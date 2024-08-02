@@ -89,10 +89,10 @@ clean-bender:
 # RTL sources #
 ###############
 
-.PHONY: rtl clint plic socctrl hbmctrl quadctrl soc snax tb
+.PHONY: rtl clint plic socctrl hbmctrl quadctrl snax soc tb
 .PHONY: clean-rtl clean-clint clean-plic clean-socctrl clean-hbmctrl clean-quadctrl clean-soc clean-tb
 
-rtl: clint plic socctrl hbmctrl quadctrl soc snax tb
+rtl: clint plic socctrl hbmctrl quadctrl snax soc tb
 clean-rtl: clean-clint clean-plic clean-socctrl clean-hbmctrl clean-quadctrl clean-soc clean-tb
 
 $(TARGET_PLIC_DIR) $(TARGET_CLINT_DIR) $(TARGET_SOCCTRL_DIR) $(TARGET_HBMCTRL_DIR) $(TARGET_QUADCTRL_DIR):
@@ -161,7 +161,7 @@ debug-testharness-gen:
 	$(ROOT)/util/occamygen/occamy_soc_gen.py --cfg $(CFG) --outdir test --testharness-sv test/testharness.sv.tpl
 
 debug-quadrant-ctrl-gen:
-	$(ROOT)/util/occamygen/occamy_soc_gen.py --cfg $(CFG) --outdir $(TARGET_SRC_DIR) --quadrant-s1-ctrl $(SOURCE_OCCAMY_DIR)/occamy_quadrant_s1_ctrl.sv.tpl 
+	$(ROOT)/util/occamygen/occamy_soc_gen.py --cfg $(CFG) --outdir $(TARGET_SRC_DIR) --quadrant-s1-ctrl $(SOURCE_OCCAMY_DIR)/occamy_quadrant_s1_ctrl.sv.tpl
 ############
 # QUADCTRL #
 ############
@@ -273,9 +273,14 @@ $(TARGET_CLINT_DIR)/clint.%: $(SOURCE_CLINT_DIR)/data/clint.%.tpl $(CFG) | $(TAR
 	@$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_CLINT_DIR) --chip $<
 
 
-###################################
-# SNAX Acc  + Wrapper Generations #
-###################################
+###########################################
+# SNAX Accelerator  + Wrapper Generations #
+###########################################
+# TODO: This SNAX_CFGS should not be fixed! It should be created dynamically instead. 
+# TODO: In somewhere the bender -target list should be created automatically. 
+SNAX_CFGS += $(ROOT)/target/rtl/cfg/cluster_cfg/snax_xiaoling.hjson
+SNAX_CFGS += $(ROOT)/target/rtl/cfg/cluster_cfg/snax_gemmX_xdma.hjson
+
 SNITCH_ROOT := $(shell $(BENDER) path snitch_cluster)
 WRAPPERGEN  = $(SNITCH_ROOT)/util/wrappergen/wrappergen.py
 
@@ -285,66 +290,27 @@ CHISEL_PATH := $(SNITCH_ROOT)/hw/chisel/
 
 SNAX_GENERATED_DIR		?= 	$(SNITCH_ROOT)/target/snitch_cluster/generated
 
-###############
-# Wrapper Gen #
-###############
-
-define generate_snax_wrapper_filelist
-SNAX_WRAPPER_FILES += \
-	$(SNAX_GENERATED_DIR)/$(1)/$(1)_csrman_CsrManager.sv \
-	$(SNAX_GENERATED_DIR)/$(1)/$(1)_streamer_StreamerTop.sv \
-	$(SNAX_GENERATED_DIR)/$(1)/$(1)_csrman_wrapper.sv \
-	$(SNAX_GENERATED_DIR)/$(1)/$(1)_streamer_wrapper.sv \
-	$(SNAX_GENERATED_DIR)/$(1)/$(1)_wrapper.sv
-endef
-
-# The filelist for GeMM's wrapper
-$(eval $(call generate_snax_wrapper_filelist,snax_streamer_gemm))
-
-# The filelist for SIMD's wrapper
-$(eval $(call generate_snax_wrapper_filelist,snax_streamer_simd))
-
-# The filelist for Reshuffler's wrapper
-$(eval $(call generate_snax_wrapper_filelist,snax_data_reshuffler))
-
+#######################
+# Step 1: Wrapper Gen #
+#######################
 
 SNAX_TEMPLATE_SOURCES = $(wildcard $(SNAX_TPL_PATH)*.tpl)
 
-SNAX_SCALA_SOURCES = \
-	$(wildcard ${CHISEL_PATH}/src/main/scala/snax/streamer/*.scala) \
-	$(wildcard ${CHISEL_PATH}/src/main/scala/snax/csr_manager/*.scala)
+# The wrapper is generated for different clusters
+.PHONY: SNAX_WRAPPER_GEN
+SNAX_WRAPPER_GEN: $(SNAX_TEMPLATE_SOURCES) $(SNAX_CFGS)
+	$(foreach SNAX_CFG, $(SNAX_CFGS),\
+		${WRAPPERGEN} --cfg_path="$(SNAX_CFG)" \
+		--tpl_path="${SNAX_TPL_PATH}" \
+		--chisel_path="${CHISEL_PATH}" \
+		--gen_path="${SNAX_GENERATED_DIR}/";\
+	)
 
-# Pick the first file
-FIRST_SNAX_WRAPPER_FILE := $(firstword $(SNAX_WRAPPER_FILES))
-# Pick all the files but the first file, if there are more than one
-OTHER_SNAX_WRAPPER_FILES := $(filter-out $(FIRST_SNAX_WRAPPER_FILE),$(SNAX_WRAPPER_FILES))
+###########################
+# Step 2: Accelerator Gen #
+###########################
 
-# Force a serialized build in parallel make through a circular dependency
-# Implemented as documented in:
-# https://www.gnu.org/software/automake/manual/html_node/Multiple-Outputs.html
-# Please note the limitations of this method over there
-
-SNAX_CFG ?= $(ROOT)/target/rtl/cfg/cluster_cfg/snax_xiaoling_0.hjson
-$(FIRST_SNAX_WRAPPER_FILE) : $(SNAX_TEMPLATE_SOURCES) $(SNAX_CFG) $(SNAX_SCALA_SOURCES)
-	${WRAPPERGEN} --cfg_path="$(SNAX_CFG)" \
-	--tpl_path="${SNAX_TPL_PATH}" \
-	--chisel_path="${CHISEL_PATH}" \
-	--gen_path="${SNAX_GENERATED_DIR}/"
-
-# This is a fake job that forces parallel make to wait for the first thing to be generated
-$(OTHER_SNAX_WRAPPER_FILES): $(FIRST_SNAX_WRAPPER_FILE)
-
-###################
-# Accelerator Gen #
-###################
-
-# # Import the external Makefile for GeMM and SIMD
-# SNAX_GEMM_ROOT ?= $(shell $(BENDER) path snax-gemm)
-# include $(SNAX_GEMM_ROOT)/Makefile
-# SNAX_SIMD_ROOT ?= $(shell $(BENDER) path snax-postprocessing-simd)
-# include $(SNAX_SIMD_ROOT)/Makefile
-
-# The filelist for GeMM
+# The filelist for GEMM
 SNAX_GEMM_ROOT ?= $(shell $(BENDER) path snax-gemm)
 SNAX_ACC_GEMM_FILES += \
 	$(SNAX_GEMM_ROOT)/generated/gemm/BareBlockGemm.sv \
@@ -356,10 +322,19 @@ SNAX_ACC_SIMD_FILES += \
 	$(SNAX_SIMD_ROOT)/generated/simd/SIMD.sv \
 	$(SNAX_SIMD_ROOT)/src/snax_streamer_simd_shell_wrapper.sv
 
-snax: $(SNAX_WRAPPER_FILES) $(SNAX_ACC_GEMM_FILES) $(SNAX_ACC_SIMD_FILES)
+# The filelist for GEMMX
+SNAX_GEMMX_ROOT ?= $(SNITCH_ROOT)/hw/chisel_acc
+SNAX_ACC_GEMMX_FILES += \
+	$(SNAX_GEMMX_ROOT)/generated/gemmx/BlockGemmRescaleSIMD.sv
 
-$(SNAX_ACC_GEMM_FILES):
+SNAX_ACC_GEN:
+ifeq ($(findstring snax_xiaoling,$(SNAX_CFGS)),snax_xiaoling)
 	make -C $(SNAX_GEMM_ROOT) $(SNAX_ACC_GEMM_FILES)
-
-$(SNAX_ACC_SIMD_FILES):
 	make -C $(SNAX_SIMD_ROOT) $(SNAX_ACC_SIMD_FILES)
+endif
+ifeq ($(findstring gemmX,$(SNAX_CFGS)),snax_xiaoling)
+	make -C $(SNAX_GEMMX_ROOT) $(SNAX_ACC_GEMMX_FILES)
+endif
+
+# Create the dependency in SNAX: when generating snax, two subtasks should be generated
+snax: SNAX_WRAPPER_GEN SNAX_ACC_GEN

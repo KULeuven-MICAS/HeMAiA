@@ -18,8 +18,8 @@ ifeq ($(EXT_JTAG), 0)
 	BENDER_TARGETS += -t bscane
 endif
 
-ifdef SNAX_XIAOLING
-	BENDER_TARGETS += -t snax_streamer_gemm -t snax_streamer_simd -t snax_data_reshuffler -t snax_xiaoling
+ifdef SNAX
+	BENDER_TARGETS += -t snax_streamer_gemm -t snax_streamer_simd -t snax_data_reshuffler -t snax_streamer_gemmX -t snax_streamer_gemmX_xdma -t snax
 endif
 
 ifdef SNAX_MINIMAL
