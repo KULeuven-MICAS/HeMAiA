@@ -14,15 +14,7 @@ EXT_JTAG    ?= 1
 VIVADO ?= vivado
 NPROC  ?= $(shell nproc)
 
-BENDER_TARGETS += -t cv64a6_imafdc_sv39 -t occamy -t snax_cluster
-
-ifdef SNAX
-	BENDER_TARGETS += -t snax_streamer_gemm -t snax_streamer_simd -t snax_data_reshuffler -t snax_streamer_gemmX -t snax_streamer_gemmX_xdma -t snax
-endif
-
-ifdef SNAX_MINIMAL
-	BENDER_TARGETS += -t snax_minimal
-endif
+BENDER_TARGETS = $(eval cat $(MKFILE_DIR)../rtl/src/bender_targets.tmp)
 
 default: all
 all: occamy_vcu128

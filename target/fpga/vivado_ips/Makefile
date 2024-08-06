@@ -12,18 +12,10 @@ DEBUG       ?= 0
 VIVADO ?= vivado
 BENDER ?= bender
 
-BENDER_TARGETS += -t cv64a6_imafdc_sv39 -t occamy -t snax_cluster
+BENDER_TARGETS = $(eval cat $(MKFILE_DIR)../../rtl/src/bender_targets.tmp)
 
 ifeq ($(EXT_JTAG), 0)
 	BENDER_TARGETS += -t bscane
-endif
-
-ifdef SNAX
-	BENDER_TARGETS += -t snax_streamer_gemm -t snax_streamer_simd -t snax_data_reshuffler -t snax_streamer_gemmX -t snax_streamer_gemmX_xdma -t snax
-endif
-
-ifdef SNAX_MINIMAL
-	BENDER_TARGETS += -t snax_minimal
 endif
 
 include $(ROOT)/util/Makefrag
