@@ -278,7 +278,6 @@ $(TARGET_CLINT_DIR)/clint.%: $(SOURCE_CLINT_DIR)/data/clint.%.tpl $(CFG) | $(TAR
 # SNAX Accelerator  + Wrapper Generations #
 ###########################################
 # TODO: This SNAX_CFGS should not be fixed! It should be created dynamically instead. 
-# TODO: In somewhere the bender -target list should be created automatically. 
 SNAX_CFGS += $(ROOT)/target/rtl/cfg/cluster_cfg/snax_xiaoling.hjson
 SNAX_CFGS += $(ROOT)/target/rtl/cfg/cluster_cfg/snax_gemmX_xdma.hjson
 
