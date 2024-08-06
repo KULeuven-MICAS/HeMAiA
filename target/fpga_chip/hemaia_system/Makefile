@@ -13,7 +13,7 @@ EXT_JTAG    ?= 1
 
 VIVADO ?= vivado
 
-BENDER_TARGETS = $(eval cat $(MKFILE_DIR)../../rtl/src/bender_targets.tmp)
+BENDER_TARGETS = $(shell cat $(MKFILE_DIR)../../rtl/src/bender_targets.tmp)
 
 default: all
 all: hemaia_system_vcu128

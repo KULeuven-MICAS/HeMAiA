@@ -341,4 +341,4 @@ endif
 
 # Create the dependency in SNAX: when generating snax, two subtasks should be generated, and the bender target is stored into file, which will be used by other targets (e.g. tapeout, fpga, simulation)
 snax: SNAX_WRAPPER_GEN SNAX_ACC_GEN
-	echo $(BENDER_TARGETS) >> src/bender_tagets.tmp
+	echo $(BENDER_TARGETS) > src/bender_targets.tmp
