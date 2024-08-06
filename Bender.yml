@@ -74,11 +74,15 @@ sources:
       - target/rtl/src/soc_ctrl/occamy_soc_reg_top.sv
   - hw/occamy/soc_ctrl/occamy_soc_ctrl.sv
 
-  - target: snax
+  # cluster wrapper (now there are three options)
+  - target: snax_xiaoling
     files:
       - target/rtl/src/snax_xiaoling_wrapper.sv
+
+  - target: snax_gemmX_xdma
+    files:
       - target/rtl/src/snax_gemmX_xdma_cluster_wrapper.sv
-  
+
   - target: snax_minimal
     files:
      - target/rtl/src/snax_minimal_wrapper.sv

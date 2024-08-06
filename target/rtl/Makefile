@@ -41,6 +41,7 @@ TARGET_RTL			 ?= $(ROOT)/target/rtl
 
 BENDER       ?= bender
 #VERIBLE_FMT  ?= verible-verilog-format
+BENDER_TARGETS ?= -t cv64a6_imafdc_sv39 -t occamy
 
 OCCAMYGEN  ?= $(ROOT)/util/occamygen/occamygen.py
 REGGEN     ?= $(shell $(BENDER) path register_interface)/vendor/lowrisc_opentitan/util/regtool.py
@@ -331,10 +332,14 @@ SNAX_ACC_GEN:
 ifeq ($(findstring snax_xiaoling,$(SNAX_CFGS)),snax_xiaoling)
 	make -C $(SNAX_GEMM_ROOT) $(SNAX_ACC_GEMM_FILES)
 	make -C $(SNAX_SIMD_ROOT) $(SNAX_ACC_SIMD_FILES)
-endif
-ifeq ($(findstring gemmX,$(SNAX_CFGS)),snax_xiaoling)
-	make -C $(SNAX_GEMMX_ROOT) $(SNAX_ACC_GEMMX_FILES)
+	$(eval BENDER_TARGETS += -t snax_xiaoling -t snax_streamer_gemm -t snax_streamer_simd -t snax_data_reshuffler)
 endif
 
-# Create the dependency in SNAX: when generating snax, two subtasks should be generated
+ifeq ($(findstring gemmX_xdma,$(SNAX_CFGS)),gemmX_xdma)
+	make -C $(SNAX_GEMMX_ROOT) $(SNAX_ACC_GEMMX_FILES)
+	$(eval BENDER_TARGETS += -t snax_gemmX_xdma -t snax_streamer_gemmX -t snax_streamer_gemmX_xdma)
+endif
+
+# Create the dependency in SNAX: when generating snax, two subtasks should be generated, and the bender target is stored into file, which will be used by other targets (e.g. tapeout, fpga, simulation)
 snax: SNAX_WRAPPER_GEN SNAX_ACC_GEN
+	echo $(BENDER_TARGETS) >> src/bender_tagets.tmp
