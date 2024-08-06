@@ -322,6 +322,10 @@ SNAX_ACC_SIMD_FILES += \
 	$(SNAX_SIMD_ROOT)/generated/simd/SIMD.sv \
 	$(SNAX_SIMD_ROOT)/src/snax_streamer_simd_shell_wrapper.sv
 
+# The filelist for Reshuffler
+SNAX_RESHUFFLER_ROOT ?= $(SNITCH_ROOT)/hw/chisel_acc
+SNAX_RESHUFFLER_FILES += $(SNAX_RESHUFFLER_ROOT)/generated/reshuffle/Reshuffler.sv
+
 # The filelist for GEMMX
 SNAX_GEMMX_ROOT ?= $(SNITCH_ROOT)/hw/chisel_acc
 SNAX_ACC_GEMMX_FILES += \
@@ -331,6 +335,7 @@ SNAX_ACC_GEN:
 ifeq ($(findstring snax_xiaoling,$(SNAX_CFGS)),snax_xiaoling)
 	make -C $(SNAX_GEMM_ROOT) $(SNAX_ACC_GEMM_FILES)
 	make -C $(SNAX_SIMD_ROOT) $(SNAX_ACC_SIMD_FILES)
+	make -C $(SNAX_RESHUFFLER_ROOT) $(SNAX_RESHUFFLER_FILES)
 	$(eval BENDER_TARGETS += -t snax_xiaoling -t snax_streamer_gemm -t snax_streamer_simd -t snax_data_reshuffler)
 endif
 
