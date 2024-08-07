@@ -27,6 +27,7 @@ occamy_xilinx: define-sources.tcl
 	${VIVADO} -mode batch -source occamy_xilinx.tcl -tclargs $(DEBUG) $(EXT_JTAG)
 
 define-sources.tcl:
+	echo $(BENDER_TARGETS)
 	${BENDER} script vivado $(BENDER_TARGETS) > $@
 
 clean:

@@ -12,6 +12,8 @@ MKFILE_PATH := $(abspath $(lastword $(MAKEFILE_LIST)))
 MKFILE_DIR  := $(dir $(MKFILE_PATH))
 ROOT        := $(MKFILE_DIR)../..
 TARGET_SRC_DIR       ?= src
+SNITCH_ROOT = $(shell $(BENDER) path snitch_cluster)
+WRAPPERGEN  = $(SNITCH_ROOT)/util/wrappergen/wrappergen.py
 
 SOURCE_OCCAMY_DIR    ?= $(ROOT)/hw/occamy
 
@@ -122,9 +124,8 @@ test/testharness.sv: test/testharness.sv.tpl $(CFG)
 MISC_OCCAMYGEN_SV_TEMPLATES  = $(SOURCE_OCCAMY_DIR)/occamy_*.sv.tpl
 MISC_OCCAMYGEN_SV_TARGETS  = $(TARGET_SRC_DIR)/occamy_*.sv
 MISC_OCCAMYGEN_SV_TARGETS  = $(TARGET_SRC_DIR)/snax_*.sv
-#$(warning !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!MISC_OCCAMYGEN_SV_TEMPLATES=$(MISC_OCCAMYGEN_SV_TEMPLATES) !!!!!!11! $(MISC_OCCAMYGEN_SV_TARGETS))
-MISC_OCCAMYGEN_SV_TARGETS += $(TARGET_SRC_DIR)/occamy_cluster_wrapper.sv
-MISC_OCCAMYGEN_SV_TARGETS += $(TARGET_SRC_DIR)/snax_cluster_wrapper.sv
+# MISC_OCCAMYGEN_SV_TARGETS += $(TARGET_SRC_DIR)/occamy_cluster_wrapper.sv
+# MISC_OCCAMYGEN_SV_TARGETS += $(TARGET_SRC_DIR)/snax_cluster_wrapper.sv
 
 MISC_OCCAMYGEN_TARGETS  = $(MISC_OCCAMYGEN_SV_TARGETS)
 MISC_OCCAMYGEN_TARGETS += $(TARGET_SRC_DIR)/occamy_memories.json
@@ -137,9 +138,11 @@ clean-soc:
 $(MISC_OCCAMYGEN_TARGETS): .misc_occamygen_targets_group
 .misc_occamygen_targets_group: $(CFG) $(MISC_OCCAMYGEN_SV_TEMPLATES)
 	@echo "[OCCAMYGEN] Generate $(MISC_OCCAMYGEN_TARGETS)"
+# OCCAMYGEN can trigger the SNAX cluster to do all rtl generation, So --wrapper is replaced by --snitch
+# Also --memories seem not necessary for occamy. 
+
 	$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_SRC_DIR)\
-		--wrapper \
-		--memories \
+		--snitch           $(SNITCH_ROOT) \
 		--top-sv           $(SOURCE_OCCAMY_DIR)/occamy_top.sv.tpl \
 		--soc-sv           $(SOURCE_OCCAMY_DIR)/occamy_soc.sv.tpl \
 		--chip             $(SOURCE_OCCAMY_DIR)/occamy_chip.sv.tpl \
@@ -150,6 +153,7 @@ $(MISC_OCCAMYGEN_TARGETS): .misc_occamygen_targets_group
 		--cva6-sv          $(SOURCE_OCCAMY_DIR)/occamy_cva6.sv.tpl
 # --dts 			   $(TARGET_DTS_DIR)/occamy.dts
 #why?	@$(VERIBLE_FMT) --inplace $(MISC_OCCAMYGEN_SV_TARGETS)
+
 # File included by occamy_xilinx needs to be put in the same folder
 	cp -f $(SOURCE_OCCAMY_DIR)/axi_flat.sv $(TARGET_SRC_DIR)
 	cp -f $(SOURCE_OCCAMY_DIR)/apb_flat.sv $(TARGET_SRC_DIR)
@@ -278,11 +282,8 @@ $(TARGET_CLINT_DIR)/clint.%: $(SOURCE_CLINT_DIR)/data/clint.%.tpl $(CFG) | $(TAR
 # SNAX Accelerator  + Wrapper Generations #
 ###########################################
 # TODO: This SNAX_CFGS should not be fixed! It should be created dynamically instead. 
-SNAX_CFGS += $(ROOT)/target/rtl/cfg/cluster_cfg/snax_xiaoling.hjson
-SNAX_CFGS += $(ROOT)/target/rtl/cfg/cluster_cfg/snax_gemmX_xdma.hjson
-
-SNITCH_ROOT := $(shell $(BENDER) path snitch_cluster)
-WRAPPERGEN  = $(SNITCH_ROOT)/util/wrappergen/wrappergen.py
+SNAX_CFGS += cfg/cluster_cfg/snax_xiaoling_cluster.hjson
+SNAX_CFGS += cfg/cluster_cfg/snax_streamer_gemmX_xdma_cluster.hjson
 
 SNAX_CFG_PATH := $(ROOT)/target/rtl/cfg/
 SNAX_TPL_PATH := $(SNITCH_ROOT)/hw/templates/
@@ -294,17 +295,17 @@ SNAX_GENERATED_DIR		?= 	$(SNITCH_ROOT)/target/snitch_cluster/generated
 # Step 1: Wrapper Gen #
 #######################
 
-SNAX_TEMPLATE_SOURCES = $(wildcard $(SNAX_TPL_PATH)*.tpl)
+# SNAX_TEMPLATE_SOURCES = $(wildcard $(SNAX_TPL_PATH)*.tpl)
 
-# The wrapper is generated for different clusters
-.PHONY: SNAX_WRAPPER_GEN
-SNAX_WRAPPER_GEN: $(SNAX_TEMPLATE_SOURCES) $(SNAX_CFGS)
-	$(foreach SNAX_CFG, $(SNAX_CFGS),\
-		${WRAPPERGEN} --cfg_path="$(SNAX_CFG)" \
-		--tpl_path="${SNAX_TPL_PATH}" \
-		--chisel_path="${CHISEL_PATH}" \
-		--gen_path="${SNAX_GENERATED_DIR}/";\
-	)
+# # The wrapper is generated for different clusters
+# .PHONY: SNAX_WRAPPER_GEN
+# SNAX_WRAPPER_GEN: $(SNAX_TEMPLATE_SOURCES) $(SNAX_CFGS)
+# 	$(foreach SNAX_CFG, $(SNAX_CFGS),\
+# 		${WRAPPERGEN} --cfg_path="$(SNAX_CFG)" \
+# 		--tpl_path="${SNAX_TPL_PATH}" \
+# 		--chisel_path="${CHISEL_PATH}" \
+# 		--gen_path="${SNAX_GENERATED_DIR}/";\
+# 	)
 
 ###########################
 # Step 2: Accelerator Gen #
@@ -332,18 +333,18 @@ SNAX_ACC_GEMMX_FILES += \
 	$(SNAX_GEMMX_ROOT)/generated/gemmx/BlockGemmRescaleSIMD.sv
 
 SNAX_ACC_GEN:
-ifeq ($(findstring snax_xiaoling,$(SNAX_CFGS)),snax_xiaoling)
+ifeq ($(findstring snax_xiaoling_cluster,$(SNAX_CFGS)),snax_xiaoling_cluster)
 	make -C $(SNAX_GEMM_ROOT) $(SNAX_ACC_GEMM_FILES)
 	make -C $(SNAX_SIMD_ROOT) $(SNAX_ACC_SIMD_FILES)
 	make -C $(SNAX_RESHUFFLER_ROOT) $(SNAX_RESHUFFLER_FILES)
-	$(eval BENDER_TARGETS += -t snax_xiaoling -t snax_streamer_gemm -t snax_streamer_simd -t snax_data_reshuffler)
+	$(eval BENDER_TARGETS += -t snax_xiaoling_cluster -t snax_streamer_gemm -t snax_streamer_simd -t snax_data_reshuffler)
 endif
 
-ifeq ($(findstring gemmX_xdma,$(SNAX_CFGS)),gemmX_xdma)
+ifeq ($(findstring snax_streamer_gemmX_xdma_cluster,$(SNAX_CFGS)),snax_streamer_gemmX_xdma_cluster)
 	make -C $(SNAX_GEMMX_ROOT) $(SNAX_ACC_GEMMX_FILES)
-	$(eval BENDER_TARGETS += -t snax_gemmX_xdma -t snax_streamer_gemmX -t snax_streamer_gemmX_xdma)
+	$(eval BENDER_TARGETS += -t snax_streamer_gemmX_xdma_cluster -t snax_streamer_gemmX -t snax_streamer_gemmX_xdma)
 endif
 
 # Create the dependency in SNAX: when generating snax, two subtasks should be generated, and the bender target is stored into file, which will be used by other targets (e.g. tapeout, fpga, simulation)
-snax: SNAX_WRAPPER_GEN SNAX_ACC_GEN
+snax: SNAX_ACC_GEN # SNAX_WRAPPER_GEN
 	echo $(BENDER_TARGETS) > src/bender_targets.tmp
