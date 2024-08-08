@@ -15,7 +15,7 @@
         cluster_periph_size: 64, // kB
         zero_mem_size: 64, // kB
         dma_data_width: 512,
-        dma_axi_req_fifo_depth: 24,
+        dma_axi_req_fifo_depth: 16,
         dma_req_fifo_depth: 8,
         narrow_trans: 4,
         wide_trans: 32,

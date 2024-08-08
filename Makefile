@@ -2,7 +2,8 @@
 MKFILE_PATH := $(abspath $(lastword $(MAKEFILE_LIST)))
 MKFILE_DIR := $(dir $(MKFILE_PATH))
 
-CFG ?= snax_two_clusters.hjson
+CFG_OVERRIDE ?= target/rtl/cfg/occamy_cfg/snax_two_clusters.hjson
+CFG = $(realpath $(CFG_OVERRIDE))
 
 clean:
 	make -C ./target/fpga/ clean
@@ -17,7 +18,7 @@ clean:
 # Software Generation
 bootrom: # In Occamy Docker
 # The bootrom used for simulation (light-weight bootrom)
-	make -C ./target/sim bootrom CFG_OVERRIDE=../rtl/cfg/occamy_cfg/$(CFG)
+	make -C ./target/sim bootrom CFG_OVERRIDE=$(CFG)
 
 # The bootrom used for FPGA protoyping (emulated eeprom, full-functional bootrom)
 	make -C ./target/fpga/bootrom bootrom
@@ -26,7 +27,7 @@ bootrom: # In Occamy Docker
 	make -C ./target/rtl/bootrom bootrom
 
 sw: # In Occamy Docker
-	make -C ./target/sim sw CFG_OVERRIDE=../rtl/cfg/occamy_cfg/$(CFG)
+	make -C ./target/sim sw CFG_OVERRIDE=$(CFG)
 
 # The software from simulation and FPGA prototyping comes from one source. If we intend to download the sodtware to FPGA, elf2bin should be done by objcopy in Occamy docker. 
 
