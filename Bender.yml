@@ -31,7 +31,7 @@ dependencies:
   register_interface:     { git:  https://github.com/pulp-platform/register_interface.git, version: 0.3.8   }
   snitch_cluster:         { git:  https://github.com/KULeuven-MICAS/snax_cluster.git,      rev:        main }
   tech_cells_generic:     { git:  https://github.com/pulp-platform/tech_cells_generic.git, rev:     v0.2.11 }
-  cluster_icache:         { git:  https://github.com/pulp-platform/cluster_icache.git,     rev:     95035dcb3a420d85cf5d8de9a8cde760363d8967 }
+  cluster_icache:         { git:  https://github.com/pulp-platform/cluster_icache.git,     version: 0.1.0 }
 
 workspace:
   package_links:
@@ -75,14 +75,11 @@ sources:
   - hw/occamy/soc_ctrl/occamy_soc_ctrl.sv
 
   # cluster wrapper (If the file is added in the snax repo, then it does not needed to be added here)
-  - target: snax_xiaoling_cluster
-    files:
-      - deps/snitch_cluster/target/snitch_cluster/generated/snax_xiaoling_cluster_wrapper.sv
 
-  - target: snax_minimal
+  - target: snax_minimal_cluster
     files:
-     - deps/snitch_cluster/target/snitch_cluster/generated/snax_minimal_wrapper.sv
-
+     - deps/snitch_cluster/target/snitch_cluster/generated/snax_minimal_cluster_wrapper.sv
+    
   # auto-generated soc
   - target: occamy
     files:
@@ -124,7 +121,7 @@ sources:
       - target/rtl/test/uartdpi/uartdpi.sv
       - target/rtl/test/testharness.sv
 
-  - target: tapeout
+  - target: any(tapeout, hemaia)
     files:
       - target/rtl/bootrom/bootrom.sv
       - target/rtl/src/occamy_chip.sv

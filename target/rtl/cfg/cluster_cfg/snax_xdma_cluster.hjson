@@ -1,6 +1,6 @@
 {
 		cluster: {
-        name: "snax_minimal_cluster"
+        name: "snax_xdma_cluster"
         boot_addr: 4096, // 0x1000
         cluster_base_addr: 268435456, // 0x10000000
         cluster_base_offset: 262144 // 0x40000
@@ -85,6 +85,15 @@
 
 	dma_core_template: {
         isa: "rv32ima",
+        snax_xdma_cfg: {
+            reader_buffer: 8, 
+            writer_buffer: 8, 
+            reader_agu_dimension: 3, 
+            writer_agu_dimension: 3, 
+            HasTransposer: 3, 
+            HasVerilogMemset: 1, 
+            HasMaxPool: 2
+        }
         xdma: true, 
         xssr: false, 
         xfrep: false

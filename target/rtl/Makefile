@@ -282,69 +282,38 @@ $(TARGET_CLINT_DIR)/clint.%: $(SOURCE_CLINT_DIR)/data/clint.%.tpl $(CFG) | $(TAR
 # SNAX Accelerator  + Wrapper Generations #
 ###########################################
 # TODO: This SNAX_CFGS should not be fixed! It should be created dynamically instead. 
-SNAX_CFGS += cfg/cluster_cfg/snax_xiaoling_cluster.hjson
+SNAX_CFGS += cfg/cluster_cfg/snax_streamer_gemm_add_c.hjson
 SNAX_CFGS += cfg/cluster_cfg/snax_streamer_gemmX_xdma_cluster.hjson
-
-SNAX_CFG_PATH := $(ROOT)/target/rtl/cfg/
-SNAX_TPL_PATH := $(SNITCH_ROOT)/hw/templates/
-CHISEL_PATH := $(SNITCH_ROOT)/hw/chisel/
-
-SNAX_GENERATED_DIR		?= 	$(SNITCH_ROOT)/target/snitch_cluster/generated
 
 #######################
 # Step 1: Wrapper Gen #
 #######################
 
-# SNAX_TEMPLATE_SOURCES = $(wildcard $(SNAX_TPL_PATH)*.tpl)
-
-# # The wrapper is generated for different clusters
-# .PHONY: SNAX_WRAPPER_GEN
-# SNAX_WRAPPER_GEN: $(SNAX_TEMPLATE_SOURCES) $(SNAX_CFGS)
-# 	$(foreach SNAX_CFG, $(SNAX_CFGS),\
-# 		${WRAPPERGEN} --cfg_path="$(SNAX_CFG)" \
-# 		--tpl_path="${SNAX_TPL_PATH}" \
-# 		--chisel_path="${CHISEL_PATH}" \
-# 		--gen_path="${SNAX_GENERATED_DIR}/";\
-# 	)
+# This tag is integrated into SNAX Cluster
 
 ###########################
 # Step 2: Accelerator Gen #
 ###########################
 
-# The filelist for GEMM
-SNAX_GEMM_ROOT ?= $(shell $(BENDER) path snax-gemm)
-SNAX_ACC_GEMM_FILES += \
-	$(SNAX_GEMM_ROOT)/generated/gemm/BareBlockGemm.sv \
-	$(SNAX_GEMM_ROOT)/src/snax_streamer_gemm_shell_wrapper.sv
+# This tag is integrated into SNAX Cluster
 
-# The filelist for SIMD
-SNAX_SIMD_ROOT ?= $(shell $(BENDER) path snax-postprocessing-simd)
-SNAX_ACC_SIMD_FILES += \
-	$(SNAX_SIMD_ROOT)/generated/simd/SIMD.sv \
-	$(SNAX_SIMD_ROOT)/src/snax_streamer_simd_shell_wrapper.sv
-
-# The filelist for Reshuffler
-SNAX_RESHUFFLER_ROOT ?= $(SNITCH_ROOT)/hw/chisel_acc
-SNAX_RESHUFFLER_FILES += $(SNAX_RESHUFFLER_ROOT)/generated/reshuffle/Reshuffler.sv
-
-# The filelist for GEMMX
-SNAX_GEMMX_ROOT ?= $(SNITCH_ROOT)/hw/chisel_acc
-SNAX_ACC_GEMMX_FILES += \
-	$(SNAX_GEMMX_ROOT)/generated/gemmx/BlockGemmRescaleSIMD.sv
+#############################
+# Step 3: Bender Target Gen #
+#############################
 
 SNAX_ACC_GEN:
-ifeq ($(findstring snax_xiaoling_cluster,$(SNAX_CFGS)),snax_xiaoling_cluster)
-	make -C $(SNAX_GEMM_ROOT) $(SNAX_ACC_GEMM_FILES)
-	make -C $(SNAX_SIMD_ROOT) $(SNAX_ACC_SIMD_FILES)
-	make -C $(SNAX_RESHUFFLER_ROOT) $(SNAX_RESHUFFLER_FILES)
-	$(eval BENDER_TARGETS += -t snax_xiaoling_cluster -t snax_streamer_gemm -t snax_streamer_simd -t snax_data_reshuffler)
+ifeq ($(findstring snax_streamer_gemm_add_c_cluster,$(SNAX_CFGS)),snax_streamer_gemm_add_c_cluster)
+	$(eval BENDER_TARGETS += -t snax_streamer_gemm_add_c -t snax_streamer_gemm_add_c_cluster)
 endif
 
 ifeq ($(findstring snax_streamer_gemmX_xdma_cluster,$(SNAX_CFGS)),snax_streamer_gemmX_xdma_cluster)
-	make -C $(SNAX_GEMMX_ROOT) $(SNAX_ACC_GEMMX_FILES)
-	$(eval BENDER_TARGETS += -t snax_streamer_gemmX_xdma_cluster -t snax_streamer_gemmX -t snax_streamer_gemmX_xdma)
+	$(eval BENDER_TARGETS += -t snax_streamer_gemmX_xdma -t snax_streamer_gemmX_xdma_cluster)
 endif
 
-# Create the dependency in SNAX: when generating snax, two subtasks should be generated, and the bender target is stored into file, which will be used by other targets (e.g. tapeout, fpga, simulation)
+ifeq ($(findstring snax_xdma_cluster,$(SNAX_CFGS)),snax_xdma_cluster)
+	$(eval BENDER_TARGETS += -t snax_xdma -t snax_xdma_cluster)
+endif
+
+# Create the dependency in SNAX: when generating snax, the bender target should be stored into file, which will be used by other targets (e.g. tapeout, fpga, simulation)
 snax: SNAX_ACC_GEN # SNAX_WRAPPER_GEN
 	echo $(BENDER_TARGETS) > src/bender_targets.tmp

@@ -13,7 +13,7 @@ VIVADO ?= vivado
 BENDER ?= bender
 
 BENDER_TARGETS = $(shell cat $(MKFILE_DIR)../../rtl/src/bender_targets.tmp)
-BENDER_TARGETS += -t tapeout
+BENDER_TARGETS += -t hemaia
 
 ifeq ($(EXT_JTAG), 0)
 	BENDER_TARGETS += -t bscane

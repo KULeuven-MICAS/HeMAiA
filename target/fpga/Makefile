@@ -15,6 +15,7 @@ VIVADO ?= vivado
 NPROC  ?= $(shell nproc)
 
 BENDER_TARGETS = $(shell cat $(MKFILE_DIR)../rtl/src/bender_targets.tmp)
+BENDER_TARGETS += -t xilinx
 
 default: all
 all: occamy_vcu128
