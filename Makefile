@@ -33,7 +33,8 @@ bootrom: # In Occamy Docker
 sw: # In Occamy Docker
 	make -C ./target/sim sw CFG_OVERRIDE=$(CFG)
 
-# The software from simulation and FPGA prototyping comes from one source. If we intend to download the sodtware to FPGA, elf2bin should be done by objcopy in Occamy docker. 
+# The software from simulation and FPGA prototyping comes from one source. 
+# If we intend to download the sodtware to FPGA, the bin should be extracted from elf by objcopy in Occamy docker. 
 
 # Hardware Generation
 rtl: # In SNAX Docker
