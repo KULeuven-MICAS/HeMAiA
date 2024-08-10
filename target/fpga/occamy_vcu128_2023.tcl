@@ -69,7 +69,6 @@ foreach run $all_ooc_synth {
         puts "Launching run $run"
         lappend runs_queued $run
         # The synthesis strategy for each IP core (including SoC, regarding as an IP)
-        # set_property strategy Flow_AlternateRoutability [get_runs $run]
         set_property strategy Flow_AreaOptimized_high [get_runs $run]
     } else {
         puts "Skipping 100% complete run: $run"
