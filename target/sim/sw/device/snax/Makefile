@@ -15,9 +15,9 @@ SNAX_LIBS = gemm
 SNAX_LIBS += mac
 SNAX_LIBS += streamer-gemm
 SNAX_LIBS += streamer-simd
-SNAX_LIBS += data-reshuffler
+# SNAX_LIBS += data-reshuffler
 SANX_LIBS += streamer-gemm-conv
-SANX_LIBS += streamer-gemm-conv-simd
+# SANX_LIBS += streamer-gemm-conv-simd
 
 
 INCDIRS = $(addprefix $(MKFILE_DIR)/,$(addsuffix /include,$(SNAX_LIBS)))
