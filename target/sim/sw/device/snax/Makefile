@@ -17,6 +17,7 @@ SNAX_LIBS += streamer-gemm
 SNAX_LIBS += streamer-simd
 SNAX_LIBS += data-reshuffler
 SANX_LIBS += streamer-gemm-conv
+SANX_LIBS += streamer-gemm-conv-simd
 
 
 INCDIRS = $(addprefix $(MKFILE_DIR)/,$(addsuffix /include,$(SNAX_LIBS)))
@@ -67,6 +68,8 @@ $(BUILDDIR)/snax-streamer-simd-lib.o: $(MKFILE_DIR)/streamer-simd/src/snax-strea
 $(BUILDDIR)/snax-streamer-gemm-conv-lib.o: $(MKFILE_DIR)/streamer-gemm-conv/src/snax-streamer-gemm-conv-lib.c | $(BUILDDIR)
 	$(RISCV_CC) $(RISCV_CFLAGS) $(RISCV_LDFLAGS) -c  $< -o $@
 
+$(BUILDDIR)/snax-streamer-gemm-conv-simd-lib.o: $(MKFILE_DIR)/streamer-gemm-conv/src/snax-streamer-gemm-conv-simd-lib.c | $(BUILDDIR)
+	$(RISCV_CC) $(RISCV_CFLAGS) $(RISCV_LDFLAGS) -c  $< -o $@
 
 $(SNAX_LIB): $(OBJS) | $(BUILDDIR)
 	$(RISCV_AR) $(RISCV_ARFLAGS) $@ $^
