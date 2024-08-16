@@ -21,7 +21,7 @@ RISCV_LDFLAGS += ../../../snax/streamer-gemm-conv-simd/build/snax-streamer-gemm-
 
 SRCS    = src/snax-streamer-gemm-conv-simd.c
 
-include ../../common.mk
 include ./data/Makefile
+include ../../common.mk
 
 $(DEP): $(DATA_H)

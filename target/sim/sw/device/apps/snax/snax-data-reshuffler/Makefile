@@ -15,7 +15,7 @@ RISCV_LDFLAGS += ../../../snax/data-reshuffler/build/snax-data-reshuffler-lib.o
 
 SRCS    = src/snax-data-reshuffler.c
 
-include ../../common.mk
 include ./data/Makefile
+include ../../common.mk
 
 $(DEP): $(DATA_H)
