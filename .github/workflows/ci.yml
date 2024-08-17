@@ -1,6 +1,8 @@
-# Copyright 2023 ETH Zurich and University of Bologna.
+# Copyright 2024 KU Leuven.
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
+
+# Yunhao Deng <yunhao.deng@kuleuven.be>
 
 # Run functional regression checks
 name: ci
@@ -11,48 +13,51 @@ jobs:
   # Docs #
   ########
 
-  docs:
-    name: Build documentation
-    runs-on: ubuntu-22.04
-    container:
-      image: ghcr.io/pulp-platform/occamy:main
-    steps:
-      - uses: actions/checkout@v2
-      - name: Build docs
-        run: |
-          bender update && bender checkout
-          mkdocs build
+  # docs:
+  #   name: Build documentation
+  #   runs-on: ubuntu-22.04
+  #   container:
+  #     image: ghcr.io/pulp-platform/occamy:main
+  #   steps:
+  #     - uses: actions/checkout@v2
+  #     - name: Build docs
+  #       run: |
+  #         bender update && bender checkout
+  #         mkdocs build
 
   #######################
   # Build SW for Occamy #
   #######################
 
-  occamy-sw:
-    name: Build SW for Occamy
+  # occamy-sw:
+  #   name: Build SW for Occamy
+  #   runs-on: ubuntu-22.04
+  #   container:
+  #     image: ghcr.io/pulp-platform/occamy:main
+  #   steps:
+  #     - uses: actions/checkout@v2
+  #       with:
+  #         submodules: 'recursive'
+  #     - name: Build Software
+  #       run: |
+  #         make -C target/sim sw
+
+  ######################################
+  # Occamy System Hardware Compilation #
+  ######################################
+
+  occamy-verilator:
+    name: Compile Occamy Verilator Binary for behavioral simulation
     runs-on: ubuntu-22.04
     container:
-      image: ghcr.io/pulp-platform/occamy:main
+      image: ghcr.io/kuleuven-micas/snax:main
     steps:
       - uses: actions/checkout@v2
         with:
           submodules: 'recursive'
-      - name: Build Software
+      - name: Compile RTL
         run: |
-          make -C target/sim sw
-
-  ###############################
-  # Generate Occamy RTL sources #
-  ###############################
-
-  occamy-rtl:
-    name: Generate Occamy RTL sources
-    runs-on: ubuntu-22.04
-    container:
-      image: ghcr.io/pulp-platform/occamy:main
-    steps:
-      - uses: actions/checkout@v2
-        with:
-          submodules: 'recursive'
-      - name: Generate single-cluster Occamy RTL sources
+          make rtl CFG_OVERRIDES=target/rtl/cfg/occamy_cfg/snax_two_clusters.hjson
+      - name: Compile Verilator Binary
         run: |
-          make -C target/sim CFG_OVERRIDE=cfg/single-cluster.hjson rtl
+          make occamy_system_vlt
