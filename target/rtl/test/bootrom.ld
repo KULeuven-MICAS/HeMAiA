@@ -18,6 +18,7 @@ SECTIONS
   .end ALIGN(16): { *(end) } > bootrom
 
   /DISCARD/ : { *(.riscv.attributes) *(.comment) }
+
   /* Global and stack pointer */
   __global_pointer$ = ADDR(.misc) + SIZEOF(.misc) / 2;
   __stack_pointer$  = ORIGIN(spm) + LENGTH(spm) - 8;
