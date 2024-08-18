@@ -16,13 +16,7 @@ DEBUG ?= OFF # ON to turn on debugging symbols
 
 APP  = offload
 SRCS = src/offload.c
-DEVICE_APPS  = blas/axpy
-DEVICE_APPS += blas/gemm
-DEVICE_APPS += blas/test
-DEVICE_APPS += snax/snax-wide-gemm-data-reshuffler
-DEVICE_APPS += snax/snax-streamer-gemm-conv
-DEVICE_APPS += snax/snax-data-reshuffler
-DEVICE_APPS += snax/snax-streamer-gemm-conv-simd
+DEVICE_APPS += $(shell cd ../../../device/apps/;find -mindepth 2 -maxdepth 2 -type d)
 # Compiler toolchain
 RISCV_CC      = riscv64-unknown-elf-gcc
 RISCV_OBJCOPY = riscv64-unknown-elf-objcopy
