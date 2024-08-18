@@ -43,7 +43,6 @@ export_include_dirs:
 sources:
   # future
   - hw/future/reg_to_apb.sv
-  
   # snitch_read_only_cache
   - hw/snitch_read_only_cache/src/snitch_axi_to_cache.sv
   - hw/snitch_read_only_cache/src/snitch_read_only_cache.sv
@@ -78,8 +77,8 @@ sources:
 
   - target: snax_minimal_cluster
     files:
-     - deps/snitch_cluster/target/snitch_cluster/generated/snax_minimal_cluster_wrapper.sv
-    
+      - deps/snitch_cluster/target/snitch_cluster/generated/snax_minimal_cluster_wrapper.sv
+
   # auto-generated soc
   - target: occamy
     files:
@@ -109,7 +108,6 @@ sources:
       - target/rtl/src/occamy_top.sv
       - target/rtl/src/occamy_cva6.sv
 
-  
   # target/fpga
   - target: xilinx
     files:
@@ -125,4 +123,3 @@ sources:
     files:
       - target/rtl/bootrom/bootrom.sv
       - target/rtl/src/occamy_chip.sv
-      
