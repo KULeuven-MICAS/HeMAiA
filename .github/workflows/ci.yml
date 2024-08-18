@@ -25,29 +25,12 @@ jobs:
   #         bender update && bender checkout
   #         mkdocs build
 
-  #######################
-  # Build SW for Occamy #
-  #######################
-
-  # occamy-sw:
-  #   name: Build SW for Occamy
-  #   runs-on: ubuntu-22.04
-  #   container:
-  #     image: ghcr.io/pulp-platform/occamy:main
-  #   steps:
-  #     - uses: actions/checkout@v2
-  #       with:
-  #         submodules: 'recursive'
-  #     - name: Build Software
-  #       run: |
-  #         make -C target/sim sw
-
-  ######################################
-  # Occamy System Hardware Compilation #
-  ######################################
+  #################################################
+  # Occamy System Software + Hardware Compilation #
+  #################################################
 
   occamy-verilator:
-    name: Compile Occamy Verilator Binary for behavioral simulation
+    name: Compile Occamy Software + Hardware Verilator Binary for behavioral simulation
     runs-on: ubuntu-22.04
     container:
       image: ghcr.io/kuleuven-micas/snax:main
@@ -55,6 +38,14 @@ jobs:
       - uses: actions/checkout@v2
         with:
           submodules: 'recursive'
+      - name: Compile Bootrom
+        run: |
+          echo -e "The placeholer for compiling Bootrom"
+          echo -e "Should execute \"make bootrom\""
+      - name: Compile SW
+        run: |
+          echo -e "The placeholer for compiling SW"
+          echo -e "Should execute \"make sw\""
       - name: Compile RTL
         run: |
           make rtl CFG_OVERRIDES=target/rtl/cfg/occamy_cfg/snax_two_clusters.hjson
