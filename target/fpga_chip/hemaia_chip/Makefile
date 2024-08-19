@@ -7,10 +7,12 @@
 MKFILE_PATH := $(abspath $(lastword $(MAKEFILE_LIST)))
 MKFILE_DIR  := $(dir $(MKFILE_PATH))
 ROOT        := ${MKFILE_DIR}../../..
-DEBUG       ?= 0
+DEBUG       ?= 1
+EXT_JTAG    ?= 1
 
 VIVADO ?= vivado
 BENDER ?= bender
+TARGET_PLATFORM ?= vcu128
 
 BENDER_TARGETS = $(shell cat $(MKFILE_DIR)../../rtl/src/bender_targets.tmp)
 BENDER_TARGETS += -t hemaia
@@ -25,7 +27,7 @@ hemaia_chip: define-sources.tcl
 	# $(MAKE) -C ../../ update-source
 	# $(MAKE) -C ../../sim rtl
 
-	${VIVADO} -mode batch -source hemaia_chip.tcl -tclargs $(DEBUG) $(EXT_JTAG)
+	${VIVADO} -mode batch -source hemaia_chip_${TARGET_PLATFORM}.tcl -tclargs $(DEBUG) $(EXT_JTAG)
 
 define-sources.tcl:
 	${BENDER} script vivado $(BENDER_TARGETS) > $@
