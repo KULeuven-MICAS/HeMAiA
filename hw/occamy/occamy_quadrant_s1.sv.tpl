@@ -35,7 +35,6 @@ module ${name}_quadrant_s1
   input  logic                         clk_i,
   input  logic                         rst_ni,
   input  logic                         test_mode_i,
-  input  tile_id_t                     tile_id_i,
   input  logic [NrCoresS1Quadrant-1:0] meip_i,
   input  logic [NrCoresS1Quadrant-1:0] mtip_i,
   input  logic [NrCoresS1Quadrant-1:0] msip_i,
@@ -55,7 +54,7 @@ module ${name}_quadrant_s1
  // Calculate cluster base address based on `tile id`.
   addr_t [${nr_clusters-1}:0] cluster_base_addr;
   % for i in range(nr_clusters):
-  assign cluster_base_addr[${i}] = ClusterBaseOffset + tile_id_i * NrClustersS1Quadrant * ClusterAddressSpace + ${i} * ClusterAddressSpace;
+  assign cluster_base_addr[${i}] = ClusterBaseOffset + ${i} * ClusterAddressSpace;
   %endfor
 
   // Define types for IOTLBs
@@ -185,7 +184,6 @@ module ${name}_quadrant_s1
     .clk_i,
     .rst_ni,
     .test_mode_i,
-    .tile_id_i,
     .clk_quadrant_o (clk_quadrant),
     .rst_quadrant_no (rst_quadrant_n),
     .isolate_o (isolate),
@@ -228,7 +226,7 @@ module ${name}_quadrant_s1
   %>
 
   logic [9:0] hart_base_id_${i};
-  assign hart_base_id_${i} = HartIdOffset + tile_id_i * NrCoresS1Quadrant + NrCoresClusterOffset[${i}];
+  assign hart_base_id_${i} = HartIdOffset + NrCoresClusterOffset[${i}];
 
   ${cluster_name}_wrapper i_${name}_cluster_${i} (
     .clk_i (clk_quadrant),
