@@ -16,53 +16,53 @@ set_property IOSTANDARD LVCMOS18 [get_ports uart_tx_o_0]
 # Data
 # # LA25P - CC38
 # set_property PACKAGE_PIN CC38 [get_ports uart_rx_i_0]
-# set_property IOSTANDARD LVCMOS33 [get_ports uart_rx_i_0]
+# set_property IOSTANDARD LVCMOS18 [get_ports uart_rx_i_0]
 # # LA25N - CC39
 # set_property PACKAGE_PIN CC39 [get_ports uart_tx_o_0]
-# set_property IOSTANDARD LVCMOS33 [get_ports uart_tx_o_0]
+# set_property IOSTANDARD LVCMOS18 [get_ports uart_tx_o_0]
 # Flow Control
 # LA29P - BY38
 set_property PACKAGE_PIN BY38 [get_ports uart_cts_ni_0]
-set_property IOSTANDARD LVCMOS33 [get_ports uart_cts_ni_0]
+set_property IOSTANDARD LVCMOS18 [get_ports uart_cts_ni_0]
 set_property PULLUP TRUE [get_ports uart_cts_ni_0]
 # LA29N - CA37
 set_property PACKAGE_PIN CA37 [get_ports uart_rts_no_0]
-set_property IOSTANDARD LVCMOS33 [get_ports uart_rts_no_0]
+set_property IOSTANDARD LVCMOS18 [get_ports uart_rts_no_0]
 
 # Six-wires SPIx4
 # FMCP_HSPC_LA12_P
 set_property PACKAGE_PIN BW49 [get_ports spim_sd_io[0]]
-set_property IOSTANDARD LVCMOS33 [get_ports spim_sd_io[0]]
+set_property IOSTANDARD LVCMOS18 [get_ports spim_sd_io[0]]
 # FMCP_HSPC LA12_N
 set_property PACKAGE_PIN BW50 [get_ports spim_sd_io[1]]
-set_property IOSTANDARD LVCMOS33 [get_ports spim_sd_io[1]]
+set_property IOSTANDARD LVCMOS18 [get_ports spim_sd_io[1]]
 # FMCP_HSPC LA16_P
 set_property PACKAGE_PIN CA51 [get_ports spim_sd_io[2]]
-set_property IOSTANDARD LVCMOS33 [get_ports spim_sd_io[2]]
+set_property IOSTANDARD LVCMOS18 [get_ports spim_sd_io[2]]
 # FMCP_HSPC_LA16_N
 set_property PACKAGE_PIN CA52 [get_ports spim_sd_io[3]]
-set_property IOSTANDARD LVCMOS33 [get_ports spim_sd_io[3]]
+set_property IOSTANDARD LVCMOS18 [get_ports spim_sd_io[3]]
 # FMCP_HSPC_LA20_P
 set_property PACKAGE_PIN BR42 [get_ports spim_csb_o[0]]
-set_property IOSTANDARD LVCMOS33 [get_ports spim_csb_o[0]]
+set_property IOSTANDARD LVCMOS18 [get_ports spim_csb_o[0]]
 # FMCP_HSPC_LA20_N
 set_property PACKAGE_PIN BT41 [get_ports spim_csb_o[1]]
-set_property IOSTANDARD LVCMOS33 [get_ports spim_csb_o[1]]
+set_property IOSTANDARD LVCMOS18 [get_ports spim_csb_o[1]]
 # FMCP_HSPC_LA22_P
 set_property PACKAGE_PIN CD42 [get_ports spim_sck_o]
-set_property IOSTANDARD LVCMOS33 [get_ports spim_sck_o]
+set_property IOSTANDARD LVCMOS18 [get_ports spim_sck_o]
 
 create_clock -period 10.000 -name spi_m_sck [get_ports spim_sck_o]
 
 # Two-wires I2C
 # FMCP_HSPC_LA13_P
-set_property PACKAGE_PIN A25 [get_ports i2c_sda_io]
-set_property IOSTANDARD LVCMOS33 [get_ports i2c_sda_io]
+set_property PACKAGE_PIN CC49 [get_ports i2c_sda_io]
+set_property IOSTANDARD LVCMOS18 [get_ports i2c_sda_io]
 set_property PULLUP TRUE [get_ports i2c_sda_io]
 
 # FMCP_HSPC_LA13_N
-set_property PACKAGE_PIN A24 [get_ports i2c_scl_io]
-set_property IOSTANDARD LVCMOS33 [get_ports i2c_scl_io]
+set_property PACKAGE_PIN CD50 [get_ports i2c_scl_io]
+set_property IOSTANDARD LVCMOS18 [get_ports i2c_scl_io]
 set_property PULLUP TRUE [get_ports i2c_scl_io]
 
 
@@ -84,7 +84,7 @@ set_property PACKAGE_PIN BT48 [get_ports reset]
 set_property IOSTANDARD LVCMOS15 [get_ports reset]
 
 # Set RTC as false path
-set_false_path -to [get_pins occamy_vcu128_i/occamy/inst/i_occamy/i_clint/i_sync_edge/i_sync/reg_q_reg[0]/D]
+set_false_path -to [get_pins hemaia_system_i/occamy_chip/inst/i_occamy/i_clint/i_sync_edge/i_sync/reg_q_reg[0]/D]
 
 ################################################################################
 # JTAG
