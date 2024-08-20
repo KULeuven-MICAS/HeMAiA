@@ -28,7 +28,7 @@ set_max_delay -from [get_ports { jtag_tdi_i }] 20
 set_property PACKAGE_PIN BY51    [get_ports jtag_vdd_o]
 set_property IOSTANDARD LVCMOS18 [get_ports jtag_vdd_o]
 # B22 - C19 (FMCP_HSPC_LA14_N) - J1.04 - GND
-set_property PACKAGE_PIN CA62    [get_ports jtag_gnd_o]
+set_property PACKAGE_PIN CA52    [get_ports jtag_gnd_o]
 set_property IOSTANDARD LVCMOS18 [get_ports jtag_gnd_o]
 # E19 - C22 (FMCP_HSPC_LA18_CC_P) - J1.06 - TCK
 set_property PACKAGE_PIN BW39    [get_ports jtag_tck_i]

@@ -138,6 +138,7 @@ xilinx.com:ip:xlslice:1.0\
 MICAS_KUL:user:occamy_chip:1.0\
 xilinx.com:ip:axis_vio:1.0\
 xilinx.com:ip:clk_wizard:1.0\
+xilinx.com:ip:versal_cips:3.4\
 "
 
    set list_ips_missing ""
@@ -224,7 +225,7 @@ proc create_root_design { parentCell } {
   set uart_rts_no_0 [ create_bd_port -dir O uart_rts_no_0 ]
   set spim_sck_o [ create_bd_port -dir O spim_sck_o ]
   set spim_sd_io [ create_bd_port -dir IO -from 3 -to 0 spim_sd_io ]
-  set gpio_d_o [ create_bd_port -dir O -from 7 -to 0 gpio_d_o ]
+  set gpio_d_o [ create_bd_port -dir O -from 3 -to 0 gpio_d_o ]
   set spim_csb_o [ create_bd_port -dir O -from 1 -to 0 spim_csb_o ]
   set i2c_sda_io [ create_bd_port -dir IO i2c_sda_io ]
   set i2c_scl_io [ create_bd_port -dir IO i2c_scl_io ]
@@ -259,8 +260,8 @@ proc create_root_design { parentCell } {
   # Create instance: xlslice_1, and set properties
   set xlslice_1 [ create_bd_cell -type ip -vlnv xilinx.com:ip:xlslice:1.0 xlslice_1 ]
   set_property -dict [list \
-    CONFIG.DIN_FROM {7} \
-    CONFIG.DOUT_WIDTH {8} \
+    CONFIG.DIN_FROM {3} \
+    CONFIG.DOUT_WIDTH {4} \
   ] $xlslice_1
 
 
@@ -290,6 +291,44 @@ proc create_root_design { parentCell } {
     CONFIG.CLKOUT_USED {true,true,false,false,false,false,false} \
     CONFIG.CLK_IN1_BOARD_INTERFACE {lpddr4_clk1} \
   ] $clk_wizard_0
+
+
+  # Create instance: versal_cips_0, and set properties
+  set versal_cips_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:versal_cips:3.4 versal_cips_0 ]
+  set_property -dict [list \
+    CONFIG.BOOT_MODE {Custom} \
+    CONFIG.DEBUG_MODE {JTAG} \
+    CONFIG.DESIGN_MODE {0} \
+    CONFIG.DEVICE_INTEGRITY_MODE {Custom} \
+    CONFIG.PS_PMC_CONFIG { \
+      BOOT_MODE {Custom} \
+      DEBUG_MODE {JTAG} \
+      DESIGN_MODE {0} \
+      DEVICE_INTEGRITY_MODE {Custom} \
+      PMC_BANK_0_IO_STANDARD {LVCMOS1.8} \
+      PMC_QSPI_FBCLK {{ENABLE 1} {IO {PMC_MIO 6}}} \
+      PMC_QSPI_PERIPHERAL_ENABLE {0} \
+      PMC_SD0 {{CD_ENABLE 0} {CD_IO {PMC_MIO 24}} {POW_ENABLE 0} {POW_IO {PMC_MIO 17}} {RESET_ENABLE 0} {RESET_IO {PMC_MIO 17}} {WP_ENABLE 0} {WP_IO {PMC_MIO 25}}} \
+      PMC_SD0_PERIPHERAL {{CLK_100_SDR_OTAP_DLY 0x00} {CLK_200_SDR_OTAP_DLY 0x00} {CLK_50_DDR_ITAP_DLY 0x00} {CLK_50_DDR_OTAP_DLY 0x00} {CLK_50_SDR_ITAP_DLY 0x00} {CLK_50_SDR_OTAP_DLY 0x00} {ENABLE 0}\
+{IO {PMC_MIO 13 .. 25}}} \
+      PMC_SD0_SLOT_TYPE {SD 2.0} \
+      PMC_SMAP_PERIPHERAL {{ENABLE 0} {IO {32 Bit}}} \
+      PS_BOARD_INTERFACE {Custom} \
+      PS_HSDP_EGRESS_TRAFFIC {JTAG} \
+      PS_HSDP_INGRESS_TRAFFIC {JTAG} \
+      PS_HSDP_MODE {NONE} \
+      SMON_ALARMS {Set_Alarms_On} \
+      SMON_ENABLE_TEMP_AVERAGING {0} \
+      SMON_MEAS126 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 2.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {2 V unipolar}} {NAME VCCAUX} {SUPPLY_NUM 0}} \
+      SMON_MEAS127 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 2.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {2 V unipolar}} {NAME VCCAUX_PMC} {SUPPLY_NUM 1}} \
+      SMON_MEAS148 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 2.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {2 V unipolar}} {NAME VCC_PMC} {SUPPLY_NUM 2}} \
+      SMON_MEAS149 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 2.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {2 V unipolar}} {NAME VCC_PSFP} {SUPPLY_NUM 3}} \
+      SMON_MEAS150 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 2.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {2 V unipolar}} {NAME VCC_PSLP} {SUPPLY_NUM 4}} \
+      SMON_MEAS152 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 2.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {2 V unipolar}} {NAME VCC_SOC} {SUPPLY_NUM 5}} \
+      SMON_MEAS153 {{ALARM_ENABLE 0} {ALARM_LOWER 0.00} {ALARM_UPPER 2.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {2 V unipolar}} {NAME VP_VN} {SUPPLY_NUM 6}} \
+      SMON_TEMP_AVERAGING_SAMPLES {0} \
+    } \
+  ] $versal_cips_0
 
 
   # Create interface connections
