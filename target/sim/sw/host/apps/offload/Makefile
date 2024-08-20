@@ -16,7 +16,8 @@ DEBUG ?= OFF # ON to turn on debugging symbols
 
 APP  = offload
 SRCS = src/offload.c
-DEVICE_APPS += $(shell cd ../../../device/apps/;find -mindepth 2 -maxdepth 2 -type d)
+DEVICE_APPS += $(shell cd ../../../device/apps/;find -mindepth 2 -maxdepth 2 -type d | sed 's|^\./||')
+$(info DEVICE_APPS: $(DEVICE_APPS))
 # Compiler toolchain
 RISCV_CC      = riscv64-unknown-elf-gcc
 RISCV_OBJCOPY = riscv64-unknown-elf-objcopy
