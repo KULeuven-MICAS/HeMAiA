@@ -7,9 +7,9 @@
 
 
 # Four-wires UART with flow control
-set_property PACKAGE_PIN AY44 [get_ports uart_rx_i_0]
+set_property PACKAGE_PIN AW44 [get_ports uart_rx_i_0]
 set_property IOSTANDARD LVCMOS15 [get_ports uart_rx_i_0]
-set_property PACKAGE_PIN AW44 [get_ports uart_tx_o_0]
+set_property PACKAGE_PIN AY44 [get_ports uart_tx_o_0]
 set_property IOSTANDARD LVCMOS15 [get_ports uart_tx_o_0]
 # FT4232HL's flow control is not connected to the FPGA... 
 # The external UART alternative

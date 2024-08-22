@@ -117,7 +117,7 @@ if ($DEBUG) {
 
     ## Clock
     set_property port_width 1 [get_debug_ports u_ila_0/clk]
-    connect_debug_port u_ila_0/clk [get_nets [list hemaia_system_i/clk_wizard_0/inst/clk_core]]
+    connect_debug_port u_ila_0/clk [get_nets [list hemaia_system_i/versal_cips_0/inst/pl0_ref_clk]]
 
     set debugNets [lsort -dictionary [get_nets -hier -filter {MARK_DEBUG == 1}]]
     set netNameLast ""

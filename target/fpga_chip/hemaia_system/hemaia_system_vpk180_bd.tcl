@@ -137,7 +137,6 @@ xilinx.com:ip:util_reduced_logic:2.0\
 xilinx.com:ip:xlslice:1.0\
 MICAS_KUL:user:occamy_chip:1.0\
 xilinx.com:ip:axis_vio:1.0\
-xilinx.com:ip:clk_wizard:1.0\
 xilinx.com:ip:versal_cips:3.4\
 "
 
@@ -202,11 +201,6 @@ proc create_root_design { parentCell } {
 
 
   # Create interface ports
-  set ddr_200mhz_clk [ create_bd_intf_port -mode Slave -vlnv xilinx.com:interface:diff_clock_rtl:1.0 ddr_200mhz_clk ]
-  set_property -dict [ list \
-   CONFIG.FREQ_HZ {200000000} \
-   ] $ddr_200mhz_clk
-
 
   # Create ports
   set reset [ create_bd_port -dir I -type rst reset ]
@@ -277,46 +271,55 @@ proc create_root_design { parentCell } {
   ] $axis_vio_0
 
 
-  # Create instance: clk_wizard_0, and set properties
-  set clk_wizard_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:clk_wizard:1.0 clk_wizard_0 ]
-  set_property -dict [list \
-    CONFIG.CLKOUT_DRIVES {BUFG,BUFG,BUFG,BUFG,BUFG,BUFG,BUFG} \
-    CONFIG.CLKOUT_DYN_PS {None,None,None,None,None,None,None} \
-    CONFIG.CLKOUT_GROUPING {Auto,Auto,Auto,Auto,Auto,Auto,Auto} \
-    CONFIG.CLKOUT_MATCHED_ROUTING {false,false,false,false,false,false,false} \
-    CONFIG.CLKOUT_PORT {clk_core,clk_rtc,clk_out3,clk_out4,clk_out5,clk_out6,clk_out7} \
-    CONFIG.CLKOUT_REQUESTED_DUTY_CYCLE {50.000,50.000,50.000,50.000,50.000,50.000,50.000} \
-    CONFIG.CLKOUT_REQUESTED_OUT_FREQUENCY {50.000,10,100.000,100.000,100.000,100.000,100.000} \
-    CONFIG.CLKOUT_REQUESTED_PHASE {0.000,0.000,0.000,0.000,0.000,0.000,0.000} \
-    CONFIG.CLKOUT_USED {true,true,false,false,false,false,false} \
-    CONFIG.CLK_IN1_BOARD_INTERFACE {lpddr4_clk1} \
-  ] $clk_wizard_0
-
-
   # Create instance: versal_cips_0, and set properties
   set versal_cips_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:versal_cips:3.4 versal_cips_0 ]
   set_property -dict [list \
     CONFIG.BOOT_MODE {Custom} \
+    CONFIG.CLOCK_MODE {Custom} \
+    CONFIG.DDR_MEMORY_MODE {Custom} \
     CONFIG.DEBUG_MODE {JTAG} \
     CONFIG.DESIGN_MODE {0} \
     CONFIG.DEVICE_INTEGRITY_MODE {Custom} \
     CONFIG.PS_PMC_CONFIG { \
       BOOT_MODE {Custom} \
+      CLOCK_MODE {Custom} \
+      DDR_MEMORY_MODE {Custom} \
       DEBUG_MODE {JTAG} \
       DESIGN_MODE {0} \
       DEVICE_INTEGRITY_MODE {Custom} \
+      PMC_ALT_REF_CLK_FREQMHZ {33.333} \
       PMC_BANK_0_IO_STANDARD {LVCMOS1.8} \
+      PMC_BANK_1_IO_STANDARD {LVCMOS1.8} \
+      PMC_CRP_EFUSE_REF_CTRL_SRCSEL {IRO_CLK/4} \
+      PMC_CRP_HSM0_REF_CTRL_FREQMHZ {33.333} \
+      PMC_CRP_HSM1_REF_CTRL_FREQMHZ {133.333} \
+      PMC_CRP_LSBUS_REF_CTRL_FREQMHZ {100} \
+      PMC_CRP_NOC_REF_CTRL_FREQMHZ {960} \
+      PMC_CRP_PL0_REF_CTRL_FREQMHZ {50} \
+      PMC_CRP_PL1_REF_CTRL_FREQMHZ {3.2768} \
+      PMC_CRP_PL5_REF_CTRL_FREQMHZ {400} \
+      PMC_MIO0 {{AUX_IO 0} {DIRECTION in} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE Reserved}} \
+      PMC_MIO1 {{AUX_IO 0} {DIRECTION in} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE Reserved}} \
+      PMC_PL_ALT_REF_CLK_FREQMHZ {33.333} \
       PMC_QSPI_FBCLK {{ENABLE 1} {IO {PMC_MIO 6}}} \
       PMC_QSPI_PERIPHERAL_ENABLE {0} \
+      PMC_REF_CLK_FREQMHZ {33.3333333} \
       PMC_SD0 {{CD_ENABLE 0} {CD_IO {PMC_MIO 24}} {POW_ENABLE 0} {POW_IO {PMC_MIO 17}} {RESET_ENABLE 0} {RESET_IO {PMC_MIO 17}} {WP_ENABLE 0} {WP_IO {PMC_MIO 25}}} \
       PMC_SD0_PERIPHERAL {{CLK_100_SDR_OTAP_DLY 0x00} {CLK_200_SDR_OTAP_DLY 0x00} {CLK_50_DDR_ITAP_DLY 0x00} {CLK_50_DDR_OTAP_DLY 0x00} {CLK_50_SDR_ITAP_DLY 0x00} {CLK_50_SDR_OTAP_DLY 0x00} {ENABLE 0}\
 {IO {PMC_MIO 13 .. 25}}} \
       PMC_SD0_SLOT_TYPE {SD 2.0} \
       PMC_SMAP_PERIPHERAL {{ENABLE 0} {IO {32 Bit}}} \
+      PMC_USE_PMC_NOC_AXI0 {0} \
       PS_BOARD_INTERFACE {Custom} \
       PS_HSDP_EGRESS_TRAFFIC {JTAG} \
       PS_HSDP_INGRESS_TRAFFIC {JTAG} \
       PS_HSDP_MODE {NONE} \
+      PS_USE_FPD_CCI_NOC {0} \
+      PS_USE_FPD_CCI_NOC0 {0} \
+      PS_USE_NOC_LPD_AXI0 {0} \
+      PS_USE_PMCPL_CLK0 {1} \
+      PS_USE_PMCPL_CLK1 {1} \
+      PS_USE_PMCPL_IRO_CLK {0} \
       SMON_ALARMS {Set_Alarms_On} \
       SMON_ENABLE_TEMP_AVERAGING {0} \
       SMON_MEAS126 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 2.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {2 V unipolar}} {NAME VCCAUX} {SUPPLY_NUM 0}} \
@@ -331,9 +334,6 @@ proc create_root_design { parentCell } {
   ] $versal_cips_0
 
 
-  # Create interface connections
-  connect_bd_intf_net -intf_net CLK_IN1_D_0_1 [get_bd_intf_ports ddr_200mhz_clk] [get_bd_intf_pins clk_wizard_0/CLK_IN1_D]
-
   # Create port connections
   connect_bd_net -net Net [get_bd_ports spim_sd_io] [get_bd_pins occamy_chip/spim_sd_io]
   connect_bd_net -net Net1 [get_bd_ports i2c_sda_io] [get_bd_pins occamy_chip/i2c_sda_io]
@@ -343,8 +343,7 @@ proc create_root_design { parentCell } {
   connect_bd_net -net axis_vio_0_probe_out0 [get_bd_pins axis_vio_0/probe_out0] [get_bd_pins concat_rst_core/In1]
   connect_bd_net -net axis_vio_0_probe_out1 [get_bd_pins axis_vio_0/probe_out1] [get_bd_pins occamy_chip/boot_mode_i]
   connect_bd_net -net c_high_dout [get_bd_pins c_high/dout] [get_bd_ports jtag_vdd_o] [get_bd_pins occamy_chip/jtag_trst_ni]
-  connect_bd_net -net clk_wizard_0_clk_core [get_bd_pins clk_wizard_0/clk_core] [get_bd_pins axis_vio_0/clk] [get_bd_pins occamy_chip/clk_i]
-  connect_bd_net -net clk_wizard_0_clk_rtc [get_bd_pins clk_wizard_0/clk_rtc] [get_bd_pins occamy_chip/rtc_i]
+  connect_bd_net -net clk_wizard_0_clk_core [get_bd_pins versal_cips_0/pl0_ref_clk] [get_bd_pins axis_vio_0/clk] [get_bd_pins occamy_chip/clk_i] [get_bd_pins occamy_chip/clk_periph_i]
   connect_bd_net -net const_low_dout [get_bd_pins c_low/dout] [get_bd_ports jtag_gnd_o] [get_bd_pins occamy_chip/test_mode_i] [get_bd_pins occamy_chip/gpio_d_i] [get_bd_pins occamy_chip/ext_irq_i]
   connect_bd_net -net jtag_tck_i_1 [get_bd_ports jtag_tck_i] [get_bd_pins occamy_chip/jtag_tck_i]
   set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_nets jtag_tck_i_1]
@@ -368,6 +367,7 @@ proc create_root_design { parentCell } {
   set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_nets uart_cts_ni_0_1]
   connect_bd_net -net uart_rx_i_0_1 [get_bd_ports uart_rx_i_0] [get_bd_pins occamy_chip/uart_rx_i]
   set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_nets uart_rx_i_0_1]
+  connect_bd_net -net versal_cips_0_pl1_ref_clk [get_bd_pins versal_cips_0/pl1_ref_clk] [get_bd_pins occamy_chip/rtc_i]
   connect_bd_net -net xlconcat_2_dout [get_bd_pins concat_rst_core/dout] [get_bd_pins rst_or_core/Op1]
   connect_bd_net -net xlslice_1_Dout [get_bd_pins xlslice_1/Dout] [get_bd_ports gpio_d_o]
 
