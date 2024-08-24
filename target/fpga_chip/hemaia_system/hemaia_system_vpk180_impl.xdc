@@ -24,7 +24,7 @@ set_property IOSTANDARD LVCMOS15 [get_ports uart_tx_o_0]
 # LA29P - BY38
 set_property PACKAGE_PIN BY38 [get_ports uart_cts_ni_0]
 set_property IOSTANDARD LVCMOS15 [get_ports uart_cts_ni_0]
-set_property PULLUP TRUE [get_ports uart_cts_ni_0]
+set_property PULLDOWN TRUE [get_ports uart_cts_ni_0]
 # LA29N - CA37
 set_property PACKAGE_PIN CA37 [get_ports uart_rts_no_0]
 set_property IOSTANDARD LVCMOS15 [get_ports uart_rts_no_0]
