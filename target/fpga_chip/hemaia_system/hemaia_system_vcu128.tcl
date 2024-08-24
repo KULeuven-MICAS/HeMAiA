@@ -156,14 +156,6 @@ if ($DEBUG) {
     write_debug_probes -force probes.ltx
 }
 
-# Incremental implementation
-set incremental_impl_dcp /usr/scratch2/wuerzburg/cykoenig/development/vivado_checkpoints/hemaia_system_vcu128_wrapper_routed.dcp
-if { [info exists incremental_impl_dcp]} {
-  if { [file exists $incremental_impl_dcp]} {
-    set_property incremental_checkpoint ${incremental_impl_dcp} [get_runs impl_1]
-  }
-}
-
 # Implement
 set_property strategy Performance_ExploreWithRemap [get_runs impl_1]
 launch_runs impl_1 -jobs ${nproc}
