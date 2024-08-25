@@ -4,6 +4,7 @@ vivado_ips/xgui
 .Xil/
 xgui/
 define_defines_includes_no_simset.tcl
+probes.ltx
 *.jou
 *.log
 *.zip

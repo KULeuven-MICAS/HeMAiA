@@ -7,71 +7,81 @@
 
 
 # Four-wires UART with flow control
-set_property PACKAGE_PIN BP26 [get_ports uart_rx_i_0]
-set_property IOSTANDARD LVCMOS18 [get_ports uart_rx_i_0]
-set_property PACKAGE_PIN BN26 [get_ports uart_tx_o_0]
-set_property IOSTANDARD LVCMOS18 [get_ports uart_tx_o_0]
-set_property PACKAGE_PIN BP22 [get_ports uart_cts_ni_0]
-set_property IOSTANDARD LVCMOS18 [get_ports uart_cts_ni_0]
-set_property PACKAGE_PIN BP23 [get_ports uart_rts_no_0]
-set_property IOSTANDARD LVCMOS18 [get_ports uart_rts_no_0]
+set_property PACKAGE_PIN AY44 [get_ports uart_rx_i_0]
+set_property IOSTANDARD LVCMOS15 [get_ports uart_rx_i_0]
+set_property PACKAGE_PIN AW44 [get_ports uart_tx_o_0]
+set_property IOSTANDARD LVCMOS15 [get_ports uart_tx_o_0]
+# FT4232HL's flow control is not connected to the FPGA... 
+# The external UART alternative
+# Data
+# # LA25P - CC38
+# set_property PACKAGE_PIN CC38 [get_ports uart_rx_i_0]
+# set_property IOSTANDARD LVCMOS15 [get_ports uart_rx_i_0]
+# # LA25N - CC39
+# set_property PACKAGE_PIN CC39 [get_ports uart_tx_o_0]
+# set_property IOSTANDARD LVCMOS15 [get_ports uart_tx_o_0]
+# Flow Control
+# LA29P - BY38
+set_property PACKAGE_PIN BY38 [get_ports uart_cts_ni_0]
+set_property IOSTANDARD LVCMOS15 [get_ports uart_cts_ni_0]
+set_property PULLDOWN TRUE [get_ports uart_cts_ni_0]
+# LA29N - CA37
+set_property PACKAGE_PIN CA37 [get_ports uart_rts_no_0]
+set_property IOSTANDARD LVCMOS15 [get_ports uart_rts_no_0]
 
 # Six-wires SPIx4
 # FMCP_HSPC_LA12_P
-set_property PACKAGE_PIN J22 [get_ports spim_sd_io[0]]
-set_property IOSTANDARD LVCMOS18 [get_ports spim_sd_io[0]]
+set_property PACKAGE_PIN BW49 [get_ports spim_sd_io[0]]
+set_property IOSTANDARD LVCMOS15 [get_ports spim_sd_io[0]]
 # FMCP_HSPC LA12_N
-set_property PACKAGE_PIN H22 [get_ports spim_sd_io[1]]
-set_property IOSTANDARD LVCMOS18 [get_ports spim_sd_io[1]]
+set_property PACKAGE_PIN BW50 [get_ports spim_sd_io[1]]
+set_property IOSTANDARD LVCMOS15 [get_ports spim_sd_io[1]]
 # FMCP_HSPC LA16_P
-set_property PACKAGE_PIN K24 [get_ports spim_sd_io[2]]
-set_property IOSTANDARD LVCMOS18 [get_ports spim_sd_io[2]]
+set_property PACKAGE_PIN CA51 [get_ports spim_sd_io[2]]
+set_property IOSTANDARD LVCMOS15 [get_ports spim_sd_io[2]]
 # FMCP_HSPC_LA16_N
-set_property PACKAGE_PIN K23 [get_ports spim_sd_io[3]]
-set_property IOSTANDARD LVCMOS18 [get_ports spim_sd_io[3]]
+set_property PACKAGE_PIN CB52 [get_ports spim_sd_io[3]]
+set_property IOSTANDARD LVCMOS15 [get_ports spim_sd_io[3]]
 # FMCP_HSPC_LA20_P
-set_property PACKAGE_PIN A21 [get_ports spim_csb_o[0]]
-set_property IOSTANDARD LVCMOS18 [get_ports spim_csb_o[0]]
+set_property PACKAGE_PIN BR42 [get_ports spim_csb_o[0]]
+set_property IOSTANDARD LVCMOS15 [get_ports spim_csb_o[0]]
 # FMCP_HSPC_LA20_N
-set_property PACKAGE_PIN A20 [get_ports spim_csb_o[1]]
-set_property IOSTANDARD LVCMOS18 [get_ports spim_csb_o[1]]
+set_property PACKAGE_PIN BT41 [get_ports spim_csb_o[1]]
+set_property IOSTANDARD LVCMOS15 [get_ports spim_csb_o[1]]
 # FMCP_HSPC_LA22_P
-set_property PACKAGE_PIN B16 [get_ports spim_sck_o]
-set_property IOSTANDARD LVCMOS18 [get_ports spim_sck_o]
+set_property PACKAGE_PIN CD42 [get_ports spim_sck_o]
+set_property IOSTANDARD LVCMOS15 [get_ports spim_sck_o]
 
 create_clock -period 10.000 -name spi_m_sck [get_ports spim_sck_o]
 
 # Two-wires I2C
 # FMCP_HSPC_LA13_P
-set_property PACKAGE_PIN A25 [get_ports i2c_sda_io]
-set_property IOSTANDARD LVCMOS18 [get_ports i2c_sda_io]
-# FMCP_HSPC_LA13_N
-set_property PACKAGE_PIN A24 [get_ports i2c_scl_io]
-set_property IOSTANDARD LVCMOS18 [get_ports i2c_scl_io]
+set_property PACKAGE_PIN CC49 [get_ports i2c_sda_io]
+set_property IOSTANDARD LVCMOS15 [get_ports i2c_sda_io]
+set_property PULLUP TRUE [get_ports i2c_sda_io]
 
-# Eight-wires GPIO_O connected to LEDs
-set_property PACKAGE_PIN BH24 [get_ports gpio_d_o[0]]
-set_property IOSTANDARD LVCMOS18 [get_ports gpio_d_o[0]]
-set_property PACKAGE_PIN BG24 [get_ports gpio_d_o[1]]
-set_property IOSTANDARD LVCMOS18 [get_ports gpio_d_o[1]]
-set_property PACKAGE_PIN BG25 [get_ports gpio_d_o[2]]
-set_property IOSTANDARD LVCMOS18 [get_ports gpio_d_o[2]]
-set_property PACKAGE_PIN BF25 [get_ports gpio_d_o[3]]
-set_property IOSTANDARD LVCMOS18 [get_ports gpio_d_o[3]]
-set_property PACKAGE_PIN BF26 [get_ports gpio_d_o[4]]
-set_property IOSTANDARD LVCMOS18 [get_ports gpio_d_o[4]]
-set_property PACKAGE_PIN BF27 [get_ports gpio_d_o[5]]
-set_property IOSTANDARD LVCMOS18 [get_ports gpio_d_o[5]]
-set_property PACKAGE_PIN BG27 [get_ports gpio_d_o[6]]
-set_property IOSTANDARD LVCMOS18 [get_ports gpio_d_o[6]]
-set_property PACKAGE_PIN BG28 [get_ports gpio_d_o[7]]
-set_property IOSTANDARD LVCMOS18 [get_ports gpio_d_o[7]]
+# FMCP_HSPC_LA13_N
+set_property PACKAGE_PIN CD50 [get_ports i2c_scl_io]
+set_property IOSTANDARD LVCMOS15 [get_ports i2c_scl_io]
+set_property PULLUP TRUE [get_ports i2c_scl_io]
+
+
+# Four-wires GPIO_O connected to LEDs
+set_property PACKAGE_PIN BA49 [get_ports gpio_d_o[0]]
+set_property IOSTANDARD LVCMOS15 [get_ports gpio_d_o[0]]
+set_property PACKAGE_PIN AY50 [get_ports gpio_d_o[1]]
+set_property IOSTANDARD LVCMOS15 [get_ports gpio_d_o[1]]
+set_property PACKAGE_PIN BA48 [get_ports gpio_d_o[2]]
+set_property IOSTANDARD LVCMOS15 [get_ports gpio_d_o[2]]
+set_property PACKAGE_PIN AY49 [get_ports gpio_d_o[3]]
+set_property IOSTANDARD LVCMOS15 [get_ports gpio_d_o[3]]
 
 
 # CPU_RESET pushbutton switch
+# SW4 is the reset button
 set_false_path -from [get_ports reset] -to [all_registers]
-set_property PACKAGE_PIN BM29 [get_ports reset]
-set_property IOSTANDARD LVCMOS12 [get_ports reset]
+set_property PACKAGE_PIN BT48 [get_ports reset]
+set_property IOSTANDARD LVCMOS15 [get_ports reset]
 
 # Set RTC as false path
 set_false_path -to [get_pins hemaia_system_i/occamy_chip/inst/i_occamy/i_clint/i_sync_edge/i_sync/reg_q_reg[0]/D]
@@ -115,13 +125,11 @@ group_path -default -through [get_pins -filter {NAME =~ "*/D"} -of [get_cells -h
 group_path -name {fma_fu0} -through [get_pins -filter {NAME =~ "*/D"} -of [get_cells -hier -filter { NAME =~  "*gen_inside_pipeline[0]*" && PARENT =~  "*fpnew_fma_multi*" }]]
 
 ################################################################################
-# BIT_STREAM
+# BIT_STREAM: Versal uses PS to configure PL. Still investigating how to configure... 
 ################################################################################
-set_property BITSTREAM.CONFIG.SPI_32BIT_ADDR Yes [current_design]
-set_property BITSTREAM.CONFIG.SPI_BUSWIDTH 4 [current_design]
-set_property BITSTREAM.CONFIG.SPI_FALL_EDGE Yes [current_design]
-set_property BITSTREAM.CONFIG.CONFIGRATE 127.5 [current_design]
-set_property CONFIG_VOLTAGE 1.8 [current_design]
-set_property CFGBVS GND [current_design]
-
-
+# set_property BITSTREAM.CONFIG.SPI_32BIT_ADDR Yes [current_design]
+# set_property BITSTREAM.CONFIG.SPI_BUSWIDTH 4 [current_design]
+# set_property BITSTREAM.CONFIG.SPI_FALL_EDGE Yes [current_design]
+# set_property BITSTREAM.CONFIG.CONFIGRATE 127.5 [current_design]
+# set_property CONFIG_VOLTAGE 1.8 [current_design]
+# set_property CFGBVS GND [current_design]

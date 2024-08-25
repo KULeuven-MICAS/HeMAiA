@@ -15,6 +15,7 @@ VIVADO ?= vivado
 
 BENDER_TARGETS = $(shell cat $(MKFILE_DIR)../../rtl/src/bender_targets.tmp)
 BENDER_TARGETS += -t hemaia
+TARGET_PLATFORM?= vcu128
 
 default: all
 all: hemaia_system_vcu128
@@ -26,13 +27,13 @@ include $(ROOT)/util/Makefrag
 
 .PHONY: hemaia_system_vcu128
 
-hemaia_system_vcu128: ../hemaia_chip/hemaia_chip define_defines_includes_no_simset.tcl
-	${VIVADO} -mode batch -source hemaia_system_vcu128.tcl -tclargs $(DEBUG) $(EXT_JTAG)
+hemaia_system: ../hemaia_chip/hemaia_chip define_defines_includes_no_simset.tcl
+	${VIVADO} -mode batch -source hemaia_system_${TARGET_PLATFORM}.tcl -tclargs $(DEBUG) $(EXT_JTAG)
 
 define_defines_includes_no_simset.tcl:
 	${BENDER} script vivado $(BENDER_TARGETS) --only-defines --only-includes --no-simset > $@
 
 clean:
-	rm -rf .Xil hemaia_system_vcu128 *.jou *.log *.str define_defines_includes_no_simset.tcl
+	rm -rf .Xil hemaia_system *.jou *.log *.str define_defines_includes_no_simset.tcl
 
 .PHONY: program flash clean

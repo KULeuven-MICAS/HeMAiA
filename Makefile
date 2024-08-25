@@ -72,19 +72,20 @@ hemaia_system_vivado_preparation: # In SNAX Docker
 	make -C ./target/fpga_chip/hemaia_system/ define_defines_includes_no_simset.tcl
 	make -C ./target/fpga_chip/hemaia_chip/ define-sources.tcl
 
-hemaia_chip_vcu128:	# In ESAT Server
-	#                                                                                          			debug  jtag  (put 1 or 0)
-	sh -c "cd ./target/fpga_chip/hemaia_chip/;vivado -mode batch -source hemaia_chip.tcl -tclargs     		1     1"
+hemaia_chip_vivado:	# In ESAT Server
+	make -C ./target/fpga_chip/hemaia_chip hemaia_chip
 
-hemaia_chip_vcu128_gui: # In ESAT Server
+hemaia_chip_vivado_gui: # In ESAT Server
 	sh -c "cd ./target/fpga/fpga_chip/hemaia_chip/hemaia_chip/;vivado hemaia_chip.xpr"
 
-hemaia_system_vcu128: hemaia_chip_vcu128 # In ESAT Server
-	#                                                                                         						debug  jtag  (put 1 or 0)   
-	sh -c "cd ./target/fpga_chip/hemaia_system/;vivado -mode batch -source hemaia_system_vcu128.tcl -tclargs           	1     1"
+hemaia_system_vivado: hemaia_chip_vivado # In ESAT Server
+	make -C ./target/fpga_chip/hemaia_system hemaia_system
 
 hemaia_system_vcu128_gui: # In ESAT Server
 	sh -c "cd ./target/fpga_chip/hemaia_system/hemaia_system_vcu128/;vivado hemaia_system_vcu128.xpr"
+
+hemaia_system_vivado_gui: # In ESAT Server
+	sh -c "cd ./target/fpga_chip/hemaia_system/hemaia_system/;vivado hemaia_system.xpr"
 
 # Verilator Workflow (not working, many errors comes from AXI)
 occamy_system_vlt: # In SNAX Docker

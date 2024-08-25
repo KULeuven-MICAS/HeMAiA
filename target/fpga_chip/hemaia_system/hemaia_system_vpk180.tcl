@@ -17,24 +17,24 @@ set nproc [exec nproc]
 # Create project
 set project hemaia_system
 
-create_project $project ./$project -force -part xcvu37p-fsvh2892-2L-e
-set_property board_part xilinx.com:vcu128:part0:1.0 [current_project]
+create_project $project ./$project -force -part xcvp1802-lsvc4072-2MP-e-S
+set_property board_part xilinx.com:vpk180:part0:1.2 [current_project]
 set_property XPM_LIBRARIES XPM_MEMORY [current_project]
 
 set_property ip_repo_paths ../hemaia_chip [current_project]
 update_ip_catalog
 
 # Create block design
-source hemaia_system_vcu128_bd.tcl
+source hemaia_system_vpk180_bd.tcl
 
 # Add constraint files
-add_files -fileset constrs_1 -norecurse hemaia_system_vcu128_impl.xdc
-import_files -fileset constrs_1 hemaia_system_vcu128_impl.xdc
-set_property used_in_synthesis false [get_files hemaia_system/hemaia_system.srcs/constrs_1/imports/hemaia_system/hemaia_system_vcu128_impl.xdc]
+add_files -fileset constrs_1 -norecurse hemaia_system_vpk180_impl.xdc
+import_files -fileset constrs_1 hemaia_system_vpk180_impl.xdc
+set_property used_in_synthesis false [get_files hemaia_system/hemaia_system.srcs/constrs_1/imports/hemaia_system/hemaia_system_vpk180_impl.xdc]
 if { $EXT_JTAG } {
-    add_files -fileset constrs_1 -norecurse hemaia_system_vcu128_impl_ext_jtag.xdc
-    import_files -fileset constrs_1 hemaia_system_vcu128_impl_ext_jtag.xdc
-    set_property used_in_synthesis false [get_files hemaia_system/hemaia_system.srcs/constrs_1/imports/hemaia_system/hemaia_system_vcu128_impl.xdc]
+    add_files -fileset constrs_1 -norecurse hemaia_system_vpk180_impl_ext_jtag.xdc
+    import_files -fileset constrs_1 hemaia_system_vpk180_impl_ext_jtag.xdc
+    set_property used_in_synthesis false [get_files hemaia_system/hemaia_system.srcs/constrs_1/imports/hemaia_system/hemaia_system_vpk180_impl.xdc]
 } else {
     delete_bd_objs [get_bd_nets -of_objects [get_bd_ports "jtag_tck_i jtag_tdi_i jtag_tdo_o jtag_tms_i" ]]
     delete_bd_objs [get_bd_ports jtag_*]
@@ -53,7 +53,7 @@ create_ip_run [get_files -of_objects [get_fileset sources_1] ./hemaia_system/hem
 # Re-add hemaia chip includes
 set build hemaia_system
 
-export_ip_user_files -of_objects [get_ips occamy_chip_0] -no_script -sync -force -quiet
+export_ip_user_files -of_objects [get_ips occamy_chip] -no_script -sync -force -quiet
 eval [exec sed {s/current_fileset/get_filesets hemaia_system_occamy_chip_0/} define_defines_includes_no_simset.tcl]
 
 # Do NOT insert BUFGs on high-fanout nets (e.g. reset). This will backfire during placement.
@@ -100,7 +100,7 @@ if {[get_property PROGRESS [get_run $run]] != "100%"} {
 
 # Create ILA. Attach all signals that were previously marked debug.
 # For internal signals: Add "(* mark_debug = "true" *)" before signal definition in HDL code.
-# For blockdesign-level signals: Use "set_property HDL_ATTRIBUTE.DEBUG $DEBUG [get_bd_nets ...]" in hemaia_system_vcu128_bd.tcl
+# For blockdesign-level signals: Use "set_property HDL_ATTRIBUTE.DEBUG $DEBUG [get_bd_nets ...]" in hemaia_system_vpk180_bd.tcl
 if ($DEBUG) {
     open_run synth_1 -name synth_1
     # Create core
@@ -117,7 +117,7 @@ if ($DEBUG) {
 
     ## Clock
     set_property port_width 1 [get_debug_ports u_ila_0/clk]
-    connect_debug_port u_ila_0/clk [get_nets [list hemaia_system_i/clk_wiz/inst/clk_core]]
+    connect_debug_port u_ila_0/clk [get_nets [list hemaia_system_i/versal_cips_0/inst/pl0_ref_clk]]
 
     set debugNets [lsort -dictionary [get_nets -hier -filter {MARK_DEBUG == 1}]]
     set netNameLast ""
@@ -145,9 +145,9 @@ if ($DEBUG) {
         set netNameLast $netName
     }
 
-    set_property target_constrs_file hemaia_system/hemaia_system.srcs/constrs_1/imports/hemaia_system/hemaia_system_vcu128_impl.xdc [current_fileset -constrset]
+    set_property target_constrs_file hemaia_system/hemaia_system.srcs/constrs_1/imports/hemaia_system/hemaia_system_vpk180_impl.xdc [current_fileset -constrset]
     if { $EXT_JTAG } {
-        set_property target_constrs_file hemaia_system/hemaia_system.srcs/constrs_1/imports/hemaia_system/hemaia_system_vcu128_impl_ext_jtag.xdc [current_fileset -constrset]
+        set_property target_constrs_file hemaia_system/hemaia_system.srcs/constrs_1/imports/hemaia_system/hemaia_system_vpk180_impl_ext_jtag.xdc [current_fileset -constrset]
     }
     save_constraints -force
 
