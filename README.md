@@ -80,5 +80,5 @@ The following files are released under Solderpad v0.51 (`SHL-0.51`) see `hw/LICE
 @ SNAX Docker: make rtl CFG=target/rtl/cfg/occamy_cfg/snax_two_clusters.hjson (Can be modified to other configurations)
 @ SNAX Docker: make occamy_system_vsim_preparation
 @ Barnard3: make occamy_system_vsim
-@ Barnard3: target/sim/bin/occamy_top.sim[.gui] [Elf location]
+@ Barnard3: target/sim/bin/occamy_top.vsim[.gui] [Elf location]
 ```
