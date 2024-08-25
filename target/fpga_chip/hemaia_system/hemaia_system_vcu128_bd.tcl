@@ -1,6 +1,6 @@
 
 ################################################################
-# This is a generated script based on design: hemaia_system_vcu128
+# This is a generated script based on design: hemaia_system
 #
 # Though there are limitations about the generated script,
 # the main purpose of this utility is to make learning
@@ -41,7 +41,7 @@ if { [string first $scripts_vivado_version $current_vivado_version] == -1 } {
 ################################################################
 
 # To test this script, run the following commands from Vivado Tcl console:
-# source hemaia_system_vcu128_script.tcl
+# source hemaia_system_script.tcl
 
 # If there is no project opened, this script will create a
 # project, but make sure you do not have an existing project
@@ -56,7 +56,7 @@ if { $list_projs eq "" } {
 
 # CHANGE DESIGN NAME HERE
 variable design_name
-set design_name hemaia_system_vcu128
+set design_name hemaia_system
 
 # If you do not already have an existing IP Integrator design open,
 # you can create a design using the following command:
@@ -319,46 +319,46 @@ proc create_root_design { parentCell } {
   set_property CONFIG.DIN_FROM {7} $xlslice_1
 
 
-  # Create instance: occamy_chip_0, and set properties
-  set occamy_chip_0 [ create_bd_cell -type ip -vlnv MICAS_KUL:user:occamy_chip:1.0 occamy_chip_0 ]
+  # Create instance: occamy_chip, and set properties
+  set occamy_chip [ create_bd_cell -type ip -vlnv MICAS_KUL:user:occamy_chip:1.0 occamy_chip ]
 
   # Create interface connections
   connect_bd_intf_net -intf_net default_100mhz_clk_1 [get_bd_intf_ports default_100mhz_clk] [get_bd_intf_pins clk_wiz/CLK_IN1_D]
 
   # Create port connections
-  connect_bd_net -net Net [get_bd_ports spim_sd_io] [get_bd_pins occamy_chip_0/spim_sd_io]
-  connect_bd_net -net Net1 [get_bd_ports i2c_sda_io] [get_bd_pins occamy_chip_0/i2c_sda_io]
+  connect_bd_net -net Net [get_bd_ports spim_sd_io] [get_bd_pins occamy_chip/spim_sd_io]
+  connect_bd_net -net Net1 [get_bd_ports i2c_sda_io] [get_bd_pins occamy_chip/i2c_sda_io]
   set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_nets Net1]
-  connect_bd_net -net Net2 [get_bd_ports i2c_scl_io] [get_bd_pins occamy_chip_0/i2c_scl_io]
+  connect_bd_net -net Net2 [get_bd_ports i2c_scl_io] [get_bd_pins occamy_chip/i2c_scl_io]
   set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_nets Net2]
-  connect_bd_net -net c_high_dout [get_bd_pins c_high/dout] [get_bd_ports jtag_vdd_o] [get_bd_pins occamy_chip_0/jtag_trst_ni]
-  connect_bd_net -net clk_wiz_clk_core [get_bd_pins clk_wiz/clk_core] [get_bd_pins vio_sys/clk] [get_bd_pins occamy_chip_0/clk_i] [get_bd_pins occamy_chip_0/clk_periph_i]
-  connect_bd_net -net clk_wiz_clk_rtc [get_bd_pins clk_wiz/clk_rtc] [get_bd_pins occamy_chip_0/rtc_i]
-  connect_bd_net -net const_low_dout [get_bd_pins c_low/dout] [get_bd_ports jtag_gnd_o] [get_bd_pins occamy_chip_0/test_mode_i] [get_bd_pins occamy_chip_0/gpio_d_i] [get_bd_pins occamy_chip_0/ext_irq_i]
-  connect_bd_net -net jtag_tck_i_1 [get_bd_ports jtag_tck_i] [get_bd_pins occamy_chip_0/jtag_tck_i]
+  connect_bd_net -net c_high_dout [get_bd_pins c_high/dout] [get_bd_ports jtag_vdd_o] [get_bd_pins occamy_chip/jtag_trst_ni]
+  connect_bd_net -net clk_wiz_clk_core [get_bd_pins clk_wiz/clk_core] [get_bd_pins vio_sys/clk] [get_bd_pins occamy_chip/clk_i] [get_bd_pins occamy_chip/clk_periph_i]
+  connect_bd_net -net clk_wiz_clk_rtc [get_bd_pins clk_wiz/clk_rtc] [get_bd_pins occamy_chip/rtc_i]
+  connect_bd_net -net const_low_dout [get_bd_pins c_low/dout] [get_bd_ports jtag_gnd_o] [get_bd_pins occamy_chip/test_mode_i] [get_bd_pins occamy_chip/gpio_d_i] [get_bd_pins occamy_chip/ext_irq_i]
+  connect_bd_net -net jtag_tck_i_1 [get_bd_ports jtag_tck_i] [get_bd_pins occamy_chip/jtag_tck_i]
   set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_nets jtag_tck_i_1]
-  connect_bd_net -net jtag_tdi_i_1 [get_bd_ports jtag_tdi_i] [get_bd_pins occamy_chip_0/jtag_tdi_i]
+  connect_bd_net -net jtag_tdi_i_1 [get_bd_ports jtag_tdi_i] [get_bd_pins occamy_chip/jtag_tdi_i]
   set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_nets jtag_tdi_i_1]
-  connect_bd_net -net jtag_tms_i_1 [get_bd_ports jtag_tms_i] [get_bd_pins occamy_chip_0/jtag_tms_i]
+  connect_bd_net -net jtag_tms_i_1 [get_bd_ports jtag_tms_i] [get_bd_pins occamy_chip/jtag_tms_i]
   set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_nets jtag_tms_i_1]
-  connect_bd_net -net occamy_chip_0_gpio_d_o [get_bd_pins occamy_chip_0/gpio_d_o] [get_bd_pins xlslice_1/Din]
-  connect_bd_net -net occamy_chip_0_jtag_tdo_o [get_bd_pins occamy_chip_0/jtag_tdo_o] [get_bd_ports jtag_tdo_o]
+  connect_bd_net -net occamy_chip_0_gpio_d_o [get_bd_pins occamy_chip/gpio_d_o] [get_bd_pins xlslice_1/Din]
+  connect_bd_net -net occamy_chip_0_jtag_tdo_o [get_bd_pins occamy_chip/jtag_tdo_o] [get_bd_ports jtag_tdo_o]
   set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_nets occamy_chip_0_jtag_tdo_o]
-  connect_bd_net -net occamy_chip_0_spim_csb_o [get_bd_pins occamy_chip_0/spim_csb_o] [get_bd_ports spim_csb_o]
-  connect_bd_net -net occamy_chip_0_spim_sck_o [get_bd_pins occamy_chip_0/spim_sck_o] [get_bd_ports spim_sck_o]
-  connect_bd_net -net occamy_chip_0_uart_rts_no [get_bd_pins occamy_chip_0/uart_rts_no] [get_bd_ports uart_rts_no_0]
+  connect_bd_net -net occamy_chip_0_spim_csb_o [get_bd_pins occamy_chip/spim_csb_o] [get_bd_ports spim_csb_o]
+  connect_bd_net -net occamy_chip_0_spim_sck_o [get_bd_pins occamy_chip/spim_sck_o] [get_bd_ports spim_sck_o]
+  connect_bd_net -net occamy_chip_0_uart_rts_no [get_bd_pins occamy_chip/uart_rts_no] [get_bd_ports uart_rts_no_0]
   set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_nets occamy_chip_0_uart_rts_no]
-  connect_bd_net -net occamy_chip_0_uart_tx_o [get_bd_pins occamy_chip_0/uart_tx_o] [get_bd_ports uart_tx_o_0]
+  connect_bd_net -net occamy_chip_0_uart_tx_o [get_bd_pins occamy_chip/uart_tx_o] [get_bd_ports uart_tx_o_0]
   set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_nets occamy_chip_0_uart_tx_o]
   connect_bd_net -net occamy_rst [get_bd_pins rst_or_core/Res] [get_bd_pins rst_core_inv/Op1]
   connect_bd_net -net occamy_rst_vio [get_bd_pins vio_sys/probe_out0] [get_bd_pins concat_rst_core/In1]
-  connect_bd_net -net occamy_rstn [get_bd_pins rst_core_inv/Res] [get_bd_pins occamy_chip_0/rst_ni] [get_bd_pins occamy_chip_0/rst_periph_ni]
+  connect_bd_net -net occamy_rstn [get_bd_pins rst_core_inv/Res] [get_bd_pins occamy_chip/rst_ni] [get_bd_pins occamy_chip/rst_periph_ni]
   connect_bd_net -net reset_1 [get_bd_ports reset] [get_bd_pins concat_rst_core/In0]
-  connect_bd_net -net uart_cts_ni_0_1 [get_bd_ports uart_cts_ni_0] [get_bd_pins occamy_chip_0/uart_cts_ni]
+  connect_bd_net -net uart_cts_ni_0_1 [get_bd_ports uart_cts_ni_0] [get_bd_pins occamy_chip/uart_cts_ni]
   set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_nets uart_cts_ni_0_1]
-  connect_bd_net -net uart_rx_i_0_1 [get_bd_ports uart_rx_i_0] [get_bd_pins occamy_chip_0/uart_rx_i]
+  connect_bd_net -net uart_rx_i_0_1 [get_bd_ports uart_rx_i_0] [get_bd_pins occamy_chip/uart_rx_i]
   set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_nets uart_rx_i_0_1]
-  connect_bd_net -net vio_sys_probe_out1 [get_bd_pins vio_sys/probe_out1] [get_bd_pins occamy_chip_0/boot_mode_i]
+  connect_bd_net -net vio_sys_probe_out1 [get_bd_pins vio_sys/probe_out1] [get_bd_pins occamy_chip/boot_mode_i]
   connect_bd_net -net xlconcat_2_dout [get_bd_pins concat_rst_core/dout] [get_bd_pins rst_or_core/Op1]
   connect_bd_net -net xlslice_1_Dout [get_bd_pins xlslice_1/Dout] [get_bd_ports gpio_d_o]
 

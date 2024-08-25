@@ -74,7 +74,7 @@ set_property PACKAGE_PIN BM29 [get_ports reset]
 set_property IOSTANDARD LVCMOS12 [get_ports reset]
 
 # Set RTC as false path
-set_false_path -to [get_pins occamy_vcu128_i/occamy/inst/i_occamy/i_clint/i_sync_edge/i_sync/reg_q_reg[0]/D]
+set_false_path -to [get_pins hemaia_system_i/occamy_chip/inst/i_occamy/i_clint/i_sync_edge/i_sync/reg_q_reg[0]/D]
 
 ################################################################################
 # JTAG

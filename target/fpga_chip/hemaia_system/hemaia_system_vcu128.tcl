@@ -15,7 +15,7 @@ if {$argc > 1 && [lindex $argv 1]} { set EXT_JTAG true }
 set nproc [exec nproc]
 
 # Create project
-set project hemaia_system_vcu128
+set project hemaia_system
 
 create_project $project ./$project -force -part xcvu37p-fsvh2892-2L-e
 set_property board_part xilinx.com:vcu128:part0:1.0 [current_project]
@@ -30,31 +30,31 @@ source hemaia_system_vcu128_bd.tcl
 # Add constraint files
 add_files -fileset constrs_1 -norecurse hemaia_system_vcu128_impl.xdc
 import_files -fileset constrs_1 hemaia_system_vcu128_impl.xdc
-set_property used_in_synthesis false [get_files hemaia_system_vcu128/hemaia_system_vcu128.srcs/constrs_1/imports/hemaia_system/hemaia_system_vcu128_impl.xdc]
+set_property used_in_synthesis false [get_files hemaia_system/hemaia_system.srcs/constrs_1/imports/hemaia_system/hemaia_system_vcu128_impl.xdc]
 if { $EXT_JTAG } {
     add_files -fileset constrs_1 -norecurse hemaia_system_vcu128_impl_ext_jtag.xdc
     import_files -fileset constrs_1 hemaia_system_vcu128_impl_ext_jtag.xdc
-    set_property used_in_synthesis false [get_files hemaia_system_vcu128/hemaia_system_vcu128.srcs/constrs_1/imports/hemaia_system/hemaia_system_vcu128_impl.xdc]
+    set_property used_in_synthesis false [get_files hemaia_system/hemaia_system.srcs/constrs_1/imports/hemaia_system/hemaia_system_vcu128_impl.xdc]
 } else {
     delete_bd_objs [get_bd_nets -of_objects [get_bd_ports "jtag_tck_i jtag_tdi_i jtag_tdo_o jtag_tms_i" ]]
     delete_bd_objs [get_bd_ports jtag_*]
 }
 
 # Generate wrapper
-make_wrapper -files [get_files ./hemaia_system_vcu128/hemaia_system_vcu128.srcs/sources_1/bd/hemaia_system_vcu128/hemaia_system_vcu128.bd] -top
-add_files -norecurse ./hemaia_system_vcu128/hemaia_system_vcu128.gen/sources_1/bd/hemaia_system_vcu128/hdl/hemaia_system_vcu128_wrapper.v
+make_wrapper -files [get_files ./hemaia_system/hemaia_system.srcs/sources_1/bd/hemaia_system/hemaia_system.bd] -top
+add_files -norecurse ./hemaia_system/hemaia_system.gen/sources_1/bd/hemaia_system/hdl/hemaia_system_wrapper.v
 update_compile_order -fileset sources_1
 
 # Create runs
-generate_target all [get_files ./hemaia_system_vcu128/hemaia_system_vcu128.srcs/sources_1/bd/hemaia_system_vcu128/hemaia_system_vcu128.bd]
-export_ip_user_files -of_objects [get_files ./hemaia_system_vcu128/hemaia_system_vcu128.srcs/sources_1/bd/hemaia_system_vcu128/hemaia_system_vcu128.bd] -no_script -sync -force -quiet
-create_ip_run [get_files -of_objects [get_fileset sources_1] ./hemaia_system_vcu128/hemaia_system_vcu128.srcs/sources_1/bd/hemaia_system_vcu128/hemaia_system_vcu128.bd]
+generate_target all [get_files ./hemaia_system/hemaia_system.srcs/sources_1/bd/hemaia_system/hemaia_system.bd]
+export_ip_user_files -of_objects [get_files ./hemaia_system/hemaia_system.srcs/sources_1/bd/hemaia_system/hemaia_system.bd] -no_script -sync -force -quiet
+create_ip_run [get_files -of_objects [get_fileset sources_1] ./hemaia_system/hemaia_system.srcs/sources_1/bd/hemaia_system/hemaia_system.bd]
 
 # Re-add hemaia chip includes
-set build hemaia_system_vcu128
+set build hemaia_system
 
 export_ip_user_files -of_objects [get_ips occamy_chip_0] -no_script -sync -force -quiet
-eval [exec sed {s/current_fileset/get_filesets hemaia_system_vcu128_occamy_chip_0_0/} define_defines_includes_no_simset.tcl]
+eval [exec sed {s/current_fileset/get_filesets hemaia_system_occamy_chip_0/} define_defines_includes_no_simset.tcl]
 
 # Do NOT insert BUFGs on high-fanout nets (e.g. reset). This will backfire during placement.
 set_param logicopt.enableBUFGinsertHFN no
@@ -117,7 +117,7 @@ if ($DEBUG) {
 
     ## Clock
     set_property port_width 1 [get_debug_ports u_ila_0/clk]
-    connect_debug_port u_ila_0/clk [get_nets [list hemaia_system_vcu128_i/clk_wiz/inst/clk_core]]
+    connect_debug_port u_ila_0/clk [get_nets [list hemaia_system_i/clk_wiz/inst/clk_core]]
 
     set debugNets [lsort -dictionary [get_nets -hier -filter {MARK_DEBUG == 1}]]
     set netNameLast ""
@@ -145,9 +145,9 @@ if ($DEBUG) {
         set netNameLast $netName
     }
 
-    set_property target_constrs_file hemaia_system_vcu128/hemaia_system_vcu128.srcs/constrs_1/imports/hemaia_system/hemaia_system_vcu128_impl.xdc [current_fileset -constrset]
+    set_property target_constrs_file hemaia_system/hemaia_system.srcs/constrs_1/imports/hemaia_system/hemaia_system_vcu128_impl.xdc [current_fileset -constrset]
     if { $EXT_JTAG } {
-        set_property target_constrs_file hemaia_system_vcu128/hemaia_system_vcu128.srcs/constrs_1/imports/hemaia_system/hemaia_system_vcu128_impl_ext_jtag.xdc [current_fileset -constrset]
+        set_property target_constrs_file hemaia_system/hemaia_system.srcs/constrs_1/imports/hemaia_system/hemaia_system_vcu128_impl_ext_jtag.xdc [current_fileset -constrset]
     }
     save_constraints -force
 

@@ -283,7 +283,7 @@ $(TARGET_CLINT_DIR)/clint.%: $(SOURCE_CLINT_DIR)/data/clint.%.tpl $(CFG) | $(TAR
 ###########################################
 # TODO: This SNAX_CFGS should not be fixed! It should be created dynamically instead. 
 SNAX_CFGS += cfg/cluster_cfg/snax_KUL_cluster.hjson
-SNAX_CFGS += cfg/cluster_cfg/snax_streamer_gemmX_xdma_cluster.hjson
+SNAX_CFGS += cfg/cluster_cfg/snax_KUL_xdma_cluster.hjson
 
 #######################
 # Step 1: Wrapper Gen #
@@ -302,20 +302,16 @@ SNAX_CFGS += cfg/cluster_cfg/snax_streamer_gemmX_xdma_cluster.hjson
 #############################
 
 SNAX_ACC_GEN:
-ifeq ($(findstring snax_streamer_gemm_add_c_cluster,$(SNAX_CFGS)),snax_streamer_gemm_add_c_cluster)
-	$(eval BENDER_TARGETS += -t snax_streamer_gemm_add_c -t snax_streamer_gemm_add_c_cluster)
-endif
-
-ifeq ($(findstring snax_streamer_gemmX_xdma_cluster,$(SNAX_CFGS)),snax_streamer_gemmX_xdma_cluster)
-	$(eval BENDER_TARGETS += -t snax_streamer_gemmX_xdma -t snax_streamer_gemmX_xdma_cluster)
-endif
-
 ifeq ($(findstring snax_xdma_cluster,$(SNAX_CFGS)),snax_xdma_cluster)
 	$(eval BENDER_TARGETS += -t snax_xdma -t snax_xdma_cluster)
 endif
 
 ifeq ($(findstring snax_KUL_cluster,$(SNAX_CFGS)),snax_KUL_cluster)
-	$(eval BENDER_TARGETS += -t snax_KUL_cluster)
+	$(eval BENDER_TARGETS += -t snax_gemmX -t snax_data_reshuffler -t snax_KUL_cluster)
+endif
+
+ifeq ($(findstring snax_KUL_xdma_cluster,$(SNAX_CFGS)),snax_KUL_xdma_cluster)
+	$(eval BENDER_TARGETS += -t snax_gemmX -t snax_KUL_xdma_cluster_xdma -t snax_KUL_xdma_cluster)
 endif
 
 # Create the dependency in SNAX: when generating snax, the bender target should be stored into file, which will be used by other targets (e.g. tapeout, fpga, simulation)

@@ -34,6 +34,6 @@ define_defines_includes_no_simset.tcl:
 	${BENDER} script vivado $(BENDER_TARGETS) --only-defines --only-includes --no-simset > $@
 
 clean:
-	rm -rf .Xil hemaia_system_vcu128 *.jou *.log *.str define_defines_includes_no_simset.tcl
+	rm -rf .Xil hemaia_system *.jou *.log *.str define_defines_includes_no_simset.tcl
 
 .PHONY: program flash clean
