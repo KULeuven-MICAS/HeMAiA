@@ -36,45 +36,49 @@ The following files are released under Solderpad v0.51 (`SHL-0.51`) see `hw/LICE
 
 ### **⚠️Tips**: All commands is made at the root dir of the Occamy repo. 
 
-## Prototype the minimal system on VCU128: 
+## Prototype the system on FPGA:
+### Option 1: Occamy configuration on VCU128 (Bootrom and DRAM from Xilinx IP)
+
 ```makefile
 @ Occamy Docker: make bootrom
 @ Occamy Docker: make sw
 @ Occamy Docker: make -C target/fpga/sw [APP=???] (Which binary file you want to use)
-@ SNAX Docker: make rtl CFG=snax_minimal.hjson
-@ SNAX Docker: make occamy_system_vivado_preparation SNAX_MINIMAL=1
+@ SNAX Docker: make rtl CFG=target/rtl/cfg/occamy_cfg/snax_two_clusters.hjson (Can be modified to other configurations)
+@ SNAX Docker: make occamy_system_vivado_preparation
 @ Barnard3: make occamy_system_vcu128
 @ Barnard3: make occamy_system_vcu128_gui
 ```
 
-## Prototype the typical system on VCU128: 
+### Option 2: HeMAiA configuration on VPK180 (Tapeout configuration, everything is internal)
+
 ```makefile
 @ Occamy Docker: make bootrom
 @ Occamy Docker: make sw
 @ Occamy Docker: make -C target/fpga/sw [APP=???] (Which binary file you want to use)
-@ SNAX Docker: make rtl CFG=snax_two_clusters.hjson
-@ SNAX Docker: make occamy_system_vivado_preparation SNAX=1 or make hemaia_system_vivado_preparation SNAX=1
-@ Barnard3: make occamy_system_vcu128 or make hemaia_system_vcu128
-@ Barnard3: make occamy_system_vcu128_gui or make hemaia_system_vcu128_gui
-@ Barnard3: make -C target/fpga/sw download_sw
+@ SNAX Docker: make rtl CFG=target/rtl/cfg/occamy_cfg/snax_two_clusters.hjson (Can be modified to other configurations)
+@ SNAX Docker: make hemaia_system_vivado_preparation
+@ Barnard3: make hemaia_system_vivado TARGET_PLATFORM={vpk180, vcu128}
+@ Barnard3: make hemaia_system_vivado_gui
 ```
 
+## Simulate the system: 
+### Option 1: Simulate with Verilator
 
-## Simulate the minimal system: 
 ```makefile
-make bootrom
-make sw
-make rtl CFG=snax_minimal.hjson
-make occamy_system_vsim_preparation SNAX_MINIMAL=1
-make occamy_system_vsim
+@ Occamy Docker: make bootrom
+@ Occamy Docker: make sw
+@ SNAX Docker: make rtl CFG=target/rtl/cfg/occamy_cfg/snax_two_clusters.hjson (Can be modified to other configurations)
+@ SNAX Docker: make occamy_system_vlt
+@ SNAX Docker: target/sim/bin/occamy_top.vlt [Elf location] [--vcd]
 ```
 
-## Simulate the typical system: 
+### Option 2: Simulate with Questasim
 
 ```makefile
-make bootrom
-make sw
-make rtl CFG=snax_two_clusters.hjson
-make occamy_system_vsim_preparation SNAX=1
-make occamy_system_vsim
+@ Occamy Docker: make bootrom
+@ Occamy Docker: make sw
+@ SNAX Docker: make rtl CFG=target/rtl/cfg/occamy_cfg/snax_two_clusters.hjson (Can be modified to other configurations)
+@ SNAX Docker: make occamy_system_vsim_preparation
+@ Barnard3: make occamy_system_vsim
+@ Barnard3: target/sim/bin/occamy_top.vsim[.gui] [Elf location]
 ```
