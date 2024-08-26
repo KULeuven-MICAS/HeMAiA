@@ -97,7 +97,7 @@ package ${name}_pkg;
   localparam logic [15:0] PartNum = 2;
   localparam logic [31:0] IDCode = (dm::DbgVersion013 << 28) | (PartNum << 12) | 32'h1;
 
-  typedef logic [$(occamy_cfg["hemaia_multichip"]["chip_id_width"] - 1):0] chip_id_t;
+  typedef logic [${hemaia_multichip["chip_id_width"] - 1}:0] chip_id_t;
 
   typedef logic [AddrWidth-1:0] addr_t;
   typedef logic [NarrowUserWidth-1:0] user_narrow_t;

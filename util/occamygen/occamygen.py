@@ -394,7 +394,8 @@ def get_pkg_kwargs(occamy_cfg,cluster_generators, name):
         "cluster_base_addr": util.to_sv_hex(cluster_cfg["cluster_base_addr"]),
         "cluster_base_offset": util.to_sv_hex(cluster_cfg["cluster_base_offset"]),
         "quad_cfg_base_addr": util.to_sv_hex(occamy_cfg["s1_quadrant"]["cfg_base_addr"]),
-        "quad_cfg_base_offset": util.to_sv_hex(occamy_cfg["s1_quadrant"]["cfg_base_offset"])
+        "quad_cfg_base_offset": util.to_sv_hex(occamy_cfg["s1_quadrant"]["cfg_base_offset"]),
+        "hemaia_multichip": occamy_cfg["hemaia_multichip"]
     }
     return pkg_kwargs
 
