@@ -54,7 +54,7 @@ module ${name}_quadrant_s1
 
  // Calculate cluster base address based on `tile id`.
   addr_t cluster_base_offset;
-  assign cluster_base_offset = ClusterBaseOffset & {chip_id_i, {AddrWidth-ChipIdWidth}{1'b0}};
+  assign cluster_base_offset = {chip_id_i, ClusterBaseOffset[AddrWidth-ChipIdWidth-1:0]};
 
   addr_t [${nr_clusters-1}:0] cluster_base_addr;
   % for i in range(nr_clusters):
