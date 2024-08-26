@@ -35,6 +35,7 @@ module ${name}_quadrant_s1
   input  logic                         clk_i,
   input  logic                         rst_ni,
   input  logic                         test_mode_i,
+  input  chip_id_t                     chip_id_i,
   input  logic [NrCoresS1Quadrant-1:0] meip_i,
   input  logic [NrCoresS1Quadrant-1:0] mtip_i,
   input  logic [NrCoresS1Quadrant-1:0] msip_i,
