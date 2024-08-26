@@ -154,6 +154,7 @@ module ${name}_soc
     .clk_i (clk_i),
     .rst_ni (rst_ni),
     .test_mode_i (test_mode_i),
+    .chip_id_i (8'b0),  // Temporary solution as the Chip ID is not provided yet
     .meip_i ('0),
     .mtip_i (mtip_i[${lower_core + nr_cores_s1_quadrant - 1}:${lower_core}]),
     .msip_i (msip_i[${lower_core + nr_cores_s1_quadrant - 1}:${lower_core}]),

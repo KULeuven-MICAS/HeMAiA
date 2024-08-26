@@ -53,9 +53,12 @@ module ${name}_quadrant_s1
 );
 
  // Calculate cluster base address based on `tile id`.
+  addr_t cluster_base_offset;
+  assign cluster_base_offset = ClusterBaseOffset & {chip_id_i, {AddrWidth-ChipIdWidth}{1'b0}};
+
   addr_t [${nr_clusters-1}:0] cluster_base_addr;
   % for i in range(nr_clusters):
-  assign cluster_base_addr[${i}] = ClusterBaseOffset + ${i} * ClusterAddressSpace;
+  assign cluster_base_addr[${i}] = cluster_base_offset + ${i} * ClusterAddressSpace;
   %endfor
 
   // Define types for IOTLBs
@@ -185,6 +188,7 @@ module ${name}_quadrant_s1
     .clk_i,
     .rst_ni,
     .test_mode_i,
+    .chip_id_i,
     .clk_quadrant_o (clk_quadrant),
     .rst_quadrant_no (rst_quadrant_n),
     .isolate_o (isolate),

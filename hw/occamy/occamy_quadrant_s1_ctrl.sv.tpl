@@ -19,6 +19,7 @@ module ${name}_quadrant_s1_ctrl
   input  logic clk_i,
   input  logic rst_ni,
   input  logic test_mode_i,
+  input  chip_id_t chip_id_i,
 
   // Quadrant clock and reset
   output logic clk_quadrant_o,
@@ -59,7 +60,7 @@ module ${name}_quadrant_s1_ctrl
 
   // Upper half of quadrant space reserved for internal use (same size as for all clusters)
   addr_t [0:0] internal_xbar_base_addr;
-  assign internal_xbar_base_addr = S1QuadrantCfgBaseOffset;
+  assign internal_xbar_base_addr = {chip_id_i, S1QuadrantCfgBaseOffset[AddrWidth-ChipIdWidth-1:0]};
 
   // Controller crossbar: shims off for access to internal space
   ${module}
