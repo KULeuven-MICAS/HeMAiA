@@ -87,15 +87,16 @@ clean: clean-bender clean-rtl
 
 clean-bender:
 	rm -rf $(ROOT)/Bender.lock $(ROOT)/.bender/ $(ROOT)/deps
+	rm -rf src/bender_targets.tmp
 
 ###############
 # RTL sources #
 ###############
 
-.PHONY: rtl clint plic socctrl hbmctrl quadctrl snax soc tb
+.PHONY: rtl clint plic socctrl hbmctrl quadctrl soc tb
 .PHONY: clean-rtl clean-clint clean-plic clean-socctrl clean-hbmctrl clean-quadctrl clean-soc clean-tb
 
-rtl: clint plic socctrl hbmctrl quadctrl snax soc tb
+rtl: clint plic socctrl hbmctrl quadctrl soc tb src/bender_targets.tmp
 clean-rtl: clean-clint clean-plic clean-socctrl clean-hbmctrl clean-quadctrl clean-soc clean-tb
 
 $(TARGET_PLIC_DIR) $(TARGET_CLINT_DIR) $(TARGET_SOCCTRL_DIR) $(TARGET_HBMCTRL_DIR) $(TARGET_QUADCTRL_DIR):
@@ -282,8 +283,6 @@ $(TARGET_CLINT_DIR)/clint.%: $(SOURCE_CLINT_DIR)/data/clint.%.tpl $(CFG) | $(TAR
 # SNAX Accelerator  + Wrapper Generations #
 ###########################################
 
-SNAX_CFGS = $(shell python3 $(HEMAIA_UTIL) --cfg_path $(CFG) --print_clusters)
-
 #######################
 # Step 1: Wrapper Gen #
 #######################
@@ -299,20 +298,15 @@ SNAX_CFGS = $(shell python3 $(HEMAIA_UTIL) --cfg_path $(CFG) --print_clusters)
 #############################
 # Step 3: Bender Target Gen #
 #############################
-
-SNAX_ACC_GEN:
-ifeq ($(findstring snax_xdma_cluster,$(SNAX_CFGS)),snax_xdma_cluster)
-	$(eval BENDER_TARGETS += -t snax_xdma -t snax_xdma_cluster)
-endif
-
-ifeq ($(findstring snax_KUL_cluster,$(SNAX_CFGS)),snax_KUL_cluster)
-	$(eval BENDER_TARGETS += -t snax_gemmX -t snax_data_reshuffler -t snax_KUL_cluster)
-endif
-
-ifeq ($(findstring snax_KUL_xdma_cluster,$(SNAX_CFGS)),snax_KUL_xdma_cluster)
-	$(eval BENDER_TARGETS += -t snax_gemmX -t snax_KUL_xdma_cluster_xdma -t snax_KUL_xdma_cluster)
-endif
-
-# Create the dependency in SNAX: when generating snax, the bender target should be stored into file, which will be used by other targets (e.g. tapeout, fpga, simulation)
-snax: SNAX_ACC_GEN # SNAX_WRAPPER_GEN
+SNAX_CFGS = $(shell python3 $(HEMAIA_UTIL) --cfg_path $(CFG) --print_clusters)
+src/bender_targets.tmp: $(CFG) # Generate bender_targets.tmp file
+	if echo "$(SNAX_CFGS)" | grep -q "snax_xdma_cluster"; then \
+	    $(eval BENDER_TARGETS += -t snax_xdma -t snax_xdma_cluster): ; \
+	fi
+	if echo "$(SNAX_CFGS)" | grep -q "snax_KUL_cluster"; then \
+		$(eval BENDER_TARGETS+= -t snax_gemmX -t snax_data_reshuffler -t snax_KUL_cluster): ;\
+	fi
+	if echo "$(SNAX_CFGS)" | grep -q "snax_KUL_xdma_cluster"; then \
+		$(eval BENDER_TARGETS+= -t snax_gemmX -t snax_KUL_xdma_cluster_xdma -t snax_KUL_xdma_cluster): ;\
+	fi
 	echo $(BENDER_TARGETS) > src/bender_targets.tmp
