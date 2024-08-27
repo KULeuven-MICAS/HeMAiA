@@ -9,6 +9,7 @@ from jsonref import JsonRef
 sys.path.append(str(Path(__file__).parent / '../../deps/snitch_cluster/util/clustergen'))
 from cluster import Generator, PMA, PMACfg, SnitchCluster, clog2  # noqa: E402
 import subprocess
+import os
 
 def read_json_file(file):
     try:
@@ -81,6 +82,17 @@ def get_cluster_cfg_list(occamy_cfg, cluster_cfg_dir):
 def generate_snitch(cluster_cfg_dir, snitch_path):
     for cfg in cluster_cfg_dir:
         subprocess.call(f"make -C {snitch_path}/target/snitch_cluster CFG_OVERRIDE={cfg} rtl-gen", shell=True)
+
+# For generating cluster synthesis filelists
+def generate_cluster_syn_flist(cluster_cfg_dir, snitch_path, outdir):
+    for cfg in cluster_cfg_dir:
+        config_name = os.path.splitext(os.path.basename(os.path.normpath(cfg)))[0]
+        subprocess.call(f"make -C {snitch_path}/target/snitch_cluster \
+                        CFG_OVERRIDE={cfg} \
+                        MEM_TYPE=exclude_tcsram \
+                        SYN_FLIST={config_name}.tcl \
+                        SYN_BUILDDIR={outdir} \
+                        gen-syn", shell=True)
 
 def generate_wrappers(cluster_generators,out_dir):
     for cluster_generator in cluster_generators:
