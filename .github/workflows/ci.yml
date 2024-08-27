@@ -48,7 +48,7 @@ jobs:
           echo -e "Should execute \"make sw\""
       - name: Compile RTL
         run: |
-          make rtl CFG_OVERRIDES=target/rtl/cfg/occamy_cfg/snax_two_clusters.hjson
+          make rtl CFG_OVERRIDE=target/rtl/cfg/occamy_cfg/snax_two_clusters.hjson
       - name: Compile Verilator Binary
         run: |
           make occamy_system_vlt
