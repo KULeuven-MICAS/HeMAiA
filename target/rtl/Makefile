@@ -13,7 +13,7 @@ MKFILE_DIR  := $(dir $(MKFILE_PATH))
 ROOT        := $(MKFILE_DIR)../..
 TARGET_SRC_DIR       ?= src
 SNITCH_ROOT = $(shell $(BENDER) path snitch_cluster)
-WRAPPERGEN  = $(SNITCH_ROOT)/util/wrappergen/wrappergen.py
+HEMAIA_UTIL = $(ROOT)/util/hemaia/util.py
 
 SOURCE_OCCAMY_DIR    ?= $(ROOT)/hw/occamy
 
@@ -281,9 +281,8 @@ $(TARGET_CLINT_DIR)/clint.%: $(SOURCE_CLINT_DIR)/data/clint.%.tpl $(CFG) | $(TAR
 ###########################################
 # SNAX Accelerator  + Wrapper Generations #
 ###########################################
-# TODO: This SNAX_CFGS should not be fixed! It should be created dynamically instead. 
-SNAX_CFGS += cfg/cluster_cfg/snax_KUL_cluster.hjson
-SNAX_CFGS += cfg/cluster_cfg/snax_KUL_xdma_cluster.hjson
+
+SNAX_CFGS = $(shell python3 $(HEMAIA_UTIL) --cfg_path $(CFG) --print_clusters)
 
 #######################
 # Step 1: Wrapper Gen #
