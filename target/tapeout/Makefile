@@ -8,11 +8,11 @@ MKFILE_PATH := $(abspath $(lastword $(MAKEFILE_LIST)))
 MKFILE_DIR  := $(dir $(MKFILE_PATH))
 ROOT        := $(MKFILE_DIR)../..
 BENDER      := bender
-SNITCH_ROOT := $(shell $(BENDER) path snitch_cluster)
+SNAX_ROOT   := $(shell $(BENDER) path snitch_cluster)
 
-OCCAMYGEN  ?= $(ROOT)/util/occamygen/occamygen.py
+HEMAIA_UTIL ?= $(ROOT)/util/hemaia/util.py
 
-TARGET_RTL			 ?= $(ROOT)/target/rtl
+TARGET_RTL  ?= $(ROOT)/target/rtl
 
 #######################
 # Config prerequisite #
@@ -45,10 +45,11 @@ FORCE:
 ########################
 
 syn-gen-list:
-	@$(OCCAMYGEN) --cfg $(CFG) --outdir ${MKFILE_DIR} --cluster-only-flist ${SNITCH_ROOT}
+	@$(HEMAIA_UTIL) --cfg_path $(CFG) --snax-path $(SNAX_ROOT) \
+		--outdir ${MKFILE_DIR} --cluster-flist
 
 debug-info:
-	@echo "SNITCH ROOT: ${SNITCH_ROOT}"
+	@echo "SNAX ROOT: ${SNAX_ROOT}"
 	@echo "CFG override: ${CFG_OVERRIDE}"
 	@echo "Makefile path: ${MKFILE_PATH}"
 	@echo "Makefile dir: ${MKFILE_DIR}"
