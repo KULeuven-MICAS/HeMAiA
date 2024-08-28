@@ -19,8 +19,7 @@ module ${name}_quadrant_s1_ctrl
   input  logic clk_i,
   input  logic rst_ni,
   input  logic test_mode_i,
-
-  input  tile_id_t tile_id_i,
+  input  chip_id_t chip_id_i,
 
   // Quadrant clock and reset
   output logic clk_quadrant_o,
@@ -33,8 +32,8 @@ module ${name}_quadrant_s1_ctrl
   output logic ro_flush_valid_o,
   input  logic ro_flush_ready_i,
   
-  output logic [${ro_cache_regions-1}:0][${quadrant_inter_xbar.in_quadrant_0.aw-1}:0] ro_start_addr_o,
-  output logic [${ro_cache_regions-1}:0][${quadrant_inter_xbar.in_quadrant_0.aw-1}:0] ro_end_addr_o,
+  output logic [${ro_cache_regions-1}:0][${soc_wide_xbar.in_quadrant_0.aw-1}:0] ro_start_addr_o,
+  output logic [${ro_cache_regions-1}:0][${soc_wide_xbar.in_quadrant_0.aw-1}:0] ro_end_addr_o,
 
   // Upward (SoC) narrow ports
   output ${soc_narrow_xbar.in_s1_quadrant_0.req_type()} soc_out_req_o,
@@ -61,7 +60,7 @@ module ${name}_quadrant_s1_ctrl
 
   // Upper half of quadrant space reserved for internal use (same size as for all clusters)
   addr_t [0:0] internal_xbar_base_addr;
-  assign internal_xbar_base_addr = '{S1QuadrantCfgBaseOffset + tile_id_i * S1QuadrantCfgAddressSpace};
+  assign internal_xbar_base_addr = {chip_id_i, S1QuadrantCfgBaseOffset[AddrWidth-ChipIdWidth-1:0]};
 
   // Controller crossbar: shims off for access to internal space
   ${module}

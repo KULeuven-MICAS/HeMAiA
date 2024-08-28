@@ -10,8 +10,8 @@
 <%
   cuts_narrow_to_quad = occamy_cfg["cuts"]["narrow_to_quad"]
   cuts_quad_to_narrow = occamy_cfg["cuts"]["quad_to_narrow"]
-  cuts_quad_to_inter = occamy_cfg["cuts"]["quad_to_inter"]
-  cuts_inter_to_quad = occamy_cfg["cuts"]["inter_to_quad"]
+  cuts_wide_to_quad = occamy_cfg["cuts"]["wide_to_quad"]
+  cuts_quad_to_wide = occamy_cfg["cuts"]["quad_to_wide"]
   cuts_narrow_to_cva6 = occamy_cfg["cuts"]["narrow_to_cva6"]
   cuts_narrow_conv_to_spm_narrow_pre = occamy_cfg["cuts"]["narrow_conv_to_spm_narrow_pre"]
   cuts_narrow_conv_to_spm_narrow = occamy_cfg["cuts"]["narrow_conv_to_spm_narrow"]
@@ -77,26 +77,12 @@ module ${name}_soc
   // Crossbars //
   ///////////////
 
-  addr_t [${nr_s1_quadrants-1}:0] s1_quadrant_base_addr, s1_quadrant_cfg_base_addr;
-  % for i in range(nr_s1_quadrants):
-  assign s1_quadrant_base_addr[${i}] = ClusterBaseOffset + ${i} * S1QuadrantAddressSpace;
-  assign s1_quadrant_cfg_base_addr[${i}] = S1QuadrantCfgBaseOffset + ${i} * S1QuadrantCfgAddressSpace;
-  % endfor
-
-  // Crossbars
   ${module}
 
   ///////////////////////////////////
   // Connections between crossbars //
   ///////////////////////////////////
   <%
-    #// inter xbar -> wide xbar & wide xbar -> inter xbar
-    quadrant_inter_xbar.out_wide_xbar \
-      .change_iw(context, soc_wide_xbar.iw, "inter_to_wide_iw_conv_{}".format(i), max_txns_per_id=txns_wide_and_inter) \
-      .cut(context, cuts_wide_and_inter, name="inter_to_wide_cut_{}".format(i), to=soc_wide_xbar.in_quadrant_inter_xbar)
-    soc_wide_xbar.out_quadrant_inter_xbar \
-      .cut(context, cuts_wide_and_inter, name="wide_to_inter_cut_{}".format(i)) \
-      .change_iw(context, quadrant_inter_xbar.iw, "wide_to_inter_iw_conv_{}".format(i), to=quadrant_inter_xbar.in_wide_xbar,  max_txns_per_id=txns_wide_and_inter)
     #// narrow xbar -> wide xbar & wide xbar -> narrow xbar
     soc_narrow_xbar.out_soc_wide \
       .atomic_adapter(context, max_trans=max_atomics_wide, user_as_id=1, user_id_msb=soc_narrow_xbar.out_soc_wide.uw-1, user_id_lsb=0, n_cuts= cuts_withing_atomic_adapter_narrow_wide, name="soc_narrow_wide_amo_adapter") \
@@ -143,18 +129,18 @@ module ${name}_soc
     narrow_in = soc_narrow_xbar.__dict__["out_s1_quadrant_{}".format(i)].cut(context, cuts_narrow_to_quad, name="narrow_in_{}".format(i))
     narrow_out = soc_narrow_xbar.__dict__["in_s1_quadrant_{}".format(i)].copy(name="narrow_out_{}".format(i)).declare(context)
     narrow_out.cut(context, cuts_quad_to_narrow, name="narrow_out_cut_{}".format(i), to=soc_narrow_xbar.__dict__["in_s1_quadrant_{}".format(i)])
-    #// inter xbar -> quad & quad -> pre xbar
-    wide_in = quadrant_inter_xbar.__dict__["out_quadrant_{}".format(i)].cut(context, cuts_inter_to_quad, name="wide_in_{}".format(i))
+    #// wide xbar -> quad & quad -> wide xbar
+    wide_in = soc_wide_xbar.__dict__["out_quadrant_{}".format(i)].cut(context, cuts_wide_to_quad, name="wide_in_{}".format(i))
     #//wide_out = quadrant_pre_xbars[i].in_quadrant.copy(name="wide_out_{}".format(i)).declare(context)
-    wide_out = quadrant_inter_xbar.__dict__["in_quadrant_{}".format(i)].copy(name="wide_out_{}".format(i)).declare(context)
-    wide_out.cut(context, cuts_quad_to_inter, name="wide_out_cut_{}".format(i), to=quadrant_inter_xbar.__dict__["in_quadrant_{}".format(i)])
+    wide_out = soc_wide_xbar.__dict__["in_quadrant_{}".format(i)].copy(name="wide_out_{}".format(i)).declare(context)
+    wide_out.cut(context, cuts_quad_to_wide, name="wide_out_cut_{}".format(i), to=soc_wide_xbar.__dict__["in_quadrant_{}".format(i)])
   %>\
 
   ${name}_quadrant_s1 i_${name}_quadrant_s1_${i} (
     .clk_i (clk_i),
     .rst_ni (rst_ni),
     .test_mode_i (test_mode_i),
-    .tile_id_i (6'd${i}),
+    .chip_id_i (8'b0),  // Temporary solution as the Chip ID is not provided yet
     .meip_i ('0),
     .mtip_i (mtip_i[${lower_core + nr_cores_s1_quadrant - 1}:${lower_core}]),
     .msip_i (msip_i[${lower_core + nr_cores_s1_quadrant - 1}:${lower_core}]),

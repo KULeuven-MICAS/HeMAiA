@@ -122,6 +122,7 @@
 % endfor
 
 % for i, t in enumerate(("narrow", "wide")):
+% if "{}_tlb_cfg".format(t) in occamy_cfg["s1_quadrant"]:
     // Start ${t} TLB fields at regular offset
     { skipto: "${hex(0x800*(1+i))}" }
 % for e in range(occamy_cfg["s1_quadrant"]["{}_tlb_cfg".format(t)].get("l1_num_entries", 1)):
@@ -186,9 +187,7 @@
     },
     { reserved: 1 }
 % endfor
+% endif
 % endfor
-
-
-
   ]
 }
