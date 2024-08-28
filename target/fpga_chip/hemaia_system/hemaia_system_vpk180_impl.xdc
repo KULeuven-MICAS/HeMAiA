@@ -5,63 +5,73 @@
 # Nils Wistoff <nwistoff@iis.ee.ethz.ch>
 # Yunhao Deng <yunhao.deng@kuleuven.be>
 
+# 1 and 0 voltage reference
+# 1: LA20_P - BR42
+set_property PACKAGE_PIN BR42 [get_ports vref_vdd_o]
+set_property IOSTANDARD LVCMOS15 [get_ports vref_vdd_o]
+set_property DRIVE 12 [get_ports vref_vdd_o]
+
+# 0: LA20_N - BT41
+set_property PACKAGE_PIN BT41 [get_ports vref_gnd_o]
+set_property IOSTANDARD LVCMOS15 [get_ports vref_gnd_o]
+set_property DRIVE 12 [get_ports vref_gnd_o]
 
 # Four-wires UART with flow control
-set_property PACKAGE_PIN AY44 [get_ports uart_rx_i_0]
-set_property IOSTANDARD LVCMOS15 [get_ports uart_rx_i_0]
-set_property PACKAGE_PIN AW44 [get_ports uart_tx_o_0]
-set_property IOSTANDARD LVCMOS15 [get_ports uart_tx_o_0]
+# set_property PACKAGE_PIN AY44 [get_ports uart_rx_i_0]
+# set_property IOSTANDARD LVCMOS15 [get_ports uart_rx_i_0]
+# set_property PACKAGE_PIN AW44 [get_ports uart_tx_o_0]
+# set_property IOSTANDARD LVCMOS15 [get_ports uart_tx_o_0]
 # FT4232HL's flow control is not connected to the FPGA... 
 # The external UART alternative
 # Data
-# # LA25P - CC38
-# set_property PACKAGE_PIN CC38 [get_ports uart_rx_i_0]
-# set_property IOSTANDARD LVCMOS15 [get_ports uart_rx_i_0]
-# # LA25N - CC39
-# set_property PACKAGE_PIN CC39 [get_ports uart_tx_o_0]
-# set_property IOSTANDARD LVCMOS15 [get_ports uart_tx_o_0]
+# LA26P - CB41
+set_property PACKAGE_PIN CB41 [get_ports uart_rx_i_0]
+set_property IOSTANDARD LVCMOS15 [get_ports uart_rx_i_0]
+# LA25N - CC42
+set_property PACKAGE_PIN CC42 [get_ports uart_tx_o_0]
+set_property IOSTANDARD LVCMOS15 [get_ports uart_tx_o_0]
 # Flow Control
-# LA29P - BY38
-set_property PACKAGE_PIN BY38 [get_ports uart_cts_ni_0]
+# LA27P - CA38
+set_property PACKAGE_PIN CA38 [get_ports uart_cts_ni_0]
 set_property IOSTANDARD LVCMOS15 [get_ports uart_cts_ni_0]
-set_property PULLDOWN TRUE [get_ports uart_cts_ni_0]
-# LA29N - CA37
-set_property PACKAGE_PIN CA37 [get_ports uart_rts_no_0]
+set_property PULLUP TRUE [get_ports uart_cts_ni_0]
+# LA27N - CA39
+set_property PACKAGE_PIN CA39 [get_ports uart_rts_no_0]
 set_property IOSTANDARD LVCMOS15 [get_ports uart_rts_no_0]
 
 # Six-wires SPIx4
-# FMCP_HSPC_LA12_P
-set_property PACKAGE_PIN BW49 [get_ports spim_sd_io[0]]
+# FMCP_HSPC_LA10_P
+set_property PACKAGE_PIN CC44 [get_ports spim_sd_io[0]]
 set_property IOSTANDARD LVCMOS15 [get_ports spim_sd_io[0]]
-# FMCP_HSPC LA12_N
-set_property PACKAGE_PIN BW50 [get_ports spim_sd_io[1]]
+# FMCP_HSPC LA10_N
+set_property PACKAGE_PIN CD45 [get_ports spim_sd_io[1]]
 set_property IOSTANDARD LVCMOS15 [get_ports spim_sd_io[1]]
-# FMCP_HSPC LA16_P
-set_property PACKAGE_PIN CA51 [get_ports spim_sd_io[2]]
+# FMCP_HSPC LA11_P
+set_property PACKAGE_PIN CB51 [get_ports spim_sd_io[2]]
 set_property IOSTANDARD LVCMOS15 [get_ports spim_sd_io[2]]
-# FMCP_HSPC_LA16_N
-set_property PACKAGE_PIN CB52 [get_ports spim_sd_io[3]]
+# FMCP_HSPC_LA11_N
+set_property PACKAGE_PIN CC52 [get_ports spim_sd_io[3]]
 set_property IOSTANDARD LVCMOS15 [get_ports spim_sd_io[3]]
-# FMCP_HSPC_LA20_P
-set_property PACKAGE_PIN BR42 [get_ports spim_csb_o[0]]
+# FMCP_HSPC_LA12_P
+set_property PACKAGE_PIN BW49 [get_ports spim_csb_o[0]]
 set_property IOSTANDARD LVCMOS15 [get_ports spim_csb_o[0]]
-# FMCP_HSPC_LA20_N
-set_property PACKAGE_PIN BT41 [get_ports spim_csb_o[1]]
+# FMCP_HSPC_LA12_N
+set_property PACKAGE_PIN BW50 [get_ports spim_csb_o[1]]
 set_property IOSTANDARD LVCMOS15 [get_ports spim_csb_o[1]]
-# FMCP_HSPC_LA22_P
-set_property PACKAGE_PIN CD42 [get_ports spim_sck_o]
+# FMCP_HSPC_LA13_P
+set_property PACKAGE_PIN CC49 [get_ports spim_sck_o]
 set_property IOSTANDARD LVCMOS15 [get_ports spim_sck_o]
 
 create_clock -period 10.000 -name spi_m_sck [get_ports spim_sck_o]
 
 # Two-wires I2C
-# FMCP_HSPC_LA13_P
-set_property PACKAGE_PIN CC49 [get_ports i2c_sda_io]
+# FMCP_HSPC_LA14_P
+set_property PACKAGE_PIN BY51 [get_ports i2c_sda_io]
 set_property IOSTANDARD LVCMOS15 [get_ports i2c_sda_io]
 set_property PULLUP TRUE [get_ports i2c_sda_io]
 
-# FMCP_HSPC_LA13_N
-set_property PACKAGE_PIN CD50 [get_ports i2c_scl_io]
+# FMCP_HSPC_LA14_N
+set_property PACKAGE_PIN CA52 [get_ports i2c_scl_io]
 set_property IOSTANDARD LVCMOS15 [get_ports i2c_scl_io]
 set_property PULLUP TRUE [get_ports i2c_scl_io]
 
