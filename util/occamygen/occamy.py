@@ -9,7 +9,6 @@ from jsonref import JsonRef
 sys.path.append(str(Path(__file__).parent / '../../deps/snitch_cluster/util/clustergen'))
 from cluster import Generator, PMA, PMACfg, SnitchCluster, clog2  # noqa: E402
 import subprocess
-import os
 
 def read_json_file(file):
     try:
