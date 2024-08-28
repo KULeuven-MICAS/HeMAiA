@@ -17,7 +17,7 @@ from jsonref import JsonRef
 
 from mako.template import Template
 
-from occamy import check_occamy_cfg, get_cluster_generators, generate_wrappers, generate_memories, get_cluster_cfg_list, generate_snitch, generate_cluster_syn_flist
+from occamy import check_occamy_cfg, get_cluster_generators, generate_wrappers, generate_memories, get_cluster_cfg_list, generate_snitch
 
 sys.path.append(str(pathlib.Path(__file__).parent / '../'))
 from solder import solder, device_tree, util  # noqa: E402
@@ -552,9 +552,6 @@ def main():
     parser.add_argument("--chip",
                         metavar="CHIP_TOP",
                         help="(Optional) Chip Top-level")
-    parser.add_argument("--cluster-only-flist",
-                        metavar="TAEPOUT",
-                        help="Flag for generating for generating cluster specific flists only.")
     parser.add_argument("--graph", "-g", metavar="DOT")
     parser.add_argument("--memories", "-m", action="store_true")
     parser.add_argument("--wrapper", "-w", action="store_true")
@@ -616,11 +613,6 @@ def main():
     if args.snitch:
         print(cluster_cfg_list)
         generate_snitch(cluster_cfg_list, args.snitch)
-
-    # For generating filelists for each cluster
-    if args.cluster_only_flist:
-        print("Generate filelist for each cluster only.")
-        generate_cluster_syn_flist(cluster_cfg_list, args.cluster_only_flist, outdir)
 
     if args.wrapper:
         generate_wrappers(cluster_generators,outdir)
