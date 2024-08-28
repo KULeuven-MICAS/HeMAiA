@@ -119,7 +119,7 @@ def am_connect_soc_narrow_xbar(am, am_soc_narrow_xbar, occamy_cfg):
         occamy_cfg["sys_idma_cfg"]["address"]).attach_to(am_soc_narrow_xbar)
     return am_spm_narrow, am_sys_idma_cfg
 
-def am_connect_soc_wide_xbar(am, am_soc_wide_xbar, occamy_cfg):
+def am_connect_soc_wide_xbar_mem(am, am_soc_wide_xbar, occamy_cfg):
     # Connect wide SPM to Wide AXI
     am_spm_wide = am.new_leaf(
         "spm_wide",
@@ -132,7 +132,7 @@ def am_connect_soc_wide_xbar(am, am_soc_wide_xbar, occamy_cfg):
         occamy_cfg["wide_zero_mem"]["address"]).attach_to(am_soc_wide_xbar)
     return am_spm_wide, am_wide_zero_mem
 
-def am_connect_quad_xbar(am,am_soc_narrow_xbar,am_wide_xbar_quadrant_s1,am_narrow_xbar_quadrant_s1,occamy_cfg,cluster_generators):
+def am_connect_soc_wide_xbar_quad(am,am_soc_narrow_xbar,am_wide_xbar_quadrant_s1,am_narrow_xbar_quadrant_s1,occamy_cfg,cluster_generators):
     ##############################
     # AM: Quadrants and Clusters #
     ##############################
@@ -272,13 +272,7 @@ def get_top_kwargs(occamy_cfg,cluster_generators, soc_axi_lite_narrow_periph_xba
     }
     return top_kwargs
 
-
-
-
-
-
-
-def get_soc_kwargs(occamy_cfg,cluster_generators,soc_narrow_xbar,soc_wide_xbar, quadrant_inter_xbar, util, name):
+def get_soc_kwargs(occamy_cfg,cluster_generators,soc_narrow_xbar,soc_wide_xbar,util, name):
     core_per_cluster_list = [cluster_generator.cfg["nr_cores"] for cluster_generator in cluster_generators]
     nr_cores_quadrant = sum(core_per_cluster_list)
     nr_s1_quadrants = occamy_cfg["nr_s1_quadrant"]
@@ -290,15 +284,11 @@ def get_soc_kwargs(occamy_cfg,cluster_generators,soc_narrow_xbar,soc_wide_xbar, 
         "soc_wide_xbar": soc_wide_xbar,
         "cores": nr_s1_quadrants * nr_cores_quadrant + 1,
         "nr_s1_quadrants": nr_s1_quadrants,
-        "quadrant_inter_xbar": quadrant_inter_xbar,
         "nr_cores_quadrant": nr_cores_quadrant
     }
     return soc_kwargs
 
-
-
-
-def get_quadrant_ctrl_kwargs(occamy_cfg,quadrant_inter_xbar, soc_narrow_xbar,quadrant_s1_ctrl_xbars,quadrant_s1_ctrl_mux, name):
+def get_quadrant_ctrl_kwargs(occamy_cfg, soc_wide_xbar, soc_narrow_xbar,quadrant_s1_ctrl_xbars,quadrant_s1_ctrl_mux, name):
     ro_cache_cfg = occamy_cfg["s1_quadrant"].get("ro_cache_cfg", {})
     ro_cache_regions = ro_cache_cfg.get("address_regions", 1)
     narrow_tlb_cfg = occamy_cfg["s1_quadrant"].get("narrow_tlb_cfg", {})
@@ -314,7 +304,7 @@ def get_quadrant_ctrl_kwargs(occamy_cfg,quadrant_inter_xbar, soc_narrow_xbar,qua
         "narrow_tlb_entries": narrow_tlb_entries,
         "wide_tlb_cfg": wide_tlb_cfg,
         "wide_tlb_entries": wide_tlb_entries,
-        "quadrant_inter_xbar": quadrant_inter_xbar,
+        "soc_wide_xbar": soc_wide_xbar,
         "soc_narrow_xbar": soc_narrow_xbar,
         "quadrant_s1_ctrl_xbars": quadrant_s1_ctrl_xbars,
         "quadrant_s1_ctrl_mux": quadrant_s1_ctrl_mux
@@ -324,7 +314,7 @@ def get_quadrant_ctrl_kwargs(occamy_cfg,quadrant_inter_xbar, soc_narrow_xbar,qua
 
 
 
-def get_quadrant_kwargs(occamy_cfg,cluster_generators,soc_narrow_xbar,quadrant_inter_xbar, wide_xbar_quadrant_s1, narrow_xbar_quadrant_s1, name):
+def get_quadrant_kwargs(occamy_cfg,cluster_generators,soc_wide_xbar,soc_narrow_xbar, wide_xbar_quadrant_s1, narrow_xbar_quadrant_s1, name):
     cluster_cfgs = list()
     nr_clusters = len(occamy_cfg["clusters"])
     for i in range(nr_clusters):
@@ -333,11 +323,10 @@ def get_quadrant_kwargs(occamy_cfg,cluster_generators,soc_narrow_xbar,quadrant_i
         "name": name,
         "occamy_cfg": occamy_cfg,
         "cluster_cfgs": cluster_cfgs,
+        "soc_wide_xbar": soc_wide_xbar,
         "soc_narrow_xbar": soc_narrow_xbar,
-        "quadrant_inter_xbar": quadrant_inter_xbar,
         "wide_xbar_quadrant_s1": wide_xbar_quadrant_s1,
         "narrow_xbar_quadrant_s1": narrow_xbar_quadrant_s1
-
     }
     return quadrant_kwargs
 
@@ -643,7 +632,7 @@ def main():
 
 
     # Quadrant inter crossbar address map:
-    am_quadrant_inter_xbar = am.new_node("am_quadrant_inter_xbar")
+    # am_quadrant_inter_xbar = am.new_node("am_quadrant_inter_xbar")
 
     # Quadrant crossbar address map
     am_wide_xbar_quadrant_s1 = list()
@@ -663,21 +652,20 @@ def main():
     am_axi_lite_narrow_peripherals, am_bootrom, am_clint = am_connect_soc_lite_narrow_periph_xbar(am, am_soc_axi_lite_narrow_periph_xbar, occamy_cfg)
 
     am_spm_narrow,am_sys_idma_cfg = am_connect_soc_narrow_xbar(am, am_soc_narrow_xbar, occamy_cfg)
-    am_spm_wide,am_wide_zero_mem = am_connect_soc_wide_xbar(am,am_soc_wide_xbar,occamy_cfg)
+    am_spm_wide,am_wide_zero_mem = am_connect_soc_wide_xbar_mem(am,am_soc_wide_xbar,occamy_cfg)
 
-    am_clusters = am_connect_quad_xbar(am,am_soc_narrow_xbar,am_wide_xbar_quadrant_s1,am_narrow_xbar_quadrant_s1,occamy_cfg,cluster_generators)
-
+    am_clusters = am_connect_soc_wide_xbar_quad(am,am_soc_narrow_xbar,am_wide_xbar_quadrant_s1,am_narrow_xbar_quadrant_s1,occamy_cfg,cluster_generators)
     # Then we connect between xbars
 
     # Connect quadrants AXI xbar
     for i in range(nr_s1_quadrants):
         am_narrow_xbar_quadrant_s1[i].attach(am_wide_xbar_quadrant_s1[i])
         am_soc_narrow_xbar.attach(am_narrow_xbar_quadrant_s1[i])
-        am_quadrant_inter_xbar.attach(am_wide_xbar_quadrant_s1[i])
+        am_soc_wide_xbar.attach(am_wide_xbar_quadrant_s1[i])
 
     # Connect quadrant inter xbar
-    am_soc_wide_xbar.attach(am_quadrant_inter_xbar)
-    am_quadrant_inter_xbar.attach(am_soc_wide_xbar)
+    # am_soc_wide_xbar.attach(am_quadrant_inter_xbar)
+    # am_quadrant_inter_xbar.attach(am_soc_wide_xbar)
 
     # Connect narrow xbar
     am_soc_narrow_xbar.attach(am_soc_axi_lite_periph_xbar)
@@ -742,36 +730,13 @@ def main():
     # add bootrom and clint seperately
     soc_axi_lite_narrow_periph_xbar.add_output_entry("bootrom", am_bootrom)
     soc_axi_lite_narrow_periph_xbar.add_output_entry("clint", am_clint)
-    quadrant_inter_xbar = solder.AxiXbar(
-        48,
-        512,
-        occamy_cfg["quadrant_inter_xbar_slv_id_width_no_rocache"] + (
-                    1 if occamy_cfg["s1_quadrant"].get("ro_cache_cfg") else 0),
-        name="quadrant_inter_xbar",
-        clk="clk_i",
-        rst="rst_ni",
-        max_slv_trans=occamy_cfg["quadrant_inter_xbar"]["max_slv_trans"],
-        max_mst_trans=occamy_cfg["quadrant_inter_xbar"]["max_mst_trans"],
-        fall_through=occamy_cfg["quadrant_inter_xbar"]["fall_through"],
-        no_loopback=True,
-        atop_support=False,
-        context="soc",
-        node=am_quadrant_inter_xbar)
-    # Default port: soc wide xbar
-    quadrant_inter_xbar.add_output_entry("wide_xbar", am_soc_wide_xbar)
-    quadrant_inter_xbar.add_input("wide_xbar")
-    for i in range(nr_s1_quadrants):
-        # Default route passes HBI through quadrant 0
-        # --> mask this route, forcing it through default wide xbar
-        quadrant_inter_xbar.add_output_entry("quadrant_{}".format(i),
-                                             am_wide_xbar_quadrant_s1[i])
-        quadrant_inter_xbar.add_input("quadrant_{}".format(i))
 
     soc_wide_xbar = solder.AxiXbar(
         48,
         512,
         # This is the cleanest solution minimizing ID width conversions
-        quadrant_inter_xbar.iw,
+        occamy_cfg["quadrant_inter_xbar_slv_id_width_no_rocache"] + (
+                    1 if occamy_cfg["s1_quadrant"].get("ro_cache_cfg") else 0),
         name="soc_wide_xbar",
         clk="clk_i",
         rst="rst_ni",
@@ -783,13 +748,18 @@ def main():
         context="soc",
         node=am_soc_wide_xbar)
 
-    soc_wide_xbar.add_output_entry("quadrant_inter_xbar", am_quadrant_inter_xbar)
     soc_wide_xbar.add_output_entry("soc_narrow", am_soc_narrow_xbar)
-    soc_wide_xbar.add_input("quadrant_inter_xbar")
     soc_wide_xbar.add_input("soc_narrow")
     soc_wide_xbar.add_input("sys_idma_mst")
     soc_wide_xbar.add_output_entry("spm_wide", am_spm_wide)
     soc_wide_xbar.add_output_entry("wide_zero_mem", am_wide_zero_mem)
+    for i in range(nr_s1_quadrants):
+        # Default route passes HBI through quadrant 0
+        # --> mask this route, forcing it through default wide xbar
+        soc_wide_xbar.add_output_entry("quadrant_{}".format(i),
+                                             am_wide_xbar_quadrant_s1[i])
+        soc_wide_xbar.add_input("quadrant_{}".format(i))
+
     ###################
     # SoC Narrow Xbar #
     ###################
@@ -809,11 +779,12 @@ def main():
         node=am_soc_narrow_xbar)
 
     for i in range(nr_s1_quadrants):
-        soc_narrow_xbar.add_output_symbolic_multi("s1_quadrant_{}".format(i),
-                                                  [("s1_quadrant_base_addr",
-                                                    "S1QuadrantAddressSpace"),
-                                                   ("s1_quadrant_cfg_base_addr",
-                                                    "S1QuadrantCfgAddressSpace")])
+        # soc_narrow_xbar.add_output_symbolic_multi("s1_quadrant_{}".format(i),
+        #                                           [("s1_quadrant_base_addr",
+        #                                             "S1QuadrantAddressSpace"),
+        #                                            ("s1_quadrant_cfg_base_addr",
+        #                                             "S1QuadrantCfgAddressSpace")])
+        soc_narrow_xbar.add_output_entry("s1_quadrant_{}".format(i),am_narrow_xbar_quadrant_s1[i])
         soc_narrow_xbar.add_input("s1_quadrant_{}".format(i))
 
     soc_narrow_xbar.add_input("cva6")
@@ -941,7 +912,6 @@ def main():
         "name": args.name,
         "soc_narrow_xbar": soc_narrow_xbar,
         "soc_wide_xbar": soc_wide_xbar,
-        "quadrant_inter_xbar": quadrant_inter_xbar,
         "quadrant_s1_ctrl_xbars": quadrant_s1_ctrl_xbars,
         "quadrant_s1_ctrl_mux": quadrant_s1_ctrl_mux,
         "wide_xbar_quadrant_s1": wide_xbar_quadrant_s1,
@@ -971,7 +941,7 @@ def main():
     # SoC (fully synchronous) #
     ###########################
     if args.soc_sv:
-        soc_kwargs = get_soc_kwargs(occamy_cfg,cluster_generators,soc_narrow_xbar,soc_wide_xbar, quadrant_inter_xbar, util, args.name)
+        soc_kwargs = get_soc_kwargs(occamy_cfg,cluster_generators,soc_narrow_xbar,soc_wide_xbar, util, args.name)
         write_template(args.soc_sv,
                     outdir,
                     module=solder.code_module['soc'],
@@ -981,7 +951,7 @@ def main():
     # S1 Quadrant controller #
     ##########################
     if args.quadrant_s1_ctrl:
-        quadrant_ctrl_kwargs = get_quadrant_ctrl_kwargs(occamy_cfg,quadrant_inter_xbar, soc_narrow_xbar,quadrant_s1_ctrl_xbars, quadrant_s1_ctrl_mux, args.name)
+        quadrant_ctrl_kwargs = get_quadrant_ctrl_kwargs(occamy_cfg, soc_wide_xbar, soc_narrow_xbar,quadrant_s1_ctrl_xbars, quadrant_s1_ctrl_mux, args.name)
         write_template(args.quadrant_s1_ctrl,
                     outdir,
                     module=solder.code_module['quadrant_s1_ctrl'],
@@ -990,7 +960,7 @@ def main():
     # S1 Quadrant #
     ###############
     if args.quadrant_s1:
-        quadrant_kwargs = get_quadrant_kwargs(occamy_cfg, cluster_generators, soc_narrow_xbar, quadrant_inter_xbar, wide_xbar_quadrant_s1, narrow_xbar_quadrant_s1, args.name)
+        quadrant_kwargs = get_quadrant_kwargs(occamy_cfg, cluster_generators, soc_wide_xbar, soc_narrow_xbar, wide_xbar_quadrant_s1, narrow_xbar_quadrant_s1, args.name)
         if nr_s1_quadrants > 0:
             write_template(args.quadrant_s1,
                         outdir,
