@@ -35,8 +35,8 @@ set_property IOSTANDARD LVCMOS15 [get_ports uart_tx_o_0]
 set_property PACKAGE_PIN CA38 [get_ports uart_cts_ni_0]
 set_property IOSTANDARD LVCMOS15 [get_ports uart_cts_ni_0]
 set_property PULLUP TRUE [get_ports uart_cts_ni_0]
-# LA27N - CA39
-set_property PACKAGE_PIN CA39 [get_ports uart_rts_no_0]
+# LA27N - CB39
+set_property PACKAGE_PIN CB39 [get_ports uart_rts_no_0]
 set_property IOSTANDARD LVCMOS15 [get_ports uart_rts_no_0]
 
 # Six-wires SPIx4
