@@ -4,13 +4,17 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Yunhao Deng <yunhao.deng@kuleuven.be>
+# Ryan Antonio <ryan.antonio@kuleuven.be>
 
-from mako.lookup import TemplateLookup
-from mako.template import Template
+# TODO: commenting some so that they will be added later
+# from mako.lookup import TemplateLookup
+# from mako.template import Template
 from jsonref import JsonRef
 import hjson
 import argparse
 import os
+import subprocess
+import pathlib
 
 
 # Extract json file
@@ -23,10 +27,23 @@ def get_config(cfg_path: str):
     cfg = JsonRef.replace_refs(cfg)
     return cfg
 
+
+# For generating cluster synthesis filelists
+def generate_cluster_syn_flist(cfg, snax_path, outdir):
+    config_name = os.path.splitext(os.path.basename(os.path.normpath(cfg)))[0]
+    subprocess.call(f"make -C {snax_path}/target/snitch_cluster \
+                    CFG_OVERRIDE={cfg} \
+                    MEM_TYPE=exclude_tcsram \
+                    SYN_FLIST={config_name}.tcl \
+                    SYN_BUILDDIR={outdir} \
+                    gen-syn", shell=True)
+
+
 def hemaia_util():
     # Parse all arguments
     parser = argparse.ArgumentParser(
-        description="The util collection to retrieve information from the hemaia json file"
+        description="The util collection to \
+            retrieve information from the hemaia json file"
     )
     parser.add_argument(
         "--cfg_path",
@@ -41,6 +58,20 @@ def hemaia_util():
         help="Print out the containing cluster names",
     )
 
+    parser.add_argument("--outdir",
+                        "-o",
+                        type=pathlib.Path,
+                        help="Target directory.")
+
+    parser.add_argument("--snax-path",
+                        type=pathlib.Path,
+                        help="Path to the SNAX cluster repo.")
+
+    parser.add_argument("--cluster-flist",
+                        action="store_true",
+                        help="Flag for generating for generating \
+                            cluster specific flists only.")
+
     parsed_args = parser.parse_args()
 
     # Parse the occamy_cfg file
@@ -49,14 +80,25 @@ def hemaia_util():
         clusters = occamy_cfg['clusters']
         cluster_cfgs = []
         for cluster in clusters:
-            cluster_cfg_path = os.path.dirname(parsed_args.cfg_path) + "/../cluster_cfg/" + cluster + ".hjson"
+            cluster_cfg_path = os.path.dirname(parsed_args.cfg_path) + \
+                "/../cluster_cfg/" + cluster + ".hjson"
             cluster_cfgs.append(get_config(cluster_cfg_path))
     else:
         raise Exception("No clusters found in the hemaia json file")
-    
+
+    # For generating filelists for each cluster
+    # These filelists are specific for synthesis only
+    if parsed_args.cluster_flist:
+        print("Generate filelist for each cluster only.")
+        for cluster in occamy_cfg['clusters']:
+            cfg_str = f"cfg/{cluster}.hjson"
+            generate_cluster_syn_flist(cfg_str,
+                                       parsed_args.snax_path,
+                                       parsed_args.outdir)
+
     if cluster_cfgs.__len__() == 0:
         raise Exception("The number of cluster is 0")
-            
+
     # The remaining part is related to different functions
     # Available variables:
     # - occamy_cfg: The main configuration file
@@ -67,6 +109,7 @@ def hemaia_util():
             print(cluster_cfg['cluster']['name'] + " ", end="")
         print()
         return
+
 
 if __name__ == "__main__":
     hemaia_util()
