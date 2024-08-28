@@ -27,7 +27,7 @@ set_property DRIVE 12 [get_ports vref_gnd_o]
 # LA26P - CB41
 set_property PACKAGE_PIN CB41 [get_ports uart_rx_i_0]
 set_property IOSTANDARD LVCMOS15 [get_ports uart_rx_i_0]
-# LA25N - CC42
+# LA26N - CC42
 set_property PACKAGE_PIN CC42 [get_ports uart_tx_o_0]
 set_property IOSTANDARD LVCMOS15 [get_ports uart_tx_o_0]
 # Flow Control
