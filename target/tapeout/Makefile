@@ -44,7 +44,7 @@ FORCE:
 # Generating Filelists #
 ########################
 
-syn-gen-list:
+syn-gen-list: $(CFG)
 	@$(HEMAIA_UTIL) --cfg_path $(CFG) --snax-path $(SNAX_ROOT) \
 		--outdir ${MKFILE_DIR} --cluster-flist
 
