@@ -18,6 +18,7 @@ clean:
 	make -C ./target/rtl/ clean
 	make -C ./target/fpga/sw clean
 	make -C ./target/fpga/bootrom clean
+	make -C ./target/tapeout clean
 
 # Software Generation
 bootrom: # In Occamy Docker

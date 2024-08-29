@@ -45,7 +45,9 @@ FORCE:
 # Clean #
 #########
 
-.PHONY: clean-tcl
+.PHONY: clean clean-tcl
+
+clean: clean-tcl
 
 clean-tcl:
 	rm -f $(TAPEOUT_TCL_DIR)/*
