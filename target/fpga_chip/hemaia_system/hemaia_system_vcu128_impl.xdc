@@ -5,49 +5,66 @@
 # Nils Wistoff <nwistoff@iis.ee.ethz.ch>
 # Yunhao Deng <yunhao.deng@kuleuven.be>
 
+# 1 and 0 voltage reference
+# 1: LA20_P - A21
+set_property PACKAGE_PIN A21 [get_ports vref_vdd_o]
+set_property IOSTANDARD LVCMOS15 [get_ports vref_vdd_o]
+set_property DRIVE 12 [get_ports vref_vdd_o]
+
+# 0: LA20_N - A20
+set_property PACKAGE_PIN A20 [get_ports vref_gnd_o]
+set_property IOSTANDARD LVCMOS15 [get_ports vref_gnd_o]
+set_property DRIVE 12 [get_ports vref_gnd_o]
+
 
 # Four-wires UART with flow control
-set_property PACKAGE_PIN BP26 [get_ports uart_rx_i_0]
-set_property IOSTANDARD LVCMOS18 [get_ports uart_rx_i_0]
-set_property PACKAGE_PIN BN26 [get_ports uart_tx_o_0]
-set_property IOSTANDARD LVCMOS18 [get_ports uart_tx_o_0]
-set_property PACKAGE_PIN BP22 [get_ports uart_cts_ni_0]
-set_property IOSTANDARD LVCMOS18 [get_ports uart_cts_ni_0]
-set_property PACKAGE_PIN BP23 [get_ports uart_rts_no_0]
-set_property IOSTANDARD LVCMOS18 [get_ports uart_rts_no_0]
+# LA26P - D17
+set_property PACKAGE_PIN D17 [get_ports uart_rx_i_0]
+set_property IOSTANDARD LVCMOS15 [get_ports uart_rx_i_0]
+# LA26N - D16
+set_property PACKAGE_PIN D16 [get_ports uart_tx_o_0]
+set_property IOSTANDARD LVCMOS15 [get_ports uart_tx_o_0]
+# Flow Control
+# LA27P - E21
+set_property PACKAGE_PIN E21 [get_ports uart_cts_ni_0]
+set_property IOSTANDARD LVCMOS15 [get_ports uart_cts_ni_0]
+set_property PULLUP TRUE [get_ports uart_cts_ni_0]
+# LA27N - D21
+set_property PACKAGE_PIN D21 [get_ports uart_rts_no_0]
+set_property IOSTANDARD LVCMOS15 [get_ports uart_rts_no_0]
 
 # Six-wires SPIx4
-# FMCP_HSPC_LA12_P
-set_property PACKAGE_PIN J22 [get_ports spim_sd_io[0]]
-set_property IOSTANDARD LVCMOS18 [get_ports spim_sd_io[0]]
-# FMCP_HSPC LA12_N
-set_property PACKAGE_PIN H22 [get_ports spim_sd_io[1]]
-set_property IOSTANDARD LVCMOS18 [get_ports spim_sd_io[1]]
-# FMCP_HSPC LA16_P
-set_property PACKAGE_PIN K24 [get_ports spim_sd_io[2]]
-set_property IOSTANDARD LVCMOS18 [get_ports spim_sd_io[2]]
-# FMCP_HSPC_LA16_N
-set_property PACKAGE_PIN K23 [get_ports spim_sd_io[3]]
-set_property IOSTANDARD LVCMOS18 [get_ports spim_sd_io[3]]
-# FMCP_HSPC_LA20_P
-set_property PACKAGE_PIN A21 [get_ports spim_csb_o[0]]
-set_property IOSTANDARD LVCMOS18 [get_ports spim_csb_o[0]]
-# FMCP_HSPC_LA20_N
-set_property PACKAGE_PIN A20 [get_ports spim_csb_o[1]]
-set_property IOSTANDARD LVCMOS18 [get_ports spim_csb_o[1]]
-# FMCP_HSPC_LA22_P
-set_property PACKAGE_PIN B16 [get_ports spim_sck_o]
-set_property IOSTANDARD LVCMOS18 [get_ports spim_sck_o]
+# LA10_P - B23
+set_property PACKAGE_PIN B23 [get_ports spim_sd_io[0]]
+set_property IOSTANDARD LVCMOS15 [get_ports spim_sd_io[0]]
+# LA10_N - A23
+set_property PACKAGE_PIN A23 [get_ports spim_sd_io[1]]
+set_property IOSTANDARD LVCMOS15 [get_ports spim_sd_io[1]]
+# LA11_P - B26
+set_property PACKAGE_PIN B26 [get_ports spim_sd_io[2]]
+set_property IOSTANDARD LVCMOS15 [get_ports spim_sd_io[2]]
+# LA11_N - B25
+set_property PACKAGE_PIN B25 [get_ports spim_sd_io[3]]
+set_property IOSTANDARD LVCMOS15 [get_ports spim_sd_io[3]]
+# LA12_P - J22
+set_property PACKAGE_PIN J22 [get_ports spim_csb_o[0]]
+set_property IOSTANDARD LVCMOS15 [get_ports spim_csb_o[0]]
+# LA12_N - H22
+set_property PACKAGE_PIN H22 [get_ports spim_csb_o[1]]
+set_property IOSTANDARD LVCMOS15 [get_ports spim_csb_o[1]]
+# LA13_P - A25
+set_property PACKAGE_PIN A25 [get_ports spim_sck_o]
+set_property IOSTANDARD LVCMOS15 [get_ports spim_sck_o]
 
 create_clock -period 10.000 -name spi_m_sck [get_ports spim_sck_o]
 
 # Two-wires I2C
-# FMCP_HSPC_LA13_P
-set_property PACKAGE_PIN A25 [get_ports i2c_sda_io]
-set_property IOSTANDARD LVCMOS18 [get_ports i2c_sda_io]
-# FMCP_HSPC_LA13_N
-set_property PACKAGE_PIN A24 [get_ports i2c_scl_io]
-set_property IOSTANDARD LVCMOS18 [get_ports i2c_scl_io]
+# LA14_P - C23
+set_property PACKAGE_PIN C23 [get_ports i2c_sda_io]
+set_property IOSTANDARD LVCMOS15 [get_ports i2c_sda_io]
+# LA14_N - B22
+set_property PACKAGE_PIN B22 [get_ports i2c_scl_io]
+set_property IOSTANDARD LVCMOS15 [get_ports i2c_scl_io]
 
 # Eight-wires GPIO_O connected to LEDs
 set_property PACKAGE_PIN BH24 [get_ports gpio_d_o[0]]
