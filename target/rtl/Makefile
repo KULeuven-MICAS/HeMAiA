@@ -313,6 +313,6 @@ src/bender_targets.tmp: $(CFG) # Generate bender_targets.tmp file
 	    $(eval BENDER_TARGETS += -t snax_alu -t snax_alu_cluster): ; \
 	fi
 	if echo "$(SNAX_CFGS)" | grep -q "snax_hypercorex_cluster"; then \
-	    $(eval BENDER_TARGETS += -t snax_hypercorex -t snax_hypercorex_cluster): ; \
+	    $(eval BENDER_TARGETS += -t hypercorex -t snax_hypercorex_cluster): ; \
 	fi
 	echo $(BENDER_TARGETS) > src/bender_targets.tmp
