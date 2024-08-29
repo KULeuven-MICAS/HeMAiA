@@ -46,7 +46,7 @@ rtl: # In SNAX Docker
 
 # Generating filelist per cluster
 # Needed for a per-cluster synthesis
-gen-syn-flist:
+syn-gen-list:
 	make -C ./target/tapeout/ syn-gen-list CFG_OVERRIDE=$(CFG)
 
 # FPGA Workflow
@@ -110,3 +110,8 @@ occamy_system_vsim_preparation: # In SNAX Docker
 
 occamy_system_vsim: # In ESAT Server
 	make -C ./target/sim bin/occamy_top.vsim
+
+
+debug-info:
+	@echo "CFG_OVERRIDE: $(CFG_OVERRIDE)"
+	@echo "CFG: $(CFG)"
