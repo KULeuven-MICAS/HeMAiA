@@ -119,6 +119,8 @@
       cfg_base_offset: 65536 // 0x10000
     },
     clusters:[
+        "snax_alu_cluster",
+        "snax_hypercorex_cluster",
         "snax_KUL_cluster",
         "snax_KUL_xdma_cluster",
     ],
