@@ -45,22 +45,22 @@ FORCE:
 # Clean #
 #########
 
-.PHONY: clean clean-tcl
+.PHONY: clean clean_tcl
 
-clean: clean-tcl
+clean: clean_tcl
 
-clean-tcl:
+clean_tcl:
 	rm -f $(TAPEOUT_TCL_DIR)/*
 
 ########################
 # Generating Filelists #
 ########################
 
-syn-gen-list: $(CFG)
+syn_gen_list: $(CFG)
 	@$(HEMAIA_UTIL) --cfg_path $(CFG) --snax-path $(SNAX_ROOT) \
 		--outdir ${TAPEOUT_TCL_DIR} --cluster-flist
 
-debug-info:
+debug_info:
 	@echo "SNAX ROOT: ${SNAX_ROOT}"
 	@echo "CFG override: ${CFG_OVERRIDE}"
 	@echo "Makefile path: ${MKFILE_PATH}"
