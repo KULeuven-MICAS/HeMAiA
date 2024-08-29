@@ -76,7 +76,7 @@
                     cacheline: 256 // word size in bits
                 },
                 cores: [
-                    { $ref: "#/snax_streamer_gemmX_core_template" },
+                    { $ref: "#/snax_alu_core_template" },
                     { $ref: "#/dma_core_template" },
                 ]
             }
