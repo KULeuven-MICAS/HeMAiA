@@ -41,16 +41,24 @@ sw: # In Occamy Docker
 rtl: # In SNAX Docker
 	make -C ./target/rtl/ rtl CFG_OVERRIDE=$(CFG)
 
-###################
-# Tapeout targets #
-###################
+####################
+# Tapeout Workflow #
+####################
+
+.PHONY: tapeout_syn_flist tapeout_preparation
+
+tapeout_preparation: rtl tapeout_syn_flist
 
 # Generating filelist per cluster
 # Needed for a per-cluster synthesis
-syn-gen-list:
-	make -C ./target/tapeout/ syn-gen-list CFG_OVERRIDE=$(CFG)
+tapeout_syn_flist:
+	make -C ./target/tapeout/ syn_gen_list CFG_OVERRIDE=$(CFG)
 
-# FPGA Workflow
+
+#################
+# FPGA Workflow #
+#################
+
 occamy_system_vivado_preparation: # In SNAX Docker
 	make -C ./target/fpga/ define_defines_includes_no_simset.tcl
 	make -C ./target/fpga/vivado_ips/ define-sources.tcl
