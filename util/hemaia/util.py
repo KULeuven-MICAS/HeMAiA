@@ -79,37 +79,38 @@ def hemaia_util():
     if 'clusters' in occamy_cfg:
         clusters = occamy_cfg['clusters']
         cluster_cfgs = []
+        cluster_cfg_paths = []
         for cluster in clusters:
             cluster_cfg_path = os.path.dirname(parsed_args.cfg_path) + \
                 "/../cluster_cfg/" + cluster + ".hjson"
+            cluster_cfg_paths.append(cluster_cfg_path)
             cluster_cfgs.append(get_config(cluster_cfg_path))
     else:
         raise Exception("No clusters found in the hemaia json file")
-
-    # For generating filelists for each cluster
-    # These filelists are specific for synthesis only
-    if parsed_args.cluster_flist:
-        print("Generate filelist for each cluster only.")
-        for cluster in occamy_cfg['clusters']:
-            cfg_str = f"cfg/{cluster}.hjson"
-            generate_cluster_syn_flist(cfg_str,
-                                       parsed_args.snax_path,
-                                       parsed_args.outdir)
-
     if cluster_cfgs.__len__() == 0:
         raise Exception("The number of cluster is 0")
 
-    # The remaining part is related to different functions
+    # The remaining part is the region for the util functions
     # Available variables:
     # - occamy_cfg: The main configuration file
+    # - cluster_cfg_paths: The paths to the cluster configurations in a list
     # - cluster_cfgs: The parsed cluster configurations in a list
 
+    # For printing out the cluster names and generate targets
     if parsed_args.print_clusters:
         for cluster_cfg in cluster_cfgs:
             print(cluster_cfg['cluster']['name'] + " ", end="")
         print()
         return
-
+    
+    # For generating filelists for each cluster
+    # These filelists are specific for synthesis only
+    if parsed_args.cluster_flist:
+        print("Generate filelist for each cluster only.")
+        for cluster_cfg_path in cluster_cfg_paths:
+            generate_cluster_syn_flist(cluster_cfg_path,
+                                       parsed_args.snax_path,
+                                       parsed_args.outdir)
 
 if __name__ == "__main__":
     hemaia_util()
