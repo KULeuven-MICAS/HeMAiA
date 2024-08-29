@@ -1,7 +1,12 @@
 {
-    // Remote CFG
+    // Remote CFG, about to be removed
+
     is_remote_quadrant: false,
     remote_quadrants: [],
+    // Multi-chip configuration
+    hemaia_multichip: {
+      chip_id_width: 8
+    }
     addr_width: 48,
     data_width: 64,
     // XBARs
@@ -24,10 +29,8 @@
     cuts: {
       narrow_to_quad: 3,
       quad_to_narrow: 3,
-      quad_to_pre: 1,
-      pre_to_inter: 1,
-      quad_to_inter: 1,
-      inter_to_quad: 3,
+      wide_to_quad: 3,
+      quad_to_wide: 3,
       narrow_to_cva6: 2,
       narrow_conv_to_spm_narrow_pre: 2,
       narrow_conv_to_spm_narrow: 1,
@@ -74,7 +77,7 @@
       rmq: 4,
     },
     narrow_xbar_slv_id_width: 4,
-    narrow_xbar_user_width: 5, // clog2(total number of clusters)
+    narrow_xbar_user_width: 3, // clog2(total number of clusters)
     nr_s1_quadrant: 1,
     s1_quadrant: {
       // number of pending transactions on the narrow/wide network
@@ -88,16 +91,6 @@
           max_trans: 32,
           address_regions: 4,
       }
-      narrow_tlb_cfg: {
-          max_trans: 32,
-          l1_num_entries: 8,
-          l1_cut_ax: true,
-      }
-      wide_tlb_cfg: {
-          max_trans: 32,
-          l1_num_entries: 8,
-          l1_cut_ax: true,
-      }
       wide_xbar: {
         max_slv_trans: 32,
         max_mst_trans: 32,
@@ -110,12 +103,15 @@
         fall_through: false,
       },
       narrow_xbar_slv_id_width: 4,
-      narrow_xbar_user_width: 5, // clog2(total number of clusters)
+      narrow_xbar_user_width: 3, // clog2(total number of clusters)
       cfg_base_addr: 184549376, // 0x0b000000
       cfg_base_offset: 65536 // 0x10000
     },
     clusters:[
-        "snax_minimal_cluster",
+      "snax_KUL_cluster",
+      "snax_KUL_xdma_cluster",
+      "snax_hypercorex_cluster",
+      "snax_alu_cluster"
     ],
 
     // peripherals
@@ -195,4 +191,5 @@
       address: 285212672, // 0x1100_0000
       length: 65536, // 64 kiB 0x1_0000
     },
+
 }

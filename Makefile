@@ -6,7 +6,7 @@
 MKFILE_PATH := $(abspath $(lastword $(MAKEFILE_LIST)))
 MKFILE_DIR := $(dir $(MKFILE_PATH))
 
-CFG_OVERRIDE ?= target/rtl/cfg/occamy_cfg/snax_two_clusters.hjson
+CFG_OVERRIDE ?= target/rtl/cfg/occamy_cfg/hemaia.hjson
 CFG = $(realpath $(CFG_OVERRIDE))
 
 clean:
@@ -81,8 +81,7 @@ occamy_system_download_sw: # In ESAT Server; this procedure will only inject the
 	make -C ./target/fpga/sw download_sw
 
 open_terminal:	# It opens ttyUSB1 without locking it, and set baudrate at 1Mbps
-	sh minicom -D /dev/ttyUSB1 -b 1000000 -o
-
+	$(shell minicom -D /dev/ttyUSB1 -b 1000000 -o)
 
 # FPGA Workflow (with no Xilinx IP - tapeout configuration)
 # Please be attention that in this configuration, injecting any binary files by Xilinx Vivado are not possible anymore; please use JTAG or embedded bootrom to load the binary

@@ -43,7 +43,7 @@ The following files are released under Solderpad v0.51 (`SHL-0.51`) see `hw/LICE
 @ Occamy Docker: make bootrom
 @ Occamy Docker: make sw
 @ Occamy Docker: make -C target/fpga/sw [APP=???] (Which binary file you want to use)
-@ SNAX Docker: make rtl CFG=target/rtl/cfg/occamy_cfg/snax_two_clusters.hjson (Can be modified to other configurations)
+@ SNAX Docker: make rtl CFG_OVERRIDE=target/rtl/cfg/occamy_cfg/hemaia.hjson (Can be modified to other configurations)
 @ SNAX Docker: make occamy_system_vivado_preparation
 @ Barnard3: make occamy_system_vcu128
 @ Barnard3: make occamy_system_vcu128_gui
@@ -55,7 +55,7 @@ The following files are released under Solderpad v0.51 (`SHL-0.51`) see `hw/LICE
 @ Occamy Docker: make bootrom
 @ Occamy Docker: make sw
 @ Occamy Docker: make -C target/fpga/sw [APP=???] (Which binary file you want to use)
-@ SNAX Docker: make rtl CFG=target/rtl/cfg/occamy_cfg/snax_two_clusters.hjson (Can be modified to other configurations)
+@ SNAX Docker: make rtl CFG_OVERRIDE=target/rtl/cfg/occamy_cfg/hemaia.hjson (Can be modified to other configurations)
 @ SNAX Docker: make hemaia_system_vivado_preparation
 @ Barnard3: make hemaia_system_vivado TARGET_PLATFORM={vpk180, vcu128}
 @ Barnard3: make hemaia_system_vivado_gui
@@ -67,7 +67,7 @@ The following files are released under Solderpad v0.51 (`SHL-0.51`) see `hw/LICE
 ```makefile
 @ Occamy Docker: make bootrom
 @ Occamy Docker: make sw
-@ SNAX Docker: make rtl CFG=target/rtl/cfg/occamy_cfg/snax_two_clusters.hjson (Can be modified to other configurations)
+@ SNAX Docker: make rtl CFG_OVERRIDE=target/rtl/cfg/occamy_cfg/hemaia.hjson (Can be modified to other configurations)
 @ SNAX Docker: make occamy_system_vlt
 @ SNAX Docker: target/sim/bin/occamy_top.vlt [Elf location] [--vcd]
 ```
@@ -77,7 +77,7 @@ The following files are released under Solderpad v0.51 (`SHL-0.51`) see `hw/LICE
 ```makefile
 @ Occamy Docker: make bootrom
 @ Occamy Docker: make sw
-@ SNAX Docker: make rtl CFG=target/rtl/cfg/occamy_cfg/snax_two_clusters.hjson (Can be modified to other configurations)
+@ SNAX Docker: make rtl CFG_OVERRIDE=target/rtl/cfg/occamy_cfg/hemaia.hjson (Can be modified to other configurations)
 @ SNAX Docker: make occamy_system_vsim_preparation
 @ Barnard3: make occamy_system_vsim
 @ Barnard3: target/sim/bin/occamy_top.vsim[.gui] [Elf location]
