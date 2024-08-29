@@ -28,4 +28,4 @@ component.xml
 *.zip
 *.str
 
-target/tapeout/*.tcl
+target/tapeout/tcl/*
