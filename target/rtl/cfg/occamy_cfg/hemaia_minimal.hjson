@@ -24,10 +24,8 @@
     cuts: {
       narrow_to_quad: 3,
       quad_to_narrow: 3,
-      quad_to_pre: 1,
-      pre_to_inter: 1,
-      quad_to_inter: 1,
-      inter_to_quad: 3,
+      wide_to_quad: 3,
+      quad_to_wide: 3,
       narrow_to_cva6: 2,
       narrow_conv_to_spm_narrow_pre: 2,
       narrow_conv_to_spm_narrow: 1,
@@ -87,16 +85,6 @@
           sets: 2,
           max_trans: 32,
           address_regions: 4,
-      }
-      narrow_tlb_cfg: {
-          max_trans: 32,
-          l1_num_entries: 8,
-          l1_cut_ax: true,
-      }
-      wide_tlb_cfg: {
-          max_trans: 32,
-          l1_num_entries: 8,
-          l1_cut_ax: true,
       }
       wide_xbar: {
         max_slv_trans: 32,

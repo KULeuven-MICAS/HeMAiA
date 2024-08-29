@@ -63,7 +63,7 @@ CFG = $(TARGET_RTL)/cfg/occamy_cfg/lru.hjson
 $(CFG): FORCE
 	@# If the LRU config file doesn't exist, we use the default config.
 	@if [ ! -e $@ ] ; then \
-		DEFAULT_CFG="$(TARGET_RTL)/cfg/occamy_cfg/snax_two_clusters.hjson"; \
+		DEFAULT_CFG="$(TARGET_RTL)/cfg/occamy_cfg/hemaia.hjson"; \
 		echo "Using default config file: $$DEFAULT_CFG"; \
 		cp $$DEFAULT_CFG $@; \
 	fi
@@ -308,5 +308,11 @@ src/bender_targets.tmp: $(CFG) # Generate bender_targets.tmp file
 	fi
 	if echo "$(SNAX_CFGS)" | grep -q "snax_KUL_xdma_cluster"; then \
 		$(eval BENDER_TARGETS+= -t snax_gemmX -t snax_KUL_xdma_cluster_xdma -t snax_KUL_xdma_cluster): ;\
+	fi
+	if echo "$(SNAX_CFGS)" | grep -q "snax_alu_cluster"; then \
+	    $(eval BENDER_TARGETS += -t snax_alu -t snax_alu_cluster): ; \
+	fi
+	if echo "$(SNAX_CFGS)" | grep -q "snax_hypercorex_cluster"; then \
+	    $(eval BENDER_TARGETS += -t hypercorex -t snax_hypercorex_cluster): ; \
 	fi
 	echo $(BENDER_TARGETS) > src/bender_targets.tmp

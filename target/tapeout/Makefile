@@ -9,6 +9,7 @@ MKFILE_DIR  := $(dir $(MKFILE_PATH))
 ROOT        := $(MKFILE_DIR)../..
 BENDER      := bender
 SNAX_ROOT   := $(shell $(BENDER) path snitch_cluster)
+TAPEOUT_TCL_DIR := $(MKFILE_DIR)/tcl
 
 HEMAIA_UTIL ?= $(ROOT)/util/hemaia/util.py
 
@@ -28,7 +29,7 @@ CFG = $(TARGET_RTL)/cfg/occamy_cfg/lru.hjson
 $(CFG): FORCE
 	@# If the LRU config file doesn't exist, we use the default config.
 	@if [ ! -e $@ ] ; then \
-		DEFAULT_CFG="$(TARGET_RTL)/cfg/occamy_cfg/snax_two_clusters.hjson"; \
+		DEFAULT_CFG="$(TARGET_RTL)/cfg/occamy_cfg/hemaia.hjson"; \
 		echo "Using default config file: $$DEFAULT_CFG"; \
 		cp $$DEFAULT_CFG $@; \
 	fi
@@ -40,15 +41,26 @@ $(CFG): FORCE
 	fi
 FORCE:
 
+#########
+# Clean #
+#########
+
+.PHONY: clean clean_tcl
+
+clean: clean_tcl
+
+clean_tcl:
+	rm -f $(TAPEOUT_TCL_DIR)/*
+
 ########################
 # Generating Filelists #
 ########################
 
-syn-gen-list:
+syn_gen_list: $(CFG)
 	@$(HEMAIA_UTIL) --cfg_path $(CFG) --snax-path $(SNAX_ROOT) \
-		--outdir ${MKFILE_DIR} --cluster-flist
+		--outdir ${TAPEOUT_TCL_DIR} --cluster-flist
 
-debug-info:
+debug_info:
 	@echo "SNAX ROOT: ${SNAX_ROOT}"
 	@echo "CFG override: ${CFG_OVERRIDE}"
 	@echo "Makefile path: ${MKFILE_PATH}"

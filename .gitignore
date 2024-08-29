@@ -27,3 +27,5 @@ component.xml
 *.log
 *.zip
 *.str
+
+target/tapeout/tcl/*

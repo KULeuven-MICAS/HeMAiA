@@ -91,17 +91,6 @@
           max_trans: 32,
           address_regions: 4,
       }
-      // TLB is disabled
-      // narrow_tlb_cfg: {
-      //     max_trans: 32,
-      //     l1_num_entries: 8,
-      //     l1_cut_ax: true,
-      // }
-      // wide_tlb_cfg: {
-      //     max_trans: 32,
-      //     l1_num_entries: 8,
-      //     l1_cut_ax: true,
-      // }
       wide_xbar: {
         max_slv_trans: 32,
         max_mst_trans: 32,
@@ -119,8 +108,10 @@
       cfg_base_offset: 65536 // 0x10000
     },
     clusters:[
-        "snax_KUL_cluster",
-        "snax_KUL_xdma_cluster",
+      "snax_KUL_cluster",
+      "snax_KUL_xdma_cluster",
+      "snax_hypercorex_cluster",
+      "snax_alu_cluster"
     ],
 
     // peripherals

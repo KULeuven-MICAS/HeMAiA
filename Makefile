@@ -6,7 +6,7 @@
 MKFILE_PATH := $(abspath $(lastword $(MAKEFILE_LIST)))
 MKFILE_DIR := $(dir $(MKFILE_PATH))
 
-CFG_OVERRIDE ?= target/rtl/cfg/occamy_cfg/snax_two_clusters.hjson
+CFG_OVERRIDE ?= target/rtl/cfg/occamy_cfg/hemaia.hjson
 CFG = $(realpath $(CFG_OVERRIDE))
 
 clean:
@@ -18,6 +18,7 @@ clean:
 	make -C ./target/rtl/ clean
 	make -C ./target/fpga/sw clean
 	make -C ./target/fpga/bootrom clean
+	make -C ./target/tapeout clean
 
 # Software Generation
 bootrom: # In Occamy Docker
@@ -40,16 +41,24 @@ sw: # In Occamy Docker
 rtl: # In SNAX Docker
 	make -C ./target/rtl/ rtl CFG_OVERRIDE=$(CFG)
 
-###################
-# Tapeout targets #
-###################
+####################
+# Tapeout Workflow #
+####################
+
+.PHONY: tapeout_syn_flist tapeout_preparation
+
+tapeout_preparation: rtl tapeout_syn_flist
 
 # Generating filelist per cluster
 # Needed for a per-cluster synthesis
-gen-syn-flist:
-	make -C ./target/tapeout/ syn-gen-list CFG_OVERRIDE=$(CFG)
+tapeout_syn_flist:
+	make -C ./target/tapeout/ syn_gen_list CFG_OVERRIDE=$(CFG)
 
-# FPGA Workflow
+
+#################
+# FPGA Workflow #
+#################
+
 occamy_system_vivado_preparation: # In SNAX Docker
 	make -C ./target/fpga/ define_defines_includes_no_simset.tcl
 	make -C ./target/fpga/vivado_ips/ define-sources.tcl
@@ -72,8 +81,7 @@ occamy_system_download_sw: # In ESAT Server; this procedure will only inject the
 	make -C ./target/fpga/sw download_sw
 
 open_terminal:	# It opens ttyUSB1 without locking it, and set baudrate at 1Mbps
-	sh minicom -D /dev/ttyUSB1 -b 1000000 -o
-
+	$(shell minicom -D /dev/ttyUSB1 -b 1000000 -o)
 
 # FPGA Workflow (with no Xilinx IP - tapeout configuration)
 # Please be attention that in this configuration, injecting any binary files by Xilinx Vivado are not possible anymore; please use JTAG or embedded bootrom to load the binary
@@ -110,3 +118,8 @@ occamy_system_vsim_preparation: # In SNAX Docker
 
 occamy_system_vsim: # In ESAT Server
 	make -C ./target/sim bin/occamy_top.vsim
+
+
+debug-info:
+	@echo "CFG_OVERRIDE: $(CFG_OVERRIDE)"
+	@echo "CFG: $(CFG)"
