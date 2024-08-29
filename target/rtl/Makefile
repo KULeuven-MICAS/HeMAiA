@@ -309,4 +309,10 @@ src/bender_targets.tmp: $(CFG) # Generate bender_targets.tmp file
 	if echo "$(SNAX_CFGS)" | grep -q "snax_KUL_xdma_cluster"; then \
 		$(eval BENDER_TARGETS+= -t snax_gemmX -t snax_KUL_xdma_cluster_xdma -t snax_KUL_xdma_cluster): ;\
 	fi
+	if echo "$(SNAX_CFGS)" | grep -q "snax_alu_cluster"; then \
+	    $(eval BENDER_TARGETS += -t snax_alu -t snax_alu_cluster): ; \
+	fi
+	if echo "$(SNAX_CFGS)" | grep -q "snax_hypercorex_cluster"; then \
+	    $(eval BENDER_TARGETS += -t snax_hypercorex -t snax_hypercorex_cluster): ; \
+	fi
 	echo $(BENDER_TARGETS) > src/bender_targets.tmp
