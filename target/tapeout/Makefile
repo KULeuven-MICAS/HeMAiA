@@ -9,6 +9,7 @@ MKFILE_DIR  := $(dir $(MKFILE_PATH))
 ROOT        := $(MKFILE_DIR)../..
 BENDER      := bender
 SNAX_ROOT   := $(shell $(BENDER) path snitch_cluster)
+TAPEOUT_TCL_DIR := $(MKFILE_DIR)/tcl
 
 HEMAIA_UTIL ?= $(ROOT)/util/hemaia/util.py
 
@@ -40,13 +41,22 @@ $(CFG): FORCE
 	fi
 FORCE:
 
+#########
+# Clean #
+#########
+
+.PHONY: clean-tcl
+
+clean-tcl:
+	rm -f $(TAPEOUT_TCL_DIR)/*
+
 ########################
 # Generating Filelists #
 ########################
 
 syn-gen-list: $(CFG)
 	@$(HEMAIA_UTIL) --cfg_path $(CFG) --snax-path $(SNAX_ROOT) \
-		--outdir ${MKFILE_DIR} --cluster-flist
+		--outdir ${TAPEOUT_TCL_DIR} --cluster-flist
 
 debug-info:
 	@echo "SNAX ROOT: ${SNAX_ROOT}"
