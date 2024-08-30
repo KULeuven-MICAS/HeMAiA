@@ -27,9 +27,6 @@ def get_config(cfg_path: str):
     cfg = JsonRef.replace_refs(cfg)
     return cfg
 
-
-
-
 def hemaia_util():
     # Parse all arguments
     parser = argparse.ArgumentParser(
@@ -117,8 +114,9 @@ def hemaia_util():
         print("Generate filelist for each cluster only.")
         for cluster_cfg_path in cluster_cfg_paths:
             generate_cluster_syn_flist(cluster_cfg_path,
-                                       parsed_args.snax_path,
-                                       parsed_args.outdir)
+                                    parsed_args.snax_path,
+                                    parsed_args.outdir)
+        return
     
     # For generating all bender targets
     if parsed_args.get_bender_targets:
@@ -142,6 +140,7 @@ def hemaia_util():
         for i in bender_targets:
             print(" -t "+ i,end="")
         print()
+        return
 
 
 if __name__ == "__main__":
