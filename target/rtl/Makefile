@@ -43,8 +43,6 @@ TARGET_RTL			 ?= $(ROOT)/target/rtl
 
 BENDER       ?= bender
 #VERIBLE_FMT  ?= verible-verilog-format
-BENDER_TARGETS ?= -t cv64a6_imafdc_sv39 -t occamy
-
 OCCAMYGEN  ?= $(ROOT)/util/occamygen/occamygen.py
 REGGEN     ?= $(shell $(BENDER) path register_interface)/vendor/lowrisc_opentitan/util/regtool.py
 PLICGEN     = $(SOURCE_PLIC_DIR)/util/reg_rv_plic.py
@@ -298,21 +296,5 @@ $(TARGET_CLINT_DIR)/clint.%: $(SOURCE_CLINT_DIR)/data/clint.%.tpl $(CFG) | $(TAR
 #############################
 # Step 3: Bender Target Gen #
 #############################
-SNAX_CFGS = $(shell python3 $(HEMAIA_UTIL) --cfg_path $(CFG) --print_clusters)
 src/bender_targets.tmp: $(CFG) # Generate bender_targets.tmp file
-	if echo "$(SNAX_CFGS)" | grep -q "snax_xdma_cluster"; then \
-	    $(eval BENDER_TARGETS += -t snax_xdma -t snax_xdma_cluster): ; \
-	fi
-	if echo "$(SNAX_CFGS)" | grep -q "snax_KUL_cluster"; then \
-		$(eval BENDER_TARGETS+= -t snax_gemmX -t snax_data_reshuffler -t snax_KUL_cluster): ;\
-	fi
-	if echo "$(SNAX_CFGS)" | grep -q "snax_KUL_xdma_cluster"; then \
-		$(eval BENDER_TARGETS+= -t snax_gemmX -t snax_KUL_xdma_cluster_xdma -t snax_KUL_xdma_cluster): ;\
-	fi
-	if echo "$(SNAX_CFGS)" | grep -q "snax_alu_cluster"; then \
-	    $(eval BENDER_TARGETS += -t snax_alu -t snax_alu_cluster): ; \
-	fi
-	if echo "$(SNAX_CFGS)" | grep -q "snax_hypercorex_cluster"; then \
-	    $(eval BENDER_TARGETS += -t hypercorex -t snax_hypercorex_cluster): ; \
-	fi
-	echo $(BENDER_TARGETS) > src/bender_targets.tmp
+	echo $(shell $(HEMAIA_UTIL) --cfg_path $(CFG) --get_bender_targets) > src/bender_targets.tmp
