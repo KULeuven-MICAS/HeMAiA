@@ -11,6 +11,7 @@
 
     cluster: {
         name: "snax_KUL_cluster",
+        bender_target: ["snax_KUL_cluster"],
         boot_addr: 4096, // 0x1000
         cluster_base_addr: 268435456,  // 0x1000_0000
         cluster_base_offset: 1048576,  // 256KB -> 1MB
@@ -118,6 +119,7 @@
         xfvec: false,
         snax_acc_cfg: {
             snax_acc_name: "snax_streamer_gemmX",
+            bender_target: ["snax_gemmX"],
             snax_narrow_tcdm_ports: 8,
             snax_wide_tcdm_ports: 48,
             snax_num_rw_csr: 10,
@@ -147,6 +149,7 @@
         xfvec: false,
         snax_acc_cfg: {
             snax_acc_name: "snax_data_reshuffler",
+            bender_target: ["snax_data_reshuffler"],
             snax_narrow_tcdm_ports: 16,
             snax_num_rw_csr: 2,
             snax_num_ro_csr: 2,

@@ -1,6 +1,6 @@
 {
+    bender_target: ["cv64a6_imafdc_sv39", "occamy"],
     // Remote CFG, about to be removed
-
     is_remote_quadrant: false,
     remote_quadrants: [],
     // Multi-chip configuration

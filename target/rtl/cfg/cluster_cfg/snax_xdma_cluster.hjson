@@ -1,6 +1,7 @@
 {
 		cluster: {
-        name: "snax_xdma_cluster"
+        name: "snax_xdma_cluster",
+        bender_target: ["snax_xdma_cluster"],
         boot_addr: 4096, // 0x1000
         cluster_base_addr: 268435456, // 0x10000000
         cluster_base_offset: 262144,  // 256KB
@@ -86,6 +87,7 @@
 	dma_core_template: {
         isa: "rv32ima",
         snax_xdma_cfg: {
+            bender_target: ["snax_xdma"],
             reader_buffer: 8, 
             writer_buffer: 8, 
             reader_agu_dimension: 3, 
@@ -111,5 +113,4 @@
         num_dtlb_entries: 1,
         num_itlb_entries: 1,
     },
-
 }
