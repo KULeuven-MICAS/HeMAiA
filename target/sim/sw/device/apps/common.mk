@@ -35,7 +35,6 @@ INCDIRS += $(SNRT_DIR)/api
 INCDIRS += $(SNRT_DIR)/src
 INCDIRS += $(SNRT_DIR)/vendor/riscv-opcodes
 INCDIRS += $(SW_DIR)/shared/platform/generated
-# INCDIRS += $(SW_DIR)/shared/platform
 INCDIRS += $(SW_DIR)/shared/runtime
 INCDIRS += $(SNITCH_ROOT)/sw/blas
 INCDIRS += $(SNRT_DIR)/../math/arch/riscv64/

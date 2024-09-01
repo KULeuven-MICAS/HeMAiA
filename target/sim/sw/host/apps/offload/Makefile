@@ -39,7 +39,6 @@ DEVICE_APPS += snax/snax-test-integration
 # Dependencies
 INCDIRS += $(RUNTIME_DIR)
 INCDIRS += $(HOST_DIR)/../shared/platform/generated
-# INCDIRS += $(HOST_DIR)/../shared/platform
 INCDIRS += $(HOST_DIR)/../shared/runtime
 SRCS    += $(RUNTIME_DIR)/start.S
 

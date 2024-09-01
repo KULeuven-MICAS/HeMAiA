@@ -21,7 +21,6 @@ SNRT_DIR    = $(SNITCH_ROOT)/sw/snRuntime
 INCDIRS += $(SNRT_DIR)/src
 INCDIRS += $(SNRT_DIR)/api
 INCDIRS += $(SNRT_DIR)/vendor/riscv-opcodes
-# INCDIRS += $(SW_DIR)/shared/platform
 INCDIRS += $(SW_DIR)/shared/platform/generated
 INCDIRS += $(SW_DIR)/shared/runtime
 INCDIRS += $(SNRT_DIR)/../math/arch/riscv64/

@@ -194,13 +194,6 @@ clean-bootrom:
 	
 test/bootdata.cc:
 	@$(OCCAMYGEN) --cfg $(CFG) --bootdata test/bootdata.cc.tpl -o test/
-# test/bootrom.elf: test/bootrom.S test/bootrom.ld
-# 	riscv64-unknown-elf-gcc -mabi=lp64d -march=rv64imafd -static -nostartfiles -Ttest/bootrom.ld $< -o test/bootrom.elf
-# test/bootrom.dump: test/bootrom.elf
-# 	riscv64-unknown-elf-objdump -D $< > $@
-# test/bootrom.bin: test/bootrom.elf
-# 	riscv64-unknown-elf-objcopy -O binary $< $@
-
 test/bootrom.elf: test/bootrom.S test/bootrom.ld
 	$(CVA6_GCC_CC) $(CVA6_GCC_BOOTROM_CFLAGS) $(CVA6_GCC_BOOTROM_LDFLAGS) $< -o test/bootrom.elf
 test/bootrom.dump: test/bootrom.elf
@@ -386,8 +379,6 @@ clean-vlt: clean-work
 # Questasim #
 #############
 
-# include $(SNITCH_ROOT)/target/common/vsim.mk
-
 $(VSIM_BUILDDIR):
 	mkdir -p $@
 
@@ -457,9 +448,6 @@ clean-vcs: clean-work
 clean-work:
 	rm -rf work
 	rm -rf work-vsim
-
-# clean-bender:
-# 	rm -rf $(ROOT)/Bender.lock $(ROOT)/.bender/ $(ROOT)/deps
 
 clean-logs:
 	rm -rf $(LOGS_DIR)/

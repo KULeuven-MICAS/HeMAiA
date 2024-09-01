@@ -245,6 +245,8 @@ void wakeup_snitches_selective(uint32_t base_hartid, uint32_t num_harts,
     mutex_release(lock);
 }
 
+// temporary deprecate this function since it uses the N_CORES_PER_CLUSTER
+
 // /**
 //  * @brief Wake-up Snitches
 //  *
