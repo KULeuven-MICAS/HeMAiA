@@ -10,6 +10,7 @@ import pathlib
 import sys
 import re
 import logging
+import math
 from subprocess import run
 import csv
 
@@ -398,11 +399,19 @@ def get_cva6_kwargs(occamy_cfg,soc_narrow_xbar,name):
     return cva6_kwargs
 
 
-def get_cheader_kwargs(occamy_cfg,cluster_generators,name):
-    core_per_cluster_list = [cluster_generator.cfg["nr_cores"] for cluster_generator in cluster_generators]
+def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
+    core_per_cluster_list = [cluster_generator.cfg["nr_cores"]
+                             for cluster_generator in cluster_generators]
     nr_quads = occamy_cfg['nr_s1_quadrant']
     nr_clusters = len(occamy_cfg["clusters"])
     nr_cores = sum(core_per_cluster_list)
+    nr_cores_per_cluster = "{" + ",".join(map(str, core_per_cluster_list)) + "}"
+    cluster_offset_list = [cluster_generator.cfg["cluster_base_offset"]
+                             for cluster_generator in cluster_generators]
+    if not all(cluster_offset == cluster_offset_list[0] for cluster_offset in cluster_offset_list):
+        raise ValueError("Not all cluster base offset in the cluster cfg are equal.")
+    cluster_offset = cluster_offset_list[0]
+    cluster_addr_width = int(math.log2(cluster_offset))
     # # The lut here is to provide an easy way to determine the cluster idx based on core idx
     # # e.g core_per_cluster_list = [2,3]
     # # core_idx lut    cluster_idx
@@ -436,15 +445,16 @@ def get_cheader_kwargs(occamy_cfg,cluster_generators,name):
     #     "cluster_baseidx": cluster_baseidx,
     #     "nr_cores": nr_cores
     # }
-    cheader_kwargs={
+    cheader_kwargs = {
         "name": name,
         "nr_quads": nr_quads,
         "nr_clusters": nr_clusters,
-        "nr_cores_per_cluster": cluster_generators[0].cfg["nr_cores"]
+        "nr_cores_per_cluster": nr_cores_per_cluster,
+        "nr_cores": nr_cores,
+        "cluster_offset": hex(cluster_offset),
+        "cluster_addr_width": cluster_addr_width
     }
-
     return cheader_kwargs
-
 
 
 

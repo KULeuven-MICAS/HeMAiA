@@ -245,25 +245,27 @@ void wakeup_snitches_selective(uint32_t base_hartid, uint32_t num_harts,
     mutex_release(lock);
 }
 
-/**
- * @brief Wake-up Snitches
- *
- * @detail All Snitches are "parked" in a WFI. A SW interrupt
- *         must be issued to "unpark" every Snitch. This function
- *         sends a SW interrupt to one Snitch in every cluster,
- *         the so called "master" of the cluster. The "master" is
- *         then expected to wake-up all the other Snitches in its
- *         cluster. The "master" Snitches can use the cluster-local
- *         CLINTs without sending requests outside the cluster,
- *         avoiding congestion.
- */
-void wakeup_master_snitches() {
-    volatile uint32_t* lock = get_shared_lock();
+// temporary deprecate this function since it uses the N_CORES_PER_CLUSTER
 
-    mutex_ttas_acquire(lock);
-    set_sw_interrupts_unsafe(1, N_CLUSTERS, N_CORES_PER_CLUSTER);
-    mutex_release(lock);
-}
+// /**
+//  * @brief Wake-up Snitches
+//  *
+//  * @detail All Snitches are "parked" in a WFI. A SW interrupt
+//  *         must be issued to "unpark" every Snitch. This function
+//  *         sends a SW interrupt to one Snitch in every cluster,
+//  *         the so called "master" of the cluster. The "master" is
+//  *         then expected to wake-up all the other Snitches in its
+//  *         cluster. The "master" Snitches can use the cluster-local
+//  *         CLINTs without sending requests outside the cluster,
+//  *         avoiding congestion.
+//  */
+// void wakeup_master_snitches() {
+//     volatile uint32_t* lock = get_shared_lock();
+
+//     mutex_ttas_acquire(lock);
+//     set_sw_interrupts_unsafe(1, N_CLUSTERS, N_CORES_PER_CLUSTER);
+//     mutex_release(lock);
+// }
 
 /**
  * @brief Waits until snitches are done executing

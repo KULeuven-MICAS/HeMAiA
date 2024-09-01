@@ -19,6 +19,8 @@ clean:
 	make -C ./target/fpga/sw clean
 	make -C ./target/fpga/bootrom clean
 	make -C ./target/tapeout clean
+	rm -rf Bender.lock .bender deps
+	rm -rf ./target/rtl/src/bender_targets.tmp
 
 # Software Generation
 bootrom: # In Occamy Docker

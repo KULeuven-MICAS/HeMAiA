@@ -70,7 +70,7 @@
 // Replicated address spaces
 //===============================================================
 
-#define cluster_offset 0x40000
+#define cluster_offset ${cluster_offset}
 
 #define quadrant_cfg_offset 0x10000
 

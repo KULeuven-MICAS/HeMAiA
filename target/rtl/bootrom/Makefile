@@ -11,14 +11,14 @@ util				:= $(ROOT)/util
 
 include $(ROOT)/util/Makefrag
 
-CROSS_COMPILE = riscv64-unknown-elf-
 INCLUDES = -I./ -I./src
 SRCS_C = src/main.c 
 OBJS_C = $(SRCS_C:.c=.o)
 
-CC = $(CROSS_COMPILE)gcc
-OBJDUMP = $(CROSS_COMPILE)objdump
-OBJCOPY = $(CROSS_COMPILE)objcopy
+CVA6_GCC_ROOT = /tools/riscv/bin
+CC = $(CVA6_GCC_ROOT)/riscv64-unknown-elf-gcc
+OBJDUMP = $(CVA6_GCC_ROOT)/riscv64-unknown-elf-objdump
+OBJCOPY = $(CVA6_GCC_ROOT)/riscv64-unknown-elf-objcopy
 BIN2SV  = $(util)/bin2sv.py
 
 CFLAGS 	= -Os -g -Werror -ffreestanding -fno-strict-aliasing

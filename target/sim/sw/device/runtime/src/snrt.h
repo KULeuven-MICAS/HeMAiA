@@ -33,7 +33,7 @@
 #include "occamy_memory.h"
 #include "printf.h"
 #include "riscv.h"
-#include "ssr.h"
+// #include "ssr.h"
 #include "sync.h"
 #include "team.h"
 #include "uart.h"
