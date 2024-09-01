@@ -75,17 +75,17 @@ FORCE:
 
 .PHONY: all clean
 all: rtl
-clean: clean-bender clean-rtl
+clean: clean-rtl
 
 ########
 # Util #
 ########
 
-.PHONY: clean-bender
+# .PHONY: clean-bender
 
-clean-bender:
-	rm -rf $(ROOT)/Bender.lock $(ROOT)/.bender/ $(ROOT)/deps
-	rm -rf src/bender_targets.tmp
+# clean-bender:
+# 	rm -rf $(ROOT)/Bender.lock $(ROOT)/.bender/ $(ROOT)/deps
+# 	rm -rf src/bender_targets.tmp
 
 ###############
 # RTL sources #

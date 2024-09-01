@@ -15,7 +15,7 @@ CFG_OVERRIDE ?=     # Override default config file
 .DEFAULT_GOAL := help
 .PHONY: all clean
 all: rtl sw addrmap
-clean: clean-bender clean-rtl clean-sw clean-addrmap clean-vlt clean-vsim clean-vcs clean-logs clean-work clean-bootrom
+clean: clean-rtl clean-sw clean-addrmap clean-vlt clean-vsim clean-vcs clean-logs clean-work clean-bootrom
 
 ############
 # Makefrag #
@@ -452,14 +452,14 @@ clean-vcs: clean-work
 # Util #
 ########
 
-.PHONY: clean-work clean-bender clean-logs help
+.PHONY: clean-work clean-logs help
 
 clean-work:
 	rm -rf work
 	rm -rf work-vsim
 
-clean-bender:
-	rm -rf $(ROOT)/Bender.lock $(ROOT)/.bender/ $(ROOT)/deps
+# clean-bender:
+# 	rm -rf $(ROOT)/Bender.lock $(ROOT)/.bender/ $(ROOT)/deps
 
 clean-logs:
 	rm -rf $(LOGS_DIR)/
