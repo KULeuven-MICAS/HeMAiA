@@ -15,7 +15,7 @@ CFG_OVERRIDE ?=     # Override default config file
 .DEFAULT_GOAL := help
 .PHONY: all clean
 all: rtl sw addrmap
-clean: clean-bender clean-rtl clean-sw clean-addrmap clean-vlt clean-vcs clean-logs clean-work
+clean: clean-bender clean-rtl clean-sw clean-addrmap clean-vlt clean-vsim clean-vcs clean-logs clean-work clean-bootrom
 
 ############
 # Makefrag #
@@ -57,6 +57,8 @@ CLANG_FORMAT ?= $(shell which clang-format-10.0.1)
 
 BIN_DIR              ?= bin
 PLATFORM_HEADERS_DIR ?= sw/shared/platform/generated
+PLATFORM_HEADERS_TEMPLATE_DIR ?= sw/shared/platform/template
+SW_DEVICE_RT_DIR     ?= sw/device/runtime/src
 TARGET_ADDRMAP_DIR   ?= $(abspath addrmap)
 SOURCE_ADDRMAP_DIR   ?= $(ROOT)/util/addrmap
 DOCS_DIR             ?= $(ROOT)/docs
@@ -167,7 +169,23 @@ endif
 
 BOOTROM_TARGETS = test/bootrom.elf test/bootrom.dump test/bootrom.bin test/bootdata.cc
 
-.PHONY: bootrom clean-bootrom
+
+# Compiler toolchain
+CVA6_GCC_ROOT = /tools/riscv/bin
+CVA6_GCC_CC = $(CVA6_GCC_ROOT)/riscv64-unknown-elf-gcc
+CVA6_GCC_OBJDUMP = $(CVA6_GCC_ROOT)/riscv64-unknown-elf-objdump
+CVA6_GCC_OBJCOPY =$(CVA6_GCC_ROOT)/riscv64-unknown-elf-objcopy
+
+# Compiler flags
+CVA6_GCC_BOOTROM_CFLAGS += -mabi=lp64d 
+CVA6_GCC_BOOTROM_CFLAGS += -march=rv64imafd
+CVA6_GCC_BOOTROM_CFLAGS += -static
+CVA6_GCC_BOOTROM_CFLAGS += -nostartfiles
+
+# Linking sources
+LINKER_SCRIPT = test/bootrom.ld
+CVA6_GCC_BOOTROM_LDFLAGS += -T$(LINKER_SCRIPT)
+.PHONY: bootrom
 
 bootrom: $(BOOTROM_TARGETS)
 
@@ -176,12 +194,20 @@ clean-bootrom:
 	
 test/bootdata.cc:
 	@$(OCCAMYGEN) --cfg $(CFG) --bootdata test/bootdata.cc.tpl -o test/
+# test/bootrom.elf: test/bootrom.S test/bootrom.ld
+# 	riscv64-unknown-elf-gcc -mabi=lp64d -march=rv64imafd -static -nostartfiles -Ttest/bootrom.ld $< -o test/bootrom.elf
+# test/bootrom.dump: test/bootrom.elf
+# 	riscv64-unknown-elf-objdump -D $< > $@
+# test/bootrom.bin: test/bootrom.elf
+# 	riscv64-unknown-elf-objcopy -O binary $< $@
+
 test/bootrom.elf: test/bootrom.S test/bootrom.ld
-	riscv64-unknown-elf-gcc -mabi=lp64d -march=rv64imafd -static -nostartfiles -Ttest/bootrom.ld $< -o test/bootrom.elf
+	$(CVA6_GCC_CC) $(CVA6_GCC_BOOTROM_CFLAGS) $(CVA6_GCC_BOOTROM_LDFLAGS) $< -o test/bootrom.elf
 test/bootrom.dump: test/bootrom.elf
-	riscv64-unknown-elf-objdump -D $< > $@
+	$(CVA6_GCC_OBJDUMP) -D $< > $@
 test/bootrom.bin: test/bootrom.elf
-	riscv64-unknown-elf-objcopy -O binary $< $@
+	$(CVA6_GCC_OBJCOPY) -O binary $< $@
+
 
 
 ###############
@@ -240,12 +266,16 @@ $(ADDRMAP_PDF): $(ADDRMAP_TEX) | $(TARGET_ADDRMAP_DIR)
 ############
 
 PLATFORM_HEADERS  = $(PLATFORM_HEADERS_DIR)/occamy_cfg.h
+PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/occamy_memory_map.h
+PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/occamy.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/occamy_base_addr.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/clint.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/occamy_soc_ctrl.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/snitch_cluster_peripheral.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/snitch_quad_peripheral.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/snitch_hbm_xbar_peripheral.h
+
+PLATFORM_HEADERS += $(SW_DEVICE_RT_DIR)/occamy_defs.h
 
 .PHONY: sw clean-headers clean-sw
 
@@ -271,13 +301,24 @@ $(PLATFORM_HEADERS_DIR)/snitch_hbm_xbar_peripheral.h: $(TARGET_HBMCTRL_DIR)/occa
 	$(call reggen_generate_header,$@,$<)
 
 # OCCAMYGEN headers
-$(PLATFORM_HEADERS_DIR)/occamy_cfg.h: $(PLATFORM_HEADERS_DIR)/occamy_cfg.h.tpl $(CFG)
+$(PLATFORM_HEADERS_DIR)/occamy_cfg.h: $(PLATFORM_HEADERS_TEMPLATE_DIR)/occamy_cfg.h.tpl $(CFG)
 	@echo "[OCCAMYGEN] Generating $@"
 	@$(OCCAMYGEN) -c $(CFG) --outdir $(PLATFORM_HEADERS_DIR) --cheader $<
+$(PLATFORM_HEADERS_DIR)/occamy_memory_map.h: $(PLATFORM_HEADERS_TEMPLATE_DIR)/occamy_memory_map.h.tpl $(CFG)
+	@echo "[OCCAMYGEN] Generating $@"
+	@$(OCCAMYGEN) -c $(CFG) --outdir $(PLATFORM_HEADERS_DIR) --cheader $<
+$(PLATFORM_HEADERS_DIR)/occamy.h: $(PLATFORM_HEADERS_TEMPLATE_DIR)/occamy.h.tpl $(CFG)
+	@echo "[OCCAMYGEN] Generating $@"
+	@$(OCCAMYGEN) -c $(CFG) --outdir $(PLATFORM_HEADERS_DIR) --cheader $<
+
 $(PLATFORM_HEADERS_DIR)/occamy_base_addr.h: $(CFG)
 	@echo "[OCCAMYGEN] Generating $@"
 	@$(OCCAMYGEN) -c $(CFG) --outdir $(PLATFORM_HEADERS_DIR) -D $@
 
+
+$(SW_DEVICE_RT_DIR)/occamy_defs.h: $(SW_DEVICE_RT_DIR)/occamy_defs.h.tpl $(CFG)
+	@echo "[OCCAMYGEN] Generating $@"
+	@$(OCCAMYGEN) -c $(CFG) --outdir $(SW_DEVICE_RT_DIR) --cheader $<
 ##########
 # Traces #
 ##########

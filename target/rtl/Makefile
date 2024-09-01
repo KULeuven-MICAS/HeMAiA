@@ -122,7 +122,7 @@ test/testharness.sv: test/testharness.sv.tpl $(CFG)
 
 MISC_OCCAMYGEN_SV_TEMPLATES  = $(SOURCE_OCCAMY_DIR)/occamy_*.sv.tpl
 MISC_OCCAMYGEN_SV_TARGETS  = $(TARGET_SRC_DIR)/occamy_*.sv
-MISC_OCCAMYGEN_SV_TARGETS  = $(TARGET_SRC_DIR)/snax_*.sv
+MISC_OCCAMYGEN_SV_TARGETS  += $(TARGET_SRC_DIR)/snax_*.sv
 # MISC_OCCAMYGEN_SV_TARGETS += $(TARGET_SRC_DIR)/occamy_cluster_wrapper.sv
 # MISC_OCCAMYGEN_SV_TARGETS += $(TARGET_SRC_DIR)/snax_cluster_wrapper.sv
 
@@ -158,7 +158,7 @@ $(MISC_OCCAMYGEN_TARGETS): .misc_occamygen_targets_group
 	cp -f $(SOURCE_OCCAMY_DIR)/apb_flat.sv $(TARGET_SRC_DIR)
 	@touch $@
 
-.PHONY: debug-soc-gen debug-testharness-gen debug-quadrant-ctrl-gen
+.PHONY: debug-soc-gen debug-testharness-gen debug-quadrant-ctrl-gen debug-quadrant-gen
 debug-soc-gen:
 	$(ROOT)/util/occamygen/occamy_soc_gen.py --cfg $(CFG) --outdir $(TARGET_SRC_DIR) --soc-sv $(SOURCE_OCCAMY_DIR)/occamy_soc.sv.tpl --top-sv           $(SOURCE_OCCAMY_DIR)/occamy_top.sv.tpl 
 debug-testharness-gen:
@@ -166,6 +166,9 @@ debug-testharness-gen:
 
 debug-quadrant-ctrl-gen:
 	$(ROOT)/util/occamygen/occamy_soc_gen.py --cfg $(CFG) --outdir $(TARGET_SRC_DIR) --quadrant-s1-ctrl $(SOURCE_OCCAMY_DIR)/occamy_quadrant_s1_ctrl.sv.tpl
+
+debug-quadrant-gen:
+	$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_SRC_DIR) --quadrant-s1      $(SOURCE_OCCAMY_DIR)/occamy_quadrant_s1.sv.tpl
 ############
 # QUADCTRL #
 ############

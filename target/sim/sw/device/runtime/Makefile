@@ -21,10 +21,15 @@ SNRT_DIR    = $(SNITCH_ROOT)/sw/snRuntime
 INCDIRS += $(SNRT_DIR)/src
 INCDIRS += $(SNRT_DIR)/api
 INCDIRS += $(SNRT_DIR)/vendor/riscv-opcodes
-INCDIRS += $(SW_DIR)/shared/platform
+# INCDIRS += $(SW_DIR)/shared/platform
 INCDIRS += $(SW_DIR)/shared/platform/generated
 INCDIRS += $(SW_DIR)/shared/runtime
-
+INCDIRS += $(SNRT_DIR)/../math/arch/riscv64/
+INCDIRS += $(SNRT_DIR)/../math/arch/generic
+INCDIRS += $(SNRT_DIR)/../math/src/include
+INCDIRS += $(SNRT_DIR)/../math/src/internal
+INCDIRS += $(SNRT_DIR)/../math/include/bits
+INCDIRS += $(SNRT_DIR)/../math/include
 # Sources
 SRCS += $(SRC_DIR)/occamy_start.S
 SRCS += $(SRC_DIR)/snrt.c

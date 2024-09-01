@@ -16,13 +16,14 @@ DEBUG ?= OFF # ON to turn on debugging symbols
 
 APP  = offload
 SRCS = src/offload.c
-DEVICE_APPS += $(shell cd ../../../device/apps/;find -mindepth 2 -maxdepth 2 -type d | sed 's|^\./||')
+# DEVICE_APPS += $(shell cd ../../../device/apps/;find -mindepth 2 -maxdepth 2 -type d | sed 's|^\./||')
 
 # Compiler toolchain
-RISCV_CC      = riscv64-unknown-elf-gcc
-RISCV_OBJCOPY = riscv64-unknown-elf-objcopy
-RISCV_OBJDUMP = riscv64-unknown-elf-objdump
-RISCV_READELF = riscv64-unknown-elf-readelf
+CVA6_GCC_ROOT = /tools/riscv/bin
+RISCV_CC      = $(CVA6_GCC_ROOT)/riscv64-unknown-elf-gcc
+RISCV_OBJCOPY = $(CVA6_GCC_ROOT)/riscv64-unknown-elf-objcopy
+RISCV_OBJDUMP = $(CVA6_GCC_ROOT)/riscv64-unknown-elf-objdump
+RISCV_READELF = $(CVA6_GCC_ROOT)/riscv64-unknown-elf-readelf
 
 # Directories
 BUILDDIR    = $(abspath build)
@@ -30,10 +31,15 @@ HOST_DIR    = $(abspath ../../)
 RUNTIME_DIR = $(abspath $(HOST_DIR)/runtime)
 DEVICE_DIR  = $(abspath $(HOST_DIR)/../device)
 
+# now we only include the snax app
+DEVICE_APPS += snax/snax-data-reshuffler
+DEVICE_APPS += snax/snax-streamer-gemm-conv
+DEVICE_APPS += snax/snax-streamer-gemm-conv-simd
+DEVICE_APPS += snax/snax-test-integration
 # Dependencies
 INCDIRS += $(RUNTIME_DIR)
 INCDIRS += $(HOST_DIR)/../shared/platform/generated
-INCDIRS += $(HOST_DIR)/../shared/platform
+# INCDIRS += $(HOST_DIR)/../shared/platform
 INCDIRS += $(HOST_DIR)/../shared/runtime
 SRCS    += $(RUNTIME_DIR)/start.S
 
