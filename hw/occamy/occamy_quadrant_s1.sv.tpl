@@ -35,6 +35,7 @@ module ${name}_quadrant_s1
   input  logic                         clk_i,
   input  logic                         rst_ni,
   input  logic                         test_mode_i,
+  input  logic [31:0]                  boot_addr_i,
   input  chip_id_t                     chip_id_i,
   input  logic [NrCoresS1Quadrant-1:0] meip_i,
   input  logic [NrCoresS1Quadrant-1:0] mtip_i,
@@ -241,8 +242,7 @@ module ${name}_quadrant_s1
     .msip_i (msip_i[NrCoresClusterOffset[${i}]+:NrCoresCluster[${i}]]),
     .hart_base_id_i (hart_base_id_${i}),
     .cluster_base_addr_i (cluster_base_addr[${i}]),
-    // Boot Address is fixed to 0x100_0000 for now
-    .boot_addr_i (32'h0100_0000), 
+    .boot_addr_i (boot_addr_i), 
     .narrow_in_req_i (${narrow_cluster_in.req_name()}),
     .narrow_in_resp_o (${narrow_cluster_in.rsp_name()}),
     .narrow_out_req_o  (${narrow_cluster_out.req_name()}),

@@ -13,7 +13,6 @@
 #include "clint.h"
 #include "occamy_soc_ctrl.h"
 #include "snitch_cluster_peripheral.h"
-#include "snitch_hbm_xbar_peripheral.h"
 #include "snitch_quad_peripheral.h"
 
 //===============================================================

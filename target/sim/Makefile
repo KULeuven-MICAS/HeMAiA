@@ -266,7 +266,6 @@ PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/clint.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/occamy_soc_ctrl.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/snitch_cluster_peripheral.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/snitch_quad_peripheral.h
-PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/snitch_hbm_xbar_peripheral.h
 
 PLATFORM_HEADERS += $(SW_DEVICE_RT_DIR)/occamy_defs.h
 

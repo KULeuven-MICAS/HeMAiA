@@ -443,6 +443,12 @@
         },
         "peripherals": {
             "$ref": "http://pulp-platform.org/occamy/peripherals.schema.json"
+        },
+        "backup_boot_addr":{
+            "type": "integer",
+            "description": "Backup Boot Address",
+            "default": 2147483648            
         }
+
     }
 }

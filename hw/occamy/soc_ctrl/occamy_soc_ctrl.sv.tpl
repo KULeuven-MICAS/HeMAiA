@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: SHL-0.51
 
 // Author: Florian Zaruba <zarubaf@iis.ee.ethz.ch>
+`include "common_cells/registers.svh"
 
 module occamy_soc_ctrl import occamy_soc_reg_pkg::*; #(
   parameter type reg_req_t = logic,
@@ -17,6 +18,8 @@ module occamy_soc_ctrl import occamy_soc_reg_pkg::*; #(
   // To HW
   output occamy_soc_reg2hw_t reg2hw_o, // Write
   input  occamy_soc_hw2reg_t hw2reg_i,
+  // Boot addr
+  output logic [31:0] boot_addr_o,
   // Events in
   input logic [1:0] event_ecc_rerror_narrow_i,
   input logic [1:0] event_ecc_rerror_wide_i,
@@ -60,10 +63,23 @@ module occamy_soc_ctrl import occamy_soc_reg_pkg::*; #(
     .rst_ni    ( rst_ni ),
     .reg_req_i ( reg_req_i ),
     .reg_rsp_o ( reg_rsp_o ),
-    .reg2hw    ( reg2hw_o ),
-    .hw2reg    ( hw2reg ),
+    .reg2hw    ( reg2hw_o ), 
+    .hw2reg    ( hw2reg ),   
     .devmode_i ( 1'b1 )
   );
+   // boot address
+  logic [31:0] boot_addr_d, boot_addr_q;
+  logic [31:0] boot_addr_init;
+  logic [1:0] boot_mode;
+  assign boot_mode = hw2reg_i.boot_mode.d;
+
+  always_comb begin
+    boot_addr_init = (boot_mode == 2'b00)? ${default_boot_addr}:${backup_boot_addr};
+    boot_addr_d = (boot_mode == 2'b00)? ${default_boot_addr}:${backup_boot_addr};
+    boot_addr_o = boot_addr_q;
+  end
+
+  `FF(boot_addr_q, boot_addr_d, boot_addr_init, clk_i, rst_ni)
 
   prim_intr_hw #(.Width(1)) intr_hw_ecc_narrow_correctable (
     .clk_i,

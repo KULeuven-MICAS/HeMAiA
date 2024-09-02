@@ -82,6 +82,8 @@ module ${name}_top
 
   ${name}_soc_reg_pkg::${name}_soc_reg2hw_t soc_ctrl_out;
   ${name}_soc_reg_pkg::${name}_soc_hw2reg_t soc_ctrl_in;
+  // System boot address 
+  logic [31:0] boot_addr;
   logic [1:0] spm_narrow_rerror;
   logic [1:0] spm_wide_rerror;
 
@@ -121,6 +123,7 @@ module ${name}_top
     .clk_i,
     .rst_ni,
     .test_mode_i,
+    .boot_addr_i           ( boot_addr                   ),
     .periph_axi_lite_req_o ( periph_axi_lite_soc2per_req ),
     .periph_axi_lite_rsp_i ( periph_axi_lite_soc2per_rsp ),
     .periph_axi_lite_req_i ( periph_axi_lite_per2soc_req ),
@@ -324,7 +327,7 @@ module ${name}_top
   /////////////////////
   //   SOC CONTROL   //
   /////////////////////
-
+  
   <% regbus_soc_ctrl = soc_axi_lite_narrow_periph_xbar.out_soc_ctrl \
     .cut(context, cuts_soc_ctrl_cfg, name="soc_axi_lite_narrow_periph_xbar_out_soc_ctrl_cut") \
     .to_reg(context, "axi_lite_to_reg_soc_ctrl") %>
@@ -338,6 +341,7 @@ module ${name}_top
     .reg_rsp_o ( ${regbus_soc_ctrl.rsp_name()} ),
     .reg2hw_o  ( soc_ctrl_out ),
     .hw2reg_i  ( soc_ctrl_in ),
+    .boot_addr_o (boot_addr),
     .event_ecc_rerror_narrow_i(spm_narrow_rerror),
     .event_ecc_rerror_wide_i(spm_wide_rerror),
     .intr_ecc_narrow_uncorrectable_o(irq.ecc_narrow_uncorrectable),

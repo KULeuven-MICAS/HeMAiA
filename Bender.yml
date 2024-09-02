@@ -66,13 +66,6 @@ sources:
       - hw/spm_interface/test/tb_spm_rmw_adapter.sv
       - hw/spm_interface/test/tb_spm_1p_adv.sv
 
-  # soc_ctrl
-  - target: occamy
-    files:
-      - target/rtl/src/soc_ctrl/occamy_soc_reg_pkg.sv
-      - target/rtl/src/soc_ctrl/occamy_soc_reg_top.sv
-  - hw/occamy/soc_ctrl/occamy_soc_ctrl.sv
-
   # cluster wrapper (If the file is added in the snax repo, then it does not needed to be added here)
 
   - target: snax_minimal_cluster
@@ -85,10 +78,15 @@ sources:
       # quadrant_s1_ctrl
       - target/rtl/src/quadrant_s1_ctrl/occamy_quadrant_s1_reg_pkg.sv
       - target/rtl/src/quadrant_s1_ctrl/occamy_quadrant_s1_reg_top.sv
-
+      
+      # soc_ctrl
+      - target/rtl/src/soc_ctrl/occamy_soc_reg_pkg.sv
+      - target/rtl/src/soc_ctrl/occamy_soc_reg_top.sv
+      - target/rtl/src/soc_ctrl/occamy_soc_ctrl.sv
+  
       # hbm_xbar_ctrl
-      - target/rtl/src/hbm_xbar_ctrl/occamy_hbm_xbar_reg_pkg.sv
-      - target/rtl/src/hbm_xbar_ctrl/occamy_hbm_xbar_reg_top.sv
+      #- target/rtl/src/hbm_xbar_ctrl/occamy_hbm_xbar_reg_pkg.sv
+      #- target/rtl/src/hbm_xbar_ctrl/occamy_hbm_xbar_reg_top.sv
 
       # rv_plic
       - target/rtl/src/rv_plic/rv_plic_reg_pkg.sv

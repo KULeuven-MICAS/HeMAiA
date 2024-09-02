@@ -29,6 +29,7 @@ re_trailws = re.compile(r'[ \t\r]+$', re.MULTILINE)
 # Default name for all generated sources
 DEFAULT_NAME = "occamy"
 
+
 def write_template(tpl_path, outdir, fname=None, **kwargs):
     if tpl_path:
         tpl_path = pathlib.Path(tpl_path).absolute()
@@ -55,14 +56,14 @@ def read_json_file(file):
     return obj
 
 
-
 def am_connect_soc_lite_periph_xbar(am, am_soc_axi_lite_periph_xbar, occamy_cfg):
     ########################
     # Periph AXI Lite XBar #
     ########################
 
     # AM
-    nr_axi_lite_peripherals = len(occamy_cfg["peripherals"]["axi_lite_peripherals"])
+    nr_axi_lite_peripherals = len(
+        occamy_cfg["peripherals"]["axi_lite_peripherals"])
     am_axi_lite_peripherals = []
 
     for p in range(nr_axi_lite_peripherals):
@@ -73,7 +74,7 @@ def am_connect_soc_lite_periph_xbar(am, am_soc_axi_lite_periph_xbar, occamy_cfg)
                 occamy_cfg["peripherals"]["axi_lite_peripherals"][p]["address"]
             ).attach_to(am_soc_axi_lite_periph_xbar)
         )
-    
+
     return am_axi_lite_peripherals
 
 
@@ -81,7 +82,8 @@ def am_connect_soc_lite_narrow_periph_xbar(am, am_soc_axi_lite_narrow_periph_xba
     ##########################
     # AM: Periph Regbus XBar #
     ##########################
-    nr_axi_lite_narrow_peripherals = len(occamy_cfg["peripherals"]["axi_lite_narrow_peripherals"])
+    nr_axi_lite_narrow_peripherals = len(
+        occamy_cfg["peripherals"]["axi_lite_narrow_peripherals"])
     am_axi_lite_narrow_peripherals = []
 
     for p in range(nr_axi_lite_narrow_peripherals):
@@ -91,7 +93,7 @@ def am_connect_soc_lite_narrow_periph_xbar(am, am_soc_axi_lite_narrow_periph_xba
                 occamy_cfg["peripherals"]["axi_lite_narrow_peripherals"][p]["length"],
                 occamy_cfg["peripherals"]["axi_lite_narrow_peripherals"][p]["address"]
             ).attach_to(am_soc_axi_lite_narrow_periph_xbar)
-        )    
+        )
     # add bootrom seperately
     am_bootrom = am.new_leaf(
         "bootrom",
@@ -104,13 +106,14 @@ def am_connect_soc_lite_narrow_periph_xbar(am, am_soc_axi_lite_narrow_periph_xba
         occamy_cfg["peripherals"]["clint"]["address"]).attach_to(am_soc_axi_lite_narrow_periph_xbar)
     return am_axi_lite_narrow_peripherals, am_bootrom, am_clint
 
+
 def am_connect_soc_narrow_xbar(am, am_soc_narrow_xbar, occamy_cfg):
     # Connect narrow SPM to Narrow AXI
     am_spm_narrow = am.new_leaf(
         "spm_narrow",
         occamy_cfg["spm_narrow"]["length"],
         occamy_cfg["spm_narrow"]["address"]).attach_to(am_soc_narrow_xbar)
-    
+
     ############
     # AM: IDMA #
     ############
@@ -119,6 +122,7 @@ def am_connect_soc_narrow_xbar(am, am_soc_narrow_xbar, occamy_cfg):
         occamy_cfg["sys_idma_cfg"]["length"],
         occamy_cfg["sys_idma_cfg"]["address"]).attach_to(am_soc_narrow_xbar)
     return am_spm_narrow, am_sys_idma_cfg
+
 
 def am_connect_soc_wide_xbar_mem(am, am_soc_wide_xbar, occamy_cfg):
     # Connect wide SPM to Wide AXI
@@ -133,7 +137,8 @@ def am_connect_soc_wide_xbar_mem(am, am_soc_wide_xbar, occamy_cfg):
         occamy_cfg["wide_zero_mem"]["address"]).attach_to(am_soc_wide_xbar)
     return am_spm_wide, am_wide_zero_mem
 
-def am_connect_soc_wide_xbar_quad(am,am_soc_narrow_xbar,am_wide_xbar_quadrant_s1,am_narrow_xbar_quadrant_s1,occamy_cfg,cluster_generators):
+
+def am_connect_soc_wide_xbar_quad(am, am_soc_narrow_xbar, am_wide_xbar_quadrant_s1, am_narrow_xbar_quadrant_s1, occamy_cfg, cluster_generators):
     ##############################
     # AM: Quadrants and Clusters #
     ##############################
@@ -146,10 +151,14 @@ def am_connect_soc_wide_xbar_quad(am,am_soc_narrow_xbar,am_wide_xbar_quadrant_s1
     nr_s1_clusters = len(cluster_generators)
     nr_s1_quadrants = occamy_cfg["nr_s1_quadrant"]
     for i in range(nr_s1_clusters):
-        clusters_base_offset.append(cluster_generators[i].cfg["cluster_base_offset"])
-        clusters_tcdm_size.append(cluster_generators[i].cfg["tcdm"]["size"] * 1024)  # config is in KiB
-        clusters_periph_size.append(cluster_generators[i].cfg["cluster_periph_size"] * 1024)
-        clusters_zero_mem_size.append(cluster_generators[i].cfg["zero_mem_size"] * 1024)
+        clusters_base_offset.append(
+            cluster_generators[i].cfg["cluster_base_offset"])
+        clusters_tcdm_size.append(
+            cluster_generators[i].cfg["tcdm"]["size"] * 1024)  # config is in KiB
+        clusters_periph_size.append(
+            cluster_generators[i].cfg["cluster_periph_size"] * 1024)
+        clusters_zero_mem_size.append(
+            cluster_generators[i].cfg["zero_mem_size"] * 1024)
 
         # assert memory region allocation
         error_str = "ERROR: cluster peripherals, zero memory and tcdm \
@@ -163,7 +172,8 @@ def am_connect_soc_wide_xbar_quad(am,am_soc_narrow_xbar,am_wide_xbar_quadrant_s1
         am_clusters = list()
         for j in range(nr_s1_clusters):
             bases_cluster = list()
-            bases_cluster.append(cluster_i_start_addr + sum(clusters_base_offset[0:j+1]) + 0)
+            bases_cluster.append(cluster_i_start_addr +
+                                 sum(clusters_base_offset[0:j+1]) + 0)
             am_clusters.append(
                 am.new_leaf(
                     "quadrant_{}_cluster_{}_tcdm".format(i, j),
@@ -206,27 +216,27 @@ def am_connect_soc_wide_xbar_quad(am,am_soc_narrow_xbar,am_wide_xbar_quadrant_s1
                 )
             )
         am.new_leaf(
-                "quad_{}_cfg".format(i),
-                occamy_cfg["s1_quadrant"]["cfg_base_offset"],
-                occamy_cfg["s1_quadrant"]["cfg_base_addr"] +
-                i * occamy_cfg["s1_quadrant"]["cfg_base_offset"]
-            ).attach_to(
-                am_narrow_xbar_quadrant_s1[i]
-            ).attach_to(
-                am_soc_narrow_xbar
-            )
+            "quad_{}_cfg".format(i),
+            occamy_cfg["s1_quadrant"]["cfg_base_offset"],
+            occamy_cfg["s1_quadrant"]["cfg_base_addr"] +
+            i * occamy_cfg["s1_quadrant"]["cfg_base_offset"]
+        ).attach_to(
+            am_narrow_xbar_quadrant_s1[i]
+        ).attach_to(
+            am_soc_narrow_xbar
+        )
     return am_clusters
-    
 
 
-def get_dts(occamy_cfg, am_clint,am_axi_lite_peripherals,am_axi_lite_narrow_peripherals):
+def get_dts(occamy_cfg, am_clint, am_axi_lite_peripherals, am_axi_lite_narrow_peripherals):
     dts = device_tree.DeviceTree()
 
     #########################
     #  Periph AXI Lite XBar #
     #########################
 
-    nr_axi_lite_peripherals = len(occamy_cfg["peripherals"]["axi_lite_peripherals"])
+    nr_axi_lite_peripherals = len(
+        occamy_cfg["peripherals"]["axi_lite_peripherals"])
     for p in range(nr_axi_lite_peripherals):
         # add debug module to devicetree
         if occamy_cfg["peripherals"]["axi_lite_peripherals"][p]["name"] == "debug":
@@ -236,9 +246,10 @@ def get_dts(occamy_cfg, am_clint,am_axi_lite_peripherals,am_axi_lite_narrow_peri
 
     ######################
     # Periph Regbus XBar #
-    ###################### 
-    nr_axi_lite_narrow_peripherals = len(occamy_cfg["peripherals"]["axi_lite_narrow_peripherals"])
-    for p in range(nr_axi_lite_narrow_peripherals):    
+    ######################
+    nr_axi_lite_narrow_peripherals = len(
+        occamy_cfg["peripherals"]["axi_lite_narrow_peripherals"])
+    for p in range(nr_axi_lite_narrow_peripherals):
         # add uart to devicetree
         if occamy_cfg["peripherals"]["axi_lite_narrow_peripherals"][p]["name"] == "uart":
             dts.add_device("serial", "lowrisc,serial", am_axi_lite_narrow_peripherals[p], [
@@ -249,7 +260,6 @@ def get_dts(occamy_cfg, am_clint,am_axi_lite_peripherals,am_axi_lite_narrow_peri
         elif occamy_cfg["peripherals"]["axi_lite_narrow_peripherals"][p]["name"] == "plic":
             dts.add_plic([0], am_axi_lite_narrow_peripherals[p])
 
-
     dts.add_clint([0], am_clint)
     dts.add_cpu("eth,ariane")
     htif = dts.add_node("htif", "ucb,htif0")
@@ -258,12 +268,12 @@ def get_dts(occamy_cfg, am_clint,am_axi_lite_peripherals,am_axi_lite_narrow_peri
     return dts
 
 
-
-def get_top_kwargs(occamy_cfg,cluster_generators, soc_axi_lite_narrow_periph_xbar,soc_wide_xbar, soc_narrow_xbar, name):
-    core_per_cluster_list = [cluster_generator.cfg["nr_cores"] for cluster_generator in cluster_generators]
+def get_top_kwargs(occamy_cfg, cluster_generators, soc_axi_lite_narrow_periph_xbar, soc_wide_xbar, soc_narrow_xbar, name):
+    core_per_cluster_list = [cluster_generator.cfg["nr_cores"]
+                             for cluster_generator in cluster_generators]
     nr_cores_quadrant = sum(core_per_cluster_list)
     nr_s1_quadrants = occamy_cfg["nr_s1_quadrant"]
-    top_kwargs={
+    top_kwargs = {
         "name": name,
         "occamy_cfg": occamy_cfg,
         "soc_axi_lite_narrow_periph_xbar": soc_axi_lite_narrow_periph_xbar,
@@ -273,11 +283,13 @@ def get_top_kwargs(occamy_cfg,cluster_generators, soc_axi_lite_narrow_periph_xba
     }
     return top_kwargs
 
-def get_soc_kwargs(occamy_cfg,cluster_generators,soc_narrow_xbar,soc_wide_xbar,util, name):
-    core_per_cluster_list = [cluster_generator.cfg["nr_cores"] for cluster_generator in cluster_generators]
+
+def get_soc_kwargs(occamy_cfg, cluster_generators, soc_narrow_xbar, soc_wide_xbar, util, name):
+    core_per_cluster_list = [cluster_generator.cfg["nr_cores"]
+                             for cluster_generator in cluster_generators]
     nr_cores_quadrant = sum(core_per_cluster_list)
     nr_s1_quadrants = occamy_cfg["nr_s1_quadrant"]
-    soc_kwargs={
+    soc_kwargs = {
         "name": name,
         "util": util,
         "occamy_cfg": occamy_cfg,
@@ -289,7 +301,8 @@ def get_soc_kwargs(occamy_cfg,cluster_generators,soc_narrow_xbar,soc_wide_xbar,u
     }
     return soc_kwargs
 
-def get_quadrant_ctrl_kwargs(occamy_cfg, soc_wide_xbar, soc_narrow_xbar,quadrant_s1_ctrl_xbars,quadrant_s1_ctrl_mux, name):
+
+def get_quadrant_ctrl_kwargs(occamy_cfg, soc_wide_xbar, soc_narrow_xbar, quadrant_s1_ctrl_xbars, quadrant_s1_ctrl_mux, name):
     ro_cache_cfg = occamy_cfg["s1_quadrant"].get("ro_cache_cfg", {})
     ro_cache_regions = ro_cache_cfg.get("address_regions", 1)
     narrow_tlb_cfg = occamy_cfg["s1_quadrant"].get("narrow_tlb_cfg", {})
@@ -297,8 +310,9 @@ def get_quadrant_ctrl_kwargs(occamy_cfg, soc_wide_xbar, soc_narrow_xbar,quadrant
     wide_tlb_cfg = occamy_cfg["s1_quadrant"].get("wide_tlb_cfg", {})
     wide_tlb_entries = wide_tlb_cfg.get("l1_num_entries", 1)
 
-    quadrant_ctrl_kwargs={
+    quadrant_ctrl_kwargs = {
         "name": name,
+        "occamy_cfg": occamy_cfg,
         "ro_cache_cfg": ro_cache_cfg,
         "ro_cache_regions": ro_cache_regions,
         "narrow_tlb_cfg": narrow_tlb_cfg,
@@ -313,14 +327,12 @@ def get_quadrant_ctrl_kwargs(occamy_cfg, soc_wide_xbar, soc_narrow_xbar,quadrant
     return quadrant_ctrl_kwargs
 
 
-
-
-def get_quadrant_kwargs(occamy_cfg,cluster_generators,soc_wide_xbar,soc_narrow_xbar, wide_xbar_quadrant_s1, narrow_xbar_quadrant_s1, name):
+def get_quadrant_kwargs(occamy_cfg, cluster_generators, soc_wide_xbar, soc_narrow_xbar, wide_xbar_quadrant_s1, narrow_xbar_quadrant_s1, name):
     cluster_cfgs = list()
     nr_clusters = len(occamy_cfg["clusters"])
     for i in range(nr_clusters):
         cluster_cfgs.append(cluster_generators[i].cfg)
-    quadrant_kwargs={
+    quadrant_kwargs = {
         "name": name,
         "occamy_cfg": occamy_cfg,
         "cluster_cfgs": cluster_cfgs,
@@ -332,11 +344,11 @@ def get_quadrant_kwargs(occamy_cfg,cluster_generators,soc_wide_xbar,soc_narrow_x
     return quadrant_kwargs
 
 
-def get_xilinx_kwargs(occamy_cfg, soc_wide_xbar, soc_axi_lite_narrow_periph_xbar, name): 
-    xilinx_kwargs={
+def get_xilinx_kwargs(occamy_cfg, soc_wide_xbar, soc_axi_lite_narrow_periph_xbar, name):
+    xilinx_kwargs = {
         "name": name,
         "occamy_cfg": occamy_cfg,
-        "soc_wide_xbar": soc_wide_xbar, 
+        "soc_wide_xbar": soc_wide_xbar,
         "soc_axi_lite_narrow_periph_xbar": soc_axi_lite_narrow_periph_xbar
     }
     return xilinx_kwargs
@@ -362,14 +374,16 @@ def get_cores_cluster_offset(core_per_cluster):
     return nr_cores_cluster_offset
 
 
-def get_pkg_kwargs(occamy_cfg,cluster_generators, name):
-    core_per_cluster_list = [cluster_generator.cfg["nr_cores"] for cluster_generator in cluster_generators]
+def get_pkg_kwargs(occamy_cfg, cluster_generators, name):
+    core_per_cluster_list = [cluster_generator.cfg["nr_cores"]
+                             for cluster_generator in cluster_generators]
     cluster_cfg = cluster_generators[0].cfg
     nr_cores_cluster_offset = get_cores_cluster_offset(core_per_cluster_list)
     nr_cores_quadrant = sum(core_per_cluster_list)
 
     core_per_cluster = "{" + ",".join(map(str, core_per_cluster_list)) + "}"
-    nr_cores_cluster_offset = "{" + ",".join(map(str, nr_cores_cluster_offset)) + "}"
+    nr_cores_cluster_offset = "{" + \
+        ",".join(map(str, nr_cores_cluster_offset)) + "}"
 
     pkg_kwargs = {
         "name": name,
@@ -390,8 +404,8 @@ def get_pkg_kwargs(occamy_cfg,cluster_generators, name):
     return pkg_kwargs
 
 
-def get_cva6_kwargs(occamy_cfg,soc_narrow_xbar,name):
-    cva6_kwargs={
+def get_cva6_kwargs(occamy_cfg, soc_narrow_xbar, name):
+    cva6_kwargs = {
         "name": name,
         "occamy_cfg": occamy_cfg,
         "soc_narrow_xbar": soc_narrow_xbar
@@ -405,11 +419,13 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
     nr_quads = occamy_cfg['nr_s1_quadrant']
     nr_clusters = len(occamy_cfg["clusters"])
     nr_cores = sum(core_per_cluster_list)
-    nr_cores_per_cluster = "{" + ",".join(map(str, core_per_cluster_list)) + "}"
+    nr_cores_per_cluster = "{" + \
+        ",".join(map(str, core_per_cluster_list)) + "}"
     cluster_offset_list = [cluster_generator.cfg["cluster_base_offset"]
-                             for cluster_generator in cluster_generators]
+                           for cluster_generator in cluster_generators]
     if not all(cluster_offset == cluster_offset_list[0] for cluster_offset in cluster_offset_list):
-        raise ValueError("Not all cluster base offset in the cluster cfg are equal.")
+        raise ValueError(
+            "Not all cluster base offset in the cluster cfg are equal.")
     cluster_offset = cluster_offset_list[0]
     cluster_addr_width = int(math.log2(cluster_offset))
     # # The lut here is to provide an easy way to determine the cluster idx based on core idx
@@ -457,38 +473,37 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
     return cheader_kwargs
 
 
-
-
-def get_bootdata_kwargs(occamy_cfg, cluster_generators,name):
+def get_bootdata_kwargs(occamy_cfg, cluster_generators, name):
     # We use the 1st cluster cfg as the template to assign
     #   tcdm start
     #   tcdm size
     #   tcdm offset
     # We only have 1 quadrant right now so we just sum up the nr_cores within 1 quad
-    core_per_cluster_list = [cluster_generator.cfg["nr_cores"] for cluster_generator in cluster_generators]
+    core_per_cluster_list = [cluster_generator.cfg["nr_cores"]
+                             for cluster_generator in cluster_generators]
     nr_cores_quadrant = sum(core_per_cluster_list)
 
     cluster_cfg = cluster_generators[0].cfg
 
     bootdata_kwargs = {
         "name": name,
-        "boot_addr":hex(occamy_cfg["peripherals"]["rom"]["address"]),
-        "core_count":nr_cores_quadrant,
-        "hart_id_base":1,
-        "tcdm_start":hex(cluster_cfg["cluster_base_addr"]),
-        "tcdm_size":hex(cluster_cfg["tcdm"]["size"]*1024),
-        "tcdm_offset":hex(cluster_cfg["cluster_base_offset"]),
-        "global_mem_start":hex(occamy_cfg["spm_wide"]["address"]),
-        "global_mem_end":hex(occamy_cfg["spm_wide"]["address"] + occamy_cfg["spm_wide"]["length"]),
-        "cluster_count":len(occamy_cfg["clusters"]),
-        "s1_quadrant_count":occamy_cfg["nr_s1_quadrant"],
+        "boot_addr": hex(occamy_cfg["peripherals"]["rom"]["address"]),
+        "core_count": nr_cores_quadrant,
+        "hart_id_base": 1,
+        "tcdm_start": hex(cluster_cfg["cluster_base_addr"]),
+        "tcdm_size": hex(cluster_cfg["tcdm"]["size"]*1024),
+        "tcdm_offset": hex(cluster_cfg["cluster_base_offset"]),
+        "global_mem_start": hex(occamy_cfg["spm_wide"]["address"]),
+        "global_mem_end": hex(occamy_cfg["spm_wide"]["address"] + occamy_cfg["spm_wide"]["length"]),
+        "cluster_count": len(occamy_cfg["clusters"]),
+        "s1_quadrant_count": occamy_cfg["nr_s1_quadrant"],
         "clint_base": hex(occamy_cfg["peripherals"]["clint"]["address"])
     }
     return bootdata_kwargs
 
 
-def get_testharness_kwargs(soc_wide_xbar, soc_axi_lite_narrow_periph_xbar,solder, name):
-    testharness_kwargs={
+def get_testharness_kwargs(soc_wide_xbar, soc_axi_lite_narrow_periph_xbar, solder, name):
+    testharness_kwargs = {
         "name": name,
         "solder": solder,
         "soc_wide_xbar": soc_wide_xbar,
@@ -496,6 +511,40 @@ def get_testharness_kwargs(soc_wide_xbar, soc_axi_lite_narrow_periph_xbar,solder
     }
     return testharness_kwargs
 
+
+def get_chip_kwargs(soc_wide_xbar, soc_axi_lite_narrow_periph_xbar, occamy_cfg, cluster_generators, name):
+    core_per_cluster_list = [cluster_generator.cfg["nr_cores"]
+                             for cluster_generator in cluster_generators]
+    nr_cores_quadrant = sum(core_per_cluster_list)
+    nr_s1_quadrants = occamy_cfg["nr_s1_quadrant"]
+    chip_kwargs = {
+        "name": name,
+        "util": util,
+        "occamy_cfg": occamy_cfg,
+        "soc_wide_xbar": soc_wide_xbar,
+        "soc_axi_lite_narrow_periph_xbar": soc_axi_lite_narrow_periph_xbar,
+        "cores": nr_s1_quadrants * nr_cores_quadrant + 1
+    }
+    return chip_kwargs
+
+
+def get_ctrl_kwargs(occamy_cfg, name):
+    default_boot_addr = occamy_cfg["peripherals"]["rom"]["address"]
+    backup_boot_addr = occamy_cfg["backup_boot_addr"]
+
+    hex_default_boot_addr = hex(default_boot_addr)
+    hex_backup_boot_addr = hex(backup_boot_addr)
+    # Remove the prefix 0x
+    hex_default_boot_addr = "32'h" + hex_default_boot_addr[2:]
+    hex_backup_boot_addr = "32'h" + hex_backup_boot_addr[2:]
+    ctrl_kwargs = {
+        "name": name,
+        "nr_s1_quadrants": occamy_cfg["nr_s1_quadrant"],
+        "default_boot_addr": hex_default_boot_addr,
+        "backup_boot_addr": hex_backup_boot_addr,
+        "occamy_cfg": occamy_cfg
+    }
+    return ctrl_kwargs
 
 
 def main():
@@ -552,13 +601,17 @@ def main():
     parser.add_argument("--chip",
                         metavar="CHIP_TOP",
                         help="(Optional) Chip Top-level")
+    parser.add_argument("--ctrl",
+                        metavar="SoC and Quad Ctrl",
+                        help="Name of SoC or Quadrant template file (output)")
     parser.add_argument("--graph", "-g", metavar="DOT")
     parser.add_argument("--memories", "-m", action="store_true")
     parser.add_argument("--wrapper", "-w", action="store_true")
     parser.add_argument("--am-cheader", "-D", metavar="ADDRMAP_CHEADER")
     parser.add_argument("--am-csv", "-aml", metavar="ADDRMAP_CSV")
     parser.add_argument("--dts", metavar="DTS", help="System's device tree.")
-    parser.add_argument("--name", metavar="NAME", default=DEFAULT_NAME, help="System's name.")
+    parser.add_argument("--name", metavar="NAME",
+                        default=DEFAULT_NAME, help="System's name.")
 
     parser.add_argument("-v",
                         "--verbose",
@@ -567,7 +620,6 @@ def main():
 
     args = parser.parse_args()
     occamy_root = pathlib.Path(__file__).parent / "../../"
-
 
     if args.verbose:
         logging.basicConfig(level=logging.DEBUG)
@@ -596,10 +648,10 @@ def main():
     #     "snax_streamer_gemm",
     #     "snax_wide_gemm_data_reshuffler",
     # ],
-    # 
+    #
     # The name in the ["clusters"] corresponds to the file names in occamy/target/rtl/cfg/cluster_cfg
     # And each cluster is stores in cluster generator
-    
+
     cluster_cfg_dir = occamy_root / "target/rtl/cfg/cluster_cfg"
     cluster_generators = get_cluster_generators(occamy_cfg, cluster_cfg_dir)
     # Each cluster will be generated seperately
@@ -608,26 +660,25 @@ def main():
     # cluster: {
     #     name: "snax_streamer_gemm"
 
-    # As all the source is able to be generated inside snax cluster, Occamy does not need to handle the wrapper gen any more. 
+    # As all the source is able to be generated inside snax cluster, Occamy does not need to handle the wrapper gen any more.
     cluster_cfg_list = get_cluster_cfg_list(occamy_cfg, cluster_cfg_dir)
     if args.snitch:
         print(cluster_cfg_list)
         generate_snitch(cluster_cfg_list, args.snitch)
 
     if args.wrapper:
-        generate_wrappers(cluster_generators,outdir)
+        generate_wrappers(cluster_generators, outdir)
 
     if args.memories:
-        generate_memories(cluster_generators,outdir)
-
+        generate_memories(cluster_generators, outdir)
 
     # Arguments.
     nr_s1_quadrants = occamy_cfg["nr_s1_quadrant"]
     nr_s1_clusters = len(occamy_cfg["clusters"])
 
-    core_per_cluster_list = [cluster_generator.cfg["nr_cores"] for cluster_generator in cluster_generators]
+    core_per_cluster_list = [cluster_generator.cfg["nr_cores"]
+                             for cluster_generator in cluster_generators]
     nr_cores_quadrant = sum(core_per_cluster_list)
-
 
     # Now we create all the am for xbars
     # Each XBAR is a node
@@ -640,7 +691,6 @@ def main():
     am_soc_narrow_xbar = am.new_node("soc_narrow_xbar")
     am_soc_wide_xbar = am.new_node("soc_wide_xbar")
 
-
     # Quadrant inter crossbar address map:
     # am_quadrant_inter_xbar = am.new_node("am_quadrant_inter_xbar")
 
@@ -648,23 +698,30 @@ def main():
     am_wide_xbar_quadrant_s1 = list()
     am_narrow_xbar_quadrant_s1 = list()
     for i in range(nr_s1_quadrants):
-        am_wide_xbar_quadrant_s1.append(am.new_node("wide_xbar_quadrant_s1_{}".format(i)))
-        am_narrow_xbar_quadrant_s1.append(am.new_node("narrow_xbar_quadrant_s1_{}".format(i)))
+        am_wide_xbar_quadrant_s1.append(
+            am.new_node("wide_xbar_quadrant_s1_{}".format(i)))
+        am_narrow_xbar_quadrant_s1.append(
+            am.new_node("narrow_xbar_quadrant_s1_{}".format(i)))
 
     # Peripheral crossbar address map
     am_soc_axi_lite_periph_xbar = am.new_node("soc_axi_lite_periph_xbar")
-    am_soc_axi_lite_narrow_periph_xbar = am.new_node("soc_axi_lite_narrow_periph_xbar")
-
+    am_soc_axi_lite_narrow_periph_xbar = am.new_node(
+        "soc_axi_lite_narrow_periph_xbar")
 
     # After that, we need to create the leaves that connect to xbars
-    am_axi_lite_peripherals = am_connect_soc_lite_periph_xbar(am, am_soc_axi_lite_periph_xbar, occamy_cfg)
+    am_axi_lite_peripherals = am_connect_soc_lite_periph_xbar(
+        am, am_soc_axi_lite_periph_xbar, occamy_cfg)
 
-    am_axi_lite_narrow_peripherals, am_bootrom, am_clint = am_connect_soc_lite_narrow_periph_xbar(am, am_soc_axi_lite_narrow_periph_xbar, occamy_cfg)
+    am_axi_lite_narrow_peripherals, am_bootrom, am_clint = am_connect_soc_lite_narrow_periph_xbar(
+        am, am_soc_axi_lite_narrow_periph_xbar, occamy_cfg)
 
-    am_spm_narrow,am_sys_idma_cfg = am_connect_soc_narrow_xbar(am, am_soc_narrow_xbar, occamy_cfg)
-    am_spm_wide,am_wide_zero_mem = am_connect_soc_wide_xbar_mem(am,am_soc_wide_xbar,occamy_cfg)
+    am_spm_narrow, am_sys_idma_cfg = am_connect_soc_narrow_xbar(
+        am, am_soc_narrow_xbar, occamy_cfg)
+    am_spm_wide, am_wide_zero_mem = am_connect_soc_wide_xbar_mem(
+        am, am_soc_wide_xbar, occamy_cfg)
 
-    am_clusters = am_connect_soc_wide_xbar_quad(am,am_soc_narrow_xbar,am_wide_xbar_quadrant_s1,am_narrow_xbar_quadrant_s1,occamy_cfg,cluster_generators)
+    am_clusters = am_connect_soc_wide_xbar_quad(
+        am, am_soc_narrow_xbar, am_wide_xbar_quadrant_s1, am_narrow_xbar_quadrant_s1, occamy_cfg, cluster_generators)
     # Then we connect between xbars
 
     # Connect quadrants AXI xbar
@@ -705,7 +762,8 @@ def main():
     soc_axi_lite_periph_xbar.add_output_entry("soc", am_soc_narrow_xbar)
 
     # connect AXI lite peripherals
-    nr_axi_lite_peripherals = len(occamy_cfg["peripherals"]["axi_lite_peripherals"])
+    nr_axi_lite_peripherals = len(
+        occamy_cfg["peripherals"]["axi_lite_peripherals"])
     for p in range(nr_axi_lite_peripherals):
         soc_axi_lite_periph_xbar.add_input(
             occamy_cfg["peripherals"]["axi_lite_peripherals"][p]["name"]
@@ -730,7 +788,8 @@ def main():
     soc_axi_lite_narrow_periph_xbar.add_input("soc")
 
     # connect Regbus peripherals
-    nr_axi_lite_narrow_peripherals = len(occamy_cfg["peripherals"]["axi_lite_narrow_peripherals"])
+    nr_axi_lite_narrow_peripherals = len(
+        occamy_cfg["peripherals"]["axi_lite_narrow_peripherals"])
     for p in range(nr_axi_lite_narrow_peripherals):
         soc_axi_lite_narrow_periph_xbar.add_output_entry(
             occamy_cfg["peripherals"]["axi_lite_narrow_peripherals"][p]["name"],
@@ -746,7 +805,7 @@ def main():
         512,
         # This is the cleanest solution minimizing ID width conversions
         occamy_cfg["quadrant_inter_xbar_slv_id_width_no_rocache"] + (
-                    1 if occamy_cfg["s1_quadrant"].get("ro_cache_cfg") else 0),
+            1 if occamy_cfg["s1_quadrant"].get("ro_cache_cfg") else 0),
         name="soc_wide_xbar",
         clk="clk_i",
         rst="rst_ni",
@@ -767,7 +826,7 @@ def main():
         # Default route passes HBI through quadrant 0
         # --> mask this route, forcing it through default wide xbar
         soc_wide_xbar.add_output_entry("quadrant_{}".format(i),
-                                             am_wide_xbar_quadrant_s1[i])
+                                       am_wide_xbar_quadrant_s1[i])
         soc_wide_xbar.add_input("quadrant_{}".format(i))
 
     ###################
@@ -794,7 +853,8 @@ def main():
         #                                             "S1QuadrantAddressSpace"),
         #                                            ("s1_quadrant_cfg_base_addr",
         #                                             "S1QuadrantCfgAddressSpace")])
-        soc_narrow_xbar.add_output_entry("s1_quadrant_{}".format(i),am_narrow_xbar_quadrant_s1[i])
+        soc_narrow_xbar.add_output_entry(
+            "s1_quadrant_{}".format(i), am_narrow_xbar_quadrant_s1[i])
         soc_narrow_xbar.add_input("s1_quadrant_{}".format(i))
 
     soc_narrow_xbar.add_input("cva6")
@@ -930,53 +990,57 @@ def main():
         "occamy_cfg": occamy_cfg,
         "cluster_cfgs": cluster_cfgs,
         "cores": nr_s1_quadrants * nr_cores_quadrant + 1,
-        "lcl_cores": nr_s1_quadrants * nr_cores_quadrant ,
+        "lcl_cores": nr_s1_quadrants * nr_cores_quadrant,
         "nr_s1_quadrants": nr_s1_quadrants,
         "nr_s1_clusters": nr_s1_clusters,
         "core_per_cluster_list": core_per_cluster_list
-    }   
+    }
     # Emit the code.
     #############
     # Top-Level #
     #############
     if args.top_sv:
-        top_kwargs = get_top_kwargs(occamy_cfg,cluster_generators, soc_axi_lite_narrow_periph_xbar,soc_wide_xbar, soc_narrow_xbar, args.name)
+        top_kwargs = get_top_kwargs(occamy_cfg, cluster_generators,
+                                    soc_axi_lite_narrow_periph_xbar, soc_wide_xbar, soc_narrow_xbar, args.name)
         write_template(args.top_sv,
-                    outdir,
-                    fname="{}_top.sv".format(args.name),
-                    module=solder.code_module['top_axi_lite_periph'],
-                    soc_periph_xbar=soc_axi_lite_periph_xbar,
-                    **top_kwargs)
+                       outdir,
+                       fname="{}_top.sv".format(args.name),
+                       module=solder.code_module['top_axi_lite_periph'],
+                       soc_periph_xbar=soc_axi_lite_periph_xbar,
+                       **top_kwargs)
     ###########################
     # SoC (fully synchronous) #
     ###########################
     if args.soc_sv:
-        soc_kwargs = get_soc_kwargs(occamy_cfg,cluster_generators,soc_narrow_xbar,soc_wide_xbar, util, args.name)
+        soc_kwargs = get_soc_kwargs(
+            occamy_cfg, cluster_generators, soc_narrow_xbar, soc_wide_xbar, util, args.name)
         write_template(args.soc_sv,
-                    outdir,
-                    module=solder.code_module['soc'],
-                    soc_periph_xbar=soc_axi_lite_periph_xbar,
-                    **soc_kwargs)
+                       outdir,
+                       module=solder.code_module['soc'],
+                       soc_periph_xbar=soc_axi_lite_periph_xbar,
+                       **soc_kwargs)
     ##########################
     # S1 Quadrant controller #
     ##########################
     if args.quadrant_s1_ctrl:
-        quadrant_ctrl_kwargs = get_quadrant_ctrl_kwargs(occamy_cfg, soc_wide_xbar, soc_narrow_xbar,quadrant_s1_ctrl_xbars, quadrant_s1_ctrl_mux, args.name)
+        quadrant_ctrl_kwargs = get_quadrant_ctrl_kwargs(
+            occamy_cfg, soc_wide_xbar, soc_narrow_xbar, quadrant_s1_ctrl_xbars, quadrant_s1_ctrl_mux, args.name)
         write_template(args.quadrant_s1_ctrl,
-                    outdir,
-                    module=solder.code_module['quadrant_s1_ctrl'],
-                    **quadrant_ctrl_kwargs)
+                       outdir,
+                       module=solder.code_module['quadrant_s1_ctrl'],
+                       **quadrant_ctrl_kwargs)
     ###############
     # S1 Quadrant #
     ###############
     if args.quadrant_s1:
-        quadrant_kwargs = get_quadrant_kwargs(occamy_cfg, cluster_generators, soc_wide_xbar, soc_narrow_xbar, wide_xbar_quadrant_s1, narrow_xbar_quadrant_s1, args.name)
+        quadrant_kwargs = get_quadrant_kwargs(occamy_cfg, cluster_generators, soc_wide_xbar,
+                                              soc_narrow_xbar, wide_xbar_quadrant_s1, narrow_xbar_quadrant_s1, args.name)
         if nr_s1_quadrants > 0:
             write_template(args.quadrant_s1,
-                        outdir,
-                        fname="{}_quadrant_s1.sv".format(args.name),
-                        module=solder.code_module['quadrant_s1'],
-                        **quadrant_kwargs)
+                           outdir,
+                           fname="{}_quadrant_s1.sv".format(args.name),
+                           module=solder.code_module['quadrant_s1'],
+                           **quadrant_kwargs)
         else:
             tpl_path = args.quadrant_s1
             if tpl_path:
@@ -986,49 +1050,47 @@ def main():
                     with open("{}/{}_quadrant_s1.sv".format(outdir, args.name), 'w') as f:
                         f.write("// no quadrants in this design")
 
-
     ##################
     # Xilinx Wrapper #
     ##################
     if args.xilinx_sv:
-        xilinx_kwargs = get_xilinx_kwargs(occamy_cfg, soc_wide_xbar, soc_axi_lite_narrow_periph_xbar, args.name)
+        xilinx_kwargs = get_xilinx_kwargs(
+            occamy_cfg, soc_wide_xbar, soc_axi_lite_narrow_periph_xbar, args.name)
         write_template(args.xilinx_sv,
-                    outdir,
-                    fname="{}_xilinx.sv".format(args.name),
-                    module= "",
-                    **xilinx_kwargs)
+                       outdir,
+                       fname="{}_xilinx.sv".format(args.name),
+                       module="",
+                       **xilinx_kwargs)
 
     ###########
     # Package #
     ###########
     if args.pkg_sv:
-        pkg_kwargs = get_pkg_kwargs(occamy_cfg,cluster_generators, args.name)
-        write_template(args.pkg_sv, outdir, **pkg_kwargs, package=solder.code_package)
+        pkg_kwargs = get_pkg_kwargs(occamy_cfg, cluster_generators, args.name)
+        write_template(args.pkg_sv, outdir, **pkg_kwargs,
+                       package=solder.code_package)
 
     ################
     # CVA6 Wrapper #
     ################
     if args.cva6_sv:
-        cva6_kwargs = get_cva6_kwargs(occamy_cfg,soc_narrow_xbar,args.name)
+        cva6_kwargs = get_cva6_kwargs(occamy_cfg, soc_narrow_xbar, args.name)
         write_template(args.cva6_sv, outdir, **cva6_kwargs)
-
 
     ###################
     # Generic CHEADER #
     ###################
     if args.cheader:
-        cheader_kwargs = get_cheader_kwargs(occamy_cfg, cluster_generators, args.name)
+        cheader_kwargs = get_cheader_kwargs(
+            occamy_cfg, cluster_generators, args.name)
         write_template(args.cheader, outdir, **cheader_kwargs)
-
 
     ###################
     # ADDRMAP CHEADER #
     ###################
     if args.am_cheader:
         with open(args.am_cheader, "w") as file:
-            file.write(am.print_cheader())    
-
-
+            file.write(am.print_cheader())
 
     ###############
     # ADDRMAP CSV #
@@ -1036,28 +1098,40 @@ def main():
     if args.am_csv:
         with open(args.am_csv, 'w', newline='') as csvfile:
             csv_writer = csv.writer(csvfile, delimiter=',')
-            am.print_csv(csv_writer)    
+            am.print_csv(csv_writer)
 
     ###############
     # Testharness #
     ###############
     if args.testharness_sv:
-        testharness_kwargs = get_testharness_kwargs(soc_wide_xbar, soc_axi_lite_narrow_periph_xbar, solder, name)
+        testharness_kwargs = get_testharness_kwargs(
+            soc_wide_xbar, soc_axi_lite_narrow_periph_xbar, solder, name)
         write_template(args.testharness_sv, outdir, **testharness_kwargs)
-
 
     ############
     # BOOTDATA #
     ############
     if args.bootdata:
-        bootdata_kwargs = get_bootdata_kwargs(occamy_cfg,cluster_generators,args.name)
+        bootdata_kwargs = get_bootdata_kwargs(
+            occamy_cfg, cluster_generators, args.name)
         bootdata_fname = "bootdata.cc"
-        write_template(args.bootdata, outdir, bootdata_fname, **bootdata_kwargs)    
+        write_template(args.bootdata, outdir,
+                       bootdata_fname, **bootdata_kwargs)
 
-
+    ########
+    # CHIP #
+    ########
     if args.chip:
-        write_template(args.chip, outdir, **kwargs)
+        chip_kwargs = get_chip_kwargs(
+            soc_wide_xbar, soc_axi_lite_narrow_periph_xbar, occamy_cfg, cluster_generators, args.name)
+        write_template(args.chip, outdir, **chip_kwargs)
 
+    ########
+    # CTRL #
+    ########
+    if args.ctrl:
+        ctrl_kwargs = get_ctrl_kwargs(occamy_cfg, args.name)
+        write_template(args.ctrl, outdir, **ctrl_kwargs)
     #######
     # DTS #
     #######
@@ -1070,9 +1144,10 @@ def main():
     # - Create a second(/third) configuration file.
     # - Generate the RTL into dedicated directories
     # - (Manually) adapt the `Bender.yml` to include the appropriate files.
-    
+
     if args.dts:
-        dts = get_dts(occamy_cfg, am_clint,am_axi_lite_peripherals,am_axi_lite_narrow_peripherals)
+        dts = get_dts(occamy_cfg, am_clint, am_axi_lite_peripherals,
+                      am_axi_lite_narrow_peripherals)
         # TODO(zarubaf): Figure out whether there are any requirements on the
         # model and compatability.
         dts_str = dts.emit("eth,occamy-dev", "eth,occamy")
@@ -1084,12 +1159,13 @@ def main():
                 input=dts_str,
                 stdout=file,
                 shell=True,
-                universal_newlines=True)  # In Python3.7 and newer, universal_newlines has the alias of text
+                universal_newlines=True)
 
     # Emit the address map as a dot file if requested.
     if args.graph:
         with open(args.graph, "w") as file:
             file.write(am.render_graphviz())
+
 
 if __name__ == "__main__":
     main()
