@@ -15,13 +15,13 @@ from Simulator import QuestaSimulator, VerilatorSimulator  # noqa: E402
 
 SIMULATORS = {
     'vsim': QuestaSimulator(Path(__file__).parent.resolve() / 'bin/occamy_top.vsim'), 
-    'verilator': VerilatorSimulator(Path(__file__).parent.resolve() / 'bin/snitch_cluster.vlt')
+    'verilator': VerilatorSimulator(Path(__file__).parent.resolve() / 'bin/occamy_top.vlt')
 }
 
 
 def main():
     args = parser('vsim', SIMULATORS.keys()).parse_args()
-    simulations = get_simulations(args.testlist, SIMULATORS[args.simulator], run_dir=args.run_dir)
+    simulations = get_simulations(args.testlist, SIMULATORS[args.simulator])
     return run_simulations(simulations,
                            n_procs=args.n_procs,
                            dry_run=args.dry_run,
