@@ -30,7 +30,7 @@ jobs:
   #################################################
 
   occamy-verilator:
-    name: Compile Occamy Software + Hardware Verilator Binary for behavioral simulation
+    name: Simulation with Verilator
     runs-on: ubuntu-22.04
     container:
       image: ghcr.io/kuleuven-micas/snax:main
@@ -40,15 +40,20 @@ jobs:
           submodules: 'recursive'
       - name: Compile Bootrom
         run: |
-          echo -e "The placeholer for compiling Bootrom"
-          echo -e "Should execute \"make bootrom\""
+          echo "Compiling Bootrom"
+          make bootrom
       - name: Compile SW
         run: |
-          echo -e "The placeholer for compiling SW"
-          echo -e "Should execute \"make sw\""
+          echo "Compiling SW"
+          make sw CFG_OVERRIDE=target/sw/cfg/occamy_cfg/hemaia.hjson
       - name: Compile RTL
         run: |
           make rtl CFG_OVERRIDE=target/rtl/cfg/occamy_cfg/hemaia.hjson
       - name: Compile Verilator Binary
         run: |
           make occamy_system_vlt
+      - name: Run Tests
+        working-directory: target/sim
+        run: |-
+          ./run.py --simulator verilator \
+          sw/sim_elf.yaml -j
