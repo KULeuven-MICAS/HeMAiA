@@ -83,7 +83,7 @@ occamy_system_download_sw: # In ESAT Server; this procedure will only inject the
 	make -C ./target/fpga/sw download_sw
 
 open_terminal:	# It opens ttyUSB1 without locking it, and set baudrate at 1Mbps
-	$(shell minicom -D /dev/ttyUSB1 -b 1000000 -o)
+	$(info "shell minicom -D /dev/ttyUSB1 -b 1000000 -o")
 
 # FPGA Workflow (with no Xilinx IP - tapeout configuration)
 # Please be attention that in this configuration, injecting any binary files by Xilinx Vivado are not possible anymore; please use JTAG or embedded bootrom to load the binary
