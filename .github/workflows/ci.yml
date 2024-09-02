@@ -40,11 +40,11 @@ jobs:
           submodules: 'recursive'
       - name: Compile Bootrom
         run: |
-          echo -e "Compiling Bootrom"
+          echo "Compiling Bootrom"
           make bootrom
       - name: Compile SW
         run: |
-          echo -e "Compiling SW"
+          echo "Compiling SW"
           make sw CFG_OVERRIDE=target/sw/cfg/occamy_cfg/hemaia.hjson
       - name: Compile RTL
         run: |
