@@ -74,25 +74,15 @@ FORCE:
 all: rtl
 clean: clean-rtl
 
-########
-# Util #
-########
-
-# .PHONY: clean-bender
-
-# clean-bender:
-# 	rm -rf $(ROOT)/Bender.lock $(ROOT)/.bender/ $(ROOT)/deps
-# 	rm -rf src/bender_targets.tmp
-
 ###############
 # RTL sources #
 ###############
 
 .PHONY: rtl clint plic socctrl quadctrl soc tb
-.PHONY: clean-rtl clean-clint clean-plic clean-socctrl clean-quadctrl clean-soc clean-tb
+.PHONY: clean-rtl clean-clint clean-plic clean-socctrl clean-quadctrl clean-snax-cluster clean-soc clean-tb
 
-rtl: clint plic socctrl quadctrl soc tb src/bender_targets.tmp
-clean-rtl: clean-clint clean-plic clean-socctrl clean-quadctrl clean-soc clean-tb
+rtl: clint plic socctrl quadctrl snax-cluster soc tb src/bender_targets.tmp
+clean-rtl: clean-clint clean-plic clean-socctrl clean-quadctrl clean-soc clean-snax-cluster clean-tb
 
 $(TARGET_PLIC_DIR) $(TARGET_CLINT_DIR) $(TARGET_SOCCTRL_DIR) $(TARGET_QUADCTRL_DIR):
 	@mkdir -p $@
@@ -113,6 +103,25 @@ test/testharness.sv: test/testharness.sv.tpl $(CFG)
 	# @$(OCCAMYGEN) --cfg $(CFG) \
  	# 	--bootdata       ../../ip/snitch_cluster/test/bootdata.cc.tpl
 
+
+########
+# SNAX #
+########
+
+# Make the snax gen as a seperate target
+snax-cluster: .snax_cluster_occamygen_targets_group
+
+.snax_cluster_occamygen_targets_group: $(CFG)
+	@echo "[OCCAMYGEN] START Generate SNAX CLUSTERS"
+
+	$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_SRC_DIR)\
+		--snitch           $(SNITCH_ROOT)
+
+	@echo "[OCCAMYGEN] FINISH Generate SNAX CLUSTERS"
+	@touch $@
+clean-snax-cluster:
+	rm -rf .snax_cluster_occamygen_targets_group
+
 #######
 # SOC #
 #######
@@ -132,11 +141,8 @@ clean-soc:
 $(MISC_OCCAMYGEN_TARGETS): .misc_occamygen_targets_group
 .misc_occamygen_targets_group: $(CFG) $(MISC_OCCAMYGEN_SV_TEMPLATES)
 	@echo "[OCCAMYGEN] Generate $(MISC_OCCAMYGEN_TARGETS)"
-# OCCAMYGEN can trigger the SNAX cluster to do all rtl generation, So --wrapper is replaced by --snitch
-# Also --memories seem not necessary for occamy. 
 
 	$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_SRC_DIR)\
-		--snitch           $(SNITCH_ROOT) \
 		--top-sv           $(SOURCE_OCCAMY_DIR)/occamy_top.sv.tpl \
 		--soc-sv           $(SOURCE_OCCAMY_DIR)/occamy_soc.sv.tpl \
 		--chip             $(SOURCE_OCCAMY_DIR)/occamy_chip.sv.tpl \
