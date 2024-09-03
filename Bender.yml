@@ -84,10 +84,6 @@ sources:
       - target/rtl/src/soc_ctrl/occamy_soc_reg_top.sv
       - target/rtl/src/soc_ctrl/occamy_soc_ctrl.sv
   
-      # hbm_xbar_ctrl
-      #- target/rtl/src/hbm_xbar_ctrl/occamy_hbm_xbar_reg_pkg.sv
-      #- target/rtl/src/hbm_xbar_ctrl/occamy_hbm_xbar_reg_top.sv
-
       # rv_plic
       - target/rtl/src/rv_plic/rv_plic_reg_pkg.sv
       - target/rtl/src/rv_plic/rv_plic_reg_top.sv
