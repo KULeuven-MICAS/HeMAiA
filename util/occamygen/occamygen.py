@@ -531,18 +531,20 @@ def get_chip_kwargs(soc_wide_xbar, soc_axi_lite_narrow_periph_xbar, occamy_cfg, 
 def get_ctrl_kwargs(occamy_cfg, name):
     default_boot_addr = occamy_cfg["peripherals"]["rom"]["address"]
     backup_boot_addr = occamy_cfg["backup_boot_addr"]
+    addr_width = occamy_cfg["addr_width"]
 
     hex_default_boot_addr = hex(default_boot_addr)
     hex_backup_boot_addr = hex(backup_boot_addr)
     # Remove the prefix 0x
-    hex_default_boot_addr = "32'h" + hex_default_boot_addr[2:]
-    hex_backup_boot_addr = "32'h" + hex_backup_boot_addr[2:]
+    hex_default_boot_addr = str(addr_width) + "'h" + hex_default_boot_addr[2:]
+    hex_backup_boot_addr = str(addr_width) + "'h" + hex_backup_boot_addr[2:]
     ctrl_kwargs = {
         "name": name,
         "nr_s1_quadrants": occamy_cfg["nr_s1_quadrant"],
         "default_boot_addr": hex_default_boot_addr,
         "backup_boot_addr": hex_backup_boot_addr,
-        "occamy_cfg": occamy_cfg
+        "occamy_cfg": occamy_cfg,
+        "addr_width": addr_width
     }
     return ctrl_kwargs
 

@@ -83,7 +83,7 @@ module ${name}_top
   ${name}_soc_reg_pkg::${name}_soc_reg2hw_t soc_ctrl_out;
   ${name}_soc_reg_pkg::${name}_soc_hw2reg_t soc_ctrl_in;
   // System boot address 
-  logic [31:0] boot_addr;
+  logic [${occamy_cfg["addr_width"]-1}:0] boot_addr;
   logic [1:0] spm_narrow_rerror;
   logic [1:0] spm_wide_rerror;
 

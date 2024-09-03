@@ -19,7 +19,7 @@ module occamy_soc_ctrl import occamy_soc_reg_pkg::*; #(
   output occamy_soc_reg2hw_t reg2hw_o, // Write
   input  occamy_soc_hw2reg_t hw2reg_i,
   // Boot addr
-  output logic [31:0] boot_addr_o,
+  output logic [${addr_width - 1}:0] boot_addr_o,
   // Events in
   input logic [1:0] event_ecc_rerror_narrow_i,
   input logic [1:0] event_ecc_rerror_wide_i,
@@ -68,8 +68,8 @@ module occamy_soc_ctrl import occamy_soc_reg_pkg::*; #(
     .devmode_i ( 1'b1 )
   );
    // boot address
-  logic [31:0] boot_addr_d, boot_addr_q;
-  logic [31:0] boot_addr_init;
+  logic [${addr_width-1}:0] boot_addr_d, boot_addr_q;
+  logic [${addr_width-1}:0] boot_addr_init;
   logic [1:0] boot_mode;
   assign boot_mode = hw2reg_i.boot_mode.d;
 
