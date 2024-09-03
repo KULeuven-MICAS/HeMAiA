@@ -13,6 +13,7 @@ module ${name}_cva6 import ${name}_pkg::*; (
   input  logic              ipi_i,
   input  logic              time_irq_i,
   input  logic              debug_req_i,
+  input  logic [${occamy_cfg["addr_width"]-1}:0]       boot_addr_i,
   output ${soc_narrow_xbar.in_cva6.req_type()} axi_req_o,
   input  ${soc_narrow_xbar.in_cva6.rsp_type()} axi_resp_i,
   input  sram_cfg_cva6_t    sram_cfg_i
@@ -52,7 +53,10 @@ module ${name}_cva6 import ${name}_pkg::*; (
   logic              ipi;
   logic              time_irq;
   logic              debug_req;
-
+  logic [63:0]       cva6_boot_addr;
+  always_comb begin
+      cva6_boot_addr = {${64-occamy_cfg["addr_width"]}'h0, boot_addr_i};
+  end
   sync #(.STAGES (2))
     i_sync_debug (.clk_i, .rst_ni, .serial_i (debug_req_i), .serial_o (debug_req));
   sync #(.STAGES (2))
@@ -63,9 +67,6 @@ module ${name}_cva6 import ${name}_pkg::*; (
     i_sync_irq_0  (.clk_i, .rst_ni, .serial_i (irq_i[0]), .serial_o (irq[0]));
   sync #(.STAGES (2))
     i_sync_irq_1  (.clk_i, .rst_ni, .serial_i (irq_i[1]), .serial_o (irq[1]));
-
-  localparam logic [63:0] BootAddr = 'd${occamy_cfg["peripherals"]["rom"]["address"]};
-
 
   ariane #(
     .ArianeCfg (CVA6OccamyConfig),
@@ -82,7 +83,7 @@ module ${name}_cva6 import ${name}_pkg::*; (
   ) i_cva6 (
     .clk_i,
     .rst_ni,
-    .boot_addr_i (BootAddr),
+    .boot_addr_i (cva6_boot_addr),
     .hart_id_i (64'h0),
     .irq_i (irq),
     .ipi_i (ipi),

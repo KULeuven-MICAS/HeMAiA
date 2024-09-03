@@ -20,9 +20,6 @@ SOURCE_OCCAMY_DIR    ?= $(ROOT)/hw/occamy
 SOURCE_QUADCTRL_DIR  ?= $(ROOT)/hw/occamy/quadrant_s1_ctrl
 TARGET_QUADCTRL_DIR  ?= $(TARGET_SRC_DIR)/quadrant_s1_ctrl
 
-SOURCE_HBMCTRL_DIR   ?= $(ROOT)/hw/occamy/hbm_xbar_ctrl
-TARGET_HBMCTRL_DIR   ?= $(TARGET_SRC_DIR)/hbm_xbar_ctrl
-
 
 SOURCE_SOCCTRL_DIR   ?= $(ROOT)/hw/occamy/soc_ctrl
 TARGET_SOCCTRL_DIR   ?= $(TARGET_SRC_DIR)/soc_ctrl
@@ -91,13 +88,13 @@ clean: clean-rtl
 # RTL sources #
 ###############
 
-.PHONY: rtl clint plic socctrl hbmctrl quadctrl soc tb
-.PHONY: clean-rtl clean-clint clean-plic clean-socctrl clean-hbmctrl clean-quadctrl clean-soc clean-tb
+.PHONY: rtl clint plic socctrl quadctrl soc tb
+.PHONY: clean-rtl clean-clint clean-plic clean-socctrl clean-quadctrl clean-soc clean-tb
 
-rtl: clint plic socctrl hbmctrl quadctrl soc tb src/bender_targets.tmp
-clean-rtl: clean-clint clean-plic clean-socctrl clean-hbmctrl clean-quadctrl clean-soc clean-tb
+rtl: clint plic socctrl quadctrl soc tb src/bender_targets.tmp
+clean-rtl: clean-clint clean-plic clean-socctrl clean-quadctrl clean-soc clean-tb
 
-$(TARGET_PLIC_DIR) $(TARGET_CLINT_DIR) $(TARGET_SOCCTRL_DIR) $(TARGET_HBMCTRL_DIR) $(TARGET_QUADCTRL_DIR):
+$(TARGET_PLIC_DIR) $(TARGET_CLINT_DIR) $(TARGET_SOCCTRL_DIR) $(TARGET_QUADCTRL_DIR):
 	@mkdir -p $@
 
 ######
@@ -123,8 +120,6 @@ test/testharness.sv: test/testharness.sv.tpl $(CFG)
 MISC_OCCAMYGEN_SV_TEMPLATES  = $(SOURCE_OCCAMY_DIR)/occamy_*.sv.tpl
 MISC_OCCAMYGEN_SV_TARGETS  = $(TARGET_SRC_DIR)/occamy_*.sv
 MISC_OCCAMYGEN_SV_TARGETS  += $(TARGET_SRC_DIR)/snax_*.sv
-# MISC_OCCAMYGEN_SV_TARGETS += $(TARGET_SRC_DIR)/occamy_cluster_wrapper.sv
-# MISC_OCCAMYGEN_SV_TARGETS += $(TARGET_SRC_DIR)/snax_cluster_wrapper.sv
 
 MISC_OCCAMYGEN_TARGETS  = $(MISC_OCCAMYGEN_SV_TARGETS)
 MISC_OCCAMYGEN_TARGETS += $(TARGET_SRC_DIR)/occamy_memories.json
@@ -158,7 +153,19 @@ $(MISC_OCCAMYGEN_TARGETS): .misc_occamygen_targets_group
 	cp -f $(SOURCE_OCCAMY_DIR)/apb_flat.sv $(TARGET_SRC_DIR)
 	@touch $@
 
-.PHONY: debug-soc-gen debug-testharness-gen debug-quadrant-ctrl-gen debug-quadrant-gen
+.PHONY: debug-soc-gen debug-testharness-gen debug-quadrant-ctrl-gen debug-quadrant-gen debug-occamy-gen
+
+debug-occamy-gen:
+	$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_SRC_DIR)\
+		--top-sv           $(SOURCE_OCCAMY_DIR)/occamy_top.sv.tpl \
+		--soc-sv           $(SOURCE_OCCAMY_DIR)/occamy_soc.sv.tpl \
+		--chip             $(SOURCE_OCCAMY_DIR)/occamy_chip.sv.tpl \
+		--pkg-sv           $(SOURCE_OCCAMY_DIR)/occamy_pkg.sv.tpl \
+		--quadrant-s1      $(SOURCE_OCCAMY_DIR)/occamy_quadrant_s1.sv.tpl \
+		--quadrant-s1-ctrl $(SOURCE_OCCAMY_DIR)/occamy_quadrant_s1_ctrl.sv.tpl \
+		--xilinx-sv        $(SOURCE_OCCAMY_DIR)/occamy_xilinx.sv.tpl \
+		--cva6-sv          $(SOURCE_OCCAMY_DIR)/occamy_cva6.sv.tpl	
+
 debug-soc-gen:
 	$(ROOT)/util/occamygen/occamy_soc_gen.py --cfg $(CFG) --outdir $(TARGET_SRC_DIR) --soc-sv $(SOURCE_OCCAMY_DIR)/occamy_soc.sv.tpl --top-sv           $(SOURCE_OCCAMY_DIR)/occamy_top.sv.tpl 
 debug-testharness-gen:
@@ -189,35 +196,14 @@ $(QUADCTRL_REGGEN_TARGETS): .quadctrl_reggen_targets_group
 
 $(TARGET_QUADCTRL_DIR)/occamy_quadrant_s1_reg.hjson: $(SOURCE_QUADCTRL_DIR)/occamy_quadrant_s1_reg.hjson.tpl | $(TARGET_QUADCTRL_DIR)
 	@echo "[OCCAMYGEN] Generate $@"
-	@$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_QUADCTRL_DIR) --chip $<
-
-###########
-# HBMCTRL #
-###########
-
-HBMCTRL_OCCAMYGEN_TARGETS = $(TARGET_HBMCTRL_DIR)/occamy_hbm_xbar_reg.hjson
-HBMCTRL_REGGEN_TARGETS = $(addprefix $(TARGET_HBMCTRL_DIR)/,occamy_hbm_xbar_reg_pkg.sv occamy_hbm_xbar_reg_top.sv)
-
-hbmctrl: $(HBMCTRL_OCCAMYGEN_TARGETS) $(HBMCTRL_REGGEN_TARGETS)
-clean-hbmctrl:
-	rm -rf $(HBMCTRL_OCCAMYGEN_TARGETS) $(HBMCTRL_REGGEN_TARGETS) .hbmctrl_reggen_targets_group
-
-$(HBMCTRL_REGGEN_TARGETS): .hbmctrl_reggen_targets_group
-.hbmctrl_reggen_targets_group: $(TARGET_HBMCTRL_DIR)/occamy_hbm_xbar_reg.hjson | $(TARGET_HBMCTRL_DIR)
-	@echo "[REGGEN] Generate $(HBMCTRL_REGGEN_TARGETS)"
-	@$(REGGEN) -r -t $(TARGET_HBMCTRL_DIR) $<
-#why?	@$(VERIBLE_FMT) --inplace $(HBMCTRL_REGGEN_TARGETS)
-	@touch $@
-
-$(TARGET_HBMCTRL_DIR)/occamy_hbm_xbar_reg.hjson: $(SOURCE_HBMCTRL_DIR)/occamy_hbm_xbar_reg.hjson.tpl | $(TARGET_HBMCTRL_DIR)
-	@echo "[OCCAMYGEN] Generate $@"
-	@$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_HBMCTRL_DIR) --chip $<
+	@$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_QUADCTRL_DIR) --quadrant-s1-ctrl $<
 
 ###########
 # SOCCTRL #
 ###########
 
 SOCCTRL_OCCAMYGEN_TARGETS = $(TARGET_SOCCTRL_DIR)/occamy_soc_reg.hjson
+SOCCTRL_OCCAMYGEN_TARGETS += $(TARGET_SOCCTRL_DIR)/occamy_soc_ctrl.sv
 SOCCTRL_REGGEN_TARGETS = $(addprefix $(TARGET_SOCCTRL_DIR)/,occamy_soc_reg_pkg.sv occamy_soc_reg_top.sv)
 
 socctrl: $(SOCCTRL_OCCAMYGEN_TARGETS) $(SOCCTRL_REGGEN_TARGETS)
@@ -233,7 +219,11 @@ $(SOCCTRL_REGGEN_TARGETS): .socctrl_reggen_targets_group
 
 $(TARGET_SOCCTRL_DIR)/occamy_soc_reg.hjson: $(SOURCE_SOCCTRL_DIR)/occamy_soc_reg.hjson.tpl | $(TARGET_SOCCTRL_DIR)
 	@echo "[OCCAMYGEN] Generate $@"
-	@$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_SOCCTRL_DIR) --chip $<
+	@$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_SOCCTRL_DIR) --ctrl $<
+
+$(TARGET_SOCCTRL_DIR)/occamy_soc_ctrl.sv: $(SOURCE_SOCCTRL_DIR)/occamy_soc_ctrl.sv.tpl | $(TARGET_SOCCTRL_DIR)
+	@echo "[OCCAMYGEN] Generate $@"
+	@$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_SOCCTRL_DIR) --ctrl $<
 
 ########
 # PLIC #

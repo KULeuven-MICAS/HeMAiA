@@ -90,8 +90,10 @@
             bender_target: ["snax_xdma"],
             reader_buffer: 8, 
             writer_buffer: 8, 
-            reader_agu_dimension: 3, 
-            writer_agu_dimension: 3, 
+            reader_agu_spatial_bounds: "8",
+            reader_agu_temporal_dimension: 6, 
+            writer_agu_spatial_bounds: "8",
+            writer_agu_temporal_dimension: 6, 
             HasTransposer: 3, 
             HasVerilogMemset: 1, 
             HasMaxPool: 2

@@ -191,5 +191,7 @@
       address: 285212672, // 0x1100_0000
       length: 65536, // 64 kiB 0x1_0000
     },
+    // backup boot address
+    backup_boot_addr: 2147483648 // 0x8000_0000
 
 }
