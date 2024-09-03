@@ -6,7 +6,10 @@
 
 # Run functional regression checks
 name: ci
-on: [pull_request]
+on:
+  pull_request:
+  push:
+    branches: [main]
 jobs:
 
   ########
