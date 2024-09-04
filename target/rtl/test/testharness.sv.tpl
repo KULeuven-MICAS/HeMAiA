@@ -28,6 +28,37 @@ module testharness import occamy_pkg::*; (
   assign clk_periph_i = clk_i;
   assign rst_periph_ni = rst_ni;
 
+
+
+
+  /// JTAG
+  logic jtag_tck;
+  logic jtag_trst_n;
+  logic jtag_tms;
+  logic jtag_tdi;
+  logic jtag_tdo;
+
+
+  jtag_test_top #(
+    .ClkPeriodJtag(20ns),
+    .RstCycles(5),
+    .TAppl(0.1),
+    .TTest(0.9)
+  ) i_jtag_test_top(
+    .jtag_tck (jtag_tck),
+    .jtag_trst_n(jtag_trst_n),
+    .jtag_tms(jtag_tms),
+    .jtag_tdi(jtag_tdi),
+    .jtag_tdo(jtag_tdo)
+  );
+
+
+  initial begin
+    i_jtag_test_top.jtag_init();
+  end
+
+
+
 <%def name="tb_memory(bus, name)">
   ${bus.req_type()} ${name}_req;
   ${bus.rsp_type()} ${name}_rsp;
@@ -89,6 +120,8 @@ module testharness import occamy_pkg::*; (
   axi_lite_a48_d32_req_t axi_lite_bootrom_req;
   axi_lite_a48_d32_rsp_t axi_lite_bootrom_rsp;
 
+
+
 <% regbus_bootrom = soc_axi_lite_narrow_periph_xbar.out_bootrom.to_reg(context, "bootrom_regbus", fr="axi_lite_bootrom") %>
 
   ${tb_memory_no_def(regbus_bootrom, "bootrom_regbus")}
@@ -110,11 +143,11 @@ module testharness import occamy_pkg::*; (
     .gpio_d_i ('0),
     .gpio_d_o (),
     .gpio_oe_o (),
-    .jtag_trst_ni ('0),
-    .jtag_tck_i ('0),
-    .jtag_tms_i ('0),
-    .jtag_tdi_i ('0),
-    .jtag_tdo_o (),
+    .jtag_trst_ni (jtag_trst_n),
+    .jtag_tck_i (jtag_tck),
+    .jtag_tms_i (jtag_tms),
+    .jtag_tdi_i (jtag_tdi),
+    .jtag_tdo_o (jtag_tdo),
     .i2c_sda_io (),
     .i2c_scl_io (),
     .spim_sck_o (),
@@ -126,6 +159,10 @@ module testharness import occamy_pkg::*; (
     .spm_axi_wide_rsp_i (spm_wide_rsp),
     .ext_irq_i ('0)
     );
+
+
+
+
 
   // Must be the frequency of i_uart0.clk_i in Hz
   localparam int unsigned UartDPIFreq = 1_000_000_000;
