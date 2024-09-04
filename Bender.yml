@@ -111,6 +111,7 @@ sources:
   - target: any(simulation, verilator)
     files:
       - target/rtl/test/uartdpi/uartdpi.sv
+      - target/rtl/test/jtag/jtag_test_top.sv
       - target/rtl/test/testharness.sv
 
   - target: any(tapeout, hemaia)
