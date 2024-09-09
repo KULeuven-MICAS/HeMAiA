@@ -260,6 +260,7 @@ def main():
     soc_axi_lite_periph_xbar = solder.AxiLiteXbar(
         48,
         64,
+        chipidw=occamy_cfg["hemaia_multichip"]["chip_id_width"],
         name="soc_axi_lite_periph_xbar",
         clk="clk_periph_i",
         rst="rst_periph_ni",
@@ -286,6 +287,7 @@ def main():
     soc_axi_lite_narrow_periph_xbar = solder.AxiLiteXbar(
         48,
         32,
+        chipidw=occamy_cfg["hemaia_multichip"]["chip_id_width"],
         name="soc_axi_lite_narrow_periph_xbar",
         clk="clk_periph_i",
         rst="rst_periph_ni",
@@ -314,6 +316,7 @@ def main():
         # This is the cleanest solution minimizing ID width conversions
         occamy_cfg["quadrant_inter_xbar_slv_id_width_no_rocache"] + (
             1 if occamy_cfg["s1_quadrant"].get("ro_cache_cfg") else 0),
+        chipidw=occamy_cfg["hemaia_multichip"]["chip_id_width"],
         name="soc_wide_xbar",
         clk="clk_i",
         rst="rst_ni",
@@ -345,6 +348,7 @@ def main():
         64,
         occamy_cfg["narrow_xbar_slv_id_width"],
         occamy_cfg["narrow_xbar_user_width"],
+        chipidw=occamy_cfg["hemaia_multichip"]["chip_id_width"],
         name="soc_narrow_xbar",
         clk="clk_i",
         rst="rst_ni",
@@ -393,6 +397,7 @@ def main():
             64,
             iw,
             soc_narrow_xbar.uw,
+            chipidw=occamy_cfg["hemaia_multichip"]["chip_id_width"],
             name="quadrant_s1_ctrl_{}_xbar".format(name),
             clk="clk_i",
             rst="rst_ni",
@@ -413,6 +418,7 @@ def main():
     quadrant_s1_ctrl_mux = solder.AxiLiteXbar(
         48,
         32,
+        chipidw=0,      # quadrant_ctrl_mux is a pure mux, all transactions just send out from out
         name="quadrant_s1_ctrl_mux",
         clk="clk_i",
         rst="rst_ni",
@@ -433,6 +439,7 @@ def main():
         48,
         512,
         occamy_cfg["s1_quadrant"]["wide_xbar_slv_id_width"],
+        chipidw=occamy_cfg["hemaia_multichip"]["chip_id_width"],
         name="wide_xbar_quadrant_s1",
         clk="clk_quadrant",
         rst="rst_quadrant_n",
@@ -449,6 +456,7 @@ def main():
         64,
         occamy_cfg["s1_quadrant"]["narrow_xbar_slv_id_width"],
         occamy_cfg["s1_quadrant"]["narrow_xbar_user_width"],
+        chipidw=occamy_cfg["hemaia_multichip"]["chip_id_width"],
         name="narrow_xbar_quadrant_s1",
         clk="clk_quadrant",
         rst="rst_quadrant_n",
