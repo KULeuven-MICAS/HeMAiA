@@ -1589,7 +1589,7 @@ class AxiXbar(Xbar):
                         *self.addrmap[i], aw=self.aw-self.chipidw))
             else:
                 addrmap_lines.append(
-                    "  '{{ idx: {}, start_addr: {aw}'h{:08x}, end_addr: {aw}'h{:08x} }}".format(
+                    "  '{{ idx: {}, start_addr: {{chip_id_i,{aw}'h{:08x}}}, end_addr: {{chip_id_i,{aw}'h{:08x} }}}}".format(
                         *self.addrmap[i], aw=self.aw-self.chipidw))
         for i, (idx, base, length) in enumerate(self.symbolic_addrmap):
             addrmap_lines.append(
@@ -2185,7 +2185,7 @@ class AxiLiteXbar(Xbar):
                         *self.addrmap[i], aw=self.aw-self.chipidw))
             else:
                 addrmap_lines.append(
-                    "  '{{ idx: {}, start_addr: {aw}'h{:08x}, end_addr: {aw}'h{:08x} }}".format(
+                    "  '{{ idx: {}, start_addr: {{chip_id_i,{aw}'h{:08x}}}, end_addr: {{chip_id_i,{aw}'h{:08x}}} }}".format(
                         *self.addrmap[i], aw=self.aw-self.chipidw))
         for i, (idx, base, length) in enumerate(self.symbolic_addrmap):
             addrmap_lines.append(
