@@ -335,7 +335,8 @@ module ${name}_top
     .to_reg(context, "axi_lite_to_reg_soc_ctrl") %>
   ${name}_soc_ctrl #(
     .reg_req_t ( ${regbus_soc_ctrl.req_type()} ),
-    .reg_rsp_t ( ${regbus_soc_ctrl.rsp_type()} )
+    .reg_rsp_t ( ${regbus_soc_ctrl.rsp_type()} ),
+    .chip_id_t ( chip_id_t )
   ) i_soc_ctrl (
     .clk_i     ( ${regbus_soc_ctrl.clk} ),
     .rst_ni    ( ${regbus_soc_ctrl.rst} ),

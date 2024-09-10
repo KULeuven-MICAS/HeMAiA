@@ -668,8 +668,8 @@ def get_ctrl_kwargs(occamy_cfg, name):
     hex_default_boot_addr = hex(default_boot_addr)
     hex_backup_boot_addr = hex(backup_boot_addr)
     # Remove the prefix 0x
-    hex_default_boot_addr = str(addr_width) + "'h" + hex_default_boot_addr[2:]
-    hex_backup_boot_addr = str(addr_width) + "'h" + hex_backup_boot_addr[2:]
+    hex_default_boot_addr = hex_default_boot_addr[2:]
+    hex_backup_boot_addr = hex_backup_boot_addr[2:]
     ctrl_kwargs = {
         "name": name,
         "nr_s1_quadrants": occamy_cfg["nr_s1_quadrant"],

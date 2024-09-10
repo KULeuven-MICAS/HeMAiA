@@ -7,11 +7,12 @@
 
 module occamy_soc_ctrl import occamy_soc_reg_pkg::*; #(
   parameter type reg_req_t = logic,
-  parameter type reg_rsp_t = logic
+  parameter type reg_rsp_t = logic,
+  parameter type chip_id_t = logic
 ) (
   input clk_i,
   input rst_ni,
-  input ${name}_pkg::chip_id_t chip_id_i;
+  input chip_id_t chip_id_i,
 
   // Below Register interface can be changed
   input  reg_req_t reg_req_i,
