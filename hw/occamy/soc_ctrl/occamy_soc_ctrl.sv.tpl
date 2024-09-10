@@ -11,6 +11,7 @@ module occamy_soc_ctrl import occamy_soc_reg_pkg::*; #(
 ) (
   input clk_i,
   input rst_ni,
+  input ${name}_pkg::chip_id_t chip_id_i;
 
   // Below Register interface can be changed
   input  reg_req_t reg_req_i,
@@ -74,8 +75,8 @@ module occamy_soc_ctrl import occamy_soc_reg_pkg::*; #(
   assign boot_mode = hw2reg_i.boot_mode.d;
 
   always_comb begin
-    boot_addr_init = (boot_mode == 2'b00)? ${default_boot_addr}:${backup_boot_addr};
-    boot_addr_d = (boot_mode == 2'b00)? ${default_boot_addr}:${backup_boot_addr};
+    boot_addr_init = (boot_mode == 2'b00) ? {chip_id_i,${addr_width-occamy_cfg["hemaia_multichip"]["chip_id_width"]}'h${default_boot_addr}}:{chip_id_i,${addr_width-occamy_cfg["hemaia_multichip"]["chip_id_width"]}'h${backup_boot_addr}};
+    boot_addr_d = (boot_mode == 2'b00) ? {chip_id_i,${addr_width-occamy_cfg["hemaia_multichip"]["chip_id_width"]}'h${default_boot_addr}}:{chip_id_i,${addr_width-occamy_cfg["hemaia_multichip"]["chip_id_width"]}'h${backup_boot_addr}};
     boot_addr_o = boot_addr_q;
   end
 

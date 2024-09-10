@@ -339,6 +339,7 @@ module ${name}_top
   ) i_soc_ctrl (
     .clk_i     ( ${regbus_soc_ctrl.clk} ),
     .rst_ni    ( ${regbus_soc_ctrl.rst} ),
+    .chip_id_i ( chip_id_i ),
     .reg_req_i ( ${regbus_soc_ctrl.req_name()} ),
     .reg_rsp_o ( ${regbus_soc_ctrl.rsp_name()} ),
     .reg2hw_o  ( soc_ctrl_out ),
