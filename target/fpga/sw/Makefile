@@ -10,6 +10,12 @@ APP		?= $(TARGET)/sim/sw/host/apps/hello_world/build/hello_world.elf
 BIN2JTAG	?= $(ROOT)/util/bin2jtag.py
 BIN_VERIFY	?= $(ROOT)/util/bin2jtag_only_verify.py
 
+CVA6_GCC_ROOT = /tools/riscv/bin
+RISCV_CC      = $(CVA6_GCC_ROOT)/riscv64-unknown-elf-gcc
+RISCV_OBJCOPY = $(CVA6_GCC_ROOT)/riscv64-unknown-elf-objcopy
+RISCV_OBJDUMP = $(CVA6_GCC_ROOT)/riscv64-unknown-elf-objdump
+RISCV_READELF = $(CVA6_GCC_ROOT)/riscv64-unknown-elf-readelf
+
 .PHONY: sw download_sw clean verify_sw
 
 sw: bootrom.tcl app.tcl app_verify.tcl
@@ -21,7 +27,7 @@ bootrom.tcl: $(BOOTROM)
 	$(BIN2JTAG) -c32 -b 0 -d hw_axi_1 $< > $@
 
 app.bin: 
-	riscv64-unknown-elf-objcopy -O binary $(APP) $@
+	$(RISCV_OBJCOPY) -O binary $(APP) $@
 
 app.tcl: app.bin
 	$(BIN2JTAG) -c32 -b 80000000 -d hw_axi_2 $< > $@
