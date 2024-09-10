@@ -41,7 +41,7 @@ sw: # In Occamy Docker
 
 # Hardware Generation
 rtl: # In SNAX Docker
-	make -C ./target/rtl/ rtl CFG_OVERRIDE=$(CFG)
+	$(MAKE) -C ./target/rtl/ rtl CFG_OVERRIDE=$(CFG)
 
 ####################
 # Tapeout Workflow #
@@ -54,7 +54,7 @@ tapeout_preparation: rtl tapeout_syn_flist
 # Generating filelist per cluster
 # Needed for a per-cluster synthesis
 tapeout_syn_flist:
-	make -C ./target/tapeout/ syn_gen_list CFG_OVERRIDE=$(CFG)
+	$(MAKE) -C ./target/tapeout/ syn_gen_list CFG_OVERRIDE=$(CFG)
 
 
 #################
@@ -62,8 +62,8 @@ tapeout_syn_flist:
 #################
 
 occamy_system_vivado_preparation: # In SNAX Docker
-	make -C ./target/fpga/ define_defines_includes_no_simset.tcl
-	make -C ./target/fpga/vivado_ips/ define-sources.tcl
+	$(MAKE) -C ./target/fpga/ define_defines_includes_no_simset.tcl
+	$(MAKE) -C ./target/fpga/vivado_ips/ define-sources.tcl
 
 occamy_ip_vcu128:	# In ESAT Server
 	#                                                                                          debug  jtag  (put 1 or 0)
@@ -88,17 +88,17 @@ open_terminal:	# It opens ttyUSB1 without locking it, and set baudrate at 1Mbps
 # FPGA Workflow (with no Xilinx IP - tapeout configuration)
 # Please be attention that in this configuration, injecting any binary files by Xilinx Vivado are not possible anymore; please use JTAG or embedded bootrom to load the binary
 hemaia_system_vivado_preparation: # In SNAX Docker
-	make -C ./target/fpga_chip/hemaia_system/ define_defines_includes_no_simset.tcl
-	make -C ./target/fpga_chip/hemaia_chip/ define-sources.tcl
+	$(MAKE) -C ./target/fpga_chip/hemaia_system/ define_defines_includes_no_simset.tcl
+	$(MAKE) -C ./target/fpga_chip/hemaia_chip/ define-sources.tcl
 
 hemaia_chip_vivado:	# In ESAT Server
-	make -C ./target/fpga_chip/hemaia_chip hemaia_chip
+	$(MAKE) -C ./target/fpga_chip/hemaia_chip hemaia_chip
 
 hemaia_chip_vivado_gui: # In ESAT Server
 	sh -c "cd ./target/fpga/fpga_chip/hemaia_chip/hemaia_chip/;vivado hemaia_chip.xpr"
 
 hemaia_system_vivado: hemaia_chip_vivado # In ESAT Server
-	make -C ./target/fpga_chip/hemaia_system hemaia_system
+	$(MAKE) -C ./target/fpga_chip/hemaia_system hemaia_system
 
 hemaia_system_vcu128_gui: # In ESAT Server
 	sh -c "cd ./target/fpga_chip/hemaia_system/hemaia_system_vcu128/;vivado hemaia_system_vcu128.xpr"
