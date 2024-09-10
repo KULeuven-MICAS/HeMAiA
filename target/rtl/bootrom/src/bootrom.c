@@ -63,6 +63,10 @@ void delay_cycles(uint64_t cycle) {
     }
 }
 
+inline void flush_cache() {
+    asm volatile("fence.i" ::: "memory");
+}
+
 void uart_xmodem(uint64_t start_address) {
     uint8_t received_char;
     bool transmission_end = false;
@@ -111,9 +115,11 @@ void uart_xmodem(uint64_t start_address) {
                 write_serial(NAK); // Packet number error
             }
         } else {
-            write_serial(CAN); // Unexpected byte received
+            write_serial(CAN);  // Unexpected byte received
         }
     }
+
+    flush_cache();              // Flush the cache to avoid inconsistency
 }
 
 // Boot modes.

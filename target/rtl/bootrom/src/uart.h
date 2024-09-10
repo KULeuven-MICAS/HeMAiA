@@ -106,7 +106,7 @@ inline static void print_uart(const char *str) {
 inline static void print_uart_hex(char *str, uint32_t length) {
     uint8_t lut[16] = {'0', '1', '2', '3', '4', '5', '6', '7',
                        '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
-    for (uint32_t i = 0; i < length; i++) {
+    for (uint64_t i = (uint64_t)str; i < (uint64_t)str + length; i++) {
         if (i % 16 == 0) {
             write_serial('\r');
             write_serial('\n');
@@ -115,7 +115,7 @@ inline static void print_uart_hex(char *str, uint32_t length) {
             write_serial(' ');
 
         }
-        char temp = str[i];
+        char temp = *((char *)i);
         write_serial(lut[temp / 16]);
         write_serial(lut[temp % 16]);
         write_serial(' ');
