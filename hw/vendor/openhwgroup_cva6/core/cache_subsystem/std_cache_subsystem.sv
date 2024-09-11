@@ -95,7 +95,7 @@ module std_cache_subsystem import ariane_pkg::*; import std_cache_pkg::*; #(
     ) i_cva6_icache_axi_wrapper (
         .clk_i      ( clk_i                 ),
         .rst_ni     ( rst_ni                ),
-        .chip_id_i  ( chip_id_i             ),        ),
+        .chip_id_i  ( chip_id_i             ),
         .priv_lvl_i ( priv_lvl_i            ),
         .sram_cfg_data_i ( sram_cfg_idata_i ),
         .sram_cfg_tag_i  ( sram_cfg_itag_i  ),
