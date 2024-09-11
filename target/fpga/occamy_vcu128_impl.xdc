@@ -17,36 +17,36 @@ set_property PACKAGE_PIN BP23 [get_ports uart_rts_no_0]
 set_property IOSTANDARD LVCMOS18 [get_ports uart_rts_no_0]
 
 # Six-wires SPIx4
-# FMCP_HSPC_LA12_P
-set_property PACKAGE_PIN J22 [get_ports spim_sd_io[0]]
+# LA10_P - B23
+set_property PACKAGE_PIN B23 [get_ports spim_sd_io[0]]
 set_property IOSTANDARD LVCMOS18 [get_ports spim_sd_io[0]]
-# FMCP_HSPC LA12_N
-set_property PACKAGE_PIN H22 [get_ports spim_sd_io[1]]
+# LA10_N - A23
+set_property PACKAGE_PIN A23 [get_ports spim_sd_io[1]]
 set_property IOSTANDARD LVCMOS18 [get_ports spim_sd_io[1]]
-# FMCP_HSPC LA16_P
-set_property PACKAGE_PIN K24 [get_ports spim_sd_io[2]]
+# LA11_P - B26
+set_property PACKAGE_PIN B26 [get_ports spim_sd_io[2]]
 set_property IOSTANDARD LVCMOS18 [get_ports spim_sd_io[2]]
-# FMCP_HSPC_LA16_N
-set_property PACKAGE_PIN K23 [get_ports spim_sd_io[3]]
+# LA11_N - B25
+set_property PACKAGE_PIN B25 [get_ports spim_sd_io[3]]
 set_property IOSTANDARD LVCMOS18 [get_ports spim_sd_io[3]]
-# FMCP_HSPC_LA20_P
-set_property PACKAGE_PIN A21 [get_ports spim_csb_o[0]]
+# LA12_P - J22
+set_property PACKAGE_PIN J22 [get_ports spim_csb_o[0]]
 set_property IOSTANDARD LVCMOS18 [get_ports spim_csb_o[0]]
-# FMCP_HSPC_LA20_N
-set_property PACKAGE_PIN A20 [get_ports spim_csb_o[1]]
+# LA12_N - H22
+set_property PACKAGE_PIN H22 [get_ports spim_csb_o[1]]
 set_property IOSTANDARD LVCMOS18 [get_ports spim_csb_o[1]]
-# FMCP_HSPC_LA22_P
-set_property PACKAGE_PIN B16 [get_ports spim_sck_o]
+# LA13_P - A25
+set_property PACKAGE_PIN A25 [get_ports spim_sck_o]
 set_property IOSTANDARD LVCMOS18 [get_ports spim_sck_o]
 
 create_clock -period 10.000 -name spi_m_sck [get_ports spim_sck_o]
 
 # Two-wires I2C
-# FMCP_HSPC_LA13_P
-set_property PACKAGE_PIN A25 [get_ports i2c_sda_io]
+# LA14_P - C23
+set_property PACKAGE_PIN C23 [get_ports i2c_sda_io]
 set_property IOSTANDARD LVCMOS18 [get_ports i2c_sda_io]
-# FMCP_HSPC_LA13_N
-set_property PACKAGE_PIN A24 [get_ports i2c_scl_io]
+# LA14_N - B22
+set_property PACKAGE_PIN B22 [get_ports i2c_scl_io]
 set_property IOSTANDARD LVCMOS18 [get_ports i2c_scl_io]
 
 # Eight-wires GPIO_O connected to LEDs

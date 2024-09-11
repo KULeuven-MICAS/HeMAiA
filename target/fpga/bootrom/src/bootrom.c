@@ -63,6 +63,10 @@ void delay_cycles(uint64_t cycle) {
     }
 }
 
+inline void flush_cache() {
+    asm volatile("fence.i" ::: "memory");
+}
+
 void uart_xmodem(uint64_t start_address) {
     uint8_t received_char;
     bool transmission_end = false;
@@ -111,9 +115,11 @@ void uart_xmodem(uint64_t start_address) {
                 write_serial(NAK); // Packet number error
             }
         } else {
-            write_serial(CAN); // Unexpected byte received
+            write_serial(CAN);  // Unexpected byte received
         }
     }
+
+    flush_cache();              // Flush the cache to avoid inconsistency
 }
 
 // Boot modes.
@@ -130,7 +136,7 @@ void bootrom() {
     while (1) {
         start_address = 0x80000000;
         print_uart("\033[2J");
-        print_uart("\r\n\t\t Welcome to Occamy Bootrom");
+        print_uart("\r\n\t\t Welcome to HeMAiA Bootrom");
         print_uart("\r\n");
         print_uart("\r\n\t Enter the number to select the mode: ");
         print_uart("\r\n\t 1. Load from JTAG\r\n\t 2. Load from UART to 0x80000000\r\n\t 3. Print memory from 0x80000000\r\n\t 4. Continue to Boot from 0x80000000");
