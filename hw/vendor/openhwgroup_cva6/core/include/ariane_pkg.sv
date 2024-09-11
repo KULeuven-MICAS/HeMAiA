@@ -111,10 +111,17 @@ package ariane_pkg;
     endfunction : range_check
 
     function automatic logic is_inside_nonidempotent_regions (ariane_cfg_t Cfg, logic[ChipIdWidth-1:0] chip_id, logic[63:0] address);
+      logic local_address_region = address[LocalAddressWidth+:ChipIdWidth]==chip_id;
       logic[NrMaxRules-1:0] pass;
       pass = '0;
       for (int unsigned k = 0; k < Cfg.NrNonIdempotentRules; k++) begin
         pass[k] = range_check(chip_id, Cfg.NonIdempotentAddrBase[k], Cfg.NonIdempotentLength[k], address);
+      end
+      if (CrossClusterAbility == 1'b1) begin
+        return |pass;
+      end else begin
+        // If CrossClusterAbility is 0, then all non-local addresses are non-idempotent
+        return |pass | (~local_address_region);
       end
       return |pass;
     endfunction : is_inside_nonidempotent_regions
