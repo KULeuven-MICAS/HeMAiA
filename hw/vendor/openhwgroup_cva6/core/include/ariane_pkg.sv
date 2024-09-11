@@ -31,7 +31,14 @@ package ariane_pkg;
     // This is the new user config interface system. If you need to parameterize something
     // within Ariane add a field here and assign a default value to the config. Please make
     // sure to add a propper parameter check to the `check_cfg` function.
-    localparam NrMaxRules = 16;
+    localparam int NrMaxRules = 16;
+    // LocalAddressWidth will define the region of address that is mapped to local chiplet. This value is defined in cfg files, but I hardcode it here to avoid using Mako template to generate this file.
+    // LocalAddressWidth = 40 means only 40 LSB bits are used in actual address range calculation. The rest of the bits are ignored.
+    localparam int   LocalAddressWidth = 40;
+    localparam int   ChipIdWidth = 8; // Number of bits used to identify the chiplet. This is also listed in the cfg files, but I hardcode it here to avoid using Mako template to generate this file.
+    typedef logic [ChipIdWidth-1:0] chip_id_t;
+    // CrossClusterAbility is a parameter to enable/disable the ability to execute / cache data in other chiplet domain. Be careful as there is no global coherence protocol in place, so manual cache management is required.
+    localparam logic CrossClusterAbility = 1'b1;
     typedef struct packed {
       int                               RASDepth;
       int                               BTBEntries;
@@ -93,36 +100,40 @@ package ariane_pkg;
       // pragma translate_on
     endfunction
 
-    function automatic logic range_check(logic[63:0] base, logic[63:0] len, logic[63:0] address);
+    function automatic logic range_check(chip_id_t chip_id, logic[63:0] base, logic[63:0] len, logic[63:0] address);
       // if len is a power of two, and base is properly aligned, this check could be simplified
       // Extend base by one bit to prevent an overflow.
-      return (address >= base) && (address < (65'(base)+len));
+      if (CrossClusterAbility == 1'b1) begin
+        return (address[LocalAddressWidth-1:0] >= base[LocalAddressWidth-1:0]) && (address[LocalAddressWidth-1:0] < {base + len}[LocalAddressWidth-1:0]);
+      end else begin
+        return ({chip_id,address[LocalAddressWidth-1:0]} >= {chip_id,base[LocalAddressWidth-1:0]}) && ({chip_id,address[LocalAddressWidth-1:0]} < {chip_id,{base + len}[LocalAddressWidth-1:0]});
+      end
     endfunction : range_check
 
-    function automatic logic is_inside_nonidempotent_regions (ariane_cfg_t Cfg, logic[63:0] address);
+    function automatic logic is_inside_nonidempotent_regions (ariane_cfg_t Cfg, logic[ChipIdWidth-1:0] chip_id, logic[63:0] address);
       logic[NrMaxRules-1:0] pass;
       pass = '0;
       for (int unsigned k = 0; k < Cfg.NrNonIdempotentRules; k++) begin
-        pass[k] = range_check(Cfg.NonIdempotentAddrBase[k], Cfg.NonIdempotentLength[k], address);
+        pass[k] = range_check(chip_id, Cfg.NonIdempotentAddrBase[k], Cfg.NonIdempotentLength[k], address);
       end
       return |pass;
     endfunction : is_inside_nonidempotent_regions
 
-    function automatic logic is_inside_execute_regions (ariane_cfg_t Cfg, logic[63:0] address);
+    function automatic logic is_inside_execute_regions (ariane_cfg_t Cfg, chip_id_t chip_id, logic[63:0] address);
       // if we don't specify any region we assume everything is accessible
       logic[NrMaxRules-1:0] pass;
       pass = '0;
       for (int unsigned k = 0; k < Cfg.NrExecuteRegionRules; k++) begin
-        pass[k] = range_check(Cfg.ExecuteRegionAddrBase[k], Cfg.ExecuteRegionLength[k], address);
+        pass[k] = range_check(chip_id, Cfg.ExecuteRegionAddrBase[k], Cfg.ExecuteRegionLength[k], address);
       end
       return |pass;
     endfunction : is_inside_execute_regions
 
-    function automatic logic is_inside_cacheable_regions (ariane_cfg_t Cfg, logic[63:0] address);
+    function automatic logic is_inside_cacheable_regions (ariane_cfg_t Cfg, chip_id_t chip_id, logic[63:0] address);
       automatic logic[NrMaxRules-1:0] pass;
       pass = '0;
       for (int unsigned k = 0; k < Cfg.NrCachedRegionRules; k++) begin
-        pass[k] = range_check(Cfg.CachedRegionAddrBase[k], Cfg.CachedRegionLength[k], address);
+        pass[k] = range_check(chip_id, Cfg.CachedRegionAddrBase[k], Cfg.CachedRegionLength[k], address);
       end
       return |pass;
     endfunction : is_inside_cacheable_regions

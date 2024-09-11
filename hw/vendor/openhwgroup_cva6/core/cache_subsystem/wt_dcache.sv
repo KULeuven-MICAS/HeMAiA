@@ -24,7 +24,7 @@ module wt_dcache import ariane_pkg::*; import wt_cache_pkg::*; #(
 ) (
   input  logic                           clk_i,       // Clock
   input  logic                           rst_ni,      // Asynchronous reset active low
-
+  input  chip_id_t                       chip_id_i,   // Chip ID for the correct cache / execution region configuration
   // SRAM config
   input sram_cfg_t                       sram_cfg_data_i,
   input sram_cfg_t                       sram_cfg_tag_i,
@@ -197,6 +197,7 @@ module wt_dcache import ariane_pkg::*; import wt_cache_pkg::*; #(
     ) i_wt_dcache_ctrl (
       .clk_i           ( clk_i             ),
       .rst_ni          ( rst_ni            ),
+      .chip_id_i       ( chip_id_i         ),
       .cache_en_i      ( cache_en          ),
       .busy_o          ( ctrl_busy     [k] ),
       .stall_i         ( stall_i           ),
@@ -243,6 +244,7 @@ module wt_dcache import ariane_pkg::*; import wt_cache_pkg::*; #(
   ) i_wt_dcache_wbuffer (
     .clk_i           ( clk_i               ),
     .rst_ni          ( rst_ni              ),
+    .chip_id_i       ( chip_id_i           ),
     .empty_o         ( wbuffer_empty_o     ),
     .not_ni_o        ( wbuffer_not_ni_o    ),
     // TODO: fix this

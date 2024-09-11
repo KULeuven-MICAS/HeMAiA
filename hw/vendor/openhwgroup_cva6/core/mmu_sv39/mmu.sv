@@ -23,6 +23,7 @@ module mmu import ariane_pkg::*; #(
 ) (
     input  logic                            clk_i,
     input  logic                            rst_ni,
+    input  chip_id_t                        chip_id_i,
     input  logic                            flush_i,
     input  logic                            enable_translation_i,
     input  logic                            en_ld_st_translation_i,   // enable virtual memory translation for load/stores
@@ -267,7 +268,7 @@ module mmu import ariane_pkg::*; #(
     end
 
     // check for execute flag on memory
-    assign match_any_execute_region = ariane_pkg::is_inside_execute_regions(ArianeCfg, {{64-riscv::PLEN{1'b0}}, icache_areq_o.fetch_paddr});
+    assign match_any_execute_region = ariane_pkg::is_inside_execute_regions(ArianeCfg, chip_id_i, {{64-riscv::PLEN{1'b0}}, icache_areq_o.fetch_paddr});
 
     // Instruction fetch
     pmp #(

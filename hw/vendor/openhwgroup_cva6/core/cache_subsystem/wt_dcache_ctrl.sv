@@ -19,6 +19,7 @@ module wt_dcache_ctrl import ariane_pkg::*; import wt_cache_pkg::*; #(
 ) (
   input  logic                            clk_i,          // Clock
   input  logic                            rst_ni,         // Asynchronous reset active low
+  input  chip_id_t                        chip_id_i,      // Chip ID
   input  logic                            cache_en_i,
   output logic                            busy_o,
   input  logic                            stall_i,        // stall new memory requests
@@ -88,7 +89,7 @@ module wt_dcache_ctrl import ariane_pkg::*; import wt_cache_pkg::*; #(
   assign miss_size_o           = (miss_nc_o) ? data_size_q : 3'b111;
 
   // noncacheable if request goes to I/O space, or if cache is disabled
-  assign miss_nc_o = (~cache_en_i) | (~ariane_pkg::is_inside_cacheable_regions(ArianeCfg, {{{64-DCACHE_TAG_WIDTH-DCACHE_INDEX_WIDTH}{1'b0}}, address_tag_q, {DCACHE_INDEX_WIDTH{1'b0}}}));
+  assign miss_nc_o = (~cache_en_i) | (~ariane_pkg::is_inside_cacheable_regions(ArianeCfg, chip_id_i, {{{64-DCACHE_TAG_WIDTH-DCACHE_INDEX_WIDTH}{1'b0}}, address_tag_q, {DCACHE_INDEX_WIDTH{1'b0}}}));
 
 
   assign miss_we_o    = '0;

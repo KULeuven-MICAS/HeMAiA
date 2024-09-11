@@ -38,6 +38,8 @@ module cva6 import ariane_pkg::*; #(
 ) (
   input  logic                         clk_i,
   input  logic                         rst_ni,
+  // Chip ID for the correct cache / execution region configuration
+  input  chip_id_t                     chip_id_i,
   // Core ID, Cluster ID and boot address are considered more or less static
   input  logic [riscv::VLEN-1:0]       boot_addr_i,  // reset boot address
   input  logic [riscv::XLEN-1:0]       hart_id_i,    // hart id in a multicore environment (reflected in a CSR)
@@ -443,6 +445,7 @@ input  axi_rsp_t                     axi_resp_i
   ) ex_stage_i (
     .clk_i                  ( clk_i                       ),
     .rst_ni                 ( rst_uarch_n                 ),
+    .chip_id_i              ( chip_id_i                   ),
     .debug_mode_i           ( debug_mode                  ),
     .flush_i                ( flush_ctrl_ex               ),
     .rs1_forwarding_i       ( rs1_forwarding_id_ex        ),
@@ -741,6 +744,7 @@ input  axi_rsp_t                     axi_resp_i
     // to D$
     .clk_i                 ( clk_i                       ),
     .rst_ni                ( rst_uarch_n                 ),
+    .chip_id_i             ( chip_id_i                   ),
     .busy_o                ( busy_cache_ctrl             ),
     .stall_i               ( stall_ctrl_cache            ),
     .init_ni               ( init_ctrl_cache_n           ),
@@ -801,6 +805,7 @@ input  axi_rsp_t                     axi_resp_i
     // to D$
     .clk_i                 ( clk_i                       ),
     .rst_ni                ( rst_uarch_n                 ),
+    .chip_id_i             ( chip_id_i                   ),
     .priv_lvl_i            ( priv_lvl                    ),
     .busy_o                ( busy_cache_ctrl             ),
     .stall_i               ( stall_ctrl_cache            ),

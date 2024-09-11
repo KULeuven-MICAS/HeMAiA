@@ -9,6 +9,7 @@
 module ${name}_cva6 import ${name}_pkg::*; (
   input  logic              clk_i,
   input  logic              rst_ni,
+  input  chip_id_t          chip_id_i,
   input  logic [1:0]        irq_i,
   input  logic              ipi_i,
   input  logic              time_irq_i,
@@ -25,6 +26,7 @@ module ${name}_cva6 import ${name}_pkg::*; (
   assign cva6_axi_cut_rsp = axi_resp_i;
 
   // TODO(zarubaf): Derive from system parameters
+  // Becareful of address overflow problem: As for now the system only has the 40bit address region, so base + size should be smaller than the maximal addressable region. 
   localparam ariane_pkg::ariane_cfg_t CVA6OccamyConfig = '{
     RASDepth: 2,
     BTBEntries: 32,

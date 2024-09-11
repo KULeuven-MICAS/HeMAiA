@@ -109,6 +109,7 @@ module ${name}_soc
   ${name}_cva6 i_${name}_cva6 (
     .clk_i (clk_i),
     .rst_ni (rst_ni),
+    .chip_id_i (chip_id_i),
     .irq_i (eip_i),
     .ipi_i (msip_i[0]),
     .time_irq_i (mtip_i[0]),

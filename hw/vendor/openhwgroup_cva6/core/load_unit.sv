@@ -18,6 +18,7 @@ module load_unit import ariane_pkg::*; #(
 ) (
     input  logic                     clk_i,    // Clock
     input  logic                     rst_ni,   // Asynchronous reset active low
+    input  chip_id_t                 chip_id_i,// Chip ID
     input  logic                     flush_i,
     // load unit input port
     input  logic                     valid_i,
@@ -84,7 +85,7 @@ module load_unit import ariane_pkg::*; #(
     logic not_commit_time;
     logic inflight_stores;
     logic stall_ni;
-    assign paddr_ni = is_inside_nonidempotent_regions(ArianeCfg, {dtlb_ppn_i,12'd0});
+    assign paddr_ni = is_inside_nonidempotent_regions(ArianeCfg, chip_id_i, {dtlb_ppn_i,12'd0});
     assign not_commit_time = commit_tran_id_i != lsu_ctrl_i.trans_id;
     assign inflight_stores = (!dcache_wbuffer_not_ni_i || !store_buffer_empty_i);
     assign stall_ni = (inflight_stores || not_commit_time) && paddr_ni;
