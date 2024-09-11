@@ -26,23 +26,23 @@ set_max_delay -from [get_ports { jtag_tdi_i }] 20
 
 # 1: LA20_P - A21
 set_property PACKAGE_PIN A21     [get_ports jtag_vdd_o]
-set_property IOSTANDARD LVCMOS15 [get_ports jtag_vdd_o]
+set_property IOSTANDARD LVCMOS18 [get_ports jtag_vdd_o]
 set_property DRIVE 12            [get_ports jtag_vdd_o]
 
 # 0: LA20_N - A20
 set_property PACKAGE_PIN A20     [get_ports jtag_gnd_o]
-set_property IOSTANDARD LVCMOS15 [get_ports jtag_gnd_o]
+set_property IOSTANDARD LVCMOS18 [get_ports jtag_gnd_o]
 set_property DRIVE 12            [get_ports jtag_gnd_o]
 
 # LA24P - C18
 set_property PACKAGE_PIN C18     [get_ports jtag_tck_i]
-set_property IOSTANDARD LVCMOS15 [get_ports jtag_tck_i]
+set_property IOSTANDARD LVCMOS18 [get_ports jtag_tck_i]
 # LA24N - C17
 set_property PACKAGE_PIN C17     [get_ports jtag_tdi_i]
-set_property IOSTANDARD LVCMOS15 [get_ports jtag_tdi_i]
+set_property IOSTANDARD LVCMOS18 [get_ports jtag_tdi_i]
 # LA25P - D20
 set_property PACKAGE_PIN D20     [get_ports jtag_tdo_o]
-set_property IOSTANDARD LVCMOS15 [get_ports jtag_tdo_o]
+set_property IOSTANDARD LVCMOS18 [get_ports jtag_tdo_o]
 # LA25N - D19
 set_property PACKAGE_PIN D19     [get_ports jtag_tms_i]
-set_property IOSTANDARD LVCMOS15 [get_ports jtag_tms_i]
+set_property IOSTANDARD LVCMOS18 [get_ports jtag_tms_i]
