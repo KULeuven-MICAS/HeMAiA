@@ -20,8 +20,8 @@ CC = $(CVA6_GCC_ROOT)/riscv64-unknown-elf-gcc
 OBJDUMP = $(CVA6_GCC_ROOT)/riscv64-unknown-elf-objdump
 OBJCOPY = $(CVA6_GCC_ROOT)/riscv64-unknown-elf-objcopy
 CFLAGS 	= -Os -g -Werror -ffreestanding -fno-strict-aliasing
-CFLAGS += -static -nostartfiles -nostartfiles
-CFLAGS += -fno-omit-frame-pointer -fno-optimize-sibling-calls -fno-stack-protector
+CFLAGS += -static -nostartfiles -pie
+CFLAGS += -fno-omit-frame-pointer -fno-optimize-sibling-calls -fno-stack-protector -fPIE
 CFLAGS += -mno-save-restore -mstrict-align
 CFLAGS += -mabi=lp64d -march=rv64imafd
 CFLAGS += -mcmodel=medany
