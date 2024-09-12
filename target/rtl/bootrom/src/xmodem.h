@@ -43,6 +43,10 @@ void *memcpy(void *dest, const void *src, size_t n) {
     return dest;
 }
 
+inline void flush_cache() {
+    asm volatile("fence.i" ::: "memory");
+}
+
 void uart_xmodem(uintptr_t address_prefix, uint64_t start_address) {
     uint8_t received_char;
     bool transmission_end = false;
@@ -95,4 +99,6 @@ void uart_xmodem(uintptr_t address_prefix, uint64_t start_address) {
             write_serial(address_prefix, CAN);  // Unexpected byte received
         }
     }
+    // Flush the cache after loading the program
+    flush_cache();
 }
