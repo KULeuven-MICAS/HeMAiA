@@ -31,6 +31,7 @@ module csr_regfile import ariane_pkg::*; #(
     // Core and Cluster ID
     input  logic[riscv::VLEN-1:0] boot_addr_i,                // Address from which to start booting, mtvec is set to the same address
     input  logic[riscv::XLEN-1:0] hart_id_i,                  // Hart id in a multicore environment (reflected in a CSR)
+    input  chip_id_t              chip_id_i,                  // Chip id in a multichip environment (reflected in a CSR)
     // we are taking an exception
     input exception_t             ex_i,                       // We've got an exception from the commit stage, take it
 
@@ -252,6 +253,7 @@ module csr_regfile import ariane_pkg::*; #(
                 riscv::CSR_MARCHID:            csr_rdata = ARIANE_MARCHID;
                 riscv::CSR_MIMPID:             csr_rdata = '0; // not implemented
                 riscv::CSR_MHARTID:            csr_rdata = hart_id_i;
+                riscv::CSR_MCHIPID:            csr_rdata = {{(riscv::XLEN-ChipIdWidth){1'b0}}, chip_id_i};
                 // Counters and Timers
                 riscv::CSR_MCYCLE:             csr_rdata = cycle_q[riscv::XLEN-1:0];
                 riscv::CSR_MCYCLEH:            if (riscv::XLEN == 32) csr_rdata = cycle_q[63:32]; else read_access_exception = 1'b1;

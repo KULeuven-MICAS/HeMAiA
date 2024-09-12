@@ -606,6 +606,7 @@ input  axi_rsp_t                     axi_resp_i
     .commit_ack_i           ( commit_ack                    ),
     .boot_addr_i            ( boot_addr_i[riscv::VLEN-1:0]  ),
     .hart_id_i              ( hart_id_i[riscv::XLEN-1:0]    ),
+    .chip_id_i              ( chip_id_i                     ),
     .ex_i                   ( ex_commit                     ),
     .csr_op_i               ( csr_op_commit_csr             ),
     .csr_write_fflags_i     ( csr_write_fflags_commit_cs    ),
