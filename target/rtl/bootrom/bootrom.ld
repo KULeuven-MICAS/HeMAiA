@@ -14,7 +14,7 @@ SECTIONS
   .text : { *(.text._start) *(.text) } > bootrom
 	.rodata : { *(.rodata) *(.rodata*) } > bootrom
 	.srodata : { *(.srodata) *(.srodata*) } > bootrom
-	/* .data : { *(.data) *(.sdata)  } > spm */
+	.data : { *(.data) *(.sdata)  } > spm
 	.bss : { *(.bss) } > spm
 
 	/* .misc : { *(*) } > bootrom */

@@ -86,6 +86,7 @@ module ${name}_cva6 import ${name}_pkg::*; (
     .clk_i,
     .rst_ni,
     .boot_addr_i (cva6_boot_addr),
+    .chip_id_i (chip_id_i),
     .hart_id_i (64'h0),
     .irq_i (irq),
     .ipi_i (ipi),

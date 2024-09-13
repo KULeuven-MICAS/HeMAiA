@@ -42,7 +42,7 @@ void bootrom() {
 
     uint32_t chip_id;
     asm volatile("csrr %0, 0xf15" : "=r"(chip_id));
-    uintptr_t address_prefix = ((uintptr_t)chip_id) >> 40;
+    uintptr_t address_prefix = ((uintptr_t)chip_id) << 40;
 
     char in_buf[8];
     init_uart(address_prefix, 50000000, 1000000);

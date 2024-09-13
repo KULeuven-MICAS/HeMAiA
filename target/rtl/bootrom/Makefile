@@ -22,8 +22,8 @@ OBJCOPY = $(CVA6_GCC_ROOT)/riscv64-unknown-elf-objcopy
 BIN2SV  = $(util)/bin2sv.py
 
 CFLAGS 	= -Os -g -Werror -ffreestanding -fno-strict-aliasing
-CFLAGS += -static -nostartfiles -pie
-CFLAGS += -fno-omit-frame-pointer -fno-optimize-sibling-calls -fno-stack-protector -fPIE
+CFLAGS += -static -nostartfiles
+CFLAGS += -fno-omit-frame-pointer -fno-optimize-sibling-calls -fno-stack-protector
 CFLAGS += -mno-save-restore -mstrict-align
 CFLAGS += -mabi=lp64d -march=rv64imafd
 CFLAGS += -mcmodel=medany

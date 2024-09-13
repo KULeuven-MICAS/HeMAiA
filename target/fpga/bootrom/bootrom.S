@@ -47,11 +47,11 @@ _cva6_init:
     .option push
     .option norelax
     la      gp, __global_pointer$
-    and     gp, gp, s0
+    or      gp, gp, s0
     .option pop
     # Set stack pointer at the local
     la      sp, __stack_pointer$
-    and     sp, sp, s0
+    or      sp, sp, s0
     la      t1, exception
     csrw    mtvec, t1
     call    bootrom
