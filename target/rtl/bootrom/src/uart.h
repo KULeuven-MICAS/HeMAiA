@@ -8,7 +8,7 @@
 
 extern uint32_t __base_uart_sym;
 
-#define UART_BASE_ADDR (uintptr_t)&__base_uart_sym
+#define UART_BASE_ADDR (uintptr_t) & __base_uart_sym
 
 #define UART_RBR UART_BASE_ADDR + 0
 #define UART_THR UART_BASE_ADDR + 0
@@ -21,7 +21,6 @@ extern uint32_t __base_uart_sym;
 #define UART_MODEM_STATUS UART_BASE_ADDR + 24
 #define UART_DLAB_LSB UART_BASE_ADDR + 0
 #define UART_DLAB_MSB UART_BASE_ADDR + 4
-
 
 /*
     UART_LINE_CONTROL[1:0]: iLCR_WLS Word Length Select, 2'b11 for two bits mode
@@ -42,95 +41,117 @@ extern uint32_t __base_uart_sym;
     UART_MODEM_CONTROL[5]: iMCR_AFE (Automatic Flow Control, set to 1 to automatically manage DTR and RTS)
 */
 
-inline static void write_reg_u8(uintptr_t addr, uint8_t value) {
+inline static void write_reg_u8(uintptr_t addr, uint8_t value)
+{
     volatile uint8_t *loc_addr = (volatile uint8_t *)addr;
     *loc_addr = value;
 }
 
-inline static uint8_t read_reg_u8(uintptr_t addr) {
+inline static uint8_t read_reg_u8(uintptr_t addr)
+{
     return *(volatile uint8_t *)addr;
 }
 
-inline static int is_data_ready() {
+inline static int is_data_ready()
+{
     return read_reg_u8(UART_LINE_STATUS) & 0x01;
 }
 
-inline static int is_data_overrun() {
+inline static int is_data_overrun()
+{
     return read_reg_u8(UART_LINE_STATUS) & 0x02;
 }
 
-inline static int is_transmit_empty() {
+inline static int is_transmit_empty()
+{
     return read_reg_u8(UART_LINE_STATUS) & 0x20;
 }
 
-inline static int is_transmit_done() {
+inline static int is_transmit_done()
+{
     return read_reg_u8(UART_LINE_STATUS) & 0x40;
 }
 
-inline static void write_serial(char a) {
-    while (is_transmit_empty() == 0) {
+inline static void write_serial(char a)
+{
+    while (is_transmit_empty() == 0)
+    {
     };
 
     write_reg_u8(UART_THR, a);
 }
 
-inline static uint8_t read_serial() {
-    while (is_data_ready() == 0) {
+inline static uint8_t read_serial()
+{
+    while (is_data_ready() == 0)
+    {
     };
 
     return read_reg_u8(UART_RBR);
 }
-inline static void init_uart(uint32_t freq, uint32_t baud) {
+inline static void init_uart(uint32_t freq, uint32_t baud)
+{
     uint32_t divisor = freq / (baud << 4);
 
-    write_reg_u8(UART_INTERRUPT_ENABLE, 0x00);  // Disable all interrupts
+    write_reg_u8(UART_INTERRUPT_ENABLE, 0x00); // Disable all interrupts
     write_reg_u8(UART_LINE_CONTROL,
-                 0x80);  // Enable DLAB (set baud rate divisor)
-    write_reg_u8(UART_DLAB_LSB, divisor);                // divisor (lo byte)
-    write_reg_u8(UART_DLAB_MSB, (divisor >> 8) & 0xFF);  // divisor (hi byte)
-    write_reg_u8(UART_LINE_CONTROL, 0x03);  // 8 bits, no parity, one stop bit
+                 0x80);                                 // Enable DLAB (set baud rate divisor)
+    write_reg_u8(UART_DLAB_LSB, divisor);               // divisor (lo byte)
+    write_reg_u8(UART_DLAB_MSB, (divisor >> 8) & 0xFF); // divisor (hi byte)
+    write_reg_u8(UART_LINE_CONTROL, 0x03);              // 8 bits, no parity, one stop bit
     write_reg_u8(UART_FIFO_CONTROL,
-                 0xC7);  // Enable FIFO, clear them, with 14-byte threshold
-    write_reg_u8(UART_MODEM_CONTROL, 0x22);  // Flow control enabled, auto flow control mode
+                 0xC7);                     // Enable FIFO, clear them, with 14-byte threshold
+    write_reg_u8(UART_MODEM_CONTROL, 0x22); // Flow control enabled, auto flow control mode
 }
 
-inline static void print_uart(const char *str) {
+inline static void print_uart(const char *str)
+{
     const char *cur = &str[0];
-    while (*cur != '\0') {
+    while (*cur != '\0')
+    {
         write_serial((uint8_t)*cur);
         ++cur;
     }
-    while (!is_transmit_done());
+    while (!is_transmit_done())
+        ;
 }
 
-inline static void print_uart_hex(char *str, uint32_t length) {
+inline static void print_uart_hex(char *str, uint32_t length)
+{
     uint8_t lut[16] = {'0', '1', '2', '3', '4', '5', '6', '7',
                        '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
-    for (uint64_t i = (uint64_t)str; i < (uint64_t)str + length; i++) {
-        if (i % 16 == 0) {
+    for (uint64_t i = (uint64_t)str; i < (uint64_t)str + length; i++)
+    {
+        if (i % 16 == 0)
+        {
             write_serial('\r');
             write_serial('\n');
-            for (int j = 28; j >= 0; j = j - 4) write_serial(lut[(i >> j) % 16]);
+            for (int j = 28; j >= 0; j = j - 4)
+                write_serial(lut[(i >> j) % 16]);
             write_serial(':');
             write_serial(' ');
-
         }
         char temp = *((char *)i);
         write_serial(lut[temp / 16]);
         write_serial(lut[temp % 16]);
         write_serial(' ');
     }
-    while (!is_transmit_done());
+    while (!is_transmit_done())
+        ;
 }
 
-inline static void scan_uart(char *str) {
+inline static void scan_uart(char *str)
+{
     char *cur = &str[0];
-    while (1) {
+    while (1)
+    {
         *cur = read_serial();
-        if (*cur == '\r') {
+        if (*cur == '\r')
+        {
             *cur = '\0';
             return;
-        } else
+        }
+        else
             cur++;
     }
 }
