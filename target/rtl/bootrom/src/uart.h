@@ -67,14 +67,14 @@ inline static int is_transmit_done(uintptr_t address_prefix) {
     return read_reg_u8(address_prefix | UART_LINE_STATUS) & 0x40;
 }
 
-inline static void write_serial(uintptr_t address_prefix, char a) {
+inline static void putchar(uintptr_t address_prefix, char a) {
     while (is_transmit_empty(address_prefix) == 0) {
     };
 
     write_reg_u8(address_prefix | UART_THR, a);
 }
 
-inline static uint8_t read_serial(uintptr_t address_prefix) {
+inline static uint8_t getchar(uintptr_t address_prefix) {
     while (is_data_ready(address_prefix) == 0) {
     };
 
@@ -99,32 +99,67 @@ inline static void init_uart(uintptr_t address_prefix, uint32_t freq,
                  0x22);  // Flow control enabled, auto flow control mode
 }
 
-inline static void print_uart(uintptr_t address_prefix, const char *str) {
+inline static void print_u8(uintptr_t address_prefix, uint8_t value) {
+    char lut[16] = {'0', '1', '2', '3', '4', '5', '6', '7',
+                    '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
+    putchar(address_prefix, lut[value / 16]);
+    putchar(address_prefix, lut[value % 16]);
+    while (!is_transmit_done(address_prefix));
+}
+
+inline static void print_u32(uintptr_t address_prefix, uint32_t value) {
+    char lut[16] = {'0', '1', '2', '3', '4', '5', '6', '7',
+                    '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
+    for (int i = 28; i >= 0; i = i - 4) {
+        putchar(address_prefix, lut[(value >> i) % 16]);
+    }
+    while (!is_transmit_done(address_prefix));
+}
+
+inline static void print_u48(uintptr_t address_prefix, uint64_t value) {
+    char lut[16] = {'0', '1', '2', '3', '4', '5', '6', '7',
+                    '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
+    for (int i = 44; i >= 0; i = i - 4) {
+        putchar(address_prefix, lut[(value >> i) % 16]);
+    }
+    while (!is_transmit_done(address_prefix));
+}
+
+inline static void print_u64(uintptr_t address_prefix, uint64_t value) {
+    char lut[16] = {'0', '1', '2', '3', '4', '5', '6', '7',
+                    '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
+    for (int i = 60; i >= 0; i = i - 4) {
+        putchar(address_prefix, lut[(value >> i) % 16]);
+    }
+    while (!is_transmit_done(address_prefix));
+}
+
+inline static void print_str(uintptr_t address_prefix, const char *str) {
     const char *cur = &str[0];
     while (*cur != '\0') {
-        write_serial(address_prefix, (uint8_t)*cur);
+        putchar(address_prefix, (uint8_t)*cur);
         ++cur;
     }
     while (!is_transmit_done(address_prefix));
 }
 
-inline static void print_uart_hex(uintptr_t address_prefix, char *str,
-                                  uint32_t length, uint32_t auto_wrap) {
+inline static void print_mem_hex(uintptr_t address_prefix, char *str,
+                                 uint32_t length) {
     uint8_t lut[16] = {'0', '1', '2', '3', '4', '5', '6', '7',
                        '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
     for (uint64_t i = (uint64_t)str; i < (uint64_t)str + length; i++) {
-        if (i % 16 == 0 && auto_wrap) {
-            write_serial(address_prefix, '\r');
-            write_serial(address_prefix, '\n');
-            for (int j = 28; j >= 0; j = j - 4) write_serial(address_prefix, lut[(i >> j) % 16]);
-            write_serial(address_prefix, ':');
-            write_serial(address_prefix, ' ');
-
+        if (i % 16 == 0) {
+            putchar(address_prefix, '\r');
+            putchar(address_prefix, '\n');
+            for (int j = 28; j >= 0; j = j - 4)
+                putchar(address_prefix, lut[(i >> j) % 16]);
+            putchar(address_prefix, ':');
+            putchar(address_prefix, ' ');
         }
         char temp = *((char *)i);
-        write_serial(address_prefix, lut[temp / 16]);
-        write_serial(address_prefix, lut[temp % 16]);
-        write_serial(address_prefix, ' ');
+        putchar(address_prefix, lut[temp / 16]);
+        putchar(address_prefix, lut[temp % 16]);
+        putchar(address_prefix, ' ');
     }
     while (!is_transmit_done(address_prefix));
 }
@@ -132,7 +167,7 @@ inline static void print_uart_hex(uintptr_t address_prefix, char *str,
 inline static void scan_uart(uintptr_t address_prefix, char *str) {
     char *cur = &str[0];
     while (1) {
-        *cur = read_serial(address_prefix);
+        *cur = getchar(address_prefix);
         if (*cur == '\r') {
             *cur = '\0';
             return;

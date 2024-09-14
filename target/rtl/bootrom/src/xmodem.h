@@ -51,7 +51,7 @@ void uart_xmodem(uintptr_t address_prefix, uint64_t start_address) {
     uint8_t received_char;
     bool transmission_end = false;
 
-    write_serial(address_prefix, NAK);  // Request for data
+    putchar(address_prefix, NAK);  // Request for data
 
     uint32_t current_offset = 0;
 
@@ -61,42 +61,42 @@ void uart_xmodem(uintptr_t address_prefix, uint64_t start_address) {
         uint8_t received_parity, calculated_parity;
         int index = 0;
 
-        received_char = read_serial(address_prefix);  // Read the header
+        received_char = getchar(address_prefix);  // Read the header
         if (received_char == EOT) {                   // End of transmission
-            write_serial(address_prefix, ACK);
-            print_uart(address_prefix, "\r\n\t Load finished. \r\n\r\n");
+            putchar(address_prefix, ACK);
+            print_str(address_prefix, "\r\n\t Load finished. \r\n\r\n");
             break;
         }
 
         if (received_char == SOH || received_char == STX) {
-            packet_number = read_serial(address_prefix);
-            packet_complement = read_serial(address_prefix);
+            packet_number = getchar(address_prefix);
+            packet_complement = getchar(address_prefix);
 
             if (packet_number ==
                 ((~packet_complement) & 0xFF)) {  // Packet number is correct
                 while (index < (received_char == SOH ? 128 : 1024)) {
-                    data[index++] = read_serial(address_prefix);
+                    data[index++] = getchar(address_prefix);
                 }
 
-                received_parity = read_serial(address_prefix);
+                received_parity = getchar(address_prefix);
 
                 calculated_parity = compute_parity(data, index);
 
                 if (received_parity == calculated_parity) {
                     // Copy data to memory
-                    write_serial(address_prefix, ACK);
+                    putchar(address_prefix, ACK);
                     memcpy((void *)(start_address + current_offset), data,
                            index);
                     current_offset += index;
                 } else {
-                    write_serial(address_prefix,
+                    putchar(address_prefix,
                                  NAK);  // CRC error, request retransmission
                 }
             } else {
-                write_serial(address_prefix, NAK);  // Packet number error
+                putchar(address_prefix, NAK);  // Packet number error
             }
         } else {
-            write_serial(address_prefix, CAN);  // Unexpected byte received
+            putchar(address_prefix, CAN);  // Unexpected byte received
         }
     }
     // Flush the cache after loading the program

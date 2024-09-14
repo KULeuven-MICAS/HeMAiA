@@ -17,7 +17,6 @@ clean:
 	$(MAKE) -C ./target/sim/ clean
 	$(MAKE) -C ./target/rtl/ clean
 	$(MAKE) -C ./target/fpga/sw clean
-	$(MAKE) -C ./target/fpga/bootrom clean
 	$(MAKE) -C ./target/tapeout clean
 	rm -rf Bender.lock .bender deps
 	rm -rf ./target/rtl/src/bender_targets.tmp
@@ -27,10 +26,7 @@ bootrom: # In Occamy Docker
 # The bootrom used for simulation (light-weight bootrom)
 	$(MAKE) -C ./target/sim bootrom CFG_OVERRIDE=$(CFG)
 
-# The bootrom used for FPGA protoyping (emulated eeprom, full-functional bootrom)
-	$(MAKE) -C ./target/fpga/bootrom bootrom CFG_OVERRIDE=$(CFG)
-
-# The bootrom used for tapeout (embedded real rom, full-functional bootrom with different frequency settings)
+# The bootrom used for tapeout / FPGA prototyping (embedded real rom, full-functional bootrom with different frequency settings)
 	$(MAKE) -C ./target/rtl/bootrom bootrom CFG_OVERRIDE=$(CFG)
 
 sw: # In Occamy Docker

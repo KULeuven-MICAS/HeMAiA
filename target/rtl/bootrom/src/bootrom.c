@@ -25,10 +25,7 @@ void delay_cycles(uint64_t cycle) {
     __asm__ volatile("csrr %0, mcycle;" : "=r"(target_cycle));
     target_cycle = target_cycle + cycle;
     while (current_cycle < target_cycle) {
-    __asm__ volatile(
-                    "csrr %0, mcycle;"
-                    : "=r"(current_cycle)
-                    );
+        __asm__ volatile("csrr %0, mcycle;" : "=r"(current_cycle));
     }
 }
 
@@ -48,28 +45,29 @@ void bootrom() {
     init_uart(address_prefix, 50000000, 1000000);
 
     while (1) {
-        start_address = 0x80000000 | ((uint64_t)address_prefix);
-        print_uart(address_prefix, "\033[2J");
-        print_uart(address_prefix, "\r\n\t\t Welcome to HeMAiA Bootrom");
-        print_uart(address_prefix, "\r\n");
-        print_uart(address_prefix, "\r\n\t Chip ID: 0x");
-        print_uart_hex(address_prefix, (char*)&chip_id, 1, false);
-        print_uart(address_prefix,
-                   "\r\n\t Enter the number to select the mode: ");
-        print_uart(address_prefix, "\r\n\t 1. Load from JTAG");
-        print_uart(address_prefix, "\r\n\t 2. Load from UART to 0x");
-        print_uart_hex(address_prefix, (char*)&start_address, 8, false);
-        print_uart(address_prefix, "\r\n\t 3. Print memory from 0x");
-        print_uart_hex(address_prefix, (char*)&start_address, 8, false);
-        print_uart(address_prefix, "\r\n\t 4. Continue to Boot from 0x");
-        print_uart_hex(address_prefix, (char*)&start_address, 8, false);
+        start_address = 0x80000000L | ((uint64_t)address_prefix);
+        print_str(address_prefix, "\033[2J");
+        print_str(address_prefix, "\r\n\t\t Welcome to HeMAiA Bootrom");
+        print_str(address_prefix, "\r\n");
+        print_str(address_prefix, "\r\n\t Chip ID: 0x");
+        print_u8(address_prefix, chip_id);
+        print_str(address_prefix,
+                  "\r\n\t Enter the number to select the mode: ");
+        print_str(address_prefix, "\r\n\t 1. Load from JTAG");
+        print_str(address_prefix, "\r\n\t 2. Load from UART to 0x");
+        print_u48(address_prefix, start_address);
+        print_str(address_prefix, "\r\n\t 3. Print memory from 0x");
+        print_u48(address_prefix, start_address);
+        print_str(address_prefix, "\r\n\t 4. Continue to Boot from 0x");
+        print_u48(address_prefix, start_address);
+        print_str(address_prefix, "\r\n");
 
-        boot_mode = read_serial(address_prefix) - '0' - 1;
+        boot_mode = getchar(address_prefix) - '0' - 1;
 
         switch (boot_mode) {
             case JTAG:
-                print_uart(address_prefix,
-                           "\r\n\t Handover to debugger... \r\n\r\n");
+                print_str(address_prefix,
+                          "\r\n\t Handover to debugger... \r\n\r\n");
                 __asm__ volatile(
                     "csrr a0, mhartid;"
                     "ebreak;");
@@ -78,12 +76,12 @@ void bootrom() {
             case UART:
                 delay_cycles(50000000);  // Delay for 1s
                 uart_xmodem(address_prefix, start_address);
-                print_uart(address_prefix, "\r\n\t Load finished. \r\n\r\n");
+                print_str(address_prefix, "\r\n\t Load finished. \r\n\r\n");
                 break;
 
             case PRINTMEM:
-                print_uart(address_prefix,
-                           "\r\n\t Enter the size of the memory in byte: ");
+                print_str(address_prefix,
+                          "\r\n\t Enter the size of the memory in byte: ");
                 scan_uart(address_prefix, in_buf);
                 char* cur = in_buf;
                 memory_length = 0;
@@ -91,19 +89,20 @@ void bootrom() {
                     memory_length = memory_length * 10 + *cur - '0';
                     cur++;
                 }
-                print_uart(address_prefix, "\r\n\t The memory from 0x");
-                print_uart_hex(address_prefix, (char*)&start_address, 8, false);
-                print_uart(address_prefix, "is:");
-                print_uart_hex(address_prefix, (char*)start_address,
-                               memory_length, true);
-                print_uart(address_prefix, "\r\n\r\n\t Print finished. ");
-                read_serial(address_prefix);
+                print_str(address_prefix, "\r\n\t The memory from 0x");
+                print_u48(address_prefix, start_address);
+                print_str(address_prefix, "is:");
+                print_mem_hex(address_prefix, (char*)start_address,
+                              memory_length);
+                print_str(address_prefix, "\r\n\r\n\t Print finished. ");
+                getchar(address_prefix);
                 break;
 
             case NORMAL:
-                print_uart(address_prefix, "\r\n\t Booting at 0x");
-                print_uart_hex(address_prefix, (char*)&start_address, 8, false);
-                print_uart(address_prefix, "...\r\n\r\n");
+                print_str(address_prefix, "\033[2J");
+                print_str(address_prefix, "\r\n\t Booting at 0x");
+                print_u48(address_prefix, start_address);
+                print_str(address_prefix, "...\r\n\r\n\r\n");
                 return;
                 break;
         }

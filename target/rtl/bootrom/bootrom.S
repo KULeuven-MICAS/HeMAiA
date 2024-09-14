@@ -52,10 +52,12 @@ _cva6_init:
     # Set stack pointer at the local
     la      sp, __stack_pointer$
     or      sp, sp, s0
+    # Set the interrupt vector
     la      t1, exception
     csrw    mtvec, t1
     call    bootrom
 	li      t0, 0x80000000
+    or      t0, t0, s0
     jalr    t0
     j       _start
 exception:
