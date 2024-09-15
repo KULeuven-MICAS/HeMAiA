@@ -42,6 +42,7 @@ module ${name}_soc
   input  logic        clk_i,
   input  logic        rst_ni,
   input  logic        test_mode_i,
+  input  chip_id_t    chip_id_i,
   input  logic [${occamy_cfg["addr_width"]-1}:0] boot_addr_i,
   // Peripheral Ports (to AXI-lite Xbar)
   output  ${soc_narrow_xbar.out_periph.req_type()} periph_axi_lite_req_o,
@@ -108,6 +109,7 @@ module ${name}_soc
   ${name}_cva6 i_${name}_cva6 (
     .clk_i (clk_i),
     .rst_ni (rst_ni),
+    .chip_id_i (chip_id_i),
     .irq_i (eip_i),
     .ipi_i (msip_i[0]),
     .time_irq_i (mtip_i[0]),
@@ -142,7 +144,7 @@ module ${name}_soc
     .rst_ni (rst_ni),
     .test_mode_i (test_mode_i),
     .boot_addr_i (boot_addr_i[31:0]),
-    .chip_id_i (8'b0),  // Temporary solution as the Chip ID is not provided yet
+    .chip_id_i (chip_id_i),
     .meip_i ('0),
     .mtip_i (mtip_i[${lower_core + nr_cores_s1_quadrant - 1}:${lower_core}]),
     .msip_i (msip_i[${lower_core + nr_cores_s1_quadrant - 1}:${lower_core}]),

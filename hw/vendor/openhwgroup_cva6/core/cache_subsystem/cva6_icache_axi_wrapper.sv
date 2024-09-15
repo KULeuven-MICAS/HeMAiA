@@ -24,6 +24,7 @@ module cva6_icache_axi_wrapper import ariane_pkg::*; import wt_cache_pkg::*; #(
 ) (
   input  logic              clk_i,
   input  logic              rst_ni,
+  input  chip_id_t          chip_id_i,
   input riscv::priv_lvl_t   priv_lvl_i,
 
   // SRAM config
@@ -114,6 +115,7 @@ module cva6_icache_axi_wrapper import ariane_pkg::*; import wt_cache_pkg::*; #(
   ) i_cva6_icache (
     .clk_i              ( clk_i               ),
     .rst_ni             ( rst_ni              ),
+    .chip_id_i          ( chip_id_i           ),
     .sram_cfg_data_i    ( sram_cfg_data_i     ),
     .sram_cfg_tag_i     ( sram_cfg_tag_i      ),
     .flush_i            ( flush_i             ),

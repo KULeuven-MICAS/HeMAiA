@@ -18,7 +18,7 @@ SECTIONS
 	.bss : { *(.bss) } > spm
 
 	/* .misc : { *(*) } > bootrom */
-  /* /DISCARD/ : { *(.riscv.attributes) *(.comment) *(.debug*) } */
+  /* /DISCARD/ : { *(.riscv.attributes) [reduce binary size] *(.comment) [reduce binary size] *(.debug*) [reduce binary size] *(.data) [no initialized memory] *(.sdata) [no initialized memory] } */
 
   /* Global and stack pointer */
   __global_pointer$ = ADDR(.rodata) + SIZEOF(.rodata) / 2;

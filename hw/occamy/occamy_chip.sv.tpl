@@ -19,7 +19,7 @@ import ${name}_pkg::*;
   /// Real-time clock (for time keeping)
   input  logic        rtc_i,
   input  logic        test_mode_i,
-  input  logic [1:0]  chip_id_i,
+  input  chip_id_t    chip_id_i,
   input  logic [1:0]  boot_mode_i,
   // `uart` Interface
   output logic        uart_tx_o,
@@ -134,10 +134,24 @@ import ${name}_pkg::*;
   assign bootrom_rsp.error   = '0;
 
   ///////////////////
+  // Chip ID Latch //
+  ///////////////////
+
+  // The latched chip_id
+  chip_id_t chip_id;
+
+  always_latch begin
+    if (~rst_ni) begin
+      chip_id <= chip_id_i;
+    end
+  end
+
+  ///////////////////
   //  Occamy Top   //
   ///////////////////
 
   ${name}_top i_${name} (
+    .chip_id_i       (chip_id),
     .bootrom_req_o   (bootrom_axi_lite_req),
     .bootrom_rsp_i   (bootrom_axi_lite_rsp),
     .ext_irq_i       (ext_irq_i),

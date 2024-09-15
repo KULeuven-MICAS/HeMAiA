@@ -23,6 +23,7 @@ module cache_ctrl import ariane_pkg::*; import std_cache_pkg::*; #(
 ) (
     input  logic                                 clk_i,     // Clock
     input  logic                                 rst_ni,    // Asynchronous reset active low
+    input  chip_id_t                             chip_id_i, // Chip ID for the correct cache / execution region configuration
     input  logic                                 bypass_i,  // enable cache
     output logic                                 busy_o,
     input  logic                                 stall_i,   // stall new memory requests
@@ -247,7 +248,7 @@ module cache_ctrl import ariane_pkg::*; import std_cache_pkg::*; #(
                     // -------------------------
                     // Check for cache-ability
                     // -------------------------
-                    if (!is_inside_cacheable_regions(ArianeCfg, {{{64-riscv::PLEN}{1'b0}}, tag_o, {DCACHE_INDEX_WIDTH{1'b0}}})) begin
+                    if (!is_inside_cacheable_regions(ArianeCfg, chip_id_i, {{{64-riscv::PLEN}{1'b0}}, tag_o, {DCACHE_INDEX_WIDTH{1'b0}}})) begin
                         mem_req_d.bypass = 1'b1;
                         state_d = WAIT_REFILL_GNT;
                     end

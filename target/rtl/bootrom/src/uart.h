@@ -8,7 +8,7 @@
 
 extern uint32_t __base_uart_sym;
 
-#define UART_BASE_ADDR (uintptr_t)&__base_uart_sym
+#define UART_BASE_ADDR (uintptr_t) & __base_uart_sym
 
 #define UART_RBR UART_BASE_ADDR + 0
 #define UART_THR UART_BASE_ADDR + 0
@@ -22,24 +22,24 @@ extern uint32_t __base_uart_sym;
 #define UART_DLAB_LSB UART_BASE_ADDR + 0
 #define UART_DLAB_MSB UART_BASE_ADDR + 4
 
-
 /*
     UART_LINE_CONTROL[1:0]: iLCR_WLS Word Length Select, 2'b11 for two bits mode
     UART_LINE_CONTROL[2]: iLCE_STB, 1'b0 for one bit stop bit
-    UART_LINE_CONTROL[3]: iLCR_PEN, Parity Enable, disable as there is higher level parity check algorithm
-    UART_LINE_CONTROL[4]: iLCR_PES, also related to parity check
-    UART_LINE_CONTROL[5]: iLCR_SP, also related to parity check
+    UART_LINE_CONTROL[3]: iLCR_PEN, Parity Enable, disable as there is higher
+   level parity check algorithm UART_LINE_CONTROL[4]: iLCR_PES, also related to
+   parity check UART_LINE_CONTROL[5]: iLCR_SP, also related to parity check
     UART_LINE_CONTROL[6]: iLCR_BC, signaling a break control
     UART_LINE_CONTROL[7]: iLCR_DLAB, don't know what it is
 
 */
 /*
     UART_MODEM_CONTROL[0]: iMCR_DTR (DTR output, not used)
-    UART_MODEM_CONTROL[1]: iMCR_RTS (RTS output, set 1 to inform the device is ready to receive the data)
-    UART_MODEM_CONTROL[2]: iMCR_OUT1 (General Purpose Output 1, not used)
-    UART_MODEM_CONTROL[3]: iMCR_OUT2 (General Purpose Output 2, not used)
-    UART_MODEM_CONTROL[4]: iMCR_LOOP (Internal Loopback, should set to 0)
-    UART_MODEM_CONTROL[5]: iMCR_AFE (Automatic Flow Control, set to 1 to automatically manage DTR and RTS)
+    UART_MODEM_CONTROL[1]: iMCR_RTS (RTS output, set 1 to inform the device is
+   ready to receive the data) UART_MODEM_CONTROL[2]: iMCR_OUT1 (General Purpose
+   Output 1, not used) UART_MODEM_CONTROL[3]: iMCR_OUT2 (General Purpose Output
+   2, not used) UART_MODEM_CONTROL[4]: iMCR_LOOP (Internal Loopback, should set
+   to 0) UART_MODEM_CONTROL[5]: iMCR_AFE (Automatic Flow Control, set to 1 to
+   automatically manage DTR and RTS)
 */
 
 inline static void write_reg_u8(uintptr_t addr, uint8_t value) {
@@ -51,82 +51,123 @@ inline static uint8_t read_reg_u8(uintptr_t addr) {
     return *(volatile uint8_t *)addr;
 }
 
-inline static int is_data_ready() {
-    return read_reg_u8(UART_LINE_STATUS) & 0x01;
+inline static int is_data_ready(uintptr_t address_prefix) {
+    return read_reg_u8(address_prefix | UART_LINE_STATUS) & 0x01;
 }
 
-inline static int is_data_overrun() {
-    return read_reg_u8(UART_LINE_STATUS) & 0x02;
+inline static int is_data_overrun(uintptr_t address_prefix) {
+    return read_reg_u8(address_prefix | UART_LINE_STATUS) & 0x02;
 }
 
-inline static int is_transmit_empty() {
-    return read_reg_u8(UART_LINE_STATUS) & 0x20;
+inline static int is_transmit_empty(uintptr_t address_prefix) {
+    return read_reg_u8(address_prefix | UART_LINE_STATUS) & 0x20;
 }
 
-inline static int is_transmit_done() {
-    return read_reg_u8(UART_LINE_STATUS) & 0x40;
+inline static int is_transmit_done(uintptr_t address_prefix) {
+    return read_reg_u8(address_prefix | UART_LINE_STATUS) & 0x40;
 }
 
-inline static void write_serial(char a) {
-    while (is_transmit_empty() == 0) {
+inline static void putchar(uintptr_t address_prefix, char a) {
+    while (is_transmit_empty(address_prefix) == 0) {
     };
 
-    write_reg_u8(UART_THR, a);
+    write_reg_u8(address_prefix | UART_THR, a);
 }
 
-inline static uint8_t read_serial() {
-    while (is_data_ready() == 0) {
+inline static uint8_t getchar(uintptr_t address_prefix) {
+    while (is_data_ready(address_prefix) == 0) {
     };
 
-    return read_reg_u8(UART_RBR);
+    return read_reg_u8(address_prefix | UART_RBR);
 }
-inline static void init_uart(uint32_t freq, uint32_t baud) {
+inline static void init_uart(uintptr_t address_prefix, uint32_t freq,
+                             uint32_t baud) {
     uint32_t divisor = freq / (baud << 4);
 
-    write_reg_u8(UART_INTERRUPT_ENABLE, 0x00);  // Disable all interrupts
-    write_reg_u8(UART_LINE_CONTROL,
+    write_reg_u8(address_prefix | UART_INTERRUPT_ENABLE,
+                 0x00);  // Disable all interrupts
+    write_reg_u8(address_prefix | UART_LINE_CONTROL,
                  0x80);  // Enable DLAB (set baud rate divisor)
-    write_reg_u8(UART_DLAB_LSB, divisor);                // divisor (lo byte)
-    write_reg_u8(UART_DLAB_MSB, (divisor >> 8) & 0xFF);  // divisor (hi byte)
-    write_reg_u8(UART_LINE_CONTROL, 0x03);  // 8 bits, no parity, one stop bit
-    write_reg_u8(UART_FIFO_CONTROL,
+    write_reg_u8(address_prefix | UART_DLAB_LSB, divisor);  // divisor (lo byte)
+    write_reg_u8(address_prefix | UART_DLAB_MSB,
+                 (divisor >> 8) & 0xFF);  // divisor (hi byte)
+    write_reg_u8(address_prefix | UART_LINE_CONTROL,
+                 0x03);  // 8 bits, no parity, one stop bit
+    write_reg_u8(address_prefix | UART_FIFO_CONTROL,
                  0xC7);  // Enable FIFO, clear them, with 14-byte threshold
-    write_reg_u8(UART_MODEM_CONTROL, 0x22);  // Flow control enabled, auto flow control mode
+    write_reg_u8(address_prefix | UART_MODEM_CONTROL,
+                 0x22);  // Flow control enabled, auto flow control mode
 }
 
-inline static void print_uart(const char *str) {
+inline static void print_u8(uintptr_t address_prefix, uint8_t value) {
+    char lut[16] = {'0', '1', '2', '3', '4', '5', '6', '7',
+                    '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
+    putchar(address_prefix, lut[value / 16]);
+    putchar(address_prefix, lut[value % 16]);
+    while (!is_transmit_done(address_prefix));
+}
+
+inline static void print_u32(uintptr_t address_prefix, uint32_t value) {
+    char lut[16] = {'0', '1', '2', '3', '4', '5', '6', '7',
+                    '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
+    for (int i = 28; i >= 0; i = i - 4) {
+        putchar(address_prefix, lut[(value >> i) % 16]);
+    }
+    while (!is_transmit_done(address_prefix));
+}
+
+inline static void print_u48(uintptr_t address_prefix, uint64_t value) {
+    char lut[16] = {'0', '1', '2', '3', '4', '5', '6', '7',
+                    '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
+    for (int i = 44; i >= 0; i = i - 4) {
+        putchar(address_prefix, lut[(value >> i) % 16]);
+    }
+    while (!is_transmit_done(address_prefix));
+}
+
+inline static void print_u64(uintptr_t address_prefix, uint64_t value) {
+    char lut[16] = {'0', '1', '2', '3', '4', '5', '6', '7',
+                    '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
+    for (int i = 60; i >= 0; i = i - 4) {
+        putchar(address_prefix, lut[(value >> i) % 16]);
+    }
+    while (!is_transmit_done(address_prefix));
+}
+
+inline static void print_str(uintptr_t address_prefix, const char *str) {
     const char *cur = &str[0];
     while (*cur != '\0') {
-        write_serial((uint8_t)*cur);
+        putchar(address_prefix, (uint8_t)*cur);
         ++cur;
     }
-    while (!is_transmit_done());
+    while (!is_transmit_done(address_prefix));
 }
 
-inline static void print_uart_hex(char *str, uint32_t length) {
+inline static void print_mem_hex(uintptr_t address_prefix, char *str,
+                                 uint32_t length) {
     uint8_t lut[16] = {'0', '1', '2', '3', '4', '5', '6', '7',
                        '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
     for (uint64_t i = (uint64_t)str; i < (uint64_t)str + length; i++) {
         if (i % 16 == 0) {
-            write_serial('\r');
-            write_serial('\n');
-            for (int j = 28; j >= 0; j = j - 4) write_serial(lut[(i >> j) % 16]);
-            write_serial(':');
-            write_serial(' ');
-
+            putchar(address_prefix, '\r');
+            putchar(address_prefix, '\n');
+            for (int j = 28; j >= 0; j = j - 4)
+                putchar(address_prefix, lut[(i >> j) % 16]);
+            putchar(address_prefix, ':');
+            putchar(address_prefix, ' ');
         }
         char temp = *((char *)i);
-        write_serial(lut[temp / 16]);
-        write_serial(lut[temp % 16]);
-        write_serial(' ');
+        putchar(address_prefix, lut[temp / 16]);
+        putchar(address_prefix, lut[temp % 16]);
+        putchar(address_prefix, ' ');
     }
-    while (!is_transmit_done());
+    while (!is_transmit_done(address_prefix));
 }
 
-inline static void scan_uart(char *str) {
+inline static void scan_uart(uintptr_t address_prefix, char *str) {
     char *cur = &str[0];
     while (1) {
-        *cur = read_serial();
+        *cur = getchar(address_prefix);
         if (*cur == '\r') {
             *cur = '\0';
             return;

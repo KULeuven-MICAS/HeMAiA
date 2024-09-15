@@ -1450,6 +1450,7 @@ class AxiXbar(Xbar):
                  dw,
                  iw,
                  uw=0,
+                 chipidw=0,
                  max_slv_trans=4,
                  max_mst_trans=4,
                  fall_through=False,
@@ -1463,6 +1464,7 @@ class AxiXbar(Xbar):
         self.dw = dw
         self.iw = iw
         self.uw = uw
+        self.chipidw = chipidw
         self.max_slv_trans = max_slv_trans
         self.max_mst_trans = max_mst_trans
         self.fall_through = fall_through
@@ -1581,9 +1583,14 @@ class AxiXbar(Xbar):
         addrmap += "assign {} = '{{\n".format(addrmap_name)
         addrmap_lines = []
         for i in range(len(self.addrmap)):
-            addrmap_lines.append(
-                "  '{{ idx: {}, start_addr: {aw}'h{:08x}, end_addr: {aw}'h{:08x} }}".format(
-                    *self.addrmap[i], aw=self.aw))
+            if self.chipidw == 0:
+                addrmap_lines.append(
+                    "  '{{ idx: {}, start_addr: {aw}'h{:08x}, end_addr: {aw}'h{:08x} }}".format(
+                        *self.addrmap[i], aw=self.aw-self.chipidw))
+            else:
+                addrmap_lines.append(
+                    "  '{{ idx: {}, start_addr: {{chip_id_i,{aw}'h{:08x}}}, end_addr: {{chip_id_i,{aw}'h{:08x} }}}}".format(
+                        *self.addrmap[i], aw=self.aw-self.chipidw))
         for i, (idx, base, length) in enumerate(self.symbolic_addrmap):
             addrmap_lines.append(
                 "  '{{ idx: {}, start_addr: {}[{i}], end_addr: {}[{i}] + {} }}".format(
@@ -2106,6 +2113,7 @@ class AxiLiteXbar(Xbar):
     def __init__(self,
                  aw,
                  dw,
+                 chipidw=0,
                  max_slv_trans=4,
                  max_mst_trans=4,
                  fall_through=False,
@@ -2114,6 +2122,7 @@ class AxiLiteXbar(Xbar):
         super().__init__(**kwargs)
         self.aw = aw
         self.dw = dw
+        self.chipidw = chipidw
         self.max_slv_trans = max_slv_trans
         self.max_mst_trans = max_mst_trans
         self.fall_through = fall_through
@@ -2170,9 +2179,14 @@ class AxiLiteXbar(Xbar):
         addrmap += "assign {} = '{{\n".format(addrmap_name)
         addrmap_lines = []
         for i in range(len(self.addrmap)):
-            addrmap_lines.append(
-                "  '{{ idx: {}, start_addr: {aw}'h{:08x}, end_addr: {aw}'h{:08x} }}".format(
-                    *self.addrmap[i], aw=self.aw))
+            if self.chipidw == 0:
+                addrmap_lines.append(
+                    "  '{{ idx: {}, start_addr: {aw}'h{:08x}, end_addr: {aw}'h{:08x} }}".format(
+                        *self.addrmap[i], aw=self.aw-self.chipidw))
+            else:
+                addrmap_lines.append(
+                    "  '{{ idx: {}, start_addr: {{chip_id_i,{aw}'h{:08x}}}, end_addr: {{chip_id_i,{aw}'h{:08x}}} }}".format(
+                        *self.addrmap[i], aw=self.aw-self.chipidw))
         for i, (idx, base, length) in enumerate(self.symbolic_addrmap):
             addrmap_lines.append(
                 "  '{{ idx: {}, start_addr: {}[{i}], end_addr: {}[{i}] + {} }}".format(

@@ -5,7 +5,7 @@ ROOT        := ${MKFILE_DIR}../../..
 
 VIVADO	  := vivado
 
-BOOTROM		?= $(TARGET)/fpga/bootrom/bootrom.bin
+BOOTROM		?= $(TARGET)/rtl/bootrom/bootrom.bin
 APP		?= $(TARGET)/sim/sw/host/apps/hello_world/build/hello_world.elf
 BIN2JTAG	?= $(ROOT)/util/bin2jtag.py
 BIN_VERIFY	?= $(ROOT)/util/bin2jtag_only_verify.py

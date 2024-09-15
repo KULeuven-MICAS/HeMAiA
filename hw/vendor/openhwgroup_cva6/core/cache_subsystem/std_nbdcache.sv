@@ -25,6 +25,7 @@ module std_nbdcache import std_cache_pkg::*; import ariane_pkg::*; #(
 )(
     input  logic                           clk_i,       // Clock
     input  logic                           rst_ni,      // Asynchronous reset active low
+    input  chip_id_t                       chip_id_i,   // Chip ID for the correct cache / execution region configuration
     // SRAM config
     input sram_cfg_t                       sram_cfg_data_i,
     input sram_cfg_t                       sram_cfg_tag_i,

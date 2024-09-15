@@ -20,6 +20,7 @@ module ex_stage import ariane_pkg::*; #(
 ) (
     input  logic                                   clk_i,    // Clock
     input  logic                                   rst_ni,   // Asynchronous reset active low
+    input  chip_id_t                               chip_id_i,// Chip ID
     input  logic                                   flush_i,
     input  logic                                   debug_mode_i,
 
@@ -295,6 +296,7 @@ module ex_stage import ariane_pkg::*; #(
     ) lsu_i (
         .clk_i,
         .rst_ni,
+        .chip_id_i,
         .flush_i,
         .no_st_pending_o,
         .fu_data_i             ( lsu_data ),

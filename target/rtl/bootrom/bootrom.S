@@ -39,19 +39,27 @@ _snitch_resume:
 
 # You may use rv64 instuctions in this block.
 _cva6_init:
-    # Set global pointer
+    # Load the Chip ID to the register
+    csrr    s0, 0xf15
+    # Transfer as mask by left shift 40 bits
+    slli    s0, s0, 40
+    # Set global pointer at the local
     .option push
     .option norelax
     la      gp, __global_pointer$
+    or      gp, gp, s0
     .option pop
-    # Set stack pointer
+    # Set stack pointer at the local
     la      sp, __stack_pointer$
+    or      sp, sp, s0
+    # Set the interrupt vector
     la      t1, exception
     csrw    mtvec, t1
     call    bootrom
 	li      t0, 0x80000000
+    or      t0, t0, s0
     jalr    t0
+    j       _start
 exception:
     wfi
     j     exception
-

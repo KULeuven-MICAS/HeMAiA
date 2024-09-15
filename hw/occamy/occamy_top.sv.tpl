@@ -20,7 +20,7 @@ module ${name}_top
   /// Real-time clock (for time keeping)
   input  logic        rtc_i,
   input  logic        test_mode_i,
-  input  logic [1:0]  chip_id_i,
+  input  chip_id_t    chip_id_i,
   input  logic [1:0]  boot_mode_i,
   // `uart` Interface
   output logic        uart_tx_o,
@@ -90,7 +90,8 @@ module ${name}_top
   always_comb begin
     soc_ctrl_in = '0;
     soc_ctrl_in.boot_mode.d = boot_mode_i;
-    soc_ctrl_in.chip_id.d = chip_id_i;
+    soc_ctrl_in.chip_id.d = '0;
+    // The original chip_id is disabled, and replaced by chip_id of HeMAiA
   end
 
   // Machine timer and machine software interrupt pending.
@@ -123,6 +124,7 @@ module ${name}_top
     .clk_i,
     .rst_ni,
     .test_mode_i,
+    .chip_id_i             ( chip_id_i                   ),
     .boot_addr_i           ( boot_addr                   ),
     .periph_axi_lite_req_o ( periph_axi_lite_soc2per_req ),
     .periph_axi_lite_rsp_i ( periph_axi_lite_soc2per_rsp ),
@@ -333,10 +335,12 @@ module ${name}_top
     .to_reg(context, "axi_lite_to_reg_soc_ctrl") %>
   ${name}_soc_ctrl #(
     .reg_req_t ( ${regbus_soc_ctrl.req_type()} ),
-    .reg_rsp_t ( ${regbus_soc_ctrl.rsp_type()} )
+    .reg_rsp_t ( ${regbus_soc_ctrl.rsp_type()} ),
+    .chip_id_t ( chip_id_t )
   ) i_soc_ctrl (
     .clk_i     ( ${regbus_soc_ctrl.clk} ),
     .rst_ni    ( ${regbus_soc_ctrl.rst} ),
+    .chip_id_i ( chip_id_i ),
     .reg_req_i ( ${regbus_soc_ctrl.req_name()} ),
     .reg_rsp_o ( ${regbus_soc_ctrl.rsp_name()} ),
     .reg2hw_o  ( soc_ctrl_out ),

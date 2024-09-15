@@ -29,6 +29,8 @@ module ariane import ariane_pkg::*; #(
 ) (
   input  logic                         clk_i,
   input  logic                         rst_ni,
+  // Chip ID for the correct cache / execution region configuration
+  input  chip_id_t                     chip_id_i,
   // Core ID, Cluster ID and boot address are considered more or less static
   input  logic [riscv::VLEN-1:0]       boot_addr_i,  // reset boot address
   input  logic [riscv::XLEN-1:0]       hart_id_i,    // hart id in a multicore environment (reflected in a CSR)
@@ -82,6 +84,7 @@ module ariane import ariane_pkg::*; #(
   ) i_cva6 (
     .clk_i                ( clk_i                     ),
     .rst_ni               ( rst_ni                    ),
+    .chip_id_i            ( chip_id_i                 ),
     .boot_addr_i          ( boot_addr_i               ),
     .hart_id_i            ( hart_id_i                 ),
     .sram_cfg_idata_i     ( sram_cfg_idata_i          ),

@@ -19,6 +19,7 @@ module load_store_unit import ariane_pkg::*; #(
 )(
     input  logic                     clk_i,
     input  logic                     rst_ni,
+    input  chip_id_t                 chip_id_i,
     input  logic                     flush_i,
     output logic                     no_st_pending_o,
     input  logic                     amo_valid_commit_i,
