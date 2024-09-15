@@ -101,7 +101,7 @@ module testharness import occamy_pkg::*; (
     .rst_periph_ni,
     .rtc_i,
     .test_mode_i (1'b0),
-    .chip_id_i ('0),
+    .chip_id_i (${chip_id}),
     .boot_mode_i ('0),
     .uart_tx_o (tx),
     .uart_cts_ni ('0),

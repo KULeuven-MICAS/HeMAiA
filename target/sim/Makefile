@@ -37,8 +37,7 @@ TXT_TRACES          += $(CVA6_TXT_TRACE)
 PERF_DUMPS          += $(CVA6_PERF_DUMP)
 ANNOTATED_TRACES    += $(CVA6_ANNOTATED_TRACE)
 
-include ../../deps/snitch_cluster/target/common/common.mk
-
+include $(SIM_MKFILE_DIR)/sim.mk
 include $(ROOT)/target/rtl/Makefile
 
 ############
@@ -349,7 +348,7 @@ ${VLT_AR}: ${VLT_SOURCES} ${TB_SRCS}
 verilate: ${VLT_AR}
 
 # Build targets for verilator TB
-$(VLT_BUILDDIR)/tb/%.o: $(TB_DIR)/%.cc $(VLT_AR) ${VLT_BUILDDIR}/lib/libfesvr.a
+$(VLT_BUILDDIR)/tb/%.o: ${MKFILE_DIR}/test/%.cc $(VLT_AR) ${VLT_BUILDDIR}/lib/libfesvr.a
 	mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $(VLT_CFLAGS) -c $< -o $@
 $(VLT_BUILDDIR)/vlt/%.o: $(VLT_ROOT)/include/%.cpp

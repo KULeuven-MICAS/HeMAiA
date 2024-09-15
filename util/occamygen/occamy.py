@@ -619,25 +619,30 @@ def get_bootdata_kwargs(occamy_cfg, cluster_generators, name):
 
     bootdata_kwargs = {
         "name": name,
-        "boot_addr": hex(occamy_cfg["peripherals"]["rom"]["address"]),
+        "boot_addr": occamy_cfg["peripherals"]["rom"]["address"],
         "core_count": nr_cores_quadrant,
         "hart_id_base": 1,
-        "tcdm_start": hex(cluster_cfg["cluster_base_addr"]),
-        "tcdm_size": hex(cluster_cfg["tcdm"]["size"]*1024),
-        "tcdm_offset": hex(cluster_cfg["cluster_base_offset"]),
-        "global_mem_start": hex(occamy_cfg["spm_wide"]["address"]),
-        "global_mem_end": hex(occamy_cfg["spm_wide"]["address"] + occamy_cfg["spm_wide"]["length"]),
+        "addr_width": occamy_cfg["addr_width"],
+        "chip_id_width": occamy_cfg["hemaia_multichip"]["chip_id_width"],
+        "single_chip": occamy_cfg["hemaia_multichip"]["single_chip"],
+        "single_chip_id": occamy_cfg["hemaia_multichip"]["single_chip_id"],
+        "tcdm_start": cluster_cfg["cluster_base_addr"],
+        "tcdm_size": cluster_cfg["tcdm"]["size"]*1024,
+        "tcdm_offset": cluster_cfg["cluster_base_offset"],
+        "global_mem_start": occamy_cfg["spm_wide"]["address"],
+        "global_mem_end": occamy_cfg["spm_wide"]["address"] + occamy_cfg["spm_wide"]["length"],
         "cluster_count": len(occamy_cfg["clusters"]),
         "s1_quadrant_count": occamy_cfg["nr_s1_quadrant"],
-        "clint_base": hex(occamy_cfg["peripherals"]["clint"]["address"])
+        "clint_base": occamy_cfg["peripherals"]["clint"]["address"]
     }
     return bootdata_kwargs
 
 
-def get_testharness_kwargs(soc_wide_xbar, soc_axi_lite_narrow_periph_xbar, solder, name):
+def get_testharness_kwargs(soc_wide_xbar, soc_axi_lite_narrow_periph_xbar, chip_id, solder, name):
     testharness_kwargs = {
         "name": name,
         "solder": solder,
+        "chip_id": chip_id, 
         "soc_wide_xbar": soc_wide_xbar,
         "soc_axi_lite_narrow_periph_xbar": soc_axi_lite_narrow_periph_xbar
     }

@@ -601,7 +601,7 @@ def main():
     ###############
     if args.testharness_sv:
         testharness_kwargs = occamy.get_testharness_kwargs(
-            soc_wide_xbar, soc_axi_lite_narrow_periph_xbar, solder, name)
+            soc_wide_xbar, soc_axi_lite_narrow_periph_xbar, occamy_cfg["hemaia_multichip"]["single_chip_id"], solder, name)
         write_template(args.testharness_sv, outdir, **testharness_kwargs)
 
     ############
