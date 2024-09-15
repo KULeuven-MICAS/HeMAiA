@@ -2,3 +2,4 @@ testharness.sv
 bootrom.bin
 bootrom.elf
 bootrom.dump
+bootdata.cc
