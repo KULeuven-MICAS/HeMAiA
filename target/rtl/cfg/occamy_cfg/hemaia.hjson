@@ -5,7 +5,9 @@
     remote_quadrants: [],
     // Multi-chip configuration
     hemaia_multichip: {
-      chip_id_width: 8
+      chip_id_width: 8, 
+      single_chip: true,
+      single_chip_id: 0
     }
     addr_width: 48,
     data_width: 64,
