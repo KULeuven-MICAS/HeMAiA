@@ -44,7 +44,7 @@ jobs:
       - name: Compile Bootrom
         run: |
           echo "Compiling Bootrom"
-          make bootrom CFG_OVERRIDE=target/sw/cfg/occamy_cfg/hemaia.hjson
+          make bootrom CFG_OVERRIDE=target/rtl/cfg/occamy_cfg/hemaia.hjson
       - name: Compile SW
         run: |
           echo "Compiling SW"
