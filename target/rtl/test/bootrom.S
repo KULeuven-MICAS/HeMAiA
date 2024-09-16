@@ -40,16 +40,23 @@ _snitch_resume:
 
 # You may use rv64 instuctions in this block.
 _cva6_init:
+    # Load the Chip ID to the register
+    csrr    s0, 0xf15
+    # Transfer as mask by left shift 40 bits
+    slli    s0, s0, 40
     # Set global pointer
     .option push
     .option norelax
     la      gp, __global_pointer$
+    or      gp, gp, s0
     .option pop
     # Set stack pointer
     la      sp, __stack_pointer$
-    la      t2, exception
-    csrw    mtvec, t2
-    lwu     t0, entry_addr
+    or      sp, sp, s0
+    # Set stack pointer at the local
+    la      t1, exception
+    csrw    mtvec, t1
+    la      t0, entry_addr
     jalr    t0
 exception:
     wfi
@@ -59,5 +66,5 @@ exception:
 # as expected by test/common_lib.cc
 .pushsection end, "ax"
 entry_addr:
-.word 0x80000000
+.dword      0x80000000
 device_tree:

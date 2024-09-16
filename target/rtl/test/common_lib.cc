@@ -31,7 +31,7 @@ void Sim::start() {
 
     // Write the entry point of the binary to the last word in the bootloader
     // (which is a placeholder for this data).
-    uint32_t e = get_entry_point();
+    uint64_t e = get_entry_point();
     size_t ep = BOOTDATA.boot_addr + bllen - 4;
     MEM.write(ep, 4, reinterpret_cast<const uint8_t *>(&e), nullptr);
     std::cout << "[fesvr] Wrote entry point 0x" << std::hex << e
