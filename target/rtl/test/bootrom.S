@@ -56,7 +56,7 @@ _cva6_init:
     # Set stack pointer at the local
     la      t1, exception
     csrw    mtvec, t1
-    la      t0, entry_addr
+    ld      t0, entry_addr
     jalr    t0
 exception:
     wfi

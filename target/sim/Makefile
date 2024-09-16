@@ -129,10 +129,10 @@ VLT_FLAGS += --prof-cfuncs # Enable code profiling
 # C testbench #
 ###############
 
-TB_CC_SOURCES  = $(SNITCH_TEST_DIR)/bootrom.cc
-TB_CC_SOURCES += $(SNITCH_TEST_DIR)/ipc.cc
-TB_CC_SOURCES += $(SNITCH_TEST_DIR)/rtl_lib.cc
-TB_CC_SOURCES += $(SNITCH_TEST_DIR)/common_lib.cc
+TB_CC_SOURCES  = $(TARGET_TEST_DIR)/bootrom.cc
+TB_CC_SOURCES += $(TARGET_TEST_DIR)/ipc.cc
+TB_CC_SOURCES += $(TARGET_TEST_DIR)/rtl_lib.cc
+TB_CC_SOURCES += $(TARGET_TEST_DIR)/common_lib.cc
 TB_CC_SOURCES += $(TARGET_TEST_DIR)/bootdata.cc
 TB_CC_SOURCES += $(TARGET_TEST_DIR)/uartdpi/uartdpi.c
 
@@ -142,7 +142,7 @@ TB_CC_FLAGS  = -std=c++17
 TB_CC_FLAGS +=-I$(SIM_MKFILE_DIR)
 TB_CC_FLAGS +=-I$(SIM_MKFILE_DIR)/test
 TB_CC_FLAGS +=-I$(FESVR)/include
-TB_CC_FLAGS +=-I$(SNITCH_TEST_DIR)
+TB_CC_FLAGS +=-I$(TARGET_TEST_DIR)
 TB_CC_FLAGS +=-I$(TARGET_TEST_DIR)/uartdpi
 
 # Required C sources for the verilator TB that are linked against the verilated model
