@@ -190,6 +190,6 @@
             fifo_depth: [2, 2],
         },
 
-        snax_library_name: "streamer-gemm-conv-simd",
+        snax_library_name: "gemmx",
     }
 }

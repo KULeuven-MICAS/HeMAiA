@@ -119,7 +119,7 @@
         xfvec: false,
         snax_acc_cfg: {
             snax_acc_name: "snax_streamer_gemmX",
-            bender_target: ["snax_gemmX"],
+            bender_target: ["snax_gemmX","snax_data_reshuffler"],
             snax_narrow_tcdm_ports: 8,
             snax_wide_tcdm_ports: 48,
             snax_num_rw_csr: 10,
@@ -207,7 +207,7 @@
             fifo_depth: [2, 2],
         },
 
-        snax_library_name: "streamer-gemm-conv-simd",
+        snax_library_name: "gemmx",
     },
     // SNAX Streamer Templates
     snax_data_reshuffler_streamer_template :{
