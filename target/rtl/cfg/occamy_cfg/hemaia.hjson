@@ -7,7 +7,7 @@
     hemaia_multichip: {
       chip_id_width: 8, 
       single_chip: true,
-      single_chip_id: 0
+      single_chip_id: 1
     }
     addr_width: 48,
     data_width: 64,
@@ -113,7 +113,7 @@
       "snax_KUL_cluster",
       "snax_KUL_xdma_cluster",
       "snax_hypercorex_cluster",
-      "snax_alu_cluster"
+      "snax_hypercorex_cluster"
     ],
 
     // peripherals

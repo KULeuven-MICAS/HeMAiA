@@ -41,7 +41,7 @@ bootrom.elf bootrom.dump bootrom.bin: bootrom.S src/bootrom.o bootrom.ld
 	$(OBJCOPY) -j .text -j .rodata -j .srodata -O binary bootrom.elf bootrom.bin
 
 bootrom.sv: bootrom.bin
-	$(BIN2SV) "$(MKFILE_DIR)$<" -m bootrom > bootrom.sv
+	$(BIN2SV) "$(MKFILE_DIR)$<" -m bootrom > $@
 
 clean:
 	rm -rf *.bin *.dump *.elf src/*.o
