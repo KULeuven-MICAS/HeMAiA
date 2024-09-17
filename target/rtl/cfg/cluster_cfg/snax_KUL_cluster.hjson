@@ -119,7 +119,7 @@
         xfvec: false,
         snax_acc_cfg: {
             snax_acc_name: "snax_streamer_gemmX",
-            bender_target: ["snax_gemmX","snax_data_reshuffler"],
+            bender_target: ["snax_gemmX"],
             snax_narrow_tcdm_ports: 8,
             snax_wide_tcdm_ports: 48,
             snax_num_rw_csr: 10,
