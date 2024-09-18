@@ -391,6 +391,12 @@ int main() {
                 golden_inst_loop_count) {
                 err += 1;
             }
+
+            if(err){
+                printf("Error in test! \n");
+            }else{
+                printf("Success! \n");
+            };
         };
 
     };
