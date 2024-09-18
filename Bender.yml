@@ -114,11 +114,12 @@ sources:
       - target/rtl/test/testharness.sv
 
   # target/sim_chip
-  - target: simulation_chip
+  - target: simulation_hemaia
     files:
       - target/rtl/test/uartdpi/uartdpi.sv
       - target/sim_chip/testharness/testharness.sv
-
+      - target/sim/test/bootrom.sv
+      - target/rtl/src/occamy_chip.sv
 
 
   # target/*_chip

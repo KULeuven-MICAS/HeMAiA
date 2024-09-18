@@ -37,20 +37,20 @@ MATCH_END := '/+incdir+/ s/$$/\/*\/*/'
 MATCH_BGN := 's/+incdir+//g'
 SED_SRCS  := sed -e ${MATCH_END} -e ${MATCH_BGN}
 
-VSIM_BENDER   += -t test -t rtl -t simulation -t vsim
+VSIM_BENDER   += -t test -t rtl -t vsim
 VSIM_SOURCES   = $(shell ${BENDER} script flist ${VSIM_BENDER} | ${SED_SRCS})
 VSIM_BUILDDIR ?= work-vsim
 VOPT_FLAGS     = +acc
 
 # VCS_BUILDDIR should to be the same as the `DEFAULT : ./work-vcs`
 # in target/snitch_cluster/synopsys_sim.setup
-VCS_BENDER   += -t test -t rtl -t simulation -t vcs
+VCS_BENDER   += -t test -t rtl -t vcs
 VCS_SOURCES   = $(shell ${BENDER} script flist ${VCS_BENDER} | ${SED_SRCS})
 VCS_BUILDDIR := work-vcs
 
 # For synthesis with DC compiler
 SYN_FLIST ?= syn_flist.tcl
-SYN_BENDER += -t test -t synthesis -t simulation
+SYN_BENDER += -t test -t synthesis
 ifeq ($(MEM_TYPE), exclude_tcsram)
 	VSIM_BENDER += -t tech_cells_generic_exclude_tc_sram
 	SYN_BENDER  += -t tech_cells_generic_exclude_tc_sram

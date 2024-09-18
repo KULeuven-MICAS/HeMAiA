@@ -167,7 +167,7 @@ module testharness
       .rtc_i,
       .chip_id_i('0),
       .test_mode_i(1'b0),
-      .boot_mode_i(1),
+      .boot_mode_i(0),
       .uart_tx_o(tx),
       .uart_rx_i(rx),
       .uart_rts_no(),

@@ -1,7 +1,8 @@
 .PHONY: clean bootrom sw rtl occamy_ip_vcu128 occamy_ip_vcu128_gui occamy_system_vcu128 \
 		occamy_system_vcu128_gui occamy_system_download_sw open_terminal hemaia_system_vivado_preparation \
 		hemaia_chip_vcu128 hemaia_chip_vcu128_gui hemaia_system_vcu128 hemaia_system_vcu128_gui \
-		occamy_system_vlt occamy_system_vsim_preparation occamy_system_vsim
+		occamy_system_vlt occamy_system_vsim_preparation occamy_system_vsim hemaia_system_vsim_preparation \
+		hemaia_system_vsim
 
 MKFILE_PATH := $(abspath $(lastword $(MAKEFILE_LIST)))
 MKFILE_DIR := $(dir $(MKFILE_PATH))
@@ -22,18 +23,17 @@ clean:
 	rm -rf ./target/rtl/src/bender_targets.tmp
 
 # Software Generation
-bootrom: # In Occamy Docker
+bootrom: # In SNAX Docker
 # The bootrom used for simulation (light-weight bootrom)
 	$(MAKE) -C ./target/sim bootrom CFG_OVERRIDE=$(CFG)
 
 # The bootrom used for tapeout / FPGA prototyping (embedded real rom, full-functional bootrom with different frequency settings)
 	$(MAKE) -C ./target/rtl/bootrom bootrom CFG_OVERRIDE=$(CFG)
 
-sw: # In Occamy Docker
+sw: # In SNAX Docker
 	+$(MAKE) -C ./target/sim sw CFG_OVERRIDE=$(CFG)
 
 # The software from simulation and FPGA prototyping comes from one source. 
-# If we intend to download the sodtware to FPGA, the bin should be extracted from elf by objcopy in Occamy docker. 
 
 # Hardware Generation
 rtl: # In SNAX Docker
@@ -96,9 +96,6 @@ hemaia_chip_vivado_gui: # In ESAT Server
 hemaia_system_vivado: hemaia_chip_vivado # In ESAT Server
 	$(MAKE) -C ./target/fpga_chip/hemaia_system hemaia_system
 
-hemaia_system_vcu128_gui: # In ESAT Server
-	sh -c "cd ./target/fpga_chip/hemaia_system/hemaia_system_vcu128/;vivado hemaia_system_vcu128.xpr"
-
 hemaia_system_vivado_gui: # In ESAT Server
 	sh -c "cd ./target/fpga_chip/hemaia_system/hemaia_system/;vivado hemaia_system.xpr"
 
@@ -118,6 +115,8 @@ occamy_system_vsim_preparation: # In SNAX Docker
 occamy_system_vsim: # In ESAT Server
 	$(MAKE) -C ./target/sim bin/occamy_top.vsim
 
-debug-info:
-	@echo "CFG_OVERRIDE: $(CFG_OVERRIDE)"
-	@echo "CFG: $(CFG)"
+hemaia_system_vsim_preparation: # In SNAX Docker
+	$(MAKE) -C ./target/sim_chip work-vsim/compile.vsim.tcl
+
+occamy_system_vsim: # In ESAT Server
+	$(MAKE) -C ./target/sim_chip bin/occamy_chip.vsim
