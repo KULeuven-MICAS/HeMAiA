@@ -47,6 +47,7 @@ include $(ROOT)/target/rtl/Makefile
 REGGEN     ?= $(shell $(BENDER) path register_interface)/vendor/lowrisc_opentitan/util/regtool.py
 OCCAMYGEN  ?= $(ROOT)/util/occamygen/occamygen.py
 ADDRMAPGEN ?= $(ROOT)/util/addrmap/addrmapgen.py
+BIN2SV     ?= $(ROOT)/util/bin2sv.py
 
 CLANG_FORMAT ?= $(shell which clang-format-10.0.1)
 
@@ -166,7 +167,7 @@ endif
 # Boot ROM #
 ############
 
-BOOTROM_TARGETS = test/bootrom.elf test/bootrom.dump test/bootrom.bin test/bootdata.cc
+BOOTROM_TARGETS = test/bootrom.elf test/bootrom.dump test/bootrom.bin test/bootdata.cc test/bootrom.sv
 
 
 # Compiler toolchain
@@ -199,6 +200,9 @@ test/bootrom.dump: test/bootrom.elf
 	$(CVA6_GCC_OBJDUMP) -D $< > $@
 test/bootrom.bin: test/bootrom.elf
 	$(CVA6_GCC_OBJCOPY) -O binary $< $@
+
+test/bootrom.sv: test/bootrom.bin
+	$(BIN2SV) "$(SIM_MKFILE_DIR)$<" -m bootrom > $@
 
 
 
