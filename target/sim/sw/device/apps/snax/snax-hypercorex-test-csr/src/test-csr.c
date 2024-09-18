@@ -392,11 +392,6 @@ int main() {
                 err += 1;
             }
 
-            if(err){
-                printf("Error in test! \n");
-            }else{
-                printf("Success! \n");
-            };
         };
 
     };
