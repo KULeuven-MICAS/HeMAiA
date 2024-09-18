@@ -81,7 +81,11 @@ def get_cluster_cfg_list(occamy_cfg, cluster_cfg_dir):
 
 def generate_snitch(cluster_cfg_dir, snitch_path):
     for cfg in cluster_cfg_dir:
-        subprocess.call(f"make -C {snitch_path}/target/snitch_cluster CFG_OVERRIDE={cfg} rtl-gen", shell=True)
+        try:
+            subprocess.check_call(f"make -C {snitch_path}/target/snitch_cluster CFG_OVERRIDE={cfg} DISABLE_HEADER_GEN=true rtl-gen", shell=True)
+        except subprocess.CalledProcessError as e:
+            print("Error! SNAX gen fails. Check the log.")
+            raise
 
 def generate_wrappers(cluster_generators,out_dir):
     for cluster_generator in cluster_generators:

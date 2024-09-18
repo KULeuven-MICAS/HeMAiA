@@ -29,15 +29,15 @@ int main(int argc, char** argv, char** env) {
         std::cout << "VCD trace enabled. Dumping to sim.vcd..." << std::endl;
     }
 
+    // unsigned long main_time = 0;  // Current simulation time
     unsigned long main_time = 0;  // Current simulation time
-
     // Simulation loop
     while (!Verilated::gotFinish()) {
         top->eval();  // Evaluate the model
         if (tfp)
             tfp->dump(main_time);  // Dump to VCD file if tracing is enabled
-
-        main_time++;  // Increment simulation time
+        Verilated::timeInc(500);   // Increment the simulation time
+        main_time += 500;
     }
 
     // Clean up

@@ -159,7 +159,7 @@ $(VLT_BUILDDIR)/test/uartdpi/uartdpi.o: $(TARGET_TEST_DIR)/uartdpi/uartdpi.c
 # Link verilated archive wich $(VLT_COBJ)
 $(BIN_DIR)/$(TARGET).vlt: $(VLT_AR) $(VLT_COBJ)
 	mkdir -p $(dir $@)
-	$(CXX) $(LDFLAGS) -std=c++17 -L ${VLT_BUILDDIR}/lib -o $@ $(VLT_COBJ) $(VLT_AR) -lpthread
+	$(CXX) $(LDFLAGS) -std=c++17 -L ${VLT_BUILDDIR}/lib -o $@ $(VLT_COBJ) $(VLT_AR) -lpthread -lutil
 
 # Clean all build directories and temporary files for Verilator simulation
 .PHONY: clean-vlt
@@ -182,16 +182,18 @@ $(VSIM_BUILDDIR)/compile.vsim.tcl: $(BENDER_LOCK) | $(VSIM_BUILDDIR)
 $(BIN_DIR):
 	mkdir -p $@
 
+.PHONY: $(BIN_DIR)/occamy_chip.vsim
+
 $(BIN_DIR)/occamy_chip.vsim: $(VSIM_BUILDDIR)/compile.vsim.tcl |$(BIN_DIR)
 	touch $@
 	vsim -c -do "source $<; quit" | tee $(dir $<)vlog.log
 	@! grep -P "Errors: [1-9]*," $(dir $<)vlog.log
-	vopt $(VOPT_FLAGS) -work $(VSIM_BUILDDIR) tb_bin -o tb_bin_opt | tee $(dir $<)vopt.log
+	vopt $(VOPT_FLAGS) -work $(VSIM_BUILDDIR) testharness -o testharness_opt | tee $(dir $<)vopt.log
 	@! grep -P "Errors: [1-9]*," $(dir $<)vopt.log
 	@echo "#!/bin/bash" > $@
 	@echo 'vsim +permissive $(VSIM_FLAGS) $$2 -work $(SIM_MKFILE_DIR)/$(VSIM_BUILDDIR) -c \
-				-ldflags "-Wl,-rpath" \
-				tb_bin_opt +permissive-off ++$$1' >> $@
+				-ldflags "-Wl,-rpath,-L -lutil" \
+				testharness_opt +permissive-off ++$$1' >> $@
 	@# Rename CVA6 trace to align with Snitch trace names
 	@echo "mv ${CVA6_TRACE} $(LOGS_DIR)/trace_hart_00000.txt" >> $@
 	@# Move all other traces to logs folder as well
@@ -199,17 +201,14 @@ $(BIN_DIR)/occamy_chip.vsim: $(VSIM_BUILDDIR)/compile.vsim.tcl |$(BIN_DIR)
 	@chmod +x $@
 	@echo "#!/bin/bash" > $@.gui
 	@echo 'vsim +permissive $(VSIM_FLAGS) -work $(SIM_MKFILE_DIR)/$(VSIM_BUILDDIR) \
-				-ldflags "-Wl,-rpath" \
-				tb_bin_opt +permissive-off ++$$1' >> $@.gui
+				-ldflags "-Wl,-rpath,-L -lutil" \
+				testharness_opt +permissive-off ++$$1' >> $@.gui
 	@echo "mv ${CVA6_TRACE} $(LOGS_DIR)/trace_hart_00000.txt" >> $@.gui
 	@echo "mv *trace*.log $(LOGS_DIR)/" >> $@.gui
 	@chmod +x $@.gui
 
 clean-vsim: clean-work
 	rm -rf $(BIN_DIR)/$(TARGET).vsim $(BIN_DIR)/$(TARGET).vsim.gui $(VSIM_BUILDDIR) vsim.wlf
-# Add dependency on bootrom
-$(BIN_DIR)/$(TARGET).vsim: test/bootrom.bin
-
 
 ########
 # Util #
