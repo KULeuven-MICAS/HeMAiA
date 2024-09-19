@@ -36,6 +36,8 @@ DEVICE_APPS += snax/snax-data-reshuffler
 DEVICE_APPS += snax/snax-streamer-gemm-conv
 DEVICE_APPS += snax/snax-streamer-gemm-conv-simd
 DEVICE_APPS += snax/snax-test-integration
+DEVICE_APPS += snax/snax-hypercorex-test-csr
+DEVICE_APPS += snax/snax-hypercorex-char-recog
 # Dependencies
 INCDIRS += $(RUNTIME_DIR)
 INCDIRS += $(HOST_DIR)/../shared/platform/generated
