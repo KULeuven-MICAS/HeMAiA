@@ -1,0 +1,12 @@
+{
+  K: 2
+  N: 2
+  M: 3
+  bypassSIMD: 1
+  ifTestMatmul: 1
+  transposed_A: 0
+  transposed_B: 0
+  meshRow: 8
+  meshCol: 8
+  tileSize: 8
+}
