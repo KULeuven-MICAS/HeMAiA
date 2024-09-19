@@ -4,3 +4,4 @@
 
 runs:
   - elf: host/apps/offload/build/offload-snax-test-integration.elf
+  - elf: host/apps/offload/build/offload-snax-gemmx.elf
