@@ -66,7 +66,7 @@ The following files are released under Solderpad v0.51 (`SHL-0.51`) see `hw/LICE
 
 ```makefile
 @ Occamy Docker: make bootrom
-@ Occamy Docker: make sw
+@ Occamy Docker: make sw CFG_OVERRIDE=target/rtl/cfg/occamy_cfg/hemaia.hjson (Can be modified to other configurations)
 @ SNAX Docker: make rtl CFG_OVERRIDE=target/rtl/cfg/occamy_cfg/hemaia.hjson (Can be modified to other configurations)
 @ SNAX Docker: make occamy_system_vlt
 @ SNAX Docker: target/sim/bin/occamy_top.vlt [Elf location] [--vcd]
@@ -76,7 +76,7 @@ The following files are released under Solderpad v0.51 (`SHL-0.51`) see `hw/LICE
 
 ```makefile
 @ Occamy Docker: make bootrom
-@ Occamy Docker: make sw
+@ Occamy Docker: make sw CFG_OVERRIDE=target/rtl/cfg/occamy_cfg/hemaia.hjson (Can be modified to other configurations)
 @ SNAX Docker: make rtl CFG_OVERRIDE=target/rtl/cfg/occamy_cfg/hemaia.hjson (Can be modified to other configurations)
 @ SNAX Docker: make occamy_system_vsim_preparation
 @ Barnard3: make occamy_system_vsim
