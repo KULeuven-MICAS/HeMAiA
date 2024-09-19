@@ -108,7 +108,7 @@ sources:
       - target/rtl/src/occamy_xilinx.sv
 
   # target/sim
-  - target: simulation
+  - target: any(simulation,simulation_vlt)
     files:
       - target/rtl/test/uartdpi/uartdpi.sv
       - target/rtl/test/testharness.sv

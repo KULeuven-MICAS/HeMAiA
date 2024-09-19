@@ -16,6 +16,7 @@ clean:
 	$(MAKE) -C ./target/fpga_chip/hemaia_chip/ clean
 	$(MAKE) -C ./target/fpga_chip/hemaia_system/ clean
 	$(MAKE) -C ./target/sim/ clean
+	$(MAKE) -C ./target/sim_chip/ clean
 	$(MAKE) -C ./target/rtl/ clean
 	$(MAKE) -C ./target/fpga/sw clean
 	$(MAKE) -C ./target/tapeout clean

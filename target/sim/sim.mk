@@ -70,7 +70,7 @@ SYN_BUILDDIR := work-syn
 FESVR         ?= ${MKFILE_DIR}work
 FESVR_VERSION ?= 98d2c29e431f3b14feefbda48c5f70c2f451acf2
 
-VLT_BENDER   += -t rtl
+VLT_BENDER   += -t rtl -t simulation_vlt
 VLT_SOURCES   = $(shell ${BENDER} script flist ${VLT_BENDER} | ${SED_SRCS})
 VLT_BUILDDIR := work-vlt
 VLT_FESVR     = $(VLT_BUILDDIR)/riscv-isa-sim

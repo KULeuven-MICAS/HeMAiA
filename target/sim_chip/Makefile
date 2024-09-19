@@ -15,7 +15,7 @@ CFG_OVERRIDE ?=     # Override default config file
 .DEFAULT_GOAL := help
 .PHONY: all clean
 all: rtl sw addrmap
-clean: clean-vsim clean-vlt
+clean: clean-vsim clean-vlt clean-apps
 
 ############
 # Makefrag #
@@ -130,6 +130,16 @@ $(CVA6_ANNOTATED_TRACE): $(CVA6_TXT_TRACE) $(ANNOTATE_PY)
 $(CVA6_DIFF_TRACE): $(CVA6_TXT_TRACE) $(ANNOTATE_PY)
 	$(PYTHON) $(ANNOTATE_PY) $(ANNOTATE_FLAGS) -o $@ $(CVA6_BINARY) $< -d
 
+############
+### Apps ###
+############
+.PHONY: apps clean-apps
+apps: 
+	$(MAKE) -C apps apps
+
+clean-apps:
+	$(MAKE) -C apps clean
+
 #############
 # Verilator #
 #############
@@ -208,7 +218,7 @@ $(BIN_DIR)/occamy_chip.vsim: $(VSIM_BUILDDIR)/compile.vsim.tcl |$(BIN_DIR)
 	@chmod +x $@.gui
 
 clean-vsim: clean-work
-	rm -rf $(BIN_DIR)/$(TARGET).vsim $(BIN_DIR)/$(TARGET).vsim.gui $(VSIM_BUILDDIR) vsim.wlf
+	rm -rf $(BIN_DIR)/$(TARGET).vsim $(BIN_DIR)/$(TARGET).vsim.gui $(VSIM_BUILDDIR) vsim.wlf transcript
 
 ########
 # Util #
