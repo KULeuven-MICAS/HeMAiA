@@ -3,3 +3,4 @@ bootrom.bin
 bootrom.elf
 bootrom.dump
 bootdata.cc
+bootrom.sv

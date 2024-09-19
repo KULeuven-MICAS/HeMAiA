@@ -152,6 +152,18 @@ module testharness
     end
   end
 
+  // Finish Block
+  always @(i_occamy.i_spm_wide_cut.i_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32]) begin
+    if (i_occamy.i_spm_wide_cut.i_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32] != 0) begin
+      if (i_occamy.i_spm_wide_cut.i_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32] == 32'd1) begin
+        $display("Simulation finished at %tns", $time / 1000);
+        $finish;
+      end else begin
+        $error("Simulation finished with errors %d at %tns", i_occamy.i_spm_wide_cut.i_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32], $time / 1000);
+      end
+    end
+  end
+
   logic clk_periph_i, rst_periph_ni;
   assign clk_periph_i  = clk_i;
   assign rst_periph_ni = rst_ni;

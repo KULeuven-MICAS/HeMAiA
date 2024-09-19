@@ -118,5 +118,5 @@ occamy_system_vsim: # In ESAT Server
 hemaia_system_vsim_preparation: # In SNAX Docker
 	$(MAKE) -C ./target/sim_chip work-vsim/compile.vsim.tcl
 
-occamy_system_vsim: # In ESAT Server
+hemaia_system_vsim: # In ESAT Server
 	$(MAKE) -C ./target/sim_chip bin/occamy_chip.vsim
