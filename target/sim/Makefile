@@ -192,7 +192,7 @@ bootrom: $(BOOTROM_TARGETS)
 clean-bootrom:
 	rm -rf $(BOOTROM_TARGETS)
 	
-test/bootdata.cc:
+test/bootdata.cc: $(CFG)
 	@$(OCCAMYGEN) --cfg $(CFG) --bootdata test/bootdata.cc.tpl -o test/
 test/bootrom.elf: test/bootrom.S test/bootrom.ld
 	$(CVA6_GCC_CC) $(CVA6_GCC_BOOTROM_CFLAGS) $(CVA6_GCC_BOOTROM_LDFLAGS) $< -o test/bootrom.elf
