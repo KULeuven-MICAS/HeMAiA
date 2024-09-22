@@ -11,7 +11,7 @@ else
 		FILE=$1
 	fi
 
-	stty -F /dev/ttyUSB1 cs8 1000000 ignbrk -brkint -imaxbel -opost -onlcr -isig -icanon -iexten -echo -echoe -echok -echoctl -echoke noflsh -ixon crtscts
+	stty -F /dev/ttyUSB1 cs8 500000 ignbrk -brkint -imaxbel -opost -onlcr -isig -icanon -iexten -echo -echoe -echok -echoctl -echoke noflsh -ixon crtscts
 
 	echo -n 2 > /dev/ttyUSB1
 

@@ -155,7 +155,7 @@ void bootrom()
     uint64_t end_address;
 
     char in_buf[8];
-    init_uart(16, 1);
+    init_uart(32, 1);
 
     while (1)
     {
