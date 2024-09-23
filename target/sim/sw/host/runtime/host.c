@@ -4,6 +4,7 @@
 
 #include "host.h"
 
+#include "chip_id.h"
 #include "heterogeneous_runtime.h"
 #include "occamy.h"
 #include "sys_dma.h"
@@ -73,7 +74,8 @@ volatile comm_buffer_t comm_buffer __attribute__((aligned(8)));
 // Anticipated function declarations
 //===============================================================
 
-static inline void set_sw_interrupts_unsafe(uint32_t base_hartid,
+static inline void set_sw_interrupts_unsafe(uint8_t chip_id,
+                                            uint32_t base_hartid,
                                             uint32_t num_harts,
                                             uint32_t stride);
 
@@ -103,9 +105,9 @@ void initialize_wide_spm() {
 void enable_fpu() {
     uint64_t mstatus;
 
-    asm volatile("csrr %[mstatus], mstatus" : [ mstatus ] "=r"(mstatus));
+    asm volatile("csrr %[mstatus], mstatus" : [mstatus] "=r"(mstatus));
     mstatus |= (1 << MSTATUS_FS_OFFSET);
-    asm volatile("csrw mstatus, %[mstatus]" : : [ mstatus ] "r"(mstatus));
+    asm volatile("csrw mstatus, %[mstatus]" : : [mstatus] "r"(mstatus));
 }
 
 void set_d_cache_enable(uint16_t ena) {
@@ -167,7 +169,9 @@ static inline void mutex_release(volatile uint32_t* pmtx) {
 
 extern void snitch_main();
 
-static inline void wakeup_snitch(uint32_t hartid) { set_sw_interrupt(hartid); }
+static inline void wakeup_snitch(uint8_t chip_id, uint32_t hartid) {
+    set_sw_interrupt(chip_id, hartid);
+}
 
 /**
  * @brief Waits until snitches are parked in a `wfi` instruction
@@ -212,11 +216,11 @@ static inline void wakeup_cluster(uint32_t cluster_id) {
  *         must be issued to "unpark" every Snitch. This function
  *         sends a SW interrupt to all Snitches.
  */
-void wakeup_snitches() {
+void wakeup_snitches(uint8_t chip_id) {
     volatile uint32_t* lock = get_shared_lock();
 
     mutex_ttas_acquire(lock);
-    set_sw_interrupts_unsafe(1, N_SNITCHES, 1);
+    set_sw_interrupts_unsafe(chip_id, 1, N_SNITCHES, 1);
     mutex_release(lock);
 }
 
@@ -236,12 +240,12 @@ static inline void wakeup_snitches_cl() {
  *         must be issued to "unpark" every Snitch. This function
  *         sends a SW interrupt to a given range of Snitches.
  */
-void wakeup_snitches_selective(uint32_t base_hartid, uint32_t num_harts,
-                               uint32_t stride) {
+void wakeup_snitches_selective(uint8_t chip_id, uint32_t base_hartid,
+                               uint32_t num_harts, uint32_t stride) {
     volatile uint32_t* lock = get_shared_lock();
 
     mutex_ttas_acquire(lock);
-    set_sw_interrupts_unsafe(base_hartid, num_harts, stride);
+    set_sw_interrupts_unsafe(chip_id, base_hartid, num_harts, stride);
     mutex_release(lock);
 }
 
@@ -270,10 +274,15 @@ void wakeup_snitches_selective(uint32_t base_hartid, uint32_t num_harts,
 /**
  * @brief Waits until snitches are done executing
  */
-static inline int wait_snitches_done() {
+static inline int wait_snitches_done(uint8_t chip_id) {
     wait_sw_interrupt();
-    clear_host_sw_interrupt();
-    int retval = *soc_ctrl_scratch_ptr(3);
+    uint8_t current_chip_id = get_current_chip_id();
+    clear_host_sw_interrupt(current_chip_id);
+
+    uintptr_t baseaddress = (uintptr_t)get_chip_baseaddress(chip_id);
+    uint32_t* retval_ptr =
+        (uint32_t*)((uintptr_t)soc_ctrl_scratch_ptr(3) | baseaddress);
+    int retval = *retval_ptr;
     // LSB signals completion
     if (retval & 1)
         return retval >> 1;
@@ -289,23 +298,32 @@ static inline volatile uint32_t* get_shared_lock() {
 // Reset and clock gating
 //===============================================================
 
-static inline void set_clk_ena_quad(uint32_t quad_idx, uint32_t value) {
-    *quad_cfg_clk_ena_ptr(quad_idx) = value & 0x1;
+static inline void set_clk_ena_quad(uint8_t chip_id, uint32_t quad_idx,
+                                    uint32_t value) {
+    uint32_t* clk_ena_ptr =
+        (uint32_t*)((uintptr_t)quad_cfg_clk_ena_ptr(quad_idx) |
+                    (uintptr_t)get_chip_baseaddress(chip_id));
+    *clk_ena_ptr = value & 0x1;
 }
 
-static inline void set_reset_n_quad(uint32_t quad_idx, uint32_t value) {
-    *quad_cfg_reset_n_ptr(quad_idx) = value & 0x1;
+static inline void set_reset_n_quad(uint8_t chip_id, uint32_t quad_idx,
+                                    uint32_t value) {
+    uint32_t* reset_n_ptr =
+        (uint32_t*)((uintptr_t)quad_cfg_reset_n_ptr(quad_idx) |
+                    (uintptr_t)get_chip_baseaddress(chip_id));
+    *reset_n_ptr = value & 0x1;
 }
 
-static inline void reset_and_ungate_quad(uint32_t quadrant_idx) {
-    set_reset_n_quad(quadrant_idx, 0);
-    set_clk_ena_quad(quadrant_idx, 0);
-    set_reset_n_quad(quadrant_idx, 1);
-    set_clk_ena_quad(quadrant_idx, 1);
+static inline void reset_and_ungate_quad(uint8_t chip_id,
+                                         uint32_t quadrant_idx) {
+    set_reset_n_quad(chip_id, quadrant_idx, 0);
+    set_clk_ena_quad(chip_id, quadrant_idx, 0);
+    set_reset_n_quad(chip_id, quadrant_idx, 1);
+    set_clk_ena_quad(chip_id, quadrant_idx, 1);
 }
 
-static inline void reset_and_ungate_quadrants() {
-    for (int i = 0; i < N_QUADS; i++) reset_and_ungate_quad(i);
+static inline void reset_and_ungate_quadrants(uint8_t chip_id) {
+    for (int i = 0; i < N_QUADS; i++) reset_and_ungate_quad(chip_id, i);
 }
 
 //===============================================================
@@ -317,15 +335,19 @@ static inline void wfi() { asm volatile("wfi"); }
 static inline void enable_sw_interrupts() {
     uint64_t mie;
 
-    asm volatile("csrr %[mie], mie" : [ mie ] "=r"(mie));
+    asm volatile("csrr %[mie], mie" : [mie] "=r"(mie));
     mie |= (1 << MIE_MSIE_OFFSET);
-    asm volatile("csrw mie, %[mie]" : : [ mie ] "r"(mie));
+    asm volatile("csrw mie, %[mie]" : : [mie] "r"(mie));
 }
 
-static inline uint32_t get_clint_msip_hart(uint32_t hartid) {
+static inline uint32_t get_clint_msip_hart(uint8_t chip_id, uint32_t hartid) {
+    uintptr_t base_addr = (uintptr_t)get_chip_baseaddress(chip_id);
     uint32_t field_offset = hartid % CLINT_MSIP_P_FIELDS_PER_REG;
     uint32_t lsb_offset = field_offset * CLINT_MSIP_P_FIELD_WIDTH;
-    return (*clint_msip_ptr(hartid) >> lsb_offset) & 1;
+    return (*(volatile uint32_t*)((uintptr_t)clint_msip_ptr(hartid) |
+                                  base_addr) >>
+            lsb_offset) &
+           1;
 }
 
 /**
@@ -339,30 +361,31 @@ static inline uint32_t get_clint_msip_hart(uint32_t hartid) {
 static inline uint32_t sw_interrupt_pending() {
     uint64_t mip;
 
-    asm volatile("csrr %[mip], mip" : [ mip ] "=r"(mip));
+    asm volatile("csrr %[mip], mip" : [mip] "=r"(mip));
     return mip & (1 << MIP_MSIP_OFFSET);
 }
 
 // TODO: for portability to architectures where WFI is implemented as a NOP
 //       also sw_interrupts_enabled() should be checked
 static inline void wait_sw_interrupt() {
-    do
-        wfi();
+    do wfi();
     while (!sw_interrupt_pending());
 }
 
-static inline void clear_sw_interrupt_unsafe(uint32_t hartid) {
+static inline void clear_sw_interrupt_unsafe(uint8_t chip_id, uint32_t hartid) {
+    uintptr_t base_addr = (uintptr_t)get_chip_baseaddress(chip_id);
     uint32_t field_offset = hartid % CLINT_MSIP_P_FIELDS_PER_REG;
     uint32_t lsb_offset = field_offset * CLINT_MSIP_P_FIELD_WIDTH;
 
-    *clint_msip_ptr(hartid) &= ~(1 << lsb_offset);
+    *(volatile uint32_t*)((uintptr_t)clint_msip_ptr(hartid) | base_addr) &=
+        ~(1 << lsb_offset);
 }
 
-static inline void clear_sw_interrupt(uint32_t hartid) {
+static inline void clear_sw_interrupt(uint8_t chip_id, uint32_t hartid) {
     volatile uint32_t* shared_lock = get_shared_lock();
 
     mutex_tas_acquire(shared_lock);
-    clear_sw_interrupt_unsafe(hartid);
+    clear_sw_interrupt_unsafe(chip_id, hartid);
     mutex_release(shared_lock);
 }
 
@@ -374,35 +397,41 @@ static inline void clear_sw_interrupt(uint32_t hartid) {
  *         status. That function interrogates a local CSR
  *         instead of the shared CLINT.
  */
-static inline uint32_t remote_sw_interrupt_pending(uint32_t hartid) {
-    return get_clint_msip_hart(hartid);
+static inline uint32_t remote_sw_interrupt_pending(uint8_t chip_id,
+                                                   uint32_t hartid) {
+    return get_clint_msip_hart(chip_id, hartid);
 }
 
 static inline uint32_t timer_interrupts_enabled() {
     uint64_t mie;
-    asm volatile("csrr %[mie], mie" : [ mie ] "=r"(mie));
+    asm volatile("csrr %[mie], mie" : [mie] "=r"(mie));
     return (mie >> MIE_MTIE_OFFSET) & 1;
 }
 
-static inline void set_sw_interrupt_unsafe(uint32_t hartid) {
+static inline void set_sw_interrupt_unsafe(uint8_t chip_id, uint32_t hartid) {
+    uintptr_t base_addr = (uintptr_t)get_chip_baseaddress(chip_id);
     uint32_t field_offset = hartid % CLINT_MSIP_P_FIELDS_PER_REG;
     uint32_t lsb_offset = field_offset * CLINT_MSIP_P_FIELD_WIDTH;
 
-    *clint_msip_ptr(hartid) |= (1 << lsb_offset);
+    *(volatile uint32_t*)((uintptr_t)clint_msip_ptr(hartid) | base_addr) |=
+        (1 << lsb_offset);
 }
 
-void set_sw_interrupt(uint32_t hartid) {
+void set_sw_interrupt(uint8_t chip_id, uint32_t hartid) {
     volatile uint32_t* shared_lock = get_shared_lock();
 
     mutex_ttas_acquire(shared_lock);
-    set_sw_interrupt_unsafe(hartid);
+    set_sw_interrupt_unsafe(chip_id, hartid);
     mutex_release(shared_lock);
 }
 
-static inline void set_sw_interrupts_unsafe(uint32_t base_hartid,
+static inline void set_sw_interrupts_unsafe(uint8_t chip_id,
+                                            uint32_t base_hartid,
                                             uint32_t num_harts,
                                             uint32_t stride) {
-    volatile uint32_t* ptr = clint_msip_ptr(base_hartid);
+    uintptr_t base_addr = (uintptr_t)get_chip_baseaddress(chip_id);
+    volatile uint32_t* ptr =
+        (uint32_t*)((uintptr_t)clint_msip_ptr(base_hartid) | base_addr);
 
     uint32_t num_fields = num_harts;
     uint32_t field_idx = base_hartid;
@@ -441,53 +470,53 @@ static inline void set_sw_interrupts_unsafe(uint32_t base_hartid,
     *ptr |= mask;
 }
 
-void set_cluster_interrupt(uint32_t cluster_id, uint32_t core_id) {
-    *(cluster_clint_set_ptr(cluster_id)) = (1 << core_id);
+void set_cluster_interrupt(uint8_t chip_id, uint32_t cluster_id, uint32_t core_id) {
+    uintptr_t base_addr = (uintptr_t)get_chip_baseaddress(chip_id);
+    *(volatile uint32_t*)((uintptr_t)cluster_clint_set_ptr(cluster_id) | base_addr) = (1 << core_id);
 }
 
 static inline uint32_t timer_interrupt_pending() {
     uint64_t mip;
 
-    asm volatile("csrr %[mip], mip" : [ mip ] "=r"(mip));
+    asm volatile("csrr %[mip], mip" : [mip] "=r"(mip));
     return mip & (1 << MIP_MTIP_OFFSET);
 }
 
 void wait_timer_interrupt() {
-    do
-        wfi();
+    do wfi();
     while (!timer_interrupt_pending() && timer_interrupts_enabled());
 }
 
 void enable_global_interrupts() {
     uint64_t mstatus;
 
-    asm volatile("csrr %[mstatus], mstatus" : [ mstatus ] "=r"(mstatus));
+    asm volatile("csrr %[mstatus], mstatus" : [mstatus] "=r"(mstatus));
     mstatus |= (1 << MSTATUS_MIE_OFFSET);
-    asm volatile("csrw mstatus, %[mstatus]" : : [ mstatus ] "r"(mstatus));
+    asm volatile("csrw mstatus, %[mstatus]" : : [mstatus] "r"(mstatus));
 }
 
 void enable_timer_interrupts() {
     uint64_t mie;
 
-    asm volatile("csrr %[mie], mie" : [ mie ] "=r"(mie));
+    asm volatile("csrr %[mie], mie" : [mie] "=r"(mie));
     mie |= (1 << MIE_MTIE_OFFSET);
-    asm volatile("csrw mie, %[mie]" : : [ mie ] "r"(mie));
+    asm volatile("csrw mie, %[mie]" : : [mie] "r"(mie));
 }
 
 void disable_timer_interrupts() {
     uint64_t mie;
 
-    asm volatile("csrr %[mie], mie" : [ mie ] "=r"(mie));
+    asm volatile("csrr %[mie], mie" : [mie] "=r"(mie));
     mie &= ~(1 << MIE_MTIE_OFFSET);
-    asm volatile("csrw mie, %[mie]" : : [ mie ] "r"(mie));
+    asm volatile("csrw mie, %[mie]" : : [mie] "r"(mie));
 }
 
 void disable_sw_interrupts() {
     uint64_t mie;
 
-    asm volatile("csrr %[mie], mie" : [ mie ] "=r"(mie));
+    asm volatile("csrr %[mie], mie" : [mie] "=r"(mie));
     mie &= ~(1 << MIE_MSIE_OFFSET);
-    asm volatile("csrw mie, %[mie]" : : [ mie ] "r"(mie));
+    asm volatile("csrw mie, %[mie]" : : [mie] "r"(mie));
 }
 
 /**
@@ -498,10 +527,7 @@ void disable_sw_interrupts() {
  *         status. This avoids unnecessary congestion on the
  *         interconnect and shared CLINT.
  */
-void wait_sw_interrupt_cleared() {
-    while (sw_interrupt_pending())
-        ;
-}
+void wait_sw_interrupt_cleared() { while (sw_interrupt_pending()); }
 
 /**
  * @brief Gets SW interrupt pending status from shared CLINT
@@ -511,9 +537,8 @@ void wait_sw_interrupt_cleared() {
  *         status. That function polls a local CSR instead
  *         of the shared CLINT.
  */
-void wait_remote_sw_interrupt_pending(uint32_t hartid) {
-    while (remote_sw_interrupt_pending(hartid))
-        ;
+void wait_remote_sw_interrupt_pending(uint8_t chip_id, uint32_t hartid) {
+    while (remote_sw_interrupt_pending(chip_id, hartid));
 }
 
 //===============================================================
@@ -528,14 +553,20 @@ static inline uint64_t mcycle() {
     return r;
 }
 
-static inline uint64_t mtime() { return *clint_mtime_ptr; }
+static inline uint64_t mtime(uint8_t chip_id) {
+    uintptr_t base_addr = (uintptr_t)get_chip_baseaddress(chip_id);
+    return *(volatile uint64_t*)((uintptr_t)clint_mtime_ptr | base_addr);
+}
 
-void set_timer_interrupt(uint64_t interval_ns) {
+void set_timer_interrupt(uint8_t chip_id, uint64_t interval_ns) {
     // Convert ns to RTC unit
     uint64_t rtc_interval = interval_ns / (int64_t)rtc_period;
 
-    // Offset interval by current time
-    *clint_mtimecmp0_ptr = mtime() + rtc_interval;
+    // Calculate the base address for the chip
+    uintptr_t base_addr = (uintptr_t)get_chip_baseaddress(chip_id);
+
+    // Offset interval by current time and set the timer interrupt
+    *(volatile uint64_t*)((uintptr_t)clint_mtimecmp0_ptr | base_addr) = mtime(chip_id) + rtc_interval;
 }
 
 /**
@@ -548,11 +579,15 @@ void set_timer_interrupt(uint64_t interval_ns) {
  *         the pending bit. If this is not desired, it is safer
  *         to disable the timer interrupt before clearing it.
  */
-void clear_timer_interrupt() { *clint_mtimecmp0_ptr = mtime() + 1; }
+void clear_timer_interrupt(uint8_t chip_id) {
+    uintptr_t base_addr = (uintptr_t)get_chip_baseaddress(chip_id);
+    *(volatile uint64_t*)((uintptr_t)clint_mtimecmp0_ptr | base_addr) = mtime(chip_id) + 1;
+}
 
 // Minimum delay is of one RTC period
 void delay_ns(uint64_t delay) {
-    set_timer_interrupt(delay);
+    uint8_t chip_id = get_current_chip_id();
+    set_timer_interrupt(chip_id, delay);
 
     // Wait for set_timer_interrupt() to have effect
     fence();
@@ -560,7 +595,7 @@ void delay_ns(uint64_t delay) {
 
     wait_timer_interrupt();
     disable_timer_interrupts();
-    clear_timer_interrupt();
+    clear_timer_interrupt(chip_id);
 }
 
 //===============================================================
@@ -682,8 +717,10 @@ void delay_ns(uint64_t delay) {
 uint32_t const ISO_MASK_ALL = 0b1111;
 uint32_t const ISO_MASK_NONE = 0;
 
-static inline void deisolate_quad(uint32_t quad_idx, uint32_t iso_mask) {
-    *quad_cfg_isolate_ptr(quad_idx) &= ~iso_mask;
+static inline void deisolate_quad(uint8_t chip_id, uint32_t quad_idx, uint32_t iso_mask) {
+    uintptr_t base_addr = (uintptr_t)get_chip_baseaddress(chip_id);
+    volatile uint32_t* isolate_ptr = (volatile uint32_t*)((uintptr_t)quad_cfg_isolate_ptr(quad_idx) | base_addr);
+    *isolate_ptr &= ~iso_mask;
 }
 
 /**
@@ -691,17 +728,22 @@ static inline void deisolate_quad(uint32_t quad_idx, uint32_t iso_mask) {
  *
  * @return Masked register field realigned to start at LSB
  */
-static inline uint32_t get_quad_cfg_isolated(uint32_t quad_idx) {
-    return *quad_cfg_isolated_ptr(quad_idx) & ISO_MASK_ALL;
+static inline uint32_t get_quad_cfg_isolated(uint8_t chip_id, uint32_t quad_idx) {
+    uintptr_t base_addr = (uintptr_t)get_chip_baseaddress(chip_id);
+    return *(volatile uint32_t*)((uintptr_t)quad_cfg_isolated_ptr(quad_idx) | base_addr) & ISO_MASK_ALL;
 }
 
-void isolate_quad(uint32_t quad_idx, uint32_t iso_mask) {
-    *quad_cfg_isolate_ptr(quad_idx) |= iso_mask;
+void isolate_quad(uint8_t chip_id, uint32_t quad_idx, uint32_t iso_mask) {
+    uintptr_t base_addr = (uintptr_t)get_chip_baseaddress(chip_id);
+    volatile uint32_t* isolate_ptr = (volatile uint32_t*)((uintptr_t)quad_cfg_isolate_ptr(quad_idx) | base_addr);
+    *isolate_ptr |= iso_mask;
     fence();
 }
 
-static inline void deisolate_all() {
-    for (uint32_t i = 0; i < N_QUADS; ++i) deisolate_quad(i, ISO_MASK_ALL);
+static inline void deisolate_all(uint8_t chip_id) {
+    for (uint32_t i = 0; i < N_QUADS; ++i) {
+        deisolate_quad(chip_id, i, ISO_MASK_ALL);
+    }
 }
 
 /**
@@ -710,10 +752,12 @@ static inline void deisolate_all() {
  * @param iso_mask set bit to 1 to check if path is isolated, 0 de-isolated
  * @return 1 is check passes, 0 otherwise
  */
-uint32_t check_isolated_timeout(uint32_t max_tries, uint32_t quadrant_idx,
-                                uint32_t iso_mask) {
-    for (uint32_t i = 0; i < max_tries; ++i)
-        if (get_quad_cfg_isolated(quadrant_idx) == iso_mask) return 1;
+uint32_t check_isolated_timeout(uint8_t chip_id, uint32_t max_tries, uint32_t quadrant_idx, uint32_t iso_mask) {
+    for (uint32_t i = 0; i < max_tries; ++i) {
+        if (get_quad_cfg_isolated(chip_id, quadrant_idx) == iso_mask) {
+            return 1;
+        }
+    }
     return 0;
 }
 
