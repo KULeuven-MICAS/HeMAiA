@@ -6,8 +6,9 @@
 
 int main() {
     // Reset and ungate all quadrants, deisolate
-    init_uart(50000000, 1000000);
-    print_uart("[Occamy] The Offload main function \r\n");
+    uintptr_t address_prefix = (uintptr_t)get_current_chip_baseaddress();
+    init_uart(address_prefix, 50000000, 1000000);
+    print_str(address_prefix, "[Occamy] The Offload main function \r\n");
     reset_and_ungate_quadrants();
     deisolate_all();
 
@@ -21,16 +22,16 @@ int main() {
     // programmed before Snitches are woken up
     asm volatile("" ::: "memory");
 
-    print_uart("[Occamy] Calling snitch cluster to execute the task \r\n");
+    print_str(address_prefix, "[Occamy] Calling snitch cluster to execute the task \r\n");
 
     // Start Snitches
     wakeup_snitches_cl();
 
     int ret = wait_snitches_done();
 
-    print_uart("[Occamy] Snitch cluster done with exit code ");
-    print_uart_int(ret);
-    print_uart("\r\n");
+    print_str(print_str, "[Occamy] Snitch cluster done with exit code ");
+    print_u32(print_str, ret);
+    print_str(print_str, "\r\n");
 
     // Wait for job done and return Snitch exit code
     return ret;

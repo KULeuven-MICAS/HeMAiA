@@ -47,6 +47,7 @@ extern "C" {
 #include <stdint.h>
 
 #include "occamy_memory_map.h"
+#include "chip_id.h"
 
 #define IDMA_SRC_ADDR \
     (SYS_IDMA_CFG_BASE_ADDR + IDMA_REG64_FRONTEND_SRC_ADDR_REG_OFFSET)
@@ -68,25 +69,32 @@ extern "C" {
 #define IDMA_CONF_SERIALIZE 0
 
 inline volatile uint64_t *sys_dma_src_ptr(void) {
-    return (volatile uint64_t *)IDMA_SRC_ADDR;
+    return (volatile uint64_t *)(IDMA_SRC_ADDR |
+                                 (uint64_t)get_current_chip_baseaddress());
 }
 inline volatile uint64_t *sys_dma_dst_ptr(void) {
-    return (volatile uint64_t *)IDMA_DST_ADDR;
+    return (volatile uint64_t *)(IDMA_DST_ADDR |
+                                 (uint64_t)get_current_chip_baseaddress());
 }
 inline volatile uint64_t *sys_dma_num_bytes_ptr(void) {
-    return (volatile uint64_t *)IDMA_NUMBYTES_ADDR;
+    return (volatile uint64_t *)(IDMA_NUMBYTES_ADDR |
+                                 (uint64_t)get_current_chip_baseaddress());
 }
 inline volatile uint64_t *sys_dma_conf_ptr(void) {
-    return (volatile uint64_t *)IDMA_CONF_ADDR;
+    return (volatile uint64_t *)(IDMA_CONF_ADDR |
+                                 (uint64_t)get_current_chip_baseaddress());
 }
 inline volatile uint64_t *sys_dma_status_ptr(void) {
-    return (volatile uint64_t *)IDMA_STATUS_ADDR;
+    return (volatile uint64_t *)(IDMA_STATUS_ADDR |
+                                 (uint64_t)get_current_chip_baseaddress());
 }
 inline volatile uint64_t *sys_dma_nextid_ptr(void) {
-    return (volatile uint64_t *)IDMA_NEXTID_ADDR;
+    return (volatile uint64_t *)(IDMA_NEXTID_ADDR |
+                                 (uint64_t)get_current_chip_baseaddress());
 }
 inline volatile uint64_t *sys_dma_done_ptr(void) {
-    return (volatile uint64_t *)IDMA_DONE_ADDR;
+    return (volatile uint64_t *)(IDMA_DONE_ADDR |
+                                 (uint64_t)get_current_chip_baseaddress());
 }
 
 inline uint64_t sys_dma_memcpy(uint64_t dst, uint64_t src, uint64_t size) {
