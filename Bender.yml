@@ -30,8 +30,8 @@ dependencies:
   opentitan_peripherals:  { path: hw/vendor/pulp_platform_opentitan_peripherals                             }
   register_interface:     { git:  https://github.com/pulp-platform/register_interface.git, version: 0.3.8   }
   snitch_cluster:         { git:  https://github.com/KULeuven-MICAS/snax_cluster.git,      rev:        main }
-  tech_cells_generic:     { git:  https://github.com/pulp-platform/tech_cells_generic.git, rev:     v0.2.11 }
-  cluster_icache:         { git:  https://github.com/pulp-platform/cluster_icache.git,     version: 0.1.0 }
+  tech_cells_generic:     { git:  https://github.com/pulp-platform/tech_cells_generic.git, version: 0.2.13 }
+  cluster_icache:         { git:  https://github.com/KULeuven-MICAS/cluster_icache.git,     rev:  main }
 
 workspace:
   package_links:
@@ -43,13 +43,6 @@ export_include_dirs:
 sources:
   # future
   - hw/future/reg_to_apb.sv
-  # snitch_read_only_cache
-  - hw/snitch_read_only_cache/src/snitch_axi_to_cache.sv
-  - hw/snitch_read_only_cache/src/snitch_read_only_cache.sv
-
-  - target: test
-    files:
-      - hw/snitch_read_only_cache/test/snitch_read_only_cache_tb.sv
 
   # spm_interface
   - files:
