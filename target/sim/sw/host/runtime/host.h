@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-static inline void set_sw_interrupt(uint32_t hartid);
+static inline void set_sw_interrupt(uint8_t chip_id, uint32_t hartid);
 
 void delay_ns(uint64_t delay);
 
@@ -13,4 +13,4 @@ static inline volatile uint32_t* get_shared_lock();
 
 static inline void wait_sw_interrupt();
 
-static inline void clear_sw_interrupt(uint32_t hartid);
+static inline void clear_sw_interrupt(uint8_t chip_id, uint32_t hartid);

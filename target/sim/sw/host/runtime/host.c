@@ -1,14 +1,13 @@
 // Copyright 2022 ETH Zurich and University of Bologna.
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
-
 #include "host.h"
-
 #include "chip_id.h"
-#include "heterogeneous_runtime.h"
 #include "occamy.h"
 #include "sys_dma.h"
 #include "uart.h"
+
+#include "heterogeneous_runtime.h"
 
 // Handle multireg degeneration to single register
 #if OCCAMY_SOC_ISOLATE_MULTIREG_COUNT == 1
@@ -194,9 +193,10 @@ void wait_snitches_parked(uint32_t timeout) { delay_ns(100000); }
  *         This routine programs the soc_ctrl_scratch_0 register
  *         with the address of the user binary.
  */
-static inline void program_snitches() {
-    *soc_ctrl_scratch_ptr(1) = (uintptr_t)snitch_main;
-    *soc_ctrl_scratch_ptr(2) = (uintptr_t)&comm_buffer;
+static inline void program_snitches(uint8_t chip_id) {
+    uintptr_t base_addr = (uintptr_t)get_chip_baseaddress(chip_id);
+    *(volatile uint32_t*)((uintptr_t)soc_ctrl_scratch_ptr(1) | base_addr) = (uintptr_t)snitch_main;
+    *(volatile uint32_t*)((uintptr_t)soc_ctrl_scratch_ptr(2) | base_addr) = (uintptr_t)&comm_buffer;
 }
 
 /**
@@ -205,8 +205,9 @@ static inline void program_snitches() {
  * @detail Send a cluster interrupt to all Snitches in a cluster
  */
 
-static inline void wakeup_cluster(uint32_t cluster_id) {
-    *(cluster_clint_set_ptr(cluster_id)) = 511;
+static inline void wakeup_cluster(uint8_t chip_id, uint32_t cluster_id) {
+    uintptr_t base_addr = (uintptr_t)get_chip_baseaddress(chip_id);
+    *(volatile uint32_t*)((uintptr_t)cluster_clint_set_ptr(cluster_id) | base_addr) = 511;
 }
 
 /**
@@ -229,8 +230,8 @@ void wakeup_snitches(uint8_t chip_id) {
  *
  * @detail Send a cluster interrupt to all Snitches
  */
-static inline void wakeup_snitches_cl() {
-    for (int i = 0; i < N_CLUSTERS; i++) wakeup_cluster(i);
+static inline void wakeup_snitches_cl(uint8_t chip_id) {
+    for (int i = 0; i < N_CLUSTERS; i++) wakeup_cluster(chip_id, i);
 }
 
 /**

@@ -7,16 +7,18 @@
 int main() {
     // Reset and ungate all quadrants, deisolate
     uintptr_t address_prefix = (uintptr_t)get_current_chip_baseaddress();
+    uint32_t chip_id = get_current_chip_id();
+
     init_uart(address_prefix, 50000000, 1000000);
     print_str(address_prefix, "[Occamy] The Offload main function \r\n");
-    reset_and_ungate_quadrants();
-    deisolate_all();
+    reset_and_ungate_quadrants(chip_id);
+    deisolate_all(chip_id);
 
     // Enable interrupts to receive notice of job termination
     enable_sw_interrupts();
 
     // Program Snitch entry point and communication buffer
-    program_snitches();
+    program_snitches(chip_id);
 
     // Compiler fence to ensure Snitch entry point is
     // programmed before Snitches are woken up
@@ -25,13 +27,13 @@ int main() {
     print_str(address_prefix, "[Occamy] Calling snitch cluster to execute the task \r\n");
 
     // Start Snitches
-    wakeup_snitches_cl();
+    wakeup_snitches_cl(chip_id);
 
-    int ret = wait_snitches_done();
+    int ret = wait_snitches_done(chip_id);
 
-    print_str(print_str, "[Occamy] Snitch cluster done with exit code ");
-    print_u32(print_str, ret);
-    print_str(print_str, "\r\n");
+    print_str(address_prefix, "[Occamy] Snitch cluster done with exit code ");
+    print_u32(address_prefix, ret);
+    print_str(address_prefix, "\r\n");
 
     // Wait for job done and return Snitch exit code
     return ret;
