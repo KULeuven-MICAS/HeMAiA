@@ -1,7 +1,7 @@
   snitch_read_only_cache #(
     .LineWidth (${cfg["width"]}),
     .LineCount (${cfg["count"]}),
-    .SetCount (${cfg["sets"]}),
+    .WayCount (${cfg["sets"]}),
     .AxiAddrWidth (${axi_in.aw}),
     .AxiDataWidth (${axi_in.dw}),
     .AxiIdWidth (${axi_in.iw}),

@@ -634,12 +634,15 @@ def get_bootdata_kwargs(occamy_cfg, cluster_generators, name):
     return bootdata_kwargs
 
 
-def get_testharness_kwargs(soc_wide_xbar, soc_axi_lite_narrow_periph_xbar, solder, name):
+def get_testharness_kwargs(soc_wide_xbar, soc_axi_lite_narrow_periph_xbar, solder, occamy_cfg, util, flag, name):
     testharness_kwargs = {
         "name": name,
         "solder": solder,
         "soc_wide_xbar": soc_wide_xbar,
-        "soc_axi_lite_narrow_periph_xbar": soc_axi_lite_narrow_periph_xbar
+        "soc_axi_lite_narrow_periph_xbar": soc_axi_lite_narrow_periph_xbar,
+        "occamy_cfg": occamy_cfg,
+        "util": util,
+        "flag": flag
     }
     return testharness_kwargs
 

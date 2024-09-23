@@ -44,7 +44,7 @@ import ${name}_pkg::*;
   output logic [1:0]  spim_csb_o,
   inout  logic [3:0]  spim_sd_io,
 
-  input  logic [11:0] ext_irq_i
+  input  logic [12:0] ext_irq_i
 );
 
   /////////////////////////
@@ -109,7 +109,7 @@ import ${name}_pkg::*;
     .be_i (spm_wide_strb),
     .rdata_o (spm_wide_rdata),
     .rvalid_o (spm_wide_rvalid),
-    .rerror_o (spm_wide_rerror_o),
+    .rerror_o (),
     .sram_cfg_i ('0)
   );
 
@@ -126,7 +126,7 @@ import ${name}_pkg::*;
     .clk_i(clk_i), 
     .rst_ni(rst_ni), 
     .req_i(bootrom_req.valid), 
-    .addr_i(bootrom_req.addr), 
+    .addr_i(bootrom_req.addr[31:0]), 
     .data_o(bootrom_rsp.rdata)
   );
 

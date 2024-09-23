@@ -170,6 +170,8 @@ sources:
       - core/cache_subsystem/wt_dcache_missunit.sv
       - core/cache_subsystem/wt_dcache_wbuffer.sv
       - core/cache_subsystem/wt_dcache.sv
+      - core/cache_subsystem/cva6_icache_tag.sv
+      - core/cache_subsystem/cva6_icache_data.sv
       - core/cache_subsystem/cva6_icache.sv
       - core/cache_subsystem/wt_cache_subsystem.sv
       - core/cache_subsystem/wt_axi_adapter.sv
@@ -179,6 +181,9 @@ sources:
       - core/cache_subsystem/wt_l15_adapter.sv
       - corev_apu/tb/axi_adapter.sv
       - core/cache_subsystem/miss_handler.sv
+      - core/cache_subsystem/std_nbdcache_data.sv
+      - core/cache_subsystem/std_nbdcache_tag.sv
+      - core/cache_subsystem/std_nbdcache_valid_dirty.sv
       - core/cache_subsystem/std_nbdcache.sv
       - core/cache_subsystem/cva6_icache_axi_wrapper.sv
       - core/cache_subsystem/std_cache_subsystem.sv

@@ -187,48 +187,89 @@ import std_cache_pkg::*;
     );
 
     assign tag[0] = '0;
-
+    logic [ariane_pkg::DCACHE_LINE_WIDTH-1:0] rdata_ram_data [DCACHE_SET_ASSOC-1:0];
+    logic [ariane_pkg::DCACHE_TAG_WIDTH-1:0] rdata_ram_tag [DCACHE_SET_ASSOC-1:0];
     // --------------
     // Memory Arrays
     // --------------
-    for (genvar i = 0; i < DCACHE_SET_ASSOC; i++) begin : sram_block
-        tc_sram_impl #(
-            .impl_in_t ( sram_cfg_t                         ),
-            .DataWidth ( DCACHE_LINE_WIDTH                  ),
-            .NumWords  ( DCACHE_NUM_WORDS                   ),
-            .NumPorts  ( 1                                  )
-        ) data_sram (
-            .req_i   ( req_ram [i]                          ),
-            .rst_ni  ( rst_ni                               ),
-            .impl_i  ( sram_cfg_data_i                      ),
-            .impl_o  (  ),
-            .we_i    ( we_ram                               ),
-            .addr_i  ( addr_ram[DCACHE_INDEX_WIDTH-1:DCACHE_BYTE_OFFSET]  ),
-            .wdata_i ( wdata_ram.data                       ),
-            .be_i    ( be_ram.data                          ),
-            .rdata_o ( rdata_ram[i].data                    ),
-            .*
-        );
+    std_nbdcache_data #(
+        .impl_in_t ( sram_cfg_t                         ),
+        .DataWidth ( DCACHE_LINE_WIDTH                  ),
+        .NumWords  ( DCACHE_NUM_WORDS                   ),
+        .WAY_COUNT ( DCACHE_SET_ASSOC                   )
+    ) data_sram (
+        .clk_i   ( clk_i                                ),
+        .rst_ni  ( rst_ni                               ),
+        .impl_i  ( sram_cfg_data_i                      ),
+        .impl_o  ( /*Not Used*/                         ),
+        .req_i   ( req_ram                              ),
+        .we_i    ( we_ram                               ),
+        .addr_i  ( addr_ram[DCACHE_INDEX_WIDTH-1:DCACHE_BYTE_OFFSET]  ),
+        .wdata_i ( wdata_ram.data                       ),
+        .be_i    ( be_ram.data                          ),
+        .rdata_o ( rdata_ram_data                       )
+    );
 
-        tc_sram_impl #(
-            .impl_in_t ( sram_cfg_t                         ),
-            .DataWidth ( DCACHE_TAG_WIDTH                   ),
-            .NumWords  ( DCACHE_NUM_WORDS                   ),
-            .NumPorts  ( 1                                  )
-        ) tag_sram (
-            .req_i   ( req_ram [i]                          ),
-            .rst_ni  ( rst_ni                               ),
-            .impl_i  ( sram_cfg_tag_i                       ),
-            .impl_o  (                                      ),
-            .we_i    ( we_ram                               ),
-            .addr_i  ( addr_ram[DCACHE_INDEX_WIDTH-1:DCACHE_BYTE_OFFSET]  ),
-            .wdata_i ( wdata_ram.tag                        ),
-            .be_i    ( be_ram.tag                           ),
-            .rdata_o ( rdata_ram[i].tag                     ),
-            .*
-        );
+    std_nbdcache_tag #(
+        .impl_in_t ( sram_cfg_t                         ),
+        .DataWidth ( DCACHE_TAG_WIDTH                  ),
+        .NumWords  ( DCACHE_NUM_WORDS                   ),
+        .WAY_COUNT ( DCACHE_SET_ASSOC                   )
+    ) tag_sram (
+        .clk_i   ( clk_i                                ),
+        .rst_ni  ( rst_ni                               ),
+        .impl_i  ( sram_cfg_data_i                      ),
+        .impl_o  ( /*Not Used*/                         ),
+        .req_i   ( req_ram                              ),
+        .we_i    ( we_ram                               ),
+        .addr_i  ( addr_ram[DCACHE_INDEX_WIDTH-1:DCACHE_BYTE_OFFSET]  ),
+        .wdata_i ( wdata_ram.tag                        ),
+        .be_i    ( be_ram.tag                           ),
+        .rdata_o ( rdata_ram_tag                        )
+    );
 
+    for (genvar i = 0; i < DCACHE_SET_ASSOC; i++) begin : assign_sram_block
+        assign rdata_ram[i].data = rdata_ram_data[i];
+        assign rdata_ram[i].tag = rdata_ram_tag[i];
     end
+    // for (genvar i = 0; i < DCACHE_SET_ASSOC; i++) begin : sram_block
+    //     tc_sram_impl #(
+    //         .impl_in_t ( sram_cfg_t                         ),
+    //         .DataWidth ( DCACHE_LINE_WIDTH                  ),
+    //         .NumWords  ( DCACHE_NUM_WORDS                   ),
+    //         .NumPorts  ( 1                                  )
+    //     ) data_sram (
+    //         .req_i   ( req_ram [i]                          ),
+    //         .rst_ni  ( rst_ni                               ),
+    //         .impl_i  ( sram_cfg_data_i                      ),
+    //         .impl_o  (  ),
+    //         .we_i    ( we_ram                               ),
+    //         .addr_i  ( addr_ram[DCACHE_INDEX_WIDTH-1:DCACHE_BYTE_OFFSET]  ),
+    //         .wdata_i ( wdata_ram.data                       ),
+    //         .be_i    ( be_ram.data                          ),
+    //         .rdata_o ( rdata_ram[i].data                    ),
+    //         .*
+    //     );
+
+    //     tc_sram_impl #(
+    //         .impl_in_t ( sram_cfg_t                         ),
+    //         .DataWidth ( DCACHE_TAG_WIDTH                   ),
+    //         .NumWords  ( DCACHE_NUM_WORDS                   ),
+    //         .NumPorts  ( 1                                  )
+    //     ) tag_sram (
+    //         .req_i   ( req_ram [i]                          ),
+    //         .rst_ni  ( rst_ni                               ),
+    //         .impl_i  ( sram_cfg_tag_i                       ),
+    //         .impl_o  (                                      ),
+    //         .we_i    ( we_ram                               ),
+    //         .addr_i  ( addr_ram[DCACHE_INDEX_WIDTH-1:DCACHE_BYTE_OFFSET]  ),
+    //         .wdata_i ( wdata_ram.tag                        ),
+    //         .be_i    ( be_ram.tag                           ),
+    //         .rdata_o ( rdata_ram[i].tag                     ),
+    //         .*
+    //     );
+
+    // end
 
     // ----------------
     // Valid/Dirty Regs
@@ -246,11 +287,10 @@ import std_cache_pkg::*;
         assign rdata_ram[i].valid = dirty_rdata[8*i+1];
     end
 
-    tc_sram_impl #(
-        .impl_in_t ( sram_cfg_t                       ),
-        .DataWidth ( 4*DCACHE_DIRTY_WIDTH             ),
-        .NumWords  ( DCACHE_NUM_WORDS                 ),
-        .NumPorts  ( 1                                )
+    std_nbdcache_valid_dirty #(
+        .impl_in_t ( sram_cfg_t                         ),
+        .DataWidth ( 4*DCACHE_DIRTY_WIDTH               ),
+        .NumWords  ( DCACHE_NUM_WORDS                   )
     ) valid_dirty_sram (
         .clk_i   ( clk_i                               ),
         .rst_ni  ( rst_ni                              ),
@@ -263,6 +303,25 @@ import std_cache_pkg::*;
         .be_i    ( be_ram.vldrty                       ),
         .rdata_o ( dirty_rdata                         )
     );
+
+
+    // tc_sram_impl #(
+    //     .impl_in_t ( sram_cfg_t                       ),
+    //     .DataWidth ( 4*DCACHE_DIRTY_WIDTH             ),
+    //     .NumWords  ( DCACHE_NUM_WORDS                 ),
+    //     .NumPorts  ( 1                                )
+    // ) valid_dirty_sram (
+    //     .clk_i   ( clk_i                               ),
+    //     .rst_ni  ( rst_ni                              ),
+    //     .impl_i  ( sram_cfg_valid_dirty_i              ),
+    //     .impl_o  (                                     ),
+    //     .req_i   ( |req_ram                            ),
+    //     .we_i    ( we_ram                              ),
+    //     .addr_i  ( addr_ram[DCACHE_INDEX_WIDTH-1:DCACHE_BYTE_OFFSET] ),
+    //     .wdata_i ( dirty_wdata                         ),
+    //     .be_i    ( be_ram.vldrty                       ),
+    //     .rdata_o ( dirty_rdata                         )
+    // );
 
     // ------------------------------------------------
     // Tag Comparison and memory arbitration

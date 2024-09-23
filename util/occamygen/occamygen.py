@@ -92,6 +92,11 @@ def main():
     parser.add_argument("--testharness-sv",
                         metavar="TESTHARNESS_SV",
                         help="Name of the testharness wrapper file (output).")
+    parser.add_argument("--testharness-sv-flag",
+                        metavar="TESTHARNESS_SV_FLAG",
+                        type = str,
+                        default= "sim" ,
+                        help="FLAG to generate the corresponding testharness.")    
     parser.add_argument("--cva6-sv",
                         metavar="CVA6_SV",
                         help="Name of the CVA6 wrapper file (output).")
@@ -593,7 +598,7 @@ def main():
     ###############
     if args.testharness_sv:
         testharness_kwargs = occamy.get_testharness_kwargs(
-            soc_wide_xbar, soc_axi_lite_narrow_periph_xbar, solder, name)
+            soc_wide_xbar, soc_axi_lite_narrow_periph_xbar, solder, occamy_cfg, util, args.testharness_sv_flag, name)
         write_template(args.testharness_sv, outdir, **testharness_kwargs)
 
     ############

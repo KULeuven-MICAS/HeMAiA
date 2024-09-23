@@ -31,7 +31,7 @@ dependencies:
   register_interface:     { git:  https://github.com/pulp-platform/register_interface.git, version: 0.3.8   }
   snitch_cluster:         { git:  https://github.com/KULeuven-MICAS/snax_cluster.git,      rev:        main }
   tech_cells_generic:     { git:  https://github.com/pulp-platform/tech_cells_generic.git, rev:     v0.2.11 }
-  cluster_icache:         { git:  https://github.com/pulp-platform/cluster_icache.git,     version: 0.1.0 }
+  cluster_icache:     { git:  https://github.com/KULeuven-MICAS/cluster_icache,     rev: main }
 
 workspace:
   package_links:
@@ -41,11 +41,16 @@ export_include_dirs:
   - hw/spm_interface/include
 
 sources:
+  - target: all(tech_cells_generic_exclude_tc_sram, prep_syn, print_mem_info)
+    files:
+      - target/tapeout/tc_sram/tc_sram_print/tc_sram.sv
+      - target/tapeout/tc_sram/tc_sram_print/tc_sram_impl.sv
+  - target: all(tech_cells_generic_exclude_tc_sram, any(prep_syn_test,syn))
+    files:
+      - /users/micas/shares/project_snax/tapeout_modules/hemaia/tc_sram_impl.sv
+
   # future
   - hw/future/reg_to_apb.sv
-  # snitch_read_only_cache
-  - hw/snitch_read_only_cache/src/snitch_axi_to_cache.sv
-  - hw/snitch_read_only_cache/src/snitch_read_only_cache.sv
 
   - target: test
     files:
@@ -57,6 +62,7 @@ sources:
       - hw/spm_interface/src/spm_interface.sv
       - hw/spm_interface/src/spm_rmw_adapter.sv
       # Level 2
+      - hw/spm_interface/src/spm_1p_adv_mem_wrapper.sv
       - hw/spm_interface/src/spm_1p_adv.sv
   - target: simulation
     files:
@@ -113,7 +119,7 @@ sources:
       - target/rtl/test/uartdpi/uartdpi.sv
       - target/rtl/test/testharness.sv
 
-  - target: any(tapeout, hemaia)
+  - target: any(tapeout, hemaia, prep_syn, syn)
     files:
       - target/rtl/bootrom/bootrom.sv
       - target/rtl/src/occamy_chip.sv

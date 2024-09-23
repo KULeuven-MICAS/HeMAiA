@@ -1,3 +1,4 @@
+
 // Copyright 2023 ETH Zurich and University of Bologna.
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
@@ -14,13 +15,13 @@
         bender_target: ["snax_KUL_xdma_cluster"],
         boot_addr: 4096, // 0x1000
         cluster_base_addr: 268435456,  // 0x1000_0000
-        cluster_base_offset: 1048576,  // 256KB -> 1MB
+        cluster_base_offset: 262144,  // 256KB -> 1MB
         cluster_base_hartid: 1,
         addr_width: 48,
         data_width: 64,
         user_width: 3,
         tcdm: {
-            size: 512,                  // 128K -> 512K
+            size: 128,                  // 128K -> 512K
             banks: 32,
         },
         cluster_periph_size: 64, // kB
@@ -121,6 +122,10 @@
             bender_target: ["snax_gemmX"],
             snax_narrow_tcdm_ports: 8,
             snax_wide_tcdm_ports: 48,
+            snax_gemmx_mesh_row: 8,
+            snax_gemmx_tile_size: 8,
+            snax_gemmx_mesh_col: 8,
+            with_pipeline: false,
             snax_num_rw_csr: 10,
             snax_num_ro_csr: 2,
             snax_streamer_cfg: {$ref: "#/snax_streamer_gemmX_streamer_template" }
@@ -190,6 +195,6 @@
             fifo_depth: [2, 2],
         },
 
-        snax_library_name: "streamer-gemm-conv-simd",
+        snax_library_name: "gemmx",
     }
 }
