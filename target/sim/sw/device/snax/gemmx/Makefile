@@ -14,8 +14,9 @@ include $(MK_DIR)/../common.mk
 ## Outputs #
 ############
 
-OBJS        = $(BUILDDIR)/snax-streamer-gemm-lib.o
+OBJS        = $(BUILDDIR)/snax-gemmx-lib.o
 ALL_OUTPUTS = $(OBJS)
+
 INCDIRS += $(abspath include)
 
 ##########
@@ -28,5 +29,3 @@ all: $(ALL_OUTPUTS)
 .PHONY: clean
 clean:
 	rm -rf $(BUILDDIR)
-
-

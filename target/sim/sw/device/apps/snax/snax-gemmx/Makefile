@@ -4,16 +4,16 @@
 #
 # Xiaoling Yi <xiaoling.yi@esat.kuleuven.be>
 
-APP     = snax-data-reshuffler
+APP     = snax-gemmx
 
 INCDIRS = data
 
-INCDIRS += ../../../snax/data-reshuffler/include
+INCDIRS += ../../../snax/gemmx/include
 
 # Include this binary in the final build
-RISCV_LDFLAGS += ../../../snax/data-reshuffler/build/snax-data-reshuffler-lib.o
+RISCV_LDFLAGS += ../../../snax/gemmx/build/snax-gemmx-lib.o
 
-SRCS    = src/snax-data-reshuffler.c
+SRCS    = src/snax-gemmx.c
 
 include ./data/Makefile
 include ../../common.mk
