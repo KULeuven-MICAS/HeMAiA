@@ -7,7 +7,6 @@ MEMORY
 {
   bootrom (rx)  : ORIGIN = 0x01000000, LENGTH = 16K
   spm (rwx)     : ORIGIN = 0x70000000, LENGTH = 128K
-  hbm (rwx)     : ORIGIN = 0x80000000, LENGTH = 2048M
 }
 
 SECTIONS
@@ -35,5 +34,4 @@ SECTIONS
   __base_i2c_sym      = 0x02004000;
   __base_spi_sym      = 0x03000000;
   __base_spm_sym      = ORIGIN(spm);
-  __base_hbm_sym      = ORIGIN(hbm);
 }

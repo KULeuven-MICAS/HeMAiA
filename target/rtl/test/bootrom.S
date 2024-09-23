@@ -7,6 +7,38 @@
 .global _start
 
 _start:
+    # Clear all registers
+    li x1, 0
+    li x2, 0
+    li x3, 0
+    li x4, 0
+    li x5, 0
+    li x6, 0
+    li x7, 0
+    li x8, 0
+    li x9, 0
+    li x10, 0
+    li x11, 0
+    li x12, 0
+    li x13, 0
+    li x14, 0
+    li x15, 0
+    li x16, 0
+    li x17, 0
+    li x18, 0
+    li x19, 0
+    li x20, 0
+    li x21, 0
+    li x22, 0
+    li x23, 0
+    li x24, 0
+    li x25, 0
+    li x26, 0
+    li x27, 0
+    li x28, 0
+    li x29, 0
+    li x30, 0
+    li x31, 0
     # Park non-64-bit cores: inspect MISA MSB
     csrr    t0, misa
     bltz    t0, _cva6_init
@@ -40,17 +72,26 @@ _snitch_resume:
 
 # You may use rv64 instuctions in this block.
 _cva6_init:
+    # Load the Chip ID to the register
+    csrr    s0, 0xf15
+    # Transfer as mask by left shift 40 bits
+    slli    s0, s0, 40
     # Set global pointer
     .option push
     .option norelax
     la      gp, __global_pointer$
+    or      gp, gp, s0
     .option pop
     # Set stack pointer
     la      sp, __stack_pointer$
-    la      t2, exception
-    csrw    mtvec, t2
-    lwu     t0, entry_addr
+    or      sp, sp, s0
+    # Set stack pointer at the local
+    la      t1, exception
+    csrw    mtvec, t1
+    ld      t0, entry_addr
+    or      t0, t0, s0
     jalr    t0
+    j       _start
 exception:
     wfi
     j     exception
@@ -59,5 +100,5 @@ exception:
 # as expected by test/common_lib.cc
 .pushsection end, "ax"
 entry_addr:
-.word 0x80000000
+.dword      0x80000000
 device_tree:

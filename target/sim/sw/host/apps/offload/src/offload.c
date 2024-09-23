@@ -26,6 +26,12 @@ int main() {
     // Start Snitches
     wakeup_snitches_cl();
 
+    int ret = wait_snitches_done();
+
+    print_uart("[Occamy] Snitch cluster done with exit code ");
+    print_uart_int(ret);
+    print_uart("\r\n");
+
     // Wait for job done and return Snitch exit code
-    return wait_snitches_done();
+    return ret;
 }

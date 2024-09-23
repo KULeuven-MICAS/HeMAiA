@@ -37,20 +37,20 @@ MATCH_END := '/+incdir+/ s/$$/\/*\/*/'
 MATCH_BGN := 's/+incdir+//g'
 SED_SRCS  := sed -e ${MATCH_END} -e ${MATCH_BGN}
 
-VSIM_BENDER   += -t test -t rtl -t simulation -t vsim
+VSIM_BENDER   += -t test -t rtl -t vsim
 VSIM_SOURCES   = $(shell ${BENDER} script flist ${VSIM_BENDER} | ${SED_SRCS})
 VSIM_BUILDDIR ?= work-vsim
 VOPT_FLAGS     = +acc
 
 # VCS_BUILDDIR should to be the same as the `DEFAULT : ./work-vcs`
 # in target/snitch_cluster/synopsys_sim.setup
-VCS_BENDER   += -t test -t rtl -t simulation -t vcs
+VCS_BENDER   += -t test -t rtl -t vcs
 VCS_SOURCES   = $(shell ${BENDER} script flist ${VCS_BENDER} | ${SED_SRCS})
 VCS_BUILDDIR := work-vcs
 
 # For synthesis with DC compiler
 SYN_FLIST ?= syn_flist.tcl
-SYN_BENDER += -t test -t synthesis -t simulation
+SYN_BENDER += -t test -t synthesis
 ifeq ($(MEM_TYPE), exclude_tcsram)
 	VSIM_BENDER += -t tech_cells_generic_exclude_tc_sram
 	SYN_BENDER  += -t tech_cells_generic_exclude_tc_sram
@@ -70,13 +70,11 @@ SYN_BUILDDIR := work-syn
 FESVR         ?= ${MKFILE_DIR}work
 FESVR_VERSION ?= 98d2c29e431f3b14feefbda48c5f70c2f451acf2
 
-VLT_BENDER   += -t rtl -t simulation_vlt
+VLT_BENDER   += -t rtl
 VLT_SOURCES   = $(shell ${BENDER} script flist ${VLT_BENDER} | ${SED_SRCS})
 VLT_BUILDDIR := work-vlt
-VLT_FESVR     = $(VLT_BUILDDIR)/riscv-isa-sim
-ifeq ($(VERILATOR_VERSION), 5)
-	VLT_FLAGS += --timing
-endif
+
+VLT_FLAGS    += --timing
 VLT_FLAGS    += -Wno-BLKANDNBLK
 VLT_FLAGS    += -Wno-LITENDIAN
 VLT_FLAGS    += -Wno-CASEINCOMPLETE
@@ -88,11 +86,9 @@ VLT_FLAGS    += -Wno-UNOPTFLAT
 VLT_FLAGS    += -Wno-fatal
 VLT_FLAGS    += +define+SYNTHESIS
 VLT_FLAGS    += --unroll-count 1024
-ifeq ($(VERILATOR_VERSION), 5)
-	VLT_CXXSTD_FLAGS += -std=c++20 -pthread -latomic
-else 
-	VLT_CXXSTD_FLAGS += -std=c++17 -pthread
-endif
+
+VLT_CXXSTD_FLAGS += -std=c++20 -pthread -latomic
+
 VLT_CFLAGS   += ${VLT_CXXSTD_FLAGS} -I ${VLT_BUILDDIR} -I $(VLT_ROOT)/include -I $(VLT_ROOT)/include/vltstd -I $(VLT_FESVR)/include -I ${MKFILE_DIR}/test
 
 ANNOTATE_FLAGS ?= -q --keep-time
@@ -131,40 +127,6 @@ VLOGAN_FLAGS += -full64
 VLOGAN_FLAGS += -kdb
 VHDLAN_FLAGS := -full64
 VHDLAN_FLAGS += -kdb
-
-# default on target `all`
-all:
-
-#################
-# Prerequisites #
-#################
-# Eventually it could be an option to package this statically using musl libc.
-work/${FESVR_VERSION}_unzip:
-	mkdir -p $(dir $@)
-	wget -O $(dir $@)/${FESVR_VERSION} https://github.com/riscv/riscv-isa-sim/tarball/${FESVR_VERSION}
-	tar xfm $(dir $@)${FESVR_VERSION} --strip-components=1 -C $(dir $@)
-	touch $@
-
-work/lib/libfesvr.a: work/${FESVR_VERSION}_unzip
-	cd $(dir $<)/ && ./configure --prefix `pwd`
-	make -C $(dir $<) install-config-hdrs install-hdrs libfesvr.a
-	mkdir -p $(dir $@)
-	cp $(dir $<)libfesvr.a $@
-
-# Build fesvr seperately for verilator since this might use different compilers
-# and libraries than modelsim/vcs and
-$(VLT_FESVR)/${FESVR_VERSION}_unzip:
-	mkdir -p $(dir $@)
-	wget -O $(dir $@)/${FESVR_VERSION} https://github.com/riscv/riscv-isa-sim/tarball/${FESVR_VERSION}
-	tar xfm $(dir $@)${FESVR_VERSION} --strip-components=1 -C $(dir $@)
-	touch $@
-
-$(VLT_BUILDDIR)/lib/libfesvr.a: $(VLT_FESVR)/${FESVR_VERSION}_unzip
-	cd $(dir $<)/ && ./configure --prefix `pwd` \
-        CC=${CC} CXX=${CXX} CFLAGS="${CFLAGS}" CXXFLAGS="${CXXFLAGS}" LDFLAGS="${LDFLAGS}"
-	$(MAKE) -C $(dir $<) install-config-hdrs install-hdrs libfesvr.a
-	mkdir -p $(dir $@)
-	cp $(dir $<)libfesvr.a $@
 
 #############
 # Verilator #

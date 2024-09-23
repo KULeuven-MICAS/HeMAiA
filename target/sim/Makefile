@@ -47,6 +47,7 @@ include $(ROOT)/target/rtl/Makefile
 REGGEN     ?= $(shell $(BENDER) path register_interface)/vendor/lowrisc_opentitan/util/regtool.py
 OCCAMYGEN  ?= $(ROOT)/util/occamygen/occamygen.py
 ADDRMAPGEN ?= $(ROOT)/util/addrmap/addrmapgen.py
+BIN2SV     ?= $(ROOT)/util/bin2sv.py
 
 CLANG_FORMAT ?= $(shell which clang-format-10.0.1)
 
@@ -129,10 +130,10 @@ VLT_FLAGS += --prof-cfuncs # Enable code profiling
 # C testbench #
 ###############
 
-TB_CC_SOURCES  = $(SNITCH_TEST_DIR)/bootrom.cc
-TB_CC_SOURCES += $(SNITCH_TEST_DIR)/ipc.cc
-TB_CC_SOURCES += $(SNITCH_TEST_DIR)/rtl_lib.cc
-TB_CC_SOURCES += $(SNITCH_TEST_DIR)/common_lib.cc
+TB_CC_SOURCES  = $(TARGET_TEST_DIR)/bootrom.cc
+TB_CC_SOURCES += $(TARGET_TEST_DIR)/ipc.cc
+TB_CC_SOURCES += $(TARGET_TEST_DIR)/rtl_lib.cc
+TB_CC_SOURCES += $(TARGET_TEST_DIR)/common_lib.cc
 TB_CC_SOURCES += $(TARGET_TEST_DIR)/bootdata.cc
 TB_CC_SOURCES += $(TARGET_TEST_DIR)/uartdpi/uartdpi.c
 
@@ -142,7 +143,7 @@ TB_CC_FLAGS  = -std=c++17
 TB_CC_FLAGS +=-I$(SIM_MKFILE_DIR)
 TB_CC_FLAGS +=-I$(SIM_MKFILE_DIR)/test
 TB_CC_FLAGS +=-I$(FESVR)/include
-TB_CC_FLAGS +=-I$(SNITCH_TEST_DIR)
+TB_CC_FLAGS +=-I$(TARGET_TEST_DIR)
 TB_CC_FLAGS +=-I$(TARGET_TEST_DIR)/uartdpi
 
 # Required C sources for the verilator TB that are linked against the verilated model
@@ -166,7 +167,7 @@ endif
 # Boot ROM #
 ############
 
-BOOTROM_TARGETS = test/bootrom.elf test/bootrom.dump test/bootrom.bin test/bootdata.cc
+BOOTROM_TARGETS = test/bootrom.elf test/bootrom.dump test/bootrom.bin test/bootdata.cc test/bootrom.sv
 
 
 # Compiler toolchain
@@ -199,6 +200,9 @@ test/bootrom.dump: test/bootrom.elf
 	$(CVA6_GCC_OBJDUMP) -D $< > $@
 test/bootrom.bin: test/bootrom.elf
 	$(CVA6_GCC_OBJCOPY) -O binary $< $@
+
+test/bootrom.sv: test/bootrom.bin
+	$(BIN2SV) "$(SIM_MKFILE_DIR)$<" -m bootrom > $@
 
 
 
