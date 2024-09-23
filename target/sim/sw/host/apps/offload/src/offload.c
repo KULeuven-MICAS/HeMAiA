@@ -6,7 +6,7 @@
 
 int main() {
     // Reset and ungate all quadrants, deisolate
-    init_uart(16, 1);
+    init_uart(32, 1);
     print_uart("[Occamy] The Offload main function \r\n");
     reset_and_ungate_quadrants();
     deisolate_all();
