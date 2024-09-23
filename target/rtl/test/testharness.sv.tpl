@@ -127,13 +127,10 @@ module testharness import occamy_pkg::*; (
     .ext_irq_i ('0)
     );
 
-  // Must be the frequency of i_uart0.clk_i in Hz
-  localparam int unsigned UartDPIFreq = 320_000_000;
-
   uartdpi #(
-    .BAUD ('d2_000_000),
+    .BAUD (1),
     // Frequency shouldn't matter since we are sending with the same clock.
-    .FREQ (UartDPIFreq),
+    .FREQ (32),
     .NAME("uart0")
   ) i_uart0 (
     .clk_i (clk_i),
