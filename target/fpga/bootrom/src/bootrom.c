@@ -71,7 +71,7 @@ void uart_xmodem(uint64_t start_address) {
     uint8_t received_char;
     bool transmission_end = false;
 
-    delay_cycles(50000000); // Delay for 1s
+    delay_cycles(500000000); // Delay for 1s at 500MHz
 
     write_serial(NAK);  // Request for data
 
@@ -131,7 +131,7 @@ void bootrom() {
     uint64_t end_address;
 
     char in_buf[8]; 
-    init_uart(50000000, 1000000);
+    init_uart(32, 1);
 
     while (1) {
         start_address = 0x80000000;

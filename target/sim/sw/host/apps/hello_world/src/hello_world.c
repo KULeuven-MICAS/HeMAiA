@@ -6,7 +6,7 @@
 #include "host.c"
 
 // Frequency at which the UART peripheral is clocked
-#define PERIPH_FREQ 50000000
+#define PERIPH_FREQ 16000000
 
 int main() {
     init_uart(PERIPH_FREQ, 1000000);

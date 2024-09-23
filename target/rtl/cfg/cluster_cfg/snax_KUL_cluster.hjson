@@ -127,7 +127,7 @@
             snax_gemmx_mesh_row: 8,
             snax_gemmx_tile_size: 8,
             snax_gemmx_mesh_col: 8,
-            with_pipeline: false,
+            with_pipeline: true,
             snax_streamer_cfg: {$ref: "#/snax_streamer_gemmX_streamer_template" }
         },
         snax_use_custom_ports: false,

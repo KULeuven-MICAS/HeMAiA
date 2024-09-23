@@ -282,24 +282,26 @@ proc create_root_design { parentCell } {
     CONFIG.CLKOUT3_REQUESTED_OUT_FREQ {120} \
     CONFIG.CLKOUT3_REQUESTED_PHASE {0} \
     CONFIG.CLKOUT3_USED {true} \
-    CONFIG.CLKOUT4_JITTER {112.035} \
+    CONFIG.CLKOUT4_JITTER {171.072} \
     CONFIG.CLKOUT4_PHASE_ERROR {87.180} \
-    CONFIG.CLKOUT4_REQUESTED_OUT_FREQ {100.000} \
-    CONFIG.CLKOUT4_USED {false} \
+    CONFIG.CLKOUT4_REQUESTED_OUT_FREQ {16} \
+    CONFIG.CLKOUT4_REQUESTED_PHASE {60} \
+    CONFIG.CLKOUT4_USED {true} \
     CONFIG.CLK_IN1_BOARD_INTERFACE {default_100mhz_clk} \
     CONFIG.CLK_OUT1_PORT {clk_core} \
     CONFIG.CLK_OUT2_PORT {clk_rtc} \
     CONFIG.CLK_OUT3_PORT {clk_hbm} \
-    CONFIG.CLK_OUT4_PORT {clk_out4} \
+    CONFIG.CLK_OUT4_PORT {clk_peri} \
     CONFIG.FEEDBACK_SOURCE {FDBK_AUTO} \
     CONFIG.MMCM_CLKFBOUT_MULT_F {12.000} \
     CONFIG.MMCM_CLKOUT0_DIVIDE_F {24.000} \
     CONFIG.MMCM_CLKOUT1_DIVIDE {96} \
     CONFIG.MMCM_CLKOUT2_DIVIDE {10} \
     CONFIG.MMCM_CLKOUT2_PHASE {0.000} \
-    CONFIG.MMCM_CLKOUT3_DIVIDE {1} \
+    CONFIG.MMCM_CLKOUT3_DIVIDE {75} \
+    CONFIG.MMCM_CLKOUT3_PHASE {60.000} \
     CONFIG.MMCM_DIVCLK_DIVIDE {1} \
-    CONFIG.NUM_OUT_CLKS {3} \
+    CONFIG.NUM_OUT_CLKS {4} \
     CONFIG.OPTIMIZE_CLOCKING_STRUCTURE_EN {true} \
     CONFIG.PHASE_DUTY_CONFIG {false} \
     CONFIG.PRIM_SOURCE {Differential_clock_capable_pin} \
@@ -554,8 +556,9 @@ proc create_root_design { parentCell } {
   connect_bd_net -net Net2 [get_bd_ports spim_sd_io] [get_bd_pins occamy/spim_sd_io]
   set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_nets Net2]
   connect_bd_net -net c_high_dout [get_bd_pins c_high/dout] [get_bd_ports jtag_vdd_o] [get_bd_pins occamy/jtag_trst_ni]
-  connect_bd_net -net clk_wiz_clk_core [get_bd_pins clk_wiz/clk_core] [get_bd_pins axi_bram_ctrl_0/s_axi_aclk] [get_bd_pins blk_mem_gen_0/clkb] [get_bd_pins hbm_0/APB_0_PCLK] [get_bd_pins hbm_0/APB_1_PCLK] [get_bd_pins jtag_axi_0/aclk] [get_bd_pins psr_core/slowest_sync_clk] [get_bd_pins smc_hbm_0/aclk] [get_bd_pins vio_sys/clk] [get_bd_pins jtag_axi_1/aclk] [get_bd_pins occamy/clk_i] [get_bd_pins occamy/clk_periph_i]
+  connect_bd_net -net clk_wiz_clk_core [get_bd_pins clk_wiz/clk_core] [get_bd_pins axi_bram_ctrl_0/s_axi_aclk] [get_bd_pins blk_mem_gen_0/clkb] [get_bd_pins hbm_0/APB_0_PCLK] [get_bd_pins hbm_0/APB_1_PCLK] [get_bd_pins jtag_axi_0/aclk] [get_bd_pins psr_core/slowest_sync_clk] [get_bd_pins smc_hbm_0/aclk] [get_bd_pins vio_sys/clk] [get_bd_pins jtag_axi_1/aclk] [get_bd_pins occamy/clk_i]
   connect_bd_net -net clk_wiz_clk_hbm [get_bd_pins clk_wiz/clk_hbm] [get_bd_pins hbm_0/HBM_REF_CLK_0] [get_bd_pins hbm_0/HBM_REF_CLK_1] [get_bd_pins hbm_0/AXI_00_ACLK] [get_bd_pins psr_hbm/slowest_sync_clk] [get_bd_pins smc_hbm_0/aclk1]
+  connect_bd_net -net clk_wiz_clk_peri [get_bd_pins clk_wiz/clk_peri] [get_bd_pins occamy/clk_periph_i]
   connect_bd_net -net clk_wiz_clk_rtc [get_bd_pins clk_wiz/clk_rtc] [get_bd_pins occamy/rtc_i]
   connect_bd_net -net const_low_dout [get_bd_pins c_low/dout] [get_bd_ports jtag_gnd_o] [get_bd_pins occamy/test_mode_i] [get_bd_pins occamy/ext_irq_i] [get_bd_pins occamy/gpio_d_i]
   connect_bd_net -net glbl_rst [get_bd_pins vio_sys/probe_out1] [get_bd_pins concat_rst/In1]
@@ -673,6 +676,9 @@ proc create_root_design { parentCell } {
 ##################################################################
 # MAIN FLOW
 ##################################################################
+
+
+common::send_gid_msg -ssname BD::TCL -id 2052 -severity "CRITICAL WARNING" "This Tcl script was generated from a block design that is out-of-date/locked. It is possible that design <$design_name> may result in errors during construction."
 
 create_root_design ""
 
