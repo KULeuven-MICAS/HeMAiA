@@ -70,31 +70,31 @@ extern "C" {
 
 inline volatile uint64_t *sys_dma_src_ptr(void) {
     return (volatile uint64_t *)(IDMA_SRC_ADDR |
-                                 (uint64_t)get_current_chip_baseaddress());
+                                 (uintptr_t)get_current_chip_baseaddress());
 }
 inline volatile uint64_t *sys_dma_dst_ptr(void) {
     return (volatile uint64_t *)(IDMA_DST_ADDR |
-                                 (uint64_t)get_current_chip_baseaddress());
+                                 (uintptr_t)get_current_chip_baseaddress());
 }
 inline volatile uint64_t *sys_dma_num_bytes_ptr(void) {
     return (volatile uint64_t *)(IDMA_NUMBYTES_ADDR |
-                                 (uint64_t)get_current_chip_baseaddress());
+                                 (uintptr_t)get_current_chip_baseaddress());
 }
 inline volatile uint64_t *sys_dma_conf_ptr(void) {
     return (volatile uint64_t *)(IDMA_CONF_ADDR |
-                                 (uint64_t)get_current_chip_baseaddress());
+                                 (uintptr_t)get_current_chip_baseaddress());
 }
 inline volatile uint64_t *sys_dma_status_ptr(void) {
     return (volatile uint64_t *)(IDMA_STATUS_ADDR |
-                                 (uint64_t)get_current_chip_baseaddress());
+                                 (uintptr_t)get_current_chip_baseaddress());
 }
 inline volatile uint64_t *sys_dma_nextid_ptr(void) {
     return (volatile uint64_t *)(IDMA_NEXTID_ADDR |
-                                 (uint64_t)get_current_chip_baseaddress());
+                                 (uintptr_t)get_current_chip_baseaddress());
 }
 inline volatile uint64_t *sys_dma_done_ptr(void) {
     return (volatile uint64_t *)(IDMA_DONE_ADDR |
-                                 (uint64_t)get_current_chip_baseaddress());
+                                 (uintptr_t)get_current_chip_baseaddress());
 }
 
 inline uint64_t sys_dma_memcpy(uint64_t dst, uint64_t src, uint64_t size) {

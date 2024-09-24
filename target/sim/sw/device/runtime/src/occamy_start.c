@@ -25,7 +25,8 @@ static inline void snrt_exit_default(int exit_code);
 
 static inline void snrt_exit(int exit_code) {
     snrt_exit_default(exit_code);
-    if (snrt_global_core_idx() == 0) set_host_sw_interrupt();
+    // Interrupt the local host to signal the exit code (snitch by default only has the access to local domain)
+    if (snrt_global_core_idx() == 0) set_host_sw_interrupt(0);
 }
 
 #include "start.c"
