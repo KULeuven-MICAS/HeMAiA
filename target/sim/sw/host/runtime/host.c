@@ -195,8 +195,10 @@ void wait_snitches_parked(uint32_t timeout) { delay_ns(100000); }
  */
 static inline void program_snitches(uint8_t chip_id) {
     uintptr_t base_addr = (uintptr_t)get_chip_baseaddress(chip_id);
-    *(volatile uint32_t*)((uintptr_t)soc_ctrl_scratch_ptr(1) | base_addr) = (uintptr_t)snitch_main;
-    *(volatile uint32_t*)((uintptr_t)soc_ctrl_scratch_ptr(2) | base_addr) = (uintptr_t)&comm_buffer;
+    *(volatile uint32_t*)((uintptr_t)soc_ctrl_scratch_ptr(1) | base_addr) =
+        (uintptr_t)snitch_main;
+    *(volatile uint32_t*)((uintptr_t)soc_ctrl_scratch_ptr(2) | base_addr) =
+        (uintptr_t)&comm_buffer;
 }
 
 /**
@@ -207,7 +209,8 @@ static inline void program_snitches(uint8_t chip_id) {
 
 static inline void wakeup_cluster(uint8_t chip_id, uint32_t cluster_id) {
     uintptr_t base_addr = (uintptr_t)get_chip_baseaddress(chip_id);
-    *(volatile uint32_t*)((uintptr_t)cluster_clint_set_ptr(cluster_id) | base_addr) = 511;
+    *(volatile uint32_t*)((uintptr_t)cluster_clint_set_ptr(cluster_id) |
+                          base_addr) = 511;
 }
 
 /**
@@ -319,6 +322,7 @@ static inline void reset_and_ungate_quad(uint8_t chip_id,
                                          uint32_t quadrant_idx) {
     set_reset_n_quad(chip_id, quadrant_idx, 0);
     set_clk_ena_quad(chip_id, quadrant_idx, 0);
+    __asm__ __volatile__("fence" ::: "memory");
     set_reset_n_quad(chip_id, quadrant_idx, 1);
     set_clk_ena_quad(chip_id, quadrant_idx, 1);
 }
@@ -471,9 +475,11 @@ static inline void set_sw_interrupts_unsafe(uint8_t chip_id,
     *ptr |= mask;
 }
 
-void set_cluster_interrupt(uint8_t chip_id, uint32_t cluster_id, uint32_t core_id) {
+void set_cluster_interrupt(uint8_t chip_id, uint32_t cluster_id,
+                           uint32_t core_id) {
     uintptr_t base_addr = (uintptr_t)get_chip_baseaddress(chip_id);
-    *(volatile uint32_t*)((uintptr_t)cluster_clint_set_ptr(cluster_id) | base_addr) = (1 << core_id);
+    *(volatile uint32_t*)((uintptr_t)cluster_clint_set_ptr(cluster_id) |
+                          base_addr) = (1 << core_id);
 }
 
 static inline uint32_t timer_interrupt_pending() {
@@ -567,7 +573,8 @@ void set_timer_interrupt(uint8_t chip_id, uint64_t interval_ns) {
     uintptr_t base_addr = (uintptr_t)get_chip_baseaddress(chip_id);
 
     // Offset interval by current time and set the timer interrupt
-    *(volatile uint64_t*)((uintptr_t)clint_mtimecmp0_ptr | base_addr) = mtime(chip_id) + rtc_interval;
+    *(volatile uint64_t*)((uintptr_t)clint_mtimecmp0_ptr | base_addr) =
+        mtime(chip_id) + rtc_interval;
 }
 
 /**
@@ -582,7 +589,8 @@ void set_timer_interrupt(uint8_t chip_id, uint64_t interval_ns) {
  */
 void clear_timer_interrupt(uint8_t chip_id) {
     uintptr_t base_addr = (uintptr_t)get_chip_baseaddress(chip_id);
-    *(volatile uint64_t*)((uintptr_t)clint_mtimecmp0_ptr | base_addr) = mtime(chip_id) + 1;
+    *(volatile uint64_t*)((uintptr_t)clint_mtimecmp0_ptr | base_addr) =
+        mtime(chip_id) + 1;
 }
 
 // Minimum delay is of one RTC period
@@ -718,9 +726,12 @@ void delay_ns(uint64_t delay) {
 uint32_t const ISO_MASK_ALL = 0b1111;
 uint32_t const ISO_MASK_NONE = 0;
 
-static inline void deisolate_quad(uint8_t chip_id, uint32_t quad_idx, uint32_t iso_mask) {
+static inline void deisolate_quad(uint8_t chip_id, uint32_t quad_idx,
+                                  uint32_t iso_mask) {
     uintptr_t base_addr = (uintptr_t)get_chip_baseaddress(chip_id);
-    volatile uint32_t* isolate_ptr = (volatile uint32_t*)((uintptr_t)quad_cfg_isolate_ptr(quad_idx) | base_addr);
+    volatile uint32_t* isolate_ptr =
+        (volatile uint32_t*)((uintptr_t)quad_cfg_isolate_ptr(quad_idx) |
+                             base_addr);
     *isolate_ptr &= ~iso_mask;
 }
 
@@ -729,14 +740,19 @@ static inline void deisolate_quad(uint8_t chip_id, uint32_t quad_idx, uint32_t i
  *
  * @return Masked register field realigned to start at LSB
  */
-static inline uint32_t get_quad_cfg_isolated(uint8_t chip_id, uint32_t quad_idx) {
+static inline uint32_t get_quad_cfg_isolated(uint8_t chip_id,
+                                             uint32_t quad_idx) {
     uintptr_t base_addr = (uintptr_t)get_chip_baseaddress(chip_id);
-    return *(volatile uint32_t*)((uintptr_t)quad_cfg_isolated_ptr(quad_idx) | base_addr) & ISO_MASK_ALL;
+    return *(volatile uint32_t*)((uintptr_t)quad_cfg_isolated_ptr(quad_idx) |
+                                 base_addr) &
+           ISO_MASK_ALL;
 }
 
 void isolate_quad(uint8_t chip_id, uint32_t quad_idx, uint32_t iso_mask) {
     uintptr_t base_addr = (uintptr_t)get_chip_baseaddress(chip_id);
-    volatile uint32_t* isolate_ptr = (volatile uint32_t*)((uintptr_t)quad_cfg_isolate_ptr(quad_idx) | base_addr);
+    volatile uint32_t* isolate_ptr =
+        (volatile uint32_t*)((uintptr_t)quad_cfg_isolate_ptr(quad_idx) |
+                             base_addr);
     *isolate_ptr |= iso_mask;
     fence();
 }
@@ -753,7 +769,8 @@ static inline void deisolate_all(uint8_t chip_id) {
  * @param iso_mask set bit to 1 to check if path is isolated, 0 de-isolated
  * @return 1 is check passes, 0 otherwise
  */
-uint32_t check_isolated_timeout(uint8_t chip_id, uint32_t max_tries, uint32_t quadrant_idx, uint32_t iso_mask) {
+uint32_t check_isolated_timeout(uint8_t chip_id, uint32_t max_tries,
+                                uint32_t quadrant_idx, uint32_t iso_mask) {
     for (uint32_t i = 0; i < max_tries; ++i) {
         if (get_quad_cfg_isolated(chip_id, quadrant_idx) == iso_mask) {
             return 1;

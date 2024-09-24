@@ -11,14 +11,18 @@ int main() {
 
     init_uart(address_prefix, 50000000, 1000000);
     print_str(address_prefix, "[Occamy] The Offload main function \r\n");
+    print_str(address_prefix, "[Occamy] Current Chip ID is: ");
+    print_u8(address_prefix, chip_id);
+    print_str(address_prefix, "\r\n");    
     reset_and_ungate_quadrants(chip_id);
+    print_str(address_prefix, "[Occamy] Snitch ungated. \r\n");
     deisolate_all(chip_id);
-
+    print_str(address_prefix, "[Occamy] Snitch deisolated. \r\n");
     // Enable interrupts to receive notice of job termination
     enable_sw_interrupts();
-
     // Program Snitch entry point and communication buffer
     program_snitches(chip_id);
+    print_str(address_prefix, "[Occamy] Snitch Jump Address Programmed. \r\n");
 
     // Compiler fence to ensure Snitch entry point is
     // programmed before Snitches are woken up

@@ -29,6 +29,7 @@ ROOT        := $(SIM_MKFILE_DIR)../..
 SNITCH_ROOT := $(shell bender path snitch_cluster)
 
 TARGET = occamy_chip
+LOGS_DIR = $(SIM_MKFILE_DIR)/bin/logs
 
 CVA6_TXT_TRACE       = $(LOGS_DIR)/trace_hart_00000.txt
 CVA6_PERF_DUMP       = $(LOGS_DIR)/hart_00000_perf.json
