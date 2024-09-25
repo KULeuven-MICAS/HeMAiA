@@ -6,7 +6,6 @@
     .AxiDataWidth (${axi_in.dw}),
     .AxiIdWidth (${axi_in.iw}),
     .AxiUserWidth (${max(axi_in.uw, 1)}),
-    .SerialLookup(1'b0),
     .MaxTrans (${cfg["max_trans"]}),
     .NrAddrRules (${cfg["address_regions"]}),
     .slv_req_t (${axi_in.req_type()}),
