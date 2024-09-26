@@ -2,3 +2,4 @@
 /work-vlt
 /bin
 /apps/*.bin
+/testharness/testharness.sv
