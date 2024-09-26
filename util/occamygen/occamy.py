@@ -641,7 +641,6 @@ def get_bootdata_kwargs(occamy_cfg, cluster_generators, name):
     }
     return bootdata_kwargs
 
-
 def get_testharness_kwargs(soc_wide_xbar, soc_axi_lite_narrow_periph_xbar, chip_id, solder, name):
     testharness_kwargs = {
         "name": name,
@@ -652,6 +651,12 @@ def get_testharness_kwargs(soc_wide_xbar, soc_axi_lite_narrow_periph_xbar, chip_
     }
     return testharness_kwargs
 
+def get_multichip_testharness_kwargs(occamy_cfg, name):
+    testharness_kwargs = {
+        "name": name,
+        "multichip_cfg": occamy_cfg["hemaia_multichip"]
+    }
+    return testharness_kwargs
 
 def get_chip_kwargs(soc_wide_xbar, soc_axi_lite_narrow_periph_xbar, occamy_cfg, cluster_generators, util, name):
     core_per_cluster_list = [cluster_generator.cfg["nr_cores"]

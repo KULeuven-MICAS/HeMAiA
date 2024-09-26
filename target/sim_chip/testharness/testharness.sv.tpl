@@ -1,6 +1,15 @@
-// Copyright 2020 ETH Zurich and University of Bologna.
+// Copyright 2024 KU Leuven.
 // Solderpad Hardware License, Version 0.51, see LICENSE for details.
 // SPDX-License-Identifier: SHL-0.51
+// Yunhao Deng <yunhao.deng@kuleuven.be>
+
+<%
+  x = range(0, 1)
+  y = range(0, 1)
+  if multichip_cfg["single_chip"] is False:
+    x = range(multichip_cfg["testbench_cfg"]["upper_left_coordinate"][0], multichip_cfg["testbench_cfg"]["lower_right_coordinate"][0] + 1)
+    y = range(multichip_cfg["testbench_cfg"]["upper_left_coordinate"][1], multichip_cfg["testbench_cfg"]["lower_right_coordinate"][1] + 1)
+%>
 
 `timescale 1ns / 1ps
 `include "axi/typedef.svh"
@@ -18,20 +27,20 @@ module testharness
   logic rst_ni;
   logic rtc_i;
 
-  reg [511:0] wide_sram_buffer[SRAM_DEPTH-1:0];
 
   // Task to load binary file into memory array
-  task automatic load_binary_to_buffer(input string filepath);
+  task automatic load_binary_to_hardware(input string filepath,
+                                         ref logic [511:0] wide_sram_buffer[SRAM_DEPTH-1:0]);
     integer fd;
     integer i;
     reg [7:0] buffer[SRAM_WIDTH*SRAM_DEPTH];
-    foreach (buffer[i]) buffer[i] = 0;
+    foreach (buffer[i]) buffer[i] = 0;  // Zero out the buffer
 
     // Open the binary file
     fd = $fopen(filepath, "rb");
     if (fd == 0) begin
       $display("Failed to open binary file: %s", filepath);
-      $finish;
+      $finish(-1);
     end
 
     // Read the binary data into the buffer
@@ -110,6 +119,8 @@ module testharness
     $display("Binary file '%s' loaded into memory.", filepath);
   endtask
 
+  // Chip finish signal
+  integer chip_finish[${max(x)}:${min(x)}][${max(y)}:${min(y)}];
 
   // Generate reset and clock.
   initial begin
@@ -117,6 +128,7 @@ module testharness
     clk_i  = 0;
 
     // Reset the chip
+    chip_finish = '0;
     rst_ni = 1;
     #0;
     $display("Resetting the system at %tns", $time / 1000);
@@ -124,15 +136,37 @@ module testharness
     #(10 + $urandom % 10);
     $display("Reset released at %tns", $time / 1000);
     rst_ni = 1;
+    // Load the binaries
+% for i in x:
+%   for j in y:
+    load_binary_to_hardware("app_chip_${i}_${j}.bin", i_occamy_${i}_${j}.i_spm_wide_cut.i_mem.i_tc_sram.sram);
+%   endfor
+% endfor
+  end
 
-    // Initialize the memory
-    load_binary_to_buffer("app_chip_0_0.bin");
+  always @(chip_finish) begin
+    integer allFinished = 1;
+    integer allCorrect = 1;
+    for (int i = 0; i < ${x}; i = i + 1) begin
+      for (int j = 0; j < ${y}; j = j + 1) begin
+        if (chip_finish[i][j] == 0) begin
+          allFinished = 0;
+        end
+        if (chip_finish[i][j] == -1) begin
+          allCorrect = 0;
+        end
+      end
+    end
 
-    force i_occamy.i_spm_wide_cut.i_mem.i_tc_sram.sram = wide_sram_buffer;
-    #0;
-    release i_occamy.i_spm_wide_cut.i_mem.i_tc_sram.sram;
-
-    // Places to load the binaries
+    if (allFinished == 1) begin
+      if (allCorrect == 1) begin
+        $display("All chips finished successfully at %tns", $time / 1000);
+        $finish;
+      end else begin
+        $error("All chips finished with errors at %tns", $time / 1000);
+      end
+      $finish(-1);
+    end
   end
 
   always #(CLKTCK / 2) begin
@@ -152,36 +186,31 @@ module testharness
     end
   end
 
-  // Finish Block
-  always @(i_occamy.i_spm_wide_cut.i_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32]) begin
-    if (i_occamy.i_spm_wide_cut.i_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32] != 0) begin
-      if (i_occamy.i_spm_wide_cut.i_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32] == 32'd1) begin
-        $display("Simulation finished at %tns", $time / 1000);
-        $finish;
-      end else begin
-        $error("Simulation finished with errors %d at %tns", i_occamy.i_spm_wide_cut.i_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32], $time / 1000);
-      end
-    end
-  end
-
   logic clk_periph_i, rst_periph_ni;
   assign clk_periph_i  = clk_i;
   assign rst_periph_ni = rst_ni;
 
+% for i in x:
+%   for j in y:
   /// Uart signals
-  logic tx, rx;
+  logic tx_${i}_${j}, rx_${i}_${j};
 
-  occamy_chip i_occamy (
+  <%
+    i_hex_string = "{:02x}".format(i)
+    j_hex_string = "{:02x}".format(j)
+  %>
+
+  occamy_chip i_occamy_${i}_${j} (
       .clk_i,
       .rst_ni,
       .clk_periph_i,
       .rst_periph_ni,
       .rtc_i,
-      .chip_id_i('0),
+      .chip_id_i(8'h${i_hex_string}${j_hex_string}),
       .test_mode_i(1'b0),
       .boot_mode_i(0),
-      .uart_tx_o(tx),
-      .uart_rx_i(rx),
+      .uart_tx_o(tx_${i}_${j}),
+      .uart_rx_i(rx_${i}_${j}),
       .uart_rts_no(),
       .uart_cts_ni('0),
       .gpio_d_i('0),
@@ -207,12 +236,30 @@ module testharness
       .BAUD('d20_000_000),
       // Frequency shouldn't matter since we are sending with the same clock.
       .FREQ(UartDPIFreq),
-      .NAME("uart0")
-  ) i_uart0 (
+      .NAME("uart_${i}_${j}")
+  ) i_uart_${i}_${j} (
       .clk_i (clk_i),
       .rst_ni(rst_ni),
-      .tx_o  (rx),
-      .rx_i  (tx)
+      .tx_o  (rx_${i}_${j}),
+      .rx_i  (tx_${i}_${j})
   );
+
+  // Chip Status Monitor Block
+  always @(i_occamy_${i}_${j}.i_spm_wide_cut.i_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32]) begin
+    if (i_occamy_${i}_${j}.i_spm_wide_cut.i_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32] != 0) begin
+      if (i_occamy_${i}_${j}.i_spm_wide_cut.i_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32] == 32'd1) begin
+        $display("Simulation of chip_${i}_${j} is finished at %tns", $time / 1000);
+        chip_finish[${i}][${j}] = 1;
+      end else begin
+        $error("Simulation of chip_${i}_${j} is finished with errors %d at %tns",
+               i_occamy_${i}_${j}.i_spm_wide_cut.i_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32],
+               $time / 1000);
+        chip_finish[${i}][${j}] = -1;
+      end
+    end
+  end
+
+%   endfor
+% endfor
 
 endmodule

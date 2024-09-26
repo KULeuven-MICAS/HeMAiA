@@ -36,3 +36,8 @@ inline uint8_t *get_chip_baseaddress(uint8_t chip_id) {
     return (uint8_t *)0;
 #endif
 }
+
+inline uint32_t get_current_chip_baseaddress_h() {
+    uint32_t chip_id = get_current_chip_id();
+    return (uint32_t)(chip_id << 8);
+}

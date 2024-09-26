@@ -5,7 +5,6 @@
 #include <stdint.h>
 
 #include "chip_id.h"
-#include "uart.h"
 #include "occamy.h"
 #include "occamy_memory_map.h"
 
@@ -25,7 +24,6 @@ inline static void set_host_sw_interrupt(uint8_t chip_id) {
     uint32_t* msip_ptr =
         (uint32_t*)(((uintptr_t)clint_msip_ptr(0)) |
                     ((uintptr_t)get_chip_baseaddress(chip_id)));
-    print_u32(0, (uintptr_t)msip_ptr);
     *msip_ptr = 1;
 }
 
