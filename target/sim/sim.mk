@@ -37,20 +37,20 @@ MATCH_END := '/+incdir+/ s/$$/\/*\/*/'
 MATCH_BGN := 's/+incdir+//g'
 SED_SRCS  := sed -e ${MATCH_END} -e ${MATCH_BGN}
 
-VSIM_BENDER   += -t test -t rtl -t simulation -t vsim
+VSIM_BENDER   += -t test -t rtl -t simulation_occamy -t vsim
 VSIM_SOURCES   = $(shell ${BENDER} script flist ${VSIM_BENDER} | ${SED_SRCS})
 VSIM_BUILDDIR ?= work-vsim
 VOPT_FLAGS     = +acc
 
 # VCS_BUILDDIR should to be the same as the `DEFAULT : ./work-vcs`
 # in target/snitch_cluster/synopsys_sim.setup
-VCS_BENDER   += -t test -t rtl -t simulation -t vcs
+VCS_BENDER   += -t test -t rtl -t simulation_occamy -t vcs
 VCS_SOURCES   = $(shell ${BENDER} script flist ${VCS_BENDER} | ${SED_SRCS})
 VCS_BUILDDIR := work-vcs
 
 # For synthesis with DC compiler
 SYN_FLIST ?= syn_flist.tcl
-SYN_BENDER += -t test -t synthesis -t simulation
+SYN_BENDER += -t test -t synthesis -t simulation_occamy
 ifeq ($(MEM_TYPE), exclude_tcsram)
 	VSIM_BENDER += -t tech_cells_generic_exclude_tc_sram
 	SYN_BENDER  += -t tech_cells_generic_exclude_tc_sram
@@ -70,7 +70,7 @@ SYN_BUILDDIR := work-syn
 FESVR         ?= ${MKFILE_DIR}work
 FESVR_VERSION ?= 98d2c29e431f3b14feefbda48c5f70c2f451acf2
 
-VLT_BENDER   += -t rtl -t simulation_vlt
+VLT_BENDER   += -t rtl -t simulation_occamy
 VLT_SOURCES   = $(shell ${BENDER} script flist ${VLT_BENDER} | ${SED_SRCS})
 VLT_BUILDDIR := work-vlt
 VLT_FESVR     = $(VLT_BUILDDIR)/riscv-isa-sim
@@ -245,9 +245,9 @@ endef
 # Traces #
 ##########
 
-DASM_TRACES      = $(shell (ls $(LOGS_DIR)/trace_hart_*.dasm 2>/dev/null))
+DASM_TRACES      = $(shell (ls $(LOGS_DIR)/trace_chip_??_hart_*.dasm 2>/dev/null))
 TXT_TRACES       = $(shell (echo $(DASM_TRACES) | sed 's/\.dasm/\.txt/g'))
-PERF_TRACES      = $(shell (echo $(DASM_TRACES) | sed 's/trace_hart/hart/g' | sed 's/.dasm/_perf.json/g'))
+PERF_TRACES      = $(shell (echo $(DASM_TRACES) | sed 's/.dasm/_perf.json/g'))
 ANNOTATED_TRACES = $(shell (echo $(DASM_TRACES) | sed 's/\.dasm/\.s/g'))
 DIFF_TRACES      = $(shell (echo $(DASM_TRACES) | sed 's/\.dasm/\.diff/g'))
 
@@ -265,16 +265,19 @@ perf-csv: $(PERF_CSV)
 event-csv: $(EVENT_CSV)
 layout: $(TRACE_CSV) $(TRACE_JSON)
 
-$(LOGS_DIR)/trace_hart_%.txt $(LOGS_DIR)/hart_%_perf.json: $(LOGS_DIR)/trace_hart_%.dasm $(GENTRACE_PY)
-	$(DASM) < $< | $(PYTHON) $(GENTRACE_PY) --permissive -d $(LOGS_DIR)/hart_$*_perf.json > $(LOGS_DIR)/trace_hart_$*.txt
-
+$(LOGS_DIR)/%.txt $(LOGS_DIR)/%_perf.json: $(LOGS_DIR)/%.dasm $(GENTRACE_PY)
+	@CHIP=$(word 3,$(subst _, ,$*)) && \
+	HART=$(word 5,$(subst _, ,$*)) && \
+	echo "Processing Chip $$CHIP Hart $$HART" && \
+	$(DASM) < $< | $(PYTHON) $(GENTRACE_PY) --permissive -d $(LOGS_DIR)/chip_$$CHIP\_hart_$$HART\_perf.json > $(LOGS_DIR)/trace_chip_$$CHIP\_hart_$$HART.txt
 # Generate source-code interleaved traces for all harts. Reads the binary from
 # the logs/.rtlbinary file that is written at start of simulation in the vsim script
 BINARY ?= $(shell cat $(LOGS_DIR)/.rtlbinary)
-$(LOGS_DIR)/trace_hart_%.s: $(LOGS_DIR)/trace_hart_%.txt ${ANNOTATE_PY}
-	$(PYTHON) ${ANNOTATE_PY} ${ANNOTATE_FLAGS} -o $@ $(BINARY) $<
-$(LOGS_DIR)/trace_hart_%.diff: $(LOGS_DIR)/trace_hart_%.txt ${ANNOTATE_PY}
-	$(PYTHON) ${ANNOTATE_PY} ${ANNOTATE_FLAGS} -o $@ $(BINARY) $< -d
+
+$(LOGS_DIR)/%.s: $(LOGS_DIR)/%.txt $(ANNOTATE_PY)
+	$(PYTHON) $(ANNOTATE_PY) $(ANNOTATE_FLAGS) -o $@ $(BINARY) $<
+$(LOGS_DIR)/%.diff: $(LOGS_DIR)/%.txt $(ANNOTATE_PY)
+	$(PYTHON) $(ANNOTATE_PY) $(ANNOTATE_FLAGS) -o $@ $(BINARY) $< -d
 
 $(PERF_CSV): $(PERF_TRACES) $(PERF_CSV_PY)
 	$(PYTHON) $(PERF_CSV_PY) -o $@ -i $(PERF_TRACES)

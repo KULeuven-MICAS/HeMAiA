@@ -128,7 +128,9 @@ module testharness
     clk_i  = 0;
 
     // Reset the chip
-    chip_finish = '0;
+    foreach (chip_finish[i,j]) begin
+      chip_finish[i][j] = 0;
+    end
     rst_ni = 1;
     #0;
     $display("Resetting the system at %tns", $time / 1000);
@@ -144,11 +146,11 @@ module testharness
 % endfor
   end
 
-  always @(chip_finish) begin
-    integer allFinished = 1;
-    integer allCorrect = 1;
-    for (int i = 0; i < ${x}; i = i + 1) begin
-      for (int j = 0; j < ${y}; j = j + 1) begin
+  always_comb begin
+    automatic integer allFinished = 1;
+    automatic integer allCorrect = 1;
+    for (int i = ${min(x)}; i <= ${max(x)}; i = i + 1) begin
+      for (int j = ${min(y)}; j <= ${max(y)}; j = j + 1) begin
         if (chip_finish[i][j] == 0) begin
           allFinished = 0;
         end
@@ -190,14 +192,17 @@ module testharness
   assign clk_periph_i  = clk_i;
   assign rst_periph_ni = rst_ni;
 
+  // Must be the frequency of i_uart0.clk_i in Hz
+  localparam int unsigned UartDPIFreq = 1_000_000_000;
+
 % for i in x:
 %   for j in y:
   /// Uart signals
   logic tx_${i}_${j}, rx_${i}_${j};
 
   <%
-    i_hex_string = "{:02x}".format(i)
-    j_hex_string = "{:02x}".format(j)
+    i_hex_string = "{:01x}".format(i)
+    j_hex_string = "{:01x}".format(j)
   %>
 
   occamy_chip i_occamy_${i}_${j} (
@@ -228,9 +233,6 @@ module testharness
       .spim_sd_io(),
       .ext_irq_i('0)
   );
-
-  // Must be the frequency of i_uart0.clk_i in Hz
-  localparam int unsigned UartDPIFreq = 1_000_000_000;
 
   uartdpi #(
       .BAUD('d20_000_000),

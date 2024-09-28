@@ -29,7 +29,7 @@ ROOT        := $(SIM_MKFILE_DIR)../..
 SNITCH_ROOT := $(shell bender path snitch_cluster)
 
 TARGET = occamy_chip
-LOGS_DIR = $(SIM_MKFILE_DIR)/bin/logs
+LOGS_DIR = logs
 
 CVA6_TXT_TRACE       = $(LOGS_DIR)/trace_hart_00000.txt
 CVA6_PERF_DUMP       = $(LOGS_DIR)/hart_00000_perf.json
@@ -110,10 +110,10 @@ VLT_COBJ += $(VLT_BUILDDIR)/testharness/testharness.o
 
 CVA6_BINARY ?= $(shell cat $(LOGS_DIR)/.rtlbinary)
 
-CVA6_TXT_TRACE       = $(LOGS_DIR)/trace_hart_00000.txt
-CVA6_PERF_TRACE      = $(LOGS_DIR)/hart_00000_perf.json
-CVA6_ANNOTATED_TRACE = $(LOGS_DIR)/trace_hart_00000.s
-CVA6_DIFF_TRACE      = $(LOGS_DIR)/trace_hart_00000.diff
+CVA6_TXT_TRACE       = $(LOGS_DIR)/trace_chip_00_hart_00000.txt
+CVA6_PERF_TRACE      = $(LOGS_DIR)/chip_00_hart_00000_perf.json
+CVA6_ANNOTATED_TRACE = $(LOGS_DIR)/trace_chip_00_hart_00000.s
+CVA6_DIFF_TRACE      = $(LOGS_DIR)/trace_chip_00_hart_00000.diff
 
 TXT_TRACES       += $(CVA6_TXT_TRACE)
 PERF_TRACES      += $(CVA6_PERF_TRACE)

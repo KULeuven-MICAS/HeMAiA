@@ -961,7 +961,8 @@ input  axi_rsp_t                     axi_resp_i
 
   instr_tracer instr_tracer_i (
     .tracer_if(tracer_if),
-    .hart_id_i
+    .hart_id_i,
+    .chip_id_i
   );
 
 // mock tracer for Verilator, to be used with spike-dasm

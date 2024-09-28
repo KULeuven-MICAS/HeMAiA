@@ -350,6 +350,7 @@ module ${name}_soc
   ) i_axi_dma_backend_sys_idma (
     .clk_i,
     .rst_ni,
+    .chip_id_i,
     .dma_id_i         ( 'd0                           ),
     .axi_dma_req_o    ( ${in_sys_idma_mst.req_name()} ),
     .axi_dma_res_i    ( ${in_sys_idma_mst.rsp_name()} ),
