@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 
+#include "chip_id.h"
 #include "occamy.h"
 #include "occamy_memory_map.h"
 
@@ -19,18 +20,32 @@ typedef struct {
 /* Interrupts */
 /**************/
 
-inline void set_host_sw_interrupt() { *clint_msip_ptr(0) = 1; }
-
-inline void clear_host_sw_interrupt_unsafe() { *clint_msip_ptr(0) = 0; }
-
-inline void wait_host_sw_interrupt_clear() {
-    while (*clint_msip_ptr(0))
-        ;
+inline static void set_host_sw_interrupt(uint8_t chip_id) {
+    uint32_t* msip_ptr =
+        (uint32_t*)(((uintptr_t)clint_msip_ptr(0)) |
+                    ((uintptr_t)get_chip_baseaddress(chip_id)));
+    *msip_ptr = 1;
 }
 
-inline void clear_host_sw_interrupt() {
-    clear_host_sw_interrupt_unsafe();
-    wait_host_sw_interrupt_clear();
+inline void clear_host_sw_interrupt_unsafe(uint8_t chip_id) {
+    uint32_t* msip_ptr =
+        (uint32_t*)(((uintptr_t)clint_msip_ptr(0)) |
+                    ((uintptr_t)get_chip_baseaddress(chip_id)));
+
+    *msip_ptr = 0;
+}
+
+inline void wait_host_sw_interrupt_clear(uint8_t chip_id) {
+    uint32_t* msip_ptr =
+        (uint32_t*)(((uintptr_t)clint_msip_ptr(0)) |
+                    ((uintptr_t)get_chip_baseaddress(chip_id)));
+
+    while (*msip_ptr);
+}
+
+static inline void clear_host_sw_interrupt(uint8_t chip_id) {
+    clear_host_sw_interrupt_unsafe(chip_id);
+    wait_host_sw_interrupt_clear(chip_id);
 }
 
 /**************************/
@@ -38,17 +53,23 @@ inline void clear_host_sw_interrupt() {
 /**************************/
 
 // Configure RO cache address range
-inline void configure_read_only_cache_addr_rule(uint32_t quad_idx,
+inline void configure_read_only_cache_addr_rule(uint8_t chip_id,
+                                                uint32_t quad_idx,
                                                 uint32_t rule_idx,
                                                 uint64_t start_addr,
                                                 uint64_t end_addr) {
     volatile uint64_t* rule_ptr =
-        quad_cfg_ro_cache_addr_rule_ptr(quad_idx, rule_idx);
+        (uint64_t*)(((uintptr_t)quad_cfg_ro_cache_addr_rule_ptr(quad_idx,
+                                                                rule_idx)) |
+                    ((uintptr_t)get_chip_baseaddress(chip_id)));
     *(rule_ptr) = start_addr;
     *(rule_ptr + 1) = end_addr;
 }
 
 // Enable RO cache
-inline void enable_read_only_cache(uint32_t quad_idx) {
-    *(quad_cfg_ro_cache_enable_ptr(quad_idx)) = 1;
+inline void enable_read_only_cache(uint8_t chip_id, uint32_t quad_idx) {
+    volatile uint32_t* enable_ptr =
+        (uint32_t*)(((uintptr_t)quad_cfg_ro_cache_enable_ptr(quad_idx)) |
+                    ((uintptr_t)get_chip_baseaddress(chip_id)));
+    *enable_ptr = 1;
 }

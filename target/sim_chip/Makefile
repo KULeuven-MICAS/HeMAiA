@@ -29,6 +29,7 @@ ROOT        := $(SIM_MKFILE_DIR)../..
 SNITCH_ROOT := $(shell bender path snitch_cluster)
 
 TARGET = occamy_chip
+LOGS_DIR = logs
 
 CVA6_TXT_TRACE       = $(LOGS_DIR)/trace_hart_00000.txt
 CVA6_PERF_DUMP       = $(LOGS_DIR)/hart_00000_perf.json
@@ -109,10 +110,10 @@ VLT_COBJ += $(VLT_BUILDDIR)/testharness/testharness.o
 
 CVA6_BINARY ?= $(shell cat $(LOGS_DIR)/.rtlbinary)
 
-CVA6_TXT_TRACE       = $(LOGS_DIR)/trace_hart_00000.txt
-CVA6_PERF_TRACE      = $(LOGS_DIR)/hart_00000_perf.json
-CVA6_ANNOTATED_TRACE = $(LOGS_DIR)/trace_hart_00000.s
-CVA6_DIFF_TRACE      = $(LOGS_DIR)/trace_hart_00000.diff
+CVA6_TXT_TRACE       = $(LOGS_DIR)/trace_chip_00_hart_00000.txt
+CVA6_PERF_TRACE      = $(LOGS_DIR)/chip_00_hart_00000_perf.json
+CVA6_ANNOTATED_TRACE = $(LOGS_DIR)/trace_chip_00_hart_00000.s
+CVA6_DIFF_TRACE      = $(LOGS_DIR)/trace_chip_00_hart_00000.diff
 
 TXT_TRACES       += $(CVA6_TXT_TRACE)
 PERF_TRACES      += $(CVA6_PERF_TRACE)
@@ -140,11 +141,40 @@ apps:
 clean-apps:
 	$(MAKE) -C apps clean
 
+###############
+# Testharness #
+###############
+
+TARGET_RTL = $(ROOT)/target/rtl
+
+CFG = $(TARGET_RTL)/cfg/occamy_cfg/lru.hjson
+
+OCCAMYGEN ?= $(ROOT)/util/occamygen/occamygen.py
+
+$(CFG):
+	@# If the LRU config file doesn't exist, we use the default config.
+	@if [ ! -e $@ ] ; then \
+		DEFAULT_CFG="$(TARGET_RTL)/cfg/occamy_cfg/hemaia.hjson"; \
+		echo "Using default config file: $$DEFAULT_CFG"; \
+		cp $$DEFAULT_CFG $@; \
+	fi
+	@# If a config file is provided on the command-line 
+	@# then we override the LRU file with it
+	@if [ $(CFG_OVERRIDE) ] ; then \
+		echo "Overriding config file with: $(CFG_OVERRIDE)"; \
+		cp $(CFG_OVERRIDE) $@; \
+	fi
+
+
+testharness/testharness.sv: testharness/testharness.sv.tpl $(CFG)
+	@echo "[OCCAMYGEN] Generate $@"
+	@$(OCCAMYGEN) --cfg $(CFG) --outdir testharness --multichip-testharness-sv $<
+
 #############
 # Verilator #
 #############
 
-${VLT_AR}: ${VLT_SOURCES} ${TB_SRCS}
+${VLT_AR}: ${VLT_SOURCES} ${TB_SRCS} testharness/testharness.sv
 	$(call VERILATE,testharness)
 
 # Quick sanity check, not really meant for simulation.
@@ -184,7 +214,7 @@ clean-vlt: clean-work
 $(VSIM_BUILDDIR):
 	mkdir -p $@
 
-$(VSIM_BUILDDIR)/compile.vsim.tcl: $(BENDER_LOCK) | $(VSIM_BUILDDIR)
+$(VSIM_BUILDDIR)/compile.vsim.tcl: $(BENDER_LOCK) | $(VSIM_BUILDDIR) testharness/testharness.sv
 	$(BENDER) script vsim $(VSIM_BENDER) --vlog-arg="$(VLOG_FLAGS) -work $(dir $@) " > $@
 	echo '$(VLOG) -work $(dir $@) $(TB_CC_SOURCES) -vv -ccflags "$(TB_CC_FLAGS)"' >> $@
 	echo 'return 0' >> $@

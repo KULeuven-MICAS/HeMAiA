@@ -6,31 +6,38 @@
 
 int main() {
     // Reset and ungate all quadrants, deisolate
-    init_uart(50000000, 1000000);
-    print_uart("[Occamy] The Offload main function \r\n");
-    reset_and_ungate_quadrants();
-    deisolate_all();
+    uintptr_t address_prefix = (uintptr_t)get_current_chip_baseaddress();
+    uint32_t chip_id = get_current_chip_id();
 
+    init_uart(address_prefix, 50000000, 1000000);
+    print_str(address_prefix, "[Occamy] The Offload main function \r\n");
+    print_str(address_prefix, "[Occamy] Current Chip ID is: ");
+    print_u8(address_prefix, chip_id);
+    print_str(address_prefix, "\r\n");    
+    reset_and_ungate_quadrants(chip_id);
+    print_str(address_prefix, "[Occamy] Snitch ungated. \r\n");
+    deisolate_all(chip_id);
+    print_str(address_prefix, "[Occamy] Snitch deisolated. \r\n");
     // Enable interrupts to receive notice of job termination
     enable_sw_interrupts();
-
     // Program Snitch entry point and communication buffer
-    program_snitches();
+    program_snitches(chip_id);
+    print_str(address_prefix, "[Occamy] Snitch Jump Address Programmed. \r\n");
 
     // Compiler fence to ensure Snitch entry point is
     // programmed before Snitches are woken up
     asm volatile("" ::: "memory");
 
-    print_uart("[Occamy] Calling snitch cluster to execute the task \r\n");
+    print_str(address_prefix, "[Occamy] Calling snitch cluster to execute the task \r\n");
 
     // Start Snitches
-    wakeup_snitches_cl();
+    wakeup_snitches_cl(chip_id);
 
-    int ret = wait_snitches_done();
+    int ret = wait_snitches_done(chip_id);
 
-    print_uart("[Occamy] Snitch cluster done with exit code ");
-    print_uart_int(ret);
-    print_uart("\r\n");
+    print_str(address_prefix, "[Occamy] Snitch cluster done with exit code ");
+    print_u32(address_prefix, ret);
+    print_str(address_prefix, "\r\n");
 
     // Wait for job done and return Snitch exit code
     return ret;

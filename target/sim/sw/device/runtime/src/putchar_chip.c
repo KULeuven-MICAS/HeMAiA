@@ -7,8 +7,6 @@
 #include "uart.h"
 
 void _putchar(char character) {
-    while (is_transmit_empty() == 0) {
-    };
-
-    write_reg_u8(UART_THR, character);
+    // Print to UART of local chip
+    print_char((uintptr_t)0, character);
 }

@@ -20,7 +20,8 @@
 
 module instr_tracer (
   instr_tracer_if   tracer_if,
-  input logic[riscv::XLEN-1:0] hart_id_i
+  input logic[riscv::XLEN-1:0] hart_id_i,
+  input ariane_pkg::chip_id_t  chip_id_i
 );
 
   // keep the decoded instructions in a queue
@@ -44,11 +45,12 @@ module instr_tracer (
 
   // static uvm_cmdline_processor uvcl = uvm_cmdline_processor::get_inst();
 
-  function void create_file(logic [63:0] hart_id);
+  function void create_file(logic [7:0] chip_id, logic [63:0] hart_id);
     string fn, fn_commit_log;
-    $sformat(fn, "trace_hart_%0.0f.log", hart_id);
-    $sformat(fn_commit_log, "trace_hart_%0.0f_commit.log", hart_id);
-    $display("[TRACER] Output filename is: %s", fn);
+    $sformat(fn, "logs/trace_chip_%01x%01x_hart_%05x.log", chip_id[7:4], chip_id[3:0], hart_id);
+    $sformat(fn_commit_log, "logs/trace_chip_%01x%01x_hart_%05x_commit.log", chip_id[7:4],
+             chip_id[3:0], hart_id);
+    $display("[Tracer] Logging Hart %d to %s", hart_id, fn);
 
     f = $fopen(fn,"w");
     if (ariane_pkg::ENABLE_SPIKE_COMMIT_LOG) commit_log = $fopen(fn_commit_log, "w");
@@ -214,7 +216,7 @@ module instr_tracer (
 
   initial begin
     #15ns;
-    create_file(hart_id_i);
+    create_file(chip_id_i, hart_id_i);
     trace();
   end
 

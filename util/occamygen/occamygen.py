@@ -92,6 +92,9 @@ def main():
     parser.add_argument("--testharness-sv",
                         metavar="TESTHARNESS_SV",
                         help="Name of the testharness wrapper file (output).")
+    parser.add_argument("--multichip-testharness-sv",
+                        metavar="MULTICHIP_TESTHARNESS_SV",
+                        help="Name of the multichip testharness wrapper file (output).")
     parser.add_argument("--cva6-sv",
                         metavar="CVA6_SV",
                         help="Name of the CVA6 wrapper file (output).")
@@ -603,6 +606,10 @@ def main():
         testharness_kwargs = occamy.get_testharness_kwargs(
             soc_wide_xbar, soc_axi_lite_narrow_periph_xbar, occamy_cfg["hemaia_multichip"]["single_chip_id"], solder, name)
         write_template(args.testharness_sv, outdir, **testharness_kwargs)
+
+    if args.multichip_testharness_sv:
+        multichip_testharness_kwargs = occamy.get_multichip_testharness_kwargs(occamy_cfg, name)
+        write_template(args.multichip_testharness_sv, outdir, **multichip_testharness_kwargs)
 
     ############
     # BOOTDATA #
