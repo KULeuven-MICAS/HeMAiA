@@ -9,7 +9,8 @@ def copy_file_m_n_times(input_file, m, n):
     if not os.path.isfile(input_file):
         print(f"Error: {input_file} does not exist.")
         return
-
+    
+    os.makedirs("../bin/", exist_ok=True)
     # Loop through m and n to create copies
     for x in range(m):
         for y in range(n):
