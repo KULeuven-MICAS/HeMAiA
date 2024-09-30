@@ -85,8 +85,8 @@ int main() {
                 gen_subtraction_config(subtraction_a, subtraction_b);
 
             uint32_t csr0 =
-                gen_csr0_config(input_zp_i, output_zp_i, shift_i, max_int_i);
-            uint32_t csr1 = gen_csr1_config(min_int_i, double_round_i);
+                gen_csr0_config(input_zp_i, output_zp_i, max_int_i, min_int_i);
+            uint32_t csr1 = gen_csr1_config(double_round_i);
 
             set_gemmx_csr(
                 K, N, M, subtraction_setting, csr0, csr1, shared_bitpacked_shift0,
