@@ -335,7 +335,7 @@ static inline void reset_and_ungate_quadrants(uint8_t chip_id, uint32_t cluster_
     for (int i = 0; i < N_QUADS; i++) reset_and_ungate_quad(chip_id, i, cluster_enable_value);
 }
 
-static inline void reset_and_ungate_quadrants_all(chip_id) {
+static inline void reset_and_ungate_quadrants_all(uint8_t chip_id) {
     for (int i = 0; i < N_QUADS; i++) reset_and_ungate_quad(chip_id, i, 0xFFFF);
 }
 //===============================================================
