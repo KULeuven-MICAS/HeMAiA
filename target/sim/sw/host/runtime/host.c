@@ -303,11 +303,11 @@ static inline volatile uint32_t* get_shared_lock() {
 //===============================================================
 
 static inline void set_clk_ena_quad(uint8_t chip_id, uint32_t quad_idx,
-                                    uint32_t value, uint32_t clk_enable_mask) {
+                                    uint32_t value, uint32_t cluster_clk_enable_mask) {
     uint32_t* clk_ena_ptr =
         (uint32_t*)((uintptr_t)quad_cfg_clk_ena_ptr(quad_idx) |
                     (uintptr_t)get_chip_baseaddress(chip_id));
-    *clk_ena_ptr = value & clk_enable_mask;
+    *clk_ena_ptr = value & cluster_clk_enable_mask;
 }
 
 // static inline void set_clk_ena_quad(uint32_t quad_idx, uint32_t value) {
@@ -323,16 +323,16 @@ static inline void set_reset_n_quad(uint8_t chip_id, uint32_t quad_idx,
 }
 
 static inline void reset_and_ungate_quad(uint8_t chip_id,
-                                         uint32_t quadrant_idx, uint32_t cluster_enable_value) {
+                                         uint32_t quadrant_idx, uint32_t cluster_clk_enable_mask) {
     set_reset_n_quad(chip_id, quadrant_idx, 0);
-    set_clk_ena_quad(chip_id, quadrant_idx, 0, cluster_enable_value);
+    set_clk_ena_quad(chip_id, quadrant_idx, 0, cluster_clk_enable_mask);
     __asm__ __volatile__("fence" ::: "memory");
-    set_reset_n_quad(chip_id, quadrant_idx, 1);
-    set_clk_ena_quad(chip_id, quadrant_idx, 1, cluster_enable_value);
+    set_reset_n_quad(chip_id, quadrant_idx, 0xFFFFFFFF);
+    set_clk_ena_quad(chip_id, quadrant_idx, 0xFFFFFFFF, cluster_clk_enable_mask);
 }
 
-static inline void reset_and_ungate_quadrants(uint8_t chip_id, uint32_t cluster_enable_value) {
-    for (int i = 0; i < N_QUADS; i++) reset_and_ungate_quad(chip_id, i, cluster_enable_value);
+static inline void reset_and_ungate_quadrants(uint8_t chip_id, uint32_t cluster_clk_enable_mask) {
+    for (int i = 0; i < N_QUADS; i++) reset_and_ungate_quad(chip_id, i, cluster_clk_enable_mask);
 }
 
 static inline void reset_and_ungate_quadrants_all(uint8_t chip_id) {
