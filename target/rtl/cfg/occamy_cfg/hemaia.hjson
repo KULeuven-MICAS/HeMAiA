@@ -108,10 +108,10 @@
       cfg_base_offset: 65536 // 0x10000
     },
     clusters:[
-      "snax_KUL_cluster",
       "snax_KUL_xdma_cluster",
       "snax_hypercorex_cluster",
-      "snax_hypercorex_cluster"
+      "snax_cgra_cluster",
+      "snax_dimc_cluster"
     ],
 
     // peripherals
