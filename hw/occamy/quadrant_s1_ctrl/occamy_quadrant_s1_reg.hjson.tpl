@@ -17,7 +17,10 @@
       hwaccess: "hro",
       // Clock disabled (i.e. gated) by default
       fields: [
-        {bits: "0:0", name: "clk_ena", resval: 0, desc: "Clock gate enable"}
+% for cluster_idx in range(num_clusters):
+        {bits: "${cluster_idx}:${cluster_idx}", name: "ena_cluster_${cluster_idx}", resval: 0, desc: "Clock gate enable for cluster ${cluster_idx}"}
+% endfor
+        {bits: "${num_clusters}:${num_clusters}", name: "ena_quad_uncore",  resval: 0, desc: "Clock gate enable for cluster un-core"},
       ],
     },
     { name: "RESET_N",

@@ -22,7 +22,8 @@ module ${name}_quadrant_s1_ctrl
   input  chip_id_t chip_id_i,
 
   // Quadrant clock and reset
-  output logic clk_quadrant_o,
+  output logic [${num_clusters-1}:0] clk_quadrant_cluster_o,
+  output logic clk_quadrant_uncore_o,
   output logic rst_quadrant_no,
 
   // Quadrant control signals
@@ -157,12 +158,22 @@ module ${name}_quadrant_s1_ctrl
   % endif
 
   // Quadrant clock gate controlled by register
-  tc_clk_gating i_tc_clk_gating_quadrant (
+  % for cluster_idx in range(num_clusters):
+  tc_clk_gating i_tc_clk_gating_quadrant_cluster_${cluster_idx} (
     .clk_i,
-    .en_i (reg2hw.clk_ena.q),
+    .en_i (reg2hw.clk_ena.ena_cluster_${cluster_idx}.q),
     .test_en_i (test_mode_i),
-    .clk_o (clk_quadrant_o)
+    .clk_o (clk_quadrant_cluster_o[${cluster_idx}])
   );
+  % endfor
+
+  tc_clk_gating i_tc_clk_gating_quadrant_cluster_uncore (
+    .clk_i,
+    .en_i (reg2hw.clk_ena.en_quad_uncore.q),
+    .test_en_i (test_mode_i),
+    .clk_o (clk_quadrant_uncore_o)
+  );
+  
 
   // Reset directly from register (i.e. (de)assertion inherently synchronized)
   // Multiplex with glitchless multiplexor, top reset for testing purposes

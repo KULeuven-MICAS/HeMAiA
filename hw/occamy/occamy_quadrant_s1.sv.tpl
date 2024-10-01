@@ -66,7 +66,9 @@ module ${name}_quadrant_s1
   `AXI_TLB_TYPEDEF_ALL(tlb, logic [AddrWidth-12-1:0], logic [AddrWidth-12-1:0])
 
   // Signals from Controller
-  logic clk_quadrant, rst_quadrant_n;
+  logic clk_quadrant_uncore, rst_quadrant_n;
+  logic [${nr_clusters-1}:0] clk_quadrant_cluster;
+
   logic [3:0] isolate, isolated;
   logic ro_enable, ro_flush_valid, ro_flush_ready;
   logic [${ro_cache_regions-1}:0][${soc_wide_xbar.in_quadrant_0.aw-1}:0] ro_start_addr, ro_end_addr;
@@ -93,7 +95,7 @@ module ${name}_quadrant_s1
       .declare(context)
     narrow_cluster_in_ctrl \
       .cut(context, cuts_narrx_with_ctrl) \
-      .isolate(context, "isolate[0]", "narrow_cluster_in_isolate", isolated="isolated[0]", terminated=True, to_clk="clk_quadrant", to_rst="rst_quadrant_n", num_pending=narrow_trans) \
+      .isolate(context, "isolate[0]", "narrow_cluster_in_isolate", isolated="isolated[0]", terminated=True, to_clk="clk_quadrant_uncore", to_rst="rst_quadrant_n", num_pending=narrow_trans) \
       .change_iw(context, narrow_xbar_quadrant_s1.in_top.iw, "narrow_cluster_in_iwc", to=narrow_xbar_quadrant_s1.in_top)
   %>
 
@@ -172,7 +174,7 @@ module ${name}_quadrant_s1
       .copy(name="wide_cluster_in_iwc") \
       .declare(context) \
       .cut(context, cuts_wideiwc_with_wideout) \
-      .isolate(context, "isolate[2]", "wide_cluster_in_isolate", isolated="isolated[2]", terminated=True, atop_support=False, to_clk="clk_quadrant", to_rst="rst_quadrant_n", num_pending=wide_trans) \
+      .isolate(context, "isolate[2]", "wide_cluster_in_isolate", isolated="isolated[2]", terminated=True, atop_support=False, to_clk="clk_quadrant_uncore", to_rst="rst_quadrant_n", num_pending=wide_trans) \
       .cut(context, cuts_wideisolate_with_wideiwc_in) \
       .change_iw(context, wide_xbar_quadrant_s1.in_top.iw, "wide_cluster_in_iwc", to=wide_xbar_quadrant_s1.in_top)
   %>
@@ -190,7 +192,8 @@ module ${name}_quadrant_s1
     .rst_ni,
     .test_mode_i,
     .chip_id_i,
-    .clk_quadrant_o (clk_quadrant),
+    .clk_quadrant_uncore_o (clk_quadrant_uncore),
+    .clk_quadrant_cluster_o (clk_quadrant_cluster),
     .rst_quadrant_no (rst_quadrant_n),
     .isolate_o (isolate),
     .isolated_i (isolated),
@@ -235,7 +238,7 @@ module ${name}_quadrant_s1
   assign hart_base_id_${i} = HartIdOffset + NrCoresClusterOffset[${i}];
 
   ${cluster_name}_wrapper i_${name}_cluster_${i} (
-    .clk_i (clk_quadrant),
+    .clk_i (clk_quadrant_cluster[${i}]),
     .rst_ni (rst_quadrant_n),
     .meip_i (meip_i[NrCoresClusterOffset[${i}]+:NrCoresCluster[${i}]]),
     .mtip_i (mtip_i[NrCoresClusterOffset[${i}]+:NrCoresCluster[${i}]]),

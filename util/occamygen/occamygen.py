@@ -444,7 +444,7 @@ def main():
         occamy_cfg["s1_quadrant"]["wide_xbar_slv_id_width"],
         chipidw=occamy_cfg["hemaia_multichip"]["chip_id_width"],
         name="wide_xbar_quadrant_s1",
-        clk="clk_quadrant",
+        clk="clk_quadrant_uncore",
         rst="rst_quadrant_n",
         max_slv_trans=occamy_cfg["s1_quadrant"]["wide_xbar"]["max_slv_trans"],
         max_mst_trans=occamy_cfg["s1_quadrant"]["wide_xbar"]["max_mst_trans"],
@@ -461,7 +461,7 @@ def main():
         occamy_cfg["s1_quadrant"]["narrow_xbar_user_width"],
         chipidw=occamy_cfg["hemaia_multichip"]["chip_id_width"],
         name="narrow_xbar_quadrant_s1",
-        clk="clk_quadrant",
+        clk="clk_quadrant_uncore",
         rst="rst_quadrant_n",
         max_slv_trans=occamy_cfg["s1_quadrant"]["narrow_xbar"]
         ["max_slv_trans"],
