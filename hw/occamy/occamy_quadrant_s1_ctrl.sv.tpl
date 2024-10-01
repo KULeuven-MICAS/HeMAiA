@@ -169,7 +169,7 @@ module ${name}_quadrant_s1_ctrl
 
   tc_clk_gating i_tc_clk_gating_quadrant_cluster_uncore (
     .clk_i,
-    .en_i (reg2hw.clk_ena.en_quad_uncore.q),
+    .en_i (reg2hw.clk_ena.ena_quad_uncore.q),
     .test_en_i (test_mode_i),
     .clk_o (clk_quadrant_uncore_o)
   );
