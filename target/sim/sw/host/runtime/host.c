@@ -289,25 +289,34 @@ static inline volatile uint32_t* get_shared_lock() {
 // Reset and clock gating
 //===============================================================
 
-static inline void set_clk_ena_quad(uint32_t quad_idx, uint32_t value) {
-    *quad_cfg_clk_ena_ptr(quad_idx) = value & 0x1;
+static inline void set_clk_ena_quad(uint32_t quad_idx, uint32_t value, uint32_t clk_enable_mask) {
+    *quad_cfg_clk_ena_ptr(quad_idx) = value & clk_enable_mask;
 }
+
+// static inline void set_clk_ena_quad(uint32_t quad_idx, uint32_t value) {
+//     *quad_cfg_clk_ena_ptr(quad_idx) = value & 0x1;
+// }
 
 static inline void set_reset_n_quad(uint32_t quad_idx, uint32_t value) {
     *quad_cfg_reset_n_ptr(quad_idx) = value & 0x1;
 }
 
-static inline void reset_and_ungate_quad(uint32_t quadrant_idx) {
+static inline void reset_and_ungate_quad(uint32_t quadrant_idx, uint32_t cluster_enable_value) {
+    // The N_CLUSTER + 1 is for the uncore
+    uint32_t clk_enable_mask = (1 << (N_CLUSTERS + 1) ) - 1;
     set_reset_n_quad(quadrant_idx, 0);
-    set_clk_ena_quad(quadrant_idx, 0);
+    set_clk_ena_quad(quadrant_idx, 0, clk_enable_mask);
     set_reset_n_quad(quadrant_idx, 1);
-    set_clk_ena_quad(quadrant_idx, 1);
+    set_clk_ena_quad(quadrant_idx, cluster_enable_value, clk_enable_mask);
 }
 
-static inline void reset_and_ungate_quadrants() {
-    for (int i = 0; i < N_QUADS; i++) reset_and_ungate_quad(i);
+static inline void reset_and_ungate_quadrants(uint32_t cluster_enable_value) {
+    for (int i = 0; i < N_QUADS; i++) reset_and_ungate_quad(i, cluster_enable_value);
 }
 
+static inline void reset_and_ungate_quadrants_all() {
+    for (int i = 0; i < N_QUADS; i++) reset_and_ungate_quad(i, 0xFFFF);
+}
 //===============================================================
 // Interrupts
 //===============================================================

@@ -8,7 +8,12 @@ int main() {
     // Reset and ungate all quadrants, deisolate
     init_uart(32, 1);
     print_uart("[Occamy] The Offload main function \r\n");
-    reset_and_ungate_quadrants();
+    reset_and_ungate_quadrants_all();
+    // To enable the cluster gating
+    // uncore c3 c2 c1 c0
+    // 1      0  0  1  1
+    // 0x13
+    // reset_and_ungate_quadrants(0x13);
     deisolate_all();
 
     // Enable interrupts to receive notice of job termination

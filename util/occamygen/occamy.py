@@ -438,6 +438,7 @@ def get_soc_kwargs(occamy_cfg, cluster_generators, soc_narrow_xbar, soc_wide_xba
 
 
 def get_quadrant_ctrl_kwargs(occamy_cfg, soc_wide_xbar, soc_narrow_xbar, quadrant_s1_ctrl_xbars, quadrant_s1_ctrl_mux, name):
+    num_clusters = len(occamy_cfg["clusters"])
     ro_cache_cfg = occamy_cfg["s1_quadrant"].get("ro_cache_cfg", {})
     ro_cache_regions = ro_cache_cfg.get("address_regions", 1)
     narrow_tlb_cfg = occamy_cfg["s1_quadrant"].get("narrow_tlb_cfg", {})
@@ -448,6 +449,7 @@ def get_quadrant_ctrl_kwargs(occamy_cfg, soc_wide_xbar, soc_narrow_xbar, quadran
     quadrant_ctrl_kwargs = {
         "name": name,
         "occamy_cfg": occamy_cfg,
+        "num_clusters": num_clusters,
         "ro_cache_cfg": ro_cache_cfg,
         "ro_cache_regions": ro_cache_regions,
         "narrow_tlb_cfg": narrow_tlb_cfg,
