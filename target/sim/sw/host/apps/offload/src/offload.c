@@ -14,7 +14,7 @@ int main() {
     print_str(address_prefix, "[Occamy] Current Chip ID is: ");
     print_u8(address_prefix, chip_id);
     print_str(address_prefix, "\r\n");    
-    reset_and_ungate_quadrants(chip_id);
+    reset_and_ungate_quadrants_all(chip_id);
     print_str(address_prefix, "[Occamy] Snitch ungated. \r\n");
     deisolate_all(chip_id);
     print_str(address_prefix, "[Occamy] Snitch deisolated. \r\n");
