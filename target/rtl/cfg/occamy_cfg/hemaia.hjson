@@ -110,7 +110,7 @@
     clusters:[
       "snax_KUL_xdma_cluster",
       "snax_hypercorex_cluster",
-      "snax_cgra_cluster",
+      "snax_KUL_xdma_cluster",
       "snax_dimc_cluster"
     ],
 
@@ -166,9 +166,7 @@
                 name: "spim",
                 address: 50331648, // 0x0300_0000
                 length: 131072, // 4 kiB 0x2_0000
-            },
-            {
-                name: "plic",
+            },CFG_OVERRIDE=/repo/target/rtl/cfg/occamy_cfg/hemaia.hjson
                 address: 201326592, // 0x0C00_0000
                 length: 67108864, // 64 MiB 0x400_0000
             },
