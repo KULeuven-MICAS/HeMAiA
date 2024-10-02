@@ -103,25 +103,47 @@ module testharness import occamy_pkg::*; (
     .test_mode_i (1'b0),
     .chip_id_i ('0),
     .boot_mode_i ('0),
+    // UART
     .uart_tx_o (tx),
     .uart_cts_ni ('0),
     .uart_rts_no (),
     .uart_rx_i (rx),
+    // GPIO
     .gpio_d_i ('0),
     .gpio_d_o (),
     .gpio_oe_o (),
+    // JTAG
     .jtag_trst_ni ('0),
     .jtag_tck_i ('0),
     .jtag_tms_i ('0),
     .jtag_tdi_i ('0),
     .jtag_tdo_o (),
-    .i2c_sda_io (),
-    .i2c_scl_io (),
+    // I2C
+    .i2c_sda_o (),
+    .i2c_sda_i ('0),
+    .i2c_sda_en_o (),
+    .i2c_scl_o (),
+    .i2c_scl_i ('0),
+    .i2c_scl_en_o (),
+    // SPI Master
     .spim_sck_o (),
+    .spim_sck_en_o (),
     .spim_csb_o (),
-    .spim_sd_io (),
+    .spim_csb_en_o (),
+    .spim_sd_o(),
+    .spim_sd_en_o(),
+    .spim_sd_i('0),
+    // SPI Slave
+    .spis_sck_i ('0),
+    .spis_csb_i ('0),
+    .spis_mode_o(),
+    .spis_sd_o (),
+    .spis_sd_en_o (),
+    .spis_sd_i ('0),
+    // Bootrom
     .bootrom_req_o (axi_lite_bootrom_req),
     .bootrom_rsp_i (axi_lite_bootrom_rsp),
+    // Main RAM
     .spm_axi_wide_req_o (spm_wide_req),
     .spm_axi_wide_rsp_i (spm_wide_rsp),
     .ext_irq_i ('0)

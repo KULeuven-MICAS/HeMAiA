@@ -52,10 +52,10 @@ module ${name}_top
   output logic [3:0]  spim_sd_o,
   output logic [3:0]  spim_sd_en_o,
   input        [3:0]  spim_sd_i,
-  <% 
+<% 
   spi_slave_present = any(periph["name"] == "spi_slave" for periph in occamy_cfg["peripherals"]["axi_lite_peripherals"])
-  if spi_slave_present: 
-  %>
+%>
+% if spi_slave_present: 
   // `SPI Slave` for Debugging Purposes
   input  logic        spis_sck_i,
   input  logic        spis_csb_i,
@@ -63,8 +63,7 @@ module ${name}_top
   output logic [3:0]  spis_sd_o,
   output logic [3:0]  spis_sd_en_o,
   input  logic [3:0]  spis_sd_i,
-
-  <% endif %>
+% endif
 
   /// Boot ROM
   output ${soc_axi_lite_narrow_periph_xbar.out_bootrom.req_type()} bootrom_req_o,
@@ -325,9 +324,9 @@ module ${name}_top
 
 
   <% 
-  spi_slave_present = any(periph["name"] == "spi_slave" for periph in occamy_cfg["peripherals"]["axi_lite_peripherals"])
-  if spi_slave_present: 
-    axi_spi_slave = soc_periph_xbar.out_spi_slave
+    spi_slave_present = any(periph["name"] == "spi_slave" for periph in occamy_cfg["peripherals"]["axi_lite_peripherals"])
+    if spi_slave_present: 
+      axi_spi_slave = soc_periph_xbar.in_spi_slave
   %>
   ///////////////////////////////////////
   // SPI Slave for Debugging Purposes ///
