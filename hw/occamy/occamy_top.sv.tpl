@@ -59,7 +59,6 @@ module ${name}_top
   // `SPI Slave` for Debugging Purposes
   input  logic        spis_sck_i,
   input  logic        spis_csb_i,
-  input  logic [1:0]  spis_mode_o,
   output logic [3:0]  spis_sd_o,
   output logic [3:0]  spis_sd_en_o,
   input  logic [3:0]  spis_sd_i,
@@ -341,7 +340,6 @@ module ${name}_top
     .axi_lite_rsp_i(${axi_spi_slave.rsp_name()}),
     .spi_sclk_i(spis_sck_i),
     .spi_cs_i(spis_csb_i),
-    .spi_mode_o(spis_mode_o),
     .spi_sdi_i(spis_sd_i),
     .spi_sdo_o(spis_sd_o),
     .spi_oen_o(spis_sd_en_o)
@@ -471,8 +469,6 @@ module ${name}_top
   <% regbus_spim = soc_axi_lite_narrow_periph_xbar.out_spim \
     .cut(context, cuts_spim_cfg, name="soc_axi_lite_narrow_periph_xbar_out_spim_cut") \
     .to_reg(context, "axi_lite_to_reg_spim") %>
-
-  logic [3:0] spim_sd_i, spim_sd_o, spim_sd_en_o;
   spi_host #(
     .reg_req_t (${regbus_spim.req_type()}),
     .reg_rsp_t (${regbus_spim.rsp_type()})

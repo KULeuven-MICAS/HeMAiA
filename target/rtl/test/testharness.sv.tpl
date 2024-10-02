@@ -136,7 +136,6 @@ module testharness import occamy_pkg::*; (
     // SPI Slave
     .spis_sck_i ('0),
     .spis_csb_i ('0),
-    .spis_mode_o(),
     .spis_sd_o (),
     .spis_sd_en_o (),
     .spis_sd_i ('0),
