@@ -53,7 +53,7 @@ module ${name}_top
   output logic [3:0]  spim_sd_en_o,
   input        [3:0]  spim_sd_i,
 <% 
-  spi_slave_present = any(periph["name"] == "spi_slave" for periph in occamy_cfg["peripherals"]["axi_lite_peripherals"])
+  spi_slave_present = any(periph["name"] == "spis" for periph in occamy_cfg["peripherals"]["axi_lite_peripherals"])
 %>
 % if spi_slave_present: 
   // `SPI Slave` for Debugging Purposes
@@ -323,10 +323,12 @@ module ${name}_top
 
 
   <% 
-    spi_slave_present = any(periph["name"] == "spi_slave" for periph in occamy_cfg["peripherals"]["axi_lite_peripherals"])
+    spi_slave_present = any(periph["name"] == "spis" for periph in occamy_cfg["peripherals"]["axi_lite_peripherals"])
     if spi_slave_present: 
-      axi_spi_slave = soc_periph_xbar.in_spi_slave
+      axi_spi_slave = soc_periph_xbar.in_spis
   %>
+
+  % if spi_slave_present: 
   ///////////////////////////////////////
   // SPI Slave for Debugging Purposes ///
   ///////////////////////////////////////
@@ -344,7 +346,7 @@ module ${name}_top
     .spi_sdo_o(spis_sd_o),
     .spi_oen_o(spis_sd_en_o)
   );
-  <% endif %>
+  % endif
 
   ///////////////
   //   CLINT   //

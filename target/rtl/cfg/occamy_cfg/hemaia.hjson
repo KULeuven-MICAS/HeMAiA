@@ -111,7 +111,7 @@
       "snax_KUL_cluster",
       "snax_KUL_xdma_cluster",
       "snax_hypercorex_cluster",
-      "snax_dimc_cluster"
+      // "snax_dimc_cluster"
     ],
 
     // peripherals
@@ -131,7 +131,7 @@
                 length: 4096, // 4 kiB 0x1000
             }, 
             {
-              name: "spi_slave", // Only Master port, no slave port
+              name: "spis", // Only Master port, no slave port
             }
         ],
         axi_lite_narrow_peripherals: [
