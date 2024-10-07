@@ -10,7 +10,7 @@ task automatic spi_read(input logic [31:0] addr, input integer length);
   //   data   - Array to store read data
 
   reg [7:0] cmd;  // SPI read command code
-  integer i, j;
+  integer i, j, k;
   reg [3:0] mosi_data;  // Data to send over SPI (master out)
   reg [3:0] miso_data;  // Data received from SPI (slave out)
 
@@ -76,19 +76,25 @@ task automatic spi_read(input logic [31:0] addr, input integer length);
   end
 
   // Now read the data from the slave
-  for (i = 0; i < length; i = i + 1) begin
-    reg [7:0] byte_data;
-    for (j = 7; j >= 0; j -= 4) begin
-      @(posedge spis_sck_i);
-      miso_data = spis_sd_o;  // Read 4 bits from slave
-      if (j >= 3) begin
-        byte_data[j-:4] = miso_data;
-      end else begin
-        // For j = 3 to 0
-        byte_data[3:0] = miso_data >> (3 - j);
+  // Becareful that the data is coming out from SPI in reversed order (Most Significant Byte first, most significant bit inside one byte first)
+  for (i = 0; i < length; i = i + 4) begin
+    reg [7:0] byte_data[4] = '{default: 8'h00};
+
+    for (j = 3; j >= 0; j -= 1) begin
+      for (k = 7; k >= 0; k -= 4) begin
+        @(posedge spis_sck_i);
+        miso_data = spis_sd_o;  // Read 4 bits from slave
+        if (k >= 3) begin
+          byte_data[j][k-:4] = miso_data;
+        end else begin
+          // For j = 3 to 0
+          byte_data[j][3:0] = miso_data >> (3 - j);
+        end
       end
     end
-    $display("Read byte %0d: %h", i, byte_data);  // Print the byte to the console
+    for (j = 0; j < 4; j = j + 1) begin
+      $display("Read byte %0d: %h", (i + j), byte_data[j]);  // Print the byte to the console
+    end
   end
 
   // Bring CSB high to end the transaction
@@ -103,12 +109,13 @@ task automatic spi_write(input string path, input logic [31:0] addr);
   //   addr   - 32-bit Address to read from
 
   reg [7:0] cmd;  // SPI write command code
-  integer i, j;
+  integer i, j, k;
   reg [3:0] mosi_data;  // Data to send over SPI (master out)
   reg [3:0] miso_data;  // Data received from SPI (slave out)
   integer file;
   integer file_size;
 
+  // Start to load binaries from file
   // Wait for a clock edge to align
   @(posedge spis_sck_i);
   spis_csb_i = 0;
@@ -160,15 +167,14 @@ task automatic spi_write(input string path, input logic [31:0] addr);
     spis_sd_i = mosi_data;  // Drive data lines
   end
 
-  @(negedge spis_sck_i);  // Wait for last data to be sent
-
+  // @(negedge spis_sck_i);  // Wait for last data to be sent
 
   // Insert dummy cycles if required (e.g., 32 cycles)
-  // This is the bug of ETH: @spi_slave_rx.sv, the counter count one more cycles
-  for (i = 0; i <= 32; i = i + 1) begin
-    @(posedge spis_sck_i);
-    // Do nothing, just wait
-  end
+  // Write process seems not need dummy cycles
+  // for (i = 0; i <= 32; i = i + 1) begin
+  //   @(posedge spis_sck_i);
+  //   // Do nothing, just wait
+  // end
 
   // Now write the data to the slave
   // Open the file for reading and get the size of the file
@@ -182,23 +188,31 @@ task automatic spi_write(input string path, input logic [31:0] addr);
   $fseek(file, 0, `SEEK_SET);
 
   // Read the file in chunks of 4 bytes
-  for (i = 0; i < file_size; i = i + 1) begin
-    reg [7:0] byte_data;
-    byte_data = $fgetc(file);
+  for (i = 0; i < file_size; i = i + 4) begin
+    reg [7:0] byte_data[4] = '{default: 8'h00};
 
-    for (j = 7; j >= 0; j -= 4) begin
-      @(posedge spis_sck_i);
-      if (j >= 3) begin
-        mosi_data = byte_data[j-:4];
-      end else begin
-        // For j = 3 to 0
-        mosi_data = byte_data[3:0] << (3 - j);
+    for (j = 0; j < 4; j = j + 1) begin
+      byte_data[j] = $fgetc(file);
+    end
+
+    for (j = 3; j >= 0; j -= 1) begin
+      for (k = 7; k >= 0; k -= 4) begin
+        @(posedge spis_sck_i);
+        if (k >= 3) begin
+          mosi_data = byte_data[j][k-:4];
+        end else begin
+          // For j = 3 to 0
+          mosi_data = byte_data[j][3:0] << (3 - j);
+        end
+        spis_sd_i = mosi_data;  // Drive data lines
       end
-      spis_sd_i = mosi_data;  // Drive data lines
+    end
+    for (j = 0; j < 4; j = j + 1) begin
+      $display("Wrote byte %0d: %h", (i + j), byte_data[j]);  // Print the byte to the console
     end
   end
   $fclose(file);
-  $display("Wrote %0d bytes to address %h", file_size, addr);
+  $display("Wrote to address %h finished", addr);
   @(negedge spis_sck_i);
 
   // Bring CSB high to end the transaction

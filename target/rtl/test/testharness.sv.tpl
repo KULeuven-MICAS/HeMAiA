@@ -45,13 +45,13 @@ module testharness import occamy_pkg::*; (
   logic [3:0] spis_sd_en_o;
   logic [3:0] spis_sd_i = '1;
 
-  `ifndef TARGET_VSIM
+  `ifdef TARGET_VSIM
     // Inject the signals into SPI device
     `include "spi_tb.sv"
     initial begin
       #10us;
       // spi_read(32'h80000000, 128);
-      spi_write("app.bin", 32'h80000000);
+      // spi_write("app.bin", 32'h80000000);
     end
   `endif
 
