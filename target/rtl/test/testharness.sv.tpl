@@ -11,7 +11,7 @@ module testharness import occamy_pkg::*; (
 
   // verilog_lint: waive explicit-parameter-storage-type
   localparam RTCTCK = 30.518us; // 32.768 kHz
-  localparam SPITCK = 15.15ns; // SPI clock
+  localparam SPITCK = 16ns; // SPI clock
 
   logic rtc_i;
 

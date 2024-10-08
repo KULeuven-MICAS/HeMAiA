@@ -49,8 +49,8 @@ import ${name}_pkg::*;
   output logic [1:0]  spim_csb_o,
   output logic [1:0]  spim_csb_en_o,
   output logic [3:0]  spim_sd_o,
-  output logic [3:0]  spim_sd_en_o,
   input        [3:0]  spim_sd_i,
+  output logic [3:0]  spim_sd_en_o,
 <% 
   spi_slave_present = any(periph["name"] == "spi_slave" for periph in occamy_cfg["peripherals"]["axi_lite_peripherals"])
 %>
