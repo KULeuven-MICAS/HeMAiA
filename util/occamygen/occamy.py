@@ -202,13 +202,14 @@ def am_connect_soc_lite_periph_xbar(am, am_soc_axi_lite_periph_xbar, occamy_cfg)
     am_axi_lite_peripherals = []
 
     for p in range(nr_axi_lite_peripherals):
-        am_axi_lite_peripherals.append(
+        if "address" in occamy_cfg["peripherals"]["axi_lite_peripherals"][p]:
+            am_axi_lite_peripherals.append(
             am.new_leaf(
                 occamy_cfg["peripherals"]["axi_lite_peripherals"][p]["name"],
                 occamy_cfg["peripherals"]["axi_lite_peripherals"][p]["length"],
                 occamy_cfg["peripherals"]["axi_lite_peripherals"][p]["address"]
             ).attach_to(am_soc_axi_lite_periph_xbar)
-        )
+            )
 
     return am_axi_lite_peripherals
 

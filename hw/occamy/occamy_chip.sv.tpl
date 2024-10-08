@@ -35,12 +35,31 @@ import ${name}_pkg::*;
   input  logic        jtag_tdi_i,
   output logic        jtag_tdo_o,
   // `i2c` Interface
-  inout  logic        i2c_sda_io,
-  inout  logic        i2c_scl_io,
+  output logic        i2c_sda_o,
+  input  logic        i2c_sda_i,
+  output logic        i2c_sda_en_o,
+  output logic        i2c_scl_o,
+  input  logic        i2c_scl_i,
+  output logic        i2c_scl_en_o,
   // `SPI Host` Interface
   output logic        spim_sck_o,
+  output logic        spim_sck_en_o,
   output logic [1:0]  spim_csb_o,
-  inout  logic [3:0]  spim_sd_io,
+  output logic [1:0]  spim_csb_en_o,
+  output logic [3:0]  spim_sd_o,
+  input        [3:0]  spim_sd_i,
+  output logic [3:0]  spim_sd_en_o,
+<% 
+  spi_slave_present = any(periph["name"] == "spis" for periph in occamy_cfg["peripherals"]["axi_lite_peripherals"])
+%>
+% if spi_slave_present: 
+  // `SPI Slave` for Debugging Purposes
+  input  logic        spis_sck_i,
+  input  logic        spis_csb_i,
+  output logic [3:0]  spis_sd_o,
+  output logic [3:0]  spis_sd_en_o,
+  input  logic [3:0]  spis_sd_i,
+% endif
 
   input  logic [11:0] ext_irq_i
 );

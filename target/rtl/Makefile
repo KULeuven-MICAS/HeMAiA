@@ -81,7 +81,7 @@ clean: clean-rtl
 .PHONY: rtl clint plic socctrl quadctrl soc tb
 .PHONY: clean-rtl clean-clint clean-plic clean-socctrl clean-quadctrl clean-snax-cluster clean-soc clean-tb
 
-rtl: clint plic socctrl quadctrl snax-cluster soc tb src/bender_targets.tmp
+rtl: clint plic socctrl quadctrl soc snax-cluster tb src/bender_targets.tmp
 clean-rtl: clean-clint clean-plic clean-socctrl clean-quadctrl clean-soc clean-snax-cluster clean-tb
 
 $(TARGET_PLIC_DIR) $(TARGET_CLINT_DIR) $(TARGET_SOCCTRL_DIR) $(TARGET_QUADCTRL_DIR):

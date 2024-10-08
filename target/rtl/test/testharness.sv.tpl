@@ -11,6 +11,7 @@ module testharness import occamy_pkg::*; (
 
   // verilog_lint: waive explicit-parameter-storage-type
   localparam RTCTCK = 30.518us; // 32.768 kHz
+  localparam SPITCK = 16ns; // SPI clock
 
   logic rtc_i;
 
@@ -27,6 +28,32 @@ module testharness import occamy_pkg::*; (
   logic clk_periph_i, rst_periph_ni;
   assign clk_periph_i = clk_i;
   assign rst_periph_ni = rst_ni;
+
+  // Generate SPI Clock.
+  logic spis_sck_i;
+  initial begin
+    spis_sck_i = 0;
+    forever begin
+      #(SPITCK/2);
+      spis_sck_i = ~spis_sck_i;
+    end
+  end
+
+  // Generate logic to connect to the SPI device.
+  logic spis_csb_i = '1;
+  logic [3:0] spis_sd_o;
+  logic [3:0] spis_sd_en_o;
+  logic [3:0] spis_sd_i = '1;
+
+  `ifdef TARGET_VSIM
+    // Inject the signals into SPI device
+    `include "spi_tb.sv"
+    initial begin
+      #10us;
+      // spi_read(32'h80000000, 128);
+      // spi_write("app.bin", 32'h80000000);
+    end
+  `endif
 
 <%def name="tb_memory(bus, name)">
   ${bus.req_type()} ${name}_req;
@@ -103,25 +130,46 @@ module testharness import occamy_pkg::*; (
     .test_mode_i (1'b0),
     .chip_id_i (${chip_id}),
     .boot_mode_i ('0),
+    // UART
     .uart_tx_o (tx),
     .uart_cts_ni ('0),
     .uart_rts_no (),
     .uart_rx_i (rx),
+    // GPIO
     .gpio_d_i ('0),
     .gpio_d_o (),
     .gpio_oe_o (),
+    // JTAG
     .jtag_trst_ni ('0),
     .jtag_tck_i ('0),
     .jtag_tms_i ('0),
     .jtag_tdi_i ('0),
     .jtag_tdo_o (),
-    .i2c_sda_io (),
-    .i2c_scl_io (),
+    // I2C
+    .i2c_sda_o (),
+    .i2c_sda_i ('0),
+    .i2c_sda_en_o (),
+    .i2c_scl_o (),
+    .i2c_scl_i ('0),
+    .i2c_scl_en_o (),
+    // SPI Master
     .spim_sck_o (),
+    .spim_sck_en_o (),
     .spim_csb_o (),
-    .spim_sd_io (),
+    .spim_csb_en_o (),
+    .spim_sd_o(),
+    .spim_sd_en_o(),
+    .spim_sd_i('0),
+    // SPI Slave
+    .spis_sck_i (spis_sck_i),
+    .spis_csb_i (spis_csb_i),
+    .spis_sd_o (spis_sd_o),
+    .spis_sd_en_o (spis_sd_en_o),
+    .spis_sd_i (spis_sd_i),
+    // Bootrom
     .bootrom_req_o (axi_lite_bootrom_req),
     .bootrom_rsp_i (axi_lite_bootrom_rsp),
+    // Main RAM
     .spm_axi_wide_req_o (spm_wide_req),
     .spm_axi_wide_rsp_i (spm_wide_rsp),
     .ext_irq_i ('0)
