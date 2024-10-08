@@ -161,21 +161,18 @@ module spm_1p_adv #(
   ////////////////////////////
   // RAM Primitive Instance //
   ////////////////////////////
-
-  tc_sram_impl #(
+  spm_1p_adv_mem_wrapper #(
     .NumWords (NumWords),
     .DataWidth(SPMDataWidth),
     .ByteWidth(ByteWidth),
-    .NumPorts (1),
     .SimInit (SimInit),
     .PrintSimCfg (PrintSimCfg),
-    .Latency  (1),
     .impl_in_t (sram_cfg_t)
   ) i_mem (
     .clk_i(clk_i),
     .rst_ni(rst_ni),
-    .impl_i (sram_cfg_i),
-    .impl_o (  ),
+    .impl_i(sram_cfg_i),
+    .impl_o( /*Not used*/),
     .req_i(req_q),
     .we_i(we_q),
     .addr_i(addr_q),
