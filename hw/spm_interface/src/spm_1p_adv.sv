@@ -181,28 +181,6 @@ module spm_1p_adv #(
     .rdata_o(rdata_sram)
   );
 
-  // tc_sram_impl #(
-  //   .NumWords (NumWords),
-  //   .DataWidth(SPMDataWidth),
-  //   .ByteWidth(ByteWidth),
-  //   .NumPorts (1),
-  //   .SimInit (SimInit),
-  //   .PrintSimCfg (PrintSimCfg),
-  //   .Latency  (1),
-  //   .impl_in_t (sram_cfg_t)
-  // ) i_mem (
-  //   .clk_i(clk_i),
-  //   .rst_ni(rst_ni),
-  //   .impl_i (sram_cfg_i),
-  //   .impl_o (  ),
-  //   .req_i(req_q),
-  //   .we_i(we_q),
-  //   .addr_i(addr_q),
-  //   .wdata_i(wdata_q),
-  //   .be_i(be_q),
-  //   .rdata_o(rdata_sram)
-  // );
-
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       rvalid_sram_q <= 1'b0;

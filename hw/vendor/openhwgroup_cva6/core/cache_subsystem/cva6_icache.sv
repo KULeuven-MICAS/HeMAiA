@@ -476,57 +476,6 @@ end else begin : gen_piton_offset
     assign cl_ruser[i] = '0;   
   end
 
-
-
-  // for (genvar i = 0; i < ICACHE_SET_ASSOC; i++) begin : gen_sram
-  //   // Tag RAM
-  //   tc_sram_impl #(
-  //     .impl_in_t ( sram_cfg_t         ),
-  //     // tag + valid bit
-  //     .DataWidth ( ICACHE_TAG_WIDTH+1 ),
-  //     .NumWords  ( ICACHE_NUM_WORDS   ),
-  //     .NumPorts  ( 1                  )
-  //   ) tag_sram (
-  //     .clk_i     ( clk_i                    ),
-  //     .rst_ni    ( rst_ni                   ),
-  //     .impl_i    ( sram_cfg_tag_i           ),
-  //     .impl_o    (                          ),
-  //     .req_i     ( vld_req[i]               ),
-  //     .we_i      ( vld_we                   ),
-  //     .addr_i    ( vld_addr                 ),
-  //     // we can always use the saved tag here since it takes a
-  //     // couple of cycle until we write to the cache upon a miss
-  //     .wdata_i   ( {vld_wdata[i], cl_tag_q} ),
-  //     .be_i      ( '1                       ),
-  //     .rdata_o   ( cl_tag_valid_rdata[i]    )
-  //   );
-
-  //   assign cl_tag_rdata[i] = cl_tag_valid_rdata[i][ICACHE_TAG_WIDTH-1:0];
-  //   assign vld_rdata[i]    = cl_tag_valid_rdata[i][ICACHE_TAG_WIDTH];
-
-  //   // Data RAM
-  //   tc_sram_impl #(
-  //     .impl_in_t ( sram_cfg_t        ),
-  //     .DataWidth ( ICACHE_LINE_WIDTH ),
-  //     .NumWords  ( ICACHE_NUM_WORDS  ),
-  //     .NumPorts  ( 1                 )
-  //   ) data_sram (
-  //     .clk_i     ( clk_i               ),
-  //     .rst_ni    ( rst_ni              ),
-  //     .impl_i    ( sram_cfg_data_i     ),
-  //     .impl_o    (                     ),
-  //     .req_i     ( cl_req[i]           ),
-  //     .we_i      ( cl_we               ),
-  //     .addr_i    ( cl_index            ),
-  //     .wdata_i   ( mem_rtrn_i.data     ),
-  //     .be_i      ( '1                  ),
-  //     .rdata_o   ( cl_rdata[i]         )
-  //   );
-
-  //   assign cl_ruser[i] = '0;
-  // end
-
-
   always_ff @(posedge clk_i or negedge rst_ni) begin : p_regs
     if(!rst_ni) begin
       cl_tag_q      <= '0;
@@ -611,4 +560,5 @@ end else begin : gen_piton_offset
 `endif
 //pragma translate_on
 
-endmodule // cva6_icache
+endmodule 
+// cva6_icache
