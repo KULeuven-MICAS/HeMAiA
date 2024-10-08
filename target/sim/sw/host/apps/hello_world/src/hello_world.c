@@ -6,10 +6,8 @@
 #include "host.c"
 
 // Frequency at which the UART peripheral is clocked
-#define PERIPH_FREQ 16000000
-
 int main() {
-    init_uart(PERIPH_FREQ, 1000000);
+    init_uart(32, 1);
     asm volatile("fence" : : : "memory");
     print_uart("Hello world from Occamy in VCU128! \r\n");
     char uart_rx_buffer[512];
