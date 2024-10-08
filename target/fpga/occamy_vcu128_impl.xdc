@@ -7,14 +7,14 @@
 
 
 # Four-wires UART with flow control
-set_property PACKAGE_PIN BP26 [get_ports uart_rx_i_0]
-set_property IOSTANDARD LVCMOS18 [get_ports uart_rx_i_0]
-set_property PACKAGE_PIN BN26 [get_ports uart_tx_o_0]
-set_property IOSTANDARD LVCMOS18 [get_ports uart_tx_o_0]
-set_property PACKAGE_PIN BP22 [get_ports uart_cts_ni_0]
-set_property IOSTANDARD LVCMOS18 [get_ports uart_cts_ni_0]
-set_property PACKAGE_PIN BP23 [get_ports uart_rts_no_0]
-set_property IOSTANDARD LVCMOS18 [get_ports uart_rts_no_0]
+set_property PACKAGE_PIN BP26 [get_ports uart_rx_i]
+set_property IOSTANDARD LVCMOS18 [get_ports uart_rx_i]
+set_property PACKAGE_PIN BN26 [get_ports uart_tx_o]
+set_property IOSTANDARD LVCMOS18 [get_ports uart_tx_o]
+set_property PACKAGE_PIN BP22 [get_ports uart_cts_ni]
+set_property IOSTANDARD LVCMOS18 [get_ports uart_cts_ni]
+set_property PACKAGE_PIN BP23 [get_ports uart_rts_no]
+set_property IOSTANDARD LVCMOS18 [get_ports uart_rts_no]
 
 # Six-wires SPIx4
 # LA10_P - B23
@@ -48,6 +48,28 @@ set_property IOSTANDARD LVCMOS18 [get_ports i2c_sda_io]
 # LA14_N - B22
 set_property PACKAGE_PIN B22 [get_ports i2c_scl_io]
 set_property IOSTANDARD LVCMOS18 [get_ports i2c_scl_io]
+
+# Six-wires SPIx4 (Slave)
+# LA15_N - H20
+set_property PACKAGE_PIN H20 [get_ports spis_sd_io[0]]
+set_property IOSTANDARD LVCMOS18 [get_ports spis_sd_io[0]]
+# LA16_P - K24
+set_property PACKAGE_PIN K24 [get_ports spis_sd_io[1]]
+set_property IOSTANDARD LVCMOS18 [get_ports spis_sd_io[1]]
+# LA16_N - K23
+set_property PACKAGE_PIN K23 [get_ports spis_sd_io[2]]
+set_property IOSTANDARD LVCMOS18 [get_ports spis_sd_io[2]]
+# LA17_P - D20
+set_property PACKAGE_PIN D20 [get_ports spis_sd_io[3]]
+set_property IOSTANDARD LVCMOS18 [get_ports spis_sd_io[3]]
+# LA17_N - D21
+set_property PACKAGE_PIN D21 [get_ports spis_csb_i]
+set_property IOSTANDARD LVCMOS18 [get_ports spim_csb_o]
+# LA18_P - C22
+set_property PACKAGE_PIN C22 [get_ports spis_sck_i]
+set_property IOSTANDARD LVCMOS18 [get_ports spis_sck_i]
+
+create_clock -period 10.000 -name spi_s_sck [get_ports spis_sck_i]
 
 # Eight-wires GPIO_O connected to LEDs
 set_property PACKAGE_PIN BH24 [get_ports gpio_d_o[0]]

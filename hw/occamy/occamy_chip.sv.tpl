@@ -52,7 +52,7 @@ import ${name}_pkg::*;
   input        [3:0]  spim_sd_i,
   output logic [3:0]  spim_sd_en_o,
 <% 
-  spi_slave_present = any(periph["name"] == "spi_slave" for periph in occamy_cfg["peripherals"]["axi_lite_peripherals"])
+  spi_slave_present = any(periph["name"] == "spis" for periph in occamy_cfg["peripherals"]["axi_lite_peripherals"])
 %>
 % if spi_slave_present: 
   // `SPI Slave` for Debugging Purposes

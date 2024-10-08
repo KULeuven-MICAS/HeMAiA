@@ -25,21 +25,21 @@ set_property DRIVE 12 [get_ports vref_gnd_o]
 # The external UART alternative
 # Data
 # LA26P - CB41
-set_property PACKAGE_PIN CB41 [get_ports uart_rx_i_0]
-set_property IOSTANDARD LVCMOS15 [get_ports uart_rx_i_0]
+set_property PACKAGE_PIN CB41 [get_ports uart_rx_i]
+set_property IOSTANDARD LVCMOS15 [get_ports uart_rx_i]
 # LA26N - CC42
-set_property PACKAGE_PIN CC42 [get_ports uart_tx_o_0]
-set_property IOSTANDARD LVCMOS15 [get_ports uart_tx_o_0]
+set_property PACKAGE_PIN CC42 [get_ports uart_tx_o]
+set_property IOSTANDARD LVCMOS15 [get_ports uart_tx_o]
 # Flow Control
 # LA27P - CA38
-set_property PACKAGE_PIN CA38 [get_ports uart_cts_ni_0]
-set_property IOSTANDARD LVCMOS15 [get_ports uart_cts_ni_0]
-set_property PULLUP TRUE [get_ports uart_cts_ni_0]
+set_property PACKAGE_PIN CA38 [get_ports uart_cts_ni]
+set_property IOSTANDARD LVCMOS15 [get_ports uart_cts_ni]
+set_property PULLUP TRUE [get_ports uart_cts_ni]
 # LA27N - CB39
-set_property PACKAGE_PIN CB39 [get_ports uart_rts_no_0]
-set_property IOSTANDARD LVCMOS15 [get_ports uart_rts_no_0]
+set_property PACKAGE_PIN CB39 [get_ports uart_rts_no]
+set_property IOSTANDARD LVCMOS15 [get_ports uart_rts_no]
 
-# Six-wires SPIx4
+# Six-wires SPIx4 (Host)
 # FMCP_HSPC_LA10_P
 set_property PACKAGE_PIN CC44 [get_ports spim_sd_io[0]]
 set_property IOSTANDARD LVCMOS15 [get_ports spim_sd_io[0]]
@@ -75,6 +75,27 @@ set_property PACKAGE_PIN CA52 [get_ports i2c_scl_io]
 set_property IOSTANDARD LVCMOS15 [get_ports i2c_scl_io]
 set_property PULLUP TRUE [get_ports i2c_scl_io]
 
+# Six-wires SPIx4 (Slave)
+# LA15_N - CD52
+set_property PACKAGE_PIN CD52 [get_ports spis_sd_io[0]]
+set_property IOSTANDARD LVCMOS15 [get_ports spis_sd_io[0]]
+# LA16_P - CA51
+set_property PACKAGE_PIN CA51 [get_ports spis_sd_io[1]]
+set_property IOSTANDARD LVCMOS15 [get_ports spis_sd_io[1]]
+# LA16_N - CB52
+set_property PACKAGE_PIN CB52 [get_ports spis_sd_io[2]]
+set_property IOSTANDARD LVCMOS15 [get_ports spis_sd_io[2]]
+# LA17_P - BU41
+set_property PACKAGE_PIN BU41 [get_ports spis_sd_io[3]]
+set_property IOSTANDARD LVCMOS15 [get_ports spis_sd_io[3]]
+# LA17_N - BU42
+set_property PACKAGE_PIN BU42 [get_ports spis_csb_i]
+set_property IOSTANDARD LVCMOS15 [get_ports spim_csb_o]
+# LA18_P - BW39
+set_property PACKAGE_PIN BW39 [get_ports spis_sck_i]
+set_property IOSTANDARD LVCMOS15 [get_ports spis_sck_i]
+
+create_clock -period 10.000 -name spi_s_sck [get_ports spis_sck_i]
 
 # Four-wires GPIO_O connected to LEDs
 set_property PACKAGE_PIN BA49 [get_ports gpio_d_o[0]]

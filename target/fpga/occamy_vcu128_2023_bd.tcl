@@ -144,6 +144,7 @@ xilinx.com:ip:util_reduced_logic:2.0\
 xilinx.com:ip:smartconnect:1.0\
 xilinx.com:ip:vio:3.0\
 xilinx.com:ip:xlslice:1.0\
+xilinx.com:ip:util_ds_buf:2.2\
 "
 
    set list_ips_missing ""
@@ -218,22 +219,23 @@ proc create_root_design { parentCell } {
   set_property -dict [ list \
    CONFIG.POLARITY {ACTIVE_HIGH} \
  ] $reset
-  set uart_rx_i_0 [ create_bd_port -dir I uart_rx_i_0 ]
-  set uart_tx_o_0 [ create_bd_port -dir O uart_tx_o_0 ]
+  set uart_rx_i [ create_bd_port -dir I uart_rx_i ]
+  set uart_tx_o [ create_bd_port -dir O uart_tx_o ]
   set jtag_vdd_o [ create_bd_port -dir O -from 0 -to 0 jtag_vdd_o ]
   set jtag_gnd_o [ create_bd_port -dir O -from 0 -to 0 jtag_gnd_o ]
   set jtag_tdo_o [ create_bd_port -dir O jtag_tdo_o ]
   set jtag_tdi_i [ create_bd_port -dir I jtag_tdi_i ]
   set jtag_tms_i [ create_bd_port -dir I jtag_tms_i ]
   set jtag_tck_i [ create_bd_port -dir I -type clk -freq_hz 5000000 jtag_tck_i ]
-  set uart_cts_ni_0 [ create_bd_port -dir I uart_cts_ni_0 ]
+  set uart_cts_ni [ create_bd_port -dir I uart_cts_ni ]
   set uart_rts_no_0 [ create_bd_port -dir O uart_rts_no_0 ]
   set spim_sck_o [ create_bd_port -dir O spim_sck_o ]
-  set spim_sd_io [ create_bd_port -dir IO -from 3 -to 0 spim_sd_io ]
   set gpio_d_o [ create_bd_port -dir O -from 7 -to 0 gpio_d_o ]
   set spim_csb_o [ create_bd_port -dir O -from 1 -to 0 spim_csb_o ]
   set i2c_sda_io [ create_bd_port -dir IO i2c_sda_io ]
   set i2c_scl_io [ create_bd_port -dir IO i2c_scl_io ]
+  set spim_sd_io [ create_bd_port -dir IO -from 3 -to 0 spim_sd_io ]
+  set spis_sd_io [ create_bd_port -dir IO -from 3 -to 0 spis_sd_io ]
 
   # Create instance: axi_bram_ctrl_0, and set properties
   set axi_bram_ctrl_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_bram_ctrl:4.1 axi_bram_ctrl_0 ]
@@ -540,6 +542,32 @@ proc create_root_design { parentCell } {
   set_property CONFIG.DIN_FROM {7} $xlslice_1
 
 
+  # Create instance: i2c_scl_iobuf, and set properties
+  set i2c_scl_iobuf [ create_bd_cell -type ip -vlnv xilinx.com:ip:util_ds_buf:2.2 i2c_scl_iobuf ]
+  set_property CONFIG.C_BUF_TYPE {IOBUF} $i2c_scl_iobuf
+
+
+  # Create instance: i2c_sda_iobuf, and set properties
+  set i2c_sda_iobuf [ create_bd_cell -type ip -vlnv xilinx.com:ip:util_ds_buf:2.2 i2c_sda_iobuf ]
+  set_property CONFIG.C_BUF_TYPE {IOBUF} $i2c_sda_iobuf
+
+
+  # Create instance: spim_iobuf, and set properties
+  set spim_iobuf [ create_bd_cell -type ip -vlnv xilinx.com:ip:util_ds_buf:2.2 spim_iobuf ]
+  set_property -dict [list \
+    CONFIG.C_BUF_TYPE {IOBUF} \
+    CONFIG.C_SIZE {4} \
+  ] $spim_iobuf
+
+
+  # Create instance: spis_iobuf, and set properties
+  set spis_iobuf [ create_bd_cell -type ip -vlnv xilinx.com:ip:util_ds_buf:2.2 spis_iobuf ]
+  set_property -dict [list \
+    CONFIG.C_BUF_TYPE {IOBUF} \
+    CONFIG.C_SIZE {4} \
+  ] $spis_iobuf
+
+
   # Create interface connections
   connect_bd_intf_net -intf_net default_100mhz_clk_1 [get_bd_intf_ports default_100mhz_clk] [get_bd_intf_pins clk_wiz/CLK_IN1_D]
   connect_bd_intf_net -intf_net jtag_axi_0_M_AXI [get_bd_intf_pins axi_bram_ctrl_0/S_AXI] [get_bd_intf_pins jtag_axi_0/M_AXI]
@@ -549,12 +577,10 @@ proc create_root_design { parentCell } {
   connect_bd_intf_net -intf_net smc_hbm_0_M00_AXI [get_bd_intf_pins hbm_0/SAXI_00] [get_bd_intf_pins smc_hbm_0/M00_AXI]
 
   # Create port connections
-  connect_bd_net -net Net [get_bd_ports i2c_sda_io] [get_bd_pins occamy/i2c_sda_io]
-  set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_nets Net]
-  connect_bd_net -net Net1 [get_bd_ports i2c_scl_io] [get_bd_pins occamy/i2c_scl_io]
-  set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_nets Net1]
-  connect_bd_net -net Net2 [get_bd_ports spim_sd_io] [get_bd_pins occamy/spim_sd_io]
-  set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_nets Net2]
+  connect_bd_net -net Net [get_bd_ports i2c_sda_io] [get_bd_pins i2c_sda_iobuf/IOBUF_IO_IO]
+  connect_bd_net -net Net1 [get_bd_ports i2c_scl_io] [get_bd_pins i2c_scl_iobuf/IOBUF_IO_IO]
+  connect_bd_net -net Net2 [get_bd_ports spis_sd_io] [get_bd_pins spis_iobuf/IOBUF_IO_IO]
+  connect_bd_net -net Net3 [get_bd_ports spim_sd_io] [get_bd_pins spim_iobuf/IOBUF_IO_IO]
   connect_bd_net -net c_high_dout [get_bd_pins c_high/dout] [get_bd_ports jtag_vdd_o] [get_bd_pins occamy/jtag_trst_ni]
   connect_bd_net -net clk_wiz_clk_core [get_bd_pins clk_wiz/clk_core] [get_bd_pins axi_bram_ctrl_0/s_axi_aclk] [get_bd_pins blk_mem_gen_0/clkb] [get_bd_pins hbm_0/APB_0_PCLK] [get_bd_pins hbm_0/APB_1_PCLK] [get_bd_pins jtag_axi_0/aclk] [get_bd_pins psr_core/slowest_sync_clk] [get_bd_pins smc_hbm_0/aclk] [get_bd_pins vio_sys/clk] [get_bd_pins jtag_axi_1/aclk] [get_bd_pins occamy/clk_i]
   connect_bd_net -net clk_wiz_clk_hbm [get_bd_pins clk_wiz/clk_hbm] [get_bd_pins hbm_0/HBM_REF_CLK_0] [get_bd_pins hbm_0/HBM_REF_CLK_1] [get_bd_pins hbm_0/AXI_00_ACLK] [get_bd_pins psr_hbm/slowest_sync_clk] [get_bd_pins smc_hbm_0/aclk1]
@@ -562,12 +588,18 @@ proc create_root_design { parentCell } {
   connect_bd_net -net clk_wiz_clk_rtc [get_bd_pins clk_wiz/clk_rtc] [get_bd_pins occamy/rtc_i]
   connect_bd_net -net const_low_dout [get_bd_pins c_low/dout] [get_bd_ports jtag_gnd_o] [get_bd_pins occamy/test_mode_i] [get_bd_pins occamy/ext_irq_i] [get_bd_pins occamy/gpio_d_i]
   connect_bd_net -net glbl_rst [get_bd_pins vio_sys/probe_out1] [get_bd_pins concat_rst/In1]
+  connect_bd_net -net i2c_scl_iobuf_IOBUF_IO_O [get_bd_pins i2c_scl_iobuf/IOBUF_IO_O] [get_bd_pins occamy/i2c_scl_i]
+  connect_bd_net -net i2c_sda_iobuf_IOBUF_IO_O [get_bd_pins i2c_sda_iobuf/IOBUF_IO_O] [get_bd_pins occamy/i2c_sda_i]
   connect_bd_net -net jtag_tck_i_1 [get_bd_ports jtag_tck_i] [get_bd_pins occamy/jtag_tck_i]
   connect_bd_net -net jtag_tdi_i_1 [get_bd_ports jtag_tdi_i] [get_bd_pins occamy/jtag_tdi_i]
   connect_bd_net -net jtag_tms_i_1 [get_bd_ports jtag_tms_i] [get_bd_pins occamy/jtag_tms_i]
   connect_bd_net -net occamy_bootmode [get_bd_pins vio_sys/probe_out2] [get_bd_pins occamy/boot_mode_i]
   connect_bd_net -net occamy_bootrom_addr_o [get_bd_pins occamy/bootrom_addr_o] [get_bd_pins xlslice_0/Din]
   connect_bd_net -net occamy_gpio_d_o [get_bd_pins occamy/gpio_d_o] [get_bd_pins xlslice_1/Din]
+  connect_bd_net -net occamy_i2c_scl_en_o [get_bd_pins occamy/i2c_scl_en_o] [get_bd_pins i2c_scl_iobuf/IOBUF_IO_T]
+  connect_bd_net -net occamy_i2c_scl_o [get_bd_pins occamy/i2c_scl_o] [get_bd_pins i2c_scl_iobuf/IOBUF_IO_I]
+  connect_bd_net -net occamy_i2c_sda_en_o [get_bd_pins occamy/i2c_sda_en_o] [get_bd_pins i2c_sda_iobuf/IOBUF_IO_T]
+  connect_bd_net -net occamy_i2c_sda_o [get_bd_pins occamy/i2c_sda_o] [get_bd_pins i2c_sda_iobuf/IOBUF_IO_I]
   connect_bd_net -net occamy_jtag_tdo_o [get_bd_pins occamy/jtag_tdo_o] [get_bd_ports jtag_tdo_o]
   connect_bd_net -net occamy_rst [get_bd_pins rst_or_core/Res] [get_bd_pins rst_core_inv/Op1]
   connect_bd_net -net occamy_rst_vio [get_bd_pins vio_sys/probe_out0] [get_bd_pins concat_rst_core/In1]
@@ -575,9 +607,13 @@ proc create_root_design { parentCell } {
   connect_bd_net -net occamy_spim_csb_o [get_bd_pins occamy/spim_csb_o] [get_bd_ports spim_csb_o]
   set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_nets occamy_spim_csb_o]
   connect_bd_net -net occamy_spim_sck_o [get_bd_pins occamy/spim_sck_o] [get_bd_ports spim_sck_o]
+  connect_bd_net -net occamy_spim_sd_en_o [get_bd_pins occamy/spim_sd_en_o] [get_bd_pins spim_iobuf/IOBUF_IO_T]
+  connect_bd_net -net occamy_spim_sd_o [get_bd_pins occamy/spim_sd_o] [get_bd_pins spim_iobuf/IOBUF_IO_I]
+  connect_bd_net -net occamy_spis_sd_en_o [get_bd_pins occamy/spis_sd_en_o] [get_bd_pins spis_iobuf/IOBUF_IO_T]
+  connect_bd_net -net occamy_spis_sd_o [get_bd_pins occamy/spis_sd_o] [get_bd_pins spis_iobuf/IOBUF_IO_I]
   connect_bd_net -net occamy_uart_rts_no [get_bd_pins occamy/uart_rts_no] [get_bd_ports uart_rts_no_0]
   set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_nets occamy_uart_rts_no]
-  connect_bd_net -net occamy_uart_tx_o [get_bd_pins occamy/uart_tx_o] [get_bd_ports uart_tx_o_0]
+  connect_bd_net -net occamy_uart_tx_o [get_bd_pins occamy/uart_tx_o] [get_bd_ports uart_tx_o]
   set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_nets occamy_uart_tx_o]
   connect_bd_net -net proc_sys_reset_0_peripheral_aresetn [get_bd_pins psr_core/peripheral_aresetn] [get_bd_pins axi_bram_ctrl_0/s_axi_aresetn] [get_bd_pins hbm_0/APB_0_PRESET_N] [get_bd_pins hbm_0/APB_1_PRESET_N] [get_bd_pins jtag_axi_0/aresetn] [get_bd_pins smc_hbm_0/aresetn] [get_bd_pins jtag_axi_1/aresetn]
   connect_bd_net -net psr_hbm_peripheral_aresetn [get_bd_pins psr_hbm/peripheral_aresetn] [get_bd_pins hbm_0/AXI_00_ARESET_N]
@@ -588,9 +624,11 @@ proc create_root_design { parentCell } {
   set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_nets rom_doutb]
   connect_bd_net -net rom_en [get_bd_pins occamy/bootrom_en_o] [get_bd_pins blk_mem_gen_0/enb]
   set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_nets rom_en]
-  connect_bd_net -net uart_cts_ni_0_1 [get_bd_ports uart_cts_ni_0] [get_bd_pins occamy/uart_cts_ni]
+  connect_bd_net -net spim_iobuf_IOBUF_IO_O [get_bd_pins spim_iobuf/IOBUF_IO_O] [get_bd_pins occamy/spim_sd_i]
+  connect_bd_net -net spis_iobuf_IOBUF_IO_O [get_bd_pins spis_iobuf/IOBUF_IO_O] [get_bd_pins occamy/spis_sd_i]
+  connect_bd_net -net uart_cts_ni_0_1 [get_bd_ports uart_cts_ni] [get_bd_pins occamy/uart_cts_ni]
   set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_nets uart_cts_ni_0_1]
-  connect_bd_net -net uart_rx_i_0_1 [get_bd_ports uart_rx_i_0] [get_bd_pins occamy/uart_rx_i]
+  connect_bd_net -net uart_rx_i_0_1 [get_bd_ports uart_rx_i] [get_bd_pins occamy/uart_rx_i]
   set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_nets uart_rx_i_0_1]
   connect_bd_net -net util_reduced_logic_0_Res [get_bd_pins rst_or/Res] [get_bd_pins psr_core/ext_reset_in] [get_bd_pins psr_hbm/ext_reset_in]
   connect_bd_net -net xlconcat_0_dout [get_bd_pins concat_rst/dout] [get_bd_pins rst_or/Op1]
@@ -676,9 +714,6 @@ proc create_root_design { parentCell } {
 ##################################################################
 # MAIN FLOW
 ##################################################################
-
-
-common::send_gid_msg -ssname BD::TCL -id 2052 -severity "CRITICAL WARNING" "This Tcl script was generated from a block design that is out-of-date/locked. It is possible that design <$design_name> may result in errors during construction."
 
 create_root_design ""
 
