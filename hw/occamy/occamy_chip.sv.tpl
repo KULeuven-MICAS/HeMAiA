@@ -187,6 +187,8 @@ import ${name}_pkg::*;
     .bootrom_rsp_i (bootrom_axi_lite_rsp),
     .spm_axi_wide_req_o (ram_axi_req),
     .spm_axi_wide_rsp_i (ram_axi_rsp),
+    .chip_ctrl_req_o (),
+    .chip_ctrl_rsp_i ('0),
     .ext_irq_i ('0)
   );
 

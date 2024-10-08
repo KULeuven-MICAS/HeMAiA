@@ -50,8 +50,6 @@ sources:
     files:
       - /users/micas/shares/project_snax/tapeout_modules/hemaia/tc_sram_impl.sv
 
-  # future
-  - hw/future/reg_to_apb.sv
   # spm_interface
   - files:
       # Level 1
