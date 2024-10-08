@@ -17,13 +17,29 @@ int main() {
     // Set err value for checking
     int err = 0;
 
+    // Declaration of Variables
+    int32_t program_start;
+    int32_t cycle_start, cycle_end;
+
+    // Prepare addresses in TCDM
+    int8_t *local_a, *local_b;
+    int32_t *local_c, *local_d32;
+    int8_t *local_d8;
+
+    // Set GEMMX configuration CSR
+    uint32_t subtraction_setting =
+        gen_subtraction_config(subtraction_a, subtraction_b);
+
+    uint32_t csr0 =
+        gen_csr0_config(input_zp_i, output_zp_i, max_int_i, min_int_i);
+    uint32_t csr1 = gen_csr1_config(double_round_i);
+
+    // Set the size configuration
+    int32_t gemmx_cycles;
+    int32_t gemmx_streamer_cycles;
+
     if (snrt_cluster_idx() == 1){
         printf("SNAX GEMM Conv2d: Start\n");
-        // Prepare addresses in TCDM
-        int8_t *local_a, *local_b;
-        int32_t *local_c, *local_d32;
-        int8_t *local_d8;
-
         // Allocate space in TCDM
         local_a = (int8_t *)(snrt_l1_next() + delta_local_a);
         local_b = (int8_t *)(snrt_l1_next() + delta_local_b);
@@ -33,9 +49,9 @@ int main() {
 
         // Transfer data from L3 to L1
         // Using DMA only
-        int32_t cycle_start = snrt_mcycle();
-        int32_t program_start = snrt_mcycle();
+        program_start = snrt_mcycle();
         if (snrt_is_dm_core()) {
+            cycle_start = snrt_mcycle();
     #ifdef TEST_MATMUL
             snrt_dma_start_1d(local_a, A,
                             M * K * meshRow * tileSize * sizeof(int8_t));
@@ -50,13 +66,14 @@ int main() {
             snrt_dma_start_1d(local_c, C,
                             M * N * meshRow * meshCol * sizeof(int32_t));
             snrt_dma_wait_all();
+            cycle_end = snrt_mcycle();
+            printf("DMA cycles %d \n", cycle_end - cycle_start);
         }
 
         snrt_cluster_hw_barrier();
-        int32_t cycle_end = snrt_mcycle();
-        printf("DMA cycles %d \n", cycle_end - cycle_start);
 
-        if (snrt_global_core_idx() == 0) {
+        if (snrt_cluster_core_idx() == 0) {
+            printf("SNAX GEMM Conv2d: Start\n");
             cycle_start = snrt_mcycle();
             // Set Streamer configuration CSR for conv2d
             set_gemmx_streamer_csr(
@@ -77,28 +94,26 @@ int main() {
                 D32tlstride1, D32tlbound2, D32tlstride2,
 
                 delta_local_a, delta_local_b, delta_local_d8, delta_local_c,
-                delta_local_d32, bypassSIMD, transposed_A, transposed_B);
+                delta_local_d32, bypassSIMD, transposed_A, transposed_B,
+                channel_en_C);
+
+            set_gemmx_csr(
+                K, N, M, subtraction_setting, csr0, csr1, shared_bitpacked_shift0,
+                shared_bitpacked_shift1, shared_multiplier0, shared_multiplier1,
+                shared_multiplier2, shared_multiplier3, shared_multiplier4,
+                shared_multiplier5, shared_multiplier6, shared_multiplier7, M * N,
+                bypassSIMD);
 
             // Set CSR to start Streamer for conv2d
             set_gemmx_streamer_start();
-
-            // Set GEMMX configuration CSR
-            uint32_t subtraction_setting =
-                gen_subtraction_config(subtraction_a, subtraction_b);
-
-            uint32_t csr0 =
-                gen_csr0_config(input_zp_i, output_zp_i, shift_i, max_int_i);
-            uint32_t csr1 = gen_csr1_config(min_int_i, double_round_i);
-            uint32_t csr2 = gen_csr2_config(multiplier_i);
-
-            set_gemmx_csr(K, N, M, subtraction_setting, csr0, csr1, csr2, M * N,
-                        bypassSIMD);
 
             // Set CSR to start GEMM
             set_gemmx_start();
 
             // Poll until Streamer and GEMM accelerator finish
             wait_gemmx_and_streamer();
+
+            printf("SNAX GEMM Conv2d: Finish\n");
 
             cycle_end = snrt_mcycle();
 
@@ -115,8 +130,8 @@ int main() {
             printf("SNAX GEMM Conv2d: %s, Error: %d . bypassSIMD = %d .\n",
                 err ? "FAIL" : "PASS", err, bypassSIMD);
     #endif
-            int32_t gemmx_cycles = read_gemmx_perf_counter();
-            int32_t gemmx_streamer_cycles = read_gemmx_streamer_perf_counter();
+            gemmx_cycles = read_gemmx_perf_counter();
+            gemmx_streamer_cycles = read_gemmx_streamer_perf_counter();
             printf("Workload size: M = %d x N = %d x K = %d\n", M, N, K);
             printf("SNAX GEMM cycles: %d\n", gemmx_cycles);
             printf("SNAX GEMM Streamer cycles: %d\n", gemmx_streamer_cycles);

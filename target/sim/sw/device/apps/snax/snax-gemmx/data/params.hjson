@@ -1,12 +1,33 @@
+// Copyright 2024 KU Leuven.
+// Licensed under the Apache License, Version 2.0, see LICENSE for details.
+// SPDX-License-Identifier: Apache-2.0
+
+// Cluster configuration for a simple testbench system.
 {
-  K: 2
-  N: 2
-  M: 3
-  bypassSIMD: 1
-  ifTestMatmul: 1
-  transposed_A: 0
-  transposed_B: 0
-  meshRow: 8
-  meshCol: 8
-  tileSize: 8
+  ifC8HW8datalayout: true,
+  // ifC8HW8datalayout: false,
+  Nbatch: 1,
+  W: 8,
+  H: 2,
+  Cin: 16,
+  Cout: 16,
+  Kh: 3,
+  Kw: 3,
+  pad_h: 1,
+  pad_w: 1,
+  stride_h: 1,
+  stride_w: 1,
+  transposed_A: 1,
+  transposed_B: 0,
+  K: 18,
+  N: 2,
+  M: 1,
+  bypassSIMD: 0,
+  channel_en_C: 0,
+  ifTestMatmul: 1,
+
+  // hardware parameters
+  meshRow : 8,
+  tileSize: 8,
+  meshCol : 8,
 }
