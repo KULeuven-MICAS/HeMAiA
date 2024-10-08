@@ -172,6 +172,8 @@ module testharness import occamy_pkg::*; (
     // Main RAM
     .spm_axi_wide_req_o (spm_wide_req),
     .spm_axi_wide_rsp_i (spm_wide_rsp),
+    .chip_ctrl_req_o (),
+    .chip_ctrl_rsp_i ('0),
     .ext_irq_i ('0)
     );
 

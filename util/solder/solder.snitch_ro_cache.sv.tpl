@@ -20,6 +20,7 @@
     .enable_i (${enable}),
     .flush_valid_i (${flush_valid}),
     .flush_ready_o (${flush_ready}),
+    .icache_events_o (),
     .start_addr_i (${start_addr}),
     .end_addr_i (${end_addr}),
     .axi_slv_req_i (${axi_in.req_name()}),

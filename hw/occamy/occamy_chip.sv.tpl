@@ -63,7 +63,7 @@ import ${name}_pkg::*;
   input  logic [3:0]  spis_sd_i,
 % endif
 
-  input  logic [11:0] ext_irq_i
+  input  logic [12:0] ext_irq_i
 );
 
   /////////////////////////
@@ -128,7 +128,7 @@ import ${name}_pkg::*;
     .be_i (spm_wide_strb),
     .rdata_o (spm_wide_rdata),
     .rvalid_o (spm_wide_rvalid),
-    .rerror_o (spm_wide_rerror_o),
+    .rerror_o (),
     .sram_cfg_i ('0)
   );
 
@@ -145,7 +145,7 @@ import ${name}_pkg::*;
     .clk_i(clk_i), 
     .rst_ni(rst_ni), 
     .req_i(bootrom_req.valid), 
-    .addr_i(bootrom_req.addr), 
+    .addr_i(bootrom_req.addr[31:0]), 
     .data_o(bootrom_rsp.rdata)
   );
 
@@ -157,17 +157,39 @@ import ${name}_pkg::*;
   ///////////////////
 
   ${name}_top i_${name} (
-    .bootrom_req_o   (bootrom_axi_lite_req),
-    .bootrom_rsp_i   (bootrom_axi_lite_rsp),
-    .ext_irq_i       (ext_irq_i),
-    // RAM
-    .spm_axi_wide_req_o(${ram_axi.req_name()}), 
-    .spm_axi_wide_rsp_i(${ram_axi.rsp_name()}), 
-    // Tie-off unused ports
-    .chip_ctrl_req_o (), 
-    .chip_ctrl_rsp_i ('0),
+    .clk_i,
+    .rst_ni,
     .sram_cfgs_i ('0),
-    .*
+    .clk_periph_i,
+    .rst_periph_ni,
+    .rtc_i,
+    .test_mode_i (1'b0),
+    .chip_id_i ('0),
+    .boot_mode_i ('0),
+    .uart_tx_o (uart_tx_o),
+    .uart_cts_ni (uart_cts_ni),
+    .uart_rts_no (uart_rts_no),
+    .uart_rx_i (uart_rx_i),
+    .gpio_d_i (gpio_d_i),
+    .gpio_d_o (gpio_d_o),
+    .gpio_oe_o (gpio_oe_o),
+    .jtag_trst_ni (jtag_trst_ni),
+    .jtag_tck_i (jtag_tck_i),
+    .jtag_tms_i (jtag_tms_i),
+    .jtag_tdi_i (jtag_tdi_i),
+    .jtag_tdo_o (jtag_tdo_o),
+    .i2c_sda_io (),
+    .i2c_scl_io (),
+    .spim_sck_o (),
+    .spim_csb_o (),
+    .spim_sd_io (),
+    .bootrom_req_o (bootrom_axi_lite_req),
+    .bootrom_rsp_i (bootrom_axi_lite_rsp),
+    .spm_axi_wide_req_o (ram_axi_req),
+    .spm_axi_wide_rsp_i (ram_axi_rsp),
+    .chip_ctrl_req_o (),
+    .chip_ctrl_rsp_i ('0),
+    .ext_irq_i ('0)
   );
 
 endmodule
