@@ -129,6 +129,9 @@
                 name: "debug",
                 address: 0, // 0x0000_0000
                 length: 4096, // 4 kiB 0x1000
+            }, 
+            {
+              name: "spis", // Only Master port, no slave port
             }
         ],
         axi_lite_narrow_peripherals: [
