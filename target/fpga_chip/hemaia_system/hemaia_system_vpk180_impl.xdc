@@ -62,7 +62,7 @@ set_property IOSTANDARD LVCMOS15 [get_ports spim_csb_o[1]]
 set_property PACKAGE_PIN CC49 [get_ports spim_sck_o]
 set_property IOSTANDARD LVCMOS15 [get_ports spim_sck_o]
 
-create_clock -period 10.000 -name spi_m_sck [get_ports spim_sck_o]
+create_clock -period 20.000 -name spi_m_sck [get_ports spim_sck_o]
 
 # Two-wires I2C
 # FMCP_HSPC_LA14_P
@@ -90,12 +90,12 @@ set_property PACKAGE_PIN BU41 [get_ports spis_sd_io[3]]
 set_property IOSTANDARD LVCMOS15 [get_ports spis_sd_io[3]]
 # LA17_N - BU42
 set_property PACKAGE_PIN BU42 [get_ports spis_csb_i]
-set_property IOSTANDARD LVCMOS15 [get_ports spim_csb_o]
+set_property IOSTANDARD LVCMOS15 [get_ports spis_csb_i]
 # LA18_P - BW39
 set_property PACKAGE_PIN BW39 [get_ports spis_sck_i]
 set_property IOSTANDARD LVCMOS15 [get_ports spis_sck_i]
 
-create_clock -period 10.000 -name spi_s_sck [get_ports spis_sck_i]
+create_clock -period 20.000 -name spi_s_sck [get_ports spis_sck_i]
 
 # Four-wires GPIO_O connected to LEDs
 set_property PACKAGE_PIN BA49 [get_ports gpio_d_o[0]]
