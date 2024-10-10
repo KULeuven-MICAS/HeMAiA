@@ -73,7 +73,8 @@ SYN_BENDER = -t rtl
 SYN_BENDER += -t synthesis
 SYN_BENDER += -t occamy
 SYN_BENDER += -t tech_cells_generic_exclude_tc_sram
-SYN_BENDER += -t syn
+SYN_BENDER += -t hemaia
+SYN_BENDER += -t tsmc_pad
 SYN_BENDER += $(shell cat ../rtl/src/bender_targets.tmp)
 SYN_ROOT = /users/micas/shares/project_snax/projects/hemaia/HeMAiA
 

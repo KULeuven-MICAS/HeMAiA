@@ -46,7 +46,7 @@ sources:
     files:
       - target/tapeout/tc_sram/tc_sram_print/tc_sram.sv
       - target/tapeout/tc_sram/tc_sram_print/tc_sram_impl.sv
-  - target: all(tech_cells_generic_exclude_tc_sram, any(prep_syn_test,syn))
+  - target: all(tech_cells_generic_exclude_tc_sram, any(prep_syn_test,synthesis))
     files:
       - /users/micas/shares/project_snax/tapeout_modules/hemaia/tc_sram_impl.sv
 
@@ -112,9 +112,12 @@ sources:
     files:
       - target/rtl/test/uartdpi/uartdpi.sv
       - target/rtl/test/testharness.sv
-
-  - target: any(tapeout, hemaia, prep_syn, syn)
+  
+  - target: hemaia
     files:
       - target/rtl/bootrom/bootrom.sv
       - target/rtl/src/occamy_chip.sv
+
+  - target: tsmc_pad
+    files:
       - /users/micas/shares/project_snax/tapeout_modules/hemaia/hemaia_chip_top.sv
