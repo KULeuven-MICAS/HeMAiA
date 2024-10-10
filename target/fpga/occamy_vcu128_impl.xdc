@@ -39,7 +39,7 @@ set_property IOSTANDARD LVCMOS18 [get_ports spim_csb_o[1]]
 set_property PACKAGE_PIN A25 [get_ports spim_sck_o]
 set_property IOSTANDARD LVCMOS18 [get_ports spim_sck_o]
 
-create_clock -period 10.000 -name spi_m_sck [get_ports spim_sck_o]
+create_clock -period 20.000 -name spi_m_sck [get_ports spim_sck_o]
 
 # Two-wires I2C
 # LA14_P - C23
@@ -69,7 +69,7 @@ set_property IOSTANDARD LVCMOS18 [get_ports spis_csb_i]
 set_property PACKAGE_PIN C22 [get_ports spis_sck_i]
 set_property IOSTANDARD LVCMOS18 [get_ports spis_sck_i]
 
-create_clock -period 10.000 -name spi_s_sck [get_ports spis_sck_i]
+create_clock -period 20.000 -name spi_s_sck [get_ports spis_sck_i]
 
 # Eight-wires GPIO_O connected to LEDs
 set_property PACKAGE_PIN BH24 [get_ports gpio_d_o[0]]
