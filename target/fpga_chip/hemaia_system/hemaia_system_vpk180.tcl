@@ -157,7 +157,7 @@ if ($DEBUG) {
 }
 
 # Implement
-set_property strategy Performance_ExploreWithRemap [get_runs impl_1]
+set_property strategy Congestion_SpreadLogic_high [get_runs impl_1]
 launch_runs impl_1 -jobs ${nproc}
 wait_on_run impl_1
 
