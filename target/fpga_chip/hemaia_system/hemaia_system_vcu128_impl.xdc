@@ -81,7 +81,7 @@ set_property PACKAGE_PIN D20 [get_ports spis_sd_io[3]]
 set_property IOSTANDARD LVCMOS18 [get_ports spis_sd_io[3]]
 # LA17_N - D21
 set_property PACKAGE_PIN D21 [get_ports spis_csb_i]
-set_property IOSTANDARD LVCMOS18 [get_ports spim_csb_i]
+set_property IOSTANDARD LVCMOS18 [get_ports spis_csb_i]
 # LA18_P - C22
 set_property PACKAGE_PIN C22 [get_ports spis_sck_i]
 set_property IOSTANDARD LVCMOS18 [get_ports spis_sck_i]
