@@ -36,6 +36,9 @@ DEVICE_APPS += snax/snax-gemmx
 DEVICE_APPS += snax/snax-test-integration
 DEVICE_APPS += snax/snax-hypercorex-test-csr
 DEVICE_APPS += snax/snax-hypercorex-char-recog
+DEVICE_APPS += snax/snax-xdma-maxpool
+DEVICE_APPS += snax/snax-xdma-memset
+
 # Dependencies
 INCDIRS += $(RUNTIME_DIR)
 INCDIRS += $(HOST_DIR)/../shared/platform/generated
