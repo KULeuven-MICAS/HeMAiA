@@ -17,13 +17,6 @@ set_property IOSTANDARD LVCMOS15 [get_ports vref_gnd_o]
 set_property DRIVE 12 [get_ports vref_gnd_o]
 
 # Four-wires UART with flow control
-# set_property PACKAGE_PIN AY44 [get_ports uart_rx_i_0]
-# set_property IOSTANDARD LVCMOS15 [get_ports uart_rx_i_0]
-# set_property PACKAGE_PIN AW44 [get_ports uart_tx_o_0]
-# set_property IOSTANDARD LVCMOS15 [get_ports uart_tx_o_0]
-# FT4232HL's flow control is not connected to the FPGA... 
-# The external UART alternative
-# Data
 # LA26P - CB41
 set_property PACKAGE_PIN CB41 [get_ports uart_rx_i]
 set_property IOSTANDARD LVCMOS15 [get_ports uart_rx_i]
@@ -38,42 +31,6 @@ set_property PULLUP TRUE [get_ports uart_cts_ni]
 # LA27N - CB39
 set_property PACKAGE_PIN CB39 [get_ports uart_rts_no]
 set_property IOSTANDARD LVCMOS15 [get_ports uart_rts_no]
-
-# # Six-wires SPIx4 (Host)
-# # FMCP_HSPC_LA10_P
-# set_property PACKAGE_PIN CC44 [get_ports spim_sd_io[0]]
-# set_property IOSTANDARD LVCMOS15 [get_ports spim_sd_io[0]]
-# # FMCP_HSPC LA10_N
-# set_property PACKAGE_PIN CD45 [get_ports spim_sd_io[1]]
-# set_property IOSTANDARD LVCMOS15 [get_ports spim_sd_io[1]]
-# # FMCP_HSPC LA11_P
-# set_property PACKAGE_PIN CB51 [get_ports spim_sd_io[2]]
-# set_property IOSTANDARD LVCMOS15 [get_ports spim_sd_io[2]]
-# # FMCP_HSPC_LA11_N
-# set_property PACKAGE_PIN CC52 [get_ports spim_sd_io[3]]
-# set_property IOSTANDARD LVCMOS15 [get_ports spim_sd_io[3]]
-# # FMCP_HSPC_LA12_P
-# set_property PACKAGE_PIN BW49 [get_ports spim_csb_o[0]]
-# set_property IOSTANDARD LVCMOS15 [get_ports spim_csb_o[0]]
-# # FMCP_HSPC_LA12_N
-# set_property PACKAGE_PIN BW50 [get_ports spim_csb_o[1]]
-# set_property IOSTANDARD LVCMOS15 [get_ports spim_csb_o[1]]
-# # FMCP_HSPC_LA13_P
-# set_property PACKAGE_PIN CC49 [get_ports spim_sck_o]
-# set_property IOSTANDARD LVCMOS15 [get_ports spim_sck_o]
-
-# create_clock -period 20.000 -name spi_m_sck [get_ports spim_sck_o]
-
-# # Two-wires I2C
-# # FMCP_HSPC_LA14_P
-# set_property PACKAGE_PIN BY51 [get_ports i2c_sda_io]
-# set_property IOSTANDARD LVCMOS15 [get_ports i2c_sda_io]
-# set_property PULLUP TRUE [get_ports i2c_sda_io]
-
-# # FMCP_HSPC_LA14_N
-# set_property PACKAGE_PIN CA52 [get_ports i2c_scl_io]
-# set_property IOSTANDARD LVCMOS15 [get_ports i2c_scl_io]
-# set_property PULLUP TRUE [get_ports i2c_scl_io]
 
 # Six-wires SPIx4 (Slave)
 # LA15_N - CD52
