@@ -50,8 +50,19 @@ module testharness import occamy_pkg::*; (
     `include "spi_tb.sv"
     initial begin
       #10us;
-      // spi_read(32'h80000000, 128);
-      // spi_write("app.bin", 32'h80000000);
+      // spi_init();
+      // #1us;
+      // spi_read(128, 32'h80000000);
+      // #1us;
+      // spi_write_u32('0, 32'h80000300);
+      // #1us;
+      // spi_read_u32(32'h80000300);
+      // #1us;
+      // spi_write_u32(32'hABCDEF00, 32'h80000300);
+      // #1us;
+      // spi_read_u32(32'h80000300);
+      // #1us;
+      // spi_write_image("app.bin", 32'h80000000); #1us;
     end
   `endif
 
