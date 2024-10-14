@@ -130,4 +130,5 @@ sources:
 
   - target: tsmc_pad
     files:
+      - /users/micas/shares/project_snax/tapeout_modules/hemaia/obs_clk_div.sv
       - /users/micas/shares/project_snax/tapeout_modules/hemaia/hemaia_chip_top.sv
