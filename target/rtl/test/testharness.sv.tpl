@@ -45,6 +45,14 @@ module testharness import occamy_pkg::*; (
   logic [3:0] spis_sd_en_o;
   logic [3:0] spis_sd_i = '1;
 
+  // DEBUG boot mode
+  // Normal mode: BOOT_MODE = 2'b0; Boot from 0x0100_0000
+  // Others: Boot from 0x8000_0000
+  localparam BOOT_MODE = 2'b0;
+  // QUAD CONTROL ADDR
+  localparam QUAD_CTRL_CLK_ENA = 32'h0B00_0000;
+  localparam QUAD_CTRL_RESET = 32'h0B00_0004;
+  localparam QUAD_CTRL_ISO = 32'h0B00_0008;
   `ifdef TARGET_VSIM
     // Inject the signals into SPI device
     `include "spi_tb.sv"
@@ -62,7 +70,28 @@ module testharness import occamy_pkg::*; (
       // #1us;
       // spi_read_u32(32'h80000300);
       // #1us;
-      // spi_write_image("app.bin", 32'h80000000); #1us;
+      // spi_write_image("/users/micas/fkong/Documents/phd_projects/gitrepos/HeMAiA/target/rtl/test/app/snax-printf.bin", 32'h80000000);
+      // #1us;
+      // spi_init();
+      // #1us;
+      // //Mimic the reset_and_ungate_quad()
+      // //set_reset_n_quad(0)
+      // spi_write_u32(32'h0, QUAD_CTRL_RESET);
+      // #1us;
+      // //set_clk_ena_quad(0)
+      // spi_write_u32(32'h0, QUAD_CTRL_CLK_ENA);
+      // #1us;
+      // //set_reset_n_quad(1)
+      // spi_write_u32(32'h1, QUAD_CTRL_RESET);
+      // #1us;
+      // //set_clk_ena_quad(FFFF)
+      // spi_write_u32(32'h9, QUAD_CTRL_CLK_ENA);
+      // #1us;
+      // // Deisolate the cluster
+      // spi_write_u32(32'h0, QUAD_CTRL_ISO);
+      // forever begin
+      //   #1us;
+      // end
     end
   `endif
 
@@ -140,7 +169,7 @@ module testharness import occamy_pkg::*; (
     .rtc_i,
     .test_mode_i (1'b0),
     .chip_id_i ('0),
-    .boot_mode_i ('0),
+    .boot_mode_i (BOOT_MODE),
     // UART
     .uart_tx_o (tx),
     .uart_cts_ni ('0),

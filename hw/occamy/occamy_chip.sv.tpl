@@ -148,7 +148,7 @@ import ${name}_pkg::*;
     .rtc_i              (rtc_i),
     .test_mode_i        (1'b0),
     .chip_id_i          ('0),
-    .boot_mode_i        ('0),
+    .boot_mode_i        (boot_mode_i),
     .uart_tx_o          (uart_tx_o),
     .uart_cts_ni        (uart_cts_ni),
     .uart_rts_no        (uart_rts_no),

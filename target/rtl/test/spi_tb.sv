@@ -162,7 +162,7 @@ task automatic spi_write_u32(input logic [31:0] data, input logic [31:0] addr);
     spis_sd_i = mosi_data;  // Drive data lines
 
   end
-  $display("Wrote to address %h finished", addr);
+  $display("Wrote %h to address %h finished", data, addr);
   @(negedge spis_sck_i);
 
   // Bring CSB high to end the transaction
