@@ -156,6 +156,9 @@ if ($DEBUG) {
     write_debug_probes -force probes.ltx
 }
 
+# Disable the error message for the ADEF-911 DRC before the implementation because we don't need to do the simulation in Vivado. 
+set_property IS_ENABLED 0 [get_drc_checks {ADEF-911}]
+
 # Implement
 set_property strategy Congestion_SpreadLogic_high [get_runs impl_1]
 launch_runs impl_1 -jobs ${nproc}
