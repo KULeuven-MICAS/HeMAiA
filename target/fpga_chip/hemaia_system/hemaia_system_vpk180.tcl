@@ -157,6 +157,7 @@ if ($DEBUG) {
 }
 
 # Disable the error message for the ADEF-911 DRC before the implementation because we don't need to do the simulation in Vivado. 
+set_property SEVERITY {Warning} [get_drc_checks ADEF-911]
 set_property IS_ENABLED 0 [get_drc_checks {ADEF-911}]
 
 # Implement
@@ -165,6 +166,7 @@ launch_runs impl_1 -jobs ${nproc}
 wait_on_run impl_1
 
 # Generate Bitstream
+set_property STEPS.WRITE_DEVICE_IMAGE.TCL.PRE [ get_files disable_adef911.tcl -of [get_fileset utils_1] ] [get_runs impl_1]
 launch_runs impl_1 -to_step write_bitstream -jobs ${nproc}
 wait_on_run impl_1
 
