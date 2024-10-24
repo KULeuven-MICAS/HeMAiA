@@ -73,7 +73,7 @@
       rmq: 4,
     },
     narrow_xbar_slv_id_width: 4,
-    narrow_xbar_user_width: 5, // clog2(total number of clusters)
+    narrow_xbar_user_width: 3, // clog2(total number of clusters)
     nr_s1_quadrant: 1,
     s1_quadrant: {
       // number of pending transactions on the narrow/wide network
@@ -99,7 +99,7 @@
         fall_through: false,
       },
       narrow_xbar_slv_id_width: 4,
-      narrow_xbar_user_width: 5, // clog2(total number of clusters)
+      narrow_xbar_user_width: 3, // clog2(total number of clusters)
       cfg_base_addr: 184549376, // 0x0b000000
       cfg_base_offset: 65536 // 0x10000
     },
