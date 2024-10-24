@@ -3,6 +3,10 @@
     // Remote CFG, about to be removed
     is_remote_quadrant: false,
     remote_quadrants: [],
+    // Multi-chip configuration
+    hemaia_multichip: {
+      chip_id_width: 8
+    }
     addr_width: 48,
     data_width: 64,
     // XBARs
@@ -104,7 +108,7 @@
       cfg_base_offset: 65536 // 0x10000
     },
     clusters:[
-        "snax_minimal_cluster",
+      "snax_KUL_xdma_cluster"
     ],
 
     // peripherals
@@ -122,6 +126,9 @@
                 name: "debug",
                 address: 0, // 0x0000_0000
                 length: 4096, // 4 kiB 0x1000
+            }, 
+            {
+              name: "spis", // Only Master port, no slave port
             }
         ],
         axi_lite_narrow_peripherals: [
