@@ -36,7 +36,7 @@ def hemaia_util():
     parser.add_argument(
         "--cfg_path",
         type=str,
-        default="../../target/rtl/cfg/occamy_cfg/lru.hjson",
+        default="../../target/rtl/cfg/lru.hjson",
         help="Path to the hemaia json file",
     )
 
@@ -76,7 +76,7 @@ def hemaia_util():
         cluster_cfg_paths = []
         for cluster in clusters:
             cluster_cfg_path = os.path.dirname(parsed_args.cfg_path) + \
-                "/../cluster_cfg/" + cluster + ".hjson"
+                "/../../../deps/snitch_cluster/target/snitch_cluster/cfg/" + cluster + ".hjson"
             cluster_cfg_paths.append(cluster_cfg_path)
             cluster_cfgs.append(get_config(cluster_cfg_path))
     else:
