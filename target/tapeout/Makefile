@@ -24,12 +24,12 @@ TARGET_RTL  ?= $(ROOT)/target/rtl
 # (LRU) config, all targets depending on the configuration file have
 # to be rebuilt. This file is used to express this condition as a
 # prerequisite for other rules.
-CFG = $(TARGET_RTL)/cfg/occamy_cfg/lru.hjson
+CFG = $(TARGET_RTL)/cfg/lru.hjson
 
 $(CFG): FORCE
 	@# If the LRU config file doesn't exist, we use the default config.
 	@if [ ! -e $@ ] ; then \
-		DEFAULT_CFG="$(TARGET_RTL)/cfg/occamy_cfg/hemaia.hjson"; \
+		DEFAULT_CFG="$(TARGET_RTL)/cfg/hemaia.hjson"; \
 		echo "Using default config file: $$DEFAULT_CFG"; \
 		cp $$DEFAULT_CFG $@; \
 	fi
