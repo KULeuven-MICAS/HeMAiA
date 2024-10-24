@@ -161,7 +161,7 @@ def main():
     # The name in the ["clusters"] corresponds to the file names in occamy/target/rtl/cfg/cluster_cfg
     # And each cluster is stores in cluster generator
 
-    cluster_cfg_dir = occamy_root / "target/rtl/cfg/cluster_cfg"
+    cluster_cfg_dir = occamy_root / "deps/snitch_cluster/target/snitch_cluster/cfg"
     cluster_generators = occamy.get_cluster_generators(occamy_cfg, cluster_cfg_dir)
     # Each cluster will be generated seperately
     # The generated file's name is specified in the ["name"] field of each cluster's cfg file

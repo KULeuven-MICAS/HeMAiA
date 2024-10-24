@@ -40,10 +40,10 @@ The following files are released under Solderpad v0.51 (`SHL-0.51`) see `hw/LICE
 ### Option 1: Occamy configuration on VCU128 (Bootrom and DRAM from Xilinx IP)
 
 ```makefile
-@ SNAX Docker: make bootrom CFG_OVERRIDE=target/rtl/cfg/occamy_cfg/...
+@ SNAX Docker: make bootrom CFG_OVERRIDE=target/rtl/cfg/...
 @ SNAX Docker: make sw
 @ SNAX Docker: make -C target/fpga/sw [APP=???] (Which binary file you want to use)
-@ SNAX Docker: make rtl CFG_OVERRIDE=target/rtl/cfg/occamy_cfg/...hjson
+@ SNAX Docker: make rtl CFG_OVERRIDE=target/rtl/cfg/...hjson
 @ SNAX Docker: make occamy_system_vivado_preparation
 @ Barnard3: make occamy_system_vcu128
 @ Barnard3: make occamy_system_vcu128_gui
@@ -52,10 +52,10 @@ The following files are released under Solderpad v0.51 (`SHL-0.51`) see `hw/LICE
 ### Option 2: HeMAiA configuration on VPK180 (Tapeout configuration, everything is internal)
 
 ```makefile
-@ SNAX Docker: make bootrom CFG_OVERRIDE=target/rtl/cfg/occamy_cfg/...hjson
-@ SNAX Docker: make sw CFG_OVERRIDE=target/rtl/cfg/occamy_cfg/...hjson
+@ SNAX Docker: make bootrom CFG_OVERRIDE=target/rtl/cfg/...hjson
+@ SNAX Docker: make sw CFG_OVERRIDE=target/rtl/cfg/...hjson
 @ SNAX Docker: make -C target/fpga/sw [APP=???] (Which binary file you want to use)
-@ SNAX Docker: make rtl CFG_OVERRIDE=target/rtl/cfg/occamy_cfg/...hjson
+@ SNAX Docker: make rtl CFG_OVERRIDE=target/rtl/cfg/...hjson
 @ SNAX Docker: make hemaia_system_vivado_preparation
 @ Barnard3: make hemaia_system_vivado TARGET_PLATFORM=[vpk180|vcu128]
 @ Barnard3: make hemaia_system_vivado_gui
@@ -65,9 +65,9 @@ The following files are released under Solderpad v0.51 (`SHL-0.51`) see `hw/LICE
 ### Option 1: Simulate with Verilator
 
 ```makefile
-@ SNAX Docker: make bootrom CFG_OVERRIDE=target/rtl/cfg/occamy_cfg/...hjson
-@ SNAX Docker: make sw CFG_OVERRIDE=target/rtl/cfg/occamy_cfg/...hjson
-@ SNAX Docker: make rtl CFG_OVERRIDE=target/rtl/cfg/occamy_cfg/...hjson
+@ SNAX Docker: make bootrom CFG_OVERRIDE=target/rtl/cfg/...hjson
+@ SNAX Docker: make sw CFG_OVERRIDE=target/rtl/cfg/...hjson
+@ SNAX Docker: make rtl CFG_OVERRIDE=target/rtl/cfg/...hjson
 @ SNAX Docker: make occamy_system_vlt
 @ SNAX Docker: cd target/sim/bin;./occamy_top.vlt [Elf location] [--vcd]
 ```
@@ -75,9 +75,9 @@ The following files are released under Solderpad v0.51 (`SHL-0.51`) see `hw/LICE
 ### Option 2: Simulate with Questasim
 
 ```makefile
-@ SNAX Docker: make bootrom CFG_OVERRIDE=target/rtl/cfg/occamy_cfg/...hjson
-@ SNAX Docker: make sw CFG_OVERRIDE=target/rtl/cfg/occamy_cfg/...hjson
-@ SNAX Docker: make rtl CFG_OVERRIDE=target/rtl/cfg/occamy_cfg/...hjson
+@ SNAX Docker: make bootrom CFG_OVERRIDE=target/rtl/cfg/...hjson
+@ SNAX Docker: make sw CFG_OVERRIDE=target/rtl/cfg/...hjson
+@ SNAX Docker: make rtl CFG_OVERRIDE=target/rtl/cfg/...hjson
 @ SNAX Docker: make occamy_system_vsim_preparation
 @ Barnard3: make occamy_system_vsim
 @ Barnard3: cd target/sim/bin;./occamy_top.vsim[.gui] [Elf location]
