@@ -56,7 +56,7 @@ The following files are released under Solderpad v0.51 (`SHL-0.51`) see `hw/LICE
 @ SNAX Docker: make sw CFG_OVERRIDE=target/rtl/cfg/...hjson
 @ SNAX Docker: make -C target/fpga/sw [APP=???] (Which binary file you want to use)
 @ SNAX Docker: make rtl CFG_OVERRIDE=target/rtl/cfg/...hjson
-@ SNAX Docker: make hemaia_system_vivado_preparation
+@ SNAX Docker: make hemaia_system_vivado_preparation TARGET_PLATFORM=[vpk180|vcu128]
 @ Barnard3: make hemaia_system_vivado TARGET_PLATFORM=[vpk180|vcu128]
 @ Barnard3: make hemaia_system_vivado_gui
 ```
