@@ -32,7 +32,8 @@ RUNTIME_DIR = $(abspath $(HOST_DIR)/runtime)
 DEVICE_DIR  = $(abspath $(HOST_DIR)/../device)
 
 # now we only include the snax app
-DEVICE_APPS += snax/snax-gemmx
+DEVICE_APPS += snax/snax-gemmx-matmul
+DEVICE_APPS += snax/snax-gemmx-conv
 DEVICE_APPS += snax/snax-test-integration
 DEVICE_APPS += snax/snax-hypercorex-test-csr
 DEVICE_APPS += snax/snax-hypercorex-char-recog
