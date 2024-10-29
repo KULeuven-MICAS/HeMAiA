@@ -13,11 +13,20 @@ import hjson
 import sys
 import os
 
+import subprocess
+
 # Add data utility path
-sys.path.append(os.path.join(os.path.dirname(__file__), "../../../../../../util/sim/"))
+sys.path.append(os.path.join(os.path.dirname(__file__),
+                "../../../../../../../../util/sim/"))
 from data_utils import format_scalar_definition, format_vector_definition  # noqa E402
 
 # Add golden model path
+bender_command = subprocess.run(['bender', 'path', 'snitch_cluster'],
+                                capture_output=True, text=True)
+snax_utils_path = bender_command.stdout.strip()
+
+sys.path.append(snax_utils_path + "/util/sim/")
+
 from snax_utils import (  # noqa E402
     conv2d,
     im2col,
