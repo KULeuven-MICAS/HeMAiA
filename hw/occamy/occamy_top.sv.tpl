@@ -108,7 +108,6 @@ module ${name}_top
 
   always_comb begin
     soc_ctrl_in = '0;
-    soc_ctrl_in.boot_mode.d = boot_mode_i;
     soc_ctrl_in.chip_id.d = chip_id_i;
   end
 
@@ -386,6 +385,7 @@ module ${name}_top
     .reg_rsp_o ( ${regbus_soc_ctrl.rsp_name()} ),
     .reg2hw_o  ( soc_ctrl_out ),
     .hw2reg_i  ( soc_ctrl_in ),
+    .boot_mode_i ( boot_mode_i),
     .boot_addr_o (boot_addr),
     .event_ecc_rerror_narrow_i(spm_narrow_rerror),
     .event_ecc_rerror_wide_i(spm_wide_rerror),

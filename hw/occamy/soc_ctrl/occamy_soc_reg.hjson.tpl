@@ -83,24 +83,33 @@
       }
     },
 
-    { name: "BOOT_MODE",
-      desc: "Selected boot mode exposed a register.",
+    { name: "BOOT_ADDR_DEFAULT",
+      desc: "Default Boot Address.",
       swaccess: "ro",
-      hwaccess: "hwo",
-      hwqe:     "true",
-      hwext:    "true",
+      hwaccess: "hrw",
       fields: [
-        { bits: "1:0",
-          name: "MODE",
-          desc: "Selected boot mode.",
-          enum: [
-               { value: "0", name: "idle", desc: "Governor idles in bootrom." },
-               { value: "1", name: "serial", desc: "Governor jumps to the base of the serial." },
-               { value: "2", name: "i2c", desc: "Governor tries to boot from I2C." }
-          ]
+        { bits: "31:0",
+          name: "boot_addr_default",
+          desc: "default boot address ${hex_default_boot_addr}",
+          resval: "${int_default_boot_addr}"
         }
       ]
     },
+
+    { name: "BOOT_ADDR_BACKUP",
+      desc: "Backup Boot Address.",
+      swaccess: "ro",
+      hwaccess: "hrw",
+      fields: [
+        { bits: "31:0",
+          name: "boot_addr_backup",
+          desc: "backup boot address ${hex_backup_boot_addr}",
+          resval: "${int_backup_boot_addr}"
+        }
+      ]
+    },
+
+
     { name: "NUM_QUADRANTS",
       desc: "Number of quadrants per chip.",
       swaccess: "ro",
