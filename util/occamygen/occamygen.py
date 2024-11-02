@@ -280,10 +280,11 @@ def main():
         soc_axi_lite_periph_xbar.add_input(
             occamy_cfg["peripherals"]["axi_lite_peripherals"][p]["name"]
         )
-        soc_axi_lite_periph_xbar.add_output_entry(
+        if "address" in occamy_cfg["peripherals"]["axi_lite_peripherals"][p]:
+            soc_axi_lite_periph_xbar.add_output_entry(
             occamy_cfg["peripherals"]["axi_lite_peripherals"][p]["name"],
             am_axi_lite_peripherals[p]
-        )
+            )
     ##################
     # AxiLite Narrow #
     ##################

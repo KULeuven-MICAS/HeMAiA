@@ -38,12 +38,31 @@ module ${name}_top
   input  logic        jtag_tdi_i,
   output logic        jtag_tdo_o,
   // `i2c` Interface
-  inout  logic        i2c_sda_io,
-  inout  logic        i2c_scl_io,
+  output logic        i2c_sda_o,
+  input  logic        i2c_sda_i,
+  output logic        i2c_sda_en_o,
+  output logic        i2c_scl_o,
+  input  logic        i2c_scl_i,
+  output logic        i2c_scl_en_o,
   // `SPI Host` Interface
   output logic        spim_sck_o,
+  output logic        spim_sck_en_o,
   output logic [1:0]  spim_csb_o,
-  inout  logic [3:0]  spim_sd_io,
+  output logic [1:0]  spim_csb_en_o,
+  output logic [3:0]  spim_sd_o,
+  output logic [3:0]  spim_sd_en_o,
+  input        [3:0]  spim_sd_i,
+<% 
+  spi_slave_present = any(periph["name"] == "spis" for periph in occamy_cfg["peripherals"]["axi_lite_peripherals"])
+%>
+% if spi_slave_present: 
+  // `SPI Slave` for Debugging Purposes
+  input  logic        spis_sck_i,
+  input  logic        spis_csb_i,
+  output logic [3:0]  spis_sd_o,
+  output logic [3:0]  spis_sd_en_o,
+  input  logic [3:0]  spis_sd_i,
+% endif
 
   /// Boot ROM
   output ${soc_axi_lite_narrow_periph_xbar.out_bootrom.req_type()} bootrom_req_o,
@@ -305,6 +324,32 @@ module ${name}_top
   );
 
 
+  <% 
+    spi_slave_present = any(periph["name"] == "spis" for periph in occamy_cfg["peripherals"]["axi_lite_peripherals"])
+    if spi_slave_present: 
+      axi_spi_slave = soc_periph_xbar.in_spis
+  %>
+
+  % if spi_slave_present: 
+  ///////////////////////////////////////
+  // SPI Slave for Debugging Purposes ///
+  ///////////////////////////////////////
+  occamy_spi_slave #(
+    .axi_lite_req_t(${axi_spi_slave.req_type()}),
+    .axi_lite_rsp_t(${axi_spi_slave.rsp_type()})
+  ) i_spi_slave (
+    .clk_i(${axi_spi_slave.clk}),
+    .rst_ni(${axi_spi_slave.rst}),
+    .axi_lite_req_o(${axi_spi_slave.req_name()}),
+    .axi_lite_rsp_i(${axi_spi_slave.rsp_name()}),
+    .spi_sclk_i(spis_sck_i),
+    .spi_cs_i(spis_csb_i),
+    .spi_sdi_i(spis_sd_i),
+    .spi_sdo_o(spis_sd_o),
+    .spi_oen_o(spis_sd_en_o)
+  );
+  % endif
+
   ///////////////
   //   CLINT   //
   ///////////////
@@ -430,8 +475,6 @@ module ${name}_top
   <% regbus_spim = soc_axi_lite_narrow_periph_xbar.out_spim \
     .cut(context, cuts_spim_cfg, name="soc_axi_lite_narrow_periph_xbar_out_spim_cut") \
     .to_reg(context, "axi_lite_to_reg_spim") %>
-
-  logic [3:0] spim_sd_i, spim_sd_o, spim_sd_en_o;
   spi_host #(
     .reg_req_t (${regbus_spim.req_type()}),
     .reg_rsp_t (${regbus_spim.rsp_type()})
@@ -444,31 +487,15 @@ module ${name}_top
     .reg_req_i (${regbus_spim.req_name()}),
     .reg_rsp_o (${regbus_spim.rsp_name()}),
     .cio_sck_o (spim_sck_o),
-    .cio_sck_en_o (),
+    .cio_sck_en_o (spim_sck_en_o),
     .cio_csb_o (spim_csb_o),
-    .cio_csb_en_o (),
+    .cio_csb_en_o (spim_csb_en_o),
     .cio_sd_o (spim_sd_o),
     .cio_sd_en_o (spim_sd_en_o),
     .cio_sd_i (spim_sd_i),
     .intr_error_o (irq.spim_error),
     .intr_spi_event_o (irq.spim_spi_event)
   );
-
-
-  // Unidirectional - Bidirectional transform
-  logic [3:0] spim_sd_io_reg;
-
-  always_comb begin
-    if (spim_sd_en_o > 0) begin             // Output Mode
-      spim_sd_i = 4'b1111;                  // Tie-off input
-      spim_sd_io_reg = spim_sd_o;
-    end else begin                          // Input Mode
-      spim_sd_i = spim_sd_io;
-      spim_sd_io_reg = 4'bZZZZ;             // Disable output functionality
-    end
-  end
-
-  assign spim_sd_io = spim_sd_io_reg;
 
   //////////////
   //   GPIO   //
@@ -496,8 +523,6 @@ module ${name}_top
   <% regbus_i2c = soc_axi_lite_narrow_periph_xbar.out_i2c \
     .cut(context, cuts_i2c_cfg, name="soc_axi_lite_narrow_periph_xbar_out_i2c_cut") \
     .to_reg(context, "axi_lite_to_reg_i2c") %>
-
-  logic i2c_scl_i, i2c_scl_o, i2c_scl_en_o, i2c_sda_i, i2c_sda_o, i2c_sda_en_o;
   
   i2c #(
     .reg_req_t (${regbus_i2c.req_type()}),
@@ -530,32 +555,6 @@ module ${name}_top
     .intr_ack_stop_o (irq.i2c_ack_stop),
     .intr_host_timeout_o (irq.i2c_host_timeout)
   );
-
-  // Unidirectional - Bidirectional transform
-  logic i2c_sda_io_reg, i2c_scl_io_reg;
-  always_comb begin
-    if (i2c_sda_en_o) begin                     // Output Mode
-      i2c_sda_i = 1'b1;                         // Tie-off input
-      i2c_sda_io_reg = i2c_sda_o ? 1'bZ : 1'b0; // Open-drain connection;
-    end else begin                              // Input Mode
-      i2c_sda_i = i2c_sda_io;
-      i2c_sda_io_reg = 1'bZ;                    // Disable output functionality
-    end
-  end
-
-  assign i2c_sda_io = i2c_sda_io_reg;
-
-  always_comb begin
-    if (i2c_scl_en_o) begin                     // Output Mode
-      i2c_scl_i = 1'b1;                         // Tie-off input
-      i2c_scl_io_reg = i2c_scl_o ? 1'bZ : 1'b0; // Open-drain connection
-    end else begin                              // Input Mode
-      i2c_scl_i = i2c_scl_io;
-      i2c_scl_io_reg = 1'bZ;                    // Disable output functionality
-    end
-  end
-
-  assign i2c_scl_io = i2c_scl_io_reg;
 
   /////////////
   //  Timer  //
