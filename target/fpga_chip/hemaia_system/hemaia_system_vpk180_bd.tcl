@@ -218,12 +218,7 @@ proc create_root_design { parentCell } {
   set jtag_tck_i [ create_bd_port -dir I -type clk -freq_hz 5000000 jtag_tck_i ]
   set uart_cts_ni [ create_bd_port -dir I uart_cts_ni ]
   set uart_rts_no [ create_bd_port -dir O uart_rts_no ]
-  set spim_sck_o [ create_bd_port -dir O spim_sck_o ]
   set gpio_d_o [ create_bd_port -dir O -from 3 -to 0 gpio_d_o ]
-  set spim_csb_o [ create_bd_port -dir O -from 1 -to 0 spim_csb_o ]
-  set i2c_sda_io [ create_bd_port -dir IO i2c_sda_io ]
-  set i2c_scl_io [ create_bd_port -dir IO i2c_scl_io ]
-  set spim_sd_io [ create_bd_port -dir IO -from 3 -to 0 spim_sd_io ]
   set spis_sd_io [ create_bd_port -dir IO -from 3 -to 0 spis_sd_io ]
   set spis_sck_i [ create_bd_port -dir I spis_sck_i ]
   set spis_csb_i [ create_bd_port -dir I spis_csb_i ]
@@ -338,24 +333,6 @@ proc create_root_design { parentCell } {
   ] $versal_cips_0
 
 
-  # Create instance: i2c_scl_iobuf, and set properties
-  set i2c_scl_iobuf [ create_bd_cell -type ip -vlnv xilinx.com:ip:util_ds_buf:2.2 i2c_scl_iobuf ]
-  set_property CONFIG.C_BUF_TYPE {IOBUF} $i2c_scl_iobuf
-
-
-  # Create instance: i2c_sda_iobuf, and set properties
-  set i2c_sda_iobuf [ create_bd_cell -type ip -vlnv xilinx.com:ip:util_ds_buf:2.2 i2c_sda_iobuf ]
-  set_property CONFIG.C_BUF_TYPE {IOBUF} $i2c_sda_iobuf
-
-
-  # Create instance: spim_iobuf, and set properties
-  set spim_iobuf [ create_bd_cell -type ip -vlnv xilinx.com:ip:util_ds_buf:2.2 spim_iobuf ]
-  set_property -dict [list \
-    CONFIG.C_BUF_TYPE {IOBUF} \
-    CONFIG.C_SIZE {4} \
-  ] $spim_iobuf
-
-
   # Create instance: spis_iobuf, and set properties
   set spis_iobuf [ create_bd_cell -type ip -vlnv xilinx.com:ip:util_ds_buf:2.2 spis_iobuf ]
   set_property -dict [list \
@@ -365,9 +342,6 @@ proc create_root_design { parentCell } {
 
 
   # Create port connections
-  connect_bd_net -net Net [get_bd_ports spim_sd_io] [get_bd_pins spim_iobuf/IOBUF_IO_IO]
-  connect_bd_net -net Net1 [get_bd_ports i2c_scl_io] [get_bd_pins i2c_scl_iobuf/IOBUF_IO_IO]
-  connect_bd_net -net Net2 [get_bd_ports i2c_sda_io] [get_bd_pins i2c_sda_iobuf/IOBUF_IO_IO]
   connect_bd_net -net Net3 [get_bd_ports spis_sd_io] [get_bd_pins spis_iobuf/IOBUF_IO_IO]
   connect_bd_net -net bootmode [get_bd_pins axis_vio_0/probe_out1] [get_bd_pins occamy_chip/boot_mode_i]
   connect_bd_net -net c_high_dout [get_bd_pins c_high/dout] [get_bd_ports vref_vdd_o] [get_bd_pins occamy_chip/jtag_trst_ni]
@@ -384,25 +358,16 @@ proc create_root_design { parentCell } {
   connect_bd_net -net occamy_chip_0_gpio_d_o [get_bd_pins occamy_chip/gpio_d_o] [get_bd_pins xlslice_1/Din]
   connect_bd_net -net occamy_chip_0_jtag_tdo_o [get_bd_pins occamy_chip/jtag_tdo_o] [get_bd_ports jtag_tdo_o]
   set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_nets occamy_chip_0_jtag_tdo_o]
-  connect_bd_net -net occamy_chip_0_spim_csb_o [get_bd_pins occamy_chip/spim_csb_o] [get_bd_ports spim_csb_o]
-  connect_bd_net -net occamy_chip_0_spim_sck_o [get_bd_pins occamy_chip/spim_sck_o] [get_bd_ports spim_sck_o]
   connect_bd_net -net occamy_chip_0_uart_rts_no [get_bd_pins occamy_chip/uart_rts_no] [get_bd_ports uart_rts_no]
   set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_nets occamy_chip_0_uart_rts_no]
   connect_bd_net -net occamy_chip_0_uart_tx_o [get_bd_pins occamy_chip/uart_tx_o] [get_bd_ports uart_tx_o]
   set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_nets occamy_chip_0_uart_tx_o]
-  connect_bd_net -net occamy_chip_i2c_scl_en_o [get_bd_pins occamy_chip/i2c_scl_en_o] [get_bd_pins i2c_scl_iobuf/IOBUF_IO_T]
-  connect_bd_net -net occamy_chip_i2c_scl_o [get_bd_pins occamy_chip/i2c_scl_o] [get_bd_pins i2c_scl_iobuf/IOBUF_IO_I]
-  connect_bd_net -net occamy_chip_i2c_sda_en_o [get_bd_pins occamy_chip/i2c_sda_en_o] [get_bd_pins i2c_sda_iobuf/IOBUF_IO_T]
-  connect_bd_net -net occamy_chip_i2c_sda_o [get_bd_pins occamy_chip/i2c_sda_o] [get_bd_pins i2c_sda_iobuf/IOBUF_IO_I]
-  connect_bd_net -net occamy_chip_spim_sd_en_o [get_bd_pins occamy_chip/spim_sd_en_o] [get_bd_pins spim_iobuf/IOBUF_IO_T]
-  connect_bd_net -net occamy_chip_spim_sd_o [get_bd_pins occamy_chip/spim_sd_o] [get_bd_pins spim_iobuf/IOBUF_IO_I]
   connect_bd_net -net occamy_chip_spis_sd_en_o [get_bd_pins occamy_chip/spis_sd_en_o] [get_bd_pins spis_iobuf/IOBUF_IO_T]
   connect_bd_net -net occamy_chip_spis_sd_o [get_bd_pins occamy_chip/spis_sd_o] [get_bd_pins spis_iobuf/IOBUF_IO_I]
   connect_bd_net -net occamy_rst [get_bd_pins rst_or_core/Res] [get_bd_pins rst_core_inv/Op1]
   connect_bd_net -net occamy_rstn [get_bd_pins rst_core_inv/Res] [get_bd_pins occamy_chip/rst_ni] [get_bd_pins occamy_chip/rst_periph_ni]
   connect_bd_net -net reset [get_bd_pins axis_vio_0/probe_out0] [get_bd_pins concat_rst_core/In1]
   connect_bd_net -net reset_button [get_bd_ports reset] [get_bd_pins concat_rst_core/In0]
-  connect_bd_net -net spim_iobuf_IOBUF_IO_O [get_bd_pins spim_iobuf/IOBUF_IO_O] [get_bd_pins occamy_chip/spim_sd_i]
   connect_bd_net -net spis_csb_i_0_1 [get_bd_ports spis_csb_i] [get_bd_pins occamy_chip/spis_csb_i]
   connect_bd_net -net spis_iobuf_IOBUF_IO_O [get_bd_pins spis_iobuf/IOBUF_IO_O] [get_bd_pins occamy_chip/spis_sd_i]
   connect_bd_net -net spis_sck_i_0_1 [get_bd_ports spis_sck_i] [get_bd_pins occamy_chip/spis_sck_i]
