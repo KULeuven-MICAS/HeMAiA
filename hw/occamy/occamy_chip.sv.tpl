@@ -28,27 +28,6 @@ import ${name}_pkg::*;
   input  logic [31:0] gpio_d_i,
   output logic [31:0] gpio_d_o,
   output logic [31:0] gpio_oe_o,
-  // `jtag` Interface
-  input  logic        jtag_trst_ni,
-  input  logic        jtag_tck_i,
-  input  logic        jtag_tms_i,
-  input  logic        jtag_tdi_i,
-  output logic        jtag_tdo_o,
-  // `i2c` Interface
-  output logic        i2c_sda_o,
-  input  logic        i2c_sda_i,
-  output logic        i2c_sda_en_o,
-  output logic        i2c_scl_o,
-  input  logic        i2c_scl_i,
-  output logic        i2c_scl_en_o,
-  // `SPI Host` Interface
-  output logic        spim_sck_o,
-  output logic        spim_sck_en_o,
-  output logic [1:0]  spim_csb_o,
-  output logic [1:0]  spim_csb_en_o,
-  output logic [3:0]  spim_sd_o,
-  input        [3:0]  spim_sd_i,
-  output logic [3:0]  spim_sd_en_o,
 <% 
   spi_slave_present = any(periph["name"] == "spis" for periph in occamy_cfg["peripherals"]["axi_lite_peripherals"])
 %>
@@ -60,8 +39,12 @@ import ${name}_pkg::*;
   output logic [3:0]  spis_sd_en_o,
   input  logic [3:0]  spis_sd_i,
 % endif
-
-  input  logic [11:0] ext_irq_i
+  // `jtag` Interface
+  input  logic        jtag_trst_ni,
+  input  logic        jtag_tck_i,
+  input  logic        jtag_tms_i,
+  input  logic        jtag_tdi_i,
+  output logic        jtag_tdo_o
 );
 
   /////////////////////////
@@ -126,7 +109,7 @@ import ${name}_pkg::*;
     .be_i (spm_wide_strb),
     .rdata_o (spm_wide_rdata),
     .rvalid_o (spm_wide_rvalid),
-    .rerror_o (spm_wide_rerror_o),
+    .rerror_o (),
     .sram_cfg_i ('0)
   );
 
@@ -143,7 +126,7 @@ import ${name}_pkg::*;
     .clk_i(clk_i), 
     .rst_ni(rst_ni), 
     .req_i(bootrom_req.valid), 
-    .addr_i(bootrom_req.addr), 
+    .addr_i(bootrom_req.addr[31:0]), 
     .data_o(bootrom_rsp.rdata)
   );
 
@@ -168,18 +151,54 @@ import ${name}_pkg::*;
   ///////////////////
 
   ${name}_top i_${name} (
-    .chip_id_i       (chip_id),
-    .bootrom_req_o   (bootrom_axi_lite_req),
-    .bootrom_rsp_i   (bootrom_axi_lite_rsp),
-    .ext_irq_i       (ext_irq_i),
-    // RAM
-    .spm_axi_wide_req_o(${ram_axi.req_name()}), 
-    .spm_axi_wide_rsp_i(${ram_axi.rsp_name()}), 
-    // Tie-off unused ports
-    .chip_ctrl_req_o (), 
-    .chip_ctrl_rsp_i ('0),
-    .sram_cfgs_i ('0),
-    .*
+    .clk_i,             (clk_i),
+    .rst_ni,            (rst_ni),
+    .sram_cfgs_i        ('0),
+    .clk_periph_i,      (clk_periph_i),
+    .rst_periph_ni,     (rst_periph_ni),
+    .rtc_i,             (rtc_i),
+    .test_mode_i        (1'b0),
+    .chip_id_i          (chip_id),
+    .boot_mode_i        ('0),
+    .uart_tx_o          (uart_tx_o),
+    .uart_cts_ni        (uart_cts_ni),
+    .uart_rts_no        (uart_rts_no),
+    .uart_rx_i          (uart_rx_i),
+    .gpio_d_i           (gpio_d_i),
+    .gpio_d_o           (gpio_d_o),
+    .gpio_oe_o          (gpio_oe_o),
+    .jtag_trst_ni       (jtag_trst_ni),
+    .jtag_tck_i         (jtag_tck_i),
+    .jtag_tms_i         (jtag_tms_i),
+    .jtag_tdi_i         (jtag_tdi_i),
+    .jtag_tdo_o         (jtag_tdo_o),
+    .i2c_sda_o          (),
+    .i2c_scl_i          ('0),
+    .i2c_sda_en_o       (),
+    .i2c_scl_o          (),
+    .i2c_scl_i          ('0),
+    .i2c_scl_en_o       (),
+    .spim_sck_o         (),
+    .spim_sck_en_o      (),
+    .spim_csb_o         (),
+    .spim_csb_en_o      (),
+    .spim_sd_o          (),
+    .spim_sd_en_o       (),
+    .spim_sd_i          ('0),
+% if spi_slave_present: 
+    .spis_sck_i         (spis_sck_i),
+    .spis_csb_i         (spis_csb_i),
+    .spis_sd_o          (spis_sd_o),
+    .spis_sd_en_o       (spis_sd_en_o),
+    .spis_sd_i          (spis_sd_i),
+% endif    
+    .bootrom_req_o      (bootrom_axi_lite_req),
+    .bootrom_rsp_i      (bootrom_axi_lite_rsp),
+    .spm_axi_wide_req_o (ram_axi_req),
+    .spm_axi_wide_rsp_i (ram_axi_rsp),
+    .chip_ctrl_req_o    (),
+    .chip_ctrl_rsp_i    ('0),
+    .ext_irq_i          ('0)
   );
 
 endmodule
