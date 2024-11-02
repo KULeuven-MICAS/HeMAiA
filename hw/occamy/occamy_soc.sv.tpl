@@ -353,7 +353,6 @@ module ${name}_soc
     .rst_ni,
     .chip_id_i,
     .dma_id_i         ( 'd0                           ),
-    .chip_id_i        ( '0                            ),
     .axi_dma_req_o    ( ${in_sys_idma_mst.req_name()} ),
     .axi_dma_res_i    ( ${in_sys_idma_mst.rsp_name()} ),
     .burst_req_i      ( idma_burst_req                ),
