@@ -37,5 +37,6 @@
 #include "sync.h"
 #include "team.h"
 #include "uart.h"
+#include "csr.h"
 
 #endif  // SNRT_H
