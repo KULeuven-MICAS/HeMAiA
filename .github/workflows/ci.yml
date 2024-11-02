@@ -48,10 +48,10 @@ jobs:
       - name: Compile SW
         run: |
           echo "Compiling SW"
-          make sw CFG_OVERRIDE=target/sw/cfg/occamy_cfg/hemaia.hjson -j$(nproc)
+          make sw CFG_OVERRIDE=target/sw/cfg/hemaia.hjson -j$(nproc)
       - name: Compile RTL
         run: |
-          make rtl CFG_OVERRIDE=target/rtl/cfg/occamy_cfg/hemaia.hjson
+          make rtl CFG_OVERRIDE=target/rtl/cfg/hemaia.hjson
       - name: Compile Verilator Binary
         run: |
           make occamy_system_vlt -j$(nproc)
