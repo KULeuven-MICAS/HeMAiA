@@ -141,7 +141,7 @@ module testharness
     // Load the binaries
 % for i in x:
 %   for j in y:
-    load_binary_to_hardware("app_chip_${i}_${j}.bin", i_occamy_${i}_${j}.i_spm_wide_cut.i_mem.i_tc_sram.sram);
+    load_binary_to_hardware("app_chip_${i}_${j}.bin", i_occamy_${i}_${j}.i_spm_wide_cut.i_mem.i_mem.i_tc_sram.sram);
 %   endfor
 % endfor
   end
@@ -213,7 +213,7 @@ module testharness
       .rtc_i,
       .chip_id_i(8'h${i_hex_string}${j_hex_string}),
       .test_mode_i(1'b0),
-      .boot_mode_i(0),
+      .boot_mode_i('0),
       .uart_tx_o(tx_${i}_${j}),
       .uart_rx_i(rx_${i}_${j}),
       .uart_rts_no(),
@@ -226,12 +226,11 @@ module testharness
       .jtag_tms_i('0),
       .jtag_tdi_i('0),
       .jtag_tdo_o(),
-      .i2c_sda_io(),
-      .i2c_scl_io(),
-      .spim_sck_o(),
-      .spim_csb_o(),
-      .spim_sd_io(),
-      .ext_irq_i('0)
+      .spis_sd_i('1),
+      .spis_sd_en_o(),
+      .spis_sd_o(),
+      .spis_csb_i('1),
+      .spis_sck_i('0)
   );
 
   uartdpi #(
@@ -247,14 +246,14 @@ module testharness
   );
 
   // Chip Status Monitor Block
-  always @(i_occamy_${i}_${j}.i_spm_wide_cut.i_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32]) begin
-    if (i_occamy_${i}_${j}.i_spm_wide_cut.i_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32] != 0) begin
-      if (i_occamy_${i}_${j}.i_spm_wide_cut.i_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32] == 32'd1) begin
+  always @(i_occamy_${i}_${j}.i_spm_wide_cut.i_mem.i_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32]) begin
+    if (i_occamy_${i}_${j}.i_spm_wide_cut.i_mem.i_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32] != 0) begin
+      if (i_occamy_${i}_${j}.i_spm_wide_cut.i_mem.i_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32] == 32'd1) begin
         $display("Simulation of chip_${i}_${j} is finished at %tns", $time / 1000);
         chip_finish[${i}][${j}] = 1;
       end else begin
         $error("Simulation of chip_${i}_${j} is finished with errors %d at %tns",
-               i_occamy_${i}_${j}.i_spm_wide_cut.i_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32],
+               i_occamy_${i}_${j}.i_spm_wide_cut.i_mem.i_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32],
                $time / 1000);
         chip_finish[${i}][${j}] = -1;
       end

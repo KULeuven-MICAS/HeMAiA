@@ -6,12 +6,12 @@
     // Multi-chip configuration
     hemaia_multichip: {
       chip_id_width: 8, 
-      single_chip: true,
+      single_chip: false,
       single_chip_id: 0, 
       testbench_cfg: {
         // Emulate a four-chips configuration
         upper_left_coordinate: [0, 0],
-        lower_right_coordinate: [2, 2]
+        lower_right_coordinate: [1, 1]
       }
     }
     addr_width: 48,

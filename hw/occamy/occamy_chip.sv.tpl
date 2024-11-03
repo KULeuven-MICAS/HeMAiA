@@ -78,6 +78,7 @@ import ${name}_pkg::*;
     .clk_i (${soc_wide_xbar.out_spm_wide.clk}),
     .rst_ni (${soc_wide_xbar.out_spm_wide.rst}),
     .busy_o (),
+    .test_i ('0),
     .axi_req_i (${ram_axi.req_name()}),
     .axi_resp_o (${ram_axi.rsp_name()}),
     .mem_req_o (spm_wide_req),
