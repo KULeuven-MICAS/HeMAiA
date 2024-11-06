@@ -46,6 +46,11 @@ sources:
     files:
       - target/tapeout/tc_sram/tc_sram_print/tc_sram.sv
       - target/tapeout/tc_sram/tc_sram_print/tc_sram_impl.sv
+
+  - target: all(tech_cells_generic_exclude_tc_clk, synthesis)
+    files:
+      - /users/micas/shares/project_snax/tapeout_modules/hemaia/tc_clk.sv
+      
   - target: all(tech_cells_generic_exclude_tc_sram, any(prep_syn_test,synthesis))
     files:
       - /users/micas/shares/project_snax/tapeout_modules/hemaia/tc_sram_impl.sv
