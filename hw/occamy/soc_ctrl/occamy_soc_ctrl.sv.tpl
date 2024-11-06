@@ -19,6 +19,7 @@ module occamy_soc_ctrl import occamy_soc_reg_pkg::*; #(
   output occamy_soc_reg2hw_t reg2hw_o, // Write
   input  occamy_soc_hw2reg_t hw2reg_i,
   // Boot addr
+  input logic [1:0] boot_mode_i,
   output logic [${addr_width - 1}:0] boot_addr_o,
   // Events in
   input logic [1:0] event_ecc_rerror_narrow_i,
@@ -68,18 +69,12 @@ module occamy_soc_ctrl import occamy_soc_reg_pkg::*; #(
     .devmode_i ( 1'b1 )
   );
    // boot address
-  logic [${addr_width-1}:0] boot_addr_d, boot_addr_q;
-  logic [${addr_width-1}:0] boot_addr_init;
-  logic [1:0] boot_mode;
-  assign boot_mode = hw2reg_i.boot_mode.d;
-
+   logic [31:0] boot_addr;
   always_comb begin
-    boot_addr_init = (boot_mode == 2'b00)? ${default_boot_addr}:${backup_boot_addr};
-    boot_addr_d = (boot_mode == 2'b00)? ${default_boot_addr}:${backup_boot_addr};
-    boot_addr_o = boot_addr_q;
+      boot_addr = (boot_mode_i == 2'b00)? reg2hw_o.boot_addr_default.q : reg2hw_o.boot_addr_backup.q;
+      boot_addr_o = {${addr_width-32}'h0, boot_addr};
   end
 
-  `FF(boot_addr_q, boot_addr_d, boot_addr_init, clk_i, rst_ni)
 
   prim_intr_hw #(.Width(1)) intr_hw_ecc_narrow_correctable (
     .clk_i,
