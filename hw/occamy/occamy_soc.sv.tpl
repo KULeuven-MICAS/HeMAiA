@@ -41,6 +41,8 @@ module ${name}_soc
 (
   input  logic        clk_i,
   input  logic        rst_ni,
+  // Obs pins
+  output obs_t        obs_o,
   input  logic        test_mode_i,
   input  logic [${occamy_cfg["addr_width"]-1}:0] boot_addr_i,
   // Peripheral Ports (to AXI-lite Xbar)
@@ -140,6 +142,7 @@ module ${name}_soc
   ${name}_quadrant_s1 i_${name}_quadrant_s1_${i} (
     .clk_i (clk_i),
     .rst_ni (rst_ni),
+    .obs_o (obs_o),
     .test_mode_i (test_mode_i),
     .boot_addr_i (boot_addr_i[31:0]),
     .chip_id_i (8'b0),  // Temporary solution as the Chip ID is not provided yet

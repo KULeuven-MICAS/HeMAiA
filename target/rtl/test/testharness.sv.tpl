@@ -134,6 +134,7 @@ module testharness import occamy_pkg::*; (
   occamy_top i_occamy (
     .clk_i,
     .rst_ni,
+    .obs_o (),
     .sram_cfgs_i ('0),
     .clk_periph_i,
     .rst_periph_ni,

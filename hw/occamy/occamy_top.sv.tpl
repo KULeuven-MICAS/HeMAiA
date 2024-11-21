@@ -14,6 +14,8 @@ module ${name}_top
 (
   input  logic        clk_i,
   input  logic        rst_ni,
+  // Obs pins
+  output obs_t        obs_o,
   /// Peripheral clock
   input  logic        clk_periph_i,
   input  logic        rst_periph_ni,
@@ -140,6 +142,7 @@ module ${name}_top
   ${name}_soc i_${name}_soc (
     .clk_i,
     .rst_ni,
+    .obs_o,
     .test_mode_i,
     .boot_addr_i           ( boot_addr                   ),
     .periph_axi_lite_req_o ( periph_axi_lite_soc2per_req ),
