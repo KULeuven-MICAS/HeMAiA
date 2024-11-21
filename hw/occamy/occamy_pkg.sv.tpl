@@ -20,11 +20,16 @@ package ${name}_pkg;
   localparam int unsigned NarrowUserWidth = ${narrow_user_width};
   localparam int unsigned WideUserWidth = ${wide_user_width};
 
+  localparam int unsigned ObsPinWidth = ${obs_pin_width};
+
   localparam int unsigned NrClustersS1Quadrant = ${nr_clusters_s1_quadrant};
   localparam int unsigned NrCoresCluster [NrClustersS1Quadrant] = '${core_per_cluster};
   localparam int unsigned NrCoresClusterOffset [NrClustersS1Quadrant] = '${nr_cores_cluster_offset};
   localparam int unsigned NrCoresS1Quadrant = ${nr_cores_quadrant};
 
+  // Obs width typedefine
+  typedef logic [ObsPinWidth-1:0] obs_t [NrClustersS1Quadrant];
+  
   // Memory cut configurations: one per memory parameterization
   // SRAM configurations
   typedef struct packed {

@@ -13,6 +13,8 @@ import ${name}_pkg::*;
  (
   input  logic        clk_i,
   input  logic        rst_ni,
+  // Obs pins
+  output obs_t        obs_o,
   /// Peripheral clock
   input  logic        clk_periph_i,
   input  logic        rst_periph_ni,
@@ -142,6 +144,7 @@ import ${name}_pkg::*;
   ${name}_top i_${name} (
     .clk_i              (clk_i),
     .rst_ni             (rst_ni),
+    .obs_o              (obs_o),
     .sram_cfgs_i        ('0),
     .clk_periph_i       (clk_periph_i),
     .rst_periph_ni      (rst_periph_ni),

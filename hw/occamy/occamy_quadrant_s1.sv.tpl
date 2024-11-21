@@ -34,6 +34,8 @@ module ${name}_quadrant_s1
 (
   input  logic                         clk_i,
   input  logic                         rst_ni,
+  // Obs pins
+  output obs_t                         obs_o,
   input  logic                         test_mode_i,
   input  logic [31:0]                  boot_addr_i,
   input  chip_id_t                     chip_id_i,
@@ -52,6 +54,7 @@ module ${name}_quadrant_s1
   // SRAM configuration
   input  sram_cfg_quadrant_t sram_cfg_i
 );
+
 
  // Calculate cluster base address based on `tile id`.
   addr_t cluster_base_offset;
@@ -240,6 +243,7 @@ module ${name}_quadrant_s1
   ${cluster_name}_wrapper i_${name}_cluster_${i} (
     .clk_i (clk_quadrant_cluster[${i}]),
     .rst_ni (rst_quadrant_n),
+    .obs_o (obs_o[${i}]),
     .meip_i (meip_i[NrCoresClusterOffset[${i}]+:NrCoresCluster[${i}]]),
     .mtip_i (mtip_i[NrCoresClusterOffset[${i}]+:NrCoresCluster[${i}]]),
     .msip_i (msip_i[NrCoresClusterOffset[${i}]+:NrCoresCluster[${i}]]),
