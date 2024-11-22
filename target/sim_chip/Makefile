@@ -283,9 +283,10 @@ $(VCS_BUILDDIR)/compile.sh: $(BENDER_LOCK) | $(VCS_BUILDDIR) testharness/testhar
 	# $(VCS_SEPP) $@ > $(VCS_BUILDDIR)/compile.log
 
 $(BIN_DIR)/occamy_chip.vcs: $(VCS_BUILDDIR)/compile.sh
+	bash work-vcs/compile.sh
 	mkdir -p $(BIN_DIR)
 	$(VCS) $(VCS_FLAGS) -o $(BIN_DIR)/occamy_chip.vcs -cc $(CC) -cpp $(CXX) \
-		-assert disable_cover -override_timescale=1ns/1ps -full64 -ignore initializer_driver_checks testharness $(TB_CC_SOURCES) $(RTL_CC_SOURCES) \
+		-override_timescale=1ns/1ps -full64 -ignore initializer_driver_checks testharness $(TB_CC_SOURCES) $(RTL_CC_SOURCES) \
 		-CFLAGS "$(TB_CC_FLAGS)" -lutil +error+100
 
 ########
