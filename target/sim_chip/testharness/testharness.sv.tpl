@@ -141,7 +141,7 @@ module testharness
     // Load the binaries
 % for i in x:
 %   for j in y:
-    load_binary_to_hardware("app_chip_${i}_${j}.bin", i_occamy_${i}_${j}.i_spm_wide_cut.i_mem.i_mem.i_tc_sram.sram);
+    i_occamy_${i}_${j}.i_spm_wide_cut.i_mem.i_mem.i_tc_sram.load_data("app_chip_${i}_${j}.hex");
 %   endfor
 % endfor
   end
