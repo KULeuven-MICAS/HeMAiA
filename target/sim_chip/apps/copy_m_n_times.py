@@ -15,7 +15,7 @@ def copy_file_m_n_times(input_file, m, n):
     for x in range(m):
         for y in range(n):
             # Define the new file name
-            output_file = f"../bin/app_chip_{x}_{y}.bin"
+            output_file = f"../bin/app_chip_{x}_{y}.hex"
             
             # Copy the file to the new location with the new name
             shutil.copy(input_file, output_file)

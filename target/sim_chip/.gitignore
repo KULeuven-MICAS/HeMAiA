@@ -2,5 +2,10 @@
 /work-vlt
 /bin
 /apps/*.bin
+/apps/*.hex
 /testharness/testharness.sv
 /logs
+/work-vcs
+/work.lib++
+/AN.DB
+/vc_hdrs.h

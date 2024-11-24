@@ -54,14 +54,17 @@ SYN_BENDER += -t test -t synthesis
 ifeq ($(MEM_TYPE), exclude_tcsram)
 	VSIM_BENDER += -t tech_cells_generic_exclude_tc_sram
 	SYN_BENDER  += -t tech_cells_generic_exclude_tc_sram
+	VCS_BENDER  += -t tech_cells_generic_exclude_tc_sram
 endif
 ifeq ($(MEM_TYPE), prep_syn_mem)
         VSIM_BENDER += -t tech_cells_generic_exclude_tc_sram
+		VCS_BENDER  += -t tech_cells_generic_exclude_tc_sram
         SYN_BENDER  += -t tech_cells_generic_exclude_tc_sram
         SYN_BENDER  += -t prep_syn_mem
 endif
 ifeq ($(SIM_TYPE), gate_level_sim)
         VSIM_BENDER += -t gate_level_sim
+		VCS_BENDER  += -t gate_level_sim
 endif
 SYN_SOURCES = $(shell ${BENDER} script synopsys ${SYN_BENDER})
 SYN_BUILDDIR := work-syn
@@ -123,10 +126,14 @@ endif
 
 VLOGAN_FLAGS := -assert svaext
 VLOGAN_FLAGS += -assert disable_cover
-VLOGAN_FLAGS += -full64
 VLOGAN_FLAGS += -kdb
-VHDLAN_FLAGS := -full64
+VLOGAN_FLAGS += -timescale=1ns/1ps
+VLOGAN_FLAGS += -override_timescale=1ns/1ps
+# VLOGAN_FLAGS += -work ./work-vcs
 VHDLAN_FLAGS += -kdb
+VHDLAN_FLAGS += -timescale=1ns/1ps
+VHDLAN_FLAGS += -override_timescale=1ns/1ps
+# VHDLAN_FLAGS += -work ./work-vcs
 
 #############
 # Verilator #
@@ -174,15 +181,6 @@ define QUESTASIM
 				$(1)_opt +permissive-off ++$$binary ++$$2' >> $@.gui
 	@chmod +x $@.gui
 endef
-
-#######
-# VCS #
-#######
-$(VCS_BUILDDIR)/compile.sh:
-	mkdir -p $(VCS_BUILDDIR)
-	${BENDER} script vcs ${VCS_BENDER} --vlog-arg="${VLOGAN_FLAGS}" --vcom-arg="${VHDLAN_FLAGS}" > $@
-	chmod +x $@
-	$(VCS_SEPP) $@ > $(VCS_BUILDDIR)/compile.log
 
 ########
 # Util #

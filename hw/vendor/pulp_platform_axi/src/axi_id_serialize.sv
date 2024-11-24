@@ -65,8 +65,10 @@ module axi_id_serialize #(
   /// than one entry, it is matched to the *last* matching entry's output ID.
   /// Number of Entries in the explicit ID map (default: None)
   parameter int unsigned IdMapNumEntries = 32'd0,
+  /// Index of IdMap to avoid its underflow (Error reported in Synopsys VCS)
+  parameter int unsigned IdMapIndex = (IdMapNumEntries>0) ? (IdMapNumEntries - 1) : 0,
   /// Explicit ID map; index [0] in each entry is the input ID to match, index [1] the output ID.
-  parameter int unsigned IdMap [IdMapNumEntries-1:0][0:1] = '{default: {32'b0, 32'b0}}
+  parameter int unsigned IdMap [IdMapIndex:0][0:1] = '{default: {32'b0, 32'b0}}
 ) (
   /// Rising-edge clock of both ports
   input  logic      clk_i,

@@ -54,11 +54,13 @@ CVA6_TRACE            = trace_hart_0.log
 
 VSIM_BENDER += $(shell cat ../rtl/src/bender_targets.tmp)
 VLT_BENDER += $(shell cat ../rtl/src/bender_targets.tmp)
+VCS_BENDER += $(shell cat ../rtl/src/bender_targets.tmp)
 
 VLT_BENDER  += -t SYNTHESIS_SNAX_DEV_ONLY
 
 VSIM_BENDER += -t simulation_hemaia
 VLT_BENDER += -t simulation_hemaia
+VCS_BENDER += -t simulation_hemaia
 
 VSIM_FLAGS += -t 1ps
 VSIM_FLAGS += -voptargs=+acc
@@ -73,6 +75,19 @@ VLOG_FLAGS += -suppress 2583
 VLOG_FLAGS += -suppress 13314
 VLOG_FLAGS += ${QUESTA_64BIT}
 VLOG_FLAGS += -timescale 1ns/1ps
+
+VCS_FLAGS += +nospecify
+VCS_FLAGS += -Mdir=work-vcs
+VCS_FLAGS += -Mlib=work-vcs
+VCS_FLAGS += -full64
+# Multi-core
+VCS_FLAGS += -fgp
+# Debug Options
+VCS_FLAGS += -assert disable_cover
+VCS_FLAGS += -kdb
+VCS_FLAGS += +vcs+fsdbon
+VCS_FLAGS += +lint=TFIPC-L
+VCS_FLAGS += -debug_access+all
 
 # Verilated and compiled Occamy system
 VLT_AR     = ${VLT_BUILDDIR}/Vtestharness__ALL.a
@@ -249,6 +264,30 @@ $(BIN_DIR)/occamy_chip.vsim: $(VSIM_BUILDDIR)/compile.vsim.tcl |$(BIN_DIR)
 
 clean-vsim: clean-work
 	rm -rf $(BIN_DIR)/$(TARGET).vsim $(BIN_DIR)/$(TARGET).vsim.gui $(VSIM_BUILDDIR) vsim.wlf transcript
+
+
+
+#######
+# VCS #
+#######
+
+$(VCS_BUILDDIR):
+	mkdir -p $@
+
+
+$(VCS_BUILDDIR)/compile.sh: $(BENDER_LOCK) | $(VCS_BUILDDIR) testharness/testharness.sv
+	mkdir -p $(VCS_BUILDDIR)
+	${BENDER} script vcs ${VCS_BENDER} --vlog-arg="${VLOGAN_FLAGS}" --vcom-arg="${VHDLAN_FLAGS}" > $@
+	# echo '${VCS} -sverilog -full64 -assert svaext -assert disable_cover -debug_acc+all+dmptf -kdb -ntb_opts sv -CCFLAGS="${TB_CC_FLAGS}" -o ../bin/hemaia_chip.simv -top testharness' >> $@
+	chmod +x $@
+	# $(VCS_SEPP) $@ > $(VCS_BUILDDIR)/compile.log
+
+$(BIN_DIR)/occamy_chip.vcs: $(VCS_BUILDDIR)/compile.sh
+	bash work-vcs/compile.sh
+	mkdir -p $(BIN_DIR)
+	$(VCS) $(VCS_FLAGS) -o $(BIN_DIR)/occamy_chip.vcs -cc $(CC) -cpp $(CXX) \
+		-override_timescale=1ns/1ps -full64 -ignore initializer_driver_checks testharness $(TB_CC_SOURCES) $(RTL_CC_SOURCES) \
+		-CFLAGS "$(TB_CC_FLAGS)" -lutil +error+100
 
 ########
 # Util #

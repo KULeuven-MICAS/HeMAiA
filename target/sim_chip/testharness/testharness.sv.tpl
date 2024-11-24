@@ -27,98 +27,6 @@ module testharness
   logic rst_ni;
   logic rtc_i;
 
-
-  // Task to load binary file into memory array
-  task automatic load_binary_to_hardware(input string filepath,
-                                         ref logic [511:0] wide_sram_buffer[SRAM_DEPTH-1:0]);
-    integer fd;
-    integer i;
-    reg [7:0] buffer[SRAM_WIDTH*SRAM_DEPTH];
-    foreach (buffer[i]) buffer[i] = 0;  // Zero out the buffer
-
-    // Open the binary file
-    fd = $fopen(filepath, "rb");
-    if (fd == 0) begin
-      $display("Failed to open binary file: %s", filepath);
-      $finish(-1);
-    end
-
-    // Read the binary data into the buffer
-    $fread(buffer, fd);
-    $fclose(fd);
-
-    // Assemble bytes into 512-bit words
-    for (i = 0; i < SRAM_DEPTH; i = i + 1) begin
-      wide_sram_buffer[i] = {
-        buffer[i*SRAM_WIDTH+63],
-        buffer[i*SRAM_WIDTH+62],
-        buffer[i*SRAM_WIDTH+61],
-        buffer[i*SRAM_WIDTH+60],
-        buffer[i*SRAM_WIDTH+59],
-        buffer[i*SRAM_WIDTH+58],
-        buffer[i*SRAM_WIDTH+57],
-        buffer[i*SRAM_WIDTH+56],
-        buffer[i*SRAM_WIDTH+55],
-        buffer[i*SRAM_WIDTH+54],
-        buffer[i*SRAM_WIDTH+53],
-        buffer[i*SRAM_WIDTH+52],
-        buffer[i*SRAM_WIDTH+51],
-        buffer[i*SRAM_WIDTH+50],
-        buffer[i*SRAM_WIDTH+49],
-        buffer[i*SRAM_WIDTH+48],
-        buffer[i*SRAM_WIDTH+47],
-        buffer[i*SRAM_WIDTH+46],
-        buffer[i*SRAM_WIDTH+45],
-        buffer[i*SRAM_WIDTH+44],
-        buffer[i*SRAM_WIDTH+43],
-        buffer[i*SRAM_WIDTH+42],
-        buffer[i*SRAM_WIDTH+41],
-        buffer[i*SRAM_WIDTH+40],
-        buffer[i*SRAM_WIDTH+39],
-        buffer[i*SRAM_WIDTH+38],
-        buffer[i*SRAM_WIDTH+37],
-        buffer[i*SRAM_WIDTH+36],
-        buffer[i*SRAM_WIDTH+35],
-        buffer[i*SRAM_WIDTH+34],
-        buffer[i*SRAM_WIDTH+33],
-        buffer[i*SRAM_WIDTH+32],
-        buffer[i*SRAM_WIDTH+31],
-        buffer[i*SRAM_WIDTH+30],
-        buffer[i*SRAM_WIDTH+29],
-        buffer[i*SRAM_WIDTH+28],
-        buffer[i*SRAM_WIDTH+27],
-        buffer[i*SRAM_WIDTH+26],
-        buffer[i*SRAM_WIDTH+25],
-        buffer[i*SRAM_WIDTH+24],
-        buffer[i*SRAM_WIDTH+23],
-        buffer[i*SRAM_WIDTH+22],
-        buffer[i*SRAM_WIDTH+21],
-        buffer[i*SRAM_WIDTH+20],
-        buffer[i*SRAM_WIDTH+19],
-        buffer[i*SRAM_WIDTH+18],
-        buffer[i*SRAM_WIDTH+17],
-        buffer[i*SRAM_WIDTH+16],
-        buffer[i*SRAM_WIDTH+15],
-        buffer[i*SRAM_WIDTH+14],
-        buffer[i*SRAM_WIDTH+13],
-        buffer[i*SRAM_WIDTH+12],
-        buffer[i*SRAM_WIDTH+11],
-        buffer[i*SRAM_WIDTH+10],
-        buffer[i*SRAM_WIDTH+9],
-        buffer[i*SRAM_WIDTH+8],
-        buffer[i*SRAM_WIDTH+7],
-        buffer[i*SRAM_WIDTH+6],
-        buffer[i*SRAM_WIDTH+5],
-        buffer[i*SRAM_WIDTH+4],
-        buffer[i*SRAM_WIDTH+3],
-        buffer[i*SRAM_WIDTH+2],
-        buffer[i*SRAM_WIDTH+1],
-        buffer[i*SRAM_WIDTH+0]
-      };
-    end
-    $display("Binary file '%s' loaded into memory.", filepath);
-  endtask
-
   // Chip finish signal
   integer chip_finish[${max(x)}:${min(x)}][${max(y)}:${min(y)}];
 
@@ -126,7 +34,12 @@ module testharness
   initial begin
     rtc_i  = 0;
     clk_i  = 0;
-
+    // Load the binaries
+% for i in x:
+%   for j in y:
+    i_occamy_${i}_${j}.i_spm_wide_cut.i_mem.i_mem.i_tc_sram.load_data("app_chip_${i}_${j}.hex");
+%   endfor
+% endfor
     // Reset the chip
     foreach (chip_finish[i,j]) begin
       chip_finish[i][j] = 0;
@@ -138,12 +51,6 @@ module testharness
     #(10 + $urandom % 10);
     $display("Reset released at %tns", $time / 1000);
     rst_ni = 1;
-    // Load the binaries
-% for i in x:
-%   for j in y:
-    load_binary_to_hardware("app_chip_${i}_${j}.bin", i_occamy_${i}_${j}.i_spm_wide_cut.i_mem.i_mem.i_tc_sram.sram);
-%   endfor
-% endfor
   end
 
   always_comb begin
