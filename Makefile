@@ -107,6 +107,9 @@ occamy_system_vlt: # In SNAX Docker
 	+$(MAKE) -C ./target/sim tb
 	+$(MAKE) -C ./target/sim bin/occamy_top.vlt
 
+hemaia_system_vlt: # In SNAX Docker
+	+$(MAKE) -C ./target/sim_chip bin/occamy_chip.vlt CFG_OVERRIDE=$(CFG)
+
 # Questasim Workflow
 occamy_system_vsim_preparation: # In SNAX Docker
 	$(MAKE) -C ./target/sim work/lib/libfesvr.a
