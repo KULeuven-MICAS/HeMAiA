@@ -91,7 +91,7 @@ void bootrom() {
                 }
                 print_str(address_prefix, "\r\n\t The memory from 0x");
                 print_u48(address_prefix, start_address);
-                print_str(address_prefix, "is:");
+                print_str(address_prefix, " is:");
                 print_mem_hex(address_prefix, (char*)start_address,
                               memory_length);
                 print_str(address_prefix, "\r\n\r\n\t Print finished. ");
