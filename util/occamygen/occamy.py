@@ -658,10 +658,14 @@ def get_chip_kwargs(soc_wide_xbar, soc_axi_lite_narrow_periph_xbar, occamy_cfg, 
                              for cluster_generator in cluster_generators]
     nr_cores_quadrant = sum(core_per_cluster_list)
     nr_s1_quadrants = occamy_cfg["nr_s1_quadrant"]
+    cluster_cfg = cluster_generators[0].cfg
     chip_kwargs = {
         "name": name,
         "util": util,
         "occamy_cfg": occamy_cfg,
+        "nr_clusters_s1_quadrant": len(occamy_cfg["clusters"]),
+        "obs_pin_width": cluster_cfg["observable_pin_width"],
+
         "soc_wide_xbar": soc_wide_xbar,
         "soc_axi_lite_narrow_periph_xbar": soc_axi_lite_narrow_periph_xbar,
         "cores": nr_s1_quadrants * nr_cores_quadrant + 1

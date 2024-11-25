@@ -6,30 +6,30 @@
 # Yunhao Deng <yunhao.deng@kuleuven.be>
 
 # 1 and 0 voltage reference
-# 1: LA20_P - BR42
-set_property PACKAGE_PIN BR42 [get_ports vref_vdd_o]
+# 1: J20.3 LA20_P - BT41
+set_property PACKAGE_PIN BT41 [get_ports vref_vdd_o]
 set_property IOSTANDARD LVCMOS15 [get_ports vref_vdd_o]
 set_property DRIVE 12 [get_ports vref_vdd_o]
 
-# 0: LA20_N - BT41
-set_property PACKAGE_PIN BT41 [get_ports vref_gnd_o]
+# 0: J20.1 LA20_N - BR42
+set_property PACKAGE_PIN BR42 [get_ports vref_gnd_o]
 set_property IOSTANDARD LVCMOS15 [get_ports vref_gnd_o]
 set_property DRIVE 12 [get_ports vref_gnd_o]
 
 # Four-wires UART with flow control
-# LA26P - CB41
-set_property PACKAGE_PIN CB41 [get_ports uart_rx_i]
+# J20.9 LA22P - CD42
+set_property PACKAGE_PIN CD42 [get_ports uart_rx_i]
 set_property IOSTANDARD LVCMOS15 [get_ports uart_rx_i]
-# LA26N - CC42
-set_property PACKAGE_PIN CC42 [get_ports uart_tx_o]
+# J20.11 LA22N - CD43
+set_property PACKAGE_PIN CD43 [get_ports uart_tx_o]
 set_property IOSTANDARD LVCMOS15 [get_ports uart_tx_o]
 # Flow Control
-# LA27P - CA38
-set_property PACKAGE_PIN CA38 [get_ports uart_cts_ni]
+# J20.13 LA23P - CB40
+set_property PACKAGE_PIN CB40 [get_ports uart_cts_ni]
 set_property IOSTANDARD LVCMOS15 [get_ports uart_cts_ni]
 set_property PULLUP TRUE [get_ports uart_cts_ni]
-# LA27N - CB39
-set_property PACKAGE_PIN CB39 [get_ports uart_rts_no]
+# J20.15 LA23N - CC40
+set_property PACKAGE_PIN CC40 [get_ports uart_rts_no]
 set_property IOSTANDARD LVCMOS15 [get_ports uart_rts_no]
 
 # Six-wires SPIx4 (Slave)
