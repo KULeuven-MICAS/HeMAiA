@@ -16,6 +16,10 @@ import ${name}_pkg::*;
   /// Peripheral clock
   input  logic        clk_periph_i,
   input  logic        rst_periph_ni,
+  /// Observe Pins
+  %for i in range(obs_num):
+  output logic [${obs_pin_width-1}:0]  obs_${i}_o,
+  %endfor
   /// Real-time clock (for time keeping)
   input  logic        rtc_i,
   input  logic        test_mode_i,
@@ -115,7 +119,6 @@ import ${name}_pkg::*;
       bootrom_req_ready_q <= bootrom_req_ready_d;
     end
   end
-
 
   // Occamy top-level
   ${name}_top i_${name} (

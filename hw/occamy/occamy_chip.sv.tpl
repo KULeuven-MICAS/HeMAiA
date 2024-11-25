@@ -13,8 +13,10 @@ import ${name}_pkg::*;
  (
   input  logic        clk_i,
   input  logic        rst_ni,
-  // Obs pins
-  output obs_t        obs_o,
+  /// Observe Pins
+  %for i in range(obs_num):
+  output logic [${obs_pin_width-1}:0]  obs_${i}_o,
+  %endfor
   /// Peripheral clock
   input  logic        clk_periph_i,
   input  logic        rst_periph_ni,
@@ -140,11 +142,12 @@ import ${name}_pkg::*;
   ///////////////////
   //  Occamy Top   //
   ///////////////////
+  obs_t obs_pin;
 
   ${name}_top i_${name} (
     .clk_i              (clk_i),
     .rst_ni             (rst_ni),
-    .obs_o              (obs_o),
+    .obs_o              (obs_pin),
     .sram_cfgs_i        ('0),
     .clk_periph_i       (clk_periph_i),
     .rst_periph_ni      (rst_periph_ni),
@@ -192,5 +195,9 @@ import ${name}_pkg::*;
     .chip_ctrl_rsp_i    ('0),
     .ext_irq_i          ('0)
   );
+
+  %for i in range(obs_num):
+  assign obs_${i}_o = obs_pin[${i}];
+  %endfor
 
 endmodule
