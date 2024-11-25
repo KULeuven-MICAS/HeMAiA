@@ -544,7 +544,7 @@ def main():
     ##################
     if args.xilinx_sv:
         xilinx_kwargs = occamy.get_xilinx_kwargs(
-            occamy_cfg, soc_wide_xbar, soc_axi_lite_narrow_periph_xbar, args.name)
+            occamy_cfg, cluster_generators, soc_wide_xbar, soc_axi_lite_narrow_periph_xbar, args.name)
         write_template(args.xilinx_sv,
                        outdir,
                        fname="{}_xilinx.sv".format(args.name),
