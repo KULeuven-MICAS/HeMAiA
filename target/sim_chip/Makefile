@@ -81,7 +81,7 @@ VCS_FLAGS += -Mdir=work-vcs
 VCS_FLAGS += -Mlib=work-vcs
 VCS_FLAGS += -full64
 # Multi-core
-VCS_FLAGS += -fgp
+VCS_FLAGS += -fgp=multisocket
 # Debug Options
 VCS_FLAGS += -assert disable_cover
 VCS_FLAGS += -kdb

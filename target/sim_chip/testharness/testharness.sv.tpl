@@ -30,6 +30,9 @@ module testharness
   // Chip finish signal
   integer chip_finish[${max(x)}:${min(x)}][${max(y)}:${min(y)}];
 
+  // Integer to save current time
+  time current_time;
+
   // Generate reset and clock.
   initial begin
     rtc_i  = 0;
@@ -46,10 +49,12 @@ module testharness
     end
     rst_ni = 1;
     #0;
-    $display("Resetting the system at %tns", $time / 1000);
+    current_time = $time / 1000;
+    $display("Resetting the system at %tns", current_time);
     rst_ni = 0;
     #(10 + $urandom % 10);
-    $display("Reset released at %tns", $time / 1000);
+    current_time = $time / 1000;
+    $display("Reset released at %tns", current_time);
     rst_ni = 1;
   end
 
