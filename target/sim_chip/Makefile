@@ -189,7 +189,7 @@ testharness/testharness.sv: testharness/testharness.sv.tpl $(CFG)
 # Verilator #
 #############
 
-${VLT_AR}: ${VLT_SOURCES} ${TB_SRCS} testharness/testharness.sv
+${VLT_AR}: testharness/testharness.sv
 	$(call VERILATE,testharness)
 
 # Quick sanity check, not really meant for simulation.
