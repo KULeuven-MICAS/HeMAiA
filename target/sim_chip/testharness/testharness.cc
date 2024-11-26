@@ -54,7 +54,7 @@ int main(int argc, char** argv) {
     static struct option long_options[] = {
         {"vcd", no_argument, nullptr, 0},
         {"disable-tracing", no_argument, nullptr, 1},
-        {"trace-prefix", required_argument, nullptr, 2},
+        {"prefix-trace", required_argument, nullptr, 2},
         {"help", no_argument, nullptr, 'h'},
         {nullptr, 0, nullptr, 0}  // Terminate the option array
     };
@@ -101,7 +101,7 @@ int main(int argc, char** argv) {
     }
 
     // Additional logging based on other options
-    if (disable_tracing) {
+    if (WRAPPER_disable_tracing) {
         std::cout << "DASM tracing is disabled.\n";
     } else if (!WRAPPER_trace_prefix.empty()) {
         std::cout << "DASM tracing enabled with prefix: "
