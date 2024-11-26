@@ -9,7 +9,7 @@
 // Function to print help message
 void print_help() {
     std::cout
-        << "HeMAIA Verilator Simulation Driver\n"
+        << "HeMAiA Verilator Simulation Driver\n"
         << "     -h :\t\t\t Show this help message\n"
         << "     --vcd :\t\t\t Enable VCD trace dumping\n"
         << "     --disable-tracing : \t Disable DASM tracing\n"
