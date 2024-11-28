@@ -363,6 +363,14 @@ def am_connect_soc_wide_xbar_quad(am, am_soc_narrow_xbar, am_wide_xbar_quadrant_
         )
     return am_clusters
 
+def am_connect_hemaia_multichip(am, am_soc_wide_xbar):
+    # Connect HeMAiA multichip master to wide AXI: This rule matches with no address condition, acting as a default port
+    am_hemaia_multichip = am.new_leaf(
+        "hemaia_multichip",
+        0x000000000000,
+        0x000000000000).attach_to(am_soc_wide_xbar)
+    return am_hemaia_multichip
+
 
 def get_dts(occamy_cfg, am_clint, am_axi_lite_peripherals, am_axi_lite_narrow_peripherals):
     dts = device_tree.DeviceTree()
@@ -404,7 +412,7 @@ def get_dts(occamy_cfg, am_clint, am_axi_lite_peripherals, am_axi_lite_narrow_pe
     return dts
 
 
-def get_top_kwargs(occamy_cfg, cluster_generators, soc_axi_lite_narrow_periph_xbar, soc_wide_xbar, soc_narrow_xbar, name):
+def get_top_kwargs(occamy_cfg, cluster_generators, soc_axi_lite_narrow_periph_xbar, soc_wide_xbar, soc_narrow_xbar, soc2router_bus, router2soc_bus, name):
     core_per_cluster_list = [cluster_generator.cfg["nr_cores"]
                              for cluster_generator in cluster_generators]
     nr_cores_quadrant = sum(core_per_cluster_list)
@@ -415,12 +423,14 @@ def get_top_kwargs(occamy_cfg, cluster_generators, soc_axi_lite_narrow_periph_xb
         "soc_axi_lite_narrow_periph_xbar": soc_axi_lite_narrow_periph_xbar,
         "soc_wide_xbar": soc_wide_xbar,
         "soc_narrow_xbar": soc_narrow_xbar,
+        "soc2router_bus": soc2router_bus,
+        "router2soc_bus": router2soc_bus,
         "cores": nr_s1_quadrants * nr_cores_quadrant + 1,
     }
     return top_kwargs
 
 
-def get_soc_kwargs(occamy_cfg, cluster_generators, soc_narrow_xbar, soc_wide_xbar, util, name):
+def get_soc_kwargs(occamy_cfg, cluster_generators, soc_narrow_xbar, soc_wide_xbar, soc2router_bus, router2soc_bus, util, name):
     core_per_cluster_list = [cluster_generator.cfg["nr_cores"]
                              for cluster_generator in cluster_generators]
     nr_cores_quadrant = sum(core_per_cluster_list)
@@ -431,6 +441,8 @@ def get_soc_kwargs(occamy_cfg, cluster_generators, soc_narrow_xbar, soc_wide_xba
         "occamy_cfg": occamy_cfg,
         "soc_narrow_xbar": soc_narrow_xbar,
         "soc_wide_xbar": soc_wide_xbar,
+        "soc2router_bus": soc2router_bus,
+        "router2soc_bus": router2soc_bus,
         "cores": nr_s1_quadrants * nr_cores_quadrant + 1,
         "nr_s1_quadrants": nr_s1_quadrants,
         "nr_cores_quadrant": nr_cores_quadrant
@@ -661,7 +673,7 @@ def get_multichip_testharness_kwargs(occamy_cfg, name):
     }
     return testharness_kwargs
 
-def get_chip_kwargs(soc_wide_xbar, soc_axi_lite_narrow_periph_xbar, occamy_cfg, cluster_generators, util, name):
+def get_chip_kwargs(soc_wide_xbar, soc_axi_lite_narrow_periph_xbar, soc2router_bus, router2soc_bus, occamy_cfg, cluster_generators, util, name):
     core_per_cluster_list = [cluster_generator.cfg["nr_cores"]
                              for cluster_generator in cluster_generators]
     nr_cores_quadrant = sum(core_per_cluster_list)
@@ -672,6 +684,8 @@ def get_chip_kwargs(soc_wide_xbar, soc_axi_lite_narrow_periph_xbar, occamy_cfg, 
         "occamy_cfg": occamy_cfg,
         "soc_wide_xbar": soc_wide_xbar,
         "soc_axi_lite_narrow_periph_xbar": soc_axi_lite_narrow_periph_xbar,
+        "soc2router_bus": soc2router_bus,
+        "router2soc_bus": router2soc_bus,
         "cores": nr_s1_quadrants * nr_cores_quadrant + 1
     }
     return chip_kwargs

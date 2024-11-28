@@ -72,6 +72,16 @@ module ${name}_top
   output ${soc_wide_xbar.out_spm_wide.req_type()} spm_axi_wide_req_o,
   input  ${soc_wide_xbar.out_spm_wide.rsp_type()} spm_axi_wide_rsp_i,
 
+% if occamy_cfg['hemaia_multichip']['single_chip'] is False: 
+  // HeMAiA Multi-Chip AXI Interface
+  // Chiplet Requst to Router
+  output ${soc2router_bus.req_type()} soc2router_req_o,
+  input  ${soc2router_bus.rsp_type()} soc2router_rsp_i,
+  // Router Requst to Chiplet
+  input  ${router2soc_bus.req_type()} router2soc_req_i,
+  output ${router2soc_bus.rsp_type()} router2soc_rsp_o,
+% endif
+
   /// Chip specific control registers
   output ${soc_axi_lite_narrow_periph_xbar.out_chip_ctrl.req_type()} chip_ctrl_req_o,
   input  ${soc_axi_lite_narrow_periph_xbar.out_chip_ctrl.rsp_type()} chip_ctrl_rsp_i,
@@ -83,7 +93,6 @@ module ${name}_top
 );
 
 <%
-
   cuts_clint_cfg = occamy_cfg["cuts"]["periph_axi_lite_narrow_clint_cfg"]
   cuts_soc_ctrl_cfg = occamy_cfg["cuts"]["periph_axi_lite_narrow_soc_ctrl_cfg"]
   cuts_chip_ctrl_cfg = occamy_cfg["cuts"]["periph_axi_lite_narrow_chip_ctrl_cfg"]
@@ -153,6 +162,14 @@ module ${name}_top
     .periph_axi_lite_narrow_rsp_i ( periph_regbus_soc2per_rsp ),
     .spm_axi_wide_req_o,
     .spm_axi_wide_rsp_i,
+% if occamy_cfg['hemaia_multichip']['single_chip'] is False: 
+    // Chiplet Requst to Router
+    .soc2router_req_o,
+    .soc2router_rsp_i,
+    // Router Requst to Chiplet
+    .router2soc_req_i,
+    .router2soc_rsp_o,
+% endif
     .spm_narrow_rerror_o (spm_narrow_rerror),
     .spm_wide_rerror_o (spm_wide_rerror),
     .mtip_i ( mtip ),
