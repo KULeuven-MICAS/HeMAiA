@@ -229,8 +229,6 @@ def main():
     am_spm_narrow, am_sys_idma_cfg = occamy.am_connect_soc_narrow_xbar(
         am, am_soc_narrow_xbar, occamy_cfg)
 
-    am_hemaia_multichip = occamy.am_connect_hemaia_multichip(am, am_soc_wide_xbar)
-
     am_spm_wide, am_wide_zero_mem = occamy.am_connect_soc_wide_xbar_mem(
         am, am_soc_wide_xbar, occamy_cfg)
 
@@ -339,7 +337,8 @@ def main():
         node=am_soc_wide_xbar)
 
     if occamy_cfg["hemaia_multichip"]["single_chip"] is False:
-        soc_wide_xbar.add_output_entry("hemaia_multichip", am_hemaia_multichip)
+        # The chiplet output port does not have the rule; it is the default port
+        soc_wide_xbar.outputs.append("hemaia_multichip")
         soc_wide_xbar.add_input("hemaia_multichip")
     soc_wide_xbar.add_output_entry("soc_narrow", am_soc_narrow_xbar)
     soc_wide_xbar.add_input("soc_narrow")

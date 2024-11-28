@@ -363,15 +363,6 @@ def am_connect_soc_wide_xbar_quad(am, am_soc_narrow_xbar, am_wide_xbar_quadrant_
         )
     return am_clusters
 
-def am_connect_hemaia_multichip(am, am_soc_wide_xbar):
-    # Connect HeMAiA multichip master to wide AXI: This rule matches with no address condition, acting as a default port
-    am_hemaia_multichip = am.new_leaf(
-        "hemaia_multichip",
-        0x000000000000,
-        0x000000000000).attach_to(am_soc_wide_xbar)
-    return am_hemaia_multichip
-
-
 def get_dts(occamy_cfg, am_clint, am_axi_lite_peripherals, am_axi_lite_narrow_peripherals):
     dts = device_tree.DeviceTree()
 

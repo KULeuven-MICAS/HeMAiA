@@ -6,7 +6,7 @@
     // Multi-chip configuration
     hemaia_multichip: {
       chip_id_width: 8, 
-      router_to_soc_iw: 8,
+      router_to_soc_iw: 6,
       soc_to_router_iw: 4,
       single_chip: false,
       single_chip_id: 0, 
@@ -120,6 +120,7 @@
     },
     clusters:[
       "snax_KUL_cluster",
+      "snax_KUL_dse_cluster",
       "snax_hypercorex_cluster",
       // "snax_dimc_cluster"
     ],
