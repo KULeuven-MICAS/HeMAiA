@@ -641,7 +641,8 @@ def main():
         write_template(args.testharness_sv, outdir, **testharness_kwargs)
 
     if args.multichip_testharness_sv:
-        multichip_testharness_kwargs = occamy.get_multichip_testharness_kwargs(occamy_cfg, name)
+        multichip_testharness_kwargs = occamy.get_multichip_testharness_kwargs(
+            occamy_cfg, soc2router_bus, router2soc_bus, name)
         write_template(args.multichip_testharness_sv, outdir, **multichip_testharness_kwargs)
 
     ############

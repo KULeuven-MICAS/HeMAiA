@@ -666,10 +666,12 @@ def get_testharness_kwargs(soc_wide_xbar, soc_axi_lite_narrow_periph_xbar, chip_
     }
     return testharness_kwargs
 
-def get_multichip_testharness_kwargs(occamy_cfg, name):
+def get_multichip_testharness_kwargs(occamy_cfg, soc2router_bus, router2soc_bus, name):
     testharness_kwargs = {
         "name": name,
-        "multichip_cfg": occamy_cfg["hemaia_multichip"]
+        "multichip_cfg": occamy_cfg["hemaia_multichip"],
+        "soc2router_bus": soc2router_bus,
+        "router2soc_bus": router2soc_bus
     }
     return testharness_kwargs
 
