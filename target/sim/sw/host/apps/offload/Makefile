@@ -86,8 +86,9 @@ LD_ORIGINS      = $(abspath $(addsuffix /origin.ld, $(DEVICE_BUILDDIRS)))
 ELFS            = $(abspath $(addsuffix .elf, $(addprefix $(BUILDDIR)/$(APP)-, $(notdir $(DEVICE_APPS)))))
 DUMPS           = $(abspath $(addsuffix .dump, $(addprefix $(BUILDDIR)/$(APP)-, $(notdir $(DEVICE_APPS)))))
 DWARFS          = $(abspath $(addsuffix .dwarf, $(addprefix $(BUILDDIR)/$(APP)-, $(notdir $(DEVICE_APPS)))))
+BINS           = $(abspath $(addsuffix .bin, $(addprefix $(BUILDDIR)/$(APP)-, $(notdir $(DEVICE_APPS)))))
 PARTIAL_OUTPUTS = $(PARTIAL_ELF) $(PARTIAL_DUMP) $(LD_ORIGINS)
-FINAL_OUTPUTS   = $(ELFS) $(DUMPS) $(DWARFS)
+FINAL_OUTPUTS   = $(ELFS) $(DUMPS) $(DWARFS)  $(BINS)
 
 #########
 # Rules #
@@ -147,6 +148,8 @@ $(BUILDDIR)/$(APP)-%.dump: $(BUILDDIR)/$(APP)-%.elf | $(BUILDDIR)
 $(BUILDDIR)/$(APP)-%.dwarf: $(BUILDDIR)/$(APP)-%.elf | $(BUILDDIR)
 	$(RISCV_READELF) --debug-dump $< > $@
 
+$(BUILDDIR)/$(APP)-%.bin: $(BUILDDIR)/$(APP)-%.elf | $(BUILDDIR)
+	$(RISCV_OBJCOPY) -O binary $< $@
 ifneq ($(MAKECMDGOALS),clean)
 -include $(DEP)
 endif
