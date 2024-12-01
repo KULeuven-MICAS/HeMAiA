@@ -14,7 +14,7 @@ import ${name}_pkg::*;
   input  logic        clk_i,
   input  logic        rst_ni,
   // Obs pins
-  output obs_t        obs_o,
+  output logic [${obs_pin_width-1}:0]  obs_o [${nr_clusters_s1_quadrant}],
   /// Peripheral clock
   input  logic        clk_periph_i,
   input  logic        rst_periph_ni,
