@@ -16,7 +16,7 @@ SECTIONS
   .appl :
   {
     /*TODO colluca: place stack at end of DRAM*/
-    __stack_pointer$ = ORIGIN(DRAM) + LENGTH(DRAM) - 4;
+    __stack_pointer$ = ORIGIN(DRAM) + LENGTH(DRAM) - 8;
     *(.text.startup)
     *(.text .text.*)
     __SDATA_BEGIN__ = .;
