@@ -6,7 +6,8 @@ ENTRY(_start)
 
 MEMORY
 {
-    DRAM (rwxa) : ORIGIN = 0x80000000, LENGTH = 0x80000000
+    /* DRAM (rwxa) : ORIGIN = 0x80000000, LENGTH = 0x80000000 */
+    DRAM (rwxa) : ORIGIN = 0x80000000, LENGTH = 0x100000
 }
 
 SECTIONS
@@ -15,11 +16,11 @@ SECTIONS
   .appl :
   {
     /*TODO colluca: place stack at end of DRAM*/
-    __stack_pointer$  = . + 0x70000;
+    __stack_pointer$ = ORIGIN(DRAM) + LENGTH(DRAM) - 8;
     *(.text.startup)
     *(.text .text.*)
     __SDATA_BEGIN__ = .;
-    __global_pointer$ = . + 0x7f0;
+    __global_pointer$ = . + 0x800;
     *(.sdata)
     *(.srodata.cst16) *(.srodata.cst8) *(.srodata.cst4) *(.srodata.cst2) *(.srodata .srodata.*)
     *(.sdata .sdata.* .gnu.linkonce.s.*)
