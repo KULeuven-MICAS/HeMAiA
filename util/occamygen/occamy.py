@@ -569,39 +569,6 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
             "Not all cluster base offset in the cluster cfg are equal.")
     cluster_offset = cluster_offset_list[0]
     cluster_addr_width = int(math.log2(cluster_offset))
-    # # The lut here is to provide an easy way to determine the cluster idx based on core idx
-    # # e.g core_per_cluster_list = [2,3]
-    # # core_idx lut    cluster_idx
-    # # 0        lut[0] 0
-    # # 1        lut[1] 0
-    # # 2        lut[2] 1
-    # # 3        lut[3] 1
-    # # 4        lut[4] 1
-    # lut = []
-    # for cluster_num, num_cores in enumerate(core_per_cluster_list):
-    #     lut.extend([cluster_num] * num_cores)
-    # running_sum = []
-    # current_sum = 0
-    # for core in core_per_cluster_list:
-    #     current_sum += core
-    #     running_sum.append(current_sum)
-    # cluster_baseidx = [0] + running_sum[:-1]
-    # # we need to define an array in c header file for each cluster like
-    # # #define N_CORES_PER_CLUSTER {2,3}
-    # # so here we need to take out the value of the core_per_cluster_list
-    # # and join them with commas and then finally concat with {}
-    # nr_cores_per_cluster = "{" + ",".join(map(str, core_per_cluster_list)) + "}"
-    # lut_coreidx_clusteridx = "{" + ",".join(map(str, lut)) + "}"
-    # cluster_baseidx = "{" + ",".join(map(str, cluster_baseidx)) + "}"
-    # cheader_kwargs={
-    #     "name": name,
-    #     "nr_quads": nr_quads,
-    #     "nr_clusters": nr_clusters,
-    #     "nr_cores_per_cluster": nr_cores_per_cluster,
-    #     "lut_coreidx_clusteridx": lut_coreidx_clusteridx,
-    #     "cluster_baseidx": cluster_baseidx,
-    #     "nr_cores": nr_cores
-    # }
     cheader_kwargs = {
         "name": name,
         "nr_quads": nr_quads,
