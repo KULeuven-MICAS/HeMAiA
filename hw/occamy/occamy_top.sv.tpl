@@ -357,6 +357,7 @@ module ${name}_top
   ) i_spi_slave (
     .clk_i(${axi_spi_slave.clk}),
     .rst_ni(${axi_spi_slave.rst}),
+    .chip_id_i(chip_id_i),
     .axi_lite_req_o(${axi_spi_slave.req_name()}),
     .axi_lite_rsp_i(${axi_spi_slave.rsp_name()}),
     .spi_sclk_i(spis_sck_i),
