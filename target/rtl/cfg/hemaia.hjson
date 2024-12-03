@@ -6,7 +6,9 @@
     // Multi-chip configuration
     hemaia_multichip: {
       chip_id_width: 8, 
-      single_chip: false,
+      router_to_soc_iw: 8,
+      soc_to_router_iw: 4,
+      single_chip: true,
       single_chip_id: 0, 
       testbench_cfg: {
         // Emulate a four-chips configuration
@@ -34,6 +36,8 @@
       fall_through: false,
     },
     cuts: {
+      soc_to_router: 1,
+      router_to_soc: 1,
       narrow_to_quad: 3,
       quad_to_narrow: 3,
       wide_to_quad: 3,
@@ -116,7 +120,7 @@
     },
     clusters:[
       "snax_KUL_cluster",
-      "snax_KUL_xdma_cluster",
+      "snax_KUL_dse_cluster",
       "snax_hypercorex_cluster",
       // "snax_dimc_cluster"
     ],

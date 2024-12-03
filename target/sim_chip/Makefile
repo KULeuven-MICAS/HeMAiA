@@ -166,7 +166,7 @@ CFG = $(TARGET_RTL)/cfg/lru.hjson
 
 OCCAMYGEN ?= $(ROOT)/util/occamygen/occamygen.py
 
-$(CFG):
+$(CFG): FORCE
 	@# If the LRU config file doesn't exist, we use the default config.
 	@if [ ! -e $@ ] ; then \
 		DEFAULT_CFG="$(TARGET_RTL)/cfg/hemaia.hjson"; \
@@ -179,7 +179,7 @@ $(CFG):
 		echo "Overriding config file with: $(CFG_OVERRIDE)"; \
 		cp $(CFG_OVERRIDE) $@; \
 	fi
-
+FORCE:
 
 testharness/testharness.sv: testharness/testharness.sv.tpl $(CFG)
 	@echo "[OCCAMYGEN] Generate $@"

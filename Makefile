@@ -131,3 +131,4 @@ hemaia_system_vcs_preparation: # In SNAX Docker
 
 hemaia_system_vcs: # In ESAT Server
 	$(MAKE) -C ./target/sim_chip bin/occamy_chip.vcs
+# How to start the execution of the simulation: cd ./target/sim_chip/bin; ./occamy_chip.vcs -gui -R -fgp=num_threads:8

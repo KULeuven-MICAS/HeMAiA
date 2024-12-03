@@ -5,13 +5,15 @@
     remote_quadrants: [],
     // Multi-chip configuration
     hemaia_multichip: {
-      chip_id_width: 8, 
-      single_chip: true,
-      single_chip_id: 0, 
-      testbench_cfg: {
-        // Emulate a four-chips configuration
+      chip_id_width: 8,             // Not verified, should never be changed
+      router_to_soc_iw: 5,          // soc_to_router_iw + clog2(chips)
+      soc_to_router_iw: 4,          // Not beneficial for iw > 6
+      single_chip: false,
+      single_chip_id: 0,            // Only used for single chip simulation
+      testbench_cfg: {              // The total number of homogeneous chips (x * y) on the virtual interposer
+        // Emulate a two-chips configuration
         upper_left_coordinate: [0, 0],
-        lower_right_coordinate: [1, 1]
+        lower_right_coordinate: [1, 0]
       }
     }
     addr_width: 48,
@@ -34,6 +36,8 @@
       fall_through: false,
     },
     cuts: {
+      soc_to_router: 1,
+      router_to_soc: 1,
       narrow_to_quad: 3,
       quad_to_narrow: 3,
       wide_to_quad: 3,
@@ -115,10 +119,10 @@
       cfg_base_offset: 65536 // 0x10000
     },
     clusters:[
-      "snax_cgra_cluster",
-      "snax_KUL_xdma_cluster",
+      "snax_KUL_cluster",
+      "snax_KUL_dse_cluster",
       "snax_hypercorex_cluster",
-      "snax_dimc_cluster"
+      // "snax_dimc_cluster"
     ],
 
     // peripherals

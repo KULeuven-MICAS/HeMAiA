@@ -228,6 +228,7 @@ def main():
 
     am_spm_narrow, am_sys_idma_cfg = occamy.am_connect_soc_narrow_xbar(
         am, am_soc_narrow_xbar, occamy_cfg)
+
     am_spm_wide, am_wide_zero_mem = occamy.am_connect_soc_wide_xbar_mem(
         am, am_soc_wide_xbar, occamy_cfg)
 
@@ -314,6 +315,9 @@ def main():
     soc_axi_lite_narrow_periph_xbar.add_output_entry("bootrom", am_bootrom)
     soc_axi_lite_narrow_periph_xbar.add_output_entry("clint", am_clint)
 
+    #################
+    # SoC Wide Xbar #
+    #################
     soc_wide_xbar = solder.AxiXbar(
         48,
         512,
@@ -332,6 +336,10 @@ def main():
         context="soc",
         node=am_soc_wide_xbar)
 
+    if occamy_cfg["hemaia_multichip"]["single_chip"] is False:
+        # The chiplet output port does not have the rule; it is the default port
+        soc_wide_xbar.outputs.append("hemaia_multichip")
+        soc_wide_xbar.add_input("hemaia_multichip")
     soc_wide_xbar.add_output_entry("soc_narrow", am_soc_narrow_xbar)
     soc_wide_xbar.add_input("soc_narrow")
     soc_wide_xbar.add_input("sys_idma_mst")
@@ -489,19 +497,42 @@ def main():
                                                     "ClusterAddressSpace")
         narrow_xbar_quadrant_s1.add_input("cluster_{}".format(i))
 
-    # Generate the Verilog code.
+    # Generate the Verilog code for occamy_pkg.sv (Only include the definition related to xbars)
     solder.render()
-    cluster_cfgs = list()
-    nr_clusters = len(occamy_cfg["clusters"])
-    for i in range(nr_clusters):
-        cluster_cfgs.append(cluster_generators[i].cfg)
+
+    ##############################################
+    # Die2Die AXI Bus For Module I/O Declaration #
+    ##############################################
+    # As the Die2Die communication is irrelevant to XBars inside one chip, it is declared in the standalone way, so it should be placed below solder.render()
+    soc2router_bus = solder.AxiBus(
+        clk=soc_wide_xbar.clk,
+        rst=soc_wide_xbar.rst,
+        aw=soc_wide_xbar.aw,
+        dw=soc_wide_xbar.dw,
+        iw=occamy_cfg["hemaia_multichip"]["soc_to_router_iw"],
+        uw=soc_wide_xbar.uw,
+        name="soc2router_bus",
+        # declared=True
+    )
+
+    router2soc_bus = solder.AxiBus(
+        clk=soc_wide_xbar.clk,
+        rst=soc_wide_xbar.rst,
+        aw=soc_wide_xbar.aw,
+        dw=soc_wide_xbar.dw,
+        iw=occamy_cfg["hemaia_multichip"]["router_to_soc_iw"],
+        uw=soc_wide_xbar.uw,
+        name="router2soc_bus",
+        # declared=True
+    )
+
     # Emit the code.
     #############
     # Top-Level #
     #############
     if args.top_sv:
         top_kwargs = occamy.get_top_kwargs(occamy_cfg, cluster_generators,
-                                    soc_axi_lite_narrow_periph_xbar, soc_wide_xbar, soc_narrow_xbar, args.name)
+                                    soc_axi_lite_narrow_periph_xbar, soc_wide_xbar, soc_narrow_xbar, soc2router_bus, router2soc_bus, args.name)
         write_template(args.top_sv,
                        outdir,
                        fname="{}_top.sv".format(args.name),
@@ -513,7 +544,7 @@ def main():
     ###########################
     if args.soc_sv:
         soc_kwargs = occamy.get_soc_kwargs(
-            occamy_cfg, cluster_generators, soc_narrow_xbar, soc_wide_xbar, util, args.name)
+            occamy_cfg, cluster_generators, soc_narrow_xbar, soc_wide_xbar, soc2router_bus, router2soc_bus, util, args.name)
         write_template(args.soc_sv,
                        outdir,
                        module=solder.code_module['soc'],
@@ -609,7 +640,8 @@ def main():
         write_template(args.testharness_sv, outdir, **testharness_kwargs)
 
     if args.multichip_testharness_sv:
-        multichip_testharness_kwargs = occamy.get_multichip_testharness_kwargs(occamy_cfg, name)
+        multichip_testharness_kwargs = occamy.get_multichip_testharness_kwargs(
+            occamy_cfg, soc2router_bus, router2soc_bus, name)
         write_template(args.multichip_testharness_sv, outdir, **multichip_testharness_kwargs)
 
     ############
@@ -627,7 +659,7 @@ def main():
     ########
     if args.chip:
         chip_kwargs = occamy.get_chip_kwargs(
-            soc_wide_xbar, soc_axi_lite_narrow_periph_xbar, occamy_cfg, cluster_generators, util, args.name)
+            soc_wide_xbar, soc_axi_lite_narrow_periph_xbar, soc2router_bus, router2soc_bus, occamy_cfg, cluster_generators, util, args.name)
         write_template(args.chip, outdir, **chip_kwargs)
 
     ########

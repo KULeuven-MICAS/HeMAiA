@@ -19,6 +19,15 @@ import ${name}_pkg::*;
   input  logic        test_mode_i,
   input  chip_id_t    chip_id_i,
   input  logic [1:0]  boot_mode_i,
+% if occamy_cfg['hemaia_multichip']['single_chip'] is False: 
+  // HeMAiA D2D AXI Interface
+  // Chiplet Requst to Router
+  output ${soc2router_bus.req_type()} soc2router_req_o,
+  input  ${soc2router_bus.rsp_type()} soc2router_rsp_i,
+  // Router Requst to Chiplet
+  input  ${router2soc_bus.req_type()} router2soc_req_i,
+  output ${router2soc_bus.rsp_type()} router2soc_rsp_o,
+% endif
   // `uart` Interface
   output logic        uart_tx_o,
   input  logic        uart_rx_i,
@@ -160,6 +169,14 @@ import ${name}_pkg::*;
     .rtc_i              (rtc_i),
     .test_mode_i        (test_mode_i),
     .chip_id_i          (chip_id_i),
+% if occamy_cfg['hemaia_multichip']['single_chip'] is False: 
+    // Chiplet Requst to Router
+    .soc2router_req_o,
+    .soc2router_rsp_i,
+    // Router Requst to Chiplet
+    .router2soc_req_i,
+    .router2soc_rsp_o,
+% endif
     .boot_mode_i        (boot_mode_i),
     .uart_tx_o          (uart_tx_o),
     .uart_cts_ni        (uart_cts_ni),
