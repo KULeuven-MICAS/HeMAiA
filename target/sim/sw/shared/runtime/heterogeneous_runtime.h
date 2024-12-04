@@ -13,6 +13,7 @@
 // usr_data is an explicitly-sized integer field instead of a pointer
 typedef struct {
     volatile uint32_t lock;
+    volatile uint32_t chip_id;
     volatile uint32_t usr_data_ptr;
 } comm_buffer_t;
 
