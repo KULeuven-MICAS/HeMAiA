@@ -47,7 +47,6 @@ INCDIRS += $(SNRT_DIR)/../math/include
 BASE_LD       = $(abspath $(SNRT_DIR)/base.ld)
 MEMORY_LD     = $(abspath $(APPSDIR)/memory.ld)
 ORIGIN_LD     = $(abspath $(BUILDDIR)/origin.ld)
-BASE_LD       = $(abspath $(SNRT_DIR)/base.ld)
 SNRT_LIB_DIR  = $(abspath $(RUNTIME_DIR)/build/)
 SNRT_LIB_NAME = snRuntime
 SNRT_LIB      = $(realpath $(SNRT_LIB_DIR)/lib$(SNRT_LIB_NAME).a)

@@ -24,38 +24,46 @@ int main() {
     print_str(current_chip_address_prefix, "[Occamy] Enter target Chip ID: ");
     scan_str(current_chip_address_prefix, in_buf);
     print_str(current_chip_address_prefix, "\r\n");
-    target_chip_id = 0;
 
-    for (char *cur = in_buf, target_chip_id = 0; *cur != '\0'; cur++) {
-        if (*cur >= '0' || *cur <= '9') {
+    char* cur = in_buf;
+
+    while (*cur != '\0') {
+        if (*cur >= '0' && *cur <= '9') {
             target_chip_id = (target_chip_id << 4) + *cur - '0';
-        } else if (*cur >= 'A' || *cur <= 'F') {
+        } else if (*cur >= 'A' && *cur <= 'F') {
             target_chip_id = (target_chip_id << 4) + *cur - 'A' + 10;
-        } else if (*cur >= 'a' || *cur <= 'f') {
+        } else if (*cur >= 'a' && *cur <= 'f') {
             target_chip_id = (target_chip_id << 4) + *cur - 'a' + 10;
+        } else {
+            print_str(current_chip_address_prefix,
+                      "[Occamy] Invalid target chip ID. \r\n");
+            scan_char(current_chip_address_prefix);
+            break;
         }
+        cur++;
     }
+
     uintptr_t target_chip_address_prefix =
         (uintptr_t)get_chip_baseaddress(target_chip_id);
     comm_buffer_ptr = (comm_buffer_t*)(((uint64_t)&__narrow_spm_start) |
                                        target_chip_address_prefix);
 
-    print_str(current_chip_address_prefix,
-              "[Occamy] Snitch Communication Buffer is: ");
-    print_u48(current_chip_address_prefix, (uint64_t)comm_buffer_ptr);
-    print_str(current_chip_address_prefix, "\r\n");
+    // print_str(current_chip_address_prefix,
+    //           "[Occamy] Snitch Communication Buffer is: ");
+    // print_u48(current_chip_address_prefix, (uint64_t)comm_buffer_ptr);
+    // print_str(current_chip_address_prefix, "\r\n");
     reset_and_ungate_quadrants_all(target_chip_id);
-    print_str(current_chip_address_prefix, "[Occamy] Snitch ungated. \r\n");
+    // print_str(current_chip_address_prefix, "[Occamy] Snitch ungated. \r\n");
     deisolate_all(target_chip_id);
-    print_str(current_chip_address_prefix, "[Occamy] Snitch deisolated. \r\n");
+    // print_str(current_chip_address_prefix, "[Occamy] Snitch deisolated. \r\n");
     // Enable interrupts to receive notice of job termination
     enable_sw_interrupts();
     // Program Snitch entry point and communication buffer
     (*comm_buffer_ptr).lock = 0;
     (*comm_buffer_ptr).chip_id = current_chip_id;
     program_snitches(target_chip_id, comm_buffer_ptr);
-    print_str(current_chip_address_prefix,
-              "[Occamy] Snitch Jump Address Programmed. \r\n");
+    // print_str(current_chip_address_prefix,
+    //           "[Occamy] Snitch Jump Address Programmed. \r\n");
 
     // Compiler fence to ensure Snitch entry point is
     // programmed before Snitches are woken up
