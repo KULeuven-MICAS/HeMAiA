@@ -6,18 +6,18 @@ ENTRY(_start)
 
 MEMORY
 {
-    DRAM (rwxa) : ORIGIN = 0x80000000, LENGTH = 0x100000
+    NARROW_SPM (rwxa) : ORIGIN = 0x70000000, LENGTH = 0x20000
+    WIDE_SPM (rwxa) : ORIGIN = 0x80000000, LENGTH = 0x100000
 }
 
 SECTIONS
 {
-  /* The program code and data goes into DRAM */
+  /* The program code and data goes into WIDE_SPM */
   .appl :
   {
     /* __stack_pointer$  = . + 0x70000; */
     /* __global_pointer$ = . + 0x7f0; */
-    
-    __return_pointer$ = ORIGIN(DRAM) + LENGTH(DRAM) - 4;
+    __return_pointer$ = ORIGIN(WIDE_SPM) + LENGTH(WIDE_SPM) - 4;
     *(.text.startup)
     *(.text .text.*)
     __SDATA_BEGIN__ = .;
@@ -26,10 +26,10 @@ SECTIONS
     *(.sdata .sdata.* .gnu.linkonce.s.*)
     *(.data)
     *(.rodata .rodata.*)
-  } > DRAM
+  } > WIDE_SPM
 
   /* HTIF section for FESVR */
-  .htif : { *(.htif) } > DRAM
+  .htif : { *(.htif) } > WIDE_SPM
 
   .bss (NOLOAD) :
   {
@@ -40,20 +40,23 @@ SECTIONS
     *(COMMON)
     . = ALIGN(8);
     __bss_end = . ;
-  } > DRAM
+  } > WIDE_SPM
 
   .wide_spm :
   {
-    . = ALIGN(8);
-    __wide_spm_start = . ;
-    *(.wide_spm)
-    . = ALIGN(8);
-    __wide_spm_end = . ;
-  } > DRAM
+    __wide_spm_start = ORIGIN(WIDE_SPM);
+    __wide_spm_end = ORIGIN(WIDE_SPM) + LENGTH(WIDE_SPM);
+  } > WIDE_SPM
+
+  .narrow_spm :
+  {
+    __narrow_spm_start = ORIGIN(NARROW_SPM);
+    __narrow_spm_end = ORIGIN(NARROW_SPM) + LENGTH(NARROW_SPM);
+  } > WIDE_SPM
 
   __end = .;
 
-  .devicebin : { *(.devicebin) } > DRAM
+  .devicebin : { *(.devicebin) } > WIDE_SPM
 
   /* Discard sections */
   /DISCARD/ : { *(.riscv.attributes) *(.comment) }

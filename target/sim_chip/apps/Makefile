@@ -13,11 +13,11 @@ RISCV_READELF = $(CVA6_GCC_ROOT)/riscv64-unknown-elf-readelf
 ELFS = $(shell find $(TARGET)/sim/sw/host/apps -type f -name "*.elf")
 # Generate BIN filenames from the ELF filenames
 BINS = $(ELFS:.elf=.bin)
-$(info BINS: $(BINS))
 
-.PHONY: apps clean
+.PHONY: apps hex clean
 
 apps: $(BINS)
+	python3 bin2hex.py
 
 # Use full paths for the dependencies
 %.bin: %.elf

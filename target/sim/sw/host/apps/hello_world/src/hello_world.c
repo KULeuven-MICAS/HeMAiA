@@ -3,8 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdio.h>
-#include "chip_id.h"
-#include "host.c"
+#include "host.h"
 
 // Frequency at which the UART peripheral is clocked
 #define PERIPH_FREQ 50000000
