@@ -55,19 +55,19 @@ int main() {
     reset_and_ungate_quadrants_all(target_chip_id);
     // print_str(current_chip_address_prefix, "[Occamy] Snitch ungated. \r\n");
     deisolate_all(target_chip_id);
-    // print_str(current_chip_address_prefix, "[Occamy] Snitch deisolated. \r\n");
-    // Enable interrupts to receive notice of job termination
+    // print_str(current_chip_address_prefix, "[Occamy] Snitch deisolated.
+    // \r\n"); Enable interrupts to receive notice of job termination
     enable_sw_interrupts();
     // Program Snitch entry point and communication buffer
-    (*comm_buffer_ptr).lock = 0;
-    (*comm_buffer_ptr).chip_id = current_chip_id;
+    comm_buffer_ptr->lock = 0;
+    comm_buffer_ptr->chip_id = current_chip_id;
     program_snitches(target_chip_id, comm_buffer_ptr);
     // print_str(current_chip_address_prefix,
     //           "[Occamy] Snitch Jump Address Programmed. \r\n");
 
     // Compiler fence to ensure Snitch entry point is
     // programmed before Snitches are woken up
-    asm volatile("" ::: "memory");
+    asm volatile("fence.i" ::: "memory");
 
     print_str(current_chip_address_prefix,
               "[Occamy] Calling snitch cluster to execute the task \r\n");

@@ -22,26 +22,85 @@ typedef struct {
 /**************/
 
 inline static void set_host_sw_interrupt(uint8_t chip_id) {
+#if __riscv_xlen == 64
     uint32_t* msip_ptr =
         (uint32_t*)(((uintptr_t)clint_msip_ptr(0)) |
                     ((uintptr_t)get_chip_baseaddress(chip_id)));
     *msip_ptr = 1;
+#elif __riscv_xlen == 32
+    uint32_t* msip_ptr = clint_msip_ptr(0);
+    uint32_t target_addrh = get_chip_baseaddress_h(chip_id);
+    uint32_t current_addrh = get_current_chip_baseaddress_h();
+
+    register uint32_t reg_target_addrh asm("t0") = target_addrh;
+    register uint32_t reg_return_value asm("t1") = 1;
+    register uint32_t reg_msip_ptr asm("t2") = (uint32_t)msip_ptr;
+    register uint32_t reg_current_addrh asm("t3") = current_addrh;
+
+    asm volatile(
+        "csrw 0xbc0, t0;"
+        "sw t1, 0(t2);"
+        "csrw 0xbc0, t3;"
+        :
+        : "r"(reg_target_addrh), "r"(reg_return_value), "r"(reg_msip_ptr),
+          "r"(reg_current_addrh)
+        : "memory");
+#endif
 }
 
 inline void clear_host_sw_interrupt_unsafe(uint8_t chip_id) {
+#if __riscv_xlen == 64
     uint32_t* msip_ptr =
         (uint32_t*)(((uintptr_t)clint_msip_ptr(0)) |
                     ((uintptr_t)get_chip_baseaddress(chip_id)));
-
     *msip_ptr = 0;
+#elif __riscv_xlen == 32
+    uint32_t* msip_ptr = clint_msip_ptr(0);
+    uint32_t target_addrh = get_chip_baseaddress_h(chip_id);
+    uint32_t current_addrh = get_current_chip_baseaddress_h();
+
+    register uint32_t reg_target_addrh asm("t0") = target_addrh;
+    register uint32_t reg_return_value asm("t1") = 0;
+    register uint32_t reg_msip_ptr asm("t2") = (uint32_t)msip_ptr;
+    register uint32_t reg_current_addrh asm("t3") = current_addrh;
+
+    asm volatile(
+        "csrw 0xbc0, t0;"
+        "sw t1, 0(t2);"
+        "csrw 0xbc0, t3;"
+        :
+        : "r"(reg_target_addrh), "r"(reg_return_value), "r"(reg_msip_ptr),
+          "r"(reg_current_addrh)
+        : "memory");
+#endif
 }
 
 inline void wait_host_sw_interrupt_clear(uint8_t chip_id) {
+#if __riscv_xlen == 64
     uint32_t* msip_ptr =
         (uint32_t*)(((uintptr_t)clint_msip_ptr(0)) |
                     ((uintptr_t)get_chip_baseaddress(chip_id)));
-
     while (*msip_ptr);
+#elif __riscv_xlen == 32
+    uint32_t* msip_ptr = clint_msip_ptr(0);
+    uint32_t target_addrh = get_chip_baseaddress_h(chip_id);
+    uint32_t current_addrh = get_current_chip_baseaddress_h();
+
+    register uint32_t reg_target_addrh asm("t0") = target_addrh;
+    register uint32_t reg_value asm("t1");
+    register uint32_t reg_msip_ptr asm("t2") = (uint32_t)msip_ptr;
+    register uint32_t reg_current_addrh asm("t3") = current_addrh;
+
+    do {
+        asm volatile(
+            "csrw 0xbc0, t0;"
+            "lw t1, 0(t2);"
+            "csrw 0xbc0, t3;"
+            : "=r"(reg_value)
+            : "r"(reg_target_addrh), "r"(reg_msip_ptr), "r"(reg_current_addrh)
+            : "memory");
+    } while (reg_value);
+#endif
 }
 
 static inline void clear_host_sw_interrupt(uint8_t chip_id) {

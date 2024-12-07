@@ -55,14 +55,17 @@ inline void return_to_cva6(sync_t sync) {
             if (cnt == snrt_cluster_num()) {
 #endif
                 *((volatile uint32_t*)barrier_ptr) = 0;
-                // Interrupt the local host to signal the exit code (snitch by default only has the access to local domain)
-                set_host_sw_interrupt(0);
+                // Interrupt the local host to signal the exit code (snitch by
+                // default only has the access to local domain)
+                comm_buffer_t* comm_buffer = get_communication_buffer();
+                set_host_sw_interrupt(comm_buffer->chip_id);
             }
         }
     }
     // Otherwise assume cores are already synchronized and only
     // one core calls this function
     else {
-        set_host_sw_interrupt(0);
+        comm_buffer_t* comm_buffer = get_communication_buffer();
+        set_host_sw_interrupt(comm_buffer->chip_id);
     }
 }
