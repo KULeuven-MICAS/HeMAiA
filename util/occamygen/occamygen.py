@@ -358,9 +358,9 @@ def main():
 
     for i in range(nr_s1_quadrants):
         soc_narrow_xbar.add_output_symbolic_multi("s1_quadrant_{}".format(i),
-                                                  [("s1_quadrant_base_addr",
+                                                  [("ClusterBaseOffset",
                                                     "S1QuadrantAddressSpace"),
-                                                   ("s1_quadrant_cfg_base_addr",
+                                                   ("S1QuadrantCfgBaseOffset",
                                                     "S1QuadrantCfgAddressSpace")])
         soc_narrow_xbar.add_input("s1_quadrant_{}".format(i))
 
