@@ -92,7 +92,7 @@ finalize-build: $(FINAL_OUTPUTS)
 .PHONY: clean
 clean:
 	rm -rf $(BUILDDIR)
-	rm -f $(OFFSET_LD)
+	rm -f $(ORIGIN_LD)
 
 $(BUILDDIR):
 	mkdir -p $@
@@ -106,6 +106,7 @@ $(DEP): $(SRCS) | $(BUILDDIR)
 
 # Partially linked object
 $(PARTIAL_ELF): $(DEP) $(LD_SRCS) | $(BUILDDIR)
+	rm -f $(ORIGIN_LD)
 	$(RISCV_CC) $(RISCV_CFLAGS) $(RISCV_LDFLAGS) $(SRCS) -o $@
 
 $(PARTIAL_DUMP): $(PARTIAL_ELF) | $(BUILDDIR)
