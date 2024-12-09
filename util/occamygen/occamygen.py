@@ -334,8 +334,13 @@ def main():
     for i in range(nr_s1_quadrants):
         # Default route passes HBI through quadrant 0
         # --> mask this route, forcing it through default wide xbar
-        soc_wide_xbar.add_output_entry("quadrant_{}".format(i),
-                                       am_wide_xbar_quadrant_s1[i])
+        soc_narrow_xbar.add_output_symbolic_multi(
+            "s1_quadrant_{}".format(i),
+            [("ClusterBaseOffset",
+            "S1QuadrantAddressSpace"),
+            ("S1QuadrantCfgBaseOffset",
+            "S1QuadrantCfgAddressSpace")])
+
         soc_wide_xbar.add_input("quadrant_{}".format(i))
 
     ###################
