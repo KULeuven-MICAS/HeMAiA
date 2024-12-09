@@ -118,8 +118,8 @@ sources:
     files:
       - target/rtl/test/uartdpi/uartdpi.sv
       - target/sim_chip/testharness/testharness.sv
-      - target/sim/test/bootrom.sv
-      # - target/rtl/bootrom/bootrom.sv
+      # - target/sim/test/bootrom.sv
+      - target/rtl/bootrom/bootrom.sv
       - target/rtl/src/occamy_chip.sv
 
 

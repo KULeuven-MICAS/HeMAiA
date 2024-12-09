@@ -6,6 +6,7 @@
 
 # Add user applications to APPS variable
 APPS  = hello_world
+APPS += offload_multichip
 APPS += offload
 
 TARGET ?= all

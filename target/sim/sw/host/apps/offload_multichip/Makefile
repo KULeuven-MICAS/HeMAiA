@@ -14,8 +14,8 @@ DEBUG ?= OFF # ON to turn on debugging symbols
 # Build variables #
 ###################
 
-APP  = offload
-SRCS = src/offload.c
+APP  = offload_multichip
+SRCS = src/offload_multichip.c
 # DEVICE_APPS += $(shell cd ../../../device/apps/;find -mindepth 2 -maxdepth 2 -type d | sed 's|^\./||')
 
 # Compiler toolchain
