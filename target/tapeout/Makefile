@@ -10,11 +10,32 @@ ROOT        := $(MKFILE_DIR)../..
 BENDER      := bender
 SNAX_ROOT   := $(shell $(BENDER) path snitch_cluster)
 TAPEOUT_TCL_DIR := $(MKFILE_DIR)/tcl
-
+SIM_MKFILE_DIR := $(ROOT)/target/sim
+FESVR = $(SIM_MKFILE_DIR)/work
 HEMAIA_UTIL ?= $(ROOT)/util/hemaia/util.py
 
 TARGET_RTL  ?= $(ROOT)/target/rtl
+SNITCH_TEST_DIR ?= $(SNAX_ROOT)/target/common/test
 
+VLOG_FLAGS += -svinputport=compat
+VLOG_FLAGS += -override_timescale 1ns/1ps
+VLOG_FLAGS += -suppress 2583
+VLOG_FLAGS += -suppress 13314
+VLOG_FLAGS += -timescale 1ns/1ps
+
+TB_CC_SOURCES  = $(SNITCH_TEST_DIR)/bootrom.cc
+TB_CC_SOURCES += $(SNITCH_TEST_DIR)/ipc.cc
+TB_CC_SOURCES += $(SNITCH_TEST_DIR)/rtl_lib.cc
+TB_CC_SOURCES += $(SNITCH_TEST_DIR)/common_lib.cc
+TB_CC_SOURCES += $(TARGET_TEST_DIR)/bootdata.cc
+TB_CC_SOURCES += $(TARGET_TEST_DIR)/uartdpi/uartdpi.c
+
+TB_CC_FLAGS  = -std=c++17
+TB_CC_FLAGS +=-I$(SIM_MKFILE_DIR)
+TB_CC_FLAGS +=-I$(SIM_MKFILE_DIR)/test
+TB_CC_FLAGS +=-I$(FESVR)/include
+TB_CC_FLAGS +=-I$(SNITCH_TEST_DIR)
+TB_CC_FLAGS +=-I$(TARGET_TEST_DIR)/uartdpi
 #######################
 # Config prerequisite #
 #######################
@@ -88,3 +109,17 @@ gen-syn:
 clean-syn:
 	rm -rf $(SYN_BUILDDIR)
 
+######################
+# post-syn-only-sram #
+######################
+.PHONY: gen-post-syn-sram
+VSIM_POST_SYN_SRAM = /users/micas/shares/project_snax/post_synthesis_testing/post_syn_sram
+VSIM_POST_SYN_SRAM_BENDER = $(shell cat ../rtl/src/bender_targets.tmp)
+VSIM_POST_SYN_SRAM_BENDER += -t prep_syn_test
+VSIM_POST_SYN_SRAM_BENDER += -t hemaia
+VSIM_POST_SYN_SRAM_BENDER += -t tech_cells_generic_exclude_tc_sram 
+$(VSIM_POST_SYN_SRAM)/compile.vsim.tcl:
+	$(BENDER) script vsim $(VSIM_POST_SYN_SRAM_BENDER) --vlog-arg="$(VLOG_FLAGS) -work $(VSIM_POST_SYN_SRAM)/work-vsim " > $@
+	echo '$(VLOG) -work $(VSIM_POST_SYN_SRAM)/work-vsim $(TB_CC_SOURCES) -vv -ccflags "$(TB_CC_FLAGS)"' >> $@
+	echo 'return 0' >> $@
+gen-post-syn-sram: $(VSIM_POST_SYN_SRAM)/compile.vsim.tcl
