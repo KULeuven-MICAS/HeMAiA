@@ -335,7 +335,7 @@ def main():
         # Default route passes HBI through quadrant 0
         # --> mask this route, forcing it through default wide xbar
         soc_wide_xbar.add_output_entry("quadrant_{}".format(i),
-                                       am_wide_xbar_quadrant_s1[i])
+                                am_wide_xbar_quadrant_s1[i])
         soc_wide_xbar.add_input("quadrant_{}".format(i))
 
     ###################
@@ -357,13 +357,11 @@ def main():
         node=am_soc_narrow_xbar)
 
     for i in range(nr_s1_quadrants):
-        # soc_narrow_xbar.add_output_symbolic_multi("s1_quadrant_{}".format(i),
-        #                                           [("s1_quadrant_base_addr",
-        #                                             "S1QuadrantAddressSpace"),
-        #                                            ("s1_quadrant_cfg_base_addr",
-        #                                             "S1QuadrantCfgAddressSpace")])
-        soc_narrow_xbar.add_output_entry(
-            "s1_quadrant_{}".format(i), am_narrow_xbar_quadrant_s1[i])
+        soc_narrow_xbar.add_output_symbolic_multi("s1_quadrant_{}".format(i),
+                                                  [("ClusterBaseOffset",
+                                                    "S1QuadrantAddressSpace"),
+                                                   ("S1QuadrantCfgBaseOffset",
+                                                    "S1QuadrantCfgAddressSpace")])
         soc_narrow_xbar.add_input("s1_quadrant_{}".format(i))
 
     soc_narrow_xbar.add_input("cva6")
