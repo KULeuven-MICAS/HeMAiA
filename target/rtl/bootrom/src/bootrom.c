@@ -33,6 +33,7 @@ void delay_cycles(uint64_t cycle) {
 
 // Boot modes.
 enum boot_mode_t {
+    HALT,
     TARGET_CHIPID,
     UART,
     COPY_TO_REMOTE,
@@ -67,16 +68,17 @@ void bootrom() {
         print_u8(address_prefix, target_chip_id);
         print_str(address_prefix,
                   "\r\n\t Enter the number to select the mode: ");
-        print_str(address_prefix, "\r\n\t 1. Change the target remote Chip ID");
-        print_str(address_prefix, "\r\n\t 2. Load from UART to 0x");
+        print_str(address_prefix, "\r\n\t 1. Halt the CVA6 Core");
+        print_str(address_prefix, "\r\n\t 2. Change the target remote Chip ID");
+        print_str(address_prefix, "\r\n\t 3. Load from UART to 0x");
         print_u48(address_prefix, remote_chip_mem_start_address);
         print_str(address_prefix,
-                  "\r\n\t 3. Copy memory from local chip to remote chip");
+                  "\r\n\t 4. Copy memory from local chip to remote chip");
         print_str(address_prefix,
-                  "\r\n\t 4. Copy memory from remote chip to local chip");
-        print_str(address_prefix, "\r\n\t 5. Print memory from 0x");
+                  "\r\n\t 5. Copy memory from remote chip to local chip");
+        print_str(address_prefix, "\r\n\t 6. Print memory from 0x");
         print_u48(address_prefix, remote_chip_mem_start_address);
-        print_str(address_prefix, "\r\n\t 6. Continue to Boot from 0x");
+        print_str(address_prefix, "\r\n\t 7. Continue to Boot from 0x");
         print_u48(address_prefix, local_chip_mem_start_address);
         print_str(address_prefix, "\r\n");
 
@@ -85,6 +87,11 @@ void bootrom() {
         char* cur = 0;
 
         switch (boot_mode) {
+            case HALT:
+                print_str(address_prefix, "\r\n\t CVA6 Core is Halted. ");
+                getchar(address_prefix);
+                __asm__ volatile("wfi");
+                break;
             case TARGET_CHIPID:
                 print_str(address_prefix,
                           "\r\n\t Enter the target remote Chip ID: ");
@@ -92,12 +99,12 @@ void bootrom() {
                 cur = in_buf;
                 target_chip_id = 0;
                 while (*cur != '\0') {
-                    if (*cur >= '0' || *cur <= '9') {
+                    if (*cur >= '0' && *cur <= '9') {
                         target_chip_id = (target_chip_id << 4) + *cur - '0';
-                    } else if (*cur >= 'A' || *cur <= 'F') {
+                    } else if (*cur >= 'A' && *cur <= 'F') {
                         target_chip_id =
                             (target_chip_id << 4) + *cur - 'A' + 10;
-                    } else if (*cur >= 'a' || *cur <= 'f') {
+                    } else if (*cur >= 'a' && *cur <= 'f') {
                         target_chip_id =
                             (target_chip_id << 4) + *cur - 'a' + 10;
                     } else {

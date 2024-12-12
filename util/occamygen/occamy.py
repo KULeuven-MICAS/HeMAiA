@@ -316,9 +316,9 @@ def am_connect_soc_wide_xbar_quad(am, am_soc_narrow_xbar, am_wide_xbar_quadrant_
                     clusters_tcdm_size[j+1],
                     *bases_cluster
                 ).attach_to(
-                    am_wide_xbar_quadrant_s1[i]
-                ).attach_to(
                     am_narrow_xbar_quadrant_s1[i]
+                ).attach_to(
+                    am_wide_xbar_quadrant_s1[i]
                 )
             )
 
@@ -331,10 +331,10 @@ def am_connect_soc_wide_xbar_quad(am, am_soc_narrow_xbar, am_wide_xbar_quadrant_
                     clusters_periph_size[j+1],
                     *bases_cluster
                 ).attach_to(
-                    am_wide_xbar_quadrant_s1[i]
-                ).attach_to(
                     am_narrow_xbar_quadrant_s1[i]
-                )
+                ) # .attach_to(
+                #     am_wide_xbar_quadrant_s1[i]
+                # )
             )
 
             bases_cluster = list()

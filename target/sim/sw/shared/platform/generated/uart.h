@@ -180,7 +180,9 @@ inline static void scan_str(uintptr_t address_prefix, char *str) {
         if (*cur == '\r') {
             *cur = '\0';
             return;
-        } else
+        } else {
+            print_char(address_prefix, *cur);
             cur++;
+        }
     }
 }

@@ -370,23 +370,22 @@ def main():
         no_loopback=True,
         context="soc",
         node=am_soc_narrow_xbar)
+    
+    # Default port: wide xbar (Should stay on the first position)
+    soc_narrow_xbar.add_output_entry("soc_wide", am_soc_wide_xbar)
+    soc_narrow_xbar.add_input("soc_wide")
 
     for i in range(nr_s1_quadrants):
-        # soc_narrow_xbar.add_output_symbolic_multi("s1_quadrant_{}".format(i),
-        #                                           [("s1_quadrant_base_addr",
-        #                                             "S1QuadrantAddressSpace"),
-        #                                            ("s1_quadrant_cfg_base_addr",
-        #                                             "S1QuadrantCfgAddressSpace")])
-        soc_narrow_xbar.add_output_entry(
-            "s1_quadrant_{}".format(i), am_narrow_xbar_quadrant_s1[i])
+        soc_narrow_xbar.add_output_symbolic_multi("s1_quadrant_{}".format(i),
+                                            [("ClusterBaseOffset",
+                                            "S1QuadrantAddressSpace"),
+                                            ("S1QuadrantCfgBaseOffset",
+                                            "S1QuadrantCfgAddressSpace")])
         soc_narrow_xbar.add_input("s1_quadrant_{}".format(i))
 
     soc_narrow_xbar.add_input("cva6")
-    soc_narrow_xbar.add_input("soc_wide")
     soc_narrow_xbar.add_input("periph")
 
-    # Default port: wide xbar
-    soc_narrow_xbar.add_output_entry("soc_wide", am_soc_wide_xbar)
     soc_narrow_xbar.add_output_entry("periph", am_soc_axi_lite_periph_xbar)
     soc_narrow_xbar.add_output_entry("spm_narrow", am_spm_narrow)
     soc_narrow_xbar.add_output_entry("sys_idma_cfg", am_sys_idma_cfg)
