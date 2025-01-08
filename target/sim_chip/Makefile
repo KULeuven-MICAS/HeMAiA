@@ -15,7 +15,7 @@ CFG_OVERRIDE ?=     # Override default config file
 .DEFAULT_GOAL := help
 .PHONY: all clean
 all: rtl sw addrmap
-clean: clean-vsim clean-vlt clean-apps
+clean: clean-vsim clean-vlt clean-vcs clean-apps
 
 ############
 # Makefrag #
@@ -237,7 +237,7 @@ $(VSIM_BUILDDIR)/compile.vsim.tcl: $(BENDER_LOCK) | $(VSIM_BUILDDIR) testharness
 $(BIN_DIR):
 	mkdir -p $@
 
-.PHONY: $(BIN_DIR)/occamy_chip.vsim
+.PHONY: $(BIN_DIR)/occamy_chip.vsim clean-vsim
 
 $(BIN_DIR)/occamy_chip.vsim: $(VSIM_BUILDDIR)/compile.vsim.tcl |$(BIN_DIR)
 	touch $@
@@ -263,9 +263,7 @@ $(BIN_DIR)/occamy_chip.vsim: $(VSIM_BUILDDIR)/compile.vsim.tcl |$(BIN_DIR)
 	@chmod +x $@.gui
 
 clean-vsim: clean-work
-	rm -rf $(BIN_DIR)/$(TARGET).vsim $(BIN_DIR)/$(TARGET).vsim.gui $(VSIM_BUILDDIR) vsim.wlf transcript
-
-
+	rm -rf $(BIN_DIR)/$(TARGET).vsim $(BIN_DIR)/$(TARGET).vsim.gui $(VSIM_BUILDDIR) $(BIN_DIR)/vsim.wlf $(BIN_DIR)/transcript
 
 #######
 # VCS #
@@ -273,7 +271,6 @@ clean-vsim: clean-work
 
 $(VCS_BUILDDIR):
 	mkdir -p $@
-
 
 $(VCS_BUILDDIR)/compile.sh: $(BENDER_LOCK) | $(VCS_BUILDDIR) testharness/testharness.sv
 	mkdir -p $(VCS_BUILDDIR)
@@ -288,6 +285,9 @@ $(BIN_DIR)/occamy_chip.vcs: $(VCS_BUILDDIR)/compile.sh
 	$(VCS) $(VCS_FLAGS) -o $(BIN_DIR)/occamy_chip.vcs -cc $(CC) -cpp $(CXX) \
 		-override_timescale=1ns/1ps -full64 -ignore initializer_driver_checks testharness $(TB_CC_SOURCES) $(RTL_CC_SOURCES) \
 		-CFLAGS "$(TB_CC_FLAGS)" -lutil +error+100
+.PHONY: clean-vcs
+clean-vcs: clean-work
+	rm -rf $(VCS_BUILDDIR) AN.DB work.lib++ vc_hdrs.h $(BIN_DIR)/$(TARGET).vcs $(BIN_DIR)/inter.fsdb $(BIN_DIR)/$(TARGET).vcs.daidir $(BIN_DIR)/verdi_config_file $(BIN_DIR)/verdiLog $(BIN_DIR)/novas* $(BIN_DIR)/ucli.key
 
 ########
 # Util #

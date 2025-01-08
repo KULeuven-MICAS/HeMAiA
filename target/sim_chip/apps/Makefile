@@ -25,4 +25,4 @@ apps: $(BINS)
 	mv $@ $(MKFILE_DIR)
 
 clean:
-	@rm -f $(MKFILE_DIR)/*.bin
+	@rm -f $(MKFILE_DIR)/*.bin $(MKFILE_DIR)/*.hex
