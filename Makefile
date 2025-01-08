@@ -120,14 +120,14 @@ occamy_system_vsim: # In ESAT Server
 	$(MAKE) -C ./target/sim bin/occamy_top.vsim
 
 hemaia_system_vsim_preparation: # In SNAX Docker
-	$(MAKE) -C ./target/sim_chip work-vsim/compile.vsim.tcl CFG_OVERRIDE=$(CFG)
+	$(MAKE) -C ./target/sim_chip work-vsim/compile.vsim.tcl
 
 hemaia_system_vsim: # In ESAT Server
 	$(MAKE) -C ./target/sim_chip bin/occamy_chip.vsim
 
 # VCS Workflow
 hemaia_system_vcs_preparation: # In SNAX Docker
-	$(MAKE) -C ./target/sim_chip work-vcs/compile.sh CFG_OVERRIDE=$(CFG)
+	$(MAKE) -C ./target/sim_chip work-vcs/compile.sh
 
 hemaia_system_vcs: # In ESAT Server
 	$(MAKE) -C ./target/sim_chip bin/occamy_chip.vcs
