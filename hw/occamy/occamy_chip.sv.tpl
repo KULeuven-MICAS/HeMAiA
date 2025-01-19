@@ -21,12 +21,13 @@ import ${name}_pkg::*;
   input  logic [1:0]  boot_mode_i,
 % if occamy_cfg['hemaia_multichip']['single_chip'] is False: 
   // HeMAiA D2D AXI Interface
-  // Chiplet Requst to Router
-  output ${soc2router_bus.req_type()} soc2router_req_o,
-  input  ${soc2router_bus.rsp_type()} soc2router_rsp_i,
-  // Router Requst to Chiplet
-  input  ${router2soc_bus.req_type()} router2soc_req_i,
-  output ${router2soc_bus.rsp_type()} router2soc_rsp_o,
+  // 756 bits in total, 755b req + 1b resp
+  // This Chiplet to remote Chiplet
+  output logic [754:0] toremote_req_o,
+  input  logic [0:0] toremote_rsp_i,
+  // Remote Chiplet chiplet to this Chiplet
+  input  logic [754:0] fromremote_req_i,
+  output logic [0:0] fromremote_rsp_o,
 % endif
   // `uart` Interface
   output logic        uart_tx_o,
@@ -160,6 +161,14 @@ import ${name}_pkg::*;
   //  Occamy Top   //
   ///////////////////
 
+  // AXI HeMAiA SoC -> HeMAiA D2D
+  ${soc2router_bus.req_type()} soc2router_req;
+  ${soc2router_bus.rsp_type()} soc2router_rsp;
+  // AXI HeMAiA SoC -> HeMAiA D2D
+  ${router2soc_bus.req_type()} router2soc_req;
+  ${router2soc_bus.rsp_type()} router2soc_rsp;
+
+
   ${name}_top i_${name} (
     .clk_i              (clk_i),
     .rst_ni             (rst_ni),
@@ -171,11 +180,11 @@ import ${name}_pkg::*;
     .chip_id_i          (chip_id_i),
 % if occamy_cfg['hemaia_multichip']['single_chip'] is False: 
     // Chiplet Requst to Router
-    .soc2router_req_o,
-    .soc2router_rsp_i,
+    .soc2router_req_o   (soc2router_req),
+    .soc2router_rsp_i   (soc2router_rsp),
     // Router Requst to Chiplet
-    .router2soc_req_i,
-    .router2soc_rsp_o,
+    .router2soc_req_i   (router2soc_req),
+    .router2soc_rsp_o   (router2soc_rsp),
 % endif
     .boot_mode_i        (boot_mode_i),
     .uart_tx_o          (uart_tx_o),
@@ -218,5 +227,42 @@ import ${name}_pkg::*;
     .chip_ctrl_rsp_i    ('0),
     .ext_irq_i          ('0)
   );
+
+
+% if occamy_cfg['hemaia_multichip']['single_chip'] is False:
+  //////////////////////
+  //  HeMAiA D2D Link //
+  //////////////////////
+
+  hemaia_d2d_link #(
+    .axi_req_t (${soc2router_bus.req_type()}),
+    .axi_rsp_t (${soc2router_bus.rsp_type()}),
+    .aw_chan_t (${soc2router_bus.aw_chan_type()}),
+    .ar_chan_t (${soc2router_bus.ar_chan_type()}),
+    .r_chan_t (${soc2router_bus.r_chan_type()}),
+    .w_chan_t (${soc2router_bus.w_chan_type()}),
+    .b_chan_t (${soc2router_bus.b_chan_type()}),
+    .axis_req_raw_t (type(toremote_req_o)),
+    .axis_rsp_raw_t (type(fromremote_rsp_o))
+  ) i_d2d_link (
+    .netframe_clk_i(clk_i),
+    .netframe_rst_ni(rst_ni),
+    .netroute_clk_i(clk_i),
+    .netroute_rst_ni(rst_ni),
+    .testmode_i(test_mode_i),
+
+    .axi_in_req_i(soc2router_req),
+    .axi_in_rsp_o(soc2router_rsp),
+    .axi_out_req_o(router2soc_req),
+    .axi_out_rsp_i(router2soc_rsp),
+
+    .axis_in_req_i(fromremote_req_i),
+    .axis_in_rsp_o(fromremote_rsp_o),
+    .axis_out_req_o(toremote_req_o),
+    .axis_out_rsp_i(toremote_rsp_i)
+  );
+
+% endif
+
 
 endmodule

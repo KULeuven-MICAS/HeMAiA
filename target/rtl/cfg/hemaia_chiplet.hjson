@@ -6,7 +6,7 @@
     // Multi-chip configuration
     hemaia_multichip: {
       chip_id_width: 8,             // Not verified, should never be changed
-      router_to_soc_iw: 5,          // soc_to_router_iw + clog2(chips)
+      router_to_soc_iw: 4,// 5,          // soc_to_router_iw + clog2(chips)
       soc_to_router_iw: 4,          // Not beneficial for iw > 6
       single_chip: false,
       single_chip_id: 0,            // Only used for single chip simulation
