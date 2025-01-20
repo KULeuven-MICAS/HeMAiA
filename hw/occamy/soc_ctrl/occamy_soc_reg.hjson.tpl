@@ -64,6 +64,18 @@
         }
       ]
     },
+    { name: "CLK_TRIM",
+      desc: "TRIM bits for CLK GEN.",
+      swaccess: "rw",
+      hwaccess: "hrw",
+      fields: [
+        { bits: "31:0",
+          name: "clk_trim",
+          desc: "default trim bits are 9'b0_0011_0000",
+          resval: "48"
+        }
+      ]
+    },
     { multireg:
       { name: "SCRATCH",
         desc: "Scratch register for SW to write to.",
