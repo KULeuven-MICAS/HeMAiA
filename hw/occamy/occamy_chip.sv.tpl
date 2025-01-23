@@ -23,6 +23,8 @@ import ${name}_pkg::*;
   input  logic        test_mode_i,
   input  logic [1:0]  chip_id_i,
   input  logic [1:0]  boot_mode_i,
+  // Clk gen trim bits
+  output logic [8:0]  clk_gen_trim_bits_o,
   // `uart` Interface
   output logic        uart_tx_o,
   input  logic        uart_rx_i,
@@ -152,6 +154,7 @@ import ${name}_pkg::*;
     .test_mode_i        (test_mode_i),
     .chip_id_i          (chip_id_i),
     .boot_mode_i        (boot_mode_i),
+    .clk_gen_trim_bits_o (clk_gen_trim_bits_o),
     .uart_tx_o          (uart_tx_o),
     .uart_cts_ni        (uart_cts_ni),
     .uart_rts_no        (uart_rts_no),

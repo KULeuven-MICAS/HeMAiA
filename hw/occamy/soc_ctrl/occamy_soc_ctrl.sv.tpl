@@ -21,6 +21,8 @@ module occamy_soc_ctrl import occamy_soc_reg_pkg::*; #(
   // Boot addr
   input logic [1:0] boot_mode_i,
   output logic [${addr_width - 1}:0] boot_addr_o,
+  // clk trim bits
+  output logic [8:0] clk_gen_trim_bits_o,
   // Events in
   input logic [1:0] event_ecc_rerror_narrow_i,
   input logic [1:0] event_ecc_rerror_wide_i,
@@ -74,7 +76,10 @@ module occamy_soc_ctrl import occamy_soc_reg_pkg::*; #(
       boot_addr = (boot_mode_i == 2'b00)? reg2hw_o.boot_addr_default.q : reg2hw_o.boot_addr_backup.q;
       boot_addr_o = {${addr_width-32}'h0, boot_addr};
   end
-
+  // clk trim bits
+  always_comb begin
+    clk_gen_trim_bits_o = reg2hw_o.clk_trim.q[8:0];
+  end
 
   prim_intr_hw #(.Width(1)) intr_hw_ecc_narrow_correctable (
     .clk_i,

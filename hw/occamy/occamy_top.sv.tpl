@@ -24,6 +24,8 @@ module ${name}_top
   input  logic        test_mode_i,
   input  logic [1:0]  chip_id_i,
   input  logic [1:0]  boot_mode_i,
+  // Clk gen trim bits
+  output logic [8:0]  clk_gen_trim_bits_o,
   // `uart` Interface
   output logic        uart_tx_o,
   input  logic        uart_rx_i,
@@ -389,8 +391,9 @@ module ${name}_top
     .reg_rsp_o ( ${regbus_soc_ctrl.rsp_name()} ),
     .reg2hw_o  ( soc_ctrl_out ),
     .hw2reg_i  ( soc_ctrl_in ),
-    .boot_mode_i ( boot_mode_i),
-    .boot_addr_o (boot_addr),
+    .boot_mode_i ( boot_mode_i ),
+    .boot_addr_o ( boot_addr ),
+    .clk_gen_trim_bits_o ( clk_gen_trim_bits_o ),
     .event_ecc_rerror_narrow_i(spm_narrow_rerror),
     .event_ecc_rerror_wide_i(spm_wide_rerror),
     .intr_ecc_narrow_uncorrectable_o(irq.ecc_narrow_uncorrectable),
