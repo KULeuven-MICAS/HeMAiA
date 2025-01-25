@@ -177,7 +177,7 @@ import ${name}_pkg::*;
     .rst_periph_ni      (rst_periph_ni),
     .rtc_i              (rtc_i),
     .test_mode_i        (test_mode_i),
-    .chip_id_i          (chip_id_i),
+    .chip_id_i          (chip_id),
 % if occamy_cfg['hemaia_multichip']['single_chip'] is False: 
     // Chiplet Requst to Router
     .soc2router_req_o   (soc2router_req),
@@ -235,6 +235,7 @@ import ${name}_pkg::*;
   //////////////////////
 
   hemaia_d2d_link #(
+    .chip_id_t (chip_id_t),
     .axi_req_t (${soc2router_bus.req_type()}),
     .axi_rsp_t (${soc2router_bus.rsp_type()}),
     .aw_chan_t (${soc2router_bus.aw_chan_type()}),
@@ -245,6 +246,8 @@ import ${name}_pkg::*;
     .axis_req_raw_t (type(toremote_req_o)),
     .axis_rsp_raw_t (type(fromremote_rsp_o))
   ) i_d2d_link (
+    .chip_id_i(chip_id),
+
     .netframe_clk_i(clk_i),
     .netframe_rst_ni(rst_ni),
     .netroute_clk_i(clk_i),

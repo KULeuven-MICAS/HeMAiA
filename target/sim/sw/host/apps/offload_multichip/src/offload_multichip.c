@@ -45,6 +45,10 @@ int main() {
 
     uintptr_t target_chip_address_prefix =
         (uintptr_t)get_chip_baseaddress(target_chip_id);
+    
+    // print_str(current_chip_address_prefix, "[Occamy] Target Chip Address Prefix is: ");
+    // print_u48(current_chip_address_prefix, (uint64_t)target_chip_address_prefix);
+
     comm_buffer_ptr = (comm_buffer_t*)(((uint64_t)&__narrow_spm_start) |
                                        target_chip_address_prefix);
 
