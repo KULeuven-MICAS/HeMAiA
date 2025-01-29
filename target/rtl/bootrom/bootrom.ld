@@ -27,10 +27,10 @@ SECTIONS
   __quad_stride     = 0x10000;
   __quad_int_base   = 0x0b000000;
   /* Further addresses */
-  __soc_ctrl_scratch0 = 0x02000014;
-  __soc_ctrl_scratch1 = 0x02000018;
-  __soc_ctrl_bootmode = 0x02000024;
-  __soc_ctrl_nr_quads = 0x02000028;
+  __soc_ctrl_scratch0 = 0x02000018;
+  __soc_ctrl_scratch1 = 0x0200001C;
+  __soc_ctrl_bootmode = 0x02000028;
+  __soc_ctrl_nr_quads = 0x0200002C;
   __clint_mtime       = 0x0400bff8;
   __base_uart_sym     = 0x02002000;
   __base_i2c_sym      = 0x02004000;
