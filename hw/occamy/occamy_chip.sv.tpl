@@ -23,8 +23,8 @@ import ${name}_pkg::*;
   // HeMAiA D2D AXI Interface
   // 756 bits in total, 755b req + 1b resp
   // This Chiplet to remote Chiplet
-  output logic [754:0] toremote_req_o,
-  input  logic [0:0] toremote_rsp_i,
+  output serial_link_pkg::hemaia_d2d_link_network_layer_req_t toremote_req_o,
+  input  serial_link_pkg::hemaia_d2d_link_network_layer_rsp_t toremote_rsp_i,
   // Remote Chiplet chiplet to this Chiplet
   input  logic [754:0] fromremote_req_i,
   output logic [0:0] fromremote_rsp_o,
@@ -243,8 +243,8 @@ import ${name}_pkg::*;
     .r_chan_t (${soc2router_bus.r_chan_type()}),
     .w_chan_t (${soc2router_bus.w_chan_type()}),
     .b_chan_t (${soc2router_bus.b_chan_type()}),
-    .axis_req_raw_t (type(toremote_req_o)),
-    .axis_rsp_raw_t (type(fromremote_rsp_o))
+    .axis_req_raw_t (serial_link_pkg::hemaia_d2d_link_network_layer_req_t),
+    .axis_rsp_raw_t (serial_link_pkg::hemaia_d2d_link_network_layer_rsp_t)
   ) i_d2d_link (
     .chip_id_i(chip_id),
 
