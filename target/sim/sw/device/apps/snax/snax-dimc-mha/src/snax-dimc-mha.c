@@ -8,7 +8,7 @@
 #include "snax-dimc-csr.h"
 #include "snax-dimc-lib.h"
 #include "snrt.h"
-#include "data.h"
+#include "data_mha.h"
 
 int main() {
 

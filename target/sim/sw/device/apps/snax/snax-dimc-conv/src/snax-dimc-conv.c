@@ -5,7 +5,7 @@
 #include "snrt.h"
 #include "snax-dimc-csr.h"
 #include "snax-dimc-lib.h"
-#include "data.h"
+#include "data_conv.h"
 
 static int err = 0;
 
