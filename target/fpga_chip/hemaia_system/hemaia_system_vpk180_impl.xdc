@@ -52,7 +52,7 @@ set_property IOSTANDARD LVCMOS15 [get_ports spis_csb_i]
 set_property PACKAGE_PIN BW39 [get_ports spis_sck_i]
 set_property IOSTANDARD LVCMOS15 [get_ports spis_sck_i]
 
-create_clock -period 20.000 -name spi_s_sck [get_ports spis_sck_i]
+create_clock -period 50.0 -name spi_s_sck [get_ports spis_sck_i]
 
 # Four-wires GPIO_O connected to LEDs
 set_property PACKAGE_PIN BA49 [get_ports gpio_d_o[0]]
@@ -78,7 +78,7 @@ set_false_path -to [get_pins hemaia_system_i/occamy_chip/inst/i_occamy/i_clint/i
 # Crossing Clock Domains
 ################################################################################
 
-create_clock -period 20.0 -name clk_core [get_pins hemaia_system_i/versal_cips_0/pl0_ref_clk]
+create_clock -period 50.0 -name clk_core [get_pins hemaia_system_i/versal_cips_0/pl0_ref_clk]
 create_clock -period 62.5 -name clk_peri [get_pins hemaia_system_i/versal_cips_0/pl2_ref_clk]
 
 set_clock_groups -asynchronous -group [get_clocks -of [get_pins hemaia_system_i/occamy_chip/clk_i]] -group [get_clocks -of [get_pins hemaia_system_i/occamy_chip/clk_periph_i]]

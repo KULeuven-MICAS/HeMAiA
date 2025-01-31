@@ -294,7 +294,7 @@ proc create_root_design { parentCell } {
       PMC_CRP_HSM1_REF_CTRL_FREQMHZ {133.333} \
       PMC_CRP_LSBUS_REF_CTRL_FREQMHZ {100} \
       PMC_CRP_NOC_REF_CTRL_FREQMHZ {960} \
-      PMC_CRP_PL0_REF_CTRL_FREQMHZ {50} \
+      PMC_CRP_PL0_REF_CTRL_FREQMHZ {20} \
       PMC_CRP_PL1_REF_CTRL_FREQMHZ {3.2768} \
       PMC_CRP_PL2_REF_CTRL_FREQMHZ {16} \
       PMC_CRP_PL5_REF_CTRL_FREQMHZ {400} \
@@ -349,7 +349,7 @@ proc create_root_design { parentCell } {
   connect_bd_net -net bootmode [get_bd_pins axis_vio_0/probe_out1] [get_bd_pins occamy_chip/boot_mode_i]
   connect_bd_net -net c_high_dout [get_bd_pins c_high/dout] [get_bd_ports vref_vdd_o] [get_bd_pins occamy_chip/jtag_trst_ni]
   connect_bd_net -net clk_wizard_0_clk_core [get_bd_pins versal_cips_0/pl0_ref_clk] [get_bd_pins axis_vio_0/clk] [get_bd_pins occamy_chip/clk_i]
-  connect_bd_net -net const_low_dout [get_bd_pins c_low/dout] [get_bd_ports vref_gnd_o] [get_bd_pins occamy_chip/gpio_d_i]
+  connect_bd_net -net const_low_dout [get_bd_pins c_low/dout] [get_bd_ports vref_gnd_o] [get_bd_pins occamy_chip/gpio_d_i] [get_bd_pins occamy_chip/chip_id_i]
   connect_bd_net -net jtag_tck_i_1 [get_bd_ports jtag_tck_i] [get_bd_pins occamy_chip/jtag_tck_i]
   set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_nets jtag_tck_i_1]
   connect_bd_net -net jtag_tdi_i_1 [get_bd_ports jtag_tdi_i] [get_bd_pins occamy_chip/jtag_tdi_i]

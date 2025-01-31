@@ -16,7 +16,6 @@ set_property PACKAGE_PIN A20 [get_ports vref_gnd_o]
 set_property IOSTANDARD LVCMOS18 [get_ports vref_gnd_o]
 set_property DRIVE 12 [get_ports vref_gnd_o]
 
-
 # Four-wires UART with flow control
 # LA26P - D17
 set_property PACKAGE_PIN D17 [get_ports uart_rx_i]
@@ -53,7 +52,7 @@ set_property IOSTANDARD LVCMOS18 [get_ports spis_csb_i]
 set_property PACKAGE_PIN C22 [get_ports spis_sck_i]
 set_property IOSTANDARD LVCMOS18 [get_ports spis_sck_i]
 
-create_clock -period 20.000 -name spi_s_sck [get_ports spis_sck_i]
+create_clock -period 50.000 -name spi_s_sck [get_ports spis_sck_i]
 
 # Eight-wires GPIO_O connected to LEDs
 set_property PACKAGE_PIN BH24 [get_ports gpio_d_o[0]]
@@ -134,5 +133,3 @@ set_property BITSTREAM.CONFIG.SPI_FALL_EDGE Yes [current_design]
 set_property BITSTREAM.CONFIG.CONFIGRATE 127.5 [current_design]
 set_property CONFIG_VOLTAGE 1.8 [current_design]
 set_property CFGBVS GND [current_design]
-
-
