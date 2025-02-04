@@ -119,11 +119,42 @@ module testharness
   /// Uart signals
   logic tx_${i}_${j}, rx_${i}_${j};
 
-  /// AXIS signals
-  logic [754:0] toremote_req_o_${i}_${j};
-  logic [0:0] toremote_rsp_i_${i}_${j};
-  logic [754:0] fromremote_req_i_${i}_${j};
-  logic [0:0] fromremote_rsp_o_${i}_${j};
+  /// Die2Die signals
+  // East side
+  logic chip_${i}_${j}_link_available_east;
+  logic [577:0] chip_${i}_${j}_payload_from_east;
+  logic chip_${i}_${j}_payload_from_east_valid;
+  logic chip_${i}_${j}_payload_from_east_ready;
+  logic [577:0] chip_${i}_${j}_payload_to_east;
+  logic chip_${i}_${j}_payload_to_east_valid;
+  logic chip_${i}_${j}_payload_to_east_ready;
+
+  // West side
+  logic chip_${i}_${j}_link_available_west;
+  logic [577:0] chip_${i}_${j}_payload_from_west;
+  logic chip_${i}_${j}_payload_from_west_valid;
+  logic chip_${i}_${j}_payload_from_west_ready;
+  logic [577:0] chip_${i}_${j}_payload_to_west;
+  logic chip_${i}_${j}_payload_to_west_valid;
+  logic chip_${i}_${j}_payload_to_west_ready;
+
+  // North side
+  logic chip_${i}_${j}_link_available_north;
+  logic [577:0] chip_${i}_${j}_payload_from_north;
+  logic chip_${i}_${j}_payload_from_north_valid;
+  logic chip_${i}_${j}_payload_from_north_ready;
+  logic [577:0] chip_${i}_${j}_payload_to_north;
+  logic chip_${i}_${j}_payload_to_north_valid;
+  logic chip_${i}_${j}_payload_to_north_ready;
+
+  // South side
+  logic chip_${i}_${j}_link_available_south;
+  logic [577:0] chip_${i}_${j}_payload_from_south;
+  logic chip_${i}_${j}_payload_from_south_valid;
+  logic chip_${i}_${j}_payload_from_south_ready;
+  logic [577:0] chip_${i}_${j}_payload_to_south;
+  logic chip_${i}_${j}_payload_to_south_valid;
+  logic chip_${i}_${j}_payload_to_south_ready;
 
   occamy_chip i_occamy_${i}_${j} (
       .clk_i,
@@ -135,10 +166,34 @@ module testharness
       .test_mode_i(1'b0),
       .boot_mode_i('0),
 % if multichip_cfg['single_chip'] is False:
-      .toremote_req_o(toremote_req_o_${i}_${j}),
-      .toremote_rsp_i(toremote_rsp_i_${i}_${j}),
-      .fromremote_req_i(fromremote_req_i_${i}_${j}),
-      .fromremote_rsp_o(fromremote_rsp_o_${i}_${j}),
+      .link_available_east_i(chip_${i}_${j}_link_available_east),
+      .payload_from_east_i(chip_${i}_${j}_payload_from_east),
+      .payload_from_east_valid_i(chip_${i}_${j}_payload_from_east_valid),
+      .payload_from_east_ready_o(chip_${i}_${j}_payload_from_east_ready),
+      .payload_to_east_o(chip_${i}_${j}_payload_to_east),
+      .payload_to_east_valid_o(chip_${i}_${j}_payload_to_east_valid),
+      .payload_to_east_ready_i(chip_${i}_${j}_payload_to_east_ready),
+      .link_available_west_i(chip_${i}_${j}_link_available_west),
+      .payload_from_west_i(chip_${i}_${j}_payload_from_west),
+      .payload_from_west_valid_i(chip_${i}_${j}_payload_from_west_valid),
+      .payload_from_west_ready_o(chip_${i}_${j}_payload_from_west_ready),
+      .payload_to_west_o(chip_${i}_${j}_payload_to_west),
+      .payload_to_west_valid_o(chip_${i}_${j}_payload_to_west_valid),
+      .payload_to_west_ready_i(chip_${i}_${j}_payload_to_west_ready),
+      .link_available_north_i(chip_${i}_${j}_link_available_north),
+      .payload_from_north_i(chip_${i}_${j}_payload_from_north),
+      .payload_from_north_valid_i(chip_${i}_${j}_payload_from_north_valid),
+      .payload_from_north_ready_o(chip_${i}_${j}_payload_from_north_ready),
+      .payload_to_north_o(chip_${i}_${j}_payload_to_north),
+      .payload_to_north_valid_o(chip_${i}_${j}_payload_to_north_valid),
+      .payload_to_north_ready_i(chip_${i}_${j}_payload_to_north_ready),
+      .link_available_south_i(chip_${i}_${j}_link_available_south),
+      .payload_from_south_i(chip_${i}_${j}_payload_from_south),
+      .payload_from_south_valid_i(chip_${i}_${j}_payload_from_south_valid),
+      .payload_from_south_ready_o(chip_${i}_${j}_payload_from_south_ready),
+      .payload_to_south_o(chip_${i}_${j}_payload_to_south),
+      .payload_to_south_valid_o(chip_${i}_${j}_payload_to_south_valid),
+      .payload_to_south_ready_i(chip_${i}_${j}_payload_to_south_ready),
 % endif
       .uart_tx_o(tx_${i}_${j}),
       .uart_rx_i(rx_${i}_${j}),
@@ -189,10 +244,67 @@ module testharness
 %   endfor
 % endfor
 
-// Temporary hack for two_chiplet testbench for the absense of the routing layer
-assign toremote_rsp_i_0_0 = fromremote_rsp_o_1_0;
-assign toremote_rsp_i_1_0 = fromremote_rsp_o_0_0;
-assign fromremote_req_i_0_0 = toremote_req_o_1_0;
-assign fromremote_req_i_1_0 = toremote_req_o_0_0;
-
+// Connect the signals declared together
+% for i in x:
+%   for j in y:
+  // Connect the east and west side of the chip
+%     if i == min(x):
+  assign chip_${i}_${j}_link_available_west = '0;
+  assign chip_${i}_${j}_payload_from_west = '0;
+  assign chip_${i}_${j}_payload_from_west_valid = '0;
+  assign chip_${i}_${j}_payload_to_west_ready = '0;
+  assign chip_${i}_${j}_link_available_east = '1;
+  assign chip_${i}_${j}_payload_from_east = chip_${i+1}_${j}_payload_to_west;
+  assign chip_${i}_${j}_payload_from_east_valid = chip_${i+1}_${j}_payload_to_west_valid;
+  assign chip_${i}_${j}_payload_to_east_ready = chip_${i+1}_${j}_payload_from_west_ready;
+%     elif i == max(x):
+  assign chip_${i}_${j}_link_available_west = '1;
+  assign chip_${i}_${j}_payload_from_west = chip_${i-1}_${j}_payload_to_east;
+  assign chip_${i}_${j}_payload_from_west_valid = chip_${i-1}_${j}_payload_to_east_valid;
+  assign chip_${i}_${j}_payload_to_west_ready = chip_${i-1}_${j}_payload_from_east_ready;
+  assign chip_${i}_${j}_link_available_east = '0;
+  assign chip_${i}_${j}_payload_from_east = '0;
+  assign chip_${i}_${j}_payload_from_east_valid = '0;
+  assign chip_${i}_${j}_payload_to_east_ready = '0;
+%     else:
+  assign chip_${i}_${j}_link_available_west = '1;
+  assign chip_${i}_${j}_payload_from_west = chip_${i-1}_${j}_payload_to_east;
+  assign chip_${i}_${j}_payload_from_west_valid = chip_${i-1}_${j}_payload_to_east_valid;
+  assign chip_${i}_${j}_payload_to_west_ready = chip_${i-1}_${j}_payload_from_east_ready;
+  assign chip_${i}_${j}_link_available_east = '1;
+  assign chip_${i}_${j}_payload_from_east = chip_${i+1}_${j}_payload_to_west;
+  assign chip_${i}_${j}_payload_from_east_valid = chip_${i+1}_${j}_payload_to_west_valid;
+  assign chip_${i}_${j}_payload_to_east_ready = chip_${i+1}_${j}_payload_from_west_ready;
+%     endif
+  // Connect the north and south side of the chip
+%     if j == min(y):
+  assign chip_${i}_${j}_link_available_north = '0;
+  assign chip_${i}_${j}_payload_from_north = '0;
+  assign chip_${i}_${j}_payload_from_north_valid = '0;
+  assign chip_${i}_${j}_payload_to_north_ready = '0;
+  assign chip_${i}_${j}_link_available_south = '1;
+  assign chip_${i}_${j}_payload_from_south = chip_${i}_${j+1}_payload_to_north;
+  assign chip_${i}_${j}_payload_from_south_valid = chip_${i}_${j+1}_payload_to_north_valid;
+  assign chip_${i}_${j}_payload_to_south_ready = chip_${i}_${j+1}_payload_from_north_ready;
+%     elif j == max(y):
+  assign chip_${i}_${j}_link_available_north = '1;
+  assign chip_${i}_${j}_payload_from_north = chip_${i}_${j-1}_payload_to_south;
+  assign chip_${i}_${j}_payload_from_north_valid = chip_${i}_${j-1}_payload_to_south_valid;
+  assign chip_${i}_${j}_payload_to_north_ready = chip_${i}_${j-1}_payload_from_south_ready;
+  assign chip_${i}_${j}_link_available_south = '0;
+  assign chip_${i}_${j}_payload_from_south = '0;
+  assign chip_${i}_${j}_payload_from_south_valid = '0;
+  assign chip_${i}_${j}_payload_to_south_ready = '0;
+%     else:
+  assign chip_${i}_${j}_link_available_north = '1;
+  assign chip_${i}_${j}_payload_from_north = chip_${i}_${j-1}_payload_to_south;
+  assign chip_${i}_${j}_payload_from_north_valid = chip_${i}_${j-1}_payload_to_south_valid;
+  assign chip_${i}_${j}_payload_to_north_ready = chip_${i}_${j-1}_payload_from_south_ready;
+  assign chip_${i}_${j}_link_available_south = '1;
+  assign chip_${i}_${j}_payload_from_south = chip_${i}_${j+1}_payload_to_north;
+  assign chip_${i}_${j}_payload_from_south_valid = chip_${i}_${j+1}_payload_to_north_valid;
+  assign chip_${i}_${j}_payload_to_south_ready = chip_${i}_${j+1}_payload_from_north_ready;
+%     endif
+%   endfor
+% endfor
 endmodule

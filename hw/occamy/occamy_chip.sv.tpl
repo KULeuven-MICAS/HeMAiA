@@ -20,14 +20,39 @@ import ${name}_pkg::*;
   input  chip_id_t    chip_id_i,
   input  logic [1:0]  boot_mode_i,
 % if occamy_cfg['hemaia_multichip']['single_chip'] is False: 
-  // HeMAiA D2D AXI Interface
-  // 756 bits in total, 755b req + 1b resp
-  // This Chiplet to remote Chiplet
-  output serial_link_pkg::hemaia_d2d_link_network_layer_req_t toremote_req_o,
-  input  serial_link_pkg::hemaia_d2d_link_network_layer_rsp_t toremote_rsp_i,
-  // Remote Chiplet chiplet to this Chiplet
-  input  logic [754:0] fromremote_req_i,
-  output logic [0:0] fromremote_rsp_o,
+  // Currently the router is implemented, so bidirectional connections toward E/S/W/N is needed, with 578b payload
+  // East side
+  input  logic             link_available_east_i,
+  input  logic     [577:0] payload_from_east_i,
+  input  logic             payload_from_east_valid_i,
+  output logic             payload_from_east_ready_o,
+  output logic     [577:0] payload_to_east_o,
+  output logic             payload_to_east_valid_o,
+  input  logic             payload_to_east_ready_i,
+  // West side
+  input  logic             link_available_west_i,
+  input  logic     [577:0] payload_from_west_i,
+  input  logic             payload_from_west_valid_i,
+  output logic             payload_from_west_ready_o,
+  output logic     [577:0] payload_to_west_o,
+  output logic             payload_to_west_valid_o,
+  input  logic             payload_to_west_ready_i,
+  // North side
+  input  logic             link_available_north_i,
+  input  logic     [577:0] payload_from_north_i,
+  input  logic             payload_from_north_valid_i,
+  output logic             payload_from_north_ready_o,
+  output logic     [577:0] payload_to_north_o,
+  output logic             payload_to_north_valid_o,
+  input  logic             payload_to_north_ready_i,
+  // South side
+  input  logic             link_available_south_i,
+  input  logic     [577:0] payload_from_south_i,
+  input  logic             payload_from_south_valid_i,
+  output logic             payload_from_south_ready_o,
+  output logic     [577:0] payload_to_south_o,
+  output logic             payload_to_south_valid_o,
+  input  logic             payload_to_south_ready_i,
 % endif
   // `uart` Interface
   output logic        uart_tx_o,
@@ -242,9 +267,7 @@ import ${name}_pkg::*;
     .ar_chan_t (${soc2router_bus.ar_chan_type()}),
     .r_chan_t (${soc2router_bus.r_chan_type()}),
     .w_chan_t (${soc2router_bus.w_chan_type()}),
-    .b_chan_t (${soc2router_bus.b_chan_type()}),
-    .axis_req_raw_t (serial_link_pkg::hemaia_d2d_link_network_layer_req_t),
-    .axis_rsp_raw_t (serial_link_pkg::hemaia_d2d_link_network_layer_rsp_t)
+    .b_chan_t (${soc2router_bus.b_chan_type()})
   ) i_d2d_link (
     .chip_id_i(chip_id),
 
@@ -259,13 +282,36 @@ import ${name}_pkg::*;
     .axi_out_req_o(router2soc_req),
     .axi_out_rsp_i(router2soc_rsp),
 
-    .axis_in_req_i(fromremote_req_i),
-    .axis_in_rsp_o(fromremote_rsp_o),
-    .axis_out_req_o(toremote_req_o),
-    .axis_out_rsp_i(toremote_rsp_i)
+    .link_available_east_i(link_available_east_i),
+    .payload_from_east_i(payload_from_east_i),
+    .payload_from_east_valid_i(payload_from_east_valid_i),
+    .payload_from_east_ready_o(payload_from_east_ready_o),
+    .payload_to_east_o(payload_to_east_o),
+    .payload_to_east_valid_o(payload_to_east_valid_o),
+    .payload_to_east_ready_i(payload_to_east_ready_i),
+    .link_available_west_i(link_available_west_i),
+    .payload_from_west_i(payload_from_west_i),
+    .payload_from_west_valid_i(payload_from_west_valid_i),
+    .payload_from_west_ready_o(payload_from_west_ready_o),
+    .payload_to_west_o(payload_to_west_o),
+    .payload_to_west_valid_o(payload_to_west_valid_o),
+    .payload_to_west_ready_i(payload_to_west_ready_i),
+    .link_available_north_i(link_available_north_i),
+    .payload_from_north_i(payload_from_north_i),
+    .payload_from_north_valid_i(payload_from_north_valid_i),
+    .payload_from_north_ready_o(payload_from_north_ready_o),
+    .payload_to_north_o(payload_to_north_o),
+    .payload_to_north_valid_o(payload_to_north_valid_o),
+    .payload_to_north_ready_i(payload_to_north_ready_i),
+    .link_available_south_i(link_available_south_i),
+    .payload_from_south_i(payload_from_south_i),
+    .payload_from_south_valid_i(payload_from_south_valid_i),
+    .payload_from_south_ready_o(payload_from_south_ready_o),
+    .payload_to_south_o(payload_to_south_o),
+    .payload_to_south_valid_o(payload_to_south_valid_o),
+    .payload_to_south_ready_i(payload_to_south_ready_i)
   );
 
 % endif
-
 
 endmodule
