@@ -35,23 +35,23 @@ int main() {
     }
 
     // Report the address of test data
-    if (snrt_global_core_idx() == 0) {
-        printf("Test data start address: %p%p\r\n",
-               (uint8_t*)(test_data_start_addr >> 32),
-               (uint8_t*)test_data_start_addr);
-        printf("TCDM0 start address: %p%p\r\n",
-               (uint8_t*)(next_destination_start_addr[0] >> 32),
-               (uint8_t*)next_destination_start_addr[0]);
-        printf("TCDM1 start address: %p%p\r\n",
-               (uint8_t*)(next_destination_start_addr[1] >> 32),
-               (uint8_t*)next_destination_start_addr[1]);
-        printf("TCDM2 start address: %p%p\r\n",
-               (uint8_t*)(next_destination_start_addr[2] >> 32),
-               (uint8_t*)next_destination_start_addr[2]);
-        printf("TCDM3 start address: %p%p\r\n",
-               (uint8_t*)(next_destination_start_addr[3] >> 32),
-               (uint8_t*)next_destination_start_addr[3]);
-    }
+    // if (snrt_global_core_idx() == 0) {
+    //     printf("Test data start address: %p%p\r\n",
+    //            (uint8_t*)(test_data_start_addr >> 32),
+    //            (uint8_t*)test_data_start_addr);
+    //     printf("TCDM0 start address: %p%p\r\n",
+    //            (uint8_t*)(next_destination_start_addr[0] >> 32),
+    //            (uint8_t*)next_destination_start_addr[0]);
+    //     printf("TCDM1 start address: %p%p\r\n",
+    //            (uint8_t*)(next_destination_start_addr[1] >> 32),
+    //            (uint8_t*)next_destination_start_addr[1]);
+    //     printf("TCDM2 start address: %p%p\r\n",
+    //            (uint8_t*)(next_destination_start_addr[2] >> 32),
+    //            (uint8_t*)next_destination_start_addr[2]);
+    //     printf("TCDM3 start address: %p%p\r\n",
+    //            (uint8_t*)(next_destination_start_addr[3] >> 32),
+    //            (uint8_t*)next_destination_start_addr[3]);
+    // }
     snrt_global_barrier();
 
     // Loading data to TCDM

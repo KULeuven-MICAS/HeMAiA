@@ -122,37 +122,37 @@ module testharness
   /// Die2Die signals
   // East side
   logic chip_${i}_${j}_link_available_east;
-  logic [577:0] chip_${i}_${j}_payload_from_east;
+  logic [597:0] chip_${i}_${j}_payload_from_east;
   logic chip_${i}_${j}_payload_from_east_valid;
   logic chip_${i}_${j}_payload_from_east_ready;
-  logic [577:0] chip_${i}_${j}_payload_to_east;
+  logic [597:0] chip_${i}_${j}_payload_to_east;
   logic chip_${i}_${j}_payload_to_east_valid;
   logic chip_${i}_${j}_payload_to_east_ready;
 
   // West side
   logic chip_${i}_${j}_link_available_west;
-  logic [577:0] chip_${i}_${j}_payload_from_west;
+  logic [597:0] chip_${i}_${j}_payload_from_west;
   logic chip_${i}_${j}_payload_from_west_valid;
   logic chip_${i}_${j}_payload_from_west_ready;
-  logic [577:0] chip_${i}_${j}_payload_to_west;
+  logic [597:0] chip_${i}_${j}_payload_to_west;
   logic chip_${i}_${j}_payload_to_west_valid;
   logic chip_${i}_${j}_payload_to_west_ready;
 
   // North side
   logic chip_${i}_${j}_link_available_north;
-  logic [577:0] chip_${i}_${j}_payload_from_north;
+  logic [597:0] chip_${i}_${j}_payload_from_north;
   logic chip_${i}_${j}_payload_from_north_valid;
   logic chip_${i}_${j}_payload_from_north_ready;
-  logic [577:0] chip_${i}_${j}_payload_to_north;
+  logic [597:0] chip_${i}_${j}_payload_to_north;
   logic chip_${i}_${j}_payload_to_north_valid;
   logic chip_${i}_${j}_payload_to_north_ready;
 
   // South side
   logic chip_${i}_${j}_link_available_south;
-  logic [577:0] chip_${i}_${j}_payload_from_south;
+  logic [597:0] chip_${i}_${j}_payload_from_south;
   logic chip_${i}_${j}_payload_from_south_valid;
   logic chip_${i}_${j}_payload_from_south_ready;
-  logic [577:0] chip_${i}_${j}_payload_to_south;
+  logic [597:0] chip_${i}_${j}_payload_to_south;
   logic chip_${i}_${j}_payload_to_south_valid;
   logic chip_${i}_${j}_payload_to_south_ready;
 

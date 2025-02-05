@@ -74,42 +74,28 @@ int main() {
     snrt_global_barrier();
 
     // Start to check
-    if (snrt_cluster_idx() == 0) {
-        if (snrt_cluster_core_idx() == 0) {
-            printf("C0 Checking the results\r\n");
-            for (int i = 0; i < length_data; i++) {
-                if (((int8_t*)tcdm0_start_addr)[i] != test_data[i]) {
-                    err++;
-                    printf("C0 data is incorrect!\r\n");
-                    printf("tcdm0[%d]=%d, test_data[%d]=%d\r\n", i,
-                           ((int8_t*)tcdm0_start_addr)[i], i, test_data[i]);
-                    return -1;
-                }
+    if (snrt_cluster_idx() == 0 && snrt_is_dm_core()) {
+        printf("C0 Checking the results\r\n");
+        for (int i = 0; i < length_data; i++) {
+            if (((int8_t*)tcdm0_start_addr)[i] != test_data[i]) {
+                err++;
+                printf("C0 data is incorrect!\r\n");
+                printf("tcdm0[%d]=%d, test_data[%d]=%d\r\n", i,
+                       ((int8_t*)tcdm0_start_addr)[i], i, test_data[i]);
+                return -1;
             }
         }
-    }
-    snrt_global_barrier();
-    if (snrt_cluster_idx() == 1) {
-        if (snrt_cluster_core_idx() == 0) {
-            printf("C1 Checking the results\r\n");
-            for (int i = 0; i < length_data; i++) {
-                if (((int8_t*)tcdm1_start_addr)[i] != test_data[i]) {
-                    err++;
-                    printf("C1 data is incorrect!\r\n");
-                    printf("tcdm0[%d]=%d, test_data[%d]=%d\r\n", i,
-                           ((int8_t*)tcdm1_start_addr)[i], i, test_data[i]);
-                    return -1;
-                }
+    } else if (snrt_cluster_idx() == 1 && snrt_is_dm_core()) {
+        printf("C1 Checking the results\r\n");
+        for (int i = 0; i < length_data; i++) {
+            if (((int8_t*)tcdm1_start_addr)[i] != test_data[i]) {
+                err++;
+                printf("C1 data is incorrect!\r\n");
+                printf("tcdm0[%d]=%d, test_data[%d]=%d\r\n", i,
+                       ((int8_t*)tcdm1_start_addr)[i], i, test_data[i]);
+                return -1;
             }
         }
-    }
-
-    snrt_global_barrier();
-    if (snrt_cluster_idx() == 0) {
-        if (snrt_is_dm_core()) {
-            printf("Checking all done! No error!\r\n");
-        }
-    }
-
-    return 0;
+    } else
+        return 0;
 }
