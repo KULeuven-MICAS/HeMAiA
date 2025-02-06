@@ -304,10 +304,10 @@ static inline void set_reset_n_quad(uint32_t quad_idx, uint32_t value) {
 static inline void reset_and_ungate_quad(uint32_t quadrant_idx, uint32_t cluster_enable_value) {
     // The N_CLUSTER + 1 is for the uncore
     uint32_t clk_enable_mask = (1 << (N_CLUSTERS + 1) ) - 1;
-    set_reset_n_quad(quadrant_idx, 0);
     set_clk_ena_quad(quadrant_idx, 0, clk_enable_mask);
-    set_reset_n_quad(quadrant_idx, 1);
+    set_reset_n_quad(quadrant_idx, 0);
     set_clk_ena_quad(quadrant_idx, cluster_enable_value, clk_enable_mask);
+    set_reset_n_quad(quadrant_idx, 1);
 }
 
 static inline void reset_and_ungate_quadrants(uint32_t cluster_enable_value) {
