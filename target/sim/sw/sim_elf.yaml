@@ -6,3 +6,4 @@ runs:
   - elf: host/apps/offload/build/offload-snax-test-integration.elf
   - elf: host/apps/offload/build/offload-snax-gemmx-matmul.elf
   - elf: host/apps/offload/build/offload-snax-gemmx-conv.elf
+  # - elf: host/apps/offload/build/offload-snax-cgra-run.elf

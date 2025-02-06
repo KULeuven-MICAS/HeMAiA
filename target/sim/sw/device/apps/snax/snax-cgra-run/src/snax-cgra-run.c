@@ -57,39 +57,39 @@ int main() {
 
 		// testing csr -> cgra
 		if (snrt_is_compute_core()) {
-			printf ("hello world!\n\n");
+			printf ("hello world!\r\n\r\n");
 
 			launch_cgra_0(delta_config_data, delta_comp_data, delta_store_data);
 
 			fsafe_counter = 0;
 			while(csrr_ss(STREAMER_BUSY_CSR) != 0 || csrr_ss(CGRA_CSR_RO_ADDR_BASE+8) < 655370){
-				printf ("system busy ...\n"); 
+				printf ("system busy ...\r\n"); 
 				if (csrr_ss(CGRA_CSR_RO_ADDR_BASE+8) >= 655370 && fsafe_counter >= 42) {
-					printf ("--> Break because CGRA is done. Check the Streamer IO amount settings...\n"); 
+					printf ("--> Break because CGRA is done. Check the Streamer IO amount settings...\r\n"); 
 					break;
 				}
 				fsafe_counter++;
 			}
-			printf ("ckpt hit!\n\n"); 
+			printf ("ckpt hit!\r\n\r\n"); 
 			
 			
-			printf("ckpt @ CGRA stage [%2d]\n", csrr_ss(CGRA_CSR_RO_ADDR_BASE+8) >> 16);
-			printf("\tCGRA cc timestamp = %d\n", csrr_ss(CGRA_CSR_RO_ADDR_BASE));
+			printf("ckpt @ CGRA stage [%2d]\r\n", csrr_ss(CGRA_CSR_RO_ADDR_BASE+8) >> 16);
+			printf("\tCGRA cc timestamp = %d\r\n", csrr_ss(CGRA_CSR_RO_ADDR_BASE));
 			for(int i = 1; i < 7; i++) {
 				perf_counter[0] = csrr_ss(CGRA_CSR_RO_ADDR_BASE+i);
 				perf_counter[1] = csrr_ss(CGRA_CSR_RO_ADDR_BASE+i+1);
 				perf_counter_tmp = perf_counter[1] < perf_counter[0] ? 0 : perf_counter[1] - perf_counter[0];
-				printf("\tElapsed cc @ %s = %d\n", stage_helper[i], perf_counter_tmp);
+				printf("\tElapsed cc @ %s = %d\r\n", stage_helper[i], perf_counter_tmp);
 			}
-			printf("\tCGRA cc timestamp = %d\n\n", csrr_ss(CGRA_CSR_RO_ADDR_BASE));
+			printf("\tCGRA cc timestamp = %d\r\n\r\n", csrr_ss(CGRA_CSR_RO_ADDR_BASE));
 
 			
-			printf("Check result:\n");
+			printf("Check result:\r\n");
 			err_counter = 0;
 			for(int i = 0; i < 48; i++) {
 				if (local_d16[i*4] != COMP_DATA_REF[i]) err_counter++;
 			}
-			printf("\tErrors: %d\n", err_counter);
+			printf("\tErrors: %d\r\n", err_counter);
 			return err_counter;
 		} else return 0;
 	} else return 0;
