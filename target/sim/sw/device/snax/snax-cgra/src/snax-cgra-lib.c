@@ -23,6 +23,10 @@ void launch_cgra_0(int32_t delta_config_data, int32_t delta_comp_data, int32_t d
 		csrw_ss(T_STRIDE_READER_0_4,    0);
 		csrw_ss(T_BOUND_READER_0_5,    1);
 		csrw_ss(T_STRIDE_READER_0_5,    0);
+		csrw_ss(T_BOUND_READER_0_6,    1);
+		csrw_ss(T_STRIDE_READER_0_6,    0);
+		csrw_ss(T_BOUND_READER_0_7,    1);
+		csrw_ss(T_STRIDE_READER_0_7,    0);
 		// READER_1
 		csrw_ss(BASE_PTR_READER_1_LOW, (uint32_t)(snrt_l1_next() + delta_config_data +    8));
 		csrw_ss(S_STRIDE_READER_1_0, 8);
@@ -38,6 +42,10 @@ void launch_cgra_0(int32_t delta_config_data, int32_t delta_comp_data, int32_t d
 		csrw_ss(T_STRIDE_READER_1_4,    0);
 		csrw_ss(T_BOUND_READER_1_5,    1);
 		csrw_ss(T_STRIDE_READER_1_5,    0);
+		csrw_ss(T_BOUND_READER_1_6,    1);
+		csrw_ss(T_STRIDE_READER_1_6,    0);
+		csrw_ss(T_BOUND_READER_1_7,    1);
+		csrw_ss(T_STRIDE_READER_1_7,    0);
 		// READER_2
 		csrw_ss(BASE_PTR_READER_2_LOW, (uint32_t)(snrt_l1_next() + delta_config_data +   16));
 		csrw_ss(S_STRIDE_READER_2_0, 8);
@@ -53,6 +61,10 @@ void launch_cgra_0(int32_t delta_config_data, int32_t delta_comp_data, int32_t d
 		csrw_ss(T_STRIDE_READER_2_4,    0);
 		csrw_ss(T_BOUND_READER_2_5,    1);
 		csrw_ss(T_STRIDE_READER_2_5,    0);
+		csrw_ss(T_BOUND_READER_2_6,    1);
+		csrw_ss(T_STRIDE_READER_2_6,    0);
+		csrw_ss(T_BOUND_READER_2_7,    1);
+		csrw_ss(T_STRIDE_READER_2_7,    0);
 		// READER_3
 		csrw_ss(BASE_PTR_READER_3_LOW, (uint32_t)(snrt_l1_next() + delta_config_data +   24));
 		csrw_ss(S_STRIDE_READER_3_0, 8);
@@ -68,6 +80,10 @@ void launch_cgra_0(int32_t delta_config_data, int32_t delta_comp_data, int32_t d
 		csrw_ss(T_STRIDE_READER_3_4,    0);
 		csrw_ss(T_BOUND_READER_3_5,    1);
 		csrw_ss(T_STRIDE_READER_3_5,    0);
+		csrw_ss(T_BOUND_READER_3_6,    1);
+		csrw_ss(T_STRIDE_READER_3_6,    0);
+		csrw_ss(T_BOUND_READER_3_7,    1);
+		csrw_ss(T_STRIDE_READER_3_7,    0);
 		// READER_4
 		csrw_ss(BASE_PTR_READER_4_LOW, (uint32_t)(snrt_l1_next() + delta_config_data +   32));
 		csrw_ss(S_STRIDE_READER_4_0, 8);
@@ -83,6 +99,10 @@ void launch_cgra_0(int32_t delta_config_data, int32_t delta_comp_data, int32_t d
 		csrw_ss(T_STRIDE_READER_4_4,    0);
 		csrw_ss(T_BOUND_READER_4_5,    1);
 		csrw_ss(T_STRIDE_READER_4_5,    0);
+		csrw_ss(T_BOUND_READER_4_6,    1);
+		csrw_ss(T_STRIDE_READER_4_6,    0);
+		csrw_ss(T_BOUND_READER_4_7,    1);
+		csrw_ss(T_STRIDE_READER_4_7,    0);
 		// READER_5
 		csrw_ss(BASE_PTR_READER_5_LOW, (uint32_t)(snrt_l1_next() + delta_config_data +   40));
 		csrw_ss(S_STRIDE_READER_5_0, 8);
@@ -98,6 +118,10 @@ void launch_cgra_0(int32_t delta_config_data, int32_t delta_comp_data, int32_t d
 		csrw_ss(T_STRIDE_READER_5_4,    0);
 		csrw_ss(T_BOUND_READER_5_5,    1);
 		csrw_ss(T_STRIDE_READER_5_5,    0);
+		csrw_ss(T_BOUND_READER_5_6,    1);
+		csrw_ss(T_STRIDE_READER_5_6,    0);
+		csrw_ss(T_BOUND_READER_5_7,    1);
+		csrw_ss(T_STRIDE_READER_5_7,    0);
 		// READER_6
 		csrw_ss(BASE_PTR_READER_6_LOW, (uint32_t)(snrt_l1_next() + delta_config_data +   48));
 		csrw_ss(S_STRIDE_READER_6_0, 8);
@@ -113,6 +137,10 @@ void launch_cgra_0(int32_t delta_config_data, int32_t delta_comp_data, int32_t d
 		csrw_ss(T_STRIDE_READER_6_4,    0);
 		csrw_ss(T_BOUND_READER_6_5,    1);
 		csrw_ss(T_STRIDE_READER_6_5,    0);
+		csrw_ss(T_BOUND_READER_6_6,    1);
+		csrw_ss(T_STRIDE_READER_6_6,    0);
+		csrw_ss(T_BOUND_READER_6_7,    1);
+		csrw_ss(T_STRIDE_READER_6_7,    0);
 		// READER_7
 		csrw_ss(BASE_PTR_READER_7_LOW, (uint32_t)(snrt_l1_next() + delta_config_data +   56));
 		csrw_ss(S_STRIDE_READER_7_0, 8);
@@ -128,6 +156,10 @@ void launch_cgra_0(int32_t delta_config_data, int32_t delta_comp_data, int32_t d
 		csrw_ss(T_STRIDE_READER_7_4,    0);
 		csrw_ss(T_BOUND_READER_7_5,    1);
 		csrw_ss(T_STRIDE_READER_7_5,    0);
+		csrw_ss(T_BOUND_READER_7_6,    1);
+		csrw_ss(T_STRIDE_READER_7_6,    0);
+		csrw_ss(T_BOUND_READER_7_7,    1);
+		csrw_ss(T_STRIDE_READER_7_7,    0);
 		// STREAMER handles end
 
 
@@ -190,6 +222,10 @@ void launch_cgra_0(int32_t delta_config_data, int32_t delta_comp_data, int32_t d
 		csrw_ss(T_STRIDE_READER_0_4,    0);
 		csrw_ss(T_BOUND_READER_0_5,    0);
 		csrw_ss(T_STRIDE_READER_0_5,    0);
+		csrw_ss(T_BOUND_READER_0_6,    0);
+		csrw_ss(T_STRIDE_READER_0_6,    0);
+		csrw_ss(T_BOUND_READER_0_7,    0);
+		csrw_ss(T_STRIDE_READER_0_7,    0);
 		// READER_1
 		csrw_ss(BASE_PTR_READER_1_LOW, (uint32_t)(snrt_l1_next() + delta_comp_data +   0));
 		csrw_ss(S_STRIDE_READER_1_0, 8);
@@ -205,6 +241,10 @@ void launch_cgra_0(int32_t delta_config_data, int32_t delta_comp_data, int32_t d
 		csrw_ss(T_STRIDE_READER_1_4,    0);
 		csrw_ss(T_BOUND_READER_1_5,    0);
 		csrw_ss(T_STRIDE_READER_1_5,    0);
+		csrw_ss(T_BOUND_READER_1_6,    0);
+		csrw_ss(T_STRIDE_READER_1_6,    0);
+		csrw_ss(T_BOUND_READER_1_7,    0);
+		csrw_ss(T_STRIDE_READER_1_7,    0);
 		// READER_2
 		csrw_ss(BASE_PTR_READER_2_LOW, (uint32_t)(snrt_l1_next() + delta_comp_data +   0));
 		csrw_ss(S_STRIDE_READER_2_0, 8);
@@ -220,6 +260,10 @@ void launch_cgra_0(int32_t delta_config_data, int32_t delta_comp_data, int32_t d
 		csrw_ss(T_STRIDE_READER_2_4,    0);
 		csrw_ss(T_BOUND_READER_2_5,    0);
 		csrw_ss(T_STRIDE_READER_2_5,    0);
+		csrw_ss(T_BOUND_READER_2_6,    0);
+		csrw_ss(T_STRIDE_READER_2_6,    0);
+		csrw_ss(T_BOUND_READER_2_7,    0);
+		csrw_ss(T_STRIDE_READER_2_7,    0);
 		// READER_3
 		csrw_ss(BASE_PTR_READER_3_LOW, (uint32_t)(snrt_l1_next() + delta_comp_data +  16));
 		csrw_ss(S_STRIDE_READER_3_0, 8);
@@ -235,6 +279,10 @@ void launch_cgra_0(int32_t delta_config_data, int32_t delta_comp_data, int32_t d
 		csrw_ss(T_STRIDE_READER_3_4,    0);
 		csrw_ss(T_BOUND_READER_3_5,    1);
 		csrw_ss(T_STRIDE_READER_3_5,    0);
+		csrw_ss(T_BOUND_READER_3_6,    1);
+		csrw_ss(T_STRIDE_READER_3_6,    0);
+		csrw_ss(T_BOUND_READER_3_7,    1);
+		csrw_ss(T_STRIDE_READER_3_7,    0);
 		// READER_4
 		csrw_ss(BASE_PTR_READER_4_LOW, (uint32_t)(snrt_l1_next() + delta_comp_data +  80));
 		csrw_ss(S_STRIDE_READER_4_0, 8);
@@ -250,6 +298,10 @@ void launch_cgra_0(int32_t delta_config_data, int32_t delta_comp_data, int32_t d
 		csrw_ss(T_STRIDE_READER_4_4,    0);
 		csrw_ss(T_BOUND_READER_4_5,    1);
 		csrw_ss(T_STRIDE_READER_4_5,    0);
+		csrw_ss(T_BOUND_READER_4_6,    1);
+		csrw_ss(T_STRIDE_READER_4_6,    0);
+		csrw_ss(T_BOUND_READER_4_7,    1);
+		csrw_ss(T_STRIDE_READER_4_7,    0);
 		// READER_5
 		csrw_ss(BASE_PTR_READER_5_LOW, (uint32_t)(snrt_l1_next() + delta_comp_data +   0));
 		csrw_ss(S_STRIDE_READER_5_0, 8);
@@ -265,6 +317,10 @@ void launch_cgra_0(int32_t delta_config_data, int32_t delta_comp_data, int32_t d
 		csrw_ss(T_STRIDE_READER_5_4,    0);
 		csrw_ss(T_BOUND_READER_5_5,    0);
 		csrw_ss(T_STRIDE_READER_5_5,    0);
+		csrw_ss(T_BOUND_READER_5_6,    0);
+		csrw_ss(T_STRIDE_READER_5_6,    0);
+		csrw_ss(T_BOUND_READER_5_7,    0);
+		csrw_ss(T_STRIDE_READER_5_7,    0);
 		// READER_6
 		csrw_ss(BASE_PTR_READER_6_LOW, (uint32_t)(snrt_l1_next() + delta_comp_data +   0));
 		csrw_ss(S_STRIDE_READER_6_0, 8);
@@ -280,6 +336,10 @@ void launch_cgra_0(int32_t delta_config_data, int32_t delta_comp_data, int32_t d
 		csrw_ss(T_STRIDE_READER_6_4,    0);
 		csrw_ss(T_BOUND_READER_6_5,    0);
 		csrw_ss(T_STRIDE_READER_6_5,    0);
+		csrw_ss(T_BOUND_READER_6_6,    0);
+		csrw_ss(T_STRIDE_READER_6_6,    0);
+		csrw_ss(T_BOUND_READER_6_7,    0);
+		csrw_ss(T_STRIDE_READER_6_7,    0);
 		// READER_7
 		csrw_ss(BASE_PTR_READER_7_LOW, (uint32_t)(snrt_l1_next() + delta_comp_data +   0));
 		csrw_ss(S_STRIDE_READER_7_0, 8);
@@ -295,6 +355,10 @@ void launch_cgra_0(int32_t delta_config_data, int32_t delta_comp_data, int32_t d
 		csrw_ss(T_STRIDE_READER_7_4,    0);
 		csrw_ss(T_BOUND_READER_7_5,    0);
 		csrw_ss(T_STRIDE_READER_7_5,    0);
+		csrw_ss(T_BOUND_READER_7_6,    0);
+		csrw_ss(T_STRIDE_READER_7_6,    0);
+		csrw_ss(T_BOUND_READER_7_7,    0);
+		csrw_ss(T_STRIDE_READER_7_7,    0);
 		// STREAMER handles end
 
 
@@ -308,6 +372,16 @@ void launch_cgra_0(int32_t delta_config_data, int32_t delta_comp_data, int32_t d
 		csrw_ss(T_STRIDE_WRITER_0_1,    0);
 		csrw_ss(T_BOUND_WRITER_0_2,    0);
 		csrw_ss(T_STRIDE_WRITER_0_2,    0);
+		csrw_ss(T_BOUND_WRITER_0_3,    0);
+		csrw_ss(T_STRIDE_WRITER_0_3,    0);
+		csrw_ss(T_BOUND_WRITER_0_4,    0);
+		csrw_ss(T_STRIDE_WRITER_0_4,    0);
+		csrw_ss(T_BOUND_WRITER_0_5,    0);
+		csrw_ss(T_STRIDE_WRITER_0_5,    0);
+		csrw_ss(T_BOUND_WRITER_0_6,    0);
+		csrw_ss(T_STRIDE_WRITER_0_6,    0);
+		csrw_ss(T_BOUND_WRITER_0_7,    0);
+		csrw_ss(T_STRIDE_WRITER_0_7,    0);
 		// WRITER_1
 		csrw_ss(BASE_PTR_WRITER_1_LOW, (uint32_t)(snrt_l1_next() + delta_store_data +   0));
 		csrw_ss(S_STRIDE_WRITER_1_0, 8);
@@ -317,6 +391,16 @@ void launch_cgra_0(int32_t delta_config_data, int32_t delta_comp_data, int32_t d
 		csrw_ss(T_STRIDE_WRITER_1_1,    0);
 		csrw_ss(T_BOUND_WRITER_1_2,    0);
 		csrw_ss(T_STRIDE_WRITER_1_2,    0);
+		csrw_ss(T_BOUND_WRITER_1_3,    0);
+		csrw_ss(T_STRIDE_WRITER_1_3,    0);
+		csrw_ss(T_BOUND_WRITER_1_4,    0);
+		csrw_ss(T_STRIDE_WRITER_1_4,    0);
+		csrw_ss(T_BOUND_WRITER_1_5,    0);
+		csrw_ss(T_STRIDE_WRITER_1_5,    0);
+		csrw_ss(T_BOUND_WRITER_1_6,    0);
+		csrw_ss(T_STRIDE_WRITER_1_6,    0);
+		csrw_ss(T_BOUND_WRITER_1_7,    0);
+		csrw_ss(T_STRIDE_WRITER_1_7,    0);
 		// WRITER_2
 		csrw_ss(BASE_PTR_WRITER_2_LOW, (uint32_t)(snrt_l1_next() + delta_store_data +   0));
 		csrw_ss(S_STRIDE_WRITER_2_0, 8);
@@ -326,6 +410,16 @@ void launch_cgra_0(int32_t delta_config_data, int32_t delta_comp_data, int32_t d
 		csrw_ss(T_STRIDE_WRITER_2_1,    0);
 		csrw_ss(T_BOUND_WRITER_2_2,    0);
 		csrw_ss(T_STRIDE_WRITER_2_2,    0);
+		csrw_ss(T_BOUND_WRITER_2_3,    0);
+		csrw_ss(T_STRIDE_WRITER_2_3,    0);
+		csrw_ss(T_BOUND_WRITER_2_4,    0);
+		csrw_ss(T_STRIDE_WRITER_2_4,    0);
+		csrw_ss(T_BOUND_WRITER_2_5,    0);
+		csrw_ss(T_STRIDE_WRITER_2_5,    0);
+		csrw_ss(T_BOUND_WRITER_2_6,    0);
+		csrw_ss(T_STRIDE_WRITER_2_6,    0);
+		csrw_ss(T_BOUND_WRITER_2_7,    0);
+		csrw_ss(T_STRIDE_WRITER_2_7,    0);
 		// WRITER_3
 		csrw_ss(BASE_PTR_WRITER_3_LOW, (uint32_t)(snrt_l1_next() + delta_store_data +   0));
 		csrw_ss(S_STRIDE_WRITER_3_0, 8);
@@ -335,6 +429,16 @@ void launch_cgra_0(int32_t delta_config_data, int32_t delta_comp_data, int32_t d
 		csrw_ss(T_STRIDE_WRITER_3_1,    0);
 		csrw_ss(T_BOUND_WRITER_3_2,    0);
 		csrw_ss(T_STRIDE_WRITER_3_2,    0);
+		csrw_ss(T_BOUND_WRITER_3_3,    0);
+		csrw_ss(T_STRIDE_WRITER_3_3,    0);
+		csrw_ss(T_BOUND_WRITER_3_4,    0);
+		csrw_ss(T_STRIDE_WRITER_3_4,    0);
+		csrw_ss(T_BOUND_WRITER_3_5,    0);
+		csrw_ss(T_STRIDE_WRITER_3_5,    0);
+		csrw_ss(T_BOUND_WRITER_3_6,    0);
+		csrw_ss(T_STRIDE_WRITER_3_6,    0);
+		csrw_ss(T_BOUND_WRITER_3_7,    0);
+		csrw_ss(T_STRIDE_WRITER_3_7,    0);
 		// WRITER_4
 		csrw_ss(BASE_PTR_WRITER_4_LOW, (uint32_t)(snrt_l1_next() + delta_store_data +   0));
 		csrw_ss(S_STRIDE_WRITER_4_0, 8);
@@ -344,6 +448,16 @@ void launch_cgra_0(int32_t delta_config_data, int32_t delta_comp_data, int32_t d
 		csrw_ss(T_STRIDE_WRITER_4_1,    0);
 		csrw_ss(T_BOUND_WRITER_4_2,    1);
 		csrw_ss(T_STRIDE_WRITER_4_2,    0);
+		csrw_ss(T_BOUND_WRITER_4_3,    1);
+		csrw_ss(T_STRIDE_WRITER_4_3,    0);
+		csrw_ss(T_BOUND_WRITER_4_4,    1);
+		csrw_ss(T_STRIDE_WRITER_4_4,    0);
+		csrw_ss(T_BOUND_WRITER_4_5,    1);
+		csrw_ss(T_STRIDE_WRITER_4_5,    0);
+		csrw_ss(T_BOUND_WRITER_4_6,    1);
+		csrw_ss(T_STRIDE_WRITER_4_6,    0);
+		csrw_ss(T_BOUND_WRITER_4_7,    1);
+		csrw_ss(T_STRIDE_WRITER_4_7,    0);
 		// WRITER_5
 		csrw_ss(BASE_PTR_WRITER_5_LOW, (uint32_t)(snrt_l1_next() + delta_store_data +   0));
 		csrw_ss(S_STRIDE_WRITER_5_0, 8);
@@ -353,6 +467,16 @@ void launch_cgra_0(int32_t delta_config_data, int32_t delta_comp_data, int32_t d
 		csrw_ss(T_STRIDE_WRITER_5_1,    0);
 		csrw_ss(T_BOUND_WRITER_5_2,    0);
 		csrw_ss(T_STRIDE_WRITER_5_2,    0);
+		csrw_ss(T_BOUND_WRITER_5_3,    0);
+		csrw_ss(T_STRIDE_WRITER_5_3,    0);
+		csrw_ss(T_BOUND_WRITER_5_4,    0);
+		csrw_ss(T_STRIDE_WRITER_5_4,    0);
+		csrw_ss(T_BOUND_WRITER_5_5,    0);
+		csrw_ss(T_STRIDE_WRITER_5_5,    0);
+		csrw_ss(T_BOUND_WRITER_5_6,    0);
+		csrw_ss(T_STRIDE_WRITER_5_6,    0);
+		csrw_ss(T_BOUND_WRITER_5_7,    0);
+		csrw_ss(T_STRIDE_WRITER_5_7,    0);
 		// WRITER_6
 		csrw_ss(BASE_PTR_WRITER_6_LOW, (uint32_t)(snrt_l1_next() + delta_store_data +   0));
 		csrw_ss(S_STRIDE_WRITER_6_0, 8);
@@ -362,6 +486,16 @@ void launch_cgra_0(int32_t delta_config_data, int32_t delta_comp_data, int32_t d
 		csrw_ss(T_STRIDE_WRITER_6_1,    0);
 		csrw_ss(T_BOUND_WRITER_6_2,    0);
 		csrw_ss(T_STRIDE_WRITER_6_2,    0);
+		csrw_ss(T_BOUND_WRITER_6_3,    0);
+		csrw_ss(T_STRIDE_WRITER_6_3,    0);
+		csrw_ss(T_BOUND_WRITER_6_4,    0);
+		csrw_ss(T_STRIDE_WRITER_6_4,    0);
+		csrw_ss(T_BOUND_WRITER_6_5,    0);
+		csrw_ss(T_STRIDE_WRITER_6_5,    0);
+		csrw_ss(T_BOUND_WRITER_6_6,    0);
+		csrw_ss(T_STRIDE_WRITER_6_6,    0);
+		csrw_ss(T_BOUND_WRITER_6_7,    0);
+		csrw_ss(T_STRIDE_WRITER_6_7,    0);
 		// WRITER_7
 		csrw_ss(BASE_PTR_WRITER_7_LOW, (uint32_t)(snrt_l1_next() + delta_store_data +   0));
 		csrw_ss(S_STRIDE_WRITER_7_0, 8);
@@ -371,6 +505,16 @@ void launch_cgra_0(int32_t delta_config_data, int32_t delta_comp_data, int32_t d
 		csrw_ss(T_STRIDE_WRITER_7_1,    0);
 		csrw_ss(T_BOUND_WRITER_7_2,    0);
 		csrw_ss(T_STRIDE_WRITER_7_2,    0);
+		csrw_ss(T_BOUND_WRITER_7_3,    0);
+		csrw_ss(T_STRIDE_WRITER_7_3,    0);
+		csrw_ss(T_BOUND_WRITER_7_4,    0);
+		csrw_ss(T_STRIDE_WRITER_7_4,    0);
+		csrw_ss(T_BOUND_WRITER_7_5,    0);
+		csrw_ss(T_STRIDE_WRITER_7_5,    0);
+		csrw_ss(T_BOUND_WRITER_7_6,    0);
+		csrw_ss(T_STRIDE_WRITER_7_6,    0);
+		csrw_ss(T_BOUND_WRITER_7_7,    0);
+		csrw_ss(T_STRIDE_WRITER_7_7,    0);
 		// STREAMER handles end
 
 
