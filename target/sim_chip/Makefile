@@ -80,14 +80,19 @@ VCS_FLAGS += +nospecify
 VCS_FLAGS += -Mdir=work-vcs
 VCS_FLAGS += -Mlib=work-vcs
 VCS_FLAGS += -full64
+VCS_FLAGS += +lint=TFIPC-L
+# Additional Optimizations
+VCS_FLAGS += -O4
+# Multi-threading compilation
+VCS_FLAGS += -j16
 # Multi-core
-VCS_FLAGS += -fgp=multisocket
+VCS_FLAGS += -fgp# =multisocket
 # Debug Options
 VCS_FLAGS += -assert disable_cover
-VCS_FLAGS += -kdb
-VCS_FLAGS += +vcs+fsdbon
-VCS_FLAGS += +lint=TFIPC-L
-VCS_FLAGS += -debug_access+all
+# Waveform Visibility
+# VCS_FLAGS += -kdb
+# VCS_FLAGS += +vcs+fsdbon
+# VCS_FLAGS += -debug_access+all
 
 # Verilated and compiled Occamy system
 VLT_AR     = ${VLT_BUILDDIR}/Vtestharness__ALL.a
@@ -275,9 +280,7 @@ $(VCS_BUILDDIR):
 $(VCS_BUILDDIR)/compile.sh: $(BENDER_LOCK) | $(VCS_BUILDDIR) testharness/testharness.sv
 	mkdir -p $(VCS_BUILDDIR)
 	${BENDER} script vcs ${VCS_BENDER} --vlog-arg="${VLOGAN_FLAGS}" --vcom-arg="${VHDLAN_FLAGS}" > $@
-	# echo '${VCS} -sverilog -full64 -assert svaext -assert disable_cover -debug_acc+all+dmptf -kdb -ntb_opts sv -CCFLAGS="${TB_CC_FLAGS}" -o ../bin/hemaia_chip.simv -top testharness' >> $@
 	chmod +x $@
-	# $(VCS_SEPP) $@ > $(VCS_BUILDDIR)/compile.log
 
 $(BIN_DIR)/occamy_chip.vcs: $(VCS_BUILDDIR)/compile.sh
 	bash work-vcs/compile.sh
