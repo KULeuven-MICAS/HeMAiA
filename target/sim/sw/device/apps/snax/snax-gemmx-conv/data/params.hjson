@@ -23,7 +23,7 @@
   channel_en_C: 1,
 
   // memory space configurations
-  interleaved_address: 1,
+  interleaved_address: 0,
   memory_size: 128,
 
   // hardware parameters
