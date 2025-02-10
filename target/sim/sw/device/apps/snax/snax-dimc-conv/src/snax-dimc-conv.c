@@ -63,32 +63,32 @@ int main() {
         if (snrt_is_compute_core()){
             printf("COMPUTE CORE\n");
 
-            /**********************************************************************/
-            // configure the accelerator
-            /**********************************************************************/
             printf("ENTERING CONV MODE\n");
 
-            dimc_query_busy();
-
-            // printf("QUERYING BUSY SUCCEEDED\n");
+            uint32_t busy = dimc_query_busy();
+            printf("%d: busy\n", busy);
+            printf("QUERYING BUSY SUCCEEDED\n");
 
             configure_accelerator();
 
             printf("CONFIGURING ACCELERATOR SUCCEEDED\n");
-            /**********************************************************************/
-            // configure the accelerator
-            /**********************************************************************/
 
-            // load convolution kernels
-            dimc_load_kernel();
+            busy = dimc_query_busy();
+            printf("%d: busy\n", busy);
+            printf("QUERYING BUSY SUCCEEDED\n");
 
-            // printf("STARTING LOADING KERNEL SUCCEEDED\n");
+            printf("CONFIGURING STREAMERS for KERNEL\n");
+            dimc_set_streamer_dim_w((64*16), 1, 64, 0, 8, (uint32_t)(local_final_res));
+            dimc_set_streamer_dim_r0(145, 1, 256, 0, 8, (uint32_t)(local_kernel));
+            dimc_set_streamer_dim_r1(145, 1, 256, 0, 8, (uint32_t)(local_kernel + 64));
+            dimc_set_streamer_dim_r2(145, 1, 256, 0, 8, (uint32_t)(local_kernel + 128));
+            dimc_set_streamer_dim_r3(145, 1, 256, 0, 8, (uint32_t)(local_kernel + 192));
+            dimc_start_streamer();
 
-            /**********************************************************************/
-            // configure the streamer
-            /**********************************************************************/
+            dimc_start_conv();
 
             // LOAD KERNELS
+            /*
             printf("CONFIGURING STREAMERS for KERNEL\n");
             dimc_set_streamer_dim_w(0, 0, 0, 0, 0, 0);
             dimc_set_streamer_dim_r0(1, 1, 256, 0, 8, (uint32_t)(local_kernel));
@@ -98,21 +98,11 @@ int main() {
 
             dimc_start_streamer();
 
+            dimc_start_conv();
+
             while (dimc_is_streamer_busy()) {
                 // printf("STREAMER BUSY\n");
             }
-
-            /**********************************************************************/
-            // configure the accelerator
-            /**********************************************************************/
-            dimc_load_act_conv();
-            while (dimc_is_streamer_busy()) { }
-
-            // printf("STARTING LOADING ACTIVATION SUCCEEDED\n");
-
-            /**********************************************************************/
-            // configure the streamer
-            /**********************************************************************/
 
             // LOAD ACTIVATION
             printf("CONFIGURING STREAMERS for ACTIVATION\n");
@@ -124,12 +114,12 @@ int main() {
             // printf("STREAMER CONFIGURED for ACTIVATION\n");
 
             dimc_start_streamer();
+            */
 
-            /**********************************************************************/
-            // configure the accelerator
-            /**********************************************************************/
+            busy = dimc_query_busy();
+            printf("%d: busy\n", busy);
+            printf("QUERYING BUSY SUCCEEDED\n");
 
-            dimc_start_conv();
 
             // Wait until the accelerator is done
             while (dimc_is_streamer_busy()) { }

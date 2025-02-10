@@ -275,7 +275,7 @@ int main() {
                 // Split each uint64_t element into 8 uint8_t elements
                 for (int j = 0; j < 8; ++j) {
                     uint8_t tmp_res = (uint8_t)((value >> (j * 8)) & 0xFF);
-                    printf("%d ", tmp_res);
+                    // printf("%d ", tmp_res);
                     if(tmp_res != gold[index + j]) {
                         printf("MISMATCH at %d, res:%d, gold:%d\n", (index + j), tmp_res, gold[index + j]);
                         err += 1;
