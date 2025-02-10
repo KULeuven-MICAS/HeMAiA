@@ -22,7 +22,7 @@ int main() {
     if (snrt_cluster_idx() == 0) {
         if (snrt_is_dm_core()) {
             tcdm0_start_addr = (int8_t*)snrt_cluster_base_addrl();
-            printf("The C0 TCDM ADDR is %p \n", tcdm0_start_addr);
+            printf("The C0 TCDM ADDR is %p \r\n", tcdm0_start_addr);
         }
     }
     snrt_global_barrier();
@@ -30,14 +30,14 @@ int main() {
     if (snrt_cluster_idx() == 1) {
         if (snrt_is_dm_core()) {
             tcdm1_start_addr = (int8_t*)snrt_cluster_base_addrl();
-            printf("The C1 TCDM ADDR is %p \n", tcdm1_start_addr);
+            printf("The C1 TCDM ADDR is %p \r\n", tcdm1_start_addr);
         }
     }
     snrt_global_barrier();
     // C0 Load the data from l3 -> l1
     if (snrt_cluster_idx() == 0) {
         if (snrt_is_dm_core()) {
-            printf("[C0] Start to load data from %p\n", test_data);
+            printf("[C0] Start to load data from %p\r\n", test_data);
             snrt_dma_start_1d(tcdm0_start_addr, test_data, length_data);
             snrt_dma_wait_all();
         }
@@ -48,7 +48,7 @@ int main() {
     // Thenc C1 fetches data from C0
     if (snrt_cluster_idx() == 1) {
         if (snrt_is_dm_core()) {
-            printf("[C1] Load data from C0 TCDM %p\n", tcdm0_start_addr);
+            printf("[C1] Load data from C0 TCDM %p\r\n", tcdm0_start_addr);
             snrt_dma_start_1d(tcdm1_start_addr, tcdm0_start_addr, length_data);
             snrt_dma_wait_all();
         }
@@ -59,12 +59,12 @@ int main() {
     // Start to check
     if (snrt_cluster_idx() == 0) {
         if (snrt_cluster_core_idx() == 0) {
-            printf("C0 Checking the results\n");
+            printf("C0 Checking the results\r\n");
             for (int i = 0; i < length_data; i++) {
                 if (tcdm0_start_addr[i] != test_data[i]) {
                     err++;
-                    printf("C0 data is incorrect!\n");
-                    printf("tcdm0[%d]=%d, test_data[%d]=%d\n", i,
+                    printf("C0 data is incorrect!\r\n");
+                    printf("tcdm0[%d]=%d, test_data[%d]=%d\r\n", i,
                            tcdm0_start_addr[i], i, test_data[i]);
                     return -1;
                 }
@@ -74,12 +74,12 @@ int main() {
     snrt_global_barrier();
     if (snrt_cluster_idx() == 1) {
         if (snrt_cluster_core_idx() == 0) {
-            printf("C1 Checking the results\n");
+            printf("C1 Checking the results\r\n");
             for (int i = 0; i < length_data; i++) {
                 if (tcdm1_start_addr[i] != test_data[i]) {
                     err++;
-                    printf("C1 data is incorrect!\n");
-                    printf("tcdm0[%d]=%d, test_data[%d]=%d\n", i,
+                    printf("C1 data is incorrect!\r\n");
+                    printf("tcdm0[%d]=%d, test_data[%d]=%d\r\n", i,
                            tcdm1_start_addr[i], i, test_data[i]);
                     return -1;
                 }
@@ -90,7 +90,7 @@ int main() {
     snrt_global_barrier();
     if (snrt_cluster_idx() == 0) {
         if (snrt_is_dm_core()) {
-            printf("Checking all done! No error!\n");
+            printf("Checking all done! No error!\r\n");
         }
     }
 
