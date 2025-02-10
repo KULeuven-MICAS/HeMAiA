@@ -6,7 +6,7 @@
 MKFILE_PATH := $(abspath $(lastword $(MAKEFILE_LIST)))
 MKFILE_DIR := $(dir $(MKFILE_PATH))
 
-CFG_OVERRIDE ?= target/rtl/cfg/hemaia.hjson
+CFG_OVERRIDE ?= target/rtl/cfg/hemaia_tapeout.hjson
 CFG = $(realpath $(CFG_OVERRIDE))
 
 clean:
