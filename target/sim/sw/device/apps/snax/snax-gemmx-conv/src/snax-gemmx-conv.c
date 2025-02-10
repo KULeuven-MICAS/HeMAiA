@@ -144,7 +144,7 @@ int main() {
                 }
             }
 
-            printf("SNAX GEMM Conv2d: %s, Error: %d . bypassSIMD = %d .\n",
+            printf("SNAX GEMM Conv2d: %s, Error: %d . bypassSIMD = %d .\r\n",
                    err ? "FAIL" : "PASS", err, bypassSIMD);
         };
 

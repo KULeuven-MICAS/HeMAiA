@@ -57,25 +57,25 @@ int main() {
             // --------------------- Configure the Ext --------------------- //
 
             if (xdma_disable_dst_ext(0) != 0) {
-                printf("Error in disabling xdma extension 0\n");
+                printf("Error in disabling xdma extension 0\r\n");
                 err++;
             } else {
-                printf("The xdma extension 0 is disabled\n");
+                printf("The xdma extension 0 is disabled\r\n");
             }
 
             uint32_t ext_param_maxpool_size[1] = {reduceLen};
             if (xdma_enable_dst_ext(1, ext_param_maxpool_size) != 0) {
-                printf("Error in enabling xdma extension 1\n");
+                printf("Error in enabling xdma extension 1\r\n");
                 err++;
             } else {
-                printf("The xdma extension 1 is enabled\n");
+                printf("The xdma extension 1 is enabled\r\n");
             }
 
             if (xdma_disable_dst_ext(2) != 0) {
-                printf("Error in disabling xdma extension 2\n");
+                printf("Error in disabling xdma extension 2\r\n");
                 err++;
             } else {
-                printf("The xdma extension 2 is disabled\n");
+                printf("The xdma extension 2 is disabled\r\n");
             }
 
             // --------------------- Configure the AGU --------------------- //
@@ -89,12 +89,12 @@ int main() {
             // //
             for (int i = 0; i < output_data_len; i++) {
                 if ((int8_t)tcdm_out[i] != C_golden[i]) {
-                    printf("The maxpool is incorrect!\n");
+                    printf("The maxpool is incorrect!\r\n");
                     printf("tcdm_out[%d]=%d, C_golden[%d]=%d", i,
                            (int8_t)tcdm_out[i], i, C_golden[i]);
                 }
             }
-            printf("Checking is done. All values are right\n");
+            printf("Checking is done. All values are right\r\n");
         }
 
         return 0;

@@ -107,7 +107,7 @@ int main() {
                     check_gemmx_result_D32(local_d32, D32, Batch, M, N, false);
             }
 
-            printf("SNAX GEMM Matmul: %s, Error: %d . bypassSIMD = %d .\n",
+            printf("SNAX GEMM Matmul: %s, Error: %d . bypassSIMD = %d .\r\n",
                    err ? "FAIL" : "PASS", err, bypassSIMD);
         };
 
