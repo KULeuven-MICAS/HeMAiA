@@ -9,7 +9,7 @@
 #include "snrt.h"
 
 int main() {
-    if (snrt_cluster_idx == 1) {  // Set err value for checking
+    if (snrt_cluster_idx() == 1) {  // Set err value for checking
         // Set err value for checking
         int err = 0;
         // Obtain the start address of the TCDM memory

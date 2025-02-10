@@ -14,7 +14,7 @@
 // We use several nested loops to iterate over the input data and weights,
 // achieving implicit im2col
 int main() {
-    if (snrt_cluster_idx == 1) {  // Set err value for checking
+    if (snrt_cluster_idx() == 1) {  // Set err value for checking
         int err = 0;
 
         // Prepare addresses pointers in TCDM for DMA
