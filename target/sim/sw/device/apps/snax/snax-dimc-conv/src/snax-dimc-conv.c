@@ -11,7 +11,7 @@ static int err = 0;
 
 int main() {
 
-    // printf("Starting the DIMC CONV test\n");
+    // printf("Starting the DIMC CONV test\r\n");
 
     // Set err value for checking
     err = 0;
@@ -30,7 +30,7 @@ int main() {
         local_final_res = (uint64_t *)(local_activation_qkt + qkt_activation_length);
 
         if(snrt_is_dm_core()) {
-            printf("DMA core will be configured\n");
+            printf("DMA core will be configured\r\n");
 
             // This measures the start of cycle count
             // for preloading the data to the L1 memory
@@ -38,7 +38,7 @@ int main() {
             /**********************************************************************/
             // initialize TCDM by DMA
             /**********************************************************************/
-            printf("INITIALIZING TCDM\n");
+            printf("INITIALIZING TCDM\r\n");
 
             // read matrix Q from data.h
             int kernel_size = kernel_length * sizeof(uint8_t);
@@ -54,30 +54,30 @@ int main() {
 
             uint32_t end_dma_load = snrt_mcycle();
 
-            printf("DMA core exits\n"); 
+            printf("DMA core exits\r\n"); 
         }
 
         // Wait until DMA transfer is done
         snrt_cluster_hw_barrier();
 
         if (snrt_is_compute_core()){
-            printf("COMPUTE CORE\n");
+            printf("COMPUTE CORE\r\n");
 
-            printf("ENTERING CONV MODE\n");
+            printf("ENTERING CONV MODE\r\n");
 
             uint32_t busy = dimc_query_busy();
-            printf("%d: busy\n", busy);
-            printf("QUERYING BUSY SUCCEEDED\n");
+            printf("%d: busy\r\n", busy);
+            printf("QUERYING BUSY SUCCEEDED\r\n");
 
             configure_accelerator();
 
-            printf("CONFIGURING ACCELERATOR SUCCEEDED\n");
+            printf("CONFIGURING ACCELERATOR SUCCEEDED\r\n");
 
             busy = dimc_query_busy();
-            printf("%d: busy\n", busy);
-            printf("QUERYING BUSY SUCCEEDED\n");
+            printf("%d: busy\r\n", busy);
+            printf("QUERYING BUSY SUCCEEDED\r\n");
 
-            printf("CONFIGURING STREAMERS for KERNEL\n");
+            printf("CONFIGURING STREAMERS for KERNEL\r\n");
             dimc_set_streamer_dim_w((64*16), 1, 64, 0, 8, (uint32_t)(local_final_res));
             dimc_set_streamer_dim_r0(145, 1, 256, 0, 8, (uint32_t)(local_kernel));
             dimc_set_streamer_dim_r1(145, 1, 256, 0, 8, (uint32_t)(local_kernel + 64));
@@ -89,7 +89,7 @@ int main() {
 
             // LOAD KERNELS
             /*
-            printf("CONFIGURING STREAMERS for KERNEL\n");
+            printf("CONFIGURING STREAMERS for KERNEL\r\n");
             dimc_set_streamer_dim_w(0, 0, 0, 0, 0, 0);
             dimc_set_streamer_dim_r0(1, 1, 256, 0, 8, (uint32_t)(local_kernel));
             dimc_set_streamer_dim_r1(1, 1, 256, 0, 8, (uint32_t)(local_kernel + 64));
@@ -101,30 +101,30 @@ int main() {
             dimc_start_conv();
 
             while (dimc_is_streamer_busy()) {
-                // printf("STREAMER BUSY\n");
+                // printf("STREAMER BUSY\r\n");
             }
 
             // LOAD ACTIVATION
-            printf("CONFIGURING STREAMERS for ACTIVATION\n");
+            printf("CONFIGURING STREAMERS for ACTIVATION\r\n");
             dimc_set_streamer_dim_w((64*16), 1, 64, 0, 8, (uint32_t)(local_final_res));
             dimc_set_streamer_dim_r0(144, 1, 256, 0, 8, (uint32_t)(local_activation_qkv));
             dimc_set_streamer_dim_r1(144, 1, 256, 0, 8, (uint32_t)(local_activation_qkv + 8));
             dimc_set_streamer_dim_r2(144, 1, 256, 0, 8, (uint32_t)(local_activation_qkv + 16));
             dimc_set_streamer_dim_r3(144, 1, 256, 0, 8, (uint32_t)(local_activation_qkv + 24));
-            // printf("STREAMER CONFIGURED for ACTIVATION\n");
+            // printf("STREAMER CONFIGURED for ACTIVATION\r\n");
 
             dimc_start_streamer();
             */
 
             busy = dimc_query_busy();
-            printf("%d: busy\n", busy);
-            printf("QUERYING BUSY SUCCEEDED\n");
+            printf("%d: busy\r\n", busy);
+            printf("QUERYING BUSY SUCCEEDED\r\n");
 
 
             // Wait until the accelerator is done
             while (dimc_is_streamer_busy()) { }
 
-            printf("GO CHECK FINAL RESULT\n");
+            printf("GO CHECK FINAL RESULT\r\n");
 
             int mismatch = 0;
 
@@ -163,13 +163,13 @@ int main() {
                     if (res_bits[j] != gold_bits[j]) {
                         match = false;
                         err += 1;
-                        printf("fuck\n");
+                        printf("fuck\r\n");
                         break;
                     }
                 }
 
             }
-            printf("MISMATCHES: %d\n", err);
+            printf("MISMATCHES: %d\r\n", err);
         }
     }
 
