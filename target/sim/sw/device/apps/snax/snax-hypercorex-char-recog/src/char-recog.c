@@ -228,6 +228,12 @@ int main() {
                     err++;
                 }
             };
+
+            if (err == 0) {
+                printf("PASS\n");
+            } else {
+                printf("FAIL\n");
+            };
         };
 
         // Synchronize cores

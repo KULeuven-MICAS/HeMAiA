@@ -73,6 +73,9 @@ int main() {
                 test_streamer_test_val5, test_streamer_test_val6,
                 test_streamer_test_val7);
 
+            // Write to observable CSR for visibile state
+            write_csr_obs(0x001);
+
             //-------------------------------
             // Read from streamer RW registers
             //-------------------------------
@@ -290,6 +293,9 @@ int main() {
                 err += 1;
             };
 
+            // Write to observable CSR for visibile state
+            write_csr_obs(0x002);
+
             //-------------------------------
             // Write to several Hypercorex registers
             //-------------------------------
@@ -322,6 +328,9 @@ int main() {
             hypercorex_set_inst_loop_count(test_inst_loop_count1,
                                         test_inst_loop_count2,
                                         test_inst_loop_count3);
+
+            // Write to observable CSR for visibile state
+            write_csr_obs(0x003);
 
             //-------------------------------
             // Read from registers if they have correct values
@@ -392,6 +401,14 @@ int main() {
                 err += 1;
             }
 
+            // Write to observable CSR for visibile state
+            write_csr_obs(0x004);
+
+            if(err == 0){
+                printf("PASS\n");
+            } else {
+                printf("FAIL\n");
+            }
         };
 
     };
