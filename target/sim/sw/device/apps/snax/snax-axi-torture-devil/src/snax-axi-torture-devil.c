@@ -130,7 +130,7 @@ int main() {
     // Start to check: Ensure all cores go to one of the branch
     if (current_chip_id == 0x00 && snrt_is_dm_core() &&
         (snrt_cluster_idx() == 0 | snrt_cluster_idx() == 1)) {
-        int8_t* tcdm_start_addr = (int8_t*)snrt_cluster_base_addrl();
+        uint32_t* tcdm_start_addr = (uint32_t*)snrt_cluster_base_addrl();
         printf("Cluster %d Checking the results\r\n", snrt_cluster_idx());
         for (int i = 0; i < length_data; i++) {
             if (tcdm_start_addr[i] != test_data[i]) {
@@ -143,7 +143,7 @@ int main() {
         }
     } else if (current_chip_id == 0x10 && snrt_is_dm_core() &&
                (snrt_cluster_idx() == 2 | snrt_cluster_idx() == 3)) {
-        int8_t* tcdm_start_addr = (int8_t*)snrt_cluster_base_addrl();
+        uint32_t* tcdm_start_addr = (uint32_t*)snrt_cluster_base_addrl();
         printf("Cluster %d Checking the results\r\n", snrt_cluster_idx());
         for (int i = 0; i < length_data; i++) {
             if (tcdm_start_addr[i] != test_data[i]) {

@@ -40,6 +40,7 @@ DEVICE_APPS += snax/snax-hypercorex-char-recog
 DEVICE_APPS += snax/snax-xdma-maxpool
 DEVICE_APPS += snax/snax-xdma-memset
 DEVICE_APPS += snax/snax-axi-torture
+DEVICE_APPS += snax/snax-axi-torture-devil
 
 # Dependencies
 INCDIRS += $(RUNTIME_DIR)

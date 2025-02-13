@@ -255,13 +255,27 @@ module testharness
   assign chip_${i}_${j}_payload_to_west_ready = '0;
   assign chip_${i}_${j}_link_available_east = '1;
   assign chip_${i}_${j}_payload_from_east = chip_${i+1}_${j}_payload_to_west;
-  assign chip_${i}_${j}_payload_from_east_valid = chip_${i+1}_${j}_payload_to_west_valid;
-  assign chip_${i}_${j}_payload_to_east_ready = chip_${i+1}_${j}_payload_from_west_ready;
+  congestion_emulator #(
+    .CONGESTION_LEVEL(${multichip_cfg["testbench_cfg"]["congestion_level"]})
+  ) i_congestion_emulator_from_${i+1}${j}_to_${i}${j} (
+    .clk_i(clk_i),
+    .valid_o(chip_${i}_${j}_payload_from_east_valid),
+    .ready_i(chip_${i}_${j}_payload_from_east_ready),
+    .valid_i(chip_${i+1}_${j}_payload_to_west_valid),
+    .ready_o(chip_${i+1}_${j}_payload_to_west_ready)
+  );
 %     elif i == max(x):
   assign chip_${i}_${j}_link_available_west = '1;
   assign chip_${i}_${j}_payload_from_west = chip_${i-1}_${j}_payload_to_east;
-  assign chip_${i}_${j}_payload_from_west_valid = chip_${i-1}_${j}_payload_to_east_valid;
-  assign chip_${i}_${j}_payload_to_west_ready = chip_${i-1}_${j}_payload_from_east_ready;
+  congestion_emulator #(
+    .CONGESTION_LEVEL(${multichip_cfg["testbench_cfg"]["congestion_level"]})
+  ) i_congestion_emulator_from_${i-1}${j}_to_${i}${j} (
+    .clk_i(clk_i),
+    .valid_o(chip_${i}_${j}_payload_from_west_valid),
+    .ready_i(chip_${i}_${j}_payload_from_west_ready),
+    .valid_i(chip_${i-1}_${j}_payload_to_east_valid),
+    .ready_o(chip_${i-1}_${j}_payload_to_east_ready)
+  );
   assign chip_${i}_${j}_link_available_east = '0;
   assign chip_${i}_${j}_payload_from_east = '0;
   assign chip_${i}_${j}_payload_from_east_valid = '0;
@@ -269,12 +283,26 @@ module testharness
 %     else:
   assign chip_${i}_${j}_link_available_west = '1;
   assign chip_${i}_${j}_payload_from_west = chip_${i-1}_${j}_payload_to_east;
-  assign chip_${i}_${j}_payload_from_west_valid = chip_${i-1}_${j}_payload_to_east_valid;
-  assign chip_${i}_${j}_payload_to_west_ready = chip_${i-1}_${j}_payload_from_east_ready;
+  congestion_emulator #(
+    .CONGESTION_LEVEL(${multichip_cfg["testbench_cfg"]["congestion_level"]})
+  ) i_congestion_emulator_from_${i-1}${j}_to_${i}${j} (
+    .clk_i(clk_i),
+    .valid_o(chip_${i}_${j}_payload_from_west_valid),
+    .ready_i(chip_${i}_${j}_payload_from_west_ready),
+    .valid_i(chip_${i-1}_${j}_payload_to_east_valid),
+    .ready_o(chip_${i-1}_${j}_payload_to_east_ready)
+  );
   assign chip_${i}_${j}_link_available_east = '1;
   assign chip_${i}_${j}_payload_from_east = chip_${i+1}_${j}_payload_to_west;
-  assign chip_${i}_${j}_payload_from_east_valid = chip_${i+1}_${j}_payload_to_west_valid;
-  assign chip_${i}_${j}_payload_to_east_ready = chip_${i+1}_${j}_payload_from_west_ready;
+  congestion_emulator #(
+    .CONGESTION_LEVEL(${multichip_cfg["testbench_cfg"]["congestion_level"]})
+  ) i_congestion_emulator_from_${i+1}${j}_to_${i}${j} (
+    .clk_i(clk_i),
+    .valid_o(chip_${i}_${j}_payload_from_east_valid),
+    .ready_i(chip_${i}_${j}_payload_from_east_ready),
+    .valid_i(chip_${i+1}_${j}_payload_to_west_valid),
+    .ready_o(chip_${i+1}_${j}_payload_to_west_ready)
+  );
 %     endif
   // Connect the north and south side of the chip
 %     if j == min(y):
@@ -284,13 +312,27 @@ module testharness
   assign chip_${i}_${j}_payload_to_north_ready = '0;
   assign chip_${i}_${j}_link_available_south = '1;
   assign chip_${i}_${j}_payload_from_south = chip_${i}_${j+1}_payload_to_north;
-  assign chip_${i}_${j}_payload_from_south_valid = chip_${i}_${j+1}_payload_to_north_valid;
-  assign chip_${i}_${j}_payload_to_south_ready = chip_${i}_${j+1}_payload_from_north_ready;
+  congestion_emulator #(
+    .CONGESTION_LEVEL(${multichip_cfg["testbench_cfg"]["congestion_level"]})
+  ) i_congestion_emulator_from_${i}${j+1}_to_${i}${j} (
+    .clk_i(clk_i),
+    .valid_o(chip_${i}_${j}_payload_from_south_valid),
+    .ready_i(chip_${i}_${j}_payload_from_south_ready),
+    .valid_i(chip_${i}_${j+1}_payload_to_north_valid),
+    .ready_o(chip_${i}_${j+1}_payload_to_north_ready)
+  );
 %     elif j == max(y):
   assign chip_${i}_${j}_link_available_north = '1;
   assign chip_${i}_${j}_payload_from_north = chip_${i}_${j-1}_payload_to_south;
-  assign chip_${i}_${j}_payload_from_north_valid = chip_${i}_${j-1}_payload_to_south_valid;
-  assign chip_${i}_${j}_payload_to_north_ready = chip_${i}_${j-1}_payload_from_south_ready;
+  congestion_emulator #(
+    .CONGESTION_LEVEL(${multichip_cfg["testbench_cfg"]["congestion_level"]})
+  ) i_congestion_emulator_from_${i}${j-1}_to_${i}${j} (
+    .clk_i(clk_i),
+    .valid_o(chip_${i}_${j}_payload_from_north_valid),
+    .ready_i(chip_${i}_${j}_payload_from_north_ready),
+    .valid_i(chip_${i}_${j-1}_payload_to_south_valid),
+    .ready_o(chip_${i}_${j-1}_payload_to_south_ready)
+  );
   assign chip_${i}_${j}_link_available_south = '0;
   assign chip_${i}_${j}_payload_from_south = '0;
   assign chip_${i}_${j}_payload_from_south_valid = '0;
@@ -298,12 +340,26 @@ module testharness
 %     else:
   assign chip_${i}_${j}_link_available_north = '1;
   assign chip_${i}_${j}_payload_from_north = chip_${i}_${j-1}_payload_to_south;
-  assign chip_${i}_${j}_payload_from_north_valid = chip_${i}_${j-1}_payload_to_south_valid;
-  assign chip_${i}_${j}_payload_to_north_ready = chip_${i}_${j-1}_payload_from_south_ready;
+  congestion_emulator #(
+    .CONGESTION_LEVEL(${multichip_cfg["testbench_cfg"]["congestion_level"]})
+  ) i_congestion_emulator_from_${i}${j-1}_to_${i}${j} (
+    .clk_i(clk_i),
+    .valid_o(chip_${i}_${j}_payload_from_north_valid),
+    .ready_i(chip_${i}_${j}_payload_from_north_ready),
+    .valid_i(chip_${i}_${j-1}_payload_to_south_valid),
+    .ready_o(chip_${i}_${j-1}_payload_to_south_ready)
+  );
   assign chip_${i}_${j}_link_available_south = '1;
   assign chip_${i}_${j}_payload_from_south = chip_${i}_${j+1}_payload_to_north;
-  assign chip_${i}_${j}_payload_from_south_valid = chip_${i}_${j+1}_payload_to_north_valid;
-  assign chip_${i}_${j}_payload_to_south_ready = chip_${i}_${j+1}_payload_from_north_ready;
+  congestion_emulator #(
+    .CONGESTION_LEVEL(${multichip_cfg["testbench_cfg"]["congestion_level"]})
+  ) i_congestion_emulator_from_${i}${j+1}_to_${i}${j} (
+    .clk_i(clk_i),
+    .valid_o(chip_${i}_${j}_payload_from_south_valid),
+    .ready_i(chip_${i}_${j}_payload_from_south_ready),
+    .valid_i(chip_${i}_${j+1}_payload_to_north_valid),
+    .ready_o(chip_${i}_${j+1}_payload_to_north_ready)
+  );
 %     endif
 %   endfor
 % endfor

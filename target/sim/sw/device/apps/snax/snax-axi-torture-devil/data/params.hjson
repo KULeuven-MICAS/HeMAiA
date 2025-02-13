@@ -5,6 +5,6 @@
 // Yunhao Deng <yunhao.deng@kuleuven.be>
 
 {
-    length_data: "1024*128/2", // Generate the data with the same size as the half TCDM
+    size_data: "2048", // Generate the data with the same size as the half TCDM
     torture_times: 1
 }

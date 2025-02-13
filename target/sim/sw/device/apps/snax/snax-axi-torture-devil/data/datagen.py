@@ -29,18 +29,18 @@ def emit_header_file(**kwargs):
     return emit_str
 
 
-MIN = -128
-MAX = 127
+MIN = 0
+MAX = (1 << 32) - 1
 
 
 def emit_gemm_data(**kwargs):
     data_str = ""
 
     # Generating random input data vector
-    data_in = np.random.randint(MIN, MAX, int(eval(kwargs["length_data"])))
-    data_str += format_scalar_definition("int32_t", "length_data", int(eval(kwargs["length_data"]))) + "\n"
+    data_in = np.random.randint(MIN, MAX, int(eval(kwargs["size_data"])/4))
+    data_str += format_scalar_definition("int32_t", "length_data", int(eval(kwargs["size_data"])/4)) + "\n"
     data_str += format_scalar_definition("int32_t", "torture_times", kwargs["torture_times"]) + "\n"
-    data_str += format_vector_definition("int8_t", "test_data", data_in)
+    data_str += format_vector_definition("uint32_t", "test_data", data_in)
     return data_str
 
 
