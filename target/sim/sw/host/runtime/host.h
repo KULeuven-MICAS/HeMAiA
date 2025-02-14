@@ -116,8 +116,28 @@ void initialize_wide_spm() {
     size_t wide_spm_size =
         (size_t)(&__wide_spm_end) - (size_t)(&__wide_spm_start);
     if (wide_spm_size)
-        sys_dma_blk_memcpy(SPM_WIDE_BASE_ADDR, (uint64_t)(&__wide_spm_start),
-                           wide_spm_size);
+        sys_dma_blk_memcpy(
+            (uint64_t)get_current_chip_baseaddress() | SPM_WIDE_BASE_ADDR,
+            (uint64_t)get_current_chip_baseaddress() | WIDE_ZERO_MEM_BASE_ADDR,
+            wide_spm_size);
+}
+
+void initialize_narrow_spm() {
+    size_t narrow_spm_size =
+        (size_t)(&__narrow_spm_end) - (size_t)(&__narrow_spm_start);
+    if (narrow_spm_size)
+        sys_dma_blk_memcpy(
+            (uint64_t)get_current_chip_baseaddress() | SPM_NARROW_BASE_ADDR,
+            (uint64_t)get_current_chip_baseaddress() | WIDE_ZERO_MEM_BASE_ADDR,
+            narrow_spm_size);
+}
+
+void initialize_comm_buffer(comm_buffer_t* comm_buffer_ptr) {
+    sys_dma_blk_memcpy(
+        (uint64_t)comm_buffer_ptr,
+        (uint64_t)get_current_chip_baseaddress() | WIDE_ZERO_MEM_BASE_ADDR,
+        sizeof(comm_buffer_t));
+    asm volatile("fence" ::: "memory");
 }
 
 void enable_fpu() {
@@ -832,3 +852,65 @@ uint32_t check_isolated_timeout(uint8_t chip_id, uint32_t max_tries,
 //         OCCAMY_HBM_XBAR_INTERLEAVED_ENA_REG_OFFSET + HBM_XBAR_CFG_BASE_ADDR;
 //     *((volatile uint32_t*)addr) = 1;
 // }
+
+//===============================================================
+// Chip Level Synchronization Mechanism
+//===============================================================
+
+void announce_chip_checkpoint(volatile comm_buffer_t* comm_buffer_ptr,
+                              uint8_t checkpoint) {
+    volatile uint8_t* this_chip_checkpoint =
+        &((*comm_buffer_ptr).chip_level_checkpoint[get_current_chip_id()]);
+    // Broadcast to all Chips
+    this_chip_checkpoint =
+        (uint8_t*)(((uint64_t)this_chip_checkpoint) | (((uint64_t)0xFF) << 40));
+    *this_chip_checkpoint = checkpoint;
+}
+
+void wait_chip_checkpoint(volatile comm_buffer_t* comm_buffer_ptr,
+                          uint8_t chip_id, uint8_t checkpoint) {
+    volatile uint8_t* target_chip_checkpoint =
+        &((*comm_buffer_ptr).chip_level_checkpoint[chip_id]);
+    // Broadcast to all Chips
+    while (*target_chip_checkpoint != checkpoint) {
+        asm volatile("fence.i" ::: "memory");
+    }
+}
+
+void wait_chips_checkpoint(volatile comm_buffer_t* comm_buffer_ptr,
+                           uint8_t top_left_chip_id,
+                           uint8_t bottom_right_chip_id, uint8_t checkpoint) {
+    volatile uint8_t* chip_level_checkpoint =
+        &((*comm_buffer_ptr).chip_level_checkpoint[0]);
+    uint8_t current_chip_id = get_current_chip_id();
+    uint8_t continue_loop = 1;
+    while (continue_loop) {
+        continue_loop = 0;
+        asm volatile("fence.i" ::: "memory");
+        for (uint8_t i = top_left_chip_id >> 4;
+             i <= (bottom_right_chip_id >> 4); i++) {
+            for (uint8_t j = top_left_chip_id & 0xF;
+                 j <= (bottom_right_chip_id & 0xF); j++) {
+                if ((*(chip_level_checkpoint + ((i << 4) + j)) != checkpoint) &&
+                    (current_chip_id != ((i << 4) + j))) {
+                    continue_loop = 1;
+                    break;
+                }
+            }
+        }
+    }
+}
+
+// Barrier is realized in software, to ensure that all other chips have reached
+// a certain checkpoint
+void chip_barrier(volatile comm_buffer_t* comm_buffer_ptr,
+                  uint8_t top_left_chip_id, uint8_t bottom_right_chip_id,
+                  uint8_t checkpoint) {
+    volatile uint8_t* chip_level_checkpoint =
+        &((*comm_buffer_ptr).chip_level_checkpoint[0]);
+    // Broadcast to all other chip on the progress of the chip
+    announce_chip_checkpoint(comm_buffer_ptr, checkpoint);
+    // Change the pointer back
+    wait_chips_checkpoint(comm_buffer_ptr, top_left_chip_id,
+                          bottom_right_chip_id, checkpoint);
+}

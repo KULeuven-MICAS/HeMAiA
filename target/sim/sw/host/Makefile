@@ -6,6 +6,7 @@
 
 # Add user applications to APPS variable
 APPS  = hello_world
+APPS += multichip_sync
 ifneq ($(findstring chiplet,$(CFG_OVERRIDE)),)
 # If chiplet cfg is used, offloaf_multichip is compiled with the support to execute applications on cores at different chips
 APPS += offload_multichip
