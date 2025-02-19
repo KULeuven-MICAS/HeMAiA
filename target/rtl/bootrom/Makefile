@@ -35,8 +35,8 @@ bootrom: bootrom.sv
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 	@echo "CC    <= $<"
 
-bootrom.elf bootrom.dump bootrom.bin: bootrom.S src/bootrom.o bootrom.ld
-	$(CC) $(CFLAGS) $(INCLUDES) -Tbootrom.ld $< src/bootrom.o -o bootrom.elf
+bootrom.elf bootrom.dump bootrom.bin: bootrom.S bootrom.ld
+	$(CC) $(CFLAGS) $(INCLUDES) -Tbootrom.ld $< -o bootrom.elf
 	$(OBJDUMP) -d bootrom.elf > bootrom.dump
 	$(OBJCOPY) -j .text -j .rodata -j .srodata -O binary bootrom.elf bootrom.bin
 
