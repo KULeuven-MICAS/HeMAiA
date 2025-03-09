@@ -6,50 +6,51 @@
 # Yunhao Deng <yunhao.deng@kuleuven.be>
 
 # 1 and 0 voltage reference
-# 1: LA20_P - BR42
-set_property PACKAGE_PIN BR42 [get_ports vref_vdd_o]
+# 1: J20.3 - LA20_N - BT21
+set_property PACKAGE_PIN BT41 [get_ports vref_vdd_o]
 set_property IOSTANDARD LVCMOS15 [get_ports vref_vdd_o]
 set_property DRIVE 12 [get_ports vref_vdd_o]
 
-# 0: LA20_N - BT41
-set_property PACKAGE_PIN BT41 [get_ports vref_gnd_o]
+# 0: J20.1 - LA20_P - BR42
+set_property PACKAGE_PIN BR42 [get_ports vref_gnd_o]
 set_property IOSTANDARD LVCMOS15 [get_ports vref_gnd_o]
 set_property DRIVE 12 [get_ports vref_gnd_o]
 
+
 # Four-wires UART with flow control
-# LA26P - CB41
-set_property PACKAGE_PIN CB41 [get_ports uart_rx_i]
+# 2CD0 - J1.10 - LA12_P - BW49
+set_property PACKAGE_PIN BW49 [get_ports uart_rx_i]
 set_property IOSTANDARD LVCMOS15 [get_ports uart_rx_i]
-# LA26N - CC42
-set_property PACKAGE_PIN CC42 [get_ports uart_tx_o]
+# 2CD1 - J1.12 - LA12_N - BW50
+set_property PACKAGE_PIN BW50 [get_ports uart_tx_o]
 set_property IOSTANDARD LVCMOS15 [get_ports uart_tx_o]
 # Flow Control
-# LA27P - CA38
-set_property PACKAGE_PIN CA38 [get_ports uart_cts_ni]
+# 2CD2 - J1.14 - LA13_P - CC49
+set_property PACKAGE_PIN CC49 [get_ports uart_cts_ni]
 set_property IOSTANDARD LVCMOS15 [get_ports uart_cts_ni]
 set_property PULLUP TRUE [get_ports uart_cts_ni]
-# LA27N - CB39
-set_property PACKAGE_PIN CB39 [get_ports uart_rts_no]
+# 2CD3 - J1.16 - LA13_N - CD50
+set_property PACKAGE_PIN CD50 [get_ports uart_rts_no]
 set_property IOSTANDARD LVCMOS15 [get_ports uart_rts_no]
 
 # Six-wires SPIx4 (Slave)
-# LA15_N - CD52
-set_property PACKAGE_PIN CD52 [get_ports spis_sd_io[0]]
+# J1.39 - LA09_N - CD46
+set_property PACKAGE_PIN CD46 [get_ports spis_sd_io[0]]
 set_property IOSTANDARD LVCMOS15 [get_ports spis_sd_io[0]]
-# LA16_P - CA51
-set_property PACKAGE_PIN CA51 [get_ports spis_sd_io[1]]
+# J1.37 - LA09_P - CC45
+set_property PACKAGE_PIN CC45 [get_ports spis_sd_io[1]]
 set_property IOSTANDARD LVCMOS15 [get_ports spis_sd_io[1]]
-# LA16_N - CB52
-set_property PACKAGE_PIN CB52 [get_ports spis_sd_io[2]]
+# J1.35 - LA08_N - BY50
+set_property PACKAGE_PIN BY50 [get_ports spis_sd_io[2]]
 set_property IOSTANDARD LVCMOS15 [get_ports spis_sd_io[2]]
-# LA17_P - BU41
-set_property PACKAGE_PIN BU41 [get_ports spis_sd_io[3]]
+# J1.33 - LA08_P - BY49
+set_property PACKAGE_PIN BY49 [get_ports spis_sd_io[3]]
 set_property IOSTANDARD LVCMOS15 [get_ports spis_sd_io[3]]
-# LA17_N - BU42
-set_property PACKAGE_PIN BU42 [get_ports spis_csb_i]
+# J1.31 - LA07_N - CC50
+set_property PACKAGE_PIN CC50 [get_ports spis_csb_i]
 set_property IOSTANDARD LVCMOS15 [get_ports spis_csb_i]
-# LA18_P - BW39
-set_property PACKAGE_PIN BW39 [get_ports spis_sck_i]
+# J1.29 - LA07_P - CB49
+set_property PACKAGE_PIN CB49 [get_ports spis_sck_i]
 set_property IOSTANDARD LVCMOS15 [get_ports spis_sck_i]
 
 create_clock -period 50.0 -name spi_s_sck [get_ports spis_sck_i]

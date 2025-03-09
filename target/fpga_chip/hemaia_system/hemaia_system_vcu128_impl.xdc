@@ -6,50 +6,50 @@
 # Yunhao Deng <yunhao.deng@kuleuven.be>
 
 # 1 and 0 voltage reference
-# 1: LA20_P - A21
-set_property PACKAGE_PIN A21 [get_ports vref_vdd_o]
+# 1: J20.3 - LA20_N - A20
+set_property PACKAGE_PIN A20 [get_ports vref_vdd_o]
 set_property IOSTANDARD LVCMOS18 [get_ports vref_vdd_o]
 set_property DRIVE 12 [get_ports vref_vdd_o]
 
-# 0: LA20_N - A20
-set_property PACKAGE_PIN A20 [get_ports vref_gnd_o]
+# 0: J20.1 - LA20_P - A21
+set_property PACKAGE_PIN A21 [get_ports vref_gnd_o]
 set_property IOSTANDARD LVCMOS18 [get_ports vref_gnd_o]
 set_property DRIVE 12 [get_ports vref_gnd_o]
 
 # Four-wires UART with flow control
-# LA26P - D17
-set_property PACKAGE_PIN D17 [get_ports uart_rx_i]
+# 2CD0 - J1.10 - LA12_P - J22
+set_property PACKAGE_PIN J22 [get_ports uart_rx_i]
 set_property IOSTANDARD LVCMOS18 [get_ports uart_rx_i]
-# LA26N - D16
+# 2CD1 - J1.12 - LA12_N - H22
 set_property PACKAGE_PIN D16 [get_ports uart_tx_o]
 set_property IOSTANDARD LVCMOS18 [get_ports uart_tx_o]
 # Flow Control
-# LA27P - E21
-set_property PACKAGE_PIN E21 [get_ports uart_cts_ni]
+# 2CD2 - J1.14 - LA13_P - A25
+set_property PACKAGE_PIN A25 [get_ports uart_cts_ni]
 set_property IOSTANDARD LVCMOS18 [get_ports uart_cts_ni]
 set_property PULLUP TRUE [get_ports uart_cts_ni]
-# LA27N - D21
-set_property PACKAGE_PIN D21 [get_ports uart_rts_no]
+# 2CD3 - J1.16 - LA13_N - A24
+set_property PACKAGE_PIN A24 [get_ports uart_rts_no]
 set_property IOSTANDARD LVCMOS18 [get_ports uart_rts_no]
 
 # Six-wires SPIx4 (Slave)
-# LA15_N - H20
-set_property PACKAGE_PIN H20 [get_ports spis_sd_io[0]]
+# J1.39 - LA09_N - D26
+set_property PACKAGE_PIN D26 [get_ports spis_sd_io[0]]
 set_property IOSTANDARD LVCMOS18 [get_ports spis_sd_io[0]]
-# LA16_P - K24
-set_property PACKAGE_PIN K24 [get_ports spis_sd_io[1]]
+# J1.37 - LA09_P - E26
+set_property PACKAGE_PIN E26 [get_ports spis_sd_io[1]]
 set_property IOSTANDARD LVCMOS18 [get_ports spis_sd_io[1]]
-# LA16_N - K23
-set_property PACKAGE_PIN K23 [get_ports spis_sd_io[2]]
+# J1.35 - LA08_N - D27
+set_property PACKAGE_PIN D27 [get_ports spis_sd_io[2]]
 set_property IOSTANDARD LVCMOS18 [get_ports spis_sd_io[2]]
-# LA17_P - D20
-set_property PACKAGE_PIN D20 [get_ports spis_sd_io[3]]
+# J1.33 - LA08_P - E27
+set_property PACKAGE_PIN E27 [get_ports spis_sd_io[3]]
 set_property IOSTANDARD LVCMOS18 [get_ports spis_sd_io[3]]
-# LA17_N - D21
-set_property PACKAGE_PIN D21 [get_ports spis_csb_i]
+# J1.31 - LA07_N - J27
+set_property PACKAGE_PIN J27 [get_ports spis_csb_i]
 set_property IOSTANDARD LVCMOS18 [get_ports spis_csb_i]
-# LA18_P - C22
-set_property PACKAGE_PIN C22 [get_ports spis_sck_i]
+# J1.29 - LA07_P - K27
+set_property PACKAGE_PIN K27 [get_ports spis_sck_i]
 set_property IOSTANDARD LVCMOS18 [get_ports spis_sck_i]
 
 create_clock -period 50.000 -name spi_s_sck [get_ports spis_sck_i]
