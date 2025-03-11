@@ -54,6 +54,8 @@ set_property PACKAGE_PIN CB49 [get_ports spis_sck_i]
 set_property IOSTANDARD LVCMOS15 [get_ports spis_sck_i]
 
 create_clock -period 50.0 -name spi_s_sck [get_ports spis_sck_i]
+set_property CLOCK_DEDICATED_ROUTE FALSE [get_nets spis_sck_i_IBUF]
+set_property CLOCK_DEDICATED_ROUTE ANY_CMT_REGION [get_nets spis_sck_i_IBUF_BUFGCE]
 
 # Four-wires GPIO_O connected to LEDs
 set_property PACKAGE_PIN BA49 [get_ports gpio_d_o[0]]
