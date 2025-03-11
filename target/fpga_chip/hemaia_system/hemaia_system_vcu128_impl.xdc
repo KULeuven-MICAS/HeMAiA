@@ -53,6 +53,8 @@ set_property PACKAGE_PIN K27 [get_ports spis_sck_i]
 set_property IOSTANDARD LVCMOS18 [get_ports spis_sck_i]
 
 create_clock -period 50.000 -name spi_s_sck [get_ports spis_sck_i]
+set_property CLOCK_DEDICATED_ROUTE FALSE [get_nets spis_sck_i_IBUF]
+set_property CLOCK_DEDICATED_ROUTE ANY_CMT_REGION [get_nets spis_sck_i_IBUF_BUFGCE]
 
 # Eight-wires GPIO_O connected to LEDs
 set_property PACKAGE_PIN BH24 [get_ports gpio_d_o[0]]
