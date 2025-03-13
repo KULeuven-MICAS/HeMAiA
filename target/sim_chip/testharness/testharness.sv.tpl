@@ -119,6 +119,7 @@ module testharness
   /// Uart signals
   logic tx_${i}_${j}, rx_${i}_${j};
 
+% if multichip_cfg['single_chip'] is False:
   /// Die2Die signals
   // East side
   logic chip_${i}_${j}_link_available_east;
@@ -166,6 +167,7 @@ module testharness
   logic chip_${i}_${j}_link_to_south_rts;
   logic chip_${i}_${j}_link_to_south_cts;
   logic chip_${i}_${j}_link_south_tx_mode;
+% endif
 
   occamy_chip i_occamy_${i}_${j} (
       .clk_i,
@@ -270,6 +272,7 @@ module testharness
 %   endfor
 % endfor
 
+% if multichip_cfg['single_chip'] is False:
 // Connect the signals: control signals
 % for i in x:
 %   for j in y:
@@ -391,5 +394,5 @@ module testharness
 %     endif
 %   endfor
 % endfor
-
+% endif
 endmodule
