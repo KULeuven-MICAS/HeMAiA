@@ -122,39 +122,50 @@ module testharness
   /// Die2Die signals
   // East side
   logic chip_${i}_${j}_link_available_east;
-  logic [596:0] chip_${i}_${j}_payload_from_east;
-  logic chip_${i}_${j}_payload_from_east_valid;
-  logic chip_${i}_${j}_payload_from_east_ready;
-  logic [596:0] chip_${i}_${j}_payload_to_east;
-  logic chip_${i}_${j}_payload_to_east_valid;
-  logic chip_${i}_${j}_payload_to_east_ready;
-
+  logic [207:0] chip_${i}_${j}_link_from_east [3];
+  logic [2:0] chip_${i}_${j}_link_from_east_valid;
+  logic [207:0] chip_${i}_${j}_link_to_east [3];
+  logic [2:0] chip_${i}_${j}_link_to_east_valid;
+  logic chip_${i}_${j}_link_from_east_rts;
+  logic chip_${i}_${j}_link_from_east_cts;
+  logic chip_${i}_${j}_link_to_east_rts;
+  logic chip_${i}_${j}_link_to_east_cts;
+  logic chip_${i}_${j}_link_east_tx_mode;
+  
   // West side
   logic chip_${i}_${j}_link_available_west;
-  logic [596:0] chip_${i}_${j}_payload_from_west;
-  logic chip_${i}_${j}_payload_from_west_valid;
-  logic chip_${i}_${j}_payload_from_west_ready;
-  logic [596:0] chip_${i}_${j}_payload_to_west;
-  logic chip_${i}_${j}_payload_to_west_valid;
-  logic chip_${i}_${j}_payload_to_west_ready;
+  logic [207:0] chip_${i}_${j}_link_from_west [3];
+  logic [2:0] chip_${i}_${j}_link_from_west_valid;
+  logic [207:0] chip_${i}_${j}_link_to_west [3];
+  logic [2:0] chip_${i}_${j}_link_to_west_valid;
+  logic chip_${i}_${j}_link_from_west_rts;
+  logic chip_${i}_${j}_link_from_west_cts;
+  logic chip_${i}_${j}_link_to_west_rts;
+  logic chip_${i}_${j}_link_to_west_cts;
+  logic chip_${i}_${j}_link_west_tx_mode;
 
   // North side
   logic chip_${i}_${j}_link_available_north;
-  logic [596:0] chip_${i}_${j}_payload_from_north;
-  logic chip_${i}_${j}_payload_from_north_valid;
-  logic chip_${i}_${j}_payload_from_north_ready;
-  logic [596:0] chip_${i}_${j}_payload_to_north;
-  logic chip_${i}_${j}_payload_to_north_valid;
-  logic chip_${i}_${j}_payload_to_north_ready;
-
+  logic [207:0] chip_${i}_${j}_link_from_north [3];
+  logic [2:0] chip_${i}_${j}_link_from_north_valid;
+  logic [207:0] chip_${i}_${j}_link_to_north [3];
+  logic [2:0] chip_${i}_${j}_link_to_north_valid;
+  logic chip_${i}_${j}_link_from_north_rts;
+  logic chip_${i}_${j}_link_from_north_cts;
+  logic chip_${i}_${j}_link_to_north_rts;
+  logic chip_${i}_${j}_link_to_north_cts;
+  logic chip_${i}_${j}_link_north_tx_mode;
   // South side
   logic chip_${i}_${j}_link_available_south;
-  logic [596:0] chip_${i}_${j}_payload_from_south;
-  logic chip_${i}_${j}_payload_from_south_valid;
-  logic chip_${i}_${j}_payload_from_south_ready;
-  logic [596:0] chip_${i}_${j}_payload_to_south;
-  logic chip_${i}_${j}_payload_to_south_valid;
-  logic chip_${i}_${j}_payload_to_south_ready;
+  logic [207:0] chip_${i}_${j}_link_from_south [3];
+  logic [2:0] chip_${i}_${j}_link_from_south_valid;
+  logic [207:0] chip_${i}_${j}_link_to_south [3];
+  logic [2:0] chip_${i}_${j}_link_to_south_valid;
+  logic chip_${i}_${j}_link_from_south_rts;
+  logic chip_${i}_${j}_link_from_south_cts;
+  logic chip_${i}_${j}_link_to_south_rts;
+  logic chip_${i}_${j}_link_to_south_cts;
+  logic chip_${i}_${j}_link_south_tx_mode;
 
   occamy_chip i_occamy_${i}_${j} (
       .clk_i,
@@ -167,33 +178,48 @@ module testharness
       .boot_mode_i('0),
 % if multichip_cfg['single_chip'] is False:
       .link_available_east_i(chip_${i}_${j}_link_available_east),
-      .payload_from_east_i(chip_${i}_${j}_payload_from_east),
-      .payload_from_east_valid_i(chip_${i}_${j}_payload_from_east_valid),
-      .payload_from_east_ready_o(chip_${i}_${j}_payload_from_east_ready),
-      .payload_to_east_o(chip_${i}_${j}_payload_to_east),
-      .payload_to_east_valid_o(chip_${i}_${j}_payload_to_east_valid),
-      .payload_to_east_ready_i(chip_${i}_${j}_payload_to_east_ready),
+      .link_east_tx_mode_o(chip_${i}_${j}_link_east_tx_mode),
+      .link_from_east_i(chip_${i}_${j}_link_from_east),
+      .link_from_east_valid_i(chip_${i}_${j}_link_from_east_valid),
+      .link_to_east_o(chip_${i}_${j}_link_to_east),
+      .link_to_east_valid_o(chip_${i}_${j}_link_to_east_valid),
+      .flow_control_east_rts_o(chip_${i}_${j}_link_to_east_rts),
+      .flow_control_east_cts_i(chip_${i}_${j}_link_to_east_cts),
+      .flow_control_east_rts_i(chip_${i}_${j}_link_from_east_rts),
+      .flow_control_east_cts_o(chip_${i}_${j}_link_from_east_cts),
+
       .link_available_west_i(chip_${i}_${j}_link_available_west),
-      .payload_from_west_i(chip_${i}_${j}_payload_from_west),
-      .payload_from_west_valid_i(chip_${i}_${j}_payload_from_west_valid),
-      .payload_from_west_ready_o(chip_${i}_${j}_payload_from_west_ready),
-      .payload_to_west_o(chip_${i}_${j}_payload_to_west),
-      .payload_to_west_valid_o(chip_${i}_${j}_payload_to_west_valid),
-      .payload_to_west_ready_i(chip_${i}_${j}_payload_to_west_ready),
+      .link_west_tx_mode_o(chip_${i}_${j}_link_west_tx_mode),
+      .link_from_west_i(chip_${i}_${j}_link_from_west),
+      .link_from_west_valid_i(chip_${i}_${j}_link_from_west_valid),
+      .link_to_west_o(chip_${i}_${j}_link_to_west),
+      .link_to_west_valid_o(chip_${i}_${j}_link_to_west_valid),
+      .flow_control_west_rts_o(chip_${i}_${j}_link_to_west_rts),
+      .flow_control_west_cts_i(chip_${i}_${j}_link_to_west_cts),
+      .flow_control_west_rts_i(chip_${i}_${j}_link_from_west_rts),
+      .flow_control_west_cts_o(chip_${i}_${j}_link_from_west_cts),
+
       .link_available_north_i(chip_${i}_${j}_link_available_north),
-      .payload_from_north_i(chip_${i}_${j}_payload_from_north),
-      .payload_from_north_valid_i(chip_${i}_${j}_payload_from_north_valid),
-      .payload_from_north_ready_o(chip_${i}_${j}_payload_from_north_ready),
-      .payload_to_north_o(chip_${i}_${j}_payload_to_north),
-      .payload_to_north_valid_o(chip_${i}_${j}_payload_to_north_valid),
-      .payload_to_north_ready_i(chip_${i}_${j}_payload_to_north_ready),
+      .link_north_tx_mode_o(chip_${i}_${j}_link_north_tx_mode),
+      .link_from_north_i(chip_${i}_${j}_link_from_north),
+      .link_from_north_valid_i(chip_${i}_${j}_link_from_north_valid),
+      .link_to_north_o(chip_${i}_${j}_link_to_north),
+      .link_to_north_valid_o(chip_${i}_${j}_link_to_north_valid),
+      .flow_control_north_rts_o(chip_${i}_${j}_link_to_north_rts),
+      .flow_control_north_cts_i(chip_${i}_${j}_link_to_north_cts),
+      .flow_control_north_rts_i(chip_${i}_${j}_link_from_north_rts),
+      .flow_control_north_cts_o(chip_${i}_${j}_link_from_north_cts),
+
       .link_available_south_i(chip_${i}_${j}_link_available_south),
-      .payload_from_south_i(chip_${i}_${j}_payload_from_south),
-      .payload_from_south_valid_i(chip_${i}_${j}_payload_from_south_valid),
-      .payload_from_south_ready_o(chip_${i}_${j}_payload_from_south_ready),
-      .payload_to_south_o(chip_${i}_${j}_payload_to_south),
-      .payload_to_south_valid_o(chip_${i}_${j}_payload_to_south_valid),
-      .payload_to_south_ready_i(chip_${i}_${j}_payload_to_south_ready),
+      .link_south_tx_mode_o(chip_${i}_${j}_link_south_tx_mode),
+      .link_from_south_i(chip_${i}_${j}_link_from_south),
+      .link_from_south_valid_i(chip_${i}_${j}_link_from_south_valid),
+      .link_to_south_o(chip_${i}_${j}_link_to_south),
+      .link_to_south_valid_o(chip_${i}_${j}_link_to_south_valid),
+      .flow_control_south_rts_o(chip_${i}_${j}_link_to_south_rts),
+      .flow_control_south_cts_i(chip_${i}_${j}_link_to_south_cts),
+      .flow_control_south_rts_i(chip_${i}_${j}_link_from_south_rts),
+      .flow_control_south_cts_o(chip_${i}_${j}_link_from_south_cts),
 % endif
       .uart_tx_o(tx_${i}_${j}),
       .uart_rx_i(rx_${i}_${j}),
@@ -244,123 +270,126 @@ module testharness
 %   endfor
 % endfor
 
-// Connect the signals declared together
+// Connect the signals: control signals
 % for i in x:
 %   for j in y:
   // Connect the east and west side of the chip
 %     if i == min(x):
   assign chip_${i}_${j}_link_available_west = '0;
-  assign chip_${i}_${j}_payload_from_west = '0;
-  assign chip_${i}_${j}_payload_from_west_valid = '0;
-  assign chip_${i}_${j}_payload_to_west_ready = '0;
+  assign chip_${i}_${j}_link_to_west_cts = '0;
+  assign chip_${i}_${j}_link_from_west_rts = '0;
+  assign chip_${i}_${j}_link_from_west = '{default: '0};
+  assign chip_${i}_${j}_link_from_west_valid = '0;
   assign chip_${i}_${j}_link_available_east = '1;
-  assign chip_${i}_${j}_payload_from_east = chip_${i+1}_${j}_payload_to_west;
-  congestion_emulator #(
-    .CONGESTION_LEVEL(${multichip_cfg["testbench_cfg"]["congestion_level"]})
-  ) i_congestion_emulator_from_${i+1}${j}_to_${i}${j} (
-    .clk_i(clk_i),
-    .valid_o(chip_${i}_${j}_payload_from_east_valid),
-    .ready_i(chip_${i}_${j}_payload_from_east_ready),
-    .valid_i(chip_${i+1}_${j}_payload_to_west_valid),
-    .ready_o(chip_${i+1}_${j}_payload_to_west_ready)
-  );
+  assign chip_${i}_${j}_link_from_east_valid = chip_${i+1}_${j}_link_to_west_valid;
+  assign chip_${i}_${j}_link_to_east_cts = chip_${i+1}_${j}_link_from_west_cts;
+  assign chip_${i}_${j}_link_from_east_rts = chip_${i+1}_${j}_link_to_west_rts;
 %     elif i == max(x):
   assign chip_${i}_${j}_link_available_west = '1;
-  assign chip_${i}_${j}_payload_from_west = chip_${i-1}_${j}_payload_to_east;
-  congestion_emulator #(
-    .CONGESTION_LEVEL(${multichip_cfg["testbench_cfg"]["congestion_level"]})
-  ) i_congestion_emulator_from_${i-1}${j}_to_${i}${j} (
-    .clk_i(clk_i),
-    .valid_o(chip_${i}_${j}_payload_from_west_valid),
-    .ready_i(chip_${i}_${j}_payload_from_west_ready),
-    .valid_i(chip_${i-1}_${j}_payload_to_east_valid),
-    .ready_o(chip_${i-1}_${j}_payload_to_east_ready)
-  );
+  assign chip_${i}_${j}_link_from_west_valid = chip_${i-1}_${j}_link_to_east_valid;
+  assign chip_${i}_${j}_link_to_west_cts = chip_${i-1}_${j}_link_from_east_cts;
+  assign chip_${i}_${j}_link_from_west_rts = chip_${i-1}_${j}_link_to_east_rts;
   assign chip_${i}_${j}_link_available_east = '0;
-  assign chip_${i}_${j}_payload_from_east = '0;
-  assign chip_${i}_${j}_payload_from_east_valid = '0;
-  assign chip_${i}_${j}_payload_to_east_ready = '0;
+  assign chip_${i}_${j}_link_from_east = '{default: '0};
+  assign chip_${i}_${j}_link_from_east_valid = '0;
+  assign chip_${i}_${j}_link_to_east_cts = '0;
+  assign chip_${i}_${j}_link_from_east_rts = '0;
 %     else:
   assign chip_${i}_${j}_link_available_west = '1;
-  assign chip_${i}_${j}_payload_from_west = chip_${i-1}_${j}_payload_to_east;
-  congestion_emulator #(
-    .CONGESTION_LEVEL(${multichip_cfg["testbench_cfg"]["congestion_level"]})
-  ) i_congestion_emulator_from_${i-1}${j}_to_${i}${j} (
-    .clk_i(clk_i),
-    .valid_o(chip_${i}_${j}_payload_from_west_valid),
-    .ready_i(chip_${i}_${j}_payload_from_west_ready),
-    .valid_i(chip_${i-1}_${j}_payload_to_east_valid),
-    .ready_o(chip_${i-1}_${j}_payload_to_east_ready)
-  );
+  assign chip_${i}_${j}_link_from_west_valid = chip_${i-1}_${j}_link_to_east_valid;
+  assign chip_${i}_${j}_link_to_west_cts = chip_${i-1}_${j}_link_from_east_cts;
+  assign chip_${i}_${j}_link_from_west_rts = chip_${i-1}_${j}_link_to_east_rts;
   assign chip_${i}_${j}_link_available_east = '1;
-  assign chip_${i}_${j}_payload_from_east = chip_${i+1}_${j}_payload_to_west;
-  congestion_emulator #(
-    .CONGESTION_LEVEL(${multichip_cfg["testbench_cfg"]["congestion_level"]})
-  ) i_congestion_emulator_from_${i+1}${j}_to_${i}${j} (
-    .clk_i(clk_i),
-    .valid_o(chip_${i}_${j}_payload_from_east_valid),
-    .ready_i(chip_${i}_${j}_payload_from_east_ready),
-    .valid_i(chip_${i+1}_${j}_payload_to_west_valid),
-    .ready_o(chip_${i+1}_${j}_payload_to_west_ready)
-  );
+  assign chip_${i}_${j}_link_from_east_valid = chip_${i+1}_${j}_link_to_west_valid;
+  assign chip_${i}_${j}_link_to_east_cts = chip_${i+1}_${j}_link_from_west_cts;
+  assign chip_${i}_${j}_link_from_east_rts = chip_${i+1}_${j}_link_to_west_rts;
 %     endif
   // Connect the north and south side of the chip
 %     if j == min(y):
   assign chip_${i}_${j}_link_available_north = '0;
-  assign chip_${i}_${j}_payload_from_north = '0;
-  assign chip_${i}_${j}_payload_from_north_valid = '0;
-  assign chip_${i}_${j}_payload_to_north_ready = '0;
+  assign chip_${i}_${j}_link_to_north_cts = '0;
+  assign chip_${i}_${j}_link_from_north_rts = '0;
+  assign chip_${i}_${j}_link_from_north = '{default: '0};
+  assign chip_${i}_${j}_link_from_north_valid = '0;
   assign chip_${i}_${j}_link_available_south = '1;
-  assign chip_${i}_${j}_payload_from_south = chip_${i}_${j+1}_payload_to_north;
-  congestion_emulator #(
-    .CONGESTION_LEVEL(${multichip_cfg["testbench_cfg"]["congestion_level"]})
-  ) i_congestion_emulator_from_${i}${j+1}_to_${i}${j} (
-    .clk_i(clk_i),
-    .valid_o(chip_${i}_${j}_payload_from_south_valid),
-    .ready_i(chip_${i}_${j}_payload_from_south_ready),
-    .valid_i(chip_${i}_${j+1}_payload_to_north_valid),
-    .ready_o(chip_${i}_${j+1}_payload_to_north_ready)
-  );
+  assign chip_${i}_${j}_link_from_south_valid = chip_${i}_${j+1}_link_to_north_valid;
+  assign chip_${i}_${j}_link_to_south_cts = chip_${i}_${j+1}_link_from_north_cts;
+  assign chip_${i}_${j}_link_from_south_rts = chip_${i}_${j+1}_link_to_north_rts;
 %     elif j == max(y):
   assign chip_${i}_${j}_link_available_north = '1;
-  assign chip_${i}_${j}_payload_from_north = chip_${i}_${j-1}_payload_to_south;
-  congestion_emulator #(
-    .CONGESTION_LEVEL(${multichip_cfg["testbench_cfg"]["congestion_level"]})
-  ) i_congestion_emulator_from_${i}${j-1}_to_${i}${j} (
-    .clk_i(clk_i),
-    .valid_o(chip_${i}_${j}_payload_from_north_valid),
-    .ready_i(chip_${i}_${j}_payload_from_north_ready),
-    .valid_i(chip_${i}_${j-1}_payload_to_south_valid),
-    .ready_o(chip_${i}_${j-1}_payload_to_south_ready)
-  );
+  assign chip_${i}_${j}_link_from_north_valid = chip_${i}_${j-1}_link_to_south_valid;
+  assign chip_${i}_${j}_link_to_north_cts = chip_${i}_${j-1}_link_from_south_cts;
+  assign chip_${i}_${j}_link_from_north_rts = chip_${i}_${j-1}_link_to_south_rts;
   assign chip_${i}_${j}_link_available_south = '0;
-  assign chip_${i}_${j}_payload_from_south = '0;
-  assign chip_${i}_${j}_payload_from_south_valid = '0;
-  assign chip_${i}_${j}_payload_to_south_ready = '0;
+  assign chip_${i}_${j}_link_from_south = '{default: '0};
+  assign chip_${i}_${j}_link_from_south_valid = '0;
+  assign chip_${i}_${j}_link_to_south_cts = '0;
+  assign chip_${i}_${j}_link_from_south_rts = '0;
 %     else:
   assign chip_${i}_${j}_link_available_north = '1;
-  assign chip_${i}_${j}_payload_from_north = chip_${i}_${j-1}_payload_to_south;
-  congestion_emulator #(
-    .CONGESTION_LEVEL(${multichip_cfg["testbench_cfg"]["congestion_level"]})
-  ) i_congestion_emulator_from_${i}${j-1}_to_${i}${j} (
-    .clk_i(clk_i),
-    .valid_o(chip_${i}_${j}_payload_from_north_valid),
-    .ready_i(chip_${i}_${j}_payload_from_north_ready),
-    .valid_i(chip_${i}_${j-1}_payload_to_south_valid),
-    .ready_o(chip_${i}_${j-1}_payload_to_south_ready)
-  );
+  assign chip_${i}_${j}_link_from_north_valid = chip_${i}_${j-1}_link_to_south_valid;
+  assign chip_${i}_${j}_link_to_north_cts = chip_${i}_${j-1}_link_from_south_cts;
+  assign chip_${i}_${j}_link_from_north_rts = chip_${i}_${j-1}_link_to_south_rts;
   assign chip_${i}_${j}_link_available_south = '1;
-  assign chip_${i}_${j}_payload_from_south = chip_${i}_${j+1}_payload_to_north;
-  congestion_emulator #(
-    .CONGESTION_LEVEL(${multichip_cfg["testbench_cfg"]["congestion_level"]})
-  ) i_congestion_emulator_from_${i}${j+1}_to_${i}${j} (
-    .clk_i(clk_i),
-    .valid_o(chip_${i}_${j}_payload_from_south_valid),
-    .ready_i(chip_${i}_${j}_payload_from_south_ready),
-    .valid_i(chip_${i}_${j+1}_payload_to_north_valid),
-    .ready_o(chip_${i}_${j+1}_payload_to_north_ready)
+  assign chip_${i}_${j}_link_from_south_valid = chip_${i}_${j+1}_link_to_north_valid;
+  assign chip_${i}_${j}_link_to_south_cts = chip_${i}_${j+1}_link_from_north_cts;
+  assign chip_${i}_${j}_link_from_south_rts = chip_${i}_${j+1}_link_to_north_rts;
+%     endif
+%   endfor
+% endfor
+
+// Connect the signals: half_duplex data signals
+% for i in x:
+%   for j in y:
+%     if i != max(x) and j != max(y):
+  half_duplex_bus_emulator #(
+      .BusWidth(208),
+      .ChannelNum(3)
+  ) i_half_duplex_east_${i}_${j} (
+      .port1_tx_mode_i(chip_${i}_${j}_link_east_tx_mode),
+      .port2_tx_mode_i(chip_${i+1}_${j}_link_west_tx_mode),
+      .port1_i(chip_${i}_${j}_link_to_east),
+      .port2_i(chip_${i+1}_${j}_link_to_west),
+      .port1_o(chip_${i+1}_${j}_link_from_west),
+      .port2_o(chip_${i}_${j}_link_from_east)
+  );
+  half_duplex_bus_emulator #(
+      .BusWidth(208),
+      .ChannelNum(3)
+  ) i_half_duplex_south_${i}_${j} (
+      .port1_tx_mode_i(chip_${i}_${j}_link_south_tx_mode),
+      .port2_tx_mode_i(chip_${i}_${j+1}_link_north_tx_mode),
+      .port1_i(chip_${i}_${j}_link_to_south),
+      .port2_i(chip_${i}_${j+1}_link_to_north),
+      .port1_o(chip_${i}_${j+1}_link_from_north),
+      .port2_o(chip_${i}_${j}_link_from_south)
+  );
+%     elif i == max(x) and j != max(y):
+  half_duplex_bus_emulator #(
+      .BusWidth(208),
+      .ChannelNum(3)
+  ) i_half_duplex_south_${i}_${j} (
+      .port1_tx_mode_i(chip_${i}_${j}_link_south_tx_mode),
+      .port2_tx_mode_i(chip_${i}_${j+1}_link_north_tx_mode),
+      .port1_i(chip_${i}_${j}_link_to_south),
+      .port2_i(chip_${i}_${j+1}_link_to_north),
+      .port1_o(chip_${i}_${j+1}_link_from_north),
+      .port2_o(chip_${i}_${j}_link_from_south)
+  );
+%     elif i != max(x) and j == max(y):
+  half_duplex_bus_emulator #(
+      .BusWidth(208),
+      .ChannelNum(3)
+  ) i_half_duplex_east_${i}_${j} (
+      .port1_tx_mode_i(chip_${i}_${j}_link_east_tx_mode),
+      .port2_tx_mode_i(chip_${i+1}_${j}_link_west_tx_mode),
+      .port1_i(chip_${i}_${j}_link_to_east),
+      .port2_i(chip_${i+1}_${j}_link_to_west),
+      .port1_o(chip_${i+1}_${j}_link_from_west),
+      .port2_o(chip_${i}_${j}_link_from_east)
   );
 %     endif
 %   endfor
 % endfor
+
 endmodule

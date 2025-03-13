@@ -119,6 +119,7 @@ sources:
     files:
       - target/rtl/test/uartdpi/uartdpi.sv
       - target/sim_chip/testharness/congestion_emulator.sv
+      - target/sim_chip/testharness/half_duplex_bus_emulator.sv
       - target/sim_chip/testharness/testharness.sv
       # - target/sim/test/bootrom.sv
       - target/rtl/bootrom/bootrom.sv
