@@ -132,14 +132,14 @@ void bootrom() {
                 break;
 
             case COPY_FROM_REMOTE:
-                print_str(address_prefix, "\r\n\t Memory Size: ");
-                scan_uart(address_prefix, in_buf);
-                cur = in_buf;
-                memory_length = 0;
-                while (*cur != '\0') {
-                    memory_length = memory_length * 10 + *cur - '0';
-                    cur++;
-                }
+                // print_str(address_prefix, "\r\n\t Memory Size: ");
+                // scan_uart(address_prefix, in_buf);
+                // cur = in_buf;
+                memory_length = 1048576;
+                // while (*cur != '\0') {
+                //     memory_length = memory_length * 10 + *cur - '0';
+                //     cur++;
+                // }
                 print_str(address_prefix, "\r\n\t Copying...");
                 sys_dma_blk_memcpy(local_chip_mem_start_address,
                                    remote_chip_mem_start_address,
