@@ -39,8 +39,6 @@ jobs:
       image: ghcr.io/kuleuven-micas/snax:main
     steps:
       - uses: actions/checkout@v2
-        with:
-          submodules: 'recursive'
       - name: Compile Bootrom
         run: |
           echo "Compiling Bootrom"
