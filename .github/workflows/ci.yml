@@ -32,31 +32,31 @@ jobs:
   # Occamy System Software + Hardware Compilation #
   #################################################
 
-  # occamy-verilator:
-  #   name: Simulation with Verilator
-  #   runs-on: ubuntu-22.04
-  #   container:
-  #     image: ghcr.io/kuleuven-micas/snax:main
-  #   steps:
-  #     - uses: actions/checkout@v2
-  #       with:
-  #         submodules: "recursive"
-  #     - name: Compile Bootrom
-  #       run: |
-  #         echo "Compiling Bootrom"
-  #         make bootrom CFG_OVERRIDE=target/rtl/cfg/occamy_cfg/hemaia.hjson
-  #     - name: Compile SW
-  #       run: |
-  #         echo "Compiling SW"
-  #         make sw CFG_OVERRIDE=target/sw/cfg/hemaia.hjson -j$(nproc)
-  #     - name: Compile RTL
-  #       run: |
-  #         make rtl CFG_OVERRIDE=target/rtl/cfg/hemaia.hjson
-  #     - name: Compile Verilator Binary
-  #       run: |
-  #         make occamy_system_vlt -j$(nproc)
-  #     - name: Run Tests
-  #       working-directory: target/sim
-  #       run: |
-  #         ./run.py --simulator verilator \
-  #         sw/sim_elf.yaml -j
+  occamy-verilator:
+    name: Simulation with Verilator
+    runs-on: ubuntu-22.04
+    container:
+      image: ghcr.io/kuleuven-micas/snax@sha256:4ff37cad4e85d6a898cda3232ee04a1210833eb4618d1f1fd183201c03c4c57c
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: "recursive"
+      - name: Compile Bootrom
+        run: |
+          echo "Compiling Bootrom"
+          make bootrom CFG_OVERRIDE=target/rtl/cfg/occamy_cfg/hemaia.hjson
+      - name: Compile SW
+        run: |
+          echo "Compiling SW"
+          make sw CFG_OVERRIDE=target/sw/cfg/hemaia.hjson -j$(nproc)
+      - name: Compile RTL
+        run: |
+          make rtl CFG_OVERRIDE=target/rtl/cfg/hemaia.hjson
+      - name: Compile Verilator Binary
+        run: |
+          make occamy_system_vlt -j$(nproc)
+      - name: Run Tests
+        working-directory: target/sim
+        run: |
+          ./run.py --simulator verilator \
+          sw/sim_elf.yaml -j
