@@ -15,6 +15,9 @@ typedef struct {
     volatile uint32_t lock;
     volatile uint32_t chip_id;
     volatile uint32_t usr_data_ptr;
+    volatile uint32_t chip_barrier;
+    // Chip Level synchronization mechanism: 16x16 chip matrix
+    volatile uint8_t  chip_level_checkpoint[256];
 } comm_buffer_t;
 
 /**************/

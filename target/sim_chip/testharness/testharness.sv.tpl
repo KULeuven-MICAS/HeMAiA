@@ -108,27 +108,66 @@ module testharness
   localparam int unsigned UartDPIFreq = 1_000_000_000;
 
   // Instatiate Chips
-<%
-  axi_wires = {}
-%>
 
 % for i in x:
 %   for j in y:
-  /// Uart signals
-  logic tx_${i}_${j}, rx_${i}_${j};
 
 <%
     i_hex_string = "{:01x}".format(i)
     j_hex_string = "{:01x}".format(j)
-
-    if multichip_cfg['single_chip'] is False:
-      axi_wires["chip_{}_{}_soc2router".format(i_hex_string, j_hex_string)] = \
-        soc2router_bus.copy(name="chip_{}_{}_soc2router".format(i_hex_string, j_hex_string)) \
-        .declare(context)
-      axi_wires["chip_{}_{}_router2soc".format(i_hex_string, j_hex_string)] = \
-        router2soc_bus.copy(name="chip_{}_{}_router2soc".format(i_hex_string, j_hex_string)) \
-        .declare(context)
 %>
+  /// Uart signals
+  logic tx_${i}_${j}, rx_${i}_${j};
+
+% if multichip_cfg['single_chip'] is False:
+  /// Die2Die signals
+  // East side
+  logic chip_${i}_${j}_link_available_east;
+  logic [207:0] chip_${i}_${j}_link_from_east [3];
+  logic [2:0] chip_${i}_${j}_link_from_east_valid;
+  logic [207:0] chip_${i}_${j}_link_to_east [3];
+  logic [2:0] chip_${i}_${j}_link_to_east_valid;
+  logic chip_${i}_${j}_link_from_east_rts;
+  logic chip_${i}_${j}_link_from_east_cts;
+  logic chip_${i}_${j}_link_to_east_rts;
+  logic chip_${i}_${j}_link_to_east_cts;
+  logic chip_${i}_${j}_link_east_tx_mode;
+  
+  // West side
+  logic chip_${i}_${j}_link_available_west;
+  logic [207:0] chip_${i}_${j}_link_from_west [3];
+  logic [2:0] chip_${i}_${j}_link_from_west_valid;
+  logic [207:0] chip_${i}_${j}_link_to_west [3];
+  logic [2:0] chip_${i}_${j}_link_to_west_valid;
+  logic chip_${i}_${j}_link_from_west_rts;
+  logic chip_${i}_${j}_link_from_west_cts;
+  logic chip_${i}_${j}_link_to_west_rts;
+  logic chip_${i}_${j}_link_to_west_cts;
+  logic chip_${i}_${j}_link_west_tx_mode;
+
+  // North side
+  logic chip_${i}_${j}_link_available_north;
+  logic [207:0] chip_${i}_${j}_link_from_north [3];
+  logic [2:0] chip_${i}_${j}_link_from_north_valid;
+  logic [207:0] chip_${i}_${j}_link_to_north [3];
+  logic [2:0] chip_${i}_${j}_link_to_north_valid;
+  logic chip_${i}_${j}_link_from_north_rts;
+  logic chip_${i}_${j}_link_from_north_cts;
+  logic chip_${i}_${j}_link_to_north_rts;
+  logic chip_${i}_${j}_link_to_north_cts;
+  logic chip_${i}_${j}_link_north_tx_mode;
+  // South side
+  logic chip_${i}_${j}_link_available_south;
+  logic [207:0] chip_${i}_${j}_link_from_south [3];
+  logic [2:0] chip_${i}_${j}_link_from_south_valid;
+  logic [207:0] chip_${i}_${j}_link_to_south [3];
+  logic [2:0] chip_${i}_${j}_link_to_south_valid;
+  logic chip_${i}_${j}_link_from_south_rts;
+  logic chip_${i}_${j}_link_from_south_cts;
+  logic chip_${i}_${j}_link_to_south_rts;
+  logic chip_${i}_${j}_link_to_south_cts;
+  logic chip_${i}_${j}_link_south_tx_mode;
+% endif
 
   occamy_chip i_occamy_${i}_${j} (
       .clk_i,
@@ -140,10 +179,49 @@ module testharness
       .test_mode_i(1'b0),
       .boot_mode_i('0),
 % if multichip_cfg['single_chip'] is False:
-      .soc2router_req_o(${axi_wires["chip_{}_{}_soc2router".format(i_hex_string, j_hex_string)].req_name()}),
-      .soc2router_rsp_i(${axi_wires["chip_{}_{}_soc2router".format(i_hex_string, j_hex_string)].rsp_name()}),
-      .router2soc_req_i(${axi_wires["chip_{}_{}_router2soc".format(i_hex_string, j_hex_string)].req_name()}),
-      .router2soc_rsp_o(${axi_wires["chip_{}_{}_router2soc".format(i_hex_string, j_hex_string)].rsp_name()}),
+      .link_available_east_i(chip_${i}_${j}_link_available_east),
+      .link_east_tx_mode_o(chip_${i}_${j}_link_east_tx_mode),
+      .link_from_east_i(chip_${i}_${j}_link_from_east),
+      .link_from_east_valid_i(chip_${i}_${j}_link_from_east_valid),
+      .link_to_east_o(chip_${i}_${j}_link_to_east),
+      .link_to_east_valid_o(chip_${i}_${j}_link_to_east_valid),
+      .flow_control_east_rts_o(chip_${i}_${j}_link_to_east_rts),
+      .flow_control_east_cts_i(chip_${i}_${j}_link_to_east_cts),
+      .flow_control_east_rts_i(chip_${i}_${j}_link_from_east_rts),
+      .flow_control_east_cts_o(chip_${i}_${j}_link_from_east_cts),
+
+      .link_available_west_i(chip_${i}_${j}_link_available_west),
+      .link_west_tx_mode_o(chip_${i}_${j}_link_west_tx_mode),
+      .link_from_west_i(chip_${i}_${j}_link_from_west),
+      .link_from_west_valid_i(chip_${i}_${j}_link_from_west_valid),
+      .link_to_west_o(chip_${i}_${j}_link_to_west),
+      .link_to_west_valid_o(chip_${i}_${j}_link_to_west_valid),
+      .flow_control_west_rts_o(chip_${i}_${j}_link_to_west_rts),
+      .flow_control_west_cts_i(chip_${i}_${j}_link_to_west_cts),
+      .flow_control_west_rts_i(chip_${i}_${j}_link_from_west_rts),
+      .flow_control_west_cts_o(chip_${i}_${j}_link_from_west_cts),
+
+      .link_available_north_i(chip_${i}_${j}_link_available_north),
+      .link_north_tx_mode_o(chip_${i}_${j}_link_north_tx_mode),
+      .link_from_north_i(chip_${i}_${j}_link_from_north),
+      .link_from_north_valid_i(chip_${i}_${j}_link_from_north_valid),
+      .link_to_north_o(chip_${i}_${j}_link_to_north),
+      .link_to_north_valid_o(chip_${i}_${j}_link_to_north_valid),
+      .flow_control_north_rts_o(chip_${i}_${j}_link_to_north_rts),
+      .flow_control_north_cts_i(chip_${i}_${j}_link_to_north_cts),
+      .flow_control_north_rts_i(chip_${i}_${j}_link_from_north_rts),
+      .flow_control_north_cts_o(chip_${i}_${j}_link_from_north_cts),
+
+      .link_available_south_i(chip_${i}_${j}_link_available_south),
+      .link_south_tx_mode_o(chip_${i}_${j}_link_south_tx_mode),
+      .link_from_south_i(chip_${i}_${j}_link_from_south),
+      .link_from_south_valid_i(chip_${i}_${j}_link_from_south_valid),
+      .link_to_south_o(chip_${i}_${j}_link_to_south),
+      .link_to_south_valid_o(chip_${i}_${j}_link_to_south_valid),
+      .flow_control_south_rts_o(chip_${i}_${j}_link_to_south_rts),
+      .flow_control_south_cts_i(chip_${i}_${j}_link_to_south_cts),
+      .flow_control_south_rts_i(chip_${i}_${j}_link_from_south_rts),
+      .flow_control_south_cts_o(chip_${i}_${j}_link_from_south_cts),
 % endif
       .uart_tx_o(tx_${i}_${j}),
       .uart_rx_i(rx_${i}_${j}),
@@ -195,85 +273,126 @@ module testharness
 % endfor
 
 % if multichip_cfg['single_chip'] is False:
-  // AXI XBar as the temporary router and virtual interposer
-  // Wires to connect between chips and router
-  ${soc2router_bus.req_type()} [${(max(x) + 1) * (max(y) + 1) - 1}:0] soc2router_req;
-  ${soc2router_bus.rsp_type()} [${(max(x) + 1) * (max(y) + 1) - 1}:0] soc2router_rsp;
-  ${router2soc_bus.req_type()} [${(max(x) + 1) * (max(y) + 1) - 1}:0] router2soc_req;
-  ${router2soc_bus.rsp_type()} [${(max(x) + 1) * (max(y) + 1) - 1}:0] router2soc_rsp;
+// Connect the signals: control signals
+% for i in x:
+%   for j in y:
+  // Connect the east and west side of the chip
+%     if i == min(x):
+  assign chip_${i}_${j}_link_available_west = '0;
+  assign chip_${i}_${j}_link_to_west_cts = '0;
+  assign chip_${i}_${j}_link_from_west_rts = '0;
+  assign chip_${i}_${j}_link_from_west = '{default: '0};
+  assign chip_${i}_${j}_link_from_west_valid = '0;
+  assign chip_${i}_${j}_link_available_east = '1;
+  assign chip_${i}_${j}_link_from_east_valid = chip_${i+1}_${j}_link_to_west_valid;
+  assign chip_${i}_${j}_link_to_east_cts = chip_${i+1}_${j}_link_from_west_cts;
+  assign chip_${i}_${j}_link_from_east_rts = chip_${i+1}_${j}_link_to_west_rts;
+%     elif i == max(x):
+  assign chip_${i}_${j}_link_available_west = '1;
+  assign chip_${i}_${j}_link_from_west_valid = chip_${i-1}_${j}_link_to_east_valid;
+  assign chip_${i}_${j}_link_to_west_cts = chip_${i-1}_${j}_link_from_east_cts;
+  assign chip_${i}_${j}_link_from_west_rts = chip_${i-1}_${j}_link_to_east_rts;
+  assign chip_${i}_${j}_link_available_east = '0;
+  assign chip_${i}_${j}_link_from_east = '{default: '0};
+  assign chip_${i}_${j}_link_from_east_valid = '0;
+  assign chip_${i}_${j}_link_to_east_cts = '0;
+  assign chip_${i}_${j}_link_from_east_rts = '0;
+%     else:
+  assign chip_${i}_${j}_link_available_west = '1;
+  assign chip_${i}_${j}_link_from_west_valid = chip_${i-1}_${j}_link_to_east_valid;
+  assign chip_${i}_${j}_link_to_west_cts = chip_${i-1}_${j}_link_from_east_cts;
+  assign chip_${i}_${j}_link_from_west_rts = chip_${i-1}_${j}_link_to_east_rts;
+  assign chip_${i}_${j}_link_available_east = '1;
+  assign chip_${i}_${j}_link_from_east_valid = chip_${i+1}_${j}_link_to_west_valid;
+  assign chip_${i}_${j}_link_to_east_cts = chip_${i+1}_${j}_link_from_west_cts;
+  assign chip_${i}_${j}_link_from_east_rts = chip_${i+1}_${j}_link_to_west_rts;
+%     endif
+  // Connect the north and south side of the chip
+%     if j == min(y):
+  assign chip_${i}_${j}_link_available_north = '0;
+  assign chip_${i}_${j}_link_to_north_cts = '0;
+  assign chip_${i}_${j}_link_from_north_rts = '0;
+  assign chip_${i}_${j}_link_from_north = '{default: '0};
+  assign chip_${i}_${j}_link_from_north_valid = '0;
+  assign chip_${i}_${j}_link_available_south = '1;
+  assign chip_${i}_${j}_link_from_south_valid = chip_${i}_${j+1}_link_to_north_valid;
+  assign chip_${i}_${j}_link_to_south_cts = chip_${i}_${j+1}_link_from_north_cts;
+  assign chip_${i}_${j}_link_from_south_rts = chip_${i}_${j+1}_link_to_north_rts;
+%     elif j == max(y):
+  assign chip_${i}_${j}_link_available_north = '1;
+  assign chip_${i}_${j}_link_from_north_valid = chip_${i}_${j-1}_link_to_south_valid;
+  assign chip_${i}_${j}_link_to_north_cts = chip_${i}_${j-1}_link_from_south_cts;
+  assign chip_${i}_${j}_link_from_north_rts = chip_${i}_${j-1}_link_to_south_rts;
+  assign chip_${i}_${j}_link_available_south = '0;
+  assign chip_${i}_${j}_link_from_south = '{default: '0};
+  assign chip_${i}_${j}_link_from_south_valid = '0;
+  assign chip_${i}_${j}_link_to_south_cts = '0;
+  assign chip_${i}_${j}_link_from_south_rts = '0;
+%     else:
+  assign chip_${i}_${j}_link_available_north = '1;
+  assign chip_${i}_${j}_link_from_north_valid = chip_${i}_${j-1}_link_to_south_valid;
+  assign chip_${i}_${j}_link_to_north_cts = chip_${i}_${j-1}_link_from_south_cts;
+  assign chip_${i}_${j}_link_from_north_rts = chip_${i}_${j-1}_link_to_south_rts;
+  assign chip_${i}_${j}_link_available_south = '1;
+  assign chip_${i}_${j}_link_from_south_valid = chip_${i}_${j+1}_link_to_north_valid;
+  assign chip_${i}_${j}_link_to_south_cts = chip_${i}_${j+1}_link_from_north_cts;
+  assign chip_${i}_${j}_link_from_south_rts = chip_${i}_${j+1}_link_to_north_rts;
+%     endif
+%   endfor
+% endfor
 
-  // AXI XBar Configuration
-  localparam axi_pkg::xbar_cfg_t VInterposerCfg = '{
-    NoSlvPorts:         ${(max(x) + 1) * (max(y) + 1)},
-    NoMstPorts:         ${(max(x) + 1) * (max(y) + 1)},
-    MaxSlvTrans:        64,
-    MaxMstTrans:        64,
-    FallThrough:        0,
-    LatencyMode:        axi_pkg::CUT_ALL_PORTS,
-    PipelineStages:     0,
-    AxiIdWidthSlvPorts: ${multichip_cfg['soc_to_router_iw']},
-    AxiIdUsedSlvPorts:  ${multichip_cfg['soc_to_router_iw']},
-    UniqueIds:          0,
-    AxiAddrWidth:       48,
-    AxiDataWidth:       512,
-    NoAddrRules:        ${(max(x) + 1) * (max(y) + 1)}
-  };
-
-  // AXI Rules
-  xbar_rule_48_t [${(max(x) + 1) * (max(y) + 1) - 1}:0] VInterposerRule;
-  % for i in x:
-  %   for j in y:
-  assign VInterposerRule[${i + j * (max(x) + 1)}] = '{ 
-    idx: ${i + j * (max(x) + 1)}, start_addr: {4'd${i}, 4'd${j}, 40'h0}, end_addr: {4'd${i}, 4'd${j}, 40'hFFFFFFFFFF}
-  };
-  %   endfor
-  % endfor
-
-  // Instantiation of the AXI XBar
-  axi_xbar #(
-    .Cfg            (VInterposerCfg),
-    .Connectivity   ('1),
-    .ATOPs          (0),
-    .slv_aw_chan_t  (${soc2router_bus.aw_chan_type()}),
-    .mst_aw_chan_t  (${router2soc_bus.aw_chan_type()}),
-    .w_chan_t       (${soc2router_bus.w_chan_type()}),
-    .slv_b_chan_t   (${soc2router_bus.b_chan_type()}),
-    .mst_b_chan_t   (${router2soc_bus.b_chan_type()}),
-    .slv_ar_chan_t  (${soc2router_bus.ar_chan_type()}),
-    .mst_ar_chan_t  (${router2soc_bus.ar_chan_type()}),
-    .slv_r_chan_t   (${soc2router_bus.r_chan_type()}),
-    .mst_r_chan_t   (${router2soc_bus.r_chan_type()}),
-    .slv_req_t      (${soc2router_bus.req_type()}),
-    .slv_resp_t      (${soc2router_bus.rsp_type()}),
-    .mst_req_t      (${router2soc_bus.req_type()}),
-    .mst_resp_t      (${router2soc_bus.rsp_type()}),
-    .rule_t         (xbar_rule_48_t)
-  ) i_virtual_interposer (
-    .clk_i                  (clk_i),
-    .rst_ni                 (rst_ni),
-    .test_i                 (1'b0),
-    .slv_ports_req_i        (soc2router_req),
-    .slv_ports_resp_o       (soc2router_rsp),
-    .mst_ports_req_o        (router2soc_req),
-    .mst_ports_resp_i       (router2soc_rsp),
-    .addr_map_i             (VInterposerRule),
-    .en_default_mst_port_i  ('0),
-    .default_mst_port_i     ('0)
+// Connect the signals: half_duplex data signals
+% for i in x:
+%   for j in y:
+%     if i != max(x) and j != max(y):
+  half_duplex_bus_emulator #(
+      .BusWidth(208),
+      .ChannelNum(3)
+  ) i_half_duplex_east_${i}_${j} (
+      .port1_tx_mode_i(chip_${i}_${j}_link_east_tx_mode),
+      .port2_tx_mode_i(chip_${i+1}_${j}_link_west_tx_mode),
+      .port1_i(chip_${i}_${j}_link_to_east),
+      .port2_i(chip_${i+1}_${j}_link_to_west),
+      .port1_o(chip_${i+1}_${j}_link_from_west),
+      .port2_o(chip_${i}_${j}_link_from_east)
   );
-
-  // Assign the Wires
-  % for i in x:
-  %   for j in y:
-<%
-  i_hex_string = "{:01x}".format(i)
-  j_hex_string = "{:01x}".format(j)
-%>
-  assign soc2router_req[${i + j * (max(x) + 1)}] = ${axi_wires["chip_{}_{}_soc2router".format(i_hex_string, j_hex_string)].req_name()};
-  assign ${axi_wires["chip_{}_{}_soc2router".format(i_hex_string, j_hex_string)].rsp_name()} = soc2router_rsp[${i + j * (max(x) + 1)}];
-  assign ${axi_wires["chip_{}_{}_router2soc".format(i_hex_string, j_hex_string)].req_name()} = router2soc_req[${i + j * (max(x) + 1)}];
-  assign router2soc_rsp[${i + j * (max(x) + 1)}] = ${axi_wires["chip_{}_{}_router2soc".format(i_hex_string, j_hex_string)].rsp_name()};
-  %   endfor
-  % endfor
+  half_duplex_bus_emulator #(
+      .BusWidth(208),
+      .ChannelNum(3)
+  ) i_half_duplex_south_${i}_${j} (
+      .port1_tx_mode_i(chip_${i}_${j}_link_south_tx_mode),
+      .port2_tx_mode_i(chip_${i}_${j+1}_link_north_tx_mode),
+      .port1_i(chip_${i}_${j}_link_to_south),
+      .port2_i(chip_${i}_${j+1}_link_to_north),
+      .port1_o(chip_${i}_${j+1}_link_from_north),
+      .port2_o(chip_${i}_${j}_link_from_south)
+  );
+%     elif i == max(x) and j != max(y):
+  half_duplex_bus_emulator #(
+      .BusWidth(208),
+      .ChannelNum(3)
+  ) i_half_duplex_south_${i}_${j} (
+      .port1_tx_mode_i(chip_${i}_${j}_link_south_tx_mode),
+      .port2_tx_mode_i(chip_${i}_${j+1}_link_north_tx_mode),
+      .port1_i(chip_${i}_${j}_link_to_south),
+      .port2_i(chip_${i}_${j+1}_link_to_north),
+      .port1_o(chip_${i}_${j+1}_link_from_north),
+      .port2_o(chip_${i}_${j}_link_from_south)
+  );
+%     elif i != max(x) and j == max(y):
+  half_duplex_bus_emulator #(
+      .BusWidth(208),
+      .ChannelNum(3)
+  ) i_half_duplex_east_${i}_${j} (
+      .port1_tx_mode_i(chip_${i}_${j}_link_east_tx_mode),
+      .port2_tx_mode_i(chip_${i+1}_${j}_link_west_tx_mode),
+      .port1_i(chip_${i}_${j}_link_to_east),
+      .port2_i(chip_${i+1}_${j}_link_to_west),
+      .port1_o(chip_${i+1}_${j}_link_from_west),
+      .port2_o(chip_${i}_${j}_link_from_east)
+  );
+%     endif
+%   endfor
+% endfor
 % endif
-
 endmodule

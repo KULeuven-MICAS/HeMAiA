@@ -97,7 +97,7 @@ inline volatile uint64_t *sys_dma_done_ptr(void) {
                                  (uintptr_t)get_current_chip_baseaddress());
 }
 
-inline uint64_t sys_dma_memcpy(uint64_t dst, uint64_t src, uint64_t size) {
+static inline uint64_t sys_dma_memcpy(uint64_t dst, uint64_t src, uint64_t size) {
     *(sys_dma_src_ptr()) = (uint64_t)src;
     *(sys_dma_dst_ptr()) = (uint64_t)dst;
     *(sys_dma_num_bytes_ptr()) = size;
@@ -108,7 +108,7 @@ inline uint64_t sys_dma_memcpy(uint64_t dst, uint64_t src, uint64_t size) {
     return *(sys_dma_nextid_ptr());
 }
 
-inline void sys_dma_blk_memcpy(uint64_t dst, uint64_t src, uint64_t size) {
+static inline void sys_dma_blk_memcpy(uint64_t dst, uint64_t src, uint64_t size) {
     volatile uint64_t tf_id = sys_dma_memcpy(dst, src, size);
 
     while (*(sys_dma_done_ptr()) != tf_id) {

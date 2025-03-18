@@ -14,6 +14,7 @@ _start:
     sd          s0, 0(sp)
     call        initialize_bss
 #   call        initialize_wide_spm
+#   call        initialize_narrow_spm
     call        enable_fpu
     call        main
 
@@ -27,7 +28,11 @@ _exit:
     sw          a0, 0(t0)
 
     # Return exit code to host to terminate hemaia simulation
-    la          t0, __return_pointer$
+    # Load chip_id to t1, and get base address
+    csrr        t0, 0xf15
+    slli        t0, t0, 40
+    la          t1, __return_pointer$
+    or          t0, t1, t0
     sw          a0, 0(t0)
     fence.i
 
