@@ -18,6 +18,8 @@ def copy_directory_m_n_times(input_dir, m, n):
             output_dir = f"../bin/app_chip_{x}_{y}"
             
             # Copy the directory to the new location
+            if os.path.exists(output_dir):
+                shutil.rmtree(output_dir)
             shutil.copytree(input_dir, output_dir)
             print(f"Copied {input_dir} to {output_dir}")
 

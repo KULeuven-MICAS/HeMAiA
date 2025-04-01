@@ -199,6 +199,7 @@
     spm_wide: {
       address: 2147483648, // 0x8000_0000
       length: 1048576, // 1 MiB 0x10_0000
+      banks: 32,
     },
     wide_zero_mem: {
       address: 68719476736, // 0x10_0000_0000
