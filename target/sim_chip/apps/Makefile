@@ -26,3 +26,4 @@ apps: $(BINS)
 
 clean:
 	@rm -f $(MKFILE_DIR)/*.bin $(MKFILE_DIR)/*.hex
+	@find $(MKFILE_DIR) -mindepth 1 -type d -exec rm -rf {} +
