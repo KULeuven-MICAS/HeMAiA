@@ -262,16 +262,16 @@ def am_connect_soc_narrow_xbar(am, am_soc_narrow_xbar, occamy_cfg):
 
 def am_connect_soc_wide_xbar_mem(am, am_soc_wide_xbar, occamy_cfg):
     # Connect wide SPM to Wide AXI
-    am_spm_wide = am.new_leaf(
+    am_hemaia_mem = am.new_leaf(
         "spm_wide",
-        occamy_cfg["spm_wide"]["length"],
+        0xffffffff - occamy_cfg["spm_wide"]["address"] + 1,
         occamy_cfg["spm_wide"]["address"]).attach_to(am_soc_wide_xbar)
     # Connect wide Zero Memory to Wide AXI
     am_wide_zero_mem = am.new_leaf(
         "wide_zero_mem",
         occamy_cfg["wide_zero_mem"]["length"],
         occamy_cfg["wide_zero_mem"]["address"]).attach_to(am_soc_wide_xbar)
-    return am_spm_wide, am_wide_zero_mem
+    return am_hemaia_mem, am_wide_zero_mem
 
 
 def am_connect_soc_wide_xbar_quad(am, am_soc_narrow_xbar, am_wide_xbar_quadrant_s1, am_narrow_xbar_quadrant_s1, occamy_cfg, cluster_generators):

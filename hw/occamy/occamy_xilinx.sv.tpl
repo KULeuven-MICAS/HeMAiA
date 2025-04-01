@@ -73,7 +73,7 @@ import ${name}_pkg::*;
   input  logic [31:0] bootrom_data_i,
 
   // HBM Port
-  ${soc_wide_xbar.out_spm_wide.emit_flat_master_port("m_axi_ram")}
+  ${soc_wide_xbar.out_hemaia_mem.emit_flat_master_port("m_axi_ram")}
 );
 
   // AXI ports of Occamy top-level
@@ -82,8 +82,8 @@ import ${name}_pkg::*;
   // SRAM as main memory //
   /////////////////////////
 
-  ${soc_wide_xbar.out_spm_wide.req_type()} spm_axi_wide_req_o;
-  ${soc_wide_xbar.out_spm_wide.rsp_type()} spm_axi_wide_rsp_i;
+  ${soc_wide_xbar.out_hemaia_mem.req_type()} spm_axi_wide_req_o;
+  ${soc_wide_xbar.out_hemaia_mem.rsp_type()} spm_axi_wide_rsp_i;
 
   // Assign structs to flattened ports
   `AXI_FLATTEN_MASTER(m_axi_ram, spm_axi_wide_req_o, spm_axi_wide_rsp_i)
@@ -126,6 +126,10 @@ import ${name}_pkg::*;
     .chip_ctrl_req_o(), 
     .chip_ctrl_rsp_i ('0),
     .sram_cfgs_i ('0),
+    .hemaia_mem_axi_req_o(spm_axi_wide_req_o),
+    .hemaia_mem_axi_rsp_i(spm_axi_wide_rsp_i),
+    .hemaia_mem_axi_req_i('0),
+    .hemaia_mem_axi_rsp_o(),
     .*
   );
 

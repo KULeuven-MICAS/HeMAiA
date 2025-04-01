@@ -2,7 +2,7 @@
 /work-vlt
 /bin
 /apps/*.bin
-/apps/*.hex
+/apps/**/*.hex
 /testharness/testharness.sv
 /logs
 /work-vcs

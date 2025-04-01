@@ -123,6 +123,7 @@ sources:
       - target/sim_chip/testharness/testharness.sv
       # - target/sim/test/bootrom.sv
       - target/rtl/bootrom/bootrom.sv
+      - hw/hemaia/hemaia_mem_system.sv
       - target/rtl/src/occamy_chip.sv
 
 
@@ -130,6 +131,7 @@ sources:
   - target: hemaia
     files:
       - target/rtl/bootrom/bootrom.sv
+      - hw/hemaia/hemaia_mem_system.sv
       - target/rtl/src/occamy_chip.sv
 
   - target: tsmc_pad

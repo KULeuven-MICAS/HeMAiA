@@ -69,8 +69,10 @@ module ${name}_top
   input  ${soc_axi_lite_narrow_periph_xbar.out_bootrom.rsp_type()} bootrom_rsp_i,
 
   /// Wide SPM
-  output ${soc_wide_xbar.out_spm_wide.req_type()} spm_axi_wide_req_o,
-  input  ${soc_wide_xbar.out_spm_wide.rsp_type()} spm_axi_wide_rsp_i,
+  output ${soc_wide_xbar.out_hemaia_mem.req_type()} hemaia_mem_axi_req_o,
+  input  ${soc_wide_xbar.out_hemaia_mem.rsp_type()} hemaia_mem_axi_rsp_i,
+  input  ${soc_wide_xbar.in_hemaia_mem.req_type()}  hemaia_mem_axi_req_i,
+  output ${soc_wide_xbar.in_hemaia_mem.rsp_type()}  hemaia_mem_axi_rsp_o,
 
 % if occamy_cfg['hemaia_multichip']['single_chip'] is False: 
   // HeMAiA Multi-Chip AXI Interface
@@ -160,8 +162,10 @@ module ${name}_top
     .periph_axi_lite_rsp_o ( periph_axi_lite_per2soc_rsp ),
     .periph_axi_lite_narrow_req_o ( periph_regbus_soc2per_req ),
     .periph_axi_lite_narrow_rsp_i ( periph_regbus_soc2per_rsp ),
-    .spm_axi_wide_req_o,
-    .spm_axi_wide_rsp_i,
+    .hemaia_mem_axi_req_o,
+    .hemaia_mem_axi_rsp_i,
+    .hemaia_mem_axi_req_i,
+    .hemaia_mem_axi_rsp_o,
 % if occamy_cfg['hemaia_multichip']['single_chip'] is False: 
     // Chiplet Requst to Router
     .soc2router_req_o,

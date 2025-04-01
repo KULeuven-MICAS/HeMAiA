@@ -120,7 +120,7 @@ module testharness import occamy_pkg::*; (
 
   /// SPM Wide Mem
   /// Simulated by fesvr
-  ${tb_memory(soc_wide_xbar.out_spm_wide,"spm_wide")}
+  ${tb_memory(soc_wide_xbar.out_hemaia_mem,"hemaia_mem_wide")}
 
   /// Bootrom
   /// Simulated by fesvr
@@ -181,8 +181,10 @@ module testharness import occamy_pkg::*; (
     .bootrom_req_o (axi_lite_bootrom_req),
     .bootrom_rsp_i (axi_lite_bootrom_rsp),
     // Main RAM
-    .spm_axi_wide_req_o (spm_wide_req),
-    .spm_axi_wide_rsp_i (spm_wide_rsp),
+    .hemaia_mem_axi_req_o (hemaia_mem_wide_req),
+    .hemaia_mem_axi_rsp_i (hemaia_mem_wide_rsp),
+    .hemaia_mem_axi_req_i ('0),
+    .hemaia_mem_axi_rsp_o (),
     .chip_ctrl_req_o (),
     .chip_ctrl_rsp_i ('0),
     .ext_irq_i ('0)
