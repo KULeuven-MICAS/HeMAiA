@@ -18,10 +18,11 @@ module testharness
   import occamy_pkg::*;
 ();
 
-  localparam RTCTCK = 30.518us;  // 32.768 kHz
-  localparam CLKTCK = 1000ps;  // 1 GHz
-  localparam SRAM_DEPTH = 16384;  // 16K Depp
-  localparam SRAM_WIDTH = 64;  // 64 Bytes Wide
+  localparam RTCTCK = 30.518us;   // 32.768 kHz
+  localparam CLKTCK = 1000ps;     // 1 GHz
+  localparam SRAM_BANK = 32;      // 32 Banks architecture
+  localparam SRAM_DEPTH = 4096;   // 4K Depp
+  localparam SRAM_WIDTH = 8;      // 8 Bytes Wide
 
   logic clk_i;
   logic rst_ni;
@@ -40,7 +41,9 @@ module testharness
     // Load the binaries
 % for i in x:
 %   for j in y:
-    i_occamy_${i}_${j}.i_spm_wide_cut.i_mem.i_mem.i_tc_sram.load_data("app_chip_${i}_${j}.hex");
+%     for k in range(0, 32):
+    i_occamy_${i}_${j}.i_hemaia_mem_system.i_hemaia_mem.gen_banks[${k}].i_data_mem.i_tc_sram.load_data("app_chip_${i}_${j}/bank_${k}.hex");
+%     endfor
 %   endfor
 % endfor
     // Reset the chip
@@ -255,14 +258,14 @@ module testharness
   );
 
   // Chip Status Monitor Block
-  always @(i_occamy_${i}_${j}.i_spm_wide_cut.i_mem.i_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32]) begin
-    if (i_occamy_${i}_${j}.i_spm_wide_cut.i_mem.i_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32] != 0) begin
-      if (i_occamy_${i}_${j}.i_spm_wide_cut.i_mem.i_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32] == 32'd1) begin
+  always @(i_occamy_${i}_${j}.i_hemaia_mem_system.i_hemaia_mem.gen_banks[31].i_data_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32]) begin
+    if (i_occamy_${i}_${j}.i_hemaia_mem_system.i_hemaia_mem.gen_banks[31].i_data_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32] != 0) begin
+      if (i_occamy_${i}_${j}.i_hemaia_mem_system.i_hemaia_mem.gen_banks[31].i_data_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32] == 32'd1) begin
         $display("Simulation of chip_${i}_${j} is finished at %tns", $time / 1000);
         chip_finish[${i}][${j}] = 1;
       end else begin
         $error("Simulation of chip_${i}_${j} is finished with errors %d at %tns",
-               i_occamy_${i}_${j}.i_spm_wide_cut.i_mem.i_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32],
+               i_occamy_${i}_${j}.i_hemaia_mem_system.i_hemaia_mem.gen_banks[31].i_data_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32],
                $time / 1000);
         chip_finish[${i}][${j}] = -1;
       end

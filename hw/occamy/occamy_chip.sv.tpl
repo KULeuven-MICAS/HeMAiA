@@ -94,71 +94,31 @@ import ${name}_pkg::*;
   output logic        jtag_tdo_o
 );
 
-  /////////////////////////
-  // SRAM as main memory //
-  /////////////////////////
+  //////////////////////////////
+  // SRAM L2 Memory Subsystem //
+  //////////////////////////////
 
   <%
-    ram_axi = soc_wide_xbar.out_spm_wide.copy(name="ram_axi").declare(context)
+    axi_soc_to_mem = soc_wide_xbar.out_hemaia_mem.copy(name="axi_soc_to_mem").declare(context)
+    axi_mem_to_soc = soc_wide_xbar.in_hemaia_mem.copy(name="axi_mem_to_soc").declare(context)
   %> \
-
-  <% spm_wide_words = occamy_cfg["spm_wide"]["length"]//(soc_wide_xbar.out_spm_wide.dw//8) %>\
-
-  typedef logic [${util.clog2(spm_wide_words) + util.clog2(soc_wide_xbar.out_spm_wide.dw//8)-1}:0] mem_wide_addr_t;
-  typedef logic [${soc_wide_xbar.out_spm_wide.dw-1}:0] mem_wide_data_t;
-  typedef logic [${soc_wide_xbar.out_spm_wide.dw//8-1}:0] mem_wide_strb_t;
-
-  logic spm_wide_req, spm_wide_gnt, spm_wide_we, spm_wide_rvalid;
-  mem_wide_addr_t spm_wide_addr;
-  mem_wide_data_t spm_wide_wdata, spm_wide_rdata;
-  mem_wide_strb_t spm_wide_strb;
-
-    axi_to_mem_interleaved #(
-    .axi_req_t (${soc_wide_xbar.out_spm_wide.req_type()}),
-    .axi_resp_t (${soc_wide_xbar.out_spm_wide.rsp_type()}),
-    .AddrWidth (${util.clog2(spm_wide_words) + util.clog2(soc_wide_xbar.out_spm_wide.dw//8)}),
-    .DataWidth (${soc_wide_xbar.out_spm_wide.dw}),
-    .IdWidth (${soc_wide_xbar.out_spm_wide.iw}),
-    .NumBanks (1),
-    .BufDepth (16)
-  ) i_axi_to_mem (
-    .clk_i (${soc_wide_xbar.out_spm_wide.clk}),
-    .rst_ni (${soc_wide_xbar.out_spm_wide.rst}),
-    .busy_o (),
-    .test_i ('0),
-    .axi_req_i (${ram_axi.req_name()}),
-    .axi_resp_o (${ram_axi.rsp_name()}),
-    .mem_req_o (spm_wide_req),
-    .mem_gnt_i (spm_wide_gnt),
-    .mem_addr_o (spm_wide_addr),
-    .mem_wdata_o (spm_wide_wdata),
-    .mem_strb_o (spm_wide_strb),
-    .mem_atop_o (),
-    .mem_we_o (spm_wide_we),
-    .mem_rvalid_i (spm_wide_rvalid),
-    .mem_rdata_i (spm_wide_rdata)
-  );
-
-  spm_1p_adv #(
-    .NumWords (${spm_wide_words}),
-    .DataWidth (${soc_wide_xbar.out_spm_wide.dw}),
-    .ByteWidth (8),
-    .EnableInputPipeline (1'b1),
-    .EnableOutputPipeline (1'b1),
-    .sram_cfg_t (sram_cfg_t)
-  ) i_spm_wide_cut (
-    .clk_i (${soc_wide_xbar.out_spm_wide.clk}),
-    .rst_ni (${soc_wide_xbar.out_spm_wide.rst}),
-    .valid_i (spm_wide_req),
-    .ready_o (spm_wide_gnt),
-    .we_i (spm_wide_we),
-    .addr_i (spm_wide_addr[${util.clog2(spm_wide_words) + util.clog2(soc_wide_xbar.out_spm_wide.dw//8)-1}:${util.clog2(soc_wide_xbar.out_spm_wide.dw//8)}]),
-    .wdata_i (spm_wide_wdata),
-    .be_i (spm_wide_strb),
-    .rdata_o (spm_wide_rdata),
-    .rvalid_o (spm_wide_rvalid),
-    .rerror_o (),
-    .sram_cfg_i ('0)
+  hemaia_mem_system #(
+    .chip_id_t (chip_id_t),
+    .axi_master_req_t (${axi_soc_to_mem.req_type()}),
+    .axi_master_rsp_t (${axi_soc_to_mem.rsp_type()}),
+    .axi_slave_req_t (${axi_mem_to_soc.req_type()}),
+    .axi_slave_rsp_t (${axi_mem_to_soc.rsp_type()}),
+    .MemBaseAddr (${occamy_cfg['spm_wide']["address"]}),
+    .MemBankNum (${occamy_cfg['spm_wide']["banks"]}),
+    .MemSize (${occamy_cfg['spm_wide']["length"]})
+  ) i_hemaia_mem_system (
+    .clk_i,
+    .rst_ni,
+    .chip_id_i,
+    .axi_master_req_i(${axi_soc_to_mem.req_name()}),
+    .axi_master_rsp_o(${axi_soc_to_mem.rsp_name()}),
+    .axi_slave_req_o(${axi_mem_to_soc.req_name()}),
+    .axi_slave_rsp_i(${axi_mem_to_soc.rsp_name()})
   );
 
   ///////////////////
@@ -258,8 +218,10 @@ import ${name}_pkg::*;
 % endif    
     .bootrom_req_o      (bootrom_axi_lite_req),
     .bootrom_rsp_i      (bootrom_axi_lite_rsp),
-    .spm_axi_wide_req_o (ram_axi_req),
-    .spm_axi_wide_rsp_i (ram_axi_rsp),
+    .hemaia_mem_axi_req_o(${axi_soc_to_mem.req_name()}),
+    .hemaia_mem_axi_rsp_i(${axi_soc_to_mem.rsp_name()}),
+    .hemaia_mem_axi_req_i(${axi_mem_to_soc.req_name()}),
+    .hemaia_mem_axi_rsp_o(${axi_mem_to_soc.rsp_name()}),
     .chip_ctrl_req_o    (),
     .chip_ctrl_rsp_i    ('0),
     .ext_irq_i          ('0)

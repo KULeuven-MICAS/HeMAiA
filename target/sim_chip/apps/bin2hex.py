@@ -1,4 +1,5 @@
 import argparse
+import bin2preload
 import os
 
 # Convert a binary file to a hex string and save it to a text file
@@ -52,8 +53,8 @@ def convert_all_bin_to_hex(directory):
         for file in files:
             if file.endswith('.bin'):
                 input_file = os.path.join(root, file)
-                output_file = f"{input_file.rsplit('.', 1)[0]}.hex"
-                binary_to_hex(input_file, output_file, chunk_size=64)
+                output_dir = f"{input_file.rsplit('.', 1)[0]}"
+                bin2preload.bin2preload(input_file, output_dir)
 
 def main():
     # Set up argument parser

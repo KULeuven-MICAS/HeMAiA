@@ -48,7 +48,8 @@
       narrow_conv_to_spm_narrow: 1,
       narrow_and_pcie: 3,
       narrow_and_wide: 1,
-      wide_conv_to_spm_wide: 3,
+      wide_to_hemaia_mem: 1,
+      hemaia_mem_to_wide: 1,
       wide_to_wide_zero_mem: 0,
       wide_to_hbm: 3,
       wide_and_inter: 3,
@@ -201,6 +202,7 @@
     spm_wide: {
       address: 2147483648, // 0x8000_0000
       length: 1048576, // 1 MiB 0x10_0000
+      banks: 32,
     },
     wide_zero_mem: {
       address: 68719476736, // 0x10_0000_0000

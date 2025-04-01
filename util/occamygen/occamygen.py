@@ -229,7 +229,7 @@ def main():
     am_spm_narrow, am_sys_idma_cfg = occamy.am_connect_soc_narrow_xbar(
         am, am_soc_narrow_xbar, occamy_cfg)
 
-    am_spm_wide, am_wide_zero_mem = occamy.am_connect_soc_wide_xbar_mem(
+    am_hemaia_mem, am_wide_zero_mem = occamy.am_connect_soc_wide_xbar_mem(
         am, am_soc_wide_xbar, occamy_cfg)
 
     am_clusters = occamy.am_connect_soc_wide_xbar_quad(
@@ -343,7 +343,9 @@ def main():
     soc_wide_xbar.add_output_entry("soc_narrow", am_soc_narrow_xbar)
     soc_wide_xbar.add_input("soc_narrow")
     soc_wide_xbar.add_input("sys_idma_mst")
-    soc_wide_xbar.add_output_entry("spm_wide", am_spm_wide)
+    soc_wide_xbar.add_output_entry("hemaia_mem", am_hemaia_mem)
+    soc_wide_xbar.add_input("hemaia_mem")
+
     soc_wide_xbar.add_output_entry("wide_zero_mem", am_wide_zero_mem)
     for i in range(nr_s1_quadrants):
         # Default route passes HBI through quadrant 0
