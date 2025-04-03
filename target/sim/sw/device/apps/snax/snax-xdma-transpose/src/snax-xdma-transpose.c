@@ -32,30 +32,22 @@ int main() {
         if (xdma_disable_dst_ext(0) != 0) {
             printf("Error in disabling xdma extension 0\r\n");
             err++;
-        } else {
-            printf("The xdma extension 0 is disabled\r\n");
         }
 
         if (xdma_disable_dst_ext(1) != 0) {
             printf("Error in disabling xdma extension 1\r\n");
             err++;
-        } else {
-            printf("The xdma extension 1 is disabled\r\n");
         }
 
         if (enable_transpose) {
             if (xdma_enable_dst_ext(2, (uint32_t *)NULL) != 0) {
                 printf("Error in enabling xdma extension 2\r\n");
                 err++;
-            } else {
-                printf("The xdma extension 2 is enabled\r\n");
             }
         } else {
             if (xdma_disable_dst_ext(2) != 0) {
                 printf("Error in disabling xdma extension 1\r\n");
                 err++;
-            } else {
-                printf("The xdma extension 2 is disabled\r\n");
             }
         }
 
@@ -65,10 +57,15 @@ int main() {
                        temporal_strides_src, temporal_bounds_src,
                        temporal_dimension_dst, temporal_strides_dst,
                        temporal_bounds_dst, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF);
+        uint32_t start_time;
+        uint32_t end_time;
+        __asm__ volatile("fence" ::: "memory");
+        __asm__ volatile("csrr %0, mcycle;" : "=r"(start_time));
         int task_id = xdma_start();
         xdma_local_wait(task_id);
-        printf("The xdma copy is finished\r\n");
-
+        __asm__ volatile("csrr %0, mcycle;" : "=r"(end_time));
+        printf("The xdma copy is finished in %d cycles\r\n",
+               end_time - start_time);
         // --------------------- Checking the Results --------------------- //
         for (int i = 0; i < matrix_size; i++) {
             if (tcdm_out[i] != golden_output_matrix[i]) {
