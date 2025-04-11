@@ -94,15 +94,6 @@ module testharness
     rtc_i = ~rtc_i;
   end
 
-  initial begin
-    forever begin
-      clk_i = 1;
-      #(CLKTCK / 2);
-      clk_i = 0;
-      #(CLKTCK / 2);
-    end
-  end
-
   logic clk_periph_i, rst_periph_ni;
   assign clk_periph_i  = clk_i;
   assign rst_periph_ni = rst_ni;

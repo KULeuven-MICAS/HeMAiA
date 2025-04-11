@@ -30,7 +30,7 @@ def format_vector_define(uid, vector):
             el_str = f'{el}'
         else:
             el_str = f'0x{el:02x}'
-        s += f','    
+        s += f'{el_str},'    
     s += '}'
     return s
 

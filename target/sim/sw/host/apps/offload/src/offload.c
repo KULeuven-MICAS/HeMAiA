@@ -14,11 +14,11 @@ int main() {
     uint32_t current_chip_id = get_current_chip_id();
 
     init_uart(current_chip_address_prefix, 50000000, 1000000);
-    print_str(current_chip_address_prefix,
-              "[HeMAiA] The Offload main function \r\n");
-    print_str(current_chip_address_prefix, "[HeMAiA] Current Chip ID is: ");
-    print_u8(current_chip_address_prefix, current_chip_id);
-    print_str(current_chip_address_prefix, "\r\n");
+    // print_str(current_chip_address_prefix,
+    //           "[HeMAiA] The Offload main function \r\n");
+    // print_str(current_chip_address_prefix, "[HeMAiA] Current Chip ID is: ");
+    // print_u8(current_chip_address_prefix, current_chip_id);
+    // print_str(current_chip_address_prefix, "\r\n");
     
     comm_buffer_ptr = (comm_buffer_t*)(((uint64_t)&__narrow_spm_start) |
                                        current_chip_address_prefix);
@@ -44,8 +44,8 @@ int main() {
     // programmed before Snitches are woken up
     asm volatile("fence.i" ::: "memory");
 
-    print_str(current_chip_address_prefix,
-              "[HeMAiA] Calling snitch cluster to execute the task \r\n");
+    // print_str(current_chip_address_prefix,
+    //           "[HeMAiA] Calling snitch cluster to execute the task \r\n");
 
     // Start Snitches
     wakeup_snitches_cl(current_chip_id);
