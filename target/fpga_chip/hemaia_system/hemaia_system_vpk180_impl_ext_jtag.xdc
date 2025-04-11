@@ -24,15 +24,15 @@ set_max_delay -to   [get_ports { jtag_tdo_o }] 20
 set_max_delay -from [get_ports { jtag_tms_i }] 20
 set_max_delay -from [get_ports { jtag_tdi_i }] 20
 
-# LA24P - BY40
-set_property PACKAGE_PIN BY40    [get_ports jtag_tck_i]
+# 2AD0 - J1.1 - LA00_CC_P - BV49
+set_property PACKAGE_PIN BV49    [get_ports jtag_tck_i]
 set_property IOSTANDARD LVCMOS15 [get_ports jtag_tck_i]
-# LA24N - CA39
-set_property PACKAGE_PIN CA39    [get_ports jtag_tdi_i]
+# 2AD1 - J1.3 - LA00_CC_N - BV50
+set_property PACKAGE_PIN BV50    [get_ports jtag_tdi_i]
 set_property IOSTANDARD LVCMOS15 [get_ports jtag_tdi_i]
-# LA25P - CC38
-set_property PACKAGE_PIN CC38    [get_ports jtag_tdo_o]
+# 2AD2 - J1.5 - LA01_CC_P - BW51
+set_property PACKAGE_PIN BW51    [get_ports jtag_tdo_o]
 set_property IOSTANDARD LVCMOS15 [get_ports jtag_tdo_o]
-# LA25N - CC39
-set_property PACKAGE_PIN CC39    [get_ports jtag_tms_i]
+# 2AD3 - J1.7 - LA01_CC_N - BW52
+set_property PACKAGE_PIN BW52    [get_ports jtag_tms_i]
 set_property IOSTANDARD LVCMOS15 [get_ports jtag_tms_i]
