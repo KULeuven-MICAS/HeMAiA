@@ -4,9 +4,9 @@
 
 // Provide an implementation for putchar.
 // void _putchar(char character) {}
-// extern uintptr_t volatile tohost, fromhost;
-static uintptr_t volatile *occamy_tohost = 0x800004c0;
-static uintptr_t volatile *occamy_fromhost = 0x80000500;
+extern uintptr_t volatile tohost, fromhost;
+static uintptr_t volatile *occamy_tohost = (volatile uintptr_t *)0x800004c0;
+static uintptr_t volatile *occamy_fromhost = (volatile uintptr_t *)0x80000500;
 // Rudimentary string buffer for putc calls.
 extern uint32_t _edram;
 #define PUTC_BUFFER_LEN (1024 - sizeof(size_t))

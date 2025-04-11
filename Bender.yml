@@ -121,8 +121,8 @@ sources:
       - target/sim_chip/testharness/congestion_emulator.sv
       - target/sim_chip/testharness/half_duplex_bus_emulator.sv
       - target/sim_chip/testharness/testharness.sv
-      # - target/sim/test/bootrom.sv
-      - target/rtl/bootrom/bootrom.sv
+      - target/sim/test/bootrom.sv
+      # - target/rtl/bootrom/bootrom.sv
       - hw/hemaia/hemaia_mem_system.sv
       - target/rtl/src/occamy_chip.sv
 
