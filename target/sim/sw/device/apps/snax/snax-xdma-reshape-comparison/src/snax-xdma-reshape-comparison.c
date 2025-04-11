@@ -16,63 +16,26 @@ int main() {
     uint32_t dma_load_input_end;
     uint32_t tcdm_baseaddress = snrt_cluster_base_addrl();
     // Put the input at the starting of tcdm
-    uint8_t *tcdm_in = (uint8_t *)tcdm_baseaddress;
+    uint8_t *tcdm_in = 0;
     // Put the output at the middle of tcdm
-    uint8_t *tcdm_out =
-        (uint8_t *)(tcdm_baseaddress +
-                    (matrix_size * sizeof(uint8_t) * 8 + 7) / 8);
+    uint8_t *tcdm_out = 0;
+    // (uint8_t *)(tcdm_baseaddress +
+    //             (matrix_size * sizeof(uint8_t) * 8 + 7) / 8);
 
-    if (snrt_is_dm_core() && snrt_cluster_idx() == 0) {
+    if (snrt_cluster_idx() == 1 && snrt_is_dm_core()) {
+        tcdm_in = (void *)tcdm_baseaddress;
         // First we need to transfer the input data from L3->TCDM
-        snrt_dma_start_1d(tcdm_in, input_matrix, matrix_size * sizeof(uint8_t));
+        snrt_dma_start_1d(tcdm_in, input_matrix,
+                          matrix_size * sizeof(input_matrix[0]));
         snrt_dma_wait_all();
+    }
 
-        // --------------------- Configure the Ext --------------------- //
+    snrt_global_barrier();
 
-        if (xdma_disable_dst_ext(0) != 0) {
-            printf("Error in disabling xdma extension 0\r\n");
-            err++;
-        }
-
-        if (xdma_disable_dst_ext(1) != 0) {
-            printf("Error in disabling xdma extension 1\r\n");
-            err++;
-        }
-        if (xdma_disable_dst_ext(2) != 0) {
-            printf("Error in disabling xdma extension 1\r\n");
-            err++;
-        }
-
-        // --------------------- Configure the AGU --------------------- //
-        xdma_memcpy_nd(tcdm_in, tcdm_out, spatial_stride_src_xdma,
-                       spatial_stride_dst_xdma, temporal_dimension_src_xdma,
-                       temporal_strides_src_xdma, temporal_bounds_src_xdma,
-                       temporal_dimension_dst_xdma, temporal_strides_dst_xdma,
-                       temporal_bounds_dst_xdma, 0xFFFFFFFF, 0xFFFFFFFF,
-                       0xFFFFFFFF);
-
-        uint32_t start_time;
-        uint32_t end_time;
-
-        __asm__ volatile("fence" ::: "memory");
-        __asm__ volatile("csrr %0, mcycle;" : "=r"(start_time));
-        int task_id = xdma_start();
-        xdma_local_wait(task_id);
-        __asm__ volatile("csrr %0, mcycle;" : "=r"(end_time));
-        printf("The XDMA copy is finished in %d cycles\r\n",
-               end_time - start_time);
-
-        // --------------------- Checking the Results --------------------- //
-        // for (int i = 0; i < matrix_size; i++) {
-        //     if (tcdm_out[i] != golden_output_matrix[i]) {
-        //         printf("The transpose is incorrect!\r\n");
-        //         printf("tcdm_out[%d]=%d, golden_output_matrix[%d]=%d\r\n", i,
-        //                tcdm_out[i], i, golden_output_matrix[i]);
-        //     }
-        // }
-        // printf("Checking is done. All values copied by XDMA are right\r\n");
-
-        // Do the same in IDMA
+    if (snrt_cluster_idx() == 0 && snrt_is_dm_core()) {
+        tcdm_in = (void *)tcdm_baseaddress + cluster_offset;
+        tcdm_out = (void *)tcdm_baseaddress;
+        // The baseline group: Copy by IDMA
         char *src_addr[TOTAL_ITERATIONS_IDMA];
         char *dst_addr[TOTAL_ITERATIONS_IDMA];
         for (uint32_t i = 0; i < TOTAL_ITERATIONS_IDMA; i++) {
@@ -99,7 +62,9 @@ int main() {
                           sw_dst_bound_idma[2] % sw_dst_bound_idma[3]) *
                              sw_dst_stride_idma[3]);
         }
-        __asm__ volatile("fence" ::: "memory");
+
+        uint32_t start_time;
+        uint32_t end_time;
         __asm__ volatile("csrr %0, mcycle;" : "=r"(start_time));
         for (int i = 0; i < TOTAL_ITERATIONS_IDMA; i++) {
             snrt_dma_start_2d(dst_addr[i], src_addr[i], size_idma,
@@ -110,15 +75,50 @@ int main() {
         printf("The IDMA copy is finished in %d cycles\r\n",
                end_time - start_time);
 
+        // The XDMA group: Copy by XDMA
+        // --------------------- Configure the Ext --------------------- //
+
+        if (xdma_disable_dst_ext(0) != 0) {
+            printf("Error in disabling xdma extension 0\r\n");
+            err++;
+        }
+
+        if (xdma_disable_dst_ext(1) != 0) {
+            printf("Error in disabling xdma extension 1\r\n");
+            err++;
+        }
+        if (xdma_disable_dst_ext(2) != 0) {
+            printf("Error in disabling xdma extension 2\r\n");
+            err++;
+        }
+
+        // --------------------- Configure the AGU --------------------- //
+        xdma_memcpy_nd(tcdm_in, tcdm_out, spatial_stride_src_xdma,
+                       spatial_stride_dst_xdma, temporal_dimension_src_xdma,
+                       temporal_strides_src_xdma, temporal_bounds_src_xdma,
+                       temporal_dimension_dst_xdma, temporal_strides_dst_xdma,
+                       temporal_bounds_dst_xdma, 0xFFFFFFFF, 0xFFFFFFFF,
+                       0xFFFFFFFF);
+
+        __asm__ volatile("csrr %0, mcycle;" : "=r"(start_time));
+        int task_id = xdma_start();
+        xdma_remote_wait(task_id);
+        __asm__ volatile("csrr %0, mcycle;" : "=r"(end_time));
+        printf("The XDMA copy is finished in %d cycles\r\n",
+               end_time - start_time);
+
         // --------------------- Checking the Results --------------------- //
-        for (int i = 0; i < matrix_size; i++) {
-            if (tcdm_out[i] != golden_output_matrix[i]) {
-                printf("The transpose is incorrect!\r\n");
-                printf("tcdm_out[%d]=%d, golden_output_matrix[%d]=%d\r\n", i,
-                       tcdm_out[i], i, golden_output_matrix[i]);
+        #ifdef XDMA_CHECK_RESULT
+        uint32_t *golden_result = (uint32_t *)golden_output_matrix;
+        uint32_t *tcdm_result = (uint32_t *)tcdm_out;
+
+        for (int i = 0; i < matrix_size * sizeof(input_matrix[0]) / 4; i++) {
+            if (tcdm_result[i] != golden_result[i]) {
+                printf("The reshape is incorrect at byte %d! \n", i << 2);
             }
         }
-        printf("Checking is done. All values copied by IDMA are right\r\n");
+        printf("Checking is done. All values are right\n");
+        #endif
     }
 
     return 0;

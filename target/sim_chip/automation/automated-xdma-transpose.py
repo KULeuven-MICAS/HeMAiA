@@ -9,8 +9,8 @@ binary_path = "/users/micas/ydeng/Desktop/SNAX/HeMAiA/target/sim_chip/bin/occamy
 hemaia_root_path = "/users/micas/ydeng/Desktop/SNAX/HeMAiA"
 
 num_threads = 12
-Ms = [16, 32, 64, 96, 128, 192, 256]
-Ns = [16, 32, 64, 96, 128, 192, 256]
+Ms = [32, 64, 96, 128, 192, 256, 384, 512]
+Ns = [32, 64, 96, 128, 192, 256, 384, 512]
 BIT_WIDTHs = [8, 16]
 input_layouts = ["MNM8N8", "MN"]
 output_layouts = ["MNM8N8", "MN"]

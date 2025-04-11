@@ -17,7 +17,7 @@ typedef struct {
     volatile uint32_t usr_data_ptr;
     volatile uint32_t chip_barrier;
     // Chip Level synchronization mechanism: 16x16 chip matrix
-    volatile uint8_t  chip_level_checkpoint[256];
+    volatile uint8_t chip_level_checkpoint[256];
 } comm_buffer_t;
 
 /**************/
@@ -26,12 +26,12 @@ typedef struct {
 
 inline static void set_host_sw_interrupt(uint8_t chip_id) {
 #if __riscv_xlen == 64
-    uint32_t* msip_ptr =
+    volatile uint32_t* msip_ptr =
         (uint32_t*)(((uintptr_t)clint_msip_ptr(0)) |
                     ((uintptr_t)get_chip_baseaddress(chip_id)));
     *msip_ptr = 1;
 #elif __riscv_xlen == 32
-    uint32_t* msip_ptr = clint_msip_ptr(0);
+    volatile uint32_t* msip_ptr = clint_msip_ptr(0);
     uint32_t target_addrh = get_chip_baseaddress_h(chip_id);
     uint32_t current_addrh = get_current_chip_baseaddress_h();
 
@@ -53,12 +53,12 @@ inline static void set_host_sw_interrupt(uint8_t chip_id) {
 
 inline void clear_host_sw_interrupt_unsafe(uint8_t chip_id) {
 #if __riscv_xlen == 64
-    uint32_t* msip_ptr =
+    volatile uint32_t* msip_ptr =
         (uint32_t*)(((uintptr_t)clint_msip_ptr(0)) |
                     ((uintptr_t)get_chip_baseaddress(chip_id)));
     *msip_ptr = 0;
 #elif __riscv_xlen == 32
-    uint32_t* msip_ptr = clint_msip_ptr(0);
+    volatile uint32_t* msip_ptr = clint_msip_ptr(0);
     uint32_t target_addrh = get_chip_baseaddress_h(chip_id);
     uint32_t current_addrh = get_current_chip_baseaddress_h();
 
@@ -80,12 +80,12 @@ inline void clear_host_sw_interrupt_unsafe(uint8_t chip_id) {
 
 inline void wait_host_sw_interrupt_clear(uint8_t chip_id) {
 #if __riscv_xlen == 64
-    uint32_t* msip_ptr =
+    volatile uint32_t* msip_ptr =
         (uint32_t*)(((uintptr_t)clint_msip_ptr(0)) |
                     ((uintptr_t)get_chip_baseaddress(chip_id)));
     while (*msip_ptr);
 #elif __riscv_xlen == 32
-    uint32_t* msip_ptr = clint_msip_ptr(0);
+    volatile uint32_t* msip_ptr = clint_msip_ptr(0);
     uint32_t target_addrh = get_chip_baseaddress_h(chip_id);
     uint32_t current_addrh = get_current_chip_baseaddress_h();
 
