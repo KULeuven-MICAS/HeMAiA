@@ -121,11 +121,7 @@
     },
     clusters:[
       "snax_KUL_cluster",
-      // "snax_KUL_dse_cluster",
-      "snax_hypercorex_cluster",
-      "snax_hypercorex_cluster",
-      "snax_hypercorex_cluster",
-      // "snax_dimc_cluster"
+      "snax_KUL_cluster",
     ],
 
     // peripherals
