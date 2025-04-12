@@ -1,6 +1,6 @@
 {
-  M: 32
-  N: 32
+  M: 512
+  N: 512
   input_layout: MN
   output_layout: MN
 }

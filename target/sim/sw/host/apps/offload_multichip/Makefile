@@ -37,7 +37,9 @@ DEVICE_APPS += snax/snax-hypercorex-test-csr
 DEVICE_APPS += snax/snax-hypercorex-char-recog
 DEVICE_APPS += snax/snax-xdma-maxpool
 DEVICE_APPS += snax/snax-xdma-memset
+DEVICE_APPS += snax/snax-xdma-broadcast
 DEVICE_APPS += snax/snax-xdma-transpose
+DEVICE_APPS += snax/snax-xdma-reshape-comparison
 DEVICE_APPS += snax/snax-axi-torture
 DEVICE_APPS += snax/snax-axi-torture-devil
 
