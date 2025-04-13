@@ -4,7 +4,7 @@
 #
 # Yunhao Deng <yunhao.deng@kuleuven.be>
 
-APP     = snax-xdma-broadcast
+APP     = snax-xdma-multicast
 
 INCDIRS += data
 INCDIRS += INCDIRS += ../../../snax/xdma/include/
@@ -12,7 +12,7 @@ INCDIRS += INCDIRS += ../../../snax/xdma/include/
 # Add binary to final build
 RISCV_LDFLAGS += ../../../snax/xdma/build/snax-xdma-lib.o
 
-SRCS    = src/snax-xdma-broadcast.c
+SRCS    = src/snax-xdma-multicast.c
 
 include ./data/Makefile
 include ../../common.mk

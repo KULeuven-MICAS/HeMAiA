@@ -4,20 +4,20 @@ import shutil
 import hjson
 from concurrent.futures import ThreadPoolExecutor
 
-param_path = "/users/micas/ydeng/Desktop/SNAX/HeMAiA/target/sim/sw/device/apps/snax/snax-xdma-reshape-comparison/data/params.hjson"
+param_path = "/users/micas/ydeng/Desktop/SNAX/HeMAiA/target/sim/sw/device/apps/snax/snax-xdma-reshape/data/params.hjson"
 binary_path = "/users/micas/ydeng/Desktop/SNAX/HeMAiA/target/sim_chip/bin/occamy_chip.vlt"
 hemaia_root_path = "/users/micas/ydeng/Desktop/SNAX/HeMAiA"
 
-num_threads = 12
-Ms = [32, 64, 96, 128, 192, 256, 384, 512]
-Ns = [32, 64, 96, 128, 192, 256, 384, 512]
-input_layouts = ["MNM8N32", "MNM8N16", "MNM8N8", "MN"]
-output_layouts = ["MNM8N32", "MNM8N16", "MNM8N8", "MN"]
-
-# Ms = [32]
-# Ns = [32]
+num_threads = 24
+# Ms = [32, 64, 96, 128, 192, 256, 384, 512]
+# Ns = [32, 64, 96, 128, 192, 256, 384, 512]
 # input_layouts = ["MNM8N32", "MNM8N16", "MNM8N8", "MN"]
 # output_layouts = ["MNM8N32", "MNM8N16", "MNM8N8", "MN"]
+
+Ms = [512]
+Ns = [512]
+input_layouts = ["MNM8N32", "MNM8N16", "MNM8N8", "MN"]
+output_layouts = ["MNM8N32", "MNM8N16", "MNM8N8", "MN"]
 
 
 # Load the existing params from params.hjson (so we only modify the needed keys)
@@ -79,7 +79,7 @@ with ThreadPoolExecutor(max_workers=num_threads) as executor:
                     subprocess.run(["make", "apps"], cwd=apps_path, check=True)
 
                     # 4. Copy the "snax-xdma-transpose" folder to the new folder
-                    source_dir = os.path.join(apps_path, "offload-snax-xdma-reshape-comparison")
+                    source_dir = os.path.join(apps_path, "offload-snax-xdma-reshape")
                     target_dir = os.path.join(folder_name, "app_chip_0_0")
                     shutil.copytree(source_dir, target_dir)
 
