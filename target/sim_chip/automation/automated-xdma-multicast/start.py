@@ -9,9 +9,7 @@ binary_path = "/users/micas/ydeng/Desktop/SNAX/HeMAiA/target/sim_chip/bin/occamy
 hemaia_root_path = "/users/micas/ydeng/Desktop/SNAX/HeMAiA"
 
 num_threads = 24
-# sizes = [64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 786432]
-sizes = [65536]
-
+sizes = [64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 786432]
 
 # Load the existing params from params.hjson (so we only modify the needed keys)
 with open(param_path, 'r') as f:
@@ -61,7 +59,7 @@ def process_configuration(folder_name, size):
         result_file.write(f"{size},{idma_multicast_1_val},{xdma_copy_cycle_val},{idma_multicast_1_val},{xdma_multicast_1_val},{idma_multicast_2_val},{xdma_multicast_2_val},{idma_multicast_3_val},{xdma_multicast_3_val},{idma_multicast_4_val},{xdma_multicast_4_val}\n")
 
     # 5. Delete the entire folder
-    # shutil.rmtree(folder_name)
+    shutil.rmtree(folder_name)
 
 # Use ThreadPoolExecutor to run configurations concurrently
 
