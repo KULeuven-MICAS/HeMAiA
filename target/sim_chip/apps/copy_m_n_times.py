@@ -29,8 +29,8 @@ def main():
     
     # Positional arguments
     parser.add_argument('-i', '--input-dir', required=True, help='Path to the input directory to be copied')
-    parser.add_argument('-m', required=True, type=int, help='Number of rows (copies along x-axis)')
-    parser.add_argument('-n', required=True, type=int, help='Number of columns (copies along y-axis)')
+    parser.add_argument('-m', type=int, default=1, help='Number of rows (copies along x-axis, default: 1)')
+    parser.add_argument('-n', type=int, default=1, help='Number of columns (copies along y-axis, default: 1)')
     
     # Parse the arguments
     args = parser.parse_args()
