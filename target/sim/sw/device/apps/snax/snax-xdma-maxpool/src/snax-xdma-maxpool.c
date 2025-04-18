@@ -7,6 +7,7 @@
 #include "data.h"
 #include "snax-xdma-lib.h"
 #include "snrt.h"
+#define XDMA_CHECK_RESULT
 
 uint32_t tstride_src[5] = {0};
 uint32_t tbound_src[5] = {0};
@@ -51,20 +52,19 @@ int main() {
         // Reference Group: Copy by IDMA + MaxPool to compute locally
 
         // --------------------- Configure the Ext --------------------- //
+        uint32_t ext_param_maxpool_size[1] = {reduceLen};
+        if (xdma_enable_src_ext(0, ext_param_maxpool_size) != 0) {
+            printf("Error in enabling xdma reader extension 0\r\n");
+            err++;
+        }
 
         if (xdma_disable_dst_ext(0) != 0) {
-            printf("Error in disabling xdma extension 0\r\n");
+            printf("Error in disabling xdma writer extension 0\r\n");
             err++;
         }
 
-        uint32_t ext_param_maxpool_size[1] = {reduceLen};
-        if (xdma_enable_dst_ext(1, ext_param_maxpool_size) != 0) {
-            printf("Error in enabling xdma extension 1\r\n");
-            err++;
-        }
-
-        if (xdma_disable_dst_ext(2) != 0) {
-            printf("Error in disabling xdma extension 2\r\n");
+        if (xdma_disable_dst_ext(1) != 0) {
+            printf("Error in disabling xdma writer extension 1\r\n");
             err++;
         }
 
@@ -86,8 +86,8 @@ int main() {
         printf("The IDMA + MaxPool copy is finished in %d cycles\r\n",
                end_time - start_time);
 
-        // --------------------- Checking the Results --------------------- //
-        #ifdef XDMA_CHECK_RESULT
+// --------------------- Checking the Results --------------------- //
+#ifdef XDMA_CHECK_RESULT
         for (int i = 0; i < output_data_len; i++) {
             if ((int8_t)tcdm_out[i] != C_golden[i]) {
                 printf("The maxpool is incorrect!\r\n");
@@ -96,20 +96,13 @@ int main() {
             }
         }
         printf("Checking is done. All values are right\r\n");
-        #endif
-    }
+#endif
 
-    snrt_global_barrier();
-
-    if (snrt_is_dm_core() && snrt_cluster_idx() == 1) {
-        tcdm_in = tcdm_in - cluster_offset;
-        // --------------------- Configure the AGU --------------------- //
+        // Experiment Group Use XDMA to do maxpool and copy
+        tcdm_out = tcdm_in + cluster_offset;
         xdma_memcpy_nd(tcdm_in, tcdm_out, spatialStride1_in, spatialStride1_out,
                        5, tstride_src, tbound_src, 3, tstride_dst, tbound_dst,
                        0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF);
-
-        register uint32_t start_time;
-        register uint32_t end_time;
         __asm__ volatile("csrr %0, mcycle;" : "=r"(start_time));
         // Start XDMA to do the maxpool
         int task_id = xdma_start();
@@ -117,9 +110,12 @@ int main() {
         __asm__ volatile("csrr %0, mcycle;" : "=r"(end_time));
         printf("The XDMA copy is finished in %d cycles\r\n",
                end_time - start_time);
+    }
 
-        // --------------------- Checking the Results --------------------- //
-        #ifdef XDMA_CHECK_RESULT
+    snrt_global_barrier();
+
+    if (snrt_is_dm_core() && snrt_cluster_idx() == 1) {
+#ifdef XDMA_CHECK_RESULT
         for (int i = 0; i < output_data_len; i++) {
             if ((int8_t)tcdm_out[i] != C_golden[i]) {
                 printf("The maxpool is incorrect!\r\n");
@@ -128,7 +124,7 @@ int main() {
             }
         }
         printf("Checking is done. All values are right\r\n");
-        #endif
+#endif
     }
 
     return 0;

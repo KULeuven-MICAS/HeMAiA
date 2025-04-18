@@ -79,16 +79,15 @@ int main() {
         // --------------------- Configure the Ext --------------------- //
 
         if (xdma_disable_dst_ext(0) != 0) {
-            printf("Error in disabling xdma extension 0\r\n");
+            printf("Error in disabling xdma writer extension 0\n");
             err++;
         }
-
         if (xdma_disable_dst_ext(1) != 0) {
-            printf("Error in disabling xdma extension 1\r\n");
+            printf("Error in disabling xdma writer extension 1\n");
             err++;
         }
-        if (xdma_disable_dst_ext(2) != 0) {
-            printf("Error in disabling xdma extension 2\r\n");
+        if (xdma_disable_src_ext(0) != 0) {
+            printf("Error in disabling xdma reader extension 0\n");
             err++;
         }
 
@@ -107,8 +106,8 @@ int main() {
         printf("The XDMA copy is finished in %d cycles\r\n",
                end_time - start_time);
 
-        // --------------------- Checking the Results --------------------- //
-        #ifdef XDMA_CHECK_RESULT
+// --------------------- Checking the Results --------------------- //
+#ifdef XDMA_CHECK_RESULT
         uint32_t *golden_result = (uint32_t *)golden_output_matrix;
         uint32_t *tcdm_result = (uint32_t *)tcdm_out;
 
@@ -118,7 +117,7 @@ int main() {
             }
         }
         printf("Checking is done. All values are right\n");
-        #endif
+#endif
     }
 
     return 0;

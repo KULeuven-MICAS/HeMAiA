@@ -32,21 +32,20 @@ int main() {
         // Normal copy evaluation
         // Configure the extension
         if (xdma_disable_dst_ext(0) != 0) {
-            printf("Error in disabling xdma extension 0\n");
+            printf("Error in disabling xdma writer extension 0\n");
             err++;
         }
         if (xdma_disable_dst_ext(1) != 0) {
-            printf("Error in disabling xdma extension 1\n");
+            printf("Error in disabling xdma writer extension 1\n");
             err++;
         }
-        if (xdma_disable_dst_ext(2) != 0) {
-            printf("Error in disabling xdma extension 1\n");
+        if (xdma_disable_src_ext(0) != 0) {
+            printf("Error in disabling xdma reader extension 0\n");
             err++;
         }
 
         xdma_memcpy_1d((void *)tcdm_baseaddress - cluster_offset,
-                       (void *)(tcdm_baseaddress),
-                       data_size * sizeof(data[0]));
+                       (void *)(tcdm_baseaddress), data_size * sizeof(data[0]));
         __asm__ volatile("csrr %0, mcycle;" : "=r"(start_time));
         int task_id = xdma_start();
         xdma_remote_wait(task_id);
@@ -69,15 +68,15 @@ int main() {
 
         // Configure the extension
         if (xdma_disable_dst_ext(0) != 0) {
-            printf("Error in disabling xdma extension 0\n");
+            printf("Error in disabling xdma writer extension 0\n");
             err++;
         }
         if (xdma_disable_dst_ext(1) != 0) {
-            printf("Error in disabling xdma extension 1\n");
+            printf("Error in disabling xdma writer extension 1\n");
             err++;
         }
-        if (xdma_disable_dst_ext(2) != 0) {
-            printf("Error in disabling xdma extension 1\n");
+        if (xdma_disable_src_ext(0) != 0) {
+            printf("Error in disabling xdma reader extension 0\n");
             err++;
         }
 
