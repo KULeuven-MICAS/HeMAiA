@@ -47,7 +47,7 @@ extern "C" {
 #include <stdint.h>
 #include "chip_id.h"
 
-#define SYS_IDMA_CFG_BASE_ADDR 0x11000000
+#define SYS_IDMA_CFG_BASE_ADDR 0x05000000
 
 #define IDMA_SRC_ADDR \
     (SYS_IDMA_CFG_BASE_ADDR + IDMA_REG64_FRONTEND_SRC_ADDR_REG_OFFSET)
