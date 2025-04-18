@@ -1,24 +1,16 @@
-// Copyright 2023 KU Leuven.
-// Licensed under the Apache License, Version 2.0, see LICENSE for details.
-// SPDX-License-Identifier: Apache-2.0
-//
-// Xiaoling Yi <xiaoling.yi@esat.kuleuven.be>
-
 {
-    ifMaxPool: true,
-    iftestIm2Col: false,
-    ifTestTransposer: false,
-    
-    // parameters for maxpool
-    ifC8HW8datalayout: true,
-    Nbatch: 1,
-    H: 16,
-    W: 8,
-    Cin: 8,
-    Kh: 3,
-    Kw: 3,
-    pad_h: 1,
-    pad_w: 1,
-    stride_h: 1,
-    stride_w: 1,
+  ifMaxPool: true
+  iftestIm2Col: false
+  ifTestTransposer: false
+  ifC8HW8datalayout: true
+  Nbatch: 1
+  H: 224
+  W: 224
+  Cin: 64
+  Kh: 2
+  Kw: 2
+  pad_h: 0
+  pad_w: 0
+  stride_h: 2
+  stride_w: 2
 }
