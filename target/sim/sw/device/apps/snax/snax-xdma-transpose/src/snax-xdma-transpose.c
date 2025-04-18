@@ -38,24 +38,24 @@ int main() {
 
         // --------------------- Configure the Ext --------------------- //
 
-        if (xdma_disable_dst_ext(0) != 0) {
-            printf("Error in disabling xdma extension 0\n");
+        if (xdma_disable_src_ext(0) != 0) {
+            printf("Error in disabling reader xdma extension 0\n");
             err++;
         }
 
-        if (xdma_disable_dst_ext(1) != 0) {
-            printf("Error in disabling xdma extension 1\n");
+        if (xdma_disable_dst_ext(0) != 0) {
+            printf("Error in disabling writer xdma extension 1\n");
             err++;
         }
 
         if (enable_transpose) {
-            if (xdma_enable_dst_ext(2, (uint32_t *)transposer_param) != 0) {
-                printf("Error in enabling xdma extension 2\n");
+            if (xdma_enable_dst_ext(1, (uint32_t *)transposer_param) != 0) {
+                printf("Error in enabling xdma writer extension 1\n");
                 err++;
             }
         } else {
-            if (xdma_disable_dst_ext(2) != 0) {
-                printf("Error in disabling xdma extension 2\n");
+            if (xdma_disable_dst_ext(1) != 0) {
+                printf("Error in disabling xdma writer extension 1\n");
                 err++;
             }
         }
@@ -80,7 +80,7 @@ int main() {
         printf("The IDMA + Transposer copy is finished in %d cycles\r\n",
                end_time - start_time);
 
-        // The experiment group: XDMA to do transpose during data copy 
+        // The experiment group: XDMA to do transpose during data copy
         tcdm_in = (void *)tcdm_baseaddress + cluster_offset;
         tcdm_out = (void *)tcdm_baseaddress;
 
@@ -99,8 +99,8 @@ int main() {
         printf("The XDMA copy is finished in %d cycles\r\n",
                end_time - start_time);
 
-        // --------------------- Checking the Results --------------------- //
-        #ifdef XDMA_CHECK_RESULT
+// --------------------- Checking the Results --------------------- //
+#ifdef XDMA_CHECK_RESULT
         uint32_t *golden_result = (uint32_t *)golden_output_matrix;
         uint32_t *tcdm_result = (uint32_t *)tcdm_out;
 
@@ -110,7 +110,7 @@ int main() {
             }
         }
         printf("Checking is done. All values are right\n");
-        #endif
+#endif
     }
 
     return 0;

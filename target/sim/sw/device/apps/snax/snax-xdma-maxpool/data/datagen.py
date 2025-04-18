@@ -320,8 +320,8 @@ def emit_data_reshuffler(**kwargs):
         assert kwargs["Cin"] % 8 == 0
 
         assert (
-            input_data_len + output_data_len < 128 * 1024
-        ), "Data size too large for 128 KB TCDM"
+            input_data_len + output_data_len < 4096 * 1024
+        ), "Data size too large for 4 MB TCDM"
 
         data_str += [
             format_scalar_definition("int32_t", "input_data_len", input_data_len),
