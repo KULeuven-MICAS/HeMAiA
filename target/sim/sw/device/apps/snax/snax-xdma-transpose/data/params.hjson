@@ -1,6 +1,6 @@
 {
-  M: 16
-  N: 16
+  M: 512
+  N: 512
   BIT_WIDTH: 16
   input_layout: MN
   output_layout: MN

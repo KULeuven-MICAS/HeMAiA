@@ -9,18 +9,18 @@ binary_path = "/users/micas/ydeng/Desktop/SNAX/HeMAiA/target/sim_chip/bin/occamy
 hemaia_root_path = "/users/micas/ydeng/Desktop/SNAX/HeMAiA"
 
 num_threads = 12
-Ms = [32, 64, 96, 128, 192, 256, 384, 512]
-Ns = [32, 64, 96, 128, 192, 256, 384, 512]
-BIT_WIDTHs = [8, 16]
+# Ms = [32, 64, 96, 128, 192, 256, 384, 512]
+# Ns = [32, 64, 96, 128, 192, 256, 384, 512]
+# BIT_WIDTHs = [8, 16]
+# input_layouts = ["MNM8N8", "MN"]
+# output_layouts = ["MNM8N8", "MN"]
+# transpose_options = [True]
+Ms = [512]
+Ns = [512]
+BIT_WIDTHs = [16]
 input_layouts = ["MNM8N8", "MN"]
 output_layouts = ["MNM8N8", "MN"]
 transpose_options = [True]
-# Ms = [8]
-# Ns = [8]
-# BIT_WIDTHs = [16]
-# input_layouts = ["MNM8N8"]
-# output_layouts = ["MNM8N8"]
-# transpose_options = [True]
 
 # Load the existing params from params.hjson (so we only modify the needed keys)
 with open(param_path, 'r') as f:
