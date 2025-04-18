@@ -121,7 +121,7 @@
     },
     clusters:[
       "snax_KUL_cluster",
-      "snax_KUL_cluster",
+      // "snax_KUL_cluster",
       // "snax_KUL_cluster",
       // "snax_KUL_cluster",
       // "snax_KUL_cluster",
@@ -208,7 +208,7 @@
       length: 8589934592, // 8 GiB 0x11_0000_0000
     },
     sys_idma_cfg: {
-      address: 285212672, // 0x1100_0000
+      address: 83886080, // 0x0500_0000
       length: 65536, // 64 kiB 0x1_0000
     },
     // backup boot address
