@@ -40,6 +40,9 @@ DEVICE_APPS += snax/snax-xdma-memset
 DEVICE_APPS += snax/snax-xdma-multicast
 DEVICE_APPS += snax/snax-xdma-transpose
 DEVICE_APPS += snax/snax-xdma-reshape
+DEVICE_APPS += snax/snax-xdma-kvcache-prefill
+DEVICE_APPS += snax/snax-xdma-kvcache-store
+DEVICE_APPS += snax/snax-xdma-kvcache-load
 DEVICE_APPS += snax/snax-axi-torture
 DEVICE_APPS += snax/snax-axi-torture-devil
 

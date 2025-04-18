@@ -1,0 +1,6 @@
+{
+  M: 1
+  N: 512
+  input_layout: MNM8N8
+  output_layout: MN
+}

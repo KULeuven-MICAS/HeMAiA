@@ -1,0 +1,7 @@
+# 1024*512 = 512K
+{
+  M: 1024
+  N: 512
+  input_layout: MNM8N8
+  output_layout: MN
+}
