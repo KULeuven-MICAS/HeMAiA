@@ -6,5 +6,6 @@ runs:
   - elf: host/apps/offload/build/offload-snax-test-integration.elf
   - elf: host/apps/offload/build/offload-snax-xdma-maxpool.elf
   - elf: host/apps/offload/build/offload-snax-xdma-memset.elf
-  - elf: host/apps/offload/build/offload-snax-xdma-reshape-comparison.elf
+  - elf: host/apps/offload/build/offload-snax-xdma-reshape.elf
   - elf: host/apps/offload/build/offload-snax-xdma-transpose.elf
+  - elf: host/apps/offload/build/offload-snax-xdma-multicast.elf

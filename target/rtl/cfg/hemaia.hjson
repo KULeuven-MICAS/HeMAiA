@@ -122,6 +122,12 @@
     clusters:[
       "snax_KUL_cluster",
       "snax_KUL_cluster",
+      // "snax_KUL_cluster",
+      // "snax_KUL_cluster",
+      // "snax_KUL_cluster",
+      // "snax_KUL_cluster",
+      // "snax_KUL_cluster",
+      // "snax_KUL_cluster",
     ],
 
     // peripherals
@@ -194,7 +200,7 @@
     },
     spm_wide: {
       address: 2147483648, // 0x8000_0000
-      length: 1048576, // 1 MiB 0x10_0000
+      length: 2097152, // 1 MiB 0x10_0000
       banks: 32,
     },
     wide_zero_mem: {

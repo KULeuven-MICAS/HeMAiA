@@ -21,7 +21,7 @@ module testharness
   localparam RTCTCK = 30.518us;   // 32.768 kHz
   localparam CLKTCK = 1000ps;     // 1 GHz
   localparam SRAM_BANK = 32;      // 32 Banks architecture
-  localparam SRAM_DEPTH = 4096;   // 4K Depp
+  localparam SRAM_DEPTH = ${int(mem_size/8/32)};   // 4K Depp
   localparam SRAM_WIDTH = 8;      // 8 Bytes Wide
 
   logic clk_i;

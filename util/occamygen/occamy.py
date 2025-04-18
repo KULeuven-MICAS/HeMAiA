@@ -80,6 +80,7 @@ def get_cluster_cfg_list(occamy_cfg, cluster_cfg_dir):
     return get_cluster_cfg_list
 
 def generate_snitch(cluster_cfg_dir, snitch_path):
+    cluster_cfg_dir = set(cluster_cfg_dir)
     for cfg in cluster_cfg_dir:
         try:
             subprocess.check_call(f"make -C {snitch_path}/target/snitch_cluster CFG_OVERRIDE={cfg} DISABLE_HEADER_GEN=true rtl-gen", shell=True)
@@ -662,7 +663,8 @@ def get_multichip_testharness_kwargs(occamy_cfg, soc2router_bus, router2soc_bus,
         "name": name,
         "multichip_cfg": occamy_cfg["hemaia_multichip"],
         "soc2router_bus": soc2router_bus,
-        "router2soc_bus": router2soc_bus
+        "router2soc_bus": router2soc_bus,
+        "mem_size": occamy_cfg["spm_wide"]["length"]
     }
     return testharness_kwargs
 
