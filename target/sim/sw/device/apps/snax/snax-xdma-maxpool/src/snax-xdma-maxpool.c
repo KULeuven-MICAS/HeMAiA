@@ -7,7 +7,6 @@
 #include "data.h"
 #include "snax-xdma-lib.h"
 #include "snrt.h"
-#define XDMA_CHECK_RESULT
 
 uint32_t tstride_src[5] = {0};
 uint32_t tbound_src[5] = {0};
@@ -24,7 +23,7 @@ int main() {
     // Currently tcdm_in is at the start of the TCDM
     uint8_t *tcdm_in = (uint8_t *)tcdm_baseaddress;
     // tcdm_out is also at the start of the TCDM
-    uint8_t *tcdm_out = (uint8_t *)(tcdm_baseaddress);
+    uint8_t *tcdm_out = (uint8_t *)tcdm_baseaddress;
 
     if (snrt_is_dm_core() && snrt_cluster_idx() == 0) {
         // The xdma core is the last compute core in the cluster
@@ -105,7 +104,7 @@ int main() {
                        0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF);
         __asm__ volatile("csrr %0, mcycle;" : "=r"(start_time));
         // Start XDMA to do the maxpool
-        int task_id = xdma_start();
+        task_id = xdma_start();
         xdma_remote_wait(task_id);
         __asm__ volatile("csrr %0, mcycle;" : "=r"(end_time));
         printf("The XDMA copy is finished in %d cycles\r\n",
@@ -126,6 +125,5 @@ int main() {
         printf("Checking is done. All values are right\r\n");
 #endif
     }
-
     return 0;
 }
