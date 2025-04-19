@@ -9,7 +9,7 @@ binary_path = "/users/micas/ydeng/Desktop/SNAX/HeMAiA/target/sim_chip/bin/occamy
 hemaia_root_path = "/users/micas/ydeng/Desktop/SNAX/HeMAiA"
 
 num_threads = 24
-sizes = [64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 786432]
+sizes = [64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 786432,1048576, 1572864, 2097152, 3145728, 4194304]
 
 # Load the existing params from params.hjson (so we only modify the needed keys)
 with open(param_path, 'r') as f:

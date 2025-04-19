@@ -571,6 +571,7 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
             "Not all cluster base offset in the cluster cfg are equal.")
     cluster_offset = cluster_offset_list[0]
     cluster_addr_width = int(math.log2(cluster_offset))
+    cluster_base_addr = cluster_generators[0].cfg["cluster_base_addr"]
     # # The lut here is to provide an easy way to determine the cluster idx based on core idx
     # # e.g core_per_cluster_list = [2,3]
     # # core_idx lut    cluster_idx
@@ -611,7 +612,8 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
         "nr_cores_per_cluster": nr_cores_per_cluster,
         "nr_cores": nr_cores,
         "cluster_offset": hex(cluster_offset),
-        "cluster_addr_width": cluster_addr_width
+        "cluster_addr_width": cluster_addr_width,
+        "cluster_base_addr": hex(cluster_base_addr)
     }
     return cheader_kwargs
 
