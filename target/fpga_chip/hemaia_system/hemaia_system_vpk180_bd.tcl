@@ -296,6 +296,7 @@ proc create_root_design { parentCell } {
       PMC_CRP_NOC_REF_CTRL_FREQMHZ {960} \
       PMC_CRP_PL0_REF_CTRL_FREQMHZ {50} \
       PMC_CRP_PL1_REF_CTRL_FREQMHZ {3.2768} \
+      PMC_CRP_PL2_REF_CTRL_FREQMHZ {16} \
       PMC_CRP_PL5_REF_CTRL_FREQMHZ {400} \
       PMC_MIO0 {{AUX_IO 0} {DIRECTION in} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE Reserved}} \
       PMC_MIO1 {{AUX_IO 0} {DIRECTION in} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE Reserved}} \
@@ -318,6 +319,7 @@ proc create_root_design { parentCell } {
       PS_USE_NOC_LPD_AXI0 {0} \
       PS_USE_PMCPL_CLK0 {1} \
       PS_USE_PMCPL_CLK1 {1} \
+      PS_USE_PMCPL_CLK2 {1} \
       PS_USE_PMCPL_IRO_CLK {0} \
       SMON_ALARMS {Set_Alarms_On} \
       SMON_ENABLE_TEMP_AVERAGING {0} \
@@ -346,10 +348,8 @@ proc create_root_design { parentCell } {
   connect_bd_net -net axis_vio_0_probe_out2 [get_bd_pins axis_vio_0/probe_out2] [get_bd_pins occamy_chip/test_mode_i]
   connect_bd_net -net bootmode [get_bd_pins axis_vio_0/probe_out1] [get_bd_pins occamy_chip/boot_mode_i]
   connect_bd_net -net c_high_dout [get_bd_pins c_high/dout] [get_bd_ports vref_vdd_o] [get_bd_pins occamy_chip/jtag_trst_ni]
-  connect_bd_net -net clk_wizard_0_clk_core [get_bd_pins versal_cips_0/pl0_ref_clk] [get_bd_pins axis_vio_0/clk] [get_bd_pins occamy_chip/clk_i] [get_bd_pins occamy_chip/clk_periph_i]
-  connect_bd_net -net const_low_dout [get_bd_pins c_low/dout] [get_bd_ports vref_gnd_o] [get_bd_pins occamy_chip/test_mode_i] [get_bd_pins occamy_chip/gpio_d_i] [get_bd_pins occamy_chip/ext_irq_i]
-  connect_bd_net -net i2c_scl_iobuf_IOBUF_IO_O [get_bd_pins i2c_scl_iobuf/IOBUF_IO_O] [get_bd_pins occamy_chip/i2c_scl_i]
-  connect_bd_net -net i2c_sda_iobuf_IOBUF_IO_O [get_bd_pins i2c_sda_iobuf/IOBUF_IO_O] [get_bd_pins occamy_chip/i2c_sda_i]
+  connect_bd_net -net clk_wizard_0_clk_core [get_bd_pins versal_cips_0/pl0_ref_clk] [get_bd_pins axis_vio_0/clk] [get_bd_pins occamy_chip/clk_i]
+  connect_bd_net -net const_low_dout [get_bd_pins c_low/dout] [get_bd_ports vref_gnd_o] [get_bd_pins occamy_chip/gpio_d_i] [get_bd_pins occamy_chip/chip_id_i]
   connect_bd_net -net jtag_tck_i_1 [get_bd_ports jtag_tck_i] [get_bd_pins occamy_chip/jtag_tck_i]
   set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_nets jtag_tck_i_1]
   connect_bd_net -net jtag_tdi_i_1 [get_bd_ports jtag_tdi_i] [get_bd_pins occamy_chip/jtag_tdi_i]
@@ -377,6 +377,7 @@ proc create_root_design { parentCell } {
   connect_bd_net -net uart_rx_i_0_1 [get_bd_ports uart_rx_i] [get_bd_pins occamy_chip/uart_rx_i]
   set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_nets uart_rx_i_0_1]
   connect_bd_net -net versal_cips_0_pl1_ref_clk [get_bd_pins versal_cips_0/pl1_ref_clk] [get_bd_pins occamy_chip/rtc_i]
+  connect_bd_net -net versal_cips_0_pl2_ref_clk [get_bd_pins versal_cips_0/pl2_ref_clk] [get_bd_pins occamy_chip/clk_periph_i]
   connect_bd_net -net xlconcat_2_dout [get_bd_pins concat_rst_core/dout] [get_bd_pins rst_or_core/Op1]
   connect_bd_net -net xlslice_1_Dout [get_bd_pins xlslice_1/Dout] [get_bd_ports gpio_d_o]
 

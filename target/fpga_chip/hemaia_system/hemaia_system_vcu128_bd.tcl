@@ -241,17 +241,17 @@ proc create_root_design { parentCell } {
   set_property -dict [list \
     CONFIG.AXI_DRP {false} \
     CONFIG.CLKOUT1_DRIVES {Buffer} \
-    CONFIG.CLKOUT1_JITTER {132.683} \
-    CONFIG.CLKOUT1_PHASE_ERROR {87.180} \
+    CONFIG.CLKOUT1_JITTER {167.017} \
+    CONFIG.CLKOUT1_PHASE_ERROR {114.212} \
     CONFIG.CLKOUT1_REQUESTED_OUT_FREQ {50} \
-    CONFIG.CLKOUT2_JITTER {180.712} \
-    CONFIG.CLKOUT2_PHASE_ERROR {87.180} \
+    CONFIG.CLKOUT2_JITTER {219.618} \
+    CONFIG.CLKOUT2_PHASE_ERROR {114.212} \
     CONFIG.CLKOUT2_REQUESTED_OUT_FREQ {12.5} \
     CONFIG.CLKOUT2_USED {true} \
-    CONFIG.CLKOUT3_JITTER {112.035} \
-    CONFIG.CLKOUT3_PHASE_ERROR {87.180} \
-    CONFIG.CLKOUT3_REQUESTED_OUT_FREQ {120} \
-    CONFIG.CLKOUT3_REQUESTED_PHASE {0} \
+    CONFIG.CLKOUT3_JITTER {209.277} \
+    CONFIG.CLKOUT3_PHASE_ERROR {114.212} \
+    CONFIG.CLKOUT3_REQUESTED_OUT_FREQ {16} \
+    CONFIG.CLKOUT3_REQUESTED_PHASE {60} \
     CONFIG.CLKOUT3_USED {true} \
     CONFIG.CLKOUT4_JITTER {112.035} \
     CONFIG.CLKOUT4_PHASE_ERROR {87.180} \
@@ -260,14 +260,16 @@ proc create_root_design { parentCell } {
     CONFIG.CLK_IN1_BOARD_INTERFACE {default_100mhz_clk} \
     CONFIG.CLK_OUT1_PORT {clk_core} \
     CONFIG.CLK_OUT2_PORT {clk_rtc} \
-    CONFIG.CLK_OUT3_PORT {clk_hbm} \
+    CONFIG.CLK_OUT3_PORT {clk_peri} \
     CONFIG.CLK_OUT4_PORT {clk_out4} \
     CONFIG.FEEDBACK_SOURCE {FDBK_AUTO} \
-    CONFIG.MMCM_CLKFBOUT_MULT_F {12.000} \
-    CONFIG.MMCM_CLKOUT0_DIVIDE_F {24.000} \
-    CONFIG.MMCM_CLKOUT1_DIVIDE {96} \
-    CONFIG.MMCM_CLKOUT2_DIVIDE {10} \
-    CONFIG.MMCM_CLKOUT2_PHASE {0.000} \
+    CONFIG.MMCM_CLKFBOUT_MULT_F {8.000} \
+    CONFIG.MMCM_CLKIN1_PERIOD {10.0} \
+    CONFIG.MMCM_CLKIN2_PERIOD {10.0} \
+    CONFIG.MMCM_CLKOUT0_DIVIDE_F {16.000} \
+    CONFIG.MMCM_CLKOUT1_DIVIDE {64} \
+    CONFIG.MMCM_CLKOUT2_DIVIDE {50} \
+    CONFIG.MMCM_CLKOUT2_PHASE {60.300} \
     CONFIG.MMCM_CLKOUT3_DIVIDE {1} \
     CONFIG.MMCM_DIVCLK_DIVIDE {1} \
     CONFIG.NUM_OUT_CLKS {3} \
@@ -336,7 +338,8 @@ proc create_root_design { parentCell } {
   connect_bd_net -net Net [get_bd_ports spis_sd_io] [get_bd_pins spis_iobuf/IOBUF_IO_IO]
   connect_bd_net -net bootmode [get_bd_pins vio_sys/probe_out1] [get_bd_pins occamy_chip/boot_mode_i]
   connect_bd_net -net c_high_dout [get_bd_pins c_high/dout] [get_bd_ports vref_vdd_o] [get_bd_pins occamy_chip/jtag_trst_ni]
-  connect_bd_net -net clk_wiz_clk_core [get_bd_pins clk_wiz/clk_core] [get_bd_pins vio_sys/clk] [get_bd_pins occamy_chip/clk_i] [get_bd_pins occamy_chip/clk_periph_i]
+  connect_bd_net -net clk_wiz_clk_core [get_bd_pins clk_wiz/clk_core] [get_bd_pins vio_sys/clk] [get_bd_pins occamy_chip/clk_i]
+  connect_bd_net -net clk_wiz_clk_peri [get_bd_pins clk_wiz/clk_peri] [get_bd_pins occamy_chip/clk_periph_i]
   connect_bd_net -net clk_wiz_clk_rtc [get_bd_pins clk_wiz/clk_rtc] [get_bd_pins occamy_chip/rtc_i]
   connect_bd_net -net const_low_dout [get_bd_pins c_low/dout] [get_bd_ports vref_gnd_o] [get_bd_pins occamy_chip/test_mode_i] [get_bd_pins occamy_chip/gpio_d_i]
   connect_bd_net -net jtag_tck_i_1 [get_bd_ports jtag_tck_i] [get_bd_pins occamy_chip/jtag_tck_i]
