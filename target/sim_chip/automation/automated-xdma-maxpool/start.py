@@ -9,19 +9,7 @@ param_path = "/users/micas/ydeng/Desktop/SNAX/HeMAiA/target/sim/sw/device/apps/s
 binary_path = "/users/micas/ydeng/Desktop/SNAX/HeMAiA/target/sim_chip/bin/occamy_chip.vlt"
 hemaia_root_path = "/users/micas/ydeng/Desktop/SNAX/HeMAiA"
 
-num_threads = 12
-# Ms = [32, 64, 96, 128, 192, 256, 384, 512]
-# Ns = [32, 64, 96, 128, 192, 256, 384, 512]
-# BIT_WIDTHs = [8, 16]
-# input_layouts = ["MNM8N8", "MN"]
-# output_layouts = ["MNM8N8", "MN"]
-# transpose_options = [True]
-Ms = [512]
-Ns = [512]
-BIT_WIDTHs = [16]
-input_layouts = ["MNM8N8", "MN"]
-output_layouts = ["MNM8N8", "MN"]
-transpose_options = [True]
+num_threads = 24
 
 layer_cfg_list = []
 with open("cfg.csv", "r", newline="") as f:
