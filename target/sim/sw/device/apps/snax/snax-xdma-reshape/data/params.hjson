@@ -1,6 +1,6 @@
 {
-  M: 1
-  N: 512
-  input_layout: MNM8N8
+  M: 64
+  N: 64
+  input_layout: MN
   output_layout: MN
 }
