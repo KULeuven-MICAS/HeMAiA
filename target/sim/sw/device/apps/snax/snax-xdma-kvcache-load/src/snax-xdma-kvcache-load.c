@@ -68,7 +68,7 @@ int main() {
         }
         snrt_dma_wait_all();
         __asm__ volatile("csrr %0, mcycle;" : "=r"(end_time));
-        printf("[XDMA KVCache Prefill] The IDMA copy is finished in %d cycles\r\n",
+        printf("The IDMA load is finished in %d cycles\r\n",
                end_time - start_time);
 
         // The XDMA group: Copy by XDMA
@@ -100,7 +100,7 @@ int main() {
         int task_id = xdma_start();
         xdma_remote_wait(task_id);
         __asm__ volatile("csrr %0, mcycle;" : "=r"(end_time));
-        printf("[XDMA KVCache Prefill] The XDMA copy is finished in %d cycles\r\n",
+        printf("The XDMA load is finished in %d cycles\r\n",
                end_time - start_time);
 
         // --------------------- Checking the Results --------------------- //
