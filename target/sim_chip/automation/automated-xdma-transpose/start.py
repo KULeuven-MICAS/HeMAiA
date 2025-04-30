@@ -11,9 +11,9 @@ hemaia_root_path = "/users/micas/ydeng/Desktop/SNAX/HeMAiA"
 num_threads = 12
 Ms = [32, 64, 96, 128, 192, 256, 384, 512]
 Ns = [32, 64, 96, 128, 192, 256, 384, 512]
-BIT_WIDTHs = [8, 16]
+BIT_WIDTHs = [8]
 input_layouts = ["MNM8N8", "MN"]
-output_layouts = ["MNM8N8", "MN"]
+output_layouts = ["MNM8N8", "MNM16N16"]
 transpose_options = [True]
 
 # Load the existing params from params.hjson (so we only modify the needed keys)

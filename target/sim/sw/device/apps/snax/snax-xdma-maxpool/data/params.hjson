@@ -4,13 +4,13 @@
   ifTestTransposer: false
   ifC8HW8datalayout: true
   Nbatch: 1
-  H: 224
-  W: 224
-  Cin: 8
-  Kh: 2
-  Kw: 2
+  H: 20
+  W: 20
+  Cin: 1024
+  Kh: 5
+  Kw: 5
   pad_h: 0
   pad_w: 0
-  stride_h: 2
-  stride_w: 2
+  stride_h: 1
+  stride_w: 1
 }
