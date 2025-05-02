@@ -114,11 +114,11 @@ import ${name}_pkg::*;
   ) i_hemaia_mem_system (
     .clk_i,
     .rst_ni,
-    .chip_id_i,
-    .axi_master_req_i(${axi_soc_to_mem.req_name()}),
-    .axi_master_rsp_o(${axi_soc_to_mem.rsp_name()}),
-    .axi_slave_req_o(${axi_mem_to_soc.req_name()}),
-    .axi_slave_rsp_i(${axi_mem_to_soc.rsp_name()})
+    .chip_id_i        (chip_id),
+    .axi_master_req_i (${axi_soc_to_mem.req_name()}),
+    .axi_master_rsp_o (${axi_soc_to_mem.rsp_name()}),
+    .axi_slave_req_o  (${axi_mem_to_soc.req_name()}),
+    .axi_slave_rsp_i  (${axi_mem_to_soc.rsp_name()})
   );
 
   ///////////////////
