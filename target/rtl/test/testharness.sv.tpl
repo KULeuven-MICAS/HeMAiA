@@ -194,7 +194,7 @@ module testharness import occamy_pkg::*; (
   localparam int unsigned UartDPIFreq = 1_000_000_000;
 
   uartdpi #(
-    .BAUD ('d20_000_000),
+    .BAUD ('d31250000),
     // Frequency shouldn't matter since we are sending with the same clock.
     .FREQ (UartDPIFreq),
     .NAME("uart0")

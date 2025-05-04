@@ -82,6 +82,12 @@ inline static uint8_t getchar(uintptr_t address_prefix) {
     return char_in;
 }
 
+inline static uint8_t getchar_no_echo(uintptr_t address_prefix) {
+    while (is_data_ready(address_prefix) == 0) {
+    };
+    return read_reg_u8(address_prefix | UART_RBR);
+}
+
 inline static void init_uart(uintptr_t address_prefix, uint32_t freq,
                              uint32_t baud) {
     uint32_t divisor = freq / (baud << 4);

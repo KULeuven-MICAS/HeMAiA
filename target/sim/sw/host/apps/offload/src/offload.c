@@ -13,7 +13,7 @@ int main() {
         (uintptr_t)get_current_chip_baseaddress();
     uint32_t current_chip_id = get_current_chip_id();
 
-    init_uart(current_chip_address_prefix, 50000000, 1000000);
+    init_uart(current_chip_address_prefix, 32, 1);
     // print_str(current_chip_address_prefix,
     //           "[HeMAiA] The Offload main function \r\n");
     // print_str(current_chip_address_prefix, "[HeMAiA] Current Chip ID is: ");

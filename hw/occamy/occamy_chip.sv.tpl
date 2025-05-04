@@ -94,6 +94,19 @@ import ${name}_pkg::*;
   output logic        jtag_tdo_o
 );
 
+  ///////////////////
+  // Chip ID Latch //
+  ///////////////////
+
+  // The latched chip_id
+  chip_id_t chip_id;
+
+  always_latch begin
+    if (~rst_ni) begin
+      chip_id <= chip_id_i;
+    end
+  end
+
   //////////////////////////////
   // SRAM L2 Memory Subsystem //
   //////////////////////////////
@@ -140,19 +153,6 @@ import ${name}_pkg::*;
 
   assign bootrom_rsp.ready   = '1;
   assign bootrom_rsp.error   = '0;
-
-  ///////////////////
-  // Chip ID Latch //
-  ///////////////////
-
-  // The latched chip_id
-  chip_id_t chip_id;
-
-  always_latch begin
-    if (~rst_ni) begin
-      chip_id <= chip_id_i;
-    end
-  end
 
   ///////////////////
   //  Occamy Top   //

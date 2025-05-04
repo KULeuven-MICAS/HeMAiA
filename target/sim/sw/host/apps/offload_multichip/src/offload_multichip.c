@@ -15,7 +15,7 @@ int main() {
     uint32_t target_chip_id = 0;
     char in_buf[8];
 
-    init_uart(current_chip_address_prefix, 50000000, 1000000);
+    init_uart(current_chip_address_prefix, 32, 1);
     print_str(current_chip_address_prefix,
               "[HeMAiA] The Offload main function \r\n");
     print_str(current_chip_address_prefix, "[HeMAiA] Current Chip ID is: ");

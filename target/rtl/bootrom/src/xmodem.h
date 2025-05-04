@@ -43,9 +43,7 @@ void *memcpy(void *dest, const void *src, size_t n) {
     return dest;
 }
 
-inline void flush_cache() {
-    asm volatile("fence.i" ::: "memory");
-}
+inline void flush_cache() { asm volatile("fence.i" ::: "memory"); }
 
 void uart_xmodem(uintptr_t address_prefix, uint64_t start_address) {
     uint8_t received_char;
@@ -61,24 +59,24 @@ void uart_xmodem(uintptr_t address_prefix, uint64_t start_address) {
         uint8_t received_parity, calculated_parity;
         int index = 0;
 
-        received_char = getchar(address_prefix);  // Read the header
-        if (received_char == EOT) {                   // End of transmission
+        received_char = getchar_no_echo(address_prefix);  // Read the header
+        if (received_char == EOT) {               // End of transmission
             putchar(address_prefix, ACK);
             print_str(address_prefix, "\r\n\t Load finished. \r\n\r\n");
             break;
         }
 
         if (received_char == SOH || received_char == STX) {
-            packet_number = getchar(address_prefix);
-            packet_complement = getchar(address_prefix);
+            packet_number = getchar_no_echo(address_prefix);
+            packet_complement = getchar_no_echo(address_prefix);
 
             if (packet_number ==
                 ((~packet_complement) & 0xFF)) {  // Packet number is correct
                 while (index < (received_char == SOH ? 128 : 1024)) {
-                    data[index++] = getchar(address_prefix);
+                    data[index++] = getchar_no_echo(address_prefix);
                 }
 
-                received_parity = getchar(address_prefix);
+                received_parity = getchar_no_echo(address_prefix);
 
                 calculated_parity = compute_parity(data, index);
 
@@ -90,7 +88,7 @@ void uart_xmodem(uintptr_t address_prefix, uint64_t start_address) {
                     current_offset += index;
                 } else {
                     putchar(address_prefix,
-                                 NAK);  // CRC error, request retransmission
+                            NAK);  // CRC error, request retransmission
                 }
             } else {
                 putchar(address_prefix, NAK);  // Packet number error
