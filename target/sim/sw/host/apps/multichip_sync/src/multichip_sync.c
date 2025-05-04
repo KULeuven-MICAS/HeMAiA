@@ -16,7 +16,7 @@ int main() {
     // Initialize the communication buffer
     initialize_comm_buffer((comm_buffer_t*)comm_buffer_ptr);
     // Initialize the UART
-    init_uart(current_chip_address_prefix, 50000000, 1000000);
+    init_uart(current_chip_address_prefix, 32, 1);
     // print_str(current_chip_address_prefix,
     //           "[HeMAiA] The multi-chip synchronization tester \r\n");
 

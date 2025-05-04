@@ -81,7 +81,7 @@ set_false_path -to [get_pins hemaia_system_i/occamy_chip/inst/i_occamy/i_clint/i
 # Crossing Clock Domains
 ################################################################################
 
-create_clock -period 20.0 -name clk_core [get_pins hemaia_system_i/versal_cips_0/pl0_ref_clk]
+create_clock -period 25.0 -name clk_core [get_pins hemaia_system_i/versal_cips_0/pl0_ref_clk]
 create_clock -period 62.5 -name clk_peri [get_pins hemaia_system_i/versal_cips_0/pl2_ref_clk]
 
 set_clock_groups -asynchronous -group [get_clocks -of [get_pins hemaia_system_i/occamy_chip/clk_i]] -group [get_clocks -of [get_pins hemaia_system_i/occamy_chip/clk_periph_i]]

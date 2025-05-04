@@ -4,6 +4,8 @@
 
 // Yunhao Deng <yunhao.deng@kuleuven.be>
 
+// Simplified Bootrom with reduced printing for faster simulation
+
 // Please avoid using initialized global variable and static variable (.data
 // region) in C. This will lead to the loss of initial value, as they are
 // allocated in spm instead of bootrom.
@@ -49,38 +51,35 @@ void bootrom() {
     uint64_t memory_length;
 
     uint32_t chip_id = get_current_chip_id();
-    uint32_t target_chip_id = chip_id;
+    uint32_t target_chip_id = 0x11;
     uintptr_t address_prefix = ((uintptr_t)chip_id) << 40;
 
     char in_buf[8];
-    init_uart(address_prefix, 50000000, 1000000);
+    init_uart(address_prefix, 32, 1);
 
     while (1) {
         local_chip_mem_start_address = 0x80000000L | ((uint64_t)address_prefix);
         remote_chip_mem_start_address =
             0x80000000L | ((uint64_t)target_chip_id << 40);
         print_str(address_prefix, "\033[2J");
-        print_str(address_prefix, "\r\n\t\t Welcome to HeMAiA Bootrom");
+        print_str(address_prefix, "\r\n\t\tBootrom");
         print_str(address_prefix, "\r\n");
         print_str(address_prefix, "\r\n\t Chip ID: 0x");
         print_u8(address_prefix, chip_id);
-        print_str(address_prefix, "\r\n\t Target Remote Chip ID: 0x");
+        print_str(address_prefix, ", 0x");
         print_u8(address_prefix, target_chip_id);
         print_str(address_prefix,
-                  "\r\n\t Enter the number to select the mode: ");
-        print_str(address_prefix, "\r\n\t 1. Halt the CVA6 Core");
-        print_str(address_prefix, "\r\n\t 2. Change the target remote Chip ID");
-        print_str(address_prefix, "\r\n\t 3. Load from UART to 0x");
-        print_u48(address_prefix, remote_chip_mem_start_address);
-        print_str(address_prefix,
-                  "\r\n\t 4. Copy memory from local chip to remote chip");
-        print_str(address_prefix,
-                  "\r\n\t 5. Copy memory from remote chip to local chip");
-        print_str(address_prefix, "\r\n\t 6. Print memory from 0x");
-        print_u48(address_prefix, remote_chip_mem_start_address);
-        print_str(address_prefix, "\r\n\t 7. Continue to Boot from 0x");
-        print_u48(address_prefix, local_chip_mem_start_address);
-        print_str(address_prefix, "\r\n");
+                  "\r\n");
+        // print_str(address_prefix, "\r\n\t 1. Halt the CVA6 Core");
+        // print_str(address_prefix, "\r\n\t 2. Change the target remote Chip ID");
+        // print_str(address_prefix, "\r\n\t 3. Load from UART");
+        // print_str(address_prefix,
+        //           "\r\n\t 4. Copy memory from local chip to remote chip");
+        // print_str(address_prefix,
+        //           "\r\n\t 5. Copy memory from remote chip to local chip");
+        // print_str(address_prefix, "\r\n\t 6. Print memory from 0x");
+        // print_str(address_prefix, "\r\n\t 7. Continue to Boot from 0x");
+        // print_str(address_prefix, "\r\n");
 
         boot_mode = getchar(address_prefix) - '0' - 1;
 
@@ -94,7 +93,7 @@ void bootrom() {
                 break;
             case TARGET_CHIPID:
                 print_str(address_prefix,
-                          "\r\n\t Enter the target remote Chip ID: ");
+                          "\r\n\t Target Chip ID: ");
                 scan_uart(address_prefix, in_buf);
                 cur = in_buf;
                 target_chip_id = 0;
@@ -117,22 +116,15 @@ void bootrom() {
                 break;
 
             case COPY_TO_REMOTE:
-                print_str(address_prefix,
-                          "\r\n\t Enter the size of the memory in byte: ");
-                scan_uart(address_prefix, in_buf);
-                cur = in_buf;
-                memory_length = 0;
-                while (*cur != '\0') {
-                    memory_length = memory_length * 10 + *cur - '0';
-                    cur++;
-                }
-                print_str(address_prefix, "\r\n\t Copying memory from 0x");
-                print_u48(address_prefix, local_chip_mem_start_address);
-                print_str(address_prefix, " to 0x");
-                print_u48(address_prefix, remote_chip_mem_start_address);
-                print_str(address_prefix, " with size ");
-                print_u48(address_prefix, memory_length);
-                print_str(address_prefix, " bytes...");
+                // print_str(address_prefix, "\r\n\t Memory Size: ");
+                // scan_uart(address_prefix, in_buf);
+                // cur = in_buf;
+                memory_length = 1048576;
+                // while (*cur != '\0') {
+                //     memory_length = memory_length * 10 + *cur - '0';
+                //     cur++;
+                // }
+                print_str(address_prefix, "\r\n\t Copying...");
                 sys_dma_blk_memcpy(remote_chip_mem_start_address,
                                    local_chip_mem_start_address, memory_length);
                 print_str(address_prefix, "\r\n\t Copy finished. ");
@@ -140,22 +132,15 @@ void bootrom() {
                 break;
 
             case COPY_FROM_REMOTE:
-                print_str(address_prefix,
-                          "\r\n\t Enter the size of the memory in byte: ");
-                scan_uart(address_prefix, in_buf);
-                cur = in_buf;
-                memory_length = 0;
-                while (*cur != '\0') {
-                    memory_length = memory_length * 10 + *cur - '0';
-                    cur++;
-                }
-                print_str(address_prefix, "\r\n\t Copying memory from 0x");
-                print_u48(address_prefix, remote_chip_mem_start_address);
-                print_str(address_prefix, " to 0x");
-                print_u48(address_prefix, local_chip_mem_start_address);
-                print_str(address_prefix, " with size ");
-                print_u48(address_prefix, memory_length);
-                print_str(address_prefix, " bytes...");
+                // print_str(address_prefix, "\r\n\t Memory Size: ");
+                // scan_uart(address_prefix, in_buf);
+                // cur = in_buf;
+                memory_length = 1048576;
+                // while (*cur != '\0') {
+                //     memory_length = memory_length * 10 + *cur - '0';
+                //     cur++;
+                // }
+                print_str(address_prefix, "\r\n\t Copying...");
                 sys_dma_blk_memcpy(local_chip_mem_start_address,
                                    remote_chip_mem_start_address,
                                    memory_length);
@@ -170,8 +155,7 @@ void bootrom() {
                 break;
 
             case PRINTMEM:
-                print_str(address_prefix,
-                          "\r\n\t Enter the size of the memory in byte: ");
+                print_str(address_prefix, "\r\n\t Memory Size: ");
                 scan_uart(address_prefix, in_buf);
                 char* cur = in_buf;
                 memory_length = 0;
@@ -179,9 +163,6 @@ void bootrom() {
                     memory_length = memory_length * 10 + *cur - '0';
                     cur++;
                 }
-                print_str(address_prefix, "\r\n\t The memory from 0x");
-                print_u48(address_prefix, remote_chip_mem_start_address);
-                print_str(address_prefix, " is:");
                 print_mem_hex(address_prefix,
                               (char*)remote_chip_mem_start_address,
                               memory_length);
@@ -191,9 +172,7 @@ void bootrom() {
 
             case NORMAL:
                 print_str(address_prefix, "\033[2J");
-                print_str(address_prefix, "\r\n\t Booting at 0x");
-                print_u48(address_prefix, local_chip_mem_start_address);
-                print_str(address_prefix, "...\r\n\r\n\r\n");
+                print_str(address_prefix, "\r\n\t Booting...\r\n\r\n\r\n");
                 return;
                 break;
         }

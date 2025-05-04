@@ -5,13 +5,10 @@
 #include <stdio.h>
 #include "host.h"
 
-// Frequency at which the UART peripheral is clocked
-#define PERIPH_FREQ 50000000
-
 int main() {
     uintptr_t address_prefix = (uintptr_t)get_current_chip_baseaddress();
 
-    init_uart(address_prefix, PERIPH_FREQ, 1000000);
+    init_uart(address_prefix, 32, 1);
     asm volatile("fence" : : : "memory");
     print_str(address_prefix, "Hello world from Occamy in VCU128! \r\n");
     char uart_rx_buffer[512];
@@ -22,10 +19,6 @@ int main() {
         sprintf(uart_tx_buffer, "[Occamy] What you said is: %s",
                 uart_rx_buffer);
         print_str(address_prefix, uart_tx_buffer);
-        // Artificial delay to ensure last symbol has been transmitted
-        // (just waiting for the UART TSR register to be empty is not
-        // sufficient)
-        for (int i = 0; i < 50000; i++) asm volatile("nop" : : : "memory");
     }
 
     return 0;
