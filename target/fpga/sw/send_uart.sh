@@ -11,10 +11,10 @@ else
 		FILE=$1
 	fi
 
-	stty -F /dev/ttyUSB2 cs8 500000 ignbrk -brkint -imaxbel -opost -onlcr -isig -icanon -iexten -echo -echoe -echok -echoctl -echoke noflsh -ixon crtscts
+	stty -F /dev/ttyUSB10 cs8 500000 ignbrk -brkint -imaxbel -opost -onlcr -isig -icanon -iexten -echo -echoe -echok -echoctl -echoke noflsh -ixon crtscts
 
-	echo -n 2 > /dev/ttyUSB2
+	echo -n 2 > /dev/ttyUSB10
 
-	sx -k "$FILE" < /dev/ttyUSB2 > /dev/ttyUSB2
+	sx -k "$FILE" < /dev/ttyUSB10 > /dev/ttyUSB10
 
 fi
