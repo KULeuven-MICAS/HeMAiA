@@ -21,7 +21,7 @@ module testharness
   localparam RTCTCK = 30.518us;   // 32.768 kHz
   localparam CLKTCK = 1000ps;     // 1 GHz
   localparam SRAM_BANK = 32;      // 32 Banks architecture
-  localparam SRAM_DEPTH = ${int(mem_size/8/32)};   // 4K Depp
+  localparam SRAM_DEPTH = ${int(mem_size/8/32)};
   localparam SRAM_WIDTH = 8;      // 8 Bytes Wide
 
   logic clk_i;
@@ -116,7 +116,6 @@ module testharness
 % if multichip_cfg['single_chip'] is False:
   /// Die2Die signals
   // East side
-  logic chip_${i}_${j}_link_available_east;
   logic [207:0] chip_${i}_${j}_link_from_east [3];
   logic [2:0] chip_${i}_${j}_link_from_east_valid;
   logic [207:0] chip_${i}_${j}_link_to_east [3];
@@ -125,10 +124,8 @@ module testharness
   logic chip_${i}_${j}_link_from_east_cts;
   logic chip_${i}_${j}_link_to_east_rts;
   logic chip_${i}_${j}_link_to_east_cts;
-  logic chip_${i}_${j}_link_east_tx_mode;
   
   // West side
-  logic chip_${i}_${j}_link_available_west;
   logic [207:0] chip_${i}_${j}_link_from_west [3];
   logic [2:0] chip_${i}_${j}_link_from_west_valid;
   logic [207:0] chip_${i}_${j}_link_to_west [3];
@@ -137,10 +134,8 @@ module testharness
   logic chip_${i}_${j}_link_from_west_cts;
   logic chip_${i}_${j}_link_to_west_rts;
   logic chip_${i}_${j}_link_to_west_cts;
-  logic chip_${i}_${j}_link_west_tx_mode;
 
   // North side
-  logic chip_${i}_${j}_link_available_north;
   logic [207:0] chip_${i}_${j}_link_from_north [3];
   logic [2:0] chip_${i}_${j}_link_from_north_valid;
   logic [207:0] chip_${i}_${j}_link_to_north [3];
@@ -149,9 +144,7 @@ module testharness
   logic chip_${i}_${j}_link_from_north_cts;
   logic chip_${i}_${j}_link_to_north_rts;
   logic chip_${i}_${j}_link_to_north_cts;
-  logic chip_${i}_${j}_link_north_tx_mode;
   // South side
-  logic chip_${i}_${j}_link_available_south;
   logic [207:0] chip_${i}_${j}_link_from_south [3];
   logic [2:0] chip_${i}_${j}_link_from_south_valid;
   logic [207:0] chip_${i}_${j}_link_to_south [3];
@@ -160,7 +153,6 @@ module testharness
   logic chip_${i}_${j}_link_from_south_cts;
   logic chip_${i}_${j}_link_to_south_rts;
   logic chip_${i}_${j}_link_to_south_cts;
-  logic chip_${i}_${j}_link_south_tx_mode;
 % endif
 
   occamy_chip i_occamy_${i}_${j} (
@@ -173,8 +165,6 @@ module testharness
       .test_mode_i(1'b0),
       .boot_mode_i('0),
 % if multichip_cfg['single_chip'] is False:
-      .link_available_east_i(chip_${i}_${j}_link_available_east),
-      .link_east_tx_mode_o(chip_${i}_${j}_link_east_tx_mode),
       .link_from_east_i(chip_${i}_${j}_link_from_east),
       .link_from_east_valid_i(chip_${i}_${j}_link_from_east_valid),
       .link_to_east_o(chip_${i}_${j}_link_to_east),
@@ -184,8 +174,6 @@ module testharness
       .flow_control_east_rts_i(chip_${i}_${j}_link_from_east_rts),
       .flow_control_east_cts_o(chip_${i}_${j}_link_from_east_cts),
 
-      .link_available_west_i(chip_${i}_${j}_link_available_west),
-      .link_west_tx_mode_o(chip_${i}_${j}_link_west_tx_mode),
       .link_from_west_i(chip_${i}_${j}_link_from_west),
       .link_from_west_valid_i(chip_${i}_${j}_link_from_west_valid),
       .link_to_west_o(chip_${i}_${j}_link_to_west),
@@ -195,8 +183,6 @@ module testharness
       .flow_control_west_rts_i(chip_${i}_${j}_link_from_west_rts),
       .flow_control_west_cts_o(chip_${i}_${j}_link_from_west_cts),
 
-      .link_available_north_i(chip_${i}_${j}_link_available_north),
-      .link_north_tx_mode_o(chip_${i}_${j}_link_north_tx_mode),
       .link_from_north_i(chip_${i}_${j}_link_from_north),
       .link_from_north_valid_i(chip_${i}_${j}_link_from_north_valid),
       .link_to_north_o(chip_${i}_${j}_link_to_north),
@@ -206,8 +192,6 @@ module testharness
       .flow_control_north_rts_i(chip_${i}_${j}_link_from_north_rts),
       .flow_control_north_cts_o(chip_${i}_${j}_link_from_north_cts),
 
-      .link_available_south_i(chip_${i}_${j}_link_available_south),
-      .link_south_tx_mode_o(chip_${i}_${j}_link_south_tx_mode),
       .link_from_south_i(chip_${i}_${j}_link_from_south),
       .link_from_south_valid_i(chip_${i}_${j}_link_from_south_valid),
       .link_to_south_o(chip_${i}_${j}_link_to_south),
@@ -272,7 +256,6 @@ module testharness
 %   for j in y:
   // Connect the east and west side of the chip
 %     if i == min(x):
-  assign chip_${i}_${j}_link_available_west = '0;
   assign chip_${i}_${j}_link_to_west_cts = '0;
   assign chip_${i}_${j}_link_from_west_rts = '0;
   assign chip_${i}_${j}_link_from_west = '{default: '0};
@@ -282,7 +265,6 @@ module testharness
   assign chip_${i}_${j}_link_to_east_cts = chip_${i+1}_${j}_link_from_west_cts;
   assign chip_${i}_${j}_link_from_east_rts = chip_${i+1}_${j}_link_to_west_rts;
 %     elif i == max(x):
-  assign chip_${i}_${j}_link_available_west = '1;
   assign chip_${i}_${j}_link_from_west_valid = chip_${i-1}_${j}_link_to_east_valid;
   assign chip_${i}_${j}_link_to_west_cts = chip_${i-1}_${j}_link_from_east_cts;
   assign chip_${i}_${j}_link_from_west_rts = chip_${i-1}_${j}_link_to_east_rts;
@@ -292,7 +274,6 @@ module testharness
   assign chip_${i}_${j}_link_to_east_cts = '0;
   assign chip_${i}_${j}_link_from_east_rts = '0;
 %     else:
-  assign chip_${i}_${j}_link_available_west = '1;
   assign chip_${i}_${j}_link_from_west_valid = chip_${i-1}_${j}_link_to_east_valid;
   assign chip_${i}_${j}_link_to_west_cts = chip_${i-1}_${j}_link_from_east_cts;
   assign chip_${i}_${j}_link_from_west_rts = chip_${i-1}_${j}_link_to_east_rts;
@@ -303,7 +284,6 @@ module testharness
 %     endif
   // Connect the north and south side of the chip
 %     if j == min(y):
-  assign chip_${i}_${j}_link_available_north = '0;
   assign chip_${i}_${j}_link_to_north_cts = '0;
   assign chip_${i}_${j}_link_from_north_rts = '0;
   assign chip_${i}_${j}_link_from_north = '{default: '0};
@@ -313,7 +293,6 @@ module testharness
   assign chip_${i}_${j}_link_to_south_cts = chip_${i}_${j+1}_link_from_north_cts;
   assign chip_${i}_${j}_link_from_south_rts = chip_${i}_${j+1}_link_to_north_rts;
 %     elif j == max(y):
-  assign chip_${i}_${j}_link_available_north = '1;
   assign chip_${i}_${j}_link_from_north_valid = chip_${i}_${j-1}_link_to_south_valid;
   assign chip_${i}_${j}_link_to_north_cts = chip_${i}_${j-1}_link_from_south_cts;
   assign chip_${i}_${j}_link_from_north_rts = chip_${i}_${j-1}_link_to_south_rts;
@@ -323,7 +302,6 @@ module testharness
   assign chip_${i}_${j}_link_to_south_cts = '0;
   assign chip_${i}_${j}_link_from_south_rts = '0;
 %     else:
-  assign chip_${i}_${j}_link_available_north = '1;
   assign chip_${i}_${j}_link_from_north_valid = chip_${i}_${j-1}_link_to_south_valid;
   assign chip_${i}_${j}_link_to_north_cts = chip_${i}_${j-1}_link_from_south_cts;
   assign chip_${i}_${j}_link_from_north_rts = chip_${i}_${j-1}_link_to_south_rts;
@@ -343,8 +321,8 @@ module testharness
       .BusWidth(208),
       .ChannelNum(3)
   ) i_half_duplex_east_${i}_${j} (
-      .port1_tx_mode_i(chip_${i}_${j}_link_east_tx_mode),
-      .port2_tx_mode_i(chip_${i+1}_${j}_link_west_tx_mode),
+      .port1_tx_mode_i(|chip_${i}_${j}_link_to_east_valid),
+      .port2_tx_mode_i(|chip_${i+1}_${j}_link_to_west_valid),
       .port1_i(chip_${i}_${j}_link_to_east),
       .port2_i(chip_${i+1}_${j}_link_to_west),
       .port1_o(chip_${i+1}_${j}_link_from_west),
@@ -354,8 +332,8 @@ module testharness
       .BusWidth(208),
       .ChannelNum(3)
   ) i_half_duplex_south_${i}_${j} (
-      .port1_tx_mode_i(chip_${i}_${j}_link_south_tx_mode),
-      .port2_tx_mode_i(chip_${i}_${j+1}_link_north_tx_mode),
+      .port1_tx_mode_i(|chip_${i}_${j}_link_to_south_valid),
+      .port2_tx_mode_i(|chip_${i}_${j+1}_link_to_north_valid),
       .port1_i(chip_${i}_${j}_link_to_south),
       .port2_i(chip_${i}_${j+1}_link_to_north),
       .port1_o(chip_${i}_${j+1}_link_from_north),
@@ -366,8 +344,8 @@ module testharness
       .BusWidth(208),
       .ChannelNum(3)
   ) i_half_duplex_south_${i}_${j} (
-      .port1_tx_mode_i(chip_${i}_${j}_link_south_tx_mode),
-      .port2_tx_mode_i(chip_${i}_${j+1}_link_north_tx_mode),
+      .port1_tx_mode_i(|chip_${i}_${j}_link_to_south_valid),
+      .port2_tx_mode_i(|chip_${i}_${j+1}_link_to_north_valid),
       .port1_i(chip_${i}_${j}_link_to_south),
       .port2_i(chip_${i}_${j+1}_link_to_north),
       .port1_o(chip_${i}_${j+1}_link_from_north),
@@ -378,8 +356,8 @@ module testharness
       .BusWidth(208),
       .ChannelNum(3)
   ) i_half_duplex_east_${i}_${j} (
-      .port1_tx_mode_i(chip_${i}_${j}_link_east_tx_mode),
-      .port2_tx_mode_i(chip_${i+1}_${j}_link_west_tx_mode),
+      .port1_tx_mode_i(|chip_${i}_${j}_link_to_east_valid),
+      .port2_tx_mode_i(|chip_${i+1}_${j}_link_to_west_valid),
       .port1_i(chip_${i}_${j}_link_to_east),
       .port2_i(chip_${i+1}_${j}_link_to_west),
       .port1_o(chip_${i+1}_${j}_link_from_west),

@@ -22,8 +22,6 @@ import ${name}_pkg::*;
 % if occamy_cfg['hemaia_multichip']['single_chip'] is False: 
   // Currently the router is implemented, so bidirectional connections toward E/S/W/N is needed, with 578b payload
     // East side
-    input  logic     link_available_east_i,
-    output logic     link_east_tx_mode_o,
     input  logic     [207:0] link_from_east_i [3],
     input  logic     [3-1:0] link_from_east_valid_i,
     output logic     [207:0] link_to_east_o [3],
@@ -33,8 +31,6 @@ import ${name}_pkg::*;
     input  logic     flow_control_east_rts_i,
     output logic     flow_control_east_cts_o,
     // West side
-    input  logic     link_available_west_i,
-    output logic     link_west_tx_mode_o,
     input  logic     [207:0] link_from_west_i [3],
     input  logic     [3-1:0] link_from_west_valid_i,
     output logic     [207:0] link_to_west_o [3],
@@ -44,8 +40,6 @@ import ${name}_pkg::*;
     input  logic     flow_control_west_rts_i,
     output logic     flow_control_west_cts_o,
     // North side
-    input  logic     link_available_north_i,
-    output logic     link_north_tx_mode_o,
     input  logic     [207:0] link_from_north_i [3],
     input  logic     [3-1:0] link_from_north_valid_i,
     output logic     [207:0] link_to_north_o [3],
@@ -55,8 +49,6 @@ import ${name}_pkg::*;
     input  logic     flow_control_north_rts_i,
     output logic     flow_control_north_cts_o,
     // South side
-    input  logic     link_available_south_i,
-    output logic     link_south_tx_mode_o,
     input  logic     [207:0] link_from_south_i [3],
     input  logic     [3-1:0] link_from_south_valid_i,
     output logic     [207:0] link_to_south_o [3],
@@ -253,8 +245,10 @@ import ${name}_pkg::*;
   ) i_d2d_link (
     .chip_id_i(chip_id),
 
+    .control_clk_i(clk_periph_i),
+    .control_rst_ni(rst_periph_ni),
     .digital_clk_i(clk_i),
-    .digtial_rst_ni(rst_ni),
+    .digital_rst_ni(rst_ni),
 
     .axi_lite_req_i(hemaia_d2d_link_ctrl_req),
     .axi_lite_rsp_o(hemaia_d2d_link_ctrl_rsp),
@@ -264,8 +258,6 @@ import ${name}_pkg::*;
     .axi_out_req_o(router2soc_req),
     .axi_out_rsp_i(router2soc_rsp),
 
-    .link_available_east_i(link_available_east_i),
-    .link_east_tx_mode_o(link_east_tx_mode_o),
     .link_from_east_i(link_from_east_i),
     .link_from_east_valid_i(link_from_east_valid_i),
     .link_to_east_o(link_to_east_o),
@@ -275,8 +267,6 @@ import ${name}_pkg::*;
     .flow_control_east_rts_i(flow_control_east_rts_i),
     .flow_control_east_cts_o(flow_control_east_cts_o),
 
-    .link_available_west_i(link_available_west_i),
-    .link_west_tx_mode_o(link_west_tx_mode_o),
     .link_from_west_i(link_from_west_i),
     .link_from_west_valid_i(link_from_west_valid_i),
     .link_to_west_o(link_to_west_o),
@@ -286,8 +276,6 @@ import ${name}_pkg::*;
     .flow_control_west_rts_i(flow_control_west_rts_i),
     .flow_control_west_cts_o(flow_control_west_cts_o),
 
-    .link_available_north_i(link_available_north_i),
-    .link_north_tx_mode_o(link_north_tx_mode_o),
     .link_from_north_i(link_from_north_i),
     .link_from_north_valid_i(link_from_north_valid_i),
     .link_to_north_o(link_to_north_o),
@@ -297,8 +285,6 @@ import ${name}_pkg::*;
     .flow_control_north_rts_i(flow_control_north_rts_i),
     .flow_control_north_cts_o(flow_control_north_cts_o),
 
-    .link_available_south_i(link_available_south_i),
-    .link_south_tx_mode_o(link_south_tx_mode_o),
     .link_from_south_i(link_from_south_i),
     .link_from_south_valid_i(link_from_south_valid_i),
     .link_to_south_o(link_to_south_o),

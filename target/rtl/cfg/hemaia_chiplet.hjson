@@ -122,9 +122,8 @@
       cfg_base_offset: 65536 // 0x10000
     },
     clusters:[
-
       "snax_KUL_cluster",
-      "snax_hypercorex_cluster",
+      "snax_KUL_cluster",
       // "snax_KUL_dse_cluster",
       // "snax_hypercorex_cluster",
       // "snax_hypercorex_cluster",
@@ -206,7 +205,7 @@
     },
     spm_wide: {
       address: 2147483648, // 0x8000_0000
-      length: 1048576, // 1 MiB 0x10_0000
+      length: 16777216,    // 16 MiB 0x100_0000
       banks: 32,
     },
     wide_zero_mem: {
