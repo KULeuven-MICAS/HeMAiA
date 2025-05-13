@@ -157,7 +157,10 @@ import ${name}_pkg::*;
   ///////////////////
   //  Occamy Top   //
   ///////////////////
-
+  // Control bus
+  ${soc_axi_lite_narrow_periph_xbar.out_hemaia_d2d_link.req_type()} hemaia_d2d_link_ctrl_req;
+  ${soc_axi_lite_narrow_periph_xbar.out_hemaia_d2d_link.rsp_type()} hemaia_d2d_link_ctrl_rsp;
+  // Data bus
   // AXI HeMAiA SoC -> HeMAiA D2D
   ${soc2router_bus.req_type()} soc2router_req;
   ${soc2router_bus.rsp_type()} soc2router_rsp;
@@ -176,6 +179,9 @@ import ${name}_pkg::*;
     .test_mode_i        (test_mode_i),
     .chip_id_i          (chip_id),
 % if occamy_cfg['hemaia_multichip']['single_chip'] is False: 
+    // Control registers
+    .hemaia_d2d_link_ctrl_req_o   (hemaia_d2d_link_ctrl_req),
+    .hemaia_d2d_link_ctrl_rsp_i   (hemaia_d2d_link_ctrl_rsp),
     // Chiplet Requst to Router
     .soc2router_req_o   (soc2router_req),
     .soc2router_rsp_i   (soc2router_rsp),
@@ -237,6 +243,8 @@ import ${name}_pkg::*;
     .chip_id_t (chip_id_t),
     .axi_req_t (${soc2router_bus.req_type()}),
     .axi_rsp_t (${soc2router_bus.rsp_type()}),
+    .axi_lite_req_t (${soc_axi_lite_narrow_periph_xbar.out_hemaia_d2d_link.req_type()}),
+    .axi_lite_rsp_t (${soc_axi_lite_narrow_periph_xbar.out_hemaia_d2d_link.rsp_type()}),
     .aw_chan_t (${soc2router_bus.aw_chan_type()}),
     .ar_chan_t (${soc2router_bus.ar_chan_type()}),
     .r_chan_t (${soc2router_bus.r_chan_type()}),
@@ -245,11 +253,11 @@ import ${name}_pkg::*;
   ) i_d2d_link (
     .chip_id_i(chip_id),
 
-    .netframe_clk_i(clk_i),
-    .netframe_rst_ni(rst_ni),
-    .netroute_clk_i(clk_i),
-    .netroute_rst_ni(rst_ni),
-    .testmode_i(test_mode_i),
+    .digital_clk_i(clk_i),
+    .digtial_rst_ni(rst_ni),
+
+    .axi_lite_req_i(hemaia_d2d_link_ctrl_req),
+    .axi_lite_rsp_o(hemaia_d2d_link_ctrl_rsp),
 
     .axi_in_req_i(soc2router_req),
     .axi_in_rsp_o(soc2router_rsp),

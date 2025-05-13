@@ -33,7 +33,7 @@ dependencies:
   tech_cells_generic:     { git:  https://github.com/KULeuven-MICAS/tech_cells_generic.git, version: 0.2.16 }
   cluster_icache:         { git:  https://github.com/KULeuven-MICAS/cluster_icache.git,     rev:  main }
   hemaia_axi_spi_slave:   { git: https://github.com/KULeuven-MICAS/hemaia_axi_spi_slave.git,rev:  main }
-  hemaia_d2d_link:        { git: https://github.com/KULeuven-MICAS/hemaia_d2d_link.git,     rev:  main }
+  hemaia_d2d_link:        { git: https://github.com/KULeuven-MICAS/hemaia_d2d_link.git,     rev:  ydeng/mapper }
 
 workspace:
   package_links:
@@ -121,8 +121,8 @@ sources:
       - target/sim_chip/testharness/congestion_emulator.sv
       - target/sim_chip/testharness/half_duplex_bus_emulator.sv
       - target/sim_chip/testharness/testharness.sv
-      - target/sim/test/bootrom.sv
-      # - target/rtl/bootrom/bootrom.sv
+      # - target/sim/test/bootrom.sv
+      - target/rtl/bootrom/bootrom.sv
       - hw/hemaia/hemaia_mem_system.sv
       - target/rtl/src/occamy_chip.sv
 

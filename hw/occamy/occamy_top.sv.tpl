@@ -76,12 +76,16 @@ module ${name}_top
 
 % if occamy_cfg['hemaia_multichip']['single_chip'] is False: 
   // HeMAiA Multi-Chip AXI Interface
+  // Data Bus
   // Chiplet Requst to Router
   output ${soc2router_bus.req_type()} soc2router_req_o,
   input  ${soc2router_bus.rsp_type()} soc2router_rsp_i,
   // Router Requst to Chiplet
   input  ${router2soc_bus.req_type()} router2soc_req_i,
   output ${router2soc_bus.rsp_type()} router2soc_rsp_o,
+  // Control Bus
+  output ${soc_axi_lite_narrow_periph_xbar.out_hemaia_d2d_link.req_type()} hemaia_d2d_link_ctrl_req_o,
+  input  ${soc_axi_lite_narrow_periph_xbar.out_hemaia_d2d_link.rsp_type()} hemaia_d2d_link_ctrl_rsp_i,
 % endif
 
   /// Chip specific control registers
@@ -108,6 +112,7 @@ module ${name}_top
   cuts_gpio_cfg = occamy_cfg["cuts"]["periph_axi_lite_narrow_gpio_cfg"]
   cuts_i2c_cfg = occamy_cfg["cuts"]["periph_axi_lite_narrow_i2c_cfg"]
   cuts_timer_cfg = occamy_cfg["cuts"]["periph_axi_lite_narrow_timer_cfg"]
+  cuts_d2d_link_cfg = occamy_cfg["cuts"]["periph_axi_lite_narrow_d2d_link_cfg"]
 %>
 
   ${name}_soc_reg_pkg::${name}_soc_reg2hw_t soc_ctrl_out;
@@ -371,6 +376,17 @@ module ${name}_top
     .spi_oen_o(spis_sd_en_o)
   );
   % endif
+
+% if occamy_cfg['hemaia_multichip']['single_chip'] is False: 
+  /////////////////////
+  //   Die2Die Ctrl  //
+  /////////////////////
+  <% regbus_d2d_link = soc_axi_lite_narrow_periph_xbar.out_hemaia_d2d_link \
+    .cut(context, cuts_d2d_link_cfg, name="soc_axi_lite_narrow_periph_xbar_out_hemaia_d2d_link_cut") %>
+  assign hemaia_d2d_link_ctrl_req_o = ${regbus_d2d_link.req_name()};
+  assign ${regbus_d2d_link.rsp_name()} = hemaia_d2d_link_ctrl_rsp_i;
+% endif
+
 
   ///////////////
   //   CLINT   //
