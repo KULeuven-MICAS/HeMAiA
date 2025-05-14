@@ -241,7 +241,15 @@ def am_connect_soc_lite_narrow_periph_xbar(am, am_soc_axi_lite_narrow_periph_xba
         "clint",
         occamy_cfg["peripherals"]["clint"]["length"],
         occamy_cfg["peripherals"]["clint"]["address"]).attach_to(am_soc_axi_lite_narrow_periph_xbar)
-    return am_axi_lite_narrow_peripherals, am_bootrom, am_clint
+    # add hemaia_d2d_link reg seperately
+    if occamy_cfg["hemaia_multichip"]["single_chip"] == False:
+        am_hemaia_d2d_link = am.new_leaf(
+            "hemaia_d2d_link",
+            occamy_cfg["peripherals"]["hemaia_d2d_link"]["length"],
+            occamy_cfg["peripherals"]["hemaia_d2d_link"]["address"]).attach_to(am_soc_axi_lite_narrow_periph_xbar)
+    else:
+        am_hemaia_d2d_link = None
+    return am_axi_lite_narrow_peripherals, am_bootrom, am_clint, am_hemaia_d2d_link
 
 
 def am_connect_soc_narrow_xbar(am, am_soc_narrow_xbar, occamy_cfg):

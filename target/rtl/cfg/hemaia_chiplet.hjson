@@ -82,6 +82,7 @@
       periph_axi_lite_narrow_plic_cfg: 1,
       periph_axi_lite_narrow_spim_cfg: 1,
       periph_axi_lite_narrow_timer_cfg: 1,
+      periph_axi_lite_narrow_d2d_link_cfg: 1,
     },
     txns: {
       wide_and_inter: 128,
@@ -121,9 +122,8 @@
       cfg_base_offset: 65536 // 0x10000
     },
     clusters:[
-
       "snax_KUL_cluster",
-      "snax_hypercorex_cluster",
+      "snax_KUL_cluster",
       // "snax_KUL_dse_cluster",
       // "snax_hypercorex_cluster",
       // "snax_hypercorex_cluster",
@@ -140,6 +140,10 @@
         clint: {
                     address: 67108864, // 0x0400_0000
                     length: 1048576, // 1 MiB 0x10_0000
+        },
+        hemaia_d2d_link: {
+                    address: 33583104, // 0x0200_7000
+                    length: 4096, // 4 kiB 0x1000
         },
         axi_lite_peripherals: [
             {
@@ -201,7 +205,7 @@
     },
     spm_wide: {
       address: 2147483648, // 0x8000_0000
-      length: 1048576, // 1 MiB 0x10_0000
+      length: 16777216,    // 16 MiB 0x100_0000
       banks: 32,
     },
     wide_zero_mem: {
@@ -209,7 +213,7 @@
       length: 8589934592, // 8 GiB 0x11_0000_0000
     },
     sys_idma_cfg: {
-      address: 285212672, // 0x1100_0000
+      address: 83886080, // 0x0500_0000
       length: 65536, // 64 kiB 0x1_0000
     },
     // backup boot address

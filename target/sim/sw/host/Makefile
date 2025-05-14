@@ -9,7 +9,7 @@ APPS  = hello_world
 APPS += multichip_sync
 ifneq ($(findstring chiplet,$(CFG_OVERRIDE)),)
 # If chiplet cfg is used, offloaf_multichip is compiled with the support to execute applications on cores at different chips
-APPS += offload_multichip
+APPS += offload_multichip hemaia_d2d_link_configurator
 else
 # Otherwise, simple offload is compiled, which is mainly used for ci. 
 APPS += offload
