@@ -387,7 +387,6 @@ module ${name}_top
   assign ${regbus_d2d_link.rsp_name()} = hemaia_d2d_link_ctrl_rsp_i;
 % endif
 
-
   ///////////////
   //   CLINT   //
   ///////////////
