@@ -16,22 +16,34 @@ typedef enum {
     D2D_DIRECTION_SOUTH = 3
 } Direction;
 
+typedef uint8_t bool;
+
+inline void delay_cycles(uint64_t cycle) {
+    uint64_t target_cycle, current_cycle;
+    __asm__ volatile("csrr %0, mcycle;" : "=r"(current_cycle));
+    target_cycle = current_cycle + cycle;
+    while (current_cycle < target_cycle) {
+        __asm__ volatile("csrr %0, mcycle;" : "=r"(current_cycle));
+    }
+}
+
 // Reset the D2D link
-inline void reset_d2d_link_digital() {
-    uint32_t *hemaia_d2d_link_reset_addr =
-        (uint32_t *)(((uintptr_t)get_current_chip_baseaddress() |
-                      HEMAIA_D2D_LINK_BASE_ADDR) +
-                     HEMAIA_D2D_LINK_RESET_REGISTER_REG_OFFSET);
-    *hemaia_d2d_link_reset_addr = 0xFFFF;  // Reset the d2d link
-    *hemaia_d2d_link_reset_addr = 0x0;     // Release the reset
+inline void reset_d2d_link_digital(uint32_t delay) {
+    volatile uint32_t *hemaia_d2d_link_reset_addr =
+        (volatile uint32_t *)(((uintptr_t)get_current_chip_baseaddress() |
+                               HEMAIA_D2D_LINK_BASE_ADDR) +
+                              HEMAIA_D2D_LINK_RESET_REGISTER_REG_OFFSET);
+    *hemaia_d2d_link_reset_addr = 0xFFFFFFFF;  // Reset the d2d link
+    delay_cycles(delay);
+    *hemaia_d2d_link_reset_addr = 0x0;  // Release the reset
 }
 
 // Test mode
 inline void set_d2d_link_test_mode(Direction direction, bool enable) {
-    uint32_t *hemaia_d2d_link_test_mode_addr =
-        (uint32_t *)(((uintptr_t)get_current_chip_baseaddress() |
-                      HEMAIA_D2D_LINK_BASE_ADDR) +
-                     HEMAIA_D2D_LINK_TEST_MODE_REGISTER_REG_OFFSET);
+    volatile uint32_t *hemaia_d2d_link_test_mode_addr =
+        (volatile uint32_t *)(((uintptr_t)get_current_chip_baseaddress() |
+                               HEMAIA_D2D_LINK_BASE_ADDR) +
+                              HEMAIA_D2D_LINK_TEST_MODE_REGISTER_REG_OFFSET);
     if (enable) {
         *hemaia_d2d_link_test_mode_addr |= (1 << direction);
     } else {
@@ -40,10 +52,10 @@ inline void set_d2d_link_test_mode(Direction direction, bool enable) {
 }
 
 inline void set_all_d2d_link_test_mode(bool enable) {
-    uint32_t *hemaia_d2d_link_test_mode_addr =
-        (uint32_t *)(((uintptr_t)get_current_chip_baseaddress() |
-                      HEMAIA_D2D_LINK_BASE_ADDR) +
-                     HEMAIA_D2D_LINK_TEST_MODE_REGISTER_REG_OFFSET);
+    volatile uint32_t *hemaia_d2d_link_test_mode_addr =
+        (volatile uint32_t *)(((uintptr_t)get_current_chip_baseaddress() |
+                               HEMAIA_D2D_LINK_BASE_ADDR) +
+                              HEMAIA_D2D_LINK_TEST_MODE_REGISTER_REG_OFFSET);
     if (enable) {
         *hemaia_d2d_link_test_mode_addr |= 0x0F;  // Set all test modes
     } else {
@@ -52,20 +64,20 @@ inline void set_all_d2d_link_test_mode(bool enable) {
 }
 
 inline bool get_d2d_link_being_tested(Direction direction) {
-    uint32_t *hemaia_d2d_link_test_mode_addr =
-        (uint32_t *)(((uintptr_t)get_current_chip_baseaddress() |
-                      HEMAIA_D2D_LINK_BASE_ADDR) +
-                     HEMAIA_D2D_LINK_TEST_MODE_REGISTER_REG_OFFSET);
+    volatile uint32_t *hemaia_d2d_link_test_mode_addr =
+        (volatile uint32_t *)(((uintptr_t)get_current_chip_baseaddress() |
+                               HEMAIA_D2D_LINK_BASE_ADDR) +
+                              HEMAIA_D2D_LINK_TEST_MODE_REGISTER_REG_OFFSET);
     uint32_t test_mode_status = *hemaia_d2d_link_test_mode_addr;
     return (test_mode_status & (1 << (direction + 4))) != 0;
 }
 
 // Link availability
 inline void set_d2d_link_availability(Direction direction, bool avail) {
-    uint32_t *hemaia_d2d_link_availability_addr =
-        (uint32_t *)(((uintptr_t)get_current_chip_baseaddress() |
-                      HEMAIA_D2D_LINK_BASE_ADDR) +
-                     HEMAIA_D2D_LINK_AVAILABILITY_REGISTER_REG_OFFSET);
+    volatile uint32_t *hemaia_d2d_link_availability_addr =
+        (volatile uint32_t *)(((uintptr_t)get_current_chip_baseaddress() |
+                               HEMAIA_D2D_LINK_BASE_ADDR) +
+                              HEMAIA_D2D_LINK_AVAILABILITY_REGISTER_REG_OFFSET);
     if (avail) {
         *hemaia_d2d_link_availability_addr |= (1 << direction);
     } else {
@@ -73,10 +85,10 @@ inline void set_d2d_link_availability(Direction direction, bool avail) {
     }
 }
 inline void set_all_d2d_link_availability(bool avail) {
-    uint32_t *hemaia_d2d_link_availability_addr =
-        (uint32_t *)(((uintptr_t)get_current_chip_baseaddress() |
-                      HEMAIA_D2D_LINK_BASE_ADDR) +
-                     HEMAIA_D2D_LINK_AVAILABILITY_REGISTER_REG_OFFSET);
+    volatile uint32_t *hemaia_d2d_link_availability_addr =
+        (volatile uint32_t *)(((uintptr_t)get_current_chip_baseaddress() |
+                               HEMAIA_D2D_LINK_BASE_ADDR) +
+                              HEMAIA_D2D_LINK_AVAILABILITY_REGISTER_REG_OFFSET);
     if (avail) {
         *hemaia_d2d_link_availability_addr |=
             0x0F;  // Set all link availability
@@ -87,10 +99,10 @@ inline void set_all_d2d_link_availability(bool avail) {
 }
 
 inline bool get_d2d_link_availability(Direction direction) {
-    uint32_t *hemaia_d2d_link_availability_addr =
-        (uint32_t *)(((uintptr_t)get_current_chip_baseaddress() |
-                      HEMAIA_D2D_LINK_BASE_ADDR) +
-                     HEMAIA_D2D_LINK_AVAILABILITY_REGISTER_REG_OFFSET);
+    volatile uint32_t *hemaia_d2d_link_availability_addr =
+        (volatile uint32_t *)(((uintptr_t)get_current_chip_baseaddress() |
+                               HEMAIA_D2D_LINK_BASE_ADDR) +
+                              HEMAIA_D2D_LINK_AVAILABILITY_REGISTER_REG_OFFSET);
     uint32_t availability_status = *hemaia_d2d_link_availability_addr;
     return (availability_status & (1 << direction)) != 0;
 }
@@ -233,8 +245,8 @@ inline uint8_t get_d2d_link_clock_delay(Direction direction) {
 // Driving strength
 inline void set_d2d_link_driving_strength(uint8_t strength,
                                           Direction direction) {
-    uint32_t *hemaia_d2d_link_driving_strength_addr =
-        (uint32_t
+    volatile uint32_t *hemaia_d2d_link_driving_strength_addr =
+        (volatile uint32_t
              *)(((uintptr_t)get_current_chip_baseaddress() |
                  HEMAIA_D2D_LINK_BASE_ADDR) +
                 HEMAIA_D2D_LINK_PROGRAMMABLE_DRIVE_STRENGTH_REGISTER_REG_OFFSET);
@@ -244,8 +256,8 @@ inline void set_d2d_link_driving_strength(uint8_t strength,
 }
 
 inline void set_all_d2d_link_driving_strength(uint8_t strength) {
-    uint32_t *hemaia_d2d_link_driving_strength_addr =
-        (uint32_t
+    volatile uint32_t *hemaia_d2d_link_driving_strength_addr =
+        (volatile uint32_t
              *)(((uintptr_t)get_current_chip_baseaddress() |
                  HEMAIA_D2D_LINK_BASE_ADDR) +
                 HEMAIA_D2D_LINK_PROGRAMMABLE_DRIVE_STRENGTH_REGISTER_REG_OFFSET);
@@ -254,8 +266,8 @@ inline void set_all_d2d_link_driving_strength(uint8_t strength) {
 }
 
 inline uint8_t get_d2d_link_driving_strength(Direction direction) {
-    uint32_t *hemaia_d2d_link_driving_strength_addr =
-        (uint32_t
+    volatile uint32_t *hemaia_d2d_link_driving_strength_addr =
+        (volatile uint32_t
              *)(((uintptr_t)get_current_chip_baseaddress() |
                  HEMAIA_D2D_LINK_BASE_ADDR) +
                 HEMAIA_D2D_LINK_PROGRAMMABLE_DRIVE_STRENGTH_REGISTER_REG_OFFSET);
@@ -265,30 +277,33 @@ inline uint8_t get_d2d_link_driving_strength(Direction direction) {
 
 // RX buffer threshold
 inline void set_d2d_link_threshold(uint8_t threshold, Direction direction) {
-    uint32_t *hemaia_d2d_link_threshold_addr =
-        (uint32_t *)(((uintptr_t)get_current_chip_baseaddress() |
-                      HEMAIA_D2D_LINK_BASE_ADDR) +
-                     HEMAIA_D2D_LINK_RX_BUFFER_THRESHOLD_REGISTER_REG_OFFSET);
+    volatile uint32_t *hemaia_d2d_link_threshold_addr =
+        (volatile uint32_t
+             *)(((uintptr_t)get_current_chip_baseaddress() |
+                 HEMAIA_D2D_LINK_BASE_ADDR) +
+                HEMAIA_D2D_LINK_RX_BUFFER_THRESHOLD_REGISTER_REG_OFFSET);
     *hemaia_d2d_link_threshold_addr =
         (*hemaia_d2d_link_threshold_addr & ~(0xFF << (direction * 8))) |
         (threshold << (direction * 8));
 }
 
 inline void set_all_d2d_link_threshold(uint8_t threshold) {
-    uint32_t *hemaia_d2d_link_threshold_addr =
-        (uint32_t *)(((uintptr_t)get_current_chip_baseaddress() |
-                      HEMAIA_D2D_LINK_BASE_ADDR) +
-                     HEMAIA_D2D_LINK_RX_BUFFER_THRESHOLD_REGISTER_REG_OFFSET);
+    volatile uint32_t *hemaia_d2d_link_threshold_addr =
+        (volatile uint32_t
+             *)(((uintptr_t)get_current_chip_baseaddress() |
+                 HEMAIA_D2D_LINK_BASE_ADDR) +
+                HEMAIA_D2D_LINK_RX_BUFFER_THRESHOLD_REGISTER_REG_OFFSET);
     *hemaia_d2d_link_threshold_addr =
         (threshold << 24) | (threshold << 16) | (threshold << 8) |
         threshold;  // Set the threshold to the passed parameter
 }
 
 inline uint8_t get_d2d_link_threshold(Direction direction) {
-    uint32_t *hemaia_d2d_link_threshold_addr =
-        (uint32_t *)(((uintptr_t)get_current_chip_baseaddress() |
-                      HEMAIA_D2D_LINK_BASE_ADDR) +
-                     HEMAIA_D2D_LINK_RX_BUFFER_THRESHOLD_REGISTER_REG_OFFSET);
+    volatile uint32_t *hemaia_d2d_link_threshold_addr =
+        (volatile uint32_t
+             *)(((uintptr_t)get_current_chip_baseaddress() |
+                 HEMAIA_D2D_LINK_BASE_ADDR) +
+                HEMAIA_D2D_LINK_RX_BUFFER_THRESHOLD_REGISTER_REG_OFFSET);
     uint32_t threshold_value = *hemaia_d2d_link_threshold_addr;
     return (threshold_value >> (direction * 8)) & 0xFF;
 }
@@ -322,8 +337,8 @@ inline bool get_d2d_link_operating_mode(Direction direction) {
 // TX mode clock frequency
 inline void set_d2d_link_tx_mode_clock_frequency(uint8_t frequency,
                                                  Direction direction) {
-    uint32_t *hemaia_d2d_link_tx_mode_clock_frequency_addr =
-        (uint32_t
+    volatile uint32_t *hemaia_d2d_link_tx_mode_clock_frequency_addr =
+        (volatile uint32_t
              *)(((uintptr_t)get_current_chip_baseaddress() |
                  HEMAIA_D2D_LINK_BASE_ADDR) +
                 HEMAIA_D2D_LINK_TX_MODE_CLOCK_FREQUENCY_REGISTER_REG_OFFSET);
@@ -334,8 +349,8 @@ inline void set_d2d_link_tx_mode_clock_frequency(uint8_t frequency,
 }
 
 inline void set_all_d2d_link_tx_mode_clock_frequency(uint8_t frequency) {
-    uint32_t *hemaia_d2d_link_tx_mode_clock_frequency_addr =
-        (uint32_t
+    volatile uint32_t *hemaia_d2d_link_tx_mode_clock_frequency_addr =
+        (volatile uint32_t
              *)(((uintptr_t)get_current_chip_baseaddress() |
                  HEMAIA_D2D_LINK_BASE_ADDR) +
                 HEMAIA_D2D_LINK_TX_MODE_CLOCK_FREQUENCY_REGISTER_REG_OFFSET);
@@ -344,8 +359,8 @@ inline void set_all_d2d_link_tx_mode_clock_frequency(uint8_t frequency) {
 }
 
 inline uint8_t get_d2d_link_tx_mode_clock_frequency(Direction direction) {
-    uint32_t *hemaia_d2d_link_tx_mode_clock_frequency_addr =
-        (uint32_t
+    volatile uint32_t *hemaia_d2d_link_tx_mode_clock_frequency_addr =
+        (volatile uint32_t
              *)(((uintptr_t)get_current_chip_baseaddress() |
                  HEMAIA_D2D_LINK_BASE_ADDR) +
                 HEMAIA_D2D_LINK_TX_MODE_CLOCK_FREQUENCY_REGISTER_REG_OFFSET);
@@ -356,8 +371,8 @@ inline uint8_t get_d2d_link_tx_mode_clock_frequency(Direction direction) {
 // Clock gating delay
 inline void set_d2d_link_clock_gating_delay(uint8_t delay,
                                             Direction direction) {
-    uint32_t *hemaia_d2d_link_clock_gating_delay_addr =
-        (uint32_t
+    volatile uint32_t *hemaia_d2d_link_clock_gating_delay_addr =
+        (volatile uint32_t
              *)(((uintptr_t)get_current_chip_baseaddress() |
                  HEMAIA_D2D_LINK_BASE_ADDR) +
                 HEMAIA_D2D_LINK_AUTOMATIC_HIGH_SPEED_CLOCK_GATING_DELAY_REGISTER_REG_OFFSET);
@@ -367,8 +382,8 @@ inline void set_d2d_link_clock_gating_delay(uint8_t delay,
         (delay << (direction * 8));
 }
 inline void set_all_d2d_link_clock_gating_delay(uint8_t delay) {
-    uint32_t *hemaia_d2d_link_clock_gating_delay_addr =
-        (uint32_t
+    volatile uint32_t *hemaia_d2d_link_clock_gating_delay_addr =
+        (volatile uint32_t
              *)(((uintptr_t)get_current_chip_baseaddress() |
                  HEMAIA_D2D_LINK_BASE_ADDR) +
                 HEMAIA_D2D_LINK_AUTOMATIC_HIGH_SPEED_CLOCK_GATING_DELAY_REGISTER_REG_OFFSET);
@@ -376,8 +391,8 @@ inline void set_all_d2d_link_clock_gating_delay(uint8_t delay) {
         (delay << 24) | (delay << 16) | (delay << 8) | delay;
 }
 inline uint8_t get_d2d_link_clock_gating_delay(Direction direction) {
-    uint32_t *hemaia_d2d_link_clock_gating_delay_addr =
-        (uint32_t
+    volatile uint32_t *hemaia_d2d_link_clock_gating_delay_addr =
+        (volatile uint32_t
              *)(((uintptr_t)get_current_chip_baseaddress() |
                  HEMAIA_D2D_LINK_BASE_ADDR) +
                 HEMAIA_D2D_LINK_AUTOMATIC_HIGH_SPEED_CLOCK_GATING_DELAY_REGISTER_REG_OFFSET);

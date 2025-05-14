@@ -23,11 +23,10 @@
 #define true 1
 #define false 0
 
-void delay_cycles(uint64_t cycle) {
+inline void delay_cycles(uint64_t cycle) {
     uint64_t target_cycle, current_cycle;
-
-    __asm__ volatile("csrr %0, mcycle;" : "=r"(target_cycle));
-    target_cycle = target_cycle + cycle;
+    __asm__ volatile("csrr %0, mcycle;" : "=r"(current_cycle));
+    target_cycle = current_cycle + cycle;
     while (current_cycle < target_cycle) {
         __asm__ volatile("csrr %0, mcycle;" : "=r"(current_cycle));
     }
@@ -68,11 +67,10 @@ void bootrom() {
         print_u8(address_prefix, chip_id);
         print_str(address_prefix, ", 0x");
         print_u8(address_prefix, target_chip_id);
-        print_str(address_prefix,
-                  "\r\n");
+        print_str(address_prefix, "\r\n");
         // print_str(address_prefix, "\r\n\t 1. Halt the CVA6 Core");
-        // print_str(address_prefix, "\r\n\t 2. Change the target remote Chip ID");
-        // print_str(address_prefix, "\r\n\t 3. Load from UART");
+        // print_str(address_prefix, "\r\n\t 2. Change the target remote Chip
+        // ID"); print_str(address_prefix, "\r\n\t 3. Load from UART");
         // print_str(address_prefix,
         //           "\r\n\t 4. Copy memory from local chip to remote chip");
         // print_str(address_prefix,
@@ -92,8 +90,7 @@ void bootrom() {
                 __asm__ volatile("wfi");
                 break;
             case TARGET_CHIPID:
-                print_str(address_prefix,
-                          "\r\n\t Target Chip ID: ");
+                print_str(address_prefix, "\r\n\t Target Chip ID: ");
                 scan_uart(address_prefix, in_buf);
                 cur = in_buf;
                 target_chip_id = 0;
