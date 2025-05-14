@@ -33,7 +33,7 @@ dependencies:
   tech_cells_generic:     { git:  https://github.com/KULeuven-MICAS/tech_cells_generic.git, version: 0.2.16 }
   cluster_icache:         { git:  https://github.com/KULeuven-MICAS/cluster_icache.git,     rev:  main }
   hemaia_axi_spi_slave:   { git: https://github.com/KULeuven-MICAS/hemaia_axi_spi_slave.git,rev:  main }
-  hemaia_d2d_link:        { git: https://github.com/KULeuven-MICAS/hemaia_d2d_link.git,     rev:  ydeng/mapper }
+  hemaia_d2d_link:        { git: https://github.com/KULeuven-MICAS/hemaia_d2d_link.git,     rev:  main }
 
 workspace:
   package_links:
