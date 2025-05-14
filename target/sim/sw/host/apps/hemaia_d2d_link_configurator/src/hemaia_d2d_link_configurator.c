@@ -4,9 +4,9 @@
 
 #include <stdio.h>
 #include "host.h"
-#include "hemaia_d2d_link_reg.h"
+#include "hemaia_d2d_link_peripheral.h"
 
-uint8_t *hemaia_d2d_link_cfg = (uint8_t *)0x02007000;
+uint8_t *hemaia_d2d_link_cfg = (uint8_t *)HEMAIA_D2D_LINK_BASE_ADDR;
 
 int main() {
     uintptr_t address_prefix = (uintptr_t)get_current_chip_baseaddress();
