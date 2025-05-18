@@ -112,7 +112,7 @@ module ${name}_top
   cuts_gpio_cfg = occamy_cfg["cuts"]["periph_axi_lite_narrow_gpio_cfg"]
   cuts_i2c_cfg = occamy_cfg["cuts"]["periph_axi_lite_narrow_i2c_cfg"]
   cuts_timer_cfg = occamy_cfg["cuts"]["periph_axi_lite_narrow_timer_cfg"]
-  cuts_d2d_link_cfg = occamy_cfg["cuts"]["periph_axi_lite_narrow_d2d_link_cfg"]
+  cuts_d2d_link_cfg = occamy_cfg["cuts"]["periph_axi_lite_narrow_d2d_link_cfg"] if occamy_cfg['hemaia_multichip']['single_chip'] is False else None
 %>
 
   ${name}_soc_reg_pkg::${name}_soc_reg2hw_t soc_ctrl_out;

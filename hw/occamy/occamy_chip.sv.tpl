@@ -149,6 +149,7 @@ import ${name}_pkg::*;
   ///////////////////
   //  Occamy Top   //
   ///////////////////
+  % if occamy_cfg['hemaia_multichip']['single_chip'] is False: 
   // Control bus
   ${soc_axi_lite_narrow_periph_xbar.out_hemaia_d2d_link.req_type()} hemaia_d2d_link_ctrl_req;
   ${soc_axi_lite_narrow_periph_xbar.out_hemaia_d2d_link.rsp_type()} hemaia_d2d_link_ctrl_rsp;
@@ -159,6 +160,7 @@ import ${name}_pkg::*;
   // AXI HeMAiA SoC -> HeMAiA D2D
   ${router2soc_bus.req_type()} router2soc_req;
   ${router2soc_bus.rsp_type()} router2soc_rsp;
+  % endif
 
 
   ${name}_top i_${name} (
