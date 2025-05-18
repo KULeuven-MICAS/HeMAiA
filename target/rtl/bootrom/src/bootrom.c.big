@@ -21,11 +21,10 @@
 #define true 1
 #define false 0
 
-void delay_cycles(uint64_t cycle) {
+static inline void delay_cycles(uint64_t cycle) {
     uint64_t target_cycle, current_cycle;
-
-    __asm__ volatile("csrr %0, mcycle;" : "=r"(target_cycle));
-    target_cycle = target_cycle + cycle;
+    __asm__ volatile("csrr %0, mcycle;" : "=r"(current_cycle));
+    target_cycle = current_cycle + cycle;
     while (current_cycle < target_cycle) {
         __asm__ volatile("csrr %0, mcycle;" : "=r"(current_cycle));
     }
