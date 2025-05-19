@@ -385,7 +385,7 @@ static inline void reset_and_ungate_quadrants(
 }
 
 static inline void reset_and_ungate_quadrants_all(uint8_t chip_id) {
-    for (int i = 0; i < N_QUADS; i++) reset_and_ungate_quad(chip_id, i, 0xFFFF);
+    for (int i = 0; i < N_QUADS; i++) reset_and_ungate_quad(chip_id, i, 0xFFFFFFFF);
 }
 //===============================================================
 // Interrupts
