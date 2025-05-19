@@ -122,10 +122,22 @@
     clusters:[
       "snax_KUL_cluster",
       "snax_KUL_cluster",
-      // "snax_KUL_cluster",
-      // "snax_KUL_cluster",
-      // "snax_KUL_cluster",
-    ],
+      "snax_KUL_cluster",
+      "snax_KUL_cluster",
+      "snax_KUL_cluster",
+      "snax_KUL_cluster",
+      "snax_KUL_cluster",
+      "snax_KUL_cluster",
+      "snax_KUL_cluster",
+      "snax_KUL_cluster",
+      "snax_KUL_cluster",
+      "snax_KUL_cluster",
+      "snax_KUL_cluster",
+      "snax_KUL_cluster",
+      "snax_KUL_cluster",
+      "snax_KUL_cluster",
+      "snax_KUL_cluster",
+      ],
 
     // peripherals
     peripherals: {

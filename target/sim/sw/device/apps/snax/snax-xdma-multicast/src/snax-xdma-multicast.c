@@ -8,6 +8,8 @@
 #include "snax-xdma-lib.h"
 #include "snrt.h"
 
+#define BROADCAST_NUM 16
+
 int main() {
     // Set err value for checking
     int err = 0;
@@ -59,8 +61,8 @@ int main() {
     if (snrt_cluster_idx() == 0 && snrt_is_dm_core()) {
         // Multicast evaluation
         // Prepare the broadcast destination address
-        uint32_t dest[4];
-        for (int i = 0; i < 4; i++) {
+        uint32_t dest[BROADCAST_NUM];
+        for (int i = 0; i < BROADCAST_NUM; i++) {
             dest[i] = (uint32_t)tcdm_baseaddress + (i + 1) * cluster_offset;
         }
         register uint32_t start_time;
@@ -81,7 +83,7 @@ int main() {
         }
 
         // Broacast to j Destination
-        for (int j = 1; j <= 4; j++) {
+        for (int j = 1; j <= BROADCAST_NUM; j++) {
             // Reference group:
             __asm__ volatile("csrr %0, mcycle;" : "=r"(start_time));
             for (int i = 0; i < j; i++) {
