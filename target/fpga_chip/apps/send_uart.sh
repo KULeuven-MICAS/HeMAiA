@@ -13,7 +13,7 @@ else
 
 	stty -F /dev/ttyUSB10 cs8 500000 ignbrk -brkint -imaxbel -opost -onlcr -isig -icanon -iexten -echo -echoe -echok -echoctl -echoke noflsh -ixon crtscts
 
-	echo -n 3 > /dev/ttyUSB10
+	echo -n 2 > /dev/ttyUSB10
 
 	sx -k "$FILE" < /dev/ttyUSB10 > /dev/ttyUSB10
 
