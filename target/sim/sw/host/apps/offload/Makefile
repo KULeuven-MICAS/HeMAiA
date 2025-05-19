@@ -91,7 +91,7 @@ DUMPS           = $(abspath $(addsuffix .dump, $(addprefix $(BUILDDIR)/$(APP)-, 
 DWARFS          = $(abspath $(addsuffix .dwarf, $(addprefix $(BUILDDIR)/$(APP)-, $(notdir $(DEVICE_APPS)))))
 BINS           = $(abspath $(addsuffix .bin, $(addprefix $(BUILDDIR)/$(APP)-, $(notdir $(DEVICE_APPS)))))
 PARTIAL_OUTPUTS = $(PARTIAL_ELF) $(PARTIAL_DUMP) $(LD_ORIGINS)
-FINAL_OUTPUTS   = $(ELFS) $(DUMPS) $(DWARFS)  $(BINS)
+FINAL_OUTPUTS   = $(ELFS) $(DUMPS) $(DWARFS) $(BINS)
 
 #########
 # Rules #
