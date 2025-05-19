@@ -14,15 +14,17 @@ ELFS = $(shell find $(TARGET)/sim/sw/host/apps -type f -name "*.elf")
 # Generate BIN filenames from the ELF filenames
 BINS = $(ELFS:.elf=.bin)
 
-.PHONY: apps hex clean
+.PHONY: apps copy_apps clean
 
-apps: $(BINS)
+copy_apps:
+	@cp $(BINS) $(MKFILE_DIR)
+
+apps: $(BINS) copy_apps
 
 # Use full paths for the dependencies
 %.bin: %.elf
 	$(RISCV_OBJCOPY) -O binary $< $@
-	mv $@ $(MKFILE_DIR)
 
 clean:
-	@rm -f $(MKFILE_DIR)/*.bin $(MKFILE_DIR)/*.hex
+	@rm -f $(MKFILE_DIR)/*.bin
 	@find $(MKFILE_DIR) -mindepth 1 -type d -exec rm -rf {} +
