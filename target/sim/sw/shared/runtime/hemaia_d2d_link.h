@@ -220,8 +220,8 @@ inline uint32_t get_fec_unrecoverable_error_count(Direction direction) {
 }
 
 // Programmable clock delay
-inline void set_d2d_link_clock_delay(uint8_t delay, Direction direction,
-                                     uint8_t channel) {
+inline void set_d2d_link_clock_delay(Direction direction, uint8_t channel,
+                                     uint8_t delay) {
     uintptr_t base =
         (uintptr_t)get_current_chip_baseaddress() | HEMAIA_D2D_LINK_BASE_ADDR;
     switch (direction) {
@@ -255,7 +255,8 @@ inline void set_d2d_link_clock_delay(uint8_t delay, Direction direction,
     *reg = current;
 }
 
-inline void set_d2d_link_clock_delay_all_channels(uint8_t delay, Direction direction) {
+inline void set_d2d_link_clock_delay_all_channels(Direction direction,
+                                                  uint8_t delay) {
     uintptr_t base =
         (uintptr_t)get_current_chip_baseaddress() | HEMAIA_D2D_LINK_BASE_ADDR;
     switch (direction) {
@@ -317,30 +318,22 @@ inline uint8_t get_d2d_link_clock_delay(Direction direction, uint8_t channel) {
 }
 
 // Programmable fault link bypass
-inline void set_d2d_link_broken_link(uint8_t broken_link, Direction direction,
-                                     uint8_t channel) {
+inline void set_d2d_link_broken_link(Direction direction, uint8_t channel,
+                                     uint8_t broken_link) {
     uintptr_t base =
         (uintptr_t)get_current_chip_baseaddress() | HEMAIA_D2D_LINK_BASE_ADDR;
     switch (direction) {
         case D2D_DIRECTION_EAST:
-            base =
-                base +
-                HEMAIA_D2D_LINK_EAST_BROKEN_WIRE_REGISTER_REG_OFFSET;
+            base = base + HEMAIA_D2D_LINK_EAST_BROKEN_WIRE_REGISTER_REG_OFFSET;
             break;
         case D2D_DIRECTION_WEST:
-            base =
-                base +
-                HEMAIA_D2D_LINK_WEST_BROKEN_WIRE_REGISTER_REG_OFFSET;
+            base = base + HEMAIA_D2D_LINK_WEST_BROKEN_WIRE_REGISTER_REG_OFFSET;
             break;
         case D2D_DIRECTION_NORTH:
-            base =
-                base +
-                HEMAIA_D2D_LINK_NORTH_BROKEN_WIRE_REGISTER_REG_OFFSET;
+            base = base + HEMAIA_D2D_LINK_NORTH_BROKEN_WIRE_REGISTER_REG_OFFSET;
             break;
         default:
-            base =
-                base +
-                HEMAIA_D2D_LINK_SOUTH_BROKEN_WIRE_REGISTER_REG_OFFSET;
+            base = base + HEMAIA_D2D_LINK_SOUTH_BROKEN_WIRE_REGISTER_REG_OFFSET;
             break;
     }
 
@@ -352,29 +345,21 @@ inline void set_d2d_link_broken_link(uint8_t broken_link, Direction direction,
     *reg = current;
 }
 
-inline uint8_t get_d2d_link_clock_delay(Direction direction, uint8_t channel) {
+inline uint8_t get_d2d_link_broken_link(Direction direction, uint8_t channel) {
     uintptr_t base =
         (uintptr_t)get_current_chip_baseaddress() | HEMAIA_D2D_LINK_BASE_ADDR;
     switch (direction) {
         case D2D_DIRECTION_EAST:
-            base =
-                base +
-                HEMAIA_D2D_LINK_EAST_BROKEN_WIRE_REGISTER_REG_OFFSET;
+            base = base + HEMAIA_D2D_LINK_EAST_BROKEN_WIRE_REGISTER_REG_OFFSET;
             break;
         case D2D_DIRECTION_WEST:
-            base =
-                base +
-                HEMAIA_D2D_LINK_WEST_BROKEN_WIRE_REGISTER_REG_OFFSET;
+            base = base + HEMAIA_D2D_LINK_WEST_BROKEN_WIRE_REGISTER_REG_OFFSET;
             break;
         case D2D_DIRECTION_NORTH:
-            base =
-                base +
-                HEMAIA_D2D_LINK_NORTH_BROKEN_WIRE_REGISTER_REG_OFFSET;
+            base = base + HEMAIA_D2D_LINK_NORTH_BROKEN_WIRE_REGISTER_REG_OFFSET;
             break;
         default:
-            base =
-                base +
-                HEMAIA_D2D_LINK_SOUTH_BROKEN_WIRE_REGISTER_REG_OFFSET;
+            base = base + HEMAIA_D2D_LINK_SOUTH_BROKEN_WIRE_REGISTER_REG_OFFSET;
             break;
     }
 
