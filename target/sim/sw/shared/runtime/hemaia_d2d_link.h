@@ -108,84 +108,97 @@ inline bool get_d2d_link_availability(Direction direction) {
 }
 
 // Error count and total count of the D2D link BER test
-inline uint32_t get_d2d_link_tested_cycle(Direction direction) {
+inline uint32_t get_d2d_link_tested_cycle(Direction direction,
+                                          uint8_t channel) {
     uintptr_t base =
         (uintptr_t)get_current_chip_baseaddress() | HEMAIA_D2D_LINK_BASE_ADDR;
     uint32_t offset = 0;
     switch (direction) {
         case D2D_DIRECTION_EAST:
             offset =
-                HEMAIA_D2D_LINK_EAST_TEST_MODE_TOTAL_CYCLE_REGISTER_REG_OFFSET;
+                HEMAIA_D2D_LINK_EAST_C0_TEST_MODE_TOTAL_CYCLE_REGISTER_REG_OFFSET;
             break;
         case D2D_DIRECTION_WEST:
             offset =
-                HEMAIA_D2D_LINK_WEST_TEST_MODE_TOTAL_CYCLE_REGISTER_REG_OFFSET;
+                HEMAIA_D2D_LINK_WEST_C0_TEST_MODE_TOTAL_CYCLE_REGISTER_REG_OFFSET;
             break;
             ;
             break;
         case D2D_DIRECTION_NORTH:
             offset =
-                HEMAIA_D2D_LINK_NORTH_TEST_MODE_TOTAL_CYCLE_REGISTER_REG_OFFSET;
+                HEMAIA_D2D_LINK_NORTH_C0_TEST_MODE_TOTAL_CYCLE_REGISTER_REG_OFFSET;
             break;
         default:
             offset =
-                HEMAIA_D2D_LINK_SOUTH_TEST_MODE_TOTAL_CYCLE_REGISTER_REG_OFFSET;
+                HEMAIA_D2D_LINK_SOUTH_C0_TEST_MODE_TOTAL_CYCLE_REGISTER_REG_OFFSET;
             break;
     }
-    return *((volatile uint32_t *)(base + offset));
+    return *((volatile uint32_t *)(base + offset + channel));
 }
 
-inline uint8_t get_d2d_link_error_cycle(Direction direction, uint8_t channel) {
+inline uint8_t get_d2d_link_error_cycle_one_wire(Direction direction,
+                                                 uint8_t channel,
+                                                 uint8_t wire) {
     uintptr_t base =
         (uintptr_t)get_current_chip_baseaddress() | HEMAIA_D2D_LINK_BASE_ADDR;
-    uint8_t group = channel / 4;
-    uint8_t subChannel = channel % 4;
+    uint8_t group = wire / 4;
+    uint8_t subChannel = wire % 4;
     uint32_t offset = 0;
     switch (direction) {
         case D2D_DIRECTION_EAST:
             offset =
-                HEMAIA_D2D_LINK_EAST_TEST_MODE_ERROR_REGISTER_0_REG_OFFSET +
-                group * 4;
+                HEMAIA_D2D_LINK_EAST_C0_TEST_MODE_ERROR_REGISTER_0_REG_OFFSET +
+                channel * 20 + group * 4;
             break;
         case D2D_DIRECTION_WEST:
             offset =
-                HEMAIA_D2D_LINK_WEST_TEST_MODE_ERROR_REGISTER_0_REG_OFFSET +
-                group * 4;
+                HEMAIA_D2D_LINK_WEST_C0_TEST_MODE_ERROR_REGISTER_0_REG_OFFSET +
+                channel * 20 + group * 4;
             break;
         case D2D_DIRECTION_NORTH:
             offset =
-                HEMAIA_D2D_LINK_NORTH_TEST_MODE_ERROR_REGISTER_0_REG_OFFSET +
-                group * 4;
+                HEMAIA_D2D_LINK_NORTH_C0_TEST_MODE_ERROR_REGISTER_0_REG_OFFSET +
+                channel * 20 + group * 4;
             break;
         default:
             offset =
-                HEMAIA_D2D_LINK_SOUTH_TEST_MODE_ERROR_REGISTER_0_REG_OFFSET +
-                group * 4;
+                HEMAIA_D2D_LINK_SOUTH_C0_TEST_MODE_ERROR_REGISTER_0_REG_OFFSET +
+                channel * 20 + group * 4;
             break;
     }
     uint32_t value = *((volatile uint32_t *)(base + offset));
     return (value >> (8 * subChannel)) & 0xFF;
 }
 
-inline void get_all_d2d_link_error_cycle(Direction direction, uint8_t *dest) {
+inline void get_d2d_link_error_cycle_one_channel(Direction direction,
+                                                 uint8_t channel,
+                                                 uint8_t *dest) {
     uintptr_t base =
         (uintptr_t)get_current_chip_baseaddress() | HEMAIA_D2D_LINK_BASE_ADDR;
     switch (direction) {
         case D2D_DIRECTION_EAST:
-            base = base +
-                   HEMAIA_D2D_LINK_EAST_TEST_MODE_ERROR_REGISTER_0_REG_OFFSET;
+            base =
+                base +
+                HEMAIA_D2D_LINK_EAST_C0_TEST_MODE_ERROR_REGISTER_0_REG_OFFSET +
+                channel * 20;
             break;
         case D2D_DIRECTION_WEST:
-            base = base +
-                   HEMAIA_D2D_LINK_WEST_TEST_MODE_ERROR_REGISTER_0_REG_OFFSET;
+            base =
+                base +
+                HEMAIA_D2D_LINK_WEST_C0_TEST_MODE_ERROR_REGISTER_0_REG_OFFSET +
+                channel * 20;
             break;
         case D2D_DIRECTION_NORTH:
-            base = base +
-                   HEMAIA_D2D_LINK_NORTH_TEST_MODE_ERROR_REGISTER_0_REG_OFFSET;
+            base =
+                base +
+                HEMAIA_D2D_LINK_NORTH_C0_TEST_MODE_ERROR_REGISTER_0_REG_OFFSET +
+                channel * 20;
             break;
         default:
-            base = base +
-                   HEMAIA_D2D_LINK_SOUTH_TEST_MODE_ERROR_REGISTER_0_REG_OFFSET;
+            base =
+                base +
+                HEMAIA_D2D_LINK_SOUTH_C0_TEST_MODE_ERROR_REGISTER_0_REG_OFFSET +
+                channel * 20;
             break;
     }
 
@@ -207,39 +220,100 @@ inline uint32_t get_fec_unrecoverable_error_count(Direction direction) {
 }
 
 // Programmable clock delay
-inline void set_d2d_link_clock_delay(uint8_t delay, Direction direction) {
+inline void set_d2d_link_clock_delay(uint8_t delay, Direction direction,
+                                     uint8_t channel) {
     uintptr_t base =
         (uintptr_t)get_current_chip_baseaddress() | HEMAIA_D2D_LINK_BASE_ADDR;
-    volatile uint32_t *reg =
-        (volatile uint32_t
-             *)(base +
-                HEMAIA_D2D_LINK_PROGRAMMABLE_CLOCK_DELAY_REGISTER_REG_OFFSET);
+    switch (direction) {
+        case D2D_DIRECTION_EAST:
+            base =
+                base +
+                HEMAIA_D2D_LINK_EAST_PROGRAMMABLE_CLOCK_DELAY_REGISTER_REG_OFFSET;
+            break;
+        case D2D_DIRECTION_WEST:
+            base =
+                base +
+                HEMAIA_D2D_LINK_WEST_PROGRAMMABLE_CLOCK_DELAY_REGISTER_REG_OFFSET;
+            break;
+        case D2D_DIRECTION_NORTH:
+            base =
+                base +
+                HEMAIA_D2D_LINK_NORTH_PROGRAMMABLE_CLOCK_DELAY_REGISTER_REG_OFFSET;
+            break;
+        default:
+            base =
+                base +
+                HEMAIA_D2D_LINK_SOUTH_PROGRAMMABLE_CLOCK_DELAY_REGISTER_REG_OFFSET;
+            break;
+    }
+
+    volatile uint32_t *reg = (volatile uint32_t *)(base);
     uint32_t current = *reg;
-    uint32_t shift = direction * 8;
+    uint32_t shift = channel * 8;
     current &= ~(0xFF << shift);
     current |= ((uint32_t)delay & 0xFF) << shift;
     *reg = current;
 }
 
-inline void set_all_d2d_link_clock_delay(uint8_t delay) {
+inline void set_all_d2d_link_clock_delay(uint8_t delay, Direction direction) {
     uintptr_t base =
         (uintptr_t)get_current_chip_baseaddress() | HEMAIA_D2D_LINK_BASE_ADDR;
-    volatile uint32_t *reg =
-        (volatile uint32_t
-             *)(base +
-                HEMAIA_D2D_LINK_PROGRAMMABLE_CLOCK_DELAY_REGISTER_REG_OFFSET);
+    switch (direction) {
+        case D2D_DIRECTION_EAST:
+            base =
+                base +
+                HEMAIA_D2D_LINK_EAST_PROGRAMMABLE_CLOCK_DELAY_REGISTER_REG_OFFSET;
+            break;
+        case D2D_DIRECTION_WEST:
+            base =
+                base +
+                HEMAIA_D2D_LINK_WEST_PROGRAMMABLE_CLOCK_DELAY_REGISTER_REG_OFFSET;
+            break;
+        case D2D_DIRECTION_NORTH:
+            base =
+                base +
+                HEMAIA_D2D_LINK_NORTH_PROGRAMMABLE_CLOCK_DELAY_REGISTER_REG_OFFSET;
+            break;
+        default:
+            base =
+                base +
+                HEMAIA_D2D_LINK_SOUTH_PROGRAMMABLE_CLOCK_DELAY_REGISTER_REG_OFFSET;
+            break;
+    }
+
+    volatile uint32_t *reg = (volatile uint32_t *)(base);
     *reg = ((uint32_t)delay << 24) | ((uint32_t)delay << 16) |
            ((uint32_t)delay << 8) | delay;
 }
 
-inline uint8_t get_d2d_link_clock_delay(Direction direction) {
+inline uint8_t get_d2d_link_clock_delay(Direction direction, uint8_t channel) {
     uintptr_t base =
         (uintptr_t)get_current_chip_baseaddress() | HEMAIA_D2D_LINK_BASE_ADDR;
-    volatile uint32_t *reg =
-        (volatile uint32_t
-             *)(base +
-                HEMAIA_D2D_LINK_PROGRAMMABLE_CLOCK_DELAY_REGISTER_REG_OFFSET);
-    return (uint8_t)((*reg >> (direction * 8)) & 0xFF);
+    switch (direction) {
+        case D2D_DIRECTION_EAST:
+            base =
+                base +
+                HEMAIA_D2D_LINK_EAST_PROGRAMMABLE_CLOCK_DELAY_REGISTER_REG_OFFSET;
+            break;
+        case D2D_DIRECTION_WEST:
+            base =
+                base +
+                HEMAIA_D2D_LINK_WEST_PROGRAMMABLE_CLOCK_DELAY_REGISTER_REG_OFFSET;
+            break;
+        case D2D_DIRECTION_NORTH:
+            base =
+                base +
+                HEMAIA_D2D_LINK_NORTH_PROGRAMMABLE_CLOCK_DELAY_REGISTER_REG_OFFSET;
+            break;
+        default:
+            base =
+                base +
+                HEMAIA_D2D_LINK_SOUTH_PROGRAMMABLE_CLOCK_DELAY_REGISTER_REG_OFFSET;
+            break;
+    }
+
+    volatile uint32_t *reg = (volatile uint32_t *)(base);
+    return (uint8_t)((*reg >> (channel * 8)) & 0xFF);
 }
 
 // Driving strength
