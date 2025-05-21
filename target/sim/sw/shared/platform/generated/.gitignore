@@ -9,3 +9,5 @@ snitch_cluster_peripheral.h
 snitch_hbm_xbar_peripheral.h
 snitch_quad_peripheral.h
 hemaia_d2d_link_peripheral.h
+occamy_memory_map.h
+occamy.h

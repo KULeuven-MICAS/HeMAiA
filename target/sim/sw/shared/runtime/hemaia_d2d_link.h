@@ -214,9 +214,9 @@ inline uint32_t get_fec_unrecoverable_error_count(Direction direction) {
         (uint32_t
              *)(((uintptr_t)get_current_chip_baseaddress() |
                  HEMAIA_D2D_LINK_BASE_ADDR) +
-                HEMAIA_D2D_LINK_EAST_FEC_UNRECOVERABLE_ERROR_REGISTER_REG_OFFSET +
-                direction * 4);
-    return *fec_unrecoverable_error_count_addr;
+                HEMAIA_D2D_LINK_FEC_UNRECOVERABLE_ERROR_REGISTER_REG_OFFSET);
+    return (uint8_t)((*fec_unrecoverable_error_count_addr >> (direction * 8)) &
+                     0xFF);
 }
 
 // Programmable clock delay
