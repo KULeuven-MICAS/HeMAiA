@@ -101,20 +101,17 @@ module testharness
   // Must be the frequency of i_uart0.clk_i in Hz
   localparam int unsigned UartDPIFreq = 1_000_000_000;
 
-  // Instatiate Chips
-
-% for i in x:
-%   for j in y:
-
-
-% for i in x:
-%   for j in y:
   // Definition of tri_state bus
+% for i in x:
+%   for j in y:
   tri [19:0] chip_${i}_${j}_to_${i+1}_${j}_link[3];
   tri [19:0] chip_${i}_${j}_to_${i}_${j+1}_link[3];
-
 %   endfor
 % endfor
+
+  // Instatiate Chips
+% for i in x:
+%   for j in y:
 <%
     i_hex_string = "{:01x}".format(i)
     j_hex_string = "{:01x}".format(j)
@@ -172,7 +169,7 @@ module testharness
       .east_test_being_requested_i(chip_${i}_${j}_link_to_east_test_request),
       .east_test_request_o(chip_${i}_${j}_link_from_east_test_request),
 
-%   if j > min(y):
+%   if i > min(x):
       .west_d2d_io(chip_${i-1}_${j}_to_${i}_${j}_link),
 %   else:
       .west_d2d_io(),
@@ -184,7 +181,7 @@ module testharness
       .west_test_being_requested_i(chip_${i}_${j}_link_to_west_test_request),
       .west_test_request_o(chip_${i}_${j}_link_from_west_test_request),
 
-%   if i > min(x):
+%   if j > min(y):
       .north_d2d_io(chip_${i}_${j-1}_to_${i}_${j}_link),
 %   else:
       .north_d2d_io(),

@@ -289,8 +289,7 @@ import ${name}_pkg::*;
     .flow_control_south_cts_i,
     .flow_control_south_rts_i,
     .flow_control_south_cts_o,
-    .south_phy_io(south_d2d_io),
-
+    .south_phy_io(south_d2d_io)
   );
 
 % endif
