@@ -43,6 +43,7 @@ DEVICE_APPS += snax/snax-xdma-transpose
 DEVICE_APPS += snax/snax-xdma-reshape
 DEVICE_APPS += snax/snax-axi-torture
 DEVICE_APPS += snax/snax-axi-torture-devil
+DEVICE_APPS += snax/snax-xdma-multicast-chiplet
 
 # Dependencies
 INCDIRS += $(RUNTIME_DIR)
