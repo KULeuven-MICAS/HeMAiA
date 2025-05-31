@@ -39,7 +39,7 @@ int main() {
     print_u8(current_chip_address_prefix, current_chip_id);
     print_str(current_chip_address_prefix, "\r\n");
 
-    while (true) {
+    while (1) {
     print_str(current_chip_address_prefix,
               "[HeMAiA] Enter Chip ID to ungate clusters in this chip: ");
         scan_str(current_chip_address_prefix, in_buf);

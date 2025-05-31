@@ -500,7 +500,7 @@ inline void set_d2d_link_clock_gating_delay(uint8_t delay,
         (volatile uint32_t
              *)(((uintptr_t)get_current_chip_baseaddress() |
                  HEMAIA_D2D_LINK_BASE_ADDR) +
-                HEMAIA_D2D_LINK_AUTOMATIC_HIGH_SPEED_CLOCK_GATING_DELAY_REGISTER_REG_OFFSET);
+                HEMAIA_D2D_LINK_PHY_CLOCK_GATING_DELAY_REGISTER_REG_OFFSET);
     *hemaia_d2d_link_clock_gating_delay_addr =
         (*hemaia_d2d_link_clock_gating_delay_addr &
          ~(0xFF << (direction * 8))) |
@@ -511,7 +511,7 @@ inline void set_all_d2d_link_clock_gating_delay(uint8_t delay) {
         (volatile uint32_t
              *)(((uintptr_t)get_current_chip_baseaddress() |
                  HEMAIA_D2D_LINK_BASE_ADDR) +
-                HEMAIA_D2D_LINK_AUTOMATIC_HIGH_SPEED_CLOCK_GATING_DELAY_REGISTER_REG_OFFSET);
+                HEMAIA_D2D_LINK_PHY_CLOCK_GATING_DELAY_REGISTER_REG_OFFSET);
     *hemaia_d2d_link_clock_gating_delay_addr =
         (delay << 24) | (delay << 16) | (delay << 8) | delay;
 }
@@ -520,7 +520,40 @@ inline uint8_t get_d2d_link_clock_gating_delay(Direction direction) {
         (volatile uint32_t
              *)(((uintptr_t)get_current_chip_baseaddress() |
                  HEMAIA_D2D_LINK_BASE_ADDR) +
-                HEMAIA_D2D_LINK_AUTOMATIC_HIGH_SPEED_CLOCK_GATING_DELAY_REGISTER_REG_OFFSET);
+                HEMAIA_D2D_LINK_PHY_CLOCK_GATING_DELAY_REGISTER_REG_OFFSET);
     uint32_t delay_value = *hemaia_d2d_link_clock_gating_delay_addr;
+    return (delay_value >> (direction * 8)) & 0xFF;
+}
+
+// Data Transmisson Delay
+inline void set_d2d_link_data_transmission_delay(uint8_t delay, Direction direction) {
+    volatile uint32_t *hemaia_d2d_link_data_transmission_delay_addr =
+        (volatile uint32_t
+             *)(((uintptr_t)get_current_chip_baseaddress() |
+                 HEMAIA_D2D_LINK_BASE_ADDR) +
+                HEMAIA_D2D_LINK_PHY_DATA_TRANSMISSION_DELAY_REGISTER_REG_OFFSET);
+    *hemaia_d2d_link_data_transmission_delay_addr =
+        (*hemaia_d2d_link_data_transmission_delay_addr &
+         ~(0xFF << (direction * 8))) |
+        (delay << (direction * 8));
+}
+
+inline void set_all_d2d_link_data_transmission_delay(uint8_t delay) {
+    volatile uint32_t *hemaia_d2d_link_data_transmission_delay_addr =
+        (volatile uint32_t
+             *)(((uintptr_t)get_current_chip_baseaddress() |
+                 HEMAIA_D2D_LINK_BASE_ADDR) +
+                HEMAIA_D2D_LINK_PHY_DATA_TRANSMISSION_DELAY_REGISTER_REG_OFFSET);
+    *hemaia_d2d_link_data_transmission_delay_addr =
+        (delay << 24) | (delay << 16) | (delay << 8) | delay;
+}
+
+inline uint8_t get_d2d_link_data_transmission_delay(Direction direction) {
+    volatile uint32_t *hemaia_d2d_link_data_transmission_delay_addr =
+        (volatile uint32_t
+             *)(((uintptr_t)get_current_chip_baseaddress() |
+                 HEMAIA_D2D_LINK_BASE_ADDR) +
+                HEMAIA_D2D_LINK_PHY_DATA_TRANSMISSION_DELAY_REGISTER_REG_OFFSET);
+    uint32_t delay_value = *hemaia_d2d_link_data_transmission_delay_addr;
     return (delay_value >> (direction * 8)) & 0xFF;
 }
