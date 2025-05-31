@@ -350,9 +350,9 @@ static inline volatile uint32_t* get_shared_lock(
 static inline void set_clk_ena_quad(uint8_t chip_id, uint32_t quad_idx,
                                     uint32_t value,
                                     uint32_t cluster_clk_enable_mask) {
-    uint32_t* clk_ena_ptr =
-        (uint32_t*)((uintptr_t)quad_cfg_clk_ena_ptr(quad_idx) |
-                    (uintptr_t)get_chip_baseaddress(chip_id));
+    volatile uint32_t* clk_ena_ptr =
+        (volatile uint32_t*)((uintptr_t)quad_cfg_clk_ena_ptr(quad_idx) |
+                             (uintptr_t)get_chip_baseaddress(chip_id));
     *clk_ena_ptr = value & cluster_clk_enable_mask;
 }
 
@@ -362,9 +362,9 @@ static inline void set_clk_ena_quad(uint8_t chip_id, uint32_t quad_idx,
 
 static inline void set_reset_n_quad(uint8_t chip_id, uint32_t quad_idx,
                                     uint32_t value) {
-    uint32_t* reset_n_ptr =
-        (uint32_t*)((uintptr_t)quad_cfg_reset_n_ptr(quad_idx) |
-                    (uintptr_t)get_chip_baseaddress(chip_id));
+    volatile uint32_t* reset_n_ptr =
+        (volatile uint32_t*)((uintptr_t)quad_cfg_reset_n_ptr(quad_idx) |
+                             (uintptr_t)get_chip_baseaddress(chip_id));
     *reset_n_ptr = value & 0x1;
 }
 
@@ -372,7 +372,6 @@ static inline void reset_and_ungate_quad(uint8_t chip_id, uint32_t quadrant_idx,
                                          uint32_t cluster_clk_enable_mask) {
     set_reset_n_quad(chip_id, quadrant_idx, 0);
     set_clk_ena_quad(chip_id, quadrant_idx, 0, cluster_clk_enable_mask);
-    __asm__ __volatile__("fence" ::: "memory");
     set_reset_n_quad(chip_id, quadrant_idx, 0xFFFFFFFF);
     set_clk_ena_quad(chip_id, quadrant_idx, 0xFFFFFFFF,
                      cluster_clk_enable_mask);
@@ -385,7 +384,8 @@ static inline void reset_and_ungate_quadrants(
 }
 
 static inline void reset_and_ungate_quadrants_all(uint8_t chip_id) {
-    for (int i = 0; i < N_QUADS; i++) reset_and_ungate_quad(chip_id, i, 0xFFFFFFFF);
+    for (int i = 0; i < N_QUADS; i++)
+        reset_and_ungate_quad(chip_id, i, 0xFFFFFFFF);
 }
 //===============================================================
 // Interrupts
