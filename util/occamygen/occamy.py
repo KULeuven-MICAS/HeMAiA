@@ -319,6 +319,8 @@ def am_connect_soc_wide_xbar_quad(am, am_soc_narrow_xbar, am_wide_xbar_quadrant_
             bases_cluster = list()
             bases_cluster.append(cluster_i_start_addr +
                                  sum(clusters_base_offset[0:j+1]) + 0)
+            
+            # TCDM is accessible from both narrow and wide xbar
             am_clusters.append(
                 am.new_leaf(
                     "quadrant_{}_cluster_{}_tcdm".format(i, j),
@@ -331,6 +333,7 @@ def am_connect_soc_wide_xbar_quad(am, am_soc_narrow_xbar, am_wide_xbar_quadrant_
                 )
             )
 
+            # Cluster peripherals are only accessible from narrow xbar
             bases_cluster = list()
             bases_cluster.append(cluster_i_start_addr + sum(clusters_base_offset[0:j+1])
                                  + clusters_tcdm_size[j+1])
@@ -341,23 +344,20 @@ def am_connect_soc_wide_xbar_quad(am, am_soc_narrow_xbar, am_wide_xbar_quadrant_
                     *bases_cluster
                 ).attach_to(
                     am_narrow_xbar_quadrant_s1[i]
-                ) # .attach_to(
-                #     am_wide_xbar_quadrant_s1[i]
-                # )
+                )
             )
 
+            # Cluster zero memory and XDMA are only accessible from wide xbar
             bases_cluster = list()
             bases_cluster.append(cluster_i_start_addr + sum(clusters_base_offset[0:j+1]) +
                                  clusters_tcdm_size[j+1] + clusters_periph_size[j+1])
             am_clusters.append(
                 am.new_leaf(
-                    "quadrant_{}_cluster_{}_zero_mem".format(i, j),
-                    clusters_zero_mem_size[j+1],
+                    "quadrant_{}_cluster_{}_space_after_periph".format(i, j),
+                    clusters_base_offset[j+1] - clusters_tcdm_size[j+1] - clusters_periph_size[j+1],
                     *bases_cluster
                 ).attach_to(
                     am_wide_xbar_quadrant_s1[i]
-                ).attach_to(
-                    am_narrow_xbar_quadrant_s1[i]
                 )
             )
         am.new_leaf(

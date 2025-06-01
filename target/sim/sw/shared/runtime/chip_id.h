@@ -42,11 +42,11 @@ inline uint8_t *get_chip_baseaddress(uint8_t chip_id) {
 #endif
 }
 
-inline uint32_t get_chip_baseaddress_h(uint8_t chip_id) {
-    return (uint32_t)(chip_id << 8);
+inline uint64_t get_chip_baseaddress_value(uint8_t chip_id) {
+    return (((uint64_t)chip_id) << 40);
 }
 
-inline uint32_t get_current_chip_baseaddress_h() {
+inline uint64_t get_current_chip_baseaddress_value() {
     uint32_t chip_id = get_current_chip_id();
-    return (uint32_t)(chip_id << 8);
+    return get_chip_baseaddress_value(chip_id);
 }

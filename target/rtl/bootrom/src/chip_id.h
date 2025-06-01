@@ -1,3 +1,8 @@
+// Copyright 2025 KU Leuven.
+// Licensed under the Apache License, Version 2.0, see LICENSE for details.
+// SPDX-License-Identifier: Apache-2.0
+// Yunhao Deng <yunhao.deng@kuleuven.be>
+
 #pragma once
 #include <stdint.h>
 
@@ -37,7 +42,11 @@ inline uint8_t *get_chip_baseaddress(uint8_t chip_id) {
 #endif
 }
 
-inline uint32_t get_current_chip_baseaddress_h() {
+inline uint64_t get_chip_baseaddress_value(uint8_t chip_id) {
+    return (((uint64_t)chip_id) << 8);
+}
+
+inline uint64_t get_current_chip_baseaddress_value() {
     uint32_t chip_id = get_current_chip_id();
-    return (uint32_t)(chip_id << 8);
+    return get_chip_baseaddress_value(chip_id);
 }
