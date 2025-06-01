@@ -56,7 +56,7 @@ int main() {
         printf("The XDMA copy is finished in %d cycles\r\n",
                end_time - start_time);
 
-        // The seoncd test is multicast to the clusters in Chiplet (1, 0).
+        // The seoncd test is multicast to the clusters in Chiplet (0, 1).
         for (int i = 0; i < 3; i++) {
             dest[i] = dest[i] + get_chip_baseaddress_value(1);
         }

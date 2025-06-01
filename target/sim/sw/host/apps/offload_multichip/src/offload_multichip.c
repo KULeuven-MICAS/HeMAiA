@@ -6,6 +6,7 @@
 
 int32_t parse_hex(const char* str) {
     int32_t value = 0;
+    const char* start = str;
     while (*str != '\0') {
         if (*str >= '0' && *str <= '9') {
             value = (value << 4) + (*str - '0');
@@ -14,11 +15,14 @@ int32_t parse_hex(const char* str) {
         } else if (*str >= 'a' && *str <= 'f') {
             value = (value << 4) + (*str - 'a' + 10);
         } else {
-            return -1; // Invalid character
+            return -1;  // Invalid character
         }
         str++;
     }
-    return value;
+    if (str == start)
+        return -2;  // No input
+    else
+        return value;
 }
 
 int main() {
@@ -33,33 +37,29 @@ int main() {
     char in_buf[8];
 
     init_uart(current_chip_address_prefix, 32, 1);
-    print_str(current_chip_address_prefix,
-              "[HeMAiA] The Offload main function \r\n");
     print_str(current_chip_address_prefix, "[HeMAiA] Current Chip ID is: ");
     print_u8(current_chip_address_prefix, current_chip_id);
     print_str(current_chip_address_prefix, "\r\n");
 
-    while (1) {
-    print_str(current_chip_address_prefix,
-              "[HeMAiA] Enter Chip ID to ungate clusters in this chip: ");
-        scan_str(current_chip_address_prefix, in_buf);
-        print_str(current_chip_address_prefix, "\r\n");
+    print_str(current_chip_address_prefix, "[HeMAiA] Max X of SoP: ");
+    scan_str(current_chip_address_prefix, in_buf);
+    print_str(current_chip_address_prefix, "\r\n");
+    uint32_t max_x = parse_hex(in_buf);
+    print_str(current_chip_address_prefix, "[HeMAiA] Max Y of SoP: ");
+    scan_str(current_chip_address_prefix, in_buf);
+    print_str(current_chip_address_prefix, "\r\n");
+    uint32_t max_y = parse_hex(in_buf);
 
-        target_chip_id = parse_hex(in_buf);
-        if (target_chip_id < 0)
-            break;  // No input, exit loop
-        else {
-            reset_and_ungate_quadrants_all(target_chip_id);
-            deisolate_all(target_chip_id);
-            print_str(current_chip_address_prefix,
-                      "[HeMAiA] Clusters in Chip ");
-            print_u8(current_chip_address_prefix, target_chip_id);
-            print_str(current_chip_address_prefix,
-                      " are reset, ungated and deisolated. \r\n");
+    for (uint32_t x = 0; x <= max_x; x++) {
+        for (uint32_t y = 0; y <= max_y; y++) {
+            // Reset and ungate all quadrants, deisolate
+            reset_and_ungate_quadrants_all((x << 4) + y);
+            deisolate_all((x << 4) + y);
         }
     }
 
-    print_str(current_chip_address_prefix, "[HeMAiA] Enter Chip ID to offload functions to this chip: ");
+    print_str(current_chip_address_prefix,
+              "[HeMAiA] Chip ID to execute binary: ");
     scan_str(current_chip_address_prefix, in_buf);
     print_str(current_chip_address_prefix, "\r\n");
 
@@ -67,7 +67,7 @@ int main() {
     if (target_chip_id < 0) {
         print_str(current_chip_address_prefix,
                   "[HeMAiA] Invalid Chip ID. Exiting.\r\n");
-        return -1; // Invalid chip ID, exit
+        return -1;  // Invalid chip ID, exit
     }
 
     uintptr_t target_chip_address_prefix =
