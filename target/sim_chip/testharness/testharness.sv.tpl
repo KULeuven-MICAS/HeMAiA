@@ -18,15 +18,14 @@ module testharness
   import occamy_pkg::*;
 ();
 
-  localparam RTCTCK = 30.518us;   // 32.768 kHz
-  localparam CLKTCK = 1000ps;     // 1 GHz
-  localparam SRAM_BANK = 32;      // 32 Banks architecture
-  localparam SRAM_DEPTH = ${int(mem_size/8/32)};
-  localparam SRAM_WIDTH = 8;      // 8 Bytes Wide
+  localparam RTCTCK = 30.518us;        // 32.768 kHz
+  localparam CLKTCK = 2000ps;          // 500 MHz
+  localparam D2DTCK = 400ps;           // 2.5 GHz
+  localparam int  SRAM_BANK = 32;      // 32 Banks architecture
+  localparam int  SRAM_DEPTH = ${int(mem_size/8/32)};
+  localparam int  SRAM_WIDTH = 8;      // 8 Bytes Wide
 
-  logic clk_i;
-  logic rst_ni;
-  logic rtc_i;
+  logic rtc_clk_i, core_clk_i, d2d_clk_i, rst_ni;
 
   // Chip finish signal
   integer chip_finish[${max(x)}:${min(x)}][${max(y)}:${min(y)}];
@@ -36,8 +35,9 @@ module testharness
 
   // Generate reset and clock.
   initial begin
-    rtc_i  = 0;
-    clk_i  = 0;
+    rtc_clk_i  = 0;
+    core_clk_i  = 0;
+    d2d_clk_i = 0;
     // Load the binaries
 % for i in x:
 %   for j in y:
@@ -86,17 +86,17 @@ module testharness
     end
   end
 
-  always #(CLKTCK / 2) begin
-    clk_i = ~clk_i;
-  end
-
   always #(RTCTCK / 2) begin
-    rtc_i = ~rtc_i;
+    rtc_clk_i = ~rtc_clk_i;
+  end
+  
+  always #(CLKTCK / 2) begin
+    core_clk_i = ~core_clk_i;
   end
 
-  logic clk_periph_i, rst_periph_ni;
-  assign clk_periph_i  = clk_i;
-  assign rst_periph_ni = rst_ni;
+  always #(D2DTCK / 2) begin
+    d2d_clk_i = ~d2d_clk_i;
+  end
 
   // Must be the frequency of i_uart0.clk_i in Hz
   localparam int unsigned UartDPIFreq = 1_000_000_000;
@@ -152,15 +152,17 @@ module testharness
 % endif
 
   occamy_chip i_occamy_${i}_${j} (
-      .clk_i,
+      .clk_i(core_clk_i),
       .rst_ni,
-      .clk_periph_i,
-      .rst_periph_ni,
-      .rtc_i,
+      .clk_periph_i(core_clk_i),
+      .rst_periph_ni(rst_ni),
+      .rtc_i(rtc_clk_i),
       .chip_id_i(8'h${i_hex_string}${j_hex_string}),
       .test_mode_i(1'b0),
       .boot_mode_i('0),
 % if multichip_cfg['single_chip'] is False:
+      .d2d_clk_i(core_clk_i),
+
       .east_d2d_io(chip_${i}_${j}_to_${i+1}_${j}_link),
       .flow_control_east_rts_o(chip_${i}_${j}_link_to_east_rts),
       .flow_control_east_cts_i(chip_${i}_${j}_link_to_east_cts),
@@ -226,7 +228,7 @@ module testharness
       .FREQ(UartDPIFreq),
       .NAME("uart_${i}_${j}")
   ) i_uart_${i}_${j} (
-      .clk_i (clk_i),
+      .clk_i (core_clk_i),
       .rst_ni(rst_ni),
       .tx_o  (rx_${i}_${j}),
       .rx_i  (tx_${i}_${j})
