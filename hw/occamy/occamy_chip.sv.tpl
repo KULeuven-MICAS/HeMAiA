@@ -20,40 +20,40 @@ import ${name}_pkg::*;
   input  chip_id_t    chip_id_i,
   input  logic [1:0]  boot_mode_i,
 % if occamy_cfg['hemaia_multichip']['single_chip'] is False: 
-  // Currently the router is implemented, so bidirectional connections toward E/S/W/N is needed, with 578b payload
-    // East side
-    input  logic     east_test_being_requested_i,
-    output logic     east_test_request_o,
-    output logic     flow_control_east_rts_o,
-    input  logic     flow_control_east_cts_i,
-    input  logic     flow_control_east_rts_i,
-    output logic     flow_control_east_cts_o,
-    inout  logic    [19:0] east_d2d_io [3],
-    // West side
-    // West side
-    input  logic     west_test_being_requested_i,
-    output logic     west_test_request_o,
-    output logic     flow_control_west_rts_o,
-    input  logic     flow_control_west_cts_i,
-    input  logic     flow_control_west_rts_i,
-    output logic     flow_control_west_cts_o,
-    inout  logic    [19:0] west_d2d_io [3],
-    // North side
-    input  logic     north_test_being_requested_i,
-    output logic     north_test_request_o,
-    output logic     flow_control_north_rts_o,
-    input  logic     flow_control_north_cts_i,
-    input  logic     flow_control_north_rts_i,
-    output logic     flow_control_north_cts_o,
-    inout  logic    [19:0] north_d2d_io [3],
-    // South side
-    input  logic     south_test_being_requested_i,
-    output logic     south_test_request_o,
-    output logic     flow_control_south_rts_o,
-    input  logic     flow_control_south_cts_i,
-    input  logic     flow_control_south_rts_i,
-    output logic     flow_control_south_cts_o,
-    inout  logic    [19:0] south_d2d_io [3],
+  // Main clock
+  input logic         d2d_clk_i,
+  // East side
+  input  logic        east_test_being_requested_i,
+  output logic        east_test_request_o,
+  output logic        flow_control_east_rts_o,
+  input  logic        flow_control_east_cts_i,
+  input  logic        flow_control_east_rts_i,
+  output logic        flow_control_east_cts_o,
+  inout  logic [19:0] east_d2d_io [3],
+  // West side
+  input  logic        west_test_being_requested_i,
+  output logic        west_test_request_o,
+  output logic        flow_control_west_rts_o,
+  input  logic        flow_control_west_cts_i,
+  input  logic        flow_control_west_rts_i,
+  output logic        flow_control_west_cts_o,
+  inout  logic [19:0] west_d2d_io [3],
+  // North side
+  input  logic        north_test_being_requested_i,
+  output logic        north_test_request_o,
+  output logic        flow_control_north_rts_o,
+  input  logic        flow_control_north_cts_i,
+  input  logic        flow_control_north_rts_i,
+  output logic        flow_control_north_cts_o,
+  inout  logic [19:0] north_d2d_io [3],
+  // South side
+  input  logic        south_test_being_requested_i,
+  output logic        south_test_request_o,
+  output logic        flow_control_south_rts_o,
+  input  logic        flow_control_south_cts_i,
+  input  logic        flow_control_south_rts_i,
+  output logic        flow_control_south_cts_o,
+  inout  logic [19:0] south_d2d_io [3],
 % endif
   // `uart` Interface
   output logic        uart_tx_o,
@@ -247,9 +247,8 @@ import ${name}_pkg::*;
     .control_clk_i(clk_periph_i),
     .control_rst_ni(rst_periph_ni),
     .digital_clk_i(clk_i),
-    .digital_rst_ni(rst_ni),
-    .analog_clk_i(clk_i),
-    .analog_rst_ni(rst_ni),
+    .analog_clk_i(d2d_clk_i),
+    .rst_ni(rst_ni),
 
     .axi_lite_req_i(hemaia_d2d_link_ctrl_req),
     .axi_lite_rsp_o(hemaia_d2d_link_ctrl_rsp),
