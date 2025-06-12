@@ -40,7 +40,7 @@ cd target/sim;bin/occamy_top.vlt [Elf location]
 ### Perform RTL simulation using Questasim:
 - Prepare the compilation script for Questasim:
 ```bash
-make occamy_system_vsim_preparation CFG_OVERRIDE=target/rtl/cfg/...
+make occamy_system_vsim_preparation
 ```
 - Exit the docker image as there is no Questasim in the container. Compile the Questasim binary:
 ```bash
