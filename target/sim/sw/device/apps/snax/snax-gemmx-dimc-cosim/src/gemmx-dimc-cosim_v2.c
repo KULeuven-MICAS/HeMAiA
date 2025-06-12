@@ -9,15 +9,14 @@
 // Version 2 function: DIMC computes one head, GEMMX reads the result
 
 // Version 3 function: DIMC computes one head, GEMMX reads the result and compute MM
-
-#include "data.h"
-#include "snax-gemmx-params.h"
-#include "snax-gemmx-lib.h"
-
 #include "snax-dimc-csr.h"
 #include "snax-dimc-lib.h"
 #include "snrt.h"
 #include "data_mha.h"
+
+#include "data.h"
+#include "snax-gemmx-params.h"
+#include "snax-gemmx-lib.h"
 
 uint64_t * tcdm_1_start_addr; // starting address for GEMMX cluster
 uint64_t * tcdm_3_start_addr; // starting address for DIMC cluster
@@ -49,11 +48,9 @@ int main() {
 
             snrt_dma_wait_all();
         }
-    }
 
-    snrt_global_barrier();
+        snrt_cluster_hw_barrier();
 
-    if (snrt_cluster_idx() == 3){
         if (snrt_cluster_core_idx() == 0) {
             uint32_t busy = dimc_query_busy();
             printf("%d: busy\n", busy);
@@ -74,11 +71,9 @@ int main() {
 
             while (dimc_is_streamer_busy()) { }
         }
-    }
+        
+        snrt_cluster_hw_barrier();
 
-    snrt_global_barrier();
-
-    if (snrt_cluster_idx() == 3){
         // load weight WQ from data.h to tcdm
         if (snrt_is_dm_core()) {
             size_t vector_size = Q_LENGTH * sizeof(uint64_t);
@@ -100,11 +95,9 @@ int main() {
 
             while (dimc_is_streamer_busy()) { }
         }
-    }
-
-    snrt_global_barrier();
-
-    if (snrt_cluster_idx() == 3){
+        
+        snrt_cluster_hw_barrier();
+        
         if (snrt_cluster_core_idx == 0 ) {
             // printf("CONFIGURING STREAMERS for WQ\n");
             dimc_set_streamer_dim_w(0, 0, 0, 0, 0, 0);
@@ -118,11 +111,9 @@ int main() {
 
             while (dimc_is_streamer_busy()) { }
         }
-    }
 
-    snrt_global_barrier();
+        snrt_cluster_hw_barrier();
 
-    if (snrt_cluster_idx() == 3){
         if (snrt_is_dm_core()) {
             
             // load WV and V from data.h to tcdm
@@ -133,6 +124,8 @@ int main() {
 
             snrt_dma_wait_all();
         }
+        
+        snrt_cluster_hw_barrier();
 
         if (snrt_cluster_core_idx() == 0) {
             // send Q
