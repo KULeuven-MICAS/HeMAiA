@@ -10,14 +10,14 @@
 
 // Version 3 function: DIMC computes one head, GEMMX reads the result and compute MM
 
-#include "data.h"
 #include "snax-gemmx-params.h"
 #include "snax-gemmx-lib.h"
 
 #include "snax-dimc-csr.h"
 #include "snax-dimc-lib.h"
 #include "snrt.h"
-#include "data_mha.h"
+#include "data.h"
+// #include "data_mha.h"
 
 uint64_t * tcdm_1_start_addr; // starting address for GEMMX cluster
 uint64_t * tcdm_3_start_addr; // starting address for DIMC cluster
@@ -67,7 +67,7 @@ int main() {
 
     if (snrt_cluster_idx() == 1) {
         if (snrt_cluster_core_idx() == 0) {
-            printf("GEMMX cluster starts to check copied data]\n");
+            printf("GEMMX cluster starts to check copied data\n");
             for ( int i = 0; i < Q_LENGTH; i++) {
                 if (tcdm_1_start_addr[i] != K[i]) {
                     printf("Error: tcdm_1_start_addr[%d] = %lu, expected %lu\n", i, tcdm_1_start_addr[i], K[i]);
