@@ -12,7 +12,7 @@
 #include "snax-dimc-csr.h"
 #include "snax-dimc-lib.h"
 #include "snrt.h"
-#include "data_mha.h"
+// #include "data_mha.h"
 
 #include "data.h"
 #include "snax-gemmx-params.h"
@@ -25,11 +25,11 @@ int main() {
 
     // set error value for checking
     int err = 0;
-    
-    if (snrt_cluster_idx() == 3){
 
-        // allocate 32+32+32KB in TCDM for activation and weight pair
-        uint64_t *tcdm_ptr_0, *tcdm_ptr_1, *tcdm_ptr_2, *tcdm_ptr_danger;
+    // allocate 32+32+32KB in TCDM for activation and weight pair
+    uint64_t *tcdm_ptr_0, *tcdm_ptr_1, *tcdm_ptr_2, *tcdm_ptr_danger;
+
+    if (snrt_cluster_idx() == 3){
 
         tcdm_ptr_0 = (uint64_t *)snrt_cluster_base_addrl();
         tcdm_ptr_1     = tcdm_ptr_0 + Q_LENGTH;
@@ -59,6 +59,7 @@ int main() {
             configure_accelerator();
 
             // send WK
+            printf("CONFIGURING STREAMERS for WK\n");
             dimc_set_streamer_dim_w(0, 0, 0, 0, 0, 0);
             dimc_set_streamer_dim_r0(128, 1, 256, 0, 8, (uint32_t)(tcdm_ptr_2));
             dimc_set_streamer_dim_r1(128, 1, 256, 0, 8, (uint32_t)(tcdm_ptr_2 + 8));
@@ -70,6 +71,7 @@ int main() {
             dimc_start_streamer();
 
             while (dimc_is_streamer_busy()) { }
+            printf("STREAMER Finished for WK\n");
         }
         
         snrt_cluster_hw_barrier();
@@ -85,6 +87,7 @@ int main() {
 
         if (snrt_cluster_core_idx() == 0) {
             // send K
+            printf("CONFIGURING STREAMERS for K\n");
             dimc_set_streamer_dim_w(0, 0, 0, 0, 0, 0);
             dimc_set_streamer_dim_r0(128, 1, 256, 0, 8, (uint32_t)(tcdm_ptr_0));
             dimc_set_streamer_dim_r1(128, 1, 256, 0, 8, (uint32_t)(tcdm_ptr_0 + 8));
@@ -94,22 +97,23 @@ int main() {
             dimc_start_streamer();
 
             while (dimc_is_streamer_busy()) { }
+            printf("STREAMER Finished for K\n");
         }
         
         snrt_cluster_hw_barrier();
         
         if (snrt_cluster_core_idx == 0 ) {
-            // printf("CONFIGURING STREAMERS for WQ\n");
+            printf("CONFIGURING STREAMERS for WQ\n");
             dimc_set_streamer_dim_w(0, 0, 0, 0, 0, 0);
             dimc_set_streamer_dim_r0(128, 1, 256, 0, 8, (uint32_t)(tcdm_ptr_2));
             dimc_set_streamer_dim_r1(128, 1, 256, 0, 8, (uint32_t)(tcdm_ptr_2 + 8));
             dimc_set_streamer_dim_r2(128, 1, 256, 0, 8, (uint32_t)(tcdm_ptr_2 + 16));
             dimc_set_streamer_dim_r3(128, 1, 256, 0, 8, (uint32_t)(tcdm_ptr_2 + 24));
-            // printf("STREAMER CONFIGURED for WQ\n");
 
             dimc_start_streamer();
 
             while (dimc_is_streamer_busy()) { }
+            printf("STREAMER Finished for WQ\n");
         }
 
         snrt_cluster_hw_barrier();
@@ -129,17 +133,17 @@ int main() {
 
         if (snrt_cluster_core_idx() == 0) {
             // send Q
-            // printf("CONFIGURING STREAMERS for Q\n");
+            printf("CONFIGURING STREAMERS for Q\n");
             dimc_set_streamer_dim_w(64, 1, 64, 0, 8, (uint32_t)(tcdm_ptr_danger));
             dimc_set_streamer_dim_r0(128, 1, 256, 0, 8, (uint32_t)(tcdm_ptr_1));
             dimc_set_streamer_dim_r1(128, 1, 256, 0, 8, (uint32_t)(tcdm_ptr_1 + 8));
             dimc_set_streamer_dim_r2(128, 1, 256, 0, 8, (uint32_t)(tcdm_ptr_1 + 16));
             dimc_set_streamer_dim_r3(128, 1, 256, 0, 8, (uint32_t)(tcdm_ptr_1 + 24));
-            // printf("STREAMER CONFIGURED for Q\n");
 
             dimc_start_streamer();
 
             while (dimc_is_streamer_busy()) { }
+            printf("STREAMER Finished for Q\n");
         }
     }
 
@@ -148,17 +152,17 @@ int main() {
     if (snrt_cluster_idx() == 3){
         if (snrt_cluster_core_idx() == 0) {
             // send V
-            // printf("CONFIGURING STREAMERS for V\n");
+            printf("CONFIGURING STREAMERS for V\n");
             dimc_set_streamer_dim_w(0, 0, 0, 0, 0, 0);
             dimc_set_streamer_dim_r0(128, 1, 256, 0, 8, (uint32_t)(tcdm_ptr_0));
             dimc_set_streamer_dim_r1(128, 1, 256, 0, 8, (uint32_t)(tcdm_ptr_0 + 8));
             dimc_set_streamer_dim_r2(128, 1, 256, 0, 8, (uint32_t)(tcdm_ptr_0 + 16));
             dimc_set_streamer_dim_r3(128, 1, 256, 0, 8, (uint32_t)(tcdm_ptr_0 + 24));
-            // printf("STREAMER CONFIGURED for V\n");
 
             dimc_start_streamer();
 
             while (dimc_is_streamer_busy()) { }
+            printf("STREAMER Finished for V\n");
         }
     }
 
@@ -173,11 +177,11 @@ int main() {
             dimc_set_streamer_dim_r1(16, 1, 256, 0, 8, (uint32_t)(tcdm_ptr_danger + 8));
             dimc_set_streamer_dim_r2(16, 1, 256, 0, 8, (uint32_t)(tcdm_ptr_danger + 16));
             dimc_set_streamer_dim_r3(16, 1, 256, 0, 8, (uint32_t)(tcdm_ptr_danger + 24));
-            printf("STREAMER CONFIGURED for Q1K1T\n");
 
             dimc_start_streamer();
 
             while (dimc_is_streamer_busy()) { }
+            printf("STREAMER Finished for Q1K1T\n");
         }
     }
 
