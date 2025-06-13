@@ -176,10 +176,10 @@ int main() {
             // send WV
             printf("CONFIGURING STREAMERS for WV\r\n");
             dimc_set_streamer_dim_w(0, 0, 0, 0, 0, 0);
-            dimc_set_streamer_dim_r0(128, 1, 256, 0, 8, (uint32_t)(weight_ptr));
-            dimc_set_streamer_dim_r1(128, 1, 256, 0, 8, (uint32_t)(weight_ptr + 8));
-            dimc_set_streamer_dim_r2(128, 1, 256, 0, 8, (uint32_t)(weight_ptr + 16));
-            dimc_set_streamer_dim_r3(128, 1, 256, 0, 8, (uint32_t)(weight_ptr + 24));
+            dimc_set_streamer_dim_r0(128, 1, 256, 0, 8, (uint32_t)(dimc_tcdm_ptr_2));
+            dimc_set_streamer_dim_r1(128, 1, 256, 0, 8, (uint32_t)(dimc_tcdm_ptr_2 + 8));
+            dimc_set_streamer_dim_r2(128, 1, 256, 0, 8, (uint32_t)(dimc_tcdm_ptr_2 + 16));
+            dimc_set_streamer_dim_r3(128, 1, 256, 0, 8, (uint32_t)(dimc_tcdm_ptr_2 + 24));
 
             dimc_start_streamer();
 
