@@ -295,7 +295,7 @@ $(PLATFORM_HEADERS_DIR)/snitch_quad_peripheral.h: $(TARGET_QUADCTRL_DIR)/occamy_
 	$(call reggen_generate_header,$@,$<)
 $(PLATFORM_HEADERS_DIR)/snitch_hbm_xbar_peripheral.h: $(TARGET_HBMCTRL_DIR)/occamy_hbm_xbar_reg.hjson
 	$(call reggen_generate_header,$@,$<)
-$(PLATFORM_HEADERS_DIR)/hemaia_d2d_link_peripheral.h: $(shell bender path hemaia_d2d_link)/src/regs/hemaia_d2d_link_reg.hjson
+$(PLATFORM_HEADERS_DIR)/hemaia_d2d_link_peripheral.h: $(shell bender path hemaia_d2d_link)/src/ctrl/hemaia_d2d_link_reg.hjson
 	$(call reggen_generate_header,$@,$<)
 
 # OCCAMYGEN headers

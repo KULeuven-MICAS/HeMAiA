@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdio.h>
+// #include <stdio.h>
 #include "host.h"
 
 int main() {
@@ -10,15 +10,11 @@ int main() {
 
     init_uart(address_prefix, 32, 1);
     asm volatile("fence" : : : "memory");
-    print_str(address_prefix, "Hello world from Occamy in VCU128! \r\n");
+    printf("Hello world from HeMAiA! \r\n");
     char uart_rx_buffer[512];
-    char uart_tx_buffer[512];
-
     while (1) {
-        scan_str(address_prefix, uart_rx_buffer);
-        sprintf(uart_tx_buffer, "[Occamy] What you said is: %s",
-                uart_rx_buffer);
-        print_str(address_prefix, uart_tx_buffer);
+        scanf("%s", uart_rx_buffer);
+        printf("[HeMAiA] What you said is: %s\r\n", uart_rx_buffer);
     }
 
     return 0;

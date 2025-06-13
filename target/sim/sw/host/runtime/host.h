@@ -8,7 +8,7 @@
 #include "heterogeneous_runtime.h"
 #include "occamy.h"
 #include "sys_dma.h"
-#include "uart.h"
+#include "uart.c"
 
 extern uint64_t __narrow_spm_start;
 extern uint64_t __narrow_spm_end;

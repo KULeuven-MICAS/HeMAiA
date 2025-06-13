@@ -21,19 +21,15 @@ int main() {
     //           "[HeMAiA] The multi-chip synchronization tester \r\n");
 
     for (uint8_t i = 1;; i++) {
-        print_str(current_chip_address_prefix,
-                  "[HeMAiA] Press to run barrier \r\n");
+        printf("[HeMAiA] Press to run barrier %d \r\n", i);
         scan_char(current_chip_address_prefix);
         uint64_t cycle_num_before = mcycle();
         // Barrier
         chip_barrier(comm_buffer_ptr, 0x00, 0x11, i);
         uint64_t cycle_num_after = mcycle();
-        print_u48(current_chip_address_prefix, cycle_num_before);
-        print_str(current_chip_address_prefix, ", ");
-        print_u48(current_chip_address_prefix, cycle_num_after);
-        print_str(current_chip_address_prefix, ", ");
-        print_u8(current_chip_address_prefix, i);
-        print_str(current_chip_address_prefix, "\r\n");
+        // Print the cycle number before and after the barrier
+        printf("[HeMAiA] Barrier %d done, cycle before: %x, after: %x\r\n", i,
+               cycle_num_before, cycle_num_after);
     }
     // Wait for job done and return Snitch exit code
     return 0;

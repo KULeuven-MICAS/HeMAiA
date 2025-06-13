@@ -12,7 +12,9 @@ util				:= $(ROOT)/util
 include $(ROOT)/util/Makefrag
 
 INCLUDES = -I./ -I./src
-SRCS_C = src/main.c 
+INCLUDES += -I$(ROOT)/target/sim/sw/shared/platform/generated
+INCLUDES += -I$(ROOT)/target/sim/sw/shared/runtime
+SRCS_C = src/main.c
 OBJS_C = $(SRCS_C:.c=.o)
 
 CVA6_GCC_ROOT = /tools/riscv/bin

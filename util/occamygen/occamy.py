@@ -347,19 +347,34 @@ def am_connect_soc_wide_xbar_quad(am, am_soc_narrow_xbar, am_wide_xbar_quadrant_
                 )
             )
 
-            # Cluster zero memory and XDMA are only accessible from wide xbar
+            # Cluster zero memory are only accessible from wide xbar
             bases_cluster = list()
             bases_cluster.append(cluster_i_start_addr + sum(clusters_base_offset[0:j+1]) +
                                  clusters_tcdm_size[j+1] + clusters_periph_size[j+1])
             am_clusters.append(
                 am.new_leaf(
-                    "quadrant_{}_cluster_{}_space_after_periph".format(i, j),
-                    clusters_base_offset[j+1] - clusters_tcdm_size[j+1] - clusters_periph_size[j+1],
+                    "quadrant_{}_cluster_{}_zero_mem".format(i, j),
+                    clusters_zero_mem_size[j+1],
                     *bases_cluster
                 ).attach_to(
                     am_wide_xbar_quadrant_s1[i]
                 )
             )
+
+            # The remaining addresses are reserved for XDMA, and are only accessible from wide xbar
+            bases_cluster = list()
+            bases_cluster.append(cluster_i_start_addr + sum(clusters_base_offset[0:j+1]) +
+                                 clusters_tcdm_size[j+1] + clusters_periph_size[j+1] + clusters_zero_mem_size[j+1])
+            am_clusters.append(
+                am.new_leaf(
+                    "quadrant_{}_cluster_{}_space_after_zero_mem".format(i, j),
+                    clusters_base_offset[j+1] - clusters_tcdm_size[j+1] - clusters_periph_size[j+1] - clusters_zero_mem_size[j+1],
+                    *bases_cluster
+                ).attach_to(
+                    am_wide_xbar_quadrant_s1[i]
+                )
+            )
+
         am.new_leaf(
             "quad_{}_cfg".format(i),
             occamy_cfg["s1_quadrant"]["cfg_base_offset"],

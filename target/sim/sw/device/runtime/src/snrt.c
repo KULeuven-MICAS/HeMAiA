@@ -1,10 +1,6 @@
 // Copyright 2023 ETH Zurich and University of Bologna.
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
-
-// The definition to output the printf to UART or simulator
-#define UART_PRINTF
-
 #include "snrt.h"
 
 #include "alloc.c"
@@ -15,12 +11,8 @@
 #include "occamy_device.c"
 #include "occamy_memory.c"
 #include "occamy_start.c"
-#include "printf.c"
-#ifdef UART_PRINTF
-    #include "putchar_chip.c"
-#else
-    #include "putchar_sim.c"
-#endif
 #include "sync.c"
 #include "sys_dma.c"
 #include "team.c"
+#include "uart.c"
+
