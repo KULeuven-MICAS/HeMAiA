@@ -9,6 +9,13 @@
 #include "hemaia_d2d_link_peripheral.h"
 #include "occamy_memory_map.h"
 
+#define CHANNELS_PER_DIRECTION 3
+#define HEMAIA_D2D_LINK_NUM_DELAYS 8
+#define HEMAIA_D2D_LINK_BROKEN_LINK_REG_SIZE 20
+#define MAX_CFG_ROUND 3
+
+#define HEMAIA_D2D_LINK_DEFAULT_TEST_CYCLES 2000
+
 typedef enum {
     D2D_DIRECTION_EAST = 0,
     D2D_DIRECTION_WEST = 1,
@@ -17,6 +24,8 @@ typedef enum {
 } Direction;
 
 typedef uint8_t bool;
+#define true 1
+#define false 0
 
 inline void delay_cycles(uint64_t cycle) {
     uint64_t target_cycle, current_cycle;
