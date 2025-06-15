@@ -3,23 +3,138 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdio.h>
+#include "hemaia_d2d_link.c"
 #include "host.h"
-#include "hemaia_d2d_link.h"
 
 uint8_t *hemaia_d2d_link_cfg = (uint8_t *)HEMAIA_D2D_LINK_BASE_ADDR;
+
+uint32_t get_max_index(uint8_t *array, uint32_t size) {
+    uint32_t max_index = 16;
+    for (uint32_t i = 1; i < size; ++i) {
+        if (array[i] > array[max_index]) {
+            max_index = i;
+        }
+    }
+    return max_index;
+}
 
 int main() {
     uintptr_t address_prefix = (uintptr_t)get_current_chip_baseaddress();
 
     init_uart(address_prefix, 32, 1);
-    // Try to reset the D2D link
     asm volatile("fence" : : : "memory");
-    print_str(address_prefix, "Press enter to reset the d2d_link \r\n");
-    scan_char(address_prefix);
-    reset_d2d_link_digital(1000);
-    print_str(address_prefix, "Press enter to set the threshold to 6 \r\n");
-    scan_char(address_prefix);
-    set_all_d2d_link_threshold(6);
-    print_str(address_prefix, "All operation is finished. \r\n");
+
+    // Configure the East D2D link
+    printf("HeMAiA D2D Link Configurator\r\n");
+    printf("Configuring the East D2D link...\r\n");
+    for (uint8_t i = 0; i < MAX_CFG_ROUND; i++) {
+        printf("Round %d\r\n", i);
+        hemaia_d2d_link_set_delay(D2D_DIRECTION_EAST);
+        for (uint8_t j = 0; j < CHANNELS_PER_DIRECTION; j++) {
+            hemaia_d2d_link_set_bypass_link(D2D_DIRECTION_EAST, j);
+        }
+        if (get_d2d_link_availability(D2D_DIRECTION_EAST)) {
+            printf("East D2D link is enabled.\r\n");
+            break;
+        }
+
+        if (i == MAX_CFG_ROUND - 1) {
+            printf("East D2D link is disabled.\r\n");
+        }
+    }
+
+    // Configure the West D2D link
+    printf("Configuring the West D2D link...\r\n");
+    for (uint8_t i = 0; i < MAX_CFG_ROUND; i++) {
+        printf("Round %d\r\n", i);
+        hemaia_d2d_link_set_delay(D2D_DIRECTION_WEST);
+        for (uint8_t j = 0; j < CHANNELS_PER_DIRECTION; j++) {
+            hemaia_d2d_link_set_bypass_link(D2D_DIRECTION_WEST, j);
+        }
+        if (get_d2d_link_availability(D2D_DIRECTION_WEST)) {
+            printf("West D2D link is enabled.\r\n");
+            break;
+        }
+        if (i == (MAX_CFG_ROUND - 1)) {
+            printf("West D2D link is disabled.\r\n");
+        }
+    }
+
+    // Configure the North D2D link
+    printf("Configuring the North D2D link...\r\n");
+    for (uint8_t i = 0; i < MAX_CFG_ROUND; i++) {
+        printf("Round %d\r\n", i);
+        hemaia_d2d_link_set_delay(D2D_DIRECTION_NORTH);
+        for (uint8_t j = 0; j < CHANNELS_PER_DIRECTION; j++) {
+            hemaia_d2d_link_set_bypass_link(D2D_DIRECTION_NORTH, j);
+        }
+        if (get_d2d_link_availability(D2D_DIRECTION_NORTH)) {
+            printf("North D2D link is enabled.\r\n");
+            break;
+        }
+        if (i == (MAX_CFG_ROUND - 1)) {
+            printf("North D2D link is disabled.\r\n");
+        }
+    }
+
+    // Configure the South D2D link
+    printf("Configuring the South D2D link...\r\n");
+    for (uint8_t i = 0; i < MAX_CFG_ROUND; i++) {
+        printf("Round %d\r\n", i);
+        hemaia_d2d_link_set_delay(D2D_DIRECTION_SOUTH);
+        for (uint8_t j = 0; j < CHANNELS_PER_DIRECTION; j++) {
+            hemaia_d2d_link_set_bypass_link(D2D_DIRECTION_SOUTH, j);
+        }
+        if (get_d2d_link_availability(D2D_DIRECTION_SOUTH)) {
+            printf("South D2D link is enabled.\r\n");
+            break;
+        }
+        if (i == (MAX_CFG_ROUND - 1)) {
+            printf("South D2D link is disabled.\r\n");
+        }
+    }
+
+    printf("Configuration results:\r\n");
+    printf(
+        "East D2D link:\r\nAvailability: %d\r\nClock delay: %d, %d, "
+        "%d\r\nBypassed wires: %d, %d, %d\r\n",
+        get_d2d_link_availability(D2D_DIRECTION_EAST),
+        get_d2d_link_clock_delay(D2D_DIRECTION_EAST, 0),
+        get_d2d_link_clock_delay(D2D_DIRECTION_EAST, 1),
+        get_d2d_link_clock_delay(D2D_DIRECTION_EAST, 2),
+        get_d2d_link_broken_link(D2D_DIRECTION_EAST, 0),
+        get_d2d_link_broken_link(D2D_DIRECTION_EAST, 1),
+        get_d2d_link_broken_link(D2D_DIRECTION_EAST, 2));
+    printf(
+        "West D2D link:\r\nAvailability: %d\r\nClock delay: %d, %d, "
+        "%d\r\nBypassed wires: %d, %d, %d\r\n",
+        get_d2d_link_availability(D2D_DIRECTION_WEST),
+        get_d2d_link_clock_delay(D2D_DIRECTION_WEST, 0),
+        get_d2d_link_clock_delay(D2D_DIRECTION_WEST, 1),
+        get_d2d_link_clock_delay(D2D_DIRECTION_WEST, 2),
+        get_d2d_link_broken_link(D2D_DIRECTION_WEST, 0),
+        get_d2d_link_broken_link(D2D_DIRECTION_WEST, 1),
+        get_d2d_link_broken_link(D2D_DIRECTION_WEST, 2));
+    printf(
+        "North D2D link:\r\nAvailability: %d\r\nClock delay: %d, %d, "
+        "%d\r\nBypassed wires: %d, %d, %d\r\n",
+        get_d2d_link_availability(D2D_DIRECTION_NORTH),
+        get_d2d_link_clock_delay(D2D_DIRECTION_NORTH, 0),
+        get_d2d_link_clock_delay(D2D_DIRECTION_NORTH, 1),
+        get_d2d_link_clock_delay(D2D_DIRECTION_NORTH, 2),
+        get_d2d_link_broken_link(D2D_DIRECTION_NORTH, 0),
+        get_d2d_link_broken_link(D2D_DIRECTION_NORTH, 1),
+        get_d2d_link_broken_link(D2D_DIRECTION_NORTH, 2));
+    printf(
+        "South D2D link:\r\nAvailability: %d\r\nClock delay: %d, %d, "
+        "%d\r\nBypassed wires: %d, %d, %d\r\n",
+        get_d2d_link_availability(D2D_DIRECTION_SOUTH),
+        get_d2d_link_clock_delay(D2D_DIRECTION_SOUTH, 0),
+        get_d2d_link_clock_delay(D2D_DIRECTION_SOUTH, 1),
+        get_d2d_link_clock_delay(D2D_DIRECTION_SOUTH, 2),
+        get_d2d_link_broken_link(D2D_DIRECTION_SOUTH, 0),
+        get_d2d_link_broken_link(D2D_DIRECTION_SOUTH, 1),
+        get_d2d_link_broken_link(D2D_DIRECTION_SOUTH, 2));
+
     return 0;
 }

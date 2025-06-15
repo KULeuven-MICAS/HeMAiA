@@ -4,27 +4,6 @@
 
 #include "host.h"
 
-int32_t parse_hex(const char* str) {
-    int32_t value = 0;
-    const char* start = str;
-    while (*str != '\0') {
-        if (*str >= '0' && *str <= '9') {
-            value = (value << 4) + (*str - '0');
-        } else if (*str >= 'A' && *str <= 'F') {
-            value = (value << 4) + (*str - 'A' + 10);
-        } else if (*str >= 'a' && *str <= 'f') {
-            value = (value << 4) + (*str - 'a' + 10);
-        } else {
-            return -1;  // Invalid character
-        }
-        str++;
-    }
-    if (str == start)
-        return -2;  // No input
-    else
-        return value;
-}
-
 int main() {
     // The pointer to the communication buffer
     volatile comm_buffer_t* comm_buffer_ptr = (comm_buffer_t*)0;
@@ -34,21 +13,17 @@ int main() {
         (uintptr_t)get_current_chip_baseaddress();
     uint32_t current_chip_id = get_current_chip_id();
     int32_t target_chip_id = 0;
-    char in_buf[8];
 
     init_uart(current_chip_address_prefix, 32, 1);
-    print_str(current_chip_address_prefix, "[HeMAiA] Current Chip ID is: ");
-    print_u8(current_chip_address_prefix, current_chip_id);
-    print_str(current_chip_address_prefix, "\r\n");
+    printf("[HeMAiA] Current Chip ID is: %x%x\r\n", current_chip_id >> 4,
+           current_chip_id & 0x0F);
 
-    print_str(current_chip_address_prefix, "[HeMAiA] Max X of SoP: ");
-    scan_str(current_chip_address_prefix, in_buf);
-    print_str(current_chip_address_prefix, "\r\n");
-    uint32_t max_x = parse_hex(in_buf);
-    print_str(current_chip_address_prefix, "[HeMAiA] Max Y of SoP: ");
-    scan_str(current_chip_address_prefix, in_buf);
-    print_str(current_chip_address_prefix, "\r\n");
-    uint32_t max_y = parse_hex(in_buf);
+    printf("[HeMAiA] Max X of SoP: \r\n");
+    uint32_t max_x = 0;
+    scanf("%x", &max_x);
+    uint32_t max_y = 0;
+    printf("[HeMAiA] Max Y of SoP: \r\n");
+    scanf("%x", &max_y);
 
     for (uint32_t x = 0; x <= max_x; x++) {
         for (uint32_t y = 0; y <= max_y; y++) {
@@ -58,15 +33,10 @@ int main() {
         }
     }
 
-    print_str(current_chip_address_prefix,
-              "[HeMAiA] Chip ID to execute binary: ");
-    scan_str(current_chip_address_prefix, in_buf);
-    print_str(current_chip_address_prefix, "\r\n");
-
-    target_chip_id = parse_hex(in_buf);
+    printf("[HeMAiA] Chip ID to execute binary: \r\n");
+    scanf("%x", &target_chip_id);
     if (target_chip_id < 0) {
-        print_str(current_chip_address_prefix,
-                  "[HeMAiA] Invalid Chip ID. Exiting.\r\n");
+        printf("[HeMAiA] Invalid Chip ID. Exiting.\r\n");
         return -1;  // Invalid chip ID, exit
     }
 
@@ -84,18 +54,15 @@ int main() {
 
     asm volatile("fence" ::: "memory");
 
-    print_str(current_chip_address_prefix,
-              "[HeMAiA] Calling snitch cluster to execute the task \r\n");
+    printf("[HeMAiA] Calling snitch cluster on chip %d to execute the task\r\n",
+           target_chip_id);
 
     // Start Snitches
     wakeup_snitches_cl(target_chip_id);
 
     int ret = wait_snitches_done(target_chip_id);
 
-    print_str(current_chip_address_prefix,
-              "[HeMAiA] Snitch cluster done with exit code ");
-    print_u32(current_chip_address_prefix, ret);
-    print_str(current_chip_address_prefix, "\r\n");
+    printf("[HeMAiA] Snitch cluster done with exit code %d\r\n", ret);
 
     // Wait for job done and return Snitch exit code
     return ret;

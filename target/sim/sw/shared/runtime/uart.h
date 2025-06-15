@@ -4,7 +4,9 @@
 
 #pragma once
 
+#include <stdarg.h>
 #include <stdint.h>
+#include "chip_id.h"
 
 #include "occamy_base_addr.h"
 
@@ -97,92 +99,5 @@ inline static uint8_t scan_char(uintptr_t address_prefix) {
     return read_reg_u8(address_prefix | UART_RBR);
 }
 
-// inline static int putchar(char a) {
-//     uintptr_t address_prefix = (uintptr_t)get_current_chip_baseaddress();
-//     print_char_uart(address_prefix, a);
-//     return 0;
-// }
-
-// inline static uint8_t getchar(void) {
-//     uintptr_t address_prefix = (uintptr_t)get_current_chip_baseaddress();
-//     return scan_char(address_prefix);
-// }
-
-inline static void print_u8(uintptr_t address_prefix, uint8_t value) {
-    char lut[16] = {'0', '1', '2', '3', '4', '5', '6', '7',
-                    '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
-    print_char(address_prefix, lut[value / 16]);
-    print_char(address_prefix, lut[value % 16]);
-    while (!is_transmit_done(address_prefix));
-}
-
-inline static void print_u32(uintptr_t address_prefix, uint32_t value) {
-    char lut[16] = {'0', '1', '2', '3', '4', '5', '6', '7',
-                    '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
-    for (int i = 28; i >= 0; i = i - 4) {
-        print_char(address_prefix, lut[(value >> i) % 16]);
-    }
-    while (!is_transmit_done(address_prefix));
-}
-
-inline static void print_u48(uintptr_t address_prefix, uint64_t value) {
-    char lut[16] = {'0', '1', '2', '3', '4', '5', '6', '7',
-                    '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
-    for (int i = 44; i >= 0; i = i - 4) {
-        print_char(address_prefix, lut[(value >> i) % 16]);
-    }
-    while (!is_transmit_done(address_prefix));
-}
-
-inline static void print_u64(uintptr_t address_prefix, uint64_t value) {
-    char lut[16] = {'0', '1', '2', '3', '4', '5', '6', '7',
-                    '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
-    for (int i = 60; i >= 0; i = i - 4) {
-        print_char(address_prefix, lut[(value >> i) % 16]);
-    }
-    while (!is_transmit_done(address_prefix));
-}
-
-inline static void print_mem_hex(uintptr_t address_prefix, char *str,
-                                 uint32_t length) {
-    uint8_t lut[16] = {'0', '1', '2', '3', '4', '5', '6', '7',
-                       '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
-    for (uint64_t i = (uint64_t)str; i < (uint64_t)str + length; i++) {
-        if (i % 16 == 0) {
-            print_char(address_prefix, '\r');
-            print_char(address_prefix, '\n');
-            for (int j = 28; j >= 0; j = j - 4)
-                print_char(address_prefix, lut[(i >> j) % 16]);
-            print_char(address_prefix, ':');
-            print_char(address_prefix, ' ');
-        }
-        char temp = *((char *)i);
-        print_char(address_prefix, lut[temp / 16]);
-        print_char(address_prefix, lut[temp % 16]);
-        print_char(address_prefix, ' ');
-    }
-    while (!is_transmit_done(address_prefix));
-}
-
-inline static void print_str(uintptr_t address_prefix, const char *str) {
-    const char *cur = &str[0];
-    while (*cur != '\0') {
-        print_char(address_prefix, (uint8_t)*cur);
-        ++cur;
-    }
-    while (!is_transmit_done(address_prefix));
-}
-
-inline static void scan_str(uintptr_t address_prefix, char *str) {
-    char *cur = &str[0];
-    while (1) {
-        *cur = scan_char(address_prefix);
-        if (*cur == '\r') {
-            *cur = '\0';
-            return;
-        } else {
-            print_char(address_prefix, *cur);
-            cur++;
-        }
-    }
-}
+int printf(const char *fmt, ...);
+int scanf(const char *fmt, ...);

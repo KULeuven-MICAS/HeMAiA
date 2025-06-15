@@ -49,7 +49,7 @@ void uart_xmodem(uintptr_t address_prefix, uint64_t start_address) {
     uint8_t received_char;
     bool transmission_end = false;
 
-    putchar(address_prefix, NAK);  // Request for data
+    print_char(address_prefix, NAK);  // Request for data
 
     uint32_t current_offset = 0;
 
@@ -59,42 +59,42 @@ void uart_xmodem(uintptr_t address_prefix, uint64_t start_address) {
         uint8_t received_parity, calculated_parity;
         int index = 0;
 
-        received_char = getchar_no_echo(address_prefix);  // Read the header
-        if (received_char == EOT) {               // End of transmission
-            putchar(address_prefix, ACK);
-            print_str(address_prefix, "\r\n\t Load finished. \r\n\r\n");
+        received_char = scan_char(address_prefix);  // Read the header
+        if (received_char == EOT) {                 // End of transmission
+            print_char(address_prefix, ACK);
+            printf("\r\n\t Load finished. \r\n\r\n");
             break;
         }
 
         if (received_char == SOH || received_char == STX) {
-            packet_number = getchar_no_echo(address_prefix);
-            packet_complement = getchar_no_echo(address_prefix);
+            packet_number = scan_char(address_prefix);
+            packet_complement = scan_char(address_prefix);
 
             if (packet_number ==
                 ((~packet_complement) & 0xFF)) {  // Packet number is correct
                 while (index < (received_char == SOH ? 128 : 1024)) {
-                    data[index++] = getchar_no_echo(address_prefix);
+                    data[index++] = scan_char(address_prefix);
                 }
 
-                received_parity = getchar_no_echo(address_prefix);
+                received_parity = scan_char(address_prefix);
 
                 calculated_parity = compute_parity(data, index);
 
                 if (received_parity == calculated_parity) {
                     // Copy data to memory
-                    putchar(address_prefix, ACK);
+                    print_char(address_prefix, ACK);
                     memcpy((void *)(start_address + current_offset), data,
                            index);
                     current_offset += index;
                 } else {
-                    putchar(address_prefix,
-                            NAK);  // CRC error, request retransmission
+                    print_char(address_prefix,
+                               NAK);  // CRC error, request retransmission
                 }
             } else {
-                putchar(address_prefix, NAK);  // Packet number error
+                print_char(address_prefix, NAK);  // Packet number error
             }
         } else {
-            putchar(address_prefix, CAN);  // Unexpected byte received
+            print_char(address_prefix, CAN);  // Unexpected byte received
         }
     }
     // Flush the cache after loading the program
