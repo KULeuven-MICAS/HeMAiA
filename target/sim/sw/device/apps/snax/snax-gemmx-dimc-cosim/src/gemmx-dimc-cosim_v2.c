@@ -21,15 +21,11 @@
 #include "data_gemmx.h"
 
 uint64_t * tcdm_1_start_addr; // starting address for GEMMX cluster
-uint64_t * tcdm_3_start_addr; // starting address for DIMC cluster
 
 int main() {
 
     // set error value for checking
     int err = 0;
-
-    // allocate 32+32+32KB in TCDM for activation and weight pair
-    uint64_t *dimc_tcdm_ptr_0, *dimc_tcdm_ptr_1, *dimc_tcdm_ptr_2, *dimc_tcdm_ptr_danger;
     
     if (snrt_cluster_idx() == 1){
         // allocate memory for GEMMX cluster
@@ -40,170 +36,256 @@ int main() {
 
     if (snrt_cluster_idx() == 3){
 
-        dimc_tcdm_ptr_0 = (uint64_t *)snrt_cluster_base_addrl();
-        dimc_tcdm_ptr_1     = dimc_tcdm_ptr_0 + Q_LENGTH;
-        dimc_tcdm_ptr_2     = dimc_tcdm_ptr_1 + Q_LENGTH;
-        // must not fully use the 32KB space
-        dimc_tcdm_ptr_danger     = dimc_tcdm_ptr_2 + Q_LENGTH;
+        // printf("Starting the DIMC test\r\n");
 
-        tcdm_3_start_addr = dimc_tcdm_ptr_0;
+        // allocate 32+32+32KB in TCDM for activation and weight pair
+        uint64_t *activation_ptr, *weight_ptr, *output_ptr;
+
+        activation_ptr = (uint64_t *)snrt_l1_next();
+        weight_ptr     = activation_ptr + Q_LENGTH;
+        output_ptr     = weight_ptr + Q_LENGTH;
+
+        // allocate 4KB in TCDM for Q1K1T and final result
+        uint64_t *buffer_ptr = output_ptr + Q_LENGTH;
+
+        // alias for output_ptr, also holding Q
+        uint64_t *activation_ptr_i = output_ptr; 
+
+        // stage 1:
+        // load WK, K, Q to TCDM
 
         if (snrt_is_dm_core()) {
+            printf("DMA core is configured for K and WK\r\n");
+
+            // measure the start of cycle count for preloading data to TCDM
+            uint32_t start_dma_load = snrt_mcycle();
+
+            // initialize TCDM with matrix K by DMA
+            printf("INITIALIZING TCDM\r\n");
+
             // read weight WK and ativation K from data.h
             size_t vector_size = Q_LENGTH * sizeof(uint64_t);
-            snrt_dma_start_1d(dimc_tcdm_ptr_0, K,  vector_size);
-            snrt_dma_start_1d(dimc_tcdm_ptr_1, Q,  vector_size);
-            snrt_dma_start_1d(dimc_tcdm_ptr_2, WK, vector_size);
+
+            snrt_dma_start_1d(activation_ptr,   K,  vector_size);
+            snrt_dma_start_1d(activation_ptr_i, Q,  vector_size);
+            snrt_dma_start_1d(weight_ptr,       WK, vector_size);
 
             snrt_dma_wait_all();
+
+            // measures the end of the DMA transfer process
+            uint32_t end_dma_load = snrt_mcycle();
+            printf("DMA core exits after loading K and WK\r\n"); 
         }
 
+        /**************************************************************************/
+        // wait for the DMA to finish loading WK and K to TCDM
         snrt_cluster_hw_barrier();
+        /**************************************************************************/
+        // stage 2: all three regions are occupied with WK, K, and Q
+        // send WK from TCDM to DIMC
+        /**************************************************************************/
 
-        if (snrt_is_compute_core()) {
+        if (snrt_is_compute_core()){
+            printf("COMPUTE CORE is configured\r\n");
+
+            // configure the accelerator
+            printf("ENTERING MHA MODE\r\n");
+
             uint32_t busy = dimc_query_busy();
-            printf("%d: busy\n", busy);
-            printf("QUERYING BUSY SUCCEEDED\n");
+            printf("%d: busy\r\n", busy);
+            printf("QUERYING BUSY SUCCEEDED\r\n");
 
             configure_accelerator();
 
+            printf("CONFIGURING ACCELERATOR SUCCEEDED\r\n");
+
+            uint32_t read_zp_qkv = read_zp();
+            printf("%d: read_zp_qkv\r\n", read_zp_qkv);
+            printf("READING ZP SUCCEEDED\r\n");
+
             // send WK
-            printf("CONFIGURING STREAMERS for WK\n");
+            printf("CONFIGURING STREAMERS for WK\r\n");
             dimc_set_streamer_dim_w(0, 0, 0, 0, 0, 0);
-            dimc_set_streamer_dim_r0(128, 1, 256, 0, 8, (uint32_t)(dimc_tcdm_ptr_2));
-            dimc_set_streamer_dim_r1(128, 1, 256, 0, 8, (uint32_t)(dimc_tcdm_ptr_2 + 8));
-            dimc_set_streamer_dim_r2(128, 1, 256, 0, 8, (uint32_t)(dimc_tcdm_ptr_2 + 16));
-            dimc_set_streamer_dim_r3(128, 1, 256, 0, 8, (uint32_t)(dimc_tcdm_ptr_2 + 24));
-            
+            dimc_set_streamer_dim_r0(128, 1, 256, 0, 8, (uint32_t)(weight_ptr));
+            dimc_set_streamer_dim_r1(128, 1, 256, 0, 8, (uint32_t)(weight_ptr + 8));
+            dimc_set_streamer_dim_r2(128, 1, 256, 0, 8, (uint32_t)(weight_ptr + 16));
+            dimc_set_streamer_dim_r3(128, 1, 256, 0, 8, (uint32_t)(weight_ptr + 24));
+            printf("STREAMER CONFIGURED FOR WK\r\n");
+
+            // configure the accelerator to start MHA computation
             dimc_start_mha();
 
+            // start streamer data transfer
             dimc_start_streamer();
 
             while (dimc_is_streamer_busy()) { }
-            printf("STREAMER Finished for WK\n");
         }
-        
-        snrt_cluster_hw_barrier();
 
-        // load weight WQ from data.h to tcdm
+        /**************************************************************************/
+        // wait for streamer to finish sending WK to DIMC
+        snrt_cluster_hw_barrier();
+        /**************************************************************************/
+        // stage 3: weight_ptr is free, has K and Q in TCDM
+        // load WQ to TCDM;
+        // send K from TCDM to DIMC; kick start K1 generation;
+        /**************************************************************************/
+
         if (snrt_is_dm_core()) {
+            // printf("DMA core is configured for WQ\r\n");
+
+            // read weight WQ from data.h
             size_t vector_size = Q_LENGTH * sizeof(uint64_t);
 
-            snrt_dma_start_1d(dimc_tcdm_ptr_2, WQ, vector_size);
+            snrt_dma_start_1d(weight_ptr, WQ, vector_size);
 
             snrt_dma_wait_all();
         }
 
-        if (snrt_is_compute_core()) {
+        if (snrt_is_compute_core()){
             // send K
-            printf("CONFIGURING STREAMERS for K\n");
+            printf("CONFIGURING STREAMERS for K\r\n");
             dimc_set_streamer_dim_w(0, 0, 0, 0, 0, 0);
-            dimc_set_streamer_dim_r0(128, 1, 256, 0, 8, (uint32_t)(dimc_tcdm_ptr_0));
-            dimc_set_streamer_dim_r1(128, 1, 256, 0, 8, (uint32_t)(dimc_tcdm_ptr_0 + 8));
-            dimc_set_streamer_dim_r2(128, 1, 256, 0, 8, (uint32_t)(dimc_tcdm_ptr_0 + 16));
-            dimc_set_streamer_dim_r3(128, 1, 256, 0, 8, (uint32_t)(dimc_tcdm_ptr_0 + 24));
+            dimc_set_streamer_dim_r0(128, 1, 256, 0, 8, (uint32_t)(activation_ptr));
+            dimc_set_streamer_dim_r1(128, 1, 256, 0, 8, (uint32_t)(activation_ptr + 8));
+            dimc_set_streamer_dim_r2(128, 1, 256, 0, 8, (uint32_t)(activation_ptr + 16));
+            dimc_set_streamer_dim_r3(128, 1, 256, 0, 8, (uint32_t)(activation_ptr + 24));
+            printf("STREAMER CONFIGURED FOR K\r\n");
 
             dimc_start_streamer();
 
             while (dimc_is_streamer_busy()) { }
-            printf("STREAMER Finished for K\n");
         }
-        
+
+        /**************************************************************************/
+        // wait for the DMA to finish loading WQ to TCDM and K1 generation
         snrt_cluster_hw_barrier();
-        
-        if (snrt_cluster_core_idx == 0 ) {
-            printf("CONFIGURING STREAMERS for WQ\n");
+        /**************************************************************************/
+        // stage 4: activation_ptr is free, has WQ and Q in TCDM
+        // streamer sends WQ to DIMC
+        /**************************************************************************/
+
+        if(snrt_is_compute_core()) {
+            // send WQ
+            printf("CONFIGURING STREAMERS for WQ\r\n");
             dimc_set_streamer_dim_w(0, 0, 0, 0, 0, 0);
-            dimc_set_streamer_dim_r0(128, 1, 256, 0, 8, (uint32_t)(dimc_tcdm_ptr_2));
-            dimc_set_streamer_dim_r1(128, 1, 256, 0, 8, (uint32_t)(dimc_tcdm_ptr_2 + 8));
-            dimc_set_streamer_dim_r2(128, 1, 256, 0, 8, (uint32_t)(dimc_tcdm_ptr_2 + 16));
-            dimc_set_streamer_dim_r3(128, 1, 256, 0, 8, (uint32_t)(dimc_tcdm_ptr_2 + 24));
+            dimc_set_streamer_dim_r0(128, 1, 256, 0, 8, (uint32_t)(weight_ptr));
+            dimc_set_streamer_dim_r1(128, 1, 256, 0, 8, (uint32_t)(weight_ptr + 8));
+            dimc_set_streamer_dim_r2(128, 1, 256, 0, 8, (uint32_t)(weight_ptr + 16));
+            dimc_set_streamer_dim_r3(128, 1, 256, 0, 8, (uint32_t)(weight_ptr + 24));
+            printf("STREAMER CONFIGURED for WQ\r\n");
 
             dimc_start_streamer();
 
             while (dimc_is_streamer_busy()) { }
-            printf("STREAMER Finished for WQ\n");
         }
 
+        /**************************************************************************/
+        // wait for the streamer to finish sending WQ to DIMC
         snrt_cluster_hw_barrier();
+        /**************************************************************************/
+        // stage 5: weight_ptr and actication_ptr are free, has Q in TCDM
+        // load WV and V to TCDM;
+        // streamer sends Q to DIMC & kick start Q1K1T generation;
+        /**************************************************************************/
 
         if (snrt_is_dm_core()) {
-            
-            // load WV and V from data.h to tcdm
+            // printf("DMA core is configured for WQ\r\n");
+
+            // read weight WK and ativation K from data.h
             size_t vector_size = Q_LENGTH * sizeof(uint64_t);
 
-            snrt_dma_start_1d(dimc_tcdm_ptr_0, V,  vector_size);
-            snrt_dma_start_1d(dimc_tcdm_ptr_2, WV, vector_size);
+            snrt_dma_start_1d(activation_ptr, V, vector_size);
+            snrt_dma_start_1d(weight_ptr, WV, vector_size);
 
             snrt_dma_wait_all();
         }
-        
-        snrt_cluster_hw_barrier();
 
-        if (snrt_is_compute_core()) {
+        if (snrt_is_compute_core()){
             // send Q
-            printf("CONFIGURING STREAMERS for Q\n");
-            dimc_set_streamer_dim_w(64, 1, 64, 0, 8, (uint32_t)(dimc_tcdm_ptr_danger));
-            dimc_set_streamer_dim_r0(128, 1, 256, 0, 8, (uint32_t)(dimc_tcdm_ptr_1));
-            dimc_set_streamer_dim_r1(128, 1, 256, 0, 8, (uint32_t)(dimc_tcdm_ptr_1 + 8));
-            dimc_set_streamer_dim_r2(128, 1, 256, 0, 8, (uint32_t)(dimc_tcdm_ptr_1 + 16));
-            dimc_set_streamer_dim_r3(128, 1, 256, 0, 8, (uint32_t)(dimc_tcdm_ptr_1 + 24));
+            printf("CONFIGURING STREAMERS for Q\r\n");
+            dimc_set_streamer_dim_w(64, 1, 64, 0, 8, (uint32_t)(buffer_ptr));
+            dimc_set_streamer_dim_r0(128, 1, 256, 0, 8, (uint32_t)(activation_ptr_i));
+            dimc_set_streamer_dim_r1(128, 1, 256, 0, 8, (uint32_t)(activation_ptr_i + 8));
+            dimc_set_streamer_dim_r2(128, 1, 256, 0, 8, (uint32_t)(activation_ptr_i + 16));
+            dimc_set_streamer_dim_r3(128, 1, 256, 0, 8, (uint32_t)(activation_ptr_i + 24));
+            printf("STREAMER CONFIGURED for Q\r\n");
 
             dimc_start_streamer();
 
             while (dimc_is_streamer_busy()) { }
-            printf("STREAMER Finished for Q\n");
         }
-        
-        snrt_cluster_hw_barrier();
 
-        if (snrt_is_compute_core()) {
+        /**************************************************************************/
+        // wait for the streamer to finish receiving Q1K1T
+        snrt_cluster_hw_barrier();
+        /**************************************************************************/
+        // stage 6: activation_ptr_i is free, has V and WV in TCDM
+        // send V to DIMC
+        /**************************************************************************/
+
+        if (snrt_is_compute_core()){
             // send V
-            printf("CONFIGURING STREAMERS for V\n");
+            printf("CONFIGURING STREAMERS for V\r\n");
             dimc_set_streamer_dim_w(0, 0, 0, 0, 0, 0);
-            dimc_set_streamer_dim_r0(128, 1, 256, 0, 8, (uint32_t)(dimc_tcdm_ptr_0));
-            dimc_set_streamer_dim_r1(128, 1, 256, 0, 8, (uint32_t)(dimc_tcdm_ptr_0 + 8));
-            dimc_set_streamer_dim_r2(128, 1, 256, 0, 8, (uint32_t)(dimc_tcdm_ptr_0 + 16));
-            dimc_set_streamer_dim_r3(128, 1, 256, 0, 8, (uint32_t)(dimc_tcdm_ptr_0 + 24));
+            dimc_set_streamer_dim_r0(128, 1, 256, 0, 8, (uint32_t)(activation_ptr));
+            dimc_set_streamer_dim_r1(128, 1, 256, 0, 8, (uint32_t)(activation_ptr + 8));
+            dimc_set_streamer_dim_r2(128, 1, 256, 0, 8, (uint32_t)(activation_ptr + 16));
+            dimc_set_streamer_dim_r3(128, 1, 256, 0, 8, (uint32_t)(activation_ptr + 24));
+            printf("STREAMER CONFIGURED for V\r\n");
 
             dimc_start_streamer();
 
             while (dimc_is_streamer_busy()) { }
-            printf("STREAMER Finished for V\n");
         }
 
+        /**************************************************************************/
+        // wait for the streamer to finish sending V to DIMC
         snrt_cluster_hw_barrier();
+        /**************************************************************************/
+        // stage 7: activation_ptr, activation_ptr_i are free, has WV in TCDM
+        // send WV to DIMC
+        /**************************************************************************/
 
         if (snrt_is_compute_core()) {
             // send WV
             printf("CONFIGURING STREAMERS for WV\r\n");
             dimc_set_streamer_dim_w(0, 0, 0, 0, 0, 0);
-            dimc_set_streamer_dim_r0(128, 1, 256, 0, 8, (uint32_t)(dimc_tcdm_ptr_2));
-            dimc_set_streamer_dim_r1(128, 1, 256, 0, 8, (uint32_t)(dimc_tcdm_ptr_2 + 8));
-            dimc_set_streamer_dim_r2(128, 1, 256, 0, 8, (uint32_t)(dimc_tcdm_ptr_2 + 16));
-            dimc_set_streamer_dim_r3(128, 1, 256, 0, 8, (uint32_t)(dimc_tcdm_ptr_2 + 24));
+            dimc_set_streamer_dim_r0(128, 1, 256, 0, 8, (uint32_t)(weight_ptr));
+            dimc_set_streamer_dim_r1(128, 1, 256, 0, 8, (uint32_t)(weight_ptr + 8));
+            dimc_set_streamer_dim_r2(128, 1, 256, 0, 8, (uint32_t)(weight_ptr + 16));
+            dimc_set_streamer_dim_r3(128, 1, 256, 0, 8, (uint32_t)(weight_ptr + 24));
+            printf("STREAMER CONFIGURED for WV\r\n");
 
             dimc_start_streamer();
 
             while (dimc_is_streamer_busy()) { }
-            printf("STREAMER sended WV\r\n");
         }
 
+        /**************************************************************************/
+        // wait for the streamer to finish sending WV to DIMC and V1 generation
         snrt_cluster_hw_barrier();
+        /**************************************************************************/
+        // stage 8: activation_ptr, activation_ptr_i, weight_ptr are free
+        // has Q1K1T in TCDM
+        // send Q1K1T to DIMC, saving final result in 
+        /**************************************************************************/
 
         if (snrt_is_compute_core()) {
             // send Q1K1T
-            printf("CONFIGURING STREAMERS for Q1K1T\n");
+            printf("CONFIGURING STREAMERS for Q1K1T\r\n");
             dimc_set_streamer_dim_w(64, 1, 64, 0, 8, (uint32_t)(tcdm_1_start_addr));
-            dimc_set_streamer_dim_r0(16, 1, 256, 0, 8, (uint32_t)(dimc_tcdm_ptr_danger));
-            dimc_set_streamer_dim_r1(16, 1, 256, 0, 8, (uint32_t)(dimc_tcdm_ptr_danger + 8));
-            dimc_set_streamer_dim_r2(16, 1, 256, 0, 8, (uint32_t)(dimc_tcdm_ptr_danger + 16));
-            dimc_set_streamer_dim_r3(16, 1, 256, 0, 8, (uint32_t)(dimc_tcdm_ptr_danger + 24));
+            dimc_set_streamer_dim_r0(16, 1, 256, 0, 8, (uint32_t)(buffer_ptr));
+            dimc_set_streamer_dim_r1(16, 1, 256, 0, 8, (uint32_t)(buffer_ptr + 8));
+            dimc_set_streamer_dim_r2(16, 1, 256, 0, 8, (uint32_t)(buffer_ptr + 16));
+            dimc_set_streamer_dim_r3(16, 1, 256, 0, 8, (uint32_t)(buffer_ptr + 24));
+            printf("STREAMER CONFIGURED for Q1K1T\r\n");
 
             dimc_start_streamer();
 
             while (dimc_is_streamer_busy()) { }
-            printf("STREAMER Finished for Q1K1T\n");
+
+            printf("GEMMX SHALL CHECK FINAL RESULT\r\n");
+
         }
     }
 
