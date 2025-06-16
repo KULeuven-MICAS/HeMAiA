@@ -348,7 +348,7 @@ int main() {
             printf("GEMMX cluster starts to check copied data\n");
 
             for (int i = 0; i < 512; ++i) {
-                uint64_t value = dimc_tcdm_ptr_0[i];
+                uint64_t value = tcdm_1_start_addr[i];
 
                 uint64_t index = i * 8;
 
