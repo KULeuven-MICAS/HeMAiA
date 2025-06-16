@@ -49,7 +49,7 @@ def check_occamy_cfg(occamy_cfg):
                         occamy_root / "docs/schema/address_range.schema.json",
                         occamy_root / "docs/schema/peripherals.schema.json",
                         snitch_root / "docs/schema/snitch_cluster.schema.json"]
-    generator_obj = Generator(schema,remote_schemas)
+    generator_obj = Generator(schema, remote_schemas)
     generator_obj.validate(occamy_cfg)
 
 
@@ -59,7 +59,7 @@ def get_cluster_generators(occamy_cfg, cluster_cfg_dir):
     cluster_name_list = occamy_cfg["clusters"]
     for cluster_name in cluster_name_list:
         cluster_cfg_path = cluster_cfg_dir / f"{cluster_name}.hjson"
-        with open(cluster_cfg_path,'r') as file:
+        with open(cluster_cfg_path, 'r') as file:
             cluster_cfg = read_json_file(file)
         # Now cluster_cfg has three field
         # cluster, dram, clint
@@ -67,15 +67,17 @@ def get_cluster_generators(occamy_cfg, cluster_cfg_dir):
         cluster_cfg = cluster_cfg["cluster"]
         # Add some field
         cluster_processing(cluster_cfg, occamy_cfg)
-        cluster_obj = SnitchCluster(cluster_cfg ,pma_cfg)
+        cluster_obj = SnitchCluster(cluster_cfg, pma_cfg)
         cluster_add_mem(cluster_obj, occamy_cfg)
         cluster_generators.append(cluster_obj)
     return cluster_generators
 
 def get_cluster_cfg_list(occamy_cfg, cluster_cfg_dir):
-    cluster_name_list = occamy_cfg["clusters"]
+    # Since we need to call the snitch gen for each of the clusters specified in occamy_cfg["clusters"],
+    # we use a set to extract the unique clusters to prevent the multiple gen
+    cluster_name_unique_list = set(occamy_cfg["clusters"])
     get_cluster_cfg_list = list()
-    for cluster_name in cluster_name_list:
+    for cluster_name in cluster_name_unique_list:
         get_cluster_cfg_list.append(cluster_cfg_dir / f"{cluster_name}.hjson")
     return get_cluster_cfg_list
 
@@ -88,13 +90,13 @@ def generate_snitch(cluster_cfg_dir, snitch_path):
             print("Error! SNAX gen fails. Check the log.")
             raise
 
-def generate_wrappers(cluster_generators,out_dir):
+def generate_wrappers(cluster_generators, out_dir):
     for cluster_generator in cluster_generators:
         cluster_name = cluster_generator.cfg["name"]
         with open(out_dir / f"{cluster_name}_wrapper.sv", "w") as f:
             f.write(cluster_generator.render_wrapper())
 
-def generate_memories(cluster_generators,out_dir):
+def generate_memories(cluster_generators, out_dir):
     for cluster_generator in cluster_generators:
         cluster_name = cluster_generator.cfg["name"]
         with open(out_dir / f"{cluster_name}_memories.json", "w") as f:
