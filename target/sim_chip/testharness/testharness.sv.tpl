@@ -20,7 +20,7 @@ module testharness
 
   localparam RTCTCK = 30.518us;        // 32.768 kHz
   localparam CLKTCK = 2000ps;          // 500 MHz
-  localparam D2DTCK = 400ps;           // 2.5 GHz
+  localparam D2DTCK = 312.5ps;         // 3.2 GHz
   localparam int  SRAM_BANK = 32;      // 32 Banks architecture
   localparam int  SRAM_DEPTH = ${int(mem_size/8/32)};
   localparam int  SRAM_WIDTH = 8;      // 8 Bytes Wide
@@ -161,7 +161,7 @@ module testharness
       .test_mode_i(1'b0),
       .boot_mode_i('0),
 % if multichip_cfg['single_chip'] is False:
-      .d2d_clk_i(core_clk_i),
+      .d2d_clk_i(d2d_clk_i),
 
       .east_d2d_io(chip_${i}_${j}_to_${i+1}_${j}_link),
       .flow_control_east_rts_o(chip_${i}_${j}_link_to_east_rts),
