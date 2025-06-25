@@ -103,6 +103,18 @@ sources:
       - target/rtl/src/occamy_top.sv
       - target/rtl/src/occamy_cva6.sv
 
+  # target/*_chip
+  - target: hemaia
+    files:
+      - target/rtl/bootrom/bootrom.sv
+      - hw/hemaia/hemaia_mem_system.sv
+      - hw/hemaia/hemaia_clk_rst_controller/regs/hemaia_clk_rst_controller_reg_pkg.sv
+      - hw/hemaia/hemaia_clk_rst_controller/regs/hemaia_clk_rst_controller_reg_top.sv
+      - hw/hemaia/hemaia_clk_rst_controller/hemaia_clock_divider.sv
+      - hw/hemaia/hemaia_clk_rst_controller/hemaia_reset_controller.sv
+      - hw/hemaia/hemaia_clk_rst_controller/hemaia_clk_rst_controller.sv
+      - target/rtl/src/occamy_chip.sv
+
   # target/fpga
   - target: xilinx
     files:
@@ -121,18 +133,7 @@ sources:
       - target/sim_chip/testharness/congestion_emulator.sv
       - target/sim_chip/testharness/half_duplex_bus_emulator.sv
       - target/sim_chip/testharness/testharness.sv
-      # - target/sim/test/bootrom.sv
-      - target/rtl/bootrom/bootrom.sv
-      - hw/hemaia/hemaia_mem_system.sv
-      - target/rtl/src/occamy_chip.sv
 
-
-  # target/*_chip
-  - target: hemaia
-    files:
-      - target/rtl/bootrom/bootrom.sv
-      - hw/hemaia/hemaia_mem_system.sv
-      - target/rtl/src/occamy_chip.sv
 
   - target: tsmc_pad
     files:

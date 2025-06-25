@@ -58,9 +58,9 @@ VCS_BENDER += $(shell cat ../rtl/src/bender_targets.tmp)
 
 VLT_BENDER  += -t SYNTHESIS_SNAX_DEV_ONLY
 
-VSIM_BENDER += -t simulation_hemaia
-VLT_BENDER += -t simulation_hemaia
-VCS_BENDER += -t simulation_hemaia
+VSIM_BENDER += -t simulation_hemaia -t hemaia
+VLT_BENDER += -t simulation_hemaia -t hemaia
+VCS_BENDER += -t simulation_hemaia -t hemaia
 
 VSIM_FLAGS += -t 1ps
 VSIM_FLAGS += -voptargs=+acc

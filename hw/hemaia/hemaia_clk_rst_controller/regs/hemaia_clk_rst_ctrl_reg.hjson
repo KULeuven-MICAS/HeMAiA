@@ -1,0 +1,169 @@
+{
+  "name": "hemaia_clk_rst_controller",
+  "clock_primary": "clk_i",
+  "bus_interfaces": [
+    {
+      "protocol": "reg_iface",
+      "direction": "device"
+    }
+  ],
+  "regwidth": 32,
+  "registers": [
+    {
+      "name": "RESET_REGISTER",
+      "desc": "Reset Register",
+      "fields": [
+        { "bits": "0:0", "name": "RESET_C0", "desc":"Reset Register for C0", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "1:1", "name": "RESET_C1", "desc": "Reset Register for C1", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "2:2", "name": "RESET_C2", "desc": "Reset Register for C2", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "3:3", "name": "RESET_C3", "desc": "Reset Register for C3", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "4:4", "name": "RESET_C4", "desc": "Reset Register for C4", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "5:5", "name": "RESET_C5", "desc": "Reset Register for C5", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "6:6", "name": "RESET_C6", "desc": "Reset Register for C6", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "7:7", "name": "RESET_C7", "desc": "Reset Register for C7", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "8:8", "name": "RESET_C8", "desc": "Reset Register for C8", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "9:9", "name": "RESET_C9", "desc": "Reset Register for C9", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "10:10", "name": "RESET_C10", "desc": "Reset Register for C10", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "11:11", "name": "RESET_C11", "desc": "Reset Register for C11", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "12:12", "name": "RESET_C12", "desc": "Reset Register for C12", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "13:13", "name": "RESET_C13", "desc": "Reset Register for C13", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "14:14", "name": "RESET_C14", "desc": "Reset Register for C14", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "15:15", "name": "RESET_C15", "desc": "Reset Register for C15", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "16:16", "name": "RESET_C16", "desc": "Reset Register for C16", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "17:17", "name": "RESET_C17", "desc": "Reset Register for C17", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "18:18", "name": "RESET_C18", "desc": "Reset Register for C18", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "19:19", "name": "RESET_C19", "desc": "Reset Register for C19", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "20:20", "name": "RESET_C20", "desc": "Reset Register for C20", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "21:21", "name": "RESET_C21", "desc": "Reset Register for C21", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "22:22", "name": "RESET_C22", "desc": "Reset Register for C22", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "23:23", "name": "RESET_C23", "desc": "Reset Register for C23", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "24:24", "name": "RESET_C24", "desc": "Reset Register for C24", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "25:25", "name": "RESET_C25", "desc": "Reset Register for C25", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "26:26", "name": "RESET_C26", "desc": "Reset Register for C26", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "27:27", "name": "RESET_C27", "desc": "Reset Register for C27", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "28:28", "name": "RESET_C28", "desc": "Reset Register for C28", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "29:29", "name": "RESET_C29", "desc": "Reset Register for C29", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "30:30", "name": "RESET_C30", "desc": "Reset Register for C30", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "31:31", "name": "RESET_C31", "desc": "Reset Register for C31", "swaccess": "rw", "hwaccess": "hro", "resval": 0 }
+      ]
+    },
+    {
+      "name": "CLOCK_VALID_REGISTER",
+      "desc": "Clock valid register: set to 1 by sw to program clock divider, reset to 0 by hw to indicate the clock is set",
+      "fields": [
+        { "bits": "0:0", "name": "VALID_C0", "desc": "Clock valid for C0", "swaccess": "rw", "hwaccess": "hrw", "resval": 0 },
+        { "bits": "1:1", "name": "VALID_C1", "desc": "Clock valid for C1", "swaccess": "rw", "hwaccess": "hrw", "resval": 0 },
+        { "bits": "2:2", "name": "VALID_C2", "desc": "Clock valid for C2", "swaccess": "rw", "hwaccess": "hrw", "resval": 0 },
+        { "bits": "3:3", "name": "VALID_C3", "desc": "Clock valid for C3", "swaccess": "rw", "hwaccess": "hrw", "resval": 0 },
+        { "bits": "4:4", "name": "VALID_C4", "desc": "Clock valid for C4", "swaccess": "rw", "hwaccess": "hrw", "resval": 0 },
+        { "bits": "5:5", "name": "VALID_C5", "desc": "Clock valid for C5", "swaccess": "rw", "hwaccess": "hrw", "resval": 0 },
+        { "bits": "6:6", "name": "VALID_C6", "desc": "Clock valid for C6", "swaccess": "rw", "hwaccess": "hrw", "resval": 0 },
+        { "bits": "7:7", "name": "VALID_C7", "desc": "Clock valid for C7", "swaccess": "rw", "hwaccess": "hrw", "resval": 0 },
+        { "bits": "8:8", "name": "VALID_C8", "desc": "Clock valid for C8", "swaccess": "rw", "hwaccess": "hrw", "resval": 0 },
+        { "bits": "9:9", "name": "VALID_C9", "desc": "Clock valid for C9", "swaccess": "rw", "hwaccess": "hrw", "resval": 0 },
+        { "bits": "10:10", "name": "VALID_C10", "desc": "Clock valid for C10", "swaccess": "rw", "hwaccess": "hrw", "resval": 0 },
+        { "bits": "11:11", "name": "VALID_C11", "desc": "Clock valid for C11", "swaccess": "rw", "hwaccess": "hrw", "resval": 0 },
+        { "bits": "12:12", "name": "VALID_C12", "desc": "Clock valid for C12", "swaccess": "rw", "hwaccess": "hrw", "resval": 0 },
+        { "bits": "13:13", "name": "VALID_C13", "desc": "Clock valid for C13", "swaccess": "rw", "hwaccess": "hrw", "resval": 0 },
+        { "bits": "14:14", "name": "VALID_C14", "desc": "Clock valid for C14", "swaccess": "rw", "hwaccess": "hrw", "resval": 0 },
+        { "bits": "15:15", "name": "VALID_C15", "desc": "Clock valid for C15", "swaccess": "rw", "hwaccess": "hrw", "resval": 0 },
+        { "bits": "16:16", "name": "VALID_C16", "desc": "Clock valid for C16", "swaccess": "rw", "hwaccess": "hrw", "resval": 0 },
+        { "bits": "17:17", "name": "VALID_C17", "desc": "Clock valid for C17", "swaccess": "rw", "hwaccess": "hrw", "resval": 0 },
+        { "bits": "18:18", "name": "VALID_C18", "desc": "Clock valid for C18", "swaccess": "rw", "hwaccess": "hrw", "resval": 0 },
+        { "bits": "19:19", "name": "VALID_C19", "desc": "Clock valid for C19", "swaccess": "rw", "hwaccess": "hrw", "resval": 0 },
+        { "bits": "20:20", "name": "VALID_C20", "desc": "Clock valid for C20", "swaccess": "rw", "hwaccess": "hrw", "resval": 0 },
+        { "bits": "21:21", "name": "VALID_C21", "desc": "Clock valid for C21", "swaccess": "rw", "hwaccess": "hrw", "resval": 0 },
+        { "bits": "22:22", "name": "VALID_C22", "desc": "Clock valid for C22", "swaccess": "rw", "hwaccess": "hrw", "resval": 0 },
+        { "bits": "23:23", "name": "VALID_C23", "desc": "Clock valid for C23", "swaccess": "rw", "hwaccess": "hrw", "resval": 0 },
+        { "bits": "24:24", "name": "VALID_C24", "desc": "Clock valid for C24", "swaccess": "rw", "hwaccess": "hrw", "resval": 0 },
+        { "bits": "25:25", "name": "VALID_C25", "desc": "Clock valid for C25", "swaccess": "rw", "hwaccess": "hrw", "resval": 0 },
+        { "bits": "26:26", "name": "VALID_C26", "desc": "Clock valid for C26", "swaccess": "rw", "hwaccess": "hrw", "resval": 0 },
+        { "bits": "27:27", "name": "VALID_C27", "desc": "Clock valid for C27", "swaccess": "rw", "hwaccess": "hrw", "resval": 0 },
+        { "bits": "28:28", "name": "VALID_C28", "desc": "Clock valid for C28", "swaccess": "rw", "hwaccess": "hrw", "resval": 0 },
+        { "bits": "29:29", "name": "VALID_C29", "desc": "Clock valid for C29", "swaccess": "rw", "hwaccess": "hrw", "resval": 0 },
+        { "bits": "30:30", "name": "VALID_C30", "desc": "Clock valid for C30", "swaccess": "rw", "hwaccess": "hrw", "resval": 0 },
+        { "bits": "31:31", "name": "VALID_C31", "desc": "Clock valid for C31", "swaccess": "rw", "hwaccess": "hrw", "resval": 0 }
+      ]
+    },
+    {
+      "name": "CLOCK_DIVISION_REGISTER_C0_C3",
+      "desc": "The clock division register",
+      "fields": [
+        { "bits": "7:0", "name": "DIVISION_C0", "desc": "Clock division for C0", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "15:8", "name": "DIVISION_C1", "desc": "Clock division for C1", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "23:16", "name": "DIVISION_C2", "desc": "Clock division for C2", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "31:24", "name": "DIVISION_C3", "desc": "Clock division for C3", "swaccess": "rw", "hwaccess": "hro", "resval": 0 }
+      ]
+    },
+    {
+      "name": "CLOCK_DIVISION_REGISTER_C4_C7",
+      "desc": "The clock division register",
+      "fields": [
+        { "bits": "7:0", "name": "DIVISION_C4", "desc": "Clock division for C4", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "15:8", "name": "DIVISION_C5", "desc": "Clock division for C5", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "23:16", "name": "DIVISION_C6", "desc": "Clock division for C6", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "31:24", "name": "DIVISION_C7", "desc": "Clock division for C7", "swaccess": "rw", "hwaccess": "hro", "resval": 0 }
+      ]
+    },
+    {
+      "name": "CLOCK_DIVISION_REGISTER_C8_C11",
+      "desc": "The clock division register",
+      "fields": [
+        { "bits": "7:0", "name": "DIVISION_C8", "desc": "Clock division for C8", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "15:8", "name": "DIVISION_C9", "desc": "Clock division for C9", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "23:16", "name": "DIVISION_C10", "desc": "Clock division for C10", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "31:24", "name": "DIVISION_C11", "desc": "Clock division for C11", "swaccess": "rw", "hwaccess": "hro", "resval": 0 }
+      ]
+    },
+    {
+      "name": "CLOCK_DIVISION_REGISTER_C12_C15",
+      "desc": "The clock division register",
+      "fields": [
+      { "bits": "7:0", "name": "DIVISION_C12", "desc": "Clock division for C12", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+      { "bits": "15:8", "name": "DIVISION_C13", "desc": "Clock division for C13", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+      { "bits": "23:16", "name": "DIVISION_C14", "desc": "Clock division for C14", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+      { "bits": "31:24", "name": "DIVISION_C15", "desc": "Clock division for C15", "swaccess": "rw", "hwaccess": "hro", "resval": 0 }
+      ]
+    },
+    {
+      "name": "CLOCK_DIVISION_REGISTER_C16_C19",
+      "desc": "The clock division register",
+      "fields": [
+        { "bits": "7:0", "name": "DIVISION_C16", "desc": "Clock division for C16", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "15:8", "name": "DIVISION_C17", "desc": "Clock division for C17", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "23:16", "name": "DIVISION_C18", "desc": "Clock division for C18", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "31:24", "name": "DIVISION_C19", "desc": "Clock division for C19", "swaccess": "rw", "hwaccess": "hro", "resval": 0 }
+      ]
+    },
+    {
+      "name": "CLOCK_DIVISION_REGISTER_C20_C23",
+      "desc": "The clock division register",
+      "fields": [
+        { "bits": "7:0", "name": "DIVISION_C20", "desc": "Clock division for C20", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "15:8", "name": "DIVISION_C21", "desc": "Clock division for C21", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "23:16", "name": "DIVISION_C22", "desc": "Clock division for C22", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "31:24", "name": "DIVISION_C23", "desc": "Clock division for C23", "swaccess": "rw", "hwaccess": "hro", "resval": 0 }
+      ]
+    },
+    {
+      "name": "CLOCK_DIVISION_REGISTER_C24_C27",
+      "desc": "The clock division register",
+      "fields": [
+        { "bits": "7:0", "name": "DIVISION_C24", "desc": "Clock division for C24", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "15:8", "name": "DIVISION_C25", "desc": "Clock division for C25", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "23:16", "name": "DIVISION_C26", "desc": "Clock division for C26", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "31:24", "name": "DIVISION_C27", "desc": "Clock division for C27", "swaccess": "rw", "hwaccess": "hro", "resval": 0 }
+      ]
+    },
+    {
+      "name": "CLOCK_DIVISION_REGISTER_C28_C31",
+      "desc": "The clock division register",
+      "fields": [
+        { "bits": "7:0", "name": "DIVISION_C28", "desc": "Clock division for C28", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "15:8", "name": "DIVISION_C29", "desc": "Clock division for C29", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "23:16", "name": "DIVISION_C30", "desc": "Clock division for C30", "swaccess": "rw", "hwaccess": "hro", "resval": 0 },
+        { "bits": "31:24", "name": "DIVISION_C31", "desc": "Clock division for C31", "swaccess": "rw", "hwaccess": "hro", "resval": 0 }
+      ]
+    }
+  ]
+}
