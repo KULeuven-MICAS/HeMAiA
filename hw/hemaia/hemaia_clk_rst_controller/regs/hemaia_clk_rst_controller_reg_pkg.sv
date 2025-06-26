@@ -335,6 +335,137 @@ package hemaia_clk_rst_controller_reg_pkg;
     struct packed {
       logic        d;
       logic        de;
+    } reset_c0;
+    struct packed {
+      logic        d;
+      logic        de;
+    } reset_c1;
+    struct packed {
+      logic        d;
+      logic        de;
+    } reset_c2;
+    struct packed {
+      logic        d;
+      logic        de;
+    } reset_c3;
+    struct packed {
+      logic        d;
+      logic        de;
+    } reset_c4;
+    struct packed {
+      logic        d;
+      logic        de;
+    } reset_c5;
+    struct packed {
+      logic        d;
+      logic        de;
+    } reset_c6;
+    struct packed {
+      logic        d;
+      logic        de;
+    } reset_c7;
+    struct packed {
+      logic        d;
+      logic        de;
+    } reset_c8;
+    struct packed {
+      logic        d;
+      logic        de;
+    } reset_c9;
+    struct packed {
+      logic        d;
+      logic        de;
+    } reset_c10;
+    struct packed {
+      logic        d;
+      logic        de;
+    } reset_c11;
+    struct packed {
+      logic        d;
+      logic        de;
+    } reset_c12;
+    struct packed {
+      logic        d;
+      logic        de;
+    } reset_c13;
+    struct packed {
+      logic        d;
+      logic        de;
+    } reset_c14;
+    struct packed {
+      logic        d;
+      logic        de;
+    } reset_c15;
+    struct packed {
+      logic        d;
+      logic        de;
+    } reset_c16;
+    struct packed {
+      logic        d;
+      logic        de;
+    } reset_c17;
+    struct packed {
+      logic        d;
+      logic        de;
+    } reset_c18;
+    struct packed {
+      logic        d;
+      logic        de;
+    } reset_c19;
+    struct packed {
+      logic        d;
+      logic        de;
+    } reset_c20;
+    struct packed {
+      logic        d;
+      logic        de;
+    } reset_c21;
+    struct packed {
+      logic        d;
+      logic        de;
+    } reset_c22;
+    struct packed {
+      logic        d;
+      logic        de;
+    } reset_c23;
+    struct packed {
+      logic        d;
+      logic        de;
+    } reset_c24;
+    struct packed {
+      logic        d;
+      logic        de;
+    } reset_c25;
+    struct packed {
+      logic        d;
+      logic        de;
+    } reset_c26;
+    struct packed {
+      logic        d;
+      logic        de;
+    } reset_c27;
+    struct packed {
+      logic        d;
+      logic        de;
+    } reset_c28;
+    struct packed {
+      logic        d;
+      logic        de;
+    } reset_c29;
+    struct packed {
+      logic        d;
+      logic        de;
+    } reset_c30;
+    struct packed {
+      logic        d;
+      logic        de;
+    } reset_c31;
+  } hemaia_clk_rst_controller_hw2reg_reset_register_reg_t;
+
+  typedef struct packed {
+    struct packed {
+      logic        d;
+      logic        de;
     } valid_c0;
     struct packed {
       logic        d;
@@ -478,6 +609,7 @@ package hemaia_clk_rst_controller_reg_pkg;
 
   // HW -> register type
   typedef struct packed {
+    hemaia_clk_rst_controller_hw2reg_reset_register_reg_t reset_register; // [127:64]
     hemaia_clk_rst_controller_hw2reg_clock_valid_register_reg_t clock_valid_register; // [63:0]
   } hemaia_clk_rst_controller_hw2reg_t;
 

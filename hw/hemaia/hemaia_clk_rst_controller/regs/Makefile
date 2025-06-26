@@ -10,8 +10,8 @@ MKFILE_DIR  := $(dir $(MKFILE_PATH))
 BENDER   = bender
 REGTOOL := $(shell $(BENDER) path register_interface)/vendor/lowrisc_opentitan/util/regtool.py
 
-hemaia_clk_rst_ctrl_reg_top.sv: $(REGTOOL) hemaia_clk_rst_ctrl_reg.hjson
-	$(REGTOOL) -r -t $(MKFILE_DIR) $(shell realpath hemaia_clk_rst_ctrl_reg.hjson)
+hemaia_clk_rst_ctrl_reg_top.sv: $(REGTOOL) hemaia_clk_rst_controller_reg.hjson
+	$(REGTOOL) -r -t $(MKFILE_DIR) $(shell realpath hemaia_clk_rst_controller_reg.hjson)
 
 .PHONY: all
 all: hemaia_clk_rst_ctrl_reg_top.sv

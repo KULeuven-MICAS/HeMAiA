@@ -5,8 +5,7 @@
 // Author: Yunhao Deng <yunhao.deng@kuleuven.be>
 
 module hemaia_clock_counter #(
-    parameter int Width      = 8,
-    parameter int HasCeiling = 1
+    parameter int Width = 8
 ) (
     input  logic             clk_i,
     input  logic             rst_ni,       // active-low async reset
@@ -26,26 +25,14 @@ module hemaia_clock_counter #(
       count_o <= '0;
     end else if (tick_i) begin
       // Only update on tick
-      if (HasCeiling) begin
-        // Compare against (ceiling_i - 1)
-        if (count_o < (ceiling_i - 1'b1)) count_o <= count_o + 1'b1;
-        else count_o <= '0;
-      end else begin
-        // Free-running counter
-        count_o <= count_o + 1'b1;
-      end
+      // If ceiling_i is 0, count_o should not increment
+      // Compare against (ceiling_i - 1)
+      if (count_o < (ceiling_i - 1'b1) && ceiling_i > 1'b0) count_o <= count_o + 1'b1;
+      else count_o <= '0;
     end
   end
 
-  always_comb begin
-    if (HasCeiling) begin
-      // last_value_o is true if count_o == (ceiling_i - 1) AND a tick occurs
-      last_value_o = (count_o == (ceiling_i - 1'b1)) && tick_i;
-    end else begin
-      // last_value_o is true if all bits of count_o are 1 AND a tick occurs
-      last_value_o = (&count_o) && tick_i;
-    end
-  end
+  assign last_value_o = (count_o == (ceiling_i - 1'b1)) && tick_i;
 
 endmodule
 
@@ -71,8 +58,7 @@ module hemaia_clock_divider #(
   logic last_val;
 
   hemaia_clock_counter #(
-      .Width(MaxDivisionWidth),
-      .HasCeiling(1)
+      .Width(MaxDivisionWidth)
   ) pos_counter (
       .clk_i(clk_i),
       .rst_ni(rst_ni),

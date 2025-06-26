@@ -29,23 +29,23 @@ module hemaia_reset_controller #(
 
     //--------------------------------------------------------------------------
     // Two-flop synchroniser (both flops have async set-to-0)
-    //--------------------------------------------------------------------------
-    logic sync_ff0, sync_ff1;
-    logic sync_ff_rst;
+    //---------------------------------------------------------------------------
+    (* async *) logic sync_ff0, sync_ff1;
+    (* false_path *) logic sync_ff_rst;
     assign sync_ff_rst = async_local_rst_ni[i] & async_global_rst_ni;
 
     always_ff @(posedge clk_i[i] or negedge sync_ff_rst) begin
-      if (~sync_ff_rst) begin  // *** asynchronous assertion ***
+      if (~sync_ff_rst) begin
         sync_ff0 <= 1'b0;
         sync_ff1 <= 1'b0;
-      end else begin  // *** synchronous de-assertion ***
+      end else begin
         sync_ff0 <= 1'b1;
         sync_ff1 <= sync_ff0;
       end
     end
 
     //---------------------------------------------------------------------------
-    //  Optional pipeline
+    //  More pipeline to make the timing easier to meet
     //---------------------------------------------------------------------------
     if (ResetDelays[i] == 0) begin : g_no_delay
       // No extra flops requested.
@@ -54,8 +54,8 @@ module hemaia_reset_controller #(
       localparam int PipeStages = ResetDelays[i];
       logic [PipeStages-1:0] pipe_ff;
 
-      always_ff @(posedge clk_i[i] or negedge async_global_rst_ni) begin
-        if (~async_global_rst_ni) begin
+      always_ff @(posedge clk_i[i] or negedge sync_ff_rst) begin
+        if (~sync_ff_rst) begin
           pipe_ff <= '0;
         end else begin
           pipe_ff[0] <= sync_ff1;
@@ -64,10 +64,8 @@ module hemaia_reset_controller #(
           end
         end
       end
-
       assign sync_rst_no[i] = pipe_ff[PipeStages-1];
     end
-
   end : g_rst
 
 endmodule

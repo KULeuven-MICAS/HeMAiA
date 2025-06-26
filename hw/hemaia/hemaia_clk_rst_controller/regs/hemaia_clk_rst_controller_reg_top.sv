@@ -374,8 +374,8 @@ module hemaia_clk_rst_controller_reg_top #(
     .wd     (reset_register_reset_c0_wd),
 
     // from internal hardware
-    .de     (1'b0),
-    .d      ('0  ),
+    .de     (hw2reg.reset_register.reset_c0.de),
+    .d      (hw2reg.reset_register.reset_c0.d ),
 
     // to internal hardware
     .qe     (),
@@ -400,8 +400,8 @@ module hemaia_clk_rst_controller_reg_top #(
     .wd     (reset_register_reset_c1_wd),
 
     // from internal hardware
-    .de     (1'b0),
-    .d      ('0  ),
+    .de     (hw2reg.reset_register.reset_c1.de),
+    .d      (hw2reg.reset_register.reset_c1.d ),
 
     // to internal hardware
     .qe     (),
@@ -426,8 +426,8 @@ module hemaia_clk_rst_controller_reg_top #(
     .wd     (reset_register_reset_c2_wd),
 
     // from internal hardware
-    .de     (1'b0),
-    .d      ('0  ),
+    .de     (hw2reg.reset_register.reset_c2.de),
+    .d      (hw2reg.reset_register.reset_c2.d ),
 
     // to internal hardware
     .qe     (),
@@ -452,8 +452,8 @@ module hemaia_clk_rst_controller_reg_top #(
     .wd     (reset_register_reset_c3_wd),
 
     // from internal hardware
-    .de     (1'b0),
-    .d      ('0  ),
+    .de     (hw2reg.reset_register.reset_c3.de),
+    .d      (hw2reg.reset_register.reset_c3.d ),
 
     // to internal hardware
     .qe     (),
@@ -478,8 +478,8 @@ module hemaia_clk_rst_controller_reg_top #(
     .wd     (reset_register_reset_c4_wd),
 
     // from internal hardware
-    .de     (1'b0),
-    .d      ('0  ),
+    .de     (hw2reg.reset_register.reset_c4.de),
+    .d      (hw2reg.reset_register.reset_c4.d ),
 
     // to internal hardware
     .qe     (),
@@ -504,8 +504,8 @@ module hemaia_clk_rst_controller_reg_top #(
     .wd     (reset_register_reset_c5_wd),
 
     // from internal hardware
-    .de     (1'b0),
-    .d      ('0  ),
+    .de     (hw2reg.reset_register.reset_c5.de),
+    .d      (hw2reg.reset_register.reset_c5.d ),
 
     // to internal hardware
     .qe     (),
@@ -530,8 +530,8 @@ module hemaia_clk_rst_controller_reg_top #(
     .wd     (reset_register_reset_c6_wd),
 
     // from internal hardware
-    .de     (1'b0),
-    .d      ('0  ),
+    .de     (hw2reg.reset_register.reset_c6.de),
+    .d      (hw2reg.reset_register.reset_c6.d ),
 
     // to internal hardware
     .qe     (),
@@ -556,8 +556,8 @@ module hemaia_clk_rst_controller_reg_top #(
     .wd     (reset_register_reset_c7_wd),
 
     // from internal hardware
-    .de     (1'b0),
-    .d      ('0  ),
+    .de     (hw2reg.reset_register.reset_c7.de),
+    .d      (hw2reg.reset_register.reset_c7.d ),
 
     // to internal hardware
     .qe     (),
@@ -582,8 +582,8 @@ module hemaia_clk_rst_controller_reg_top #(
     .wd     (reset_register_reset_c8_wd),
 
     // from internal hardware
-    .de     (1'b0),
-    .d      ('0  ),
+    .de     (hw2reg.reset_register.reset_c8.de),
+    .d      (hw2reg.reset_register.reset_c8.d ),
 
     // to internal hardware
     .qe     (),
@@ -608,8 +608,8 @@ module hemaia_clk_rst_controller_reg_top #(
     .wd     (reset_register_reset_c9_wd),
 
     // from internal hardware
-    .de     (1'b0),
-    .d      ('0  ),
+    .de     (hw2reg.reset_register.reset_c9.de),
+    .d      (hw2reg.reset_register.reset_c9.d ),
 
     // to internal hardware
     .qe     (),
@@ -634,8 +634,8 @@ module hemaia_clk_rst_controller_reg_top #(
     .wd     (reset_register_reset_c10_wd),
 
     // from internal hardware
-    .de     (1'b0),
-    .d      ('0  ),
+    .de     (hw2reg.reset_register.reset_c10.de),
+    .d      (hw2reg.reset_register.reset_c10.d ),
 
     // to internal hardware
     .qe     (),
@@ -660,8 +660,8 @@ module hemaia_clk_rst_controller_reg_top #(
     .wd     (reset_register_reset_c11_wd),
 
     // from internal hardware
-    .de     (1'b0),
-    .d      ('0  ),
+    .de     (hw2reg.reset_register.reset_c11.de),
+    .d      (hw2reg.reset_register.reset_c11.d ),
 
     // to internal hardware
     .qe     (),
@@ -686,8 +686,8 @@ module hemaia_clk_rst_controller_reg_top #(
     .wd     (reset_register_reset_c12_wd),
 
     // from internal hardware
-    .de     (1'b0),
-    .d      ('0  ),
+    .de     (hw2reg.reset_register.reset_c12.de),
+    .d      (hw2reg.reset_register.reset_c12.d ),
 
     // to internal hardware
     .qe     (),
@@ -712,8 +712,8 @@ module hemaia_clk_rst_controller_reg_top #(
     .wd     (reset_register_reset_c13_wd),
 
     // from internal hardware
-    .de     (1'b0),
-    .d      ('0  ),
+    .de     (hw2reg.reset_register.reset_c13.de),
+    .d      (hw2reg.reset_register.reset_c13.d ),
 
     // to internal hardware
     .qe     (),
@@ -738,8 +738,8 @@ module hemaia_clk_rst_controller_reg_top #(
     .wd     (reset_register_reset_c14_wd),
 
     // from internal hardware
-    .de     (1'b0),
-    .d      ('0  ),
+    .de     (hw2reg.reset_register.reset_c14.de),
+    .d      (hw2reg.reset_register.reset_c14.d ),
 
     // to internal hardware
     .qe     (),
@@ -764,8 +764,8 @@ module hemaia_clk_rst_controller_reg_top #(
     .wd     (reset_register_reset_c15_wd),
 
     // from internal hardware
-    .de     (1'b0),
-    .d      ('0  ),
+    .de     (hw2reg.reset_register.reset_c15.de),
+    .d      (hw2reg.reset_register.reset_c15.d ),
 
     // to internal hardware
     .qe     (),
@@ -790,8 +790,8 @@ module hemaia_clk_rst_controller_reg_top #(
     .wd     (reset_register_reset_c16_wd),
 
     // from internal hardware
-    .de     (1'b0),
-    .d      ('0  ),
+    .de     (hw2reg.reset_register.reset_c16.de),
+    .d      (hw2reg.reset_register.reset_c16.d ),
 
     // to internal hardware
     .qe     (),
@@ -816,8 +816,8 @@ module hemaia_clk_rst_controller_reg_top #(
     .wd     (reset_register_reset_c17_wd),
 
     // from internal hardware
-    .de     (1'b0),
-    .d      ('0  ),
+    .de     (hw2reg.reset_register.reset_c17.de),
+    .d      (hw2reg.reset_register.reset_c17.d ),
 
     // to internal hardware
     .qe     (),
@@ -842,8 +842,8 @@ module hemaia_clk_rst_controller_reg_top #(
     .wd     (reset_register_reset_c18_wd),
 
     // from internal hardware
-    .de     (1'b0),
-    .d      ('0  ),
+    .de     (hw2reg.reset_register.reset_c18.de),
+    .d      (hw2reg.reset_register.reset_c18.d ),
 
     // to internal hardware
     .qe     (),
@@ -868,8 +868,8 @@ module hemaia_clk_rst_controller_reg_top #(
     .wd     (reset_register_reset_c19_wd),
 
     // from internal hardware
-    .de     (1'b0),
-    .d      ('0  ),
+    .de     (hw2reg.reset_register.reset_c19.de),
+    .d      (hw2reg.reset_register.reset_c19.d ),
 
     // to internal hardware
     .qe     (),
@@ -894,8 +894,8 @@ module hemaia_clk_rst_controller_reg_top #(
     .wd     (reset_register_reset_c20_wd),
 
     // from internal hardware
-    .de     (1'b0),
-    .d      ('0  ),
+    .de     (hw2reg.reset_register.reset_c20.de),
+    .d      (hw2reg.reset_register.reset_c20.d ),
 
     // to internal hardware
     .qe     (),
@@ -920,8 +920,8 @@ module hemaia_clk_rst_controller_reg_top #(
     .wd     (reset_register_reset_c21_wd),
 
     // from internal hardware
-    .de     (1'b0),
-    .d      ('0  ),
+    .de     (hw2reg.reset_register.reset_c21.de),
+    .d      (hw2reg.reset_register.reset_c21.d ),
 
     // to internal hardware
     .qe     (),
@@ -946,8 +946,8 @@ module hemaia_clk_rst_controller_reg_top #(
     .wd     (reset_register_reset_c22_wd),
 
     // from internal hardware
-    .de     (1'b0),
-    .d      ('0  ),
+    .de     (hw2reg.reset_register.reset_c22.de),
+    .d      (hw2reg.reset_register.reset_c22.d ),
 
     // to internal hardware
     .qe     (),
@@ -972,8 +972,8 @@ module hemaia_clk_rst_controller_reg_top #(
     .wd     (reset_register_reset_c23_wd),
 
     // from internal hardware
-    .de     (1'b0),
-    .d      ('0  ),
+    .de     (hw2reg.reset_register.reset_c23.de),
+    .d      (hw2reg.reset_register.reset_c23.d ),
 
     // to internal hardware
     .qe     (),
@@ -998,8 +998,8 @@ module hemaia_clk_rst_controller_reg_top #(
     .wd     (reset_register_reset_c24_wd),
 
     // from internal hardware
-    .de     (1'b0),
-    .d      ('0  ),
+    .de     (hw2reg.reset_register.reset_c24.de),
+    .d      (hw2reg.reset_register.reset_c24.d ),
 
     // to internal hardware
     .qe     (),
@@ -1024,8 +1024,8 @@ module hemaia_clk_rst_controller_reg_top #(
     .wd     (reset_register_reset_c25_wd),
 
     // from internal hardware
-    .de     (1'b0),
-    .d      ('0  ),
+    .de     (hw2reg.reset_register.reset_c25.de),
+    .d      (hw2reg.reset_register.reset_c25.d ),
 
     // to internal hardware
     .qe     (),
@@ -1050,8 +1050,8 @@ module hemaia_clk_rst_controller_reg_top #(
     .wd     (reset_register_reset_c26_wd),
 
     // from internal hardware
-    .de     (1'b0),
-    .d      ('0  ),
+    .de     (hw2reg.reset_register.reset_c26.de),
+    .d      (hw2reg.reset_register.reset_c26.d ),
 
     // to internal hardware
     .qe     (),
@@ -1076,8 +1076,8 @@ module hemaia_clk_rst_controller_reg_top #(
     .wd     (reset_register_reset_c27_wd),
 
     // from internal hardware
-    .de     (1'b0),
-    .d      ('0  ),
+    .de     (hw2reg.reset_register.reset_c27.de),
+    .d      (hw2reg.reset_register.reset_c27.d ),
 
     // to internal hardware
     .qe     (),
@@ -1102,8 +1102,8 @@ module hemaia_clk_rst_controller_reg_top #(
     .wd     (reset_register_reset_c28_wd),
 
     // from internal hardware
-    .de     (1'b0),
-    .d      ('0  ),
+    .de     (hw2reg.reset_register.reset_c28.de),
+    .d      (hw2reg.reset_register.reset_c28.d ),
 
     // to internal hardware
     .qe     (),
@@ -1128,8 +1128,8 @@ module hemaia_clk_rst_controller_reg_top #(
     .wd     (reset_register_reset_c29_wd),
 
     // from internal hardware
-    .de     (1'b0),
-    .d      ('0  ),
+    .de     (hw2reg.reset_register.reset_c29.de),
+    .d      (hw2reg.reset_register.reset_c29.d ),
 
     // to internal hardware
     .qe     (),
@@ -1154,8 +1154,8 @@ module hemaia_clk_rst_controller_reg_top #(
     .wd     (reset_register_reset_c30_wd),
 
     // from internal hardware
-    .de     (1'b0),
-    .d      ('0  ),
+    .de     (hw2reg.reset_register.reset_c30.de),
+    .d      (hw2reg.reset_register.reset_c30.d ),
 
     // to internal hardware
     .qe     (),
@@ -1180,8 +1180,8 @@ module hemaia_clk_rst_controller_reg_top #(
     .wd     (reset_register_reset_c31_wd),
 
     // from internal hardware
-    .de     (1'b0),
-    .d      ('0  ),
+    .de     (hw2reg.reset_register.reset_c31.de),
+    .d      (hw2reg.reset_register.reset_c31.d ),
 
     // to internal hardware
     .qe     (),

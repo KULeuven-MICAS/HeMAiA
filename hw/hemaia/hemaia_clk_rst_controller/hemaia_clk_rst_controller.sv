@@ -11,7 +11,7 @@ module hemaia_clk_rst_controller #(
 ) (
     // The clock and rst for the controller itself
     input logic control_clk_i,
-    input logic control_rst_ni,
+    (* false_path *) input logic control_rst_ni,
     // Data bus for controller
     input axi_lite_req_t axi_lite_req_i,
     output axi_lite_rsp_t axi_lite_rsp_o,
@@ -26,7 +26,7 @@ module hemaia_clk_rst_controller #(
   ///////////////////////////////
   //    Reset Synchronizer     //
   ///////////////////////////////
-  logic control_rst_n_d1_mst_clk, control_rst_n_d2_mst_clk;
+  (* async *) logic control_rst_n_d1_mst_clk, control_rst_n_d2_mst_clk;
   always_ff @(posedge mst_clk_i or negedge control_rst_ni) begin
     if (~control_rst_ni) begin
       control_rst_n_d1_mst_clk <= 1'b0;
@@ -83,49 +83,49 @@ module hemaia_clk_rst_controller #(
   //    Logic to reset clock division valid reg    //
   ///////////////////////////////////////////////////
   // Generate the spike for the sync bits
-  assign hw2reg.clock_valid_register.valid_c0.d   = 1'b0;
-  assign hw2reg.clock_valid_register.valid_c1.d   = 1'b0;
-  assign hw2reg.clock_valid_register.valid_c2.d   = 1'b0;
-  assign hw2reg.clock_valid_register.valid_c3.d   = 1'b0;
-  assign hw2reg.clock_valid_register.valid_c4.d   = 1'b0;
-  assign hw2reg.clock_valid_register.valid_c5.d   = 1'b0;
-  assign hw2reg.clock_valid_register.valid_c6.d   = 1'b0;
-  assign hw2reg.clock_valid_register.valid_c7.d   = 1'b0;
-  assign hw2reg.clock_valid_register.valid_c8.d   = 1'b0;
-  assign hw2reg.clock_valid_register.valid_c9.d   = 1'b0;
-  assign hw2reg.clock_valid_register.valid_c10.d  = 1'b0;
-  assign hw2reg.clock_valid_register.valid_c11.d  = 1'b0;
-  assign hw2reg.clock_valid_register.valid_c12.d  = 1'b0;
-  assign hw2reg.clock_valid_register.valid_c13.d  = 1'b0;
-  assign hw2reg.clock_valid_register.valid_c14.d  = 1'b0;
-  assign hw2reg.clock_valid_register.valid_c15.d  = 1'b0;
-  assign hw2reg.clock_valid_register.valid_c16.d  = 1'b0;
-  assign hw2reg.clock_valid_register.valid_c17.d  = 1'b0;
-  assign hw2reg.clock_valid_register.valid_c18.d  = 1'b0;
-  assign hw2reg.clock_valid_register.valid_c19.d  = 1'b0;
-  assign hw2reg.clock_valid_register.valid_c20.d  = 1'b0;
-  assign hw2reg.clock_valid_register.valid_c21.d  = 1'b0;
-  assign hw2reg.clock_valid_register.valid_c22.d  = 1'b0;
-  assign hw2reg.clock_valid_register.valid_c23.d  = 1'b0;
-  assign hw2reg.clock_valid_register.valid_c24.d  = 1'b0;
-  assign hw2reg.clock_valid_register.valid_c25.d  = 1'b0;
-  assign hw2reg.clock_valid_register.valid_c26.d  = 1'b0;
-  assign hw2reg.clock_valid_register.valid_c27.d  = 1'b0;
-  assign hw2reg.clock_valid_register.valid_c28.d  = 1'b0;
-  assign hw2reg.clock_valid_register.valid_c29.d  = 1'b0;
-  assign hw2reg.clock_valid_register.valid_c30.d  = 1'b0;
-  assign hw2reg.clock_valid_register.valid_c31.d  = 1'b0;
+  assign hw2reg.clock_valid_register.valid_c0.d = 1'b0;
+  assign hw2reg.clock_valid_register.valid_c1.d = 1'b0;
+  assign hw2reg.clock_valid_register.valid_c2.d = 1'b0;
+  assign hw2reg.clock_valid_register.valid_c3.d = 1'b0;
+  assign hw2reg.clock_valid_register.valid_c4.d = 1'b0;
+  assign hw2reg.clock_valid_register.valid_c5.d = 1'b0;
+  assign hw2reg.clock_valid_register.valid_c6.d = 1'b0;
+  assign hw2reg.clock_valid_register.valid_c7.d = 1'b0;
+  assign hw2reg.clock_valid_register.valid_c8.d = 1'b0;
+  assign hw2reg.clock_valid_register.valid_c9.d = 1'b0;
+  assign hw2reg.clock_valid_register.valid_c10.d = 1'b0;
+  assign hw2reg.clock_valid_register.valid_c11.d = 1'b0;
+  assign hw2reg.clock_valid_register.valid_c12.d = 1'b0;
+  assign hw2reg.clock_valid_register.valid_c13.d = 1'b0;
+  assign hw2reg.clock_valid_register.valid_c14.d = 1'b0;
+  assign hw2reg.clock_valid_register.valid_c15.d = 1'b0;
+  assign hw2reg.clock_valid_register.valid_c16.d = 1'b0;
+  assign hw2reg.clock_valid_register.valid_c17.d = 1'b0;
+  assign hw2reg.clock_valid_register.valid_c18.d = 1'b0;
+  assign hw2reg.clock_valid_register.valid_c19.d = 1'b0;
+  assign hw2reg.clock_valid_register.valid_c20.d = 1'b0;
+  assign hw2reg.clock_valid_register.valid_c21.d = 1'b0;
+  assign hw2reg.clock_valid_register.valid_c22.d = 1'b0;
+  assign hw2reg.clock_valid_register.valid_c23.d = 1'b0;
+  assign hw2reg.clock_valid_register.valid_c24.d = 1'b0;
+  assign hw2reg.clock_valid_register.valid_c25.d = 1'b0;
+  assign hw2reg.clock_valid_register.valid_c26.d = 1'b0;
+  assign hw2reg.clock_valid_register.valid_c27.d = 1'b0;
+  assign hw2reg.clock_valid_register.valid_c28.d = 1'b0;
+  assign hw2reg.clock_valid_register.valid_c29.d = 1'b0;
+  assign hw2reg.clock_valid_register.valid_c30.d = 1'b0;
+  assign hw2reg.clock_valid_register.valid_c31.d = 1'b0;
 
-  assign hw2reg.clock_valid_register.valid_c0.de  = reg2hw.clock_valid_register.valid_c0;
-  assign hw2reg.clock_valid_register.valid_c1.de  = reg2hw.clock_valid_register.valid_c1;
-  assign hw2reg.clock_valid_register.valid_c2.de  = reg2hw.clock_valid_register.valid_c2;
-  assign hw2reg.clock_valid_register.valid_c3.de  = reg2hw.clock_valid_register.valid_c3;
-  assign hw2reg.clock_valid_register.valid_c4.de  = reg2hw.clock_valid_register.valid_c4;
-  assign hw2reg.clock_valid_register.valid_c5.de  = reg2hw.clock_valid_register.valid_c5;
-  assign hw2reg.clock_valid_register.valid_c6.de  = reg2hw.clock_valid_register.valid_c6;
-  assign hw2reg.clock_valid_register.valid_c7.de  = reg2hw.clock_valid_register.valid_c7;
-  assign hw2reg.clock_valid_register.valid_c8.de  = reg2hw.clock_valid_register.valid_c8;
-  assign hw2reg.clock_valid_register.valid_c9.de  = reg2hw.clock_valid_register.valid_c9;
+  assign hw2reg.clock_valid_register.valid_c0.de = reg2hw.clock_valid_register.valid_c0;
+  assign hw2reg.clock_valid_register.valid_c1.de = reg2hw.clock_valid_register.valid_c1;
+  assign hw2reg.clock_valid_register.valid_c2.de = reg2hw.clock_valid_register.valid_c2;
+  assign hw2reg.clock_valid_register.valid_c3.de = reg2hw.clock_valid_register.valid_c3;
+  assign hw2reg.clock_valid_register.valid_c4.de = reg2hw.clock_valid_register.valid_c4;
+  assign hw2reg.clock_valid_register.valid_c5.de = reg2hw.clock_valid_register.valid_c5;
+  assign hw2reg.clock_valid_register.valid_c6.de = reg2hw.clock_valid_register.valid_c6;
+  assign hw2reg.clock_valid_register.valid_c7.de = reg2hw.clock_valid_register.valid_c7;
+  assign hw2reg.clock_valid_register.valid_c8.de = reg2hw.clock_valid_register.valid_c8;
+  assign hw2reg.clock_valid_register.valid_c9.de = reg2hw.clock_valid_register.valid_c9;
   assign hw2reg.clock_valid_register.valid_c10.de = reg2hw.clock_valid_register.valid_c10;
   assign hw2reg.clock_valid_register.valid_c11.de = reg2hw.clock_valid_register.valid_c11;
   assign hw2reg.clock_valid_register.valid_c12.de = reg2hw.clock_valid_register.valid_c12;
@@ -148,6 +148,76 @@ module hemaia_clk_rst_controller #(
   assign hw2reg.clock_valid_register.valid_c29.de = reg2hw.clock_valid_register.valid_c29;
   assign hw2reg.clock_valid_register.valid_c30.de = reg2hw.clock_valid_register.valid_c30;
   assign hw2reg.clock_valid_register.valid_c31.de = reg2hw.clock_valid_register.valid_c31;
+
+  ////////////////////////////////////////////////////////////////////////////////
+  // Generate the “spike” and data‐enable bits for the reset_register registers //
+  ////////////////////////////////////////////////////////////////////////////////
+
+  assign hw2reg.reset_register.reset_c0.d = 1'b0;
+  assign hw2reg.reset_register.reset_c1.d = 1'b0;
+  assign hw2reg.reset_register.reset_c2.d = 1'b0;
+  assign hw2reg.reset_register.reset_c3.d = 1'b0;
+  assign hw2reg.reset_register.reset_c4.d = 1'b0;
+  assign hw2reg.reset_register.reset_c5.d = 1'b0;
+  assign hw2reg.reset_register.reset_c6.d = 1'b0;
+  assign hw2reg.reset_register.reset_c7.d = 1'b0;
+  assign hw2reg.reset_register.reset_c8.d = 1'b0;
+  assign hw2reg.reset_register.reset_c9.d = 1'b0;
+  assign hw2reg.reset_register.reset_c10.d = 1'b0;
+  assign hw2reg.reset_register.reset_c11.d = 1'b0;
+  assign hw2reg.reset_register.reset_c12.d = 1'b0;
+  assign hw2reg.reset_register.reset_c13.d = 1'b0;
+  assign hw2reg.reset_register.reset_c14.d = 1'b0;
+  assign hw2reg.reset_register.reset_c15.d = 1'b0;
+  assign hw2reg.reset_register.reset_c16.d = 1'b0;
+  assign hw2reg.reset_register.reset_c17.d = 1'b0;
+  assign hw2reg.reset_register.reset_c18.d = 1'b0;
+  assign hw2reg.reset_register.reset_c19.d = 1'b0;
+  assign hw2reg.reset_register.reset_c20.d = 1'b0;
+  assign hw2reg.reset_register.reset_c21.d = 1'b0;
+  assign hw2reg.reset_register.reset_c22.d = 1'b0;
+  assign hw2reg.reset_register.reset_c23.d = 1'b0;
+  assign hw2reg.reset_register.reset_c24.d = 1'b0;
+  assign hw2reg.reset_register.reset_c25.d = 1'b0;
+  assign hw2reg.reset_register.reset_c26.d = 1'b0;
+  assign hw2reg.reset_register.reset_c27.d = 1'b0;
+  assign hw2reg.reset_register.reset_c28.d = 1'b0;
+  assign hw2reg.reset_register.reset_c29.d = 1'b0;
+  assign hw2reg.reset_register.reset_c30.d = 1'b0;
+  assign hw2reg.reset_register.reset_c31.d = 1'b0;
+
+  assign hw2reg.reset_register.reset_c0.de = reg2hw.reset_register.reset_c0;
+  assign hw2reg.reset_register.reset_c1.de = reg2hw.reset_register.reset_c1;
+  assign hw2reg.reset_register.reset_c2.de = reg2hw.reset_register.reset_c2;
+  assign hw2reg.reset_register.reset_c3.de = reg2hw.reset_register.reset_c3;
+  assign hw2reg.reset_register.reset_c4.de = reg2hw.reset_register.reset_c4;
+  assign hw2reg.reset_register.reset_c5.de = reg2hw.reset_register.reset_c5;
+  assign hw2reg.reset_register.reset_c6.de = reg2hw.reset_register.reset_c6;
+  assign hw2reg.reset_register.reset_c7.de = reg2hw.reset_register.reset_c7;
+  assign hw2reg.reset_register.reset_c8.de = reg2hw.reset_register.reset_c8;
+  assign hw2reg.reset_register.reset_c9.de = reg2hw.reset_register.reset_c9;
+  assign hw2reg.reset_register.reset_c10.de = reg2hw.reset_register.reset_c10;
+  assign hw2reg.reset_register.reset_c11.de = reg2hw.reset_register.reset_c11;
+  assign hw2reg.reset_register.reset_c12.de = reg2hw.reset_register.reset_c12;
+  assign hw2reg.reset_register.reset_c13.de = reg2hw.reset_register.reset_c13;
+  assign hw2reg.reset_register.reset_c14.de = reg2hw.reset_register.reset_c14;
+  assign hw2reg.reset_register.reset_c15.de = reg2hw.reset_register.reset_c15;
+  assign hw2reg.reset_register.reset_c16.de = reg2hw.reset_register.reset_c16;
+  assign hw2reg.reset_register.reset_c17.de = reg2hw.reset_register.reset_c17;
+  assign hw2reg.reset_register.reset_c18.de = reg2hw.reset_register.reset_c18;
+  assign hw2reg.reset_register.reset_c19.de = reg2hw.reset_register.reset_c19;
+  assign hw2reg.reset_register.reset_c20.de = reg2hw.reset_register.reset_c20;
+  assign hw2reg.reset_register.reset_c21.de = reg2hw.reset_register.reset_c21;
+  assign hw2reg.reset_register.reset_c22.de = reg2hw.reset_register.reset_c22;
+  assign hw2reg.reset_register.reset_c23.de = reg2hw.reset_register.reset_c23;
+  assign hw2reg.reset_register.reset_c24.de = reg2hw.reset_register.reset_c24;
+  assign hw2reg.reset_register.reset_c25.de = reg2hw.reset_register.reset_c25;
+  assign hw2reg.reset_register.reset_c26.de = reg2hw.reset_register.reset_c26;
+  assign hw2reg.reset_register.reset_c27.de = reg2hw.reset_register.reset_c27;
+  assign hw2reg.reset_register.reset_c28.de = reg2hw.reset_register.reset_c28;
+  assign hw2reg.reset_register.reset_c29.de = reg2hw.reset_register.reset_c29;
+  assign hw2reg.reset_register.reset_c30.de = reg2hw.reset_register.reset_c30;
+  assign hw2reg.reset_register.reset_c31.de = reg2hw.reset_register.reset_c31;
 
   // Synchronize valid bits into high frequencies
   (* async *)logic [31:0] clock_division_reg_valid_d1;
@@ -224,7 +294,7 @@ module hemaia_clk_rst_controller #(
   ) i_reset_sync (
       .clk_i(clk_o),
       .async_global_rst_ni(mst_rst_ni),
-      (* false_path *) .async_local_rst_ni(reg2hw.reset_register[NumClocks-1:0]),
+      (* false_path *) .async_local_rst_ni(~(reg2hw.reset_register[NumClocks-1:0])),
       .sync_rst_no(rst_no)
   );
 

@@ -125,9 +125,27 @@ import ${name}_pkg::*;
 
   logic [5:0] clk_vec, rst_n_vec;
   logic clk_host, clk_acc, clk_d2d_phy_east, clk_d2d_phy_west, clk_d2d_phy_north, clk_d2d_phy_south;
-  logic rst_host_n, rst_acc_n, rst_d2d_phy_east_n, rst_d2d_phy_west_n, rst_d2d_phy_north_n, rst_d2d_phy_south_n;
-  assign clk_vec = {clk_d2d_phy_south, clk_d2d_phy_north, clk_d2d_phy_west, clk_d2d_phy_east, clk_acc, clk_host};
-  assign rst_n_vec = {rst_d2d_phy_south_n, rst_d2d_phy_north_n, rst_d2d_phy_west_n, rst_d2d_phy_east_n, rst_acc_n, rst_host_n};
+  logic
+      rst_host_n,
+      rst_acc_n,
+      rst_d2d_phy_east_n,
+      rst_d2d_phy_west_n,
+      rst_d2d_phy_north_n,
+      rst_d2d_phy_south_n;
+
+  assign clk_host = clk_vec[0];
+  assign clk_acc = clk_vec[1];
+  assign clk_d2d_phy_east = clk_vec[2];
+  assign clk_d2d_phy_west = clk_vec[3];
+  assign clk_d2d_phy_north = clk_vec[4];
+  assign clk_d2d_phy_south = clk_vec[5];
+
+  assign rst_host_n = rst_n_vec[0];
+  assign rst_acc_n = rst_n_vec[1];
+  assign rst_d2d_phy_east_n = rst_n_vec[2];
+  assign rst_d2d_phy_west_n = rst_n_vec[3];
+  assign rst_d2d_phy_north_n = rst_n_vec[4];
+  assign rst_d2d_phy_south_n = rst_n_vec[5];
 
   hemaia_clk_rst_controller #(
     .NumClocks(6),
