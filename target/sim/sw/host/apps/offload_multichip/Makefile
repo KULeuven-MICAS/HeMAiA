@@ -32,16 +32,16 @@ RUNTIME_DIR = $(abspath $(HOST_DIR)/runtime)
 DEVICE_DIR  = $(abspath $(HOST_DIR)/../device)
 
 # now we only include the snax app
-DEVICE_APPS += snax/snax-test-integration
-DEVICE_APPS += snax/snax-xdma-maxpool
-DEVICE_APPS += snax/snax-xdma-memset
-DEVICE_APPS += snax/snax-xdma-multicast
-DEVICE_APPS += snax/snax-xdma-copy
-DEVICE_APPS += snax/snax-xdma-transpose
-DEVICE_APPS += snax/snax-xdma-reshape
-DEVICE_APPS += snax/snax-axi-torture
-DEVICE_APPS += snax/snax-axi-torture-devil
-DEVICE_APPS += snax/snax-xdma-multicast-chiplet
+DEVICE_APPS += apps/snax/snax-test-integration
+DEVICE_APPS += apps/snax/snax-xdma-maxpool
+DEVICE_APPS += apps/snax/snax-xdma-memset
+DEVICE_APPS += apps/snax/snax-xdma-multicast
+DEVICE_APPS += apps/snax/snax-xdma-copy
+DEVICE_APPS += apps/snax/snax-xdma-transpose
+DEVICE_APPS += apps/snax/snax-xdma-reshape
+DEVICE_APPS += apps/snax/snax-axi-torture
+DEVICE_APPS += apps/snax/snax-axi-torture-devil
+DEVICE_APPS += apps/snax/snax-xdma-multicast-chiplet
 
 # Dependencies
 INCDIRS += $(RUNTIME_DIR)
@@ -77,7 +77,7 @@ RISCV_LDFLAGS += -lgcc
 RISCV_LDFLAGS += -T$(LINKER_SCRIPT)
 
 # Device binaries
-DEVICE_BUILDDIRS = $(addsuffix /build, $(addprefix $(DEVICE_DIR)/apps/, $(DEVICE_APPS)))
+DEVICE_BUILDDIRS = $(addsuffix /build, $(addprefix $(DEVICE_DIR)/, $(DEVICE_APPS)))
 
 ###########
 # Outputs #
@@ -97,8 +97,11 @@ FINAL_OUTPUTS   = $(ELFS) $(DUMPS) $(DWARFS)
 # Rules #
 #########
 
+$(DEVICE_DIR)/app_list.tmp:
+	echo "$(DEVICE_APPS)" > $(DEVICE_DIR)/app_list.tmp
+
 .PHONY: partial-build
-partial-build: $(PARTIAL_OUTPUTS)
+partial-build: $(DEVICE_DIR)/app_list.tmp $(PARTIAL_OUTPUTS)
 
 .PHONY: finalize-build
 finalize-build: $(FINAL_OUTPUTS)
@@ -128,8 +131,8 @@ $(PARTIAL_DUMP): $(PARTIAL_ELF) | $(BUILDDIR)
 	$(RISCV_OBJDUMP) -D $< > $@
 
 # Device object relocation address
-.PHONY: $(DEVICE_DIR)/apps/%/build/origin.ld
-$(DEVICE_DIR)/apps/%/build/origin.ld: $(PARTIAL_ELF) | $(DEVICE_DIR)/apps/%/build
+.PHONY: $(DEVICE_DIR)/%/build/origin.ld
+$(DEVICE_DIR)/%/build/origin.ld: $(PARTIAL_ELF) | $(DEVICE_DIR)/%/build
 	@RELOC_ADDR=$$($(RISCV_OBJDUMP) -t $< | grep snitch_main | cut -c9-16); \
 	echo "Writing device object relocation address 0x$$RELOC_ADDR to $@"; \
 	echo "L3_ORIGIN = 0x$$RELOC_ADDR;" > $@
@@ -141,7 +144,7 @@ $(DEVICE_DIR)/apps/%/build/origin.ld: $(PARTIAL_ELF) | $(DEVICE_DIR)/apps/%/buil
 #
 # This approach is required cause you can't use multiple %-signs in a prerequisite
 define elf_rule_template =
-    $$(BUILDDIR)/$$(APP)-$(notdir $(1)).elf: $$(DEVICE_DIR)/apps/$(1)/build/$(notdir $(1)).bin $$(DEP) $$(LD_SRCS) | $$(BUILDDIR)
+    $$(BUILDDIR)/$$(APP)-$(notdir $(1)).elf: $$(DEVICE_DIR)/$(1)/build/$(notdir $(1)).bin $$(DEP) $$(LD_SRCS) | $$(BUILDDIR)
 		$$(RISCV_CC) $$(RISCV_CFLAGS) -DDEVICEBIN=\"$$<\" $$(RISCV_LDFLAGS) $$(SRCS) -o $$@
 endef
 $(foreach f,$(DEVICE_APPS),$(eval $(call elf_rule_template,$(f))))
