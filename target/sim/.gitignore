@@ -4,8 +4,9 @@
 /work/
 /work-vsim/
 /work-vlt/
-/*.log
-/*.jou
+**/*.tmp
+**/*.log
+**/*.jou
 /.*_targets_group
 /sw/**/build/
 /runs/
