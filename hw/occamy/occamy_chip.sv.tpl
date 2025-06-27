@@ -100,21 +100,21 @@ import ${name}_pkg::*;
 
   // Control Clock / clk_periph_i: Peripheral Slow Speed Clock
   // Master Clock / clk_i: Oscillator Clock
-  // Clock 1 / clk_o[0]: Host Clock
-  // Clock 2 / clk_o[1]: Accelerator Cluster Clock
-  // Clock 3 / clk_o[2]: East D2D TX Clock
-  // Clock 4 / clk_o[3]: West D2D TX Clock
-  // Clock 5 / clk_o[4]: North D2D TX Clock
-  // Clock 6 / clk_o[5]: South D2D TX Clock
+  // Clock Channel 0 / clk_o[0]: Host Clock
+  // Clock Channel 1 / clk_o[1]: Accelerator Cluster Clock
+  // Clock Channel 2 / clk_o[2]: East D2D TX Clock
+  // Clock Channel 3 / clk_o[3]: West D2D TX Clock
+  // Clock Channel 4 / clk_o[4]: North D2D TX Clock
+  // Clock Channel 5 / clk_o[5]: South D2D TX Clock
 
   // Control Clock: 100 MHz
   // Master Clock: 3.2GHz
-  // Clock 1: 3.2GHz / 6 = 533MHz
-  // Clock 2: 3.2GHz / 6 = 533MHz
-  // Clock 3: 3.2GHz / 1 = 3.2GHz
-  // Clock 4: 3.2GHz / 1 = 3.2GHz
-  // Clock 5: 3.2GHz / 1 = 3.2GHz
-  // Clock 6: 3.2GHz / 1 = 3.2GHz
+  // Clock Channel 0: 3.2GHz / 6 = 533MHz
+  // Clock Channel 1: 3.2GHz / 6 = 533MHz
+  // Clock Channel 2: 3.2GHz / 1 = 3.2GHz
+  // Clock Channel 3: 3.2GHz / 1 = 3.2GHz
+  // Clock Channel 4: 3.2GHz / 1 = 3.2GHz
+  // Clock Channel 5: 3.2GHz / 1 = 3.2GHz
   
   ${soc_axi_lite_narrow_periph_xbar.out_hemaia_clk_rst_controller.req_type()} hemaia_clk_rst_controller_req;
   ${soc_axi_lite_narrow_periph_xbar.out_hemaia_clk_rst_controller.rsp_type()} hemaia_clk_rst_controller_rsp;
