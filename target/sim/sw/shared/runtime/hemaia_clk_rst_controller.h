@@ -47,7 +47,7 @@ inline void disable_clk_domain(uint8_t domain) {
     uint32_t mask = 0xFF << ((domain % 4) * 8);
     *hemaia_clk_rst_controller_clock_division_reg &=
         ~mask;  // Clear the corresponding byte
-    *hemaia_clk_rst_controller_clock_valid_reg &=
+    *hemaia_clk_rst_controller_clock_valid_reg =
         1 << domain;  // Set the valid bit
 }
 
@@ -71,6 +71,6 @@ inline void enable_clk_domain(uint8_t domain, uint8_t division) {
     division_register_val |=
         ((division & 0xFF) << shift);  // Set the new division value
     *hemaia_clk_rst_controller_clock_division_reg = division_register_val;
-    *hemaia_clk_rst_controller_clock_valid_reg |=
+    *hemaia_clk_rst_controller_clock_valid_reg =
         (1 << domain);  // Set the valid bit
 }

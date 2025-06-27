@@ -73,7 +73,7 @@ module hemaia_clock_divider #(
     if (!rst_ni) begin
       new_divisor_ready <= '0;
       divisor_q <= DefaultDivision[MaxDivisionWidth-1:0];
-    end else if (new_divisor_ready && (cnt == 0) && (divisor_i >= 1)) begin
+    end else if (new_divisor_ready && (cnt == 0)) begin
       new_divisor_ready <= '0;
       divisor_q <= divisor_i;
     end else if (divisor_valid_i) begin

@@ -227,7 +227,7 @@ module hemaia_clk_rst_controller #(
       clock_division_reg_valid_d1 <= '0;
       clock_division_reg_valid_d2 <= '0;
     end else begin
-      clock_division_reg_valid_d1 <= reg2hw.clock_valid_register;
+      clock_division_reg_valid_d1 <= {<<{reg2hw.clock_valid_register}};
       clock_division_reg_valid_d2 <= clock_division_reg_valid_d1;
     end
   end
@@ -288,13 +288,15 @@ module hemaia_clk_rst_controller #(
   //////////////////////////////
   //    Reset synchronizer    //
   //////////////////////////////
+  logic [31:0] async_local_rst;
+  assign async_local_rst = {<<{~reg2hw.reset_register}};
   hemaia_reset_controller #(
       .NumReset(NumClocks),
       .ResetDelays(ResetDelays)
   ) i_reset_sync (
       .clk_i(clk_o),
       .async_global_rst_ni(mst_rst_ni),
-      (* false_path *) .async_local_rst_ni(~(reg2hw.reset_register[NumClocks-1:0])),
+      (* false_path *) .async_local_rst_ni(async_local_rst[NumClocks-1:0]),
       .sync_rst_no(rst_no)
   );
 

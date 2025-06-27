@@ -123,12 +123,14 @@ sources:
   # target/sim
   - target: simulation_occamy
     files:
+      - target/rtl/test/bootrom.sv
       - target/rtl/test/uartdpi/uartdpi.sv
       - target/rtl/test/testharness.sv
   
   # target/sim_chip
   - target: simulation_hemaia
     files:
+      - target/rtl/test/bootrom.sv
       - target/rtl/test/uartdpi/uartdpi.sv
       - target/sim_chip/testharness/congestion_emulator.sv
       - target/sim_chip/testharness/half_duplex_bus_emulator.sv
