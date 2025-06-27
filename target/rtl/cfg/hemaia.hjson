@@ -181,7 +181,7 @@
                 length: 4096, // 4 kiB 0x1000
             },
             {
-                name: "chip_ctrl",
+                name: "hemaia_clk_rst_controller",
                 address: 33574912, // 0x0200_5000
                 length: 4096, // 4 kiB 0x1000
             },

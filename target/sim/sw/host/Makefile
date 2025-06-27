@@ -6,10 +6,10 @@
 
 # Add user applications to APPS variable
 APPS  = hello_world
-APPS += hemaia_d2d_link_configurator
 APPS += hemaia_clk_rst_configurator
 ifneq ($(findstring chiplet,$(CFG_OVERRIDE)),)
 # If chiplet cfg is used, offloaf_multichip is compiled with the support to execute applications on cores at different chips
+APPS += hemaia_d2d_link_configurator
 APPS += offload_multichip
 APPS += multichip_sync
 else
