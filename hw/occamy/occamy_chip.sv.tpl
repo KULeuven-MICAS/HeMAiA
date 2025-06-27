@@ -20,8 +20,6 @@ import ${name}_pkg::*;
   input  chip_id_t    chip_id_i,
   input  logic [1:0]  boot_mode_i,
 % if occamy_cfg['hemaia_multichip']['single_chip'] is False: 
-  // Main clock
-  input logic         d2d_clk_i,
   // East side
   input  logic        east_test_being_requested_i,
   output logic        east_test_request_o,
@@ -96,6 +94,77 @@ import ${name}_pkg::*;
     end
   end
 
+  ///////////////////////////////////
+  //  HeMAiA Clock & Reset Manager //
+  ///////////////////////////////////
+
+  // Control Clock / clk_periph_i: Peripheral Slow Speed Clock
+  // Master Clock / clk_i: Oscillator Clock
+  // Clock Channel 0 / clk_o[0]: Host Clock
+  // Clock Channel 1 / clk_o[1]: Accelerator Cluster Clock
+  // Clock Channel 2 / clk_o[2]: East D2D TX Clock
+  // Clock Channel 3 / clk_o[3]: West D2D TX Clock
+  // Clock Channel 4 / clk_o[4]: North D2D TX Clock
+  // Clock Channel 5 / clk_o[5]: South D2D TX Clock
+
+  // Control Clock: 100 MHz
+  // Master Clock: 3.2GHz
+  // Clock Channel 0: 3.2GHz / 6 = 533MHz
+  // Clock Channel 1: 3.2GHz / 6 = 533MHz
+  // Clock Channel 2: 3.2GHz / 1 = 3.2GHz
+  // Clock Channel 3: 3.2GHz / 1 = 3.2GHz
+  // Clock Channel 4: 3.2GHz / 1 = 3.2GHz
+  // Clock Channel 5: 3.2GHz / 1 = 3.2GHz
+  
+  ${soc_axi_lite_narrow_periph_xbar.out_hemaia_clk_rst_controller.req_type()} hemaia_clk_rst_controller_req;
+  ${soc_axi_lite_narrow_periph_xbar.out_hemaia_clk_rst_controller.rsp_type()} hemaia_clk_rst_controller_rsp;
+
+
+  localparam int unsigned HeMAiADefaultDivision[6] = '{6, 6, 1, 1, 1, 1};
+  localparam int unsigned ResetDelays[6] = '{default: 3};
+
+  logic [5:0] clk_vec, rst_n_vec;
+  logic clk_host, clk_acc, clk_d2d_phy_east, clk_d2d_phy_west, clk_d2d_phy_north, clk_d2d_phy_south;
+  logic
+      rst_host_n,
+      rst_acc_n,
+      rst_d2d_phy_east_n,
+      rst_d2d_phy_west_n,
+      rst_d2d_phy_north_n,
+      rst_d2d_phy_south_n;
+
+  assign clk_host = clk_vec[0];
+  assign clk_acc = clk_vec[1];
+  assign clk_d2d_phy_east = clk_vec[2];
+  assign clk_d2d_phy_west = clk_vec[3];
+  assign clk_d2d_phy_north = clk_vec[4];
+  assign clk_d2d_phy_south = clk_vec[5];
+
+  assign rst_host_n = rst_n_vec[0];
+  assign rst_acc_n = rst_n_vec[1];
+  assign rst_d2d_phy_east_n = rst_n_vec[2];
+  assign rst_d2d_phy_west_n = rst_n_vec[3];
+  assign rst_d2d_phy_north_n = rst_n_vec[4];
+  assign rst_d2d_phy_south_n = rst_n_vec[5];
+
+  hemaia_clk_rst_controller #(
+    .NumClocks(6),
+    .MaxDivisionWidth(8),
+    .DefaultDivision(HeMAiADefaultDivision),
+    .ResetDelays(ResetDelays),
+    .axi_lite_req_t (${soc_axi_lite_narrow_periph_xbar.out_hemaia_clk_rst_controller.req_type()}),
+    .axi_lite_rsp_t (${soc_axi_lite_narrow_periph_xbar.out_hemaia_clk_rst_controller.rsp_type()})
+  ) i_hemaia_clk_rst_controller (
+    .control_clk_i(clk_periph_i),
+    .control_rst_ni(rst_periph_ni),
+    .axi_lite_req_i(hemaia_clk_rst_controller_req),
+    .axi_lite_rsp_o(hemaia_clk_rst_controller_rsp),
+    .mst_clk_i(clk_i),
+    .mst_rst_ni(rst_ni),
+    .clk_o(clk_vec),
+    .rst_no(rst_n_vec)
+  );
+
   //////////////////////////////
   // SRAM L2 Memory Subsystem //
   //////////////////////////////
@@ -114,8 +183,8 @@ import ${name}_pkg::*;
     .MemBankNum (${occamy_cfg['spm_wide']["banks"]}),
     .MemSize (${occamy_cfg['spm_wide']["length"]})
   ) i_hemaia_mem_system (
-    .clk_i,
-    .rst_ni,
+    .clk_i            (clk_host),
+    .rst_ni           (rst_host_n),
     .chip_id_i        (chip_id),
     .axi_master_req_i (${axi_soc_to_mem.req_name()}),
     .axi_master_rsp_o (${axi_soc_to_mem.rsp_name()}),
@@ -133,8 +202,8 @@ import ${name}_pkg::*;
   <% regbus_bootrom = soc_axi_lite_narrow_periph_xbar.out_bootrom.to_reg(context, "bootrom", fr="bootrom_axi_lite") %>
 
   bootrom i_bootrom (
-    .clk_i(clk_i), 
-    .rst_ni(rst_ni), 
+    .clk_i(clk_periph_i), 
+    .rst_ni(rst_periph_ni), 
     .req_i(bootrom_req.valid), 
     .addr_i(bootrom_req.addr[31:0]), 
     .data_o(bootrom_rsp.rdata)
@@ -147,7 +216,7 @@ import ${name}_pkg::*;
   //  Occamy Top   //
   ///////////////////
   % if occamy_cfg['hemaia_multichip']['single_chip'] is False: 
-  // Control bus
+  // HeMAiA D2D Control bus
   ${soc_axi_lite_narrow_periph_xbar.out_hemaia_d2d_link.req_type()} hemaia_d2d_link_ctrl_req;
   ${soc_axi_lite_narrow_periph_xbar.out_hemaia_d2d_link.rsp_type()} hemaia_d2d_link_ctrl_rsp;
   // Data bus
@@ -159,10 +228,9 @@ import ${name}_pkg::*;
   ${router2soc_bus.rsp_type()} router2soc_rsp;
   % endif
 
-
   ${name}_top i_${name} (
-    .clk_i              (clk_i),
-    .rst_ni             (rst_ni),
+    .clk_i              (clk_host),
+    .rst_ni             (rst_host_n),
     .sram_cfgs_i        ('0),
     .clk_periph_i       (clk_periph_i),
     .rst_periph_ni      (rst_periph_ni),
@@ -219,11 +287,13 @@ import ${name}_pkg::*;
     .hemaia_mem_axi_rsp_i(${axi_soc_to_mem.rsp_name()}),
     .hemaia_mem_axi_req_i(${axi_mem_to_soc.req_name()}),
     .hemaia_mem_axi_rsp_o(${axi_mem_to_soc.rsp_name()}),
-    .chip_ctrl_req_o    (),
-    .chip_ctrl_rsp_i    ('0),
+
+    // HeMAiA Reset & Clock Controller
+    .hemaia_clk_rst_controller_req_o(hemaia_clk_rst_controller_req),
+    .hemaia_clk_rst_controller_rsp_i(hemaia_clk_rst_controller_rsp),
+
     .ext_irq_i          ('0)
   );
-
 
 % if occamy_cfg['hemaia_multichip']['single_chip'] is False:
   //////////////////////
@@ -246,8 +316,11 @@ import ${name}_pkg::*;
 
     .control_clk_i(clk_periph_i),
     .control_rst_ni(rst_periph_ni),
-    .digital_clk_i(clk_i),
-    .analog_clk_i(d2d_clk_i),
+    .digital_clk_i(clk_host),
+    .east_phy_tx_clk_i(clk_d2d_phy_east),
+    .west_phy_tx_clk_i(clk_d2d_phy_west),
+    .north_phy_tx_clk_i(clk_d2d_phy_north),
+    .south_phy_tx_clk_i(clk_d2d_phy_south),
     .rst_ni(rst_ni),
 
     .axi_lite_req_i(hemaia_d2d_link_ctrl_req),

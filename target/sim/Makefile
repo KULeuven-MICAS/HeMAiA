@@ -270,6 +270,7 @@ PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/occamy_soc_ctrl.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/snitch_cluster_peripheral.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/snitch_quad_peripheral.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/hemaia_d2d_link_peripheral.h
+PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/hemaia_clk_rst_controller_peripheral.h
 
 PLATFORM_HEADERS += $(SW_DEVICE_RT_DIR)/occamy_defs.h
 
@@ -297,6 +298,10 @@ $(PLATFORM_HEADERS_DIR)/snitch_hbm_xbar_peripheral.h: $(TARGET_HBMCTRL_DIR)/occa
 	$(call reggen_generate_header,$@,$<)
 $(PLATFORM_HEADERS_DIR)/hemaia_d2d_link_peripheral.h: $(shell bender path hemaia_d2d_link)/src/ctrl/hemaia_d2d_link_reg.hjson
 	$(call reggen_generate_header,$@,$<)
+
+$(PLATFORM_HEADERS_DIR)/hemaia_clk_rst_controller_peripheral.h: $(ROOT)/hw/hemaia/hemaia_clk_rst_controller/regs/hemaia_clk_rst_controller_reg.hjson
+	$(call reggen_generate_header,$@,$<)
+
 
 # OCCAMYGEN headers
 $(PLATFORM_HEADERS_DIR)/occamy_cfg.h: $(PLATFORM_HEADERS_TEMPLATE_DIR)/occamy_cfg.h.tpl $(CFG)

@@ -11,3 +11,4 @@ snitch_quad_peripheral.h
 hemaia_d2d_link_peripheral.h
 occamy_memory_map.h
 occamy.h
+hemaia_clk_rst_controller_peripheral.h
