@@ -33,8 +33,6 @@ DEVICE_DIR  = $(abspath $(HOST_DIR)/../device)
 
 # now we only include the snax app
 DEVICE_APPS += snax/snax-test-integration
-DEVICE_APPS += snax/snax-hypercorex-test-csr
-DEVICE_APPS += snax/snax-hypercorex-char-recog
 DEVICE_APPS += snax/snax-xdma-maxpool
 DEVICE_APPS += snax/snax-xdma-memset
 DEVICE_APPS += snax/snax-xdma-multicast

@@ -229,7 +229,7 @@ def main():
     am_axi_lite_peripherals = occamy.am_connect_soc_lite_periph_xbar(
         am, am_soc_axi_lite_periph_xbar, occamy_cfg)
 
-    am_axi_lite_narrow_peripherals, am_bootrom, am_clint, am_hemaia_d2d_link = occamy.am_connect_soc_lite_narrow_periph_xbar(
+    am_axi_lite_narrow_peripherals, am_bootrom, am_clint = occamy.am_connect_soc_lite_narrow_periph_xbar(
         am, am_soc_axi_lite_narrow_periph_xbar, occamy_cfg)
 
     am_spm_narrow, am_sys_idma_cfg = occamy.am_connect_soc_narrow_xbar(
@@ -320,10 +320,6 @@ def main():
     # add bootrom and clint seperately
     soc_axi_lite_narrow_periph_xbar.add_output_entry("bootrom", am_bootrom)
     soc_axi_lite_narrow_periph_xbar.add_output_entry("clint", am_clint)
-
-    # add hemaia d2d link if the function is enabled
-    if occamy_cfg["hemaia_multichip"]["single_chip"] is False:
-        soc_axi_lite_narrow_periph_xbar.add_output_entry("hemaia_d2d_link", am_hemaia_d2d_link)
 
     #################
     # SoC Wide Xbar #

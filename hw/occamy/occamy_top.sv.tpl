@@ -88,9 +88,10 @@ module ${name}_top
   input  ${soc_axi_lite_narrow_periph_xbar.out_hemaia_d2d_link.rsp_type()} hemaia_d2d_link_ctrl_rsp_i,
 % endif
 
-  /// Chip specific control registers
-  output ${soc_axi_lite_narrow_periph_xbar.out_chip_ctrl.req_type()} chip_ctrl_req_o,
-  input  ${soc_axi_lite_narrow_periph_xbar.out_chip_ctrl.rsp_type()} chip_ctrl_rsp_i,
+  /// HeMAiA Clk and Rst Controller
+  output ${soc_axi_lite_narrow_periph_xbar.out_hemaia_clk_rst_controller.req_type()} hemaia_clk_rst_controller_req_o,
+  input  ${soc_axi_lite_narrow_periph_xbar.out_hemaia_clk_rst_controller.rsp_type()} hemaia_clk_rst_controller_rsp_i,
+
   // "external interrupts from uncore - "programmable"
   input logic [12:0] ext_irq_i,
 
@@ -101,7 +102,7 @@ module ${name}_top
 <%
   cuts_clint_cfg = occamy_cfg["cuts"]["periph_axi_lite_narrow_clint_cfg"]
   cuts_soc_ctrl_cfg = occamy_cfg["cuts"]["periph_axi_lite_narrow_soc_ctrl_cfg"]
-  cuts_chip_ctrl_cfg = occamy_cfg["cuts"]["periph_axi_lite_narrow_chip_ctrl_cfg"]
+  cuts_hemaia_clk_rst_controller_cfg = occamy_cfg["cuts"]["periph_axi_lite_narrow_hemaia_clk_rst_controller_cfg"]
   cuts_uart_cfg = occamy_cfg["cuts"]["periph_axi_lite_narrow_uart_cfg"]
   cuts_bootrom_cfg = occamy_cfg["cuts"]["periph_axi_lite_narrow_bootrom_cfg"]
   cuts_fll_system_cfg = occamy_cfg["cuts"]["periph_axi_lite_narrow_fll_system_cfg"]
@@ -436,14 +437,13 @@ module ${name}_top
     .intr_ecc_wide_correctable_o(irq.ecc_wide_correctable)
   );
 
-  //////////////////////
-  //   CHIP CONTROL   //
-  //////////////////////
-  // Contains NDA and chip specific information.
-  <% axi_lite_cut_chip_ctrl = soc_axi_lite_narrow_periph_xbar.out_chip_ctrl.cut(context, cuts_chip_ctrl_cfg, name="soc_axi_lite_narrow_periph_xbar_out_chip_ctrl_cut")  %>
+  /////////////////////////////
+  //   HEMAIA CLK RST CTRL   //
+  /////////////////////////////
+  <% axi_lite_hemaia_clk_rst_controller = soc_axi_lite_narrow_periph_xbar.out_hemaia_clk_rst_controller.cut(context, cuts_hemaia_clk_rst_controller_cfg, name="soc_axi_lite_narrow_periph_xbar_out_hemaia_clk_rst_controller_cut")  %>
 
-  assign chip_ctrl_req_o = ${axi_lite_cut_chip_ctrl.req_name()};
-  assign ${axi_lite_cut_chip_ctrl.rsp_name()} = chip_ctrl_rsp_i;
+  assign hemaia_clk_rst_controller_req_o = ${axi_lite_hemaia_clk_rst_controller.req_name()};
+  assign ${axi_lite_hemaia_clk_rst_controller.rsp_name()} = hemaia_clk_rst_controller_rsp_i;
 
   //////////////
   //   UART   //

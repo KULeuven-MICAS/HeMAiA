@@ -1,22 +1,11 @@
-// Copyright 2022 ETH Zurich and University of Bologna.
+// Copyright 2025 KU Leuven.
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
+// Yunhao Deng <yunhao.deng@kuleuven.be>
 
 #include <stdio.h>
 #include "hemaia_d2d_link.c"
 #include "host.h"
-
-uint8_t *hemaia_d2d_link_cfg = (uint8_t *)HEMAIA_D2D_LINK_BASE_ADDR;
-
-uint32_t get_max_index(uint8_t *array, uint32_t size) {
-    uint32_t max_index = 16;
-    for (uint32_t i = 1; i < size; ++i) {
-        if (array[i] > array[max_index]) {
-            max_index = i;
-        }
-    }
-    return max_index;
-}
 
 int main() {
     uintptr_t address_prefix = (uintptr_t)get_current_chip_baseaddress();
