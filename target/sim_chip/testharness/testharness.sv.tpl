@@ -161,7 +161,11 @@ module testharness
       .test_mode_i(1'b0),
       .boot_mode_i('0),
 % if multichip_cfg['single_chip'] is False:
+%   if i < max(x):
       .east_d2d_io(chip_${i}_${j}_to_${i+1}_${j}_link),
+%   else:
+      .east_d2d_io(),
+%   endif
       .flow_control_east_rts_o(chip_${i}_${j}_link_to_east_rts),
       .flow_control_east_cts_i(chip_${i}_${j}_link_to_east_cts),
       .flow_control_east_rts_i(chip_${i}_${j}_link_from_east_rts),
@@ -193,7 +197,11 @@ module testharness
       .north_test_being_requested_i(chip_${i}_${j}_link_to_north_test_request),
       .north_test_request_o(chip_${i}_${j}_link_from_north_test_request),
 
+%   if j < max(y):
       .south_d2d_io(chip_${i}_${j}_to_${i}_${j+1}_link),
+%   else:
+      .south_d2d_io(),
+%   endif
       .flow_control_south_rts_o(chip_${i}_${j}_link_to_south_rts),
       .flow_control_south_cts_i(chip_${i}_${j}_link_to_south_cts),
       .flow_control_south_rts_i(chip_${i}_${j}_link_from_south_rts),
@@ -251,57 +259,50 @@ module testharness
 % endfor
 
 % if multichip_cfg['single_chip'] is False:
-// Connect the signals: control signals
+// Connect the control signals for chip ${i}_${j} to the adjacent chips
 % for i in x:
 %   for j in y:
-  // Connect the east and west side of the chip
+  // Connect the west side of the chip
 %     if i == min(x):
   assign chip_${i}_${j}_link_to_west_cts = '0;
   assign chip_${i}_${j}_link_from_west_rts = '0;
   assign chip_${i}_${j}_link_to_west_test_request = '0;
-  assign chip_${i}_${j}_link_to_east_cts = chip_${i+1}_${j}_link_from_west_cts;
-  assign chip_${i}_${j}_link_from_east_rts = chip_${i+1}_${j}_link_to_west_rts;
-  assign chip_${i}_${j}_link_to_east_test_request = chip_${i+1}_${j}_link_from_west_test_request;
-
-%     elif i == max(x):
-  assign chip_${i}_${j}_link_to_west_cts = chip_${i-1}_${j}_link_from_east_cts;
-  assign chip_${i}_${j}_link_from_west_rts = chip_${i-1}_${j}_link_to_east_rts;
-  assign chip_${i}_${j}_link_to_west_test_request = chip_${i-1}_${j}_link_from_east_test_request;
-  assign chip_${i}_${j}_link_to_east_cts = '0;
-  assign chip_${i}_${j}_link_from_east_rts = '0;
-  assign chip_${i}_${j}_link_to_east_test_request = '0;
-  
 %     else:
   assign chip_${i}_${j}_link_to_west_cts = chip_${i-1}_${j}_link_from_east_cts;
   assign chip_${i}_${j}_link_from_west_rts = chip_${i-1}_${j}_link_to_east_rts;
   assign chip_${i}_${j}_link_to_west_test_request = chip_${i-1}_${j}_link_from_east_test_request;
+%     endif
+  // Connect the east side of the chip
+%     if i == max(x):
+  assign chip_${i}_${j}_link_to_east_cts = '0;
+  assign chip_${i}_${j}_link_from_east_rts = '0;
+  assign chip_${i}_${j}_link_to_east_test_request = '0;
+%     else:
   assign chip_${i}_${j}_link_to_east_cts = chip_${i+1}_${j}_link_from_west_cts;
   assign chip_${i}_${j}_link_from_east_rts = chip_${i+1}_${j}_link_to_west_rts;
   assign chip_${i}_${j}_link_to_east_test_request = chip_${i+1}_${j}_link_from_west_test_request;
 %     endif
-  // Connect the north and south side of the chip
+  // Connect the north side of the chip
 %     if j == min(y):
   assign chip_${i}_${j}_link_to_north_cts = '0;
   assign chip_${i}_${j}_link_from_north_rts = '0;
   assign chip_${i}_${j}_link_to_north_test_request = '0;
-  assign chip_${i}_${j}_link_to_south_cts = chip_${i}_${j+1}_link_from_north_cts;
-  assign chip_${i}_${j}_link_from_south_rts = chip_${i}_${j+1}_link_to_north_rts;
-  assign chip_${i}_${j}_link_to_south_test_request = chip_${i}_${j+1}_link_from_north_test_request;
-%     elif j == max(y):
-  assign chip_${i}_${j}_link_to_north_cts = chip_${i}_${j-1}_link_from_south_cts;
-  assign chip_${i}_${j}_link_from_north_rts = chip_${i}_${j-1}_link_to_south_rts;
-  assign chip_${i}_${j}_link_to_north_test_request = chip_${i}_${j-1}_link_from_south_test_request;
-  assign chip_${i}_${j}_link_to_south_cts = '0;
-  assign chip_${i}_${j}_link_from_south_rts = '0;
-  assign chip_${i}_${j}_link_to_south_test_request = '0;
 %     else:
   assign chip_${i}_${j}_link_to_north_cts = chip_${i}_${j-1}_link_from_south_cts;
   assign chip_${i}_${j}_link_from_north_rts = chip_${i}_${j-1}_link_to_south_rts;
   assign chip_${i}_${j}_link_to_north_test_request = chip_${i}_${j-1}_link_from_south_test_request;
+%     endif
+  // Connect the south side of the chip
+%     if j == max(y):
+  assign chip_${i}_${j}_link_to_south_cts = '0;
+  assign chip_${i}_${j}_link_from_south_rts = '0;
+  assign chip_${i}_${j}_link_to_south_test_request = '0;
+%     else:
   assign chip_${i}_${j}_link_to_south_cts = chip_${i}_${j+1}_link_from_north_cts;
   assign chip_${i}_${j}_link_from_south_rts = chip_${i}_${j+1}_link_to_north_rts;
   assign chip_${i}_${j}_link_to_south_test_request = chip_${i}_${j+1}_link_from_north_test_request;
 %     endif
+
 %   endfor
 % endfor
 % endif
