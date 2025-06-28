@@ -36,12 +36,8 @@ jobs:
     name: Simulation with Verilator
     runs-on: ubuntu-22.04
     container:
-      image: ghcr.io/kuleuven-micas/snax:main
+      image: ghcr.io/kuleuven-micas/snax@sha256:4ff37cad4e85d6a898cda3232ee04a1210833eb4618d1f1fd183201c03c4c57c
     steps:
-      - name: Install Git
-        run: |
-          apt-get update
-          apt-get install -y git
       - uses: actions/checkout@v2
         with:
           submodules: "recursive"
