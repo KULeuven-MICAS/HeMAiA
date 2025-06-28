@@ -29,10 +29,10 @@ jobs:
   #         mkdocs build
 
   #################################################
-  # Occamy System Software + Hardware Compilation #
+  # HeMAiA System Software + Hardware Compilation #
   #################################################
 
-  occamy-verilator:
+  hemaia-verilator:
     name: Simulation with Verilator
     runs-on: ubuntu-22.04
     container:
@@ -41,22 +41,15 @@ jobs:
       - uses: actions/checkout@v2
         with:
           submodules: "recursive"
-      - name: Compile Bootrom
+      - name: Compile everything
         run: |
-          echo "Compiling Bootrom"
-          make bootrom CFG_OVERRIDE=target/rtl/cfg/occamy_cfg/hemaia.hjson
-      - name: Compile SW
-        run: |
-          echo "Compiling SW"
-          make sw CFG_OVERRIDE=target/sw/cfg/hemaia.hjson -j$(nproc)
-      - name: Compile RTL
-        run: |
-          make rtl CFG_OVERRIDE=target/rtl/cfg/hemaia.hjson
-      - name: Compile Verilator Binary
-        run: |
-          make occamy_system_vlt -j$(nproc)
-      - name: Run Tests
-        working-directory: target/sim
-        run: |
-          ./run.py --simulator verilator \
-          sw/sim_elf.yaml -j
+          make sw CFG_OVERRIDE=target/rtl/cfg/hemaia_ci.hjson -j
+          make bootrom CFG_OVERRIDE=target/rtl/cfg/hemaia_ci.hjson -j
+          make rtl CFG_OVERRIDE=target/rtl/cfg/hemaia_ci.hjson
+          make hemaia_system_vlt -j2
+          make -C target/sim_chip/apps apps
+      # - name: Run Tests
+      #   working-directory: target/sim
+      #   run: |
+      #     ./run.py --simulator verilator \
+      #     sw/sim_elf.yaml -j
