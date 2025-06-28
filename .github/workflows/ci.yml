@@ -48,3 +48,7 @@ jobs:
           make rtl CFG_OVERRIDE=target/rtl/cfg/hemaia_ci.hjson
           make hemaia_system_vlt -j2
           make -C target/sim_chip/apps apps
+      - name: Run Tests
+        working-directory: target/sim_chip/automation/ci
+        run: |
+          python3 start.py

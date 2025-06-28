@@ -2,6 +2,11 @@
 !/Makefile
 !/.gitignore
 
+!/ci/
+/ci/*
+!/ci/task.yaml
+!/ci/start.py
+
 !/automated-xdma-transpose/
 /automated-xdma-transpose/*
 !/automated-xdma-transpose/start.py
