@@ -3,7 +3,6 @@ import subprocess
 import shutil
 import yaml
 from concurrent.futures import ThreadPoolExecutor
-import csv
 import multiprocessing
 
 binary_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../bin/occamy_chip.vlt")
