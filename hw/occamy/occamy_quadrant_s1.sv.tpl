@@ -15,6 +15,12 @@
   cuts_wideisolate_with_wideiwc_in = 1
   cuts_wideiwc_with_wideout = 1
   nr_clusters = len(occamy_cfg["clusters"])
+  noc_cfg = occamy_cfg["s1_quadrant"].get("noc_cfg",{})
+  noc_name = noc_cfg.get("noc_name", {})
+  en_floonoc = noc_cfg.get("en_floonoc", False)
+  noc_array = noc_cfg.get("noc_array", {})
+  x_num = noc_array[0] if noc_array else 1
+  y_num = noc_array[1] if noc_array else 1
   wide_trans = int(occamy_cfg["s1_quadrant"]["wide_trans"])
   narrow_trans = int(occamy_cfg["s1_quadrant"]["narrow_trans"])
   ro_cache_cfg = occamy_cfg["s1_quadrant"].get("ro_cache_cfg", {})
@@ -31,6 +37,9 @@
 /// Occamy Stage 1 Quadrant
 module ${name}_quadrant_s1
   import ${name}_pkg::*;
+  %if en_floonoc:
+  import floo_${noc_name}_noc_pkg::*;
+  %endif
 (
   input  logic                         clk_i,
   input  logic                         rst_ni,
@@ -81,14 +90,83 @@ module ${name}_quadrant_s1
   tlb_entry_t [${wide_tlb_entries-1}:0] wide_tlb_entries;
   % endif
 
+  ///////////////////////
+  //   INTERCONNECTS   //
+  ///////////////////////
+%if en_floonoc:
+  //////////////
+  // FlooNoC  //
+  //////////////
+
+  ///Address Map of the 'floo_${noc_name}_noc' NoC.
+  floo_${noc_name}_noc_pkg::sam_rule_t [${nr_clusters-1}:0] NoC_SAM;
+  % for i in range(nr_clusters):
+  <% 
+    x = i // y_num + 1
+    y = i % y_num
+  %>
+  assign NoC_SAM[${i}] = '{idx: '{x: ${x}, y: ${y}, port_id: 0}, start_addr: cluster_base_addr[${i}], end_addr:cluster_base_addr[${i}] + ClusterAddressSpace};
+  %endfor
+
+  ///Default ID
+  floo_${noc_name}_noc_pkg::id_t DEFAULT_ID = '{x: 0, y: 0, port_id: 0};
+
+  floo_${noc_name}_noc_pkg::axi_noc_narrow_out_req_t  [${x_num}:0][${y_num-1}:0] cluster_noc_narrow_out_req;
+  floo_${noc_name}_noc_pkg::axi_noc_narrow_out_rsp_t  [${x_num}:0][${y_num-1}:0] cluster_noc_narrow_out_rsp;
+  floo_${noc_name}_noc_pkg::axi_noc_wide_out_req_t    [${x_num}:0][${y_num-1}:0] cluster_noc_wide_out_req;
+  floo_${noc_name}_noc_pkg::axi_noc_wide_out_rsp_t    [${x_num}:0][${y_num-1}:0] cluster_noc_wide_out_rsp;
+  floo_${noc_name}_noc_pkg::axi_noc_narrow_in_req_t [${x_num}:0][${y_num-1}:0] cluster_noc_narrow_in_req;
+  floo_${noc_name}_noc_pkg::axi_noc_narrow_in_rsp_t [${x_num}:0][${y_num-1}:0] cluster_noc_narrow_in_rsp;
+  floo_${noc_name}_noc_pkg::axi_noc_wide_in_req_t   [${x_num}:0][${y_num-1}:0] cluster_noc_wide_in_req;
+  floo_${noc_name}_noc_pkg::axi_noc_wide_in_rsp_t   [${x_num}:0][${y_num-1}:0] cluster_noc_wide_in_rsp;
+
+
+  floo_${noc_name}_noc i_floonoc(
+    .clk_i                       (clk_quadrant_uncore        ),
+    .rst_ni                      (rst_quadrant_n             ),
+    .test_enable_i               (test_mode_i                ),
+    .Sam_i                       (NoC_SAM                    ),
+    .en_default_idx_i            (1'b1                       ),
+    .default_idx_i               (DEFAULT_ID                 ),
+    .cluster_noc_narrow_in_req_i (cluster_noc_narrow_in_req  ),
+    .cluster_noc_narrow_in_rsp_o (cluster_noc_narrow_in_rsp  ),
+    .cluster_noc_wide_in_req_i   (cluster_noc_wide_in_req    ),
+    .cluster_noc_wide_in_rsp_o   (cluster_noc_wide_in_rsp    ),
+    .cluster_noc_narrow_out_req_o(cluster_noc_narrow_out_req ),
+    .cluster_noc_narrow_out_rsp_i(cluster_noc_narrow_out_rsp ),
+    .cluster_noc_wide_out_req_o  (cluster_noc_wide_out_req   ),
+    .cluster_noc_wide_out_rsp_i  (cluster_noc_wide_out_rsp   )
+  );
+  // Tied the unused inputs
+  % for j in range(1,y_num):
+  assign cluster_noc_narrow_in_req[0][${j}] = '0;
+  assign cluster_noc_wide_in_req[0][${j}] = '0;
+  assign cluster_noc_narrow_out_rsp[0][${j}] = '0;
+  assign cluster_noc_wide_out_rsp[0][${j}] = '0;
+  % endfor
+
+%else:
   ///////////////////
   //   CROSSBARS   //
   ///////////////////
   ${module}
-
+%endif
   ///////////////////////////////
   // Narrow In + IW Converter //
   ///////////////////////////////
+  %if en_floonoc:
+  <%
+    narrow_cluster_in_ctrl = soc_narrow_xbar.out_s1_quadrant_0 \
+      .copy(name="narrow_cluster_in_ctrl") \
+      .declare(context)
+    narrow_cluster_in_ctrl \
+      .cut(context, cuts_narrx_with_ctrl) \
+      .isolate(context, "isolate[0]", "narrow_cluster_in_isolate", isolated="isolated[0]", terminated=True, to_clk="clk_quadrant_uncore", to_rst="rst_quadrant_n", num_pending=narrow_trans) \
+      .change_iw(context, occamy_cfg["s1_quadrant"]["narrow_xbar_slv_id_width"], "narrow_cluster_in_iwc")
+  %>
+  assign cluster_noc_narrow_in_req[0][0] = narrow_cluster_in_iwc_req;
+  assign narrow_cluster_in_iwc_rsp = cluster_noc_narrow_in_rsp[0][0];
+  %else:
   <%
     narrow_cluster_in_ctrl = soc_narrow_xbar.out_s1_quadrant_0 \
       .copy(name="narrow_cluster_in_ctrl") \
@@ -98,10 +176,150 @@ module ${name}_quadrant_s1
       .isolate(context, "isolate[0]", "narrow_cluster_in_isolate", isolated="isolated[0]", terminated=True, to_clk="clk_quadrant_uncore", to_rst="rst_quadrant_n", num_pending=narrow_trans) \
       .change_iw(context, narrow_xbar_quadrant_s1.in_top.iw, "narrow_cluster_in_iwc", to=narrow_xbar_quadrant_s1.in_top)
   %>
+  %endif
 
   /////////////////////////////////////
   // Narrow Out + TLB + IW Converter //
   /////////////////////////////////////
+
+  %if en_floonoc:
+  // We do not have the solder for noc
+  // So we do it manually for now
+
+  floo_${noc_name}_noc_pkg::axi_noc_narrow_out_req_t narrow_cluster_out_tlb_req;
+  floo_${noc_name}_noc_pkg::axi_noc_narrow_out_rsp_t narrow_cluster_out_tlb_rsp;
+
+  %if narrow_tlb_cfg:
+  axi_tlb_noreg #(
+    .AxiSlvPortAddrWidth(48),
+    .AxiMstPortAddrWidth(48),
+    .AxiDataWidth(64),
+    .AxiIdWidth(${occamy_cfg["s1_quadrant"]["narrow_xbar_slv_id_width"]}),
+    .AxiUserWidth (${occamy_cfg["s1_quadrant"]["narrow_xbar_slv_user_width"]}),
+    .AxiSlvPortMaxTxns(${occamy_cfg["s1_quadrant"]["narrow_tlb_cfg"]["max_trans"]}),
+    .L1NumEntries(${occamy_cfg["s1_quadrant"]["narrow_tlb_cfg"]["l1_num_entries"]}),
+    .L1CutAx(${"1'b1" if occamy_cfg["s1_quadrant"]["narrow_tlb_cfg"]["l1_cut_ax"] else "1'b0"}),
+    .slv_req_t(floo_${noc_name}_noc_pkg::axi_noc_narrow_out_req_t),
+    .mst_req_t(floo_${noc_name}_noc_pkg::axi_noc_narrow_out_req_t),
+    .axi_resp_t(floo_${noc_name}_noc_pkg::axi_noc_narrow_out_rsp_t),
+    .entry_t(tlb_entry_t)
+  ) i_narrow_cluster_out_tlb (
+    .clk_i (clk_quadrant),
+    .rst_ni (rst_quadrant_n),
+    .test_en_i(test_mode_i),
+    .slv_req_i (cluster_noc_narrow_out_req[0][0]),
+    .slv_resp_o (cluster_noc_narrow_out_rsp[0][0]),
+    .mst_req_o (narrow_cluster_out_tlb_req),
+    .mst_resp_i (narrow_cluster_out_tlb_rsp),
+    .entries_i (narrow_tlb_entries),
+    .bypass_i (~narrow_tlb_enable)
+  );
+  %else:
+  assign narrow_cluster_out_tlb_req = cluster_noc_narrow_out_req[0][0];
+  assign cluster_noc_narrow_out_rsp[0][0] = narrow_cluster_out_tlb_rsp;
+  %endif
+  <%
+    quad_narrow_out_id_width = cluster_cfgs[0]["id_width_in"]
+    quad_narrow_out_user_width = cluster_cfgs[0]["user_width"]
+    soc_narrow_out_id_width = soc_narrow_xbar.in_s1_quadrant_0.iw
+    soc_narrow_out_user_width = soc_narrow_xbar.in_s1_quadrant_0.uw
+  %>
+  
+  ${soc_narrow_xbar.in_s1_quadrant_0.req_type()} narrow_cluster_out_iwc_req;
+  ${soc_narrow_xbar.in_s1_quadrant_0.rsp_type()} narrow_cluster_out_iwc_rsp;
+  typedef logic [${soc_narrow_xbar.iw-quad_narrow_out_id_width-1}:0] narrow_cluster_out_iwc_pre_id_t;
+
+  axi_id_prepend #(
+    .slv_aw_chan_t  ( floo_${noc_name}_noc_pkg::axi_noc_narrow_out_aw_chan_t ),
+    .slv_w_chan_t   ( floo_${noc_name}_noc_pkg::axi_noc_narrow_out_w_chan_t ),
+    .slv_b_chan_t   ( floo_${noc_name}_noc_pkg::axi_noc_narrow_out_b_chan_t ),
+    .slv_ar_chan_t  ( floo_${noc_name}_noc_pkg::axi_noc_narrow_out_ar_chan_t ),
+    .slv_r_chan_t   ( floo_${noc_name}_noc_pkg::axi_noc_narrow_out_r_chan_t ),
+    .mst_aw_chan_t  ( ${soc_narrow_xbar.in_s1_quadrant_0.aw_chan_type()} ),
+    .mst_w_chan_t   ( ${soc_narrow_xbar.in_s1_quadrant_0.w_chan_type()} ),
+    .mst_b_chan_t   ( ${soc_narrow_xbar.in_s1_quadrant_0.b_chan_type()} ),
+    .mst_ar_chan_t  ( ${soc_narrow_xbar.in_s1_quadrant_0.ar_chan_type()} ),
+    .mst_r_chan_t   ( ${soc_narrow_xbar.in_s1_quadrant_0.r_chan_type()} ),
+    .NoBus          ( 1 ),
+    .AxiIdWidthSlvPort ( ${quad_narrow_out_id_width} ),
+    .AxiIdWidthMstPort ( ${soc_narrow_out_id_width} )
+  ) i_narrow_cluster_out_iwc (
+    .pre_id_i           (narrow_cluster_out_iwc_pre_id_t'(0)),
+    .slv_aw_chans_i     (narrow_cluster_out_tlb_req.aw),
+    .slv_aw_valids_i    (narrow_cluster_out_tlb_req.aw_valid),
+    .slv_aw_readies_o   (narrow_cluster_out_tlb_rsp.aw_ready),
+    .slv_w_chans_i      (narrow_cluster_out_tlb_req.w),
+    .slv_w_valids_i     (narrow_cluster_out_tlb_req.w_valid),
+    .slv_w_readies_o    (narrow_cluster_out_tlb_rsp.w_ready),
+    .slv_b_chans_o      (narrow_cluster_out_tlb_rsp.b),
+    .slv_b_valids_o     (narrow_cluster_out_tlb_rsp.b_valid),
+    .slv_b_readies_i    (narrow_cluster_out_tlb_req.b_ready),
+    .slv_ar_chans_i     (narrow_cluster_out_tlb_req.ar),
+    .slv_ar_valids_i    (narrow_cluster_out_tlb_req.ar_valid),
+    .slv_ar_readies_o   (narrow_cluster_out_tlb_rsp.ar_ready),
+    .slv_r_chans_o      (narrow_cluster_out_tlb_rsp.r),
+    .slv_r_valids_o     (narrow_cluster_out_tlb_rsp.r_valid),
+    .slv_r_readies_i    (narrow_cluster_out_tlb_req.r_ready),
+    .mst_aw_chans_o     (narrow_cluster_out_iwc_req.aw),
+    .mst_aw_valids_o    (narrow_cluster_out_iwc_req.aw_valid),
+    .mst_aw_readies_i   (narrow_cluster_out_iwc_rsp.aw_ready),
+    .mst_w_chans_o      (narrow_cluster_out_iwc_req.w),
+    .mst_w_valids_o     (narrow_cluster_out_iwc_req.w_valid),
+    .mst_w_readies_i    (narrow_cluster_out_iwc_rsp.w_ready),
+    .mst_b_chans_i      (narrow_cluster_out_iwc_rsp.b),
+    .mst_b_valids_i     (narrow_cluster_out_iwc_rsp.b_valid),
+    .mst_b_readies_o    (narrow_cluster_out_iwc_req.b_ready),
+    .mst_ar_chans_o     (narrow_cluster_out_iwc_req.ar),
+    .mst_ar_valids_o    (narrow_cluster_out_iwc_req.ar_valid),
+    .mst_ar_readies_i   (narrow_cluster_out_iwc_rsp.ar_ready),
+    .mst_r_chans_i      (narrow_cluster_out_iwc_rsp.r),
+    .mst_r_valids_i     (narrow_cluster_out_iwc_rsp.r_valid),
+    .mst_r_readies_o    (narrow_cluster_out_iwc_req.r_ready)
+  );
+
+  ${soc_narrow_xbar.in_s1_quadrant_0.req_type()} narrow_cluster_out_isolate_req;
+  ${soc_narrow_xbar.in_s1_quadrant_0.rsp_type()} narrow_cluster_out_isolate_rsp;
+  axi_isolate #(
+    .NumPending   ( ${narrow_trans} ),
+    .TerminateTransaction ( 0 ),
+    .AtopSupport  ( 1 ),
+    .AxiIdWidth   ( ${soc_narrow_out_id_width} ),
+    .AxiAddrWidth ( 48 ),
+    .AxiDataWidth ( 64 ),
+    .AxiUserWidth ( ${soc_narrow_out_user_width} ),
+    .axi_req_t    ( ${soc_narrow_xbar.in_s1_quadrant_0.req_type()} ),
+    .axi_resp_t   ( ${soc_narrow_xbar.in_s1_quadrant_0.rsp_type()} )
+  ) i_narrow_cluster_out_isolate (
+    .clk_i      ( clk_i ),
+    .rst_ni     ( rst_ni ),
+    .slv_req_i  ( narrow_cluster_out_iwc_req ),
+    .slv_resp_o ( narrow_cluster_out_iwc_rsp ),
+    .mst_req_o  ( narrow_cluster_out_isolate_req ),
+    .mst_resp_i ( narrow_cluster_out_isolate_rsp ),
+    .isolate_i  ( isolate[1] ),
+    .isolated_o ( isolated[1] )
+  );
+
+  ${soc_narrow_xbar.in_s1_quadrant_0.req_type()} narrow_cluster_out_ctrl_req;
+  ${soc_narrow_xbar.in_s1_quadrant_0.rsp_type()} narrow_cluster_out_ctrl_rsp;
+  axi_multicut #(
+    .NoCuts     ( ${cuts_narrx_with_ctrl}),
+    .aw_chan_t  ( ${soc_narrow_xbar.in_s1_quadrant_0.aw_chan_type()}),
+    .w_chan_t   ( ${soc_narrow_xbar.in_s1_quadrant_0.w_chan_type()}),
+    .b_chan_t   ( ${soc_narrow_xbar.in_s1_quadrant_0.b_chan_type()}),
+    .ar_chan_t  ( ${soc_narrow_xbar.in_s1_quadrant_0.ar_chan_type()}),
+    .r_chan_t   ( ${soc_narrow_xbar.in_s1_quadrant_0.r_chan_type()}),
+    .axi_req_t  ( ${soc_narrow_xbar.in_s1_quadrant_0.req_type()}),
+    .axi_resp_t ( ${soc_narrow_xbar.in_s1_quadrant_0.rsp_type()})
+  ) i_narrow_cluster_out_ctrl (
+    .clk_i      (clk_i),
+    .rst_ni     (rst_ni),
+    .slv_req_i  (narrow_cluster_out_isolate_req),
+    .slv_resp_o (narrow_cluster_out_isolate_rsp),
+    .mst_req_o  (narrow_cluster_out_ctrl_req),
+    .mst_resp_i (narrow_cluster_out_ctrl_rsp)
+  );  
+  %else:
   <%
   #// Add TLB behind crossbar if enabled
   if narrow_tlb_cfg:
@@ -118,13 +336,216 @@ module ${name}_quadrant_s1
     .change_iw(context, soc_narrow_xbar.in_s1_quadrant_0.iw, "narrow_cluster_out_iwc") \
     .isolate(context, "isolate[1]", "narrow_cluster_out_isolate", isolated="isolated[1]", to_clk="clk_i", to_rst="rst_ni", use_to_clk_rst=True, num_pending=narrow_trans) \
     .cut(context, cuts_narrx_with_ctrl, "narrow_cluster_out_ctrl")
-   %>
-
+  %>
+  %endif
   /////////////////////////////////////////
   // Wide Out + RO Cache + IW Converter  //
   /////////////////////////////////////////
+  %if en_floonoc:
+  floo_${noc_name}_noc_pkg::axi_noc_wide_out_req_t quad_wide_out_tlb_req;
+  floo_${noc_name}_noc_pkg::axi_noc_wide_out_rsp_t quad_wide_out_tlb_rsp;
+  %if wide_tlb_cfg:
+  axi_tlb_noreg #(
+    .AxiSlvPortAddrWidth(48),
+    .AxiMstPortAddrWidth(48),
+    .AxiDataWidth(512),
+    .AxiIdWidth(${occamy_cfg["s1_quadrant"]["wide_xbar_slv_id_width"]}),
+    .AxiUserWidth (${occamy_cfg["s1_quadrant"]["wide_xbar_slv_user_width"]}),
+    .AxiSlvPortMaxTxns(${occamy_cfg["s1_quadrant"]["wide_tlb_cfg"]["max_trans"]}),
+    .L1NumEntries(${occamy_cfg["s1_quadrant"]["wide_tlb_cfg"]["l1_num_entries"]}),
+    .L1CutAx(${"1'b1" if occamy_cfg["s1_quadrant"]["wide_tlb_cfg"]["l1_cut_ax"] else "1'b0"}),
+    .slv_req_t(floo_${noc_name}_noc_pkg::axi_noc_wide_in_req_t),
+    .mst_req_t(floo_${noc_name}_noc_pkg::axi_noc_wide_in_req_t),
+    .axi_resp_t(floo_${noc_name}_noc_pkg::axi_noc_wide_in_rsp_t),
+    .entry_t(tlb_entry_t)
+  ) i_wide_cluster_out_tlb (
+    .clk_i (clk_quadrant_uncore),
+    .rst_ni (rst_quadrant_n),
+    .test_en_i(test_mode_i),
+    .slv_req_i (cluster_noc_wide_out_req[0][0]),
+    .slv_resp_o (cluster_noc_wide_out_rsp[0][0]),
+    .mst_req_o (quad_wide_out_tlb_req),
+    .mst_resp_i (quad_wide_out_tlb_rsp),
+    .entries_i (wide_tlb_entries),
+    .bypass_i (~wide_tlb_enable)
+  );
+  %else:
+
+  assign quad_wide_out_tlb_req = cluster_noc_wide_out_req[0][0];
+  assign cluster_noc_wide_out_rsp[0][0] = quad_wide_out_tlb_rsp;
+  %endif
+
   <%
-    wide_target_iw = 3
+    ro_cache_id_width = cluster_cfgs[0]["dma_id_width_in"] + 1
+    ro_cache_user_width = cluster_cfgs[0]["dma_user_width"]
+  %>
+  `AXI_TYPEDEF_ALL_CT(axi_a48_d512_i${ro_cache_id_width}_u${ro_cache_user_width},
+                      axi_a48_d512_i${ro_cache_id_width}_u${ro_cache_user_width}_req_t,
+                      axi_a48_d512_i${ro_cache_id_width}_u${ro_cache_user_width}_resp_t,
+                      logic [47:0],
+                      logic [${ro_cache_id_width-1}:0],
+                      logic [511:0],
+                      logic [63:0],
+                      logic [${ro_cache_user_width-1}:0])
+
+  axi_a48_d512_i${ro_cache_id_width}_u${ro_cache_user_width}_req_t snitch_ro_cache_req;
+  axi_a48_d512_i${ro_cache_id_width}_u${ro_cache_user_width}_resp_t snitch_ro_cache_rsp;
+  snitch_read_only_cache #(
+      .LineWidth    (${occamy_cfg["s1_quadrant"]["ro_cache_cfg"]["width"]}),
+      .LineCount    (${occamy_cfg["s1_quadrant"]["ro_cache_cfg"]["count"]}),
+      .WayCount     (${occamy_cfg["s1_quadrant"]["ro_cache_cfg"]["sets"]}),
+      .AxiAddrWidth (48),
+      .AxiDataWidth (512),
+      .AxiIdWidth   (${cluster_cfgs[0]["dma_id_width_in"]}),
+      .AxiUserWidth (${cluster_cfgs[0]["dma_user_width"]}),
+      .MaxTrans     (${occamy_cfg["s1_quadrant"]["ro_cache_cfg"]["max_trans"]}),
+      .NrAddrRules  (${occamy_cfg["s1_quadrant"]["ro_cache_cfg"]["address_regions"]}),
+      .slv_req_t    (floo_${noc_name}_noc_pkg::axi_noc_wide_out_req_t),
+      .slv_rsp_t    (floo_${noc_name}_noc_pkg::axi_noc_wide_out_rsp_t),
+      .mst_req_t    (axi_a48_d512_i${ro_cache_id_width}_u${ro_cache_user_width}_req_t),
+      .mst_rsp_t    (axi_a48_d512_i${ro_cache_id_width}_u${ro_cache_user_width}_resp_t),
+      .sram_cfg_data_t (sram_cfg_t),
+      .sram_cfg_tag_t (sram_cfg_t)
+    ) i_snitch_ro_cache (
+      .clk_i (clk_quadrant_uncore),
+      .rst_ni (rst_quadrant_n),
+      .enable_i (ro_enable),
+      .flush_valid_i (ro_flush_valid),
+      .flush_ready_o (ro_flush_ready),
+      .start_addr_i (ro_start_addr),
+      .end_addr_i (ro_end_addr),
+      .axi_slv_req_i (quad_wide_out_tlb_req),
+      .axi_slv_rsp_o (quad_wide_out_tlb_rsp),
+      .axi_mst_req_o (snitch_ro_cache_req),
+      .axi_mst_rsp_i (snitch_ro_cache_rsp),
+      .sram_cfg_data_i (sram_cfg_i.rocache_data),
+      .sram_cfg_tag_i (sram_cfg_i.rocache_tag)
+    );
+
+  axi_a48_d512_i${ro_cache_id_width}_u${ro_cache_user_width}_req_t snitch_ro_cache_cut_req;
+  axi_a48_d512_i${ro_cache_id_width}_u${ro_cache_user_width}_resp_t snitch_ro_cache_cut_rsp;
+  axi_multicut #(
+    .NoCuts (1),
+    .aw_chan_t  (axi_a48_d512_i${ro_cache_id_width}_u${ro_cache_user_width}_aw_chan_t),
+    .w_chan_t   (axi_a48_d512_i${ro_cache_id_width}_u${ro_cache_user_width}_w_chan_t),
+    .b_chan_t   (axi_a48_d512_i${ro_cache_id_width}_u${ro_cache_user_width}_b_chan_t),
+    .ar_chan_t  (axi_a48_d512_i${ro_cache_id_width}_u${ro_cache_user_width}_ar_chan_t),
+    .r_chan_t   (axi_a48_d512_i${ro_cache_id_width}_u${ro_cache_user_width}_r_chan_t),
+    .axi_req_t  (axi_a48_d512_i${ro_cache_id_width}_u${ro_cache_user_width}_req_t),
+    .axi_resp_t (axi_a48_d512_i${ro_cache_id_width}_u${ro_cache_user_width}_resp_t)
+  ) i_snitch_ro_cache_cut (
+    .clk_i (clk_quadrant_uncore),
+    .rst_ni (rst_quadrant_n),
+    .slv_req_i (snitch_ro_cache_req),
+    .slv_resp_o (snitch_ro_cache_rsp),
+    .mst_req_o (snitch_ro_cache_cut_req),
+    .mst_resp_i (snitch_ro_cache_cut_rsp)
+  );
+
+  ${soc_wide_xbar.in_quadrant_0.req_type()} wide_cluster_out_iwc_req;
+  ${soc_wide_xbar.in_quadrant_0.rsp_type()} wide_cluster_out_iwc_rsp;
+  typedef logic [${soc_wide_xbar.in_quadrant_0.iw-ro_cache_id_width-1}:0] wide_cluster_out_iwc_pre_id_t;
+  axi_id_prepend #(
+    .slv_aw_chan_t  ( axi_a48_d512_i${ro_cache_id_width}_u${ro_cache_user_width}_aw_chan_t ),
+    .slv_w_chan_t   ( axi_a48_d512_i${ro_cache_id_width}_u${ro_cache_user_width}_w_chan_t ),
+    .slv_b_chan_t   ( axi_a48_d512_i${ro_cache_id_width}_u${ro_cache_user_width}_b_chan_t ),
+    .slv_ar_chan_t  ( axi_a48_d512_i${ro_cache_id_width}_u${ro_cache_user_width}_ar_chan_t ),
+    .slv_r_chan_t   ( axi_a48_d512_i${ro_cache_id_width}_u${ro_cache_user_width}_r_chan_t ),
+    .mst_aw_chan_t  ( ${soc_wide_xbar.in_quadrant_0.aw_chan_type()} ),
+    .mst_w_chan_t   ( ${soc_wide_xbar.in_quadrant_0.w_chan_type()} ),
+    .mst_b_chan_t   ( ${soc_wide_xbar.in_quadrant_0.b_chan_type()} ),
+    .mst_ar_chan_t  ( ${soc_wide_xbar.in_quadrant_0.ar_chan_type()} ),
+    .mst_r_chan_t   ( ${soc_wide_xbar.in_quadrant_0.r_chan_type()} ),
+    .NoBus          ( 1 ),
+    .AxiIdWidthSlvPort ( ${ro_cache_id_width} ),
+    .AxiIdWidthMstPort ( ${soc_wide_xbar.in_quadrant_0.iw} )
+  ) i_wide_cluster_out_iwc (
+    .pre_id_i           (wide_cluster_out_iwc_pre_id_t'(0)),
+    .slv_aw_chans_i     (snitch_ro_cache_cut_req.aw),
+    .slv_aw_valids_i    (snitch_ro_cache_cut_req.aw_valid),
+    .slv_aw_readies_o   (snitch_ro_cache_cut_rsp.aw_ready),
+    .slv_w_chans_i      (snitch_ro_cache_cut_req.w),
+    .slv_w_valids_i     (snitch_ro_cache_cut_req.w_valid),
+    .slv_w_readies_o    (snitch_ro_cache_cut_rsp.w_ready),
+    .slv_b_chans_o      (snitch_ro_cache_cut_rsp.b),
+    .slv_b_valids_o     (snitch_ro_cache_cut_rsp.b_valid),
+    .slv_b_readies_i    (snitch_ro_cache_cut_req.b_ready),
+    .slv_ar_chans_i     (snitch_ro_cache_cut_req.ar),
+    .slv_ar_valids_i    (snitch_ro_cache_cut_req.ar_valid),
+    .slv_ar_readies_o   (snitch_ro_cache_cut_rsp.ar_ready),
+    .slv_r_chans_o      (snitch_ro_cache_cut_rsp.r),
+    .slv_r_valids_o     (snitch_ro_cache_cut_rsp.r_valid),
+    .slv_r_readies_i    (snitch_ro_cache_cut_req.r_ready),
+    .mst_aw_chans_o     (wide_cluster_out_iwc_req.aw),
+    .mst_aw_valids_o    (wide_cluster_out_iwc_req.aw_valid),
+    .mst_aw_readies_i   (wide_cluster_out_iwc_rsp.aw_ready),
+    .mst_w_chans_o      (wide_cluster_out_iwc_req.w),
+    .mst_w_valids_o     (wide_cluster_out_iwc_req.w_valid),
+    .mst_w_readies_i    (wide_cluster_out_iwc_rsp.w_ready),
+    .mst_b_chans_i      (wide_cluster_out_iwc_rsp.b),
+    .mst_b_valids_i     (wide_cluster_out_iwc_rsp.b_valid),
+    .mst_b_readies_o    (wide_cluster_out_iwc_req.b_ready),
+    .mst_ar_chans_o     (wide_cluster_out_iwc_req.ar),
+    .mst_ar_valids_o    (wide_cluster_out_iwc_req.ar_valid),
+    .mst_ar_readies_i   (wide_cluster_out_iwc_rsp.ar_ready),
+    .mst_r_chans_i      (wide_cluster_out_iwc_rsp.r),
+    .mst_r_valids_i     (wide_cluster_out_iwc_rsp.r_valid),
+    .mst_r_readies_o    (wide_cluster_out_iwc_req.r_ready)
+  );
+
+
+
+  ${soc_wide_xbar.in_quadrant_0.req_type()} wide_cluster_out_isolate_req;
+  ${soc_wide_xbar.in_quadrant_0.rsp_type()} wide_cluster_out_isolate_rsp;
+
+  axi_isolate #(
+    .NumPending ( 32 ),
+    .TerminateTransaction ( 0 ),
+    .AtopSupport ( 0 ),
+    .AxiIdWidth ( ${soc_wide_xbar.iw} ),
+    .AxiAddrWidth ( 48 ),
+    .AxiDataWidth ( 512 ),
+    .AxiUserWidth ( ${soc_wide_xbar.uw} ),
+    .axi_req_t ( ${soc_wide_xbar.in_quadrant_0.req_type()} ),
+    .axi_resp_t ( ${soc_wide_xbar.in_quadrant_0.rsp_type()} )
+  ) i_wide_cluster_out_isolate (
+    .clk_i      ( clk_i                        ),
+    .rst_ni     ( rst_ni                       ),
+    .slv_req_i  ( wide_cluster_out_iwc_req     ),
+    .slv_resp_o ( wide_cluster_out_iwc_rsp     ),
+    .mst_req_o  ( wide_cluster_out_isolate_req ),
+    .mst_resp_i ( wide_cluster_out_isolate_rsp ),
+    .isolate_i  ( isolate[3]                   ),
+    .isolated_o ( isolated[3]                  )
+  );
+
+  ${soc_wide_xbar.in_quadrant_0.req_type()} wide_cluster_out_isolate_cut_req;
+  ${soc_wide_xbar.in_quadrant_0.rsp_type()} wide_cluster_out_isolate_cut_rsp;
+
+  axi_multicut #(
+    .NoCuts (1),
+    .aw_chan_t (${soc_wide_xbar.in_quadrant_0.aw_chan_type()}),
+    .w_chan_t (${soc_wide_xbar.in_quadrant_0.w_chan_type()}),
+    .b_chan_t (${soc_wide_xbar.in_quadrant_0.b_chan_type()}),
+    .ar_chan_t (${soc_wide_xbar.in_quadrant_0.ar_chan_type()}),
+    .r_chan_t (${soc_wide_xbar.in_quadrant_0.r_chan_type()}),
+    .axi_req_t (${soc_wide_xbar.in_quadrant_0.req_type()}),
+    .axi_resp_t (${soc_wide_xbar.in_quadrant_0.rsp_type()})
+  ) i_wide_cluster_out_isolate_cut (
+    .clk_i (clk_i),
+    .rst_ni (rst_ni),
+    .slv_req_i (wide_cluster_out_isolate_req),
+    .slv_resp_o (wide_cluster_out_isolate_rsp),
+    .mst_req_o (wide_cluster_out_isolate_cut_req),
+    .mst_resp_i (wide_cluster_out_isolate_cut_rsp)
+  );
+  assign quadrant_wide_out_req_o = wide_cluster_out_isolate_cut_req;
+  assign wide_cluster_out_isolate_cut_rsp = quadrant_wide_out_rsp_i;
+
+
+  %else:
+  <%
+    wide_target_iw = occamy_cfg["s1_quadrant"]["wide_xbar_slv_id_width"]
     #// Add TLB behind crossbar if enabled
     if wide_tlb_cfg:
       wide_cluster_out_tlb = wide_xbar_quadrant_s1.out_top \
@@ -160,15 +581,33 @@ module ${name}_quadrant_s1
       .isolate(context, "isolate[3]", "wide_cluster_out_isolate", isolated="isolated[3]", atop_support=False, to_clk="clk_i", to_rst="rst_ni", use_to_clk_rst=True, num_pending=wide_trans) \
       .cut(context, cuts_wideiwc_with_wideout)
     #// Assert correct outgoing ID widths
-    assert soc_wide_xbar.in_quadrant_0.iw == wide_cluster_out_cut.iw, "S1 Quadrant and SoC IW mismatches."
+    assert soc_wide_xbar.in_quadrant_0.iw == wide_cluster_out_cut.iw, f"Wide IW for S1 Quadrant and SoC mismatches. SOC IW={soc_wide_xbar.in_quadrant_0.iw}, Quadrant IW={wide_cluster_out_cut.iw}"
   %>
 
   assign quadrant_wide_out_req_o = ${wide_cluster_out_cut.req_name()};
   assign ${wide_cluster_out_cut.rsp_name()} = quadrant_wide_out_rsp_i;
-
+  %endif
   ////////////////////////////
   // Wide In + IW Converter //
   ////////////////////////////
+  %if en_floonoc:
+  <%
+    soc_wide_xbar.out_quadrant_0 \
+      .copy(name="wide_cluster_in") \
+      .declare(context) \
+      .cut(context, cuts_wideiwc_with_wideout) \
+      .isolate(context, "isolate[2]", "wide_cluster_in_isolate", isolated="isolated[2]", terminated=True, atop_support=False, to_clk="clk_quadrant_uncore", to_rst="rst_quadrant_n", num_pending=wide_trans) \
+      .cut(context, cuts_wideisolate_with_wideiwc_in) \
+      .change_iw(context,  occamy_cfg["s1_quadrant"]["wide_xbar_slv_id_width"],"wide_cluster_in_iwc")
+  %>
+  // to SOC
+  assign wide_cluster_in_req = quadrant_wide_in_req_i;
+  assign quadrant_wide_in_rsp_o = wide_cluster_in_rsp;
+
+  // to Quad NoC
+  assign cluster_noc_wide_in_req[0][0] = wide_cluster_in_iwc_req;
+  assign wide_cluster_in_iwc_rsp = cluster_noc_wide_in_rsp[0][0];
+  %else:
   <%
     soc_wide_xbar.out_quadrant_0 \
       .copy(name="wide_cluster_in_iwc") \
@@ -180,6 +619,8 @@ module ${name}_quadrant_s1
   %>
   assign wide_cluster_in_iwc_req = quadrant_wide_in_req_i;
   assign quadrant_wide_in_rsp_o = wide_cluster_in_iwc_rsp;
+  %endif
+
 
   /////////////////////////
   // Quadrant Controller //
@@ -214,16 +655,55 @@ module ${name}_quadrant_s1
     .wide_tlb_entries_o (wide_tlb_entries),
     .wide_tlb_enable_o (wide_tlb_enable),
     %endif
+    %if en_floonoc:
+    .quadrant_out_req_o (narrow_cluster_in_ctrl_req),
+    .quadrant_out_rsp_i (narrow_cluster_in_ctrl_rsp),
+    .quadrant_in_req_i  (narrow_cluster_out_ctrl_req),
+    .quadrant_in_rsp_o  (narrow_cluster_out_ctrl_rsp)
+    %else:    
     .quadrant_out_req_o (${narrow_cluster_in_ctrl.req_name()}),
     .quadrant_out_rsp_i (${narrow_cluster_in_ctrl.rsp_name()}),
     .quadrant_in_req_i (${narrow_cluster_out_ctrl.req_name()}),
     .quadrant_in_rsp_o (${narrow_cluster_out_ctrl.rsp_name()})
+    %endif 
   );
 
+
 % for i in range(nr_clusters):
+  <%
+    cluster_name = cluster_cfgs[i]["name"]
+  %>
   ///////////////
   // Cluster ${i} //
   ///////////////
+  logic [9:0] hart_base_id_${i};
+  assign hart_base_id_${i} = HartIdOffset + NrCoresClusterOffset[${i}];
+  %if en_floonoc:
+  <% 
+    x = i // y_num
+    y = i % y_num
+  %>
+  ${cluster_name}_wrapper i_${name}_cluster_${i} (
+    .clk_i               (clk_quadrant_cluster[${i}]),
+    .rst_ni              (rst_quadrant_n),
+    .meip_i              (meip_i[NrCoresClusterOffset[${i}]+:NrCoresCluster[${i}]]),
+    .mtip_i              (mtip_i[NrCoresClusterOffset[${i}]+:NrCoresCluster[${i}]]),
+    .msip_i              (msip_i[NrCoresClusterOffset[${i}]+:NrCoresCluster[${i}]]),
+    .hart_base_id_i      (hart_base_id_${i}),
+    .cluster_base_addr_i (cluster_base_addr[${i}]),
+    .boot_addr_i         (boot_addr_i), 
+    .narrow_in_req_i     (cluster_noc_narrow_out_req[${x+1}][${y}]),
+    .narrow_in_resp_o    (cluster_noc_narrow_out_rsp[${x+1}][${y}]),
+    .narrow_out_req_o    (cluster_noc_narrow_in_req[${x+1}][${y}]),
+    .narrow_out_resp_i   (cluster_noc_narrow_in_rsp[${x+1}][${y}]),
+    .wide_out_req_o      (cluster_noc_wide_in_req[${x+1}][${y}]),
+    .wide_out_resp_i     (cluster_noc_wide_in_rsp[${x+1}][${y}]),
+    .wide_in_req_i       (cluster_noc_wide_out_req[${x+1}][${y}]),
+    .wide_in_resp_o      (cluster_noc_wide_out_rsp[${x+1}][${y}]),
+    .sram_cfgs_i         (sram_cfg_i.cluster)
+  );
+  %else:
+
   <%
     narrow_cluster_in = narrow_xbar_quadrant_s1.__dict__["out_cluster_{}".format(i)].change_iw(context, cluster_cfgs[i]["id_width_in"], "narrow_in_iwc_{}".format(i)).cut(context, cuts_narrx_with_cluster)
     narrow_cluster_out = narrow_xbar_quadrant_s1.__dict__["in_cluster_{}".format(i)].copy(name="narrow_out_{}".format(i)).declare(context)
@@ -231,31 +711,28 @@ module ${name}_quadrant_s1
     wide_cluster_in = wide_xbar_quadrant_s1.__dict__["out_cluster_{}".format(i)].change_iw(context, cluster_cfgs[i]["dma_id_width_in"], "wide_in_iwc_{}".format(i), max_txns_per_id=wide_trans).cut(context, cuts_widex_with_cluster)
     wide_cluster_out = wide_xbar_quadrant_s1.__dict__["in_cluster_{}".format(i)].copy(name="wide_out_{}".format(i)).declare(context)
     wide_cluster_out.cut(context, cuts_widex_with_cluster, to=wide_xbar_quadrant_s1.__dict__["in_cluster_{}".format(i)])
-    cluster_name = cluster_cfgs[i]["name"]
   %>
 
-  logic [9:0] hart_base_id_${i};
-  assign hart_base_id_${i} = HartIdOffset + NrCoresClusterOffset[${i}];
-
   ${cluster_name}_wrapper i_${name}_cluster_${i} (
-    .clk_i (clk_quadrant_cluster[${i}]),
-    .rst_ni (rst_quadrant_n),
-    .meip_i (meip_i[NrCoresClusterOffset[${i}]+:NrCoresCluster[${i}]]),
-    .mtip_i (mtip_i[NrCoresClusterOffset[${i}]+:NrCoresCluster[${i}]]),
-    .msip_i (msip_i[NrCoresClusterOffset[${i}]+:NrCoresCluster[${i}]]),
-    .hart_base_id_i (hart_base_id_${i}),
+    .clk_i               (clk_quadrant_cluster[${i}]),
+    .rst_ni              (rst_quadrant_n),
+    .meip_i              (meip_i[NrCoresClusterOffset[${i}]+:NrCoresCluster[${i}]]),
+    .mtip_i              (mtip_i[NrCoresClusterOffset[${i}]+:NrCoresCluster[${i}]]),
+    .msip_i              (msip_i[NrCoresClusterOffset[${i}]+:NrCoresCluster[${i}]]),
+    .hart_base_id_i      (hart_base_id_${i}),
     .cluster_base_addr_i (cluster_base_addr[${i}]),
-    .boot_addr_i (boot_addr_i), 
-    .narrow_in_req_i (${narrow_cluster_in.req_name()}),
-    .narrow_in_resp_o (${narrow_cluster_in.rsp_name()}),
-    .narrow_out_req_o  (${narrow_cluster_out.req_name()}),
-    .narrow_out_resp_i (${narrow_cluster_out.rsp_name()}),
-    .wide_out_req_o  (${wide_cluster_out.req_name()}),
-    .wide_out_resp_i (${wide_cluster_out.rsp_name()}),
-    .wide_in_req_i (${wide_cluster_in.req_name()}),
-    .wide_in_resp_o (${wide_cluster_in.rsp_name()}),
-    .sram_cfgs_i (sram_cfg_i.cluster)
+    .boot_addr_i         (boot_addr_i), 
+    .narrow_in_req_i     (${narrow_cluster_in.req_name()}),
+    .narrow_in_resp_o    (${narrow_cluster_in.rsp_name()}),
+    .narrow_out_req_o    (${narrow_cluster_out.req_name()}),
+    .narrow_out_resp_i   (${narrow_cluster_out.rsp_name()}),
+    .wide_out_req_o      (${wide_cluster_out.req_name()}),
+    .wide_out_resp_i     (${wide_cluster_out.rsp_name()}),
+    .wide_in_req_i       (${wide_cluster_in.req_name()}),
+    .wide_in_resp_o      (${wide_cluster_in.rsp_name()}),
+    .sram_cfgs_i         (sram_cfg_i.cluster)
   );
+  %endif
 
 % endfor
 endmodule

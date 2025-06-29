@@ -2,14 +2,17 @@
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
+import subprocess
 import sys
 import math
+import importlib.util
 from pathlib import Path
 import hjson
 from jsonref import JsonRef
-sys.path.append(str(Path(__file__).parent / '../../deps/snitch_cluster/util/clustergen'))
+sys.path.append(str(Path(__file__).parent /
+                '../../deps/snitch_cluster/util/clustergen'))
 from cluster import Generator, PMA, PMACfg, SnitchCluster, clog2  # noqa: E402
-import subprocess
+
 
 def read_json_file(file):
     try:
@@ -20,37 +23,42 @@ def read_json_file(file):
         raise SystemExit(sys.exc_info()[1])
     return obj
 
+
 def generate_pma_cfg(occamy_cfg):
     pma_cfg = PMACfg()
     addr_width = occamy_cfg["addr_width"]
     # Make Wide SPM cacheable
     pma_cfg.add_region_length(PMA.CACHED,
-                                occamy_cfg["spm_wide"]["address"],
-                                occamy_cfg["spm_wide"]["length"],
-                                addr_width)
+                              occamy_cfg["spm_wide"]["address"],
+                              occamy_cfg["spm_wide"]["length"],
+                              addr_width)
     # Make the SPM cacheable
     pma_cfg.add_region_length(PMA.CACHED,
-                                occamy_cfg["spm_narrow"]["address"],
-                                occamy_cfg["spm_narrow"]["length"],
-                                addr_width)
+                              occamy_cfg["spm_narrow"]["address"],
+                              occamy_cfg["spm_narrow"]["length"],
+                              addr_width)
     # Make the boot ROM cacheable
     pma_cfg.add_region_length(PMA.CACHED,
-                                occamy_cfg["peripherals"]["rom"]["address"],
-                                occamy_cfg["peripherals"]["rom"]["length"],
-                                addr_width)
-    return pma_cfg  
+                              occamy_cfg["peripherals"]["rom"]["address"],
+                              occamy_cfg["peripherals"]["rom"]["length"],
+                              addr_width)
+    return pma_cfg
+
 
 def check_occamy_cfg(occamy_cfg):
     occamy_root = (Path(__file__).parent / "../../").resolve()
-    snitch_root = (Path(__file__).parent / "../../deps/snitch_cluster").resolve()
+    snitch_root = (Path(__file__).parent /
+                   "../../deps/snitch_cluster").resolve()
     schema = occamy_root / "docs/schema/occamy.schema.json"
     remote_schemas = [occamy_root / "docs/schema/axi_xbar.schema.json",
-                        occamy_root / "docs/schema/axi_tlb.schema.json",
-                        occamy_root / "docs/schema/address_range.schema.json",
-                        occamy_root / "docs/schema/peripherals.schema.json",
-                        snitch_root / "docs/schema/snitch_cluster.schema.json"]
-    generator_obj = Generator(schema,remote_schemas)
+                      occamy_root / "docs/schema/axi_tlb.schema.json",
+                      occamy_root / "docs/schema/address_range.schema.json",
+                      occamy_root / "docs/schema/peripherals.schema.json",
+                      snitch_root / "docs/schema/snitch_cluster.schema.json"]
+    generator_obj = Generator(schema, remote_schemas)
     generator_obj.validate(occamy_cfg)
+
+
 
 
 def get_cluster_generators(occamy_cfg, cluster_cfg_dir):
@@ -59,7 +67,7 @@ def get_cluster_generators(occamy_cfg, cluster_cfg_dir):
     cluster_name_list = occamy_cfg["clusters"]
     for cluster_name in cluster_name_list:
         cluster_cfg_path = cluster_cfg_dir / f"{cluster_name}.hjson"
-        with open(cluster_cfg_path,'r') as file:
+        with open(cluster_cfg_path, 'r') as file:
             cluster_cfg = read_json_file(file)
         # Now cluster_cfg has three field
         # cluster, dram, clint
@@ -67,10 +75,53 @@ def get_cluster_generators(occamy_cfg, cluster_cfg_dir):
         cluster_cfg = cluster_cfg["cluster"]
         # Add some field
         cluster_processing(cluster_cfg, occamy_cfg)
-        cluster_obj = SnitchCluster(cluster_cfg ,pma_cfg)
+        cluster_obj = SnitchCluster(cluster_cfg, pma_cfg)
         cluster_add_mem(cluster_obj, occamy_cfg)
         cluster_generators.append(cluster_obj)
     return cluster_generators
+
+
+def check_and_fix_occamy_xbar_id_width(occamy_cfg, cluster_generators):
+    # We take the cluster axi parameters from the first cluster
+    cluster_cfg = cluster_generators[0].cfg
+    # This is from line 78 of snitch_cluster/hw/snitch_cluster/src/snitch_cluster_wrapper.sv.tpl
+    # localparam int unsigned NrMasters = 3;
+    cluster_narrow_num_masters = 3
+    # This is from line 81 of snitch_cluster/hw/snitch_cluster/src/snitch_cluster_wrapper.sv.tpl
+    # localparam int unsigned NrDmaMasters = 3 + ${cfg['nr_hives']};
+    cluster_wide_num_masters = 3 + cluster_cfg["nr_hives"]
+
+    # cluster id/width
+    cluster_narrow_in_id_width = cluster_cfg["id_width_in"]
+    cluster_narrow_out_id_width = cluster_narrow_in_id_width + \
+        clog2(cluster_narrow_num_masters)
+    cluster_narrow_user_width = cluster_cfg["user_width"]
+    cluster_wide_in_id_width = cluster_cfg["dma_id_width_in"]
+    cluster_wide_out_id_width = cluster_wide_in_id_width + \
+        clog2(cluster_wide_num_masters)
+    cluster_wide_user_width = cluster_cfg["dma_user_width"]
+
+    # quadrant id/width
+    # Derive the quadrant_narrow_xbar_id from the cluster cfg
+    occamy_cfg["s1_quadrant"]["narrow_xbar_slv_id_width"] = cluster_narrow_out_id_width
+    # Derive the quadrant_narrow_xbar_user from the cluster cfg
+    occamy_cfg["s1_quadrant"]["narrow_xbar_slv_user_width"] = cluster_narrow_user_width
+    # Derive the quadrant_wide_xbar_id from the cluster cfg
+    occamy_cfg["s1_quadrant"]["wide_xbar_slv_id_width"] = cluster_wide_out_id_width
+    # Derive the quadrant_wide_xbar_user from the cluster cfg
+    occamy_cfg["s1_quadrant"]["wide_xbar_slv_user_width"] = cluster_wide_user_width
+    # Compute the quad xbar out id
+    num_clusters = len(occamy_cfg["clusters"])
+    quad_narrow_xbar_out_id = occamy_cfg["s1_quadrant"]["narrow_xbar_slv_id_width"] + clog2(num_clusters+1)
+    quad_wide_xbar_out_id = occamy_cfg["s1_quadrant"]["wide_xbar_slv_id_width"] + clog2(num_clusters+1)
+
+    # soc id/width
+    # occamy_cfg["narrow_xbar_slv_id_width"] = quad_narrow_xbar_out_id
+    occamy_cfg["narrow_xbar_slv_user_width"] = occamy_cfg["s1_quadrant"]["narrow_xbar_slv_user_width"]
+    # occamy_cfg["wide_xbar_slv_id_width"] = quad_wide_xbar_out_id + (
+    #         1 if occamy_cfg["s1_quadrant"].get("ro_cache_cfg") else 0)
+    occamy_cfg["wide_xbar_slv_user_width"] = occamy_cfg["s1_quadrant"]["wide_xbar_slv_user_width"]
+
 
 def get_cluster_cfg_list(occamy_cfg, cluster_cfg_dir):
     cluster_name_list = occamy_cfg["clusters"]
@@ -79,31 +130,93 @@ def get_cluster_cfg_list(occamy_cfg, cluster_cfg_dir):
         get_cluster_cfg_list.append(cluster_cfg_dir / f"{cluster_name}.hjson")
     return get_cluster_cfg_list
 
+
 def generate_snitch(cluster_cfg_dir, snitch_path):
     cluster_cfg_dir = set(cluster_cfg_dir)
     for cfg in cluster_cfg_dir:
         try:
-            subprocess.check_call(f"make -C {snitch_path}/target/snitch_cluster CFG_OVERRIDE={cfg} DISABLE_HEADER_GEN=true rtl-gen", shell=True)
+            subprocess.check_call(
+                f"make -C {snitch_path}/target/snitch_cluster CFG_OVERRIDE={cfg} DISABLE_HEADER_GEN=true rtl-gen", shell=True)
         except subprocess.CalledProcessError as e:
             print("Error! SNAX gen fails. Check the log.")
             raise
 
-def generate_wrappers(cluster_generators,out_dir):
+
+def generate_wrappers(cluster_generators, out_dir):
     for cluster_generator in cluster_generators:
         cluster_name = cluster_generator.cfg["name"]
         with open(out_dir / f"{cluster_name}_wrapper.sv", "w") as f:
             f.write(cluster_generator.render_wrapper())
 
-def generate_memories(cluster_generators,out_dir):
+
+def generate_memories(cluster_generators, out_dir):
     for cluster_generator in cluster_generators:
         cluster_name = cluster_generator.cfg["name"]
         with open(out_dir / f"{cluster_name}_memories.json", "w") as f:
             f.write(cluster_generator.memory_cfg())
 
+def generate_floonoc(floonoc_cfg, out_dir):
+    """
+    Generate the Floonoc sv from the cfg
+    :param floonoc_cfg: The floonoc cfg (generated from the template)
+    :param out_dir: The output directory
+    """
+    python_exec = sys.executable
+    try:
+        # Step0: Using bender to get the floonoc project dir
+        result = subprocess.run(
+            ["bender", "path", "floo_noc"],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        path = result.stdout.strip()
+        if not path:
+            raise RuntimeError("bender returns empty dir!")
+        floo_path = Path(path)
+        if not floo_path.exists():
+            raise FileNotFoundError(f"bender returns non-exist path: {path}")
+        # Step1: Using pip to install the floogen
+        spec = importlib.util.find_spec("floogen")
+        if spec is None:
+            print("Floogen is not installed!")
+            install_cmd = [python_exec, "-m", "pip", "install", "."]
+            print(f"Installing floogen: {' '.join(install_cmd)}")
+            result = subprocess.run(
+                install_cmd,
+                cwd=floo_path,
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            print("Install Success!")
+            print(result.stdout)
+        else:
+            print("Floogen has installed!")
+            print("Generating SV...")
+        # Step2: Using the floogen to generate the sv
+        cmd = [python_exec, "-m", "floogen.cli"]
+        cmd += ["-c", floonoc_cfg, "-o", out_dir]
+        cmd += ["--no-format"]
+        subprocess.run(cmd, check=True)
+        print("Floogen is done.")
+    except subprocess.CalledProcessError as e:
+        print(f"Install Failed! Erro Code: {e.returncode}")
+        print("Stdout:")
+        print(e.stdout)
+        print("Stderror:")
+        print(e.stderr)
+        raise
+    except Exception as e:
+        print(f"Execution Failed: {str(e)}")
+        raise
+
 
 def cluster_processing(cluster_cfg, occamy_cfg):
     # in snith_cluster_wrapper.sv.tpl
-    #% if not cfg['tie_ports']:
+    # % if not cfg['tie_ports']:
     #   //-----------------------------
     #   // Cluster base addressing
     #   //-----------------------------
@@ -126,7 +239,6 @@ def cluster_processing(cluster_cfg, occamy_cfg):
     cluster_cfg["enable_debug"] = False
     # Set the vm_support to false, since do not need snitch (core-internal) virtual memory support
     cluster_cfg["vm_support"] = False
-
 
 
 def cluster_add_mem(cluster_obj, occamy_cfg):
@@ -191,7 +303,8 @@ def cluster_add_mem(cluster_obj, occamy_cfg):
                         byte_enable=True,
                         speed_optimized=True,
                         density_optimized=False)
-    
+
+
 def am_connect_soc_lite_periph_xbar(am, am_soc_axi_lite_periph_xbar, occamy_cfg):
     ########################
     # Periph AXI Lite XBar #
@@ -205,11 +318,11 @@ def am_connect_soc_lite_periph_xbar(am, am_soc_axi_lite_periph_xbar, occamy_cfg)
     for p in range(nr_axi_lite_peripherals):
         if "address" in occamy_cfg["peripherals"]["axi_lite_peripherals"][p]:
             am_axi_lite_peripherals.append(
-            am.new_leaf(
-                occamy_cfg["peripherals"]["axi_lite_peripherals"][p]["name"],
-                occamy_cfg["peripherals"]["axi_lite_peripherals"][p]["length"],
-                occamy_cfg["peripherals"]["axi_lite_peripherals"][p]["address"]
-            ).attach_to(am_soc_axi_lite_periph_xbar)
+                am.new_leaf(
+                    occamy_cfg["peripherals"]["axi_lite_peripherals"][p]["name"],
+                    occamy_cfg["peripherals"]["axi_lite_peripherals"][p]["length"],
+                    occamy_cfg["peripherals"]["axi_lite_peripherals"][p]["address"]
+                ).attach_to(am_soc_axi_lite_periph_xbar)
             )
 
     return am_axi_lite_peripherals
@@ -291,7 +404,8 @@ def am_connect_soc_wide_xbar_quad(am, am_soc_narrow_xbar, am_wide_xbar_quadrant_
         clusters_base_offset.append(
             cluster_generators[i].cfg["cluster_base_offset"])
         clusters_tcdm_size.append(
-            cluster_generators[i].cfg["tcdm"]["size"] * 1024)  # config is in KiB
+            # config is in KiB
+            cluster_generators[i].cfg["tcdm"]["size"] * 1024)
         clusters_periph_size.append(
             cluster_generators[i].cfg["cluster_periph_size"] * 1024)
         clusters_zero_mem_size.append(
@@ -311,7 +425,7 @@ def am_connect_soc_wide_xbar_quad(am, am_soc_narrow_xbar, am_wide_xbar_quadrant_
             bases_cluster = list()
             bases_cluster.append(cluster_i_start_addr +
                                  sum(clusters_base_offset[0:j+1]) + 0)
-            
+
             # TCDM is accessible from both narrow and wide xbar
             am_clusters.append(
                 am.new_leaf(
@@ -360,7 +474,8 @@ def am_connect_soc_wide_xbar_quad(am, am_soc_narrow_xbar, am_wide_xbar_quadrant_
             am_clusters.append(
                 am.new_leaf(
                     "quadrant_{}_cluster_{}_space_after_zero_mem".format(i, j),
-                    clusters_base_offset[j+1] - clusters_tcdm_size[j+1] - clusters_periph_size[j+1] - clusters_zero_mem_size[j+1],
+                    clusters_base_offset[j+1] - clusters_tcdm_size[j+1] -
+                    clusters_periph_size[j+1] - clusters_zero_mem_size[j+1],
                     *bases_cluster
                 ).attach_to(
                     am_wide_xbar_quadrant_s1[i]
@@ -378,6 +493,7 @@ def am_connect_soc_wide_xbar_quad(am, am_soc_narrow_xbar, am_wide_xbar_quadrant_
             am_soc_narrow_xbar
         )
     return am_clusters
+
 
 def get_dts(occamy_cfg, am_clint, am_axi_lite_peripherals, am_axi_lite_narrow_peripherals):
     dts = device_tree.DeviceTree()
@@ -499,6 +615,70 @@ def get_quadrant_kwargs(occamy_cfg, cluster_generators, soc_wide_xbar, soc_narro
         "narrow_xbar_quadrant_s1": narrow_xbar_quadrant_s1
     }
     return quadrant_kwargs
+
+
+def get_quadrant_noc_kwargs(occamy_cfg, cluster_generators):
+
+    # noc parameters
+    noc_name = occamy_cfg["s1_quadrant"]["noc_cfg"]["noc_name"]
+    routing_algo = occamy_cfg["s1_quadrant"]["noc_cfg"]["routing_algo"]
+    noc_array = occamy_cfg["s1_quadrant"]["noc_cfg"]["noc_array"]
+
+    # Check if the noc array size matches with the num of clusters
+    num_clusters = len(occamy_cfg["clusters"])
+    if num_clusters != noc_array[0]*noc_array[1]:
+        raise Exception(
+            "The noc array size must match with the num of clusters!")
+    # Add one col of the noc_array (since we need the default port)
+    x_num = noc_array[0]
+    y_num = noc_array[1]
+    x_num += 1
+    new_noc_array = [x_num, y_num]
+
+    # We take the cluster axi parameters from the first cluster
+    cluster_cfg = cluster_generators[0].cfg
+    # This is from line 78 of snitch_cluster/hw/snitch_cluster/src/snitch_cluster_wrapper.sv.tpl
+    # localparam int unsigned NrMasters = 3;
+    cluster_narrow_num_masters = 3
+    # This is from line 81 of snitch_cluster/hw/snitch_cluster/src/snitch_cluster_wrapper.sv.tpl
+    # localparam int unsigned NrDmaMasters = 3 + ${cfg['nr_hives']};
+    cluster_wide_num_masters = 3 + cluster_cfg["nr_hives"]
+    # Narrow link
+    narrow_data_width = cluster_cfg["data_width"]
+    narrow_addr_width = cluster_cfg["addr_width"]
+    narrow_in_id_width = cluster_cfg["id_width_in"]
+    narrow_out_id_width = narrow_in_id_width + \
+        clog2(cluster_narrow_num_masters)
+    narrow_user_width = cluster_cfg["user_width"]
+    # wide link
+    wide_data_width = cluster_cfg["dma_data_width"]
+    wide_addr_width = cluster_cfg["addr_width"]
+    wide_in_id_width = cluster_cfg["dma_id_width_in"]
+    wide_out_id_width = wide_in_id_width + \
+        clog2(cluster_wide_num_masters)
+    wide_user_width = cluster_cfg["dma_user_width"]
+    # cluster
+    cluster_base_addr = cluster_cfg["cluster_base_addr"]
+    cluster_size = cluster_cfg["cluster_base_offset"]
+
+    quadrant_noc_kwargs = {
+        "noc_name": noc_name,
+        "noc_array": new_noc_array,
+        "routing_algo": routing_algo,
+        "narrow_data_width": narrow_data_width,
+        "narrow_addr_width": narrow_addr_width,
+        "narrow_in_id_width": narrow_in_id_width,
+        "narrow_out_id_width": narrow_out_id_width,
+        "narrow_user_width": narrow_user_width,
+        "wide_data_width": wide_data_width,
+        "wide_addr_width": wide_addr_width,
+        "wide_in_id_width": wide_in_id_width,
+        "wide_out_id_width": wide_out_id_width,
+        "wide_user_width": wide_user_width,
+        "cluster_base_addr": cluster_base_addr,
+        "cluster_size": cluster_size
+    }
+    return quadrant_noc_kwargs
 
 
 def get_xilinx_kwargs(occamy_cfg, soc_wide_xbar, soc_axi_lite_narrow_periph_xbar, name):
@@ -665,15 +845,17 @@ def get_bootdata_kwargs(occamy_cfg, cluster_generators, name):
     }
     return bootdata_kwargs
 
+
 def get_testharness_kwargs(soc_wide_xbar, soc_axi_lite_narrow_periph_xbar, chip_id, solder, name):
     testharness_kwargs = {
         "name": name,
         "solder": solder,
-        "chip_id": chip_id, 
+        "chip_id": chip_id,
         "soc_wide_xbar": soc_wide_xbar,
         "soc_axi_lite_narrow_periph_xbar": soc_axi_lite_narrow_periph_xbar
     }
     return testharness_kwargs
+
 
 def get_multichip_testharness_kwargs(occamy_cfg, soc2router_bus, router2soc_bus, name):
     testharness_kwargs = {
@@ -684,6 +866,7 @@ def get_multichip_testharness_kwargs(occamy_cfg, soc2router_bus, router2soc_bus,
         "mem_size": occamy_cfg["spm_wide"]["length"]
     }
     return testharness_kwargs
+
 
 def get_chip_kwargs(soc_wide_xbar, soc_axi_lite_narrow_periph_xbar, soc2router_bus, router2soc_bus, occamy_cfg, cluster_generators, util, name):
     core_per_cluster_list = [cluster_generator.cfg["nr_cores"]

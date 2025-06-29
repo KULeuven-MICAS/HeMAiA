@@ -45,7 +45,8 @@ def write_template(tpl_path, outdir, fname=None, **kwargs):
         else:
             print(f'Could not find file {tpl_path}')
             raise FileNotFoundError
-
+    else:
+        print("No template file provided, skipping template generation.")
 
 def read_json_file(file):
     try:
@@ -86,6 +87,9 @@ def main():
     parser.add_argument("--quadrant-s1-ctrl",
                         metavar="QUADRANT_S1_CTL",
                         help="Name of S1 quadrant controller template file (output)")
+    parser.add_argument("--quadrant-s1-noc",
+                        metavar="QUADRANT_S1_NOC",
+                        help="Name of S1 quadrant NoC template file (output)")
     parser.add_argument("--xilinx-sv",
                         metavar="XILINX_SV",
                         help="Name of the Xilinx wrapper file (output).")
@@ -166,6 +170,9 @@ def main():
 
     cluster_cfg_dir = occamy_root / "deps/snitch_cluster/target/snitch_cluster/cfg"
     cluster_generators = occamy.get_cluster_generators(occamy_cfg, cluster_cfg_dir)
+
+    # Check and fix the xbar id/width
+    occamy.check_and_fix_occamy_xbar_id_width(occamy_cfg, cluster_generators)
     # Each cluster will be generated seperately
     # The generated file's name is specified in the ["name"] field of each cluster's cfg file
     # e.g
@@ -322,8 +329,8 @@ def main():
         48,
         512,
         # This is the cleanest solution minimizing ID width conversions
-        occamy_cfg["quadrant_inter_xbar_slv_id_width_no_rocache"] + (
-            1 if occamy_cfg["s1_quadrant"].get("ro_cache_cfg") else 0),
+        iw=occamy_cfg["wide_xbar_slv_id_width"],
+        uw=occamy_cfg["wide_xbar_slv_user_width"],
         chipidw=occamy_cfg["hemaia_multichip"]["chip_id_width"],
         name="soc_wide_xbar",
         clk="clk_i",
@@ -360,8 +367,8 @@ def main():
     soc_narrow_xbar = solder.AxiXbar(
         48,
         64,
-        occamy_cfg["narrow_xbar_slv_id_width"],
-        occamy_cfg["narrow_xbar_user_width"],
+        iw=occamy_cfg["narrow_xbar_slv_id_width"],
+        uw=occamy_cfg["narrow_xbar_slv_user_width"],
         chipidw=occamy_cfg["hemaia_multichip"]["chip_id_width"],
         name="soc_narrow_xbar",
         clk="clk_i",
@@ -451,7 +458,8 @@ def main():
     wide_xbar_quadrant_s1 = solder.AxiXbar(
         48,
         512,
-        occamy_cfg["s1_quadrant"]["wide_xbar_slv_id_width"],
+        iw=occamy_cfg["s1_quadrant"]["wide_xbar_slv_id_width"],
+        uw=occamy_cfg["s1_quadrant"]["wide_xbar_slv_user_width"],
         chipidw=occamy_cfg["hemaia_multichip"]["chip_id_width"],
         name="wide_xbar_quadrant_s1",
         clk="clk_quadrant_uncore",
@@ -467,8 +475,8 @@ def main():
     narrow_xbar_quadrant_s1 = solder.AxiXbar(
         48,
         64,
-        occamy_cfg["s1_quadrant"]["narrow_xbar_slv_id_width"],
-        occamy_cfg["s1_quadrant"]["narrow_xbar_user_width"],
+        iw=occamy_cfg["s1_quadrant"]["narrow_xbar_slv_id_width"],
+        uw=occamy_cfg["s1_quadrant"]["narrow_xbar_slv_user_width"],
         chipidw=occamy_cfg["hemaia_multichip"]["chip_id_width"],
         name="narrow_xbar_quadrant_s1",
         clk="clk_quadrant_uncore",
@@ -565,6 +573,13 @@ def main():
     # S1 Quadrant #
     ###############
     if args.quadrant_s1:
+        if occamy_cfg["s1_quadrant"].get("noc_cfg", None):
+            quadrant_s1_noc_kwargs = occamy.get_quadrant_noc_kwargs(occamy_cfg, cluster_generators)
+            write_template(args.quadrant_s1_noc,
+                        outdir,
+                        fname="{}_quad_noc.yml".format(args.name),
+                        **quadrant_s1_noc_kwargs)
+            occamy.generate_floonoc(f"{outdir}/{args.name}_quad_noc.yml", outdir)
         quadrant_kwargs = occamy.get_quadrant_kwargs(occamy_cfg, cluster_generators, soc_wide_xbar,
                                               soc_narrow_xbar, wide_xbar_quadrant_s1, narrow_xbar_quadrant_s1, args.name)
         if nr_s1_quadrants > 0:
@@ -581,7 +596,6 @@ def main():
                     print(outdir, args.name)
                     with open("{}/{}_quadrant_s1.sv".format(outdir, args.name), 'w') as f:
                         f.write("// no quadrants in this design")
-
     ##################
     # Xilinx Wrapper #
     ##################
