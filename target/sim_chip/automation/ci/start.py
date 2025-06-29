@@ -33,7 +33,7 @@ def process_configuration(folder_name, sw_name):
     shutil.copytree(src_sw_name, dest_sw_dir)
 
     try:
-        subprocess.run([dest_binary_file], cwd=folder_name, check=True)
+        subprocess.run([dest_binary_file], cwd=folder_name, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except subprocess.CalledProcessError as e:
         print(f"Task {sw_name} failed: {e}")
         shutil.rmtree(dest_binary_path)
