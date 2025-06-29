@@ -45,7 +45,8 @@ def write_template(tpl_path, outdir, fname=None, **kwargs):
         else:
             print(f'Could not find file {tpl_path}')
             raise FileNotFoundError
-
+    else:
+        print("No template file provided, skipping template generation.")
 
 def read_json_file(file):
     try:
@@ -572,7 +573,7 @@ def main():
     # S1 Quadrant #
     ###############
     if args.quadrant_s1:
-        if occamy_cfg["s1_quadrant"].get("noc_cfg", None):
+        if occamy_cfg["s1_quadrant"].get("noc_cfg", None).get("en_floonoc", False):
             quadrant_s1_noc_kwargs = occamy.get_quadrant_noc_kwargs(occamy_cfg, cluster_generators)
             write_template(args.quadrant_s1_noc,
                         outdir,

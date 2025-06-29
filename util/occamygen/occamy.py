@@ -199,6 +199,7 @@ def generate_floonoc(floonoc_cfg, out_dir):
         # Step2: Using the floogen to generate the sv
         cmd = [python_exec, "-m", "floogen.cli"]
         cmd += ["-c", floonoc_cfg, "-o", out_dir]
+        cmd += ["--no-format"]
         subprocess.run(cmd, check=True)
         print("Floogen is done.")
     except subprocess.CalledProcessError as e:
@@ -629,7 +630,10 @@ def get_quadrant_noc_kwargs(occamy_cfg, cluster_generators):
         raise Exception(
             "The noc array size must match with the num of clusters!")
     # Add one col of the noc_array (since we need the default port)
-    noc_array[0] += 1
+    x_num = noc_array[0]
+    y_num = noc_array[1]
+    x_num += 1
+    new_noc_array = [x_num, y_num]
 
     # We take the cluster axi parameters from the first cluster
     cluster_cfg = cluster_generators[0].cfg
@@ -659,7 +663,7 @@ def get_quadrant_noc_kwargs(occamy_cfg, cluster_generators):
 
     quadrant_noc_kwargs = {
         "noc_name": noc_name,
-        "noc_array": noc_array,
+        "noc_array": new_noc_array,
         "routing_algo": routing_algo,
         "narrow_data_width": narrow_data_width,
         "narrow_addr_width": narrow_addr_width,

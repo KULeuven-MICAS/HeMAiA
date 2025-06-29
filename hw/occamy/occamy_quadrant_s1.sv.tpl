@@ -102,8 +102,8 @@ module ${name}_quadrant_s1
   floo_${noc_name}_noc_pkg::sam_rule_t [${nr_clusters-1}:0] NoC_SAM;
   % for i in range(nr_clusters):
   <% 
-    x = i // x_num + 1
-    y = i % x_num
+    x = i // y_num + 1
+    y = i % y_num
   %>
   assign NoC_SAM[${i}] = '{idx: '{x: ${x}, y: ${y}, port_id: 0}, start_addr: cluster_base_addr[${i}], end_addr:cluster_base_addr[${i}] + ClusterAddressSpace};
   %endfor
@@ -680,8 +680,8 @@ module ${name}_quadrant_s1
   assign hart_base_id_${i} = HartIdOffset + NrCoresClusterOffset[${i}];
   %if en_floonoc:
   <% 
-    x = i // x_num
-    y = i % x_num
+    x = i // y_num
+    y = i % y_num
   %>
   ${cluster_name}_wrapper i_${name}_cluster_${i} (
     .clk_i               (clk_quadrant_cluster[${i}]),

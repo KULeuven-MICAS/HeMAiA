@@ -184,7 +184,9 @@ debug-quadrant-ctrl-gen:
 	$(ROOT)/util/occamygen/occamy_soc_gen.py --cfg $(CFG) --outdir $(TARGET_SRC_DIR) --quadrant-s1-ctrl $(SOURCE_OCCAMY_DIR)/occamy_quadrant_s1_ctrl.sv.tpl
 
 debug-quadrant-gen:
-	$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_SRC_DIR) --quadrant-s1      $(SOURCE_OCCAMY_DIR)/occamy_quadrant_s1.sv.tpl
+	$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_SRC_DIR) \
+	--quadrant-s1      $(SOURCE_OCCAMY_DIR)/occamy_quadrant_s1.sv.tpl \
+	--quadrant-s1-noc  $(SOURCE_OCCAMY_DIR)/quad_noc/quad_noc.yml.tpl
 ############
 # QUADCTRL #
 ############
