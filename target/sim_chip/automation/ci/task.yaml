@@ -1,2 +1,4 @@
 runs:
   - elf: offload-snax-test-integration
+  - elf: hemaia_clk_rst_configurator
+  - elf: offload-snax-xdma-multicast

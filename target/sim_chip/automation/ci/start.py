@@ -32,8 +32,15 @@ def process_configuration(folder_name, sw_name):
     dest_sw_dir = os.path.join(dest_binary_path, "app_chip_0_0")
     shutil.copytree(src_sw_name, dest_sw_dir)
 
-    subprocess.run([dest_binary_file], cwd=folder_name, check=True)
-    shutil.rmtree(dest_binary_path)
+    try:
+        subprocess.run([dest_binary_file], cwd=folder_name, check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"Task {sw_name} failed: {e}")
+        shutil.rmtree(dest_binary_path)
+        raise e
+    finally:
+        print(f"Task {sw_name} passed. ")
+        shutil.rmtree(dest_binary_path)
 
 # Use ThreadPoolExecutor to run configurations concurrently
 

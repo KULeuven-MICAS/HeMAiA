@@ -43,10 +43,10 @@ jobs:
           submodules: "recursive"
       - name: Compile everything
         run: |
-          make sw CFG_OVERRIDE=target/rtl/cfg/hemaia_ci.hjson -j
-          make bootrom CFG_OVERRIDE=target/rtl/cfg/hemaia_ci.hjson -j
+          make sw CFG_OVERRIDE=target/rtl/cfg/hemaia_ci.hjson -j$(nproc)
+          make bootrom CFG_OVERRIDE=target/rtl/cfg/hemaia_ci.hjson -j$(nproc)
           make rtl CFG_OVERRIDE=target/rtl/cfg/hemaia_ci.hjson
-          make hemaia_system_vlt -j2
+          make hemaia_system_vlt -j$(nproc)
           make -C target/sim_chip/apps apps
       - name: Run Tests
         working-directory: target/sim_chip/automation/ci
