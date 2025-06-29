@@ -29,12 +29,12 @@ dependencies:
   cva6:                   { path: hw/vendor/openhwgroup_cva6                                                    }
   opentitan_peripherals:  { path: hw/vendor/pulp_platform_opentitan_peripherals                                 }
   register_interface:     { git:  https://github.com/pulp-platform/register_interface.git,     version: 0.3.8   }
-  snitch_cluster:         { git:  https://github.com/KULeuven-MICAS/snax_cluster.git,          rev:     main         }
+  snitch_cluster:         { git:  https://github.com/KULeuven-MICAS/snax_cluster.git,          rev:     main    }
   tech_cells_generic:     { git:  https://github.com/KULeuven-MICAS/tech_cells_generic.git,   version: 0.2.16   }
-  cluster_icache:         { git:  https://github.com/KULeuven-MICAS/cluster_icache.git,       rev:     main          }
-  hemaia_axi_spi_slave:   { git:  https://github.com/KULeuven-MICAS/hemaia_axi_spi_slave.git,  rev:     main         }
-  hemaia_d2d_link:        { git:  https://github.com/IveanEx/hemaia_d2d_link.git,              rev:     main         }
-  floo_noc:                { git: https://github.com/Konste11ation/FlooNoC,              rev:  fanchen/floonoc-chiplet-adapt}
+  cluster_icache:         { git:  https://github.com/KULeuven-MICAS/cluster_icache.git,        rev:     main    }
+  hemaia_axi_spi_slave:   { git:  https://github.com/KULeuven-MICAS/hemaia_axi_spi_slave.git,  rev:     main    }
+  hemaia_d2d_link:        { git:  https://github.com/IveanEx/hemaia_d2d_link.git,              rev:     main    }
+  floo_noc:               { git: https://github.com/KULeuven-MICAS/FlooNoC,                    rev:     main    }
 
 workspace:
   package_links:
