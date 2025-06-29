@@ -176,6 +176,7 @@ debug-occamy-gen:
 
 debug-soc-gen:
 	$(ROOT)/util/occamygen/occamy_soc_gen.py --cfg $(CFG) --outdir $(TARGET_SRC_DIR) --soc-sv $(SOURCE_OCCAMY_DIR)/occamy_soc.sv.tpl --top-sv           $(SOURCE_OCCAMY_DIR)/occamy_top.sv.tpl 
+	
 debug-testharness-gen:
 	$(ROOT)/util/occamygen/occamy_soc_gen.py --cfg $(CFG) --outdir test --testharness-sv test/testharness.sv.tpl
 
@@ -184,9 +185,6 @@ debug-quadrant-ctrl-gen:
 
 debug-quadrant-gen:
 	$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_SRC_DIR) --quadrant-s1      $(SOURCE_OCCAMY_DIR)/occamy_quadrant_s1.sv.tpl
-
-debug-quadrant-noc-gen:
-	$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_SRC_DIR) --quadrant-s1-noc  $(SOURCE_OCCAMY_DIR)/quad_noc/quad_noc.yml.tpl
 ############
 # QUADCTRL #
 ############

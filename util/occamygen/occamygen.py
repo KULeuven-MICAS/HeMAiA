@@ -572,6 +572,13 @@ def main():
     # S1 Quadrant #
     ###############
     if args.quadrant_s1:
+        if occamy_cfg["s1_quadrant"].get("noc_cfg", None):
+            quadrant_s1_noc_kwargs = occamy.get_quadrant_noc_kwargs(occamy_cfg, cluster_generators)
+            write_template(args.quadrant_s1_noc,
+                        outdir,
+                        fname="{}_quad_noc.yml".format(args.name),
+                        **quadrant_s1_noc_kwargs)
+            occamy.generate_floonoc(f"{outdir}/{args.name}_quad_noc.yml", outdir)
         quadrant_kwargs = occamy.get_quadrant_kwargs(occamy_cfg, cluster_generators, soc_wide_xbar,
                                               soc_narrow_xbar, wide_xbar_quadrant_s1, narrow_xbar_quadrant_s1, args.name)
         if nr_s1_quadrants > 0:
@@ -588,17 +595,6 @@ def main():
                     print(outdir, args.name)
                     with open("{}/{}_quadrant_s1.sv".format(outdir, args.name), 'w') as f:
                         f.write("// no quadrants in this design")
-    ###################
-    # S1 Quadrant NoC #
-    ###################
-    if args.quadrant_s1_noc:
-        quadrant_s1_noc_kwargs = occamy.get_quadrant_noc_kwargs(occamy_cfg, cluster_generators)
-        write_template(args.quadrant_s1_noc,
-                       outdir,
-                       fname="{}_quad_noc.yml".format(args.name),
-                       **quadrant_s1_noc_kwargs)
-        occamy.generate_floonoc(f"{outdir}/{args.name}_quad_noc.yml", outdir)
-
     ##################
     # Xilinx Wrapper #
     ##################

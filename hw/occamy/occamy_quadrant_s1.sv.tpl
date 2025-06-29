@@ -15,10 +15,12 @@
   cuts_wideisolate_with_wideiwc_in = 1
   cuts_wideiwc_with_wideout = 1
   nr_clusters = len(occamy_cfg["clusters"])
-  en_floonoc = occamy_cfg["s1_quadrant"]["noc_cfg"]["en_floonoc"]
-  noc_name = occamy_cfg["s1_quadrant"]["noc_cfg"]["noc_name"]
-  x_num = occamy_cfg["s1_quadrant"]["noc_cfg"]["noc_array"][0]
-  y_num = occamy_cfg["s1_quadrant"]["noc_cfg"]["noc_array"][1]
+  noc_cfg = occamy_cfg["s1_quadrant"].get("noc_cfg",{})
+  noc_name = noc_cfg.get("noc_name", {})
+  en_floonoc = noc_cfg.get("en_floonoc", False)
+  noc_array = noc_cfg.get("noc_array", {})
+  x_num = noc_array[0] if noc_array else 1
+  y_num = noc_array[1] if noc_array else 1
   wide_trans = int(occamy_cfg["s1_quadrant"]["wide_trans"])
   narrow_trans = int(occamy_cfg["s1_quadrant"]["narrow_trans"])
   ro_cache_cfg = occamy_cfg["s1_quadrant"].get("ro_cache_cfg", {})
@@ -668,17 +670,19 @@ module ${name}_quadrant_s1
 
 
 % for i in range(nr_clusters):
-    <% 
-    x = i // x_num
-    y = i % x_num
+  <%
     cluster_name = cluster_cfgs[i]["name"]
-    %>
+  %>
   ///////////////
   // Cluster ${i} //
   ///////////////
   logic [9:0] hart_base_id_${i};
   assign hart_base_id_${i} = HartIdOffset + NrCoresClusterOffset[${i}];
   %if en_floonoc:
+  <% 
+    x = i // x_num
+    y = i % x_num
+  %>
   ${cluster_name}_wrapper i_${name}_cluster_${i} (
     .clk_i               (clk_quadrant_cluster[${i}]),
     .rst_ni              (rst_quadrant_n),
