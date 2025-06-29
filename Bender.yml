@@ -73,11 +73,13 @@ sources:
   - target: snax_minimal_cluster
     files:
       - deps/snitch_cluster/target/snitch_cluster/generated/snax_minimal_cluster_wrapper.sv
+
   # Targets for the occamy NoC
   - target: occamy_noc
     files:
       - target/rtl/src/floo_quad_mesh_xy_noc_pkg.sv
       - target/rtl/src/floo_quad_mesh_xy_noc.sv
+
   # auto-generated soc
   - target: occamy
     files:
@@ -107,6 +109,7 @@ sources:
       - target/rtl/src/occamy_soc.sv
       - target/rtl/src/occamy_top.sv
       - target/rtl/src/occamy_cva6.sv
+
   # HeMAiA bootrom
   - target: all(hemaia, not(simulation_hemaia))
     files:
@@ -143,7 +146,6 @@ sources:
     files:
       - target/rtl/test/uartdpi/uartdpi.sv
       - target/sim_chip/testharness/testharness.sv
-
 
   - target: tsmc_pad
     files:
