@@ -34,6 +34,7 @@ dependencies:
   cluster_icache:         { git:  https://github.com/KULeuven-MICAS/cluster_icache.git,     rev:     main    }
   hemaia_axi_spi_slave:   { git: https://github.com/KULeuven-MICAS/hemaia_axi_spi_slave.git,rev:     main    }
   hemaia_d2d_link:        { git: https://github.com/IveanEx/hemaia_d2d_link.git,            rev:     main    }
+  floo_noc:                { git: https://github.com/Konste11ation/FlooNoC,              rev:  fanchen/floonoc-chiplet-adapt}
 
 workspace:
   package_links:
@@ -97,6 +98,8 @@ sources:
 
       # occamy
       - target/rtl/src/occamy_pkg.sv
+      - target/rtl/src/floo_quad_mesh_xy_noc_pkg.sv
+      - target/rtl/src/floo_quad_mesh_xy_noc.sv
       - target/rtl/src/occamy_quadrant_s1_ctrl.sv
       - target/rtl/src/occamy_quadrant_s1.sv
       - target/rtl/src/occamy_soc.sv

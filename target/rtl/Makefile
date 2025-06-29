@@ -149,6 +149,7 @@ $(MISC_OCCAMYGEN_TARGETS): .misc_occamygen_targets_group
 		--pkg-sv           $(SOURCE_OCCAMY_DIR)/occamy_pkg.sv.tpl \
 		--quadrant-s1      $(SOURCE_OCCAMY_DIR)/occamy_quadrant_s1.sv.tpl \
 		--quadrant-s1-ctrl $(SOURCE_OCCAMY_DIR)/occamy_quadrant_s1_ctrl.sv.tpl \
+		--quadrant-s1-noc  $(SOURCE_OCCAMY_DIR)/quad_noc/quad_noc.yml.tpl \
 		--xilinx-sv        $(SOURCE_OCCAMY_DIR)/occamy_xilinx.sv.tpl \
 		--cva6-sv          $(SOURCE_OCCAMY_DIR)/occamy_cva6.sv.tpl
 # --dts 			   $(TARGET_DTS_DIR)/occamy.dts
@@ -169,6 +170,7 @@ debug-occamy-gen:
 		--pkg-sv           $(SOURCE_OCCAMY_DIR)/occamy_pkg.sv.tpl \
 		--quadrant-s1      $(SOURCE_OCCAMY_DIR)/occamy_quadrant_s1.sv.tpl \
 		--quadrant-s1-ctrl $(SOURCE_OCCAMY_DIR)/occamy_quadrant_s1_ctrl.sv.tpl \
+		--quadrant-s1-noc  $(SOURCE_OCCAMY_DIR)/quad_noc/quad_noc.yml.tpl \
 		--xilinx-sv        $(SOURCE_OCCAMY_DIR)/occamy_xilinx.sv.tpl \
 		--cva6-sv          $(SOURCE_OCCAMY_DIR)/occamy_cva6.sv.tpl	
 
@@ -182,6 +184,9 @@ debug-quadrant-ctrl-gen:
 
 debug-quadrant-gen:
 	$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_SRC_DIR) --quadrant-s1      $(SOURCE_OCCAMY_DIR)/occamy_quadrant_s1.sv.tpl
+
+debug-quadrant-noc-gen:
+	$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_SRC_DIR) --quadrant-s1-noc  $(SOURCE_OCCAMY_DIR)/quad_noc/quad_noc.yml.tpl
 ############
 # QUADCTRL #
 ############
