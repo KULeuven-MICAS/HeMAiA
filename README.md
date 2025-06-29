@@ -57,19 +57,40 @@ bin/occamy_chip.vlt
 ```bash
 make hemaia_system_vsim_preparation
 ```
+- Copy the software to be preloaded into SRAM:
+```bash
+# @ target/sim_chip/apps
+python3 copy_m_n_times.py -i [ProgramName]
+```
 - Exit the docker image as there is no Questasim in the container. Compile the Questasim binary:
 ```bash
 make hemaia_system_vsim
+```
+- Execute the compiled binary:
+```bash
+# @ target/sim_chip
+bin/occamy_chip.vsim[.gui]
+```
+
+### Perform RTL simulation using VCS:
+- Prepare the compilation script for VCS:
+```bash
+make hemaia_system_vcs_preparation
 ```
 - Copy the software to be preloaded into SRAM:
 ```bash
 # @ target/sim_chip/apps
 python3 copy_m_n_times.py -i [ProgramName]
 ```
-- Execute the compiled binary:
+- Exit the docker image as there is no VCS in the container. Compile the VCS binary:
 ```bash
-# @ target/sim_chip/bin
-bin/occamy_chip.vsim[.gui]
+make hemaia_system_vcs
+```
+
+- Execute the compiled binary, with optional parameter to determine number of simulation threads:
+```bash
+# @ target/sim_chip
+bin/occamy_chip.vcs [-gui] [-num_threads:8]
 ```
 
 ### Perform FPGA Prototype:
