@@ -64,7 +64,7 @@
       // Non-right-side chip peripherals
       periph_axi_lite_narrow_hbm_cfg: 3,
       periph_axi_lite_narrow_pcie_cfg: 3,
-      periph_axi_lite_narrow_chip_ctrl_cfg: 3,
+      periph_axi_lite_narrow_hemaia_clk_rst_controller_cfg: 3,
       periph_axi_lite_narrow_hbi_narrow_cfg: 3,
       periph_axi_lite_narrow_hbi_wide_cfg: 3,
       periph_axi_lite_narrow_bootrom_cfg: 3,
@@ -173,13 +173,18 @@
                 length: 4096, // 4 kiB 0x1000
             },
             {
-                name: "chip_ctrl",
+                name: "hemaia_clk_rst_controller",
                 address: 33574912, // 0x0200_5000
                 length: 4096, // 4 kiB 0x1000
             },
             {
                 name: "timer",
                 address: 33579008, // 0x0200_6000
+                length: 4096, // 4 kiB 0x1000
+            },
+            {
+                name: "hemaia_d2d_link",
+                address: 33583104, // 0x0200_7000
                 length: 4096, // 4 kiB 0x1000
             },
             {
