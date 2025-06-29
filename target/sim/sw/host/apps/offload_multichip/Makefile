@@ -16,7 +16,6 @@ DEBUG ?= OFF # ON to turn on debugging symbols
 
 APP  = offload_multichip
 SRCS = src/offload_multichip.c
-# DEVICE_APPS += $(shell cd ../../../device/apps/;find -mindepth 2 -maxdepth 2 -type d | sed 's|^\./||')
 
 # Compiler toolchain
 CVA6_GCC_ROOT = /tools/riscv/bin

@@ -58,7 +58,7 @@ CFG = $(TARGET_RTL)/cfg/lru.hjson
 $(CFG): FORCE
 	@# If the LRU config file doesn't exist, we use the default config.
 	@if [ ! -e $@ ] ; then \
-		DEFAULT_CFG="$(TARGET_RTL)/cfg/hemaia.hjson"; \
+		DEFAULT_CFG="$(TARGET_RTL)/cfg/hemaia_ci.hjson"; \
 		echo "Using default config file: $$DEFAULT_CFG"; \
 		cp $$DEFAULT_CFG $@; \
 	fi

@@ -16,7 +16,6 @@ DEBUG ?= OFF # ON to turn on debugging symbols
 
 APP  = offload
 SRCS = src/offload.c
-# DEVICE_APPS += $(shell cd ../../../device/apps/;find -mindepth 2 -maxdepth 2 -type d | sed 's|^\./||')
 
 # Compiler toolchain
 CVA6_GCC_ROOT = /tools/riscv/bin
@@ -94,7 +93,7 @@ FINAL_OUTPUTS   = $(ELFS) $(DUMPS) $(DWARFS)
 #########
 # Rules #
 #########
-
+.PHONY: $(DEVICE_DIR)/app_list.tmp
 $(DEVICE_DIR)/app_list.tmp:
 	echo "$(DEVICE_APPS)" > $(DEVICE_DIR)/app_list.tmp
 
