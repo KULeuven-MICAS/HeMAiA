@@ -33,7 +33,7 @@ jobs:
   #################################################
 
   hemaia-verilator:
-    name: Simulation with Verilator
+    name: Simulation HeMAiA XBar with Verilator
     runs-on: ubuntu-22.04
     container:
       image: ghcr.io/kuleuven-micas/snax@sha256:4ff37cad4e85d6a898cda3232ee04a1210833eb4618d1f1fd183201c03c4c57c
@@ -46,6 +46,27 @@ jobs:
           make sw CFG_OVERRIDE=target/rtl/cfg/hemaia_ci.hjson -j$(nproc)
           make bootrom CFG_OVERRIDE=target/rtl/cfg/hemaia_ci.hjson -j$(nproc)
           make rtl CFG_OVERRIDE=target/rtl/cfg/hemaia_ci.hjson
+          make hemaia_system_vlt -j$(nproc)
+          make -C target/sim_chip/apps apps
+      - name: Run Tests
+        working-directory: target/sim_chip/automation/ci
+        run: |
+          python3 start.py
+
+  hemaia-noc-verilator:
+    name: Simulation HeMAiA NoC with Verilator
+    runs-on: ubuntu-22.04
+    container:
+      image: ghcr.io/kuleuven-micas/snax@sha256:4ff37cad4e85d6a898cda3232ee04a1210833eb4618d1f1fd183201c03c4c57c
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: "recursive"
+      - name: Compile everything
+        run: |
+          make sw CFG_OVERRIDE=target/rtl/cfg/hemaia_noc.hjson -j$(nproc)
+          make bootrom CFG_OVERRIDE=target/rtl/cfg/hemaia_noc.hjson -j$(nproc)
+          make rtl CFG_OVERRIDE=target/rtl/cfg/hemaia_noc.hjson
           make hemaia_system_vlt -j$(nproc)
           make -C target/sim_chip/apps apps
       - name: Run Tests
