@@ -5,8 +5,6 @@ name: ${noc_name}
 description: "NW mesh configuration with ${routing_algo} routing for FlooGen"
 network_type: "narrow-wide"
 
-chip_id_width: 8
-
 routing:
   route_algo: ${routing_algo}
   use_id_table: true
