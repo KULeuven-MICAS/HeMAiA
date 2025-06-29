@@ -36,10 +36,10 @@ def process_configuration(folder_name, sw_name):
         subprocess.run([dest_binary_file], cwd=folder_name, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except subprocess.CalledProcessError as e:
         print(f"Task {sw_name} failed: {e}")
-        shutil.rmtree(dest_binary_path)
         raise e
+    else:
+        print(f"Task {sw_name} passed.")
     finally:
-        print(f"Task {sw_name} passed. ")
         shutil.rmtree(dest_binary_path)
 
 # Use ThreadPoolExecutor to run configurations concurrently

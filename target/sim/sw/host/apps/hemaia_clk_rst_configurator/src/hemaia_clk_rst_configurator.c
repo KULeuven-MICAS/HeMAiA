@@ -10,7 +10,6 @@
 int main() {
     init_uart((uintptr_t)get_current_chip_baseaddress(), 32, 1);
     asm volatile("fence" : : : "memory");
-    return -1;
 
     // Clock Gating the D2D links: Clock Channel 2 / 3 / 4 /5
     disable_clk_domain(2);
