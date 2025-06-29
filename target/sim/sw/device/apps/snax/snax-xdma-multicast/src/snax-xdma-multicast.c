@@ -8,7 +8,7 @@
 #include "snax-xdma-lib.h"
 #include "snrt.h"
 
-#define BROADCAST_NUM 16
+#define BROADCAST_NUM 3
 
 int main() {
     // Set err value for checking

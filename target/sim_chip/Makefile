@@ -86,13 +86,13 @@ VCS_FLAGS += -O4
 # Multi-threading compilation
 VCS_FLAGS += -j16
 # Multi-core
-VCS_FLAGS += -fgp# =multisocket
+VCS_FLAGS += -fgp
 # Debug Options
 VCS_FLAGS += -assert disable_cover
 # Waveform Visibility
-# VCS_FLAGS += -kdb
-# VCS_FLAGS += +vcs+fsdbon
-# VCS_FLAGS += -debug_access+all
+VCS_FLAGS += -kdb
+VCS_FLAGS += +vcs+fsdbon
+VCS_FLAGS += -debug_access+all
 
 # Verilated and compiled Occamy system
 VLT_AR     = ${VLT_BUILDDIR}/Vtestharness__ALL.a
