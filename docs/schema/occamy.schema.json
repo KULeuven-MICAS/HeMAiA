@@ -30,9 +30,24 @@
         },
         "narrow_xbar_slv_id_width": {
             "type": "integer",
-            "description": "ID width of narrow crossbar slave ports.",
+            "description": "ID width of narrow soc crossbar slave ports.",
             "default": 4
         },
+        "narrow_xbar_slv_user_width": {
+            "type": "integer",
+            "description": "User width of narrow soc crossbar slave ports.",
+            "default": 3
+        },
+        "wide_xbar_slv_id_width": {
+            "type": "integer",
+            "description": "ID width of wide soc crossbar slave ports.",
+            "default": 4
+        },        
+        "wide_xbar_slv_user_width": {
+            "type": "integer",
+            "description": "User width of wide soc crossbar slave ports.",
+            "default": 1
+        },        
         "nr_s1_quadrant": {
             "title": "Number of S1 Quadrants",
             "type": "integer",
@@ -313,6 +328,36 @@
                     "default": 4,
                     "description": "Number of clusters in an S1 quadrant."
                 },
+                "noc_cfg": {
+                    "type": "object",
+                    "description": "Mesh NoC configuration.",
+                    "properties": {
+                        "en_floonoc": {
+                            "type": "boolean",
+                            "description": "Enable the FlooNoC",
+                            "default": false
+                        },
+                        "routing_algo": {
+                            "type": "string",
+                            "description": "The Routing Algorithm",
+                            "enum": ["XY", "SRC", "ID"],
+                            "default": "XY"
+                        },
+                        "noc_name": {
+                            "type": "string",
+                            "description": "The Generated NoC RTL TOP Name"
+                        },
+                        "noc_array": {
+                            "type": "array",
+                            "description": "The noc array dimension, first is x_num, second is y_num",
+                            "items": {
+                                "type": "integer"
+                            },
+                            "minItems": 2,
+                            "maxItems": 2
+                        }
+                    }
+                },                
                 "ro_cache_cfg": {
                     "type": "object",
                     "description": "Constant cache configuration.",
@@ -349,6 +394,11 @@
                     "description": "ID width of wide quadrant crossbar slave ports.",
                     "default": 3
                 },
+                "wide_xbar_slv_user_width": {
+                    "type": "integer",
+                    "description": "User width of wide quadrant crossbar slave ports.",
+                    "default": 1
+                },
                 "narrow_xbar": {
                     "$ref": "http://pulp-platform.org/occamy/axi_xbar.schema.json"
                 },
@@ -356,6 +406,11 @@
                     "type": "integer",
                     "description": "ID width of narrow quadrant crossbar slave ports.",
                     "default": 4
+                },
+                "narrow_xbar_slv_user_width": {
+                    "type": "integer",
+                    "description": "User width of narrow quadrant crossbar slave ports.",
+                    "default": 2
                 },
                 "cfg_base_addr": {
                     "type": "integer",
