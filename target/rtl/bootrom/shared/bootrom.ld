@@ -12,10 +12,10 @@ MEMORY
 SECTIONS
 {
   .text : { *(.text._start) *(.text) } > bootrom
-	.rodata ALIGN(8): { *(.rodata) *(.rodata*) } > bootrom
-	.srodata ALIGN(8): { *(.srodata) *(.srodata*) } > bootrom
-	.data ALIGN(8): { *(.data) *(.sdata)  } > spm
-	.bss ALIGN(8): { *(.bss) } > spm
+	.rodata : { *(.rodata) *(.rodata*) } > bootrom
+	.srodata : { *(.srodata) *(.srodata*) } > bootrom
+	.data : { *(.data) *(.sdata)  } > spm
+	.bss : { *(.bss) } > spm
 
 	/* .misc : { *(*) } > bootrom */
   /* /DISCARD/ : { *(.riscv.attributes) [reduce binary size] *(.comment) [reduce binary size] *(.debug*) [reduce binary size] *(.data) [no initialized memory] *(.sdata) [no initialized memory] } */
