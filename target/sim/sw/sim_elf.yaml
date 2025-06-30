@@ -5,6 +5,7 @@
 runs:
   - elf: host/apps/offload/build/offload-snax-test-integration.elf
   - elf: host/apps/offload/build/offload-snax-gemmx-matmul.elf
+  - elf: host/apps/offload/build/offload-snax-gemmx-matmul-tiling.elf
   - elf: host/apps/offload/build/offload-snax-gemmx-conv.elf
   - elf: host/apps/offload/build/offload-snax-dimc-conv.elf
   - elf: host/apps/offload/build/offload-snax-hypercorex-test-csr.elf
