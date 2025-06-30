@@ -40,18 +40,17 @@ int main() {
                 for (int k = 0; k < K2; k++) {
                     // Transfer data from L3 to L1
                     // Using DMA only
-                    cur_A = A + m * K2 * M * K * meshRow * tileSize +
-                            k * M * K * meshRow * tileSize;
-                    cur_B = B + n * K2 * N * K * tileSize * meshCol +
-                            k * N * K * tileSize * meshCol;
-                    cur_C = C + m * N2 * M * N * meshRow * meshCol +
-                            n * M * N * meshRow * meshCol;
+
                     if (snrt_is_dm_core()) {
+                        cur_A = A + m * K2 * M * K * meshRow * tileSize +
+                                k * M * K * meshRow * tileSize;
+                        cur_B = B + n * K2 * N * K * tileSize * meshCol +
+                                k * N * K * tileSize * meshCol;
                         snrt_dma_start_1d(
-                            local_a, A,
+                            local_a, cur_A,
                             M * K * meshRow * tileSize * sizeof(int8_t));
                         snrt_dma_start_1d(
-                            local_b, B,
+                            local_b, cur_B,
                             N * K * tileSize * meshCol * sizeof(int8_t));
 
                         snrt_dma_wait_all();
@@ -62,6 +61,8 @@ int main() {
 
                     if (k == 0) {
                         if (snrt_is_dm_core()) {
+                            cur_C = C + m * N2 * M * N * meshRow * meshCol +
+                                    n * M * N * meshRow * meshCol;
                             snrt_dma_start_1d(
                                 local_d32, cur_C,
                                 M * N * meshRow * meshCol * sizeof(int32_t));
@@ -125,28 +126,42 @@ int main() {
 
                         // Poll until Streamer and GEMM accelerator finish
                         wait_gemmx_and_streamer();
-
-                        // check the result of the implicit im2col convolution
-                        if (!bypassSIMD) {
-                            err += check_gemmx_result_D8(
-                                local_d8,
-                                D8_golden + m * N2 * M * N * meshRow * meshCol +
-                                    n * M * N * meshRow * meshCol,
-                                Batch, M, N, false);
-                        } else {
-                            err += check_gemmx_result_D32(
-                                local_d32,
-                                D32_golden +
-                                    m * N2 * M * N * meshRow * meshCol +
-                                    n * M * N * meshRow * meshCol,
-                                Batch, M, N, false);
-                        }
-
-                        printf(
-                            "SNAX GEMM Matmul: %s, Error: %d . bypassSIMD = %d "
-                            ".\r\n",
-                            err ? "FAIL" : "PASS", err, bypassSIMD);
                     };
+                snrt_cluster_hw_barrier();
+                }
+
+                snrt_cluster_hw_barrier();
+
+                // check the result of the implicit im2col convolution
+                if (snrt_cluster_core_idx() == 0) {
+                    if (!bypassSIMD) {
+                        err += check_gemmx_result_D8(
+                            local_d8,
+                            D8_golden + m * N2 * M * N * meshRow * meshCol +
+                                n * M * N * meshRow * meshCol,
+                            Batch, M, N, false);
+                    } else {
+                        err += check_gemmx_result_D32(
+                            local_d32,
+                            D32_golden + m * N2 * M * N * meshRow * meshCol +
+                                n * M * N * meshRow * meshCol,
+                            Batch, M, N, false);
+                    }
+
+                    printf(
+                        "SNAX GEMM Matmul: %s, Error: %d . bypassSIMD = %d, m= "
+                        "%d, n= %d \n",
+                        err ? "FAIL" : "PASS", err, bypassSIMD, m, n);
+                }
+
+                snrt_cluster_hw_barrier();
+
+                if (snrt_is_dm_core()) {
+                    snrt_dma_start_1d(
+                        D32_generated + m * N2 * M * N * meshRow * meshCol +
+                            n * M * N * meshRow * meshCol,
+                        local_d32, M * N * meshRow * meshCol * sizeof(int32_t));
+                    snrt_dma_wait_all();
                 }
             }
         }

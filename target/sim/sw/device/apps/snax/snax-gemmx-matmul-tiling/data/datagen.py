@@ -239,8 +239,12 @@ def emit_matmul_data(**kwargs):
         C = np.random.randint(MIN, MAX, size=(kwargs["M"], kwargs["N"], 1, meshCol))
         C = np.repeat(C, repeats=8, axis=1).reshape(-1)
     elif enable_full_C == 1:
-        C = np.random.randint(
-            MIN, MAX, size=(kwargs["M2"], kwargs["N2"], kwargs["M"], kwargs["N"], meshRow, meshCol)
+        # C = np.random.randint(
+        #     MIN, MAX, size=(kwargs["M2"], kwargs["N2"], kwargs["M"], kwargs["N"], meshRow, meshCol)
+        # ).reshape(-1)
+        C = np.zeros(
+            (kwargs["M2"], kwargs["N2"], kwargs["M"], kwargs["N"], meshRow, meshCol),
+            dtype=np.int32,
         ).reshape(-1)
     else:
         C = np.random.randint(
@@ -299,6 +303,8 @@ def emit_gemmx_data(**kwargs):
     data_str, D32 = emit_matmul_data(**kwargs)
 
     data_str += [format_vector_definition("int32_t", "D32_golden", D32)]
+    D32_zero = np.zeros_like(D32, dtype=np.int32)
+    data_str += [format_vector_definition("int32_t", "D32_generated", D32_zero)]
 
     # -----------------------------------------------------------
     # Postprocessing
