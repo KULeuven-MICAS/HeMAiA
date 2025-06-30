@@ -10,12 +10,12 @@
 #######################
 
 DEBUG        ?= OFF # ON to turn on debugging symbols
-CFG_OVERRIDE ?=     # Override default config file
+CFG          ?=     # Override default config file
 
 .DEFAULT_GOAL := help
-.PHONY: all clean
-all: rtl sw addrmap
-clean: clean-rtl clean-sw clean-addrmap clean-vlt clean-vsim clean-vcs clean-logs clean-work clean-bootrom
+.PHONY: all apps clean clean-testharness clean-vsim clean-vlt clean-vcs clean-apps clean-logs clean-bin
+all: apps addrmap
+clean: clean-testharness clean-vsim clean-vlt clean-vcs clean-apps clean-logs clean-bin
 
 ############
 # Makefrag #
@@ -28,69 +28,30 @@ SIM_MKFILE_DIR  := $(dir $(MKFILE_PATH))
 ROOT        := $(SIM_MKFILE_DIR)../..
 SNITCH_ROOT := $(shell bender path snitch_cluster)
 
-TARGET = occamy_top
-
-CVA6_TXT_TRACE       = $(LOGS_DIR)/trace_hart_00000.txt
-CVA6_PERF_DUMP       = $(LOGS_DIR)/hart_00000_perf.json
-CVA6_ANNOTATED_TRACE = $(LOGS_DIR)/trace_hart_00000.s
-TXT_TRACES          += $(CVA6_TXT_TRACE)
-PERF_DUMPS          += $(CVA6_PERF_DUMP)
-ANNOTATED_TRACES    += $(CVA6_ANNOTATED_TRACE)
+TARGET = occamy_chip
 
 include $(SIM_MKFILE_DIR)/sim.mk
-include $(ROOT)/target/rtl/Makefile
-
-############
-# Programs #
-############
-
-REGGEN     ?= $(shell $(BENDER) path register_interface)/vendor/lowrisc_opentitan/util/regtool.py
-OCCAMYGEN  ?= $(ROOT)/util/occamygen/occamygen.py
-ADDRMAPGEN ?= $(ROOT)/util/addrmap/addrmapgen.py
-BIN2SV     ?= $(ROOT)/util/bin2sv.py
-
-CLANG_FORMAT ?= $(shell which clang-format-10.0.1)
 
 #########################
 # Files and directories #
 #########################
 
 BIN_DIR              ?= bin
-PLATFORM_HEADERS_DIR ?= sw/shared/platform/generated
-PLATFORM_HEADERS_TEMPLATE_DIR ?= sw/shared/platform/template
-SW_DEVICE_RT_DIR     ?= sw/device/runtime/src
-TARGET_ADDRMAP_DIR   ?= $(abspath addrmap)
-SOURCE_ADDRMAP_DIR   ?= $(ROOT)/util/addrmap
-DOCS_DIR             ?= $(ROOT)/docs
-TARGET_PLIC_DIR      ?= $(TARGET_SRC_DIR)/rv_plic
-TARGET_CLINT_DIR     ?= $(TARGET_SRC_DIR)/clint
-TARGET_SOCCTRL_DIR   ?= $(TARGET_SRC_DIR)/soc_ctrl
-TARGET_HBMCTRL_DIR   ?= $(TARGET_SRC_DIR)/hbm_xbar_ctrl
-TARGET_QUADCTRL_DIR  ?= $(TARGET_SRC_DIR)/quadrant_s1_ctrl
-SOURCE_OCCAMY_DIR    ?= $(ROOT)/hw/occamy
-SOURCE_SOCCTRL_DIR   ?= $(ROOT)/hw/occamy/soc_ctrl
-SOURCE_HBMCTRL_DIR   ?= $(ROOT)/hw/occamy/hbm_xbar_ctrl
-SOURCE_QUADCTRL_DIR  ?= $(ROOT)/hw/occamy/quadrant_s1_ctrl
-SNITCH_TEST_DIR      ?= $(SNITCH_ROOT)/target/common/test
-TARGET_TEST_DIR      ?= $(ROOT)/target/rtl/test
-TARGET_DTS_DIR		 ?= $(ROOT)/target/fpga/bootrom
-CVA6_TRACE            = trace_hart_0.log
-
-# If the configuration file is overriden on the command-line (through
-# CFG_OVERRIDE) and this file differs from the least recently used
-# (LRU) config, all targets depending on the configuration file have
-# to be rebuilt. This file is used to express this condition as a
-# prerequisite for other rules.
-# CFG = ../rtl/cfg/lru.hjson
+UART_DPI_DIR         ?= $(SIM_MKFILE_DIR)testharness/uartdpi
 
 #####################
 # Simulator options #
 #####################
 
 VSIM_BENDER += $(shell cat ../rtl/src/bender_targets.tmp)
-VLT_BENDER += $(shell cat ../rtl/src/bender_targets.tmp)
+VLT_BENDER  += $(shell cat ../rtl/src/bender_targets.tmp)
+VCS_BENDER  += $(shell cat ../rtl/src/bender_targets.tmp)
 
 VLT_BENDER  += -t SYNTHESIS_SNAX_DEV_ONLY
+
+VSIM_BENDER += -t simulation_hemaia -t hemaia
+VLT_BENDER  += -t simulation_hemaia -t hemaia
+VCS_BENDER  += -t simulation_hemaia -t hemaia
 
 VSIM_FLAGS += -t 1ps
 VSIM_FLAGS += -voptargs=+acc
@@ -99,25 +60,30 @@ VSIM_FLAGS += -do "log -r /*; run -a"
 # TODO: Workaround; revise
 VSIM_FLAGS += -warning 8386
 
-VCS_FLAGS += +nospecify
-VCS_FLAGS += -Mdir=work-vcs
-VCS_FLAGS += -Mlib=work-vcs
-VCS_FLAGS += -full64
-# Multi-core
-VCS_FLAGS += -fgp
-# Debug Options
-VCS_FLAGS += -assert disable_cover
-VCS_FLAGS += -kdb
-VCS_FLAGS += +vcs+fsdbon
-VCS_FLAGS += +lint=TFIPC-L
-VCS_FLAGS += -debug_access+all
-
 VLOG_FLAGS += -svinputport=compat
 VLOG_FLAGS += -override_timescale 1ns/1ps
 VLOG_FLAGS += -suppress 2583
 VLOG_FLAGS += -suppress 13314
 VLOG_FLAGS += ${QUESTA_64BIT}
 VLOG_FLAGS += -timescale 1ns/1ps
+
+VCS_FLAGS += +nospecify
+VCS_FLAGS += -Mdir=work-vcs
+VCS_FLAGS += -Mlib=work-vcs
+VCS_FLAGS += -full64
+VCS_FLAGS += +lint=TFIPC-L
+# Additional Optimizations
+VCS_FLAGS += -O4
+# Multi-threading compilation
+VCS_FLAGS += -j16
+# Multi-core
+VCS_FLAGS += -fgp
+# Debug Options
+VCS_FLAGS += -assert disable_cover
+# Waveform Visibility
+VCS_FLAGS += -kdb
+VCS_FLAGS += +vcs+fsdbon
+VCS_FLAGS += -debug_access+all
 
 # Verilated and compiled Occamy system
 VLT_AR     = ${VLT_BUILDDIR}/Vtestharness__ALL.a
@@ -130,30 +96,13 @@ VLT_FLAGS += --prof-cfuncs # Enable code profiling
 # C testbench #
 ###############
 
-TB_CC_SOURCES  = $(TARGET_TEST_DIR)/bootrom.cc
-TB_CC_SOURCES += $(TARGET_TEST_DIR)/ipc.cc
-TB_CC_SOURCES += $(TARGET_TEST_DIR)/rtl_lib.cc
-TB_CC_SOURCES += $(TARGET_TEST_DIR)/common_lib.cc
-TB_CC_SOURCES += $(TARGET_TEST_DIR)/bootdata.cc
-TB_CC_SOURCES += $(TARGET_TEST_DIR)/uartdpi/uartdpi.c
-
-FESVR = $(SIM_MKFILE_DIR)/work
+TB_CC_SOURCES += $(UART_DPI_DIR)/uartdpi.c
 
 TB_CC_FLAGS  = -std=c++17
-TB_CC_FLAGS +=-I$(SIM_MKFILE_DIR)
-TB_CC_FLAGS +=-I$(SIM_MKFILE_DIR)/test
-TB_CC_FLAGS +=-I$(FESVR)/include
-TB_CC_FLAGS +=-I$(TARGET_TEST_DIR)
-TB_CC_FLAGS +=-I$(TARGET_TEST_DIR)/uartdpi
+TB_CC_FLAGS +=-I$(UART_DPI_DIR)
 
 # Required C sources for the verilator TB that are linked against the verilated model
-VLT_COBJ  = $(VLT_BUILDDIR)/tb/bootrom.o
-VLT_COBJ += $(VLT_BUILDDIR)/tb/ipc.o
-VLT_COBJ += $(VLT_BUILDDIR)/tb/common_lib.o
-VLT_COBJ += $(VLT_BUILDDIR)/tb/verilator_lib.o
-VLT_COBJ += $(VLT_BUILDDIR)/tb/tb_bin.o
 VLT_COBJ += $(VLT_BUILDDIR)/test/uartdpi/uartdpi.o
-VLT_COBJ += $(VLT_BUILDDIR)/test/bootdata.o
 # Sources from verilator root
 VLT_COBJ += $(VLT_BUILDDIR)/vlt/verilated.o
 VLT_COBJ += $(VLT_BUILDDIR)/vlt/verilated_dpi.o
@@ -162,222 +111,60 @@ ifeq ($(VERILATOR_VERSION), 5)
 	VLT_COBJ += $(VLT_BUILDDIR)/vlt/verilated_timing.o
 	VLT_COBJ += $(VLT_BUILDDIR)/vlt/verilated_threads.o
 endif
+# Testharness
+VLT_COBJ += $(VLT_BUILDDIR)/testharness/testharness.o
 
 ############
-# Boot ROM #
+### Apps ###
 ############
+apps: 
+	$(MAKE) -C apps apps
 
-BOOTROM_TARGETS = test/bootrom.elf test/bootrom.dump test/bootrom.bin test/bootdata.cc test/bootrom.sv
-
-
-# Compiler toolchain
-CVA6_GCC_ROOT = /tools/riscv/bin
-CVA6_GCC_CC = $(CVA6_GCC_ROOT)/riscv64-unknown-elf-gcc
-CVA6_GCC_OBJDUMP = $(CVA6_GCC_ROOT)/riscv64-unknown-elf-objdump
-CVA6_GCC_OBJCOPY =$(CVA6_GCC_ROOT)/riscv64-unknown-elf-objcopy
-
-# Compiler flags
-CVA6_GCC_BOOTROM_CFLAGS += -mabi=lp64d 
-CVA6_GCC_BOOTROM_CFLAGS += -march=rv64imafd
-CVA6_GCC_BOOTROM_CFLAGS += -static
-CVA6_GCC_BOOTROM_CFLAGS += -nostartfiles
-
-# Linking sources
-LINKER_SCRIPT = test/bootrom.ld
-CVA6_GCC_BOOTROM_LDFLAGS += -T$(LINKER_SCRIPT)
-.PHONY: bootrom
-
-bootrom: $(BOOTROM_TARGETS)
-
-clean-bootrom:
-	rm -rf $(BOOTROM_TARGETS)
-	
-test/bootdata.cc: $(CFG)
-	@$(OCCAMYGEN) --cfg $(CFG) --bootdata test/bootdata.cc.tpl -o test/
-test/bootrom.elf: test/bootrom.S test/bootrom.ld
-	$(CVA6_GCC_CC) $(CVA6_GCC_BOOTROM_CFLAGS) $(CVA6_GCC_BOOTROM_LDFLAGS) $< -o test/bootrom.elf
-test/bootrom.dump: test/bootrom.elf
-	$(CVA6_GCC_OBJDUMP) -D $< > $@
-test/bootrom.bin: test/bootrom.elf
-	$(CVA6_GCC_OBJCOPY) -O binary $< $@
-
-test/bootrom.sv: test/bootrom.bin
-	$(BIN2SV) "$(SIM_MKFILE_DIR)$<" -m bootrom > $@
-
-
+clean-apps:
+	$(MAKE) -C apps clean
 
 ###############
-# Address Map #
+# Testharness #
 ###############
 
-ADDRMAP_CSV     = $(TARGET_ADDRMAP_DIR)/addrmap.csv
-ADDRMAP_DOT     = $(TARGET_ADDRMAP_DIR)/addrmap.dot
-ADDRMAP_TEX     = $(TARGET_ADDRMAP_DIR)/addrmap.tex
-ADDRMAP_TEX_TPL = $(SOURCE_ADDRMAP_DIR)/addrmap.tex.tpl
-ADDRMAP_PNG     = $(TARGET_ADDRMAP_DIR)/addrmap.png
-ADDRMAP_MD      = $(DOCS_DIR)/rm/2_addrmap.md
-ADDRMAP_PDF     = $(TARGET_ADDRMAP_DIR)/addrmap.pdf
+OCCAMYGEN ?= $(ROOT)/util/occamygen/occamygen.py
 
-ADDRMAP_TARGETS  = $(ADDRMAP_DOT)
-ADDRMAP_TARGETS += $(ADDRMAP_CSV)
-ADDRMAP_TARGETS += $(ADDRMAP_TEX)
-ADDRMAP_TARGETS += $(ADDRMAP_MD)
-ADDRMAP_TARGETS += $(ADDRMAP_PNG)
-ADDRMAP_TARGETS += $(ADDRMAP_PDF)
+testharness/testharness.sv: testharness/testharness.sv.tpl $(CFG)
+	@echo "[OCCAMYGEN] Generate $@"
+	@$(OCCAMYGEN) --cfg $(CFG) --outdir testharness --multichip-testharness-sv $<
 
-.PHONY: addrmap clean-addrmap
-
-# Generate address map in all formats
-addrmap: $(ADDRMAP_TARGETS)
-
-clean-addrmap:
-	rm -rf $(TARGET_ADDRMAP_DIR)
-
-$(TARGET_ADDRMAP_DIR):
-	mkdir $@
-
-ADDRMAP_OCCAMYGEN_TARGETS = $(ADDRMAP_DOT) $(ADDRMAP_CSV)
-$(ADDRMAP_OCCAMYGEN_TARGETS): .addrmap_occamygen_targets_group
-.addrmap_occamygen_targets_group: $(CFG) | $(TARGET_ADDRMAP_DIR)
-	@echo "[OCCAMYGEN] Generate $(ADDRMAP_OCCAMYGEN_TARGETS)"
-	@$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_ADDRMAP_DIR) \
-		--graph  $(ADDRMAP_DOT) \
-		--am-csv $(ADDRMAP_CSV)
-	@touch $@
-
-$(ADDRMAP_PNG): $(ADDRMAP_DOT) | $(TARGET_ADDRMAP_DIR)
-	dot -Tpng $(ADDRMAP_DOT) > $(ADDRMAP_PNG)
-
-$(ADDRMAP_TEX): $(ADDRMAP_CSV) $(ADDRMAP_TEX_TPL) | $(TARGET_ADDRMAP_DIR)
-	@$(ADDRMAPGEN) --file $(ADDRMAP_CSV) --outdir $(dir $@) --tex $(ADDRMAP_TEX_TPL)
-
-$(ADDRMAP_MD): $(ADDRMAP_CSV) | $(TARGET_ADDRMAP_DIR)
-	@$(ADDRMAPGEN) --file $(ADDRMAP_CSV) --outdir $(dir $@) --md $(notdir $@)
-
-$(ADDRMAP_PDF): $(ADDRMAP_TEX) | $(TARGET_ADDRMAP_DIR)
-	cd $(TARGET_ADDRMAP_DIR) && latexmk -quiet -pdf $(notdir $(ADDRMAP_TEX))
-
-############
-# Software #
-############
-
-PLATFORM_HEADERS  = $(PLATFORM_HEADERS_DIR)/occamy_cfg.h
-PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/occamy_memory_map.h
-PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/occamy.h
-PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/occamy_base_addr.h
-PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/clint.h
-PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/occamy_soc_ctrl.h
-PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/snitch_cluster_peripheral.h
-PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/snitch_quad_peripheral.h
-PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/hemaia_d2d_link_peripheral.h
-PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/hemaia_clk_rst_controller_peripheral.h
-
-PLATFORM_HEADERS += $(SW_DEVICE_RT_DIR)/occamy_defs.h
-
-.PHONY: sw clean-headers clean-sw
-
-sw: $(PLATFORM_HEADERS)
-	$(MAKE) -C sw/ all
-
-clean-headers:
-	rm -f $(PLATFORM_HEADERS)
-
-clean-sw: clean-headers
-	$(MAKE) -C sw/ clean
-
-# REGGEN headers
-$(PLATFORM_HEADERS_DIR)/clint.h: $(TARGET_SRC_DIR)/clint/clint.hjson
-	$(call reggen_generate_header,$@,$<)
-$(PLATFORM_HEADERS_DIR)/occamy_soc_ctrl.h: $(TARGET_SOCCTRL_DIR)/occamy_soc_reg.hjson
-	$(call reggen_generate_header,$@,$<)
-$(PLATFORM_HEADERS_DIR)/snitch_cluster_peripheral.h: $(SNITCH_ROOT)/hw/snitch_cluster/src/snitch_cluster_peripheral/snitch_cluster_peripheral_reg.hjson
-	$(call reggen_generate_header,$@,$<)
-$(PLATFORM_HEADERS_DIR)/snitch_quad_peripheral.h: $(TARGET_QUADCTRL_DIR)/occamy_quadrant_s1_reg.hjson
-	$(call reggen_generate_header,$@,$<)
-$(PLATFORM_HEADERS_DIR)/snitch_hbm_xbar_peripheral.h: $(TARGET_HBMCTRL_DIR)/occamy_hbm_xbar_reg.hjson
-	$(call reggen_generate_header,$@,$<)
-$(PLATFORM_HEADERS_DIR)/hemaia_d2d_link_peripheral.h: $(shell bender path hemaia_d2d_link)/src/ctrl/hemaia_d2d_link_reg.hjson
-	$(call reggen_generate_header,$@,$<)
-
-$(PLATFORM_HEADERS_DIR)/hemaia_clk_rst_controller_peripheral.h: $(ROOT)/hw/hemaia/hemaia_clk_rst_controller/regs/hemaia_clk_rst_controller_reg.hjson
-	$(call reggen_generate_header,$@,$<)
-
-
-# OCCAMYGEN headers
-$(PLATFORM_HEADERS_DIR)/occamy_cfg.h: $(PLATFORM_HEADERS_TEMPLATE_DIR)/occamy_cfg.h.tpl $(CFG)
-	@echo "[OCCAMYGEN] Generating $@"
-	@$(OCCAMYGEN) -c $(CFG) --outdir $(PLATFORM_HEADERS_DIR) --cheader $<
-$(PLATFORM_HEADERS_DIR)/occamy_memory_map.h: $(PLATFORM_HEADERS_TEMPLATE_DIR)/occamy_memory_map.h.tpl $(CFG)
-	@echo "[OCCAMYGEN] Generating $@"
-	@$(OCCAMYGEN) -c $(CFG) --outdir $(PLATFORM_HEADERS_DIR) --cheader $<
-$(PLATFORM_HEADERS_DIR)/occamy.h: $(PLATFORM_HEADERS_TEMPLATE_DIR)/occamy.h.tpl $(CFG)
-	@echo "[OCCAMYGEN] Generating $@"
-	@$(OCCAMYGEN) -c $(CFG) --outdir $(PLATFORM_HEADERS_DIR) --cheader $<
-
-$(PLATFORM_HEADERS_DIR)/occamy_base_addr.h: $(CFG)
-	@echo "[OCCAMYGEN] Generating $@"
-	@$(OCCAMYGEN) -c $(CFG) --outdir $(PLATFORM_HEADERS_DIR) -D $@
-
-
-$(SW_DEVICE_RT_DIR)/occamy_defs.h: $(SW_DEVICE_RT_DIR)/occamy_defs.h.tpl $(CFG)
-	@echo "[OCCAMYGEN] Generating $@"
-	@$(OCCAMYGEN) -c $(CFG) --outdir $(SW_DEVICE_RT_DIR) --cheader $<
-##########
-# Traces #
-##########
-
-CVA6_BINARY ?= $(shell cat $(LOGS_DIR)/.rtlbinary)
-
-CVA6_TXT_TRACE       = $(LOGS_DIR)/trace_hart_00000.txt
-CVA6_PERF_TRACE      = $(LOGS_DIR)/hart_00000_perf.json
-CVA6_ANNOTATED_TRACE = $(LOGS_DIR)/trace_hart_00000.s
-CVA6_DIFF_TRACE      = $(LOGS_DIR)/trace_hart_00000.diff
-
-TXT_TRACES       += $(CVA6_TXT_TRACE)
-PERF_TRACES      += $(CVA6_PERF_TRACE)
-ANNOTATED_TRACES += $(CVA6_ANNOTATED_TRACE)
-DIFF_TRACES      += $(CVA6_DIFF_TRACE)
-
-traces: $(CVA6_TXT_TRACE) $(CVA6_PERF_TRACE)
-annotate: $(CVA6_ANNOTATED_TRACE)
-
-# CVA6 traces require different handling
-$(CVA6_PERF_TRACE): $(CVA6_TXT_TRACE) $(EVENTS_PY)
-	$(PYTHON) $(EVENTS_PY) -f cva6 $< -o $@
-$(CVA6_ANNOTATED_TRACE): $(CVA6_TXT_TRACE) $(ANNOTATE_PY)
-	$(PYTHON) $(ANNOTATE_PY) $(ANNOTATE_FLAGS) -o $@ $(CVA6_BINARY) $<
-$(CVA6_DIFF_TRACE): $(CVA6_TXT_TRACE) $(ANNOTATE_PY)
-	$(PYTHON) $(ANNOTATE_PY) $(ANNOTATE_FLAGS) -o $@ $(CVA6_BINARY) $< -d
-
+clean-testharness:
+	rm -rf testharness/testharness.sv
 #############
 # Verilator #
 #############
 
-${VLT_AR}: ${VLT_SOURCES} ${TB_SRCS}
+${VLT_AR}: testharness/testharness.sv
 	$(call VERILATE,testharness)
 
 # Quick sanity check, not really meant for simulation.
 verilate: ${VLT_AR}
 
 # Build targets for verilator TB
-$(VLT_BUILDDIR)/tb/%.o: ${MKFILE_DIR}/test/%.cc $(VLT_AR) ${VLT_BUILDDIR}/lib/libfesvr.a
-	mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) $(VLT_CFLAGS) -c $< -o $@
 $(VLT_BUILDDIR)/vlt/%.o: $(VLT_ROOT)/include/%.cpp
 	mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $(VLT_CFLAGS) -c $< -o $@
-$(VLT_BUILDDIR)/test/%.o: test/%.cc ${VLT_BUILDDIR}/lib/libfesvr.a
+$(VLT_BUILDDIR)/test/%.o: test/%.cc
 	mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $(VLT_CFLAGS) -c $< -o $@
 
-$(VLT_BUILDDIR)/test/uartdpi/uartdpi.o: test/uartdpi/uartdpi.c
+$(VLT_BUILDDIR)/testharness/%.o: testharness/%.cc $(VLT_AR)
+	mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) $(VLT_CFLAGS) -c $< -o $@
+
+$(VLT_BUILDDIR)/test/uartdpi/uartdpi.o: $(UART_DPI_DIR)/uartdpi.c
 	mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(VLT_CFLAGS) -c $< -o $@
 
 # Link verilated archive wich $(VLT_COBJ)
-$(BIN_DIR)/$(TARGET).vlt: $(VLT_AR) $(VLT_COBJ) ${VLT_BUILDDIR}/lib/libfesvr.a
+$(BIN_DIR)/$(TARGET).vlt: $(VLT_AR) $(VLT_COBJ)
 	mkdir -p $(dir $@)
-	$(CXX) $(LDFLAGS) -std=c++17 -L ${VLT_BUILDDIR}/lib -o $@ $(VLT_COBJ) $(VLT_AR) -lfesvr -lpthread -lutil
+	$(CXX) $(LDFLAGS) -std=c++17 -L ${VLT_BUILDDIR}/lib -o $@ $(VLT_COBJ) $(VLT_AR) -lpthread -lutil
 
 # Clean all build directories and temporary files for Verilator simulation
 .PHONY: clean-vlt
@@ -392,7 +179,7 @@ clean-vlt: clean-work
 $(VSIM_BUILDDIR):
 	mkdir -p $@
 
-$(VSIM_BUILDDIR)/compile.vsim.tcl: $(BENDER_LOCK) | $(VSIM_BUILDDIR)
+$(VSIM_BUILDDIR)/compile.vsim.tcl: $(BENDER_LOCK) | $(VSIM_BUILDDIR) testharness/testharness.sv
 	$(BENDER) script vsim $(VSIM_BENDER) --vlog-arg="$(VLOG_FLAGS) -work $(dir $@) " > $@
 	echo '$(VLOG) -work $(dir $@) $(TB_CC_SOURCES) -vv -ccflags "$(TB_CC_FLAGS)"' >> $@
 	echo 'return 0' >> $@
@@ -400,54 +187,54 @@ $(VSIM_BUILDDIR)/compile.vsim.tcl: $(BENDER_LOCK) | $(VSIM_BUILDDIR)
 $(BIN_DIR):
 	mkdir -p $@
 
-$(BIN_DIR)/occamy_top.vsim: $(VSIM_BUILDDIR)/compile.vsim.tcl |$(BIN_DIR)
+.PHONY: $(BIN_DIR)/occamy_chip.vsim clean-vsim
+
+$(BIN_DIR)/occamy_chip.vsim: $(VSIM_BUILDDIR)/compile.vsim.tcl |$(BIN_DIR)
 	touch $@
 	vsim -c -do "source $<; quit" | tee $(dir $<)vlog.log
 	@! grep -P "Errors: [1-9]*," $(dir $<)vlog.log
-	vopt $(VOPT_FLAGS) -work $(VSIM_BUILDDIR) tb_bin -o tb_bin_opt | tee $(dir $<)vopt.log
+	vopt $(VOPT_FLAGS) -work $(VSIM_BUILDDIR) testharness -o testharness_opt | tee $(dir $<)vopt.log
 	@! grep -P "Errors: [1-9]*," $(dir $<)vopt.log
 	@echo "#!/bin/bash" > $@
-	@echo 'binary=$$(realpath $$1)' >> $@
-	@echo 'echo $$binary > .rtlbinary' >> $@
-	@echo 'vsim +permissive $(VSIM_FLAGS) $$3 -work $(SIM_MKFILE_DIR)/$(VSIM_BUILDDIR) -c \
-				-ldflags "-Wl,-rpath,$(FESVR)/lib -L$(FESVR)/lib -lfesvr -lutil" \
-				tb_bin_opt +permissive-off ++$$binary ++$$2' >> $@
-	@# Rename CVA6 trace to align with Snitch trace names
-	@echo "mv ${CVA6_TRACE} $(LOGS_DIR)/trace_hart_00000.txt" >> $@
-	@# Move all other traces to logs folder as well
+	@echo 'vsim +permissive $(VSIM_FLAGS) $$2 -work $(SIM_MKFILE_DIR)/$(VSIM_BUILDDIR) -c \
+				-ldflags "-Wl,-rpath,-L -lutil" \
+				testharness_opt +permissive-off ++$$1' >> $@
+	@# Move all traces to logs folder
 	@echo "mv *trace*.log $(LOGS_DIR)/" >> $@
 	@chmod +x $@
 	@echo "#!/bin/bash" > $@.gui
-	@echo 'binary=$$(realpath $$1)' >> $@.gui
-	@echo 'echo $$binary > .rtlbinary' >> $@.gui
 	@echo 'vsim +permissive $(VSIM_FLAGS) -work $(SIM_MKFILE_DIR)/$(VSIM_BUILDDIR) \
-				-ldflags "-Wl,-rpath,$(FESVR)/lib -L$(FESVR)/lib -lfesvr -lutil" \
-				tb_bin_opt +permissive-off ++$$binary ++$$2' >> $@.gui
-	@echo "mv ${CVA6_TRACE} $(LOGS_DIR)/trace_hart_00000.txt" >> $@.gui
+				-ldflags "-Wl,-rpath,-L -lutil" \
+				testharness_opt +permissive-off ++$$1' >> $@.gui
+	@# Move all traces to logs folder
 	@echo "mv *trace*.log $(LOGS_DIR)/" >> $@.gui
 	@chmod +x $@.gui
 
 clean-vsim: clean-work
-	rm -rf $(BIN_DIR)/$(TARGET).vsim $(BIN_DIR)/$(TARGET).vsim.gui $(VSIM_BUILDDIR) vsim.wlf
-# Add dependency on bootrom
-$(BIN_DIR)/$(TARGET).vsim: test/bootrom.bin
+	rm -rf $(BIN_DIR)/$(TARGET).vsim $(BIN_DIR)/$(TARGET).vsim.gui $(VSIM_BUILDDIR) $(BIN_DIR)/vsim.wlf $(BIN_DIR)/transcript
+
 
 #######
 # VCS #
 #######
 
-# Build compilation script and compile all sources for VCS simulation
-$(BIN_DIR)/$(TARGET).vcs: work-vcs/compile.sh work/lib/libfesvr.a ${TB_CC_SOURCES} test/bootrom.bin
-	mkdir -p bin
-	vcs $(VCS_FLAGS) -o $(BIN_DIR)/$(TARGET).vcs tb_bin -cc $(CC) -cpp $(CXX) \
-		$(TB_CC_SOURCES) -CFLAGS "$(TB_CC_FLAGS)" -LDFLAGS "-L${FESVR}/lib" -lfesvr -lutil
+$(VCS_BUILDDIR):
+	mkdir -p $@
 
-# Clean all build directories and temporary files for VCS simulation
+$(VCS_BUILDDIR)/compile.sh: $(BENDER_LOCK) | $(VCS_BUILDDIR) testharness/testharness.sv
+	mkdir -p $(VCS_BUILDDIR)
+	${BENDER} script vcs ${VCS_BENDER} --vlog-arg="${VLOGAN_FLAGS}" --vcom-arg="${VHDLAN_FLAGS}" > $@
+	chmod +x $@
+
+$(BIN_DIR)/occamy_chip.vcs: $(VCS_BUILDDIR)/compile.sh
+	bash work-vcs/compile.sh
+	mkdir -p $(BIN_DIR)
+	$(VCS) $(VCS_FLAGS) -o $(BIN_DIR)/occamy_chip.vcs -cc $(CC) -cpp $(CXX) \
+		-override_timescale=1ns/1ps -full64 -ignore initializer_driver_checks testharness $(TB_CC_SOURCES) $(RTL_CC_SOURCES) \
+		-CFLAGS "$(TB_CC_FLAGS)" -lutil +error+100
 .PHONY: clean-vcs
 clean-vcs: clean-work
-	rm -rf AN.DB
-	rm -rf work-vcs
-	rm -f $(BIN_DIR)/$(TARGET).vcs
+	rm -rf $(VCS_BUILDDIR) AN.DB work.lib++ vc_hdrs.h $(BIN_DIR)/$(TARGET).vcs $(BIN_DIR)/inter.fsdb $(BIN_DIR)/$(TARGET).vcs.daidir $(BIN_DIR)/verdi_config_file $(BIN_DIR)/verdiLog $(BIN_DIR)/novas* $(BIN_DIR)/ucli.key
 
 ########
 # Util #
@@ -462,36 +249,5 @@ clean-work:
 clean-logs:
 	rm -rf $(LOGS_DIR)/
 
-# Help command
-Blue=\033[1;34m
-Black=\033[0m
-help:
-	@echo -e "${Blue}Makefile Targets${Black} for the ${Blue}Snitch Cluster${Black}"
-	@echo -e "Use 'make <target>' where <target> is one of:"
-	@echo -e ""
-	@echo -e "${Blue}help           ${Black}Show an overview of all Makefile targets."
-	@echo -e ""
-	@echo -e "${Blue}bin/$(TARGET).vcs  ${Black}Build compilation script and compile all sources for VCS simulation. @IIS: vcs-2020.12 make bin/$(TARGET).vcs"
-	@echo -e "${Blue}bin/$(TARGET).vlt  ${Black}Build compilation script and compile all sources for Verilator simulation."
-	@echo -e "${Blue}bin/$(TARGET).vsim ${Black}Build compilation script and compile all sources for Questasim simulation. @IIS: QUESTA_HOME=/usr/pack/modelsim-10.7b-kgf/questasim/ CC=$(QUESTA_HOME)/gcc-5.3.0-linux_x86_64/bin/gcc CXX=$(QUESTA_HOME)/gcc-5.3.0-linux_x86_64/bin/g++ LD=$(QUESTA_HOME)/gcc-5.3.0-linux_x86_64/bin/ld make bin/$(TARGET).vsim"
-	@echo -e ""
-	@echo -e "${Blue}all            ${Black}Update all SW and HW related sources (by, e.g., re-generating the RegGen registers and their c-header files)."
-	@echo -e "${Blue}fpga           ${Black}Build a small Occamy version (CVA6 + 1xcluster) for the VCU128 FPGA board."
-	@echo -e ""
-	@echo -e "${Blue}addrmap        ${Black}Generate the addressmap in the following formats: MD, PNG, TEX, PDF."
-	@echo -e ""
-	@echo -e "${Blue}clean          ${Black}Clean everything except traces in logs directory."
-	@echo -e "${Blue}clean-bender   ${Black}Clean all Bender generated files."
-	@echo -e "${Blue}clean-sw       ${Black}Clean all software."
-	@echo -e "${Blue}clean-addrmap  ${Black}Delete all addrmap outputs."
-	@echo -e "${Blue}clean-logs     ${Black}Delete all traces in logs directory."
-	@echo -e "${Blue}clean-vcs      ${Black}Clean all build directories and temporary files for VCS simulation."
-	@echo -e "${Blue}clean-vlt      ${Black}Clean all build directories and temporary files for Verilator simulation."
-	@echo -e "${Blue}clean-vsim     ${Black}Clean all build directories and temporary files for Questasim simulation."
-	@echo -e ""
-	@echo -e "${Blue}sw             ${Black}Build all software."
-	@echo -e "${Blue}rtl            ${Black}Build all auto-generated RTL sources."
-	@echo -e ""
-	@echo -e "Additional useful targets from the included Makefrag:"
-	@echo -e "${Blue}traces         ${Black}Generate the better readable traces in .logs/trace_hart_<hart_id>.txt with spike-dasm."
-	@echo -e "${Blue}annotate       ${Black}Annotate the better readable traces in .logs/trace_hart_<hart_id>.s with the source code related with the retired instructions."
+clean-bin:
+	rm -rf $(BIN_DIR)

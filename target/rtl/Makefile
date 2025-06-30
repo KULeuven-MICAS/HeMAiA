@@ -32,8 +32,6 @@ TARGET_CLINT_DIR     ?= $(TARGET_SRC_DIR)/clint
 
 TARGET_RTL			 ?= $(ROOT)/target/rtl
 
-# TARGET_DTS_DIR       ?= $(TARGET_RTL)/test
-
 ############
 # Programs #
 ############
@@ -47,61 +45,26 @@ PLICGEN     = $(SOURCE_PLIC_DIR)/util/reg_rv_plic.py
 #######################
 # Config prerequisite #
 #######################
-
-# If the configuration file is overriden on the command-line (through
-# CFG_OVERRIDE) and this file differs from the least recently used
-# (LRU) config, all targets depending on the configuration file have
-# to be rebuilt. This file is used to express this condition as a
-# prerequisite for other rules.
 CFG = $(TARGET_RTL)/cfg/lru.hjson
-
-$(CFG): FORCE
-	@# If the LRU config file doesn't exist, we use the default config.
-	@if [ ! -e $@ ] ; then \
-		DEFAULT_CFG="$(TARGET_RTL)/cfg/hemaia_ci.hjson"; \
-		echo "Using default config file: $$DEFAULT_CFG"; \
-		cp $$DEFAULT_CFG $@; \
-	fi
-	@# If a config file is provided on the command-line 
-	@# then we override the LRU file with it
-	@if [ $(CFG_OVERRIDE) ] ; then \
-		echo "Overriding config file with: $(CFG_OVERRIDE)"; \
-		cp $(CFG_OVERRIDE) $@; \
-	fi
-FORCE:
 
 .PHONY: all clean
 all: rtl
-clean: clean-rtl
+clean: clean-rtl-src
 
 ###############
 # RTL sources #
 ###############
 
-.PHONY: rtl clint plic socctrl quadctrl soc tb
-.PHONY: clean-rtl clean-clint clean-plic clean-socctrl clean-quadctrl clean-snax-cluster clean-soc clean-tb
+.PHONY: rtl clint plic socctrl quadctrl soc
+.PHONY: clean-rtl-src clean-rtl clean-clint clean-plic clean-socctrl clean-quadctrl clean-snax-cluster clean-soc
 
-rtl: clint plic socctrl quadctrl soc snax-cluster tb src/bender_targets.tmp
-clean-rtl: clean-clint clean-plic clean-socctrl clean-quadctrl clean-soc clean-snax-cluster clean-tb
+rtl: clint plic socctrl quadctrl soc snax-cluster src/bender_targets.tmp
+clean-rtl: clean-clint clean-plic clean-socctrl clean-quadctrl clean-soc clean-snax-cluster
+clean-rtl-src:
+	rm -rf $(TARGET_SRC_DIR)
 
 $(TARGET_PLIC_DIR) $(TARGET_CLINT_DIR) $(TARGET_SOCCTRL_DIR) $(TARGET_QUADCTRL_DIR):
 	@mkdir -p $@
-
-######
-# TB #
-######
-
-tb: test/testharness.sv
-clean-tb:
-	rm -rf test/testharness.sv
-
-test/testharness.sv: test/testharness.sv.tpl $(CFG)
-	@echo "[OCCAMYGEN] Generate $@"
-	@$(OCCAMYGEN) --cfg $(CFG) --outdir test --testharness-sv $<
-#why?	@$(VERIBLE_FMT) --inplace $@
-
-	# @$(OCCAMYGEN) --cfg $(CFG) \
- 	# 	--bootdata       ../../ip/snitch_cluster/test/bootdata.cc.tpl
 
 
 ########
@@ -137,6 +100,10 @@ MISC_OCCAMYGEN_TARGETS += $(TARGET_SRC_DIR)/occamy_memories.json
 soc: $(MISC_OCCAMYGEN_TARGETS)
 clean-soc:
 	rm -rf $(MISC_OCCAMYGEN_TARGETS) .misc_occamygen_targets_group
+	rm -rf $(TARGET_SRC_DIR)/*noc*
+	rm -rf $(TARGET_SRC_DIR)/axi_flat.sv
+	rm -rf $(TARGET_SRC_DIR)/apb_flat.sv
+	rm -rf $(TARGET_SRC_DIR)/bender_targets.tmp
 
 $(MISC_OCCAMYGEN_TARGETS): .misc_occamygen_targets_group
 .misc_occamygen_targets_group: $(CFG) $(MISC_OCCAMYGEN_SV_TEMPLATES)
@@ -160,7 +127,7 @@ $(MISC_OCCAMYGEN_TARGETS): .misc_occamygen_targets_group
 	cp -f $(SOURCE_OCCAMY_DIR)/apb_flat.sv $(TARGET_SRC_DIR)
 	@touch $@
 
-.PHONY: debug-soc-gen debug-testharness-gen debug-quadrant-ctrl-gen debug-quadrant-gen debug-occamy-gen
+.PHONY: debug-soc-gen debug-quadrant-ctrl-gen debug-quadrant-gen debug-occamy-gen
 
 debug-occamy-gen:
 	$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_SRC_DIR)\
@@ -176,9 +143,6 @@ debug-occamy-gen:
 
 debug-soc-gen:
 	$(ROOT)/util/occamygen/occamy_soc_gen.py --cfg $(CFG) --outdir $(TARGET_SRC_DIR) --soc-sv $(SOURCE_OCCAMY_DIR)/occamy_soc.sv.tpl --top-sv           $(SOURCE_OCCAMY_DIR)/occamy_top.sv.tpl 
-	
-debug-testharness-gen:
-	$(ROOT)/util/occamygen/occamy_soc_gen.py --cfg $(CFG) --outdir test --testharness-sv test/testharness.sv.tpl
 
 debug-quadrant-ctrl-gen:
 	$(ROOT)/util/occamygen/occamy_soc_gen.py --cfg $(CFG) --outdir $(TARGET_SRC_DIR) --quadrant-s1-ctrl $(SOURCE_OCCAMY_DIR)/occamy_quadrant_s1_ctrl.sv.tpl
@@ -279,7 +243,6 @@ $(CLINT_REGGEN_TARGETS): .clint_reggen_targets_group
 $(TARGET_CLINT_DIR)/clint.%: $(SOURCE_CLINT_DIR)/data/clint.%.tpl $(CFG) | $(TARGET_CLINT_DIR)
 	@echo "[OCCAMYGEN] Generate $@"
 	@$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_CLINT_DIR) --chip $<
-
 
 ###########################################
 # SNAX Accelerator  + Wrapper Generations #

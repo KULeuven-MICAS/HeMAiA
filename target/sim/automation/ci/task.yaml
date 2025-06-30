@@ -1,0 +1,7 @@
+runs:
+  - app_0: 
+    - host_app: offload
+    - device_app: snax-test-integration
+  - app_1:
+    - host_app: hemaia_clk_rst_configurator
+    - device_app: null

@@ -1,4 +1,4 @@
-.PHONY: clean bootrom sw rtl occamy_ip_vcu128 occamy_ip_vcu128_gui occamy_system_vcu128 \
+.PHONY: clean FORCE bootrom sw rtl occamy_ip_vcu128 occamy_ip_vcu128_gui occamy_system_vcu128 \
 		occamy_system_vcu128_gui occamy_system_download_sw open_terminal hemaia_system_vivado_preparation \
 		hemaia_chip_vcu128 hemaia_chip_vcu128_gui hemaia_system_vcu128 hemaia_system_vcu128_gui \
 		occamy_system_vlt occamy_system_vsim_preparation occamy_system_vsim hemaia_system_vsim_preparation \
@@ -7,38 +7,74 @@
 MKFILE_PATH := $(abspath $(lastword $(MAKEFILE_LIST)))
 MKFILE_DIR := $(dir $(MKFILE_PATH))
 
-CFG_OVERRIDE ?= target/rtl/cfg/hemaia.hjson
-CFG = $(realpath $(CFG_OVERRIDE))
+CFG_OVERRIDE ?= 
+DEFAULT_CFG = $(MKFILE_DIR)target/rtl/cfg/hemaia_ci.hjson
+CFG = $(MKFILE_DIR)target/rtl/cfg/lru.hjson
+# If the configuration file is overriden on the command-line (through
+# CFG_OVERRIDE) and this file differs from the least recently used
+# (LRU) config, all targets depending on the configuration file have
+# to be rebuilt. This file is used to express this condition as a
+# prerequisite for other rules.
+
+$(CFG): FORCE
+	@# If the LRU config file doesn't exist, we use the default config.
+	@if [ ! -e $@ ] ; then \
+		DEFAULT_CFG="$(DEFAULT_CFG)"; \
+		echo "Using default config file: $$DEFAULT_CFG"; \
+		cp $$DEFAULT_CFG $@; \
+	fi
+	@# If a config file is provided on the command-line 
+	@# then we override the LRU file with it
+	@if [ $(CFG_OVERRIDE) ] ; then \
+		echo "Overriding config file with: $(CFG_OVERRIDE)"; \
+		cp $(CFG_OVERRIDE) $@; \
+	fi
+FORCE:
 
 clean:
 	$(MAKE) -C ./target/fpga/ clean
 	$(MAKE) -C ./target/fpga/vivado_ips/ clean
 	$(MAKE) -C ./target/fpga_chip/hemaia_chip/ clean
 	$(MAKE) -C ./target/fpga_chip/hemaia_system/ clean
+	$(MAKE) -C ./target/sw/  clean
+	$(MAKE) -C ./target/rtl/bootrom/  clean
 	$(MAKE) -C ./target/sim/ clean
-	$(MAKE) -C ./target/sim_chip/ clean
 	$(MAKE) -C ./target/rtl/ clean
 	$(MAKE) -C ./target/fpga/sw clean
 	$(MAKE) -C ./target/tapeout clean
 	rm -rf Bender.lock .bender deps
 	rm -rf ./target/rtl/src/bender_targets.tmp
+	rm -rf ./target/rtl/cfg/lru.hjson
 
-# Software Generation
-bootrom: # In SNAX Docker
-# The bootrom used for simulation (light-weight bootrom)
-	$(MAKE) -C ./target/sim bootrom CFG_OVERRIDE=$(CFG)
-
-# The bootrom used for tapeout / FPGA prototyping (embedded real rom, full-functional bootrom with different frequency settings)
-	$(MAKE) -C ./target/rtl/bootrom bootrom CFG_OVERRIDE=$(CFG)
-
+#######################
+# Software Generation #
+#######################
+# The software from simulation and FPGA prototyping comes from one source.
 sw: # In SNAX Docker
-	+$(MAKE) -C ./target/sim sw CFG_OVERRIDE=$(CFG)
+	$(MAKE) -C ./target/sw sw CFG=$(CFG)
 
-# The software from simulation and FPGA prototyping comes from one source. 
+
+#########################
+# App Binary Generation #
+#########################
+HOST_APP ?= offload
+DEVICE_APP ?= snax-test-integration
+apps:
+	$(MAKE) -C ./target/sim apps HOST_APP=$(HOST_APP) DEVICE_APP=$(DEVICE_APP)
+ 
+######################
+# Bootrom Generation #
+######################
+
+bootrom: # In SNAX Docker
+# Here will generate two bootroms:
+# 1. The bootrom used for simulation (light-weight bootrom)
+# 2. The bootrom used for tapeout / FPGA prototyping (embedded real rom, full-functional bootrom with different frequency settings)
+	$(MAKE) -C ./target/rtl/bootrom all
 
 # Hardware Generation
 rtl: # In SNAX Docker
-	$(MAKE) -C ./target/rtl/ rtl CFG_OVERRIDE=$(CFG)
+	$(MAKE) -C ./target/rtl/ rtl CFG=$(CFG)
 
 ####################
 # Tapeout Workflow #
@@ -100,32 +136,27 @@ hemaia_system_vivado: hemaia_chip_vivado # In ESAT Server
 hemaia_system_vivado_gui: # In ESAT Server
 	sh -c "cd ./target/fpga_chip/hemaia_system/hemaia_system/;vivado hemaia_system.xpr"
 
-# Verilator Workflow (not working, many errors comes from AXI)
-occamy_system_vlt: # In SNAX Docker
-	
-	+$(MAKE) -C ./target/sim work/lib/libfesvr.a
-	+$(MAKE) -C ./target/sim tb
-	+$(MAKE) -C ./target/sim bin/occamy_top.vlt
+######################
+# Verilator Workflow #
+######################
 
 hemaia_system_vlt: # In SNAX Docker
-	+$(MAKE) -C ./target/sim_chip bin/occamy_chip.vlt CFG_OVERRIDE=$(CFG)
+	+$(MAKE) -C ./target/sim bin/occamy_chip.vlt CFG=$(CFG)
 
-# Questasim Workflow
-occamy_system_vsim_preparation: # In SNAX Docker
-	$(MAKE) -C ./target/sim work/lib/libfesvr.a
-	$(MAKE) -C ./target/sim tb
-	$(MAKE) -C ./target/sim work-vsim/compile.vsim.tcl
-
-occamy_system_vsim: # In ESAT Server
-	$(MAKE) -C ./target/sim bin/occamy_top.vsim
+#####################
+# Questasim Workflow #
+######################
 
 hemaia_system_vsim_preparation: # In SNAX Docker
-	$(MAKE) -C ./target/sim_chip work-vsim/compile.vsim.tcl
+	$(MAKE) -C ./target/sim work-vsim/compile.vsim.tcl CFG=$(CFG)
 
 hemaia_system_vsim: # In ESAT Server
-	$(MAKE) -C ./target/sim_chip bin/occamy_chip.vsim
+	$(MAKE) -C ./target/sim bin/occamy_chip.vsim
 
-# VCS Workflow
+################
+# VCS Workflow #
+################
+
 hemaia_system_vcs_preparation: # In SNAX Docker
 	$(MAKE) -C ./target/sim_chip work-vcs/compile.sh
 

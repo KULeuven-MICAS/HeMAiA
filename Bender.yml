@@ -113,11 +113,11 @@ sources:
   # HeMAiA bootrom
   - target: all(hemaia, not(simulation_hemaia))
     files:
-      - target/rtl/bootrom/bootrom.sv
+      - target/rtl/bootrom/bootrom_chip/bootrom.sv
   
   - target: all(hemaia, simulation_hemaia)
     files:
-      - target/rtl/test/bootrom.sv
+      - target/rtl/bootrom/bootrom_sim/bootrom.sv
 
   # target/*_chip
   - target: hemaia
@@ -138,14 +138,14 @@ sources:
   # target/sim
   - target: simulation_occamy
     files:
-      - target/rtl/test/uartdpi/uartdpi.sv
-      - target/rtl/test/testharness.sv
+      - target/sim/testharness/uartdpi/uartdpi.sv
+      - target/sim/testharness/testharness.sv
   
   # target/sim_chip
   - target: simulation_hemaia
     files:
-      - target/rtl/test/uartdpi/uartdpi.sv
-      - target/sim_chip/testharness/testharness.sv
+      - target/sim/testharness/uartdpi/uartdpi.sv
+      - target/sim/testharness/testharness.sv
 
   - target: tsmc_pad
     files:

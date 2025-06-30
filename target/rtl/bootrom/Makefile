@@ -3,47 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Yunhao Deng <yunhao.deng@kuleuven.be>
-
+# Fanchen Kong <fanchen.kong@kuleuven.be>
 MKFILE_PATH := $(abspath $(lastword $(MAKEFILE_LIST)))
 MKFILE_DIR  := $(dir $(MKFILE_PATH))
-ROOT        := ${MKFILE_DIR}../../..
-util				:= $(ROOT)/util
 
-include $(ROOT)/util/Makefrag
-
-INCLUDES = -I./ -I./src
-INCLUDES += -I$(ROOT)/target/sim/sw/shared/platform/generated
-INCLUDES += -I$(ROOT)/target/sim/sw/shared/runtime
-SRCS_C = src/main.c
-OBJS_C = $(SRCS_C:.c=.o)
-
-CVA6_GCC_ROOT = /tools/riscv/bin
-CC = $(CVA6_GCC_ROOT)/riscv64-unknown-elf-gcc
-OBJDUMP = $(CVA6_GCC_ROOT)/riscv64-unknown-elf-objdump
-OBJCOPY = $(CVA6_GCC_ROOT)/riscv64-unknown-elf-objcopy
-BIN2SV  = $(util)/bin2sv.py
-
-CFLAGS 	= -Os -g -Werror -ffreestanding -fno-strict-aliasing
-CFLAGS += -static -nostartfiles
-CFLAGS += -fno-omit-frame-pointer -fno-optimize-sibling-calls -fno-stack-protector
-CFLAGS += -mno-save-restore -mstrict-align
-CFLAGS += -mabi=lp64d -march=rv64imafd
-CFLAGS += -mcmodel=medany
-
-.PHONY: bootrom clean
-bootrom: bootrom.sv
-
-%.o: %.c
-	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
-	@echo "CC    <= $<"
-
-bootrom.elf bootrom.dump bootrom.bin: bootrom.S src/bootrom.o bootrom.ld
-	$(CC) $(CFLAGS) $(INCLUDES) -Tbootrom.ld $< src/bootrom.o -o bootrom.elf
-	$(OBJDUMP) -d bootrom.elf > bootrom.dump
-	$(OBJCOPY) -j .text -j .rodata -j .srodata -O binary bootrom.elf bootrom.bin
-
-bootrom.sv: bootrom.bin
-	$(BIN2SV) "$(MKFILE_DIR)$<" -m bootrom > $@
-
+.PHONY: all clean
+all:
+	$(MAKE) -C $(MKFILE_DIR)bootrom_chip TARGET=bootrom
+	$(MAKE) -C $(MKFILE_DIR)bootrom_sim TARGET=bootrom
 clean:
-	rm -rf *.bin *.dump *.elf src/*.o
+	$(MAKE) -C $(MKFILE_DIR)bootrom_chip clean
+	$(MAKE) -C $(MKFILE_DIR)bootrom_sim clean

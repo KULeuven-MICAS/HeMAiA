@@ -1,5 +1,5 @@
-bootrom.sv
-*.bin
-*.dump
-*.elf
-src/*.o
+*/bootrom.o
+*/bootrom.bin
+*/bootrom.dump
+*/bootrom.elf
+*/bootrom.sv
