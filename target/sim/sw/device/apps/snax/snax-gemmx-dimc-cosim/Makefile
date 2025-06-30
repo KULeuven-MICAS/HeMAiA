@@ -39,7 +39,7 @@ INCDIRS += ../../../snax/gemmx/include
 RISCV_LDFLAGS += ../../../snax/dimc/build/snax-dimc-lib.o
 RISCV_LDFLAGS += ../../../snax/gemmx/build/snax-gemmx-lib.o
 
-SRCS    = src/gemmx-dimc-cosim_v2.c
+SRCS    = src/gemmx-dimc-cosim-one-head.c
 
 include ../../common.mk
 

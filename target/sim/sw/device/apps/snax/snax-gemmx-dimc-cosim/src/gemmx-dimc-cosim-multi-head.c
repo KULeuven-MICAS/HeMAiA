@@ -489,6 +489,6 @@ int main() {
     }
 
     snrt_global_barrier();
-    
+
     return err;
 }
