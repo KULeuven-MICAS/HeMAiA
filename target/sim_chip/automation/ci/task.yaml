@@ -1,3 +1,0 @@
-runs:
-  - elf: offload-snax-test-integration
-  - elf: hemaia_clk_rst_configurator
