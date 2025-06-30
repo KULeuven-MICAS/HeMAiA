@@ -19,7 +19,7 @@
 #include "snax-gemmx-lib.h"
 
 #include "cfg_gemmx.h"
-#include "data_gemmx.h"
+#include "data_gemmx_one_head.h"
 
 uint64_t * tcdm_1_start_addr; // starting address for GEMMX cluster
 
