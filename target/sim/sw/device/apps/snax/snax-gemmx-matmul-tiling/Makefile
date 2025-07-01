@@ -13,7 +13,7 @@ INCDIRS += ../../../snax/gemmx/include
 # Include this binary in the final build
 RISCV_LDFLAGS += ../../../snax/gemmx/build/snax-gemmx-lib.o
 
-SRCS    = src/snax-gemmx-matmul-tiling.c
+SRCS    = src/snax-gemmx-matmul-tiling-print-fix.c
 
 include ./data/Makefile
 include ../../common.mk
