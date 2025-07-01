@@ -16,6 +16,7 @@
 int main() {
     if (snrt_cluster_idx() == 1) {  // Set err value for checking
         int err = 0;
+
         // Prepare addresses in TCDM
         int8_t *local_a, *local_b;
         int32_t *local_c, *local_d32;
@@ -34,9 +35,9 @@ int main() {
         cur_B = B;
         cur_C = C;
 
-        for (int m = 0; m < M2;) {
-            for (int n = 0; n < N2;) {
-                for (int k = 0; k < K2;) {
+        for (int m = 0; m < M2; m++) {
+            for (int n = 0; n < N2; n++) {
+                for (int k = 0; k < K2; k++) {
                     // Transfer data from L3 to L1
                     // Using DMA only
 
@@ -58,8 +59,8 @@ int main() {
                     // Wait for DMA to finish
                     snrt_cluster_hw_barrier();
 
-                    if (snrt_is_dm_core()) {
-                        if (k == 0) {
+                    if (k == 0) {
+                        if (snrt_is_dm_core()) {
                             cur_C = C + m * N2 * M * N * meshRow * meshCol +
                                     n * M * N * meshRow * meshCol;
                             snrt_dma_start_1d(
@@ -72,30 +73,6 @@ int main() {
                     snrt_cluster_hw_barrier();
 
                     if (snrt_cluster_core_idx() == 0) {
-                        // printf("start to print the data \r\n");
-                        // // print A
-                        // for (int i = 0;
-                        //      i < (M * K * meshRow * tileSize); i++) {
-                        //     printf("A[%d] = %d \r\n", i, local_a[i]);
-                        // }
-                        // // print B
-                        // for (int i = 0;
-                        //      i < (K * N * tileSize * meshCol); i++) {
-                        //     printf("B[%d] = %d \r\n", i, local_b[i]);
-                        // }
-                        // // print C
-                        // for (int i = 0;
-                        //      i < (M * N * meshRow * meshCol); i++) {
-                        //     printf("C[%d] = %d \r\n", i, local_d32[i]);
-                        // }
-
-                        printf(
-                            "delta_local_a = %d, delta_local_b = %d, "
-                            "delta_local_c = %d, delta_local_d32 = %d \r\n",
-                            delta_local_a, delta_local_b, delta_local_c,
-                            delta_local_d32);
-                        printf("start to configure the CSR \r\n");
-
                         // Set Streamer configuration CSR for conv2d
                         set_gemmx_streamer_csr(
                             Aslstride0, Aslstride1, Atlbound0, Atlstride0,
@@ -141,21 +118,14 @@ int main() {
                                       shared_multiplier6, shared_multiplier7,
                                       M * N, bypassSIMD);
 
-                        printf("CSR configure finished and start now \r\n");
                         // Set CSR to start Streamer for conv2d
                         set_gemmx_streamer_start();
 
                         // Set CSR to start GEMM
                         set_gemmx_start();
-                        int start_cycle;
-                        asm volatile("csrr %0, mcycle" : "=r"(start_cycle));
 
                         // Poll until Streamer and GEMM accelerator finish
                         wait_gemmx_and_streamer();
-                        int end_cycle;
-                        asm volatile("csrr %0, mcycle" : "=r"(end_cycle));
-                        printf("SNAX GEMM Matmul finished, cycle = %d\r\n", (end_cycle - start_cycle));
-                        k++;
                     };
                     snrt_cluster_hw_barrier();
                 }
@@ -164,9 +134,6 @@ int main() {
 
                 // check the result of the implicit im2col convolution
                 if (snrt_cluster_core_idx() == 0) {
-                    for (int i = 0; i < M * N * meshRow * meshCol; i++) {
-                        asm volatile("nop\n");
-                    }
                     if (!bypassSIMD) {
                         for (int i = 0; i < M * N * meshRow * meshCol; i++) {
                             if (local_d8[i] !=
@@ -216,29 +183,20 @@ int main() {
 
                     printf(
                         "SNAX GEMM Matmul: %s, Error: %d . bypassSIMD = %d, m= "
-                        "%d, n= %d \r\n",
+                        "%d, n= %d \n",
                         err ? "FAIL" : "PASS", err, bypassSIMD, m, n);
-                    n++;
                 }
 
                 snrt_cluster_hw_barrier();
 
-                // if (snrt_is_dm_core()) {
-                //     snrt_dma_start_1d(
-                //         D32_generated + m * N2 * M * N * meshRow * meshCol +
-                //             n * M * N * meshRow * meshCol,
-                //         local_d32, M * N * meshRow * meshCol *
-                //         sizeof(int32_t));
-                //     snrt_dma_wait_all();
-                // }
-
-                // snrt_cluster_hw_barrier();
+                if (snrt_is_dm_core()) {
+                    snrt_dma_start_1d(
+                        D32_generated + m * N2 * M * N * meshRow * meshCol +
+                            n * M * N * meshRow * meshCol,
+                        local_d32, M * N * meshRow * meshCol * sizeof(int32_t));
+                    snrt_dma_wait_all();
+                }
             }
-
-            if (snrt_cluster_core_idx() == 0) {
-                m++;
-            }
-            snrt_cluster_hw_barrier();
         }
         return err;
     } else
