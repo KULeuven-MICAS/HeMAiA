@@ -19,7 +19,7 @@
 #include "snax-gemmx-lib.h"
 #include "snax-gemmx-params.h"
 
-#include "cfg_gemmx.h"
+#include "cfg_gemmx_multi_head.h"
 #include "data_gemmx_multi_head.h"
 
 uint64_t *tcdm_1_start_addr;  // starting address for GEMMX cluster
@@ -365,7 +365,7 @@ int main() {
                     snrt_cluster_hw_barrier();
 
                     if (snrt_is_compute_core()) {
-                        printf("GEMMX cluster starts to configure GEMMX\n");
+                        printf("GEMMX cluster starts to configure GEMMX\r\n");
                         // Set Streamer configuration CSR for conv2d
                         set_gemmx_streamer_csr(
                             Aslstride0, Aslstride1, Atlbound0, Atlstride0,
@@ -410,7 +410,7 @@ int main() {
                             shared_multiplier3, shared_multiplier4,
                             shared_multiplier5, shared_multiplier6,
                             shared_multiplier7, gemmx_M * gemmx_N, bypassSIMD);
-                        printf("GEMMX cluster configuration finished\n");
+                        printf("GEMMX cluster configuration finished\r\n");
 
                         // Set CSR to start Streamer for conv2d
                         set_gemmx_streamer_start();
@@ -420,12 +420,12 @@ int main() {
 
                         // Poll until Streamer and GEMM accelerator finish
                         wait_gemmx_and_streamer();
-                        printf("GEMMX cluster finished the computation\n");
+                        printf("GEMMX cluster finished the computation\r\n");
 
                         // check the final result
                         printf(
                             "GEMMX cluster starts to check the computed "
-                            "data\n");
+                            "data\r\n");
                     }
                     snrt_cluster_hw_barrier();
                 }
@@ -439,24 +439,31 @@ int main() {
                             D_golden_blocked_row_major[i + m * N2 * gemmx_M * gemmx_N * meshRow * meshCol +
                                 n * gemmx_M * gemmx_N * meshRow * meshCol]) {
                             err++;
-                            printf(
-                                "GEMMX cluster failed to verify the "
-                                "computed data at "
-                                "index %d, expected %d but got %d\n",
-                                i, D_golden_blocked_row_major[i + m * N2 * gemmx_M * gemmx_N * meshRow * meshCol +
-                                n * gemmx_M * gemmx_N * meshRow * meshCol],
-                                local_d32[i]);
+                                printf(
+                                    "SNAX GEMM Matmul failed to verify the "
+                                    "computed data at index %d, at address = "
+                                    "%p, expected %d but got %d \r\n",
+                                    i,
+                                    &D_golden_blocked_row_major[i +
+                                                m * N2 * gemmx_M * gemmx_N * meshRow *
+                                                    meshCol +
+                                                n * gemmx_M * gemmx_N * meshRow * meshCol],
+                                    D_golden_blocked_row_major[i +
+                                               m * N2 * gemmx_M * gemmx_N * meshRow *
+                                                   meshCol +
+                                               n * gemmx_M * gemmx_N * meshRow * meshCol],
+                                    local_d32[i]);
                         }
                     }
 
                     if (err == 0) {
                         printf(
                             "GEMMX cluster verified the computed data "
-                            "successfully!, m = %d, n = %d\n", m, n);
+                            "successfully!, m = %d, n = %d\r\n", m, n);
                     } else {
                         printf(
                             "GEMMX cluster failed to verify the computed "
-                            "data, m = %d, n = %d, err = %d\n",
+                            "data, m = %d, n = %d, err = %d\r\n",
                             m, n, err);
                     }
                 }
