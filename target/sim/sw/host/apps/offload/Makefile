@@ -43,6 +43,7 @@ DEVICE_APPS += snax/snax-xdma-memset
 DEVICE_APPS += snax/snax-cgra-run
 DEVICE_APPS += snax/snax-dimc-mha
 DEVICE_APPS += snax/snax-dimc-conv
+DEVICE_APPS += snax/snax-gemmx-dimc-cosim
 
 # Dependencies
 INCDIRS += $(RUNTIME_DIR)
