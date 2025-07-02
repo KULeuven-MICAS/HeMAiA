@@ -83,9 +83,9 @@ set_false_path -to [get_pins hemaia_system_i/occamy_chip/inst/i_occamy/i_clint/i
 
 create_clock -period 4.0 -name clk_main [get_pins hemaia_system_i/versal_cips_0/pl0_ref_clk]
 
-create_generated_clock -name clk_core -source [get_pins hemaia_system_i/versal_cips_0/pl0_ref_clk] -divide_by 6 [get_pins hemaia_system_i/occamy_chip/hemaia_system_occamy_chip_0/inst/i_hemaia_clk_rst_controller/clk_o[0]]
+create_generated_clock -name clk_core -source [get_pins hemaia_system_i/versal_cips_0/pl0_ref_clk] -divide_by 6 [get_pins hemaia_system_i/occamy_chip/inst/i_hemaia_clk_rst_controller/clk_o]
 
-create_generated_clock -name clk_acc -source [get_pins hemaia_system_i/versal_cips_0/pl0_ref_clk] -divide_by 6 [get_pins hemaia_system_i/occamy_chip/hemaia_system_occamy_chip_0/inst/i_hemaia_clk_rst_controller/clk_o[1]]
+# create_generated_clock -name clk_acc -source [get_pins hemaia_system_i/versal_cips_0/pl0_ref_clk] -divide_by 6 [get_pins hemaia_system_i/occamy_chip/inst/i_hemaia_clk_rst_controller/clk_o]
 
 create_clock -period 62.5 -name clk_peri [get_pins hemaia_system_i/versal_cips_0/pl2_ref_clk]
 
