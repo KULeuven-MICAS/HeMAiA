@@ -10,7 +10,7 @@
 #######################
 
 DEBUG        ?= OFF # ON to turn on debugging symbols
-CFG          ?=     # Override default config file
+CFG          ?= $(realpath $(MKFILE_DIR)../rtl/cfg/lru.hjson)
 
 .DEFAULT_GOAL := help
 .PHONY: all apps clean clean-testharness clean-vsim clean-vlt clean-vcs clean-apps clean-logs clean-bin

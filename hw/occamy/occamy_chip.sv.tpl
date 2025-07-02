@@ -120,8 +120,8 @@ import ${name}_pkg::*;
   ${soc_axi_lite_narrow_periph_xbar.out_hemaia_clk_rst_controller.rsp_type()} hemaia_clk_rst_controller_rsp;
 
 
-  localparam int unsigned HeMAiADefaultDivision[6] = '{6, 6, 1, 1, 1, 1};
-  localparam int unsigned ResetDelays[6] = '{default: 3};
+  localparam int HeMAiADefaultDivision[6] = '{6, 6, 1, 1, 1, 1};
+  localparam int ResetDelays[6] = '{default: 3};
 
   logic [5:0] clk_vec, rst_n_vec;
   logic clk_host, clk_acc, clk_d2d_phy_east, clk_d2d_phy_west, clk_d2d_phy_north, clk_d2d_phy_south;

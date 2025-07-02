@@ -50,7 +50,8 @@ clean:
 # Software Generation #
 #######################
 # The software from simulation and FPGA prototyping comes from one source.
-sw: # In SNAX Docker
+# Execute in SNAX Docker
+sw: $(CFG)
 	$(MAKE) -C ./target/sw sw CFG=$(CFG)
 
 
@@ -73,7 +74,8 @@ bootrom: # In SNAX Docker
 	$(MAKE) -C ./target/rtl/bootrom all
 
 # Hardware Generation
-rtl: # In SNAX Docker
+# In SNAX Docker
+rtl: $(CFG)
 	$(MAKE) -C ./target/rtl/ rtl CFG=$(CFG)
 
 ####################
@@ -87,8 +89,7 @@ tapeout_preparation: rtl tapeout_syn_flist
 # Generating filelist per cluster
 # Needed for a per-cluster synthesis
 tapeout_syn_flist:
-	$(MAKE) -C ./target/tapeout/ syn_gen_list CFG_OVERRIDE=$(CFG)
-
+	$(MAKE) -C ./target/tapeout/ syn_gen_list CFG=$(CFG)
 
 #################
 # FPGA Workflow #
@@ -98,19 +99,8 @@ occamy_system_vivado_preparation: # In SNAX Docker
 	$(MAKE) -C ./target/fpga/ define_defines_includes_no_simset.tcl
 	$(MAKE) -C ./target/fpga/vivado_ips/ define-sources.tcl
 
-occamy_ip_vcu128:	# In ESAT Server
-	#                                                                                          debug  jtag  (put 1 or 0)
-	sh -c "cd ./target/fpga/vivado_ips/;vivado -mode batch -source occamy_xilinx.tcl -tclargs      1     1"
-
-occamy_ip_vcu128_gui: # In ESAT Server
-	sh -c "cd ./target/fpga/vivado_ips/occamy_xilinx/;vivado occamy_xilinx.xpr"
-
-occamy_system_vcu128: occamy_ip_vcu128 # In ESAT Server
-	#                                                                                          debug  jtag  (put 1 or 0)
-	sh -c "cd ./target/fpga;vivado -mode batch -source occamy_vcu128_2023.tcl -tclargs             1     1"
-
-occamy_system_vcu128_gui: # In ESAT Server
-	sh -c "cd ./target/fpga/occamy_vcu128_2023/;vivado occamy_vcu128_2023.xpr"
+occamy_system_vivado: occamy_ip_vcu128 # In ESAT Server
+	$(MAKE) -C ./target/fpga occamy_vcu128
 
 occamy_system_download_sw: # In ESAT Server; this procedure will only inject the bootrom at present; however, it can also inject the software.
 	$(MAKE) -C ./target/fpga/sw download_sw
@@ -158,8 +148,8 @@ hemaia_system_vsim: # In ESAT Server
 ################
 
 hemaia_system_vcs_preparation: # In SNAX Docker
-	$(MAKE) -C ./target/sim_chip work-vcs/compile.sh
+	$(MAKE) -C ./target/sim work-vcs/compile.sh
 
 hemaia_system_vcs: # In ESAT Server
-	$(MAKE) -C ./target/sim_chip bin/occamy_chip.vcs
-# How to start the execution of the simulation: cd ./target/sim_chip/bin; ./occamy_chip.vcs -gui -R -fgp=num_threads:8
+	$(MAKE) -C ./target/sim bin/occamy_chip.vcs
+# How to start the execution of the simulation: cd ./target/sim/bin; ./occamy_chip.vcs -gui -R -fgp=num_threads:8
