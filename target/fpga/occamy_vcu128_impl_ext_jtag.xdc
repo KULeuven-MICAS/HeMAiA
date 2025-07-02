@@ -7,7 +7,7 @@
 # This constraint file is written for VCU128 + FMC XM105 Debug Card and is included only when EXT_JTAG = 1
 
 # 5 MHz max JTAG
-create_clock -period 200 -name jtag_tck_i [get_pins occamy_vcu128_i/jtag_tck_i]
+create_clock -period 200 -name jtag_tck_i [get_pins hemaia_system_i/jtag_tck_i]
 set_property CLOCK_DEDICATED_ROUTE FALSE [get_nets -of [get_pins jtag_tck_i_IBUF_inst/O]]
 set_property CLOCK_BUFFER_TYPE NONE [get_nets -of [get_pins jtag_tck_i_IBUF_inst/O]]
 set_input_jitter jtag_tck_i 1.000
@@ -24,25 +24,15 @@ set_max_delay -to   [get_ports { jtag_tdo_o }] 20
 set_max_delay -from [get_ports { jtag_tms_i }] 20
 set_max_delay -from [get_ports { jtag_tdi_i }] 20
 
-# 1: LA20_P - A21
-set_property PACKAGE_PIN A21     [get_ports jtag_vdd_o]
-set_property IOSTANDARD LVCMOS18 [get_ports jtag_vdd_o]
-set_property DRIVE 12            [get_ports jtag_vdd_o]
-
-# 0: LA20_N - A20
-set_property PACKAGE_PIN A20     [get_ports jtag_gnd_o]
-set_property IOSTANDARD LVCMOS18 [get_ports jtag_gnd_o]
-set_property DRIVE 12            [get_ports jtag_gnd_o]
-
-# LA24P - C18
-set_property PACKAGE_PIN C18     [get_ports jtag_tck_i]
+# 2AD0 - J1.1 - LA00_CC_P - E24
+set_property PACKAGE_PIN E24     [get_ports jtag_tck_i]
 set_property IOSTANDARD LVCMOS18 [get_ports jtag_tck_i]
-# LA24N - C17
-set_property PACKAGE_PIN C17     [get_ports jtag_tdi_i]
+# 2AD1 - J1.3 - LA00_CC_N - E23
+set_property PACKAGE_PIN E23     [get_ports jtag_tdi_i]
 set_property IOSTANDARD LVCMOS18 [get_ports jtag_tdi_i]
-# LA25P - D20
-set_property PACKAGE_PIN D20     [get_ports jtag_tdo_o]
+# 2AD2 - J1.5 - LA01_CC_P - F26
+set_property PACKAGE_PIN F26     [get_ports jtag_tdo_o]
 set_property IOSTANDARD LVCMOS18 [get_ports jtag_tdo_o]
-# LA25N - D19
-set_property PACKAGE_PIN D19     [get_ports jtag_tms_i]
+# 2AD3 - J1.7 - LA01_CC_N - F25
+set_property PACKAGE_PIN F25     [get_ports jtag_tms_i]
 set_property IOSTANDARD LVCMOS18 [get_ports jtag_tms_i]
