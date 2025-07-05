@@ -64,7 +64,15 @@ def emit_multicast_pointers(**kwargs):
         raise ValueError(
             f"Multicast number {kwargs['multicast_num']} exceeds the number of pointers {len(pointers)}.")
     else:
-        pointers = pointers[:kwargs["multicast_num"]]
+        # Randomly drop elements to match multicast_num
+        selected_indices = np.sort(
+            np.random.choice(
+            len(pointers),
+            size=kwargs["multicast_num"],
+            replace=False
+            )
+        )
+        pointers = [pointers[i] for i in selected_indices]
 
     emit_str = [
         format_scalar_define(
@@ -74,10 +82,19 @@ def emit_multicast_pointers(**kwargs):
 
     emit_str += [format_vector_definition(
         "uint8_t",
-        "multicast_pointers",
+        "multicast_pointers_optimized",
         np.array(pointers, dtype=np.uint8))
-
     ]
+
+    # Randomly permute the pointers before passing to the function
+    pointers = np.random.permutation(pointers)
+
+    emit_str += [format_vector_definition(
+        "uint8_t",
+        "multicast_pointers_randomized",
+        np.array(pointers, dtype=np.uint8))
+    ]
+
     return emit_str
 
 def main():

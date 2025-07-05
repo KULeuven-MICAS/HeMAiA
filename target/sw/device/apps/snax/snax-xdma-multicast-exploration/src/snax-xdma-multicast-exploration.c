@@ -71,33 +71,47 @@ int main() {
             err++;
         }
 
-        // Broacast to j Destination
-        void* dest[MULTICAST_NUM];
+        // Broacast to j Destination - IDMA and XDMA - Unoptimized
+        void *dest[MULTICAST_NUM];
+
         for (int i = 0; i < MULTICAST_NUM; i++) {
-            dest[i] = (void *)(tcdm_baseaddress + (multicast_pointers[i]) * cluster_offset);
+            dest[i] =
+                (void *)(tcdm_baseaddress +
+                         (multicast_pointers_randomized[i]) * cluster_offset);
         }
 
-        for (int j = 0; j <= MULTICAST_NUM; j++) {
-            // Reference group:
-            snrt_start_perf_counter(SNRT_PERF_CNT0, SNRT_PERF_CNT_DMA_BUSY,
-                                    snrt_hartid());
-            for (int i = 0; i < j; i++) {
-                snrt_dma_start_1d(dest[i], (void *)tcdm_baseaddress,
-                                  data_size * sizeof(data[0]));
-            }
-            snrt_dma_wait_all();
-            printf("The IDMA copy to %d dest is finished in %d cycles\r\n", j,
-                   snrt_get_perf_counter(SNRT_PERF_CNT0));
-            snrt_reset_perf_counter(SNRT_PERF_CNT0);
-
-            // Experiment group:
-            xdma_multicast_1d((void *)tcdm_baseaddress, dest, j,
+        // Reference group:
+        snrt_start_perf_counter(SNRT_PERF_CNT0, SNRT_PERF_CNT_DMA_BUSY,
+                                snrt_hartid());
+        for (int i = 0; i < MULTICAST_NUM; i++) {
+            snrt_dma_start_1d(dest[i], (void *)tcdm_baseaddress,
                               data_size * sizeof(data[0]));
-            int task_id = xdma_start();
-            xdma_remote_wait(task_id);
-            printf("The XDMA copy to %d dest is finished in %d cycles\r\n", j,
-                   xdma_last_task_cycle());
         }
+        snrt_dma_wait_all();
+        printf("The IDMA copy to %d dest is finished in %d cycles\r\n",
+               MULTICAST_NUM, snrt_get_perf_counter(SNRT_PERF_CNT0));
+        snrt_reset_perf_counter(SNRT_PERF_CNT0);
+
+        // Experiment group 1:
+        xdma_multicast_1d((void *)tcdm_baseaddress, dest, MULTICAST_NUM,
+                          data_size * sizeof(data[0]));
+        int task_id = xdma_start();
+        xdma_remote_wait(task_id);
+        printf("The XDMA normal copy to %d dest is finished in %d cycles\r\n",
+               MULTICAST_NUM, xdma_last_task_cycle());
+
+        // Experiment group 2:
+        for (int i = 0; i < MULTICAST_NUM; i++) {
+            dest[i] =
+                (void *)(tcdm_baseaddress +
+                         (multicast_pointers_optimized[i]) * cluster_offset);
+        }
+        xdma_multicast_1d((void *)tcdm_baseaddress, dest, MULTICAST_NUM,
+                          data_size * sizeof(data[0]));
+        task_id = xdma_start();
+        xdma_remote_wait(task_id);
+        printf("The XDMA optimal copy to %d dest is finished in %d cycles\r\n",
+               MULTICAST_NUM, xdma_last_task_cycle());
     }
 
     return 0;

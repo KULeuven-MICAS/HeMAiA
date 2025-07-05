@@ -3,11 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "host.h"
+#include "hemaia_clk_rst_controller.h"
 
 // Global Variables for communication buffer
 volatile comm_buffer_t* comm_buffer_ptr = (comm_buffer_t*)0;
 
 int main() {
+    // Set clk manager to 1 division for a faster simulation time
+    enable_clk_domain(0, 1);
+    enable_clk_domain(1, 1);
     // Reset and ungate all quadrants, deisolate
     uintptr_t current_chip_address_prefix =
         (uintptr_t)get_current_chip_baseaddress();

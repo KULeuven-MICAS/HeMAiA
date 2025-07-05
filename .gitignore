@@ -16,16 +16,11 @@ transcript
 gmon.out
 
 build/
-.Xil/
 .venv/
-occamy_xilinx/
-component.xml
-./component.xml
-*.backup.log
-*.log
-*.jou
-*.log
-*.zip
-*.str
+**/*.tmp
+**/*.log
+**/*.jou
+**/*.zip
+**/*.str
 
 target/tapeout/tcl/*
