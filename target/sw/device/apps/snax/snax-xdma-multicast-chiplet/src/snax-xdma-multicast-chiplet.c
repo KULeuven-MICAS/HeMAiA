@@ -49,14 +49,12 @@ int main() {
         xdma_multicast_1d_full_address((uint64_t)tcdm_baseaddress,
                                        (uint64_t *)dest, 3,
                                        data_size * sizeof(data[0]));
-        __asm__ volatile("csrr %0, mcycle;" : "=r"(start_time));
         int task_id = xdma_start();
         xdma_remote_wait(task_id);
-        __asm__ volatile("csrr %0, mcycle;" : "=r"(end_time));
         printf("The XDMA copy is finished in %d cycles\r\n",
-               end_time - start_time);
+               xdma_last_task_cycle());
 
-        // The seoncd test is multicast to the clusters in Chiplet (0, 1).
+        // The second test is multicast to the clusters in Chiplet (0, 1).
         for (int i = 0; i < 3; i++) {
             dest[i] = dest[i] + get_chip_baseaddress_value(1);
         }
@@ -64,12 +62,10 @@ int main() {
         xdma_multicast_1d_full_address((uint64_t)tcdm_baseaddress,
                                        (uint64_t *)dest, 3,
                                        data_size * sizeof(data[0]));
-        __asm__ volatile("csrr %0, mcycle;" : "=r"(start_time));
         task_id = xdma_start();
         xdma_remote_wait(task_id);
-        __asm__ volatile("csrr %0, mcycle;" : "=r"(end_time));
         printf("The XDMA copy is finished in %d cycles\r\n",
-               end_time - start_time);
+               xdma_last_task_cycle());
     }
     return 0;
 }
