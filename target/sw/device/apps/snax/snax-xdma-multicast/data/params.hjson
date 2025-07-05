@@ -1,3 +1,4 @@
 {
-  size: 256
+  size: 256,
+  noc_dimension: [4, 4],
 }

@@ -48,12 +48,10 @@ int main() {
 
         xdma_memcpy_1d((void *)tcdm_baseaddress - cluster_offset,
                        (void *)(tcdm_baseaddress), data_size * sizeof(data[0]));
-        __asm__ volatile("csrr %0, mcycle;" : "=r"(start_time));
         int task_id = xdma_start();
         xdma_remote_wait(task_id);
-        __asm__ volatile("csrr %0, mcycle;" : "=r"(end_time));
         printf("The XDMA copy is finished in %d cycles\r\n",
-               end_time - start_time);
+               xdma_last_task_cycle());
     }
 
     snrt_global_barrier();
@@ -85,24 +83,24 @@ int main() {
         // Broacast to j Destination
         for (int j = 1; j <= BROADCAST_NUM; j++) {
             // Reference group:
-            __asm__ volatile("csrr %0, mcycle;" : "=r"(start_time));
+            snrt_start_perf_counter(SNRT_PERF_CNT0, SNRT_PERF_CNT_DMA_BUSY,
+                                    snrt_hartid());
             for (int i = 0; i < j; i++) {
                 snrt_dma_start_1d((void *)dest[i], (void *)tcdm_baseaddress,
                                   data_size * sizeof(data[0]));
             }
             snrt_dma_wait_all();
-            __asm__ volatile("csrr %0, mcycle;" : "=r"(end_time));
             printf("The IDMA copy to %d dest is finished in %d cycles\r\n", j,
-                   end_time - start_time);
+                   snrt_get_perf_counter(SNRT_PERF_CNT0));
+            snrt_reset_perf_counter(SNRT_PERF_CNT0);
+
             // Experiment group:
             xdma_multicast_1d((void *)tcdm_baseaddress, (void **)dest, j,
                               data_size * sizeof(data[0]));
-            __asm__ volatile("csrr %0, mcycle;" : "=r"(start_time));
             int task_id = xdma_start();
             xdma_remote_wait(task_id);
-            __asm__ volatile("csrr %0, mcycle;" : "=r"(end_time));
             printf("The XDMA copy to %d dest is finished in %d cycles\r\n", j,
-                   end_time - start_time);
+                   xdma_last_task_cycle());
         }
     }
 

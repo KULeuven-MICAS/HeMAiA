@@ -31,6 +31,7 @@
 #include "global_interrupts.h"
 #include "occamy_device.h"
 #include "occamy_memory.h"
+#include "perf_cnt.h"
 // #include "printf.h"
 #include "riscv.h"
 // #include "ssr.h"
