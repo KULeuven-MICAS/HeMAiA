@@ -88,8 +88,7 @@ VCS_FLAGS += -debug_access+all
 # Verilated and compiled Occamy system
 VLT_AR     = ${VLT_BUILDDIR}/Vtestharness__ALL.a
 
-VLT_FLAGS += -Wno-SYMRSVDWORD -Wno-BLKLOOPINIT
-VLT_FLAGS += --trace       # Enable VCD dumping
+# VLT_FLAGS += --trace       # Enable VCD dumping
 VLT_FLAGS += --prof-cfuncs # Enable code profiling
 
 ###############
@@ -196,18 +195,18 @@ $(BIN_DIR)/occamy_chip.vsim: $(VSIM_BUILDDIR)/compile.vsim.tcl |$(BIN_DIR)
 	vopt $(VOPT_FLAGS) -work $(VSIM_BUILDDIR) testharness -o testharness_opt | tee $(dir $<)vopt.log
 	@! grep -P "Errors: [1-9]*," $(dir $<)vopt.log
 	@echo "#!/bin/bash" > $@
-	@echo 'vsim +permissive $(VSIM_FLAGS) $$2 -work $(SIM_MKFILE_DIR)/$(VSIM_BUILDDIR) -c \
+	@echo 'script_dir="$$( cd -- "$$( dirname -- "$${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"' >> $@
+	@echo 'cd $$script_dir' >> $@
+	@echo 'vsim +permissive $(VSIM_FLAGS) $$2 -work ../$(VSIM_BUILDDIR) -c \
 				-ldflags "-Wl,-rpath,-L -lutil" \
 				testharness_opt +permissive-off ++$$1' >> $@
-	@# Move all traces to logs folder
-	@echo "mv *trace*.log $(LOGS_DIR)/" >> $@
 	@chmod +x $@
 	@echo "#!/bin/bash" > $@.gui
-	@echo 'vsim +permissive $(VSIM_FLAGS) -work $(SIM_MKFILE_DIR)/$(VSIM_BUILDDIR) \
+	@echo 'script_dir="$$( cd -- "$$( dirname -- "$${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"' >> $@.gui
+	@echo 'cd $$script_dir' >> $@.gui
+	@echo 'vsim +permissive $(VSIM_FLAGS) -work ../$(VSIM_BUILDDIR) \
 				-ldflags "-Wl,-rpath,-L -lutil" \
 				testharness_opt +permissive-off ++$$1' >> $@.gui
-	@# Move all traces to logs folder
-	@echo "mv *trace*.log $(LOGS_DIR)/" >> $@.gui
 	@chmod +x $@.gui
 
 clean-vsim: clean-work

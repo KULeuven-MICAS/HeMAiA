@@ -26,9 +26,6 @@ int main() {
     snrt_global_barrier();
 
     if (snrt_cluster_idx() == 1 && snrt_is_dm_core()) {
-        register uint32_t start_time;
-        register uint32_t end_time;
-
         // Normal copy evaluation
         // Configure the extension
         if (xdma_disable_dst_ext(0) != 0) {
@@ -56,7 +53,6 @@ int main() {
 
     if (snrt_cluster_idx() == 0 && snrt_is_dm_core()) {
         // Multicast evaluation
-
         // Configure the extension
         if (xdma_disable_dst_ext(0) != 0) {
             printf("Error in disabling xdma writer extension 0\n");
@@ -77,7 +73,7 @@ int main() {
             dest[i] = (void *)(tcdm_baseaddress + (multicast_pointers[i]) * cluster_offset);
         }
 
-        for (int j = 0; j <= MULTICAST_NUM; j++) {
+        for (int j = 1; j <= MULTICAST_NUM; j++) {
             // Reference group:
             snrt_start_perf_counter(SNRT_PERF_CNT0, SNRT_PERF_CNT_DMA_BUSY,
                                     snrt_hartid());
