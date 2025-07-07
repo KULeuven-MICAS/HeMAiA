@@ -31,8 +31,9 @@ def process_configuration(folder_name, size):
     dest_binary_path = os.path.join(folder_name, os.path.basename(binary_path))
     shutil.copyfile(binary_path, dest_binary_path)
     os.chmod(dest_binary_path, 0o755)
-    
-    subprocess.run(["./occamy_chip.vlt"], cwd=folder_name, check=True)
+
+    subprocess.run("ulimit -s unlimited; ./occamy_chip.vlt", shell=True, cwd=folder_name, check=True)
+
     with open(os.path.join(folder_name, "uart_0_0.log"), "r") as log_file:
         xdma_copy_line = next((ln for ln in log_file if "The XDMA copy is finished in" in ln), "")
         xdma_copy_cycle_val = xdma_copy_line.split("in")[-1].split("cycles")[0].strip() if xdma_copy_line else "N/A"
