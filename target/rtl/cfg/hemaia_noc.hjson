@@ -91,9 +91,9 @@
     s1_quadrant: {
       noc_cfg: {
         en_floonoc: true,
-        routing_algo: "XY"
-        noc_name: "quad_mesh_xy"
-        noc_array: [2, 2]
+        routing_algo: "XY",
+        noc_name: "quad_mesh_xy",
+        noc_array: [5, 4]
       },
       // number of pending transactions on the narrow/wide network
       narrow_trans: 32,
@@ -125,10 +125,26 @@
       
     },
     clusters:[
-      "snax_KUL_cluster",
-      "snax_KUL_cluster",
-      "snax_KUL_cluster",
-      "snax_KUL_cluster",
+      "snax_xdma_cluster",
+      "snax_xdma_cluster",
+      "snax_xdma_cluster",
+      "snax_xdma_cluster",
+      "snax_xdma_cluster",
+      "snax_xdma_cluster",
+      "snax_xdma_cluster",
+      "snax_xdma_cluster",
+      "snax_xdma_cluster",
+      "snax_xdma_cluster",
+      "snax_xdma_cluster",
+      "snax_xdma_cluster",
+      "snax_xdma_cluster",
+      "snax_xdma_cluster",
+      "snax_xdma_cluster",
+      "snax_xdma_cluster",
+      "snax_xdma_cluster",
+      "snax_xdma_cluster",
+      "snax_xdma_cluster",
+      "snax_xdma_cluster",
       ],
 
     // peripherals
