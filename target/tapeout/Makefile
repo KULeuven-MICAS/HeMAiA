@@ -63,3 +63,37 @@ gen-syn:
 clean-syn:
 	rm -rf $(SYN_BUILDDIR)
 
+########################
+# Extract the Mem Info #
+########################
+MEMINFO_UTIL ?= $(ROOT)/util/meminfo/meminfo.py
+MEMINFO_DIR ?= meminfo
+# The transcript file is expected to be passed as an argument to meminfo.py
+# One can manually set the tc_sram.sv and override the "PrintSimCfg" parameter to 
+# generate the transcript with the mem info
+# The expected meminfo are like
+#################################################################################
+# tc_sram functional instantiated with the configuration:
+# Instance: testharness.i_occamy_0_0.i_occamy.i_occamy_soc.i_occamy_quadrant_s1_0.i_occamy_cluster_3.i_cluster.gen_hive[0].i_snitch_hive.i_snitch_icache.i_lookup.i_snitch_icache_tag.g_cache_tag_sets[0].i_tag.i_tc_sram.p_sim_hello
+# Number of ports   (dec): 1
+# Number of words   (dec): 128
+# Address width     (dec): 7
+# Data width        (dec): 39
+# Byte width        (dec): 8
+# Byte enable width (dec): 5
+# Latency Cycles    (dec): 1
+# Simulation init   (str): none
+#################################################################################
+TRANSCRIPT ?= transcript
+
+.PHONY: gen-meminfo debug-meminfo clean-meminfo
+clean-meminfo:
+	rm -rf $(MEMINFO_DIR)
+$(MEMINFO_DIR):
+	mkdir -p $@
+gen-meminfo: ${TRANSCRIPT} | $(MEMINFO_DIR)
+	@echo "Generating meminfo from transcript: ${TRANSCRIPT}"
+	@python3 ${MEMINFO_UTIL} --sim_mem_info --transcript ${TRANSCRIPT} --outfile $(MEMINFO_DIR)/meminfo.txt
+debug-meminfo: ${TRANSCRIPT} | $(MEMINFO_DIR)
+	@echo "Generating debug meminfo from transcript: ${TRANSCRIPT}"
+	@python3 ${MEMINFO_UTIL} --debug_sim_mem_info --transcript ${TRANSCRIPT} --outfile $(MEMINFO_DIR)/debug_meminfo.txt 
