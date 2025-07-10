@@ -21,42 +21,8 @@ int main() {
         snrt_dma_start_1d((void *)tcdm_baseaddress, data,
                           data_size * sizeof(data[0]));
         snrt_dma_wait_all();
-    }
 
-    snrt_global_barrier();
-
-    if (snrt_cluster_idx() == 1 && snrt_is_dm_core()) {
-        register uint32_t start_time;
-        register uint32_t end_time;
-
-        // Normal copy evaluation
-        // Configure the extension
-        if (xdma_disable_dst_ext(0) != 0) {
-            printf("Error in disabling xdma writer extension 0\n");
-            err++;
-        }
-        if (xdma_disable_dst_ext(1) != 0) {
-            printf("Error in disabling xdma writer extension 1\n");
-            err++;
-        }
-        if (xdma_disable_src_ext(0) != 0) {
-            printf("Error in disabling xdma reader extension 0\n");
-            err++;
-        }
-
-        xdma_memcpy_1d((void *)tcdm_baseaddress - cluster_offset,
-                       (void *)(tcdm_baseaddress), data_size * sizeof(data[0]));
-        int task_id = xdma_start();
-        xdma_remote_wait(task_id);
-        printf("The XDMA copy is finished in %d cycles\r\n",
-               xdma_last_task_cycle());
-    }
-
-    snrt_global_barrier();
-
-    if (snrt_cluster_idx() == 0 && snrt_is_dm_core()) {
         // Multicast evaluation
-
         // Configure the extension
         if (xdma_disable_dst_ext(0) != 0) {
             printf("Error in disabling xdma writer extension 0\n");

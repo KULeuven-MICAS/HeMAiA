@@ -1,5 +1,5 @@
 {
-  size: 256,
+  size: 16384,
   noc_dimensions: [4, 4],
   multicast_num: 8,
 }
