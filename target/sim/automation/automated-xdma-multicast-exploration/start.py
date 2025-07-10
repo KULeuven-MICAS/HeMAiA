@@ -37,7 +37,7 @@ with open(param_path, 'r') as f:
 result_csv_path = "result.csv"
 with open(result_csv_path, 'w') as result_csv:
     # Write the header row
-    result_csv.write("type,num_dest,cycles\n")
+    result_csv.write("type,num_dest,cycles,hops\n")
 
 # The function needs to be parallelized
 def process_configuration(folder_name):
@@ -48,6 +48,7 @@ def process_configuration(folder_name):
         typ = "idma"
         dest = "N/A"
         cycles = "N/A"
+        hops = "N/A"
         pattern = re.compile(r"The IDMA copy to (\d+) dest is finished in (\d+) cycles")
         for ln in log_file:
             match = pattern.search(ln)
@@ -55,35 +56,38 @@ def process_configuration(folder_name):
                 dest = match.group(1)
                 cycles = match.group(2)
         with open(result_csv_path, "a") as result_file:
-            result_file.write(f"{typ},{dest},{cycles}\n")
+            result_file.write(f"{typ},{dest},{cycles},{hops}\n")
 
         # Get the XDMA Experiment results
         log_file.seek(0)
         typ = "xdma_normal"
         dest = "N/A"
         cycles = "N/A"
-        pattern = re.compile(r"The XDMA normal copy to (\d+) dest is finished in (\d+) cycles")
+        hops = "N/A"
+        pattern = re.compile(r"The XDMA normal copy to (\d+) dest is finished in (\d+) cycles. Total hops = (\d+)")
         for ln in log_file:
             match = pattern.search(ln)
             if match:
                 dest = match.group(1)
                 cycles = match.group(2)
+                hops = match.group(3)
         with open(result_csv_path, "a") as result_file:
-            result_file.write(f"{typ},{dest},{cycles}\n")
+            result_file.write(f"{typ},{dest},{cycles},{hops}\n")
 
         # Get the XDMA Experiment results
         log_file.seek(0)
         typ = "xdma_optimal"
         dest = "N/A"
         cycles = "N/A"
-        pattern = re.compile(r"The XDMA optimal copy to (\d+) dest is finished in (\d+) cycles")
+        pattern = re.compile(r"The XDMA optimal copy to (\d+) dest is finished in (\d+) cycles. Total hops = (\d+)")
         for ln in log_file:
             match = pattern.search(ln)
             if match:
                 dest = match.group(1)
                 cycles = match.group(2)
+                hops = match.group(3)
         with open(result_csv_path, "a") as result_file:
-            result_file.write(f"{typ},{dest},{cycles}\n")
+            result_file.write(f"{typ},{dest},{cycles},{hops}\n")
 
 
     # 5. Delete the entire folder
