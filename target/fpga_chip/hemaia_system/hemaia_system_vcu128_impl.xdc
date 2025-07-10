@@ -110,8 +110,8 @@ create_clock -period 62.5 -name clk_peri [get_pins hemaia_system_i/clk_wiz/clk_p
 set_clock_groups -asynchronous \
     -group [get_clocks -of [get_pins hemaia_system_i/clk_wiz/clk_main]] \
     -group [get_clocks -of [get_pins hemaia_system_i/occamy_chip/clk_periph_i]] \
-    -group [get_clocks -of [get_pins hemaia_system_i/occamy_chip/inst/i_hemaia_clk_rst_controller/gen_clock_divider[0].i_clk_divider.clk_o]] \
-    -group [get_clocks -of [get_pins hemaia_system_i/occamy_chip/inst/i_hemaia_clk_rst_controller/gen_clock_divider[1].i_clk_divider.clk_o]]
+    -group [get_clocks -of [get_pins hemaia_system_i/occamy_chip/inst/i_hemaia_clk_rst_controller/gen_clock_divider[0].i_clk_divider/clk_o]] \
+    -group [get_clocks -of [get_pins hemaia_system_i/occamy_chip/inst/i_hemaia_clk_rst_controller/gen_clock_divider[1].i_clk_divider/clk_o]]
 
 ################################################################################
 # JTAG

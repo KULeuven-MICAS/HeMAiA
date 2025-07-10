@@ -20,7 +20,7 @@ module testharness
 
   localparam RTCTCK = 30.518us;        // 32.768 kHz
   localparam CLKTCK = 1ns;             // 1 GHz
-  localparam PRITCK = 8ns;             // 125 MHz
+  localparam PRITCK = 1ns;             // 1 GHz
   localparam int  SRAM_BANK = 32;      // 32 Banks architecture
   localparam int  SRAM_DEPTH = ${int(mem_size/8/32)};
   localparam int  SRAM_WIDTH = 8;      // 8 Bytes Wide

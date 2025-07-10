@@ -1,19 +1,19 @@
 {
-    bender_target: ["cv64a6_imafdc_sv39", "occamy"],
+    bender_target: ["cv64a6_imafdc_sv39", "occamy", "occamy_noc"],
     // Remote CFG, about to be removed
     is_remote_quadrant: false,
     remote_quadrants: [],
     // Multi-chip configuration
     hemaia_multichip: {
-      chip_id_width: 8,             // Not verified, should never be changed
-      router_to_soc_iw: 4,          // soc_to_router_iw + clog2(chips)
-      soc_to_router_iw: 4,          // Not beneficial for iw > 6
+      chip_id_width: 8, 
+      router_to_soc_iw: 8,
+      soc_to_router_iw: 4,
       single_chip: true,
-      single_chip_id: 0,            // Only used for single chip simulation
-      testbench_cfg: {              // The total number of homogeneous chips (x * y) on the virtual interposer
-        // Emulate a two-chips configuration
+      single_chip_id: 0, 
+      testbench_cfg: {
+        // Emulate a four-chips configuration
         upper_left_coordinate: [0, 0],
-        lower_right_coordinate: [0, 0],
+        lower_right_coordinate: [1, 1]
       }
     }
     addr_width: 48,
@@ -24,7 +24,6 @@
       max_mst_trans: 64,
       fall_through: false,
     },
-    quadrant_inter_xbar_slv_id_width_no_rocache: 3,
     quadrant_inter_xbar: {
       max_slv_trans: 64,
       max_mst_trans: 64,
@@ -81,7 +80,6 @@
       periph_axi_lite_narrow_plic_cfg: 1,
       periph_axi_lite_narrow_spim_cfg: 1,
       periph_axi_lite_narrow_timer_cfg: 1,
-      periph_axi_lite_narrow_d2d_link_cfg: 1,
     },
     txns: {
       wide_and_inter: 128,
@@ -89,10 +87,14 @@
       narrow_and_wide: 16,
       rmq: 4,
     },
-    narrow_xbar_slv_id_width: 4,
-    narrow_xbar_user_width: 3, // clog2(total number of clusters)
     nr_s1_quadrant: 1,
     s1_quadrant: {
+      noc_cfg: {
+        en_floonoc: true,
+        routing_algo: "XY",
+        noc_name: "quad_mesh_xy",
+        noc_array: [2, 2]
+      },
       // number of pending transactions on the narrow/wide network
       narrow_trans: 32,
       wide_trans: 32,
@@ -109,22 +111,24 @@
         max_mst_trans: 32,
         fall_through: false,
       },
-      wide_xbar_slv_id_width: 3
+      // wide_xbar_slv_id_width: 3
       narrow_xbar: {
         max_slv_trans: 8,
         max_mst_trans: 8,
         fall_through: false,
       },
-      narrow_xbar_slv_id_width: 4,
-      narrow_xbar_user_width: 3, // clog2(total number of clusters)
+      // narrow_xbar_slv_id_width: 4,
+      // narrow_xbar_user_width: 3, // clog2(total number of clusters)
       cfg_base_addr: 184549376, // 0x0b000000
-      cfg_base_offset: 65536 // 0x10000
+      cfg_base_offset: 65536, // 0x10000
+
+      
     },
     clusters:[
-      "snax_KUL_cluster",
-      "snax_KUL_cluster",
-      "snax_KUL_cluster",
-      "snax_KUL_cluster",
+      "snax_xdma_cluster",
+      "snax_xdma_cluster",
+      "snax_xdma_cluster",
+      "snax_xdma_cluster",
       ],
 
     // peripherals
@@ -202,7 +206,7 @@
     },
     spm_wide: {
       address: 2147483648, // 0x8000_0000
-      length: 16777216,    // 16 MiB 0x100_0000
+      length: 16777216, // 16 MiB 0x100_0000
       banks: 32,
     },
     wide_zero_mem: {

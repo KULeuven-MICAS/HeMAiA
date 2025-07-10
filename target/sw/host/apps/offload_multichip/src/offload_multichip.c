@@ -6,6 +6,9 @@
 #include "host.h"
 
 int main() {
+    // Set clk manager to 1 division for a faster simulation time
+    enable_clk_domain(0, 1);
+    enable_clk_domain(1, 1);
     // The pointer to the communication buffer
     volatile comm_buffer_t* comm_buffer_ptr = (comm_buffer_t*)0;
 

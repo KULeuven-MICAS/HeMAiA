@@ -1,13 +1,5 @@
-/bin/
-/logs/
-/addrmap/
-/work/
-/work-vsim/
-/*.log
-/*.jou
 /.*_targets_group
-/sw/**/build/
-/runs/
+/cfg/lru.hjson
 
 # Auto-generated sources
 /src/

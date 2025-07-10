@@ -1,1 +1,0 @@
-apps/snax/snax-test-integration apps/snax/snax-xdma-maxpool apps/snax/snax-xdma-memset apps/snax/snax-xdma-multicast apps/snax/snax-xdma-copy apps/snax/snax-xdma-transpose apps/snax/snax-xdma-reshape apps/snax/snax-axi-torture apps/snax/snax-axi-torture-devil

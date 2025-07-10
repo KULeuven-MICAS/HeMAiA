@@ -75,6 +75,9 @@ VLT_SOURCES   = $(shell ${BENDER} script flist ${VLT_BENDER} | ${SED_SRCS})
 VLT_BUILDDIR := work-vlt
 
 VLT_FLAGS    += --timing
+VLT_FLAGS    += --x-assign fast
+VLT_FLAGS    += --x-initial fast
+VLT_FLAGS    += --unroll-count 256
 VLT_FLAGS    += -Wno-BLKANDNBLK
 VLT_FLAGS    += -Wno-LITENDIAN
 VLT_FLAGS    += -Wno-CASEINCOMPLETE
@@ -84,10 +87,13 @@ VLT_FLAGS    += -Wno-WIDTHCONCAT
 VLT_FLAGS    += -Wno-UNSIGNED
 VLT_FLAGS    += -Wno-UNOPTFLAT
 VLT_FLAGS    += -Wno-fatal
-VLT_FLAGS    += +define+SYNTHESIS
-VLT_FLAGS    += --unroll-count 1024
+VLT_FLAGS    += -Wno-SYMRSVDWORD
+VLT_FLAGS    += -Wno-BLKLOOPINIT
 
-VLT_CXXSTD_FLAGS += -std=c++20 -pthread -latomic
+VLT_FLAGS    += +define+SYNTHESIS
+
+
+VLT_CXXSTD_FLAGS += -std=c++20 -O3 -march=native -flto -pthread -latomic
 
 VLT_CFLAGS   += ${VLT_CXXSTD_FLAGS} -I ${VLT_BUILDDIR} -I $(VLT_ROOT)/include -I $(VLT_ROOT)/include/vltstd -I $(VLT_FESVR)/include -I ${MKFILE_DIR}/test
 
