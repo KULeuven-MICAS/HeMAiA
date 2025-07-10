@@ -13,8 +13,9 @@ binary_path_1 = os.path.abspath(os.path.join(script_dir, "../../../sim/bin/occam
 binary_path_2 = os.path.abspath(os.path.join(script_dir, "../../../sim/work-vsim"))
 app_path = os.path.abspath(os.path.join(script_dir, "../../../sim/bin/app_chip_0_0"))
 
-num_threads = 24
-sizes = [64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288]
+num_threads = 5
+sizes = [524288]
+# sizes = [64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288]
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
@@ -40,7 +41,7 @@ with open(result_csv_path, 'w') as result_csv:
 # The function needs to be parallelized
 def process_configuration(folder_name, size):
     subprocess.run("./bin/occamy_chip.vsim", shell=True, cwd=folder_name, check=True)
-    with open(os.path.join(folder_name, "/bin/uart_0_0.log"), "r") as log_file:
+    with open(os.path.join(folder_name, "bin/uart_0_0.log"), "r") as log_file:
         xdma_copy_line = next((ln for ln in log_file if "The XDMA copy is finished in" in ln), "")
         xdma_copy_cycle_val = xdma_copy_line.split("in")[-1].split("cycles")[0].strip() if xdma_copy_line else "N/A"
 
