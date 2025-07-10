@@ -99,30 +99,30 @@ with ThreadPoolExecutor(max_workers=num_threads) as executor:
             if phase == 1:
                 os.makedirs(folder_name, exist_ok=True)
 
-            # 2. Modify the params.hjson values in place
-            param_data["multicast_num"] = num_dest
-            with open(param_path, 'w') as f:
-                hjson.dump(param_data, f)
+                # 2. Modify the params.hjson values in place
+                param_data["multicast_num"] = num_dest
+                with open(param_path, 'w') as f:
+                    hjson.dump(param_data, f)
 
-            # 3a. Execute "make sw" and then "make apps" in the apps folder
-            subprocess.run(["make", "sw", "CFG_OVERRIDE=target/rtl/cfg/hemaia_noc.hjson", "-j"], cwd=hemaia_root_path, check=True)
-            subprocess.run(["make", "apps", "DEVICE_APP=snax-xdma-multicast-exploration"], cwd=hemaia_root_path, check=True)
-            # 4. Copy the "snax-xdma-multicast" folder to the new folder
-            source_dir = app_path
-            target_dir = os.path.join(folder_name + "/bin", "app_chip_0_0")
-            os.makedirs(os.path.dirname(target_dir), exist_ok=True)
-            shutil.copytree(source_dir, target_dir)
+                # 3a. Execute "make sw" and then "make apps" in the apps folder
+                subprocess.run(["make", "sw", "CFG_OVERRIDE=target/rtl/cfg/hemaia_noc.hjson", "-j"], cwd=hemaia_root_path, check=True)
+                subprocess.run(["make", "apps", "DEVICE_APP=snax-xdma-multicast-exploration"], cwd=hemaia_root_path, check=True)
+                # 4. Copy the "snax-xdma-multicast" folder to the new folder
+                source_dir = app_path
+                target_dir = os.path.join(folder_name + "/bin", "app_chip_0_0")
+                os.makedirs(os.path.dirname(target_dir), exist_ok=True)
+                shutil.copytree(source_dir, target_dir)
 
-            # 4. Copy the simulation binary into the new folder
-            dest_binary_path_1 = os.path.join(folder_name + "/bin", os.path.basename(binary_path_1))
-            os.makedirs(os.path.dirname(dest_binary_path_1), exist_ok=True)
-            shutil.copyfile(binary_path_1, dest_binary_path_1)
-            os.chmod(dest_binary_path_1, 0o755)
+                # 4. Copy the simulation binary into the new folder
+                dest_binary_path_1 = os.path.join(folder_name + "/bin", os.path.basename(binary_path_1))
+                os.makedirs(os.path.dirname(dest_binary_path_1), exist_ok=True)
+                shutil.copyfile(binary_path_1, dest_binary_path_1)
+                os.chmod(dest_binary_path_1, 0o755)
 
-            dest_binary_path_2 = os.path.join(folder_name, os.path.basename(binary_path_2))
-            shutil.copytree(binary_path_2, dest_binary_path_2)
-        else:
-            futures.append(executor.submit(process_configuration, folder_name))
+                dest_binary_path_2 = os.path.join(folder_name, os.path.basename(binary_path_2))
+                shutil.copytree(binary_path_2, dest_binary_path_2)
+            else:
+                futures.append(executor.submit(process_configuration, folder_name))
 
     # Wait for all threads to complete
     for future in futures:
