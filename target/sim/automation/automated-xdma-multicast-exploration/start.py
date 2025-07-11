@@ -79,7 +79,8 @@ def process_configuration(folder_name):
         typ = "xdma_optimal"
         dest = "N/A"
         cycles = "N/A"
-        pattern = re.compile(r"The XDMA optimal copy to (\d+) dest is finished in (\d+) cycles. Total hops = (\d+)")
+        hops = "N/A"
+        pattern = re.compile(r"The XDMA optimal copy to (\d+) dest is finished in (\d+) cycles with hops of (\d+)")
         for ln in log_file:
             match = pattern.search(ln)
             if match:
