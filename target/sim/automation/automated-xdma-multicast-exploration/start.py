@@ -15,8 +15,8 @@ binary_path_2 = os.path.abspath(os.path.join(script_dir, "../../../sim/work-vsim
 app_path = os.path.abspath(os.path.join(script_dir, "../../../sim/bin/app_chip_0_0"))
 
 num_threads = 16
-num_dests = [2, 4, 6, 8, 10]
-num_repetitions = 1
+num_dests = [2, 4, 6, 8, 10, 12]
+num_repetitions = 32
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
