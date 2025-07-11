@@ -63,8 +63,8 @@ int main() {
         int task_id = xdma_start();
         xdma_remote_wait(task_id);
         printf(
-            "The XDMA normal copy to %d dest is finished in %d cycles. Total "
-            "hops = %d\r\n",
+            "The XDMA normal copy to %d dest is finished in %d cycles with "
+            "hops of %d\r\n",
             MULTICAST_NUM, xdma_last_task_cycle(), multicast_total_hops);
 
         // Experiment group 2:
@@ -78,8 +78,8 @@ int main() {
         task_id = xdma_start();
         xdma_remote_wait(task_id);
         printf(
-            "The XDMA optimal copy to %d dest is finished in %d cycles. Total "
-            "hops = %d\r\n",
+            "The XDMA optimal copy to %d dest is finished in %d cycles with "
+            "hops of %d\r\n",
             MULTICAST_NUM, xdma_last_task_cycle(),
             multicast_pointers_optimized);
     }

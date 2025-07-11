@@ -16,7 +16,7 @@ app_path = os.path.abspath(os.path.join(script_dir, "../../../sim/bin/app_chip_0
 
 num_threads = 16
 num_dests = [2, 4, 6, 8, 10]
-num_repetitions = 32
+num_repetitions = 1
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
@@ -64,7 +64,7 @@ def process_configuration(folder_name):
         dest = "N/A"
         cycles = "N/A"
         hops = "N/A"
-        pattern = re.compile(r"The XDMA normal copy to (\d+) dest is finished in (\d+) cycles. Total hops = (\d+)")
+        pattern = re.compile(r"The XDMA normal copy to (\d+) dest is finished in (\d+) cycles with hops of (\d+)")
         for ln in log_file:
             match = pattern.search(ln)
             if match:
