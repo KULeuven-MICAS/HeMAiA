@@ -53,8 +53,11 @@ int main() {
                               data_size * sizeof(data[0]));
         }
         snrt_dma_wait_all();
-        printf("The IDMA copy to %d dest is finished in %d cycles\r\n",
-               MULTICAST_NUM, snrt_get_perf_counter(SNRT_PERF_CNT0));
+        printf(
+            "The IDMA copy to %d dest is finished in %d cycles with %d "
+            "hops\r\n",
+            MULTICAST_NUM, snrt_get_perf_counter(SNRT_PERF_CNT0),
+            unicast_total_hops);
         snrt_reset_perf_counter(SNRT_PERF_CNT0);
 
         // Experiment group 1:
@@ -63,8 +66,8 @@ int main() {
         int task_id = xdma_start();
         xdma_remote_wait(task_id);
         printf(
-            "The XDMA normal copy to %d dest is finished in %d cycles with "
-            "hops of %d\r\n",
+            "The XDMA normal copy to %d dest is finished in %d cycles with %d "
+            "hops\r\n",
             MULTICAST_NUM, xdma_last_task_cycle(), multicast_total_hops);
 
         // Experiment group 2:
@@ -78,10 +81,12 @@ int main() {
         task_id = xdma_start();
         xdma_remote_wait(task_id);
         printf(
-            "The XDMA optimal copy to %d dest is finished in %d cycles with "
-            "hops of %d\r\n",
+            "The XDMA optimal copy to %d dest is finished in %d cycles with %d "
+            "hops\r\n",
             MULTICAST_NUM, xdma_last_task_cycle(),
             multicast_total_hops_optimized);
+        printf("The ideal broadcast to %d dest has %d hops\r\n", MULTICAST_NUM,
+               broadcast_total_hops);
     }
 
     return 0;

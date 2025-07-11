@@ -12,12 +12,13 @@ import pathlib
 import hjson
 import sys
 import os
+import time
 
 # Add data utility path
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../../../../../util/sim/"))
 from data_utils import format_scalar_definition, format_scalar_define, format_vector_definition  # noqa E402
 
-np.random.seed(320)
+np.random.seed((int(time.time() * 1e9) ^ os.getpid()) % (2**32))
 
 # Optimise pointer order for multicast
 def optimise_pointer_order(pointers, noc_x, noc_y):
@@ -93,6 +94,30 @@ def total_xy_hops(order, noc_x, noc_y):
         current = dst
     return hops
 
+# Compute broadcast hops by counting each XY-edge only once
+def total_xy_hops_broadcast(dests, noc_x, noc_y):
+    def coords(idx):
+        return divmod(idx, noc_y)
+    def xy_edges(a, b):
+        ax, ay = coords(a)
+        bx, by = coords(b)
+        edges = []
+        # X‐direction
+        step = 1 if bx > ax else -1
+        for x in range(ax, bx, step):
+            edges.append(((x, ay), (x+step, ay)))
+        # Y‐direction
+        step = 1 if by > ay else -1
+        for y in range(ay, by, step):
+            edges.append(((bx, y), (bx, y+step)))
+        return edges
+
+    used_edges = set()
+    for d in dests:
+        used_edges.update(xy_edges(0, d))
+    return len(used_edges)
+
+
 # Add stdint.h header
 def emit_header_file(**kwargs):
     emit_str = ["#include <stdint.h>"]
@@ -151,6 +176,16 @@ def emit_multicast_pointers(**kwargs):
         np.array(pointers, dtype=np.uint8))
     ]
 
+    unicast_total_hops = sum(
+        total_xy_hops([p], noc_x_size, noc_y_size) for p in pointers
+    )
+    emit_str += [
+        format_scalar_definition(
+            "uint32_t",
+            "unicast_total_hops",
+            unicast_total_hops),
+    ]
+
     emit_str += [
         format_scalar_definition(
             "uint32_t",
@@ -172,6 +207,19 @@ def emit_multicast_pointers(**kwargs):
             "uint32_t",
             "multicast_total_hops_optimized",
             total_xy_hops(pointers, noc_x_size, noc_y_size)),
+    ]
+
+    # The total hops for broadcast
+    broadcast_total_hops = total_xy_hops_broadcast(pointers,
+                                                   noc_x_size,
+                                                   noc_y_size)
+
+    emit_str += [
+        format_scalar_definition(
+            "uint32_t",
+            "broadcast_total_hops",
+            broadcast_total_hops
+        )
     ]
 
     return emit_str

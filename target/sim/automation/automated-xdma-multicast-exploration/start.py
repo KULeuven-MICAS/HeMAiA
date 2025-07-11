@@ -49,12 +49,13 @@ def process_configuration(folder_name):
         dest = "N/A"
         cycles = "N/A"
         hops = "N/A"
-        pattern = re.compile(r"The IDMA copy to (\d+) dest is finished in (\d+) cycles")
+        pattern = re.compile(r"The IDMA copy to (\d+) dest is finished in (\d+) cycles with (\d+) hops")
         for ln in log_file:
             match = pattern.search(ln)
             if match:
                 dest = match.group(1)
                 cycles = match.group(2)
+                hops = match.group(3)
         with open(result_csv_path, "a") as result_file:
             result_file.write(f"{typ},{dest},{cycles},{hops}\n")
 
@@ -64,7 +65,7 @@ def process_configuration(folder_name):
         dest = "N/A"
         cycles = "N/A"
         hops = "N/A"
-        pattern = re.compile(r"The XDMA normal copy to (\d+) dest is finished in (\d+) cycles with hops of (\d+)")
+        pattern = re.compile(r"The XDMA normal copy to (\d+) dest is finished in (\d+) cycles with (\d+) hops")
         for ln in log_file:
             match = pattern.search(ln)
             if match:
@@ -80,7 +81,7 @@ def process_configuration(folder_name):
         dest = "N/A"
         cycles = "N/A"
         hops = "N/A"
-        pattern = re.compile(r"The XDMA optimal copy to (\d+) dest is finished in (\d+) cycles with hops of (\d+)")
+        pattern = re.compile(r"The XDMA optimal copy to (\d+) dest is finished in (\d+) cycles with (\d+) hops")
         for ln in log_file:
             match = pattern.search(ln)
             if match:
@@ -90,7 +91,20 @@ def process_configuration(folder_name):
         with open(result_csv_path, "a") as result_file:
             result_file.write(f"{typ},{dest},{cycles},{hops}\n")
 
-
+        # Get the Ideal Experiment results
+        log_file.seek(0)
+        typ = "ideal"
+        dest = "N/A"
+        cycles = "N/A"
+        hops = "N/A"
+        pattern = re.compile(r"The ideal broadcast to (\d+) dest has (\d+) hops")
+        for ln in log_file:
+            match = pattern.search(ln)
+            if match:
+                dest = match.group(1)
+                hops = match.group(3)
+        with open(result_csv_path, "a") as result_file:
+            result_file.write(f"{typ},{dest},{cycles},{hops}\n")
     # 5. Delete the entire folder
     shutil.rmtree(folder_name)
 
