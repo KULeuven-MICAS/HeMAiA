@@ -81,7 +81,7 @@ int main() {
             "The XDMA optimal copy to %d dest is finished in %d cycles with "
             "hops of %d\r\n",
             MULTICAST_NUM, xdma_last_task_cycle(),
-            multicast_pointers_optimized);
+            multicast_total_hops_optimized);
     }
 
     return 0;
