@@ -102,7 +102,7 @@ def process_configuration(folder_name):
             match = pattern.search(ln)
             if match:
                 dest = match.group(1)
-                hops = match.group(3)
+                hops = match.group(2)
         with open(result_csv_path, "a") as result_file:
             result_file.write(f"{typ},{dest},{cycles},{hops}\n")
     # 5. Delete the entire folder
