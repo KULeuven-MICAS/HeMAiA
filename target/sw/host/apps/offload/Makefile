@@ -39,6 +39,7 @@ DEVICE_APPS += apps/snax/snax-xdma-copy
 DEVICE_APPS += apps/snax/snax-xdma-transpose
 DEVICE_APPS += apps/snax/snax-xdma-reshape
 DEVICE_APPS += apps/snax/snax-xdma-multicast-exploration
+DEVICE_APPS += apps/snax/snax-xdma-overhead
 DEVICE_APPS += apps/snax/snax-axi-torture
 DEVICE_APPS += apps/snax/snax-axi-torture-devil
 
