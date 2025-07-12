@@ -863,7 +863,8 @@ def get_multichip_testharness_kwargs(occamy_cfg, soc2router_bus, router2soc_bus,
         "multichip_cfg": occamy_cfg["hemaia_multichip"],
         "soc2router_bus": soc2router_bus,
         "router2soc_bus": router2soc_bus,
-        "mem_size": occamy_cfg["spm_wide"]["length"]
+        "mem_size": occamy_cfg["spm_wide"]["length"],
+        "mem_bank": occamy_cfg["spm_wide"]["banks"],
     }
     return testharness_kwargs
 
