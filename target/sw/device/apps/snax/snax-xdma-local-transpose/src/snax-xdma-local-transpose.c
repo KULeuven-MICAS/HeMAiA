@@ -31,23 +31,23 @@ int main() {
         // --------------------- Configure the Ext --------------------- //
 
         if (xdma_disable_src_ext(0) != 0) {
-            printf("Error in disabling reader xdma extension 0\n");
+            printf("Error in disabling reader xdma extension 0\r\n");
             err++;
         }
 
         if (xdma_disable_dst_ext(0) != 0) {
-            printf("Error in disabling writer xdma extension 1\n");
+            printf("Error in disabling writer xdma extension 1\r\n");
             err++;
         }
 
         if (enable_transpose) {
             if (xdma_enable_dst_ext(1, (uint32_t *)transposer_param) != 0) {
-                printf("Error in enabling xdma writer extension 1\n");
+                printf("Error in enabling xdma writer extension 1\r\n");
                 err++;
             }
         } else {
             if (xdma_disable_dst_ext(1) != 0) {
-                printf("Error in disabling xdma writer extension 1\n");
+                printf("Error in disabling xdma writer extension 1\r\n");
                 err++;
             }
         }
@@ -61,7 +61,7 @@ int main() {
 
         int task_id = xdma_start();
         xdma_local_wait(task_id);
-        printf("xdma task %d is done in %d cycles\n", task_id,
+        printf("xdma task %d is done in %d cycles\r\n", task_id,
                xdma_last_task_cycle());
 
         // --------------------- Checking the Results --------------------- //
@@ -70,10 +70,10 @@ int main() {
 
         for (int i = 0; i < matrix_size * sizeof(input_matrix[0]) / 4; i++) {
             if (tcdm_result[i] != golden_result[i]) {
-                printf("The transpose is incorrect at byte %d! \n", i << 2);
+                printf("The transpose is incorrect at byte %d! \r\n", i << 2);
             }
         }
-        printf("Checking is done. All values are right\n");
+        printf("Checking is done. All values are right\r\n");
     }
 
     return 0;
