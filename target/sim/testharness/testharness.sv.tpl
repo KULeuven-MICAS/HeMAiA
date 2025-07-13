@@ -42,7 +42,11 @@ module testharness
 % for i in x:
 %   for j in y:
 %     for k in range(0, mem_bank):
+%       if backend is False:
     i_occamy_${i}_${j}.i_hemaia_mem_system.i_hemaia_mem.gen_banks[${k}].i_data_mem.i_tc_sram.load_data("app_chip_${i}_${j}/bank_${k}.hex");
+%       else:
+    i_occamy_${i}_${j}.i_hemaia_mem_system.i_hemaia_mem.gen_banks[${k}].i_data_mem.i_tc_sram.gen_mem.gen_${int(mem_size/8/mem_bank)}x${64}.u_sram.load_data("app_chip_${i}_${j}/bank_${k}.hex");
+%       endif
 %     endfor
 %   endfor
 % endfor
@@ -240,6 +244,7 @@ module testharness
       .rx_i  (tx_${i}_${j})
   );
 
+% if backend is False:
   // Chip Status Monitor Block
   always @(i_occamy_${i}_${j}.i_hemaia_mem_system.i_hemaia_mem.gen_banks[${mem_bank-1}].i_data_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32]) begin
     if (i_occamy_${i}_${j}.i_hemaia_mem_system.i_hemaia_mem.gen_banks[${mem_bank-1}].i_data_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32] != 0) begin
@@ -254,6 +259,7 @@ module testharness
       end
     end
   end
+% endif
 
 %   endfor
 % endfor

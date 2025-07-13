@@ -99,6 +99,9 @@ def main():
     parser.add_argument("--multichip-testharness-sv",
                         metavar="MULTICHIP_TESTHARNESS_SV",
                         help="Name of the multichip testharness wrapper file (output).")
+    parser.add_argument("--backend-testharness-sv",
+                        metavar="BACKEND_TESTHARNESS_SV",
+                        help="Name of the backend testharness wrapper file (output).")
     parser.add_argument("--cva6-sv",
                         metavar="CVA6_SV",
                         help="Name of the CVA6 wrapper file (output).")
@@ -658,6 +661,11 @@ def main():
         multichip_testharness_kwargs = occamy.get_multichip_testharness_kwargs(
             occamy_cfg, soc2router_bus, router2soc_bus, name)
         write_template(args.multichip_testharness_sv, outdir, **multichip_testharness_kwargs)
+
+    if args.backend_testharness_sv:
+        backend_testharness_kwargs = occamy.get_backend_testharness_kwargs(
+            occamy_cfg, soc2router_bus, router2soc_bus, name)
+        write_template(args.backend_testharness_sv, outdir, **backend_testharness_kwargs)
 
     ############
     # BOOTDATA #
