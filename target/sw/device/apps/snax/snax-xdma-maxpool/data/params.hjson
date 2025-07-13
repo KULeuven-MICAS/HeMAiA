@@ -6,7 +6,7 @@
   Nbatch: 1
   H: 20
   W: 20
-  Cin: 1024
+  Cin: 32
   Kh: 5
   Kw: 5
   pad_h: 0

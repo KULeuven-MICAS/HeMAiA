@@ -202,7 +202,7 @@
     // non-peripheral IPs
     spm_narrow: {
       address: 1879048192, // 0x7000_0000
-      length: 131072, // 128 kiB 0x2_0000
+      length: 32768, // 32 kiB 0x8000
     },
     spm_wide: {
       address: 2147483648, // 0x8000_0000
