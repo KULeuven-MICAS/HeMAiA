@@ -85,7 +85,6 @@ create_generated_clock \
     -name clk_main \
     -source [get_pins hemaia_system_i/versal_cips_0/pl0_ref_clk] \
     -divide_by 1 \
-    -add \
     -master_clock clk_pl_0 \
     [get_pins hemaia_system_i/occamy_chip/inst/clk_i]
 
@@ -93,7 +92,6 @@ create_generated_clock \
     -name clk_peri \
     -source [get_pins hemaia_system_i/versal_cips_0/pl2_ref_clk] \
     -divide_by 1 \
-    -add \
     -master_clock clk_pl_2 \
     [get_pins hemaia_system_i/occamy_chip/inst/clk_periph_i]
 
@@ -101,7 +99,6 @@ create_generated_clock \
     -name clk_core \
     -source [get_pins hemaia_system_i/occamy_chip/inst/clk_i] \
     -divide_by 6 \
-    -add \
     -master_clock clk_main \
     [get_pins hemaia_system_i/occamy_chip/inst/i_hemaia_clk_rst_controller/gen_clock_divider[0].i_clk_divider/clk_o]
 
@@ -109,17 +106,12 @@ create_generated_clock \
     -name clk_acc \
     -source [get_pins hemaia_system_i/occamy_chip/inst/clk_i] \
     -divide_by 6 \
-    -add \
     -master_clock clk_main \
     [get_pins hemaia_system_i/occamy_chip/inst/i_hemaia_clk_rst_controller/gen_clock_divider[1].i_clk_divider/clk_o]
 
 set_clock_groups -asynchronous \
-    -group [get_clocks clk_pl_0] \
-    -group [get_clocks clk_pl_2] \
-    -group [get_clocks clk_main] \
-    -group [get_clocks clk_peri] \
-    -group [get_clocks clk_core] \
-    -group [get_clocks clk_acc]
+    -group [get_clocks clk_pl_0 clk_main clk_core clk_acc] \
+    -group [get_clocks clk_pl_2 clk_peri]
 
 # CDC 2phase clearable of DM: i_cdc_resp/i_cdc_req
 # CONSTRAINT: Requires max_delay of min_period(src_clk_i, dst_clk_i) through the paths async_req, async_ack, async_data.
