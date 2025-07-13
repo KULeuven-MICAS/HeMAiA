@@ -42,6 +42,7 @@ UART_DPI_DIR         ?= $(SIM_MKFILE_DIR)testharness/uartdpi
 #####################
 # Simulator options #
 #####################
+SIM_WITH_TSMC16_MACRO ?= 0
 
 VSIM_BENDER += $(shell cat ../rtl/src/bender_targets.tmp)
 VLT_BENDER  += $(shell cat ../rtl/src/bender_targets.tmp)
@@ -49,9 +50,15 @@ VCS_BENDER  += $(shell cat ../rtl/src/bender_targets.tmp)
 
 VLT_BENDER  += -t SYNTHESIS_SNAX_DEV_ONLY
 
-VSIM_BENDER += -t simulation_hemaia -t hemaia
-VLT_BENDER  += -t simulation_hemaia -t hemaia
-VCS_BENDER  += -t simulation_hemaia -t hemaia
+ifeq ($(SIM_WITH_TSMC16_MACRO), 1)
+	VSIM_BENDER += -t tsmc16_sim -t tsmc16 -t hemaia
+	VLT_BENDER  += -t tsmc16_sim -t tsmc16 -t hemaia
+	VCS_BENDER  += -t tsmc16_sim -t tsmc16 -t hemaia
+else
+	VSIM_BENDER += -t simulation_hemaia -t hemaia
+	VLT_BENDER  += -t simulation_hemaia -t hemaia
+	VCS_BENDER  += -t simulation_hemaia -t hemaia
+endif
 
 VSIM_FLAGS += -t 1ps
 VSIM_FLAGS += -voptargs=+acc
