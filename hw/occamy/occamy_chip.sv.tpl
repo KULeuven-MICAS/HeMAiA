@@ -16,9 +16,9 @@ import ${name}_pkg::*;
   input  logic        rst_periph_ni,
   /// Real-time clock (for time keeping)
   input  logic        rtc_i,
-  input  logic        test_mode_i,
-  input  chip_id_t    chip_id_i,
-  input  logic [1:0]  boot_mode_i,
+  (* false_path *) input  logic        test_mode_i,
+  (* false_path *) input  chip_id_t    chip_id_i,
+  (* false_path *) input  logic [1:0]  boot_mode_i,
 % if occamy_cfg['hemaia_multichip']['single_chip'] is False: 
   // East side
   input  logic        east_test_being_requested_i,
