@@ -412,5 +412,9 @@ int main() {
         };
 
     };
+    //// When using single cluster, uncomment the following line
+    //// This function will return directly to the host instead of
+    //// relying on the snitch_main to exit
+    // return_to_cva6_single_cluster(err);
     return err;
 }
