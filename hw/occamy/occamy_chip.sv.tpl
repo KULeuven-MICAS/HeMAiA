@@ -9,13 +9,15 @@
 module ${name}_chip
 import ${name}_pkg::*;
  (
+  // The Clock Reset Controller takes care of clk_i and rst_ni, should not be marked as false_path
   input  logic        clk_i,
   input  logic        rst_ni,
-  /// Peripheral clock
+  // clk_periph_i and rst_periph_ni are directly used by logics, should be marked as false_path
   input  logic        clk_periph_i,
-  input  logic        rst_periph_ni,
+  (* false_path *) input  logic        rst_periph_ni,
   /// Real-time clock (for time keeping)
   input  logic        rtc_i,
+  // Quasi-static configuration signals, can be marked as false_path
   (* false_path *) input  logic        test_mode_i,
   (* false_path *) input  chip_id_t    chip_id_i,
   (* false_path *) input  logic [1:0]  boot_mode_i,
