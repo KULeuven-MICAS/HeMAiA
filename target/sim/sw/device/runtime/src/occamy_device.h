@@ -65,3 +65,13 @@ inline void return_to_cva6(sync_t sync) {
         set_host_sw_interrupt();
     }
 }
+
+
+// Temporary function to return to CVA6 in the single cluster mode
+inline void return_to_cva6_single_cluster(int exit_code){
+    snrt_cluster_hw_barrier();
+    if (snrt_is_dm_core()){
+        *(soc_ctrl_scratch_ptr(3)) = (exit_code << 1) | 1;
+        set_host_sw_interrupt();
+    }
+}
