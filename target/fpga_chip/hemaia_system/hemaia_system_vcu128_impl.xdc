@@ -106,8 +106,10 @@ create_generated_clock \
 create_clock -period 62.5 -name clk_peri [get_pins hemaia_system_i/clk_wiz/clk_peri]
 
 set_clock_groups -asynchronous \
-    -group [get_clocks clk_main clk_core clk_acc] \
-    -group [get_clocks clk_peri]
+    -group {clk_main} \
+    -group {clk_core} \
+    -group {clk_acc} \
+    -group {clk_peri}
 
 ################################################################################
 # JTAG
