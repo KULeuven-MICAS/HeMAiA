@@ -34,7 +34,7 @@ make occamy_system_vlt -j24
 - Execute the compiled binary:
 ```bash
 # @ target/sim
-cd target/sim;bin/occamy_top.vlt [Elf location]
+cd target/sim;bin/occamy_top.vlt sw/host/apps/offload/build/[choose any ELF]
 ```
 
 ### Perform RTL simulation using Questasim:
@@ -48,7 +48,7 @@ make occamy_system_vsim
 ```
 - Execute the compiled binary:
 ```bash
-cd target/sim;bin/occamy_top.vsim[.gui] [Elf location]
+cd target/sim;bin/occamy_top.vsim[.gui] sw/host/apps/offload/build/[choose any ELF]
 ```
 
 ### Perform FPGA Prototype:
@@ -88,6 +88,40 @@ cd target/fpga_chip_apps
 It takes some time for the handshaking between the computer and the SoC (20 seconds). At the end you will see transfer complete. 
 
 - Open minicom and execute the binary by pressing 4. 
+
+## How to Build Your Own Program
+
+The relevant directory contents for making your own program are listed below:
+
+- `target/sim/sw/device/apps/snax`: contains all the snax programs.
+  - In each program you will see the necessaryt source and data files.
+- `target/sim/sw/device/snax`: contains all the pre-built kernel libraries. These are sourced by the programs made in the `apps` directory.
+- `target/sim/sw/device/host`: contains the programs for the CVA6 to run.
+- `target/sim/sw/device/host/apps/offload`: contains the most relevant source code for the CVA6. The source C file simply initializes the host and snax cores and waits for them to finish. Take note that snax cores are like "devices" in this regard.
+- `target/sim/sw/device/host/apps/offload/build`: contains all the compiled `.elf` files to be run by the host. Since HEMAIA is a host-system, all programs start running from the host.
+
+Programs are written by:
+- Follow from several examples inside the `target/sim/sw/device/apps/snax` directory.
+  - This is similar to programming a simple cluster shell from SNAX cluster.
+  - Put all your starting `data.h` and source codes in this directory.
+  - Take note, that you have to also specify in the program, which cluster core you are using. So there is an extra layer of conditional statement to indicate which cluster shell is running:
+
+```C
+    // n - is the cluster number you are using
+    // e.g., in HEMAIA, cluster number 3 is the DIMC
+    if (snrt_cluster_idx() == n){
+        // Put your original SNAX cluster code in here
+    }
+```
+
+- If you will use pre-built kernels for your accelerator, put them in: `target/sim/sw/device/snax`
+- Modify `target/sim/sw/host/apps/offload/Makefile` and add to the `DEVICE_APPS` list the path to the new program you are using.
+
+```Makefile
+DEVICE_APPS += [insert the path to your program]
+```
+
+- When you accomplish all you can build your SW: `make CFG_OVERRIDE=... sw -j`
 
 ## Content
 
@@ -149,7 +183,7 @@ The following files are released under Solderpad v0.51 (`SHL-0.51`) see `hw/LICE
 @ SNAX Docker: make sw CFG_OVERRIDE=target/rtl/cfg/...hjson
 @ SNAX Docker: make rtl CFG_OVERRIDE=target/rtl/cfg/...hjson
 @ SNAX Docker: make occamy_system_vlt
-@ SNAX Docker: cd target/sim/bin;./occamy_top.vlt [Elf location] [--vcd]
+@ SNAX Docker: cd target/sim/bin;./occamy_top.vlt sw/host/apps/offload/build/[choose any ELF] [--vcd]
 ```
 
 ### Option 2: Simulate with Questasim
