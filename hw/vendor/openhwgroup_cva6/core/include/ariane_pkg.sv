@@ -104,10 +104,11 @@ package ariane_pkg;
       // if len is a power of two, and base is properly aligned, this check could be simplified
       // Extend base by one bit to prevent an overflow.
       // In any case, the multi-cast/broadcast virtual chips should be excluded from the range check
+      logic [63:0] end_addr = base + len;
       if (CrossClusterAbility == 1'b1) begin
-        return (address[LocalAddressWidth-1:0] >= base[LocalAddressWidth-1:0]) && (address[LocalAddressWidth-1:0] < {base + len}[LocalAddressWidth-1:0]) && ((~(&address[LocalAddressWidth +: (ChipIdWidth/2)]))|(~(&address[(LocalAddressWidth+ChipIdWidth/2) +: (ChipIdWidth/2)])));
+        return (address[LocalAddressWidth-1:0] >= base[LocalAddressWidth-1:0]) && (address[LocalAddressWidth-1:0] < {end_addr[LocalAddressWidth-1:0]}) && ((~(&address[LocalAddressWidth +: (ChipIdWidth/2)]))|(~(&address[(LocalAddressWidth+ChipIdWidth/2) +: (ChipIdWidth/2)])));
       end else begin
-        return ({chip_id,address[LocalAddressWidth-1:0]} >= {chip_id,base[LocalAddressWidth-1:0]}) && ({chip_id,address[LocalAddressWidth-1:0]} < {chip_id,{base + len}[LocalAddressWidth-1:0]}) && ((~(&address[LocalAddressWidth +: (ChipIdWidth/2)]))|(~(&address[(LocalAddressWidth+ChipIdWidth/2) +: (ChipIdWidth/2)])));
+        return ({chip_id,address[LocalAddressWidth-1:0]} >= {chip_id, base[LocalAddressWidth-1:0]}) && ({chip_id,address[LocalAddressWidth-1:0]} < {chip_id, end_addr[LocalAddressWidth-1:0]}) && ((~(&address[LocalAddressWidth +: (ChipIdWidth/2)]))|(~(&address[(LocalAddressWidth+ChipIdWidth/2) +: (ChipIdWidth/2)])));
       end
     endfunction : range_check
 
