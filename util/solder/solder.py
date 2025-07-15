@@ -1598,8 +1598,8 @@ class AxiXbar(Xbar):
         for i, (idx, entries) in enumerate(self.symbolic_addrmap_multi):
             for base, length in entries:
                 addrmap_lines.append(
-                    "  '{{ idx: {}, start_addr: {{chip_id_i, {}[39:0]}}, end_addr: {{chip_id_i, {{{} + {}}}[39:0] }} }}".format(
-                        idx, base, base, length, i=i))
+                    "  '{{ idx: {}, start_addr: {{chip_id_i, {}[{}:0]}}, end_addr: {{chip_id_i, {}[{}:0] + {}[{}:0] }} }}".format(
+                        idx, base, self.aw-self.chipidw, base, self.aw-self.chipidw, length, self.aw-self.chipidw, i=i))
         addrmap += "{}\n}};\n".format(',\n'.join(addrmap_lines))
 
         code_module[self.context] += "\n" + addrmap
