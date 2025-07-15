@@ -1593,13 +1593,13 @@ class AxiXbar(Xbar):
                         *self.addrmap[i], aw=self.aw-self.chipidw))
         for i, (idx, base, length) in enumerate(self.symbolic_addrmap):
             addrmap_lines.append(
-                "  '{{ idx: {}, start_addr: {}[{i}], end_addr: {}[{i}] + {} }}".format(
-                    idx, base, base, length, i=i))
+                "  '{{ idx: {}, start_addr: {}[{i}][{}:0], end_addr: {}[{i}][{}:0] + {}[{}:0] }}".format(
+                    idx, base, self.aw-self.chipidw-1, base, self.aw-self.chipidw-1, length, self.aw-self.chipidw-1, i=i))
         for i, (idx, entries) in enumerate(self.symbolic_addrmap_multi):
             for base, length in entries:
                 addrmap_lines.append(
                     "  '{{ idx: {}, start_addr: {{chip_id_i, {}[{}:0]}}, end_addr: {{chip_id_i, {}[{}:0] + {}[{}:0] }} }}".format(
-                        idx, base, self.aw-self.chipidw, base, self.aw-self.chipidw, length, self.aw-self.chipidw, i=i))
+                        idx, base, self.aw-self.chipidw-1, base, self.aw-self.chipidw-1, length, self.aw-self.chipidw-1, i=i))
         addrmap += "{}\n}};\n".format(',\n'.join(addrmap_lines))
 
         code_module[self.context] += "\n" + addrmap
