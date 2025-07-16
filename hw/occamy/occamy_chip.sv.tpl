@@ -126,7 +126,15 @@ import ${name}_pkg::*;
   localparam int ResetDelays[6] = '{default: 3};
 
   logic [5:0] clk_vec, rst_n_vec;
-  logic clk_host, clk_acc, clk_d2d_phy_east, clk_d2d_phy_west, clk_d2d_phy_north, clk_d2d_phy_south;
+  (* syn_keep = 1, syn_preserve = 1 *)
+  logic
+      clk_host,
+      clk_acc,
+      clk_d2d_phy_east,
+      clk_d2d_phy_west,
+      clk_d2d_phy_north,
+      clk_d2d_phy_south;
+  (* syn_keep = 1, syn_preserve = 1 *)
   logic
       rst_host_n,
       rst_acc_n,
