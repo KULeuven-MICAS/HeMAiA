@@ -4,7 +4,6 @@ import os
 def bin2preload(input_file, output_dir):
     # Constants
     NUM_BANKS = 32
-    BANK_DEPTH = 4096
     BANK_WIDTH = 64  # 64 bits = 8 bytes
     TOTAL_WIDTH = NUM_BANKS * BANK_WIDTH  # 2048 bits = 256 bytes
 
@@ -28,11 +27,6 @@ def bin2preload(input_file, output_dir):
             word = chunk[start:end]  # Extract 32-bit word
             word_int = int.from_bytes(word, byteorder='little')  # Convert to integer
             memory_banks[bank_id].append(f"{word_int:08X}")  # Format as 8-digit hex string
-
-    # Pad each bank to its full capacity (16384 lines)
-    for bank_id in range(NUM_BANKS):
-        while len(memory_banks[bank_id]) < BANK_DEPTH:
-            memory_banks[bank_id].append("0" * (BANK_WIDTH // 4))  # Pad with zeros
 
     # Ensure the output directory exists
     os.makedirs(output_dir, exist_ok=True)

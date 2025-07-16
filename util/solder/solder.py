@@ -1592,14 +1592,24 @@ class AxiXbar(Xbar):
                     "  '{{ idx: {}, start_addr: {{chip_id_i,{aw}'h{:08x}}}, end_addr: {{chip_id_i,{aw}'h{:08x} }}}}".format(
                         *self.addrmap[i], aw=self.aw-self.chipidw))
         for i, (idx, base, length) in enumerate(self.symbolic_addrmap):
-            addrmap_lines.append(
-                "  '{{ idx: {}, start_addr: {}[{i}], end_addr: {}[{i}] + {} }}".format(
-                    idx, base, base, length, i=i))
+            if self.chipidw == 0:
+                addrmap_lines.append(
+                    "  '{{ idx: {}, start_addr: {}[{i}], end_addr: {}[{i}] + {} }}".format(
+                        idx, base, base, length, i=i))
+            else:
+                addrmap_lines.append(
+                    "  '{{ idx: {}, start_addr: {{chip_id_i, {}[{i}][{}:0]}}, end_addr: {{chip_id_i, {}[{i}][{}:0] + {}[{}:0] }} }}".format(
+                        idx, base, self.aw-self.chipidw-1, base, self.aw-self.chipidw-1, length, self.aw-self.chipidw-1, i=i))
         for i, (idx, entries) in enumerate(self.symbolic_addrmap_multi):
             for base, length in entries:
-                addrmap_lines.append(
-                    "  '{{ idx: {}, start_addr: {{chip_id_i, {}[39:0]}}, end_addr: {{chip_id_i, {{{} + {}}}[39:0] }} }}".format(
-                        idx, base, base, length, i=i))
+                if self.chipidw == 0:
+                    addrmap_lines.append(
+                        "  '{{ idx: {}, start_addr: {}, end_addr: {} + {} }}".format(
+                            idx, base, base, length, i=i))
+                else:
+                    addrmap_lines.append(
+                        "  '{{ idx: {}, start_addr: {{chip_id_i, {}[{}:0]}}, end_addr: {{chip_id_i, {}[{}:0] + {}[{}:0] }} }}".format(
+                            idx, base, self.aw-self.chipidw-1, base, self.aw-self.chipidw-1, length, self.aw-self.chipidw-1, i=i))
         addrmap += "{}\n}};\n".format(',\n'.join(addrmap_lines))
 
         code_module[self.context] += "\n" + addrmap

@@ -9,16 +9,18 @@
 module ${name}_chip
 import ${name}_pkg::*;
  (
+  // The Clock Reset Controller takes care of clk_i and rst_ni, should not be marked as false_path
   input  logic        clk_i,
   input  logic        rst_ni,
-  /// Peripheral clock
+  // clk_periph_i and rst_periph_ni are directly used by logics, should be marked as false_path
   input  logic        clk_periph_i,
-  input  logic        rst_periph_ni,
+  (* false_path *) input  logic        rst_periph_ni,
   /// Real-time clock (for time keeping)
   input  logic        rtc_i,
-  input  logic        test_mode_i,
-  input  chip_id_t    chip_id_i,
-  input  logic [1:0]  boot_mode_i,
+  // Quasi-static configuration signals, can be marked as false_path
+  (* false_path *) input  logic        test_mode_i,
+  (* false_path *) input  chip_id_t    chip_id_i,
+  (* false_path *) input  logic [1:0]  boot_mode_i,
 % if occamy_cfg['hemaia_multichip']['single_chip'] is False: 
   // East side
   input  logic        east_test_being_requested_i,
@@ -124,7 +126,15 @@ import ${name}_pkg::*;
   localparam int ResetDelays[6] = '{default: 3};
 
   logic [5:0] clk_vec, rst_n_vec;
-  logic clk_host, clk_acc, clk_d2d_phy_east, clk_d2d_phy_west, clk_d2d_phy_north, clk_d2d_phy_south;
+  (* syn_keep = 1, syn_preserve = 1 *)
+  logic
+      clk_host,
+      clk_acc,
+      clk_d2d_phy_east,
+      clk_d2d_phy_west,
+      clk_d2d_phy_north,
+      clk_d2d_phy_south;
+  (* syn_keep = 1, syn_preserve = 1 *)
   logic
       rst_host_n,
       rst_acc_n,

@@ -40,7 +40,8 @@ SED_SRCS  := sed -e ${MATCH_END} -e ${MATCH_BGN}
 VSIM_BENDER   += -t test -t rtl -t vsim
 VSIM_SOURCES   = $(shell ${BENDER} script flist ${VSIM_BENDER} | ${SED_SRCS})
 VSIM_BUILDDIR ?= work-vsim
-VOPT_FLAGS     = +acc 
+VOPT_FLAGS     = +acc
+VOPT_FLAGS    += +notimingchecks
 
 # VCS_BUILDDIR should to be the same as the `DEFAULT : ./work-vcs`
 # in target/snitch_cluster/synopsys_sim.setup

@@ -21,8 +21,8 @@ module testharness
   localparam RTCTCK = 30.518us;        // 32.768 kHz
   localparam CLKTCK = 1ns;             // 1 GHz
   localparam PRITCK = 1ns;             // 1 GHz
-  localparam int  SRAM_BANK = 32;      // 32 Banks architecture
-  localparam int  SRAM_DEPTH = ${int(mem_size/8/32)};
+  localparam int  SRAM_BANK = ${mem_bank};      // ${mem_bank} Banks architecture
+  localparam int  SRAM_DEPTH = ${int(mem_size/8/mem_bank)};
   localparam int  SRAM_WIDTH = 8;      // 8 Bytes Wide
 
   logic rtc_clk_i, mst_clk_i, periph_clk_i, rst_ni;
@@ -41,8 +41,12 @@ module testharness
     // Load the binaries
 % for i in x:
 %   for j in y:
-%     for k in range(0, 32):
+%     for k in range(0, mem_bank):
+%       if backend is False:
     i_occamy_${i}_${j}.i_hemaia_mem_system.i_hemaia_mem.gen_banks[${k}].i_data_mem.i_tc_sram.load_data("app_chip_${i}_${j}/bank_${k}.hex");
+%       else:
+    i_occamy_${i}_${j}.i_hemaia_mem_system.i_hemaia_mem.gen_banks[${k}].i_data_mem.i_tc_sram.gen_mem.gen_${int(mem_size/8/mem_bank)}x${64}.u_sram.load_data("app_chip_${i}_${j}/bank_${k}.hex");
+%       endif
 %     endfor
 %   endfor
 % endfor
@@ -240,20 +244,22 @@ module testharness
       .rx_i  (tx_${i}_${j})
   );
 
+% if backend is False:
   // Chip Status Monitor Block
-  always @(i_occamy_${i}_${j}.i_hemaia_mem_system.i_hemaia_mem.gen_banks[31].i_data_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32]) begin
-    if (i_occamy_${i}_${j}.i_hemaia_mem_system.i_hemaia_mem.gen_banks[31].i_data_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32] != 0) begin
-      if (i_occamy_${i}_${j}.i_hemaia_mem_system.i_hemaia_mem.gen_banks[31].i_data_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32] == 32'd1) begin
+  always @(i_occamy_${i}_${j}.i_hemaia_mem_system.i_hemaia_mem.gen_banks[${mem_bank-1}].i_data_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32]) begin
+    if (i_occamy_${i}_${j}.i_hemaia_mem_system.i_hemaia_mem.gen_banks[${mem_bank-1}].i_data_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32] != 0) begin
+      if (i_occamy_${i}_${j}.i_hemaia_mem_system.i_hemaia_mem.gen_banks[${mem_bank-1}].i_data_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32] == 32'd1) begin
         $display("Simulation of chip_${i}_${j} is finished at %tns", $time / 1000);
         chip_finish[${i}][${j}] = 1;
       end else begin
         $error("Simulation of chip_${i}_${j} is finished with errors %d at %tns",
-               i_occamy_${i}_${j}.i_hemaia_mem_system.i_hemaia_mem.gen_banks[31].i_data_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32],
+               i_occamy_${i}_${j}.i_hemaia_mem_system.i_hemaia_mem.gen_banks[${mem_bank-1}].i_data_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32],
                $time / 1000);
         chip_finish[${i}][${j}] = -1;
       end
     end
   end
+% endif
 
 %   endfor
 % endfor

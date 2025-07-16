@@ -37,6 +37,7 @@ DEVICE_APPS += apps/snax/snax-xdma-memset
 DEVICE_APPS += apps/snax/snax-xdma-multicast
 DEVICE_APPS += apps/snax/snax-xdma-copy
 DEVICE_APPS += apps/snax/snax-xdma-transpose
+DEVICE_APPS += apps/snax/snax-xdma-local-transpose
 DEVICE_APPS += apps/snax/snax-xdma-reshape
 DEVICE_APPS += apps/snax/snax-xdma-multicast-exploration
 DEVICE_APPS += apps/snax/snax-xdma-overhead
