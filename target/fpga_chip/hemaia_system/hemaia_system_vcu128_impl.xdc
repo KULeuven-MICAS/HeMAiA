@@ -84,7 +84,7 @@ set_property IOSTANDARD LVCMOS12 [get_ports reset]
 set_false_path -to [get_pins hemaia_system_i/occamy_chip/inst/i_occamy/i_clint/i_sync_edge/i_sync/reg_q_reg[0]/D]
 
 ################################################################################
-# Crossing Clock Domains
+# Clock Domains
 ################################################################################
 
 create_clock -period 4.0 -name clk_main [get_pins hemaia_system_i/clk_wiz/clk_main]
@@ -111,10 +111,6 @@ set_clock_groups -asynchronous \
     -group {clk_acc} \
     -group {clk_peri}
 
-################################################################################
-# JTAG
-################################################################################
-
 # CDC 2phase clearable of DM: i_cdc_resp/i_cdc_req
 # CONSTRAINT: Requires max_delay of min_period(src_clk_i, dst_clk_i) through the paths async_req, async_ack, async_data.
 set_max_delay -through [get_nets -hier -filter {NAME =~ "*i_cdc_resp/async_req*"}] 10.000
@@ -123,6 +119,16 @@ set_max_delay -through [get_nets -hier -filter {NAME =~ "*i_cdc_resp/async_data*
 set_max_delay -through [get_nets -hier -filter {NAME =~ "*i_cdc_req/async_req*"}] 10.000
 set_max_delay -through [get_nets -hier -filter {NAME =~ "*i_cdc_req/async_ack*"}] 10.000
 set_max_delay -through [get_nets -hier -filter {NAME =~ "*i_cdc_req/async_data*"}] 10.000
+
+################################################################################
+# False Paths at IO
+################################################################################
+set_false_path -through [get_pins hemaia_system_i/occamy_chip/inst/chip_id_i]
+set_false_path -through [get_pins hemaia_system_i/occamy_chip/inst/boot_mode_i]
+set_false_path -through [get_pins hemaia_system_i/occamy_chip/inst/test_mode_i]
+set_false_path -through [get_pins hemaia_system_i/occamy_chip/inst/gpio_d_i]
+set_false_path -through [get_pins hemaia_system_i/occamy_chip/inst/gpio_d_o]
+set_false_path -through [get_pins hemaia_system_i/occamy_chip/inst/gpio_oe_o]
 
 ################################################################################
 # TIMING GROUPS
