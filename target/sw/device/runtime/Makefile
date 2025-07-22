@@ -29,6 +29,8 @@ INCDIRS += $(SNRT_DIR)/../math/src/include
 INCDIRS += $(SNRT_DIR)/../math/src/internal
 INCDIRS += $(SNRT_DIR)/../math/include/bits
 INCDIRS += $(SNRT_DIR)/../math/include
+INCDIRS += $(SNITCH_ROOT)/target/snitch_cluster/sw/snax/xdma/src
+INCDIRS += $(SNITCH_ROOT)/target/snitch_cluster/sw/snax/xdma/include
 # Sources
 SRCS += $(SRC_DIR)/occamy_start.S
 SRCS += $(SRC_DIR)/snrt.c

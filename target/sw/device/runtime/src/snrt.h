@@ -39,5 +39,6 @@
 #include "team.h"
 #include "uart.h"
 #include "csr.h"
-
+#include "snax-xdma-csr-addr.h"
+#include "snax-xdma-lib.h"
 #endif  // SNRT_H

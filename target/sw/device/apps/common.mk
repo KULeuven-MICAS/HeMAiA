@@ -43,6 +43,8 @@ INCDIRS += $(SNRT_DIR)/../math/src/include
 INCDIRS += $(SNRT_DIR)/../math/src/internal
 INCDIRS += $(SNRT_DIR)/../math/include/bits
 INCDIRS += $(SNRT_DIR)/../math/include
+INCDIRS += $(SNITCH_ROOT)/target/snitch_cluster/sw/snax/xdma/src
+INCDIRS += $(SNITCH_ROOT)/target/snitch_cluster/sw/snax/xdma/include
 # Linking sources
 BASE_LD       = $(abspath $(SNRT_DIR)/base.ld)
 MEMORY_LD     = $(abspath $(APPSDIR)/memory.ld)

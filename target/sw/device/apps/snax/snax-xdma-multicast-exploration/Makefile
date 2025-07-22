@@ -10,7 +10,7 @@ INCDIRS += data
 INCDIRS += INCDIRS += ../../../snax/xdma/include/
 
 # Add binary to final build
-RISCV_LDFLAGS += ../../../snax/xdma/build/snax-xdma-lib.o
+# RISCV_LDFLAGS += ../../../snax/xdma/build/snax-xdma-lib.o
 
 SRCS    = src/snax-xdma-multicast-exploration.c
 

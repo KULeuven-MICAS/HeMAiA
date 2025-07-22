@@ -15,4 +15,4 @@
 #include "sys_dma.c"
 #include "team.c"
 #include "uart.c"
-
+#include "snax-xdma-lib.c"

@@ -38,6 +38,11 @@ INCDIRS += $(SNRT_DIR)/../math/src/include
 INCDIRS += $(SNRT_DIR)/../math/src/internal
 INCDIRS += $(SNRT_DIR)/../math/include/bits
 INCDIRS += $(SNRT_DIR)/../math/include
+INCDIRS += $(RUNTIME_DIR)/rtl/src
+INCDIRS += $(RUNTIME_DIR)/rtl/include
+INCDIRS += $(SNITCH_ROOT)/target/snitch_cluster/sw/snax/xdma/src
+INCDIRS += $(SNITCH_ROOT)/target/snitch_cluster/sw/snax/xdma/include
+
 # occamy platform shared
 INCDIRS += $(SW_DIR)/shared/platform/generated
 # INCDIRS += $(SW_DIR)/shared/platform
