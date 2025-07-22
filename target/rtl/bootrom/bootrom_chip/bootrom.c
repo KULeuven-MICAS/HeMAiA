@@ -71,7 +71,7 @@ void bootrom() {
     uint64_t memory_length;
 
     uint32_t chip_id = get_current_chip_id();
-    uint32_t target_chip_id = 0x11;
+    uint32_t target_chip_id = chip_id;
     uintptr_t address_prefix = ((uintptr_t)chip_id) << 40;
 
     char in_buf[8];
