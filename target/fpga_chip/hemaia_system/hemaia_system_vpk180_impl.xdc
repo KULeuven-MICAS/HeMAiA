@@ -78,48 +78,40 @@ set_property IOSTANDARD LVCMOS15 [get_ports reset]
 set_false_path -to [get_pins hemaia_system_i/occamy_chip/inst/i_occamy/i_clint/i_sync_edge/i_sync/reg_q_reg[0]/D]
 
 ################################################################################
-# Crossing Clock Domains
+# Clock Domains
 ################################################################################
 
 create_generated_clock \
     -name clk_main \
     -source [get_pins hemaia_system_i/versal_cips_0/pl0_ref_clk] \
     -divide_by 1 \
-    -add \
-    -master_clock clk_pl_0 \
     [get_pins hemaia_system_i/occamy_chip/inst/clk_i]
 
 create_generated_clock \
     -name clk_peri \
     -source [get_pins hemaia_system_i/versal_cips_0/pl2_ref_clk] \
     -divide_by 1 \
-    -add \
-    -master_clock clk_pl_2 \
     [get_pins hemaia_system_i/occamy_chip/inst/clk_periph_i]
 
 create_generated_clock \
     -name clk_core \
     -source [get_pins hemaia_system_i/occamy_chip/inst/clk_i] \
     -divide_by 6 \
-    -add \
-    -master_clock clk_main \
-    [get_pins hemaia_system_i/occamy_chip/inst/i_hemaia_clk_rst_controller/gen_clock_divider[0].i_clk_divider/clk_o]
+    [get_pins hemaia_system_i/occamy_chip/inst/i_hemaia_clk_rst_controller/gen_clock_divider[0].i_clk_divider/clk_o_INST_0/O]
 
 create_generated_clock \
     -name clk_acc \
     -source [get_pins hemaia_system_i/occamy_chip/inst/clk_i] \
     -divide_by 6 \
-    -add \
-    -master_clock clk_main \
-    [get_pins hemaia_system_i/occamy_chip/inst/i_hemaia_clk_rst_controller/gen_clock_divider[1].i_clk_divider/clk_o]
+    [get_pins hemaia_system_i/occamy_chip/inst/i_hemaia_clk_rst_controller/gen_clock_divider[1].i_clk_divider/clk_o_INST_0/O]
 
 set_clock_groups -asynchronous \
-    -group [get_clocks clk_pl_0] \
-    -group [get_clocks clk_pl_2] \
-    -group [get_clocks clk_main] \
-    -group [get_clocks clk_peri] \
-    -group [get_clocks clk_core] \
-    -group [get_clocks clk_acc]
+    -group {clk_pl_0 clk_main} \
+    -group {clk_core} \
+    -group {clk_acc} \
+    -group {clk_pl_1} \
+    -group {clk_pl_2 clk_peri} \
+    -group {spi_s_sck}
 
 # CDC 2phase clearable of DM: i_cdc_resp/i_cdc_req
 # CONSTRAINT: Requires max_delay of min_period(src_clk_i, dst_clk_i) through the paths async_req, async_ack, async_data.
@@ -129,6 +121,16 @@ set_max_delay -through [get_nets -hier -filter {NAME =~ "*i_cdc_resp/async_data*
 set_max_delay -through [get_nets -hier -filter {NAME =~ "*i_cdc_req/async_req*"}] 10.000
 set_max_delay -through [get_nets -hier -filter {NAME =~ "*i_cdc_req/async_ack*"}] 10.000
 set_max_delay -through [get_nets -hier -filter {NAME =~ "*i_cdc_req/async_data*"}] 10.000
+
+################################################################################
+# False Paths at IO
+################################################################################
+set_false_path -through [get_pins hemaia_system_i/occamy_chip/inst/chip_id_i]
+set_false_path -through [get_pins hemaia_system_i/occamy_chip/inst/boot_mode_i]
+set_false_path -through [get_pins hemaia_system_i/occamy_chip/inst/test_mode_i]
+set_false_path -through [get_pins hemaia_system_i/occamy_chip/inst/gpio_d_i]
+set_false_path -through [get_pins hemaia_system_i/occamy_chip/inst/gpio_d_o]
+set_false_path -through [get_pins hemaia_system_i/occamy_chip/inst/gpio_oe_o]
 
 ################################################################################
 # TIMING GROUPS
