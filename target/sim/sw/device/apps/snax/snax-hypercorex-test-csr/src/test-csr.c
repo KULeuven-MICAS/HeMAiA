@@ -15,10 +15,31 @@
 //-------------------------------
 
 #include "snrt.h"
+// #include ""
 
 #include "data.h"
 #include "snax-hypercorex-lib.h"
 #include "streamer_csr_addr_map.h"
+
+#define CLINT_BASE_ADDR 0x04000000
+#define CLINT_MSIP_P_FIELDS_PER_REG 32
+#define CLINT_MSIP_REG_OFFSET 0x0
+#define CLINT_MSIP_0_REG_OFFSET CLINT_MSIP_REG_OFFSET
+#define clint_msip_base (CLINT_BASE_ADDR + CLINT_MSIP_0_REG_OFFSET)
+
+inline void snrt_exit_hypercorex(int exit_code){
+    *((volatile uint32_t*)0x02000014)  = (exit_code << 1) | 1;
+};
+
+// inline uintptr_t clint_msip_addr(uint32_t hartid) {
+//     return clint_msip_base + (hartid / CLINT_MSIP_P_FIELDS_PER_REG) * 4;
+// }
+
+// inline volatile uint32_t* clint_msip_ptr(uint32_t hartid) {
+//     return (volatile uint32_t*)clint_msip_addr(hartid);
+// }
+
+inline void snax_host_sw_interrupt() { *clint_msip_ptr(0) = 1; }
 
 int main() {
 
@@ -329,6 +350,18 @@ int main() {
                                         test_inst_loop_count2,
                                         test_inst_loop_count3);
 
+            // Write to data slicer configurations
+            csrw_ss(HYPERCOREX_DATA_SLICE_CTRL, test_data_slice_ctrl);
+            csrw_ss(HYPERCOREX_DATA_SLICE_NUM_ELEM_A, test_data_slice_num_elem_a);
+            csrw_ss(HYPERCOREX_DATA_SLICE_NUM_ELEM_B, test_data_slice_num_elem_b);
+
+            // Write to auto counter configurations
+            csrw_ss(HYPERCOREX_AUTO_COUNTER_START_A, test_auto_counter_start_a);
+            csrw_ss(HYPERCOREX_AUTO_COUNTER_START_B, test_auto_counter_start_b);
+            csrw_ss(HYPERCOREX_AUTO_COUNTER_NUM_A, test_auto_counter_num_a);
+            csrw_ss(HYPERCOREX_AUTO_COUNTER_NUM_B, test_auto_counter_num_b);
+
+
             // Write to observable CSR for visibile state
             write_csr_obs(0x003);
 
@@ -401,6 +434,40 @@ int main() {
                 err += 1;
             }
 
+            if (csrr_ss(HYPERCOREX_DATA_SLICE_CTRL) != golden_data_slice_ctrl) {
+                err += 1;
+            }
+
+            if (csrr_ss(HYPERCOREX_DATA_SLICE_NUM_ELEM_A) !=
+                golden_data_slice_num_elem_a) {
+                err += 1;
+            };
+
+            if (csrr_ss(HYPERCOREX_DATA_SLICE_NUM_ELEM_B) !=
+                golden_data_slice_num_elem_b) {
+                err += 1;
+            };
+
+            if (csrr_ss(HYPERCOREX_AUTO_COUNTER_START_A) !=
+                golden_auto_counter_start_a) {
+                err += 1;
+            };
+
+            if (csrr_ss(HYPERCOREX_AUTO_COUNTER_START_B) !=
+                golden_auto_counter_start_b) {
+                err += 1;
+            };
+
+            if (csrr_ss(HYPERCOREX_AUTO_COUNTER_NUM_A) !=
+                golden_auto_counter_num_a) {
+                err += 1;
+            };
+
+            if (csrr_ss(HYPERCOREX_AUTO_COUNTER_NUM_B) !=
+                golden_auto_counter_num_b) {
+                err += 1;
+            };
+
             // Write to observable CSR for visibile state
             write_csr_obs(0x004);
 
@@ -409,9 +476,14 @@ int main() {
             } else {
                 printf("FAIL\n");
             }
+
+            // snrt_exit_hypercorex(err);
+            // snax_host_sw_interrupt();
         };
 
+        
     };
+
     //// When using single cluster, uncomment the following line
     //// This function will return directly to the host instead of
     //// relying on the snitch_main to exit
