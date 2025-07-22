@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "uart.h"
 
-uintptr_t base_address = 0;
+uintptr_t base_address;
 
 static inline int out_ch(char c) {
     print_char(base_address, c);
@@ -137,7 +137,7 @@ int printf(const char *fmt, ...) {
 }
 
 // Scanf implementation
-static int peek = -1;     // simple one‑char push‑back
+static int peek;
 static int getc_in(void)  // fetch next char or peeked
 {
     int c = peek;
@@ -247,6 +247,7 @@ static void skip_ws_fmt_and_input(void) {
 
 int scanf(const char *fmt, ...) {
     base_address = (uintptr_t)get_current_chip_baseaddress();
+    peek = -1;                  // simple one‑char push‑back
     va_list ap;
     va_start(ap, fmt);
     int assigned = 0;
