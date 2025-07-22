@@ -110,7 +110,8 @@ set_clock_groups -asynchronous \
     -group {clk_core} \
     -group {clk_acc} \
     -group {clk_pl_1} \
-    -group {clk_pl_2 clk_peri}
+    -group {clk_pl_2 clk_peri} \
+    -group {spi_s_sck}
 
 # CDC 2phase clearable of DM: i_cdc_resp/i_cdc_req
 # CONSTRAINT: Requires max_delay of min_period(src_clk_i, dst_clk_i) through the paths async_req, async_ack, async_data.
