@@ -4,11 +4,11 @@
 
 // Yunhao Deng <yunhao.deng@kuleuven.be>
 
-// Simplified Bootrom with reduced printing for faster simulation
+// Standard Bootrom for HeMAiA with D2D Link
 
-// Please avoid using initialized global variable and static variable (.data
+// Please avoid using initialized global variable (.data
 // region) in C. This will lead to the loss of initial value, as they are
-// allocated in spm instead of bootrom.
+// allocated in spm instead of bootrom. Thus, the initial data will lose.
 
 // For global constant, use "const var"
 // For values need to share between functions, use uninitialized global variable
