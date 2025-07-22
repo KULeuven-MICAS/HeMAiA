@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "uart.h"
 
-uintptr_t base_address;
+static uintptr_t base_address;
 
 static inline int out_ch(char c) {
     print_char(base_address, c);
