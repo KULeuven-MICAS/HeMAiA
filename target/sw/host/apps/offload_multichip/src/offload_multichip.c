@@ -4,6 +4,7 @@
 // Yunhao Deng <yunhao.deng@kuleuven.be>
 
 #include "host.h"
+#include "hemaia_clk_rst_controller.h"
 
 int main() {
     // Set clk manager to 1 division for a faster simulation time
