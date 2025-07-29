@@ -14,9 +14,9 @@
 // For values need to share between functions, use uninitialized global variable
 // + initialization function
 
+#include "uart.c"
 #include "chip_id.h"
-#include "sys_dma.h"
-#include "uart.h"
+#include "sys_dma_bootrom.h"
 #include "xmodem.h"
 
 #define bool uint8_t
@@ -30,6 +30,27 @@ static inline void delay_cycles(uint64_t cycle) {
     while (current_cycle < target_cycle) {
         __asm__ volatile("csrr %0, mcycle;" : "=r"(current_cycle));
     }
+}
+
+inline static void print_mem_hex(uintptr_t address_prefix, char *str,
+                                 uint32_t length) {
+    uint8_t lut[16] = {'0', '1', '2', '3', '4', '5', '6', '7',
+                       '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
+    for (uint64_t i = (uint64_t)str; i < (uint64_t)str + length; i++) {
+        if (i % 16 == 0) {
+            print_char(address_prefix, '\r');
+            print_char(address_prefix, '\n');
+            for (int j = 28; j >= 0; j = j - 4)
+                print_char(address_prefix, lut[(i >> j) % 16]);
+            print_char(address_prefix, ':');
+            print_char(address_prefix, ' ');
+        }
+        char temp = *((char *)i);
+        print_char(address_prefix, lut[temp / 16]);
+        print_char(address_prefix, lut[temp % 16]);
+        print_char(address_prefix, ' ');
+    }
+    while (!is_transmit_done(address_prefix));
 }
 
 // Boot modes.
@@ -50,7 +71,7 @@ void bootrom() {
     uint64_t memory_length;
 
     uint32_t chip_id = get_current_chip_id();
-    uint32_t target_chip_id = 0x11;
+    uint32_t target_chip_id = chip_id;
     uintptr_t address_prefix = ((uintptr_t)chip_id) << 40;
 
     char in_buf[8];
@@ -60,18 +81,11 @@ void bootrom() {
         local_chip_mem_start_address = 0x80000000L | ((uint64_t)address_prefix);
         remote_chip_mem_start_address =
             0x80000000L | ((uint64_t)target_chip_id << 40);
-        print_str(address_prefix, "\033[2J");
-        print_str(address_prefix, "\r\n\t\tBootrom");
-        print_str(address_prefix, "\r\n");
-        print_str(address_prefix, "\r\n\t Chip ID: 0x");
-        print_u8(address_prefix, chip_id);
-        print_str(address_prefix, ", 0x");
-        print_u8(address_prefix, target_chip_id);
-        print_str(address_prefix,
-                  "\r\n");
+        printf("\033[2J\r\n\t\tBootrom\r\n\r\n\t Chip ID: 0x%02X, 0x%02X\r\n",
+               chip_id, target_chip_id);
         // print_str(address_prefix, "\r\n\t 1. Halt the CVA6 Core");
-        // print_str(address_prefix, "\r\n\t 2. Change the target remote Chip ID");
-        // print_str(address_prefix, "\r\n\t 3. Load from UART");
+        // print_str(address_prefix, "\r\n\t 2. Change the target remote Chip
+        // ID"); print_str(address_prefix, "\r\n\t 3. Load from UART");
         // print_str(address_prefix,
         //           "\r\n\t 4. Copy memory from local chip to remote chip");
         // print_str(address_prefix,
@@ -80,40 +94,20 @@ void bootrom() {
         // print_str(address_prefix, "\r\n\t 7. Continue to Boot from 0x");
         // print_str(address_prefix, "\r\n");
 
-        boot_mode = getchar(address_prefix) - '0' - 1;
+        boot_mode = scan_char(address_prefix) - '0' - 1;
 
         char* cur = 0;
 
         switch (boot_mode) {
             case HALT:
-                print_str(address_prefix, "\r\n\t CVA6 Core is Halted. ");
-                getchar(address_prefix);
+                printf("\r\n\t CVA6 Core is Halted. ");
+                scan_char(address_prefix);
                 __asm__ volatile("wfi");
                 break;
             case TARGET_CHIPID:
-                print_str(address_prefix,
-                          "\r\n\t Target Chip ID: ");
-                scan_uart(address_prefix, in_buf);
-                cur = in_buf;
-                target_chip_id = 0;
-                while (*cur != '\0') {
-                    if (*cur >= '0' && *cur <= '9') {
-                        target_chip_id = (target_chip_id << 4) + *cur - '0';
-                    } else if (*cur >= 'A' && *cur <= 'F') {
-                        target_chip_id =
-                            (target_chip_id << 4) + *cur - 'A' + 10;
-                    } else if (*cur >= 'a' && *cur <= 'f') {
-                        target_chip_id =
-                            (target_chip_id << 4) + *cur - 'a' + 10;
-                    } else {
-                        print_str(address_prefix, "\r\n\t Invalid input. ");
-                        getchar(address_prefix);
-                        break;
-                    }
-                    cur++;
-                }
+                printf("\r\n\t Target Chip ID: ");
+                scanf("%x", &target_chip_id);
                 break;
-
             case COPY_TO_REMOTE:
                 // print_str(address_prefix, "\r\n\t Memory Size: ");
                 // scan_uart(address_prefix, in_buf);
@@ -123,11 +117,11 @@ void bootrom() {
                 //     memory_length = memory_length * 10 + *cur - '0';
                 //     cur++;
                 // }
-                print_str(address_prefix, "\r\n\t Copying...");
+                printf("\r\n\t Copying...");
                 sys_dma_blk_memcpy(remote_chip_mem_start_address,
                                    local_chip_mem_start_address, memory_length);
-                print_str(address_prefix, "\r\n\t Copy finished. ");
-                getchar(address_prefix);
+                printf("\r\n\t Copy finished. ");
+                scan_char(address_prefix);
                 break;
 
             case COPY_FROM_REMOTE:
@@ -139,39 +133,33 @@ void bootrom() {
                 //     memory_length = memory_length * 10 + *cur - '0';
                 //     cur++;
                 // }
-                print_str(address_prefix, "\r\n\t Copying...");
+                printf("\r\n\t Copying...");
                 sys_dma_blk_memcpy(local_chip_mem_start_address,
                                    remote_chip_mem_start_address,
                                    memory_length);
-                print_str(address_prefix, "\r\n\t Copy finished. ");
-                getchar(address_prefix);
+                printf("\r\n\t Copy finished. ");
+                scan_char(address_prefix);
                 break;
 
             case UART:
                 delay_cycles(50000000);  // Delay for 1s
                 uart_xmodem(address_prefix, remote_chip_mem_start_address);
-                print_str(address_prefix, "\r\n\t Load finished. \r\n\r\n");
+                printf("\r\n\t Load finished. \r\n\r\n");
                 break;
 
             case PRINTMEM:
-                print_str(address_prefix, "\r\n\t Memory Size: ");
-                scan_uart(address_prefix, in_buf);
-                char* cur = in_buf;
-                memory_length = 0;
-                while (*cur != '\0') {
-                    memory_length = memory_length * 10 + *cur - '0';
-                    cur++;
-                }
+                printf("\r\n\t Memory Size: ");
+                scanf("%d", &memory_length);
                 print_mem_hex(address_prefix,
                               (char*)remote_chip_mem_start_address,
                               memory_length);
-                print_str(address_prefix, "\r\n\r\n\t Print finished. ");
-                getchar(address_prefix);
+                printf("\r\n\r\n\t Print finished. ");
+                scan_char(address_prefix);
                 break;
 
             case NORMAL:
-                print_str(address_prefix, "\033[2J");
-                print_str(address_prefix, "\r\n\t Booting...\r\n\r\n\r\n");
+                printf("\033[2J");
+                printf("\r\n\t Booting...\r\n\r\n\r\n");
                 return;
                 break;
         }
