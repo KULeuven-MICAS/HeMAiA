@@ -4,19 +4,19 @@
 
 // Yunhao Deng <yunhao.deng@kuleuven.be>
 
-// Simplified Bootrom with reduced printing for faster simulation
+// Standard Bootrom for HeMAiA with D2D Link
 
-// Please avoid using initialized global variable and static variable (.data
+// Please avoid using initialized global variable (.data
 // region) in C. This will lead to the loss of initial value, as they are
-// allocated in spm instead of bootrom.
+// allocated in spm instead of bootrom. Thus, the initial data will lose.
 
 // For global constant, use "const var"
 // For values need to share between functions, use uninitialized global variable
 // + initialization function
 
-#include "uart.c"
 #include "chip_id.h"
 #include "sys_dma_bootrom.h"
+#include "uart.c"
 #include "xmodem.h"
 
 #define bool uint8_t
@@ -71,7 +71,7 @@ void bootrom() {
     uint64_t memory_length;
 
     uint32_t chip_id = get_current_chip_id();
-    uint32_t target_chip_id = 0x11;
+    uint32_t target_chip_id = chip_id;
     uintptr_t address_prefix = ((uintptr_t)chip_id) << 40;
 
     char in_buf[8];
@@ -81,22 +81,25 @@ void bootrom() {
         local_chip_mem_start_address = 0x80000000L | ((uint64_t)address_prefix);
         remote_chip_mem_start_address =
             0x80000000L | ((uint64_t)target_chip_id << 40);
-        printf("\033[2J\r\n\t\tBootrom\r\n\r\n\t Chip ID: 0x%02X, 0x%02X\r\n",
-               chip_id, target_chip_id);
-        // print_str(address_prefix, "\r\n\t 1. Halt the CVA6 Core");
-        // print_str(address_prefix, "\r\n\t 2. Change the target remote Chip
-        // ID"); print_str(address_prefix, "\r\n\t 3. Load from UART");
-        // print_str(address_prefix,
-        //           "\r\n\t 4. Copy memory from local chip to remote chip");
-        // print_str(address_prefix,
-        //           "\r\n\t 5. Copy memory from remote chip to local chip");
-        // print_str(address_prefix, "\r\n\t 6. Print memory from 0x");
-        // print_str(address_prefix, "\r\n\t 7. Continue to Boot from 0x");
-        // print_str(address_prefix, "\r\n");
+        printf(
+            "\033[2J\r\n\t\t Welcome to HeMAiA Bootrom\r\n\r\n\t Chip ID: "
+            "L0x%02X, R0x%02X\r\n",
+            chip_id, target_chip_id);
+        printf(
+            "\r\n\t Enter the number to select the mode: "
+            "\r\n\t 1. Halt the CVA6 Core"
+            "\r\n\t 2. Change the remote Chip ID"
+            "\r\n\t 3. Load from UART to Chip %02x"
+            "\r\n\t 4. Copy memory from Chip %02x to Chip %02x"
+            "\r\n\t 5. Copy memory from Chip %02x to Chip %02x"
+            "\r\n\t 6. Print main memory in Chip %02x"
+            "\r\n\t 7. Continue to boot\r\n",
+            target_chip_id, chip_id, target_chip_id, target_chip_id, chip_id,
+            target_chip_id);
 
         boot_mode = scan_char(address_prefix) - '0' - 1;
 
-        char* cur = 0;
+        char *cur = 0;
 
         switch (boot_mode) {
             case HALT:
@@ -109,51 +112,39 @@ void bootrom() {
                 scanf("%x", &target_chip_id);
                 break;
             case COPY_TO_REMOTE:
-                // print_str(address_prefix, "\r\n\t Memory Size: ");
-                // scan_uart(address_prefix, in_buf);
-                // cur = in_buf;
-                memory_length = 1048576;
-                // while (*cur != '\0') {
-                //     memory_length = memory_length * 10 + *cur - '0';
-                //     cur++;
-                // }
-                printf("\r\n\t Copying...");
+                printf("Enter the size of memory in byte:\r\n");
+                scanf("%d", &memory_length);
+                printf("\tCopying... \r\n");
                 sys_dma_blk_memcpy(remote_chip_mem_start_address,
                                    local_chip_mem_start_address, memory_length);
-                printf("\r\n\t Copy finished. ");
+                printf("\t Copy finished. \r\n");
                 scan_char(address_prefix);
                 break;
 
             case COPY_FROM_REMOTE:
-                // print_str(address_prefix, "\r\n\t Memory Size: ");
-                // scan_uart(address_prefix, in_buf);
-                // cur = in_buf;
-                memory_length = 1048576;
-                // while (*cur != '\0') {
-                //     memory_length = memory_length * 10 + *cur - '0';
-                //     cur++;
-                // }
-                printf("\r\n\t Copying...");
+                printf("Enter the size of memory in byte:\r\n");
+                scanf("%d", &memory_length);
+                printf("\tCopying... \r\n");
                 sys_dma_blk_memcpy(local_chip_mem_start_address,
                                    remote_chip_mem_start_address,
                                    memory_length);
-                printf("\r\n\t Copy finished. ");
+                printf("\t Copy finished. \r\n");
                 scan_char(address_prefix);
                 break;
 
             case UART:
                 delay_cycles(50000000);  // Delay for 1s
                 uart_xmodem(address_prefix, remote_chip_mem_start_address);
-                printf("\r\n\t Load finished. \r\n\r\n");
+                printf("\r\n\t Load finished. \r\n");
                 break;
 
             case PRINTMEM:
-                printf("\r\n\t Memory Size: ");
+                printf("Enter the size of memory in byte:\r\n");
                 scanf("%d", &memory_length);
                 print_mem_hex(address_prefix,
-                              (char*)remote_chip_mem_start_address,
+                              (char *)remote_chip_mem_start_address,
                               memory_length);
-                printf("\r\n\r\n\t Print finished. ");
+                printf("\r\n\r\n\t Print finished. \r\n");
                 scan_char(address_prefix);
                 break;
 
