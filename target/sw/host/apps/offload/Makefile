@@ -43,6 +43,7 @@ DEVICE_APPS += apps/snax/snax-xdma-multicast-exploration
 DEVICE_APPS += apps/snax/snax-xdma-overhead
 DEVICE_APPS += apps/snax/snax-axi-torture
 DEVICE_APPS += apps/snax/snax-axi-torture-devil
+DEVICE_APPS += apps/snax/snax-xdma-reshape-multicast
 
 # Dependencies
 INCDIRS += $(RUNTIME_DIR)

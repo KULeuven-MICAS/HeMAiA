@@ -1,0 +1,13 @@
+{
+  M: 64
+  N: 64
+  input_layout: MN
+  output_layout: MN
+  multicast_num: 4
+  noc_dimensions:
+  [
+    3
+    3
+  ]
+
+}
