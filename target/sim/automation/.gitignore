@@ -19,6 +19,10 @@
 /automated-xdma-multicast/*
 !/automated-xdma-multicast/start.py
 
+!/automated-xdma-reshape-multicast/
+/automated-xdma-reshape-multicast/*
+!/automated-xdma-reshape-multicast/start.py
+
 !/automated-xdma-multicast-exploration/
 /automated-xdma-multicast-exploration/*
 !/automated-xdma-multicast-exploration/start.py
