@@ -20,6 +20,8 @@ module hemaia_mem_system #(
     parameter type axi_slave_req_t = logic,
     parameter type axi_slave_rsp_t = logic,
 
+    parameter int unsigned ClusterAddressSpace = 48'h400000,
+
     parameter int unsigned MemBaseAddr = 32'h80000000,
     parameter int unsigned MemBankNum = 32,
     parameter int unsigned MemSize = 32'h100000
@@ -57,7 +59,7 @@ module hemaia_mem_system #(
 
 
   localparam axi_pkg::xbar_cfg_t HeMAiAMemXbarCfg = '{
-      NoSlvPorts: 2,
+      NoSlvPorts: 1,
       NoMstPorts: 2,
       MaxMstTrans: 16,
       MaxSlvTrans: 16,
@@ -91,13 +93,13 @@ module hemaia_mem_system #(
     logic [AxiMasterAddrWidth-1:0] end_addr;
   } xbar_rule_t;
 
-  axi_in_pre_xbar_req_t   [1:0] axi_pre_xbar_req;
-  axi_in_pre_xbar_resp_t  [1:0] axi_pre_xbar_rsp;
+  axi_in_pre_xbar_req_t   [0:0] axi_pre_xbar_req;
+  axi_in_pre_xbar_resp_t  [0:0] axi_pre_xbar_rsp;
   axi_in_post_xbar_req_t  [1:0] axi_post_xbar_req;
   axi_in_post_xbar_resp_t [1:0] axi_post_xbar_rsp;
 
-  assign axi_pre_xbar_req[1] = axi_master_req_i;
-  assign axi_master_rsp_o = axi_pre_xbar_rsp[1];
+  assign axi_pre_xbar_req[0] = axi_master_req_i;
+  assign axi_master_rsp_o = axi_pre_xbar_rsp[0];
 
   xbar_rule_t [1:0] mem_system_xbar_rule;
   // The 0nd port is for the XDMA virtual addresses
@@ -107,7 +109,7 @@ module hemaia_mem_system #(
   logic [AxiMasterAddrWidth-1:0] memory_end_address;
 
   assign memory_start_address = {chip_id_i, 40'b0} + MemBaseAddr;
-  assign memory_end_address = {chip_id_i, 40'b0} + MemBaseAddr + MemSize;
+  assign memory_end_address   = {chip_id_i, 40'b0} + MemBaseAddr + MemSize;
 
   logic [AxiMasterAddrWidth-1:0] xdma_region_start_address;
   logic [AxiMasterAddrWidth-1:0] xdma_region_end_address;
@@ -325,34 +327,33 @@ module hemaia_mem_system #(
   );
 
   hemaia_xdma_wrapper #(
-    .tcdm_req_t(tcdm_req_t),
-    .tcdm_rsp_t(tcdm_rsp_t),
-    .wide_slv_id_t(logic [AxiMasterIdWidth-1:0]),
-    .wide_out_req_t(axi_in_pre_xbar_req_t),
-    .wide_out_resp_t(axi_in_pre_xbar_resp_t),
-    .wide_in_req_t(axi_in_post_xbar_req_t),
-    .wide_in_resp_t(axi_in_post_xbar_resp_t),
-    .TCDMNumPorts(BanksPerSuperBank * 2),
-    .TCDMAddrWidth($clog2(MemSize)),
-    .ClusterBaseAddr({16'b0, MemBaseAddr}),
-    .ClusterAddressSpace(48'h80000000)
+      .tcdm_req_t(tcdm_req_t),
+      .tcdm_rsp_t(tcdm_rsp_t),
+      .wide_slv_id_t(logic [AxiMasterIdWidth+$clog2(HeMAiAMemXbarCfg.NoSlvPorts)-1:0]),
+      .wide_out_req_t(axi_slave_req_t),
+      .wide_out_resp_t(axi_slave_rsp_t),
+      .wide_in_req_t(axi_in_post_xbar_req_t),
+      .wide_in_resp_t(axi_in_post_xbar_resp_t),
+      .TCDMNumPorts(BanksPerSuperBank * 2),
+      .TCDMAddrWidth($clog2(MemSize)),
+      .ClusterAddressSpace(ClusterAddressSpace)
   ) i_hemaia_xdma_wrapper (
-    .clk_i(clk_i),
-    .rst_ni(rst_ni),
-    .cluster_base_addr_i({chip_id_i, 40'b0} + MemBaseAddr),
-    .tcdm_req_o(xdma_req),
-    .tcdm_rsp_i(xdma_rsp),
-    .csr_req_bits_data_i('0),
-    .csr_req_bits_addr_i('0),
-    .csr_req_bits_write_i(1'b0),
-    .csr_req_valid_i(1'b0),
-    .csr_req_ready_o(),
-    .csr_rsp_bits_data_o(),
-    .csr_rsp_valid_o(),
-    .csr_rsp_ready_i(1'b1),
-    .xdma_wide_out_req_o(axi_pre_xbar_req[0]),
-    .xdma_wide_out_resp_i(axi_pre_xbar_rsp[0]),
-    .xdma_wide_in_req_i(axi_post_xbar_req[0]),
-    .xdma_wide_in_resp_o(axi_post_xbar_rsp[0])
+      .clk_i(clk_i),
+      .rst_ni(rst_ni),
+      .cluster_base_addr_i({chip_id_i, 40'b0} + MemBaseAddr),
+      .tcdm_req_o(xdma_req),
+      .tcdm_rsp_i(xdma_rsp),
+      .csr_req_bits_data_i('0),
+      .csr_req_bits_addr_i('0),
+      .csr_req_bits_write_i(1'b0),
+      .csr_req_valid_i(1'b0),
+      .csr_req_ready_o(),
+      .csr_rsp_bits_data_o(),
+      .csr_rsp_valid_o(),
+      .csr_rsp_ready_i(1'b1),
+      .xdma_wide_out_req_o(axi_slave_req_o),
+      .xdma_wide_out_resp_i(axi_slave_rsp_i),
+      .xdma_wide_in_req_i(axi_post_xbar_req[0]),
+      .xdma_wide_in_resp_o(axi_post_xbar_rsp[0])
   );
 endmodule

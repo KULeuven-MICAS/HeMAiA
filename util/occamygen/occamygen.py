@@ -683,7 +683,6 @@ def main():
     # XDMA #
     ########
     if args.xdma is True and occamy_cfg["hemaia_xdma_cfg"] is not None:
-        print(args.chip)
         print("------------------------------------------------")
         print("    Generate XDMA")
         print("------------------------------------------------")
