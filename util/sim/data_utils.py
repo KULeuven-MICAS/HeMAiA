@@ -35,7 +35,7 @@ def format_vector_define(uid, vector):
     return s
 
 
-def format_vector_definition(type, uid, vector, alignment=None, section=None):
+def format_vector_definition(type, uid, vector, alignment=8, section=None):
     attributes = variable_attributes(alignment, section)
     s = f'{type} {uid}[{len(vector)}] {attributes} = ' + '{\n'
     for el in vector:
@@ -48,7 +48,7 @@ def format_vector_definition(type, uid, vector, alignment=None, section=None):
     return s
 
 
-def format_vector_declaration(type, uid, vector, alignment=None, section=None):
+def format_vector_declaration(type, uid, vector, alignment=8, section=None):
     attributes = variable_attributes(alignment, section)
     s = f'{type} {uid}[{len(vector)}] {attributes};'
     return s

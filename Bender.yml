@@ -122,7 +122,9 @@ sources:
   # target/*_chip
   - target: hemaia
     files:
-      - hw/hemaia/hemaia_mem_system.sv
+      - hw/hemaia/hemaia_mem_system/hemaia_xdma.sv
+      - hw/hemaia/hemaia_mem_system/hemaia_xdma_wrapper.sv
+      - hw/hemaia/hemaia_mem_system/hemaia_mem_system.sv
       - hw/hemaia/hemaia_clk_rst_controller/regs/hemaia_clk_rst_controller_reg_pkg.sv
       - hw/hemaia/hemaia_clk_rst_controller/regs/hemaia_clk_rst_controller_reg_top.sv
       - hw/hemaia/hemaia_clk_rst_controller/hemaia_clock_divider.sv

@@ -18,17 +18,29 @@ int main() {
 
     if (snrt_cluster_idx() == 0 && snrt_is_dm_core()) {
         // First we need to transfer the input data from L3->TCDM
-        snrt_dma_start_1d((void *)tcdm_baseaddress, data,
-                          data_size * sizeof(data[0]));
-        snrt_dma_wait_all();
+        if (xdma_disable_dst_ext(0) != 0) {
+            printf("Error in disabling xdma writer extension 0\n");
+            err++;
+        }
+        if (xdma_disable_dst_ext(1) != 0) {
+            printf("Error in disabling xdma writer extension 1\n");
+            err++;
+        }
+        if (xdma_disable_src_ext(0) != 0) {
+            printf("Error in disabling xdma reader extension 0\n");
+            err++;
+        }
+        xdma_memcpy_1d(data, (void *)tcdm_baseaddress,
+                       data_size * sizeof(data[0]));
+        int task_id = xdma_start();
+        xdma_remote_wait(task_id);
+        printf("XDMA copy from L3 to TCDM C0 is done in %d cycles.\r\n",
+               xdma_last_task_cycle());
     }
 
     snrt_global_barrier();
 
     if (snrt_cluster_idx() == 1 && snrt_is_dm_core()) {
-        register uint32_t start_time;
-        register uint32_t end_time;
-
         // Normal copy evaluation
         // Configure the extension
         if (xdma_disable_dst_ext(0) != 0) {
@@ -45,13 +57,42 @@ int main() {
         }
 
         xdma_memcpy_1d((void *)tcdm_baseaddress - cluster_offset,
-                       (void *)(tcdm_baseaddress), data_size * sizeof(data[0]));
-        __asm__ volatile("csrr %0, mcycle;" : "=r"(start_time));
+                       (void *)tcdm_baseaddress, data_size * sizeof(data[0]));
         int task_id = xdma_start();
         xdma_remote_wait(task_id);
-        __asm__ volatile("csrr %0, mcycle;" : "=r"(end_time));
-        printf("The XDMA copy starts at %d cycles and ends at %d cycles\r\n",
-            start_time, end_time);
+        printf("XDMA copy from TCDM C0 to TCDM C1 is done in %d cycles.\r\n",
+               xdma_last_task_cycle());
+
+#ifdef XDMA_CHECK_RESULT
+        // Check the result
+        uint32_t *golden_result = (uint32_t *)data;
+        uint32_t *tcdm_result = (uint32_t *)tcdm_baseaddress;
+
+        for (int i = 0; i < data_size * sizeof(data[0]) / 4; i++) {
+            if (tcdm_result[i] != golden_result[i]) {
+                printf("The data copy is incorrect at byte %d! \n", i << 2);
+            }
+        }
+        printf("Checking is done. All values are right\n");
+#endif
+        xdma_memcpy_1d((void *)tcdm_baseaddress, (void *)data,
+                       data_size * sizeof(data[0]));
+        task_id = xdma_start();
+        xdma_remote_wait(task_id);
+        printf("XDMA copy from TCDM C1 to L3 is done in %d cycles.\r\n",
+               xdma_last_task_cycle());
+#ifdef XDMA_CHECK_RESULT
+        // Check the result
+        uint32_t *golden_result = (uint32_t *)tcdm_baseaddress;
+        uint32_t *tcdm_result = (uint32_t *)data;
+
+        for (int i = 0; i < data_size * sizeof(data[0]) / 4; i++) {
+            if (tcdm_result[i] != golden_result[i]) {
+                printf("The data copy is incorrect at byte %d! \n", i << 2);
+            }
+        }
+        printf("Checking is done. All values are right\n");
+#endif
     }
 
     return 0;
