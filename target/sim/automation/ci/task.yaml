@@ -5,3 +5,6 @@ runs:
   - app_1:
     - host_app: hemaia_clk_rst_configurator
     - device_app: null
+  - app_2: 
+    - host_app: offload
+    - device_app: snax-xdma-copy

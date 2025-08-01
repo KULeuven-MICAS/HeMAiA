@@ -864,6 +864,7 @@ def get_chip_kwargs(soc_wide_xbar, soc_axi_lite_narrow_periph_xbar, soc2router_b
         "name": name,
         "util": util,
         "occamy_cfg": occamy_cfg,
+        "cluster_address_space": cluster_generators[0].cfg["cluster_base_offset"],
         "soc_wide_xbar": soc_wide_xbar,
         "soc_axi_lite_narrow_periph_xbar": soc_axi_lite_narrow_periph_xbar,
         "soc2router_bus": soc2router_bus,

@@ -189,6 +189,7 @@ import ${name}_pkg::*;
     .axi_master_rsp_t (${axi_soc_to_mem.rsp_type()}),
     .axi_slave_req_t (${axi_mem_to_soc.req_type()}),
     .axi_slave_rsp_t (${axi_mem_to_soc.rsp_type()}),
+    .ClusterAddressSpace (${cluster_address_space}),
     .MemBaseAddr (${occamy_cfg['spm_wide']["address"]}),
     .MemBankNum (${occamy_cfg['spm_wide']["banks"]}),
     .MemSize (${occamy_cfg['spm_wide']["length"]})
