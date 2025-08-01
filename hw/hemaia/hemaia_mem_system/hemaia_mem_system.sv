@@ -69,7 +69,7 @@ module hemaia_mem_system #(
       UniqueIds: 1'b0,
       AxiAddrWidth: AxiMasterAddrWidth,
       AxiDataWidth: AxiMasterDataWidth,
-      NoAddrRules: 1
+      NoAddrRules: 2
   };
 
   // Define the AXI type for the ports that before the xbar or after the xbar
@@ -99,17 +99,24 @@ module hemaia_mem_system #(
   assign axi_pre_xbar_req[1] = axi_master_req_i;
   assign axi_master_rsp_o = axi_pre_xbar_rsp[1];
 
-  xbar_rule_t [0:0] mem_system_xbar_rule;
+  xbar_rule_t [1:0] mem_system_xbar_rule;
+  // The 0nd port is for the XDMA virtual addresses
   // The 1st port is for the memory's direct access
-  // The 2nd port is for the XDMA virtual addresses
 
   logic [AxiMasterAddrWidth-1:0] memory_start_address;
   logic [AxiMasterAddrWidth-1:0] memory_end_address;
 
   assign memory_start_address = {chip_id_i, 40'b0} + MemBaseAddr;
-  assign memory_end_address = {chip_id_i, 40'b0} + MemBaseAddr + MemSize - 1;
+  assign memory_end_address = {chip_id_i, 40'b0} + MemBaseAddr + MemSize;
+
+  logic [AxiMasterAddrWidth-1:0] xdma_region_start_address;
+  logic [AxiMasterAddrWidth-1:0] xdma_region_end_address;
+
+  assign xdma_region_end_address = {chip_id_i, 40'b0} + 'h1_0000_0000;
+  assign xdma_region_start_address = xdma_region_end_address - 'h4000;
 
   assign mem_system_xbar_rule = '{
+          '{idx: 0, start_addr: xdma_region_start_address, end_addr: xdma_region_end_address},
           '{idx: 1, start_addr: memory_start_address, end_addr: memory_end_address}
       };
 
@@ -140,7 +147,7 @@ module hemaia_mem_system #(
       .mst_ports_req_o(axi_post_xbar_req),
       .mst_ports_resp_i(axi_post_xbar_rsp),
       .addr_map_i(mem_system_xbar_rule),
-      .en_default_mst_port_i(1'b1),
+      .en_default_mst_port_i('0),
       .default_mst_port_i('0)
   );
 
@@ -332,7 +339,7 @@ module hemaia_mem_system #(
   ) i_hemaia_xdma_wrapper (
     .clk_i(clk_i),
     .rst_ni(rst_ni),
-    .cluster_base_addr_i({chip_id_i, 8'b0} + MemBaseAddr),
+    .cluster_base_addr_i({chip_id_i, 40'b0} + MemBaseAddr),
     .tcdm_req_o(xdma_req),
     .tcdm_rsp_i(xdma_rsp),
     .csr_req_bits_data_i('0),

@@ -717,10 +717,6 @@ def main():
             file_name= "hemaia_xdma_wrapper.sv",
         )
 
-        # Make the directory to avoid the generation error
-        include_dir = script_dir / ".." / ".." / "hw" / "hemaia" / "hemaia_mem_system" / "include"
-        include_dir.mkdir(parents=True, exist_ok=True)
-        
         gen_chisel_file(
             chisel_path=str(script_dir / ".." / ".." / "deps" / "snitch_cluster" / "hw" / "chisel"),
             chisel_param="snax.xdma.xdmaTop.XDMATopGen",
