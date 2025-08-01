@@ -26,6 +26,8 @@ module hemaia_mem_system #(
     // XMDA Defines
     parameter int unsigned ClusterAddressSpace = 48'h400000,
 
+    parameter int unsigned ClusterAddressSpace = 48'h400000,
+
     parameter int unsigned MemBaseAddr = 32'h80000000,
     parameter int unsigned MemBankNum = 32,
     parameter int unsigned MemSize = 32'h100000
