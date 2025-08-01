@@ -160,8 +160,14 @@ module hemaia_mem_system #(
   `MEM_TYPEDEF_ALL(mem, mem_addr_t, mem_data_t, mem_strb_t, logic)
   `MEM_TYPEDEF_ALL(wide_mem, mem_addr_t, wide_mem_data_t, wide_mem_strb_t, logic)
 
-  `TCDM_TYPEDEF_ALL(tcdm, tcdm_addr_t, mem_data_t, mem_strb_t, logic)
-  `TCDM_TYPEDEF_ALL(wide_tcdm, tcdm_addr_t, wide_mem_data_t, wide_mem_strb_t, logic)
+  // TCDM definitions
+  typedef struct packed {
+    logic core_id;
+    logic is_core;
+  } tcdm_user_t;
+
+  `TCDM_TYPEDEF_ALL(tcdm, tcdm_addr_t, mem_data_t, mem_strb_t, tcdm_user_t)
+  `TCDM_TYPEDEF_ALL(wide_tcdm, tcdm_addr_t, wide_mem_data_t, wide_mem_strb_t, tcdm_user_t)
 
   logic      [MemBankNum-1:0] mem_cs;
   logic      [MemBankNum-1:0] mem_wen;
@@ -316,9 +322,9 @@ module hemaia_mem_system #(
     .tcdm_rsp_t(tcdm_rsp_t),
     .wide_slv_id_t(logic [AxiMasterIdWidth-1:0]),
     .wide_out_req_t(axi_in_pre_xbar_req_t),
-    .wide_out_rsp_t(axi_in_pre_xbar_resp_t),
+    .wide_out_resp_t(axi_in_pre_xbar_resp_t),
     .wide_in_req_t(axi_in_post_xbar_req_t),
-    .wide_in_rsp_t(axi_in_post_xbar_resp_t),
+    .wide_in_resp_t(axi_in_post_xbar_resp_t),
     .TCDMNumPorts(BanksPerSuperBank * 2),
     .TCDMAddrWidth($clog2(MemSize)),
     .ClusterBaseAddr({16'b0, MemBaseAddr}),
@@ -338,8 +344,8 @@ module hemaia_mem_system #(
     .csr_rsp_valid_o(),
     .csr_rsp_ready_i(1'b1),
     .xdma_wide_out_req_o(axi_pre_xbar_req[0]),
-    .xdma_wide_out_rsp_i(axi_pre_xbar_rsp[0]),
+    .xdma_wide_out_resp_i(axi_pre_xbar_rsp[0]),
     .xdma_wide_in_req_i(axi_post_xbar_req[0]),
-    .xdma_wide_in_rsp_o(axi_post_xbar_rsp[0])
+    .xdma_wide_in_resp_o(axi_post_xbar_rsp[0])
   );
 endmodule
