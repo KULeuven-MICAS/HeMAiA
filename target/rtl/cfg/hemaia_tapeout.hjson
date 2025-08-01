@@ -124,8 +124,7 @@
       // Extension Cfg
       writer_extensions: {},
       reader_extensions: {}
-  },
-
+    },
 
     // peripherals
     peripherals: {

@@ -18,9 +18,22 @@ int main() {
 
     if (snrt_cluster_idx() == 0 && snrt_is_dm_core()) {
         // First we need to transfer the input data from L3->TCDM
-        snrt_dma_start_1d((void *)tcdm_baseaddress, data,
-                          data_size * sizeof(data[0]));
-        snrt_dma_wait_all();
+        if (xdma_disable_dst_ext(0) != 0) {
+            printf("Error in disabling xdma writer extension 0\n");
+            err++;
+        }
+        if (xdma_disable_dst_ext(1) != 0) {
+            printf("Error in disabling xdma writer extension 1\n");
+            err++;
+        }
+        if (xdma_disable_src_ext(0) != 0) {
+            printf("Error in disabling xdma reader extension 0\n");
+            err++;
+        }
+        printf("xdma copy data from L3 to TCDM\r\n");
+        xdma_memcpy_1d(data, (void *)tcdm_baseaddress, data_size * sizeof(data[0]));
+        int task_id = xdma_start();
+        xdma_remote_wait(task_id);
     }
 
     snrt_global_barrier();
