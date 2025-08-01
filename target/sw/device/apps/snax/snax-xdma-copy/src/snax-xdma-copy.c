@@ -57,7 +57,7 @@ int main() {
         }
 
         xdma_memcpy_1d((void *)tcdm_baseaddress - cluster_offset,
-                       (void *)(tcdm_baseaddress), data_size * sizeof(data[0]));
+                       (void *)tcdm_baseaddress, data_size * sizeof(data[0]));
         int task_id = xdma_start();
         xdma_remote_wait(task_id);
         printf("XDMA copy from TCDM C0 to TCDM C1 is done in %d cycles.\r\n",
@@ -67,6 +67,24 @@ int main() {
         // Check the result
         uint32_t *golden_result = (uint32_t *)data;
         uint32_t *tcdm_result = (uint32_t *)tcdm_baseaddress;
+
+        for (int i = 0; i < data_size * sizeof(data[0]) / 4; i++) {
+            if (tcdm_result[i] != golden_result[i]) {
+                printf("The data copy is incorrect at byte %d! \n", i << 2);
+            }
+        }
+        printf("Checking is done. All values are right\n");
+#endif
+        xdma_memcpy_1d((void *)tcdm_baseaddress, (void *)data,
+                       data_size * sizeof(data[0]));
+        task_id = xdma_start();
+        xdma_remote_wait(task_id);
+        printf("XDMA copy from TCDM C1 to L3 is done in %d cycles.\r\n",
+               xdma_last_task_cycle());
+#ifdef XDMA_CHECK_RESULT
+        // Check the result
+        uint32_t *golden_result = (uint32_t *)tcdm_baseaddress;
+        uint32_t *tcdm_result = (uint32_t *)data;
 
         for (int i = 0; i < data_size * sizeof(data[0]) / 4; i++) {
             if (tcdm_result[i] != golden_result[i]) {
