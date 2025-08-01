@@ -112,6 +112,7 @@ $(MISC_OCCAMYGEN_TARGETS): .misc_occamygen_targets_group
 	$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_SRC_DIR)\
 		--top-sv           $(SOURCE_OCCAMY_DIR)/occamy_top.sv.tpl \
 		--soc-sv           $(SOURCE_OCCAMY_DIR)/occamy_soc.sv.tpl \
+		--xdma             \
 		--chip             $(SOURCE_OCCAMY_DIR)/occamy_chip.sv.tpl \
 		--pkg-sv           $(SOURCE_OCCAMY_DIR)/occamy_pkg.sv.tpl \
 		--quadrant-s1      $(SOURCE_OCCAMY_DIR)/occamy_quadrant_s1.sv.tpl \

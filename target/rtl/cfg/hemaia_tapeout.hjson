@@ -110,6 +110,23 @@
       "snax_versacore_cluster",
       ],
 
+    hemaia_xdma_cfg: {
+      bender_target: ["hemaia_xdma"],
+      // Cross Cluster Calling Cfg
+      max_multicast: 2,
+      max_dimension: 5,
+      max_mem_size: 4096,
+      // DataMaestro Cfg
+      reader_buffer: 8,
+      writer_buffer: 8,
+      reader_agu_temporal_dimension: 5,
+      writer_agu_temporal_dimension: 5,
+      // Extension Cfg
+      writer_extensions: {},
+      reader_extensions: {}
+  },
+
+
     // peripherals
     peripherals: {
         rom: {
