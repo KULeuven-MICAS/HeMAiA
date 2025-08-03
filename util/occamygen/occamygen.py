@@ -689,7 +689,7 @@ def main():
     # CTRL #
     ########
     if args.ctrl:
-        ctrl_kwargs = occamy.get_ctrl_kwargs(occamy_cfg, args.name)
+        ctrl_kwargs = occamy.get_ctrl_kwargs(occamy_cfg, cluster_generators, args.name)
         write_template(args.ctrl, outdir, **ctrl_kwargs)
     #######
     # DTS #

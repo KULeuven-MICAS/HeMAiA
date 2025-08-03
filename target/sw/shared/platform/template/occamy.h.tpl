@@ -2,6 +2,7 @@
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
 #define N_CLUSTERS ${nr_clusters}
 #define N_SNITCHES ${nr_cores}
 #define N_HARTS N_SNITCHES + 1

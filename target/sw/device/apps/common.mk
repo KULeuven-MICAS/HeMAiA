@@ -14,13 +14,13 @@ include $(MK_DIR)/../toolchain.mk
 ###############
 
 # Fixed paths in repository tree
-ROOT        = $(abspath $(MK_DIR)/../../../../)
-SNITCH_ROOT = $(shell bender path snitch_cluster)
-APPSDIR     = $(abspath $(MK_DIR))
-RUNTIME_DIR = $(ROOT)/target/sw/device/runtime
-SNRT_DIR    = $(SNITCH_ROOT)/sw/snRuntime
-SW_DIR      = $(ROOT)/target/sw
-MATH_DIR    = $(ROOT)/target/sw/device/math
+ROOT         = $(abspath $(MK_DIR)/../../../../)
+SNITCH_ROOT  = $(shell bender path snitch_cluster)
+APPSDIR      = $(abspath $(MK_DIR))
+SW_DIR       = $(ROOT)/target/sw
+RUNTIME_DIR  = $(SW_DIR)/device/runtime
+MATH_DIR     = $(SW_DIR)/device/math
+SNRT_DIR     = $(SNITCH_ROOT)/sw/snRuntime
 
 # Paths relative to the app including this Makefile
 BUILDDIR    = $(abspath build)
@@ -31,6 +31,7 @@ BUILDDIR    = $(abspath build)
 
 # Dependencies
 INCDIRS += $(RUNTIME_DIR)/src
+INCDIRS += $(RUNTIME_DIR)/api
 INCDIRS += $(SNRT_DIR)/api
 INCDIRS += $(SNRT_DIR)/src
 INCDIRS += $(SNRT_DIR)/vendor/riscv-opcodes
@@ -43,14 +44,24 @@ INCDIRS += $(SNRT_DIR)/../math/src/include
 INCDIRS += $(SNRT_DIR)/../math/src/internal
 INCDIRS += $(SNRT_DIR)/../math/include/bits
 INCDIRS += $(SNRT_DIR)/../math/include
+INCDIRS += $(SW_DIR)/device/libsnaxkernel/include
+INCDIRS += $(SW_DIR)/shared/vendor/o1heap/o1heap
+
 # Linking sources
-BASE_LD       = $(abspath $(SNRT_DIR)/base.ld)
+# BASE_LD       = $(abspath $(SNRT_DIR)/base.ld)
+BASE_LD       = $(abspath $(APPSDIR)/base.ld)
 MEMORY_LD     = $(abspath $(APPSDIR)/memory.ld)
 ORIGIN_LD     = $(abspath $(BUILDDIR)/origin.ld)
+# SNRT LIB
 SNRT_LIB_DIR  = $(abspath $(RUNTIME_DIR)/build/)
 SNRT_LIB_NAME = snRuntime
 SNRT_LIB      = $(realpath $(SNRT_LIB_DIR)/lib$(SNRT_LIB_NAME).a)
-LD_SRCS       = $(BASE_LD) $(MEMORY_LD) $(ORIGIN_LD) $(SNRT_LIB)
+# SNAX KERNEL LIB
+SNAX_LIB_DIR  = $(SW_DIR)/device/libsnaxkernel/build
+SNAX_LIB_NAME = snaxkernel
+SNAX_LIB      = $(realpath $(SNAX_LIB_DIR)/lib$(SNAX_LIB_NAME).a)
+# LD SRCS
+LD_SRCS       = $(BASE_LD) $(MEMORY_LD) $(ORIGIN_LD) $(SNRT_LIB) $(SNAX_LIB)
 
 # Linker script
 RISCV_LDFLAGS += -L$(APPSDIR)
@@ -60,6 +71,13 @@ RISCV_LDFLAGS += -T$(BASE_LD)
 # Link snRuntime library
 RISCV_LDFLAGS += -L$(SNRT_LIB_DIR)
 RISCV_LDFLAGS += -l$(SNRT_LIB_NAME)
+# Link snaxkernel library
+# Since the snax kernel is not used in the dev.c
+# We need to keep the snax kernel symbol table by using the --whole-archive
+RISCV_LDFLAGS += -Wl,--whole-archive
+RISCV_LDFLAGS += -L$(SNAX_LIB_DIR)
+RISCV_LDFLAGS += -l$(SNAX_LIB_NAME)
+RISCV_LDFLAGS += -Wl,--no-whole-archive
 # Link math library
 RISCV_LDFLAGS += -L$(MATH_DIR)/build
 RISCV_LDFLAGS += -lmath

@@ -43,9 +43,6 @@ INCDIRS += $(SW_DIR)/shared/platform/generated
 # INCDIRS += $(SW_DIR)/shared/platform
 INCDIRS += $(SW_DIR)/shared/runtime
 
-SNRT_LIB_DIR  = $(abspath $(RUNTIME_DIR)/build/)
-SNRT_LIB_NAME = snRuntime
-SNRT_LIB      = $(realpath $(SNRT_LIB_DIR)/lib$(SNRT_LIB_NAME).a)
 
 $(BUILDDIR):
 	mkdir -p $@

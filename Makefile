@@ -131,7 +131,7 @@ hemaia_system_vivado_gui: # In ESAT Server
 ######################
 
 hemaia_system_vlt: # In SNAX Docker
-	+$(MAKE) -C ./target/sim bin/occamy_chip.vlt CFG=$(CFG)
+	$(MAKE) -C ./target/sim bin/occamy_chip.vlt CFG=$(CFG)
 
 #####################
 # Questasim Workflow #

@@ -2,8 +2,10 @@
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 // #include "host.h"
+
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 #include "chip_id.h"
 #include "heterogeneous_runtime.h"
 #include "occamy.h"
@@ -14,7 +16,6 @@ extern uint64_t __narrow_spm_start;
 extern uint64_t __narrow_spm_end;
 extern uint64_t __wide_spm_start;
 extern uint64_t __wide_spm_end;
-
 // Handle multireg degeneration to single register
 #if OCCAMY_SOC_ISOLATE_MULTIREG_COUNT == 1
 #define OCCAMY_SOC_ISOLATE_0_REG_OFFSET OCCAMY_SOC_ISOLATE_REG_OFFSET
@@ -29,6 +30,52 @@ extern uint64_t __wide_spm_end;
 #if OCCAMY_SOC_SCRATCH_MULTIREG_COUNT == 1
 #define OCCAMY_SOC_SCRATCH_0_REG_OFFSET OCCAMY_SOC_SCRATCH_REG_OFFSET
 #endif
+
+
+//===============================================================
+// SNAX LIB Symbol Tab
+//===============================================================
+
+// symtab data structure
+#define SNAX_LIB_NAME_MAX_LEN 64
+typedef struct __attribute__((packed)){
+    char name[SNAX_LIB_NAME_MAX_LEN];      // function name
+    uint32_t addr;                         // function addr
+} snax_symbol_t;
+#define SNAX_SYMTAB_END_FN_NAME "SYMTAB_END"
+#define SNAX_SYMTAB_END_FN_ADDR (uint32_t)(0xBAADF00D)
+
+// Busy wait the ready signal
+void check_kernel_tab_ready(){
+    volatile uint32_t *symtab_ready_ptr = (volatile uint32_t *)soc_ctrl_kernel_tab_scratch_addr(0);
+    while(*symtab_ready_ptr!=1){}
+}
+// Get the device function
+uint32_t get_device_function(const char *name) {
+    uint32_t get_symtab_start_raw = *(volatile uint32_t *)soc_ctrl_kernel_tab_scratch_addr(1);
+    uint32_t get_symtab_end_raw   = *(volatile uint32_t *)soc_ctrl_kernel_tab_scratch_addr(2);
+    // printf("[Host] Symtab Start Value: 0x%x\n", get_symtab_start_raw);
+    // printf("[Host] Symtab End Value:   0x%x\n", get_symtab_end_raw);
+    snax_symbol_t *symtab_start = (snax_symbol_t *)(uintptr_t)get_symtab_start_raw;
+    snax_symbol_t *symtab_end   = (snax_symbol_t *)(uintptr_t)get_symtab_end_raw;
+    // printf("Scanning device symbol table...\n");  
+    for (volatile snax_symbol_t *sym = symtab_start; sym < symtab_end; sym++) {
+        // printf("Symbol raw name: %s\n", (const char *)sym->name);
+        // printf("Symbol addr     : 0x%x\n", (uint32_t)sym->addr);
+        if (strcmp((const char *)sym->name, SNAX_SYMTAB_END_FN_NAME) == 0 &&
+            sym->addr == SNAX_SYMTAB_END_FN_ADDR) {
+            break;
+        }
+
+        // printf("Checking symbol: %s at 0x%x\n", sym->name, (unsigned)(uintptr_t)sym->addr);
+
+        if (strcmp((const char *)sym->name, name) == 0) {
+            return sym->addr;
+        }
+    }
+    // printf("Symbol \"%s\" not found.\n", name);
+    return (uint32_t)(0xBAADF00D);
+}
 
 //===============================================================
 // RISC-V
@@ -130,6 +177,7 @@ void initialize_narrow_spm() {
             (uint64_t)get_current_chip_baseaddress() | SPM_NARROW_BASE_ADDR,
             (uint64_t)get_current_chip_baseaddress() | WIDE_ZERO_MEM_BASE_ADDR,
             narrow_spm_size);
+    asm volatile("fence" ::: "memory");
 }
 
 void initialize_comm_buffer(comm_buffer_t* comm_buffer_ptr) {
@@ -139,6 +187,23 @@ void initialize_comm_buffer(comm_buffer_t* comm_buffer_ptr) {
         sizeof(comm_buffer_t));
     asm volatile("fence" ::: "memory");
 }
+
+void initialize_cluster(uint32_t cluster_idx) {
+    // Initialize the cluster tcdm
+    sys_dma_blk_memcpy(
+        (uint64_t)get_current_chip_baseaddress() | cluster_tcdm_start_addr(cluster_idx),
+        (uint64_t)get_current_chip_baseaddress() | WIDE_ZERO_MEM_BASE_ADDR,
+        (uint64_t)CLUSTER_TCDM_SIZE
+    );
+}
+
+void initialize_all_clusters() {
+    for (uint32_t i = 0; i < N_CLUSTERS; i++) {
+        initialize_cluster(i);
+    }
+}
+
+
 
 void enable_fpu() {
     uint64_t mstatus;
@@ -387,6 +452,7 @@ static inline void reset_and_ungate_quadrants_all(uint8_t chip_id) {
     for (int i = 0; i < N_QUADS; i++)
         reset_and_ungate_quad(chip_id, i, 0xFFFFFFFF);
 }
+
 //===============================================================
 // Interrupts
 //===============================================================

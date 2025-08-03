@@ -94,6 +94,7 @@ $(SW_DEVICE_RT_DIR)/src/occamy_defs.h: $(SW_DEVICE_RT_DIR)/template/occamy_defs.
 	@$(OCCAMYGEN) -c $(CFG) --outdir $(SW_DEVICE_RT_DIR)/src --cheader $<
 
 sw: $(PLATFORM_HEADERS)
+	$(MAKE) -C host libs
 	$(MAKE) -C host TARGET=partial-build
 	$(MAKE) -C device
 	$(MAKE) -C host TARGET=finalize-build

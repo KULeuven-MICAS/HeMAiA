@@ -29,8 +29,15 @@ INCDIRS += $(SNRT_DIR)/../math/src/include
 INCDIRS += $(SNRT_DIR)/../math/src/internal
 INCDIRS += $(SNRT_DIR)/../math/include/bits
 INCDIRS += $(SNRT_DIR)/../math/include
+# Occamy specific includes
+INCDIRS += ./src/
+INCDIRS += ./api/
+# vendor o1 heap
+INCDIRS += $(SW_DIR)/shared/vendor/o1heap/o1heap
+
 # Sources
-SRCS += $(SRC_DIR)/occamy_start.S
+# SRCS += $(SRC_DIR)/occamy_start.S
+SRCS += $(SRC_DIR)/hemaia_start.S
 SRCS += $(SRC_DIR)/snrt.c
 
 ###########
