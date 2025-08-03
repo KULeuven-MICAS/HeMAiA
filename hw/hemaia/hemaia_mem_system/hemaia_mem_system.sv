@@ -114,7 +114,7 @@ module hemaia_mem_system #(
   logic [AxiMasterAddrWidth-1:0] xdma_region_start_address;
   logic [AxiMasterAddrWidth-1:0] xdma_region_end_address;
 
-  assign xdma_region_end_address = {chip_id_i, 40'b0} + 'h1_0000_0000;
+  assign xdma_region_end_address = {chip_id_i, 40'b0} + 48'h1_0000_0000;
   assign xdma_region_start_address = xdma_region_end_address - 'h4000;
 
   assign mem_system_xbar_rule = '{

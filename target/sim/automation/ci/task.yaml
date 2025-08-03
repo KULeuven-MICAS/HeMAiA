@@ -8,3 +8,6 @@ runs:
   - app_2: 
     - host_app: offload
     - device_app: snax-xdma-copy
+  - app_3: 
+    - host_app: offload
+    - device_app: snax-xdma-hazard
