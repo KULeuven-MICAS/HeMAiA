@@ -180,15 +180,21 @@ import ${name}_pkg::*;
   //////////////////////////////
 
   <%
-    axi_soc_to_mem = soc_wide_xbar.out_hemaia_mem.copy(name="axi_soc_to_mem").declare(context)
-    axi_mem_to_soc = soc_wide_xbar.in_hemaia_mem.copy(name="axi_mem_to_soc").declare(context)
+    axi_wide_soc_to_mem = soc_wide_xbar.out_hemaia_mem.copy(name="axi_wide_soc_to_mem").declare(context)
+    axi_wide_mem_to_soc = soc_wide_xbar.in_hemaia_mem.copy(name="axi_wide_mem_to_soc").declare(context)
+    axi_narrow_soc_to_mem = soc_narrow_xbar.out_hemaia_mem.copy(name="axi_narrow_soc_to_mem").declare(context)
+    axi_narrow_mem_to_soc = soc_narrow_xbar.in_hemaia_mem.copy(name="axi_narrow_mem_to_soc").declare(context)
   %> \
   hemaia_mem_system #(
     .chip_id_t (chip_id_t),
-    .axi_master_req_t (${axi_soc_to_mem.req_type()}),
-    .axi_master_rsp_t (${axi_soc_to_mem.rsp_type()}),
-    .axi_slave_req_t (${axi_mem_to_soc.req_type()}),
-    .axi_slave_rsp_t (${axi_mem_to_soc.rsp_type()}),
+    .axi_wide_master_req_t (${axi_wide_soc_to_mem.req_type()}),
+    .axi_wide_master_rsp_t (${axi_wide_soc_to_mem.rsp_type()}),
+    .axi_wide_slave_req_t (${axi_wide_mem_to_soc.req_type()}),
+    .axi_wide_slave_rsp_t (${axi_wide_mem_to_soc.rsp_type()}),
+    .axi_narrow_master_req_t (${axi_narrow_soc_to_mem.req_type()}),
+    .axi_narrow_master_rsp_t (${axi_narrow_soc_to_mem.rsp_type()}),
+    .axi_narrow_slave_req_t (${axi_narrow_mem_to_soc.req_type()}),
+    .axi_narrow_slave_rsp_t (${axi_narrow_mem_to_soc.rsp_type()}),
     .ClusterAddressSpace (${cluster_address_space}),
     .MemBaseAddr (${occamy_cfg['spm_wide']["address"]}),
     .MemBankNum (${occamy_cfg['spm_wide']["banks"]}),
@@ -197,10 +203,14 @@ import ${name}_pkg::*;
     .clk_i            (clk_host),
     .rst_ni           (rst_host_n),
     .chip_id_i        (chip_id),
-    .axi_master_req_i (${axi_soc_to_mem.req_name()}),
-    .axi_master_rsp_o (${axi_soc_to_mem.rsp_name()}),
-    .axi_slave_req_o  (${axi_mem_to_soc.req_name()}),
-    .axi_slave_rsp_i  (${axi_mem_to_soc.rsp_name()})
+    .axi_wide_master_req_i (${axi_wide_soc_to_mem.req_name()}),
+    .axi_wide_master_rsp_o (${axi_wide_soc_to_mem.rsp_name()}),
+    .axi_wide_slave_req_o  (${axi_wide_mem_to_soc.req_name()}),
+    .axi_wide_slave_rsp_i  (${axi_wide_mem_to_soc.rsp_name()}),
+    .axi_narrow_master_req_i (${axi_narrow_soc_to_mem.req_name()}),
+    .axi_narrow_master_rsp_o (${axi_narrow_soc_to_mem.rsp_name()}),
+    .axi_narrow_slave_req_o  (${axi_narrow_mem_to_soc.req_name()}),
+    .axi_narrow_slave_rsp_i  (${axi_narrow_mem_to_soc.rsp_name()})
   );
 
   ///////////////////
@@ -294,10 +304,16 @@ import ${name}_pkg::*;
 % endif    
     .bootrom_req_o      (bootrom_axi_lite_req),
     .bootrom_rsp_i      (bootrom_axi_lite_rsp),
-    .hemaia_mem_axi_req_o(${axi_soc_to_mem.req_name()}),
-    .hemaia_mem_axi_rsp_i(${axi_soc_to_mem.rsp_name()}),
-    .hemaia_mem_axi_req_i(${axi_mem_to_soc.req_name()}),
-    .hemaia_mem_axi_rsp_o(${axi_mem_to_soc.rsp_name()}),
+    // HeMAiA Mem system wide
+    .hemaia_mem_axi_wide_req_o(${axi_wide_soc_to_mem.req_name()}),
+    .hemaia_mem_axi_wide_rsp_i(${axi_wide_soc_to_mem.rsp_name()}),
+    .hemaia_mem_axi_wide_req_i(${axi_wide_mem_to_soc.req_name()}),
+    .hemaia_mem_axi_wide_rsp_o(${axi_wide_mem_to_soc.rsp_name()}),
+    // HeMAiA Mem system narrow
+    .hemaia_mem_axi_narrow_req_o(${axi_narrow_soc_to_mem.req_name()}),
+    .hemaia_mem_axi_narrow_rsp_i(${axi_narrow_soc_to_mem.rsp_name()}),
+    .hemaia_mem_axi_narrow_req_i(${axi_narrow_mem_to_soc.req_name()}),
+    .hemaia_mem_axi_narrow_rsp_o(${axi_narrow_mem_to_soc.rsp_name()}),
 
     // HeMAiA Reset & Clock Controller
     .hemaia_clk_rst_controller_req_o(hemaia_clk_rst_controller_req),

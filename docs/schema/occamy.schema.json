@@ -113,6 +113,26 @@
                     "description": "narrow xbar -> wide xbar & wide xbar -> narrow xbar",
                     "default": 0
                 },
+                "wide_to_hemaia_mem": {
+                    "type": "integer",
+                    "description": "wide xbar -> hemaia mem system",
+                    "default": 1
+                },
+                "narrow_to_hemaia_mem": {
+                    "type": "integer",
+                    "description": "narrow xbar -> hemaia mem system",
+                    "default": 1
+                },
+                "hemaia_mem_to_wide": {
+                    "type": "integer",
+                    "description": "hemaia mem system -> wide xbar",
+                    "default": 1
+                },
+                "hemaia_mem_to_narrow": {
+                    "type": "integer",
+                    "description": "hemaia mem system -> narrow xbar",
+                    "default": 1
+                },
                 "wide_conv_to_spm_wide": {
                     "type": "integer",
                     "description": "wide xbar -> wide spm",

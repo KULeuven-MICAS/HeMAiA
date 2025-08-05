@@ -357,7 +357,7 @@ def am_connect_soc_lite_narrow_periph_xbar(am, am_soc_axi_lite_narrow_periph_xba
     return am_axi_lite_narrow_peripherals, am_bootrom, am_clint
 
 
-def am_connect_soc_narrow_xbar(am, am_soc_narrow_xbar, occamy_cfg):
+def am_connect_soc_narrow_xbar_mem(am, am_soc_narrow_xbar, occamy_cfg):
     # Connect narrow SPM to Narrow AXI
     am_spm_narrow = am.new_leaf(
         "spm_narrow",
@@ -371,21 +371,33 @@ def am_connect_soc_narrow_xbar(am, am_soc_narrow_xbar, occamy_cfg):
         "sys_idma_cfg",
         occamy_cfg["sys_idma_cfg"]["length"],
         occamy_cfg["sys_idma_cfg"]["address"]).attach_to(am_soc_narrow_xbar)
-    return am_spm_narrow, am_sys_idma_cfg
+    
+    ##################
+    # AM: HeMAiA Mem #
+    ##################
+    # The MMIO of the ctrl is at
+    # (end_addr - 12kB) - end_addr
+    # size 12KB
+    # cfg grant finish
+    am_narrow_hemaia_mem = am.new_leaf(
+        "hemaia_xdma_ctrl",
+        4096*3,
+        0x100000000 - 4096*3).attach_to(am_soc_narrow_xbar)    
+    return am_spm_narrow, am_sys_idma_cfg, am_narrow_hemaia_mem
 
 
 def am_connect_soc_wide_xbar_mem(am, am_soc_wide_xbar, occamy_cfg):
     # Connect wide SPM to Wide AXI
-    am_hemaia_mem = am.new_leaf(
+    am_wide_hemaia_mem = am.new_leaf(
         "spm_wide",
-        0xffffffff - occamy_cfg["spm_wide"]["address"] + 1,
+        0xffffffff - occamy_cfg["spm_wide"]["address"] + 1 - 4096*3,
         occamy_cfg["spm_wide"]["address"]).attach_to(am_soc_wide_xbar)
     # Connect wide Zero Memory to Wide AXI
     am_wide_zero_mem = am.new_leaf(
         "wide_zero_mem",
         occamy_cfg["wide_zero_mem"]["length"],
         occamy_cfg["wide_zero_mem"]["address"]).attach_to(am_soc_wide_xbar)
-    return am_hemaia_mem, am_wide_zero_mem
+    return am_wide_hemaia_mem, am_wide_zero_mem
 
 
 def am_connect_soc_wide_xbar_quad(am, am_soc_narrow_xbar, am_wide_xbar_quadrant_s1, am_narrow_xbar_quadrant_s1, occamy_cfg, cluster_generators):
@@ -882,7 +894,7 @@ def get_backend_testharness_kwargs(occamy_cfg, soc2router_bus, router2soc_bus, n
     return testharness_kwargs
 
 
-def get_chip_kwargs(soc_wide_xbar, soc_axi_lite_narrow_periph_xbar, soc2router_bus, router2soc_bus, occamy_cfg, cluster_generators, util, name):
+def get_chip_kwargs(soc_wide_xbar, soc_narrow_xbar, soc_axi_lite_narrow_periph_xbar, soc2router_bus, router2soc_bus, occamy_cfg, cluster_generators, util, name):
     core_per_cluster_list = [cluster_generator.cfg["nr_cores"]
                              for cluster_generator in cluster_generators]
     nr_cores_quadrant = sum(core_per_cluster_list)
@@ -893,6 +905,7 @@ def get_chip_kwargs(soc_wide_xbar, soc_axi_lite_narrow_periph_xbar, soc2router_b
         "occamy_cfg": occamy_cfg,
         "cluster_address_space": cluster_generators[0].cfg["cluster_base_offset"],
         "soc_wide_xbar": soc_wide_xbar,
+        "soc_narrow_xbar": soc_narrow_xbar,
         "soc_axi_lite_narrow_periph_xbar": soc_axi_lite_narrow_periph_xbar,
         "soc2router_bus": soc2router_bus,
         "router2soc_bus": router2soc_bus,

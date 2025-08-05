@@ -49,19 +49,23 @@ CFG = $(TARGET_RTL)/cfg/lru.hjson
 
 .PHONY: all clean
 all: rtl
-clean: clean-rtl-src
-
-###############
-# RTL sources #
-###############
 
 .PHONY: rtl clint plic socctrl quadctrl soc
 .PHONY: clean-rtl-src clean-rtl clean-clint clean-plic clean-socctrl clean-quadctrl clean-snax-cluster clean-soc
 
+clean: clean-rtl-src
+###############
+# RTL sources #
+###############
+
+
+
 rtl: clint plic socctrl quadctrl soc snax-cluster src/bender_targets.tmp
 clean-rtl: clean-clint clean-plic clean-socctrl clean-quadctrl clean-soc clean-snax-cluster
-clean-rtl-src:
+clean-rtl-src: 
 	rm -rf $(TARGET_SRC_DIR)
+	rm -rf *_group
+
 
 $(TARGET_PLIC_DIR) $(TARGET_CLINT_DIR) $(TARGET_SOCCTRL_DIR) $(TARGET_QUADCTRL_DIR):
 	@mkdir -p $@

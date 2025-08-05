@@ -239,10 +239,10 @@ def main():
     am_axi_lite_narrow_peripherals, am_bootrom, am_clint = occamy.am_connect_soc_lite_narrow_periph_xbar(
         am, am_soc_axi_lite_narrow_periph_xbar, occamy_cfg)
 
-    am_spm_narrow, am_sys_idma_cfg = occamy.am_connect_soc_narrow_xbar(
+    am_spm_narrow, am_sys_idma_cfg, am_narrow_hemaia_mem = occamy.am_connect_soc_narrow_xbar_mem(
         am, am_soc_narrow_xbar, occamy_cfg)
 
-    am_hemaia_mem, am_wide_zero_mem = occamy.am_connect_soc_wide_xbar_mem(
+    am_wide_hemaia_mem, am_wide_zero_mem = occamy.am_connect_soc_wide_xbar_mem(
         am, am_soc_wide_xbar, occamy_cfg)
 
     am_clusters = occamy.am_connect_soc_wide_xbar_quad(
@@ -356,7 +356,7 @@ def main():
     soc_wide_xbar.add_output_entry("soc_narrow", am_soc_narrow_xbar)
     soc_wide_xbar.add_input("soc_narrow")
     soc_wide_xbar.add_input("sys_idma_mst")
-    soc_wide_xbar.add_output_entry("hemaia_mem", am_hemaia_mem)
+    soc_wide_xbar.add_output_entry("hemaia_mem", am_wide_hemaia_mem)
     soc_wide_xbar.add_input("hemaia_mem")
 
     soc_wide_xbar.add_output_entry("wide_zero_mem", am_wide_zero_mem)
@@ -407,6 +407,9 @@ def main():
     soc_narrow_xbar.add_output_entry("axi_lite_narrow_periph",
                                      am_soc_axi_lite_narrow_periph_xbar)
 
+    # hemaia mem system
+    soc_narrow_xbar.add_input("hemaia_mem")
+    soc_narrow_xbar.add_output_entry("hemaia_mem", am_narrow_hemaia_mem)
     ##########################
     # S1 Quadrant controller #
     ##########################
@@ -743,7 +746,7 @@ def main():
     ########
     if args.chip:
         chip_kwargs = occamy.get_chip_kwargs(
-            soc_wide_xbar, soc_axi_lite_narrow_periph_xbar, soc2router_bus, router2soc_bus, occamy_cfg, cluster_generators, util, args.name)
+            soc_wide_xbar, soc_narrow_xbar, soc_axi_lite_narrow_periph_xbar, soc2router_bus, router2soc_bus, occamy_cfg, cluster_generators, util, args.name)
         write_template(args.chip, outdir, **chip_kwargs)
 
     ########
