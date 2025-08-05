@@ -64,7 +64,11 @@ rtl: clint plic socctrl quadctrl soc snax-cluster src/bender_targets.tmp
 clean-rtl: clean-clint clean-plic clean-socctrl clean-quadctrl clean-soc clean-snax-cluster
 clean-rtl-src: 
 	rm -rf $(TARGET_SRC_DIR)
-	rm -rf *_group
+	rm -rf .snax_cluster_occamygen_targets_group
+	rm -rf .misc_occamygen_targets_group
+	rm -rf .quadctrl_reggen_targets_group
+	rm -rf .plic_reggen_targets_group
+	rm -rf .clint_reggen_targets_group
 
 
 $(TARGET_PLIC_DIR) $(TARGET_CLINT_DIR) $(TARGET_SOCCTRL_DIR) $(TARGET_QUADCTRL_DIR):
