@@ -16,13 +16,13 @@ module hemaia_mem_system #(
     // AXI Wide Port
     parameter type axi_wide_master_req_t = logic,
     parameter type axi_wide_master_rsp_t = logic,
-    parameter type axi_wide_slave_req_t  = logic,
-    parameter type axi_wide_slave_rsp_t  = logic,
+    parameter type axi_wide_slave_req_t = logic,
+    parameter type axi_wide_slave_rsp_t = logic,
     // AXI Narrow Port
     parameter type axi_narrow_master_req_t = logic,
     parameter type axi_narrow_master_rsp_t = logic,
-    parameter type axi_narrow_slave_req_t  = logic,
-    parameter type axi_narrow_slave_rsp_t  = logic,
+    parameter type axi_narrow_slave_req_t = logic,
+    parameter type axi_narrow_slave_rsp_t = logic,
     // XMDA Defines
     parameter int unsigned ClusterAddressSpace = 48'h400000,
 
@@ -30,8 +30,8 @@ module hemaia_mem_system #(
     parameter int unsigned MemBankNum = 32,
     parameter int unsigned MemSize = 32'h100000
 ) (
-    input  logic clk_i,
-    input  logic rst_ni,
+    input  logic                   clk_i,
+    input  logic                   rst_ni,
     input  chip_id_t               chip_id_i,
     // Wide axi ports
     input  axi_wide_master_req_t   axi_wide_master_req_i,
@@ -112,7 +112,7 @@ module hemaia_mem_system #(
   axi_in_post_xbar_req_t  [1:0] axi_post_xbar_req;
   axi_in_post_xbar_resp_t [1:0] axi_post_xbar_rsp;
 
-  assign axi_pre_xbar_req[0] = axi_wide_master_req_i;
+  assign axi_pre_xbar_req[0]   = axi_wide_master_req_i;
   assign axi_wide_master_rsp_o = axi_pre_xbar_rsp[0];
 
   xbar_rule_t [1:0] mem_system_xbar_rule;
@@ -341,38 +341,38 @@ module hemaia_mem_system #(
   );
 
   hemaia_xdma_wrapper #(
-      .tcdm_req_t(tcdm_req_t),
-      .tcdm_rsp_t(tcdm_rsp_t),
+      .tcdm_req_t         (tcdm_req_t),
+      .tcdm_rsp_t         (tcdm_rsp_t),
       // Wide ports
-      .wide_slv_id_t    (logic [AxiWideMasterIdWidth+$clog2(HeMAiAMemXbarCfg.NoSlvPorts)-1:0]),
-      .wide_out_req_t   (axi_wide_slave_req_t),
-      .wide_out_resp_t  (axi_wide_slave_rsp_t),
-      .wide_in_req_t    (axi_in_post_xbar_req_t),
-      .wide_in_resp_t   (axi_in_post_xbar_resp_t),
+      .wide_slv_id_t      (logic [AxiWideMasterIdWidth+$clog2(HeMAiAMemXbarCfg.NoSlvPorts)-1:0]),
+      .wide_out_req_t     (axi_wide_slave_req_t),
+      .wide_out_resp_t    (axi_wide_slave_rsp_t),
+      .wide_in_req_t      (axi_in_post_xbar_req_t),
+      .wide_in_resp_t     (axi_in_post_xbar_resp_t),
       // Narrow ports
-      .narrow_slv_id_t  (logic [AxiNarrowMasterIdWidth-1:0]),
-      .narrow_out_req_t (axi_narrow_slave_req_t),
-      .narrow_out_resp_t(axi_narrow_slave_rsp_t),
-      .narrow_in_req_t  (axi_narrow_master_req_t),
-      .narrow_in_resp_t (axi_narrow_master_rsp_t),
+      .narrow_slv_id_t    (logic [AxiNarrowMasterIdWidth-1:0]),
+      .narrow_out_req_t   (axi_narrow_slave_req_t),
+      .narrow_out_resp_t  (axi_narrow_slave_rsp_t),
+      .narrow_in_req_t    (axi_narrow_master_req_t),
+      .narrow_in_resp_t   (axi_narrow_master_rsp_t),
       // TCDM
-      .TCDMNumPorts(BanksPerSuperBank * 2),
-      .TCDMAddrWidth($clog2(MemSize)),
+      .TCDMNumPorts       (BanksPerSuperBank * 2),
+      .TCDMAddrWidth      ($clog2(MemSize)),
       .ClusterAddressSpace(ClusterAddressSpace)
   ) i_hemaia_xdma_wrapper (
-      .clk_i(clk_i),
-      .rst_ni(rst_ni),
-      .cluster_base_addr_i({chip_id_i, 40'b0} + MemBaseAddr),
-      .tcdm_req_o(xdma_req),
-      .tcdm_rsp_i(xdma_rsp),
-      .csr_req_bits_data_i('0),
-      .csr_req_bits_addr_i('0),
-      .csr_req_bits_write_i(1'b0),
-      .csr_req_valid_i(1'b0),
-      .csr_req_ready_o(),
-      .csr_rsp_bits_data_o(),
-      .csr_rsp_valid_o(),
-      .csr_rsp_ready_i(1'b1),
+      .clk_i                 (clk_i),
+      .rst_ni                (rst_ni),
+      .cluster_base_addr_i   ({chip_id_i, 40'b0} + MemBaseAddr),
+      .tcdm_req_o            (xdma_req),
+      .tcdm_rsp_i            (xdma_rsp),
+      .csr_req_bits_data_i   ('0),
+      .csr_req_bits_addr_i   ('0),
+      .csr_req_bits_write_i  (1'b0),
+      .csr_req_valid_i       (1'b0),
+      .csr_req_ready_o       (),
+      .csr_rsp_bits_data_o   (),
+      .csr_rsp_valid_o       (),
+      .csr_rsp_ready_i       (1'b1),
       // Wide ports
       .xdma_wide_out_req_o   (axi_wide_slave_req_o),
       .xdma_wide_out_resp_i  (axi_wide_slave_rsp_i),
