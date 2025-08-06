@@ -69,10 +69,16 @@ module ${name}_top
   input  ${soc_axi_lite_narrow_periph_xbar.out_bootrom.rsp_type()} bootrom_rsp_i,
 
   /// Wide SPM
-  output ${soc_wide_xbar.out_hemaia_mem.req_type()} hemaia_mem_axi_req_o,
-  input  ${soc_wide_xbar.out_hemaia_mem.rsp_type()} hemaia_mem_axi_rsp_i,
-  input  ${soc_wide_xbar.in_hemaia_mem.req_type()}  hemaia_mem_axi_req_i,
-  output ${soc_wide_xbar.in_hemaia_mem.rsp_type()}  hemaia_mem_axi_rsp_o,
+  output ${soc_wide_xbar.out_hemaia_mem.req_type()} hemaia_mem_axi_wide_req_o,
+  input  ${soc_wide_xbar.out_hemaia_mem.rsp_type()} hemaia_mem_axi_wide_rsp_i,
+  input  ${soc_wide_xbar.in_hemaia_mem.req_type()}  hemaia_mem_axi_wide_req_i,
+  output ${soc_wide_xbar.in_hemaia_mem.rsp_type()}  hemaia_mem_axi_wide_rsp_o,
+
+  output ${soc_narrow_xbar.out_hemaia_mem.req_type()} hemaia_mem_axi_narrow_req_o,
+  input  ${soc_narrow_xbar.out_hemaia_mem.rsp_type()} hemaia_mem_axi_narrow_rsp_i,
+  input  ${soc_narrow_xbar.in_hemaia_mem.req_type()}  hemaia_mem_axi_narrow_req_i,
+  output ${soc_narrow_xbar.in_hemaia_mem.rsp_type()}  hemaia_mem_axi_narrow_rsp_o,
+
 
 % if occamy_cfg['hemaia_multichip']['single_chip'] is False: 
   // HeMAiA Multi-Chip AXI Interface
@@ -160,18 +166,22 @@ module ${name}_top
     .clk_i,
     .rst_ni,
     .test_mode_i,
-    .chip_id_i             ( chip_id_i                   ),
-    .boot_addr_i           ( boot_addr                   ),
-    .periph_axi_lite_req_o ( periph_axi_lite_soc2per_req ),
-    .periph_axi_lite_rsp_i ( periph_axi_lite_soc2per_rsp ),
-    .periph_axi_lite_req_i ( periph_axi_lite_per2soc_req ),
-    .periph_axi_lite_rsp_o ( periph_axi_lite_per2soc_rsp ),
+    .chip_id_i                    ( chip_id_i                   ),
+    .boot_addr_i                  ( boot_addr                   ),
+    .periph_axi_lite_req_o        ( periph_axi_lite_soc2per_req ),
+    .periph_axi_lite_rsp_i        ( periph_axi_lite_soc2per_rsp ),
+    .periph_axi_lite_req_i        ( periph_axi_lite_per2soc_req ),
+    .periph_axi_lite_rsp_o        ( periph_axi_lite_per2soc_rsp ),
     .periph_axi_lite_narrow_req_o ( periph_regbus_soc2per_req ),
     .periph_axi_lite_narrow_rsp_i ( periph_regbus_soc2per_rsp ),
-    .hemaia_mem_axi_req_o,
-    .hemaia_mem_axi_rsp_i,
-    .hemaia_mem_axi_req_i,
-    .hemaia_mem_axi_rsp_o,
+    .hemaia_mem_axi_wide_req_o    ( hemaia_mem_axi_wide_req_o ),
+    .hemaia_mem_axi_wide_rsp_i    ( hemaia_mem_axi_wide_rsp_i ),
+    .hemaia_mem_axi_wide_req_i    ( hemaia_mem_axi_wide_req_i ),
+    .hemaia_mem_axi_wide_rsp_o    ( hemaia_mem_axi_wide_rsp_o ),
+    .hemaia_mem_axi_narrow_req_o  ( hemaia_mem_axi_narrow_req_o ),
+    .hemaia_mem_axi_narrow_rsp_i  ( hemaia_mem_axi_narrow_rsp_i ),
+    .hemaia_mem_axi_narrow_req_i  ( hemaia_mem_axi_narrow_req_i ),
+    .hemaia_mem_axi_narrow_rsp_o  ( hemaia_mem_axi_narrow_rsp_o ),    
 % if occamy_cfg['hemaia_multichip']['single_chip'] is False: 
     // Chiplet Requst to Router
     .soc2router_req_o,

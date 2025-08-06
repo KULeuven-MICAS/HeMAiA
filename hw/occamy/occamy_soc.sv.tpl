@@ -19,7 +19,9 @@
   cuts_narrow_conv_to_spm_narrow = occamy_cfg["cuts"]["narrow_conv_to_spm_narrow"]
   cuts_narrow_and_wide = occamy_cfg["cuts"]["narrow_and_wide"]
   cuts_wide_to_hemaia_mem = occamy_cfg["cuts"]["wide_to_hemaia_mem"]
+  cuts_narrow_to_hemaia_mem = occamy_cfg["cuts"]["narrow_to_hemaia_mem"]
   cuts_hemaia_mem_to_wide = occamy_cfg["cuts"]["hemaia_mem_to_wide"]
+  cuts_hemaia_mem_to_narrow = occamy_cfg["cuts"]["hemaia_mem_to_narrow"]
   cuts_wide_to_wide_zero_mem = occamy_cfg["cuts"]["wide_to_wide_zero_mem"]
   cuts_wide_and_inter = occamy_cfg["cuts"]["wide_and_inter"]
   cuts_periph_axi_lite_narrow = occamy_cfg["cuts"]["periph_axi_lite_narrow"]
@@ -58,13 +60,20 @@ module ${name}_soc
   output  ${soc_narrow_xbar.out_axi_lite_narrow_periph.req_type()} periph_axi_lite_narrow_req_o,
   input   ${soc_narrow_xbar.out_axi_lite_narrow_periph.rsp_type()} periph_axi_lite_narrow_rsp_i,
 
+  // WIDE AXI
   // Toward HeMAiA Memory System
-  output ${soc_wide_xbar.out_hemaia_mem.req_type()} hemaia_mem_axi_req_o,
-  input  ${soc_wide_xbar.out_hemaia_mem.rsp_type()} hemaia_mem_axi_rsp_i,
+  output ${soc_wide_xbar.out_hemaia_mem.req_type()} hemaia_mem_axi_wide_req_o,
+  input  ${soc_wide_xbar.out_hemaia_mem.rsp_type()} hemaia_mem_axi_wide_rsp_i,
   // From HeMAiA Memory System
-  input  ${soc_wide_xbar.in_hemaia_mem.req_type()} hemaia_mem_axi_req_i,
-  output ${soc_wide_xbar.in_hemaia_mem.rsp_type()} hemaia_mem_axi_rsp_o,
-
+  input  ${soc_wide_xbar.in_hemaia_mem.req_type()} hemaia_mem_axi_wide_req_i,
+  output ${soc_wide_xbar.in_hemaia_mem.rsp_type()} hemaia_mem_axi_wide_rsp_o,
+  // Narrow AXI
+  // Toward HeMAiA Memory System
+  output ${soc_narrow_xbar.out_hemaia_mem.req_type()} hemaia_mem_axi_narrow_req_o,
+  input  ${soc_narrow_xbar.out_hemaia_mem.rsp_type()} hemaia_mem_axi_narrow_rsp_i,
+  // From HeMAiA Memory System
+  input  ${soc_narrow_xbar.in_hemaia_mem.req_type()} hemaia_mem_axi_narrow_req_i,
+  output ${soc_narrow_xbar.in_hemaia_mem.rsp_type()} hemaia_mem_axi_narrow_rsp_o,
 % if occamy_cfg['hemaia_multichip']['single_chip'] is False: 
   // HeMAiA Multi-Chip AXI Interface
   // Chiplet Requst to Router
@@ -264,6 +273,20 @@ module ${name}_soc
     .sram_cfg_i (sram_cfgs_i.spm_narrow)
   );
 
+  
+  //////////////////////////////////////
+  // SoC NARROW to HeMAiA Mem System  //
+  //////////////////////////////////////
+  <% 
+  narrow_memory_mst = soc_narrow_xbar.out_hemaia_mem \
+                    .cut(context, cuts_narrow_to_hemaia_mem, name="narrow_memory_mst_cut")
+  narrow_memory_slv = soc_narrow_xbar.in_hemaia_mem.copy(name="narrow_memory_slv").declare(context)
+  narrow_memory_slv.cut(context, cuts_hemaia_mem_to_narrow, name="narrow_memory_slv_cut", to=soc_narrow_xbar.in_hemaia_mem)
+  %>
+  assign hemaia_mem_axi_narrow_req_o = ${narrow_memory_mst.req_name()};
+  assign ${narrow_memory_mst.rsp_name()} = hemaia_mem_axi_narrow_rsp_i;
+  assign ${narrow_memory_slv.req_name()} = hemaia_mem_axi_narrow_req_i;
+  assign hemaia_mem_axi_narrow_rsp_o = ${narrow_memory_slv.rsp_name()};
   //////////////
   // SPM WIDE //
   //////////////
@@ -274,10 +297,10 @@ module ${name}_soc
   wide_memory_slv.cut(context, cuts_hemaia_mem_to_wide, name="wide_memory_slv_cut", to=soc_wide_xbar.in_hemaia_mem)
   %>\
 
-  assign hemaia_mem_axi_req_o = ${wide_memory_mst.req_name()};
-  assign ${wide_memory_mst.rsp_name()} = hemaia_mem_axi_rsp_i;
-  assign ${wide_memory_slv.req_name()} = hemaia_mem_axi_req_i;
-  assign hemaia_mem_axi_rsp_o = ${wide_memory_slv.rsp_name()};
+  assign hemaia_mem_axi_wide_req_o = ${wide_memory_mst.req_name()};
+  assign ${wide_memory_mst.rsp_name()} = hemaia_mem_axi_wide_rsp_i;
+  assign ${wide_memory_slv.req_name()} = hemaia_mem_axi_wide_req_i;
+  assign hemaia_mem_axi_wide_rsp_o = ${wide_memory_slv.rsp_name()};
 
   //////////////////////
   // WIDE ZERO MEMORY //

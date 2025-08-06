@@ -32,6 +32,7 @@ TARGET_CLINT_DIR     ?= $(TARGET_SRC_DIR)/clint
 
 TARGET_RTL			 ?= $(ROOT)/target/rtl
 
+HEMAIA_MEM_SYS_DIR   ?= $(ROOT)/hw/hemaia/hemaia_mem_system
 ############
 # Programs #
 ############
@@ -49,19 +50,29 @@ CFG = $(TARGET_RTL)/cfg/lru.hjson
 
 .PHONY: all clean
 all: rtl
-clean: clean-rtl-src
-
-###############
-# RTL sources #
-###############
 
 .PHONY: rtl clint plic socctrl quadctrl soc
 .PHONY: clean-rtl-src clean-rtl clean-clint clean-plic clean-socctrl clean-quadctrl clean-snax-cluster clean-soc
 
+clean: clean-rtl-src
+###############
+# RTL sources #
+###############
+
+
+
 rtl: clint plic socctrl quadctrl soc snax-cluster src/bender_targets.tmp
 clean-rtl: clean-clint clean-plic clean-socctrl clean-quadctrl clean-soc clean-snax-cluster
-clean-rtl-src:
+clean-rtl-src: 
 	rm -rf $(TARGET_SRC_DIR)
+	rm -rf .snax_cluster_occamygen_targets_group
+	rm -rf .misc_occamygen_targets_group
+	rm -rf .quadctrl_reggen_targets_group
+	rm -rf .plic_reggen_targets_group
+	rm -rf .clint_reggen_targets_group
+	rm -rf .socctrl_reggen_targets_grouip
+	rm -rf $(HEMAIA_MEM_SYS_DIR)/include $(HEMAIA_MEM_SYS_DIR)/hemaia_xdma_wrapper.sv $(HEMAIA_MEM_SYS_DIR)/hemaia_xdma.sv
+
 
 $(TARGET_PLIC_DIR) $(TARGET_CLINT_DIR) $(TARGET_SOCCTRL_DIR) $(TARGET_QUADCTRL_DIR):
 	@mkdir -p $@
