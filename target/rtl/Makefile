@@ -32,6 +32,7 @@ TARGET_CLINT_DIR     ?= $(TARGET_SRC_DIR)/clint
 
 TARGET_RTL			 ?= $(ROOT)/target/rtl
 
+HEMAIA_MEM_SYS_DIR   ?= $(ROOT)/hw/hemaia/hemaia_mem_system
 ############
 # Programs #
 ############
@@ -69,6 +70,8 @@ clean-rtl-src:
 	rm -rf .quadctrl_reggen_targets_group
 	rm -rf .plic_reggen_targets_group
 	rm -rf .clint_reggen_targets_group
+	rm -rf .socctrl_reggen_targets_grouip
+	rm -rf $(HEMAIA_MEM_SYS_DIR)/include $(HEMAIA_MEM_SYS_DIR)/hemaia_xdma_wrapper.sv $(HEMAIA_MEM_SYS_DIR)/hemaia_xdma.sv
 
 
 $(TARGET_PLIC_DIR) $(TARGET_CLINT_DIR) $(TARGET_SOCCTRL_DIR) $(TARGET_QUADCTRL_DIR):
