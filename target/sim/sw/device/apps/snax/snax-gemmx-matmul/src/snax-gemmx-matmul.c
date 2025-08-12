@@ -99,6 +99,19 @@ int main() {
             // Poll until Streamer and GEMM accelerator finish
             wait_gemmx_and_streamer();
 
+            int if_inifinit_loop = 0;
+            while(if_inifinit_loop){
+                // Set CSR to start Streamer for conv2d
+                set_gemmx_streamer_start();
+
+                // Set CSR to start GEMM
+                set_gemmx_start();
+
+                // Poll until Streamer and GEMM accelerator finish
+                wait_gemmx_and_streamer();
+            }
+
+
             // check the result of the implicit im2col convolution
             if (!bypassSIMD) {
                 err += check_gemmx_result_D8(local_d8, D8, Batch, M, N, false);
