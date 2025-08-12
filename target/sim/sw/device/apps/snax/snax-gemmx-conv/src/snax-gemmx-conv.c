@@ -125,7 +125,8 @@ int main() {
             // Poll until Streamer and GEMM accelerator finish
             wait_gemmx_and_streamer();
 
-            while(1){
+            int if_inifinit_loop = 0;
+            while(if_inifinit_loop){
                 // Set CSR to start Streamer for conv2d
                 set_gemmx_streamer_start();
 
