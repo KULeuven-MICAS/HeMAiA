@@ -125,6 +125,17 @@ int main() {
             // Poll until Streamer and GEMM accelerator finish
             wait_gemmx_and_streamer();
 
+            while(1){
+                // Set CSR to start Streamer for conv2d
+                set_gemmx_streamer_start();
+
+                // Set CSR to start GEMM
+                set_gemmx_start();
+
+                // Poll until Streamer and GEMM accelerator finish
+                wait_gemmx_and_streamer();
+            }
+
             // check the result of the implicit im2col convolution
             if (interleaved_address == 1) {
                 if (!bypassSIMD) {
