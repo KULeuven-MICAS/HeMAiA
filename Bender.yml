@@ -132,6 +132,10 @@ sources:
       - hw/hemaia/hemaia_clk_rst_controller/hemaia_clk_rst_controller.sv
       - target/rtl/src/occamy_chip.sv
 
+  - target: hemaia_netlist
+    files:
+      - target/tapeout/dc_work_hemaia/outputs/occamy_chip_mapped.v
+
   # target/fpga
   - target: xilinx
     files:
@@ -148,8 +152,3 @@ sources:
     files:
       - target/sim/testharness/uartdpi/uartdpi.sv
       - target/sim/testharness/testharness.sv
-
-  - target: tsmc_pad
-    files:
-      - /users/micas/shares/project_snax/tapeout_modules/hemaia/obs_clk_div.sv
-      - /users/micas/shares/project_snax/tapeout_modules/hemaia/hemaia_chip_top.sv
