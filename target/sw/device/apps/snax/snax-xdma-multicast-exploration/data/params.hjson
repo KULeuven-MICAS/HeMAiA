@@ -2,4 +2,5 @@
   size: 16384,
   noc_dimensions: [5, 4],
   multicast_num: 8,
+  better_solver: true
 }
