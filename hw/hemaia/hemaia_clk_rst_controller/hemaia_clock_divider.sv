@@ -127,7 +127,7 @@ module hemaia_clock_divider #(
 
   tc_clk_gating i_clk_o_gate (
       .clk_i(clk_ungated),
-      .en_i(divisor_q == '0),
+      .en_i(divisor_q != '0),
       .test_en_i(test_mode_i),
       .clk_o(clk_o)
   );
