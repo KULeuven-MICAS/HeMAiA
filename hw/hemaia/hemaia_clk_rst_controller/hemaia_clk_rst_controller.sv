@@ -9,6 +9,8 @@ module hemaia_clk_rst_controller #(
     parameter type axi_lite_req_t = logic,
     parameter type axi_lite_rsp_t = logic
 ) (
+    // Test mode
+    input logic test_en_i,
     // The clock and rst for the controller itself
     input logic control_clk_i,
     (* false_path *) input logic control_rst_ni,
@@ -278,6 +280,7 @@ module hemaia_clk_rst_controller #(
       ) i_clk_divider (
           .clk_i(mst_clk_i),
           .rst_ni(control_rst_n_d2_mst_clk),
+          (* false_path *) .test_en_i(test_en_i),
           (* false_path *) .divisor_i(clock_division_reg_concat[i][MaxDivisionWidth-1:0]),
           .divisor_valid_i(clock_division_reg_valid_d2[i]),
           .clk_o(clk_o[i])
