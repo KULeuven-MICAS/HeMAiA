@@ -42,7 +42,8 @@ UART_DPI_DIR         ?= $(SIM_MKFILE_DIR)testharness/uartdpi
 #####################
 # Simulator options #
 #####################
-SIM_WITH_TSMC16_MACRO ?= 0
+SIM_WITH_MACRO ?= 0
+SIM_WITH_NETLIST ?= 0
 
 VSIM_BENDER += $(shell cat ../rtl/src/bender_targets.tmp)
 VLT_BENDER  += $(shell cat ../rtl/src/bender_targets.tmp)
@@ -58,7 +59,7 @@ else
 	VCS_BENDER  += -t hemaia
 endif
 
-ifeq ($(SIM_WITH_TSMC16_MACRO), 1)
+ifeq ($(SIM_WITH_MACRO), 1)
 	VSIM_BENDER += -t tsmc16_sim -t tsmc16
 	VLT_BENDER  += -t tsmc16_sim -t tsmc16
 	VCS_BENDER  += -t tsmc16_sim -t tsmc16
@@ -147,10 +148,13 @@ OCCAMYGEN ?= $(ROOT)/util/occamygen/occamygen.py
 
 testharness/testharness.sv: testharness/testharness.sv.tpl $(CFG)
 	@echo "[OCCAMYGEN] Generate $@"
-ifeq ($(SIM_WITH_TSMC16_MACRO), 0)
-	@$(OCCAMYGEN) --cfg $(CFG) --outdir testharness --multichip-testharness-sv $<
+
+ifneq ($(SIM_WITH_MACRO), 0)
+	@$(OCCAMYGEN) --cfg $(CFG) --outdir testharness --mem-macro-testharness-sv $<
+else ifneq ($(SIM_WITH_NETLIST), 0)
+	@$(OCCAMYGEN) --cfg $(CFG) --outdir testharness --netlist-testharness-sv $<
 else
-	@$(OCCAMYGEN) --cfg $(CFG) --outdir testharness --backend-testharness-sv $<
+	@$(OCCAMYGEN) --cfg $(CFG) --outdir testharness --multichip-testharness-sv $<
 endif
 
 clean-testharness:

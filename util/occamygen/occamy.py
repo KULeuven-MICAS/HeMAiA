@@ -872,7 +872,8 @@ def get_testharness_kwargs(soc_wide_xbar, soc_axi_lite_narrow_periph_xbar, chip_
 def get_multichip_testharness_kwargs(occamy_cfg, soc2router_bus, router2soc_bus, name):
     testharness_kwargs = {
         "name": name,
-        "backend": False,
+        "mem_macro": False,
+        "netlist": False,
         "multichip_cfg": occamy_cfg["hemaia_multichip"],
         "soc2router_bus": soc2router_bus,
         "router2soc_bus": router2soc_bus,
@@ -881,10 +882,11 @@ def get_multichip_testharness_kwargs(occamy_cfg, soc2router_bus, router2soc_bus,
     }
     return testharness_kwargs
 
-def get_backend_testharness_kwargs(occamy_cfg, soc2router_bus, router2soc_bus, name):
+def get_mem_macro_testharness_kwargs(occamy_cfg, soc2router_bus, router2soc_bus, name):
     testharness_kwargs = {
         "name": name,
-        "backend": True,
+        "mem_macro": True,
+        "netlist": False,
         "multichip_cfg": occamy_cfg["hemaia_multichip"],
         "soc2router_bus": soc2router_bus,
         "router2soc_bus": router2soc_bus,
@@ -893,6 +895,18 @@ def get_backend_testharness_kwargs(occamy_cfg, soc2router_bus, router2soc_bus, n
     }
     return testharness_kwargs
 
+def get_netlist_testharness_kwargs(occamy_cfg, soc2router_bus, router2soc_bus, name):
+    testharness_kwargs = {
+        "name": name,
+        "mem_macro": False,
+        "netlist": True,
+        "multichip_cfg": occamy_cfg["hemaia_multichip"],
+        "soc2router_bus": soc2router_bus,
+        "router2soc_bus": router2soc_bus,
+        "mem_size": occamy_cfg["spm_wide"]["length"],
+        "mem_bank": occamy_cfg["spm_wide"]["banks"],
+    }
+    return testharness_kwargs
 
 def get_chip_kwargs(soc_wide_xbar, soc_narrow_xbar, soc_axi_lite_narrow_periph_xbar, soc2router_bus, router2soc_bus, occamy_cfg, cluster_generators, util, name):
     core_per_cluster_list = [cluster_generator.cfg["nr_cores"]

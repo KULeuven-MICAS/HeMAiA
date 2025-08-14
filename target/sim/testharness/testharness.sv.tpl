@@ -42,10 +42,12 @@ module testharness
 % for i in x:
 %   for j in y:
 %     for k in range(0, mem_bank):
-%       if backend is False:
-    i_occamy_${i}_${j}.i_hemaia_mem_system.i_hemaia_mem.gen_banks[${k}].i_data_mem.i_tc_sram.load_data("app_chip_${i}_${j}/bank_${k}.hex");
-%       else:
+%       if mem_macro is True:
     i_occamy_${i}_${j}.i_hemaia_mem_system.i_hemaia_mem.gen_banks[${k}].i_data_mem.i_tc_sram.gen_mem.gen_${int(mem_size/8/mem_bank)}x${64}.u_sram.load_data("app_chip_${i}_${j}/bank_${k}.hex");
+%       elif netlist is True:
+    i_occamy_${i}_${j}.i_hemaia_mem_system.i_hemaia_mem.gen_banks_${k}__i_data_mem_i_tc_sram_gen_mem_gen_${int(mem_size/8/mem_bank)}x${64}_u_sram.load_data("app_chip_${i}_${j}/bank_${k}.hex");
+%       else:
+    i_occamy_${i}_${j}.i_hemaia_mem_system.i_hemaia_mem.gen_banks[${k}].i_data_mem.i_tc_sram.load_data("app_chip_${i}_${j}/bank_${k}.hex");
 %       endif
 %     endfor
 %   endfor
