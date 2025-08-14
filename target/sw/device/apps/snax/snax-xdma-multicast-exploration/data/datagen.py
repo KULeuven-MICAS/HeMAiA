@@ -136,7 +136,7 @@ def optimise_pointer_order_improved(pointers, noc_x, noc_y):
     try:
         from ortools.sat.python import cp_model  # type: ignore
     except Exception:
-        print("OR-Tools is not available. Using greedy optimization.")
+        # OR-Tools is not available. Using greedy optimization
         cp_model = None
 
     # Only build and solve a CP-SAT model when OR-Tools is available.
