@@ -46,7 +46,7 @@ module hemaia_clock_divider #(
     input  logic                        rst_ni,
     input  logic [MaxDivisionWidth-1:0] divisor_i,
     input  logic                        divisor_valid_i,
-    input  logic                        test_en_i,
+    input  logic                        test_mode_i,
     output logic                        clk_o
 );
 
@@ -128,7 +128,7 @@ module hemaia_clock_divider #(
   tc_clk_gating i_clk_o_gate (
       .clk_i(clk_ungated),
       .en_i(divisor_q == '0),
-      .test_en_i(test_en_i),
+      .test_en_i(test_mode_i),
       .clk_o(clk_o)
   );
 endmodule
