@@ -99,9 +99,13 @@ def main():
     parser.add_argument("--multichip-testharness-sv",
                         metavar="MULTICHIP_TESTHARNESS_SV",
                         help="Name of the multichip testharness wrapper file (output).")
-    parser.add_argument("--backend-testharness-sv",
-                        metavar="BACKEND_TESTHARNESS_SV",
-                        help="Name of the backend testharness wrapper file (output).")
+    parser.add_argument("--mem-macro-testharness-sv",
+                        metavar="MEM_MACRO_TESTHARNESS_SV",
+                        help="Name of the memory macro testharness wrapper file (output).")
+    parser.add_argument("--netlist-testharness-sv",
+                        metavar="NETLIST_TESTHARNESS_SV",
+                        help="Name of the netlist testharness wrapper file (output).")
+
     parser.add_argument("--cva6-sv",
                         metavar="CVA6_SV",
                         help="Name of the CVA6 wrapper file (output).")
@@ -668,10 +672,15 @@ def main():
             occamy_cfg, soc2router_bus, router2soc_bus, name)
         write_template(args.multichip_testharness_sv, outdir, **multichip_testharness_kwargs)
 
-    if args.backend_testharness_sv:
-        backend_testharness_kwargs = occamy.get_backend_testharness_kwargs(
+    if args.mem_macro_testharness_sv:
+        mem_macro_testharness_kwargs = occamy.get_mem_macro_testharness_kwargs(
             occamy_cfg, soc2router_bus, router2soc_bus, name)
-        write_template(args.backend_testharness_sv, outdir, **backend_testharness_kwargs)
+        write_template(args.mem_macro_testharness_sv, outdir, **mem_macro_testharness_kwargs)
+
+    if args.netlist_testharness_sv:
+        netlist_testharness_kwargs = occamy.get_netlist_testharness_kwargs(
+            occamy_cfg, soc2router_bus, router2soc_bus, name)
+        write_template(args.netlist_testharness_sv, outdir, **netlist_testharness_kwargs)
 
     ############
     # BOOTDATA #

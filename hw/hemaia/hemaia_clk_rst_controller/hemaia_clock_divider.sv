@@ -46,6 +46,7 @@ module hemaia_clock_divider #(
     input  logic                        rst_ni,
     input  logic [MaxDivisionWidth-1:0] divisor_i,
     input  logic                        divisor_valid_i,
+    input  logic                        test_mode_i,
     output logic                        clk_o
 );
 
@@ -106,11 +107,28 @@ module hemaia_clock_divider #(
     end
   end
 
-  logic clk_divided, clk_odd, clk_even;
-  assign clk_odd  /* synthesis keep */ = raw_div_d1 & raw_div_d2;
-  assign clk_even  /* synthesis keep */ = raw_div_d1;
+  logic clk_ungated, clk_divided, clk_odd, clk_even;
+  assign clk_odd  /* synthesis keep */  = ~(raw_div_d1 & raw_div_d2);
+  assign clk_even  /* synthesis keep */ = ~raw_div_d1;
 
-  assign clk_divided = divisor_q[0] ? clk_odd : clk_even;
-  assign clk_o = (divisor_q == 'd1) ? clk_i : clk_divided;
+  tc_clk_mux2 i_clk_divided_mux (
+      .clk0_i(clk_even),
+      .clk1_i(clk_odd),
+      .clk_sel_i(divisor_q[0]),
+      .clk_o(clk_divided)
+  );
 
+  tc_clk_mux2 i_clk_o_mux (
+      .clk0_i(clk_divided),
+      .clk1_i(clk_i),
+      .clk_sel_i(divisor_q == 'd1),
+      .clk_o(clk_ungated)
+  );
+
+  tc_clk_gating i_clk_o_gate (
+      .clk_i(clk_ungated),
+      .en_i(divisor_q != '0 && rst_ni),
+      .test_en_i(test_mode_i),
+      .clk_o(clk_o)
+  );
 endmodule
