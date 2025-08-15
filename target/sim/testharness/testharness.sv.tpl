@@ -246,7 +246,7 @@ module testharness
       .rx_i  (tx_${i}_${j})
   );
 
-% if backend is False:
+% if mem_macro is False and netlist is False:
   // Chip Status Monitor Block
   always @(i_occamy_${i}_${j}.i_hemaia_mem_system.i_hemaia_mem.gen_banks[${mem_bank-1}].i_data_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32]) begin
     if (i_occamy_${i}_${j}.i_hemaia_mem_system.i_hemaia_mem.gen_banks[${mem_bank-1}].i_data_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32] != 0) begin
