@@ -108,8 +108,8 @@ module hemaia_clock_divider #(
   end
 
   logic clk_ungated, clk_divided, clk_odd, clk_even;
-  assign clk_odd  /* synthesis keep */  = raw_div_d1 & raw_div_d2;
-  assign clk_even  /* synthesis keep */ = raw_div_d1;
+  assign clk_odd  /* synthesis keep */  = ~(raw_div_d1 & raw_div_d2);
+  assign clk_even  /* synthesis keep */ = ~raw_div_d1;
 
   tc_clk_mux2 i_clk_divided_mux (
       .clk0_i(clk_even),
@@ -127,7 +127,7 @@ module hemaia_clock_divider #(
 
   tc_clk_gating i_clk_o_gate (
       .clk_i(clk_ungated),
-      .en_i(divisor_q != '0),
+      .en_i(divisor_q != '0 && rst_ni),
       .test_en_i(test_mode_i),
       .clk_o(clk_o)
   );

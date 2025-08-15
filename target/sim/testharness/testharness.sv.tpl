@@ -35,10 +35,19 @@ module testharness
 
   // Generate reset and clock.
   initial begin
+    // Init the chip_finish flags
+    foreach (chip_finish[i,j]) begin
+      chip_finish[i][j] = 0;
+    end
+    // Init the clk pins
     rtc_clk_i  = 0;
     mst_clk_i  = 0;
     periph_clk_i = 0;
-    // Load the binaries
+    // Init the reset pin
+    rst_ni = 1;
+    #0;
+    rst_ni = 0;
+   // Load the binaries
 % for i in x:
 %   for j in y:
 %     for k in range(0, mem_bank):
@@ -52,15 +61,7 @@ module testharness
 %     endfor
 %   endfor
 % endfor
-    // Reset the chip
-    foreach (chip_finish[i,j]) begin
-      chip_finish[i][j] = 0;
-    end
-    rst_ni = 1;
-    #0;
-    current_time = $time / 1000;
-    $display("Resetting the system at %tns", current_time);
-    rst_ni = 0;
+    // Release the reset
     #(10 + $urandom % 10);
     current_time = $time / 1000;
     $display("Reset released at %tns", current_time);
