@@ -116,17 +116,7 @@ int main() {
                 shared_multiplier3, shared_multiplier4, shared_multiplier5,
                 shared_multiplier6, shared_multiplier7, M * N, bypassSIMD);
 
-            // Set CSR to start Streamer for conv2d
-            set_gemmx_streamer_start();
-
-            // Set CSR to start GEMM
-            set_gemmx_start();
-
-            // Poll until Streamer and GEMM accelerator finish
-            wait_gemmx_and_streamer();
-
-            int if_inifinit_loop = 0;
-            while(if_inifinit_loop){
+            for (int i = 0; i < 10000000; i++) {
                 // Set CSR to start Streamer for conv2d
                 set_gemmx_streamer_start();
 
@@ -135,6 +125,18 @@ int main() {
 
                 // Poll until Streamer and GEMM accelerator finish
                 wait_gemmx_and_streamer();
+
+                int if_inifinit_loop = 0;
+                while (if_inifinit_loop) {
+                    // Set CSR to start Streamer for conv2d
+                    set_gemmx_streamer_start();
+
+                    // Set CSR to start GEMM
+                    set_gemmx_start();
+
+                    // Poll until Streamer and GEMM accelerator finish
+                    wait_gemmx_and_streamer();
+                }
             }
 
             // check the result of the implicit im2col convolution
@@ -156,11 +158,19 @@ int main() {
                 }
             }
 
-            printf("SNAX GEMM Conv2d: %s, Error: %d . bypassSIMD = %d .\r\n",
-                   err ? "FAIL" : "PASS", err, bypassSIMD);
+            // printf("SNAX GEMM Conv2d: %s, Error: %d . bypassSIMD = %d .\r\n",
+            //        err ? "FAIL" : "PASS", err, bypassSIMD);
+            if (err == 0) {
+                write_csr_obs(0x00f);
+                printf("P \r\n");
+            } else {
+                write_csr_obs(0x00e);
+                printf("F: %d \r\n", err);
+            }
         };
 
-        return err;
-    } else
-        return 0;
+        snrt_cluster_hw_barrier();
+
+        return_to_cva6_single_cluster(err);
+    }
 }

@@ -324,7 +324,7 @@ int main() {
 
     if (snrt_cluster_idx() == 1) {
         // allocate memory for GEMMX cluster
-        tcdm_1_start_addr = (uint8_t *)snrt_cluster_base_addrl();
+        tcdm_1_start_addr = (uint64_t *)snrt_cluster_base_addrl();
 
         // Prepare addresses in TCDM
         int8_t *local_b;
