@@ -5,6 +5,7 @@
 // Xiaoling Yi <xiaoling.yi@esat.kuleuven.be>
 
 #include "snrt.h"
+#include "data.h"
 #include "snax-gemmx-lib.h"
 #include "snax-gemmx-params.h"
 
@@ -216,7 +217,7 @@ int main() {
             write_csr_obs(0x00b);
 
             for (int i = 0; i < Batch * M * N * meshRow * meshCol; i++) {
-                if (local_d32[i] != ouD32tput_golden[i]) {
+                if (local_d32[i] != D32[i]) {
                     err++;
                 }
             }
