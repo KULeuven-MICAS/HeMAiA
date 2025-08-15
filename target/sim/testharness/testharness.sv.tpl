@@ -35,30 +35,33 @@ module testharness
 
   // Generate reset and clock.
   initial begin
+    // Init the chip_finish flags
+    foreach (chip_finish[i,j]) begin
+      chip_finish[i][j] = 0;
+    end
+    // Init the clk pins
     rtc_clk_i  = 0;
     mst_clk_i  = 0;
     periph_clk_i = 0;
-    // Load the binaries
+    // Init the reset pin
+    rst_ni = 1;
+    #0;
+    rst_ni = 0;
+   // Load the binaries
 % for i in x:
 %   for j in y:
 %     for k in range(0, mem_bank):
-%       if backend is False:
-    i_occamy_${i}_${j}.i_hemaia_mem_system.i_hemaia_mem.gen_banks[${k}].i_data_mem.i_tc_sram.load_data("app_chip_${i}_${j}/bank_${k}.hex");
-%       else:
+%       if mem_macro is True:
     i_occamy_${i}_${j}.i_hemaia_mem_system.i_hemaia_mem.gen_banks[${k}].i_data_mem.i_tc_sram.gen_mem.gen_${int(mem_size/8/mem_bank)}x${64}.u_sram.load_data("app_chip_${i}_${j}/bank_${k}.hex");
+%       elif netlist is True:
+    i_occamy_${i}_${j}.i_hemaia_mem_system.i_hemaia_mem.gen_banks_${k}__i_data_mem_i_tc_sram_gen_mem_gen_${int(mem_size/8/mem_bank)}x${64}_u_sram.load_data("app_chip_${i}_${j}/bank_${k}.hex");
+%       else:
+    i_occamy_${i}_${j}.i_hemaia_mem_system.i_hemaia_mem.gen_banks[${k}].i_data_mem.i_tc_sram.load_data("app_chip_${i}_${j}/bank_${k}.hex");
 %       endif
 %     endfor
 %   endfor
 % endfor
-    // Reset the chip
-    foreach (chip_finish[i,j]) begin
-      chip_finish[i][j] = 0;
-    end
-    rst_ni = 1;
-    #0;
-    current_time = $time / 1000;
-    $display("Resetting the system at %tns", current_time);
-    rst_ni = 0;
+    // Release the reset
     #(10 + $urandom % 10);
     current_time = $time / 1000;
     $display("Reset released at %tns", current_time);
@@ -108,8 +111,8 @@ module testharness
   // Definition of tri_state bus
 % for i in x:
 %   for j in y:
-  tri [19:0] chip_${i}_${j}_to_${i+1}_${j}_link[3];
-  tri [19:0] chip_${i}_${j}_to_${i}_${j+1}_link[3];
+  tri [2:0][19:0] chip_${i}_${j}_to_${i+1}_${j}_link;
+  tri [2:0][19:0] chip_${i}_${j}_to_${i}_${j+1}_link;
 %   endfor
 % endfor
 
@@ -244,7 +247,7 @@ module testharness
       .rx_i  (tx_${i}_${j})
   );
 
-% if backend is False:
+% if mem_macro is False and netlist is False:
   // Chip Status Monitor Block
   always @(i_occamy_${i}_${j}.i_hemaia_mem_system.i_hemaia_mem.gen_banks[${mem_bank-1}].i_data_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32]) begin
     if (i_occamy_${i}_${j}.i_hemaia_mem_system.i_hemaia_mem.gen_banks[${mem_bank-1}].i_data_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32] != 0) begin

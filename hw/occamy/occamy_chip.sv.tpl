@@ -165,6 +165,7 @@ import ${name}_pkg::*;
     .axi_lite_req_t (${soc_axi_lite_narrow_periph_xbar.out_hemaia_clk_rst_controller.req_type()}),
     .axi_lite_rsp_t (${soc_axi_lite_narrow_periph_xbar.out_hemaia_clk_rst_controller.rsp_type()})
   ) i_hemaia_clk_rst_controller (
+    .test_mode_i(test_mode_i),
     .control_clk_i(clk_periph_i),
     .control_rst_ni(rst_periph_ni),
     .axi_lite_req_i(hemaia_clk_rst_controller_req),
