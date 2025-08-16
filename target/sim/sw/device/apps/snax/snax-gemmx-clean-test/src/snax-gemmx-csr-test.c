@@ -81,6 +81,10 @@ int main() {
             if (T_BOUND_READER_0_5_CSR != 1){
                 err = err + 1;
             }
+
+            csrw_ss(BASE_PTR_READER_0_LOW, (uint32_t)(delta_local_a + snrt_l1_next()));
+            csrw_ss(S_STRIDE_READER_0_0, Aslstride1);
+
             printf("A err = %d\n", err);
 
             csrw_ss(T_BOUND_READER_1_0, 1);
@@ -100,6 +104,10 @@ int main() {
             if (T_BOUND_READER_1_2_CSR != 1) {
                 err = err + 1;
             }
+
+            csrw_ss(BASE_PTR_READER_1_LOW, (uint32_t)(delta_local_b + snrt_l1_next()));
+            csrw_ss(S_STRIDE_READER_1_0, Bslstride1);
+
             printf("B err = %d\n", err);
 
             csrw_ss(T_BOUND_WRITER_0_0, 0);
@@ -138,6 +146,10 @@ int main() {
             if (T_BOUND_READER_WRITER_0_2_CSR != 1) {
                 err = err + 1;
             }
+
+            csrw_ss(BASE_PTR_READER_WRITER_0_LOW,
+                    (uint32_t)(delta_local_c + snrt_l1_next()));
+
             printf("C err = %d\n", err);
 
             csrw_ss(T_BOUND_READER_WRITER_1_0, 1);
@@ -157,7 +169,17 @@ int main() {
             if (T_BOUND_READER_WRITER_1_2_CSR != 1) {
                 err = err + 1;
             }
+
+            csrw_ss(BASE_PTR_READER_WRITER_1_LOW,
+                    (uint32_t)(delta_local_d32 + snrt_l1_next()));
+
+            csrw_ss(S_STRIDE_READER_WRITER_1_0, D32slstride0);
+            csrw_ss(S_STRIDE_READER_WRITER_1_1, D32slstride1);
+
             printf("D32 err = %d\n", err);
+
+            csrw_ss(TRANSPOSE_CSR_READER_0, 1);
+            csrw_ss(TRANSPOSE_CSR_READER_1, 1);
 
             // GEMM CSR
             csrw_ss(T_BOUND_K, 1);
@@ -218,8 +240,33 @@ int main() {
 
             for (int i = 0; i < Batch * M * N * meshRow * meshCol; i++) {
                 if (local_d32[i] != D32[i]) {
+                    printf("Mismatch at index %d: local_d32 = %d, D32 = %d \r\n", i, local_d32[i], D32[i]);
                     err++;
                 }
+            }
+
+            if (err == 0) {
+                write_csr_obs(0x00e);
+                printf("P \r\n");
+            } else {
+                write_csr_obs(0x00f);
+                printf("F: %d \r\n", err);
+            }
+
+            if (err == 0) {
+                write_csr_obs(0x00e);
+                printf("P \r\n");
+            } else {
+                write_csr_obs(0x00f);
+                printf("F: %d \r\n", err);
+            }
+
+            if (err == 0) {
+                write_csr_obs(0x00e);
+                printf("P \r\n");
+            } else {
+                write_csr_obs(0x00f);
+                printf("F: %d \r\n", err);
             }
 
             if (err == 0) {

@@ -212,7 +212,6 @@ def emit_matmul_data(**kwargs):
     subtraction_a = np.random.randint(MIN, MAX)
     subtraction_b = np.random.randint(MIN, MAX)
 
-
     # Writing the subtraction value to data.h
     data_str += [format_scalar_definition("int8_t", "subtraction_a", subtraction_a)]
     data_str += [format_scalar_definition("int8_t", "subtraction_b", subtraction_b)]
