@@ -94,14 +94,14 @@ create_generated_clock \
     -source [get_pins hemaia_system_i/clk_wiz/clk_main] \
     -divide_by 6 \
     -master_clock clk_main \
-    [get_pins hemaia_system_i/occamy_chip/inst/i_hemaia_clk_rst_controller/gen_clock_divider[0].i_clk_divider/clk_o_INST_0/O]
+    [get_pins hemaia_system_i/occamy_chip/inst/i_hemaia_clk_rst_controller/gen_clock_divider[0].i_clk_divider/i_clk_o_gate/bufgce_inst/O]
 
 create_generated_clock \
     -name clk_acc \
     -source [get_pins hemaia_system_i/clk_wiz/clk_main] \
     -divide_by 6 \
     -master_clock clk_main \
-    [get_pins hemaia_system_i/occamy_chip/inst/i_hemaia_clk_rst_controller/gen_clock_divider[1].i_clk_divider/clk_o_INST_0/O]
+    [get_pins hemaia_system_i/occamy_chip/inst/i_hemaia_clk_rst_controller/gen_clock_divider[1].i_clk_divider/i_clk_o_gate/bufgce_inst/O]
 
 create_clock -period 62.5 -name clk_peri [get_pins hemaia_system_i/clk_wiz/clk_peri]
 
