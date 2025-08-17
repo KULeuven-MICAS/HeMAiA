@@ -19,11 +19,11 @@ int main() {
         int8_t *local_d8;
 
         // Allocate space in TCDM
-        local_a = (int8_t *)(snrt_l1_next() + delta_local_a);
-        local_b = (int8_t *)(snrt_l1_next() + delta_local_b);
-        local_c = (int32_t *)(snrt_l1_next() + delta_local_c);
-        local_d32 = (int32_t *)(snrt_l1_next() + delta_local_d32);
-        local_d8 = (int8_t *)(snrt_l1_next() + delta_local_d8);
+        local_a = (int8_t *)((uint32_t)(snrt_l1_next()));
+        local_b = (int8_t *)((uint32_t)(snrt_l1_next()) + delta_local_b);
+        local_c = (int32_t *)((uint32_t)(snrt_l1_next()) + delta_local_c);
+        local_d32 = (int32_t *)((uint32_t)(snrt_l1_next()) + delta_local_d32);
+        local_d8 = (int8_t *)((uint32_t)(snrt_l1_next()) + delta_local_d8);
 
         // Transfer data from L3 to L1
         // Using DMA only
@@ -47,7 +47,7 @@ int main() {
         snrt_cluster_hw_barrier();
 
         if (snrt_cluster_core_idx() == 0) {
-            printf("Hello world from gemm core\r\n");
+            printf("Hello world from gemm core \r\n");
             // write streamer CSR manually
             csrw_ss(T_BOUND_READER_0_0, 1);
             csrw_ss(T_BOUND_READER_0_1, 1);
@@ -108,7 +108,7 @@ int main() {
             csrw_ss(BASE_PTR_READER_1_LOW, (uint32_t)(delta_local_b + snrt_l1_next()));
             csrw_ss(S_STRIDE_READER_1_0, Bslstride1);
 
-            printf("B err = %d\n", err);
+            printf("B err = %d \r\n", err);
 
             csrw_ss(T_BOUND_WRITER_0_0, 0);
             csrw_ss(T_BOUND_WRITER_0_1, 0);
@@ -127,7 +127,7 @@ int main() {
             if (T_BOUND_WRITER_0_2_CSR != 0) {
                 err = err + 1;
             }
-            printf("D8 err = %d\n", err);
+            printf("D8 err = %d \r\n", err);
 
             csrw_ss(T_BOUND_READER_WRITER_0_0, 1);
             csrw_ss(T_BOUND_READER_WRITER_0_1, 1);
@@ -150,7 +150,7 @@ int main() {
             csrw_ss(BASE_PTR_READER_WRITER_0_LOW,
                     (uint32_t)(delta_local_c + snrt_l1_next()));
 
-            printf("C err = %d\n", err);
+            printf("C err = %d \r\n", err);
 
             csrw_ss(T_BOUND_READER_WRITER_1_0, 1);
             csrw_ss(T_BOUND_READER_WRITER_1_1, 1);
@@ -176,7 +176,7 @@ int main() {
             csrw_ss(S_STRIDE_READER_WRITER_1_0, D32slstride0);
             csrw_ss(S_STRIDE_READER_WRITER_1_1, D32slstride1);
 
-            printf("D32 err = %d\n", err);
+            printf("D32 err = %d \r\n", err);
 
             csrw_ss(TRANSPOSE_CSR_READER_0, 1);
             csrw_ss(TRANSPOSE_CSR_READER_1, 1);
@@ -218,7 +218,7 @@ int main() {
                 err = err + 1;
             }
 
-            printf("GeMM CFG err = %d\n", err);
+            printf("GeMM CFG err = %d \r\n", err);
 
             csrw_ss(GEMMX_START, 1);
             csrw_ss(STREAMER_START_CSR, 1);
@@ -227,7 +227,7 @@ int main() {
 
             int GEMMX_BUSY_CSR = csrr_ss(GEMMX_BUSY);
             while (GEMMX_BUSY_CSR) {
-                printf("GEMMX is busy\n");
+                printf("GEMMX is busy \r\n");
                 GEMMX_BUSY_CSR = csrr_ss(GEMMX_BUSY);
             }
 
@@ -238,6 +238,13 @@ int main() {
 
             write_csr_obs(0x00b);
 
+            printf("delta_local_a = %d \r\n", delta_local_a);
+            for (int i = 0; i < Batch * M * K * meshRow * meshCol; i++) {
+                printf("A %d: %d at addr %p \r\n", i, local_a[i], &local_a[i]);
+            }
+            for (int i = 0; i < Batch * K * N * meshRow * meshCol; i++) {
+                printf("B %d: %d at addr %p \r\n", i, local_b[i], &local_b[i]);
+            }
             for (int i = 0; i < Batch * M * N * meshRow * meshCol; i++) {
                 if (local_d32[i] != D32[i]) {
                     printf("Mismatch at index %d: local_d32 = %d, D32 = %d \r\n", i, local_d32[i], D32[i]);
