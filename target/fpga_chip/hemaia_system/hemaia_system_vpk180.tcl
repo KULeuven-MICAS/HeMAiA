@@ -158,6 +158,24 @@ if ($DEBUG) {
 
 # Implement
 set_property strategy Congestion_SpreadLogic_high [get_runs impl_1]
+# ------------------------------------------------------------------
+# Modify impl_1 run to add stronger hold-fix passes
+# ------------------------------------------------------------------
+set impl_run [get_runs impl_1]
+
+# Tell the router to allow extra skew modelling
+set_property STEPS.ROUTE_DESIGN.ARGS.DIRECTIVE \
+             AdvancedSkewModeling $impl_run
+
+# Add a pre-route phys_opt step that fixes hold
+set_property STEPS.PHYS_OPT_DESIGN.IS_ENABLED true  $impl_run
+set_property STEPS.PHYS_OPT_DESIGN.ARGS.DIRECTIVE ExploreWithHoldFix $impl_run
+
+# Add a post-route phys_opt step in aggressive mode
+set_property STEPS.POST_ROUTE_PHYS_OPT_DESIGN.IS_ENABLED true  $impl_run
+set_property STEPS.POST_ROUTE_PHYS_OPT_DESIGN.ARGS.DIRECTIVE ExploreWithAggressiveHoldFix $impl_run
+
+# Implement
 launch_runs impl_1 -jobs ${nproc}
 wait_on_run impl_1
 
