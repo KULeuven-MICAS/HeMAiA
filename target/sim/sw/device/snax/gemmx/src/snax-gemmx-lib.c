@@ -148,13 +148,13 @@ void set_gemmx_streamer_csr(
     // set the address remap index for C
     csrw_ss(ADDR_REMAP_INDEX_READER_WRITER_0, set_addr_remap_index_C);
 
-#ifdef ENABLED_CHANNEL_READER_WRITER_0
+// #ifdef ENABLED_CHANNEL_READER_WRITER_0
     csrw_ss(ENABLED_CHANNEL_READER_WRITER_0, channel_en_C);
-#endif
+// #endif
 
-#ifdef C_BROADCAST_EXTENSION_ENABLE
+// #ifdef C_BROADCAST_EXTENSION_ENABLE
     csrw_ss(C_BROADCAST_CSR_READER_WRITER_0, broadcast_C == 1 ? 0 : 1);
-#endif
+// #endif
 
     // base ptr for D32
     csrw_ss(BASE_PTR_READER_WRITER_1_LOW,
@@ -184,10 +184,10 @@ void set_gemmx_streamer_csr(
     csrw_ss(ADDR_REMAP_INDEX_READER_WRITER_1, set_addr_remap_index_D32);
 
     // set the transpose
-#ifdef TRANSPOSE_EXTENSION_ENABLE
+// #ifdef TRANSPOSE_EXTENSION_ENABLE
     csrw_ss(TRANSPOSE_CSR_READER_0, transpose_A == 0 ? 1 : 0);
     csrw_ss(TRANSPOSE_CSR_READER_1, transpose_B == 0 ? 1 : 0);
-#endif
+// #endif
 }
 
 // Set GEMM configuration CSR
@@ -233,13 +233,13 @@ void set_gemmx_csr(int tempLoop0, int tempLoop1, int tempLoop2,
 
 // Stall until Streamer and GEMM accelerator finish
 void wait_gemmx_and_streamer() {
-    csrw_ss(STREAMER_START_CSR, 0);
-    csrw_ss(STREAMER_START_CSR, 0);
+    // csrw_ss(STREAMER_START_CSR, 0);
+    // csrw_ss(STREAMER_START_CSR, 0);
     while (csrr_ss(GEMMX_BUSY)) {
     }
     while (csrr_ss(STREAMER_BUSY_CSR)) {
     }
-    csrw_ss(GEMMX_START, 0);
+    // csrw_ss(GEMMX_START, 0);
 }
 
 // Read performance counter of the Streamer, a read-only CSR

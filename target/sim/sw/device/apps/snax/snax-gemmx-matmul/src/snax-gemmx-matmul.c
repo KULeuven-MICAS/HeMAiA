@@ -14,7 +14,8 @@
 // We use several nested loops to iterate over the input data and weights,
 // achieving implicit im2col
 int main() {
-    if (snrt_cluster_idx() == 1) {  // Set err value for checking
+    if (snrt_cluster_idx() == 1) {
+        // Set err value for checking
         int err = 0;
 
         // Prepare addresses in TCDM
@@ -51,6 +52,21 @@ int main() {
         snrt_cluster_hw_barrier();
 
         if (snrt_cluster_core_idx() == 0) {
+            // Set GEMMX configuration CSR
+            uint32_t subtraction_setting =
+                gen_subtraction_config(subtraction_a, subtraction_b);
+
+            uint32_t csr0 =
+                gen_csr0_config(input_zp_i, output_zp_i, max_int_i, min_int_i);
+            uint32_t csr1 = gen_csr1_config(double_round_i);
+
+            set_gemmx_csr(
+                K, N, M, subtraction_setting, csr0, csr1,
+                shared_bitpacked_shift0, shared_bitpacked_shift1,
+                shared_multiplier0, shared_multiplier1, shared_multiplier2,
+                shared_multiplier3, shared_multiplier4, shared_multiplier5,
+                shared_multiplier6, shared_multiplier7, M * N, bypassSIMD);
+
             // Set Streamer configuration CSR for conv2d
             set_gemmx_streamer_csr(
                 Aslstride0, Aslstride1, Atlbound0, Atlstride0, Atlbound1,
@@ -75,30 +91,35 @@ int main() {
                 delta_local_d32, bypassSIMD, transposed_A, transposed_B,
                 channel_en_C, broadcast_C);
 
-            // Set GEMMX configuration CSR
-            uint32_t subtraction_setting =
-                gen_subtraction_config(subtraction_a, subtraction_b);
+            write_csr_obs(0x00b);
 
-            uint32_t csr0 =
-                gen_csr0_config(input_zp_i, output_zp_i, max_int_i, min_int_i);
-            uint32_t csr1 = gen_csr1_config(double_round_i);
+            // printf("CSR configuration finished \r\n");
+            for (int i = 0; i < 1; i++) {
+                // Set CSR to start GEMM
+                set_gemmx_start();
 
-            set_gemmx_csr(
-                K, N, M, subtraction_setting, csr0, csr1,
-                shared_bitpacked_shift0, shared_bitpacked_shift1,
-                shared_multiplier0, shared_multiplier1, shared_multiplier2,
-                shared_multiplier3, shared_multiplier4, shared_multiplier5,
-                shared_multiplier6, shared_multiplier7, M * N, bypassSIMD);
+                // Set CSR to start Streamer for conv2d
+                set_gemmx_streamer_start();
+                // printf("Streamer and GeMM started \r\n");
+                write_csr_obs(0x00d);
 
-            // Set CSR to start Streamer for conv2d
-            set_gemmx_streamer_start();
+                // Poll until Streamer and GEMM accelerator finish
+                wait_gemmx_and_streamer();
+                write_csr_obs(0x00c);
 
-            // Set CSR to start GEMM
-            set_gemmx_start();
+                while (0) {
+                    // Set CSR to start Streamer for conv2d
+                    set_gemmx_streamer_start();
 
-            // Poll until Streamer and GEMM accelerator finish
-            wait_gemmx_and_streamer();
+                    // Set CSR to start GEMM
+                    set_gemmx_start();
 
+                    // Poll until Streamer and GEMM accelerator finish
+                    wait_gemmx_and_streamer();
+                }
+            }
+
+            // printf("Computation finished \r\n");
             // check the result of the implicit im2col convolution
             if (!bypassSIMD) {
                 err += check_gemmx_result_D8(local_d8, D8, Batch, M, N, false);
@@ -107,11 +128,20 @@ int main() {
                     check_gemmx_result_D32(local_d32, D32, Batch, M, N, false);
             }
 
-            printf("SNAX GEMM Matmul: %s, Error: %d . bypassSIMD = %d .\r\n",
-                   err ? "FAIL" : "PASS", err, bypassSIMD);
+            // printf("SNAX GEMM Matmul: %s, Error: %d . bypassSIMD = %d .\r\n",
+            //    err ? "FAIL" : "PASS", err, bypassSIMD);
+            if (err == 0) {
+                write_csr_obs(0x00f);
+                printf("P \r\n");
+            } else {
+                write_csr_obs(0x00e);
+                printf("F: %d \r\n", err);
+            }
         };
 
-        return err;
-    } else
-        return 0;
+        snrt_cluster_hw_barrier();
+
+        return_to_cva6_single_cluster(err);
+        // return err;
+    }
 }

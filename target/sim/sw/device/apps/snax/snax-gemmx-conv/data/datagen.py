@@ -14,7 +14,9 @@ import sys
 import os
 
 # Add data utility path
-sys.path.append(os.path.join(os.path.dirname(__file__), "../../../../../../../../util/sim/"))
+sys.path.append(
+    os.path.join(os.path.dirname(__file__), "../../../../../../../../util/sim/")
+)
 from data_utils import format_scalar_definition, format_vector_definition  # noqa E402
 
 # Add golden model path
@@ -75,8 +77,8 @@ def emit_conv_data(**kwargs):
         W = W + (stride_w * (8 - (W // stride_w) % 8)) % (stride_w * 8)
 
     # test data generation
-    input_data = np.random.randint(-10, 10, size=(Nbatch, Cin8, H, W, 8))
-    kernel = np.random.randint(-10, 10, size=(Cout8, Cin8, Kh, Kw, 8, 8))
+    input_data = np.random.randint(-128, 127, size=(Nbatch, Cin8, H, W, 8))
+    kernel = np.random.randint(-128, 127, size=(Cout8, Cin8, Kh, Kw, 8, 8))
 
     # inferred config from the input data and kernel
     padding = pad_h, pad_w
@@ -183,10 +185,8 @@ def emit_conv_data(**kwargs):
         delta_physical_d8 = delta_local_d8
         delta_physical_d32 = delta_local_d32
 
-        assert (
-            input_padding.size + kernel.size + length_c * 4 * 2
-            < kwargs["memory_size"] * 1024
-        )
+        assert delta_physical_d32 + length_c * 4 < kwargs["memory_size"] * 1024
+
     else:
         # Generating base pointer settings
         base_logical_addr_delta = kwargs["memory_size"] / 4 * 1024

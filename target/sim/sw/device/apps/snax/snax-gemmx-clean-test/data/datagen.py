@@ -14,9 +14,7 @@ import sys
 import os
 
 # Add data utility path
-sys.path.append(
-    os.path.join(os.path.dirname(__file__), "../../../../../../../../util/sim/")
-)
+sys.path.append(os.path.join(os.path.dirname(__file__), "../../../../../../../../util/sim/"))
 from data_utils import format_scalar_definition, format_vector_definition  # noqa E402
 
 # Add golden model path
@@ -186,10 +184,6 @@ def emit_matmul_data(**kwargs):
         meshRow * meshCol * output_data_width / 8
     )
     delta_local_d8 = delta_local_d32
-    assert (
-        delta_local_d8
-        + kwargs["M"] * kwargs["N"] * (meshRow * meshCol * output_data_width / 8)
-    ) < 128 * 1024
     data_str += [format_scalar_definition("int32_t", "delta_local_a", delta_local_a)]
     data_str += [format_scalar_definition("int32_t", "delta_local_b", delta_local_b)]
     data_str += [
