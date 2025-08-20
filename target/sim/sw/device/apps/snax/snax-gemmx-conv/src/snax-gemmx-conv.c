@@ -127,7 +127,7 @@ int main() {
                 wait_gemmx_and_streamer();
 
                 int if_inifinit_loop = 0;
-                while (if_inifinit_loop) {
+                while (0) {
                     // Set CSR to start Streamer for conv2d
                     set_gemmx_streamer_start();
 

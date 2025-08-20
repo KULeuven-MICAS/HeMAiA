@@ -94,32 +94,30 @@ int main() {
             write_csr_obs(0x00b);
 
             // printf("CSR configuration finished \r\n");
-            // for (int i = 0; i < 10000000; i++) {
+            for (int i = 0; i < 1; i++) {
+                // Set CSR to start GEMM
+                set_gemmx_start();
 
-            // Set CSR to start GEMM
-            set_gemmx_start();
+                // Set CSR to start Streamer for conv2d
+                set_gemmx_streamer_start();
+                // printf("Streamer and GeMM started \r\n");
+                write_csr_obs(0x00d);
 
-            // Set CSR to start Streamer for conv2d
-            set_gemmx_streamer_start();
-            // printf("Streamer and GeMM started \r\n");
-            write_csr_obs(0x00d);
+                // Poll until Streamer and GEMM accelerator finish
+                wait_gemmx_and_streamer();
+                write_csr_obs(0x00c);
 
-            // Poll until Streamer and GEMM accelerator finish
-            wait_gemmx_and_streamer();
-            write_csr_obs(0x00c);
+                while (0) {
+                    // Set CSR to start Streamer for conv2d
+                    set_gemmx_streamer_start();
 
-            // int if_infinite_loop = 0;
-            // while (if_infinite_loop) {
-            //     // Set CSR to start Streamer for conv2d
-            //     set_gemmx_streamer_start();
+                    // Set CSR to start GEMM
+                    set_gemmx_start();
 
-            //     // Set CSR to start GEMM
-            //     set_gemmx_start();
-
-            //     // Poll until Streamer and GEMM accelerator finish
-            //     wait_gemmx_and_streamer();
-            // }
-            // }
+                    // Poll until Streamer and GEMM accelerator finish
+                    wait_gemmx_and_streamer();
+                }
+            }
 
             // printf("Computation finished \r\n");
             // check the result of the implicit im2col convolution

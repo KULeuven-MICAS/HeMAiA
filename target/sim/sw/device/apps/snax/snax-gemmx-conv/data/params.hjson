@@ -2,28 +2,27 @@
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
-// Cluster configuration for a conv testbench system.
 {
   // conv configurations
   Nbatch: 1,
-  W: 8,
-  H: 2,
-  Cin: 16,
+  W: 65,
+  H: 37,
+  Cin: 8,
   Cout: 16,
-  Kh: 3,
-  Kw: 3,
+  Kh: 4,
+  Kw: 4,
   pad_h: 1,
   pad_w: 1,
   stride_h: 1,
   stride_w: 1,
-  transposed_A: 1,
+  transposed_A: 0,
   transposed_B: 0,
   bypassSIMD: 0,
-  broadcast_C: 1,
-  channel_en_C: 1,
+  broadcast_C: 0,
+  channel_en_C: 0,
 
   // memory space configurations
-  interleaved_address: 0,
+  interleaved_address: 1,
   memory_size: 128,
 
   // hardware parameters
