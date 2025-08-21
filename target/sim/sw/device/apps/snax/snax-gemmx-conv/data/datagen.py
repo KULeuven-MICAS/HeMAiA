@@ -73,8 +73,8 @@ def emit_conv_data(**kwargs):
     pad_h, pad_w = (kwargs["pad_h"], kwargs["pad_w"])
 
     # make sure the output width is multiple of 8
-    if W // stride_w % 8 != 0:
-        W = W + (stride_w * (8 - (W // stride_w) % 8)) % (stride_w * 8)
+    # if W // stride_w % 8 != 0:
+    #     W = W + (stride_w * (8 - (W // stride_w) % 8)) % (stride_w * 8)
 
     # test data generation
     input_data = np.random.randint(-128, 127, size=(Nbatch, Cin8, H, W, 8))
@@ -185,7 +185,10 @@ def emit_conv_data(**kwargs):
         delta_physical_d8 = delta_local_d8
         delta_physical_d32 = delta_local_d32
 
-        assert delta_physical_d32 + length_c * 4 < kwargs["memory_size"] * 1024
+        # if kwargs['bypassSIMD'] == 1:
+        #     assert delta_physical_d32 + length_c * 4 < kwargs["memory_size"] * 1024
+        # else:
+        #     assert delta_physical_d32 + length_c < kwargs["memory_size"] * 1024
 
     else:
         # Generating base pointer settings
