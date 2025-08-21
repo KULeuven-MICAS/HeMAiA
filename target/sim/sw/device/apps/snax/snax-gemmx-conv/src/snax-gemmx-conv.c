@@ -54,6 +54,8 @@ int main() {
         // Transfer data from L3 to L1
         // Using DMA only
         if (snrt_is_dm_core()) {
+            snrt_start_perf_counter(SNRT_PERF_CNT0, SNRT_PERF_CNT_DMA_BUSY,
+                                    snrt_hartid());
             if (interleaved_address == 1) {
                 start_cycle = snrt_mcycle();
                 snrt_dma_start_1d(local_a, A,
@@ -61,7 +63,6 @@ int main() {
                                       Cin * sizeof(int8_t));
                 snrt_dma_start_1d(local_b, B,
                                   Cout * Kh * Kw * Cin * sizeof(int8_t));
-                end_cycle = snrt_mcycle();
             } else {
                 start_cycle = snrt_mcycle();
                 snrt_dma_start_2d(
@@ -69,9 +70,12 @@ int main() {
                     Nbatch * (H + 2 * pad_h) * (W + 2 * pad_w) * Cin / 64);
                 snrt_dma_start_2d(local_b_dma, B, 64 * sizeof(int8_t), 256, 64,
                                   Cout * Kh * Kw * Cin / 64);
-                end_cycle = snrt_mcycle();
             }
             snrt_dma_wait_all();
+            end_cycle = snrt_mcycle();
+            printf("DMA transfer cycle from DMA hardware counter %d \r\n",
+                   snrt_get_perf_counter(SNRT_PERF_CNT0));
+            snrt_reset_perf_counter(SNRT_PERF_CNT0);
             printf("DMA transfer time: %d cycles for A and B \r\n",
                    end_cycle - start_cycle);
         }
@@ -79,19 +83,23 @@ int main() {
         // Wait for DMA to finish
         snrt_cluster_hw_barrier();
         if (snrt_is_dm_core()) {
+            snrt_start_perf_counter(SNRT_PERF_CNT0, SNRT_PERF_CNT_DMA_BUSY,
+                                    snrt_hartid());
             if (interleaved_address == 1) {
                 start_cycle = snrt_mcycle();
                 snrt_dma_start_1d(local_c, C,
                                   M * N * meshRow * meshCol * sizeof(int32_t));
-                end_cycle = snrt_mcycle();
             } else {
                 start_cycle = snrt_mcycle();
                 snrt_dma_start_2d(local_c_dma, C, 16 * sizeof(int32_t), 256,
                                   16 * sizeof(int32_t),
                                   M * N * meshRow * meshCol / 16);
-                end_cycle = snrt_mcycle();
             }
             snrt_dma_wait_all();
+            end_cycle = snrt_mcycle();
+            printf("DMA transfer cycle from DMA hardware counter %d \r\n",
+                   snrt_get_perf_counter(SNRT_PERF_CNT0));
+            snrt_reset_perf_counter(SNRT_PERF_CNT0);
             printf("DMA transfer time: %d cycles for C \r\n",
                    end_cycle - start_cycle);
         }
@@ -151,7 +159,7 @@ int main() {
             int performance_counter = 0;
             performance_counter = read_gemmx_streamer_perf_counter();
 
-            printf("Performance counter: %d \r\n", performance_counter);
+            printf("GeMM performance counter: %d \r\n", performance_counter);
 
             int if_inifinit_loop = 0;
             while (0) {

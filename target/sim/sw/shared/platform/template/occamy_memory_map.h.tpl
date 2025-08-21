@@ -41,6 +41,10 @@
     (QUADRANT_0_CLUSTER_0_PERIPH_BASE_ADDR + \
      SNITCH_CLUSTER_PERIPHERAL_CL_CLINT_CLEAR_REG_OFFSET)
 
+#define cluster_perf_counters_base           \
+    (QUADRANT_0_CLUSTER_0_PERIPH_BASE_ADDR + \
+     SNITCH_CLUSTER_PERIPHERAL_PERF_COUNTER_ENABLE_0_REG_OFFSET)
+
 #define cluster_hw_barrier_base              \
     (QUADRANT_0_CLUSTER_0_PERIPH_BASE_ADDR + \
      SNITCH_CLUSTER_PERIPHERAL_HW_BARRIER_REG_OFFSET)
@@ -110,6 +114,10 @@ inline uintptr_t cluster_tcdm_end_addr(uint32_t cluster_idx) {
                                      cluster_idx);
 }
 
+inline uintptr_t cluster_perf_counters_addr(uint32_t cluster_idx) {
+    return translate_cluster_address(cluster_perf_counters_base, cluster_idx);
+}
+
 inline uintptr_t cluster_hw_barrier_addr(uint32_t cluster_idx) {
     return translate_cluster_address(cluster_hw_barrier_base, cluster_idx);
 }
@@ -174,6 +182,10 @@ inline volatile uint32_t* cluster_clint_clr_ptr(uint32_t cluster_idx) {
 
 inline volatile uint32_t* cluster_clint_set_ptr(uint32_t cluster_idx) {
     return (volatile uint32_t*)cluster_clint_set_addr(cluster_idx);
+}
+
+inline volatile uint32_t* cluster_perf_counters_ptr(uint32_t cluster_idx) {
+    return (volatile uint32_t*)cluster_perf_counters_addr(cluster_idx);
 }
 
 inline volatile uint32_t* cluster_hw_barrier_ptr(uint32_t cluster_idx) {

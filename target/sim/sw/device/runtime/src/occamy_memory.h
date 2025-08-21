@@ -33,6 +33,10 @@ inline uint32_t __attribute__((const)) snrt_cluster_hw_barrier_addr() {
     return _snrt_cluster_hw_barrier;
 }
 
+inline volatile uint32_t* __attribute__((const)) snrt_cluster_perf_counters_addr() {
+    return cluster_perf_counters_ptr(snrt_cluster_idx());
+}
+
 inline volatile uint32_t* __attribute__((const)) snrt_zero_memory_ptr() {
     return cluster_zero_memory_ptr(snrt_cluster_idx());
 }
