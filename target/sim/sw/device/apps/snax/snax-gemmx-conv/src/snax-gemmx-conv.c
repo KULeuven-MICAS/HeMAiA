@@ -73,10 +73,10 @@ int main() {
             }
             snrt_dma_wait_all();
             end_cycle = snrt_mcycle();
-            printf("DMA transfer cycle from DMA hardware counter %d \r\n",
+            printf("DMA transfer cycle from DMA hardware counter %d  for A and B\r\n",
                    snrt_get_perf_counter(SNRT_PERF_CNT0));
             snrt_reset_perf_counter(SNRT_PERF_CNT0);
-            printf("DMA transfer time: %d cycles for A and B \r\n",
+            printf("DMA transfer cycle from mcycle: %d cycles for A and B \r\n",
                    end_cycle - start_cycle);
         }
 
@@ -100,7 +100,7 @@ int main() {
             printf("DMA transfer cycle from DMA hardware counter %d \r\n",
                    snrt_get_perf_counter(SNRT_PERF_CNT0));
             snrt_reset_perf_counter(SNRT_PERF_CNT0);
-            printf("DMA transfer time: %d cycles for C \r\n",
+            printf("DMA transfer cycle from mcycle: %d cycles for C \r\n",
                    end_cycle - start_cycle);
         }
 
