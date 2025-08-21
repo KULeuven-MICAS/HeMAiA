@@ -4,7 +4,7 @@
 #
 # Xiaoling Yi <xiaoling.yi@esat.kuleuven.be>
 
-APP     = snax-gemmx-matmul-tiling
+APP     = snax-gemmx-matmul-tiling-overlap
 
 INCDIRS = data
 
@@ -13,7 +13,7 @@ INCDIRS += ../../../snax/gemmx/include
 # Include this binary in the final build
 RISCV_LDFLAGS += ../../../snax/gemmx/build/snax-gemmx-lib.o
 
-SRCS    = src/snax-gemmx-matmul-tiling-print-fix.c
+SRCS    = src/snax-gemmx-matmul-tiling-overlap.c
 
 include ./data/Makefile
 include ../../common.mk
