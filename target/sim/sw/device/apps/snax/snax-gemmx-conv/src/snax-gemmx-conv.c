@@ -41,16 +41,30 @@ int main() {
         local_d32 = (int32_t *)(snrt_l1_next() + delta_local_d32);
         local_d8 = (int8_t *)(snrt_l1_next() + delta_local_d8);
 
+        int start_cycle = 0;
+        int end_cycle = 0;
+
+        uint32_t subtraction_setting =
+            gen_subtraction_config(subtraction_a, subtraction_b);
+
+        uint32_t csr0 =
+            gen_csr0_config(input_zp_i, output_zp_i, max_int_i, min_int_i);
+        uint32_t csr1 = gen_csr1_config(double_round_i);
+
         // Transfer data from L3 to L1
         // Using DMA only
         if (snrt_is_dm_core()) {
+            snrt_start_perf_counter(SNRT_PERF_CNT0, SNRT_PERF_CNT_DMA_BUSY,
+                                    snrt_hartid());
             if (interleaved_address == 1) {
+                start_cycle = snrt_mcycle();
                 snrt_dma_start_1d(local_a, A,
                                   Nbatch * (H + 2 * pad_h) * (W + 2 * pad_w) *
                                       Cin * sizeof(int8_t));
                 snrt_dma_start_1d(local_b, B,
                                   Cout * Kh * Kw * Cin * sizeof(int8_t));
             } else {
+                start_cycle = snrt_mcycle();
                 snrt_dma_start_2d(
                     local_a_dma, A, 64 * sizeof(int8_t), 256, 64,
                     Nbatch * (H + 2 * pad_h) * (W + 2 * pad_w) * Cin / 64);
@@ -58,26 +72,43 @@ int main() {
                                   Cout * Kh * Kw * Cin / 64);
             }
             snrt_dma_wait_all();
+            end_cycle = snrt_mcycle();
+            printf("DMA transfer cycle from DMA hardware counter %d  for A and B\r\n",
+                   snrt_get_perf_counter(SNRT_PERF_CNT0));
+            snrt_reset_perf_counter(SNRT_PERF_CNT0);
+            printf("DMA transfer cycle from mcycle: %d cycles for A and B \r\n",
+                   end_cycle - start_cycle);
         }
 
         // Wait for DMA to finish
         snrt_cluster_hw_barrier();
         if (snrt_is_dm_core()) {
+            snrt_start_perf_counter(SNRT_PERF_CNT0, SNRT_PERF_CNT_DMA_BUSY,
+                                    snrt_hartid());
             if (interleaved_address == 1) {
+                start_cycle = snrt_mcycle();
                 snrt_dma_start_1d(local_c, C,
                                   M * N * meshRow * meshCol * sizeof(int32_t));
             } else {
+                start_cycle = snrt_mcycle();
                 snrt_dma_start_2d(local_c_dma, C, 16 * sizeof(int32_t), 256,
                                   16 * sizeof(int32_t),
                                   M * N * meshRow * meshCol / 16);
             }
             snrt_dma_wait_all();
+            end_cycle = snrt_mcycle();
+            printf("DMA transfer cycle from DMA hardware counter %d \r\n",
+                   snrt_get_perf_counter(SNRT_PERF_CNT0));
+            snrt_reset_perf_counter(SNRT_PERF_CNT0);
+            printf("DMA transfer cycle from mcycle: %d cycles for C \r\n",
+                   end_cycle - start_cycle);
         }
 
         snrt_cluster_hw_barrier();
 
         if (snrt_cluster_core_idx() == 0) {
             // Set Streamer configuration CSR for conv2d
+            start_cycle = snrt_mcycle();
             set_gemmx_streamer_csr(
                 Aslstride0, Aslstride1, Atlbound0, Atlstride0, Atlbound1,
                 Atlstride1, Atlbound2, Atlstride2, Atlbound3, Atlstride3,
@@ -102,21 +133,36 @@ int main() {
                 channel_en_C, broadcast_C);
 
             // Set GEMMX configuration CSR
-            uint32_t subtraction_setting =
-                gen_subtraction_config(subtraction_a, subtraction_b);
-
-            uint32_t csr0 =
-                gen_csr0_config(input_zp_i, output_zp_i, max_int_i, min_int_i);
-            uint32_t csr1 = gen_csr1_config(double_round_i);
-
             set_gemmx_csr(
                 K, N, M, subtraction_setting, csr0, csr1,
                 shared_bitpacked_shift0, shared_bitpacked_shift1,
                 shared_multiplier0, shared_multiplier1, shared_multiplier2,
                 shared_multiplier3, shared_multiplier4, shared_multiplier5,
                 shared_multiplier6, shared_multiplier7, M * N, bypassSIMD);
+            end_cycle = snrt_mcycle();
+            printf("Configuration cycles: %d \r\n", end_cycle - start_cycle);
 
-            for (int i = 0; i < 10000000; i++) {
+            // Set CSR to start Streamer for conv2d
+            start_cycle = snrt_mcycle();
+            set_gemmx_streamer_start();
+
+            // Set CSR to start GEMM
+            set_gemmx_start();
+
+            // Poll until Streamer and GEMM accelerator finish
+            wait_gemmx_and_streamer();
+            end_cycle = snrt_mcycle();
+
+            printf("Compute total cycles from mcycle: %d \r\n",
+                   end_cycle - start_cycle);
+
+            int performance_counter = 0;
+            performance_counter = read_gemmx_streamer_perf_counter();
+
+            printf("GeMM performance counter: %d \r\n", performance_counter);
+
+            int if_inifinit_loop = 0;
+            while (0) {
                 // Set CSR to start Streamer for conv2d
                 set_gemmx_streamer_start();
 
@@ -125,18 +171,6 @@ int main() {
 
                 // Poll until Streamer and GEMM accelerator finish
                 wait_gemmx_and_streamer();
-
-                int if_inifinit_loop = 0;
-                while (0) {
-                    // Set CSR to start Streamer for conv2d
-                    set_gemmx_streamer_start();
-
-                    // Set CSR to start GEMM
-                    set_gemmx_start();
-
-                    // Poll until Streamer and GEMM accelerator finish
-                    wait_gemmx_and_streamer();
-                }
             }
 
             // check the result of the implicit im2col convolution
