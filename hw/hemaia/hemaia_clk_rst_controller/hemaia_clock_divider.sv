@@ -37,17 +37,18 @@ module hemaia_clock_counter #(
 endmodule
 
 
-(* no_ungroup *) (* no_boundary_optimization *) (* keep_hierarchy *)
+(* no_ungroup *) (* no_boundary_optimization *) (* keep_hierarchy *) (* KEEP_HIERARCHY = "TRUE" *)
 module hemaia_clock_divider #(
     parameter int MaxDivisionWidth = 4,
     parameter int DefaultDivision  = 1
 ) (
-    input  logic                        clk_i,
-    input  logic                        rst_ni,
-    input  logic [MaxDivisionWidth-1:0] divisor_i,
-    input  logic                        divisor_valid_i,
+    input logic clk_i,
+    input logic rst_ni,
+    input logic [MaxDivisionWidth-1:0] divisor_i,
+    input logic divisor_valid_i,
     input  logic                        test_mode_i,
-    output logic                        clk_o
+    (* syn_keep = 1, syn_preserve = 1, KEEP = "TRUE", DONT_TOUCH = "TRUE" *)
+    output logic clk_o
 );
 
   logic [MaxDivisionWidth-1:0] divisor_q;
@@ -82,7 +83,8 @@ module hemaia_clock_divider #(
     end
   end
 
-  (* syn_keep = 1, syn_preserve = 1 *) logic raw_div, raw_div_d1, raw_div_d2;
+  (* syn_keep = 1, syn_preserve = 1, KEEP = "TRUE", DONT_TOUCH = "TRUE" *) logic
+      raw_div, raw_div_d1, raw_div_d2;
   always_comb begin
     if (cnt < (divisor_q >> 1)) begin
       raw_div = 1'b0;  // high for half the period
@@ -107,10 +109,12 @@ module hemaia_clock_divider #(
     end
   end
 
-  logic clk_ungated, clk_divided, clk_odd, clk_even;
-  assign clk_odd  /* synthesis keep */  = ~(raw_div_d1 & raw_div_d2);
-  assign clk_even  /* synthesis keep */ = ~raw_div_d1;
+  (* syn_keep = 1, syn_preserve = 1, KEEP = "TRUE", DONT_TOUCH = "TRUE" *) logic
+      clk_ungated, clk_divided, clk_odd, clk_even;
+  assign clk_odd  = ~(raw_div_d1 & raw_div_d2);
+  assign clk_even = ~raw_div_d1;
 
+  (* DONT_TOUCH = "TRUE" *)
   tc_clk_mux2 i_clk_divided_mux (
       .clk0_i(clk_even),
       .clk1_i(clk_odd),
@@ -118,6 +122,7 @@ module hemaia_clock_divider #(
       .clk_o(clk_divided)
   );
 
+  (* DONT_TOUCH = "TRUE" *)
   tc_clk_mux2 i_clk_o_mux (
       .clk0_i(clk_divided),
       .clk1_i(clk_i),
@@ -125,6 +130,7 @@ module hemaia_clock_divider #(
       .clk_o(clk_ungated)
   );
 
+  (* DONT_TOUCH = "TRUE" *)
   tc_clk_gating i_clk_o_gate (
       .clk_i(clk_ungated),
       .en_i(divisor_q != '0 && rst_ni),
