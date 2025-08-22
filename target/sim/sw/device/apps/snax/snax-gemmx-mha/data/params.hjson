@@ -2,19 +2,24 @@
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
-// Cluster configuration for a matmul testbench system.
 {
   // gemm configurations
-  transposed_A: 0,
-  transposed_B: 0,
-  // this is the setting to match dimc for 16x16x2304 with 8 bit quantization
-  K2: 1,
-  N2: 1,
-  M2: 1,
-  K: 2,
-  N: 144,
-  M: 2,
-  // 
+
+  // this is the setting to match dimc's mha (except softmax)
+  // Q=Xwq, K=XWk, V=XWv
+  K_1: 64,
+  N_1: 8,
+  M_1: 8,
+  // S=QKt, Z=SV
+  K_2: 8,
+  N_2: 8,
+  M_2: 8,
+
+  transposed_A_1: 0,
+  transposed_B_1: 0,
+  transposed_A_2: 0,
+  transposed_B_2: 1,
+
   bypassSIMD: 0,
   broadcast_C: 0,
   channel_en_C: 0,

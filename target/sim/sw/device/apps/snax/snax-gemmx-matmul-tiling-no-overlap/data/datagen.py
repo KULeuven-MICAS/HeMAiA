@@ -174,20 +174,42 @@ def emit_matmul_data(**kwargs):
     data_str += [format_scalar_definition("int32_t", "D8tlbound2", 1)]
     data_str += [format_scalar_definition("int32_t", "D8tlstride2", 0)]
 
+
+    broadcast_C = kwargs["broadcast_C"] == 1 and kwargs["channel_en_C"] == 1
+    disable_C = kwargs["broadcast_C"] == 0 and kwargs["channel_en_C"] == 0
+    enable_full_C = kwargs["broadcast_C"] == 0 and kwargs["channel_en_C"] == 1
+
+    # assert enable_full_C, "Invalid C settings"
+
     delta_local_a = 0
     delta_local_b = (
         kwargs["K"] * kwargs["M"] * (meshRow * tileSize * input_data_width / 8)
     )
     delta_local_b = align_wide_addr(delta_local_b, 64)
+
     delta_local_c = delta_local_b + kwargs["K"] * kwargs["N"] * (
         meshCol * tileSize * input_data_width / 8
     )
     delta_local_c = align_wide_addr(delta_local_c, 64)
-    delta_local_d32 = delta_local_c + kwargs["M"] * kwargs["N"] * (
-        meshRow * meshCol * output_data_width / 8
-    )
+    if disable_C:
+        delta_local_d32 = delta_local_c 
+    else:
+        delta_local_d32 = delta_local_c + kwargs["M"] * kwargs["N"] * (
+            meshRow * meshCol * output_data_width / 8
+        )
     delta_local_d32 = align_wide_addr(delta_local_d32, 64)
     delta_local_d8 = delta_local_d32
+
+    # avoid overflow
+    if kwargs["bypassSIMD"] == 1:
+        assert delta_local_d32  + kwargs["M"] * kwargs["N"] * (
+            meshRow * meshCol * output_data_width / 8
+        ) < 128 * 1024 * 0.95
+    else:
+        assert delta_local_d8  + kwargs["M"] * kwargs["N"] * (
+            meshRow * meshCol * quantized_output_data_width / 8
+        ) < 128 * 1024 * 0.95
+
     data_str += [format_scalar_definition("int32_t", "delta_local_a", delta_local_a)]
     data_str += [format_scalar_definition("int32_t", "delta_local_b", delta_local_b)]
     data_str += [
@@ -231,12 +253,6 @@ def emit_matmul_data(**kwargs):
         MIN, MAX, size=(kwargs["K2"], kwargs["N2"], kwargs["K"], kwargs["N"], tileSize, meshCol)
     ).reshape(-1)
     data_str += [format_vector_definition("int8_t", "B", B)]
-
-    broadcast_C = kwargs["broadcast_C"] == 1 and kwargs["channel_en_C"] == 1
-    disable_C = kwargs["broadcast_C"] == 0 and kwargs["channel_en_C"] == 0
-    enable_full_C = kwargs["broadcast_C"] == 0 and kwargs["channel_en_C"] == 1
-
-    assert enable_full_C, "Invalid C settings"
 
     if broadcast_C == 1:
         C = np.random.randint(MIN, MAX, size=(kwargs["M"], kwargs["N"], 1, meshCol))
