@@ -158,6 +158,31 @@ if ($DEBUG) {
 
 # Implement
 set_property strategy Congestion_SpreadLogic_high [get_runs impl_1]
+# ------------------------------------------------------------------
+# Modify impl_1 run to add stronger hold-fix passes
+# ------------------------------------------------------------------
+set impl_run [get_runs impl_1]
+
+# Tell the router to allow extra skew modelling
+set_property STEPS.ROUTE_DESIGN.ARGS.DIRECTIVE \
+             AdvancedSkewModeling $impl_run
+
+# Add set_param route.enableHoldExpnBailout 0 
+set pre_route_file [file normalize "pre_route_hold_fix.tcl"]
+file mkdir [file dirname $pre_route_file]
+set fh [open $pre_route_file "w"]
+puts $fh {# Pre-route settings for to force enable hold fixing
+set_param route.enableHoldExpnBailout 0
+}
+close $fh
+
+# Mount pre-route script to ROUTE_DESIGN step
+set_property STEPS.ROUTE_DESIGN.TCL.PRE $pre_route_file $impl_run
+# Add a post-route phys_opt step in aggressive mode
+set_property STEPS.POST_ROUTE_PHYS_OPT_DESIGN.IS_ENABLED true  $impl_run
+set_property STEPS.POST_ROUTE_PHYS_OPT_DESIGN.ARGS.DIRECTIVE ExploreWithAggressiveHoldFix $impl_run
+
+# Implement
 launch_runs impl_1 -jobs ${nproc}
 wait_on_run impl_1
 
