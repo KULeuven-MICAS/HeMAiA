@@ -19,7 +19,7 @@ from data_utils import format_scalar_definition, format_vector_definition  # noq
 
 # Add golden model path
 from snax_utils import (  # noqa E402
-    tiled_block_gemm_golden_model,
+    block_gemm_golden_model,
     postprocessing_simd_golden_model,
     align_wide_addr,
 )  # noqa E402
@@ -438,65 +438,6 @@ def emit_mha_data(**kwargs):
     # --------------------------------------------------
     # --------------------------------------------------
 
-    # A = np.random.randint(
-    #     MIN, MAX, size=(kwargs["M2"], kwargs["K2"], kwargs["M"], kwargs["K"], meshRow, tileSize)
-    # ).reshape(-1)
-    # data_str += [format_vector_definition("int8_t", "A", A)]
-
-    # B = np.random.randint(
-    #     MIN, MAX, size=(kwargs["K2"], kwargs["N2"], kwargs["K"], kwargs["N"], tileSize, meshCol)
-    # ).reshape(-1)
-    # data_str += [format_vector_definition("int8_t", "B", B)]
-
-
-    # if kwargs["transposed_A"] == 1:
-    #     A = A.reshape(kwargs["M"], kwargs["K"], meshRow, tileSize)
-    #     A = A.transpose(0, 1, 3, 2).reshape(-1)
-    # if kwargs["transposed_B"] == 1:
-    #     B = B.reshape(kwargs["K"], kwargs["N"], tileSize, meshCol)
-    #     B = B.transpose(0, 1, 3, 2).reshape(-1)
-
-    # C = np.random.randint(
-    #     0, 1, size=(kwargs["M"], kwargs["N"], meshRow, meshCol)
-    # ).reshape(-1)
-
-    # D32 = tiled_block_gemm_golden_model(
-    #     kwargs["M2"],
-    #     kwargs["K2"],
-    #     kwargs["N2"],
-    #     kwargs["M"],
-    #     kwargs["K"],
-    #     kwargs["N"],
-    #     meshRow,
-    #     tileSize,
-    #     meshCol,
-    #     A,
-    #     B,
-    #     subtraction_a,
-    #     subtraction_b,
-    #     C,
-    # )
-
-    # data_str += [format_vector_definition("int32_t", "D32_golden", D32)]
-    # D32_zero = np.zeros_like(D32, dtype=np.int32)
-    # data_str += [format_vector_definition("int32_t", "D32_generated", D32_zero)]
-
-    # D8 = np.zeros_like(D32, dtype=np.uint8)
-    # # output channel (innermost dim) has a different scale factor
-    # for i in range(group_num):
-    #     D8[i::group_num] = postprocessing_simd_golden_model(
-    #         D32[i::group_num],
-    #         input_zp_i,
-    #         output_zp_i,
-    #         shift_i[i],
-    #         max_int_i,
-    #         min_int_i,
-    #         double_round_i,
-    #         multiplier_i[i],
-    #     )
-
-    # data_str += [format_vector_definition("int8_t", "D8_golden", D8)]
-
     X = np.random.randint(
         MIN, MAX, size=( kwargs["M_1"], kwargs["K_1"], meshRow, tileSize)
     ).reshape(-1)
@@ -516,6 +457,155 @@ def emit_mha_data(**kwargs):
         MIN, MAX, size=(kwargs["N_1"], kwargs["K_1"], meshRow, tileSize)
     ).reshape(-1)
     data_str += [format_vector_definition("int8_t", "Wv", Wv)]
+
+    # Q=XWq
+    Q = block_gemm_golden_model(
+        kwargs["M_1"],
+        kwargs["K_1"],
+        kwargs["N_1"],
+        meshRow,
+        tileSize,
+        meshCol,
+        X,
+        Wq,
+        subtraction_a,
+        subtraction_b,
+        np.zeros(shape=(kwargs["M_1"], kwargs["N_1"], meshRow, meshCol), dtype=np.int32).reshape(-1),
+    )
+
+    Q8 = np.zeros_like(Q, dtype=np.uint8)
+    for i in range(group_num):
+        Q8[i::group_num] = postprocessing_simd_golden_model(
+            Q[i::group_num],
+            input_zp_i,
+            output_zp_i,
+            shift_i[i],
+            max_int_i,
+            min_int_i,
+            double_round_i,
+            multiplier_i[i],
+        )
+    data_str += [format_vector_definition("int8_t", "Q8_golden", Q8)]
+
+    # K = XWk
+    K = block_gemm_golden_model(
+        kwargs["M_1"],
+        kwargs["K_1"],
+        kwargs["N_1"],
+        meshRow,
+        tileSize,
+        meshCol,
+        X,
+        Wk,
+        subtraction_a,
+        subtraction_b,
+        np.zeros(shape=(kwargs["M_1"], kwargs["N_1"], meshRow, meshCol), dtype=np.int32).reshape(-1),
+    )
+
+    K8 = np.zeros_like(K, dtype=np.uint8)
+    for i in range(group_num):
+        K8[i::group_num] = postprocessing_simd_golden_model(
+            K[i::group_num],
+            input_zp_i,
+            output_zp_i,
+            shift_i[i],
+            max_int_i,
+            min_int_i,
+            double_round_i,
+            multiplier_i[i],
+        )
+    data_str += [format_vector_definition("int8_t", "K8_golden", K8)]
+
+    # V = XWv
+    V = block_gemm_golden_model(
+        kwargs["M_1"],
+        kwargs["K_1"],
+        kwargs["N_1"],
+        meshRow,
+        tileSize,
+        meshCol,
+        X,
+        Wv,
+        subtraction_a,
+        subtraction_b,
+        np.zeros(shape=(kwargs["M_1"], kwargs["N_1"], meshRow, meshCol), dtype=np.int32).reshape(-1),
+    )
+
+    V8 = np.zeros_like(V, dtype=np.uint8)
+    for i in range(group_num):
+        V8[i::group_num] = postprocessing_simd_golden_model(
+            V[i::group_num],
+            input_zp_i,
+            output_zp_i,
+            shift_i[i],
+            max_int_i,
+            min_int_i,
+            double_round_i,
+            multiplier_i[i],
+        )
+    data_str += [format_vector_definition("int8_t", "V8_golden", V8)]
+
+    # S=QKt
+    K8 = K8.reshape(kwargs["M_1"], kwargs["N_1"], tileSize, meshCol)
+    K8t = K8.reshape(-1)
+    # K8t = K8.transpose(0, 1, 3, 2).reshape(-1)
+    S = block_gemm_golden_model(
+        kwargs["M_2"],
+        kwargs["K_2"],
+        kwargs["N_2"],
+        meshRow,
+        tileSize,
+        meshCol,
+        Q8,
+        K8t,
+        subtraction_a,
+        subtraction_b,
+        np.zeros(shape=(kwargs["M_2"], kwargs["N_2"], meshRow, meshCol), dtype=np.int32).reshape(-1),
+    )
+
+    S8 = np.zeros_like(S, dtype=np.uint8)
+    for i in range(group_num):
+        S8[i::group_num] = postprocessing_simd_golden_model(
+            S[i::group_num],
+            input_zp_i,
+            output_zp_i,
+            shift_i[i],
+            max_int_i,
+            min_int_i,
+            double_round_i,
+            multiplier_i[i],
+        )
+    data_str += [format_vector_definition("int8_t", "S8_golden", S8)]
+
+    # Z = SV
+    Z = block_gemm_golden_model(
+        kwargs["M_2"],
+        kwargs["K_2"],
+        kwargs["N_2"],
+        meshRow,
+        tileSize,
+        meshCol,
+        S8,
+        V8,
+        subtraction_a,
+        subtraction_b,
+        np.zeros(shape=(kwargs["M_2"], kwargs["N_2"], meshRow, meshCol), dtype=np.int32).reshape(-1),
+    )
+
+    Z8 = np.zeros_like(Z, dtype=np.uint8)
+    for i in range(group_num):
+        Z8[i::group_num] = postprocessing_simd_golden_model(
+            Z[i::group_num],
+            input_zp_i,
+            output_zp_i,
+            shift_i[i],
+            max_int_i,
+            min_int_i,
+            double_round_i,
+            multiplier_i[i],
+        )
+
+    data_str += [format_vector_definition("int8_t", "Z8_golden", Z8)]
 
     data_str = "\n\n".join(data_str)
 
