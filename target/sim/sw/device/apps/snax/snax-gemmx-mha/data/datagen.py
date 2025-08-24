@@ -473,7 +473,7 @@ def emit_mha_data(**kwargs):
         np.zeros(shape=(kwargs["M_1"], kwargs["N_1"], meshRow, meshCol), dtype=np.int32).reshape(-1),
     )
 
-    Q8 = np.zeros_like(Q, dtype=np.uint8)
+    Q8 = np.zeros_like(Q, dtype=np.int8)
     for i in range(group_num):
         Q8[i::group_num] = postprocessing_simd_golden_model(
             Q[i::group_num],
@@ -502,7 +502,7 @@ def emit_mha_data(**kwargs):
         np.zeros(shape=(kwargs["M_1"], kwargs["N_1"], meshRow, meshCol), dtype=np.int32).reshape(-1),
     )
 
-    K8 = np.zeros_like(K, dtype=np.uint8)
+    K8 = np.zeros_like(K, dtype=np.int8)
     for i in range(group_num):
         K8[i::group_num] = postprocessing_simd_golden_model(
             K[i::group_num],
@@ -531,7 +531,7 @@ def emit_mha_data(**kwargs):
         np.zeros(shape=(kwargs["M_1"], kwargs["N_1"], meshRow, meshCol), dtype=np.int32).reshape(-1),
     )
 
-    V8 = np.zeros_like(V, dtype=np.uint8)
+    V8 = np.zeros_like(V, dtype=np.int8)
     for i in range(group_num):
         V8[i::group_num] = postprocessing_simd_golden_model(
             V[i::group_num],
@@ -563,7 +563,7 @@ def emit_mha_data(**kwargs):
         np.zeros(shape=(kwargs["M_2"], kwargs["N_2"], meshRow, meshCol), dtype=np.int32).reshape(-1),
     )
 
-    S8 = np.zeros_like(S, dtype=np.uint8)
+    S8 = np.zeros_like(S, dtype=np.int8)
     for i in range(group_num):
         S8[i::group_num] = postprocessing_simd_golden_model(
             S[i::group_num],
@@ -592,7 +592,7 @@ def emit_mha_data(**kwargs):
         np.zeros(shape=(kwargs["M_2"], kwargs["N_2"], meshRow, meshCol), dtype=np.int32).reshape(-1),
     )
 
-    Z8 = np.zeros_like(Z, dtype=np.uint8)
+    Z8 = np.zeros_like(Z, dtype=np.int8)
     for i in range(group_num):
         Z8[i::group_num] = postprocessing_simd_golden_model(
             Z[i::group_num],

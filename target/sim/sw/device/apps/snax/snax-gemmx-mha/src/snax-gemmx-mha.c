@@ -202,6 +202,9 @@ int main() {
         // ------------------------------------------------------------------------------
         // ------------------------------------------------------------------------------
 
+        // note::
+        // the K is not really transposed
+        // need special tstride
         local_d8 = (int8_t *)(snrt_l1_next() + delta_local_d8_S);
 
         if (snrt_cluster_core_idx() == 0) {
@@ -414,12 +417,12 @@ int main() {
 
         if (snrt_cluster_core_idx() == 0) {
             int8_t* local_Z8 = (int8_t *)(snrt_l1_next() + delta_local_d8_Z);
-            // for (int i = 0; i < M_2 * N_2 * meshRow * meshCol; i++){
-            //     if(local_Z8[i] != Z8_golden[i]){
-            //         printf("Mismatch at index %d: %d != %d\n", i, local_Z8[i], Z8_golden[i]);
-            //         err++;
-            //     }
-            // }
+            for (int i = 0; i < M_2 * N_2 * meshRow * meshCol; i++){
+                if(local_Z8[i] != Z8_golden[i]){
+                    printf("Mismatch at index %d: %d != %d\n", i, local_Z8[i], Z8_golden[i]);
+                    err++;
+                }
+            }
             printf("Total mismatches: %d\n", err);
         }
 
