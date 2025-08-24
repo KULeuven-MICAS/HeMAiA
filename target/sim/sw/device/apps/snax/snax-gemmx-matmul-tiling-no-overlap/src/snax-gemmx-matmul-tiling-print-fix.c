@@ -35,12 +35,23 @@ int main() {
         cur_B = B;
         cur_C = C;
 
+        int start_cycle = 0;
+        int end_cycle = 0;
+
+        uint32_t subtraction_setting = gen_subtraction_config(
+            subtraction_a, subtraction_b);
+
+        uint32_t csr0 = gen_csr0_config(input_zp_i, output_zp_i,
+                                        max_int_i, min_int_i);
+        uint32_t csr1 = gen_csr1_config(double_round_i);
+
+        start_cycle = snrt_mcycle();
+
         for (int m = 0; m < M2; m++) {
             for (int n = 0; n < N2; n++) {
                 for (int k = 0; k < K2; k++) {
                     // Transfer data from L3 to L1
                     // Using DMA only
-
                     if (snrt_is_dm_core()) {
                         cur_A = A + m * K2 * M * K * meshRow * tileSize +
                                 k * M * K * meshRow * tileSize;
@@ -102,12 +113,6 @@ int main() {
                             broadcast_C);
 
                         // Set GEMMX configuration CSR
-                        uint32_t subtraction_setting = gen_subtraction_config(
-                            subtraction_a, subtraction_b);
-
-                        uint32_t csr0 = gen_csr0_config(input_zp_i, output_zp_i,
-                                                        max_int_i, min_int_i);
-                        uint32_t csr1 = gen_csr1_config(double_round_i);
 
                         set_gemmx_csr(K, N, M, subtraction_setting, csr0, csr1,
                                       shared_bitpacked_shift0,
@@ -130,75 +135,99 @@ int main() {
                     snrt_cluster_hw_barrier();
                 }
 
+                // snrt_cluster_hw_barrier();
+
+                // check the result
+                // if (snrt_cluster_core_idx() == 0) {
+                //     if (!bypassSIMD) {
+                //         for (int i = 0; i < M * N * meshRow * meshCol; i++) {
+                //             if (local_d8[i] !=
+                //                 D8_golden[i +
+                //                           m * N2 * M * N * meshRow * meshCol
+                //                           + n * M * N * meshRow * meshCol]) {
+                //                 err++;
+                //                 // printf(
+                //                 //     "SNAX GEMM Matmul failed to verify the
+                //                 "
+                //                 //     "computed data at index %d, expected
+                //                 %d "
+                //                 //     "but got %d \r\n",
+                //                 //     i,
+                //                 //     D8_golden[i +
+                //                 //               m * N2 * M * N * meshRow *
+                //                 //                   meshCol +
+                //                 //               n * M * N * meshRow *
+                //                 meshCol],
+                //                 //     local_d8[i]);
+                //             }
+                //         }
+                //     } else {
+                //         printf(
+                //             "start to verify the computed data for D32
+                //             \r\n");
+                //         // printf("m = %d, n = %d \r\n", m, n);
+                //         for (int i = 0; i < M * N * meshRow * meshCol; i++) {
+                //             if (local_d32[i] !=
+                //                 D32_golden[i +
+                //                            m * N2 * M * N * meshRow * meshCol
+                //                            + n * M * N * meshRow * meshCol])
+                //                            {
+                //                 err++;
+                //                 printf(
+                //                     "SNAX GEMM Matmul failed to verify the "
+                //                     "computed data at index %d, at address =
+                //                     "
+                //                     "%p, expected %d but got %d \r\n",
+                //                     i,
+                //                     &D32_golden[i +
+                //                                 m * N2 * M * N * meshRow *
+                //                                     meshCol +
+                //                                 n * M * N * meshRow *
+                //                                 meshCol],
+                //                     D32_golden[i +
+                //                                m * N2 * M * N * meshRow *
+                //                                    meshCol +
+                //                                n * M * N * meshRow *
+                //                                meshCol],
+                //                     local_d32[i]);
+                //             }
+                //         }
+                //     }
+
+                //     printf(
+                //         "SNAX GEMM Matmul: %s, Error: %d . bypassSIMD = %d,
+                //         m= "
+                //         "%d, n= %d \n",
+                //         err ? "FAIL" : "PASS", err, bypassSIMD, m, n);
+                // }
+
                 snrt_cluster_hw_barrier();
 
-                // check the result of the implicit im2col convolution
-                if (snrt_cluster_core_idx() == 0) {
-                    if (!bypassSIMD) {
-                        for (int i = 0; i < M * N * meshRow * meshCol; i++) {
-                            if (local_d8[i] !=
-                                D8_golden[i +
-                                          m * N2 * M * N * meshRow * meshCol +
-                                          n * M * N * meshRow * meshCol]) {
-                                err++;
-                                // printf(
-                                //     "SNAX GEMM Matmul failed to verify the "
-                                //     "computed data at index %d, expected %d "
-                                //     "but got %d \r\n",
-                                //     i,
-                                //     D8_golden[i +
-                                //               m * N2 * M * N * meshRow *
-                                //                   meshCol +
-                                //               n * M * N * meshRow * meshCol],
-                                //     local_d8[i]);
-                            }
-                        }
-                    } else {
-                        printf(
-                            "start to verify the computed data for D32 \r\n");
-                        // printf("m = %d, n = %d \r\n", m, n);
-                        for (int i = 0; i < M * N * meshRow * meshCol; i++) {
-                            if (local_d32[i] !=
-                                D32_golden[i +
-                                           m * N2 * M * N * meshRow * meshCol +
-                                           n * M * N * meshRow * meshCol]) {
-                                err++;
-                                printf(
-                                    "SNAX GEMM Matmul failed to verify the "
-                                    "computed data at index %d, at address = "
-                                    "%p, expected %d but got %d \r\n",
-                                    i,
-                                    &D32_golden[i +
-                                                m * N2 * M * N * meshRow *
-                                                    meshCol +
-                                                n * M * N * meshRow * meshCol],
-                                    D32_golden[i +
-                                               m * N2 * M * N * meshRow *
-                                                   meshCol +
-                                               n * M * N * meshRow * meshCol],
-                                    local_d32[i]);
-                            }
-                        }
-                    }
-
-                    printf(
-                        "SNAX GEMM Matmul: %s, Error: %d . bypassSIMD = %d, m= "
-                        "%d, n= %d \n",
-                        err ? "FAIL" : "PASS", err, bypassSIMD, m, n);
-                }
-
-                snrt_cluster_hw_barrier();
-
+                // load the result to the L3
                 if (snrt_is_dm_core()) {
                     snrt_dma_start_1d(
                         D32_generated + m * N2 * M * N * meshRow * meshCol +
                             n * M * N * meshRow * meshCol,
-                        local_d32, M * N * meshRow * meshCol * sizeof(int32_t));
+                        local_d32, M * N * meshRow * meshCol *
+                        sizeof(int32_t));
                     snrt_dma_wait_all();
                 }
+
+                snrt_cluster_hw_barrier();
+
             }
         }
-        return err;
-    } else
-        return 0;
+
+        end_cycle = snrt_mcycle();
+
+        if (snrt_cluster_core_idx() == 0){
+            for (int i = 0; i < 10; i++){
+                printf("Total cycles from mcycle: %d \r\n", end_cycle - start_cycle);
+            }
+        }
+
+        snrt_cluster_hw_barrier();
+
+        return_to_cva6_single_cluster(err);
+    }
 }

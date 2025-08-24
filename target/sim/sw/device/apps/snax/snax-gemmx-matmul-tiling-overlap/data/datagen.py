@@ -394,6 +394,9 @@ def emit_gemmx_data(**kwargs):
 
     data_str += [format_vector_definition("int8_t", "D8_golden", D8)]
 
+    D8_zero = np.zeros_like(D8, dtype=np.uint8)
+    data_str += [format_vector_definition("int8_t", "D8_generated", D8_zero)]
+
     data_str += [format_scalar_definition("int32_t", "set_addr_remap_index_A", 0)]
     data_str += [format_scalar_definition("int32_t", "set_addr_remap_index_B", 0)]
     data_str += [format_scalar_definition("int32_t", "set_addr_remap_index_C", 0)]
