@@ -35,6 +35,7 @@ DEVICE_DIR  = $(abspath $(HOST_DIR)/../device)
 DEVICE_APPS += snax/snax-gemmx-clean-test
 DEVICE_APPS += snax/snax-gemmx-matmul
 DEVICE_APPS += snax/snax-gemmx-mha
+DEVICE_APPS += snax/snax-gemmx-resnet8
 DEVICE_APPS += snax/snax-gemmx-matmul-tiling-no-overlap
 DEVICE_APPS += snax/snax-gemmx-matmul-tiling-overlap
 DEVICE_APPS += snax/snax-gemmx-conv
