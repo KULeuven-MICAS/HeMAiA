@@ -474,6 +474,94 @@ int main() {
 
         snrt_cluster_hw_barrier();
 
+        // ---------------------------------------------------------------
+        // ---------------------------------------------------------------
+        // ---------------------------------------------------------------
+        // Data Reshuffler
+        // ---------------------------------------------------------------
+        // ---------------------------------------------------------------
+        // ---------------------------------------------------------------
+
+        // Put the input at the starting of tcdm
+        uint8_t *tcdm_in_dr = (uint8_t *)tcdm_baseaddress + delta_local_d8_fc;
+        // Put the output at the middle of tcdm
+        uint8_t *tcdm_out_dr = (uint8_t *)(tcdm_baseaddress + delta_local_out_dr);
+
+        if (snrt_is_dm_core()) {
+            // The xdma core is the last compute core in the cluster
+            uint32_t sstride_src_dr[1] = {0};
+            uint32_t sstride_dst_dr[1] = {0};
+            uint32_t tstride_src_dr[5] = {0};
+            uint32_t tbound_src_dr[5] = {0};
+            uint32_t tstride_dst_dr[3] = {0};
+            uint32_t tbound_dst_dr[3] = {0};
+
+            // Load the CFG from data.h
+            sstride_src_dr[0] = spatialStride1_in_dr;
+            sstride_dst_dr[0] = spatialStride1_out_dr;
+
+            tstride_src_dr[0] = tempStride0_in_dr;
+            tstride_src_dr[1] = tempStride1_in_dr;
+            tstride_src_dr[2] = tempStride2_in_dr;
+            tstride_src_dr[3] = tempStride3_in_dr;
+            tstride_src_dr[4] = tempStride4_in_dr;
+
+            tbound_src_dr[0] = tempLoop0_in_dr;
+            tbound_src_dr[1] = tempLoop1_in_dr;
+            tbound_src_dr[2] = tempLoop2_in_dr;
+            tbound_src_dr[3] = tempLoop3_in_dr;
+            tbound_src_dr[4] = tempLoop4_in_dr;
+
+            tstride_dst_dr[0] = tempStride0_out_dr;
+            tstride_dst_dr[1] = tempStride1_out_dr;
+            tstride_dst_dr[2] = tempStride2_out_dr;
+
+            tbound_dst_dr[0] = tempLoop0_out_dr;
+            tbound_dst_dr[1] = tempLoop1_out_dr;
+            tbound_dst_dr[2] = tempLoop2_out_dr;
+
+            // --------------------- Configure the Ext --------------------- //
+
+            if (xdma_disable_dst_ext(0) != 0) {
+                printf("Error in disabling xdma extension 0\r\n");
+                err++;
+            } else {
+                printf("The xdma extension 0 is disabled\r\n");
+            }
+
+            if (xdma_disable_dst_ext(1) != 0) {
+                printf("Error in disabling xdma extension 1\r\n");
+                err++;
+            } else {
+                printf("The xdma extension 1 is disabled\r\n");
+            }
+
+            if (xdma_enable_dst_ext(2, NULL) != 0) {
+                printf("Error in enabling xdma extension 2\r\n");
+                err++;
+            } else {
+                printf("The xdma extension 2 is enabled\r\n");
+            }
+
+            // --------------------- Configure the AGU --------------------- //
+
+            xdma_memcpy_nd(tcdm_in_dr, tcdm_out_dr, sstride_src_dr, sstride_dst_dr, 5,
+                           tstride_src_dr, tbound_src_dr, 3, tstride_dst_dr, tbound_dst_dr,
+                           0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF);
+            start_cycle = snrt_mcycle();
+
+            int task_id = xdma_start();
+            xdma_wait(task_id);
+
+            end_cycle = snrt_mcycle();
+
+            printf("[Data Reshuffler]-XDMA cycle from mcycle: %d \r\n",
+                   end_cycle - start_cycle);
+
+        }
+
+        snrt_cluster_hw_barrier();
+
         return_to_cva6_single_cluster(err);
     }
 }
