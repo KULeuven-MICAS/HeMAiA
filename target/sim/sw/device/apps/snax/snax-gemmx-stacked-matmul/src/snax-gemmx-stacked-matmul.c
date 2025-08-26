@@ -132,7 +132,7 @@ start_cycle = snrt_mcycle();
         int8_t *local_d8_2nd_layer;
 
         // Allocate space in TCDM
-        local_a_2nd_layer = (int8_t *)(snrt_l1_next() + delta_local_a_2nd_layer);
+        local_a_2nd_layer = (int8_t *)(snrt_l1_next() + delta_local_d8);
         local_b_2nd_layer = (int8_t *)(snrt_l1_next() + delta_local_b_2nd_layer);
         local_c_2nd_layer = (int32_t *)(snrt_l1_next() + delta_local_c_2nd_layer);
         local_d32_2nd_layer = (int32_t *)(snrt_l1_next() + delta_local_d32_2nd_layer);
