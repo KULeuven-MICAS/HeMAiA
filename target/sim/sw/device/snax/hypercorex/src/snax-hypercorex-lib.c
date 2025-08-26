@@ -198,6 +198,57 @@ uint32_t hypercorex_is_core_busy(void) {
     return csrr_ss(HYPERCOREX_CORE_SET_REG_ADDR);
 };
 
+void hypercorex_pack_512b(
+    uint32_t vec_num,
+    uint32_t *tcdm_super_bank_1,
+    uint32_t *tcdm_super_bank_3
+){
+    int32_t main32b;
+    int8_t sub8b;
+    uint32_t sub32b_hv;
+    uint32_t hv_32b_cnt;
+    // num_hv_rows is how many HV in int8 needs to be processed
+    for (uint32_t num_hv_rows = 0; num_hv_rows < vec_num; num_hv_rows++){
+        // num_super_bank_rows is the number of super bank rows for 1 HV
+        hv_32b_cnt = 1;
+        for (uint32_t num_super_bank_rows = 0; num_super_bank_rows < 8; num_super_bank_rows++){
+            // super_bank_sub_32b_idx is the index of an entire 32b data in onw super bank row
+            // there are 8 banks in 1 super bank. the first 4 banks (3:0) gives one 32b chunk.
+            // the 2nd 4 banks (7:4) gives the second 32b chunk
+            for (uint32_t super_bank_sub_32b_idx = 0; super_bank_sub_32b_idx < 2; super_bank_sub_32b_idx++){
+                // Initialize extraction of sub32b HV
+                uint32_t sub32b_hv = 0;
+                // bank_sub_32b_idx is the bank number of the first 4 banks.
+                // Note that the first 4 banks have 8 32-bit values packed together
+                for (uint32_t bank_sub_32b_idx = 0; bank_sub_32b_idx < 8; bank_sub_32b_idx++){
+                    // Extract the 1st 32b data
+                    main32b = *(tcdm_super_bank_1 +         // Base address
+                                num_hv_rows*512 +           // HV stride for int32
+                                num_super_bank_rows*64 +    // Row per-super bank stride
+                                super_bank_sub_32b_idx*8 +  // Sub-super bank stride
+                                bank_sub_32b_idx);          // Per bank stride
+                    // Per 32b data there are 4 int8 data
+                    // This is where we combine the bits to make 1b data
+                    for (uint32_t sub_int8b_idx = 0; sub_int8b_idx < 4; sub_int8b_idx++){
+                        sub8b = (main32b >> (sub_int8b_idx * 8)) & 0x000000FF;
+                        if (sub8b >= 0){
+                            sub32b_hv = (sub32b_hv << 1) | 0x00000001;
+                        } else {
+                            sub32b_hv = (sub32b_hv << 1) | 0x00000000;
+                        }
+                    }
+                }
+                // Save it unto the proper banks
+                // Note that we have to reverse the order
+                // So we start at the end and fill it backwards
+                // As the hypercorex uses big endian
+                *(tcdm_super_bank_3 + num_hv_rows*64 - (1 * hv_32b_cnt)) = sub32b_hv;
+                hv_32b_cnt++;
+            }
+        }
+    }
+    return;
+};
 
 //-------------------------------
 // Data slicer functions

@@ -7,7 +7,8 @@
 # Add user applications to APPS variable automatically. This is located in the apps directory with depth of 2.
 
 # Now we only compile the snax apps
-APPDIR  = $(shell find apps/snax -mindepth 1 -maxdepth 1 -type d)
+# APPDIR  = $(shell find apps/snax -mindepth 1 -maxdepth 1 -type d)
+APPDIR = apps/snax/snax-nvsa
 TARGET ?= all
 
 
