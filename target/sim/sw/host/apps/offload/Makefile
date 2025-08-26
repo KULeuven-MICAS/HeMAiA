@@ -38,6 +38,7 @@ DEVICE_APPS += snax/snax-gemmx-mha
 DEVICE_APPS += snax/snax-gemmx-matmul-tiling-no-overlap
 DEVICE_APPS += snax/snax-gemmx-matmul-tiling-overlap
 DEVICE_APPS += snax/snax-gemmx-conv
+DEVICE_APPS += snax/snax-gemmx-stacked-matmul
 DEVICE_APPS += snax/snax-test-integration
 DEVICE_APPS += snax/snax-hypercorex-test-csr
 DEVICE_APPS += snax/snax-hypercorex-char-recog
