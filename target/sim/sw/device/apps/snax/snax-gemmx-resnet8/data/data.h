@@ -65285,3 +65285,45 @@ int8_t B_fc[32768]  = {
 	-34,
 	85,
 };
+
+// input
+int32_t tempLoop0_in_dr = 8;
+
+int32_t tempLoop1_in_dr = 1;
+
+int32_t tempLoop2_in_dr = 1;
+
+int32_t tempLoop3_in_dr = 1;
+
+int32_t tempLoop4_in_dr = 8;
+
+int32_t spatialStride1_in_dr = 512;
+
+int32_t tempStride0_in_dr = 64;
+
+int32_t tempStride1_in_dr = 0;
+
+int32_t tempStride2_in_dr = 0;
+
+int32_t tempStride3_in_dr = 0;
+
+int32_t tempStride4_in_dr = 0;
+
+// output
+int32_t tempLoop0_out_dr = 1;
+
+int32_t tempLoop1_out_dr = 1;
+
+int32_t tempLoop2_out_dr = 8;
+
+int32_t output_data_len_dr = 512;
+
+int32_t delta_local_out_dr = 6272;
+
+int32_t spatialStride1_out_dr = 8;
+
+int32_t tempStride0_out_dr = 64;
+
+int32_t tempStride1_out_dr = 64;
+
+int32_t tempStride2_out_dr = 64;

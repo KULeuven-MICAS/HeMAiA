@@ -20,7 +20,7 @@ RISCV_LDFLAGS += ../../../snax/xdma/build/snax-xdma-lib.o
 
 SRCS    = src/snax-gemmx-resnet8.c
 
-include ./data/Makefile
+# include ./data/Makefile
 include ../../common.mk
 
 $(DEP): $(DATA_H)
