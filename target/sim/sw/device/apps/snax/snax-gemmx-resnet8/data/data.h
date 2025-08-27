@@ -32353,7 +32353,7 @@ int32_t reduceLen = 49;
 
 int Batch_fc = 1;
 
-int M_fc = 1;
+int M_fc = 4;
 
 int K_fc = 8;
 
@@ -32371,7 +32371,7 @@ int32_t Atlbound1_fc = 64;
 
 int32_t Atlstride1_fc = 0;
 
-int32_t Atlbound2_fc = 1;
+int32_t Atlbound2_fc = 4;
 
 int32_t Atlstride2_fc = 512.0;
 
@@ -32399,7 +32399,7 @@ int32_t Btlbound1_fc = 64;
 
 int32_t Btlstride1_fc = 512.0;
 
-int32_t Btlbound2_fc = 1;
+int32_t Btlbound2_fc = 4;
 
 int32_t Btlstride2_fc = 0;
 
@@ -32411,7 +32411,7 @@ int32_t Ctlbound0_fc = 64;
 
 int32_t Ctlstride0_fc = 256.0;
 
-int32_t Ctlbound1_fc = 1;
+int32_t Ctlbound1_fc = 4;
 
 int32_t Ctlstride1_fc = 16384.0;
 
@@ -32427,7 +32427,7 @@ int32_t D32tlbound0_fc = 64;
 
 int32_t D32tlstride0_fc = 256.0;
 
-int32_t D32tlbound1_fc = 1;
+int32_t D32tlbound1_fc = 4;
 
 int32_t D32tlstride1_fc = 16384.0;
 
@@ -32443,7 +32443,7 @@ int32_t D8tlbound0_fc = 64;
 
 int32_t D8tlstride0_fc = 64.0;
 
-int32_t D8tlbound1_fc = 1;
+int32_t D8tlbound1_fc = 4;
 
 int32_t D8tlstride1_fc = 4096.0;
 
@@ -32453,13 +32453,13 @@ int32_t D8tlstride2_fc = 0;
 
 int32_t delta_local_a_fc = 0;
 
-int32_t delta_local_b_fc = 512.0;
+int32_t delta_local_b_fc = 2048.0;
 
-int32_t delta_local_c_fc = 33280.0;
+int32_t delta_local_c_fc = 34816.0;
 
-int32_t delta_local_d32_fc = 49664.0;
+int32_t delta_local_d32_fc = 67584.0;
 
-int32_t delta_local_d8_fc = 49664.0;
+int32_t delta_local_d8_fc = 67584.0;
 
 int8_t subtraction_a_fc = -26;
 
@@ -32475,9 +32475,9 @@ int32_t transposed_B_fc = 0;
 
 int32_t bypassSIMD_fc = 0;
 
-int8_t input_zp_i_fc = -65;
+int8_t input_zp_i_fc = 45;
 
-int8_t output_zp_i_fc = -64;
+int8_t output_zp_i_fc = -49;
 
 int8_t max_int_i_fc = 127;
 
@@ -32485,25 +32485,25 @@ int8_t min_int_i_fc = -128;
 
 int8_t double_round_i_fc = 0;
 
-int32_t shared_bitpacked_shift0_fc = 588778812;
+int32_t shared_bitpacked_shift0_fc = 574097964;
 
-int32_t shared_bitpacked_shift1_fc = 67250211;
+int32_t shared_bitpacked_shift1_fc = 16915207;
 
-int32_t shared_multiplier0_fc = -1252922048;
+int32_t shared_multiplier0_fc = 1672846772;
 
-int32_t shared_multiplier1_fc = 1028264373;
+int32_t shared_multiplier1_fc = 387263181;
 
-int32_t shared_multiplier2_fc = 466306066;
+int32_t shared_multiplier2_fc = 817733171;
 
-int32_t shared_multiplier3_fc = -1819985696;
+int32_t shared_multiplier3_fc = -719926948;
 
-int32_t shared_multiplier4_fc = 957777513;
+int32_t shared_multiplier4_fc = -1522897228;
 
-int32_t shared_multiplier5_fc = 1807171125;
+int32_t shared_multiplier5_fc = 1061089205;
 
-int32_t shared_multiplier6_fc = -541852707;
+int32_t shared_multiplier6_fc = 391507758;
 
-int32_t shared_multiplier7_fc = 2034129355;
+int32_t shared_multiplier7_fc = 499476994;
 
 int32_t set_addr_remap_index_A_fc = 0;
 
@@ -65289,7 +65289,7 @@ int8_t B_fc[32768]  = {
 // input
 int32_t tempLoop0_in_dr = 8;
 
-int32_t tempLoop1_in_dr = 1;
+int32_t tempLoop1_in_dr = 4;
 
 int32_t tempLoop2_in_dr = 1;
 
@@ -65312,7 +65312,7 @@ int32_t tempStride4_in_dr = 0;
 // output
 int32_t tempLoop0_out_dr = 8;
 
-int32_t tempLoop1_out_dr = 1;
+int32_t tempLoop1_out_dr = 4;
 
 int32_t tempLoop2_out_dr = 1;
 
@@ -65324,6 +65324,6 @@ int32_t spatialStride1_out_dr = 8;
 
 int32_t tempStride0_out_dr = 64;
 
-int32_t tempStride1_out_dr = 64;
+int32_t tempStride1_out_dr = 8;
 
 int32_t tempStride2_out_dr = 64;
