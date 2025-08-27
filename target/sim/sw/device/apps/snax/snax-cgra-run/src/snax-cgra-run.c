@@ -56,7 +56,7 @@ int main() {
 		snrt_cluster_hw_barrier();
 
 		// testing csr -> cgra
-		if (snrt_is_compute_core()) {
+		if (snrt_cluster_core_idx() == 0) {
 			printf ("hello world!\r\n\r\n");
 
 			launch_cgra_0(delta_config_data, delta_comp_data, delta_store_data);
@@ -90,7 +90,17 @@ int main() {
 				if (local_d16[i*4] != COMP_DATA_REF[i]) err_counter++;
 			}
 			printf("\tErrors: %d\r\n", err_counter);
-			return err_counter;
-		} else return 0;
-	} else return 0;
+		} 
+
+		snrt_cluster_hw_barrier();
+		// return_to_cva6_single_cluster(err_counter);
+
+        if (snrt_cluster_core_idx() == 0){
+            return_to_cva6_single_cluster(err_counter);
+        }
+
+		// snrt_cluster_hw_barrier();
+	} 
+
+	// return 0;
 }
