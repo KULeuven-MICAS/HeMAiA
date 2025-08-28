@@ -10,4 +10,6 @@
 #include "stdint.h"
 #include "streamer_csr_addr_map.h"
 
-void launch_cgra_0(int32_t delta_config_data, int32_t delta_comp_data, int32_t delta_store_data);
+void cgra_hw_barrier(int t_stage, int threshold, bool verbose, bool quiet);
+void cgra_hw_barrier_fast(int t_stage, int threshold);
+void cgra_hw_profiler();
