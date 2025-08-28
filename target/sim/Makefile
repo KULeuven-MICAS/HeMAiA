@@ -251,11 +251,11 @@ $(VCS_BUILDDIR)/compile.sh: $(BENDER_LOCK) | $(VCS_BUILDDIR) testharness/testhar
 	chmod +x $@
 
 $(BIN_DIR)/occamy_chip.vcs: $(VCS_BUILDDIR)/compile.sh
-	bash work-vcs/compile.sh
+	bash work-vcs/compile.sh | tee $(dir $<)vcs_compile.log
 	mkdir -p $(BIN_DIR)
 	$(VCS) $(VCS_FLAGS) -o $(BIN_DIR)/occamy_chip.vcs -cc $(CC) -cpp $(CXX) \
 		-override_timescale=1ns/1ps -full64 -ignore initializer_driver_checks testharness $(TB_CC_SOURCES) $(RTL_CC_SOURCES) \
-		-CFLAGS "$(TB_CC_FLAGS)" -lutil +error+100
+		-CFLAGS "$(TB_CC_FLAGS)" -lutil +error+100 | tee $(dir $<)vcs.log
 .PHONY: clean-vcs
 clean-vcs: clean-work
 	rm -rf $(VCS_BUILDDIR) AN.DB work.lib++ vc_hdrs.h $(BIN_DIR)/$(TARGET).vcs $(BIN_DIR)/inter.fsdb $(BIN_DIR)/$(TARGET).vcs.daidir $(BIN_DIR)/verdi_config_file $(BIN_DIR)/verdiLog $(BIN_DIR)/novas* $(BIN_DIR)/ucli.key

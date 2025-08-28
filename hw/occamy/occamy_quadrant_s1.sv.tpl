@@ -686,6 +686,7 @@ module ${name}_quadrant_s1
   ${cluster_name}_wrapper i_${name}_cluster_${i} (
     .clk_i               (clk_quadrant_cluster[${i}]),
     .rst_ni              (rst_quadrant_n),
+    .obs_o               (/* Not Connected*/),
     .meip_i              (meip_i[NrCoresClusterOffset[${i}]+:NrCoresCluster[${i}]]),
     .mtip_i              (mtip_i[NrCoresClusterOffset[${i}]+:NrCoresCluster[${i}]]),
     .msip_i              (msip_i[NrCoresClusterOffset[${i}]+:NrCoresCluster[${i}]]),
@@ -716,6 +717,7 @@ module ${name}_quadrant_s1
   ${cluster_name}_wrapper i_${name}_cluster_${i} (
     .clk_i               (clk_quadrant_cluster[${i}]),
     .rst_ni              (rst_quadrant_n),
+    .obs_o               (/* Not Connected*/),
     .meip_i              (meip_i[NrCoresClusterOffset[${i}]+:NrCoresCluster[${i}]]),
     .mtip_i              (mtip_i[NrCoresClusterOffset[${i}]+:NrCoresCluster[${i}]]),
     .msip_i              (msip_i[NrCoresClusterOffset[${i}]+:NrCoresCluster[${i}]]),
