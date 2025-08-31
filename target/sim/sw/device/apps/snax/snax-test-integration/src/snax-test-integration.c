@@ -14,6 +14,9 @@
 #include "snrt.h"
 int8_t* tcdm0_start_addr;
 int8_t* tcdm1_start_addr;
+int8_t* tcdm2_start_addr;
+int8_t* tcdm3_start_addr;
+
 int main() {
     int err = 0;
     // First set the addr of cluster 0
@@ -33,13 +36,37 @@ int main() {
             printf("The C1 TCDM ADDR is %p \r\n", tcdm1_start_addr);
         }
     }
+
     snrt_global_barrier();
+
+    if (snrt_cluster_idx() == 2) {
+        if (snrt_is_dm_core()) {
+            tcdm2_start_addr = (int8_t*)snrt_cluster_base_addrl();
+            printf("The C2 TCDM ADDR is %p \r\n", tcdm2_start_addr);
+        }
+    }
+
+    snrt_global_barrier();
+
+    if (snrt_cluster_idx() == 3) {
+        if (snrt_is_dm_core()) {
+            tcdm3_start_addr = (int8_t*)snrt_cluster_base_addrl();
+            printf("The C3 TCDM ADDR is %p \r\n", tcdm3_start_addr);
+        }
+    }
+
+    snrt_global_barrier();
+
     // C0 Load the data from l3 -> l1
     if (snrt_cluster_idx() == 0) {
         if (snrt_is_dm_core()) {
+            
             printf("[C0] Start to load data from %p\r\n", test_data);
+            uint32_t dma_start = snrt_mcycle();
             snrt_dma_start_1d(tcdm0_start_addr, test_data, length_data);
             snrt_dma_wait_all();
+            uint32_t dma_end = snrt_mcycle();
+            printf("[C0] DMA transfer time: %d cycles\r\n", dma_end - dma_start);
         }
     }
     // wait the C0 is done
@@ -48,12 +75,46 @@ int main() {
     // Thenc C1 fetches data from C0
     if (snrt_cluster_idx() == 1) {
         if (snrt_is_dm_core()) {
+            
             printf("[C1] Load data from C0 TCDM %p\r\n", tcdm0_start_addr);
+            uint32_t dma_start = snrt_mcycle();
             snrt_dma_start_1d(tcdm1_start_addr, tcdm0_start_addr, length_data);
             snrt_dma_wait_all();
+            uint32_t dma_end = snrt_mcycle();
+            printf("[C1] DMA transfer time: %d cycles\r\n", dma_end - dma_start);
         }
     }
     // wait the C1 is done
+    snrt_global_barrier();
+
+    // Thenc C2 fetches data from C1
+    if (snrt_cluster_idx() == 2) {
+        if (snrt_is_dm_core()) {
+            
+            printf("[C2] Load data from C1 TCDM %p\r\n", tcdm1_start_addr);
+            uint32_t dma_start = snrt_mcycle();
+            snrt_dma_start_1d(tcdm2_start_addr, tcdm1_start_addr, length_data);
+            snrt_dma_wait_all();
+            uint32_t dma_end = snrt_mcycle();
+            printf("[C2] DMA transfer time: %d cycles\r\n", dma_end - dma_start);
+        }
+    }
+    // wait the C2 is done
+    snrt_global_barrier();
+
+    // Thenc C3 fetches data from C2
+    if (snrt_cluster_idx() == 3) {
+        if (snrt_is_dm_core()) {
+            
+            printf("[C3] Load data from C2 TCDM %p\r\n", tcdm2_start_addr);
+            uint32_t dma_start = snrt_mcycle();
+            snrt_dma_start_1d(tcdm3_start_addr, tcdm2_start_addr, length_data);
+            snrt_dma_wait_all();
+            uint32_t dma_end = snrt_mcycle();
+            printf("[C3] DMA transfer time: %d cycles\r\n", dma_end - dma_start);
+        }
+    }
+    // wait the C3 is done
     snrt_global_barrier();
 
     // Start to check
@@ -81,6 +142,38 @@ int main() {
                     printf("C1 data is incorrect!\r\n");
                     printf("tcdm0[%d]=%d, test_data[%d]=%d\r\n", i,
                            tcdm1_start_addr[i], i, test_data[i]);
+                    return -1;
+                }
+            }
+        }
+    }
+
+    snrt_global_barrier();
+    if (snrt_cluster_idx() == 2) {
+        if (snrt_cluster_core_idx() == 0) {
+            printf("C2 Checking the results\r\n");
+            for (int i = 0; i < length_data; i++) {
+                if (tcdm2_start_addr[i] != test_data[i]) {
+                    err++;
+                    printf("C2 data is incorrect!\r\n");
+                    printf("tcdm2[%d]=%d, test_data[%d]=%d\r\n", i,
+                           tcdm2_start_addr[i], i, test_data[i]);
+                    return -1;
+                }
+            }
+        }
+    }
+
+    snrt_global_barrier();
+    if (snrt_cluster_idx() == 3) {
+        if (snrt_cluster_core_idx() == 0) {
+            printf("C3 Checking the results\r\n");
+            for (int i = 0; i < length_data; i++) {
+                if (tcdm3_start_addr[i] != test_data[i]) {
+                    err++;
+                    printf("C3 data is incorrect!\r\n");
+                    printf("tcdm3[%d]=%d, test_data[%d]=%d\r\n", i,
+                           tcdm3_start_addr[i], i, test_data[i]);
                     return -1;
                 }
             }

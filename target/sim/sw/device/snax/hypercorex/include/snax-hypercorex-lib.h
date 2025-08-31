@@ -116,3 +116,10 @@ void hypercorex_set_auto_counter_num_b(uint32_t num_counter);
 void hypercorex_start_core(void);
 
 uint32_t hypercorex_is_core_busy(void);
+
+void hypercorex_pack_512b(
+    uint32_t vec_num,
+    uint32_t *tcdm_super_bank_1,
+    uint32_t *tcdm_super_bank_3
+);
+  
