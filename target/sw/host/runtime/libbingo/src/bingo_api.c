@@ -37,8 +37,7 @@ void bingo_task_offload(bingo_task_t *task, HeroDev *dev) {
     // 2. Write the Task Id to Dev
     // 3. Write the kernel function address to Dev
     // 4. Write the kernel function args address to Dev
-    printf("[Host] Offloading task %d to cluster %d with function pointer 0x%x and args pointer 0x%x\n",
-            task->task_id, task->assigned_cid, task->fn_ptr, task->args_ptr);
+    printf("[Host] Offloading task %d to cluster %d with function pointer 0x%x and args pointer 0x%x\n", task->task_id, task->assigned_cid, task->fn_ptr, task->args_ptr);
     hero_dev_mbox_write(dev, (uint32_t)DEV_START);
     hero_dev_mbox_write(dev, (uint32_t)(task->task_id));
     hero_dev_mbox_write(dev, (uint32_t)(task->fn_ptr));

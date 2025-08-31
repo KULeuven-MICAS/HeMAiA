@@ -10,8 +10,8 @@
 // static volatile void* occ_quad_ctrl;
 static volatile void* occ_soc_ctrl;
 static volatile void* occ_snitch_cluster;
-static volatile void* occ_l2;
-static volatile void* occ_l3;
+static volatile void* occ_l2_heap;
+static volatile void* occ_l3_heap;
 // static volatile void* occ_clint;
 
 struct __attribute__((packed, aligned(4))) l2_layout {
@@ -23,8 +23,7 @@ struct __attribute__((packed, aligned(4))) l2_layout {
 
 // Temporary set a hard value
 
-#define L2_OFFSET 0x1000 // The L2 heap starts from 4KB
-#define L3_OFFSET 0x8000 // The L3 heap starts from 32KB
+#define L2_OFFSET NARROW_SPM_MAILBOX_SIZE // Leave the space for the mailbox
 #define SPM_NARROW_SIZE NARROW_SPM_SIZE
 #define SPM_WIDE_SIZE WIDE_SPM_SIZE
 #define SNITCH_TCDM_SIZE CLUSTER_TCDM_SIZE
@@ -47,3 +46,5 @@ struct __attribute__((packed, aligned(4))) l2_layout {
 // #define SCTL_SCRATCH_1_REG_OFFSET 0x18
 // #define SCTL_SCRATCH_2_REG_OFFSET 0x1c
 // #define SCTL_SCRATCH_3_REG_OFFSET 0x20
+
+extern uint64_t __l3_heap_start;

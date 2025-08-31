@@ -12,9 +12,14 @@
 //////////////////////////////
 
 // Stucture containing the *device* L2 and L3 allocator
-struct O1HeapInstance *l2_heap_manager, *l3_heap_manager;
+struct O1HeapInstance *l2_heap_manager, *l2_mailbox_manager, *l3_heap_manager;
+
+uintptr_t l2_mailbox_start_phy, l2_mailbox_start_virt;
+size_t l2_mailbox_size;
+
 uintptr_t l2_heap_start_phy, l2_heap_start_virt;
 size_t l2_heap_size;
+
 uintptr_t l3_heap_start_phy, l3_heap_start_virt;
 size_t l3_heap_size;
 
@@ -26,17 +31,17 @@ int hero_dev_alloc_mboxes(HeroDev *dev) {
     pr_trace("%s default\n", __func__);
 
     // Alloc ringbuf structure
-    dev->mboxes.h2a_mbox = (struct ring_buf *)hero_dev_l2_malloc(dev, sizeof(struct ring_buf), &dev->mboxes.h2a_mbox_mem.p_addr);
+    dev->mboxes.h2a_mbox = (struct ring_buf *)hero_dev_l2_mailbox_malloc(dev, sizeof(struct ring_buf), &dev->mboxes.h2a_mbox_mem.p_addr);
     // Alloc data array for ringbuf
-    dev->mboxes.h2a_mbox->data_v = hero_dev_l2_malloc(dev, sizeof(uint32_t)*16, (uintptr_t *)&dev->mboxes.h2a_mbox->data_p);
+    dev->mboxes.h2a_mbox->data_v = hero_dev_l2_mailbox_malloc(dev, sizeof(uint32_t)*16, (uintptr_t *)&dev->mboxes.h2a_mbox->data_p);
 
-    // Same for the accel2host mailbox
-    dev->mboxes.a2h_mbox = (struct ring_buf *)hero_dev_l2_malloc(dev, sizeof(struct ring_buf), &dev->mboxes.a2h_mbox_mem.p_addr);
-    dev->mboxes.a2h_mbox->data_v = hero_dev_l2_malloc(dev, sizeof(uint32_t)*16, (uintptr_t *)&dev->mboxes.a2h_mbox->data_p);
+    // Same for the acc2host mailbox
+    dev->mboxes.a2h_mbox = (struct ring_buf *)hero_dev_l2_mailbox_malloc(dev, sizeof(struct ring_buf), &dev->mboxes.a2h_mbox_mem.p_addr);
+    dev->mboxes.a2h_mbox->data_v = hero_dev_l2_mailbox_malloc(dev, sizeof(uint32_t)*16, (uintptr_t *)&dev->mboxes.a2h_mbox->data_p);
 
-    // Same for the rb mailbox
-    dev->mboxes.rb_mbox = (struct ring_buf *)hero_dev_l2_malloc(dev, sizeof(struct ring_buf), &dev->mboxes.rb_mbox_mem.p_addr);
-    dev->mboxes.rb_mbox->data_v = hero_dev_l2_malloc(dev, sizeof(uint32_t)*16, (uintptr_t *)&dev->mboxes.rb_mbox->data_p);
+    // Same for the acc2host ringbug mailbox
+    dev->mboxes.rb_mbox = (struct ring_buf *)hero_dev_l2_mailbox_malloc(dev, sizeof(struct ring_buf), &dev->mboxes.rb_mbox_mem.p_addr);
+    dev->mboxes.rb_mbox->data_v = hero_dev_l2_mailbox_malloc(dev, sizeof(uint32_t)*16, (uintptr_t *)&dev->mboxes.rb_mbox->data_p);
 
     if(!dev->mboxes.a2h_mbox || !dev->mboxes.h2a_mbox || !dev->mboxes.rb_mbox) {
         return -1;
@@ -47,6 +52,12 @@ int hero_dev_alloc_mboxes(HeroDev *dev) {
     rb_init(dev->mboxes.rb_mbox, 16, sizeof(uint32_t));
 
     return 0;
+}
+
+
+void hero_dev_l2_mailbox_free(HeroDev *dev, uintptr_t v_addr, uintptr_t p_addr) {
+    pr_trace("%p - %p\n", l2_mailbox_manager, v_addr);
+    o1heapFree(l2_mailbox_manager, (void*)v_addr);
 }
 
 void hero_dev_l2_free(HeroDev *dev, uintptr_t v_addr, uintptr_t p_addr) {
@@ -64,14 +75,14 @@ void hero_dev_l3_free(HeroDev *dev, uintptr_t v_addr, uintptr_t p_addr) {
 int hero_dev_free_mboxes(HeroDev *dev) {
     pr_trace("%s default\n", __func__);
 
-    hero_dev_l2_free(dev, (uintptr_t)dev->mboxes.h2a_mbox->data_v, 0);
-    hero_dev_l2_free(dev, (uintptr_t)dev->mboxes.h2a_mbox, 0);
+    hero_dev_l2_mailbox_free(dev, (uintptr_t)dev->mboxes.h2a_mbox->data_v, 0);
+    hero_dev_l2_mailbox_free(dev, (uintptr_t)dev->mboxes.h2a_mbox, 0);
 
-    hero_dev_l2_free(dev, (uintptr_t)dev->mboxes.a2h_mbox->data_v, 0);
-    hero_dev_l2_free(dev, (uintptr_t)dev->mboxes.a2h_mbox, 0);
+    hero_dev_l2_mailbox_free(dev, (uintptr_t)dev->mboxes.a2h_mbox->data_v, 0);
+    hero_dev_l2_mailbox_free(dev, (uintptr_t)dev->mboxes.a2h_mbox, 0);
 
-    hero_dev_l2_free(dev, (uintptr_t)dev->mboxes.rb_mbox->data_v, 0);
-    hero_dev_l2_free(dev, (uintptr_t)dev->mboxes.rb_mbox, 0);
+    hero_dev_l2_mailbox_free(dev, (uintptr_t)dev->mboxes.rb_mbox->data_v, 0);
+    hero_dev_l2_mailbox_free(dev, (uintptr_t)dev->mboxes.rb_mbox, 0);
 
     return 0;
 }
@@ -79,9 +90,9 @@ int hero_dev_free_mboxes(HeroDev *dev) {
 int hero_dev_mbox_try_read(const HeroDev *dev, uint32_t *buffer){
     pr_trace("%s default\n", __func__);
     int ret;
-    asm volatile("fence" : : : "memory");
+    // If this region is cached and no cache coherency, need a fence
+    // asm volatile("fence" : : : "memory");
     ret = rb_host_get(dev->mboxes.a2h_mbox, buffer) == 0 ? 1 : 0;
-    asm volatile("fence" : : : "memory");
     return ret;
 }
 
@@ -92,9 +103,8 @@ int hero_dev_mbox_read(const HeroDev *dev, uint32_t *buffer, size_t n_words) {
     while (n_words--) {
         do {
         // If this region is cached and no cache coherency, need a fence
-            asm volatile("fence" : : : "memory");
+        // asm volatile("fence" : : : "memory");
             ret = rb_host_get(dev->mboxes.a2h_mbox, &buffer[n_words]);
-            asm volatile("fence" : : : "memory");
             if (ret) {
                 if (++retry == 10)
                     pr_warn("high retry on mbox read()\n");
@@ -114,12 +124,8 @@ int hero_dev_mbox_write(HeroDev *dev, uint32_t word) {
     int ret, retry = 0;
     do {
         // If this region is cached and no cache coherency, need a fence
-        asm volatile("fence" : : : "memory");
-#ifndef HOST_COHERENT_IO
-            asm volatile ("fence");
-#endif
+        // asm volatile("fence" : : : "memory");
         ret = rb_host_put(dev->mboxes.h2a_mbox, &word);
-        asm volatile ("fence" ::: "memory");
         if (ret) {
             if (++retry == 100)
                 pr_warn("high retry on mbox write()\n");
@@ -185,6 +191,25 @@ int hero_dev_exe_wait(const HeroDev *dev, uint32_t timeout_s) {
 
 int hero_dev_l2_init() {
     pr_trace("%s default\n", __func__);
+    // Initialize L2 mailbox manager in the beginning of the L2
+    if (!l2_mailbox_manager) {
+        if(!l2_mailbox_start_phy || !l2_mailbox_size) {
+            pr_error("%s does not know where to put the heap manager\n", __func__);
+            return -1;
+        }
+        pr_trace("Initializing o1heap at %p (%p) size %x\n", (void *) l2_mailbox_start_phy, (void *) l2_mailbox_start_virt, l2_mailbox_size);
+        l2_mailbox_manager = o1heapInit((void *) l2_mailbox_start_virt, l2_mailbox_size);
+        if (l2_mailbox_manager == NULL) {
+            pr_error("Failed to initialize L2 mailbox manager.\n");
+            return -1;
+        } else {
+            pr_debug("Allocated L2 mailbox manager at %p.\n", l2_mailbox_manager);
+        }
+    } else {
+        pr_warn("%s is already initialized\n", __func__);
+    }
+
+
     // Initialize L2 heap manager in the middle of the reserved memory range
     if (!l2_heap_manager) {
         if(!l2_heap_start_phy || !l2_heap_size) {
@@ -226,6 +251,15 @@ int hero_dev_l3_init() {
     }
     return 0;
 }
+
+uintptr_t hero_dev_l2_mailbox_malloc(HeroDev *dev, uint32_t size_b, uintptr_t *p_addr) {
+    pr_trace("%p %x\n", l2_mailbox_manager, size_b);
+    void *result = o1heapAllocate(l2_mailbox_manager, size_b);
+    *p_addr = (uintptr_t)((void *) result - l2_mailbox_start_virt + l2_mailbox_start_phy);
+    pr_trace("%s Allocated %u bytes at %x (%p)\n", __func__, size_b, (void *) result - l2_mailbox_start_virt + l2_mailbox_start_phy, result);
+    return (uintptr_t)result;
+}
+
 
 uintptr_t hero_dev_l2_malloc(HeroDev *dev, uint32_t size_b, uintptr_t *p_addr) {
     pr_trace("%p %x\n", l2_heap_manager, size_b);

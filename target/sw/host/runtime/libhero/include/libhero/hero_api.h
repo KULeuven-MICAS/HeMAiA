@@ -113,7 +113,6 @@ typedef struct {
 typedef struct {
     void *dev;
     uint8_t dev_id;
-    HeroSubDev_t *local_mems;
     HeroSubDev_t *global_mems;
     char alias[32];
     HeroMboxes_t mboxes;
@@ -310,6 +309,8 @@ int hero_dev_exe_wait(const HeroDev *dev, uint32_t timeout_s);
 uintptr_t hero_dev_l3_malloc(HeroDev *dev, uint32_t size_b, uintptr_t *p_addr);
 
 uintptr_t hero_dev_l2_malloc(HeroDev *dev, uint32_t size_b, uintptr_t *p_addr);
+
+uintptr_t hero_dev_l2_mailbox_malloc(HeroDev *dev, uint32_t size_b, uintptr_t *p_addr);
 
 /** Allocate a DMA-able buffer host L3.
   \param    pulp   pointer to the HeroDev structure

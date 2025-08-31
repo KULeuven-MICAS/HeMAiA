@@ -54,9 +54,13 @@ SECTIONS
     __narrow_spm_end = ORIGIN(NARROW_SPM) + LENGTH(NARROW_SPM);
   } > WIDE_SPM
 
-  __end = .;
+  . = ALIGN(8);
+  __host_end = .;
 
   .devicebin : { *(.devicebin) } > WIDE_SPM
+  .l3_heap ALIGN(0x1000):{
+    __l3_heap_start = .;
+  } > WIDE_SPM
 
   /* Discard sections */
   /DISCARD/ : { *(.riscv.attributes) *(.comment) }

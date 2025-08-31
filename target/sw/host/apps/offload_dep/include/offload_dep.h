@@ -23,7 +23,6 @@ void host_init_dev() {
         HeroDev *dev = &dev_array[i];
         dev->dev = NULL;
         dev->dev_id = i;
-        dev->local_mems = NULL;
         dev->global_mems = NULL;
 
         char *alias = dev->alias;
@@ -70,8 +69,6 @@ void host_init_dev() {
         printf("[Host] Init the Dev %d\n", i);
         hero_dev_init(&dev_array[i]);
     }
-    // printf("[Host] Mailbox h2a[0] address = %x\n", dev_array[0].mboxes.h2a_mbox_mem.p_addr);
-    // printf("[Host] Mailbox h2a[1] address = %x\n", dev_array[1].mboxes.h2a_mbox_mem.p_addr);
 }
 
 // Kernel Execution
@@ -81,22 +78,25 @@ int test_kernel_execution(){
         dev_list[i] = &dev_array[i];
     }
     // Set up the kernel args
-    uint32_t dummy_args[] = {42};
+    // We allocate 1 arg for the dummy
+    uintptr_t dummy_args = hero_dev_l3_malloc(&dev_array[1], sizeof(uint32_t), NULL);
+    ((uint32_t*)dummy_args)[0] = 42;
+    
+    // There are 4 args for the load_compute_store
     uint32_t test_data_size = 8;
-    uintptr_t dummy_input_addr = hero_dev_l2_malloc(&dev_array[0], test_data_size*sizeof(uint32_t), NULL);
-    uintptr_t dummy_output_addr = hero_dev_l2_malloc(&dev_array[0], test_data_size*sizeof(uint32_t), NULL);
-    uint32_t* dummy_input_array = (uint32_t*)dummy_input_addr;
-    uint32_t* dummy_output_array = (uint32_t*)dummy_output_addr;
+    uintptr_t load_compute_store_args = hero_dev_l3_malloc(&dev_array[0], 4*sizeof(uint32_t), NULL);
+    uintptr_t load_compute_store_input_addr = hero_dev_l3_malloc(&dev_array[0], test_data_size*sizeof(uint32_t), NULL);
+    uintptr_t load_compute_store_output_addr = hero_dev_l3_malloc(&dev_array[0], test_data_size*sizeof(uint32_t), NULL);
     for (uint32_t i = 0; i < test_data_size; i++)
     {
-        dummy_input_array[i] = i;
+        ((uint32_t*)load_compute_store_input_addr)[i] = i;
     }
-    uint32_t load_compute_store_args[] = {
-        (uint32_t)dummy_input_addr, // Input data address
-        test_data_size * sizeof(uint32_t), // Input data size in bytes
-        (uint32_t)dummy_output_addr, // Output data address
-        test_data_size * sizeof(uint32_t) // Output data size in bytes
-    };
+    ((uint32_t*)load_compute_store_args)[0] = (uint32_t)load_compute_store_input_addr;
+    ((uint32_t*)load_compute_store_args)[1] = test_data_size * sizeof(uint32_t);
+    ((uint32_t*)load_compute_store_args)[2] = (uint32_t)load_compute_store_output_addr;
+    ((uint32_t*)load_compute_store_args)[3] = test_data_size * sizeof(uint32_t);
+    // Flush the cache to make sure the data is written to the memory
+    asm volatile("fence" ::: "memory");
     // Get the kernel function address
     check_kernel_tab_ready();
     uint32_t dummy_func_addr = get_device_function("__snax_kernel_dummy");
@@ -106,9 +106,9 @@ int test_kernel_execution(){
         return -1;
     }
     // printf("[Host] Dummy Function Address: 0x%x\n", dummy_func_addr);
-    // printf("[Host] CSR Function Address: 0x%x\n", csr_func_addr);
+    // printf("[Host] Load Compute Store Function Address: 0x%x\n", csr_func_addr);
     // printf("[Host] Dummy Args Address: 0x%x\n", dummy_args);
-    // printf("[Host] CSR Args Address: 0x%x\n", csr_args);
+    // printf("[Host] Load Compute Store Args Address: 0x%x\n", load_compute_store_args);
     // Create two tasks
     bingo_task_t *task_dummy = bingo_task_create(dummy_func_addr, (uint32_t)(uintptr_t)dummy_args);
     bingo_task_t *task_load_compute_store   = bingo_task_create(load_compute_store_addr, (uint32_t)(uintptr_t)load_compute_store_args);

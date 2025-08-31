@@ -125,9 +125,9 @@ inline uint32_t mailbox_read(volatile struct ring_buf *g_h2a_mbox, uint32_t *buf
     int ret;
     while (n_words--) {
         do {
-            asm volatile ("fence" ::: "memory");
+        // If this region is cached and no cache coherency, need a fence
+        // asm volatile("fence" : : : "memory");
             ret = rb_host_get(g_h2a_mbox, &buffer[n_words]);
-            asm volatile ("fence" ::: "memory");
             if (ret) {
                 csleep(10);
             }
@@ -138,9 +138,9 @@ inline uint32_t mailbox_read(volatile struct ring_buf *g_h2a_mbox, uint32_t *buf
 inline uint32_t mailbox_write(volatile struct ring_buf *g_a2h_mbox, uint32_t word) {
     int ret;
     do {
-        asm volatile ("fence" ::: "memory");
+        // If this region is cached and no cache coherency, need a fence
+        // asm volatile("fence" : : : "memory");
         ret = rb_host_put(g_a2h_mbox, &word);
-        asm volatile ("fence" ::: "memory");
         if (ret) {
             csleep(10);
         }

@@ -4,7 +4,7 @@
 #
 # Luca Colagrande <colluca@iis.ee.ethz.ch>
 
-.PHONY: sw clean
+.PHONY: sw clean-sw
 
 ############
 # Makefrag #
@@ -99,6 +99,6 @@ sw: $(PLATFORM_HEADERS)
 	$(MAKE) -C device
 	$(MAKE) -C host TARGET=finalize-build
 
-clean:
+clean-sw:
 	$(MAKE) -C device TARGET=clean
 	$(MAKE) -C host TARGET=clean

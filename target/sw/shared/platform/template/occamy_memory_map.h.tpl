@@ -23,6 +23,7 @@
 
 #define WIDE_SPM_SIZE ${wide_spm_size}
 #define NARROW_SPM_SIZE ${narrow_spm_size}
+#define NARROW_SPM_MAILBOX_SIZE ${mailbox_size}
 #define CLUSTER_TCDM_SIZE ${cluster_tcdm_size}
 
 //===============================================================

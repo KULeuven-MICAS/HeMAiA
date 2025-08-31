@@ -782,6 +782,7 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
     cluster_tcdm_size =  cluster_generators[0].cfg["tcdm"]["size"]*1024
     wide_spm_size = occamy_cfg["spm_wide"]["length"]
     narrow_spm_size = occamy_cfg["spm_narrow"]["length"]
+    mailbox_size = occamy_cfg["spm_narrow_mailbox_size"]
     cheader_kwargs = {
         "name": name,
         "nr_quads": nr_quads,
@@ -790,6 +791,7 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
         "nr_cores": nr_cores,
         "wide_spm_size": hex(wide_spm_size),
         "narrow_spm_size": hex(narrow_spm_size),
+        "mailbox_size": hex(mailbox_size),
         "cluster_tcdm_size": hex(cluster_tcdm_size),
         "cluster_offset": hex(cluster_offset),
         "cluster_addr_width": cluster_addr_width,

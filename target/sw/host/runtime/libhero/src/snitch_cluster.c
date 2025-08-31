@@ -80,25 +80,29 @@ int hero_dev_mmap_init(){
     int err = 0;
     // We use the physical address
     occ_soc_ctrl = (void *)SOC_CTRL_BASE_ADDR;
-    occ_l3 = (void *)(SPM_WIDE_BASE_ADDR + L3_OFFSET);
-    occ_l2 = (void *)(SPM_NARROW_BASE_ADDR + L2_OFFSET);
-    // Put half of the l2 memory map to heap allocator
-    uint64_t occ_l2_size = SPM_NARROW_SIZE; 
-    volatile void* occ_l2_phys = occ_l2;
-    l2_heap_start_phy = (uintptr_t)occ_l2_phys + ALIGN_UP(occ_l2_size / 2, O1HEAP_ALIGNMENT);
-    l2_heap_start_virt = (uintptr_t)occ_l2 + ALIGN_UP(occ_l2_size / 2, O1HEAP_ALIGNMENT);
-    l2_heap_size = occ_l2_size / 2;
+    occ_l3_heap = (void *)(__l3_heap_start);
+    occ_l2_heap = (void *)(SPM_NARROW_BASE_ADDR + L2_OFFSET); // Heap starts after the spm_base+mailbox_size
+    // Assign the memory info to the L2
+    // 1. The mailbox region at the beginning of L2
+    l2_mailbox_size = NARROW_SPM_MAILBOX_SIZE;
+    l2_mailbox_start_phy = (uintptr_t)SPM_NARROW_BASE_ADDR;
+    l2_mailbox_start_virt = (uintptr_t)SPM_NARROW_BASE_ADDR;
+    
+    // 2. Put half of the l2 memory map to heap allocator
+    l2_heap_size = SPM_NARROW_SIZE / 2;
+    l2_heap_start_phy = (uintptr_t)occ_l2_heap;
+    l2_heap_start_virt = (uintptr_t)occ_l2_heap;
     err = hero_dev_l2_init();
     if(err) {
         pr_error("Error when initializing L2 mem.\n");
         return err;
     }
     // Put half of the l3 memory map to heap allocator
-    uint64_t occ_l3_size = SPM_WIDE_SIZE; 
-    volatile void* occ_l3_phys = occ_l3; 
-    l3_heap_start_phy = (uintptr_t)occ_l3_phys + ALIGN_UP(occ_l3_size / 2, O1HEAP_ALIGNMENT);
-    l3_heap_start_virt = (uintptr_t)occ_l3 + ALIGN_UP(occ_l3_size / 2, O1HEAP_ALIGNMENT);
-    l3_heap_size = occ_l3_size / 2;
+    uint64_t occ_l3_heap_size = SPM_WIDE_SIZE / 2;
+    l3_heap_size = ALIGN_UP(occ_l3_heap_size, O1HEAP_ALIGNMENT);
+    l3_heap_start_phy = (uintptr_t)(&__l3_heap_start);
+    l3_heap_start_virt = (uintptr_t)(&__l3_heap_start);
+    // printf("[Init] L3 heap start addr = %x, size = %x\n", l3_heap_start_phy, l3_heap_size);
     err = hero_dev_l3_init();
     if(err) {
         pr_error("Error when initializing L3 mem.\n");
@@ -112,30 +116,15 @@ int hero_dev_mmap_init(){
 // Besides we currently do not need to support the full openmp
 // We use a minimal task dep management runtime instead
 int hero_dev_mmap(HeroDev *dev) {
-    // The L1 local mems
-    uint64_t local_mems_phy;
-    HeroSubDev_t *local_mems_tail = (HeroSubDev_t *)hero_dev_l2_malloc(dev, sizeof(HeroSubDev_t), &local_mems_phy);
-    uint64_t occ_snitch_cluster_size = SNITCH_TCDM_SIZE;
-    uintptr_t occ_snitch_cluster_phys = cluster_tcdm_start_addr(dev->dev_id);
-    if(!local_mems_tail){
-        pr_error("Error when allocating local_mems_tail.\n");
-        return 1;
-    }
-    local_mems_tail->v_addr = (uint32_t *)cluster_tcdm_start_addr(dev->dev_id);
-    local_mems_tail->p_addr = 0xFFFFFFFF & occ_snitch_cluster_phys;
-    local_mems_tail->size   = occ_snitch_cluster_size;
-    local_mems_tail->alias  = "l1_snitch_cluster";
-    dev->local_mems = local_mems_tail;
-
     // The L3 shared mem
     int64_t global_mems_phy;
-    HeroSubDev_t *global_mems_tail = (HeroSubDev_t *)hero_dev_l2_malloc(dev, sizeof(HeroSubDev_t), &global_mems_phy);
+    HeroSubDev_t *global_mems_tail = (HeroSubDev_t *)hero_dev_l3_malloc(dev, sizeof(HeroSubDev_t), &global_mems_phy);
     if(!global_mems_tail){
         pr_error("Error when allocating global_mems_tail.\n");
         return 1;
     }
-    global_mems_tail->v_addr = (unsigned *)occ_l3;
-    global_mems_tail->p_addr = (size_t)occ_l3;
+    global_mems_tail->v_addr = (unsigned *)occ_l3_heap;
+    global_mems_tail->p_addr = (size_t)occ_l3_heap;
     global_mems_tail->alias = "l3";
     global_mems_tail->next = NULL;
     dev->global_mems = global_mems_tail;
@@ -150,7 +139,7 @@ int hero_dev_init(HeroDev *dev){
     hero_dev_alloc_mboxes(dev);
     // Point to the mailboxes
     uint64_t mbox_ptrs_phy;
-    struct l2_layout *mbox_ptrs = (struct l2_layout *)hero_dev_l2_malloc(dev, sizeof(struct l2_layout), &mbox_ptrs_phy);
+    struct l2_layout *mbox_ptrs = (struct l2_layout *)hero_dev_l2_mailbox_malloc(dev, sizeof(struct l2_layout), &mbox_ptrs_phy);
     mbox_ptrs->h2a_mbox = (uint32_t) dev->mboxes.h2a_mbox_mem.p_addr;
     mbox_ptrs->a2h_mbox = (uint32_t) dev->mboxes.a2h_mbox_mem.p_addr;
     mbox_ptrs->a2h_rb = (uint32_t) dev->mboxes.rb_mbox_mem.p_addr;
