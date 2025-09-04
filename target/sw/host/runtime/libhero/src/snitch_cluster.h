@@ -6,6 +6,7 @@
 
 #pragma once
 #include "occamy_memory_map.h"
+#include "chip_id.h"
 // The virtual addresses of the hardware
 // static volatile void* occ_quad_ctrl;
 static volatile void* occ_soc_ctrl;

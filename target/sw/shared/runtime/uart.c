@@ -12,7 +12,7 @@ static inline int out_ch(char c) {
 
 static int print_unsigned(uint32_t value, uint32_t base, int uppercase,
                           int width, int zero_pad) {
-    char buf[11];  // enough for 32‑bit 0xFFFFFFFF or 10 decimal digits
+    char buf[30];  // enough for 32‑bit 0xFFFFFFFF or 10 decimal digits
     int idx = 0;
 
     // 1. Convert to string in reverse order
@@ -120,6 +120,22 @@ int printf(const char *fmt, ...) {
                 total += print_unsigned(va_arg(ap, unsigned int), 16, 1, width,
                                         zero_pad);
                 break;
+
+            case 'l': {  // Handle %lx
+                char next = *fmt ? *fmt++ : '\0';
+                if (next == 'x' || next == 'X') {
+                    unsigned long val = va_arg(ap, unsigned long);
+                    uint32_t hi = (uint32_t)(val >> 32);
+                    uint32_t lo = (uint32_t)(val & 0xffffffffUL);
+                    total += print_unsigned(hi, 16, (next == 'X'), 4, 1);
+                    total += print_unsigned(lo, 16, (next == 'X'), 8, 1);
+ 
+                } else {
+                    total += out_ch('%');
+                    total += out_ch('l');
+                    if (next) total += out_ch(next);
+                }
+            } break;
 
             case '%':
                 total += out_ch('%');

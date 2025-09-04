@@ -79,15 +79,16 @@ static int occamy_tlb_write(uint32_t idx, uint64_t addr_begin, uint64_t addr_end
 int hero_dev_mmap_init(){
     int err = 0;
     // We use the physical address
-    occ_soc_ctrl = (void *)SOC_CTRL_BASE_ADDR;
-    occ_l3_heap = (void *)(__l3_heap_start);
-    occ_l2_heap = (void *)(SPM_NARROW_BASE_ADDR + L2_OFFSET); // Heap starts after the spm_base+mailbox_size
+    uint64_t l2_heap_start = SPM_NARROW_BASE_ADDR + L2_OFFSET;
+    occ_soc_ctrl = (void *)chiplet_addr_transform((uint64_t)SOC_CTRL_BASE_ADDR);
+    occ_l3_heap = (void *)chiplet_addr_transform((uint64_t)(&__l3_heap_start));
+    occ_l2_heap = (void *)chiplet_addr_transform(l2_heap_start); // Heap starts after the spm_base+mailbox_size
+    // printf("L2 heap start addr = %lx\n", (uint64_t)occ_l2_heap);
     // Assign the memory info to the L2
     // 1. The mailbox region at the beginning of L2
     l2_mailbox_size = NARROW_SPM_MAILBOX_SIZE;
-    l2_mailbox_start_phy = (uintptr_t)SPM_NARROW_BASE_ADDR;
-    l2_mailbox_start_virt = (uintptr_t)SPM_NARROW_BASE_ADDR;
-    
+    l2_mailbox_start_phy = (uintptr_t)chiplet_addr_transform(SPM_NARROW_BASE_ADDR);
+    l2_mailbox_start_virt = (uintptr_t)chiplet_addr_transform(SPM_NARROW_BASE_ADDR);
     // 2. Put half of the l2 memory map to heap allocator
     l2_heap_size = SPM_NARROW_SIZE / 2;
     l2_heap_start_phy = (uintptr_t)occ_l2_heap;
@@ -100,8 +101,8 @@ int hero_dev_mmap_init(){
     // Put half of the l3 memory map to heap allocator
     uint64_t occ_l3_heap_size = SPM_WIDE_SIZE / 2;
     l3_heap_size = ALIGN_UP(occ_l3_heap_size, O1HEAP_ALIGNMENT);
-    l3_heap_start_phy = (uintptr_t)(&__l3_heap_start);
-    l3_heap_start_virt = (uintptr_t)(&__l3_heap_start);
+    l3_heap_start_phy = (uintptr_t)occ_l3_heap;
+    l3_heap_start_virt = (uintptr_t)occ_l3_heap;
     // printf("[Init] L3 heap start addr = %x, size = %x\n", l3_heap_start_phy, l3_heap_size);
     err = hero_dev_l3_init();
     if(err) {
@@ -138,15 +139,17 @@ int hero_dev_init(HeroDev *dev){
     // Allocate sw mailboxes
     hero_dev_alloc_mboxes(dev);
     // Point to the mailboxes
+    // The mbox ptrs will be send to the snitch cluster
+    // So the address must be 32bit address
     uint64_t mbox_ptrs_phy;
     struct l2_layout *mbox_ptrs = (struct l2_layout *)hero_dev_l2_mailbox_malloc(dev, sizeof(struct l2_layout), &mbox_ptrs_phy);
     mbox_ptrs->h2a_mbox = (uint32_t) dev->mboxes.h2a_mbox_mem.p_addr;
     mbox_ptrs->a2h_mbox = (uint32_t) dev->mboxes.a2h_mbox_mem.p_addr;
     mbox_ptrs->a2h_rb = (uint32_t) dev->mboxes.rb_mbox_mem.p_addr;
-    mbox_ptrs->heap = l3_heap_start_phy;
-    // Give the poiter to the mailboxes to the device
-    writew(mbox_ptrs_phy, soc_ctrl_mailbox_scratch_addr(dev->dev_id));
-    pr_trace("Write Mbox Address %x to %x\n",mbox_ptrs_phy,soc_ctrl_mailbox_scratch_addr(dev->dev_id));
+    mbox_ptrs->heap = (uint32_t) l3_heap_start_phy;
+    // Give the ptr to the mailboxes
+    writew((uint32_t)mbox_ptrs_phy, (uintptr_t)chiplet_addr_transform(soc_ctrl_mailbox_scratch_addr(dev->dev_id)));
+    pr_trace("Write Mbox Address %x to %x\n",mbox_ptrs_phy,chiplet_addr_transform(soc_ctrl_mailbox_scratch_addr(dev->dev_id)));
     return 0;
 }
 

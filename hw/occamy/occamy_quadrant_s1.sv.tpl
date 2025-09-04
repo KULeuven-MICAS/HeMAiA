@@ -64,7 +64,7 @@ module ${name}_quadrant_s1
 
  // Calculate cluster base address based on `tile id`.
   addr_t cluster_base_offset;
-  assign cluster_base_offset = ClusterBaseOffset;
+  assign cluster_base_offset = {chip_id_i, ClusterBaseOffset[AddrWidth-ChipIdWidth-1:0]};
 
   addr_t [${nr_clusters-1}:0] cluster_base_addr;
   % for i in range(nr_clusters):
@@ -686,6 +686,7 @@ module ${name}_quadrant_s1
   ${cluster_name}_wrapper i_${name}_cluster_${i} (
     .clk_i               (clk_quadrant_cluster[${i}]),
     .rst_ni              (rst_quadrant_n),
+    .chip_id_i           (chip_id_i),
     .obs_o               (/* Not Connected*/),
     .meip_i              (meip_i[NrCoresClusterOffset[${i}]+:NrCoresCluster[${i}]]),
     .mtip_i              (mtip_i[NrCoresClusterOffset[${i}]+:NrCoresCluster[${i}]]),
@@ -717,6 +718,7 @@ module ${name}_quadrant_s1
   ${cluster_name}_wrapper i_${name}_cluster_${i} (
     .clk_i               (clk_quadrant_cluster[${i}]),
     .rst_ni              (rst_quadrant_n),
+    .chip_id_i           (chip_id_i),
     .obs_o               (/* Not Connected*/),
     .meip_i              (meip_i[NrCoresClusterOffset[${i}]+:NrCoresCluster[${i}]]),
     .mtip_i              (mtip_i[NrCoresClusterOffset[${i}]+:NrCoresCluster[${i}]]),

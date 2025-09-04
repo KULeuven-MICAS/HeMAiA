@@ -24,15 +24,16 @@ extern uint64_t l3_heap_start_phy, l3_heap_start_virt, l3_heap_size;
 // The task is running on the device 
 // Let us fix the width of the pointers
 typedef struct task {
-  uint32_t task_id;          // unique task id
-  uint32_t fn_ptr;      // function pointer
-  uint32_t args_ptr;                // function args
-  uint8_t num_predecessors;  // remaining deps count
-  uint8_t num_successors;    // num of child tasks
+  uint32_t task_id;            // unique task id
+  uint32_t fn_ptr;             // function pointer
+  uint32_t args_ptr;           // function args
+  uint8_t num_predecessors;    // remaining deps count
+  uint8_t num_successors;      // num of child tasks
   struct task *successors[MAX_SUCCESSORS];
-  bool offloaded;            // flag to indicate the task has been offloaded or not
-  bool completed;            // flag to indicate whether this task is finished or not
-  uint8_t assigned_cid;      // assigned cluster id
+  bool offloaded;              // flag to indicate the task has been offloaded or not
+  bool completed;              // flag to indicate whether this task is finished or not
+  uint8_t assigned_chip_id;    // assigned chip id
+  uint8_t assigned_cluster_id; // assigned cluster id
 } bingo_task_t;
 
 
@@ -50,3 +51,5 @@ void bingo_task_add_depend(bingo_task_t *task, bingo_task_t *dep_task);
 void bingo_task_offload(bingo_task_t *task, HeroDev *dev);
 
 void bingo_runtime_schedule(bingo_task_t **task_list, uint32_t num_tasks, HeroDev **dev_list, uint32_t num_devs);
+
+void bingo_runtime_schedule_multichip(bingo_task_t **task_list, uint32_t num_tasks, HeroDev **dev_list_2d[], uint32_t num_chips, uint32_t num_devs_per_chip);

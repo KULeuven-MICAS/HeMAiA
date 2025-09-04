@@ -32,7 +32,7 @@ apps: $(APP_ELF)
 	cp $(APP_BIN) $(MKFILE_DIR)
 	cp $(APP_DUMP) $(MKFILE_DIR)
 	python3 bin2hex.py -i $(APP_NAME).bin
-	python3 copy_m_n_times.py -i $(APP_NAME) -o $(BIN_DIR)
+	python3 copy_m_n_times.py -i $(APP_NAME) -o $(BIN_DIR) -c $(CFG)
 clean:
 	@rm -f $(MKFILE_DIR)/*.bin $(MKFILE_DIR)/*.hex
 	@find $(MKFILE_DIR) -mindepth 1 -type d -exec rm -rf {} +

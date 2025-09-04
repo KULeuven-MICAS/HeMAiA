@@ -21,7 +21,7 @@ include ../common.mk
 INCDIRS       = src/
 INCDIRS      += include/
 INCDIRS      += $(SW_DIR)/shared/vendor/o1heap/o1heap # for o1heap
-INCDIRS      += $(SW_DIR)/shared/runtime # for uart print
+INCDIRS      += $(SW_DIR)/shared/runtime # for uart print and chip_id
 INCDIRS      += $(SW_DIR)/shared/platform/generated # for occamy_memory_map
 RISCV_CFLAGS += $(addprefix -I,$(INCDIRS))
 

@@ -194,7 +194,7 @@ int hero_dev_l2_init() {
     // Initialize L2 mailbox manager in the beginning of the L2
     if (!l2_mailbox_manager) {
         if(!l2_mailbox_start_phy || !l2_mailbox_size) {
-            pr_error("%s does not know where to put the heap manager\n", __func__);
+            pr_error("%s does not know where to put the mailbox manager\n", __func__);
             return -1;
         }
         pr_trace("Initializing o1heap at %p (%p) size %x\n", (void *) l2_mailbox_start_phy, (void *) l2_mailbox_start_virt, l2_mailbox_size);
@@ -285,9 +285,12 @@ int hero_dev_dma_xfer(const HeroDev *dev, uintptr_t addr_l3,
     return 0;
 }
 
-__attribute__((weak)) uintptr_t hero_host_l3_malloc(HeroDev *dev, uint32_t size_b, uintptr_t *p_addr) {
-    pr_warn("%s unimplemented\n", __func__);
-    return (uintptr_t)NULL;
+__attribute__((weak)) uintptr_t hero_host_l3_malloc(uint32_t size_b, uintptr_t *p_addr) {
+    pr_trace("%s default\n", __func__);
+    void *result = o1heapAllocate(l3_heap_manager, size_b);
+    *p_addr = (uintptr_t)((void *) result - l3_heap_start_virt + l3_heap_start_phy);
+    pr_trace("%s Allocated %u bytes at %x (%p)\n", __func__, size_b, (void *) result - l3_heap_start_virt + l3_heap_start_phy, result);
+    return (uintptr_t)result;
 }
 
 __attribute__((weak)) uintptr_t hero_iommu_map_virt(HeroDev *dev, uint32_t size_b, void *v_addr) {

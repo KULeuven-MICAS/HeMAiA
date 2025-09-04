@@ -204,6 +204,7 @@ inline uint32_t bingo_offload_manager(){
     while(1){
         // (1) Wait for the offload trigger cmd == MBOX_DEVICE_START
         mailbox_read(bingo_offload_unit_ptr->g_h2a_mbox, (unsigned int *)&(bingo_offload_unit_ptr->cmd), 1);
+
         if (MBOX_DEVICE_STOP == (bingo_offload_unit_ptr->cmd)) {
             // Got MBOX_DEVICE_STOP from host, stopping execution now.
             // Set the exit flag to stop the workers
@@ -226,10 +227,10 @@ inline uint32_t bingo_offload_manager(){
         // Bookkeeping the end cycles
         bingo_offload_unit_ptr->end_cycles = snrt_mcycle();
 
-        printf("[Cluster %d] Task %d finish with CC=%d \n", 
-                snrt_cluster_idx(),
-                bingo_offload_unit_ptr->task_id,
-                bingo_offload_unit_ptr->end_cycles-bingo_offload_unit_ptr->start_cycles);
+        // printf("[Cluster %d] Task %d finish with CC=%d \n", 
+        //         snrt_cluster_idx(),
+        //         bingo_offload_unit_ptr->task_id,
+        //         bingo_offload_unit_ptr->end_cycles-bingo_offload_unit_ptr->start_cycles);
         // (6) return the cycles to the host with 1. Done 2. Task id 3. Cycles
         mailbox_write(bingo_offload_unit_ptr->g_a2h_mbox, MBOX_DEVICE_DONE);
         mailbox_write(bingo_offload_unit_ptr->g_a2h_mbox, bingo_offload_unit_ptr->task_id);

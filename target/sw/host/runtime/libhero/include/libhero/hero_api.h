@@ -113,6 +113,7 @@ typedef struct {
 typedef struct {
     void *dev;
     uint8_t dev_id;
+    uint8_t chip_id;
     HeroSubDev_t *global_mems;
     char alias[32];
     HeroMboxes_t mboxes;
@@ -313,12 +314,11 @@ uintptr_t hero_dev_l2_malloc(HeroDev *dev, uint32_t size_b, uintptr_t *p_addr);
 uintptr_t hero_dev_l2_mailbox_malloc(HeroDev *dev, uint32_t size_b, uintptr_t *p_addr);
 
 /** Allocate a DMA-able buffer host L3.
-  \param    pulp   pointer to the HeroDev structure
   \param    size_b size in Bytes of the requested chunk
   \param    p_addr pointer to store the physical address to
   \return   virtual user-space address for host
  */
-uintptr_t hero_host_l3_malloc(HeroDev *dev, uint32_t size_b, uintptr_t *p_addr);
+uintptr_t hero_host_l3_malloc(uint32_t size_b, uintptr_t *p_addr);
 
 uintptr_t hero_iommu_map_virt(HeroDev *dev, uint32_t size_b, void *v_addr);
 

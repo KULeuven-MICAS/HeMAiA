@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#define N_CHIPLETS ${nr_chiplets}
 #define N_CLUSTERS ${nr_clusters}
 #define N_SNITCHES ${nr_cores}
 #define N_HARTS N_SNITCHES + 1

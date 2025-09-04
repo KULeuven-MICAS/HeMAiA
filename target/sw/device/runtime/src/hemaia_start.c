@@ -51,14 +51,6 @@ static inline void snrt_init_tls() {
                 dst[j] = tls_dst[j];
             }
         }
-        // if(snrt_cluster_idx() == 0){
-        //     printf("[Cluster 0]DM core initialized TLS section\n");
-        //     printf("[Cluster 0]DM core TLS addr 0x%x\n", tls_ptr);
-        // }
-        // if(snrt_cluster_idx() == 1){
-        //     printf("[Cluster 1]DM core initialized TLS section\n");
-        //     printf("[Cluster 1]DM core TLS addr 0x%x\n", tls_ptr);
-        // }
     }
     snrt_cluster_hw_barrier();
 }

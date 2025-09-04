@@ -61,7 +61,7 @@ sw: $(CFG)
 HOST_APP ?= offload
 DEVICE_APP ?= snax-test-integration
 apps:
-	$(MAKE) -C ./target/sim apps HOST_APP=$(HOST_APP) DEVICE_APP=$(DEVICE_APP)
+	$(MAKE) -C ./target/sim apps CFG=$(CFG) HOST_APP=$(HOST_APP) DEVICE_APP=$(DEVICE_APP)
  
 ######################
 # Bootrom Generation #

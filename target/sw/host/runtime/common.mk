@@ -22,6 +22,7 @@ RISCV_CFLAGS += -ffast-math
 RISCV_CFLAGS += -fno-builtin-printf
 RISCV_CFLAGS += -fno-common
 RISCV_CFLAGS += -O3
+RISCV_CFLAGS += -fPIC
 RISCV_CFLAGS += -ffunction-sections
 RISCV_CFLAGS += -Wextra
 RISCV_CFLAGS += -Werror

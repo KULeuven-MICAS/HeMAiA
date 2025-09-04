@@ -117,9 +117,9 @@ int test_kernel_execution(){
     // load_compute_store task depends on the dummy task
     bingo_task_add_depend(task_dummy, task_load_compute_store);
 
-    // Set the assigned cluster id
-    task_dummy->assigned_cid = 1;
-    task_load_compute_store->assigned_cid = 0;
+    // Set the assigned chiplet id and cluster id
+    task_dummy->assigned_cluster_id = 1;
+    task_load_compute_store->assigned_cluster_id = 0;
 
     // Set up the bingo scheduler
     bingo_task_t *task_list[] = {task_dummy, task_load_compute_store};
