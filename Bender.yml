@@ -134,7 +134,7 @@ sources:
 
   - target: hemaia_netlist
     files:
-      - target/tapeout/dc_work_hemaia/outputs/occamy_chip_mapped.v
+      - target/tapeout/dc_work_hemaia/outputs/occamy_chip_mapped_retimed_lpo.v
 
   # target/fpga
   - target: xilinx
