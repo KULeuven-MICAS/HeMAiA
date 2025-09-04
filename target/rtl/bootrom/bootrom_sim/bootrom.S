@@ -87,6 +87,7 @@ _cva6_init:
     # Set the interrupt vector
     la      t1, exception
     csrw    mtvec, t1
+    call    bootrom
 	li      t0, 0x80000000
     or      t0, t0, s0
     jalr    t0

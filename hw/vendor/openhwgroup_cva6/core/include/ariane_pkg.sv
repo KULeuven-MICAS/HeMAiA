@@ -37,8 +37,8 @@ package ariane_pkg;
     localparam int   LocalAddressWidth = 40;
     localparam int   ChipIdWidth = 8; // Number of bits used to identify the chiplet. This is also listed in the cfg files, but I hardcode it here to avoid using Mako template to generate this file.
     typedef logic [ChipIdWidth-1:0] chip_id_t;
-    // CrossClusterAbility is a parameter to enable/disable the ability to execute / cache data in other chiplet domain. Be careful as there is no global coherence protocol in place, so manual cache management is required.
-    localparam logic CrossClusterAbility = 1'b1;
+    // CrossChipAbility is a parameter to enable/disable the ability to execute / cache data in other chiplet domain. Be careful as there is no global coherence protocol in place, so manual cache management is required.
+    localparam logic CrossChipAbility = 1'b0;
     typedef struct packed {
       int                               RASDepth;
       int                               BTBEntries;
@@ -104,7 +104,7 @@ package ariane_pkg;
       // if len is a power of two, and base is properly aligned, this check could be simplified
       // Extend base by one bit to prevent an overflow.
       // In any case, the multi-cast/broadcast virtual chips should be excluded from the range check
-      if (CrossClusterAbility == 1'b1) begin
+      if (CrossChipAbility == 1'b1) begin
         return (address[LocalAddressWidth-1:0] >= base[LocalAddressWidth-1:0]) && (address[LocalAddressWidth-1:0] < (base[LocalAddressWidth-1:0] + len[LocalAddressWidth-1:0])) && ((~(&address[LocalAddressWidth +: (ChipIdWidth/2)]))|(~(&address[(LocalAddressWidth+ChipIdWidth/2) +: (ChipIdWidth/2)])));
       end else begin
         return ({chip_id,address[LocalAddressWidth-1:0]} >= {chip_id, base[LocalAddressWidth-1:0]}) && ({chip_id,address[LocalAddressWidth-1:0]} < {chip_id, (base[LocalAddressWidth-1:0] + len[LocalAddressWidth-1:0])}) && ((~(&address[LocalAddressWidth +: (ChipIdWidth/2)]))|(~(&address[(LocalAddressWidth+ChipIdWidth/2) +: (ChipIdWidth/2)])));
@@ -112,18 +112,18 @@ package ariane_pkg;
     endfunction : range_check
 
     function automatic logic is_inside_nonidempotent_regions (ariane_cfg_t Cfg, logic[ChipIdWidth-1:0] chip_id, logic[63:0] address);
-      logic local_address_region = address[LocalAddressWidth+:ChipIdWidth]==chip_id;
+    //   logic local_address_region = address[LocalAddressWidth+:ChipIdWidth]==chip_id;
       logic[NrMaxRules-1:0] pass;
       pass = '0;
       for (int unsigned k = 0; k < Cfg.NrNonIdempotentRules; k++) begin
         pass[k] = range_check(chip_id, Cfg.NonIdempotentAddrBase[k], Cfg.NonIdempotentLength[k], address);
       end
-      if (CrossClusterAbility == 1'b1) begin
-        return |pass;
-      end else begin
-        // If CrossClusterAbility is 0, then all non-local addresses are non-idempotent
-        return |pass | (~local_address_region);
-      end
+    //   if (CrossChipAbility == 1'b1) begin
+    //     return |pass;
+    //   end else begin
+    //     // If CrossChipAbility is 0, then all non-local addresses are non-idempotent
+    //     return |pass | (~local_address_region);
+    //   end
       return |pass;
     endfunction : is_inside_nonidempotent_regions
 

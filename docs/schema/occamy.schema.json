@@ -526,8 +526,8 @@
         },
         "spm_narrow_mailbox_size":{
             "type": "integer",
-            "description": "The siez of the mailbox in the narrow SPM",
-            "default": 4096    
+            "description": "The size of the mailbox in the narrow SPM",
+            "default": 8192 
         }
     }
 }
