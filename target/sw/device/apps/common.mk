@@ -59,7 +59,7 @@ SNRT_LIB_DIR  = $(abspath $(RUNTIME_DIR)/build/)
 SNRT_LIB_NAME = snRuntime
 SNRT_LIB      = $(realpath $(SNRT_LIB_DIR)/lib$(SNRT_LIB_NAME).a)
 # LD SRCS
-LD_SRCS       = $(BASE_LD) $(MEMORY_LD) $(ORIGIN_LD) $(SNRT_LIB) $(SNAX_LIB)
+LD_SRCS       = $(BASE_LD) $(MEMORY_LD) $(ORIGIN_LD) $(SNRT_LIB)
 
 # Linker script
 RISCV_LDFLAGS += -L$(APPSDIR)
@@ -72,6 +72,7 @@ RISCV_LDFLAGS += -T$(BASE_LD)
 RISCV_LDFLAGS += -Wl,--whole-archive
 RISCV_LDFLAGS += -L$(SNRT_LIB_DIR)
 RISCV_LDFLAGS += -l$(SNRT_LIB_NAME)
+RISCV_LDFLAGS += -Wl,--no-whole-archive
 # Link math library
 RISCV_LDFLAGS += -L$(MATH_DIR)/build
 RISCV_LDFLAGS += -lmath
