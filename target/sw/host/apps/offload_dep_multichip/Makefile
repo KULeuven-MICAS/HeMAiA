@@ -46,8 +46,16 @@ INCDIRS += $(LIBHERO_DIR)/src
 INCDIRS += $(SWDIR)/shared/vendor/o1heap/o1heap
 # libbingo
 INCDIRS += $(LIBBINGO_DIR)/include
-
 SRCS    += $(RUNTIME_DIR)/start.S
+
+
+##############################
+# New workloads defined here #
+##############################
+# INCDIRS += include/workloads/<workload_name>
+INCDIRS += include/workloads/dummy
+INCDIRS += include/workloads/xdma_1d
+
 
 # Compiler flags
 RISCV_CFLAGS += $(addprefix -I,$(INCDIRS))

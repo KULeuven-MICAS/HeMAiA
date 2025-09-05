@@ -7,7 +7,7 @@
 #include "libbingo/bingo_api.h"
 #include "host.h"
 #include "hemaia_clk_rst_controller.h"
-#include "data.h"
+#include "dummy_workload.h"
 // Devices
 #define NUM_DEV N_CLUSTERS
 #define NUM_CHIP N_CHIPLETS
@@ -88,54 +88,21 @@ int kernel_execution(){
     // The lower address of the dev_array will be the same
     // Only the upper 48-40 chiplet id prefix will be different
 
+    // Set up the tasks list
+    // We set a maximum number of tasks to 64
+    // Can be changed if needed
+    bingo_task_t *task_list[64] = {0};
+    uint32_t num_tasks = 0;
 
-    // Get the kernel function address
-    check_kernel_tab_ready();
-    // printf("[Host] Init the Kernel Symbol Table\r\n");
-    uint32_t dummy_func_addr = get_device_function("__snax_kernel_dummy");
-    if (dummy_func_addr == 0xBAADF00D) {
-        printf("Error: Kernel symbol lookup failed!\r\n");
-        return -1;
-    }
+    /////////////////////////
+    // User defined workload
+    /////////////////////////
+    // Normally the user will define their own workload here
+    __workload_multichip_dummy(task_list, &num_tasks);
 
-    // Register the tasks
-    // printf("[Host] Start to Register tasks\r\n");
-    bingo_task_t *task_dummy_chip0_cluster0 = bingo_task_create(dummy_func_addr, (uint32_t)(uintptr_t)(&dummy_args_chip0_cluster0));
-    bingo_task_t *task_dummy_chip0_cluster1 = bingo_task_create(dummy_func_addr, (uint32_t)(uintptr_t)(&dummy_args_chip0_cluster1));
-    bingo_task_t *task_dummy_chip1_cluster0 = bingo_task_create(dummy_func_addr, (uint32_t)(uintptr_t)(&dummy_args_chip1_cluster0));
-    bingo_task_t *task_dummy_chip1_cluster1 = bingo_task_create(dummy_func_addr, (uint32_t)(uintptr_t)(&dummy_args_chip1_cluster1));
-
-    // Set the task dependency
-    //      c0_cl0
-    //           |
-    //           v
-    //  ----c1_cl1
-    //  |        |
-    //  v        v
-    // c0_cl1   c1_cl0
-    // So the c0_cl0 will start to run
-    // Then the c1_cl1 will run after
-    // Then the c0_cl0 and  c1_cl0 will run in parallel
-    // We set the dependency from the child to the parent
-    bingo_task_add_depend(task_dummy_chip0_cluster1, task_dummy_chip1_cluster1);
-    bingo_task_add_depend(task_dummy_chip1_cluster0, task_dummy_chip1_cluster1);
-    bingo_task_add_depend(task_dummy_chip1_cluster1, task_dummy_chip0_cluster0);
-
-    //Set the assigned chiplet id and cluster id
-    task_dummy_chip0_cluster0->assigned_chip_id = 0;
-    task_dummy_chip0_cluster0->assigned_cluster_id = 0;
-    task_dummy_chip0_cluster1->assigned_chip_id = 0;
-    task_dummy_chip0_cluster1->assigned_cluster_id = 1;
-    task_dummy_chip1_cluster0->assigned_chip_id = 1;
-    task_dummy_chip1_cluster0->assigned_cluster_id = 0;
-    task_dummy_chip1_cluster1->assigned_chip_id = 1;
-    task_dummy_chip1_cluster1->assigned_cluster_id = 1;
-
-    // Set up the bingo scheduler
-    bingo_task_t *task_list[] = {task_dummy_chip0_cluster0, 
-                                 task_dummy_chip0_cluster1,
-                                 task_dummy_chip1_cluster0,
-                                 task_dummy_chip1_cluster1};
+    ////////////////////////////
+    // End user defined workload
+    ////////////////////////////
     // Call bingo runtime
     HeroDev global_dev[NUM_CHIP][NUM_DEV];
     // printf("[Host] The local dev array addr is at %lx\r\n", (uint64_t)(uintptr_t)(chiplet_addr_transform_full(0, (uint64_t)dev_array)));
@@ -152,18 +119,18 @@ int kernel_execution(){
     asm volatile("fence" ::: "memory");
 
     HeroDev *dev_ptr_2d[NUM_CHIP][NUM_DEV];
+    HeroDev **dev_ptrs[NUM_CHIP];
+
     for (int c = 0; c < NUM_CHIP; c++) {
         for (int i = 0; i < NUM_DEV; i++) {
             dev_ptr_2d[c][i] = &global_dev[c][i];
         }
-    }
-    HeroDev **dev_ptrs[NUM_CHIP];
-    for (int c = 0; c < NUM_CHIP; c++) {
         dev_ptrs[c] = dev_ptr_2d[c];
     }
+
     bingo_runtime_schedule_multichip(
         task_list, 
-        sizeof(task_list)/sizeof(task_list[0]), 
+        num_tasks, 
         dev_ptrs, 
         NUM_CHIP, 
         NUM_DEV
