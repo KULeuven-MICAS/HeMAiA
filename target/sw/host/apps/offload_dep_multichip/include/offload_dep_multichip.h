@@ -151,25 +151,6 @@ int kernel_execution(){
         sizeof(HeroDev) * NUM_DEV);
     asm volatile("fence" ::: "memory");
 
-
-    // for (int c = 0; c < NUM_CHIP; c++){
-    //     printf("[Host] Init the global dev @ chip %d\r\n", c);
-    //     printf("[Host] The global dev array addr is at %lx\r\n", (uint64_t)(uintptr_t)(&global_dev[c]));
-    //     printf("[Host] The dev array addr is at %lx\r\n", (uint64_t)(uintptr_t)(chiplet_addr_transform_full(c, (uint64_t)dev_array)));
-    //     sys_dma_blk_memcpy(
-    //         (uint64_t)(uintptr_t)(&global_dev[c]),
-    //         chiplet_addr_transform_full(c, (uint64_t)dev_array),
-    //         sizeof(HeroDev) * NUM_DEV);
-    //     asm volatile("fence" ::: "memory");
-    // }
-    // printf("[Host] Init the global dev @%lx\r\n", (uint64_t)(uintptr_t)(&global_dev));
-    // printf("[Host] The h2a mailbox of chip 0 cluster 0 is at 0x%lx\r\n", global_dev[0][0].mboxes.h2a_mbox);
-    // printf("[Host] The h2a mailbox of chip 0 cluster 1 is at 0x%lx\r\n", global_dev[0][1].mboxes.h2a_mbox);
-    // printf("[Host] The h2a mailbox of chip 1 cluster 0 is at 0x%lx\r\n", global_dev[1][0].mboxes.h2a_mbox);
-    // printf("[Host] The h2a mailbox of chip 1 cluster 1 is at 0x%lx\r\n", global_dev[1][1].mboxes.h2a_mbox);
-
-
-
     HeroDev *dev_ptr_2d[NUM_CHIP][NUM_DEV];
     for (int c = 0; c < NUM_CHIP; c++) {
         for (int i = 0; i < NUM_DEV; i++) {

@@ -24,7 +24,7 @@ APP_ELF = $(SW_HOST_APPS_DIR)$(HOST_APP)/build/$(APP_NAME).elf
 APP_BIN = $(SW_HOST_APPS_DIR)$(HOST_APP)/build/$(APP_NAME).bin
 APP_DUMP = $(SW_HOST_APPS_DIR)$(HOST_APP)/build/$(APP_NAME).dump
 
-.PHONY: apps hex clean
+.PHONY: apps hex clean-apps
 
 apps: $(APP_ELF)
 	cp $(APP_ELF) $(MKFILE_DIR)
@@ -33,6 +33,7 @@ apps: $(APP_ELF)
 	cp $(APP_DUMP) $(MKFILE_DIR)
 	python3 bin2hex.py -i $(APP_NAME).bin
 	python3 copy_m_n_times.py -i $(APP_NAME) -o $(BIN_DIR) -c $(CFG)
-clean:
+clean-apps:
+	@rm -rf .rtlbinary
 	@rm -f $(MKFILE_DIR)/*.bin $(MKFILE_DIR)/*.hex
 	@find $(MKFILE_DIR) -mindepth 1 -type d -exec rm -rf {} +

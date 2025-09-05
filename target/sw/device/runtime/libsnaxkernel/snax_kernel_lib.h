@@ -4,8 +4,6 @@
 //
 // Fanchen Kong <fanchen.kong@kuleuven.be>
 #pragma once
-#include <stdint.h>
-#include "snrt.h"
 #define SNAX_LIB_NAME_MAX_LEN 64
 // symtab data structure
 typedef struct __attribute__((packed)){

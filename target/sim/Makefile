@@ -138,7 +138,7 @@ apps:
 	$(MAKE) -C apps apps
 
 clean-apps:
-	$(MAKE) -C apps clean
+	$(MAKE) -C apps clean-apps
 
 ###############
 # Testharness #

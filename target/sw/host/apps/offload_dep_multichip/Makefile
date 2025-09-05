@@ -33,7 +33,7 @@ DEVICE_DIR   = $(abspath $(HOST_DIR)/../device)
 LIBBINGO_DIR = $(abspath $(RUNTIME_DIR)/libbingo)
 LIBHERO_DIR  = $(abspath $(RUNTIME_DIR)/libhero)
 # now we only include the snax app
-DEVICE_APPS += apps/snax/snax-dummy-offload
+DEVICE_APPS += apps/snax/snax-bingo-offload
 
 # Dependencies
 INCDIRS += include

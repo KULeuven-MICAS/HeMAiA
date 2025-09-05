@@ -32,6 +32,12 @@ INCDIRS += $(SNRT_DIR)/../math/include
 # Occamy specific includes
 INCDIRS += ./src/
 INCDIRS += ./api/
+# SNAX runtime
+INCDIRS += $(SW_DIR)/device/runtime/snax/xdma
+INCDIRS += $(SW_DIR)/device/runtime/snax/gemmx
+# SNAX kernel lib
+INCDIRS += $(SW_DIR)/device/runtime/libsnaxkernel
+
 # vendor o1 heap
 INCDIRS += $(SW_DIR)/shared/vendor/o1heap/o1heap
 

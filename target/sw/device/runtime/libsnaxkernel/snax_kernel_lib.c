@@ -4,37 +4,43 @@
 //
 // Fanchen Kong <fanchen.kong@kuleuven.be>
 
-#include "snax_symtab.h"
-
 // Here we define all the snax kernels
 // The kernels are intended to run at the cluster level
 
 SNAX_LIB_DEFINE void __snax_kernel_dummy(void *arg){
     uint32_t arg0 = ((uint32_t *)arg)[0];
     if(snrt_is_dm_core()){
-        printf("[Cluster %d] Core(%d) Running Dummy Kernel with arg[0] = %d\n", snrt_cluster_idx(), snrt_cluster_core_idx(), arg0);
+        printf("Chip(%x, %x): [Cluster %d] Core(%d) Running Dummy Kernel with arg[0] = %d\n", get_current_chip_loc_x(), get_current_chip_loc_y(), snrt_cluster_idx(), snrt_cluster_core_idx(), arg0);
     }
 }
 
-// SNAX_LIB_DEFINE void __snax_kernel_csr(void *arg){
-//     // Arg0: csr_addr
-//     // Arg1: csr_value
-//     uint32_t csr_addr = ((uint32_t *)arg)[0];
-//     uint32_t csr_write_value = ((uint32_t *)arg)[1];
-//     uint32_t cluster_id = snrt_cluster_core_idx();
-//     printf("Running CSR Kernel with arg[0] = %d, arg[1] = %x, @ cluster %d\n", csr_addr, csr_write_value, cluster_id);
-//     uint32_t csr_read_value;
-//     csrw_ss(csr_addr, csr_write_value);
-//     csr_read_value = csrr_ss(csr_addr);
-//     if (csr_read_value!=csr_write_value)
-//     {
-//         printf("Error! R/W CSR values are not the same!\n");
-//     }
-//     else
-//     {
-//         printf("Pass!\n");
-//     }
-// }
+SNAX_LIB_DEFINE void __snax_kernel_csr(void *arg){
+    // Arg0: csr_addr
+    // Arg1: csr_value
+
+    // shared_ptrs[0] arg_ptr
+    // shared_ptrs[1] csr_read_value
+    if(snrt_is_dm_core()){
+        get_cls_shared_ptrs()[0] = snrt_l1_malloc(256);
+        get_cls_shared_ptrs()[1] = snrt_l1_malloc(4);
+        get_cls_shared_ptrs()[0][0] = ((uint32_t *)arg)[0];
+        get_cls_shared_ptrs()[0][1] = ((uint32_t *)arg)[1];
+        uint32_t csr_addr = get_cls_shared_ptrs()[0][0];
+        uint32_t csr_write_value = get_cls_shared_ptrs()[0][1];
+        uint32_t csr_read_value = get_cls_shared_ptrs()[1][0];
+        printf("Chip(%x, %x): Running CSR Kernel with arg[0](csr_addr) = %d, arg[1](csr_value) = %x\n", get_current_chip_loc_x(), get_current_chip_loc_y(), csr_addr, csr_write_value);
+        csrw_ss(csr_addr, csr_write_value);
+        csr_read_value = csrr_ss(csr_addr);
+        if (csr_read_value!=csr_write_value)
+        {
+            printf("Chip(%x, %x): Error! R/W CSR values are not the same!\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+        }
+        else
+        {
+            printf("Chip(%x, %x): Pass!\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+        }
+    }
+}
 
 
 SNAX_LIB_DEFINE void __snax_kernel_load_compute_store(void *arg){
@@ -109,11 +115,42 @@ SNAX_LIB_DEFINE void __snax_kernel_load_compute_store(void *arg){
     }
 }
 
+SNAX_LIB_DEFINE void __snax_xdma_1d_copy(void *arg){
+    // Arg0: uint32_t src_addr_hi
+    // Arg1: uint32_t src_addr_lo
+    // Arg2: uint32_t dst_addr_hi
+    // Arg3: uint32_t dst_addr_lo
+    // Arg4: uint32_t size in Byte
+
+    void* src_addr;
+    void* dst_addr;
+    uint32_t data_size;
+    if(snrt_is_dm_core()){
+        src_addr = (void *)(((uint64_t)((uint32_t *)arg)[0] << 32) | ((uint64_t)((uint32_t *)arg)[1]));
+        dst_addr = (void *)(((uint64_t)((uint32_t *)arg)[2] << 32) | ((uint64_t)((uint32_t *)arg)[3]));
+        data_size = ((uint32_t *)arg)[4];
+        if (xdma_disable_dst_ext(0) != 0) {
+            printf("Error in disabling xdma writer extension 0\n");
+        }
+        if (xdma_disable_dst_ext(1) != 0) {
+            printf("Error in disabling xdma writer extension 1\n");
+        }
+        if (xdma_disable_src_ext(0) != 0) {
+            printf("Error in disabling xdma reader extension 0\n");
+        }
+        xdma_memcpy_1d(src_addr, dst_addr, data_size);
+        int task_id = xdma_start();
+        xdma_remote_wait(task_id);
+    }
+}
+
+
 // Here we create the symbol table
 SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
     SNAX_EXPORT_FUNC(__snax_kernel_dummy),
-    // SNAX_EXPORT_FUNC(__snax_kernel_csr),
+    SNAX_EXPORT_FUNC(__snax_kernel_csr),
     SNAX_EXPORT_FUNC(__snax_kernel_load_compute_store),
+    SNAX_EXPORT_FUNC(__snax_xdma_1d_copy),
     SNAX_SYMTAB_END
 };
 

@@ -49,5 +49,9 @@
 #include "bingo.h"
 #include "hemaia_cls.h"
 #include "sw_mailbox.h"
+// SNAX runtime
+#include "snax_xdma_lib.h"
 
+// Kernel Libs
+#include "snax_kernel_lib.h"
 #endif  // SNRT_H

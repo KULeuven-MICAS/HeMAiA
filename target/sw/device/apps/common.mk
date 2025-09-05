@@ -32,6 +32,9 @@ BUILDDIR    = $(abspath build)
 # Dependencies
 INCDIRS += $(RUNTIME_DIR)/src
 INCDIRS += $(RUNTIME_DIR)/api
+INCDIRS += $(RUNTIME_DIR)/snax/xdma
+INCDIRS += $(RUNTIME_DIR)/snax/gemmx
+INCDIRS += $(RUNTIME_DIR)/libsnaxkernel
 INCDIRS += $(SNRT_DIR)/api
 INCDIRS += $(SNRT_DIR)/src
 INCDIRS += $(SNRT_DIR)/vendor/riscv-opcodes
@@ -44,7 +47,6 @@ INCDIRS += $(SNRT_DIR)/../math/src/include
 INCDIRS += $(SNRT_DIR)/../math/src/internal
 INCDIRS += $(SNRT_DIR)/../math/include/bits
 INCDIRS += $(SNRT_DIR)/../math/include
-INCDIRS += $(SW_DIR)/device/libsnaxkernel/include
 INCDIRS += $(SW_DIR)/shared/vendor/o1heap/o1heap
 
 # Linking sources
@@ -56,10 +58,6 @@ ORIGIN_LD     = $(abspath $(BUILDDIR)/origin.ld)
 SNRT_LIB_DIR  = $(abspath $(RUNTIME_DIR)/build/)
 SNRT_LIB_NAME = snRuntime
 SNRT_LIB      = $(realpath $(SNRT_LIB_DIR)/lib$(SNRT_LIB_NAME).a)
-# SNAX KERNEL LIB
-SNAX_LIB_DIR  = $(SW_DIR)/device/libsnaxkernel/build
-SNAX_LIB_NAME = snaxkernel
-SNAX_LIB      = $(realpath $(SNAX_LIB_DIR)/lib$(SNAX_LIB_NAME).a)
 # LD SRCS
 LD_SRCS       = $(BASE_LD) $(MEMORY_LD) $(ORIGIN_LD) $(SNRT_LIB) $(SNAX_LIB)
 
@@ -69,19 +67,14 @@ RISCV_LDFLAGS += -L$(BUILDDIR)
 RISCV_LDFLAGS += -T$(BASE_LD)
 # RISCV_LDFLAGS += -T$(MEMORY_LD)
 # Link snRuntime library
-RISCV_LDFLAGS += -L$(SNRT_LIB_DIR)
-RISCV_LDFLAGS += -l$(SNRT_LIB_NAME)
-# Link snaxkernel library
 # Since the snax kernel is not used in the dev.c
 # We need to keep the snax kernel symbol table by using the --whole-archive
 RISCV_LDFLAGS += -Wl,--whole-archive
-RISCV_LDFLAGS += -L$(SNAX_LIB_DIR)
-RISCV_LDFLAGS += -l$(SNAX_LIB_NAME)
-RISCV_LDFLAGS += -Wl,--no-whole-archive
+RISCV_LDFLAGS += -L$(SNRT_LIB_DIR)
+RISCV_LDFLAGS += -l$(SNRT_LIB_NAME)
 # Link math library
 RISCV_LDFLAGS += -L$(MATH_DIR)/build
 RISCV_LDFLAGS += -lmath
-
 
 # Objcopy flags
 OBJCOPY_FLAGS  = -O binary

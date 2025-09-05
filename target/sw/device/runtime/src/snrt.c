@@ -19,3 +19,8 @@
 #include "bingo.c"
 #include "hemaia_cls.c"
 #include "sw_mailbox.c"
+// SNAX runtime
+#include "snax_xdma_lib.c"
+
+// Kernel Libs
+#include "snax_kernel_lib.c"

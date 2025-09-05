@@ -285,7 +285,7 @@ int hero_dev_dma_xfer(const HeroDev *dev, uintptr_t addr_l3,
     return 0;
 }
 
-__attribute__((weak)) uintptr_t hero_host_l3_malloc(uint32_t size_b, uintptr_t *p_addr) {
+uintptr_t hero_host_l3_malloc(uint32_t size_b, uintptr_t *p_addr) {
     pr_trace("%s default\n", __func__);
     void *result = o1heapAllocate(l3_heap_manager, size_b);
     *p_addr = (uintptr_t)((void *) result - l3_heap_start_virt + l3_heap_start_phy);
