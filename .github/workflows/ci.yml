@@ -43,7 +43,7 @@ jobs:
           submodules: "recursive"
       - name: Compile everything
         run: |
-          make sw CFG_OVERRIDE=target/rtl/cfg/hemaia_ci.hjson -j$(nproc)
+          make sw CFG_OVERRIDE=target/rtl/cfg/hemaia_ci.hjson
           make bootrom 
           make rtl
           make hemaia_system_vlt -j$(nproc)
@@ -63,7 +63,7 @@ jobs:
           submodules: "recursive"
       - name: Compile everything
         run: |
-          make sw CFG_OVERRIDE=target/rtl/cfg/hemaia_ci_noc.hjson -j$(nproc)
+          make sw CFG_OVERRIDE=target/rtl/cfg/hemaia_ci_noc.hjson
           make bootrom 
           make rtl
           make hemaia_system_vlt -j$(nproc)
