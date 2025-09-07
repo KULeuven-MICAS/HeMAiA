@@ -5,7 +5,6 @@
 // Yunhao Deng <yunhao.deng@kuleuven.be>
 
 #include "data.h"
-#include "snax-xdma-lib.h"
 #include "snrt.h"
 
 uint32_t time[SNRT_CLUSTER_NUM];

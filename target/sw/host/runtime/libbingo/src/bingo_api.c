@@ -47,54 +47,54 @@ void bingo_task_offload(bingo_task_t *task, HeroDev *dev) {
     task->offloaded = true;
 }
 
-void bingo_runtime_schedule(bingo_task_t **task_list, uint32_t num_tasks, HeroDev **dev_list, uint32_t num_devs) {
-    uint32_t num_completed_task = 0;
+// void bingo_runtime_schedule(bingo_task_t **task_list, uint32_t num_tasks, HeroDev **dev_list, uint32_t num_devs) {
+//     uint32_t num_completed_task = 0;
 
-    while (num_completed_task != num_tasks) {
-        // (1) Poll all devs for completed tasks
-        for (uint32_t d = 0; d < num_devs; d++) {
-            HeroDev *dev = dev_list[d];
-            uint32_t dev_return_flag;
-            uint32_t dev_completed_task_id;
-            uint32_t dev_kernel_cc;
-            uint32_t ret = hero_dev_mbox_try_read(dev, &dev_return_flag);
-            if(ret){
-                printf("[Host] Dev %d returned with flag %d\n", dev->dev_id, dev_return_flag);
-                if (dev_return_flag == MBOX_DEVICE_DONE) {
-                    hero_dev_mbox_read(dev, &dev_completed_task_id, 1);
-                    hero_dev_mbox_read(dev, &dev_kernel_cc, 1);
+//     while (num_completed_task != num_tasks) {
+//         // (1) Poll all devs for completed tasks
+//         for (uint32_t d = 0; d < num_devs; d++) {
+//             HeroDev *dev = dev_list[d];
+//             uint32_t dev_return_flag;
+//             uint32_t dev_completed_task_id;
+//             uint32_t dev_kernel_cc;
+//             uint32_t ret = hero_dev_mbox_try_read(dev, &dev_return_flag);
+//             if(ret){
+//                 printf("[Host] Dev %d returned with flag %d\n", dev->dev_id, dev_return_flag);
+//                 if (dev_return_flag == MBOX_DEVICE_DONE) {
+//                     hero_dev_mbox_read(dev, &dev_completed_task_id, 1);
+//                     hero_dev_mbox_read(dev, &dev_kernel_cc, 1);
 
-                    bingo_task_t *complete_task = task_list[dev_completed_task_id];
-                    complete_task->completed = true;
-                    num_completed_task++;
+//                     bingo_task_t *complete_task = task_list[dev_completed_task_id];
+//                     complete_task->completed = true;
+//                     num_completed_task++;
 
-                    for (uint32_t s = 0; s < complete_task->num_successors; s++) {
-                        bingo_task_t *suc = complete_task->successors[s];
-                        suc->num_predecessors--;
-                    }
-                }                
-            }
-        }
+//                     for (uint32_t s = 0; s < complete_task->num_successors; s++) {
+//                         bingo_task_t *suc = complete_task->successors[s];
+//                         suc->num_predecessors--;
+//                     }
+//                 }                
+//             }
+//         }
 
-        // (2) Offload tasks with no predecessors and not yet offloaded
-        for (uint32_t i = 0; i < num_tasks; i++) {
-            bingo_task_t *t = task_list[i];
-            if (!t->offloaded && t->num_predecessors == 0) {
-                bingo_task_offload(t, dev_list[t->assigned_cluster_id]);
-            }
-        }
+//         // (2) Offload tasks with no predecessors and not yet offloaded
+//         for (uint32_t i = 0; i < num_tasks; i++) {
+//             bingo_task_t *t = task_list[i];
+//             if (!t->offloaded && t->num_predecessors == 0) {
+//                 bingo_task_offload(t, dev_list[t->assigned_cluster_id]);
+//             }
+//         }
 
-        // (3) Sleep to reduce CPU usage
-        bingo_csleep(HOST_SLEEP_CYCLES);
-    }
-    // All tasks are completed, close the devs
-    for (uint32_t d = 0; d < num_devs; d++) {
-        HeroDev *dev = dev_list[d];
-        hero_dev_mbox_write(dev, MBOX_DEVICE_STOP);
-        printf("[Host] Dev %d completed all tasks\n", dev->dev_id);
-    }
-}
-void bingo_runtime_schedule_multichip(bingo_task_t **task_list, uint32_t num_tasks, 
+//         // (3) Sleep to reduce CPU usage
+//         bingo_csleep(HOST_SLEEP_CYCLES);
+//     }
+//     // All tasks are completed, close the devs
+//     for (uint32_t d = 0; d < num_devs; d++) {
+//         HeroDev *dev = dev_list[d];
+//         hero_dev_mbox_write(dev, MBOX_DEVICE_STOP);
+//         printf("[Host] Dev %d completed all tasks\n", dev->dev_id);
+//     }
+// }
+void bingo_runtime_schedule(bingo_task_t **task_list, uint32_t num_tasks, 
                                      HeroDev **dev_list_2d[], uint32_t num_chips, uint32_t num_devs_per_chip) {
     // Currently we only support the homogenous chiplet that the number of devices per chiplet is the same
     uint32_t num_completed_task = 0;                              

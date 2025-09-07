@@ -8,15 +8,13 @@
 #include "host.h"
 #include "hemaia_clk_rst_controller.h"
 #include "dummy_workload.h"
-// Global Variables for communication buffer
-volatile comm_buffer_t* comm_buffer_ptr = (comm_buffer_t*)0;
 
 // Devices
 #define NUM_DEV N_CLUSTERS
 #define NUM_CHIP 1
 HeroDev dev_array[NUM_DEV];
 int libhero_log_level = LOG_WARN;
-void host_init_dev() {
+void host_init_local_dev() {
     // printf("[Host] Start to Init the Devs\n");
     // We first reset the devs
     for (uint8_t i = 0; i < NUM_DEV; i++) {
@@ -155,7 +153,7 @@ int kernel_execution(){
         }
         dev_ptrs[c] = dev_ptr_2d[c];
     }
-    bingo_runtime_schedule_multichip(
+    bingo_runtime_schedule(
         task_list, 
         num_tasks, 
         dev_ptrs, 

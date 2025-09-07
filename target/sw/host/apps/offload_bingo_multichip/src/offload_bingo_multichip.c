@@ -26,6 +26,7 @@
 
 #include "offload_bingo_multichip.h"
 int main() {
+    printf("Multi-chip Offload Bingo Main\r\n");
     // Bear in mind that all the function calls here will be executed by all the chiplets
     // The chip id and chip address prefix is needed to differentiate the chiplets
     uintptr_t current_chip_address_prefix = (uintptr_t)get_current_chip_baseaddress();

@@ -50,6 +50,6 @@ void bingo_task_add_depend(bingo_task_t *task, bingo_task_t *dep_task);
 // Offload the task to dev
 void bingo_task_offload(bingo_task_t *task, HeroDev *dev);
 
-void bingo_runtime_schedule(bingo_task_t **task_list, uint32_t num_tasks, HeroDev **dev_list, uint32_t num_devs);
+// void bingo_runtime_schedule(bingo_task_t **task_list, uint32_t num_tasks, HeroDev **dev_list, uint32_t num_devs);
 
-void bingo_runtime_schedule_multichip(bingo_task_t **task_list, uint32_t num_tasks, HeroDev **dev_list_2d[], uint32_t num_chips, uint32_t num_devs_per_chip);
+void bingo_runtime_schedule(bingo_task_t **task_list, uint32_t num_tasks, HeroDev **dev_list_2d[], uint32_t num_chips, uint32_t num_devs_per_chip);

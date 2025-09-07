@@ -3,21 +3,30 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Luca Colagrande <colluca@iis.ee.ethz.ch>
+# Fanchen Kong <fanchen.kong@kuleuven.be>
+# Yunhao Deng <yunhao.deng@kuleuven.be>
 
 # Add user applications to APPS variable
-# APPS  = hello_world
-# APPS += hemaia_clk_rst_configurator
-# ifneq ($(findstring multichip,$(CFG_OVERRIDE)),)
-# # If chiplet cfg is used, offloaf_multichip is compiled with the support to execute applications on cores at different chips
-# APPS += hemaia_d2d_link_configurator
-# APPS += offload_multichip
-# APPS += multichip_sync
-# else
-# # Otherwise, simple offload is compiled, which is mainly used for ci. 
-# APPS += offload_dep
-# endif
-APPS += offload_bingo
+APPS  = hello_world
+APPS += hemaia_clk_rst_configurator
+ifneq ($(findstring multichip,$(CFG_OVERRIDE)),)
+# If chiplet cfg is used, offloaf_multichip is compiled with the support to execute applications on cores at different chips
+# host only applications
+APPS += hemaia_d2d_link_configurator
+APPS += multichip_sync
+# offload applications
+# The legacy offload
+APPS += offload_multichip
+# The bingo offload
 APPS += offload_bingo_multichip
+else
+# Otherwise, single chip offload is compiled
+# The legacy offload
+APPS += offload
+# The bingo offload
+APPS += offload_bingo
+endif
+
 TARGET ?= all
 
 LIB_HERO_DIR = runtime/libhero

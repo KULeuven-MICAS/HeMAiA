@@ -130,7 +130,7 @@ int kernel_execution(){
         dev_ptrs[c] = dev_ptr_2d[c];
     }
 
-    bingo_runtime_schedule_multichip(
+    bingo_runtime_schedule(
         task_list, 
         num_tasks, 
         dev_ptrs, 

@@ -7,11 +7,6 @@
 APP     = snax-xdma-copy
 
 INCDIRS += data
-INCDIRS += INCDIRS += ../../../snax/xdma/include/
-
-# Add binary to final build
-RISCV_LDFLAGS += ../../../snax/xdma/build/snax-xdma-lib.o
-
 SRCS    = src/snax-xdma-copy.c
 
 include ./data/Makefile
