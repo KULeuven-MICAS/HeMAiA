@@ -7,6 +7,7 @@
 APP     = snax-xdma-hazard
 
 INCDIRS += data
+
 SRCS    = src/snax-xdma-hazard.c
 
 include ./data/Makefile

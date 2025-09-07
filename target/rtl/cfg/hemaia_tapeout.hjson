@@ -14,7 +14,7 @@
       testbench_cfg: {              // The total number of homogeneous chips (x * y) on the virtual interposer
         // Emulate a two-chips configuration
         upper_left_coordinate: [0, 0],
-        lower_right_coordinate: [1, 0],
+        lower_right_coordinate: [1, 1],
       }
     }
     addr_width: 48,
