@@ -14,8 +14,8 @@ DEBUG ?= OFF # ON to turn on debugging symbols
 # Build variables #
 ###################
 
-APP  = offload_dep_multichip
-SRCS = src/offload_dep_multichip.c
+APP  = offload_bingo
+SRCS = src/offload_bingo.c
 
 # Compiler toolchain
 CVA6_GCC_ROOT = /tools/riscv/bin
@@ -46,8 +46,6 @@ INCDIRS += $(LIBHERO_DIR)/src
 INCDIRS += $(SWDIR)/shared/vendor/o1heap/o1heap
 # libbingo
 INCDIRS += $(LIBBINGO_DIR)/include
-SRCS    += $(RUNTIME_DIR)/start.S
-
 
 ##############################
 # New workloads defined here #
@@ -57,6 +55,8 @@ INCDIRS += include/workloads/dummy
 INCDIRS += include/workloads/xdma_1d
 
 
+SRCS    += $(RUNTIME_DIR)/start.S
+
 # Compiler flags
 RISCV_CFLAGS += $(addprefix -I,$(INCDIRS))
 RISCV_CFLAGS += -march=rv64imafdc
@@ -65,7 +65,6 @@ RISCV_CFLAGS += -mcmodel=medany
 RISCV_CFLAGS += -ffast-math
 RISCV_CFLAGS += -fno-builtin-printf
 RISCV_CFLAGS += -fno-common
-RISCV_CFLAGS += -fPIC
 RISCV_CFLAGS += -O3
 RISCV_CFLAGS += -ffunction-sections
 RISCV_CFLAGS += -Wextra

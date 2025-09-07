@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Fanchen Kong <fanchen.kong@kuleuven.be>
-#include "offload_dep.h"
+#include "offload_bingo.h"
 
 int main() {
     // Set clk manager to 1 division for a faster simulation time
@@ -42,7 +42,7 @@ int main() {
     // Start Snitches
     wakeup_snitches_cl(current_chip_id);
     
-    int ret = test_kernel_execution();
+    int ret = kernel_execution();
 
     printf("[HeMAiA] Snitch cluster done with exit code %d\r\n", ret);
 

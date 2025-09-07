@@ -16,7 +16,8 @@
 # # Otherwise, simple offload is compiled, which is mainly used for ci. 
 # APPS += offload_dep
 # endif
-APPS += offload_dep_multichip
+APPS += offload_bingo
+APPS += offload_bingo_multichip
 TARGET ?= all
 
 LIB_HERO_DIR = runtime/libhero

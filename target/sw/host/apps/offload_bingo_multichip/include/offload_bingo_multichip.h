@@ -91,6 +91,8 @@ int kernel_execution(){
     // Set up the tasks list
     // We set a maximum number of tasks to 64
     // Can be changed if needed
+    // This is mainly due to the task_list will be allocated to the stack in L2
+    // which has a limited size
     bingo_task_t *task_list[64] = {0};
     uint32_t num_tasks = 0;
 

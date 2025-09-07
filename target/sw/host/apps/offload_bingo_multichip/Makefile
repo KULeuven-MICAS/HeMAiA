@@ -14,8 +14,8 @@ DEBUG ?= OFF # ON to turn on debugging symbols
 # Build variables #
 ###################
 
-APP  = offload_dep
-SRCS = src/offload_dep.c
+APP  = offload_bingo_multichip
+SRCS = src/offload_bingo_multichip.c
 
 # Compiler toolchain
 CVA6_GCC_ROOT = /tools/riscv/bin
@@ -33,7 +33,7 @@ DEVICE_DIR   = $(abspath $(HOST_DIR)/../device)
 LIBBINGO_DIR = $(abspath $(RUNTIME_DIR)/libbingo)
 LIBHERO_DIR  = $(abspath $(RUNTIME_DIR)/libhero)
 # now we only include the snax app
-DEVICE_APPS += apps/snax/snax-dummy-offload
+DEVICE_APPS += apps/snax/snax-bingo-offload
 
 # Dependencies
 INCDIRS += include
@@ -46,8 +46,16 @@ INCDIRS += $(LIBHERO_DIR)/src
 INCDIRS += $(SWDIR)/shared/vendor/o1heap/o1heap
 # libbingo
 INCDIRS += $(LIBBINGO_DIR)/include
-
 SRCS    += $(RUNTIME_DIR)/start.S
+
+
+##############################
+# New workloads defined here #
+##############################
+# INCDIRS += include/workloads/<workload_name>
+INCDIRS += include/workloads/dummy
+INCDIRS += include/workloads/xdma_1d
+
 
 # Compiler flags
 RISCV_CFLAGS += $(addprefix -I,$(INCDIRS))
@@ -57,6 +65,7 @@ RISCV_CFLAGS += -mcmodel=medany
 RISCV_CFLAGS += -ffast-math
 RISCV_CFLAGS += -fno-builtin-printf
 RISCV_CFLAGS += -fno-common
+RISCV_CFLAGS += -fPIC
 RISCV_CFLAGS += -O3
 RISCV_CFLAGS += -ffunction-sections
 RISCV_CFLAGS += -Wextra

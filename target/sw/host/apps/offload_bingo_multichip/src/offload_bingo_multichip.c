@@ -24,7 +24,7 @@
 //    a. The local offloading is based on the mailbox in local L2
 //    b. The remote offloading is based on the mailbox in the remote L2 memory
 
-#include "offload_dep_multichip.h"
+#include "offload_bingo_multichip.h"
 int main() {
     // Bear in mind that all the function calls here will be executed by all the chiplets
     // The chip id and chip address prefix is needed to differentiate the chiplets
