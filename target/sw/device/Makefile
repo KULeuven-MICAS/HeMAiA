@@ -7,7 +7,7 @@
 # Add user applications to APPS variable automatically. This is located in the apps directory with depth of 2.
 
 # Now we only compile the snax apps
-APPDIR  = apps/snax/snax-dummy-offload
+APPDIR  = $(shell cat app_list.tmp)
 TARGET ?= all
 
 RTDIR    = math
