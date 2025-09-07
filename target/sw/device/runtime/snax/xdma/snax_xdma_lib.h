@@ -16,7 +16,7 @@
 #endif
 
 // Data Copy Task
-static inline int32_t xdma_memcpy_nd_full_addr(
+inline int32_t xdma_memcpy_nd_full_addr(
     uint64_t src, uint64_t dst, uint32_t spatial_stride_src,
     uint32_t spatial_stride_dst, uint32_t temp_dim_src,
     uint32_t* temp_stride_src, uint32_t* temp_bound_src, uint32_t temp_dim_dst,
@@ -96,7 +96,7 @@ static inline int32_t xdma_memcpy_nd_full_addr(
     return 0;
 }
 
-static inline int32_t xdma_memcpy_nd(void* src, void* dst, uint32_t spatial_stride_src,
+inline int32_t xdma_memcpy_nd(void* src, void* dst, uint32_t spatial_stride_src,
                        uint32_t spatial_stride_dst, uint32_t temp_dim_src,
                        uint32_t* temp_stride_src, uint32_t* temp_bound_src,
                        uint32_t temp_dim_dst, uint32_t* temp_stride_dst,
@@ -112,7 +112,7 @@ static inline int32_t xdma_memcpy_nd(void* src, void* dst, uint32_t spatial_stri
         enabled_chan_dst, enabled_byte_dst);
 }
 
-static inline int32_t xdma_memcpy_1d_full_addr(uint64_t src, uint64_t dst, uint32_t size) {
+inline int32_t xdma_memcpy_1d_full_addr(uint64_t src, uint64_t dst, uint32_t size) {
     if (size % XDMA_WIDTH != 0) {
         XDMA_DEBUG_PRINT("Size is not multiple of XDMA_WIDTH\n");
         return -1;
@@ -125,7 +125,7 @@ static inline int32_t xdma_memcpy_1d_full_addr(uint64_t src, uint64_t dst, uint3
         temporal_stride, temporal_bound, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF);
 }
 
-static inline int32_t xdma_memcpy_1d(void* src, void* dst, uint32_t size) {
+inline int32_t xdma_memcpy_1d(void* src, void* dst, uint32_t size) {
     if (size % XDMA_WIDTH != 0) {
         XDMA_DEBUG_PRINT("Size is not multiple of XDMA_WIDTH\n");
         return -1;
@@ -139,7 +139,7 @@ static inline int32_t xdma_memcpy_1d(void* src, void* dst, uint32_t size) {
 }
 
 // Multicast Task
-static inline int32_t xdma_multicast_nd_full_address(
+inline int32_t xdma_multicast_nd_full_address(
     uint64_t src, uint64_t* dst, uint32_t dst_num, uint32_t spatial_stride_src,
     uint32_t spatial_stride_dst, uint32_t temp_dim_src,
     uint32_t* temp_stride_src, uint32_t* temp_bound_src, uint32_t temp_dim_dst,
@@ -228,7 +228,7 @@ static inline int32_t xdma_multicast_nd_full_address(
     return 0;
 }
 
-static inline int32_t xdma_multicast_nd(void* src, void** dst, uint32_t dst_num,
+inline int32_t xdma_multicast_nd(void* src, void** dst, uint32_t dst_num,
                           uint32_t spatial_stride_src,
                           uint32_t spatial_stride_dst, uint32_t temp_dim_src,
                           uint32_t* temp_stride_src, uint32_t* temp_bound_src,
@@ -254,7 +254,7 @@ static inline int32_t xdma_multicast_nd(void* src, void** dst, uint32_t dst_num,
         enabled_chan_src, enabled_chan_dst, enabled_byte_dst);
 }
 
-static inline int32_t xdma_multicast_1d_full_address(uint64_t src, uint64_t* dst,
+inline int32_t xdma_multicast_1d_full_address(uint64_t src, uint64_t* dst,
                                        uint32_t dst_num, uint32_t size) {
     if (size % XDMA_WIDTH != 0) {
         XDMA_DEBUG_PRINT("Size is not multiple of XDMA_WIDTH\n");
@@ -268,7 +268,7 @@ static inline int32_t xdma_multicast_1d_full_address(uint64_t src, uint64_t* dst
         temporal_stride, temporal_bound, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF);
 }
 
-static inline int32_t xdma_multicast_1d(void* src, void** dst, uint32_t dst_num,
+inline int32_t xdma_multicast_1d(void* src, void** dst, uint32_t dst_num,
                           uint32_t size) {
     if (size % XDMA_WIDTH != 0) {
         XDMA_DEBUG_PRINT("Size is not multiple of XDMA_WIDTH\n");
@@ -286,7 +286,7 @@ static inline int32_t xdma_multicast_1d(void* src, void** dst, uint32_t dst_num,
 
 // Extension
 // xdma extension interface
-static inline int32_t xdma_enable_src_ext(uint8_t ext, uint32_t* csr_value) {
+inline int32_t xdma_enable_src_ext(uint8_t ext, uint32_t* csr_value) {
     if (ext >= XDMA_SRC_EXT_NUM) {
         return -1;
     }
@@ -305,7 +305,7 @@ static inline int32_t xdma_enable_src_ext(uint8_t ext, uint32_t* csr_value) {
     return 0;
 }
 
-static inline int32_t xdma_enable_dst_ext(uint8_t ext, uint32_t* csr_value) {
+inline int32_t xdma_enable_dst_ext(uint8_t ext, uint32_t* csr_value) {
     if (ext >= XDMA_DST_EXT_NUM) {
         return -1;
     }
@@ -323,7 +323,7 @@ static inline int32_t xdma_enable_dst_ext(uint8_t ext, uint32_t* csr_value) {
     return 0;
 }
 
-static inline int32_t xdma_disable_src_ext(uint8_t ext) {
+inline int32_t xdma_disable_src_ext(uint8_t ext) {
     if (ext >= XDMA_SRC_EXT_NUM) {
         return 0;
     }
@@ -332,7 +332,7 @@ static inline int32_t xdma_disable_src_ext(uint8_t ext) {
     return 0;
 }
 
-static inline int32_t xdma_disable_dst_ext(uint8_t ext) {
+inline int32_t xdma_disable_dst_ext(uint8_t ext) {
     if (ext >= XDMA_DST_EXT_NUM) {
         return 0;
     }
@@ -342,7 +342,7 @@ static inline int32_t xdma_disable_dst_ext(uint8_t ext) {
 }
 
 // Start
-static inline uint32_t xdma_start() {
+inline uint32_t xdma_start() {
     int local_task_id = csrr_ss(XDMA_COMMIT_LOCAL_TASK_PTR);
     int remote_task_id = csrr_ss(XDMA_COMMIT_REMOTE_TASK_PTR);
     csrw_ss(XDMA_START_PTR, 1);
@@ -358,26 +358,26 @@ static inline uint32_t xdma_start() {
 }
 
 // Wait xdma to finished
-static inline void xdma_local_wait(uint32_t task_id) {
+inline void xdma_local_wait(uint32_t task_id) {
     while (csrr_ss(XDMA_FINISH_LOCAL_TASK_PTR) < task_id) {
         // Wait for xdma to finish
     }
 }
 
-static inline void xdma_remote_wait(uint32_t task_id) {
+inline void xdma_remote_wait(uint32_t task_id) {
     while (csrr_ss(XDMA_FINISH_REMOTE_TASK_PTR) < task_id) {
         // Wait for xdma to finish
     }
 }
 
-static inline uint32_t xdma_last_task_cycle() {
+inline uint32_t xdma_last_task_cycle() {
     return csrr_ss(XDMA_PERF_CTR_TASK);
 }
 
-static inline uint32_t xdma_last_read_cycle() {
+inline uint32_t xdma_last_read_cycle() {
     return csrr_ss(XDMA_PERF_CTR_READER);
 }
 
-static inline uint32_t xdma_last_write_cycle() {
+inline uint32_t xdma_last_write_cycle() {
     return csrr_ss(XDMA_PERF_CTR_WRITER);
 }

@@ -52,6 +52,4 @@
 // SNAX runtime
 #include "snax_xdma_lib.h"
 
-// Kernel Libs
-#include "snax_kernel_lib.h"
 #endif  // SNRT_H

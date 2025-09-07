@@ -2,6 +2,7 @@
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 #include "snrt.h"
+#include "snax_kernel_lib.h"
 int main(){
     // First we need to write the kernel tab to the soc ctrl
     // We use the dm core of first cluster in first chiplet to do this

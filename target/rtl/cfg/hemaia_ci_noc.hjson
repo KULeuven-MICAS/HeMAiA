@@ -125,10 +125,10 @@
       
     },
     clusters:[
-      "snax_xdma_cluster",
-      "snax_xdma_cluster",
-      "snax_xdma_cluster",
-      "snax_xdma_cluster",
+      "snax_KUL_cluster",
+      "snax_KUL_cluster",
+      "snax_KUL_cluster",
+      "snax_KUL_cluster",
       ],
 
     hemaia_xdma_cfg: {

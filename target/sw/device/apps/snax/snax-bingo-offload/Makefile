@@ -7,6 +7,8 @@
 APP     = snax-bingo-offload
 SRCS    = src/snax-bingo-offload.c
 
+INCDIRS += libsnaxkernel
+
 include ../../common.mk
 
 # llvm-objdump -t target/sw/device/apps/snax/snax-bingo-offload/build/snax-bingo-offload.elf | grep __snax_kernel_dummy | cut -c1-8

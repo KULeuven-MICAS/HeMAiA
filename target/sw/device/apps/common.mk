@@ -34,7 +34,6 @@ INCDIRS += $(RUNTIME_DIR)/src
 INCDIRS += $(RUNTIME_DIR)/api
 INCDIRS += $(RUNTIME_DIR)/snax/xdma
 INCDIRS += $(RUNTIME_DIR)/snax/gemmx
-INCDIRS += $(RUNTIME_DIR)/libsnaxkernel
 INCDIRS += $(SNRT_DIR)/api
 INCDIRS += $(SNRT_DIR)/src
 INCDIRS += $(SNRT_DIR)/vendor/riscv-opcodes
@@ -69,10 +68,10 @@ RISCV_LDFLAGS += -T$(BASE_LD)
 # Link snRuntime library
 # Since the snax kernel is not used in the dev.c
 # We need to keep the snax kernel symbol table by using the --whole-archive
-RISCV_LDFLAGS += -Wl,--whole-archive
+# RISCV_LDFLAGS += -Wl,--whole-archive
 RISCV_LDFLAGS += -L$(SNRT_LIB_DIR)
 RISCV_LDFLAGS += -l$(SNRT_LIB_NAME)
-RISCV_LDFLAGS += -Wl,--no-whole-archive
+# RISCV_LDFLAGS += -Wl,--no-whole-archive
 # Link math library
 RISCV_LDFLAGS += -L$(MATH_DIR)/build
 RISCV_LDFLAGS += -lmath

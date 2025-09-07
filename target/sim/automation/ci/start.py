@@ -11,7 +11,7 @@ binary_path = os.path.normpath(binary_path)
 sw_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../apps")
 sw_path = os.path.normpath(sw_path)
 
-cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../../rtl/cfg/hemaia_ci.hjson")
+cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../../rtl/cfg/lru.hjson")
 cfg_path = os.path.normpath(cfg_path)
 
 task_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "task.yaml")
