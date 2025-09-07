@@ -121,7 +121,9 @@ FINAL_OUTPUTS   = $(ELFS) $(DUMPS) $(DWARFS) $(BINS)
 #########
 # Rules #
 #########
-
+.PHONY: $(DEVICE_DIR)/app_list.tmp
+$(DEVICE_DIR)/app_list.tmp:
+	echo "$(DEVICE_APPS)" > $(DEVICE_DIR)/app_list.tmp
 
 .PHONY: partial-build
 partial-build: $(PARTIAL_OUTPUTS)

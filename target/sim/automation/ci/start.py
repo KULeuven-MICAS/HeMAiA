@@ -11,15 +11,18 @@ binary_path = os.path.normpath(binary_path)
 sw_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../apps")
 sw_path = os.path.normpath(sw_path)
 
-cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "task.yaml")
+cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../../rtl/cfg/hemaia_ci.hjson")
 cfg_path = os.path.normpath(cfg_path)
+
+task_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "task.yaml")
+task_path = os.path.normpath(task_path)
 
 num_threads = multiprocessing.cpu_count()
 
 
-def get_apps(cfg_path):
+def get_apps(task_path):
     # Load the existing params from params.hjson (so we only modify the needed keys)
-    with open(cfg_path, 'r') as f:
+    with open(task_path, 'r') as f:
         param_data = yaml.safe_load(f)
 
     app_name_list = []
@@ -39,6 +42,7 @@ def get_apps(cfg_path):
         app_name = host_app + "-" + device_app if device_app else host_app
         app_name_list.append(app_name)
         shell_script = ["make", "apps"]
+        shell_script += [f"CFG={cfg_path}"]
         shell_script += [f"HOST_APP={host_app}"]
         shell_script += [f"DEVICE_APP={device_app}"] if device_app else []
         # Generate the app hex file
@@ -70,7 +74,7 @@ def process_configuration(folder_name, sw_name):
 
 
 def main():
-    app_name_list = get_apps(cfg_path)
+    app_name_list = get_apps(task_path)
 
     # Use ThreadPoolExecutor to run configurations concurrently
 
