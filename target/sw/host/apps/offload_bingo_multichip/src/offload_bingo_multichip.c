@@ -26,13 +26,14 @@
 
 #include "offload_bingo_multichip.h"
 int main() {
-    printf("Multi-chip Offload Bingo Main\r\n");
+    
     // Bear in mind that all the function calls here will be executed by all the chiplets
     // The chip id and chip address prefix is needed to differentiate the chiplets
     uintptr_t current_chip_address_prefix = (uintptr_t)get_current_chip_baseaddress();
     uint8_t current_chip_id = get_current_chip_id();
     // Init the uart for printf
     init_uart(current_chip_address_prefix, 32, 1);
+    printf("Multi-chip Offload Bingo Main\r\n");
     printf("Chip(%x, %x): [Host] Start Offloading Program\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
 
     ///////////////////////////////
