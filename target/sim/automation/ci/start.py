@@ -39,7 +39,7 @@ def get_apps(task_path):
         if host_app is None:
             raise ValueError("host_app must be specified in the configuration.")
         # if device_app is None, we assume it is the same as host_app
-        app_name = host_app + "-" + device_app if device_app else host_app
+        app_name = host_app + "_" + device_app if device_app else host_app
         app_name_list.append(app_name)
         shell_script = ["make", "apps"]
         shell_script += [f"CFG={cfg_path}"]
