@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Fanchen Kong <fanchen.kong@kuleuven.be>
-#include "dummy_data.h"
+#include "data.h"
 #include "libbingo/bingo_api.h"
 #include "host.h"
-
+#include "device_kernel_args.h"
 void __workload_dummy(bingo_task_t **task_list, uint32_t *num_tasks_ptr) {
     // User need to define the number of tasks
     int num_tasks = 2;
@@ -16,12 +16,12 @@ void __workload_dummy(bingo_task_t **task_list, uint32_t *num_tasks_ptr) {
     ///////////////////
     // Main function //
     ///////////////////
-    // 1. Get the kernel function address by the kernel name
+    // 1. Get the kernel function address by the kernel name and prepare the args
     // 2. Register the tasks
     // 3. Set the task dependency
     // 4. Set the assigned chiplet id and cluster id
 
-    // 1. Get the kernel function address by the kernel name
+    // 1.Get the kernel function address by the kernel name
     check_kernel_tab_ready();
     uint32_t dummy_func_addr = get_device_function("__snax_kernel_dummy");
     if (dummy_func_addr == SNAX_SYMTAB_END_FN_ADDR) {
@@ -32,7 +32,6 @@ void __workload_dummy(bingo_task_t **task_list, uint32_t *num_tasks_ptr) {
     bingo_task_t *task_dummy_cluster0 = bingo_task_create(dummy_func_addr, (uint32_t)(uintptr_t)(&dummy_args_cluster0));
     bingo_task_t *task_dummy_cluster1 = bingo_task_create(dummy_func_addr, (uint32_t)(uintptr_t)(&dummy_args_cluster1));
 
-    // 3. Set the task dependency
     //      cl0
     //       |
     //       v

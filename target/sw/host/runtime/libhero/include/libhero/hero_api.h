@@ -320,6 +320,8 @@ uintptr_t hero_dev_l2_mailbox_malloc(HeroDev *dev, uint32_t size_b, uintptr_t *p
  */
 uintptr_t hero_host_l3_malloc(uint32_t size_b, uintptr_t *p_addr);
 
+void hero_host_l3_free(uintptr_t v_addr, uintptr_t p_addr);
+
 uintptr_t hero_iommu_map_virt(HeroDev *dev, uint32_t size_b, void *v_addr);
 
 int hero_iommu_map_virt_to_phys(HeroDev *dev, uint32_t size_b, void *v_addr, uintptr_t p_addr);

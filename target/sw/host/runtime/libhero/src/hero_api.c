@@ -293,6 +293,11 @@ uintptr_t hero_host_l3_malloc(uint32_t size_b, uintptr_t *p_addr) {
     return (uintptr_t)result;
 }
 
+
+void hero_host_l3_free(uintptr_t v_addr, uintptr_t p_addr) {
+    pr_trace("%p - %p\n", l3_heap_manager, v_addr);
+    o1heapFree(l3_heap_manager, (void*)v_addr);
+}
 __attribute__((weak)) uintptr_t hero_iommu_map_virt(HeroDev *dev, uint32_t size_b, void *v_addr) {
     pr_warn("%s unimplemented\n", __func__);
     return (uintptr_t)0;

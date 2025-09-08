@@ -8,7 +8,7 @@
 #include "host.h"
 #include "hemaia_clk_rst_controller.h"
 #include "dummy_workload.h"
-
+// #include "xdma_1d_copy_workload.h"
 // Devices
 #define NUM_DEV N_CLUSTERS
 #define NUM_CHIP 1
@@ -85,57 +85,12 @@ int kernel_execution(){
     /////////////////////////
     
     __workload_dummy(task_list, &num_tasks);
+    // uintptr_t output_data_ptr = 0;
+    // __workload_xdma_1d_copy(task_list, &num_tasks, &output_data_ptr);
 
     ////////////////////////////
     // End user defined workload
     ////////////////////////////
-    
-    // // Set up the kernel args
-    // // We allocate 1 arg for the dummy
-    // uintptr_t dummy_args = hero_dev_l3_malloc(&dev_array[1], sizeof(uint32_t), NULL);
-    // ((uint32_t*)dummy_args)[0] = 42;
-    
-    // // There are 4 args for the load_compute_store
-    // uint32_t test_data_size = 8;
-    // uintptr_t load_compute_store_args = hero_dev_l3_malloc(&dev_array[0], 4*sizeof(uint32_t), NULL);
-    // uintptr_t load_compute_store_input_addr = hero_dev_l3_malloc(&dev_array[0], test_data_size*sizeof(uint32_t), NULL);
-    // uintptr_t load_compute_store_output_addr = hero_dev_l3_malloc(&dev_array[0], test_data_size*sizeof(uint32_t), NULL);
-    // for (uint32_t i = 0; i < test_data_size; i++)
-    // {
-    //     ((uint32_t*)load_compute_store_input_addr)[i] = i;
-    // }
-    // ((uint32_t*)load_compute_store_args)[0] = (uint32_t)load_compute_store_input_addr;
-    // ((uint32_t*)load_compute_store_args)[1] = test_data_size * sizeof(uint32_t);
-    // ((uint32_t*)load_compute_store_args)[2] = (uint32_t)load_compute_store_output_addr;
-    // ((uint32_t*)load_compute_store_args)[3] = test_data_size * sizeof(uint32_t);
-    // // Flush the cache to make sure the data is written to the memory
-    // asm volatile("fence" ::: "memory");
-    // // Get the kernel function address
-    // check_kernel_tab_ready();
-    // uint32_t dummy_func_addr = get_device_function("__snax_kernel_dummy");
-    // uint32_t load_compute_store_addr = get_device_function("__snax_kernel_load_compute_store");
-    // if (dummy_func_addr == 0xBAADF00D || load_compute_store_addr == 0xBAADF00D) {
-    //     printf("Error: Kernel symbol lookup failed!\n");
-    //     return -1;
-    // }
-    // // printf("[Host] Dummy Function Address: 0x%x\n", dummy_func_addr);
-    // // printf("[Host] Load Compute Store Function Address: 0x%x\n", csr_func_addr);
-    // // printf("[Host] Dummy Args Address: 0x%x\n", dummy_args);
-    // // printf("[Host] Load Compute Store Args Address: 0x%x\n", load_compute_store_args);
-    // // Create two tasks
-    // bingo_task_t *task_dummy = bingo_task_create(dummy_func_addr, (uint32_t)(uintptr_t)dummy_args);
-    // bingo_task_t *task_load_compute_store   = bingo_task_create(load_compute_store_addr, (uint32_t)(uintptr_t)load_compute_store_args);
-
-    // // Set the task dependency
-    // // load_compute_store task depends on the dummy task
-    // bingo_task_add_depend(task_dummy, task_load_compute_store);
-
-    // // Set the assigned chiplet id and cluster id
-    // task_dummy->assigned_cluster_id = 1;
-    // task_load_compute_store->assigned_cluster_id = 0;
-
-    // // Set up the bingo scheduler
-    // bingo_task_t *task_list[] = {task_dummy, task_load_compute_store};
 
     // Call bingo runtime
     HeroDev global_dev[NUM_CHIP][NUM_DEV];
@@ -160,5 +115,6 @@ int kernel_execution(){
         NUM_CHIP, 
         NUM_DEV
     );
+    // hero_host_l3_free((void*)output_data_ptr);
     return 0;
 }

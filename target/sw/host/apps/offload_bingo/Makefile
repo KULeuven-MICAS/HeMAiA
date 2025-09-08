@@ -52,7 +52,7 @@ INCDIRS += $(LIBBINGO_DIR)/include
 ##############################
 # INCDIRS += include/workloads/<workload_name>
 INCDIRS += include/workloads/dummy
-INCDIRS += include/workloads/xdma_1d
+INCDIRS += include/workloads/xdma_1d_copy
 
 
 SRCS    += $(RUNTIME_DIR)/start.S
