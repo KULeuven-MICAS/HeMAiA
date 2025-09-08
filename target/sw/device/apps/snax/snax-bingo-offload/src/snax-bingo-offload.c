@@ -1,6 +1,8 @@
-// Copyright 2020 ETH Zurich and University of Bologna.
+// Copyright 2025 KU Leuven.
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
+//
+// Fanchen Kong <fanchen.kong@kuleuven.be>
 #include "snrt.h"
 #include "snax_kernel_lib.h"
 int main(){

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Fanchen Kong <fanchen.kong@kuleuven.be>
+#pragma once
 #include "data.h"
 #include "libbingo/bingo_api.h"
 #include "host.h"

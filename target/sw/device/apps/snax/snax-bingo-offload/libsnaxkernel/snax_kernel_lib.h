@@ -236,7 +236,7 @@ SNAX_LIB_DEFINE void __snax_kernel_xdma_1d_copy(void *arg) {
     }
 }
 
-
+//////////////////////// SYMBOL TABLE ////////////////////////
 // Here we create the symbol table
 SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
     SNAX_EXPORT_FUNC(__snax_kernel_dummy),

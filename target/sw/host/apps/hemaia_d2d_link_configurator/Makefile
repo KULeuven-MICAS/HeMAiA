@@ -6,5 +6,6 @@
 
 APP  = hemaia_d2d_link_configurator
 SRCS = src/hemaia_d2d_link_configurator.c
-
+BINGO_HOST ?= 0 # True to include the bingo runtime
+INCL_DEVICE_BINARY ?= 0 # True to include the device binary
 include ../common.mk

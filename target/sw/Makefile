@@ -100,5 +100,9 @@ sw: $(PLATFORM_HEADERS)
 	$(MAKE) -C host TARGET=finalize-build
 
 clean-sw:
+# clean generated tmp files
+	$(MAKE) -C device clean
+# clean device build
 	$(MAKE) -C device TARGET=clean
+# clean host build
 	$(MAKE) -C host TARGET=clean

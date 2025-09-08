@@ -1,8 +1,8 @@
-# Copyright 2023 ETH Zurich and University of Bologna.
+# Copyright 2025 KU Leuven.
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Luca Colagrande <colluca@iis.ee.ethz.ch>
+# Fanchen Kong <fanchen.kong@kuleuven.be>
 
 # Add user applications to APPS variable automatically. This is located in the apps directory with depth of 2.
 
@@ -30,12 +30,36 @@ TARGET ?= all
 RTDIR    = math
 RTDIR   += runtime
 
-.PHONY: all $(RTDIR) $(APPDIR)
+.PHONY: all $(RTDIR) $(APPDIR) aggregate-tmps clean
+
 
 all: $(APPDIR)
 
 $(RTDIR):
 	$(MAKE) -C $@ $(TARGET)
 
-$(APPDIR): $(RTDIR)
-	$(MAKE) -C $@ $(TARGET)
+define APP_template
+.PHONY: $(1)
+$(1): $(RTDIR)
+	$$(MAKE) -C $(1) $$(TARGET)
+endef
+
+$(foreach app,$(APPDIR),$(eval $(call APP_template,$(app))))
+
+
+ALL_HOST_LIST   = host_app_list.tmp
+ALL_ORIGIN_LIST = host_app_origin.tmp
+ALL_DEV_LIST    = dev_app_list.tmp
+
+aggregate-tmps: $(ALL_HOST_LIST) $(ALL_ORIGIN_LIST) $(ALL_DEV_LIST)
+
+$(ALL_HOST_LIST): $(wildcard host_app_list.*.tmp)
+	cat $^ > $@
+
+$(ALL_ORIGIN_LIST): $(wildcard host_app_origin.*.tmp)
+	cat $^ > $@
+
+$(ALL_DEV_LIST): $(wildcard dev_app_list.*.tmp)
+	cat $^ > $@
+clean:
+	rm -f $(ALL_HOST_LIST) $(ALL_ORIGIN_LIST) $(ALL_DEV_LIST)

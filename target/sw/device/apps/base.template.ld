@@ -7,7 +7,8 @@ ENTRY(_start)
 
 /* Memory section should be provided in a separate, platform-specific */
 /* file. It should define at least the L1 and L3 memory blocks. */
-INCLUDE memory.ld
+
+/* INCLUDE directive will be replaced by Makefile with correct origin file */
 
 SECTIONS
 {
