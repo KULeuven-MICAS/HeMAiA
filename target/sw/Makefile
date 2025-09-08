@@ -13,6 +13,7 @@
 MKFILE_PATH := $(abspath $(lastword $(MAKEFILE_LIST)))
 SIM_MKFILE_DIR  := $(dir $(MKFILE_PATH))
 ROOT        := $(SIM_MKFILE_DIR)../..
+SW_DIR      := $(abspath $(ROOT)/target/sw)
 include $(ROOT)/target/rtl/Makefile
 ############
 # Programs #
@@ -96,12 +97,12 @@ $(SW_DEVICE_RT_DIR)/src/occamy_defs.h: $(SW_DEVICE_RT_DIR)/template/occamy_defs.
 sw: $(PLATFORM_HEADERS)
 	$(MAKE) -C host libs
 	$(MAKE) -C host TARGET=partial-build
-	$(MAKE) -C device
+	$(MAKE) -C device all
 	$(MAKE) -C host TARGET=finalize-build
 
 clean-sw:
 # clean generated tmp files
-	$(MAKE) -C device clean
+	rm -rf $(SW_DIR)/device/*.tmp
 # clean device build
 	$(MAKE) -C device TARGET=clean
 # clean host build

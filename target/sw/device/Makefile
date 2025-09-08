@@ -30,28 +30,13 @@ TARGET ?= all
 RTDIR    = math
 RTDIR   += runtime
 
-.PHONY: all $(RTDIR) $(APPDIR) aggregate-tmps clean
-
-
-all: $(APPDIR)
-
-$(RTDIR):
-	$(MAKE) -C $@ $(TARGET)
-
-define APP_template
-.PHONY: $(1)
-$(1): $(RTDIR)
-	$$(MAKE) -C $(1) $$(TARGET)
-endef
-
-$(foreach app,$(APPDIR),$(eval $(call APP_template,$(app))))
-
 
 ALL_HOST_LIST   = host_app_list.tmp
 ALL_ORIGIN_LIST = host_app_origin.tmp
 ALL_DEV_LIST    = dev_app_list.tmp
+ALL_TMPS       = $(ALL_HOST_LIST) $(ALL_ORIGIN_LIST) $(ALL_DEV_LIST)
 
-aggregate-tmps: $(ALL_HOST_LIST) $(ALL_ORIGIN_LIST) $(ALL_DEV_LIST)
+aggregate-tmps: $(ALL_TMPS)
 
 $(ALL_HOST_LIST): $(wildcard host_app_list.*.tmp)
 	cat $^ > $@
@@ -61,5 +46,22 @@ $(ALL_ORIGIN_LIST): $(wildcard host_app_origin.*.tmp)
 
 $(ALL_DEV_LIST): $(wildcard dev_app_list.*.tmp)
 	cat $^ > $@
-clean:
-	rm -f $(ALL_HOST_LIST) $(ALL_ORIGIN_LIST) $(ALL_DEV_LIST)
+
+
+.PHONY: all $(RTDIR) $(APPDIR) aggregate-tmps
+
+
+all: $(APPDIR)
+
+$(RTDIR):
+	$(MAKE) -C $@ $(TARGET)
+
+define APP_template
+.PHONY: $(1)
+$(1): $(RTDIR) $(ALL_TMPS)
+	$$(MAKE) -C $(1) $$(TARGET)
+endef
+
+$(foreach app,$(APPDIR),$(eval $(call APP_template,$(app))))
+
+
