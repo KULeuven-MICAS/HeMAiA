@@ -715,13 +715,13 @@ def main():
         gen_file(
             cfg={
                 "name": "hemaia",
+                "xdma_cfg_io_width": occamy_cfg["hemaia_xdma_cfg"]["cfg_io_width"],
                 "dma_data_width": 512,
                 "data_width": occamy_cfg["data_width"],
                 "addr_width": occamy_cfg["addr_width"],
                 "tcdm": {
                     "size": int(occamy_cfg["spm_wide"]["length"]/1024),
                 }
-
             },
             tpl=tpl_rtl_wrapper,
             target_path=str(script_dir / ".." / ".." / "hw" / "hemaia" / "hemaia_mem_system") + "/",

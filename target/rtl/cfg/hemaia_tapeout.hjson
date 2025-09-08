@@ -114,6 +114,8 @@
 
     hemaia_xdma_cfg: {
       bender_target: ["hemaia_xdma"],
+      // ReqrspManager Cfg
+      cfg_io_width: 64,
       // Cross Cluster Calling Cfg
       max_multicast: 2,
       max_dimension: 5,
