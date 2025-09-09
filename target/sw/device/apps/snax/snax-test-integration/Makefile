@@ -13,5 +13,3 @@ SRCS    = src/snax-test-integration.c
 include ./data/Makefile
 include ../../common.mk
 
-
-$(DEP): $(DATA_H)

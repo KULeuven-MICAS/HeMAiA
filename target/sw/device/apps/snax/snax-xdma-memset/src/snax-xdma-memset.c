@@ -5,7 +5,6 @@
 // Yunhao Deng <yunhao.deng@kuleuven.be>
 
 #include <stdint.h>
-#include "snax-xdma-lib.h"
 #include "snrt.h"
 
 int main() {
@@ -13,7 +12,7 @@ int main() {
     int err = 0;
 
     // Obtain the start address of the TCDM memory
-    uint8_t *tcdm_baseaddress = (uint8_t *)snrt_l1_next();
+    uint8_t *tcdm_baseaddress = (uint8_t *)snrt_cluster_base_addrl();
     uint8_t *tcdm_0 = tcdm_baseaddress;
     uint8_t *tcdm_16 = tcdm_baseaddress + 0x4000 * sizeof(uint8_t);
     uint8_t *tcdm_32 = tcdm_baseaddress + 0x8000 * sizeof(uint8_t);

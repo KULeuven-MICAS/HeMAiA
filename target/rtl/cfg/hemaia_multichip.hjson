@@ -5,6 +5,7 @@
     remote_quadrants: [],
     // Multi-chip configuration
     hemaia_multichip: {
+      nr_chiplets: 2,
       chip_id_width: 8,             // Not verified, should never be changed
       router_to_soc_iw: 4,          // soc_to_router_iw + clog2(chips)
       soc_to_router_iw: 4,          // Not beneficial for iw > 6
@@ -13,7 +14,7 @@
       testbench_cfg: {              // The total number of homogeneous chips (x * y) on the virtual interposer
         // Emulate a two-chips configuration
         upper_left_coordinate: [0, 0],
-        lower_right_coordinate: [1, 1],
+        lower_right_coordinate: [1, 0],
       }
     }
     addr_width: 48,
@@ -121,8 +122,6 @@
       cfg_base_offset: 65536 // 0x10000
     },
     clusters:[
-      "snax_KUL_cluster",
-      "snax_KUL_cluster",
       "snax_KUL_cluster",
       "snax_KUL_cluster",
       ],

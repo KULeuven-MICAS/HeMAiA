@@ -31,18 +31,40 @@ module ${name}_cva6 import ${name}_pkg::*; (
     RASDepth: 2,
     BTBEntries: 32,
     BHTEntries: 128,
-    // DRAM -- SPM, SPM -- Boot ROM, Boot ROM -- Debug Module
-    NrNonIdempotentRules: 3,
-    NonIdempotentAddrBase: {64'd${occamy_cfg["spm_narrow"]["address"]+occamy_cfg["spm_narrow"]["length"]}           , 64'd${occamy_cfg["peripherals"]["rom"]["address"]+occamy_cfg["peripherals"]["rom"]["length"]}                      , 64'h1000},
-    NonIdempotentLength:   {64'd${0x80000000-occamy_cfg["spm_narrow"]["address"]-occamy_cfg["spm_narrow"]["length"]}, 64'd${occamy_cfg["spm_narrow"]["address"]-occamy_cfg["peripherals"]["rom"]["address"]-occamy_cfg["peripherals"]["rom"]["length"]}, 64'd${occamy_cfg["peripherals"]["rom"]["address"]-0x1000}},
+    // We need the extra 1KB space in the narrow SPM as the mailbox between the host and acc
+
+    // Narrow SPM -- Narrow SPM+1KB, Narrow SPM End -- DRAM Start, SPM -- Boot ROM, Boot ROM -- Debug Module
+    NrNonIdempotentRules: 4,
+    NonIdempotentAddrBase: {64'd${occamy_cfg["spm_narrow"]["address"]}, // Mailbox Region Starts from the spm narrow
+                            64'd${occamy_cfg["spm_narrow"]["address"]+occamy_cfg["spm_narrow"]["length"]},
+                            64'd${occamy_cfg["peripherals"]["rom"]["address"]+occamy_cfg["peripherals"]["rom"]["length"]},
+                            64'h1000
+                            },
+    NonIdempotentLength:   {64'd${occamy_cfg["spm_narrow_mailbox_size"]}, // Mailbox size
+                            64'd${occamy_cfg["spm_wide"]["address"]-occamy_cfg["spm_narrow"]["address"]-occamy_cfg["spm_narrow"]["length"]},
+                            64'd${occamy_cfg["spm_narrow"]["address"]-occamy_cfg["peripherals"]["rom"]["address"]-occamy_cfg["peripherals"]["rom"]["length"]},
+                            64'd${occamy_cfg["peripherals"]["rom"]["address"]-0x1000}
+                            },
     NrExecuteRegionRules: 4,
     // DRAM, Boot ROM, SPM, Debug Module
-    ExecuteRegionAddrBase: {64'h8000_0000, 64'd${occamy_cfg["peripherals"]["rom"]["address"]}, 64'd${occamy_cfg["spm_narrow"]["address"]}, 64'h0   },
-    ExecuteRegionLength:   {(64'hff_ffff_ffff-64'h8000_0000), 64'd${occamy_cfg["peripherals"]["rom"]["length"]} , 64'd${occamy_cfg["spm_narrow"]["length"]} , 64'h1000},
+    ExecuteRegionAddrBase: {64'h8000_0000,
+                            64'd${occamy_cfg["peripherals"]["rom"]["address"]},
+                            64'd${occamy_cfg["spm_narrow"]["address"]},
+                            64'h0
+                            },
+    ExecuteRegionLength:   {(64'hff_ffff_ffff-64'h8000_0000),
+                            64'd${occamy_cfg["peripherals"]["rom"]["length"]},
+                            64'd${occamy_cfg["spm_narrow"]["length"]},
+                            64'h1000
+                            },
     // cached region
     NrCachedRegionRules:    2,
-    CachedRegionAddrBase:  {64'h8000_0000, 64'd${occamy_cfg["spm_narrow"]["address"]}},
-    CachedRegionLength:    {(64'hff_ffff_ffff-64'h8000_0000), 64'd${occamy_cfg["spm_narrow"]["length"]}},
+    CachedRegionAddrBase:  {64'd${occamy_cfg["spm_wide"]["address"]},
+                            64'd${occamy_cfg["spm_narrow"]["address"]+occamy_cfg["spm_narrow_mailbox_size"]}
+                            },
+    CachedRegionLength:    {(64'hff_ffff_ffff-64'd${occamy_cfg["spm_wide"]["address"]}),
+                             64'd${occamy_cfg["spm_narrow"]["length"]-occamy_cfg["spm_narrow_mailbox_size"]}
+                             },
     //  cache config
     AxiCompliant:           1'b1,
     SwapEndianess:          1'b0,

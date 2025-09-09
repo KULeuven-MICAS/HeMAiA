@@ -3,6 +3,16 @@
 import os
 import shutil
 import argparse
+import hjson
+from jsonref import JsonRef
+def read_json_file(file):
+    try:
+        srcfull = file.read()
+        obj = hjson.loads(srcfull, use_decimal=True)
+        obj = JsonRef.replace_refs(obj)
+    except ValueError:
+        raise SystemExit(sys.exc_info()[1])
+    return obj
 
 def copy_directory_m_n_times(input_dir, output_dir, m, n):
     # Check if the input directory exists
@@ -30,14 +40,23 @@ def main():
     # Positional arguments
     parser.add_argument('-i', '--input-dir', required=True, help='Path to the input directory to be copied')
     parser.add_argument('-o', '--output-dir', required=True, help='Path to the output directory to be copied')
-    parser.add_argument('-m', type=int, default=1, help='Number of rows (copies along x-axis, default: 1)')
-    parser.add_argument('-n', type=int, default=1, help='Number of columns (copies along y-axis, default: 1)')
+    parser.add_argument("--cfg",
+                        "-c",
+                        metavar="file",
+                        type=argparse.FileType('r'),
+                        required=True,
+                        help="A cluster configuration file")
     
     # Parse the arguments
     args = parser.parse_args()
-
+    
+    # Read HJSON description of System.
+    with args.cfg as file:
+        occamy_cfg = read_json_file(file)
+    m = occamy_cfg['hemaia_multichip']['testbench_cfg']['lower_right_coordinate'][0] + 1
+    n = occamy_cfg['hemaia_multichip']['testbench_cfg']['lower_right_coordinate'][1] + 1
     # Call the function with parsed arguments
-    copy_directory_m_n_times(args.input_dir, args.output_dir, args.m, args.n)
+    copy_directory_m_n_times(args.input_dir, args.output_dir, m, n)
 
 if __name__ == '__main__':
     main()

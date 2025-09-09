@@ -5,7 +5,6 @@
 // Yunhao Deng <yunhao.deng@kuleuven.be>
 
 #include "data.h"
-#include "snax-xdma-lib.h"
 #include "snrt.h"
 
 uint8_t *tcdm_c0 = 0;

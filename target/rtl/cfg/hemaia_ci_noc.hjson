@@ -13,7 +13,7 @@
       testbench_cfg: {
         // Emulate a four-chips configuration
         upper_left_coordinate: [0, 0],
-        lower_right_coordinate: [1, 1]
+        lower_right_coordinate: [0, 0]
       }
     }
     addr_width: 48,
@@ -125,10 +125,10 @@
       
     },
     clusters:[
-      "snax_xdma_cluster",
-      "snax_xdma_cluster",
-      "snax_xdma_cluster",
-      "snax_xdma_cluster",
+      "snax_KUL_cluster",
+      "snax_KUL_cluster",
+      "snax_KUL_cluster",
+      "snax_KUL_cluster",
       ],
 
     hemaia_xdma_cfg: {

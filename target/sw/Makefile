@@ -4,7 +4,7 @@
 #
 # Luca Colagrande <colluca@iis.ee.ethz.ch>
 
-.PHONY: sw clean
+.PHONY: sw clean-sw
 
 ############
 # Makefrag #
@@ -13,6 +13,7 @@
 MKFILE_PATH := $(abspath $(lastword $(MAKEFILE_LIST)))
 SIM_MKFILE_DIR  := $(dir $(MKFILE_PATH))
 ROOT        := $(SIM_MKFILE_DIR)../..
+SW_DIR      := $(abspath $(ROOT)/target/sw)
 include $(ROOT)/target/rtl/Makefile
 ############
 # Programs #
@@ -94,10 +95,15 @@ $(SW_DEVICE_RT_DIR)/src/occamy_defs.h: $(SW_DEVICE_RT_DIR)/template/occamy_defs.
 	@$(OCCAMYGEN) -c $(CFG) --outdir $(SW_DEVICE_RT_DIR)/src --cheader $<
 
 sw: $(PLATFORM_HEADERS)
+	$(MAKE) -C host libs
 	$(MAKE) -C host TARGET=partial-build
-	$(MAKE) -C device
+	$(MAKE) -C device all
 	$(MAKE) -C host TARGET=finalize-build
 
-clean:
+clean-sw:
+# clean generated tmp files
+	rm -rf $(SW_DIR)/device/*.tmp
+# clean device build
 	$(MAKE) -C device TARGET=clean
+# clean host build
 	$(MAKE) -C host TARGET=clean

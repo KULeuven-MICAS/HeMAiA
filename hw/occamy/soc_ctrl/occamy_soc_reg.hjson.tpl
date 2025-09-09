@@ -13,6 +13,16 @@
       desc: "Number of GPIO pads in the chip.",
       type: "int",
       default: "31"
+    },
+    { name: "NumMailboxRegs",
+      desc: "Number of Mailbox scartch registers",
+      type: "int",
+      default: "${nr_clusters}"
+    },
+    { name: "NumKernelTabRegs",
+      desc: "Number of Kernel Table registers",
+      type: "int",
+      default: "3"
     }
   ],
   name: "${name}_SoC",
@@ -144,6 +154,42 @@
             name: "DRV",
             resval: "2",
             desc: "Drive strength."
+          }
+        ]
+      }
+    },
+    { multireg:
+      { name: "MAILBOX_SCRATCH",
+        desc: "Scratch register holding the mailbox pointers.",
+        swaccess: "rw",
+        hwaccess: "none",
+        count: "NumMailboxRegs",
+        cname: "mailbox_scratch",
+        fields: [
+          { bits: "31:0",
+            resval: "0",
+            name: "MAILBOX_PTR",
+            desc: '''
+                  Scratch register holding the mailbox pointers.
+                  '''
+          }
+        ]
+      }
+    },
+    { multireg:
+      { name: "KERNEL_TAB_SCRATCH",
+        desc: "Scratch register holding the kernel tabel. 1. Ready 2. Kernel Table Start Addr 3. Kernel Table End Addr.",
+        swaccess: "rw",
+        hwaccess: "none",
+        count: "NumKernelTabRegs",
+        cname: "kernel_tab_scratch",
+        fields: [
+          { bits: "31:0",
+            resval: "0",
+            name: "KERNAL_TAB_REGS",
+            desc: '''
+                  Scratch register holding the mailbox pointers.
+                  '''
           }
         ]
       }

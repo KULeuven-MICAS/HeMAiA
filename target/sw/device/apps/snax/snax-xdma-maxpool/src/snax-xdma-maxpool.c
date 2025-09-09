@@ -5,7 +5,6 @@
 // Fanchen Kong <fanchen.kong@kuleuven.be>
 
 #include "data.h"
-#include "snax-xdma-lib.h"
 #include "snrt.h"
 
 uint32_t tstride_src[5] = {0};

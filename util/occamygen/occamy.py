@@ -766,6 +766,17 @@ def get_cva6_kwargs(occamy_cfg, soc_narrow_xbar, name):
 def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
     core_per_cluster_list = [cluster_generator.cfg["nr_cores"]
                              for cluster_generator in cluster_generators]
+    if occamy_cfg['hemaia_multichip']['single_chip']:
+        nr_chiplets = 1
+    else:
+        nr_chiplets = occamy_cfg['hemaia_multichip']['nr_chiplets']
+        upper_left_coordinate = occamy_cfg['hemaia_multichip']['testbench_cfg']['upper_left_coordinate']
+        lower_right_coordinate = occamy_cfg['hemaia_multichip']['testbench_cfg']['lower_right_coordinate']
+        delta_x = lower_right_coordinate[0] - upper_left_coordinate[0]
+        delta_y = lower_right_coordinate[1] - upper_left_coordinate[1]
+        expected_nr_chiplets = (delta_x + 1) * (delta_y + 1)
+        if not (nr_chiplets==expected_nr_chiplets):
+            raise ValueError(f"The number of chiplets ({nr_chiplets}) does not match the coordinates provided in the testbench_cfg ({upper_left_coordinate} to {lower_right_coordinate}, expected {expected_nr_chiplets} chiplets). Please check your configuration.")
     nr_quads = occamy_cfg['nr_s1_quadrant']
     nr_clusters = len(occamy_cfg["clusters"])
     nr_cores = sum(core_per_cluster_list)
@@ -779,45 +790,21 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
     cluster_offset = cluster_offset_list[0]
     cluster_addr_width = int(math.log2(cluster_offset))
     cluster_base_addr = cluster_generators[0].cfg["cluster_base_addr"]
-    # # The lut here is to provide an easy way to determine the cluster idx based on core idx
-    # # e.g core_per_cluster_list = [2,3]
-    # # core_idx lut    cluster_idx
-    # # 0        lut[0] 0
-    # # 1        lut[1] 0
-    # # 2        lut[2] 1
-    # # 3        lut[3] 1
-    # # 4        lut[4] 1
-    # lut = []
-    # for cluster_num, num_cores in enumerate(core_per_cluster_list):
-    #     lut.extend([cluster_num] * num_cores)
-    # running_sum = []
-    # current_sum = 0
-    # for core in core_per_cluster_list:
-    #     current_sum += core
-    #     running_sum.append(current_sum)
-    # cluster_baseidx = [0] + running_sum[:-1]
-    # # we need to define an array in c header file for each cluster like
-    # # #define N_CORES_PER_CLUSTER {2,3}
-    # # so here we need to take out the value of the core_per_cluster_list
-    # # and join them with commas and then finally concat with {}
-    # nr_cores_per_cluster = "{" + ",".join(map(str, core_per_cluster_list)) + "}"
-    # lut_coreidx_clusteridx = "{" + ",".join(map(str, lut)) + "}"
-    # cluster_baseidx = "{" + ",".join(map(str, cluster_baseidx)) + "}"
-    # cheader_kwargs={
-    #     "name": name,
-    #     "nr_quads": nr_quads,
-    #     "nr_clusters": nr_clusters,
-    #     "nr_cores_per_cluster": nr_cores_per_cluster,
-    #     "lut_coreidx_clusteridx": lut_coreidx_clusteridx,
-    #     "cluster_baseidx": cluster_baseidx,
-    #     "nr_cores": nr_cores
-    # }
+    cluster_tcdm_size =  cluster_generators[0].cfg["tcdm"]["size"]*1024
+    wide_spm_size = occamy_cfg["spm_wide"]["length"]
+    narrow_spm_size = occamy_cfg["spm_narrow"]["length"]
+    mailbox_size = occamy_cfg["spm_narrow_mailbox_size"]
     cheader_kwargs = {
         "name": name,
+        "nr_chiplets": nr_chiplets,
         "nr_quads": nr_quads,
         "nr_clusters": nr_clusters,
         "nr_cores_per_cluster": nr_cores_per_cluster,
         "nr_cores": nr_cores,
+        "wide_spm_size": hex(wide_spm_size),
+        "narrow_spm_size": hex(narrow_spm_size),
+        "mailbox_size": hex(mailbox_size),
+        "cluster_tcdm_size": hex(cluster_tcdm_size),
         "cluster_offset": hex(cluster_offset),
         "cluster_addr_width": cluster_addr_width,
         "cluster_base_addr": hex(cluster_base_addr)
@@ -928,11 +915,13 @@ def get_chip_kwargs(soc_wide_xbar, soc_narrow_xbar, soc_axi_lite_narrow_periph_x
     return chip_kwargs
 
 
-def get_ctrl_kwargs(occamy_cfg, name):
+def get_ctrl_kwargs(occamy_cfg, cluster_generators, name):
     default_boot_addr = occamy_cfg["peripherals"]["rom"]["address"]
     backup_boot_addr = occamy_cfg["backup_boot_addr"]
     addr_width = occamy_cfg["addr_width"]
-
+    # core_per_cluster_list = [cluster_generator.cfg["nr_cores"]
+    #                          for cluster_generator in cluster_generators]
+    # nr_cores_quadrant = sum(core_per_cluster_list)
     hex_default_boot_addr = hex(default_boot_addr)
     hex_backup_boot_addr = hex(backup_boot_addr)
     # Remove the prefix 0x
@@ -941,6 +930,8 @@ def get_ctrl_kwargs(occamy_cfg, name):
     ctrl_kwargs = {
         "name": name,
         "nr_s1_quadrants": occamy_cfg["nr_s1_quadrant"],
+        "nr_clusters": len(occamy_cfg["clusters"]),
+        # "nr_cores": nr_cores_quadrant,
         "default_boot_addr": hex_default_boot_addr,
         "backup_boot_addr": hex_backup_boot_addr,
         "occamy_cfg": occamy_cfg,

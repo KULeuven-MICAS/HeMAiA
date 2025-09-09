@@ -36,7 +36,7 @@ clean:
 	$(MAKE) -C ./target/fpga/vivado_ips/ clean
 	$(MAKE) -C ./target/fpga_chip/hemaia_chip/ clean
 	$(MAKE) -C ./target/fpga_chip/hemaia_system/ clean
-	$(MAKE) -C ./target/sw/  clean
+	$(MAKE) -C ./target/sw/  clean-sw
 	$(MAKE) -C ./target/rtl/bootrom/  clean
 	$(MAKE) -C ./target/sim/ clean
 	$(MAKE) -C ./target/rtl/ clean
@@ -61,7 +61,7 @@ sw: $(CFG)
 HOST_APP ?= offload
 DEVICE_APP ?= snax-test-integration
 apps:
-	$(MAKE) -C ./target/sim apps HOST_APP=$(HOST_APP) DEVICE_APP=$(DEVICE_APP)
+	$(MAKE) -C ./target/sim apps CFG=$(CFG) HOST_APP=$(HOST_APP) DEVICE_APP=$(DEVICE_APP)
  
 ######################
 # Bootrom Generation #
@@ -131,7 +131,7 @@ hemaia_system_vivado_gui: # In ESAT Server
 ######################
 
 hemaia_system_vlt: # In SNAX Docker
-	+$(MAKE) -C ./target/sim bin/occamy_chip.vlt CFG=$(CFG)
+	$(MAKE) -C ./target/sim bin/occamy_chip.vlt CFG=$(CFG)
 
 #####################
 # Questasim Workflow #

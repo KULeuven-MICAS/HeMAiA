@@ -523,7 +523,11 @@
             "type": "integer",
             "description": "Backup Boot Address",
             "default": 2147483648            
+        },
+        "spm_narrow_mailbox_size":{
+            "type": "integer",
+            "description": "The size of the mailbox in the narrow SPM",
+            "default": 8192 
         }
-
     }
 }

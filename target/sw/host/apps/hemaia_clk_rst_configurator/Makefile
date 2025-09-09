@@ -6,5 +6,6 @@
 
 APP  = hemaia_clk_rst_configurator
 SRCS = src/hemaia_clk_rst_configurator.c
-
+BINGO_HOST ?= 0 # True to include the bingo runtime
+INCL_DEVICE_BINARY ?= 0 # True to include the device binary
 include ../common.mk
