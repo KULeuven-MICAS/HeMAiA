@@ -501,7 +501,7 @@ HeMAiAMemNarrowXbarCfg.NoSlvPorts
       .narrow_out_req_t(axi_narrow_slave_req_t),
       .narrow_out_resp_t(axi_narrow_slave_rsp_t),
       .narrow_in_req_t(axi_narrow_in_post_xbar_req_t),
-      .narrow_in_resp_t(axi_narrow_in_post_xbar_rsp_t),
+      .narrow_in_resp_t(axi_narrow_in_post_xbar_resp_t),
       // TCDM
       .TCDMNumPorts(BanksPerSuperBank * 2),
       .TCDMAddrWidth($clog2(MemSize)),
