@@ -155,7 +155,7 @@ module hemaia_mem_system #(
   assign axi_wide_slave_req_o = axi_wide_post_xbar_req[0];
   assign axi_wide_post_xbar_rsp[0] = axi_wide_slave_rsp_i;
 
-  xbar_rule_t [1:0] mem_system_xbar_rule;
+  xbar_rule_t [1:0] mem_system_wide_xbar_rule;
   // The 0th port is for the XDMA virtual addresses
   // The 1st port is for the memory's direct access
 
@@ -171,7 +171,7 @@ module hemaia_mem_system #(
   assign xdma_data_region_start_address = {chip_id_i, 40'b0} + 48'h1_0000_0000 - 'h4000;
   assign xdma_data_region_end_address = xdma_data_region_start_address + 'h1000;
 
-  assign mem_system_xbar_rule = '{
+  assign mem_system_wide_xbar_rule = '{
           '{
               idx: 0,
               start_addr: xdma_data_region_start_address,
@@ -237,7 +237,7 @@ module hemaia_mem_system #(
       .slv_ports_resp_o(axi_wide_pre_xbar_rsp),
       .mst_ports_req_o(axi_wide_post_xbar_req),
       .mst_ports_resp_i(axi_wide_post_xbar_rsp),
-      .addr_map_i(mem_system_xbar_rule),
+      .addr_map_i(mem_system_wide_xbar_rule),
       .en_default_mst_port_i('0),
       .default_mst_port_i('0)
   );
