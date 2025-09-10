@@ -152,8 +152,8 @@ module hemaia_mem_system #(
   assign axi_wide_pre_xbar_req[0] = axi_wide_master_req_i;
   assign axi_wide_master_rsp_o = axi_wide_pre_xbar_rsp[0];
 
-  assign axi_wide_slave_req_o = axi_wide_post_xbar_req[0];
-  assign axi_wide_post_xbar_rsp[0] = axi_wide_slave_rsp_i;
+  assign axi_narrow_pre_xbar_req[0] = axi_narrow_master_req_i;
+  assign axi_narrow_master_rsp_o = axi_narrow_pre_xbar_rsp[0];
 
   xbar_rule_t [1:0] mem_system_wide_xbar_rule;
   // The 0th port is for the XDMA virtual addresses
@@ -513,7 +513,9 @@ HeMAiAMemNarrowXbarCfg.NoSlvPorts
       .tcdm_req_o            (xdma_req),
       .tcdm_rsp_i            (xdma_rsp),
       .csr_req_bits_data_i   (csr_req.wdata),
-      .csr_req_bits_addr_i   (csr_req.addr[31:0]),
+      .csr_req_bits_strb_i   (csr_req.wstrb),
+      // For 4KB address space, maximally 10 bits are used
+      .csr_req_bits_addr_i   ({22'b0, csr_req.addr[9:0]}),
       .csr_req_bits_write_i  (csr_req.write),
       .csr_req_valid_i       (csr_req.valid),
       .csr_req_ready_o       (csr_rsp.ready),
