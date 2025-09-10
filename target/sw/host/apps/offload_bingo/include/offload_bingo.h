@@ -6,7 +6,6 @@
 #pragma once
 #include "libbingo/bingo_api.h"
 #include "host.h"
-#include "hemaia_clk_rst_controller.h"
 #include "dummy_workload.h"
 // #include "xdma_1d_copy_workload.h"
 // Devices

@@ -71,7 +71,6 @@ clean-rtl-src:
 	rm -rf .plic_reggen_targets_group
 	rm -rf .clint_reggen_targets_group
 	rm -rf .socctrl_reggen_targets_grouip
-	rm -rf $(HEMAIA_MEM_SYS_DIR)/include $(HEMAIA_MEM_SYS_DIR)/hemaia_xdma_wrapper.sv $(HEMAIA_MEM_SYS_DIR)/hemaia_xdma.sv
 
 
 $(TARGET_PLIC_DIR) $(TARGET_CLINT_DIR) $(TARGET_SOCCTRL_DIR) $(TARGET_QUADCTRL_DIR):
@@ -115,6 +114,7 @@ clean-soc:
 	rm -rf $(TARGET_SRC_DIR)/axi_flat.sv
 	rm -rf $(TARGET_SRC_DIR)/apb_flat.sv
 	rm -rf $(TARGET_SRC_DIR)/bender_targets.tmp
+	rm -rf $(HEMAIA_MEM_SYS_DIR)/hemaia_xdma_wrapper.sv $(HEMAIA_MEM_SYS_DIR)/hemaia_xdma.sv
 
 $(MISC_OCCAMYGEN_TARGETS): .misc_occamygen_targets_group
 .misc_occamygen_targets_group: $(CFG) $(MISC_OCCAMYGEN_SV_TEMPLATES)

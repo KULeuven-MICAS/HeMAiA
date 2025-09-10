@@ -746,7 +746,7 @@ def main():
             + " --hw-target-dir "
             + str(script_dir / ".." / ".." / "hw" / "hemaia" / "hemaia_mem_system") + "/"
             + " --sw-target-dir "
-            + str(script_dir / ".." / ".." / "hw" / "hemaia" / "hemaia_mem_system") + "/",
+            + str(script_dir / ".." / ".." / "target" / "sw" / "shared" / "vendor" / "xdma" / "hemaia-xdma-addr.h")
         )
         print("XDMA generation finished")
 

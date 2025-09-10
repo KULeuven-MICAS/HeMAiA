@@ -21,4 +21,3 @@
 #include "sw_mailbox.c"
 // SNAX runtime
 #include "snax_xdma_lib.c"
-

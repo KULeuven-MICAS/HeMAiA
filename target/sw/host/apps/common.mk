@@ -39,6 +39,9 @@ INCDIRS += $(HOST_DIR)/../shared/platform/generated
 INCDIRS += $(HOST_DIR)/../shared/runtime
 SRCS    += $(RUNTIME_DIR)/start.S
 
+# Include XDMA
+INCDIRS += $(SWDIR)/shared/vendor/xdma
+
 # Compiler flags
 RISCV_CFLAGS += $(addprefix -I,$(INCDIRS))
 RISCV_CFLAGS += -march=rv64imafdc
