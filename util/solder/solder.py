@@ -1506,6 +1506,16 @@ class AxiXbar(Xbar):
             addrs = filter(lambda r: r[0] >= range_mask[0] and r[1] < range_mask[1], addrs)
         self.add_output(name, addrs)
 
+    def add_output_multi_entries(self, name, entries, range_mask=None):
+        """Add single output port with addresses from multiple entries"""
+        all_addrs = []
+        for entry in entries:
+            addrs = [(r.lo, r.hi) for r in self.node.get_routes() if r.port == entry]
+            if range_mask is not None:
+                addrs = [addr for addr in addrs if addr[0] >= range_mask[0] and addr[1] < range_mask[1]]
+            all_addrs.extend(addrs)
+        self.add_output(name, all_addrs)
+
     def addr_map_len(self):
         return len(self.addrmap) + len(self.symbolic_addrmap) + sum(
             len(am[1]) for am in self.symbolic_addrmap_multi)

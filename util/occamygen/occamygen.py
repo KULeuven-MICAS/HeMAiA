@@ -243,10 +243,10 @@ def main():
     am_axi_lite_narrow_peripherals, am_bootrom, am_clint = occamy.am_connect_soc_lite_narrow_periph_xbar(
         am, am_soc_axi_lite_narrow_periph_xbar, occamy_cfg)
 
-    am_spm_narrow, am_sys_idma_cfg, am_narrow_hemaia_mem = occamy.am_connect_soc_narrow_xbar_mem(
+    am_spm_narrow, am_sys_idma_cfg, am_narrow_hemaia_xdma_ctrl_io, am_narrow_hemaia_xdma_cfg_io = occamy.am_connect_soc_narrow_xbar_mem(
         am, am_soc_narrow_xbar, occamy_cfg)
 
-    am_wide_hemaia_mem, am_wide_zero_mem = occamy.am_connect_soc_wide_xbar_mem(
+    am_wide_hemaia_mem, am_wide_hemaia_xdma_data_io, am_wide_zero_mem = occamy.am_connect_soc_wide_xbar_mem(
         am, am_soc_wide_xbar, occamy_cfg)
 
     am_clusters = occamy.am_connect_soc_wide_xbar_quad(
@@ -360,7 +360,7 @@ def main():
     soc_wide_xbar.add_output_entry("soc_narrow", am_soc_narrow_xbar)
     soc_wide_xbar.add_input("soc_narrow")
     soc_wide_xbar.add_input("sys_idma_mst")
-    soc_wide_xbar.add_output_entry("hemaia_mem", am_wide_hemaia_mem)
+    soc_wide_xbar.add_output_multi_entries("hemaia_mem", [am_wide_hemaia_mem, am_wide_hemaia_xdma_data_io])
     soc_wide_xbar.add_input("hemaia_mem")
 
     soc_wide_xbar.add_output_entry("wide_zero_mem", am_wide_zero_mem)
@@ -413,7 +413,7 @@ def main():
 
     # hemaia mem system
     soc_narrow_xbar.add_input("hemaia_mem")
-    soc_narrow_xbar.add_output_entry("hemaia_mem", am_narrow_hemaia_mem)
+    soc_narrow_xbar.add_output_multi_entries("hemaia_mem", [am_narrow_hemaia_xdma_ctrl_io, am_narrow_hemaia_xdma_cfg_io])
     ##########################
     # S1 Quadrant controller #
     ##########################
