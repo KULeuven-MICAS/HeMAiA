@@ -514,8 +514,8 @@ HeMAiAMemNarrowXbarCfg.NoSlvPorts
       .tcdm_rsp_i            (xdma_rsp),
       .csr_req_bits_data_i   (csr_req.wdata),
       .csr_req_bits_strb_i   (csr_req.wstrb),
-      // For 4KB address space, maximally 10 bits are used
-      .csr_req_bits_addr_i   ({22'b0, csr_req.addr[9:0]}),
+      // For 4KB address space, maximally 9 bits are used
+      .csr_req_bits_addr_i   ({23'b0, csr_req.addr[11:3]}),
       .csr_req_bits_write_i  (csr_req.write),
       .csr_req_valid_i       (csr_req.valid),
       .csr_req_ready_o       (csr_rsp.ready),
