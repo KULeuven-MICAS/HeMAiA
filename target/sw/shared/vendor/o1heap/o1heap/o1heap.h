@@ -31,7 +31,7 @@ extern "C" {
 #define O1HEAP_VERSION_MAJOR 2
 
 /// The guaranteed alignment depends on the platform pointer width.
-#define O1HEAP_ALIGNMENT (sizeof(void*) * 4U)
+#define O1HEAP_ALIGNMENT (sizeof(uint8_t) * 64)
 
 /// The definition is private, so the user code can only operate on pointers. This is done to enforce encapsulation.
 typedef struct O1HeapInstance O1HeapInstance;

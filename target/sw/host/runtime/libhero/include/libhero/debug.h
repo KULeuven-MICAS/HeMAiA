@@ -12,7 +12,7 @@
 ///// LOGGING  //////
 /////////////////////
 
-extern int libhero_log_level;
+#define libhero_log_level LOG_WARN
 
 enum log_level {
   LOG_ERROR = 0,

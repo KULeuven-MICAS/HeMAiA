@@ -6,6 +6,12 @@
 
 APP  = hemaia_system_xdma_copy
 SRCS = src/hemaia_system_xdma_copy.c
-BINGO_HOST ?= 0 # True to include the bingo runtime
+BINGO_HOST ?= 1 # True to include the bingo runtime
 INCL_DEVICE_BINARY ?= 0 # True to include the device binary
+
+PARTIAL_OUTPUTS += data/data.h
+
+data/data.h: data/datagen.py data/params.hjson
+	python3 $< -c data/params.hjson > $@
+
 include ../common.mk
