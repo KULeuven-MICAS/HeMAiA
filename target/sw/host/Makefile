@@ -27,6 +27,9 @@ APPS += offload
 APPS += offload_bingo
 endif
 
+# XDMA copy test application
+APPS += hemaia_system_xdma_copy
+
 TARGET ?= all
 
 LIB_HERO_DIR = runtime/libhero

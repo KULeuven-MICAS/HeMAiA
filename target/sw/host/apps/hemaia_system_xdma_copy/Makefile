@@ -4,8 +4,8 @@
 #
 # Luca Colagrande <colluca@iis.ee.ethz.ch>
 
-APP  = hemaia_xdma
-SRCS = src/hemaia_xdma.c
+APP  = hemaia_system_xdma_copy
+SRCS = src/hemaia_system_xdma_copy.c
 BINGO_HOST ?= 0 # True to include the bingo runtime
 INCL_DEVICE_BINARY ?= 0 # True to include the device binary
 include ../common.mk
