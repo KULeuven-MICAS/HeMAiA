@@ -13,6 +13,16 @@
 #define XDMA_DEBUG_PRINT(...)
 #endif
 
+// Define the base address of XDMA MMIO
+#define SNAX_XDMA_CFG_ADDR 960
+static inline uint32_t snax_read_xdma_cfg_reg(uint32_t addr) {
+    return csrr_ss(SNAX_XDMA_CFG_ADDR + addr);
+}
+
+static inline void snax_write_xdma_cfg_reg(uint32_t addr, uint32_t value) {
+    csrw_ss(SNAX_XDMA_CFG_ADDR + addr, value);
+}
+
 // Data Copy Task
 inline int32_t xdma_memcpy_nd_full_addr(
     uint64_t src, uint64_t dst, uint32_t spatial_stride_src,
@@ -21,15 +31,15 @@ inline int32_t xdma_memcpy_nd_full_addr(
     uint32_t* temp_stride_dst, uint32_t* temp_bound_dst,
     uint32_t enabled_chan_src, uint32_t enabled_chan_dst,
     uint32_t enabled_byte_dst) {
-    csrw_ss(XDMA_SRC_ADDR_PTR_LSB, (uint32_t)src);
-    csrw_ss(XDMA_SRC_ADDR_PTR_MSB, (uint32_t)(src >> 32));
+    snax_write_xdma_cfg_reg(XDMA_SRC_ADDR_PTR_LSB, (uint32_t)src);
+    snax_write_xdma_cfg_reg(XDMA_SRC_ADDR_PTR_MSB, (uint32_t)(src >> 32));
 
-    csrw_ss(XDMA_DST_ADDR_PTR_LSB, (uint32_t)dst);
-    csrw_ss(XDMA_DST_ADDR_PTR_MSB, (uint32_t)(dst >> 32));
+    snax_write_xdma_cfg_reg(XDMA_DST_ADDR_PTR_LSB, (uint32_t)dst);
+    snax_write_xdma_cfg_reg(XDMA_DST_ADDR_PTR_MSB, (uint32_t)(dst >> 32));
 
     for (uint32_t i = 1; i < XDMA_MAX_DST_COUNT; i++) {
-        csrw_ss(XDMA_DST_ADDR_PTR_LSB + i * 2, 0);
-        csrw_ss(XDMA_DST_ADDR_PTR_MSB + i * 2, 0);
+        snax_write_xdma_cfg_reg(XDMA_DST_ADDR_PTR_LSB + i * 2, 0);
+        snax_write_xdma_cfg_reg(XDMA_DST_ADDR_PTR_MSB + i * 2, 0);
     }
 
     // Rule check
@@ -52,10 +62,10 @@ inline int32_t xdma_memcpy_nd_full_addr(
         // return -3;
     }
     // Spatial Stride at src
-    csrw_ss(XDMA_SRC_SPATIAL_STRIDE_PTR, spatial_stride_src);
+    snax_write_xdma_cfg_reg(XDMA_SRC_SPATIAL_STRIDE_PTR, spatial_stride_src);
 
     // Spatial Stride at dst
-    csrw_ss(XDMA_DST_SPATIAL_STRIDE_PTR, spatial_stride_dst);
+    snax_write_xdma_cfg_reg(XDMA_DST_SPATIAL_STRIDE_PTR, spatial_stride_dst);
 
     // Temporal Dimension 0 to n at src
     for (uint32_t i = 0; i < temp_dim_src; i++) {
@@ -63,13 +73,14 @@ inline int32_t xdma_memcpy_nd_full_addr(
             XDMA_DEBUG_PRINT("Source dimension is too high for xdma\n");
             return -4;
         }
-        csrw_ss(XDMA_SRC_TEMP_BOUND_PTR + i, temp_bound_src[i]);
-        csrw_ss(XDMA_SRC_TEMP_STRIDE_PTR + i, temp_stride_src[i]);
+        snax_write_xdma_cfg_reg(XDMA_SRC_TEMP_BOUND_PTR + i, temp_bound_src[i]);
+        snax_write_xdma_cfg_reg(XDMA_SRC_TEMP_STRIDE_PTR + i,
+                                temp_stride_src[i]);
     }
     // Dimension n to MAX at src
     for (uint32_t i = temp_dim_src; i < XDMA_SRC_TEMP_DIM; i++) {
-        csrw_ss(XDMA_SRC_TEMP_BOUND_PTR + i, 1);
-        csrw_ss(XDMA_SRC_TEMP_STRIDE_PTR + i, 0);
+        snax_write_xdma_cfg_reg(XDMA_SRC_TEMP_BOUND_PTR + i, 1);
+        snax_write_xdma_cfg_reg(XDMA_SRC_TEMP_STRIDE_PTR + i, 0);
     }
     // Temporal Dimension 0 to n at dst
     for (uint32_t i = 0; i < temp_dim_dst; i++) {
@@ -77,20 +88,21 @@ inline int32_t xdma_memcpy_nd_full_addr(
             XDMA_DEBUG_PRINT("Destination dimension is too high for xdma\n");
             return -4;
         }
-        csrw_ss(XDMA_DST_TEMP_BOUND_PTR + i, temp_bound_dst[i]);
-        csrw_ss(XDMA_DST_TEMP_STRIDE_PTR + i, temp_stride_dst[i]);
+        snax_write_xdma_cfg_reg(XDMA_DST_TEMP_BOUND_PTR + i, temp_bound_dst[i]);
+        snax_write_xdma_cfg_reg(XDMA_DST_TEMP_STRIDE_PTR + i,
+                                temp_stride_dst[i]);
     }
     // Dimension n to MAX at dst
     for (uint32_t i = temp_dim_dst; i < XDMA_DST_TEMP_DIM; i++) {
-        csrw_ss(XDMA_DST_TEMP_BOUND_PTR + i, 1);
-        csrw_ss(XDMA_DST_TEMP_STRIDE_PTR + i, 0);
+        snax_write_xdma_cfg_reg(XDMA_DST_TEMP_BOUND_PTR + i, 1);
+        snax_write_xdma_cfg_reg(XDMA_DST_TEMP_STRIDE_PTR + i, 0);
     }
     // Enabled channel at src
-    csrw_ss(XDMA_SRC_ENABLED_CHAN_PTR, enabled_chan_src);
+    snax_write_xdma_cfg_reg(XDMA_SRC_ENABLED_CHAN_PTR, enabled_chan_src);
     // Enabled channel at dst
-    csrw_ss(XDMA_DST_ENABLED_CHAN_PTR, enabled_chan_dst);
+    snax_write_xdma_cfg_reg(XDMA_DST_ENABLED_CHAN_PTR, enabled_chan_dst);
     // Enabled byte at dst
-    csrw_ss(XDMA_DST_ENABLED_BYTE_PTR, enabled_byte_dst);
+    snax_write_xdma_cfg_reg(XDMA_DST_ENABLED_BYTE_PTR, enabled_byte_dst);
     return 0;
 }
 
@@ -148,8 +160,8 @@ inline int32_t xdma_multicast_nd_full_address(
     uint32_t* temp_stride_dst, uint32_t* temp_bound_dst,
     uint32_t enabled_chan_src, uint32_t enabled_chan_dst,
     uint32_t enabled_byte_dst) {
-    csrw_ss(XDMA_SRC_ADDR_PTR_LSB, (uint32_t)src);
-    csrw_ss(XDMA_SRC_ADDR_PTR_MSB, (uint32_t)(src >> 32));
+    snax_write_xdma_cfg_reg(XDMA_SRC_ADDR_PTR_LSB, (uint32_t)src);
+    snax_write_xdma_cfg_reg(XDMA_SRC_ADDR_PTR_MSB, (uint32_t)(src >> 32));
 
     if (dst_num > XDMA_MAX_DST_COUNT) {
         XDMA_DEBUG_PRINT("Number of destination exceeds the hardware limit\n");
@@ -157,15 +169,17 @@ inline int32_t xdma_multicast_nd_full_address(
 
     // Set the destination address for each destination
     for (uint32_t i = 0; i < dst_num; i++) {
-        csrw_ss(XDMA_DST_ADDR_PTR_LSB + i * 2, (uint32_t)dst[i]);
-        csrw_ss(XDMA_DST_ADDR_PTR_MSB + i * 2, (uint32_t)(dst[i] >> 32));
+        snax_write_xdma_cfg_reg(XDMA_DST_ADDR_PTR_LSB + i * 2,
+                                (uint32_t)dst[i]);
+        snax_write_xdma_cfg_reg(XDMA_DST_ADDR_PTR_MSB + i * 2,
+                                (uint32_t)(dst[i] >> 32));
     }
 
     // The remaining is set to 0, and XDMA will stop the chained copy to the
     // next destination
     for (uint32_t i = dst_num; i < XDMA_MAX_DST_COUNT; i++) {
-        csrw_ss(XDMA_DST_ADDR_PTR_LSB + i * 2, 0);
-        csrw_ss(XDMA_DST_ADDR_PTR_MSB + i * 2, 0);
+        snax_write_xdma_cfg_reg(XDMA_DST_ADDR_PTR_LSB + i * 2, 0);
+        snax_write_xdma_cfg_reg(XDMA_DST_ADDR_PTR_MSB + i * 2, 0);
     }
     // Rule check
     // The enabled spatial bound for input should be equal to the enabled
@@ -188,10 +202,10 @@ inline int32_t xdma_multicast_nd_full_address(
     }
 
     // Spatial Stride at src
-    csrw_ss(XDMA_SRC_SPATIAL_STRIDE_PTR, spatial_stride_src);
+    snax_write_xdma_cfg_reg(XDMA_SRC_SPATIAL_STRIDE_PTR, spatial_stride_src);
 
     // Spatial Stride at dst
-    csrw_ss(XDMA_DST_SPATIAL_STRIDE_PTR, spatial_stride_dst);
+    snax_write_xdma_cfg_reg(XDMA_DST_SPATIAL_STRIDE_PTR, spatial_stride_dst);
 
     // Temporal Dimension 0 to n at src
     for (uint32_t i = 0; i < temp_dim_src; i++) {
@@ -199,13 +213,14 @@ inline int32_t xdma_multicast_nd_full_address(
             XDMA_DEBUG_PRINT("Source dimension is too high for xdma\n");
             return -4;
         }
-        csrw_ss(XDMA_SRC_TEMP_BOUND_PTR + i, temp_bound_src[i]);
-        csrw_ss(XDMA_SRC_TEMP_STRIDE_PTR + i, temp_stride_src[i]);
+        snax_write_xdma_cfg_reg(XDMA_SRC_TEMP_BOUND_PTR + i, temp_bound_src[i]);
+        snax_write_xdma_cfg_reg(XDMA_SRC_TEMP_STRIDE_PTR + i,
+                                temp_stride_src[i]);
     }
     // Dimension n to MAX at src
     for (uint32_t i = temp_dim_src; i < XDMA_SRC_TEMP_DIM; i++) {
-        csrw_ss(XDMA_SRC_TEMP_BOUND_PTR + i, 1);
-        csrw_ss(XDMA_SRC_TEMP_STRIDE_PTR + i, 0);
+        snax_write_xdma_cfg_reg(XDMA_SRC_TEMP_BOUND_PTR + i, 1);
+        snax_write_xdma_cfg_reg(XDMA_SRC_TEMP_STRIDE_PTR + i, 0);
     }
     // Temporal Dimension 0 to n at dst
     for (uint32_t i = 0; i < temp_dim_dst; i++) {
@@ -213,20 +228,21 @@ inline int32_t xdma_multicast_nd_full_address(
             XDMA_DEBUG_PRINT("Destination dimension is too high for xdma\n");
             return -4;
         }
-        csrw_ss(XDMA_DST_TEMP_BOUND_PTR + i, temp_bound_dst[i]);
-        csrw_ss(XDMA_DST_TEMP_STRIDE_PTR + i, temp_stride_dst[i]);
+        snax_write_xdma_cfg_reg(XDMA_DST_TEMP_BOUND_PTR + i, temp_bound_dst[i]);
+        snax_write_xdma_cfg_reg(XDMA_DST_TEMP_STRIDE_PTR + i,
+                                temp_stride_dst[i]);
     }
     // Dimension n to MAX at dst
     for (uint32_t i = temp_dim_dst; i < XDMA_DST_TEMP_DIM; i++) {
-        csrw_ss(XDMA_DST_TEMP_BOUND_PTR + i, 1);
-        csrw_ss(XDMA_DST_TEMP_STRIDE_PTR + i, 0);
+        snax_write_xdma_cfg_reg(XDMA_DST_TEMP_BOUND_PTR + i, 1);
+        snax_write_xdma_cfg_reg(XDMA_DST_TEMP_STRIDE_PTR + i, 0);
     }
     // Enabled channel at src
-    csrw_ss(XDMA_SRC_ENABLED_CHAN_PTR, enabled_chan_src);
+    snax_write_xdma_cfg_reg(XDMA_SRC_ENABLED_CHAN_PTR, enabled_chan_src);
     // Enabled channel at dst
-    csrw_ss(XDMA_DST_ENABLED_CHAN_PTR, enabled_chan_dst);
+    snax_write_xdma_cfg_reg(XDMA_DST_ENABLED_CHAN_PTR, enabled_chan_dst);
     // Enabled byte at dst
-    csrw_ss(XDMA_DST_ENABLED_BYTE_PTR, enabled_byte_dst);
+    snax_write_xdma_cfg_reg(XDMA_DST_ENABLED_BYTE_PTR, enabled_byte_dst);
     return 0;
 }
 
@@ -295,10 +311,12 @@ inline int32_t xdma_enable_src_ext(uint8_t ext, uint32_t* csr_value) {
         csr_offset += custom_csr_list[i];
     }
 
-    csrw_ss(XDMA_SRC_ENABLE_PTR, csrr_ss(XDMA_SRC_ENABLE_PTR) | (1 << ext));
+    snax_write_xdma_cfg_reg(
+        XDMA_SRC_ENABLE_PTR,
+        snax_read_xdma_cfg_reg(XDMA_SRC_ENABLE_PTR) | (1 << ext));
 
     for (uint8_t i = 0; i < custom_csr_list[ext]; i++) {
-        csrw_ss(csr_offset + i, csr_value[i]);
+        snax_write_xdma_cfg_reg(csr_offset + i, csr_value[i]);
     }
     return 0;
 }
@@ -313,9 +331,11 @@ inline int32_t xdma_enable_dst_ext(uint8_t ext, uint32_t* csr_value) {
         csr_offset += custom_csr_list[i];
     }
 
-    csrw_ss(XDMA_DST_ENABLE_PTR, csrr_ss(XDMA_DST_ENABLE_PTR) | (1 << ext));
+    snax_write_xdma_cfg_reg(
+        XDMA_DST_ENABLE_PTR,
+        snax_read_xdma_cfg_reg(XDMA_DST_ENABLE_PTR) | (1 << ext));
     for (uint8_t i = 0; i < custom_csr_list[ext]; i++) {
-        csrw_ss(csr_offset + i, csr_value[i]);
+        snax_write_xdma_cfg_reg(csr_offset + i, csr_value[i]);
     }
     return 0;
 }
@@ -324,7 +344,9 @@ inline int32_t xdma_disable_src_ext(uint8_t ext) {
     if (ext >= XDMA_SRC_EXT_NUM) {
         return 0;
     }
-    csrw_ss(XDMA_SRC_ENABLE_PTR, csrr_ss(XDMA_SRC_ENABLE_PTR) & ~(1 << ext));
+    snax_write_xdma_cfg_reg(
+        XDMA_SRC_ENABLE_PTR,
+        snax_read_xdma_cfg_reg(XDMA_SRC_ENABLE_PTR) & ~(1 << ext));
     return 0;
 }
 
@@ -332,43 +354,51 @@ inline int32_t xdma_disable_dst_ext(uint8_t ext) {
     if (ext >= XDMA_DST_EXT_NUM) {
         return 0;
     }
-    csrw_ss(XDMA_DST_ENABLE_PTR, csrr_ss(XDMA_DST_ENABLE_PTR) & ~(1 << ext));
+    snax_write_xdma_cfg_reg(
+        XDMA_DST_ENABLE_PTR,
+        snax_read_xdma_cfg_reg(XDMA_DST_ENABLE_PTR) & ~(1 << ext));
     return 0;
 }
 
 // Start
 inline uint32_t xdma_start() {
-    int local_task_id = csrr_ss(XDMA_COMMIT_LOCAL_TASK_PTR);
-    int remote_task_id = csrr_ss(XDMA_COMMIT_REMOTE_TASK_PTR);
-    csrw_ss(XDMA_START_PTR, 1);
+    int local_task_id = snax_read_xdma_cfg_reg(XDMA_COMMIT_LOCAL_TASK_PTR);
+    int remote_task_id = snax_read_xdma_cfg_reg(XDMA_COMMIT_REMOTE_TASK_PTR);
+    snax_write_xdma_cfg_reg(XDMA_START_PTR, 1);
     while (1) {
         // Wait for xdma to start
-        if (csrr_ss(XDMA_COMMIT_LOCAL_TASK_PTR) != local_task_id) {
-            return csrr_ss(XDMA_COMMIT_LOCAL_TASK_PTR);
+        if (snax_read_xdma_cfg_reg(XDMA_COMMIT_LOCAL_TASK_PTR) !=
+            local_task_id) {
+            return snax_read_xdma_cfg_reg(XDMA_COMMIT_LOCAL_TASK_PTR);
         }
-        if (csrr_ss(XDMA_COMMIT_REMOTE_TASK_PTR) != remote_task_id) {
-            return csrr_ss(XDMA_COMMIT_REMOTE_TASK_PTR);
+        if (snax_read_xdma_cfg_reg(XDMA_COMMIT_REMOTE_TASK_PTR) !=
+            remote_task_id) {
+            return snax_read_xdma_cfg_reg(XDMA_COMMIT_REMOTE_TASK_PTR);
         }
     }
 }
 
 // Wait xdma to finished
 inline void xdma_local_wait(uint32_t task_id) {
-    while (csrr_ss(XDMA_FINISH_LOCAL_TASK_PTR) < task_id) {
+    while (snax_read_xdma_cfg_reg(XDMA_FINISH_LOCAL_TASK_PTR) < task_id) {
         // Wait for xdma to finish
     }
 }
 
 inline void xdma_remote_wait(uint32_t task_id) {
-    while (csrr_ss(XDMA_FINISH_REMOTE_TASK_PTR) < task_id) {
+    while (snax_read_xdma_cfg_reg(XDMA_FINISH_REMOTE_TASK_PTR) < task_id) {
         // Wait for xdma to finish
     }
 }
 
-inline uint32_t xdma_last_task_cycle() { return csrr_ss(XDMA_PERF_CTR_TASK); }
+inline uint32_t xdma_last_task_cycle() {
+    return snax_read_xdma_cfg_reg(XDMA_PERF_CTR_TASK);
+}
 
-inline uint32_t xdma_last_read_cycle() { return csrr_ss(XDMA_PERF_CTR_READER); }
+inline uint32_t xdma_last_read_cycle() {
+    return snax_read_xdma_cfg_reg(XDMA_PERF_CTR_READER);
+}
 
 inline uint32_t xdma_last_write_cycle() {
-    return csrr_ss(XDMA_PERF_CTR_WRITER);
+    return snax_read_xdma_cfg_reg(XDMA_PERF_CTR_WRITER);
 }
