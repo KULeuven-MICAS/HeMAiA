@@ -379,25 +379,34 @@ def am_connect_soc_narrow_xbar_mem(am, am_soc_narrow_xbar, occamy_cfg):
     # (end_addr - 12kB) - end_addr
     # size 12KB
     # cfg grant finish
-    am_narrow_hemaia_mem = am.new_leaf(
-        "hemaia_xdma_ctrl",
+    am_narrow_hemaia_xdma_ctrl_io = am.new_leaf(
+        "hemaia_xdma_ctrl_io",
         4096*3,
-        0x100000000 - 4096*3).attach_to(am_soc_narrow_xbar)    
-    return am_spm_narrow, am_sys_idma_cfg, am_narrow_hemaia_mem
+        0x100000000 - 4096*3).attach_to(am_soc_narrow_xbar)
+    am_narrow_hemaia_xdma_cfg_io = am.new_leaf(
+        "hemaia_xdma_cfg_mmio",
+        4096,
+        0x100000000 - 4096*5).attach_to(am_soc_narrow_xbar)
+
+    return am_spm_narrow, am_sys_idma_cfg, am_narrow_hemaia_xdma_ctrl_io, am_narrow_hemaia_xdma_cfg_io
 
 
 def am_connect_soc_wide_xbar_mem(am, am_soc_wide_xbar, occamy_cfg):
     # Connect wide SPM to Wide AXI
     am_wide_hemaia_mem = am.new_leaf(
         "spm_wide",
-        0xffffffff - occamy_cfg["spm_wide"]["address"] + 1 - 4096*3,
+        occamy_cfg["spm_wide"]["length"],
         occamy_cfg["spm_wide"]["address"]).attach_to(am_soc_wide_xbar)
+    am_wide_hemaia_xdma_data_io = am.new_leaf(
+        "hemaia_xdma_data_io",
+        4096,
+        0x100000000 - 4096*4).attach_to(am_soc_wide_xbar)
     # Connect wide Zero Memory to Wide AXI
     am_wide_zero_mem = am.new_leaf(
         "wide_zero_mem",
         occamy_cfg["wide_zero_mem"]["length"],
         occamy_cfg["wide_zero_mem"]["address"]).attach_to(am_soc_wide_xbar)
-    return am_wide_hemaia_mem, am_wide_zero_mem
+    return am_wide_hemaia_mem, am_wide_hemaia_xdma_data_io, am_wide_zero_mem
 
 
 def am_connect_soc_wide_xbar_quad(am, am_soc_narrow_xbar, am_wide_xbar_quadrant_s1, am_narrow_xbar_quadrant_s1, occamy_cfg, cluster_generators):

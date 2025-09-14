@@ -62,9 +62,9 @@ module ${name}_cva6 import ${name}_pkg::*; (
     CachedRegionAddrBase:  {64'd${occamy_cfg["spm_wide"]["address"]},
                             64'd${occamy_cfg["spm_narrow"]["address"]+occamy_cfg["spm_narrow_mailbox_size"]}
                             },
-    CachedRegionLength:    {(64'hff_ffff_ffff-64'd${occamy_cfg["spm_wide"]["address"]}),
+    CachedRegionLength:    {64'd${occamy_cfg["spm_wide"]["length"]},
                              64'd${occamy_cfg["spm_narrow"]["length"]-occamy_cfg["spm_narrow_mailbox_size"]}
-                             },
+                            },
     //  cache config
     AxiCompliant:           1'b1,
     SwapEndianess:          1'b0,

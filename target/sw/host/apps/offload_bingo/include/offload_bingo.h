@@ -6,14 +6,12 @@
 #pragma once
 #include "libbingo/bingo_api.h"
 #include "host.h"
-#include "hemaia_clk_rst_controller.h"
 #include "dummy_workload.h"
 // #include "xdma_1d_copy_workload.h"
 // Devices
 #define NUM_DEV N_CLUSTERS
 #define NUM_CHIP 1
 HeroDev dev_array[NUM_DEV];
-int libhero_log_level = LOG_WARN;
 void host_init_local_dev() {
     // printf("[Host] Start to Init the Devs\n");
     // We first reset the devs

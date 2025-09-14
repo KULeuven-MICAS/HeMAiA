@@ -12,7 +12,6 @@
 #define NUM_DEV N_CLUSTERS
 #define NUM_CHIP N_CHIPLETS
 HeroDev dev_array[NUM_DEV];
-int libhero_log_level = LOG_WARN;
 void host_init_local_dev(){
     // Here we init all the Mailboxs for host<->dev communication
     // All the chiplet only perform local initilization

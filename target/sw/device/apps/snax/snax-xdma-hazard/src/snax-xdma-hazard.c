@@ -3,6 +3,18 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Yunhao Deng <yunhao.deng@kuleuven.be>
+// Fanchen Kong <fanchen.kong@kuleuven.be>
+
+// This SW is used to test the XDMA read and write between L3 and TCDM
+// and between TCDMs of different clusters.
+// The test includes 4 parts:
+// 1. All clusters read data from L3 to their TCDM at the same time
+// 2. All clusters (except cluster 0) read data from previous cluster's TCDM
+// C1 read C0, C2 read C1, C3 read C2, ..., Cn read C(n-1)
+// 3. All clusters (except the last cluster) write data to next cluster's TCDM
+// C0 write C1, C1 write C2, C2 write C3, ..., C(n-1) write Cn
+// 4. All clusters write data back to L3 from their TCDM at the same time
+// The data size is defined in data.h file, which is 8192B by default.
 
 #include "data.h"
 #include "snrt.h"
@@ -17,7 +29,7 @@ int main() {
     uint32_t dma_load_input_end;
     uint32_t tcdm_baseaddress = snrt_cluster_base_addrl();
     if (snrt_global_core_idx() == 0) {
-        printf("Now start to let clusters to read from L3\r\n");
+        printf("Now start to let clusters to read %dB data from L3\r\n", data_size * sizeof(data[0]));
     }
     if (snrt_is_dm_core()) {
         // All clusters try to read data from L3 at the same time
@@ -50,7 +62,7 @@ int main() {
     snrt_global_barrier();
 
     if (snrt_global_core_idx() == 0) {
-        printf("Now start to read data between Clusters\r\n");
+        printf("Now start to read %dB data between Clusters\r\n", data_size * sizeof(data[0]));
     }
     if ((snrt_cluster_idx() != 0) && snrt_is_dm_core()) {
         // All remaining clusters try to read data from previous cluster's TCDM
@@ -85,7 +97,7 @@ int main() {
     snrt_global_barrier();
 
     if (snrt_global_core_idx() == 0) {
-        printf("Now start to write data between Clusters\r\n");
+        printf("Now start to write %dB data between Clusters\r\n", data_size * sizeof(data[0]));
     }
     if ((snrt_cluster_idx() != snrt_cluster_num() - 1) && snrt_is_dm_core()) {
         // All remaining clusters try to write data to next cluster's TCDM
@@ -135,7 +147,7 @@ int main() {
     snrt_global_barrier();
 #endif
     if (snrt_global_core_idx() == 0) {
-        printf("Now start to let cluster to write back the data to L3\r\n");
+        printf("Now start to let cluster to write back the %dB data to L3\r\n", data_size * sizeof(data[0]));
     }    
     if (snrt_is_dm_core()) {
         // All clusters try to read data from L3 at the same time

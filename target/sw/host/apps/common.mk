@@ -39,6 +39,9 @@ INCDIRS += $(HOST_DIR)/../shared/platform/generated
 INCDIRS += $(HOST_DIR)/../shared/runtime
 SRCS    += $(RUNTIME_DIR)/start.S
 
+# Include XDMA
+INCDIRS += $(SWDIR)/shared/vendor/xdma
+
 # Compiler flags
 RISCV_CFLAGS += $(addprefix -I,$(INCDIRS))
 RISCV_CFLAGS += -march=rv64imafdc
@@ -115,19 +118,19 @@ PARTIAL_DEV_APP_LIST      = $(abspath $(DEVICE_DIR)/dev_app_list.$(APP).tmp)
 
 
 PARTIAL_TMPS = $(PARTIAL_HOST_APP_LIST) $(PARTIAL_HOST_APP_ORIGIN) $(PARTIAL_DEV_APP_LIST)
-PARTIAL_OUTPUTS = $(PARTIAL_ELF) $(PARTIAL_DUMP) $(PARTIAL_TMPS)
-ELFS   = $(addprefix $(BUILDDIR)/$(APP)_, $(addsuffix .elf, $(DEVICE_APPS)))
-DUMPS  = $(ELFS:.elf=.dump)
-DWARFS = $(ELFS:.elf=.dwarf)
-BINS   = $(ELFS:.elf=.bin)
-FINAL_OUTPUTS = $(ELFS) $(DUMPS) $(DWARFS) $(BINS)
+PARTIAL_OUTPUTS += $(PARTIAL_ELF) $(PARTIAL_DUMP) $(PARTIAL_TMPS)
+ELFS             = $(addprefix $(BUILDDIR)/$(APP)_, $(addsuffix .elf, $(DEVICE_APPS)))
+DUMPS            = $(ELFS:.elf=.dump)
+DWARFS           = $(ELFS:.elf=.dwarf)
+BINS             = $(ELFS:.elf=.bin)
+FINAL_OUTPUTS    = $(ELFS) $(DUMPS) $(DWARFS) $(BINS)
 else
-PARTIAL_OUTPUTS = $(PARTIAL_ELF) $(PARTIAL_DUMP)
-ELF             = $(abspath $(BUILDDIR)/$(APP).elf)
-DUMP            = $(abspath $(BUILDDIR)/$(APP).dump)
-DWARF           = $(abspath $(BUILDDIR)/$(APP).dwarf)
-BIN             = $(abspath $(BUILDDIR)/$(APP).bin)
-FINAL_OUTPUTS   = $(ELF) $(DUMP) $(DWARF) $(BIN)
+PARTIAL_OUTPUTS += $(PARTIAL_ELF) $(PARTIAL_DUMP)
+ELF              = $(abspath $(BUILDDIR)/$(APP).elf)
+DUMP             = $(abspath $(BUILDDIR)/$(APP).dump)
+DWARF            = $(abspath $(BUILDDIR)/$(APP).dwarf)
+BIN              = $(abspath $(BUILDDIR)/$(APP).bin)
+FINAL_OUTPUTS    = $(ELF) $(DUMP) $(DWARF) $(BIN)
 endif
 
 
@@ -203,7 +206,7 @@ $(BUILDDIR)/$(APP)_%.bin: $(BUILDDIR)/$(APP)_%.elf | $(BUILDDIR)
 else
 # else we only build the host app without device binaries
 $(ELF): $(DEP) $(LD_SRCS) | $(BUILDDIR)
-	$(RISCV_CC) $(RISCV_CFLAGS) $(RISCV_LDFLAGS) $(SRCS) -o $@
+	$(RISCV_CC) $(RISCV_CFLAGS) $(SRCS) $(RISCV_LDFLAGS) -o $@
 $(DUMP): $(ELF) | $(BUILDDIR)
 	$(RISCV_OBJDUMP) -D $< > $@
 $(DWARF): $(ELF) | $(BUILDDIR)

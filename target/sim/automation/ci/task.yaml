@@ -11,3 +11,6 @@ runs:
   - app_3: 
     - host_app: offload
     - device_app: snax-xdma-hazard
+  - app_4:
+    - host_app: hemaia_system_xdma_copy
+    - device_app: null

@@ -111,8 +111,8 @@ module testharness
   // Definition of tri_state bus
 % for i in x:
 %   for j in y:
-  tri [2:0][19:0] chip_${i}_${j}_to_${i+1}_${j}_link;
-  tri [2:0][19:0] chip_${i}_${j}_to_${i}_${j+1}_link;
+  tri [19:0] chip_${i}_${j}_to_${i+1}_${j}_link[3];
+  tri [19:0] chip_${i}_${j}_to_${i}_${j+1}_link[3];
 %   endfor
 % endfor
 

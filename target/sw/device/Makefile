@@ -39,14 +39,19 @@ ALL_TMPS       = $(ALL_HOST_LIST) $(ALL_ORIGIN_LIST) $(ALL_DEV_LIST)
 aggregate-tmps: $(ALL_TMPS)
 
 $(ALL_HOST_LIST): $(wildcard host_app_list.*.tmp)
-	cat $^ > $@
+# Make an empty file first, and then concatenate all the tmp files into one
+	> $@
+	$(foreach f,$^,cat $(f) >> $@;)
 
 $(ALL_ORIGIN_LIST): $(wildcard host_app_origin.*.tmp)
-	cat $^ > $@
+# Make an empty file first, and then concatenate all the tmp files into one
+	> $@
+	$(foreach f,$^,cat $(f) >> $@;)
 
 $(ALL_DEV_LIST): $(wildcard dev_app_list.*.tmp)
-	cat $^ > $@
-
+# Make an empty file first, and then concatenate all the tmp files into one
+	> $@
+	$(foreach f,$^,cat $(f) >> $@;)
 
 .PHONY: all $(RTDIR) $(APPDIR) aggregate-tmps
 
