@@ -28,6 +28,9 @@ PLATFORM_HEADERS_DIR ?= shared/platform/generated
 PLATFORM_HEADERS_TEMPLATE_DIR ?= shared/platform/template
 SW_DEVICE_RT_DIR     ?= device/runtime
 
+HOST_RUNTIME_DIR   = $(SW_DIR)/host/runtime
+LIB_HERO_DIR      = $(HOST_RUNTIME_DIR)/libhero
+LIB_BINGO_DIR     = $(HOST_RUNTIME_DIR)/libbingo
 ###################
 # Software Headers#
 ###################
@@ -107,3 +110,6 @@ clean-sw:
 	$(MAKE) -C device TARGET=clean
 # clean host build
 	$(MAKE) -C host TARGET=clean
+# clean host runtimes
+	$(MAKE) -C $(LIB_HERO_DIR) clean
+	$(MAKE) -C $(LIB_BINGO_DIR) clean
