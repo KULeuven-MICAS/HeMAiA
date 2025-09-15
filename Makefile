@@ -36,7 +36,7 @@ clean:
 	$(MAKE) -C ./target/fpga/vivado_ips/ clean
 	$(MAKE) -C ./target/fpga_chip/hemaia_chip/ clean
 	$(MAKE) -C ./target/fpga_chip/hemaia_system/ clean
-	$(MAKE) -C ./target/sw/  clean-sw
+	$(MAKE) -C ./target/sw/  clean
 	$(MAKE) -C ./target/rtl/bootrom/  clean
 	$(MAKE) -C ./target/sim/ clean
 	$(MAKE) -C ./target/rtl/ clean

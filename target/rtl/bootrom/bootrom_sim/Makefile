@@ -31,4 +31,4 @@ bootrom.sv: bootrom.bin
 	$(BIN2SV) $< -m bootrom > $@
 
 clean:
-	rm -rf *.bin *.dump *.elf *.o
+	rm -rf *.bin *.dump *.elf *.o bootrom.sv

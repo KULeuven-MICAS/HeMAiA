@@ -56,6 +56,7 @@ HOST_ORIGINS_FOR_DEV := $(foreach idx,$(HOST_APP_INDICES),$(word $(idx),$(HOST_A
 # Dependencies
 INCDIRS += $(RUNTIME_DIR)/src
 INCDIRS += $(RUNTIME_DIR)/api
+INCDIRS += $(RUNTIME_DIR)/generated
 INCDIRS += $(SNRT_DIR)/api
 INCDIRS += $(SNRT_DIR)/src
 INCDIRS += $(SNRT_DIR)/vendor/riscv-opcodes

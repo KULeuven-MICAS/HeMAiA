@@ -1,2 +1,5 @@
 # Auto-generated sources
-/src/
+/shared/platform/template/clint
+/shared/platform/template/quadrant_s1_ctrl
+/shared/platform/template/rv_plic
+/shared/platform/template/soc_ctrl

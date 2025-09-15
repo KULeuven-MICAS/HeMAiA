@@ -55,7 +55,6 @@ $(ALL_DEV_LIST): $(wildcard dev_app_list.*.tmp)
 
 .PHONY: all $(RTDIR) $(APPDIR) aggregate-tmps
 
-
 all: $(APPDIR)
 
 $(RTDIR):
