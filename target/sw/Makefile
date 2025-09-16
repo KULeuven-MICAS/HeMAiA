@@ -1,36 +1,47 @@
-# Copyright 2023 ETH Zurich and University of Bologna.
+# Copyright 2025 KU Leuven
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Luca Colagrande <colluca@iis.ee.ethz.ch>
-
+# Yunhao Deng <yunhao.deng@kuleuven.be>
+# Fanchen Kong <fanchen.kong@kuleuven.be>
+# <Try not to blindly include other makefiles>
+# This makefile generates the SW sources for HeMAiA SoC
 .PHONY: sw clean-sw
-
 ############
 # Makefrag #
 ############
-
-MKFILE_PATH := $(abspath $(lastword $(MAKEFILE_LIST)))
-SIM_MKFILE_DIR  := $(dir $(MKFILE_PATH))
-ROOT        := $(SIM_MKFILE_DIR)../..
-SW_DIR      := $(abspath $(ROOT)/target/sw)
-include $(ROOT)/target/rtl/Makefile
-############
-# Programs #
-############
-REGGEN     ?= $(shell $(BENDER) path register_interface)/vendor/lowrisc_opentitan/util/regtool.py
-OCCAMYGEN  ?= $(ROOT)/util/occamygen/occamygen.py
+BENDER                ?= bender
+MKFILE_PATH           := $(abspath $(lastword $(MAKEFILE_LIST)))
+SIM_MKFILE_DIR        := $(dir $(MKFILE_PATH))
 
 #########################
 # Files and directories #
 #########################
-PLATFORM_HEADERS_DIR ?= shared/platform/generated
-PLATFORM_HEADERS_TEMPLATE_DIR ?= shared/platform/template
-SW_DEVICE_RT_DIR     ?= device/runtime
+ROOT                  = $(abspath $(SIM_MKFILE_DIR)../..)
+SNITCH_ROOT           = $(shell $(BENDER) path snitch_cluster)
+SW_DIR                = $(ROOT)/target/sw
+TARGET_SRC_DIR        = $(SW_DIR)/shared/platform/template
+TARGET_CLINT_DIR      = $(TARGET_SRC_DIR)/clint
+TARGET_PLIC_DIR       = $(TARGET_SRC_DIR)/rv_plic
+TARGET_SOCCTRL_DIR	  = $(TARGET_SRC_DIR)/soc_ctrl
+TARGET_QUADCTRL_DIR   = $(TARGET_SRC_DIR)/quadrant_s1_ctrl
+PLATFORM_HEADERS_DIR  = shared/platform/generated
+PLATFORM_HEADERS_TEMPLATE_DIR = shared/platform/template
+SW_DEVICE_RT_DIR      = device/runtime
+HOST_RUNTIME_DIR      = $(SW_DIR)/host/runtime
+LIB_HERO_DIR          = $(HOST_RUNTIME_DIR)/libhero
+LIB_BINGO_DIR         = $(HOST_RUNTIME_DIR)/libbingo
 
-HOST_RUNTIME_DIR   = $(SW_DIR)/host/runtime
-LIB_HERO_DIR      = $(HOST_RUNTIME_DIR)/libhero
-LIB_BINGO_DIR     = $(HOST_RUNTIME_DIR)/libbingo
+############
+# Programs #
+############
+REGGEN     			  = $(shell $(BENDER) path register_interface)/vendor/lowrisc_opentitan/util/regtool.py
+OCCAMYGEN  			  = $(ROOT)/util/occamygen/occamygen.py
+
+#######################
+# Config prerequisite #
+#######################
+CFG				  	  ?= $(ROOT)/target/rtl/cfg/lru.hjson
 ###################
 # Software Headers#
 ###################
@@ -44,9 +55,10 @@ endef
 
 # REGGEN headers
 PLATFORM_HEADERS  = $(PLATFORM_HEADERS_DIR)/clint.h
+PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/rv_plic.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/occamy_soc_ctrl.h
-PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/snitch_cluster_peripheral.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/snitch_quad_peripheral.h
+PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/snitch_cluster_peripheral.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/hemaia_d2d_link_peripheral.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/hemaia_clk_rst_controller_peripheral.h
 # OCCAMYGEN headers
@@ -54,27 +66,86 @@ PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/occamy_cfg.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/occamy_memory_map.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/occamy.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/occamy_base_addr.h
-PLATFORM_HEADERS += $(SW_DEVICE_RT_DIR)/src/occamy_defs.h
+PLATFORM_HEADERS += $(SW_DEVICE_RT_DIR)/generated/occamy_defs.h
 
-# REGGEN headers
-$(PLATFORM_HEADERS_DIR)/clint.h: $(TARGET_SRC_DIR)/clint/clint.hjson
+###########
+# 1.CLINT #
+###########
+$(TARGET_CLINT_DIR):
+	mkdir -p $@
+SOURCE_CLINT_DIR  = $(shell $(BENDER) path clint)
+# CLINT needs the hjson tmp first to generate the hjson
+$(TARGET_CLINT_DIR)/clint.hjson: $(SOURCE_CLINT_DIR)/data/clint.hjson.tpl $(CFG)
+	@echo "[OCCAMYGEN] Generate $@"
+	@$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_CLINT_DIR) --chip $<
+# Then the hjson can be used to generate the header file
+$(PLATFORM_HEADERS_DIR)/clint.h: $(TARGET_CLINT_DIR)/clint.hjson
 	$(call reggen_generate_header,$@,$<)
-	
-$(PLATFORM_HEADERS_DIR)/occamy_soc_ctrl.h: $(TARGET_SRC_DIR)/soc_ctrl/occamy_soc_reg.hjson
+
+###########
+# 2.PLIC  #
+###########
+$(TARGET_PLIC_DIR):
+	mkdir -p $@
+SOURCE_PLIC_DIR       = $(ROOT)/hw/vendor/pulp_platform_opentitan_peripherals/src/rv_plic
+PLICGEN               = $(SOURCE_PLIC_DIR)/util/reg_rv_plic.py
+$(TARGET_PLIC_DIR)/rv_plic.hjson: $(SOURCE_PLIC_DIR)/data/rv_plic.hjson.tpl $(CFG) | $(TARGET_PLIC_DIR)
+	@echo "[PLICGEN] Generate $@"
+	@$(PLICGEN) -s 73 -t 2 -p 6 $< > $@
+
+# Currently there are no sw related to the the PLIC
+$(PLATFORM_HEADERS_DIR)/rv_plic.h: $(TARGET_PLIC_DIR)/rv_plic.hjson
 	$(call reggen_generate_header,$@,$<)
+
+##############
+# 3.SoC Ctrl #
+##############
+$(TARGET_SOCCTRL_DIR):
+	mkdir -p $@
+# SoC Ctrl needs the hjson tmp first to generate the hjson
+SOURCE_SOCCTRL_DIR = $(ROOT)/hw/occamy/soc_ctrl
+$(TARGET_SOCCTRL_DIR)/occamy_soc_reg.hjson: $(SOURCE_SOCCTRL_DIR)/occamy_soc_reg.hjson.tpl $(CFG)
+	@echo "[OCCAMYGEN] Generate $@"
+	@$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_SOCCTRL_DIR) --ctrl $<
+# Then the hjson can be used to generate the header file
+$(PLATFORM_HEADERS_DIR)/occamy_soc_ctrl.h: $(TARGET_SOCCTRL_DIR)/occamy_soc_reg.hjson
+	$(call reggen_generate_header,$@,$<)
+
+#############
+# Quad Ctrl #
+#############
+$(TARGET_QUADCTRL_DIR):
+	mkdir -p $@
+# Quad Ctrl needs the hjson tmp first to generate the hjson
+SOURCE_QUADCTRL_DIR  = $(ROOT)/hw/occamy/quadrant_s1_ctrl
+$(TARGET_QUADCTRL_DIR)/occamy_quadrant_s1_reg.hjson: $(SOURCE_QUADCTRL_DIR)/occamy_quadrant_s1_reg.hjson.tpl $(CFG)
+	@echo "[OCCAMYGEN] Generate $@"
+	@$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_QUADCTRL_DIR) --quadrant-s1-ctrl $<
+
+# Then the hjson can be used to generate the header file
+$(PLATFORM_HEADERS_DIR)/snitch_quad_peripheral.h: $(TARGET_QUADCTRL_DIR)/occamy_quadrant_s1_reg.hjson
+	$(call reggen_generate_header,$@,$<)
+
+######################
+# Cluster Peripheral #
+######################
 
 $(PLATFORM_HEADERS_DIR)/snitch_cluster_peripheral.h: $(SNITCH_ROOT)/hw/snitch_cluster/src/snitch_cluster_peripheral/snitch_cluster_peripheral_reg.hjson
 	$(call reggen_generate_header,$@,$<)
 
-$(PLATFORM_HEADERS_DIR)/snitch_quad_peripheral.h: $(TARGET_SRC_DIR)/quadrant_s1_ctrl/occamy_quadrant_s1_reg.hjson
-	$(call reggen_generate_header,$@,$<)
+########################
+# HeMAiA D2D Link Ctrl #
+########################
 
 $(PLATFORM_HEADERS_DIR)/hemaia_d2d_link_peripheral.h: $(shell bender path hemaia_d2d_link)/src/ctrl/hemaia_d2d_link_reg.hjson
 	$(call reggen_generate_header,$@,$<)
 
+#######################
+# HeMAiA Clk Rst Ctrl #
+#######################
+
 $(PLATFORM_HEADERS_DIR)/hemaia_clk_rst_controller_peripheral.h: $(ROOT)/hw/hemaia/hemaia_clk_rst_controller/regs/hemaia_clk_rst_controller_reg.hjson
 	$(call reggen_generate_header,$@,$<)
-
 
 # OCCAMYGEN headers
 $(PLATFORM_HEADERS_DIR)/occamy_cfg.h: $(PLATFORM_HEADERS_TEMPLATE_DIR)/occamy_cfg.h.tpl $(CFG)
@@ -92,10 +163,11 @@ $(PLATFORM_HEADERS_DIR)/occamy.h: $(PLATFORM_HEADERS_TEMPLATE_DIR)/occamy.h.tpl 
 $(PLATFORM_HEADERS_DIR)/occamy_base_addr.h: $(CFG)
 	@echo "[OCCAMYGEN] Generating $@"
 	@$(OCCAMYGEN) -c $(CFG) --outdir $(PLATFORM_HEADERS_DIR) -D $@
-
-$(SW_DEVICE_RT_DIR)/src/occamy_defs.h: $(SW_DEVICE_RT_DIR)/template/occamy_defs.h.tpl $(CFG)
+	
+# OCCAMYGEN Device runtime
+$(SW_DEVICE_RT_DIR)/generated/occamy_defs.h: $(SW_DEVICE_RT_DIR)/template/occamy_defs.h.tpl $(CFG)
 	@echo "[OCCAMYGEN] Generating $@"
-	@$(OCCAMYGEN) -c $(CFG) --outdir $(SW_DEVICE_RT_DIR)/src --cheader $<
+	@$(OCCAMYGEN) -c $(CFG) --outdir $(SW_DEVICE_RT_DIR)/generated --cheader $<
 
 sw: $(PLATFORM_HEADERS)
 	$(MAKE) -C host libs
@@ -103,13 +175,17 @@ sw: $(PLATFORM_HEADERS)
 	$(MAKE) -C device all
 	$(MAKE) -C host TARGET=finalize-build
 
-clean-sw:
-# clean generated tmp files
-	rm -rf $(SW_DIR)/device/*.tmp
+clean:
 # clean device build
-	$(MAKE) -C device TARGET=clean
+	$(MAKE) -C device all TARGET=clean
 # clean host build
 	$(MAKE) -C host TARGET=clean
 # clean host runtimes
 	$(MAKE) -C $(LIB_HERO_DIR) clean
 	$(MAKE) -C $(LIB_BINGO_DIR) clean
+# clean generated tmp files
+	rm -rf $(SW_DIR)/device/*.tmp
+# clean generated headers
+	rm -f $(PLATFORM_HEADERS)
+# clean generated hjson files
+	rm -rf $(TARGET_CLINT_DIR) $(TARGET_SOCCTRL_DIR) $(TARGET_QUADCTRL_DIR) $(TARGET_PLIC_DIR)

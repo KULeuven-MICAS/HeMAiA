@@ -31,6 +31,7 @@ INCDIRS += $(SNRT_DIR)/../math/include/bits
 INCDIRS += $(SNRT_DIR)/../math/include
 # Occamy specific includes
 INCDIRS += ./src/
+INCDIRS += ./generated
 INCDIRS += ./api/
 # SNAX runtime
 INCDIRS += $(SW_DIR)/device/runtime/snax/xdma

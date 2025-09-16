@@ -35,5 +35,5 @@ apps: $(APP_ELF)
 	python3 copy_m_n_times.py -i $(APP_NAME) -o $(BIN_DIR) -c $(CFG)
 clean-apps:
 	@rm -rf .rtlbinary
-	@rm -f $(MKFILE_DIR)/*.bin $(MKFILE_DIR)/*.hex
+	@rm -f $(MKFILE_DIR)/*.bin $(MKFILE_DIR)/*.hex $(MKFILE_DIR)/*.elf $(MKFILE_DIR)/*.dump
 	@find $(MKFILE_DIR) -mindepth 1 -type d -exec rm -rf {} +

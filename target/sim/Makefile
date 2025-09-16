@@ -235,7 +235,7 @@ $(BIN_DIR)/occamy_chip.vsim: $(VSIM_BUILDDIR)/compile.vsim.tcl |$(BIN_DIR)
 	@chmod +x $@.gui
 
 clean-vsim: clean-work
-	rm -rf $(BIN_DIR)/$(TARGET).vsim $(BIN_DIR)/$(TARGET).vsim.gui $(VSIM_BUILDDIR) $(BIN_DIR)/vsim.wlf $(BIN_DIR)/transcript
+	rm -rf $(BIN_DIR)/$(TARGET).vsim $(BIN_DIR)/$(TARGET).vsim.gui $(VSIM_BUILDDIR) $(BIN_DIR)/vsim.wlf $(BIN_DIR)/transcript transcript
 
 
 #######

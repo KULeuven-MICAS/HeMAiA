@@ -1,52 +1,54 @@
-# The dependencies in this file are below the targets, in reverse order. (for you to read them easier)
-
-
-# Copyright 2020 ETH Zurich and University of Bologna.
-# Solderpad Hardware License, Version 0.51, see LICENSE for details.
-# SPDX-License-Identifier: SHL-0.51
+# Copyright 2025 KU Leuven
+# Licensed under the Apache License, Version 2.0, see LICENSE for details.
+# SPDX-License-Identifier: Apache-2.0
 #
-# Fabian Schuiki <fschuiki@iis.ee.ethz.ch>
-# Florian Zaruba <zarubaf@iis.ee.ethz.ch>
+# Yunhao Deng <yunhao.deng@kuleuven.be>
+# Fanchen Kong <fanchen.kong@kuleuven.be>
+# <Try not to blindly include other makefiles>
+# This makefile generates the RTL sources for HeMAiA SoC
 
+############
+# Makefrag #
+############
+BENDER      ?= bender
 MKFILE_PATH := $(abspath $(lastword $(MAKEFILE_LIST)))
 MKFILE_DIR  := $(dir $(MKFILE_PATH))
-ROOT        := $(MKFILE_DIR)../..
-TARGET_SRC_DIR       ?= src
-SNITCH_ROOT = $(shell $(BENDER) path snitch_cluster)
-HEMAIA_UTIL = $(ROOT)/util/hemaia/util.py
-
-SOURCE_OCCAMY_DIR    ?= $(ROOT)/hw/occamy
-
-SOURCE_QUADCTRL_DIR  ?= $(ROOT)/hw/occamy/quadrant_s1_ctrl
-TARGET_QUADCTRL_DIR  ?= $(TARGET_SRC_DIR)/quadrant_s1_ctrl
 
 
-SOURCE_SOCCTRL_DIR   ?= $(ROOT)/hw/occamy/soc_ctrl
-TARGET_SOCCTRL_DIR   ?= $(TARGET_SRC_DIR)/soc_ctrl
+#########################
+# Files and directories #
+#########################
+ROOT                  = $(abspath $(MKFILE_DIR)../..)
+SW_DIR                = $(ROOT)/target/sw
+SW_HJSON_DIR          = $(SW_DIR)/shared/platform/template
 
+TARGET_SRC_DIR        = $(ROOT)/target/rtl/src
+TARGET_CLINT_DIR      = $(TARGET_SRC_DIR)/clint
+TARGET_PLIC_DIR       = $(TARGET_SRC_DIR)/rv_plic
+TARGET_SOCCTRL_DIR	  = $(TARGET_SRC_DIR)/soc_ctrl
+TARGET_QUADCTRL_DIR   = $(TARGET_SRC_DIR)/quadrant_s1_ctrl
+SNITCH_ROOT           = $(shell $(BENDER) path snitch_cluster)
+HEMAIA_UTIL           = $(ROOT)/util/hemaia/util.py
+SOURCE_OCCAMY_DIR     = $(ROOT)/hw/occamy
+SOURCE_QUADCTRL_DIR   = $(ROOT)/hw/occamy/quadrant_s1_ctrl
+SOURCE_SOCCTRL_DIR    = $(ROOT)/hw/occamy/soc_ctrl
 SOURCE_PLIC_DIR       = $(ROOT)/hw/vendor/pulp_platform_opentitan_peripherals/src/rv_plic
-TARGET_PLIC_DIR      ?= $(TARGET_SRC_DIR)/rv_plic
-
 SOURCE_CLINT_DIR      = $(shell $(BENDER) path clint)
-TARGET_CLINT_DIR     ?= $(TARGET_SRC_DIR)/clint
-
-TARGET_RTL			 ?= $(ROOT)/target/rtl
-
-HEMAIA_MEM_SYS_DIR   ?= $(ROOT)/hw/hemaia/hemaia_mem_system
+TARGET_RTL			  = $(ROOT)/target/rtl
+HEMAIA_MEM_SYS_DIR    = $(ROOT)/hw/hemaia/hemaia_mem_system
 ############
 # Programs #
 ############
 
-BENDER       ?= bender
-#VERIBLE_FMT  ?= verible-verilog-format
-OCCAMYGEN  ?= $(ROOT)/util/occamygen/occamygen.py
-REGGEN     ?= $(shell $(BENDER) path register_interface)/vendor/lowrisc_opentitan/util/regtool.py
-PLICGEN     = $(SOURCE_PLIC_DIR)/util/reg_rv_plic.py
+
+OCCAMYGEN  	 = $(ROOT)/util/occamygen/occamygen.py
+REGGEN     	 = $(shell $(BENDER) path register_interface)/vendor/lowrisc_opentitan/util/regtool.py
+
 
 #######################
 # Config prerequisite #
 #######################
-CFG = $(TARGET_RTL)/cfg/lru.hjson
+CFG		     ?= $(ROOT)/target/rtl/cfg/lru.hjson
 
 .PHONY: all clean
 all: rtl
@@ -63,20 +65,14 @@ clean: clean-rtl-src
 
 rtl: clint plic socctrl quadctrl soc snax-cluster src/bender_targets.tmp
 clean-rtl: clean-clint clean-plic clean-socctrl clean-quadctrl clean-soc clean-snax-cluster
-clean-rtl-src: 
+clean-rtl-src:
 	rm -rf $(TARGET_SRC_DIR)
 	rm -rf .snax_cluster_occamygen_targets_group
 	rm -rf .misc_occamygen_targets_group
 	rm -rf .quadctrl_reggen_targets_group
 	rm -rf .plic_reggen_targets_group
 	rm -rf .clint_reggen_targets_group
-	rm -rf .socctrl_reggen_targets_grouip
-
-
-$(TARGET_PLIC_DIR) $(TARGET_CLINT_DIR) $(TARGET_SOCCTRL_DIR) $(TARGET_QUADCTRL_DIR):
-	@mkdir -p $@
-
-
+	rm -rf .socctrl_reggen_targets_group
 ########
 # SNAX #
 ########
@@ -131,8 +127,6 @@ $(MISC_OCCAMYGEN_TARGETS): .misc_occamygen_targets_group
 		--quadrant-s1-noc  $(SOURCE_OCCAMY_DIR)/quad_noc/quad_noc.yml.tpl \
 		--xilinx-sv        $(SOURCE_OCCAMY_DIR)/occamy_xilinx.sv.tpl \
 		--cva6-sv          $(SOURCE_OCCAMY_DIR)/occamy_cva6.sv.tpl
-# --dts 			   $(TARGET_DTS_DIR)/occamy.dts
-#why?	@$(VERIBLE_FMT) --inplace $(MISC_OCCAMYGEN_SV_TARGETS)
 
 # File included by occamy_xilinx needs to be put in the same folder
 	cp -f $(SOURCE_OCCAMY_DIR)/axi_flat.sv $(TARGET_SRC_DIR)
@@ -163,98 +157,135 @@ debug-quadrant-gen:
 	$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_SRC_DIR) \
 	--quadrant-s1      $(SOURCE_OCCAMY_DIR)/occamy_quadrant_s1.sv.tpl \
 	--quadrant-s1-noc  $(SOURCE_OCCAMY_DIR)/quad_noc/quad_noc.yml.tpl
+
 ############
 # QUADCTRL #
 ############
+# Quad control do not need to generate the sv file here
+# it is generated together with the soc sv file
+# But we need to generate the reggen targets here
+$(TARGET_QUADCTRL_DIR):
+	@mkdir -p $@
 
-QUADCTRL_OCCAMYGEN_TARGETS = $(TARGET_QUADCTRL_DIR)/occamy_quadrant_s1_reg.hjson
-QUADCTRL_REGGEN_TARGETS = $(addprefix $(TARGET_QUADCTRL_DIR)/,occamy_quadrant_s1_reg_pkg.sv occamy_quadrant_s1_reg_top.sv)
-
-quadctrl: $(QUADCTRL_OCCAMYGEN_TARGETS) $(QUADCTRL_REGGEN_TARGETS)
-clean-quadctrl:
-	rm -rf $(QUADCTRL_OCCAMYGEN_TARGETS) $(QUADCTRL_REGGEN_TARGETS) .quadctrl_reggen_targets_group
+QUADCTRL_HJSON_DIR    = $(SW_HJSON_DIR)/quadrant_s1_ctrl
+QUADCTRL_REGGEN_TARGETS = $(TARGET_QUADCTRL_DIR)/quadctrl_reg_pkg.sv
+QUADCTRL_REGGEN_TARGETS += $(TARGET_QUADCTRL_DIR)/quadctrl_reg_top.sv
 
 $(QUADCTRL_REGGEN_TARGETS): .quadctrl_reggen_targets_group
-.quadctrl_reggen_targets_group: $(TARGET_QUADCTRL_DIR)/occamy_quadrant_s1_reg.hjson | $(TARGET_QUADCTRL_DIR)
+
+# QUADCTRL RTL needs the hjson file
+# Normally if you generate the SW first, the hjson file is already generated
+# But if you generate the RTL first, we need to generate the hjson from the template
+$(QUADCTRL_HJSON_DIR)/occamy_quadrant_s1_reg.hjson: $(SOURCE_QUADCTRL_DIR)/occamy_quadrant_s1_reg.hjson.tpl $(CFG)
+	@echo "[OCCAMYGEN] Generate $@"
+	@$(OCCAMYGEN) --cfg $(CFG) --outdir $(QUADCTRL_HJSON_DIR) --quadrant-s1-ctrl $<
+
+quadctrl: $(QUADCTRL_RTL_TARGET) $(QUADCTRL_REGGEN_TARGETS)
+clean-quadctrl:
+	rm -rf $(QUADCTRL_REGGEN_TARGETS) .quadctrl_reggen_targets_group
+# Generate the reggen targets from the hjson file
+.quadctrl_reggen_targets_group: $(QUADCTRL_HJSON_DIR)/occamy_quadrant_s1_reg.hjson | $(TARGET_QUADCTRL_DIR)
 	@echo "[REGGEN] Generate $(QUADCTRL_REGGEN_TARGETS)"
 	@$(REGGEN) -r -t $(TARGET_QUADCTRL_DIR) $<
-#why?	@$(VERIBLE_FMT) --inplace $(QUADCTRL_REGGEN_TARGETS)
 	@touch $@
-
-$(TARGET_QUADCTRL_DIR)/occamy_quadrant_s1_reg.hjson: $(SOURCE_QUADCTRL_DIR)/occamy_quadrant_s1_reg.hjson.tpl | $(TARGET_QUADCTRL_DIR)
-	@echo "[OCCAMYGEN] Generate $@"
-	@$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_QUADCTRL_DIR) --quadrant-s1-ctrl $<
 
 ###########
 # SOCCTRL #
 ###########
-
-SOCCTRL_OCCAMYGEN_TARGETS = $(TARGET_SOCCTRL_DIR)/occamy_soc_reg.hjson
-SOCCTRL_OCCAMYGEN_TARGETS += $(TARGET_SOCCTRL_DIR)/occamy_soc_ctrl.sv
-SOCCTRL_REGGEN_TARGETS = $(addprefix $(TARGET_SOCCTRL_DIR)/,occamy_soc_reg_pkg.sv occamy_soc_reg_top.sv)
-
-socctrl: $(SOCCTRL_OCCAMYGEN_TARGETS) $(SOCCTRL_REGGEN_TARGETS)
-clean-socctrl:
-	rm -rf $(SOCCTRL_OCCAMYGEN_TARGETS) $(SOCCTRL_REGGEN_TARGETS) .socctrl_reggen_targets_group
+$(TARGET_SOCCTRL_DIR):
+	@mkdir -p $@
+SOCCTRL_HJSON_DIR	    = $(SW_HJSON_DIR)/soc_ctrl
+SOCCTRL_RTL_TARGET      = $(TARGET_SOCCTRL_DIR)/occamy_soc_ctrl.sv
+SOCCTRL_REGGEN_TARGETS  = $(TARGET_SOCCTRL_DIR)/occamy_soc_reg_pkg.sv
+SOCCTRL_REGGEN_TARGETS += $(TARGET_SOCCTRL_DIR)/occamy_soc_reg_top.sv
 
 $(SOCCTRL_REGGEN_TARGETS): .socctrl_reggen_targets_group
-.socctrl_reggen_targets_group: $(TARGET_SOCCTRL_DIR)/occamy_soc_reg.hjson | $(TARGET_SOCCTRL_DIR)
-	@echo "[REGGEN] Generate $(SOCCTRL_REGGEN_TARGETS)"
+
+# SOCCTRL RTL needs the hjson file
+# Normally if you generate the SW first, the hjson file is already generated
+# But if you generate the RTL first, we need to generate the hjson from the template
+$(SOCCTRL_HJSON_DIR)/occamy_soc_reg.hjson: $(SOURCE_SOCCTRL_DIR)/occamy_soc_reg.hjson.tpl $(CFG)
+	@echo "[OCCAMYGEN] Generate $@"
+	@$(OCCAMYGEN) --cfg $(CFG) --outdir $(SOCCTRL_HJSON_DIR) --ctrl $<
+# Generate the RTL file from the template
+$(SOCCTRL_RTL_TARGET): $(SOURCE_SOCCTRL_DIR)/occamy_soc_ctrl.sv.tpl | $(TARGET_SOCCTRL_DIR)
+	@echo "[OCCAMYGEN] Generate $@"
+	@$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_SOCCTRL_DIR) --ctrl $<
+
+socctrl: $(SOCCTRL_RTL_TARGET) $(SOCCTRL_REGGEN_TARGETS)
+clean-socctrl:
+	rm -rf $(SOCCTRL_REGGEN_TARGETS) .socctrl_reggen_targets_group
+# Generate the reggen targets from the hjson file
+.socctrl_reggen_targets_group: $(SOCCTRL_HJSON_DIR)/occamy_soc_reg.hjson | $(TARGET_SOCCTRL_DIR)
 	@$(REGGEN) -r -t $(TARGET_SOCCTRL_DIR) $<
-#why?	@$(VERIBLE_FMT) --inplace $(SOCCTRL_REGGEN_TARGETS)
 	@touch $@
-
-$(TARGET_SOCCTRL_DIR)/occamy_soc_reg.hjson: $(SOURCE_SOCCTRL_DIR)/occamy_soc_reg.hjson.tpl | $(TARGET_SOCCTRL_DIR)
-	@echo "[OCCAMYGEN] Generate $@"
-	@$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_SOCCTRL_DIR) --ctrl $<
-
-$(TARGET_SOCCTRL_DIR)/occamy_soc_ctrl.sv: $(SOURCE_SOCCTRL_DIR)/occamy_soc_ctrl.sv.tpl | $(TARGET_SOCCTRL_DIR)
-	@echo "[OCCAMYGEN] Generate $@"
-	@$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_SOCCTRL_DIR) --ctrl $<
 
 ########
 # PLIC #
 ########
 
-PLIC_PLICGEN_TARGETS = $(addprefix $(TARGET_PLIC_DIR)/,rv_plic.sv rv_plic.hjson)
-PLIC_REGGEN_TARGETS = $(addprefix $(TARGET_PLIC_DIR)/,rv_plic_reg_pkg.sv rv_plic_reg_top.sv)
-
-plic: $(PLIC_PLICGEN_TARGETS) $(PLIC_REGGEN_TARGETS)
-clean-plic:
-	rm -rf $(PLIC_PLICGEN_TARGETS) $(PLIC_REGGEN_TARGETS) .plic_reggen_targets_group
+PLICGEN      = $(SOURCE_PLIC_DIR)/util/reg_rv_plic.py
+# PLIC do not need the occamygen
+$(TARGET_PLIC_DIR):
+	@mkdir -p $@
+$(PLIC_HJSON_DIR):
+	@mkdir -p $@
+PLIC_HJSON_DIR       = $(SW_HJSON_DIR)/rv_plic
+PLIC_RTL_TARGET     = $(TARGET_PLIC_DIR)/rv_plic.sv
+PLIC_REGGEN_TARGETS = $(TARGET_PLIC_DIR)/rv_plic_reg_pkg.sv
+PLIC_REGGEN_TARGETS += $(TARGET_PLIC_DIR)/rv_plic_reg_top.sv
 
 $(PLIC_REGGEN_TARGETS): .plic_reggen_targets_group
-.plic_reggen_targets_group: $(TARGET_PLIC_DIR)/rv_plic.hjson | $(TARGET_PLIC_DIR)
-	@echo "[REGGEN] Generate $(PLIC_REGGEN_TARGETS)"
-	@$(REGGEN) -r -t $(TARGET_PLIC_DIR) $<
-#why?	@$(VERIBLE_FMT) --inplace $(PLIC_REGGEN_TARGETS)
-	@touch $@
-
-$(TARGET_PLIC_DIR)/rv_plic.%: $(SOURCE_PLIC_DIR)/data/rv_plic.%.tpl | $(TARGET_PLIC_DIR)
+# PLIC RTL needs the hjson file
+# Normally if you generate the SW first, the hjson file is already generated
+# But if you generate the RTL first, we need to generate the hjson from the template
+$(PLIC_HJSON_DIR)/rv_plic.hjson: $(SOURCE_PLIC_DIR)/data/rv_plic.hjson.tpl $(CFG) | $(PLIC_HJSON_DIR)
 	@echo "[PLICGEN] Generate $@"
 	@$(PLICGEN) -s 73 -t 2 -p 6 $< > $@
+
+# Generate the RTL file from the template
+$(PLIC_RTL_TARGET): $(SOURCE_PLIC_DIR)/data/rv_plic.sv.tpl | $(TARGET_PLIC_DIR)
+	@echo "[PLICGEN] Generate $@"
+	@$(PLICGEN) -s 73 -t 2 -p 6 $< > $@
+
+plic: $(PLIC_RTL_TARGET) $(PLIC_REGGEN_TARGETS)
+clean-plic:
+	rm -rf $(PLIC_RTL_TARGET) $(PLIC_REGGEN_TARGETS) .plic_reggen_targets_group
+# Generate the reggen targets from the hjson file
+.plic_reggen_targets_group: $(PLIC_HJSON_DIR)/rv_plic.hjson | $(TARGET_PLIC_DIR)
+	@$(REGGEN) -r -t $(TARGET_PLIC_DIR) $<
+	@touch $@
 
 #########
 # CLINT #
 #########
-
-CLINT_OCCAMYGEN_TARGETS = $(addprefix $(TARGET_CLINT_DIR)/,clint.sv clint.hjson)
-CLINT_REGGEN_TARGETS = $(addprefix $(TARGET_CLINT_DIR)/,clint_reg_pkg.sv clint_reg_top.sv)
-
-clint: $(CLINT_OCCAMYGEN_TARGETS) $(CLINT_REGGEN_TARGETS)
-clean-clint:
-	rm -rf $(CLINT_OCCAMYGEN_TARGETS) $(CLINT_REGGEN_TARGETS) .clint_reggen_targets_group
+$(TARGET_CLINT_DIR):
+	@mkdir -p $@
+CLINT_HJSON_DIR	   	  = $(SW_HJSON_DIR)/clint
+CLINT_RTL_TARGET     = $(TARGET_CLINT_DIR)/clint.sv
+CLINT_REGGEN_TARGETS = $(TARGET_CLINT_DIR)/clint_reg_pkg.sv
+CLINT_REGGEN_TARGETS += $(TARGET_CLINT_DIR)/clint_reg_top.sv
 
 $(CLINT_REGGEN_TARGETS): .clint_reggen_targets_group
-.clint_reggen_targets_group: $(TARGET_CLINT_DIR)/clint.hjson | $(TARGET_CLINT_DIR)
-	@echo "[REGGEN] Generate $(CLINT_REGGEN_TARGETS)"
-	@$(REGGEN) -r -t $(TARGET_CLINT_DIR) $<
-#why?	@$(VERIBLE_FMT) --inplace $(CLINT_REGGEN_TARGETS)
-	@touch $@
 
-$(TARGET_CLINT_DIR)/clint.%: $(SOURCE_CLINT_DIR)/data/clint.%.tpl $(CFG) | $(TARGET_CLINT_DIR)
+# CLINT RTL needs the hjson file
+# Normally if you generate the SW first, the hjson file is already generated
+# But if you generate the RTL first, we need to generate the hjson from the template
+$(CLINT_HJSON_DIR)/clint.hjson: $(SOURCE_CLINT_DIR)/data/clint.hjson.tpl $(CFG)
+	@echo "[OCCAMYGEN] Generate $@"
+	@$(OCCAMYGEN) --cfg $(CFG) --outdir $(CLINT_HJSON_DIR) --chip $<
+# Generate the RTL file from the template
+$(CLINT_RTL_TARGET): $(SOURCE_CLINT_DIR)/data/clint.sv.tpl | $(TARGET_CLINT_DIR)
 	@echo "[OCCAMYGEN] Generate $@"
 	@$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_CLINT_DIR) --chip $<
+
+clint: $(CLINT_RTL_TARGET) $(CLINT_REGGEN_TARGETS)
+clean-clint:
+	rm -rf $(CLINT_RTL_TARGET)$(CLINT_REGGEN_TARGETS) .clint_reggen_targets_group
+# Generate the reggen targets from the hjson file
+.clint_reggen_targets_group: $(CLINT_HJSON_DIR)/clint.hjson | $(TARGET_CLINT_DIR)
+	@$(REGGEN) -r -t $(TARGET_CLINT_DIR) $<
+	@touch $@
 
 ###########################################
 # SNAX Accelerator  + Wrapper Generations #
