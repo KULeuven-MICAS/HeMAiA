@@ -52,11 +52,11 @@ module testharness
 %   for j in y:
 %     for k in range(0, mem_bank):
 %       if netlist is True:
-    i_occamy_${i}_${j}.i_hemaia_mem_system.i_hemaia_mem.gen_banks_${k}__i_data_mem.i_tc_sram.gen_mem_gen_${int(mem_size/8/mem_bank)}x${64}_u_sram.load_data("app_chip_${i}_${j}/bank_${k}.hex");
+    i_hemaia_${i}_${j}.i_occamy_chip.i_hemaia_mem_system.i_hemaia_mem.gen_banks_${k}__i_data_mem.i_tc_sram.gen_mem_gen_${int(mem_size/8/mem_bank)}x${64}_u_sram.load_data("app_chip_${i}_${j}/bank_${k}.hex");
 %       elif mem_macro is True:
-    i_occamy_${i}_${j}.i_hemaia_mem_system.i_hemaia_mem.gen_banks[${k}].i_data_mem.i_tc_sram.gen_mem.gen_${int(mem_size/8/mem_bank)}x${64}.u_sram.load_data("app_chip_${i}_${j}/bank_${k}.hex");
+    i_hemaia_${i}_${j}.i_occamy_chip.i_hemaia_mem_system.i_hemaia_mem.gen_banks[${k}].i_data_mem.i_tc_sram.gen_mem.gen_${int(mem_size/8/mem_bank)}x${64}.u_sram.load_data("app_chip_${i}_${j}/bank_${k}.hex");
 %       else:
-    i_occamy_${i}_${j}.i_hemaia_mem_system.i_hemaia_mem.gen_banks[${k}].i_data_mem.i_tc_sram.load_data("app_chip_${i}_${j}/bank_${k}.hex");
+    i_hemaia_${i}_${j}.i_occamy_chip.i_hemaia_mem_system.i_hemaia_mem.gen_banks[${k}].i_data_mem.i_tc_sram.load_data("app_chip_${i}_${j}/bank_${k}.hex");
 %       endif
 %     endfor
 %   endfor
@@ -158,81 +158,82 @@ module testharness
   logic chip_${i}_${j}_link_to_south_test_request;
 % endif
 
-  occamy_chip i_occamy_${i}_${j} (
-      .clk_i(mst_clk_i),
-      .rst_ni,
-      .clk_periph_i(periph_clk_i),
-      .rst_periph_ni(rst_ni),
-      .rtc_i(rtc_clk_i),
-      .chip_id_i(8'h${i_hex_string}${j_hex_string}),
-      .test_mode_i(1'b0),
-      .boot_mode_i('0),
+  hemaia i_hemaia_${i}_${j} (
+      .io_clk(mst_clk_i),
+      .io_rst_n(rst_ni),
+      .io_clk_periph(periph_clk_i),
+      .io_rst_periph_n(rst_periph_ni),
+      .io_rtc(rtc_clk_i),
+      .io_chip_id(8'h${i_hex_string}${j_hex_string}),
+      .io_test_mode(1'b0),
+      .io_boot_mode('0),
 % if multichip_cfg['single_chip'] is False:
 %   if i < max(x):
-      .east_d2d_io(chip_${i}_${j}_to_${i+1}_${j}_link),
+      .io_east_d2d(chip_${i}_${j}_to_${i+1}_${j}_link),
 %   else:
-      .east_d2d_io(),
+      .io_east_d2d(),
 %   endif
-      .flow_control_east_rts_o(chip_${i}_${j}_link_to_east_rts),
-      .flow_control_east_cts_i(chip_${i}_${j}_link_to_east_cts),
-      .flow_control_east_rts_i(chip_${i}_${j}_link_from_east_rts),
-      .flow_control_east_cts_o(chip_${i}_${j}_link_from_east_cts),
-      .east_test_being_requested_i(chip_${i}_${j}_link_to_east_test_request),
-      .east_test_request_o(chip_${i}_${j}_link_from_east_test_request),
+      .io_flow_control_east_rts_o(chip_${i}_${j}_link_to_east_rts),
+      .io_flow_control_east_cts_i(chip_${i}_${j}_link_to_east_cts),
+      .io_flow_control_east_rts_i(chip_${i}_${j}_link_from_east_rts),
+      .io_flow_control_east_cts_o(chip_${i}_${j}_link_from_east_cts),
+      .io_west_test_being_requested(chip_${i}_${j}_link_to_east_test_request),
+      .io_west_test_request(chip_${i}_${j}_link_from_east_test_request),
 
 %   if i > min(x):
-      .west_d2d_io(chip_${i-1}_${j}_to_${i}_${j}_link),
+      .io_west_d2d(chip_${i-1}_${j}_to_${i}_${j}_link),
 %   else:
-      .west_d2d_io(),
+      .io_west_d2d(),
 %   endif
-      .flow_control_west_rts_o(chip_${i}_${j}_link_to_west_rts),
-      .flow_control_west_cts_i(chip_${i}_${j}_link_to_west_cts),
-      .flow_control_west_rts_i(chip_${i}_${j}_link_from_west_rts),
-      .flow_control_west_cts_o(chip_${i}_${j}_link_from_west_cts),
-      .west_test_being_requested_i(chip_${i}_${j}_link_to_west_test_request),
-      .west_test_request_o(chip_${i}_${j}_link_from_west_test_request),
+      .io_flow_control_west_rts_o(chip_${i}_${j}_link_to_west_rts),
+      .io_flow_control_west_cts_i(chip_${i}_${j}_link_to_west_cts),
+      .io_flow_control_west_rts_i(chip_${i}_${j}_link_from_west_rts),
+      .io_flow_control_west_cts_o(chip_${i}_${j}_link_from_west_cts),
+      .io_west_test_being_requested(chip_${i}_${j}_link_to_west_test_request),
+      .io_west_test_request(chip_${i}_${j}_link_from_west_test_request),
 
 %   if j > min(y):
-      .north_d2d_io(chip_${i}_${j-1}_to_${i}_${j}_link),
+      .io_north_d2d(chip_${i}_${j-1}_to_${i}_${j}_link),
 %   else:
-      .north_d2d_io(),
+      .io_north_d2d(),
 %   endif
-      .flow_control_north_rts_o(chip_${i}_${j}_link_to_north_rts),
-      .flow_control_north_cts_i(chip_${i}_${j}_link_to_north_cts),
-      .flow_control_north_rts_i(chip_${i}_${j}_link_from_north_rts),
-      .flow_control_north_cts_o(chip_${i}_${j}_link_from_north_cts),
-      .north_test_being_requested_i(chip_${i}_${j}_link_to_north_test_request),
-      .north_test_request_o(chip_${i}_${j}_link_from_north_test_request),
+      .io_flow_control_north_rts_o(chip_${i}_${j}_link_to_north_rts),
+      .io_flow_control_north_cts_i(chip_${i}_${j}_link_to_north_cts),
+      .io_flow_control_north_rts_i(chip_${i}_${j}_link_from_north_rts),
+      .io_flow_control_north_cts_o(chip_${i}_${j}_link_from_north_cts),
+      .io_north_test_being_requested(chip_${i}_${j}_link_to_north_test_request),
+      .io_north_test_request(chip_${i}_${j}_link_from_north_test_request),
 
 %   if j < max(y):
-      .south_d2d_io(chip_${i}_${j}_to_${i}_${j+1}_link),
+      .io_south_d2d(chip_${i}_${j}_to_${i}_${j+1}_link),
 %   else:
-      .south_d2d_io(),
+      .io_south_d2d(),
 %   endif
-      .flow_control_south_rts_o(chip_${i}_${j}_link_to_south_rts),
-      .flow_control_south_cts_i(chip_${i}_${j}_link_to_south_cts),
-      .flow_control_south_rts_i(chip_${i}_${j}_link_from_south_rts),
-      .flow_control_south_cts_o(chip_${i}_${j}_link_from_south_cts),
-      .south_test_being_requested_i(chip_${i}_${j}_link_to_south_test_request),
-      .south_test_request_o(chip_${i}_${j}_link_from_south_test_request),
+      .io_flow_control_south_rts_o(chip_${i}_${j}_link_to_south_rts),
+      .io_flow_control_south_cts_i(chip_${i}_${j}_link_to_south_cts),
+      .io_flow_control_south_rts_i(chip_${i}_${j}_link_from_south_rts),
+      .io_flow_control_south_cts_o(chip_${i}_${j}_link_from_south_cts),
+      .io_south_test_being_requested(chip_${i}_${j}_link_to_south_test_request),
+      .io_south_test_request(chip_${i}_${j}_link_from_south_test_request),
 % endif
-      .uart_tx_o(tx_${i}_${j}),
-      .uart_rx_i(rx_${i}_${j}),
-      .uart_rts_no(),
-      .uart_cts_ni('0),
-      .gpio_d_i('0),
-      .gpio_d_o(),
-      .gpio_oe_o(),
-      .jtag_trst_ni('0),
-      .jtag_tck_i('0),
-      .jtag_tms_i('0),
-      .jtag_tdi_i('0),
-      .jtag_tdo_o(),
-      .spis_sd_i('1),
-      .spis_sd_en_o(),
-      .spis_sd_o(),
-      .spis_csb_i('1),
-      .spis_sck_i('0)
+      .io_uart_tx(tx_${i}_${j}),
+      .io_uart_rx(rx_${i}_${j}),
+      .io_uart_rts_n(),
+      .io_uart_cts_n('0),
+      .io_gpio(),
+      .io_spis_sck(),
+      .io_spis_csb(),
+      .io_spis_sd(),
+      .io_spim_sck(),
+      .io_spim_csb(),
+      .io_spim_sd(),
+      .io_jtag_trst_n('0),
+      .io_jtag_tck('0),
+      .io_jtag_tms('0),
+      .io_jtag_tdi('0),
+      .io_jtag_tdo(),
+      .io_i2c_sda(),
+      .io_i2c_scl()
   );
 
   uartdpi #(
@@ -249,14 +250,14 @@ module testharness
 
 % if mem_macro is False and netlist is False:
   // Chip Status Monitor Block
-  always @(i_occamy_${i}_${j}.i_hemaia_mem_system.i_hemaia_mem.gen_banks[${mem_bank-1}].i_data_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32]) begin
-    if (i_occamy_${i}_${j}.i_hemaia_mem_system.i_hemaia_mem.gen_banks[${mem_bank-1}].i_data_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32] != 0) begin
-      if (i_occamy_${i}_${j}.i_hemaia_mem_system.i_hemaia_mem.gen_banks[${mem_bank-1}].i_data_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32] == 32'd1) begin
+  always @(i_hemaia_${i}_${j}.i_occamy_chip.i_hemaia_mem_system.i_hemaia_mem.gen_banks[${mem_bank-1}].i_data_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32]) begin
+    if (i_hemaia_${i}_${j}.i_occamy_chip.i_hemaia_mem_system.i_hemaia_mem.gen_banks[${mem_bank-1}].i_data_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32] != 0) begin
+      if (i_hemaia_${i}_${j}.i_occamy_chip.i_hemaia_mem_system.i_hemaia_mem.gen_banks[${mem_bank-1}].i_data_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32] == 32'd1) begin
         $display("Simulation of chip_${i}_${j} is finished at %tns", $time / 1000);
         chip_finish[${i}][${j}] = 1;
       end else begin
         $error("Simulation of chip_${i}_${j} is finished with errors %d at %tns",
-               i_occamy_${i}_${j}.i_hemaia_mem_system.i_hemaia_mem.gen_banks[${mem_bank-1}].i_data_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32],
+               i_hemaia_${i}_${j}.i_occamy_chip.i_hemaia_mem_system.i_hemaia_mem.gen_banks[${mem_bank-1}].i_data_mem.i_tc_sram.sram[SRAM_DEPTH-1][(SRAM_WIDTH*8-1)-:32],
                $time / 1000);
         chip_finish[${i}][${j}] = -1;
       end
@@ -311,7 +312,6 @@ module testharness
   assign chip_${i}_${j}_link_from_south_rts = chip_${i}_${j+1}_link_to_north_rts;
   assign chip_${i}_${j}_link_to_south_test_request = chip_${i}_${j+1}_link_from_north_test_request;
 %     endif
-
 %   endfor
 % endfor
 % endif
