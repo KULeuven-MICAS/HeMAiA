@@ -77,8 +77,8 @@ import ${name}_pkg::*;
   // SPI Master Interface
   output logic        spim_sck_o,
   output logic        spim_sck_en_o,
-  output logic        spim_csb_o,
-  output logic        spim_csb_en_o,
+  output logic [1:0]  spim_csb_o,
+  output logic [1:0]  spim_csb_en_o,
   output logic [3:0]  spim_sd_o,
   output logic [3:0]  spim_sd_en_o,
   input  logic [3:0]  spim_sd_i,

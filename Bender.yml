@@ -131,6 +131,7 @@ sources:
       - hw/hemaia/hemaia_clk_rst_controller/hemaia_reset_controller.sv
       - hw/hemaia/hemaia_clk_rst_controller/hemaia_clk_rst_controller.sv
       - target/rtl/src/occamy_chip.sv
+      - target/rtl/src/hemaia.sv
 
   - target: hemaia_netlist
     files:
