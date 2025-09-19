@@ -636,10 +636,12 @@ module hemaia (
   );
 
   occamy_chip i_occamy_chip (
+% if multichip_cfg["single_chip"] is False:
     .east_d2d_io         (io_east_d2d        ),
     .west_d2d_io         (io_west_d2d        ),
     .north_d2d_io        (io_north_d2d       ),
     .south_d2d_io        (io_south_d2d       ),
+% endif
     .*
     );
 
