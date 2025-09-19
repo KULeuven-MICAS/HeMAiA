@@ -923,6 +923,14 @@ def get_chip_kwargs(soc_wide_xbar, soc_narrow_xbar, soc_axi_lite_narrow_periph_x
     }
     return chip_kwargs
 
+def get_io_kwargs(occamy_cfg, util, name):
+    io_kwargs = {
+        "name": name,
+        "util": util,
+        "occamy_cfg": occamy_cfg,
+        "multichip_cfg": occamy_cfg["hemaia_multichip"]
+    }
+    return io_kwargs
 
 def get_ctrl_kwargs(occamy_cfg, cluster_generators, name):
     default_boot_addr = occamy_cfg["peripherals"]["rom"]["address"]

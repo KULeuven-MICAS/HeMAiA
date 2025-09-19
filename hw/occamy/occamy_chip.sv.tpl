@@ -15,8 +15,6 @@ import ${name}_pkg::*;
   // clk_periph_i and rst_periph_ni are directly used by logics, should be marked as false_path
   input  logic        clk_periph_i,
   (* false_path *) input  logic        rst_periph_ni,
-  /// Real-time clock (for time keeping)
-  input  logic        rtc_i,
   // Quasi-static configuration signals, can be marked as false_path
   (* false_path *) input  logic        test_mode_i,
   (* false_path *) input  chip_id_t    chip_id_i,
@@ -74,13 +72,31 @@ import ${name}_pkg::*;
   output logic [3:0]  spis_sd_o,
   output logic [3:0]  spis_sd_en_o,
   input  logic [3:0]  spis_sd_i,
+
 % endif
+  // SPI Master Interface
+  output logic        spim_sck_o,
+  output logic        spim_sck_en_o,
+  output logic [1:0]  spim_csb_o,
+  output logic [1:0]  spim_csb_en_o,
+  output logic [3:0]  spim_sd_o,
+  output logic [3:0]  spim_sd_en_o,
+  input  logic [3:0]  spim_sd_i,
+
   // `jtag` Interface
   input  logic        jtag_trst_ni,
   input  logic        jtag_tck_i,
   input  logic        jtag_tms_i,
   input  logic        jtag_tdi_i,
-  output logic        jtag_tdo_o
+  output logic        jtag_tdo_o,
+
+  // I2C Interface
+  output logic        i2c_sda_o,
+  input  logic        i2c_sda_i,
+  output logic        i2c_sda_en_o,
+  output logic        i2c_scl_o,
+  input  logic        i2c_scl_i,
+  output logic        i2c_scl_en_o
 );
 
   ///////////////////
@@ -256,7 +272,7 @@ import ${name}_pkg::*;
     .sram_cfgs_i        ('0),
     .clk_periph_i       (clk_periph_i),
     .rst_periph_ni      (rst_periph_ni),
-    .rtc_i              (rtc_i),
+    .rtc_i              ('0),
     .test_mode_i        (test_mode_i),
     .chip_id_i          (chip_id),
 % if occamy_cfg['hemaia_multichip']['single_chip'] is False: 
@@ -283,19 +299,19 @@ import ${name}_pkg::*;
     .jtag_tms_i         (jtag_tms_i),
     .jtag_tdi_i         (jtag_tdi_i),
     .jtag_tdo_o         (jtag_tdo_o),
-    .i2c_sda_o          (),
-    .i2c_sda_i          ('1),
-    .i2c_sda_en_o       (),
-    .i2c_scl_o          (),
-    .i2c_scl_i          ('1),
-    .i2c_scl_en_o       (),
-    .spim_sck_o         (),
-    .spim_sck_en_o      (),
-    .spim_csb_o         (),
-    .spim_csb_en_o      (),
-    .spim_sd_o          (),
-    .spim_sd_en_o       (),
-    .spim_sd_i          ('1),
+    .i2c_sda_o          (i2c_sda_o),
+    .i2c_sda_i          (i2c_sda_i),
+    .i2c_sda_en_o       (i2c_sda_en_o),
+    .i2c_scl_o          (i2c_scl_o),
+    .i2c_scl_i          (i2c_scl_i),
+    .i2c_scl_en_o       (i2c_scl_en_o),
+    .spim_sck_o         (spim_sck_o),
+    .spim_sck_en_o      (spim_sck_en_o),
+    .spim_csb_o         (spim_csb_o),
+    .spim_csb_en_o      (spim_csb_en_o),
+    .spim_sd_o          (spim_sd_o),
+    .spim_sd_en_o       (spim_sd_en_o),
+    .spim_sd_i          (spim_sd_i),
 % if spi_slave_present: 
     .spis_sck_i         (spis_sck_i),
     .spis_csb_i         (spis_csb_i),

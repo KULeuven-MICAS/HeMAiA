@@ -127,6 +127,9 @@ def main():
     parser.add_argument("--chip",
                         metavar="CHIP_TOP",
                         help="(Optional) Chip Top-level")
+    parser.add_argument("--io",
+                        metavar="CHIP_IO",
+                        help="(Optional) Chip I/O Cell Wrapper")
     parser.add_argument("--ctrl",
                         metavar="SoC and Quad Ctrl",
                         help="Name of SoC or Quadrant template file (output)")
@@ -757,6 +760,14 @@ def main():
         chip_kwargs = occamy.get_chip_kwargs(
             soc_wide_xbar, soc_narrow_xbar, soc_axi_lite_narrow_periph_xbar, soc2router_bus, router2soc_bus, occamy_cfg, cluster_generators, util, args.name)
         write_template(args.chip, outdir, **chip_kwargs)
+
+    ########
+    # IO #
+    ########
+    if args.io:
+        io_kwargs = occamy.get_io_kwargs(
+            occamy_cfg, util, args.name)
+        write_template(args.io, outdir, **io_kwargs)
 
     ########
     # CTRL #
