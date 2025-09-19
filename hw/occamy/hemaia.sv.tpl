@@ -486,7 +486,7 @@ module hemaia (
           .io(io_gpio[i])
       );
     end
-    for (genvar i = NumGpio; i < 8; i++) begin : gen_gpio_io_cells_nc
+    for (genvar i = NumGpio; i < 32; i++) begin : gen_gpio_io_cells_nc
       assign gpio_d_i[i] = 1'b0;
     end
   endgenerate
