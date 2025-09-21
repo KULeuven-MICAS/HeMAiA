@@ -3,12 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import subprocess
+import os
 import sys
 import math
 import importlib.util
 from pathlib import Path
 import hjson
 from jsonref import JsonRef
+
 sys.path.append(str(Path(__file__).parent /
                 '../../deps/snitch_cluster/util/clustergen'))
 from cluster import Generator, PMA, PMACfg, SnitchCluster, clog2  # noqa: E402
@@ -133,10 +135,15 @@ def get_cluster_cfg_list(occamy_cfg, cluster_cfg_dir):
 
 def generate_snitch(cluster_cfg_dir, snitch_path):
     cluster_cfg_dir = set(cluster_cfg_dir)
+    env = os.environ.copy()
+    env["JAVA_OPTS"] = "-Xmx32G -Xms4G"
     for cfg in cluster_cfg_dir:
         try:
             subprocess.check_call(
-                f"make -C {snitch_path}/target/snitch_cluster CFG_OVERRIDE={cfg} DISABLE_HEADER_GEN=true rtl-gen", shell=True)
+                ["make", "-C", f"{snitch_path}/target/snitch_cluster",
+                 f"CFG_OVERRIDE={cfg}", "DISABLE_HEADER_GEN=true", "rtl-gen"],
+                env=env
+            )
         except subprocess.CalledProcessError as e:
             print("Error! SNAX gen fails. Check the log.")
             raise
