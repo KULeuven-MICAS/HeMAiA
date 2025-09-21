@@ -140,9 +140,9 @@ def generate_snitch(cluster_cfg_dir, snitch_path):
     for cfg in cluster_cfg_dir:
         try:
             subprocess.check_call(
-                ["make", "-C", f"{snitch_path}/target/snitch_cluster",
-                 f"CFG_OVERRIDE={cfg}", "DISABLE_HEADER_GEN=true", "rtl-gen"],
-                env=env
+                f"make -C {snitch_path}/target/snitch_cluster CFG_OVERRIDE={cfg} DISABLE_HEADER_GEN=true rtl-gen",
+                env=env, 
+                shell=True
             )
         except subprocess.CalledProcessError as e:
             print("Error! SNAX gen fails. Check the log.")
