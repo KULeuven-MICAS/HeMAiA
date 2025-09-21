@@ -133,18 +133,38 @@ def get_cluster_cfg_list(occamy_cfg, cluster_cfg_dir):
     return get_cluster_cfg_list
 
 
-def generate_snitch(cluster_cfg_dir, snitch_path):
+def generate_snitch(cluster_cfg_dir, snitch_path, xmx="8G", xms="8G"):
     cluster_cfg_dir = set(cluster_cfg_dir)
     env = os.environ.copy()
-    env["JAVA_OPTS"] = "-Xmx32G -Xms4G"
+    jvm_args = f"-Xms{xms} -Xmx{xmx}"
+
+    # Ensure JVM memory settings reach whatever launcher is used (sbt/coursier/mill/java)
+    for var in (
+        "JAVA_OPTS",
+        "SBT_OPTS",
+        "JVM_OPTS",
+        "MILL_OPTS",
+        "COURSIER_JVM_ARGS",
+        "JAVA_TOOL_OPTIONS",
+        "_JAVA_OPTIONS",
+        "FIRRTL_JAVA_ARGS",
+    ):
+        env[var] = f"{jvm_args} {env.get(var, '')}".strip()
+
     for cfg in cluster_cfg_dir:
         try:
             subprocess.check_call(
-                f"make -C {snitch_path}/target/snitch_cluster CFG_OVERRIDE={cfg} DISABLE_HEADER_GEN=true rtl-gen",
-                env=env, 
-                shell=True
+                [
+                    "make",
+                    "-C",
+                    f"{snitch_path}/target/snitch_cluster",
+                    f"CFG_OVERRIDE={cfg}",
+                    "DISABLE_HEADER_GEN=true",
+                    "rtl-gen",
+                ],
+                env=env,
             )
-        except subprocess.CalledProcessError as e:
+        except subprocess.CalledProcessError:
             print("Error! SNAX gen fails. Check the log.")
             raise
 
