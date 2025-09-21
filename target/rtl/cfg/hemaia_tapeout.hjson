@@ -109,7 +109,6 @@
     },
     clusters:[
       "snax_versacore_cluster",
-      "snax_versacore_cluster",
       ],
 
     hemaia_xdma_cfg: {
