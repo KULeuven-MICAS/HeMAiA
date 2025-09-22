@@ -376,9 +376,19 @@ module ${name}_quadrant_s1
   %endif
 
   <%
-    ro_cache_id_width = cluster_cfgs[0]["dma_id_width_in"] + 1
+    ro_cache_id_width = 0
+    if ro_cache_cfg:
+      ro_cache_id_width = cluster_cfgs[0]["dma_id_width_in"] + 1
+    else:
+      ro_cache_id_width = cluster_cfgs[0]["dma_id_width_in"]
     ro_cache_user_width = cluster_cfgs[0]["dma_user_width"]
   %>
+
+  ${soc_wide_xbar.in_quadrant_0.req_type()} wide_cluster_out_iwc_req;
+  ${soc_wide_xbar.in_quadrant_0.rsp_type()} wide_cluster_out_iwc_rsp;
+  typedef logic [${soc_wide_xbar.in_quadrant_0.iw-ro_cache_id_width-1}:0] wide_cluster_out_iwc_pre_id_t;
+
+% if ro_cache_cfg:
   `AXI_TYPEDEF_ALL_CT(axi_a48_d512_i${ro_cache_id_width}_u${ro_cache_user_width},
                       axi_a48_d512_i${ro_cache_id_width}_u${ro_cache_user_width}_req_t,
                       axi_a48_d512_i${ro_cache_id_width}_u${ro_cache_user_width}_resp_t,
@@ -442,9 +452,6 @@ module ${name}_quadrant_s1
     .mst_resp_i (snitch_ro_cache_cut_rsp)
   );
 
-  ${soc_wide_xbar.in_quadrant_0.req_type()} wide_cluster_out_iwc_req;
-  ${soc_wide_xbar.in_quadrant_0.rsp_type()} wide_cluster_out_iwc_rsp;
-  typedef logic [${soc_wide_xbar.in_quadrant_0.iw-ro_cache_id_width-1}:0] wide_cluster_out_iwc_pre_id_t;
   axi_id_prepend #(
     .slv_aw_chan_t  ( axi_a48_d512_i${ro_cache_id_width}_u${ro_cache_user_width}_aw_chan_t ),
     .slv_w_chan_t   ( axi_a48_d512_i${ro_cache_id_width}_u${ro_cache_user_width}_w_chan_t ),
@@ -492,8 +499,55 @@ module ${name}_quadrant_s1
     .mst_r_valids_i     (wide_cluster_out_iwc_rsp.r_valid),
     .mst_r_readies_o    (wide_cluster_out_iwc_req.r_ready)
   );
-
-
+% else:
+  axi_id_prepend #(
+    .slv_aw_chan_t  ( floo_${noc_name}_noc_pkg::axi_noc_wide_out_aw_chan_t ),
+    .slv_w_chan_t   ( floo_${noc_name}_noc_pkg::axi_noc_wide_out_w_chan_t ),
+    .slv_b_chan_t   ( floo_${noc_name}_noc_pkg::axi_noc_wide_out_b_chan_t ),
+    .slv_ar_chan_t  ( floo_${noc_name}_noc_pkg::axi_noc_wide_out_ar_chan_t ),
+    .slv_r_chan_t   ( floo_${noc_name}_noc_pkg::axi_noc_wide_out_r_chan_t ),
+    .mst_aw_chan_t  ( ${soc_wide_xbar.in_quadrant_0.aw_chan_type()} ),
+    .mst_w_chan_t   ( ${soc_wide_xbar.in_quadrant_0.w_chan_type()} ),
+    .mst_b_chan_t   ( ${soc_wide_xbar.in_quadrant_0.b_chan_type()} ),
+    .mst_ar_chan_t  ( ${soc_wide_xbar.in_quadrant_0.ar_chan_type()} ),
+    .mst_r_chan_t   ( ${soc_wide_xbar.in_quadrant_0.r_chan_type()} ),
+    .NoBus          ( 1 ),
+    .AxiIdWidthSlvPort ( ${cluster_cfgs[0]["dma_id_width_in"]} ),
+    .AxiIdWidthMstPort ( ${soc_wide_xbar.in_quadrant_0.iw} )
+  ) i_wide_cluster_out_iwc (
+    .pre_id_i           (wide_cluster_out_iwc_pre_id_t'(0)),
+    .slv_aw_chans_i     (quad_wide_out_tlb_req.aw),
+    .slv_aw_valids_i    (quad_wide_out_tlb_req.aw_valid),
+    .slv_aw_readies_o   (quad_wide_out_tlb_rsp.aw_ready),
+    .slv_w_chans_i      (quad_wide_out_tlb_req.w),
+    .slv_w_valids_i     (quad_wide_out_tlb_req.w_valid),
+    .slv_w_readies_o    (quad_wide_out_tlb_rsp.w_ready),
+    .slv_b_chans_o      (quad_wide_out_tlb_rsp.b),
+    .slv_b_valids_o     (quad_wide_out_tlb_rsp.b_valid),
+    .slv_b_readies_i    (quad_wide_out_tlb_req.b_ready),
+    .slv_ar_chans_i     (quad_wide_out_tlb_req.ar),
+    .slv_ar_valids_i    (quad_wide_out_tlb_req.ar_valid),
+    .slv_ar_readies_o   (quad_wide_out_tlb_rsp.ar_ready),
+    .slv_r_chans_o      (quad_wide_out_tlb_rsp.r),
+    .slv_r_valids_o     (quad_wide_out_tlb_rsp.r_valid),
+    .slv_r_readies_i    (quad_wide_out_tlb_req.r_ready),
+    .mst_aw_chans_o     (wide_cluster_out_iwc_req.aw),
+    .mst_aw_valids_o    (wide_cluster_out_iwc_req.aw_valid),
+    .mst_aw_readies_i   (wide_cluster_out_iwc_rsp.aw_ready),
+    .mst_w_chans_o      (wide_cluster_out_iwc_req.w),
+    .mst_w_valids_o     (wide_cluster_out_iwc_req.w_valid),
+    .mst_w_readies_i    (wide_cluster_out_iwc_rsp.w_ready),
+    .mst_b_chans_i      (wide_cluster_out_iwc_rsp.b),
+    .mst_b_valids_i     (wide_cluster_out_iwc_rsp.b_valid),
+    .mst_b_readies_o    (wide_cluster_out_iwc_req.b_ready),
+    .mst_ar_chans_o     (wide_cluster_out_iwc_req.ar),
+    .mst_ar_valids_o    (wide_cluster_out_iwc_req.ar_valid),
+    .mst_ar_readies_i   (wide_cluster_out_iwc_rsp.ar_ready),
+    .mst_r_chans_i      (wide_cluster_out_iwc_rsp.r),
+    .mst_r_valids_i     (wide_cluster_out_iwc_rsp.r_valid),
+    .mst_r_readies_o    (wide_cluster_out_iwc_req.r_ready)
+  );
+% endif
 
   ${soc_wide_xbar.in_quadrant_0.req_type()} wide_cluster_out_isolate_req;
   ${soc_wide_xbar.in_quadrant_0.rsp_type()} wide_cluster_out_isolate_rsp;
