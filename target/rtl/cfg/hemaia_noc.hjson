@@ -99,13 +99,23 @@
       narrow_trans: 32,
       wide_trans: 32,
       // Disable for easier flow trials.
-      ro_cache_cfg: {
-          width: 1024,
-          count: 128,
-          sets: 2,
-          max_trans: 32,
-          address_regions: 4,
-      }
+      // ro_cache_cfg: {
+      //     width: 1024,
+      //     count: 128,
+      //     sets: 2,
+      //     max_trans: 32,
+      //     address_regions: 4,
+      // }
+      // narrow_tlb_cfg: {
+      //     max_trans: 32,
+      //     l1_num_entries: 8,
+      //     l1_cut_ax: true,
+      // }
+      // wide_tlb_cfg: {
+      //     max_trans: 32,
+      //     l1_num_entries: 8,
+      //     l1_cut_ax: true,
+      // }
       wide_xbar: {
         max_slv_trans: 32,
         max_mst_trans: 32,
