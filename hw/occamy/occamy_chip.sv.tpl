@@ -116,6 +116,12 @@ import ${name}_pkg::*;
   //  HeMAiA Clock & Reset Manager //
   ///////////////////////////////////
 
+<%
+  num_d2d_clk_domain = 0
+  if occamy_cfg["hemaia_multichip"]["single_chip"] is False:
+    num_d2d_clk_domain = 4
+  num_acc_clk_domain = len(occamy_cfg["hemaia_multichip"]["clusters"])
+%>
   // Control Clock / clk_periph_i: Peripheral Slow Speed Clock
   // Master Clock / clk_i: Oscillator Clock
   // Clock Channel 0 / clk_o[0]: Host Clock
@@ -138,43 +144,64 @@ import ${name}_pkg::*;
   ${soc_axi_lite_narrow_periph_xbar.out_hemaia_clk_rst_controller.rsp_type()} hemaia_clk_rst_controller_rsp;
 
 
-  localparam int HeMAiADefaultDivision[6] = '{6, 6, 1, 1, 1, 1};
-  localparam int ResetDelays[6] = '{default: 3};
+  localparam int HeMAiADefaultDivision[${1+num_acc_clk_domain+num_d2d_clk_domain}] = '{
+    6
+  % for _ in range(num_acc_clk_domain):
+    ,6
+  % endfor
+  % if occamy_cfg["hemaia_multichip"]["single_chip"] is False:
+    ,1,1,1,1
+  % endif
+  };
+  localparam int ResetDelays[${1+num_acc_clk_domain+num_d2d_clk_domain}] = '{default: 3};
 
-  logic [5:0] clk_vec, rst_n_vec;
+  logic [${1+num_acc_clk_domain+num_d2d_clk_domain-1}:0] clk_vec, rst_n_vec;
+  (* syn_keep = 1, syn_preserve = 1 *)
+  logic clk_host;
+% if occamy_cfg["hemaia_multichip"]["single_chip"] is False: 
   (* syn_keep = 1, syn_preserve = 1 *)
   logic
-      clk_host,
-      clk_acc,
       clk_d2d_phy_east,
       clk_d2d_phy_west,
       clk_d2d_phy_north,
       clk_d2d_phy_south;
+% endif
+  (* syn_keep = 1, syn_preserve = 1 *)
+  logic [${num_acc_clk_domain-1}:0] clk_acc;
+
+  (* syn_keep = 1, syn_preserve = 1 *)
+  logic rst_host_n;
+% if occamy_cfg["hemaia_multichip"]["single_chip"] is False: 
   (* syn_keep = 1, syn_preserve = 1 *)
   logic
-      rst_host_n,
-      rst_acc_n,
       rst_d2d_phy_east_n,
       rst_d2d_phy_west_n,
       rst_d2d_phy_north_n,
       rst_d2d_phy_south_n;
+% endif
+  (* syn_keep = 1, syn_preserve = 1 *)
+  logic [${num_acc_clk_domain-1}:0] rst_acc_n;
 
   assign clk_host = clk_vec[0];
-  assign clk_acc = clk_vec[1];
-  assign clk_d2d_phy_east = clk_vec[2];
-  assign clk_d2d_phy_west = clk_vec[3];
-  assign clk_d2d_phy_north = clk_vec[4];
-  assign clk_d2d_phy_south = clk_vec[5];
+  assign clk_acc = clk_vec[1 +: ${num_acc_clk_domain}];
+% if occamy_cfg["hemaia_multichip"]["single_chip"] is False:
+  assign clk_d2d_phy_east = clk_vec[${1+num_acc_clk_domain}];
+  assign clk_d2d_phy_west = clk_vec[${2+num_acc_clk_domain}];
+  assign clk_d2d_phy_north = clk_vec[${3+num_acc_clk_domain}];
+  assign clk_d2d_phy_south = clk_vec[${4+num_acc_clk_domain}];
+% endif
 
   assign rst_host_n = rst_n_vec[0];
-  assign rst_acc_n = rst_n_vec[1];
-  assign rst_d2d_phy_east_n = rst_n_vec[2];
-  assign rst_d2d_phy_west_n = rst_n_vec[3];
-  assign rst_d2d_phy_north_n = rst_n_vec[4];
-  assign rst_d2d_phy_south_n = rst_n_vec[5];
+  assign rst_acc_n = rst_n_vec[1 +: ${num_acc_clk_domain}];
+% if occamy_cfg["hemaia_multichip"]["single_chip"] is False:
+  assign rst_d2d_phy_east_n = rst_n_vec[${1+num_acc_clk_domain}];
+  assign rst_d2d_phy_west_n = rst_n_vec[${2+num_acc_clk_domain}];
+  assign rst_d2d_phy_north_n = rst_n_vec[${3+num_acc_clk_domain}];
+  assign rst_d2d_phy_south_n = rst_n_vec[${4+num_acc_clk_domain}];
+% endif
 
   hemaia_clk_rst_controller #(
-    .NumClocks(6),
+    .NumClocks(${1+num_acc_clk_domain+num_d2d_clk_domain}),
     .MaxDivisionWidth(8),
     .DefaultDivision(HeMAiADefaultDivision),
     .ResetDelays(ResetDelays),
@@ -269,6 +296,8 @@ import ${name}_pkg::*;
   ${name}_top i_${name} (
     .clk_i              (clk_host),
     .rst_ni             (rst_host_n),
+    .clk_acc_i          (clk_acc),
+    .rst_acc_ni         (rst_acc_n),
     .sram_cfgs_i        ('0),
     .clk_periph_i       (clk_periph_i),
     .rst_periph_ni      (rst_periph_ni),
