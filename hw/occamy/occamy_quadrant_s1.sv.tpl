@@ -680,6 +680,11 @@ module ${name}_quadrant_s1
   // Quadrant Controller //
   /////////////////////////
 
+% if "ro_cache_cfg" not in occamy_cfg["s1_quadrant"]:
+  // Tie off RO Cache signals if RO Cache does not exist
+  assign ro_flush_ready = 1'b1;
+% endif
+
   ${name}_quadrant_s1_ctrl #(
     .tlb_entry_t (tlb_entry_t)
   ) i_${name}_quadrant_s1_ctrl (
