@@ -45,8 +45,13 @@
 #define soc_ctrl_scratch_base \
     (SOC_CTRL_BASE_ADDR + OCCAMY_SOC_SCRATCH_0_REG_OFFSET)
 
+%if nr_clusters==1:
+#define soc_ctrl_mailbox_scratch_base \
+    (SOC_CTRL_BASE_ADDR + OCCAMY_SOC_MAILBOX_SCRATCH_REG_OFFSET)
+%else:
 #define soc_ctrl_mailbox_scratch_base \
     (SOC_CTRL_BASE_ADDR + OCCAMY_SOC_MAILBOX_SCRATCH_0_REG_OFFSET)
+%endif
 
 #define soc_ctrl_kernel_tab_scratch_base \
     (SOC_CTRL_BASE_ADDR + OCCAMY_SOC_KERNEL_TAB_SCRATCH_0_REG_OFFSET)    
