@@ -611,8 +611,9 @@ module ${name}_quadrant_s1
     else:
       wide_cluster_out_tlb = wide_xbar_quadrant_s1.out_top
     #// Add RO cache behind TLB if enabled
+    #// RO cache needs an extra ID bit
+    wide_target_iw += 1
     if ro_cache_cfg:
-      wide_target_iw += 1
       wide_cluster_out_ro_cache = wide_cluster_out_tlb \
       .add_ro_cache(context, "snitch_ro_cache", \
         ro_cache_cfg, \
