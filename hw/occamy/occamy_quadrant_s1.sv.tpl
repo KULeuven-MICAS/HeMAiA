@@ -43,8 +43,8 @@ module ${name}_quadrant_s1
 (
   input  logic                         clk_i,
   input  logic                         rst_ni,
-  input  logic [${len(occamy_cfg["hemaia_multichip"]["clusters"])}-1:0] clk_acc_i,
-  input  logic [${len(occamy_cfg["hemaia_multichip"]["clusters"])}-1:0] rst_acc_ni,
+  input  logic [${len(occamy_cfg["clusters"])}-1:0] clk_acc_i,
+  input  logic [${len(occamy_cfg["clusters"])}-1:0] rst_acc_ni,
   input  logic                         test_mode_i,
   input  logic [31:0]                  boot_addr_i,
   input  chip_id_t                     chip_id_i,

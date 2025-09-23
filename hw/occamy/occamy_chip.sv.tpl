@@ -120,7 +120,7 @@ import ${name}_pkg::*;
   num_d2d_clk_domain = 0
   if occamy_cfg["hemaia_multichip"]["single_chip"] is False:
     num_d2d_clk_domain = 4
-  num_acc_clk_domain = len(occamy_cfg["hemaia_multichip"]["clusters"])
+  num_acc_clk_domain = len(occamy_cfg["clusters"])
 %>
   // Control Clock / clk_periph_i: Peripheral Slow Speed Clock
   // Master Clock / clk_i: Oscillator Clock

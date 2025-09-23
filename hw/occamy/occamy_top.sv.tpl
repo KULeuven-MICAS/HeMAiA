@@ -15,8 +15,8 @@ module ${name}_top
   input  logic        clk_i,
   input  logic        rst_ni,
   /// Accelerator clock
-  input  logic [${len(occamy_cfg["hemaia_multichip"]["clusters"])}-1:0] clk_acc_i,
-  input  logic [${len(occamy_cfg["hemaia_multichip"]["clusters"])}-1:0] rst_acc_ni,
+  input  logic [${len(occamy_cfg["clusters"])}-1:0] clk_acc_i,
+  input  logic [${len(occamy_cfg["clusters"])}-1:0] rst_acc_ni,
   /// Peripheral clock
   input  logic        clk_periph_i,
   input  logic        rst_periph_ni,
