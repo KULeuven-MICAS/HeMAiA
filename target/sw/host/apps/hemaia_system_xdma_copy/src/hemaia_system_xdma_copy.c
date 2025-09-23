@@ -11,6 +11,10 @@ int main() {
     // Set clk manager to 1 division for a faster simulation time
     enable_clk_domain(0, 1);
     enable_clk_domain(1, 1);
+    enable_clk_domain(2, 1);
+    enable_clk_domain(3, 1);
+    enable_clk_domain(4, 1);
+    enable_clk_domain(5, 1);
     // Reset and ungate all quadrants, deisolate
     uintptr_t current_chip_address_prefix =
         (uintptr_t)get_current_chip_baseaddress();
@@ -18,7 +22,6 @@ int main() {
 
     init_uart(current_chip_address_prefix, 32, 1);
 
-    reset_and_ungate_quadrants_all(current_chip_id);
     deisolate_all(current_chip_id);
     enable_sw_interrupts();
 

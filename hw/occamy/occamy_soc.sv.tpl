@@ -46,6 +46,11 @@ module ${name}_soc
 (
   input  logic        clk_i,
   input  logic        rst_ni,
+
+  // Accelerator clock
+  input  logic [${len(occamy_cfg["clusters"])}-1:0] clk_acc_i,
+  input  logic [${len(occamy_cfg["clusters"])}-1:0] rst_acc_ni,
+
   input  logic        test_mode_i,
   input  chip_id_t    chip_id_i,
   input  logic [${occamy_cfg["addr_width"]-1}:0] boot_addr_i,
@@ -186,6 +191,8 @@ module ${name}_soc
   ${name}_quadrant_s1 i_${name}_quadrant_s1_${i} (
     .clk_i (clk_i),
     .rst_ni (rst_ni),
+    .clk_acc_i (clk_acc_i),
+    .rst_acc_ni (rst_acc_ni),
     .test_mode_i (test_mode_i),
     .boot_addr_i (boot_addr_i[31:0]),
     .chip_id_i (chip_id_i),

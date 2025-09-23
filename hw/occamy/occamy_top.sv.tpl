@@ -14,6 +14,9 @@ module ${name}_top
 (
   input  logic        clk_i,
   input  logic        rst_ni,
+  /// Accelerator clock
+  input  logic [${len(occamy_cfg["clusters"])}-1:0] clk_acc_i,
+  input  logic [${len(occamy_cfg["clusters"])}-1:0] rst_acc_ni,
   /// Peripheral clock
   input  logic        clk_periph_i,
   input  logic        rst_periph_ni,
@@ -165,6 +168,8 @@ module ${name}_top
   ${name}_soc i_${name}_soc (
     .clk_i,
     .rst_ni,
+    .clk_acc_i,
+    .rst_acc_ni,
     .test_mode_i,
     .chip_id_i                    ( chip_id_i                   ),
     .boot_addr_i                  ( boot_addr                   ),

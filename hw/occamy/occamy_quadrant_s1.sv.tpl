@@ -43,6 +43,8 @@ module ${name}_quadrant_s1
 (
   input  logic                         clk_i,
   input  logic                         rst_ni,
+  input  logic [${len(occamy_cfg["clusters"])}-1:0] clk_acc_i,
+  input  logic [${len(occamy_cfg["clusters"])}-1:0] rst_acc_ni,
   input  logic                         test_mode_i,
   input  logic [31:0]                  boot_addr_i,
   input  chip_id_t                     chip_id_i,
@@ -75,9 +77,6 @@ module ${name}_quadrant_s1
   `AXI_TLB_TYPEDEF_ALL(tlb, logic [AddrWidth-12-1:0], logic [AddrWidth-12-1:0])
 
   // Signals from Controller
-  logic clk_quadrant_uncore, rst_quadrant_n;
-  logic [${nr_clusters-1}:0] clk_quadrant_cluster;
-
   logic [3:0] isolate, isolated;
   logic ro_enable, ro_flush_valid, ro_flush_ready;
   logic [${ro_cache_regions-1}:0][${soc_wide_xbar.in_quadrant_0.aw-1}:0] ro_start_addr, ro_end_addr;
@@ -122,8 +121,8 @@ module ${name}_quadrant_s1
 
 
   floo_${noc_name}_noc i_floonoc(
-    .clk_i                       (clk_quadrant_uncore        ),
-    .rst_ni                      (rst_quadrant_n             ),
+    .clk_i                       (clk_i                      ),
+    .rst_ni                      (rst_ni             ),
     .test_enable_i               (test_mode_i                ),
     .Sam_i                       (NoC_SAM                    ),
     .en_default_idx_i            (1'b1                       ),
@@ -161,7 +160,7 @@ module ${name}_quadrant_s1
       .declare(context)
     narrow_cluster_in_ctrl \
       .cut(context, cuts_narrx_with_ctrl) \
-      .isolate(context, "isolate[0]", "narrow_cluster_in_isolate", isolated="isolated[0]", terminated=True, to_clk="clk_quadrant_uncore", to_rst="rst_quadrant_n", num_pending=narrow_trans) \
+      .isolate(context, "isolate[0]", "narrow_cluster_in_isolate", isolated="isolated[0]", terminated=True, to_clk="clk_i", to_rst="rst_ni", num_pending=narrow_trans) \
       .change_iw(context, occamy_cfg["s1_quadrant"]["narrow_xbar_slv_id_width"], "narrow_cluster_in_iwc")
   %>
   assign cluster_noc_narrow_in_req[0][0] = narrow_cluster_in_iwc_req;
@@ -173,7 +172,7 @@ module ${name}_quadrant_s1
       .declare(context)
     narrow_cluster_in_ctrl \
       .cut(context, cuts_narrx_with_ctrl) \
-      .isolate(context, "isolate[0]", "narrow_cluster_in_isolate", isolated="isolated[0]", terminated=True, to_clk="clk_quadrant_uncore", to_rst="rst_quadrant_n", num_pending=narrow_trans) \
+      .isolate(context, "isolate[0]", "narrow_cluster_in_isolate", isolated="isolated[0]", terminated=True, to_clk="clk_i", to_rst="rst_ni", num_pending=narrow_trans) \
       .change_iw(context, narrow_xbar_quadrant_s1.in_top.iw, "narrow_cluster_in_iwc", to=narrow_xbar_quadrant_s1.in_top)
   %>
   %endif
@@ -205,7 +204,7 @@ module ${name}_quadrant_s1
     .entry_t(tlb_entry_t)
   ) i_narrow_cluster_out_tlb (
     .clk_i (clk_quadrant),
-    .rst_ni (rst_quadrant_n),
+    .rst_ni (rst_ni),
     .test_en_i(test_mode_i),
     .slv_req_i (cluster_noc_narrow_out_req[0][0]),
     .slv_resp_o (cluster_noc_narrow_out_rsp[0][0]),
@@ -359,8 +358,8 @@ module ${name}_quadrant_s1
     .axi_resp_t(floo_${noc_name}_noc_pkg::axi_noc_wide_in_rsp_t),
     .entry_t(tlb_entry_t)
   ) i_wide_cluster_out_tlb (
-    .clk_i (clk_quadrant_uncore),
-    .rst_ni (rst_quadrant_n),
+    .clk_i (clk_i),
+    .rst_ni (rst_ni),
     .test_en_i(test_mode_i),
     .slv_req_i (cluster_noc_wide_out_req[0][0]),
     .slv_resp_o (cluster_noc_wide_out_rsp[0][0]),
@@ -417,8 +416,8 @@ module ${name}_quadrant_s1
       .sram_cfg_data_t (sram_cfg_t),
       .sram_cfg_tag_t (sram_cfg_t)
     ) i_snitch_ro_cache (
-      .clk_i (clk_quadrant_uncore),
-      .rst_ni (rst_quadrant_n),
+      .clk_i (clk_i),
+      .rst_ni (rst_ni),
       .enable_i (ro_enable),
       .flush_valid_i (ro_flush_valid),
       .flush_ready_o (ro_flush_ready),
@@ -444,8 +443,8 @@ module ${name}_quadrant_s1
     .axi_req_t  (axi_a48_d512_i${ro_cache_id_width}_u${ro_cache_user_width}_req_t),
     .axi_resp_t (axi_a48_d512_i${ro_cache_id_width}_u${ro_cache_user_width}_resp_t)
   ) i_snitch_ro_cache_cut (
-    .clk_i (clk_quadrant_uncore),
-    .rst_ni (rst_quadrant_n),
+    .clk_i (clk_i),
+    .rst_ni (rst_ni),
     .slv_req_i (snitch_ro_cache_req),
     .slv_resp_o (snitch_ro_cache_rsp),
     .mst_req_o (snitch_ro_cache_cut_req),
@@ -651,7 +650,7 @@ module ${name}_quadrant_s1
       .copy(name="wide_cluster_in") \
       .declare(context) \
       .cut(context, cuts_wideiwc_with_wideout) \
-      .isolate(context, "isolate[2]", "wide_cluster_in_isolate", isolated="isolated[2]", terminated=True, atop_support=False, to_clk="clk_quadrant_uncore", to_rst="rst_quadrant_n", num_pending=wide_trans) \
+      .isolate(context, "isolate[2]", "wide_cluster_in_isolate", isolated="isolated[2]", terminated=True, atop_support=False, to_clk="clk_i", to_rst="rst_ni", num_pending=wide_trans) \
       .cut(context, cuts_wideisolate_with_wideiwc_in) \
       .change_iw(context,  occamy_cfg["s1_quadrant"]["wide_xbar_slv_id_width"],"wide_cluster_in_iwc")
   %>
@@ -668,7 +667,7 @@ module ${name}_quadrant_s1
       .copy(name="wide_cluster_in_iwc") \
       .declare(context) \
       .cut(context, cuts_wideiwc_with_wideout) \
-      .isolate(context, "isolate[2]", "wide_cluster_in_isolate", isolated="isolated[2]", terminated=True, atop_support=False, to_clk="clk_quadrant_uncore", to_rst="rst_quadrant_n", num_pending=wide_trans) \
+      .isolate(context, "isolate[2]", "wide_cluster_in_isolate", isolated="isolated[2]", terminated=True, atop_support=False, to_clk="clk_i", to_rst="rst_ni", num_pending=wide_trans) \
       .cut(context, cuts_wideisolate_with_wideiwc_in) \
       .change_iw(context, wide_xbar_quadrant_s1.in_top.iw, "wide_cluster_in_iwc", to=wide_xbar_quadrant_s1.in_top)
   %>
@@ -693,9 +692,6 @@ module ${name}_quadrant_s1
     .rst_ni,
     .test_mode_i,
     .chip_id_i,
-    .clk_quadrant_uncore_o (clk_quadrant_uncore),
-    .clk_quadrant_cluster_o (clk_quadrant_cluster),
-    .rst_quadrant_no (rst_quadrant_n),
     .isolate_o (isolate),
     .isolated_i (isolated),
     .ro_enable_o (ro_enable),
@@ -743,47 +739,151 @@ module ${name}_quadrant_s1
     x = i // y_num
     y = i % y_num
   %>
+
+  // Cut for four AXI: Narrow In/Out, Wide In/Out
+
+  // AXI CDC signals for narrow_in interface (quadrant_uncore -> accelerator)
+  floo_${noc_name}_noc_pkg::axi_noc_narrow_out_req_t narrow_in_cdc_dst_req_${i};
+  floo_${noc_name}_noc_pkg::axi_noc_narrow_out_rsp_t narrow_in_cdc_dst_rsp_${i};
+
+  axi_cdc #(
+    .aw_chan_t  ( floo_${noc_name}_noc_pkg::axi_noc_narrow_out_aw_chan_t ),
+    .w_chan_t   ( floo_${noc_name}_noc_pkg::axi_noc_narrow_out_w_chan_t ),
+    .b_chan_t   ( floo_${noc_name}_noc_pkg::axi_noc_narrow_out_b_chan_t ),
+    .ar_chan_t  ( floo_${noc_name}_noc_pkg::axi_noc_narrow_out_ar_chan_t ),
+    .r_chan_t   ( floo_${noc_name}_noc_pkg::axi_noc_narrow_out_r_chan_t ),
+    .axi_req_t  ( floo_${noc_name}_noc_pkg::axi_noc_narrow_out_req_t ),
+    .axi_resp_t ( floo_${noc_name}_noc_pkg::axi_noc_narrow_out_rsp_t ),
+    .LogDepth   ( 1 ),
+    .SyncStages ( 2 )
+  ) i_narrow_in_cdc_${i} (
+    .src_clk_i  ( clk_i ),
+    .src_rst_ni ( rst_ni ),
+    .src_req_i  ( cluster_noc_narrow_out_req[${x+1}][${y}] ),
+    .src_resp_o ( cluster_noc_narrow_out_rsp[${x+1}][${y}] ),
+    .dst_clk_i  ( clk_acc_i[${i}] ),
+    .dst_rst_ni ( rst_acc_ni[${i}] ),
+    .dst_req_o  ( narrow_in_cdc_dst_req_${i} ),
+    .dst_resp_i ( narrow_in_cdc_dst_rsp_${i} )
+  );
+
+  // AXI CDC signals for narrow_out interface (accelerator -> quadrant_uncore)
+  floo_${noc_name}_noc_pkg::axi_noc_narrow_in_req_t narrow_out_cdc_src_req_${i};
+  floo_${noc_name}_noc_pkg::axi_noc_narrow_in_rsp_t narrow_out_cdc_src_rsp_${i};
+
+  axi_cdc #(
+    .aw_chan_t  ( floo_${noc_name}_noc_pkg::axi_noc_narrow_in_aw_chan_t ),
+    .w_chan_t   ( floo_${noc_name}_noc_pkg::axi_noc_narrow_in_w_chan_t ),
+    .b_chan_t   ( floo_${noc_name}_noc_pkg::axi_noc_narrow_in_b_chan_t ),
+    .ar_chan_t  ( floo_${noc_name}_noc_pkg::axi_noc_narrow_in_ar_chan_t ),
+    .r_chan_t   ( floo_${noc_name}_noc_pkg::axi_noc_narrow_in_r_chan_t ),
+    .axi_req_t  ( floo_${noc_name}_noc_pkg::axi_noc_narrow_in_req_t ),
+    .axi_resp_t ( floo_${noc_name}_noc_pkg::axi_noc_narrow_in_rsp_t ),
+    .LogDepth   ( 1 ),
+    .SyncStages ( 2 )
+  ) i_narrow_out_cdc_${i} (
+    .src_clk_i  ( clk_acc_i[${i}] ),
+    .src_rst_ni ( rst_acc_ni[${i}] ),
+    .src_req_i  ( narrow_out_cdc_src_req_${i} ),
+    .src_resp_o ( narrow_out_cdc_src_rsp_${i} ),
+    .dst_clk_i  ( clk_i ),
+    .dst_rst_ni ( rst_ni ),
+    .dst_req_o  ( cluster_noc_narrow_in_req[${x+1}][${y}] ),
+    .dst_resp_i ( cluster_noc_narrow_in_rsp[${x+1}][${y}] )
+  );
+
+  // AXI CDC signals for wide_in interface (quadrant_uncore -> accelerator)
+  floo_${noc_name}_noc_pkg::axi_noc_wide_out_req_t wide_in_cdc_dst_req_${i};
+  floo_${noc_name}_noc_pkg::axi_noc_wide_out_rsp_t wide_in_cdc_dst_rsp_${i};
+
+  axi_cdc #(
+    .aw_chan_t  ( floo_${noc_name}_noc_pkg::axi_noc_wide_out_aw_chan_t ),
+    .w_chan_t   ( floo_${noc_name}_noc_pkg::axi_noc_wide_out_w_chan_t ),
+    .b_chan_t   ( floo_${noc_name}_noc_pkg::axi_noc_wide_out_b_chan_t ),
+    .ar_chan_t  ( floo_${noc_name}_noc_pkg::axi_noc_wide_out_ar_chan_t ),
+    .r_chan_t   ( floo_${noc_name}_noc_pkg::axi_noc_wide_out_r_chan_t ),
+    .axi_req_t  ( floo_${noc_name}_noc_pkg::axi_noc_wide_out_req_t ),
+    .axi_resp_t ( floo_${noc_name}_noc_pkg::axi_noc_wide_out_rsp_t ),
+    .LogDepth   ( 1 ),
+    .SyncStages ( 2 )
+  ) i_wide_in_cdc_${i} (
+    .src_clk_i  ( clk_i ),
+    .src_rst_ni ( rst_ni ),
+    .src_req_i  ( cluster_noc_wide_out_req[${x+1}][${y}] ),
+    .src_resp_o ( cluster_noc_wide_out_rsp[${x+1}][${y}] ),
+    .dst_clk_i  ( clk_acc_i[${i}] ),
+    .dst_rst_ni ( rst_acc_ni[${i}] ),
+    .dst_req_o  ( wide_in_cdc_dst_req_${i} ),
+    .dst_resp_i ( wide_in_cdc_dst_rsp_${i} )
+  );
+
+  // AXI CDC signals for wide_out interface (accelerator -> quadrant_uncore)
+  floo_${noc_name}_noc_pkg::axi_noc_wide_in_req_t wide_out_cdc_src_req_${i};
+  floo_${noc_name}_noc_pkg::axi_noc_wide_in_rsp_t wide_out_cdc_src_rsp_${i};
+
+  axi_cdc #(
+    .aw_chan_t  ( floo_${noc_name}_noc_pkg::axi_noc_wide_in_aw_chan_t ),
+    .w_chan_t   ( floo_${noc_name}_noc_pkg::axi_noc_wide_in_w_chan_t ),
+    .b_chan_t   ( floo_${noc_name}_noc_pkg::axi_noc_wide_in_b_chan_t ),
+    .ar_chan_t  ( floo_${noc_name}_noc_pkg::axi_noc_wide_in_ar_chan_t ),
+    .r_chan_t   ( floo_${noc_name}_noc_pkg::axi_noc_wide_in_r_chan_t ),
+    .axi_req_t  ( floo_${noc_name}_noc_pkg::axi_noc_wide_in_req_t ),
+    .axi_resp_t ( floo_${noc_name}_noc_pkg::axi_noc_wide_in_rsp_t ),
+    .LogDepth   ( 1 ),
+    .SyncStages ( 2 )
+  ) i_wide_out_cdc_${i} (
+    .src_clk_i  ( clk_acc_i[${i}] ),
+    .src_rst_ni ( rst_acc_ni[${i}] ),
+    .src_req_i  ( wide_out_cdc_src_req_${i} ),
+    .src_resp_o ( wide_out_cdc_src_rsp_${i} ),
+    .dst_clk_i  ( clk_i ),
+    .dst_rst_ni ( rst_ni ),
+    .dst_req_o  ( cluster_noc_wide_in_req[${x+1}][${y}] ),
+    .dst_resp_i ( cluster_noc_wide_in_rsp[${x+1}][${y}] )
+  );
+
   ${cluster_name}_wrapper i_${name}_cluster_${i} (
-    .clk_i               (clk_quadrant_cluster[${i}]),
-    .rst_ni              (rst_quadrant_n),
-    .obs_o               (/* Not Connected*/),
-    .meip_i              (meip_i[NrCoresClusterOffset[${i}]+:NrCoresCluster[${i}]]),
-    .mtip_i              (mtip_i[NrCoresClusterOffset[${i}]+:NrCoresCluster[${i}]]),
-    .msip_i              (msip_i[NrCoresClusterOffset[${i}]+:NrCoresCluster[${i}]]),
-    .hart_base_id_i      (hart_base_id_${i}),
-    .cluster_base_addr_i (cluster_base_addr[${i}]),
-    .boot_addr_i         (boot_addr_i), 
-    .narrow_in_req_i     (cluster_noc_narrow_out_req[${x+1}][${y}]),
-    .narrow_in_resp_o    (cluster_noc_narrow_out_rsp[${x+1}][${y}]),
-    .narrow_out_req_o    (cluster_noc_narrow_in_req[${x+1}][${y}]),
-    .narrow_out_resp_i   (cluster_noc_narrow_in_rsp[${x+1}][${y}]),
-    .wide_out_req_o      (cluster_noc_wide_in_req[${x+1}][${y}]),
-    .wide_out_resp_i     (cluster_noc_wide_in_rsp[${x+1}][${y}]),
-    .wide_in_req_i       (cluster_noc_wide_out_req[${x+1}][${y}]),
-    .wide_in_resp_o      (cluster_noc_wide_out_rsp[${x+1}][${y}]),
+    .clk_i               (clk_acc_i[${i}]),
+    .rst_ni              (rst_acc_ni[${i}]),
+    (* false_path *) .obs_o               (/* Not Connected */),
+    (* false_path *) .meip_i              (meip_i[NrCoresClusterOffset[${i}]+:NrCoresCluster[${i}]]),
+    (* false_path *) .mtip_i              (mtip_i[NrCoresClusterOffset[${i}]+:NrCoresCluster[${i}]]),
+    (* false_path *) .msip_i              (msip_i[NrCoresClusterOffset[${i}]+:NrCoresCluster[${i}]]),
+    (* false_path *) .hart_base_id_i      (hart_base_id_${i}),
+    (* false_path *) .cluster_base_addr_i (cluster_base_addr[${i}]),
+    (* false_path *) .boot_addr_i         (boot_addr_i), 
+    .narrow_in_req_i     (narrow_in_cdc_dst_req_${i}),
+    .narrow_in_resp_o    (narrow_in_cdc_dst_rsp_${i}),
+    .narrow_out_req_o    (narrow_out_cdc_src_req_${i}),
+    .narrow_out_resp_i   (narrow_out_cdc_src_rsp_${i}),
+    .wide_out_req_o      (wide_out_cdc_src_req_${i}),
+    .wide_out_resp_i     (wide_out_cdc_src_rsp_${i}),
+    .wide_in_req_i       (wide_in_cdc_dst_req_${i}),
+    .wide_in_resp_o      (wide_in_cdc_dst_rsp_${i}),
     .sram_cfgs_i         (sram_cfg_i.cluster)
   );
   %else:
 
   <%
-    narrow_cluster_in = narrow_xbar_quadrant_s1.__dict__["out_cluster_{}".format(i)].change_iw(context, cluster_cfgs[i]["id_width_in"], "narrow_in_iwc_{}".format(i)).cut(context, cuts_narrx_with_cluster)
-    narrow_cluster_out = narrow_xbar_quadrant_s1.__dict__["in_cluster_{}".format(i)].copy(name="narrow_out_{}".format(i)).declare(context)
-    narrow_cluster_out.cut(context, cuts_narrx_with_cluster, to=narrow_xbar_quadrant_s1.__dict__["in_cluster_{}".format(i)])
-    wide_cluster_in = wide_xbar_quadrant_s1.__dict__["out_cluster_{}".format(i)].change_iw(context, cluster_cfgs[i]["dma_id_width_in"], "wide_in_iwc_{}".format(i), max_txns_per_id=wide_trans).cut(context, cuts_widex_with_cluster)
+    narrow_cluster_in = narrow_xbar_quadrant_s1.__dict__["out_cluster_{}".format(i)].change_iw(context, cluster_cfgs[i]["id_width_in"], "narrow_in_iwc_{}".format(i)).cut(context, cuts_narrx_with_cluster).cdc(context, target_clk="clk_acc_i[{}]".format(i), target_rst="rst_acc_ni[{}]".format(i), name="narrow_cluster_in_cdc_{}".format(i))
+    narrow_cluster_out = narrow_xbar_quadrant_s1.__dict__["in_cluster_{}".format(i)].copy(name="narrow_out_{}".format(i),clk="clk_acc_i[{}]".format(i),rst="rst_acc_ni[{}]".format(i)).declare(context)
+    narrow_cluster_out.cdc(context, target_clk="clk_i", target_rst="rst_ni", name="narrow_cluster_out_cdc_{}".format(i)).cut(context, cuts_narrx_with_cluster, to=narrow_xbar_quadrant_s1.__dict__["in_cluster_{}".format(i)])
+
+    wide_cluster_in = wide_xbar_quadrant_s1.__dict__["out_cluster_{}".format(i)].change_iw(context, cluster_cfgs[i]["dma_id_width_in"], "wide_in_iwc_{}".format(i), max_txns_per_id=wide_trans).cut(context, cuts_widex_with_cluster).cdc(context, target_clk="clk_acc_i[{}]".format(i), target_rst="rst_acc_ni[{}]".format(i), name="wide_cluster_in_cdc_{}".format(i))
     wide_cluster_out = wide_xbar_quadrant_s1.__dict__["in_cluster_{}".format(i)].copy(name="wide_out_{}".format(i)).declare(context)
-    wide_cluster_out.cut(context, cuts_widex_with_cluster, to=wide_xbar_quadrant_s1.__dict__["in_cluster_{}".format(i)])
+    wide_cluster_out.cdc(context, target_clk="clk_i", target_rst="rst_ni", name="wide_cluster_out_cdc_{}".format(i)).cut(context, cuts_widex_with_cluster, to=wide_xbar_quadrant_s1.__dict__["in_cluster_{}".format(i)])
   %>
 
   ${cluster_name}_wrapper i_${name}_cluster_${i} (
-    .clk_i               (clk_quadrant_cluster[${i}]),
-    .rst_ni              (rst_quadrant_n),
-    .obs_o               (/* Not Connected*/),
-    .meip_i              (meip_i[NrCoresClusterOffset[${i}]+:NrCoresCluster[${i}]]),
-    .mtip_i              (mtip_i[NrCoresClusterOffset[${i}]+:NrCoresCluster[${i}]]),
-    .msip_i              (msip_i[NrCoresClusterOffset[${i}]+:NrCoresCluster[${i}]]),
-    .hart_base_id_i      (hart_base_id_${i}),
-    .cluster_base_addr_i (cluster_base_addr[${i}]),
-    .boot_addr_i         (boot_addr_i), 
+    .clk_i               (clk_acc_i[${i}]),
+    .rst_ni              (rst_acc_ni[${i}]),
+    (* false_path *) .obs_o               (/* Not Connected */),
+    (* false_path *) .meip_i              (meip_i[NrCoresClusterOffset[${i}]+:NrCoresCluster[${i}]]),
+    (* false_path *) .mtip_i              (mtip_i[NrCoresClusterOffset[${i}]+:NrCoresCluster[${i}]]),
+    (* false_path *) .msip_i              (msip_i[NrCoresClusterOffset[${i}]+:NrCoresCluster[${i}]]),
+    (* false_path *) .hart_base_id_i      (hart_base_id_${i}),
+    (* false_path *) .cluster_base_addr_i (cluster_base_addr[${i}]),
+    (* false_path *) .boot_addr_i         (boot_addr_i), 
     .narrow_in_req_i     (${narrow_cluster_in.req_name()}),
     .narrow_in_resp_o    (${narrow_cluster_in.rsp_name()}),
     .narrow_out_req_o    (${narrow_cluster_out.req_name()}),
