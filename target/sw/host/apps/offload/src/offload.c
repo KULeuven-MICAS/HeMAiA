@@ -24,7 +24,6 @@ int main() {
     init_uart(current_chip_address_prefix, 32, 1);
     comm_buffer_ptr = (comm_buffer_t*)(((uint64_t)&__narrow_spm_start) |
                                        current_chip_address_prefix);
-    deisolate_all(current_chip_id);
     enable_sw_interrupts();
     comm_buffer_ptr->lock = 0;
     comm_buffer_ptr->chip_id = current_chip_id;

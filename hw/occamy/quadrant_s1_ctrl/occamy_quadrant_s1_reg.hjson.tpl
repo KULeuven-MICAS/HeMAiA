@@ -10,33 +10,6 @@
   ],
   regwidth: 32,
   registers: [
-
-    { name: "ISOLATE",
-      desc: "Isolate ports of given quadrant.",
-      swaccess: "rw",
-      hwaccess: "hro",
-      // All channels isolated by default
-      fields: [
-        {bits: "0:0", name: "narrow_in",  resval: 1, desc: "narrow slave in isolate"},
-        {bits: "1:1", name: "narrow_out", resval: 1, desc: "narrow master out isolate"},
-        {bits: "2:2", name: "wide_in",    resval: 1, desc: "wide slave in isolate"},
-        {bits: "3:3", name: "wide_out",   resval: 1, desc: "wide master out isolate"}
-      ]
-    },
-    { name: "ISOLATED"
-      desc: "Isolation status of S1 quadrant and port"
-      swaccess: "ro"
-      hwaccess: "hwo"
-      hwqe: "true",
-      hwext: "true",
-      // All channels isolated by default
-      fields: [
-        {bits: "0:0", name: "narrow_in",  resval: 1, desc: "narrow slave in isolation status"},
-        {bits: "1:1", name: "narrow_out", resval: 1, desc: "narrow master out isolation status"},
-        {bits: "2:2", name: "wide_in",    resval: 1, desc: "wide slave in isolation status"},
-        {bits: "3:3", name: "wide_out",   resval: 1, desc: "wide master out isolation status"}
-      ]
-    },
 #// TODO: The enable registers below are unconditionally present; conditionalize on config?
     { name: "RO_CACHE_ENABLE",
       desc: "Enable read-only cache of quadrant.",
