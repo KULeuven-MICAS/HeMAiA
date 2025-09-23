@@ -21,6 +21,10 @@ int main() {
     // Set clk manager to 1 division for a faster simulation time
     enable_clk_domain(0, 1);
     enable_clk_domain(1, 1);
+    enable_clk_domain(2, 1);
+    enable_clk_domain(3, 1);
+    enable_clk_domain(4, 1);
+    enable_clk_domain(5, 1);
     printf("Chip(%x, %x): [Host] Init CLK Manager\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
 
     ///////////////////////////////
@@ -32,8 +36,7 @@ int main() {
     // 3. Wake up all the clusters
     ///////////////////////////////
 
-    // 3.1 Reset and ungate all quadrants, deisolate
-    reset_and_ungate_quadrants_all(current_chip_id);
+    // 3.1 Deisolate the quadrants
     deisolate_all(current_chip_id);
 
     // 3.2 The pointer to the communication buffer
