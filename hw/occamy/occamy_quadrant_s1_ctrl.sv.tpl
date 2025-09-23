@@ -21,11 +21,6 @@ module ${name}_quadrant_s1_ctrl
   input  logic test_mode_i,
   input  chip_id_t chip_id_i,
 
-  // Quadrant clock and reset
-  output logic [${num_clusters-1}:0] clk_quadrant_cluster_o,
-  output logic clk_quadrant_uncore_o,
-  output logic rst_quadrant_no,
-
   // Quadrant control signals
   output ${name}_quadrant_s1_reg2hw_isolate_reg_t isolate_o,
   input  ${name}_quadrant_s1_hw2reg_isolated_reg_t isolated_i,
@@ -156,37 +151,4 @@ module ${name}_quadrant_s1_ctrl
   };
   % endfor
   % endif
-
-  // Quadrant clock gate controlled by register
-  % for cluster_idx in range(num_clusters):
-  tc_clk_gating i_tc_clk_gating_quadrant_cluster_${cluster_idx} (
-    .clk_i,
-    .en_i (reg2hw.clk_ena.ena_cluster_${cluster_idx}.q),
-    .test_en_i (test_mode_i),
-    .clk_o (clk_quadrant_cluster_o[${cluster_idx}])
-  );
-  % endfor
-
-  tc_clk_gating i_tc_clk_gating_quadrant_cluster_uncore (
-    .clk_i,
-    .en_i (reg2hw.clk_ena.ena_quad_uncore.q),
-    .test_en_i (test_mode_i),
-    .clk_o (clk_quadrant_uncore_o)
-  );
-  
-
-  // Reset directly from register (i.e. (de)assertion inherently synchronized)
-  // Multiplex with glitchless multiplexor, top reset for testing purposes
-`ifdef TARGET_XILINX
-  // Using clk cells makes Vivado flag the reset as a clock tree
-  assign rst_quadrant_no = (test_mode_i) ? rst_ni : reg2hw.reset_n.q;
-`else
-  tc_clk_mux2 i_tc_reset_mux (
-    .clk0_i (reg2hw.reset_n.q),
-    .clk1_i (rst_ni),
-    .clk_sel_i (test_mode_i),
-    .clk_o (rst_quadrant_no)
-  );
-`endif
-
 endmodule
