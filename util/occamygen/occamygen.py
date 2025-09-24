@@ -557,7 +557,7 @@ def main():
     #############
     if args.top_sv:
         top_kwargs = occamy.get_top_kwargs(occamy_cfg, cluster_generators,
-                                    soc_axi_lite_narrow_periph_xbar, soc_wide_xbar, soc_narrow_xbar, soc2router_bus, router2soc_bus, args.name)
+                                    soc_axi_lite_narrow_periph_xbar, soc_wide_xbar, soc_narrow_xbar, soc2router_bus, router2soc_bus, util, args.name)
         write_template(args.top_sv,
                        outdir,
                        fname="{}_top.sv".format(args.name),

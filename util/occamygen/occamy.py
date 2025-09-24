@@ -351,7 +351,6 @@ def am_connect_soc_lite_periph_xbar(am, am_soc_axi_lite_periph_xbar, occamy_cfg)
                     occamy_cfg["peripherals"]["axi_lite_peripherals"][p]["address"]
                 ).attach_to(am_soc_axi_lite_periph_xbar)
             )
-
     return am_axi_lite_peripherals
 
 
@@ -583,11 +582,19 @@ def get_dts(occamy_cfg, am_clint, am_axi_lite_peripherals, am_axi_lite_narrow_pe
     return dts
 
 
-def get_top_kwargs(occamy_cfg, cluster_generators, soc_axi_lite_narrow_periph_xbar, soc_wide_xbar, soc_narrow_xbar, soc2router_bus, router2soc_bus, name):
+def get_top_kwargs(occamy_cfg, cluster_generators, soc_axi_lite_narrow_periph_xbar, soc_wide_xbar, soc_narrow_xbar, soc2router_bus, router2soc_bus, util, name):
     core_per_cluster_list = [cluster_generator.cfg["nr_cores"]
                              for cluster_generator in cluster_generators]
     nr_cores_quadrant = sum(core_per_cluster_list)
     nr_s1_quadrants = occamy_cfg["nr_s1_quadrant"]
+
+    for p in range(len(occamy_cfg["peripherals"]["axi_lite_peripherals"])):
+        if occamy_cfg["peripherals"]["axi_lite_peripherals"][p]["name"] == "h2h_mailbox":
+            h2h_mailbox_base_addr = occamy_cfg["peripherals"]["axi_lite_peripherals"][p]["address"]
+            
+    for p in range(len(occamy_cfg["peripherals"]["axi_lite_narrow_peripherals"])):
+        if occamy_cfg["peripherals"]["axi_lite_narrow_peripherals"][p]["name"] == "c2h_mailbox":
+            c2h_mailbox_base_addr = occamy_cfg["peripherals"]["axi_lite_narrow_peripherals"][p]["address"]
     top_kwargs = {
         "name": name,
         "occamy_cfg": occamy_cfg,
@@ -597,6 +604,8 @@ def get_top_kwargs(occamy_cfg, cluster_generators, soc_axi_lite_narrow_periph_xb
         "soc2router_bus": soc2router_bus,
         "router2soc_bus": router2soc_bus,
         "cores": nr_s1_quadrants * nr_cores_quadrant + 1,
+        "h2h_mailbox_base_addr": util.to_sv_hex(h2h_mailbox_base_addr),
+        "c2h_mailbox_base_addr": util.to_sv_hex(c2h_mailbox_base_addr)
     }
     return top_kwargs
 

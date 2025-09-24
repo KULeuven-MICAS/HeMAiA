@@ -79,7 +79,11 @@ sources:
     files:
       - target/rtl/src/floo_quad_mesh_xy_noc_pkg.sv
       - target/rtl/src/floo_quad_mesh_xy_noc.sv
-
+  # hw mailboxes
+  - target: hw_mailbox
+    files:
+      - hw/hemaia/hemaia_hw_mailbox/hemaia_axi_lite_mailbox_adapter.sv
+      - hw/hemaia/hemaia_hw_mailbox/hemaia_hw_mailbox.sv
   # auto-generated soc
   - target: occamy
     files:

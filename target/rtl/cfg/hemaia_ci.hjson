@@ -129,8 +129,11 @@
       },
       narrow_xbar_slv_id_width: 4,
       narrow_xbar_user_width: 3, // clog2(total number of clusters)
-      cfg_base_addr: 184549376, // 0x0b000000
-      cfg_base_offset: 65536 // 0x10000
+      cfg_base_addr: 184549376,  // 0x0b00_0000
+      cfg_base_offset: 65536     // 0x1_0000
+      h2c_mailbox_addr: 184614912// 0x0b01_0000
+      h2c_mailbox_offset: 4096   // 0x1000
+      
     },
     clusters:[
       "snax_KUL_cluster",
@@ -164,18 +167,23 @@
             length: 131072, // 128 kiB 0x2_0000
         },
         clint: {
-                    address: 67108864, // 0x0400_0000
-                    length: 1048576, // 1 MiB 0x10_0000
+            address: 67108864, // 0x0400_0000
+            length: 1048576, // 1 MiB 0x10_0000
         },
         axi_lite_peripherals: [
             {
                 name: "debug",
                 address: 0, // 0x0000_0000
                 length: 4096, // 4 kiB 0x1000
-            }, 
+            },
+            {
+                name: "h2h_mailbox",
+                address: 4096, // 0x0000_1000
+                length: 4096, // 4 kiB 0x1000
+            },
             {
               name: "spis", // Only Master port, no slave port
-            }
+            },
         ],
         axi_lite_narrow_peripherals: [
             {
@@ -214,10 +222,16 @@
                 length: 4096, // 4 kiB 0x1000
             },
             {
+                name: "c2h_mailbox",
+                address: 33587200, // 0x0200_8000
+                length: 4096, // 4 kiB 0x1000
+            },
+            {
                 name: "spim",
                 address: 50331648, // 0x0300_0000
-                length: 131072, // 4 kiB 0x2_0000
+                length: 131072, // 8 kiB 0x2_0000
             },
+
             {
                 name: "plic",
                 address: 201326592, // 0x0C00_0000

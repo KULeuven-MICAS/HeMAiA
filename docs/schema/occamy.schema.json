@@ -434,13 +434,23 @@
                 },
                 "cfg_base_addr": {
                     "type": "integer",
-                    "description": "Base address of the quadrant configuration region.",
+                    "description": "Base address of the quadrant configuration region. defaults to 0x0b000000",
                     "default": 184549376
                 },
                 "cfg_base_offset": {
                     "type": "integer",
-                    "description": "Allocated size and offset of each quadrant configuration.",
+                    "description": "Allocated size and offset of each quadrant configuration. defaults to 0x10000",
                     "default": 65536
+                },
+                "h2c_mailbox_addr": {
+                    "type": "integer",
+                    "description": "Base address of the host to cluster mailbox. defaults to 0x0b010000",
+                    "default": 184614912
+                },
+                "h2c_mailbox_offset": {
+                    "type": "integer",
+                    "description": "Allocated size and offset of the host to cluster mailbox. defaults to 0x1000",
+                    "default": 4096
                 }
             }
         },

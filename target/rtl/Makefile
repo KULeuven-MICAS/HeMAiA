@@ -149,10 +149,12 @@ debug-occamy-gen:
 		--cva6-sv          $(SOURCE_OCCAMY_DIR)/occamy_cva6.sv.tpl	
 
 debug-soc-gen:
-	$(ROOT)/util/occamygen/occamy_soc_gen.py --cfg $(CFG) --outdir $(TARGET_SRC_DIR) --soc-sv $(SOURCE_OCCAMY_DIR)/occamy_soc.sv.tpl --top-sv           $(SOURCE_OCCAMY_DIR)/occamy_top.sv.tpl 
+	$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_SRC_DIR) \
+	--soc-sv $(SOURCE_OCCAMY_DIR)/occamy_soc.sv.tpl \
+	--top-sv $(SOURCE_OCCAMY_DIR)/occamy_top.sv.tpl
 
 debug-quadrant-ctrl-gen:
-	$(ROOT)/util/occamygen/occamy_soc_gen.py --cfg $(CFG) --outdir $(TARGET_SRC_DIR) --quadrant-s1-ctrl $(SOURCE_OCCAMY_DIR)/occamy_quadrant_s1_ctrl.sv.tpl
+	$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_SRC_DIR) --quadrant-s1-ctrl $(SOURCE_OCCAMY_DIR)/occamy_quadrant_s1_ctrl.sv.tpl
 
 debug-quadrant-gen:
 	$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_SRC_DIR) \
