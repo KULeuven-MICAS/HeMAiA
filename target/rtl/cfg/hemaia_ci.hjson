@@ -125,8 +125,6 @@
     clusters:[
       "snax_KUL_cluster",
       "snax_KUL_cluster",
-      "snax_KUL_cluster",
-      "snax_KUL_cluster",
       ],
 
     hemaia_xdma_cfg: {
@@ -222,7 +220,7 @@
     },
     spm_wide: {
       address: 2147483648, // 0x8000_0000
-      length: 16777216,    // 16 MiB 0x100_0000
+      length: 67108864,    // 64 MiB 0x400_0000
       banks: 32,
     },
     wide_zero_mem: {
