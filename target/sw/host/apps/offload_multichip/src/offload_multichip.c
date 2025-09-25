@@ -27,20 +27,6 @@ int main() {
     printf("[HeMAiA] Current Chip ID is: %x%x\r\n", current_chip_id >> 4,
            current_chip_id & 0x0F);
 
-    printf("[HeMAiA] Max X of SoP: \r\n");
-    uint32_t max_x = 0;
-    scanf("%x", &max_x);
-    uint32_t max_y = 0;
-    printf("[HeMAiA] Max Y of SoP: \r\n");
-    scanf("%x", &max_y);
-
-    for (uint32_t x = 0; x <= max_x; x++) {
-        for (uint32_t y = 0; y <= max_y; y++) {
-            // 3.1 Deisolate the quadrants
-            deisolate_all((x << 4) + y);
-        }
-    }
-
     printf("[HeMAiA] Chip ID to execute binary: \r\n");
     scanf("%x", &target_chip_id);
     if (target_chip_id < 0) {

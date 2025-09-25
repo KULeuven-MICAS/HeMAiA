@@ -22,8 +22,6 @@ module ${name}_quadrant_s1_ctrl
   input  chip_id_t chip_id_i,
 
   // Quadrant control signals
-  output ${name}_quadrant_s1_reg2hw_isolate_reg_t isolate_o,
-  input  ${name}_quadrant_s1_hw2reg_isolated_reg_t isolated_i,
   output logic ro_enable_o,
   output logic ro_flush_valid_o,
   input  logic ro_flush_ready_i,
@@ -105,8 +103,6 @@ module ${name}_quadrant_s1_ctrl
   );
 
   // Control quadrant control signals
-  assign isolate_o = reg2hw.isolate;
-  assign hw2reg.isolated = isolated_i;
   assign ro_enable_o = reg2hw.ro_cache_enable.q;
 
   // RO cache flush handshake

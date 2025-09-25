@@ -15,14 +15,12 @@ int main() {
     enable_clk_domain(3, 1);
     enable_clk_domain(4, 1);
     enable_clk_domain(5, 1);
-    // Reset and ungate all quadrants, deisolate
     uintptr_t current_chip_address_prefix =
         (uintptr_t)get_current_chip_baseaddress();
     uint32_t current_chip_id = get_current_chip_id();
 
+    // Init the uart for printf and enable software interrupts
     init_uart(current_chip_address_prefix, 32, 1);
-
-    deisolate_all(current_chip_id);
     enable_sw_interrupts();
 
     // Heap Initialization

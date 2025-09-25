@@ -12,7 +12,6 @@
   cuts_widex_with_cluster = 0
   cuts_narrx_with_ctrl = 1
   cuts_widexpost_with_wideiwc_out = 1
-  cuts_wideisolate_with_wideiwc_in = 1
   cuts_wideiwc_with_wideout = 1
   nr_clusters = len(occamy_cfg["clusters"])
   noc_cfg = occamy_cfg["s1_quadrant"].get("noc_cfg",{})
@@ -77,7 +76,6 @@ module ${name}_quadrant_s1
   `AXI_TLB_TYPEDEF_ALL(tlb, logic [AddrWidth-12-1:0], logic [AddrWidth-12-1:0])
 
   // Signals from Controller
-  logic [3:0] isolate, isolated;
   logic ro_enable, ro_flush_valid, ro_flush_ready;
   logic [${ro_cache_regions-1}:0][${soc_wide_xbar.in_quadrant_0.aw-1}:0] ro_start_addr, ro_end_addr;
   %if narrow_tlb_cfg:
@@ -160,7 +158,6 @@ module ${name}_quadrant_s1
       .declare(context)
     narrow_cluster_in_ctrl \
       .cut(context, cuts_narrx_with_ctrl) \
-      .isolate(context, "isolate[0]", "narrow_cluster_in_isolate", isolated="isolated[0]", terminated=True, to_clk="clk_i", to_rst="rst_ni", num_pending=narrow_trans) \
       .change_iw(context, occamy_cfg["s1_quadrant"]["narrow_xbar_slv_id_width"], "narrow_cluster_in_iwc")
   %>
   assign cluster_noc_narrow_in_req[0][0] = narrow_cluster_in_iwc_req;
@@ -172,7 +169,6 @@ module ${name}_quadrant_s1
       .declare(context)
     narrow_cluster_in_ctrl \
       .cut(context, cuts_narrx_with_ctrl) \
-      .isolate(context, "isolate[0]", "narrow_cluster_in_isolate", isolated="isolated[0]", terminated=True, to_clk="clk_i", to_rst="rst_ni", num_pending=narrow_trans) \
       .change_iw(context, narrow_xbar_quadrant_s1.in_top.iw, "narrow_cluster_in_iwc", to=narrow_xbar_quadrant_s1.in_top)
   %>
   %endif
@@ -276,29 +272,6 @@ module ${name}_quadrant_s1
     .mst_r_readies_o    (narrow_cluster_out_iwc_req.r_ready)
   );
 
-  ${soc_narrow_xbar.in_s1_quadrant_0.req_type()} narrow_cluster_out_isolate_req;
-  ${soc_narrow_xbar.in_s1_quadrant_0.rsp_type()} narrow_cluster_out_isolate_rsp;
-  axi_isolate #(
-    .NumPending   ( ${narrow_trans} ),
-    .TerminateTransaction ( 0 ),
-    .AtopSupport  ( 1 ),
-    .AxiIdWidth   ( ${soc_narrow_out_id_width} ),
-    .AxiAddrWidth ( 48 ),
-    .AxiDataWidth ( 64 ),
-    .AxiUserWidth ( ${soc_narrow_out_user_width} ),
-    .axi_req_t    ( ${soc_narrow_xbar.in_s1_quadrant_0.req_type()} ),
-    .axi_resp_t   ( ${soc_narrow_xbar.in_s1_quadrant_0.rsp_type()} )
-  ) i_narrow_cluster_out_isolate (
-    .clk_i      ( clk_i ),
-    .rst_ni     ( rst_ni ),
-    .slv_req_i  ( narrow_cluster_out_iwc_req ),
-    .slv_resp_o ( narrow_cluster_out_iwc_rsp ),
-    .mst_req_o  ( narrow_cluster_out_isolate_req ),
-    .mst_resp_i ( narrow_cluster_out_isolate_rsp ),
-    .isolate_i  ( isolate[1] ),
-    .isolated_o ( isolated[1] )
-  );
-
   ${soc_narrow_xbar.in_s1_quadrant_0.req_type()} narrow_cluster_out_ctrl_req;
   ${soc_narrow_xbar.in_s1_quadrant_0.rsp_type()} narrow_cluster_out_ctrl_rsp;
   axi_multicut #(
@@ -313,8 +286,8 @@ module ${name}_quadrant_s1
   ) i_narrow_cluster_out_ctrl (
     .clk_i      (clk_i),
     .rst_ni     (rst_ni),
-    .slv_req_i  (narrow_cluster_out_isolate_req),
-    .slv_resp_o (narrow_cluster_out_isolate_rsp),
+    .slv_req_i  (narrow_cluster_out_iwc_req),
+    .slv_resp_o (narrow_cluster_out_iwc_rsp),
     .mst_req_o  (narrow_cluster_out_ctrl_req),
     .mst_resp_i (narrow_cluster_out_ctrl_rsp)
   );  
@@ -330,10 +303,9 @@ module ${name}_quadrant_s1
       bypass="~narrow_tlb_enable")
   else:
     narrow_cluster_out_tlb = narrow_xbar_quadrant_s1.out_top
-  #// Change ID width, isolate, and cut
+  #// Change ID width and cut
   narrow_cluster_out_ctrl = narrow_cluster_out_tlb \
     .change_iw(context, soc_narrow_xbar.in_s1_quadrant_0.iw, "narrow_cluster_out_iwc") \
-    .isolate(context, "isolate[1]", "narrow_cluster_out_isolate", isolated="isolated[1]", to_clk="clk_i", to_rst="rst_ni", use_to_clk_rst=True, num_pending=narrow_trans) \
     .cut(context, cuts_narrx_with_ctrl, "narrow_cluster_out_ctrl")
   %>
   %endif
@@ -548,32 +520,8 @@ module ${name}_quadrant_s1
   );
 % endif
 
-  ${soc_wide_xbar.in_quadrant_0.req_type()} wide_cluster_out_isolate_req;
-  ${soc_wide_xbar.in_quadrant_0.rsp_type()} wide_cluster_out_isolate_rsp;
-
-  axi_isolate #(
-    .NumPending ( 32 ),
-    .TerminateTransaction ( 0 ),
-    .AtopSupport ( 0 ),
-    .AxiIdWidth ( ${soc_wide_xbar.iw} ),
-    .AxiAddrWidth ( 48 ),
-    .AxiDataWidth ( 512 ),
-    .AxiUserWidth ( ${soc_wide_xbar.uw} ),
-    .axi_req_t ( ${soc_wide_xbar.in_quadrant_0.req_type()} ),
-    .axi_resp_t ( ${soc_wide_xbar.in_quadrant_0.rsp_type()} )
-  ) i_wide_cluster_out_isolate (
-    .clk_i      ( clk_i                        ),
-    .rst_ni     ( rst_ni                       ),
-    .slv_req_i  ( wide_cluster_out_iwc_req     ),
-    .slv_resp_o ( wide_cluster_out_iwc_rsp     ),
-    .mst_req_o  ( wide_cluster_out_isolate_req ),
-    .mst_resp_i ( wide_cluster_out_isolate_rsp ),
-    .isolate_i  ( isolate[3]                   ),
-    .isolated_o ( isolated[3]                  )
-  );
-
-  ${soc_wide_xbar.in_quadrant_0.req_type()} wide_cluster_out_isolate_cut_req;
-  ${soc_wide_xbar.in_quadrant_0.rsp_type()} wide_cluster_out_isolate_cut_rsp;
+  ${soc_wide_xbar.in_quadrant_0.req_type()} wide_cluster_out_cut_req;
+  ${soc_wide_xbar.in_quadrant_0.rsp_type()} wide_cluster_out_cut_rsp;
 
   axi_multicut #(
     .NoCuts (1),
@@ -584,16 +532,16 @@ module ${name}_quadrant_s1
     .r_chan_t (${soc_wide_xbar.in_quadrant_0.r_chan_type()}),
     .axi_req_t (${soc_wide_xbar.in_quadrant_0.req_type()}),
     .axi_resp_t (${soc_wide_xbar.in_quadrant_0.rsp_type()})
-  ) i_wide_cluster_out_isolate_cut (
+  ) i_wide_cluster_out_cut (
     .clk_i (clk_i),
     .rst_ni (rst_ni),
-    .slv_req_i (wide_cluster_out_isolate_req),
-    .slv_resp_o (wide_cluster_out_isolate_rsp),
-    .mst_req_o (wide_cluster_out_isolate_cut_req),
-    .mst_resp_i (wide_cluster_out_isolate_cut_rsp)
+    .slv_req_i (wide_cluster_out_iwc_req),
+    .slv_resp_o (wide_cluster_out_iwc_rsp),
+    .mst_req_o (wide_cluster_out_cut_req),
+    .mst_resp_i (wide_cluster_out_cut_rsp)
   );
-  assign quadrant_wide_out_req_o = wide_cluster_out_isolate_cut_req;
-  assign wide_cluster_out_isolate_cut_rsp = quadrant_wide_out_rsp_i;
+  assign quadrant_wide_out_req_o = wide_cluster_out_cut_req;
+  assign wide_cluster_out_cut_rsp = quadrant_wide_out_rsp_i;
 
 
   %else:
@@ -629,10 +577,9 @@ module ${name}_quadrant_s1
       wide_cluster_out_ro_cache = wide_cluster_out_tlb
     #// Add another multicut as configured before IWC
     wide_cluster_out_ro_cache = wide_cluster_out_ro_cache.cut(context, cuts_widexpost_with_wideiwc_out)
-    #// Change ID width, isolate, and cut
+    #// Change ID width and cut
     wide_cluster_out_cut = wide_cluster_out_ro_cache \
       .change_iw(context, wide_target_iw, "wide_cluster_out_iwc", max_txns_per_id=wide_trans) \
-      .isolate(context, "isolate[3]", "wide_cluster_out_isolate", isolated="isolated[3]", atop_support=False, to_clk="clk_i", to_rst="rst_ni", use_to_clk_rst=True, num_pending=wide_trans) \
       .cut(context, cuts_wideiwc_with_wideout)
     #// Assert correct outgoing ID widths
     assert soc_wide_xbar.in_quadrant_0.iw == wide_cluster_out_cut.iw, f"Wide IW for S1 Quadrant and SoC mismatches. SOC IW={soc_wide_xbar.in_quadrant_0.iw}, Quadrant IW={wide_cluster_out_cut.iw}"
@@ -650,8 +597,6 @@ module ${name}_quadrant_s1
       .copy(name="wide_cluster_in") \
       .declare(context) \
       .cut(context, cuts_wideiwc_with_wideout) \
-      .isolate(context, "isolate[2]", "wide_cluster_in_isolate", isolated="isolated[2]", terminated=True, atop_support=False, to_clk="clk_i", to_rst="rst_ni", num_pending=wide_trans) \
-      .cut(context, cuts_wideisolate_with_wideiwc_in) \
       .change_iw(context,  occamy_cfg["s1_quadrant"]["wide_xbar_slv_id_width"],"wide_cluster_in_iwc")
   %>
   // to SOC
@@ -667,8 +612,6 @@ module ${name}_quadrant_s1
       .copy(name="wide_cluster_in_iwc") \
       .declare(context) \
       .cut(context, cuts_wideiwc_with_wideout) \
-      .isolate(context, "isolate[2]", "wide_cluster_in_isolate", isolated="isolated[2]", terminated=True, atop_support=False, to_clk="clk_i", to_rst="rst_ni", num_pending=wide_trans) \
-      .cut(context, cuts_wideisolate_with_wideiwc_in) \
       .change_iw(context, wide_xbar_quadrant_s1.in_top.iw, "wide_cluster_in_iwc", to=wide_xbar_quadrant_s1.in_top)
   %>
   assign wide_cluster_in_iwc_req = quadrant_wide_in_req_i;
@@ -692,8 +635,6 @@ module ${name}_quadrant_s1
     .rst_ni,
     .test_mode_i,
     .chip_id_i,
-    .isolate_o (isolate),
-    .isolated_i (isolated),
     .ro_enable_o (ro_enable),
     .ro_flush_valid_o (ro_flush_valid),
     .ro_flush_ready_i  (ro_flush_ready),
