@@ -126,6 +126,8 @@ package ${name}_pkg;
   localparam addr_t S1QuadrantCfgBaseOffset = ${quad_cfg_base_addr};
   /// The address space set aside for the configuration of each slave.
   localparam addr_t S1QuadrantCfgAddressSpace = ${quad_cfg_base_offset};
+  /// The host to cluster mailbox allocated space
+  localparam addr_t H2CMailboxAddressSpace = ${h2c_mailbox_length};
 
 
   ${package}

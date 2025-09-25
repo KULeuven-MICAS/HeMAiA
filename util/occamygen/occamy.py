@@ -587,7 +587,7 @@ def get_top_kwargs(occamy_cfg, cluster_generators, soc_axi_lite_narrow_periph_xb
                              for cluster_generator in cluster_generators]
     nr_cores_quadrant = sum(core_per_cluster_list)
     nr_s1_quadrants = occamy_cfg["nr_s1_quadrant"]
-
+    chip_id_width = occamy_cfg["hemaia_multichip"]["chip_id_width"]
     for p in range(len(occamy_cfg["peripherals"]["axi_lite_peripherals"])):
         if occamy_cfg["peripherals"]["axi_lite_peripherals"][p]["name"] == "h2h_mailbox":
             h2h_mailbox_base_addr = occamy_cfg["peripherals"]["axi_lite_peripherals"][p]["address"]
@@ -598,6 +598,7 @@ def get_top_kwargs(occamy_cfg, cluster_generators, soc_axi_lite_narrow_periph_xb
     top_kwargs = {
         "name": name,
         "occamy_cfg": occamy_cfg,
+        "chip_id_width": chip_id_width,
         "soc_axi_lite_narrow_periph_xbar": soc_axi_lite_narrow_periph_xbar,
         "soc_wide_xbar": soc_wide_xbar,
         "soc_narrow_xbar": soc_narrow_xbar,
@@ -632,23 +633,12 @@ def get_soc_kwargs(occamy_cfg, cluster_generators, soc_narrow_xbar, soc_wide_xba
 
 def get_quadrant_ctrl_kwargs(occamy_cfg, soc_wide_xbar, soc_narrow_xbar, quadrant_s1_ctrl_xbars, quadrant_s1_ctrl_mux, name):
     num_clusters = len(occamy_cfg["clusters"])
-    ro_cache_cfg = occamy_cfg["s1_quadrant"].get("ro_cache_cfg", {})
-    ro_cache_regions = ro_cache_cfg.get("address_regions", 1)
-    narrow_tlb_cfg = occamy_cfg["s1_quadrant"].get("narrow_tlb_cfg", {})
-    narrow_tlb_entries = narrow_tlb_cfg.get("l1_num_entries", 1)
-    wide_tlb_cfg = occamy_cfg["s1_quadrant"].get("wide_tlb_cfg", {})
-    wide_tlb_entries = wide_tlb_cfg.get("l1_num_entries", 1)
-
+    chip_id_width = occamy_cfg["hemaia_multichip"]["chip_id_width"]
     quadrant_ctrl_kwargs = {
         "name": name,
         "occamy_cfg": occamy_cfg,
+        "chip_id_width": chip_id_width,
         "num_clusters": num_clusters,
-        "ro_cache_cfg": ro_cache_cfg,
-        "ro_cache_regions": ro_cache_regions,
-        "narrow_tlb_cfg": narrow_tlb_cfg,
-        "narrow_tlb_entries": narrow_tlb_entries,
-        "wide_tlb_cfg": wide_tlb_cfg,
-        "wide_tlb_entries": wide_tlb_entries,
         "soc_wide_xbar": soc_wide_xbar,
         "soc_narrow_xbar": soc_narrow_xbar,
         "quadrant_s1_ctrl_xbars": quadrant_s1_ctrl_xbars,
@@ -794,7 +784,8 @@ def get_pkg_kwargs(occamy_cfg, cluster_generators, util, name):
         "cluster_base_offset": util.to_sv_hex(cluster_cfg["cluster_base_offset"]),
         "quad_cfg_base_addr": util.to_sv_hex(occamy_cfg["s1_quadrant"]["cfg_base_addr"]),
         "quad_cfg_base_offset": util.to_sv_hex(occamy_cfg["s1_quadrant"]["cfg_base_offset"]),
-        "hemaia_multichip": occamy_cfg["hemaia_multichip"]
+        "hemaia_multichip": occamy_cfg["hemaia_multichip"],
+        "h2c_mailbox_length": util.to_sv_hex(occamy_cfg["s1_quadrant"]["h2c_mailbox_length"])
     }
     return pkg_kwargs
 
@@ -849,6 +840,7 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
         "wide_spm_size": hex(wide_spm_size),
         "narrow_spm_size": hex(narrow_spm_size),
         "mailbox_size": hex(mailbox_size),
+        "h2c_mailbox_size": hex(occamy_cfg["s1_quadrant"]["h2c_mailbox_length"]),
         "cluster_tcdm_size": hex(cluster_tcdm_size),
         "cluster_offset": hex(cluster_offset),
         "cluster_addr_width": cluster_addr_width,

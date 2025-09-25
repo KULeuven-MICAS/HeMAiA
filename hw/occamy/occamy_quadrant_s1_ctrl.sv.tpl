@@ -12,38 +12,17 @@
 
 module ${name}_quadrant_s1_ctrl
   import ${name}_pkg::*;
-  import ${name}_quadrant_s1_reg_pkg::*;
-#(
-  parameter type tlb_entry_t = logic
-)(
+(
   input  logic clk_i,
   input  logic rst_ni,
   input  logic test_mode_i,
   input  chip_id_t chip_id_i,
-
-  // Quadrant control signals
-  output logic ro_enable_o,
-  output logic ro_flush_valid_o,
-  input  logic ro_flush_ready_i,
-  
-  output logic [${ro_cache_regions-1}:0][${soc_wide_xbar.in_quadrant_0.aw-1}:0] ro_start_addr_o,
-  output logic [${ro_cache_regions-1}:0][${soc_wide_xbar.in_quadrant_0.aw-1}:0] ro_end_addr_o,
 
   // Upward (SoC) narrow ports
   output ${soc_narrow_xbar.in_s1_quadrant_0.req_type()} soc_out_req_o,
   input  ${soc_narrow_xbar.in_s1_quadrant_0.rsp_type()} soc_out_rsp_i,
   input  ${soc_narrow_xbar.out_s1_quadrant_0.req_type()} soc_in_req_i,
   output ${soc_narrow_xbar.out_s1_quadrant_0.rsp_type()} soc_in_rsp_o,
-
-  // TLB narrow and wide configuration ports
-  %if narrow_tlb_cfg:
-  output tlb_entry_t [${narrow_tlb_entries-1}:0] narrow_tlb_entries_o,
-  output logic narrow_tlb_enable_o,
-  %endif
-  %if wide_tlb_cfg:
-  output tlb_entry_t [${wide_tlb_entries-1}:0] wide_tlb_entries_o,
-  output logic wide_tlb_enable_o,
-  %endif
 
   // Quadrant narrow ports
   output ${soc_narrow_xbar.out_s1_quadrant_0.req_type()} quadrant_out_req_o,
@@ -56,7 +35,12 @@ module ${name}_quadrant_s1_ctrl
   addr_t [0:0] internal_xbar_base_addr;
   assign internal_xbar_base_addr = {chip_id_i, S1QuadrantCfgBaseOffset[AddrWidth-ChipIdWidth-1:0]};
 
-  // Controller crossbar: shims off for access to internal space
+  // Quadrant Lite xbar
+  // Here we have the host to cluster mailboxes
+  addr_t [${num_clusters-1}:0] h2c_mailbox_base_addr;
+  % for i in range(num_clusters):
+  assign h2c_mailbox_base_addr[${i}] = internal_xbar_base_addr + ${i} * H2CMailboxAddressSpace;
+  % endfor
   ${module}
 
   // Connect upward (SoC) narrow ports
@@ -81,70 +65,34 @@ module ${name}_quadrant_s1_ctrl
       .serialize(context, iw=1, name="soc_internal_serialize") \
       .change_dw(context, 32, "soc_internal_change_dw") \
       .to_axi_lite(context, name="soc_internal_to_axi_lite", to=quadrant_s1_ctrl_mux.in_quad)
-    quad_regs_regbus = quadrant_s1_ctrl_mux.out_out \
-      .to_reg(context, "axi_lite_to_regbus_regs")
   %> \
 
-  // Control registers
-  ${name}_quadrant_s1_reg2hw_t reg2hw;
-  ${name}_quadrant_s1_hw2reg_t hw2reg;
-
-  ${name}_quadrant_s1_reg_top #(
-    .reg_req_t (${quad_regs_regbus.req_type()}),
-    .reg_rsp_t (${quad_regs_regbus.rsp_type()})
-  ) i_${name}_quadrant_s1_reg_top (
-    .clk_i,
-    .rst_ni,
-    .reg_req_i (${quad_regs_regbus.req_name()}),
-    .reg_rsp_o (${quad_regs_regbus.rsp_name()}),
-    .reg2hw,
-    .hw2reg,
-    .devmode_i (1'b1)
+  ////////////////////////////
+  //  Host2Cluster Mailbox  //
+  ////////////////////////////
+  % for i in range(num_clusters):
+  <%
+    axi_lite_h2c_mailbox_slave = quadrant_s1_ctrl_mux.__dict__[f"out_h2c_mailbox_{i}"]
+  %>
+  // Mailbox ${i}
+  hemaia_hw_mailbox #(
+    .MailboxDepth(32),
+    .IrqEdgeTrig (1'b0),
+    .IrqActHigh  (1'b1),
+    .AxiAddrWidth(${axi_lite_h2c_mailbox_slave.aw}),
+    .AxiDataWidth(${axi_lite_h2c_mailbox_slave.dw}),
+    .ChipIdWidth (${chip_id_width}),
+    .req_lite_t  (${axi_lite_h2c_mailbox_slave.req_type()}),
+    .resp_lite_t (${axi_lite_h2c_mailbox_slave.rsp_type()})
+  ) i_h2c_mailbox_${i} (
+    .clk_i (${axi_lite_h2c_mailbox_slave.clk}),
+    .rst_ni(${axi_lite_h2c_mailbox_slave.rst}),
+    .chip_id_i(chip_id_i),
+    .test_i(1'b0),
+    .req_i (${axi_lite_h2c_mailbox_slave.req_name()}),
+    .resp_o(${axi_lite_h2c_mailbox_slave.rsp_name()}),
+    .irq_o (),
+    .base_addr_i(h2c_mailbox_base_addr[${i}])
   );
-
-  // Control quadrant control signals
-  assign ro_enable_o = reg2hw.ro_cache_enable.q;
-
-  // RO cache flush handshake
-  assign ro_flush_valid_o = reg2hw.ro_cache_flush.q;
-  assign hw2reg.ro_cache_flush.d = ro_flush_ready_i;
-  assign hw2reg.ro_cache_flush.de = reg2hw.ro_cache_flush.q & hw2reg.ro_cache_flush.d;
-
-  // Assemble RO cache start and end addresses from registers
-  % for j in range(ro_cache_regions):
-  assign ro_start_addr_o[${j}] = {reg2hw.ro_start_addr_high_${j}.q, reg2hw.ro_start_addr_low_${j}.q};
-  assign ro_end_addr_o  [${j}] = {reg2hw.ro_end_addr_high_${j}.q,   reg2hw.ro_end_addr_low_${j}.q};
   % endfor
-
-  %if narrow_tlb_cfg:
-  // Narrow TLB enable
-  assign narrow_tlb_enable_o = reg2hw.tlb_narrow_enable.q;
-
-  // Assemble narrow TLB entries
-  % for j in range(narrow_tlb_entries):
-  assign narrow_tlb_entries_o[${j}] = '{
-    first:  {reg2hw.tlb_narrow_entry_${j}_pagein_first_high.q,  reg2hw.tlb_narrow_entry_${j}_pagein_first_low.q},
-    last:   {reg2hw.tlb_narrow_entry_${j}_pagein_last_high.q,   reg2hw.tlb_narrow_entry_${j}_pagein_last_low.q},
-    base:   {reg2hw.tlb_narrow_entry_${j}_pageout_high.q,       reg2hw.tlb_narrow_entry_${j}_pageout_low.q},
-    valid:  reg2hw.tlb_narrow_entry_${j}_flags.valid.q,
-    read_only: reg2hw.tlb_narrow_entry_${j}_flags.read_only.q
-  };
-  % endfor
-  % endif
-
-  %if wide_tlb_cfg:
-  // Wide TLB enable
-  assign wide_tlb_enable_o = reg2hw.tlb_wide_enable.q;
-
-  // Assemble wide TLB entries
-  % for j in range(wide_tlb_entries):
-  assign wide_tlb_entries_o[${j}] = '{
-    first:  {reg2hw.tlb_wide_entry_${j}_pagein_first_high.q,  reg2hw.tlb_wide_entry_${j}_pagein_first_low.q},
-    last:   {reg2hw.tlb_wide_entry_${j}_pagein_last_high.q,   reg2hw.tlb_wide_entry_${j}_pagein_last_low.q},
-    base:   {reg2hw.tlb_wide_entry_${j}_pageout_high.q,       reg2hw.tlb_wide_entry_${j}_pageout_low.q},
-    valid:  reg2hw.tlb_wide_entry_${j}_flags.valid.q,
-    read_only: reg2hw.tlb_wide_entry_${j}_flags.read_only.q
-  };
-  % endfor
-  % endif
 endmodule

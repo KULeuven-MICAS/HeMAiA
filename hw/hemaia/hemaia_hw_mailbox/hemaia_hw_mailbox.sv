@@ -33,6 +33,7 @@ module hemaia_hw_mailbox #(
     parameter bit unsigned IrqActHigh   = 1'b1,
     parameter int unsigned AxiAddrWidth = 32'd0,
     parameter int unsigned AxiDataWidth = 32'd0,
+    parameter int unsigned ChipIdWidth  = 8,
     parameter type         req_lite_t   = logic,
     parameter type         resp_lite_t  = logic,
     // DEPENDENT PARAMETERS, DO NOT OVERRIDE!
@@ -42,13 +43,14 @@ module hemaia_hw_mailbox #(
     // is one bit wider, MSB is the fifo_full flag of the respective fifo
     parameter type         usage_t      = logic [$clog2(MailboxDepth):0]
 ) (
-    input  logic             clk_i,       // Clock
-    input  logic             rst_ni,      // Asynchronous reset active low
-    input  logic             test_i,      // Testmode enable
-    input  req_lite_t        req_i,       // AXI-Lite request input
-    output resp_lite_t       resp_o,      // AXI-Lite response output
-    output logic             irq_o        // Interrupt output
-    input  addr_t            base_addr_i  // base address for this peripheral
+    input  logic                   clk_i,       // Clock
+    input  logic                   rst_ni,      // Asynchronous reset active low
+    input  logic                   test_i,      // Testmode enable
+    input  logic [ChipIdWidth-1:0] chip_id_i,   // chip id input for multi-chip addressing
+    input  req_lite_t              req_i,       // AXI-Lite request input
+    output resp_lite_t             resp_o,      // AXI-Lite response output
+    output logic                   irq_o,       // Interrupt output
+    input  addr_t                  base_addr_i  // base address for this peripheral
 );
     // FIFO signals
     logic w_mbox_flush, r_mbox_flush;
@@ -73,9 +75,10 @@ module hemaia_hw_mailbox #(
     ) i_hemaia_axi_lite_mailbox_adapter (
         .clk_i,   // Clock
         .rst_ni,  // Asynchronous reset active low
+        .chip_id_i      (chip_id_i     ), // chip id input for multi-chip addressing
         // slave port
-        .slv_req_i      ( slv_reqs_i   ),
-        .slv_resp_o     ( slv_resps_o  ),
+        .slv_req_i      ( req_i        ),
+        .slv_resp_o     ( resp_o       ),
         .base_addr_i    ( base_addr_i  ), // base address for the slave port
         // write FIFO port
         .mbox_w_data_o  ( mbox_w_data  ),

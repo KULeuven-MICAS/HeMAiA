@@ -450,11 +450,13 @@ def main():
                                                          "internal_xbar_base_addr",
                                                          "S1QuadrantCfgAddressSpace")
 
-    # AXI Lite mux to combine register requests
+    # AXI Lite mux
+    # Here we hook the hw mailboxes
+    # The number of mailboxes equals to the number of clusters
     quadrant_s1_ctrl_mux = solder.AxiLiteXbar(
         48,
         32,
-        chipidw=0,      # quadrant_ctrl_mux is a pure mux, all transactions just send out from out
+        chipidw=occamy_cfg["hemaia_multichip"]["chip_id_width"],
         name="quadrant_s1_ctrl_mux",
         clk="clk_i",
         rst="rst_ni",
@@ -463,10 +465,12 @@ def main():
         fall_through=False,
         context="quadrant_s1_ctrl")
 
-    quadrant_s1_ctrl_mux.add_output("out", [(0, (1 << 48) - 1)])
     quadrant_s1_ctrl_mux.add_input("soc")
     quadrant_s1_ctrl_mux.add_input("quad")
-
+    for i in range(nr_s1_clusters):
+        quadrant_s1_ctrl_mux.add_output_symbolic(f"h2c_mailbox_{i}",
+                                                  "h2c_mailbox_base_addr",
+                                                  "H2CMailboxAddressSpace")
     ################
     # S1 Quadrants #
     ################

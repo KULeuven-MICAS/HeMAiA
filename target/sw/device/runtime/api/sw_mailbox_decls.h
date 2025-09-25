@@ -72,3 +72,15 @@ inline uint32_t mailbox_try_read(volatile struct ring_buf *g_h2a_mbox, uint32_t 
  * @brief Blocking mailbox write access
  */
 inline uint32_t mailbox_write(volatile struct ring_buf *g_a2h_mbox, uint32_t word);
+
+/**
+ * @brief Blocking read a word from the HW H2C mailbox
+ */
+inline uint32_t bingo_h2c_mailbox_read(uint32_t *buffer);
+
+/**
+ * @brief Blocking write a word to the HW C2H mailbox
+ */
+
+inline void bingo_c2h_mailbox_write(uint32_t word);
+

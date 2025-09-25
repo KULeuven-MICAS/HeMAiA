@@ -11,6 +11,7 @@ module hemaia_axi_lite_mailbox_adapter #(
   parameter int unsigned MailboxDepth = 32'd16,
   parameter int unsigned AxiAddrWidth = 32'd32,
   parameter int unsigned AxiDataWidth = 32'd32,
+  parameter int unsigned ChipIdWidth  = 8,
   parameter type         req_lite_t   = logic,
   parameter type         resp_lite_t  = logic,
   parameter type         addr_t       = logic [AxiAddrWidth-1:0],
@@ -19,6 +20,7 @@ module hemaia_axi_lite_mailbox_adapter #(
 ) (
   input  logic       clk_i,   // Clock
   input  logic       rst_ni,  // Asynchronous reset active low
+  input  logic [ChipIdWidth-1:0] chip_id_i, // chip id input for multi-chip addressing
   // slave port
   input  req_lite_t  slv_req_i,
   output resp_lite_t slv_resp_o,
@@ -69,14 +71,16 @@ module hemaia_axi_lite_mailbox_adapter #(
   logic         b_valid, b_ready;
   b_chan_lite_t b_chan;
   logic         r_valid, r_ready;
-  r_chan_lite_t r_chan;
+  r_chan_lite_t r_chan; 
   // address map generation
   rule_t [NoRegs-1:0] addr_map;
+  addr_t base_addr;
+  assign base_addr = {chip_id_i, base_addr_i[AxiAddrWidth-ChipIdWidth-1:0]};
   for (genvar i = 0; i < NoRegs; i++) begin : gen_addr_map
     assign addr_map[i] = '{
         idx:        i,
-        start_addr: base_addr_i +  i      * (AxiDataWidth / 8),
-        end_addr:   base_addr_i + (i + 1) * (AxiDataWidth / 8),
+        start_addr: base_addr +  i      * (AxiDataWidth / 8),
+        end_addr:   base_addr + (i + 1) * (AxiDataWidth / 8),
         default:    '0
     };
   end

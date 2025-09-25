@@ -8,6 +8,25 @@
 
 uint32_t global_task_id = 0;
 
+void bingo_write_h2h_mailbox(uint8_t chip_id) {
+    // Not implemented yet
+}
+
+uint64_t bingo_read_h2h_mailbox() {
+    // Not implemented yet
+    return 0;
+}
+
+void bingo_write_h2c_mailbox(HeroDev *dev, uint32_t word) {
+    // Not implemented yet
+}
+
+uint32_t bingo_read_c2h_mailbox(HeroDev *dev, uint32_t *buffer) {
+    // Not implemented yet
+    return 0;
+}
+
+
 bingo_task_t *bingo_task_create(uint32_t fn_ptr, uint32_t args_ptr) {
     bingo_task_t *task = o1heapAllocate(l2_heap_manager, sizeof(bingo_task_t));
     task->task_id = global_task_id;

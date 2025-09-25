@@ -41,6 +41,23 @@ typedef struct task {
 ///// API      /////
 ////////////////////
 
+// Mailbox read/write functions
+
+// H2H mailbox
+// Host can write to any chip's H2H mailbox
+void bingo_write_h2h_mailbox(uint8_t chip_id);
+// Host can only read from its own chip's H2H mailbox
+uint64_t bingo_read_h2h_mailbox();
+
+// H2C mailbox
+// Host can write to any chip's H2C mailbox
+void bingo_write_h2c_mailbox(HeroDev *dev, uint32_t word);
+
+// C2H mailbox
+// Host can only read from its own chip's C2H mailbox
+uint32_t bingo_read_c2h_mailbox(HeroDev *dev, uint32_t *buffer); 
+
+
 // Create a new task
 bingo_task_t *bingo_task_create(uint32_t fn_ptr, uint32_t args_ptr);
 
@@ -52,3 +69,4 @@ void bingo_task_offload(bingo_task_t *task, HeroDev *dev);
 
 // The main scheduling function
 void bingo_runtime_schedule(bingo_task_t **task_list, uint32_t num_tasks, HeroDev **dev_list_2d[], uint32_t num_chips, uint32_t num_devs_per_chip);
+

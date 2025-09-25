@@ -11,3 +11,5 @@ extern void rb_init(volatile struct ring_buf *rb, uint32_t size, uint32_t elemen
 extern uint32_t mailbox_try_read(volatile struct ring_buf *g_h2a_mbox, uint32_t *buffer);
 extern uint32_t mailbox_read(volatile struct ring_buf *g_h2a_mbox, uint32_t *buffer, uint32_t n_words);
 extern uint32_t mailbox_write(volatile struct ring_buf *g_a2h_mbox, uint32_t word);
+extern uint32_t bingo_h2c_mailbox_read(uint32_t *buffer);
+extern void bingo_c2h_mailbox_write(uint32_t word);

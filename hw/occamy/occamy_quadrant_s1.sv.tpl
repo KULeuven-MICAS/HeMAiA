@@ -622,36 +622,15 @@ module ${name}_quadrant_s1
   /////////////////////////
   // Quadrant Controller //
   /////////////////////////
-
-% if "ro_cache_cfg" not in occamy_cfg["s1_quadrant"]:
-  // Tie off RO Cache signals if RO Cache does not exist
-  assign ro_flush_ready = 1'b1;
-% endif
-
-  ${name}_quadrant_s1_ctrl #(
-    .tlb_entry_t (tlb_entry_t)
-  ) i_${name}_quadrant_s1_ctrl (
+  ${name}_quadrant_s1_ctrl i_${name}_quadrant_s1_ctrl (
     .clk_i,
     .rst_ni,
     .test_mode_i,
     .chip_id_i,
-    .ro_enable_o (ro_enable),
-    .ro_flush_valid_o (ro_flush_valid),
-    .ro_flush_ready_i  (ro_flush_ready),
-    .ro_start_addr_o (ro_start_addr),
-    .ro_end_addr_o (ro_end_addr),
-    .soc_out_req_o (quadrant_narrow_out_req_o),
-    .soc_out_rsp_i (quadrant_narrow_out_rsp_i),
-    .soc_in_req_i (quadrant_narrow_in_req_i),
-    .soc_in_rsp_o (quadrant_narrow_in_rsp_o),
-    %if narrow_tlb_cfg:
-    .narrow_tlb_entries_o (narrow_tlb_entries),
-    .narrow_tlb_enable_o (narrow_tlb_enable),
-    %endif
-    %if wide_tlb_cfg:
-    .wide_tlb_entries_o (wide_tlb_entries),
-    .wide_tlb_enable_o (wide_tlb_enable),
-    %endif
+    .soc_out_req_o      (quadrant_narrow_out_req_o),
+    .soc_out_rsp_i      (quadrant_narrow_out_rsp_i),
+    .soc_in_req_i       (quadrant_narrow_in_req_i ),
+    .soc_in_rsp_o       (quadrant_narrow_in_rsp_o ),
     %if en_floonoc:
     .quadrant_out_req_o (narrow_cluster_in_ctrl_req),
     .quadrant_out_rsp_i (narrow_cluster_in_ctrl_rsp),
@@ -660,11 +639,10 @@ module ${name}_quadrant_s1
     %else:    
     .quadrant_out_req_o (${narrow_cluster_in_ctrl.req_name()}),
     .quadrant_out_rsp_i (${narrow_cluster_in_ctrl.rsp_name()}),
-    .quadrant_in_req_i (${narrow_cluster_out_ctrl.req_name()}),
-    .quadrant_in_rsp_o (${narrow_cluster_out_ctrl.rsp_name()})
+    .quadrant_in_req_i  (${narrow_cluster_out_ctrl.req_name()}),
+    .quadrant_in_rsp_o  (${narrow_cluster_out_ctrl.rsp_name()})
     %endif 
   );
-
 
 % for i in range(nr_clusters):
   <%

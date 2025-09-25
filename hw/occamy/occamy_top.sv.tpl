@@ -371,23 +371,25 @@ module ${name}_top
   <%
      axi_lite_h2h_mailbox_slave = soc_periph_xbar.out_h2h_mailbox
   %>
-
+  addr_t h2h_mailbox_base_addr = ${h2h_mailbox_base_addr};
   hemaia_hw_mailbox #(
     .MailboxDepth(8),
     .IrqEdgeTrig (1'b0),
     .IrqActHigh  (1'b1),
     .AxiAddrWidth(${axi_lite_h2h_mailbox_slave.aw}),
     .AxiDataWidth(${axi_lite_h2h_mailbox_slave.dw}),
+    .ChipIdWidth (${chip_id_width}),
     .req_lite_t  (${axi_lite_h2h_mailbox_slave.req_type()}),
-    .resp_lite_t (${axi_lite_h2h_mailbox_slave.rsp_type()}),
+    .resp_lite_t (${axi_lite_h2h_mailbox_slave.rsp_type()})
   ) i_h2h_mailbox (
     .clk_i (${axi_lite_h2h_mailbox_slave.clk}),
     .rst_ni(${axi_lite_h2h_mailbox_slave.rst}),
+    .chip_id_i(chip_id_i),
     .test_i(1'b0),
     .req_i (${axi_lite_h2h_mailbox_slave.req_name()}),
     .resp_o(${axi_lite_h2h_mailbox_slave.rsp_name()}),
     .irq_o (),
-    .base_addr_i(${h2h_mailbox_base_addr})
+    .base_addr_i(h2h_mailbox_base_addr)
   );
 
 
@@ -664,21 +666,24 @@ module ${name}_top
   <%
      axi_lite_narrow_c2h_mailbox_slave = soc_axi_lite_narrow_periph_xbar.out_c2h_mailbox
   %>
+  addr_t c2h_mailbox_base_addr = ${c2h_mailbox_base_addr};
   hemaia_hw_mailbox #(
     .MailboxDepth(32),
     .IrqEdgeTrig (1'b0),
     .IrqActHigh  (1'b1),
     .AxiAddrWidth(${axi_lite_narrow_c2h_mailbox_slave.aw}),
     .AxiDataWidth(${axi_lite_narrow_c2h_mailbox_slave.dw}),
+    .ChipIdWidth (${chip_id_width}),
     .req_lite_t  (${axi_lite_narrow_c2h_mailbox_slave.req_type()}),
-    .resp_lite_t (${axi_lite_narrow_c2h_mailbox_slave.rsp_type()}),
+    .resp_lite_t (${axi_lite_narrow_c2h_mailbox_slave.rsp_type()})
   ) i_c2h_mailbox (
     .clk_i (${axi_lite_narrow_c2h_mailbox_slave.clk}),
     .rst_ni(${axi_lite_narrow_c2h_mailbox_slave.rst}),
+    .chip_id_i(chip_id_i),
     .test_i(1'b0),
     .req_i (${axi_lite_narrow_c2h_mailbox_slave.req_name()}),
     .resp_o(${axi_lite_narrow_c2h_mailbox_slave.rsp_name()}),
     .irq_o (),
-    .base_addr_i(${c2h_mailbox_base_addr})
+    .base_addr_i(c2h_mailbox_base_addr)
   );
 endmodule
