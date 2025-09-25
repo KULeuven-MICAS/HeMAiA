@@ -17,6 +17,7 @@ APPDIR += apps/snax/snax-xdma-hazard
 APPDIR += apps/snax/snax-xdma-transpose
 APPDIR += apps/snax/snax-xdma-local-transpose
 APPDIR += apps/snax/snax-xdma-reshape
+APPDIR += apps/snax/snax-xdma-multicast-chiplet
 APPDIR += apps/snax/snax-xdma-multicast-exploration
 APPDIR += apps/snax/snax-xdma-overhead
 APPDIR += apps/snax/snax-axi-torture
