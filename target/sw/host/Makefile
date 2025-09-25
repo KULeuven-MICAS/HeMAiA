@@ -9,22 +9,16 @@
 # Add user applications to APPS variable
 APPS  = hello_world
 APPS += hemaia_clk_rst_configurator
+APPS += multichip_sync
+APPS += offload
+APPS += offload_multichip
+APPS += offload_bingo
+APPS += offload_bingo_multichip
 ifneq ($(findstring multichip,$(CFG_OVERRIDE)),)
 # If chiplet cfg is used, offloaf_multichip is compiled with the support to execute applications on cores at different chips
 # host only applications
 APPS += hemaia_d2d_link_configurator
-APPS += multichip_sync
-# offload applications
-# The legacy offload
-APPS += offload_multichip
-# The bingo offload
-APPS += offload_bingo_multichip
-else
-# Otherwise, single chip offload is compiled
-# The legacy offload
-APPS += offload
-# The bingo offload
-APPS += offload_bingo
+
 endif
 
 # XDMA copy test application
