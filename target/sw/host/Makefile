@@ -22,10 +22,11 @@ ifneq ($(findstring multichip,$(CFG_OVERRIDE)),)
 # If chiplet cfg is used, offload_multichip is compiled with the support to execute applications on cores at different chips
 # Host only applications
 APPS += hemaia_d2d_link_configurator
-APPS += hemaia_mailbox
 APPS += multichip_sync
-# Offload applications
+# offload applications
+# The legacy offload
 APPS += offload_multichip
+# The bingo offload
 APPS += offload_bingo_multichip
 endif
 
