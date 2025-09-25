@@ -11,27 +11,24 @@ int main() {
     init_uart((uintptr_t)get_current_chip_baseaddress(), 32, 1);
     asm volatile("fence" : : : "memory");
 
-    // Clock Gating the D2D links: Clock Channel 2 / 3 / 4 /5
-    disable_clk_domain(2);
-    disable_clk_domain(3);
-    disable_clk_domain(4);
-    disable_clk_domain(5);
+    // Clock Gating the D2D links
+    for (int i = 1; i <= 4; i++) {
+        disable_clk_domain(N_CLUSTERS + i);
+    }
     asm volatile("fence" : : : "memory");
     printf("The clock of D2D link is disabled\r\n");
 
     // Try to reset all D2D links
-    reset_clk_domain(2);
-    reset_clk_domain(3);
-    reset_clk_domain(4);
-    reset_clk_domain(5);
+    for (int i = 1; i <= 4; i++) {
+        reset_clk_domain(N_CLUSTERS + i);
+    }
     asm volatile("fence" : : : "memory");
     printf("The D2D links are reset. \r\n");
 
     // Re-enable the clock of D2D links at halved speed
-    enable_clk_domain(2, 2);  // 1: 2 division
-    enable_clk_domain(3, 2);  // 1: 2 division
-    enable_clk_domain(4, 2);  // 1: 2 division
-    enable_clk_domain(5, 2);  // 1: 2 division
+    for (int i = 1; i <= 4; i++) {
+        enable_clk_domain(N_CLUSTERS + i, 2);
+    }
     asm volatile("fence" : : : "memory");
     printf("The clock of D2D link is enabled at halved speed. \r\n");
     asm volatile("fence" : : : "memory");
