@@ -5,6 +5,14 @@
 // Fanchen Kong <fanchen.kong@kuleuven.be>
 #pragma once
 
+// Bit field extraction macro
+// Extract bits [high:low] from variable x
+#define BINGO_EXTRACT_BITS(x, high, low) (((x) >> (low)) & ((1ULL << ((high) - (low) + 1)) - 1))
+
+// Extract a single bit at position pos from variable x
+#define BINGO_EXTRACT_BIT(x, pos) (((x) >> (pos)) & 1)
+
+// 
 static inline uint64_t bingo_mcycle() {
     register uint64_t r;
     asm volatile("csrr %0, mcycle" : "=r"(r));

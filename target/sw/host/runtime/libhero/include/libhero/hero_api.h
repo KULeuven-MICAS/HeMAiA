@@ -13,7 +13,7 @@
 #include "libhero/debug.h"
 #include "o1heap.h"
 #include "snitch_cluster.h"
-
+#include "io.h"
 // ////////////////////
 // ///// OMP API //////
 // ////////////////////

@@ -8,7 +8,13 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+// Hero lib for sw mailbox and malloc
 #include "libhero/hero_api.h"
+// HW mailbox
+#include "mailbox.h"
+// Chip id
+#include "chip_id.h"
+// Bingo utils for sleep and cycle count
 #include "bingo_utils.h"
 extern struct O1HeapInstance *l2_heap_manager;
 extern uint64_t l2_heap_start_phy, l2_heap_start_virt, l2_heap_size;
@@ -43,11 +49,26 @@ typedef struct task {
 
 // Mailbox read/write functions
 
-// H2H mailbox
-// Host can write to any chip's H2H mailbox
-void bingo_write_h2h_mailbox(uint8_t chip_id);
-// Host can only read from its own chip's H2H mailbox
-uint64_t bingo_read_h2h_mailbox();
+// H2H mailbox status/error codes
+#define BINGO_MB_OK            0
+#define BINGO_MB_ERR_PARAM    -1
+#define BINGO_MB_ERR_TIMEOUT  -2
+
+// Blocking write: waits until space available or timeout
+// timeout_cycles = 0 means wait forever
+// retry_hint allows caller to observe loop iterations (can pass NULL)
+int bingo_write_h2h_mailbox(uint8_t chip_id, uint64_t dword,
+                            uint64_t timeout_cycles, uint32_t *retry_hint);
+
+// Blocking read: waits until data available or timeout
+// timeout_cycles = 0 means wait forever
+int bingo_read_h2h_mailbox(uint64_t *buffer,
+                           uint64_t timeout_cycles, uint32_t *retry_hint);
+
+// Non-blocking attempts
+// Return: 1 = success (read/write performed), 0 = would block, <0 = error
+int bingo_try_write_h2h_mailbox(uint8_t chip_id, uint64_t dword);
+int bingo_try_read_h2h_mailbox(uint64_t *buffer);
 
 // H2C mailbox
 // Host can write to any chip's H2C mailbox

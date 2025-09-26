@@ -16,7 +16,7 @@
 #include "uart.c"
 #include "hemaia_clk_rst_controller.h"
 #include "hemaia-xdma-lib.h"
-
+#include "mailbox.h"
 
 extern uint64_t __narrow_spm_start;
 extern uint64_t __narrow_spm_end;

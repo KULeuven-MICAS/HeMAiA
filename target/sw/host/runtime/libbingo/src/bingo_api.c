@@ -4,17 +4,90 @@
 //
 // Fanchen Kong <fanchen.kong@kuleuven.be>
 
+// This is the host-side runtime for offloading to the clusters
 #include "libbingo/bingo_api.h"
+#include "libbingo/bingo_utils.h"
 
 uint32_t global_task_id = 0;
 
-void bingo_write_h2h_mailbox(uint8_t chip_id) {
-    // Not implemented yet
+int bingo_try_write_h2h_mailbox(uint8_t chip_id, uint64_t dword) {
+    uint8_t current_chip_id = get_current_chip_id();
+    if (chip_id == current_chip_id) {
+        return BINGO_MB_ERR_PARAM;
+    }
+    volatile uint64_t target_h2h_mailbox_write_addr = chiplet_addr_transform_full(chip_id, h2h_mailbox_write_address());
+    volatile uint64_t target_h2h_mailbox_status_addr = chiplet_addr_transform_full(chip_id, h2h_mailbox_status_flag_address());
+    uint64_t status = readd((uintptr_t)target_h2h_mailbox_status_addr);
+    if (BINGO_EXTRACT_BIT(status, 1)) {
+        return 0; // would block
+    }
+    writed(dword, (uintptr_t)target_h2h_mailbox_write_addr);
+    return 1; // success
 }
 
-uint64_t bingo_read_h2h_mailbox() {
-    // Not implemented yet
-    return 0;
+int bingo_try_read_h2h_mailbox(uint64_t *buffer) {
+    if (!buffer) return BINGO_MB_ERR_PARAM;
+    volatile uint64_t local_h2h_mailbox_read_addr = chiplet_addr_transform(h2h_mailbox_read_address());
+    volatile uint64_t local_h2h_mailbox_status_addr = chiplet_addr_transform(h2h_mailbox_status_flag_address());
+    uint64_t status = readd((uintptr_t)local_h2h_mailbox_status_addr);
+    if (BINGO_EXTRACT_BIT(status, 0)) {
+        return 0; // would block
+    }
+    *buffer = readd((uintptr_t)local_h2h_mailbox_read_addr);
+    return 1; // success
+}
+
+int bingo_write_h2h_mailbox(uint8_t chip_id, uint64_t dword,
+                            uint64_t timeout_cycles, uint32_t *retry_hint) {
+    uint8_t current_chip_id = get_current_chip_id();
+    if (chip_id == current_chip_id) {
+        printf("Chip(%x, %x): [Host] Error: Cannot write to its own H2H mailbox!\\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+        return BINGO_MB_ERR_PARAM;
+    }
+    volatile uint64_t target_h2h_mailbox_write_addr = chiplet_addr_transform_full(chip_id, h2h_mailbox_write_address());
+    volatile uint64_t target_h2h_mailbox_status_addr = chiplet_addr_transform_full(chip_id, h2h_mailbox_status_flag_address());
+
+    uint64_t start_cycle = bingo_mcycle();
+    uint32_t retries = 0;
+    while (1) {
+        uint64_t status = readd((uintptr_t)target_h2h_mailbox_status_addr);
+        if (!BINGO_EXTRACT_BIT(status, 1)) {
+            writed(dword, (uintptr_t)target_h2h_mailbox_write_addr);
+            if (retry_hint) *retry_hint = retries;
+            return BINGO_MB_OK;
+        }
+        // FIFO full
+        retries++;
+        if (timeout_cycles && ((bingo_mcycle() - start_cycle) > timeout_cycles)) {
+            if (retry_hint) *retry_hint = retries;
+            return BINGO_MB_ERR_TIMEOUT;
+        }
+        bingo_csleep(HOST_SLEEP_CYCLES);
+    }
+}
+
+int bingo_read_h2h_mailbox(uint64_t *buffer,
+                           uint64_t timeout_cycles, uint32_t *retry_hint) {
+    if (!buffer) return BINGO_MB_ERR_PARAM;
+    volatile uint64_t local_h2h_mailbox_read_addr = chiplet_addr_transform(h2h_mailbox_read_address());
+    volatile uint64_t local_h2h_mailbox_status_addr = chiplet_addr_transform(h2h_mailbox_status_flag_address());
+    uint64_t start_cycle = bingo_mcycle();
+    uint32_t retries = 0;
+    while (1) {
+        uint64_t status = readd((uintptr_t)local_h2h_mailbox_status_addr);
+        if (!BINGO_EXTRACT_BIT(status, 0)) {
+            *buffer = readd((uintptr_t)local_h2h_mailbox_read_addr);
+            if (retry_hint) *retry_hint = retries;
+            return BINGO_MB_OK;
+        }
+        // FIFO empty
+        retries++;
+        if (timeout_cycles && ((bingo_mcycle() - start_cycle) > timeout_cycles)) {
+            if (retry_hint) *retry_hint = retries;
+            return BINGO_MB_ERR_TIMEOUT;
+        }
+        bingo_csleep(HOST_SLEEP_CYCLES);
+    }
 }
 
 void bingo_write_h2c_mailbox(HeroDev *dev, uint32_t word) {
