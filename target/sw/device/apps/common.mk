@@ -73,7 +73,7 @@ INCDIRS += $(SW_DIR)/shared/vendor/o1heap/o1heap
 INCDIRS += $(SW_DIR)/shared/vendor/xdma
 # snax libs
 INCDIRS += $(RUNTIME_DIR)/snax/xdma
-INCDIRS += $(RUNTIME_DIR)/snax/gemmx
+INCDIRS += $(RUNTIME_DIR)/snax/versacore
 
 # Linking sources
 BASE_TEMPLATE_LD = $(abspath $(APPSDIR)/base.template.ld)

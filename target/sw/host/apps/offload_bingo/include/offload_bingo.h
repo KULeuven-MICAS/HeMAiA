@@ -8,6 +8,8 @@
 #include "host.h"
 #include "dummy_workload.h"
 // #include "xdma_1d_copy_workload.h"
+#include "versacore_workload.h"
+
 // Devices
 #define NUM_DEV N_CLUSTERS
 #define NUM_CHIP 1
@@ -68,7 +70,6 @@ void host_init_local_dev() {
 }
 
 // Kernel Execution
-
 int kernel_execution(){
 
     // Set up the tasks list
@@ -77,13 +78,13 @@ int kernel_execution(){
     bingo_task_t *task_list[64] = {0};
     uint32_t num_tasks = 0;
 
-
     /////////////////////////
     // User defined workload
     /////////////////////////
-    
-    __workload_dummy(task_list, &num_tasks);
-    // uintptr_t output_data_ptr = 0;
+
+    // __workload_dummy(task_list, &num_tasks);
+    uintptr_t output_data_ptr = 0;
+    __workload_versacore(task_list, &num_tasks, &output_data_ptr);
     // __workload_xdma_1d_copy(task_list, &num_tasks, &output_data_ptr);
 
     ////////////////////////////
@@ -113,6 +114,9 @@ int kernel_execution(){
         NUM_CHIP, 
         NUM_DEV
     );
+
+    // Free the output data
     // hero_host_l3_free((void*)output_data_ptr);
+
     return 0;
 }

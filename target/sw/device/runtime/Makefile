@@ -35,7 +35,7 @@ INCDIRS += ./generated
 INCDIRS += ./api/
 # SNAX runtime
 INCDIRS += $(SW_DIR)/device/runtime/snax/xdma
-INCDIRS += $(SW_DIR)/device/runtime/snax/gemmx
+INCDIRS += $(SW_DIR)/device/runtime/snax/versacore
 # SNAX kernel lib
 INCDIRS += $(SW_DIR)/device/runtime/libsnaxkernel
 

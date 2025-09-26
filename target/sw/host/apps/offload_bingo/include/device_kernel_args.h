@@ -46,3 +46,27 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_kernel_xdma_1d_copy_args {
   uint32_t dst_addr_lo;            
   uint32_t size;        // in Bytes
 } __snax_kernel_xdma_1d_copy_args_t;
+
+// ---------------------------------------------------------
+// ---------------------VERSACORE---------------------------
+// ---------------------------------------------------------
+
+// Versacore Streamer Config kernel args
+__SNAX_KERNEL_ARGS_DEFINE __snax_kernel_versacore_streamer_cfg_args {
+  uint32_t a_streamer_cfg_addr;
+  uint32_t b_streamer_cfg_addr;
+  uint32_t c_streamer_cfg_addr;
+  uint32_t d_streamer_cfg_addr;
+} __snax_kernel_versacore_streamer_cfg_args_t;
+
+// Versacore Config kernel args
+__SNAX_KERNEL_ARGS_DEFINE __snax_kernel_versacore_cfg_args {
+  uint32_t tempLoop0;
+  uint32_t tempLoop1;
+  uint32_t tempLoop2;
+  uint32_t subtraction_a;
+  uint32_t subtraction_b;
+  uint32_t array_shape;
+  uint32_t data_type;
+} __snax_kernel_versacore_cfg_args_t;
+
