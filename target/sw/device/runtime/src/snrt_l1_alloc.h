@@ -31,6 +31,10 @@ inline snrt_l1_allocator_t *get_snrt_l1_allocator() {
 
 inline uint32_t *snrt_l1_malloc(uint32_t size){
     void *result = o1heapAllocate(get_snrt_l1_allocator()->l1_heap_manager, size);
+    if (result==NULL) {
+        printf("[Cluster %d] Core(%d) L1 malloc failed for size %d\n", snrt_cluster_idx(), snrt_cluster_core_idx(), size);
+        return NULL;
+    }
     return (uint32_t *)result;
 }
 inline void snrt_l1_free(uint32_t *addr){

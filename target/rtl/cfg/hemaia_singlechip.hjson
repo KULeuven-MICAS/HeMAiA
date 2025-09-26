@@ -131,8 +131,8 @@
       cfg_base_offset: 65536 // 0x10000
     },
     clusters:[
-      "snax_KUL_cluster",
-      "snax_KUL_cluster",
+      "snax_versacore_cluster",
+      "snax_versacore_cluster",
       ],
 
     hemaia_xdma_cfg: {

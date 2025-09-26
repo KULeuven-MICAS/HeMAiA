@@ -18,15 +18,15 @@ uint32_t meshCol = 32;
 
 uint32_t stationary = 1;
 
-int32_t Aslstride0 = 8.0;
+int32_t Aslstride0 = 8;
 
 int32_t Atlbound0 = 1;
 
-int32_t Atlstride0 = 64.0;
+int32_t Atlstride0 = 64;
 
 int32_t Atlbound1 = 1;
 
-int32_t Atlstride1 = 64.0;
+int32_t Atlstride1 = 64;
 
 int32_t Atlbound2 = 1;
 
@@ -46,9 +46,9 @@ int32_t Atlstride5 = 0;
 
 int32_t channel_en_A[] = { 255 };
 
-int32_t a_data_length = 64.0;
+int32_t a_data_length = 64;
 
-int32_t Bslstride0 = 8.0;
+int32_t Bslstride0 = 8;
 
 int32_t Btlbound0 = 1;
 
@@ -56,25 +56,25 @@ int32_t Btlstride0 = 0;
 
 int32_t Btlbound1 = 1;
 
-int32_t Btlstride1 = 2048.0;
+int32_t Btlstride1 = 2048;
 
 int32_t Btlbound2 = 1;
 
-int32_t Btlstride2 = 2048.0;
+int32_t Btlstride2 = 2048;
 
 int32_t channel_en_B[] = { 4294967295, 4294967295, 4294967295, 4294967295, 4294967295, 4294967295, 4294967295, 4294967295 };
 
-int32_t b_data_length = 2048.0;
+int32_t b_data_length = 2048;
 
 int32_t Cslstride0 = 8.0;
 
 int32_t Ctlbound0 = 1;
 
-int32_t Ctlstride0 = 128.0;
+int32_t Ctlstride0 = 128;
 
 int32_t Ctlbound1 = 1;
 
-int32_t Ctlstride1 = 128.0;
+int32_t Ctlstride1 = 128;
 
 int32_t Ctlbound2 = 1;
 
@@ -82,21 +82,21 @@ int32_t Ctlstride2 = 0;
 
 int32_t Ctlbound3 = 1;
 
-int32_t Ctlstride3 = 128.0;
+int32_t Ctlstride3 = 128;
 
 int32_t channel_en_C[] = { 0, 0, 0, 65535 };
 
-int32_t c_data_length = 128.0;
+int32_t c_data_length = 128;
 
-int32_t D32slstride0 = 8.0;
+int32_t D32slstride0 = 8;
 
 int32_t D32tlbound0 = 1;
 
-int32_t D32tlstride0 = 128.0;
+int32_t D32tlstride0 = 128;
 
 int32_t D32tlbound1 = 1;
 
-int32_t D32tlstride1 = 128.0;
+int32_t D32tlstride1 = 128;
 
 int32_t D32tlbound2 = 1;
 
@@ -104,19 +104,11 @@ int32_t D32tlstride2 = 0;
 
 int32_t D32tlbound3 = 1;
 
-int32_t D32tlstride3 = 128.0;
+int32_t D32tlstride3 = 128;
 
 int32_t channel_en_D[] = { 0, 0, 0, 65535 };
 
-int32_t d_data_length = 128.0;
-
-int32_t delta_local_a = 0;
-
-int32_t delta_local_b = 64.0;
-
-int32_t delta_local_c = 2112.0;
-
-int32_t delta_local_d = 2112.0;
+int32_t d_data_length = 128;
 
 int8_t subtraction_a = 0;
 

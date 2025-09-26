@@ -35,20 +35,20 @@ int32_t gen_subtraction_config(int8_t subtraction_a, int8_t subtraction_b) {
 }
 
 void set_versacore_streamer_csr(
-    int32_t delta_local_a, int32_t* Aslstride, int32_t* Atlbound,
-    int32_t* Atlstride, int32_t set_addr_remap_index_A, int32_t transpose_A,
-    int32_t* channel_en_A,
+    uint32_t A_addr, uint32_t* Aslstride, uint32_t* Atlbound,
+    uint32_t* Atlstride, uint32_t set_addr_remap_index_A, uint32_t transpose_A,
+    uint32_t* channel_en_A,
 
-    int32_t delta_local_b, int32_t* Bslstride, int32_t* Btlbound,
-    int32_t* Btlstride, int32_t set_addr_remap_index_B, int32_t transpose_B,
-    int32_t* channel_en_B,
+    uint32_t B_addr, uint32_t* Bslstride, uint32_t* Btlbound,
+    uint32_t* Btlstride, uint32_t set_addr_remap_index_B, uint32_t transpose_B,
+    uint32_t* channel_en_B,
 
-    int32_t delta_local_c, int32_t* Cslstride, int32_t* Ctlbound,
-    int32_t* Ctlstride, int32_t set_addr_remap_index_C, int32_t* channel_en_C,
+    uint32_t C_addr, uint32_t* Cslstride, uint32_t* Ctlbound,
+    uint32_t* Ctlstride, uint32_t set_addr_remap_index_C, uint32_t* channel_en_C,
 
-    int32_t delta_local_d32, int32_t* D32slstride, int32_t* D32tlbound,
-    int32_t* D32tlstride, int32_t set_addr_remap_index_D32,
-    int32_t* channel_en_D) {
+    uint32_t D_addr, uint32_t* D32slstride, uint32_t* D32tlbound,
+    uint32_t* D32tlstride, uint32_t set_addr_remap_index_D32,
+    uint32_t* channel_en_D) {
 // #ifdef SNAX_VERSACORE_OUTPUT_STATIONARY_ONLY
 
 //     // ----------------------------------A-----------------------------------
@@ -204,7 +204,7 @@ void set_versacore_streamer_csr(
     // ----------------------------------A-----------------------------------
     // ----------------------------------A-----------------------------------
     // base ptr for A
-    csrw_ss(BASE_PTR_READER_0_LOW, (uint32_t)(delta_local_a + snrt_cluster_base_addrl()));
+    csrw_ss(BASE_PTR_READER_0_LOW, A_addr);
 
     // spatial strides for A
     for (int i = 0; i < S_STRIDE_NUM_READER_0; i++) {
@@ -237,7 +237,7 @@ void set_versacore_streamer_csr(
     // ----------------------------------B-----------------------------------
 
     // base ptr for B
-    csrw_ss(BASE_PTR_READER_1_LOW, (uint32_t)(delta_local_b + snrt_cluster_base_addrl()));
+    csrw_ss(BASE_PTR_READER_1_LOW, B_addr);
 
     // spatial strides for B
     for (int i = 0; i < S_STRIDE_NUM_READER_1; i++) {
@@ -270,7 +270,7 @@ void set_versacore_streamer_csr(
     // ----------------------------------C-----------------------------------
     // ----------------------------------C-----------------------------------
     // base ptr for C
-    csrw_ss(BASE_PTR_READER_2_LOW, (uint32_t)(delta_local_c + snrt_cluster_base_addrl()));
+    csrw_ss(BASE_PTR_READER_2_LOW, C_addr);
 
     // spatial strides for C
     for (int i = 0; i < S_STRIDE_NUM_READER_2; i++) {
@@ -303,8 +303,7 @@ void set_versacore_streamer_csr(
     // ----------------------------------D32-----------------------------------
     // ----------------------------------D32-----------------------------------
     // base ptr for D32
-    csrw_ss(BASE_PTR_WRITER_0_LOW,
-            (uint32_t)(delta_local_d32 + snrt_cluster_base_addrl()));
+    csrw_ss(BASE_PTR_WRITER_0_LOW, D_addr);
 
     // spatial strides for D32
     for (int i = 0; i < S_STRIDE_NUM_WRITER_0; i++) {
@@ -350,6 +349,14 @@ void set_versacore_streamer_csr(
 // #endif
 }
 
+void start_streamer() { csrw_ss(STREAMER_START_CSR, 1); }
+void start_versacore() { csrw_ss(VERSACORE_START_CSR, 1); }
+
+void start_versacore_and_streamer() {
+    start_versacore();
+    start_streamer();
+}
+
 // Set GEMM configuration CSR
 void set_versacore_csr(uint32_t tempLoop0, uint32_t tempLoop1,
                        uint32_t tempLoop2, uint32_t subtractions,
@@ -370,7 +377,6 @@ void set_versacore_csr(uint32_t tempLoop0, uint32_t tempLoop1,
 
 // Stall until Streamer and GEMM accelerator finish
 void wait_versacore_and_streamer() {
-    csrw_ss(STREAMER_START_CSR, 0);
     csrw_ss(STREAMER_START_CSR, 0);
     csrw_ss(VERSACORE_START_CSR, 0);
     while (csrr_ss(VERSACORE_BUSY)) {
