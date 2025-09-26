@@ -12,7 +12,6 @@
 
 void __workload_versacore(bingo_task_t **task_list, uint32_t *num_tasks_ptr, uintptr_t *output_data_ptr) {
 
-
     // task 1
     // move data A from L3 to cluster 0
     // task 2
@@ -227,24 +226,24 @@ void __workload_versacore(bingo_task_t **task_list, uint32_t *num_tasks_ptr, uin
     }
 
     // 3. Set the task dependency
-    // move A, B, C -> versacore streamer cfg -> 
-    // versacore cfg                          -> wait -> move D -> check results
-    // bingo_task_add_depend(task_check_results, task_move_d);
-    // bingo_task_add_depend(task_move_d, task_streamer_and_versacore_wait);
-    // bingo_task_add_depend(task_streamer_and_versacore_wait, task_versacore_cfg);
-    // bingo_task_add_depend(task_streamer_and_versacore_wait, task_versacore_streamer_cfg);
-    // bingo_task_add_depend(task_versacore_streamer_cfg, task_move_c);
-    // bingo_task_add_depend(task_versacore_streamer_cfg, task_move_b);
-    // bingo_task_add_depend(task_versacore_streamer_cfg, task_move_a);
+    // move A, B, C (no dependency, can be executed in parallel) -> versacore streamer cfg -> 
+    // versacore cfg                                                                       -> wait -> move D -> check results
+    bingo_task_add_depend(task_check_results, task_move_d);
+    bingo_task_add_depend(task_move_d, task_streamer_and_versacore_wait);
+    bingo_task_add_depend(task_streamer_and_versacore_wait, task_versacore_cfg);
+    bingo_task_add_depend(task_streamer_and_versacore_wait, task_versacore_streamer_cfg);
+    bingo_task_add_depend(task_versacore_streamer_cfg, task_move_c);
+    bingo_task_add_depend(task_versacore_streamer_cfg, task_move_b);
+    bingo_task_add_depend(task_versacore_streamer_cfg, task_move_a);
 
     // 4. Set the assigned cluster id and chip id
     task_move_a->assigned_cluster_id = 0;
     task_move_b->assigned_cluster_id = 0;
     task_move_c->assigned_cluster_id = 0;
-    task_move_d->assigned_cluster_id = 0;
     task_versacore_streamer_cfg->assigned_cluster_id = 0;
     task_versacore_cfg->assigned_cluster_id = 0;
     task_streamer_and_versacore_wait->assigned_cluster_id = 0;
+    task_move_d->assigned_cluster_id = 0;
     task_check_results->assigned_cluster_id = 0;
 
     //////////////////////
