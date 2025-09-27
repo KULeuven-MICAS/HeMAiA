@@ -410,34 +410,34 @@ SNAX_LIB_DEFINE void __snax_kernel_versacore_load_compute_store(void *arg){
         // writes receive proper scalars vs pointers.
         set_versacore_streamer_csr(
             (uint32_t)(uintptr_t)get_cls_shared_ptrs()[1],                  // A_addr
-            &get_cls_shared_ptrs()[5][0],              // Aslstride[] base
-            &get_cls_shared_ptrs()[5][1],              // Atlbound[] base
-            &get_cls_shared_ptrs()[5][2],              // Atlstride[] base
+            (uint32_t*)get_cls_shared_ptrs()[5][0],              // Aslstride[] base
+            (uint32_t*)get_cls_shared_ptrs()[5][1],              // Atlbound[] base
+            (uint32_t*)get_cls_shared_ptrs()[5][2],              // Atlstride[] base
             get_cls_shared_ptrs()[5][3],               // set_addr_remap_index_A
             get_cls_shared_ptrs()[5][4],               // transpose_A
-            &get_cls_shared_ptrs()[5][5],              // channel_en_A
+            (uint32_t*)get_cls_shared_ptrs()[5][5],              // channel_en_A []
 
             (uint32_t)(uintptr_t)get_cls_shared_ptrs()[2],                  // B_addr
-            &get_cls_shared_ptrs()[5][6],              // Bslstride[] base
-            &get_cls_shared_ptrs()[5][7],              // Btlbound[] base
-            &get_cls_shared_ptrs()[5][8],              // Btlstride[] base
+            (uint32_t*)get_cls_shared_ptrs()[5][6],              // Bslstride[] base
+            (uint32_t*)get_cls_shared_ptrs()[5][7],              // Btlbound[] base
+            (uint32_t*)get_cls_shared_ptrs()[5][8],              // Btlstride[] base
             get_cls_shared_ptrs()[5][9],               // set_addr_remap_index_B
             get_cls_shared_ptrs()[5][10],              // transpose_B
-            &get_cls_shared_ptrs()[5][11],             // channel_en_B
+            (uint32_t*)get_cls_shared_ptrs()[5][11],             // channel_en_B []
 
             (uint32_t)(uintptr_t)get_cls_shared_ptrs()[3],                  // C_addr
-            &get_cls_shared_ptrs()[5][12],             // Cslstride[] base
-            &get_cls_shared_ptrs()[5][13],             // Ctlbound[] base
-            &get_cls_shared_ptrs()[5][14],             // Ctlstride[] base
+            (uint32_t*)get_cls_shared_ptrs()[5][12],             // Cslstride[] base
+            (uint32_t*)get_cls_shared_ptrs()[5][13],             // Ctlbound[] base
+            (uint32_t*)get_cls_shared_ptrs()[5][14],             // Ctlstride[] base
             get_cls_shared_ptrs()[5][15],              // set_addr_remap_index_C
-            &get_cls_shared_ptrs()[5][16],             // channel_en_C
+            (uint32_t*)get_cls_shared_ptrs()[5][16],             // channel_en_C []
 
             (uint32_t)(uintptr_t)get_cls_shared_ptrs()[4],                  // D_addr
-            &get_cls_shared_ptrs()[5][17],             // D32slstride[] base
-            &get_cls_shared_ptrs()[5][18],             // D32tlbound[] base
-            &get_cls_shared_ptrs()[5][19],             // D32tlstride[] base
+            (uint32_t*)get_cls_shared_ptrs()[5][17],             // D32slstride[] base
+            (uint32_t*)get_cls_shared_ptrs()[5][18],             // D32tlbound[] base
+            (uint32_t*)get_cls_shared_ptrs()[5][19],             // D32tlstride[] base
             get_cls_shared_ptrs()[5][20],              // set_addr_remap_index_D32
-            &get_cls_shared_ptrs()[5][21]              // channel_en_D32
+            (uint32_t*)get_cls_shared_ptrs()[5][21]              // channel_en_D32 []
         );
         // printf("[Cluster %d] Core(%d) Config Streamer\n",snrt_cluster_idx(),
         //        snrt_cluster_core_idx());

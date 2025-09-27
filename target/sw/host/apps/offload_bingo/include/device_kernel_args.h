@@ -78,29 +78,47 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_kernel_versacore_load_compute_store_args {
   // C: int32
   // D: int32
   // Inputs
+  // 0
   uint32_t input_A_addr_hi;
+  // 1
   uint32_t input_A_addr_lo;
+  // 2
   uint32_t input_A_size;        // in Bytes
+  // 3
   uint32_t input_B_addr_hi;
+  // 4
   uint32_t input_B_addr_lo;
+  // 5
   uint32_t input_B_size;        // in Bytes
+  // 6
   uint32_t input_C_addr_hi;
+  // 7
   uint32_t input_C_addr_lo;
+  // 8
   uint32_t input_C_size;        // in Bytes
   // Outputs
+  // 9
   uint32_t output_addr_hi;
+  // 10
   uint32_t output_addr_lo;
 
   // Streamer Arguments
+  // 11
   uint32_t streamer_cfg_addr_hi;
+  // 12
   uint32_t streamer_cfg_addr_lo;
+  // 13
   uint32_t streamer_cfg_size;        // in Bytes
 
   // Versacore Arguments
+  // 14
   uint32_t versacore_cfg_addr_hi;
+  // 15
   uint32_t versacore_cfg_addr_lo;
+  // 16
   uint32_t versacore_cfg_size;        // in Bytes
   // Total arg length
+  // 17
   uint32_t total_arg_length;        // in Bytes
 
 } __snax_kernel_versacore_load_compute_store_args_t;
