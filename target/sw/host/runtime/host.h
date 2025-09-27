@@ -30,7 +30,8 @@ extern uint64_t __wide_spm_end;
 #define OCCAMY_SOC_SCRATCH_0_REG_OFFSET OCCAMY_SOC_SCRATCH_REG_OFFSET
 #endif
 
-
+#define ARRAY_ELEM_COUNT(a) (sizeof(a)/sizeof((a)[0]))
+#define ARRAY_SIZE_BYTES(a) (sizeof(a))
 //===============================================================
 // SNAX LIB Symbol Tab
 //===============================================================
