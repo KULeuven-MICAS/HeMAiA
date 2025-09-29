@@ -14,3 +14,6 @@ runs:
   - app_4:
     - host_app: hemaia_system_xdma_copy
     - device_app: null
+  - app_5: 
+    - host_app: offload_bingo_ci
+    - device_app: snax-bingo-offload
