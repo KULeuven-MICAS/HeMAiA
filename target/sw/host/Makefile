@@ -11,23 +11,16 @@
 # Host only applications
 APPS  = hello_world
 APPS += hemaia_clk_rst_configurator
-# XDMA applications
-APPS += hemaia_system_xdma_copy
-# Offload applications
+APPS += multichip_sync
 APPS += offload
+APPS += offload_multichip
 APPS += offload_bingo
-APPS += offload_bingo_ci
-
+APPS += offload_bingo_multichip
 ifneq ($(findstring multichip,$(CFG_OVERRIDE)),)
 # If chiplet cfg is used, offload_multichip is compiled with the support to execute applications on cores at different chips
 # Host only applications
 APPS += hemaia_d2d_link_configurator
-APPS += multichip_sync
-# offload applications
-# The legacy offload
-APPS += offload_multichip
-# The bingo offload
-APPS += offload_bingo_multichip
+
 endif
 
 TARGET ?= all
