@@ -23,7 +23,7 @@ int kernel_execution(){
     // User defined workload
     /////////////////////////
 
-    __workload_dummy(task_list, &num_tasks);
+    num_tasks = __workload_dummy(task_list);
     // uintptr_t output_data_ptr = 0;
     // __workload_versacore(task_list, &num_tasks, &output_data_ptr);
     // __workload_xdma_1d_copy(task_list, &num_tasks, &output_data_ptr);

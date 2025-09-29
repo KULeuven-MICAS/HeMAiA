@@ -65,3 +65,6 @@ typedef struct {
 } cls_t;
 
 inline cls_t* cls();
+
+// Getter function to retrive the cls shared pointers
+inline uint32_t **get_cls_shared_ptrs();

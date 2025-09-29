@@ -29,6 +29,7 @@ inline snrt_l1_allocator_t *get_snrt_l1_allocator() {
     return (snrt_l1_allocator_t *)&(cls()->l1_allocator);
 }
 
+
 inline uint32_t *snrt_l1_malloc(uint32_t size){
     void *result = o1heapAllocate(get_snrt_l1_allocator()->l1_heap_manager, size);
     if (result==NULL) {

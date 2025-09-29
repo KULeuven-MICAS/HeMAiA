@@ -12,7 +12,7 @@ static inline int out_ch(char c) {
 
 static int print_unsigned(uint32_t value, uint32_t base, int uppercase,
                           int width, int zero_pad) {
-    char buf[128];  // enough for 32‑bit 0xFFFFFFFF or 10 decimal digits
+    char buf[32];  // enough for 32‑bit 0xFFFFFFFF or 10 decimal digits
     int idx = 0;
 
     // 1. Convert to string in reverse order

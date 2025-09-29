@@ -26,11 +26,6 @@ inline uint64_t make_u64(uint32_t hi, uint32_t lo) {
     return ((uint64_t)hi << 32) | (uint64_t)lo;
 }
 
-// Getter function to retrive the cls shared pointers
-inline uint32_t **get_cls_shared_ptrs() {
-    return (uint32_t **)&(cls()->shared_ptrs);
-}
-
 //////////////////////// Kernel functions ////////////////////////
 // Template for user defined kernels
 // Each kernel function takes a single void* argument

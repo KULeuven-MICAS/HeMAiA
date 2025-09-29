@@ -1,4 +1,5 @@
   axi_dw_converter #(
+    .AxiMaxReads         ( 8 ),
     .AxiSlvPortDataWidth ( ${axi_in.dw} ),
     .AxiMstPortDataWidth ( ${axi_out.dw} ),
     .AxiAddrWidth ( ${axi_in.aw} ),

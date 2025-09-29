@@ -16,10 +16,6 @@ Its design philosophy borrows ideas from LLVM `libomptarget`, PULP `libhero`, an
 * O(1) ring‑buffer based ready queue (no full rescans)
 * Explicit local vs. remote dependency bookkeeping
 * Compact inter‑chip 64‑bit message format + 32‑bit C2H encoded return
-* Deterministic, allocation‑light fast paths (optional preallocation)
-* Pluggable heaps (L2 / L3) via O1Heap allocators
-* Clear error codes & retry/timeout semantics
-
 ---
 ## 2. High‑Level Architecture
 
