@@ -3,9 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
-
-
-
 ###################
 # PATH            #
 ###################
@@ -17,22 +14,22 @@ include ../common.mk
 ###################
 INCDIRS      += include/
 INCDIRS      += $(SW_DIR)/host/runtime/
-INCDIRS      += $(SW_DIR)/host/runtime/libhero/include
-INCDIRS      += $(SW_DIR)/host/runtime/libhero/src
 INCDIRS      += $(SW_DIR)/shared/vendor/o1heap/o1heap
-INCDIRS      += $(SW_DIR)/shared/runtime # for uart print
+INCDIRS      += $(SW_DIR)/shared/runtime # for print/mailbox/chipid
 INCDIRS      += $(SW_DIR)/shared/platform/generated # for occamy_memory_map
 RISCV_CFLAGS += $(addprefix -I,$(INCDIRS))
 
-
-
 SRCS           = src/bingo_api.c
-OBJS           = $(BUILD_DIR)/bingo_api.o
+OBJS           = $(BUILD_DIR)/o1heap.o
+OBJS          += $(BUILD_DIR)/bingo_api.o
 BINGO_LIB      = $(BUILD_DIR)/libbingo.a
 BINGO_LIB_DUMP = $(BUILD_DIR)/libbingo.dump
 ALL_OUTPUTS   = $(OBJS) $(BINGO_LIB) $(BINGO_LIB_DUMP)
 .PHONY: gen-lib 
 gen-lib: $(ALL_OUTPUTS)
+
+$(BUILD_DIR)/o1heap.o: $(SW_DIR)/shared/vendor/o1heap/o1heap/o1heap.c | $(BUILD_DIR)
+	$(RISCV_CC) $(RISCV_CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/bingo_api.o: src/bingo_api.c | $(BUILD_DIR)
 	$(RISCV_CC) $(RISCV_CFLAGS) -c $< -o $@

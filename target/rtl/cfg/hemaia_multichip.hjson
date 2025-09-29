@@ -5,19 +5,19 @@
     remote_quadrants: [],
     // Multi-chip configuration
     hemaia_multichip: {
-      nr_chiplets: 2,
+      nr_chiplets: 4,
       chip_id_width: 8,             // Not verified, should never be changed
       router_to_soc_iw: 4,          // soc_to_router_iw + clog2(chips)
       soc_to_router_iw: 4,          // Not beneficial for iw > 6
       single_chip: false,
       single_chip_id: 0,            // Only used for single chip simulation
       testbench_cfg: {              // The total number of homogeneous chips (x * y) on the virtual interposer
-        // Emulate a two-chips configuration
+        // Emulate a four-chips configuration
         //        x = 0       x = 1
         // y = 0  (0, 0)     (1, 0)
-        // y = 1
+        // y = 1  (0, 1)     (1, 1)
         upper_left_coordinate: [0, 0],
-        lower_right_coordinate: [1, 0],
+        lower_right_coordinate: [1, 1],
       }
     }
     addr_width: 48,
@@ -60,7 +60,6 @@
       // Give some flexibility in peripheral xbar placement
       periph_axi_lite_narrow: 2,
       periph_axi_lite: 2,
-      periph_axi_lite_narrow_hbm_xbar_cfg: 2,
       // Non-right-side chip peripherals
       periph_axi_lite_narrow_hemaia_clk_rst_controller_cfg: 3,
       periph_axi_lite_narrow_bootrom_cfg: 3,
@@ -106,6 +105,8 @@
       h2c_mailbox_length: 4096,   // 0x1000
     },
     clusters:[
+      "snax_KUL_cluster",
+      "snax_KUL_cluster",
       "snax_KUL_cluster",
       "snax_KUL_cluster",
       ],

@@ -147,12 +147,3 @@ inline uint32_t mailbox_write(volatile struct ring_buf *g_a2h_mbox, uint32_t wor
     } while (ret);
     return ret;
 }
-
-inline uint32_t bingo_h2c_mailbox_read(uint32_t *buffer) {
-    // Not implemented yet
-    return -1;
-}
-
-inline void bingo_c2h_mailbox_write(uint32_t word) {
-    // Not implemented yet
-}

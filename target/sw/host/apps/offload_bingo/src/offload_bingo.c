@@ -28,10 +28,14 @@ int main() {
     printf("Chip(%x, %x): [Host] Init CLK Manager\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
 
     ///////////////////////////////
-    // 2. Init the mailbox
+    // 2. Init the Allocator
     ///////////////////////////////
-    host_init_local_dev();
-    printf("Chip(%x, %x): [Host] Init MailBox\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+    if(bingo_hemaia_system_mmap_init() < 0){
+        printf("Chip(%x, %x): [Host] Error when initializing Allocator\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+        return -1;
+    } else {
+        printf("Chip(%x, %x): [Host] Allocator Init Success\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+    }
     ///////////////////////////////
     // 3. Wake up all the clusters
     ///////////////////////////////
@@ -62,7 +66,7 @@ int main() {
     // So we clean up the interrupt line here
     clear_host_sw_interrupt(current_chip_id);
     printf("Chip(%x, %x): [Host] Offload Finish with ret = %d\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), ret);
-
-    // Wait for job done and return Snitch exit code
+    printf("Chip(%x, %x): [Host] End Offloading Program\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+   
     return ret;
 }

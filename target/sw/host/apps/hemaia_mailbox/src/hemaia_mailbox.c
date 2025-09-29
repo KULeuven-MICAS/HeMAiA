@@ -46,24 +46,14 @@ int main(){
         uint8_t target_chip_id = chip_loc_to_chip_id(target_chip_loc_x, target_chip_loc_y);
         printf("Chip(%x, %x): [Host] Write to Chip(%x, %x)'s H2H Mailbox\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), target_chip_loc_x, target_chip_loc_y);
         int wr_ret;
-        uint32_t wr_retries;
+        uint32_t wr_retries = 0;
         wr_ret = bingo_write_h2h_mailbox(target_chip_id, 0xdeadbeefcafebabe, 0 /* wait forever */, &wr_retries);
-        if (wr_ret != BINGO_MB_OK) {
-            printf("Chip(%x, %x): [Host] H2H write failed ret=%d retries=%u\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), wr_ret, wr_retries);
-        } else {
-            printf("Chip(%x, %x): [Host] H2H write success retries=%u\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), wr_retries);
-        }
         // Notice here are no chiplet barriers, the writes and reads are asynchronous and blocking
     } else {
         printf("Chip(%x, %x): [Host] Read from its own H2H Mailbox\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
         uint64_t read_data = 0;
         uint32_t rd_retries;
         int rd_ret = bingo_read_h2h_mailbox(&read_data, 0 /* wait forever */, &rd_retries);
-        if (rd_ret == BINGO_MB_OK) {
-            printf("Chip(%x, %x): [Host] Read Data: 0x%lx (retries=%u)\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), read_data, rd_retries);
-        } else {
-            printf("Chip(%x, %x): [Host] H2H read failed ret=%d retries=%u\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), rd_ret, rd_retries);
-        }
     }
     printf("Chip(%x, %x): [Host] End Program\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
     return 0;

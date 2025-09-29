@@ -6,4 +6,5 @@ overrides:
   axi:                { path: hw/vendor/pulp_platform_axi                                             }
   common_cells:       { git: https://github.com/KULeuven-MICAS/common_cells.git,       rev    :  main  }
   register_interface: { git: https://github.com/pulp-platform/register_interface.git,  version:  0.4.2 }
-  tech_cells_generic: { git: https://github.com/KULeuven-MICAS/tech_cells_generic.git, rev    : master }
+  tech_cells_generic:  { path: hw/hemaia/tech_cells_tsmc16 }
+  hemaia_d2d_link:    { path: hw/hemaia/hemaia_d2d_link }

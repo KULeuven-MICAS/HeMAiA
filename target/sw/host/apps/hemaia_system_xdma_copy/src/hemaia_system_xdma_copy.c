@@ -5,8 +5,7 @@
 
 #include "../data/data.h"
 #include "host.h"
-#include "libhero/hero_api.h"
-
+#include "libbingo/bingo_api.h"
 int main() {
     // Set clk manager to 1 division for a faster simulation time
     enable_clk_domain(0, 1);
@@ -23,30 +22,15 @@ int main() {
     init_uart(current_chip_address_prefix, 32, 1);
     enable_sw_interrupts();
 
-    // Heap Initialization
-    // Start address is the end of the .bss section
-    // Allocate half of the SPM_WIDE_SIZE to L2 heap
-    extern size_t l3_heap_size;
-    extern uintptr_t l3_heap_start_phy;
-    extern uintptr_t l3_heap_start_virt;
-
-    l3_heap_start_phy =
-        (uintptr_t)chiplet_addr_transform((uint64_t)(&__l3_heap_start));
-    l3_heap_start_virt =
-        (uintptr_t)chiplet_addr_transform((uint64_t)(&__l3_heap_start));
-    l3_heap_size = SPM_WIDE_SIZE / 2;
+    if(bingo_hemaia_system_mmap_init() < 0){
+        printf("Chip(%x, %x): [Host] Error when initializing Allocator\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+        return -1;
+    } else {
+        printf("Chip(%x, %x): [Host] Allocator Init Success\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+    }
 
     uint8_t* data_dest;
-    if (hero_dev_l3_init() == 0) {
-        data_dest = (uint8_t*)hero_host_l3_malloc(data_size, NULL);
-    } else {
-        printf("L3 init failed!\n");
-        return -1;
-    }
-    if (data_dest == NULL) {
-        printf("L3 malloc failed!\n");
-        return -1;
-    }
+    data_dest = (uint8_t*)o1heapAllocate(l3_heap_manager, data_size);
 
     printf("L3 malloc succeeded! Start to call XDMA to copy the data\n");
 
@@ -62,5 +46,6 @@ int main() {
         }
     }
     printf("Data check passed!\n");
+    o1heapFree(l3_heap_manager, data_dest);
     return 0;
 }

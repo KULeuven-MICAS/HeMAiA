@@ -6,7 +6,7 @@
 ###################
 # Build variables #
 ###################
-
+# For the runtime compilation, we only need a minimal set of flags
 # Compiler toolchain
 CVA6_GCC_ROOT = /tools/riscv/bin
 RISCV_CC      = $(CVA6_GCC_ROOT)/riscv64-unknown-elf-gcc

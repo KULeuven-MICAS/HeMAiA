@@ -13,13 +13,12 @@
 //    - This mailbox is used for communication between two host in different chiplets.
 // 2. The cluster2host mailbox, which is resied in the 32bit soc axi lite narrow periph xbar.
 //    - There is only one cluster2host mailbox in one chiplet.
-//    - This mailbox is used for communication from clusters to the host in the same chiplet
+//    - This mailbox is used for communication from clusters to the host in the same chiplet, hence we do not need the chip id field.
 //    - The field of this mailbox is:
 //      * return value (4bit)
-//      * chip id      (8bit)
-//      * cluster id   (6bit)
-//      * task id      (12bit)
-//      * reserved     (2bit)
+//      * cluster id   (8bit)
+//      * task id      (16bit)
+//      * reserved     (4bit)
 //    - The reason why we use a 32bit mailbox and pack all the information in one 32bit word is to
 //      reduce the complexity of the software driver. The software driver only needs to read one
 //      32bit word to get all the information. Beside, multiple clusters can send message to the

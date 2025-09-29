@@ -43,7 +43,6 @@
       wide_to_quad: 3,
       quad_to_wide: 3,
       narrow_to_cva6: 2,
-      narrow_conv_to_spm_narrow_pre: 2,
       narrow_conv_to_spm_narrow: 1,
       narrow_and_wide: 1,
       wide_to_hemaia_mem: 1,
@@ -56,7 +55,6 @@
       // Give some flexibility in peripheral xbar placement
       periph_axi_lite_narrow: 2,
       periph_axi_lite: 2,
-      periph_axi_lite_narrow_hbm_xbar_cfg: 2,
       // Non-right-side chip peripherals
       periph_axi_lite_narrow_hemaia_clk_rst_controller_cfg: 3,
       periph_axi_lite_narrow_bootrom_cfg: 3,

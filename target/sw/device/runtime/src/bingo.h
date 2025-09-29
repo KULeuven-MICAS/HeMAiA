@@ -195,16 +195,10 @@ inline uint32_t bingo_offload_manager(){
         return 0;
     }
 
-    // The DM core is the manager, it will handle the codes below
-    uintptr_t l2l_addr = *((volatile uint32_t *)soc_ctrl_mailbox_scratch_addr(snrt_cluster_idx()));
-    bingo_offload_unit_ptr->l2l_ptr = (volatile struct l2_layout *)l2l_addr;
-    bingo_offload_unit_ptr->g_a2h_rb = (volatile struct ring_buf *)(bingo_offload_unit_ptr->l2l_ptr->a2h_rb);
-    bingo_offload_unit_ptr->g_a2h_mbox = (volatile struct ring_buf *)(bingo_offload_unit_ptr->l2l_ptr->a2h_mbox);
-    bingo_offload_unit_ptr->g_h2a_mbox = (volatile struct ring_buf *)(bingo_offload_unit_ptr->l2l_ptr->h2a_mbox);
     while(1){
         // (1) Wait for the offload trigger cmd == MBOX_DEVICE_START
-        mailbox_read(bingo_offload_unit_ptr->g_h2a_mbox, (unsigned int *)&(bingo_offload_unit_ptr->cmd), 1);
-
+        h2c_mailbox_read((uint32_t *)&(bingo_offload_unit_ptr->cmd));
+        // printf("[Cluster %d] Received command: 0x%x\n", snrt_cluster_idx(), bingo_offload_unit_ptr->cmd);
         if (MBOX_DEVICE_STOP == (bingo_offload_unit_ptr->cmd)) {
             // Got MBOX_DEVICE_STOP from host, stopping execution now.
             // Set the exit flag to stop the workers
@@ -215,11 +209,14 @@ inline uint32_t bingo_offload_manager(){
             return -1;
         }
         // (2) The host sends the task id
-        mailbox_read(bingo_offload_unit_ptr->g_h2a_mbox, (uint32_t *)&(bingo_offload_unit_ptr->task_id), 1);
+        h2c_mailbox_read((uint32_t *)&(bingo_offload_unit_ptr->task_id));
+        // printf("[Cluster %d] Received task id: 0x%x\n", snrt_cluster_idx(), bingo_offload_unit_ptr->task_id);
         // (3) The host sends through the mailbox the pointer to the function that should be executed on the accelerator.
-        mailbox_read(bingo_offload_unit_ptr->g_h2a_mbox, (uint32_t *)&(bingo_offload_unit_ptr->offloadFn), 1);
+        h2c_mailbox_read((uint32_t *)&(bingo_offload_unit_ptr->offloadFn));
+        // printf("[Cluster %d] Received function pointer: 0x%x\n", snrt_cluster_idx(), (uint32_t)(bingo_offload_unit_ptr->offloadFn));
         // (4) The host sends through the mailbox the pointer to the arguments that should be used.
-        mailbox_read(bingo_offload_unit_ptr->g_h2a_mbox, (uint32_t *)&(bingo_offload_unit_ptr->offloadArgs), 1);
+        h2c_mailbox_read((uint32_t *)&(bingo_offload_unit_ptr->offloadArgs));
+        // printf("[Cluster %d] Received function args: 0x%x\n", snrt_cluster_idx(), bingo_offload_unit_ptr->offloadArgs);
         // Bookkeeping the start cycles
         bingo_offload_unit_ptr->start_cycles = snrt_mcycle();
         // (5) The manager core will execute the offload function
@@ -228,15 +225,16 @@ inline uint32_t bingo_offload_manager(){
         bingo_offload_unit_ptr->end_cycles = snrt_mcycle();
 
         // printf("[Cluster %d] Task %d finish with CC=%d \n", 
-        //         snrt_cluster_idx(),
-        //         bingo_offload_unit_ptr->task_id,
-        //         bingo_offload_unit_ptr->end_cycles-bingo_offload_unit_ptr->start_cycles);
-        // (6) return the cycles to the host with 1. Done 2. Task id 3. Cycles
-        mailbox_write(bingo_offload_unit_ptr->g_a2h_mbox, MBOX_DEVICE_DONE);
-        mailbox_write(bingo_offload_unit_ptr->g_a2h_mbox, bingo_offload_unit_ptr->task_id);
-        mailbox_write(bingo_offload_unit_ptr->g_a2h_mbox, 
-                      bingo_offload_unit_ptr->end_cycles - bingo_offload_unit_ptr->start_cycles);
-            
+                // snrt_cluster_idx(),
+                // bingo_offload_unit_ptr->task_id,
+                // bingo_offload_unit_ptr->end_cycles-bingo_offload_unit_ptr->start_cycles);
+        // (6) return the result through the mailbox to the host
+        bingo_c2h_msg_fields_t c2h_msg;
+        c2h_msg.cluster_id = snrt_cluster_idx();
+        c2h_msg.flag = MBOX_DEVICE_DONE;
+        c2h_msg.task_id = (uint16_t)bingo_offload_unit_ptr->task_id;
+        c2h_msg.reserved = 0;
+        c2h_mailbox_write(bingo_c2h_msg_encode(c2h_msg));
     }
     return 0;
 }

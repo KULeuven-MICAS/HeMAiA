@@ -5,10 +5,9 @@
 // Xiaoling Yi <xiaoling.yi@kuleuven.be>
 
 #pragma once
-#include "data.h"
+#include "versacore_data.h"
 #include "libbingo/bingo_api.h"
 #include "host.h"
-#include "device_kernel_args.h"
 
 // void __workload_versacore(bingo_task_t **task_list, uint32_t *num_tasks_ptr, uintptr_t *output_data_ptr) {
 

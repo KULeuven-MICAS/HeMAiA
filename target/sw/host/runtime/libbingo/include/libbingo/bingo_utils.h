@@ -5,6 +5,9 @@
 // Fanchen Kong <fanchen.kong@kuleuven.be>
 #pragma once
 
+
+#define ALIGN_UP(x, p) (((x) + (p)-1) & ~((p)-1))
+
 // Bit field extraction macro
 // Extract bits [high:low] from variable x
 #define BINGO_EXTRACT_BITS(x, high, low) (((x) >> (low)) & ((1ULL << ((high) - (low) + 1)) - 1))

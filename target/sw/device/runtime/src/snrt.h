@@ -8,6 +8,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
+// Generic R/W IO
+#include "io.h"
+
 // Occamy specific definitions
 #include "occamy_defs.h"
 #include "occamy_memory_map.h"
@@ -20,7 +23,8 @@
 #include "snrt_l1_alloc_decls.h" // snrt l1 allocator using o1heap
 #include "bingo_decls.h"         // bingo offload dependency
 #include "hemaia_cls_decls.h"    // CLS(cluster local storage) decl, which stores the bingo offload unit and the l1 allocator
-#include "sw_mailbox_decls.h"    // sw mailbox between the host and the cluster
+// #include "sw_mailbox_decls.h"    // sw mailbox between the host and the cluster
+#include "hw_mailbox_decls.h"    // hw mailbox between the host and the cluster
 #include "cluster_interrupt_decls.h"
 #include "global_interrupt_decls.h"
 #include "memory_decls.h"
@@ -48,7 +52,8 @@
 #include "snrt_l1_alloc.h"
 #include "bingo.h"
 #include "hemaia_cls.h"
-#include "sw_mailbox.h"
+// #include "sw_mailbox.h"
+#include "hw_mailbox.h"
 // SNAX runtime
 #include "snax_xdma_lib.h"
 
