@@ -4,5 +4,6 @@
 //
 // Fanchen Kong <fanchen.kong@kuleuven.be>
 #include <stdint.h>
-uint32_t dummy_args_cluster0 = 8000;
-uint32_t dummy_args_cluster1 = 8001;
+uint32_t dummy_args_0 = 8000;
+uint32_t dummy_args_1 = 8001;
+uint32_t dummy_args_2 = 8002;

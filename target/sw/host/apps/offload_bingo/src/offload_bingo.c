@@ -28,18 +28,26 @@ int main() {
     printf("Chip(%x, %x): [Host] Init CLK Manager\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
 
     ///////////////////////////////
-    // 2. Init the mailbox
+    // 2. Init the Allocator
     ///////////////////////////////
-    host_init_local_dev();
-    printf("Chip(%x, %x): [Host] Init MailBox\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+    if(bingo_hemaia_system_mmap_init() < 0){
+        printf("Chip(%x, %x): [Host] Error when initializing Allocator\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+        return -1;
+    } else {
+        printf("Chip(%x, %x): [Host] Allocator Init Success\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+    }
     ///////////////////////////////
     // 3. Wake up all the clusters
     ///////////////////////////////
 
     // 3.1 The pointer to the communication buffer
-    volatile comm_buffer_t* comm_buffer_ptr = (comm_buffer_t*)0;
+    O1HeapInstance *local_l3_heap_manager = bingo_get_l3_heap_manager(current_chip_id);
+    volatile comm_buffer_t* comm_buffer_ptr = o1heapAllocate(local_l3_heap_manager, sizeof(comm_buffer_t));
+    if(comm_buffer_ptr == NULL){
+        printf("Chip(%x, %x): [Host] Error when allocating comm buffer, l3 heap manager = 0x%lx, size = %x\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), local_l3_heap_manager, sizeof(comm_buffer_t));
+        return -1;
+    }
     initialize_comm_buffer((comm_buffer_t*)comm_buffer_ptr);
-    comm_buffer_ptr = (comm_buffer_t*)chiplet_addr_transform(((uint64_t)&__narrow_spm_start));
     enable_sw_interrupts();
 
     // 3.2 Program Snitch entry point and communication buffer
@@ -62,7 +70,6 @@ int main() {
     // So we clean up the interrupt line here
     clear_host_sw_interrupt(current_chip_id);
     printf("Chip(%x, %x): [Host] Offload Finish with ret = %d\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), ret);
-
-    // Wait for job done and return Snitch exit code
+    printf("Chip(%x, %x): [Host] End Offloading Program\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());   
     return ret;
 }

@@ -10,20 +10,15 @@
 // For the host main, the goal is to init the system and manage the offload tasks to the snax clusters
 // For the chiplets:
 // 1. Init the clk manager
-// 2. Init the mailbox for the bingo runtime
+// 2. Init the allocator
 // 3. Wake up the chiplet local clusters
 //    a. This is done in parallel by all the chiplets, the clusters will wait for the main host core to start
 //    b. The cluster in each chiplet will polling their local mailbox in L2
-// After this step, there are diversions of the main host core and the other chiplet host cores:
-// Other chiplets:
-// 4. Set flag signals to the soc ctrl
-// 5. Put itself to sleep
-// Main chiplet:
-// 4. Get all the mailbox addresses for all the other chiplets
-// 5. Offload the tasks to the chiplets according to the dependency graph
-//    a. The local offloading is based on the mailbox in local L2
-//    b. The remote offloading is based on the mailbox in the remote L2 memory
-
+// 4. Running the bingo runtime
+//    a. Notice all the chiplets will run the same bingo runtime code, which means they will have the same DFG
+//       hence the same task list in the chiplet local memory
+//    b. Based on the assigned_chiplet_id in the DFG, each chiplet takes the corresponding tasks and execute them
+//       (see details in the bingo_runtime_schedule function in bingo_api.c)
 #include "offload_bingo_multichip.h"
 int main() {
     
@@ -47,21 +42,28 @@ int main() {
     enable_clk_domain(3, 1);
     enable_clk_domain(4, 1);
     enable_clk_domain(5, 1);
-    printf("Chip(%x, %x): [Host] Init CLK Manager\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+    // printf("Chip(%x, %x): [Host] Init CLK Manager Success\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
     ///////////////////////////////
-    // 2. Init the mailbox
+    // 2. Init the Allocator
     ///////////////////////////////
-
-    host_init_local_dev();
-    printf("Chip(%x, %x): [Host] Init MailBox\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+    if(bingo_hemaia_system_mmap_init() < 0){
+        printf("Chip(%x, %x): [Host] Error when initializing Allocator\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+        return -1;
+    } else {
+        printf("Chip(%x, %x): [Host] Init Allocator Success\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+    }
     ///////////////////////////////
     // 3. Wake up all the clusters
     ///////////////////////////////
 
     // 3.1 The pointer to the communication buffer
-    volatile comm_buffer_t* comm_buffer_ptr = (comm_buffer_t*)0;
+    O1HeapInstance *local_l3_heap_manager = bingo_get_l3_heap_manager(current_chip_id);
+    volatile comm_buffer_t* comm_buffer_ptr = o1heapAllocate(local_l3_heap_manager, sizeof(comm_buffer_t));
+    if(comm_buffer_ptr == NULL){
+        printf("Chip(%x, %x): [Host] Error when allocating comm buffer, l3 heap manager = 0x%lx, size = %x\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), local_l3_heap_manager, sizeof(comm_buffer_t));
+        return -1;
+    }
     initialize_comm_buffer((comm_buffer_t*)comm_buffer_ptr);
-    comm_buffer_ptr = (comm_buffer_t*)chiplet_addr_transform(((uint64_t)&__narrow_spm_start));
     enable_sw_interrupts();
 
     // 3.2 Program Snitch entry point and communication buffer
@@ -72,30 +74,21 @@ int main() {
     // 3.3 Start Snitches
     wakeup_snitches_cl(current_chip_id);
     asm volatile("fence" ::: "memory");
-    printf("Chip(%x, %x): [Host] Wake up clusters\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+    // printf("Chip(%x, %x): [Host] Wake up clusters\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
     ///////////////////////////////
     // 4. Run the bingo runtime
     ///////////////////////////////
     // We need to first sync all the chiplets
     uint8_t sync_checkpoint = 1;
-    chip_barrier(comm_buffer_ptr, 0x00, 0x10, sync_checkpoint);
+    chip_barrier(comm_buffer_ptr, 0x00, 0x11, sync_checkpoint);
     sync_checkpoint++;
+    printf("Chip(%x, %x): [Host] All chiplets synced, start Bingo\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
     int ret = 0;
-    // Only the main chiplet will perform the offloading
-    if (current_chip_id == 0) {
-        printf("Chip(%x, %x): [Host] Start Bingo\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
-        ret = kernel_execution();
-        // By default the clusters will pull up the interrupt line once the tasks are done
-        // So we clean up the interrupt line here
-        clear_host_sw_interrupt(current_chip_id);
-        printf("Chip(%x, %x): [Host] Offload Finish\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
-    } else
-    {
-        printf("Chip(%x, %x): [Host] Enter WFI\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
-        wait_sw_interrupt();
-        // By default the clusters will pull up the interrupt line once the tasks are done
-        // So we clean up the interrupt line here
-        clear_host_sw_interrupt(current_chip_id);
-    }
+    ret = kernel_execution();
+    clear_host_sw_interrupt(current_chip_id);
+    printf("Chip(%x, %x): [Host] Offload Finish\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+    // Sync before exit
+    chip_barrier(comm_buffer_ptr, 0x00, 0x11, sync_checkpoint);
+    sync_checkpoint++;
     return ret;
 }

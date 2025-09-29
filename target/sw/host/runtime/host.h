@@ -16,7 +16,8 @@
 #include "uart.c"
 #include "hemaia_clk_rst_controller.h"
 #include "hemaia-xdma-lib.h"
-
+#include "mailbox.h"
+#include "io.h"
 
 extern uint64_t __narrow_spm_start;
 extern uint64_t __narrow_spm_end;
@@ -47,18 +48,27 @@ typedef struct __attribute__((packed)){
 
 // Busy wait the ready signal
 void check_kernel_tab_ready(){
-    volatile uint32_t *symtab_ready_ptr = (volatile uint32_t *)soc_ctrl_kernel_tab_scratch_addr(0);
-    while(*symtab_ready_ptr!=1){}
+    uint64_t symtab_ready_addr = (uint64_t)soc_ctrl_kernel_tab_scratch_addr(0);
+    uint64_t local_symtab_ready_addr = chiplet_addr_transform(symtab_ready_addr);
+    // printf("Chip(%x, %x): [Host] Kernel tab ready addr: 0x%lx\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), local_symtab_ready_addr);
+    while(readw(local_symtab_ready_addr)!=1){
+
+    }
 }
 // Get the device function
 uint32_t get_device_function(const char *name) {
-    uint32_t get_symtab_start_raw = *(volatile uint32_t *)soc_ctrl_kernel_tab_scratch_addr(1);
-    uint32_t get_symtab_end_raw   = *(volatile uint32_t *)soc_ctrl_kernel_tab_scratch_addr(2);
-    // printf("[Host] Symtab Start Value: 0x%x\n", get_symtab_start_raw);
-    // printf("[Host] Symtab End Value:   0x%x\n", get_symtab_end_raw);
-    snax_symbol_t *symtab_start = (snax_symbol_t *)(uintptr_t)get_symtab_start_raw;
-    snax_symbol_t *symtab_end   = (snax_symbol_t *)(uintptr_t)get_symtab_end_raw;
-    // printf("Scanning device symbol table...\n");  
+    uint64_t symtab_start_addr_ptr = (uint64_t)soc_ctrl_kernel_tab_scratch_addr(1);
+    uint64_t symtab_end_addr_ptr   = (uint64_t)soc_ctrl_kernel_tab_scratch_addr(2);
+    uint64_t local_symtab_start_addr_ptr = chiplet_addr_transform(symtab_start_addr_ptr);
+    uint64_t local_symtab_end_addr_ptr   = chiplet_addr_transform(symtab_end_addr_ptr);
+    uint64_t snax_symtab_start = (uint64_t)readw(local_symtab_start_addr_ptr);
+    uint64_t snax_symtab_end   = (uint64_t)readw(local_symtab_end_addr_ptr);
+    uint64_t snax_symtab_start_local = chiplet_addr_transform(snax_symtab_start);
+    uint64_t snax_symtab_end_local   = chiplet_addr_transform(snax_symtab_end);
+    // printf("Chip(%x, %x): [Host] Device symbol table range: 0x%lx - 0x%lx\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), snax_symtab_start, snax_symtab_end);
+    snax_symbol_t *symtab_start = (snax_symbol_t *)(uintptr_t)snax_symtab_start_local;
+    snax_symbol_t *symtab_end   = (snax_symbol_t *)(uintptr_t)snax_symtab_end_local;
+    // printf("Scanning device symbol table...\n");
     for (volatile snax_symbol_t *sym = symtab_start; sym < symtab_end; sym++) {
         // printf("Symbol raw name: %s\n", (const char *)sym->name);
         // printf("Symbol addr     : 0x%x\n", (uint32_t)sym->addr);

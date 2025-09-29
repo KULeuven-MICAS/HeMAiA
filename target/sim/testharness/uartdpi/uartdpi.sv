@@ -38,7 +38,7 @@ module uartdpi #(
   string log_file_path = DefaultLogFile;
 
   initial begin
-    $value$plusargs({"UARTDPI_LOG_", NAME, "=%s"}, log_file_path);
+    void'($value$plusargs({"UARTDPI_LOG_", NAME, "=%s"}, log_file_path));
     ctx = uartdpi_create(NAME, log_file_path);
   end
 

@@ -79,14 +79,14 @@ sources:
     files:
       - target/rtl/src/floo_quad_mesh_xy_noc_pkg.sv
       - target/rtl/src/floo_quad_mesh_xy_noc.sv
-
+  # hw mailboxes
+  - target:
+    files:
+      - hw/hemaia/hemaia_hw_mailbox/hemaia_axi_lite_mailbox_adapter.sv
+      - hw/hemaia/hemaia_hw_mailbox/hemaia_hw_mailbox.sv
   # auto-generated soc
   - target: occamy
     files:
-      # quadrant_s1_ctrl
-      - target/rtl/src/quadrant_s1_ctrl/occamy_quadrant_s1_reg_pkg.sv
-      - target/rtl/src/quadrant_s1_ctrl/occamy_quadrant_s1_reg_top.sv
-      
       # soc_ctrl
       - target/rtl/src/soc_ctrl/occamy_soc_reg_pkg.sv
       - target/rtl/src/soc_ctrl/occamy_soc_reg_top.sv

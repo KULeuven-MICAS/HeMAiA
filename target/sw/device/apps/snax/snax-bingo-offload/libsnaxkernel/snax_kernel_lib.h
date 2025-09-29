@@ -7,6 +7,9 @@
 
 #include <snax_versacore_lib.h>
 
+
+#include <snax_versacore_lib.h>
+
 #define SNAX_LIB_NAME_MAX_LEN 64
 // symtab data structure
 typedef struct __attribute__((packed)) {
@@ -24,11 +27,6 @@ typedef struct __attribute__((packed)) {
 
 inline uint64_t make_u64(uint32_t hi, uint32_t lo) {
     return ((uint64_t)hi << 32) | (uint64_t)lo;
-}
-
-// Getter function to retrive the cls shared pointers
-inline uint32_t **get_cls_shared_ptrs() {
-    return (uint32_t **)&(cls()->shared_ptrs);
 }
 
 //////////////////////// Kernel functions ////////////////////////
@@ -504,186 +502,6 @@ SNAX_LIB_DEFINE void __snax_kernel_versacore_load_compute_store(void *arg){
                     sizeof(uint32_t *) * NUM_CLS_SHARED_PTRS);
     }
 }
-// SNAX_LIB_DEFINE void __snax_kernel_versacore_streamer_cfg(void *arg) {
-//     // config the versacore streamer
-//     // Arg0: a_streamer_cfg_addr
-//     // Arg1: b_streamer_cfg_addr
-//     // Arg2: c_streamer_cfg_addr
-//     // Arg3: d_streamer_cfg_addr
-
-//     if (snrt_cluster_core_idx() == 0) {
-//         // parse the args
-//         // We allocate 256 bytes of heap memory for the args
-//         // Each arg is 4 bytes, so we can store 64 args
-
-//         get_cls_shared_ptrs()[0] = snrt_l1_malloc(256);
-
-//         // a_streamer_cfg_addr in total 7 words
-//         // a_streamer_cfg_addr - int32_t delta_local_a
-//         get_cls_shared_ptrs()[0][0] = ((uint32_t *)(((uint32_t *)arg)[0]))[0];
-//         // a_streamer_cfg_addr - int32_t* Aslstride
-//         get_cls_shared_ptrs()[0][1] = ((uint32_t *)(((uint32_t *)arg)[0]))[1];
-//         // a_streamer_cfg_addr - int32_t* Atlbound
-//         get_cls_shared_ptrs()[0][2] = ((uint32_t *)(((uint32_t *)arg)[0]))[2];
-//         // a_streamer_cfg_addr - int32_t* Atlstride
-//         get_cls_shared_ptrs()[0][3] = ((uint32_t *)(((uint32_t *)arg)[0]))[3];
-//         // a_streamer_cfg_addr - int32_t set_addr_remap_index_A
-//         get_cls_shared_ptrs()[0][4] = ((uint32_t *)(((uint32_t *)arg)[0]))[4];
-//         // a_streamer_cfg_addr - int32_t transpose_A
-//         get_cls_shared_ptrs()[0][5] = ((uint32_t *)(((uint32_t *)arg)[0]))[5];
-//         // a_streamer_cfg_addr - int32_t channel_en_A
-//         get_cls_shared_ptrs()[0][6] = ((uint32_t *)(((uint32_t *)arg)[0]))[6];
-
-//         // b_streamer_cfg_addr in total 7 words
-//         // b_streamer_cfg_addr - int32_t delta_local_b
-//         get_cls_shared_ptrs()[0][7] = ((uint32_t *)(((uint32_t *)arg)[1]))[0];
-//         // b_streamer_cfg_addr - int32_t* Bslstride
-//         get_cls_shared_ptrs()[0][8] = ((uint32_t *)(((uint32_t *)arg)[1]))[1];
-//         // b_streamer_cfg_addr - int32_t* Btlbound
-//         get_cls_shared_ptrs()[0][9] = ((uint32_t *)(((uint32_t *)arg)[1]))[2];
-//         // b_streamer_cfg_addr - int32_t* Btlstride
-//         get_cls_shared_ptrs()[0][10] = ((uint32_t *)(((uint32_t *)arg)[1]))[3];
-//         // b_streamer_cfg_addr - int32_t set_addr_remap_index_B
-//         get_cls_shared_ptrs()[0][11] = ((uint32_t *)(((uint32_t *)arg)[1]))[4];
-//         // b_streamer_cfg_addr - int32_t transpose_B
-//         get_cls_shared_ptrs()[0][12] = ((uint32_t *)(((uint32_t *)arg)[1]))[5];
-//         // b_streamer_cfg_addr - int32_t channel_en_B
-//         get_cls_shared_ptrs()[0][13] = ((uint32_t *)(((uint32_t *)arg)[1]))[6];
-
-//         // c_streamer_cfg_addr in total 6 words
-//         // c_streamer_cfg_addr - delta_local_c
-//         get_cls_shared_ptrs()[0][14] = ((uint32_t *)(((uint32_t *)arg)[2]))[0];
-//         // c_streamer_cfg_addr - int32_t* Cslstride
-//         get_cls_shared_ptrs()[0][15] = ((uint32_t *)(((uint32_t *)arg)[2]))[1];
-//         // c_streamer_cfg_addr - int32_t* Ctlbound
-//         get_cls_shared_ptrs()[0][16] = ((uint32_t *)(((uint32_t *)arg)[2]))[2];
-//         // c_streamer_cfg_addr - int32_t* Ctlstride
-//         get_cls_shared_ptrs()[0][17] = ((uint32_t *)(((uint32_t *)arg)[2]))[3];
-//         // c_streamer_cfg_addr - int32_t set_addr_remap_index_C
-//         get_cls_shared_ptrs()[0][18] = ((uint32_t *)(((uint32_t *)arg)[2]))[4];
-//         // c_streamer_cfg_addr - int32_t* channel_en_C
-//         get_cls_shared_ptrs()[0][19] = ((uint32_t *)(((uint32_t *)arg)[2]))[5];
-
-//         // d_streamer_cfg_addr in total 6 words
-//         // d_streamer_cfg_addr - delta_local_d32
-//         get_cls_shared_ptrs()[0][20] = ((uint32_t *)(((uint32_t *)arg)[3]))[0];
-//         // d_streamer_cfg_addr - int32 * D32slstride
-//         get_cls_shared_ptrs()[0][21] = ((uint32_t *)(((uint32_t *)arg)[3]))[1];
-//         // d_streamer_cfg_addr - int32_t* D32tlbound
-//         get_cls_shared_ptrs()[0][22] = ((uint32_t *)(((uint32_t *)arg)[3]))[2];
-//         // d_streamer_cfg_addr - int32_t* D32tlstride
-//         get_cls_shared_ptrs()[0][23] = ((uint32_t *)(((uint32_t *)arg)[3]))[3];
-//         // d_streamer_cfg_addr - int32_t set_addr_remap_index_D32
-//         get_cls_shared_ptrs()[0][24] = ((uint32_t *)(((uint32_t *)arg)[3]))[4];
-//         // d_streamer_cfg_addr - int32_t* channel_en_D
-//         get_cls_shared_ptrs()[0][25] = ((uint32_t *)(((uint32_t *)arg)[3]))[5];
-
-//         set_versacore_streamer_csr(
-//             get_cls_shared_ptrs()[0][0], (int32_t *)get_cls_shared_ptrs()[0][1],
-//             (int32_t *)get_cls_shared_ptrs()[0][2],
-//             (int32_t *)get_cls_shared_ptrs()[0][3], get_cls_shared_ptrs()[0][4],
-//             get_cls_shared_ptrs()[0][5], (int32_t *)get_cls_shared_ptrs()[0][6],
-
-//             get_cls_shared_ptrs()[0][7], (int32_t *)get_cls_shared_ptrs()[0][8],
-//             (int32_t *)get_cls_shared_ptrs()[0][9],
-//             (int32_t *)get_cls_shared_ptrs()[0][10],
-//             get_cls_shared_ptrs()[0][11], get_cls_shared_ptrs()[0][12],
-//             (int32_t *)get_cls_shared_ptrs()[0][13],
-
-//             get_cls_shared_ptrs()[0][14],
-//             (int32_t *)get_cls_shared_ptrs()[0][15],
-//             (int32_t *)get_cls_shared_ptrs()[0][16],
-//             (int32_t *)get_cls_shared_ptrs()[0][17],
-//             get_cls_shared_ptrs()[0][18],
-//             (int32_t *)get_cls_shared_ptrs()[0][19],
-
-//             get_cls_shared_ptrs()[0][20],
-//             (int32_t *)get_cls_shared_ptrs()[0][21],
-//             (int32_t *)get_cls_shared_ptrs()[0][22],
-//             (int32_t *)get_cls_shared_ptrs()[0][23],
-//             get_cls_shared_ptrs()[0][24],
-//             (int32_t *)get_cls_shared_ptrs()[0][25]);
-
-//         // start the streamer
-//         csrw_ss(STREAMER_START_CSR, 1);
-
-//         printf(
-//             "Chip(%x, %x): [Cluster %d] Core(%d) Configured and Launched "
-//             "Versacore Streamer\n",
-//             "Streamer\n", get_current_chip_loc_x(), get_current_chip_loc_y(),
-//             snrt_cluster_idx(), snrt_cluster_core_idx());
-
-//         // Free the allocated memory
-//         snrt_l1_free(get_cls_shared_ptrs()[0]);
-
-//         printf("[Cluster %d] Core(%d) Free allocated heap memory\n",
-//                snrt_cluster_idx(), snrt_cluster_core_idx());
-
-//         // clear the shared ptrs
-//         snrt_memset(get_cls_shared_ptrs(), 0,
-//                     sizeof(uint32_t *) * NUM_CLS_SHARED_PTRS);
-//         printf("[Cluster %d] Core(%d) Free shared pointers\n",
-//                snrt_cluster_idx(), snrt_cluster_core_idx());
-//     }
-// }
-
-// SNAX_LIB_DEFINE void __snax_kernel_versacore_cfg(void *arg) {
-//     // config the versacore
-//     // parse the args
-//     // We allocate 256 bytes of heap memory for the args
-//     // Each arg is 4 bytes, so we can store 64 args
-
-//     if (snrt_cluster_core_idx() == 0) {
-//         get_cls_shared_ptrs()[0] = snrt_l1_malloc(256);
-//         get_cls_shared_ptrs()[0][0] = ((uint32_t *)arg)[0];
-//         get_cls_shared_ptrs()[0][1] = ((uint32_t *)arg)[1];
-//         get_cls_shared_ptrs()[0][2] = ((uint32_t *)arg)[2];
-//         get_cls_shared_ptrs()[0][3] = ((uint32_t *)arg)[3];
-//         get_cls_shared_ptrs()[0][4] = ((uint32_t *)arg)[4];
-//         get_cls_shared_ptrs()[0][5] = ((uint32_t *)arg)[5];
-//         get_cls_shared_ptrs()[0][6] = ((uint32_t *)arg)[6];
-
-//         get_cls_shared_ptrs()[0][7] =
-//             gen_subtraction_config(((uint32_t *)arg)[3], ((uint32_t *)arg)[4]);
-
-//         set_versacore_csr(
-//             get_cls_shared_ptrs()[0][0], get_cls_shared_ptrs()[0][1],
-//             get_cls_shared_ptrs()[0][2], get_cls_shared_ptrs()[0][7],
-//             get_cls_shared_ptrs()[0][5], get_cls_shared_ptrs()[0][6]);
-
-//         // start the versacore
-//         csrw_ss(VERSACORE_START_CSR, 1);
-
-//         printf("Chip(%x, %x): [Cluster %d] Core(%d) Configured Versacore\n",
-//                get_current_chip_loc_x(), get_current_chip_loc_y(),
-//                snrt_cluster_idx(), snrt_cluster_core_idx());
-
-//         // Free the allocated memory
-//         snrt_l1_free(get_cls_shared_ptrs()[0]);
-//         printf("[Cluster %d] Core(%d) Free allocated heap memory\n",
-//                snrt_cluster_idx(), snrt_cluster_core_idx());
-//         // clear the shared ptrs
-//         snrt_memset(get_cls_shared_ptrs(), 0,
-//                     sizeof(uint32_t *) * NUM_CLS_SHARED_PTRS);
-//         printf("[Cluster %d] Core(%d) Free shared pointers\n",
-//                snrt_cluster_idx(), snrt_cluster_core_idx());
-//     }
-// }
-
-// SNAX_LIB_DEFINE void __snax_kernel_streamer_and_versacore_wait(void *arg) {
-//     if (snrt_cluster_core_idx() == 0) {
-//         // wait the streamer to finish
-//         while (csrr_ss(VERSACORE_BUSY)) {
-//         }
-//         while (csrr_ss(STREAMER_BUSY_CSR)) {
-//         }
-//         printf(
-//             "Chip(%x, %x): [Cluster %d] Core(%d) Versacore and Streamer "
-//             "Finished\n",
-//             get_current_chip_loc_x(), get_current_chip_loc_y(),
-//             snrt_cluster_idx(), snrt_cluster_core_idx());
-//     }
-// }
 
 //////////////////////// SYMBOL TABLE ////////////////////////
 // Here we create the symbol table
@@ -694,8 +512,5 @@ SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
     SNAX_EXPORT_FUNC(__snax_kernel_load_compute_store),
     SNAX_EXPORT_FUNC(__snax_kernel_xdma_1d_copy),
     SNAX_EXPORT_FUNC(__snax_kernel_versacore_load_compute_store),
-    // SNAX_EXPORT_FUNC(__snax_kernel_versacore_streamer_cfg),
-    // SNAX_EXPORT_FUNC(__snax_kernel_versacore_cfg),
-    // SNAX_EXPORT_FUNC(__snax_kernel_streamer_and_versacore_wait),
     SNAX_SYMTAB_END
 };

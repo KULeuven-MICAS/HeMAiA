@@ -22,9 +22,6 @@
         "quadrant_inter_xbar": {
             "$ref": "http://pulp-platform.org/occamy/axi_xbar.schema.json"
         },
-        "hbm_xbar": {
-            "$ref": "http://pulp-platform.org/occamy/axi_xbar.schema.json"
-        },
         "narrow_xbar": {
             "$ref": "http://pulp-platform.org/occamy/axi_xbar.schema.json"
         },
@@ -51,13 +48,7 @@
         "nr_s1_quadrant": {
             "title": "Number of S1 Quadrants",
             "type": "integer",
-            "default": 8
-        },
-        "narrow_tlb_cfg": {
-            "$ref": "http://pulp-platform.org/occamy/axi_tlb.schema.json"
-        },
-        "wide_tlb_cfg": {
-            "$ref": "http://pulp-platform.org/occamy/axi_tlb.schema.json"
+            "default": 1
         },
         "cuts": {
             "title": "Number of cuts on the AXI bus",
@@ -73,21 +64,6 @@
                     "description": "quad -> narrow xbar",
                     "default": 3
                 },
-                "quad_to_pre": {
-                    "type": "integer",
-                    "description": "quad -> pre xbar",
-                    "default": 1
-                },
-                "pre_to_inter": {
-                    "type": "integer",
-                    "description": "pre xbar -> inter xbar",
-                    "default": 1
-                },
-                "inter_to_quad": {
-                    "type": "integer",
-                    "description": "inter xbar -> quad",
-                    "default": 3
-                },
                 "narrow_to_cva6": {
                     "type": "integer",
                     "description": "narrow -> cva6",
@@ -101,11 +77,6 @@
                 "narrow_conv_to_spm_narrow": {
                     "type": "integer",
                     "description": "narrow -> SPM post atomic adapter",
-                    "default": 1
-                },
-                "narrow_and_pcie": {
-                    "type": "integer",
-                    "description": "PCIe in and out",
                     "default": 1
                 },
                 "narrow_and_wide": {
@@ -143,36 +114,6 @@
                     "description": "wide xbar -> wide zero memory",
                     "default": 0
                 },
-                "wide_to_hbm": {
-                    "type": "integer",
-                    "description": "wide xbar -> hbm xbar",
-                    "default": 6
-                },
-                "wide_and_inter": {
-                    "type": "integer",
-                    "description": "inter xbar -> wide xbar & wide xbar -> inter xbar",
-                    "default": 3
-                },
-                "wide_and_hbi": {
-                    "type": "integer",
-                    "description": "hbi <-> wide xbar",
-                    "default": 3
-                },
-                "narrow_and_hbi": {
-                    "type": "integer",
-                    "description": "hbi <-> narrow xbar",
-                    "default": 3
-                },
-                "pre_to_hbmx": {
-                    "type": "integer",
-                    "description": "pre xbar -> hbm xbar",
-                    "default": 3
-                },
-                "hbmx_to_hbm": {
-                    "type": "integer",
-                    "description": "hbmx -> hbm",
-                    "default": 3
-                },
                 "atomic_adapter_narrow": {
                     "type": "integer",
                     "description": "narrow spm atomic adapter internal cuts",
@@ -191,31 +132,6 @@
                 "periph_axi_lite": {
                     "type": "integer",
                     "description": "soc narrow -> periph axilite",
-                    "default": 3
-                },
-                "periph_axi_lite_narrow_hbm_xbar_cfg": {
-                    "type": "integer",
-                    "description": "axi lite narrow cuts before regbus translation for hbm_xbar_cfg",
-                    "default": 3
-                },
-                "periph_axi_lite_narrow_hbi_wide_cfg": {
-                    "type": "integer",
-                    "description": "axi lite narrow cuts before regbus translation for hbi_wide_cfg",
-                    "default": 3
-                },
-                "periph_axi_lite_narrow_hbi_narrow_cfg": {
-                    "type": "integer",
-                    "description": "axi lite narrow cuts before regbus translation for hbi_narrow_cfg",
-                    "default": 3
-                },
-                "periph_axi_lite_narrow_pcie_cfg": {
-                    "type": "integer",
-                    "description": "axi lite narrow cuts before regbus translation for pcie_cfg",
-                    "default": 2
-                },
-                "periph_axi_lite_narrow_hbm_cfg": {
-                    "type": "integer",
-                    "description": "axi lite narrow cuts before regbus translation for hbm_cfg",
                     "default": 3
                 },
                 "periph_axi_lite_narrow_clint_cfg": {
@@ -241,21 +157,6 @@
                 "periph_axi_lite_narrow_bootrom_cfg": {
                     "type": "integer",
                     "description": "axi lite narrow cuts before regbus translation for bootrom_cfg",
-                    "default": 3
-                },
-                "periph_axi_lite_narrow_fll_system_cfg": {
-                    "type": "integer",
-                    "description": "axi lite narrow cuts before regbus translation for fll_system_cfg",
-                    "default": 3
-                },
-                "periph_axi_lite_narrow_fll_periph_cfg": {
-                    "type": "integer",
-                    "description": "axi lite narrow cuts before regbus translation for fll_periph_cfg",
-                    "default": 3
-                },
-                "periph_axi_lite_narrow_fll_hbm2e_cfg": {
-                    "type": "integer",
-                    "description": "axi lite narrow cuts before regbus translation for fll_hbm2e_cfg",
                     "default": 3
                 },
                 "periph_axi_lite_narrow_plic_cfg": {
@@ -289,24 +190,9 @@
             "title": "Number of outstanding transactions on the AXI bus",
             "type": "object",
             "properties": {
-                "wide_and_inter": {
-                    "type": "integer",
-                    "description": "inter xbar -> wide xbar & wide xbar -> inter xbar",
-                    "default": 4
-                },
-                "wide_to_hbm": {
-                    "type": "integer",
-                    "description": "wide xbar -> hbm xbar",
-                    "default": 4
-                },
                 "narrow_and_wide": {
                     "type": "integer",
                     "description": "narrow xbar -> wide xbar & wide xbar -> narrow xbar",
-                    "default": 4
-                },
-                "rmq": {
-                    "type": "integer",
-                    "description": "Remote Quadrant mux/demux",
                     "default": 4
                 }
             }
@@ -378,34 +264,6 @@
                         }
                     }
                 },                
-                "ro_cache_cfg": {
-                    "type": "object",
-                    "description": "Constant cache configuration.",
-                    "properties": {
-                        "max_trans": {
-                            "type": "integer",
-                            "description": "Maximum Outstanding Transaction",
-                            "default": 4
-                        },
-                        "width": {
-                            "type": "integer",
-                            "description": "Cache Line Width"
-                        },
-                        "count": {
-                            "type": "integer",
-                            "description": "The number of cache lines per set. Power of two; >= 2."
-                        },
-                        "sets": {
-                            "type": "integer",
-                            "description": "The set associativity of the cache. Power of two; >= 1."
-                        },
-                        "address_regions": {
-                            "type": "integer",
-                            "description": "Number of programmable address regions.",
-                            "default": 1
-                        }
-                    }
-                },
                 "wide_xbar": {
                     "$ref": "http://pulp-platform.org/occamy/axi_xbar.schema.json"
                 },
@@ -434,14 +292,20 @@
                 },
                 "cfg_base_addr": {
                     "type": "integer",
-                    "description": "Base address of the quadrant configuration region.",
+                    "description": "Base address of the quadrant configuration region. defaults to 0x0b000000",
                     "default": 184549376
                 },
                 "cfg_base_offset": {
                     "type": "integer",
-                    "description": "Allocated size and offset of each quadrant configuration.",
+                    "description": "Allocated size and offset of each quadrant configuration. defaults to 0x10000",
                     "default": 65536
+                },
+                "h2c_mailbox_length": {
+                    "type": "integer",
+                    "description": "Length of the host to cluster mailbox in bytes.defaults to 0x1000",
+                    "default": 4096
                 }
+
             }
         },
         "spm_narrow": {
@@ -453,69 +317,6 @@
         "wide_zero_mem": {
             "$ref": "http://pulp-platform.org/occamy/address_range.schema.json"
         },
-        "pcie": {
-            "title": "Configuration of external PCIe port",
-            "type": "object",
-            "properties": {
-                "address_io": {
-                    "type": "integer",
-                    "description": "Base address of PCIe IO range.",
-                    "minimum": 0
-                },
-                "address_mm": {
-                    "type": "integer",
-                    "description": "Base address of PCIe memory-mapped range.",
-                    "minimum": 0
-                },
-                "length": {
-                    "type": "integer",
-                    "description": "Size in bytes of all PCIe ranges.",
-                    "minimum": 0
-                }
-            }
-        },
-        "hbi": {
-            "$ref": "http://pulp-platform.org/occamy/address_range.schema.json"
-        },
-        "hbm": {
-            "title": "Configuration of external HBM interface",
-            "type": "object",
-            "properties": {
-                "address_1": {
-                    "type": "integer",
-                    "description": "Start of HBM address region 1.",
-                    "minimum": 0
-                },
-                "address_2": {
-                    "type": "integer",
-                    "description": "Start of HBM address region 1.",
-                    "minimum": 0
-                },
-                "channel_size": {
-                    "type": "integer",
-                    "description": "Size of single HBM channel region.",
-                    "minimum": 0
-                },
-                "nr_channels_total": {
-                    "type": "integer",
-                    "description": "Total number of HBM channels.",
-                    "minimum": 0
-                },
-                "nr_channels_address_0": {
-                    "type": "integer",
-                    "description": "Number of lower HBM channels accessible over address region 1",
-                    "minimum": 0
-                },
-                "cfg_regions": {
-                    "properties": {
-                        "top": {"$ref": "http://pulp-platform.org/occamy/address_range.schema.json"},
-                        "phy": {"$ref": "http://pulp-platform.org/occamy/address_range.schema.json"},
-                        "seq": {"$ref": "http://pulp-platform.org/occamy/address_range.schema.json"},
-                        "ctrl": {"$ref": "http://pulp-platform.org/occamy/address_range.schema.json"}
-                    }
-                }
-            }
-        },
         "peripherals": {
             "$ref": "http://pulp-platform.org/occamy/peripherals.schema.json"
         },
@@ -523,11 +324,6 @@
             "type": "integer",
             "description": "Backup Boot Address",
             "default": 2147483648            
-        },
-        "spm_narrow_mailbox_size":{
-            "type": "integer",
-            "description": "The size of the mailbox in the narrow SPM",
-            "default": 8192 
         }
     }
 }

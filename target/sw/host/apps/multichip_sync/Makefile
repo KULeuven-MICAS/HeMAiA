@@ -1,8 +1,8 @@
-# Copyright 2023 ETH Zurich and University of Bologna.
+# Copyright 2025 KU Leuven.
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Luca Colagrande <colluca@iis.ee.ethz.ch>
+# Fanchen Kong <fanchen.kong@kuleuven.be>
 
 APP  = multichip_sync
 SRCS = src/multichip_sync.c

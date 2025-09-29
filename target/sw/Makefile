@@ -29,7 +29,6 @@ PLATFORM_HEADERS_DIR  = shared/platform/generated
 PLATFORM_HEADERS_TEMPLATE_DIR = shared/platform/template
 SW_DEVICE_RT_DIR      = device/runtime
 HOST_RUNTIME_DIR      = $(SW_DIR)/host/runtime
-LIB_HERO_DIR          = $(HOST_RUNTIME_DIR)/libhero
 LIB_BINGO_DIR         = $(HOST_RUNTIME_DIR)/libbingo
 
 ############
@@ -57,7 +56,6 @@ endef
 PLATFORM_HEADERS  = $(PLATFORM_HEADERS_DIR)/clint.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/rv_plic.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/occamy_soc_ctrl.h
-PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/snitch_quad_peripheral.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/snitch_cluster_peripheral.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/hemaia_d2d_link_peripheral.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/hemaia_clk_rst_controller_peripheral.h
@@ -109,21 +107,6 @@ $(TARGET_SOCCTRL_DIR)/occamy_soc_reg.hjson: $(SOURCE_SOCCTRL_DIR)/occamy_soc_reg
 	@$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_SOCCTRL_DIR) --ctrl $<
 # Then the hjson can be used to generate the header file
 $(PLATFORM_HEADERS_DIR)/occamy_soc_ctrl.h: $(TARGET_SOCCTRL_DIR)/occamy_soc_reg.hjson
-	$(call reggen_generate_header,$@,$<)
-
-#############
-# Quad Ctrl #
-#############
-$(TARGET_QUADCTRL_DIR):
-	mkdir -p $@
-# Quad Ctrl needs the hjson tmp first to generate the hjson
-SOURCE_QUADCTRL_DIR  = $(ROOT)/hw/occamy/quadrant_s1_ctrl
-$(TARGET_QUADCTRL_DIR)/occamy_quadrant_s1_reg.hjson: $(SOURCE_QUADCTRL_DIR)/occamy_quadrant_s1_reg.hjson.tpl $(CFG)
-	@echo "[OCCAMYGEN] Generate $@"
-	@$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_QUADCTRL_DIR) --quadrant-s1-ctrl $<
-
-# Then the hjson can be used to generate the header file
-$(PLATFORM_HEADERS_DIR)/snitch_quad_peripheral.h: $(TARGET_QUADCTRL_DIR)/occamy_quadrant_s1_reg.hjson
 	$(call reggen_generate_header,$@,$<)
 
 ######################
@@ -181,7 +164,6 @@ clean:
 # clean host build
 	$(MAKE) -C host TARGET=clean
 # clean host runtimes
-	$(MAKE) -C $(LIB_HERO_DIR) clean
 	$(MAKE) -C $(LIB_BINGO_DIR) clean
 # clean generated tmp files
 	rm -rf $(SW_DIR)/device/*.tmp
