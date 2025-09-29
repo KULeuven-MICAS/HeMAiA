@@ -31,9 +31,15 @@ int main() {
 
     uint8_t* data_dest;
     data_dest = (uint8_t*)o1heapAllocate(l3_heap_manager, data_size);
-
-    printf("L3 malloc succeeded! Start to call XDMA to copy the data\n");
-
+    if (!data_dest) {
+        printf("L3 malloc failed!\n");
+        return -1;
+    } else
+    {
+        printf("L3 malloc succeeded! Start to call XDMA to copy the data\n");
+    }
+        
+    
     hemaia_xdma_memcpy_1d((uint8_t*)data, data_dest, data_size);
     uint32_t task_id = hemaia_xdma_start();
     hemaia_xdma_local_wait(task_id);
