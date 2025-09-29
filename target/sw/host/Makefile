@@ -11,6 +11,7 @@
 # Host only applications
 APPS  = hello_world
 APPS += hemaia_clk_rst_configurator
+APPS += hemaia_system_xdma_copy
 # Host + Device applications
 APPS += offload
 APPS += offload_bingo
