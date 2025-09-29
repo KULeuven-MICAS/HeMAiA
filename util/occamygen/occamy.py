@@ -541,47 +541,6 @@ def am_connect_soc_wide_xbar_quad(am, am_soc_narrow_xbar, am_wide_xbar_quadrant_
         )
     return am_clusters
 
-
-def get_dts(occamy_cfg, am_clint, am_axi_lite_peripherals, am_axi_lite_narrow_peripherals):
-    dts = device_tree.DeviceTree()
-
-    #########################
-    #  Periph AXI Lite XBar #
-    #########################
-
-    nr_axi_lite_peripherals = len(
-        occamy_cfg["peripherals"]["axi_lite_peripherals"])
-    for p in range(nr_axi_lite_peripherals):
-        # add debug module to devicetree
-        if occamy_cfg["peripherals"]["axi_lite_peripherals"][p]["name"] == "debug":
-            dts.add_device("debug", "riscv,debug-013", am_axi_lite_peripherals[p], [
-                "interrupts-extended = <&CPU0_intc 65535>", "reg-names = \"control\""
-            ])
-
-    ######################
-    # Periph Regbus XBar #
-    ######################
-    nr_axi_lite_narrow_peripherals = len(
-        occamy_cfg["peripherals"]["axi_lite_narrow_peripherals"])
-    for p in range(nr_axi_lite_narrow_peripherals):
-        # add uart to devicetree
-        if occamy_cfg["peripherals"]["axi_lite_narrow_peripherals"][p]["name"] == "uart":
-            dts.add_device("serial", "lowrisc,serial", am_axi_lite_narrow_peripherals[p], [
-                "clock-frequency = <50000000>", "current-speed = <115200>",
-                "interrupt-parent = <&PLIC0>", "interrupts = <1>"
-            ])
-        # add plic to devicetree
-        elif occamy_cfg["peripherals"]["axi_lite_narrow_peripherals"][p]["name"] == "plic":
-            dts.add_plic([0], am_axi_lite_narrow_peripherals[p])
-
-    dts.add_clint([0], am_clint)
-    dts.add_cpu("eth,ariane")
-    htif = dts.add_node("htif", "ucb,htif0")
-    dts.add_chosen("stdout-path = \"{}\";".format(htif))
-
-    return dts
-
-
 def get_top_kwargs(occamy_cfg, cluster_generators, soc_axi_lite_narrow_periph_xbar, soc_wide_xbar, soc_narrow_xbar, soc2router_bus, router2soc_bus, util, name):
     core_per_cluster_list = [cluster_generator.cfg["nr_cores"]
                              for cluster_generator in cluster_generators]
@@ -829,7 +788,6 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
     cluster_tcdm_size =  cluster_generators[0].cfg["tcdm"]["size"]*1024
     wide_spm_size = occamy_cfg["spm_wide"]["length"]
     narrow_spm_size = occamy_cfg["spm_narrow"]["length"]
-    mailbox_size = occamy_cfg["spm_narrow_mailbox_size"]
     cheader_kwargs = {
         "name": name,
         "nr_chiplets": nr_chiplets,
@@ -839,7 +797,6 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
         "nr_cores": nr_cores,
         "wide_spm_size": hex(wide_spm_size),
         "narrow_spm_size": hex(narrow_spm_size),
-        "mailbox_size": hex(mailbox_size),
         "h2c_mailbox_size": hex(occamy_cfg["s1_quadrant"]["h2c_mailbox_length"]),
         "cluster_tcdm_size": hex(cluster_tcdm_size),
         "cluster_offset": hex(cluster_offset),

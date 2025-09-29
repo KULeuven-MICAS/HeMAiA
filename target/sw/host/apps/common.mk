@@ -71,36 +71,22 @@ RISCV_LDFLAGS += -T$(LINKER_SCRIPT)
 # if the host application uses the bingo runtime
 ifneq (,$(filter $(BINGO_HOST),True true TRUE 1))
 LIBBINGO_DIR = $(abspath $(RUNTIME_DIR)/libbingo)
-# LIBHERO_DIR  = $(abspath $(RUNTIME_DIR)/libhero)
-# Dependencies
-# libhero
-# INCDIRS += $(LIBHERO_DIR)/include
-# INCDIRS += $(LIBHERO_DIR)/src
+
 
 # libbingo
 INCDIRS += $(LIBBINGO_DIR)/include
 INCDIRS += $(SWDIR)/shared/vendor/o1heap/o1heap
 
-# HERO LIB
-# HERO_LIB_DIR = $(LIBHERO_DIR)/build
-# HERO_LIB_NAME = hero
-# HERO_LIB = $(HERO_LIB_DIR)/lib$(HERO_LIB_NAME).a
-# BINGO LIB
 BINGO_LIB_DIR = $(LIBBINGO_DIR)/build
 BINGO_LIB_NAME = bingo
 BINGO_LIB = $(BINGO_LIB_DIR)/lib$(BINGO_LIB_NAME).a
 
-# LD_SRCS += $(HERO_LIB)
 LD_SRCS += $(BINGO_LIB) 
 
 # link bingo lib
-# RISCV_LDFLAGS += -Wl,--start-group
 RISCV_LDFLAGS += -L$(BINGO_LIB_DIR)
 RISCV_LDFLAGS += -l$(BINGO_LIB_NAME)
-# link hero lib
-# RISCV_LDFLAGS += -L$(HERO_LIB_DIR)
-# RISCV_LDFLAGS += -l$(HERO_LIB_NAME)
-# RISCV_LDFLAGS += -Wl,--end-group
+
 endif
 
 

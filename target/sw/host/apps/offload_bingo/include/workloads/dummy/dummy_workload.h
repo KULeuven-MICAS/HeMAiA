@@ -7,7 +7,7 @@
 #include "dummy_data.h"
 #include "libbingo/bingo_api.h"
 #include "host.h"
-void __workload_dummy(bingo_task_t **task_list, uint32_t *num_tasks_ptr) {
+uint32_t __workload_dummy(bingo_task_t **task_list) {
 
     // This is a dummy workload for testing
     // It creates two tasks on two different clusters
@@ -52,7 +52,6 @@ void __workload_dummy(bingo_task_t **task_list, uint32_t *num_tasks_ptr) {
     task_list[2] = task_dummy_2;
     // User need to define the number of tasks
     int num_tasks = 3;
-    // 2. Set the number of tasks to outside
-    *num_tasks_ptr = num_tasks;
+    return num_tasks;
 }
 

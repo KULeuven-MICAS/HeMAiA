@@ -29,7 +29,6 @@ endif
 
 TARGET ?= all
 
-# LIB_HERO_DIR = runtime/libhero
 LIB_BINGO_DIR = runtime/libbingo
 
 
@@ -40,7 +39,6 @@ SUBDIRS = $(addprefix apps/,$(APPS))
 all: $(SUBDIRS)
 
 libs:
-# 	$(MAKE) -C $(LIB_HERO_DIR) gen-lib
 	$(MAKE) -C $(LIB_BINGO_DIR) gen-lib
 
 $(SUBDIRS):

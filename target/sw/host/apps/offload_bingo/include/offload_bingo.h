@@ -41,7 +41,6 @@ int kernel_execution(){
     // Close all the clusters
     bingo_close_all_clusters(task_list, num_tasks);
     // Free the output data
-    // hero_host_l3_free((void*)output_data_ptr);
 
     return 0;
 }

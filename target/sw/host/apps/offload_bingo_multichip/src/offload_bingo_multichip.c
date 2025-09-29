@@ -29,7 +29,7 @@ int main() {
     // Init the uart for printf
     init_uart(current_chip_address_prefix, 32, 1);
     printf("Multi-chip Offload Bingo Main\r\n");
-    // printf("Chip(%x, %x): [Host] Start Offloading Program\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+    printf("Chip(%x, %x): [Host] Start Offloading Program\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
 
     ///////////////////////////////
     // 1. Init the clk manager
@@ -50,7 +50,7 @@ int main() {
         printf("Chip(%x, %x): [Host] Error when initializing Allocator\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
         return -1;
     } else {
-        // printf("Chip(%x, %x): [Host] Init Allocator Success\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+        printf("Chip(%x, %x): [Host] Init Allocator Success\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
     }
     ///////////////////////////////
     // 3. Wake up all the clusters
@@ -82,7 +82,7 @@ int main() {
     uint8_t sync_checkpoint = 1;
     chip_barrier(comm_buffer_ptr, 0x00, 0x11, sync_checkpoint);
     sync_checkpoint++;
-    // printf("Chip(%x, %x): [Host] All chiplets synced, start Bingo\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+    printf("Chip(%x, %x): [Host] All chiplets synced, start Bingo\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
     int ret = 0;
     ret = kernel_execution();
     clear_host_sw_interrupt(current_chip_id);

@@ -70,10 +70,7 @@
       periph_axi_lite_narrow_d2d_link_cfg: 1,
     },
     txns: {
-      wide_and_inter: 128,
-      wide_to_hbm: 128,
       narrow_and_wide: 16,
-      rmq: 4,
     },
     narrow_xbar_slv_id_width: 4,
     narrow_xbar_user_width: 3, // clog2(total number of clusters)

@@ -7,7 +7,9 @@
 
 
 #define ALIGN_UP(x, p) (((x) + (p)-1) & ~((p)-1))
-
+// High32 and Low32 extraction macros
+#define HIGH32(x) ((uint32_t)(((uint64_t)(x) >> 32) & 0xFFFFFFFF))
+#define LOW32(x)  ((uint32_t)(((uint64_t)(x) >> 0) & 0xFFFFFFFF))
 // Bit field extraction macro
 // Extract bits [high:low] from variable x
 #define BINGO_EXTRACT_BITS(x, high, low) (((x) >> (low)) & ((1ULL << ((high) - (low) + 1)) - 1))

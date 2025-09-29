@@ -138,7 +138,6 @@ def main():
     parser.add_argument("--wrapper", "-w", action="store_true")
     parser.add_argument("--am-cheader", "-D", metavar="ADDRMAP_CHEADER")
     parser.add_argument("--am-csv", "-aml", metavar="ADDRMAP_CSV")
-    parser.add_argument("--dts", metavar="DTS", help="System's device tree.")
     parser.add_argument("--name", metavar="NAME",
                         default=DEFAULT_NAME, help="System's name.")
 
@@ -779,34 +778,6 @@ def main():
     if args.ctrl:
         ctrl_kwargs = occamy.get_ctrl_kwargs(occamy_cfg, cluster_generators, args.name)
         write_template(args.ctrl, outdir, **ctrl_kwargs)
-    #######
-    # DTS #
-    #######
-    # TODO(niwis, zarubaf): We probably need to think about genrating a couple
-    # of different systems here. I can at least think about two in that context:
-    # 1. RTL sim
-    # 2. FPGA
-    # 3. (ASIC) in the private wrapper repo
-    # I think we have all the necessary ingredients for this. What is missing is:
-    # - Create a second(/third) configuration file.
-    # - Generate the RTL into dedicated directories
-    # - (Manually) adapt the `Bender.yml` to include the appropriate files.
-
-    if args.dts:
-        dts = occamy.get_dts(occamy_cfg, am_clint, am_axi_lite_peripherals,
-                      am_axi_lite_narrow_peripherals)
-        # TODO(zarubaf): Figure out whether there are any requirements on the
-        # model and compatability.
-        dts_str = dts.emit("eth,occamy-dev", "eth,occamy")
-        with open(args.dts, "w") as file:
-            file.write(dts_str)
-        # Compile to DTB and save to a file with `.dtb` extension.
-        with open(pathlib.Path(args.dts).with_suffix(".dtb"), "wb") as file:
-            run(["dtc", args.dts],
-                input=dts_str,
-                stdout=file,
-                shell=True,
-                universal_newlines=True)
 
     # Emit the address map as a dot file if requested.
     if args.graph:

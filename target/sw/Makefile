@@ -29,7 +29,6 @@ PLATFORM_HEADERS_DIR  = shared/platform/generated
 PLATFORM_HEADERS_TEMPLATE_DIR = shared/platform/template
 SW_DEVICE_RT_DIR      = device/runtime
 HOST_RUNTIME_DIR      = $(SW_DIR)/host/runtime
-LIB_HERO_DIR          = $(HOST_RUNTIME_DIR)/libhero
 LIB_BINGO_DIR         = $(HOST_RUNTIME_DIR)/libbingo
 
 ############
@@ -165,7 +164,6 @@ clean:
 # clean host build
 	$(MAKE) -C host TARGET=clean
 # clean host runtimes
-	$(MAKE) -C $(LIB_HERO_DIR) clean
 	$(MAKE) -C $(LIB_BINGO_DIR) clean
 # clean generated tmp files
 	rm -rf $(SW_DIR)/device/*.tmp

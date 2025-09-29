@@ -4,4 +4,4 @@ Libbingo is a minimal implementation of the baremetal task dependency management
 
 The goal is to ease the programming effort on the heterogenous platform. 
 
-The design follows largely on the llvm openmp libomptarget.
+The design follows largely on the llvm openmp libomptarget and the libhero from ETH Pulp.
