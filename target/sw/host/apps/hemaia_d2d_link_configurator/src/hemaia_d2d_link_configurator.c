@@ -15,7 +15,17 @@ int main() {
 
     // Configure the East D2D link
     printf("HeMAiA D2D Link Configurator\r\n");
-    printf("Configuring the East D2D link...\r\n");
+    printf("Press 1 to set to DDR mode, 0 to set to SDR mode:\r\n");
+    char mode_char = scan_char(address_prefix);
+    if (mode_char == '1') {
+        set_all_d2d_link_phy_mode(D2D_PHY_MODE_DDR);
+        printf("Set to DDR mode.\r\n");
+    } else {
+        set_all_d2d_link_phy_mode(D2D_PHY_MODE_SDR);
+        printf("Set to SDR mode.\r\n");
+    }
+
+    printf("Calibrating the East D2D link...\r\n");
     for (uint8_t i = 0; i < MAX_CFG_ROUND; i++) {
         printf("Round %d\r\n", i);
         hemaia_d2d_link_set_delay(D2D_DIRECTION_EAST);
@@ -33,7 +43,7 @@ int main() {
     }
 
     // Configure the West D2D link
-    printf("Configuring the West D2D link...\r\n");
+    printf("Calibrating the West D2D link...\r\n");
     for (uint8_t i = 0; i < MAX_CFG_ROUND; i++) {
         printf("Round %d\r\n", i);
         hemaia_d2d_link_set_delay(D2D_DIRECTION_WEST);
@@ -50,7 +60,7 @@ int main() {
     }
 
     // Configure the North D2D link
-    printf("Configuring the North D2D link...\r\n");
+    printf("Calibrating the North D2D link...\r\n");
     for (uint8_t i = 0; i < MAX_CFG_ROUND; i++) {
         printf("Round %d\r\n", i);
         hemaia_d2d_link_set_delay(D2D_DIRECTION_NORTH);
@@ -67,7 +77,7 @@ int main() {
     }
 
     // Configure the South D2D link
-    printf("Configuring the South D2D link...\r\n");
+    printf("Calibrating the South D2D link...\r\n");
     for (uint8_t i = 0; i < MAX_CFG_ROUND; i++) {
         printf("Round %d\r\n", i);
         hemaia_d2d_link_set_delay(D2D_DIRECTION_SOUTH);
