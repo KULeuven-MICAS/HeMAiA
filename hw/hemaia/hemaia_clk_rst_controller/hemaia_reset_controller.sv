@@ -30,8 +30,11 @@ module hemaia_reset_controller #(
     //--------------------------------------------------------------------------
     // Two-flop synchroniser (both flops have async set-to-0)
     //---------------------------------------------------------------------------
-    (* async *) logic sync_ff0, sync_ff1;
-    (* false_path *) logic sync_ff_rst;
+    logic sync_ff0, sync_ff1;
+    (* async *) wire sync_ff0_value;
+    assign sync_ff0_value = sync_ff0;
+
+    (* false_path *) wire sync_ff_rst;
     assign sync_ff_rst = async_local_rst_ni[i] & async_global_rst_ni;
 
     always_ff @(posedge clk_i[i] or negedge sync_ff_rst) begin
@@ -40,7 +43,7 @@ module hemaia_reset_controller #(
         sync_ff1 <= 1'b0;
       end else begin
         sync_ff0 <= 1'b1;
-        sync_ff1 <= sync_ff0;
+        sync_ff1 <= sync_ff0_value;
       end
     end
 
