@@ -24,6 +24,8 @@ int main() {
         set_all_d2d_link_phy_mode(D2D_PHY_MODE_SDR);
         printf("Set to SDR mode.\r\n");
     }
+    printf("Press any key to continue\r\n");
+    scan_char(address_prefix);
 
     printf("Calibrating the East D2D link...\r\n");
     for (uint8_t i = 0; i < MAX_CFG_ROUND; i++) {
