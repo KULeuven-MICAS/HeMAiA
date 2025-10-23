@@ -1,6 +1,6 @@
 #include "hemaia_d2d_link.h"
 
-void hemaia_d2d_link_require_test_one_direction(Direction direction,
+void hemaia_d2d_link_require_test_one_direction(D2DDirection direction,
                                                 uint32_t cycles) {
     while (get_d2d_link_being_tested(direction)) {
         // Wait until the link is not being tested
@@ -113,7 +113,7 @@ inline uint32_t get_array_sum_u32(uint32_t *array, uint32_t size) {
 }
 
 // The function to set the delay for each channel in a direction
-void hemaia_d2d_link_set_delay(Direction direction) {
+void hemaia_d2d_link_set_delay(D2DDirection direction) {
     uint32_t ber[CHANNELS_PER_DIRECTION][HEMAIA_D2D_LINK_NUM_DELAYS] = {0};
     for (uint8_t i = 0; i < HEMAIA_D2D_LINK_NUM_DELAYS; i++) {
         // Set the delay and require one test
@@ -191,7 +191,7 @@ void hemaia_d2d_link_set_delay(Direction direction) {
 }
 
 // The function to set the broken link for one channel in a direction
-int32_t hemaia_d2d_link_set_bypass_link(Direction direction, uint8_t channel) {
+int32_t hemaia_d2d_link_set_bypass_link(D2DDirection direction, uint8_t channel) {
     uint8_t ber_counter_result[HEMAIA_D2D_LINK_BROKEN_LINK_REG_SIZE] = {0};
     get_d2d_link_error_cycle_one_channel(direction, channel,
                                          ber_counter_result);

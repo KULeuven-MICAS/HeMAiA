@@ -28,7 +28,7 @@ module hemaia_clk_rst_controller #(
   ///////////////////////////////
   //    Reset Synchronizer     //
   ///////////////////////////////
-  (* async *) logic control_rst_n_d1_mst_clk, control_rst_n_d2_mst_clk;
+  logic control_rst_n_d1_mst_clk, control_rst_n_d2_mst_clk;
   always_ff @(posedge mst_clk_i or negedge control_rst_ni) begin
     if (~control_rst_ni) begin
       control_rst_n_d1_mst_clk <= 1'b0;
