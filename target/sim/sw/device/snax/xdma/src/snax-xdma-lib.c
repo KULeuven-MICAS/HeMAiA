@@ -28,39 +28,39 @@ int32_t xdma_memcpy_nd(uint8_t* src, uint8_t* dst, uint32_t* spatial_stride_src,
 
     csrw_ss(XDMA_DST_ADDR_PTR_LSB, (uint32_t)(uint64_t)dst);
     csrw_ss(XDMA_DST_ADDR_PTR_MSB, (uint32_t)((uint64_t)dst >> 32));
-    // Rule check
-    // The enabled spatial bound for input should be equal to the enabled
-    // Src frame count and dst frame count should be equal
-    uint32_t src_size = 1;
-    if (temp_dim_src > 0) {
-        #pragma unroll
-        for (uint32_t i = 0; i < temp_dim_src; i++) {
-            src_size *= temp_bound_src[i];
-        }
-    }
-    uint32_t dst_size = 1;
-    if (temp_dim_dst > 0) {
-        #pragma unroll
-        for (uint32_t i = 0; i < temp_dim_dst; i++) {
-            dst_size *= temp_bound_dst[i];
-        }
-    }
-    if (src_size != dst_size) {
-        XDMA_DEBUG_PRINT("src loop and dst loop is not equal\n");
-        // return -3;
-    }
+    // // Rule check
+    // // The enabled spatial bound for input should be equal to the enabled
+    // // Src frame count and dst frame count should be equal
+    // uint32_t src_size = 1;
+    // if (temp_dim_src > 0) {
+    //     
+    //     for (uint32_t i = 0; i < temp_dim_src; i++) {
+    //         src_size *= temp_bound_src[i];
+    //     }
+    // }
+    // uint32_t dst_size = 1;
+    // if (temp_dim_dst > 0) {
+    //     
+    //     for (uint32_t i = 0; i < temp_dim_dst; i++) {
+    //         dst_size *= temp_bound_dst[i];
+    //     }
+    // }
+    // if (src_size != dst_size) {
+    //     XDMA_DEBUG_PRINT("src loop and dst loop is not equal\n");
+    //     // return -3;
+    // }
     // Spatial Stride 0 to XDMA_SRC_SPATIAL_DIM at src
-    #pragma unroll
+    
     for (uint32_t i = 0; i < XDMA_SRC_SPATIAL_DIM; i++) {
         csrw_ss(XDMA_SRC_SPATIAL_STRIDE_PTR + i, spatial_stride_src[i]);
     }
     // Spatial Stride 0 to XDMA_DST_SPATIAL_DIM at dst
-    #pragma unroll
+    
     for (uint32_t i = 0; i < XDMA_DST_SPATIAL_DIM; i++) {
         csrw_ss(XDMA_DST_SPATIAL_STRIDE_PTR + i, spatial_stride_dst[i]);
     }
     // Temporal Dimension 0 to n at src
-    #pragma unroll
+    
     for (uint32_t i = 0; i < temp_dim_src; i++) {
         if (i >= XDMA_SRC_TEMP_DIM) {
             XDMA_DEBUG_PRINT("Source dimension is too high for xdma\n");
@@ -70,13 +70,13 @@ int32_t xdma_memcpy_nd(uint8_t* src, uint8_t* dst, uint32_t* spatial_stride_src,
         csrw_ss(XDMA_SRC_TEMP_STRIDE_PTR + i, temp_stride_src[i]);
     }
     // Dimension n to MAX at src
-    #pragma unroll
+    
     for (uint32_t i = temp_dim_src; i < XDMA_SRC_TEMP_DIM; i++) {
         csrw_ss(XDMA_SRC_TEMP_BOUND_PTR + i, 1);
         csrw_ss(XDMA_SRC_TEMP_STRIDE_PTR + i, 0);
     }
     // Temporal Dimension 0 to n at dst
-    #pragma unroll
+    
     for (uint32_t i = 0; i < temp_dim_dst; i++) {
         if (i >= XDMA_DST_TEMP_DIM) {
             XDMA_DEBUG_PRINT("Destination dimension is too high for xdma\n");
@@ -86,7 +86,7 @@ int32_t xdma_memcpy_nd(uint8_t* src, uint8_t* dst, uint32_t* spatial_stride_src,
         csrw_ss(XDMA_DST_TEMP_STRIDE_PTR + i, temp_stride_dst[i]);
     }
     // Dimension n to MAX at dst
-    #pragma unroll
+    
     for (uint32_t i = temp_dim_dst; i < XDMA_DST_TEMP_DIM; i++) {
         csrw_ss(XDMA_DST_TEMP_BOUND_PTR + i, 1);
         csrw_ss(XDMA_DST_TEMP_STRIDE_PTR + i, 0);

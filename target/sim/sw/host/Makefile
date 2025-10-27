@@ -15,6 +15,7 @@
 APPS += offload
 APPS += offload_cluster_2
 APPS += offload_cluster_1
+# APPS += offload_cluster_0
 APPS += offload_nvsa
 
 TARGET ?= all

@@ -14,8 +14,8 @@ int main() {
     // 1      0  1  0  0
     // 0x14
     // When using single cluster, uncomment the following line
-    reset_and_ungate_quadrants_all();
-    // reset_and_ungate_quadrants(0x17);
+    // reset_and_ungate_quadrants_all();
+    reset_and_ungate_quadrants(0x15);
     deisolate_all();
 
     // Enable interrupts to receive notice of job termination
@@ -31,11 +31,11 @@ int main() {
     print_uart("[H] C012 \r\n");
 
     // When using single cluster, uncomment the following line
-    // wakeup_cluster(0);
-    // wakeup_cluster(1);
-    // wakeup_cluster(2);
+    wakeup_cluster(0);
+    wakeup_cluster(1);
+    wakeup_cluster(2);
 
-    wakeup_snitches_cl();
+    // wakeup_snitches_cl();
     // Wait for job done and return Snitch exit code
     return wait_snitches_done();
 }

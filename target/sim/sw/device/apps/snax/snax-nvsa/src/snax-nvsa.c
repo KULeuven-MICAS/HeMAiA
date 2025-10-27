@@ -72,16 +72,149 @@ uint32_t tcdm_baseaddress;
 uint8_t *tcdm_maxpool_in;
 // Put the output at the middle of tcdm
 uint8_t *tcdm_maxpool_out;
+uint8_t *tcdm_in_dr;
+uint8_t *tcdm_out_dr;
+
+// sstride_src[0] = 8;
+// sstride_dst[0] = 8;
+// tstride_src[0] = 8;
+// tstride_src[1] = 112;
+// tstride_src[2] = 64;
+// tstride_src[3] = 112;
+// tstride_src[4] = 784;
+// tbound_src[0] = 7;
+// tbound_src[1] = 7;
+// tbound_src[2] = 1;
+// tbound_src[3] = 1;
+// tbound_src[4] = 8;
+// tstride_dst[0] = 64;
+// tstride_dst[1] = 64;
+// tstride_dst[2] = 64;
+// tbound_dst[0] = 1;
+// tbound_dst[1] = 1;
+// tbound_dst[2] = 8;
+
+// sstride_src[0] = spatialStride1_in;
+// sstride_dst[0] = spatialStride1_out;
+// tstride_src[0] = tempStride0_in;
+// tstride_src[1] = tempStride1_in;
+// tstride_src[2] = tempStride2_in;
+// tstride_src[3] = tempStride3_in;
+// tstride_src[4] = tempStride4_in;
+// tbound_src[0] = tempLoop0_in;
+// tbound_src[1] = tempLoop1_in;
+// tbound_src[2] = tempLoop2_in;
+// tbound_src[3] = tempLoop3_in;
+// tbound_src[4] = tempLoop4_in;
+// tstride_dst[0] = tempStride0_out;
+// tstride_dst[1] = tempStride1_out;
+// tstride_dst[2] = tempStride2_out;
+// tbound_dst[0] = tempLoop0_out;
+// tbound_dst[1] = tempLoop1_out;
+// tbound_dst[2] = tempLoop2_out;
+
+// int32_t xdma_maxpool_nvsa(uint8_t* src, uint8_t* dst,
+//         uint32_t* spatial_stride_src,
+//         uint32_t* spatial_stride_dst,
+//         uint32_t temp_dim_src,
+//         uint32_t* temp_stride_src,
+//         uint32_t* temp_bound_src,
+//         uint32_t temp_dim_dst, 
+//         uint32_t* temp_stride_dst,
+//         uint32_t* temp_bound_dst, 
+//         uint32_t enabled_chan_src,
+//         uint32_t enabled_chan_dst, 
+//         uint32_t enabled_byte_dst) {
+//     csrw_ss(XDMA_SRC_ADDR_PTR_LSB, (uint32_t)(uint64_t)src);
+//     csrw_ss(XDMA_SRC_ADDR_PTR_MSB, (uint32_t)((uint64_t)src >> 32));
+
+//     csrw_ss(XDMA_DST_ADDR_PTR_LSB, (uint32_t)(uint64_t)dst);
+//     csrw_ss(XDMA_DST_ADDR_PTR_MSB, (uint32_t)((uint64_t)dst >> 32));
+//     // Rule check
+//     // The enabled spatial bound for input should be equal to the enabled
+//     // Src frame count and dst frame count should be equal
+//     uint32_t src_size = 1;
+//     if (temp_dim_src > 0) {
+//         #pragma unroll
+//         for (uint32_t i = 0; i < temp_dim_src; i++) {
+//             src_size *= temp_bound_src[i];
+//         }
+//     }
+//     uint32_t dst_size = 1;
+//     if (temp_dim_dst > 0) {
+//         #pragma unroll
+//         for (uint32_t i = 0; i < temp_dim_dst; i++) {
+//             dst_size *= temp_bound_dst[i];
+//         }
+//     }
+//     if (src_size != dst_size) {
+//         XDMA_DEBUG_PRINT("src loop and dst loop is not equal\n");
+//         // return -3;
+//     }
+//     // Spatial Stride 0 to XDMA_SRC_SPATIAL_DIM at src
+//     #pragma unroll
+//     for (uint32_t i = 0; i < XDMA_SRC_SPATIAL_DIM; i++) {
+//         csrw_ss(XDMA_SRC_SPATIAL_STRIDE_PTR + i, spatial_stride_src[i]);
+//     }
+//     // Spatial Stride 0 to XDMA_DST_SPATIAL_DIM at dst
+//     #pragma unroll
+//     for (uint32_t i = 0; i < XDMA_DST_SPATIAL_DIM; i++) {
+//         csrw_ss(XDMA_DST_SPATIAL_STRIDE_PTR + i, spatial_stride_dst[i]);
+//     }
+//     // Temporal Dimension 0 to n at src
+//     #pragma unroll
+//     for (uint32_t i = 0; i < temp_dim_src; i++) {
+//         if (i >= XDMA_SRC_TEMP_DIM) {
+//             XDMA_DEBUG_PRINT("Source dimension is too high for xdma\n");
+//             return -4;
+//         }
+//         csrw_ss(XDMA_SRC_TEMP_BOUND_PTR + i, temp_bound_src[i]);
+//         csrw_ss(XDMA_SRC_TEMP_STRIDE_PTR + i, temp_stride_src[i]);
+//     }
+//     // Dimension n to MAX at src
+//     #pragma unroll
+//     for (uint32_t i = temp_dim_src; i < XDMA_SRC_TEMP_DIM; i++) {
+//         csrw_ss(XDMA_SRC_TEMP_BOUND_PTR + i, 1);
+//         csrw_ss(XDMA_SRC_TEMP_STRIDE_PTR + i, 0);
+//     }
+//     // Temporal Dimension 0 to n at dst
+//     #pragma unroll
+//     for (uint32_t i = 0; i < temp_dim_dst; i++) {
+//         if (i >= XDMA_DST_TEMP_DIM) {
+//             XDMA_DEBUG_PRINT("Destination dimension is too high for xdma\n");
+//             return -4;
+//         }
+//         csrw_ss(XDMA_DST_TEMP_BOUND_PTR + i, temp_bound_dst[i]);
+//         csrw_ss(XDMA_DST_TEMP_STRIDE_PTR + i, temp_stride_dst[i]);
+//     }
+//     // Dimension n to MAX at dst
+//     #pragma unroll
+//     for (uint32_t i = temp_dim_dst; i < XDMA_DST_TEMP_DIM; i++) {
+//         csrw_ss(XDMA_DST_TEMP_BOUND_PTR + i, 1);
+//         csrw_ss(XDMA_DST_TEMP_STRIDE_PTR + i, 0);
+//     }
+//     // Enabled channel at src
+//     csrw_ss(XDMA_SRC_ENABLED_CHAN_PTR, enabled_chan_src);
+//     // Enabled channel at dst
+//     csrw_ss(XDMA_DST_ENABLED_CHAN_PTR, enabled_chan_dst);
+//     // Enabled byte at dst
+//     csrw_ss(XDMA_DST_ENABLED_BYTE_PTR, enabled_byte_dst);
+//     return 0;
+// }
 
 int main() {
 
     // Set err value for checking
     int err = 0;
 
-    //----------------------------
-    // Initial pre-load stage!
-    //----------------------------
+    // //------------------------------------------------
+    // //------------------------------------------------
+    // // BEGIN GEMM
+    // //------------------------------------------------
+    // //------------------------------------------------
+    // if (snrt_cluster_idx() == 1){
 
+<<<<<<< Updated upstream
     //----------------------------
     //----------------------------
     //----------------------------
@@ -92,189 +225,183 @@ int main() {
     //----------------------------
     //----------------------------
     if (snrt_cluster_idx() == 1){
+=======
+    //     int start_cycle = 0;
+    //     int end_cycle = 0;
+    //     int performance_counter = 0;
+>>>>>>> Stashed changes
 
-        int start_cycle = 0;
-        int end_cycle = 0;
-        int performance_counter = 0;
+    //     uint32_t subtraction_setting = gen_subtraction_config(subtraction_a, subtraction_b);
+    //     uint32_t csr0 = gen_csr0_config(input_zp_i, output_zp_i, max_int_i, min_int_i);
+    //     uint32_t csr1 = gen_csr1_config(double_round_i);
 
-        uint32_t subtraction_setting = gen_subtraction_config(subtraction_a, subtraction_b);
-        uint32_t csr0 = gen_csr0_config(input_zp_i, output_zp_i, max_int_i, min_int_i);
-        uint32_t csr1 = gen_csr1_config(double_round_i);
+    //     //----------------------------
+    //     // GeMM DMA Task
+    //     //----------------------------
+    //     if (snrt_is_dm_core()) {
 
-        //----------------------------
-        // GeMM DMA Task
-        //----------------------------
-        if (snrt_is_dm_core()) {
-            // tcdm_c1_sb0 = (uint32_t*)snrt_cluster_base_addrl();
-            // printf("C1 TCDM ADDR %p \r\n", tcdm_c1_sb0);
+    //         //--------------------------------------------
+    //         // Some initial settings that we can exclude
+    //         //--------------------------------------------
 
-            // uint32_t dma_start = snrt_mcycle();
-            // snrt_dma_start_1d(tcdm_c1_sb0, vec_list, 5120);
-            // snrt_dma_wait_all();
-            // uint32_t dma_end = snrt_mcycle();
-            // printf("C1DM %d  \r\n", dma_end - dma_start);
-            // c1_barr_start = snrt_mcycle();
+    //         // Allocate space in TCDM for DMA
+    //         local_a_dma = (int8_t *)(snrt_l1_next() + delta_physical_a);
+    //         local_b_dma = (int8_t *)(snrt_l1_next() + delta_physical_b);
+    //         local_c_dma = (int32_t *)(snrt_l1_next() + delta_physical_c);
+    //         local_d32_dma = (int32_t *)(snrt_l1_next() + delta_physical_d32);
+    //         local_d8_dma = (int8_t *)(snrt_l1_next() + delta_physical_d8);
 
-            //--------------------------------------------
-            // Some initial settings that we can exclude
-            //--------------------------------------------
+    //         // Allocate space in TCDM for streamer
+    //         local_a = (int8_t *)(snrt_l1_next() + delta_local_a);
+    //         local_b = (int8_t *)(snrt_l1_next() + delta_local_b);
+    //         local_c = (int32_t *)(snrt_l1_next() + delta_local_c);
+    //         local_d32 = (int32_t *)(snrt_l1_next() + delta_local_d32);
+    //         local_d8 = (int8_t *)(snrt_l1_next() + delta_local_d8);
 
-            // Allocate space in TCDM for DMA
-            local_a_dma = (int8_t *)(snrt_l1_next() + delta_physical_a);
-            local_b_dma = (int8_t *)(snrt_l1_next() + delta_physical_b);
-            local_c_dma = (int32_t *)(snrt_l1_next() + delta_physical_c);
-            local_d32_dma = (int32_t *)(snrt_l1_next() + delta_physical_d32);
-            local_d8_dma = (int8_t *)(snrt_l1_next() + delta_physical_d8);
+    //         snrt_start_perf_counter(SNRT_PERF_CNT0, SNRT_PERF_CNT_DMA_BUSY,
+    //                                 snrt_hartid());
 
-            // Allocate space in TCDM for streamer
-            local_a = (int8_t *)(snrt_l1_next() + delta_local_a);
-            local_b = (int8_t *)(snrt_l1_next() + delta_local_b);
-            local_c = (int32_t *)(snrt_l1_next() + delta_local_c);
-            local_d32 = (int32_t *)(snrt_l1_next() + delta_local_d32);
-            local_d8 = (int8_t *)(snrt_l1_next() + delta_local_d8);
+    //         //--------------------------------------------
+    //         // Main DMA transfers
+    //         //--------------------------------------------
+    //         if (interleaved_address == 1) {
+    //             asm volatile("" ::: "memory");
+    //             start_cycle = snrt_mcycle();
+    //             snrt_dma_start_1d(local_a, A,
+    //                             Nbatch * (H + 2 * pad_h) * (W + 2 * pad_w) *
+    //                                 Cin * sizeof(int8_t));
+    //             snrt_dma_start_1d(local_b, B,
+    //                             Cout * Kh * Kw * Cin * sizeof(int8_t));+
+    //             snrt_dma_start_1d(local_c, C,
+    //                             M * N * meshRow * meshCol * sizeof(int32_t));
+    //         } else {
+    //             asm volatile("" ::: "memory");
+    //             start_cycle = snrt_mcycle();
+    //             snrt_dma_start_2d(
+    //                 local_a_dma, A, 64 * sizeof(int8_t), 256, 64,
+    //                 Nbatch * (H + 2 * pad_h) * (W + 2 * pad_w) * Cin / 64);
+    //             snrt_dma_start_2d(local_b_dma, B, 64 * sizeof(int8_t), 256, 64,
+    //                             Cout * Kh * Kw * Cin / 64);
+    //             snrt_dma_start_2d(local_c_dma, C, 16 * sizeof(int32_t), 256,
+    //                             16 * sizeof(int32_t),
+    //                             M * N * meshRow * meshCol / 16);
+    //         }
+    //         snrt_dma_wait_all();
+    //         asm volatile("" ::: "memory");
+    //         end_cycle = snrt_mcycle();
+    //         // printf("C1DMHW %d \r\n", snrt_get_perf_counter(SNRT_PERF_CNT0));
+    //         // snrt_reset_perf_counter(SNRT_PERF_CNT0);
+    //         printf("C1DMMC %d \r\n", end_cycle - start_cycle);
 
-            snrt_start_perf_counter(SNRT_PERF_CNT0, SNRT_PERF_CNT_DMA_BUSY,
-                                    snrt_hartid());
+    //     }
 
-            //--------------------------------------------
-            // Main DMA transfers
-            //--------------------------------------------
-            if (interleaved_address == 1) {
-                asm volatile("" ::: "memory");
-                start_cycle = snrt_mcycle();
-                snrt_dma_start_1d(local_a, A,
-                                Nbatch * (H + 2 * pad_h) * (W + 2 * pad_w) *
-                                    Cin * sizeof(int8_t));
-                snrt_dma_start_1d(local_b, B,
-                                Cout * Kh * Kw * Cin * sizeof(int8_t));+
-                snrt_dma_start_1d(local_c, C,
-                                M * N * meshRow * meshCol * sizeof(int32_t));
-            } else {
-                asm volatile("" ::: "memory");
-                start_cycle = snrt_mcycle();
-                snrt_dma_start_2d(
-                    local_a_dma, A, 64 * sizeof(int8_t), 256, 64,
-                    Nbatch * (H + 2 * pad_h) * (W + 2 * pad_w) * Cin / 64);
-                snrt_dma_start_2d(local_b_dma, B, 64 * sizeof(int8_t), 256, 64,
-                                Cout * Kh * Kw * Cin / 64);
-                snrt_dma_start_2d(local_c_dma, C, 16 * sizeof(int32_t), 256,
-                                16 * sizeof(int32_t),
-                                M * N * meshRow * meshCol / 16);
-            }
-            snrt_dma_wait_all();
-            asm volatile("" ::: "memory");
-            end_cycle = snrt_mcycle();
-            // printf("C1DMHW %d \r\n", snrt_get_perf_counter(SNRT_PERF_CNT0));
-            // snrt_reset_perf_counter(SNRT_PERF_CNT0);
-            printf("C1DMMC %d \r\n", end_cycle - start_cycle);
+    //     snrt_cluster_hw_barrier();
 
-        }
-
-        snrt_cluster_hw_barrier();
-
-        //----------------------------
-        // GeMM Compute Task
-        //----------------------------
-        if (snrt_cluster_core_idx() == 0){
-            // Set Streamer configuration CSR for conv2d
-            start_cycle = snrt_mcycle();
+    //     //----------------------------
+    //     // GeMM Compute Task
+    //     //----------------------------
+    //     if (snrt_cluster_core_idx() == 0){
+    //         // Set Streamer configuration CSR for conv2d
+    //         start_cycle = snrt_mcycle();
             
-            set_gemmx_streamer_csr(
-                1, 8, 3, 8, 3,
-                80, 4, 720, 8, 0,
-                1, 64, 7, 80,
-                0,
+    //         set_gemmx_streamer_csr(
+    //             1, 8, 3, 8, 3,
+    //             80, 4, 720, 8, 0,
+    //             1, 64, 7, 80,
+    //             0,
 
-                1, 8, 36, 64, 8,
-                2304, 7, 0, 0,
+    //             1, 8, 36, 64, 8,
+    //             2304, 7, 0, 0,
 
-                1, 8, 8, 448, 1,
-                64, 7, 64, 0,
+    //             1, 8, 8, 448, 1,
+    //             64, 7, 64, 0,
 
-                8, 64, 8, 1792, 1,
-                256, 7, 256, 0,
+    //             8, 64, 8, 1792, 1,
+    //             256, 7, 256, 0,
 
-                8, 64, 8, 1792,
-                1, 256, 7, 256,
-                0,
+    //             8, 64, 8, 1792,
+    //             1, 256, 7, 256,
+    //             0,
 
-                0, 2880, 35648, 21312,
-                35648, 0, 0, 0,
-                0, 0);
+    //             0, 2880, 35648, 21312,
+    //             35648, 0, 0, 0,
+    //             0, 0);
 
-            // Set GEMMX configuration CSR
-            set_gemmx_csr(
-                36, 8, 7, subtraction_setting, csr0, csr1,
-                857224986, 638653443,
-                -1115715826, -96688076, -943963355,
-                -23202385, -1919332301, -43242793,
-                1269514311, 166527003, 56, 0);
+    //         // Set GEMMX configuration CSR
+    //         set_gemmx_csr(
+    //             36, 8, 7, subtraction_setting, csr0, csr1,
+    //             857224986, 638653443,
+    //             -1115715826, -96688076, -943963355,
+    //             -23202385, -1919332301, -43242793,
+    //             1269514311, 166527003, 56, 0);
 
             
-            end_cycle = snrt_mcycle();
-            printf("C1CGT %d \r\n", end_cycle - start_cycle);
+    //         end_cycle = snrt_mcycle();
+    //         printf("C1CGT %d \r\n", end_cycle - start_cycle);
 
-            // Set CSR to start Streamer for conv2d
-            start_cycle = snrt_mcycle();
-            set_gemmx_streamer_start();
+    //         // Set CSR to start Streamer for conv2d
+    //         start_cycle = snrt_mcycle();
+    //         set_gemmx_streamer_start();
 
-            // Set CSR to start GEMM
-            set_gemmx_start();
+    //         // Set CSR to start GEMM
+    //         set_gemmx_start();
 
-            // Poll until Streamer and GEMM accelerator finish
-            wait_gemmx_and_streamer();
-            end_cycle = snrt_mcycle();
+    //         // Poll until Streamer and GEMM accelerator finish
+    //         wait_gemmx_and_streamer();
+    //         end_cycle = snrt_mcycle();
 
-            printf("C1CRT %d \r\n", end_cycle - start_cycle);
+    //         printf("C1CRT %d \r\n", end_cycle - start_cycle);
 
-            performance_counter = read_gemmx_streamer_perf_counter();
+    //         performance_counter = read_gemmx_streamer_perf_counter();
 
-            printf("C1CRTP %d \r\n", performance_counter);
+    //         printf("C1CRTP %d \r\n", performance_counter);
 
-        }
+    //     }
 
-        snrt_cluster_hw_barrier();
+    //     snrt_cluster_hw_barrier();
 
 
-        //----------------------------
-        // Maxpool Compute Task
-        //----------------------------
+    //     //----------------------------
+    //     // Maxpool Compute Task
+    //     //----------------------------
 
-        if (snrt_is_dm_core()) {
-            tcdm_baseaddress = snrt_cluster_base_addrl();
-            tcdm_maxpool_in = (uint8_t *)tcdm_baseaddress;
-            // Put the output at the middle of tcdm
-            tcdm_maxpool_out = (uint8_t *)(tcdm_baseaddress + delta_local_out);
+    //     if (snrt_is_dm_core()) {
+    //         tcdm_baseaddress = snrt_cluster_base_addrl();
+    //         tcdm_maxpool_in = (uint8_t *)tcdm_baseaddress;
+    //         // Put the output at the middle of tcdm
+    //         tcdm_maxpool_out = (uint8_t *)(tcdm_baseaddress + delta_local_out);
 
-            // Put the input at the starting of tcdm
-            // The xdma core is the last compute core in the cluster
-            uint32_t sstride_src[1] = {0};
-            uint32_t sstride_dst[1] = {0};
-            uint32_t tstride_src[5] = {0};
-            uint32_t tbound_src[5] = {0};
-            uint32_t tstride_dst[3] = {0};
-            uint32_t tbound_dst[3] = {0};
+    //         start_cycle = snrt_mcycle();
+    //         // Put the input at the starting of tcdm
+    //         // The xdma core is the last compute core in the cluster
+    //         uint32_t sstride_src[1] = {0};
+    //         uint32_t sstride_dst[1] = {0};
+    //         uint32_t tstride_src[5] = {0};
+    //         uint32_t tbound_src[5] = {0};
+    //         uint32_t tstride_dst[3] = {0};
+    //         uint32_t tbound_dst[3] = {0};
 
-            // Load the CFG from data.h
-            sstride_src[0] = spatialStride1_in;
-            sstride_dst[0] = spatialStride1_out;
-            tstride_src[0] = tempStride0_in;
-            tstride_src[1] = tempStride1_in;
-            tstride_src[2] = tempStride2_in;
-            tstride_src[3] = tempStride3_in;
-            tstride_src[4] = tempStride4_in;
-            tbound_src[0] = tempLoop0_in;
-            tbound_src[1] = tempLoop1_in;
-            tbound_src[2] = tempLoop2_in;
-            tbound_src[3] = tempLoop3_in;
-            tbound_src[4] = tempLoop4_in;
-            tstride_dst[0] = tempStride0_out;
-            tstride_dst[1] = tempStride1_out;
-            tstride_dst[2] = tempStride2_out;
-            tbound_dst[0] = tempLoop0_out;
-            tbound_dst[1] = tempLoop1_out;
-            tbound_dst[2] = tempLoop2_out;
+    //         // Load the CFG from data.h
+    //         sstride_src[0] = 8;
+    //         sstride_dst[0] = 8;
+    //         tstride_src[0] = 8;
+    //         tstride_src[1] = 112;
+    //         tstride_src[2] = 64;
+    //         tstride_src[3] = 112;
+    //         tstride_src[4] = 784;
+    //         tbound_src[0] = 7;
+    //         tbound_src[1] = 7;
+    //         tbound_src[2] = 1;
+    //         tbound_src[3] = 1;
+    //         tbound_src[4] = 8;
+    //         tstride_dst[0] = 64;
+    //         tstride_dst[1] = 64;
+    //         tstride_dst[2] = 64;
+    //         tbound_dst[0] = 1;
+    //         tbound_dst[1] = 1;
+    //         tbound_dst[2] = 8;
 
+<<<<<<< Updated upstream
             start_cycle = snrt_mcycle();
             uint32_t check;
             check = xdma_disable_dst_ext(0);
@@ -443,10 +570,18 @@ int main() {
         // Set err value for checking
         // int err = 0;
         int err_counter;
+=======
+    //         uint32_t check;
+    //         check = xdma_disable_dst_ext(0);
+    //         uint32_t ext_param_maxpool_size[1] = {reduceLen};
+    //         check = xdma_enable_dst_ext(1, ext_param_maxpool_size);
+    //         check = xdma_disable_dst_ext(2);
+>>>>>>> Stashed changes
 
         int32_t *local_config_data;
         int16_t *local_d16;
 
+<<<<<<< Updated upstream
         local_config_data = (int32_t *)(snrt_l1_next() + delta_config_data);
         local_d16 = (int16_t *)(snrt_l1_next() + delta_store_data);
 
@@ -478,9 +613,23 @@ int main() {
                               CONFIG_SIZE_CMD_SS * sizeof(uint32_t));
             snrt_dma_wait_all();
         }
+=======
+    //         xdma_memcpy_nd(tcdm_maxpool_in, tcdm_maxpool_out, sstride_src, sstride_dst, 5,
+    //                        tstride_src, tbound_src, 3, tstride_dst, tbound_dst,
+    //                        0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF);
+    //         end_cycle = snrt_mcycle();
+    //         printf("C1MPGT %d \r\n", end_cycle - start_cycle);
 
-        snrt_cluster_hw_barrier();
+    //         start_cycle = snrt_mcycle();
+    //         uint32_t task_id = xdma_start();
+    //         xdma_wait(task_id);
+    //         end_cycle = snrt_mcycle();
+>>>>>>> Stashed changes
 
+    //         printf("C1MPRT %d \r\n", end_cycle - start_cycle);
+    //     }
+
+<<<<<<< Updated upstream
         local_config_data = (int32_t *)(snrt_l1_next() + delta_comp_data);
         // Using DMA only
         if (snrt_is_dm_core()) {
@@ -558,17 +707,278 @@ int main() {
     //----------------------------
     //----------------------------
 
+=======
+    //     //----------------------------
+    //     // Data Transfer for FC layer
+    //     //----------------------------
+    //     snrt_cluster_hw_barrier();
+
+    //     if(snrt_is_dm_core()){
+    //         local_a_fc = (int8_t *)(snrt_l1_next() + delta_local_a_fc);
+    //         local_b_fc = (int8_t *)(snrt_l1_next() + delta_local_b_fc);
+    //         local_c_fc = (int32_t *)(snrt_l1_next() + delta_local_c_fc);
+    //         local_d32_fc = (int32_t *)(snrt_l1_next() + delta_local_d32_fc);
+    //         local_d8_fc = (int8_t *)(snrt_l1_next() + delta_local_d8_fc);
+
+    //         // snrt_start_perf_counter(SNRT_PERF_CNT0, SNRT_PERF_CNT_DMA_BUSY,
+    //         //                         snrt_hartid());
+    //         start_cycle = snrt_mcycle();
+    //         snrt_dma_start_1d(
+    //             local_b_fc, B_fc,
+    //             N_fc * K_fc * tileSize * meshCol * sizeof(int8_t));
+
+    //         snrt_dma_wait_all();
+    //         end_cycle = snrt_mcycle();
+    //         printf("DMAFC %d \r\n", end_cycle - start_cycle);
+    //         // printf("DMAFC %d \r\n", snrt_get_perf_counter(SNRT_PERF_CNT0));
+    //         // snrt_reset_perf_counter(SNRT_PERF_CNT0);
+    //     }
+
+    //     snrt_cluster_hw_barrier();
+
+    //     //----------------------------
+    //     // Compute FC layer
+    //     //----------------------------
+    //     if (snrt_cluster_core_idx() == 0) {
+    //         // Set GEMMX configuration CSR
+    //         uint32_t subtraction_setting_fc =
+    //             gen_subtraction_config(subtraction_a_fc, subtraction_b_fc);
+
+    //         uint32_t csr0_fc = gen_csr0_config(input_zp_i_fc, output_zp_i_fc,
+    //                                            max_int_i_fc, min_int_i_fc);
+    //         uint32_t csr1_fc = gen_csr1_config(double_round_i_fc);
+
+    //         start_cycle = snrt_mcycle();
+
+    //         set_gemmx_csr(8, 64, 1, subtraction_setting_fc, csr0_fc,
+    //                       csr1_fc, 588778812,
+    //                       67250211, -1252922048,
+    //                       1028264373,
+    //                       466306066,
+    //                       -1819985696,
+    //                       957777513,
+    //                       1807171125,
+    //                       -541852707,
+    //                       2034129355,
+    //                       64, 0);
+
+    //         // Set Streamer configuration CSR for conv2d
+    //         set_gemmx_streamer_csr(
+    //             1, 8, 8, 64,
+    //             64, 0, 1, 512,
+    //             1, 0, 1, 0,
+    //             1, 0, 0,
+
+    //             1, 8, 8, 64,
+    //             64, 512, 1, 0,
+    //             0,
+
+    //             1, 8, 64, 64,
+    //             1, 4096, 1, 0,
+    //             0,
+
+    //             8, 64, 64, 256,
+    //             1, 16384, 1, 0,
+    //             0,
+
+    //             8, 64, 64,
+    //             256, 1, 16384,
+    //             1, 0, 0,
+
+    //             0, 512, 49664,
+    //             33280, 49664, 0,
+    //             0, 0, 0,
+    //             0);
+
+    //         end_cycle = snrt_mcycle();
+
+    //         printf("FCGT %d \r\n", end_cycle - start_cycle);
+
+    //         // Set CSR to start GEMM
+    //         set_gemmx_start();
+
+    //         // Set CSR to start Streamer for conv2d
+    //         set_gemmx_streamer_start();
+    //         // printf("Streamer and GeMM started \r\n");
+    //         write_csr_obs(0x00d);
+
+    //         // Poll until Streamer and GEMM accelerator finish
+    //         wait_gemmx_and_streamer();
+
+    //         performance_counter = read_gemmx_streamer_perf_counter();
+    //         printf("FCRT %d \r\n", performance_counter);
+
+    //         //local_d8_fc output of the fc layer
+            
+    //     }
+
+    //     // Measurement purposes
+    //     // asm volatile("" ::: "memory");
+    //     // c1_barr_start = snrt_mcycle();
+    //     // if(snrt_is_compute_core){
+    //     //     return_to_cva6_single_cluster(err);
+    //     // }
+    //     // BARRIER
+    //     snrt_cluster_hw_barrier();
+
+
+    //     // ---------------------------------------------------------------
+    //     // Data Reshuffler
+    //     // ---------------------------------------------------------------
+
+    //     if (snrt_is_dm_core()) {
+    //         tcdm_baseaddress = snrt_cluster_base_addrl();
+    //         // Put the input at the starting of tcdm
+    //         tcdm_in_dr = (uint8_t *)(tcdm_baseaddress + delta_local_d8_fc);
+    //         // Put the output at the middle of tcdm
+    //         tcdm_out_dr = (uint8_t *)(tcdm_baseaddress + delta_local_out_dr);
+
+    //         // The xdma core is the last compute core in the cluster
+    //         uint32_t sstride_src_dr[1] = {0};
+    //         uint32_t sstride_dst_dr[1] = {0};
+    //         uint32_t tstride_src_dr[5] = {0};
+    //         uint32_t tbound_src_dr[5] = {0};
+    //         uint32_t tstride_dst_dr[3] = {0};
+    //         uint32_t tbound_dst_dr[3] = {0};
+
+    //         // Load the CFG from data.h
+    //         sstride_src_dr[0] = spatialStride1_in_dr;
+    //         sstride_dst_dr[0] = spatialStride1_out_dr;
+
+    //         tstride_src_dr[0] = tempStride0_in_dr;
+    //         tstride_src_dr[1] = tempStride1_in_dr;
+    //         tstride_src_dr[2] = tempStride2_in_dr;
+    //         tstride_src_dr[3] = tempStride3_in_dr;
+    //         tstride_src_dr[4] = tempStride4_in_dr;
+
+    //         tbound_src_dr[0] = tempLoop0_in_dr;
+    //         tbound_src_dr[1] = tempLoop1_in_dr;
+    //         tbound_src_dr[2] = tempLoop2_in_dr;
+    //         tbound_src_dr[3] = tempLoop3_in_dr;
+    //         tbound_src_dr[4] = tempLoop4_in_dr;
+
+    //         tstride_dst_dr[0] = tempStride0_out_dr;
+    //         tstride_dst_dr[1] = tempStride1_out_dr;
+    //         tstride_dst_dr[2] = tempStride2_out_dr;
+
+    //         tbound_dst_dr[0] = tempLoop0_out_dr;
+    //         tbound_dst_dr[1] = tempLoop1_out_dr;
+    //         tbound_dst_dr[2] = tempLoop2_out_dr;
+
+    //         // --------------------- Configure the Ext --------------------- //
+    //         start_cycle = snrt_mcycle();
+    //         uint32_t check;
+    //         check = xdma_disable_dst_ext(0);
+    //         check = xdma_enable_dst_ext(2, NULL);
+    //         check = xdma_disable_dst_ext(1);
+
+    //         // --------------------- Configure the AGU --------------------- //
+
+    //         xdma_memcpy_nd(tcdm_in_dr, tcdm_out_dr, sstride_src_dr, sstride_dst_dr, 5,
+    //                        tstride_src_dr, tbound_src_dr, 3, tstride_dst_dr, tbound_dst_dr,
+    //                        0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF);
+
+    //         end_cycle = snrt_mcycle();
+    //         printf("C1DRGT %d \r\n", end_cycle - start_cycle);
+
+    //         start_cycle = snrt_mcycle();
+    //         uint32_t task_id = xdma_start();
+    //         xdma_wait(task_id);
+    //         end_cycle = snrt_mcycle();
+
+    //         printf("C1DRRT %d \r\n", end_cycle - start_cycle);
+
+    //         barr_start = snrt_mcycle();
+
+    //     };
+
+    //     snrt_cluster_hw_barrier();
+    // }
+    // //------------------------------------------------
+    // //------------------------------------------------
+    // // END GEMM
+    // //------------------------------------------------
+    // //------------------------------------------------
+
+    // snrt_global_barrier();
+
+    // //------------------------------------------------
+    // //------------------------------------------------
+    // // BEGIN CGRA
+    // //------------------------------------------------
+    // //------------------------------------------------
+    // if (snrt_cluster_idx() == 0){
+
+    //     // MEASUREMENT TIME
+    //     if(snrt_cluster_core_idx() == 0){
+    //         barr_end = snrt_mcycle();
+    //         printf("BS %d \r\n", barr_start);
+    //         printf("BE %d \r\n", barr_end);
+    //     }
+    //     // BARRIER
+    //     snrt_cluster_hw_barrier();
+
+
+    //     if (snrt_is_dm_core()) {
+    //         tcdm_c0_sb0 = (uint32_t*)snrt_cluster_base_addrl();
+    //         printf("C0 TCDM ADDR %p \r\n", tcdm_c0_sb0);
+
+    //         uint32_t dma_start = snrt_mcycle();
+    //         // Just transfer 1 block 
+    //         snrt_dma_start_1d(tcdm_c0_sb0, local_d8_fc, 512);
+    //         snrt_dma_wait_all();
+    //         uint32_t dma_end = snrt_mcycle();
+    //         printf("C0DM %d  \r\n", dma_end - dma_start);
+    //         // c0_barr_start = snrt_mcycle();
+    //     }
+
+    //     snrt_cluster_hw_barrier();
+
+    //     if(snrt_cluster_core_idx() == 0){
+    //         // printf("D %d \r\n",(int8_t) * (tcdm_c0_sb0 + 0));
+    //         // printf("D %d \r\n",(int8_t) * (tcdm_c0_sb0 + 1));
+    //         // printf("D %d \r\n",(int8_t) * (tcdm_c0_sb0 + 2));
+    //         // printf("D %d \r\n",(int8_t) * (tcdm_c0_sb0 + 3));
+    //         // printf("D %d \r\n",(int8_t) * (tcdm_c0_sb0 + 4));
+    //         // printf("D %d \r\n",(int8_t) * (tcdm_c0_sb0 + 5));
+    //         // printf("D %d \r\n",(int8_t) * (tcdm_c0_sb0 + 6));
+    //         // printf("D %d \r\n",(int8_t) * (tcdm_c0_sb0 + 7));
+    //         // printf("D %d \r\n",(int8_t) * (tcdm_c0_sb0 + 8));
+    //         // printf("D %d \r\n",(int8_t) * (tcdm_c0_sb0 + 9));
+    //         barr_start = snrt_mcycle();
+    //     }
+
+    //     // BARRIER
+    //     snrt_cluster_hw_barrier();
+        
+    // };
+    // //------------------------------------------------
+    // //------------------------------------------------
+    // // END CGRA
+    // //------------------------------------------------
+    // //------------------------------------------------
+    
+    // snrt_global_barrier();
+
+
+
+    // //------------------------------------------------
+    // //------------------------------------------------
+    // // BEGIN HDC
+    // //------------------------------------------------
+    // //------------------------------------------------
+>>>>>>> Stashed changes
     if (snrt_cluster_idx() == 2){
 
-        // MEASUREMENT TIME
-        if(snrt_cluster_core_idx() == 0){
-            barr_end = snrt_mcycle();
-            printf("BS %d \r\n", barr_start);
-            printf("BE %d \r\n", barr_end);
-        }
+        // // MEASUREMENT TIME
+        // if(snrt_cluster_core_idx() == 0){
+        //     barr_end = snrt_mcycle();
+        //     printf("BS %d \r\n", barr_start);
+        //     printf("BE %d \r\n", barr_end);
+        // }
         // BARRIER
-        snrt_cluster_hw_barrier();
-
+        // snrt_cluster_hw_barrier();
+        
         // MOVE DATA FROM C0 TO C2
         if (snrt_is_dm_core()) {
             // Layout assignment
@@ -577,7 +987,7 @@ int main() {
             tcdm_c2_sb2 = tcdm_c2_sb1 + 16;
             tcdm_c2_sb3 = tcdm_c2_sb2 + 16;
 
-            printf("C2 TCDM ADDR %p \r\n", tcdm_c2_sb0);
+            // printf("C2 TCDM ADDR %p \r\n", tcdm_c2_sb0);
 
             size_t src_stride = 8 * sizeof(uint64_t);
             size_t dst_stride = 4 * src_stride;
@@ -600,7 +1010,7 @@ int main() {
             // Data transferring
             snrt_dma_start_2d(
                 // Destination address, source address
-                tcdm_c2_sb1, tcdm_c0_sb0,
+                tcdm_c2_sb1, vec_list,
                 // Size per chunk
                 src_stride,
                 // Destination stride, source stride
@@ -611,7 +1021,7 @@ int main() {
 
             snrt_dma_wait_all();
             uint32_t dma_end = snrt_mcycle();
-            printf("C2DM %d  \r\n", dma_end - dma_start);
+            // printf("C2DM %d  \r\n", dma_end - dma_start);
         }
 
         // BARRIER
@@ -619,6 +1029,7 @@ int main() {
 
         
         if(snrt_cluster_core_idx() == 0){
+            
             // CONVERT AND COMPRESS
             uint32_t start_convert = snrt_mcycle();
             hypercorex_pack_512b(
@@ -627,7 +1038,7 @@ int main() {
                 tcdm_c2_sb3
             );
             uint32_t end_convert = snrt_mcycle();
-            printf("C2CT %d\n", end_convert - start_convert);
+            // printf("C2CT %d\n", end_convert - start_convert);
             // printf("D %d \n", (int8_t)*(tcdm_c2_sb2));
             // printf("D %d \n", (int8_t)*(tcdm_c2_sb2 + 1));
             // printf("D %d \n", (int8_t)*(tcdm_c2_sb2 + 2));
@@ -644,6 +1055,9 @@ int main() {
             // printf("D[6]=%d \n", (uint32_t)*(tcdm_c2_sb2 + 256 + 2));
             // printf("D[7]=%d \n", (uint32_t)*(tcdm_c2_sb2 + 256 + 3));
 
+            // while(1){
+            // printf("T\n ");
+            
 
             // ACTIVATE HDC TASK
             uint32_t hdc_cfg_start = snrt_mcycle();
@@ -710,7 +1124,7 @@ int main() {
             csrw_ss(HYPERCOREX_CORE_SET_REG_ADDR, 0x00000010);
 
             uint32_t hdc_cfg_end = snrt_mcycle();
-            printf("C2CGT: %d\n", hdc_cfg_end - hdc_cfg_start);
+            // printf("C2CGT: %d\n", hdc_cfg_end - hdc_cfg_start);
 
 
             uint32_t hdc_core_start = snrt_mcycle();
@@ -724,17 +1138,19 @@ int main() {
 
             // csrr_ss(STREAMER_BUSY_CSR)
             uint32_t hdc_core_end = snrt_mcycle();
-            printf("C2CRT %d \r\n", hdc_core_end - hdc_core_start);
+            // printf("C2CRT %d \r\n", hdc_core_end - hdc_core_start);
 
             csrw_ss(HYPERCOREX_CORE_SET_REG_ADDR, 0x00000040);
 
-            printf("D %d \r\n",(uint32_t) * (tcdm_c2_sb3));
+        // }//end of while
 
-            printf("D finish!");
-            printf("D finish!");
-            printf("D finish!");
-            printf("D finish!");
-            printf("D finish!");
+            // printf("D %d \r\n",(uint32_t) * (tcdm_c2_sb3));
+
+            // printf("D finish!");
+            // printf("D finish!");
+            // printf("D finish!");
+            // printf("D finish!");
+            // printf("D finish!");
             
 
             // for (uint32_t i = 0; i < vec_num; i++) {
@@ -747,6 +1163,12 @@ int main() {
         // }
         snrt_cluster_hw_barrier();
     };
+    //------------------------------------------------
+    //------------------------------------------------
+    // END HDC
+    //------------------------------------------------
+    //------------------------------------------------
+
     snrt_global_barrier();
     return err;
 }
