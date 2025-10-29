@@ -4,7 +4,7 @@
 
 // Yunhao Deng <yunhao.deng@kuleuven.be>
 
-// Simplified Bootrom with reduced printing for faster simulation
+// Standard Bootrom for HeMAiA
 
 // Please avoid using initialized global variable and static variable (.data
 // region) in C. This will lead to the loss of initial value, as they are
