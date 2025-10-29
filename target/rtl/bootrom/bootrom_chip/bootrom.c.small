@@ -150,7 +150,7 @@ void bootrom() {
                 break;
             case INITMEM:
                 sys_dma_blk_memcpy(local_chip_mem_start_address,
-                                   0x1000000000L | address_prefix,
+                                   WIDE_ZERO_MEM_BASE_ADDR | address_prefix,
                                    WIDE_SPM_SIZE);
                 printf("\r\n\t Memory initialized. \r\n");
                 scan_char(address_prefix);

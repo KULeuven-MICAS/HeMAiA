@@ -83,19 +83,22 @@ void bootrom() {
         local_chip_mem_start_address = address_prefix | SPM_WIDE_BASE_ADDR;
         remote_chip_mem_start_address =
             ((uint64_t)target_chip_id << 40) | SPM_WIDE_BASE_ADDR;
-        printf("\033[2J\r\n\tL0x%02X, R0x%02X\r\n", chip_id, target_chip_id);
-        // printf(
-        //     "\r\n\t Enter the number to select the mode: "
-        //     "\r\n\t 1. Halt the CVA6 Core"
-        //     "\r\n\t 2. Change the remote Chip ID"
-        //     "\r\n\t 3. Load from UART to Chip %02x"
-        //     "\r\n\t 4. Copy memory from Chip %02x to Chip %02x"
-        //     "\r\n\t 5. Copy memory from Chip %02x to Chip %02x"
-        //     "\r\n\t 6. Print main memory in Chip %02x"
-        //     "\r\n\t 7. Continue to boot"
-        //     "\r\n\t 8. Initialize the main memory\r\n",
-        //     target_chip_id, chip_id, target_chip_id, target_chip_id, chip_id,
-        //     target_chip_id);
+        printf(
+            "\033[2J\r\n\t\t Welcome to HeMAiA Bootrom\r\n\r\n\t Chip ID: "
+            "L0x%02X, R0x%02X\r\n",
+            chip_id, target_chip_id);
+        printf(
+            "\r\n\t Enter the number to select the mode: "
+            "\r\n\t 1. Halt the CVA6 Core"
+            "\r\n\t 2. Change the remote Chip ID"
+            "\r\n\t 3. Load from UART to Chip %02x"
+            "\r\n\t 4. Copy memory from Chip %02x to Chip %02x"
+            "\r\n\t 5. Copy memory from Chip %02x to Chip %02x"
+            "\r\n\t 6. Print main memory in Chip %02x"
+            "\r\n\t 7. Continue to boot"
+            "\r\n\t 8. Initialize the main memory\r\n",
+            target_chip_id, chip_id, target_chip_id, target_chip_id, chip_id,
+            target_chip_id);
 
         boot_mode = scan_char(address_prefix) - '0' - 1;
 
@@ -103,12 +106,12 @@ void bootrom() {
 
         switch (boot_mode) {
             case HALT:
-                printf("\r\n\t Halted. ");
+                printf("\r\n\t CVA6 Core is Halted. ");
                 scan_char(address_prefix);
                 __asm__ volatile("wfi");
                 break;
             case TARGET_CHIPID:
-                printf("\r\n\t TCID: ");
+                printf("\r\n\t Target Chip ID: ");
                 scanf("%x", &target_chip_id);
                 break;
             case COPY_TO_REMOTE:
@@ -135,7 +138,7 @@ void bootrom() {
                 break;
 
             case PRINTMEM:
-                printf("Size:\r\n");
+                printf("Enter the size of memory in byte:\r\n");
                 scanf("%d", &memory_length);
                 print_mem_hex(address_prefix,
                               (char*)remote_chip_mem_start_address,
@@ -146,11 +149,12 @@ void bootrom() {
 
             case NORMAL:
                 printf("\033[2J");
+                printf("\r\n\t Booting...\r\n\r\n\r\n");
                 return;
                 break;
             case INITMEM:
                 sys_dma_blk_memcpy(local_chip_mem_start_address,
-                                   0x1000000000L | address_prefix,
+                                   WIDE_ZERO_MEM_BASE_ADDR | address_prefix,
                                    WIDE_SPM_SIZE);
                 printf("\r\n\t Memory initialized. \r\n");
                 scan_char(address_prefix);
