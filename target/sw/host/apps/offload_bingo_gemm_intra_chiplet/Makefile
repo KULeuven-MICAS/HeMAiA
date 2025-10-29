@@ -15,3 +15,6 @@ INCDIRS += include
 
 
 include ../common.mk
+include ./include/Makefile
+
+$(DEP): $(DATA_H)
