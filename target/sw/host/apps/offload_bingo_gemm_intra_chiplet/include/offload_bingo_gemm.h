@@ -20,8 +20,8 @@ int kernel_execution() {
     // User defined workload
     /////////////////////////
 
-    uintptr_t output_data_ptr = 0;
-    __workload_versacore_w_streamer_args(task_list, &num_tasks, &output_data_ptr);
+    __workload_versacore(task_list, &num_tasks);
+    // __workload_versacore_w_streamer_args(task_list, &num_tasks);
 
     ////////////////////////////
     // End user defined workload
