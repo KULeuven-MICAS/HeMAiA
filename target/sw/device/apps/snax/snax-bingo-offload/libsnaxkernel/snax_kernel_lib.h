@@ -587,16 +587,9 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         K = get_cls_shared_ptrs()[0][9];
         N = get_cls_shared_ptrs()[0][10];
 
-        // L1 data addresses
+        // L1 data addresses for A
         get_cls_shared_ptrs()[1] =
             snrt_l1_malloc(M * K * sizeof(uint8_t));  // A MxK in uint8_t
-        get_cls_shared_ptrs()[2] =
-            snrt_l1_malloc(K * N * sizeof(uint8_t));  // B KxN in uint8_t
-        get_cls_shared_ptrs()[3] =
-            snrt_l1_malloc(M * N * sizeof(uint32_t));  // C MxN in uint32
-        get_cls_shared_ptrs()[4] =
-            snrt_l1_malloc(M * N * sizeof(uint32_t));  // D MxN in uint32
-
         // Call the idma to load the inputs
         l3_input_A_addr =
             make_u64(get_cls_shared_ptrs()[0][0], get_cls_shared_ptrs()[0][1]);
@@ -604,19 +597,33 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
                        M * K * sizeof(uint8_t));
         int task_id = xdma_start();
         xdma_remote_wait(task_id);
+
+        get_cls_shared_ptrs()[2] =
+            snrt_l1_malloc(K * N * sizeof(uint8_t));  // B KxN in uint8_t
         l3_input_B_addr =
             make_u64(get_cls_shared_ptrs()[0][2], get_cls_shared_ptrs()[0][3]);
         xdma_memcpy_1d((void*)l3_input_B_addr, (void*)get_cls_shared_ptrs()[2],
                        K * N * sizeof(uint8_t));
         task_id = xdma_start();
         xdma_remote_wait(task_id);
+
+        // load C only if C_addr is not 0
         l3_input_C_addr =
             make_u64(get_cls_shared_ptrs()[0][4], get_cls_shared_ptrs()[0][5]);
-        xdma_memcpy_1d((void*)l3_input_C_addr, (void*)get_cls_shared_ptrs()[3],
-                       M * N * sizeof(uint32_t));
-        task_id = xdma_start();
-        xdma_remote_wait(task_id);
+        if (l3_input_C_addr != 0) {
+            get_cls_shared_ptrs()[3] =
+                snrt_l1_malloc(M * N * sizeof(uint32_t));  // C MxN in uint32
+            xdma_memcpy_1d((void*)l3_input_C_addr,
+                           (void*)get_cls_shared_ptrs()[3],
+                           M * N * sizeof(uint32_t));
+            task_id = xdma_start();
+            xdma_remote_wait(task_id);
+        } else {
+            printf("skip loading C since C_addr is 0\n");
+        }
 
+        get_cls_shared_ptrs()[4] =
+            snrt_l1_malloc(M * N * sizeof(uint32_t));  // D MxN in uint32
         // l3_output_D_addr is only used for output, no need to load
         l3_output_D_addr =
             make_u64(get_cls_shared_ptrs()[0][6], get_cls_shared_ptrs()[0][7]);
@@ -778,7 +785,7 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
             Ctlstride[2] = N * C_elem_len * meshRow_0 * meshCol_0 / 8;
             // Ctlstride3
             Ctlstride[3] = 0;
-        }else{
+        } else {
             // Ctlstride0
             Ctlstride[0] = c_spatial_bound_0_1 * (bankWidth / 8);
             // Ctlstride1
@@ -791,7 +798,9 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         // set_addr_remap_index_C
         get_cls_shared_ptrs()[5][15] = 0;
         // channel_en_C []
-        if (array_shape_idx == 0) {
+        if (l3_input_C_addr == 0) {
+            get_cls_shared_ptrs()[5][16] = chanelEnC_C_null;
+        } else if (array_shape_idx == 0) {
             get_cls_shared_ptrs()[5][16] = chanelEnC_0;
         } else {
             get_cls_shared_ptrs()[5][16] = chanelEnC_1;
@@ -852,7 +861,7 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         // Configuration the Steamer and Versacore
         //////////////////////////////////////////////////////////////
         set_versacore_streamer_csr(
-            (uint32_t)(uintptr_t)get_cls_shared_ptrs()[1], // A_addr
+            (uint32_t)(uintptr_t)get_cls_shared_ptrs()[1],  // A_addr
             (uint32_t*)get_cls_shared_ptrs()[5][0],         // Aslstride
             (uint32_t*)get_cls_shared_ptrs()[5][1],         // Atlbound[] base
             (uint32_t*)get_cls_shared_ptrs()[5][2],         // Atlstride[] base
@@ -860,7 +869,7 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
             get_cls_shared_ptrs()[5][4],             // transpose_A
             (uint32_t*)get_cls_shared_ptrs()[5][5],  // channel_en_A []
 
-            (uint32_t)(uintptr_t)get_cls_shared_ptrs()[2], // B_addr
+            (uint32_t)(uintptr_t)get_cls_shared_ptrs()[2],  // B_addr
             (uint32_t*)get_cls_shared_ptrs()[5][6],         // Bslstride[] base
             (uint32_t*)get_cls_shared_ptrs()[5][7],         // Btlbound[] base
             (uint32_t*)get_cls_shared_ptrs()[5][8],         // Btlstride[] base
@@ -868,14 +877,14 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
             get_cls_shared_ptrs()[5][10],             // transpose_B
             (uint32_t*)get_cls_shared_ptrs()[5][11],  // channel_en_B []
 
-            (uint32_t)(uintptr_t)get_cls_shared_ptrs()[3], // C_addr
+            (uint32_t)(uintptr_t)get_cls_shared_ptrs()[3],  // C_addr
             (uint32_t*)get_cls_shared_ptrs()[5][12],        // Cslstride[] base
             (uint32_t*)get_cls_shared_ptrs()[5][13],        // Ctlbound[] base
             (uint32_t*)get_cls_shared_ptrs()[5][14],        // Ctlstride[] base
             get_cls_shared_ptrs()[5][15],             // set_addr_remap_index_C
             (uint32_t*)get_cls_shared_ptrs()[5][16],  // channel_en_C []
 
-            (uint32_t)(uintptr_t)get_cls_shared_ptrs()[4], // D_addr
+            (uint32_t)(uintptr_t)get_cls_shared_ptrs()[4],  // D_addr
             (uint32_t*)get_cls_shared_ptrs()[5][17],  // D32slstride[] base
             (uint32_t*)get_cls_shared_ptrs()[5][18],  // D32tlbound[] base
             (uint32_t*)get_cls_shared_ptrs()[5][19],  // D32tlstride[] base
@@ -884,21 +893,13 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
 
         );
 
-        set_versacore_csr(
-            1,
-            K,
-            N * M,
-            0,
-            array_shape_idx,
-            0
-        );
+        set_versacore_csr(1, K, N * M, 0, array_shape_idx, 0);
 
         // Set CSR to start Streamer
         start_versacore_and_streamer();
 
         // Poll until Streamer and GEMM accelerator finish
         wait_versacore_and_streamer();
-
     }
 
     snrt_cluster_hw_barrier();
@@ -934,5 +935,4 @@ SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
     SNAX_EXPORT_FUNC(
         __snax_kernel_versacore_load_compute_store_w_streamer_args),
     SNAX_EXPORT_FUNC(__snax_kernel_gemm_intra_chiplet),
-    SNAX_SYMTAB_END
-};
+    SNAX_SYMTAB_END};
