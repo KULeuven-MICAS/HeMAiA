@@ -10,7 +10,7 @@
 #include "libbingo/bingo_api.h"
 #include "host.h"
 
-void __workload_versacore(bingo_task_t **task_list, uint32_t *num_tasks_ptr, uintptr_t *output_data_ptr){
+void __workload_versacore(bingo_task_t **task_list, uint32_t *num_tasks_ptr){
     ///////////////////
     // Main function //
     ///////////////////
@@ -19,10 +19,99 @@ void __workload_versacore(bingo_task_t **task_list, uint32_t *num_tasks_ptr, uin
     // 3. Set the task dependency
     // 4. Set the assigned chiplet id and cluster id
 
+    uint8_t current_chip_id = get_current_chip_id();
+    uint8_t cluster_id = 0; // versacore is located at cluster
 
+    // 1.1 Get the kernel function address by the kernel name
+    check_kernel_tab_ready(); 
+    uint32_t check_results_func_addr = get_device_function("__snax_kernel_check_results");
+    uint32_t __snax_kernel_gemm_intra_chiplet_func_addr = get_device_function("__snax_kernel_gemm_intra_chiplet");
+    if (check_results_func_addr == SNAX_SYMTAB_END_FN_ADDR ||
+        __snax_kernel_gemm_intra_chiplet_func_addr == SNAX_SYMTAB_END_FN_ADDR) {
+        printf("Error: Kernel symbol lookup failed!\r\n");
+    }
+
+    // 1.2 Prepare the args
+    // versacore args
+    uint32_t gemm_args[14];
+    // A matrix
+    gemm_args[0] = (uint32_t)(((uint64_t)(&A[0]) >> 32) & 0xFFFFFFFF);
+    gemm_args[1] = (uint32_t)(((uint64_t)(&A[0]) >> 0) & 0xFFFFFFFF);
+    // B matrix
+    gemm_args[2] = (uint32_t)(((uint64_t)(&B[0]) >> 32) & 0xFFFFFFFF);
+    gemm_args[3] = (uint32_t)(((uint64_t)(&B[0]) >> 0) & 0xFFFFFFFF);
+    // C matrix
+    gemm_args[4] = (uint32_t)(((uint64_t)(&C[0]) >> 32) & 0xFFFFFFFF);
+    gemm_args[5] = (uint32_t)(((uint64_t)(&C[0]) >> 0) & 0xFFFFFFFF);
+    // D matrix (output)
+    O1HeapInstance *local_l3_heap_manager = bingo_get_l3_heap_manager(current_chip_id);
+    uintptr_t output_data_addr = (uintptr_t)o1heapAllocate(local_l3_heap_manager, sizeof(D) * sizeof(D[0]));
+    gemm_args[6] = (uint32_t)(((uint64_t)(output_data_addr) >> 32) & 0xFFFFFFFF);
+    gemm_args[7] = (uint32_t)(((uint64_t)(output_data_addr) >> 0) & 0xFFFFFFFF);
+    // Matrix dimensions
+    gemm_args[8]  = M; // M
+    gemm_args[9]  = K; // K
+    gemm_args[10] = N; // N
+    // SUs
+    gemm_args[11] = array_shape;
+    // transpose A
+    gemm_args[12] = transposed_A;
+    // transpose B
+    gemm_args[13] = transposed_B;
+    
+    __snax_kernel_gemm_intra_chiplet_args_t gemm_intra_chiplet_args;
+    gemm_intra_chiplet_args.args_ptr = (uint32_t)(uintptr_t)&gemm_args;
+
+    // checkresults args
+    __snax_kernel_check_results_args_t task_check_results_args;
+    task_check_results_args.golden_data_addr = (uint32_t)(uintptr_t)(&D);
+    task_check_results_args.output_data_addr = (uint32_t)(uintptr_t)(output_data_addr);
+    task_check_results_args.data_size = ARRAY_SIZE_BYTES(D);
+
+    // 2. Register the tasks
+    bingo_task_t *task_versacore = bingo_task_create(__snax_kernel_gemm_intra_chiplet_func_addr, (uint32_t)(uintptr_t)(&gemm_intra_chiplet_args), current_chip_id, cluster_id);
+    if (task_versacore == NULL) {
+        printf("Error: Task versacore creation failed!\r\n");
+    }
+    bingo_task_t *task_check_results = bingo_task_create(check_results_func_addr, (uint32_t)(uintptr_t)(&task_check_results_args), current_chip_id, cluster_id);
+    if (task_check_results == NULL) {
+        printf("Error: Task check results creation failed!\r\n");
+    }
+
+    // 3. Set the task dependency
+    // Here we have only two tasks and simple dependency
+    // versacore -> check results
+    bingo_task_add_depend(task_check_results, task_versacore);
+
+    // 4. Set the assigned cluster id and chip id
+    task_versacore->assigned_cluster_id = 0;
+    task_check_results->assigned_cluster_id = 0;
+
+    //////////////////////
+    // End main function //
+    //////////////////////
+    // Handle the output parameters
+    // 1. Set up the task list to outside
+
+    task_list[0] = task_versacore;
+    task_list[1] = task_check_results;
+
+
+    // User need to define the number of tasks
+    int num_tasks = 2;
+
+    // Since this is a single chiplet workload
+    // We set the assigned chiplet id to 0 for all tasks
+    for (int i = 0; i < num_tasks; i++)
+    {
+        task_list[i]->assigned_chip_id = 0;
+    }
+
+    // 2. Set the number of tasks to outside
+    *num_tasks_ptr = num_tasks;
 }
 
-void __workload_versacore_w_streamer_args(bingo_task_t **task_list, uint32_t *num_tasks_ptr, uintptr_t *output_data_ptr) {
+void __workload_versacore_w_streamer_args(bingo_task_t **task_list, uint32_t *num_tasks_ptr) {
     ///////////////////
     // Main function //
     ///////////////////
@@ -59,8 +148,8 @@ void __workload_versacore_w_streamer_args(bingo_task_t **task_list, uint32_t *nu
     versacore_load_compute_store_args.input_C_addr_lo = (uint32_t)(((uint64_t)(&C[0]) >> 0) & 0xFFFFFFFF);
     versacore_load_compute_store_args.input_C_size = ARRAY_SIZE_BYTES(C);
     // Outputs
-    // uintptr_t output_data_addr = hero_host_l3_malloc(sizeof(D) * sizeof(D[0]), output_data_ptr);
     O1HeapInstance *local_l3_heap_manager = bingo_get_l3_heap_manager(current_chip_id);
+
     uintptr_t output_data_addr = (uintptr_t)o1heapAllocate(local_l3_heap_manager, sizeof(D) * sizeof(D[0]));
     versacore_load_compute_store_args.output_addr_hi = (uint32_t)(((uint64_t)(output_data_addr) >> 32) & 0xFFFFFFFF);
     versacore_load_compute_store_args.output_addr_lo = (uint32_t)(((uint64_t)(output_data_addr) >> 0) & 0xFFFFFFFF);

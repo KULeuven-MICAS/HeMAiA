@@ -3,12 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Fanchen Kong <fanchen.kong@kuleuven.be>
+// Xiaoling Yi <xiaoling.yi@kuleuven.be>
+
 #pragma once
 
 #include <snax_versacore_lib.h>
-
-
-#include <snax_versacore_lib.h>
+#include "versacore_hw_param.h"
 
 #define SNAX_LIB_NAME_MAX_LEN 64
 // symtab data structure
@@ -40,8 +40,8 @@ inline uint64_t make_u64(uint32_t hi, uint32_t lo) {
 //     // Arg1: ...
 // }
 
-SNAX_LIB_DEFINE void __snax_kernel_dummy(void *arg) {
-    uint32_t arg0 = ((uint32_t *)arg)[0];
+SNAX_LIB_DEFINE void __snax_kernel_dummy(void* arg) {
+    uint32_t arg0 = ((uint32_t*)arg)[0];
     if (snrt_is_dm_core()) {
         printf(
             "Chip(%x, %x): [Cluster %d] Core(%d) Running Dummy Kernel with "
@@ -51,7 +51,7 @@ SNAX_LIB_DEFINE void __snax_kernel_dummy(void *arg) {
     }
 }
 
-SNAX_LIB_DEFINE void __snax_kernel_csr(void *arg) {
+SNAX_LIB_DEFINE void __snax_kernel_csr(void* arg) {
     // Arg0: csr_addr
     // Arg1: csr_value
 
@@ -60,8 +60,8 @@ SNAX_LIB_DEFINE void __snax_kernel_csr(void *arg) {
     if (snrt_is_dm_core()) {
         get_cls_shared_ptrs()[0] = snrt_l1_malloc(256);
         get_cls_shared_ptrs()[1] = snrt_l1_malloc(4);
-        get_cls_shared_ptrs()[0][0] = ((uint32_t *)arg)[0];
-        get_cls_shared_ptrs()[0][1] = ((uint32_t *)arg)[1];
+        get_cls_shared_ptrs()[0][0] = ((uint32_t*)arg)[0];
+        get_cls_shared_ptrs()[0][1] = ((uint32_t*)arg)[1];
         uint32_t csr_addr = get_cls_shared_ptrs()[0][0];
         uint32_t csr_write_value = get_cls_shared_ptrs()[0][1];
         uint32_t csr_read_value = get_cls_shared_ptrs()[1][0];
@@ -82,25 +82,25 @@ SNAX_LIB_DEFINE void __snax_kernel_csr(void *arg) {
     }
 }
 
-SNAX_LIB_DEFINE void __snax_kernel_check_results(void *arg) {
+SNAX_LIB_DEFINE void __snax_kernel_check_results(void* arg) {
     // This function is used to check the results of the computation
     // We assume the data type is uint32_t
     // Arg0: golden_data_addr
     // Arg1: output_data_addr
     // Arg2: data_size in Byte
     if (snrt_is_dm_core()) {
-        uint32_t golden_data_addr = ((uint32_t *)arg)[0];
-        uint32_t output_data_addr = ((uint32_t *)arg)[1];
-        uint32_t data_size = ((uint32_t *)arg)[2];
+        uint32_t golden_data_addr = ((uint32_t*)arg)[0];
+        uint32_t output_data_addr = ((uint32_t*)arg)[1];
+        uint32_t data_size = ((uint32_t*)arg)[2];
         uint32_t num_errors = 0;
         for (uint32_t i = 0; i < data_size / sizeof(uint32_t); i++) {
-            if (((uint32_t *)golden_data_addr)[i] !=
-                ((uint32_t *)output_data_addr)[i]) {
+            if (((uint32_t*)golden_data_addr)[i] !=
+                ((uint32_t*)output_data_addr)[i]) {
                 num_errors++;
                 if (num_errors < 10) {
                     printf("Error at index %d: golden = %d, output = %d\n", i,
-                           ((uint32_t *)golden_data_addr)[i],
-                           ((uint32_t *)output_data_addr)[i]);
+                           ((uint32_t*)golden_data_addr)[i],
+                           ((uint32_t*)output_data_addr)[i]);
                 }
             }
         }
@@ -112,7 +112,7 @@ SNAX_LIB_DEFINE void __snax_kernel_check_results(void *arg) {
     }
 }
 
-SNAX_LIB_DEFINE void __snax_kernel_load_compute_store(void *arg) {
+SNAX_LIB_DEFINE void __snax_kernel_load_compute_store(void* arg) {
     // Arg0: uint32_t input_data_addr
     // Arg1: uint32_t input_data_size in Byte
     // Arg2: uint32_t output_data_addr
@@ -126,10 +126,10 @@ SNAX_LIB_DEFINE void __snax_kernel_load_compute_store(void *arg) {
         // Each arg is 4 bytes, so we can store 64 args
 
         get_cls_shared_ptrs()[0] = snrt_l1_malloc(256);
-        get_cls_shared_ptrs()[0][0] = ((uint32_t *)arg)[0];
-        get_cls_shared_ptrs()[0][1] = ((uint32_t *)arg)[1];
-        get_cls_shared_ptrs()[0][2] = ((uint32_t *)arg)[2];
-        get_cls_shared_ptrs()[0][3] = ((uint32_t *)arg)[3];
+        get_cls_shared_ptrs()[0][0] = ((uint32_t*)arg)[0];
+        get_cls_shared_ptrs()[0][1] = ((uint32_t*)arg)[1];
+        get_cls_shared_ptrs()[0][2] = ((uint32_t*)arg)[2];
+        get_cls_shared_ptrs()[0][3] = ((uint32_t*)arg)[3];
         // We then allocate the space for input and output data
         get_cls_shared_ptrs()[1] = snrt_l1_malloc(get_cls_shared_ptrs()[0][1]);
         get_cls_shared_ptrs()[2] = snrt_l1_malloc(get_cls_shared_ptrs()[0][3]);
@@ -148,8 +148,8 @@ SNAX_LIB_DEFINE void __snax_kernel_load_compute_store(void *arg) {
     snrt_cluster_hw_barrier();
     if (snrt_is_dm_core()) {
         // load the input data
-        snrt_dma_start_1d((void *)get_cls_shared_ptrs()[1],
-                          (void *)get_cls_shared_ptrs()[0][0],
+        snrt_dma_start_1d((void*)get_cls_shared_ptrs()[1],
+                          (void*)get_cls_shared_ptrs()[0][0],
                           get_cls_shared_ptrs()[0][1]);
         snrt_dma_wait_all();
         printf("[Cluster %d] Core(%d) Load Input Data\n", snrt_cluster_idx(),
@@ -183,8 +183,8 @@ SNAX_LIB_DEFINE void __snax_kernel_load_compute_store(void *arg) {
     snrt_cluster_hw_barrier();
     if (snrt_is_dm_core()) {
         // We store the output data
-        snrt_dma_start_1d((void *)get_cls_shared_ptrs()[0][2],
-                          (void *)get_cls_shared_ptrs()[1],
+        snrt_dma_start_1d((void*)get_cls_shared_ptrs()[0][2],
+                          (void*)get_cls_shared_ptrs()[1],
                           get_cls_shared_ptrs()[0][3]);
         snrt_dma_wait_all();
         printf("[Cluster %d] Core(%d) Store Data\n", snrt_cluster_idx(),
@@ -199,13 +199,13 @@ SNAX_LIB_DEFINE void __snax_kernel_load_compute_store(void *arg) {
         printf("[Cluster %d] Core(%d) Free allocated heap memory\n",
                snrt_cluster_idx(), snrt_cluster_core_idx());
         snrt_memset(get_cls_shared_ptrs(), 0,
-                    sizeof(uint32_t *) * NUM_CLS_SHARED_PTRS);
+                    sizeof(uint32_t*) * NUM_CLS_SHARED_PTRS);
         printf("[Cluster %d] Core(%d) Free shared pointers\n",
                snrt_cluster_idx(), snrt_cluster_core_idx());
     }
 }
 
-SNAX_LIB_DEFINE void __snax_kernel_xdma_1d_copy(void *arg) {
+SNAX_LIB_DEFINE void __snax_kernel_xdma_1d_copy(void* arg) {
     // Copy 1d data from src to dst using xdma
     // Arg0: uint32_t src_addr_hi
     // Arg1: uint32_t src_addr_lo
@@ -218,11 +218,11 @@ SNAX_LIB_DEFINE void __snax_kernel_xdma_1d_copy(void *arg) {
     uint32_t data_size;
 
     if (snrt_is_dm_core()) {
-        src_addr = ((uint64_t)((uint32_t *)arg)[0] << 32) |
-                   ((uint64_t)((uint32_t *)arg)[1]);
-        dst_addr = ((uint64_t)((uint32_t *)arg)[2] << 32) |
-                   ((uint64_t)((uint32_t *)arg)[3]);
-        data_size = ((uint32_t *)arg)[4];
+        src_addr = ((uint64_t)((uint32_t*)arg)[0] << 32) |
+                   ((uint64_t)((uint32_t*)arg)[1]);
+        dst_addr = ((uint64_t)((uint32_t*)arg)[2] << 32) |
+                   ((uint64_t)((uint32_t*)arg)[3]);
+        data_size = ((uint32_t*)arg)[4];
 
         if (xdma_disable_dst_ext(0) != 0) {
             printf("Error in disabling xdma writer extension 0\n");
@@ -234,7 +234,7 @@ SNAX_LIB_DEFINE void __snax_kernel_xdma_1d_copy(void *arg) {
             printf("Error in disabling xdma reader extension 0\n");
         }
 
-        xdma_memcpy_1d((void *)src_addr, (void *)dst_addr, data_size);
+        xdma_memcpy_1d((void*)src_addr, (void*)dst_addr, data_size);
 
         int task_id = xdma_start();
         xdma_remote_wait(task_id);
@@ -242,7 +242,8 @@ SNAX_LIB_DEFINE void __snax_kernel_xdma_1d_copy(void *arg) {
 }
 
 //////////////////////// VERSACORE ////////////////////////
-SNAX_LIB_DEFINE void __snax_kernel_versacore_load_compute_store_w_streamer_args(void *arg){
+SNAX_LIB_DEFINE void __snax_kernel_versacore_load_compute_store_w_streamer_args(
+    void* arg) {
     // Compute D = A*B + C using versacore
     // A: int8
     // B: int8
@@ -282,8 +283,10 @@ SNAX_LIB_DEFINE void __snax_kernel_versacore_load_compute_store_w_streamer_args(
     // shared_ptrs[4] l1_D_data_ptr
     // shared_ptrs[5] l1_streamer_cfg_ptr
     // shared_ptrs[6] l1_versacore_cfg_ptr
-    uint64_t l3_input_A_addr, l3_input_B_addr, l3_input_C_addr, l3_streamer_cfg_addr, l3_versacore_cfg_addr;
-    uint32_t input_A_size, input_B_size, input_C_size, streamer_cfg_size, versacore_cfg_size;
+    uint64_t l3_input_A_addr, l3_input_B_addr, l3_input_C_addr,
+        l3_streamer_cfg_addr, l3_versacore_cfg_addr;
+    uint32_t input_A_size, input_B_size, input_C_size, streamer_cfg_size,
+        versacore_cfg_size;
 
     if (snrt_is_dm_core()) {
         // We have two dma in the system
@@ -300,20 +303,24 @@ SNAX_LIB_DEFINE void __snax_kernel_versacore_load_compute_store_w_streamer_args(
         ////////////////////////////////////
         // Call the idma to load the args //
         ////////////////////////////////////
-        // First we need to use the DMA to load all the arguments from L3 into L1
-        // Here we assume the arguments are packed in a contiguous way in L3
+        // First we need to use the DMA to load all the arguments from L3 into
+        // L1 Here we assume the arguments are packed in a contiguous way in L3
 
-        snrt_dma_start_1d((void *)get_cls_shared_ptrs()[0], (void *)arg, ((uint32_t *)arg)[17]);
+        snrt_dma_start_1d((void*)get_cls_shared_ptrs()[0], (void*)arg,
+                          ((uint32_t*)arg)[17]);
         snrt_dma_wait_all();
 
-        // printf("[Cluster %d] Core(%d) Load Kernel Args: Dst = %x, Src = %x\n", snrt_cluster_idx(),
+        // printf("[Cluster %d] Core(%d) Load Kernel Args: Dst = %x, Src =
+        // %x\n", snrt_cluster_idx(),
         //        snrt_cluster_core_idx(), get_cls_shared_ptrs()[0], arg);
 
         // printf("[Cluster %d] Core(%d) Kernel Args:\n", snrt_cluster_idx(),
         //        snrt_cluster_core_idx());
-        // for (uint32_t i = 0; i < ((uint32_t *)l1_arg_ptr)[17] / sizeof(uint32_t);
+        // for (uint32_t i = 0; i < ((uint32_t *)l1_arg_ptr)[17] /
+        // sizeof(uint32_t);
         //      i++) {
-        //     printf("[Cluster %d] Core(%d) Arg[%d] = %x\n", snrt_cluster_idx(),
+        //     printf("[Cluster %d] Core(%d) Arg[%d] = %x\n",
+        //     snrt_cluster_idx(),
         //            snrt_cluster_core_idx(), i, ((uint32_t *)l1_arg_ptr)[i]);
         // }
         /////////////////////////////////////////
@@ -336,65 +343,86 @@ SNAX_LIB_DEFINE void __snax_kernel_versacore_load_compute_store_w_streamer_args(
         ///////////////////////////////
         // Call the dma to load A    //
         ///////////////////////////////
-        l3_input_A_addr = make_u64(get_cls_shared_ptrs()[0][0], get_cls_shared_ptrs()[0][1]);
+        l3_input_A_addr =
+            make_u64(get_cls_shared_ptrs()[0][0], get_cls_shared_ptrs()[0][1]);
         input_A_size = (get_cls_shared_ptrs()[0][2]);
-        xdma_memcpy_1d((void *)l3_input_A_addr, (void *)get_cls_shared_ptrs()[1], input_A_size);
+        xdma_memcpy_1d((void*)l3_input_A_addr, (void*)get_cls_shared_ptrs()[1],
+                       input_A_size);
         int task_id = xdma_start();
-        xdma_remote_wait(task_id);  
-        printf("[Cluster %d] Core(%d) Load Input A: Dst = %x, Src = %x\n", snrt_cluster_idx(),
-               snrt_cluster_core_idx(), get_cls_shared_ptrs()[1], (uint32_t)l3_input_A_addr);
+        xdma_remote_wait(task_id);
+        printf("[Cluster %d] Core(%d) Load Input A: Dst = %x, Src = %x\n",
+               snrt_cluster_idx(), snrt_cluster_core_idx(),
+               get_cls_shared_ptrs()[1], (uint32_t)l3_input_A_addr);
         printf("[Cluster %d] Core(%d) Input A[0] = %d\n", snrt_cluster_idx(),
                snrt_cluster_core_idx(), get_cls_shared_ptrs()[1][0]);
         ///////////////////////////////
         // Call the dma to load B    //
         ///////////////////////////////
-        l3_input_B_addr = make_u64(get_cls_shared_ptrs()[0][3], get_cls_shared_ptrs()[0][4]);
+        l3_input_B_addr =
+            make_u64(get_cls_shared_ptrs()[0][3], get_cls_shared_ptrs()[0][4]);
         input_B_size = (get_cls_shared_ptrs()[0][5]);
-        xdma_memcpy_1d((void *)l3_input_B_addr, (void *)get_cls_shared_ptrs()[2], input_B_size);
+        xdma_memcpy_1d((void*)l3_input_B_addr, (void*)get_cls_shared_ptrs()[2],
+                       input_B_size);
         task_id = xdma_start();
         xdma_remote_wait(task_id);
-        // printf("[Cluster %d] Core(%d) Load Input B: Dst = %x, Src = %x\n", snrt_cluster_idx(),
-        //        snrt_cluster_core_idx(), get_cls_shared_ptrs()[2], (uint32_t)l3_input_B_addr);
+        // printf("[Cluster %d] Core(%d) Load Input B: Dst = %x, Src = %x\n",
+        // snrt_cluster_idx(),
+        //        snrt_cluster_core_idx(), get_cls_shared_ptrs()[2],
+        //        (uint32_t)l3_input_B_addr);
         printf("[Cluster %d] Core(%d) Input B[0] = %d\n", snrt_cluster_idx(),
                snrt_cluster_core_idx(), get_cls_shared_ptrs()[2][0]);
         ///////////////////////////////
         // Call the dma to load C    //
         ///////////////////////////////
-        l3_input_C_addr = make_u64(get_cls_shared_ptrs()[0][6], get_cls_shared_ptrs()[0][7]);
+        l3_input_C_addr =
+            make_u64(get_cls_shared_ptrs()[0][6], get_cls_shared_ptrs()[0][7]);
         input_C_size = (get_cls_shared_ptrs()[0][8]);
-        xdma_memcpy_1d((void *)l3_input_C_addr, (void *)get_cls_shared_ptrs()[3], input_C_size);
+        xdma_memcpy_1d((void*)l3_input_C_addr, (void*)get_cls_shared_ptrs()[3],
+                       input_C_size);
         task_id = xdma_start();
         xdma_remote_wait(task_id);
         printf("[Cluster %d] Core(%d) Input C[0] = %d\n", snrt_cluster_idx(),
                snrt_cluster_core_idx(), get_cls_shared_ptrs()[3][0]);
-        // printf("[Cluster %d] Core(%d) Load Input C: Dst = %x, Src = %x\n", snrt_cluster_idx(),
-        //        snrt_cluster_core_idx(), get_cls_shared_ptrs()[3], (uint32_t)l3_input_C_addr);
+        // printf("[Cluster %d] Core(%d) Load Input C: Dst = %x, Src = %x\n",
+        // snrt_cluster_idx(),
+        //        snrt_cluster_core_idx(), get_cls_shared_ptrs()[3],
+        //        (uint32_t)l3_input_C_addr);
         //////////////////////////////////////////////////////////////
         // Allocated the L1 memory for Stream and Versacore CSRs    //
         //////////////////////////////////////////////////////////////
-        get_cls_shared_ptrs()[5] = snrt_l1_malloc(((uint32_t *)get_cls_shared_ptrs()[0])[13]);
+        get_cls_shared_ptrs()[5] =
+            snrt_l1_malloc(((uint32_t*)get_cls_shared_ptrs()[0])[13]);
         // l1_streamer_cfg_ptr = get_cls_shared_ptrs()[5];
-        get_cls_shared_ptrs()[6] = snrt_l1_malloc(((uint32_t *)get_cls_shared_ptrs()[0])[16]);
+        get_cls_shared_ptrs()[6] =
+            snrt_l1_malloc(((uint32_t*)get_cls_shared_ptrs()[0])[16]);
         // l1_versacore_cfg_ptr = get_cls_shared_ptrs()[6];
 
         //////////////////////////////////////////
         // Call the dma to load streamer cfg    //
         //////////////////////////////////////////
-        l3_streamer_cfg_addr = make_u64(get_cls_shared_ptrs()[0][11], get_cls_shared_ptrs()[0][12]);
+        l3_streamer_cfg_addr = make_u64(get_cls_shared_ptrs()[0][11],
+                                        get_cls_shared_ptrs()[0][12]);
         streamer_cfg_size = (get_cls_shared_ptrs()[0][13]);
-        snrt_dma_start_1d((void *)get_cls_shared_ptrs()[5], (void *)l3_streamer_cfg_addr, streamer_cfg_size);
+        snrt_dma_start_1d((void*)get_cls_shared_ptrs()[5],
+                          (void*)l3_streamer_cfg_addr, streamer_cfg_size);
         snrt_dma_wait_all();
-        // printf("[Cluster %d] Core(%d) Load Streamer Cfg: Dst = %x, Src = %x\n", snrt_cluster_idx(),
-        //        snrt_cluster_core_idx(), get_cls_shared_ptrs()[5], l3_streamer_cfg_addr);
+        // printf("[Cluster %d] Core(%d) Load Streamer Cfg: Dst = %x, Src =
+        // %x\n", snrt_cluster_idx(),
+        //        snrt_cluster_core_idx(), get_cls_shared_ptrs()[5],
+        //        l3_streamer_cfg_addr);
         //////////////////////////////////////////
         // Call the dma to load versacore cfg   //
         //////////////////////////////////////////
-        l3_versacore_cfg_addr = make_u64(get_cls_shared_ptrs()[0][14], get_cls_shared_ptrs()[0][15]);
+        l3_versacore_cfg_addr = make_u64(get_cls_shared_ptrs()[0][14],
+                                         get_cls_shared_ptrs()[0][15]);
         versacore_cfg_size = (get_cls_shared_ptrs()[0][16]);
-        snrt_dma_start_1d((void *)get_cls_shared_ptrs()[6], (void *)l3_versacore_cfg_addr, versacore_cfg_size);
+        snrt_dma_start_1d((void*)get_cls_shared_ptrs()[6],
+                          (void*)l3_versacore_cfg_addr, versacore_cfg_size);
         snrt_dma_wait_all();
-        // printf("[Cluster %d] Core(%d) Load Versacore Cfg: Dst = %x, Src = %x\n", snrt_cluster_idx(),
-        //        snrt_cluster_core_idx(), get_cls_shared_ptrs()[6], l3_versacore_cfg_addr);
+        // printf("[Cluster %d] Core(%d) Load Versacore Cfg: Dst = %x, Src =
+        // %x\n", snrt_cluster_idx(),
+        //        snrt_cluster_core_idx(), get_cls_shared_ptrs()[6],
+        //        l3_versacore_cfg_addr);
     }
     snrt_cluster_hw_barrier();
     // The core 0 will be responsible for configuring and starting the versacore
@@ -407,35 +435,35 @@ SNAX_LIB_DEFINE void __snax_kernel_versacore_load_compute_store_w_streamer_args(
         // format is defined. For now this fixes the type mismatches so CSR
         // writes receive proper scalars vs pointers.
         set_versacore_streamer_csr(
-            (uint32_t)(uintptr_t)get_cls_shared_ptrs()[1],                  // A_addr
-            (uint32_t*)get_cls_shared_ptrs()[5][0],              // Aslstride[] base
-            (uint32_t*)get_cls_shared_ptrs()[5][1],              // Atlbound[] base
-            (uint32_t*)get_cls_shared_ptrs()[5][2],              // Atlstride[] base
-            get_cls_shared_ptrs()[5][3],               // set_addr_remap_index_A
-            get_cls_shared_ptrs()[5][4],               // transpose_A
-            (uint32_t*)get_cls_shared_ptrs()[5][5],              // channel_en_A []
+            (uint32_t)(uintptr_t)get_cls_shared_ptrs()[1],  // A_addr
+            (uint32_t*)get_cls_shared_ptrs()[5][0],         // Aslstride
+            (uint32_t*)get_cls_shared_ptrs()[5][1],         // Atlbound[] base
+            (uint32_t*)get_cls_shared_ptrs()[5][2],         // Atlstride[] base
+            get_cls_shared_ptrs()[5][3],             // set_addr_remap_index_A
+            get_cls_shared_ptrs()[5][4],             // transpose_A
+            (uint32_t*)get_cls_shared_ptrs()[5][5],  // channel_en_A []
 
-            (uint32_t)(uintptr_t)get_cls_shared_ptrs()[2],                  // B_addr
-            (uint32_t*)get_cls_shared_ptrs()[5][6],              // Bslstride[] base
-            (uint32_t*)get_cls_shared_ptrs()[5][7],              // Btlbound[] base
-            (uint32_t*)get_cls_shared_ptrs()[5][8],              // Btlstride[] base
-            get_cls_shared_ptrs()[5][9],               // set_addr_remap_index_B
-            get_cls_shared_ptrs()[5][10],              // transpose_B
-            (uint32_t*)get_cls_shared_ptrs()[5][11],             // channel_en_B []
+            (uint32_t)(uintptr_t)get_cls_shared_ptrs()[2],  // B_addr
+            (uint32_t*)get_cls_shared_ptrs()[5][6],         // Bslstride[] base
+            (uint32_t*)get_cls_shared_ptrs()[5][7],         // Btlbound[] base
+            (uint32_t*)get_cls_shared_ptrs()[5][8],         // Btlstride[] base
+            get_cls_shared_ptrs()[5][9],              // set_addr_remap_index_B
+            get_cls_shared_ptrs()[5][10],             // transpose_B
+            (uint32_t*)get_cls_shared_ptrs()[5][11],  // channel_en_B []
 
-            (uint32_t)(uintptr_t)get_cls_shared_ptrs()[3],                  // C_addr
-            (uint32_t*)get_cls_shared_ptrs()[5][12],             // Cslstride[] base
-            (uint32_t*)get_cls_shared_ptrs()[5][13],             // Ctlbound[] base
-            (uint32_t*)get_cls_shared_ptrs()[5][14],             // Ctlstride[] base
-            get_cls_shared_ptrs()[5][15],              // set_addr_remap_index_C
-            (uint32_t*)get_cls_shared_ptrs()[5][16],             // channel_en_C []
+            (uint32_t)(uintptr_t)get_cls_shared_ptrs()[3],  // C_addr
+            (uint32_t*)get_cls_shared_ptrs()[5][12],        // Cslstride[] base
+            (uint32_t*)get_cls_shared_ptrs()[5][13],        // Ctlbound[] base
+            (uint32_t*)get_cls_shared_ptrs()[5][14],        // Ctlstride[] base
+            get_cls_shared_ptrs()[5][15],             // set_addr_remap_index_C
+            (uint32_t*)get_cls_shared_ptrs()[5][16],  // channel_en_C []
 
-            (uint32_t)(uintptr_t)get_cls_shared_ptrs()[4],                  // D_addr
-            (uint32_t*)get_cls_shared_ptrs()[5][17],             // D32slstride[] base
-            (uint32_t*)get_cls_shared_ptrs()[5][18],             // D32tlbound[] base
-            (uint32_t*)get_cls_shared_ptrs()[5][19],             // D32tlstride[] base
-            get_cls_shared_ptrs()[5][20],              // set_addr_remap_index_D32
-            (uint32_t*)get_cls_shared_ptrs()[5][21]              // channel_en_D32 []
+            (uint32_t)(uintptr_t)get_cls_shared_ptrs()[4],  // D_addr
+            (uint32_t*)get_cls_shared_ptrs()[5][17],  // D32slstride[] base
+            (uint32_t*)get_cls_shared_ptrs()[5][18],  // D32tlbound[] base
+            (uint32_t*)get_cls_shared_ptrs()[5][19],  // D32tlstride[] base
+            get_cls_shared_ptrs()[5][20],            // set_addr_remap_index_D32
+            (uint32_t*)get_cls_shared_ptrs()[5][21]  // channel_en_D32 []
         );
         // printf("[Cluster %d] Core(%d) Config Streamer\n",snrt_cluster_idx(),
         //        snrt_cluster_core_idx());
@@ -448,47 +476,55 @@ SNAX_LIB_DEFINE void __snax_kernel_versacore_load_compute_store_w_streamer_args(
         // printf("[Cluster %d] Core(%d) D_addr = %x\n",snrt_cluster_idx(),
         //        snrt_cluster_core_idx(), get_cls_shared_ptrs()[4]);
         // for (int i=0; i<22; i++){
-        //     printf("[Cluster %d] Core(%d) Streamer_cfg[%d] = %x\n",snrt_cluster_idx(),
+        //     printf("[Cluster %d] Core(%d) Streamer_cfg[%d] =
+        //     %x\n",snrt_cluster_idx(),
         //        snrt_cluster_core_idx(), i, get_cls_shared_ptrs()[5][i]);
         // }
 
         set_versacore_csr(
-            get_cls_shared_ptrs()[6][0],  //tempLoop0
-            get_cls_shared_ptrs()[6][1],  //tempLoop1
-            get_cls_shared_ptrs()[6][2],  //tempLoop2
-            gen_subtraction_config((int8_t)get_cls_shared_ptrs()[6][3], (int8_t)get_cls_shared_ptrs()[6][4]), //subtraction
-            get_cls_shared_ptrs()[6][5],  //array_shape
-            get_cls_shared_ptrs()[6][6]   //data_type
+            get_cls_shared_ptrs()[6][0],  // tempLoop0
+            get_cls_shared_ptrs()[6][1],  // tempLoop1
+            get_cls_shared_ptrs()[6][2],  // tempLoop2
+            gen_subtraction_config(
+                (int8_t)get_cls_shared_ptrs()[6][3],
+                (int8_t)get_cls_shared_ptrs()[6][4]),  // subtraction
+            get_cls_shared_ptrs()[6][5],               // array_shape
+            get_cls_shared_ptrs()[6][6]                // data_type
         );
         // printf("[Cluster %d] Core(%d) Config Versacore\n",snrt_cluster_idx(),
         //        snrt_cluster_core_idx());
         // for (int i=0; i<7; i++){
-        //     printf("[Cluster %d] Core(%d) Versacore_cfg[%d] = %x\n",snrt_cluster_idx(),
+        //     printf("[Cluster %d] Core(%d) Versacore_cfg[%d] =
+        //     %x\n",snrt_cluster_idx(),
         //        snrt_cluster_core_idx(), i, get_cls_shared_ptrs()[6][i]);
         // }
         ////////////////////////////////////
         // Start the Streamer and Versacore
         ////////////////////////////////////
         start_versacore_and_streamer();
-        printf("[Cluster %d] Core(%d) Start Versacore\n",snrt_cluster_idx(),
+        printf("[Cluster %d] Core(%d) Start Versacore\n", snrt_cluster_idx(),
                snrt_cluster_core_idx());
         // Wait for the Versacore to finish
         wait_versacore_and_streamer();
     }
-    
+
     snrt_cluster_hw_barrier();
     if (snrt_is_dm_core()) {
         // Send the output data back to L3
-        uint64_t l3_output_addr = make_u64(get_cls_shared_ptrs()[0][9], get_cls_shared_ptrs()[0][10]);
+        uint64_t l3_output_addr =
+            make_u64(get_cls_shared_ptrs()[0][9], get_cls_shared_ptrs()[0][10]);
         uint32_t output_size = get_cls_shared_ptrs()[0][8];
         // D is the temporary output buffer in L1
-        printf("[Cluster %d] Core(%d) Quick check on D[0] = %d\n", snrt_cluster_idx(),
-               snrt_cluster_core_idx(), get_cls_shared_ptrs()[4][0]);
-        xdma_memcpy_1d((void *)get_cls_shared_ptrs()[4], (void *)l3_output_addr, output_size);
+        printf("[Cluster %d] Core(%d) Quick check on D[0] = %d\n",
+               snrt_cluster_idx(), snrt_cluster_core_idx(),
+               get_cls_shared_ptrs()[4][0]);
+        xdma_memcpy_1d((void*)get_cls_shared_ptrs()[4], (void*)l3_output_addr,
+                       output_size);
         int task_id = xdma_start();
         xdma_remote_wait(task_id);
-        printf("[Cluster %d] Core(%d) Store Output: Dst = %x, Src = %x\n", snrt_cluster_idx(),
-               snrt_cluster_core_idx(), get_cls_shared_ptrs()[4], (uint32_t)l3_output_addr);
+        printf("[Cluster %d] Core(%d) Store Output: Dst = %x, Src = %x\n",
+               snrt_cluster_idx(), snrt_cluster_core_idx(),
+               get_cls_shared_ptrs()[4], (uint32_t)l3_output_addr);
         // Free the allocated L1 memory
         snrt_l1_free(get_cls_shared_ptrs()[0]);
         snrt_l1_free(get_cls_shared_ptrs()[1]);
@@ -499,26 +535,392 @@ SNAX_LIB_DEFINE void __snax_kernel_versacore_load_compute_store_w_streamer_args(
         snrt_l1_free(get_cls_shared_ptrs()[6]);
         // Reset the shared pointers
         snrt_memset(get_cls_shared_ptrs(), 0,
-                    sizeof(uint32_t *) * NUM_CLS_SHARED_PTRS);
+                    sizeof(uint32_t*) * NUM_CLS_SHARED_PTRS);
     }
 }
 
+SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
+    // arg0: uint32_t A_addr_hi
+    // arg1: uint32_t A_addr_lo
+    // arg2: uint32_t B_addr_hi
+    // arg3: uint32_t B_addr_lo
+    // arg4: uint32_t C_addr_hi
+    // arg5: uint32_t C_addr_lo
+    // arg6: uint32_t D_addr_hi
+    // arg7: uint32_t D_addr_lo
+    // arg8: uint32_t M
+    // arg9: uint32_t K
+    // arg10: uint32_t N
+    // arg11: uint32_t array_shape_idx
+    // arg12: transpose A
+    // arg13: transpose B
 
-SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void *arg){
+    ///////////////////////////////////////
+    // Allocate the L1 memory for args   //
+    ///////////////////////////////////////
+    // We allocate 128 bytes of heap memory for the args
+    // Each arg is 4 bytes, so we can store 32 args
+    // this is shared by core-0 and core-1
+    uint64_t l3_input_A_addr, l3_input_B_addr, l3_input_C_addr,
+        l3_output_D_addr;
+    uint32_t M, K, N, array_shape_idx;
 
-// arg0: uint32_t A_addr_hi
-// arg1: uint32_t A_addr_lo
-// arg2: uint32_t B_addr_hi
-// arg3: uint32_t B_addr_lo
-// arg4: uint32_t C_addr_hi
-// arg5: uint32_t C_addr_lo
+    get_cls_shared_ptrs()[0] = snrt_l1_malloc(128);
 
-// arg6: uint32_t M
-// arg7: uint32_t N
-// arg8: uint32_t K
+    // move the args to local variables
+    if (snrt_is_dm_core()) {
+        ////////////////////////////////////
+        // Call the idma to load the args //
+        ////////////////////////////////////
+        // First we need to use the DMA to load all the arguments from L3 into
+        // L1 Here we assume the arguments are packed in a contiguous way in L3
 
-// arg9: uint32_t SU
+        snrt_dma_start_1d((void*)get_cls_shared_ptrs()[0], (void*)arg,
+                          sizeof(uint32_t) * 14);  // 14 uint32_t args in total
+        snrt_dma_wait_all();
 
+        /////////////////////////////////////////
+        // Allocate the L1 memory for Inputs   //
+        /////////////////////////////////////////
+        // Allocate the l1 space specifed by the arg
+        M = get_cls_shared_ptrs()[0][8];
+        K = get_cls_shared_ptrs()[0][9];
+        N = get_cls_shared_ptrs()[0][10];
+
+        // L1 data addresses
+        get_cls_shared_ptrs()[1] =
+            snrt_l1_malloc(M * K * sizeof(uint8_t));  // A MxK in uint8_t
+        get_cls_shared_ptrs()[2] =
+            snrt_l1_malloc(K * N * sizeof(uint8_t));  // B KxN in uint8_t
+        get_cls_shared_ptrs()[3] =
+            snrt_l1_malloc(M * N * sizeof(uint32_t));  // C MxN in uint32
+        get_cls_shared_ptrs()[4] =
+            snrt_l1_malloc(M * N * sizeof(uint32_t));  // D MxN in uint32
+
+        // Call the idma to load the inputs
+        l3_input_A_addr =
+            make_u64(get_cls_shared_ptrs()[0][0], get_cls_shared_ptrs()[0][1]);
+        xdma_memcpy_1d((void*)l3_input_A_addr, (void*)get_cls_shared_ptrs()[1],
+                       M * K * sizeof(uint8_t));
+        int task_id = xdma_start();
+        xdma_remote_wait(task_id);
+        l3_input_B_addr =
+            make_u64(get_cls_shared_ptrs()[0][2], get_cls_shared_ptrs()[0][3]);
+        xdma_memcpy_1d((void*)l3_input_B_addr, (void*)get_cls_shared_ptrs()[2],
+                       K * N * sizeof(uint8_t));
+        task_id = xdma_start();
+        xdma_remote_wait(task_id);
+        l3_input_C_addr =
+            make_u64(get_cls_shared_ptrs()[0][4], get_cls_shared_ptrs()[0][5]);
+        xdma_memcpy_1d((void*)l3_input_C_addr, (void*)get_cls_shared_ptrs()[3],
+                       M * N * sizeof(uint32_t));
+        task_id = xdma_start();
+        xdma_remote_wait(task_id);
+
+        // l3_output_D_addr is only used for output, no need to load
+        l3_output_D_addr =
+            make_u64(get_cls_shared_ptrs()[0][6], get_cls_shared_ptrs()[0][7]);
+    }
+
+    snrt_cluster_hw_barrier();
+
+    // The core 0 will be responsible for configuring and starting the versacore
+    if (snrt_cluster_core_idx() == 0) {
+        // compute the streamer cfg first
+        //////////////////////////////////////////////////////////////
+        // Allocated the L1 memory for Streamer CSRs    //
+        //////////////////////////////////////////////////////////////
+
+        // the snicth needs to generate these streamer cfgs
+        // 22 args in total
+        // A 6, B 6, C 5, D 5
+        get_cls_shared_ptrs()[5] = snrt_l1_malloc(sizeof(uint32_t) * 22);
+
+        //////////////////////////////////////////////////////////////
+        // streamer cfg for A
+        //////////////////////////////////////////////////////////////
+
+        // Aslstride0
+        get_cls_shared_ptrs()[5][0] = bankWidth / 8;
+        // Atlbound0~5
+        uint32_t* Atlbound = snrt_l1_malloc(sizeof(uint32_t) * 6);
+        get_cls_shared_ptrs()[5][1] = (uintptr_t)Atlbound;
+        // Atlbound0
+        Atlbound[0] = K;
+        // Atlbound1
+        Atlbound[1] = N;
+        // Atlbound2
+        Atlbound[2] = M;
+        // Atlbound3
+        Atlbound[3] = 1;
+        // Atlbound4
+        Atlbound[4] = 1;
+        // Atlbound5
+        Atlbound[5] = 1;
+
+        // Atlstride0~5
+        uint32_t* Atlstride = snrt_l1_malloc(sizeof(uint32_t) * 6);
+        get_cls_shared_ptrs()[5][2] = (uintptr_t)Atlstride;
+        // Atlstride0
+        if (array_shape_idx == 0) {
+            Atlstride[0] = meshRow_0 * tileSize_0;
+            // Atlstride1
+            Atlstride[1] = 0;
+            // Atlstride2
+            Atlstride[2] = meshRow_0 * tileSize_0 * K;
+            // Atlstride3
+            Atlstride[3] = 0;
+            // Atlstride4
+            Atlstride[4] = 0;
+        } else {
+            Atlstride[0] = meshRow_1 * tileSize_1;
+            // Atlstride1
+            Atlstride[1] = 0;
+            // Atlstride2
+            Atlstride[2] = meshRow_1 * tileSize_1 * K;
+            // Atlstride3
+            Atlstride[3] = 0;
+            // Atlstride4
+            Atlstride[4] = 0;
+        }
+
+        // set_addr_remap_index_A
+        get_cls_shared_ptrs()[5][3] = 0;
+        // transpose_A
+        get_cls_shared_ptrs()[5][4] = get_cls_shared_ptrs()[0][12];
+        // channel_en_A []
+        if (array_shape_idx == 0) {
+            get_cls_shared_ptrs()[5][5] = chanelEnA_0;
+        } else {
+            get_cls_shared_ptrs()[5][5] = chanelEnA_1;
+        }
+
+        //////////////////////////////////////////////////////////////
+        // streamer cfg for B
+        //////////////////////////////////////////////////////////////
+
+        // Bslstride0
+        get_cls_shared_ptrs()[5][6] = bankWidth / 8;
+
+        // Btlbound0~2
+        uint32_t* Btlbound = snrt_l1_malloc(sizeof(uint32_t) * 3);
+        get_cls_shared_ptrs()[5][7] = (uintptr_t)Btlbound;
+        // Btlbound0
+        Btlbound[0] = K;
+        // Btlbound1
+        Btlbound[1] = N;
+        // Btlbound2
+        Btlbound[2] = M;
+
+        // Btlstride0~2
+        uint32_t* Btlstride = snrt_l1_malloc(sizeof(uint32_t) * 3);
+        get_cls_shared_ptrs()[5][8] = (uintptr_t)Btlstride;
+        if (array_shape_idx == 0) {
+            // Btlstride0
+            Btlstride[0] = meshCol_0 * tileSize_0;
+            // Btlstride1
+            Btlstride[1] = meshCol_0 * tileSize_0 * K;
+        } else {
+            // Btlstride0
+            Btlstride[0] = meshCol_1 * tileSize_1;
+            // Btlstride1
+            Btlstride[1] = meshCol_1 * tileSize_1 * K;
+        }
+        // Btlstride2
+        Btlstride[2] = 0;
+
+        // set_addr_remap_index_B
+        get_cls_shared_ptrs()[5][9] = 0;
+        // transpose_B
+        get_cls_shared_ptrs()[5][10] = get_cls_shared_ptrs()[0][13];
+        // channel_en_B []
+        uint32_t* channel_en_B = snrt_l1_malloc(sizeof(uint32_t) * 2);
+        if (array_shape_idx == 0) {
+            channel_en_B[0] = chanelEnB_0_0;
+            channel_en_B[1] = chanelEnB_0_1;
+        } else {
+            channel_en_B[0] = chanelEnB_1_0;
+            channel_en_B[1] = chanelEnB_1_1;
+        }
+        get_cls_shared_ptrs()[5][11] = (uintptr_t)channel_en_B;
+
+        //////////////////////////////////////////////////////////////
+        // streamer cfg for C
+        //////////////////////////////////////////////////////////////
+        // Cslstride0
+        get_cls_shared_ptrs()[5][12] = bankWidth / 8;
+        // Ctlbound0~3
+        uint32_t* Ctlbound = snrt_l1_malloc(sizeof(uint32_t) * 4);
+        get_cls_shared_ptrs()[5][13] = (uintptr_t)Ctlbound;
+        // Ctlbound0
+        if (array_shape_idx == 0) {
+            Ctlbound[0] = Ctlbound_0_0;
+            Ctlbound[1] = N;
+            Ctlbound[2] = M;
+            Ctlbound[3] = 1;
+
+        } else {
+            Ctlbound[0] = Ctlbound_1_0;
+            Ctlbound[1] = N;
+            Ctlbound[2] = M;
+            Ctlbound[3] = 1;
+        }
+        // Ctlstride0~3
+        uint32_t* Ctlstride = snrt_l1_malloc(sizeof(uint32_t) * 4);
+        get_cls_shared_ptrs()[5][14] = (uintptr_t)Ctlstride;
+
+        if (array_shape_idx == 0) {
+            // Ctlstride0
+            Ctlstride[0] = c_spatial_bound_0_0 * (bankWidth / 8);
+            // Ctlstride1
+            Ctlstride[1] = C_elem_len * meshRow_0 * meshCol_0 / 8;
+            // Ctlstride2
+            Ctlstride[2] = N * C_elem_len * meshRow_0 * meshCol_0 / 8;
+            // Ctlstride3
+            Ctlstride[3] = 0;
+        }else{
+            // Ctlstride0
+            Ctlstride[0] = c_spatial_bound_0_1 * (bankWidth / 8);
+            // Ctlstride1
+            Ctlstride[1] = C_elem_len * meshRow_1 * meshCol_1 / 8;
+            // Ctlstride2
+            Ctlstride[2] = N * C_elem_len * meshRow_1 * meshCol_1 / 8;
+            // Ctlstride3
+            Ctlstride[3] = 0;
+        }
+        // set_addr_remap_index_C
+        get_cls_shared_ptrs()[5][15] = 0;
+        // channel_en_C []
+        if (array_shape_idx == 0) {
+            get_cls_shared_ptrs()[5][16] = chanelEnC_0;
+        } else {
+            get_cls_shared_ptrs()[5][16] = chanelEnC_1;
+        }
+
+        //////////////////////////////////////////////////////////////
+        // streamer cfg for D
+        //////////////////////////////////////////////////////////////
+        // D32slstride0
+        get_cls_shared_ptrs()[5][17] = bankWidth / 8;
+        // D32tlbound0~3
+        uint32_t* D32tlbound = snrt_l1_malloc(sizeof(uint32_t) * 4);
+        get_cls_shared_ptrs()[5][18] = (uintptr_t)D32tlbound;
+        // D32tlbound0~3
+        if (array_shape_idx == 0) {
+            D32tlbound[0] = D32tlbound_0_0;
+            D32tlbound[1] = N;
+            D32tlbound[2] = M;
+            D32tlbound[3] = 1;
+        } else {
+            D32tlbound[0] = D32tlbound_1_0;
+            D32tlbound[1] = N;
+            D32tlbound[2] = M;
+            D32tlbound[3] = 1;
+        }
+        // D32tlstride0~3
+        uint32_t* D32tlstride = snrt_l1_malloc(sizeof(uint32_t) * 4);
+        get_cls_shared_ptrs()[5][19] = (uintptr_t)D32tlstride;
+        if (array_shape_idx == 0) {
+            // D32tlstride0
+            D32tlstride[0] = d32_spatial_bound_0_0 * (bankWidth / 8);
+            // D32tlstride1
+            D32tlstride[1] = D32_elem_len * meshRow_0 * meshCol_0 / 8;
+            // D32tlstride2
+            D32tlstride[2] = N * D32_elem_len * meshRow_0 * meshCol_0 / 8;
+            // D32tlstride3
+            D32tlstride[3] = 0;
+        } else {
+            // D32tlstride0
+            D32tlstride[0] = d32_spatial_bound_0_1 * (bankWidth / 8);
+            // D32tlstride1
+            D32tlstride[1] = D32_elem_len * meshRow_1 * meshCol_1 / 8;
+            // D32tlstride2
+            D32tlstride[2] = N * D32_elem_len * meshRow_1 * meshCol_1 / 8;
+            // D32tlstride3
+            D32tlstride[3] = 0;
+        }
+        // set_addr_remap_index_D32
+        get_cls_shared_ptrs()[5][20] = 0;
+        // channel_en_D32 []
+        if (array_shape_idx == 0) {
+            get_cls_shared_ptrs()[5][21] = chanelEnD32_0;
+        } else {
+            get_cls_shared_ptrs()[5][21] = chanelEnD32_1;
+        }
+
+        //////////////////////////////////////////////////////////////
+        // Configuration the Steamer and Versacore
+        //////////////////////////////////////////////////////////////
+        set_versacore_streamer_csr(
+            (uint32_t)(uintptr_t)get_cls_shared_ptrs()[1], // A_addr
+            (uint32_t*)get_cls_shared_ptrs()[5][0],         // Aslstride
+            (uint32_t*)get_cls_shared_ptrs()[5][1],         // Atlbound[] base
+            (uint32_t*)get_cls_shared_ptrs()[5][2],         // Atlstride[] base
+            get_cls_shared_ptrs()[5][3],             // set_addr_remap_index_A
+            get_cls_shared_ptrs()[5][4],             // transpose_A
+            (uint32_t*)get_cls_shared_ptrs()[5][5],  // channel_en_A []
+
+            (uint32_t)(uintptr_t)get_cls_shared_ptrs()[2], // B_addr
+            (uint32_t*)get_cls_shared_ptrs()[5][6],         // Bslstride[] base
+            (uint32_t*)get_cls_shared_ptrs()[5][7],         // Btlbound[] base
+            (uint32_t*)get_cls_shared_ptrs()[5][8],         // Btlstride[] base
+            get_cls_shared_ptrs()[5][9],              // set_addr_remap_index_B
+            get_cls_shared_ptrs()[5][10],             // transpose_B
+            (uint32_t*)get_cls_shared_ptrs()[5][11],  // channel_en_B []
+
+            (uint32_t)(uintptr_t)get_cls_shared_ptrs()[3], // C_addr
+            (uint32_t*)get_cls_shared_ptrs()[5][12],        // Cslstride[] base
+            (uint32_t*)get_cls_shared_ptrs()[5][13],        // Ctlbound[] base
+            (uint32_t*)get_cls_shared_ptrs()[5][14],        // Ctlstride[] base
+            get_cls_shared_ptrs()[5][15],             // set_addr_remap_index_C
+            (uint32_t*)get_cls_shared_ptrs()[5][16],  // channel_en_C []
+
+            (uint32_t)(uintptr_t)get_cls_shared_ptrs()[4], // D_addr
+            (uint32_t*)get_cls_shared_ptrs()[5][17],  // D32slstride[] base
+            (uint32_t*)get_cls_shared_ptrs()[5][18],  // D32tlbound[] base
+            (uint32_t*)get_cls_shared_ptrs()[5][19],  // D32tlstride[] base
+            get_cls_shared_ptrs()[5][20],            // set_addr_remap_index_D32
+            (uint32_t*)get_cls_shared_ptrs()[5][21]  // channel_en_D32 []
+
+        );
+
+        set_versacore_csr(
+            1,
+            K,
+            N * M,
+            0,
+            array_shape_idx,
+            0
+        );
+
+        // Set CSR to start Streamer
+        start_versacore_and_streamer();
+
+        // Poll until Streamer and GEMM accelerator finish
+        wait_versacore_and_streamer();
+
+    }
+
+    snrt_cluster_hw_barrier();
+
+    // After computation, dma core will store the output back to L3
+    if (snrt_is_dm_core()) {
+        uint32_t output_size = M * N * sizeof(uint32_t);
+        xdma_memcpy_1d((void*)get_cls_shared_ptrs()[4], (void*)l3_output_D_addr,
+                       output_size);
+        int task_id = xdma_start();
+        xdma_remote_wait(task_id);
+        // Free the allocated L1 memory
+        snrt_l1_free(get_cls_shared_ptrs()[0]);
+        snrt_l1_free(get_cls_shared_ptrs()[1]);
+        snrt_l1_free(get_cls_shared_ptrs()[2]);
+        snrt_l1_free(get_cls_shared_ptrs()[3]);
+        snrt_l1_free(get_cls_shared_ptrs()[4]);
+        snrt_l1_free(get_cls_shared_ptrs()[5]);
+        // Reset the shared pointers
+        snrt_memset(get_cls_shared_ptrs(), 0,
+                    sizeof(uint32_t*) * NUM_CLS_SHARED_PTRS);
+    }
 }
 
 //////////////////////// SYMBOL TABLE ////////////////////////
@@ -529,6 +931,8 @@ SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
     SNAX_EXPORT_FUNC(__snax_kernel_csr),
     SNAX_EXPORT_FUNC(__snax_kernel_load_compute_store),
     SNAX_EXPORT_FUNC(__snax_kernel_xdma_1d_copy),
-    SNAX_EXPORT_FUNC(__snax_kernel_versacore_load_compute_store_w_streamer_args),
+    SNAX_EXPORT_FUNC(
+        __snax_kernel_versacore_load_compute_store_w_streamer_args),
+    SNAX_EXPORT_FUNC(__snax_kernel_gemm_intra_chiplet),
     SNAX_SYMTAB_END
 };

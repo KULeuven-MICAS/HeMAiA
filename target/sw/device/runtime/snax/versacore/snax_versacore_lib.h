@@ -199,7 +199,6 @@ void set_versacore_streamer_csr(
     csrw_ss(READER_EXTENSION_1_CSR_BASE, transpose_B == 1 ? 0 : 1);
 #endif
 
-
 }
 
 void start_streamer() { csrw_ss(STREAMER_START_CSR, 1); }
