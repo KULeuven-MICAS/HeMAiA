@@ -242,7 +242,7 @@ SNAX_LIB_DEFINE void __snax_kernel_xdma_1d_copy(void *arg) {
 }
 
 //////////////////////// VERSACORE ////////////////////////
-SNAX_LIB_DEFINE void __snax_kernel_versacore_load_compute_store(void *arg){
+SNAX_LIB_DEFINE void __snax_kernel_versacore_load_compute_store_w_streamer_args(void *arg){
     // Compute D = A*B + C using versacore
     // A: int8
     // B: int8
@@ -503,6 +503,24 @@ SNAX_LIB_DEFINE void __snax_kernel_versacore_load_compute_store(void *arg){
     }
 }
 
+
+SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void *arg){
+
+// arg0: uint32_t A_addr_hi
+// arg1: uint32_t A_addr_lo
+// arg2: uint32_t B_addr_hi
+// arg3: uint32_t B_addr_lo
+// arg4: uint32_t C_addr_hi
+// arg5: uint32_t C_addr_lo
+
+// arg6: uint32_t M
+// arg7: uint32_t N
+// arg8: uint32_t K
+
+// arg9: uint32_t SU
+
+}
+
 //////////////////////// SYMBOL TABLE ////////////////////////
 // Here we create the symbol table
 SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
@@ -511,6 +529,6 @@ SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
     SNAX_EXPORT_FUNC(__snax_kernel_csr),
     SNAX_EXPORT_FUNC(__snax_kernel_load_compute_store),
     SNAX_EXPORT_FUNC(__snax_kernel_xdma_1d_copy),
-    SNAX_EXPORT_FUNC(__snax_kernel_versacore_load_compute_store),
+    SNAX_EXPORT_FUNC(__snax_kernel_versacore_load_compute_store_w_streamer_args),
     SNAX_SYMTAB_END
 };
