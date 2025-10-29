@@ -31,7 +31,7 @@ Then you can go to the folder where the HeMAiA repo is located at, and execute t
 - Compile the software. The default CFG is the target/rtl/cfg/hemaia_ci.hjson. You can override the configuration to the one you want:
 
 ```bash
-make sw CFG_OVERRIDE==target/rtl/cfg/<YOUR_CFG>
+make sw CFG_OVERRIDE=target/rtl/cfg/<YOUR_CFG>
 ```
 
 We have two different software runtime:
@@ -55,7 +55,7 @@ make bootrom
 - Compile the SystemVerilog Code:
 
 ```bash
-make rtl CFG_OVERRIDE==target/rtl/cfg/<YOUR_CFG>
+make rtl CFG_OVERRIDE=target/rtl/cfg/<YOUR_CFG>
 ```
 
 ### Perform RTL simulation using Verilator
@@ -71,7 +71,7 @@ make hemaia_system_vlt -j$(nproc)
 - Execute the compiled binary:
 
 ```bash
-# @ target/sim_chip/bin
+# @ target/sim/bin
 ./occamy_chip.vlt
 ```
 
@@ -94,7 +94,7 @@ make hemaia_system_vsim
 - Execute the compiled binary:
 
 ```bash
-# @ target/sim_chip/bin
+# @ target/sim/bin
 ./occamy_chip.vsim[.gui]
 ```
 
@@ -117,8 +117,8 @@ make hemaia_system_vcs
 - Execute the compiled binary, with optional parameter to enable Verdi GUI and determine number of simulation threads:
 
 ```bash
-# @ target/sim_chip
-bin/occamy_chip.vcs [-gui] [-num_threads:8]
+# @ target/sim/bin
+./occamy_chip.vcs [-gui] [-num_threads:8]
 ```
 
 ### Perform FPGA Prototype
