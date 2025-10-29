@@ -152,7 +152,11 @@ $(SW_DEVICE_RT_DIR)/generated/occamy_defs.h: $(SW_DEVICE_RT_DIR)/template/occamy
 	@echo "[OCCAMYGEN] Generating $@"
 	@$(OCCAMYGEN) -c $(CFG) --outdir $(SW_DEVICE_RT_DIR)/generated --cheader $<
 
-sw: $(PLATFORM_HEADERS)
+host/runtime/host.ld:
+	@echo "[OCCAMYGEN] Generating host.ld"
+	@$(OCCAMYGEN) -c $(CFG) --gen-host-ld --outdir host/runtime
+
+sw: $(PLATFORM_HEADERS) host/runtime/host.ld
 	$(MAKE) -C host libs
 	$(MAKE) -C host TARGET=partial-build
 	$(MAKE) -C device all
