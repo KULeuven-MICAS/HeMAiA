@@ -175,3 +175,4 @@ clean:
 	rm -f $(PLATFORM_HEADERS)
 # clean generated hjson files
 	rm -rf $(TARGET_CLINT_DIR) $(TARGET_SOCCTRL_DIR) $(TARGET_QUADCTRL_DIR) $(TARGET_PLIC_DIR)
+	rm -rf host/runtime/host.ld
