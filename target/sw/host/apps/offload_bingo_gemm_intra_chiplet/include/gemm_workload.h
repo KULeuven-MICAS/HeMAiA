@@ -41,8 +41,13 @@ void __workload_versacore(bingo_task_t **task_list, uint32_t *num_tasks_ptr){
     gemm_args[2] = (uint32_t)(((uint64_t)(&B[0]) >> 32) & 0xFFFFFFFF);
     gemm_args[3] = (uint32_t)(((uint64_t)(&B[0]) >> 0) & 0xFFFFFFFF);
     // C matrix
-    gemm_args[4] = (uint32_t)(((uint64_t)(&C[0]) >> 32) & 0xFFFFFFFF);
-    gemm_args[5] = (uint32_t)(((uint64_t)(&C[0]) >> 0) & 0xFFFFFFFF);
+    if (addNewC == 0) {
+        gemm_args[4] = 0;
+        gemm_args[5] = 0;
+    } else {
+        gemm_args[4] = (uint32_t)(((uint64_t)(&C[0]) >> 32) & 0xFFFFFFFF);
+        gemm_args[5] = (uint32_t)(((uint64_t)(&C[0]) >> 0) & 0xFFFFFFFF);
+    }
     // D matrix (output)
     O1HeapInstance *local_l3_heap_manager = bingo_get_l3_heap_manager(current_chip_id);
     uintptr_t output_data_addr = (uintptr_t)o1heapAllocate(local_l3_heap_manager, sizeof(D) * sizeof(D[0]));
