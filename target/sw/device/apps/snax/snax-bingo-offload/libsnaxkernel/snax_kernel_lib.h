@@ -565,16 +565,20 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         l3_output_D_addr;
     uint32_t M, K, N, array_shape_idx;
 
-    get_cls_shared_ptrs()[0] = snrt_l1_malloc(128);
 
     // move the args to local variables
     if (snrt_is_dm_core()) {
+        get_cls_shared_ptrs()[0] = snrt_l1_malloc(128);
         ////////////////////////////////////
         // Call the idma to load the args //
         ////////////////////////////////////
         // First we need to use the DMA to load all the arguments from L3 into
         // L1 Here we assume the arguments are packed in a contiguous way in L3
-
+        // printf(
+        //     "[Cluster %d] Core(%d) Load GEMM Intra-Chiplet Kernel Args: Dst = %x, "
+        //     "Src = %x\n",
+        //     snrt_cluster_idx(), snrt_cluster_core_idx(),
+        //     get_cls_shared_ptrs()[0], arg);
         snrt_dma_start_1d((void*)get_cls_shared_ptrs()[0], (void*)arg,
                           sizeof(uint32_t) * 14);  // 14 uint32_t args in total
         snrt_dma_wait_all();
@@ -583,10 +587,13 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         // Allocate the L1 memory for Inputs   //
         /////////////////////////////////////////
         // Allocate the l1 space specifed by the arg
+
         M = get_cls_shared_ptrs()[0][8];
         K = get_cls_shared_ptrs()[0][9];
         N = get_cls_shared_ptrs()[0][10];
-
+        printf(
+            "[Cluster %d] Core(%d) GEMM Intra-Chiplet M=%d, K=%d, N=%d\n",
+            snrt_cluster_idx(), snrt_cluster_core_idx(), M, K, N);
         // L1 data addresses for A
         get_cls_shared_ptrs()[1] =
             snrt_l1_malloc(M * K * sizeof(uint8_t));  // A MxK in uint8_t
@@ -627,6 +634,11 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         // l3_output_D_addr is only used for output, no need to load
         l3_output_D_addr =
             make_u64(get_cls_shared_ptrs()[0][6], get_cls_shared_ptrs()[0][7]);
+        printf(
+            "[Cluster %d] Core(%d) Load Input A[0] = %d, B[0] = %d, C[0] = %d\n",
+            snrt_cluster_idx(), snrt_cluster_core_idx(),
+            get_cls_shared_ptrs()[1][0], get_cls_shared_ptrs()[2][0],
+            (l3_input_C_addr != 0) ? get_cls_shared_ptrs()[3][0] : 0);
     }
 
     snrt_cluster_hw_barrier();
@@ -894,6 +906,8 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         );
 
         set_versacore_csr(1, K, N * M, 0, array_shape_idx, 0);
+        printf("[Cluster %d] Core(%d) Config Streamer and Versacore\n",
+               snrt_cluster_idx(), snrt_cluster_core_idx());
 
         // Set CSR to start Streamer
         start_versacore_and_streamer();

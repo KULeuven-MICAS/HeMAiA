@@ -19,9 +19,8 @@ int kernel_execution() {
     /////////////////////////
     // User defined workload
     /////////////////////////
-
-    __workload_versacore(task_list, &num_tasks);
-    // __workload_versacore_w_streamer_args(task_list, &num_tasks);
+    uintptr_t output_data_ptr = 0;
+    num_tasks = __workload_versacore(task_list, &output_data_ptr);
 
     ////////////////////////////
     // End user defined workload

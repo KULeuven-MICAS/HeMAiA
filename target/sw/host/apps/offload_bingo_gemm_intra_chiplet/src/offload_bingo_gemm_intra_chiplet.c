@@ -13,7 +13,7 @@ int main() {
 
     init_uart(current_chip_address_prefix, 32, 1);
     printf("Single-chip Offload Bingo Main\r\n");
-    printf("Chip(%x, %x): [Host] Start Offloading Program\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+    // printf("Chip(%x, %x): [Host] Start Offloading Program\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
 
     ///////////////////////////////
     // 1. Init the clk manager
@@ -22,7 +22,7 @@ int main() {
     enable_clk_domain(0, 1);
     enable_clk_domain(1, 1);
     enable_clk_domain(2, 1);
-    printf("Chip(%x, %x): [Host] Init CLK Manager\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+    // printf("Chip(%x, %x): [Host] Init CLK Manager\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
 
     ///////////////////////////////
     // 2. Init the Allocator
@@ -31,7 +31,7 @@ int main() {
         printf("Chip(%x, %x): [Host] Error when initializing Allocator\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
         return -1;
     } else {
-        printf("Chip(%x, %x): [Host] Allocator Init Success\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+        // printf("Chip(%x, %x): [Host] Allocator Init Success\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
     }
     ///////////////////////////////
     // 3. Wake up all the clusters
@@ -55,7 +55,7 @@ int main() {
     // 3.3 Start Snitches
     wakeup_snitches_cl(current_chip_id);
     asm volatile("fence" ::: "memory");
-    printf("Chip(%x, %x): [Host] Wake up clusters\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+    // printf("Chip(%x, %x): [Host] Wake up clusters\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
 
     ///////////////////////////////
     // 4. Run the bingo runtime
