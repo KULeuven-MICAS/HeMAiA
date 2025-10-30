@@ -6,6 +6,13 @@
 
 #pragma once
 
+// #define VERSACORE_DEBUG
+#ifdef VERSACORE_DEBUG
+#define VERSACORE_DEBUG_PRINT(...) printf(__VA_ARGS__)
+#else
+#define VERSACORE_DEBUG_PRINT(...)
+#endif
+
 #define meshRow_0 32
 #define tileSize_0 4
 #define meshCol_0 32

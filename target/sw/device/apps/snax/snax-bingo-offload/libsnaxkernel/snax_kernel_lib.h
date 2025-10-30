@@ -548,10 +548,10 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         ///////////////////////////////////////
         get_cls_shared_ptrs()[0] = snrt_l1_malloc(128);
         if (!get_cls_shared_ptrs()[0]) {
-            printf("ERROR: arg alloc failed!\r\n");
+            VERSACORE_DEBUG_PRINT("ERROR: arg alloc failed!\r\n");
             return;
         } else {
-            printf("Allocated arg at %p\r\n", (void*)get_cls_shared_ptrs()[0]);
+            VERSACORE_DEBUG_PRINT("Allocated arg at %p\r\n", (void*)get_cls_shared_ptrs()[0]);
         }
 
         ////////////////////////////////////
@@ -559,7 +559,7 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         ////////////////////////////////////
         // First we need to use the DMA to load all the arguments from L3 into
         // L1 Here we assume the arguments are packed in a contiguous way in L3
-        printf("GEMM Intra-Chiplet Kernel Start!\r\n");
+        VERSACORE_DEBUG_PRINT("GEMM Intra-Chiplet Kernel Start!\r\n");
 
         snrt_dma_start_1d(
             (void*)get_cls_shared_ptrs()[0], (void*)arg,
@@ -586,14 +586,14 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         // get_cls_shared_ptrs()[0][16] tileSize
         // get_cls_shared_ptrs()[0][17] meshCol
 
-        printf("GEMM Intra-Chiplet Kernel Load Args Done!\r\n");
+        VERSACORE_DEBUG_PRINT("GEMM Intra-Chiplet Kernel Load Args Done!\r\n");
         /////////////////////////////////////////
         // Allocate the L1 memory for Inputs   //
         /////////////////////////////////////////
         // Allocate the l1 space specifed by the arg
         uint64_t l3_input_A_addr, l3_input_B_addr, l3_input_C_addr;
 
-        printf("M = %d, K = %d, N = %d, array_shape_idx = %d\r\n",
+        VERSACORE_DEBUG_PRINT("M = %d, K = %d, N = %d, array_shape_idx = %d\r\n",
                get_cls_shared_ptrs()[0][8], get_cls_shared_ptrs()[0][9],
                get_cls_shared_ptrs()[0][10], get_cls_shared_ptrs()[0][11]);
         if (get_cls_shared_ptrs()[0][11] == 0) {
@@ -612,10 +612,10 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
             (get_cls_shared_ptrs()[0][15]) * (get_cls_shared_ptrs()[0][16]) *
             sizeof(uint8_t));  // A MxK in uint8_t
         if (!get_cls_shared_ptrs()[1]) {
-            printf("ERROR: A alloc failed!\r\n");
+            VERSACORE_DEBUG_PRINT("ERROR: A alloc failed!\r\n");
             return;
         } else {
-            printf("Allocated A at %p\r\n", (void*)get_cls_shared_ptrs()[1]);
+            VERSACORE_DEBUG_PRINT("Allocated A at %p\r\n", (void*)get_cls_shared_ptrs()[1]);
         }
         // Call the idma to load the inputs
         l3_input_A_addr =
@@ -634,10 +634,10 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
             get_cls_shared_ptrs()[0][16] * get_cls_shared_ptrs()[0][17] *
             sizeof(uint8_t));  // B KxN in uint8_t
         if (!get_cls_shared_ptrs()[2]) {
-            printf("ERROR: B alloc failed!\r\n");
+            VERSACORE_DEBUG_PRINT("ERROR: B alloc failed!\r\n");
             return;
         } else {
-            printf("Allocated B at %p\r\n", (void*)get_cls_shared_ptrs()[2]);
+            VERSACORE_DEBUG_PRINT("Allocated B at %p\r\n", (void*)get_cls_shared_ptrs()[2]);
         }
 
         l3_input_B_addr =
@@ -661,10 +661,10 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
                 get_cls_shared_ptrs()[0][15] * get_cls_shared_ptrs()[0][17] *
                 sizeof(uint32_t));  // C MxN in uint32
             if (!get_cls_shared_ptrs()[3]) {
-                printf("ERROR: C alloc failed!\r\n");
+                VERSACORE_DEBUG_PRINT("ERROR: C alloc failed!\r\n");
                 return;
             } else {
-                printf("Allocated C at %p\r\n",
+                VERSACORE_DEBUG_PRINT("Allocated C at %p\r\n",
                        (void*)get_cls_shared_ptrs()[3]);
             }
             xdma_memcpy_1d(
@@ -676,7 +676,7 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
             xdma_remote_wait(task_id);
         } else {
             get_cls_shared_ptrs()[0][14] = 0;
-            printf("skip loading C since C_addr is 0\r\n");
+            VERSACORE_DEBUG_PRINT("skip loading C since C_addr is 0\r\n");
         }
 
         // L1 data addresses for D
@@ -685,13 +685,13 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
             get_cls_shared_ptrs()[0][15] * get_cls_shared_ptrs()[0][17] *
             sizeof(uint32_t));  // D MxN in uint32
         if (!get_cls_shared_ptrs()[4]) {
-            printf("ERROR: D alloc failed!\r\n");
+            VERSACORE_DEBUG_PRINT("ERROR: D alloc failed!\r\n");
             return;
         } else {
-            printf("Allocated D at %p\r\n", (void*)get_cls_shared_ptrs()[4]);
+            VERSACORE_DEBUG_PRINT("Allocated D at %p\r\n", (void*)get_cls_shared_ptrs()[4]);
         }
 
-        printf("GEMM Intra-Chiplet Kernel Load Input Data Done!\r\n");
+        VERSACORE_DEBUG_PRINT("GEMM Intra-Chiplet Kernel Load Input Data Done!\r\n");
     }
 
     snrt_cluster_hw_barrier();
@@ -703,16 +703,16 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         // Allocated the L1 memory for Streamer CSRs    //
         //////////////////////////////////////////////////////////////
 
-        printf("GEMM Intra-Chiplet Kernel Compute Streamer Cfg Start!\r\n");
+        VERSACORE_DEBUG_PRINT("GEMM Intra-Chiplet Kernel Compute Streamer Cfg Start!\r\n");
         // the snicth needs to generate these streamer cfgs
         // 22 args in total
         // A 6, B 6, C 5, D 5
         get_cls_shared_ptrs()[5] = snrt_l1_malloc(sizeof(uint32_t) * 22);
         if (!get_cls_shared_ptrs()[5]) {
-            printf("ERROR: streamer cfg alloc failed!\r\n");
+            VERSACORE_DEBUG_PRINT("ERROR: streamer cfg alloc failed!\r\n");
             return;
         } else {
-            printf("Allocated streamer cfg at %p\r\n",
+            VERSACORE_DEBUG_PRINT("Allocated streamer cfg at %p\r\n",
                    (void*)get_cls_shared_ptrs()[5]);
         }
         //////////////////////////////////////////////////////////////
@@ -725,10 +725,10 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         // Atlbound0~5
         uint32_t* Atlbound = snrt_l1_malloc(sizeof(uint32_t) * 6);
         if (!Atlbound) {
-            printf("ERROR: Atlbound alloc failed!\r\n");
+            VERSACORE_DEBUG_PRINT("ERROR: Atlbound alloc failed!\r\n");
             return;
         } else {
-            printf("Allocated Atlbound at %p\r\n", (void*)Atlbound);
+            VERSACORE_DEBUG_PRINT("Allocated Atlbound at %p\r\n", (void*)Atlbound);
         }
         // Atlbound0
         Atlbound[0] = (get_cls_shared_ptrs()[0][9]);
@@ -743,26 +743,14 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         // Atlbound5
         Atlbound[5] = 1;
         get_cls_shared_ptrs()[5][1] = (uint32_t)(uintptr_t)Atlbound;
-        printf("Atlbound[0]: %d\r\n",
-               ((uint32_t*)get_cls_shared_ptrs()[5][1])[0]);
-        printf("Atlbound[1]: %d\r\n",
-               ((uint32_t*)get_cls_shared_ptrs()[5][1])[1]);
-        printf("Atlbound[2]: %d\r\n",
-               ((uint32_t*)get_cls_shared_ptrs()[5][1])[2]);
-        printf("Atlbound[3]: %d\r\n",
-               ((uint32_t*)get_cls_shared_ptrs()[5][1])[3]);
-        printf("Atlbound[4]: %d\r\n",
-               ((uint32_t*)get_cls_shared_ptrs()[5][1])[4]);
-        printf("Atlbound[5]: %d\r\n",
-               ((uint32_t*)get_cls_shared_ptrs()[5][1])[5]);
 
         // Atlstride0~5
         uint32_t* Atlstride = snrt_l1_malloc(sizeof(uint32_t) * 6);
         if (!Atlstride) {
-            printf("ERROR: Atlstride alloc failed!\r\n");
+            VERSACORE_DEBUG_PRINT("ERROR: Atlstride alloc failed!\r\n");
             return;
         } else {
-            printf("Allocated Atlstride at %p\r\n", (void*)Atlstride);
+            VERSACORE_DEBUG_PRINT("Allocated Atlstride at %p\r\n", (void*)Atlstride);
         }
         // Atlstride0
         Atlstride[0] = get_cls_shared_ptrs()[0][15] * get_cls_shared_ptrs()[0][16];
@@ -786,7 +774,7 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         } else {
             get_cls_shared_ptrs()[5][5] = chanelEnA_1;
         }
-        printf("GEMM Intra-Chiplet Kernel Compute Streamer Cfg A Done!\r\n");
+        VERSACORE_DEBUG_PRINT("GEMM Intra-Chiplet Kernel Compute Streamer Cfg A Done!\r\n");
 
         //////////////////////////////////////////////////////////////
         // streamer cfg for B
@@ -798,10 +786,10 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         // Btlbound0~2
         uint32_t* Btlbound = snrt_l1_malloc(sizeof(uint32_t) * 3);
         if (!Btlbound) {
-            printf("ERROR: Btlbound alloc failed!\r\n");
+            VERSACORE_DEBUG_PRINT("ERROR: Btlbound alloc failed!\r\n");
             return;
         } else {
-            printf("Allocated Btlbound at %p\r\n", (void*)Btlbound);
+            VERSACORE_DEBUG_PRINT("Allocated Btlbound at %p\r\n", (void*)Btlbound);
         }
         get_cls_shared_ptrs()[5][7] = (uint32_t)(uintptr_t)Btlbound;
         // Btlbound0
@@ -814,10 +802,10 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         // Btlstride0~2
         uint32_t* Btlstride = snrt_l1_malloc(sizeof(uint32_t) * 3);
         if (!Btlstride) {
-            printf("ERROR: Btlstride alloc failed!\r\n");
+            VERSACORE_DEBUG_PRINT("ERROR: Btlstride alloc failed!\r\n");
             return;
         } else {
-            printf("Allocated Btlstride at %p\r\n", (void*)Btlstride);
+            VERSACORE_DEBUG_PRINT("Allocated Btlstride at %p\r\n", (void*)Btlstride);
         }
         get_cls_shared_ptrs()[5][8] = (uint32_t)(uintptr_t)Btlstride;
 
@@ -836,10 +824,10 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         // channel_en_B []
         uint32_t* channel_en_B = snrt_l1_malloc(sizeof(uint32_t) * 2);
         if (!channel_en_B) {
-            printf("ERROR: channel_en_B alloc failed!\r\n");
+            VERSACORE_DEBUG_PRINT("ERROR: channel_en_B alloc failed!\r\n");
             return;
         } else {
-            printf("Allocated channel_en_B at %p\r\n", (void*)channel_en_B);
+            VERSACORE_DEBUG_PRINT("Allocated channel_en_B at %p\r\n", (void*)channel_en_B);
         }
         if (get_cls_shared_ptrs()[0][11] == 0) {
             channel_en_B[0] = chanelEnB_0_0;
@@ -849,7 +837,7 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
             channel_en_B[1] = chanelEnB_1_1;
         }
         get_cls_shared_ptrs()[5][11] = (uint32_t)(uintptr_t)channel_en_B;
-        printf("GEMM Intra-Chiplet Kernel Compute Streamer Cfg B Done!\r\n");
+        VERSACORE_DEBUG_PRINT("GEMM Intra-Chiplet Kernel Compute Streamer Cfg B Done!\r\n");
 
         //////////////////////////////////////////////////////////////
         // streamer cfg for C
@@ -859,10 +847,10 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         // Ctlbound0~3
         uint32_t* Ctlbound = snrt_l1_malloc(sizeof(uint32_t) * 4);
         if (!Ctlbound) {
-            printf("ERROR: Ctlbound alloc failed!\r\n");
+            VERSACORE_DEBUG_PRINT("ERROR: Ctlbound alloc failed!\r\n");
             return;
         } else {
-            printf("Allocated Ctlbound at %p\r\n", (void*)Ctlbound);
+            VERSACORE_DEBUG_PRINT("Allocated Ctlbound at %p\r\n", (void*)Ctlbound);
         }
         get_cls_shared_ptrs()[5][13] = (uint32_t)(uintptr_t)Ctlbound;
         // Ctlbound0
@@ -877,10 +865,10 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         // Ctlstride0~3
         uint32_t* Ctlstride = snrt_l1_malloc(sizeof(uint32_t) * 4);
         if (!Ctlstride) {
-            printf("ERROR: Ctlstride alloc failed!\r\n");
+            VERSACORE_DEBUG_PRINT("ERROR: Ctlstride alloc failed!\r\n");
             return;
         } else {
-            printf("Allocated Ctlstride at %p\r\n", (void*)Ctlstride);
+            VERSACORE_DEBUG_PRINT("Allocated Ctlstride at %p\r\n", (void*)Ctlstride);
         }
         get_cls_shared_ptrs()[5][14] = (uint32_t)(uintptr_t)Ctlstride;
 
@@ -908,7 +896,7 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         } else {
             get_cls_shared_ptrs()[5][16] = chanelEnC_1;
         }
-        printf("GEMM Intra-Chiplet Kernel Compute Streamer Cfg C Done!\r\n");
+        VERSACORE_DEBUG_PRINT("GEMM Intra-Chiplet Kernel Compute Streamer Cfg C Done!\r\n");
 
         //////////////////////////////////////////////////////////////
         // streamer cfg for D
@@ -918,10 +906,10 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         // D32tlbound0~3
         uint32_t* D32tlbound = snrt_l1_malloc(sizeof(uint32_t) * 4);
         if (!D32tlbound) {
-            printf("ERROR: D32tlbound alloc failed!\r\n");
+            VERSACORE_DEBUG_PRINT("ERROR: D32tlbound alloc failed!\r\n");
             return;
         } else {
-            printf("Allocated D32tlbound at %p\r\n", (void*)D32tlbound);
+            VERSACORE_DEBUG_PRINT("Allocated D32tlbound at %p\r\n", (void*)D32tlbound);
         }
         get_cls_shared_ptrs()[5][18] = (uint32_t)(uintptr_t)D32tlbound;
         // D32tlbound0~3
@@ -936,10 +924,10 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         // D32tlstride0~3
         uint32_t* D32tlstride = snrt_l1_malloc(sizeof(uint32_t) * 4);
         if (!D32tlstride) {
-            printf("ERROR: D32tlstride alloc failed!\r\n");
+            VERSACORE_DEBUG_PRINT("ERROR: D32tlstride alloc failed!\r\n");
             return;
         } else {
-            printf("Allocated D32tlstride at %p\r\n", (void*)D32tlstride);
+            VERSACORE_DEBUG_PRINT("Allocated D32tlstride at %p\r\n", (void*)D32tlstride);
         }
         get_cls_shared_ptrs()[5][19] = (uint32_t)(uintptr_t)D32tlstride;
         if (get_cls_shared_ptrs()[0][11] == 0) {
@@ -964,7 +952,7 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         } else {
             get_cls_shared_ptrs()[5][21] = chanelEnD32_1;
         }
-        printf("GEMM Intra-Chiplet Kernel Compute Streamer Cfg D Done!\r\n");
+        VERSACORE_DEBUG_PRINT("GEMM Intra-Chiplet Kernel Compute Streamer Cfg D Done!\r\n");
 
         //////////////////////////////////////////////////////////////
         // Configuration the Steamer and Versacore
@@ -1008,7 +996,7 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
             (get_cls_shared_ptrs()[0][10]) * (get_cls_shared_ptrs()[0][8]), 0,
             get_cls_shared_ptrs()[0][11], 0);
 
-        printf("GEMM Intra-Chiplet Kernel Compute Streamer Cfg-ed Done!\r\n");
+        VERSACORE_DEBUG_PRINT("GEMM Intra-Chiplet Kernel Compute Streamer Cfg-ed Done!\r\n");
 
         // Set CSR to start Streamer
         start_versacore_and_streamer();
@@ -1016,13 +1004,13 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         // Poll until Streamer and GEMM accelerator finish
         wait_versacore_and_streamer();
 
-        printf("GEMM Intra-Chiplet Kernel Compute Done!\r\n");
+        VERSACORE_DEBUG_PRINT("GEMM Intra-Chiplet Kernel Compute Done!\r\n");
 
         for (int i = 0;
              i < (get_cls_shared_ptrs()[0][8]) *
                      (get_cls_shared_ptrs()[0][10]) * get_cls_shared_ptrs()[0][15] * get_cls_shared_ptrs()[0][17];
              i++) {
-            printf("D[%d] = %d\r\n", i, get_cls_shared_ptrs()[4][i]);
+            VERSACORE_DEBUG_PRINT("D[%d] = %d\r\n", i, get_cls_shared_ptrs()[4][i]);
         }
     }
 
@@ -1051,7 +1039,7 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         // Reset the shared pointers
         snrt_memset(get_cls_shared_ptrs(), 0,
                     sizeof(uint32_t*) * NUM_CLS_SHARED_PTRS);
-        printf("GEMM Intra-Chiplet Kernel Store Output Done!\r\n");
+        VERSACORE_DEBUG_PRINT("GEMM Intra-Chiplet Kernel Store Output Done!\r\n");
     }
 }
 

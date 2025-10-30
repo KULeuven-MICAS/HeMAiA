@@ -8,8 +8,8 @@
     array_shape: 1
     transposed_A: 0
     transposed_B: 0
-    K: 1
-    N: 1
+    K: 3
+    N: 4
     M: 2
     addNewC: 1
 }
