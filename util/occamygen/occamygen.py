@@ -145,6 +145,9 @@ def main():
                         "--verbose",
                         help="increase output verbosity",
                         action="store_true")
+    parser.add_argument("--gen-host-ld",
+                        action="store_true",
+                        help="Generate host.ld file for host build")
 
     args = parser.parse_args()
     occamy_root = pathlib.Path(__file__).parent / "../../"
@@ -755,6 +758,25 @@ def main():
             + str(script_dir / ".." / ".." / "target" / "sw" / "shared" / "vendor" / "xdma" / "hemaia-xdma-addr.h")
         )
         print("XDMA generation finished")
+
+    # # generate the loader script
+    if args.gen_host_ld:
+        print("------------------------------------------------")
+        print("    Generate host.ld")
+        print("------------------------------------------------")
+        import importlib.util
+        script_dir = pathlib.Path(__file__).parent.resolve()
+        host_ld_tpl_file = script_dir / ".." / ".." / "target" / "sw" / "host" / "runtime" / "host.ld.tpl"
+        cfg={
+            "name": args.name,
+            "spm_narrow": occamy_cfg["spm_narrow"],
+            "spm_wide": occamy_cfg["spm_wide"],
+        }
+        write_template(
+            host_ld_tpl_file,
+            outdir,
+            **cfg
+        )
 
     ########
     # CHIP #

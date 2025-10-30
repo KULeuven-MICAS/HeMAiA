@@ -6,8 +6,8 @@ ENTRY(_start)
 
 MEMORY
 {
-    NARROW_SPM (rwxa) : ORIGIN = 0x70000000, LENGTH = 32K
-    WIDE_SPM (rwxa) : ORIGIN = 0x80000000, LENGTH = 512K
+    NARROW_SPM (rwxa) : ORIGIN = ${spm_narrow["address"]}, LENGTH = ${spm_narrow["length"]}
+    WIDE_SPM (rwxa) : ORIGIN = ${spm_wide["address"]}, LENGTH = ${spm_wide["length"]}
 }
 
 SECTIONS

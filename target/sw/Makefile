@@ -152,7 +152,11 @@ $(SW_DEVICE_RT_DIR)/generated/occamy_defs.h: $(SW_DEVICE_RT_DIR)/template/occamy
 	@echo "[OCCAMYGEN] Generating $@"
 	@$(OCCAMYGEN) -c $(CFG) --outdir $(SW_DEVICE_RT_DIR)/generated --cheader $<
 
-sw: $(PLATFORM_HEADERS)
+host/runtime/host.ld:
+	@echo "[OCCAMYGEN] Generating host.ld"
+	@$(OCCAMYGEN) -c $(CFG) --gen-host-ld --outdir host/runtime
+
+sw: $(PLATFORM_HEADERS) host/runtime/host.ld
 	$(MAKE) -C host libs
 	$(MAKE) -C host TARGET=partial-build
 	$(MAKE) -C device all
@@ -171,3 +175,4 @@ clean:
 	rm -f $(PLATFORM_HEADERS)
 # clean generated hjson files
 	rm -rf $(TARGET_CLINT_DIR) $(TARGET_SOCCTRL_DIR) $(TARGET_QUADCTRL_DIR) $(TARGET_PLIC_DIR)
+	rm -rf host/runtime/host.ld
