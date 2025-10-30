@@ -5,11 +5,11 @@
 # Xiaoling Yi <xiaoling.yi@kuleuven.be>
 
 {
-    array_shape: 1
+    array_shape: 0
     transposed_A: 0
     transposed_B: 0
-    K: 3
-    N: 4
+    K: 1
+    N: 3
     M: 2
-    addNewC: 1
+    addNewC: 0
 }

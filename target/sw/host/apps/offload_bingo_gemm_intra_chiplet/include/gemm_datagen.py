@@ -65,14 +65,22 @@ def emit_matmul_data(**kwargs):
 
     addNewC = kwargs["addNewC"]
     data_str += [format_scalar_definition("uint32_t", "addNewC", addNewC)]
-    assert addNewC == 1, "Only support addNewC = 1 for now!"
 
     # test data generation
     A_MIN, A_MAX = -128, 127
     B_MIN, B_MAX = -128, 127
     C_MIN, C_MAX = -2147483648, 2147483647
     A = np.random.randint(A_MIN, A_MAX, size=(M, K, meshRow, tileSize)).reshape(-1)
-    data_str += [format_vector_definition("int8_t", "A", A)]
+
+    # Pad A to be multiple of 64 elements for xdma transfer
+    length = A.size
+    pad_len = (-length) % 64   # how many zeros to add to reach next multiple of 64
+    if pad_len > 0:
+        A_padded = np.pad(A, (0, pad_len), mode='constant', constant_values=0)
+    else:
+        A_padded = A
+    data_str += [format_vector_definition("int8_t", "A", A_padded)]
+
     B = np.random.randint(B_MIN, B_MAX, size=(K, N, tileSize, meshCol)).reshape(-1)
     data_str += [format_vector_definition("int8_t", "B", B)]
 
