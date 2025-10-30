@@ -9,7 +9,7 @@
     transposed_A: 0
     transposed_B: 0
     K: 1
-    N: 2
-    M: 3
+    N: 1
+    M: 2
     addNewC: 1
 }

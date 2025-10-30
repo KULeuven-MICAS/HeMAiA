@@ -563,23 +563,31 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
     // this is shared by core-0 and core-1
     uint64_t l3_input_A_addr, l3_input_B_addr, l3_input_C_addr,
         l3_output_D_addr;
-    uint32_t M, K, N, array_shape_idx;
-
-    
+    uint32_t M, K, N, array_shape_idx, addNewC;
+    uint32_t meshRow, tileSize, meshCol;
 
     // move the args to local variables
     if (snrt_is_dm_core()) {
         get_cls_shared_ptrs()[0] = snrt_l1_malloc(128);
+        if (!get_cls_shared_ptrs()[0]) {
+            printf("ERROR: arg alloc failed!\r\n");
+            return;
+        } else {
+            printf("Allocated arg at %p\r\n", (void*)get_cls_shared_ptrs()[0]);
+        }
+
         ////////////////////////////////////
         // Call the idma to load the args //
         ////////////////////////////////////
         // First we need to use the DMA to load all the arguments from L3 into
         // L1 Here we assume the arguments are packed in a contiguous way in L3
+        printf("GEMM Intra-Chiplet Kernel Start!\r\n");
 
         snrt_dma_start_1d((void*)get_cls_shared_ptrs()[0], (void*)arg,
                           sizeof(uint32_t) * 14);  // 14 uint32_t args in total
         snrt_dma_wait_all();
 
+        printf("GEMM Intra-Chiplet Kernel Load Args Done!\r\n");
         /////////////////////////////////////////
         // Allocate the L1 memory for Inputs   //
         /////////////////////////////////////////
@@ -588,46 +596,99 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         K = get_cls_shared_ptrs()[0][9];
         N = get_cls_shared_ptrs()[0][10];
 
+        // determine the array shape
+        array_shape_idx = get_cls_shared_ptrs()[0][11];
+
+        printf("M = %d, K = %d, N = %d, array_shape_idx = %d\r\n", M, K, N,
+               array_shape_idx);
+        if (array_shape_idx == 0) {
+            meshRow = meshRow_0;
+            tileSize = tileSize_0;
+            meshCol = meshCol_0;
+        } else {
+            meshRow = meshRow_1;
+            tileSize = tileSize_1;
+            meshCol = meshCol_1;
+        }
+
         // L1 data addresses for A
-        get_cls_shared_ptrs()[1] =
-            snrt_l1_malloc(M * K * sizeof(uint8_t));  // A MxK in uint8_t
+        get_cls_shared_ptrs()[1] = snrt_l1_malloc(
+            M * K * meshRow * tileSize * sizeof(uint8_t));  // A MxK in uint8_t
+        if (!get_cls_shared_ptrs()[1]) {
+            printf("ERROR: A alloc failed!\r\n");
+            return;
+        } else {
+            printf("Allocated A at %p\r\n", (void*)get_cls_shared_ptrs()[1]);
+        }
         // Call the idma to load the inputs
         l3_input_A_addr =
             make_u64(get_cls_shared_ptrs()[0][0], get_cls_shared_ptrs()[0][1]);
         xdma_memcpy_1d((void*)l3_input_A_addr, (void*)get_cls_shared_ptrs()[1],
-                       M * K * sizeof(uint8_t));
+                       M * K * meshRow * tileSize * sizeof(uint8_t));
         int task_id = xdma_start();
         xdma_remote_wait(task_id);
 
-        get_cls_shared_ptrs()[2] =
-            snrt_l1_malloc(K * N * sizeof(uint8_t));  // B KxN in uint8_t
+        // L1 data addresses for B
+        get_cls_shared_ptrs()[2] = snrt_l1_malloc(
+            K * N * meshCol * tileSize * sizeof(uint8_t));  // B KxN in uint8_t
+        if (!get_cls_shared_ptrs()[2]) {
+            printf("ERROR: B alloc failed!\r\n");
+            return;
+        } else {
+            printf("Allocated B at %p\r\n", (void*)get_cls_shared_ptrs()[2]);
+        }
+
         l3_input_B_addr =
             make_u64(get_cls_shared_ptrs()[0][2], get_cls_shared_ptrs()[0][3]);
         xdma_memcpy_1d((void*)l3_input_B_addr, (void*)get_cls_shared_ptrs()[2],
-                       K * N * sizeof(uint8_t));
+                       K * N * meshCol * tileSize * sizeof(uint8_t));
         task_id = xdma_start();
         xdma_remote_wait(task_id);
 
+        // L1 data addresses for C
         // load C only if C_addr is not 0
         l3_input_C_addr =
             make_u64(get_cls_shared_ptrs()[0][4], get_cls_shared_ptrs()[0][5]);
         if (l3_input_C_addr != 0) {
+            addNewC = 1;
+            // printf("Loading C from L3 address high %x\r\n",
+            //        (unsigned int)(l3_input_C_addr >> 32));
+            // printf("Loading C from L3 address low %x\r\n",
+            //        (unsigned int)l3_input_C_addr);
             get_cls_shared_ptrs()[3] =
-                snrt_l1_malloc(M * N * sizeof(uint32_t));  // C MxN in uint32
+                snrt_l1_malloc(M * N * meshRow * meshCol *
+                               sizeof(uint32_t));  // C MxN in uint32
+            if (!get_cls_shared_ptrs()[3]) {
+                printf("ERROR: C alloc failed!\r\n");
+                return;
+            } else {
+                printf("Allocated C at %p\r\n",
+                       (void*)get_cls_shared_ptrs()[3]);
+            }
             xdma_memcpy_1d((void*)l3_input_C_addr,
                            (void*)get_cls_shared_ptrs()[3],
-                           M * N * sizeof(uint32_t));
+                           M * N * meshRow * meshCol * sizeof(uint32_t));
             task_id = xdma_start();
             xdma_remote_wait(task_id);
         } else {
-            printf("skip loading C since C_addr is 0\n");
+            addNewC = 0;
+            printf("skip loading C since C_addr is 0\r\n");
         }
 
-        get_cls_shared_ptrs()[4] =
-            snrt_l1_malloc(M * N * sizeof(uint32_t));  // D MxN in uint32
+        // L1 data addresses for D
+        get_cls_shared_ptrs()[4] = snrt_l1_malloc(
+            M * N * meshRow * meshCol * sizeof(uint32_t));  // D MxN in uint32
+        if (!get_cls_shared_ptrs()[4]) {
+            printf("ERROR: D alloc failed!\r\n");
+            return;
+        } else {
+            printf("Allocated D at %p\r\n", (void*)get_cls_shared_ptrs()[4]);
+        }
         // l3_output_D_addr is only used for output, no need to load
         l3_output_D_addr =
             make_u64(get_cls_shared_ptrs()[0][6], get_cls_shared_ptrs()[0][7]);
+
+        printf("GEMM Intra-Chiplet Kernel Load Input Data Done!\r\n");
     }
 
     snrt_cluster_hw_barrier();
@@ -639,20 +700,33 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         // Allocated the L1 memory for Streamer CSRs    //
         //////////////////////////////////////////////////////////////
 
+        printf("GEMM Intra-Chiplet Kernel Compute Streamer Cfg Start!\r\n");
         // the snicth needs to generate these streamer cfgs
         // 22 args in total
         // A 6, B 6, C 5, D 5
         get_cls_shared_ptrs()[5] = snrt_l1_malloc(sizeof(uint32_t) * 22);
-
+        if (!get_cls_shared_ptrs()[5]) {
+            printf("ERROR: streamer cfg alloc failed!\r\n");
+            return;
+        } else {
+            printf("Allocated streamer cfg at %p\r\n",
+                   (void*)get_cls_shared_ptrs()[5]);
+        }
         //////////////////////////////////////////////////////////////
         // streamer cfg for A
         //////////////////////////////////////////////////////////////
 
         // Aslstride0
         get_cls_shared_ptrs()[5][0] = bankWidth / 8;
+
         // Atlbound0~5
         uint32_t* Atlbound = snrt_l1_malloc(sizeof(uint32_t) * 6);
-        get_cls_shared_ptrs()[5][1] = (uintptr_t)Atlbound;
+        if (!Atlbound) {
+            printf("ERROR: Atlbound alloc failed!\r\n");
+            return;
+        } else {
+            printf("Allocated Atlbound at %p\r\n", (void*)Atlbound);
+        }
         // Atlbound0
         Atlbound[0] = K;
         // Atlbound1
@@ -665,32 +739,27 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         Atlbound[4] = 1;
         // Atlbound5
         Atlbound[5] = 1;
+        get_cls_shared_ptrs()[5][1] = (uint32_t)(uintptr_t)Atlbound;
 
         // Atlstride0~5
         uint32_t* Atlstride = snrt_l1_malloc(sizeof(uint32_t) * 6);
-        get_cls_shared_ptrs()[5][2] = (uintptr_t)Atlstride;
-        // Atlstride0
-        if (array_shape_idx == 0) {
-            Atlstride[0] = meshRow_0 * tileSize_0;
-            // Atlstride1
-            Atlstride[1] = 0;
-            // Atlstride2
-            Atlstride[2] = meshRow_0 * tileSize_0 * K;
-            // Atlstride3
-            Atlstride[3] = 0;
-            // Atlstride4
-            Atlstride[4] = 0;
+        if (!Atlstride) {
+            printf("ERROR: Atlstride alloc failed!\r\n");
+            return;
         } else {
-            Atlstride[0] = meshRow_1 * tileSize_1;
-            // Atlstride1
-            Atlstride[1] = 0;
-            // Atlstride2
-            Atlstride[2] = meshRow_1 * tileSize_1 * K;
-            // Atlstride3
-            Atlstride[3] = 0;
-            // Atlstride4
-            Atlstride[4] = 0;
+            printf("Allocated Atlstride at %p\r\n", (void*)Atlstride);
         }
+        // Atlstride0
+        Atlstride[0] = meshRow * tileSize;
+        // Atlstride1
+        Atlstride[1] = 0;
+        // Atlstride2
+        Atlstride[2] = meshRow * tileSize * K;
+        // Atlstride3
+        Atlstride[3] = 0;
+        // Atlstride4
+        Atlstride[4] = 0;
+        get_cls_shared_ptrs()[5][2] = (uint32_t)(uintptr_t)Atlstride;
 
         // set_addr_remap_index_A
         get_cls_shared_ptrs()[5][3] = 0;
@@ -702,6 +771,7 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         } else {
             get_cls_shared_ptrs()[5][5] = chanelEnA_1;
         }
+        printf("GEMM Intra-Chiplet Kernel Compute Streamer Cfg A Done!\r\n");
 
         //////////////////////////////////////////////////////////////
         // streamer cfg for B
@@ -712,7 +782,13 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
 
         // Btlbound0~2
         uint32_t* Btlbound = snrt_l1_malloc(sizeof(uint32_t) * 3);
-        get_cls_shared_ptrs()[5][7] = (uintptr_t)Btlbound;
+        if (!Btlbound) {
+            printf("ERROR: Btlbound alloc failed!\r\n");
+            return;
+        } else {
+            printf("Allocated Btlbound at %p\r\n", (void*)Btlbound);
+        }
+        get_cls_shared_ptrs()[5][7] = (uint32_t)(uintptr_t)Btlbound;
         // Btlbound0
         Btlbound[0] = K;
         // Btlbound1
@@ -722,18 +798,19 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
 
         // Btlstride0~2
         uint32_t* Btlstride = snrt_l1_malloc(sizeof(uint32_t) * 3);
-        get_cls_shared_ptrs()[5][8] = (uintptr_t)Btlstride;
-        if (array_shape_idx == 0) {
-            // Btlstride0
-            Btlstride[0] = meshCol_0 * tileSize_0;
-            // Btlstride1
-            Btlstride[1] = meshCol_0 * tileSize_0 * K;
+        if (!Btlstride) {
+            printf("ERROR: Btlstride alloc failed!\r\n");
+            return;
         } else {
-            // Btlstride0
-            Btlstride[0] = meshCol_1 * tileSize_1;
-            // Btlstride1
-            Btlstride[1] = meshCol_1 * tileSize_1 * K;
+            printf("Allocated Btlstride at %p\r\n", (void*)Btlstride);
         }
+        get_cls_shared_ptrs()[5][8] = (uint32_t)(uintptr_t)Btlstride;
+
+        // Btlstride0
+        Btlstride[0] = meshCol * tileSize;
+        // Btlstride1
+        Btlstride[1] = meshCol * tileSize * K;
+
         // Btlstride2
         Btlstride[2] = 0;
 
@@ -743,6 +820,12 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         get_cls_shared_ptrs()[5][10] = get_cls_shared_ptrs()[0][13];
         // channel_en_B []
         uint32_t* channel_en_B = snrt_l1_malloc(sizeof(uint32_t) * 2);
+        if (!channel_en_B) {
+            printf("ERROR: channel_en_B alloc failed!\r\n");
+            return;
+        } else {
+            printf("Allocated channel_en_B at %p\r\n", (void*)channel_en_B);
+        }
         if (array_shape_idx == 0) {
             channel_en_B[0] = chanelEnB_0_0;
             channel_en_B[1] = chanelEnB_0_1;
@@ -750,7 +833,8 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
             channel_en_B[0] = chanelEnB_1_0;
             channel_en_B[1] = chanelEnB_1_1;
         }
-        get_cls_shared_ptrs()[5][11] = (uintptr_t)channel_en_B;
+        get_cls_shared_ptrs()[5][11] = (uint32_t)(uintptr_t)channel_en_B;
+        printf("GEMM Intra-Chiplet Kernel Compute Streamer Cfg B Done!\r\n");
 
         //////////////////////////////////////////////////////////////
         // streamer cfg for C
@@ -759,43 +843,45 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         get_cls_shared_ptrs()[5][12] = bankWidth / 8;
         // Ctlbound0~3
         uint32_t* Ctlbound = snrt_l1_malloc(sizeof(uint32_t) * 4);
-        get_cls_shared_ptrs()[5][13] = (uintptr_t)Ctlbound;
+        if (!Ctlbound) {
+            printf("ERROR: Ctlbound alloc failed!\r\n");
+            return;
+        }else{
+            printf("Allocated Ctlbound at %p\r\n", (void*)Ctlbound);
+        }
+        get_cls_shared_ptrs()[5][13] = (uint32_t)(uintptr_t)Ctlbound;
         // Ctlbound0
         if (array_shape_idx == 0) {
             Ctlbound[0] = Ctlbound_0_0;
-            Ctlbound[1] = N;
-            Ctlbound[2] = M;
-            Ctlbound[3] = 1;
-
         } else {
             Ctlbound[0] = Ctlbound_1_0;
-            Ctlbound[1] = N;
-            Ctlbound[2] = M;
-            Ctlbound[3] = 1;
         }
+        Ctlbound[1] = N;
+        Ctlbound[2] = M;
+        Ctlbound[3] = 1;
         // Ctlstride0~3
         uint32_t* Ctlstride = snrt_l1_malloc(sizeof(uint32_t) * 4);
-        get_cls_shared_ptrs()[5][14] = (uintptr_t)Ctlstride;
+        if (!Ctlstride) {
+            printf("ERROR: Ctlstride alloc failed!\r\n");
+            return;
+        }else{
+            printf("Allocated Ctlstride at %p\r\n", (void*)Ctlstride);
+        }
+        get_cls_shared_ptrs()[5][14] = (uint32_t)(uintptr_t)Ctlstride;
 
         if (array_shape_idx == 0) {
             // Ctlstride0
             Ctlstride[0] = c_spatial_bound_0_0 * (bankWidth / 8);
-            // Ctlstride1
-            Ctlstride[1] = C_elem_len * meshRow_0 * meshCol_0 / 8;
-            // Ctlstride2
-            Ctlstride[2] = N * C_elem_len * meshRow_0 * meshCol_0 / 8;
-            // Ctlstride3
-            Ctlstride[3] = 0;
         } else {
             // Ctlstride0
             Ctlstride[0] = c_spatial_bound_0_1 * (bankWidth / 8);
-            // Ctlstride1
-            Ctlstride[1] = C_elem_len * meshRow_1 * meshCol_1 / 8;
-            // Ctlstride2
-            Ctlstride[2] = N * C_elem_len * meshRow_1 * meshCol_1 / 8;
-            // Ctlstride3
-            Ctlstride[3] = 0;
         }
+        // Ctlstride1
+        Ctlstride[1] = C_elem_len * meshRow * meshCol / 8;
+        // Ctlstride2
+        Ctlstride[2] = N * C_elem_len * meshRow * meshCol / 8;
+        // Ctlstride3
+        Ctlstride[3] = 0;
         // set_addr_remap_index_C
         get_cls_shared_ptrs()[5][15] = 0;
         // channel_en_C []
@@ -806,6 +892,7 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         } else {
             get_cls_shared_ptrs()[5][16] = chanelEnC_1;
         }
+        printf("GEMM Intra-Chiplet Kernel Compute Streamer Cfg C Done!\r\n");
 
         //////////////////////////////////////////////////////////////
         // streamer cfg for D
@@ -814,41 +901,44 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         get_cls_shared_ptrs()[5][17] = bankWidth / 8;
         // D32tlbound0~3
         uint32_t* D32tlbound = snrt_l1_malloc(sizeof(uint32_t) * 4);
-        get_cls_shared_ptrs()[5][18] = (uintptr_t)D32tlbound;
+        if (!D32tlbound) {
+            printf("ERROR: D32tlbound alloc failed!\r\n");
+            return;
+        }else{
+            printf("Allocated D32tlbound at %p\r\n", (void*)D32tlbound);
+        }
+        get_cls_shared_ptrs()[5][18] = (uint32_t)(uintptr_t)D32tlbound;
         // D32tlbound0~3
         if (array_shape_idx == 0) {
             D32tlbound[0] = D32tlbound_0_0;
-            D32tlbound[1] = N;
-            D32tlbound[2] = M;
-            D32tlbound[3] = 1;
         } else {
             D32tlbound[0] = D32tlbound_1_0;
-            D32tlbound[1] = N;
-            D32tlbound[2] = M;
-            D32tlbound[3] = 1;
         }
+        D32tlbound[1] = N;
+        D32tlbound[2] = M;
+        D32tlbound[3] = 1;
         // D32tlstride0~3
         uint32_t* D32tlstride = snrt_l1_malloc(sizeof(uint32_t) * 4);
-        get_cls_shared_ptrs()[5][19] = (uintptr_t)D32tlstride;
+        if (!D32tlstride) {
+            printf("ERROR: D32tlstride alloc failed!\r\n");
+            return;
+        }else{
+            printf("Allocated D32tlstride at %p\r\n", (void*)D32tlstride);
+        }
+        get_cls_shared_ptrs()[5][19] = (uint32_t)(uintptr_t)D32tlstride;
         if (array_shape_idx == 0) {
             // D32tlstride0
             D32tlstride[0] = d32_spatial_bound_0_0 * (bankWidth / 8);
-            // D32tlstride1
-            D32tlstride[1] = D32_elem_len * meshRow_0 * meshCol_0 / 8;
-            // D32tlstride2
-            D32tlstride[2] = N * D32_elem_len * meshRow_0 * meshCol_0 / 8;
-            // D32tlstride3
-            D32tlstride[3] = 0;
         } else {
             // D32tlstride0
             D32tlstride[0] = d32_spatial_bound_0_1 * (bankWidth / 8);
-            // D32tlstride1
-            D32tlstride[1] = D32_elem_len * meshRow_1 * meshCol_1 / 8;
-            // D32tlstride2
-            D32tlstride[2] = N * D32_elem_len * meshRow_1 * meshCol_1 / 8;
-            // D32tlstride3
-            D32tlstride[3] = 0;
         }
+        // D32tlstride1
+        D32tlstride[1] = D32_elem_len * meshRow * meshCol / 8;
+        // D32tlstride2
+        D32tlstride[2] = N * D32_elem_len * meshRow * meshCol / 8;
+        // D32tlstride3
+        D32tlstride[3] = 0;
         // set_addr_remap_index_D32
         get_cls_shared_ptrs()[5][20] = 0;
         // channel_en_D32 []
@@ -857,57 +947,67 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         } else {
             get_cls_shared_ptrs()[5][21] = chanelEnD32_1;
         }
+        printf("GEMM Intra-Chiplet Kernel Compute Streamer Cfg D Done!\r\n");
 
         //////////////////////////////////////////////////////////////
         // Configuration the Steamer and Versacore
         //////////////////////////////////////////////////////////////
+
         set_versacore_streamer_csr(
             (uint32_t)(uintptr_t)get_cls_shared_ptrs()[1],  // A_addr
-            (uint32_t*)get_cls_shared_ptrs()[5][0],         // Aslstride
-            (uint32_t*)get_cls_shared_ptrs()[5][1],         // Atlbound[] base
-            (uint32_t*)get_cls_shared_ptrs()[5][2],         // Atlstride[] base
+            (uint32_t*)(&get_cls_shared_ptrs()[5][0]),         // Aslstride
+            (uint32_t*)(get_cls_shared_ptrs()[5][1]),         // Atlbound[] base
+            (uint32_t*)(get_cls_shared_ptrs()[5][2]),         // Atlstride[] base
             get_cls_shared_ptrs()[5][3],             // set_addr_remap_index_A
             get_cls_shared_ptrs()[5][4],             // transpose_A
-            (uint32_t*)get_cls_shared_ptrs()[5][5],  // channel_en_A []
+            (uint32_t*)(&get_cls_shared_ptrs()[5][5]),  // channel_en_A []
 
             (uint32_t)(uintptr_t)get_cls_shared_ptrs()[2],  // B_addr
-            (uint32_t*)get_cls_shared_ptrs()[5][6],         // Bslstride[] base
-            (uint32_t*)get_cls_shared_ptrs()[5][7],         // Btlbound[] base
-            (uint32_t*)get_cls_shared_ptrs()[5][8],         // Btlstride[] base
+            (uint32_t*)(&get_cls_shared_ptrs()[5][6]),         // Bslstride[] base
+            (uint32_t*)(get_cls_shared_ptrs()[5][7]),         // Btlbound[] base
+            (uint32_t*)(get_cls_shared_ptrs()[5][8]),         // Btlstride[] base
             get_cls_shared_ptrs()[5][9],              // set_addr_remap_index_B
             get_cls_shared_ptrs()[5][10],             // transpose_B
-            (uint32_t*)get_cls_shared_ptrs()[5][11],  // channel_en_B []
+            (uint32_t*)(get_cls_shared_ptrs()[5][11]),  // channel_en_B []
 
             (uint32_t)(uintptr_t)get_cls_shared_ptrs()[3],  // C_addr
-            (uint32_t*)get_cls_shared_ptrs()[5][12],        // Cslstride[] base
-            (uint32_t*)get_cls_shared_ptrs()[5][13],        // Ctlbound[] base
-            (uint32_t*)get_cls_shared_ptrs()[5][14],        // Ctlstride[] base
+            (uint32_t*)(&get_cls_shared_ptrs()[5][12]),        // Cslstride[] base
+            (uint32_t*)(get_cls_shared_ptrs()[5][13]),        // Ctlbound[] base
+            (uint32_t*)(get_cls_shared_ptrs()[5][14]),        // Ctlstride[] base
             get_cls_shared_ptrs()[5][15],             // set_addr_remap_index_C
-            (uint32_t*)get_cls_shared_ptrs()[5][16],  // channel_en_C []
+            (uint32_t*)(&get_cls_shared_ptrs()[5][16]),  // channel_en_C []
 
             (uint32_t)(uintptr_t)get_cls_shared_ptrs()[4],  // D_addr
-            (uint32_t*)get_cls_shared_ptrs()[5][17],  // D32slstride[] base
-            (uint32_t*)get_cls_shared_ptrs()[5][18],  // D32tlbound[] base
-            (uint32_t*)get_cls_shared_ptrs()[5][19],  // D32tlstride[] base
+            (uint32_t*)(&get_cls_shared_ptrs()[5][17]),  // D32slstride[] base
+            (uint32_t*)(get_cls_shared_ptrs()[5][18]),  // D32tlbound[] base
+            (uint32_t*)(get_cls_shared_ptrs()[5][19]),  // D32tlstride[] base
             get_cls_shared_ptrs()[5][20],            // set_addr_remap_index_D32
-            (uint32_t*)get_cls_shared_ptrs()[5][21]  // channel_en_D32 []
+            (uint32_t*)(&get_cls_shared_ptrs()[5][21])  // channel_en_D32 []
 
         );
 
-        set_versacore_csr(1, K, N * M, 0, array_shape_idx, 0);
+        set_versacore_csr(addNewC, K, N * M, 0, array_shape_idx, 0);
+
+        printf("GEMM Intra-Chiplet Kernel Compute Streamer Cfg-ed Done!\r\n");
 
         // Set CSR to start Streamer
         start_versacore_and_streamer();
 
         // Poll until Streamer and GEMM accelerator finish
         wait_versacore_and_streamer();
+
+        printf("GEMM Intra-Chiplet Kernel Compute Done!\r\n");
+
+        for (int i = 0; i < M * N * meshRow * meshCol; i++) {
+            printf("D[%d] = %d\r\n", i, get_cls_shared_ptrs()[4][i]);
+        }
     }
 
     snrt_cluster_hw_barrier();
 
     // After computation, dma core will store the output back to L3
     if (snrt_is_dm_core()) {
-        uint32_t output_size = M * N * sizeof(uint32_t);
+        uint32_t output_size = M * N * meshRow * meshCol * sizeof(uint32_t);
         xdma_memcpy_1d((void*)get_cls_shared_ptrs()[4], (void*)l3_output_D_addr,
                        output_size);
         int task_id = xdma_start();
@@ -922,6 +1022,7 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         // Reset the shared pointers
         snrt_memset(get_cls_shared_ptrs(), 0,
                     sizeof(uint32_t*) * NUM_CLS_SHARED_PTRS);
+        printf("GEMM Intra-Chiplet Kernel Store Output Done!\r\n");
     }
 }
 

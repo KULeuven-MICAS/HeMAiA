@@ -48,12 +48,12 @@ def emit_matmul_data(**kwargs):
 
     if array_shape == 0:
         meshRow = 32
-        meshCol = 4
-        tileSize = 32
+        tileSize = 4
+        meshCol = 32
     elif array_shape == 1:
         meshRow = 1
-        meshCol = 32
-        tileSize = 16
+        tileSize =32
+        meshCol = 16
     else:
         raise ValueError("Unsupported array shape!")
 
@@ -73,14 +73,14 @@ def emit_matmul_data(**kwargs):
     C_MIN, C_MAX = -2147483648, 2147483647
     A = np.random.randint(A_MIN, A_MAX, size=(M, K, meshRow, tileSize)).reshape(-1)
     data_str += [format_vector_definition("int8_t", "A", A)]
-    B = np.random.randint(B_MIN, B_MAX, size=(K, N, meshCol, tileSize)).reshape(-1)
+    B = np.random.randint(B_MIN, B_MAX, size=(K, N, tileSize, meshCol)).reshape(-1)
     data_str += [format_vector_definition("int8_t", "B", B)]
 
     if addNewC:
-        C = np.random.randint(C_MIN, C_MAX, size=(M, N, meshCol, meshRow)).reshape(-1)
+        C = np.random.randint(C_MIN, C_MAX, size=(M, N, meshRow, meshCol)).reshape(-1)
         data_str += [format_vector_definition("int32_t", "C", C)]
     else:
-        C = np.zeros((M, N, meshCol, meshRow), dtype=np.int32).reshape(-1)
+        C = np.zeros((M, N, meshRow, meshCol), dtype=np.int32).reshape(-1)
         data_str += [format_vector_definition("int32_t", "C", C)]
 
     if kwargs["transposed_A"] == 1:
