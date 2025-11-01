@@ -582,6 +582,7 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         // arg11: uint32_t array_shape_idx get_cls_shared_ptrs()[0][11]
         // arg12: transpose A get_cls_shared_ptrs()[0][12]
         // arg13: transpose B get_cls_shared_ptrs()[0][13]
+
         // get_cls_shared_ptrs()[0][14] is used for C exist flag
         // get_cls_shared_ptrs()[0][15] meshRow
         // get_cls_shared_ptrs()[0][16] tileSize
@@ -769,11 +770,12 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         // Atlstride2
         Atlstride[2] = get_cls_shared_ptrs()[0][15] *
                        get_cls_shared_ptrs()[0][16] *
-                       (get_cls_shared_ptrs()[0][9]);
+                       get_cls_shared_ptrs()[0][9];
         // Atlstride3
         Atlstride[3] = 0;
         // Atlstride4
         Atlstride[4] = 0;
+        Atlstride[5] = 0;
         get_cls_shared_ptrs()[5][2] = (uint32_t)(uintptr_t)Atlstride;
 
         // set_addr_remap_index_A
@@ -830,7 +832,7 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         // Btlstride1
         Btlstride[1] = get_cls_shared_ptrs()[0][17] *
                        get_cls_shared_ptrs()[0][16] *
-                       (get_cls_shared_ptrs()[0][9]);
+                       get_cls_shared_ptrs()[0][9];
 
         // Btlstride2
         Btlstride[2] = 0;
@@ -875,7 +877,9 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         }
         get_cls_shared_ptrs()[5][13] = (uint32_t)(uintptr_t)Ctlbound;
         // Ctlbound0
-        if (get_cls_shared_ptrs()[0][11] == 0) {
+        if (get_cls_shared_ptrs()[0][14] == 0) {
+            Ctlbound[0] = 0;
+        } else if (get_cls_shared_ptrs()[0][11] == 0) {
             Ctlbound[0] = Ctlbound_0_0;
         } else {
             Ctlbound[0] = Ctlbound_1_0;
@@ -1022,8 +1026,8 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         );
 
         set_versacore_csr(
-            get_cls_shared_ptrs()[0][14], (get_cls_shared_ptrs()[0][9]),
-            (get_cls_shared_ptrs()[0][10]) * (get_cls_shared_ptrs()[0][8]), 0,
+            get_cls_shared_ptrs()[0][14], get_cls_shared_ptrs()[0][9],
+            get_cls_shared_ptrs()[0][10] * get_cls_shared_ptrs()[0][8], 0,
             get_cls_shared_ptrs()[0][11], 0);
 
         VERSACORE_DEBUG_PRINT(
