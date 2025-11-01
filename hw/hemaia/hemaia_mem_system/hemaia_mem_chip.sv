@@ -82,9 +82,9 @@ module hemaia_mem_chip #(
   // Clock Channel 1 / clk_o[1]: West D2D TX Clock = 3.6 GHz
 
   `AXI_LITE_TYPEDEF_ALL_CT(axi_lite_a48_d32, axi_lite_a48_d32_req_t, axi_lite_a48_d32_rsp_t,
-                           logic [47:0], logic [32:0], logic [7:0])
+                           logic [47:0], logic [32:0], logic [3:0])
 
-  localparam int HeMAiAMemChipDivision[5] = '{3, 1, 1, 1, 1};
+  localparam int HeMAiAMemChipDivision[5] = '{4, 1, 1, 1, 1};
   localparam int HeMAiAResetDelays[5] = '{default: 3};
 
   logic [4:0] clk_vec, rst_n_vec;
@@ -141,12 +141,12 @@ module hemaia_mem_chip #(
   ////////////////////////
 
   `AXI_TYPEDEF_ALL_CT(axi_a48_d512_i4_u1, axi_a48_d512_i4_u1_req_t, axi_a48_d512_i4_u1_resp_t,
-                      logic [47:0], logic [5:0], logic [511:0], logic [63:0], logic [0:0])
+                      logic [47:0], logic [3:0], logic [511:0], logic [63:0], logic [0:0])
   `AXI_TYPEDEF_ALL_CT(axi_a48_d512_i6_u1, axi_a48_d512_i6_u1_req_t, axi_a48_d512_i6_u1_resp_t,
                       logic [47:0], logic [5:0], logic [511:0], logic [63:0], logic [0:0])
 
-  `AXI_TYPEDEF_ALL_CT(axi_a48_d64_i2_u1, axi_a48_d64_i2_u1_req_t, axi_a48_d64_i2_u1_resp_t,
-                      logic [47:0], logic [1:0], logic [63:0], logic [7:0], logic [0:0])
+  `AXI_TYPEDEF_ALL_CT(axi_a48_d64_i3_u1, axi_a48_d64_i3_u1_req_t, axi_a48_d64_i3_u1_resp_t,
+                      logic [47:0], logic [2:0], logic [63:0], logic [7:0], logic [0:0])
   `AXI_TYPEDEF_ALL_CT(axi_a48_d64_i4_u1, axi_a48_d64_i4_u1_req_t, axi_a48_d64_i4_u1_resp_t,
                       logic [47:0], logic [3:0], logic [63:0], logic [7:0], logic [0:0])
 
@@ -155,8 +155,8 @@ module hemaia_mem_chip #(
   axi_a48_d512_i6_u1_req_t  axi_wide_xbar_to_mem_sys_req;
   axi_a48_d512_i6_u1_resp_t axi_wide_xbar_to_mem_sys_rsp;
 
-  axi_a48_d64_i2_u1_req_t   axi_narrow_mem_sys_to_xbar_req;
-  axi_a48_d64_i2_u1_resp_t  axi_narrow_mem_sys_to_xbar_rsp;
+  axi_a48_d64_i3_u1_req_t   axi_narrow_mem_sys_to_xbar_req;
+  axi_a48_d64_i3_u1_resp_t  axi_narrow_mem_sys_to_xbar_rsp;
   axi_a48_d64_i4_u1_req_t   axi_narrow_xbar_to_mem_sys_req;
   axi_a48_d64_i4_u1_resp_t  axi_narrow_xbar_to_mem_sys_rsp;
 
@@ -168,8 +168,8 @@ module hemaia_mem_chip #(
       .axi_wide_slave_rsp_t(axi_a48_d512_i4_u1_resp_t),
       .axi_narrow_master_req_t(axi_a48_d64_i4_u1_req_t),
       .axi_narrow_master_rsp_t(axi_a48_d64_i4_u1_resp_t),
-      .axi_narrow_slave_req_t(axi_a48_d64_i2_u1_req_t),
-      .axi_narrow_slave_rsp_t(axi_a48_d64_i2_u1_resp_t),
+      .axi_narrow_slave_req_t(axi_a48_d64_i3_u1_req_t),
+      .axi_narrow_slave_rsp_t(axi_a48_d64_i3_u1_resp_t),
       .ClusterAddressSpace(ClusterAddressSpace),
       .MemBaseAddr(MemBaseAddr),
       .MemBankNum(MemBankNum),
@@ -364,7 +364,7 @@ module hemaia_mem_chip #(
   );
 
   `AXI_TYPEDEF_ALL_CT(axi_a48_d32_i4_u1, axi_a48_d32_i4_u1_req_t, axi_a48_d32_i4_u1_resp_t,
-                      logic [47:0], logic [5:0], logic [31:0], logic [3:0], logic [0:0])
+                      logic [47:0], logic [3:0], logic [31:0], logic [3:0], logic [0:0])
 
   axi_a48_d32_i4_u1_req_t  hemaia_mem_chip_narrow_xbar_to_periph_xbar_dwc_req;
   axi_a48_d32_i4_u1_resp_t hemaia_mem_chip_narrow_xbar_to_periph_xbar_dwc_rsp;
@@ -576,18 +576,18 @@ module hemaia_mem_chip #(
   );
 
 
-  axi_a48_d64_i2_u1_req_t  axi_wide_xbar_to_narrow_xbar_dwc_iwc_req;
-  axi_a48_d64_i2_u1_resp_t axi_wide_xbar_to_narrow_xbar_dwc_iwc_rsp;
+  axi_a48_d64_i3_u1_req_t  axi_wide_xbar_to_narrow_xbar_dwc_iwc_req;
+  axi_a48_d64_i3_u1_resp_t axi_wide_xbar_to_narrow_xbar_dwc_iwc_rsp;
 
   axi_id_remap #(
       .AxiSlvPortIdWidth(6),
       .AxiSlvPortMaxUniqIds(4),
       .AxiMaxTxnsPerId(4),
-      .AxiMstPortIdWidth(2),
+      .AxiMstPortIdWidth(3),
       .slv_req_t(axi_a48_d64_i6_u1_req_t),
       .slv_resp_t(axi_a48_d64_i6_u1_resp_t),
-      .mst_req_t(axi_a48_d64_i2_u1_req_t),
-      .mst_resp_t(axi_a48_d64_i2_u1_resp_t)
+      .mst_req_t(axi_a48_d64_i3_u1_req_t),
+      .mst_resp_t(axi_a48_d64_i3_u1_resp_t)
   ) i_wide_xbar_to_narrow_xbar_iwc (
       .clk_i(clk_host),
       .rst_ni(rst_host_n),
@@ -608,8 +608,8 @@ module hemaia_mem_chip #(
       FallThrough: 0,
       LatencyMode: axi_pkg::CUT_ALL_PORTS,
       PipelineStages: 0,
-      AxiIdWidthSlvPorts: 2,
-      AxiIdUsedSlvPorts: 2,
+      AxiIdWidthSlvPorts: 3,
+      AxiIdUsedSlvPorts: 3,
       UniqueIds: 0,
       AxiAddrWidth: 48,
       AxiDataWidth: 64,
@@ -623,10 +623,10 @@ module hemaia_mem_chip #(
           '{idx: 2, start_addr: {chip_id, 40'h2000000}, end_addr: {chip_id, 40'h2010000}}
       };
 
-  axi_a48_d64_i2_u1_req_t  [1:0] master_to_axi_narrow_xbar_req;
-  axi_a48_d64_i2_u1_resp_t [1:0] master_to_axi_narrow_xbar_rsp;
-  axi_a48_d64_i2_u1_req_t  [2:0] axi_narrow_xbar_to_slave_req;
-  axi_a48_d64_i2_u1_resp_t [2:0] axi_narrow_xbar_to_slave_rsp;
+  axi_a48_d64_i3_u1_req_t  [1:0] master_to_axi_narrow_xbar_req;
+  axi_a48_d64_i3_u1_resp_t [1:0] master_to_axi_narrow_xbar_rsp;
+  axi_a48_d64_i4_u1_req_t  [2:0] axi_narrow_xbar_to_slave_req;
+  axi_a48_d64_i4_u1_resp_t [2:0] axi_narrow_xbar_to_slave_rsp;
 
   assign master_to_axi_narrow_xbar_req[0] = axi_wide_xbar_to_narrow_xbar_dwc_iwc_req;
   assign axi_wide_xbar_to_narrow_xbar_dwc_iwc_rsp = master_to_axi_narrow_xbar_rsp[0];
@@ -644,21 +644,21 @@ module hemaia_mem_chip #(
       .Cfg          (HeMAiAMemChipNarrowXbarCfg),
       .Connectivity ('1),
       .ATOPs        (0),
-      .slv_aw_chan_t(axi_a48_d64_i2_u1_aw_chan_t),
+      .slv_aw_chan_t(axi_a48_d64_i3_u1_aw_chan_t),
       .mst_aw_chan_t(axi_a48_d64_i4_u1_aw_chan_t),
-      .w_chan_t     (axi_a48_d64_i2_u1_w_chan_t),
-      .slv_b_chan_t (axi_a48_d64_i2_u1_b_chan_t),
+      .w_chan_t     (axi_a48_d64_i3_u1_w_chan_t),
+      .slv_b_chan_t (axi_a48_d64_i3_u1_b_chan_t),
       .mst_b_chan_t (axi_a48_d64_i4_u1_b_chan_t),
-      .slv_ar_chan_t(axi_a48_d64_i2_u1_ar_chan_t),
+      .slv_ar_chan_t(axi_a48_d64_i3_u1_ar_chan_t),
       .mst_ar_chan_t(axi_a48_d64_i4_u1_ar_chan_t),
-      .slv_r_chan_t (axi_a48_d64_i2_u1_r_chan_t),
+      .slv_r_chan_t (axi_a48_d64_i3_u1_r_chan_t),
       .mst_r_chan_t (axi_a48_d64_i4_u1_r_chan_t),
-      .slv_req_t    (axi_a48_d64_i2_u1_req_t),
-      .slv_resp_t   (axi_a48_d64_i2_u1_resp_t),
+      .slv_req_t    (axi_a48_d64_i3_u1_req_t),
+      .slv_resp_t   (axi_a48_d64_i3_u1_resp_t),
       .mst_req_t    (axi_a48_d64_i4_u1_req_t),
       .mst_resp_t   (axi_a48_d64_i4_u1_resp_t),
       .rule_t       (xbar_rule_48_t)
-  ) i_soc_wide_xbar (
+  ) i_axi_narrow_xbar (
       .clk_i                (clk_host),
       .rst_ni               (rst_host_n),
       .test_i               (test_mode_i),
