@@ -1,0 +1,19 @@
+# Copyright 2025 KU Leuven.
+# Licensed under the Apache License, Version 2.0, see LICENSE for details.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Xiaoling Yi <xiaoling.yi@kuleuven.be>
+
+{
+    array_shape: 1
+    transposed_A: 0
+    transposed_B: 0
+    K: 1
+    N: 3
+    M: 2
+    // these two will config the addNewC = 1
+    addNonZeroC: 0
+    addZeroC: 1
+    // these two will config the addNewC = 0, but need to make sure M=M=1
+    accumPrevC: 0
+}
