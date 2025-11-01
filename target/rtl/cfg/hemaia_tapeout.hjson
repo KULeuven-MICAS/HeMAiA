@@ -5,7 +5,6 @@
     remote_quadrants: [],
     // Multi-chip configuration
     hemaia_multichip: {
-      nr_chiplets: 4,               // Total number of chips on the interposer
       chip_id_width: 8,             // Not verified, should never be changed
       router_to_soc_iw: 4,          // soc_to_router_iw + clog2(chips)
       soc_to_router_iw: 4,          // Not beneficial for iw > 6
