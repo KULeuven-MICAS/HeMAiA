@@ -582,7 +582,7 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         // arg11: uint32_t array_shape_idx get_cls_shared_ptrs()[0][11]
         // arg12: transpose A get_cls_shared_ptrs()[0][12]
         // arg13: transpose B get_cls_shared_ptrs()[0][13]
-        // get_cls_shared_ptrs()[0][14] is used for accumPrevC
+        // arg14: get_cls_shared_ptrs()[0][14] is used for accumPrevC
 
         // get_cls_shared_ptrs()[0][15] is used for addNonZeroC
         // get_cls_shared_ptrs()[0][16] is used for meshRow
