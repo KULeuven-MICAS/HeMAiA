@@ -5,11 +5,15 @@
 # Xiaoling Yi <xiaoling.yi@kuleuven.be>
 
 {
-    array_shape: 0
+    array_shape: 1
     transposed_A: 0
     transposed_B: 0
     K: 1
     N: 3
     M: 2
-    addNewC: 0
+    // these two will config the addNewC = 1
+    addNonZeroC: 0
+    addZeroC: 1
+    // these two will config the addNewC = 0, but need to make sure M=M=1
+    accumPrevC: 0
 }

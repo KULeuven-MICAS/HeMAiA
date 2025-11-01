@@ -37,7 +37,7 @@ uint32_t __workload_versacore(bingo_task_t** task_list,
 
     // 1.2 Prepare the args
     // versacore args
-    uint32_t gemm_args[14];
+    uint32_t gemm_args[15];
     // A matrix
     gemm_args[0] = HIGH32(&A[0]);
     gemm_args[1] = LOW32(&A[0]);
@@ -45,13 +45,15 @@ uint32_t __workload_versacore(bingo_task_t** task_list,
     gemm_args[2] = HIGH32(&B[0]);
     gemm_args[3] = LOW32(&B[0]);
     // C matrix
-    if (addNewC == 0) {
+    if (accumPrevC || addZeroC) {
+        // When accumPrevC is true, we use D as the previous C matrix
         gemm_args[4] = 0;
         gemm_args[5] = 0;
     } else {
         gemm_args[4] = HIGH32(&C[0]);
         gemm_args[5] = LOW32(&C[0]);
     }
+
     // D matrix (output)
     O1HeapInstance* local_l3_heap_manager =
         bingo_get_l3_heap_manager(current_chip_id);
@@ -69,6 +71,8 @@ uint32_t __workload_versacore(bingo_task_t** task_list,
     gemm_args[12] = transposed_A;
     // transpose B
     gemm_args[13] = transposed_B;
+    // accumPrevC
+    gemm_args[14] = accumPrevC;
 
     // checkresults args
     __snax_kernel_check_results_args_t task_check_results_args;

@@ -564,7 +564,7 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
 
         snrt_dma_start_1d(
             (void*)get_cls_shared_ptrs()[0], (void*)arg,
-            sizeof(uint32_t) * 14);  // 14 uint32_t passed args in total
+            sizeof(uint32_t) * 15);  // 15 uint32_t passed args in total
         snrt_dma_wait_all();
 
         // we use the following args, they are shared across the cluster
@@ -582,11 +582,12 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         // arg11: uint32_t array_shape_idx get_cls_shared_ptrs()[0][11]
         // arg12: transpose A get_cls_shared_ptrs()[0][12]
         // arg13: transpose B get_cls_shared_ptrs()[0][13]
+        // get_cls_shared_ptrs()[0][14] is used for accumPrevC
 
-        // get_cls_shared_ptrs()[0][14] is used for C exist flag
-        // get_cls_shared_ptrs()[0][15] meshRow
-        // get_cls_shared_ptrs()[0][16] tileSize
-        // get_cls_shared_ptrs()[0][17] meshCol
+        // get_cls_shared_ptrs()[0][15] is used for addNonZeroC
+        // get_cls_shared_ptrs()[0][16] is used for meshRow
+        // get_cls_shared_ptrs()[0][17] is used for tileSize
+        // get_cls_shared_ptrs()[0][18] is used for meshCol
 
         VERSACORE_DEBUG_PRINT("GEMM Intra-Chiplet Kernel Load Args Done!\r\n");
         /////////////////////////////////////////
@@ -600,20 +601,20 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
             get_cls_shared_ptrs()[0][8], get_cls_shared_ptrs()[0][9],
             get_cls_shared_ptrs()[0][10], get_cls_shared_ptrs()[0][11]);
         if (get_cls_shared_ptrs()[0][11] == 0) {
-            get_cls_shared_ptrs()[0][15] = meshRow_0;
-            get_cls_shared_ptrs()[0][16] = tileSize_0;
-            get_cls_shared_ptrs()[0][17] = meshCol_0;
+            get_cls_shared_ptrs()[0][16] = meshRow_0;
+            get_cls_shared_ptrs()[0][17] = tileSize_0;
+            get_cls_shared_ptrs()[0][18] = meshCol_0;
         } else {
-            get_cls_shared_ptrs()[0][15] = meshRow_1;
-            get_cls_shared_ptrs()[0][16] = tileSize_1;
-            get_cls_shared_ptrs()[0][17] = meshCol_1;
+            get_cls_shared_ptrs()[0][16] = meshRow_1;
+            get_cls_shared_ptrs()[0][17] = tileSize_1;
+            get_cls_shared_ptrs()[0][18] = meshCol_1;
         }
 
         // L1 data addresses for A
         uint32_t A_size = (get_cls_shared_ptrs()[0][8]) *
                           (get_cls_shared_ptrs()[0][9]) *
-                          get_cls_shared_ptrs()[0][15] *
-                          get_cls_shared_ptrs()[0][16] * sizeof(uint8_t);
+                          get_cls_shared_ptrs()[0][16] *
+                          get_cls_shared_ptrs()[0][17] * sizeof(uint8_t);
         A_size = (A_size + 63) & ~63;  // align to 64 bytes for xdma granularity
         get_cls_shared_ptrs()[1] = snrt_l1_malloc(A_size);
         if (!get_cls_shared_ptrs()[1]) {
@@ -634,7 +635,7 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         // L1 data addresses for B
         get_cls_shared_ptrs()[2] = snrt_l1_malloc(
             (get_cls_shared_ptrs()[0][9]) * (get_cls_shared_ptrs()[0][10]) *
-            get_cls_shared_ptrs()[0][16] * get_cls_shared_ptrs()[0][17] *
+            get_cls_shared_ptrs()[0][17] * get_cls_shared_ptrs()[0][18] *
             sizeof(uint8_t));  // B KxN in uint8_t
         if (!get_cls_shared_ptrs()[2]) {
             VERSACORE_DEBUG_PRINT("ERROR: B alloc failed!\r\n");
@@ -649,8 +650,8 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         xdma_memcpy_1d((void*)l3_input_B_addr, (void*)get_cls_shared_ptrs()[2],
                        (get_cls_shared_ptrs()[0][9]) *
                            (get_cls_shared_ptrs()[0][10]) *
-                           get_cls_shared_ptrs()[0][16] *
-                           get_cls_shared_ptrs()[0][17] * sizeof(uint8_t));
+                           get_cls_shared_ptrs()[0][17] *
+                           get_cls_shared_ptrs()[0][18] * sizeof(uint8_t));
         task_id = xdma_start();
         xdma_remote_wait(task_id);
 
@@ -658,11 +659,15 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         // load C only if C_addr is not 0
         l3_input_C_addr =
             make_u64(get_cls_shared_ptrs()[0][4], get_cls_shared_ptrs()[0][5]);
-        if (l3_input_C_addr != 0) {
-            get_cls_shared_ptrs()[0][14] = 1;
+        if (get_cls_shared_ptrs()[0][14]){
+            get_cls_shared_ptrs()[0][15] = 0;
+            get_cls_shared_ptrs()[3] = NULL;
+            VERSACORE_DEBUG_PRINT("skip loading C since b\r\n");
+        } else if (l3_input_C_addr != 0) {
+            get_cls_shared_ptrs()[0][15] = 1;
             get_cls_shared_ptrs()[3] = snrt_l1_malloc(
                 (get_cls_shared_ptrs()[0][8]) * (get_cls_shared_ptrs()[0][10]) *
-                get_cls_shared_ptrs()[0][15] * get_cls_shared_ptrs()[0][17] *
+                get_cls_shared_ptrs()[0][16] * get_cls_shared_ptrs()[0][18] *
                 sizeof(uint32_t));  // C MxN in uint32
             if (!get_cls_shared_ptrs()[3]) {
                 VERSACORE_DEBUG_PRINT("ERROR: C alloc failed!\r\n");
@@ -674,20 +679,20 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
             xdma_memcpy_1d(
                 (void*)l3_input_C_addr, (void*)get_cls_shared_ptrs()[3],
                 (get_cls_shared_ptrs()[0][8]) * (get_cls_shared_ptrs()[0][10]) *
-                    get_cls_shared_ptrs()[0][15] *
-                    get_cls_shared_ptrs()[0][17] * sizeof(uint32_t));
+                    get_cls_shared_ptrs()[0][16] *
+                    get_cls_shared_ptrs()[0][18] * sizeof(uint32_t));
             task_id = xdma_start();
             xdma_remote_wait(task_id);
         } else {
-            get_cls_shared_ptrs()[0][14] = 0;
+            get_cls_shared_ptrs()[0][15] = 0;
             get_cls_shared_ptrs()[3] = NULL;
-            VERSACORE_DEBUG_PRINT("skip loading C since C_addr is 0\r\n");
+            VERSACORE_DEBUG_PRINT("skip loading C since C_addr is 0, eg., C is always zero\r\n");
         }
 
         // L1 data addresses for D
         get_cls_shared_ptrs()[4] = snrt_l1_malloc(
             (get_cls_shared_ptrs()[0][8]) * (get_cls_shared_ptrs()[0][10]) *
-            get_cls_shared_ptrs()[0][15] * get_cls_shared_ptrs()[0][17] *
+            get_cls_shared_ptrs()[0][16] * get_cls_shared_ptrs()[0][18] *
             sizeof(uint32_t));  // D MxN in uint32
         if (!get_cls_shared_ptrs()[4]) {
             VERSACORE_DEBUG_PRINT("ERROR: D alloc failed!\r\n");
@@ -764,12 +769,12 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         }
         // Atlstride0
         Atlstride[0] =
-            get_cls_shared_ptrs()[0][15] * get_cls_shared_ptrs()[0][16];
+            get_cls_shared_ptrs()[0][16] * get_cls_shared_ptrs()[0][17];
         // Atlstride1
         Atlstride[1] = 0;
         // Atlstride2
-        Atlstride[2] = get_cls_shared_ptrs()[0][15] *
-                       get_cls_shared_ptrs()[0][16] *
+        Atlstride[2] = get_cls_shared_ptrs()[0][16] *
+                       get_cls_shared_ptrs()[0][17] *
                        get_cls_shared_ptrs()[0][9];
         // Atlstride3
         Atlstride[3] = 0;
@@ -828,10 +833,10 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
 
         // Btlstride0
         Btlstride[0] =
-            get_cls_shared_ptrs()[0][17] * get_cls_shared_ptrs()[0][16];
+            get_cls_shared_ptrs()[0][17] * get_cls_shared_ptrs()[0][18];
         // Btlstride1
         Btlstride[1] = get_cls_shared_ptrs()[0][17] *
-                       get_cls_shared_ptrs()[0][16] *
+                       get_cls_shared_ptrs()[0][18] *
                        get_cls_shared_ptrs()[0][9];
 
         // Btlstride2
@@ -877,9 +882,10 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         }
         get_cls_shared_ptrs()[5][13] = (uint32_t)(uintptr_t)Ctlbound;
         // Ctlbound0
-        if (get_cls_shared_ptrs()[0][14] == 0) {
+        if (get_cls_shared_ptrs()[0][14] == 1) {
+            // accumPrevC is true
             Ctlbound[0] = 0;
-        } else if (get_cls_shared_ptrs()[0][11] == 0) {
+        } else if (get_cls_shared_ptrs()[0][11] == 0) { // else bound is normal
             Ctlbound[0] = Ctlbound_0_0;
         } else {
             Ctlbound[0] = Ctlbound_1_0;
@@ -906,18 +912,19 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
             Ctlstride[0] = c_spatial_bound_0_1 * (bankWidth / 8);
         }
         // Ctlstride1
-        Ctlstride[1] = C_elem_len * get_cls_shared_ptrs()[0][15] *
-                       get_cls_shared_ptrs()[0][17] / 8;
+        Ctlstride[1] = C_elem_len * get_cls_shared_ptrs()[0][16] *
+                       get_cls_shared_ptrs()[0][18] / 8;
         // Ctlstride2
-        Ctlstride[2] = (get_cls_shared_ptrs()[0][10]) * C_elem_len *
-                       get_cls_shared_ptrs()[0][15] *
-                       get_cls_shared_ptrs()[0][17] / 8;
+        Ctlstride[2] = get_cls_shared_ptrs()[0][10] * C_elem_len *
+                       get_cls_shared_ptrs()[0][16] *
+                       get_cls_shared_ptrs()[0][18] / 8;
         // Ctlstride3
         Ctlstride[3] = 0;
         // set_addr_remap_index_C
         get_cls_shared_ptrs()[5][15] = 0;
         // channel_en_C []
-        if (get_cls_shared_ptrs()[0][14] == 0) {
+        // set channel_en_C to zero if accumPrevC or addNonZeroC
+        if (get_cls_shared_ptrs()[0][14] == 1 || get_cls_shared_ptrs()[0][15] == 0) {
             get_cls_shared_ptrs()[5][16] = chanelEnC_C_null;
         } else if (get_cls_shared_ptrs()[0][11] == 0) {
             get_cls_shared_ptrs()[5][16] = chanelEnC_0;
@@ -969,12 +976,12 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
             D32tlstride[0] = d32_spatial_bound_0_1 * (bankWidth / 8);
         }
         // D32tlstride1
-        D32tlstride[1] = D32_elem_len * get_cls_shared_ptrs()[0][15] *
-                         get_cls_shared_ptrs()[0][17] / 8;
+        D32tlstride[1] = D32_elem_len * get_cls_shared_ptrs()[0][16] *
+                         get_cls_shared_ptrs()[0][18] / 8;
         // D32tlstride2
         D32tlstride[2] = (get_cls_shared_ptrs()[0][10]) * D32_elem_len *
-                         get_cls_shared_ptrs()[0][15] *
-                         get_cls_shared_ptrs()[0][17] / 8;
+                         get_cls_shared_ptrs()[0][16] *
+                         get_cls_shared_ptrs()[0][18] / 8;
         // D32tlstride3
         D32tlstride[3] = 0;
         // set_addr_remap_index_D32
@@ -1026,7 +1033,8 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         );
 
         set_versacore_csr(
-            get_cls_shared_ptrs()[0][14], get_cls_shared_ptrs()[0][9],
+            // accPrevC means takes new C
+            get_cls_shared_ptrs()[0][14] == 0, get_cls_shared_ptrs()[0][9],
             get_cls_shared_ptrs()[0][10] * get_cls_shared_ptrs()[0][8], 0,
             get_cls_shared_ptrs()[0][11], 0);
 
@@ -1044,7 +1052,7 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         for (int i = 0;
              i <
              (get_cls_shared_ptrs()[0][8]) * (get_cls_shared_ptrs()[0][10]) *
-                 get_cls_shared_ptrs()[0][15] * get_cls_shared_ptrs()[0][17];
+                 get_cls_shared_ptrs()[0][16] * get_cls_shared_ptrs()[0][18];
              i++) {
             VERSACORE_DEBUG_PRINT("D[%d] = %d\r\n", i,
                                   get_cls_shared_ptrs()[4][i]);
@@ -1057,8 +1065,8 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
     if (snrt_is_dm_core()) {
         uint32_t output_size = (get_cls_shared_ptrs()[0][8]) *
                                (get_cls_shared_ptrs()[0][10]) *
-                               get_cls_shared_ptrs()[0][15] *
-                               get_cls_shared_ptrs()[0][17] * sizeof(uint32_t);
+                               get_cls_shared_ptrs()[0][16] *
+                               get_cls_shared_ptrs()[0][18] * sizeof(uint32_t);
         uint64_t l3_output_D_addr;
         // l3_output_D_addr output address in L3
         l3_output_D_addr =
@@ -1076,8 +1084,8 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         snrt_l1_free(get_cls_shared_ptrs()[0]);
         snrt_l1_free(get_cls_shared_ptrs()[1]);
         snrt_l1_free(get_cls_shared_ptrs()[2]);
-        // Free C only if it is allocated
-        if (get_cls_shared_ptrs()[0][14]) {
+        // Free C only if it is allocated when accNonZeroC is true
+        if (get_cls_shared_ptrs()[0][15]) {
             snrt_l1_free(get_cls_shared_ptrs()[3]);
         }
         snrt_l1_free(get_cls_shared_ptrs()[4]);
