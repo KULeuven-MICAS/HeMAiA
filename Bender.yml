@@ -143,14 +143,8 @@ sources:
       - target/rtl/src/occamy_xilinx.sv
 
   # target/sim
-  - target: simulation_occamy
-    files:
-      - target/sim/testharness/uartdpi/uartdpi.sv
-      - target/sim/testharness/testharness.sv
-      - hw/hemaia/hemaia_mem_system/hemaia_mem_chip.sv
-  
-  # target/sim_chip
   - target: simulation_hemaia
     files:
       - target/sim/testharness/uartdpi/uartdpi.sv
+      - hw/hemaia/hemaia_mem_system/hemaia_mem_chip.sv
       - target/sim/testharness/testharness.sv

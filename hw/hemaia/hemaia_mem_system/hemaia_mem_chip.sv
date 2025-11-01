@@ -318,6 +318,12 @@ module hemaia_mem_chip #(
   };
 
   // M0 to clk_rst_controller, M1 to d2d_link_ctrl
+  typedef struct packed {
+    logic [31:0] idx;
+    logic [47:0] start_addr;
+    logic [47:0] end_addr;
+  } xbar_rule_48_t;
+
   xbar_rule_48_t [1:0] HeMAiAMemChipPeriphXbarAddrmap;
   assign HeMAiAMemChipPeriphXbarAddrmap = '{
           '{idx: 0, start_addr: {chip_id, 40'h002005000}, end_addr: {chip_id, 40'h002006000}},
@@ -458,7 +464,6 @@ module hemaia_mem_chip #(
   axi_a48_d512_i6_u1_req_t axi_wide_xbar_to_narrow_xbar_req;
   axi_a48_d512_i6_u1_resp_t axi_wide_xbar_to_narrow_xbar_rsp;
 
-
   assign master_to_axi_wide_xbar_req[0] = axi_d2d_link_to_soc_xbar_req;
   assign axi_d2d_link_to_soc_xbar_rsp = master_to_axi_wide_xbar_rsp[0];
   assign master_to_axi_wide_xbar_req[1] = axi_wide_mem_sys_to_xbar_req;
@@ -472,9 +477,8 @@ module hemaia_mem_chip #(
   assign axi_wide_xbar_to_slave_rsp[1] = axi_wide_xbar_to_mem_sys_rsp;
   assign axi_wide_xbar_to_narrow_xbar_req = axi_wide_xbar_to_slave_req[2];
   assign axi_wide_xbar_to_slave_rsp[2] = axi_wide_xbar_to_narrow_xbar_rsp;
-  assign axi_wide_xbar_to_slave_req[3] = axi_wide_xbar_to_dram_req;
-  assign axi_wide_xbar_to_dram_rsp = axi_wide_xbar_to_slave_rsp[3];
-
+  assign axi_wide_xbar_to_dram_req = axi_wide_xbar_to_slave_req[3];
+  assign axi_wide_xbar_to_slave_rsp[3] = axi_wide_xbar_to_dram_rsp;
 
   axi_xbar #(
       .Cfg          (HeMAiAMemChipWideXbarCfg),
@@ -530,7 +534,7 @@ module hemaia_mem_chip #(
       .axi_mst_resp_t     (axi_a48_d512_i4_u1_resp_t),
       .axi_slv_req_t      (axi_a48_d64_i4_u1_req_t),
       .axi_slv_resp_t     (axi_a48_d64_i4_u1_resp_t)
-  ) i_axi_to_axi_lite_dw (
+  ) i_axi_narrow_to_axi_wide_dw (
       .clk_i(clk_host),
       .rst_ni(rst_host_n),
       .slv_req_i(axi_narrow_xbar_to_wide_xbar_req),
