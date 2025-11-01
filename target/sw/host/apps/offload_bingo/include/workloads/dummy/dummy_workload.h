@@ -50,6 +50,7 @@ uint32_t __workload_dummy(bingo_task_t **task_list) {
     task_list[0] = task_dummy_0;
     task_list[1] = task_dummy_1;
     task_list[2] = task_dummy_2;
+    asm volatile("fence" ::: "memory");
     // User need to define the number of tasks
     int num_tasks = 3;
     return num_tasks;

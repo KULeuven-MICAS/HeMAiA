@@ -574,7 +574,7 @@ uint32_t __workload_versacore(bingo_task_t **task_list, uintptr_t *output_data_p
     task_list[0] = task_versacore;
     task_list[1] = task_check_results;
 
-
+    asm volatile("fence" ::: "memory");
     // User need to define the number of tasks
     int num_tasks = 2;
 
