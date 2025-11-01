@@ -10,11 +10,18 @@
       router_to_soc_iw: 4,          // soc_to_router_iw + clog2(chips)
       soc_to_router_iw: 4,          // Not beneficial for iw > 6
       single_chip: false,
-      single_chip_id: 0,            // Only used for single chip simulation
       testbench_cfg: {              // The total number of homogeneous chips (x * y) on the virtual interposer
-        // Emulate a two-chips configuration
-        upper_left_coordinate: [0, 0],
-        lower_right_coordinate: [1, 1],
+        // Emulate a 2*2C + 2M configuration
+        hemaia_compute_chip: [
+          {coordinate: [0,0]},
+          {coordinate: [0,1]},
+          {coordinate: [1,0]},
+          {coordinate: [1,1]}
+        ],
+        hemaia_mem_chip: [
+          {coordinate: [2,0], mem_size: 67108864},
+          {coordinate: [2,1], mem_size: 67108864}
+        ]
       }
     }
     addr_width: 48,

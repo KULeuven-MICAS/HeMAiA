@@ -12,12 +12,13 @@
       single_chip: false,
       single_chip_id: 0,            // Only used for single chip simulation
       testbench_cfg: {              // The total number of homogeneous chips (x * y) on the virtual interposer
-        // Emulate a four-chips configuration
-        //        x = 0       x = 1
-        // y = 0  (0, 0)     (1, 0)
-        // y = 1  (0, 1)     (1, 1)
-        upper_left_coordinate: [0, 0],
-        lower_right_coordinate: [1, 1],
+        // Emulate a 2*2C configuration
+        hemaia_compute_chip: [
+          {coordinate: [0,0]},
+          {coordinate: [0,1]},
+          {coordinate: [1,0]},
+          {coordinate: [1,1]}
+        ]
       }
     }
     addr_width: 48,
