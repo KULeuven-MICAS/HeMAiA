@@ -203,10 +203,10 @@ module testharness
 %   else:
       .io_east_d2d(),
       .io_flow_control_east_rts_o(),
-      .io_flow_control_east_cts_i('0),
-      .io_flow_control_east_rts_i('0),
+      .io_flow_control_east_cts_i(const_zero),
+      .io_flow_control_east_rts_i(const_zero),
       .io_flow_control_east_cts_o(),
-      .io_east_test_being_requested_i('0),
+      .io_east_test_being_requested_i(const_zero),
       .io_east_test_request_o(),
 %   endif
 %   if any(neighborhood.coordinate == (chip.coordinate[0]-1, chip.coordinate[1]) for neighborhood in chip_coordinates):
@@ -220,10 +220,10 @@ module testharness
 %   else:
       .io_west_d2d(),
       .io_flow_control_west_rts_o(),
-      .io_flow_control_west_cts_i('0),
-      .io_flow_control_west_rts_i('0),
+      .io_flow_control_west_cts_i(const_zero),
+      .io_flow_control_west_rts_i(const_zero),
       .io_flow_control_west_cts_o(),
-      .io_west_test_being_requested_i('0),
+      .io_west_test_being_requested_i(const_zero),
       .io_west_test_request_o(),
 %   endif
 %   if any(neighborhood.coordinate == (chip.coordinate[0], chip.coordinate[1]-1) for neighborhood in chip_coordinates):
@@ -237,10 +237,10 @@ module testharness
 %   else:
       .io_north_d2d(),
       .io_flow_control_north_rts_o(),
-      .io_flow_control_north_cts_i('0),
-      .io_flow_control_north_rts_i('0),
+      .io_flow_control_north_cts_i(const_zero),
+      .io_flow_control_north_rts_i(const_zero),
       .io_flow_control_north_cts_o(),
-      .io_north_test_being_requested_i('0),
+      .io_north_test_being_requested_i(const_zero),
       .io_north_test_request_o(),
 %   endif
 %   if any(neighborhood.coordinate == (chip.coordinate[0], chip.coordinate[1]+1) for neighborhood in chip_coordinates):
@@ -254,10 +254,10 @@ module testharness
 %   else:
       .io_south_d2d(),
       .io_flow_control_south_rts_o(),
-      .io_flow_control_south_cts_i('0),
-      .io_flow_control_south_rts_i('0),
+      .io_flow_control_south_cts_i(const_zero),
+      .io_flow_control_south_rts_i(const_zero),
       .io_flow_control_south_cts_o(),
-      .io_south_test_being_requested_i('0),
+      .io_south_test_being_requested_i(const_zero),
       .io_south_test_request_o(),
 %   endif
 % endif
@@ -340,10 +340,10 @@ module testharness
 %   else:
       .east_d2d_io(),
       .flow_control_east_rts_o(),
-      .flow_control_east_cts_i('0),
-      .flow_control_east_rts_i('0),
+      .flow_control_east_cts_i(const_zero),
+      .flow_control_east_rts_i(const_zero),
       .flow_control_east_cts_o(),
-      .east_test_being_requested_i('0),
+      .east_test_being_requested_i(const_zero),
       .east_test_request_o(),
 %   endif
 %   if any(neighborhood.coordinate == (chip.coordinate[0]-1, chip.coordinate[1]) for neighborhood in chip_coordinates):
@@ -357,10 +357,10 @@ module testharness
 %   else:
       .west_d2d_io(),
       .flow_control_west_rts_o(),
-      .flow_control_west_cts_i('0),
-      .flow_control_west_rts_i('0),
+      .flow_control_west_cts_i(const_zero),
+      .flow_control_west_rts_i(const_zero),
       .flow_control_west_cts_o(),
-      .west_test_being_requested_i('0),
+      .west_test_being_requested_i(const_zero),
       .west_test_request_o(),
 %   endif
 %   if any(neighborhood.coordinate == (chip.coordinate[0], chip.coordinate[1]-1) for neighborhood in chip_coordinates):
@@ -374,10 +374,10 @@ module testharness
 %   else:
       .north_d2d_io(),
       .flow_control_north_rts_o(),
-      .flow_control_north_cts_i('0),
-      .flow_control_north_rts_i('0),
+      .flow_control_north_cts_i(const_zero),
+      .flow_control_north_rts_i(const_zero),
       .flow_control_north_cts_o(),
-      .north_test_being_requested_i('0),
+      .north_test_being_requested_i(const_zero),
       .north_test_request_o(),
 %   endif
 %   if any(neighborhood.coordinate == (chip.coordinate[0], chip.coordinate[1]+1) for neighborhood in chip_coordinates):
@@ -391,10 +391,10 @@ module testharness
 %   else:
       .south_d2d_io(),
       .flow_control_south_rts_o(),
-      .flow_control_south_cts_i('0),
-      .flow_control_south_rts_i('0),
+      .flow_control_south_cts_i(const_zero),
+      .flow_control_south_rts_i(const_zero),
       .flow_control_south_cts_o(),
-      .south_test_being_requested_i('0),
+      .south_test_being_requested_i(const_zero),
       .south_test_request_o()
 %   endif
   );

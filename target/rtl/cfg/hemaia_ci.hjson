@@ -13,6 +13,7 @@
         hemaia_compute_chip: [
           {coordinate: [0,0]}
         ],
+        hemaia_mem_chip: []
       }
     }
     addr_width: 48,

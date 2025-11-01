@@ -87,7 +87,7 @@ module hemaia_mem_chip #(
   localparam int HeMAiAMemChipDivision[5] = '{3, 1, 1, 1, 1};
   localparam int HeMAiAResetDelays[5] = '{default: 3};
 
-  logic [1:0] clk_vec, rst_n_vec;
+  logic [4:0] clk_vec, rst_n_vec;
   (* syn_keep = 1, syn_preserve = 1 *)
   logic clk_host;
   (* syn_keep = 1, syn_preserve = 1 *)
@@ -160,7 +160,7 @@ module hemaia_mem_chip #(
   axi_a48_d64_i4_u1_req_t   axi_narrow_xbar_to_mem_sys_req;
   axi_a48_d64_i4_u1_resp_t  axi_narrow_xbar_to_mem_sys_rsp;
 
-  hemaia_mem_system #(
+  hemaia_mem_system_for_mem_chip #(
       .chip_id_t(chip_id_t),
       .axi_wide_master_req_t(axi_a48_d512_i6_u1_req_t),
       .axi_wide_master_rsp_t(axi_a48_d512_i6_u1_resp_t),
