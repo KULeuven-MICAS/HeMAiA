@@ -5,19 +5,20 @@
     remote_quadrants: [],
     // Multi-chip configuration
     hemaia_multichip: {
-      nr_chiplets: 4,
       chip_id_width: 8,             // Not verified, should never be changed
       router_to_soc_iw: 4,          // soc_to_router_iw + clog2(chips)
       soc_to_router_iw: 4,          // Not beneficial for iw > 6
       single_chip: false,
       single_chip_id: 0,            // Only used for single chip simulation
       testbench_cfg: {              // The total number of homogeneous chips (x * y) on the virtual interposer
-        // Emulate a four-chips configuration
-        //        x = 0       x = 1
-        // y = 0  (0, 0)     (1, 0)
-        // y = 1  (0, 1)     (1, 1)
-        upper_left_coordinate: [0, 0],
-        lower_right_coordinate: [1, 1],
+        // Emulate a 2*2C configuration
+        hemaia_compute_chip: [
+          {coordinate: [0,0]},
+          {coordinate: [0,1]},
+          {coordinate: [1,0]},
+          {coordinate: [1,1]}
+        ],
+        hemaia_mem_chip: []
       }
     }
     addr_width: 48,

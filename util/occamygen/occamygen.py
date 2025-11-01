@@ -705,7 +705,7 @@ def main():
     ########
     if args.xdma is True and occamy_cfg["hemaia_xdma_cfg"] is not None:
         print("------------------------------------------------")
-        print("    Generate XDMA")
+        print("    Generate HeMAiA Compute Chip XDMA")
         print("------------------------------------------------")
         import importlib.util
         script_dir = pathlib.Path(__file__).parent.resolve()
@@ -757,7 +757,64 @@ def main():
             + " --sw-target-dir "
             + str(script_dir / ".." / ".." / "target" / "sw" / "shared" / "vendor" / "xdma" / "hemaia-xdma-addr.h")
         )
-        print("XDMA generation finished")
+        print("HeMAiA Chip XDMA generation finished")
+
+    if args.xdma is True and any(occamy_cfg["hemaia_multichip"]["testbench_cfg"]["hemaia_mem_chip"]) and occamy_cfg["hemaia_xdma_cfg"] is not None:
+        print("------------------------------------------------")
+        print("    Generate HeMAiA Mem Chip XDMA")
+        print("------------------------------------------------")
+        import importlib.util
+        script_dir = pathlib.Path(__file__).parent.resolve()
+        snaxgen_path = script_dir / ".." / ".." / "deps" / "snitch_cluster" /  "util" / "snaxgen" / "snaxgen.py"
+        spec = importlib.util.spec_from_file_location("snaxgen", snaxgen_path)
+        snaxgen = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(snaxgen)
+        gen_file = snaxgen.gen_file
+        gen_chisel_file = snaxgen.gen_chisel_file
+        get_template = snaxgen.get_template
+
+        tpl_rtl_wrapper_file = script_dir / ".." / ".." / "deps" / "snitch_cluster" / "hw" / "templates" / "snax_xdma_wrapper.sv.tpl"
+
+        tpl_rtl_wrapper = get_template(tpl_rtl_wrapper_file)
+
+        gen_file(
+            cfg={
+                "name": "hemaia_mem_chip",
+                "xdma_cfg_io_width": occamy_cfg["hemaia_xdma_cfg"]["cfg_io_width"],
+                "dma_data_width": 512,
+                "data_width": occamy_cfg["data_width"],
+                "addr_width": occamy_cfg["addr_width"],
+                "tcdm": {
+                    "size": int(occamy_cfg["hemaia_multichip"]["testbench_cfg"]["hemaia_mem_chip"][0]["mem_size"]/1024),
+                }
+            },
+            tpl=tpl_rtl_wrapper,
+            target_path=str(script_dir / ".." / ".." / "hw" / "hemaia" / "hemaia_mem_system") + "/",
+            file_name= "hemaia_mem_chip_xdma_wrapper.sv",
+        )
+
+        gen_chisel_file(
+            chisel_path=str(script_dir / ".." / ".." / "deps" / "snitch_cluster" / "hw" / "chisel"),
+            chisel_param="snax.xdma.xdmaTop.XDMATopGen",
+            gen_path=" --clusterName "
+            + "hemaia_mem_chip"
+            + " --tcdmDataWidth "
+            + str(occamy_cfg["data_width"])
+            + " --axiDataWidth "
+            + str(512)
+            + " --axiAddrWidth "
+            + str(occamy_cfg["addr_width"])
+            + " --tcdmSize "
+            + str(int(occamy_cfg["hemaia_multichip"]["testbench_cfg"]["hemaia_mem_chip"][0]["mem_size"]/1024))
+            + " --xdmaCfg "
+            + hjson.dumpsJSON(obj=occamy_cfg["hemaia_xdma_cfg"], separators=(",", ":")).replace(" ", "")
+            + " --hw-target-dir "
+            + str(script_dir / ".." / ".." / "hw" / "hemaia" / "hemaia_mem_system") + "/"
+            + " --sw-target-dir "
+            + str(script_dir / ".." / ".." / "target" / "sw" / "shared" / "vendor" / "xdma" / "hemaia-mem-chip-xdma-addr.h")
+        )
+        print("HeMAiA Mem Chip XDMA generation finished")
+
 
     # # generate the loader script
     if args.gen_host_ld:

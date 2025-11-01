@@ -12,7 +12,7 @@
 `include "tcdm_interface/typedef.svh"
 `include "register_interface/typedef.svh"
 
-module hemaia_mem_system #(
+module hemaia_mem_system_for_mem_chip #(
     parameter type chip_id_t = logic,
     // AXI Wide Port
     parameter type axi_wide_master_req_t = logic,
@@ -485,7 +485,7 @@ module hemaia_mem_system #(
 
   assign csr_rsp.error = 1'b0;
 
-  hemaia_xdma_wrapper #(
+  hemaia_mem_chip_xdma_wrapper #(
       .tcdm_req_t(tcdm_req_t),
       .tcdm_rsp_t(tcdm_rsp_t),
       // Wide ports

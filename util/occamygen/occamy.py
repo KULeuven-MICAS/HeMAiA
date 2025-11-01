@@ -764,14 +764,7 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
     if occamy_cfg['hemaia_multichip']['single_chip']:
         nr_chiplets = 1
     else:
-        nr_chiplets = occamy_cfg['hemaia_multichip']['nr_chiplets']
-        upper_left_coordinate = occamy_cfg['hemaia_multichip']['testbench_cfg']['upper_left_coordinate']
-        lower_right_coordinate = occamy_cfg['hemaia_multichip']['testbench_cfg']['lower_right_coordinate']
-        delta_x = lower_right_coordinate[0] - upper_left_coordinate[0]
-        delta_y = lower_right_coordinate[1] - upper_left_coordinate[1]
-        expected_nr_chiplets = (delta_x + 1) * (delta_y + 1)
-        if not (nr_chiplets==expected_nr_chiplets):
-            raise ValueError(f"The number of chiplets ({nr_chiplets}) does not match the coordinates provided in the testbench_cfg ({upper_left_coordinate} to {lower_right_coordinate}, expected {expected_nr_chiplets} chiplets). Please check your configuration.")
+        nr_chiplets = len(occamy_cfg['hemaia_multichip']['testbench_cfg']['hemaia_compute_chip'])
     nr_quads = occamy_cfg['nr_s1_quadrant']
     nr_clusters = len(occamy_cfg["clusters"])
     nr_cores = sum(core_per_cluster_list)

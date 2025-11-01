@@ -14,7 +14,7 @@ def read_json_file(file):
         raise SystemExit(sys.exc_info()[1])
     return obj
 
-def copy_directory_m_n_times(input_dir, output_dir, m, n):
+def copy_directory_n_times(input_dir, output_dir, folder_names):
     # Check if the input directory exists
     if not os.path.isdir(input_dir):
         print(f"Error: {input_dir} does not exist or is not a directory.")
@@ -22,16 +22,15 @@ def copy_directory_m_n_times(input_dir, output_dir, m, n):
     
     os.makedirs(output_dir, exist_ok=True)
     # Loop through m and n to create copies
-    for x in range(m):
-        for y in range(n):
-            # Define the new directory name
-            output_dir_x_y = f"{output_dir}/app_chip_{x}_{y}"
-            
-            # Copy the directory to the new location
-            if os.path.exists(output_dir_x_y):
-                shutil.rmtree(output_dir_x_y)
-            shutil.copytree(input_dir, output_dir_x_y)
-            print(f"Copied {input_dir} to {output_dir_x_y}")
+    for name in folder_names:
+        # Define the new directory name
+        app_dir = f"{output_dir}/{name}"
+        
+        # Copy the directory to the new location
+        if os.path.exists(app_dir):
+            shutil.rmtree(app_dir)
+        shutil.copytree(input_dir, app_dir)
+        print(f"Copied {input_dir} to {app_dir}")
 
 def main():
     # Define argument parser
@@ -53,10 +52,11 @@ def main():
     # Read HJSON description of System.
     with args.cfg as file:
         occamy_cfg = read_json_file(file)
-    m = occamy_cfg['hemaia_multichip']['testbench_cfg']['lower_right_coordinate'][0] + 1
-    n = occamy_cfg['hemaia_multichip']['testbench_cfg']['lower_right_coordinate'][1] + 1
+    folder_names = []
+    for chip in occamy_cfg['hemaia_multichip']['testbench_cfg']['hemaia_compute_chip']:
+        folder_names.append("app_chip_" + str(chip["coordinate"][0]) + "_" + str(chip["coordinate"][1]))
     # Call the function with parsed arguments
-    copy_directory_m_n_times(args.input_dir, args.output_dir, m, n)
+    copy_directory_n_times(args.input_dir, args.output_dir, folder_names)
 
 if __name__ == '__main__':
     main()
