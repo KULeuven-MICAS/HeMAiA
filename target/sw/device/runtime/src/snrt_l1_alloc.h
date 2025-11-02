@@ -22,7 +22,7 @@
 #define ALIGN_UP(addr, size) (((addr) + (size)-1) & ~((size)-1))
 #define ALIGN_DOWN(addr, size) ((addr) & ~((size)-1))
 
-#define TCDM_ROW_SIZE 256 // 256B per row (8B/Bank*32Bank)
+#define TCDM_ROW_SIZE 512 // 512B per row (8B/Bank*64Bank)
 #define RESERVED_SIZE 4096 // reserve 4kB for future use
 // Getter functions for L1 allocator
 inline snrt_l1_allocator_t *get_snrt_l1_allocator() {
@@ -61,15 +61,9 @@ inline void snrt_l1_malloc_init(){
         get_snrt_l1_allocator()->l1_heap_manager = o1heapInit((void *)(get_snrt_l1_allocator()->l1_heap_start_addr), get_snrt_l1_allocator()->l1_heap_size);
         // if(snrt_cluster_idx() == 0){
         //     printf("[Cluster0] DM core initialized L1 Allocator\n");
-        //     printf("[Cluster0] L1 Alloc Addr 0x%x\n",&(snrt_l1_allocator()->l1_heap_manager));
-        //     printf("[Cluster0] Heap Start Addr 0x%x\n",snrt_l1_allocator()->l1_heap_start_addr);
-        //     printf("[Cluster0] Heap Size 0x%x\n",snrt_l1_allocator()->l1_heap_size);
-        // }
-        // if(snrt_cluster_idx() == 1){
-        //     printf("[Cluster1] DM core initialized L1 Allocator\n");
-        //     printf("[Cluster1] L1 Alloc Addr 0x%x\n",snrt_l1_allocator()->l1_heap_manager);
-        //     printf("[Cluster1] Heap Start Addr 0x%x\n",snrt_l1_allocator()->l1_heap_start_addr);
-        //     printf("[Cluster1] Heap Size 0x%x\n",snrt_l1_allocator()->l1_heap_size);
+        //     printf("[Cluster0] L1 Alloc Addr 0x%x\n",&(get_snrt_l1_allocator()->l1_heap_manager));
+        //     printf("[Cluster0] Heap Start Addr 0x%x\n",get_snrt_l1_allocator()->l1_heap_start_addr);
+        //     printf("[Cluster0] Heap Size 0x%x\n",get_snrt_l1_allocator()->l1_heap_size);
         // }
     }
     snrt_cluster_hw_barrier();
