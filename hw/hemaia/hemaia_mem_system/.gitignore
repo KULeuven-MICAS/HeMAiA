@@ -1,2 +1,4 @@
 /hemaia_xdma_wrapper.sv
 /hemaia_xdma.sv
+/hemaia_mem_chip_xdma_wrapper.sv
+/hemaia_mem_chip_xdma.sv

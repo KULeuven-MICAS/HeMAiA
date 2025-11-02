@@ -9,11 +9,11 @@
       router_to_soc_iw: 8,
       soc_to_router_iw: 4,
       single_chip: true,
-      single_chip_id: 0, 
       testbench_cfg: {
-        // Emulate a four-chips configuration
-        upper_left_coordinate: [0, 0],
-        lower_right_coordinate: [0, 0]
+        hemaia_compute_chip: [
+          {coordinate: [0,0]}
+        ],
+        hemaia_mem_chip: []
       }
     }
     addr_width: 48,
