@@ -54,7 +54,7 @@ import ${name}_pkg::*;
   input  logic        flow_control_east_cts_i,
   input  logic        flow_control_east_rts_i,
   output logic        flow_control_east_cts_o,
-  inout  logic [19:0] east_d2d_io [3],
+  inout  wire  [19:0] east_d2d_io [3],
   // West side
   input  logic        west_test_being_requested_i,
   output logic        west_test_request_o,
@@ -62,7 +62,7 @@ import ${name}_pkg::*;
   input  logic        flow_control_west_cts_i,
   input  logic        flow_control_west_rts_i,
   output logic        flow_control_west_cts_o,
-  inout  logic [19:0] west_d2d_io [3],
+  inout  wire  [19:0] west_d2d_io [3],
   // North side
   input  logic        north_test_being_requested_i,
   output logic        north_test_request_o,
@@ -70,7 +70,7 @@ import ${name}_pkg::*;
   input  logic        flow_control_north_cts_i,
   input  logic        flow_control_north_rts_i,
   output logic        flow_control_north_cts_o,
-  inout  logic [19:0] north_d2d_io [3],
+  inout  wire  [19:0] north_d2d_io [3],
   // South side
   input  logic        south_test_being_requested_i,
   output logic        south_test_request_o,
@@ -78,7 +78,7 @@ import ${name}_pkg::*;
   input  logic        flow_control_south_cts_i,
   input  logic        flow_control_south_rts_i,
   output logic        flow_control_south_cts_o,
-  inout  logic [19:0] south_d2d_io [3],
+  inout  wire  [19:0] south_d2d_io [3],
 % endif
   // `uart` Interface
   output logic        uart_tx_o,
