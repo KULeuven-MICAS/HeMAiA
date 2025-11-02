@@ -32,7 +32,7 @@ module hemaia_mem_chip #(
     input  logic            flow_control_east_cts_i,
     input  logic            flow_control_east_rts_i,
     output logic            flow_control_east_cts_o,
-    inout  logic     [19:0] east_d2d_io                 [3],
+    inout  wire      [19:0] east_d2d_io                 [3],
     // D2D Link - West side
     input  logic            west_test_being_requested_i,
     output logic            west_test_request_o,
@@ -40,7 +40,7 @@ module hemaia_mem_chip #(
     input  logic            flow_control_west_cts_i,
     input  logic            flow_control_west_rts_i,
     output logic            flow_control_west_cts_o,
-    inout  logic     [19:0] west_d2d_io                 [3],
+    inout  wire      [19:0] west_d2d_io                 [3],
     // D2D Link - North side
     input  logic            north_test_being_requested_i,
     output logic            north_test_request_o,
@@ -48,7 +48,7 @@ module hemaia_mem_chip #(
     input  logic            flow_control_north_cts_i,
     input  logic            flow_control_north_rts_i,
     output logic            flow_control_north_cts_o,
-    inout  logic     [19:0] north_d2d_io                [3],
+    inout  wire      [19:0] north_d2d_io                [3],
     // D2D Link - South side
     input  logic            south_test_being_requested_i,
     output logic            south_test_request_o,
@@ -56,7 +56,7 @@ module hemaia_mem_chip #(
     input  logic            flow_control_south_cts_i,
     input  logic            flow_control_south_rts_i,
     output logic            flow_control_south_cts_o,
-    inout  logic     [19:0] south_d2d_io                [3]
+    inout  wire      [19:0] south_d2d_io                [3]
 );
 
   ///////////////////
@@ -661,7 +661,7 @@ module hemaia_mem_chip #(
   ) i_axi_narrow_xbar (
       .clk_i                (clk_host),
       .rst_ni               (rst_host_n),
-      .test_i               (test_mode_i),
+      .test_i               ('0),
       .slv_ports_req_i      (master_to_axi_narrow_xbar_req),
       .slv_ports_resp_o     (master_to_axi_narrow_xbar_rsp),
       .mst_ports_req_o      (axi_narrow_xbar_to_slave_req),
