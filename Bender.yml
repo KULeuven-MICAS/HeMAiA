@@ -142,6 +142,14 @@ sources:
     files:
       - target/rtl/src/occamy_xilinx.sv
 
+  # HeMAiA Mem Chip
+  - target: hemaia_mem_chip
+    files:
+      - hw/hemaia/hemaia_mem_system/hemaia_mem_chip_xdma.sv
+      - hw/hemaia/hemaia_mem_system/hemaia_mem_chip_xdma_wrapper.sv
+      - hw/hemaia/hemaia_mem_system/hemaia_mem_system_for_mem_chip.sv
+      - hw/hemaia/hemaia_mem_system/hemaia_mem_chip.sv
+
   # target/sim
   - target: simulation_hemaia
     files:
