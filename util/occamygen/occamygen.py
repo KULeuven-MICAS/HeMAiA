@@ -759,7 +759,6 @@ def main():
         )
         print("HeMAiA Chip XDMA generation finished")
 
-    if args.xdma is True and any(occamy_cfg["hemaia_multichip"]["testbench_cfg"]["hemaia_mem_chip"]) and occamy_cfg["hemaia_xdma_cfg"] is not None:
         print("------------------------------------------------")
         print("    Generate HeMAiA Mem Chip XDMA")
         print("------------------------------------------------")
