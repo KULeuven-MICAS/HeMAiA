@@ -98,6 +98,7 @@ uint32_t __workload_xdma_1d_copy(bingo_task_t **task_list, uintptr_t *output_dat
     task_list[1] = task_cluster0_to_cluster1;
     task_list[2] = task_cluster1_to_l3;
     task_list[3] = task_check_results;
+    asm volatile("fence" ::: "memory");
     // User need to define the number of tasks
     int num_tasks = 4;
     return num_tasks;

@@ -205,6 +205,152 @@ SNAX_LIB_DEFINE void __snax_kernel_load_compute_store(void* arg) {
     }
 }
 
+SNAX_LIB_DEFINE void __snax_kernel_double_buffer_example(void *arg) {
+    // Example kernel for double buffering
+
+    // Input data is assumed to be array of uint32_t
+    // Arg0: uint32_t input_data_addr
+    // Arg1: uint32_t output_data_addr
+    // Arg2: uint32_t data_size in Byte
+    // Arg3: uint32_t num_tiles (>3)
+    // This kernel demonstrates how to do the double buffering
+    // ----------------------
+    // Double buffering idea
+    // ----------------------
+    // One standard way to to load_compute_store is as follows:
+    // * - Bubbles indicate idle time
+    // Core_DMA  Load0 |     *    | Store0
+    // Core_Comp   *   | Compute0 |    *
+    // The double buffering idea is to overlap the loading of the next tile
+    // If we have 6 tiles, the computation flow will be as follows:
+    //              ____________Sync points_______________________
+    //              |    |       |       |       |        |       |
+    //              v    v       v       v       v        v       v
+    // Core_DMA  L0 | L1 | S0,L2 | S1,L3 | S2,L4 | S3,L5  | S4  | S5 
+    // Core_Comp *  | C0 | C1    | C2    | C3    | C4     | C5  | *  
+    // Time slot s0   s1   s2      s3      s4      s5       s6    s7  
+    // Memory layout:
+    // Buffer 0: t0                t3                       t6
+    // Buffer 1:      t1                   t4                 
+    // Buffer 2:           t2                     t5
+    // So at the same time at most three tiles are in the system
+    // Memory mappings:
+    // T     load tile | compute tile | store tile
+    // s=0   Buf0      | ---          | ---
+    // s=1   Buf1      | Buf0         | ---
+    // s=2   Buf2      | Buf1         | Buf0         
+    // s=3   Buf0      | Buf2         | Buf1
+    // s=4   Buf1      | Buf0         | Buf2
+    // s=5   Buf2      | Buf1         | Buf0
+    // s=x   x%3       | (x+2)%3      | (x+1)%3
+    // ....
+    // s=S-1 ----      | (S+1)%3      | (S)  %3
+    // s=S   ----      | ----         | (S+1)%3
+    // ----------- Main code -------------------
+
+    // Notice the following vars are allocated in the Thread-Local Storage (TLS)
+    // which means each core has its own copy
+    // Since those are just arguments and will not be modified during the kernel execution, it is safe to put here
+    uint32_t input_data_addr = ((uint32_t *)arg)[0];
+    uint32_t output_data_addr = ((uint32_t *)arg)[1];
+    uint32_t input_data_size = ((uint32_t *)arg)[2];
+    uint32_t num_tiles = ((uint32_t *)arg)[3]; // assume num_tiles >= 3
+    uint32_t tile_size = input_data_size / num_tiles;  // in Byte
+    // if(snrt_is_dm_core()){
+    //     printf("input_data_addr=0x%x, output_data_addr=0x%x, input_data_size=%d, num_tiles=%d, tile_size=%d bytes\n",
+    //            input_data_addr, output_data_addr, input_data_size, num_tiles, tile_size);
+    // }
+    snrt_cluster_hw_barrier();
+
+    // Use one core to allocate the shared storage
+    if(snrt_is_dm_core()){
+        if (num_tiles < 3){
+            printf("Error: num_tiles should be >= 3 for double buffering example kernel\n");
+            return;
+        }
+        get_cls_shared_ptrs()[0] = snrt_l1_malloc(tile_size); // ptr for temporal tile storage 1
+        get_cls_shared_ptrs()[1] = snrt_l1_malloc(tile_size); // ptr for temporal tile storage 2
+        get_cls_shared_ptrs()[2] = snrt_l1_malloc(tile_size); // ptr for temporal tile storage 3
+        // printf("Allocated shared buffers, buf1=0x%x, buf2=0x%x, buf3=0x%x\n",
+        //        get_cls_shared_ptrs()[0],
+        //        get_cls_shared_ptrs()[1],
+        //        get_cls_shared_ptrs()[2]);
+        
+    }
+    snrt_cluster_hw_barrier();
+    // Here all the cores can access the shared tile buffers
+    uint32_t *tile_buf_0 = get_cls_shared_ptrs()[0];
+    uint32_t *tile_buf_1 = get_cls_shared_ptrs()[1];
+    uint32_t *tile_buf_2 = get_cls_shared_ptrs()[2];
+
+    for (uint32_t s = 0; s < num_tiles + 2; s++){
+        // Here all the varialbes are derived from the tile_bufs, hence they are shared among all cores
+        uint32_t *load_buf = s % 3 == 0 ? tile_buf_0 : (s % 3 == 1 ? tile_buf_1 : tile_buf_2);
+        uint32_t *compute_buf = (s + 2) % 3 == 0 ? tile_buf_0 : ((s + 2) % 3 == 1 ? tile_buf_1 : tile_buf_2);
+        uint32_t *store_buf = (s + 1) % 3 == 0 ? tile_buf_0 : ((s + 1) % 3 == 1 ? tile_buf_1 : tile_buf_2);
+        if (s==0){
+            // T0: Load tile 0
+            if (snrt_is_dm_core()){
+                snrt_dma_start_1d((void *)load_buf, (void *)input_data_addr, tile_size);
+                snrt_dma_wait_all();
+            }
+        }
+
+        if (s==1){
+            // T1: Load tile 1 + Compute tile 0
+            if (snrt_is_dm_core()){
+                snrt_dma_start_1d((void *)load_buf, (void *)(input_data_addr + tile_size), tile_size);
+                snrt_dma_wait_all();
+            }
+            if(snrt_cluster_core_idx() == 0){
+                for (uint32_t i = 0; i < tile_size / sizeof(uint32_t); i++) {
+                    compute_buf[i] += 1;
+                }
+            }
+        }
+
+        if (s >= 2 && s <= num_tiles - 1){
+            // T2 to TS-2: Load tile s + Compute tile s-1 + Store tile s-2
+            if (snrt_is_dm_core()) {
+                // Load tile s
+                snrt_dma_start_1d((void *)load_buf, (void *)(input_data_addr + s * tile_size), tile_size);
+                // Store tile s-2
+                snrt_dma_start_1d((void *)(output_data_addr + (s - 2) * tile_size), (void *)store_buf, tile_size);
+                snrt_dma_wait_all();
+            }
+            // Compute tile s-1
+            if (snrt_cluster_core_idx() == 0) {
+                for (uint32_t i = 0; i < tile_size / sizeof(uint32_t); i++) {
+                    compute_buf[i] += 1;
+                }
+            }
+        }
+
+        if (s == num_tiles){
+            // TS-1: Compute tile s-1 + Store tile s-2
+            if (snrt_cluster_core_idx() == 0) {
+                for (uint32_t i = 0; i < tile_size / sizeof(uint32_t); i++) {
+                    compute_buf[i] += 1;  // Example computation
+                }
+            }
+            if (snrt_is_dm_core()){
+                snrt_dma_start_1d((void *)(output_data_addr + (num_tiles - 2) * tile_size), (void *)store_buf, tile_size);
+                snrt_dma_wait_all();
+            }
+        }
+
+        if (s == num_tiles + 1){
+            // TS: Store tile s-2
+            if (snrt_is_dm_core()) {
+                snrt_dma_start_1d((void *)(output_data_addr + (num_tiles - 1) * tile_size), (void *)store_buf, tile_size);
+                snrt_dma_wait_all();
+            }
+        }
+
+        snrt_cluster_hw_barrier();
+    }
+}
+
 SNAX_LIB_DEFINE void __snax_kernel_xdma_1d_copy(void* arg) {
     // Copy 1d data from src to dst using xdma
     // Arg0: uint32_t src_addr_hi
@@ -1105,6 +1251,7 @@ SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
     SNAX_EXPORT_FUNC(__snax_kernel_check_results),
     SNAX_EXPORT_FUNC(__snax_kernel_csr),
     SNAX_EXPORT_FUNC(__snax_kernel_load_compute_store),
+    SNAX_EXPORT_FUNC(__snax_kernel_double_buffer_example),
     SNAX_EXPORT_FUNC(__snax_kernel_xdma_1d_copy),
     SNAX_EXPORT_FUNC(
         __snax_kernel_versacore_load_compute_store_w_streamer_args),

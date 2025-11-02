@@ -38,6 +38,14 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_kernel_load_compute_store_args {
   uint32_t output_data_size;       // in Bytes
 } __snax_kernel_load_compute_store_args_t;
 
+// Double Buffer kernel args
+__SNAX_KERNEL_ARGS_DEFINE __snax_kernel_double_buffer_args {
+  uint32_t input_data_addr;            
+  uint32_t output_data_addr;            
+  uint32_t data_size;       // in Bytes
+  uint32_t num_tiles;      // Number of tiles >=3
+} __snax_kernel_double_buffer_args_t;
+
 // XDMA 1D Copy kernel args
 __SNAX_KERNEL_ARGS_DEFINE __snax_kernel_xdma_1d_copy_args {
   uint32_t src_addr_hi;    
