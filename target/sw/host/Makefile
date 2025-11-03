@@ -17,6 +17,7 @@ APPS += offload
 APPS += offload_bingo
 APPS += offload_bingo_ci
 APPS += offload_bingo_gemm_intra_chiplet
+APPS += offload_bingo_gemm_multi_chiplet_vanilla
 ifneq ($(findstring multichip,$(CFG_OVERRIDE)),)
 # If chiplet cfg is used, offload_multichip is compiled with the support to execute applications on cores at different chips
 # Host only applications
