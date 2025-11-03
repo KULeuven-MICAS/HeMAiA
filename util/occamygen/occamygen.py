@@ -642,7 +642,7 @@ def main():
     # CVA6 Wrapper #
     ################
     if args.cva6_sv:
-        cva6_kwargs = occamy.get_cva6_kwargs(occamy_cfg, soc_narrow_xbar, args.name)
+        cva6_kwargs = occamy.get_cva6_kwargs(occamy_cfg, cluster_generators, soc_narrow_xbar, util, args.name)
         write_template(args.cva6_sv, outdir, **cva6_kwargs)
 
     ###################

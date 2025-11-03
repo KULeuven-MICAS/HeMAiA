@@ -153,7 +153,7 @@ module ${name}_soc
     cva6_mst.cut(context, cuts_narrow_to_cva6, to=soc_narrow_xbar.__dict__["in_cva6"])
   %>\
 
-  ${name}_cva6 i_${name}_cva6 (
+  ${name}_cva6_ara i_${name}_cva6_ara (
     .clk_i (clk_i),
     .rst_ni (rst_ni),
     .chip_id_i (chip_id_i),
@@ -163,8 +163,7 @@ module ${name}_soc
     .debug_req_i (debug_req_i[0]),
     .boot_addr_i (boot_addr_i),
     .axi_req_o (${cva6_mst.req_name()}),
-    .axi_resp_i (${cva6_mst.rsp_name()}),
-    .sram_cfg_i (sram_cfgs_i.cva6)
+    .axi_resp_i (${cva6_mst.rsp_name()})
   );
 
   % for i in range(nr_s1_quadrants):
