@@ -3,12 +3,24 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Xiaoling Yi <xiaoling.yi@kuleuven.be>
-// Fanchen Kong <fanchen.kong@kuleuven.be>
 
 #pragma once
 #include "gemm_multi_chiplet_data.h"
 #include "host.h"
 #include "libbingo/bingo_api.h"
+
+// This workload tests the multi-chiplet gemm offloading with versacore
+// Each chiplet works on a sub-matrix of A and the full matrix of B
+// independently, without any communication between chiplets.
+
+// A=[A1;A2;A3;A4] split into 4 sub-matrices along the row dimension
+// A1*B on Chiplet 0x00
+// A2*B on Chiplet 0x01
+// A3*B on Chiplet 0x10
+// A4*B on Chiplet 0x11
+
+// the agruments for gemm kernel for each chiplet are the same except the
+// A1/A2/A3/A4 pointers, C1/C2/C3/C4 and the output D1/D2/D3/D4 pointers
 
 uint32_t __workload_versacore_multi_chiplet(bingo_task_t** task_list,
                                             uintptr_t* output_data_ptr) {
@@ -213,6 +225,49 @@ uint32_t __workload_versacore_multi_chiplet(bingo_task_t** task_list,
         gemm_args_chip_0x11[14] = accumPrevC;
     }
 
+    if (current_chip_id == 0x00) {
+        printf(
+            "Chip(%x, %x): [Host] Preparing gemm args for chiplet 0x%02x\r\n",
+            get_current_chip_loc_x(), get_current_chip_loc_y(),
+            current_chip_id);
+        printf("gemm_args_chip_0x00 addr high: 0x%x\r\n",
+               HIGH32((uintptr_t)gemm_args_chip_0x00));
+        printf("gemm_args_chip_0x00 addr low : 0x%x\r\n",
+               LOW32((uintptr_t)gemm_args_chip_0x00));
+    }
+    if (current_chip_id == 0x01) {
+        printf(
+            "Chip(%x, %x): [Host] Preparing gemm args for chiplet 0x%02x\r\n",
+            get_current_chip_loc_x(), get_current_chip_loc_y(),
+            current_chip_id);
+        printf("gemm_args_chip_0x01 addr high: 0x%x\r\n",
+               HIGH32((uintptr_t)gemm_args_chip_0x01));
+        printf("gemm_args_chip_0x01 addr low : 0x%x\r\n",
+               LOW32((uintptr_t)gemm_args_chip_0x01));
+    }
+
+    if (current_chip_id == 0x10) {
+        printf(
+            "Chip(%x, %x): [Host] Preparing gemm args for chiplet 0x%02x\r\n",
+            get_current_chip_loc_x(), get_current_chip_loc_y(),
+            current_chip_id);
+        printf("gemm_args_chip_0x10 addr high: 0x%x\r\n",
+               HIGH32((uintptr_t)gemm_args_chip_0x10));
+        printf("gemm_args_chip_0x10 addr low : 0x%x\r\n",
+               LOW32((uintptr_t)gemm_args_chip_0x10));
+    }
+
+    if (current_chip_id == 0x11) {
+        printf(
+            "Chip(%x, %x): [Host] Preparing gemm args for chiplet 0x%02x\r\n",
+            get_current_chip_loc_x(), get_current_chip_loc_y(),
+            current_chip_id);
+        printf("gemm_args_chip_0x11 addr high: 0x%x\r\n",
+               HIGH32((uintptr_t)gemm_args_chip_0x11));
+        printf("gemm_args_chip_0x11 addr low : 0x%x\r\n",
+               LOW32((uintptr_t)gemm_args_chip_0x11));
+    }
+
     __snax_kernel_check_results_args_t task_check_results_args_chip_0x00;
     __snax_kernel_check_results_args_t task_check_results_args_chip_0x01;
     __snax_kernel_check_results_args_t task_check_results_args_chip_0x10;
@@ -254,7 +309,7 @@ uint32_t __workload_versacore_multi_chiplet(bingo_task_t** task_list,
     // 2. Register the tasks
     bingo_task_t* task_versacore_chip_0x00 = bingo_task_create(
         __snax_kernel_gemm_intra_chiplet_func_addr,
-        (uint32_t)(uintptr_t)(&gemm_args_chip_0x00), 0x00, cluster_id);
+        (uint32_t)(uintptr_t)(gemm_args_chip_0x00), 0x00, cluster_id);
     if (task_versacore_chip_0x00 == NULL) {
         printf("Error: Task versacore creation failed!\r\n");
     }
@@ -268,7 +323,7 @@ uint32_t __workload_versacore_multi_chiplet(bingo_task_t** task_list,
 
     bingo_task_t* task_versacore_chip_0x01 = bingo_task_create(
         __snax_kernel_gemm_intra_chiplet_func_addr,
-        (uint32_t)(uintptr_t)(&gemm_args_chip_0x01), 0x01, cluster_id);
+        (uint32_t)(uintptr_t)(gemm_args_chip_0x01), 0x01, cluster_id);
     if (task_versacore_chip_0x01 == NULL) {
         printf("Error: Task versacore creation failed!\r\n");
     }
@@ -282,7 +337,7 @@ uint32_t __workload_versacore_multi_chiplet(bingo_task_t** task_list,
 
     bingo_task_t* task_versacore_chip_0x10 = bingo_task_create(
         __snax_kernel_gemm_intra_chiplet_func_addr,
-        (uint32_t)(uintptr_t)(&gemm_args_chip_0x10), 0x10, cluster_id);
+        (uint32_t)(uintptr_t)(gemm_args_chip_0x10), 0x10, cluster_id);
     if (task_versacore_chip_0x10 == NULL) {
         printf("Error: Task versacore creation failed!\r\n");
     }
@@ -296,7 +351,7 @@ uint32_t __workload_versacore_multi_chiplet(bingo_task_t** task_list,
 
     bingo_task_t* task_versacore_chip_0x11 = bingo_task_create(
         __snax_kernel_gemm_intra_chiplet_func_addr,
-        (uint32_t)(uintptr_t)(&gemm_args_chip_0x11), 0x11, cluster_id);
+        (uint32_t)(uintptr_t)(gemm_args_chip_0x11), 0x11, cluster_id);
     if (task_versacore_chip_0x11 == NULL) {
         printf("Error: Task versacore creation failed!\r\n");
     }
@@ -325,8 +380,8 @@ uint32_t __workload_versacore_multi_chiplet(bingo_task_t** task_list,
     //////////////////////
     // End main function //
     //////////////////////
-    // Handle the output parameters
 
+    // Prepare the task list to return
     task_list[0] = task_versacore_chip_0x00;
     task_list[1] = task_check_results_chip_0x00;
     task_list[2] = task_versacore_chip_0x01;
@@ -336,7 +391,7 @@ uint32_t __workload_versacore_multi_chiplet(bingo_task_t** task_list,
     task_list[6] = task_versacore_chip_0x11;
     task_list[7] = task_check_results_chip_0x11;
     uint32_t num_tasks = 8;
-    
+
     output_data_ptr = (uintptr_t*)output_data_addr_chip_0x00;
     return num_tasks;
 }

@@ -95,10 +95,10 @@ def emit_matmul_data(**kwargs):
         data_str += [format_vector_definition("int32_t", "C1", C)]
     elif kwargs["addZeroC"] == 1:
         C = np.zeros((M, N, meshRow, meshCol), dtype=np.int32).reshape(-1)
-        data_str += [format_scalar_definition("int32_t *", "C1", "NULL")]
+        data_str += [format_scalar_definition("int32_t *", "C1", "(int32_t *)NULL")]
     else: # use accumPrevC
         C = np.zeros((M, N, meshRow, meshCol), dtype=np.int32).reshape(-1)
-        data_str += [format_scalar_definition("int32_t *", "C1", "NULL")]
+        data_str += [format_scalar_definition("int32_t *", "C1", "(int32_t *)NULL")]
 
     if kwargs["transposed_A"] == 1:
         A = A.reshape(M, K, meshRow, tileSize)
@@ -143,10 +143,10 @@ def emit_matmul_data(**kwargs):
             data_str += [format_vector_definition("int32_t", f"C{i+1}", C_i)]
         elif kwargs["addZeroC"] == 1:
             C_i = np.zeros((M, N, meshRow, meshCol), dtype=np.int32).reshape(-1)
-            data_str += [format_scalar_definition("int32_t *", f"C{i+1}", "NULL")]
+            data_str += [format_scalar_definition("int32_t *", f"C{i+1}", "(int32_t *)NULL")]
         else: # use accumPrevC
             C_i = np.zeros((M, N, meshRow, meshCol), dtype=np.int32).reshape(-1)
-            data_str += [format_scalar_definition("int32_t *", f"C{i+1}", "NULL")]
+            data_str += [format_scalar_definition("int32_t *", f"C{i+1}", "(int32_t *)NULL")]
 
         # Compute corresponding D_i
         D_i = block_gemm_golden_model(M, K, N, meshRow, tileSize, meshCol, A_i, B, subtraction_a, subtraction_b, C_i)

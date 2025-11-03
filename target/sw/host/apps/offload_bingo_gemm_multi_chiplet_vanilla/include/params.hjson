@@ -5,7 +5,7 @@
 # Xiaoling Yi <xiaoling.yi@kuleuven.be>
 
 {
-    array_shape: 0
+    array_shape: 1
     transposed_A: 0
     transposed_B: 0
     K: 3
