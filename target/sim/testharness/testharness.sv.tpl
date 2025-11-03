@@ -203,7 +203,7 @@ module testharness
 %   else:
       .io_east_d2d(),
       .io_flow_control_east_rts_o(),
-      .io_flow_control_east_cts_i(const_zero),
+      .io_flow_control_east_cts_i(const_one),
       .io_flow_control_east_rts_i(const_zero),
       .io_flow_control_east_cts_o(),
       .io_east_test_being_requested_i(const_zero),
@@ -220,7 +220,7 @@ module testharness
 %   else:
       .io_west_d2d(),
       .io_flow_control_west_rts_o(),
-      .io_flow_control_west_cts_i(const_zero),
+      .io_flow_control_west_cts_i(const_one),
       .io_flow_control_west_rts_i(const_zero),
       .io_flow_control_west_cts_o(),
       .io_west_test_being_requested_i(const_zero),
@@ -237,7 +237,7 @@ module testharness
 %   else:
       .io_north_d2d(),
       .io_flow_control_north_rts_o(),
-      .io_flow_control_north_cts_i(const_zero),
+      .io_flow_control_north_cts_i(const_one),
       .io_flow_control_north_rts_i(const_zero),
       .io_flow_control_north_cts_o(),
       .io_north_test_being_requested_i(const_zero),
@@ -254,7 +254,7 @@ module testharness
 %   else:
       .io_south_d2d(),
       .io_flow_control_south_rts_o(),
-      .io_flow_control_south_cts_i(const_zero),
+      .io_flow_control_south_cts_i(const_one),
       .io_flow_control_south_rts_i(const_zero),
       .io_flow_control_south_cts_o(),
       .io_south_test_being_requested_i(const_zero),
