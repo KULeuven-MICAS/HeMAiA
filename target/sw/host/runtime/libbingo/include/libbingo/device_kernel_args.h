@@ -55,6 +55,15 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_kernel_xdma_1d_copy_args {
   uint32_t size;        // in Bytes
 } __snax_kernel_xdma_1d_copy_args_t;
 
+// IDMA 1D Copy kernel args
+__SNAX_KERNEL_ARGS_DEFINE __snax_kernel_idma_1d_copy_args_t {
+  uint32_t src_addr_hi;    
+  uint32_t src_addr_lo;            
+  uint32_t dst_addr_hi;            
+  uint32_t dst_addr_lo;            
+  uint32_t size;        // in Bytes
+} __snax_kernel_idma_1d_copy_args_t;
+
 // ---------------------------------------------------------
 // ---------------------VERSACORE---------------------------
 // ---------------------------------------------------------

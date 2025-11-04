@@ -205,7 +205,7 @@ SNAX_LIB_DEFINE void __snax_kernel_load_compute_store(void* arg) {
     }
 }
 
-SNAX_LIB_DEFINE void __snax_kernel_double_buffer_example(void *arg) {
+SNAX_LIB_DEFINE void __snax_kernel_double_buffer_example(void* arg) {
     // Example kernel for double buffering
 
     // Input data is assumed to be array of uint32_t
@@ -226,19 +226,19 @@ SNAX_LIB_DEFINE void __snax_kernel_double_buffer_example(void *arg) {
     //              ____________Sync points_______________________
     //              |    |       |       |       |        |       |
     //              v    v       v       v       v        v       v
-    // Core_DMA  L0 | L1 | S0,L2 | S1,L3 | S2,L4 | S3,L5  | S4  | S5 
-    // Core_Comp *  | C0 | C1    | C2    | C3    | C4     | C5  | *  
-    // Time slot s0   s1   s2      s3      s4      s5       s6    s7  
+    // Core_DMA  L0 | L1 | S0,L2 | S1,L3 | S2,L4 | S3,L5  | S4  | S5
+    // Core_Comp *  | C0 | C1    | C2    | C3    | C4     | C5  | *
+    // Time slot s0   s1   s2      s3      s4      s5       s6    s7
     // Memory layout:
     // Buffer 0: t0                t3                       t6
-    // Buffer 1:      t1                   t4                 
+    // Buffer 1:      t1                   t4
     // Buffer 2:           t2                     t5
     // So at the same time at most three tiles are in the system
     // Memory mappings:
     // T     load tile | compute tile | store tile
     // s=0   Buf0      | ---          | ---
     // s=1   Buf1      | Buf0         | ---
-    // s=2   Buf2      | Buf1         | Buf0         
+    // s=2   Buf2      | Buf1         | Buf0
     // s=3   Buf0      | Buf2         | Buf1
     // s=4   Buf1      | Buf0         | Buf2
     // s=5   Buf2      | Buf1         | Buf0
@@ -250,72 +250,92 @@ SNAX_LIB_DEFINE void __snax_kernel_double_buffer_example(void *arg) {
 
     // Notice the following vars are allocated in the Thread-Local Storage (TLS)
     // which means each core has its own copy
-    // Since those are just arguments and will not be modified during the kernel execution, it is safe to put here
-    uint32_t input_data_addr = ((uint32_t *)arg)[0];
-    uint32_t output_data_addr = ((uint32_t *)arg)[1];
-    uint32_t input_data_size = ((uint32_t *)arg)[2];
-    uint32_t num_tiles = ((uint32_t *)arg)[3]; // assume num_tiles >= 3
+    // Since those are just arguments and will not be modified during the kernel
+    // execution, it is safe to put here
+    uint32_t input_data_addr = ((uint32_t*)arg)[0];
+    uint32_t output_data_addr = ((uint32_t*)arg)[1];
+    uint32_t input_data_size = ((uint32_t*)arg)[2];
+    uint32_t num_tiles = ((uint32_t*)arg)[3];          // assume num_tiles >= 3
     uint32_t tile_size = input_data_size / num_tiles;  // in Byte
     // if(snrt_is_dm_core()){
-    //     printf("input_data_addr=0x%x, output_data_addr=0x%x, input_data_size=%d, num_tiles=%d, tile_size=%d bytes\n",
-    //            input_data_addr, output_data_addr, input_data_size, num_tiles, tile_size);
+    //     printf("input_data_addr=0x%x, output_data_addr=0x%x,
+    //     input_data_size=%d, num_tiles=%d, tile_size=%d bytes\n",
+    //            input_data_addr, output_data_addr, input_data_size, num_tiles,
+    //            tile_size);
     // }
     snrt_cluster_hw_barrier();
 
     // Use one core to allocate the shared storage
-    if(snrt_is_dm_core()){
-        if (num_tiles < 3){
-            printf("Error: num_tiles should be >= 3 for double buffering example kernel\n");
+    if (snrt_is_dm_core()) {
+        if (num_tiles < 3) {
+            printf(
+                "Error: num_tiles should be >= 3 for double buffering example "
+                "kernel\n");
             return;
         }
-        get_cls_shared_ptrs()[0] = snrt_l1_malloc(tile_size); // ptr for temporal tile storage 1
-        get_cls_shared_ptrs()[1] = snrt_l1_malloc(tile_size); // ptr for temporal tile storage 2
-        get_cls_shared_ptrs()[2] = snrt_l1_malloc(tile_size); // ptr for temporal tile storage 3
+        get_cls_shared_ptrs()[0] =
+            snrt_l1_malloc(tile_size);  // ptr for temporal tile storage 1
+        get_cls_shared_ptrs()[1] =
+            snrt_l1_malloc(tile_size);  // ptr for temporal tile storage 2
+        get_cls_shared_ptrs()[2] =
+            snrt_l1_malloc(tile_size);  // ptr for temporal tile storage 3
         // printf("Allocated shared buffers, buf1=0x%x, buf2=0x%x, buf3=0x%x\n",
         //        get_cls_shared_ptrs()[0],
         //        get_cls_shared_ptrs()[1],
         //        get_cls_shared_ptrs()[2]);
-        
     }
     snrt_cluster_hw_barrier();
     // Here all the cores can access the shared tile buffers
-    uint32_t *tile_buf_0 = get_cls_shared_ptrs()[0];
-    uint32_t *tile_buf_1 = get_cls_shared_ptrs()[1];
-    uint32_t *tile_buf_2 = get_cls_shared_ptrs()[2];
+    uint32_t* tile_buf_0 = get_cls_shared_ptrs()[0];
+    uint32_t* tile_buf_1 = get_cls_shared_ptrs()[1];
+    uint32_t* tile_buf_2 = get_cls_shared_ptrs()[2];
 
-    for (uint32_t s = 0; s < num_tiles + 2; s++){
-        // Here all the varialbes are derived from the tile_bufs, hence they are shared among all cores
-        uint32_t *load_buf = s % 3 == 0 ? tile_buf_0 : (s % 3 == 1 ? tile_buf_1 : tile_buf_2);
-        uint32_t *compute_buf = (s + 2) % 3 == 0 ? tile_buf_0 : ((s + 2) % 3 == 1 ? tile_buf_1 : tile_buf_2);
-        uint32_t *store_buf = (s + 1) % 3 == 0 ? tile_buf_0 : ((s + 1) % 3 == 1 ? tile_buf_1 : tile_buf_2);
-        if (s==0){
+    for (uint32_t s = 0; s < num_tiles + 2; s++) {
+        // Here all the varialbes are derived from the tile_bufs, hence they are
+        // shared among all cores
+        uint32_t* load_buf =
+            s % 3 == 0 ? tile_buf_0 : (s % 3 == 1 ? tile_buf_1 : tile_buf_2);
+        uint32_t* compute_buf =
+            (s + 2) % 3 == 0 ? tile_buf_0
+                             : ((s + 2) % 3 == 1 ? tile_buf_1 : tile_buf_2);
+        uint32_t* store_buf =
+            (s + 1) % 3 == 0 ? tile_buf_0
+                             : ((s + 1) % 3 == 1 ? tile_buf_1 : tile_buf_2);
+        if (s == 0) {
             // T0: Load tile 0
-            if (snrt_is_dm_core()){
-                snrt_dma_start_1d((void *)load_buf, (void *)input_data_addr, tile_size);
+            if (snrt_is_dm_core()) {
+                snrt_dma_start_1d((void*)load_buf, (void*)input_data_addr,
+                                  tile_size);
                 snrt_dma_wait_all();
             }
         }
 
-        if (s==1){
+        if (s == 1) {
             // T1: Load tile 1 + Compute tile 0
-            if (snrt_is_dm_core()){
-                snrt_dma_start_1d((void *)load_buf, (void *)(input_data_addr + tile_size), tile_size);
+            if (snrt_is_dm_core()) {
+                snrt_dma_start_1d((void*)load_buf,
+                                  (void*)(input_data_addr + tile_size),
+                                  tile_size);
                 snrt_dma_wait_all();
             }
-            if(snrt_cluster_core_idx() == 0){
+            if (snrt_cluster_core_idx() == 0) {
                 for (uint32_t i = 0; i < tile_size / sizeof(uint32_t); i++) {
                     compute_buf[i] += 1;
                 }
             }
         }
 
-        if (s >= 2 && s <= num_tiles - 1){
+        if (s >= 2 && s <= num_tiles - 1) {
             // T2 to TS-2: Load tile s + Compute tile s-1 + Store tile s-2
             if (snrt_is_dm_core()) {
                 // Load tile s
-                snrt_dma_start_1d((void *)load_buf, (void *)(input_data_addr + s * tile_size), tile_size);
+                snrt_dma_start_1d((void*)load_buf,
+                                  (void*)(input_data_addr + s * tile_size),
+                                  tile_size);
                 // Store tile s-2
-                snrt_dma_start_1d((void *)(output_data_addr + (s - 2) * tile_size), (void *)store_buf, tile_size);
+                snrt_dma_start_1d(
+                    (void*)(output_data_addr + (s - 2) * tile_size),
+                    (void*)store_buf, tile_size);
                 snrt_dma_wait_all();
             }
             // Compute tile s-1
@@ -326,23 +346,27 @@ SNAX_LIB_DEFINE void __snax_kernel_double_buffer_example(void *arg) {
             }
         }
 
-        if (s == num_tiles){
+        if (s == num_tiles) {
             // TS-1: Compute tile s-1 + Store tile s-2
             if (snrt_cluster_core_idx() == 0) {
                 for (uint32_t i = 0; i < tile_size / sizeof(uint32_t); i++) {
                     compute_buf[i] += 1;  // Example computation
                 }
             }
-            if (snrt_is_dm_core()){
-                snrt_dma_start_1d((void *)(output_data_addr + (num_tiles - 2) * tile_size), (void *)store_buf, tile_size);
+            if (snrt_is_dm_core()) {
+                snrt_dma_start_1d(
+                    (void*)(output_data_addr + (num_tiles - 2) * tile_size),
+                    (void*)store_buf, tile_size);
                 snrt_dma_wait_all();
             }
         }
 
-        if (s == num_tiles + 1){
+        if (s == num_tiles + 1) {
             // TS: Store tile s-2
             if (snrt_is_dm_core()) {
-                snrt_dma_start_1d((void *)(output_data_addr + (num_tiles - 1) * tile_size), (void *)store_buf, tile_size);
+                snrt_dma_start_1d(
+                    (void*)(output_data_addr + (num_tiles - 1) * tile_size),
+                    (void*)store_buf, tile_size);
                 snrt_dma_wait_all();
             }
         }
@@ -384,6 +408,30 @@ SNAX_LIB_DEFINE void __snax_kernel_xdma_1d_copy(void* arg) {
 
         int task_id = xdma_start();
         xdma_remote_wait(task_id);
+    }
+}
+
+SNAX_LIB_DEFINE void __snax_kernel_idma_1d_copy(void* arg) {
+    // Copy 1d data from src to dst using idma
+    // Arg0: uint32_t src_addr_hi
+    // Arg1: uint32_t src_addr_lo
+    // Arg2: uint32_t dst_addr_hi
+    // Arg3: uint32_t dst_addr_lo
+    // Arg4: uint32_t size in Byte
+
+    uint64_t src_addr;
+    uint64_t dst_addr;
+    uint32_t data_size;
+
+    if (snrt_is_dm_core()) {
+        src_addr = ((uint64_t)((uint32_t*)arg)[0] << 32) |
+                   ((uint64_t)((uint32_t*)arg)[1]);
+        dst_addr = ((uint64_t)((uint32_t*)arg)[2] << 32) |
+                   ((uint64_t)((uint32_t*)arg)[3]);
+        data_size = ((uint32_t*)arg)[4];
+
+        snrt_dma_start_1d((void*)dst_addr, (void*)src_addr, data_size);
+        snrt_dma_wait_all();
     }
 }
 
@@ -805,7 +853,7 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         // load C only if C_addr is not 0
         l3_input_C_addr =
             make_u64(get_cls_shared_ptrs()[0][4], get_cls_shared_ptrs()[0][5]);
-        if (get_cls_shared_ptrs()[0][14]){
+        if (get_cls_shared_ptrs()[0][14]) {
             get_cls_shared_ptrs()[0][15] = 0;
             get_cls_shared_ptrs()[3] = NULL;
             VERSACORE_DEBUG_PRINT("skip loading C since b\r\n");
@@ -832,7 +880,8 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         } else {
             get_cls_shared_ptrs()[0][15] = 0;
             get_cls_shared_ptrs()[3] = NULL;
-            VERSACORE_DEBUG_PRINT("skip loading C since C_addr is 0, eg., C is always zero\r\n");
+            VERSACORE_DEBUG_PRINT(
+                "skip loading C since C_addr is 0, eg., C is always zero\r\n");
         }
 
         // L1 data addresses for D
@@ -1031,7 +1080,7 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         if (get_cls_shared_ptrs()[0][14] == 1) {
             // accumPrevC is true
             Ctlbound[0] = 0;
-        } else if (get_cls_shared_ptrs()[0][11] == 0) { // else bound is normal
+        } else if (get_cls_shared_ptrs()[0][11] == 0) {  // else bound is normal
             Ctlbound[0] = Ctlbound_0_0;
         } else {
             Ctlbound[0] = Ctlbound_1_0;
@@ -1070,7 +1119,8 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
         get_cls_shared_ptrs()[5][15] = 0;
         // channel_en_C []
         // set channel_en_C to zero if accumPrevC or addNonZeroC
-        if (get_cls_shared_ptrs()[0][14] == 1 || get_cls_shared_ptrs()[0][15] == 0) {
+        if (get_cls_shared_ptrs()[0][14] == 1 ||
+            get_cls_shared_ptrs()[0][15] == 0) {
             get_cls_shared_ptrs()[5][16] = chanelEnC_C_null;
         } else if (get_cls_shared_ptrs()[0][11] == 0) {
             get_cls_shared_ptrs()[5][16] = chanelEnC_0;
@@ -1244,6 +1294,428 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
     }
 }
 
+SNAX_LIB_DEFINE void __snax_kernel_gemm_compute_only_intra_chiplet(void* arg) {
+    // move the args to local variables
+    if (snrt_is_dm_core()) {
+        // allocate L1 memory for global variables across the cluster
+        ///////////////////////////////////////
+        // Allocate the L1 memory //
+        ///////////////////////////////////////
+        get_cls_shared_ptrs()[0] = snrt_l1_malloc(128);
+        if (!get_cls_shared_ptrs()[0]) {
+            VERSACORE_DEBUG_PRINT("ERROR: arg alloc failed!\r\n");
+            return;
+        } else {
+            VERSACORE_DEBUG_PRINT("Allocated arg at %p\r\n",
+                                  (void*)get_cls_shared_ptrs()[0]);
+        }
+
+        ////////////////////////////////////
+        // Call the idma to load the args //
+        ////////////////////////////////////
+        // First we need to use the DMA to load all the arguments from L3 into
+        // L1 Here we assume the arguments are packed in a contiguous way in L3
+        VERSACORE_DEBUG_PRINT("GEMM Intra-Chiplet Kernel Start!\r\n");
+
+        snrt_dma_start_1d(
+            (void*)get_cls_shared_ptrs()[0], (void*)arg,
+            sizeof(uint32_t) * 15);  // 15 uint32_t passed args in total
+        snrt_dma_wait_all();
+
+        // we use the following args, they are shared across the cluster
+        // arg0: uint32_t A_addr_hi get_cls_shared_ptrs()[0][0]
+        // arg1: uint32_t A_addr_lo get_cls_shared_ptrs()[0][1]
+        // arg2: uint32_t B_addr_hi get_cls_shared_ptrs()[0][2]
+        // arg3: uint32_t B_addr_lo get_cls_shared_ptrs()[0][3]
+        // arg4: uint32_t C_addr_hi get_cls_shared_ptrs()[0][4]
+        // arg5: uint32_t C_addr_lo get_cls_shared_ptrs()[0][5]
+        // arg6: uint32_t D_addr_hi get_cls_shared_ptrs()[0][6]
+        // arg7: uint32_t D_addr_lo get_cls_shared_ptrs()[0][7]
+        // these address are all in L1! It's the TCDM local address.
+
+        // arg8: uint32_t M get_cls_shared_ptrs()[0][8]
+        // arg9: uint32_t K get_cls_shared_ptrs()[0][9]
+        // arg10: uint32_t N get_cls_shared_ptrs()[0][10]
+        // arg11: uint32_t array_shape_idx get_cls_shared_ptrs()[0][11]
+        // arg12: transpose A get_cls_shared_ptrs()[0][12]
+        // arg13: transpose B get_cls_shared_ptrs()[0][13]
+        // arg14: get_cls_shared_ptrs()[0][14] is used for accumPrevC
+
+        // get_cls_shared_ptrs()[0][15] is used for addNonZeroC
+        if (get_cls_shared_ptrs()[0][14]) {
+            get_cls_shared_ptrs()[0][15] = 0;
+        } else if (make_u64(get_cls_shared_ptrs()[0][4],
+                            get_cls_shared_ptrs()[0][5]) != 0) {
+            get_cls_shared_ptrs()[0][15] = 1;
+        } else {
+            get_cls_shared_ptrs()[0][15] = 0;
+        }
+
+        // get_cls_shared_ptrs()[0][16] is used for meshRow
+        // get_cls_shared_ptrs()[0][17] is used for tileSize
+        // get_cls_shared_ptrs()[0][18] is used for meshCol
+        if (get_cls_shared_ptrs()[0][11] == 0) {
+            get_cls_shared_ptrs()[0][16] = meshRow_0;
+            get_cls_shared_ptrs()[0][17] = tileSize_0;
+            get_cls_shared_ptrs()[0][18] = meshCol_0;
+        } else {
+            get_cls_shared_ptrs()[0][16] = meshRow_1;
+            get_cls_shared_ptrs()[0][17] = tileSize_1;
+            get_cls_shared_ptrs()[0][18] = meshCol_1;
+        }
+    }
+
+    snrt_cluster_hw_barrier();
+
+    // The core 0 will be responsible for configuring and starting the versacore
+    if (snrt_cluster_core_idx() == 0) {
+        // compute the streamer cfg first
+        //////////////////////////////////////////////////////////////
+        // Allocated the L1 memory for Streamer CSRs    //
+        //////////////////////////////////////////////////////////////
+
+        VERSACORE_DEBUG_PRINT(
+            "GEMM Intra-Chiplet Kernel Compute Streamer Cfg Start!\r\n");
+        // the snicth needs to generate these streamer cfgs
+        // 22 args in total
+        // A 6, B 6, C 5, D 5
+        get_cls_shared_ptrs()[5] = snrt_l1_malloc(sizeof(uint32_t) * 22);
+        if (!get_cls_shared_ptrs()[5]) {
+            VERSACORE_DEBUG_PRINT("ERROR: streamer cfg alloc failed!\r\n");
+            return;
+        } else {
+            VERSACORE_DEBUG_PRINT("Allocated streamer cfg at %p\r\n",
+                                  (void*)get_cls_shared_ptrs()[5]);
+        }
+        //////////////////////////////////////////////////////////////
+        // streamer cfg for A
+        //////////////////////////////////////////////////////////////
+
+        // Aslstride0
+        get_cls_shared_ptrs()[5][0] = bankWidth / 8;
+
+        // Atlbound0~5
+        uint32_t* Atlbound = snrt_l1_malloc(sizeof(uint32_t) * 6);
+        if (!Atlbound) {
+            VERSACORE_DEBUG_PRINT("ERROR: Atlbound alloc failed!\r\n");
+            return;
+        } else {
+            VERSACORE_DEBUG_PRINT("Allocated Atlbound at %p\r\n",
+                                  (void*)Atlbound);
+        }
+        // Atlbound0
+        Atlbound[0] = (get_cls_shared_ptrs()[0][9]);
+        // Atlbound1
+        Atlbound[1] = (get_cls_shared_ptrs()[0][10]);
+        // Atlbound2
+        Atlbound[2] = (get_cls_shared_ptrs()[0][8]);
+        // Atlbound3
+        Atlbound[3] = 1;
+        // Atlbound4
+        Atlbound[4] = 1;
+        // Atlbound5
+        Atlbound[5] = 1;
+        get_cls_shared_ptrs()[5][1] = (uint32_t)(uintptr_t)Atlbound;
+
+        // Atlstride0~5
+        uint32_t* Atlstride = snrt_l1_malloc(sizeof(uint32_t) * 6);
+        if (!Atlstride) {
+            VERSACORE_DEBUG_PRINT("ERROR: Atlstride alloc failed!\r\n");
+            return;
+        } else {
+            VERSACORE_DEBUG_PRINT("Allocated Atlstride at %p\r\n",
+                                  (void*)Atlstride);
+        }
+        // Atlstride0
+        Atlstride[0] =
+            get_cls_shared_ptrs()[0][16] * get_cls_shared_ptrs()[0][17];
+        // Atlstride1
+        Atlstride[1] = 0;
+        // Atlstride2
+        Atlstride[2] = get_cls_shared_ptrs()[0][16] *
+                       get_cls_shared_ptrs()[0][17] *
+                       get_cls_shared_ptrs()[0][9];
+        // Atlstride3
+        Atlstride[3] = 0;
+        // Atlstride4
+        Atlstride[4] = 0;
+        Atlstride[5] = 0;
+        get_cls_shared_ptrs()[5][2] = (uint32_t)(uintptr_t)Atlstride;
+
+        // set_addr_remap_index_A
+        get_cls_shared_ptrs()[5][3] = 0;
+        // transpose_A
+        get_cls_shared_ptrs()[5][4] = get_cls_shared_ptrs()[0][12];
+        // channel_en_A []
+        if (get_cls_shared_ptrs()[0][11] == 0) {
+            get_cls_shared_ptrs()[5][5] = chanelEnA_0;
+        } else {
+            get_cls_shared_ptrs()[5][5] = chanelEnA_1;
+        }
+        VERSACORE_DEBUG_PRINT(
+            "GEMM Intra-Chiplet Kernel Compute Streamer Cfg A Done!\r\n");
+
+        //////////////////////////////////////////////////////////////
+        // streamer cfg for B
+        //////////////////////////////////////////////////////////////
+
+        // Bslstride0
+        get_cls_shared_ptrs()[5][6] = bankWidth / 8;
+
+        // Btlbound0~2
+        uint32_t* Btlbound = snrt_l1_malloc(sizeof(uint32_t) * 3);
+        if (!Btlbound) {
+            VERSACORE_DEBUG_PRINT("ERROR: Btlbound alloc failed!\r\n");
+            return;
+        } else {
+            VERSACORE_DEBUG_PRINT("Allocated Btlbound at %p\r\n",
+                                  (void*)Btlbound);
+        }
+        get_cls_shared_ptrs()[5][7] = (uint32_t)(uintptr_t)Btlbound;
+        // Btlbound0
+        Btlbound[0] = (get_cls_shared_ptrs()[0][9]);
+        // Btlbound1
+        Btlbound[1] = (get_cls_shared_ptrs()[0][10]);
+        // Btlbound2
+        Btlbound[2] = (get_cls_shared_ptrs()[0][8]);
+
+        // Btlstride0~2
+        uint32_t* Btlstride = snrt_l1_malloc(sizeof(uint32_t) * 3);
+        if (!Btlstride) {
+            VERSACORE_DEBUG_PRINT("ERROR: Btlstride alloc failed!\r\n");
+            return;
+        } else {
+            VERSACORE_DEBUG_PRINT("Allocated Btlstride at %p\r\n",
+                                  (void*)Btlstride);
+        }
+        get_cls_shared_ptrs()[5][8] = (uint32_t)(uintptr_t)Btlstride;
+
+        // Btlstride0
+        Btlstride[0] =
+            get_cls_shared_ptrs()[0][17] * get_cls_shared_ptrs()[0][18];
+        // Btlstride1
+        Btlstride[1] = get_cls_shared_ptrs()[0][17] *
+                       get_cls_shared_ptrs()[0][18] *
+                       get_cls_shared_ptrs()[0][9];
+
+        // Btlstride2
+        Btlstride[2] = 0;
+
+        // set_addr_remap_index_B
+        get_cls_shared_ptrs()[5][9] = 0;
+        // transpose_B
+        get_cls_shared_ptrs()[5][10] = get_cls_shared_ptrs()[0][13];
+        // channel_en_B []
+        uint32_t* channel_en_B = snrt_l1_malloc(sizeof(uint32_t) * 2);
+        if (!channel_en_B) {
+            VERSACORE_DEBUG_PRINT("ERROR: channel_en_B alloc failed!\r\n");
+            return;
+        } else {
+            VERSACORE_DEBUG_PRINT("Allocated channel_en_B at %p\r\n",
+                                  (void*)channel_en_B);
+        }
+        if (get_cls_shared_ptrs()[0][11] == 0) {
+            channel_en_B[0] = chanelEnB_0_0;
+            channel_en_B[1] = chanelEnB_0_1;
+        } else {
+            channel_en_B[0] = chanelEnB_1_0;
+            channel_en_B[1] = chanelEnB_1_1;
+        }
+        get_cls_shared_ptrs()[5][11] = (uint32_t)(uintptr_t)channel_en_B;
+        VERSACORE_DEBUG_PRINT(
+            "GEMM Intra-Chiplet Kernel Compute Streamer Cfg B Done!\r\n");
+
+        //////////////////////////////////////////////////////////////
+        // streamer cfg for C
+        //////////////////////////////////////////////////////////////
+        // Cslstride0
+        get_cls_shared_ptrs()[5][12] = bankWidth / 8;
+        // Ctlbound0~3
+        uint32_t* Ctlbound = snrt_l1_malloc(sizeof(uint32_t) * 4);
+        if (!Ctlbound) {
+            VERSACORE_DEBUG_PRINT("ERROR: Ctlbound alloc failed!\r\n");
+            return;
+        } else {
+            VERSACORE_DEBUG_PRINT("Allocated Ctlbound at %p\r\n",
+                                  (void*)Ctlbound);
+        }
+        get_cls_shared_ptrs()[5][13] = (uint32_t)(uintptr_t)Ctlbound;
+        // Ctlbound0
+        if (get_cls_shared_ptrs()[0][14] == 1) {
+            // accumPrevC is true
+            Ctlbound[0] = 0;
+        } else if (get_cls_shared_ptrs()[0][11] == 0) {  // else bound is normal
+            Ctlbound[0] = Ctlbound_0_0;
+        } else {
+            Ctlbound[0] = Ctlbound_1_0;
+        }
+        Ctlbound[1] = (get_cls_shared_ptrs()[0][10]);
+        Ctlbound[2] = (get_cls_shared_ptrs()[0][8]);
+        Ctlbound[3] = 1;
+        // Ctlstride0~3
+        uint32_t* Ctlstride = snrt_l1_malloc(sizeof(uint32_t) * 4);
+        if (!Ctlstride) {
+            VERSACORE_DEBUG_PRINT("ERROR: Ctlstride alloc failed!\r\n");
+            return;
+        } else {
+            VERSACORE_DEBUG_PRINT("Allocated Ctlstride at %p\r\n",
+                                  (void*)Ctlstride);
+        }
+        get_cls_shared_ptrs()[5][14] = (uint32_t)(uintptr_t)Ctlstride;
+
+        if (get_cls_shared_ptrs()[0][11] == 0) {
+            // Ctlstride0
+            Ctlstride[0] = c_spatial_bound_0_0 * (bankWidth / 8);
+        } else {
+            // Ctlstride0
+            Ctlstride[0] = c_spatial_bound_0_1 * (bankWidth / 8);
+        }
+        // Ctlstride1
+        Ctlstride[1] = C_elem_len * get_cls_shared_ptrs()[0][16] *
+                       get_cls_shared_ptrs()[0][18] / 8;
+        // Ctlstride2
+        Ctlstride[2] = get_cls_shared_ptrs()[0][10] * C_elem_len *
+                       get_cls_shared_ptrs()[0][16] *
+                       get_cls_shared_ptrs()[0][18] / 8;
+        // Ctlstride3
+        Ctlstride[3] = 0;
+        // set_addr_remap_index_C
+        get_cls_shared_ptrs()[5][15] = 0;
+        // channel_en_C []
+        // set channel_en_C to zero if accumPrevC or addNonZeroC
+        if (get_cls_shared_ptrs()[0][14] == 1 ||
+            get_cls_shared_ptrs()[0][15] == 0) {
+            get_cls_shared_ptrs()[5][16] = chanelEnC_C_null;
+        } else if (get_cls_shared_ptrs()[0][11] == 0) {
+            get_cls_shared_ptrs()[5][16] = chanelEnC_0;
+        } else {
+            get_cls_shared_ptrs()[5][16] = chanelEnC_1;
+        }
+        VERSACORE_DEBUG_PRINT(
+            "GEMM Intra-Chiplet Kernel Compute Streamer Cfg C Done!\r\n");
+
+        //////////////////////////////////////////////////////////////
+        // streamer cfg for D
+        //////////////////////////////////////////////////////////////
+        // D32slstride0
+        get_cls_shared_ptrs()[5][17] = bankWidth / 8;
+        // D32tlbound0~3
+        uint32_t* D32tlbound = snrt_l1_malloc(sizeof(uint32_t) * 4);
+        if (!D32tlbound) {
+            VERSACORE_DEBUG_PRINT("ERROR: D32tlbound alloc failed!\r\n");
+            return;
+        } else {
+            VERSACORE_DEBUG_PRINT("Allocated D32tlbound at %p\r\n",
+                                  (void*)D32tlbound);
+        }
+        get_cls_shared_ptrs()[5][18] = (uint32_t)(uintptr_t)D32tlbound;
+        // D32tlbound0~3
+        if (get_cls_shared_ptrs()[0][11] == 0) {
+            D32tlbound[0] = D32tlbound_0_0;
+        } else {
+            D32tlbound[0] = D32tlbound_1_0;
+        }
+        D32tlbound[1] = (get_cls_shared_ptrs()[0][10]);
+        D32tlbound[2] = (get_cls_shared_ptrs()[0][8]);
+        D32tlbound[3] = 1;
+        // D32tlstride0~3
+        uint32_t* D32tlstride = snrt_l1_malloc(sizeof(uint32_t) * 4);
+        if (!D32tlstride) {
+            VERSACORE_DEBUG_PRINT("ERROR: D32tlstride alloc failed!\r\n");
+            return;
+        } else {
+            VERSACORE_DEBUG_PRINT("Allocated D32tlstride at %p\r\n",
+                                  (void*)D32tlstride);
+        }
+        get_cls_shared_ptrs()[5][19] = (uint32_t)(uintptr_t)D32tlstride;
+        if (get_cls_shared_ptrs()[0][11] == 0) {
+            // D32tlstride0
+            D32tlstride[0] = d32_spatial_bound_0_0 * (bankWidth / 8);
+        } else {
+            // D32tlstride0
+            D32tlstride[0] = d32_spatial_bound_0_1 * (bankWidth / 8);
+        }
+        // D32tlstride1
+        D32tlstride[1] = D32_elem_len * get_cls_shared_ptrs()[0][16] *
+                         get_cls_shared_ptrs()[0][18] / 8;
+        // D32tlstride2
+        D32tlstride[2] = (get_cls_shared_ptrs()[0][10]) * D32_elem_len *
+                         get_cls_shared_ptrs()[0][16] *
+                         get_cls_shared_ptrs()[0][18] / 8;
+        // D32tlstride3
+        D32tlstride[3] = 0;
+        // set_addr_remap_index_D32
+        get_cls_shared_ptrs()[5][20] = 0;
+        // channel_en_D32 []
+        if (get_cls_shared_ptrs()[0][11] == 0) {
+            get_cls_shared_ptrs()[5][21] = chanelEnD32_0;
+        } else {
+            get_cls_shared_ptrs()[5][21] = chanelEnD32_1;
+        }
+        VERSACORE_DEBUG_PRINT(
+            "GEMM Intra-Chiplet Kernel Compute Streamer Cfg D Done!\r\n");
+
+        //////////////////////////////////////////////////////////////
+        // Configuration the Steamer and Versacore
+        //////////////////////////////////////////////////////////////
+
+        set_versacore_streamer_csr(
+            (uint32_t)(uintptr_t)get_cls_shared_ptrs()[0][1],  // A_addr
+            (uint32_t*)(&get_cls_shared_ptrs()[5][0]),         // Aslstride
+            (uint32_t*)(get_cls_shared_ptrs()[5][1]),  // Atlbound[] base
+            (uint32_t*)(get_cls_shared_ptrs()[5][2]),  // Atlstride[] base
+            get_cls_shared_ptrs()[5][3],               // set_addr_remap_index_A
+            get_cls_shared_ptrs()[5][4],               // transpose_A
+            (uint32_t*)(&get_cls_shared_ptrs()[5][5]),  // channel_en_A []
+
+            (uint32_t)(uintptr_t)get_cls_shared_ptrs()[0][3],  // B_addr
+            (uint32_t*)(&get_cls_shared_ptrs()[5][6]),  // Bslstride[] base
+            (uint32_t*)(get_cls_shared_ptrs()[5][7]),   // Btlbound[] base
+            (uint32_t*)(get_cls_shared_ptrs()[5][8]),   // Btlstride[] base
+            get_cls_shared_ptrs()[5][9],   // set_addr_remap_index_B
+            get_cls_shared_ptrs()[5][10],  // transpose_B
+            (uint32_t*)(get_cls_shared_ptrs()[5][11]),  // channel_en_B []
+
+            (uint32_t)(uintptr_t)get_cls_shared_ptrs()[0][5],  // C_addr
+            (uint32_t*)(&get_cls_shared_ptrs()[5][12]),  // Cslstride[] base
+            (uint32_t*)(get_cls_shared_ptrs()[5][13]),   // Ctlbound[] base
+            (uint32_t*)(get_cls_shared_ptrs()[5][14]),   // Ctlstride[] base
+            get_cls_shared_ptrs()[5][15],  // set_addr_remap_index_C
+            (uint32_t*)(&get_cls_shared_ptrs()[5][16]),  // channel_en_C []
+
+            (uint32_t)(uintptr_t)get_cls_shared_ptrs()[0][7],  // D_addr
+            (uint32_t*)(&get_cls_shared_ptrs()[5][17]),  // D32slstride[] base
+            (uint32_t*)(get_cls_shared_ptrs()[5][18]),   // D32tlbound[] base
+            (uint32_t*)(get_cls_shared_ptrs()[5][19]),   // D32tlstride[] base
+            get_cls_shared_ptrs()[5][20],  // set_addr_remap_index_D32
+            (uint32_t*)(&get_cls_shared_ptrs()[5][21])  // channel_en_D32 []
+
+        );
+
+        set_versacore_csr(
+            // accPrevC means takes new C
+            get_cls_shared_ptrs()[0][14] == 0, get_cls_shared_ptrs()[0][9],
+            get_cls_shared_ptrs()[0][10] * get_cls_shared_ptrs()[0][8], 0,
+            get_cls_shared_ptrs()[0][11], 0);
+
+        VERSACORE_DEBUG_PRINT(
+            "GEMM Intra-Chiplet Kernel Streamer Configuration Done!\r\n");
+
+        // Set CSR to start Streamer
+        start_versacore_and_streamer();
+
+        // Poll until Streamer and GEMM accelerator finish
+        wait_versacore_and_streamer();
+
+        VERSACORE_DEBUG_PRINT("GEMM Intra-Chiplet Kernel Compute Done!\r\n");
+
+        for (int i = 0; i < 10; i++) {
+            VERSACORE_DEBUG_PRINT("D[%d] = %d\r\n", i,
+                                  get_cls_shared_ptrs()[0][7][i]);
+        }
+    }
+}
+
 //////////////////////// SYMBOL TABLE ////////////////////////
 // Here we create the symbol table
 SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
@@ -1253,7 +1725,9 @@ SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
     SNAX_EXPORT_FUNC(__snax_kernel_load_compute_store),
     SNAX_EXPORT_FUNC(__snax_kernel_double_buffer_example),
     SNAX_EXPORT_FUNC(__snax_kernel_xdma_1d_copy),
+    SNAX_EXPORT_FUNC(__snax_kernel_idma_1d_copy),
     SNAX_EXPORT_FUNC(
         __snax_kernel_versacore_load_compute_store_w_streamer_args),
     SNAX_EXPORT_FUNC(__snax_kernel_gemm_intra_chiplet),
+    SNAX_EXPORT_FUNC(__snax_kernel_gemm_compute_only_intra_chiplet),
     SNAX_SYMTAB_END};
