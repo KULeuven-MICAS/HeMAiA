@@ -118,7 +118,7 @@ module ${name}_cva6_ara import ${name}_pkg::*; (
 
   localparam CVA6ConfigNrCommitPorts = 2;
   // We do not need the FPU in CVA6, the FPU is offloaded to the Ara
-  localparam CVA6ConfigRVF = 0;
+  localparam CVA6ConfigRVF = 1;       // Support single-precision FP
   localparam CVA6ConfigRVD = 0;
   localparam CVA6ConfigF16En = 0;
   localparam CVA6ConfigF16AltEn = 0;
