@@ -7,17 +7,12 @@
 #include "host.h"
 #include "libbingo/bingo_api.h"
 
-O1HeapInstance* dram_heap_manager = NULL;
 comm_buffer_t* comm_buffer_ptr = NULL;
+O1HeapInstance* l2_heap_manager = NULL;
+O1HeapInstance* l3_heap_manager = NULL;
+O1HeapInstance* dram_heap_manager = NULL;
 
 int main() {
-    // Set clk manager to 1 division for a faster simulation time
-    enable_clk_domain(0, 1);
-    enable_clk_domain(1, 1);
-    enable_clk_domain(2, 1);
-    enable_clk_domain(3, 1);
-    enable_clk_domain(4, 1);
-    enable_clk_domain(5, 1);
     uintptr_t current_chip_address_prefix =
         (uintptr_t)get_current_chip_baseaddress();
     uint32_t current_chip_id = get_current_chip_id();
@@ -37,6 +32,8 @@ int main() {
     }
 
     comm_buffer_ptr = bingo_get_l2_comm_buffer(current_chip_id);
+    l2_heap_manager = bingo_get_l2_heap_manager(current_chip_id);
+    l3_heap_manager = bingo_get_l3_heap_manager(current_chip_id);
 
     // Init external DRAM heap
     if (get_current_chip_id() == 0) {

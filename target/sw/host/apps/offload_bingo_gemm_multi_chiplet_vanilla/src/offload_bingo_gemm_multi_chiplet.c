@@ -29,11 +29,6 @@ int main() {
                get_current_chip_loc_x(), get_current_chip_loc_y());
     }
 
-    printf("[2] Chip ID: %x, Heap L3 Manager Addr: 0x%lx\r\n",
-           current_chip_id, (uintptr_t)bingo_get_l3_heap_manager(current_chip_id));
-    printf("[2] Chip ID: %x, Comm Buffer Addr: 0x%lx\r\n",
-           current_chip_id, (uintptr_t)bingo_get_l2_comm_buffer(current_chip_id));
-
     ///////////////////////////////
     // 3. Wake up all the clusters
     ///////////////////////////////
@@ -41,7 +36,7 @@ int main() {
     // 3.1 The pointer to the communication buffer
     O1HeapInstance* local_l3_heap_manager =
         bingo_get_l3_heap_manager(current_chip_id);
-    volatile comm_buffer_t* comm_buffer_ptr =
+    comm_buffer_t* comm_buffer_ptr =
         bingo_get_l2_comm_buffer(current_chip_id);
     enable_sw_interrupts();
 
@@ -56,11 +51,6 @@ int main() {
     // printf("Chip(%x, %x): [Host] Wake up clusters\r\n",
     // get_current_chip_loc_x(), get_current_chip_loc_y());
 
-    printf("[3.3] Chip ID: %x, Heap L3 Manager Addr: 0x%lx\r\n",
-           current_chip_id, (uintptr_t)bingo_get_l3_heap_manager(current_chip_id));
-    printf("[3.3] Chip ID: %x, Comm Buffer Addr: 0x%lx\r\n",
-           current_chip_id, (uintptr_t)bingo_get_l2_comm_buffer(current_chip_id));
-
     ///////////////////////////////
     // 4. Run the bingo runtime
     ///////////////////////////////
@@ -69,12 +59,6 @@ int main() {
     sync_checkpoint++;
     printf("Chip(%x, %x): [Host] Start Bingo\r\n", get_current_chip_loc_x(),
            get_current_chip_loc_y());
-
-    printf("[4] Chip ID: %x, Heap L3 Manager Addr: 0x%lx\r\n",
-           current_chip_id, (uintptr_t)bingo_get_l3_heap_manager(current_chip_id));
-    printf("[4] Chip ID: %x, Comm Buffer Addr: 0x%lx\r\n",
-           current_chip_id, (uintptr_t)bingo_get_l2_comm_buffer(current_chip_id));
-
     int ret = kernel_execution();
     // By default the clusters will pull up the interrupt line once the tasks
     // are done So we clean up the interrupt line here

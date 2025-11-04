@@ -58,10 +58,6 @@ uint32_t __workload_versacore_multi_chiplet(bingo_task_t** task_list,
 
     // 1.2 Prepare the args for Chiplet 0
     if (current_chip_id == 0x00) {
-        printf("L3 Heap Manager is at 0x%lx\r\n",
-               bingo_get_l3_heap_manager(current_chip_id));
-        printf("gemm_args_chip_0x00 is located at: %x\r\n",
-               &gemm_args_chip_0x00);
         gemm_args_chip_0x00 = (uint32_t*)o1heapAllocate(
             bingo_get_l3_heap_manager(get_current_chip_id()),
             sizeof(uint32_t) * 15);
@@ -104,10 +100,6 @@ uint32_t __workload_versacore_multi_chiplet(bingo_task_t** task_list,
     }
 
     if (current_chip_id == 0x01) {
-        printf("L3 Heap Manager is at 0x%lx\r\n",
-               bingo_get_l3_heap_manager(current_chip_id));
-        printf("gemm_args_chip_0x01 is located at: %x\r\n",
-               &gemm_args_chip_0x01);
         gemm_args_chip_0x01 = (uint32_t*)o1heapAllocate(
             bingo_get_l3_heap_manager(get_current_chip_id()),
             sizeof(uint32_t) * 15);
@@ -150,10 +142,6 @@ uint32_t __workload_versacore_multi_chiplet(bingo_task_t** task_list,
     }
 
     if (current_chip_id == 0x10) {
-        printf("L3 Heap Manager is at 0x%lx\r\n",
-               bingo_get_l3_heap_manager(current_chip_id));
-        printf("gemm_args_chip_0x10 is located at: %x\r\n",
-               &gemm_args_chip_0x10);
         gemm_args_chip_0x10 = (uint32_t*)o1heapAllocate(
             bingo_get_l3_heap_manager(get_current_chip_id()),
             sizeof(uint32_t) * 15);
@@ -196,10 +184,6 @@ uint32_t __workload_versacore_multi_chiplet(bingo_task_t** task_list,
     }
 
     if (current_chip_id == 0x11) {
-        printf("L3 Heap Manager is at 0x%lx\r\n",
-               bingo_get_l3_heap_manager(current_chip_id));
-        printf("gemm_args_chip_0x11 is located at: %x\r\n",
-               &gemm_args_chip_0x11);
         gemm_args_chip_0x11 = (uint32_t*)o1heapAllocate(
             bingo_get_l3_heap_manager(get_current_chip_id()),
             sizeof(uint32_t) * 15);
