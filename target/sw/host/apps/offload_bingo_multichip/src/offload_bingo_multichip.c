@@ -58,12 +58,7 @@ int main() {
 
     // 3.1 The pointer to the communication buffer
     O1HeapInstance *local_l3_heap_manager = bingo_get_l3_heap_manager(current_chip_id);
-    volatile comm_buffer_t* comm_buffer_ptr = o1heapAllocate(local_l3_heap_manager, sizeof(comm_buffer_t));
-    if(comm_buffer_ptr == NULL){
-        printf("Chip(%x, %x): [Host] Error when allocating comm buffer, l3 heap manager = 0x%lx, size = %x\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), local_l3_heap_manager, sizeof(comm_buffer_t));
-        return -1;
-    }
-    initialize_comm_buffer((comm_buffer_t*)comm_buffer_ptr);
+    volatile comm_buffer_t* comm_buffer_ptr = bingo_get_l2_comm_buffer(current_chip_id);
     enable_sw_interrupts();
 
     // 3.2 Program Snitch entry point and communication buffer

@@ -700,31 +700,31 @@ void delay_ns(uint64_t delay) {
 // Chip Level Synchronization Mechanism
 //===============================================================
 
-void announce_chip_checkpoint(volatile comm_buffer_t* comm_buffer_ptr,
+void announce_chip_checkpoint(volatile comm_buffer_t* chip_barrier_dta_ptr,
                               uint8_t checkpoint) {
     volatile uint8_t* this_chip_checkpoint =
-        &((*comm_buffer_ptr).chip_level_checkpoint[get_current_chip_id()]);
+        &((*chip_barrier_dta_ptr).chip_level_checkpoint[get_current_chip_id()]);
     // Broadcast to all Chips
     this_chip_checkpoint =
         (uint8_t*)(((uint64_t)this_chip_checkpoint) | (((uint64_t)0xFF) << 40));
     *this_chip_checkpoint = checkpoint;
 }
 
-void wait_chip_checkpoint(volatile comm_buffer_t* comm_buffer_ptr,
+void wait_chip_checkpoint(volatile comm_buffer_t* chip_barrier_dta_ptr,
                           uint8_t chip_id, uint8_t checkpoint) {
     volatile uint8_t* target_chip_checkpoint =
-        &((*comm_buffer_ptr).chip_level_checkpoint[chip_id]);
+        &((*chip_barrier_dta_ptr).chip_level_checkpoint[chip_id]);
     // Broadcast to all Chips
     while (*target_chip_checkpoint != checkpoint) {
         asm volatile("fence.i" ::: "memory");
     }
 }
 
-void wait_chips_checkpoint(volatile comm_buffer_t* comm_buffer_ptr,
+void wait_chips_checkpoint(volatile comm_buffer_t* chip_barrier_dta_ptr,
                            uint8_t top_left_chip_id,
                            uint8_t bottom_right_chip_id, uint8_t checkpoint) {
     volatile uint8_t* chip_level_checkpoint =
-        &((*comm_buffer_ptr).chip_level_checkpoint[0]);
+        &((*chip_barrier_dta_ptr).chip_level_checkpoint[0]);
     uint8_t current_chip_id = get_current_chip_id();
     uint8_t continue_loop = 1;
     while (continue_loop) {
@@ -746,14 +746,14 @@ void wait_chips_checkpoint(volatile comm_buffer_t* comm_buffer_ptr,
 
 // Barrier is realized in software, to ensure that all other chips have reached
 // a certain checkpoint
-void chip_barrier(volatile comm_buffer_t* comm_buffer_ptr,
+void chip_barrier(volatile comm_buffer_t* chip_barrier_dta_ptr,
                   uint8_t top_left_chip_id, uint8_t bottom_right_chip_id,
                   uint8_t checkpoint) {
     volatile uint8_t* chip_level_checkpoint =
-        &((*comm_buffer_ptr).chip_level_checkpoint[0]);
+        &((*chip_barrier_dta_ptr).chip_level_checkpoint[0]);
     // Broadcast to all other chip on the progress of the chip
-    announce_chip_checkpoint(comm_buffer_ptr, checkpoint);
+    announce_chip_checkpoint(chip_barrier_dta_ptr, checkpoint);
     // Change the pointer back
-    wait_chips_checkpoint(comm_buffer_ptr, top_left_chip_id,
+    wait_chips_checkpoint(chip_barrier_dta_ptr, top_left_chip_id,
                           bottom_right_chip_id, checkpoint);
 }
