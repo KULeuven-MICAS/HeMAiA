@@ -13,19 +13,9 @@ int main() {
     uint8_t current_chip_id = get_current_chip_id();
 
     init_uart(current_chip_address_prefix, 32, 1);
-    printf("Single-chip Offload Bingo Main\r\n");
+    printf("Multi-chip Offload Bingo Main\r\n");
     printf("Chip(%x, %x): [Host] Start Offloading Program\r\n",
-    get_current_chip_loc_x(), get_current_chip_loc_y());
-
-    ///////////////////////////////
-    // 1. Init the clk manager
-    ///////////////////////////////
-    // Set clk manager to 1 division for a faster simulation time
-    enable_clk_domain(0, 1);
-    enable_clk_domain(1, 1);
-    enable_clk_domain(2, 1);
-    // printf("Chip(%x, %x): [Host] Init CLK Manager\r\n",
-    // get_current_chip_loc_x(), get_current_chip_loc_y());
+           get_current_chip_loc_x(), get_current_chip_loc_y());
 
     ///////////////////////////////
     // 2. Init the Allocator
@@ -36,8 +26,14 @@ int main() {
         return -1;
     } else {
         printf("Chip(%x, %x): [Host] Allocator Init Success\r\n",
-        get_current_chip_loc_x(), get_current_chip_loc_y());
+               get_current_chip_loc_x(), get_current_chip_loc_y());
     }
+
+    printf("[2] Chip ID: %x, Heap L3 Manager Addr: 0x%lx\r\n",
+           current_chip_id, (uintptr_t)bingo_get_l3_heap_manager(current_chip_id));
+    printf("[2] Chip ID: %x, Comm Buffer Addr: 0x%lx\r\n",
+           current_chip_id, (uintptr_t)bingo_get_l2_comm_buffer(current_chip_id));
+
     ///////////////////////////////
     // 3. Wake up all the clusters
     ///////////////////////////////
@@ -60,6 +56,11 @@ int main() {
     // printf("Chip(%x, %x): [Host] Wake up clusters\r\n",
     // get_current_chip_loc_x(), get_current_chip_loc_y());
 
+    printf("[3.3] Chip ID: %x, Heap L3 Manager Addr: 0x%lx\r\n",
+           current_chip_id, (uintptr_t)bingo_get_l3_heap_manager(current_chip_id));
+    printf("[3.3] Chip ID: %x, Comm Buffer Addr: 0x%lx\r\n",
+           current_chip_id, (uintptr_t)bingo_get_l2_comm_buffer(current_chip_id));
+
     ///////////////////////////////
     // 4. Run the bingo runtime
     ///////////////////////////////
@@ -68,6 +69,12 @@ int main() {
     sync_checkpoint++;
     printf("Chip(%x, %x): [Host] Start Bingo\r\n", get_current_chip_loc_x(),
            get_current_chip_loc_y());
+
+    printf("[4] Chip ID: %x, Heap L3 Manager Addr: 0x%lx\r\n",
+           current_chip_id, (uintptr_t)bingo_get_l3_heap_manager(current_chip_id));
+    printf("[4] Chip ID: %x, Comm Buffer Addr: 0x%lx\r\n",
+           current_chip_id, (uintptr_t)bingo_get_l2_comm_buffer(current_chip_id));
+
     int ret = kernel_execution();
     // By default the clusters will pull up the interrupt line once the tasks
     // are done So we clean up the interrupt line here

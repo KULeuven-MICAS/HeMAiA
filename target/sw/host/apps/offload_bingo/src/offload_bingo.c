@@ -16,18 +16,6 @@ int main() {
     printf("Chip(%x, %x): [Host] Start Offloading Program\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
 
     ///////////////////////////////
-    // 1. Init the clk manager
-    ///////////////////////////////
-    // Set clk manager to 1 division for a faster simulation time
-    enable_clk_domain(0, 1);
-    enable_clk_domain(1, 1);
-    enable_clk_domain(2, 1);
-    enable_clk_domain(3, 1);
-    enable_clk_domain(4, 1);
-    enable_clk_domain(5, 1);
-    printf("Chip(%x, %x): [Host] Init CLK Manager\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
-
-    ///////////////////////////////
     // 2. Init the Allocator
     ///////////////////////////////
     if(bingo_hemaia_system_mmap_init() < 0){

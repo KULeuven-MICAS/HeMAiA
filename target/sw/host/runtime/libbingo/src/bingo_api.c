@@ -20,7 +20,7 @@ size_t l2_heap_size;
 uintptr_t l3_heap_start;
 size_t l3_heap_size;
 
-static volatile comm_buffer_t* comm_buffer;
+comm_buffer_t* comm_buffer;
 
 ///////////////////////////
 // Memory Allocator API  //
@@ -28,9 +28,9 @@ static volatile comm_buffer_t* comm_buffer;
 
 int bingo_hemaia_system_mmap_init(){
     // comm_buffer assignment: Begin from SPM_NARROW_BASE_ADDR and initialize to zero
-    comm_buffer = (volatile comm_buffer_t *)chiplet_addr_transform(SPM_NARROW_BASE_ADDR);
+    comm_buffer = (comm_buffer_t *)chiplet_addr_transform(SPM_NARROW_BASE_ADDR);
     for (size_t i = 0; i < sizeof(comm_buffer_t) / 8; i++) {
-        ((volatile uint64_t *)comm_buffer)[i] = 0;
+        ((uint64_t *)comm_buffer)[i] = 0;
     }
     // L2 heap init
     // Start addr is the spm narrow
