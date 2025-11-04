@@ -141,9 +141,9 @@ def emit_matmul_data(**kwargs):
         B_bytes.tofile(f)   # 1 byte per element
         D_bytes.tofile(f)   # 4 bytes per element
 
-    data_str += [format_vector_definition("int8_t", "A", A_concat)]
-    data_str += [format_vector_definition("int8_t", "B_data", B)]
-    data_str += [format_vector_definition("int32_t", "D_data", D_concat.astype(np.int32))]
+    data_str += [format_vector_definition("int8_t", "A_data_L3", A_concat)]
+    data_str += [format_vector_definition("int8_t", "B_data_L3", B)]
+    data_str += [format_vector_definition("int32_t", "D_data_L3", D_concat.astype(np.int32))]
 
     return data_str
 

@@ -20,6 +20,22 @@
 // false and addZeroC to true The correctness is checked by comparing D with the
 // golden result at each chiplet
 
+uint32_t check_result(uint8_t* src, uint8_t* dst, uint32_t size) {
+    int err_count = 0;
+    for (uint32_t i = 0; i < size; i++) {
+        if (*(src + i) != *(dst + i)) {
+            err_count++;
+            if (err_count <= 2) {
+                printf("Error in loading A1 to chiplet 0x00 at L1 addr %x\r\n",
+                       (uintptr_t)(src) + i);
+            }
+        }
+        if (err_count == 0) {
+            printf("A1 loaded correctly to chiplet 0x00\r\n");
+        }
+    }
+}
+
 uint32_t __workload_versacore_multi_chiplet_broadcast(
     bingo_task_t** task_list, uintptr_t* output_data_ptr) {
     ///////////////////
@@ -75,14 +91,15 @@ uint32_t __workload_versacore_multi_chiplet_broadcast(
     volatile uintptr_t A4 = A3 + M * K * meshRow * tileSize *
                                      sizeof(uint8_t);  // A4 at chiplet 0x11
 
-    for (int i = 0; i < 5; i++) {
-        printf("Chip(%x): A1[%d] = %d, A2[%d] = %d, A3[%d] = %d, A4[%d] = %d\r\n",
-               current_chip_id, i,
-               *((uint8_t*)(uintptr_t)(A1 + i * sizeof(uint8_t))), i,
-               *((uint8_t*)(uintptr_t)(A2 + i * sizeof(uint8_t))), i,
-               *((uint8_t*)(uintptr_t)(A3 + i * sizeof(uint8_t))), i,
-               *((uint8_t*)(uintptr_t)(A4 + i * sizeof(uint8_t))) );
-    }
+    // for (int i = 0; i < 2; i++) {
+    //     printf(
+    //         "Chip(%x): A1[%d] = %d, A2[%d] = %d, A3[%d] = %d, A4[%d] =
+    //         %d\r\n", current_chip_id, i,
+    //         *((uint8_t*)(uintptr_t)(A1 + i * sizeof(uint8_t))), i,
+    //         *((uint8_t*)(uintptr_t)(A2 + i * sizeof(uint8_t))), i,
+    //         *((uint8_t*)(uintptr_t)(A3 + i * sizeof(uint8_t))), i,
+    //         *((uint8_t*)(uintptr_t)(A4 + i * sizeof(uint8_t))));
+    // }
 
     // the A matrix load destination address in cluster L1 for each chiplet
     uintptr_t cluster_l1_addr_A =
@@ -136,6 +153,53 @@ uint32_t __workload_versacore_multi_chiplet_broadcast(
             M * K * meshRow * tileSize * sizeof(uint8_t);
     }
 
+    // check A loaded correctly at each chiplet
+    __snax_kernel_check_results_args_t task_check_A1_args;
+    if (current_chip_id == 0x00) {
+        task_check_A1_args.golden_data_addr =
+            (uint32_t)(uintptr_t)(A_data_L3);  // golden A1 at cluster L3
+        task_check_A1_args.output_data_addr =
+            (uint32_t)(uintptr_t)(cluster_l1_addr_A);  // loaded A1 at L1
+        task_check_A1_args.data_size =
+            M * K * meshRow * tileSize * sizeof(uint8_t);
+    }
+
+    __snax_kernel_check_results_args_t task_check_A2_args;
+    if (current_chip_id == 0x01) {
+        task_check_A2_args.golden_data_addr =
+            (uint32_t)(uintptr_t)(A_data_L3 +
+                                  M * K * meshRow *
+                                      tileSize);  // golden A2 at cluster L3
+        task_check_A2_args.output_data_addr =
+            (uint32_t)(uintptr_t)(cluster_l1_addr_A);  // loaded A2 at L1
+        task_check_A2_args.data_size =
+            M * K * meshRow * tileSize * sizeof(uint8_t);
+    }
+
+    __snax_kernel_check_results_args_t task_check_A3_args;
+    if (current_chip_id == 0x10) {
+        task_check_A3_args.golden_data_addr =
+            (uint32_t)(uintptr_t)(A_data_L3 +
+                                  2 * M * K * meshRow *
+                                      tileSize);  // golden A3 at cluster L3
+        task_check_A3_args.output_data_addr =
+            (uint32_t)(uintptr_t)(cluster_l1_addr_A);  // loaded A3 at L1
+        task_check_A3_args.data_size =
+            M * K * meshRow * tileSize * sizeof(uint8_t);
+    }
+
+    __snax_kernel_check_results_args_t task_check_A4_args;
+    if (current_chip_id == 0x11) {
+        task_check_A4_args.golden_data_addr =
+            (uint32_t)(uintptr_t)(A_data_L3 +
+                                  3 * M * K * meshRow *
+                                      tileSize);  // golden A4 at cluster L3
+        task_check_A4_args.output_data_addr =
+            (uint32_t)(uintptr_t)(cluster_l1_addr_A);  // loaded A4 at L1
+        task_check_A4_args.data_size =
+            M * K * meshRow * tileSize * sizeof(uint8_t);
+    }
+
     ///////////////////
     ///////////////////
     // args for xdma cp for loading B matrix from mempool to L1 at chiplet
@@ -147,8 +211,10 @@ uint32_t __workload_versacore_multi_chiplet_broadcast(
 
     volatile uintptr_t B = A4 + M * K * meshRow * tileSize *
                                     sizeof(uint8_t);  // L3 mempool base address
+
     // the B matrix load destination address in cluster L1 for chiplet 0x00
-    uintptr_t cluster_l1_addr_B = chiplet_addr_transform(0x10001100);  // predefined
+    uintptr_t cluster_l1_addr_B =
+        chiplet_addr_transform(0x10001100);  // predefined
 
     if (current_chip_id == 0x00) {
         task_mempool_to_cluster_args_B_chip_0x00.src_addr_hi = HIGH32(B);
@@ -158,6 +224,17 @@ uint32_t __workload_versacore_multi_chiplet_broadcast(
         task_mempool_to_cluster_args_B_chip_0x00.dst_addr_lo =
             LOW32(cluster_l1_addr_B);
         task_mempool_to_cluster_args_B_chip_0x00.size =
+            K * N * tileSize * meshCol * sizeof(uint8_t);
+    }
+
+    // check B loaded correctly at chiplet 0x00
+    __snax_kernel_check_results_args_t task_check_B_args_0x00;
+    if (current_chip_id == 0x00) {
+        task_check_B_args_0x00.golden_data_addr =
+            (uint32_t)(uintptr_t)(B_data_L3);  // golden B at cluster L3
+        task_check_B_args_0x00.output_data_addr =
+            (uint32_t)(uintptr_t)(cluster_l1_addr_B);  // loaded B at L1
+        task_check_B_args_0x00.data_size =
             K * N * tileSize * meshCol * sizeof(uint8_t);
     }
 
@@ -181,6 +258,39 @@ uint32_t __workload_versacore_multi_chiplet_broadcast(
         task_broadcast_args_B_chip_0x00.dst_addr_lo =
             LOW32(broadcast_dst_addr_B);
         task_broadcast_args_B_chip_0x00.size =
+            K * N * tileSize * meshCol * sizeof(uint8_t);
+    }
+
+    // check B loaded correctly at chiplet 0x01
+    __snax_kernel_check_results_args_t task_check_B_broadcasted_args_0x01;
+    if (current_chip_id == 0x01) {
+        task_check_B_broadcasted_args_0x01.golden_data_addr =
+            (uint32_t)(uintptr_t)(B_data_L3);  // golden B at cluster L3
+        task_check_B_broadcasted_args_0x01.output_data_addr =
+            (uint32_t)(uintptr_t)(cluster_l1_addr_B);  // loaded B at L1
+        task_check_B_broadcasted_args_0x01.data_size =
+            K * N * tileSize * meshCol * sizeof(uint8_t);
+    }
+
+    // check B loaded correctly at chiplet 0x10
+    __snax_kernel_check_results_args_t task_check_B_broadcasted_args_0x10;
+    if (current_chip_id == 0x10) {
+        task_check_B_broadcasted_args_0x10.golden_data_addr =
+            (uint32_t)(uintptr_t)(B_data_L3);  // golden B at cluster L3
+        task_check_B_broadcasted_args_0x10.output_data_addr =
+            (uint32_t)(uintptr_t)(cluster_l1_addr_B);  // loaded B at L1
+        task_check_B_broadcasted_args_0x10.data_size =
+            K * N * tileSize * meshCol * sizeof(uint8_t);
+    }
+
+    // check B loaded correctly at chiplet 0x11
+    __snax_kernel_check_results_args_t task_check_B_broadcasted_args_0x11;
+    if (current_chip_id == 0x11) {
+        task_check_B_broadcasted_args_0x11.golden_data_addr =
+            (uint32_t)(uintptr_t)(B_data_L3);  // golden B at cluster L3
+        task_check_B_broadcasted_args_0x11.output_data_addr =
+            (uint32_t)(uintptr_t)(cluster_l1_addr_B);  // loaded B at L1
+        task_check_B_broadcasted_args_0x11.data_size =
             K * N * tileSize * meshCol * sizeof(uint8_t);
     }
 
@@ -497,11 +607,10 @@ uint32_t __workload_versacore_multi_chiplet_broadcast(
     __snax_kernel_check_results_args_t task_check_results_args_chip_0x10;
     __snax_kernel_check_results_args_t task_check_results_args_chip_0x11;
 
-    volatile uintptr_t D = chiplet_addr_transform_loc(
-        2, 0,
+    volatile uintptr_t D =
         B + (K * N * tileSize * meshCol *
-             sizeof(uint8_t)));  // golden result for chiplet 0x00
-    volatile uintptr_t D1 = D;    // D1 at chiplet 0x00
+             sizeof(uint8_t));  // golden result for chiplet 0x00
+    volatile uintptr_t D1 = D;  // D1 at chiplet 0x00
     volatile uintptr_t D2 = D1 + M * N * meshRow * meshCol *
                                      sizeof(uint32_t);  // D2 at chiplet 0x01
     volatile uintptr_t D3 = D2 + M * N * meshRow * meshCol *
@@ -509,10 +618,20 @@ uint32_t __workload_versacore_multi_chiplet_broadcast(
     volatile uintptr_t D4 = D3 + M * N * meshRow * meshCol *
                                      sizeof(uint32_t);  // D4 at chiplet 0x11
 
+    for (int i = 0; i < 2; i++) {
+        printf(
+            "Chip(%x): D1[%d] = %d, D2[%d] = %d, D3[%d] = %d, D4[%d] = %d\r\n",
+            current_chip_id, i,
+            *((uint32_t*)(uintptr_t)(D1 + i * sizeof(uint32_t))), i,
+            *((uint32_t*)(uintptr_t)(D2 + i * sizeof(uint32_t))), i,
+            *((uint32_t*)(uintptr_t)(D3 + i * sizeof(uint32_t))), i,
+            *((uint32_t*)(uintptr_t)(D4 + i * sizeof(uint32_t))));
+    }
+
     // checkresults args
     if (current_chip_id == 0x00) {
         task_check_results_args_chip_0x00.golden_data_addr =
-            (uint32_t)(uintptr_t)(D1);
+            (uint32_t)(uintptr_t)(D_data_L3);
         task_check_results_args_chip_0x00.output_data_addr =
             (uint32_t)(uintptr_t)(output_data_addr_chip_0x00);
         task_check_results_args_chip_0x00.data_size =
@@ -521,7 +640,7 @@ uint32_t __workload_versacore_multi_chiplet_broadcast(
 
     if (current_chip_id == 0x01) {
         task_check_results_args_chip_0x01.golden_data_addr =
-            (uint32_t)(uintptr_t)(D2);
+            (uint32_t)(uintptr_t)(D_data_L3 + M * N * meshRow * meshCol);
         task_check_results_args_chip_0x01.output_data_addr =
             (uint32_t)(uintptr_t)(output_data_addr_chip_0x01);
         task_check_results_args_chip_0x01.data_size =
@@ -530,7 +649,7 @@ uint32_t __workload_versacore_multi_chiplet_broadcast(
 
     if (current_chip_id == 0x10) {
         task_check_results_args_chip_0x10.golden_data_addr =
-            (uint32_t)(uintptr_t)(D3);
+            (uint32_t)(uintptr_t)(D_data_L3 + 2 * M * N * meshRow * meshCol);
         task_check_results_args_chip_0x10.output_data_addr =
             (uint32_t)(uintptr_t)(output_data_addr_chip_0x10);
         task_check_results_args_chip_0x10.data_size =
@@ -539,7 +658,7 @@ uint32_t __workload_versacore_multi_chiplet_broadcast(
 
     if (current_chip_id == 0x11) {
         task_check_results_args_chip_0x11.golden_data_addr =
-            (uint32_t)(uintptr_t)(D4);
+            (uint32_t)(uintptr_t)(D_data_L3 + 3 * M * N * meshRow * meshCol);
         task_check_results_args_chip_0x11.output_data_addr =
             (uint32_t)(uintptr_t)(output_data_addr_chip_0x11);
         task_check_results_args_chip_0x11.data_size =
@@ -581,6 +700,36 @@ uint32_t __workload_versacore_multi_chiplet_broadcast(
     if (task_mempool_to_cluster_A4_chip_0x11 == NULL) {
         printf("Error: Task mempool to cluster A4 creation failed!\r\n");
     }
+
+    // check A1 loaded correctly at chiplet 0x00
+    bingo_task_t* task_check_A1_chip_0x00 = bingo_task_create(
+        check_results_func_addr, (uint32_t)(uintptr_t)(&task_check_A1_args),
+        0x00, cluster_id);
+    if (task_check_A1_chip_0x00 == NULL) {
+        printf("Error: Task check A1 creation failed!\r\n");
+    }
+    // check A2 loaded correctly at chiplet 0x01
+    bingo_task_t* task_check_A2_chip_0x01 = bingo_task_create(
+        check_results_func_addr, (uint32_t)(uintptr_t)(&task_check_A2_args),
+        0x01, cluster_id);
+    if (task_check_A2_chip_0x01 == NULL) {
+        printf("Error: Task check A2 creation failed!\r\n");
+    }
+    // check A3 loaded correctly at chiplet 0x10
+    bingo_task_t* task_check_A3_chip_0x10 = bingo_task_create(
+        check_results_func_addr, (uint32_t)(uintptr_t)(&task_check_A3_args),
+        0x10, cluster_id);
+    if (task_check_A3_chip_0x10 == NULL) {
+        printf("Error: Task check A3 creation failed!\r\n");
+    }
+    // check A4 loaded correctly at chiplet 0x11
+    bingo_task_t* task_check_A4_chip_0x11 = bingo_task_create(
+        check_results_func_addr, (uint32_t)(uintptr_t)(&task_check_A4_args),
+        0x11, cluster_id);
+    if (task_check_A4_chip_0x11 == NULL) {
+        printf("Error: Task check A4 creation failed!\r\n");
+    }
+
     ///////////////////
     ///////////////////
     // xdma cp task for loading B matrix from mempool to L1 at chiplet 0x00
@@ -592,6 +741,13 @@ uint32_t __workload_versacore_multi_chiplet_broadcast(
         cluster_id);
     if (task_mempool_to_cluster_B_chip_0x00 == NULL) {
         printf("Error: Task mempool to cluster B creation failed!\r\n");
+    }
+    // check B loaded correctly at chiplet 0x00
+    bingo_task_t* task_check_B_chip_0x00 = bingo_task_create(
+        check_results_func_addr, (uint32_t)(uintptr_t)(&task_check_B_args_0x00),
+        0x00, cluster_id);
+    if (task_check_B_chip_0x00 == NULL) {
+        printf("Error: Task check B creation failed!\r\n");
     }
     ///////////////////
     ///////////////////
@@ -605,6 +761,30 @@ uint32_t __workload_versacore_multi_chiplet_broadcast(
         cluster_id);
     if (task_broadcast_B_chip_0x00 == NULL) {
         printf("Error: Task broadcast B creation failed!\r\n");
+    }
+    // check B loaded correctly at chiplet 0x01
+    bingo_task_t* task_check_B_broadcasted_chip_0x01 = bingo_task_create(
+        check_results_func_addr,
+        (uint32_t)(uintptr_t)(&task_check_B_broadcasted_args_0x01), 0x01,
+        cluster_id);
+    if (task_check_B_broadcasted_chip_0x01 == NULL) {
+        printf("Error: Task check B broadcasted creation failed!\r\n");
+    }
+    // check B loaded correctly at chiplet 0x10
+    bingo_task_t* task_check_B_broadcasted_chip_0x10 = bingo_task_create(
+        check_results_func_addr,
+        (uint32_t)(uintptr_t)(&task_check_B_broadcasted_args_0x10), 0x10,
+        cluster_id);
+    if (task_check_B_broadcasted_chip_0x10 == NULL) {
+        printf("Error: Task check B broadcasted creation failed!\r\n");
+    }
+    // check B loaded correctly at chiplet 0x11
+    bingo_task_t* task_check_B_broadcasted_chip_0x11 = bingo_task_create(
+        check_results_func_addr,
+        (uint32_t)(uintptr_t)(&task_check_B_broadcasted_args_0x11), 0x11,
+        cluster_id);
+    if (task_check_B_broadcasted_chip_0x11 == NULL) {
+        printf("Error: Task check B broadcasted creation failed!\r\n");
     }
     ///////////////////
     ///////////////////
@@ -704,40 +884,75 @@ uint32_t __workload_versacore_multi_chiplet_broadcast(
     // then versacore gemm compute
     // then store output D
     // then check results
+    // Load A1 → check_A1
     // Load A1 → VersaCore 0x00 → Store Out 0x00 → Check Results 0x00
+    // Load A2 → check_A2
     // Load A2 → VersaCore 0x01 → Store Out 0x01 → Check Results 0x01
+    // Load A3 → check_A3
     // Load A3 → VersaCore 0x10 → Store Out 0x10 → Check Results 0x10
+    // Load A4 → check_A4
     // Load A4 → VersaCore 0x11 → Store Out 0x11 → Check Results 0x11
+    // Load B  → check_B → VersaCores (0x00)
     // Load B  → VersaCores (0x00)
-    // Load B  → Broadcast B → VersaCores (0x01, 0x10, 0x11)
+    // Load B  → Broadcast B → Check B 0x01
+    // Load B  → Broadcast B → VersaCores (0x01)
+    // Load B  → Broadcast B → Check B 0x10
+    // Load B  → Broadcast B → VersaCores (0x10)
+    // Load B  → Broadcast B → Check B 0x11
+    // Load B  → Broadcast B → VersaCores (0x11)
 
+    bingo_task_add_depend(task_check_A1_chip_0x00,
+                          task_mempool_to_cluster_A1_chip_0x00);
+    bingo_task_add_depend(task_check_A2_chip_0x01,
+                          task_mempool_to_cluster_A2_chip_0x01);
+    bingo_task_add_depend(task_check_A3_chip_0x10,
+                          task_mempool_to_cluster_A3_chip_0x10);
+    bingo_task_add_depend(task_check_A4_chip_0x11,
+                          task_mempool_to_cluster_A4_chip_0x11);
+
+    bingo_task_add_depend(task_check_B_chip_0x00,
+                          task_mempool_to_cluster_B_chip_0x00);
     bingo_task_add_depend(task_broadcast_B_chip_0x00,
                           task_mempool_to_cluster_B_chip_0x00);
+    bingo_task_add_depend(task_check_B_broadcasted_chip_0x01,
+                          task_broadcast_B_chip_0x00);
+    bingo_task_add_depend(task_check_B_broadcasted_chip_0x10,
+                          task_broadcast_B_chip_0x00);
+    bingo_task_add_depend(task_check_B_broadcasted_chip_0x11,
+                          task_broadcast_B_chip_0x00);
+
     bingo_task_add_depend(task_versacore_chip_0x00,
                           task_mempool_to_cluster_A1_chip_0x00);
     bingo_task_add_depend(task_versacore_chip_0x00,
                           task_mempool_to_cluster_B_chip_0x00);
+
     bingo_task_add_depend(task_versacore_chip_0x01,
                           task_mempool_to_cluster_A2_chip_0x01);
     bingo_task_add_depend(task_versacore_chip_0x01, task_broadcast_B_chip_0x00);
+
     bingo_task_add_depend(task_versacore_chip_0x10,
                           task_mempool_to_cluster_A3_chip_0x10);
     bingo_task_add_depend(task_versacore_chip_0x10, task_broadcast_B_chip_0x00);
+
     bingo_task_add_depend(task_versacore_chip_0x11,
                           task_mempool_to_cluster_A4_chip_0x11);
     bingo_task_add_depend(task_versacore_chip_0x11, task_broadcast_B_chip_0x00);
+
     bingo_task_add_depend(task_store_output_chip_0x00,
                           task_versacore_chip_0x00);
     bingo_task_add_depend(task_check_results_chip_0x00,
                           task_store_output_chip_0x00);
+
     bingo_task_add_depend(task_store_output_chip_0x01,
                           task_versacore_chip_0x01);
     bingo_task_add_depend(task_check_results_chip_0x01,
                           task_store_output_chip_0x01);
+
     bingo_task_add_depend(task_store_output_chip_0x10,
                           task_versacore_chip_0x10);
     bingo_task_add_depend(task_check_results_chip_0x10,
                           task_store_output_chip_0x10);
+
     bingo_task_add_depend(task_store_output_chip_0x11,
                           task_versacore_chip_0x11);
     bingo_task_add_depend(task_check_results_chip_0x11,
@@ -754,21 +969,33 @@ uint32_t __workload_versacore_multi_chiplet_broadcast(
     task_list[1] = task_mempool_to_cluster_A2_chip_0x01;
     task_list[2] = task_mempool_to_cluster_A3_chip_0x10;
     task_list[3] = task_mempool_to_cluster_A4_chip_0x11;
-    task_list[4] = task_mempool_to_cluster_B_chip_0x00;
-    task_list[5] = task_broadcast_B_chip_0x00;
-    task_list[6] = task_versacore_chip_0x00;
-    task_list[7] = task_store_output_chip_0x00;
-    task_list[8] = task_check_results_chip_0x00;
-    task_list[9] = task_versacore_chip_0x01;
-    task_list[10] = task_store_output_chip_0x01;
-    task_list[11] = task_check_results_chip_0x01;
-    task_list[12] = task_versacore_chip_0x10;
-    task_list[13] = task_store_output_chip_0x10;
-    task_list[14] = task_check_results_chip_0x10;
-    task_list[15] = task_versacore_chip_0x11;
-    task_list[16] = task_store_output_chip_0x11;
-    task_list[17] = task_check_results_chip_0x11;
-    uint32_t num_tasks = 18;
+    task_list[4] = task_check_A1_chip_0x00;
+    task_list[5] = task_check_A2_chip_0x01;
+    task_list[6] = task_check_A3_chip_0x10;
+    task_list[7] = task_check_A4_chip_0x11;
+
+    task_list[8] = task_mempool_to_cluster_B_chip_0x00;
+    task_list[9] = task_check_B_chip_0x00;
+    
+    task_list[10] = task_broadcast_B_chip_0x00;
+    task_list[11] = task_check_B_broadcasted_chip_0x01;
+    task_list[12] = task_check_B_broadcasted_chip_0x10;
+    task_list[13] = task_check_B_broadcasted_chip_0x11;
+
+    task_list[14] = task_versacore_chip_0x00;
+    task_list[15] = task_store_output_chip_0x00;
+    task_list[16] = task_check_results_chip_0x00;
+    task_list[17] = task_versacore_chip_0x01;
+    task_list[18] = task_store_output_chip_0x01;
+    task_list[19] = task_check_results_chip_0x01;
+    task_list[20] = task_versacore_chip_0x10;
+    task_list[21] = task_store_output_chip_0x10;
+    task_list[22] = task_check_results_chip_0x10;
+    task_list[23] = task_versacore_chip_0x11;
+    task_list[24] = task_store_output_chip_0x11;
+    task_list[25] = task_check_results_chip_0x11;
+
+    uint32_t num_tasks = 26;
 
     output_data_ptr = (uintptr_t*)output_data_addr_chip_0x00;
     return num_tasks;
