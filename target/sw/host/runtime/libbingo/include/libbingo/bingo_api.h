@@ -220,6 +220,8 @@ static inline void bingo_task_reset_deps(bingo_task_t *t) {
 // Allocator init (L2 and L3)
 int bingo_hemaia_system_mmap_init();
 
+// Getters for heap managers
+O1HeapInstance32 *bingo_get_l1_heap_manager(uint8_t chip_id, uint32_t cluster_id);
 O1HeapInstance *bingo_get_l2_heap_manager(uint8_t chip_id);
 O1HeapInstance *bingo_get_l3_heap_manager(uint8_t chip_id);
 

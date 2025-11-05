@@ -8,6 +8,7 @@
 #include <inttypes.h>
 
 #include "o1heap.h"
+#include "o1heap32.h"
 #include "occamy_memory_map.h"
 
 // The current hierachy is

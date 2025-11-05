@@ -749,10 +749,13 @@ def get_pkg_kwargs(occamy_cfg, cluster_generators, util, name):
     return pkg_kwargs
 
 
-def get_cva6_kwargs(occamy_cfg, soc_narrow_xbar, name):
+def get_cva6_kwargs(occamy_cfg, cluster_generators, util,soc_narrow_xbar, name):
+    cluster_cfg = cluster_generators[0].cfg
     cva6_kwargs = {
         "name": name,
         "occamy_cfg": occamy_cfg,
+        "cluster_base_addr": util.to_sv_hex(cluster_cfg["cluster_base_addr"],64),
+        "cluster_offset": util.to_sv_hex(cluster_cfg["cluster_base_offset"] * len(occamy_cfg["clusters"]),64),
         "soc_narrow_xbar": soc_narrow_xbar
     }
     return cva6_kwargs
