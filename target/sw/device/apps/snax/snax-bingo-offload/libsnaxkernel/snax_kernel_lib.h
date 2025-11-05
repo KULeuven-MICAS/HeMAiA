@@ -404,8 +404,7 @@ SNAX_LIB_DEFINE void __snax_kernel_xdma_1d_copy(void* arg) {
             printf("Error in disabling xdma reader extension 0\n");
         }
 
-        xdma_memcpy_1d((void*)src_addr, (void*)dst_addr, data_size);
-
+        xdma_memcpy_1d_full_addr(src_addr, dst_addr, data_size);
         int task_id = xdma_start();
         xdma_remote_wait(task_id);
     }
@@ -430,7 +429,7 @@ SNAX_LIB_DEFINE void __snax_kernel_idma_1d_copy(void* arg) {
                    ((uint64_t)((uint32_t*)arg)[3]);
         data_size = ((uint32_t*)arg)[4];
 
-        snrt_dma_start_1d((void*)dst_addr, (void*)src_addr, data_size);
+        snrt_dma_start_1d_wideptr(dst_addr, src_addr, data_size);
         snrt_dma_wait_all();
     }
 }
