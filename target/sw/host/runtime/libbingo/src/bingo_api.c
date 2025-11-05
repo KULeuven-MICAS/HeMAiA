@@ -9,32 +9,29 @@
 #include <stddef.h>  // size_t
 #include <stdlib.h>  // NULL
 #include <stdio.h>
+#include "heterogeneous_runtime.h"
 
 uint16_t global_task_id = 0; // Internal monotonically increasing id source
-struct O1HeapInstance *l2_heap_manager, *l3_heap_manager;
-
-uintptr_t l2_heap_start;
-size_t l2_heap_size;
-
-uintptr_t l3_heap_start;
-size_t l3_heap_size;
 
 ///////////////////////////
 // Memory Allocator API  //
 ///////////////////////////
 
-
-
-
-
 int bingo_hemaia_system_mmap_init(){
+    // comm_buffer assignment: Begin from SPM_NARROW_BASE_ADDR and initialize to zero
+    comm_buffer_t* comm_buffer = (comm_buffer_t *)chiplet_addr_transform(SPM_NARROW_BASE_ADDR);
+    printf("Chip(%x, %x): [Host] Comm buffer addr: %lx\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), (uintptr_t)comm_buffer);
+    for (size_t i = 0; i < sizeof(comm_buffer_t) / 8; i++) {
+        ((uint64_t *)comm_buffer)[i] = 0;
+    }
     // L2 heap init
     // Start addr is the spm narrow
     // Size is half of the narrow spm
     // The rest is leave to stack
-    l2_heap_start = chiplet_addr_transform(SPM_NARROW_BASE_ADDR);
-    l2_heap_size = ALIGN_UP(NARROW_SPM_SIZE / 2, O1HEAP_ALIGNMENT);
-    l2_heap_manager = o1heapInit((void *)l2_heap_start, l2_heap_size);
+    uintptr_t l2_heap_start = ALIGN_UP((uintptr_t)comm_buffer + sizeof(comm_buffer_t), O1HEAP_ALIGNMENT);
+    size_t l2_heap_size = ALIGN_UP(NARROW_SPM_SIZE / 2, O1HEAP_ALIGNMENT);
+    O1HeapInstance *l2_heap_manager = o1heapInit((void *)l2_heap_start, l2_heap_size);
+    printf("Chip(%x, %x): [Host] L2 heap start: %lx\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), l2_heap_start);
     // printf("Chip(%x, %x): [Host] L2 heap start: %lx, size: %lx, heap manager: 0x%lx\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), l2_heap_start, l2_heap_size, l2_heap_manager);
     if(!l2_heap_manager) {
         printf("Error when initializing L2 heap. \r\n");
@@ -43,9 +40,10 @@ int bingo_hemaia_system_mmap_init(){
     // L3 heap init
     // Start addr is the l3 heap start symbol
     // Size is half of the wide spm
-    l3_heap_start = chiplet_addr_transform((uint64_t)(&__l3_heap_start));
-    l3_heap_size = ALIGN_UP(WIDE_SPM_SIZE / 2, O1HEAP_ALIGNMENT);
-    l3_heap_manager = o1heapInit((void *)l3_heap_start, l3_heap_size);
+    uintptr_t l3_heap_start = chiplet_addr_transform((uint64_t)(&__l3_heap_start));
+    size_t l3_heap_size = ALIGN_UP(WIDE_SPM_SIZE / 2, O1HEAP_ALIGNMENT);
+    O1HeapInstance *l3_heap_manager = o1heapInit((void *)l3_heap_start, l3_heap_size);
+    printf("Chip(%x, %x): [Host] L3 heap start: %lx\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), l3_heap_start);
     // printf("Chip(%x, %x): [Host] L3 heap start: %lx, size: %lx, heap manager: 0x%lx\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), l3_heap_start, l3_heap_size, l3_heap_manager);
     if(!l3_heap_manager) {
         printf("Error when initializing L3 heap.\r\n");
@@ -54,18 +52,17 @@ int bingo_hemaia_system_mmap_init(){
     return 0;
 }
 
+comm_buffer_t *bingo_get_l2_comm_buffer(uint8_t chip_id){
+    return (comm_buffer_t *)chiplet_addr_transform_full(chip_id, (uintptr_t)SPM_NARROW_BASE_ADDR);
+}
+
 O1HeapInstance *bingo_get_l2_heap_manager(uint8_t chip_id){
-    // The heap manager will be initialized at the start address of the heap
-    // So we can get the heap manager by the chip id
-    return (O1HeapInstance *)chiplet_addr_transform_full(chip_id, SPM_NARROW_BASE_ADDR);
+    return (O1HeapInstance *)chiplet_addr_transform_full(chip_id, ALIGN_UP((uintptr_t)SPM_NARROW_BASE_ADDR + sizeof(comm_buffer_t), O1HEAP_ALIGNMENT));
 }
 
 O1HeapInstance *bingo_get_l3_heap_manager(uint8_t chip_id){
-    // The heap manager will be initialized at the start address of the heap
-    // So we can get the heap manager by the chip id
-    return (O1HeapInstance *)chiplet_addr_transform_full(chip_id, (uint64_t)(&__l3_heap_start));
+    return (O1HeapInstance *)chiplet_addr_transform_full(chip_id, (uintptr_t)chiplet_addr_transform((uint64_t)(&__l3_heap_start)));
 }
-
 
 //////////////////////////
 // Mailbox API          //

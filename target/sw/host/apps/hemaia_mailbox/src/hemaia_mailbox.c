@@ -28,9 +28,9 @@ int main(){
     enable_clk_domain(5, 1);
     printf("Chip(%x, %x): [Host] Init CLK Manager\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
     // Communication buffer pointer
-    volatile comm_buffer_t* comm_buffer_ptr = (comm_buffer_t*)0;
-    initialize_comm_buffer((comm_buffer_t*)comm_buffer_ptr);
+    volatile comm_buffer_t* comm_buffer_ptr;
     comm_buffer_ptr = (comm_buffer_t*)chiplet_addr_transform(((uint64_t)&__narrow_spm_start));
+    initialize_comm_buffer((comm_buffer_t*)comm_buffer_ptr);
     enable_sw_interrupts();
     // Make sure the comm_buffer is visible
     asm volatile("fence" ::: "memory");
