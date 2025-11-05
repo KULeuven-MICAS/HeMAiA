@@ -52,6 +52,14 @@ int bingo_hemaia_system_mmap_init(){
     return 0;
 }
 
+O1HeapInstance32 *bingo_get_l1_heap_manager(uint8_t chip_id, uint32_t cluster_id){
+    // Notice the l1 heap is init by the cluster at the start of the TCDM of each cluster
+    // Here we hack the o1heap sw to force a 32bit version of heap manager so that the host can access to the correct
+    // heap information from the O1HeapInstanc32 structure
+    return (O1HeapInstance32 *)chiplet_addr_transform_full(chip_id, (uint64_t)cluster_tcdm_start_addr(cluster_id));
+}
+
+
 comm_buffer_t *bingo_get_l2_comm_buffer(uint8_t chip_id){
     return (comm_buffer_t *)chiplet_addr_transform_full(chip_id, (uintptr_t)SPM_NARROW_BASE_ADDR);
 }

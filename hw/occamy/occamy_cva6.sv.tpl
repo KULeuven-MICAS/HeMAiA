@@ -37,10 +37,12 @@ module ${name}_cva6 import ${name}_pkg::*; (
     NrNonIdempotentRules: 3,
     NonIdempotentAddrBase: {64'd${occamy_cfg["spm_narrow"]["address"]+occamy_cfg["spm_narrow"]["length"]},
                             64'd${occamy_cfg["peripherals"]["rom"]["address"]+occamy_cfg["peripherals"]["rom"]["length"]},
+                            ${cluster_base_addr},
                             64'h1000
                             },
     NonIdempotentLength:   {64'd${occamy_cfg["spm_wide"]["address"]-occamy_cfg["spm_narrow"]["address"]-occamy_cfg["spm_narrow"]["length"]},
                             64'd${occamy_cfg["spm_narrow"]["address"]-occamy_cfg["peripherals"]["rom"]["address"]-occamy_cfg["peripherals"]["rom"]["length"]},
+                            ${cluster_offset},
                             64'd${occamy_cfg["peripherals"]["rom"]["address"]-0x1000}
                             },
     NrExecuteRegionRules: 4,
