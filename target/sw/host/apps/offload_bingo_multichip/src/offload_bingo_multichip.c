@@ -46,10 +46,13 @@ int main() {
 
     // 3.1 The pointer to the communication buffer
     O1HeapInstance *local_l3_heap_manager = bingo_get_l3_heap_manager(current_chip_id);
-    volatile comm_buffer_t* comm_buffer_ptr = bingo_get_l2_comm_buffer(current_chip_id);
+    comm_buffer_t* comm_buffer_ptr = bingo_get_l2_comm_buffer(current_chip_id);
+
     enable_sw_interrupts();
 
     // 3.2 Program Snitch entry point and communication buffer
+    // Initialize communication buffer
+    initialize_comm_buffer(comm_buffer_ptr);
     comm_buffer_ptr->lock = 0;
     comm_buffer_ptr->chip_id = current_chip_id;
     program_snitches(current_chip_id, comm_buffer_ptr);

@@ -165,8 +165,10 @@ void initialize_bss() {
 
     size_t bss_size = (size_t)(&__bss_end) - (size_t)(&__bss_start);
     if (bss_size)
-        sys_dma_blk_memcpy((uint64_t)(&__bss_start), WIDE_ZERO_MEM_BASE_ADDR,
+        sys_dma_blk_memcpy(chiplet_addr_transform((uint64_t)(&__bss_start)),
+                           chiplet_addr_transform((uint64_t)WIDE_ZERO_MEM_BASE_ADDR),
                            bss_size);
+
 }
 
 void initialize_wide_spm() {
@@ -174,8 +176,8 @@ void initialize_wide_spm() {
         (size_t)(&__wide_spm_end) - (size_t)(&__wide_spm_start);
     if (wide_spm_size)
         sys_dma_blk_memcpy(
-            (uint64_t)get_current_chip_baseaddress() | SPM_WIDE_BASE_ADDR,
-            (uint64_t)get_current_chip_baseaddress() | WIDE_ZERO_MEM_BASE_ADDR,
+            chiplet_addr_transform((uint64_t)SPM_WIDE_BASE_ADDR),
+            chiplet_addr_transform((uint64_t)WIDE_ZERO_MEM_BASE_ADDR),
             wide_spm_size);
 }
 
@@ -184,8 +186,8 @@ void initialize_narrow_spm() {
         (size_t)(&__narrow_spm_end) - (size_t)(&__narrow_spm_start);
     if (narrow_spm_size)
         sys_dma_blk_memcpy(
-            (uint64_t)get_current_chip_baseaddress() | SPM_NARROW_BASE_ADDR,
-            (uint64_t)get_current_chip_baseaddress() | WIDE_ZERO_MEM_BASE_ADDR,
+            chiplet_addr_transform((uint64_t)SPM_NARROW_BASE_ADDR),
+            chiplet_addr_transform((uint64_t)WIDE_ZERO_MEM_BASE_ADDR),
             narrow_spm_size);
     asm volatile("fence" ::: "memory");
 }
@@ -193,7 +195,7 @@ void initialize_narrow_spm() {
 void initialize_comm_buffer(comm_buffer_t* comm_buffer_ptr) {
     sys_dma_blk_memcpy(
         (uint64_t)comm_buffer_ptr,
-        (uint64_t)get_current_chip_baseaddress() | WIDE_ZERO_MEM_BASE_ADDR,
+        chiplet_addr_transform((uint64_t)WIDE_ZERO_MEM_BASE_ADDR),
         sizeof(comm_buffer_t));
     asm volatile("fence" ::: "memory");
 }
@@ -201,8 +203,8 @@ void initialize_comm_buffer(comm_buffer_t* comm_buffer_ptr) {
 void initialize_cluster(uint32_t cluster_idx) {
     // Initialize the cluster tcdm
     sys_dma_blk_memcpy(
-        (uint64_t)get_current_chip_baseaddress() | cluster_tcdm_start_addr(cluster_idx),
-        (uint64_t)get_current_chip_baseaddress() | WIDE_ZERO_MEM_BASE_ADDR,
+        chiplet_addr_transform((uint64_t)cluster_tcdm_start_addr(cluster_idx)),
+        chiplet_addr_transform((uint64_t)WIDE_ZERO_MEM_BASE_ADDR),
         (uint64_t)CLUSTER_TCDM_SIZE
     );
 }
@@ -311,11 +313,10 @@ void wait_snitches_parked(uint32_t timeout) { delay_ns(100000); }
  */
 static inline void program_snitches(uint8_t chip_id,
                                     volatile comm_buffer_t* comm_buffer_ptr) {
-    uintptr_t base_addr = (uintptr_t)get_chip_baseaddress(chip_id);
-    *(volatile uint32_t*)((uintptr_t)soc_ctrl_scratch_ptr(1) | base_addr) =
-        (uintptr_t)snitch_main;
-    *(volatile uint32_t*)((uintptr_t)soc_ctrl_scratch_ptr(2) | base_addr) =
-        (uintptr_t)comm_buffer_ptr;
+    writew((uint32_t)(uintptr_t)snitch_main,
+           (uintptr_t)chiplet_addr_transform_full(chip_id, (uintptr_t)soc_ctrl_scratch_addr(1)));
+    writew((uint32_t)(uintptr_t)comm_buffer_ptr,
+           (uintptr_t)chiplet_addr_transform_full(chip_id, (uintptr_t)soc_ctrl_scratch_addr(2)));
 }
 
 /**
@@ -325,9 +326,8 @@ static inline void program_snitches(uint8_t chip_id,
  */
 
 static inline void wakeup_cluster(uint8_t chip_id, uint32_t cluster_id) {
-    uintptr_t base_addr = (uintptr_t)get_chip_baseaddress(chip_id);
-    *(volatile uint32_t*)((uintptr_t)cluster_clint_set_ptr(cluster_id) |
-                          base_addr) = 511;
+    writew(511, 
+           (uintptr_t)chiplet_addr_transform_full(chip_id, (uintptr_t)cluster_clint_set_addr(cluster_id)));
 }
 
 /**
@@ -399,13 +399,10 @@ void wakeup_snitches_selective(uint8_t chip_id,
  */
 static inline int wait_snitches_done(uint8_t chip_id) {
     wait_sw_interrupt();
-    uint8_t current_chip_id = get_current_chip_id();
-    clear_host_sw_interrupt(current_chip_id);
+    clear_host_sw_interrupt(get_current_chip_id());
 
-    uintptr_t baseaddress = (uintptr_t)get_chip_baseaddress(chip_id);
-    uint32_t* retval_ptr =
-        (uint32_t*)((uintptr_t)soc_ctrl_scratch_ptr(3) | baseaddress);
-    int retval = *retval_ptr;
+    uint32_t retval = readw(
+        (uintptr_t)chiplet_addr_transform_full(chip_id, (uintptr_t)soc_ctrl_scratch_addr(3)));
     // LSB signals completion
     if (retval & 1)
         return retval >> 1;
@@ -566,9 +563,8 @@ static inline void set_sw_interrupts_unsafe(uint8_t chip_id,
 
 void set_cluster_interrupt(uint8_t chip_id, uint32_t cluster_id,
                            uint32_t core_id) {
-    uintptr_t base_addr = (uintptr_t)get_chip_baseaddress(chip_id);
-    *(volatile uint32_t*)((uintptr_t)cluster_clint_set_ptr(cluster_id) |
-                          base_addr) = (1 << core_id);
+    writew((1 << core_id),
+           (uintptr_t)chiplet_addr_transform_full(chip_id, (uint64_t)cluster_clint_set_addr(cluster_id)));
 }
 
 static inline uint32_t timer_interrupt_pending() {
