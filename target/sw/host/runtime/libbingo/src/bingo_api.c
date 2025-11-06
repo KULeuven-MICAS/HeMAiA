@@ -11,7 +11,7 @@
 #include <stdio.h>
 #include "heterogeneous_runtime.h"
 
-uint16_t global_task_id = 0; // Internal monotonically increasing id source
+uint64_t global_task_id = 0; // Internal monotonically increasing id source, notice this is used in each chiplet
 
 ///////////////////////////
 // Memory Allocator API  //
@@ -21,9 +21,6 @@ int bingo_hemaia_system_mmap_init(){
     // comm_buffer assignment: Begin from SPM_NARROW_BASE_ADDR and initialize to zero
     comm_buffer_t* comm_buffer = (comm_buffer_t *)chiplet_addr_transform(SPM_NARROW_BASE_ADDR);
     printf("Chip(%x, %x): [Host] Comm buffer addr: %lx\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), (uintptr_t)comm_buffer);
-    for (size_t i = 0; i < sizeof(comm_buffer_t) / 8; i++) {
-        ((uint64_t *)comm_buffer)[i] = 0;
-    }
     // L2 heap init
     // Start addr is the spm narrow
     // Size is half of the narrow spm
@@ -235,12 +232,11 @@ int bingo_read_c2h_mailbox(uint32_t *buffer, uint64_t timeout_cycles, uint32_t *
 bingo_task_t *bingo_task_create(uint32_t fn_ptr, uint32_t args_ptr, uint8_t assigned_chip_id, uint8_t assigned_cluster_id) {
 
     bingo_task_t *task = o1heapAllocate(bingo_get_l2_heap_manager(get_current_chip_id()), sizeof(bingo_task_t));
-    if (!task) return NULL;
-    if (global_task_id > 0xFFu) {
-        // Simple overflow guard; wrap is undefined for now.
-        printf("[BINGO] Warning: task id overflow (>%u)\r\n", 0xFFFFu);
+    if (!task){
+        printf("[BINGO] Error: Failed to allocate memory for new task.\r\n");
+        return NULL;
     }
-    task->task_id = global_task_id;
+    task->task_id = readh((uintptr_t)chiplet_addr_transform((uint64_t)&global_task_id));
     task->fn_ptr = fn_ptr;
     task->args_ptr = args_ptr;
     task->assigned_chip_id = assigned_chip_id;
@@ -267,8 +263,11 @@ bingo_task_t *bingo_task_create(uint32_t fn_ptr, uint32_t args_ptr, uint8_t assi
     task->completion_notified = false;
     task->debug_seq_issue = 0;
     task->debug_seq_complete = 0;
-
-    global_task_id++;
+    // Increment global task id by 1
+    writeh(
+        readh((uintptr_t)chiplet_addr_transform((uint64_t)&global_task_id)) + 1,
+        (uintptr_t)chiplet_addr_transform((uint64_t)&global_task_id)
+    );
     return task;
 }
 

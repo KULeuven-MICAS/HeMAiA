@@ -401,10 +401,6 @@ import ${name}_pkg::*;
   //////////////////////
 
   hemaia_d2d_link #(
-    .EnableEastPhy  (`EAST_IO),
-    .EnableWestPhy  (`WEST_IO),
-    .EnableNorthPhy (`NORTH_IO),
-    .EnableSouthPhy (`SOUTH_IO),
     .chip_id_t (chip_id_t),
     .axi_req_t (${soc2router_bus.req_type()}),
     .axi_rsp_t (${soc2router_bus.rsp_type()}),
