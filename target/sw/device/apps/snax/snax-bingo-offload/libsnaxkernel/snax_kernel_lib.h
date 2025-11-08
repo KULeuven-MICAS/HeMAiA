@@ -112,6 +112,55 @@ SNAX_LIB_DEFINE void __snax_kernel_check_results(void* arg) {
     }
 }
 
+SNAX_LIB_DEFINE void __snax_kernel_check_results_full(void* arg) {
+    // This function is used to check the results of the computation
+    // Different from the previous check_results kernel, this function will use the DMA core to load data from L3 to L1 first
+    // Arg0: golden_data_addr_hi
+    // Arg1: golden_data_addr_lo
+    // Arg2: output_data_addr_hi
+    // Arg3: output_data_addr_lo
+    // Arg4: data_size in Byte
+    if (snrt_is_dm_core()) {
+        uint32_t golden_data_addr_hi = ((uint32_t*)arg)[0];
+        uint32_t golden_data_addr_lo = ((uint32_t*)arg)[1];
+        uint32_t output_data_addr_hi = ((uint32_t*)arg)[2];
+        uint32_t output_data_addr_lo = ((uint32_t*)arg)[3];
+        uint32_t data_size = ((uint32_t*)arg)[4];
+
+        uint32_t* golden_data_l1 =
+            snrt_l1_malloc(data_size);  // allocate L1 memory for golden data
+        uint32_t* output_data_l1 =
+            snrt_l1_malloc(data_size);  // allocate L1 memory for output data
+
+        snrt_dma_start_1d((void*)golden_data_l1,
+                          (void*)make_u64(golden_data_addr_hi,golden_data_addr_lo),
+                          data_size);
+        snrt_dma_start_1d((void*)output_data_l1,
+                          (void*)make_u64(output_data_addr_hi,output_data_addr_lo),
+                          data_size);
+        snrt_dma_wait_all();
+
+        uint32_t num_errors = 0;
+        for (uint32_t i = 0; i < data_size / sizeof(uint32_t); i++) {
+            if (golden_data_l1[i] != output_data_l1[i]) {
+                num_errors++;
+                if (num_errors < 10) {
+                    printf("Error at index %d: golden = %d, output = %d\n", i,
+                           golden_data_l1[i], output_data_l1[i]);
+                }
+            }
+        }
+        if (num_errors == 0) {
+            printf("Check Results: PASS! No errors found.\n");
+        } else {
+            printf("Check Results: FAIL! %d errors found.\n", num_errors);
+        }
+
+        snrt_l1_free(golden_data_l1);
+        snrt_l1_free(output_data_l1);
+    }
+}
+
 SNAX_LIB_DEFINE void __snax_kernel_load_compute_store(void* arg) {
     // Arg0: uint32_t input_data_addr
     // Arg1: uint32_t input_data_size in Byte
@@ -1720,6 +1769,7 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_compute_only_intra_chiplet(void* arg) {
 SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
     SNAX_EXPORT_FUNC(__snax_kernel_dummy),
     SNAX_EXPORT_FUNC(__snax_kernel_check_results),
+    SNAX_EXPORT_FUNC(__snax_kernel_check_results_full),
     SNAX_EXPORT_FUNC(__snax_kernel_csr),
     SNAX_EXPORT_FUNC(__snax_kernel_load_compute_store),
     SNAX_EXPORT_FUNC(__snax_kernel_double_buffer_example),

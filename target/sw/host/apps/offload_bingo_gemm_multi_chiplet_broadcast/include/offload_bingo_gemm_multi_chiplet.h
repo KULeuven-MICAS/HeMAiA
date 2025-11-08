@@ -25,9 +25,8 @@ int kernel_execution() {
     /////////////////////////
     // User defined workload
     /////////////////////////
-    uintptr_t output_data_ptr = 0;
     // num_tasks = __workload_versacore_single_chiplet(task_list, &output_data_ptr);
-    num_tasks = __workload_versacore_multi_chiplet_broadcast(task_list, &output_data_ptr);
+    num_tasks = __workload_versacore_multi_chiplet_broadcast(task_list);
 
     ////////////////////////////
     // End user defined workload
