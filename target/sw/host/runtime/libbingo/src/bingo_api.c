@@ -37,7 +37,7 @@ int bingo_hemaia_system_mmap_init(){
     // Start addr is the l3 heap start symbol
     // Size is half of the wide spm
     uintptr_t l3_heap_start = ALIGN_UP(chiplet_addr_transform((uint64_t)(&__l3_heap_start)), O1HEAP_ALIGNMENT);
-    size_t l3_heap_size = ALIGN_DOWN((uintptr_t)__wide_spm_end - 1, O1HEAP_ALIGNMENT) - l3_heap_start;
+    size_t l3_heap_size = ALIGN_DOWN(chiplet_addr_transform((uint64_t)(&__wide_spm_end)) - 1, O1HEAP_ALIGNMENT) - l3_heap_start;
     O1HeapInstance *l3_heap_manager = o1heapInit((void *)l3_heap_start, l3_heap_size);
     printf("Chip(%x, %x): [Host] L3 heap start: %lx\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), l3_heap_start);
     // printf("Chip(%x, %x): [Host] L3 heap start: %lx, size: %lx, heap manager: 0x%lx\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), l3_heap_start, l3_heap_size, l3_heap_manager);
