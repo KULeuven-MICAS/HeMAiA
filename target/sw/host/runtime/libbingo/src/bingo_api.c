@@ -27,7 +27,7 @@ int bingo_hemaia_system_mmap_init(){
     uintptr_t l2_heap_start = ALIGN_UP((uintptr_t)comm_buffer + sizeof(comm_buffer_t), O1HEAP_ALIGNMENT);
     size_t l2_heap_size = ALIGN_UP(NARROW_SPM_SIZE / 2, O1HEAP_ALIGNMENT);
     O1HeapInstance *l2_heap_manager = o1heapInit((void *)l2_heap_start, l2_heap_size);
-    printf("Chip(%x, %x): [Host] L2 heap start: %lx\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), l2_heap_start);
+    printf("Chip(%x, %x): [Host] L2 heap start: %lx, size: %d\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), l2_heap_start, l2_heap_size);
     // printf("Chip(%x, %x): [Host] L2 heap start: %lx, size: %lx, heap manager: 0x%lx\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), l2_heap_start, l2_heap_size, l2_heap_manager);
     if(!l2_heap_manager) {
         printf("Error when initializing L2 heap. \r\n");
@@ -39,7 +39,7 @@ int bingo_hemaia_system_mmap_init(){
     uintptr_t l3_heap_start = ALIGN_UP(chiplet_addr_transform((uint64_t)(&__l3_heap_start)), O1HEAP_ALIGNMENT);
     size_t l3_heap_size = ALIGN_DOWN(chiplet_addr_transform((uint64_t)(&__wide_spm_end)) - 1, O1HEAP_ALIGNMENT) - l3_heap_start;
     O1HeapInstance *l3_heap_manager = o1heapInit((void *)l3_heap_start, l3_heap_size);
-    printf("Chip(%x, %x): [Host] L3 heap start: %lx\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), l3_heap_start);
+    printf("Chip(%x, %x): [Host] L3 heap start: %lx, size: %d\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), l3_heap_start, l3_heap_size);
     // printf("Chip(%x, %x): [Host] L3 heap start: %lx, size: %lx, heap manager: 0x%lx\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), l3_heap_start, l3_heap_size, l3_heap_manager);
     if(!l3_heap_manager) {
         printf("Error when initializing L3 heap.\r\n");
