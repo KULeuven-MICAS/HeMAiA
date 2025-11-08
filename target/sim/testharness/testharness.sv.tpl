@@ -311,7 +311,7 @@ module testharness
 % endif
 % elif chip.type == ChipletType.MEMORY:
   hemaia_mem_chip #(
-    .MemBankNum(32),
+    .MemBankNum(16),
     .MemSize(${chip.size}),
     .EnableEastPhy(1'b${
         '1' if any(neighborhood.coordinate == (chip.coordinate[0]+1, chip.coordinate[1]) for neighborhood in chip_coordinates) else '0'
