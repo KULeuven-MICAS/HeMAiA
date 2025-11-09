@@ -96,7 +96,7 @@ module testharness
 % endfor
 % for chip in chip_coordinates:
 %   if chip.type == ChipletType.MEMORY:
-%       for k in range(0, 32):
+%       for k in range(0, 16):
     i_hemaia_mem_${chip.coordinate[0]}_${chip.coordinate[1]}.i_hemaia_mem_system.i_hemaia_mem.gen_banks[${k}].i_data_mem.i_tc_sram.load_data("app_chip_${chip.coordinate[0]}_${chip.coordinate[1]}/bank_${k}.hex");
 %       endfor
 %   endif
@@ -311,7 +311,7 @@ module testharness
 % endif
 % elif chip.type == ChipletType.MEMORY:
   hemaia_mem_chip #(
-    .MemBankNum(32),
+    .MemBankNum(16),
     .MemSize(${chip.size}),
     .EnableEastPhy(1'b${
         '1' if any(neighborhood.coordinate == (chip.coordinate[0]+1, chip.coordinate[1]) for neighborhood in chip_coordinates) else '0'

@@ -58,7 +58,7 @@ SECTIONS
   __host_end = .;
 
   .devicebin : { *(.devicebin) } > WIDE_SPM
-  .l3_heap ALIGN(0x1000):{
+  .l3_heap : {
     __l3_heap_start = .;
   } > WIDE_SPM
 

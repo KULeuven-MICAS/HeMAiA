@@ -17,7 +17,9 @@
 // L3: Wide SoC Shared Memory
 // L3 will be on the data
 // In the future we will have the FPGA D2D Link + external SRAM as a larger L3
+#define SPM_WIDE_ALIGNMENT 1024
 extern uint64_t __l3_heap_start;
+extern uint64_t __wide_spm_end;
 
 extern struct O1HeapInstance *l2_heap_manager;
 extern uint64_t l2_heap_start, l2_heap_size;

@@ -64,17 +64,18 @@ int main() {
     ///////////////////////////////
     // 4. Run the bingo runtime
     ///////////////////////////////
+    // FIXME: Has some bugs here when multiple chiplets are used
     // We need to first sync all the chiplets
-    uint8_t sync_checkpoint = 1;
-    chip_barrier(comm_buffer_ptr, 0x00, 0x11, sync_checkpoint);
-    sync_checkpoint++;
-    printf("Chip(%x, %x): [Host] All chiplets synced, start Bingo\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+    // uint8_t sync_checkpoint = 1;
+    // chip_barrier(comm_buffer_ptr, 0x00, 0x11, sync_checkpoint);
+    // sync_checkpoint++;
+    // printf("Chip(%x, %x): [Host] All chiplets synced, start Bingo\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
     int ret = 0;
     ret = kernel_execution();
     clear_host_sw_interrupt(current_chip_id);
     printf("Chip(%x, %x): [Host] Offload Finish\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
     // Sync before exit
-    chip_barrier(comm_buffer_ptr, 0x00, 0x11, sync_checkpoint);
-    sync_checkpoint++;
+    // chip_barrier(comm_buffer_ptr, 0x00, 0x11, sync_checkpoint);
+    // sync_checkpoint++;
     return ret;
 }

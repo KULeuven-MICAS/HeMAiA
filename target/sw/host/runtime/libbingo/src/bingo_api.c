@@ -12,7 +12,6 @@
 #include "heterogeneous_runtime.h"
 
 uint64_t global_task_id = 0; // Internal monotonically increasing id source, notice this is used in each chiplet
-
 ///////////////////////////
 // Memory Allocator API  //
 ///////////////////////////
@@ -28,19 +27,19 @@ int bingo_hemaia_system_mmap_init(){
     uintptr_t l2_heap_start = ALIGN_UP((uintptr_t)comm_buffer + sizeof(comm_buffer_t), O1HEAP_ALIGNMENT);
     size_t l2_heap_size = ALIGN_UP(NARROW_SPM_SIZE / 2, O1HEAP_ALIGNMENT);
     O1HeapInstance *l2_heap_manager = o1heapInit((void *)l2_heap_start, l2_heap_size);
-    printf("Chip(%x, %x): [Host] L2 heap start: %lx\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), l2_heap_start);
+    printf("Chip(%x, %x): [Host] L2 heap start: %lx, size(kB): %d\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), l2_heap_start, l2_heap_size>>10);
     // printf("Chip(%x, %x): [Host] L2 heap start: %lx, size: %lx, heap manager: 0x%lx\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), l2_heap_start, l2_heap_size, l2_heap_manager);
     if(!l2_heap_manager) {
         printf("Error when initializing L2 heap. \r\n");
         return -1;
     }
     // L3 heap init
-    // Start addr is the l3 heap start symbol
-    // Size is half of the wide spm
-    uintptr_t l3_heap_start = chiplet_addr_transform((uint64_t)(&__l3_heap_start));
-    size_t l3_heap_size = ALIGN_UP(WIDE_SPM_SIZE / 2, O1HEAP_ALIGNMENT);
+    // Start addr is the l3 heap start symbol aligned to 1KB
+    // Size is from l3 heap start to wide spm end aligned down 1KB
+    uintptr_t l3_heap_start = ALIGN_UP(chiplet_addr_transform((uint64_t)(&__l3_heap_start)), SPM_WIDE_ALIGNMENT);
+    size_t l3_heap_size = ALIGN_DOWN(chiplet_addr_transform((uint64_t)(&__wide_spm_end)-SPM_WIDE_ALIGNMENT), SPM_WIDE_ALIGNMENT) - l3_heap_start;
     O1HeapInstance *l3_heap_manager = o1heapInit((void *)l3_heap_start, l3_heap_size);
-    printf("Chip(%x, %x): [Host] L3 heap start: %lx\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), l3_heap_start);
+    printf("Chip(%x, %x): [Host] L3 heap start: %lx, size(kB): %d\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), l3_heap_start, l3_heap_size>>10);
     // printf("Chip(%x, %x): [Host] L3 heap start: %lx, size: %lx, heap manager: 0x%lx\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), l3_heap_start, l3_heap_size, l3_heap_manager);
     if(!l3_heap_manager) {
         printf("Error when initializing L3 heap.\r\n");
@@ -66,7 +65,7 @@ O1HeapInstance *bingo_get_l2_heap_manager(uint8_t chip_id){
 }
 
 O1HeapInstance *bingo_get_l3_heap_manager(uint8_t chip_id){
-    return (O1HeapInstance *)chiplet_addr_transform_full(chip_id, (uintptr_t)chiplet_addr_transform((uint64_t)(&__l3_heap_start)));
+    return (O1HeapInstance *)chiplet_addr_transform_full(chip_id, ALIGN_UP(chiplet_addr_transform((uint64_t)(&__l3_heap_start)), SPM_WIDE_ALIGNMENT));
 }
 
 //////////////////////////
