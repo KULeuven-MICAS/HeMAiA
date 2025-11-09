@@ -23,10 +23,8 @@
   cuts_hemaia_mem_to_wide = occamy_cfg["cuts"]["hemaia_mem_to_wide"]
   cuts_hemaia_mem_to_narrow = occamy_cfg["cuts"]["hemaia_mem_to_narrow"]
   cuts_wide_to_wide_zero_mem = occamy_cfg["cuts"]["wide_to_wide_zero_mem"]
-  cuts_wide_and_inter = occamy_cfg["cuts"]["wide_and_inter"]
   cuts_periph_axi_lite_narrow = occamy_cfg["cuts"]["periph_axi_lite_narrow"]
   cuts_periph_axi_lite = occamy_cfg["cuts"]["periph_axi_lite"]
-  txns_wide_and_inter = occamy_cfg["txns"]["wide_and_inter"]
   txns_narrow_and_wide = occamy_cfg["txns"]["narrow_and_wide"]
   cuts_withing_atomic_adapter_narrow = occamy_cfg["cuts"]["atomic_adapter_narrow"]
   cuts_withing_atomic_adapter_narrow_wide = occamy_cfg["cuts"]["atomic_adapter_narrow_wide"]
@@ -46,6 +44,11 @@ module ${name}_soc
 (
   input  logic        clk_i,
   input  logic        rst_ni,
+
+  // Accelerator clock
+  input  logic [${len(occamy_cfg["clusters"])}-1:0] clk_acc_i,
+  input  logic [${len(occamy_cfg["clusters"])}-1:0] rst_acc_ni,
+
   input  logic        test_mode_i,
   input  chip_id_t    chip_id_i,
   input  logic [${occamy_cfg["addr_width"]-1}:0] boot_addr_i,
@@ -186,6 +189,8 @@ module ${name}_soc
   ${name}_quadrant_s1 i_${name}_quadrant_s1_${i} (
     .clk_i (clk_i),
     .rst_ni (rst_ni),
+    .clk_acc_i (clk_acc_i),
+    .rst_acc_ni (rst_acc_ni),
     .test_mode_i (test_mode_i),
     .boot_addr_i (boot_addr_i[31:0]),
     .chip_id_i (chip_id_i),

@@ -24,6 +24,28 @@ typedef struct {
     uint32_t end_cycles;             // end cycles of the offloaded function
 } bingo_offload_unit_t;
 
+#define BINGO_C2H_FLAG_MASK        0xFu
+#define BINGO_C2H_CLUSTER_MASK     0xFFu
+#define BINGO_C2H_TASK_MASK        0xFFFFu
+#define BINGO_C2H_FLAG_SHIFT       0
+#define BINGO_C2H_CLUSTER_SHIFT    4
+#define BINGO_C2H_TASK_SHIFT       12
+#define BINGO_C2H_RESERVED_SHIFT   28
+
+typedef struct {
+  uint16_t task_id;   // 16-bit task identifier
+  uint8_t  cluster_id;// Source cluster id
+  uint8_t  flag;      // Lower 4 bits meaningful (MBOX_DEVICE_*)
+  uint8_t  reserved;  // Upper 4 bits of the original packed word (kept for future)
+} bingo_c2h_msg_fields_t;
+
+static inline uint32_t bingo_c2h_msg_encode(bingo_c2h_msg_fields_t f) {
+  return ((uint32_t)(f.reserved & 0xF)    << BINGO_C2H_RESERVED_SHIFT) |
+         ((uint32_t)(f.task_id  & BINGO_C2H_TASK_MASK)    << BINGO_C2H_TASK_SHIFT) |
+         ((uint32_t)(f.cluster_id & BINGO_C2H_CLUSTER_MASK) << BINGO_C2H_CLUSTER_SHIFT) |
+         ((uint32_t)(f.flag & BINGO_C2H_FLAG_MASK) << BINGO_C2H_FLAG_SHIFT);
+}
+
 /**
  * @brief Initialize the bingo offload unit
  */

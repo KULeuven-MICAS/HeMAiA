@@ -28,14 +28,14 @@ module hemaia_clk_rst_controller #(
   ///////////////////////////////
   //    Reset Synchronizer     //
   ///////////////////////////////
-  (* async *) logic control_rst_n_d1_mst_clk, control_rst_n_d2_mst_clk;
-  always_ff @(posedge mst_clk_i or negedge control_rst_ni) begin
-    if (~control_rst_ni) begin
-      control_rst_n_d1_mst_clk <= 1'b0;
-      control_rst_n_d2_mst_clk <= 1'b0;
+  logic mst_rst_n_d1_mst_clk, mst_rst_n_d2_mst_clk;
+  always_ff @(posedge mst_clk_i or negedge mst_rst_ni) begin
+    if (~mst_rst_ni) begin
+      mst_rst_n_d1_mst_clk <= 1'b0;
+      mst_rst_n_d2_mst_clk <= 1'b0;
     end else begin
-      control_rst_n_d1_mst_clk <= control_rst_ni;
-      control_rst_n_d2_mst_clk <= control_rst_n_d1_mst_clk;
+      mst_rst_n_d1_mst_clk <= mst_rst_ni;
+      mst_rst_n_d2_mst_clk <= mst_rst_n_d1_mst_clk;
     end
   end
 
@@ -224,8 +224,8 @@ module hemaia_clk_rst_controller #(
   // Synchronize valid bits into high frequencies
   (* async *)logic [31:0] clock_division_reg_valid_d1;
   logic [31:0] clock_division_reg_valid_d2;
-  always_ff @(posedge mst_clk_i or negedge control_rst_n_d2_mst_clk) begin
-    if (~control_rst_n_d2_mst_clk) begin
+  always_ff @(posedge mst_clk_i or negedge mst_rst_n_d2_mst_clk) begin
+    if (~mst_rst_n_d2_mst_clk) begin
       clock_division_reg_valid_d1 <= '0;
       clock_division_reg_valid_d2 <= '0;
     end else begin
@@ -279,7 +279,7 @@ module hemaia_clk_rst_controller #(
           .DefaultDivision (DefaultDivision[i])
       ) i_clk_divider (
           .clk_i(mst_clk_i),
-          .rst_ni(control_rst_n_d2_mst_clk),
+          .rst_ni(mst_rst_n_d2_mst_clk),
           (* false_path *) .test_mode_i(test_mode_i),
           (* false_path *) .divisor_i(clock_division_reg_concat[i][MaxDivisionWidth-1:0]),
           .divisor_valid_i(clock_division_reg_valid_d2[i]),

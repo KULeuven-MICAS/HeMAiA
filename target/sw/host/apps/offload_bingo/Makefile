@@ -13,6 +13,8 @@ DEVICE_APPS = snax-bingo-offload
 ####################################
 INCDIRS += include
 INCDIRS += include/workloads/dummy
+INCDIRS += include/workloads/double_buffer
 INCDIRS += include/workloads/xdma_1d_copy
+INCDIRS += include/workloads/versacore
 
 include ../common.mk

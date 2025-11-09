@@ -10,6 +10,10 @@ int main() {
     // Set clk manager to 1 division for a faster simulation time
     enable_clk_domain(0, 1);
     enable_clk_domain(1, 1);
+    enable_clk_domain(2, 1);
+    enable_clk_domain(3, 1);
+    enable_clk_domain(4, 1);
+    enable_clk_domain(5, 1);
     // The pointer to the communication buffer
     volatile comm_buffer_t* comm_buffer_ptr = (comm_buffer_t*)0;
 
@@ -22,21 +26,6 @@ int main() {
     init_uart(current_chip_address_prefix, 32, 1);
     printf("[HeMAiA] Current Chip ID is: %x%x\r\n", current_chip_id >> 4,
            current_chip_id & 0x0F);
-
-    printf("[HeMAiA] Max X of SoP: \r\n");
-    uint32_t max_x = 0;
-    scanf("%x", &max_x);
-    uint32_t max_y = 0;
-    printf("[HeMAiA] Max Y of SoP: \r\n");
-    scanf("%x", &max_y);
-
-    for (uint32_t x = 0; x <= max_x; x++) {
-        for (uint32_t y = 0; y <= max_y; y++) {
-            // Reset and ungate all quadrants, deisolate
-            reset_and_ungate_quadrants_all((x << 4) + y);
-            deisolate_all((x << 4) + y);
-        }
-    }
 
     printf("[HeMAiA] Chip ID to execute binary: \r\n");
     scanf("%x", &target_chip_id);

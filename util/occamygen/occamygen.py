@@ -127,6 +127,9 @@ def main():
     parser.add_argument("--chip",
                         metavar="CHIP_TOP",
                         help="(Optional) Chip Top-level")
+    parser.add_argument("--io",
+                        metavar="CHIP_IO",
+                        help="(Optional) Chip I/O Cell Wrapper")
     parser.add_argument("--ctrl",
                         metavar="SoC and Quad Ctrl",
                         help="Name of SoC or Quadrant template file (output)")
@@ -135,7 +138,6 @@ def main():
     parser.add_argument("--wrapper", "-w", action="store_true")
     parser.add_argument("--am-cheader", "-D", metavar="ADDRMAP_CHEADER")
     parser.add_argument("--am-csv", "-aml", metavar="ADDRMAP_CSV")
-    parser.add_argument("--dts", metavar="DTS", help="System's device tree.")
     parser.add_argument("--name", metavar="NAME",
                         default=DEFAULT_NAME, help="System's name.")
 
@@ -143,6 +145,9 @@ def main():
                         "--verbose",
                         help="increase output verbosity",
                         action="store_true")
+    parser.add_argument("--gen-host-ld",
+                        action="store_true",
+                        help="Generate host.ld file for host build")
 
     args = parser.parse_args()
     occamy_root = pathlib.Path(__file__).parent / "../../"
@@ -447,11 +452,13 @@ def main():
                                                          "internal_xbar_base_addr",
                                                          "S1QuadrantCfgAddressSpace")
 
-    # AXI Lite mux to combine register requests
+    # AXI Lite mux
+    # Here we hook the hw mailboxes
+    # The number of mailboxes equals to the number of clusters
     quadrant_s1_ctrl_mux = solder.AxiLiteXbar(
         48,
         32,
-        chipidw=0,      # quadrant_ctrl_mux is a pure mux, all transactions just send out from out
+        chipidw=occamy_cfg["hemaia_multichip"]["chip_id_width"],
         name="quadrant_s1_ctrl_mux",
         clk="clk_i",
         rst="rst_ni",
@@ -460,10 +467,12 @@ def main():
         fall_through=False,
         context="quadrant_s1_ctrl")
 
-    quadrant_s1_ctrl_mux.add_output("out", [(0, (1 << 48) - 1)])
     quadrant_s1_ctrl_mux.add_input("soc")
     quadrant_s1_ctrl_mux.add_input("quad")
-
+    for i in range(nr_s1_clusters):
+        quadrant_s1_ctrl_mux.add_output_symbolic(f"h2c_mailbox_{i}",
+                                                  "h2c_mailbox_base_addr",
+                                                  "H2CMailboxAddressSpace")
     ################
     # S1 Quadrants #
     ################
@@ -475,8 +484,8 @@ def main():
         uw=occamy_cfg["s1_quadrant"]["wide_xbar_slv_user_width"],
         chipidw=occamy_cfg["hemaia_multichip"]["chip_id_width"],
         name="wide_xbar_quadrant_s1",
-        clk="clk_quadrant_uncore",
-        rst="rst_quadrant_n",
+        clk="clk_i",
+        rst="rst_ni",
         max_slv_trans=occamy_cfg["s1_quadrant"]["wide_xbar"]["max_slv_trans"],
         max_mst_trans=occamy_cfg["s1_quadrant"]["wide_xbar"]["max_mst_trans"],
         fall_through=occamy_cfg["s1_quadrant"]["wide_xbar"]["fall_through"],
@@ -492,8 +501,8 @@ def main():
         uw=occamy_cfg["s1_quadrant"]["narrow_xbar_slv_user_width"],
         chipidw=occamy_cfg["hemaia_multichip"]["chip_id_width"],
         name="narrow_xbar_quadrant_s1",
-        clk="clk_quadrant_uncore",
-        rst="rst_quadrant_n",
+        clk="clk_i",
+        rst="rst_ni",
         max_slv_trans=occamy_cfg["s1_quadrant"]["narrow_xbar"]
         ["max_slv_trans"],
         max_mst_trans=occamy_cfg["s1_quadrant"]["narrow_xbar"]
@@ -554,7 +563,7 @@ def main():
     #############
     if args.top_sv:
         top_kwargs = occamy.get_top_kwargs(occamy_cfg, cluster_generators,
-                                    soc_axi_lite_narrow_periph_xbar, soc_wide_xbar, soc_narrow_xbar, soc2router_bus, router2soc_bus, args.name)
+                                    soc_axi_lite_narrow_periph_xbar, soc_wide_xbar, soc_narrow_xbar, soc2router_bus, router2soc_bus, util, args.name)
         write_template(args.top_sv,
                        outdir,
                        fname="{}_top.sv".format(args.name),
@@ -633,7 +642,7 @@ def main():
     # CVA6 Wrapper #
     ################
     if args.cva6_sv:
-        cva6_kwargs = occamy.get_cva6_kwargs(occamy_cfg, soc_narrow_xbar, args.name)
+        cva6_kwargs = occamy.get_cva6_kwargs(occamy_cfg, cluster_generators, util, soc_narrow_xbar, args.name)
         write_template(args.cva6_sv, outdir, **cva6_kwargs)
 
     ###################
@@ -696,7 +705,7 @@ def main():
     ########
     if args.xdma is True and occamy_cfg["hemaia_xdma_cfg"] is not None:
         print("------------------------------------------------")
-        print("    Generate XDMA")
+        print("    Generate HeMAiA Compute Chip XDMA")
         print("------------------------------------------------")
         import importlib.util
         script_dir = pathlib.Path(__file__).parent.resolve()
@@ -748,7 +757,83 @@ def main():
             + " --sw-target-dir "
             + str(script_dir / ".." / ".." / "target" / "sw" / "shared" / "vendor" / "xdma" / "hemaia-xdma-addr.h")
         )
-        print("XDMA generation finished")
+        print("HeMAiA Chip XDMA generation finished")
+
+    if args.xdma is True and any(occamy_cfg["hemaia_multichip"]["testbench_cfg"]["hemaia_mem_chip"]) and occamy_cfg["hemaia_xdma_cfg"] is not None:
+        print("------------------------------------------------")
+        print("    Generate HeMAiA Mem Chip XDMA")
+        print("------------------------------------------------")
+        import importlib.util
+        script_dir = pathlib.Path(__file__).parent.resolve()
+        snaxgen_path = script_dir / ".." / ".." / "deps" / "snitch_cluster" /  "util" / "snaxgen" / "snaxgen.py"
+        spec = importlib.util.spec_from_file_location("snaxgen", snaxgen_path)
+        snaxgen = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(snaxgen)
+        gen_file = snaxgen.gen_file
+        gen_chisel_file = snaxgen.gen_chisel_file
+        get_template = snaxgen.get_template
+
+        tpl_rtl_wrapper_file = script_dir / ".." / ".." / "deps" / "snitch_cluster" / "hw" / "templates" / "snax_xdma_wrapper.sv.tpl"
+
+        tpl_rtl_wrapper = get_template(tpl_rtl_wrapper_file)
+
+        gen_file(
+            cfg={
+                "name": "hemaia_mem_chip",
+                "xdma_cfg_io_width": occamy_cfg["hemaia_xdma_cfg"]["cfg_io_width"],
+                "dma_data_width": 512,
+                "data_width": occamy_cfg["data_width"],
+                "addr_width": occamy_cfg["addr_width"],
+                "tcdm": {
+                    "size": int(occamy_cfg["hemaia_multichip"]["testbench_cfg"]["hemaia_mem_chip"][0]["mem_size"]/1024),
+                }
+            },
+            tpl=tpl_rtl_wrapper,
+            target_path=str(script_dir / ".." / ".." / "hw" / "hemaia" / "hemaia_mem_system") + "/",
+            file_name= "hemaia_mem_chip_xdma_wrapper.sv",
+        )
+
+        gen_chisel_file(
+            chisel_path=str(script_dir / ".." / ".." / "deps" / "snitch_cluster" / "hw" / "chisel"),
+            chisel_param="snax.xdma.xdmaTop.XDMATopGen",
+            gen_path=" --clusterName "
+            + "hemaia_mem_chip"
+            + " --tcdmDataWidth "
+            + str(occamy_cfg["data_width"])
+            + " --axiDataWidth "
+            + str(512)
+            + " --axiAddrWidth "
+            + str(occamy_cfg["addr_width"])
+            + " --tcdmSize "
+            + str(int(occamy_cfg["hemaia_multichip"]["testbench_cfg"]["hemaia_mem_chip"][0]["mem_size"]/1024))
+            + " --xdmaCfg "
+            + hjson.dumpsJSON(obj=occamy_cfg["hemaia_xdma_cfg"], separators=(",", ":")).replace(" ", "")
+            + " --hw-target-dir "
+            + str(script_dir / ".." / ".." / "hw" / "hemaia" / "hemaia_mem_system") + "/"
+            + " --sw-target-dir "
+            + str(script_dir / ".." / ".." / "target" / "sw" / "shared" / "vendor" / "xdma" / "hemaia-mem-chip-xdma-addr.h")
+        )
+        print("HeMAiA Mem Chip XDMA generation finished")
+
+
+    # # generate the loader script
+    if args.gen_host_ld:
+        print("------------------------------------------------")
+        print("    Generate host.ld")
+        print("------------------------------------------------")
+        import importlib.util
+        script_dir = pathlib.Path(__file__).parent.resolve()
+        host_ld_tpl_file = script_dir / ".." / ".." / "target" / "sw" / "host" / "runtime" / "host.ld.tpl"
+        cfg={
+            "name": args.name,
+            "spm_narrow": occamy_cfg["spm_narrow"],
+            "spm_wide": occamy_cfg["spm_wide"],
+        }
+        write_template(
+            host_ld_tpl_file,
+            outdir,
+            **cfg
+        )
 
     ########
     # CHIP #
@@ -759,39 +844,19 @@ def main():
         write_template(args.chip, outdir, **chip_kwargs)
 
     ########
+    # IO #
+    ########
+    if args.io:
+        io_kwargs = occamy.get_io_kwargs(
+            occamy_cfg, util, args.name)
+        write_template(args.io, outdir, **io_kwargs)
+
+    ########
     # CTRL #
     ########
     if args.ctrl:
         ctrl_kwargs = occamy.get_ctrl_kwargs(occamy_cfg, cluster_generators, args.name)
         write_template(args.ctrl, outdir, **ctrl_kwargs)
-    #######
-    # DTS #
-    #######
-    # TODO(niwis, zarubaf): We probably need to think about genrating a couple
-    # of different systems here. I can at least think about two in that context:
-    # 1. RTL sim
-    # 2. FPGA
-    # 3. (ASIC) in the private wrapper repo
-    # I think we have all the necessary ingredients for this. What is missing is:
-    # - Create a second(/third) configuration file.
-    # - Generate the RTL into dedicated directories
-    # - (Manually) adapt the `Bender.yml` to include the appropriate files.
-
-    if args.dts:
-        dts = occamy.get_dts(occamy_cfg, am_clint, am_axi_lite_peripherals,
-                      am_axi_lite_narrow_peripherals)
-        # TODO(zarubaf): Figure out whether there are any requirements on the
-        # model and compatability.
-        dts_str = dts.emit("eth,occamy-dev", "eth,occamy")
-        with open(args.dts, "w") as file:
-            file.write(dts_str)
-        # Compile to DTB and save to a file with `.dtb` extension.
-        with open(pathlib.Path(args.dts).with_suffix(".dtb"), "wb") as file:
-            run(["dtc", args.dts],
-                input=dts_str,
-                stdout=file,
-                shell=True,
-                universal_newlines=True)
 
     # Emit the address map as a dot file if requested.
     if args.graph:

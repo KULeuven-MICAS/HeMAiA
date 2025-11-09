@@ -16,20 +16,14 @@
 #include "uart.c"
 #include "hemaia_clk_rst_controller.h"
 #include "hemaia-xdma-lib.h"
-
+#include "mailbox.h"
+#include "io.h"
 
 extern uint64_t __narrow_spm_start;
 extern uint64_t __narrow_spm_end;
 extern uint64_t __wide_spm_start;
 extern uint64_t __wide_spm_end;
 // Handle multireg degeneration to single register
-#if OCCAMY_SOC_ISOLATE_MULTIREG_COUNT == 1
-#define OCCAMY_SOC_ISOLATE_0_REG_OFFSET OCCAMY_SOC_ISOLATE_REG_OFFSET
-#define OCCAMY_SOC_ISOLATE_0_ISOLATE_0_MASK OCCAMY_SOC_ISOLATE_ISOLATE_0_MASK
-#endif
-#if OCCAMY_SOC_ISOLATED_MULTIREG_COUNT == 1
-#define OCCAMY_SOC_ISOLATED_0_REG_OFFSET OCCAMY_SOC_ISOLATED_REG_OFFSET
-#endif
 #if OCCAMY_SOC_SCRATCH_MULTIREG_COUNT == 1
 #define OCCAMY_SOC_SCRATCH_0_REG_OFFSET OCCAMY_SOC_SCRATCH_0_REG_OFFSET
 #endif
@@ -37,7 +31,8 @@ extern uint64_t __wide_spm_end;
 #define OCCAMY_SOC_SCRATCH_0_REG_OFFSET OCCAMY_SOC_SCRATCH_REG_OFFSET
 #endif
 
-
+#define ARRAY_ELEM_COUNT(a) (sizeof(a)/sizeof((a)[0]))
+#define ARRAY_SIZE_BYTES(a) (sizeof(a))
 //===============================================================
 // SNAX LIB Symbol Tab
 //===============================================================
@@ -53,18 +48,27 @@ typedef struct __attribute__((packed)){
 
 // Busy wait the ready signal
 void check_kernel_tab_ready(){
-    volatile uint32_t *symtab_ready_ptr = (volatile uint32_t *)soc_ctrl_kernel_tab_scratch_addr(0);
-    while(*symtab_ready_ptr!=1){}
+    uint64_t symtab_ready_addr = (uint64_t)soc_ctrl_kernel_tab_scratch_addr(0);
+    uint64_t local_symtab_ready_addr = chiplet_addr_transform(symtab_ready_addr);
+    // printf("Chip(%x, %x): [Host] Kernel tab ready addr: 0x%lx\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), local_symtab_ready_addr);
+    while(readw(local_symtab_ready_addr)!=1){
+
+    }
 }
 // Get the device function
 uint32_t get_device_function(const char *name) {
-    uint32_t get_symtab_start_raw = *(volatile uint32_t *)soc_ctrl_kernel_tab_scratch_addr(1);
-    uint32_t get_symtab_end_raw   = *(volatile uint32_t *)soc_ctrl_kernel_tab_scratch_addr(2);
-    // printf("[Host] Symtab Start Value: 0x%x\n", get_symtab_start_raw);
-    // printf("[Host] Symtab End Value:   0x%x\n", get_symtab_end_raw);
-    snax_symbol_t *symtab_start = (snax_symbol_t *)(uintptr_t)get_symtab_start_raw;
-    snax_symbol_t *symtab_end   = (snax_symbol_t *)(uintptr_t)get_symtab_end_raw;
-    // printf("Scanning device symbol table...\n");  
+    uint64_t symtab_start_addr_ptr = (uint64_t)soc_ctrl_kernel_tab_scratch_addr(1);
+    uint64_t symtab_end_addr_ptr   = (uint64_t)soc_ctrl_kernel_tab_scratch_addr(2);
+    uint64_t local_symtab_start_addr_ptr = chiplet_addr_transform(symtab_start_addr_ptr);
+    uint64_t local_symtab_end_addr_ptr   = chiplet_addr_transform(symtab_end_addr_ptr);
+    uint64_t snax_symtab_start = (uint64_t)readw(local_symtab_start_addr_ptr);
+    uint64_t snax_symtab_end   = (uint64_t)readw(local_symtab_end_addr_ptr);
+    uint64_t snax_symtab_start_local = chiplet_addr_transform(snax_symtab_start);
+    uint64_t snax_symtab_end_local   = chiplet_addr_transform(snax_symtab_end);
+    // printf("Chip(%x, %x): [Host] Device symbol table range: 0x%lx - 0x%lx\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), snax_symtab_start, snax_symtab_end);
+    snax_symbol_t *symtab_start = (snax_symbol_t *)(uintptr_t)snax_symtab_start_local;
+    snax_symbol_t *symtab_end   = (snax_symbol_t *)(uintptr_t)snax_symtab_end_local;
+    // printf("Scanning device symbol table...\n");
     for (volatile snax_symbol_t *sym = symtab_start; sym < symtab_end; sym++) {
         // printf("Symbol raw name: %s\n", (const char *)sym->name);
         // printf("Symbol addr     : 0x%x\n", (uint32_t)sym->addr);
@@ -161,8 +165,10 @@ void initialize_bss() {
 
     size_t bss_size = (size_t)(&__bss_end) - (size_t)(&__bss_start);
     if (bss_size)
-        sys_dma_blk_memcpy((uint64_t)(&__bss_start), WIDE_ZERO_MEM_BASE_ADDR,
+        sys_dma_blk_memcpy(chiplet_addr_transform((uint64_t)(&__bss_start)),
+                           chiplet_addr_transform((uint64_t)WIDE_ZERO_MEM_BASE_ADDR),
                            bss_size);
+
 }
 
 void initialize_wide_spm() {
@@ -170,8 +176,8 @@ void initialize_wide_spm() {
         (size_t)(&__wide_spm_end) - (size_t)(&__wide_spm_start);
     if (wide_spm_size)
         sys_dma_blk_memcpy(
-            (uint64_t)get_current_chip_baseaddress() | SPM_WIDE_BASE_ADDR,
-            (uint64_t)get_current_chip_baseaddress() | WIDE_ZERO_MEM_BASE_ADDR,
+            chiplet_addr_transform((uint64_t)SPM_WIDE_BASE_ADDR),
+            chiplet_addr_transform((uint64_t)WIDE_ZERO_MEM_BASE_ADDR),
             wide_spm_size);
 }
 
@@ -180,8 +186,8 @@ void initialize_narrow_spm() {
         (size_t)(&__narrow_spm_end) - (size_t)(&__narrow_spm_start);
     if (narrow_spm_size)
         sys_dma_blk_memcpy(
-            (uint64_t)get_current_chip_baseaddress() | SPM_NARROW_BASE_ADDR,
-            (uint64_t)get_current_chip_baseaddress() | WIDE_ZERO_MEM_BASE_ADDR,
+            chiplet_addr_transform((uint64_t)SPM_NARROW_BASE_ADDR),
+            chiplet_addr_transform((uint64_t)WIDE_ZERO_MEM_BASE_ADDR),
             narrow_spm_size);
     asm volatile("fence" ::: "memory");
 }
@@ -189,7 +195,7 @@ void initialize_narrow_spm() {
 void initialize_comm_buffer(comm_buffer_t* comm_buffer_ptr) {
     sys_dma_blk_memcpy(
         (uint64_t)comm_buffer_ptr,
-        (uint64_t)get_current_chip_baseaddress() | WIDE_ZERO_MEM_BASE_ADDR,
+        chiplet_addr_transform((uint64_t)WIDE_ZERO_MEM_BASE_ADDR),
         sizeof(comm_buffer_t));
     asm volatile("fence" ::: "memory");
 }
@@ -197,8 +203,8 @@ void initialize_comm_buffer(comm_buffer_t* comm_buffer_ptr) {
 void initialize_cluster(uint32_t cluster_idx) {
     // Initialize the cluster tcdm
     sys_dma_blk_memcpy(
-        (uint64_t)get_current_chip_baseaddress() | cluster_tcdm_start_addr(cluster_idx),
-        (uint64_t)get_current_chip_baseaddress() | WIDE_ZERO_MEM_BASE_ADDR,
+        chiplet_addr_transform((uint64_t)cluster_tcdm_start_addr(cluster_idx)),
+        chiplet_addr_transform((uint64_t)WIDE_ZERO_MEM_BASE_ADDR),
         (uint64_t)CLUSTER_TCDM_SIZE
     );
 }
@@ -307,11 +313,10 @@ void wait_snitches_parked(uint32_t timeout) { delay_ns(100000); }
  */
 static inline void program_snitches(uint8_t chip_id,
                                     volatile comm_buffer_t* comm_buffer_ptr) {
-    uintptr_t base_addr = (uintptr_t)get_chip_baseaddress(chip_id);
-    *(volatile uint32_t*)((uintptr_t)soc_ctrl_scratch_ptr(1) | base_addr) =
-        (uintptr_t)snitch_main;
-    *(volatile uint32_t*)((uintptr_t)soc_ctrl_scratch_ptr(2) | base_addr) =
-        (uintptr_t)comm_buffer_ptr;
+    writew((uint32_t)(uintptr_t)snitch_main,
+           (uintptr_t)chiplet_addr_transform_full(chip_id, (uintptr_t)soc_ctrl_scratch_addr(1)));
+    writew((uint32_t)(uintptr_t)comm_buffer_ptr,
+           (uintptr_t)chiplet_addr_transform_full(chip_id, (uintptr_t)soc_ctrl_scratch_addr(2)));
 }
 
 /**
@@ -321,9 +326,8 @@ static inline void program_snitches(uint8_t chip_id,
  */
 
 static inline void wakeup_cluster(uint8_t chip_id, uint32_t cluster_id) {
-    uintptr_t base_addr = (uintptr_t)get_chip_baseaddress(chip_id);
-    *(volatile uint32_t*)((uintptr_t)cluster_clint_set_ptr(cluster_id) |
-                          base_addr) = 511;
+    writew(511, 
+           (uintptr_t)chiplet_addr_transform_full(chip_id, (uintptr_t)cluster_clint_set_addr(cluster_id)));
 }
 
 /**
@@ -395,13 +399,10 @@ void wakeup_snitches_selective(uint8_t chip_id,
  */
 static inline int wait_snitches_done(uint8_t chip_id) {
     wait_sw_interrupt();
-    uint8_t current_chip_id = get_current_chip_id();
-    clear_host_sw_interrupt(current_chip_id);
+    clear_host_sw_interrupt(get_current_chip_id());
 
-    uintptr_t baseaddress = (uintptr_t)get_chip_baseaddress(chip_id);
-    uint32_t* retval_ptr =
-        (uint32_t*)((uintptr_t)soc_ctrl_scratch_ptr(3) | baseaddress);
-    int retval = *retval_ptr;
+    uint32_t retval = readw(
+        (uintptr_t)chiplet_addr_transform_full(chip_id, (uintptr_t)soc_ctrl_scratch_addr(3)));
     // LSB signals completion
     if (retval & 1)
         return retval >> 1;
@@ -412,51 +413,6 @@ static inline int wait_snitches_done(uint8_t chip_id) {
 static inline volatile uint32_t* get_shared_lock(
     volatile comm_buffer_t* comm_buffer_ptr) {
     return &((*comm_buffer_ptr).lock);
-}
-
-//===============================================================
-// Reset and clock gating
-//===============================================================
-
-static inline void set_clk_ena_quad(uint8_t chip_id, uint32_t quad_idx,
-                                    uint32_t value,
-                                    uint32_t cluster_clk_enable_mask) {
-    volatile uint32_t* clk_ena_ptr =
-        (volatile uint32_t*)((uintptr_t)quad_cfg_clk_ena_ptr(quad_idx) |
-                             (uintptr_t)get_chip_baseaddress(chip_id));
-    *clk_ena_ptr = value & cluster_clk_enable_mask;
-}
-
-// static inline void set_clk_ena_quad(uint32_t quad_idx, uint32_t value) {
-//     *quad_cfg_clk_ena_ptr(quad_idx) = value & 0x1;
-// }
-
-static inline void set_reset_n_quad(uint8_t chip_id, uint32_t quad_idx,
-                                    uint32_t value) {
-    volatile uint32_t* reset_n_ptr =
-        (volatile uint32_t*)((uintptr_t)quad_cfg_reset_n_ptr(quad_idx) |
-                             (uintptr_t)get_chip_baseaddress(chip_id));
-    *reset_n_ptr = value & 0x1;
-}
-
-static inline void reset_and_ungate_quad(uint8_t chip_id, uint32_t quadrant_idx,
-                                         uint32_t cluster_clk_enable_mask) {
-    set_reset_n_quad(chip_id, quadrant_idx, 0);
-    set_clk_ena_quad(chip_id, quadrant_idx, 0, cluster_clk_enable_mask);
-    set_reset_n_quad(chip_id, quadrant_idx, 0xFFFFFFFF);
-    set_clk_ena_quad(chip_id, quadrant_idx, 0xFFFFFFFF,
-                     cluster_clk_enable_mask);
-}
-
-static inline void reset_and_ungate_quadrants(
-    uint8_t chip_id, uint32_t cluster_clk_enable_mask) {
-    for (int i = 0; i < N_QUADS; i++)
-        reset_and_ungate_quad(chip_id, i, cluster_clk_enable_mask);
-}
-
-static inline void reset_and_ungate_quadrants_all(uint8_t chip_id) {
-    for (int i = 0; i < N_QUADS; i++)
-        reset_and_ungate_quad(chip_id, i, 0xFFFFFFFF);
 }
 
 //===============================================================
@@ -607,9 +563,8 @@ static inline void set_sw_interrupts_unsafe(uint8_t chip_id,
 
 void set_cluster_interrupt(uint8_t chip_id, uint32_t cluster_id,
                            uint32_t core_id) {
-    uintptr_t base_addr = (uintptr_t)get_chip_baseaddress(chip_id);
-    *(volatile uint32_t*)((uintptr_t)cluster_clint_set_ptr(cluster_id) |
-                          base_addr) = (1 << core_id);
+    writew((1 << core_id),
+           (uintptr_t)chiplet_addr_transform_full(chip_id, (uint64_t)cluster_clint_set_addr(cluster_id)));
 }
 
 static inline uint32_t timer_interrupt_pending() {
@@ -738,222 +693,34 @@ void delay_ns(uint64_t delay) {
 }
 
 //===============================================================
-// Clocks and FLLs
-//===============================================================
-
-// #define N_LOCK_CYCLES 10
-
-// typedef enum { SYSTEM_CLK = 0, PERIPH_CLK = 1, HBM2E_CLK = 2 } clk_t;
-
-// static inline void fll_reg_write_u32(clk_t clk, uint32_t byte_offset,
-// uint32_t val) {
-//     *(fll_base[clk] + (byte_offset / 4)) = val;
-// }
-
-// static inline uint32_t fll_reg_read_u32(clk_t clk, uint32_t byte_offset) {
-//     return *(fll_base[clk] + (byte_offset / 4));
-// }
-
-/**
- * @brief Returns the multiplier to the reference frequency of the FLL
- */
-// uint32_t get_fll_freq(clk_t clk) {
-// #if SELECT_FLL==0 // ETH FLL
-//     return fll_reg_read_u32(clk, ETH_FLL_STATUS_I_REG_OFFSET) &
-//     ETH_FLL_STATUS_I_MULTIPLIER_MASK;
-// #elif SELECT_FLL==1 // GF FLL
-//     return fll_reg_read_u32(clk, FLL_FREQ_REG_OFFSET);
-// #endif
-// }
-
-// uint32_t fll_locked(clk_t clk) {
-// #if SELECT_FLL==0 // ETH FLL
-//     return fll_reg_read_u32(clk, ETH_FLL_LOCK_REG_OFFSET) &
-//     ETH_FLL_LOCK_LOCKED_MASK;
-// #elif SELECT_FLL==1 // GF FLL
-//     return fll_reg_read_u32(clk, FLL_STATE_REG_OFFSET) == 3;
-// #endif
-// }
-
-/**
- * @brief Measures frequency of clock source
- *
- * @return Frequency in GHz
- */
-// float measure_frequency(clk_t clk) {
-//     return freq_meter_ref_freqs[clk] * get_fll_freq(clk);
-// }
-
-/**
- * @brief Derives system frequency through RISC-V's
- *        mtime memory-mapped register and mcycle CSR
- *
- * @param rtc_cycles Number of RTC cycles to wait for measurement.
- *                   The higher it is, the more precise the measurement.
- * @return Frequency in GHz
- */
-// float measure_system_frequency(uint32_t rtc_cycles) {
-//     uint64_t start_cycle;
-//     uint64_t end_cycle;
-//     float time_delta;
-//     uint64_t cycle_delta;
-
-//     // Compute time delta
-//     time_delta = rtc_cycles * rtc_period;
-
-//     // Measure cycle delta
-//     start_cycle = mcycle();
-//     delay_ns(time_delta);
-//     end_cycle = mcycle();
-//     cycle_delta = end_cycle - start_cycle;
-
-//     // Return frequency
-//     return cycle_delta / time_delta;
-// }
-
-/**
- * @brief Reprogram the FLL in closed-loop mode with the specified divider
- * @detail Blocking function, returns after the new frequency is locked
- */
-// void program_fll(clk_t clk, uint32_t divider) {
-// #if SELECT_FLL==0 // ETH FLL
-//     // Reconfigure FLL
-//     uint32_t val = 0;
-//     val |= 1 << 31;     // Select closed loop mode
-//     val |= 1 << 30;     // Gate output by LOCK signal
-//     val |= 1 << 26;     // Set post-clock divider to 1 (neutral)
-//     val |= divider - 1; // Set refclk multiplier to specified value
-//     fll_reg_write_u32(clk, ETH_FLL_CONFIG_I_REG_OFFSET, val);
-//     // Wait new frequency locked
-//     while (!fll_locked(clk));
-// #elif SELECT_FLL==1 // GF FLL
-//     // Fallback to reference clock during reconfiguration
-//     fll_reg_write_u32(clk, FLL_BYPASS_REG_OFFSET,      1);
-//     // Disable DFG IP clock generation during reconfiguration
-//     fll_reg_write_u32(clk, FLL_CLKGENEN_REG_OFFSET,    0);
-//     // Reconfigure DFG IP input signals
-//     fll_reg_write_u32(clk, FLL_FIXLENMODE_REG_OFFSET,  0); // Closed-loop
-//     mode fll_reg_write_u32(clk, FLL_FBDIV_REG_OFFSET,       divider - 1);
-//     fll_reg_write_u32(clk, FLL_CLKDIV_REG_OFFSET,      0);
-//     fll_reg_write_u32(clk, FLL_CLKSRCSEL_REG_OFFSET,   1);
-//     // Reconfigure lock settings
-//     fll_reg_write_u32(clk, FLL_UPPERTHRESH_REG_OFFSET, divider + 1);
-//     fll_reg_write_u32(clk, FLL_LOWERTHRESH_REG_OFFSET, divider - 1);
-//     fll_reg_write_u32(clk, FLL_LOCKCYCLES_REG_OFFSET,  N_LOCK_CYCLES);
-//     // Enable DFG IP clock generation after new settings are applied
-//     fll_reg_write_u32(clk, FLL_CLKGENEN_REG_OFFSET,    1);
-//     // Wait new frequency locked
-//     while (!fll_locked(clk));
-//     // Disable bypass of DFG clock
-//     fll_reg_write_u32(clk, FLL_BYPASS_REG_OFFSET,      0);
-// #endif
-// }
-
-//===============================================================
-// Isolation
-//===============================================================
-
-uint32_t const ISO_MASK_ALL = 0b1111;
-uint32_t const ISO_MASK_NONE = 0;
-
-static inline void deisolate_quad(uint8_t chip_id, uint32_t quad_idx,
-                                  uint32_t iso_mask) {
-    uintptr_t base_addr = (uintptr_t)get_chip_baseaddress(chip_id);
-    volatile uint32_t* isolate_ptr =
-        (volatile uint32_t*)((uintptr_t)quad_cfg_isolate_ptr(quad_idx) |
-                             base_addr);
-    *isolate_ptr &= ~iso_mask;
-}
-
-/**
- * @brief Loads the "isolated" register field for the quadrant requested
- *
- * @return Masked register field realigned to start at LSB
- */
-static inline uint32_t get_quad_cfg_isolated(uint8_t chip_id,
-                                             uint32_t quad_idx) {
-    uintptr_t base_addr = (uintptr_t)get_chip_baseaddress(chip_id);
-    return *(volatile uint32_t*)((uintptr_t)quad_cfg_isolated_ptr(quad_idx) |
-                                 base_addr) &
-           ISO_MASK_ALL;
-}
-
-void isolate_quad(uint8_t chip_id, uint32_t quad_idx, uint32_t iso_mask) {
-    uintptr_t base_addr = (uintptr_t)get_chip_baseaddress(chip_id);
-    volatile uint32_t* isolate_ptr =
-        (volatile uint32_t*)((uintptr_t)quad_cfg_isolate_ptr(quad_idx) |
-                             base_addr);
-    *isolate_ptr |= iso_mask;
-    fence();
-}
-
-static inline void deisolate_all(uint8_t chip_id) {
-    for (uint32_t i = 0; i < N_QUADS; ++i) {
-        deisolate_quad(chip_id, i, ISO_MASK_ALL);
-    }
-}
-
-/**
- * @brief Check quadrant isolated or not
- *
- * @param iso_mask set bit to 1 to check if path is isolated, 0 de-isolated
- * @return 1 is check passes, 0 otherwise
- */
-uint32_t check_isolated_timeout(uint8_t chip_id, uint32_t max_tries,
-                                uint32_t quadrant_idx, uint32_t iso_mask) {
-    for (uint32_t i = 0; i < max_tries; ++i) {
-        if (get_quad_cfg_isolated(chip_id, quadrant_idx) == iso_mask) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
-//===============================================================
-// SoC configuration
-//===============================================================
-
-// void activate_interleaved_mode_hbm() {
-//     uint64_t addr =
-//         OCCAMY_HBM_XBAR_INTERLEAVED_ENA_REG_OFFSET + HBM_XBAR_CFG_BASE_ADDR;
-//     *((volatile uint32_t*)addr) = 1;
-// }
-
-// void deactivate_interleaved_mode_hbm() {
-//     uint64_t addr =
-//         OCCAMY_HBM_XBAR_INTERLEAVED_ENA_REG_OFFSET + HBM_XBAR_CFG_BASE_ADDR;
-//     *((volatile uint32_t*)addr) = 1;
-// }
-
-//===============================================================
 // Chip Level Synchronization Mechanism
 //===============================================================
 
-void announce_chip_checkpoint(volatile comm_buffer_t* comm_buffer_ptr,
+void announce_chip_checkpoint(volatile comm_buffer_t* chip_barrier_data_ptr,
                               uint8_t checkpoint) {
     volatile uint8_t* this_chip_checkpoint =
-        &((*comm_buffer_ptr).chip_level_checkpoint[get_current_chip_id()]);
+        &((*chip_barrier_data_ptr).chip_level_checkpoint[get_current_chip_id()]);
     // Broadcast to all Chips
     this_chip_checkpoint =
         (uint8_t*)(((uint64_t)this_chip_checkpoint) | (((uint64_t)0xFF) << 40));
     *this_chip_checkpoint = checkpoint;
 }
 
-void wait_chip_checkpoint(volatile comm_buffer_t* comm_buffer_ptr,
+void wait_chip_checkpoint(volatile comm_buffer_t* chip_barrier_data_ptr,
                           uint8_t chip_id, uint8_t checkpoint) {
     volatile uint8_t* target_chip_checkpoint =
-        &((*comm_buffer_ptr).chip_level_checkpoint[chip_id]);
+        &((*chip_barrier_data_ptr).chip_level_checkpoint[chip_id]);
     // Broadcast to all Chips
     while (*target_chip_checkpoint != checkpoint) {
         asm volatile("fence.i" ::: "memory");
     }
 }
 
-void wait_chips_checkpoint(volatile comm_buffer_t* comm_buffer_ptr,
+void wait_chips_checkpoint(volatile comm_buffer_t* chip_barrier_data_ptr,
                            uint8_t top_left_chip_id,
                            uint8_t bottom_right_chip_id, uint8_t checkpoint) {
     volatile uint8_t* chip_level_checkpoint =
-        &((*comm_buffer_ptr).chip_level_checkpoint[0]);
+        &((*chip_barrier_data_ptr).chip_level_checkpoint[0]);
     uint8_t current_chip_id = get_current_chip_id();
     uint8_t continue_loop = 1;
     while (continue_loop) {
@@ -975,14 +742,14 @@ void wait_chips_checkpoint(volatile comm_buffer_t* comm_buffer_ptr,
 
 // Barrier is realized in software, to ensure that all other chips have reached
 // a certain checkpoint
-void chip_barrier(volatile comm_buffer_t* comm_buffer_ptr,
+void chip_barrier(volatile comm_buffer_t* chip_barrier_data_ptr,
                   uint8_t top_left_chip_id, uint8_t bottom_right_chip_id,
                   uint8_t checkpoint) {
     volatile uint8_t* chip_level_checkpoint =
-        &((*comm_buffer_ptr).chip_level_checkpoint[0]);
+        &((*chip_barrier_data_ptr).chip_level_checkpoint[0]);
     // Broadcast to all other chip on the progress of the chip
-    announce_chip_checkpoint(comm_buffer_ptr, checkpoint);
+    announce_chip_checkpoint(chip_barrier_data_ptr, checkpoint);
     // Change the pointer back
-    wait_chips_checkpoint(comm_buffer_ptr, top_left_chip_id,
+    wait_chips_checkpoint(chip_barrier_data_ptr, top_left_chip_id,
                           bottom_right_chip_id, checkpoint);
 }

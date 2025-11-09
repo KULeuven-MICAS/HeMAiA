@@ -79,14 +79,14 @@ sources:
     files:
       - target/rtl/src/floo_quad_mesh_xy_noc_pkg.sv
       - target/rtl/src/floo_quad_mesh_xy_noc.sv
-
+  # hw mailboxes
+  - target:
+    files:
+      - hw/hemaia/hemaia_hw_mailbox/hemaia_axi_lite_mailbox_adapter.sv
+      - hw/hemaia/hemaia_hw_mailbox/hemaia_hw_mailbox.sv
   # auto-generated soc
   - target: occamy
     files:
-      # quadrant_s1_ctrl
-      - target/rtl/src/quadrant_s1_ctrl/occamy_quadrant_s1_reg_pkg.sv
-      - target/rtl/src/quadrant_s1_ctrl/occamy_quadrant_s1_reg_top.sv
-      
       # soc_ctrl
       - target/rtl/src/soc_ctrl/occamy_soc_reg_pkg.sv
       - target/rtl/src/soc_ctrl/occamy_soc_reg_top.sv
@@ -131,6 +131,7 @@ sources:
       - hw/hemaia/hemaia_clk_rst_controller/hemaia_reset_controller.sv
       - hw/hemaia/hemaia_clk_rst_controller/hemaia_clk_rst_controller.sv
       - target/rtl/src/occamy_chip.sv
+      - target/rtl/src/hemaia.sv
 
   - target: hemaia_netlist
     files:
@@ -141,13 +142,15 @@ sources:
     files:
       - target/rtl/src/occamy_xilinx.sv
 
-  # target/sim
-  - target: simulation_occamy
+  # HeMAiA Mem Chip
+  - target: hemaia_mem_chip
     files:
-      - target/sim/testharness/uartdpi/uartdpi.sv
-      - target/sim/testharness/testharness.sv
-  
-  # target/sim_chip
+      - hw/hemaia/hemaia_mem_system/hemaia_mem_chip_xdma.sv
+      - hw/hemaia/hemaia_mem_system/hemaia_mem_chip_xdma_wrapper.sv
+      - hw/hemaia/hemaia_mem_system/hemaia_mem_system_for_mem_chip.sv
+      - hw/hemaia/hemaia_mem_system/hemaia_mem_chip.sv
+
+  # target/sim
   - target: simulation_hemaia
     files:
       - target/sim/testharness/uartdpi/uartdpi.sv

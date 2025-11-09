@@ -31,6 +31,9 @@ $(CFG): FORCE
 	fi
 FORCE:
 
+clean-sw: 
+	$(MAKE) -C ./target/sw/ clean
+
 clean:
 	$(MAKE) -C ./target/fpga/ clean
 	$(MAKE) -C ./target/fpga/vivado_ips/ clean

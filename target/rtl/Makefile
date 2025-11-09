@@ -121,6 +121,7 @@ $(MISC_OCCAMYGEN_TARGETS): .misc_occamygen_targets_group
 		--soc-sv           $(SOURCE_OCCAMY_DIR)/occamy_soc.sv.tpl \
 		--xdma             \
 		--chip             $(SOURCE_OCCAMY_DIR)/occamy_chip.sv.tpl \
+		--io               $(SOURCE_OCCAMY_DIR)/hemaia.sv.tpl \
 		--pkg-sv           $(SOURCE_OCCAMY_DIR)/occamy_pkg.sv.tpl \
 		--quadrant-s1      $(SOURCE_OCCAMY_DIR)/occamy_quadrant_s1.sv.tpl \
 		--quadrant-s1-ctrl $(SOURCE_OCCAMY_DIR)/occamy_quadrant_s1_ctrl.sv.tpl \
@@ -148,46 +149,17 @@ debug-occamy-gen:
 		--cva6-sv          $(SOURCE_OCCAMY_DIR)/occamy_cva6.sv.tpl	
 
 debug-soc-gen:
-	$(ROOT)/util/occamygen/occamy_soc_gen.py --cfg $(CFG) --outdir $(TARGET_SRC_DIR) --soc-sv $(SOURCE_OCCAMY_DIR)/occamy_soc.sv.tpl --top-sv           $(SOURCE_OCCAMY_DIR)/occamy_top.sv.tpl 
+	$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_SRC_DIR) \
+	--soc-sv $(SOURCE_OCCAMY_DIR)/occamy_soc.sv.tpl \
+	--top-sv $(SOURCE_OCCAMY_DIR)/occamy_top.sv.tpl
 
 debug-quadrant-ctrl-gen:
-	$(ROOT)/util/occamygen/occamy_soc_gen.py --cfg $(CFG) --outdir $(TARGET_SRC_DIR) --quadrant-s1-ctrl $(SOURCE_OCCAMY_DIR)/occamy_quadrant_s1_ctrl.sv.tpl
+	$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_SRC_DIR) --quadrant-s1-ctrl $(SOURCE_OCCAMY_DIR)/occamy_quadrant_s1_ctrl.sv.tpl
 
 debug-quadrant-gen:
 	$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_SRC_DIR) \
 	--quadrant-s1      $(SOURCE_OCCAMY_DIR)/occamy_quadrant_s1.sv.tpl \
 	--quadrant-s1-noc  $(SOURCE_OCCAMY_DIR)/quad_noc/quad_noc.yml.tpl
-
-############
-# QUADCTRL #
-############
-# Quad control do not need to generate the sv file here
-# it is generated together with the soc sv file
-# But we need to generate the reggen targets here
-$(TARGET_QUADCTRL_DIR):
-	@mkdir -p $@
-
-QUADCTRL_HJSON_DIR    = $(SW_HJSON_DIR)/quadrant_s1_ctrl
-QUADCTRL_REGGEN_TARGETS = $(TARGET_QUADCTRL_DIR)/quadctrl_reg_pkg.sv
-QUADCTRL_REGGEN_TARGETS += $(TARGET_QUADCTRL_DIR)/quadctrl_reg_top.sv
-
-$(QUADCTRL_REGGEN_TARGETS): .quadctrl_reggen_targets_group
-
-# QUADCTRL RTL needs the hjson file
-# Normally if you generate the SW first, the hjson file is already generated
-# But if you generate the RTL first, we need to generate the hjson from the template
-$(QUADCTRL_HJSON_DIR)/occamy_quadrant_s1_reg.hjson: $(SOURCE_QUADCTRL_DIR)/occamy_quadrant_s1_reg.hjson.tpl $(CFG)
-	@echo "[OCCAMYGEN] Generate $@"
-	@$(OCCAMYGEN) --cfg $(CFG) --outdir $(QUADCTRL_HJSON_DIR) --quadrant-s1-ctrl $<
-
-quadctrl: $(QUADCTRL_RTL_TARGET) $(QUADCTRL_REGGEN_TARGETS)
-clean-quadctrl:
-	rm -rf $(QUADCTRL_REGGEN_TARGETS) .quadctrl_reggen_targets_group
-# Generate the reggen targets from the hjson file
-.quadctrl_reggen_targets_group: $(QUADCTRL_HJSON_DIR)/occamy_quadrant_s1_reg.hjson | $(TARGET_QUADCTRL_DIR)
-	@echo "[REGGEN] Generate $(QUADCTRL_REGGEN_TARGETS)"
-	@$(REGGEN) -r -t $(TARGET_QUADCTRL_DIR) $<
-	@touch $@
 
 ###########
 # SOCCTRL #

@@ -10,6 +10,7 @@ SRCS = src/offload_bingo_multichip.c
 BINGO_HOST ?= 1 # True to include the bingo runtime
 INCL_DEVICE_BINARY ?= 1 # True to include the device binary
 DEVICE_APPS = snax-bingo-offload
+INCDIRS += include
 ####################################
 # New bingo workloads defined here #
 ####################################

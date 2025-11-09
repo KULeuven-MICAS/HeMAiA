@@ -16,38 +16,29 @@ int main() {
     printf("Chip(%x, %x): [Host] Start Offloading Program\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
 
     ///////////////////////////////
-    // 1. Init the clk manager
+    // 2. Init the Allocator
     ///////////////////////////////
-    // Set clk manager to 1 division for a faster simulation time
-    enable_clk_domain(0, 1);
-    enable_clk_domain(1, 1);
-    printf("Chip(%x, %x): [Host] Init CLK Manager\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
-
-    ///////////////////////////////
-    // 2. Init the mailbox
-    ///////////////////////////////
-    host_init_local_dev();
-    printf("Chip(%x, %x): [Host] Init MailBox\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+    if(bingo_hemaia_system_mmap_init() < 0){
+        printf("Chip(%x, %x): [Host] Error when initializing Allocator\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+        return -1;
+    } else {
+        printf("Chip(%x, %x): [Host] Allocator Init Success\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+    }
     ///////////////////////////////
     // 3. Wake up all the clusters
     ///////////////////////////////
 
-    // 3.1 Reset and ungate all quadrants, deisolate
-    reset_and_ungate_quadrants_all(current_chip_id);
-    deisolate_all(current_chip_id);
-
-    // 3.2 The pointer to the communication buffer
-    volatile comm_buffer_t* comm_buffer_ptr = (comm_buffer_t*)0;
-    initialize_comm_buffer((comm_buffer_t*)comm_buffer_ptr);
-    comm_buffer_ptr = (comm_buffer_t*)chiplet_addr_transform(((uint64_t)&__narrow_spm_start));
+    // 3.1 The pointer to the communication buffer
+    O1HeapInstance *local_l3_heap_manager = bingo_get_l3_heap_manager(current_chip_id);
+    volatile comm_buffer_t* comm_buffer_ptr = bingo_get_l2_comm_buffer(current_chip_id);
     enable_sw_interrupts();
 
-    // 3.3 Program Snitch entry point and communication buffer
+    // 3.2 Program Snitch entry point and communication buffer
     comm_buffer_ptr->lock = 0;
     comm_buffer_ptr->chip_id = current_chip_id;
     program_snitches(current_chip_id, comm_buffer_ptr);
 
-    // 3.4 Start Snitches
+    // 3.3 Start Snitches
     wakeup_snitches_cl(current_chip_id);
     asm volatile("fence" ::: "memory");
     printf("Chip(%x, %x): [Host] Wake up clusters\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
@@ -62,7 +53,6 @@ int main() {
     // So we clean up the interrupt line here
     clear_host_sw_interrupt(current_chip_id);
     printf("Chip(%x, %x): [Host] Offload Finish with ret = %d\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), ret);
-
-    // Wait for job done and return Snitch exit code
+    printf("Chip(%x, %x): [Host] End Offloading Program\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());   
     return ret;
 }

@@ -9,11 +9,11 @@
       router_to_soc_iw: 4,          // soc_to_router_iw + clog2(chips)
       soc_to_router_iw: 4,          // Not beneficial for iw > 6
       single_chip: true,
-      single_chip_id: 0,            // Only used for single chip simulation
-      testbench_cfg: {              // The total number of homogeneous chips (x * y) on the virtual interposer
-        // Emulate a two-chips configuration
-        upper_left_coordinate: [0, 0],
-        lower_right_coordinate: [0, 0],
+      testbench_cfg: {
+        hemaia_compute_chip: [
+          {coordinate: [0,0]}
+        ],
+        hemaia_mem_chip: []
       }
     }
     addr_width: 48,
@@ -43,37 +43,21 @@
       wide_to_quad: 3,
       quad_to_wide: 3,
       narrow_to_cva6: 2,
-      narrow_conv_to_spm_narrow_pre: 2,
       narrow_conv_to_spm_narrow: 1,
-      narrow_and_pcie: 3,
       narrow_and_wide: 1,
       wide_to_hemaia_mem: 1,
       narrow_to_hemaia_mem: 1,
       hemaia_mem_to_wide: 1,
       hemaia_mem_to_narrow: 1,
       wide_to_wide_zero_mem: 0,
-      wide_to_hbm: 3,
-      wide_and_inter: 3,
-      wide_and_hbi: 3,
-      narrow_and_hbi: 3,
-      pre_to_hbmx: 3,
-      hbmx_to_hbm: 3,
       atomic_adapter_narrow: 1,
       atomic_adapter_narrow_wide: 1,
       // Give some flexibility in peripheral xbar placement
       periph_axi_lite_narrow: 2,
       periph_axi_lite: 2,
-      periph_axi_lite_narrow_hbm_xbar_cfg: 2,
       // Non-right-side chip peripherals
-      periph_axi_lite_narrow_hbm_cfg: 3,
-      periph_axi_lite_narrow_pcie_cfg: 3,
       periph_axi_lite_narrow_hemaia_clk_rst_controller_cfg: 3,
-      periph_axi_lite_narrow_hbi_narrow_cfg: 3,
-      periph_axi_lite_narrow_hbi_wide_cfg: 3,
       periph_axi_lite_narrow_bootrom_cfg: 3,
-      periph_axi_lite_narrow_fll_system_cfg: 3,
-      periph_axi_lite_narrow_fll_periph_cfg: 3,
-      periph_axi_lite_narrow_fll_hbm2e_cfg: 3,
       // Right-side or latency-invariant chip peripherals
       periph_axi_lite_narrow_soc_ctrl_cfg: 1,
       periph_axi_lite_narrow_uart_cfg: 1,
@@ -86,10 +70,7 @@
       periph_axi_lite_narrow_d2d_link_cfg: 1,
     },
     txns: {
-      wide_and_inter: 128,
-      wide_to_hbm: 128,
       narrow_and_wide: 16,
-      rmq: 4,
     },
     narrow_xbar_slv_id_width: 4,
     narrow_xbar_user_width: 3, // clog2(total number of clusters)
@@ -98,14 +79,6 @@
       // number of pending transactions on the narrow/wide network
       narrow_trans: 32,
       wide_trans: 32,
-      // Disable for easier flow trials.
-      ro_cache_cfg: {
-          width: 1024,
-          count: 128,
-          sets: 2,
-          max_trans: 32,
-          address_regions: 4,
-      }
       wide_xbar: {
         max_slv_trans: 32,
         max_mst_trans: 32,
@@ -119,8 +92,9 @@
       },
       narrow_xbar_slv_id_width: 4,
       narrow_xbar_user_width: 3, // clog2(total number of clusters)
-      cfg_base_addr: 184549376, // 0x0b000000
-      cfg_base_offset: 65536 // 0x10000
+      cfg_base_addr: 184549376,  // 0x0b00_0000
+      cfg_base_offset: 65536     // 0x1_0000
+      h2c_mailbox_length: 4096,   // 0x1000
     },
     clusters:[
       "snax_KUL_cluster",
@@ -138,8 +112,8 @@
       max_dimension: 5,
       max_mem_size: 4096,
       // DataMaestro Cfg
-      reader_buffer: 8,
-      writer_buffer: 8,
+      reader_buffer: 4,
+      writer_buffer: 4,
       reader_agu_temporal_dimension: 5,
       writer_agu_temporal_dimension: 5,
       // Extension Cfg
@@ -154,18 +128,23 @@
             length: 131072, // 128 kiB 0x2_0000
         },
         clint: {
-                    address: 67108864, // 0x0400_0000
-                    length: 1048576, // 1 MiB 0x10_0000
+            address: 67108864, // 0x0400_0000
+            length: 1048576, // 1 MiB 0x10_0000
         },
         axi_lite_peripherals: [
             {
                 name: "debug",
                 address: 0, // 0x0000_0000
                 length: 4096, // 4 kiB 0x1000
-            }, 
+            },
+            {
+                name: "h2h_mailbox",
+                address: 4096, // 0x0000_1000
+                length: 4096, // 4 kiB 0x1000
+            },
             {
               name: "spis", // Only Master port, no slave port
-            }
+            },
         ],
         axi_lite_narrow_peripherals: [
             {
@@ -204,10 +183,16 @@
                 length: 4096, // 4 kiB 0x1000
             },
             {
+                name: "c2h_mailbox",
+                address: 33587200, // 0x0200_8000
+                length: 4096, // 4 kiB 0x1000
+            },
+            {
                 name: "spim",
                 address: 50331648, // 0x0300_0000
-                length: 131072, // 4 kiB 0x2_0000
+                length: 131072, // 8 kiB 0x2_0000
             },
+
             {
                 name: "plic",
                 address: 201326592, // 0x0C00_0000
@@ -223,7 +208,7 @@
     spm_wide: {
       address: 2147483648, // 0x8000_0000
       length: 16777216,    // 16 MiB 0x100_0000
-      banks: 32,
+      banks: 16,
     },
     wide_zero_mem: {
       address: 68719476736, // 0x10_0000_0000

@@ -24,7 +24,7 @@ module hemaia_mem_system #(
     parameter type axi_narrow_master_rsp_t = logic,
     parameter type axi_narrow_slave_req_t = logic,
     parameter type axi_narrow_slave_rsp_t = logic,
-    // XMDA Defines
+    // XDMA Defines
     parameter int unsigned ClusterAddressSpace = 48'h400000,
     parameter int unsigned MemBaseAddr = 32'h80000000,
     parameter int unsigned MemBankNum = 32,

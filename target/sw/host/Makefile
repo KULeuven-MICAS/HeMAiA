@@ -7,32 +7,28 @@
 # Yunhao Deng <yunhao.deng@kuleuven.be>
 
 # Add user applications to APPS variable
+
+# Host only applications
 APPS  = hello_world
 APPS += hemaia_clk_rst_configurator
-ifneq ($(findstring multichip,$(CFG_OVERRIDE)),)
-# If chiplet cfg is used, offloaf_multichip is compiled with the support to execute applications on cores at different chips
-# host only applications
-APPS += hemaia_d2d_link_configurator
-APPS += multichip_sync
-# offload applications
-# The legacy offload
-APPS += offload_multichip
-# The bingo offload
-APPS += offload_bingo_multichip
-else
-# Otherwise, single chip offload is compiled
-# The legacy offload
-APPS += offload
-# The bingo offload
-APPS += offload_bingo
-endif
-
-# XDMA copy test application
 APPS += hemaia_system_xdma_copy
+# Host + Device applications
+APPS += offload
+APPS += offload_bingo
+APPS += offload_bingo_ci
+APPS += offload_bingo_gemm_intra_chiplet
+APPS += offload_bingo_gemm_multi_chiplet_vanilla
+# Host only applications
+APPS += hemaia_mailbox
+APPS += multichip_sync
+APPS += hemaia_d2d_link_configurator
+# Host + Device applications
+APPS += offload_multichip
+APPS += offload_bingo_multichip
+
 
 TARGET ?= all
 
-LIB_HERO_DIR = runtime/libhero
 LIB_BINGO_DIR = runtime/libbingo
 
 
@@ -43,7 +39,6 @@ SUBDIRS = $(addprefix apps/,$(APPS))
 all: $(SUBDIRS)
 
 libs:
-	$(MAKE) -C $(LIB_HERO_DIR) gen-lib
 	$(MAKE) -C $(LIB_BINGO_DIR) gen-lib
 
 $(SUBDIRS):

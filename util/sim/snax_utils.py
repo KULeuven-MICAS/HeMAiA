@@ -180,6 +180,8 @@ def block_gemm_golden_model(
     m, k, n, row, size, col, a, b, subtraction_a, subtraction_b, c
 ):
     # Reshape and subtract
+    a = a.astype(np.int32)
+    b = b.astype(np.int32)
     a_subtracted = (
         a.reshape(m, k, row, size) - subtraction_a
     )  # Shape: (m, k, row, size)
@@ -193,7 +195,8 @@ def block_gemm_golden_model(
     # Compute
     for mm in range(m):
         for nn in range(n):
-            # Perform tensordot over axes k and size (axes 0 and 3 in original arrays)
+            # Perform tensordot over axes k and size
+            # (axes 0 and 3 in original arrays)
             # But after reshaping, axes are (k, row, size) and (k, col, size)
             # So axes to sum over are 0 (k) and 2 (size)
             d[mm, nn] = np.tensordot(

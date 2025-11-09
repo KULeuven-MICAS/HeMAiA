@@ -15,7 +15,6 @@
 #include "clint.h"
 #include "occamy_soc_ctrl.h"
 #include "snitch_cluster_peripheral.h"
-#include "snitch_quad_peripheral.h"
 
 //===============================================================
 // Global Memory
@@ -23,8 +22,12 @@
 
 #define WIDE_SPM_SIZE ${wide_spm_size}
 #define NARROW_SPM_SIZE ${narrow_spm_size}
-#define NARROW_SPM_MAILBOX_SIZE ${mailbox_size}
 #define CLUSTER_TCDM_SIZE ${cluster_tcdm_size}
+
+//===============================================================
+// Mailbox
+//===============================================================
+#define MAILBOX_ADDR_SPACE ${h2c_mailbox_size}
 
 //===============================================================
 // Reggen
@@ -45,8 +48,13 @@
 #define soc_ctrl_scratch_base \
     (SOC_CTRL_BASE_ADDR + OCCAMY_SOC_SCRATCH_0_REG_OFFSET)
 
+%if nr_clusters==1:
+#define soc_ctrl_mailbox_scratch_base \
+    (SOC_CTRL_BASE_ADDR + OCCAMY_SOC_MAILBOX_SCRATCH_REG_OFFSET)
+%else:
 #define soc_ctrl_mailbox_scratch_base \
     (SOC_CTRL_BASE_ADDR + OCCAMY_SOC_MAILBOX_SCRATCH_0_REG_OFFSET)
+%endif
 
 #define soc_ctrl_kernel_tab_scratch_base \
     (SOC_CTRL_BASE_ADDR + OCCAMY_SOC_KERNEL_TAB_SCRATCH_0_REG_OFFSET)    
@@ -68,23 +76,6 @@
 
 #define cluster_zero_memory_base QUADRANT_0_CLUSTER_0_ZERO_MEM_BASE_ADDR
 
-#define quad_cfg_reset_n_base \
-    (QUAD_0_CFG_BASE_ADDR + OCCAMY_QUADRANT_S1_RESET_N_REG_OFFSET)
-
-#define quad_cfg_clk_ena_base \
-    (QUAD_0_CFG_BASE_ADDR + OCCAMY_QUADRANT_S1_CLK_ENA_REG_OFFSET)
-
-#define quad_cfg_isolate_base \
-    (QUAD_0_CFG_BASE_ADDR + OCCAMY_QUADRANT_S1_ISOLATE_REG_OFFSET)
-
-#define quad_cfg_isolated_base \
-    (QUAD_0_CFG_BASE_ADDR + OCCAMY_QUADRANT_S1_ISOLATED_REG_OFFSET)
-
-#define quad_cfg_ro_cache_enable_base \
-    (QUAD_0_CFG_BASE_ADDR + OCCAMY_QUADRANT_S1_RO_CACHE_ENABLE_REG_OFFSET)
-
-#define quad_cfg_ro_cache_addr_rule_base \
-    (QUAD_0_CFG_BASE_ADDR + OCCAMY_QUADRANT_S1_RO_START_ADDR_LOW_0_REG_OFFSET)
 
 //===============================================================
 // Replicated address spaces
@@ -141,32 +132,6 @@ inline uintptr_t cluster_hw_barrier_addr(uint32_t cluster_idx) {
 
 inline uintptr_t cluster_zero_memory_addr(uint32_t cluster_idx) {
     return translate_cluster_address(cluster_zero_memory_base, cluster_idx);
-}
-
-inline uintptr_t quad_cfg_reset_n_addr(uint32_t quadrant_idx) {
-    return translate_quadrant_cfg_address(quad_cfg_reset_n_base, quadrant_idx);
-}
-
-inline uintptr_t quad_cfg_clk_ena_addr(uint32_t quadrant_idx) {
-    return translate_quadrant_cfg_address(quad_cfg_clk_ena_base, quadrant_idx);
-}
-
-inline uintptr_t quad_cfg_isolate_addr(uint32_t quadrant_idx) {
-    return translate_quadrant_cfg_address(quad_cfg_isolate_base, quadrant_idx);
-}
-
-inline uintptr_t quad_cfg_isolated_addr(uint32_t quadrant_idx) {
-    return translate_quadrant_cfg_address(quad_cfg_isolated_base, quadrant_idx);
-}
-
-inline uintptr_t quad_cfg_ro_cache_enable_addr(uint32_t quadrant_idx) {
-    return translate_quadrant_cfg_address(quad_cfg_ro_cache_enable_base,
-                                          quadrant_idx);
-}
-
-inline uintptr_t quad_cfg_ro_cache_addr_rule_addr(uint32_t quadrant_idx) {
-    return translate_quadrant_cfg_address(quad_cfg_ro_cache_addr_rule_base,
-                                          quadrant_idx);
 }
 
 inline uintptr_t soc_ctrl_scratch_addr(uint32_t reg_idx) {
@@ -226,32 +191,4 @@ inline volatile uint32_t* cluster_zero_memory_ptr(uint32_t cluster_idx) {
 
 inline volatile uint32_t* clint_msip_ptr(uint32_t hartid) {
     return (volatile uint32_t*)clint_msip_addr(hartid);
-}
-
-inline volatile uint32_t* quad_cfg_reset_n_ptr(uint32_t quad_idx) {
-    return (volatile uint32_t*)quad_cfg_reset_n_addr(quad_idx);
-}
-
-inline volatile uint32_t* quad_cfg_clk_ena_ptr(uint32_t quad_idx) {
-    return (volatile uint32_t*)quad_cfg_clk_ena_addr(quad_idx);
-}
-
-inline volatile uint32_t* quad_cfg_isolate_ptr(uint32_t quad_idx) {
-    return (volatile uint32_t*)quad_cfg_isolate_addr(quad_idx);
-}
-
-inline volatile uint32_t* quad_cfg_isolated_ptr(uint32_t quad_idx) {
-    return (volatile uint32_t*)quad_cfg_isolated_addr(quad_idx);
-}
-
-inline volatile uint32_t* quad_cfg_ro_cache_enable_ptr(uint32_t quad_idx) {
-    return (volatile uint32_t*)quad_cfg_ro_cache_enable_addr(quad_idx);
-}
-
-inline volatile uint64_t* quad_cfg_ro_cache_addr_rule_ptr(uint32_t quad_idx,
-                                                          uint32_t rule_idx) {
-    volatile uint64_t* p =
-        (volatile uint64_t*)quad_cfg_ro_cache_addr_rule_addr(quad_idx);
-    // Every address rule is made up of a 64-bit start and end address
-    return p + 2 * rule_idx;
 }

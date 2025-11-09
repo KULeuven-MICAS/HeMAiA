@@ -3,12 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import subprocess
+import os
 import sys
 import math
 import importlib.util
 from pathlib import Path
 import hjson
 from jsonref import JsonRef
+
 sys.path.append(str(Path(__file__).parent /
                 '../../deps/snitch_cluster/util/clustergen'))
 from cluster import Generator, PMA, PMACfg, SnitchCluster, clog2  # noqa: E402
@@ -131,13 +133,38 @@ def get_cluster_cfg_list(occamy_cfg, cluster_cfg_dir):
     return get_cluster_cfg_list
 
 
-def generate_snitch(cluster_cfg_dir, snitch_path):
+def generate_snitch(cluster_cfg_dir, snitch_path, xmx="8G", xms="8G"):
     cluster_cfg_dir = set(cluster_cfg_dir)
+    env = os.environ.copy()
+    jvm_args = f"-Xms{xms} -Xmx{xmx}"
+
+    # Ensure JVM memory settings reach whatever launcher is used (sbt/coursier/mill/java)
+    for var in (
+        "JAVA_OPTS",
+        "SBT_OPTS",
+        "JVM_OPTS",
+        "MILL_OPTS",
+        "COURSIER_JVM_ARGS",
+        "JAVA_TOOL_OPTIONS",
+        "_JAVA_OPTIONS",
+        "FIRRTL_JAVA_ARGS",
+    ):
+        env[var] = f"{jvm_args} {env.get(var, '')}".strip()
+
     for cfg in cluster_cfg_dir:
         try:
             subprocess.check_call(
-                f"make -C {snitch_path}/target/snitch_cluster CFG_OVERRIDE={cfg} DISABLE_HEADER_GEN=true rtl-gen", shell=True)
-        except subprocess.CalledProcessError as e:
+                [
+                    "make",
+                    "-C",
+                    f"{snitch_path}/target/snitch_cluster",
+                    f"CFG_OVERRIDE={cfg}",
+                    "DISABLE_HEADER_GEN=true",
+                    "rtl-gen",
+                ],
+                env=env,
+            )
+        except subprocess.CalledProcessError:
             print("Error! SNAX gen fails. Check the log.")
             raise
 
@@ -324,7 +351,6 @@ def am_connect_soc_lite_periph_xbar(am, am_soc_axi_lite_periph_xbar, occamy_cfg)
                     occamy_cfg["peripherals"]["axi_lite_peripherals"][p]["address"]
                 ).attach_to(am_soc_axi_lite_periph_xbar)
             )
-
     return am_axi_lite_peripherals
 
 
@@ -515,61 +541,31 @@ def am_connect_soc_wide_xbar_quad(am, am_soc_narrow_xbar, am_wide_xbar_quadrant_
         )
     return am_clusters
 
-
-def get_dts(occamy_cfg, am_clint, am_axi_lite_peripherals, am_axi_lite_narrow_peripherals):
-    dts = device_tree.DeviceTree()
-
-    #########################
-    #  Periph AXI Lite XBar #
-    #########################
-
-    nr_axi_lite_peripherals = len(
-        occamy_cfg["peripherals"]["axi_lite_peripherals"])
-    for p in range(nr_axi_lite_peripherals):
-        # add debug module to devicetree
-        if occamy_cfg["peripherals"]["axi_lite_peripherals"][p]["name"] == "debug":
-            dts.add_device("debug", "riscv,debug-013", am_axi_lite_peripherals[p], [
-                "interrupts-extended = <&CPU0_intc 65535>", "reg-names = \"control\""
-            ])
-
-    ######################
-    # Periph Regbus XBar #
-    ######################
-    nr_axi_lite_narrow_peripherals = len(
-        occamy_cfg["peripherals"]["axi_lite_narrow_peripherals"])
-    for p in range(nr_axi_lite_narrow_peripherals):
-        # add uart to devicetree
-        if occamy_cfg["peripherals"]["axi_lite_narrow_peripherals"][p]["name"] == "uart":
-            dts.add_device("serial", "lowrisc,serial", am_axi_lite_narrow_peripherals[p], [
-                "clock-frequency = <50000000>", "current-speed = <115200>",
-                "interrupt-parent = <&PLIC0>", "interrupts = <1>"
-            ])
-        # add plic to devicetree
-        elif occamy_cfg["peripherals"]["axi_lite_narrow_peripherals"][p]["name"] == "plic":
-            dts.add_plic([0], am_axi_lite_narrow_peripherals[p])
-
-    dts.add_clint([0], am_clint)
-    dts.add_cpu("eth,ariane")
-    htif = dts.add_node("htif", "ucb,htif0")
-    dts.add_chosen("stdout-path = \"{}\";".format(htif))
-
-    return dts
-
-
-def get_top_kwargs(occamy_cfg, cluster_generators, soc_axi_lite_narrow_periph_xbar, soc_wide_xbar, soc_narrow_xbar, soc2router_bus, router2soc_bus, name):
+def get_top_kwargs(occamy_cfg, cluster_generators, soc_axi_lite_narrow_periph_xbar, soc_wide_xbar, soc_narrow_xbar, soc2router_bus, router2soc_bus, util, name):
     core_per_cluster_list = [cluster_generator.cfg["nr_cores"]
                              for cluster_generator in cluster_generators]
     nr_cores_quadrant = sum(core_per_cluster_list)
     nr_s1_quadrants = occamy_cfg["nr_s1_quadrant"]
+    chip_id_width = occamy_cfg["hemaia_multichip"]["chip_id_width"]
+    for p in range(len(occamy_cfg["peripherals"]["axi_lite_peripherals"])):
+        if occamy_cfg["peripherals"]["axi_lite_peripherals"][p]["name"] == "h2h_mailbox":
+            h2h_mailbox_base_addr = occamy_cfg["peripherals"]["axi_lite_peripherals"][p]["address"]
+            
+    for p in range(len(occamy_cfg["peripherals"]["axi_lite_narrow_peripherals"])):
+        if occamy_cfg["peripherals"]["axi_lite_narrow_peripherals"][p]["name"] == "c2h_mailbox":
+            c2h_mailbox_base_addr = occamy_cfg["peripherals"]["axi_lite_narrow_peripherals"][p]["address"]
     top_kwargs = {
         "name": name,
         "occamy_cfg": occamy_cfg,
+        "chip_id_width": chip_id_width,
         "soc_axi_lite_narrow_periph_xbar": soc_axi_lite_narrow_periph_xbar,
         "soc_wide_xbar": soc_wide_xbar,
         "soc_narrow_xbar": soc_narrow_xbar,
         "soc2router_bus": soc2router_bus,
         "router2soc_bus": router2soc_bus,
         "cores": nr_s1_quadrants * nr_cores_quadrant + 1,
+        "h2h_mailbox_base_addr": util.to_sv_hex(h2h_mailbox_base_addr),
+        "c2h_mailbox_base_addr": util.to_sv_hex(c2h_mailbox_base_addr)
     }
     return top_kwargs
 
@@ -596,23 +592,12 @@ def get_soc_kwargs(occamy_cfg, cluster_generators, soc_narrow_xbar, soc_wide_xba
 
 def get_quadrant_ctrl_kwargs(occamy_cfg, soc_wide_xbar, soc_narrow_xbar, quadrant_s1_ctrl_xbars, quadrant_s1_ctrl_mux, name):
     num_clusters = len(occamy_cfg["clusters"])
-    ro_cache_cfg = occamy_cfg["s1_quadrant"].get("ro_cache_cfg", {})
-    ro_cache_regions = ro_cache_cfg.get("address_regions", 1)
-    narrow_tlb_cfg = occamy_cfg["s1_quadrant"].get("narrow_tlb_cfg", {})
-    narrow_tlb_entries = narrow_tlb_cfg.get("l1_num_entries", 1)
-    wide_tlb_cfg = occamy_cfg["s1_quadrant"].get("wide_tlb_cfg", {})
-    wide_tlb_entries = wide_tlb_cfg.get("l1_num_entries", 1)
-
+    chip_id_width = occamy_cfg["hemaia_multichip"]["chip_id_width"]
     quadrant_ctrl_kwargs = {
         "name": name,
         "occamy_cfg": occamy_cfg,
+        "chip_id_width": chip_id_width,
         "num_clusters": num_clusters,
-        "ro_cache_cfg": ro_cache_cfg,
-        "ro_cache_regions": ro_cache_regions,
-        "narrow_tlb_cfg": narrow_tlb_cfg,
-        "narrow_tlb_entries": narrow_tlb_entries,
-        "wide_tlb_cfg": wide_tlb_cfg,
-        "wide_tlb_entries": wide_tlb_entries,
         "soc_wide_xbar": soc_wide_xbar,
         "soc_narrow_xbar": soc_narrow_xbar,
         "quadrant_s1_ctrl_xbars": quadrant_s1_ctrl_xbars,
@@ -758,15 +743,19 @@ def get_pkg_kwargs(occamy_cfg, cluster_generators, util, name):
         "cluster_base_offset": util.to_sv_hex(cluster_cfg["cluster_base_offset"]),
         "quad_cfg_base_addr": util.to_sv_hex(occamy_cfg["s1_quadrant"]["cfg_base_addr"]),
         "quad_cfg_base_offset": util.to_sv_hex(occamy_cfg["s1_quadrant"]["cfg_base_offset"]),
-        "hemaia_multichip": occamy_cfg["hemaia_multichip"]
+        "hemaia_multichip": occamy_cfg["hemaia_multichip"],
+        "h2c_mailbox_length": util.to_sv_hex(occamy_cfg["s1_quadrant"]["h2c_mailbox_length"])
     }
     return pkg_kwargs
 
 
-def get_cva6_kwargs(occamy_cfg, soc_narrow_xbar, name):
+def get_cva6_kwargs(occamy_cfg, cluster_generators, util,soc_narrow_xbar, name):
+    cluster_cfg = cluster_generators[0].cfg
     cva6_kwargs = {
         "name": name,
         "occamy_cfg": occamy_cfg,
+        "cluster_base_addr": util.to_sv_hex(cluster_cfg["cluster_base_addr"],64),
+        "cluster_offset": util.to_sv_hex(cluster_cfg["cluster_base_offset"] * len(occamy_cfg["clusters"]),64),
         "soc_narrow_xbar": soc_narrow_xbar
     }
     return cva6_kwargs
@@ -778,14 +767,7 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
     if occamy_cfg['hemaia_multichip']['single_chip']:
         nr_chiplets = 1
     else:
-        nr_chiplets = occamy_cfg['hemaia_multichip']['nr_chiplets']
-        upper_left_coordinate = occamy_cfg['hemaia_multichip']['testbench_cfg']['upper_left_coordinate']
-        lower_right_coordinate = occamy_cfg['hemaia_multichip']['testbench_cfg']['lower_right_coordinate']
-        delta_x = lower_right_coordinate[0] - upper_left_coordinate[0]
-        delta_y = lower_right_coordinate[1] - upper_left_coordinate[1]
-        expected_nr_chiplets = (delta_x + 1) * (delta_y + 1)
-        if not (nr_chiplets==expected_nr_chiplets):
-            raise ValueError(f"The number of chiplets ({nr_chiplets}) does not match the coordinates provided in the testbench_cfg ({upper_left_coordinate} to {lower_right_coordinate}, expected {expected_nr_chiplets} chiplets). Please check your configuration.")
+        nr_chiplets = len(occamy_cfg['hemaia_multichip']['testbench_cfg']['hemaia_compute_chip'])
     nr_quads = occamy_cfg['nr_s1_quadrant']
     nr_clusters = len(occamy_cfg["clusters"])
     nr_cores = sum(core_per_cluster_list)
@@ -802,7 +784,6 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
     cluster_tcdm_size =  cluster_generators[0].cfg["tcdm"]["size"]*1024
     wide_spm_size = occamy_cfg["spm_wide"]["length"]
     narrow_spm_size = occamy_cfg["spm_narrow"]["length"]
-    mailbox_size = occamy_cfg["spm_narrow_mailbox_size"]
     cheader_kwargs = {
         "name": name,
         "nr_chiplets": nr_chiplets,
@@ -812,7 +793,7 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
         "nr_cores": nr_cores,
         "wide_spm_size": hex(wide_spm_size),
         "narrow_spm_size": hex(narrow_spm_size),
-        "mailbox_size": hex(mailbox_size),
+        "h2c_mailbox_size": hex(occamy_cfg["s1_quadrant"]["h2c_mailbox_length"]),
         "cluster_tcdm_size": hex(cluster_tcdm_size),
         "cluster_offset": hex(cluster_offset),
         "cluster_addr_width": cluster_addr_width,
@@ -923,6 +904,14 @@ def get_chip_kwargs(soc_wide_xbar, soc_narrow_xbar, soc_axi_lite_narrow_periph_x
     }
     return chip_kwargs
 
+def get_io_kwargs(occamy_cfg, util, name):
+    io_kwargs = {
+        "name": name,
+        "util": util,
+        "occamy_cfg": occamy_cfg,
+        "multichip_cfg": occamy_cfg["hemaia_multichip"]
+    }
+    return io_kwargs
 
 def get_ctrl_kwargs(occamy_cfg, cluster_generators, name):
     default_boot_addr = occamy_cfg["peripherals"]["rom"]["address"]

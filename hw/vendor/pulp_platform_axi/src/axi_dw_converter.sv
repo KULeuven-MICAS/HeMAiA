@@ -16,7 +16,7 @@
 // does not support FIXED bursts with incoming axlen != 0.
 
 module axi_dw_converter #(
-    parameter int unsigned AxiMaxReads         = 1    , // Number of outstanding reads
+    parameter int unsigned AxiMaxReads         = 4    , // Number of outstanding reads
     parameter int unsigned AxiSlvPortDataWidth = 8    , // Data width of the slv port
     parameter int unsigned AxiMstPortDataWidth = 8    , // Data width of the mst port
     parameter int unsigned AxiAddrWidth        = 1    , // Address width

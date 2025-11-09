@@ -33,16 +33,16 @@ module ${name}_cva6 import ${name}_pkg::*; (
     BHTEntries: 128,
     // We need the extra 1KB space in the narrow SPM as the mailbox between the host and acc
 
-    // Narrow SPM -- Narrow SPM+1KB, Narrow SPM End -- DRAM Start, SPM -- Boot ROM, Boot ROM -- Debug Module
-    NrNonIdempotentRules: 4,
-    NonIdempotentAddrBase: {64'd${occamy_cfg["spm_narrow"]["address"]}, // Mailbox Region Starts from the spm narrow
-                            64'd${occamy_cfg["spm_narrow"]["address"]+occamy_cfg["spm_narrow"]["length"]},
+    // Narrow SPM End -- DRAM Start, SPM -- Boot ROM, Boot ROM -- Debug Module
+    NrNonIdempotentRules: 3,
+    NonIdempotentAddrBase: {64'd${occamy_cfg["spm_narrow"]["address"]+occamy_cfg["spm_narrow"]["length"]},
                             64'd${occamy_cfg["peripherals"]["rom"]["address"]+occamy_cfg["peripherals"]["rom"]["length"]},
+                            ${cluster_base_addr},
                             64'h1000
                             },
-    NonIdempotentLength:   {64'd${occamy_cfg["spm_narrow_mailbox_size"]}, // Mailbox size
-                            64'd${occamy_cfg["spm_wide"]["address"]-occamy_cfg["spm_narrow"]["address"]-occamy_cfg["spm_narrow"]["length"]},
+    NonIdempotentLength:   {64'd${occamy_cfg["spm_wide"]["address"]-occamy_cfg["spm_narrow"]["address"]-occamy_cfg["spm_narrow"]["length"]},
                             64'd${occamy_cfg["spm_narrow"]["address"]-occamy_cfg["peripherals"]["rom"]["address"]-occamy_cfg["peripherals"]["rom"]["length"]},
+                            ${cluster_offset},
                             64'd${occamy_cfg["peripherals"]["rom"]["address"]-0x1000}
                             },
     NrExecuteRegionRules: 4,
@@ -60,10 +60,10 @@ module ${name}_cva6 import ${name}_pkg::*; (
     // cached region
     NrCachedRegionRules:    2,
     CachedRegionAddrBase:  {64'd${occamy_cfg["spm_wide"]["address"]},
-                            64'd${occamy_cfg["spm_narrow"]["address"]+occamy_cfg["spm_narrow_mailbox_size"]}
+                            64'd${occamy_cfg["spm_narrow"]["address"]}
                             },
     CachedRegionLength:    {64'd${occamy_cfg["spm_wide"]["length"]},
-                             64'd${occamy_cfg["spm_narrow"]["length"]-occamy_cfg["spm_narrow_mailbox_size"]}
+                             64'd${occamy_cfg["spm_narrow"]["length"]}
                             },
     //  cache config
     AxiCompliant:           1'b1,
