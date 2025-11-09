@@ -36,8 +36,8 @@ int bingo_hemaia_system_mmap_init(){
     // L3 heap init
     // Start addr is the l3 heap start symbol aligned to 1KB
     // Size is from l3 heap start to wide spm end aligned down 1KB
-    uintptr_t l3_heap_start = ALIGN_UP(chiplet_addr_transform((uint64_t)(&__l3_heap_start)), 1024);
-    size_t l3_heap_size = ALIGN_DOWN(chiplet_addr_transform((uint64_t)(&__wide_spm_end)-1024), 1024) - l3_heap_start;
+    uintptr_t l3_heap_start = ALIGN_UP(chiplet_addr_transform((uint64_t)(&__l3_heap_start)), SPM_WIDE_ALIGNMENT);
+    size_t l3_heap_size = ALIGN_DOWN(chiplet_addr_transform((uint64_t)(&__wide_spm_end)-SPM_WIDE_ALIGNMENT), SPM_WIDE_ALIGNMENT) - l3_heap_start;
     O1HeapInstance *l3_heap_manager = o1heapInit((void *)l3_heap_start, l3_heap_size);
     printf("Chip(%x, %x): [Host] L3 heap start: %lx, size(kB): %d\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), l3_heap_start, l3_heap_size>>10);
     // printf("Chip(%x, %x): [Host] L3 heap start: %lx, size: %lx, heap manager: 0x%lx\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), l3_heap_start, l3_heap_size, l3_heap_manager);
@@ -65,7 +65,7 @@ O1HeapInstance *bingo_get_l2_heap_manager(uint8_t chip_id){
 }
 
 O1HeapInstance *bingo_get_l3_heap_manager(uint8_t chip_id){
-    return (O1HeapInstance *)chiplet_addr_transform_full(chip_id, ALIGN_UP(chiplet_addr_transform((uint64_t)(&__l3_heap_start)), 1024));
+    return (O1HeapInstance *)chiplet_addr_transform_full(chip_id, ALIGN_UP(chiplet_addr_transform((uint64_t)(&__l3_heap_start)), SPM_WIDE_ALIGNMENT));
 }
 
 //////////////////////////
