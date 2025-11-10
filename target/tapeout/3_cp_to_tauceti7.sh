@@ -2,4 +2,6 @@
 
 # config the ssh keys for passwordless login beforehand
 # change the path as needed
-scp -r /users/micas/$(whoami)/no_backup/HeMAiAv2 $(whoami)@cygni-gw:/users/micas/$(whoami)/no_backup/HeMAiAv2
+
+ssh $(whoami)@cygni-gw "rm -rf /users/micas/$(whoami)/no_backup/HeMAiAv2"
+scp -r /users/micas/$(whoami)/no_backup/HeMAiAv2 $(whoami)@cygni-gw:/users/micas/$(whoami)/no_backup/
