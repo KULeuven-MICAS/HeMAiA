@@ -3,6 +3,7 @@ script_dir="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 cfg_name="hemaia_tapeout.hjson"
 DEVICE_APP="snax-xdma-local-transpose"
 
+make -C $script_dir/../.. clean
 make -C $script_dir/../.. sw CFG_OVERRIDE=target/rtl/cfg/$cfg_name
 make -C $script_dir/../.. apps DEVICE_APP=$DEVICE_APP
 make -C $script_dir/../.. bootrom CFG_OVERRIDE=target/rtl/cfg/$cfg_name
