@@ -2,8 +2,10 @@
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
+// Xiaoling Yi <xiaoling.yi@kuleuven.be>
 // Fanchen Kong <fanchen.kong@kuleuven.be>
-#include "offload_bingo_gemm.h"
+
+#include "offload_bingo_gemm_multi_chiplet.h"
 
 int main() {
     uintptr_t current_chip_address_prefix =
@@ -11,9 +13,9 @@ int main() {
     uint8_t current_chip_id = get_current_chip_id();
 
     init_uart(current_chip_address_prefix, 32, 1);
-    printf("Single-chip Offload Bingo Main\r\n");
-    // printf("Chip(%x, %x): [Host] Start Offloading Program\r\n",
-    // get_current_chip_loc_x(), get_current_chip_loc_y());
+    printf("Multi-chip Offload Bingo Main\r\n");
+    printf("Chip(%x, %x): [Host] Start Offloading Program\r\n",
+           get_current_chip_loc_x(), get_current_chip_loc_y());
 
     ///////////////////////////////
     // 2. Init the Allocator
@@ -23,9 +25,10 @@ int main() {
                get_current_chip_loc_x(), get_current_chip_loc_y());
         return -1;
     } else {
-        // printf("Chip(%x, %x): [Host] Allocator Init Success\r\n",
-        // get_current_chip_loc_x(), get_current_chip_loc_y());
+        printf("Chip(%x, %x): [Host] Allocator Init Success\r\n",
+               get_current_chip_loc_x(), get_current_chip_loc_y());
     }
+
     ///////////////////////////////
     // 3. Wake up all the clusters
     ///////////////////////////////
@@ -33,7 +36,8 @@ int main() {
     // 3.1 The pointer to the communication buffer
     O1HeapInstance* local_l3_heap_manager =
         bingo_get_l3_heap_manager(current_chip_id);
-    volatile comm_buffer_t* comm_buffer_ptr = bingo_get_l2_comm_buffer(current_chip_id);
+    comm_buffer_t* comm_buffer_ptr =
+        bingo_get_l2_comm_buffer(current_chip_id);
     enable_sw_interrupts();
 
     // 3.2 Program Snitch entry point and communication buffer
@@ -50,7 +54,9 @@ int main() {
     ///////////////////////////////
     // 4. Run the bingo runtime
     ///////////////////////////////
-
+    uint8_t sync_checkpoint = 1;
+    chip_barrier(comm_buffer_ptr, 0x00, 0x11, sync_checkpoint);
+    sync_checkpoint++;
     printf("Chip(%x, %x): [Host] Start Bingo\r\n", get_current_chip_loc_x(),
            get_current_chip_loc_y());
     int ret = kernel_execution();
@@ -61,5 +67,8 @@ int main() {
            get_current_chip_loc_x(), get_current_chip_loc_y(), ret);
     printf("Chip(%x, %x): [Host] End Offloading Program\r\n",
            get_current_chip_loc_x(), get_current_chip_loc_y());
+    // Sync before exit
+    chip_barrier(comm_buffer_ptr, 0x00, 0x11, sync_checkpoint);
+    sync_checkpoint++;
     return ret;
 }

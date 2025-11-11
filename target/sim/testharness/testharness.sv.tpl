@@ -96,7 +96,7 @@ module testharness
 % endfor
 % for chip in chip_coordinates:
 %   if chip.type == ChipletType.MEMORY:
-%       for k in range(0, 32):
+%       for k in range(0, 16):
     i_hemaia_mem_${chip.coordinate[0]}_${chip.coordinate[1]}.i_hemaia_mem_system.i_hemaia_mem.gen_banks[${k}].i_data_mem.i_tc_sram.load_data("app_chip_${chip.coordinate[0]}_${chip.coordinate[1]}/bank_${k}.hex");
 %       endfor
 %   endif
@@ -203,7 +203,7 @@ module testharness
 %   else:
       .io_east_d2d(),
       .io_flow_control_east_rts_o(),
-      .io_flow_control_east_cts_i(const_zero),
+      .io_flow_control_east_cts_i(const_one),
       .io_flow_control_east_rts_i(const_zero),
       .io_flow_control_east_cts_o(),
       .io_east_test_being_requested_i(const_zero),
@@ -220,7 +220,7 @@ module testharness
 %   else:
       .io_west_d2d(),
       .io_flow_control_west_rts_o(),
-      .io_flow_control_west_cts_i(const_zero),
+      .io_flow_control_west_cts_i(const_one),
       .io_flow_control_west_rts_i(const_zero),
       .io_flow_control_west_cts_o(),
       .io_west_test_being_requested_i(const_zero),
@@ -237,7 +237,7 @@ module testharness
 %   else:
       .io_north_d2d(),
       .io_flow_control_north_rts_o(),
-      .io_flow_control_north_cts_i(const_zero),
+      .io_flow_control_north_cts_i(const_one),
       .io_flow_control_north_rts_i(const_zero),
       .io_flow_control_north_cts_o(),
       .io_north_test_being_requested_i(const_zero),
@@ -254,7 +254,7 @@ module testharness
 %   else:
       .io_south_d2d(),
       .io_flow_control_south_rts_o(),
-      .io_flow_control_south_cts_i(const_zero),
+      .io_flow_control_south_cts_i(const_one),
       .io_flow_control_south_rts_i(const_zero),
       .io_flow_control_south_cts_o(),
       .io_south_test_being_requested_i(const_zero),
@@ -311,7 +311,7 @@ module testharness
 % endif
 % elif chip.type == ChipletType.MEMORY:
   hemaia_mem_chip #(
-    .MemBankNum(32),
+    .MemBankNum(16),
     .MemSize(${chip.size}),
     .EnableEastPhy(1'b${
         '1' if any(neighborhood.coordinate == (chip.coordinate[0]+1, chip.coordinate[1]) for neighborhood in chip_coordinates) else '0'

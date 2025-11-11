@@ -3,7 +3,7 @@ import os
 
 def bin2preload(input_file, output_dir):
     # Constants
-    NUM_BANKS = 32
+    NUM_BANKS = 16
     BANK_WIDTH = 64  # 64 bits = 8 bytes
     TOTAL_WIDTH = NUM_BANKS * BANK_WIDTH  # 2048 bits = 256 bytes
 

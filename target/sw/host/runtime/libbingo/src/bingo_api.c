@@ -9,63 +9,64 @@
 #include <stddef.h>  // size_t
 #include <stdlib.h>  // NULL
 #include <stdio.h>
+#include "heterogeneous_runtime.h"
 
-uint16_t global_task_id = 0; // Internal monotonically increasing id source
-struct O1HeapInstance *l2_heap_manager, *l3_heap_manager;
-
-uintptr_t l2_heap_start;
-size_t l2_heap_size;
-
-uintptr_t l3_heap_start;
-size_t l3_heap_size;
-
+uint64_t global_task_id = 0; // Internal monotonically increasing id source, notice this is used in each chiplet
 ///////////////////////////
 // Memory Allocator API  //
 ///////////////////////////
 
-
-
-
-
 int bingo_hemaia_system_mmap_init(){
+    // comm_buffer assignment: Begin from SPM_NARROW_BASE_ADDR and initialize to zero
+    comm_buffer_t* comm_buffer = (comm_buffer_t *)chiplet_addr_transform(SPM_NARROW_BASE_ADDR);
+    printf("Chip(%x, %x): [Host] Comm buffer addr: %lx\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), (uintptr_t)comm_buffer);
     // L2 heap init
     // Start addr is the spm narrow
     // Size is half of the narrow spm
     // The rest is leave to stack
-    l2_heap_start = chiplet_addr_transform(SPM_NARROW_BASE_ADDR);
-    l2_heap_size = ALIGN_UP(NARROW_SPM_SIZE / 2, O1HEAP_ALIGNMENT);
-    l2_heap_manager = o1heapInit((void *)l2_heap_start, l2_heap_size);
+    uintptr_t l2_heap_start = ALIGN_UP((uintptr_t)comm_buffer + sizeof(comm_buffer_t), O1HEAP_ALIGNMENT);
+    size_t l2_heap_size = ALIGN_UP(NARROW_SPM_SIZE / 2, O1HEAP_ALIGNMENT);
+    O1HeapInstance *l2_heap_manager = o1heapInit((void *)l2_heap_start, l2_heap_size);
+    printf("Chip(%x, %x): [Host] L2 heap start: %lx, size(kB): %d\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), l2_heap_start, l2_heap_size>>10);
     // printf("Chip(%x, %x): [Host] L2 heap start: %lx, size: %lx, heap manager: 0x%lx\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), l2_heap_start, l2_heap_size, l2_heap_manager);
     if(!l2_heap_manager) {
-        printf("Error when initializing L2 heap.\n");
+        printf("Error when initializing L2 heap. \r\n");
         return -1;
     }
     // L3 heap init
-    // Start addr is the l3 heap start symbol
-    // Size is half of the wide spm
-    l3_heap_start = chiplet_addr_transform((uint64_t)(&__l3_heap_start));
-    l3_heap_size = ALIGN_UP(WIDE_SPM_SIZE / 2, O1HEAP_ALIGNMENT);
-    l3_heap_manager = o1heapInit((void *)l3_heap_start, l3_heap_size);
+    // Start addr is the l3 heap start symbol aligned to 1KB
+    // Size is from l3 heap start to wide spm end aligned down 1KB
+    uintptr_t l3_heap_start = ALIGN_UP(chiplet_addr_transform((uint64_t)(&__l3_heap_start)), SPM_WIDE_ALIGNMENT);
+    size_t l3_heap_size = ALIGN_DOWN(chiplet_addr_transform((uint64_t)(&__wide_spm_end)-SPM_WIDE_ALIGNMENT), SPM_WIDE_ALIGNMENT) - l3_heap_start;
+    O1HeapInstance *l3_heap_manager = o1heapInit((void *)l3_heap_start, l3_heap_size);
+    printf("Chip(%x, %x): [Host] L3 heap start: %lx, size(kB): %d\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), l3_heap_start, l3_heap_size>>10);
     // printf("Chip(%x, %x): [Host] L3 heap start: %lx, size: %lx, heap manager: 0x%lx\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), l3_heap_start, l3_heap_size, l3_heap_manager);
     if(!l3_heap_manager) {
-        printf("Error when initializing L3 heap.\n");
+        printf("Error when initializing L3 heap.\r\n");
         return -1;
     }
     return 0;
 }
 
+O1HeapInstance32 *bingo_get_l1_heap_manager(uint8_t chip_id, uint32_t cluster_id){
+    // Notice the l1 heap is init by the cluster at the start of the TCDM of each cluster
+    // Here we hack the o1heap sw to force a 32bit version of heap manager so that the host can access to the correct
+    // heap information from the O1HeapInstanc32 structure
+    return (O1HeapInstance32 *)chiplet_addr_transform_full(chip_id, (uint64_t)cluster_tcdm_start_addr(cluster_id));
+}
+
+
+comm_buffer_t *bingo_get_l2_comm_buffer(uint8_t chip_id){
+    return (comm_buffer_t *)chiplet_addr_transform_full(chip_id, (uintptr_t)SPM_NARROW_BASE_ADDR);
+}
+
 O1HeapInstance *bingo_get_l2_heap_manager(uint8_t chip_id){
-    // The heap manager will be initialized at the start address of the heap
-    // So we can get the heap manager by the chip id
-    return (O1HeapInstance *)chiplet_addr_transform_full(chip_id, SPM_NARROW_BASE_ADDR);
+    return (O1HeapInstance *)chiplet_addr_transform_full(chip_id, ALIGN_UP((uintptr_t)SPM_NARROW_BASE_ADDR + sizeof(comm_buffer_t), O1HEAP_ALIGNMENT));
 }
 
 O1HeapInstance *bingo_get_l3_heap_manager(uint8_t chip_id){
-    // The heap manager will be initialized at the start address of the heap
-    // So we can get the heap manager by the chip id
-    return (O1HeapInstance *)chiplet_addr_transform_full(chip_id, (uint64_t)(&__l3_heap_start));
+    return (O1HeapInstance *)chiplet_addr_transform_full(chip_id, ALIGN_UP(chiplet_addr_transform((uint64_t)(&__l3_heap_start)), SPM_WIDE_ALIGNMENT));
 }
-
 
 //////////////////////////
 // Mailbox API          //
@@ -102,7 +103,7 @@ int bingo_write_h2h_mailbox(uint8_t chip_id, uint64_t dword,
                             uint64_t timeout_cycles, uint32_t *retry_hint) {
     uint8_t current_chip_id = get_current_chip_id();
     if (chip_id == current_chip_id) {
-        printf("Chip(%x, %x): [Host] Error: Cannot write to its own H2H mailbox!\\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+        printf("Chip(%x, %x): [Host] Error: Cannot write to its own H2H mailbox!\\r\\n", get_current_chip_loc_x(), get_current_chip_loc_y());
         return BINGO_MB_ERR_PARAM;
     }
     volatile uint64_t target_h2h_mailbox_write_addr = chiplet_addr_transform_full(chip_id, h2h_mailbox_write_address());
@@ -230,12 +231,11 @@ int bingo_read_c2h_mailbox(uint32_t *buffer, uint64_t timeout_cycles, uint32_t *
 bingo_task_t *bingo_task_create(uint32_t fn_ptr, uint32_t args_ptr, uint8_t assigned_chip_id, uint8_t assigned_cluster_id) {
 
     bingo_task_t *task = o1heapAllocate(bingo_get_l2_heap_manager(get_current_chip_id()), sizeof(bingo_task_t));
-    if (!task) return NULL;
-    if (global_task_id > 0xFFu) {
-        // Simple overflow guard; wrap is undefined for now.
-        printf("[BINGO] Warning: task id overflow (>%u)\n", 0xFFFFu);
+    if (!task){
+        printf("[BINGO] Error: Failed to allocate memory for new task.\r\n");
+        return NULL;
     }
-    task->task_id = global_task_id;
+    task->task_id = readh((uintptr_t)chiplet_addr_transform((uint64_t)&global_task_id));
     task->fn_ptr = fn_ptr;
     task->args_ptr = args_ptr;
     task->assigned_chip_id = assigned_chip_id;
@@ -262,8 +262,11 @@ bingo_task_t *bingo_task_create(uint32_t fn_ptr, uint32_t args_ptr, uint8_t assi
     task->completion_notified = false;
     task->debug_seq_issue = 0;
     task->debug_seq_complete = 0;
-
-    global_task_id++;
+    // Increment global task id by 1
+    writeh(
+        readh((uintptr_t)chiplet_addr_transform((uint64_t)&global_task_id)) + 1,
+        (uintptr_t)chiplet_addr_transform((uint64_t)&global_task_id)
+    );
     return task;
 }
 
@@ -271,7 +274,7 @@ bingo_task_t *bingo_task_create(uint32_t fn_ptr, uint32_t args_ptr, uint8_t assi
 // Decide if successor is local or remote relative to predecessor's chip assignment.
 void bingo_task_add_depend(bingo_task_t *task, bingo_task_t *dep_task) {
     if (!task || !dep_task){
-        printf("[BINGO] Error: Null task pointer in bingo_task_add_depend.\n");
+        printf("[BINGO] Error: Null task pointer in bingo_task_add_depend.\r\n");
         return;
     }
     if (dep_task->assigned_chip_id == task->assigned_chip_id) {
@@ -281,7 +284,7 @@ void bingo_task_add_depend(bingo_task_t *task, bingo_task_t *dep_task) {
         if (dep_task->num_local_successors < MAX_SUCCESSORS) {
             dep_task->local_successors[dep_task->num_local_successors++] = task;
         } else {
-            printf("[BINGO] Error: MAX_SUCCESSORS exceeded for task %u\n", dep_task->task_id);
+            printf("[BINGO] Error: MAX_SUCCESSORS exceeded for task %u\r\n", dep_task->task_id);
         }
     } else {
         // Remote edge
@@ -292,21 +295,21 @@ void bingo_task_add_depend(bingo_task_t *task, bingo_task_t *dep_task) {
             dep_task->remote_successors[dep_task->num_remote_successors].task_id = task->task_id;
             dep_task->num_remote_successors++;
         } else {
-            printf("[BINGO] Error: BINGO_MAX_REMOTE_SUCC exceeded for task %u\n", dep_task->task_id);
+            printf("[BINGO] Error: BINGO_MAX_REMOTE_SUCC exceeded for task %u\r\n", dep_task->task_id);
         }
     }
 }
 
 void bingo_task_offload(bingo_task_t *task) {
     if (!task){
-        printf("[BINGO] Error: Null task pointer in bingo_task_offload.\n");
+        printf("[BINGO] Error: Null task pointer in bingo_task_offload.\r\n");
         return;
     }
     if (task->offloaded){
-        printf("[BINGO] Warning: Task %u already offloaded.\n", task->task_id);
+        printf("[BINGO] Warning: Task %u already offloaded.\r\n", task->task_id);
         return;
     }
-    printf("Chip(%x, %x): [Host] Offloaded task %u -> chip %u cluster %u fn=0x%x args=0x%x\n",
+    printf("Chip(%x, %x): [Host] Offloaded task %u -> chip %u cluster %u fn=0x%x args=0x%x\r\n",
            get_current_chip_loc_x(), get_current_chip_loc_y(), task->task_id,
            task->assigned_chip_id, task->assigned_cluster_id, task->fn_ptr, task->args_ptr); 
     // Send start command + task info via H2C mailbox
@@ -318,7 +321,7 @@ void bingo_task_offload(bingo_task_t *task) {
     bingo_write_h2c_mailbox(task->assigned_cluster_id, (uint32_t)task->args_ptr, 0, &retry_hint_args);
     total_retries += retry_hint_start + retry_hint_id + retry_hint_fn + retry_hint_args;
     if(total_retries > 100) {
-        printf("Chip(%x, %x): [Host] Warning: High mailbox write retries (%u) when offloading task %u to chip %u cluster %u\n",
+        printf("Chip(%x, %x): [Host] Warning: High mailbox write retries (%u) when offloading task %u to chip %u cluster %u\r\n",
                get_current_chip_loc_x(), get_current_chip_loc_y(), total_retries,
                task->task_id, task->assigned_chip_id, task->assigned_cluster_id);
     }
@@ -410,7 +413,7 @@ void bingo_runtime_schedule(bingo_task_t **task_list, uint32_t num_tasks) {
     for (uint32_t i = 0; i < num_tasks; i++) {
         if (task_list[i]->assigned_chip_id == current_chip) local_total++;
     }
-    printf("Chip(%x, %x): [Host] Starting runtime schedule for %u local tasks\n",
+    printf("Chip(%x, %x): [Host] Starting runtime schedule for %u local tasks\r\n",
            get_current_chip_loc_x(), get_current_chip_loc_y(), local_total);
     if (local_total == 0) return; // Nothing to do
 
@@ -418,7 +421,7 @@ void bingo_runtime_schedule(bingo_task_t **task_list, uint32_t num_tasks) {
     uint16_t cap = bingo_next_pow2(local_total * 2); // room for burst readiness
     bingo_task_t **ring = (bingo_task_t **)o1heapAllocate(bingo_get_l2_heap_manager(get_current_chip_id()), sizeof(bingo_task_t*) * cap);
     if (!ring) {
-        printf("[BINGO] Error: Failed to allocate ready ring.\n");
+        printf("[BINGO] Error: Failed to allocate ready ring.\r\n");
         return;
     }
     bingo_chip_sched_t sched = {
@@ -455,7 +458,7 @@ void bingo_runtime_schedule(bingo_task_t **task_list, uint32_t num_tasks) {
             switch (msg.flag & 0xF) {
                 case MBOX_DEVICE_DONE: {
                     uint16_t tid = msg.task_id;
-                    printf("Chip(%x, %x): [Host] Task %u completed on chip %u cluster %u\n",
+                    printf("Chip(%x, %x): [Host] Task %u completed on chip %u cluster %u \r\n",
                            get_current_chip_loc_x(), get_current_chip_loc_y(),
                            tid, current_chip, msg.cluster_id);
                     if (tid < num_tasks) {

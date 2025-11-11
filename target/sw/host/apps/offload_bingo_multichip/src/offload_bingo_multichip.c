@@ -32,18 +32,6 @@ int main() {
     printf("Chip(%x, %x): [Host] Start Offloading Program\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
 
     ///////////////////////////////
-    // 1. Init the clk manager
-    ///////////////////////////////
-    // Set clk manager to 1 division for a faster simulation time
-    
-    enable_clk_domain(0, 1);
-    enable_clk_domain(1, 1);
-    enable_clk_domain(2, 1);
-    enable_clk_domain(3, 1);
-    enable_clk_domain(4, 1);
-    enable_clk_domain(5, 1);
-    // printf("Chip(%x, %x): [Host] Init CLK Manager Success\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
-    ///////////////////////////////
     // 2. Init the Allocator
     ///////////////////////////////
     if(bingo_hemaia_system_mmap_init() < 0){
@@ -58,15 +46,13 @@ int main() {
 
     // 3.1 The pointer to the communication buffer
     O1HeapInstance *local_l3_heap_manager = bingo_get_l3_heap_manager(current_chip_id);
-    volatile comm_buffer_t* comm_buffer_ptr = o1heapAllocate(local_l3_heap_manager, sizeof(comm_buffer_t));
-    if(comm_buffer_ptr == NULL){
-        printf("Chip(%x, %x): [Host] Error when allocating comm buffer, l3 heap manager = 0x%lx, size = %x\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), local_l3_heap_manager, sizeof(comm_buffer_t));
-        return -1;
-    }
-    initialize_comm_buffer((comm_buffer_t*)comm_buffer_ptr);
+    comm_buffer_t* comm_buffer_ptr = bingo_get_l2_comm_buffer(current_chip_id);
+
     enable_sw_interrupts();
 
     // 3.2 Program Snitch entry point and communication buffer
+    // Initialize communication buffer
+    initialize_comm_buffer(comm_buffer_ptr);
     comm_buffer_ptr->lock = 0;
     comm_buffer_ptr->chip_id = current_chip_id;
     program_snitches(current_chip_id, comm_buffer_ptr);
@@ -78,17 +64,18 @@ int main() {
     ///////////////////////////////
     // 4. Run the bingo runtime
     ///////////////////////////////
+    // FIXME: Has some bugs here when multiple chiplets are used
     // We need to first sync all the chiplets
-    uint8_t sync_checkpoint = 1;
-    chip_barrier(comm_buffer_ptr, 0x00, 0x11, sync_checkpoint);
-    sync_checkpoint++;
-    printf("Chip(%x, %x): [Host] All chiplets synced, start Bingo\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+    // uint8_t sync_checkpoint = 1;
+    // chip_barrier(comm_buffer_ptr, 0x00, 0x11, sync_checkpoint);
+    // sync_checkpoint++;
+    // printf("Chip(%x, %x): [Host] All chiplets synced, start Bingo\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
     int ret = 0;
     ret = kernel_execution();
     clear_host_sw_interrupt(current_chip_id);
     printf("Chip(%x, %x): [Host] Offload Finish\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
     // Sync before exit
-    chip_barrier(comm_buffer_ptr, 0x00, 0x11, sync_checkpoint);
-    sync_checkpoint++;
+    // chip_barrier(comm_buffer_ptr, 0x00, 0x11, sync_checkpoint);
+    // sync_checkpoint++;
     return ret;
 }
