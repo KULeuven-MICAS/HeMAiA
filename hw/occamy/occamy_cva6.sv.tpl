@@ -251,14 +251,14 @@ module ${name}_cva6_ara import ${name}_pkg::*; (
       NonIdempotentLength:   1024'({SoCPeriphLength,  ClusterLength}),
       //    Exe Region
       NrExecuteRegionRules: unsigned'(4),
-      //                             WideSPM;       NarrowSPM;    Boot ROM;        Debug Module
-      ExecuteRegionAddrBase: 1024'({WideSPMBase,   NarrowSPMBase, BootromBase,    DebugBase  }),
-      ExecuteRegionLength:   1024'({WideSPMLength, NarrowSPMBase, BootromLength,  DebugLength}),
+      //                             WideSPM;       NarrowSPM;      Boot ROM;       Debug Module
+      ExecuteRegionAddrBase: 1024'({WideSPMBase,   NarrowSPMBase,   BootromBase,    DebugBase  }),
+      ExecuteRegionLength:   1024'({WideSPMLength, NarrowSPMLength, BootromLength,  DebugLength}),
       //    Cache Region
-      NrCachedRegionRules: unsigned'(2),
-      //                             WideSPM;       NarrowSPM
-      CachedRegionAddrBase:  1024'({WideSPMBase,   NarrowSPMBase  }),
-      CachedRegionLength:    1024'({WideSPMLength, NarrowSPMLength}),
+      NrCachedRegionRules: unsigned'(3),
+      //                             WideSPM;       NarrowSPM;      Boot ROM;
+      CachedRegionAddrBase:  1024'({WideSPMBase,   NarrowSPMBase,   BootromBase  }),
+      CachedRegionLength:    1024'({WideSPMLength, NarrowSPMLength, BootromLength}),
       MaxOutstandingStores: unsigned'(7),
       DebugEn: bit'(1),
       AxiBurstWriteEn: bit'(0),
