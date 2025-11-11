@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Xiaoling Yi <xiaoling.yi@kuleuven.be>
+// Fanchen Kong <fanchen.kong@kuleuven.be>
 
 #pragma once
 #include "gemm_multi_chiplet_data.h"
@@ -67,8 +68,9 @@ uint32_t __workload_versacore_multi_chiplet_broadcast(bingo_task_t** task_list) 
     ///////////////////
     ///////////////////
     // args for xdma cp for loading A matrices from mempool to L1 at each
-    // chiplet// src the mempool address for A1, A2, A3, A4 dst the L1 address
-    // in each cluster size the size in bytes
+    // chiplet.
+    // src the mempool address for A1, A2, A3, A4. dst the L1 address
+    // in each cluster size. the size in bytes
     ///////////////////
     ///////////////////
     // Below are data in mempool chiplet
@@ -91,7 +93,7 @@ uint32_t __workload_versacore_multi_chiplet_broadcast(bingo_task_t** task_list) 
     uintptr_t A3_mp        = A_mp + 2 * AdataTileSize;
     uintptr_t A4_mp        = A_mp + 3 * AdataTileSize;
     uintptr_t B_mp         = A4_mp + AdataTileSize;
-    // Below are the golden data in local chiplet
+    // Below are the golden data in local chiplet's L3
     uint64_t A_golden_l3   = chiplet_addr_transform((uint64_t)(uintptr_t)(A_data_L3));
     uint64_t A1_golden_l3  = A_golden_l3 + 0 * AdataTileSize;
     uint64_t A2_golden_l3  = A_golden_l3 + 1 * AdataTileSize;
@@ -99,7 +101,7 @@ uint32_t __workload_versacore_multi_chiplet_broadcast(bingo_task_t** task_list) 
     uint64_t A4_golden_l3  = A_golden_l3 + 3 * AdataTileSize;
     // D L3
     uint64_t B_golden_l3   = chiplet_addr_transform((uint64_t)(uintptr_t)B_data_L3);
-    uint64_t D_golden_l3   = B_golden_l3 + BdataSize;
+    uint64_t D_golden_l3   = chiplet_addr_transform((uint64_t)(uintptr_t)D_data_L3);
     uint64_t D1_golden_l3  = D_golden_l3 + 0 * DdataSize;
     uint64_t D2_golden_l3  = D_golden_l3 + 1 * DdataSize;
     uint64_t D3_golden_l3  = D_golden_l3 + 2 * DdataSize;
