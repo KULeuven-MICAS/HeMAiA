@@ -27,10 +27,10 @@ dependencies:
   clint:                  { git:  https://github.com/pulp-platform/clint.git,                  rev:     v0.1.0  }
   common_cells:           { git:  https://github.com/pulp-platform/common_cells.git,           rev:     v1.28.0 }
   cva6:                   { git:  https://github.com/KULeuven-MICAS/cva6.git,                  rev:     kfc/hemaia-integration}
-  ara:                    { git:  https://github.com/KULeuven-MICAS/ara.git,                   rev:     kfc/hemaia-integration}
+  ara:                    { git:  https://github.com/KULeuven-MICAS/ara.git,                   rev:     main    }
   opentitan_peripherals:  { path: hw/vendor/pulp_platform_opentitan_peripherals                                 }
   register_interface:     { git:  https://github.com/pulp-platform/register_interface.git,     version: 0.3.8   }
-  snitch_cluster:         { git:  https://github.com/KULeuven-MICAS/snax_cluster.git,          rev:     kfc/rm-fpu    }
+  snitch_cluster:         { git:  https://github.com/KULeuven-MICAS/snax_cluster.git,          rev:     main    }
   tech_cells_generic:     { git:  https://github.com/KULeuven-MICAS/tech_cells_generic.git,   version: 0.2.16   }
   cluster_icache:         { git:  https://github.com/KULeuven-MICAS/cluster_icache.git,        rev:     main    }
   hemaia_axi_spi_slave:   { git:  https://github.com/KULeuven-MICAS/hemaia_axi_spi_slave.git,  rev:     main    }
