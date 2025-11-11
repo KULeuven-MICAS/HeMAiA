@@ -18,6 +18,7 @@ APPS += offload_bingo
 APPS += offload_bingo_ci
 APPS += offload_bingo_gemm_intra_chiplet
 APPS += offload_bingo_gemm_multi_chiplet_vanilla
+APPS += offload_bingo_gemm_multi_chiplet_broadcast
 # Host only applications
 APPS += hemaia_mailbox
 APPS += multichip_sync

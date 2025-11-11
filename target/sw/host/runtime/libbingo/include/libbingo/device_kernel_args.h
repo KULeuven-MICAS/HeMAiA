@@ -30,6 +30,15 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_kernel_check_results_args {
   uint32_t data_size;        // in Bytes
 } __snax_kernel_check_results_args_t;
 
+// Check Results Full kernel args
+__SNAX_KERNEL_ARGS_DEFINE __snax_kernel_check_results_full_args {
+  uint32_t golden_data_addr_hi;            
+  uint32_t golden_data_addr_lo;            
+  uint32_t output_data_addr_hi;            
+  uint32_t output_data_addr_lo;            
+  uint32_t data_size;        // in Bytes
+} __snax_kernel_check_results_full_args_t;
+
 // Load-Compute-Store kernel args
 __SNAX_KERNEL_ARGS_DEFINE __snax_kernel_load_compute_store_args {
   uint32_t input_data_addr;            
@@ -54,6 +63,15 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_kernel_xdma_1d_copy_args {
   uint32_t dst_addr_lo;            
   uint32_t size;        // in Bytes
 } __snax_kernel_xdma_1d_copy_args_t;
+
+// IDMA 1D Copy kernel args
+__SNAX_KERNEL_ARGS_DEFINE __snax_kernel_idma_1d_copy_args_t {
+  uint32_t src_addr_hi;    
+  uint32_t src_addr_lo;            
+  uint32_t dst_addr_hi;            
+  uint32_t dst_addr_lo;            
+  uint32_t size;        // in Bytes
+} __snax_kernel_idma_1d_copy_args_t;
 
 // ---------------------------------------------------------
 // ---------------------VERSACORE---------------------------
@@ -113,5 +131,19 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_kernel_versacore_load_compute_store_args {
 } __snax_kernel_versacore_load_compute_store_args_t;
 
 __SNAX_KERNEL_ARGS_DEFINE __snax_kernel_gemm_intra_chiplet_args{
-  uint32_t args_ptr;
+  uint32_t input_A_addr_hi;
+  uint32_t input_A_addr_lo;
+  uint32_t input_B_addr_hi;
+  uint32_t input_B_addr_lo;
+  uint32_t input_C_addr_hi;
+  uint32_t input_C_addr_lo;
+  uint32_t output_D_addr_hi;
+  uint32_t output_D_addr_lo;
+  uint32_t M;
+  uint32_t K;
+  uint32_t N;
+  uint32_t array_shape;
+  uint32_t transpose_A;
+  uint32_t transpose_B;
+  uint32_t accumPrevC;
 } __snax_kernel_gemm_intra_chiplet_args_t;
