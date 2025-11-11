@@ -119,7 +119,7 @@ module ${name}_cva6_ara import ${name}_pkg::*; (
   localparam CVA6ConfigNrCommitPorts = 2;
   // We do not need the FPU in CVA6, the FPU is offloaded to the Ara
   localparam CVA6ConfigRVF = 1;       // Support single-precision FP
-  localparam CVA6ConfigRVD = 0;
+  localparam CVA6ConfigRVD = 1;       // Support double-precision FP
   localparam CVA6ConfigF16En = 0;
   localparam CVA6ConfigF16AltEn = 0;
   localparam CVA6ConfigF8En = 0;
@@ -255,10 +255,10 @@ module ${name}_cva6_ara import ${name}_pkg::*; (
       ExecuteRegionAddrBase: 1024'({WideSPMBase,   NarrowSPMBase,   BootromBase,    DebugBase  }),
       ExecuteRegionLength:   1024'({WideSPMLength, NarrowSPMLength, BootromLength,  DebugLength}),
       //    Cache Region
-      NrCachedRegionRules: unsigned'(3),
-      //                             WideSPM;       NarrowSPM;      Boot ROM;
-      CachedRegionAddrBase:  1024'({WideSPMBase,   NarrowSPMBase,   BootromBase  }),
-      CachedRegionLength:    1024'({WideSPMLength, NarrowSPMLength, BootromLength}),
+      NrCachedRegionRules: unsigned'(2),
+      //                             WideSPM;       NarrowSPM;     
+      CachedRegionAddrBase:  1024'({WideSPMBase,   NarrowSPMBase  }),
+      CachedRegionLength:    1024'({WideSPMLength, NarrowSPMLength}),
       MaxOutstandingStores: unsigned'(7),
       DebugEn: bit'(1),
       AxiBurstWriteEn: bit'(0),
