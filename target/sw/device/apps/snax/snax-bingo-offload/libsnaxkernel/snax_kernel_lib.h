@@ -98,7 +98,7 @@ SNAX_LIB_DEFINE void __snax_kernel_check_results(void* arg) {
                 ((uint32_t*)output_data_addr)[i]) {
                 num_errors++;
                 if (num_errors < 10) {
-                    printf("Error at index %d: golden = %d, output = %d\n", i,
+                    printf("Error at index %d: golden = %x, output = %x\n", i,
                            ((uint32_t*)golden_data_addr)[i],
                            ((uint32_t*)output_data_addr)[i]);
                 }
