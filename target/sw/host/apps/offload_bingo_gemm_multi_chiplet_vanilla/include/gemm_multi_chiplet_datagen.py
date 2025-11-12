@@ -46,17 +46,21 @@ def emit_matmul_data(**kwargs):
     array_shape = kwargs["array_shape"]
     data_str += [format_scalar_definition("uint32_t", "array_shape", array_shape)]
 
-    if array_shape == 0:
-        meshRow = 32
-        tileSize = 4
-        meshCol = 32
-    elif array_shape == 1:
-        meshRow = 1
-        tileSize =32
-        meshCol = 16
-    else:
-        raise ValueError("Unsupported array shape!")
-
+    data_type = 0  # int8 data type
+    snax_acc_cfg = kwargs["snax_versacore_core_template"]["snax_acc_cfg"][0]
+    meshRow = snax_acc_cfg["snax_versacore_spatial_unrolling"][data_type][array_shape][
+        0
+    ]
+    tileSize = snax_acc_cfg["snax_versacore_spatial_unrolling"][data_type][array_shape][
+        1
+    ]
+    meshCol = snax_acc_cfg["snax_versacore_spatial_unrolling"][data_type][array_shape][
+        2
+    ]
+    data_str += [format_scalar_definition("uint32_t", "meshRow", meshRow)]
+    data_str += [format_scalar_definition("uint32_t", "tileSize", tileSize)]
+    data_str += [format_scalar_definition("uint32_t", "meshCol", meshCol)]
+    
     transposed_A = kwargs["transposed_A"]
     data_str += [format_scalar_definition("uint32_t", "transposed_A", transposed_A)]
 
@@ -170,9 +174,15 @@ def main():
     with args.cfg.open() as f:
         param = hjson.loads(f.read())
 
-    # Emit header file
-    print(emit_header_file(**param))
+    # Load hardware config file
+    with args.hwcfg.open() as f:
+        hw = hjson.loads(f.read())
 
+    # Merge dictionaries (hw overrides param in case of conflicts)
+    merged_config = {**param, **hw}
+
+    # Emit header file
+    print(emit_header_file(**merged_config))
 
 if __name__ == "__main__":
     main()
