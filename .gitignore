@@ -2,6 +2,7 @@ deps/
 
 .bender/
 Bender.lock
+Bender.local
 /working_dir/
 
 .vscode/
