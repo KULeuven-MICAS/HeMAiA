@@ -4,7 +4,7 @@
 //
 // Xiaoling Yi <xiaoling.yi@kuleuven.be>
 
-// Generated at 2025-11-12 20:48:00
+// Generated at 2025-11-12 21:03:19
 
 #pragma once
 
@@ -93,7 +93,7 @@
 
 #define channel_en_C_0_0 4294967295
 
-#define channel_en_C_null_0_0 4294967295
+#define channel_en_C_null_0_0 0
 
 #define Ctlstride0_1 128
 
@@ -101,7 +101,7 @@
 
 #define channel_en_C_1_0 4294967295
 
-#define channel_en_C_null_1_0 4294967295
+#define channel_en_C_null_1_0 0
 
 #define Ctlstride0_2 128
 
@@ -109,7 +109,7 @@
 
 #define channel_en_C_2_0 4294967295
 
-#define channel_en_C_null_2_0 4294967295
+#define channel_en_C_null_2_0 0
 
 #define Ctlstride0_3 128
 
@@ -117,7 +117,7 @@
 
 #define channel_en_C_3_0 4294967295
 
-#define channel_en_C_null_3_0 4294967295
+#define channel_en_C_null_3_0 0
 
 #define Ctlstride0_4 64
 
@@ -125,7 +125,7 @@
 
 #define channel_en_C_4_0 255
 
-#define channel_en_C_null_4_0 255
+#define channel_en_C_null_4_0 0
 
 #define D32tlstride0_0 128
 

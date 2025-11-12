@@ -175,6 +175,7 @@ def emit_matmul_data(**kwargs):
         for j in range(len(channel_en_C)):
             data_str += [format_scalar_define_no_capital(f"channel_en_C_{i}_{j}", channel_en_C[j])]
 
+        channel_en_C = [0] * C_enabled_channel_CSR_num
         channel_en_C_bits = 0
         channel_en_C = gen_channel_enable_CSR(
             channel_en_C,
