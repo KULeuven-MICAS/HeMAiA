@@ -22,6 +22,7 @@ uint32_t __workload_versacore(bingo_task_t** task_list,
     // 4. Set the assigned chiplet id and cluster id
 
     uint8_t current_chip_id = get_current_chip_id();
+    uint8_t task_chip_id = current_chip_id;
     uint8_t cluster_id = 0;  // versacore is located at cluster
 
     // 1.1 Get the kernel function address by the kernel name
@@ -84,14 +85,14 @@ uint32_t __workload_versacore(bingo_task_t** task_list,
     // 2. Register the tasks
     bingo_task_t* task_versacore = bingo_task_create(
         __snax_kernel_gemm_intra_chiplet_func_addr,
-        (uint32_t)(uintptr_t)(&gemm_args), current_chip_id, cluster_id);
+        (uint32_t)(uintptr_t)(&gemm_args), task_chip_id, cluster_id);
     if (task_versacore == NULL) {
         printf("Error: Task versacore creation failed!\r\n");
     }
     bingo_task_t* task_check_results =
         bingo_task_create(check_results_func_addr,
                           (uint32_t)(uintptr_t)(&task_check_results_args),
-                          current_chip_id, cluster_id);
+                          task_chip_id, cluster_id);
     if (task_check_results == NULL) {
         printf("Error: Task check results creation failed!\r\n");
     }
