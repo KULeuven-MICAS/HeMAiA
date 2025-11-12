@@ -9,6 +9,7 @@
 # Now we only compile the snax apps
 # APPDIR  = $(shell find apps/snax -mindepth 1 -maxdepth 1 -type d)
 APPDIR = apps/snax/snax-nvsa
+APPDIR = apps/snax/snax-cgra-cmatmul
 TARGET ?= all
 
 

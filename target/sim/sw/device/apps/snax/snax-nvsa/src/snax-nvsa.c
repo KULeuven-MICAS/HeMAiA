@@ -452,6 +452,7 @@ int main() {
 
         // Using DMA only
         if (snrt_is_dm_core()) {
+            printf("CGRA 1! \n");
             snrt_start_perf_counter(SNRT_PERF_CNT0, SNRT_PERF_CNT_DMA_BUSY,
                                     snrt_hartid());
             local_config_data = (int32_t *)(snrt_l1_next() + delta_config_lut);
@@ -484,6 +485,7 @@ int main() {
         local_config_data = (int32_t *)(snrt_l1_next() + delta_comp_data);
         // Using DMA only
         if (snrt_is_dm_core()) {
+            printf("CGRA 2! \n");
             snrt_dma_start_1d(local_config_data, COMP_DATA,
                               COMP_DATA_SIZE * sizeof(uint32_t));
             snrt_dma_wait_all();
@@ -497,6 +499,7 @@ int main() {
 
         // testing csr -> cgra
         if (snrt_is_compute_core()) {
+            printf("CGRA 3! \n");
             // printf ("hello world!\r\n\r\n");
             uint32_t mcycle_timestamps[7];
 
@@ -508,11 +511,13 @@ int main() {
 
             launch_cgra_0_config(delta_config_data, delta_comp_data,
                                  delta_store_data, mcycle_timestamps);
+            printf("CGRA 4! \n");
             launch_cgra_0_go(delta_config_data, delta_comp_data,
                              delta_store_data, mcycle_timestamps);
-
+            printf("CGRA 5! \n");
             // cgra_hw_barrier(10, 1e5, 1, 1);
             cgra_hw_barrier_fast(10, 1e5);
+            printf("CGRA done! \n");
 
             // cgra_hw_profiler();
 
@@ -540,213 +545,214 @@ int main() {
             // - mcycle_timestamps[5]);
 
         }
+        snrt_cluster_hw_barrier();
     } 
 
     snrt_global_barrier();
 
 
 
-    //----------------------------
-    //----------------------------
-    //----------------------------
-    //----------------------------
-    //----------------------------
-    // HDC Block
-    //----------------------------
-    //----------------------------
-    //----------------------------
-    //----------------------------
-    //----------------------------
+    // //----------------------------
+    // //----------------------------
+    // //----------------------------
+    // //----------------------------
+    // //----------------------------
+    // // HDC Block
+    // //----------------------------
+    // //----------------------------
+    // //----------------------------
+    // //----------------------------
+    // //----------------------------
 
-    if (snrt_cluster_idx() == 2){
+    // if (snrt_cluster_idx() == 2){
 
-        // MEASUREMENT TIME
-        if(snrt_cluster_core_idx() == 0){
-            barr_end = snrt_mcycle();
-            printf("BS %d \r\n", barr_start);
-            printf("BE %d \r\n", barr_end);
-        }
-        // BARRIER
-        snrt_cluster_hw_barrier();
+    //     // MEASUREMENT TIME
+    //     if(snrt_cluster_core_idx() == 0){
+    //         barr_end = snrt_mcycle();
+    //         printf("BS %d \r\n", barr_start);
+    //         printf("BE %d \r\n", barr_end);
+    //     }
+    //     // BARRIER
+    //     snrt_cluster_hw_barrier();
 
-        // MOVE DATA FROM C0 TO C2
-        if (snrt_is_dm_core()) {
-            // Layout assignment
-            tcdm_c2_sb0 = (uint32_t *)snrt_cluster_base_addrl();
-            tcdm_c2_sb1 = tcdm_c2_sb0 + 16;
-            tcdm_c2_sb2 = tcdm_c2_sb1 + 16;
-            tcdm_c2_sb3 = tcdm_c2_sb2 + 16;
+    //     // MOVE DATA FROM C0 TO C2
+    //     if (snrt_is_dm_core()) {
+    //         // Layout assignment
+    //         tcdm_c2_sb0 = (uint32_t *)snrt_cluster_base_addrl();
+    //         tcdm_c2_sb1 = tcdm_c2_sb0 + 16;
+    //         tcdm_c2_sb2 = tcdm_c2_sb1 + 16;
+    //         tcdm_c2_sb3 = tcdm_c2_sb2 + 16;
 
-            printf("C2 TCDM ADDR %p \r\n", tcdm_c2_sb0);
+    //         printf("C2 TCDM ADDR %p \r\n", tcdm_c2_sb0);
 
-            size_t src_stride = 8 * sizeof(uint64_t);
-            size_t dst_stride = 4 * src_stride;
-            uint32_t num_of_rows_for_vectors = vec_num * 8;
+    //         size_t src_stride = 8 * sizeof(uint64_t);
+    //         size_t dst_stride = 4 * src_stride;
+    //         uint32_t num_of_rows_for_vectors = vec_num * 8;
 
-            uint32_t dma_start = snrt_mcycle();
+    //         uint32_t dma_start = snrt_mcycle();
 
-            // Initial AM loading
-            snrt_dma_start_2d(
-            // Destination address, source address
-                tcdm_c2_sb0, am_list,
-                // Size per chunk
-                src_stride,
-                // Destination stride, source stride
-                dst_stride, src_stride,
-                // Number of times to do
-                num_am_search
-            );
+    //         // Initial AM loading
+    //         snrt_dma_start_2d(
+    //         // Destination address, source address
+    //             tcdm_c2_sb0, am_list,
+    //             // Size per chunk
+    //             src_stride,
+    //             // Destination stride, source stride
+    //             dst_stride, src_stride,
+    //             // Number of times to do
+    //             num_am_search
+    //         );
 
-            // Data transferring
-            snrt_dma_start_2d(
-                // Destination address, source address
-                tcdm_c2_sb1, tcdm_c0_sb0,
-                // Size per chunk
-                src_stride,
-                // Destination stride, source stride
-                dst_stride, src_stride,
-                // Number of times to do
-                num_of_rows_for_vectors
-            );
+    //         // Data transferring
+    //         snrt_dma_start_2d(
+    //             // Destination address, source address
+    //             tcdm_c2_sb1, tcdm_c0_sb0,
+    //             // Size per chunk
+    //             src_stride,
+    //             // Destination stride, source stride
+    //             dst_stride, src_stride,
+    //             // Number of times to do
+    //             num_of_rows_for_vectors
+    //         );
 
-            snrt_dma_wait_all();
-            uint32_t dma_end = snrt_mcycle();
-            printf("C2DM %d  \r\n", dma_end - dma_start);
-        }
+    //         snrt_dma_wait_all();
+    //         uint32_t dma_end = snrt_mcycle();
+    //         printf("C2DM %d  \r\n", dma_end - dma_start);
+    //     }
 
-        // BARRIER
-        snrt_cluster_hw_barrier();
+    //     // BARRIER
+    //     snrt_cluster_hw_barrier();
 
         
-        if(snrt_cluster_core_idx() == 0){
-            // CONVERT AND COMPRESS
-            uint32_t start_convert = snrt_mcycle();
-            hypercorex_pack_512b(
-                vec_num,
-                tcdm_c2_sb1,
-                tcdm_c2_sb3
-            );
-            uint32_t end_convert = snrt_mcycle();
-            printf("C2CT %d\n", end_convert - start_convert);
-            // printf("D %d \n", (int8_t)*(tcdm_c2_sb2));
-            // printf("D %d \n", (int8_t)*(tcdm_c2_sb2 + 1));
-            // printf("D %d \n", (int8_t)*(tcdm_c2_sb2 + 2));
-            // printf("D %d \n", (int8_t)*(tcdm_c2_sb2 + 3));
-            // printf("D %d \n", (int8_t)*(tcdm_c2_sb2 + 4));
-            // printf("D %d \n", (int8_t)*(tcdm_c2_sb2 + 5));
-            // printf("D %d \n", (int8_t)*(tcdm_c2_sb2 + 6));
-            // printf("D %d \n", (int8_t)*(tcdm_c2_sb2 + 7));
-            // printf("D %d \n", (int8_t)*(tcdm_c2_sb2 + 8));
-            // printf("D %d \n", (int8_t)*(tcdm_c2_sb2 + 9));
+    //     if(snrt_cluster_core_idx() == 0){
+    //         // CONVERT AND COMPRESS
+    //         uint32_t start_convert = snrt_mcycle();
+    //         hypercorex_pack_512b(
+    //             vec_num,
+    //             tcdm_c2_sb1,
+    //             tcdm_c2_sb3
+    //         );
+    //         uint32_t end_convert = snrt_mcycle();
+    //         printf("C2CT %d\n", end_convert - start_convert);
+    //         // printf("D %d \n", (int8_t)*(tcdm_c2_sb2));
+    //         // printf("D %d \n", (int8_t)*(tcdm_c2_sb2 + 1));
+    //         // printf("D %d \n", (int8_t)*(tcdm_c2_sb2 + 2));
+    //         // printf("D %d \n", (int8_t)*(tcdm_c2_sb2 + 3));
+    //         // printf("D %d \n", (int8_t)*(tcdm_c2_sb2 + 4));
+    //         // printf("D %d \n", (int8_t)*(tcdm_c2_sb2 + 5));
+    //         // printf("D %d \n", (int8_t)*(tcdm_c2_sb2 + 6));
+    //         // printf("D %d \n", (int8_t)*(tcdm_c2_sb2 + 7));
+    //         // printf("D %d \n", (int8_t)*(tcdm_c2_sb2 + 8));
+    //         // printf("D %d \n", (int8_t)*(tcdm_c2_sb2 + 9));
             
-            // printf("D[4]=%d \n", (uint32_t)*(tcdm_c2_sb2 + 256 ));
-            // printf("D[5]=%d \n", (uint32_t)*(tcdm_c2_sb2 + 256 + 1));
-            // printf("D[6]=%d \n", (uint32_t)*(tcdm_c2_sb2 + 256 + 2));
-            // printf("D[7]=%d \n", (uint32_t)*(tcdm_c2_sb2 + 256 + 3));
+    //         // printf("D[4]=%d \n", (uint32_t)*(tcdm_c2_sb2 + 256 ));
+    //         // printf("D[5]=%d \n", (uint32_t)*(tcdm_c2_sb2 + 256 + 1));
+    //         // printf("D[6]=%d \n", (uint32_t)*(tcdm_c2_sb2 + 256 + 2));
+    //         // printf("D[7]=%d \n", (uint32_t)*(tcdm_c2_sb2 + 256 + 3));
 
 
-            // ACTIVATE HDC TASK
-            uint32_t hdc_cfg_start = snrt_mcycle();
-            // Configure streamer for the input
-            hypercorex_set_streamer_highdim_a(
-                (uint32_t)tcdm_c2_sb2,  // Base pointer low
-                0,                       // Base pointer high
-                8,                       // Spatial stride
-                vec_num,         // Inner loop bound
-                1,                       // Outer loop bound
-                256,                     // Inner loop stride
-                0                        // Outer loop stride
-            );
+    //         // ACTIVATE HDC TASK
+    //         uint32_t hdc_cfg_start = snrt_mcycle();
+    //         // Configure streamer for the input
+    //         hypercorex_set_streamer_highdim_a(
+    //             (uint32_t)tcdm_c2_sb2,  // Base pointer low
+    //             0,                       // Base pointer high
+    //             8,                       // Spatial stride
+    //             vec_num,         // Inner loop bound
+    //             1,                       // Outer loop bound
+    //             256,                     // Inner loop stride
+    //             0                        // Outer loop stride
+    //         );
 
-            // Configure streamer for the AM
-            hypercorex_set_streamer_highdim_am(
-                (uint32_t)tcdm_c2_sb0,  // Base pointer low
-                0,                       // Base pointer high
-                8,                       // Spatial stride
-                num_am_search,          // Inner loop bound
-                vec_num,                // Outer loop bound
-                256,                     // Inner loop stride
-                0                        // Outer loop stride
-            );
+    //         // Configure streamer for the AM
+    //         hypercorex_set_streamer_highdim_am(
+    //             (uint32_t)tcdm_c2_sb0,  // Base pointer low
+    //             0,                       // Base pointer high
+    //             8,                       // Spatial stride
+    //             num_am_search,          // Inner loop bound
+    //             vec_num,                // Outer loop bound
+    //             256,                     // Inner loop stride
+    //             0                        // Outer loop stride
+    //         );
 
-            // Configure streamer for low dim predictions
-            hypercorex_set_streamer_lowdim_predict(
-                (uint32_t)tcdm_c2_sb3,  // Base pointer low
-                0,                        // Base pointer high
-                1,                        // Spatial stride
-                vec_num,          // Inner loop bound
-                1,                        // Outer loop bound
-                256,                      // Inner loop stride
-                0                         // Outer loop stride
-            );
+    //         // Configure streamer for low dim predictions
+    //         hypercorex_set_streamer_lowdim_predict(
+    //             (uint32_t)tcdm_c2_sb3,  // Base pointer low
+    //             0,                        // Base pointer high
+    //             1,                        // Spatial stride
+    //             vec_num,          // Inner loop bound
+    //             1,                        // Outer loop bound
+    //             256,                      // Inner loop stride
+    //             0                         // Outer loop stride
+    //         );
 
-            // Start the streamers
-            hypercorex_start_streamer();
+    //         // Start the streamers
+    //         hypercorex_start_streamer();
 
-            //-------------------------------
-            // Configuring the Hypercorex
-            //-------------------------------
+    //         //-------------------------------
+    //         // Configuring the Hypercorex
+    //         //-------------------------------
 
-            // Load instructions for hypercorex
-            hypercorex_load_inst(5, 0, am_search_code);
+    //         // Load instructions for hypercorex
+    //         hypercorex_load_inst(5, 0, am_search_code);
 
-            // Set number of classes to be predicted
-            // During AM search mode
-            csrw_ss(HYPERCOREX_AM_NUM_PREDICT_REG_ADDR, num_am_search);
+    //         // Set number of classes to be predicted
+    //         // During AM search mode
+    //         csrw_ss(HYPERCOREX_AM_NUM_PREDICT_REG_ADDR, num_am_search);
 
-            // Enable loop mode to 2D
-            csrw_ss(HYPERCOREX_INST_LOOP_CTRL_REG_ADDR, 0x00000002);
+    //         // Enable loop mode to 2D
+    //         csrw_ss(HYPERCOREX_INST_LOOP_CTRL_REG_ADDR, 0x00000002);
 
-            // Set loop jump addresses
-            hypercorex_set_inst_loop_jump_addr(3, 0, 0);
+    //         // Set loop jump addresses
+    //         hypercorex_set_inst_loop_jump_addr(3, 0, 0);
 
-            // Set loop end addresses
-            hypercorex_set_inst_loop_end_addr(3, 4, 0);
+    //         // Set loop end addresses
+    //         hypercorex_set_inst_loop_end_addr(3, 4, 0);
 
-            // Set loop counts
-            hypercorex_set_inst_loop_count(num_am_search, vec_num, 0);
+    //         // Set loop counts
+    //         hypercorex_set_inst_loop_count(num_am_search, vec_num, 0);
 
-            // Write control registers
-            csrw_ss(HYPERCOREX_CORE_SET_REG_ADDR, 0x00000010);
+    //         // Write control registers
+    //         csrw_ss(HYPERCOREX_CORE_SET_REG_ADDR, 0x00000010);
 
-            uint32_t hdc_cfg_end = snrt_mcycle();
-            printf("C2CGT: %d\n", hdc_cfg_end - hdc_cfg_start);
+    //         uint32_t hdc_cfg_end = snrt_mcycle();
+    //         printf("C2CGT: %d\n", hdc_cfg_end - hdc_cfg_start);
 
 
-            uint32_t hdc_core_start = snrt_mcycle();
-            // Start hypercorex
-            csrw_ss(HYPERCOREX_CORE_SET_REG_ADDR, 0x00000011);
+    //         uint32_t hdc_core_start = snrt_mcycle();
+    //         // Start hypercorex
+    //         csrw_ss(HYPERCOREX_CORE_SET_REG_ADDR, 0x00000011);
 
-            // Poll the busy-state of Hypercorex
-            // Check both the Hypercorex and Streamer
-            while ( hypercorex_is_streamer_busy()) {
-            };
+    //         // Poll the busy-state of Hypercorex
+    //         // Check both the Hypercorex and Streamer
+    //         while ( hypercorex_is_streamer_busy()) {
+    //         };
 
-            // csrr_ss(STREAMER_BUSY_CSR)
-            uint32_t hdc_core_end = snrt_mcycle();
-            printf("C2CRT %d \r\n", hdc_core_end - hdc_core_start);
+    //         // csrr_ss(STREAMER_BUSY_CSR)
+    //         uint32_t hdc_core_end = snrt_mcycle();
+    //         printf("C2CRT %d \r\n", hdc_core_end - hdc_core_start);
 
-            csrw_ss(HYPERCOREX_CORE_SET_REG_ADDR, 0x00000040);
+    //         csrw_ss(HYPERCOREX_CORE_SET_REG_ADDR, 0x00000040);
 
-            printf("D %d \r\n",(uint32_t) * (tcdm_c2_sb3));
+    //         printf("D %d \r\n",(uint32_t) * (tcdm_c2_sb3));
 
-            printf("D finish!");
-            printf("D finish!");
-            printf("D finish!");
-            printf("D finish!");
-            printf("D finish!");
+    //         printf("D finish!");
+    //         printf("D finish!");
+    //         printf("D finish!");
+    //         printf("D finish!");
+    //         printf("D finish!");
             
 
-            // for (uint32_t i = 0; i < vec_num; i++) {
-            //     printf("D %d \n",(uint32_t) * (tcdm_c2_sb3 + i * 64));
-            // };
-        }
+    //         // for (uint32_t i = 0; i < vec_num; i++) {
+    //         //     printf("D %d \n",(uint32_t) * (tcdm_c2_sb3 + i * 64));
+    //         // };
+    //     }
 
-        // if(snrt_is_compute_core){
-        //     return_to_cva6_single_cluster(err);
-        // }
-        snrt_cluster_hw_barrier();
-    };
-    snrt_global_barrier();
+    //     // if(snrt_is_compute_core){
+    //     //     return_to_cva6_single_cluster(err);
+    //     // }
+    //     snrt_cluster_hw_barrier();
+    // };
+    // snrt_global_barrier();
     return err;
 }
