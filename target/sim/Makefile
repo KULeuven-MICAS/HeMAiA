@@ -203,7 +203,7 @@ clean-vlt: clean-work
 $(VSIM_BUILDDIR):
 	mkdir -p $@
 
-$(VSIM_BUILDDIR)/compile.vsim.tcl: testharness/testharness.sv $(BENDER_LOCK) | $(VSIM_BUILDDIR)
+$(VSIM_BUILDDIR)/compile.vsim.tcl: testharness/testharness.sv  | $(VSIM_BUILDDIR)
 	$(BENDER) script vsim $(VSIM_BENDER) --vlog-arg="$(VLOG_FLAGS) -work $(dir $@) " > $@
 	echo '$(VLOG) -work $(dir $@) $(TB_CC_SOURCES) -vv -ccflags "$(TB_CC_FLAGS)"' >> $@
 	echo 'return 0' >> $@
@@ -245,7 +245,7 @@ clean-vsim: clean-work
 $(VCS_BUILDDIR):
 	mkdir -p $@
 
-$(VCS_BUILDDIR)/compile.sh: testharness/testharness.sv $(BENDER_LOCK) | $(VCS_BUILDDIR)
+$(VCS_BUILDDIR)/compile.sh: testharness/testharness.sv | $(VCS_BUILDDIR)
 	mkdir -p $(VCS_BUILDDIR)
 	${BENDER} script vcs ${VCS_BENDER} --vlog-arg="${VLOGAN_FLAGS}" --vcom-arg="${VHDLAN_FLAGS}" > $@
 	chmod +x $@
