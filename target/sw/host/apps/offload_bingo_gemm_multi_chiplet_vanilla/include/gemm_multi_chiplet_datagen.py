@@ -168,6 +168,12 @@ def main():
         required=True,
         help="Select param config file kernel",
     )
+    parser.add_argument(
+        "--hwcfg",
+        type=pathlib.Path,
+        required=True,
+        help="Select hardware config file kernel",
+    )
     args = parser.parse_args()
 
     # Load param config file
