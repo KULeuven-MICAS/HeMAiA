@@ -340,93 +340,93 @@ int main() {
 
         snrt_cluster_hw_barrier();
 
-        //----------------------------
-        // Compute FC layer
-        //----------------------------
-        if (snrt_cluster_core_idx() == 0) {
-            // Set GEMMX configuration CSR
-            uint32_t subtraction_setting_fc =
-                gen_subtraction_config(subtraction_a_fc, subtraction_b_fc);
+    //     //----------------------------
+    //     // Compute FC layer
+    //     //----------------------------
+    //     if (snrt_cluster_core_idx() == 0) {
+    //         // Set GEMMX configuration CSR
+    //         uint32_t subtraction_setting_fc =
+    //             gen_subtraction_config(subtraction_a_fc, subtraction_b_fc);
 
-            uint32_t csr0_fc = gen_csr0_config(input_zp_i_fc, output_zp_i_fc,
-                                               max_int_i_fc, min_int_i_fc);
-            uint32_t csr1_fc = gen_csr1_config(double_round_i_fc);
+    //         uint32_t csr0_fc = gen_csr0_config(input_zp_i_fc, output_zp_i_fc,
+    //                                            max_int_i_fc, min_int_i_fc);
+    //         uint32_t csr1_fc = gen_csr1_config(double_round_i_fc);
 
-            start_cycle = snrt_mcycle();
+    //         start_cycle = snrt_mcycle();
 
-            set_gemmx_csr(8, 64, 1, subtraction_setting_fc, csr0_fc,
-                          csr1_fc, 588778812,
-                          67250211, -1252922048,
-                          1028264373,
-                          466306066,
-                          -1819985696,
-                          957777513,
-                          1807171125,
-                          -541852707,
-                          2034129355,
-                          64, 0);
+    //         set_gemmx_csr(8, 64, 1, subtraction_setting_fc, csr0_fc,
+    //                       csr1_fc, 588778812,
+    //                       67250211, -1252922048,
+    //                       1028264373,
+    //                       466306066,
+    //                       -1819985696,
+    //                       957777513,
+    //                       1807171125,
+    //                       -541852707,
+    //                       2034129355,
+    //                       64, 0);
 
-            // Set Streamer configuration CSR for conv2d
-            set_gemmx_streamer_csr(
-                1, 8, 8, 64,
-                64, 0, 1, 512,
-                1, 0, 1, 0,
-                1, 0, 0,
+    //         // Set Streamer configuration CSR for conv2d
+    //         set_gemmx_streamer_csr(
+    //             1, 8, 8, 64,
+    //             64, 0, 1, 512,
+    //             1, 0, 1, 0,
+    //             1, 0, 0,
 
-                1, 8, 8, 64,
-                64, 512, 1, 0,
-                0,
+    //             1, 8, 8, 64,
+    //             64, 512, 1, 0,
+    //             0,
 
-                1, 8, 64, 64,
-                1, 4096, 1, 0,
-                0,
+    //             1, 8, 64, 64,
+    //             1, 4096, 1, 0,
+    //             0,
 
-                8, 64, 64, 256,
-                1, 16384, 1, 0,
-                0,
+    //             8, 64, 64, 256,
+    //             1, 16384, 1, 0,
+    //             0,
 
-                8, 64, 64,
-                256, 1, 16384,
-                1, 0, 0,
+    //             8, 64, 64,
+    //             256, 1, 16384,
+    //             1, 0, 0,
 
-                0, 512, 49664,
-                33280, 49664, 0,
-                0, 0, 0,
-                0);
+    //             0, 512, 49664,
+    //             33280, 49664, 0,
+    //             0, 0, 0,
+    //             0);
 
-            end_cycle = snrt_mcycle();
+    //         end_cycle = snrt_mcycle();
 
-            printf("FCGT %d \r\n", end_cycle - start_cycle);
+    //         printf("FCGT %d \r\n", end_cycle - start_cycle);
 
-            // Set CSR to start GEMM
-            set_gemmx_start();
+    //         // Set CSR to start GEMM
+    //         set_gemmx_start();
 
-            // Set CSR to start Streamer for conv2d
-            set_gemmx_streamer_start();
-            // printf("Streamer and GeMM started \r\n");
-            write_csr_obs(0x00d);
+    //         // Set CSR to start Streamer for conv2d
+    //         set_gemmx_streamer_start();
+    //         // printf("Streamer and GeMM started \r\n");
+    //         write_csr_obs(0x00d);
 
-            // Poll until Streamer and GEMM accelerator finish
-            wait_gemmx_and_streamer();
+    //         // Poll until Streamer and GEMM accelerator finish
+    //         wait_gemmx_and_streamer();
 
-            performance_counter = read_gemmx_streamer_perf_counter();
-            printf("FCRT %d \r\n", performance_counter);
+    //         performance_counter = read_gemmx_streamer_perf_counter();
+    //         printf("FCRT %d \r\n", performance_counter);
 
-            //local_d8_fc output of the fc layer
-            barr_start = snrt_mcycle();
-        }
+    //         //local_d8_fc output of the fc layer
+    //         barr_start = snrt_mcycle();
+    //     }
 
-        // Measurement purposes
-        // asm volatile("" ::: "memory");
-        // c1_barr_start = snrt_mcycle();
-        // if(snrt_is_compute_core){
-        //     return_to_cva6_single_cluster(err);
-        // }
-        // BARRIER
-        snrt_cluster_hw_barrier();
-    };
+    //     // Measurement purposes
+    //     // asm volatile("" ::: "memory");
+    //     // c1_barr_start = snrt_mcycle();
+    //     // if(snrt_is_compute_core){
+    //     //     return_to_cva6_single_cluster(err);
+    //     // }
+    //     // BARRIER
+    //     snrt_cluster_hw_barrier();
+    // };
 
-    snrt_global_barrier();
+    // snrt_global_barrier();
 
     //----------------------------
     //----------------------------
