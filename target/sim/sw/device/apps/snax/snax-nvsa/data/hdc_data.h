@@ -1,6 +1,6 @@
 uint32_t num_am_search = 100;
 
-uint32_t vec_num = 1;
+uint32_t vec_num = 32;
 
 uint32_t am_search_code[5]  = {
 	2048,
