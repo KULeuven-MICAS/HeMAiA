@@ -424,9 +424,9 @@ int main() {
     //     // }
     //     // BARRIER
     //     snrt_cluster_hw_barrier();
-    // };
+    };
 
-    // snrt_global_barrier();
+    snrt_global_barrier();
 
     //----------------------------
     //----------------------------
