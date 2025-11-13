@@ -5,5 +5,5 @@
 // Fanchen Kong <fanchen.kong@kuleuven.be>
 
 {
-    length_data: 128
+    length_data: 2048,
 }
