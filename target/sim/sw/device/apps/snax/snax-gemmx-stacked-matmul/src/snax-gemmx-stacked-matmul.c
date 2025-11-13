@@ -8,7 +8,8 @@
 // the first layer is a matmul of 32x26 and 26x50
 // the second layer is a matmul of 32x50 and 50x26
 
-#include "data.h"
+#include "data_b16.h"
+// #include "data_b32.h"
 
 #include "snax-gemmx-params.h"
 
@@ -153,7 +154,7 @@ start_cycle = snrt_mcycle();
 
             snrt_dma_wait_all();
             printf(
-                "[FC]-DMA transfer cycle from DMA hardware counter %d  for "
+                "[MATMUL-2]-DMA transfer cycle from DMA hardware counter %d  for "
                 "B\r\n",
                 snrt_get_perf_counter(SNRT_PERF_CNT0));
             snrt_reset_perf_counter(SNRT_PERF_CNT0);
@@ -210,7 +211,7 @@ start_cycle = snrt_mcycle();
 
             end_cycle = snrt_mcycle();
 
-            printf("[FC]-CSR configuration cycle from mcycle: %d \r\n",
+            printf("[MATMUL-2]-CSR configuration cycle from mcycle: %d \r\n",
                    end_cycle - start_cycle);
 
             write_csr_obs(0x00b);
@@ -228,9 +229,10 @@ start_cycle = snrt_mcycle();
             wait_gemmx_and_streamer();
 
             performance_counter = read_gemmx_streamer_perf_counter();
-            printf("[FC]-Streamer performance counter: %d \r\n",
+            printf("[MATMUL-2]-Streamer performance counter: %d \r\n",
                    performance_counter);
-
+            printf("[MATMUL-2]-Streamer performance counter: %d \r\n",
+                   performance_counter);
             write_csr_obs(0x00c);
 
         };
