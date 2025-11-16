@@ -4,6 +4,8 @@
 //
 // Xiaoling Yi <xiaoling.yi@kuleuven.be>
 
+// Generated at 2025-11-12 21:03:19
+
 #pragma once
 
 // #define VERSACORE_DEBUG
@@ -13,67 +15,144 @@
 #define VERSACORE_DEBUG_PRINT(...)
 #endif
 
-// useful c macro for Versacore
-// highly coupled with the hardware parameters
 #define meshRow_0 32
+
 #define tileSize_0 4
+
 #define meshCol_0 32
 
 #define meshRow_1 1
-#define tileSize_1 32
-#define meshCol_1 16
+
+#define tileSize_1 8
+
+#define meshCol_1 64
+
+#define meshRow_2 4
+
+#define tileSize_2 8
+
+#define meshCol_2 64
+
+#define meshRow_3 8
+
+#define tileSize_3 8
+
+#define meshCol_3 64
+
+#define meshRow_4 4
+
+#define tileSize_4 64
+
+#define meshCol_4 4
 
 #define A_elem_len 8
+
 #define B_elem_len 8
+
 #define C_elem_len 32
+
 #define D32_elem_len 32
 
 #define versacore_serial_c_d_width 1024
 
 #define bankWidth 64
 
-// GEMM mode 16 channels are all used
-#define chanelEnA_0 65535
-// GEMV mode 4 channels are used, but safely pad to 8 for wide access
-#define chanelEnA_1 255
+#define channel_en_A_0_0 65535
 
-// GEMM mode 16 channels used
-#define chanelEnB_0_0 0
-// use the first 16 highest channels
-#define chanelEnB_0_1 65535
-// GEMV mode 64 channels used
-#define chanelEnB_1_0 4294967295
-#define chanelEnB_1_1 4294967295
+#define channel_en_A_1_0 255
 
-// serial output for C, need 32 cycles to output a data
-#define Ctlbound_0_0 (meshRow_0 * meshCol_0 * C_elem_len / versacore_serial_c_d_width)
-// one cycle output
-#define Ctlbound_1_0 1
+#define channel_en_A_2_0 255
 
-// 16 channels are all used
-#define c_spatial_bound_0_0 (versacore_serial_c_d_width / bankWidth)
-// 8 channels are used
-#define c_spatial_bound_0_1 (meshCol_1 * meshRow_1 * C_elem_len / bankWidth)
+#define channel_en_A_3_0 255
 
-// 16 channels are all used
-#define chanelEnC_0 65535
-// 8 channels used 
-#define chanelEnC_1 255
-// C null, streamer C disabled
-#define chanelEnC_C_null 0
+#define channel_en_A_4_0 4294967295
 
-// serial output for D32, need 32 cycles to output a data
-#define D32tlbound_0_0 (meshRow_0 * meshCol_0 * C_elem_len / versacore_serial_c_d_width)
-// one cycle output
-#define D32tlbound_1_0 1
+#define channel_en_B_0_0 0
 
-// 16 channels are all used
-#define d32_spatial_bound_0_0 (versacore_serial_c_d_width / bankWidth)
-#define d32_spatial_bound_0_1 (meshCol_1 * meshRow_1 * D32_elem_len / bankWidth)
+#define channel_en_B_0_1 65535
 
-// 16 channels are all used
-#define chanelEnD32_0 65535
-// 8 channels used
-#define chanelEnD32_1 255
-// D32 null, streamer D32 disabled
-#define chanelEnD32_C_null 0
+#define channel_en_B_1_0 4294967295
+
+#define channel_en_B_1_1 4294967295
+
+#define channel_en_B_2_0 4294967295
+
+#define channel_en_B_2_1 4294967295
+
+#define channel_en_B_3_0 4294967295
+
+#define channel_en_B_3_1 4294967295
+
+#define channel_en_B_4_0 0
+
+#define channel_en_B_4_1 4294967295
+
+#define Ctlstride0_0 128
+
+#define Ctlbound0_0 32
+
+#define channel_en_C_0_0 4294967295
+
+#define channel_en_C_null_0_0 0
+
+#define Ctlstride0_1 128
+
+#define Ctlbound0_1 2
+
+#define channel_en_C_1_0 4294967295
+
+#define channel_en_C_null_1_0 0
+
+#define Ctlstride0_2 128
+
+#define Ctlbound0_2 8
+
+#define channel_en_C_2_0 4294967295
+
+#define channel_en_C_null_2_0 0
+
+#define Ctlstride0_3 128
+
+#define Ctlbound0_3 16
+
+#define channel_en_C_3_0 4294967295
+
+#define channel_en_C_null_3_0 0
+
+#define Ctlstride0_4 64
+
+#define Ctlbound0_4 1
+
+#define channel_en_C_4_0 255
+
+#define channel_en_C_null_4_0 0
+
+#define D32tlstride0_0 128
+
+#define D32tlbound0_0 32
+
+#define channel_en_D32_0_0 4294967295
+
+#define D32tlstride0_1 128
+
+#define D32tlbound0_1 2
+
+#define channel_en_D32_1_0 4294967295
+
+#define D32tlstride0_2 128
+
+#define D32tlbound0_2 8
+
+#define channel_en_D32_2_0 4294967295
+
+#define D32tlstride0_3 128
+
+#define D32tlbound0_3 16
+
+#define channel_en_D32_3_0 4294967295
+
+#define D32tlstride0_4 64
+
+#define D32tlbound0_4 1
+
+#define channel_en_D32_4_0 255

@@ -9,8 +9,10 @@
 inline uint8_t get_current_chip_id() {
     uint32_t chip_id;
 # if __riscv_xlen == 64
-    // 64-bit system (CVA6), get chip_id from 0xf15
-    asm volatile("csrr %0, 0xf15" : "=r"(chip_id));
+    // 64-bit system (CVA6), get chip_id from 0xf16
+    // previously we got it from 0x15
+    // Now the new cva6 CSR for chip_id is 0xf16
+    asm volatile("csrr %0, 0xf16" : "=r"(chip_id));
 # else
     // 32-bit system, get chip_id from 0xbc2 (base_addrh)
     // and shift it to the right by 8 bits
@@ -36,9 +38,11 @@ inline uint8_t chip_loc_to_chip_id(uint8_t x, uint8_t y) {
 
 inline uint8_t *get_current_chip_baseaddress() {
 #if __riscv_xlen == 64
-    // 64-bit system (CVA6), get chip_id from 0xf15
+    // 64-bit system (CVA6), get chip_id from 0xf16
+    // previously we got it from 0x15
+    // Now the new cva6 CSR for chip_id is 0xf16
     uint32_t chip_id;
-    asm volatile("csrr %0, 0xf15" : "=r"(chip_id));
+    asm volatile("csrr %0, 0xf16" : "=r"(chip_id));
     return (uint8_t *)((uintptr_t)chip_id << 40);
 #else
     // 32-bit system, return 0 (not supported)

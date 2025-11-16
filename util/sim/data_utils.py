@@ -57,6 +57,10 @@ def format_scalar_define(uid, scalar):
     s = f'#define {uid.upper()} {scalar}'
     return s
 
+def format_scalar_define_no_capital(uid, scalar):
+    s = f'#define {uid} {scalar}'
+    return s
+
 
 def format_scalar_definition(type, uid, scalar):
     s = f'{type} {uid} = {scalar};'

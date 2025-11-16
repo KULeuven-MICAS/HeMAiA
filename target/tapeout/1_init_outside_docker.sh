@@ -3,12 +3,21 @@ script_dir="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 cfg_name="hemaia_tapeout.hjson"
 if [ ! -d "$script_dir/../../hw/hemaia/tech_cells_tsmc16" ]; then
     git clone https://github.com/IveanEx/tech_cells_tsmc16.git "$script_dir/../../hw/hemaia/tech_cells_tsmc16"
+else
+    cd $script_dir/../../hw/hemaia/tech_cells_tsmc16 || exit
+    git pull
 fi
 if [ ! -d "$script_dir/../../hw/hemaia/hemaia_d2d_link" ]; then
     git clone https://github.com/IveanEx/hemaia_d2d_link.git "$script_dir/../../hw/hemaia/hemaia_d2d_link"
+else
+    cd $script_dir/../../hw/hemaia/hemaia_d2d_link || exit
+    git pull
 fi
 if [ ! -d "$script_dir/dc_work_hemaia" ]; then
     git clone https://github.com/IveanEx/dc_work_hemaia.git "$script_dir/dc_work_hemaia"
+else
+    cd $script_dir/dc_work_hemaia || exit
+    git pull
 fi
 
 bender_local_file="$script_dir/../../Bender.local"

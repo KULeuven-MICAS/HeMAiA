@@ -72,7 +72,10 @@ _snitch_resume:
 # You may use rv64 instuctions in this block.
 _cva6_init:
     # Load the Chip ID to the register
-    csrr    s0, 0xf15
+    # Previously was 0xf15
+    # But 0xf15 is used by MCONFIGGPTR in new cva6
+    # So we use 0xf16 instead
+    csrr    s0, 0xf16
     # Transfer as mask by left shift 40 bits
     slli    s0, s0, 40
     # Set global pointer at the local
