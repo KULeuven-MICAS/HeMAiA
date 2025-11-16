@@ -13,7 +13,12 @@ int kernel_execution() {
     // Set up the tasks list
     // We set a maximum number of tasks to 64
     // Can be changed if needed
-    bingo_task_t* task_list[64] = {0};
+    #define MAX_TASKS 64
+    bingo_task_t **task_list = (bingo_task_t **)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(bingo_task_t) * MAX_TASKS);
+    if (!task_list) {
+        printf("Chip(%x, %x): [Host] Error: Cannot allocate task list.\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+        return -1;
+    }
     uint32_t num_tasks = 0;
 
     /////////////////////////

@@ -8,7 +8,7 @@
     array_shape: 1
     transposed_A: 0
     transposed_B: 0
-    K: 3
+    K: 8
     N: 1
     M: 2
     // these two will config the addNewC = 1
