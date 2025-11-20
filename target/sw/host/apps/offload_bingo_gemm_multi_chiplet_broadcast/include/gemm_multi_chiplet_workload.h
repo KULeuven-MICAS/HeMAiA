@@ -152,6 +152,7 @@ uint32_t __workload_versacore_multi_chiplet_broadcast(bingo_task_t** task_list) 
 
     // Assign args for the chiplet 0x00
     if (get_current_chip_id() == 0x00) {
+        printf("Setting args for chiplet 0x00\r\n");
         // Load A1 from mempool to L1 at chiplet 0x00
         BINGO_CHIPLET_LOCAL_AUTO(task_mempool_to_cluster_args_A1_chip_0x00)->src_addr_hi = HIGH32(A1_mp);
         BINGO_CHIPLET_LOCAL_AUTO(task_mempool_to_cluster_args_A1_chip_0x00)->src_addr_lo = LOW32(A1_mp);
