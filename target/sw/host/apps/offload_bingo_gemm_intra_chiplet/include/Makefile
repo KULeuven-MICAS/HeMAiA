@@ -16,7 +16,7 @@ BENDER   = bender
 SNITCH_ROOT = $(shell $(BENDER) path snitch_cluster)
 
 $(DATA_H): $(DATA_DIR)/gemm_datagen.py $(DATA_CFG) 
-	$< -c $(DATA_CFG) --hwcfg $(SNITCH_ROOT)/target/snitch_cluster/cfg/snax_versacore_cluster.hjson > $@
+	$< -c $(DATA_CFG) --hwcfg $(SNITCH_ROOT)/target/snitch_cluster/cfg/snax_versacore_to_cluster.hjson > $@
 
 .PHONY: clean-data clean
 
