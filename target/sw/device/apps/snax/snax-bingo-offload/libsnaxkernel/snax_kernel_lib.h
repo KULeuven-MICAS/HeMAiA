@@ -705,7 +705,9 @@ SNAX_LIB_DEFINE void __snax_kernel_versacore_load_compute_store_w_streamer_args(
             (uint32_t*)get_cls_shared_ptrs()[5][18],  // D32tlbound[] base
             (uint32_t*)get_cls_shared_ptrs()[5][19],  // D32tlstride[] base
             get_cls_shared_ptrs()[5][20],            // set_addr_remap_index_D32
-            (uint32_t*)get_cls_shared_ptrs()[5][21]  // channel_en_D32 []
+            (uint32_t*)get_cls_shared_ptrs()[5][21],  // channel_en_D32 []
+
+            0, 0, 0, 0, 0, 0, 0
         );
         // printf("[Cluster %d] Core(%d) Config Streamer\n",snrt_cluster_idx(),
         //        snrt_cluster_core_idx());
@@ -1310,7 +1312,9 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
             (uint32_t*)(get_cls_shared_ptrs()[5][18]),   // D32tlbound[] base
             (uint32_t*)(get_cls_shared_ptrs()[5][19]),   // D32tlstride[] base
             get_cls_shared_ptrs()[5][20],  // set_addr_remap_index_D32
-            (uint32_t*)(&get_cls_shared_ptrs()[5][21])  // channel_en_D32 []
+            (uint32_t*)(&get_cls_shared_ptrs()[5][21]),  // channel_en_D32 []
+
+            0, 0, 0, 0, 0, 0, 0
 
         );
 
@@ -1533,9 +1537,13 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_compute_only_intra_chiplet(void* arg) {
         get_cls_shared_ptrs()[5][4] = get_cls_shared_ptrs()[0][12];
         // channel_en_A []
         if (get_cls_shared_ptrs()[0][11] == 0) {
-            get_cls_shared_ptrs()[5][5] = chanelEnA_0;
-        } else {
-            get_cls_shared_ptrs()[5][5] = chanelEnA_1;
+            get_cls_shared_ptrs()[5][5] = channel_en_A_0_0;
+        } else if (get_cls_shared_ptrs()[0][11] == 1) {
+            get_cls_shared_ptrs()[5][5] = channel_en_A_1_0;
+        } else if (get_cls_shared_ptrs()[0][11] == 2) {
+            get_cls_shared_ptrs()[5][5] = channel_en_A_2_0;
+        } else if (get_cls_shared_ptrs()[0][11] == 3) {
+            get_cls_shared_ptrs()[5][5] = channel_en_A_3_0;
         }
         VERSACORE_DEBUG_PRINT(
             "GEMM Intra-Chiplet Kernel Compute Streamer Cfg A Done!\r\n");
@@ -1600,11 +1608,17 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_compute_only_intra_chiplet(void* arg) {
                                   (void*)channel_en_B);
         }
         if (get_cls_shared_ptrs()[0][11] == 0) {
-            channel_en_B[0] = chanelEnB_0_0;
-            channel_en_B[1] = chanelEnB_0_1;
-        } else {
-            channel_en_B[0] = chanelEnB_1_0;
-            channel_en_B[1] = chanelEnB_1_1;
+            channel_en_B[0] = channel_en_B_0_0;
+            channel_en_B[1] = channel_en_B_0_1;
+        } else if (get_cls_shared_ptrs()[0][11] == 1) {
+            channel_en_B[0] = channel_en_B_1_0;
+            channel_en_B[1] = channel_en_B_1_1;
+        } else if (get_cls_shared_ptrs()[0][11] == 2) {
+            channel_en_B[0] = channel_en_B_2_0;
+            channel_en_B[1] = channel_en_B_2_1;
+        } else if (get_cls_shared_ptrs()[0][11] == 3) {
+            channel_en_B[0] = channel_en_B_3_0;
+            channel_en_B[1] = channel_en_B_3_1;
         }
         get_cls_shared_ptrs()[5][11] = (uint32_t)(uintptr_t)channel_en_B;
         VERSACORE_DEBUG_PRINT(
@@ -1625,14 +1639,17 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_compute_only_intra_chiplet(void* arg) {
                                   (void*)Ctlbound);
         }
         get_cls_shared_ptrs()[5][13] = (uint32_t)(uintptr_t)Ctlbound;
-        // Ctlbound0
         if (get_cls_shared_ptrs()[0][14] == 1) {
             // accumPrevC is true
             Ctlbound[0] = 0;
-        } else if (get_cls_shared_ptrs()[0][11] == 0) {  // else bound is normal
-            Ctlbound[0] = Ctlbound_0_0;
-        } else {
-            Ctlbound[0] = Ctlbound_1_0;
+        } else if (get_cls_shared_ptrs()[0][11] == 0) { // else bound is normal
+            Ctlbound[0] = Ctlbound0_0;
+        } else if (get_cls_shared_ptrs()[0][11] == 1) {
+            Ctlbound[0] = Ctlbound0_1;
+        } else if (get_cls_shared_ptrs()[0][11] == 2) {
+            Ctlbound[0] = Ctlbound0_2;
+        } else if (get_cls_shared_ptrs()[0][11] == 3) {
+            Ctlbound[0] = Ctlbound0_3;
         }
         Ctlbound[1] = (get_cls_shared_ptrs()[0][10]);
         Ctlbound[2] = (get_cls_shared_ptrs()[0][8]);
@@ -1650,10 +1667,16 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_compute_only_intra_chiplet(void* arg) {
 
         if (get_cls_shared_ptrs()[0][11] == 0) {
             // Ctlstride0
-            Ctlstride[0] = c_spatial_bound_0_0 * (bankWidth / 8);
-        } else {
+            Ctlstride[0] = Ctlstride0_0;
+        } else if (get_cls_shared_ptrs()[0][11] == 1) {
             // Ctlstride0
-            Ctlstride[0] = c_spatial_bound_0_1 * (bankWidth / 8);
+            Ctlstride[0] = Ctlstride0_1;
+        } else if (get_cls_shared_ptrs()[0][11] == 2) {
+            // Ctlstride0
+            Ctlstride[0] = Ctlstride0_2;
+        } else if (get_cls_shared_ptrs()[0][11] == 3) {
+            // Ctlstride0
+            Ctlstride[0] = Ctlstride0_3;
         }
         // Ctlstride1
         Ctlstride[1] = C_elem_len * get_cls_shared_ptrs()[0][16] *
@@ -1668,13 +1691,16 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_compute_only_intra_chiplet(void* arg) {
         get_cls_shared_ptrs()[5][15] = 0;
         // channel_en_C []
         // set channel_en_C to zero if accumPrevC or addNonZeroC
-        if (get_cls_shared_ptrs()[0][14] == 1 ||
-            get_cls_shared_ptrs()[0][15] == 0) {
-            get_cls_shared_ptrs()[5][16] = chanelEnC_C_null;
+        if (get_cls_shared_ptrs()[0][14] == 1 || get_cls_shared_ptrs()[0][15] == 0) {
+            get_cls_shared_ptrs()[5][16] = channel_en_C_null_0_0;
         } else if (get_cls_shared_ptrs()[0][11] == 0) {
-            get_cls_shared_ptrs()[5][16] = chanelEnC_0;
-        } else {
-            get_cls_shared_ptrs()[5][16] = chanelEnC_1;
+            get_cls_shared_ptrs()[5][16] = channel_en_C_0_0;
+        } else if (get_cls_shared_ptrs()[0][11] == 1) {
+            get_cls_shared_ptrs()[5][16] = channel_en_C_1_0;
+        } else if (get_cls_shared_ptrs()[0][11] == 2) {
+            get_cls_shared_ptrs()[5][16] = channel_en_C_2_0;
+        } else if (get_cls_shared_ptrs()[0][11] == 3) {
+            get_cls_shared_ptrs()[5][16] = channel_en_C_3_0;
         }
         VERSACORE_DEBUG_PRINT(
             "GEMM Intra-Chiplet Kernel Compute Streamer Cfg C Done!\r\n");
@@ -1696,9 +1722,13 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_compute_only_intra_chiplet(void* arg) {
         get_cls_shared_ptrs()[5][18] = (uint32_t)(uintptr_t)D32tlbound;
         // D32tlbound0~3
         if (get_cls_shared_ptrs()[0][11] == 0) {
-            D32tlbound[0] = D32tlbound_0_0;
-        } else {
-            D32tlbound[0] = D32tlbound_1_0;
+            D32tlbound[0] = D32tlbound0_0;
+        } else if (get_cls_shared_ptrs()[0][11] == 1) {
+            D32tlbound[0] = D32tlbound0_1;
+        } else if (get_cls_shared_ptrs()[0][11] == 2) {
+            D32tlbound[0] = D32tlbound0_2;
+        } else if (get_cls_shared_ptrs()[0][11] == 3) {
+            D32tlbound[0] = D32tlbound0_3;
         }
         D32tlbound[1] = (get_cls_shared_ptrs()[0][10]);
         D32tlbound[2] = (get_cls_shared_ptrs()[0][8]);
@@ -1715,10 +1745,16 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_compute_only_intra_chiplet(void* arg) {
         get_cls_shared_ptrs()[5][19] = (uint32_t)(uintptr_t)D32tlstride;
         if (get_cls_shared_ptrs()[0][11] == 0) {
             // D32tlstride0
-            D32tlstride[0] = d32_spatial_bound_0_0 * (bankWidth / 8);
-        } else {
+            D32tlstride[0] = D32tlstride0_0;
+        } else if (get_cls_shared_ptrs()[0][11] == 1) {
             // D32tlstride0
-            D32tlstride[0] = d32_spatial_bound_0_1 * (bankWidth / 8);
+            D32tlstride[0] = D32tlstride0_1;
+        } else if (get_cls_shared_ptrs()[0][11] == 2) {
+            // D32tlstride0
+            D32tlstride[0] = D32tlstride0_2;
+        } else if (get_cls_shared_ptrs()[0][11] == 3) {
+            // D32tlstride0
+            D32tlstride[0] = D32tlstride0_3;
         }
         // D32tlstride1
         D32tlstride[1] = D32_elem_len * get_cls_shared_ptrs()[0][16] *
@@ -1733,9 +1769,13 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_compute_only_intra_chiplet(void* arg) {
         get_cls_shared_ptrs()[5][20] = 0;
         // channel_en_D32 []
         if (get_cls_shared_ptrs()[0][11] == 0) {
-            get_cls_shared_ptrs()[5][21] = chanelEnD32_0;
-        } else {
-            get_cls_shared_ptrs()[5][21] = chanelEnD32_1;
+            get_cls_shared_ptrs()[5][21] = channel_en_D32_0_0;
+        } else if (get_cls_shared_ptrs()[0][11] == 1) {
+            get_cls_shared_ptrs()[5][21] = channel_en_D32_1_0;
+        } else if (get_cls_shared_ptrs()[0][11] == 2) {
+            get_cls_shared_ptrs()[5][21] = channel_en_D32_2_0;
+        } else if (get_cls_shared_ptrs()[0][11] == 3) {
+            get_cls_shared_ptrs()[5][21] = channel_en_D32_3_0;
         }
         VERSACORE_DEBUG_PRINT(
             "GEMM Intra-Chiplet Kernel Compute Streamer Cfg D Done!\r\n");
@@ -1773,8 +1813,9 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_compute_only_intra_chiplet(void* arg) {
             (uint32_t*)(get_cls_shared_ptrs()[5][18]),   // D32tlbound[] base
             (uint32_t*)(get_cls_shared_ptrs()[5][19]),   // D32tlstride[] base
             get_cls_shared_ptrs()[5][20],  // set_addr_remap_index_D32
-            (uint32_t*)(&get_cls_shared_ptrs()[5][21])  // channel_en_D32 []
+            (uint32_t*)(&get_cls_shared_ptrs()[5][21]),  // channel_en_D32 []
 
+            0, 0, 0, 0, 0, 0, 0
         );
 
         set_versacore_csr(

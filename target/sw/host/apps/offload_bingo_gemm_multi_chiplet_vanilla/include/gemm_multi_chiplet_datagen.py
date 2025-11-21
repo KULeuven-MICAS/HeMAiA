@@ -134,7 +134,8 @@ def emit_matmul_data(**kwargs):
         pad_len_i = (-A_i.size) % 64
         if pad_len_i > 0:
             padded_A_i = np.pad(A_i, (0, pad_len_i), mode='constant', constant_values=0)
-
+        else:
+            padded_A_i = A_i
         # Apply transpose if needed
         if kwargs["transposed_A"] == 1:
             A_i = A_i.reshape(M, K, meshRow, tileSize)
