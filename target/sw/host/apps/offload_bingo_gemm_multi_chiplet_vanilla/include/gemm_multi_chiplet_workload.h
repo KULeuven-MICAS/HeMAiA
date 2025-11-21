@@ -235,6 +235,7 @@ uint32_t __workload_versacore_multi_chiplet(bingo_task_t** task_list,
         printf("gemm_args_chip_0x00 addr low : 0x%x\r\n",
                LOW32((uintptr_t)gemm_args_chip_0x00));
     }
+
     if (current_chip_id == 0x01) {
         printf(
             "Chip(%x, %x): [Host] Preparing gemm args for chiplet 0x%02x\r\n",

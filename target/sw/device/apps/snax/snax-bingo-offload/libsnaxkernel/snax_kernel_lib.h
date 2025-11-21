@@ -848,10 +848,25 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
             get_cls_shared_ptrs()[0][16] = meshRow_0;
             get_cls_shared_ptrs()[0][17] = tileSize_0;
             get_cls_shared_ptrs()[0][18] = meshCol_0;
-        } else {
+        } else if (get_cls_shared_ptrs()[0][11] == 1) {
             get_cls_shared_ptrs()[0][16] = meshRow_1;
             get_cls_shared_ptrs()[0][17] = tileSize_1;
             get_cls_shared_ptrs()[0][18] = meshCol_1;
+        } else if (get_cls_shared_ptrs()[0][11] == 2) {
+            get_cls_shared_ptrs()[0][16] = meshRow_2;
+            get_cls_shared_ptrs()[0][17] = tileSize_2;
+            get_cls_shared_ptrs()[0][18] = meshCol_2;
+        } else if (get_cls_shared_ptrs()[0][11] == 3) {
+            get_cls_shared_ptrs()[0][16] = meshRow_3;
+            get_cls_shared_ptrs()[0][17] = tileSize_3;
+            get_cls_shared_ptrs()[0][18] = meshCol_3;
+        } else if (get_cls_shared_ptrs()[0][11] == 4) {
+            get_cls_shared_ptrs()[0][16] = meshRow_4;
+            get_cls_shared_ptrs()[0][17] = tileSize_4;
+            get_cls_shared_ptrs()[0][18] = meshCol_4;
+        } else {
+            VERSACORE_DEBUG_PRINT("ERROR: array_shape_idx invalid!\r\n");
+            return;
         }
 
         // L1 data addresses for A
@@ -868,7 +883,9 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
             VERSACORE_DEBUG_PRINT("Allocated A at %p\r\n",
                                   (void*)get_cls_shared_ptrs()[1]);
         }
+
         // Call the idma to load the inputs
+        // TODO: align with the sparse interconnect address granularity
         l3_input_A_addr =
             make_u64(get_cls_shared_ptrs()[0][0], get_cls_shared_ptrs()[0][1]);
         xdma_memcpy_1d((void*)l3_input_A_addr, (void*)get_cls_shared_ptrs()[1],
@@ -889,6 +906,7 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
                                   (void*)get_cls_shared_ptrs()[2]);
         }
 
+        // TODO: align with the sparse interconnect address granularity
         l3_input_B_addr =
             make_u64(get_cls_shared_ptrs()[0][2], get_cls_shared_ptrs()[0][3]);
         xdma_memcpy_1d((void*)l3_input_B_addr, (void*)get_cls_shared_ptrs()[2],
@@ -901,6 +919,7 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
 
         // L1 data addresses for C
         // load C only if C_addr is not 0
+        // TODO: align with the sparse interconnect address granularity
         l3_input_C_addr =
             make_u64(get_cls_shared_ptrs()[0][4], get_cls_shared_ptrs()[0][5]);
         if (get_cls_shared_ptrs()[0][14]) {
@@ -1447,11 +1466,27 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm_compute_only_intra_chiplet(void* arg) {
             get_cls_shared_ptrs()[0][16] = meshRow_0;
             get_cls_shared_ptrs()[0][17] = tileSize_0;
             get_cls_shared_ptrs()[0][18] = meshCol_0;
-        } else {
+        } else if (get_cls_shared_ptrs()[0][11] == 1) {
             get_cls_shared_ptrs()[0][16] = meshRow_1;
             get_cls_shared_ptrs()[0][17] = tileSize_1;
             get_cls_shared_ptrs()[0][18] = meshCol_1;
+        } else if (get_cls_shared_ptrs()[0][11] == 2) {
+            get_cls_shared_ptrs()[0][16] = meshRow_2;
+            get_cls_shared_ptrs()[0][17] = tileSize_2;
+            get_cls_shared_ptrs()[0][18] = meshCol_2;
+        } else if (get_cls_shared_ptrs()[0][11] == 3) {
+            get_cls_shared_ptrs()[0][16] = meshRow_3;
+            get_cls_shared_ptrs()[0][17] = tileSize_3;
+            get_cls_shared_ptrs()[0][18] = meshCol_3;
+        } else if (get_cls_shared_ptrs()[0][11] == 4) {
+            get_cls_shared_ptrs()[0][16] = meshRow_4;
+            get_cls_shared_ptrs()[0][17] = tileSize_4;
+            get_cls_shared_ptrs()[0][18] = meshCol_4;
+        } else {
+            VERSACORE_DEBUG_PRINT("ERROR: array_shape_idx invalid!\r\n");
+            return;
         }
+
     }
 
     snrt_cluster_hw_barrier();
