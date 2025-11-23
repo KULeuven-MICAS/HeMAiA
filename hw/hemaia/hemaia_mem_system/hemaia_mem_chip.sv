@@ -196,6 +196,101 @@ module hemaia_mem_chip #(
   axi_a48_d512_i6_u1_resp_t axi_wide_xbar_to_dram_rsp;
   assign axi_wide_xbar_to_dram_rsp = '0;
 
+  ///////////////////////////////////////////////
+  //  IDMA at Mem Chip for the Broadcast Usage //
+  ///////////////////////////////////////////////
+
+  // burst request
+  typedef struct packed {
+    logic [3:0]      id;
+    logic [47:0]     src,         dst;
+    logic [47:0]     num_bytes;
+    axi_pkg::cache_t cache_src,   cache_dst;
+    axi_pkg::burst_t burst_src,   burst_dst;
+    logic            decouple_rw;
+    logic            deburst;
+    logic            serialize;
+  } idma_burst_req_t;
+
+  // local regbus definition
+  `REG_BUS_TYPEDEF_ALL(idma_cfg_reg_a48_d64, logic [47:0], logic [63:0], logic [7:0])
+
+  idma_burst_req_t idma_burst_req;
+  logic idma_be_valid;
+  logic idma_be_ready;
+  logic idma_be_idle;
+  logic idma_be_trans_complete;
+
+  idma_cfg_reg_a48_d64_req_t idma_cfg_reg_req;
+  idma_cfg_reg_a48_d64_rsp_t idma_cfg_reg_rsp;
+  axi_a48_d64_i4_u1_req_t axi_narrow_xbar_to_idma_cfg_req;
+  axi_a48_d64_i4_u1_resp_t axi_narrow_xbar_to_idma_cfg_rsp;
+
+  axi_to_reg #(
+      .ADDR_WIDTH(48),
+      .DATA_WIDTH(64),
+      .ID_WIDTH  (4),
+      .USER_WIDTH(1),
+      .axi_req_t (axi_a48_d64_i4_u1_req_t),
+      .axi_rsp_t (axi_a48_d64_i4_u1_resp_t),
+      .reg_req_t (idma_cfg_reg_a48_d64_req_t),
+      .reg_rsp_t (idma_cfg_reg_a48_d64_rsp_t)
+  ) i_axi_to_reg_sys_idma_cfg (
+      .clk_i(clk_host),
+      .rst_ni(rst_host_n),
+      .testmode_i(1'b0),
+      .axi_req_i(axi_narrow_xbar_to_idma_cfg_req),
+      .axi_rsp_o(axi_narrow_xbar_to_idma_cfg_rsp),
+      .reg_req_o(idma_cfg_reg_req),
+      .reg_rsp_i(idma_cfg_reg_rsp)
+  );
+
+  idma_reg64_frontend #(
+      .DmaAddrWidth  ('d64),
+      .dma_regs_req_t(idma_cfg_reg_a48_d64_req_t),
+      .dma_regs_rsp_t(idma_cfg_reg_a48_d64_rsp_t),
+      .burst_req_t   (idma_burst_req_t)
+  ) i_idma_reg64_frontend_sys_idma (
+      .clk_i           (clk_host),
+      .rst_ni          (rst_host_n),
+      .dma_ctrl_req_i  (idma_cfg_reg_req),
+      .dma_ctrl_rsp_o  (idma_cfg_reg_rsp),
+      .burst_req_o     (idma_burst_req),
+      .valid_o         (idma_be_valid),
+      .ready_i         (idma_be_ready),
+      .backend_idle_i  (idma_be_idle),
+      .trans_complete_i(idma_be_trans_complete)
+  );
+
+  axi_a48_d512_i4_u1_req_t  axi_idma_to_soc_xbar_req;
+  axi_a48_d512_i4_u1_resp_t axi_idma_to_soc_xbar_rsp;
+
+  axi_dma_backend #(
+      .DataWidth     (512),
+      .AddrWidth     (48),
+      .IdWidth       (4),
+      .AxReqFifoDepth('d64),
+      .TransFifoDepth('d16),
+      .BufferDepth   ('d3),
+      .axi_req_t     (axi_a48_d512_i4_u1_req_t),
+      .axi_res_t     (axi_a48_d512_i4_u1_resp_t),
+      .burst_req_t   (idma_burst_req_t),
+      .DmaIdWidth    ('d32),
+      .DmaTracing    (1'b1)
+  ) i_axi_dma_backend_sys_idma (
+      .clk_i           (clk_host),
+      .rst_ni          (rst_host_n),
+      .chip_id_i       (chip_id),
+      .dma_id_i        ('d0),
+      .axi_dma_req_o   (axi_idma_to_soc_xbar_req),
+      .axi_dma_res_i   (axi_idma_to_soc_xbar_rsp),
+      .burst_req_i     (idma_burst_req),
+      .valid_i         (idma_be_valid),
+      .ready_o         (idma_be_ready),
+      .backend_idle_o  (idma_be_idle),
+      .trans_complete_o(idma_be_trans_complete)
+  );
+
   //////////////////////
   //  HeMAiA D2D Link //
   //////////////////////
@@ -424,7 +519,7 @@ module hemaia_mem_chip #(
   //  Connection 2: AXI Wide XBAR //
   //////////////////////////////////
   localparam axi_pkg::xbar_cfg_t HeMAiAMemChipWideXbarCfg = '{
-      NoSlvPorts: 3,
+      NoSlvPorts: 4,
       NoMstPorts: 4,
       MaxSlvTrans: 16,
       MaxMstTrans: 16,
@@ -447,14 +542,30 @@ module hemaia_mem_chip #(
               end_addr: {chip_id, 40'h80000000 + MemSize}
           },
           '{idx: 1, start_addr: {chip_id, 40'hFFFFC000}, end_addr: {chip_id, 40'hFFFFD000}},
-          '{idx: 2, start_addr: {chip_id, 40'hFFFFB000}, end_addr: {chip_id, 40'hFFFFC000}},
+          // XDMA Handshake goes to 2
+          '{
+              idx: 2,
+              start_addr: {chip_id, 40'hFFFFB000},
+              end_addr: {chip_id, 40'hFFFFC000}
+          },
           '{idx: 2, start_addr: {chip_id, 40'hFFFFD000}, end_addr: {chip_id, 40'h100000000}},
-          '{idx: 2, start_addr: {chip_id, 40'h2000000}, end_addr: {chip_id, 40'h2010000}},
+          // Peripheral goes to 2
+          '{
+              idx: 2,
+              start_addr: {chip_id, 40'h2000000},
+              end_addr: {chip_id, 40'h2010000}
+          },
+          // IDMA Ctrl goes to 2
+          '{
+              idx: 2,
+              start_addr: {chip_id, 40'h5000000},
+              end_addr: {chip_id, 40'h5010000}
+          },
           '{idx: 3, start_addr: {chip_id, 40'h100000000}, end_addr: {chip_id, 40'hFFFFFFFFFF}}
       };
 
-  axi_a48_d512_i4_u1_req_t [2:0] master_to_axi_wide_xbar_req;
-  axi_a48_d512_i4_u1_resp_t [2:0] master_to_axi_wide_xbar_rsp;
+  axi_a48_d512_i4_u1_req_t [3:0] master_to_axi_wide_xbar_req;
+  axi_a48_d512_i4_u1_resp_t [3:0] master_to_axi_wide_xbar_rsp;
   axi_a48_d512_i6_u1_req_t [3:0] axi_wide_xbar_to_slave_req;
   axi_a48_d512_i6_u1_resp_t [3:0] axi_wide_xbar_to_slave_rsp;
 
@@ -470,6 +581,8 @@ module hemaia_mem_chip #(
   assign axi_wide_mem_sys_to_xbar_rsp = master_to_axi_wide_xbar_rsp[1];
   assign master_to_axi_wide_xbar_req[2] = axi_narrow_xbar_to_wide_xbar_dwc_req;
   assign axi_narrow_xbar_to_wide_xbar_dwc_rsp = master_to_axi_wide_xbar_rsp[2];
+  assign master_to_axi_wide_xbar_req[3] = axi_idma_to_soc_xbar_req;
+  assign axi_idma_to_soc_xbar_rsp = master_to_axi_wide_xbar_rsp[3];
 
   assign axi_soc_xbar_to_d2d_link_pre_id_conv_req = axi_wide_xbar_to_slave_req[0];
   assign axi_wide_xbar_to_slave_rsp[0] = axi_soc_xbar_to_d2d_link_pre_id_conv_rsp;
@@ -602,7 +715,7 @@ module hemaia_mem_chip #(
   ////////////////////////////////////
   localparam axi_pkg::xbar_cfg_t HeMAiAMemChipNarrowXbarCfg = '{
       NoSlvPorts: 2,
-      NoMstPorts: 3,
+      NoMstPorts: 4,
       MaxSlvTrans: 16,
       MaxMstTrans: 16,
       FallThrough: 0,
@@ -613,20 +726,21 @@ module hemaia_mem_chip #(
       UniqueIds: 0,
       AxiAddrWidth: 48,
       AxiDataWidth: 64,
-      NoAddrRules: 3
+      NoAddrRules: 4
   };
 
-  xbar_rule_48_t [2:0] HeMAiAMemChipNarrowXbarAddrmap;
+  xbar_rule_48_t [3:0] HeMAiAMemChipNarrowXbarAddrmap;
   assign HeMAiAMemChipNarrowXbarAddrmap = '{
           '{idx: 1, start_addr: {chip_id, 40'hFFFFB000}, end_addr: {chip_id, 40'hFFFFC000}},
           '{idx: 1, start_addr: {chip_id, 40'hFFFFD000}, end_addr: {chip_id, 40'h100000000}},
-          '{idx: 2, start_addr: {chip_id, 40'h2000000}, end_addr: {chip_id, 40'h2010000}}
+          '{idx: 2, start_addr: {chip_id, 40'h2000000}, end_addr: {chip_id, 40'h2010000}},
+          '{idx: 3, start_addr: {chip_id, 40'h5000000}, end_addr: {chip_id, 40'h5010000}}
       };
 
   axi_a48_d64_i3_u1_req_t  [1:0] master_to_axi_narrow_xbar_req;
   axi_a48_d64_i3_u1_resp_t [1:0] master_to_axi_narrow_xbar_rsp;
-  axi_a48_d64_i4_u1_req_t  [2:0] axi_narrow_xbar_to_slave_req;
-  axi_a48_d64_i4_u1_resp_t [2:0] axi_narrow_xbar_to_slave_rsp;
+  axi_a48_d64_i4_u1_req_t  [3:0] axi_narrow_xbar_to_slave_req;
+  axi_a48_d64_i4_u1_resp_t [3:0] axi_narrow_xbar_to_slave_rsp;
 
   assign master_to_axi_narrow_xbar_req[0] = axi_wide_xbar_to_narrow_xbar_dwc_iwc_req;
   assign axi_wide_xbar_to_narrow_xbar_dwc_iwc_rsp = master_to_axi_narrow_xbar_rsp[0];
@@ -639,6 +753,8 @@ module hemaia_mem_chip #(
   assign axi_narrow_xbar_to_slave_rsp[1] = axi_narrow_xbar_to_mem_sys_rsp;
   assign axi_narrow_xbar_to_periph_xbar_req = axi_narrow_xbar_to_slave_req[2];
   assign axi_narrow_xbar_to_slave_rsp[2] = axi_narrow_xbar_to_periph_xbar_rsp;
+  assign axi_narrow_xbar_to_idma_cfg_req = axi_narrow_xbar_to_slave_req[3];
+  assign axi_narrow_xbar_to_slave_rsp[3] = axi_narrow_xbar_to_idma_cfg_rsp;
 
   axi_xbar #(
       .Cfg          (HeMAiAMemChipNarrowXbarCfg),
