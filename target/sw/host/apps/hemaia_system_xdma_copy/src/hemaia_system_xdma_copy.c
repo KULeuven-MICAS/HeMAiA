@@ -45,8 +45,9 @@ int main() {
                    get_current_chip_loc_x(), get_current_chip_loc_y());
             return -1;
         } else {
-            printf("Chip(%x, %x): DRAM heap init succeeded!\r\n",
-                   get_current_chip_loc_x(), get_current_chip_loc_y());
+            printf("Chip(%x, %x): DRAM heap init succeeded at %lx\r\n",
+                   get_current_chip_loc_x(), get_current_chip_loc_y(),
+                   (uintptr_t)dram_heap_manager);
         }
         *(volatile O1HeapInstance**)(chiplet_addr_transform_loc(
             0xF, 0xF, (uintptr_t)&dram_heap_manager)) = dram_heap_manager;
@@ -55,25 +56,31 @@ int main() {
             // Wait for chip 0 to initialize the dram_heap_manager
             asm volatile("fence" ::: "memory");
         }
-        printf("Chip(%x, %x): DRAM heap manager is ready!\r\n",
-               get_current_chip_loc_x(), get_current_chip_loc_y());
+        printf("Chip(%x, %x): DRAM heap manager is ready at %lx\r\n",
+               get_current_chip_loc_x(), get_current_chip_loc_y(),
+               (uintptr_t)dram_heap_manager);
     }
-
-    chip_barrier(comm_buffer_ptr, 0x00, 0x10, 1);
 
     uint8_t* data_dest1;
-    data_dest1 = (uint8_t*)o1heapAllocate(dram_heap_manager, data_size);
-    if (!data_dest1) {
-        printf("The allocation of destination 1 at DRAM failed!\r\n");
-        return -1;
-    } else {
-        printf("The allocation of destination 1 at DRAM succeed!\r\n");
+
+    if (get_current_chip_id() == 0) {
+        // Only chip 0 performs the XDMA copy test
+        data_dest1 = (uint8_t*)o1heapAllocate(dram_heap_manager, data_size);
+        if (!data_dest1) {
+            printf("The allocation of destination 1 at DRAM failed!\r\n");
+            return -1;
+        } else {
+            printf("The allocation of destination 1 at DRAM succeed!\r\n");
+            *(volatile uint8_t**)(chiplet_addr_transform_loc(
+                0xF, 0xF, (uintptr_t)&data_dest1)) = data_dest1;
+        }
+        hemaia_xdma_memcpy_1d((uint8_t*)data, data_dest1, data_size);
+        uint32_t task_id = hemaia_xdma_start();
+        hemaia_xdma_remote_wait(task_id);
+        printf("XDMA copy finished to destination 1! \r\n");
     }
 
-    hemaia_xdma_memcpy_1d((uint8_t*)data, data_dest1, data_size);
-    uint32_t task_id = hemaia_xdma_start();
-    hemaia_xdma_remote_wait(task_id);
-    printf("XDMA copy finished to destination 1! \r\n");
+    chip_barrier(comm_buffer_ptr, 0x00, 0x11, 1);
 
     uint8_t* data_dest2;
     data_dest2 = (uint8_t*)o1heapAllocate(l3_heap_manager, data_size);
@@ -81,13 +88,20 @@ int main() {
         printf("The allocation of destination 2 at local SRAM failed!\r\n");
         return -1;
     } else {
-        printf("The allocation of destination 2 at local SRAM succeed!\r\n");
+        printf(
+            "The allocation of destination 2 at local SRAM succeed at %lx\r\n",
+            (uintptr_t)data_dest2);
     }
 
-    hemaia_xdma_memcpy_1d((uint8_t*)data_dest1, data_dest2, data_size);
-    task_id = hemaia_xdma_start();
-    hemaia_xdma_remote_wait(task_id);
-    printf("XDMA copy finished to destination 2! \r\n");
+    if (get_current_chip_id() == 0) {
+        sys_dma_blk_memcpy(
+            0x20,
+            chiplet_addr_transform_loc(0xF, 0xF, (uintptr_t)data_dest2),
+            chiplet_addr_transform_loc(0xF, 0xF, (uintptr_t)data_dest1),
+            data_size);
+        printf("IDMA broadcast copy finished to destination 2! \r\n");
+    }
+    chip_barrier(comm_buffer_ptr, 0x00, 0x11, 2);
 
     printf("Checking data correctness...\r\n");
     for (uint32_t i = 0; i < data_size; i++) {
@@ -98,7 +112,9 @@ int main() {
         }
     }
     printf("Data check passed!\n");
-    o1heapFree(dram_heap_manager, data_dest1);
+    if (get_current_chip_id() == 0) {
+        o1heapFree(dram_heap_manager, data_dest1);
+    }
     o1heapFree(l3_heap_manager, data_dest2);
     return 0;
 }
