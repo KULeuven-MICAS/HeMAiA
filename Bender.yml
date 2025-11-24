@@ -136,7 +136,7 @@ sources:
 
   - target: tsmc16_sim
     files:
-      - target/tapeout/dc_work_hemaia/outputs/hemaia_chip_mapped_retimed_lpo.v
+      - target/tapeout/dc_work_hemaia/outputs/hemaia_mapped_retimed_lpo.v
 
   # target/fpga
   - target: xilinx
