@@ -134,9 +134,9 @@ sources:
       - target/rtl/src/occamy_chip.sv
       - target/rtl/src/hemaia.sv
 
-  - target: hemaia_netlist
+  - target: tsmc16_sim
     files:
-      - target/tapeout/dc_work_hemaia/outputs/occamy_chip_mapped_retimed_lpo.v
+      - target/tapeout/dc_work_hemaia/outputs/hemaia_chip_mapped_retimed_lpo.v
 
   # target/fpga
   - target: xilinx
@@ -146,6 +146,11 @@ sources:
   # HeMAiA Mem Chip
   - target: hemaia_mem_chip
     files:
+      - hw/hemaia/hemaia_clk_rst_controller/regs/hemaia_clk_rst_controller_reg_pkg.sv
+      - hw/hemaia/hemaia_clk_rst_controller/regs/hemaia_clk_rst_controller_reg_top.sv
+      - hw/hemaia/hemaia_clk_rst_controller/hemaia_clock_divider.sv
+      - hw/hemaia/hemaia_clk_rst_controller/hemaia_reset_controller.sv
+      - hw/hemaia/hemaia_clk_rst_controller/hemaia_clk_rst_controller.sv
       - hw/hemaia/hemaia_mem_system/hemaia_mem_chip_xdma.sv
       - hw/hemaia/hemaia_mem_system/hemaia_mem_chip_xdma_wrapper.sv
       - hw/hemaia/hemaia_mem_system/hemaia_mem_system_for_mem_chip.sv
