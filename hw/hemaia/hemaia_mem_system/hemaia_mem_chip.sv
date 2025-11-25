@@ -6,6 +6,7 @@
 
 `include "axi/assign.svh"
 `include "axi/typedef.svh"
+`include "register_interface/typedef.svh"
 `include "common_cells/assertions.svh"
 
 module hemaia_mem_chip #(
@@ -78,7 +79,7 @@ module hemaia_mem_chip #(
 
 
   // Master Clock / clk_i: 3.6 GHz
-  // Clock Channel 0 / clk_o[0]: SRAM Clock = 3.6 GHz / 3 = 1.2 GHz
+  // Clock Channel 0 / clk_o[0]: SRAM Clock = 3.6 GHz / 4 = 0.9 GHz
   // Clock Channel 1 / clk_o[1]: West D2D TX Clock = 3.6 GHz
 
   `AXI_LITE_TYPEDEF_ALL_CT(axi_lite_a48_d32, axi_lite_a48_d32_req_t, axi_lite_a48_d32_rsp_t,
@@ -531,10 +532,10 @@ module hemaia_mem_chip #(
       UniqueIds: 0,
       AxiAddrWidth: 48,
       AxiDataWidth: 512,
-      NoAddrRules: 6
+      NoAddrRules: 7
   };
 
-  xbar_rule_48_t [5:0] HeMAiAMemChipWideXbarAddrmap;
+  xbar_rule_48_t [6:0] HeMAiAMemChipWideXbarAddrmap;
   assign HeMAiAMemChipWideXbarAddrmap = '{
           '{
               idx: 1,

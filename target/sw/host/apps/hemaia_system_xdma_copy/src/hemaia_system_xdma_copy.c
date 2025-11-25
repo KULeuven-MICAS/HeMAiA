@@ -10,7 +10,7 @@
 comm_buffer_t* comm_buffer_ptr = NULL;
 O1HeapInstance* l2_heap_manager = NULL;
 O1HeapInstance* l3_heap_manager = NULL;
-O1HeapInstance* dram_heap_manager = NULL;
+volatile O1HeapInstance* dram_heap_manager = NULL;
 
 int main() {
     uintptr_t current_chip_address_prefix =
@@ -65,7 +65,8 @@ int main() {
 
     if (get_current_chip_id() == 0) {
         // Only chip 0 performs the XDMA copy test
-        data_dest1 = (uint8_t*)o1heapAllocate(dram_heap_manager, data_size);
+        data_dest1 = (uint8_t*)o1heapAllocate(
+            (O1HeapInstance*)dram_heap_manager, data_size);
         if (!data_dest1) {
             printf("The allocation of destination 1 at DRAM failed!\r\n");
             return -1;
@@ -95,10 +96,8 @@ int main() {
 
     if (get_current_chip_id() == 0) {
         sys_dma_blk_memcpy(
-            0x20,
-            chiplet_addr_transform_loc(0xF, 0xF, (uintptr_t)data_dest2),
-            chiplet_addr_transform_loc(0xF, 0xF, (uintptr_t)data_dest1),
-            data_size);
+            0x20, chiplet_addr_transform_loc(0xF, 0xF, (uintptr_t)data_dest2),
+            (uintptr_t)data_dest1, data_size);
         printf("IDMA broadcast copy finished to destination 2! \r\n");
     }
     chip_barrier(comm_buffer_ptr, 0x00, 0x11, 2);
@@ -113,7 +112,7 @@ int main() {
     }
     printf("Data check passed!\n");
     if (get_current_chip_id() == 0) {
-        o1heapFree(dram_heap_manager, data_dest1);
+        o1heapFree((O1HeapInstance*)dram_heap_manager, data_dest1);
     }
     o1heapFree(l3_heap_manager, data_dest2);
     return 0;
