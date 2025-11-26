@@ -160,14 +160,14 @@ module testharness
 
   // Definition of tri_state bus
 % for chip in chip_coordinates:
-  tri [19:0] chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]+1}_${chip.coordinate[1]}_link[3];
+  tri [2:0][19:0] chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]+1}_${chip.coordinate[1]}_link;
   wire chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]+1}_${chip.coordinate[1]}_link_rts;
   wire chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]+1}_${chip.coordinate[1]}_link_cts;
   wire chip_${chip.coordinate[0]+1}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_rts;
   wire chip_${chip.coordinate[0]+1}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_cts;
   wire chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]+1}_${chip.coordinate[1]}_link_test_request;
   wire chip_${chip.coordinate[0]+1}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_test_request;
-  tri [19:0] chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]+1}_link[3];
+  tri [2:0][19:0] chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]+1}_link;
   wire chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]+1}_link_rts;
   wire chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]+1}_link_cts;
   wire chip_${chip.coordinate[0]}_${chip.coordinate[1]+1}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_rts;
@@ -277,8 +277,8 @@ module testharness
       .io_uart_rts_no(),
       .io_uart_cts_ni(const_zero),
       .io_gpio(),
-      .io_spis_sck_i(),
-      .io_spis_csb_i(),
+      .io_spis_sck_i(const_zero),
+      .io_spis_csb_i(const_zero),
       .io_spis_sd(),
       .io_spim_sck_o(),
       .io_spim_csb_o(),

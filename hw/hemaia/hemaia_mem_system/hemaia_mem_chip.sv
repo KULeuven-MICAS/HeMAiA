@@ -24,41 +24,41 @@ module hemaia_mem_chip #(
     parameter bit EnableNorthPhy = 0,
     parameter bit EnableSouthPhy = 0
 ) (
-    input  logic            clk_i,
-    input  logic            rst_ni,
-    input  chip_id_t        chip_id_i,
+    input  logic                 clk_i,
+    input  logic                 rst_ni,
+    input  chip_id_t             chip_id_i,
     // D2D Link - East side
-    input  logic            east_test_being_requested_i,
-    output logic            east_test_request_o,
-    output logic            flow_control_east_rts_o,
-    input  logic            flow_control_east_cts_i,
-    input  logic            flow_control_east_rts_i,
-    output logic            flow_control_east_cts_o,
-    inout  wire      [19:0] east_d2d_io                 [3],
+    input  logic                 east_test_being_requested_i,
+    output logic                 east_test_request_o,
+    output logic                 flow_control_east_rts_o,
+    input  logic                 flow_control_east_cts_i,
+    input  logic                 flow_control_east_rts_i,
+    output logic                 flow_control_east_cts_o,
+    inout  wire      [2:0][19:0] east_d2d_io,
     // D2D Link - West side
-    input  logic            west_test_being_requested_i,
-    output logic            west_test_request_o,
-    output logic            flow_control_west_rts_o,
-    input  logic            flow_control_west_cts_i,
-    input  logic            flow_control_west_rts_i,
-    output logic            flow_control_west_cts_o,
-    inout  wire      [19:0] west_d2d_io                 [3],
+    input  logic                 west_test_being_requested_i,
+    output logic                 west_test_request_o,
+    output logic                 flow_control_west_rts_o,
+    input  logic                 flow_control_west_cts_i,
+    input  logic                 flow_control_west_rts_i,
+    output logic                 flow_control_west_cts_o,
+    inout  wire      [2:0][19:0] west_d2d_io,
     // D2D Link - North side
-    input  logic            north_test_being_requested_i,
-    output logic            north_test_request_o,
-    output logic            flow_control_north_rts_o,
-    input  logic            flow_control_north_cts_i,
-    input  logic            flow_control_north_rts_i,
-    output logic            flow_control_north_cts_o,
-    inout  wire      [19:0] north_d2d_io                [3],
+    input  logic                 north_test_being_requested_i,
+    output logic                 north_test_request_o,
+    output logic                 flow_control_north_rts_o,
+    input  logic                 flow_control_north_cts_i,
+    input  logic                 flow_control_north_rts_i,
+    output logic                 flow_control_north_cts_o,
+    inout  wire      [2:0][19:0] north_d2d_io,
     // D2D Link - South side
-    input  logic            south_test_being_requested_i,
-    output logic            south_test_request_o,
-    output logic            flow_control_south_rts_o,
-    input  logic            flow_control_south_cts_i,
-    input  logic            flow_control_south_rts_i,
-    output logic            flow_control_south_cts_o,
-    inout  wire      [19:0] south_d2d_io                [3]
+    input  logic                 south_test_being_requested_i,
+    output logic                 south_test_request_o,
+    output logic                 flow_control_south_rts_o,
+    input  logic                 flow_control_south_cts_i,
+    input  logic                 flow_control_south_rts_i,
+    output logic                 flow_control_south_cts_o,
+    inout  wire      [2:0][19:0] south_d2d_io
 );
 
   ///////////////////
@@ -334,7 +334,7 @@ module hemaia_mem_chip #(
   );
 
   spm_1p_adv #(
-      .NumWords(NarrowSRAMSize/8),
+      .NumWords(NarrowSRAMSize / 8),
       .DataWidth(64),
       .ByteWidth(8),
       .EnableInputPipeline(1'b1),

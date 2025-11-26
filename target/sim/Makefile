@@ -149,10 +149,10 @@ OCCAMYGEN ?= $(ROOT)/util/occamygen/occamygen.py
 testharness/testharness.sv: testharness/testharness.sv.tpl $(CFG)
 	@echo "[OCCAMYGEN] Generate $@"
 
-ifneq ($(SIM_WITH_MACRO), 0)
-	@$(OCCAMYGEN) --cfg $(CFG) --outdir testharness --mem-macro-testharness-sv $<
-else ifneq ($(SIM_WITH_NETLIST), 0)
+ifneq ($(SIM_WITH_NETLIST), 0)
 	@$(OCCAMYGEN) --cfg $(CFG) --outdir testharness --netlist-testharness-sv $<
+else ifneq ($(SIM_WITH_MACRO), 0)
+	@$(OCCAMYGEN) --cfg $(CFG) --outdir testharness --mem-macro-testharness-sv $<
 else
 	@$(OCCAMYGEN) --cfg $(CFG) --outdir testharness --multichip-testharness-sv $<
 endif
