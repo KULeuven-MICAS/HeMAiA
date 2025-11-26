@@ -340,9 +340,9 @@ module hemaia_mem_chip #(
       .EnableInputPipeline(1'b1),
       .EnableOutputPipeline(1'b1),
       .sram_cfg_t(logic [0:0])
-  ) i_spm_narrow_cut (
-      .clk_i(clk_i),
-      .rst_ni(rst_ni),
+  ) i_hemaia_narrow_mem (
+      .clk_i(clk_host),
+      .rst_ni(rst_host_n),
       .valid_i(spm_narrow_req),
       .ready_o(spm_narrow_gnt),
       .we_i(spm_narrow_we),
