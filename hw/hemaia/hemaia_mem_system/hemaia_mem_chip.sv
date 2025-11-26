@@ -11,10 +11,11 @@
 
 module hemaia_mem_chip #(
     // XDMA Defines
-    parameter int unsigned ClusterAddressSpace = 48'h400000,
-    parameter int unsigned MemBaseAddr = 32'h80000000,
-    parameter int unsigned MemBankNum = 32,
-    parameter int unsigned MemSize = 32'h100000,
+    parameter int unsigned WideSRAMBaseAddr = 32'h80000000,
+    parameter int unsigned WideSRAMBankNum = 16,
+    parameter int unsigned WideSRAMSize = 32'h100000,
+    parameter int unsigned NarrowSRAMBaseAddr = 32'h70000000,
+    parameter int unsigned NarrowSRAMSize = 32'h8000,
     // Chip ID Type
     parameter type chip_id_t = logic [7:0],
     // D2D Link Phy Enables
@@ -171,10 +172,10 @@ module hemaia_mem_chip #(
       .axi_narrow_master_rsp_t(axi_a48_d64_i4_u1_resp_t),
       .axi_narrow_slave_req_t(axi_a48_d64_i3_u1_req_t),
       .axi_narrow_slave_rsp_t(axi_a48_d64_i3_u1_resp_t),
-      .ClusterAddressSpace(ClusterAddressSpace),
-      .MemBaseAddr(MemBaseAddr),
-      .MemBankNum(MemBankNum),
-      .MemSize(MemSize)
+      .ClusterAddressSpace(48'h400000),
+      .MemBaseAddr(WideSRAMBaseAddr),
+      .MemBankNum(WideSRAMBankNum),
+      .MemSize(WideSRAMSize)
   ) i_hemaia_mem_system (
       .clk_i                  (clk_host),
       .rst_ni                 (rst_host_n),
@@ -290,6 +291,68 @@ module hemaia_mem_chip #(
       .ready_o         (idma_be_ready),
       .backend_idle_o  (idma_be_idle),
       .trans_complete_o(idma_be_trans_complete)
+  );
+
+  /////////////////
+  //  Narrow SPM //
+  /////////////////
+  axi_a48_d64_i4_u1_req_t  axi_narrow_xbar_to_narrow_mem_req;
+  axi_a48_d64_i4_u1_resp_t axi_narrow_xbar_to_narrow_mem_rsp;
+
+  logic spm_narrow_req, spm_narrow_gnt;
+  logic [$clog2(NarrowSRAMSize)-1:0] spm_narrow_addr;
+  logic [                      63:0] spm_narrow_wdata;
+  logic [                       7:0] spm_narrow_strb;
+  logic                              spm_narrow_we;
+  logic                              spm_narrow_rvalid;
+  logic [                      63:0] spm_narrow_rdata;
+
+  axi_to_mem_interleaved #(
+      .axi_req_t(axi_a48_d64_i4_u1_req_t),
+      .axi_resp_t(axi_a48_d64_i4_u1_resp_t),
+      .AddrWidth($clog2(NarrowSRAMSize)),
+      .DataWidth(64),
+      .IdWidth(4),
+      .NumBanks(1),
+      .BufDepth(16)
+  ) i_axi_to_narrow_mem (
+      .clk_i(clk_host),
+      .rst_ni(rst_host_n),
+      .busy_o(),
+      .test_i('0),
+      .axi_req_i(axi_narrow_xbar_to_narrow_mem_req),
+      .axi_resp_o(axi_narrow_xbar_to_narrow_mem_rsp),
+      .mem_req_o(spm_narrow_req),
+      .mem_gnt_i(spm_narrow_gnt),
+      .mem_addr_o(spm_narrow_addr),
+      .mem_wdata_o(spm_narrow_wdata),
+      .mem_strb_o(spm_narrow_strb),
+      .mem_atop_o(),
+      .mem_we_o(spm_narrow_we),
+      .mem_rvalid_i(spm_narrow_rvalid),
+      .mem_rdata_i(spm_narrow_rdata)
+  );
+
+  spm_1p_adv #(
+      .NumWords(NarrowSRAMSize/8),
+      .DataWidth(64),
+      .ByteWidth(8),
+      .EnableInputPipeline(1'b1),
+      .EnableOutputPipeline(1'b1),
+      .sram_cfg_t(logic [0:0])
+  ) i_spm_narrow_cut (
+      .clk_i(clk_i),
+      .rst_ni(rst_ni),
+      .valid_i(spm_narrow_req),
+      .ready_o(spm_narrow_gnt),
+      .we_i(spm_narrow_we),
+      .addr_i(spm_narrow_addr[$clog2(NarrowSRAMSize)-1:3]),
+      .wdata_i(spm_narrow_wdata),
+      .be_i(spm_narrow_strb),
+      .rdata_o(spm_narrow_rdata),
+      .rvalid_o(spm_narrow_rvalid),
+      .rerror_o(),
+      .sram_cfg_i('0)
   );
 
   //////////////////////
@@ -532,15 +595,15 @@ module hemaia_mem_chip #(
       UniqueIds: 0,
       AxiAddrWidth: 48,
       AxiDataWidth: 512,
-      NoAddrRules: 7
+      NoAddrRules: 8
   };
 
-  xbar_rule_48_t [6:0] HeMAiAMemChipWideXbarAddrmap;
+  xbar_rule_48_t [7:0] HeMAiAMemChipWideXbarAddrmap;
   assign HeMAiAMemChipWideXbarAddrmap = '{
           '{
               idx: 1,
               start_addr: {chip_id, 40'h80000000},
-              end_addr: {chip_id, 40'h80000000 + MemSize}
+              end_addr: {chip_id, 40'h80000000 + WideSRAMSize}
           },
           '{idx: 1, start_addr: {chip_id, 40'hFFFFC000}, end_addr: {chip_id, 40'hFFFFD000}},
           // XDMA Handshake goes to 2
@@ -561,6 +624,12 @@ module hemaia_mem_chip #(
               idx: 2,
               start_addr: {chip_id, 40'h5000000},
               end_addr: {chip_id, 40'h5010000}
+          },
+          // narrow spm goes to 2
+          '{
+              idx: 2,
+              start_addr: {chip_id, 40'h70000000},
+              end_addr: {chip_id, 40'h70000000 + NarrowSRAMSize}
           },
           '{idx: 3, start_addr: {chip_id, 40'h100000000}, end_addr: {chip_id, 40'hFFFFFFFFFF}}
       };
@@ -716,7 +785,7 @@ module hemaia_mem_chip #(
   ////////////////////////////////////
   localparam axi_pkg::xbar_cfg_t HeMAiAMemChipNarrowXbarCfg = '{
       NoSlvPorts: 2,
-      NoMstPorts: 4,
+      NoMstPorts: 5,
       MaxSlvTrans: 16,
       MaxMstTrans: 16,
       FallThrough: 0,
@@ -727,21 +796,26 @@ module hemaia_mem_chip #(
       UniqueIds: 0,
       AxiAddrWidth: 48,
       AxiDataWidth: 64,
-      NoAddrRules: 4
+      NoAddrRules: 5
   };
 
-  xbar_rule_48_t [3:0] HeMAiAMemChipNarrowXbarAddrmap;
+  xbar_rule_48_t [4:0] HeMAiAMemChipNarrowXbarAddrmap;
   assign HeMAiAMemChipNarrowXbarAddrmap = '{
           '{idx: 1, start_addr: {chip_id, 40'hFFFFB000}, end_addr: {chip_id, 40'hFFFFC000}},
           '{idx: 1, start_addr: {chip_id, 40'hFFFFD000}, end_addr: {chip_id, 40'h100000000}},
           '{idx: 2, start_addr: {chip_id, 40'h2000000}, end_addr: {chip_id, 40'h2010000}},
-          '{idx: 3, start_addr: {chip_id, 40'h5000000}, end_addr: {chip_id, 40'h5010000}}
+          '{idx: 3, start_addr: {chip_id, 40'h5000000}, end_addr: {chip_id, 40'h5010000}},
+          '{
+              idx: 4,
+              start_addr: {chip_id, 40'h70000000},
+              end_addr: {chip_id, 40'h70000000 + NarrowSRAMSize}
+          }
       };
 
   axi_a48_d64_i3_u1_req_t  [1:0] master_to_axi_narrow_xbar_req;
   axi_a48_d64_i3_u1_resp_t [1:0] master_to_axi_narrow_xbar_rsp;
-  axi_a48_d64_i4_u1_req_t  [3:0] axi_narrow_xbar_to_slave_req;
-  axi_a48_d64_i4_u1_resp_t [3:0] axi_narrow_xbar_to_slave_rsp;
+  axi_a48_d64_i4_u1_req_t  [4:0] axi_narrow_xbar_to_slave_req;
+  axi_a48_d64_i4_u1_resp_t [4:0] axi_narrow_xbar_to_slave_rsp;
 
   assign master_to_axi_narrow_xbar_req[0] = axi_wide_xbar_to_narrow_xbar_dwc_iwc_req;
   assign axi_wide_xbar_to_narrow_xbar_dwc_iwc_rsp = master_to_axi_narrow_xbar_rsp[0];
@@ -756,6 +830,8 @@ module hemaia_mem_chip #(
   assign axi_narrow_xbar_to_slave_rsp[2] = axi_narrow_xbar_to_periph_xbar_rsp;
   assign axi_narrow_xbar_to_idma_cfg_req = axi_narrow_xbar_to_slave_req[3];
   assign axi_narrow_xbar_to_slave_rsp[3] = axi_narrow_xbar_to_idma_cfg_rsp;
+  assign axi_narrow_xbar_to_narrow_mem_req = axi_narrow_xbar_to_slave_req[4];
+  assign axi_narrow_xbar_to_slave_rsp[4] = axi_narrow_xbar_to_narrow_mem_rsp;
 
   axi_xbar #(
       .Cfg          (HeMAiAMemChipNarrowXbarCfg),
