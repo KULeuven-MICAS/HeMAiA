@@ -1399,6 +1399,7 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm(void* arg) {
     // the inputs are already in the local TCDM
     // Usage 1: All the matrix are not in L1, so the kernel will load all inputs using DMA
     // Usage 2: Some matrix are already in L1, so the kernel will skip loading those matrix and assume they are in the local TCDM already 
+
     // move the args to local variables
     if (snrt_is_dm_core()) {
         // allocate L1 memory for global variables across the cluster
@@ -1474,6 +1475,7 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm(void* arg) {
         // get_cls_shared_ptrs()[0][24] is used for local_B_addr
         // get_cls_shared_ptrs()[0][25] is used for local_C_addr
         // get_cls_shared_ptrs()[0][26] is used for local_D_addr
+
         if (accumPrevC) {
             arg_ptr[15] = 0;
         } else if (make_u64(C_addr_hi, C_addr_lo) != 0) {
@@ -1513,8 +1515,11 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm(void* arg) {
         uint32_t meshRow = arg_ptr[16];
         uint32_t tileSize = arg_ptr[17];
         uint32_t meshCol = arg_ptr[18];
+
         // We need to determine whether we need to use the dma to load the data from the other cores or 
         // the data has already been loaded into L1 by the other cores
+        // If the addr is in L1 range, we assume the data is already in L1
+        // Otherwise we need to use the DMA to load the data from the specified addr
         bool load_A = !((A_addr_lo > snrt_l1_start_addr()) && (A_addr_lo < snrt_l1_end_addr()));
         bool load_B = !((B_addr_lo > snrt_l1_start_addr()) && (B_addr_lo < snrt_l1_end_addr()));
         bool load_C = !((C_addr_lo > snrt_l1_start_addr()) && (C_addr_lo < snrt_l1_end_addr()));
@@ -1606,7 +1611,9 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm(void* arg) {
         get_cls_shared_ptrs()[0][26] = store_D? (uint32_t)get_cls_shared_ptrs()[4] : D_addr_lo;
 
     }
+
     snrt_cluster_hw_barrier();
+
     // Here all the cores can access the args from L1
     // Specifically the compute core will configure the streamer and versacore accoring to the following shared ptrs
     uint32_t* arg_ptr = get_cls_shared_ptrs()[0]; 
@@ -1621,10 +1628,14 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm(void* arg) {
     uint32_t transpose_A = arg_ptr[12];
     uint32_t transpose_B = arg_ptr[13];
     uint32_t accumPrevC = arg_ptr[14];
+
+    // some inferenced args
     uint32_t addNonZeroC = arg_ptr[15];
+
     uint32_t meshRow = arg_ptr[16];
     uint32_t tileSize = arg_ptr[17];
     uint32_t meshCol = arg_ptr[18];
+
     uint32_t load_A = arg_ptr[19];
     uint32_t load_B = arg_ptr[20];
     uint32_t load_C = arg_ptr[21];
@@ -1715,6 +1726,8 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm(void* arg) {
             get_cls_shared_ptrs()[5][5] = channel_en_A_2_0;
         } else if (array_shape_idx == 3) {
             get_cls_shared_ptrs()[5][5] = channel_en_A_3_0;
+        } else if (array_shape_idx == 4) {
+            get_cls_shared_ptrs()[5][5] = channel_en_A_4_0;
         }
         VERSACORE_DEBUG_PRINT(
             "GEMM Intra-Chiplet Kernel Compute Streamer Cfg A Done!\r\n");
@@ -1787,6 +1800,9 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm(void* arg) {
         } else if (array_shape_idx == 3) {
             channel_en_B[0] = channel_en_B_3_0;
             channel_en_B[1] = channel_en_B_3_1;
+        } else if (array_shape_idx == 4) {
+            channel_en_B[0] = channel_en_B_4_0;
+            channel_en_B[1] = channel_en_B_4_1;
         }
         get_cls_shared_ptrs()[5][11] = (uint32_t)(uintptr_t)channel_en_B;
         VERSACORE_DEBUG_PRINT(
@@ -1818,6 +1834,8 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm(void* arg) {
             Ctlbound[0] = Ctlbound0_2;
         } else if (array_shape_idx == 3) {
             Ctlbound[0] = Ctlbound0_3;
+        } else if (array_shape_idx == 4) {
+            Ctlbound[0] = Ctlbound0_4;
         }
         Ctlbound[1] = N;
         Ctlbound[2] = M;
@@ -1845,6 +1863,9 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm(void* arg) {
         } else if (array_shape_idx == 3) {
             // Ctlstride0
             Ctlstride[0] = Ctlstride0_3;
+        } else if (array_shape_idx == 4) {
+            // Ctlstride0
+            Ctlstride[0] = Ctlstride0_4;
         }
         // Ctlstride1
         Ctlstride[1] = C_elem_len * meshRow *
@@ -1869,6 +1890,8 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm(void* arg) {
             get_cls_shared_ptrs()[5][16] = channel_en_C_2_0;
         } else if (array_shape_idx == 3) {
             get_cls_shared_ptrs()[5][16] = channel_en_C_3_0;
+        } else if (array_shape_idx == 4) {
+            get_cls_shared_ptrs()[5][16] = channel_en_C_4_0;
         }
         VERSACORE_DEBUG_PRINT(
             "GEMM Intra-Chiplet Kernel Compute Streamer Cfg C Done!\r\n");
@@ -1897,6 +1920,8 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm(void* arg) {
             D32tlbound[0] = D32tlbound0_2;
         } else if (array_shape_idx == 3) {
             D32tlbound[0] = D32tlbound0_3;
+        } else if (array_shape_idx == 4) {
+            D32tlbound[0] = D32tlbound0_4;
         }
         D32tlbound[1] = N;
         D32tlbound[2] = M;
@@ -1923,6 +1948,9 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm(void* arg) {
         } else if (array_shape_idx == 3) {
             // D32tlstride0
             D32tlstride[0] = D32tlstride0_3;
+        } else if (array_shape_idx == 4) {
+            // D32tlstride0
+            D32tlstride[0] = D32tlstride0_4;
         }
         // D32tlstride1
         D32tlstride[1] = D32_elem_len * meshRow *
@@ -1944,6 +1972,8 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm(void* arg) {
             get_cls_shared_ptrs()[5][21] = channel_en_D32_2_0;
         } else if (array_shape_idx == 3) {
             get_cls_shared_ptrs()[5][21] = channel_en_D32_3_0;
+        } else if (array_shape_idx == 4) {
+            get_cls_shared_ptrs()[5][21] = channel_en_D32_4_0;
         }
         VERSACORE_DEBUG_PRINT(
             "GEMM Intra-Chiplet Kernel Compute Streamer Cfg D Done!\r\n");
@@ -1983,7 +2013,7 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm(void* arg) {
             get_cls_shared_ptrs()[5][20],  // set_addr_remap_index_D32
             (uint32_t*)(&get_cls_shared_ptrs()[5][21]),  // channel_en_D32 []
 
-            0, 0, 0, 0, 0, 0, 0
+            0, 0, 0, 0, 0, 0, 0, 0, 0
         );
 
         set_versacore_csr(
