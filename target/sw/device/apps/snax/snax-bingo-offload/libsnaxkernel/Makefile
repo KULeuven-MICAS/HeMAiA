@@ -26,4 +26,4 @@ clean-data:
 
 clean: clean-data
 
-# python3 gen_versacore_hw_param.py --hwcfg ../../../../../../../.bender/git/checkouts/snitch_cluster-9a64e6b3572c7a8d/target/snitch_cluster/cfg/snax_versacore_cluster.hjson > versacore_hw_param.h
+# python3 gen_versacore_hw_param.py --hwcfg ../../../../../../../.bender/git/checkouts/snitch_cluster-9a64e6b3572c7a8d/target/snitch_cluster/cfg/snax_versacore_to_cluster.hjson > versacore_hw_param.h
