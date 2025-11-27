@@ -40,10 +40,10 @@ uint32_t __workload_versacore_multi_chiplet(bingo_task_t** task_list,
     check_kernel_tab_ready();
     uint32_t check_results_func_addr =
         get_device_function("__snax_kernel_check_results");
-    uint32_t __snax_kernel_gemm_intra_chiplet_func_addr =
-        get_device_function("__snax_kernel_gemm_intra_chiplet");
+    uint32_t __snax_kernel_gemm_func_addr =
+        get_device_function("__snax_kernel_gemm");
     if (check_results_func_addr == SNAX_SYMTAB_END_FN_ADDR ||
-        __snax_kernel_gemm_intra_chiplet_func_addr == SNAX_SYMTAB_END_FN_ADDR) {
+        __snax_kernel_gemm_func_addr == SNAX_SYMTAB_END_FN_ADDR) {
         printf("Error: Kernel symbol lookup failed!\r\n");
     }
 
@@ -79,10 +79,8 @@ uint32_t __workload_versacore_multi_chiplet(bingo_task_t** task_list,
         }
 
         // D matrix (output)
-        O1HeapInstance* local_l3_heap_manager =
-            bingo_get_l3_heap_manager(current_chip_id);
         output_data_addr_chip_0x00 = (uintptr_t)o1heapAllocate(
-            local_l3_heap_manager, ARRAY_SIZE_BYTES(D1));
+            bingo_get_l3_heap_manager(current_chip_id), ARRAY_SIZE_BYTES(D1));
         gemm_args_chip_0x00[6] = HIGH32(output_data_addr_chip_0x00);
         gemm_args_chip_0x00[7] = LOW32(output_data_addr_chip_0x00);
         // Matrix dimensions
@@ -121,10 +119,8 @@ uint32_t __workload_versacore_multi_chiplet(bingo_task_t** task_list,
         }
 
         // D matrix (output)
-        O1HeapInstance* local_l3_heap_manager =
-            bingo_get_l3_heap_manager(current_chip_id);
         output_data_addr_chip_0x01 = (uintptr_t)o1heapAllocate(
-            local_l3_heap_manager, ARRAY_SIZE_BYTES(D2));
+            bingo_get_l3_heap_manager(current_chip_id), ARRAY_SIZE_BYTES(D2));
         gemm_args_chip_0x01[6] = HIGH32(output_data_addr_chip_0x01);
         gemm_args_chip_0x01[7] = LOW32(output_data_addr_chip_0x01);
         // Matrix dimensions
@@ -163,10 +159,8 @@ uint32_t __workload_versacore_multi_chiplet(bingo_task_t** task_list,
         }
 
         // D matrix (output)
-        O1HeapInstance* local_l3_heap_manager =
-            bingo_get_l3_heap_manager(current_chip_id);
         output_data_addr_chip_0x10 = (uintptr_t)o1heapAllocate(
-            local_l3_heap_manager, ARRAY_SIZE_BYTES(D3));
+            bingo_get_l3_heap_manager(current_chip_id), ARRAY_SIZE_BYTES(D3));
         gemm_args_chip_0x10[6] = HIGH32(output_data_addr_chip_0x10);
         gemm_args_chip_0x10[7] = LOW32(output_data_addr_chip_0x10);
         // Matrix dimensions
@@ -205,10 +199,8 @@ uint32_t __workload_versacore_multi_chiplet(bingo_task_t** task_list,
         }
 
         // D matrix (output)
-        O1HeapInstance* local_l3_heap_manager =
-            bingo_get_l3_heap_manager(current_chip_id);
         output_data_addr_chip_0x11 = (uintptr_t)o1heapAllocate(
-            local_l3_heap_manager, ARRAY_SIZE_BYTES(D4));
+            bingo_get_l3_heap_manager(current_chip_id), ARRAY_SIZE_BYTES(D4));
         gemm_args_chip_0x11[6] = HIGH32(output_data_addr_chip_0x11);
         gemm_args_chip_0x11[7] = LOW32(output_data_addr_chip_0x11);
         // Matrix dimensions
@@ -309,7 +301,7 @@ uint32_t __workload_versacore_multi_chiplet(bingo_task_t** task_list,
 
     // 2. Register the tasks
     bingo_task_t* task_versacore_chip_0x00 = bingo_task_create(
-        __snax_kernel_gemm_intra_chiplet_func_addr,
+        __snax_kernel_gemm_func_addr,
         (uint32_t)(uintptr_t)(gemm_args_chip_0x00), 0x00, cluster_id);
     if (task_versacore_chip_0x00 == NULL) {
         printf("Error: Task versacore creation failed!\r\n");
@@ -323,7 +315,7 @@ uint32_t __workload_versacore_multi_chiplet(bingo_task_t** task_list,
     }
 
     bingo_task_t* task_versacore_chip_0x01 = bingo_task_create(
-        __snax_kernel_gemm_intra_chiplet_func_addr,
+        __snax_kernel_gemm_func_addr,
         (uint32_t)(uintptr_t)(gemm_args_chip_0x01), 0x01, cluster_id);
     if (task_versacore_chip_0x01 == NULL) {
         printf("Error: Task versacore creation failed!\r\n");
@@ -337,7 +329,7 @@ uint32_t __workload_versacore_multi_chiplet(bingo_task_t** task_list,
     }
 
     bingo_task_t* task_versacore_chip_0x10 = bingo_task_create(
-        __snax_kernel_gemm_intra_chiplet_func_addr,
+        __snax_kernel_gemm_func_addr,
         (uint32_t)(uintptr_t)(gemm_args_chip_0x10), 0x10, cluster_id);
     if (task_versacore_chip_0x10 == NULL) {
         printf("Error: Task versacore creation failed!\r\n");
@@ -351,7 +343,7 @@ uint32_t __workload_versacore_multi_chiplet(bingo_task_t** task_list,
     }
 
     bingo_task_t* task_versacore_chip_0x11 = bingo_task_create(
-        __snax_kernel_gemm_intra_chiplet_func_addr,
+        __snax_kernel_gemm_func_addr,
         (uint32_t)(uintptr_t)(gemm_args_chip_0x11), 0x11, cluster_id);
     if (task_versacore_chip_0x11 == NULL) {
         printf("Error: Task versacore creation failed!\r\n");

@@ -31,14 +31,17 @@ int main() {
                get_current_chip_loc_x(), get_current_chip_loc_y());
     }
 
-    comm_buffer_ptr = bingo_get_l2_comm_buffer(current_chip_id);
-    l2_heap_manager = bingo_get_l2_heap_manager(current_chip_id);
-    l3_heap_manager = bingo_get_l3_heap_manager(current_chip_id);
+    comm_buffer_ptr = (comm_buffer_t*)bingo_get_l2_comm_buffer(current_chip_id);
+    l2_heap_manager =
+        (O1HeapInstance*)bingo_get_l2_heap_manager(current_chip_id);
+    l3_heap_manager =
+        (O1HeapInstance*)bingo_get_l3_heap_manager(current_chip_id);
 
     // Init external DRAM heap
     if (get_current_chip_id() == 0) {
-        dram_heap_manager = o1heapInit(
-            (void* const)(chiplet_addr_transform_loc(2, 0, SPM_WIDE_BASE_ADDR)),
+        dram_heap_manager = (volatile O1HeapInstance*)o1heapInit(
+            (const uint64_t)chiplet_addr_transform_loc(2, 0,
+                                                       SPM_WIDE_BASE_ADDR),
             64 * 1024 * 1024);  // 64 MB DRAM heap
         if (!dram_heap_manager) {
             printf("Chip(%x, %x): DRAM heap init failed!\r\n",
@@ -65,8 +68,8 @@ int main() {
 
     if (get_current_chip_id() == 0) {
         // Only chip 0 performs the XDMA copy test
-        data_dest1 = (uint8_t*)o1heapAllocate(
-            (O1HeapInstance*)dram_heap_manager, data_size);
+        data_dest1 = (uint8_t*)o1heapAllocate((const uint64_t)dram_heap_manager,
+                                              data_size);
         if (!data_dest1) {
             printf("The allocation of destination 1 at DRAM failed!\r\n");
             return -1;
@@ -84,7 +87,8 @@ int main() {
     chip_barrier(comm_buffer_ptr, 0x00, 0x11, 1);
 
     uint8_t* data_dest2;
-    data_dest2 = (uint8_t*)o1heapAllocate(l3_heap_manager, data_size);
+    data_dest2 =
+        (uint8_t*)o1heapAllocate((const uint64_t)l3_heap_manager, data_size);
     if (!data_dest2) {
         printf("The allocation of destination 2 at local SRAM failed!\r\n");
         return -1;
@@ -112,8 +116,9 @@ int main() {
     }
     printf("Data check passed!\n");
     if (get_current_chip_id() == 0) {
-        o1heapFree((O1HeapInstance*)dram_heap_manager, data_dest1);
+        o1heapFree((const uint64_t)dram_heap_manager,
+                   (const uint64_t)data_dest1);
     }
-    o1heapFree(l3_heap_manager, data_dest2);
+    o1heapFree((const uint64_t)l3_heap_manager, (const uint64_t)data_dest2);
     return 0;
 }
