@@ -7,18 +7,20 @@
 
 #include <stddef.h>
 #include <stdint.h>
-
+#include <stdbool.h>
 // Generic R/W IO
 #include "io.h"
 
+// Chipid
+#include "chip_id.h"
 // Occamy specific definitions
 #include "occamy_defs.h"
 #include "occamy_memory_map.h"
 #include "sys_dma.h"
-
+#include "uart.h"
 // Vendor
 // l1 heap allocator
-#include "o1heap.h"
+#include "o1heap64.h"
 // Forward declarations
 #include "snrt_l1_alloc_decls.h" // snrt l1 allocator using o1heap
 #include "bingo_decls.h"         // bingo offload dependency
@@ -46,7 +48,7 @@
 // #include "ssr.h"
 #include "sync.h"
 #include "team.h"
-#include "uart.h"
+
 #include "csr.h"
 
 #include "snrt_l1_alloc.h"

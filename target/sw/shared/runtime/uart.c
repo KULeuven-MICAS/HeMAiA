@@ -124,7 +124,7 @@ int printf(const char *fmt, ...) {
             case 'l': {  // Handle %lx
                 char next = *fmt ? *fmt++ : '\0';
                 if (next == 'x' || next == 'X') {
-                    unsigned long val = va_arg(ap, unsigned long);
+                    uint64_t val = va_arg(ap, uint64_t);
                     uint32_t hi = (uint32_t)(val >> 32);
                     uint32_t lo = (uint32_t)(val & 0xffffffffUL);
                     total += print_unsigned(hi, 16, (next == 'X'), 4, 1);

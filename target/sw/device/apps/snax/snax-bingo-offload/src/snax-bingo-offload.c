@@ -17,6 +17,7 @@ int main(){
             *((volatile uint32_t *)kernel_tab_start_addr) = (uint32_t)(uintptr_t)&__snax_symtab_start;
             *((volatile uint32_t *)kernel_tab_end_addr)   = (uint32_t)(uintptr_t)&__snax_symtab_end;
             *((volatile uint32_t *)kernel_tab_ready_addr) = 1;
+
         }
     }
     snrt_global_barrier();

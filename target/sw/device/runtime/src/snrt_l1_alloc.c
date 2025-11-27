@@ -22,6 +22,6 @@
 
 // __attribute__((section(".cbss"))) snrt_l1_allocator_t l1_allocator;
 
-extern uint32_t *snrt_l1_malloc(uint32_t size);
-extern void snrt_l1_free(uint32_t *addr);
+extern uint32_t snrt_l1_malloc(uint32_t size);
+extern void snrt_l1_free(uint32_t addr);
 extern void snrt_l1_malloc_init();
