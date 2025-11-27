@@ -223,10 +223,19 @@ static inline void bingo_task_reset_deps(bingo_task_t *t) {
 int bingo_hemaia_system_mmap_init();
 
 // Getters for heap managers
-O1HeapInstance32 *bingo_get_l1_heap_manager(uint8_t chip_id, uint32_t cluster_id);
-comm_buffer_t *bingo_get_l2_comm_buffer(uint8_t chip_id);
-O1HeapInstance *bingo_get_l2_heap_manager(uint8_t chip_id);
-O1HeapInstance *bingo_get_l3_heap_manager(uint8_t chip_id);
+uint64_t bingo_get_l2_comm_buffer(uint8_t chip_id);
+uint64_t bingo_get_l2_heap_manager(uint8_t chip_id);
+uint64_t bingo_get_l3_heap_manager(uint8_t chip_id);
+uint64_t bingo_get_l1_heap_manager(uint8_t chip_id, uint32_t cluster_id);
+
+// Allocator API
+uint64_t bingo_l1_alloc(uint8_t chip_id, uint32_t cluster_id, uint64_t size);
+uint64_t bingo_l2_alloc(uint8_t chip_id, uint64_t size);
+uint64_t bingo_l3_alloc(uint8_t chip_id, uint64_t size);
+void bingo_l1_free(uint8_t chip_id, uint32_t cluster_id, uint64_t ptr);
+void bingo_l2_free(uint8_t chip_id, uint64_t ptr);
+void bingo_l3_free(uint8_t chip_id, uint64_t ptr);
+
 
 // Mailbox read/write functions
 /////////////////////////////////////

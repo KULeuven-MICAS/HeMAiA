@@ -75,8 +75,8 @@ LIBBINGO_DIR = $(abspath $(RUNTIME_DIR)/libbingo)
 
 # libbingo
 INCDIRS += $(LIBBINGO_DIR)/include
-INCDIRS += $(SWDIR)/shared/vendor/o1heap/o1heap
-INCDIRS += $(SWDIR)/host/runtime/o1heap32
+INCDIRS += $(SWDIR)/shared/vendor/o1heap/o1heap64
+# INCDIRS += $(SWDIR)/host/runtime/o1heap32
 BINGO_LIB_DIR = $(LIBBINGO_DIR)/build
 BINGO_LIB_NAME = bingo
 BINGO_LIB = $(BINGO_LIB_DIR)/lib$(BINGO_LIB_NAME).a

@@ -18,55 +18,80 @@ uint64_t global_task_id = 0; // Internal monotonically increasing id source, not
 
 int bingo_hemaia_system_mmap_init(){
     // comm_buffer assignment: Begin from SPM_NARROW_BASE_ADDR and initialize to zero
-    comm_buffer_t* comm_buffer = (comm_buffer_t *)chiplet_addr_transform(SPM_NARROW_BASE_ADDR);
-    printf("Chip(%x, %x): [Host] Comm buffer addr: %lx\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), (uintptr_t)comm_buffer);
+    uint64_t comm_buffer = chiplet_addr_transform(SPM_NARROW_BASE_ADDR);
+    printf("Chip(%x, %x): [Host] Comm buffer addr: %lx\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), comm_buffer);
     // L2 heap init
     // Start addr is the spm narrow
     // Size is half of the narrow spm
     // The rest is leave to stack
-    uintptr_t l2_heap_start = ALIGN_UP((uintptr_t)comm_buffer + sizeof(comm_buffer_t), O1HEAP_ALIGNMENT);
-    size_t l2_heap_size = ALIGN_UP(NARROW_SPM_SIZE / 2, O1HEAP_ALIGNMENT);
-    O1HeapInstance *l2_heap_manager = o1heapInit((void *)l2_heap_start, l2_heap_size);
-    printf("Chip(%x, %x): [Host] L2 heap start: %lx, size(kB): %d\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), l2_heap_start, l2_heap_size>>10);
+    uint64_t l2_heap_start = ALIGN_UP(comm_buffer + sizeof(comm_buffer_t), O1HEAP_ALIGNMENT);
+    uint64_t l2_heap_size = ALIGN_UP(NARROW_SPM_SIZE / 2, O1HEAP_ALIGNMENT);
+    uint64_t l2_heap_manager = o1heapInit(l2_heap_start, l2_heap_size);
+    printf("Chip(%x, %x): [Host] L2 heap start: %lx, size(kB): %d\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), l2_heap_manager, l2_heap_size>>10);
     // printf("Chip(%x, %x): [Host] L2 heap start: %lx, size: %lx, heap manager: 0x%lx\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), l2_heap_start, l2_heap_size, l2_heap_manager);
-    if(!l2_heap_manager) {
+    if(l2_heap_manager==0UL) {
         printf("Error when initializing L2 heap. \r\n");
         return -1;
     }
     // L3 heap init
     // Start addr is the l3 heap start symbol aligned to 1KB
     // Size is from l3 heap start to wide spm end aligned down 1KB
-    uintptr_t l3_heap_start = ALIGN_UP(chiplet_addr_transform((uint64_t)(&__l3_heap_start)), SPM_WIDE_ALIGNMENT);
-    size_t l3_heap_size = ALIGN_DOWN(chiplet_addr_transform((uint64_t)(&__wide_spm_end)-SPM_WIDE_ALIGNMENT), SPM_WIDE_ALIGNMENT) - l3_heap_start;
-    O1HeapInstance *l3_heap_manager = o1heapInit((void *)l3_heap_start, l3_heap_size);
-    printf("Chip(%x, %x): [Host] L3 heap start: %lx, size(kB): %d\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), l3_heap_start, l3_heap_size>>10);
+    uint64_t l3_heap_start = ALIGN_UP(chiplet_addr_transform((uint64_t)(&__l3_heap_start)), SPM_WIDE_ALIGNMENT);
+    uint64_t l3_heap_size = ALIGN_DOWN(chiplet_addr_transform((uint64_t)(&__wide_spm_end)-SPM_WIDE_ALIGNMENT), SPM_WIDE_ALIGNMENT) - l3_heap_start;
+    uint64_t l3_heap_manager = o1heapInit(l3_heap_start, l3_heap_size);
+    printf("Chip(%x, %x): [Host] L3 heap start: %lx, size(kB): %d\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), l3_heap_manager, l3_heap_size>>10);
     // printf("Chip(%x, %x): [Host] L3 heap start: %lx, size: %lx, heap manager: 0x%lx\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), l3_heap_start, l3_heap_size, l3_heap_manager);
-    if(!l3_heap_manager) {
+    if(l3_heap_manager==0UL) {
         printf("Error when initializing L3 heap.\r\n");
         return -1;
     }
     return 0;
 }
 
-O1HeapInstance32 *bingo_get_l1_heap_manager(uint8_t chip_id, uint32_t cluster_id){
+uint64_t bingo_get_l1_heap_manager(uint8_t chip_id, uint32_t cluster_id){
     // Notice the l1 heap is init by the cluster at the start of the TCDM of each cluster
     // Here we hack the o1heap sw to force a 32bit version of heap manager so that the host can access to the correct
     // heap information from the O1HeapInstanc32 structure
-    return (O1HeapInstance32 *)chiplet_addr_transform_full(chip_id, (uint64_t)cluster_tcdm_start_addr(cluster_id));
+    return chiplet_addr_transform_full(chip_id, (uint64_t)cluster_tcdm_start_addr(cluster_id));
 }
 
 
-comm_buffer_t *bingo_get_l2_comm_buffer(uint8_t chip_id){
-    return (comm_buffer_t *)chiplet_addr_transform_full(chip_id, (uintptr_t)SPM_NARROW_BASE_ADDR);
+uint64_t bingo_get_l2_comm_buffer(uint8_t chip_id){
+    return chiplet_addr_transform_full(chip_id, (uintptr_t)SPM_NARROW_BASE_ADDR);
 }
 
-O1HeapInstance *bingo_get_l2_heap_manager(uint8_t chip_id){
-    return (O1HeapInstance *)chiplet_addr_transform_full(chip_id, ALIGN_UP((uintptr_t)SPM_NARROW_BASE_ADDR + sizeof(comm_buffer_t), O1HEAP_ALIGNMENT));
+uint64_t bingo_get_l3_heap_manager(uint8_t chip_id){
+    return chiplet_addr_transform_full(chip_id, ALIGN_UP(chiplet_addr_transform((uint64_t)(&__l3_heap_start)), SPM_WIDE_ALIGNMENT));
 }
 
-O1HeapInstance *bingo_get_l3_heap_manager(uint8_t chip_id){
-    return (O1HeapInstance *)chiplet_addr_transform_full(chip_id, ALIGN_UP(chiplet_addr_transform((uint64_t)(&__l3_heap_start)), SPM_WIDE_ALIGNMENT));
+uint64_t bingo_get_l2_heap_manager(uint8_t chip_id){
+    return chiplet_addr_transform_full(chip_id, ALIGN_UP((uintptr_t)SPM_NARROW_BASE_ADDR + sizeof(comm_buffer_t), O1HEAP_ALIGNMENT));
 }
+
+uint64_t bingo_l1_alloc(uint8_t chip_id, uint32_t cluster_id, uint64_t size){
+    return o1heapAllocate(bingo_get_l1_heap_manager(chip_id, cluster_id), size);
+}
+
+uint64_t bingo_l2_alloc(uint8_t chip_id, uint64_t size){
+    return o1heapAllocate(bingo_get_l2_heap_manager(chip_id), size);
+}
+
+uint64_t bingo_l3_alloc(uint8_t chip_id, uint64_t size){
+    return o1heapAllocate(bingo_get_l3_heap_manager(chip_id), size);
+}
+
+void bingo_l1_free(uint8_t chip_id, uint32_t cluster_id, uint64_t ptr){
+    o1heapFree(bingo_get_l1_heap_manager(chip_id, cluster_id), ptr);
+}
+
+void bingo_l2_free(uint8_t chip_id, uint64_t ptr){
+    o1heapFree(bingo_get_l2_heap_manager(chip_id), ptr);
+}
+
+void bingo_l3_free(uint8_t chip_id, uint64_t ptr){
+    o1heapFree(bingo_get_l3_heap_manager(chip_id), ptr);
+}
+
 
 //////////////////////////
 // Mailbox API          //
@@ -230,7 +255,7 @@ int bingo_read_c2h_mailbox(uint32_t *buffer, uint64_t timeout_cycles, uint32_t *
 // Task creation initializes counters & clears successor lists.
 bingo_task_t *bingo_task_create(uint32_t fn_ptr, uint32_t args_ptr, uint8_t assigned_chip_id, uint8_t assigned_cluster_id) {
 
-    bingo_task_t *task = o1heapAllocate(bingo_get_l2_heap_manager(get_current_chip_id()), sizeof(bingo_task_t));
+    bingo_task_t *task = (bingo_task_t *)(uintptr_t)o1heapAllocate(bingo_get_l2_heap_manager(get_current_chip_id()), sizeof(bingo_task_t));
     if (!task){
         printf("[BINGO] Error: Failed to allocate memory for new task.\r\n");
         return NULL;
@@ -419,7 +444,7 @@ void bingo_runtime_schedule(bingo_task_t **task_list, uint32_t num_tasks) {
 
     // Initialize scheduler instance (stack-local for now; could be static per chip)
     uint16_t cap = bingo_next_pow2(local_total * 2); // room for burst readiness
-    bingo_task_t **ring = (bingo_task_t **)o1heapAllocate(bingo_get_l2_heap_manager(get_current_chip_id()), sizeof(bingo_task_t*) * cap);
+    bingo_task_t **ring = (bingo_task_t **)(uintptr_t)o1heapAllocate(bingo_get_l2_heap_manager(get_current_chip_id()), sizeof(bingo_task_t*) * cap);
     if (!ring) {
         printf("[BINGO] Error: Failed to allocate ready ring.\r\n");
         return;
@@ -525,7 +550,7 @@ void bingo_runtime_schedule(bingo_task_t **task_list, uint32_t num_tasks) {
         }
     }
     // Destroy the allocated ready ring
-    o1heapFree(bingo_get_l2_heap_manager(get_current_chip_id()), sched.ready_ring);
+    o1heapFree(bingo_get_l2_heap_manager(get_current_chip_id()), (uint64_t)sched.ready_ring);
 }
 
 void bingo_close_all_clusters(bingo_task_t **task_list, uint32_t num_tasks){
