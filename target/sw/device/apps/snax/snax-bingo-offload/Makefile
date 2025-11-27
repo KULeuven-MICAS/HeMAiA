@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
-
+MK_DIR   = $(shell pwd)
+$(info Making in $(MK_DIR))
 APP     = snax-bingo-offload
 SRCS    = src/snax-bingo-offload.c
 
@@ -11,8 +12,6 @@ INCDIRS += libsnaxkernel
 
 include ./libsnaxkernel/Makefile
 include ../../common.mk
-
-$(DEP): $(HW_PARAM_H)
 
 # llvm-objdump -t target/sw/device/apps/snax/snax-bingo-offload/build/snax-bingo-offload.elf | grep __snax_kernel_dummy | cut -c1-8
 # get the kernel address
