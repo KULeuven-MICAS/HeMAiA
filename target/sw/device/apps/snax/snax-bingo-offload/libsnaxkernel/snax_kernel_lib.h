@@ -1444,6 +1444,12 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm(void* arg) {
         uint32_t transpose_B = arg_ptr[13];
         uint32_t accumPrevC = arg_ptr[14];
 
+        // VERSACORE_DEBUG_PRINT("chip id: %d\r\n", get_current_chip_id());
+        // VERSACORE_DEBUG_PRINT("A addr: 0x%08x%08x\r\n", A_addr_hi, A_addr_lo);
+        // VERSACORE_DEBUG_PRINT("B addr: 0x%08x%08x\r\n", B_addr_hi, B_addr_lo);
+        // VERSACORE_DEBUG_PRINT("C addr: 0x%08x%08x\r\n", C_addr_hi, C_addr_lo);
+        // VERSACORE_DEBUG_PRINT("D addr: 0x%08x%08x\r\n", D_addr_hi, D_addr_lo);
+
         // we use the following args, they are shared across the cluster
         // arg0: uint32_t A_addr_hi get_cls_shared_ptrs()[0][0]
         // arg1: uint32_t A_addr_lo get_cls_shared_ptrs()[0][1]
@@ -1522,12 +1528,13 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm(void* arg) {
         // Otherwise we need to use the DMA to load the data from the specified addr
         bool load_A = !((A_addr_lo > snrt_l1_start_addr()) && (A_addr_lo < snrt_l1_end_addr()));
         bool load_B = !((B_addr_lo > snrt_l1_start_addr()) && (B_addr_lo < snrt_l1_end_addr()));
-        bool load_C = !((C_addr_lo > snrt_l1_start_addr()) && (C_addr_lo < snrt_l1_end_addr()));
+        bool load_C = (!((C_addr_lo > snrt_l1_start_addr()) && (C_addr_lo < snrt_l1_end_addr()))) && (addNonZeroC == 1);
         bool store_D = !((D_addr_lo > snrt_l1_start_addr()) && (D_addr_lo < snrt_l1_end_addr()));
         arg_ptr[19] = load_A ? 1 : 0;
         arg_ptr[20] = load_B ? 1 : 0;
         arg_ptr[21] = load_C ? 1 : 0;
         arg_ptr[22] = store_D ? 1 : 0;
+        VERSACORE_DEBUG_PRINT("load_A: %d, load_B: %d, load_C: %d, store_D: %d\r\n", load_A, load_B, load_C, store_D);
         if(load_A) {
             // Load A to the local L1
             uint64_t src_A_addr = make_u64(A_addr_hi, A_addr_lo);
@@ -2036,9 +2043,9 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm(void* arg) {
 
         VERSACORE_DEBUG_PRINT("GEMM Intra-Chiplet Kernel Compute Done!\r\n");
 
-        for (int i = 0; i < 10; i++) {
+        for (int i = 0; i < 2; i++) {
             VERSACORE_DEBUG_PRINT("D[%d] = %d\r\n", i,
-                                  local_D_addr[i]);
+                                  *((uint32_t*)local_D_addr + i));
         }
     }
     snrt_cluster_hw_barrier();
@@ -2048,6 +2055,9 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm(void* arg) {
             uint32_t D_addr_hi = get_cls_shared_ptrs()[0][6];
             uint32_t D_addr_lo = get_cls_shared_ptrs()[0][7];
             uint64_t dst_D_addr = make_u64(D_addr_hi, D_addr_lo);
+            uint32_t local_D_addr = get_cls_shared_ptrs()[0][26];
+            VERSACORE_DEBUG_PRINT("D addr: 0x%08x%08x\r\n", D_addr_hi, D_addr_lo);
+            VERSACORE_DEBUG_PRINT("Local D addr: 0x%08x\r\n", local_D_addr);
             uint32_t M = get_cls_shared_ptrs()[0][8];
             uint32_t N = get_cls_shared_ptrs()[0][10];
             uint32_t meshRow = get_cls_shared_ptrs()[0][16];
@@ -2063,6 +2073,8 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm(void* arg) {
                                      D_size);
             snrt_dma_wait_all();
         }
+
+        VERSACORE_DEBUG_PRINT("load_A: %d, load_B: %d, load_C: %d, store_D: %d\r\n", load_A, load_B, load_C, store_D);
 
         ///////////////////////////////////////
         // Free the L1 memory //

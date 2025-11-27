@@ -22,7 +22,8 @@ uint32_t __workload_versacore(bingo_task_t** task_list,
     // 4. Set the assigned chiplet id and cluster id
 
     uint8_t current_chip_id = get_current_chip_id();
-    uint8_t task_chip_id = current_chip_id;
+    // only test chip 0 for intra-chiplet gemm
+    uint8_t task_chip_id = 0;
     uint8_t cluster_id = 0;  // versacore is located at cluster
 
     // 1.1 Get the kernel function address by the kernel name
