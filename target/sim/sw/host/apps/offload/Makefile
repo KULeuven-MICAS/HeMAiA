@@ -55,7 +55,7 @@ DEVICE_APPS += snax/snax-cgra-cmatmul
 DEVICE_APPS += snax/snax-dimc-mha
 DEVICE_APPS += snax/snax-dimc-conv
 DEVICE_APPS += snax/snax-gemmx-dimc-cosim
-DEVICE_APPS += snax/snax-simbacore
+#DEVICE_APPS += snax/snax-simbacore
 
 # Dependencies
 INCDIRS += $(RUNTIME_DIR)
