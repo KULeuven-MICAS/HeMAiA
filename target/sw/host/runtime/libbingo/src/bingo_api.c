@@ -334,9 +334,11 @@ void bingo_task_offload(bingo_task_t *task) {
         printf("[BINGO] Warning: Task %u already offloaded.\r\n", task->task_id);
         return;
     }
-    printf("Chip(%x, %x): [Host] Offloaded task %u -> chip %u cluster %u fn=0x%x args=0x%x\r\n",
-           get_current_chip_loc_x(), get_current_chip_loc_y(), task->task_id,
-           task->assigned_chip_id, task->assigned_cluster_id, task->fn_ptr, task->args_ptr); 
+    printf("Chip(%x, %x): [Host] Offloaded task %x -> chip %x cluster %d fn=0x%x args=0x%x\r\n",
+           get_current_chip_loc_x(), get_current_chip_loc_y(),
+           (uint32_t)task->task_id,
+           (uint32_t)task->assigned_chip_id,
+           (uint32_t)task->assigned_cluster_id, (uint32_t)task->fn_ptr, (uint32_t)task->args_ptr); 
     // Send start command + task info via H2C mailbox
     uint32_t retry_hint_start, retry_hint_id, retry_hint_fn, retry_hint_args;
     uint32_t total_retries = 0;
@@ -432,11 +434,13 @@ static inline bingo_task_t *sched_dequeue(bingo_chip_sched_t *s){
 void bingo_runtime_schedule(bingo_task_t **task_list, uint32_t num_tasks) {
 
     uint8_t current_chip = get_current_chip_id();
-
     // Count local tasks
     uint16_t local_total = 0;
     for (uint32_t i = 0; i < num_tasks; i++) {
-        if (task_list[i]->assigned_chip_id == current_chip) local_total++;
+        if (task_list[i]->assigned_chip_id == current_chip){
+            local_total++;
+        }
+        
     }
     printf("Chip(%x, %x): [Host] Starting runtime schedule for %u local tasks\r\n",
            get_current_chip_loc_x(), get_current_chip_loc_y(), local_total);
@@ -449,26 +453,29 @@ void bingo_runtime_schedule(bingo_task_t **task_list, uint32_t num_tasks) {
         printf("[BINGO] Error: Failed to allocate ready ring.\r\n");
         return;
     }
-    bingo_chip_sched_t sched = {
-        .chip_id = current_chip,
-        .ready_cap = cap,
-        .ready_mask = (uint16_t)(cap - 1),
-        .ready_head = 0,
-        .ready_tail = 0,
-        .ready_ring = ring,
-        .inflight = 0,
-        .completed = 0,
-        .tx_msgs = 0,
-        .rx_msgs = 0,
-        .seq_counter = 0
-    };
+    bingo_chip_sched_t *sched = (bingo_chip_sched_t *)o1heapAllocate(bingo_get_l2_heap_manager(get_current_chip_id()), sizeof(bingo_chip_sched_t));
+    if (!sched) {
+        printf("[BINGO] Error: Failed to allocate scheduler instance.\r\n");
+        return;
+    }
+    sched->chip_id = current_chip;
+    sched->ready_cap = cap;
+    sched->ready_mask = (uint16_t)(cap - 1);
+    sched->ready_head = 0;
+    sched->ready_tail = 0;
+    sched->ready_ring = ring;
+    sched->inflight = 0;
+    sched->completed = 0;
+    sched->tx_msgs = 0;
+    sched->rx_msgs = 0;
+    sched->seq_counter = 0;
 
     // Seed initial ready tasks (those with zero local & remote predecessors)
     for (uint32_t i = 0; i < num_tasks; i++) {
         bingo_task_t *t = task_list[i];
         if (t->assigned_chip_id != current_chip) continue;
         if (bingo_task_is_globally_ready(t)) {
-            sched_enqueue(&sched, t);
+            sched_enqueue(sched, t);
         }
     }
 
@@ -483,11 +490,31 @@ void bingo_runtime_schedule(bingo_task_t **task_list, uint32_t num_tasks) {
             switch (msg.flag & 0xF) {
                 case MBOX_DEVICE_DONE: {
                     uint16_t tid = msg.task_id;
-                    printf("Chip(%x, %x): [Host] Task %u completed on chip %u cluster %u \r\n",
+                    printf("Chip(%x, %x): [Host] Task %x completed on chip %x cluster %d \r\n",
                            get_current_chip_loc_x(), get_current_chip_loc_y(),
-                           tid, current_chip, msg.cluster_id);
+                           (uint32_t)tid, current_chip, (uint32_t)msg.cluster_id);
                     if (tid < num_tasks) {
-                        bingo_task_t *completed_task = task_list[tid];
+                        // find the completed task
+                        bingo_task_t *completed_task = NULL;
+                        for (uint32_t i = 0; i < num_tasks; i++) {
+                            bingo_task_t *t = task_list[i];
+                            if(t->task_id == tid) {
+                                completed_task = t;
+                            }
+                        }
+                        if (!completed_task) {
+                            printf("Chip(%x, %x): [Host] Error: Completed task %x not found in task list!\r\n",
+                                   get_current_chip_loc_x(), get_current_chip_loc_y(), (uint32_t)tid);
+                            break;
+                        }
+                        if(completed_task->assigned_chip_id != current_chip) {
+                            printf("Chip(%x, %x): [Host] Error: Completed task %d assigned to chip %x, but current chip is %x!\r\n",
+                                   get_current_chip_loc_x(), get_current_chip_loc_y(),
+                                   (uint32_t)tid,
+                                   (uint32_t)completed_task->assigned_chip_id,
+                                   (uint32_t)current_chip);
+                            break;
+                        }
                         if (!completed_task->completed && completed_task->assigned_chip_id == current_chip) {
                             completed_task->completed = true;
                             local_completed++;
@@ -497,7 +524,7 @@ void bingo_runtime_schedule(bingo_task_t **task_list, uint32_t num_tasks) {
                                 if (suc->local_pred_remaining) {
                                     suc->local_pred_remaining--;
                                     if (bingo_task_is_globally_ready(suc) && !suc->offloaded) {
-                                        sched_enqueue(&sched, suc);
+                                        sched_enqueue(sched, suc);
                                     }
                                 }
                             }
@@ -527,7 +554,7 @@ void bingo_runtime_schedule(bingo_task_t **task_list, uint32_t num_tasks) {
                     if (t->assigned_chip_id == current_chip && t->remote_pred_remaining) {
                         t->remote_pred_remaining--;
                         if (bingo_task_is_globally_ready(t) && !t->offloaded) {
-                            sched_enqueue(&sched, t);
+                            sched_enqueue(sched, t);
                         }
                     }
                 }
@@ -536,11 +563,11 @@ void bingo_runtime_schedule(bingo_task_t **task_list, uint32_t num_tasks) {
 
         // 3. Offload as many ready tasks as possible (could add throttle / inflight cap later)
         while (1) {
-            bingo_task_t *t = sched_dequeue(&sched);
+            bingo_task_t *t = sched_dequeue(sched);
             if (!t) break;
             if (!t->offloaded) {
                 bingo_task_offload(t);
-                sched.inflight++;
+                sched->inflight++;
             }
         }
 
@@ -550,7 +577,7 @@ void bingo_runtime_schedule(bingo_task_t **task_list, uint32_t num_tasks) {
         }
     }
     // Destroy the allocated ready ring
-    o1heapFree(bingo_get_l2_heap_manager(get_current_chip_id()), (uint64_t)sched.ready_ring);
+    o1heapFree(bingo_get_l2_heap_manager(get_current_chip_id()), (uint64_t)sched->ready_ring);
 }
 
 void bingo_close_all_clusters(bingo_task_t **task_list, uint32_t num_tasks){
