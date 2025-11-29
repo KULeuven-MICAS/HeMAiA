@@ -92,8 +92,6 @@ SNAX_LIB_DEFINE void __snax_kernel_check_results(void* arg) {
         uint32_t golden_data_addr = ((uint32_t*)arg)[0];
         uint32_t output_data_addr = ((uint32_t*)arg)[1];
         uint32_t data_size = ((uint32_t*)arg)[2];
-        printf("golden_data_addr: 0x%x, output_data_addr: 0x%x, data_size: %d\n",
-               golden_data_addr, output_data_addr, data_size);
         uint32_t num_errors = 0;
         for (uint32_t i = 0; i < data_size / sizeof(uint32_t); i++) {
             if (((uint32_t*)golden_data_addr)[i] !=
