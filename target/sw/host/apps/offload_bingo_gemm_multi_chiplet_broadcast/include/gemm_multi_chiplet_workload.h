@@ -142,10 +142,10 @@ uint32_t __workload_versacore_multi_chiplet_broadcast(bingo_task_t** task_list) 
     if (get_current_chip_id() == 0x00) {
         HOST_DEBUG_PRINT("Setting args for chiplet 0x00\r\n");
         // Load A1 from mempool to L1 at chiplet 0x00
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A1_chip_0x00)->src_addr_hi = HIGH32(BINGO_CHIPLET_LOCAL_PTR_AUTO(A1_mp));
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A1_chip_0x00)->src_addr_lo = LOW32(BINGO_CHIPLET_LOCAL_PTR_AUTO(A1_mp));
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A1_chip_0x00)->dst_addr_hi = HIGH32(BINGO_CHIPLET_LOCAL_PTR_AUTO(A_l1));
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A1_chip_0x00)->dst_addr_lo = LOW32(BINGO_CHIPLET_LOCAL_PTR_AUTO(A_l1));
+        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A1_chip_0x00)->src_addr_hi = HIGH32((A1_mp));
+        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A1_chip_0x00)->src_addr_lo = LOW32((A1_mp));
+        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A1_chip_0x00)->dst_addr_hi = HIGH32((A_l1));
+        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A1_chip_0x00)->dst_addr_lo = LOW32((A_l1));
         BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A1_chip_0x00)->size        = BINGO_CHIPLET_READW(AdataTileSize);
         HOST_DEBUG_PRINT("Chip(%x, %x): load A1 from mempool to L1 Args: src_addr_hi=%x, src_addr_lo=%x, dst_addr_hi=%x, dst_addr_lo=%x, size=%x\r\n", get_current_chip_loc_x(),get_current_chip_loc_y(),
         BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A1_chip_0x00)->src_addr_hi,
@@ -787,6 +787,7 @@ uint32_t __workload_versacore_multi_chiplet_broadcast(bingo_task_t** task_list) 
     task_list[1] = task_mempool_to_cluster_A2_chip_0x01;
     task_list[2] = task_mempool_to_cluster_A3_chip_0x10;
     task_list[3] = task_mempool_to_cluster_A4_chip_0x11;
+
     task_list[4] = task_check_A1_chip_0x00;
     task_list[5] = task_check_A2_chip_0x01;
     task_list[6] = task_check_A3_chip_0x10;

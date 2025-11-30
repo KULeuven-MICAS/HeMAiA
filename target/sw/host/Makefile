@@ -27,7 +27,8 @@ APPS += hemaia_d2d_link_configurator
 # # Host + Device applications
 APPS += offload_multichip
 APPS += offload_bingo_multichip
-APPS += offload_bingo_mempool_xdma
+# !!!don't compile this one as it will overwrite the mempool data!!!
+# APPS += offload_bingo_mempool_xdma
 
 TARGET ?= all
 
