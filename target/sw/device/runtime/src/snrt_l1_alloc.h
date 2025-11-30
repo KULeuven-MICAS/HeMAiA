@@ -57,10 +57,11 @@ inline void snrt_l1_malloc_init(){
         uint32_t l1_heap_top_addr = l1_end_addr - cls_size - ret_value_size - stack_size - RESERVED_SIZE;
         uint32_t l1_heap_top_aligned = ALIGN_DOWN(l1_heap_top_addr, TCDM_ROW_SIZE);
         // We put the l1 heap at the start of each cluster tcdm
-        get_snrt_l1_allocator()->l1_heap_start_addr = L1_ALLOC_MAKE_U64(0UL, snrt_cluster_base_addrl());
+        get_snrt_l1_allocator()->l1_heap_start_addr = chiplet_addr_transform((uint64_t)snrt_cluster_base_addrl());
         get_snrt_l1_allocator()->l1_heap_size = L1_ALLOC_MAKE_U64(0UL, l1_heap_top_aligned - snrt_cluster_base_addrl());
         get_snrt_l1_allocator()->l1_heap_manager = o1heapInit(get_snrt_l1_allocator()->l1_heap_start_addr,
                                                               get_snrt_l1_allocator()->l1_heap_size);
+        printf("Chip(%x, %x): [Device] L1 heap start: %lx, size(kB): %d\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), get_snrt_l1_allocator()->l1_heap_start_addr, get_snrt_l1_allocator()->l1_heap_size>>10);
     }
     snrt_cluster_hw_barrier();
 }
