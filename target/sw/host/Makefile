@@ -16,7 +16,8 @@ APPS += hemaia_system_xdma_copy
 APPS += offload
 APPS += offload_bingo
 APPS += offload_bingo_ci
-APPS += offload_bingo_gemm_intra_chiplet
+APPS += offload_bingo_gemm_intra_chiplet_merge_load_and_compute
+APPS += offload_bingo_gemm_intra_chiplet_seperate_load_and_compute
 APPS += offload_bingo_gemm_multi_chiplet_vanilla
 APPS += offload_bingo_gemm_multi_chiplet_broadcast
 # # Host only applications

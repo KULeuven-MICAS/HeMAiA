@@ -5,7 +5,7 @@
 // Xiaoling Yi <xiaoling.yi@kuleuven.be>
 
 #pragma once
-#include "gemm_multi_chiplet_data.h"
+#include "gemm_intra_chiplet_data.h"
 #include "host.h"
 #include "libbingo/bingo_api.h"
 
@@ -15,8 +15,8 @@
 // 3. store the result D matrix back to L3
 // 4. check the result D matrix with the golden data
 
-uint32_t __workload_versacore_single_chiplet(bingo_task_t** task_list,
-                                             uintptr_t* output_data_ptr) {
+uint32_t __workload_versacore_intra_chiplet(bingo_task_t** task_list
+                                             ) {
     ///////////////////
     // Main function //
     ///////////////////
@@ -33,13 +33,13 @@ uint32_t __workload_versacore_single_chiplet(bingo_task_t** task_list,
     check_kernel_tab_ready();
     uint32_t __snax_kernel_xdma_1d_copy_func_addr =
         get_device_function("__snax_kernel_xdma_1d_copy");
-    uint32_t __snax_kernel_gemm_compute_only_intra_chiplet_func_addr =
-        get_device_function("__snax_kernel_gemm_compute_only_intra_chiplet");
+    uint32_t __snax_kernel_gemm_func_addr =
+        get_device_function("__snax_kernel_gemm");
     uint32_t check_results_func_addr =
         get_device_function("__snax_kernel_check_results");
 
     if (__snax_kernel_xdma_1d_copy_func_addr == SNAX_SYMTAB_END_FN_ADDR ||
-        __snax_kernel_gemm_compute_only_intra_chiplet_func_addr ==
+        __snax_kernel_gemm_func_addr ==
             SNAX_SYMTAB_END_FN_ADDR ||
         check_results_func_addr == SNAX_SYMTAB_END_FN_ADDR) {
         printf("Error: Kernel symbol lookup failed!\r\n");
@@ -53,11 +53,16 @@ uint32_t __workload_versacore_single_chiplet(bingo_task_t** task_list,
     // Arg3: uint32_t dst_addr_lo
     // Arg4: uint32_t size in Byte
 
+    uint32_t AdataTileSize = BINGO_CHIPLET_READW(M) * BINGO_CHIPLET_READW(K) * BINGO_CHIPLET_READW(meshRow) * BINGO_CHIPLET_READW(tileSize) * sizeof(uint8_t);
+    uint32_t BdataSize     = BINGO_CHIPLET_READW(K) * BINGO_CHIPLET_READW(N) * BINGO_CHIPLET_READW(meshCol) * BINGO_CHIPLET_READW(tileSize) * sizeof(uint8_t);
+    uint32_t CdataSize     = BINGO_CHIPLET_READW(M) * BINGO_CHIPLET_READW(N) * BINGO_CHIPLET_READW(meshRow) * BINGO_CHIPLET_READW(meshCol)  * sizeof(uint8_t);
+    uint32_t DdataSize     = BINGO_CHIPLET_READW(M) * BINGO_CHIPLET_READW(N) * BINGO_CHIPLET_READW(meshRow) * BINGO_CHIPLET_READW(meshCol)  * sizeof(uint32_t);
+
     __snax_kernel_xdma_1d_copy_args_t task_l3_to_cluster_args_A;
     task_l3_to_cluster_args_A.src_addr_hi = HIGH32(&A1[0]);
     task_l3_to_cluster_args_A.src_addr_lo = LOW32(&A1[0]);
     // destination address in cluster L1 for A matrix
-    uintptr_t cluster_l1_addr_A = chiplet_addr_transform(0x10001000);  // predefined
+    uintptr_t cluster_l1_addr_A = bingo_l1_alloc(get_current_chip_id(), 0, BINGO_CHIPLET_READW(AdataTileSize));
     task_l3_to_cluster_args_A.dst_addr_hi = HIGH32(cluster_l1_addr_A);
     task_l3_to_cluster_args_A.dst_addr_lo = LOW32(cluster_l1_addr_A);
     task_l3_to_cluster_args_A.size = ARRAY_SIZE_BYTES(A1);
@@ -66,7 +71,7 @@ uint32_t __workload_versacore_single_chiplet(bingo_task_t** task_list,
     task_l3_to_cluster_args_B.src_addr_hi = HIGH32(&B[0]);
     task_l3_to_cluster_args_B.src_addr_lo = LOW32(&B[0]);
     // destination address in cluster L1 for B matrix
-    uintptr_t cluster_l1_addr_B = chiplet_addr_transform(0x10001100);  // predefined
+    uintptr_t cluster_l1_addr_B = bingo_l1_alloc(get_current_chip_id(), 0, BINGO_CHIPLET_READW(BdataSize));
     task_l3_to_cluster_args_B.dst_addr_hi = HIGH32(cluster_l1_addr_B);
     task_l3_to_cluster_args_B.dst_addr_lo = LOW32(cluster_l1_addr_B);
     task_l3_to_cluster_args_B.size = ARRAY_SIZE_BYTES(B);
@@ -74,9 +79,9 @@ uint32_t __workload_versacore_single_chiplet(bingo_task_t** task_list,
     uint32_t* gemm_args_chip_0x00 = (uint32_t*)NULL;
 
     uintptr_t cluster_l1_addr_C =
-        chiplet_addr_transform(0x10001200);  // predefined
+        bingo_l1_alloc(get_current_chip_id(), 0, BINGO_CHIPLET_READW(CdataSize));
     uintptr_t cluster_l1_addr_D =
-        chiplet_addr_transform(0x10002000);  // predefined
+        bingo_l1_alloc(get_current_chip_id(), 0, BINGO_CHIPLET_READW(DdataSize));
 
     // Prepare the args for Chiplet 0
     if (current_chip_id == 0x00) {
@@ -120,16 +125,14 @@ uint32_t __workload_versacore_single_chiplet(bingo_task_t** task_list,
     __snax_kernel_xdma_1d_copy_args_t task_cluster_to_l3_args_D;
     // D matrix (output)
     uintptr_t output_data_addr_chip_0x00 = (uintptr_t)NULL;
-    O1HeapInstance* local_l3_heap_manager =
-        bingo_get_l3_heap_manager(current_chip_id);
     output_data_addr_chip_0x00 =
-        (uintptr_t)o1heapAllocate(local_l3_heap_manager, ARRAY_SIZE_BYTES(D1));
+        (uintptr_t)o1heapAllocate(bingo_get_l3_heap_manager(current_chip_id), ARRAY_SIZE_BYTES(D1));
     task_cluster_to_l3_args_D.src_addr_hi = HIGH32(cluster_l1_addr_D);
     task_cluster_to_l3_args_D.src_addr_lo = LOW32(cluster_l1_addr_D);
     task_cluster_to_l3_args_D.dst_addr_hi = HIGH32(output_data_addr_chip_0x00);
     task_cluster_to_l3_args_D.dst_addr_lo = LOW32(output_data_addr_chip_0x00);
     task_cluster_to_l3_args_D.size = ARRAY_SIZE_BYTES(D1);
-    
+
     // checkresults args
     __snax_kernel_check_results_args_t task_check_results_args_chip_0x00;
     if (current_chip_id == 0x00) {
@@ -150,7 +153,7 @@ uint32_t __workload_versacore_single_chiplet(bingo_task_t** task_list,
         (uint32_t)(uintptr_t)(&task_l3_to_cluster_args_B), 0x00, cluster_id);
     // versacore gemm compute
     bingo_task_t* task_versacore_chip_0x00 = bingo_task_create(
-        __snax_kernel_gemm_compute_only_intra_chiplet_func_addr,
+        __snax_kernel_gemm_func_addr,
         (uint32_t)(uintptr_t)(gemm_args_chip_0x00), 0x00, cluster_id);
     if (task_versacore_chip_0x00 == NULL) {
         printf("Error: Task versacore creation failed!\r\n");
@@ -191,6 +194,6 @@ uint32_t __workload_versacore_single_chiplet(bingo_task_t** task_list,
     task_list[4] = task_check_results_chip_0x00;
     uint32_t num_tasks = 5;
 
-    output_data_ptr = (uintptr_t*)output_data_addr_chip_0x00;
+
     return num_tasks;
 }

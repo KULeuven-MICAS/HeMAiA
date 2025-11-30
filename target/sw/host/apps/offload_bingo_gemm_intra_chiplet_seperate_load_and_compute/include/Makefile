@@ -10,21 +10,17 @@ DATA_DIR := $(realpath $(MK_DIR))
 
 DATA_CFG ?= $(DATA_DIR)/params.hjson
 
-DATA_H = $(DATA_DIR)/gemm_multi_chiplet_data.h
+DATA_H = $(DATA_DIR)/gemm_intra_chiplet_data.h
 
 BENDER   = bender
 SNITCH_ROOT = $(shell $(BENDER) path snitch_cluster)
 
-$(DATA_H): $(DATA_DIR)/gemm_multi_chiplet_datagen.py $(DATA_CFG) 
+$(DATA_H): $(DATA_DIR)/gemm_intra_chiplet_datagen.py $(DATA_CFG) 
 	$< -c $(DATA_CFG) --hwcfg $(SNITCH_ROOT)/target/snitch_cluster/cfg/snax_versacore_to_cluster.hjson> $@
-
-DATA_HEX = $(DATA_DIR)/matmul_data.hex
-$(DATA_HEX): $(DATA_H) $(DATA_DIR)/gemm_multi_chiplet_datagen.py $(DATA_CFG) 
-	$(DATA_DIR)/gen_hex.py
 
 .PHONY: clean-data clean
 
 clean-data:
-	rm -f $(DATA_H) $(DATA_HEX)
+	rm -f $(DATA_H)
 
 clean: clean-data
