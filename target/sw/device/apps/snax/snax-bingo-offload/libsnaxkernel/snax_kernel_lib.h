@@ -454,21 +454,10 @@ SNAX_LIB_DEFINE void __snax_kernel_xdma_1d_copy(void* arg) {
     // Arg3: uint32_t dst_addr_lo
     // Arg4: uint32_t size in Byte
 
-
     if (snrt_is_dm_core()) {
         uint64_t src_addr = make_u64(((uint32_t*)arg)[0], ((uint32_t*)arg)[1]);
         uint64_t dst_addr = make_u64(((uint32_t*)arg)[2], ((uint32_t*)arg)[3]); 
         uint32_t data_size = ((uint32_t*)arg)[4];
-
-        if (xdma_disable_dst_ext(0) != 0) {
-            printf("Error in disabling xdma writer extension 0\n");
-        }
-        if (xdma_disable_dst_ext(1) != 0) {
-            printf("Error in disabling xdma writer extension 1\n");
-        }
-        if (xdma_disable_src_ext(0) != 0) {
-            printf("Error in disabling xdma reader extension 0\n");
-        }
 
         xdma_memcpy_1d_full_addr(src_addr, dst_addr, data_size);
         int task_id = xdma_start();
@@ -477,6 +466,7 @@ SNAX_LIB_DEFINE void __snax_kernel_xdma_1d_copy(void* arg) {
         XDMA_DEBUG_PRINT("SRC ADDR = %lx\n", src_addr);
         XDMA_DEBUG_PRINT("DST ADDR = %lx\n", dst_addr);
     }
+
 }
 
 SNAX_LIB_DEFINE void __snax_kernel_idma_1d_copy(void* arg) {

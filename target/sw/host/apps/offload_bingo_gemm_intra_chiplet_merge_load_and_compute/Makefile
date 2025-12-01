@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
-APP  = offload_bingo_gemm_intra_chiplet
+APP  = offload_bingo_gemm_intra_chiplet_merge_load_and_compute
 SRCS = src/offload_bingo_gemm_intra_chiplet.c
 BINGO_HOST ?= 1 # True to include the bingo runtime
 INCL_DEVICE_BINARY ?= 1 # True to include the device binary

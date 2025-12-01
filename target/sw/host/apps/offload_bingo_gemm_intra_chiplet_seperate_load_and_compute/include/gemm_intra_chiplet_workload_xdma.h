@@ -32,21 +32,21 @@ uint32_t __workload_versacore_intra_chiplet(bingo_task_t** task_list) {
 
     // 1.1 Get the kernel function address by the kernel name
     check_kernel_tab_ready();
-    uint32_t __snax_kernel_idma_1d_copy_func_addr =
-        get_device_function("__snax_kernel_idma_1d_copy");
+    uint32_t __snax_kernel_xdma_1d_copy_func_addr =
+        get_device_function("__snax_kernel_xdma_1d_copy");
     uint32_t __snax_kernel_gemm_func_addr =
         get_device_function("__snax_kernel_gemm");
     uint32_t check_results_func_addr =
         get_device_function("__snax_kernel_check_results");
 
-    if (__snax_kernel_idma_1d_copy_func_addr == SNAX_SYMTAB_END_FN_ADDR ||
+    if (__snax_kernel_xdma_1d_copy_func_addr == SNAX_SYMTAB_END_FN_ADDR ||
         __snax_kernel_gemm_func_addr == SNAX_SYMTAB_END_FN_ADDR ||
         check_results_func_addr == SNAX_SYMTAB_END_FN_ADDR) {
         printf("Error: Kernel symbol lookup failed!\r\n");
     }
 
-    // args for idma cp for loading A and B matrices from L3 to L1
-    // Copy 1d data from src to dst using idma
+    // args for xdma cp for loading A and B matrices from L3 to L1
+    // Copy 1d data from src to dst using xdma
     // Arg0: uint32_t src_addr_hi
     // Arg1: uint32_t src_addr_lo
     // Arg2: uint32_t dst_addr_hi
@@ -66,7 +66,7 @@ uint32_t __workload_versacore_intra_chiplet(bingo_task_t** task_list) {
                          BINGO_CHIPLET_READW(meshRow) *
                          BINGO_CHIPLET_READW(meshCol) * sizeof(uint32_t);
 
-    __snax_kernel_idma_1d_copy_args_t task_l3_to_cluster_args_A;
+    __snax_kernel_xdma_1d_copy_args_t task_l3_to_cluster_args_A;
     task_l3_to_cluster_args_A.src_addr_hi = HIGH32(&A1[0]);
     task_l3_to_cluster_args_A.src_addr_lo = LOW32(&A1[0]);
     // destination address in cluster L1 for A matrix
@@ -76,7 +76,7 @@ uint32_t __workload_versacore_intra_chiplet(bingo_task_t** task_list) {
     task_l3_to_cluster_args_A.dst_addr_lo = LOW32(cluster_l1_addr_A);
     task_l3_to_cluster_args_A.size = ARRAY_SIZE_BYTES(A1);
 
-    __snax_kernel_idma_1d_copy_args_t task_l3_to_cluster_args_B;
+    __snax_kernel_xdma_1d_copy_args_t task_l3_to_cluster_args_B;
     task_l3_to_cluster_args_B.src_addr_hi = HIGH32(&B[0]);
     task_l3_to_cluster_args_B.src_addr_lo = LOW32(&B[0]);
     // destination address in cluster L1 for B matrix
@@ -130,7 +130,7 @@ uint32_t __workload_versacore_intra_chiplet(bingo_task_t** task_list) {
     gemm_args_chip_0x00[14] = accumPrevC;
 
     // move the data from cluster L1 to L3 for D matrix
-    __snax_kernel_idma_1d_copy_args_t task_cluster_to_l3_args_D;
+    __snax_kernel_xdma_1d_copy_args_t task_cluster_to_l3_args_D;
     // D matrix (output)
     uintptr_t output_data_addr_chip_0x00 = (uintptr_t)NULL;
     output_data_addr_chip_0x00 = (uintptr_t)o1heapAllocate(
@@ -150,13 +150,13 @@ uint32_t __workload_versacore_intra_chiplet(bingo_task_t** task_list) {
     task_check_results_args_chip_0x00.data_size = ARRAY_SIZE_BYTES(D1);
 
     // 2. Register the tasks, only for chiplet 0x00
-    // two idma move
-    bingo_task_t* task_idma_l3_to_cluster_A =
-        bingo_task_create(__snax_kernel_idma_1d_copy_func_addr,
+    // two xdma move
+    bingo_task_t* task_xdma_l3_to_cluster_A =
+        bingo_task_create(__snax_kernel_xdma_1d_copy_func_addr,
                           (uint32_t)(uintptr_t)(&task_l3_to_cluster_args_A),
                           task_chip_id, cluster_id);
-    bingo_task_t* task_idma_l3_to_cluster_B =
-        bingo_task_create(__snax_kernel_idma_1d_copy_func_addr,
+    bingo_task_t* task_xdma_l3_to_cluster_B =
+        bingo_task_create(__snax_kernel_xdma_1d_copy_func_addr,
                           (uint32_t)(uintptr_t)(&task_l3_to_cluster_args_B),
                           task_chip_id, cluster_id);
     // versacore gemm compute
@@ -166,9 +166,9 @@ uint32_t __workload_versacore_intra_chiplet(bingo_task_t** task_list) {
     if (task_versacore_chip_0x00 == NULL) {
         printf("Error: Task versacore creation failed!\r\n");
     }
-    // idma move D back to L3
-    bingo_task_t* task_idma_cluster_to_l3_D =
-        bingo_task_create(__snax_kernel_idma_1d_copy_func_addr,
+    // xdma move D back to L3
+    bingo_task_t* task_xdma_cluster_to_l3_D =
+        bingo_task_create(__snax_kernel_xdma_1d_copy_func_addr,
                           (uint32_t)(uintptr_t)(&task_cluster_to_l3_args_D),
                           task_chip_id, cluster_id);
     // check results at L3
@@ -182,12 +182,12 @@ uint32_t __workload_versacore_intra_chiplet(bingo_task_t** task_list) {
 
     // 3. Set the task dependency
     // Here we have only two tasks and simple dependency
-    // ldA -> ld B -> versacore compute -> stD -> check results
-    bingo_task_add_depend(task_idma_l3_to_cluster_B, task_idma_l3_to_cluster_A);
-    bingo_task_add_depend(task_versacore_chip_0x00, task_idma_l3_to_cluster_B);
-    bingo_task_add_depend(task_idma_cluster_to_l3_D, task_versacore_chip_0x00);
+    // ldA, ld B -> versacore compute -> stD -> check results
+    bingo_task_add_depend(task_versacore_chip_0x00, task_xdma_l3_to_cluster_A);
+    bingo_task_add_depend(task_versacore_chip_0x00, task_xdma_l3_to_cluster_B);
+    bingo_task_add_depend(task_xdma_cluster_to_l3_D, task_versacore_chip_0x00);
     bingo_task_add_depend(task_check_results_chip_0x00,
-                          task_idma_cluster_to_l3_D);
+                          task_xdma_cluster_to_l3_D);
 
     // 4. Flush the caches to make sure the device can see the latest arguments
     asm volatile("fence" ::: "memory");
@@ -196,10 +196,10 @@ uint32_t __workload_versacore_intra_chiplet(bingo_task_t** task_list) {
     //////////////////////
 
     // Prepare the task list to return
-    task_list[0] = task_idma_l3_to_cluster_A;
-    task_list[1] = task_idma_l3_to_cluster_B;
+    task_list[0] = task_xdma_l3_to_cluster_A;
+    task_list[1] = task_xdma_l3_to_cluster_B;
     task_list[2] = task_versacore_chip_0x00;
-    task_list[3] = task_idma_cluster_to_l3_D;
+    task_list[3] = task_xdma_cluster_to_l3_D;
     task_list[4] = task_check_results_chip_0x00;
     uint32_t num_tasks = 5;
 
