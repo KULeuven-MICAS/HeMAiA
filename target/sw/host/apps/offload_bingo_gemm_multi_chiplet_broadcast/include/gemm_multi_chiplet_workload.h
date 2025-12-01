@@ -11,6 +11,7 @@
 #include "libbingo/bingo_api.h"
 
 // #define HOST_DEBUG
+// #define HOST_DEBUG
 #ifdef HOST_DEBUG
 #define HOST_DEBUG_PRINT(...) printf(__VA_ARGS__)
 #else
@@ -104,432 +105,456 @@ uint32_t __workload_versacore_multi_chiplet_broadcast(bingo_task_t** task_list) 
     uint64_t D_l1 = bingo_l1_alloc(get_current_chip_id(), 0, BINGO_CHIPLET_READW(DdataSize));
     // Store those L1 addresses
     // Load A tiles from mempool to L1 at each chiplet
-    __snax_kernel_idma_1d_copy_args_t task_mempool_to_cluster_args_A1_chip_0x00;
-    __snax_kernel_idma_1d_copy_args_t task_mempool_to_cluster_args_A2_chip_0x01;
-    __snax_kernel_idma_1d_copy_args_t task_mempool_to_cluster_args_A3_chip_0x10;
-    __snax_kernel_idma_1d_copy_args_t task_mempool_to_cluster_args_A4_chip_0x11;
+    __snax_kernel_idma_1d_copy_args_t *task_mempool_to_cluster_args_A1_chip_0x00 = NULL;
+    __snax_kernel_idma_1d_copy_args_t *task_mempool_to_cluster_args_A2_chip_0x01 = NULL;
+    __snax_kernel_idma_1d_copy_args_t *task_mempool_to_cluster_args_A3_chip_0x10 = NULL;
+    __snax_kernel_idma_1d_copy_args_t *task_mempool_to_cluster_args_A4_chip_0x11 = NULL;
     // check A loaded correctly at each chiplet
-    __snax_kernel_check_results_args_t task_check_A1_args_chip_0x00;
-    __snax_kernel_check_results_args_t task_check_A2_args_chip_0x01;
-    __snax_kernel_check_results_args_t task_check_A3_args_chip_0x10;
-    __snax_kernel_check_results_args_t task_check_A4_args_chip_0x11;
+    __snax_kernel_check_results_args_t *task_check_A1_args_chip_0x00 = NULL;
+    __snax_kernel_check_results_args_t *task_check_A2_args_chip_0x01 = NULL;
+    __snax_kernel_check_results_args_t *task_check_A3_args_chip_0x10 = NULL;
+    __snax_kernel_check_results_args_t *task_check_A4_args_chip_0x11 = NULL;
     // Then chiplet 0x00 loads B from mempool to l1
-    __snax_kernel_idma_1d_copy_args_t task_mempool_to_cluster_args_B_chip_0x00;
+    __snax_kernel_idma_1d_copy_args_t *task_mempool_to_cluster_args_B_chip_0x00 = NULL;
     // Then chiplet 0x00 check B loaded correctly at L1
-    __snax_kernel_check_results_args_t task_check_B_args_chip_0x00;
+    __snax_kernel_check_results_args_t *task_check_B_args_chip_0x00 = NULL;
     // Then chiplet 0x00 broadcast B to other chiplets
-    __snax_kernel_idma_1d_copy_args_t task_idma_broadcast_B_args_chip_0x00;
+    __snax_kernel_idma_1d_copy_args_t *task_idma_broadcast_B_args_chip_0x00 = NULL;
     // After the broadcast, other chiplets check B loaded correctly at L1
-    __snax_kernel_check_results_args_t task_check_B_args_chip_0x01;
-    __snax_kernel_check_results_args_t task_check_B_args_chip_0x10;
-    __snax_kernel_check_results_args_t task_check_B_args_chip_0x11;
+    __snax_kernel_check_results_args_t *task_check_B_args_chip_0x01 = NULL;
+    __snax_kernel_check_results_args_t *task_check_B_args_chip_0x10 = NULL;
+    __snax_kernel_check_results_args_t *task_check_B_args_chip_0x11 = NULL;
     // Then each chiplet does gemm compute
-    __snax_kernel_gemm_intra_chiplet_args_t task_gemm_args_chip_0x00;
-    __snax_kernel_gemm_intra_chiplet_args_t task_gemm_args_chip_0x01;
-    __snax_kernel_gemm_intra_chiplet_args_t task_gemm_args_chip_0x10;
-    __snax_kernel_gemm_intra_chiplet_args_t task_gemm_args_chip_0x11;
+    __snax_kernel_gemm_intra_chiplet_args_t *task_gemm_args_chip_0x00 = NULL;
+    __snax_kernel_gemm_intra_chiplet_args_t *task_gemm_args_chip_0x01 = NULL;
+    __snax_kernel_gemm_intra_chiplet_args_t *task_gemm_args_chip_0x10 = NULL;
+    __snax_kernel_gemm_intra_chiplet_args_t *task_gemm_args_chip_0x11 = NULL;
     // Then each chiplet store the result in local L3
-    __snax_kernel_idma_1d_copy_args_t task_store_output_args_chip_0x00;
-    __snax_kernel_idma_1d_copy_args_t task_store_output_args_chip_0x01;
-    __snax_kernel_idma_1d_copy_args_t task_store_output_args_chip_0x10;
-    __snax_kernel_idma_1d_copy_args_t task_store_output_args_chip_0x11;
+    __snax_kernel_idma_1d_copy_args_t *task_store_output_args_chip_0x00 = NULL;
+    __snax_kernel_idma_1d_copy_args_t *task_store_output_args_chip_0x01 = NULL;
+    __snax_kernel_idma_1d_copy_args_t *task_store_output_args_chip_0x10 = NULL;
+    __snax_kernel_idma_1d_copy_args_t *task_store_output_args_chip_0x11 = NULL;
     // Finally, each chiplet checks the result D
-    __snax_kernel_check_results_args_t task_check_D1_args_chip_0x00;
-    __snax_kernel_check_results_args_t task_check_D2_args_chip_0x01;
-    __snax_kernel_check_results_args_t task_check_D3_args_chip_0x10;
-    __snax_kernel_check_results_args_t task_check_D4_args_chip_0x11;
+    __snax_kernel_check_results_args_t *task_check_D1_args_chip_0x00 = NULL;
+    __snax_kernel_check_results_args_t *task_check_D2_args_chip_0x01 = NULL;
+    __snax_kernel_check_results_args_t *task_check_D3_args_chip_0x10 = NULL;
+    __snax_kernel_check_results_args_t *task_check_D4_args_chip_0x11 = NULL;
 
     // Assign args for the chiplet 0x00
     if (get_current_chip_id() == 0x00) {
         HOST_DEBUG_PRINT("Setting args for chiplet 0x00\r\n");
         // Load A1 from mempool to L1 at chiplet 0x00
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A1_chip_0x00)->src_addr_hi = HIGH32((A1_mp));
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A1_chip_0x00)->src_addr_lo = LOW32((A1_mp));
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A1_chip_0x00)->dst_addr_hi = HIGH32((A_l1));
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A1_chip_0x00)->dst_addr_lo = LOW32((A_l1));
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A1_chip_0x00)->size        = BINGO_CHIPLET_READW(AdataTileSize);
+        task_mempool_to_cluster_args_A1_chip_0x00 = (__snax_kernel_idma_1d_copy_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_idma_1d_copy_args_t));
+        task_mempool_to_cluster_args_A1_chip_0x00->src_addr_hi = HIGH32((A1_mp));
+        task_mempool_to_cluster_args_A1_chip_0x00->src_addr_lo = LOW32((A1_mp));
+        task_mempool_to_cluster_args_A1_chip_0x00->dst_addr_hi = HIGH32((A_l1));
+        task_mempool_to_cluster_args_A1_chip_0x00->dst_addr_lo = LOW32((A_l1));
+        task_mempool_to_cluster_args_A1_chip_0x00->size        = BINGO_CHIPLET_READW(AdataTileSize);
         HOST_DEBUG_PRINT("Chip(%x, %x): load A1 from mempool to L1 Args: src_addr_hi=%x, src_addr_lo=%x, dst_addr_hi=%x, dst_addr_lo=%x, size=%x\r\n", get_current_chip_loc_x(),get_current_chip_loc_y(),
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A1_chip_0x00)->src_addr_hi,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A1_chip_0x00)->src_addr_lo,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A1_chip_0x00)->dst_addr_hi,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A1_chip_0x00)->dst_addr_lo,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A1_chip_0x00)->size);
-
+        task_mempool_to_cluster_args_A1_chip_0x00->src_addr_hi,
+        task_mempool_to_cluster_args_A1_chip_0x00->src_addr_lo,
+        task_mempool_to_cluster_args_A1_chip_0x00->dst_addr_hi,
+        task_mempool_to_cluster_args_A1_chip_0x00->dst_addr_lo,
+        task_mempool_to_cluster_args_A1_chip_0x00->size);
         // check A1 loaded correctly at chiplet 0x00
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_A1_args_chip_0x00)->golden_data_addr   = LOW32(BINGO_CHIPLET_READD(A1_golden_l3));      // golden A1 at cluster L3
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_A1_args_chip_0x00)->output_data_addr   = LOW32(BINGO_CHIPLET_READD(A_l1));       // loaded A1 at L1
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_A1_args_chip_0x00)->data_size          = BINGO_CHIPLET_READW(AdataTileSize);
+        task_check_A1_args_chip_0x00 = (__snax_kernel_check_results_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_check_results_args_t));
+        task_check_A1_args_chip_0x00->golden_data_addr   = LOW32(BINGO_CHIPLET_READD(A1_golden_l3));      // golden A1 at cluster L3
+        task_check_A1_args_chip_0x00->output_data_addr   = LOW32(BINGO_CHIPLET_READD(A_l1));       // loaded A1 at L1
+        task_check_A1_args_chip_0x00->data_size          = BINGO_CHIPLET_READW(AdataTileSize);
         HOST_DEBUG_PRINT("Chip(%x, %x): check A1 loaded correctly Args: golden_data_addr=%x, output_data_addr=%x, data_size=%x\r\n", get_current_chip_loc_x(),get_current_chip_loc_y(),
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_A1_args_chip_0x00)->golden_data_addr,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_A1_args_chip_0x00)->output_data_addr,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_A1_args_chip_0x00)->data_size);
+        task_check_A1_args_chip_0x00->golden_data_addr,
+        task_check_A1_args_chip_0x00->output_data_addr,
+        task_check_A1_args_chip_0x00->data_size);
 
         // Load B from mempool to L1 at chiplet 0x00
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_B_chip_0x00)->src_addr_hi = HIGH32(BINGO_CHIPLET_READD(B_mp));
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_B_chip_0x00)->src_addr_lo = LOW32(BINGO_CHIPLET_READD(B_mp));
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_B_chip_0x00)->dst_addr_hi = HIGH32(get_current_chip_baseaddress_value());
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_B_chip_0x00)->dst_addr_lo = LOW32(BINGO_CHIPLET_READD(B_l1)); // L1 addr for B
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_B_chip_0x00)->size = BINGO_CHIPLET_READW(BdataSize);
+        task_mempool_to_cluster_args_B_chip_0x00 = (__snax_kernel_idma_1d_copy_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_idma_1d_copy_args_t));
+        task_mempool_to_cluster_args_B_chip_0x00->src_addr_hi = HIGH32(BINGO_CHIPLET_READD(B_mp));
+        task_mempool_to_cluster_args_B_chip_0x00->src_addr_lo = LOW32(BINGO_CHIPLET_READD(B_mp));
+        task_mempool_to_cluster_args_B_chip_0x00->dst_addr_hi = HIGH32(get_current_chip_baseaddress_value());
+        task_mempool_to_cluster_args_B_chip_0x00->dst_addr_lo = LOW32(BINGO_CHIPLET_READD(B_l1)); // L1 addr for B
+        task_mempool_to_cluster_args_B_chip_0x00->size = BINGO_CHIPLET_READW(BdataSize);
         HOST_DEBUG_PRINT("Chip(%x, %x): load B from mempool to L1 Args: src_addr_hi=%x, src_addr_lo=%x, dst_addr_hi=%x, dst_addr_lo=%x, size=%x\r\n", get_current_chip_loc_x(),get_current_chip_loc_y(),
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_B_chip_0x00)->src_addr_hi,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_B_chip_0x00)->src_addr_lo,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_B_chip_0x00)->dst_addr_hi,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_B_chip_0x00)->dst_addr_lo,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_B_chip_0x00)->size);
+        task_mempool_to_cluster_args_B_chip_0x00->src_addr_hi,
+        task_mempool_to_cluster_args_B_chip_0x00->src_addr_lo,
+        task_mempool_to_cluster_args_B_chip_0x00->dst_addr_hi,
+        task_mempool_to_cluster_args_B_chip_0x00->dst_addr_lo,
+        task_mempool_to_cluster_args_B_chip_0x00->size);
 
         // Check B loaded correctly at chiplet 0x00
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_B_args_chip_0x00)->golden_data_addr = LOW32(BINGO_CHIPLET_READD(B_golden_l3));      // golden B at cluster L3
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_B_args_chip_0x00)->output_data_addr = LOW32(BINGO_CHIPLET_READD(B_l1));             // L1 addr for B
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_B_args_chip_0x00)->data_size = BINGO_CHIPLET_READW(BdataSize);
+        task_check_B_args_chip_0x00 = (__snax_kernel_check_results_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_check_results_args_t));
+        task_check_B_args_chip_0x00->golden_data_addr = LOW32(BINGO_CHIPLET_READD(B_golden_l3));      // golden B at cluster L3
+        task_check_B_args_chip_0x00->output_data_addr = LOW32(BINGO_CHIPLET_READD(B_l1));             // L1 addr for B
+        task_check_B_args_chip_0x00->data_size = BINGO_CHIPLET_READW(BdataSize);
         HOST_DEBUG_PRINT("Chip(%x, %x): check B loaded correctly Args: golden_data_addr=%x, output_data_addr=%x, data_size=%x\r\n", get_current_chip_loc_x(),get_current_chip_loc_y(),
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_B_args_chip_0x00)->golden_data_addr,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_B_args_chip_0x00)->output_data_addr,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_B_args_chip_0x00)->data_size);
+        task_check_B_args_chip_0x00->golden_data_addr,
+        task_check_B_args_chip_0x00->output_data_addr,
+        task_check_B_args_chip_0x00->data_size);
 
         // Args for broadcasting B from chiplet 0x00 to other chiplets
+        task_idma_broadcast_B_args_chip_0x00 = (__snax_kernel_idma_1d_copy_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_idma_1d_copy_args_t));
         uintptr_t broadcast_dst_addr_B = chiplet_addr_transform_loc(0xF, 0xF, BINGO_CHIPLET_READD(B_l1));
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_idma_broadcast_B_args_chip_0x00)->src_addr_hi = HIGH32(get_current_chip_baseaddress_value());
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_idma_broadcast_B_args_chip_0x00)->src_addr_lo = LOW32(BINGO_CHIPLET_READD(B_l1));
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_idma_broadcast_B_args_chip_0x00)->dst_addr_hi = HIGH32(broadcast_dst_addr_B);
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_idma_broadcast_B_args_chip_0x00)->dst_addr_lo = LOW32(broadcast_dst_addr_B);
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_idma_broadcast_B_args_chip_0x00)->size =  BINGO_CHIPLET_READW(BdataSize);
+
+        task_idma_broadcast_B_args_chip_0x00->src_addr_hi = HIGH32(get_current_chip_baseaddress_value());
+        task_idma_broadcast_B_args_chip_0x00->src_addr_lo = LOW32(BINGO_CHIPLET_READD(B_l1));
+        task_idma_broadcast_B_args_chip_0x00->dst_addr_hi = HIGH32(broadcast_dst_addr_B);
+        task_idma_broadcast_B_args_chip_0x00->dst_addr_lo = LOW32(broadcast_dst_addr_B);
+        task_idma_broadcast_B_args_chip_0x00->size =  BINGO_CHIPLET_READW(BdataSize);
         HOST_DEBUG_PRINT("Chip(%x, %x): idma broadcast B Args: src_addr_hi=%x, src_addr_lo=%x, dst_addr_hi=%x, dst_addr_lo=%x, size=%x\r\n", get_current_chip_loc_x(),get_current_chip_loc_y(),
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_idma_broadcast_B_args_chip_0x00)->src_addr_hi,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_idma_broadcast_B_args_chip_0x00)->src_addr_lo,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_idma_broadcast_B_args_chip_0x00)->dst_addr_hi,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_idma_broadcast_B_args_chip_0x00)->dst_addr_lo,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_idma_broadcast_B_args_chip_0x00)->size);
+        task_idma_broadcast_B_args_chip_0x00->src_addr_hi,
+        task_idma_broadcast_B_args_chip_0x00->src_addr_lo,
+        task_idma_broadcast_B_args_chip_0x00->dst_addr_hi,
+        task_idma_broadcast_B_args_chip_0x00->dst_addr_lo,
+        task_idma_broadcast_B_args_chip_0x00->size);
 
         // Args for gemm compute at chiplet 0x00
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x00)->input_A_addr_hi = HIGH32(get_current_chip_baseaddress_value());
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x00)->input_A_addr_lo = LOW32(BINGO_CHIPLET_READD(A_l1)); // L1 addr for A
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x00)->input_B_addr_hi = HIGH32(get_current_chip_baseaddress_value());
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x00)->input_B_addr_lo = LOW32(BINGO_CHIPLET_READD(B_l1));
+        task_gemm_args_chip_0x00 = (__snax_kernel_gemm_intra_chiplet_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_gemm_intra_chiplet_args_t));
+        task_gemm_args_chip_0x00->input_A_addr_hi = HIGH32(get_current_chip_baseaddress_value());
+        task_gemm_args_chip_0x00->input_A_addr_lo = LOW32(BINGO_CHIPLET_READD(A_l1)); // L1 addr for A
+        task_gemm_args_chip_0x00->input_B_addr_hi = HIGH32(get_current_chip_baseaddress_value());
+        task_gemm_args_chip_0x00->input_B_addr_lo = LOW32(BINGO_CHIPLET_READD(B_l1));
         // C matrix
         if (BINGO_CHIPLET_READW(accumPrevC) || BINGO_CHIPLET_READW(addZeroC)) {
             // When accumPrevC is true, we use D as the previous C matrix
-            BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x00)->input_C_addr_hi = 0;
-            BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x00)->input_C_addr_lo = 0;
+            task_gemm_args_chip_0x00->input_C_addr_hi = 0;
+            task_gemm_args_chip_0x00->input_C_addr_lo = 0;
         } else {
-            BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x00)->input_C_addr_hi = HIGH32(get_current_chip_baseaddress_value());
-            BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x00)->input_C_addr_lo = LOW32(BINGO_CHIPLET_READD(C_l1));
+            task_gemm_args_chip_0x00->input_C_addr_hi = HIGH32(get_current_chip_baseaddress_value());
+            task_gemm_args_chip_0x00->input_C_addr_lo = LOW32(BINGO_CHIPLET_READD(C_l1));
         }
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x00)->output_D_addr_hi = HIGH32(get_current_chip_baseaddress_value());
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x00)->output_D_addr_lo = LOW32(BINGO_CHIPLET_READD(D_l1));
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x00)->M = BINGO_CHIPLET_READW(M);
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x00)->K = BINGO_CHIPLET_READW(K);
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x00)->N = BINGO_CHIPLET_READW(N);
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x00)->array_shape = BINGO_CHIPLET_READW(array_shape);
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x00)->transpose_A = BINGO_CHIPLET_READW(transposed_A);
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x00)->transpose_B = BINGO_CHIPLET_READW(transposed_B);
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x00)->accumPrevC = BINGO_CHIPLET_READW(accumPrevC);
+        task_gemm_args_chip_0x00->output_D_addr_hi = HIGH32(get_current_chip_baseaddress_value());
+        task_gemm_args_chip_0x00->output_D_addr_lo = LOW32(BINGO_CHIPLET_READD(D_l1));
+        task_gemm_args_chip_0x00->M = BINGO_CHIPLET_READW(M);
+        task_gemm_args_chip_0x00->K = BINGO_CHIPLET_READW(K);
+        task_gemm_args_chip_0x00->N = BINGO_CHIPLET_READW(N);
+        task_gemm_args_chip_0x00->array_shape = BINGO_CHIPLET_READW(array_shape);
+        task_gemm_args_chip_0x00->transpose_A = BINGO_CHIPLET_READW(transposed_A);
+        task_gemm_args_chip_0x00->transpose_B = BINGO_CHIPLET_READW(transposed_B);
+        task_gemm_args_chip_0x00->accumPrevC = BINGO_CHIPLET_READW(accumPrevC);
         HOST_DEBUG_PRINT("Chip(%x, %x): gemm compute Args: A_addr_hi=%x, A_addr_lo=%x, B_addr_hi=%x, B_addr_lo=%x, C_addr_hi=%x, C_addr_lo=%x, D_addr_hi=%x, D_addr_lo=%x, M=%x, K=%x, N=%x\r\n", get_current_chip_loc_x(),get_current_chip_loc_y(),
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x00)->input_A_addr_hi,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x00)->input_A_addr_lo,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x00)->input_B_addr_hi,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x00)->input_B_addr_lo,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x00)->input_C_addr_hi,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x00)->input_C_addr_lo,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x00)->output_D_addr_hi,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x00)->output_D_addr_lo,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x00)->M,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x00)->K,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x00)->N);
+        task_gemm_args_chip_0x00->input_A_addr_hi,
+        task_gemm_args_chip_0x00->input_A_addr_lo,
+        task_gemm_args_chip_0x00->input_B_addr_hi,
+        task_gemm_args_chip_0x00->input_B_addr_lo,
+        task_gemm_args_chip_0x00->input_C_addr_hi,
+        task_gemm_args_chip_0x00->input_C_addr_lo,
+        task_gemm_args_chip_0x00->output_D_addr_hi,
+        task_gemm_args_chip_0x00->output_D_addr_lo,
+        task_gemm_args_chip_0x00->M,
+        task_gemm_args_chip_0x00->K,
+        task_gemm_args_chip_0x00->N);
 
         // Args for storing output D from L1 to L3 at chiplet 0x00
         uintptr_t D_dst_addr_chip_0x00 = (uintptr_t)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), DdataSize);
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_store_output_args_chip_0x00)->src_addr_hi = HIGH32(get_current_chip_baseaddress_value());
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_store_output_args_chip_0x00)->src_addr_lo = LOW32(BINGO_CHIPLET_READD(D_l1));
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_store_output_args_chip_0x00)->dst_addr_hi = HIGH32(BINGO_CHIPLET_READD(D_dst_addr_chip_0x00));
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_store_output_args_chip_0x00)->dst_addr_lo = LOW32(BINGO_CHIPLET_READD(D_dst_addr_chip_0x00));
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_store_output_args_chip_0x00)->size = BINGO_CHIPLET_READW(DdataSize);
+        task_store_output_args_chip_0x00 = (__snax_kernel_idma_1d_copy_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_idma_1d_copy_args_t));
+        task_store_output_args_chip_0x00->src_addr_hi = HIGH32(get_current_chip_baseaddress_value());
+        task_store_output_args_chip_0x00->src_addr_lo = LOW32(BINGO_CHIPLET_READD(D_l1));
+        task_store_output_args_chip_0x00->dst_addr_hi = HIGH32(BINGO_CHIPLET_READD(D_dst_addr_chip_0x00));
+        task_store_output_args_chip_0x00->dst_addr_lo = LOW32(BINGO_CHIPLET_READD(D_dst_addr_chip_0x00));
+        task_store_output_args_chip_0x00->size = BINGO_CHIPLET_READW(DdataSize);
         HOST_DEBUG_PRINT("Chip(%x, %x): store output D from L1 to L3 Args: src_addr_hi=%x, src_addr_lo=%x, dst_addr_hi=%x, dst_addr_lo=%x, size=%x\r\n", get_current_chip_loc_x(),get_current_chip_loc_y(),
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_store_output_args_chip_0x00)->src_addr_hi,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_store_output_args_chip_0x00)->src_addr_lo,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_store_output_args_chip_0x00)->dst_addr_hi,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_store_output_args_chip_0x00)->dst_addr_lo,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_store_output_args_chip_0x00)->size);
+        task_store_output_args_chip_0x00->src_addr_hi,
+        task_store_output_args_chip_0x00->src_addr_lo,
+        task_store_output_args_chip_0x00->dst_addr_hi,
+        task_store_output_args_chip_0x00->dst_addr_lo,
+        task_store_output_args_chip_0x00->size);
 
         // Args for checking output D1 at chiplet 0x00
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_D1_args_chip_0x00)->golden_data_addr = LOW32(BINGO_CHIPLET_READD(D1_golden_l3));   // golden D1 at cluster L3
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_D1_args_chip_0x00)->output_data_addr = LOW32(BINGO_CHIPLET_READD(D_dst_addr_chip_0x00));       // stored D1 at L3
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_D1_args_chip_0x00)->data_size = BINGO_CHIPLET_READW(DdataSize);
+        task_check_D1_args_chip_0x00 = (__snax_kernel_check_results_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_check_results_args_t));
+        task_check_D1_args_chip_0x00->golden_data_addr = LOW32(BINGO_CHIPLET_READD(D1_golden_l3));   // golden D1 at cluster L3
+        task_check_D1_args_chip_0x00->output_data_addr = LOW32(BINGO_CHIPLET_READD(D_dst_addr_chip_0x00));       // stored D1 at L3
+        task_check_D1_args_chip_0x00->data_size = BINGO_CHIPLET_READW(DdataSize);
         HOST_DEBUG_PRINT("Chip(%x, %x): check output D1 Args: golden_data_addr=%x, output_data_addr=%x, data_size=%x\r\n", get_current_chip_loc_x(),get_current_chip_loc_y(),
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_D1_args_chip_0x00)->golden_data_addr,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_D1_args_chip_0x00)->output_data_addr,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_D1_args_chip_0x00)->data_size);
+        task_check_D1_args_chip_0x00->golden_data_addr,
+        task_check_D1_args_chip_0x00->output_data_addr,
+        task_check_D1_args_chip_0x00->data_size);
     }
 
     // Assign args for the chiplet 0x01
     if (get_current_chip_id() == 0x01) {
         HOST_DEBUG_PRINT("Setting args for chiplet 0x01\r\n");
         // Load A2 from mempool to L1 at chiplet 0x01
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A2_chip_0x01)->src_addr_hi = HIGH32(BINGO_CHIPLET_READD(A2_mp));
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A2_chip_0x01)->src_addr_lo = LOW32(BINGO_CHIPLET_READD(A2_mp));
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A2_chip_0x01)->dst_addr_hi = HIGH32(get_current_chip_baseaddress_value());
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A2_chip_0x01)->dst_addr_lo = LOW32(BINGO_CHIPLET_READD(A_l1)); // L1 addr for A
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A2_chip_0x01)->size        = BINGO_CHIPLET_READW(AdataTileSize);
+        task_mempool_to_cluster_args_A2_chip_0x01 = (__snax_kernel_idma_1d_copy_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_idma_1d_copy_args_t));
+        task_mempool_to_cluster_args_A2_chip_0x01->src_addr_hi = HIGH32(BINGO_CHIPLET_READD(A2_mp));
+        task_mempool_to_cluster_args_A2_chip_0x01->src_addr_lo = LOW32(BINGO_CHIPLET_READD(A2_mp));
+        task_mempool_to_cluster_args_A2_chip_0x01->dst_addr_hi = HIGH32(get_current_chip_baseaddress_value());
+        task_mempool_to_cluster_args_A2_chip_0x01->dst_addr_lo = LOW32(BINGO_CHIPLET_READD(A_l1)); // L1 addr for A
+        task_mempool_to_cluster_args_A2_chip_0x01->size        = BINGO_CHIPLET_READW(AdataTileSize);
         HOST_DEBUG_PRINT("Chip(%x, %x): load A2 from mempool to L1 Args: src_addr_hi=%x, src_addr_lo=%x, dst_addr_hi=%x, dst_addr_lo=%x, size=%x\r\n", get_current_chip_loc_x(),get_current_chip_loc_y(),
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A2_chip_0x01)->src_addr_hi,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A2_chip_0x01)->src_addr_lo,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A2_chip_0x01)->dst_addr_hi,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A2_chip_0x01)->dst_addr_lo,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A2_chip_0x01)->size);
+        task_mempool_to_cluster_args_A2_chip_0x01->src_addr_hi,
+        task_mempool_to_cluster_args_A2_chip_0x01->src_addr_lo,
+        task_mempool_to_cluster_args_A2_chip_0x01->dst_addr_hi,
+        task_mempool_to_cluster_args_A2_chip_0x01->dst_addr_lo,
+        task_mempool_to_cluster_args_A2_chip_0x01->size);
 
         // check A2 loaded correctly at chiplet 0x01
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_A2_args_chip_0x01)->golden_data_addr = LOW32(BINGO_CHIPLET_READD(A2_golden_l3));      // golden A2 at cluster L3
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_A2_args_chip_0x01)->output_data_addr = LOW32(BINGO_CHIPLET_READD(A_l1));       // loaded A2 at L1
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_A2_args_chip_0x01)->data_size = BINGO_CHIPLET_READW(AdataTileSize);
+        task_check_A2_args_chip_0x01 = (__snax_kernel_check_results_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_check_results_args_t));
+        task_check_A2_args_chip_0x01->golden_data_addr = LOW32(BINGO_CHIPLET_READD(A2_golden_l3));      // golden A2 at cluster L3
+        task_check_A2_args_chip_0x01->output_data_addr = LOW32(BINGO_CHIPLET_READD(A_l1));       // loaded A2 at L1
+        task_check_A2_args_chip_0x01->data_size = BINGO_CHIPLET_READW(AdataTileSize);
         HOST_DEBUG_PRINT("Chip(%x, %x): check A2 loaded correctly Args: golden_data_addr=%x, output_data_addr=%x, data_size=%x\r\n", get_current_chip_loc_x(),get_current_chip_loc_y(),
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_A2_args_chip_0x01)->golden_data_addr,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_A2_args_chip_0x01)->output_data_addr,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_A2_args_chip_0x01)->data_size);
+        task_check_A2_args_chip_0x01->golden_data_addr,
+        task_check_A2_args_chip_0x01->output_data_addr,
+        task_check_A2_args_chip_0x01->data_size);
         // check B loaded correctly at chiplet 0x01
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_B_args_chip_0x01)->golden_data_addr = LOW32(B_golden_l3);  // golden B at cluster L3
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_B_args_chip_0x01)->output_data_addr = LOW32(BINGO_CHIPLET_READD(B_l1));  // loaded B at L1
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_B_args_chip_0x01)->data_size = BdataSize;
+        task_check_B_args_chip_0x01 = (__snax_kernel_check_results_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_check_results_args_t));
+        task_check_B_args_chip_0x01->golden_data_addr = LOW32(B_golden_l3);  // golden B at cluster L3
+        task_check_B_args_chip_0x01->output_data_addr = LOW32(BINGO_CHIPLET_READD(B_l1));  // loaded B at L1
+        task_check_B_args_chip_0x01->data_size = BdataSize;
         HOST_DEBUG_PRINT("Chip(%x, %x): check B loaded correctly Args: golden_data_addr=%x, output_data_addr=%x, data_size=%x\r\n", get_current_chip_loc_x(),get_current_chip_loc_y(),
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_B_args_chip_0x01)->golden_data_addr,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_B_args_chip_0x01)->output_data_addr,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_B_args_chip_0x01)->data_size);
-
+        task_check_B_args_chip_0x01->golden_data_addr,
+        task_check_B_args_chip_0x01->output_data_addr,
+        task_check_B_args_chip_0x01->data_size);
         // GeMM args for chiplet 0x01
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x01)->input_A_addr_hi = HIGH32(get_current_chip_baseaddress_value());
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x01)->input_A_addr_lo = LOW32(BINGO_CHIPLET_READD(A_l1));
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x01)->input_B_addr_hi = HIGH32(get_current_chip_baseaddress_value());
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x01)->input_B_addr_lo = LOW32(BINGO_CHIPLET_READD(B_l1));
+        task_gemm_args_chip_0x01 = (__snax_kernel_gemm_intra_chiplet_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_gemm_intra_chiplet_args_t));
+        task_gemm_args_chip_0x01->input_A_addr_hi = HIGH32(get_current_chip_baseaddress_value());
+        task_gemm_args_chip_0x01->input_A_addr_lo = LOW32(BINGO_CHIPLET_READD(A_l1));
+        task_gemm_args_chip_0x01->input_B_addr_hi = HIGH32(get_current_chip_baseaddress_value());
+        task_gemm_args_chip_0x01->input_B_addr_lo = LOW32(BINGO_CHIPLET_READD(B_l1));
         // C matrix
         if (BINGO_CHIPLET_READW(accumPrevC) || BINGO_CHIPLET_READW(addZeroC)) {
             // When accumPrevC is true, we use D as the previous C matrix
-            BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x01)->input_C_addr_hi = 0;
-            BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x01)->input_C_addr_lo = 0;
+            task_gemm_args_chip_0x01->input_C_addr_hi = 0;
+            task_gemm_args_chip_0x01->input_C_addr_lo = 0;
         } else {
-            BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x01)->input_C_addr_hi = HIGH32(get_current_chip_baseaddress_value());
-            BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x01)->input_C_addr_lo = LOW32(BINGO_CHIPLET_READD(C_l1));
+            task_gemm_args_chip_0x01->input_C_addr_hi = HIGH32(get_current_chip_baseaddress_value());
+            task_gemm_args_chip_0x01->input_C_addr_lo = LOW32(BINGO_CHIPLET_READD(C_l1));
         }
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x01)->output_D_addr_hi = HIGH32(get_current_chip_baseaddress_value());
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x01)->output_D_addr_lo = LOW32(BINGO_CHIPLET_READD(D_l1));
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x01)->M = BINGO_CHIPLET_READW(M);
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x01)->K = BINGO_CHIPLET_READW(K);
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x01)->N = BINGO_CHIPLET_READW(N);
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x01)->array_shape = BINGO_CHIPLET_READW(array_shape);
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x01)->transpose_A = BINGO_CHIPLET_READW(transposed_A);
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x01)->transpose_B = BINGO_CHIPLET_READW(transposed_B);
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x01)->accumPrevC = BINGO_CHIPLET_READW(accumPrevC);
+        task_gemm_args_chip_0x01->output_D_addr_hi = HIGH32(get_current_chip_baseaddress_value());
+        task_gemm_args_chip_0x01->output_D_addr_lo = LOW32(BINGO_CHIPLET_READD(D_l1));
+        task_gemm_args_chip_0x01->M = BINGO_CHIPLET_READW(M);
+        task_gemm_args_chip_0x01->K = BINGO_CHIPLET_READW(K);
+        task_gemm_args_chip_0x01->N = BINGO_CHIPLET_READW(N);
+        task_gemm_args_chip_0x01->array_shape = BINGO_CHIPLET_READW(array_shape);
+        task_gemm_args_chip_0x01->transpose_A = BINGO_CHIPLET_READW(transposed_A);
+        task_gemm_args_chip_0x01->transpose_B = BINGO_CHIPLET_READW(transposed_B);
+        task_gemm_args_chip_0x01->accumPrevC = BINGO_CHIPLET_READW(accumPrevC);
         HOST_DEBUG_PRINT("Chip(%x, %x): gemm compute Args: A_addr_hi=%x, A_addr_lo=%x, B_addr_hi=%x, B_addr_lo=%x, C_addr_hi=%x, C_addr_lo=%x, D_addr_hi=%x, D_addr_lo=%x, M=%x, K=%x, N=%x\r\n", get_current_chip_loc_x(),get_current_chip_loc_y(),
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x01)->input_A_addr_hi,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x01)->input_A_addr_lo,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x01)->input_B_addr_hi,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x01)->input_B_addr_lo,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x01)->input_C_addr_hi,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x01)->input_C_addr_lo,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x01)->output_D_addr_hi,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x01)->output_D_addr_lo,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x01)->M,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x01)->K,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x01)->N);
+        task_gemm_args_chip_0x01->input_A_addr_hi,
+        task_gemm_args_chip_0x01->input_A_addr_lo,
+        task_gemm_args_chip_0x01->input_B_addr_hi,
+        task_gemm_args_chip_0x01->input_B_addr_lo,
+        task_gemm_args_chip_0x01->input_C_addr_hi,
+        task_gemm_args_chip_0x01->input_C_addr_lo,
+        task_gemm_args_chip_0x01->output_D_addr_hi,
+        task_gemm_args_chip_0x01->output_D_addr_lo,
+        task_gemm_args_chip_0x01->M,
+        task_gemm_args_chip_0x01->K,
+        task_gemm_args_chip_0x01->N);
 
         // Args for storing output D from L1 to L3 at chiplet 0x01
         uintptr_t D_dst_addr_chip_0x01 = (uintptr_t)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), DdataSize);
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_store_output_args_chip_0x01)->src_addr_hi = HIGH32(get_current_chip_baseaddress_value());
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_store_output_args_chip_0x01)->src_addr_lo = LOW32(BINGO_CHIPLET_READD(D_l1));
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_store_output_args_chip_0x01)->dst_addr_hi = HIGH32(D_dst_addr_chip_0x01);
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_store_output_args_chip_0x01)->dst_addr_lo = LOW32(D_dst_addr_chip_0x01);
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_store_output_args_chip_0x01)->size = DdataSize;
+        task_store_output_args_chip_0x01 = (__snax_kernel_idma_1d_copy_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_idma_1d_copy_args_t));
+        task_store_output_args_chip_0x01->src_addr_hi = HIGH32(get_current_chip_baseaddress_value());
+        task_store_output_args_chip_0x01->src_addr_lo = LOW32(BINGO_CHIPLET_READD(D_l1));
+        task_store_output_args_chip_0x01->dst_addr_hi = HIGH32(D_dst_addr_chip_0x01);
+        task_store_output_args_chip_0x01->dst_addr_lo = LOW32(D_dst_addr_chip_0x01);
+        task_store_output_args_chip_0x01->size = DdataSize;
         HOST_DEBUG_PRINT("Chip(%x, %x): store output D from L1 to L3 Args: src_addr_hi=%x, src_addr_lo=%x, dst_addr_hi=%x, dst_addr_lo=%x, size=%x\r\n", get_current_chip_loc_x(),get_current_chip_loc_y(),
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_store_output_args_chip_0x01)->src_addr_hi,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_store_output_args_chip_0x01)->src_addr_lo,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_store_output_args_chip_0x01)->dst_addr_hi,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_store_output_args_chip_0x01)->dst_addr_lo,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_store_output_args_chip_0x01)->size);
+        task_store_output_args_chip_0x01->src_addr_hi,
+        task_store_output_args_chip_0x01->src_addr_lo,
+        task_store_output_args_chip_0x01->dst_addr_hi,
+        task_store_output_args_chip_0x01->dst_addr_lo,
+        task_store_output_args_chip_0x01->size);
         
         // Args for checking output D2 at chiplet 0x01
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_D2_args_chip_0x01)->golden_data_addr = LOW32(D2_golden_l3);  // golden D2
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_D2_args_chip_0x01)->output_data_addr = LOW32(D_dst_addr_chip_0x01);       // loaded D2 at L1
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_D2_args_chip_0x01)->data_size = DdataSize;
+        task_check_D2_args_chip_0x01 = (__snax_kernel_check_results_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_check_results_args_t));
+        task_check_D2_args_chip_0x01->golden_data_addr = LOW32(D2_golden_l3);  // golden D2
+        task_check_D2_args_chip_0x01->output_data_addr = LOW32(D_dst_addr_chip_0x01);       // loaded D2 at L1
+        task_check_D2_args_chip_0x01->data_size = DdataSize;
         HOST_DEBUG_PRINT("Chip(%x, %x): check output D2 Args: golden_data_addr=%x, output_data_addr=%x, data_size=%x\r\n", get_current_chip_loc_x(),get_current_chip_loc_y(),
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_D2_args_chip_0x01)->golden_data_addr,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_D2_args_chip_0x01)->output_data_addr,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_D2_args_chip_0x01)->data_size);
+        task_check_D2_args_chip_0x01->golden_data_addr,
+        task_check_D2_args_chip_0x01->output_data_addr,
+        task_check_D2_args_chip_0x01->data_size);
     }
 
     if (get_current_chip_id() == 0x10) {
         HOST_DEBUG_PRINT("Setting args for chiplet 0x10\r\n");
         // Load A3 from mempool to L1 at chiplet 0x10
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A3_chip_0x10)->src_addr_hi = HIGH32(A3_mp);
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A3_chip_0x10)->src_addr_lo = LOW32(A3_mp);
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A3_chip_0x10)->dst_addr_hi = HIGH32(get_current_chip_baseaddress_value());
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A3_chip_0x10)->dst_addr_lo = LOW32(BINGO_CHIPLET_READD(A_l1)); // L1 addr for A
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A3_chip_0x10)->size        = BINGO_CHIPLET_READW(AdataTileSize);
+        task_mempool_to_cluster_args_A3_chip_0x10 = (__snax_kernel_idma_1d_copy_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_idma_1d_copy_args_t));
+        task_mempool_to_cluster_args_A3_chip_0x10->src_addr_hi = HIGH32(A3_mp);
+        task_mempool_to_cluster_args_A3_chip_0x10->src_addr_lo = LOW32(A3_mp);
+        task_mempool_to_cluster_args_A3_chip_0x10->dst_addr_hi = HIGH32(get_current_chip_baseaddress_value());
+        task_mempool_to_cluster_args_A3_chip_0x10->dst_addr_lo = LOW32(BINGO_CHIPLET_READD(A_l1)); // L1 addr for A
+        task_mempool_to_cluster_args_A3_chip_0x10->size        = BINGO_CHIPLET_READW(AdataTileSize);
         HOST_DEBUG_PRINT("Chip(%x, %x): load A3 from mempool to L1 Args: src_addr_hi=%x, src_addr_lo=%x, dst_addr_hi=%x, dst_addr_lo=%x, size=%x\r\n", get_current_chip_loc_x(),get_current_chip_loc_y(),
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A3_chip_0x10)->src_addr_hi,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A3_chip_0x10)->src_addr_lo,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A3_chip_0x10)->dst_addr_hi,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A3_chip_0x10)->dst_addr_lo,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A3_chip_0x10)->size);
+        task_mempool_to_cluster_args_A3_chip_0x10->src_addr_hi,
+        task_mempool_to_cluster_args_A3_chip_0x10->src_addr_lo,
+        task_mempool_to_cluster_args_A3_chip_0x10->dst_addr_hi,
+        task_mempool_to_cluster_args_A3_chip_0x10->dst_addr_lo,
+        task_mempool_to_cluster_args_A3_chip_0x10->size);
 
         // check A3 loaded correctly at chiplet 0x10
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_A3_args_chip_0x10)->golden_data_addr = LOW32(A3_golden_l3);
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_A3_args_chip_0x10)->output_data_addr = LOW32(BINGO_CHIPLET_READD(A_l1));       // loaded A3 at L1
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_A3_args_chip_0x10)->data_size = BINGO_CHIPLET_READW(AdataTileSize);
+        task_check_A3_args_chip_0x10 = (__snax_kernel_check_results_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_check_results_args_t));
+        task_check_A3_args_chip_0x10->golden_data_addr = LOW32(A3_golden_l3);
+        task_check_A3_args_chip_0x10->output_data_addr = LOW32(BINGO_CHIPLET_READD(A_l1));       // loaded A3 at L1
+        task_check_A3_args_chip_0x10->data_size = BINGO_CHIPLET_READW(AdataTileSize);
         HOST_DEBUG_PRINT("Chip(%x, %x): check A3 loaded correctly Args: golden_data_addr=%x, output_data_addr=%x, data_size=%x\r\n", get_current_chip_loc_x(),get_current_chip_loc_y(),
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_A3_args_chip_0x10)->golden_data_addr,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_A3_args_chip_0x10)->output_data_addr,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_A3_args_chip_0x10)->data_size); 
+        task_check_A3_args_chip_0x10->golden_data_addr,
+        task_check_A3_args_chip_0x10->output_data_addr,
+        task_check_A3_args_chip_0x10->data_size); 
 
         // check B loaded correctly at chiplet 0x10
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_B_args_chip_0x10)->golden_data_addr = LOW32(B_golden_l3);  // golden B at cluster L3
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_B_args_chip_0x10)->output_data_addr = LOW32(BINGO_CHIPLET_READD(B_l1));  // loaded B at L1
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_B_args_chip_0x10)->data_size = BdataSize;
+        task_check_B_args_chip_0x10 = (__snax_kernel_check_results_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_check_results_args_t));
+        task_check_B_args_chip_0x10->golden_data_addr = LOW32(B_golden_l3);  // golden B at cluster L3
+        task_check_B_args_chip_0x10->output_data_addr = LOW32(BINGO_CHIPLET_READD(B_l1));  // loaded B at L1
+        task_check_B_args_chip_0x10->data_size = BdataSize;
         HOST_DEBUG_PRINT("Chip(%x, %x): check B loaded correctly Args: golden_data_addr=%x, output_data_addr=%x, data_size=%x\r\n", get_current_chip_loc_x(),get_current_chip_loc_y(),
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_B_args_chip_0x10)->golden_data_addr,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_B_args_chip_0x10)->output_data_addr,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_B_args_chip_0x10)->data_size);  
-
+        task_check_B_args_chip_0x10->golden_data_addr,
+        task_check_B_args_chip_0x10->output_data_addr,
+        task_check_B_args_chip_0x10->data_size);  
         // GeMM args for chiplet 0x10
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x10)->input_A_addr_hi = HIGH32(get_current_chip_baseaddress_value());
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x10)->input_A_addr_lo = LOW32(BINGO_CHIPLET_READD(A_l1));
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x10)->input_B_addr_hi = HIGH32(get_current_chip_baseaddress_value());
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x10)->input_B_addr_lo = LOW32(BINGO_CHIPLET_READD(B_l1));
+        task_gemm_args_chip_0x10 = (__snax_kernel_gemm_intra_chiplet_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_gemm_intra_chiplet_args_t));
+        task_gemm_args_chip_0x10->input_A_addr_hi = HIGH32(get_current_chip_baseaddress_value());
+        task_gemm_args_chip_0x10->input_A_addr_lo = LOW32(BINGO_CHIPLET_READD(A_l1));
+        task_gemm_args_chip_0x10->input_B_addr_hi = HIGH32(get_current_chip_baseaddress_value());
+        task_gemm_args_chip_0x10->input_B_addr_lo = LOW32(BINGO_CHIPLET_READD(B_l1));
         // C matrix
         if (BINGO_CHIPLET_READW(accumPrevC) || BINGO_CHIPLET_READW(addZeroC)) {
             // When accumPrevC is true, we use D as the previous C matrix
-            BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x10)->input_C_addr_hi = 0;
-            BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x10)->input_C_addr_lo = 0;
+            task_gemm_args_chip_0x10->input_C_addr_hi = 0;
+            task_gemm_args_chip_0x10->input_C_addr_lo = 0;
         } else {
-            BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x10)->input_C_addr_hi = HIGH32(get_current_chip_baseaddress_value());
-            BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x10)->input_C_addr_lo = LOW32(BINGO_CHIPLET_READD(C_l1));
+            task_gemm_args_chip_0x10->input_C_addr_hi = HIGH32(get_current_chip_baseaddress_value());
+            task_gemm_args_chip_0x10->input_C_addr_lo = LOW32(BINGO_CHIPLET_READD(C_l1));
         }
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x10)->output_D_addr_hi = HIGH32(get_current_chip_baseaddress_value());
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x10)->output_D_addr_lo = LOW32(BINGO_CHIPLET_READD(D_l1));
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x10)->M = BINGO_CHIPLET_READW(M);
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x10)->K = BINGO_CHIPLET_READW(K);
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x10)->N = BINGO_CHIPLET_READW(N);
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x10)->array_shape = BINGO_CHIPLET_READW(array_shape);
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x10)->transpose_A = BINGO_CHIPLET_READW(transposed_A);
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x10)->transpose_B = BINGO_CHIPLET_READW(transposed_B);
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x10)->accumPrevC = BINGO_CHIPLET_READW(accumPrevC);
+        task_gemm_args_chip_0x10->output_D_addr_hi = HIGH32(get_current_chip_baseaddress_value());
+        task_gemm_args_chip_0x10->output_D_addr_lo = LOW32(BINGO_CHIPLET_READD(D_l1));
+        task_gemm_args_chip_0x10->M = BINGO_CHIPLET_READW(M);
+        task_gemm_args_chip_0x10->K = BINGO_CHIPLET_READW(K);
+        task_gemm_args_chip_0x10->N = BINGO_CHIPLET_READW(N);
+        task_gemm_args_chip_0x10->array_shape = BINGO_CHIPLET_READW(array_shape);
+        task_gemm_args_chip_0x10->transpose_A = BINGO_CHIPLET_READW(transposed_A);
+        task_gemm_args_chip_0x10->transpose_B = BINGO_CHIPLET_READW(transposed_B);
+        task_gemm_args_chip_0x10->accumPrevC = BINGO_CHIPLET_READW(accumPrevC);
         HOST_DEBUG_PRINT("Chip(%x, %x): gemm compute Args: A_addr_hi=%x, A_addr_lo=%x, B_addr_hi=%x, B_addr_lo=%x, C_addr_hi=%x, C_addr_lo=%x, D_addr_hi=%x, D_addr_lo=%x, M=%x, K=%x, N=%x\r\n", get_current_chip_loc_x(),get_current_chip_loc_y(),
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x10)->input_A_addr_hi,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x10)->input_A_addr_lo,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x10)->input_B_addr_hi,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x10)->input_B_addr_lo,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x10)->input_C_addr_hi,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x10)->input_C_addr_lo,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x10)->output_D_addr_hi,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x10)->output_D_addr_lo,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x10)->M,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x10)->K,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x10)->N);
+        task_gemm_args_chip_0x10->input_A_addr_hi,
+        task_gemm_args_chip_0x10->input_A_addr_lo,
+        task_gemm_args_chip_0x10->input_B_addr_hi,
+        task_gemm_args_chip_0x10->input_B_addr_lo,
+        task_gemm_args_chip_0x10->input_C_addr_hi,
+        task_gemm_args_chip_0x10->input_C_addr_lo,
+        task_gemm_args_chip_0x10->output_D_addr_hi,
+        task_gemm_args_chip_0x10->output_D_addr_lo,
+        task_gemm_args_chip_0x10->M,
+        task_gemm_args_chip_0x10->K,
+        task_gemm_args_chip_0x10->N);
         // Args for storing output D from L1 to L3 at chiplet 0x10
         uintptr_t D_dst_addr_chip_0x10 = (uintptr_t)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), DdataSize);
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_store_output_args_chip_0x10)->src_addr_hi = HIGH32(get_current_chip_baseaddress_value());
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_store_output_args_chip_0x10)->src_addr_lo = LOW32(BINGO_CHIPLET_READD(D_l1));
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_store_output_args_chip_0x10)->dst_addr_hi = HIGH32(D_dst_addr_chip_0x10);
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_store_output_args_chip_0x10)->dst_addr_lo = LOW32(D_dst_addr_chip_0x10);
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_store_output_args_chip_0x10)->size = DdataSize;
+        task_store_output_args_chip_0x10 = (__snax_kernel_idma_1d_copy_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_idma_1d_copy_args_t));
+        task_store_output_args_chip_0x10->src_addr_hi = HIGH32(get_current_chip_baseaddress_value());
+        task_store_output_args_chip_0x10->src_addr_lo = LOW32(BINGO_CHIPLET_READD(D_l1));
+        task_store_output_args_chip_0x10->dst_addr_hi = HIGH32(D_dst_addr_chip_0x10);
+        task_store_output_args_chip_0x10->dst_addr_lo = LOW32(D_dst_addr_chip_0x10);
+        task_store_output_args_chip_0x10->size = DdataSize;
         HOST_DEBUG_PRINT("Chip(%x, %x): store output D from L1 to L3 Args: src_addr_hi=%x, src_addr_lo=%x, dst_addr_hi=%x, dst_addr_lo=%x, size=%x\r\n", get_current_chip_loc_x(),get_current_chip_loc_y(),
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_store_output_args_chip_0x10)->src_addr_hi,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_store_output_args_chip_0x10)->src_addr_lo,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_store_output_args_chip_0x10)->dst_addr_hi,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_store_output_args_chip_0x10)->dst_addr_lo,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_store_output_args_chip_0x10)->size);
+        task_store_output_args_chip_0x10->src_addr_hi,
+        task_store_output_args_chip_0x10->src_addr_lo,
+        task_store_output_args_chip_0x10->dst_addr_hi,
+        task_store_output_args_chip_0x10->dst_addr_lo,
+        task_store_output_args_chip_0x10->size);
         // Args for checking output D3 at chiplet 0x10
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_D3_args_chip_0x10)->golden_data_addr = LOW32(D3_golden_l3);
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_D3_args_chip_0x10)->output_data_addr = LOW32(D_dst_addr_chip_0x10);
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_D3_args_chip_0x10)->data_size = DdataSize;
+        task_check_D3_args_chip_0x10 = (__snax_kernel_check_results_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_check_results_args_t));
+        task_check_D3_args_chip_0x10->golden_data_addr = LOW32(D3_golden_l3);
+        task_check_D3_args_chip_0x10->output_data_addr = LOW32(D_dst_addr_chip_0x10);
+        task_check_D3_args_chip_0x10->data_size = DdataSize;
         HOST_DEBUG_PRINT("Chip(%x, %x): check output D3 Args: golden_data_addr=%x, output_data_addr=%x, data_size=%x\r\n", get_current_chip_loc_x(),get_current_chip_loc_y(),
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_D3_args_chip_0x10)->golden_data_addr,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_D3_args_chip_0x10)->output_data_addr,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_D3_args_chip_0x10)->data_size);
+        task_check_D3_args_chip_0x10->golden_data_addr,
+        task_check_D3_args_chip_0x10->output_data_addr,
+        task_check_D3_args_chip_0x10->data_size);
     }
 
     if (get_current_chip_id() == 0x11){
         HOST_DEBUG_PRINT("Setting args for chiplet 0x11\r\n");
         // Load A4 from mempool to L1 at chiplet 0x11
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A4_chip_0x11)->src_addr_hi = HIGH32(A4_mp);
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A4_chip_0x11)->src_addr_lo = LOW32(A4_mp);
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A4_chip_0x11)->dst_addr_hi = HIGH32(get_current_chip_baseaddress_value());
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A4_chip_0x11)->dst_addr_lo = LOW32(BINGO_CHIPLET_READD(A_l1));
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A4_chip_0x11)->size        = BINGO_CHIPLET_READW(AdataTileSize);
+        task_mempool_to_cluster_args_A4_chip_0x11 = (__snax_kernel_idma_1d_copy_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_idma_1d_copy_args_t));
+        task_mempool_to_cluster_args_A4_chip_0x11->src_addr_hi = HIGH32(A4_mp);
+        task_mempool_to_cluster_args_A4_chip_0x11->src_addr_lo = LOW32(A4_mp);
+        task_mempool_to_cluster_args_A4_chip_0x11->dst_addr_hi = HIGH32(get_current_chip_baseaddress_value());
+        task_mempool_to_cluster_args_A4_chip_0x11->dst_addr_lo = LOW32(BINGO_CHIPLET_READD(A_l1));
+        task_mempool_to_cluster_args_A4_chip_0x11->size        = BINGO_CHIPLET_READW(AdataTileSize);
         HOST_DEBUG_PRINT("Chip(%x, %x): load A4 from mempool to L1 Args: src_addr_hi=%x, src_addr_lo=%x, dst_addr_hi=%x, dst_addr_lo=%x, size=%x\r\n", get_current_chip_loc_x(),get_current_chip_loc_y(),
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A4_chip_0x11)->src_addr_hi,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A4_chip_0x11)->src_addr_lo,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A4_chip_0x11)->dst_addr_hi,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A4_chip_0x11)->dst_addr_lo,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_mempool_to_cluster_args_A4_chip_0x11)->size);
+        task_mempool_to_cluster_args_A4_chip_0x11->src_addr_hi,
+        task_mempool_to_cluster_args_A4_chip_0x11->src_addr_lo,
+        task_mempool_to_cluster_args_A4_chip_0x11->dst_addr_hi,
+        task_mempool_to_cluster_args_A4_chip_0x11->dst_addr_lo,
+        task_mempool_to_cluster_args_A4_chip_0x11->size);
         // check A4 loaded correctly at chiplet 0x11
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_A4_args_chip_0x11)->golden_data_addr = LOW32(A4_golden_l3);
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_A4_args_chip_0x11)->output_data_addr = LOW32(BINGO_CHIPLET_READD(A_l1));       // loaded A4 at L1
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_A4_args_chip_0x11)->data_size = BINGO_CHIPLET_READW(AdataTileSize);
+        task_check_A4_args_chip_0x11 = (__snax_kernel_check_results_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_check_results_args_t));
+        task_check_A4_args_chip_0x11->golden_data_addr = LOW32(A4_golden_l3);
+        task_check_A4_args_chip_0x11->output_data_addr = LOW32(BINGO_CHIPLET_READD(A_l1));       // loaded A4 at L1
+        task_check_A4_args_chip_0x11->data_size = BINGO_CHIPLET_READW(AdataTileSize);
         HOST_DEBUG_PRINT("Chip(%x, %x): check A4 loaded correctly Args: golden_data_addr=%x, output_data_addr=%x, data_size=%x\r\n", get_current_chip_loc_x(),get_current_chip_loc_y(),
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_A4_args_chip_0x11)->golden_data_addr,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_A4_args_chip_0x11)->output_data_addr,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_A4_args_chip_0x11)->data_size);
+        task_check_A4_args_chip_0x11->golden_data_addr,
+        task_check_A4_args_chip_0x11->output_data_addr,
+        task_check_A4_args_chip_0x11->data_size);
         // check B loaded correctly at chiplet 0x11
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_B_args_chip_0x11)->golden_data_addr = LOW32(B_golden_l3);  // golden B at cluster L3
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_B_args_chip_0x11)->output_data_addr = LOW32(BINGO_CHIPLET_READD(B_l1));  // loaded B at L1
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_B_args_chip_0x11)->data_size = BdataSize;
+        task_check_B_args_chip_0x11 = (__snax_kernel_check_results_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_check_results_args_t));
+        task_check_B_args_chip_0x11->golden_data_addr = LOW32(B_golden_l3);  // golden B at cluster L3
+        task_check_B_args_chip_0x11->output_data_addr = LOW32(BINGO_CHIPLET_READD(B_l1));  // loaded B at L1
+        task_check_B_args_chip_0x11->data_size = BdataSize;
         HOST_DEBUG_PRINT("Chip(%x, %x): check B loaded correctly Args: golden_data_addr=%x, output_data_addr=%x, data_size=%x\r\n", get_current_chip_loc_x(),get_current_chip_loc_y(),
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_B_args_chip_0x11)->golden_data_addr,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_B_args_chip_0x11)->output_data_addr,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_B_args_chip_0x11)->data_size);
+        task_check_B_args_chip_0x11->golden_data_addr,
+        task_check_B_args_chip_0x11->output_data_addr,
+        task_check_B_args_chip_0x11->data_size);
         // GeMM args for chiplet 0x11
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x11)->input_A_addr_hi = HIGH32(get_current_chip_baseaddress_value());
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x11)->input_A_addr_lo = LOW32(BINGO_CHIPLET_READD(A_l1));
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x11)->input_B_addr_hi = HIGH32(get_current_chip_baseaddress_value());
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x11)->input_B_addr_lo = LOW32(BINGO_CHIPLET_READD(B_l1));
+        task_gemm_args_chip_0x11 = (__snax_kernel_gemm_intra_chiplet_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_gemm_intra_chiplet_args_t));
+        task_gemm_args_chip_0x11->input_A_addr_hi = HIGH32(get_current_chip_baseaddress_value());
+        task_gemm_args_chip_0x11->input_A_addr_lo = LOW32(BINGO_CHIPLET_READD(A_l1));
+        task_gemm_args_chip_0x11->input_B_addr_hi = HIGH32(get_current_chip_baseaddress_value());
+        task_gemm_args_chip_0x11->input_B_addr_lo = LOW32(BINGO_CHIPLET_READD(B_l1));
         // C matrix
         if (BINGO_CHIPLET_READW(accumPrevC) || BINGO_CHIPLET_READW(addZeroC)) {
             // When accumPrevC is true, we use D as the previous C matrix
-            BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x11)->input_C_addr_hi = 0;
-            BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x11)->input_C_addr_lo = 0;
+            task_gemm_args_chip_0x11->input_C_addr_hi = 0;
+            task_gemm_args_chip_0x11->input_C_addr_lo = 0;
         } else {
-            BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x11)->input_C_addr_hi = HIGH32(get_current_chip_baseaddress_value());
-            BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x11)->input_C_addr_lo = LOW32(BINGO_CHIPLET_READD(C_l1));
+            task_gemm_args_chip_0x11->input_C_addr_hi = HIGH32(get_current_chip_baseaddress_value());
+            task_gemm_args_chip_0x11->input_C_addr_lo = LOW32(BINGO_CHIPLET_READD(C_l1));
         }
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x11)->output_D_addr_hi = HIGH32(get_current_chip_baseaddress_value());
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x11)->output_D_addr_lo = LOW32(BINGO_CHIPLET_READD(D_l1));
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x11)->M = BINGO_CHIPLET_READW(M);
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x11)->K = BINGO_CHIPLET_READW(K);
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x11)->N = BINGO_CHIPLET_READW(N);
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x11)->array_shape = BINGO_CHIPLET_READW(array_shape);
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x11)->transpose_A = BINGO_CHIPLET_READW(transposed_A);
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x11)->transpose_B = BINGO_CHIPLET_READW(transposed_B);
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x11)->accumPrevC = BINGO_CHIPLET_READW(accumPrevC);
+        task_gemm_args_chip_0x11->output_D_addr_hi = HIGH32(get_current_chip_baseaddress_value());
+        task_gemm_args_chip_0x11->output_D_addr_lo = LOW32(BINGO_CHIPLET_READD(D_l1));
+        task_gemm_args_chip_0x11->M = BINGO_CHIPLET_READW(M);
+        task_gemm_args_chip_0x11->K = BINGO_CHIPLET_READW(K);
+        task_gemm_args_chip_0x11->N = BINGO_CHIPLET_READW(N);
+        task_gemm_args_chip_0x11->array_shape = BINGO_CHIPLET_READW(array_shape);
+        task_gemm_args_chip_0x11->transpose_A = BINGO_CHIPLET_READW(transposed_A);
+        task_gemm_args_chip_0x11->transpose_B = BINGO_CHIPLET_READW(transposed_B);
+        task_gemm_args_chip_0x11->accumPrevC = BINGO_CHIPLET_READW(accumPrevC);
         HOST_DEBUG_PRINT("Chip(%x, %x): gemm compute Args: A_addr_hi=%x, A_addr_lo=%x, B_addr_hi=%x, B_addr_lo=%x, C_addr_hi=%x, C_addr_lo=%x, D_addr_hi=%x, D_addr_lo=%x, M=%x, K=%x, N=%x\r\n", get_current_chip_loc_x(),get_current_chip_loc_y(),
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x11)->input_A_addr_hi,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x11)->input_A_addr_lo,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x11)->input_B_addr_hi,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x11)->input_B_addr_lo,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x11)->input_C_addr_hi,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x11)->input_C_addr_lo,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x11)->output_D_addr_hi,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x11)->output_D_addr_lo,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x11)->M,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x11)->K,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_gemm_args_chip_0x11)->N);
+        task_gemm_args_chip_0x11->input_A_addr_hi,
+        task_gemm_args_chip_0x11->input_A_addr_lo,
+        task_gemm_args_chip_0x11->input_B_addr_hi,
+        task_gemm_args_chip_0x11->input_B_addr_lo,
+        task_gemm_args_chip_0x11->input_C_addr_hi,
+        task_gemm_args_chip_0x11->input_C_addr_lo,
+        task_gemm_args_chip_0x11->output_D_addr_hi,
+        task_gemm_args_chip_0x11->output_D_addr_lo,
+        task_gemm_args_chip_0x11->M,
+        task_gemm_args_chip_0x11->K,
+        task_gemm_args_chip_0x11->N);
         // Args for storing output D from L1 to L3 at chiplet 0x11
         uintptr_t D_dst_addr_chip_0x11 = (uintptr_t)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), DdataSize);
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_store_output_args_chip_0x11)->src_addr_hi = HIGH32(get_current_chip_baseaddress_value());
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_store_output_args_chip_0x11)->src_addr_lo = LOW32(BINGO_CHIPLET_READD(D_l1));
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_store_output_args_chip_0x11)->dst_addr_hi = HIGH32(D_dst_addr_chip_0x11);
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_store_output_args_chip_0x11)->dst_addr_lo = LOW32(D_dst_addr_chip_0x11);
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_store_output_args_chip_0x11)->size = DdataSize;
+        task_store_output_args_chip_0x11 = (__snax_kernel_idma_1d_copy_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_idma_1d_copy_args_t));
+        task_store_output_args_chip_0x11->src_addr_hi = HIGH32(get_current_chip_baseaddress_value());
+        task_store_output_args_chip_0x11->src_addr_lo = LOW32(BINGO_CHIPLET_READD(D_l1));
+        task_store_output_args_chip_0x11->dst_addr_hi = HIGH32(D_dst_addr_chip_0x11);
+        task_store_output_args_chip_0x11->dst_addr_lo = LOW32(D_dst_addr_chip_0x11);
+        task_store_output_args_chip_0x11->size = DdataSize;
         HOST_DEBUG_PRINT("Chip(%x, %x): store output D from L1 to L3 Args: src_addr_hi=%x, src_addr_lo=%x, dst_addr_hi=%x, dst_addr_lo=%x, size=%x\r\n", get_current_chip_loc_x(),get_current_chip_loc_y(),
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_store_output_args_chip_0x11)->src_addr_hi,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_store_output_args_chip_0x11)->src_addr_lo,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_store_output_args_chip_0x11)->dst_addr_hi,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_store_output_args_chip_0x11)->dst_addr_lo,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_store_output_args_chip_0x11)->size);
+        task_store_output_args_chip_0x11->src_addr_hi,
+        task_store_output_args_chip_0x11->src_addr_lo,
+        task_store_output_args_chip_0x11->dst_addr_hi,
+        task_store_output_args_chip_0x11->dst_addr_lo,
+        task_store_output_args_chip_0x11->size);
         // Args for checking output D4 at chiplet 0x11
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_D4_args_chip_0x11)->golden_data_addr = LOW32(D4_golden_l3);
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_D4_args_chip_0x11)->output_data_addr = LOW32(D_dst_addr_chip_0x11);
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_D4_args_chip_0x11)->data_size = DdataSize;
+        task_check_D4_args_chip_0x11 = (__snax_kernel_check_results_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_check_results_args_t));
+        task_check_D4_args_chip_0x11->golden_data_addr = LOW32(D4_golden_l3);
+        task_check_D4_args_chip_0x11->output_data_addr = LOW32(D_dst_addr_chip_0x11);
+        task_check_D4_args_chip_0x11->data_size = DdataSize;
         HOST_DEBUG_PRINT("Chip(%x, %x): check output D4 Args: golden_data_addr=%x, output_data_addr=%x, data_size=%x\r\n", get_current_chip_loc_x(),get_current_chip_loc_y(),
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_D4_args_chip_0x11)->golden_data_addr,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_D4_args_chip_0x11)->output_data_addr,
-        BINGO_CHIPLET_LOCAL_PTR_AUTO(task_check_D4_args_chip_0x11)->data_size);
+        task_check_D4_args_chip_0x11->golden_data_addr,
+        task_check_D4_args_chip_0x11->output_data_addr,
+        task_check_D4_args_chip_0x11->data_size);
     }
 
     /////////////////////
@@ -537,20 +562,20 @@ uint32_t __workload_versacore_multi_chiplet_broadcast(bingo_task_t** task_list) 
     /////////////////////
 
     bingo_task_t* task_mempool_to_cluster_A1_chip_0x00 = bingo_task_create(__snax_kernel_idma_1d_copy_func_addr,
-                                                                          (uint32_t)(uintptr_t)(&task_mempool_to_cluster_args_A1_chip_0x00), 
+                                                                          (uint32_t)(uintptr_t)(task_mempool_to_cluster_args_A1_chip_0x00), 
                                                                           0x00,
                                                                           0);
     bingo_task_t* task_mempool_to_cluster_A2_chip_0x01 = bingo_task_create(__snax_kernel_idma_1d_copy_func_addr,
-                                                                          (uint32_t)(uintptr_t)(&task_mempool_to_cluster_args_A2_chip_0x01),
+                                                                          (uint32_t)(uintptr_t)(task_mempool_to_cluster_args_A2_chip_0x01),
                                                                           0x01,
                                                                           0);
 
     bingo_task_t* task_mempool_to_cluster_A3_chip_0x10 = bingo_task_create(__snax_kernel_idma_1d_copy_func_addr,
-                                                                          (uint32_t)(uintptr_t)(&task_mempool_to_cluster_args_A3_chip_0x10),
+                                                                          (uint32_t)(uintptr_t)(task_mempool_to_cluster_args_A3_chip_0x10),
                                                                           0x10,
                                                                           0);
     bingo_task_t* task_mempool_to_cluster_A4_chip_0x11 = bingo_task_create(__snax_kernel_idma_1d_copy_func_addr,
-                                                                          (uint32_t)(uintptr_t)(&task_mempool_to_cluster_args_A4_chip_0x11),
+                                                                          (uint32_t)(uintptr_t)(task_mempool_to_cluster_args_A4_chip_0x11),
                                                                           0x11,
                                                                           0);
     if (task_mempool_to_cluster_A1_chip_0x00 == NULL ||
@@ -560,20 +585,20 @@ uint32_t __workload_versacore_multi_chiplet_broadcast(bingo_task_t** task_list) 
         HOST_DEBUG_PRINT("Error: Task mempool to cluster A creation failed!\r\n");
     }
     bingo_task_t* task_check_A1_chip_0x00 = bingo_task_create(__snax_kernel_check_results_func_addr,
-                                                             (uint32_t)(uintptr_t)(&task_check_A1_args_chip_0x00),
+                                                             (uint32_t)(uintptr_t)(task_check_A1_args_chip_0x00),
                                                              0x00,
                                                              0);
 
     bingo_task_t* task_check_A2_chip_0x01 = bingo_task_create(__snax_kernel_check_results_func_addr, 
-                                                             (uint32_t)(uintptr_t)(&task_check_A2_args_chip_0x01),
+                                                             (uint32_t)(uintptr_t)(task_check_A2_args_chip_0x01),
                                                              0x01,
                                                              0);
     bingo_task_t* task_check_A3_chip_0x10 = bingo_task_create(__snax_kernel_check_results_func_addr,
-                                                             (uint32_t)(uintptr_t)(&task_check_A3_args_chip_0x10),
+                                                             (uint32_t)(uintptr_t)(task_check_A3_args_chip_0x10),
                                                              0x10,
                                                              0);
     bingo_task_t* task_check_A4_chip_0x11 = bingo_task_create(__snax_kernel_check_results_func_addr,
-                                                             (uint32_t)(uintptr_t)(&task_check_A4_args_chip_0x11),
+                                                             (uint32_t)(uintptr_t)(task_check_A4_args_chip_0x11),
                                                              0x11,
                                                              0);
     if (task_check_A1_chip_0x00 == NULL ||
@@ -584,30 +609,30 @@ uint32_t __workload_versacore_multi_chiplet_broadcast(bingo_task_t** task_list) 
     }
 
     bingo_task_t* task_mempool_to_cluster_B_chip_0x00 = bingo_task_create(__snax_kernel_idma_1d_copy_func_addr,
-                                                                         (uint32_t)(uintptr_t)(&task_mempool_to_cluster_args_B_chip_0x00),
+                                                                         (uint32_t)(uintptr_t)(task_mempool_to_cluster_args_B_chip_0x00),
                                                                          0x00,
                                                                          0);
 
     bingo_task_t* task_check_B_chip_0x00 = bingo_task_create(__snax_kernel_check_results_func_addr,
-                                                            (uint32_t)(uintptr_t)(&task_check_B_args_chip_0x00),
+                                                            (uint32_t)(uintptr_t)(task_check_B_args_chip_0x00),
                                                             0x00,
                                                             0);
 
     bingo_task_t* task_broadcast_B_chip_0x00 = bingo_task_create(__snax_kernel_idma_1d_copy_func_addr,
-                                                                (uint32_t)(uintptr_t)(&task_idma_broadcast_B_args_chip_0x00),
+                                                                (uint32_t)(uintptr_t)(task_idma_broadcast_B_args_chip_0x00),
                                                                 0x00,
                                                                 0);
 
     bingo_task_t* task_check_B_broadcasted_chip_0x01 = bingo_task_create(__snax_kernel_check_results_func_addr,
-                                                                        (uint32_t)(uintptr_t)(&task_check_B_args_chip_0x01),
+                                                                        (uint32_t)(uintptr_t)(task_check_B_args_chip_0x01),
                                                                         0x01,
                                                                         0);
     bingo_task_t* task_check_B_broadcasted_chip_0x10 = bingo_task_create(__snax_kernel_check_results_func_addr,
-                                                                        (uint32_t)(uintptr_t)(&task_check_B_args_chip_0x10),
+                                                                        (uint32_t)(uintptr_t)(task_check_B_args_chip_0x10),
                                                                         0x10,
                                                                         0);
     bingo_task_t* task_check_B_broadcasted_chip_0x11 = bingo_task_create(__snax_kernel_check_results_func_addr,
-                                                                        (uint32_t)(uintptr_t)(&task_check_B_args_chip_0x11),
+                                                                        (uint32_t)(uintptr_t)(task_check_B_args_chip_0x11),
                                                                         0x11,
                                                                         0);
     if (task_mempool_to_cluster_B_chip_0x00 == NULL ||
@@ -620,52 +645,52 @@ uint32_t __workload_versacore_multi_chiplet_broadcast(bingo_task_t** task_list) 
     }
 
     bingo_task_t* task_versacore_chip_0x00 = bingo_task_create(__snax_kernel_gemm,
-                                                              (uint32_t)(uintptr_t)(&task_gemm_args_chip_0x00),
+                                                              (uint32_t)(uintptr_t)(task_gemm_args_chip_0x00),
                                                               0x00,
                                                               0);
     bingo_task_t* task_store_output_chip_0x00 = bingo_task_create(__snax_kernel_idma_1d_copy_func_addr,
-                                                                 (uint32_t)(uintptr_t)(&task_store_output_args_chip_0x00),
+                                                                 (uint32_t)(uintptr_t)(task_store_output_args_chip_0x00),
                                                                  0x00,
                                                                  0);
     bingo_task_t* task_check_results_chip_0x00 = bingo_task_create(__snax_kernel_check_results_func_addr,
-                                                                   (uint32_t)(uintptr_t)(&task_check_D1_args_chip_0x00),
+                                                                   (uint32_t)(uintptr_t)(task_check_D1_args_chip_0x00),
                                                                    0x00,
                                                                    0);
 
     bingo_task_t* task_versacore_chip_0x01 = bingo_task_create(__snax_kernel_gemm,
-                                                              (uint32_t)(uintptr_t)(&task_gemm_args_chip_0x01),
+                                                              (uint32_t)(uintptr_t)(task_gemm_args_chip_0x01),
                                                               0x01,
                                                               0);
     bingo_task_t* task_store_output_chip_0x01 = bingo_task_create(__snax_kernel_idma_1d_copy_func_addr,
-                                                                 (uint32_t)(uintptr_t)(&task_store_output_args_chip_0x01),
+                                                                 (uint32_t)(uintptr_t)(task_store_output_args_chip_0x01),
                                                                  0x01,
                                                                  0);
     bingo_task_t* task_check_results_chip_0x01 = bingo_task_create(__snax_kernel_check_results_func_addr,
-                                                                   (uint32_t)(uintptr_t)(&task_check_D2_args_chip_0x01),
+                                                                   (uint32_t)(uintptr_t)(task_check_D2_args_chip_0x01),
                                                                    0x01,
                                                                    0);
     bingo_task_t* task_versacore_chip_0x10 = bingo_task_create(__snax_kernel_gemm,
-                                                              (uint32_t)(uintptr_t)(&task_gemm_args_chip_0x10),
+                                                              (uint32_t)(uintptr_t)(task_gemm_args_chip_0x10),
                                                               0x10,
                                                               0);
     bingo_task_t* task_store_output_chip_0x10 = bingo_task_create(__snax_kernel_idma_1d_copy_func_addr,
-                                                                 (uint32_t)(uintptr_t)(&task_store_output_args_chip_0x10),
+                                                                 (uint32_t)(uintptr_t)(task_store_output_args_chip_0x10),
                                                                  0x10,
                                                                  0);
     bingo_task_t* task_check_results_chip_0x10 = bingo_task_create(__snax_kernel_check_results_func_addr,
-                                                                   (uint32_t)(uintptr_t)(&task_check_D3_args_chip_0x10),
+                                                                   (uint32_t)(uintptr_t)(task_check_D3_args_chip_0x10),
                                                                    0x10,
                                                                    0);
     bingo_task_t* task_versacore_chip_0x11 = bingo_task_create(__snax_kernel_gemm,
-                                                              (uint32_t)(uintptr_t)(&task_gemm_args_chip_0x11),
+                                                              (uint32_t)(uintptr_t)(task_gemm_args_chip_0x11),
                                                               0x11,
                                                               0);
     bingo_task_t* task_store_output_chip_0x11 = bingo_task_create(__snax_kernel_idma_1d_copy_func_addr,
-                                                                 (uint32_t)(uintptr_t)(&task_store_output_args_chip_0x11),
+                                                                 (uint32_t)(uintptr_t)(task_store_output_args_chip_0x11),
                                                                  0x11,
                                                                  0);
     bingo_task_t* task_check_results_chip_0x11 = bingo_task_create(__snax_kernel_check_results_func_addr,
-                                                                   (uint32_t)(uintptr_t)(&task_check_D4_args_chip_0x11),
+                                                                   (uint32_t)(uintptr_t)(task_check_D4_args_chip_0x11),
                                                                    0x11,
                                                                    0);
     if (task_versacore_chip_0x00 == NULL ||
