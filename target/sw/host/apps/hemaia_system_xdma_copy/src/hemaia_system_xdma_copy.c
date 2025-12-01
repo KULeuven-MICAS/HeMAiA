@@ -97,13 +97,28 @@ int main() {
             (uintptr_t)data_dest2);
     }
 
+    sys_dma_blk_memcpy(current_chip_id, (uintptr_t)data_dest2, (uintptr_t)data_dest1, data_size);
+    printf("IDMA unicast copy finished to destination 2! \r\n");
+    printf("Checking data correctness...\r\n");
+    for (uint32_t i = 0; i < data_size; i++) {
+        if (data[i] != data_dest2[i]) {
+            printf("Data mismatch at index %d: expected %d, got %d\n", i,
+                   data[i], data_dest2[i]);
+            return -1;
+        }
+    }
+    sys_dma_blk_memcpy(current_chip_id, (uintptr_t)data_dest2, (uintptr_t)WIDE_ZERO_MEM_BASE_ADDR, data_size);
+    printf("Data at destination 2 is cleaned! \r\n");
+
+    chip_barrier(comm_buffer_ptr, 0x00, 0x11, 2);
+
     if (get_current_chip_id() == 0) {
         sys_dma_blk_memcpy(
             0x20, chiplet_addr_transform_loc(0xF, 0xF, (uintptr_t)data_dest2),
             (uintptr_t)data_dest1, data_size);
         printf("IDMA broadcast copy finished to destination 2! \r\n");
     }
-    chip_barrier(comm_buffer_ptr, 0x00, 0x11, 2);
+    chip_barrier(comm_buffer_ptr, 0x00, 0x11, 3);
 
     printf("Checking data correctness...\r\n");
     for (uint32_t i = 0; i < data_size; i++) {
