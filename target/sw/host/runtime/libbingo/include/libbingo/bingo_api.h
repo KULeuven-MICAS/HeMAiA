@@ -203,16 +203,6 @@ typedef struct {
   uint32_t seq_counter;      // Monotonic sequence for message stamping
 } bingo_chip_sched_t;
 
-// Helper inline to test if a task is globally ready (both local and remote deps satisfied)
-static inline bool bingo_task_is_globally_ready(const bingo_task_t *t) {
-  return (t->local_pred_remaining == 0) && (t->remote_pred_remaining == 0);
-}
-
-// Reset live dependency counters from their initial snapshots (used for replays / diagnostics)
-static inline void bingo_task_reset_deps(bingo_task_t *t) {
-  t->local_pred_remaining  = t->local_pred_initial;
-  t->remote_pred_remaining = t->remote_pred_initial;
-}
 
 
 ////////////////////
