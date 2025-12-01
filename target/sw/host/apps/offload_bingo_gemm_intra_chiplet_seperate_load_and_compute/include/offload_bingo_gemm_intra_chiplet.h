@@ -6,7 +6,7 @@
 #pragma once
 #include "host.h"
 #include "libbingo/bingo_api.h"
-#include "gemm_intra_chiplet_workload.h"
+#include "gemm_intra_chiplet_workload_xdma.h"
 
 // Kernel Execution
 int kernel_execution() {
