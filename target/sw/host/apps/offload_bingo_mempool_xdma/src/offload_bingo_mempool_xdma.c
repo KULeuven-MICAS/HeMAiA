@@ -21,13 +21,13 @@
 //       (see details in the bingo_runtime_schedule function in bingo_api.c)
 #include "offload_bingo_mempool_xdma.h"
 int main() {
-    
     // Bear in mind that all the function calls here will be executed by all the chiplets
     // The chip id and chip address prefix is needed to differentiate the chiplets
-    uintptr_t current_chip_address_prefix = (uintptr_t)get_current_chip_baseaddress();
     uint8_t current_chip_id = get_current_chip_id();
+    // Program the Chiplet Topology
+    hemaia_d2d_link_initialize(current_chip_id);
     // Init the uart for printf
-    init_uart(current_chip_address_prefix, 32, 1);
+    init_uart(get_current_chip_baseaddress(), 32, 1);
     printf("Multi-chip Offload Bingo Main\r\n");
     printf("Chip(%x, %x): [Host] Start Offloading Program\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
 

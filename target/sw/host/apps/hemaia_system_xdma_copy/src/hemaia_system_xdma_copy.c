@@ -13,12 +13,11 @@ O1HeapInstance* l3_heap_manager = NULL;
 volatile O1HeapInstance* dram_heap_manager = NULL;
 
 int main() {
-    uintptr_t current_chip_address_prefix =
-        (uintptr_t)get_current_chip_baseaddress();
-    uint32_t current_chip_id = get_current_chip_id();
-
-    // Init the uart for printf and enable software interrupts
-    init_uart(current_chip_address_prefix, 32, 1);
+    uint8_t current_chip_id = get_current_chip_id();
+    // Program the Chiplet Topology
+    hemaia_d2d_link_initialize(current_chip_id);
+    // Init the uart for printf
+    init_uart(get_current_chip_baseaddress(), 32, 1);
     enable_sw_interrupts();
 
     // Init bingo runtime

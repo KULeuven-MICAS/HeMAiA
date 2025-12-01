@@ -6,7 +6,6 @@
 #include "offload_bingo.h"
 
 int main() {
-    
     uintptr_t current_chip_address_prefix =
         (uintptr_t)get_current_chip_baseaddress();
     uint8_t current_chip_id = get_current_chip_id();

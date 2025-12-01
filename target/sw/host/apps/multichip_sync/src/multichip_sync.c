@@ -9,21 +9,18 @@ int main() {
     // The pointer to the communication buffer
     volatile comm_buffer_t* comm_buffer_ptr = (comm_buffer_t*)0;
 
-    // Reset and ungate all quadrants, deisolate
-    uintptr_t current_chip_address_prefix =
-        (uintptr_t)get_current_chip_baseaddress();
-    comm_buffer_ptr = (comm_buffer_t*)(((uint64_t)&__narrow_spm_start) |
-                                       current_chip_address_prefix);
+    comm_buffer_ptr = (comm_buffer_t*)chiplet_addr_transform(((uint64_t)&__narrow_spm_start));
+
     // Initialize the communication buffer
     initialize_comm_buffer((comm_buffer_t*)comm_buffer_ptr);
     // Initialize the UART
-    init_uart(current_chip_address_prefix, 32, 1);
-    // print_str(current_chip_address_prefix,
-    //           "[HeMAiA] The multi-chip synchronization tester \r\n");
+    init_uart(get_current_chip_baseaddress(), 32, 1);
+    // Initialize the D2D link topology
+    hemaia_d2d_link_initialize(get_current_chip_id());
 
     for (uint8_t i = 1;; i++) {
         printf("[HeMAiA] Press to run barrier %d \r\n", i);
-        scan_char(current_chip_address_prefix);
+        scan_char(get_current_chip_baseaddress());
         uint64_t cycle_num_before = mcycle();
         // Barrier
         chip_barrier(comm_buffer_ptr, 0x00, 0x11, i);

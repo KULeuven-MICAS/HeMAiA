@@ -15,6 +15,7 @@
 // HeMAiA specific peripherals
 #include "uart.c"
 #include "hemaia_clk_rst_controller.h"
+#include "hemaia_d2d_link.h"
 #include "hemaia-xdma-lib.h"
 #include "mailbox.h"
 #include "io.h"
