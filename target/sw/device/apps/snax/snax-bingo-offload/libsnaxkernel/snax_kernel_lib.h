@@ -29,6 +29,25 @@ inline uint64_t make_u64(uint32_t hi, uint32_t lo) {
 }
 
 #define EXTRACT_BIT(x, pos) (((x) >> (pos)) & 1)
+
+// Debug Prints
+#ifdef IDMA_DEBUG
+#define IDMA_DEBUG_PRINT(...) printf(__VA_ARGS__)
+#else
+#define IDMA_DEBUG_PRINT(...)
+#endif
+
+#ifdef XDMA_DEBUG
+#define XDMA_DEBUG_PRINT(...) printf(__VA_ARGS__)
+#else
+#define XDMA_DEBUG_PRINT(...)
+#endif
+
+#ifdef CHECK_RESULT_DEBUG
+#define CHECK_RESULT_DEBUG_PRINT(...) printf(__VA_ARGS__)
+#else
+#define CHECK_RESULT_DEBUG_PRINT(...)
+#endif
 //////////////////////// Kernel functions ////////////////////////
 // Template for user defined kernels
 // Each kernel function takes a single void* argument
@@ -93,6 +112,9 @@ SNAX_LIB_DEFINE void __snax_kernel_check_results(void* arg) {
         uint32_t output_data_addr = ((uint32_t*)arg)[1];
         uint32_t data_size = ((uint32_t*)arg)[2];
         uint32_t num_errors = 0;
+        CHECK_RESULT_DEBUG_PRINT("Checking results...\n");
+        CHECK_RESULT_DEBUG_PRINT("Golden data address: %x\n", golden_data_addr);
+        CHECK_RESULT_DEBUG_PRINT("Output data address: %x\n", output_data_addr);
         for (uint32_t i = 0; i < data_size / sizeof(uint32_t); i++) {
             if (((uint32_t*)golden_data_addr)[i] !=
                 ((uint32_t*)output_data_addr)[i]) {
@@ -451,6 +473,9 @@ SNAX_LIB_DEFINE void __snax_kernel_xdma_1d_copy(void* arg) {
         xdma_memcpy_1d_full_addr(src_addr, dst_addr, data_size);
         int task_id = xdma_start();
         xdma_remote_wait(task_id);
+        XDMA_DEBUG_PRINT("XDMA copy completed\n");
+        XDMA_DEBUG_PRINT("SRC ADDR = %lx\n", src_addr);
+        XDMA_DEBUG_PRINT("DST ADDR = %lx\n", dst_addr);
     }
 }
 
@@ -470,6 +495,9 @@ SNAX_LIB_DEFINE void __snax_kernel_idma_1d_copy(void* arg) {
 
         snrt_dma_start_1d_wideptr(dst_addr, src_addr, data_size);
         snrt_dma_wait_all();
+        IDMA_DEBUG_PRINT("IDMA copy completed\r\n");
+        IDMA_DEBUG_PRINT("SRC ADDR = %lx\r\n", src_addr);
+        IDMA_DEBUG_PRINT("DST ADDR = %lx\r\n", dst_addr);
     }
 }
 
@@ -2050,16 +2078,11 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm(void* arg) {
         get_cls_shared_ptrs()[0][26] = store_D? (uint32_t)get_cls_shared_ptrs()[4] : D_addr_lo;
 
     }
-
     snrt_cluster_hw_barrier();
 
     // Here all the cores can access the args from L1
     // Specifically the compute core will configure the streamer and versacore accoring to the following shared ptrs
     uint32_t* arg_ptr = get_cls_shared_ptrs()[0]; 
-    uint32_t local_A_addr = arg_ptr[23];
-    uint32_t local_B_addr = arg_ptr[24];
-    uint32_t local_C_addr = arg_ptr[25];
-    uint32_t local_D_addr = arg_ptr[26];
     uint32_t M = arg_ptr[8];
     uint32_t K = arg_ptr[9];
     uint32_t N = arg_ptr[10];
@@ -2079,7 +2102,10 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm(void* arg) {
     uint32_t load_B = arg_ptr[20];
     uint32_t load_C = arg_ptr[21];
     uint32_t store_D = arg_ptr[22];
-
+    uint32_t local_A_addr = arg_ptr[23];
+    uint32_t local_B_addr = arg_ptr[24];
+    uint32_t local_C_addr = arg_ptr[25];
+    uint32_t local_D_addr = arg_ptr[26];
     // The core 0 will be responsible for configuring and starting the versacore
     if (snrt_cluster_core_idx() == 0) {
         // compute the streamer cfg first

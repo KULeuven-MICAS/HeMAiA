@@ -10,8 +10,9 @@
 #include "host.h"
 #include "libbingo/bingo_api.h"
 
+// #define HOST_DEBUG
 #ifdef HOST_DEBUG
-#define HOST_DEBUG_PRINT(...) HOST_DEBUG_PRINT(__VA_ARGS__)
+#define HOST_DEBUG_PRINT(...) printf(__VA_ARGS__)
 #else
 #define HOST_DEBUG_PRINT(...)
 #endif
@@ -45,11 +46,11 @@ uint32_t __workload_versacore_multi_chiplet_broadcast(bingo_task_t** task_list) 
 
     uint32_t __snax_kernel_xdma_1d_copy_func_addr = get_device_function("__snax_kernel_xdma_1d_copy");
     uint32_t __snax_kernel_idma_1d_copy_func_addr = get_device_function("__snax_kernel_idma_1d_copy");
-    uint32_t __snax_kernel_gemm_compute_only_intra_chiplet_func_addr = get_device_function("__snax_kernel_gemm");
+    uint32_t __snax_kernel_gemm = get_device_function("__snax_kernel_gemm");
     uint32_t __snax_kernel_check_results_func_addr = get_device_function("__snax_kernel_check_results");
     if (__snax_kernel_xdma_1d_copy_func_addr == SNAX_SYMTAB_END_FN_ADDR ||
         __snax_kernel_idma_1d_copy_func_addr == SNAX_SYMTAB_END_FN_ADDR ||
-        __snax_kernel_gemm_compute_only_intra_chiplet_func_addr == SNAX_SYMTAB_END_FN_ADDR ||
+        __snax_kernel_gemm == SNAX_SYMTAB_END_FN_ADDR ||
         __snax_kernel_check_results_func_addr == SNAX_SYMTAB_END_FN_ADDR) {
         HOST_DEBUG_PRINT("Error: Kernel symbol lookup failed!\r\n");
     }
@@ -103,17 +104,17 @@ uint32_t __workload_versacore_multi_chiplet_broadcast(bingo_task_t** task_list) 
     uint64_t D_l1 = bingo_l1_alloc(get_current_chip_id(), 0, BINGO_CHIPLET_READW(DdataSize));
     // Store those L1 addresses
     // Load A tiles from mempool to L1 at each chiplet
-    __snax_kernel_xdma_1d_copy_args_t task_mempool_to_cluster_args_A1_chip_0x00;
-    __snax_kernel_xdma_1d_copy_args_t task_mempool_to_cluster_args_A2_chip_0x01;
-    __snax_kernel_xdma_1d_copy_args_t task_mempool_to_cluster_args_A3_chip_0x10;
-    __snax_kernel_xdma_1d_copy_args_t task_mempool_to_cluster_args_A4_chip_0x11;
+    __snax_kernel_idma_1d_copy_args_t task_mempool_to_cluster_args_A1_chip_0x00;
+    __snax_kernel_idma_1d_copy_args_t task_mempool_to_cluster_args_A2_chip_0x01;
+    __snax_kernel_idma_1d_copy_args_t task_mempool_to_cluster_args_A3_chip_0x10;
+    __snax_kernel_idma_1d_copy_args_t task_mempool_to_cluster_args_A4_chip_0x11;
     // check A loaded correctly at each chiplet
     __snax_kernel_check_results_args_t task_check_A1_args_chip_0x00;
     __snax_kernel_check_results_args_t task_check_A2_args_chip_0x01;
     __snax_kernel_check_results_args_t task_check_A3_args_chip_0x10;
     __snax_kernel_check_results_args_t task_check_A4_args_chip_0x11;
     // Then chiplet 0x00 loads B from mempool to l1
-    __snax_kernel_xdma_1d_copy_args_t task_mempool_to_cluster_args_B_chip_0x00;
+    __snax_kernel_idma_1d_copy_args_t task_mempool_to_cluster_args_B_chip_0x00;
     // Then chiplet 0x00 check B loaded correctly at L1
     __snax_kernel_check_results_args_t task_check_B_args_chip_0x00;
     // Then chiplet 0x00 broadcast B to other chiplets
@@ -535,20 +536,20 @@ uint32_t __workload_versacore_multi_chiplet_broadcast(bingo_task_t** task_list) 
     // 2. Register the tasks
     /////////////////////
 
-    bingo_task_t* task_mempool_to_cluster_A1_chip_0x00 = bingo_task_create(__snax_kernel_xdma_1d_copy_func_addr,
+    bingo_task_t* task_mempool_to_cluster_A1_chip_0x00 = bingo_task_create(__snax_kernel_idma_1d_copy_func_addr,
                                                                           (uint32_t)(uintptr_t)(&task_mempool_to_cluster_args_A1_chip_0x00), 
                                                                           0x00,
                                                                           0);
-    bingo_task_t* task_mempool_to_cluster_A2_chip_0x01 = bingo_task_create(__snax_kernel_xdma_1d_copy_func_addr,
+    bingo_task_t* task_mempool_to_cluster_A2_chip_0x01 = bingo_task_create(__snax_kernel_idma_1d_copy_func_addr,
                                                                           (uint32_t)(uintptr_t)(&task_mempool_to_cluster_args_A2_chip_0x01),
                                                                           0x01,
                                                                           0);
 
-    bingo_task_t* task_mempool_to_cluster_A3_chip_0x10 = bingo_task_create(__snax_kernel_xdma_1d_copy_func_addr,
+    bingo_task_t* task_mempool_to_cluster_A3_chip_0x10 = bingo_task_create(__snax_kernel_idma_1d_copy_func_addr,
                                                                           (uint32_t)(uintptr_t)(&task_mempool_to_cluster_args_A3_chip_0x10),
                                                                           0x10,
                                                                           0);
-    bingo_task_t* task_mempool_to_cluster_A4_chip_0x11 = bingo_task_create(__snax_kernel_xdma_1d_copy_func_addr,
+    bingo_task_t* task_mempool_to_cluster_A4_chip_0x11 = bingo_task_create(__snax_kernel_idma_1d_copy_func_addr,
                                                                           (uint32_t)(uintptr_t)(&task_mempool_to_cluster_args_A4_chip_0x11),
                                                                           0x11,
                                                                           0);
@@ -582,7 +583,7 @@ uint32_t __workload_versacore_multi_chiplet_broadcast(bingo_task_t** task_list) 
         HOST_DEBUG_PRINT("Error: Task check A creation failed!\r\n");
     }
 
-    bingo_task_t* task_mempool_to_cluster_B_chip_0x00 = bingo_task_create(__snax_kernel_xdma_1d_copy_func_addr,
+    bingo_task_t* task_mempool_to_cluster_B_chip_0x00 = bingo_task_create(__snax_kernel_idma_1d_copy_func_addr,
                                                                          (uint32_t)(uintptr_t)(&task_mempool_to_cluster_args_B_chip_0x00),
                                                                          0x00,
                                                                          0);
@@ -618,11 +619,11 @@ uint32_t __workload_versacore_multi_chiplet_broadcast(bingo_task_t** task_list) 
         HOST_DEBUG_PRINT("Error: Task mempool to cluster B or check B creation failed!\r\n");
     }
 
-    bingo_task_t* task_versacore_chip_0x00 = bingo_task_create(__snax_kernel_gemm_compute_only_intra_chiplet_func_addr,
+    bingo_task_t* task_versacore_chip_0x00 = bingo_task_create(__snax_kernel_gemm,
                                                               (uint32_t)(uintptr_t)(&task_gemm_args_chip_0x00),
                                                               0x00,
                                                               0);
-    bingo_task_t* task_store_output_chip_0x00 = bingo_task_create(__snax_kernel_xdma_1d_copy_func_addr,
+    bingo_task_t* task_store_output_chip_0x00 = bingo_task_create(__snax_kernel_idma_1d_copy_func_addr,
                                                                  (uint32_t)(uintptr_t)(&task_store_output_args_chip_0x00),
                                                                  0x00,
                                                                  0);
@@ -631,11 +632,11 @@ uint32_t __workload_versacore_multi_chiplet_broadcast(bingo_task_t** task_list) 
                                                                    0x00,
                                                                    0);
 
-    bingo_task_t* task_versacore_chip_0x01 = bingo_task_create(__snax_kernel_gemm_compute_only_intra_chiplet_func_addr,
+    bingo_task_t* task_versacore_chip_0x01 = bingo_task_create(__snax_kernel_gemm,
                                                               (uint32_t)(uintptr_t)(&task_gemm_args_chip_0x01),
                                                               0x01,
                                                               0);
-    bingo_task_t* task_store_output_chip_0x01 = bingo_task_create(__snax_kernel_xdma_1d_copy_func_addr,
+    bingo_task_t* task_store_output_chip_0x01 = bingo_task_create(__snax_kernel_idma_1d_copy_func_addr,
                                                                  (uint32_t)(uintptr_t)(&task_store_output_args_chip_0x01),
                                                                  0x01,
                                                                  0);
@@ -643,11 +644,11 @@ uint32_t __workload_versacore_multi_chiplet_broadcast(bingo_task_t** task_list) 
                                                                    (uint32_t)(uintptr_t)(&task_check_D2_args_chip_0x01),
                                                                    0x01,
                                                                    0);
-    bingo_task_t* task_versacore_chip_0x10 = bingo_task_create(__snax_kernel_gemm_compute_only_intra_chiplet_func_addr,
+    bingo_task_t* task_versacore_chip_0x10 = bingo_task_create(__snax_kernel_gemm,
                                                               (uint32_t)(uintptr_t)(&task_gemm_args_chip_0x10),
                                                               0x10,
                                                               0);
-    bingo_task_t* task_store_output_chip_0x10 = bingo_task_create(__snax_kernel_xdma_1d_copy_func_addr,
+    bingo_task_t* task_store_output_chip_0x10 = bingo_task_create(__snax_kernel_idma_1d_copy_func_addr,
                                                                  (uint32_t)(uintptr_t)(&task_store_output_args_chip_0x10),
                                                                  0x10,
                                                                  0);
@@ -655,11 +656,11 @@ uint32_t __workload_versacore_multi_chiplet_broadcast(bingo_task_t** task_list) 
                                                                    (uint32_t)(uintptr_t)(&task_check_D3_args_chip_0x10),
                                                                    0x10,
                                                                    0);
-    bingo_task_t* task_versacore_chip_0x11 = bingo_task_create(__snax_kernel_gemm_compute_only_intra_chiplet_func_addr,
+    bingo_task_t* task_versacore_chip_0x11 = bingo_task_create(__snax_kernel_gemm,
                                                               (uint32_t)(uintptr_t)(&task_gemm_args_chip_0x11),
                                                               0x11,
                                                               0);
-    bingo_task_t* task_store_output_chip_0x11 = bingo_task_create(__snax_kernel_xdma_1d_copy_func_addr,
+    bingo_task_t* task_store_output_chip_0x11 = bingo_task_create(__snax_kernel_idma_1d_copy_func_addr,
                                                                  (uint32_t)(uintptr_t)(&task_store_output_args_chip_0x11),
                                                                  0x11,
                                                                  0);
@@ -685,18 +686,18 @@ uint32_t __workload_versacore_multi_chiplet_broadcast(bingo_task_t** task_list) 
     // load A1 (Chip00)      load A2 (Chip01)     load A3 (Chip10)    load A4 (Chip11)
     //   |                         |                      |                      |
     //   v                         v                      v                      v
-    // check A1 (Chip00)     check A2 (Chip01)     check A3 (Chip10)     check A4 (Chip11)
-    //  |                        
-    //  v                        
-    // load B (Chip00)
-    //  |
-    //  v
-    // check B (Chip00)
-    //  |
-    //  v
-    // broadcast B(Chip00)--------------------------------------------------------
-    //   |                      |                          |                     |
-    //   v                      v                          v                     v
+    // check A1 (Chip00)     check A2 (Chip01)     check A3 (Chip10)     check A4(Chip11) 
+    //  |                          |                         |                       |
+    //  v                          |                         |                       |
+    // load B (Chip00)             |                         |                       |
+    //  |                          |                         |                       |
+    //  v                          |                         |                       |
+    // check B (Chip00)            |                         |                       |
+    //  |                          |                         |                       |
+    //  v                          |                         |                       |
+    // broadcast B(Chip00)--------------------------------------------------------   |
+    //   |                      |  |                       | |                   |   |
+    //   v                      v  v                       v v                   v   v
     //  Gemm(Chip00)          check B (Chip01)     check B (Chip10)     check B (Chip11)
     //   |                      |                          |                     |
     //   v                      v                          v                     v
@@ -737,6 +738,9 @@ uint32_t __workload_versacore_multi_chiplet_broadcast(bingo_task_t** task_list) 
     bingo_task_add_depend(task_check_B_broadcasted_chip_0x01,
                           task_broadcast_B_chip_0x00);
 
+    bingo_task_add_depend(task_check_B_broadcasted_chip_0x01,
+                          task_check_A2_chip_0x01);
+
     bingo_task_add_depend(task_versacore_chip_0x01,
                           task_check_B_broadcasted_chip_0x01);
 
@@ -753,6 +757,9 @@ uint32_t __workload_versacore_multi_chiplet_broadcast(bingo_task_t** task_list) 
     bingo_task_add_depend(task_check_B_broadcasted_chip_0x10,
                           task_broadcast_B_chip_0x00);
 
+    bingo_task_add_depend(task_check_B_broadcasted_chip_0x10,
+                          task_check_A3_chip_0x10);
+
     bingo_task_add_depend(task_versacore_chip_0x10,
                           task_check_B_broadcasted_chip_0x10);
 
@@ -768,6 +775,9 @@ uint32_t __workload_versacore_multi_chiplet_broadcast(bingo_task_t** task_list) 
 
     bingo_task_add_depend(task_check_B_broadcasted_chip_0x11,
                           task_broadcast_B_chip_0x00);
+
+    bingo_task_add_depend(task_check_B_broadcasted_chip_0x11,
+                          task_check_A4_chip_0x11);
 
     bingo_task_add_depend(task_versacore_chip_0x11,
                           task_check_B_broadcasted_chip_0x11);
