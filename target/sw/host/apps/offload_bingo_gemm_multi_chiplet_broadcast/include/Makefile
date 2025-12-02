@@ -19,12 +19,13 @@ $(DATA_H): $(DATA_DIR)/gemm_multi_chiplet_datagen.py $(DATA_CFG)
 	$< -c $(DATA_CFG) --hwcfg $(SNITCH_ROOT)/target/snitch_cluster/cfg/snax_versacore_to_cluster.hjson> $@
 
 DATA_HEX = $(DATA_DIR)/matmul_data.hex
+DATA_BIN = $(DATA_DIR)/matmul_data.bin
 $(DATA_HEX): $(DATA_H) $(DATA_DIR)/gemm_multi_chiplet_datagen.py $(DATA_CFG) 
 	$(DATA_DIR)/gen_hex.py
 
 .PHONY: clean-data clean
 
 clean-data:
-	rm -f $(DATA_H) $(DATA_HEX)
+	rm -f $(DATA_H) $(DATA_HEX) $(DATA_BIN)
 
 clean: clean-data
