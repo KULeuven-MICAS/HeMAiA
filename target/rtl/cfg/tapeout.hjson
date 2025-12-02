@@ -107,9 +107,7 @@
       cfg_base_addr: 184549376, // 0x0b000000
       cfg_base_offset: 65536 // 0x10000
     },
-    clusters:[
-      "snax_simbacore_cluster"
-    ],
+    clusters:["snax_simbacore_cluster"],
 
     // peripherals
     peripherals: {
@@ -118,8 +116,8 @@
             length: 131072, // 128 kiB 0x2_0000
         },
         clint: {
-                    address: 67108864, // 0x0400_0000
-                    length: 1048576, // 1 MiB 0x10_0000
+            address: 67108864, // 0x0400_0000
+            length: 1048576, // 1 MiB 0x10_0000
         },
         axi_lite_peripherals: [
             {

@@ -1,13 +1,13 @@
 deps/
-
 .bender/
 Bender.lock
 /working_dir/
-
 .vscode/
 __pycache__
 
-// Modelsim Fiels
+data.h
+
+# Modelsim Files
 *.wlf
 modelsim.ini
 *stacktrace*
@@ -15,6 +15,7 @@ transcript
 
 gmon.out
 
+.cache
 build/
 .Xil/
 .venv/
@@ -28,4 +29,5 @@ component.xml
 *.zip
 *.str
 
+compile_commands.json
 target/tapeout/tcl/*

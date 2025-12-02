@@ -22,7 +22,7 @@ endif
 ################
 
 # Fixed paths in repository tree
-ROOT     = $(abspath $(MK_DIR)/../../../../..)
+ROOT     = $(shell bender path snitch_cluster)
 SNRT_DIR = $(ROOT)/sw/snRuntime
 ## Paths relative to the runtime including this Makefile
 BUILDDIR = $(abspath build)

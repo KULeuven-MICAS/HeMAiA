@@ -72,7 +72,6 @@ sources:
       - hw/spm_interface/test/tb_spm_1p_adv.sv
 
   # cluster wrapper (If the file is added in the snax repo, then it does not needed to be added here)
-
   - target: snax_minimal_cluster
     files:
       - deps/snitch_cluster/target/snitch_cluster/generated/snax_minimal_cluster_wrapper.sv

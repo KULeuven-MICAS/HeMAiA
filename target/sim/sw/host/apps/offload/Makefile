@@ -32,30 +32,11 @@ RUNTIME_DIR = $(abspath $(HOST_DIR)/runtime)
 DEVICE_DIR  = $(abspath $(HOST_DIR)/../device)
 
 # now we only include the snax app
-DEVICE_APPS += snax/snax-gemmx-clean-test
-DEVICE_APPS += snax/snax-gemmx-matmul
-DEVICE_APPS += snax/snax-gemmx-mha
-DEVICE_APPS += snax/snax-gemmx-matmul-tiling-no-overlap
-DEVICE_APPS += snax/snax-gemmx-matmul-tiling-overlap
-DEVICE_APPS += snax/snax-gemmx-conv
-DEVICE_APPS += snax/snax-gemmx-stacked-matmul
-DEVICE_APPS += snax/snax-test-integration
-DEVICE_APPS += snax/snax-hypercorex-test-csr
-DEVICE_APPS += snax/snax-hypercorex-char-recog
-DEVICE_APPS += snax/snax-hypercorex-high-dim-bind
-DEVICE_APPS += snax/snax-hypercorex-digit-recog
-DEVICE_APPS += snax/snax-hypercorex-lang-recog
-DEVICE_APPS += snax/snax-hypercorex-isolet-recog
-DEVICE_APPS += snax/snax-hypercorex-ucihar-recog
-DEVICE_APPS += snax/snax-hypercorex-dna-recog
-DEVICE_APPS += snax/snax-xdma-maxpool
-DEVICE_APPS += snax/snax-xdma-memset
-# DEVICE_APPS += snax/snax-cgra-run
-DEVICE_APPS += snax/snax-cgra-cmatmul
-DEVICE_APPS += snax/snax-dimc-mha
-DEVICE_APPS += snax/snax-dimc-conv
-DEVICE_APPS += snax/snax-gemmx-dimc-cosim
-DEVICE_APPS += snax/snax-simbacore
+# ! New programs go here ! 
+DEVICE_APPS += snax-simbacore-osgemm
+DEVICE_APPS += snax-simbacore-isgemm
+DEVICE_APPS += snax-simbacore-simd
+DEVICE_APPS += snax-simbacore-main
 
 # Dependencies
 INCDIRS += $(RUNTIME_DIR)

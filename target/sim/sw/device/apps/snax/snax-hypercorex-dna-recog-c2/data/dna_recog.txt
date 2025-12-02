@@ -1,4 +1,0 @@
-imab_bind_bunda
-mv_bunda_qhv
-am_search
-clr_bunda
