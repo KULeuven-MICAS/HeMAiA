@@ -22,17 +22,18 @@ uint32_t __workload_versacore(bingo_task_t** task_list,
     // 4. Set the assigned chiplet id and cluster id
 
     uint8_t current_chip_id = get_current_chip_id();
-    uint8_t task_chip_id = current_chip_id;
+    // only test chip 0 for intra-chiplet gemm
+    uint8_t task_chip_id = 0;
     uint8_t cluster_id = 0;  // versacore is located at cluster
 
     // 1.1 Get the kernel function address by the kernel name
     check_kernel_tab_ready();
     uint32_t check_results_func_addr =
         get_device_function("__snax_kernel_check_results");
-    uint32_t __snax_kernel_gemm_intra_chiplet_func_addr =
-        get_device_function("__snax_kernel_gemm_intra_chiplet");
+    uint32_t __snax_kernel_gemm_func_addr =
+        get_device_function("__snax_kernel_gemm");
     if (check_results_func_addr == SNAX_SYMTAB_END_FN_ADDR ||
-        __snax_kernel_gemm_intra_chiplet_func_addr == SNAX_SYMTAB_END_FN_ADDR) {
+        __snax_kernel_gemm_func_addr == SNAX_SYMTAB_END_FN_ADDR) {
         printf("Error: Kernel symbol lookup failed!\r\n");
     }
 
@@ -57,9 +58,9 @@ uint32_t __workload_versacore(bingo_task_t** task_list,
 
     // D matrix (output)
     O1HeapInstance* local_l3_heap_manager =
-        bingo_get_l3_heap_manager(current_chip_id);
+        (O1HeapInstance*)bingo_get_l3_heap_manager(current_chip_id);
     uintptr_t output_data_addr =
-        (uintptr_t)o1heapAllocate(local_l3_heap_manager, ARRAY_SIZE_BYTES(D));
+        (uintptr_t)o1heapAllocate((const uint64_t)local_l3_heap_manager, ARRAY_SIZE_BYTES(D));
     gemm_args[6] = HIGH32(output_data_addr);
     gemm_args[7] = LOW32(output_data_addr);
     // Matrix dimensions
@@ -84,7 +85,7 @@ uint32_t __workload_versacore(bingo_task_t** task_list,
 
     // 2. Register the tasks
     bingo_task_t* task_versacore = bingo_task_create(
-        __snax_kernel_gemm_intra_chiplet_func_addr,
+        __snax_kernel_gemm_func_addr,
         (uint32_t)(uintptr_t)(&gemm_args), task_chip_id, cluster_id);
     if (task_versacore == NULL) {
         printf("Error: Task versacore creation failed!\r\n");

@@ -8,27 +8,15 @@
 volatile comm_buffer_t* comm_buffer_ptr = (comm_buffer_t*)0;
 
 int main() {
-    // Set clk manager to 1 division for a faster simulation time
-    enable_clk_domain(0, 1);
-    enable_clk_domain(1, 1);
-    enable_clk_domain(2, 1);
-    enable_clk_domain(3, 1);
-    enable_clk_domain(4, 1);
-    enable_clk_domain(5, 1);
-
     // Reset and ungate all quadrants, deisolate
-    uintptr_t current_chip_address_prefix =
-        (uintptr_t)get_current_chip_baseaddress();
     uint32_t current_chip_id = get_current_chip_id();
-
-    init_uart(current_chip_address_prefix, 32, 1);
-    comm_buffer_ptr = (comm_buffer_t*)(((uint64_t)&__narrow_spm_start) |
-                                       current_chip_address_prefix);
+    init_uart(get_current_chip_baseaddress(), 32, 1);
+    printf("[HeMAiA] Start Offload\r\n");
+    comm_buffer_ptr = (comm_buffer_t*)chiplet_addr_transform(((uint64_t)&__narrow_spm_start));
     enable_sw_interrupts();
     comm_buffer_ptr->lock = 0;
     comm_buffer_ptr->chip_id = current_chip_id;
     program_snitches(current_chip_id, comm_buffer_ptr);
-    asm volatile("fence.i" ::: "memory");
 
     printf("[HeMAiA] Calling snitch cluster on chip %d to execute the task\r\n",
            current_chip_id);

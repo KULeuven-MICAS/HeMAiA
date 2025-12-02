@@ -292,6 +292,7 @@ module hemaia_mem_system_for_mem_chip #(
   typedef struct packed {
     logic core_id;
     logic is_core;
+    logic tcdm_priority;
   } tcdm_user_t;
 
   `TCDM_TYPEDEF_ALL(tcdm, tcdm_addr_t, mem_data_t, mem_strb_t, tcdm_user_t)

@@ -110,7 +110,10 @@ clean-soc:
 	rm -rf $(TARGET_SRC_DIR)/axi_flat.sv
 	rm -rf $(TARGET_SRC_DIR)/apb_flat.sv
 	rm -rf $(TARGET_SRC_DIR)/bender_targets.tmp
-	rm -rf $(HEMAIA_MEM_SYS_DIR)/hemaia_xdma_wrapper.sv $(HEMAIA_MEM_SYS_DIR)/hemaia_xdma.sv
+	rm -rf $(HEMAIA_MEM_SYS_DIR)/hemaia_xdma_wrapper.sv
+	rm -rf $(HEMAIA_MEM_SYS_DIR)/hemaia_xdma.sv
+	rm -rf $(HEMAIA_MEM_SYS_DIR)/hemaia_mem_chip_xdma_wrapper.sv
+	rm -rf $(HEMAIA_MEM_SYS_DIR)/hemaia_mem_chip_xdma.sv
 
 $(MISC_OCCAMYGEN_TARGETS): .misc_occamygen_targets_group
 .misc_occamygen_targets_group: $(CFG) $(MISC_OCCAMYGEN_SV_TEMPLATES)

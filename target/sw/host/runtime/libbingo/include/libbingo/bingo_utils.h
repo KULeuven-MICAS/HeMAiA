@@ -18,6 +18,14 @@
 
 // Extract a single bit at position pos from variable x
 #define BINGO_EXTRACT_BIT(x, pos) (((x) >> (pos)) & 1)
+// Set a single bit at position pos in 32bit variable x to value v (0 or 1)
+#define BINGO_SET_BIT(x, pos, v) ((x) = ((x) & ~(1U << (pos))) | ((!!(v) << (pos))))
+#define BINGO_CHIPLET_LOCAL_PTR_AUTO(x) \
+    ((__typeof__(&(x))) (uintptr_t)chiplet_addr_transform((uint64_t)(uintptr_t)&(x)))
+// Optional: dereferenced (lvalue-style) accessor.
+#define BINGO_CHIPLET_LOCAL_REF(x) (*BINGO_CHIPLET_LOCAL_AUTO(x))
+#define BINGO_CHIPLET_READW(x) readw((uintptr_t)chiplet_addr_transform((uint64_t)(uintptr_t)&x))
+#define BINGO_CHIPLET_READD(x) readd((uintptr_t)chiplet_addr_transform((uint64_t)(uintptr_t)&x))
 
 // 
 static inline uint64_t bingo_mcycle() {

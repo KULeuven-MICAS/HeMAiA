@@ -19,7 +19,6 @@
         ],
         hemaia_mem_chip: [
           {coordinate: [2,0], mem_size: 67108864},
-          {coordinate: [2,1], mem_size: 67108864}
         ],
         bender_target: ["hemaia_mem_chip"]
       }
@@ -105,7 +104,7 @@
       h2c_mailbox_length: 4096,   // 0x1000
     },
     clusters:[
-      "snax_versacore_cluster",
+      "snax_versacore_to_cluster",
       ],
 
     hemaia_xdma_cfg: {

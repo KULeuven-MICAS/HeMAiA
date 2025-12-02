@@ -6,14 +6,16 @@
 
 `include "axi/assign.svh"
 `include "axi/typedef.svh"
+`include "register_interface/typedef.svh"
 `include "common_cells/assertions.svh"
 
 module hemaia_mem_chip #(
     // XDMA Defines
-    parameter int unsigned ClusterAddressSpace = 48'h400000,
-    parameter int unsigned MemBaseAddr = 32'h80000000,
-    parameter int unsigned MemBankNum = 32,
-    parameter int unsigned MemSize = 32'h100000,
+    parameter int unsigned WideSRAMBaseAddr = 32'h80000000,
+    parameter int unsigned WideSRAMBankNum = 16,
+    parameter int unsigned WideSRAMSize = 32'h100000,
+    parameter int unsigned NarrowSRAMBaseAddr = 32'h70000000,
+    parameter int unsigned NarrowSRAMSize = 32'h8000,
     // Chip ID Type
     parameter type chip_id_t = logic [7:0],
     // D2D Link Phy Enables
@@ -22,41 +24,41 @@ module hemaia_mem_chip #(
     parameter bit EnableNorthPhy = 0,
     parameter bit EnableSouthPhy = 0
 ) (
-    input  logic            clk_i,
-    input  logic            rst_ni,
-    input  chip_id_t        chip_id_i,
+    input  logic                 clk_i,
+    input  logic                 rst_ni,
+    input  chip_id_t             chip_id_i,
     // D2D Link - East side
-    input  logic            east_test_being_requested_i,
-    output logic            east_test_request_o,
-    output logic            flow_control_east_rts_o,
-    input  logic            flow_control_east_cts_i,
-    input  logic            flow_control_east_rts_i,
-    output logic            flow_control_east_cts_o,
-    inout  wire      [19:0] east_d2d_io                 [3],
+    input  logic                 east_test_being_requested_i,
+    output logic                 east_test_request_o,
+    output logic                 flow_control_east_rts_o,
+    input  logic                 flow_control_east_cts_i,
+    input  logic                 flow_control_east_rts_i,
+    output logic                 flow_control_east_cts_o,
+    inout  wire      [2:0][19:0] east_d2d_io,
     // D2D Link - West side
-    input  logic            west_test_being_requested_i,
-    output logic            west_test_request_o,
-    output logic            flow_control_west_rts_o,
-    input  logic            flow_control_west_cts_i,
-    input  logic            flow_control_west_rts_i,
-    output logic            flow_control_west_cts_o,
-    inout  wire      [19:0] west_d2d_io                 [3],
+    input  logic                 west_test_being_requested_i,
+    output logic                 west_test_request_o,
+    output logic                 flow_control_west_rts_o,
+    input  logic                 flow_control_west_cts_i,
+    input  logic                 flow_control_west_rts_i,
+    output logic                 flow_control_west_cts_o,
+    inout  wire      [2:0][19:0] west_d2d_io,
     // D2D Link - North side
-    input  logic            north_test_being_requested_i,
-    output logic            north_test_request_o,
-    output logic            flow_control_north_rts_o,
-    input  logic            flow_control_north_cts_i,
-    input  logic            flow_control_north_rts_i,
-    output logic            flow_control_north_cts_o,
-    inout  wire      [19:0] north_d2d_io                [3],
+    input  logic                 north_test_being_requested_i,
+    output logic                 north_test_request_o,
+    output logic                 flow_control_north_rts_o,
+    input  logic                 flow_control_north_cts_i,
+    input  logic                 flow_control_north_rts_i,
+    output logic                 flow_control_north_cts_o,
+    inout  wire      [2:0][19:0] north_d2d_io,
     // D2D Link - South side
-    input  logic            south_test_being_requested_i,
-    output logic            south_test_request_o,
-    output logic            flow_control_south_rts_o,
-    input  logic            flow_control_south_cts_i,
-    input  logic            flow_control_south_rts_i,
-    output logic            flow_control_south_cts_o,
-    inout  wire      [19:0] south_d2d_io                [3]
+    input  logic                 south_test_being_requested_i,
+    output logic                 south_test_request_o,
+    output logic                 flow_control_south_rts_o,
+    input  logic                 flow_control_south_cts_i,
+    input  logic                 flow_control_south_rts_i,
+    output logic                 flow_control_south_cts_o,
+    inout  wire      [2:0][19:0] south_d2d_io
 );
 
   ///////////////////
@@ -78,7 +80,7 @@ module hemaia_mem_chip #(
 
 
   // Master Clock / clk_i: 3.6 GHz
-  // Clock Channel 0 / clk_o[0]: SRAM Clock = 3.6 GHz / 3 = 1.2 GHz
+  // Clock Channel 0 / clk_o[0]: SRAM Clock = 3.6 GHz / 4 = 0.9 GHz
   // Clock Channel 1 / clk_o[1]: West D2D TX Clock = 3.6 GHz
 
   `AXI_LITE_TYPEDEF_ALL_CT(axi_lite_a48_d32, axi_lite_a48_d32_req_t, axi_lite_a48_d32_rsp_t,
@@ -170,10 +172,10 @@ module hemaia_mem_chip #(
       .axi_narrow_master_rsp_t(axi_a48_d64_i4_u1_resp_t),
       .axi_narrow_slave_req_t(axi_a48_d64_i3_u1_req_t),
       .axi_narrow_slave_rsp_t(axi_a48_d64_i3_u1_resp_t),
-      .ClusterAddressSpace(ClusterAddressSpace),
-      .MemBaseAddr(MemBaseAddr),
-      .MemBankNum(MemBankNum),
-      .MemSize(MemSize)
+      .ClusterAddressSpace(48'h400000),
+      .MemBaseAddr(WideSRAMBaseAddr),
+      .MemBankNum(WideSRAMBankNum),
+      .MemSize(WideSRAMSize)
   ) i_hemaia_mem_system (
       .clk_i                  (clk_host),
       .rst_ni                 (rst_host_n),
@@ -195,6 +197,163 @@ module hemaia_mem_chip #(
   axi_a48_d512_i6_u1_req_t  axi_wide_xbar_to_dram_req;
   axi_a48_d512_i6_u1_resp_t axi_wide_xbar_to_dram_rsp;
   assign axi_wide_xbar_to_dram_rsp = '0;
+
+  ///////////////////////////////////////////////
+  //  IDMA at Mem Chip for the Broadcast Usage //
+  ///////////////////////////////////////////////
+
+  // burst request
+  typedef struct packed {
+    logic [3:0]      id;
+    logic [47:0]     src,         dst;
+    logic [47:0]     num_bytes;
+    axi_pkg::cache_t cache_src,   cache_dst;
+    axi_pkg::burst_t burst_src,   burst_dst;
+    logic            decouple_rw;
+    logic            deburst;
+    logic            serialize;
+  } idma_burst_req_t;
+
+  // local regbus definition
+  `REG_BUS_TYPEDEF_ALL(idma_cfg_reg_a48_d64, logic [47:0], logic [63:0], logic [7:0])
+
+  idma_burst_req_t idma_burst_req;
+  logic idma_be_valid;
+  logic idma_be_ready;
+  logic idma_be_idle;
+  logic idma_be_trans_complete;
+
+  idma_cfg_reg_a48_d64_req_t idma_cfg_reg_req;
+  idma_cfg_reg_a48_d64_rsp_t idma_cfg_reg_rsp;
+  axi_a48_d64_i4_u1_req_t axi_narrow_xbar_to_idma_cfg_req;
+  axi_a48_d64_i4_u1_resp_t axi_narrow_xbar_to_idma_cfg_rsp;
+
+  axi_to_reg #(
+      .ADDR_WIDTH(48),
+      .DATA_WIDTH(64),
+      .ID_WIDTH  (4),
+      .USER_WIDTH(1),
+      .axi_req_t (axi_a48_d64_i4_u1_req_t),
+      .axi_rsp_t (axi_a48_d64_i4_u1_resp_t),
+      .reg_req_t (idma_cfg_reg_a48_d64_req_t),
+      .reg_rsp_t (idma_cfg_reg_a48_d64_rsp_t)
+  ) i_axi_to_reg_sys_idma_cfg (
+      .clk_i(clk_host),
+      .rst_ni(rst_host_n),
+      .testmode_i(1'b0),
+      .axi_req_i(axi_narrow_xbar_to_idma_cfg_req),
+      .axi_rsp_o(axi_narrow_xbar_to_idma_cfg_rsp),
+      .reg_req_o(idma_cfg_reg_req),
+      .reg_rsp_i(idma_cfg_reg_rsp)
+  );
+
+  idma_reg64_frontend #(
+      .DmaAddrWidth  ('d64),
+      .dma_regs_req_t(idma_cfg_reg_a48_d64_req_t),
+      .dma_regs_rsp_t(idma_cfg_reg_a48_d64_rsp_t),
+      .burst_req_t   (idma_burst_req_t)
+  ) i_idma_reg64_frontend_sys_idma (
+      .clk_i           (clk_host),
+      .rst_ni          (rst_host_n),
+      .dma_ctrl_req_i  (idma_cfg_reg_req),
+      .dma_ctrl_rsp_o  (idma_cfg_reg_rsp),
+      .burst_req_o     (idma_burst_req),
+      .valid_o         (idma_be_valid),
+      .ready_i         (idma_be_ready),
+      .backend_idle_i  (idma_be_idle),
+      .trans_complete_i(idma_be_trans_complete)
+  );
+
+  axi_a48_d512_i4_u1_req_t  axi_idma_to_soc_xbar_req;
+  axi_a48_d512_i4_u1_resp_t axi_idma_to_soc_xbar_rsp;
+
+  axi_dma_backend #(
+      .DataWidth     (512),
+      .AddrWidth     (48),
+      .IdWidth       (4),
+      .AxReqFifoDepth('d64),
+      .TransFifoDepth('d16),
+      .BufferDepth   ('d3),
+      .axi_req_t     (axi_a48_d512_i4_u1_req_t),
+      .axi_res_t     (axi_a48_d512_i4_u1_resp_t),
+      .burst_req_t   (idma_burst_req_t),
+      .DmaIdWidth    ('d32),
+      .DmaTracing    (1'b1)
+  ) i_axi_dma_backend_sys_idma (
+      .clk_i           (clk_host),
+      .rst_ni          (rst_host_n),
+      .chip_id_i       (chip_id),
+      .dma_id_i        ('d0),
+      .axi_dma_req_o   (axi_idma_to_soc_xbar_req),
+      .axi_dma_res_i   (axi_idma_to_soc_xbar_rsp),
+      .burst_req_i     (idma_burst_req),
+      .valid_i         (idma_be_valid),
+      .ready_o         (idma_be_ready),
+      .backend_idle_o  (idma_be_idle),
+      .trans_complete_o(idma_be_trans_complete)
+  );
+
+  /////////////////
+  //  Narrow SPM //
+  /////////////////
+  axi_a48_d64_i4_u1_req_t  axi_narrow_xbar_to_narrow_mem_req;
+  axi_a48_d64_i4_u1_resp_t axi_narrow_xbar_to_narrow_mem_rsp;
+
+  logic spm_narrow_req, spm_narrow_gnt;
+  logic [$clog2(NarrowSRAMSize)-1:0] spm_narrow_addr;
+  logic [                      63:0] spm_narrow_wdata;
+  logic [                       7:0] spm_narrow_strb;
+  logic                              spm_narrow_we;
+  logic                              spm_narrow_rvalid;
+  logic [                      63:0] spm_narrow_rdata;
+
+  axi_to_mem_interleaved #(
+      .axi_req_t(axi_a48_d64_i4_u1_req_t),
+      .axi_resp_t(axi_a48_d64_i4_u1_resp_t),
+      .AddrWidth($clog2(NarrowSRAMSize)),
+      .DataWidth(64),
+      .IdWidth(4),
+      .NumBanks(1),
+      .BufDepth(16)
+  ) i_axi_to_narrow_mem (
+      .clk_i(clk_host),
+      .rst_ni(rst_host_n),
+      .busy_o(),
+      .test_i('0),
+      .axi_req_i(axi_narrow_xbar_to_narrow_mem_req),
+      .axi_resp_o(axi_narrow_xbar_to_narrow_mem_rsp),
+      .mem_req_o(spm_narrow_req),
+      .mem_gnt_i(spm_narrow_gnt),
+      .mem_addr_o(spm_narrow_addr),
+      .mem_wdata_o(spm_narrow_wdata),
+      .mem_strb_o(spm_narrow_strb),
+      .mem_atop_o(),
+      .mem_we_o(spm_narrow_we),
+      .mem_rvalid_i(spm_narrow_rvalid),
+      .mem_rdata_i(spm_narrow_rdata)
+  );
+
+  spm_1p_adv #(
+      .NumWords(NarrowSRAMSize / 8),
+      .DataWidth(64),
+      .ByteWidth(8),
+      .EnableInputPipeline(1'b1),
+      .EnableOutputPipeline(1'b1),
+      .sram_cfg_t(logic [0:0])
+  ) i_hemaia_narrow_mem (
+      .clk_i(clk_host),
+      .rst_ni(rst_host_n),
+      .valid_i(spm_narrow_req),
+      .ready_o(spm_narrow_gnt),
+      .we_i(spm_narrow_we),
+      .addr_i(spm_narrow_addr[$clog2(NarrowSRAMSize)-1:3]),
+      .wdata_i(spm_narrow_wdata),
+      .be_i(spm_narrow_strb),
+      .rdata_o(spm_narrow_rdata),
+      .rvalid_o(spm_narrow_rvalid),
+      .rerror_o(),
+      .sram_cfg_i('0)
+  );
 
   //////////////////////
   //  HeMAiA D2D Link //
@@ -424,7 +583,7 @@ module hemaia_mem_chip #(
   //  Connection 2: AXI Wide XBAR //
   //////////////////////////////////
   localparam axi_pkg::xbar_cfg_t HeMAiAMemChipWideXbarCfg = '{
-      NoSlvPorts: 3,
+      NoSlvPorts: 4,
       NoMstPorts: 4,
       MaxSlvTrans: 16,
       MaxMstTrans: 16,
@@ -436,25 +595,47 @@ module hemaia_mem_chip #(
       UniqueIds: 0,
       AxiAddrWidth: 48,
       AxiDataWidth: 512,
-      NoAddrRules: 6
+      NoAddrRules: 8
   };
 
-  xbar_rule_48_t [5:0] HeMAiAMemChipWideXbarAddrmap;
+  xbar_rule_48_t [7:0] HeMAiAMemChipWideXbarAddrmap;
   assign HeMAiAMemChipWideXbarAddrmap = '{
           '{
               idx: 1,
               start_addr: {chip_id, 40'h80000000},
-              end_addr: {chip_id, 40'h80000000 + MemSize}
+              end_addr: {chip_id, 40'h80000000 + WideSRAMSize}
           },
           '{idx: 1, start_addr: {chip_id, 40'hFFFFC000}, end_addr: {chip_id, 40'hFFFFD000}},
-          '{idx: 2, start_addr: {chip_id, 40'hFFFFB000}, end_addr: {chip_id, 40'hFFFFC000}},
+          // XDMA Handshake goes to 2
+          '{
+              idx: 2,
+              start_addr: {chip_id, 40'hFFFFB000},
+              end_addr: {chip_id, 40'hFFFFC000}
+          },
           '{idx: 2, start_addr: {chip_id, 40'hFFFFD000}, end_addr: {chip_id, 40'h100000000}},
-          '{idx: 2, start_addr: {chip_id, 40'h2000000}, end_addr: {chip_id, 40'h2010000}},
+          // Peripheral goes to 2
+          '{
+              idx: 2,
+              start_addr: {chip_id, 40'h2000000},
+              end_addr: {chip_id, 40'h2010000}
+          },
+          // IDMA Ctrl goes to 2
+          '{
+              idx: 2,
+              start_addr: {chip_id, 40'h5000000},
+              end_addr: {chip_id, 40'h5010000}
+          },
+          // narrow spm goes to 2
+          '{
+              idx: 2,
+              start_addr: {chip_id, 40'h70000000},
+              end_addr: {chip_id, 40'h70000000 + NarrowSRAMSize}
+          },
           '{idx: 3, start_addr: {chip_id, 40'h100000000}, end_addr: {chip_id, 40'hFFFFFFFFFF}}
       };
 
-  axi_a48_d512_i4_u1_req_t [2:0] master_to_axi_wide_xbar_req;
-  axi_a48_d512_i4_u1_resp_t [2:0] master_to_axi_wide_xbar_rsp;
+  axi_a48_d512_i4_u1_req_t [3:0] master_to_axi_wide_xbar_req;
+  axi_a48_d512_i4_u1_resp_t [3:0] master_to_axi_wide_xbar_rsp;
   axi_a48_d512_i6_u1_req_t [3:0] axi_wide_xbar_to_slave_req;
   axi_a48_d512_i6_u1_resp_t [3:0] axi_wide_xbar_to_slave_rsp;
 
@@ -470,6 +651,8 @@ module hemaia_mem_chip #(
   assign axi_wide_mem_sys_to_xbar_rsp = master_to_axi_wide_xbar_rsp[1];
   assign master_to_axi_wide_xbar_req[2] = axi_narrow_xbar_to_wide_xbar_dwc_req;
   assign axi_narrow_xbar_to_wide_xbar_dwc_rsp = master_to_axi_wide_xbar_rsp[2];
+  assign master_to_axi_wide_xbar_req[3] = axi_idma_to_soc_xbar_req;
+  assign axi_idma_to_soc_xbar_rsp = master_to_axi_wide_xbar_rsp[3];
 
   assign axi_soc_xbar_to_d2d_link_pre_id_conv_req = axi_wide_xbar_to_slave_req[0];
   assign axi_wide_xbar_to_slave_rsp[0] = axi_soc_xbar_to_d2d_link_pre_id_conv_rsp;
@@ -602,7 +785,7 @@ module hemaia_mem_chip #(
   ////////////////////////////////////
   localparam axi_pkg::xbar_cfg_t HeMAiAMemChipNarrowXbarCfg = '{
       NoSlvPorts: 2,
-      NoMstPorts: 3,
+      NoMstPorts: 5,
       MaxSlvTrans: 16,
       MaxMstTrans: 16,
       FallThrough: 0,
@@ -613,20 +796,26 @@ module hemaia_mem_chip #(
       UniqueIds: 0,
       AxiAddrWidth: 48,
       AxiDataWidth: 64,
-      NoAddrRules: 3
+      NoAddrRules: 5
   };
 
-  xbar_rule_48_t [2:0] HeMAiAMemChipNarrowXbarAddrmap;
+  xbar_rule_48_t [4:0] HeMAiAMemChipNarrowXbarAddrmap;
   assign HeMAiAMemChipNarrowXbarAddrmap = '{
           '{idx: 1, start_addr: {chip_id, 40'hFFFFB000}, end_addr: {chip_id, 40'hFFFFC000}},
           '{idx: 1, start_addr: {chip_id, 40'hFFFFD000}, end_addr: {chip_id, 40'h100000000}},
-          '{idx: 2, start_addr: {chip_id, 40'h2000000}, end_addr: {chip_id, 40'h2010000}}
+          '{idx: 2, start_addr: {chip_id, 40'h2000000}, end_addr: {chip_id, 40'h2010000}},
+          '{idx: 3, start_addr: {chip_id, 40'h5000000}, end_addr: {chip_id, 40'h5010000}},
+          '{
+              idx: 4,
+              start_addr: {chip_id, 40'h70000000},
+              end_addr: {chip_id, 40'h70000000 + NarrowSRAMSize}
+          }
       };
 
   axi_a48_d64_i3_u1_req_t  [1:0] master_to_axi_narrow_xbar_req;
   axi_a48_d64_i3_u1_resp_t [1:0] master_to_axi_narrow_xbar_rsp;
-  axi_a48_d64_i4_u1_req_t  [2:0] axi_narrow_xbar_to_slave_req;
-  axi_a48_d64_i4_u1_resp_t [2:0] axi_narrow_xbar_to_slave_rsp;
+  axi_a48_d64_i4_u1_req_t  [4:0] axi_narrow_xbar_to_slave_req;
+  axi_a48_d64_i4_u1_resp_t [4:0] axi_narrow_xbar_to_slave_rsp;
 
   assign master_to_axi_narrow_xbar_req[0] = axi_wide_xbar_to_narrow_xbar_dwc_iwc_req;
   assign axi_wide_xbar_to_narrow_xbar_dwc_iwc_rsp = master_to_axi_narrow_xbar_rsp[0];
@@ -639,6 +828,10 @@ module hemaia_mem_chip #(
   assign axi_narrow_xbar_to_slave_rsp[1] = axi_narrow_xbar_to_mem_sys_rsp;
   assign axi_narrow_xbar_to_periph_xbar_req = axi_narrow_xbar_to_slave_req[2];
   assign axi_narrow_xbar_to_slave_rsp[2] = axi_narrow_xbar_to_periph_xbar_rsp;
+  assign axi_narrow_xbar_to_idma_cfg_req = axi_narrow_xbar_to_slave_req[3];
+  assign axi_narrow_xbar_to_slave_rsp[3] = axi_narrow_xbar_to_idma_cfg_rsp;
+  assign axi_narrow_xbar_to_narrow_mem_req = axi_narrow_xbar_to_slave_req[4];
+  assign axi_narrow_xbar_to_slave_rsp[4] = axi_narrow_xbar_to_narrow_mem_rsp;
 
   axi_xbar #(
       .Cfg          (HeMAiAMemChipNarrowXbarCfg),

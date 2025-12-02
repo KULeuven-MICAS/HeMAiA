@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
-APP  = offload_bingo_gemm_intra_chiplet
-SRCS = src/offload_bingo_gemm_intra_chiplet.c
+APP  = offload_bingo_mempool_xdma
+SRCS = src/offload_bingo_mempool_xdma.c
 BINGO_HOST ?= 1 # True to include the bingo runtime
 INCL_DEVICE_BINARY ?= 1 # True to include the device binary
 DEVICE_APPS = snax-bingo-offload
@@ -17,4 +17,4 @@ INCDIRS += include
 include ../common.mk
 include ./include/Makefile
 
-$(DEP): $(DATA_H)
+$(DEP): $(DATA_H) $(DATA_HEX)

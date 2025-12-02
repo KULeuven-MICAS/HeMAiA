@@ -13,6 +13,9 @@ int main() {
     init_uart(address_prefix, 32, 1);
     asm volatile("fence" : : : "memory");
 
+    // Configure the D2D Topology
+    hemaia_d2d_link_initialize(get_current_chip_id());
+
     // Configure the East D2D link
     printf("HeMAiA D2D Link Configurator\r\n");
     printf("Press 1 to set to DDR mode, 0 to set to SDR mode:\r\n");

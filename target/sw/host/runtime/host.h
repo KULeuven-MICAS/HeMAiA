@@ -15,6 +15,7 @@
 // HeMAiA specific peripherals
 #include "uart.c"
 #include "hemaia_clk_rst_controller.h"
+#include "hemaia_d2d_link.h"
 #include "hemaia-xdma-lib.h"
 #include "mailbox.h"
 #include "io.h"
@@ -165,7 +166,9 @@ void initialize_bss() {
 
     size_t bss_size = (size_t)(&__bss_end) - (size_t)(&__bss_start);
     if (bss_size)
-        sys_dma_blk_memcpy(chiplet_addr_transform((uint64_t)(&__bss_start)),
+        sys_dma_blk_memcpy(
+            get_current_chip_id(),
+            chiplet_addr_transform((uint64_t)(&__bss_start)),
                            chiplet_addr_transform((uint64_t)WIDE_ZERO_MEM_BASE_ADDR),
                            bss_size);
 
@@ -176,6 +179,7 @@ void initialize_wide_spm() {
         (size_t)(&__wide_spm_end) - (size_t)(&__wide_spm_start);
     if (wide_spm_size)
         sys_dma_blk_memcpy(
+            get_current_chip_id(),
             chiplet_addr_transform((uint64_t)SPM_WIDE_BASE_ADDR),
             chiplet_addr_transform((uint64_t)WIDE_ZERO_MEM_BASE_ADDR),
             wide_spm_size);
@@ -186,6 +190,7 @@ void initialize_narrow_spm() {
         (size_t)(&__narrow_spm_end) - (size_t)(&__narrow_spm_start);
     if (narrow_spm_size)
         sys_dma_blk_memcpy(
+            get_current_chip_id(),
             chiplet_addr_transform((uint64_t)SPM_NARROW_BASE_ADDR),
             chiplet_addr_transform((uint64_t)WIDE_ZERO_MEM_BASE_ADDR),
             narrow_spm_size);
@@ -194,6 +199,7 @@ void initialize_narrow_spm() {
 
 void initialize_comm_buffer(comm_buffer_t* comm_buffer_ptr) {
     sys_dma_blk_memcpy(
+        get_current_chip_id(),
         (uint64_t)comm_buffer_ptr,
         chiplet_addr_transform((uint64_t)WIDE_ZERO_MEM_BASE_ADDR),
         sizeof(comm_buffer_t));
@@ -203,6 +209,7 @@ void initialize_comm_buffer(comm_buffer_t* comm_buffer_ptr) {
 void initialize_cluster(uint32_t cluster_idx) {
     // Initialize the cluster tcdm
     sys_dma_blk_memcpy(
+        get_current_chip_id(),
         chiplet_addr_transform((uint64_t)cluster_tcdm_start_addr(cluster_idx)),
         chiplet_addr_transform((uint64_t)WIDE_ZERO_MEM_BASE_ADDR),
         (uint64_t)CLUSTER_TCDM_SIZE

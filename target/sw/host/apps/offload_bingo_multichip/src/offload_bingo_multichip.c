@@ -21,13 +21,13 @@
 //       (see details in the bingo_runtime_schedule function in bingo_api.c)
 #include "offload_bingo_multichip.h"
 int main() {
-    
     // Bear in mind that all the function calls here will be executed by all the chiplets
     // The chip id and chip address prefix is needed to differentiate the chiplets
-    uintptr_t current_chip_address_prefix = (uintptr_t)get_current_chip_baseaddress();
     uint8_t current_chip_id = get_current_chip_id();
+    // Program the Chiplet Topology
+    hemaia_d2d_link_initialize(current_chip_id);
     // Init the uart for printf
-    init_uart(current_chip_address_prefix, 32, 1);
+    init_uart(get_current_chip_baseaddress(), 32, 1);
     printf("Multi-chip Offload Bingo Main\r\n");
     printf("Chip(%x, %x): [Host] Start Offloading Program\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
 
@@ -45,17 +45,15 @@ int main() {
     ///////////////////////////////
 
     // 3.1 The pointer to the communication buffer
-    O1HeapInstance *local_l3_heap_manager = bingo_get_l3_heap_manager(current_chip_id);
-    comm_buffer_t* comm_buffer_ptr = bingo_get_l2_comm_buffer(current_chip_id);
-
+    uint64_t local_l3_heap_manager = bingo_get_l3_heap_manager(current_chip_id);
+    uint64_t comm_buffer_ptr = bingo_get_l2_comm_buffer(current_chip_id);
     enable_sw_interrupts();
 
     // 3.2 Program Snitch entry point and communication buffer
     // Initialize communication buffer
-    initialize_comm_buffer(comm_buffer_ptr);
-    comm_buffer_ptr->lock = 0;
-    comm_buffer_ptr->chip_id = current_chip_id;
-    program_snitches(current_chip_id, comm_buffer_ptr);
+    ((comm_buffer_t *)comm_buffer_ptr)->lock = 0;
+    ((comm_buffer_t *)comm_buffer_ptr)->chip_id = current_chip_id;
+    program_snitches(current_chip_id, (comm_buffer_t *)comm_buffer_ptr);
 
     // 3.3 Start Snitches
     wakeup_snitches_cl(current_chip_id);

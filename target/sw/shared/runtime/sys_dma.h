@@ -68,50 +68,50 @@ extern "C" {
 #define IDMA_CONF_DEBURST 0
 #define IDMA_CONF_SERIALIZE 0
 
-inline volatile uint64_t *sys_dma_src_ptr(void) {
+inline volatile uint64_t *sys_dma_src_ptr(uint8_t chip_id) {
     return (volatile uint64_t *)(IDMA_SRC_ADDR |
-                                 (uintptr_t)get_current_chip_baseaddress());
+                                 (uintptr_t)get_chip_baseaddress(chip_id));
 }
-inline volatile uint64_t *sys_dma_dst_ptr(void) {
+inline volatile uint64_t *sys_dma_dst_ptr(uint8_t chip_id) {
     return (volatile uint64_t *)(IDMA_DST_ADDR |
-                                 (uintptr_t)get_current_chip_baseaddress());
+                                 (uintptr_t)get_chip_baseaddress(chip_id));
 }
-inline volatile uint64_t *sys_dma_num_bytes_ptr(void) {
+inline volatile uint64_t *sys_dma_num_bytes_ptr(uint8_t chip_id) {
     return (volatile uint64_t *)(IDMA_NUMBYTES_ADDR |
-                                 (uintptr_t)get_current_chip_baseaddress());
+                                 (uintptr_t)get_chip_baseaddress(chip_id));
 }
-inline volatile uint64_t *sys_dma_conf_ptr(void) {
+inline volatile uint64_t *sys_dma_conf_ptr(uint8_t chip_id) {
     return (volatile uint64_t *)(IDMA_CONF_ADDR |
-                                 (uintptr_t)get_current_chip_baseaddress());
+                                 (uintptr_t)get_chip_baseaddress(chip_id));
 }
-inline volatile uint64_t *sys_dma_status_ptr(void) {
+inline volatile uint64_t *sys_dma_status_ptr(uint8_t chip_id) {
     return (volatile uint64_t *)(IDMA_STATUS_ADDR |
-                                 (uintptr_t)get_current_chip_baseaddress());
+                                 (uintptr_t)get_chip_baseaddress(chip_id));
 }
-inline volatile uint64_t *sys_dma_nextid_ptr(void) {
+inline volatile uint64_t *sys_dma_nextid_ptr(uint8_t chip_id) {
     return (volatile uint64_t *)(IDMA_NEXTID_ADDR |
-                                 (uintptr_t)get_current_chip_baseaddress());
+                                 (uintptr_t)get_chip_baseaddress(chip_id));
 }
-inline volatile uint64_t *sys_dma_done_ptr(void) {
+inline volatile uint64_t *sys_dma_done_ptr(uint8_t chip_id) {
     return (volatile uint64_t *)(IDMA_DONE_ADDR |
-                                 (uintptr_t)get_current_chip_baseaddress());
+                                 (uintptr_t)get_chip_baseaddress(chip_id));
 }
 
-static inline uint64_t sys_dma_memcpy(uint64_t dst, uint64_t src, uint64_t size) {
-    *(sys_dma_src_ptr()) = (uint64_t)src;
-    *(sys_dma_dst_ptr()) = (uint64_t)dst;
-    *(sys_dma_num_bytes_ptr()) = size;
-    *(sys_dma_conf_ptr()) =
+static inline uint64_t sys_dma_memcpy(uint8_t chip_id, uint64_t dst, uint64_t src, uint64_t size) {
+    *(sys_dma_src_ptr(chip_id)) = (uint64_t)src;
+    *(sys_dma_dst_ptr(chip_id)) = (uint64_t)dst;
+    *(sys_dma_num_bytes_ptr(chip_id)) = size;
+    *(sys_dma_conf_ptr(chip_id)) =
         (IDMA_CONF_DECOUPLE << IDMA_REG64_FRONTEND_CONF_DECOUPLE_BIT) |
         (IDMA_CONF_DEBURST << IDMA_REG64_FRONTEND_CONF_DEBURST_BIT) |
         (IDMA_CONF_SERIALIZE << IDMA_REG64_FRONTEND_CONF_SERIALIZE_BIT);
-    return *(sys_dma_nextid_ptr());
+    return *(sys_dma_nextid_ptr(chip_id));
 }
 
-static inline void sys_dma_blk_memcpy(uint64_t dst, uint64_t src, uint64_t size) {
-    volatile uint64_t tf_id = sys_dma_memcpy(dst, src, size);
+static inline void sys_dma_blk_memcpy(uint8_t chip_id, uint64_t dst, uint64_t src, uint64_t size) {
+    volatile uint64_t tf_id = sys_dma_memcpy(chip_id, dst, src, size);
 
-    while (*(sys_dma_done_ptr()) != tf_id) {
+    while (*(sys_dma_done_ptr(chip_id)) != tf_id) {
         asm volatile("nop");
     }
 }

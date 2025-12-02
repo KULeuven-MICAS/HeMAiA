@@ -63,23 +63,22 @@ module testharness
   // Chip finish signal
   integer chip_finish[${max_compute_chiplet_x}:${min_compute_chiplet_x}][${max_compute_chiplet_y}:${min_compute_chiplet_y}];
 
-  // Integer to save current time
-  time current_time;
-
-  // Generate reset and clock.
-  initial begin
+  // The task to reset the chips , init clocks, and load the binaries.
+  task automatic init_and_load();
+    // Integer to save current time
+    time current_time;
     // Init the chip_finish flags
     foreach (chip_finish[i,j]) begin
       chip_finish[i][j] = 0;
     end
     // Init the clk pins
-  rtc_clk_drv    = 0;
-  mst_clk_drv    = 0;
-  periph_clk_drv = 0;
+    rtc_clk_drv    = 0;
+    mst_clk_drv    = 0;
+    periph_clk_drv = 0;
     // Init the reset pin
-  rst_ni_drv = 1;
+    rst_ni_drv = 1;
     #0;
-  rst_ni_drv = 0;
+    rst_ni_drv = 0;
    // Load the binaries
 % for chip in chip_coordinates:
 %   if chip.type == ChipletType.COMPUTE:
@@ -104,8 +103,20 @@ module testharness
     // Release the reset
     #(10 + $urandom % 10);
     current_time = $time / 1000;
-    $display("Reset released at %tns", current_time);
+    $display("Reset released at %tns", $time / 1000);
     rst_ni_drv = 1;
+  endtask
+
+  // Call the reusable init task from an initial block.
+  initial begin
+    init_and_load();
+  end
+
+  // Trigger the reusbale init task when reload_bin becomes high
+  logic reload_bin = '0;
+  always @(posedge reload_bin) begin
+    init_and_load();
+    reload_bin = '0;
   end
 
   always_comb begin
@@ -127,8 +138,8 @@ module testharness
         $finish;
       end else begin
         $error("All chips finished with errors at %tns", $time / 1000);
+        $finish(-1);
       end
-      $finish(-1);
     end
   end
 
@@ -149,14 +160,14 @@ module testharness
 
   // Definition of tri_state bus
 % for chip in chip_coordinates:
-  tri [19:0] chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]+1}_${chip.coordinate[1]}_link[3];
+  tri [2:0][19:0] chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]+1}_${chip.coordinate[1]}_link;
   wire chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]+1}_${chip.coordinate[1]}_link_rts;
   wire chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]+1}_${chip.coordinate[1]}_link_cts;
   wire chip_${chip.coordinate[0]+1}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_rts;
   wire chip_${chip.coordinate[0]+1}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_cts;
   wire chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]+1}_${chip.coordinate[1]}_link_test_request;
   wire chip_${chip.coordinate[0]+1}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_test_request;
-  tri [19:0] chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]+1}_link[3];
+  tri [2:0][19:0] chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]+1}_link;
   wire chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]+1}_link_rts;
   wire chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]+1}_link_cts;
   wire chip_${chip.coordinate[0]}_${chip.coordinate[1]+1}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_rts;
@@ -266,8 +277,8 @@ module testharness
       .io_uart_rts_no(),
       .io_uart_cts_ni(const_zero),
       .io_gpio(),
-      .io_spis_sck_i(),
-      .io_spis_csb_i(),
+      .io_spis_sck_i(const_zero),
+      .io_spis_csb_i(const_zero),
       .io_spis_sd(),
       .io_spim_sck_o(),
       .io_spim_csb_o(),
@@ -311,8 +322,8 @@ module testharness
 % endif
 % elif chip.type == ChipletType.MEMORY:
   hemaia_mem_chip #(
-    .MemBankNum(16),
-    .MemSize(${chip.size}),
+    .WideSRAMBankNum(16),
+    .WideSRAMSize(${chip.size}),
     .EnableEastPhy(1'b${
         '1' if any(neighborhood.coordinate == (chip.coordinate[0]+1, chip.coordinate[1]) for neighborhood in chip_coordinates) else '0'
     }),

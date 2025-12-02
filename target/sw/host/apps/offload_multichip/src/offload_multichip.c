@@ -7,13 +7,6 @@
 #include "hemaia_clk_rst_controller.h"
 
 int main() {
-    // Set clk manager to 1 division for a faster simulation time
-    enable_clk_domain(0, 1);
-    enable_clk_domain(1, 1);
-    enable_clk_domain(2, 1);
-    enable_clk_domain(3, 1);
-    enable_clk_domain(4, 1);
-    enable_clk_domain(5, 1);
     // The pointer to the communication buffer
     volatile comm_buffer_t* comm_buffer_ptr = (comm_buffer_t*)0;
 
@@ -21,6 +14,7 @@ int main() {
     uintptr_t current_chip_address_prefix =
         (uintptr_t)get_current_chip_baseaddress();
     uint32_t current_chip_id = get_current_chip_id();
+    hemaia_d2d_link_initialize(current_chip_id);
     int32_t target_chip_id = 0;
 
     init_uart(current_chip_address_prefix, 32, 1);
