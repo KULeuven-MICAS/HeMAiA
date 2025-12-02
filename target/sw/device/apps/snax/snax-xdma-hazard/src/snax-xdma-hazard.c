@@ -20,31 +20,18 @@
 #include "snrt.h"
 
 uint32_t time[SNRT_CLUSTER_NUM];
-
+#define TCDM_OFFSET 0x1000
 int main() {
     // Set err value for checking
     int err = 0;
     // Obtain the start address of the TCDM memory
     uint32_t dma_load_input_start;
     uint32_t dma_load_input_end;
-    uint32_t tcdm_baseaddress = snrt_cluster_base_addrl();
+    uint32_t tcdm_baseaddress = snrt_cluster_base_addrl() + TCDM_OFFSET;
     if (snrt_global_core_idx() == 0) {
         printf("Now start to let clusters to read %dB data from L3\r\n", data_size * sizeof(data[0]));
     }
     if (snrt_is_dm_core()) {
-        // All clusters try to read data from L3 at the same time
-        if (xdma_disable_dst_ext(0) != 0) {
-            printf("Error in disabling xdma writer extension 0\n");
-            err++;
-        }
-        if (xdma_disable_dst_ext(1) != 0) {
-            printf("Error in disabling xdma writer extension 1\n");
-            err++;
-        }
-        if (xdma_disable_src_ext(0) != 0) {
-            printf("Error in disabling xdma reader extension 0\n");
-            err++;
-        }
         xdma_memcpy_1d(data, (void *)tcdm_baseaddress,
                        data_size * sizeof(data[0]));
         int task_id = xdma_start();
@@ -65,19 +52,6 @@ int main() {
         printf("Now start to read %dB data between Clusters\r\n", data_size * sizeof(data[0]));
     }
     if ((snrt_cluster_idx() != 0) && snrt_is_dm_core()) {
-        // All remaining clusters try to read data from previous cluster's TCDM
-        if (xdma_disable_dst_ext(0) != 0) {
-            printf("Error in disabling xdma writer extension 0\n");
-            err++;
-        }
-        if (xdma_disable_dst_ext(1) != 0) {
-            printf("Error in disabling xdma writer extension 1\n");
-            err++;
-        }
-        if (xdma_disable_src_ext(0) != 0) {
-            printf("Error in disabling xdma reader extension 0\n");
-            err++;
-        }
 
         xdma_memcpy_1d((void *)tcdm_baseaddress - cluster_offset,
                        (void *)tcdm_baseaddress, data_size * sizeof(data[0]));
@@ -100,19 +74,6 @@ int main() {
         printf("Now start to write %dB data between Clusters\r\n", data_size * sizeof(data[0]));
     }
     if ((snrt_cluster_idx() != snrt_cluster_num() - 1) && snrt_is_dm_core()) {
-        // All remaining clusters try to write data to next cluster's TCDM
-        if (xdma_disable_dst_ext(0) != 0) {
-            printf("Error in disabling xdma writer extension 0\n");
-            err++;
-        }
-        if (xdma_disable_dst_ext(1) != 0) {
-            printf("Error in disabling xdma writer extension 1\n");
-            err++;
-        }
-        if (xdma_disable_src_ext(0) != 0) {
-            printf("Error in disabling xdma reader extension 0\n");
-            err++;
-        }
         xdma_memcpy_1d((void *)tcdm_baseaddress,
                        (void *)tcdm_baseaddress + cluster_offset,
                        data_size * sizeof(data[0]));
@@ -150,19 +111,6 @@ int main() {
         printf("Now start to let cluster to write back the %dB data to L3\r\n", data_size * sizeof(data[0]));
     }    
     if (snrt_is_dm_core()) {
-        // All clusters try to read data from L3 at the same time
-        if (xdma_disable_dst_ext(0) != 0) {
-            printf("Error in disabling xdma writer extension 0\n");
-            err++;
-        }
-        if (xdma_disable_dst_ext(1) != 0) {
-            printf("Error in disabling xdma writer extension 1\n");
-            err++;
-        }
-        if (xdma_disable_src_ext(0) != 0) {
-            printf("Error in disabling xdma reader extension 0\n");
-            err++;
-        }
         xdma_memcpy_1d((void *)tcdm_baseaddress, data,
                        data_size * sizeof(data[0]));
         int task_id = xdma_start();

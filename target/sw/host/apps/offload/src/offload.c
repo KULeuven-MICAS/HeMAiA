@@ -11,13 +11,12 @@ int main() {
     // Reset and ungate all quadrants, deisolate
     uint32_t current_chip_id = get_current_chip_id();
     init_uart(get_current_chip_baseaddress(), 32, 1);
-    hemaia_d2d_link_initialize(current_chip_id);
+    printf("[HeMAiA] Start Offload\r\n");
     comm_buffer_ptr = (comm_buffer_t*)chiplet_addr_transform(((uint64_t)&__narrow_spm_start));
     enable_sw_interrupts();
     comm_buffer_ptr->lock = 0;
     comm_buffer_ptr->chip_id = current_chip_id;
     program_snitches(current_chip_id, comm_buffer_ptr);
-    asm volatile("fence.i" ::: "memory");
 
     printf("[HeMAiA] Calling snitch cluster on chip %d to execute the task\r\n",
            current_chip_id);

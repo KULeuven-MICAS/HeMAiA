@@ -16,7 +16,7 @@
 uint64_t tcdm0_start_addr;
 uint64_t tcdm1_start_addr;
 uint64_t test_data_start_addr;
-#define ADDR_OFFSET 0x1000
+#define TCDM_OFFSET 0x1000
 int main() {
     int err = 0;
     // First set the addr of cluster 0
@@ -48,10 +48,8 @@ int main() {
         if (snrt_is_dm_core()) {
             test_data_start_addr = (uint64_t)test_data;
             test_data_start_addr += (uint64_t)snrt_cluster_base_addrh() << 32;
-            printf("[C0] Start to load data from %p%p \r\n",
-                   (uint8_t*)(test_data_start_addr >> 32),
-                   (uint8_t*)test_data_start_addr);
-            snrt_dma_start_1d_wideptr((tcdm0_start_addr+ADDR_OFFSET), test_data_start_addr,
+            printf("[C0] Start to load data from %lx \r\n", test_data_start_addr+TCDM_OFFSET);
+            snrt_dma_start_1d_wideptr((tcdm0_start_addr+TCDM_OFFSET), test_data_start_addr,
                                       length_data);
             snrt_dma_wait_all();
         }
@@ -62,10 +60,8 @@ int main() {
     // Thenc C1 fetches data from C0
     if (snrt_cluster_idx() == 1) {
         if (snrt_is_dm_core()) {
-            printf("[C1] Start to load data from %p%p \r\n",
-                   (uint8_t*)(tcdm0_start_addr >> 32),
-                   (uint8_t*)tcdm0_start_addr);
-            snrt_dma_start_1d_wideptr((tcdm1_start_addr+ADDR_OFFSET), (tcdm0_start_addr+ADDR_OFFSET),
+            printf("[C1] Start to load data from %lx \r\n", tcdm0_start_addr+TCDM_OFFSET);
+            snrt_dma_start_1d_wideptr((tcdm1_start_addr+TCDM_OFFSET), (tcdm0_start_addr+TCDM_OFFSET),
                                       length_data);
             snrt_dma_wait_all();
         }
@@ -77,22 +73,22 @@ int main() {
     if (snrt_cluster_idx() == 0 && snrt_is_dm_core()) {
         printf("C0 Checking the results\r\n");
         for (int i = 0; i < length_data; i++) {
-            if (((int8_t*)(tcdm0_start_addr+ADDR_OFFSET))[i] != test_data[i]) {
+            if (((int8_t*)(tcdm0_start_addr+TCDM_OFFSET))[i] != test_data[i]) {
                 err++;
                 printf("C0 data is incorrect!\r\n");
                 printf("tcdm0[%d]=%d, test_data[%d]=%d\r\n", i,
-                       ((int8_t*)(tcdm0_start_addr+ADDR_OFFSET))[i], i, test_data[i]);
+                       ((int8_t*)(tcdm0_start_addr+TCDM_OFFSET))[i], i, test_data[i]);
                 return -1;
             }
         }
     } else if (snrt_cluster_idx() == 1 && snrt_is_dm_core()) {
         printf("C1 Checking the results\r\n");
         for (int i = 0; i < length_data; i++) {
-            if (((int8_t*)(tcdm1_start_addr+ADDR_OFFSET))[i] != test_data[i]) {
+            if (((int8_t*)(tcdm1_start_addr+TCDM_OFFSET))[i] != test_data[i]) {
                 err++;
                 printf("C1 data is incorrect!\r\n");
                 printf("tcdm1[%d]=%d, test_data[%d]=%d\r\n", i,
-                       ((int8_t*)(tcdm1_start_addr+ADDR_OFFSET))[i], i, test_data[i]);
+                       ((int8_t*)(tcdm1_start_addr+TCDM_OFFSET))[i], i, test_data[i]);
                 return -1;
             }
         }

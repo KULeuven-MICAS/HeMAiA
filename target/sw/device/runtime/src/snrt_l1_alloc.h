@@ -61,7 +61,7 @@ inline void snrt_l1_malloc_init(){
         get_snrt_l1_allocator()->l1_heap_size = L1_ALLOC_MAKE_U64(0UL, l1_heap_top_aligned - snrt_cluster_base_addrl());
         get_snrt_l1_allocator()->l1_heap_manager = o1heapInit(get_snrt_l1_allocator()->l1_heap_start_addr,
                                                               get_snrt_l1_allocator()->l1_heap_size);
-        printf("Chip(%x, %x): [Device] L1 heap start: %lx, size(kB): %d\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), get_snrt_l1_allocator()->l1_heap_start_addr, get_snrt_l1_allocator()->l1_heap_size>>10);
+        // printf("Chip(%x, %x): [Device] L1 heap start: %lx, size(kB): %d\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), get_snrt_l1_allocator()->l1_heap_start_addr, get_snrt_l1_allocator()->l1_heap_size>>10);
     }
     snrt_cluster_hw_barrier();
 }
