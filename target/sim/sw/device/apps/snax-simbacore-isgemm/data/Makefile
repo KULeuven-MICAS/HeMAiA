@@ -24,11 +24,6 @@ $(DATA_H): $(CURR_DIR)/datagen.py $(DATA_CFG)
 $(DATA_CFG):
 	$(MAKE) -C $(CURR_DIR)/../../snax-simbacore-main/data
 
-# Forward rule to build the Bender lock hash from the snitch_cluster Makefile when invoked here
-$(CLUSTER_DIR)/generated/bender_lock.hash:
-	$(MAKE) -C $(CLUSTER_DIR) $(CLUSTER_DIR)/generated/bender_lock.hash
-
-
 .PHONY: clean-data clean
 
 clean-data:

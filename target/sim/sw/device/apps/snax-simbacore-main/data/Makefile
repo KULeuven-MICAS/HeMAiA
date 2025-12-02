@@ -25,9 +25,7 @@ $(DATA_CFG):
 	@cd $(CHISEL_SSM) && sbt "test:runMain simbacore.DataGenerator seqLen=64 dModel=36 dtRank=24"
 	@touch $@
 
-# Forward rule to build the Bender lock hash from the snitch_cluster Makefile when invoked here
-$(CLUSTER_DIR)/generated/bender_lock.hash:
-	$(MAKE) -C $(CLUSTER_DIR) $(CLUSTER_DIR)/generated/bender_lock.hash
+
 
 
 .PHONY: clean-data clean
