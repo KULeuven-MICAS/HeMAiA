@@ -11,6 +11,11 @@ To get started, you need to use the following command to pull the correct versio
 ```bash
 docker run --workdir $(realpath ~) -it -v $(realpath ~):$(realpath ~) ghcr.io/kuleuven-micas/snax@sha256:4ff37cad4e85d6a898cda3232ee04a1210833eb4618d1f1fd183201c03c4c57c
 ```
+or
+```bash
+apptainer exec --pwd "$(realpath ~)" -B "$(realpath ~):$(realpath ~)" docker://ghcr.io/kuleuven-micas/snax@sha256:4ff37cad4e85d6a898cda3232ee04a1210833eb4618d1f1fd183201c03c4c57c bash
+```
+
 Then you can go to the folder where the HeMAiA repo is located at, and execute the following three commands in the container. These three commands are necessary for either simulation or FPGA prototyping: 
 
 - Compile the Bootrom: 
