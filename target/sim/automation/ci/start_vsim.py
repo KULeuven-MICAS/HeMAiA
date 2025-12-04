@@ -238,7 +238,7 @@ def build_apps(
         bin_dest.mkdir(parents=True, exist_ok=True)
         # Copy the generated app directories from target/sim/bin
         sim_bin = repo_root / "target/sim/bin"
-        for subdir in ["app_chip_0_0", "app_chip_0_1", "app_chip_1_0", "app_chip_1_1"]:
+        for subdir in ["app_chip_0_0", "app_chip_0_1", "app_chip_1_0", "app_chip_1_1", "mempool"]:
             src = sim_bin / subdir
             if src.exists():
                 dst = bin_dest / subdir
