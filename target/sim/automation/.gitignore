@@ -5,7 +5,8 @@
 !/ci/
 /ci/*
 !/ci/task.yaml
-!/ci/start.py
+!/ci/start_vlt.py
+!/ci/start_vsim.py
 
 !/automated-xdma-transpose/
 /automated-xdma-transpose/*
