@@ -410,7 +410,11 @@ import ${name}_pkg::*;
     .ar_chan_t (${soc2router_bus.ar_chan_type()}),
     .r_chan_t (${soc2router_bus.r_chan_type()}),
     .w_chan_t (${soc2router_bus.w_chan_type()}),
-    .b_chan_t (${soc2router_bus.b_chan_type()})
+    .b_chan_t (${soc2router_bus.b_chan_type()}),
+    .EnableEastPhy(`EAST_IO),
+    .EnableWestPhy(`WEST_IO),
+    .EnableNorthPhy(`NORTH_IO),
+    .EnableSouthPhy(`SOUTH_IO)   
   ) i_d2d_link (
     .chip_id_i(chip_id),
 
