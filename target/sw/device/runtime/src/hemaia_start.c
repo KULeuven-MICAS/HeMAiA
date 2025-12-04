@@ -55,7 +55,7 @@ static inline void snrt_init_tls() {
         size = (size_t)(&__tbss_end) - (size_t)(&__tbss_start);
         for (int i = 0; i < snrt_cluster_core_num(); i++) {
             snrt_dma_start_1d((void*)(tls_ptr + i * tls_offset),
-                              (void*)(snrt_zero_memory_ptr()), size);
+                              (void*)(WIDE_ZERO_MEM_BASE_ADDR), size);
         }
     }
 
