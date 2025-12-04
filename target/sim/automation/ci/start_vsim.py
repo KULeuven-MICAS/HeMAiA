@@ -293,7 +293,7 @@ def main() -> None:
     # Build applications and prepare task directories (step 3)
     tasks_info = build_apps(repo_root, docker_image, tasks, task_base_dir)
     # Prepare Questasim filelists inside docker (step 4)
-    run_in_container(repo_root, docker_image, repo_root, ["make", "hemaia_system_vsim_preparation"])
+    run_in_container(repo_root, docker_image, repo_root, ["make", "hemaia_system_vsim_preparation" "SIM_WITH_WAVEFORM=0"])
     # Compile Questasim simulation outside docker and copy artefacts (step 5)
     prepare_and_copy_sim(repo_root, tasks_info)
     # Run simulations concurrently (step 6)
