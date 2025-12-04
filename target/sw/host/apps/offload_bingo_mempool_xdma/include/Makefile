@@ -15,13 +15,9 @@ DATA_H = $(DATA_DIR)/mempool_xdma_data.h
 $(DATA_H): $(DATA_DIR)/mempool_xdma_datagen.py $(DATA_CFG) 
 	$< -c $(DATA_CFG) > $@
 
-DATA_HEX = $(DATA_DIR)/mempool_xdma_data.hex
-$(DATA_HEX): $(DATA_H) $(DATA_DIR)/mempool_xdma_datagen.py $(DATA_CFG) 
-	$(DATA_DIR)/gen_hex.py
-
 .PHONY: clean-data clean
 
 clean-data:
-	rm -f $(DATA_H) $(DATA_HEX)
+	rm -f $(DATA_H)
 
 clean: clean-data
