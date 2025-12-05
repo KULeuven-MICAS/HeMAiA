@@ -14,7 +14,7 @@ sw_path = os.path.normpath(sw_path)
 cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../../rtl/cfg/lru.hjson")
 cfg_path = os.path.normpath(cfg_path)
 
-task_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "task.yaml")
+task_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "task_vlt.yaml")
 task_path = os.path.normpath(task_path)
 
 num_threads = multiprocessing.cpu_count()

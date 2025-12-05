@@ -1,0 +1,16 @@
+runs:
+  - app_0: 
+    - host_app: offload
+    - device_app: snax-test-integration
+  - app_1:
+    - host_app: hemaia_clk_rst_configurator
+    - device_app: null
+  - app_2: 
+    - host_app: offload
+    - device_app: snax-xdma-copy
+  - app_3: 
+    - host_app: offload
+    - device_app: snax-xdma-hazard
+  - app_4: 
+    - host_app: offload_bingo_ci
+    - device_app: snax-bingo-offload

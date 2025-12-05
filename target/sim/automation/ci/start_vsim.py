@@ -348,7 +348,7 @@ def main() -> None:
     # Run initialisation inside the container (step 2)
     run_in_container(repo_root, docker_image, repo_root, ["bash", str(init_inside)])
     # Parse tasks (step 3)
-    task_yaml = script_path.parent / "task.yaml"
+    task_yaml = script_path.parent / "task_vsim.yaml"
     tasks = parse_tasks(task_yaml)
     # Build applications and prepare task directories (step 3)
     tasks_info = build_apps(repo_root, docker_image, tasks, task_base_dir)
