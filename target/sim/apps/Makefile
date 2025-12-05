@@ -34,12 +34,12 @@ apps: $(APP_ELF)
 	cp $(APP_BIN) $(MKFILE_DIR)
 	cp $(APP_DUMP) $(MKFILE_DIR)
 	python3 bin2hex.py -i $(APP_NAME).bin
+	python3 copy_n_times.py -i $(APP_NAME) -o $(BIN_DIR) -c $(CFG)
 	if [ -f "$(APP_MEM)" ]; then \
 		cp -f "$(APP_MEM)" $(MKFILE_DIR); \
 		python3 bin2hex.py -i mempool.bin; \
+		cp -r -f $(MKFILE_DIR)/mempool $(BIN_DIR); \
 	fi
-	python3 copy_n_times.py -i $(APP_NAME) -o $(BIN_DIR) -c $(CFG)
-	cp -r -f $(MKFILE_DIR)/mempool $(BIN_DIR)
 clean-apps:
 	@rm -rf .rtlbinary
 	@rm -f $(MKFILE_DIR)/*.bin $(MKFILE_DIR)/*.hex $(MKFILE_DIR)/*.elf $(MKFILE_DIR)/*.dump
