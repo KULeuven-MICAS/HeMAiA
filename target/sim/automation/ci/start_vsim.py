@@ -79,7 +79,8 @@ from concurrent.futures import ThreadPoolExecutor
 import multiprocessing
 from typing import Dict, List, Tuple, Optional
 import traceback
-
+from datetime import datetime
+import getpass
 
 def run_host_script(script_path: Path) -> None:
     """Execute a shell script on the host.
@@ -317,6 +318,9 @@ def write_summary(
     """Write a Markdown summary of the simulation results."""
     with summary_path.open("w") as f:
         f.write("# Simulation Summary\n\n")
+        username = getpass.getuser()
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        f.write(f"Run by **{username}** at **{now}**\n\n")
         for idx, (task_dir, host_app, device_app) in enumerate(tasks_info):
             key = str(task_dir)
             passed = results.get(key, False)
@@ -360,7 +364,8 @@ def main() -> None:
     # Run simulations concurrently (step 6)
     results = run_simulations(tasks_info)
     # Write summary (step 7)
-    summary_path = script_path.parent / "simulation_summary.md"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    summary_path = script_path.parent / f"simulation_summary_{timestamp}.md"
     write_summary(summary_path, tasks_info, results)
     print(f"Simulation summary written to {summary_path}")
 

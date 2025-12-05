@@ -23,6 +23,9 @@ runs:
   - app_7: 
     - host_app: offload_bingo_gemm_multi_chiplet_vanilla
     - device_app: snax-bingo-offload
-  # - app_8: 
-  #   - host_app: offload_bingo_mempool_xdma
-  #   - device_app: snax-bingo-offload
+  - app_8: 
+    - host_app: offload_bingo_mempool_xdma
+    - device_app: snax-bingo-offload
+  - app_9: 
+    - host_app: hemaia_system_xdma_copy
+    - device_app: null
