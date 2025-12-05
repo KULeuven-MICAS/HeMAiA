@@ -4,9 +4,6 @@
 //
 // Fanchen Kong <fanchen.kong@kuleuven.be>
 
-// __attribute__((section(".cbss"))) bingo_offload_unit_t bingo_offload_unit;
-__thread volatile bingo_offload_unit_t *bingo_offload_unit_ptr;
-
 extern void bingo_wait_worker_wfi();
 extern void bingo_wake_workers();
 extern void bingo_worker_wfi(uint32_t cluster_core_idx);
