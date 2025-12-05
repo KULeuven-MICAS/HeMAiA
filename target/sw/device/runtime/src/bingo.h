@@ -36,20 +36,14 @@ inline bingo_offload_unit_t *get_bingo_offload_unit() {
  */
 extern uint32_t __snax_symtab_start;
 extern uint32_t __snax_symtab_end;
-/**
- * @brief Pointer to the event unit struct only initialized after call to
- * bingo_init for main thread and call to bingo_offload_event_loop for worker threads
- *
- */
-extern __thread volatile bingo_offload_unit_t *bingo_offload_unit_ptr;
 
 //================================================================================
 // Functions
 //================================================================================
 
 inline void bingo_wait_worker_wfi() {
-    uint32_t scratch = bingo_offload_unit_ptr->workers_in_loop;
-    while (__atomic_load_n(&bingo_offload_unit_ptr->workers_wfi, __ATOMIC_RELAXED) != scratch)
+    uint32_t scratch = get_bingo_offload_unit()->workers_in_loop;
+    while (__atomic_load_n(&get_bingo_offload_unit()->workers_wfi, __ATOMIC_RELAXED) != scratch)
         ;
 }
 
@@ -67,10 +61,10 @@ inline void bingo_wake_workers(){
 }
 
 inline void bingo_worker_wfi(uint32_t cluster_core_idx) {
-    __atomic_add_fetch(&bingo_offload_unit_ptr->workers_wfi, 1, __ATOMIC_RELAXED);
+    __atomic_add_fetch(&get_bingo_offload_unit()->workers_wfi, 1, __ATOMIC_RELAXED);
     snrt_wfi();
     snrt_int_cluster_clr(1 << cluster_core_idx);
-    __atomic_add_fetch(&bingo_offload_unit_ptr->workers_wfi, -1, __ATOMIC_RELAXED);
+    __atomic_add_fetch(&get_bingo_offload_unit()->workers_wfi, -1, __ATOMIC_RELAXED);
 }
 
 
@@ -79,17 +73,17 @@ inline void bingo_worker_wfi(uint32_t cluster_core_idx) {
  * @details
  */
 inline void bingo_print_status() {
-    BINGO_PRINTF(0, "workers_in_loop=%d\n", bingo_offload_unit_ptr->workers_in_loop);
+    BINGO_PRINTF(0, "workers_in_loop=%d\n", get_bingo_offload_unit()->workers_in_loop);
 }
 
 /**
  * Getters
  */
 inline uint32_t bingo_get_workers_in_loop() {
-    return __atomic_load_n(&bingo_offload_unit_ptr->workers_in_loop, __ATOMIC_RELAXED);
+    return __atomic_load_n(&get_bingo_offload_unit()->workers_in_loop, __ATOMIC_RELAXED);
 }
 inline uint32_t bingo_get_workers_in_wfi() {
-    return __atomic_load_n(&bingo_offload_unit_ptr->workers_wfi, __ATOMIC_RELAXED);
+    return __atomic_load_n(&get_bingo_offload_unit()->workers_wfi, __ATOMIC_RELAXED);
 }
 
 
@@ -99,9 +93,8 @@ inline uint32_t bingo_get_workers_in_wfi() {
 inline void bingo_offload_init() {
     // Initialize the offload manager
     // This will let the dm to manage the offload
-    bingo_offload_unit_ptr = get_bingo_offload_unit();
     if (snrt_is_dm_core()) {
-        snrt_memset((void *)bingo_offload_unit_ptr, 0, sizeof(bingo_offload_unit_t));
+        snrt_memset((void *)get_bingo_offload_unit(), 0, sizeof(bingo_offload_unit_t));
     }
     // Make sure the bingo offload unit is reset by the DM core
     snrt_cluster_hw_barrier();
@@ -115,7 +108,7 @@ inline void bingo_offload_exit() {
     // make sure queue is empty
     // set exit flag and wake cores
     bingo_wait_worker_wfi();
-    bingo_offload_unit_ptr->exit_flag = 1;
+    get_bingo_offload_unit()->exit_flag = 1;
     bingo_wake_workers();
 }
 
@@ -127,25 +120,25 @@ inline void bingo_offload_exit() {
 inline void bingo_offload_event_loop(uint32_t cluster_core_idx) {
     // This function is called by the non-manager cores
     // count number of workers in loop
-    __atomic_add_fetch(&bingo_offload_unit_ptr->workers_in_loop, 1, __ATOMIC_RELAXED);
+    __atomic_add_fetch(&get_bingo_offload_unit()->workers_in_loop, 1, __ATOMIC_RELAXED);
     // Enable the interrupt for the core
     snrt_interrupt_enable(IRQ_M_CLUSTER);
     // Set the core to WFI
     
     while (1)
     {
-        if (bingo_offload_unit_ptr->exit_flag) {
+        if (get_bingo_offload_unit()->exit_flag) {
             // If exit flag is set, we stop the event loop
             snrt_interrupt_disable(IRQ_M_CLUSTER);
             break;
         }
-        if (bingo_offload_unit_ptr->start_flag) {
+        if (get_bingo_offload_unit()->start_flag) {
             // If start flag is enabled, we execute the offload function
-            bingo_offload_unit_ptr->offloadFn(bingo_offload_unit_ptr->offloadArgs);
+            get_bingo_offload_unit()->offloadFn(get_bingo_offload_unit()->offloadArgs);
 
         }
         // enter wait for interrupt
-        __atomic_add_fetch(&bingo_offload_unit_ptr->fini_count, 1, __ATOMIC_RELAXED);
+        __atomic_add_fetch(&get_bingo_offload_unit()->fini_count, 1, __ATOMIC_RELAXED);
         bingo_worker_wfi(cluster_core_idx);
     }
 }
@@ -162,11 +155,11 @@ inline void bingo_offload_dispatch(uint32_t (*offloadFn)(uint32_t), uint32_t off
     // function to the workers
     uint32_t scratch;
     bingo_wait_worker_wfi();
-    bingo_offload_unit_ptr->offloadFn = offloadFn;
-    bingo_offload_unit_ptr->offloadArgs = offloadArgs;
-    bingo_offload_unit_ptr->start_flag = 1;
-    bingo_offload_unit_ptr->exit_flag = 0;
-    bingo_offload_unit_ptr->fini_count = 0;
+    get_bingo_offload_unit()->offloadFn = offloadFn;
+    get_bingo_offload_unit()->offloadArgs = offloadArgs;
+    get_bingo_offload_unit()->start_flag = 1;
+    get_bingo_offload_unit()->exit_flag = 0;
+    get_bingo_offload_unit()->fini_count = 0;
     // Wake up the workers ro run the offload function
     bingo_wake_workers();
     // When the workers are done, they will add the fini_count by 1 and set itself to wfi again
@@ -175,10 +168,10 @@ inline void bingo_offload_dispatch(uint32_t (*offloadFn)(uint32_t), uint32_t off
     offloadFn(offloadArgs);
     // When the Manager core is done, check the state of the fini_count
     // if other workers are not done, wait for them to finish
-    while (__atomic_load_n(&bingo_offload_unit_ptr->fini_count, __ATOMIC_RELAXED) != bingo_get_workers_in_loop())
+    while (__atomic_load_n(&get_bingo_offload_unit()->fini_count, __ATOMIC_RELAXED) != bingo_get_workers_in_loop())
         ;
     // stop workers from re-executing the task
-    bingo_offload_unit_ptr->start_flag = 0;
+    get_bingo_offload_unit()->start_flag = 0;
 }
 
 inline uint32_t bingo_offload_manager(){
@@ -197,42 +190,41 @@ inline uint32_t bingo_offload_manager(){
 
     while(1){
         // (1) Wait for the offload trigger cmd == MBOX_DEVICE_START
-        h2c_mailbox_read((uint32_t *)&(bingo_offload_unit_ptr->cmd));
+        h2c_mailbox_read((uint32_t *)&(get_bingo_offload_unit()->cmd));
         // printf("[Cluster %d] Received command: 0x%x\n", snrt_cluster_idx(), bingo_offload_unit_ptr->cmd);
-        if (MBOX_DEVICE_STOP == (bingo_offload_unit_ptr->cmd)) {
+        if (MBOX_DEVICE_STOP == (get_bingo_offload_unit()->cmd)) {
             // Got MBOX_DEVICE_STOP from host, stopping execution now.
             // Set the exit flag to stop the workers
             bingo_offload_exit();
             break;
-        } else if (MBOX_DEVICE_START != (bingo_offload_unit_ptr->cmd)) {
+        } else if (MBOX_DEVICE_START != (get_bingo_offload_unit()->cmd)) {
             // Got unexpected command 0x%x, stopping execution now.
             return -1;
         }
         // (2) The host sends the task id
-        h2c_mailbox_read((uint32_t *)&(bingo_offload_unit_ptr->task_id));
-        // printf("[Cluster %d] Received task id: 0x%x\n", snrt_cluster_idx(), bingo_offload_unit_ptr->task_id);
+        h2c_mailbox_read((uint32_t *)&(get_bingo_offload_unit()->task_id));
+        // printf("[Cluster %d] Received task id: 0x%x\n", snrt_cluster_idx(), get_bingo_offload_unit()->task_id);
         // (3) The host sends through the mailbox the pointer to the function that should be executed on the accelerator.
-        h2c_mailbox_read((uint32_t *)&(bingo_offload_unit_ptr->offloadFn));
-        // printf("[Cluster %d] Received function pointer: 0x%x\n", snrt_cluster_idx(), (uint32_t)(bingo_offload_unit_ptr->offloadFn));
+        h2c_mailbox_read((uint32_t *)&(get_bingo_offload_unit()->offloadFn));
+        // printf("[Cluster %d] Received function pointer: 0x%x\n", snrt_cluster_idx(), (uint32_t)(get_bingo_offload_unit()->offloadFn));
         // (4) The host sends through the mailbox the pointer to the arguments that should be used.
-        h2c_mailbox_read((uint32_t *)&(bingo_offload_unit_ptr->offloadArgs));
-        // printf("[Cluster %d] Received function args: 0x%x\n", snrt_cluster_idx(), bingo_offload_unit_ptr->offloadArgs);
+        h2c_mailbox_read((uint32_t *)&(get_bingo_offload_unit()->offloadArgs));
+        // printf("[Cluster %d] Received function args: 0x%x\n", snrt_cluster_idx(), get_bingo_offload_unit()->offloadArgs);
         // Bookkeeping the start cycles
-        bingo_offload_unit_ptr->start_cycles = snrt_mcycle();
+        get_bingo_offload_unit()->start_cycles = snrt_mcycle();
         // (5) The manager core will execute the offload function
-        bingo_offload_dispatch(bingo_offload_unit_ptr->offloadFn, bingo_offload_unit_ptr->offloadArgs);
+        bingo_offload_dispatch(get_bingo_offload_unit()->offloadFn, get_bingo_offload_unit()->offloadArgs);
         // Bookkeeping the end cycles
-        bingo_offload_unit_ptr->end_cycles = snrt_mcycle();
-
+        get_bingo_offload_unit()->end_cycles = snrt_mcycle();
         // printf("[Cluster %d] Task %d finish with CC=%d \n", 
                 // snrt_cluster_idx(),
-                // bingo_offload_unit_ptr->task_id,
-                // bingo_offload_unit_ptr->end_cycles-bingo_offload_unit_ptr->start_cycles);
+                // get_bingo_offload_unit()->task_id,
+                // get_bingo_offload_unit()->end_cycles-get_bingo_offload_unit()->start_cycles);
         // (6) return the result through the mailbox to the host
         bingo_c2h_msg_fields_t c2h_msg;
         c2h_msg.cluster_id = snrt_cluster_idx();
         c2h_msg.flag = MBOX_DEVICE_DONE;
-        c2h_msg.task_id = (uint16_t)bingo_offload_unit_ptr->task_id;
+        c2h_msg.task_id = (uint16_t)get_bingo_offload_unit()->task_id;
         c2h_msg.reserved = 0;
         c2h_mailbox_write(bingo_c2h_msg_encode(c2h_msg));
     }

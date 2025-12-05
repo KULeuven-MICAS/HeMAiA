@@ -49,14 +49,6 @@ static inline void snrt_init_tls() {
             snrt_dma_start_1d((void*)(tls_ptr + i * tls_offset), (void*)tls_ptr,
                               size);
         }
-
-        // Initialize all cores' .tbss sections
-        tls_ptr += size;
-        size = (size_t)(&__tbss_end) - (size_t)(&__tbss_start);
-        for (int i = 0; i < snrt_cluster_core_num(); i++) {
-            snrt_dma_start_1d((void*)(tls_ptr + i * tls_offset),
-                              (void*)(WIDE_ZERO_MEM_BASE_ADDR), size);
-        }
     }
 
     snrt_cluster_hw_barrier();
