@@ -50,7 +50,7 @@ jobs:
       - name: Run Tests
         working-directory: target/sim/automation/ci
         run: |
-          python3 start.py
+          python3 start_vlt.py
 
   hemaia-noc-verilator:
     name: Simulate HeMAiA NoC with Verilator
@@ -70,4 +70,4 @@ jobs:
       - name: Run Tests
         working-directory: target/sim/automation/ci
         run: |
-          python3 start.py
+          python3 start_vlt.py

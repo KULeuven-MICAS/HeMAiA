@@ -12,5 +12,20 @@ runs:
     - host_app: offload
     - device_app: snax-xdma-hazard
   - app_4: 
-    - host_app: offload_bingo_ci
+    - host_app: offload_bingo_gemm_intra_chiplet_merge_load_and_compute
     - device_app: snax-bingo-offload
+  - app_5: 
+    - host_app: offload_bingo_gemm_intra_chiplet_seperate_load_and_compute
+    - device_app: snax-bingo-offload
+  - app_6: 
+    - host_app: offload_bingo_gemm_multi_chiplet_broadcast
+    - device_app: snax-bingo-offload
+  - app_7: 
+    - host_app: offload_bingo_gemm_multi_chiplet_vanilla
+    - device_app: snax-bingo-offload
+  - app_8: 
+    - host_app: offload_bingo_mempool_xdma
+    - device_app: snax-bingo-offload
+  - app_9: 
+    - host_app: hemaia_system_xdma_copy
+    - device_app: null

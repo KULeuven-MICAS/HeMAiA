@@ -44,6 +44,7 @@ UART_DPI_DIR         ?= $(SIM_MKFILE_DIR)testharness/uartdpi
 #####################
 SIM_WITH_MACRO ?= 0
 SIM_WITH_NETLIST ?= 0
+SIM_WITH_WAVEFORM ?= 1
 
 VSIM_BENDER += $(shell cat ../rtl/src/bender_targets.tmp)
 VLT_BENDER  += $(shell cat ../rtl/src/bender_targets.tmp)
@@ -72,7 +73,11 @@ VCS_BENDER  += -t simulation_hemaia
 
 
 VSIM_FLAGS += -t 1ps
-VSIM_FLAGS += -voptargs=+acc
+
+ifeq ($(SIM_WITH_WAVEFORM), 1)
+	VSIM_FLAGS += -voptargs=+acc
+endif
+
 VSIM_FLAGS += -do "log -r /*; run -a"
 # Downgraded from error as VSIM *wrongly* reports illegal enum assignments in riscv_dbg 4-phase CDCs
 # TODO: Workaround; revise
