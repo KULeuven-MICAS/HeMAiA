@@ -133,7 +133,9 @@ module hemaia (
   );
 
   logic [7:0] chip_id_i;
-  tc_digital_io chip_id_i_io[7:0] (
+  tc_digital_io #(
+    .VerticalIO(1'b1)
+  ) chip_id_i_io[7:0] (
       .data_i(1'b0),
       .data_o(chip_id_i),
       .io_direction_oe_ni(1'b1),
@@ -144,7 +146,9 @@ module hemaia (
   );
 
   logic [1:0] boot_mode_i;
-  tc_digital_io boot_mode_i_io[1:0] (
+  tc_digital_io #(
+    .VerticalIO(1'b1)
+  ) boot_mode_i_io[1:0] (
       .data_i(1'b0),
       .data_o(boot_mode_i),
       .io_direction_oe_ni(1'b1),
@@ -217,12 +221,6 @@ module hemaia (
       .io(io_flow_control_east_cts_o)
   );
 
-  generate
-    for (genvar i = 0; i < D2DChannel; i++) begin : gen_east_d2d_io_cells
-      tc_analog_io east_d2d_io[D2DWidth-1:0] (.io(io_east_d2d[i]));
-    end
-  endgenerate
-
   // West side IOs
   logic west_test_being_requested_i;
   logic west_test_request_o;
@@ -285,12 +283,6 @@ module hemaia (
       .io(io_flow_control_west_cts_o)
   );
 
-  generate
-    for (genvar i = 0; i < D2DChannel; i++) begin : gen_west_d2d_io_cells
-      tc_analog_io west_d2d_io[D2DWidth-1:0] (.io(io_west_d2d[i]));
-    end
-  endgenerate
-
   // North side IOs
   logic north_test_being_requested_i;
   logic north_test_request_o;
@@ -298,7 +290,9 @@ module hemaia (
   logic flow_control_north_cts_i;
   logic flow_control_north_rts_i;
   logic flow_control_north_cts_o;
-  tc_digital_io north_test_being_requested_i_io (
+  tc_digital_io #(
+    .VerticalIO(1'b1)
+  ) north_test_being_requested_i_io (
       .data_i(1'b0),
       .data_o(north_test_being_requested_i),
       .io_direction_oe_ni(1'b1),
@@ -307,7 +301,9 @@ module hemaia (
       .io_pulldown_en_i(1'b0),
       .io(io_north_test_being_requested_i)
   );
-  tc_digital_io north_test_request_o_io (
+  tc_digital_io #(
+    .VerticalIO(1'b1)
+  ) north_test_request_o_io (
       .data_i(north_test_request_o),
       .data_o(),
       .io_direction_oe_ni(1'b0),
@@ -316,7 +312,9 @@ module hemaia (
       .io_pulldown_en_i(1'b0),
       .io(io_north_test_request_o)
   );
-  tc_digital_io flow_control_north_rts_o_io (
+  tc_digital_io #(
+    .VerticalIO(1'b1)
+  ) flow_control_north_rts_o_io (
       .data_i(flow_control_north_rts_o),
       .data_o(),
       .io_direction_oe_ni(1'b0),
@@ -325,7 +323,9 @@ module hemaia (
       .io_pulldown_en_i(1'b0),
       .io(io_flow_control_north_rts_o)
   );
-  tc_digital_io flow_control_north_cts_i_io (
+  tc_digital_io #(
+    .VerticalIO(1'b1)
+  ) flow_control_north_cts_i_io (
       .data_i(1'b0),
       .data_o(flow_control_north_cts_i),
       .io_direction_oe_ni(1'b1),
@@ -334,7 +334,9 @@ module hemaia (
       .io_pulldown_en_i(1'b0),
       .io(io_flow_control_north_cts_i)
   );
-  tc_digital_io flow_control_north_rts_i_io (
+  tc_digital_io #(
+    .VerticalIO(1'b1)
+  ) flow_control_north_rts_i_io (
       .data_i(1'b0),
       .data_o(flow_control_north_rts_i),
       .io_direction_oe_ni(1'b1),
@@ -343,7 +345,9 @@ module hemaia (
       .io_pulldown_en_i(1'b0),
       .io(io_flow_control_north_rts_i)
   );
-  tc_digital_io flow_control_north_cts_o_io (
+  tc_digital_io #(
+    .VerticalIO(1'b1)
+  ) flow_control_north_cts_o_io (
       .data_i(flow_control_north_cts_o),
       .data_o(),
       .io_direction_oe_ni(1'b0),
@@ -353,13 +357,6 @@ module hemaia (
       .io(io_flow_control_north_cts_o)
   );
 
-  generate
-    for (genvar i = 0; i < D2DChannel; i++) begin : gen_north_d2d_io_cells
-      tc_analog_io north_d2d_io[D2DWidth-1:0] (.io(io_north_d2d[i]));
-    end
-  endgenerate
-
-
   // South side IOs
   logic south_test_being_requested_i;
   logic south_test_request_o;
@@ -367,7 +364,9 @@ module hemaia (
   logic flow_control_south_cts_i;
   logic flow_control_south_rts_i;
   logic flow_control_south_cts_o;
-  tc_digital_io south_test_being_requested_i_io (
+  tc_digital_io #(
+    .VerticalIO(1'b1)
+  ) south_test_being_requested_i_io (
       .data_i(1'b0),
       .data_o(south_test_being_requested_i),
       .io_direction_oe_ni(1'b1),
@@ -376,7 +375,9 @@ module hemaia (
       .io_pulldown_en_i(1'b0),
       .io(io_south_test_being_requested_i)
   );
-  tc_digital_io south_test_request_o_io (
+  tc_digital_io #(
+    .VerticalIO(1'b1)
+  ) south_test_request_o_io (
       .data_i(south_test_request_o),
       .data_o(),
       .io_direction_oe_ni(1'b0),
@@ -385,7 +386,9 @@ module hemaia (
       .io_pulldown_en_i(1'b0),
       .io(io_south_test_request_o)
   );
-  tc_digital_io flow_control_south_rts_o_io (
+  tc_digital_io #(
+    .VerticalIO(1'b1)
+  ) flow_control_south_rts_o_io (
       .data_i(flow_control_south_rts_o),
       .data_o(),
       .io_direction_oe_ni(1'b0),
@@ -394,7 +397,9 @@ module hemaia (
       .io_pulldown_en_i(1'b0),
       .io(io_flow_control_south_rts_o)
   );
-  tc_digital_io flow_control_south_cts_i_io (
+  tc_digital_io #(
+    .VerticalIO(1'b1)
+  ) flow_control_south_cts_i_io (
       .data_i(1'b0),
       .data_o(flow_control_south_cts_i),
       .io_direction_oe_ni(1'b1),
@@ -403,7 +408,9 @@ module hemaia (
       .io_pulldown_en_i(1'b0),
       .io(io_flow_control_south_cts_i)
   );
-  tc_digital_io flow_control_south_rts_i_io (
+  tc_digital_io #(
+    .VerticalIO(1'b1)
+  ) flow_control_south_rts_i_io (
       .data_i(1'b0),
       .data_o(flow_control_south_rts_i),
       .io_direction_oe_ni(1'b1),
@@ -412,7 +419,9 @@ module hemaia (
       .io_pulldown_en_i(1'b0),
       .io(io_flow_control_south_rts_i)
   );
-  tc_digital_io flow_control_south_cts_o_io (
+  tc_digital_io #(
+    .VerticalIO(1'b1)
+  ) flow_control_south_cts_o_io (
       .data_i(flow_control_south_cts_o),
       .data_o(),
       .io_direction_oe_ni(1'b0),
@@ -421,12 +430,6 @@ module hemaia (
       .io_pulldown_en_i(1'b0),
       .io(io_flow_control_south_cts_o)
   );
-
-  generate
-    for (genvar i = 0; i < D2DChannel; i++) begin : gen_south_d2d_io_cells
-      tc_analog_io south_d2d_io[D2DWidth-1:0] (.io(io_south_d2d[i]));
-    end
-  endgenerate
 % endif
 
   logic uart_tx_o;
@@ -475,8 +478,21 @@ module hemaia (
   logic [31:0] gpio_d_o;
   logic [31:0] gpio_oe_o;
   generate
-    for (genvar i = 0; i < NumGpio; i++) begin : gen_gpio_io_cells
+    for (genvar i = 0; i < 6; i++) begin : gen_gpio_io_cells
       tc_digital_io gpio_io (
+          .data_i(gpio_d_o[i]),
+          .data_o(gpio_d_i[i]),
+          .io_direction_oe_ni(~gpio_oe_o[i]),
+          .io_driving_strength_i(4'hf),
+          .io_pullup_en_i(1'b0),
+          .io_pulldown_en_i(1'b0),
+          .io(io_gpio[i])
+      );
+    end
+    for (genvar i = 6; i < NumGpio; i++) begin : gen_gpio_io_cells_v
+      tc_digital_io #(
+        .VerticalIO(1'b1)
+      ) gpio_io (
           .data_i(gpio_d_o[i]),
           .data_o(gpio_d_i[i]),
           .io_direction_oe_ni(~gpio_oe_o[i]),
@@ -496,7 +512,9 @@ module hemaia (
   logic [3:0] spis_sd_o;
   logic [3:0] spis_sd_en_o;
   logic [3:0] spis_sd_i;
-  tc_digital_io spis_sck_i_io (
+  tc_digital_io #(
+    .VerticalIO(1'b1)
+  ) spis_sck_i_io (
       .data_i(1'b0),
       .data_o(spis_sck_i),
       .io_direction_oe_ni(1'b1),
@@ -505,7 +523,9 @@ module hemaia (
       .io_pulldown_en_i(1'b0),
       .io(io_spis_sck_i)
   );
-  tc_digital_io spis_csb_i_io (
+  tc_digital_io #(
+    .VerticalIO(1'b1)
+  ) spis_csb_i_io (
       .data_i(1'b0),
       .data_o(spis_csb_i),
       .io_direction_oe_ni(1'b1),
@@ -514,7 +534,9 @@ module hemaia (
       .io_pulldown_en_i(1'b0),
       .io(io_spis_csb_i)
   );
-  tc_digital_io spis_sd_io[3:0] (
+  tc_digital_io #(
+    .VerticalIO(1'b1)
+  ) spis_sd_io[3:0] (
       .data_i(spis_sd_o),
       .data_o(spis_sd_i),
       .io_direction_oe_ni(~(spis_sd_en_o)),
@@ -531,7 +553,9 @@ module hemaia (
   logic [3:0] spim_sd_o;
   logic [3:0] spim_sd_en_o;
   logic [3:0] spim_sd_i;
-  tc_digital_io spim_sck_o_io (
+  tc_digital_io #(
+    .VerticalIO(1'b1)
+  ) spim_sck_o_io (
       .data_i(spim_sck_o),
       .data_o(),
       .io_direction_oe_ni(~spim_sck_en_o),
@@ -540,7 +564,9 @@ module hemaia (
       .io_pulldown_en_i(1'b0),
       .io(io_spim_sck_o)
   );
-  tc_digital_io spim_csb_o_io (
+  tc_digital_io #(
+    .VerticalIO(1'b1)
+  ) spim_csb_o_io (
       .data_i(spim_csb_o[0]),
       .data_o(),
       .io_direction_oe_ni(~(spim_csb_en_o[0])),
@@ -549,7 +575,9 @@ module hemaia (
       .io_pulldown_en_i(1'b0),
       .io(io_spim_csb_o)
   );
-  tc_digital_io spim_sd_io[3:0] (
+  tc_digital_io #(
+    .VerticalIO(1'b1)
+  ) spim_sd_io[3:0] (
       .data_i(spim_sd_o),
       .data_o(spim_sd_i),
       .io_direction_oe_ni(~(spim_sd_en_o)),
@@ -634,6 +662,12 @@ module hemaia (
       .io_pulldown_en_i(1'b0),
       .io(io_i2c_scl)
   );
+
+  tc_digital_io_special_block special_blocks ();
+  tc_digital_io_power_supply [3:0] left_io_power_supply ();
+  tc_digital_io_power_supply [3:0] top_io_power_supply ();
+  tc_digital_io_power_supply [3:0] right_io_power_supply ();
+  tc_digital_io_power_supply [3:0] bot_io_power_supply ();
 
   occamy_chip i_occamy_chip (
 % if multichip_cfg["single_chip"] is False:
