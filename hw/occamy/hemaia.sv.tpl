@@ -664,10 +664,10 @@ module hemaia (
   );
 
   tc_digital_io_special_block special_blocks ();
-  tc_digital_io_power_supply left_io_power_supply[3:0] ();
-  tc_digital_io_power_supply top_io_power_supply[3:0] ();
-  tc_digital_io_power_supply right_io_power_supply[3:0] ();
-  tc_digital_io_power_supply bot_io_power_supply[3:0] ();
+  tc_digital_io_power_supply #(.VerticalIO(1'b0)) left_io_power_supply[3:0] ();
+  tc_digital_io_power_supply #(.VerticalIO(1'b1)) top_io_power_supply[3:0] ();
+  tc_digital_io_power_supply #(.VerticalIO(1'b0)) right_io_power_supply[3:0] ();
+  tc_digital_io_power_supply #(.VerticalIO(1'b1)) bot_io_power_supply[3:0] ();
 
   occamy_chip i_occamy_chip (
 % if multichip_cfg["single_chip"] is False:
