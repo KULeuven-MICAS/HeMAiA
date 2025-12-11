@@ -37,7 +37,7 @@ module hemaia_clock_counter #(
 endmodule
 
 
-(* no_ungroup *) (* no_boundary_optimization *) (* keep_hierarchy *) (* KEEP_HIERARCHY = "TRUE" *)
+(* no_ungroup *) (* no_boundary_optimization *) (* keep_hierarchy *) (* no_clock_gating *) (* KEEP_HIERARCHY = "TRUE" *)
 module hemaia_clock_divider #(
     parameter int MaxDivisionWidth = 4,
     parameter int DefaultDivision  = 1
