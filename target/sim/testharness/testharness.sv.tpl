@@ -96,7 +96,7 @@ module testharness
 % for chip in chip_coordinates:
 %   if chip.type == ChipletType.MEMORY:
 %     for k in range(0, 16):
-%       if netlist is False:
+%       if netlist is False or mem_macro is False:
     i_hemaia_mem_${chip.coordinate[0]}_${chip.coordinate[1]}.i_hemaia_mem_system.i_hemaia_mem.gen_banks[${k}].i_data_mem.i_tc_sram.load_data("mempool/bank_${k}.hex");
 %       endif
 %     endfor

@@ -134,7 +134,7 @@ sources:
       - target/rtl/src/occamy_chip.sv
       - target/rtl/src/hemaia.sv
 
-  - target: tsmc16_sim
+  - target: hemaia_netlist
     files:
       - target/tapeout/dc_work_hemaia/outputs/hemaia_mapped_retimed_lpo.v
 
