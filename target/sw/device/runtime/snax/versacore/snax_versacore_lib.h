@@ -282,3 +282,30 @@ uint32_t read_versacore_perf_counter() {
     uint32_t perf_counter = csrr_ss(VERSACORE_PERFORMANCE_COUNTER);
     return perf_counter;
 }
+
+uint32_t check_versacore_result_D32(int8_t* output, int8_t* output_golden,
+                                    int32_t data_length,
+                                    bool banked_data_layout) {
+    uint32_t err = 0;
+
+    if (banked_data_layout) {
+        for (int i = 0; i < data_length / 16; i += 1) {
+            for (int j = 0; j < 16; j++) {
+                if (*(output + i * (256 / 4) + j) !=
+                    output_golden[i * 16 + j]) {
+                    err++;
+                }
+            }
+        }
+    } else {
+        for (int i = 0; i < data_length; i++) {
+            if (output[i] != output_golden[i]) {
+                err++;
+                printf("Unequals. output[%d] = %d, output_golden[%d] = %d\n", i,
+                       output[i], i, output_golden[i]);
+            }
+        }
+    }
+
+    return err;
+}

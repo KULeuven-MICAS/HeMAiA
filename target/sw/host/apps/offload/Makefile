@@ -14,5 +14,6 @@ INCL_DEVICE_BINARY ?= 1 # True to include the device binary
 DEVICE_APPS = snax-test-integration
 DEVICE_APPS += snax-xdma-copy
 DEVICE_APPS += snax-xdma-hazard
+DEVICE_APPS += snax-versacore-matmul-profile
 
 include ../common.mk

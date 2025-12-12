@@ -7,6 +7,7 @@
 # Xiaoling Yi <xiaoling.yi@esat.kuleuven.be>
 
 import numpy as np
+from math import ceil
 
 
 # Function to perform 2D convolution on the input data using the specified kernel,
@@ -456,3 +457,149 @@ def align_wide_addr(addr, alignment=64):
     if addr % alignment:
         addr = ((addr // alignment) + 1) * alignment
     return addr
+
+def block_gemm_golden_model_fp8(
+    M, K, N, meshRow, tileSize, meshCol, A, B, subtraction_a, subtraction_b, C
+):
+    """
+    Golden model for FP8 matrix multiplication with FP32 accumulation.
+    """
+    # Reshape inputs
+    A = A.astype(np.float32)
+    B = B.astype(np.float32)
+    C = C.astype(np.float32)
+    A = A.reshape(M, K, meshRow, tileSize)
+    B = B.reshape(N, K, meshCol, tileSize)
+
+    assert subtraction_a == 0
+    assert subtraction_b == 0
+
+    # Initialize output
+    D = np.zeros((M, N, meshRow, meshCol), dtype=np.float32)
+
+    # Perform matrix multiplication
+    for m in range(M):
+        for n in range(N):
+            # FP8 multiplication with FP32 accumulation
+            D[m, n] = np.tensordot(A[m], B[n], axes=([0, 2], [0, 2]))
+
+    # Add bias/subtraction and C matrix
+    D = D.reshape(M * N * meshRow * meshCol) + C
+
+    return D.flatten()
+
+
+def postprocessing_simd_golden_model_V3(
+    data_in,
+    input_zp_i,
+    output_zp_i,
+    shift_i,
+    max_int_i,
+    min_int_i,
+    double_round_i,
+    multiplier_i,
+):
+    """
+    This function performs SIMD postprocessing of data given approximate
+    algorithm of TOSA.rescale, with dynamically scaled shifts.
+    """
+    # Step 1: Subtract input zero point
+    var_1 = data_in - input_zp_i
+
+    # Additional Step 1:
+    bits_to_shift_input = max(0, 9 + shift_i - ceil(np.log2(multiplier_i)) - 16)
+    # 8 can be adapted to be higher. higher will add more support for
+    # overflows, but will also reduce accuracy of the output.
+    bits_to_shift_multiplier = max(0, ceil(np.log2(multiplier_i)) - 16)
+
+    var_1 = var_1 >> bits_to_shift_input
+    multiplier_i = multiplier_i >> bits_to_shift_multiplier
+    shift_i = shift_i - bits_to_shift_input - bits_to_shift_multiplier
+
+    # Step 2: Multiply with the multiplier avoiding overflow
+    var_2 = np.int32(var_1) * np.int32(multiplier_i)
+
+    # Step 3: Left shift one
+    shifted_one = np.int32(1 << (shift_i - 1))
+
+    # Step 4: Add shifted one
+    var_3 = var_2 + shifted_one
+
+    # Step 5: Double rounding
+    if double_round_i:
+        if var_1 > 0:
+            var_4 = var_3 + np.int32(
+                1 << (30 - bits_to_shift_multiplier - bits_to_shift_input)
+            )
+        else:
+            var_4 = var_3 - np.int32(
+                1 << (30 - bits_to_shift_multiplier - bits_to_shift_input)
+            )
+
+    if shift_i > 31 - bits_to_shift_multiplier - bits_to_shift_input:
+        var_5 = var_4
+    else:
+        var_5 = var_3
+
+    # Step 6: Shift right
+    var_6 = np.int32(var_5 >> shift_i)
+
+    # Step 7: Add output zero point
+    var_7 = var_6 + output_zp_i
+
+    # Step 8: Clip the values to be within min and max integer range
+    var_8 = np.clip(var_7, min_int_i, max_int_i)
+
+    return var_8
+
+
+def int32_to_fp16_golden(x: int) -> int:
+    """
+    Convert signed int32 to IEEE 754 half-precision (binary16).
+    Returns a 16-bit UNSIGNED integer (0..65535).
+    """
+    x = int(x)
+    # Handle signed → absolute value
+    sign = 1 if x < 0 else 0
+    abs_val = abs(x)  # Python ints are unbounded, this covers Int.MinValue case too
+
+    if abs_val == 0:
+        return sign << 15
+
+    # Find MSB index (equivalent to 63 - Long.numberOfLeadingZeros(abs))
+    msb_index = abs_val.bit_length() - 1
+
+    exp_unbiased = msb_index
+    exp_bias = 15
+    exp_raw = exp_unbiased + exp_bias
+
+    # Overflow → ±Inf
+    if exp_raw >= 31:
+        return (sign << 15) | (0x1F << 10)
+
+    # Normalize abs (shift so MSB goes to bit 31)
+    shift_amt = 31 - msb_index
+    mag_norm = (abs_val << shift_amt) & 0xFFFFFFFF
+
+    # Extract fraction + GRS
+    frac = (mag_norm >> 21) & 0x3FF
+    guard = ((mag_norm >> 20) & 1) != 0
+    round_bit = ((mag_norm >> 19) & 1) != 0
+    sticky = (mag_norm & ((1 << 19) - 1)) != 0
+    lsb = (frac & 1) != 0
+
+    increment = guard and (round_bit or sticky or lsb)
+
+    frac_rounded = frac + (1 if increment else 0)
+    exp_field = exp_raw
+
+    # Mantissa overflow
+    if frac_rounded == 1024:
+        frac_rounded = 0
+        exp_field += 1
+
+    # Overflow to Inf
+    if exp_field >= 31:
+        return (sign << 15) | (0x1F << 10)
+
+    return (sign << 15) | (exp_field << 10) | frac_rounded

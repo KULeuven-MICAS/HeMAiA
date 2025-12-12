@@ -29,3 +29,6 @@ runs:
   - app_9: 
     - host_app: hemaia_system_xdma_copy
     - device_app: null
+  - app_10: 
+    - host_app: offload
+    - device_app: snax-versacore-matmul-profile
