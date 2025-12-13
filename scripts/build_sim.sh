@@ -19,7 +19,7 @@ make occamy_system_vsim_preparation
 IN_CONTAINER
 
 # Make simulator
-make occamy_system_vsim
+rm -rf target/sim/bin && make occamy_system_vsim
 
 
 

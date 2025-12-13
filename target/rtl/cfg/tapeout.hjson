@@ -175,11 +175,11 @@
     // non-peripheral IPs
     spm_narrow: {
       address: 1879048192, // 0x7000_0000
-      length: 131072, // 128 kiB 0x2_0000
+      length: 16384, // 16 kiB 0x4_000
     },
     spm_wide: {
       address: 2147483648, // 0x8000_0000
-      length: 1048576, // 1 MiB 0x10_0000
+      length: 131072, // 128 kiB 0x2_0000
     },
     wide_zero_mem: {
       address: 68719476736, // 0x10_0000_0000
