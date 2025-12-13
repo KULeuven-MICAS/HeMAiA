@@ -13,7 +13,6 @@ APPS += idle_cluster_3
 APPS += idle_all_clk_off
 APPS += idle_all_clk_on
 APPS += offload
-APPS += offload_cluster_2
 
 TARGET ?= all
 

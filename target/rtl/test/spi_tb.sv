@@ -27,6 +27,31 @@ task automatic spi_init();
 
 endtask
 
+// NOTE this works without quad SPI mode!
+task automatic spi_freq_sel(input logic [7:0] freq_sel);
+  reg [7:0] cmd;  // SPI command code
+  integer i;
+
+  // Wait for a clock edge to align
+  @(posedge spis_sck_i);
+  spis_csb_i = 0;
+
+  cmd = 8'h40; // = write reg 4
+  for (i = 7; i >= 0; i--) begin
+    @(negedge spis_sck_i);
+    spis_sd_i[0] = cmd[i];  // Send 1 bit at a time on MOSI
+  end
+  for (i = 7; i >= 0; i--) begin
+    @(negedge spis_sck_i);
+    spis_sd_i[0] = freq_sel[i];  // Send 1 bit at a time on MOSI
+  end
+
+  @(posedge spis_sck_i);
+  spis_csb_i = 1;  // Bring CSB high to end the transaction
+
+endtask
+
+
 task automatic spi_read(input integer length, input logic [31:0] addr);
   // Inputs:
   //   addr   - 32-bit Address to read from

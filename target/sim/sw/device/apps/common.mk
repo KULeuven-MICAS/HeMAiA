@@ -14,16 +14,15 @@ include $(MK_DIR)/../toolchain.mk
 ###############
 
 # Fixed paths in repository tree
-ROOT        = $(abspath $(MK_DIR)/../../../../../)
 SNITCH_ROOT = $(shell bender path snitch_cluster)
 APPSDIR     = $(abspath $(MK_DIR))
-RUNTIME_DIR = $(ROOT)/target/sim/sw/device/runtime
+RUNTIME_DIR = $(abspath $(MK_DIR)/../runtime)
 SNRT_DIR    = $(SNITCH_ROOT)/sw/snRuntime
-SW_DIR      = $(ROOT)/target/sim/sw
-MATH_DIR    = $(ROOT)/target/sim/sw/device/math
+SW_DIR      = $(abspath $(MK_DIR)/../..)
+MATH_DIR    = $(abspath $(MK_DIR)/../math)
 
 # Paths relative to the app including this Makefile
-BUILDDIR    = $(abspath build)
+BUILDDIR = $(abspath build)
 
 ###################
 # Build variables #
@@ -33,7 +32,6 @@ BUILDDIR    = $(abspath build)
 INCDIRS += $(RUNTIME_DIR)/src
 INCDIRS += $(SNRT_DIR)/api
 INCDIRS += $(SNRT_DIR)/src
-INCDIRS += $(SNRT_DIR)/vendor/riscv-opcodes
 INCDIRS += $(SW_DIR)/shared/platform/generated
 INCDIRS += $(SW_DIR)/shared/runtime
 INCDIRS += $(SNITCH_ROOT)/sw/blas
@@ -43,6 +41,7 @@ INCDIRS += $(SNRT_DIR)/../math/src/include
 INCDIRS += $(SNRT_DIR)/../math/src/internal
 INCDIRS += $(SNRT_DIR)/../math/include/bits
 INCDIRS += $(SNRT_DIR)/../math/include
+
 # Linking sources
 BASE_LD       = $(abspath $(SNRT_DIR)/base.ld)
 MEMORY_LD     = $(abspath $(APPSDIR)/memory.ld)
@@ -59,11 +58,18 @@ RISCV_LDFLAGS += -L$(BUILDDIR)
 RISCV_LDFLAGS += -T$(BASE_LD)
 # RISCV_LDFLAGS += -T$(MEMORY_LD)
 # Link snRuntime library
-RISCV_LDFLAGS += -L$(SNRT_LIB_DIR)
+RISCV_LDFLAGS += -L$(SNRT_LIB_DIR)	
 RISCV_LDFLAGS += -l$(SNRT_LIB_NAME)
 # Link math library
 RISCV_LDFLAGS += -L$(MATH_DIR)/build
 RISCV_LDFLAGS += -lmath
+
+# The Snitch toolchain assumes an app-local runtime layout and may inject 
+#'-I$(APPSDIR)/.../runtime/src' and '-I$(APPSDIR)/shared/...', which are wrong for Occamy. 
+# Strip any app-root-based include dirs and replace them with the correct global Occamy runtime and shared include paths.
+RISCV_CFLAGS := $(filter-out -I$(APPSDIR)/%,$(RISCV_CFLAGS))
+RISCV_LDFLAGS := $(filter-out -I$(APPSDIR)/%,$(RISCV_LDFLAGS))
+
 
 
 # Objcopy flags

@@ -7,4 +7,3 @@ overrides:
   common_cells:       { git: https://github.com/pulp-platform/common_cells.git,       version: 1.31.1 }
   register_interface: { git: https://github.com/pulp-platform/register_interface.git, version:  0.4.2 }
   tech_cells_generic:     { git:  https://github.com/KULeuven-MICAS/tech_cells_generic.git, version: 0.2.15 }
-  hypercorex:         { git: "https://github.com/KULeuven-MICAS/hypercorex.git", version: 1.0.0 }

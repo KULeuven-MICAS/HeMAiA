@@ -60,12 +60,13 @@ module ${name}_top
   spi_slave_present = any(periph["name"] == "spis" for periph in occamy_cfg["peripherals"]["axi_lite_peripherals"])
 %>
 % if spi_slave_present: 
-  // `SPI Slave` for Debugging Purposes
+  // `SPI Slave` for Debugging and PLL frequency select
   input  logic        spis_sck_i,
   input  logic        spis_csb_i,
   output logic [3:0]  spis_sd_o,
   output logic [3:0]  spis_sd_en_o,
   input  logic [3:0]  spis_sd_i,
+  output logic [7:0]  freq_sel_o,
 % endif
 
   /// Boot ROM
@@ -338,7 +339,8 @@ module ${name}_top
   ///////////////////////////////////////
   occamy_spi_slave #(
     .axi_lite_req_t(${axi_spi_slave.req_type()}),
-    .axi_lite_rsp_t(${axi_spi_slave.rsp_type()})
+    .axi_lite_rsp_t(${axi_spi_slave.rsp_type()}),
+    .FREQ_SEL_DEFAULT(8'h11)
   ) i_spi_slave (
     .clk_i(${axi_spi_slave.clk}),
     .rst_ni(${axi_spi_slave.rst}),
@@ -349,7 +351,8 @@ module ${name}_top
     .spi_cs_i(spis_csb_i),
     .spi_sdi_i(spis_sd_i),
     .spi_sdo_o(spis_sd_o),
-    .spi_oen_o(spis_sd_en_o)
+    .spi_oen_o(spis_sd_en_o),
+    .freq_sel_o(freq_sel_o)
   );
   % endif
 

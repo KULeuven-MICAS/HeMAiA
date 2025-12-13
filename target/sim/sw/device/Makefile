@@ -7,7 +7,9 @@
 # Add user applications to APPS variable automatically. This is located in the apps directory with depth of 2.
 
 # Now we only compile the snax apps
-APPDIR  = $(shell find apps/snax -mindepth 1 -maxdepth 1 -type d)
+# APPROOT = $(shell bender path snitch_cluster)/target/snitch_cluster/sw/apps
+# APPDIR = $(shell find $(APPROOT) -mindepth 1 -maxdepth 1 -type d -name '*simbacore*')
+APPDIR  = $(shell find apps -mindepth 1 -maxdepth 1 -type d)
 TARGET ?= all
 
 

@@ -50,7 +50,7 @@ CFG = $(TARGET_RTL)/cfg/lru.hjson
 $(CFG): FORCE
 	@# If the LRU config file doesn't exist, we use the default config.
 	@if [ ! -e $@ ] ; then \
-		DEFAULT_CFG="$(TARGET_RTL)/cfg/hemaia_tapeout.hjson"; \
+		DEFAULT_CFG="$(TARGET_RTL)/cfg/tapeout.hjson"; \
 		echo "Using default config file: $$DEFAULT_CFG"; \
 		cp $$DEFAULT_CFG $@; \
 	fi
@@ -103,7 +103,7 @@ SYN_ROOT = /users/micas/shares/project_snax/projects/hemaia/HeMAiA
 
 gen-syn:
 	mkdir -p $(SYN_BUILDDIR)
-	${BENDER} script synopsys ${SYN_BENDER} > $(SYN_BUILDDIR)/$(SYN_FLIST)
+	${BENDER} script genus ${SYN_BENDER} > $(SYN_BUILDDIR)/$(SYN_FLIST)
 	sed -i '2c\set ROOT "$(SYN_ROOT)"' $(SYN_BUILDDIR)/$(SYN_FLIST)
 	chmod +x $(SYN_BUILDDIR)/$(SYN_FLIST)
 clean-syn:

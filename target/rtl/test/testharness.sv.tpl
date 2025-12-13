@@ -44,12 +44,14 @@ module testharness import occamy_pkg::*; (
   logic [3:0] spis_sd_o;
   logic [3:0] spis_sd_en_o;
   logic [3:0] spis_sd_i = '1;
+  logic [7:0] freq_sel_o;
 
   `ifdef TARGET_VSIM
     // Inject the signals into SPI device
     `include "spi_tb.sv"
     initial begin
       #10us;
+      spi_freq_sel(8'h67);
       // spi_init();
       // #1us;
       // spi_read(128, 32'h80000000);
@@ -63,6 +65,9 @@ module testharness import occamy_pkg::*; (
       // spi_read_u32(32'h80000300);
       // #1us;
       // spi_write_image("app.bin", 32'h80000000); #1us;
+    end
+    initial begin
+      $monitor("[TEST] %0t ns: freq select = 0x%0h", $time, freq_sel_o);
     end
   `endif
 
@@ -178,6 +183,7 @@ module testharness import occamy_pkg::*; (
     .spis_sd_o (spis_sd_o),
     .spis_sd_en_o (spis_sd_en_o),
     .spis_sd_i (spis_sd_i),
+    .freq_sel_o(freq_sel_o),
     // Bootrom
     .bootrom_req_o (axi_lite_bootrom_req),
     .bootrom_rsp_i (axi_lite_bootrom_rsp),
