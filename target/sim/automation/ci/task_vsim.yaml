@@ -32,3 +32,6 @@ runs:
   - app_10: 
     - host_app: offload
     - device_app: snax-versacore-matmul-profile
+  - app_11:
+    - host_app: offload_bingo_stacked_gemm_intra_chiplet
+    - device_app: snax-bingo-offload
