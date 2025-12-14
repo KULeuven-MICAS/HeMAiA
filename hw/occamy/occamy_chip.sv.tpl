@@ -44,6 +44,7 @@ import ${name}_pkg::*;
   output logic [3:0]  spis_sd_o,
   output logic [3:0]  spis_sd_en_o,
   input  logic [3:0]  spis_sd_i,
+  output logic [7:0]  freq_sel_o,
 % endif
   // `jtag` Interface
   input  logic        jtag_trst_ni,
@@ -186,6 +187,7 @@ import ${name}_pkg::*;
     .spis_sd_o          (spis_sd_o),
     .spis_sd_en_o       (spis_sd_en_o),
     .spis_sd_i          (spis_sd_i),
+    .freq_sel_o         (freq_sel_o),
 % endif    
     .bootrom_req_o      (bootrom_axi_lite_req),
     .bootrom_rsp_i      (bootrom_axi_lite_rsp),
