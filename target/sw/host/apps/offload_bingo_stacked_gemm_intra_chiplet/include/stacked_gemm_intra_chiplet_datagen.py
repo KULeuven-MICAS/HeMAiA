@@ -12,143 +12,125 @@ import pathlib
 import hjson
 import sys
 import os
-import re
 
-# Add data utility path
+# util paths
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../../../../util/sim/"))
-from data_utils import format_scalar_definition, format_vector_definition, format_scalar_define, format_vector_define  # noqa E402
+from data_utils import (
+    format_scalar_definition,
+    format_vector_definition,
+)
 
-# # Add golden model path
-from snax_utils import block_gemm_golden_model # noqa E402
+from snax_utils import block_gemm_golden_model
 
 np.random.seed(320)
 
-def emit_header_file(**kwargs):
-    emit_str = ["#include <stdint.h>"]
-    emit_str += emit_matmul_data(**kwargs)
-    return "\n\n".join(emit_str)
 
-def emit_matmul_data(**kwargs):
-    data_str = []
+def emit_header_file(**cfg):
+    out = ["#pragma once", "#include <stdint.h>"]
+    out += emit_stacked_gemm_data(**cfg)
+    return "\n\n".join(out)
 
-    # -------------------------------------------------------------
-    # matmul workload settings
-    # -------------------------------------------------------------
-    M = kwargs["M"]
-    K = kwargs["K"]
-    N = kwargs["N"]
 
-    data_str += [format_scalar_definition("uint32_t", "M", M)]
-    data_str += [format_scalar_definition("uint32_t", "K", K)]
-    data_str += [format_scalar_definition("uint32_t", "N", N)]
+def emit_stacked_gemm_data(**cfg):
+    data = []
 
-    array_shape = kwargs["array_shape"]
-    data_str += [format_scalar_definition("uint32_t", "array_shape", array_shape)]
-    snax_acc_cfg = kwargs["snax_versacore_core_template"]["snax_acc_cfg"][0]
-    data_type = 0  # int8 data type
-
-    meshRow = snax_acc_cfg["snax_versacore_spatial_unrolling"][data_type][array_shape][
-        0
-    ]
-    tileSize = snax_acc_cfg["snax_versacore_spatial_unrolling"][data_type][array_shape][
-        1
-    ]
-    meshCol = snax_acc_cfg["snax_versacore_spatial_unrolling"][data_type][array_shape][
-        2
-    ]
-    data_str += [format_scalar_definition("uint32_t", "meshRow", meshRow)]
-    data_str += [format_scalar_definition("uint32_t", "tileSize", tileSize)]
-    data_str += [format_scalar_definition("uint32_t", "meshCol", meshCol)]
-
-    transposed_A = kwargs["transposed_A"]
-    transposed_B = kwargs["transposed_B"]
-
-    data_str += [
-        format_scalar_definition("uint32_t", "transposed_A", transposed_A),
-        format_scalar_definition("uint32_t", "transposed_B", transposed_B),
-        format_scalar_definition("uint32_t", "addNonZeroC", kwargs["addNonZeroC"]),
-        format_scalar_definition("uint32_t", "addZeroC", kwargs["addZeroC"]),
-        format_scalar_definition("uint32_t", "accumPrevC", kwargs["accumPrevC"]),
+    # --------------------------------------------------
+    # GEMM dimensions
+    # --------------------------------------------------
+    M1 = cfg["M1"]
+    K1 = cfg["K1"]
+    N1 = cfg["N1"]
+    M2 = cfg["M2"]
+    K2 = cfg["K2"]
+    N2 = cfg["N2"]
+    
+    data += [
+        format_scalar_definition("uint32_t", "M1", M1),
+        format_scalar_definition("uint32_t", "K1", K1),
+        format_scalar_definition("uint32_t", "N1", N1),
+        format_scalar_definition("uint32_t", "M2", M2),
+        format_scalar_definition("uint32_t", "K2", K2),
+        format_scalar_definition("uint32_t", "N2", N2),
     ]
 
-    assert sum([kwargs["addNonZeroC"], kwargs["addZeroC"], kwargs["accumPrevC"]]) == 1, \
-        "Only one of addNonZeroC, addZeroC, accumPrevC can be set to 1."
+    array_shape = cfg["array_shape"]
+    data += [format_scalar_definition("uint32_t", "array_shape", array_shape)]
 
-    if kwargs["accumPrevC"] == 1:
-        assert M == 1 and N == 1, "When accumPrevC=1, M, N must be 1."
+    acc_cfg = cfg["snax_versacore_core_template"]["snax_acc_cfg"][0]
+    data_type = 0  # int8
 
-    # -------------------------------------------------------------
-    # Data generation
-    # -------------------------------------------------------------
-    A_MIN, A_MAX = -128, 127
-    B_MIN, B_MAX = -128, 127
-    C_MIN, C_MAX = -2147483648, 2147483647
+    meshRow, tileSize, meshCol = acc_cfg["snax_versacore_spatial_unrolling"][data_type][array_shape]
 
-    # Common B
-    B = np.random.randint(B_MIN, B_MAX, size=(K, N, tileSize, meshCol)).reshape(-1)
+    data += [
+        format_scalar_definition("uint32_t", "meshRow", meshRow),
+        format_scalar_definition("uint32_t", "tileSize", tileSize),
+        format_scalar_definition("uint32_t", "meshCol", meshCol),
+    ]
 
-    A_all, D_all = [], []
+    assert M1 * meshRow == M2 * meshRow, "In stacked GEMM, the output rows of GEMM1 should match the input rows of GEMM2"
+    assert N1 * meshCol == K2 * tileSize, "In stacked GEMM, the output cols of GEMM1 should match the input rows of GEMM2"
 
-    for i in range(1, 5):  # A1..A4
-        A_i = np.random.randint(A_MIN, A_MAX, size=(M, K, meshRow, tileSize)).reshape(-1)
-        pad_len = (-A_i.size) % 64
-        
-        if kwargs["transposed_A"] == 1:
-            A_i = A_i.reshape(M, K, meshRow, tileSize)
-            A_i = A_i.transpose(0, 1, 3, 2).reshape(-1)
+    data += [
+        format_scalar_definition("uint32_t", "transposed_A", cfg["transposed_A"]),
+        format_scalar_definition("uint32_t", "transposed_B", cfg["transposed_B"]),
+        format_scalar_definition("uint32_t", "accumPrevC", cfg["accumPrevC"]),
+    ]
 
-        if pad_len > 0:
-            A_padded_i = np.pad(A_i, (0, pad_len), mode='constant', constant_values=0)
-        else:
-            A_padded_i = A_i
+    # --------------------------------------------------
+    # Random inputs
+    # --------------------------------------------------
+    A1 = np.random.randint(
+        -128, 127, size=(M1, K1, meshRow, tileSize), dtype=np.int8
+    )
 
-        if kwargs["transposed_B"] == 1:
-            B_reshaped = B.reshape(K, N, tileSize, meshCol)
-            B_transposed = B_reshaped.transpose(0, 1, 3, 2).reshape(-1)
-            B_i = B_transposed
-        else:
-            B_i = B
+    B1 = np.random.randint(
+        -128, 127, size=(K1, N1, tileSize, meshCol), dtype=np.int8
+    )
 
-        A_all.append(A_padded_i)
+    B2 = np.random.randint(
+        -128, 127, size=(K2, N2, tileSize, meshCol), dtype=np.int8
+    )
 
-        if kwargs["addNonZeroC"] == 1:
-            C_i = np.random.randint(C_MIN, C_MAX, size=(M, N, meshRow, meshCol)).reshape(-1)
-        else:
-            C_i = np.zeros((M, N, meshRow, meshCol), dtype=np.int32).reshape(-1)
+    # --------------------------------------------------
+    # Golden GEMM 1: D1 = A1 × B1
+    # --------------------------------------------------
+    C1 = np.zeros((M1, N1, meshRow, meshCol), dtype=np.int32)
 
-        subtraction_a = 0
-        subtraction_b = 0
-        # D1..D4
-        D_i = block_gemm_golden_model(M, K, N, meshRow, tileSize, meshCol,
-                                      A_i, B_i, subtraction_a, subtraction_b, C_i)
-        D_all.append(D_i)
+    D1 = block_gemm_golden_model(
+        M1, K1, N1,
+        meshRow, tileSize, meshCol,
+        A1.reshape(-1),
+        B1.reshape(-1),
+        0, 0,
+        C1.reshape(-1),
+    ).reshape(M1, N1, meshRow, meshCol)
 
-    # Concatenate A1..A4 and D1..D4
-    A_concat = np.concatenate(A_all)
-    D_concat = np.concatenate(D_all)
+    # --------------------------------------------------
+    # Golden GEMM 2: D2 = D1 × B2
+    # --------------------------------------------------
+    C2 = np.zeros((M2, N2, meshRow, meshCol), dtype=np.int32)
 
-    # -------------------------------------------------------------
-    # Write A, B, D continuously to one file
-    # -------------------------------------------------------------
-    out_dir = kwargs.get("out_dir", "./include/")
-    os.makedirs(out_dir, exist_ok=True)
-    bin_path = os.path.join(out_dir, "matmul_data.bin")
+    D2 = block_gemm_golden_model(
+        M2, K2, N2,
+        meshRow, tileSize, meshCol,
+        D1.reshape(-1),
+        B2.reshape(-1),
+        0, 0,
+        C2.reshape(-1),
+    ).reshape(M2, N2, meshRow, meshCol)
 
-    # Ensure correct data types for binary layout
-    A_bytes = A_concat.astype(np.uint8)
-    B_bytes = B.astype(np.uint8)
-    D_bytes = D_concat.astype(np.uint32)
+    # --------------------------------------------------
+    # Emit L3 symbols (flat)
+    # --------------------------------------------------
+    data += [
+        format_vector_definition("int8_t",  "A1", A1.reshape(-1)),
+        format_vector_definition("int8_t",  "B1", B1.reshape(-1)),
+        format_vector_definition("int8_t",  "B2", B2.reshape(-1)),
+        format_vector_definition("int32_t", "D1", D1.reshape(-1)),
+        format_vector_definition("int32_t", "D2", D2.reshape(-1)),
+    ]
 
-    with open(bin_path, "wb") as f:
-        A_bytes.tofile(f)   # 1 byte per element
-        B_bytes.tofile(f)   # 1 byte per element
-        D_bytes.tofile(f)   # 4 bytes per element
-
-    data_str += [format_vector_definition("int8_t", "A_data_L3", A_concat)]
-    data_str += [format_vector_definition("int8_t", "B_data_L3", B)]
-    data_str += [format_vector_definition("int32_t", "D_data_L3", D_concat.astype(np.int32))]
-
-    return data_str
+    return data
 
 
 def main():

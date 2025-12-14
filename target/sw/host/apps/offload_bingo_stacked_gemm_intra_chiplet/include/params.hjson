@@ -8,9 +8,12 @@
     array_shape: 1
     transposed_A: 0
     transposed_B: 0
-    K: 4
-    N: 1
-    M: 2
+    K1: 4
+    N1: 2
+    M1: 2
+    K2: 16
+    N2: 4
+    M2: 2
     // these two will config the addNewC = 1
     addNonZeroC: 0
     addZeroC: 1

@@ -1,9 +1,9 @@
 // Copyright 2025 KU Leuven.
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
-// Yunhao Deng <yunhao.deng@kuleuven.be>
-// Fanchen Kong <fanchen.kong@kueleuven.be>
+
 // Xiaoling Yi <xiaoling.yi@kuleuven.be>
+
 // The following code will be run on all hosts for the chiplet system
 // We use the chiplet_id to identify each chiplet
 // The Main Chiplet has the chiplet_id=0
@@ -19,7 +19,8 @@
 //       hence the same task list in the chiplet local memory
 //    b. Based on the assigned_chiplet_id in the DFG, each chiplet takes the corresponding tasks and execute them
 //       (see details in the bingo_runtime_schedule function in bingo_api.c)
-#include "offload_bingo_gemm_multi_chiplet.h"
+
+#include "offload_bingo_stacked_gemm_intra_chiplet.h"
 int main() {
     // Bear in mind that all the function calls here will be executed by all the chiplets
     // The chip id and chip address prefix is needed to differentiate the chiplets
@@ -28,18 +29,19 @@ int main() {
     hemaia_d2d_link_initialize(current_chip_id);
     // Init the uart for printf
     init_uart(get_current_chip_baseaddress(), 32, 1);
-    printf("Multi-chip Offload Bingo Main\r\n");
-    printf("Chip(%x, %x): [Host] Start Offloading Program\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+
+    HOST_DEBUG_PRINT("Chip(%x, %x): [Host] Start Offloading Program\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
 
     ///////////////////////////////
     // 2. Init the Allocator
     ///////////////////////////////
     if(bingo_hemaia_system_mmap_init() < 0){
-        printf("Chip(%x, %x): [Host] Error when initializing Allocator\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+        HOST_DEBUG_PRINT("Chip(%x, %x): [Host] Error when initializing Allocator\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
         return -1;
     } else {
-        printf("Chip(%x, %x): [Host] Init Allocator Success\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+        HOST_DEBUG_PRINT("Chip(%x, %x): [Host] Init Allocator Success\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
     }
+
     ///////////////////////////////
     // 3. Wake up all the clusters
     ///////////////////////////////
@@ -71,7 +73,7 @@ int main() {
     int ret = 0;
     ret = kernel_execution();
     clear_host_sw_interrupt(current_chip_id);
-    printf("Chip(%x, %x): [Host] Offload Finish\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+    HOST_DEBUG_PRINT("Chip(%x, %x): [Host] Offload Finish\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
     // Sync before exit
     // chip_barrier(comm_buffer_ptr, 0x00, 0x11, sync_checkpoint);
     // sync_checkpoint++;

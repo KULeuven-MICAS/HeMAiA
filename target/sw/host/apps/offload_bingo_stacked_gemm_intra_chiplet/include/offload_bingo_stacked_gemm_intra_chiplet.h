@@ -6,8 +6,7 @@
 #pragma once
 #include "host.h"
 #include "libbingo/bingo_api.h"
-// #include "gemm_multi_chiplet_workload_single_chip_test.h"
-#include "gemm_multi_chiplet_workload.h"
+#include "stacked_gemm_intra_chiplet_workload.h"
 
 // Kernel Execution
 int kernel_execution() {
@@ -17,7 +16,7 @@ int kernel_execution() {
     #define MAX_TASKS 64
     bingo_task_t **task_list = (bingo_task_t **)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(bingo_task_t) * MAX_TASKS);
     if (!task_list) {
-        printf("Chip(%x, %x): [Host] Error: Cannot allocate task list.\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+        HOST_DEBUG_PRINT("Chip(%x, %x): [Host] Error: Cannot allocate task list.\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
         return -1;
     }
     uint32_t num_tasks = 0;
@@ -25,8 +24,7 @@ int kernel_execution() {
     /////////////////////////
     // User defined workload
     /////////////////////////
-    // num_tasks = __workload_versacore_single_chiplet(task_list, &output_data_ptr);
-    num_tasks = __workload_versacore_multi_chiplet_broadcast(task_list);
+    num_tasks = __workload_versacore_stacked_gemm_intra_chiplet(task_list);
 
     ////////////////////////////
     // End user defined workload
@@ -34,7 +32,7 @@ int kernel_execution() {
 
     // Call bingo runtime
     bingo_runtime_schedule(task_list, num_tasks);
-    printf("Chip(%x, %x): [Host] All tasks done.\n", get_current_chip_loc_x(),
+    HOST_DEBUG_PRINT("Chip(%x, %x): [Host] All tasks done.\n", get_current_chip_loc_x(),
            get_current_chip_loc_y());
     // Close all the clusters
     bingo_close_all_clusters(task_list, num_tasks);
