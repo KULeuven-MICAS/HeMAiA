@@ -47,10 +47,11 @@ uint32_t __workload_versacore_stacked_gemm_intra_chiplet(bingo_task_t **task_lis
     uint32_t __snax_kernel_xdma_1d_copy_func_addr = get_device_function("__snax_kernel_xdma_1d_copy");
     uint32_t __snax_kernel_idma_1d_copy_func_addr = get_device_function("__snax_kernel_idma_1d_copy");
     uint32_t __snax_kernel_gemm = get_device_function("__snax_kernel_gemm");
+    uint32_t __snax_kernel_minimal_cfg_start_gemm_and_wait_func_addr = get_device_function("__snax_kernel_minimal_cfg_start_gemm_and_wait");
     uint32_t __snax_kernel_check_results_func_addr = get_device_function("__snax_kernel_check_results");
     if (__snax_kernel_xdma_1d_copy_func_addr == SNAX_SYMTAB_END_FN_ADDR ||
         __snax_kernel_idma_1d_copy_func_addr == SNAX_SYMTAB_END_FN_ADDR ||
-        __snax_kernel_gemm == SNAX_SYMTAB_END_FN_ADDR ||
+        __snax_kernel_gemm == SNAX_SYMTAB_END_FN_ADDR || __snax_kernel_minimal_cfg_start_gemm_and_wait_func_addr == SNAX_SYMTAB_END_FN_ADDR ||
         __snax_kernel_check_results_func_addr == SNAX_SYMTAB_END_FN_ADDR)
     {
         HOST_DEBUG_PRINT("Error: Kernel symbol lookup failed!\r\n");
@@ -150,22 +151,11 @@ uint32_t __workload_versacore_stacked_gemm_intra_chiplet(bingo_task_t **task_lis
     task_l3_to_cluster_args_B2->size = ARRAY_SIZE_BYTES(B2);
 
     // args for gemm2
-    __snax_kernel_gemm_intra_chiplet_args_t *gemm2_args = (__snax_kernel_gemm_intra_chiplet_args_t *)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_gemm_intra_chiplet_args_t));
-    gemm2_args->input_A_addr_hi = HIGH32(BINGO_CHIPLET_READD(cluster_l1_addr_D1));
+    __snax_kernel_minimal_cfg_start_gemm_and_wait_args_t *gemm2_args = (__snax_kernel_minimal_cfg_start_gemm_and_wait_args_t *)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_minimal_cfg_start_gemm_and_wait_args_t));
     gemm2_args->input_A_addr_lo = LOW32(BINGO_CHIPLET_READD(cluster_l1_addr_D1));
-    gemm2_args->input_B_addr_hi = HIGH32(BINGO_CHIPLET_READD(cluster_l1_addr_B2));
     gemm2_args->input_B_addr_lo = LOW32(BINGO_CHIPLET_READD(cluster_l1_addr_B2));
-    gemm2_args->input_C_addr_hi = 0;
     gemm2_args->input_C_addr_lo = 0; // no C matrix
-    gemm2_args->output_D_addr_hi = HIGH32(BINGO_CHIPLET_READD(cluster_l1_addr_D2));
     gemm2_args->output_D_addr_lo = LOW32(BINGO_CHIPLET_READD(cluster_l1_addr_D2));
-    gemm2_args->M = BINGO_CHIPLET_READW(M2);
-    gemm2_args->K = BINGO_CHIPLET_READW(K2);
-    gemm2_args->N = BINGO_CHIPLET_READW(N2);
-    gemm2_args->array_shape = BINGO_CHIPLET_READW(array_shape);
-    gemm2_args->transpose_A = BINGO_CHIPLET_READW(transposed_A);
-    gemm2_args->transpose_B = BINGO_CHIPLET_READW(transposed_B);
-    gemm2_args->accumPrevC = BINGO_CHIPLET_READW(accumPrevC); // false
 
     // args for storing E
     uint64_t D2_addr_l3 = o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), ARRAY_SIZE_BYTES(D2));

@@ -35,20 +35,24 @@ def emit_matmul_data(**kwargs):
     data_str = []
 
     # arguments
-    M = kwargs["M"]
-    K = kwargs["K"]
-    N = kwargs["N"]
+    M1 = kwargs["M1"]
+    K1 = kwargs["K1"]
+    N1 = kwargs["N1"]
 
-    data_str += [format_scalar_definition("uint32_t", "M", M)]
-    data_str += [format_scalar_definition("uint32_t", "K", K)]
-    data_str += [format_scalar_definition("uint32_t", "N", N)]
+    M2 = kwargs["M2"]
+    K2 = kwargs["K2"]
+    N2 = kwargs["N2"]
+    assert K2 == N2 == 1, "K2 and N2 must be 1 in tiled_gemm_intra_chiplet kernel."
+
+    data_str += [format_scalar_definition("uint32_t", "M1", M1)]
+    data_str += [format_scalar_definition("uint32_t", "K1", K1)]
+    data_str += [format_scalar_definition("uint32_t", "N1", N1)]
 
     array_shape = kwargs["array_shape"]
     data_str += [format_scalar_definition("uint32_t", "array_shape", array_shape)]
 
-    snax_acc_cfg = kwargs["snax_versacore_core_template"]["snax_acc_cfg"][0]
     data_type = 0  # int8 data type
-
+    snax_acc_cfg = kwargs["snax_versacore_core_template"]["snax_acc_cfg"][0]
     meshRow = snax_acc_cfg["snax_versacore_spatial_unrolling"][data_type][array_shape][
         0
     ]
@@ -74,14 +78,14 @@ def emit_matmul_data(**kwargs):
     assert sum([kwargs["addNonZeroC"], kwargs["addZeroC"], kwargs["accumPrevC"]]) == 1, "Only one of addNonZeroC, addZeroC, accumPrevC can be set to 1."
 
     if kwargs["accumPrevC"] == 1:
-        assert M == 1 and N == 1, "When accumPrevC=1, M, N must be 1."
+        assert M1 == 1 and N1 == 1, "When accumPrevC=1, M, N must be 1."
 
     # test data generation
     A_MIN, A_MAX = -128, 127
     B_MIN, B_MAX = -128, 127
     C_MIN, C_MAX = -2147483648, 2147483647
 
-    A = np.random.randint(A_MIN, A_MAX, size=(M, K, meshRow, tileSize)).reshape(-1)
+    A = np.random.randint(A_MIN, A_MAX, size=(M1, K1, meshRow, tileSize)).reshape(-1)
 
     # Pad A to be multiple of 64 elements for xdma transfer
     length = A.size
@@ -92,33 +96,33 @@ def emit_matmul_data(**kwargs):
         A_padded = A
     data_str += [format_vector_definition("int8_t", "A1", A_padded)]
 
-    B = np.random.randint(B_MIN, B_MAX, size=(K, N, tileSize, meshCol)).reshape(-1)
+    B = np.random.randint(B_MIN, B_MAX, size=(K1, N1, tileSize, meshCol)).reshape(-1)
     data_str += [format_vector_definition("int8_t", "B", B)]
 
     if kwargs["addNonZeroC"] == 1:
-        C = np.random.randint(C_MIN, C_MAX, size=(M, N, meshRow, meshCol)).reshape(-1)
+        C = np.random.randint(C_MIN, C_MAX, size=(M1, N1, meshRow, meshCol)).reshape(-1)
         data_str += [format_vector_definition("int32_t", "C1", C)]
     elif kwargs["addZeroC"] == 1:
-        C = np.zeros((M, N, meshRow, meshCol), dtype=np.int32).reshape(-1)
+        C = np.zeros((M1, N1, meshRow, meshCol), dtype=np.int32).reshape(-1)
         data_str += [format_scalar_definition("int32_t *", "C1", "(int32_t *)NULL")]
     else: # use accumPrevC
-        C = np.zeros((M, N, meshRow, meshCol), dtype=np.int32).reshape(-1)
+        C = np.zeros((M1, N1, meshRow, meshCol), dtype=np.int32).reshape(-1)
         data_str += [format_scalar_definition("int32_t *", "C1", "(int32_t *)NULL")]
 
     if kwargs["transposed_A"] == 1:
-        A = A.reshape(M, K, meshRow, tileSize)
+        A = A.reshape(M1, K1, meshRow, tileSize)
         A = A.transpose(0, 1, 3, 2).reshape(-1)
     if kwargs["transposed_B"] == 1:
-        B = B.reshape(K, N, tileSize, meshCol)
+        B = B.reshape(K1, N1, tileSize, meshCol)
         B = B.transpose(0, 1, 3, 2).reshape(-1)
 
     subtraction_a = 0
     subtraction_b = 0
     
     D = block_gemm_golden_model(
-        M,
-        K,
-        N,
+        M1,
+        K1,
+        N1,
         meshRow,
         tileSize,
         meshCol,
@@ -129,6 +133,34 @@ def emit_matmul_data(**kwargs):
         C,
     )
     data_str += [format_vector_definition("int32_t", "D1", D)]
+
+    for i in range(1, M2):
+        A_i = np.random.randint(A_MIN, A_MAX, size=(M1, K1, meshRow, tileSize)).reshape(-1)
+        pad_len_i = (-A_i.size) % 64
+        if pad_len_i > 0:
+            padded_A_i = np.pad(A_i, (0, pad_len_i), mode='constant', constant_values=0)
+        else:
+            padded_A_i = A_i
+        # Apply transpose if needed
+        if kwargs["transposed_A"] == 1:
+            A_i = A_i.reshape(M1, K1, meshRow, tileSize)
+            A_i = A_i.transpose(0, 1, 3, 2).reshape(-1)
+
+        data_str += [format_vector_definition("int8_t", f"A{i+1}", padded_A_i)]
+
+        if kwargs["addNonZeroC"] == 1:
+            C_i = np.random.randint(C_MIN, C_MAX, size=(M1, N1, meshRow, meshCol)).reshape(-1)
+            data_str += [format_vector_definition("int32_t", f"C{i+1}", C_i)]
+        elif kwargs["addZeroC"] == 1:
+            C_i = np.zeros((M1, N1, meshRow, meshCol), dtype=np.int32).reshape(-1)
+            data_str += [format_scalar_definition("int32_t *", f"C{i+1}", "(int32_t *)NULL")]
+        else: # use accumPrevC
+            C_i = np.zeros((M1, N1, meshRow, meshCol), dtype=np.int32).reshape(-1)
+            data_str += [format_scalar_definition("int32_t *", f"C{i+1}", "(int32_t *)NULL")]
+
+        # Compute corresponding D_i
+        D_i = block_gemm_golden_model(M1, K1, N1, meshRow, tileSize, meshCol, A_i, B, subtraction_a, subtraction_b, C_i)
+        data_str += [format_vector_definition("int32_t", f"D{i+1}", D_i)]
 
     return data_str
 
@@ -163,7 +195,6 @@ def main():
 
     # Emit header file
     print(emit_header_file(**merged_config))
-
 
 if __name__ == "__main__":
     main()

@@ -8,9 +8,14 @@
     array_shape: 1
     transposed_A: 0
     transposed_B: 0
-    K: 4
-    N: 1
-    M: 2
+    // inner loop, data all inside inside the TCDM
+    K1: 4
+    N1: 1
+    M1: 2
+    // out loop, pure software loop
+    K2: 1
+    N2: 1
+    M2: 4
     // these two will config the addNewC = 1
     addNonZeroC: 0
     addZeroC: 1

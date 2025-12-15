@@ -18,9 +18,13 @@ SNITCH_ROOT = $(shell $(BENDER) path snitch_cluster)
 $(DATA_H): $(DATA_DIR)/tiled_gemm_intra_chiplet_datagen.py $(DATA_CFG) 
 	$< -c $(DATA_CFG) --hwcfg $(SNITCH_ROOT)/target/snitch_cluster/cfg/snax_versacore_to_cluster.hjson> $@
 
+WORKLOAD = $(DATA_DIR)/tiled_gemm_intra_chiplet_workload.h
+$(WORKLOAD): $(DATA_DIR)/tiled_gemm_intra_chiplet_workload_gen.py $(DATA_CFG) 
+	$< -c $(DATA_CFG) --hwcfg $(SNITCH_ROOT)/target/snitch_cluster/cfg/snax_versacore_to_cluster.hjson > $@
+
 .PHONY: clean-data clean
 
 clean-data:
-	rm -f $(DATA_H)
+	rm -f $(DATA_H) $(WORKLOAD)
 
 clean: clean-data

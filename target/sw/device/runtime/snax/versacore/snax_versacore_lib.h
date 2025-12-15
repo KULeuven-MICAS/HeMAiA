@@ -236,6 +236,18 @@ void set_versacore_streamer_csr(
 
 }
 
+void set_minimal_streamer_cfg(uint32_t A_addr, uint32_t B_addr, uint32_t C_addr,
+                              uint32_t D_addr) {
+    // base ptr for A
+    csrw_ss(BASE_PTR_READER_0_LOW, A_addr);
+    // base ptr for B
+    csrw_ss(BASE_PTR_READER_1_LOW, B_addr);
+    // base ptr for C
+    csrw_ss(BASE_PTR_READER_WRITER_0_LOW, C_addr);
+    // base ptr for D32
+    csrw_ss(BASE_PTR_READER_WRITER_1_LOW, D_addr);
+}
+
 void start_streamer() { csrw_ss(STREAMER_START_CSR, 1); }
 void start_versacore() { csrw_ss(VERSACORE_START_CSR, 1); }
 
