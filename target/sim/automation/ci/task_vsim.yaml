@@ -35,3 +35,6 @@ runs:
   - app_11:
     - host_app: offload_bingo_stacked_gemm_intra_chiplet
     - device_app: snax-bingo-offload
+  - app_12:
+    - host_app: offload_bingo_tiled_gemm_intra_chiplet
+    - device_app: snax-bingo-offload
