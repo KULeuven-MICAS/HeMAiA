@@ -15,8 +15,8 @@ int main() {
     hemaia_d2d_link_initialize(current_chip_id);
     // Init the uart for printf
     init_uart(get_current_chip_baseaddress(), 32, 1);
-    printf("Multi-chip Offload Bingo Main\r\n");
-    printf("Chip(%x, %x): [Host] Start Offloading Program\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+    // printf("Multi-chip Offload Bingo Main\r\n");
+    // printf("Chip(%x, %x): [Host] Start Offloading Program\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
 
     ///////////////////////////////
     // 2. Init the Allocator
@@ -56,7 +56,7 @@ int main() {
     int ret = 0;
     ret = kernel_execution();
     clear_host_sw_interrupt(current_chip_id);
-    printf("Chip(%x, %x): [Host] Offload Finish\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+    // printf("Chip(%x, %x): [Host] Offload Finish\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
     // Sync before exit
     // chip_barrier(comm_buffer_ptr, 0x00, 0x11, sync_checkpoint);
     // sync_checkpoint++;

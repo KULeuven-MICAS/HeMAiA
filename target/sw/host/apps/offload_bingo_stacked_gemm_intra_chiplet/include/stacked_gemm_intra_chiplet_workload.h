@@ -40,6 +40,8 @@ uint32_t __workload_versacore_stacked_gemm_intra_chiplet(bingo_task_t **task_lis
     // 4. Set the task dependency
     // 5. Set the assigned chiplet id and cluster id
     uint8_t current_chip_id = get_current_chip_id();
+    // only test chip 0 for intra-chiplet gemm
+    uint8_t task_chip_id = 0;
 
     // 1 Get the needed kernel function address by the kernel name
     check_kernel_tab_ready();
@@ -184,37 +186,37 @@ uint32_t __workload_versacore_stacked_gemm_intra_chiplet(bingo_task_t **task_lis
     bingo_task_t *task_load_A1 = bingo_task_create(
         __snax_kernel_xdma_1d_copy_func_addr,
         (uint32_t)(uintptr_t)task_l3_to_cluster_args_A,
-        current_chip_id,
+        task_chip_id,
         0);
     bingo_task_t *task_load_B1 = bingo_task_create(
         __snax_kernel_xdma_1d_copy_func_addr,
         (uint32_t)(uintptr_t)task_l3_to_cluster_args_B1,
-        current_chip_id,
+        task_chip_id,
         0);
     bingo_task_t *task_gemm1 = bingo_task_create(
         __snax_kernel_gemm,
         (uint32_t)(uintptr_t)gemm1_args,
-        current_chip_id,
+        task_chip_id,
         0);
     bingo_task_t *task_load_B2 = bingo_task_create(
         __snax_kernel_xdma_1d_copy_func_addr,
         (uint32_t)(uintptr_t)task_l3_to_cluster_args_B2,
-        current_chip_id,
+        task_chip_id,
         0);
     bingo_task_t *task_gemm2 = bingo_task_create(
         __snax_kernel_gemm,
         (uint32_t)(uintptr_t)gemm2_args,
-        current_chip_id,
+        task_chip_id,
         0);
     bingo_task_t *task_store_D2 = bingo_task_create(
         __snax_kernel_xdma_1d_copy_func_addr,
         (uint32_t)(uintptr_t)task_cluster_to_l3_args_D2,
-        current_chip_id,
+        task_chip_id,
         0);
     bingo_task_t *task_check_D2 = bingo_task_create(
         __snax_kernel_check_results_func_addr,
         (uint32_t)(uintptr_t)task_check_results_args_D2,
-        current_chip_id,
+        task_chip_id,
         0);
 
     // Set the task dependency
