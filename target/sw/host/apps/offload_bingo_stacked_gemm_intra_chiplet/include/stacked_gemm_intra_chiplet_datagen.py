@@ -70,6 +70,15 @@ def emit_stacked_gemm_data(**cfg):
     assert M1 * meshRow == M2 * meshRow, "In stacked GEMM, the output rows of GEMM1 should match the input rows of GEMM2"
     assert N1 * meshCol == K2 * tileSize, "In stacked GEMM, the output cols of GEMM1 should match the input rows of GEMM2"
 
+    data_granularity_a = int(cfg["snax_versacore_core_template"]["snax_acc_cfg"][0]["granularity_a"] * 64 / 8)
+    data_granularity_b = int(cfg["snax_versacore_core_template"]["snax_acc_cfg"][0]["granularity_b"] * 64 / 8)
+    data_granularity_c_d = int(cfg["snax_versacore_core_template"]["snax_acc_cfg"][0]["granularity_c_d"] * 64 / 8)
+    data += [
+        format_scalar_definition("uint32_t", "data_granularity_a", data_granularity_a),
+        format_scalar_definition("uint32_t", "data_granularity_b", data_granularity_b),
+        format_scalar_definition("uint32_t", "data_granularity_c_d", data_granularity_c_d),
+    ]
+
     data += [
         format_scalar_definition("uint32_t", "transposed_A", cfg["transposed_A"]),
         format_scalar_definition("uint32_t", "transposed_B", cfg["transposed_B"]),

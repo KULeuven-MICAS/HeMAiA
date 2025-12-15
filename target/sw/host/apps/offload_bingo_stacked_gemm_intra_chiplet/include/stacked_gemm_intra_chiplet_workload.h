@@ -92,9 +92,13 @@ uint32_t __workload_versacore_stacked_gemm_intra_chiplet(bingo_task_t **task_lis
                      get_current_chip_loc_x(), get_current_chip_loc_y(), D2_addr_golden);
 
     uint64_t cluster_l1_addr_A1 = bingo_l1_alloc(current_chip_id, 0, BINGO_CHIPLET_READW(A1dataSize));
+
     uint64_t cluster_l1_addr_B1 = bingo_l1_alloc(current_chip_id, 0, BINGO_CHIPLET_READW(B1dataSize));
+
     uint64_t cluster_l1_addr_D1 = bingo_l1_alloc(current_chip_id, 0, BINGO_CHIPLET_READW(D1dataSize));
+
     uint64_t cluster_l1_addr_B2 = bingo_l1_alloc(current_chip_id, 0, BINGO_CHIPLET_READW(B2dataSize));
+
     uint64_t cluster_l1_addr_D2 = bingo_l1_alloc(current_chip_id, 0, BINGO_CHIPLET_READW(D2datasize));
 
     // Args for loading A1
@@ -228,6 +232,7 @@ uint32_t __workload_versacore_stacked_gemm_intra_chiplet(bingo_task_t **task_lis
     bingo_task_add_depend(task_load_B1, task_load_A1);
     bingo_task_add_depend(task_gemm1, task_load_B1);
     // task4: LOAD B2, task3 --> task5: GEMM2
+    bingo_task_add_depend(task_load_B2, task_load_B1);
     bingo_task_add_depend(task_gemm2, task_load_B2);
     bingo_task_add_depend(task_gemm2, task_gemm1);
     // task6: store E
