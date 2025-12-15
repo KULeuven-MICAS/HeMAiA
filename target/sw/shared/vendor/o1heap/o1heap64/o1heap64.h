@@ -9,7 +9,7 @@ extern "C" {
 #endif
 
 /// The guaranteed alignment depends on the platform pointer width.
-#define O1HEAP_ALIGNMENT 64  // Force 64-byte alignment for all systems.
+#define O1HEAP_ALIGNMENT 128  // Force 128-byte alignment for all systems.
 #define NUM_BINS_MAX 64
 
 /// Runtime diagnostic information. This information can be used to facilitate runtime self-testing,

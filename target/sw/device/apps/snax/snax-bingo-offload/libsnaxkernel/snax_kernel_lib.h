@@ -2225,7 +2225,7 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm(void* arg) {
         // Btlstride0
         Btlstride[0] = tileSize * meshCol;
         // Btlstride1
-        Btlstride[1] = tileSize * meshRow * K;
+        Btlstride[1] = tileSize * meshCol * K;
 
         // Btlstride2
         Btlstride[2] = 0;
