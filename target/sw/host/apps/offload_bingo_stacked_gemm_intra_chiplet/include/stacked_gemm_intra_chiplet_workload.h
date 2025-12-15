@@ -76,20 +76,20 @@ uint32_t __workload_versacore_stacked_gemm_intra_chiplet(bingo_task_t **task_lis
                           BINGO_CHIPLET_READW(meshCol) * sizeof(uint32_t);
 
     uint64_t A1_addr_l3 = chiplet_addr_transform((uint64_t)(uintptr_t)(A1));
-    HOST_DEBUG_PRINT("Chip(%x, %x): A1 matrix L3 address: 0x%lx\r\n",
-                     get_current_chip_loc_x(), get_current_chip_loc_y(), A1_addr_l3);
+    // HOST_DEBUG_PRINT("Chip(%x, %x): A1 matrix L3 address: 0x%lx\r\n",
+                    //  get_current_chip_loc_x(), get_current_chip_loc_y(), A1_addr_l3);
     uint64_t B1_addr_l3 = chiplet_addr_transform((uint64_t)(uintptr_t)(B1));
-    HOST_DEBUG_PRINT("Chip(%x, %x): B1 matrix L3 address: 0x%lx\r\n",
-                     get_current_chip_loc_x(), get_current_chip_loc_y(), B1_addr_l3);
+    // HOST_DEBUG_PRINT("Chip(%x, %x): B1 matrix L3 address: 0x%lx\r\n",
+    //                  get_current_chip_loc_x(), get_current_chip_loc_y(), B1_addr_l3);
     uint64_t D1_addr_golden = chiplet_addr_transform((uint64_t)(uintptr_t)(D1));
-    HOST_DEBUG_PRINT("Chip(%x, %x): D1 golden matrix L3 address: 0x%lx\r\n",
-                     get_current_chip_loc_x(), get_current_chip_loc_y(), D1_addr_golden);
+    // HOST_DEBUG_PRINT("Chip(%x, %x): D1 golden matrix L3 address: 0x%lx\r\n",
+    //                  get_current_chip_loc_x(), get_current_chip_loc_y(), D1_addr_golden);
     uint64_t B2_addr_l3 = chiplet_addr_transform((uint64_t)(uintptr_t)(B2));
-    HOST_DEBUG_PRINT("Chip(%x, %x): B2 matrix L3 address: 0x%lx\r\n",
-                     get_current_chip_loc_x(), get_current_chip_loc_y(), B2_addr_l3);
+    // HOST_DEBUG_PRINT("Chip(%x, %x): B2 matrix L3 address: 0x%lx\r\n",
+    //                  get_current_chip_loc_x(), get_current_chip_loc_y(), B2_addr_l3);
     uint64_t D2_addr_golden = chiplet_addr_transform((uint64_t)(uintptr_t)(D2));
-    HOST_DEBUG_PRINT("Chip(%x, %x): D2 golden matrix L3 address: 0x%lx\r\n",
-                     get_current_chip_loc_x(), get_current_chip_loc_y(), D2_addr_golden);
+    // HOST_DEBUG_PRINT("Chip(%x, %x): D2 golden matrix L3 address: 0x%lx\r\n",
+    //                  get_current_chip_loc_x(), get_current_chip_loc_y(), D2_addr_golden);
 
     uint64_t cluster_l1_addr_A1 = bingo_l1_alloc(current_chip_id, 0, BINGO_CHIPLET_READW(A1dataSize));
 

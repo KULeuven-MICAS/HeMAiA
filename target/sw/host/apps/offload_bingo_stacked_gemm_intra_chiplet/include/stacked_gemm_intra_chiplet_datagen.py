@@ -40,10 +40,11 @@ def emit_stacked_gemm_data(**cfg):
     M1 = cfg["M1"]
     K1 = cfg["K1"]
     N1 = cfg["N1"]
+
     M2 = cfg["M2"]
     K2 = cfg["K2"]
     N2 = cfg["N2"]
-    
+
     data += [
         format_scalar_definition("uint32_t", "M1", M1),
         format_scalar_definition("uint32_t", "K1", K1),
@@ -112,7 +113,19 @@ def emit_stacked_gemm_data(**cfg):
         B1.reshape(-1),
         0, 0,
         C1.reshape(-1),
-    ).reshape(M1, N1, meshRow, meshCol)
+    )
+
+    D1_int32 = D1.reshape(-1)  # flatten if needed
+
+    # Allocate int8 array (4x length of D1)
+    D1_int8 = np.zeros(D1_int32.size * 4, dtype=np.int8)
+
+    # Split each int32 into 4 int8 bytes
+    for i, val in enumerate(D1_int32):
+        D1_int8[i*4 + 0] = (val & 0xFF).astype(np.int8)
+        D1_int8[i*4 + 1] = ((val >> 8) & 0xFF).astype(np.int8)
+        D1_int8[i*4 + 2] = ((val >> 16) & 0xFF).astype(np.int8)
+        D1_int8[i*4 + 3] = ((val >> 24) & 0xFF).astype(np.int8)
 
     # --------------------------------------------------
     # Golden GEMM 2: D2 = D1 × B2
@@ -122,11 +135,11 @@ def emit_stacked_gemm_data(**cfg):
     D2 = block_gemm_golden_model(
         M2, K2, N2,
         meshRow, tileSize, meshCol,
-        D1.reshape(-1),
+        D1_int8.reshape(-1)[0:M2*K2*meshRow*tileSize],
         B2.reshape(-1),
         0, 0,
         C2.reshape(-1),
-    ).reshape(M2, N2, meshRow, meshCol)
+    )
 
     # --------------------------------------------------
     # Emit L3 symbols (flat)
@@ -136,6 +149,7 @@ def emit_stacked_gemm_data(**cfg):
         format_vector_definition("int8_t",  "B1", B1.reshape(-1)),
         format_vector_definition("int8_t",  "B2", B2.reshape(-1)),
         format_vector_definition("int32_t", "D1", D1.reshape(-1)),
+        format_vector_definition("int32_t", "D1_int8", D1_int8.reshape(-1)),
         format_vector_definition("int32_t", "D2", D2.reshape(-1)),
     ]
 
