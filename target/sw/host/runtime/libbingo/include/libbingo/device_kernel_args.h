@@ -147,3 +147,10 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_kernel_gemm_intra_chiplet_args{
   uint32_t transpose_B;
   uint32_t accumPrevC;
 } __snax_kernel_gemm_intra_chiplet_args_t;
+
+__SNAX_KERNEL_ARGS_DEFINE __snax_kernel_minimal_cfg_start_gemm_and_wait_args{
+  uint32_t input_A_addr_lo;
+  uint32_t input_B_addr_lo;
+  uint32_t input_C_addr_lo;
+  uint32_t output_D_addr_lo;
+} __snax_kernel_minimal_cfg_start_gemm_and_wait_args_t;

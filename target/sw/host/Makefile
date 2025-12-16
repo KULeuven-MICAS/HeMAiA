@@ -21,6 +21,7 @@ APPS += offload_bingo_gemm_intra_chiplet_seperate_load_and_compute
 APPS += offload_bingo_gemm_multi_chiplet_vanilla
 APPS += offload_bingo_gemm_multi_chiplet_broadcast
 APPS += offload_bingo_stacked_gemm_intra_chiplet
+APPS += offload_bingo_tiled_gemm_intra_chiplet
 # # Host only applications
 APPS += hemaia_mailbox
 APPS += multichip_sync
