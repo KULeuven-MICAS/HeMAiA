@@ -63,8 +63,8 @@ uint32_t __workload_versacore_stacked_gemm_intra_chiplet(bingo_task_t **task_lis
     ///////////////////
 
     uint32_t A1dataSize = BINGO_CHIPLET_READW(M1) * BINGO_CHIPLET_READW(K1) *
-                              BINGO_CHIPLET_READW(meshRow) *
-                              BINGO_CHIPLET_READW(tileSize) * sizeof(uint8_t);
+                          BINGO_CHIPLET_READW(meshRow) *
+                          BINGO_CHIPLET_READW(tileSize) * sizeof(uint8_t);
     uint32_t B1dataSize = BINGO_CHIPLET_READW(K1) * BINGO_CHIPLET_READW(N1) *
                           BINGO_CHIPLET_READW(meshCol) *
                           BINGO_CHIPLET_READW(tileSize) * sizeof(uint8_t);
@@ -80,7 +80,7 @@ uint32_t __workload_versacore_stacked_gemm_intra_chiplet(bingo_task_t **task_lis
 
     uint64_t A1_addr_l3 = chiplet_addr_transform((uint64_t)(uintptr_t)(A1));
     // HOST_DEBUG_PRINT("Chip(%x, %x): A1 matrix L3 address: 0x%lx\r\n",
-                    //  get_current_chip_loc_x(), get_current_chip_loc_y(), A1_addr_l3);
+    //  get_current_chip_loc_x(), get_current_chip_loc_y(), A1_addr_l3);
     uint64_t B1_addr_l3 = chiplet_addr_transform((uint64_t)(uintptr_t)(B1));
     // HOST_DEBUG_PRINT("Chip(%x, %x): B1 matrix L3 address: 0x%lx\r\n",
     //                  get_current_chip_loc_x(), get_current_chip_loc_y(), B1_addr_l3);
@@ -204,7 +204,7 @@ uint32_t __workload_versacore_stacked_gemm_intra_chiplet(bingo_task_t **task_lis
         task_chip_id,
         0);
     bingo_task_t *task_gemm2 = bingo_task_create(
-        __snax_kernel_gemm,
+        __snax_kernel_minimal_cfg_start_gemm_and_wait_func_addr,
         (uint32_t)(uintptr_t)gemm2_args,
         task_chip_id,
         0);
