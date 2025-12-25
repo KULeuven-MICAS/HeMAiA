@@ -221,15 +221,15 @@ module ${name}_quad_ctrl
   );
 
   // We need an extra work here to connect the host master port to the csr
-  csr_req_t host_csr_req;
+  csr_req_t host_ready_done_csr_req;
   logic host_ready_done_csr_req_valid;
   logic host_ready_done_csr_req_ready;
   csr_rsp_t host_ready_done_csr_rsp;
   logic host_ready_done_csr_rsp_valid;
   logic host_ready_done_csr_rsp_ready;
   axi_lite_to_csr #(
-    .ADDR_WIDTH(${quad_ctrl_axi_lite_xbar.aw}),
-    .DATA_WIDTH(${quad_ctrl_axi_lite_xbar.dw}),
+    .AXI_LITE_ADDR_WIDTH(${quad_ctrl_axi_lite_xbar.aw}),
+    .AXI_LITE_DATA_WIDTH(${quad_ctrl_axi_lite_xbar.dw}),
     .axi_lite_req_t(${quad_ctrl_axi_lite_xbar.out_bingo_hw_scheduler_host_ready_done_intf.req_type()}),
     .axi_lite_rsp_t(${quad_ctrl_axi_lite_xbar.out_bingo_hw_scheduler_host_ready_done_intf.rsp_type()}),
     .csr_req_t(csr_req_t),
@@ -238,7 +238,7 @@ module ${name}_quad_ctrl
     .clk_i(${quad_ctrl_axi_lite_xbar.clk}),
     .rst_ni(${quad_ctrl_axi_lite_xbar.rst}),
     .axi_lite_req_i(${quad_ctrl_axi_lite_xbar.out_bingo_hw_scheduler_host_ready_done_intf.req_name()}),
-    .axi_lite_rsp_o(${quad_ctrl_axi_lite_xbar.out_bingo_hw_scheduler_host_ready_done_intf.req_name()}),
+    .axi_lite_rsp_o(${quad_ctrl_axi_lite_xbar.out_bingo_hw_scheduler_host_ready_done_intf.rsp_name()}),
     .csr_req_o      (host_ready_done_csr_req),
     .csr_req_valid_o(host_ready_done_csr_req_valid),
     .csr_req_ready_i(host_ready_done_csr_req_ready),
@@ -264,9 +264,9 @@ module ${name}_quad_ctrl
   // Connect the host to cluster 0 ports
   assign bingo_hw_manager_csr_req[${num_cores_per_cluster}][${cluster}] = host_ready_done_csr_req;
   assign bingo_hw_manager_csr_req_valid[${num_cores_per_cluster}][${cluster}] = host_ready_done_csr_req_valid;
-  assign bingo_hw_manager_csr_req_ready[${num_cores_per_cluster}][${cluster}] = host_ready_done_csr_req_ready;
-  assign bingo_hw_manager_csr_rsp[${num_cores_per_cluster}][${cluster}] = host_ready_done_csr_rsp;
-  assign bingo_hw_manager_csr_rsp_valid[${num_cores_per_cluster}][${cluster}] = host_ready_done_csr_rsp_valid;
+  assign host_ready_done_csr_req_ready = bingo_hw_manager_csr_req_ready[${num_cores_per_cluster}][${cluster}];
+  assign host_ready_done_csr_rsp = bingo_hw_manager_csr_rsp[${num_cores_per_cluster}][${cluster}];
+  assign host_ready_done_csr_rsp_valid = bingo_hw_manager_csr_rsp_valid[${num_cores_per_cluster}][${cluster}];
   assign bingo_hw_manager_csr_rsp_ready[${num_cores_per_cluster}][${cluster}] = host_ready_done_csr_rsp_ready;
       %else:
   // Tie off Cluster ${cluster} unused ports

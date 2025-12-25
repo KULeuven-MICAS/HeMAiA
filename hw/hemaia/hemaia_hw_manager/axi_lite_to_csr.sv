@@ -4,9 +4,9 @@
 /// A protocol converter from AXI Lite to CSR Interface
 module axi_lite_to_csr #(
     /// The width of the address.
-    parameter int ADDR_WIDTH = -1,
+    parameter int AXI_LITE_ADDR_WIDTH = -1,
     /// The width of the data.
-    parameter int DATA_WIDTH = -1,
+    parameter int AXI_LITE_DATA_WIDTH = -1,
     /// Buffer depth (how many outstanding transactions do we allow)
     parameter int BUFFER_DEPTH = 2,
     /// Whether the AXI-Lite W channel should be decoupled with a register. This
@@ -23,11 +23,11 @@ module axi_lite_to_csr #(
     //   // CSR Req/Rsp interface
     //   typedef struct packed {
     //     addr_t   addr;
-    //     data_t   data;
+    //     logic [31:0]   data;
     //     logic    write;
     //   } csr_req_t;
     //   typedef struct packed {
-    //     data_t   data;
+    //     logic [31:0]   data;
     //   } csr_rsp_t;
 ) (
     input  logic           clk_i         ,
@@ -44,17 +44,17 @@ module axi_lite_to_csr #(
     output logic           csr_rsp_ready_o
 );
     typedef struct packed {
-        logic [ADDR_WIDTH-1:0]   addr;
-        logic [DATA_WIDTH-1:0]   data;
+        logic [AXI_LITE_ADDR_WIDTH-1:0]   addr;
+        logic [31:0]   data;
     } write_t;
 
     typedef struct packed {
-        logic [ADDR_WIDTH-1:0] addr;
+        logic [AXI_LITE_ADDR_WIDTH-1:0] addr;
         logic write;
     } req_t;
 
     typedef struct packed {
-        logic [DATA_WIDTH-1:0] data;
+        logic [31:0] data;
     } resp_t;
 
     ///////////////////////////////////
@@ -75,7 +75,7 @@ module axi_lite_to_csr #(
     // FIFO Read Req Signals for AR
     ///////////////////////////////////
     logic   read_fifo_full, read_fifo_empty;
-    logic [ADDR_WIDTH-1:0]  read_fifo_in,   read_fifo_out;
+    logic [AXI_LITE_ADDR_WIDTH-1:0]  read_fifo_in,   read_fifo_out;
     logic   read_fifo_push, read_fifo_pop;
 
     ///////////////////////////////////
@@ -117,7 +117,7 @@ module axi_lite_to_csr #(
     assign write_fifo_in.addr = axi_lite_req_i.aw.addr;
     assign write_fifo_in.data = axi_lite_req_i.w.data;
     assign write_fifo_pop = write_valid && write_ready;
-    assign csr_req_o.data = arb_req.write ? write_fifo_out.data : '0;
+    assign csr_req_o.data = arb_req.write ? write_fifo_out.data[31:0] : '0;
     // B Channel
     fifo_v3 #(
         .DEPTH        ( BUFFER_DEPTH ),
@@ -144,7 +144,7 @@ module axi_lite_to_csr #(
     // AR Channel
     fifo_v3 #(
         .DEPTH        ( BUFFER_DEPTH ),
-        .DATA_WIDTH   ( ADDR_WIDTH   )
+        .DATA_WIDTH   ( AXI_LITE_ADDR_WIDTH   )
     ) i_fifo_read (
         .clk_i,
         .rst_ni,
@@ -180,7 +180,8 @@ module axi_lite_to_csr #(
         .data_o     ( read_resp_fifo_out   ),
         .pop_i      ( read_resp_fifo_pop   )
     );
-    assign axi_lite_rsp_o.r.data = read_resp_fifo_out.data;
+    assign axi_lite_rsp_o.r.data[AXI_LITE_DATA_WIDTH-1:32] = '0;
+    assign axi_lite_rsp_o.r.data[31:0] = read_resp_fifo_out.data;
     assign axi_lite_rsp_o.r.resp = axi_pkg::RESP_OKAY;
     assign axi_lite_rsp_o.r_valid = ~read_resp_fifo_empty;
     assign read_resp_fifo_pop = ~read_resp_fifo_empty & axi_lite_req_i.r_ready;

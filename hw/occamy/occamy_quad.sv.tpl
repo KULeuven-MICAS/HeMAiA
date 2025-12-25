@@ -88,35 +88,37 @@ module ${name}_quad
   % endif
 
   // Signals for CSR Req/Rsp to the QuadCtrl
-  csr_req_t [NrClustersPerQuad-1:0][NrCoresPerQuad-1:0] csr_req;
-  logic     [NrClustersPerQuad-1:0][NrCoresPerQuad-1:0] csr_req_valid;
-  logic     [NrClustersPerQuad-1:0][NrCoresPerQuad-1:0] csr_req_ready;
-  csr_rsp_t [NrClustersPerQuad-1:0][NrCoresPerQuad-1:0] csr_rsp;
-  logic     [NrClustersPerQuad-1:0][NrCoresPerQuad-1:0] csr_rsp_valid;
-  logic     [NrClustersPerQuad-1:0][NrCoresPerQuad-1:0] csr_rsp_ready;
+  // Num_cluster * Num_core
+  csr_req_t [${nr_clusters-1}:0][${nr_cores_per_cluster-1}:0] csr_req;
+  logic     [${nr_clusters-1}:0][${nr_cores_per_cluster-1}:0] csr_req_valid;
+  logic     [${nr_clusters-1}:0][${nr_cores_per_cluster-1}:0] csr_req_ready;
+  csr_rsp_t [${nr_clusters-1}:0][${nr_cores_per_cluster-1}:0] csr_rsp;
+  logic     [${nr_clusters-1}:0][${nr_cores_per_cluster-1}:0] csr_rsp_valid;
+  logic     [${nr_clusters-1}:0][${nr_cores_per_cluster-1}:0] csr_rsp_ready;
 
   %for i in range(nr_clusters):
   // CSR Req/Rsp for Cluster ${i}
-  csr_req_t [NrCoresPerQuad-1:0] csr_req_${i};
-  logic     [NrCoresPerQuad-1:0] csr_req_valid_${i};
-  logic     [NrCoresPerQuad-1:0] csr_req_ready_${i};
-  csr_rsp_t [NrCoresPerQuad-1:0] csr_rsp_${i};
-  logic     [NrCoresPerQuad-1:0] csr_rsp_valid_${i};
-  logic     [NrCoresPerQuad-1:0] csr_rsp_ready_${i};
+  csr_req_t [${nr_cores_per_cluster-1}:0] csr_req_${i};
+  logic     [${nr_cores_per_cluster-1}:0] csr_req_valid_${i};
+  logic     [${nr_cores_per_cluster-1}:0] csr_req_ready_${i};
+  csr_rsp_t [${nr_cores_per_cluster-1}:0] csr_rsp_${i};
+  logic     [${nr_cores_per_cluster-1}:0] csr_rsp_valid_${i};
+  logic     [${nr_cores_per_cluster-1}:0] csr_rsp_ready_${i};
   // CSR Req/Rsp CDC
-  csr_req_t [NrCoresPerQuad-1:0] csr_req_cdc_${i};
-  logic     [NrCoresPerQuad-1:0] csr_req_cdc_valid_${i};
-  logic     [NrCoresPerQuad-1:0] csr_req_cdc_ready_${i};
-  csr_rsp_t [NrCoresPerQuad-1:0] csr_rsp_cdc_${i};
-  logic     [NrCoresPerQuad-1:0] csr_rsp_cdc_valid_${i};
-  logic     [NrCoresPerQuad-1:0] csr_rsp_cdc_ready_${i};
+  csr_req_t [${nr_cores_per_cluster-1}:0] csr_req_cdc_${i};
+  logic     [${nr_cores_per_cluster-1}:0] csr_req_cdc_valid_${i};
+  logic     [${nr_cores_per_cluster-1}:0] csr_req_cdc_ready_${i};
+  csr_rsp_t [${nr_cores_per_cluster-1}:0] csr_rsp_cdc_${i};
+  logic     [${nr_cores_per_cluster-1}:0] csr_rsp_cdc_valid_${i};
+  logic     [${nr_cores_per_cluster-1}:0] csr_rsp_cdc_ready_${i};
   // Assignment From Cluster to QuadCtrl
   %for j in range(nr_cores_per_cluster):
+  // CSR Req/Rsp for Core ${j}
   assign csr_req[${i}][${j}] = csr_req_cdc_${i}[${j}];
   assign csr_req_valid[${i}][${j}] = csr_req_cdc_valid_${i}[${j}];
-  assign csr_req_ready[${i}][${j}] = csr_req_cdc_ready_${i}[${j}];
-  assign csr_rsp[${i}][${j}] = csr_rsp_${i}[${j}];
-  assign csr_rsp_valid[${i}][${j}] = csr_rsp_valid_${i}[${j}];
+  assign csr_req_cdc_ready_${i}[${j}] = csr_req_ready[${i}][${j}];
+  assign csr_rsp_${i}[${j}] = csr_rsp[${i}][${j}];
+  assign csr_rsp_valid_${i}[${j}] = csr_rsp_valid[${i}][${j}];
   assign csr_rsp_ready[${i}][${j}] = csr_rsp_ready_${i}[${j}];
   %endfor
   %endfor
@@ -869,44 +871,45 @@ module ${name}_quad
   %endif
 % endfor
 
+// CDC for the CSR Req/Rsp
 % for i in range(nr_clusters):
-  // CDC for the CSR Req/Rsp
+  % for j in range(nr_cores_per_cluster):
   cdc_fifo_gray #(
     .T (csr_req_t),
     .LOG_DEPTH  (1),
     .SYNC_STAGES(2)
-  ) i_csr_req_cdc_${i} (
-    .src_rst_ni (rst_acc_ni[${i}]      ),
-    .src_clk_i  (clk_acc_i[${i}]       ),
-    .src_data_i (csr_req_${i}          ),
-    .src_valid_i(csr_req_valid_${i}    ),
-    .src_ready_o(csr_req_ready_${i}    ),
+  ) i_csr_req_cdc_cluster${i}_core${j} (
+    .src_rst_ni (rst_acc_ni[${i}]            ),
+    .src_clk_i  (clk_acc_i[${i}]             ),
+    .src_data_i (csr_req_${i}[${j}]          ),
+    .src_valid_i(csr_req_valid_${i}[${j}]    ),
+    .src_ready_o(csr_req_ready_${i}[${j}]    ),
 
-    .dst_rst_ni (rst_ni                ),
-    .dst_clk_i  (clk_i                 ),
-    .dst_data_o (csr_req_cdc_${i}      ),
-    .dst_valid_o(csr_req_cdc_valid_${i}),
-    .dst_ready_i(csr_req_cdc_ready_${i})
+    .dst_rst_ni (rst_ni                      ),
+    .dst_clk_i  (clk_i                       ),
+    .dst_data_o (csr_req_cdc_${i}[${j}]      ),
+    .dst_valid_o(csr_req_cdc_valid_${i}[${j}]),
+    .dst_ready_i(csr_req_cdc_ready_${i}[${j}])
   );
 
   cdc_fifo_gray #(
     .T (csr_rsp_t),
     .LOG_DEPTH  (1),
     .SYNC_STAGES(2)
-  ) i_csr_rsp_cdc_${i} (
-    .src_rst_ni (rst_ni                ),
-    .src_clk_i  (clk_i                 ),
-    .src_data_i (csr_rsp_${i}          ),
-    .src_valid_i(csr_rsp_valid_${i}    ),
-    .src_ready_o(csr_rsp_ready_${i}    ),
+  ) i_csr_rsp_cdc_cluster${i}_core${j} (
+    .src_rst_ni (rst_ni                      ),
+    .src_clk_i  (clk_i                       ),
+    .src_data_i (csr_rsp_${i}[${j}]          ),
+    .src_valid_i(csr_rsp_valid_${i}[${j}]    ),
+    .src_ready_o(csr_rsp_ready_${i}[${j}]    ),
 
-    .dst_rst_ni (rst_acc_ni[${i}]      ),
-    .dst_clk_i  (clk_acc_i[${i}]       ),
-    .dst_data_o (csr_rsp_cdc_${i}      ),
-    .dst_valid_o(csr_rsp_cdc_valid_${i}),
-    .dst_ready_i(csr_rsp_cdc_ready_${i})
+    .dst_rst_ni (rst_acc_ni[${i}]            ),
+    .dst_clk_i  (clk_acc_i[${i}]             ),
+    .dst_data_o (csr_rsp_cdc_${i}[${j}]      ),
+    .dst_valid_o(csr_rsp_cdc_valid_${i}[${j}]),
+    .dst_ready_i(csr_rsp_cdc_ready_${i}[${j}])
   );
-
+  %endfor
 % endfor
 
 
