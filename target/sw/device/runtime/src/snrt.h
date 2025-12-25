@@ -18,6 +18,7 @@
 #include "occamy_memory_map.h"
 #include "sys_dma.h"
 #include "uart.h"
+#include "heterogeneous_runtime.h"
 // Vendor
 // l1 heap allocator
 #include "o1heap64.h"

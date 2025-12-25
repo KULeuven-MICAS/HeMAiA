@@ -290,20 +290,25 @@
                     "description": "User width of narrow quadrant crossbar slave ports.",
                     "default": 2
                 },
-                "cfg_base_addr": {
+                "quad_axi_lite_narrow_base_addr": {
                     "type": "integer",
                     "description": "Base address of the quadrant configuration region. defaults to 0x0b000000",
                     "default": 184549376
                 },
-                "cfg_base_offset": {
+                "quad_axi_lite_narrow_offset": {
                     "type": "integer",
                     "description": "Allocated size and offset of each quadrant configuration. defaults to 0x10000",
                     "default": 65536
                 },
-                "h2c_mailbox_length": {
+                "quad_axi_lite_base_addr": {
                     "type": "integer",
-                    "description": "Length of the host to cluster mailbox in bytes.defaults to 0x1000",
-                    "default": 4096
+                    "description": "Base address of the quadrant axi lite region. defaults to 0x0a000000",
+                    "default": 167772160
+                },
+                "quad_axi_lite_offset": {
+                    "type": "integer",
+                    "description": "Allocated size and offset of each quadrant axi lite configuration. defaults to 0x10000",
+                    "default": 65536
                 }
 
             }

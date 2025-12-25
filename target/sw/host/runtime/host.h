@@ -8,10 +8,8 @@
 #include <stdint.h>
 #include <string.h>
 #include "chip_id.h"
-#include "heterogeneous_runtime.h"
 #include "occamy.h"
 #include "sys_dma.h"
-
 // HeMAiA specific peripherals
 #include "uart.c"
 #include "hemaia_clk_rst_controller.h"
@@ -19,7 +17,9 @@
 #include "hemaia-xdma-lib.h"
 #include "mailbox.h"
 #include "io.h"
-
+#include "heterogeneous_runtime.h"
+// Host kernel lib
+#include "host_kernel_lib.h"
 extern uint64_t __narrow_spm_start;
 extern uint64_t __narrow_spm_end;
 extern uint64_t __wide_spm_start;

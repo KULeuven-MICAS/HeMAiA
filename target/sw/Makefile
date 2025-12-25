@@ -24,7 +24,7 @@ TARGET_SRC_DIR        = $(SW_DIR)/shared/platform/template
 TARGET_CLINT_DIR      = $(TARGET_SRC_DIR)/clint
 TARGET_PLIC_DIR       = $(TARGET_SRC_DIR)/rv_plic
 TARGET_SOCCTRL_DIR	  = $(TARGET_SRC_DIR)/soc_ctrl
-TARGET_QUADCTRL_DIR   = $(TARGET_SRC_DIR)/quadrant_s1_ctrl
+TARGET_QUADPERIPH_DIR = $(TARGET_SRC_DIR)/quad_periph
 PLATFORM_HEADERS_DIR  = shared/platform/generated
 PLATFORM_HEADERS_TEMPLATE_DIR = shared/platform/template
 SW_DEVICE_RT_DIR      = device/runtime
@@ -56,11 +56,11 @@ endef
 PLATFORM_HEADERS  = $(PLATFORM_HEADERS_DIR)/clint.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/rv_plic.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/occamy_soc_ctrl.h
+PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/occamy_quad_periph.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/snitch_cluster_peripheral.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/hemaia_d2d_link_peripheral.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/hemaia_clk_rst_controller_peripheral.h
 # OCCAMYGEN headers
-PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/occamy_cfg.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/occamy_memory_map.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/occamy.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/occamy_base_addr.h
@@ -109,6 +109,14 @@ $(TARGET_SOCCTRL_DIR)/occamy_soc_reg.hjson: $(SOURCE_SOCCTRL_DIR)/occamy_soc_reg
 $(PLATFORM_HEADERS_DIR)/occamy_soc_ctrl.h: $(TARGET_SOCCTRL_DIR)/occamy_soc_reg.hjson
 	$(call reggen_generate_header,$@,$<)
 
+###############
+# 4.Quad Ctrl #
+###############
+
+# Quad Ctrl does not need the hjson template, directly use the source hjson
+SOURCE_QUADPERIPH_DIR = $(ROOT)/hw/occamy/quad_periph
+$(PLATFORM_HEADERS_DIR)/occamy_quad_periph.h: $(SOURCE_QUADPERIPH_DIR)/occamy_quad_periph_reg.hjson
+	$(call reggen_generate_header,$@,$<)
 ######################
 # Cluster Peripheral #
 ######################
@@ -131,10 +139,6 @@ $(PLATFORM_HEADERS_DIR)/hemaia_clk_rst_controller_peripheral.h: $(ROOT)/hw/hemai
 	$(call reggen_generate_header,$@,$<)
 
 # OCCAMYGEN headers
-$(PLATFORM_HEADERS_DIR)/occamy_cfg.h: $(PLATFORM_HEADERS_TEMPLATE_DIR)/occamy_cfg.h.tpl $(CFG)
-	@echo "[OCCAMYGEN] Generating $@"
-	@$(OCCAMYGEN) -c $(CFG) --outdir $(PLATFORM_HEADERS_DIR) --cheader $<
-
 $(PLATFORM_HEADERS_DIR)/occamy_memory_map.h: $(PLATFORM_HEADERS_TEMPLATE_DIR)/occamy_memory_map.h.tpl $(CFG)
 	@echo "[OCCAMYGEN] Generating $@"
 	@$(OCCAMYGEN) -c $(CFG) --outdir $(PLATFORM_HEADERS_DIR) --cheader $<

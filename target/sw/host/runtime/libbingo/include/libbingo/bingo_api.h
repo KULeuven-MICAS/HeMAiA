@@ -32,6 +32,7 @@
 #include "heterogeneous_runtime.h"
 // kernel args
 #include "device_kernel_args.h"
+#include "host_kernel_args.h"
 #define HOST_SLEEP_CYCLES 100
 #define MAX_SUCCESSORS 8                 // Maximum number of (local) successor tasks tracked directly
 #define BINGO_MAX_REMOTE_SUCC 8          // Maximum number of remote successors (fan-out messages)
@@ -46,6 +47,10 @@
 ///////////////////////////////
 ///// Data Structure      /////
 ///////////////////////////////
+
+//////////////////////////////////
+// The BINGO SW TASk Descriptor///
+//////////////////////////////////
 // The task is running on the cluster
 // Forward declaration for remote successor struct (defined below)
 struct bingo_remote_succ;
@@ -203,7 +208,66 @@ typedef struct {
   uint32_t seq_counter;      // Monotonic sequence for message stamping
 } bingo_chip_sched_t;
 
+//////////////////////////////////////
+// BINGO HW Manager Task Descriptor //
+//////////////////////////////////////
 
+typedef struct hw_manager_task {
+    bool     task_type;            // Task Type 0: Normal Task, 1: Dummy Task 
+    uint16_t task_id;              // Task ID
+    uint8_t  assigned_chiplet_id;  // Target chiplet for execution
+    uint8_t  assigned_cluster_id;  // Target cluster for execution
+    uint8_t  assigned_core_id;     // Target core for execution
+    bool     dep_check_enabled;    // Whether dependency checking is enabled
+    uint8_t  dep_check_code;       // Dependency check code
+    bool     dep_set_enabled;      // Whether dependency setting is enabled
+    bool     dep_set_all_chiplet;  // Whether to set dependency on all chiplets
+    uint8_t  dep_set_code;         // Chiplet ID to set dependency
+    uint8_t  dep_set_chiplet_id;   // Chiplet ID to set dependency
+    uint8_t  dep_set_cluster_id;   // Cluster ID to set dependency
+} bingo_hw_manager_task_desc_t;
+
+static inline uint64_t encode_bingo_hw_manager_task_desc(bingo_hw_manager_task_desc_t desc) {
+    uint64_t encoded = 0;
+
+    // Task type (1 bit) at encoded[0]
+    encoded |= ENCODE_BITFIELD(desc.task_type, TASK_TYPE_WIDTH, TASK_TYPE_SHIFT);
+
+    // Task ID (12 bits) at encoded[12:1]
+    encoded |= ENCODE_BITFIELD(desc.task_id, TASK_ID_WIDTH, TASK_ID_SHIFT);
+
+    // Assigned chiplet ID (8 bits)
+    encoded |= ENCODE_BITFIELD(desc.assigned_chiplet_id, ASSIGNED_CHIPLET_ID_WIDTH, ASSIGNED_CHIPLET_ID_SHIFT);
+
+    // Assigned cluster ID (N_CLUSTERS_WIDTH bits)
+    encoded |= ENCODE_BITFIELD(desc.assigned_cluster_id, ASSIGNED_CLUSTER_ID_WIDTH, ASSIGNED_CLUSTER_ID_SHIFT);
+
+    // Assigned core ID (N_CORES_WIDTH bits)
+    encoded |= ENCODE_BITFIELD(desc.assigned_core_id, ASSIGNED_CORE_ID_WIDTH, ASSIGNED_CORE_ID_SHIFT);
+
+    // Dep check enabled (1 bit)
+    encoded |= ENCODE_BITFIELD(desc.dep_check_enabled, DEP_CHECK_ENABLED_WIDTH, DEP_CHECK_ENABLED_SHIFT);
+
+    // Dep check code (N_CORES_PER_CLUSTER bits)
+    encoded |= ENCODE_BITFIELD(desc.dep_check_code, DEP_CHECK_CODE_WIDTH, DEP_CHECK_CODE_SHIFT);
+
+    // Dep set enabled (1 bit)
+    encoded |= ENCODE_BITFIELD(desc.dep_set_enabled, DEP_SET_ENABLED_WIDTH, DEP_SET_ENABLED_SHIFT);
+
+    // Dep set all chiplet (1 bit)
+    encoded |= ENCODE_BITFIELD(desc.dep_set_all_chiplet, DEP_SET_ALL_CHIPLET_WIDTH, DEP_SET_ALL_CHIPLET_SHIFT);
+
+    // Dep set code (N_CORES_PER_CLUSTER bits)
+    encoded |= ENCODE_BITFIELD(desc.dep_set_code, DEP_SET_CODE_WIDTH, DEP_SET_CODE_SHIFT);
+
+    // Dep set chiplet ID (N_CHIPLETS_WIDTH bits)
+    encoded |= ENCODE_BITFIELD(desc.dep_set_chiplet_id, DEP_SET_CHIPLET_ID_WIDTH, DEP_SET_CHIPLET_ID_SHIFT);
+
+    // Dep set cluster ID (N_CLUSTERS_WIDTH bits)
+    encoded |= ENCODE_BITFIELD(desc.dep_set_cluster_id, DEP_SET_CLUSTER_ID_WIDTH, DEP_SET_CLUSTER_ID_SHIFT);
+
+    return encoded;
+}
 
 ////////////////////
 ///// API      /////

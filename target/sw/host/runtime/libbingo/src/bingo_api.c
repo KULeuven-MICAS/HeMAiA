@@ -606,3 +606,76 @@ void bingo_close_all_clusters(bingo_task_t **task_list, uint32_t num_tasks){
         }
     }
 }
+
+
+// For the HW scheduler
+// The task will be initized directly on a .h file generated from the mini compiler
+// So the whole scheduling process will be handled by the hardware scheduler
+// The host-side work is just in the begining to write the task_list_ptr and #num_tasks to the quad ctrl reg
+// Then the HW scheduler will read the task list from the memory and schedule the tasks
+// The Host core will also hooked with th ARA core for the simd
+// So its work is just to read the ready queue and write to the done queue when the simd is done
+void bingo_hw_scheduler_init(uint32_t dev_arg_base_addr, uint32_t dev_kernel_base_addr, uint32_t global_task_id_to_dev_task_id_base_addr, uint64_t task_desc_list_base, uint32_t num_tasks){
+    uint32_t current_task_id;
+    uint8_t current_chip = get_current_chip_id();
+    uint32_t current_arg_ptr;
+    uint32_t current_kernel_ptr;
+    uint32_t kernel_return_value;
+    uint32_t err = 0;
+    printf("Chip(%x, %x): [Host] Starting HW scheduler for %u tasks\r\n",
+           get_current_chip_loc_x(), get_current_chip_loc_y(), num_tasks);
+    // Write the info to the quad ctrl regs
+    writew(dev_arg_base_addr,                 (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_arg_ptr_addr()));
+    writew(dev_kernel_base_addr,              (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_kernel_ptr_addr()));
+    writew(global_task_id_to_dev_task_id_base_addr, (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_gid_to_dev_tid_base_addr()));
+    writew(task_desc_list_base>>32,       (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_task_desc_base_hi_addr()));
+    writew((uint32_t)task_desc_list_base, (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_task_desc_base_lo_addr()));
+    writew(num_tasks,                     (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_num_task_addr()));
+    // Start the HW scheduler
+    writew(1,                             (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_start_bingo_hw_manager_addr()));
+}
+
+uint32_t bingo_hw_sheduler(uint64_t* host_arg_list, uint64_t* host_kernel_list, int32_t* global_task_id_to_host_task_id){
+    uint32_t current_global_task_id;
+    int32_t current_host_task_id;
+    uint64_t current_arg_ptr;
+    uint64_t current_kernel_ptr;
+    uint64_t kernel_return_value;
+    uint32_t err=0;
+        // Poll for ready queue
+    while (1) {
+        // First read the ready queue
+        current_global_task_id = readw((uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_host_ready_done_queue_addr()));
+        // Then we get the host task id from the global task id
+        current_host_task_id = global_task_id_to_host_task_id[current_global_task_id];
+        if (current_host_task_id == -1){
+            printf("Chip(%x, %x): [Host] Error: HW scheduler got invalid host task id for global task id %d\r\n",
+                   get_current_chip_loc_x(), get_current_chip_loc_y(),
+                   current_global_task_id);
+            err=1;
+            break;
+        }
+        // Then get the task arg and fn ptr from the task list
+        current_arg_ptr = host_arg_list[current_host_task_id];
+        current_kernel_ptr = host_kernel_list[current_host_task_id];
+        // then run the host kernel
+        kernel_return_value = ((uint32_t (*)(uint32_t))current_kernel_ptr)(current_arg_ptr);
+        if (kernel_return_value == 0){
+            // The normal case, write back to the done queue
+            writew(current_global_task_id, (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_host_ready_done_queue_addr()));
+        } else if (kernel_return_value == 1){
+            // All done
+            printf("Chip(%x, %x): [Host] HW scheduler completed all tasks successfully\r\n",
+                   get_current_chip_loc_x(), get_current_chip_loc_y());
+            break;
+        } else {
+            // Error case
+            printf("Chip(%x, %x): [Host] Error: HW scheduler task %d returned error code %d\r\n",
+                   get_current_chip_loc_x(), get_current_chip_loc_y(),
+                   current_global_task_id, kernel_return_value);
+            err = kernel_return_value;
+            break;
+        }
+    }
+    return err;
+}

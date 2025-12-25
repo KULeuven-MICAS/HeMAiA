@@ -99,9 +99,11 @@
       },
       narrow_xbar_slv_id_width: 4,
       narrow_xbar_user_width: 3, // clog2(total number of clusters)
-      cfg_base_addr: 184549376,  // 0x0b00_0000
-      cfg_base_offset: 65536     // 0x1_0000
-      h2c_mailbox_length: 4096,   // 0x1000
+
+      quad_cfg_base_addr: 184549376,  // 0x0b00_0000
+      quad_cfg_base_offset: 65536     // 0x1_0000
+      quad_axi_lite_base_addr: 167772160,// 0x0a00_0000
+      quad_axi_lite_offset: 65536,       // 0x1_0000 
     },
     clusters:[
       "snax_versacore_to_cluster",

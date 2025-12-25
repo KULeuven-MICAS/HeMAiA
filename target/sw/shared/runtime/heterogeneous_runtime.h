@@ -10,7 +10,7 @@
 // *Note*: to ensure that the usr_data field is at the same offset
 // in the host and device (resp. 64b and 32b architectures)
 // usr_data is an explicitly-sized integer field instead of a pointer
-typedef struct {
+typedef struct __attribute__((aligned(8))){
     volatile uint32_t lock;
     volatile uint32_t chip_id;
     volatile uint32_t usr_data_ptr;
@@ -108,4 +108,26 @@ inline void wait_host_sw_interrupt_clear(uint8_t chip_id) {
 static inline void clear_host_sw_interrupt(uint8_t chip_id) {
     clear_host_sw_interrupt_unsafe(chip_id);
     wait_host_sw_interrupt_clear(chip_id);
+}
+
+static inline volatile uint32_t* __attribute__((const)) get_mutex_ptr_host() {
+    #if __riscv_xlen == 64
+    uint64_t comm_buffer_ptr_addr = chiplet_addr_transform((uint64_t)soc_ctrl_scratch_ptr(2));
+    comm_buffer_t* comm_buffer_ptr;
+    comm_buffer_ptr = (comm_buffer_t*)readd((uintptr_t)comm_buffer_ptr_addr);
+    return &(comm_buffer_ptr->lock);
+    #elif __riscv_xlen == 32
+    return 0;
+    #endif
+}
+
+static inline volatile uint32_t* __attribute__((const)) get_mutex_ptr_device() {
+    #if __riscv_xlen == 64
+    return 0;
+    #elif __riscv_xlen == 32
+    uint32_t comm_buffer_ptr_addr = (uint32_t)soc_ctrl_scratch_ptr(2);
+    comm_buffer_t* comm_buffer_ptr;
+    comm_buffer_ptr = (comm_buffer_t*)readw((uintptr_t)comm_buffer_ptr_addr);
+    return &(comm_buffer_ptr->lock);
+    #endif
 }
