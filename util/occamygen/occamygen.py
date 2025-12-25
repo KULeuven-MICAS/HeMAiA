@@ -971,7 +971,6 @@ def main():
     if args.graph:
         with open(args.graph, "w") as file:
             file.write(am.render_graphviz())
-    
 
 
 if __name__ == "__main__":
