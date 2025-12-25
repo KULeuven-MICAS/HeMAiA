@@ -31,10 +31,10 @@ module ${name}_quad_ctrl
   input  ${soc_narrow_xbar.out_quad.req_type()} soc_in_req_i,
   output ${soc_narrow_xbar.out_quad.rsp_type()} soc_in_rsp_o,
   // Quadrant narrow ports
-  output ${soc_narrow_xbar.out_quad.req_type()} quadrant_out_req_o,
-  input  ${soc_narrow_xbar.out_quad.rsp_type()} quadrant_out_rsp_i,
-  input  ${soc_narrow_xbar.in_quad.req_type()} quadrant_in_req_i,
-  output ${soc_narrow_xbar.in_quad.rsp_type()} quadrant_in_rsp_o
+  output ${quad_ctrl_soc_to_quad_xbar.out_clusters.req_type()} quadrant_out_req_o,
+  input  ${quad_ctrl_soc_to_quad_xbar.out_clusters.rsp_type()} quadrant_out_rsp_i,
+  input  ${quad_ctrl_quad_to_soc_xbar.in_clusters.req_type()} quadrant_in_req_i,
+  output ${quad_ctrl_quad_to_soc_xbar.in_clusters.rsp_type()} quadrant_in_rsp_o
 );
 
   // Bingo HW Manager Signals
@@ -69,33 +69,39 @@ module ${name}_quad_ctrl
   assign ${quad_ctrl_soc_to_quad_xbar.in_soc_narrow.req_name()} = quadrant_in_req_i;
   assign quadrant_in_rsp_o = ${quad_ctrl_soc_to_quad_xbar.in_soc_narrow.rsp_name()};
 
-  // Connect AXI Lite xbar to SoC to Quad Xbar
-  assign ${quad_ctrl_soc_to_quad_xbar.in_quad_axi_lite.req_name()} = ${quad_ctrl_axi_lite_xbar.out_soc_to_quad.req_name()};
-  assign ${quad_ctrl_axi_lite_xbar.out_soc_to_quad.rsp_name()} = ${quad_ctrl_soc_to_quad_xbar.in_quad_axi_lite.rsp_name()};
-
-
-  // SoC to Quad Xbar to quad axi lite narrow and quad axi lite
+  // SoC to Quad Xbar -> Quad axi lite narrow
   <%
-    soc_to_quad_to_axi_lite_narrow = quad_ctrl_soc_to_quad_xbar.out_quad_axi_lite_narrow \
-      .serialize(context, iw=1, name="soc_to_quad_axi_lite_narrow_ser") \
-      .change_dw(context, 32, "soc_to_quad_axi_lite_narrow_dw") \
-      .to_axi_lite(context, name="soc_to_quad_axi_lite_narrow", to=quad_ctrl_axi_lite_narrow_mux.in_soc_to_quad)
-
-    soc_to_quad_to_axi_lite = quad_ctrl_soc_to_quad_xbar.out_quad_axi_lite \
-      .serialize(context, iw=1, name="soc_to_quad_to_axi_lite_ser") \
+    quad_ctrl_soc_to_quad_xbar.out_quad_axi_lite_narrow \
+      .atomic_adapter(context, filter=True, max_trans=4, name="soc_to_quad_axi_lite_narrow_noatop") \
+      .change_dw(context, 32, "soc_to_quad_to_axi_lite_narrow_dw") \
+      .to_axi_lite(context, name="soc_to_quad_to_axi_lite_narrow", to=quad_ctrl_axi_lite_narrow_mux.in_soc_to_quad)
+  %>
+  // SoC to Quad Xbar -> Quad axi lite
+  <%
+    quad_ctrl_soc_to_quad_xbar.out_quad_axi_lite \
+      .atomic_adapter(context, filter=True, max_trans=4, name="soc_to_quad_axi_lite_noatop") \
       .to_axi_lite(context, name="soc_to_quad_to_axi_lite", to=quad_ctrl_axi_lite_xbar.in_soc_to_quad)
   %>
 
-  // Quad to SoC Xbar to quad axi lite narrow and quad axi lite
+  // Quad to SoC Xbar -> Quad axi lite narrow
   <%
-    quad_to_soc_to_quad_axi_lite_narrow = quad_ctrl_quad_to_soc_xbar.out_quad_axi_lite_narrow \
-      .serialize(context, iw=1, name="quad_to_soc_to_quad_axi_lite_narrow_ser") \
+    quad_ctrl_quad_to_soc_xbar.out_quad_axi_lite_narrow \
+      .atomic_adapter(context, filter=True, max_trans=4, name="quad_to_quad_axi_lite_narrow_noatop") \
       .change_dw(context, 32, "quad_to_soc_to_quad_axi_lite_narrow_dw") \
       .to_axi_lite(context, name="quad_to_soc_to_quad_axi_lite_narrow", to=quad_ctrl_axi_lite_narrow_mux.in_quad_to_soc)
-    quad_to_soc_to_quad_axi_lite = quad_ctrl_quad_to_soc_xbar.out_quad_axi_lite\
-      .serialize(context, iw=1, name="quad_to_soc_to_quad_axi_lite_ser") \
+  %>
+  // Quad to SoC Xbar -> Quad axi lite 
+  <%
+    quad_ctrl_quad_to_soc_xbar.out_quad_axi_lite\
+      .atomic_adapter(context, filter=True, max_trans=4, name="quad_to_quad_axi_lite_noatop") \
       .to_axi_lite(context, name="quad_to_soc_to_quad_axi_lite", to=quad_ctrl_axi_lite_xbar.in_quad_to_soc)
   %>
+
+  // Quad AXI Lite Xbar -> Quad to SoC Xbar
+  <%
+    quad_ctrl_axi_lite_xbar.out_quad_to_soc.to_axi(context, name="quad_axi_lite_to_quad_to_soc_xbar", to=quad_ctrl_quad_to_soc_xbar.in_quad_axi_lite)
+  %>
+
 
   //////////////////////////////////////
   //  32bit Quad Control Periph Regs  //
@@ -188,7 +194,7 @@ module ${name}_quad_ctrl
     .chip_id_i                          (chip_id_i                    ),
     // Since we set TASK_QUEUE_TYPE = 1
     // Not use the task queue slave
-    .task_queue_base_addr_i             (/* not used */               ),
+    .task_queue_base_addr_i             ('0                           ),
     .task_queue_axi_lite_req_i          ('0                           ),
     .task_queue_axi_lite_resp_o         (/* not used */               ),
     // We use the task queue master port 

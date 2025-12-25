@@ -341,7 +341,7 @@ module ${name}_quad
     narrow_cluster_out_tlb = quad_narrow_xbar.out_quad_to_soc
   #// Change ID width and cut
   narrow_cluster_out_ctrl = narrow_cluster_out_tlb \
-    .change_iw(context, soc_narrow_xbar.in_quad.iw, "narrow_cluster_out_iwc") \
+    .change_iw(context, quad_ctrl_quad_to_soc_xbar.in_clusters.iw, "narrow_cluster_out_iwc") \
     .cut(context, cuts_narrx_with_ctrl, "narrow_cluster_out_ctrl")
   %>
   %endif

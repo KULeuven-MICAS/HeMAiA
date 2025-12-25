@@ -734,7 +734,7 @@ def get_quad_ctrl_kwargs(occamy_cfg, soc_wide_xbar, soc_narrow_xbar, quad_ctrl_s
     return quadrant_ctrl_kwargs
 
 
-def get_quadrant_kwargs(occamy_cfg, cluster_generators, soc_wide_xbar, soc_narrow_xbar, quad_wide_xbar, quad_narrow_xbar, name):
+def get_quadrant_kwargs(occamy_cfg, cluster_generators, soc_wide_xbar, soc_narrow_xbar, quad_wide_xbar, quad_narrow_xbar, quad_ctrl_quad_to_soc_xbar, name):
     cluster_cfgs = list()
     nr_clusters = len(occamy_cfg["clusters"])
     for i in range(nr_clusters):
@@ -746,7 +746,8 @@ def get_quadrant_kwargs(occamy_cfg, cluster_generators, soc_wide_xbar, soc_narro
         "soc_wide_xbar": soc_wide_xbar,
         "soc_narrow_xbar": soc_narrow_xbar,
         "quad_wide_xbar": quad_wide_xbar,
-        "quad_narrow_xbar": quad_narrow_xbar
+        "quad_narrow_xbar": quad_narrow_xbar,
+        "quad_ctrl_quad_to_soc_xbar": quad_ctrl_quad_to_soc_xbar
     }
     return quadrant_kwargs
 

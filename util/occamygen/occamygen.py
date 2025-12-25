@@ -489,11 +489,11 @@ def main():
         max_slv_trans=occamy_cfg["narrow_xbar"]["max_slv_trans"],
         max_mst_trans=occamy_cfg["narrow_xbar"]["max_mst_trans"],
         fall_through=occamy_cfg["narrow_xbar"]["fall_through"],
+        latency_mode="axi_pkg::CUT_SLV_PORTS",
         context="quad_ctrl",
         node=am_soc_to_quad_axi_xbar
     )
     quad_ctrl_soc_to_quad_xbar.add_input("soc_narrow")
-    quad_ctrl_soc_to_quad_xbar.add_input("quad_axi_lite")
     quad_ctrl_soc_to_quad_xbar.add_output("clusters",
                                           [*addrs_clusters, *addrs_clusters_periph])
     quad_ctrl_soc_to_quad_xbar.add_output("quad_axi_lite", addrs_quad_axi_lite_peripherals)
@@ -503,7 +503,7 @@ def main():
     quad_ctrl_quad_to_soc_xbar = solder.AxiXbar(
         48,
         64,
-        soc_narrow_xbar.iw,
+        soc_narrow_xbar.iw-1, # -1 because the quad to soc has two slave ports
         soc_narrow_xbar.uw,
         chipidw=occamy_cfg["hemaia_multichip"]["chip_id_width"], 
         name="quad_ctrl_quad_to_soc_xbar",  
@@ -512,9 +512,11 @@ def main():
         max_slv_trans=occamy_cfg["narrow_xbar"]["max_slv_trans"],
         max_mst_trans=occamy_cfg["narrow_xbar"]["max_mst_trans"],
         fall_through=occamy_cfg["narrow_xbar"]["fall_through"],
+        latency_mode="axi_pkg::CUT_MST_PORTS",
         context="quad_ctrl",
-        node=am_soc_to_quad_axi_xbar)
+        node=am_quad_to_soc_axi_xbar)
     quad_ctrl_quad_to_soc_xbar.add_input("clusters")
+    quad_ctrl_quad_to_soc_xbar.add_input("quad_axi_lite")
     # Leave it be empty as the default port
     quad_ctrl_quad_to_soc_xbar.add_output("soc_narrow", [])
     quad_ctrl_quad_to_soc_xbar.add_output("quad_axi_lite", addrs_quad_axi_lite_peripherals)
@@ -552,7 +554,7 @@ def main():
         48,
         64,
         chipidw=occamy_cfg["hemaia_multichip"]["chip_id_width"],
-        name="quadrant_axi_lite_xbar",
+        name="quad_axi_lite_xbar",
         clk="clk_i",
         rst="rst_ni",
         max_slv_trans=occamy_cfg["narrow_xbar"]["max_slv_trans"],
@@ -564,7 +566,7 @@ def main():
     quad_ctrl_axi_lite_xbar.add_input("quad_to_soc")
     quad_ctrl_axi_lite_xbar.add_input("bingo_hw_scheduler_read_local_task")
     quad_ctrl_axi_lite_xbar.add_input("bingo_hw_scheduler_write_remote_done")
-    quad_ctrl_axi_lite_xbar.add_output_entry("soc_to_quad", am_soc_to_quad_axi_xbar)
+    quad_ctrl_axi_lite_xbar.add_output_entry("quad_to_soc", am_quad_to_soc_axi_xbar)
     quad_ctrl_axi_lite_xbar.add_output_entry("bingo_hw_scheduler_chiplet_done_queue", am_quad_axi_lite_peripherals[0])
     quad_ctrl_axi_lite_xbar.add_output_entry("bingo_hw_scheduler_host_ready_done_intf", am_quad_axi_lite_peripherals[1])
     
@@ -712,7 +714,7 @@ def main():
                         **quadrant_s1_noc_kwargs)
             occamy.generate_floonoc(f"{outdir}/{args.name}_quad_noc.yml", outdir)
         quadrant_kwargs = occamy.get_quadrant_kwargs(occamy_cfg, cluster_generators, soc_wide_xbar,
-                                              soc_narrow_xbar, quad_wide_xbar, quad_narrow_xbar, args.name)
+                                              soc_narrow_xbar, quad_wide_xbar, quad_narrow_xbar, quad_ctrl_quad_to_soc_xbar, args.name)
         if nr_s1_quadrants > 0:
             write_template(args.quad,
                            outdir,
