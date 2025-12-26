@@ -96,9 +96,6 @@ def main():
     parser.add_argument("--testharness-sv",
                         metavar="TESTHARNESS_SV",
                         help="Name of the testharness wrapper file (output).")
-    parser.add_argument("--multichip-testharness-sv",
-                        metavar="MULTICHIP_TESTHARNESS_SV",
-                        help="Name of the multichip testharness wrapper file (output).")
     parser.add_argument("--mem-macro-testharness-sv",
                         metavar="MEM_MACRO_TESTHARNESS_SV",
                         help="Name of the memory macro testharness wrapper file (output).")

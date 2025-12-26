@@ -149,9 +149,9 @@
                 address: 4096, // 0x0000_1000
                 length: 4096, // 4 kiB 0x1000
             },
-            {
-              name: "spis", // Only Master port, no slave port
-            }
+            // {
+            //   name: "spis", // Only Master port, no slave port
+            // }
         ],
         axi_lite_narrow_peripherals: [
             {
