@@ -252,22 +252,40 @@ def build_apps(
 
 
 def prepare_and_copy_sim(repo_root: Path, tasks_info: List[Tuple[Path, str, Optional[str]]]) -> None:
-    """Compile the Questasim simulation and copy outputs to each task directory."""
-    # After make hemaia_system_vsim_preparation inside the container, we
-    # compile on the host.  Running make hemaia_system_vsim outside
-    # generates target/sim/bin and target/sim/work-vsim.
-    subprocess.run(["make", "hemaia_system_vsim"], cwd=repo_root, check=True)
-    sim_bin_src = repo_root / "target/sim/bin"
-    work_vsim_src = repo_root / "target/sim/work-vsim"
-    for task_dir, _, _ in tasks_info:
-        for src in [sim_bin_src, work_vsim_src]:
-            if not src.exists():
-                continue
-            dst = task_dir / src.name
-            if dst.exists():
-                shutil.rmtree(dst)
-            shutil.copytree(src, dst)
+    """Compile the Questasim simulation and copy outputs to each task directory.
 
+    Strategy: treat everything under target/sim as an artifact tree and
+    replicate the same relative paths under each task directory.
+    """
+    subprocess.run(["make", "hemaia_system_vsim", "SIM_WITH_WAVEFORM=0"], cwd=repo_root, check=True)
+
+    sim_root = repo_root / "target/sim"
+    artifacts = [
+        sim_root / "bin" / "occamy_chip.vsim",
+        sim_root / "work-vsim",
+    ]
+
+    def copy_any(src: Path, dst: Path) -> None:
+        if not src.exists():
+            return
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if dst.exists():
+            if dst.is_dir():
+                shutil.rmtree(dst)
+            else:
+                dst.unlink()
+
+        if src.is_dir():
+            shutil.copytree(src, dst)
+        else:
+            shutil.copy2(src, dst)
+
+    for task_dir, _, _ in tasks_info:
+        for src in artifacts:
+            # Mirror the relative location within target/sim into the task directory
+            rel = src.relative_to(sim_root)
+            dst = task_dir / rel
+            copy_any(src, dst)
 
 def run_simulations(tasks_info: List[Tuple[Path, str, Optional[str]]]) -> Dict[str, bool]:
     """Run the compiled simulations in parallel and record pass/fail per task.

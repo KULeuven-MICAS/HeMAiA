@@ -127,12 +127,15 @@ module hemaia_mem_chip #(
       .test_mode_i('0),
       // for config the controller, same as uart clock
       .control_clk_i(clk_host),
-      .control_rst_ni(rst_host_n),
+      .control_rst_ni(rst_ni),
       .axi_lite_req_i(axi_lite_clk_rst_ctrl_req),
       .axi_lite_rsp_o(axi_lite_clk_rst_ctrl_rsp),
       // source clock and reset
       .mst_clk_i(clk_i),
       .mst_rst_ni(rst_ni),
+      // Disable the backup functionality
+      .bypass_pll_division_i(1'b0),
+      .clk_obs_o(),
       // generated clocks and resets
       .clk_o(clk_vec),
       .rst_no(rst_n_vec)

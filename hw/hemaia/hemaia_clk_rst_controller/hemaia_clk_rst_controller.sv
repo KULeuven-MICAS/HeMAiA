@@ -21,15 +21,24 @@ module hemaia_clk_rst_controller #(
     // Input / Output clk, reset
     input logic mst_clk_i,
     input logic mst_rst_ni,
+    input logic bypass_pll_division_i,
+    output logic clk_obs_o,
     output logic [NumClocks-1:0] clk_o,
     output logic [NumClocks-1:0] rst_no
 );
+
+  //////////////////////////////////////
+  //    PLL (Not implemented yet)     //
+  //////////////////////////////////////
+  logic mst_clk_after_pll;
+  assign mst_clk_after_pll = mst_clk_i;
+
 
   ///////////////////////////////
   //    Reset Synchronizer     //
   ///////////////////////////////
   logic mst_rst_n_d1_mst_clk, mst_rst_n_d2_mst_clk;
-  always_ff @(posedge mst_clk_i or negedge mst_rst_ni) begin
+  always_ff @(posedge mst_clk_after_pll or negedge mst_rst_ni) begin
     if (~mst_rst_ni) begin
       mst_rst_n_d1_mst_clk <= 1'b0;
       mst_rst_n_d2_mst_clk <= 1'b0;
@@ -224,7 +233,7 @@ module hemaia_clk_rst_controller #(
   // Synchronize valid bits into high frequencies
   (* async *)logic [31:0] clock_division_reg_valid_d1;
   logic [31:0] clock_division_reg_valid_d2;
-  always_ff @(posedge mst_clk_i or negedge mst_rst_n_d2_mst_clk) begin
+  always_ff @(posedge mst_clk_after_pll or negedge mst_rst_n_d2_mst_clk) begin
     if (~mst_rst_n_d2_mst_clk) begin
       clock_division_reg_valid_d1 <= '0;
       clock_division_reg_valid_d2 <= '0;
@@ -272,21 +281,39 @@ module hemaia_clk_rst_controller #(
   ///////////////////////////////
   //    Clock Division Cell    //
   ///////////////////////////////
+  logic [NumClocks-1:0] clocks_after_division;
   generate
     for (genvar i = 0; i < NumClocks; i = i + 1) begin : gen_clock_divider
       hemaia_clock_divider #(
           .MaxDivisionWidth(MaxDivisionWidth),
           .DefaultDivision (DefaultDivision[i])
       ) i_clk_divider (
-          .clk_i(mst_clk_i),
+          .clk_i(mst_clk_after_pll),
           .rst_ni(mst_rst_n_d2_mst_clk),
           (* false_path *) .test_mode_i(test_mode_i),
           (* false_path *) .divisor_i(clock_division_reg_concat[i][MaxDivisionWidth-1:0]),
           .divisor_valid_i(clock_division_reg_valid_d2[i]),
-          .clk_o(clk_o[i])
+          .clk_o(clocks_after_division[i])
       );
     end
   endgenerate
+
+  assign clk_o = bypass_pll_division_i ? {NumClocks{mst_clk_i}} : clocks_after_division;
+
+  logic clk_obs_after_division;
+  hemaia_clock_divider #(
+      .MaxDivisionWidth(MaxDivisionWidth),
+      .DefaultDivision (128)
+  ) i_clk_divider (
+      .clk_i(mst_clk_after_pll),
+      .rst_ni(mst_rst_n_d2_mst_clk),
+      (* false_path *) .test_mode_i(test_mode_i),
+      (* false_path *) .divisor_i(8'd128),
+      .divisor_valid_i('0),
+      .clk_o(clk_obs_after_division)
+  );
+
+  assign clk_obs_o = bypass_pll_division_i ? mst_clk_i : clk_obs_after_division;
 
   //////////////////////////////
   //    Reset synchronizer    //

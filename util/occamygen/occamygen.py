@@ -96,9 +96,6 @@ def main():
     parser.add_argument("--testharness-sv",
                         metavar="TESTHARNESS_SV",
                         help="Name of the testharness wrapper file (output).")
-    parser.add_argument("--multichip-testharness-sv",
-                        metavar="MULTICHIP_TESTHARNESS_SV",
-                        help="Name of the multichip testharness wrapper file (output).")
     parser.add_argument("--mem-macro-testharness-sv",
                         metavar="MEM_MACRO_TESTHARNESS_SV",
                         help="Name of the memory macro testharness wrapper file (output).")
@@ -673,13 +670,8 @@ def main():
     ###############
     if args.testharness_sv:
         testharness_kwargs = occamy.get_testharness_kwargs(
-            soc_wide_xbar, soc_axi_lite_narrow_periph_xbar, occamy_cfg["hemaia_multichip"]["single_chip_id"], solder, name)
-        write_template(args.testharness_sv, outdir, **testharness_kwargs)
-
-    if args.multichip_testharness_sv:
-        multichip_testharness_kwargs = occamy.get_multichip_testharness_kwargs(
             occamy_cfg, soc2router_bus, router2soc_bus, name)
-        write_template(args.multichip_testharness_sv, outdir, **multichip_testharness_kwargs)
+        write_template(args.testharness_sv, outdir, **testharness_kwargs)
 
     if args.mem_macro_testharness_sv:
         mem_macro_testharness_kwargs = occamy.get_mem_macro_testharness_kwargs(

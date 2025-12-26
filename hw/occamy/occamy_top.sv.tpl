@@ -9,6 +9,16 @@
 
 `include "common_cells/registers.svh"
 
+<% 
+  spi_slave_present = any(periph["name"] == "spis" for periph in occamy_cfg["peripherals"]["axi_lite_peripherals"])
+%>
+<% 
+  spi_master_present = any(periph["name"] == "spim" for periph in occamy_cfg["peripherals"]["axi_lite_narrow_peripherals"])
+%>
+<% 
+  i2c_present = any(periph["name"] == "i2c" for periph in occamy_cfg["peripherals"]["axi_lite_narrow_peripherals"])
+%>
+
 module ${name}_top
   import ${name}_pkg::*;
 (
@@ -40,6 +50,7 @@ module ${name}_top
   input  logic        jtag_tms_i,
   input  logic        jtag_tdi_i,
   output logic        jtag_tdo_o,
+% if i2c_present:
   // `i2c` Interface
   output logic        i2c_sda_o,
   input  logic        i2c_sda_i,
@@ -47,6 +58,9 @@ module ${name}_top
   output logic        i2c_scl_o,
   input  logic        i2c_scl_i,
   output logic        i2c_scl_en_o,
+% endif
+
+% if spi_master_present:
   // `SPI Host` Interface
   output logic        spim_sck_o,
   output logic        spim_sck_en_o,
@@ -55,9 +69,8 @@ module ${name}_top
   output logic [3:0]  spim_sd_o,
   output logic [3:0]  spim_sd_en_o,
   input        [3:0]  spim_sd_i,
-<% 
-  spi_slave_present = any(periph["name"] == "spis" for periph in occamy_cfg["peripherals"]["axi_lite_peripherals"])
-%>
+% endif
+
 % if spi_slave_present: 
   // `SPI Slave` for Debugging Purposes
   input  logic        spis_sck_i,
@@ -546,6 +559,7 @@ module ${name}_top
 
   assign irq.zero = 1'b0;
 
+% if spi_master_present:
   //////////////////
   //   SPI Host   //
   //////////////////
@@ -573,6 +587,7 @@ module ${name}_top
     .intr_error_o (irq.spim_error),
     .intr_spi_event_o (irq.spim_spi_event)
   );
+% endif
 
   //////////////
   //   GPIO   //
@@ -594,6 +609,7 @@ module ${name}_top
     .intr_gpio_o (irq.gpio)
   );
 
+% if i2c_present:
   /////////////
   //   I2C   //
   /////////////
@@ -632,6 +648,7 @@ module ${name}_top
     .intr_ack_stop_o (irq.i2c_ack_stop),
     .intr_host_timeout_o (irq.i2c_host_timeout)
   );
+% endif
 
   /////////////
   //  Timer  //
