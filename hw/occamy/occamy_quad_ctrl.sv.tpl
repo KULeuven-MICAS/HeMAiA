@@ -31,10 +31,10 @@ module ${name}_quad_ctrl
   input  ${soc_narrow_xbar.out_quad.req_type()} soc_in_req_i,
   output ${soc_narrow_xbar.out_quad.rsp_type()} soc_in_rsp_o,
   // Quadrant narrow ports
-  output ${quad_ctrl_soc_to_quad_xbar.out_clusters.req_type()} quadrant_out_req_o,
-  input  ${quad_ctrl_soc_to_quad_xbar.out_clusters.rsp_type()} quadrant_out_rsp_i,
-  input  ${quad_ctrl_quad_to_soc_xbar.in_clusters.req_type()} quadrant_in_req_i,
-  output ${quad_ctrl_quad_to_soc_xbar.in_clusters.rsp_type()} quadrant_in_rsp_o
+  output ${quad_ctrl_soc_to_quad_xbar.out_clusters.req_type()} quad_out_req_o,
+  input  ${quad_ctrl_soc_to_quad_xbar.out_clusters.rsp_type()} quad_out_rsp_i,
+  input  ${quad_ctrl_quad_to_soc_xbar.in_clusters.req_type()} quad_in_req_i,
+  output ${quad_ctrl_quad_to_soc_xbar.in_clusters.rsp_type()} quad_in_rsp_o
 );
 
   // Bingo HW Manager Signals
@@ -57,17 +57,21 @@ module ${name}_quad_ctrl
 
   ${module}
 
-  // Connect upward (SoC) narrow ports
+  // Connect SoC narrow ports
+  // Quad to SoC -> SoC Out
   assign soc_out_req_o = ${quad_ctrl_quad_to_soc_xbar.out_soc_narrow.req_name()};
   assign ${quad_ctrl_quad_to_soc_xbar.out_soc_narrow.rsp_name()} = soc_out_rsp_i;
-  assign ${quad_ctrl_quad_to_soc_xbar.in_clusters.req_name()} = soc_in_req_i;
-  assign soc_in_rsp_o = ${quad_ctrl_quad_to_soc_xbar.in_clusters.rsp_name()};
+  // SoC in -> SoC to Quad
+  assign ${quad_ctrl_soc_to_quad_xbar.in_soc_narrow.req_name()} = soc_in_req_i;
+  assign soc_in_rsp_o = ${quad_ctrl_soc_to_quad_xbar.in_soc_narrow.rsp_name()};
 
-  // Connect quadrant narrow ports
-  assign quadrant_out_req_o = ${quad_ctrl_soc_to_quad_xbar.out_clusters.req_name()};
-  assign ${quad_ctrl_soc_to_quad_xbar.out_clusters.rsp_name()} = quadrant_out_rsp_i;
-  assign ${quad_ctrl_soc_to_quad_xbar.in_soc_narrow.req_name()} = quadrant_in_req_i;
-  assign quadrant_in_rsp_o = ${quad_ctrl_soc_to_quad_xbar.in_soc_narrow.rsp_name()};
+  // Connect Quad narrow ports
+  // SoC to Quad -> Quad Out
+  assign quad_out_req_o = ${quad_ctrl_soc_to_quad_xbar.out_clusters.req_name()};
+  assign ${quad_ctrl_soc_to_quad_xbar.out_clusters.rsp_name()} = quad_out_rsp_i;
+  // Quad in -> Quad to SoC
+  assign ${quad_ctrl_quad_to_soc_xbar.in_clusters.req_name()} = quad_in_req_i;
+  assign quad_in_rsp_o = ${quad_ctrl_quad_to_soc_xbar.in_clusters.rsp_name()};
 
   // SoC to Quad Xbar -> Quad axi lite narrow
   <%

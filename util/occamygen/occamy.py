@@ -494,33 +494,23 @@ def am_connect_soc_wide_xbar_mem(am, am_soc_wide_xbar, occamy_cfg):
     return am_wide_hemaia_mem, am_wide_hemaia_xdma_data_io, am_wide_zero_mem
 
 def am_connect_quad_wide_and_narrow_xbar(am, am_quad_wide_xbar, am_quad_narrow_xbar, cluster_generators):
-    ##########################
-    # AM: Quad Wide XBar     #
-    ##########################
-    # We support different cluster has different TCDM Size
-    clusters_base_offset = []
-    clusters_tcdm_size = []
-    clusters_periph_size = []
-    clusters_zero_mem_size = []
-    nr_clusters = len(cluster_generators)
-    for i in range(nr_clusters):
-        clusters_base_offset.append(
-            cluster_generators[i].cfg["cluster_base_offset"])
-        clusters_tcdm_size.append(
-            # config is in KiB
-            cluster_generators[i].cfg["tcdm"]["size"] * 1024)
-        clusters_periph_size.append(
-            cluster_generators[i].cfg["cluster_periph_size"] * 1024)
-        clusters_zero_mem_size.append(
-            cluster_generators[i].cfg["zero_mem_size"] * 1024)
-
-        # assert memory region allocation
-        error_str = "ERROR: cluster peripherals, zero memory and tcdm \
-                    do not fit into the allocated memory region!!!"
-        assert (clusters_tcdm_size[i] + clusters_periph_size[i] + clusters_zero_mem_size[i]) <= \
-            clusters_base_offset[i], error_str    
-    
+    # We do not support different cluster tcdm size here
     cluster_base_addr = cluster_generators[0].cfg["cluster_base_addr"]
+    clusters_base_offset = cluster_generators[0].cfg["cluster_base_offset"]
+    clusters_tcdm_size = cluster_generators[0].cfg["tcdm"]["size"] * 1024
+    clusters_periph_size = cluster_generators[0].cfg["cluster_periph_size"] * 1024
+    clusters_zero_mem_size = cluster_generators[0].cfg["zero_mem_size"] * 1024
+    # print(f"Cluster Base Addr: {hex(cluster_base_addr)}")
+    # print(f"Cluster Base Offset: {hex(clusters_base_offset)}")
+    # print(f"Cluster TCDM Size: {hex(clusters_tcdm_size)}")
+    # print(f"Cluster Periph Size: {hex(clusters_periph_size)}")
+    # print(f"Cluster Zero Mem Size: {hex(clusters_zero_mem_size)}")
+    # assert memory region allocation
+    error_str = "ERROR: cluster peripherals, zero memory and tcdm \
+                do not fit into the allocated memory region!!!"
+    assert (clusters_tcdm_size + clusters_periph_size + clusters_zero_mem_size) <= \
+        clusters_base_offset, error_str
+    nr_clusters = len(cluster_generators)
     am_clusters = []
     am_clusters_periph = []
     am_clusters_leftover_spaces = []
@@ -532,37 +522,37 @@ def am_connect_quad_wide_and_narrow_xbar(am, am_quad_wide_xbar, am_quad_narrow_x
         am_clusters.append(
             am.new_leaf(
                 f"quad_wide_cluster_{i}_tcdm", # name
-                clusters_tcdm_size[i],         # length
-                cluster_base_addr + sum(clusters_base_offset[0:i]) # addr
+                clusters_tcdm_size,         # length
+                cluster_base_addr + i * clusters_base_offset # addr
             ).attach_to(am_quad_wide_xbar).attach_to(am_quad_narrow_xbar)
         )
         addrs_clusters.append(
-            (cluster_base_addr + sum(clusters_base_offset[0:i]), cluster_base_addr + sum(clusters_base_offset[0:i]) + clusters_tcdm_size[i])
+            (cluster_base_addr + i * clusters_base_offset, cluster_base_addr + i * clusters_base_offset + clusters_tcdm_size)
         )
         # Peripherals are only accessible from narrow xbar
         am_clusters_periph.append(
             am.new_leaf(
                 f"quad_narrow_cluster_{i}_periph", # name
-                clusters_periph_size[i],           # length
-                cluster_base_addr + sum(clusters_base_offset[0:i]) + clusters_tcdm_size[i] # addr
+                clusters_periph_size,           # length
+                cluster_base_addr + i * clusters_base_offset + clusters_tcdm_size # addr
             ).attach_to(am_quad_narrow_xbar)
         )
         addrs_clusters_periph.append(
-            (cluster_base_addr + sum(clusters_base_offset[0:i]) + clusters_tcdm_size[i],
-             cluster_base_addr + sum(clusters_base_offset[0:i]) + clusters_tcdm_size[i] + clusters_periph_size[i])
+            (cluster_base_addr + i * clusters_base_offset + clusters_tcdm_size,
+             cluster_base_addr + i * clusters_base_offset + clusters_tcdm_size + clusters_periph_size)
         )
         # We do not have the cluster zero mem
         # Remaining space is reserved for XDMA, and is only accessible from wide xbar
         am_clusters_leftover_spaces.append(
             am.new_leaf(
                 f"quad_wide_cluster_{i}_space_after_tcdm", # name
-                clusters_base_offset[i] - clusters_tcdm_size[i] - clusters_periph_size[i] - clusters_zero_mem_size[i], # length
-                cluster_base_addr + sum(clusters_base_offset[0:i]) + clusters_tcdm_size[i] + clusters_periph_size[i] + clusters_zero_mem_size[i] # addr
+                clusters_base_offset - clusters_tcdm_size - clusters_periph_size - clusters_zero_mem_size, # length
+                cluster_base_addr + i * clusters_base_offset + clusters_tcdm_size + clusters_periph_size + clusters_zero_mem_size # addr
             ).attach_to(am_quad_wide_xbar)
         )
         addrs_clusters_leftover_spaces.append(
-            (cluster_base_addr + sum(clusters_base_offset[0:i]) + clusters_tcdm_size[i] + clusters_periph_size[i] + clusters_zero_mem_size[i],
-             cluster_base_addr + sum(clusters_base_offset[0:i+1]))
+            (cluster_base_addr + i * clusters_base_offset + clusters_tcdm_size + clusters_periph_size + clusters_zero_mem_size,
+             cluster_base_addr + i * clusters_base_offset + clusters_base_offset)
         )  
         
     return am_clusters, am_clusters_periph, am_clusters_leftover_spaces, addrs_clusters, addrs_clusters_periph, addrs_clusters_leftover_spaces

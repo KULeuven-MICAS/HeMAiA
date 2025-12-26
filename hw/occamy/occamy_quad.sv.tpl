@@ -674,15 +674,15 @@ module ${name}_quad
     .soc_in_req_i       (quadrant_narrow_in_req_i   ),
     .soc_in_rsp_o       (quadrant_narrow_in_rsp_o   ),
     %if en_floonoc:
-    .quadrant_out_req_o (narrow_cluster_in_ctrl_req ),
-    .quadrant_out_rsp_i (narrow_cluster_in_ctrl_rsp ),
-    .quadrant_in_req_i  (narrow_cluster_out_ctrl_req),
-    .quadrant_in_rsp_o  (narrow_cluster_out_ctrl_rsp)
+    .quad_out_req_o     (narrow_cluster_in_ctrl_req ),
+    .quad_out_rsp_i     (narrow_cluster_in_ctrl_rsp ),
+    .quad_in_req_i      (narrow_cluster_out_ctrl_req),
+    .quad_in_rsp_o      (narrow_cluster_out_ctrl_rsp)
     %else:    
-    .quadrant_out_req_o (${narrow_cluster_in_ctrl.req_name()}),
-    .quadrant_out_rsp_i (${narrow_cluster_in_ctrl.rsp_name()}),
-    .quadrant_in_req_i  (${narrow_cluster_out_ctrl.req_name()}),
-    .quadrant_in_rsp_o  (${narrow_cluster_out_ctrl.rsp_name()})
+    .quad_out_req_o     (${narrow_cluster_in_ctrl.req_name()}),
+    .quad_out_rsp_i     (${narrow_cluster_in_ctrl.rsp_name()}),
+    .quad_in_req_i      (${narrow_cluster_out_ctrl.req_name()}),
+    .quad_in_rsp_o      (${narrow_cluster_out_ctrl.rsp_name()})
     %endif 
   );
 

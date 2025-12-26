@@ -53,8 +53,8 @@ CFG		     ?= $(ROOT)/target/rtl/cfg/lru.hjson
 .PHONY: all clean
 all: rtl
 
-.PHONY: rtl clint plic socctrl quadctrl soc
-.PHONY: clean-rtl-src clean-rtl clean-clint clean-plic clean-socctrl clean-quadctrl clean-snax-cluster clean-soc
+.PHONY: rtl clint plic socctrl quadperiph soc
+.PHONY: clean-rtl-src clean-rtl clean-clint clean-plic clean-socctrl clean-quadperiph clean-snax-cluster clean-soc
 
 clean: clean-rtl-src
 ###############
@@ -63,13 +63,13 @@ clean: clean-rtl-src
 
 
 
-rtl: clint plic socctrl quadctrl soc snax-cluster src/bender_targets.tmp
-clean-rtl: clean-clint clean-plic clean-socctrl clean-quadctrl clean-soc clean-snax-cluster
+rtl: clint plic socctrl quadperiph soc snax-cluster src/bender_targets.tmp
+clean-rtl: clean-clint clean-plic clean-socctrl clean-quadperiph clean-soc clean-snax-cluster
 clean-rtl-src:
 	rm -rf $(TARGET_SRC_DIR)
 	rm -rf .snax_cluster_occamygen_targets_group
 	rm -rf .misc_occamygen_targets_group
-	rm -rf .quadctrl_reggen_targets_group
+	rm -rf .quadperiph_reggen_targets_group
 	rm -rf .plic_reggen_targets_group
 	rm -rf .clint_reggen_targets_group
 	rm -rf .socctrl_reggen_targets_group

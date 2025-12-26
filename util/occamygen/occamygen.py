@@ -274,8 +274,6 @@ def main():
     # Quad Wide and Narrow Xbar
     am_clusters, am_clusters_periph, am_clusters_leftover_spaces, addrs_clusters, addrs_clusters_periph, addrs_clusters_leftover_spaces = occamy.am_connect_quad_wide_and_narrow_xbar(
         am, am_quad_wide_xbar, am_quad_narrow_xbar, cluster_generators)
-
-
     ####################################################################
     # Then we connect between xbars
     ####################################################################
@@ -503,7 +501,7 @@ def main():
     quad_ctrl_quad_to_soc_xbar = solder.AxiXbar(
         48,
         64,
-        soc_narrow_xbar.iw-1, # -1 because the quad to soc has two slave ports
+        soc_narrow_xbar.iw-1, # Very Important!!!!!!!!!! -1 because the quad to soc has two slave ports TODO: Make a clear documentation about this
         soc_narrow_xbar.uw,
         chipidw=occamy_cfg["hemaia_multichip"]["chip_id_width"], 
         name="quad_ctrl_quad_to_soc_xbar",  
