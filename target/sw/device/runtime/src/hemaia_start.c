@@ -10,8 +10,9 @@
 
 // KEEP IN MIND: All the functions here will be run by all the clusters
 
-#define SNRT_INIT_TLS
-#define SNRT_INIT_CLS
+// We do not need the init here since the host will clear the memory
+// #define SNRT_INIT_TLS
+// #define SNRT_INIT_CLS
 #define SNRT_CRT0_CALLBACK2
 #define SNRT_INIT_L1_ALLOC
 
@@ -35,6 +36,11 @@ static inline void snrt_init_tls() {
     // bandwidth of the DMA, the DM core initializes the TLS section
     // for every core in a cluster.
     if (snrt_is_dm_core()) {
+        printf("Core %d initializing TLS sections\n", snrt_cluster_core_idx());
+        printf("  .tbss: 0x%08x - 0x%08x\n", (uint32_t)(&__tbss_start),
+               (uint32_t)(&__tbss_end));
+        printf("  .tdata: 0x%08x - 0x%08x\n", (uint32_t)(&__tdata_start),
+               (uint32_t)(&__tdata_end));
         size = (size_t)(&__tdata_end) - (size_t)(&__tdata_start);
 
         // First initialize the DM core's .tdata section from main memory
@@ -80,6 +86,11 @@ static inline void snrt_init_cls() {
 
     // Only one core per cluster has to do this
     if (snrt_is_dm_core()) {
+        printf("Core %d initializing CLS sections\n", snrt_cluster_core_idx());
+        printf("  .cdata: 0x%08x - 0x%08x\n", (uint32_t)(&__cdata_start),
+               (uint32_t)(&__cdata_end));
+        printf("  .cbss: 0x%08x - 0x%08x\n", (uint32_t)(&__cbss_start),
+               (uint32_t)(&__cbss_end));
         void* ptr = (void*)snrt_cls_base_addr();
         size_t size;
 

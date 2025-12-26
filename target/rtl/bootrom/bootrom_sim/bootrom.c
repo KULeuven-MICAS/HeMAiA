@@ -16,7 +16,7 @@
 
 #include "chip_id.h"
 #include "sys_dma_bootrom.h"
-
+#include "occamy_memory_map.h"
 #define bool uint8_t
 #define true 1
 #define false 0
@@ -28,4 +28,12 @@ void bootrom() {
         chiplet_addr_transform(0x70000000),
         chiplet_addr_transform(0x1000000000ULL),
         stack_pointer - chiplet_addr_transform(0x70000000) - 1024);
+    // Initialize Cluster TCDM
+    for (uint32_t i = 0; i < N_CLUSTERS; i++) {
+        sys_dma_blk_memcpy(
+            chiplet_addr_transform(QUAD_WIDE_CLUSTER_0_TCDM_BASE_ADDR + i * CLUSTER_TCDM_SIZE),
+            chiplet_addr_transform(0x1000000000ULL),
+            CLUSTER_TCDM_SIZE);
+    }
+
 }
