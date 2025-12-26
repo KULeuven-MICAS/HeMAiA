@@ -24,5 +24,5 @@ int main(){
     // Now we can start the offload manager
     // This will be executed by all cores in the cluster
     // Each chiplet will start with this function and wait for the host to offload tasks
-    return bingo_offload_manager();
+    return bingo_hw_offload_manager();
 }
