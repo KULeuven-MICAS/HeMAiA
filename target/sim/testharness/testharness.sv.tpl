@@ -204,6 +204,8 @@ module testharness
   hemaia i_hemaia_${chip.coordinate[0]}_${chip.coordinate[1]} (
       .io_clk_i(mst_clk_i),
       .io_rst_ni(rst_ni),
+      .io_bypass_pll_division_i(const_zero),
+      .io_clk_obs_o(),
       .io_clk_periph_i(periph_clk_i),
       .io_rst_periph_ni(rst_periph_ni),
       .io_test_mode_i(const_zero),

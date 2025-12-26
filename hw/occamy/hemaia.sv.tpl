@@ -18,6 +18,8 @@ module hemaia (
     // Clocks, Boot, ChipId (14)
     inout wire        io_clk_i,
     inout wire        io_rst_ni,
+    inout wire        io_bypass_pll_division_i,
+    inout wire        io_clk_obs_o,
     inout wire        io_clk_periph_i,
     inout wire        io_rst_periph_ni,
     inout wire        io_test_mode_i,
@@ -117,6 +119,30 @@ module hemaia (
       .io_pullup_en_i(1'b0),
       .io_pulldown_en_i(1'b0),
       .io(io_rst_ni)
+  );
+
+  logic bypass_pll_division_i;
+  tc_digital_io bypass_pll_division_i_io (
+      .data_i(1'b0),
+      .data_o(bypass_pll_division_i),
+      .rte_i(rte),
+      .io_direction_oe_ni(1'b1),
+      .io_driving_strength_i(4'h0),
+      .io_pullup_en_i(1'b0),
+      .io_pulldown_en_i(1'b0),
+      .io(io_bypass_pll_division_i)
+  );
+
+  logic clk_obs_o;
+  tc_digital_io clk_obs_o_io (
+      .data_i(clk_obs_o),
+      .data_o(),
+      .rte_i(rte),
+      .io_direction_oe_ni(1'b0),
+      .io_driving_strength_i(4'hf),
+      .io_pullup_en_i(1'b0),
+      .io_pulldown_en_i(1'b0),
+      .io(io_clk_obs_o)
   );
 
   logic clk_periph_i;

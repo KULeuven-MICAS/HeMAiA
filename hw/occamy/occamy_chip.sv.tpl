@@ -49,8 +49,10 @@ import ${name}_pkg::*;
   // The Clock Reset Controller takes care of clk_i and rst_ni, should not be marked as false_path
   input  logic        clk_i,
   input  logic        rst_ni,
-  // clk_periph_i and rst_periph_ni are directly used by logics, should be marked as false_path
+  (* false_path *) input  logic        bypass_pll_division_i,
+  output logic        clk_obs_o,
   input  logic        clk_periph_i,
+  // clk_periph_i is directly used by logics, rst_periph_ni should be marked as false_path
   (* false_path *) input  logic        rst_periph_ni,
   // Quasi-static configuration signals, can be marked as false_path
   (* false_path *) input  logic        test_mode_i,
@@ -250,6 +252,8 @@ import ${name}_pkg::*;
     .axi_lite_rsp_o(hemaia_clk_rst_controller_rsp),
     .mst_clk_i(clk_i),
     .mst_rst_ni(rst_ni),
+    .bypass_pll_division_i(bypass_pll_division_i),
+    .clk_obs_o(clk_obs_o),
     .clk_o(clk_vec),
     .rst_no(rst_n_vec)
   );
