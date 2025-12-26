@@ -255,19 +255,26 @@ def prepare_and_copy_sim(repo_root: Path, tasks_info: List[Tuple[Path, str, Opti
     """Compile the Questasim simulation and copy outputs to each task directory."""
     # After make hemaia_system_vsim_preparation inside the container, we
     # compile on the host.  Running make hemaia_system_vsim outside
-    # generates target/sim/bin and target/sim/work-vsim.
+    # generates target/sim/bin/occamy_chip.vsim and target/sim/work-vsim.
     subprocess.run(["make", "hemaia_system_vsim"], cwd=repo_root, check=True)
-    sim_bin_src = repo_root / "target/sim/bin"
+    sim_bin_src = repo_root / "target/sim/bin/occamy_chip.vsim"
     work_vsim_src = repo_root / "target/sim/work-vsim"
     for task_dir, _, _ in tasks_info:
         for src in [sim_bin_src, work_vsim_src]:
             if not src.exists():
                 continue
             dst = task_dir / src.name
+            # 1. Clean up destination if it already exists
             if dst.exists():
-                shutil.rmtree(dst)
-            shutil.copytree(src, dst)
-
+                if dst.is_dir():
+                    shutil.rmtree(dst)
+                else:
+                    dst.unlink()
+            # 2. Copy based on source type
+            if src.is_dir():
+                shutil.copytree(src, dst)
+            else:
+                shutil.copy2(src, dst)
 
 def run_simulations(tasks_info: List[Tuple[Path, str, Optional[str]]]) -> Dict[str, bool]:
     """Run the compiled simulations in parallel and record pass/fail per task.
