@@ -32,6 +32,11 @@ max_compute_chiplet_x = max([chip.coordinate[0] for chip in chip_coordinates if 
 max_compute_chiplet_y = max([chip.coordinate[1] for chip in chip_coordinates if chip.type == ChipletType.COMPUTE])
 min_compute_chiplet_x = min([chip.coordinate[0] for chip in chip_coordinates if chip.type == ChipletType.COMPUTE])
 min_compute_chiplet_y = min([chip.coordinate[1] for chip in chip_coordinates if chip.type == ChipletType.COMPUTE])
+
+spi_slave_present = any(periph["name"] == "spis" for periph in occamy_cfg["peripherals"]["axi_lite_peripherals"])
+spi_master_present = any(periph["name"] == "spim" for periph in occamy_cfg["peripherals"]["axi_lite_narrow_peripherals"])
+i2c_present = any(periph["name"] == "i2c" for periph in occamy_cfg["peripherals"]["axi_lite_narrow_peripherals"])
+
 %>
 
 `timescale 1ns / 1ps
@@ -279,19 +284,25 @@ module testharness
       .io_uart_rts_no(),
       .io_uart_cts_ni(const_zero),
       .io_gpio(),
+% if spi_slave_present:
       .io_spis_sck_i(const_zero),
       .io_spis_csb_i(const_zero),
       .io_spis_sd(),
+% endif
+% if spi_master_present:
       .io_spim_sck_o(),
       .io_spim_csb_o(),
       .io_spim_sd(),
+% endif
+% if i2c_present:
+      .io_i2c_sda(),
+      .io_i2c_scl(),
+% endif
       .io_jtag_trst_ni(const_zero),
       .io_jtag_tck_i(const_zero),
       .io_jtag_tms_i(const_zero),
       .io_jtag_tdi_i(const_zero),
-      .io_jtag_tdo_o(),
-      .io_i2c_sda(),
-      .io_i2c_scl()
+      .io_jtag_tdo_o()
   );
 
   uartdpi #(

@@ -3,6 +3,16 @@
 // SPDX-License-Identifier: SHL-0.51
 
 // Author: Yunhao Deng <yunhao.deng@kuleuven.be>
+<% 
+  spi_slave_present = any(periph["name"] == "spis" for periph in occamy_cfg["peripherals"]["axi_lite_peripherals"])
+%>
+<% 
+  spi_master_present = any(periph["name"] == "spim" for periph in occamy_cfg["peripherals"]["axi_lite_narrow_peripherals"])
+%>
+<% 
+  i2c_present = any(periph["name"] == "i2c" for periph in occamy_cfg["peripherals"]["axi_lite_narrow_peripherals"])
+%>
+
 
 module hemaia (
     // Clocks, Boot, ChipId (14)
@@ -54,23 +64,29 @@ module hemaia (
     inout wire        io_uart_cts_ni,
     // `gpio` Interface (8)
     inout wire [ 7:0] io_gpio,
+% if spi_slave_present: 
     // `SPI Slave` for Debugging Purposes (6)
     inout wire        io_spis_sck_i,
     inout wire        io_spis_csb_i,
     inout wire [ 3:0] io_spis_sd,
+% endif
+% if spi_master_present:
     // SPI Master Interface (6)
     inout wire        io_spim_sck_o,
     inout wire        io_spim_csb_o,
     inout wire [ 3:0] io_spim_sd,
+% endif
+% if i2c_present:
+    // I2C Interface (2)
+    inout wire        io_i2c_sda,
+    inout wire        io_i2c_scl,
+% endif
     // `jtag` Interface (5)
     inout wire        io_jtag_trst_ni,
     inout wire        io_jtag_tck_i,
     inout wire        io_jtag_tms_i,
     inout wire        io_jtag_tdi_i,
-    inout wire        io_jtag_tdo_o,
-    // I2C Interface (2)
-    inout wire        io_i2c_sda,
-    inout wire        io_i2c_scl
+    inout wire        io_jtag_tdo_o
 );
 
   localparam int NumGpio = 8;
@@ -546,6 +562,7 @@ module hemaia (
     end
   endgenerate
 
+% if spi_slave_present:
   logic spis_sck_i;
   logic spis_csb_i;
   logic [3:0] spis_sd_o;
@@ -587,7 +604,8 @@ module hemaia (
       .io_pulldown_en_i(1'b0),
       .io(io_spis_sd)
   );
-
+% endif
+% if spi_master_present:
   logic spim_sck_o;
   logic spim_sck_en_o;
   logic [1:0] spim_csb_o;
@@ -631,7 +649,7 @@ module hemaia (
       .io_pulldown_en_i(1'b0),
       .io(io_spim_sd)
   );
-
+% endif
   logic jtag_trst_ni;
   logic jtag_tck_i;
   logic jtag_tms_i;
@@ -688,6 +706,7 @@ module hemaia (
       .io(io_jtag_tdo_o)
   );
 
+% if i2c_present:
   logic i2c_sda_i;
   logic i2c_sda_o;
   logic i2c_sda_en_o;
@@ -714,6 +733,7 @@ module hemaia (
       .io_pulldown_en_i(1'b0),
       .io(io_i2c_scl)
   );
+% endif
 
   tc_digital_io_special_block special_blocks (.rte_o(rte));
   tc_digital_io_power_supply #(.VerticalIO(1'b0)) left_io_power_supply[3:0] (.rte_i(rte));
