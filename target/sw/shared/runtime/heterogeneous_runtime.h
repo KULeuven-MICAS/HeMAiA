@@ -104,30 +104,63 @@ inline void wait_host_sw_interrupt_clear(uint8_t chip_id) {
     } while (reg_value);
 #endif
 }
+/**
+ * @brief lock a mutex, blocking
+ * @details test-and-set (tas) implementation of a lock.
+ *          Declare mutex with `static volatile uint32_t mtx = 0;`
+ */
+static inline void mutex_tas_acquire(volatile uint32_t* pmtx) {
+    asm volatile(
+        "li            x5,1          # x5 = 1\n"
+        "1:\n"
+        "  amoswap.w.aq  x5,x5,(%0)   # x5 = oldlock & lock = 1\n"
+        "  bnez          x5,1b      # Retry if previously set)\n"
+        : "+r"(pmtx)
+        :
+        : "x5");
+}
+
+/**
+ * @brief lock a mutex, blocking
+ * @details test-and-test-and-set (ttas) implementation of a lock.
+ *          Declare mutex with `static volatile uint32_t mtx = 0;`
+ */
+static inline void mutex_ttas_acquire(volatile uint32_t* pmtx) {
+    asm volatile(
+        "1:\n"
+        "  lw x5, 0(%0)\n"
+        "  bnez x5, 1b\n"
+        "  li x5,1          # x5 = 1\n"
+        "2:\n"
+        "  amoswap.w.aq  x5,x5,(%0)   # x5 = oldlock & lock = 1\n"
+        "  bnez          x5,2b      # Retry if previously set)\n"
+        : "+r"(pmtx)
+        :
+        : "x5");
+}
+
+/**
+ * @brief Release the mutex
+ */
+static inline void mutex_release(volatile uint32_t* pmtx) {
+    asm volatile("amoswap.w.rl  x0,x0,(%0)   # Release lock by storing 0\n"
+                 : "+r"(pmtx));
+}
 
 static inline void clear_host_sw_interrupt(uint8_t chip_id) {
     clear_host_sw_interrupt_unsafe(chip_id);
     wait_host_sw_interrupt_clear(chip_id);
 }
-
-static inline volatile uint32_t* __attribute__((const)) get_mutex_ptr_host() {
-    #if __riscv_xlen == 64
-    uint64_t comm_buffer_ptr_addr = chiplet_addr_transform((uint64_t)soc_ctrl_scratch_ptr(2));
-    comm_buffer_t* comm_buffer_ptr;
-    comm_buffer_ptr = (comm_buffer_t*)readd((uintptr_t)comm_buffer_ptr_addr);
-    return &(comm_buffer_ptr->lock);
-    #elif __riscv_xlen == 32
-    return 0;
-    #endif
+static inline volatile uint32_t* get_shared_lock(
+    volatile comm_buffer_t* comm_buffer_ptr) {
+    return &((*comm_buffer_ptr).lock);
 }
 
-static inline volatile uint32_t* __attribute__((const)) get_mutex_ptr_device() {
+static inline volatile uint32_t* __attribute__((const)) get_mutex_ptr_host(volatile comm_buffer_t* comm_buffer_ptr) {
     #if __riscv_xlen == 64
-    return 0;
+    volatile uint32_t* lock = get_shared_lock(comm_buffer_ptr);
+    return lock;
     #elif __riscv_xlen == 32
-    uint32_t comm_buffer_ptr_addr = (uint32_t)soc_ctrl_scratch_ptr(2);
-    comm_buffer_t* comm_buffer_ptr;
-    comm_buffer_ptr = (comm_buffer_t*)readw((uintptr_t)comm_buffer_ptr_addr);
-    return &(comm_buffer_ptr->lock);
+    return 0;
     #endif
 }

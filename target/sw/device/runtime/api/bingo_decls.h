@@ -3,6 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Fanchen Kong <fanchen.kong@kuleuven.be>
+
+typedef struct {
+  uint32_t dev_arg_list_ptr;
+  uint32_t dev_kernel_list_ptr;
+  uint32_t gid_to_dev_tid_list_ptr;
+} bingo_hw_offload_unit_t;
+
+
 typedef struct {
     // Here are the fields that are used by the communication between the host and the cluster
     volatile struct l2_layout *l2l_ptr;       // pointer to the L2 layout

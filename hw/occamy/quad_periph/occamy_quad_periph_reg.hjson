@@ -115,5 +115,20 @@
         }
       ]
     },
+    { name: "HOST_INIT_DONE",
+      desc: "Host initialization done",
+      swaccess: "rw",
+      hwaccess: "hro",
+      fields: [
+        {
+          bits: "31:0",
+          resval: "0",
+          name: "HOST_INIT_DONE",
+          desc: '''
+                Host initialization done.
+                '''
+        }
+      ]
+    },
   ]
 }

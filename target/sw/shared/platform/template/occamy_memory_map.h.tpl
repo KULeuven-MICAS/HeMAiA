@@ -172,6 +172,10 @@ inline uintptr_t quad_ctrl_start_bingo_hw_manager_addr(){
     return QUAD_AXI_LITE_NARROW_PERIPHERALS_BASE_ADDR + OCCAMY_QUAD_PERIPH_START_BINGO_HW_MANAGER_REG_OFFSET;
 }
 
+inline uintptr_t quad_ctrl_host_init_done_addr(){
+    return QUAD_AXI_LITE_NARROW_PERIPHERALS_BASE_ADDR + OCCAMY_QUAD_PERIPH_HOST_INIT_DONE_REG_OFFSET;
+}
+
 inline uintptr_t quad_ctrl_host_ready_done_queue_addr(){
     return QUAD_HOST_READY_DONE_QUEUE_BASE_ADDR;
 }

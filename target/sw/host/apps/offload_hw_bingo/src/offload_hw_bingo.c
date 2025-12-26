@@ -45,9 +45,7 @@ int main() {
     ///////////////////////////////
     // 4. Run the bingo runtime
     ///////////////////////////////
-
-    printf("Chip(%x, %x): [Host] Start Bingo\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
-    int ret = kernel_execution();
+    int ret = kernel_execution((comm_buffer_t *)comm_buffer_ptr);
     // By default the clusters will pull up the interrupt line once the tasks are done
     // So we clean up the interrupt line here
     clear_host_sw_interrupt(current_chip_id);

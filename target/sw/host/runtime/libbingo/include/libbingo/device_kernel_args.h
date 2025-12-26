@@ -157,8 +157,7 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_kernel_minimal_cfg_start_gemm_and_wait_args{
 
 // BINGO Dummy kernel args
 __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_dummy_args {
-  uint32_t csr_addr;            
-  uint32_t csr_value;    
+  uint32_t dummy_input;            
 } __snax_bingo_kernel_dummy_args_t;
 
 // BINGO Exit kernel args

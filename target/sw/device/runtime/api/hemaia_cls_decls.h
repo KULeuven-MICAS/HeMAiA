@@ -61,6 +61,7 @@
 typedef struct {
     snrt_l1_allocator_t l1_allocator; //shared pointer to the L1 allocator
     bingo_offload_unit_t bingo_offload_unit; // shared pointer to the offload unit
+    bingo_hw_offload_unit_t bingo_hw_offload_unit; // shared pointer to the hw offload unit
     uint32_t* shared_ptrs[NUM_CLS_SHARED_PTRS]; // shared pointers for the arguments
 } cls_t;
 

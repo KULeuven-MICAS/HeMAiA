@@ -1487,29 +1487,16 @@ SNAX_LIB_DEFINE void __snax_kernel_minimal_cfg_start_gemm_and_wait(void *arg)
 
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_dummy(void *arg){
     // Notice the variables here are all local variables at the TLS section
-    uint32_t csr_addr = ((uint32_t *)arg)[0];
-    uint32_t csr_value = ((uint32_t *)arg)[1];
-    uint32_t read_value;
-    uint32_t return_value = 0;
-    // Write the csr
-    csrw_ss(csr_addr, csr_value);
-    // Read back the csr
-    read_value = csrr_ss(csr_addr);
-    if (read_value == csr_value)
-    {
-        return_value = 1; // success
-    }
-    else
-    {
-        return_value = 0; // fail
-    }
-    return return_value;
+    uint32_t dummy_input = ((uint32_t *)arg)[0];
+    printf("[Cluster %d Core %d]: Bingo Dummy Kernel called with input %d\r\n", snrt_cluster_idx(), snrt_cluster_core_idx(), dummy_input);
+    return 0;
+
 }
 
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_exit(void *arg){
     // This is a special kernel to exit the bingo hw manager loop
     uint32_t exit_code = ((uint32_t *)arg)[0];
-    printf("[Cluster %d Core %d] Exiting with code %d\r\n", snrt_cluster_idx(), snrt_cluster_core_idx(), exit_code);
+    printf("[Cluster %d Core %d]: Exiting with code %d\r\n", snrt_cluster_idx(), snrt_cluster_core_idx(), exit_code);
     return 1;
 }
 
