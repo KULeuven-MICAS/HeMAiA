@@ -363,3 +363,10 @@ void bingo_task_offload(bingo_task_t *task);
 void bingo_runtime_schedule(bingo_task_t **task_list, uint32_t num_tasks);
 
 void bingo_close_all_clusters(bingo_task_t **task_list, uint32_t num_tasks);
+
+/////////////////////////
+// BINGO HW Scheduler //
+/////////////////////////
+void bingo_hw_scheduler_init(uint32_t dev_arg_base_addr, uint32_t dev_kernel_base_addr, uint32_t global_task_id_to_dev_task_id_base_addr, uint64_t task_desc_list_base, uint32_t num_tasks);
+
+uint32_t bingo_hw_scheduler(uint64_t *host_arg_list, uint64_t *host_kernel_list, int32_t *global_task_id_to_host_task_id);
