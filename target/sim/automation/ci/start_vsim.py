@@ -257,7 +257,7 @@ def prepare_and_copy_sim(repo_root: Path, tasks_info: List[Tuple[Path, str, Opti
     Strategy: treat everything under target/sim as an artifact tree and
     replicate the same relative paths under each task directory.
     """
-    subprocess.run(["make", "hemaia_system_vsim"], cwd=repo_root, check=True)
+    subprocess.run(["make", "hemaia_system_vsim", "SIM_WITH_WAVEFORM=0"], cwd=repo_root, check=True)
 
     sim_root = repo_root / "target/sim"
     artifacts = [
