@@ -159,7 +159,7 @@ ifneq ($(SIM_WITH_NETLIST), 0)
 else ifneq ($(SIM_WITH_MACRO), 0)
 	@$(OCCAMYGEN) --cfg $(CFG) --outdir testharness --mem-macro-testharness-sv $<
 else
-	@$(OCCAMYGEN) --cfg $(CFG) --outdir testharness --multichip-testharness-sv $<
+	@$(OCCAMYGEN) --cfg $(CFG) --outdir testharness --testharness-sv $<
 endif
 
 clean-testharness:

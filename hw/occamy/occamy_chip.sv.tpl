@@ -99,7 +99,6 @@ import ${name}_pkg::*;
   input  logic [31:0] gpio_d_i,
   output logic [31:0] gpio_d_o,
   output logic [31:0] gpio_oe_o,
-
 % if spi_slave_present: 
   // `SPI Slave` for Debugging Purposes
   input  logic        spis_sck_i,
@@ -108,7 +107,6 @@ import ${name}_pkg::*;
   output logic [3:0]  spis_sd_en_o,
   input  logic [3:0]  spis_sd_i,
 % endif
-
 % if spi_master_present:
   // SPI Master Interface
   output logic        spim_sck_o,
@@ -119,7 +117,6 @@ import ${name}_pkg::*;
   output logic [3:0]  spim_sd_en_o,
   input  logic [3:0]  spim_sd_i,
 % endif
-
 % if i2c_present:
   // I2C Interface
   output logic        i2c_sda_o,
@@ -129,7 +126,6 @@ import ${name}_pkg::*;
   input  logic        i2c_scl_i,
   output logic        i2c_scl_en_o,
 % endif
-
   // `jtag` Interface
   input  logic        jtag_trst_ni,
   input  logic        jtag_tck_i,

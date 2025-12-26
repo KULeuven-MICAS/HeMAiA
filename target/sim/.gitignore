@@ -7,6 +7,8 @@
 /apps/.rtlbinary
 /apps/**/*.hex
 /testharness/testharness.sv
+/testharness/testharness_macro.sv
+/testharness/testharness_netlist.sv
 /logs
 /work-vcs
 /work.lib++
