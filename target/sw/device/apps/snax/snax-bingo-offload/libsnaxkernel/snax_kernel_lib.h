@@ -1516,5 +1516,6 @@ SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
     // SNAX_EXPORT_FUNC(__snax_kernel_gemm),
     // SNAX_EXPORT_FUNC(__snax_kernel_minimal_cfg_start_gemm_and_wait),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_dummy),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_exit),
     SNAX_SYMTAB_END
 };

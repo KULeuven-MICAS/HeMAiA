@@ -607,8 +607,29 @@ void bingo_close_all_clusters(bingo_task_t **task_list, uint32_t num_tasks){
     }
 }
 
-
+/////////////////////////
 // For the HW scheduler
+/////////////////////////
+uint32_t bingo_hw_scheduler_get_global_task_id(){
+    return readw((uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_host_ready_done_queue_addr()));
+}
+void bingo_hw_scheduler_write_done_queue(uint32_t global_task_id){
+    writew(global_task_id, (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_host_ready_done_queue_addr()));
+}
+
+
+int32_t bingo_hw_scheduler_get_host_task_id(int32_t* global_task_id_to_host_task_id, uint32_t global_task_id){
+    return global_task_id_to_host_task_id[global_task_id];
+}
+
+int64_t* bingo_hw_scheduler_get_host_arg(int64_t* host_arg_list_base, uint32_t host_task_id){
+    return &host_arg_list_base[host_task_id];
+}
+
+int64_t* bingo_hw_scheduler_get_host_kernel(int64_t* host_kernel_list_base, uint32_t host_task_id){
+    return &host_kernel_list_base[host_task_id];
+}
+
 // The task will be initized directly on a .h file generated from the mini compiler
 // So the whole scheduling process will be handled by the hardware scheduler
 // The host-side work is just in the begining to write the task_list_ptr and #num_tasks to the quad ctrl reg
@@ -650,21 +671,9 @@ uint32_t bingo_hw_scheduler(uint64_t* host_arg_list, uint64_t* host_kernel_list,
     uint32_t err=0;
     while (1) {
         // First read the ready queue
-        current_global_task_id = readw((uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_host_ready_done_queue_addr()));
-        if(current_global_task_id >= 0xFFFF){
-            // Sth went wrong
-            err=1;
-            break;
-        }
-        mutex_tas_acquire(lock);
-        printf("Chip(%x, %x): [Host] Get task id %d from ready queue\r\n",
-               get_current_chip_loc_x(), get_current_chip_loc_y(),
-               current_global_task_id);
-        mutex_release(lock);
+        current_global_task_id = bingo_hw_scheduler_get_global_task_id();
         // Then we get the host task id from the global task id
-        current_host_task_id = global_task_id_to_host_task_id[current_global_task_id];
-        
-        
+        current_host_task_id = bingo_hw_scheduler_get_host_task_id(global_task_id_to_host_task_id, current_global_task_id);
         if (current_host_task_id == -1){
             
             printf("Chip(%x, %x): [Host] Error: Invalid host task id for global task id %d\r\n",
@@ -674,13 +683,19 @@ uint32_t bingo_hw_scheduler(uint64_t* host_arg_list, uint64_t* host_kernel_list,
             break;
         }
         // Then get the task arg and fn ptr from the task list
-        current_arg_ptr = host_arg_list[current_host_task_id];
-        current_kernel_ptr = host_kernel_list[current_host_task_id];
+        current_arg_ptr = *bingo_hw_scheduler_get_host_arg(host_arg_list, current_host_task_id);
+        current_kernel_ptr = *bingo_hw_scheduler_get_host_kernel(host_kernel_list, current_host_task_id);
+        mutex_tas_acquire(lock);
+        printf("Chip(%x, %x): [Host] Executing HW scheduled task: global id %d -> host id %d, arg ptr 0x%lx, kernel ptr 0x%lx\r\n",
+               get_current_chip_loc_x(), get_current_chip_loc_y(),
+               current_global_task_id, current_host_task_id,
+               current_arg_ptr, current_kernel_ptr);
+        mutex_release(lock);
         // then run the host kernel
-        kernel_return_value = ((uint32_t (*)(uint32_t))current_kernel_ptr)(current_arg_ptr);
+        kernel_return_value = ((uint64_t (*)(uint64_t))current_kernel_ptr)(current_arg_ptr);
         if (kernel_return_value == 0){
             // The normal case, write back to the done queue
-            writew(current_global_task_id, (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_host_ready_done_queue_addr()));
+            bingo_hw_scheduler_write_done_queue(current_global_task_id);
         } else if (kernel_return_value == 1){
             // All done
             printf("Chip(%x, %x): [Host] HW Bingo scheduler completed all tasks successfully\r\n",

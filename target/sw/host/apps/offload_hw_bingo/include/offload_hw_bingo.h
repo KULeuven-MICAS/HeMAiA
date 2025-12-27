@@ -72,8 +72,6 @@ int kernel_execution(volatile comm_buffer_t* comm_buffer_ptr){
                                       &host_kernel_list[0],
                                       &global_task_id_to_host_task_id[0],
                                       comm_buffer_ptr);
-    // Debug to make the host wfi
-    wfi();
     return 0;
 }
 

@@ -309,13 +309,13 @@ inline uint32_t bingo_hw_offload_manager(){
         // Blocking read
         cur_global_task_id = read_bingo_hw_manager_ready_queue();
 
-        printf("[Cluster %d Core %d]: HW offload manager got task %d from ready queue\r\n",
+        printf("[Cluster %d Core %d]: Get task id %d from ready queue\r\n",
                snrt_cluster_idx(), snrt_cluster_core_idx(),
                cur_global_task_id);
         // Then we get the dev task id from the global task id
         cur_dev_task_id = bingo_hw_offload_get_dev_task_id(cur_global_task_id);
         if (cur_dev_task_id == -1){
-            printf("[Cluster %d Core %d]: Error: HW offload manager got invalid dev task id for global task id %d\r\n",
+            printf("[Cluster %d Core %d]: Error: Get invalid dev task id for global task id %d\r\n",
                snrt_cluster_idx(), snrt_cluster_core_idx(),
                cur_global_task_id);
             err=1;
@@ -323,24 +323,17 @@ inline uint32_t bingo_hw_offload_manager(){
         }
         cur_arg_ptr = bingo_hw_offload_get_arg_ptr(cur_dev_task_id);
         cur_kernel_ptr = bingo_hw_offload_get_kernel_ptr(cur_dev_task_id);
-        printf("[Cluster %d Core %d]: For global task id %d, dev task id=%d, arg ptr=0x%x, kernel ptr=0x%x\r\n",
+        printf("[Cluster %d Core %d]: Global task id %d->dev task id=%d, arg ptr=0x%x, kernel ptr=0x%x\r\n",
                snrt_cluster_idx(), snrt_cluster_core_idx(),
                cur_global_task_id,
                cur_dev_task_id,
                cur_arg_ptr,
                cur_kernel_ptr);
-        printf("[Cluster %d Core %d]: Executing task %d now\r\n",
-               snrt_cluster_idx(), snrt_cluster_core_idx(),
-               cur_global_task_id);
         // Execute the function
         kernel_return_value = ((uint32_t (*)(uint32_t))cur_kernel_ptr)(cur_arg_ptr);
-        printf("[Cluster %d Core %d]: Task %d executed with return value %d\r\n",
-               snrt_cluster_idx(), snrt_cluster_core_idx(),
-               cur_global_task_id,
-               kernel_return_value);
         if (kernel_return_value == 0){
             // Step 3: Write the Done queue to notify the bingo hw scheduler
-            printf("[Cluster %d Core %d]: Writing done queue for task %d\r\n",
+            printf("[Cluster %d Core %d]: Writing done queue for task id %d\r\n",
                    snrt_cluster_idx(),
                    snrt_cluster_core_idx(),
                    cur_global_task_id);
