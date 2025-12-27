@@ -161,10 +161,8 @@ module ${name}_quad_ctrl
   //  64bit Quad AXI Lite Periph: Bingo HW Manager  //
   ////////////////////////////////////////////////////
   // ADDR Space for the axi lite periph
-  localparam addr_t TASK_QUEUE_BASE         = QuadAXILiteBaseAddr + 0 * 4096;
-  localparam addr_t CHIPLET_DONE_QUEUE_BASE = QuadAXILiteBaseAddr + 1 * 4096;
-  localparam addr_t LOCAL_DONE_QUEUE_BASE   = QuadAXILiteBaseAddr + 2 * 4096;
-  localparam addr_t READY_QUEUE_BASE        = QuadAXILiteBaseAddr + 3 * 4096;
+  localparam addr_t CHIPLET_DONE_QUEUE_BASE    = QuadAXILiteBaseAddr + 0 * 4096;
+  localparam addr_t HOST_READY_DONE_QUEUE_BASE = QuadAXILiteBaseAddr + 1 * 4096;
   // We will use the CSR interface for the cores to read ready queue and write done queue
   // CSR Signals for the bingo hw manager
   // The +1 here is due to the host will also act as a core in cluster
@@ -216,10 +214,10 @@ module ${name}_quad_ctrl
     .from_remote_axi_lite_resp_o        (${quad_ctrl_axi_lite_xbar.out_bingo_hw_scheduler_chiplet_done_queue.rsp_name()}),
     // Since we set READY_AND_DONE_QUEUE_INTERFACE_TYPE=1
     // We do not use the axi lite slave for ready and done queue
-    .done_queue_base_addr_i             (LOCAL_DONE_QUEUE_BASE        ),
+    .done_queue_base_addr_i             ('0                           ),
     .done_queue_axi_lite_req_i          ('0                           ),
     .done_queue_axi_lite_resp_o         (/* not used */               ),
-    .ready_queue_base_addr_i            (READY_QUEUE_BASE             ),
+    .ready_queue_base_addr_i            ('0                           ),
     .ready_queue_axi_lite_req_i         ('0                           ),
     .ready_queue_axi_lite_resp_o        (/* not used */               ),
     .csr_req_i                          (bingo_hw_manager_csr_req                     ),

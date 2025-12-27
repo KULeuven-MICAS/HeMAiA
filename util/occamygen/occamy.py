@@ -391,7 +391,7 @@ def am_connect_quad_axi_lite_xbar(am, am_quad_axi_lite_xbar, occamy_cfg):
     am_quad_axi_lite_peripherals = []
     am_quad_chiplet_done_queue = am.new_leaf("quad_chiplet_done_queue",
                                                 4096,
-                                                occamy_cfg["s1_quadrant"]["quad_axi_lite_base_addr"] + 4096
+                                                occamy_cfg["s1_quadrant"]["quad_axi_lite_base_addr"]
     ).attach_to(am_quad_axi_lite_xbar)
     addrs_quad_axi_lite_peripherals.append(
         (occamy_cfg["s1_quadrant"]["quad_axi_lite_base_addr"], occamy_cfg["s1_quadrant"]["quad_axi_lite_base_addr"] + 4096)
@@ -400,7 +400,7 @@ def am_connect_quad_axi_lite_xbar(am, am_quad_axi_lite_xbar, occamy_cfg):
     
     am_quad_host_ready_done_intf = am.new_leaf("quad_host_ready_done_queue",
                                                 4096,
-                                                occamy_cfg["s1_quadrant"]["quad_axi_lite_base_addr"] + 2 * 4096
+                                                occamy_cfg["s1_quadrant"]["quad_axi_lite_base_addr"] + 1 * 4096
     ).attach_to(am_quad_axi_lite_xbar)
     addrs_quad_axi_lite_peripherals.append(
         (occamy_cfg["s1_quadrant"]["quad_axi_lite_base_addr"] + 4096, occamy_cfg["s1_quadrant"]["quad_axi_lite_base_addr"] + 2 * 4096)
