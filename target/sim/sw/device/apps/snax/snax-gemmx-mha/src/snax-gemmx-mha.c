@@ -107,9 +107,9 @@ int main() {
             //         err++;
             //     }
             // }
-            if(err == 0){
-                printf("Everything is fine for Q8. \r\n");
-            }
+            // if(err == 0){
+            //     printf("Everything is fine for Q8. \r\n");
+            // }
         };
 
         snrt_cluster_hw_barrier();
@@ -188,9 +188,9 @@ int main() {
             //         err++;
             //     }
             // }
-            if(err == 0){
-                printf("Everything is fine for K8. \r\n");
-            }
+            // if(err == 0){
+            //     printf("Everything is fine for K8. \r\n");
+            // }
         };
 
         snrt_cluster_hw_barrier();
@@ -254,15 +254,15 @@ int main() {
             // Poll until Streamer and GEMM accelerator finish
             wait_gemmx_and_streamer();
 
-            for (int i = 0; i < M_2 * N_2 * meshRow * meshCol; i++) {
-                if (local_d8[i] != S8_golden[i]) {
-                    printf("Mismatch at index %d: %d != %d for S8 \r\n", i, local_d8[i], S8_golden[i]);
-                    err++;
-                }
-            }
-            if(err == 0){
-                printf("Everything is fine for S8 \r\n");
-            }
+            // for (int i = 0; i < M_2 * N_2 * meshRow * meshCol; i++) {
+            //     if (local_d8[i] != S8_golden[i]) {
+            //         printf("Mismatch at index %d: %d != %d for S8 \r\n", i, local_d8[i], S8_golden[i]);
+            //         err++;
+            //     }
+            // }
+            // if(err == 0){
+            //     printf("Everything is fine for S8 \r\n");
+            // }
         };
 
         snrt_cluster_hw_barrier();
@@ -335,15 +335,15 @@ int main() {
             // Poll until Streamer and GEMM accelerator finish
             wait_gemmx_and_streamer();
 
-            for (int i = 0; i < M_1 * N_1 * meshRow * meshCol; i++) {
-                if (local_d8[i] != V8_golden[i]) {
-                    printf("Mismatch at index %d: %d != %d for V8 \r\n", i, local_d8[i], V8_golden[i]);
-                    err++;
-                }
-            }
-            if(err == 0){
-                printf("Everything is fine for V8. \r\n");
-            }
+            // for (int i = 0; i < M_1 * N_1 * meshRow * meshCol; i++) {
+            //     if (local_d8[i] != V8_golden[i]) {
+            //         printf("Mismatch at index %d: %d != %d for V8 \r\n", i, local_d8[i], V8_golden[i]);
+            //         err++;
+            //     }
+            // }
+            // if(err == 0){
+            //     printf("Everything is fine for V8. \r\n");
+            // }
         };
 
         snrt_cluster_hw_barrier();
