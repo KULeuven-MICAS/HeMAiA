@@ -5,15 +5,17 @@
 # Luca Colagrande <colluca@iis.ee.ethz.ch>
 
 # Add user applications to APPS variable
-APPS  = hello_world
-APPS += idle_cluster_0
-APPS += idle_cluster_1
-APPS += idle_cluster_2
-APPS += idle_cluster_3
-APPS += idle_all_clk_off
-APPS += idle_all_clk_on
-APPS += offload
-APPS += offload_cluster_2
+# APPS  = hello_world
+# APPS += idle_cluster_0
+# APPS += idle_cluster_1
+# APPS += idle_cluster_2
+# APPS += idle_cluster_3
+# APPS += idle_all_clk_off
+# APPS += idle_all_clk_on
+# APPS += offload
+# APPS += offload_cluster_2
+# APPS += offload_cluster_1
+APPS += offload_nvsa
 
 TARGET ?= all
 
