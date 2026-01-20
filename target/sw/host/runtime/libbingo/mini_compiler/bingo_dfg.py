@@ -795,13 +795,10 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
     def _emit_list_allocations(self, f, chiplet_id):
         """Emit allocations for device/host argument and kernel lists."""
         f.write(f"        // 2. Prepare device/host arg/kernel lists\n")
-        f.write(f"        uint32_t num_dev_tasks = num_dev_tasks_chip_{chiplet_id:02x};\n")
-        f.write(f"        uint32_t num_host_tasks = num_host_tasks_chip_{chiplet_id:02x};\n")
-        
-        f.write(f"        uint32_t* device_arg_list = (uint32_t*)bingo_l3_alloc(0x{chiplet_id:02x}, num_dev_tasks * sizeof(uint32_t));\n")
-        f.write(f"        uint32_t* device_kernel_list = (uint32_t*)bingo_l3_alloc(0x{chiplet_id:02x}, num_dev_tasks * sizeof(uint32_t));\n")
-        f.write(f"        uint64_t* host_arg_list = (uint64_t*)bingo_l3_alloc(0x{chiplet_id:02x}, num_host_tasks * sizeof(uint64_t));\n")
-        f.write(f"        uint64_t* host_kernel_list = (uint64_t*)bingo_l3_alloc(0x{chiplet_id:02x}, num_host_tasks * sizeof(uint64_t));\n\n")
+        f.write(f"        uint32_t* device_arg_list_chip_{chiplet_id:02x} = (uint32_t*)bingo_l3_alloc(0x{chiplet_id:02x}, num_dev_tasks_chip_{chiplet_id:02x} * sizeof(uint32_t));\n")
+        f.write(f"        uint32_t* device_kernel_list_chip_{chiplet_id:02x} = (uint32_t*)bingo_l3_alloc(0x{chiplet_id:02x}, num_dev_tasks_chip_{chiplet_id:02x} * sizeof(uint32_t));\n")
+        f.write(f"        uint64_t* host_arg_list_chip_{chiplet_id:02x} = (uint64_t*)bingo_l3_alloc(0x{chiplet_id:02x}, num_host_tasks_chip_{chiplet_id:02x} * sizeof(uint64_t));\n")
+        f.write(f"        uint64_t* host_kernel_list_chip_{chiplet_id:02x} = (uint64_t*)bingo_l3_alloc(0x{chiplet_id:02x}, num_host_tasks_chip_{chiplet_id:02x} * sizeof(uint64_t));\n\n")
 
     def _emit_task_initialization(self, f, chiplet_id, sorted_nodes, handle_name_map):
         """Emit initialization for task arguments."""
@@ -835,16 +832,16 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                     field_assignments = node.kernel_args.get_c_field_assignments(handle_name_map)
                     for field, value in field_assignments.items():
                             f.write(f"        {args_var}->{field} = {value};\n")
-                    f.write(f"        device_arg_list[{dev_task_idx}] = (uint32_t)(uintptr_t){args_var};\n")
+                    f.write(f"        device_arg_list_chip_{chiplet_id:02x}[{dev_task_idx}] = (uint32_t)(uintptr_t){args_var};\n")
                 else:
                     if "exit" in kernel_name:
                         f.write(f"        __snax_bingo_kernel_exit_args_t* {args_var} = (__snax_bingo_kernel_exit_args_t*)bingo_l3_alloc(0x{chiplet_id:02x}, sizeof(__snax_bingo_kernel_exit_args_t));\n")
                         f.write(f"        {args_var}->exit_code = 0;\n")
-                        f.write(f"        device_arg_list[{dev_task_idx}] = (uint32_t)(uintptr_t){args_var};\n")
+                        f.write(f"        device_arg_list_chip_{chiplet_id:02x}[{dev_task_idx}] = (uint32_t)(uintptr_t){args_var};\n")
                     else:
-                        f.write(f"        device_arg_list[{dev_task_idx}] = 0;\n")
+                        f.write(f"        device_arg_list_chip_{chiplet_id:02x}[{dev_task_idx}] = 0;\n")
                 
-                f.write(f"        device_kernel_list[{dev_task_idx}] = (uint32_t)(uintptr_t)get_device_function(\"{kernel_name}\");\n")
+                f.write(f"        device_kernel_list_chip_{chiplet_id:02x}[{dev_task_idx}] = (uint32_t)(uintptr_t)get_device_function(\"{kernel_name}\");\n")
                 dev_task_idx += 1
                 
             elif is_host:
@@ -855,16 +852,16 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                     field_assignments = node.kernel_args.get_c_field_assignments(handle_name_map)
                     for field, value in field_assignments.items():
                             f.write(f"        {args_var}->{field} = {value};\n")
-                    f.write(f"        host_arg_list[{host_task_idx}] = (uint64_t)(uintptr_t){args_var};\n")
+                    f.write(f"        host_arg_list_chip_{chiplet_id:02x}[{host_task_idx}] = (uint64_t)(uintptr_t){args_var};\n")
                 else:
                     if "exit" in kernel_name:
                         f.write(f"        __host_bingo_kernel_exit_args_t* {args_var} = (__host_bingo_kernel_exit_args_t*)bingo_l3_alloc(0x{chiplet_id:02x}, sizeof(__host_bingo_kernel_exit_args_t));\n")
                         f.write(f"        {args_var}->exit_code = 0;\n")
-                        f.write(f"        host_arg_list[{host_task_idx}] = (uint64_t)(uintptr_t){args_var};\n")
+                        f.write(f"        host_arg_list_chip_{chiplet_id:02x}[{host_task_idx}] = (uint64_t)(uintptr_t){args_var};\n")
                     else:
-                        f.write(f"        host_arg_list[{host_task_idx}] = 0;\n")
+                        f.write(f"        host_arg_list_chip_{chiplet_id:02x}[{host_task_idx}] = 0;\n")
                 
-                f.write(f"        host_kernel_list[{host_task_idx}] = (uint64_t)(uintptr_t)&{kernel_name};\n")
+                f.write(f"        host_kernel_list_chip_{chiplet_id:02x}[{host_task_idx}] = (uint64_t)(uintptr_t)&{kernel_name};\n")
                 host_task_idx += 1
     
     def _emit_scheduler_launch(self, f, chiplet_id):
@@ -873,14 +870,14 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         f.write('        printf_safe("Chip(%x, %x): [Host] Init HW Bingo Scheduler\\r\\n",\n')
         f.write('               get_current_chip_loc_x(), get_current_chip_loc_y());\n\n')
 
-        f.write(f"        bingo_hw_scheduler_init((uint32_t)(uintptr_t)device_arg_list,\n")
-        f.write(f"                                (uint32_t)(uintptr_t)device_kernel_list,\n")
+        f.write(f"        bingo_hw_scheduler_init((uint32_t)(uintptr_t)device_arg_list_chip_{chiplet_id:02x},\n")
+        f.write(f"                                (uint32_t)(uintptr_t)device_kernel_list_chip_{chiplet_id:02x},\n")
         f.write(f"                                (uint32_t)(uintptr_t)global_task_id_to_dev_task_id_chip_{chiplet_id:02x},\n")
         f.write(f"                                (uint64_t)(uintptr_t)task_desc_list_chip_{chiplet_id:02x},\n")
         f.write(f"                                num_tasks_chip_{chiplet_id:02x});\n\n")
         
-        f.write(f"        uint32_t err = bingo_hw_scheduler(host_arg_list,\n")
-        f.write(f"                                          host_kernel_list,\n")
+        f.write(f"        uint32_t err = bingo_hw_scheduler(host_arg_list_chip_{chiplet_id:02x},\n")
+        f.write(f"                                          host_kernel_list_chip_{chiplet_id:02x},\n")
         f.write(f"                                          global_task_id_to_host_task_id_chip_{chiplet_id:02x});\n")
 
     def bingo_emit_offload_c_code(self, extra_include_header_list: list[str], output_path: str) -> None:
