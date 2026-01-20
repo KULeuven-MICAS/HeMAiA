@@ -3,6 +3,8 @@
 import random
 from bingo_utils import DiGraphWrapper
 from bingo_node import BingoNode
+from bingo_mem_handle import BingoMemAlloc
+from bingo_kernel_args import BingoKernelArgs
 import networkx as nx
 MAX_NUM_CHIPLETS = 8
 class BingoDFG(DiGraphWrapper[BingoNode]):
@@ -12,13 +14,16 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                  num_chiplets: int,
                  num_clusters_per_chiplet: int,
                  num_cores_per_cluster: int,
-                 is_host_as_acc: bool) -> None:
+                 is_host_as_acc: bool,
+                 chiplet_ids: list[int] = None) -> None:
         super().__init__()
         # HW architecture parameters
         self.num_chiplets = num_chiplets
         self.num_clusters_per_chiplet = num_clusters_per_chiplet
         self.num_cores_per_cluster = num_cores_per_cluster + 1 if is_host_as_acc else num_cores_per_cluster
         self.is_host_as_acc = is_host_as_acc
+        assert num_chiplets == len(chiplet_ids) or chiplet_ids is None, "Length of chiplet_ids must match num_chiplets"
+        self.chiplet_ids = chiplet_ids if chiplet_ids else list(range(num_chiplets))
         # Node ID counter
         # Make sure the node id is starts from 0
         self.id = -1
@@ -50,6 +55,34 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         self.add_edge(from_node_obj, new_node_obj)
         self.add_edge(new_node_obj, to_node_obj)
         
+    def bingo_transform_dfg_add_entry_node(self) -> None:
+        """Transform the DFG to add one entry node."""
+        # Find all the start nodes (nodes with no predecessors)
+        # We do this BEFORE adding the entry node, otherwise the entry node (which has 0 predecessors initially)
+        # will be included, leading to a self-loop when we connect entry_node -> start_nodes.
+        start_nodes = [node for node in self.node_list if self.in_degree(node) == 0]
+
+        # We will add one entry node at the beginning of the DFG
+        if self.is_host_as_acc:
+            entry_node = BingoNode(
+                assigned_chiplet_id=0,
+                assigned_cluster_id=0,
+                assigned_core_id=self.num_cores_per_cluster -1,
+                kernel_name="__host_bingo_kernel_entry"
+            )
+        else:
+            entry_node = BingoNode(
+                assigned_chiplet_id=0,
+                assigned_cluster_id=0,
+                assigned_core_id=0,
+                kernel_name="__snax_bingo_kernel_entry"
+            )
+        self.bingo_add_node(entry_node)
+        # Connect the entry node to all start nodes
+        for start_node in start_nodes:
+            self.bingo_add_edge(entry_node, start_node)
+        
+        
     def bingo_transform_dfg_add_exit_nodes(self) -> None:
         """Transform the DFG to add external nodes."""
         # Notice here the exit nodes are correlated with the hw architecture
@@ -77,7 +110,7 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                         assigned_chiplet_id=chiplet_id,
                         assigned_cluster_id=cluster_id,
                         assigned_core_id=core_id,
-                        assigned_kernel_name="__snax_bingo_kernel_exit"
+                        kernel_name="__snax_bingo_kernel_exit"
                     )
                     self.bingo_add_node(exit_node)
                     exit_nodes.append(exit_node)
@@ -87,7 +120,7 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                 assigned_chiplet_id=chiplet_id,
                 assigned_cluster_id=0,
                 assigned_core_id=self.num_cores_per_cluster -1,
-                assigned_kernel_name="__host_bingo_kernel_exit"
+                kernel_name="__host_bingo_kernel_exit"
             )
             self.bingo_add_node(exit_node)
             exit_nodes.append(exit_node)
@@ -140,7 +173,7 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                             assigned_chiplet_id=cur_node.assigned_chiplet_id,
                             assigned_cluster_id=cur_node.assigned_cluster_id,      # must be the same type of the cur_node to block the execution
                             assigned_core_id=cur_node.assigned_core_id,            # must be the same type of the cur_node to block the execution
-                            assigned_kernel_name= None
+                            kernel_name= None
                         )
                         dummy_set_node.node_type = "dummy"
                         dummy_set_node.dep_set_enable = True
@@ -161,7 +194,7 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                             assigned_chiplet_id=cur_node.assigned_chiplet_id,
                             assigned_cluster_id=cur_node.assigned_cluster_id,      # must be the same type of the cur_node to block the execution
                             assigned_core_id=cur_node.assigned_core_id,            # must be the same type of the cur_node to block the execution
-                            assigned_kernel_name= None
+                            kernel_name= None
                         )
                         dummy_set_node.node_type = "dummy"
                         dummy_set_node.dep_set_enable = True
@@ -182,7 +215,7 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                         assigned_chiplet_id=cur_node.assigned_chiplet_id,
                         assigned_cluster_id=cur_node.assigned_cluster_id,      # must be the same type of the cur_node to block the execution
                         assigned_core_id=cur_node.assigned_core_id,            # must be the same type of the cur_node to block the execution
-                        assigned_kernel_name= None
+                        kernel_name= None
                     )
                     dummy_set_node.node_type = "dummy"
                     dummy_set_node.dep_set_enable = True
@@ -225,7 +258,7 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                             assigned_chiplet_id=cur_node.assigned_chiplet_id,
                             assigned_cluster_id=cur_node.assigned_cluster_id, # should be fine since it will not be executed
                             assigned_core_id=cur_node.assigned_core_id,       # should be the same type of the cur_node to block the execution
-                            assigned_kernel_name= None
+                            kernel_name= None
                         )
                         dummy_check_node.node_type = "dummy"
                         dummy_check_node.dep_check_enable = True
@@ -459,7 +492,7 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         current_shift += num_cores
         
         return fields
-    def bingo_visualize_dfg(self, filename: str = "dfg_visualization.png", figsize: tuple = (10, 8)) -> None:
+    def bingo_visualize_dfg(self, filename: str = "dfg_visualization.png", figsize: tuple = (20, 16)) -> None:
         """Visualize the DFG with different shapes for task types and colors for chiplets."""
         import matplotlib.pyplot as plt
         from matplotlib.lines import Line2D
@@ -473,16 +506,22 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
 
         # Define a color map for chiplets
         chiplet_colors = [
-            "red", "blue", "green", "orange", "purple", "brown", "pink", "gray", "olive", "cyan"
+            "lightcoral", "lightblue", "lightgreen", "moccasin", "plum", "lightgray", "wheat", "lavender", "lightcyan", "mistyrose"
         ]
 
-        # Select a start node for BFS layout
-        start_node = next(iter(self.nodes), None)  # Get the first node in the graph
-        if start_node is None:
-            raise ValueError("The graph is empty. Cannot visualize an empty graph.")
-
-        # Create a BFS layout for the graph
-        pos = nx.bfs_layout(self, start_node, align="horizontal")
+        # Try to use a hierarchical layout (multipartite) based on topological generations
+        # This gives a much clearer structure for DFGs compared to BFS or Spring
+        try:
+            # multiple start nodes are possible
+            for layer, nodes in enumerate(nx.topological_generations(self)):
+                for node in nodes:
+                    self.nodes[node]["layer"] = layer
+            # align='vertical' means layers are vertical strings (x=constant), flow is Left->Right
+            pos = nx.multipartite_layout(self, subset_key="layer", align="vertical", scale=4)
+        except Exception as e:
+            print(f"Warning: Could not use multipartite_layout ({e}), falling back to spring_layout")
+            # Fallback if cyclic or other error
+            pos = nx.spring_layout(self, k=2, iterations=100, seed=42)
 
         # Separate nodes by task type and chiplet
         node_shapes = {shape: [] for shape in task_type_shapes.values()}
@@ -505,8 +544,9 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
             color = chiplet_colors[assigned_chiplet % len(chiplet_colors)]
             node_colors[node] = color
 
-        # Set the figure size
-        plt.figure(figsize=figsize)
+        # Create figure and axes with GridSpec to accommodate the table
+        fig, (ax_graph, ax_table) = plt.subplots(2, 1, figsize=figsize, gridspec_kw={'height_ratios': [4, 1]})
+        ax_table.axis('off')
 
         # Draw nodes with different shapes
         for shape, nodes in node_shapes.items():
@@ -514,40 +554,72 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                 self, pos, nodelist=nodes,
                 node_shape=shape,
                 node_color=[node_colors[node] for node in nodes],
-                node_size=500
+                node_size=500,
+                ax=ax_graph
             )
 
         # Draw edges
-        nx.draw_networkx_edges(self, pos)
+        nx.draw_networkx_edges(self, pos, ax=ax_graph)
 
         # Draw labels
         labels = {}
         for node in self.nodes:
-            cur_chiplet_id = node.assigned_chiplet_id
-            cur_cluster_id = node.assigned_cluster_id
-            cur_core_id = node.assigned_core_id
-            cur_kernel_name = node.assigned_kernel_name
-            cur_task_type = node.node_type
-            if cur_task_type == "dummy":
-                if node.dep_set_enable:
-                    cur_task_type = "dummy_set"
-                elif node.dep_check_enable:
-                    cur_task_type = "dummy_check"
-            label_string = f"Chiplet{cur_chiplet_id}_Cluster{cur_cluster_id}_Core{cur_core_id}\n"
-            label_string += f"{cur_task_type}\n"
-            label_string += f"{cur_kernel_name}\n"
-            label_string += f"ID{node.node_id}"
+            # Simplified label: just the ID
+            label_string = f"{node.node_id}"
             labels[node] = label_string
-        nx.draw_networkx_labels(self, pos, labels=labels, font_size=8)
+        nx.draw_networkx_labels(self, pos, labels=labels, font_size=8, ax=ax_graph)
 
         # Create a legend for task types
         legend_elements = [
             Line2D([0], [0], marker=shape, color="w", label=task_type, markerfacecolor="black", markersize=10)
             for task_type, shape in task_type_shapes.items()
         ]
-        plt.legend(handles=legend_elements, loc="best")
+        
+        # Create a legend for chiplets
+        chiplet_legend_elements = [
+            Line2D([0], [0], marker="o", color="w", label=f"Chiplet {cid:02x}", markerfacecolor=chiplet_colors[cid % len(chiplet_colors)], markersize=10)
+            for cid in sorted(self.chiplet_ids)
+        ]
+        
+        # Combine legends
+        all_legends = legend_elements + chiplet_legend_elements
+        
+        ax_graph.legend(handles=all_legends, loc="best")
+
+        # Create the table
+        col_labels = ["ID", "Chiplet", "Cluster", "Core", "Type", "Kernel"]
+        table_data = []
+        sorted_nodes = sorted(self.nodes, key=lambda n: n.node_id)
+        for node in sorted_nodes:
+            t_type = node.node_type
+            if t_type == "dummy":
+                if node.dep_set_enable:
+                    t_type = "dummy_set"
+                elif node.dep_check_enable:
+                    t_type = "dummy_check"
+            
+            row = [
+                f"{node.node_id}",
+                f"{node.assigned_chiplet_id:02x}",
+                f"{node.assigned_cluster_id}",
+                f"{node.assigned_core_id}",
+                t_type,
+                node.kernel_name
+            ]
+            table_data.append(row)
+
+        table = ax_table.table(
+            cellText=table_data,
+            colLabels=col_labels,
+            loc='center',
+            cellLoc='center'
+        )
+        table.auto_set_font_size(False)
+        table.set_fontsize(8)
+        table.scale(1, 1.2)
 
         # Save the visualization to a file
+        plt.tight_layout()
         plt.savefig(filename)
         plt.show()
     def bingo_emit_task_kernel_name_list(self) -> str:
@@ -560,103 +632,297 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         # Sort the normal nodes by node id
         normal_node.sort(key=lambda x: x.node_id)
         kernel_name_list += f"char kernel_name_list[{num_normal_nodes}][64] = {{\n"
-        for node in self.node_list:
-            kernel_name_list += f'    "{node.assigned_kernel_name}", // Node ID {node.node_id}\n'
+        for node in normal_node:
+            kernel_name_list += f'    "{node.kernel_name}", // Node ID {node.node_id}\n'
         kernel_name_list += "};\n"
         return kernel_name_list
 
 
 
-    def bingo_emit_task_desc_list(self) -> str:
+    def bingo_emit_task_desc_list(self, target_chiplet_id: int = None) -> str:
         """Emit the task description list in the DFG."""
         task_description_list = ""
         all_nodes = self.node_list
-        num_nodes = len(all_nodes)
         # Sort the nodes by node id
         all_nodes.sort(key=lambda x: x.node_id)
-        task_description_list += f"uint32_t num_tasks = {num_nodes};\n"
-        task_description_list += f"uint64_t task_desc_list[{num_nodes}] = {{\n"
-        for node in all_nodes:
-            packed_val = self.bingo_pack_node(node)
-            fields = self.bingo_unpack_node(packed_val)
+        
+        chiplets_to_process = [target_chiplet_id] if target_chiplet_id is not None else self.chiplet_ids
+
+        for chiplet_id in chiplets_to_process:
+            local_nodes = [node for node in all_nodes if node.assigned_chiplet_id == chiplet_id]
+            num_local_nodes = len(local_nodes)
+            if num_local_nodes == 0:
+                task_description_list += f"uint64_t task_desc_list_chip_{chiplet_id:02x}[1] = {{0}};\n"
+            else:
+                task_description_list += f"uint64_t task_desc_list_chip_{chiplet_id:02x}[{num_local_nodes}] = {{\n"
+                for node in local_nodes:
+                    packed_val = self.bingo_pack_node(node)
+                    fields = self.bingo_unpack_node(packed_val)
+                    
+                    # Create a detailed comment
+                    comment = f"// Node ID {node.node_id}\n"
+                    comment += f"    // Fields: Type={fields['task_type']}, TaskID={fields['task_id']}\n"
+                    comment += f"    //         Assigned: Chiplet={fields['assigned_chiplet_id']:02x}, Cluster={fields['assigned_cluster_id']}, Core={fields['assigned_core_id']}\n"
+                    comment += f"    //         DepCheck: En={fields['dep_check_en']}, Code=0b{fields['dep_check_code']:0{self.num_cores_per_cluster}b}\n"
+                    comment += f"    //         DepSet:   En={fields['dep_set_en']}, All={fields['dep_set_all']}, Chiplet={fields['dep_set_chiplet_id']:02x}, Cluster={fields['dep_set_cluster_id']}, Code=0b{fields['dep_set_code']:0{self.num_cores_per_cluster}b}"
+                    
+                    task_description_list += f"    0x{packed_val:016X}, {comment}\n"
+                task_description_list += "};\n"
+            task_description_list += f"uint32_t num_tasks_chip_{chiplet_id:02x} = {num_local_nodes};\n"
             
-            # Create a detailed comment
-            comment = f"// Node ID {node.node_id}\n"
-            comment += f"    // Fields: Type={fields['task_type']}, TaskID={fields['task_id']}\n"
-            comment += f"    //         Assigned: Chiplet={fields['assigned_chiplet_id']}, Cluster={fields['assigned_cluster_id']}, Core={fields['assigned_core_id']}\n"
-            comment += f"    //         DepCheck: En={fields['dep_check_en']}, Code=0b{fields['dep_check_code']:0{self.num_cores_per_cluster}b}\n"
-            comment += f"    //         DepSet:   En={fields['dep_set_en']}, All={fields['dep_set_all']}, Chiplet={fields['dep_set_chiplet_id']}, Cluster={fields['dep_set_cluster_id']}, Code=0b{fields['dep_set_code']:0{self.num_cores_per_cluster}b}"
-            
-            task_description_list += f"    0x{packed_val:016X}, {comment}\n"
-        task_description_list += "};\n"
         return task_description_list
     
-    def bingo_emit_task_id_mapping_lists(self) -> str:
+    def bingo_emit_task_id_mapping_lists(self, target_chiplet_id: int = None) -> str:
         """Emit the mapping lists from global task id to dev/host task id."""
         all_nodes = self.node_list
         num_nodes = len(all_nodes)
         # Sort the nodes by node id
         all_nodes.sort(key=lambda x: x.node_id)
         
-        global_to_dev = []
-        global_to_host = []
-        
-        dev_task_counter = 0
-        host_task_counter = 0
-        
-        for node in all_nodes:
-            kernel_name = node.assigned_kernel_name
-            if kernel_name and kernel_name.startswith("__snax"):
-                # It is a device task
-                global_to_dev.append(str(dev_task_counter))
-                global_to_host.append("-1")
-                dev_task_counter += 1
-            elif kernel_name and kernel_name.startswith("__host"):
-                # It is a host task
-                global_to_dev.append("-1")
-                global_to_host.append(str(host_task_counter))
-                host_task_counter += 1
-            else:
-                # Neither (e.g. None or other)
-                global_to_dev.append("-1")
-                global_to_host.append("-1")
-                
         mapping_str = ""
+        chiplets_to_process = [target_chiplet_id] if target_chiplet_id is not None else self.chiplet_ids
         
-        # Emit global_task_id_to_dev_task_id
-        mapping_str += f"int32_t global_task_id_to_dev_task_id[{num_nodes}] = {{\n"
-        mapping_str += "    " + ", ".join(global_to_dev) + "\n"
-        mapping_str += "};\n"
-        
-        # Emit global_task_id_to_host_task_id
-        mapping_str += f"int32_t global_task_id_to_host_task_id[{num_nodes}] = {{\n"
-        mapping_str += "    " + ", ".join(global_to_host) + "\n"
-        mapping_str += "};\n"
-        
-        # Emit num_dev_tasks and num_host_tasks
-        mapping_str += f"uint32_t num_dev_tasks = {dev_task_counter};\n"
-        mapping_str += f"uint32_t num_host_tasks = {host_task_counter};\n"
-        
+        # 1. Emit global_task_id_to_dev_task_id for each chiplet
+        # Also need to emit num_dev_tasks for each chiplet
+        for chiplet_id in chiplets_to_process:
+            global_to_dev = []
+            dev_task_counter = 0
+            
+            for node in all_nodes:
+                kernel_name = node.kernel_name
+                # Check if the node is assigned to the current chiplet
+                if node.assigned_chiplet_id == chiplet_id:
+                    if kernel_name and kernel_name.startswith("__snax"):
+                         # It is a device task
+                        global_to_dev.append(str(node.node_id))
+                        dev_task_counter += 1
+                    else:
+                        global_to_dev.append("-1")
+                else:
+                    global_to_dev.append("-1")
+            
+            mapping_str += f"int32_t global_task_id_to_dev_task_id_chip_{chiplet_id:02x}[{num_nodes}] = {{\n"
+            mapping_str += "    " + ", ".join(global_to_dev) + "\n"
+            mapping_str += "};\n"
+            mapping_str += f"uint32_t num_dev_tasks_chip_{chiplet_id:02x} = {dev_task_counter};\n"
+            
+        # 2. Emit global_task_id_to_host_task_id
+        for chiplet_id in chiplets_to_process:
+            global_to_host = []
+            host_task_counter = 0
+            for node in all_nodes:
+                kernel_name = node.kernel_name
+                if node.assigned_chiplet_id == chiplet_id:
+                    if kernel_name and kernel_name.startswith("__host"):
+                        global_to_host.append(str(node.node_id))
+                        host_task_counter += 1
+                    else:
+                        global_to_host.append("-1")
+                else:
+                    # Remote tasks are not local host tasks
+                    global_to_host.append("-1")
+            
+            mapping_str += f"int32_t global_task_id_to_host_task_id_chip_{chiplet_id:02x}[{num_nodes}] = {{\n"
+            mapping_str += "    " + ", ".join(global_to_host) + "\n"
+            mapping_str += "};\n"
+            mapping_str += f"uint32_t num_host_tasks_chip_{chiplet_id:02x} = {host_task_counter};\n"
         return mapping_str
 
-    def bingo_emit_bingo_workload_header(self, output_path: str) -> None:
-        """Emit the bingo_workload.h file."""
+
+    def _collect_memory_handles(self, sorted_nodes):
+        """Collect and sort unique BingoMemAlloc from nodes."""
+        unique_handles = set()
+        for node in sorted_nodes:
+            if node.kernel_args:
+                for attr, value in node.kernel_args.__dict__.items():
+                     if isinstance(value, BingoMemAlloc):
+                         unique_handles.add(value)
+        
+        sorted_handles = sorted(list(unique_handles), key=lambda h: h.name)
+        handle_name_map = {h: h.get_c_var_name() for h in sorted_handles}
+        return sorted_handles, handle_name_map
+
+    def _emit_headers(self, f, extra_include_header_list):
+        """Emit C header includes."""
+        f.write("// Auto-generated offload_hw_bingo.h\n")
+        f.write("#pragma once\n")
+        f.write('#include "libbingo/bingo_api.h"\n')
+        f.write('#include "host.h"\n')
+        for include in extra_include_header_list:
+            f.write(f'#include "{include}"\n')
+        f.write("\n")
+
+    def _emit_debug_kernel_list(self, f):
+        """Emit commented-out kernel name list for debugging."""
+        f.write("// Kernel Name List\n")
+        f.write("// Note: This list is currently for debugging purposes only and is not used in the runtime.\n")
+        f.write("// It will be enabled in the future.\n")
+        f.write("/*\n")
+        f.write(self.bingo_emit_task_kernel_name_list())
+        f.write("*/\n")
+        f.write("\n")
+
+    def _emit_task_desc_and_mappings(self, f, chiplet_id):
+        """Emit task description and ID mapping lists."""
+        f.write("        // Task Description List\n")
+        task_desc_str = self.bingo_emit_task_desc_list(chiplet_id)
+        indented_task_desc = "\n".join(["        " + line for line in task_desc_str.splitlines()])
+        f.write(f"{indented_task_desc}\n")
+
+        f.write("        // Task ID Mapping Lists\n")
+        mapping_str = self.bingo_emit_task_id_mapping_lists(chiplet_id)
+        indented_mapping = "\n".join(["        " + line for line in mapping_str.splitlines()])
+        f.write(f"{indented_mapping}\n")
+
+    def _emit_memory_allocations(self, f, chiplet_id, sorted_handles, handle_name_map):
+        """Emit memory allocation calls for handles on this chiplet."""
+        local_handles = [h for h in sorted_handles if h.chip_id == chiplet_id]
+        if local_handles:
+            f.write("        // 1. Memory Allocations\n")
+            for h in local_handles:
+                c_var = handle_name_map[h]
+                alloc_call = ""
+                if h.mem_level == "L1":
+                    alloc_call = f"bingo_l1_alloc(0x{h.chip_id:02x}, {h.cluster_id}, {h.size})"
+                elif h.mem_level == "L2":
+                        alloc_call = f"bingo_l2_alloc(0x{h.chip_id:02x}, {h.size})"
+                else: # L3
+                        alloc_call = f"bingo_l3_alloc(0x{h.chip_id:02x}, {h.size})"
+                
+                f.write(f"        uint64_t {c_var} = {alloc_call};\n")
+            f.write("\n")
+
+    def _emit_list_allocations(self, f, chiplet_id):
+        """Emit allocations for device/host argument and kernel lists."""
+        f.write(f"        // 2. Prepare device/host arg/kernel lists\n")
+        f.write(f"        uint32_t num_dev_tasks = num_dev_tasks_chip_{chiplet_id:02x};\n")
+        f.write(f"        uint32_t num_host_tasks = num_host_tasks_chip_{chiplet_id:02x};\n")
+        
+        f.write(f"        uint32_t* device_arg_list = (uint32_t*)bingo_l3_alloc(0x{chiplet_id:02x}, num_dev_tasks * sizeof(uint32_t));\n")
+        f.write(f"        uint32_t* device_kernel_list = (uint32_t*)bingo_l3_alloc(0x{chiplet_id:02x}, num_dev_tasks * sizeof(uint32_t));\n")
+        f.write(f"        uint64_t* host_arg_list = (uint64_t*)bingo_l3_alloc(0x{chiplet_id:02x}, num_host_tasks * sizeof(uint64_t));\n")
+        f.write(f"        uint64_t* host_kernel_list = (uint64_t*)bingo_l3_alloc(0x{chiplet_id:02x}, num_host_tasks * sizeof(uint64_t));\n\n")
+
+    def _emit_task_initialization(self, f, chiplet_id, sorted_nodes, handle_name_map):
+        """Emit initialization for task arguments."""
+        f.write("        // 3. Task Arguments Init\n")
+        
+        local_nodes = [node for node in sorted_nodes if node.assigned_chiplet_id == chiplet_id]
+        
+        dev_task_idx = 0
+        host_task_idx = 0
+        
+        for node in local_nodes:
+            kernel_name = node.kernel_name
+            is_device = kernel_name and kernel_name.startswith("__snax")
+            is_host = kernel_name and kernel_name.startswith("__host")
+            
+            if not (is_device or is_host):
+                continue
+            
+            f.write(f"        // Node ID: {node.node_id} {node.node_name} ({kernel_name})\n")
+            
+            args_struct_type = ""
+            if node.kernel_args:
+                args_struct_type = node.kernel_args.get_struct_name()
+            
+            if is_device:
+                args_var = f"args_dev_chip{chiplet_id:02x}_{node.node_id}"
+                
+                if node.kernel_args:
+                    f.write(f"        {args_struct_type}* {args_var} = ({args_struct_type}*)bingo_l3_alloc(0x{chiplet_id:02x}, sizeof({args_struct_type}));\n")
+                    # Populate fields
+                    field_assignments = node.kernel_args.get_c_field_assignments(handle_name_map)
+                    for field, value in field_assignments.items():
+                            f.write(f"        {args_var}->{field} = {value};\n")
+                    f.write(f"        device_arg_list[{dev_task_idx}] = (uint32_t)(uintptr_t){args_var};\n")
+                else:
+                    if "exit" in kernel_name:
+                        f.write(f"        __snax_bingo_kernel_exit_args_t* {args_var} = (__snax_bingo_kernel_exit_args_t*)bingo_l3_alloc(0x{chiplet_id:02x}, sizeof(__snax_bingo_kernel_exit_args_t));\n")
+                        f.write(f"        {args_var}->exit_code = 0;\n")
+                        f.write(f"        device_arg_list[{dev_task_idx}] = (uint32_t)(uintptr_t){args_var};\n")
+                    else:
+                        f.write(f"        device_arg_list[{dev_task_idx}] = 0;\n")
+                
+                f.write(f"        device_kernel_list[{dev_task_idx}] = (uint32_t)(uintptr_t)get_device_function(\"{kernel_name}\");\n")
+                dev_task_idx += 1
+                
+            elif is_host:
+                args_var = f"args_host_chip{chiplet_id:02x}_{node.node_id}"
+                
+                if node.kernel_args:
+                    f.write(f"        {args_struct_type}* {args_var} = ({args_struct_type}*)bingo_l3_alloc(0x{chiplet_id:02x}, sizeof({args_struct_type}));\n")
+                    field_assignments = node.kernel_args.get_c_field_assignments(handle_name_map)
+                    for field, value in field_assignments.items():
+                            f.write(f"        {args_var}->{field} = {value};\n")
+                    f.write(f"        host_arg_list[{host_task_idx}] = (uint64_t)(uintptr_t){args_var};\n")
+                else:
+                    if "exit" in kernel_name:
+                        f.write(f"        __host_bingo_kernel_exit_args_t* {args_var} = (__host_bingo_kernel_exit_args_t*)bingo_l3_alloc(0x{chiplet_id:02x}, sizeof(__host_bingo_kernel_exit_args_t));\n")
+                        f.write(f"        {args_var}->exit_code = 0;\n")
+                        f.write(f"        host_arg_list[{host_task_idx}] = (uint64_t)(uintptr_t){args_var};\n")
+                    else:
+                        f.write(f"        host_arg_list[{host_task_idx}] = 0;\n")
+                
+                f.write(f"        host_kernel_list[{host_task_idx}] = (uint64_t)(uintptr_t)&{kernel_name};\n")
+                host_task_idx += 1
+    
+    def _emit_scheduler_launch(self, f, chiplet_id):
+        """Emit the scheduler initialization and launch calls."""
+        f.write("\n")
+        f.write('        printf_safe("Chip(%x, %x): [Host] Init HW Bingo Scheduler\\r\\n",\n')
+        f.write('               get_current_chip_loc_x(), get_current_chip_loc_y());\n\n')
+
+        f.write(f"        bingo_hw_scheduler_init((uint32_t)(uintptr_t)device_arg_list,\n")
+        f.write(f"                                (uint32_t)(uintptr_t)device_kernel_list,\n")
+        f.write(f"                                (uint32_t)(uintptr_t)global_task_id_to_dev_task_id_chip_{chiplet_id:02x},\n")
+        f.write(f"                                (uint64_t)(uintptr_t)task_desc_list_chip_{chiplet_id:02x},\n")
+        f.write(f"                                num_tasks_chip_{chiplet_id:02x});\n\n")
+        
+        f.write(f"        uint32_t err = bingo_hw_scheduler(host_arg_list,\n")
+        f.write(f"                                          host_kernel_list,\n")
+        f.write(f"                                          global_task_id_to_host_task_id_chip_{chiplet_id:02x});\n")
+
+    def bingo_emit_offload_c_code(self, extra_include_header_list: list[str], output_path: str) -> None:
+        """Emit the offload_hw_bingo.h file with kernel_execution logic."""
+        
+        # 1. Collect Handles
+        sorted_nodes = sorted(self.node_list, key=lambda n: n.node_id)
+        sorted_handles, handle_name_map = self._collect_memory_handles(sorted_nodes)
+        
+        # 2. Start emitting C code
         with open(output_path, "w") as f:
-            f.write("// Auto-generated bingo_workload.h file, edit the main_bingo.py instead\n\n")
-            f.write("#pragma once\n")
-            f.write("#include <stdint.h>\n\n")
-            # Emit kernel name list
-            kernel_name_list_str = self.bingo_emit_task_kernel_name_list()
-            f.write("// Kernel Name List\n")
-            f.write(kernel_name_list_str)
-            f.write("\n")
-            # Emit task description list
-            task_desc_list_str = self.bingo_emit_task_desc_list()
-            f.write("// Task Description List\n")
-            f.write(task_desc_list_str)
-            f.write("\n")
-            # Emit task id mapping lists
-            task_id_mapping_str = self.bingo_emit_task_id_mapping_lists()
-            f.write("// Task ID Mapping Lists\n")
-            f.write(task_id_mapping_str)
-            f.write("\n")
+            # Step 1: Emit Headers
+            self._emit_headers(f, extra_include_header_list)
+            
+            # Step 2: Emit Debug Kernel List
+            self._emit_debug_kernel_list(f)
+
+            # Step 3: Emit kernel_execution function structure
+            f.write("int kernel_execution(){\n")
+            f.write("    check_kernel_tab_ready();\n")
+            f.write("    uint32_t current_chip_id = get_current_chip_id();\n\n")
+
+            # Step 4: Iterate over each chiplet to generate isolated blocks
+            for chiplet_id in self.chiplet_ids:
+                f.write(f"    if (current_chip_id == 0x{chiplet_id:02x}) {{\n")
+                
+                # A. Emit Task Description and Mapping Lists
+                self._emit_task_desc_and_mappings(f, chiplet_id)
+                
+                # B. Emit Memory Allocations
+                self._emit_memory_allocations(f, chiplet_id, sorted_handles, handle_name_map)
+                
+                # C. Emit List Allocations
+                self._emit_list_allocations(f, chiplet_id)
+
+                # D. Emit Task Initialization
+                self._emit_task_initialization(f, chiplet_id, sorted_nodes, handle_name_map)
+
+                # E. Emit Scheduler Launch
+                self._emit_scheduler_launch(f, chiplet_id)
+
+                f.write("    }\n")
+            
+            f.write("    return 0;\n")
+            f.write("}\n")

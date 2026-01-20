@@ -41,9 +41,17 @@ class DiGraphWrapper(Generic[T], DiGraph):
     ) -> list[tuple[T, T]] | list[tuple[T, T, dict[str, Any]]]:
         return super().out_edges(node, data)  # type: ignore
 
-    @typeguard_ignore
-    def in_degree(self) -> Iterator[tuple[T, int]]:  # type: ignore
-        return super().in_degree()  # type: ignore
+    @overload
+    def in_degree(self, node: Literal[None]) -> Iterator[tuple[T, int]]: ...
+
+    @overload
+    def in_degree(self) -> Iterator[tuple[T, int]]: ...
+
+    @overload
+    def in_degree(self, node: T) -> int: ...
+
+    def in_degree(self, *args, **kwargs) -> int | Iterator[tuple[T, int]]:  # type: ignore
+        return super().in_degree(*args, **kwargs)  # type: ignore
 
     @overload
     def out_degree(self, node: Literal[None]) -> Iterator[tuple[T, int]]: ...
@@ -54,10 +62,8 @@ class DiGraphWrapper(Generic[T], DiGraph):
     @overload
     def out_degree(self, node: T) -> int: ...
 
-    def out_degree(self, node: T | None = None) -> int | Iterator[tuple[T, int]]:  # type: ignore
-        if node:
-            return super().out_degree(node)  # type: ignore
-        return super().out_degree()  # type: ignore
+    def out_degree(self, *args, **kwargs) -> int | Iterator[tuple[T, int]]:  # type: ignore
+        return super().out_degree(*args, **kwargs)  # type: ignore
 
     def successors(self, node: T) -> Iterator[T]:  # type: ignore # pylint: disable=W0246
         return super().successors(node)  # type: ignore

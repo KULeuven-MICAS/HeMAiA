@@ -1,7 +1,8 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 # The node types and the base class for nodes in the DFG
 from abc import ABCMeta
-from typing import Literal
+from typing import Literal, Optional
+from bingo_kernel_args import BingoKernelArgs
 
 class BingoNode(metaclass=ABCMeta):
     """Abstract base class for nodes in the DFG."""
@@ -10,13 +11,21 @@ class BingoNode(metaclass=ABCMeta):
         assigned_chiplet_id: int,
         assigned_cluster_id: int,
         assigned_core_id: int,
-        assigned_kernel_name: str,
+        node_name: str = "",
+        kernel_name: str = "",
+        kernel_args: Optional[BingoKernelArgs] = None,
     ) -> None:
         self._node_id: int = 0
         self._assigned_chiplet_id = assigned_chiplet_id
         self._assigned_cluster_id = assigned_cluster_id
         self._assigned_core_id = assigned_core_id
-        self._assigned_kernel_name = assigned_kernel_name
+        self._kernel_name = kernel_name
+        self._kernel_args = kernel_args
+        self._node_name = node_name if node_name else f"Node_ID{self._node_id}_Chiplet{self._assigned_chiplet_id}_Cluster{self._assigned_cluster_id}_Core{self._assigned_core_id}_Kernel{self._kernel_name}"
+        
+        # Infer kernel name from args if not provided, but args is provided
+        # Or validate them if both are provided (optional, for now just trust user or prioritized args)
+        
         self._node_type: Literal['normal', 'dummy'] = "normal"
         self._dep_check_enable: bool = False
         self._dep_check_list: list[int] = []
@@ -28,12 +37,26 @@ class BingoNode(metaclass=ABCMeta):
 
     # Getters and Setters
     @property
-    def assigned_kernel_name(self) -> str:
-        return self._assigned_kernel_name
+    def node_name(self) -> str:
+        return self._node_name
+    @node_name.setter
+    def node_name(self, value: str) -> None:
+        self._node_name = value
+    @property
+    def kernel_name(self) -> str:
+        return self._kernel_name
 
-    @assigned_kernel_name.setter
-    def assigned_kernel_name(self, value: str) -> None:
-        self._assigned_kernel_name = value
+    @kernel_name.setter
+    def kernel_name(self, value: str) -> None:
+        self._kernel_name = value
+
+    @property
+    def kernel_args(self) -> Optional[BingoKernelArgs]:
+        return self._kernel_args
+
+    @kernel_args.setter
+    def kernel_args(self, value: Optional[BingoKernelArgs]) -> None:
+        self._kernel_args = value
 
     @property
     def node_id(self) -> int:
@@ -140,7 +163,7 @@ class BingoNode(metaclass=ABCMeta):
         self._dep_set_cluster_id = value
 
     def __str__(self):
-        return self._node_name if self._node_name else f"Node_{self._node_id}"
+        return f"Node_ID{self._node_id}_Chiplet{self._assigned_chiplet_id}_Cluster{self._assigned_cluster_id}_Core{self._assigned_core_id}_Kernel{self._kernel_name}"
 
     def list_to_one_hot(lst: list[int]) -> str:
         if (lst==[]):
@@ -149,3 +172,4 @@ class BingoNode(metaclass=ABCMeta):
         for idx in lst:
             one_hot |= (1 << idx)
         return f"{one_hot}"
+    
