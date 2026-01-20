@@ -51,10 +51,8 @@ static int print_signed(int32_t value, int width, int zero_pad) {
 // ---------------------------------------------------------------------------
 // printf() – minimal subset
 // ---------------------------------------------------------------------------
-int printf(const char *fmt, ...) {
+int vprintf(const char *fmt, va_list ap) {
     base_address = (uintptr_t)get_current_chip_baseaddress();
-    va_list ap;
-    va_start(ap, fmt);
     int total = 0;
 
     while (*fmt) {
@@ -148,9 +146,33 @@ int printf(const char *fmt, ...) {
         }
     }
 
-    va_end(ap);
     return total;
 }
+
+int printf(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    int ret = vprintf(fmt, ap);
+    va_end(ap);
+    return ret;
+}
+
+
+int printf_safe(const char *fmt, ...) {
+    // This should be used mainly for the debug printing
+    // The thread-safe version printf
+    // It uses the mutex lock in the comm_buffer to ensure only one thread prints at a time
+    // The threads means both the host core and the device cores
+    // Notice this function assumes there is one uart in each chiplets, so it is not safe when multiple chiplets are printing to one uart at the same time
+    mutex_tas_acquire(get_shared_lock());
+    va_list ap;
+    va_start(ap, fmt);
+    int ret = vprintf(fmt, ap);
+    va_end(ap);
+    mutex_release(get_shared_lock());
+    return ret;
+}
+
 
 // Scanf implementation
 static int peek;

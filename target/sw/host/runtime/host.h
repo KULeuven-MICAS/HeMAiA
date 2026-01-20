@@ -275,9 +275,9 @@ void wait_snitches_parked(uint32_t timeout) { delay_ns(100000); }
 static inline void program_snitches(uint8_t chip_id,
                                     volatile comm_buffer_t* comm_buffer_ptr) {
     writew((uint32_t)(uintptr_t)snitch_main,
-           (uintptr_t)chiplet_addr_transform_full(chip_id, (uintptr_t)soc_ctrl_scratch_addr(1)));
+           (uintptr_t)chiplet_addr_transform_full(chip_id, (uintptr_t)soc_ctrl_scratch_addr(0)));
     writew((uint32_t)(uintptr_t)comm_buffer_ptr,
-           (uintptr_t)chiplet_addr_transform_full(chip_id, (uintptr_t)soc_ctrl_scratch_addr(2)));
+           (uintptr_t)chiplet_addr_transform_full(chip_id, (uintptr_t)soc_ctrl_scratch_addr(1)));
 }
 
 /**
@@ -363,7 +363,7 @@ static inline int wait_snitches_done(uint8_t chip_id) {
     clear_host_sw_interrupt(get_current_chip_id());
 
     uint32_t retval = readw(
-        (uintptr_t)chiplet_addr_transform_full(chip_id, (uintptr_t)soc_ctrl_scratch_addr(3)));
+        (uintptr_t)chiplet_addr_transform_full(chip_id, (uintptr_t)soc_ctrl_scratch_addr(2)));
     // LSB signals completion
     if (retval & 1)
         return retval >> 1;

@@ -16,7 +16,7 @@ inline uint32_t __attribute__((const)) snrt_quadrant_idx() {
 inline void post_wakeup_cl() { snrt_int_clr_mcip(); }
 
 inline comm_buffer_t* __attribute__((const)) get_communication_buffer() {
-    return (comm_buffer_t*)(*soc_ctrl_scratch_ptr(2));
+    return (comm_buffer_t*)(*soc_ctrl_scratch_ptr(1));
 }
 
 inline uint32_t elect_director(uint32_t num_participants) {

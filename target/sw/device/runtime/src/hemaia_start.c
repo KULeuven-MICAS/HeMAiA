@@ -129,7 +129,7 @@ static inline void snrt_init_l1_alloc() { snrt_l1_malloc_init(); }
 #endif
 
 static inline uint32_t* snrt_exit_code_destination() {
-    return soc_ctrl_scratch_ptr(3);
+    return soc_ctrl_scratch_ptr(2);
 }
 static inline void snrt_exit_default(int exit_code) {
     exit_code = snrt_global_all_to_all_reduction(exit_code);

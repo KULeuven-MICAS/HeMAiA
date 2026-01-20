@@ -6,6 +6,7 @@
 #include "chip_id.h"
 #include "occamy.h"
 #include "occamy_memory_map.h"
+#include "io.h"
 
 // *Note*: to ensure that the usr_data field is at the same offset
 // in the host and device (resp. 64b and 32b architectures)
@@ -109,7 +110,7 @@ inline void wait_host_sw_interrupt_clear(uint8_t chip_id) {
  * @details test-and-set (tas) implementation of a lock.
  *          Declare mutex with `static volatile uint32_t mtx = 0;`
  */
-static inline void mutex_tas_acquire(volatile uint32_t* pmtx) {
+inline void mutex_tas_acquire(volatile uint32_t* pmtx) {
     asm volatile(
         "li            x5,1          # x5 = 1\n"
         "1:\n"
@@ -125,7 +126,7 @@ static inline void mutex_tas_acquire(volatile uint32_t* pmtx) {
  * @details test-and-test-and-set (ttas) implementation of a lock.
  *          Declare mutex with `static volatile uint32_t mtx = 0;`
  */
-static inline void mutex_ttas_acquire(volatile uint32_t* pmtx) {
+inline void mutex_ttas_acquire(volatile uint32_t* pmtx) {
     asm volatile(
         "1:\n"
         "  lw x5, 0(%0)\n"
@@ -142,25 +143,28 @@ static inline void mutex_ttas_acquire(volatile uint32_t* pmtx) {
 /**
  * @brief Release the mutex
  */
-static inline void mutex_release(volatile uint32_t* pmtx) {
+inline void mutex_release(volatile uint32_t* pmtx) {
     asm volatile("amoswap.w.rl  x0,x0,(%0)   # Release lock by storing 0\n"
                  : "+r"(pmtx));
 }
 
-static inline void clear_host_sw_interrupt(uint8_t chip_id) {
+inline void clear_host_sw_interrupt(uint8_t chip_id) {
     clear_host_sw_interrupt_unsafe(chip_id);
     wait_host_sw_interrupt_clear(chip_id);
 }
-static inline volatile uint32_t* get_shared_lock(
-    volatile comm_buffer_t* comm_buffer_ptr) {
-    return &((*comm_buffer_ptr).lock);
-}
-
-static inline volatile uint32_t* __attribute__((const)) get_mutex_ptr_host(volatile comm_buffer_t* comm_buffer_ptr) {
-    #if __riscv_xlen == 64
-    volatile uint32_t* lock = get_shared_lock(comm_buffer_ptr);
-    return lock;
-    #elif __riscv_xlen == 32
-    return 0;
-    #endif
+static inline volatile uint32_t* get_shared_lock() {
+#if __riscv_xlen == 64
+    // For the host side, the comm buffer is located at the soc_ctrl_sractch(1)
+    // Notice this address must be aligned to 8B
+    // A little hacky way to get the comm buffer pointer
+    // See bootrom.ld
+    // the soc_ctrl_scratch_addr_base = 0x2000_0014
+    // So we pick the comm_buffer_ptr to be at offset 0x2000_0014 + 4 = 0x2000_0018 and it is 8B aligned with 8B size, otherwise the host core cannot access this address
+    uint32_t comm_buffer_ptr = readw(chiplet_addr_transform((uintptr_t)soc_ctrl_scratch_addr(1)));
+    uint64_t comm_buffer_ptr_64 = chiplet_addr_transform((uint64_t)comm_buffer_ptr);
+    return &(((comm_buffer_t *)comm_buffer_ptr_64)->lock);
+#elif __riscv_xlen == 32
+    uint32_t comm_buffer_ptr = readw(soc_ctrl_scratch_addr(1));
+    return &(((comm_buffer_t *)comm_buffer_ptr)->lock);
+#endif    
 }

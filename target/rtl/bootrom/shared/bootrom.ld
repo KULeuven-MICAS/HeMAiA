@@ -24,7 +24,11 @@ SECTIONS
   /* Global and stack pointer */
   __global_pointer$       = ADDR(.rodata) + SIZEOF(.rodata) / 2;
   __stack_pointer$        = ORIGIN(narrow_spm) + LENGTH(narrow_spm) - 8;
-  /* Quadrant Parameters for Snitch Function Calls */
+  /* SoC Ctrl Reg for Snitch Function Calls */
+  /* scratch0 -> snitch_main function ptr */
+  /* scartch1 -> comm buffer ptr          */
+  /* scartch2 -> snitch exit code val     */
   __soc_ctrl_scratch0     = 0x02000014;
   __soc_ctrl_scratch1     = 0x02000018;
+  __soc_ctrl_scratch2     = 0x0200001c;
 }
