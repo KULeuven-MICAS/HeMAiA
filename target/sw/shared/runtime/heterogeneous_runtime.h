@@ -51,7 +51,7 @@ inline static void set_host_sw_interrupt(uint8_t chip_id) {
 #endif
 }
 
-inline void clear_host_sw_interrupt_unsafe(uint8_t chip_id) {
+static inline void clear_host_sw_interrupt_unsafe(uint8_t chip_id) {
 #if __riscv_xlen == 64
     volatile uint32_t* msip_ptr =
         (uint32_t*)(((uintptr_t)clint_msip_ptr(0)) |
@@ -78,7 +78,7 @@ inline void clear_host_sw_interrupt_unsafe(uint8_t chip_id) {
 #endif
 }
 
-inline void wait_host_sw_interrupt_clear(uint8_t chip_id) {
+static inline void wait_host_sw_interrupt_clear(uint8_t chip_id) {
 #if __riscv_xlen == 64
     volatile uint32_t* msip_ptr =
         (uint32_t*)(((uintptr_t)clint_msip_ptr(0)) |
@@ -110,7 +110,7 @@ inline void wait_host_sw_interrupt_clear(uint8_t chip_id) {
  * @details test-and-set (tas) implementation of a lock.
  *          Declare mutex with `static volatile uint32_t mtx = 0;`
  */
-inline void mutex_tas_acquire(volatile uint32_t* pmtx) {
+static inline void mutex_tas_acquire(volatile uint32_t* pmtx) {
     asm volatile(
         "li            x5,1          # x5 = 1\n"
         "1:\n"
@@ -126,7 +126,7 @@ inline void mutex_tas_acquire(volatile uint32_t* pmtx) {
  * @details test-and-test-and-set (ttas) implementation of a lock.
  *          Declare mutex with `static volatile uint32_t mtx = 0;`
  */
-inline void mutex_ttas_acquire(volatile uint32_t* pmtx) {
+static inline void mutex_ttas_acquire(volatile uint32_t* pmtx) {
     asm volatile(
         "1:\n"
         "  lw x5, 0(%0)\n"
@@ -143,12 +143,12 @@ inline void mutex_ttas_acquire(volatile uint32_t* pmtx) {
 /**
  * @brief Release the mutex
  */
-inline void mutex_release(volatile uint32_t* pmtx) {
+static inline void mutex_release(volatile uint32_t* pmtx) {
     asm volatile("amoswap.w.rl  x0,x0,(%0)   # Release lock by storing 0\n"
                  : "+r"(pmtx));
 }
 
-inline void clear_host_sw_interrupt(uint8_t chip_id) {
+static inline void clear_host_sw_interrupt(uint8_t chip_id) {
     clear_host_sw_interrupt_unsafe(chip_id);
     wait_host_sw_interrupt_clear(chip_id);
 }

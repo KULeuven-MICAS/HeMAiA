@@ -214,7 +214,7 @@ void initialize_cluster(uint32_t cluster_idx) {
 }
 
 void initialize_all_clusters() {
-    for (uint32_t i = 0; i < N_CLUSTERS; i++) {
+    for (uint32_t i = 0; i < N_CLUSTERS_PER_CHIPLET; i++) {
         initialize_cluster(i);
     }
 }
@@ -312,7 +312,7 @@ void wakeup_snitches(uint8_t chip_id, volatile comm_buffer_t* comm_buffer_ptr) {
  * @detail Send a cluster interrupt to all Snitches
  */
 static inline void wakeup_snitches_cl(uint8_t chip_id) {
-    for (int i = 0; i < N_CLUSTERS; i++) wakeup_cluster(chip_id, i);
+    for (int i = 0; i < N_CLUSTERS_PER_CHIPLET; i++) wakeup_cluster(chip_id, i);
 }
 
 /**

@@ -268,7 +268,7 @@ inline void bingo_hw_offload_init() {
         get_bingo_hw_offload_unit()->dev_arg_list_ptr = readw(quad_ctrl_arg_ptr_addr());
         get_bingo_hw_offload_unit()->dev_kernel_list_ptr = readw(quad_ctrl_kernel_ptr_addr());
         get_bingo_hw_offload_unit()->gid_to_dev_tid_list_ptr = readw(quad_ctrl_gid_to_dev_tid_base_addr());
-        printf("[Cluster %d Core %d]: HW offload unit initialized with arg ptr=0x%x, kernel ptr=0x%x, gid to dev tid ptr=0x%x\r\n",
+        printf_safe("[Cluster %d Core %d]: HW offload unit initialized with arg ptr=0x%x, kernel ptr=0x%x, gid to dev tid ptr=0x%x\r\n",
                snrt_cluster_idx(), snrt_cluster_core_idx(),
                get_bingo_hw_offload_unit()->dev_arg_list_ptr,
                get_bingo_hw_offload_unit()->dev_kernel_list_ptr,
@@ -279,9 +279,9 @@ inline void bingo_hw_offload_init() {
     snrt_cluster_hw_barrier();
 }
 
-inline uint32_t bingo_hw_offload_get_dev_task_id(uint32_t global_task_id){
+inline int32_t bingo_hw_offload_get_dev_task_id(uint32_t global_task_id){
     // Get the dev task id from the global task id
-    return readw((uintptr_t)(get_bingo_hw_offload_unit()->gid_to_dev_tid_list_ptr + global_task_id * sizeof(uint32_t)));
+    return (int32_t)readw((uintptr_t)(get_bingo_hw_offload_unit()->gid_to_dev_tid_list_ptr + global_task_id * sizeof(uint32_t)));
 }
 
 inline uint32_t bingo_hw_offload_get_kernel_ptr(uint32_t dev_task_id){
@@ -299,7 +299,7 @@ inline uint32_t bingo_hw_offload_manager(){
     uint32_t cur_arg_ptr;
     uint32_t cur_kernel_ptr;
     uint32_t cur_global_task_id;
-    uint32_t cur_dev_task_id;
+    int32_t cur_dev_task_id;
     uint32_t kernel_return_value;
     uint32_t err = 0;
     bingo_hw_offload_init();
@@ -308,14 +308,10 @@ inline uint32_t bingo_hw_offload_manager(){
         // Using CSR to read the ready queue
         // Blocking read
         cur_global_task_id = read_bingo_hw_manager_ready_queue();
-
-        printf("[Cluster %d Core %d]: Get task id %d from ready queue\r\n",
-               snrt_cluster_idx(), snrt_cluster_core_idx(),
-               cur_global_task_id);
         // Then we get the dev task id from the global task id
         cur_dev_task_id = bingo_hw_offload_get_dev_task_id(cur_global_task_id);
         if (cur_dev_task_id == -1){
-            printf("[Cluster %d Core %d]: Error: Get invalid dev task id for global task id %d\r\n",
+            printf_safe("[Cluster %d Core %d]: Error: Invalid dev task id for global task id %d\r\n",
                snrt_cluster_idx(), snrt_cluster_core_idx(),
                cur_global_task_id);
             err=1;
@@ -323,17 +319,21 @@ inline uint32_t bingo_hw_offload_manager(){
         }
         cur_arg_ptr = bingo_hw_offload_get_arg_ptr(cur_dev_task_id);
         cur_kernel_ptr = bingo_hw_offload_get_kernel_ptr(cur_dev_task_id);
-        printf("[Cluster %d Core %d]: Global task id %d->dev task id=%d, arg ptr=0x%x, kernel ptr=0x%x\r\n",
+        printf_safe("[Cluster %d Core %d]: Task %d Info: Dev tid=%d, arg ptr=0x%x, kernel ptr=0x%x\r\n",
                snrt_cluster_idx(), snrt_cluster_core_idx(),
                cur_global_task_id,
                cur_dev_task_id,
                cur_arg_ptr,
                cur_kernel_ptr);
+        printf_safe("[Cluster %d Core %d]: Task %d Info: Running Dev Kernel ...\r\n",
+               snrt_cluster_idx(),
+               snrt_cluster_core_idx(),
+               cur_global_task_id);
         // Execute the function
         kernel_return_value = ((uint32_t (*)(uint32_t))cur_kernel_ptr)(cur_arg_ptr);
         if (kernel_return_value == 0){
             // Step 3: Write the Done queue to notify the bingo hw scheduler
-            printf("[Cluster %d Core %d]: Writing done queue for task id %d\r\n",
+            printf_safe("[Cluster %d Core %d]: Task %d Info: Succ!\r\n",
                    snrt_cluster_idx(),
                    snrt_cluster_core_idx(),
                    cur_global_task_id);
@@ -343,20 +343,22 @@ inline uint32_t bingo_hw_offload_manager(){
             // Exit signal received from the kernel
             // There will be special kernel to return a 1 to exit the hw offload manager
             // Access the clint mutex to printf the error message
-            printf("Cluster %d Core %d: Exiting bingo hw offload manager as requested by task %d\n",
+            printf_safe("[Cluster %d Core %d]: Task %d Info: Exiting ...\r\n",
                    snrt_cluster_idx(),
                    snrt_cluster_core_idx(),
                    cur_global_task_id);
+            write_bingo_hw_manager_done_queue(cur_global_task_id);
             break;
         } else {
             // Other error code
             err = kernel_return_value;
             // Access the clint mutex to printf the error message
-            printf("Cluster %d Core %d: Error in executing task %d, error code=%d\n",
+            printf_safe("[Cluster %d Core %d]: Task %d Error: Error!!!, error code=%d\r\n",
                    snrt_cluster_idx(),
                    snrt_cluster_core_idx(),
                    cur_global_task_id,
                    kernel_return_value);
+            write_bingo_hw_manager_done_queue(cur_global_task_id);
             break;
         }
     }

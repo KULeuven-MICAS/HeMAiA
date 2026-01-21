@@ -11,7 +11,7 @@
 // the number of cores in each cluster could be different
 
 //#define SNRT_CLUSTER_CORE_NUM N_CORES_PER_CLUSTER
-#define SNRT_CLUSTER_NUM N_CLUSTERS
+#define SNRT_CLUSTER_NUM N_CLUSTERS_PER_CHIPLET
 #define SNRT_CLUSTER_DM_CORE_NUM 1
 #define SNRT_TCDM_START_ADDR ${cluster_base_addr}
 #define SNRT_TCDM_SIZE      ${cluster_tcdm_size}

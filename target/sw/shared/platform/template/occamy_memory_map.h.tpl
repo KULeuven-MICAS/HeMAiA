@@ -49,7 +49,7 @@
 #define soc_ctrl_scratch_base \
     (SOC_CTRL_BASE_ADDR + OCCAMY_SOC_SCRATCH_0_REG_OFFSET)
 
-%if nr_clusters==1:
+%if nr_clusters_per_chiplet==1:
 #define soc_ctrl_mailbox_scratch_base \
     (SOC_CTRL_BASE_ADDR + OCCAMY_SOC_MAILBOX_SCRATCH_REG_OFFSET)
 %else:
