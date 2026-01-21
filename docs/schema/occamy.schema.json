@@ -305,7 +305,7 @@
                     "description": "Base address of the quadrant axi lite region. defaults to 0x0a000000",
                     "default": 167772160
                 },
-                "quad_axi_lite_offset": {
+                "quad_axi_lite_base_offset": {
                     "type": "integer",
                     "description": "Allocated size and offset of each quadrant axi lite configuration. defaults to 0x10000",
                     "default": 65536
