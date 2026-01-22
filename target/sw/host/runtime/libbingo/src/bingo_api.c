@@ -689,16 +689,16 @@ uint32_t bingo_hw_scheduler(uint64_t* host_arg_list, uint64_t* host_kernel_list,
     uint32_t err=0;
     while (1) {
         // 1. First read the ready queue
-        BINGO_PERF_TRACING(BINGO_TRACE_MGR_GET_READY_START);
+        BINGO_TRACE_MARKER(BINGO_TRACE_MGR_GET_READY_START);
         current_global_task_id = bingo_hw_scheduler_get_global_task_id();
-        BINGO_PERF_TRACING(BINGO_TRACE_MGR_GET_READY_END);
+        BINGO_TRACE_MARKER(BINGO_TRACE_MGR_GET_READY_END);
 
 
         // 2. Then we get the host task id from the global task id
-        BINGO_PERF_TRACING(BINGO_TRACE_MGR_PREP_START);
+        BINGO_TRACE_MARKER(BINGO_TRACE_MGR_PREP_START);
         current_host_task_id = bingo_hw_scheduler_get_host_task_id(global_task_id_to_host_task_id, current_global_task_id);
         if (current_host_task_id == -1){
-            BINGO_PRINTF(1, "Chip(%x, %x): [Host]: Error: Invalid host task id for global task id %d\r\n",
+            BINGO_PRINTF(2, "Chip(%x, %x): [Host]: Error: Invalid host task id for global task id %d\r\n",
                    get_current_chip_loc_x(), get_current_chip_loc_y(),
                    current_global_task_id);
             err=1;
@@ -707,44 +707,44 @@ uint32_t bingo_hw_scheduler(uint64_t* host_arg_list, uint64_t* host_kernel_list,
         // Then get the task arg and fn ptr from the task list
         current_arg_ptr = *bingo_hw_scheduler_get_host_arg(host_arg_list, current_host_task_id);
         current_kernel_ptr = *bingo_hw_scheduler_get_host_kernel(host_kernel_list, current_host_task_id);
-        BINGO_PERF_TRACING(BINGO_TRACE_MGR_PREP_END);
+        BINGO_TRACE_MARKER(BINGO_TRACE_MGR_PREP_END);
         BINGO_PRINTF(1, "Chip(%x, %x): [Host]: Task %d Info: Host tid=%d, arg ptr=0x%lx, kernel ptr=0x%lx\r\n",
                get_current_chip_loc_x(), get_current_chip_loc_y(),
                current_global_task_id, current_host_task_id,
                current_arg_ptr, current_kernel_ptr);
-        BINGO_PRINTF(0, "Chip(%x, %x): [Host]: Task %d Info: Running Host kernel ...\r\n",
+        BINGO_PRINTF(2, "Chip(%x, %x): [Host]: Task %d Info: Running Host kernel ...\r\n",
                get_current_chip_loc_x(), get_current_chip_loc_y(),
                current_global_task_id);
         // 3. Then run the host kernel
-        BINGO_PERF_TRACING(BINGO_TRACE_MGR_RUN_KERNEL_START);
+        BINGO_TRACE_MARKER(BINGO_TRACE_MGR_RUN_KERNEL_START);
         kernel_return_value = ((uint64_t (*)(uint64_t))current_kernel_ptr)(current_arg_ptr);
-        BINGO_PERF_TRACING(BINGO_TRACE_MGR_RUN_KERNEL_END);
+        BINGO_TRACE_MARKER(BINGO_TRACE_MGR_RUN_KERNEL_END);
 
         // 4. Finally write back to the done queue
-        BINGO_PERF_TRACING(BINGO_TRACE_MGR_WRITE_DONE_START);
+        BINGO_TRACE_MARKER(BINGO_TRACE_MGR_WRITE_DONE_START);
         if (kernel_return_value == 0){
-            BINGO_PRINTF(0, "Chip(%x, %x): [Host]: Task %d Info: Succ!\r\n",
+            BINGO_PRINTF(2, "Chip(%x, %x): [Host]: Task %d Info: Succ!\r\n",
                    get_current_chip_loc_x(), get_current_chip_loc_y(),
                    current_global_task_id);
             // The normal case, write back to the done queue
             bingo_hw_scheduler_write_done_queue(current_global_task_id);
-            BINGO_PERF_TRACING(BINGO_TRACE_MGR_WRITE_DONE_END);
+            BINGO_TRACE_MARKER(BINGO_TRACE_MGR_WRITE_DONE_END);
         } else if (kernel_return_value == 1){
-            BINGO_PRINTF(0, "Chip(%x, %x): [Host]: Task %d Info: Exiting ...\r\n",
+            BINGO_PRINTF(2, "Chip(%x, %x): [Host]: Task %d Info: Exiting ...\r\n",
                    get_current_chip_loc_x(), get_current_chip_loc_y(),
                    current_global_task_id);
             // The host exit task should be the last task
-            BINGO_PRINTF(0, "Chip(%x, %x): [Host]: All Task Done!\r\n",
+            BINGO_PRINTF(2, "Chip(%x, %x): [Host]: All Task Done!\r\n",
                    get_current_chip_loc_x(), get_current_chip_loc_y());
-            BINGO_PERF_TRACING(BINGO_TRACE_MGR_WRITE_DONE_END);
+            BINGO_TRACE_MARKER(BINGO_TRACE_MGR_WRITE_DONE_END);
             break;
         } else {
             // Error case
-            BINGO_PRINTF(1, "Chip(%x, %x): [Host]: Task %d Info: Error!!!, error code=%d\r\n",
+            BINGO_PRINTF(2, "Chip(%x, %x): [Host]: Task %d Info: Error!!!, error code=%d\r\n",
                    get_current_chip_loc_x(), get_current_chip_loc_y(),
                    current_global_task_id, kernel_return_value);
             err = kernel_return_value;
-            BINGO_PERF_TRACING(BINGO_TRACE_MGR_WRITE_DONE_END);
+            BINGO_TRACE_MARKER(BINGO_TRACE_MGR_WRITE_DONE_END);
             break;
         }
     }

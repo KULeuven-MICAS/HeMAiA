@@ -34,7 +34,6 @@
 #include "device_kernel_args.h"
 #include "host_kernel_args.h"
 // Perf Tracing
-#define BINGO_PERF_TRACING
 #include "perf_tracing.h"
 // DMA
 #include "sys_dma.h"
@@ -53,7 +52,7 @@
 #ifdef BINGO_DEBUG_LEVEL
 #define _BINGO_PRINTF(...)             \
     if (1) {                        \
-        printf_safe("[bingo] "__VA_ARGS__); \
+        printf_safe("[Bingo Host] "__VA_ARGS__); \
     }
 #define BINGO_PRINTF(d, ...)        \
     if (BINGO_DEBUG_LEVEL >= d) {   \

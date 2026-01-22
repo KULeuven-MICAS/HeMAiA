@@ -649,6 +649,7 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         for chiplet_id in chiplets_to_process:
             local_nodes = [node for node in all_nodes if node.assigned_chiplet_id == chiplet_id]
             num_local_nodes = len(local_nodes)
+            
             if num_local_nodes == 0:
                 task_description_list += f"uint64_t task_desc_list_chip_{chiplet_id:02x}[1] = {{0}};\n"
             else:
@@ -666,6 +667,8 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                     
                     task_description_list += f"    0x{packed_val:016X}, {comment}\n"
                 task_description_list += "};\n"
+            
+            # Emit num_tasks at the end of the list definition
             task_description_list += f"uint32_t num_tasks_chip_{chiplet_id:02x} = {num_local_nodes};\n"
             
         return task_description_list
@@ -875,6 +878,7 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
 
         f.write(f"        bingo_hw_scheduler_init((uint32_t)(uintptr_t)device_arg_list_chip_{chiplet_id:02x},\n")
         f.write(f"                                (uint32_t)(uintptr_t)device_kernel_list_chip_{chiplet_id:02x},\n")
+        f.write(f"                                num_dev_tasks_chip_{chiplet_id:02x},\n")
         f.write(f"                                (uint32_t)(uintptr_t)global_task_id_to_dev_task_id_chip_{chiplet_id:02x},\n")
         f.write(f"                                (uint64_t)(uintptr_t)task_desc_list_chip_{chiplet_id:02x},\n")
         f.write(f"                                num_tasks_chip_{chiplet_id:02x});\n\n")

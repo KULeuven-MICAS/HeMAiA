@@ -198,7 +198,7 @@ clean-socctrl:
 ###############
 # QUAD PERIPH #
 ###############
-
+QUADPERIPH_HJSON_DIR	    = $(SW_HJSON_DIR)/quad_periph
 $(TARGET_QUADPERIPH_DIR):
 	@mkdir -p $@
 
@@ -211,7 +211,7 @@ quadperiph: $(QUADPERIPH_REGGEN_TARGETS)
 clean-quadperiph:
 	rm -rf $(QUADPERIPH_REGGEN_TARGETS) .quadperiph_reggen_targets_group
 # Generate the reggen targets from the hjson file
-.quadperiph_reggen_targets_group: $(SOURCE_QUADPERIPH_DIR)/occamy_quad_periph_reg.hjson | $(TARGET_QUADPERIPH_DIR)
+.quadperiph_reggen_targets_group: $(QUADPERIPH_HJSON_DIR)/occamy_quad_periph_reg.hjson | $(TARGET_QUADPERIPH_DIR)
 	@$(REGGEN) -r -t $(TARGET_QUADPERIPH_DIR) $<
 	@cp $(SOURCE_QUADPERIPH_DIR)/occamy_quad_periph.sv $(TARGET_QUADPERIPH_DIR)/occamy_quad_periph.sv
 	@touch $@

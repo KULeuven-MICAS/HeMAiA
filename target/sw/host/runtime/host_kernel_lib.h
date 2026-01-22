@@ -3,7 +3,6 @@
 #include <stdint.h>
 #include "uart.h"
 #include "heterogeneous_runtime.h"
-#define BINGO_PERF_TRACING
 #include "perf_tracing.h"
 #define EXIT_CODE_SUCC 1
 

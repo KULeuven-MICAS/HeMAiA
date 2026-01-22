@@ -39,15 +39,10 @@ def parse_trace_file(file_path, event_map):
     # Group 2: Instruction part (after hex code)
     log_pattern = re.compile(r'^\s*\d+ns\s+(\d+)\s+\w\s+[0-9a-fA-F]+\s+\d+\s+[0-9a-fA-F]+\s+(.*)$')
     
-    # regex to match Magic NOP: ori x0, x0, IMM or ori zero, zero, IMM
+    # regex to match Magic NOP: ori/xori x0, x0, IMM or ori/xori zero, zero, IMM
     # Captures the immediate value
-    magic_nop_pattern = re.compile(r'ori\s+(?:x0|zero)(?:,\s*(?:x0|zero))?,\s*(-?\d+|0x[0-9a-fA-F]+)')
+    magic_nop_pattern = re.compile(r'(?:ori|xori)\s+(?:x0|zero)(?:,\s*(?:x0|zero))?,\s*(-?\d+|0x[0-9a-fA-F]+)')
     
-    # regex to match prefetch instructions which map to ori x0, x0, IMM
-    # spike-dasm decodes specific immediates as prefetch hints
-    # Pattern looks like: prefetch.i 288(zero)
-    prefetch_pattern = re.compile(r'prefetch\.([irw])\s+(\d+)\(zero\)')
-
     is_log_file = file_path.endswith('.log')
     pattern = log_pattern if is_log_file else txt_pattern
 
@@ -67,26 +62,6 @@ def parse_trace_file(file_path, event_map):
                     imm_str = nop_match.group(1)
                     imm = int(imm_str, 16) if imm_str.startswith('0x') else int(imm_str)
                 
-                # If not a standard ori, check if it was disassembled as a prefetch hint
-                if imm is None:
-                    prefetch_match = prefetch_pattern.search(instr_str)
-                    if prefetch_match:
-                        # spike-dasm decodes specific immediates as prefetch hints
-                        # prefetch.i -> LSB=0 (even)
-                        # prefetch.r -> LSB=1 (odd)
-                        # prefetch.w -> LSB=3
-                        type_char = prefetch_match.group(1)
-                        # The immediate displayed is often the base (masked) value
-                        base_imm = int(prefetch_match.group(2))
-                        
-                        offset = 0
-                        if type_char == 'r':
-                            offset = 1
-                        elif type_char == 'w':
-                            offset = 3
-                            
-                        imm = base_imm + offset
-
                 if imm is not None:
                     if imm in event_map:
                         event_name = event_map[imm]
@@ -215,6 +190,9 @@ def main():
                 perfetto_event['dur'] = ev['dur']
                 k_type = ev['name'].replace('BINGO_TRACE_', '')
                 perfetto_event['args']['kernel_type'] = k_type
+                perfetto_event['args']['start_cc'] = ev['ts']
+                perfetto_event['args']['end_cc'] = ev['ts'] + ev['dur']
+                perfetto_event['args']['dur_cc'] = ev['dur']
             else:
                 # For others, keep raw_id logic or none?
                 # User said "instead of raw_id". Safe to use raw_id for instant events if needed.

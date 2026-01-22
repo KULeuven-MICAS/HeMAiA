@@ -19,7 +19,8 @@
 
 // The Magic NOP Macro
 // Uses the immediate value %0 (limited to 12 bits: 0-4095)
-#define BINGO_TRACE_MARKER(id) asm volatile("ori x0, x0, %0" :: "i"(id))
+// We use xori instead of ori to avoid spike-dasm decoding it as prefetch
+#define BINGO_TRACE_MARKER(id) asm volatile("xori x0, x0, %0" :: "i"(id))
 
 #else
 

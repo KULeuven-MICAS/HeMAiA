@@ -57,6 +57,7 @@ RISCV_CFLAGS += -Werror
 ifeq ($(DEBUG),ON)
 RISCV_CFLAGS += -g
 endif
+RISCV_CFLAGS += $(USER_FLAGS)
 
 # Linking sources
 LINKER_SCRIPT = $(abspath $(HOST_DIR)/runtime/host.ld)
