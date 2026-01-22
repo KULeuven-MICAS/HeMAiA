@@ -94,13 +94,15 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         # We put those nodes at the end of user-specified nodes and put them in serials
         # first is all the normal cores and then finally the host core
         
-        # first find the end nodes
-        end_nodes = [node for node in self.node_list if self.out_degree(node) == 0]
-        if len(end_nodes) == 0:
-            raise ValueError("No end node found in the DFG.")
-        # Now we generate the exit nodes
-        exit_nodes = []
-        for chiplet_id in range(self.num_chiplets):
+        # We generate exit nodes for each chiplet in parallel
+        print("Adding exit nodes for each chiplet...")
+        for chiplet_id in self.chiplet_ids:
+            local_end_nodes = [
+                node for node in self.node_list if node.assigned_chiplet_id == chiplet_id and self.out_degree(node) == 0
+            ]
+            current_chiplet_exit_nodes = []
+            
+            # 1. Normal cores
             for cluster_id in range(self.num_clusters_per_chiplet):
                 for core_id in range(self.num_cores_per_cluster):
                     # Skip the simd core for now
@@ -113,24 +115,24 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                         kernel_name="__snax_bingo_kernel_exit"
                     )
                     self.bingo_add_node(exit_node)
-                    exit_nodes.append(exit_node)
-        # Finally add the host core exit node
-        for chiplet_id in range(self.num_chiplets):
-            exit_node = BingoNode(
+                    current_chiplet_exit_nodes.append(exit_node)
+
+            # 2. Host core
+            exit_node_host = BingoNode(
                 assigned_chiplet_id=chiplet_id,
                 assigned_cluster_id=0,
-                assigned_core_id=self.num_cores_per_cluster -1,
+                assigned_core_id=self.num_cores_per_cluster - 1,
                 kernel_name="__host_bingo_kernel_exit"
             )
-            self.bingo_add_node(exit_node)
-            exit_nodes.append(exit_node)
-        # insert the first exit node after all end nodes
-        first_exit_node = exit_nodes[0]
-        for end_node in end_nodes:
-            self.bingo_add_edge(end_node, first_exit_node)
-        # insert the rest exit nodes in serials
-        for i in range(1, len(exit_nodes)):
-            self.bingo_add_edge(exit_nodes[i-1], exit_nodes[i])
+            self.bingo_add_node(exit_node_host)
+            current_chiplet_exit_nodes.append(exit_node_host)
+
+            # 3. Connect end nodes to the first exit node
+            for end_node in local_end_nodes:
+                self.bingo_add_edge(end_node, current_chiplet_exit_nodes[0])
+            # 4. Chain the exit nodes within this chiplet
+            for i in range(1, len(current_chiplet_exit_nodes)):
+                self.bingo_add_edge(current_chiplet_exit_nodes[i-1], current_chiplet_exit_nodes[i])
     def bingo_transform_dfg_add_dummy_set_nodes(self) -> None:
         """Transform the DFG to add dummy nodes."""
         # The idea of the dummy set nodes is to solve the problem of this kind
@@ -492,7 +494,7 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         current_shift += num_cores
         
         return fields
-    def bingo_visualize_dfg(self, filename: str = "dfg_visualization.png", figsize: tuple = (20, 16)) -> None:
+    def bingo_visualize_dfg(self, filename: str = "dfg_visualization", figsize: tuple = (20, 16)) -> None:
         """Visualize the DFG with different shapes for task types and colors for chiplets."""
         import matplotlib.pyplot as plt
         from matplotlib.lines import Line2D
@@ -544,9 +546,8 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
             color = chiplet_colors[assigned_chiplet % len(chiplet_colors)]
             node_colors[node] = color
 
-        # Create figure and axes with GridSpec to accommodate the table
-        fig, (ax_graph, ax_table) = plt.subplots(2, 1, figsize=figsize, gridspec_kw={'height_ratios': [4, 1]})
-        ax_table.axis('off')
+        # Create figure
+        fig, ax_graph = plt.subplots(figsize=figsize)
 
         # Draw nodes with different shapes
         for shape, nodes in node_shapes.items():
@@ -586,7 +587,14 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         
         ax_graph.legend(handles=all_legends, loc="best")
 
-        # Create the table
+        # Save the visualization to a file
+        plt.tight_layout()
+        plt.savefig(f"{filename}.png")
+
+    def bingo_export_dfg_to_csv(self, filename: str = "dfg_table") -> None:
+        """Export the DFG node details to a CSV file."""
+        import csv
+        
         col_labels = ["ID", "Chiplet", "Cluster", "Core", "Type", "Kernel"]
         table_data = []
         sorted_nodes = sorted(self.nodes, key=lambda n: n.node_id)
@@ -608,20 +616,11 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
             ]
             table_data.append(row)
 
-        table = ax_table.table(
-            cellText=table_data,
-            colLabels=col_labels,
-            loc='center',
-            cellLoc='center'
-        )
-        table.auto_set_font_size(False)
-        table.set_fontsize(8)
-        table.scale(1, 1.2)
+        with open(f"{filename}.csv", 'w', newline='') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(col_labels)
+            writer.writerows(table_data)
 
-        # Save the visualization to a file
-        plt.tight_layout()
-        plt.savefig(filename)
-        plt.show()
     def bingo_emit_task_kernel_name_list(self) -> str:
         """Emit the list of task kernel names."""
         # Generate the kernel name list
@@ -642,9 +641,8 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
     def bingo_emit_task_desc_list(self, target_chiplet_id: int = None) -> str:
         """Emit the task description list in the DFG."""
         task_description_list = ""
-        all_nodes = self.node_list
-        # Sort the nodes by node id
-        all_nodes.sort(key=lambda x: x.node_id)
+        # we need to sort the nodes in topological order
+        all_nodes = list(nx.topological_sort(self))
         
         chiplets_to_process = [target_chiplet_id] if target_chiplet_id is not None else self.chiplet_ids
 
@@ -685,45 +683,50 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         # 1. Emit global_task_id_to_dev_task_id for each chiplet
         # Also need to emit num_dev_tasks for each chiplet
         for chiplet_id in chiplets_to_process:
-            global_to_dev = []
+            global_to_dev_lines = []
             dev_task_counter = 0
             
             for node in all_nodes:
                 kernel_name = node.kernel_name
                 # Check if the node is assigned to the current chiplet
+                val = "-1"
+                comment = ""
                 if node.assigned_chiplet_id == chiplet_id:
                     if kernel_name and kernel_name.startswith("__snax"):
                          # It is a device task
-                        global_to_dev.append(str(node.node_id))
+                        val = str(dev_task_counter)
+                        comment = f" -> Dev Task {dev_task_counter} ({node.node_name})"
                         dev_task_counter += 1
                     else:
-                        global_to_dev.append("-1")
-                else:
-                    global_to_dev.append("-1")
+                        comment = f" ({node.node_name})"
+                
+                global_to_dev_lines.append(f"    {val}, // Node ID {node.node_id}{comment}")
             
             mapping_str += f"int32_t global_task_id_to_dev_task_id_chip_{chiplet_id:02x}[{num_nodes}] = {{\n"
-            mapping_str += "    " + ", ".join(global_to_dev) + "\n"
+            mapping_str += "\n".join(global_to_dev_lines) + "\n"
             mapping_str += "};\n"
             mapping_str += f"uint32_t num_dev_tasks_chip_{chiplet_id:02x} = {dev_task_counter};\n"
             
         # 2. Emit global_task_id_to_host_task_id
         for chiplet_id in chiplets_to_process:
-            global_to_host = []
+            global_to_host_lines = []
             host_task_counter = 0
             for node in all_nodes:
                 kernel_name = node.kernel_name
+                val = "-1"
+                comment = ""
                 if node.assigned_chiplet_id == chiplet_id:
                     if kernel_name and kernel_name.startswith("__host"):
-                        global_to_host.append(str(node.node_id))
+                        val = str(host_task_counter)
+                        comment = f" -> Host Task {host_task_counter} ({node.node_name})"
                         host_task_counter += 1
                     else:
-                        global_to_host.append("-1")
-                else:
-                    # Remote tasks are not local host tasks
-                    global_to_host.append("-1")
+                        comment = f" ({node.node_name})"
+
+                global_to_host_lines.append(f"    {val}, // Node ID {node.node_id}{comment}")
             
             mapping_str += f"int32_t global_task_id_to_host_task_id_chip_{chiplet_id:02x}[{num_nodes}] = {{\n"
-            mapping_str += "    " + ", ".join(global_to_host) + "\n"
+            mapping_str += "\n".join(global_to_host_lines) + "\n"
             mapping_str += "};\n"
             mapping_str += f"uint32_t num_host_tasks_chip_{chiplet_id:02x} = {host_task_counter};\n"
         return mapping_str
