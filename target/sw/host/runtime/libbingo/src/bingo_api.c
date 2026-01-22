@@ -636,16 +636,41 @@ int64_t* bingo_hw_scheduler_get_host_kernel(int64_t* host_kernel_list_base, uint
 // Then the HW scheduler will read the task list from the memory and schedule the tasks
 // The Host core will also hooked with th ARA core for the simd
 // So its work is just to read the ready queue and write to the done queue when the simd is done
-void bingo_hw_scheduler_init(uint32_t dev_arg_base_addr, uint32_t dev_kernel_base_addr, uint32_t global_task_id_to_dev_task_id_base_addr, uint64_t task_desc_list_base, uint32_t num_tasks){
-    uint32_t current_task_id;
-    uint8_t current_chip = get_current_chip_id();
-    uint32_t current_arg_ptr;
-    uint32_t current_kernel_ptr;
-    uint32_t kernel_return_value;
-    uint32_t err = 0;
-    writew(dev_arg_base_addr,                 (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_arg_ptr_addr()));
-    writew(dev_kernel_base_addr,              (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_kernel_ptr_addr()));
-    writew(global_task_id_to_dev_task_id_base_addr, (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_gid_to_dev_tid_base_addr()));
+void bingo_hw_scheduler_init(uint32_t dev_arg_base_addr, uint32_t dev_kernel_base_addr, uint32_t num_dev_tasks, uint32_t global_task_id_to_dev_task_id_base_addr, uint64_t task_desc_list_base, uint32_t num_tasks){
+    // For the dev_arg_base_addr, dev_kernel_base_addr, global_task_id_to_dev_task_id_base_addr
+    // We use those list when we get a globak task id and need to get the arg/kernel ptr for the device
+    // The host core will write those list to the clusters' TCDM to let the device access them directly
+    // instead of going to the main memory
+    // Essentially we are doing the SW Cache here for the device to reduce the main memory access
+
+    // Assign the space in the clusters TCDM for those lists
+    for (uint32_t i = 0; i < N_CLUSTERS_PER_CHIPLET; i++)
+    {
+        // Allocate space in the cluster's L1 for those lists
+        uint64_t ptr_dev_arg_base = bingo_l1_alloc(get_current_chip_id(), i, num_dev_tasks * sizeof(uint32_t));
+        uint64_t ptr_dev_kernel_base = bingo_l1_alloc(get_current_chip_id(), i, num_dev_tasks * sizeof(uint32_t));
+        uint64_t ptr_global_id_to_dev_id_base = bingo_l1_alloc(get_current_chip_id(), i, num_tasks * sizeof(int32_t));
+        // Copy the data using soc dma
+        // Copy dev arg list
+        sys_dma_blk_memcpy(get_current_chip_id(),
+                            ptr_dev_arg_base,
+                            (uint64_t)chiplet_addr_transform_full(get_current_chip_id(), dev_arg_base_addr),
+                            num_dev_tasks * sizeof(uint32_t));
+        // Copy dev kernel list
+        sys_dma_blk_memcpy(get_current_chip_id(),
+                            ptr_dev_kernel_base,
+                            (uint64_t)chiplet_addr_transform_full(get_current_chip_id(), dev_kernel_base_addr),
+                            num_dev_tasks * sizeof(uint32_t));
+        // Copy global task id to dev task id list
+        sys_dma_blk_memcpy(get_current_chip_id(),
+                            ptr_global_id_to_dev_id_base,
+                            (uint64_t)chiplet_addr_transform_full(get_current_chip_id(), global_task_id_to_dev_task_id_base_addr),
+                            num_tasks * sizeof(int32_t));
+        writew(ptr_dev_arg_base,                 (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_arg_ptr_addr(i)));
+        writew(ptr_dev_kernel_base,              (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_kernel_ptr_addr(i)));
+        writew(ptr_global_id_to_dev_id_base, (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_global_id_to_dev_id_addr(i)));
+    }
+    
     writew(task_desc_list_base>>32,       (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_task_desc_base_hi_addr()));
     writew((uint32_t)task_desc_list_base, (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_task_desc_base_lo_addr()));
     writew(num_tasks,                     (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_num_task_addr()));

@@ -264,9 +264,9 @@ inline void bingo_hw_offload_init() {
             // wait
         }
         // Now we can read the ptrs
-        get_bingo_hw_offload_unit()->dev_arg_list_ptr = readw(quad_ctrl_arg_ptr_addr());
-        get_bingo_hw_offload_unit()->dev_kernel_list_ptr = readw(quad_ctrl_kernel_ptr_addr());
-        get_bingo_hw_offload_unit()->gid_to_dev_tid_list_ptr = readw(quad_ctrl_gid_to_dev_tid_base_addr());
+        get_bingo_hw_offload_unit()->dev_arg_list_ptr = readw(quad_ctrl_arg_ptr_addr(snrt_cluster_idx()));
+        get_bingo_hw_offload_unit()->dev_kernel_list_ptr = readw(quad_ctrl_kernel_ptr_addr(snrt_cluster_idx()));
+        get_bingo_hw_offload_unit()->gid_to_dev_tid_list_ptr = readw(quad_ctrl_global_id_to_dev_id_addr(snrt_cluster_idx()));
         BINGO_PRINTF(0, "[Cluster %d Core %d]: HW offload unit initialized with arg ptr=0x%x, kernel ptr=0x%x, gid to dev tid ptr=0x%x\r\n",
                snrt_cluster_idx(), snrt_cluster_core_idx(),
                get_bingo_hw_offload_unit()->dev_arg_list_ptr,

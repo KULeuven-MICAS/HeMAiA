@@ -40,6 +40,16 @@
 #define CLINT_MSIP_0_REG_OFFSET CLINT_MSIP_REG_OFFSET
 #endif
 
+#if OCCAMY_SOC_MAILBOX_SCRATCH_MULTIREG_COUNT == 1
+#define OCCAMY_SOC_MAILBOX_SCRATCH_0_REG_OFFSET OCCAMY_SOC_MAILBOX_SCRATCH_REG_OFFSET
+#endif
+
+#if OCCAMY_QUAD_PERIPH_PARAM_NUM_CLUSTERS == 1
+#define OCCAMY_QUAD_PERIPH_ARG_PTR_LIST_BASE_ADDR_0_REG_OFFSET OCCAMY_QUAD_PERIPH_ARG_PTR_LIST_BASE_ADDR_REG_OFFSET
+#define OCCAMY_QUAD_PERIPH_KERNEL_PTR_LIST_BASE_ADDR_0_REG_OFFSET OCCAMY_QUAD_PERIPH_KERNEL_PTR_LIST_BASE_ADDR_REG_OFFSET
+#define OCCAMY_QUAD_PERIPH_GLOBAL_TASK_ID_TO_DEV_TASK_ID_BASE_ADDR_0_REG_OFFSET OCCAMY_QUAD_PERIPH_GLOBAL_TASK_ID_TO_DEV_TASK_ID_BASE_ADDR_REG_OFFSET
+#endif
+
 //===============================================================
 // Base addresses
 //===============================================================
@@ -49,16 +59,20 @@
 #define soc_ctrl_scratch_base \
     (SOC_CTRL_BASE_ADDR + OCCAMY_SOC_SCRATCH_0_REG_OFFSET)
 
-%if nr_clusters_per_chiplet==1:
-#define soc_ctrl_mailbox_scratch_base \
-    (SOC_CTRL_BASE_ADDR + OCCAMY_SOC_MAILBOX_SCRATCH_REG_OFFSET)
-%else:
 #define soc_ctrl_mailbox_scratch_base \
     (SOC_CTRL_BASE_ADDR + OCCAMY_SOC_MAILBOX_SCRATCH_0_REG_OFFSET)
-%endif
 
 #define soc_ctrl_kernel_tab_scratch_base \
     (SOC_CTRL_BASE_ADDR + OCCAMY_SOC_KERNEL_TAB_SCRATCH_0_REG_OFFSET)    
+
+#define quad_ctrl_arg_ptr_list_base \
+    (QUAD_AXI_LITE_NARROW_PERIPHERALS_BASE_ADDR + OCCAMY_QUAD_PERIPH_ARG_PTR_LIST_BASE_ADDR_0_REG_OFFSET)
+
+#define quad_ctrl_kernel_ptr_list_base \
+    (QUAD_AXI_LITE_NARROW_PERIPHERALS_BASE_ADDR + OCCAMY_QUAD_PERIPH_KERNEL_PTR_LIST_BASE_ADDR_0_REG_OFFSET)
+
+#define quad_ctrl_gid_to_dev_tid_base_addr \
+    (QUAD_AXI_LITE_NARROW_PERIPHERALS_BASE_ADDR + OCCAMY_QUAD_PERIPH_GLOBAL_TASK_ID_TO_DEV_TASK_ID_BASE_ADDR_0_REG_OFFSET)
 
 #define cluster_clint_set_base               \
     (QUAD_NARROW_CLUSTER_0_PERIPH_BASE_ADDR + \
@@ -144,16 +158,20 @@ inline uintptr_t soc_ctrl_kernel_tab_scratch_addr(uint32_t reg_idx) {
            (reg_idx / OCCAMY_SOC_SCRATCH_SCRATCH_FIELDS_PER_REG) * 4;
 }
 
-inline uintptr_t quad_ctrl_arg_ptr_addr(){
-    return QUAD_AXI_LITE_NARROW_PERIPHERALS_BASE_ADDR + OCCAMY_QUAD_PERIPH_ARG_PTR_LIST_BASE_ADDR_REG_OFFSET;
+inline uintptr_t quad_ctrl_arg_ptr_addr(uint32_t reg_idx){
+    return quad_ctrl_arg_ptr_list_base + 
+            (reg_idx / OCCAMY_QUAD_PERIPH_ARG_PTR_LIST_BASE_ADDR_ARG_PTR_LIST_BASE_ADDR_FIELDS_PER_REG) * 4;
+
 }
 
-inline uintptr_t quad_ctrl_kernel_ptr_addr(){
-    return QUAD_AXI_LITE_NARROW_PERIPHERALS_BASE_ADDR + OCCAMY_QUAD_PERIPH_KERNEL_PTR_LIST_BASE_ADDR_REG_OFFSET;
+inline uintptr_t quad_ctrl_kernel_ptr_addr(uint32_t reg_idx){
+    return quad_ctrl_kernel_ptr_list_base + 
+            (reg_idx / OCCAMY_QUAD_PERIPH_KERNEL_PTR_LIST_BASE_ADDR_KERNEL_PTR_LIST_BASE_ADDR_FIELDS_PER_REG) * 4;
 }
 
-inline uintptr_t quad_ctrl_gid_to_dev_tid_base_addr(){
-    return QUAD_AXI_LITE_NARROW_PERIPHERALS_BASE_ADDR + OCCAMY_QUAD_PERIPH_GLOBAL_TASK_ID_TO_DEV_TASK_ID_BASE_ADDR_REG_OFFSET;
+inline uintptr_t quad_ctrl_global_id_to_dev_id_addr(uint32_t reg_idx){
+    return quad_ctrl_gid_to_dev_tid_base_addr + 
+            (reg_idx / OCCAMY_QUAD_PERIPH_GLOBAL_TASK_ID_TO_DEV_TASK_ID_BASE_ADDR_GLOBAL_TASK_ID_TO_DEV_TASK_ID_BASE_ADDR_FIELDS_PER_REG) * 4;
 }
 
 inline uintptr_t quad_ctrl_task_desc_base_hi_addr(){

@@ -112,10 +112,15 @@ $(PLATFORM_HEADERS_DIR)/occamy_soc_ctrl.h: $(TARGET_SOCCTRL_DIR)/occamy_soc_reg.
 ###############
 # 4.Quad Ctrl #
 ###############
-
-# Quad Ctrl does not need the hjson template, directly use the source hjson
+$(TARGET_QUADPERIPH_DIR):
+	mkdir -p $@
+# SoC Ctrl needs the hjson tmp first to generate the hjson
 SOURCE_QUADPERIPH_DIR = $(ROOT)/hw/occamy/quad_periph
-$(PLATFORM_HEADERS_DIR)/occamy_quad_periph.h: $(SOURCE_QUADPERIPH_DIR)/occamy_quad_periph_reg.hjson
+$(TARGET_QUADPERIPH_DIR)/occamy_quad_periph_reg.hjson: $(SOURCE_QUADPERIPH_DIR)/occamy_quad_periph_reg.hjson.tpl $(CFG)
+	@echo "[OCCAMYGEN] Generate $@"
+	@$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_QUADPERIPH_DIR) --ctrl $<
+# Then the hjson can be used to generate the header file
+$(PLATFORM_HEADERS_DIR)/occamy_quad_periph.h: $(TARGET_QUADPERIPH_DIR)/occamy_quad_periph_reg.hjson
 	$(call reggen_generate_header,$@,$<)
 ######################
 # Cluster Peripheral #
@@ -178,5 +183,5 @@ clean:
 # clean generated headers
 	rm -f $(PLATFORM_HEADERS)
 # clean generated hjson files
-	rm -rf $(TARGET_CLINT_DIR) $(TARGET_SOCCTRL_DIR) $(TARGET_QUADCTRL_DIR) $(TARGET_PLIC_DIR)
+	rm -rf $(TARGET_CLINT_DIR) $(TARGET_SOCCTRL_DIR) $(TARGET_QUADPERIPH_DIR) $(TARGET_PLIC_DIR)
 	rm -rf host/runtime/host.ld

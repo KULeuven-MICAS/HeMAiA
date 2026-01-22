@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Generated register defines for idma_reg64_frontend
+#pragma once
 
 #ifndef _IDMA_REG64_FRONTEND_REG_DEFS_
 #define _IDMA_REG64_FRONTEND_REG_DEFS_
