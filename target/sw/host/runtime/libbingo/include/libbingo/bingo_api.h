@@ -33,6 +33,9 @@
 // kernel args
 #include "device_kernel_args.h"
 #include "host_kernel_args.h"
+// Perf Tracing
+#define BINGO_PERF_TRACING
+#include "perf_tracing.h"
 #define HOST_SLEEP_CYCLES 100
 #define MAX_SUCCESSORS 8                 // Maximum number of (local) successor tasks tracked directly
 #define BINGO_MAX_REMOTE_SUCC 8          // Maximum number of remote successors (fan-out messages)
@@ -43,6 +46,21 @@
 #define MBOX_DEVICE_BUSY (0x03U)
 #define MBOX_DEVICE_DONE (0x04U)
 #define MBOX_DEVICE_STOP (0x0FU)
+
+
+#ifdef BINGO_DEBUG_LEVEL
+#define _BINGO_PRINTF(...)             \
+    if (1) {                        \
+        printf_safe("[bingo] "__VA_ARGS__); \
+    }
+#define BINGO_PRINTF(d, ...)        \
+    if (BINGO_DEBUG_LEVEL >= d) {   \
+        _BINGO_PRINTF(__VA_ARGS__); \
+    }
+#else
+#define BINGO_PRINTF(d, ...)
+#endif
+
 
 ///////////////////////////////
 ///// Data Structure      /////

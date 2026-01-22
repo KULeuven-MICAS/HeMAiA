@@ -6,7 +6,26 @@
 // Xiaoling Yi <xiaoling.yi@kuleuven.be>
 
 #pragma once
+// #define IDMA_DEBUG
+// #define VERSACORE_DEBUG
+// Debug Prints
+#ifdef IDMA_DEBUG
+#define IDMA_DEBUG_PRINT(...) printf_safe(__VA_ARGS__)
+#else
+#define IDMA_DEBUG_PRINT(...)
+#endif
 
+#ifdef XDMA_DEBUG
+#define XDMA_DEBUG_PRINT(...) printf_safe(__VA_ARGS__)
+#else
+#define XDMA_DEBUG_PRINT(...)
+#endif
+
+#ifdef CHECK_RESULT_DEBUG
+#define CHECK_RESULT_DEBUG_PRINT(...) printf_safe(__VA_ARGS__)
+#else
+#define CHECK_RESULT_DEBUG_PRINT(...)
+#endif
 #include <snax_versacore_lib.h>
 #include "versacore_hw_param.h"
 #define SNAX_LIB_NAME_MAX_LEN 64
@@ -32,24 +51,7 @@ inline uint64_t make_u64(uint32_t hi, uint32_t lo)
 
 #define EXTRACT_BIT(x, pos) (((x) >> (pos)) & 1)
 
-// Debug Prints
-#ifdef IDMA_DEBUG
-#define IDMA_DEBUG_PRINT(...) printf(__VA_ARGS__)
-#else
-#define IDMA_DEBUG_PRINT(...)
-#endif
 
-#ifdef XDMA_DEBUG
-#define XDMA_DEBUG_PRINT(...) printf(__VA_ARGS__)
-#else
-#define XDMA_DEBUG_PRINT(...)
-#endif
-
-#ifdef CHECK_RESULT_DEBUG
-#define CHECK_RESULT_DEBUG_PRINT(...) printf(__VA_ARGS__)
-#else
-#define CHECK_RESULT_DEBUG_PRINT(...)
-#endif
 //////////////////////// Kernel functions ////////////////////////
 // Template for user defined kernels
 // Each kernel function takes a single void* argument
@@ -1486,21 +1488,583 @@ SNAX_LIB_DEFINE void __snax_kernel_minimal_cfg_start_gemm_and_wait(void *arg)
 // Those kernels are used together with the bingo hw manager
 
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_dummy(void *arg){
+    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
     // Notice the variables here are all local variables at the TLS section
     uint32_t dummy_input = ((uint32_t *)arg)[0];
-    printf("[Cluster %d Core %d]: Bingo Dummy Kernel called with input %d\r\n", snrt_cluster_idx(), snrt_cluster_core_idx(), dummy_input);
+    printf_safe("[Cluster %d Core %d]: Bingo Dummy Kernel called with input %d\r\n", snrt_cluster_idx(), snrt_cluster_core_idx(), dummy_input);
+    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
     return 0;
+}
 
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_entry_point(void *arg){
+    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
+    // This is a special kernel to indicate the bingo hw manager loop has started
+    printf_safe("[Cluster %d Core %d]: Start: \r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
+    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
+    return 0;
 }
 
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_exit(void *arg){
+    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
     // This is a special kernel to exit the bingo hw manager loop
     uint32_t exit_code = ((uint32_t *)arg)[0];
-    printf("[Cluster %d Core %d]: Exiting with code %d\r\n", snrt_cluster_idx(), snrt_cluster_core_idx(), exit_code);
+    printf_safe("[Cluster %d Core %d]: Exiting with code %d\r\n", snrt_cluster_idx(), snrt_cluster_core_idx(), exit_code);
+    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
     return 1;
 }
 
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_1d_copy(void *arg)
+{
+    
+    // Copy 1d data from src to dst using idma
+    // Arg0: uint32_t src_addr_hi
+    // Arg1: uint32_t src_addr_lo
+    // Arg2: uint32_t dst_addr_hi
+    // Arg3: uint32_t dst_addr_lo
+    // Arg4: uint32_t size in Byte
+    if (snrt_is_dm_core()){
+        uint64_t src_addr = make_u64(((uint32_t *)arg)[0], ((uint32_t *)arg)[1]);
+        uint64_t dst_addr = make_u64(((uint32_t *)arg)[2], ((uint32_t *)arg)[3]);
+        uint32_t data_size = ((uint32_t *)arg)[4];
+        BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_START);
+        snrt_dma_start_1d_wideptr(dst_addr, src_addr, data_size);
+        BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_END);
+        BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_START);
+        snrt_dma_wait_all();
+        BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_END);
+        IDMA_DEBUG_PRINT("IDMA copy completed\r\n");
+        IDMA_DEBUG_PRINT("SRC ADDR = %lx\r\n", src_addr);
+        IDMA_DEBUG_PRINT("DST ADDR = %lx\r\n", dst_addr);
+        return 0;
+    } else{
+        printf_safe("[Cluster %d Core %d]: Error! IDMA 1D copy should be called from a DM core!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
+        return 1;
+    }
+}
 
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_1d_copy(void *arg)
+{
+    // Copy 1d data from src to dst using xdma
+    // Arg0: uint32_t src_addr_hi
+    // Arg1: uint32_t src_addr_lo
+    // Arg2: uint32_t dst_addr_hi
+    // Arg3: uint32_t dst_addr_lo
+    // Arg4: uint32_t size in Byte
+
+    if (snrt_is_dm_core())
+    {
+        uint64_t src_addr = make_u64(((uint32_t *)arg)[0], ((uint32_t *)arg)[1]);
+        uint64_t dst_addr = make_u64(((uint32_t *)arg)[2], ((uint32_t *)arg)[3]);
+        uint32_t data_size = ((uint32_t *)arg)[4];
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
+        xdma_memcpy_1d_full_addr(src_addr, dst_addr, data_size);
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
+        int task_id = xdma_start();
+        xdma_remote_wait(task_id);
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
+        XDMA_DEBUG_PRINT("XDMA copy completed\n");
+        XDMA_DEBUG_PRINT("SRC ADDR = %lx\n", src_addr);
+        XDMA_DEBUG_PRINT("DST ADDR = %lx\n", dst_addr);
+        return 0;
+    } else{
+        printf_safe("[Cluster %d Core %d]: Error! XDMA copy should be called from a DM core!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
+        return 1;
+    }
+}
+
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_broadcast(void *arg)
+{
+    
+    // Copy 1d data from src to dst using idma
+    // Arg0: uint32_t src_addr_hi
+    // Arg1: uint32_t src_addr_lo
+    // Arg2: uint32_t dst_addr_hi
+    // Arg3: uint32_t dst_addr_lo
+    // Arg4: uint32_t size in Byte
+    if (snrt_is_dm_core()){
+        uint64_t src_addr = make_u64(((uint32_t *)arg)[0], ((uint32_t *)arg)[1]);
+        uint64_t dst_addr = make_u64(((uint32_t *)arg)[2], ((uint32_t *)arg)[3]);
+        uint64_t dst_addr_broadcast = chiplet_addr_transform_loc(0xF, 0xF, dst_addr);
+        uint32_t data_size = ((uint32_t *)arg)[4];
+        BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_START);
+        snrt_dma_start_1d_wideptr(dst_addr_broadcast, src_addr, data_size);
+        BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_END);
+        BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_START);
+        snrt_dma_wait_all();
+        BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_END);
+        IDMA_DEBUG_PRINT("IDMA copy completed\r\n");
+        IDMA_DEBUG_PRINT("SRC ADDR = %lx\r\n", src_addr);
+        IDMA_DEBUG_PRINT("DST ADDR = %lx\r\n", dst_addr_broadcast);
+        return 0;
+    } else{
+        printf_safe("[Cluster %d Core %d]: Error! IDMA 1D copy should be called from a DM core!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
+        return 1;
+    }
+}
+
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
+{
+    // Assume the matrix data are all in L1
+    // So all the addr are 32bit local addr
+    // This kernel will configure the versacore and streamer and start the computation
+    // There is another __snax_bingo_kernel_gemm_minimal kernel that only starts the versacore and streamer with pre-configured CSRs
+    if (snrt_cluster_core_idx() != 0){
+        printf_safe("[Cluster %d Core %d]: Error! Bingo GEMM full should be called from core 0!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
+        return 1;
+    }
+    uint32_t A_addr = ((uint32_t *)arg)[0];
+    uint32_t B_addr = ((uint32_t *)arg)[1];
+    uint32_t C_addr = ((uint32_t *)arg)[2];
+    uint32_t D_addr = ((uint32_t *)arg)[3];
+    VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Bingo GEMM Full called with A_addr=0x%08x, B_addr=0x%08x, C_addr=0x%08x, D_addr=0x%08x\r\n",
+                          snrt_cluster_idx(), snrt_cluster_core_idx(),
+                          A_addr, B_addr, C_addr, D_addr);
+    uint32_t M = ((uint32_t *)arg)[4];
+    uint32_t K = ((uint32_t *)arg)[5];
+    uint32_t N = ((uint32_t *)arg)[6];
+    uint32_t array_shape_idx = ((uint32_t *)arg)[7];
+    uint32_t transpose_A = ((uint32_t *)arg)[8];
+    uint32_t transpose_B = ((uint32_t *)arg)[9];
+    uint32_t accumPrevC = ((uint32_t *)arg)[10];
+    BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_FULL_CFG_START);
+    // some inferenced args
+    uint32_t addNonZeroC;
+    if (accumPrevC)
+    {
+        addNonZeroC = 0;
+    }
+    else if (C_addr!= 0)
+    {
+        addNonZeroC = 1;
+    }
+    else
+    {
+        addNonZeroC = 0;
+    }
+    uint32_t meshRow;
+    uint32_t tileSize;
+    uint32_t meshCol;
+    switch (array_shape_idx)
+    {
+    case 0:
+        meshRow = meshRow_0;
+        tileSize = tileSize_0;
+        meshCol = meshCol_0;
+        break;
+    case 1:
+        meshRow = meshRow_1;
+        tileSize = tileSize_1;
+        meshCol = meshCol_1;
+        break;
+    case 2:
+        meshRow = meshRow_2;
+        tileSize = tileSize_2;
+        meshCol = meshCol_2;
+        break;
+    case 3:
+        meshRow = meshRow_3;
+        tileSize = tileSize_3;
+        meshCol = meshCol_3;
+        break;
+    case 4:
+        meshRow = meshRow_4;
+        tileSize = tileSize_4;
+        meshCol = meshCol_4;
+        break;
+    default:
+        VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx invalid!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
+        return 1;
+    }
+    // Configuration the Steamer and Versacore
+    //////////////////////////////////////////////////////////////
+    // Streamer cfg for A
+    //////////////////////////////////////////////////////////////
+    
+    // Aslstride0
+    uint32_t Aslstride0 = bankWidth / 8;
+    // Atlbound0~5
+    uint32_t Atlbound[6];
+    // Atlbound0
+    Atlbound[0] = K;
+    // Atlbound1
+    Atlbound[1] = N;
+    // Atlbound2
+    Atlbound[2] = M;
+    // Atlbound3
+    Atlbound[3] = 1;
+    // Atlbound4
+    Atlbound[4] = 1;
+    // Atlbound5
+    Atlbound[5] = 1;
+    uint32_t Atlstride[6];
+    // Atlstride0
+    Atlstride[0] = meshRow * tileSize;
+    // Atlstride1
+    Atlstride[1] = 0;
+    // Atlstride2
+    Atlstride[2] = meshRow * tileSize * K;
+    // Atlstride3
+    Atlstride[3] = 0;
+    // Atlstride4
+    Atlstride[4] = 0;
+    // Atlstride5
+    Atlstride[5] = 0;
+    uint32_t set_addr_remap_index_A = 0;
+    uint32_t channel_en_A;
+    switch (array_shape_idx)
+    {
+    case 0:
+        channel_en_A = channel_en_A_0_0;
+        break;
+    case 1:
+        channel_en_A = channel_en_A_1_0;
+        break;
+    case 2:
+        channel_en_A = channel_en_A_2_0;
+        break;
+    case 3:
+        channel_en_A = channel_en_A_3_0;
+        break;
+    case 4:
+        channel_en_A = channel_en_A_4_0;
+        break;
+    default:
+        VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx invalid!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
+        return 1;
+    }
+    //////////////////////////////////////////////////////////////
+    // Streamer cfg for B
+    //////////////////////////////////////////////////////////////
+    // Bslstride0
+    uint32_t Bslstride0 = bankWidth / 8;
+    // Btlbound0~2
+    uint32_t Btlbound[3];
+    // Btlbound0
+    Btlbound[0] = K;
+    // Btlbound1
+    Btlbound[1] = N;
+    // Btlbound2
+    Btlbound[2] = M;
+    uint32_t Btlstride[3];
+    // Btlstride0
+    Btlstride[0] = tileSize * meshCol;
+    // Btlstride1
+    Btlstride[1] = tileSize * meshCol * K;
+    // Btlstride2
+    Btlstride[2] = 0;
+    uint32_t set_addr_remap_index_B = 0;
+    uint32_t channel_en_B[2];
+    switch (array_shape_idx)
+    {
+    case 0:
+        channel_en_B[0] = channel_en_B_0_0;
+        channel_en_B[1] = channel_en_B_0_1;
+        break;
+    case 1:
+        channel_en_B[0] = channel_en_B_1_0;
+        channel_en_B[1] = channel_en_B_1_1;
+        break;
+    case 2:
+        channel_en_B[0] = channel_en_B_2_0;
+        channel_en_B[1] = channel_en_B_2_1;
+        break;
+    case 3:
+        channel_en_B[0] = channel_en_B_3_0;
+        channel_en_B[1] = channel_en_B_3_1;
+        break;
+    case 4:
+        channel_en_B[0] = channel_en_B_4_0;
+        channel_en_B[1] = channel_en_B_4_1;
+        break;
+    default:
+        VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx invalid!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
+        return 1;
+    }
+    //////////////////////////////////////////////////////////////
+    // Streamer cfg for C
+    //////////////////////////////////////////////////////////////
+    // Cslstride0
+    uint32_t Cslstride0 = bankWidth / 8;
+    // Ctlbound0~3
+    uint32_t Ctlbound[4];
+    if (accumPrevC == 1)
+    {
+        // accumPrevC is true
+        Ctlbound[0] = 0;
+    }
+    else
+    {
+        switch (array_shape_idx)
+        {
+        case 0:
+            Ctlbound[0] = Ctlbound0_0;
+            break;
+        case 1:
+            Ctlbound[0] = Ctlbound0_1;
+            break;
+        case 2:
+            Ctlbound[0] = Ctlbound0_2;
+            break;
+        case 3:
+            Ctlbound[0] = Ctlbound0_3;
+            break;
+        case 4:
+            Ctlbound[0] = Ctlbound0_4;
+            break;
+        default:
+            VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx invalid!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
+            return 1;
+        }
+    }
+    // Ctlbound1
+    Ctlbound[1] = N;
+    // Ctlbound2
+    Ctlbound[2] = M;
+    // Ctlbound3
+    Ctlbound[3] = 1;
+    uint32_t Ctlstride[4];
+    switch (array_shape_idx)
+    {
+    case 0:
+        // Ctlstride0
+        Ctlstride[0] = Ctlstride0_0;
+        break;
+    case 1:
+        // Ctlstride0
+        Ctlstride[0] = Ctlstride0_1;
+        break;
+    case 2:
+        // Ctlstride0
+        Ctlstride[0] = Ctlstride0_2;
+        break;
+    case 3:
+        // Ctlstride0
+        Ctlstride[0] = Ctlstride0_3;
+        break;
+    case 4:
+        // Ctlstride0
+        Ctlstride[0] = Ctlstride0_4;
+        break;
+    default:
+        VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx invalid!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
+        return 1;
+    }
+    // Ctlstride1
+    Ctlstride[1] = C_elem_len * meshRow *
+                   meshCol / 8;
+    // Ctlstride2
+    Ctlstride[2] = N * C_elem_len *
+                   meshRow *
+                   meshCol / 8;
+    // Ctlstride3
+    Ctlstride[3] = 0;
+    uint32_t set_addr_remap_index_C = 0;
+    uint32_t channel_en_C;
+    // set channel_en_C to zero if accumPrevC or addNonZeroC
+    if (accumPrevC == 1 || addNonZeroC == 0)
+    {
+        channel_en_C = channel_en_C_null_0_0;;
+    }
+    else
+    {
+        switch (array_shape_idx)
+        {
+        case 0:
+            channel_en_C = channel_en_C_0_0;
+            break;
+        case 1:
+            channel_en_C = channel_en_C_1_0;
+            break;
+        case 2:
+            channel_en_C = channel_en_C_2_0;
+            break;
+        case 3:
+            channel_en_C = channel_en_C_3_0;
+            break;
+        case 4:
+            channel_en_C = channel_en_C_4_0;
+            break;
+        default:
+            VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx invalid!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
+            return 1;
+        }
+    }
+    //////////////////////////////////////////////////////////////
+    // Streamer cfg for D
+    //////////////////////////////////////////////////////////////
+    // D32slstride0
+    uint32_t D32slstride0 = bankWidth / 8;
+    // D32tlbound0~3
+    uint32_t D32tlbound[4];
+    switch (array_shape_idx)
+    {
+    case 0:
+        D32tlbound[0] = D32tlbound0_0;
+        break;
+    case 1:
+        D32tlbound[0] = D32tlbound0_1;
+        break;
+    case 2:
+        D32tlbound[0] = D32tlbound0_2;
+        break;
+    case 3:
+        D32tlbound[0] = D32tlbound0_3;
+        break;
+    case 4:
+        D32tlbound[0] = D32tlbound0_4;
+        break;
+    default:
+        VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx invalid!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
+        return 1;
+    }
+    // D32tlbound1
+    D32tlbound[1] = N;
+    // D32tlbound2
+    D32tlbound[2] = M;
+    // D32tlbound3
+    D32tlbound[3] = 1;
+    uint32_t D32tlstride[4];
+    switch (array_shape_idx)
+    {
+    case 0:
+        // D32tlstride0
+        D32tlstride[0] = D32tlstride0_0;
+        break;
+    case 1:
+        // D32tlstride0
+        D32tlstride[0] = D32tlstride0_1;
+        break;
+    case 2:
+        // D32tlstride0
+        D32tlstride[0] = D32tlstride0_2;
+        break;
+    case 3:
+        // D32tlstride0
+        D32tlstride[0] = D32tlstride0_3;
+        break;
+    case 4:
+        // D32tlstride0
+        D32tlstride[0] = D32tlstride0_4;
+        break;
+    default:
+        VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx invalid!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
+        return 1;
+    }
+    // D32tlstride1
+    D32tlstride[1] = D32_elem_len * meshRow *
+                     meshCol / 8;
+    // D32tlstride2
+    D32tlstride[2] = N * D32_elem_len *
+                     meshRow *
+                     meshCol / 8;
+    // D32tlstride3
+    D32tlstride[3] = 0;
+    uint32_t set_addr_remap_index_D32 = 0;
+    uint32_t channel_en_D32;
+    switch (array_shape_idx)
+    {
+    case 0:
+        channel_en_D32 = channel_en_D32_0_0;
+        break;
+    case 1:
+        channel_en_D32 = channel_en_D32_1_0;
+        break;
+    case 2:
+        channel_en_D32 = channel_en_D32_2_0;
+        break;
+    case 3:
+        channel_en_D32 = channel_en_D32_3_0;
+        break;
+    case 4:
+        channel_en_D32 = channel_en_D32_4_0;
+        break;
+    default:
+        VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx invalid!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
+        return 1;
+    }
+    //////////////////////////////////////////////////////////////
+    // Configuration the Steamer and Versacore
+    //////////////////////////////////////////////////////////////
+    VERSACORE_DEBUG_PRINT(
+        "Bingo GEMM Full Kernel Compute Streamer Cfg Start!\r\n");
+    set_versacore_streamer_csr(
+        A_addr,               // A_addr
+        &Aslstride0,         // Aslstride[] base
+        Atlbound,            // Atlbound[] base
+        Atlstride,           // Atlstride[] base
+        set_addr_remap_index_A, // set_addr_remap_index_A
+        transpose_A,         // transpose_A
+        &channel_en_A,       // channel_en_A []
+        B_addr,              // B_addr
+        &Bslstride0,         // Bslstride[] base
+        Btlbound,            // Btlbound[] base
+        Btlstride,           // Btlstride[] base
+        set_addr_remap_index_B, // set_addr_remap_index_B
+        transpose_B,         // transpose_B
+        channel_en_B,        // channel_en_B []
+        C_addr,               // C_addr
+        &Cslstride0,         // Cslstride[] base
+        Ctlbound,            // Ctlbound[] base
+        Ctlstride,           // Ctlstride[] base
+        set_addr_remap_index_C, // set_addr_remap_index_C
+        &channel_en_C,       // channel_en_C []
+        D_addr,               // D_addr
+        &D32slstride0,         // D32slstride[] base
+        D32tlbound,          // D32tlbound[] base
+        D32tlstride,         // D32tlstride[] base
+        set_addr_remap_index_D32, // set_addr_remap_index_D32
+        &channel_en_D32,     // channel_en_D32 []
+        0, 0, 0, 0, 0, 0, 0, 0, 0);
+    set_versacore_csr(
+        // accPrevC means takes new C
+        accumPrevC == 0,
+        K,
+        N * M,
+        0,
+        array_shape_idx,
+        0);
+    VERSACORE_DEBUG_PRINT(
+        "Bingo GEMM Full Kernel Streamer Configuration Done!\r\n");
+    // Set CSR to start Streamer
+    start_versacore_and_streamer();
+    BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_FULL_CFG_END);
+    // Poll until Streamer and GEMM accelerator finish
+    BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_FULL_RUN_START);
+    wait_versacore_and_streamer();
+    BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_FULL_RUN_END);
+    VERSACORE_DEBUG_PRINT("Bingo GEMM Full Kernel Compute Done!\r\n");
+    return 0;
+}
+
+
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_minimal(void *arg)
+{
+    // This kernel will only start the versacore and streamer with pre-configured CSRs
+    if (snrt_cluster_core_idx() != 0){
+        printf_safe("[Cluster %d Core %d]: Error! Bingo GEMM minimal should be called from core 0!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
+        return 1;
+    }
+    uint32_t A_addr = ((uint32_t *)arg)[0];
+    uint32_t B_addr = ((uint32_t *)arg)[1];
+    uint32_t C_addr = ((uint32_t *)arg)[2];
+    uint32_t D_addr = ((uint32_t *)arg)[3];
+    BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_MIN_CFG_START);
+    set_minimal_streamer_cfg(
+        A_addr,
+        B_addr,
+        C_addr,
+        D_addr);
+    // Set CSR to start Streamer
+    start_versacore_and_streamer();
+    BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_MIN_CFG_END);
+    // Poll until Streamer and GEMM accelerator finish
+    BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_MIN_RUN_START);
+    wait_versacore_and_streamer();
+    BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_MIN_RUN_END);
+    VERSACORE_DEBUG_PRINT("Bingo GEMM Minimal Kernel Compute Done!\r\n");
+    return 0;
+}
 
 //////////////////////// SYMBOL TABLE ////////////////////////
 // Here we create the symbol table
@@ -1517,5 +2081,9 @@ SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
     // SNAX_EXPORT_FUNC(__snax_kernel_minimal_cfg_start_gemm_and_wait),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_dummy),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_exit),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_idma_1d_copy),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_idma_broadcast),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_gemm_full),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_gemm_minimal),
     SNAX_SYMTAB_END
 };

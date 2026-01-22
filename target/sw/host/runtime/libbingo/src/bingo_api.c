@@ -595,7 +595,7 @@ void bingo_runtime_schedule(bingo_task_t **task_list, uint32_t num_tasks) {
 void bingo_close_all_clusters(bingo_task_t **task_list, uint32_t num_tasks){
     uint8_t current_chip = get_current_chip_id();
     // Issue STOP to each cluster used
-    bool cluster_stopped[N_CLUSTERS] = {0};
+    bool cluster_stopped[N_CLUSTERS_PER_CHIPLET] = {0};
     for (uint32_t i = 0; i < num_tasks; i++) {
         bingo_task_t *t = task_list[i];
         if (t->assigned_chip_id != current_chip) continue;
@@ -636,19 +636,13 @@ int64_t* bingo_hw_scheduler_get_host_kernel(int64_t* host_kernel_list_base, uint
 // Then the HW scheduler will read the task list from the memory and schedule the tasks
 // The Host core will also hooked with th ARA core for the simd
 // So its work is just to read the ready queue and write to the done queue when the simd is done
-void bingo_hw_scheduler_init(uint32_t dev_arg_base_addr, uint32_t dev_kernel_base_addr, uint32_t global_task_id_to_dev_task_id_base_addr, uint64_t task_desc_list_base, uint32_t num_tasks, volatile comm_buffer_t* comm_buffer_ptr){
-    volatile uint32_t* lock = get_shared_lock(comm_buffer_ptr);
+void bingo_hw_scheduler_init(uint32_t dev_arg_base_addr, uint32_t dev_kernel_base_addr, uint32_t global_task_id_to_dev_task_id_base_addr, uint64_t task_desc_list_base, uint32_t num_tasks){
     uint32_t current_task_id;
     uint8_t current_chip = get_current_chip_id();
     uint32_t current_arg_ptr;
     uint32_t current_kernel_ptr;
     uint32_t kernel_return_value;
     uint32_t err = 0;
-    // mutex_tas_acquire(lock);
-    // printf("Chip(%x, %x): [Host] Starting HW scheduler for %u tasks\r\n",
-    //        get_current_chip_loc_x(), get_current_chip_loc_y(), num_tasks);
-    // mutex_release(lock);
-    // Write the info to the quad ctrl regs
     writew(dev_arg_base_addr,                 (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_arg_ptr_addr()));
     writew(dev_kernel_base_addr,              (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_kernel_ptr_addr()));
     writew(global_task_id_to_dev_task_id_base_addr, (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_gid_to_dev_tid_base_addr()));
@@ -661,8 +655,7 @@ void bingo_hw_scheduler_init(uint32_t dev_arg_base_addr, uint32_t dev_kernel_bas
     writew(1,                             (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_host_init_done_addr()));
 }
 
-uint32_t bingo_hw_scheduler(uint64_t* host_arg_list, uint64_t* host_kernel_list, int32_t* global_task_id_to_host_task_id, volatile comm_buffer_t* comm_buffer_ptr){
-    volatile uint32_t* lock = get_shared_lock(comm_buffer_ptr);
+uint32_t bingo_hw_scheduler(uint64_t* host_arg_list, uint64_t* host_kernel_list, int32_t* global_task_id_to_host_task_id){
     uint32_t current_global_task_id;
     int32_t current_host_task_id;
     uint64_t current_arg_ptr;
@@ -670,13 +663,17 @@ uint32_t bingo_hw_scheduler(uint64_t* host_arg_list, uint64_t* host_kernel_list,
     uint64_t kernel_return_value;
     uint32_t err=0;
     while (1) {
-        // First read the ready queue
+        // 1. First read the ready queue
+        BINGO_PERF_TRACING(BINGO_TRACE_MGR_GET_READY_START);
         current_global_task_id = bingo_hw_scheduler_get_global_task_id();
-        // Then we get the host task id from the global task id
+        BINGO_PERF_TRACING(BINGO_TRACE_MGR_GET_READY_END);
+
+
+        // 2. Then we get the host task id from the global task id
+        BINGO_PERF_TRACING(BINGO_TRACE_MGR_PREP_START);
         current_host_task_id = bingo_hw_scheduler_get_host_task_id(global_task_id_to_host_task_id, current_global_task_id);
         if (current_host_task_id == -1){
-            
-            printf("Chip(%x, %x): [Host] Error: Invalid host task id for global task id %d\r\n",
+            BINGO_PRINTF(1, "Chip(%x, %x): [Host]: Error: Invalid host task id for global task id %d\r\n",
                    get_current_chip_loc_x(), get_current_chip_loc_y(),
                    current_global_task_id);
             err=1;
@@ -685,28 +682,44 @@ uint32_t bingo_hw_scheduler(uint64_t* host_arg_list, uint64_t* host_kernel_list,
         // Then get the task arg and fn ptr from the task list
         current_arg_ptr = *bingo_hw_scheduler_get_host_arg(host_arg_list, current_host_task_id);
         current_kernel_ptr = *bingo_hw_scheduler_get_host_kernel(host_kernel_list, current_host_task_id);
-        mutex_tas_acquire(lock);
-        printf("Chip(%x, %x): [Host] Executing HW scheduled task: global id %d -> host id %d, arg ptr 0x%lx, kernel ptr 0x%lx\r\n",
+        BINGO_PERF_TRACING(BINGO_TRACE_MGR_PREP_END);
+        BINGO_PRINTF(1, "Chip(%x, %x): [Host]: Task %d Info: Host tid=%d, arg ptr=0x%lx, kernel ptr=0x%lx\r\n",
                get_current_chip_loc_x(), get_current_chip_loc_y(),
                current_global_task_id, current_host_task_id,
                current_arg_ptr, current_kernel_ptr);
-        mutex_release(lock);
-        // then run the host kernel
+        BINGO_PRINTF(0, "Chip(%x, %x): [Host]: Task %d Info: Running Host kernel ...\r\n",
+               get_current_chip_loc_x(), get_current_chip_loc_y(),
+               current_global_task_id);
+        // 3. Then run the host kernel
+        BINGO_PERF_TRACING(BINGO_TRACE_MGR_RUN_KERNEL_START);
         kernel_return_value = ((uint64_t (*)(uint64_t))current_kernel_ptr)(current_arg_ptr);
+        BINGO_PERF_TRACING(BINGO_TRACE_MGR_RUN_KERNEL_END);
+
+        // 4. Finally write back to the done queue
+        BINGO_PERF_TRACING(BINGO_TRACE_MGR_WRITE_DONE_START);
         if (kernel_return_value == 0){
+            BINGO_PRINTF(0, "Chip(%x, %x): [Host]: Task %d Info: Succ!\r\n",
+                   get_current_chip_loc_x(), get_current_chip_loc_y(),
+                   current_global_task_id);
             // The normal case, write back to the done queue
             bingo_hw_scheduler_write_done_queue(current_global_task_id);
+            BINGO_PERF_TRACING(BINGO_TRACE_MGR_WRITE_DONE_END);
         } else if (kernel_return_value == 1){
-            // All done
-            printf("Chip(%x, %x): [Host] HW Bingo scheduler completed all tasks successfully\r\n",
+            BINGO_PRINTF(0, "Chip(%x, %x): [Host]: Task %d Info: Exiting ...\r\n",
+                   get_current_chip_loc_x(), get_current_chip_loc_y(),
+                   current_global_task_id);
+            // The host exit task should be the last task
+            BINGO_PRINTF(0, "Chip(%x, %x): [Host]: All Task Done!\r\n",
                    get_current_chip_loc_x(), get_current_chip_loc_y());
+            BINGO_PERF_TRACING(BINGO_TRACE_MGR_WRITE_DONE_END);
             break;
         } else {
             // Error case
-            printf("Chip(%x, %x): [Host] Error: HW Bingo scheduler task %d returned error code %d\r\n",
+            BINGO_PRINTF(1, "Chip(%x, %x): [Host]: Task %d Info: Error!!!, error code=%d\r\n",
                    get_current_chip_loc_x(), get_current_chip_loc_y(),
                    current_global_task_id, kernel_return_value);
             err = kernel_return_value;
+            BINGO_PERF_TRACING(BINGO_TRACE_MGR_WRITE_DONE_END);
             break;
         }
     }

@@ -8,11 +8,13 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
-// Generic R/W IO
-// #include "io.h"
 
 // Chipid
 #include "chip_id.h"
+// BINGO Perf Tracing
+// We can turn on and off the tracing by defining BINGO_PERF_TRACING here
+#define BINGO_PERF_TRACING
+#include "perf_tracing.h"
 // Occamy specific definitions
 #include "occamy_defs.h"
 #include "occamy_memory_map.h"
