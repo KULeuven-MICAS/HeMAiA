@@ -8,13 +8,7 @@ MKFILE_PATH := $(abspath $(lastword $(MAKEFILE_LIST)))
 MKFILE_DIR := $(dir $(MKFILE_PATH))
 
 CFG_OVERRIDE ?= 
-# User flags for SW compilation
-# Useful for enabling debug prints or performance tracing
-# e.g. make sw USER_FLAGS="-DBINGO_PERF_TRACING -DBINGO_DEBUG_LEVEL=1"
-# Not print the bingo debug messages
-USER_FLAGS ?= -DBINGO_PERF_TRACING -DBINGO_DEBUG_LEVEL=0
-# Print the bingo debug messages at level 1
-# USER_FLAGS ?= -DBINGO_DEBUG_LEVEL=1
+
 
 DEFAULT_CFG = $(MKFILE_DIR)target/rtl/cfg/hemaia_ci.hjson
 CFG = $(MKFILE_DIR)target/rtl/cfg/lru.hjson
@@ -62,6 +56,17 @@ clean:
 #######################
 # The software from simulation and FPGA prototyping comes from one source.
 # Execute in SNAX Docker
+DEBUG_LEVEL ?= 0
+PERF_TRACING ?= 1
+
+# User flags for SW compilation
+# Useful for enabling debug prints or performance tracing
+# e.g. make sw DEBUG_LEVEL=1 PERF_TRACING=0
+USER_FLAGS = -DBINGO_DEBUG_LEVEL=$(DEBUG_LEVEL)
+ifeq ($(PERF_TRACING), 1)
+    USER_FLAGS += -DBINGO_PERF_TRACING
+endif
+
 sw: $(CFG)
 	$(MAKE) -C ./target/sw sw CFG=$(CFG) USER_FLAGS="$(USER_FLAGS)"
 
