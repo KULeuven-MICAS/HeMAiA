@@ -52,7 +52,11 @@ inline uint64_t make_u64(uint32_t hi, uint32_t lo)
 #define EXTRACT_BIT(x, pos) (((x) >> (pos)) & 1)
 
 
-//////////////////////// Kernel functions ////////////////////////
+// We have two sets of kernels:
+// 1. Cluster-level kernels: these kernels are launched on a cluster and can utilize all cores in the cluster. This is used for the pure bingo sw.
+// 2. Core-level kernels: these kernels are launched on each core individually. This is used for the hw bingo.
+
+//////////////////////// Cluster-level Kernel functions ////////////////////////
 // Template for user defined kernels
 // Each kernel function takes a single void* argument
 
@@ -1483,12 +1487,12 @@ SNAX_LIB_DEFINE void __snax_kernel_minimal_cfg_start_gemm_and_wait(void *arg)
     }
 }
 
-////////////////////////// BINGO Kernels //////////////////////
+////////////////////////// Core-level Kernels //////////////////////
 // The bingo kernels are core-level kernels with the return value
 // Those kernels are used together with the bingo hw manager
 
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_dummy(void *arg){
-
+    // A dummy kernel that does nothing but print the input argument
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
     uint32_t dummy_input = ((uint32_t *)arg)[0];
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
@@ -1496,27 +1500,29 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_dummy(void *arg){
     // Notice the variables here are all local variables at the TLS section
     printf_safe("[Cluster %d Core %d]: Bingo Dummy Kernel called with input %d\r\n", snrt_cluster_idx(), snrt_cluster_core_idx(), dummy_input);
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
-    return 0;
+    return BINGO_RET_SUCC;
 }
 
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_entry_point(void *arg){
-
-    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
     // This is a special kernel to indicate the bingo hw manager loop has started
+    // In the future we can add some content here
+    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
     printf_safe("[Cluster %d Core %d]: Start: \r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
-    return 0;
+    return BINGO_RET_SUCC;
 }
 
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_exit(void *arg){
     // This is a special kernel to exit the bingo hw manager loop
+    // In the future we can add some profiling info here
+    // Right now we just print the exit code
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
     uint32_t exit_code = ((uint32_t *)arg)[0];
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
     printf_safe("[Cluster %d Core %d]: Exiting with code %d\r\n", snrt_cluster_idx(), snrt_cluster_core_idx(), exit_code);
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
-    return 1;
+    return BINGO_RET_EXIT;
 }
 
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_1d_copy(void *arg)
@@ -1543,10 +1549,10 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_1d_copy(void *arg)
         IDMA_DEBUG_PRINT("IDMA copy completed\r\n");
         IDMA_DEBUG_PRINT("SRC ADDR = %lx\r\n", src_addr);
         IDMA_DEBUG_PRINT("DST ADDR = %lx\r\n", dst_addr);
-        return 0;
+        return BINGO_RET_SUCC;
     } else{
         printf_safe("[Cluster %d Core %d]: Error! IDMA 1D copy should be called from a DM core!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
-        return 1;
+        return BINGO_RET_FAIL;
     }
 }
 
@@ -1576,10 +1582,10 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_1d_copy(void *arg)
         XDMA_DEBUG_PRINT("XDMA copy completed\n");
         XDMA_DEBUG_PRINT("SRC ADDR = %lx\n", src_addr);
         XDMA_DEBUG_PRINT("DST ADDR = %lx\n", dst_addr);
-        return 0;
+        return BINGO_RET_SUCC;
     } else{
         printf_safe("[Cluster %d Core %d]: Error! XDMA copy should be called from a DM core!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
-        return 1;
+        return BINGO_RET_FAIL;
     }
 }
 
@@ -1608,10 +1614,10 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_broadcast(void *arg)
         IDMA_DEBUG_PRINT("IDMA copy completed\r\n");
         IDMA_DEBUG_PRINT("SRC ADDR = %lx\r\n", src_addr);
         IDMA_DEBUG_PRINT("DST ADDR = %lx\r\n", dst_addr_broadcast);
-        return 0;
+        return BINGO_RET_SUCC;
     } else{
         printf_safe("[Cluster %d Core %d]: Error! IDMA 1D copy should be called from a DM core!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
-        return 1;
+        return BINGO_RET_FAIL;
     }
 }
 
@@ -1623,7 +1629,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
     // There is another __snax_bingo_kernel_gemm_minimal kernel that only starts the versacore and streamer with pre-configured CSRs
     if (snrt_cluster_core_idx() != 0){
         printf_safe("[Cluster %d Core %d]: Error! Bingo GEMM full should be called from core 0!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
-        return 1;
+        return BINGO_RET_FAIL;
     }
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
     uint32_t A_addr = ((uint32_t *)arg)[0];
@@ -1688,7 +1694,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
         break;
     default:
         VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx invalid!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
-        return 1;
+        return BINGO_RET_FAIL;
     }
     // Configuration the Steamer and Versacore
     //////////////////////////////////////////////////////////////
@@ -1745,7 +1751,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
         break;
     default:
         VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx invalid!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
-        return 1;
+        return BINGO_RET_FAIL;
     }
     //////////////////////////////////////////////////////////////
     // Streamer cfg for B
@@ -1793,7 +1799,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
         break;
     default:
         VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx invalid!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
-        return 1;
+        return BINGO_RET_FAIL;
     }
     //////////////////////////////////////////////////////////////
     // Streamer cfg for C
@@ -1828,7 +1834,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
             break;
         default:
             VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx invalid!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
-            return 1;
+            return BINGO_RET_FAIL;
         }
     }
     // Ctlbound1
@@ -1862,7 +1868,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
         break;
     default:
         VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx invalid!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
-        return 1;
+        return BINGO_RET_FAIL;
     }
     // Ctlstride1
     Ctlstride[1] = C_elem_len * meshRow *
@@ -1901,7 +1907,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
             break;
         default:
             VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx invalid!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
-            return 1;
+            return BINGO_RET_FAIL;
         }
     }
     //////////////////////////////////////////////////////////////
@@ -1930,7 +1936,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
         break;
     default:
         VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx invalid!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
-        return 1;
+        return BINGO_RET_FAIL;
     }
     // D32tlbound1
     D32tlbound[1] = N;
@@ -1963,7 +1969,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
         break;
     default:
         VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx invalid!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
-        return 1;
+        return BINGO_RET_FAIL;
     }
     // D32tlstride1
     D32tlstride[1] = D32_elem_len * meshRow *
@@ -1995,7 +2001,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
         break;
     default:
         VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx invalid!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
-        return 1;
+        return BINGO_RET_FAIL;
     }
     //////////////////////////////////////////////////////////////
     // Configuration the Steamer and Versacore
@@ -2048,7 +2054,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
     wait_versacore_and_streamer();
     BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_FULL_RUN_END);
     VERSACORE_DEBUG_PRINT("Bingo GEMM Full Kernel Compute Done!\r\n");
-    return 0;
+    return BINGO_RET_SUCC;
 }
 
 
@@ -2057,7 +2063,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_minimal(void *arg)
     // This kernel will only start the versacore and streamer with pre-configured CSRs
     if (snrt_cluster_core_idx() != 0){
         printf_safe("[Cluster %d Core %d]: Error! Bingo GEMM minimal should be called from core 0!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
-        return 1;
+        return BINGO_RET_FAIL;
     }
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
     uint32_t A_addr = ((uint32_t *)arg)[0];
@@ -2079,7 +2085,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_minimal(void *arg)
     wait_versacore_and_streamer();
     BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_MIN_RUN_END);
     VERSACORE_DEBUG_PRINT("Bingo GEMM Minimal Kernel Compute Done!\r\n");
-    return 0;
+    return BINGO_RET_SUCC;
 }
 
 //////////////////////// SYMBOL TABLE ////////////////////////

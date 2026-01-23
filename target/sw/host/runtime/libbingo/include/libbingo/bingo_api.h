@@ -37,6 +37,7 @@
 #include "perf_tracing.h"
 // DMA
 #include "sys_dma.h"
+
 #define HOST_SLEEP_CYCLES 100
 #define MAX_SUCCESSORS 8                 // Maximum number of (local) successor tasks tracked directly
 #define BINGO_MAX_REMOTE_SUCC 8          // Maximum number of remote successors (fan-out messages)
@@ -47,6 +48,11 @@
 #define MBOX_DEVICE_BUSY (0x03U)
 #define MBOX_DEVICE_DONE (0x04U)
 #define MBOX_DEVICE_STOP (0x0FU)
+
+// Return codes for hw-bingo tasks
+#define BINGO_RET_SUCC 0
+#define BINGO_RET_EXIT 1
+#define BINGO_RET_FAIL 2
 
 
 #ifdef BINGO_DEBUG_LEVEL

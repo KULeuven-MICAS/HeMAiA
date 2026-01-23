@@ -4,6 +4,11 @@
 //
 // Fanchen Kong <fanchen.kong@kuleuven.be>
 
+
+#define BINGO_RET_SUCC 0
+#define BINGO_RET_EXIT 1
+#define BINGO_RET_FAIL 2
+
 //================================================================================
 // Debug
 //================================================================================
@@ -343,7 +348,7 @@ inline uint32_t bingo_hw_offload_manager(){
 
         // 4. Write the Done queue to notify the bingo hw scheduler
         BINGO_TRACE_MARKER(BINGO_TRACE_MGR_WRITE_DONE_START);
-        if (kernel_return_value == 0){
+        if (kernel_return_value == BINGO_RET_SUCC){
             BINGO_PRINTF(2, "[Cluster %d Core %d]: Task %d Info: Succ!\r\n",
                    snrt_cluster_idx(),
                    snrt_cluster_core_idx(),
@@ -351,7 +356,7 @@ inline uint32_t bingo_hw_offload_manager(){
             write_bingo_hw_manager_done_queue(cur_global_task_id);
             BINGO_TRACE_MARKER(BINGO_TRACE_MGR_WRITE_DONE_END);
             // THen keep reading the next ready task id
-        } else if (kernel_return_value == 1){
+        } else if (kernel_return_value == BINGO_RET_EXIT){
             // Exit signal received from the kernel
             // There will be special kernel to return a 1 to exit the hw offload manager
             // Access the clint mutex to printf the error message
@@ -362,11 +367,23 @@ inline uint32_t bingo_hw_offload_manager(){
             write_bingo_hw_manager_done_queue(cur_global_task_id);
             BINGO_TRACE_MARKER(BINGO_TRACE_MGR_WRITE_DONE_END);
             break;
-        } else {
+        } else if (kernel_return_value == BINGO_RET_FAIL){
             // Other error code
             err = kernel_return_value;
             // Access the clint mutex to printf the error message
             BINGO_PRINTF(1, "[Cluster %d Core %d]: Task %d Error: Error!!!, error code=%d\r\n",
+                   snrt_cluster_idx(),
+                   snrt_cluster_core_idx(),
+                   cur_global_task_id,
+                   kernel_return_value);
+            write_bingo_hw_manager_done_queue(cur_global_task_id);
+            BINGO_TRACE_MARKER(BINGO_TRACE_MGR_WRITE_DONE_END);
+            break;
+        } else {
+            // Unknown error code
+            err = kernel_return_value;
+            // Access the clint mutex to printf the error message
+            BINGO_PRINTF(1, "[Cluster %d Core %d]: Task %d Error: Unknown return code=%d\r\n",
                    snrt_cluster_idx(),
                    snrt_cluster_core_idx(),
                    cur_global_task_id,
