@@ -641,8 +641,38 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
     def bingo_emit_task_desc_list(self, target_chiplet_id: int = None) -> str:
         """Emit the task description list in the DFG."""
         task_description_list = ""
-        # we need to sort the nodes in topological order
-        all_nodes = list(nx.topological_sort(self))
+        
+        # Use topological sort, but ensure Dummy Set nodes 
+        # appear immediately after their source node.
+        # 1. Get topological sort
+        topo_nodes = list(nx.topological_sort(self))
+        
+        # 2. Apply grouping logic
+        all_nodes = []
+        visited = set()
+        
+        for node in topo_nodes:
+            if node in visited:
+                continue
+                
+            all_nodes.append(node)
+            visited.add(node)
+            
+            # Find successors that are dummy set nodes
+            # These nodes must follow the current node immediately in the descriptor list
+            successors = list(self.successors(node))
+            dummy_set_succs = [
+                s for s in successors 
+                if s.node_type == "dummy" and s.dep_set_enable
+            ]
+            
+            # Sort by ID for determinism
+            dummy_set_succs.sort(key=lambda x: x.node_id)
+            
+            for dummy in dummy_set_succs:
+                if dummy not in visited:
+                    all_nodes.append(dummy)
+                    visited.add(dummy)
         
         chiplets_to_process = [target_chiplet_id] if target_chiplet_id is not None else self.chiplet_ids
 
@@ -833,15 +863,19 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                 args_var = f"args_dev_chip{chiplet_id:02x}_{node.node_id}"
                 
                 if node.kernel_args:
-                    f.write(f"        {args_struct_type}* {args_var} = ({args_struct_type}*)bingo_l3_alloc(0x{chiplet_id:02x}, sizeof({args_struct_type}));\n")
+                    # Allocate args in the assigned cluster's L1 memory
+                    f.write(f"        {args_struct_type}* {args_var} = ({args_struct_type}*)bingo_l1_alloc(0x{chiplet_id:02x}, {node.assigned_cluster_id}, sizeof({args_struct_type}));\n")
                     # Populate fields
                     field_assignments = node.kernel_args.get_c_field_assignments(handle_name_map)
                     for field, value in field_assignments.items():
                             f.write(f"        {args_var}->{field} = {value};\n")
                     f.write(f"        device_arg_list_chip_{chiplet_id:02x}[{dev_task_idx}] = (uint32_t)(uintptr_t){args_var};\n")
                 else:
+                    # Here is leaved for the special kernels
+                    # Now only the exit kernel needs this
                     if "exit" in kernel_name:
-                        f.write(f"        __snax_bingo_kernel_exit_args_t* {args_var} = (__snax_bingo_kernel_exit_args_t*)bingo_l3_alloc(0x{chiplet_id:02x}, sizeof(__snax_bingo_kernel_exit_args_t));\n")
+                        # Exit args allocated in assigned cluster's L1
+                        f.write(f"        __snax_bingo_kernel_exit_args_t* {args_var} = (__snax_bingo_kernel_exit_args_t*)bingo_l1_alloc(0x{chiplet_id:02x}, {node.assigned_cluster_id}, sizeof(__snax_bingo_kernel_exit_args_t));\n")
                         f.write(f"        {args_var}->exit_code = 0;\n")
                         f.write(f"        device_arg_list_chip_{chiplet_id:02x}[{dev_task_idx}] = (uint32_t)(uintptr_t){args_var};\n")
                     else:
