@@ -24,6 +24,9 @@ static inline uint64_t __host_bingo_kernel_dummy(void *arg){
 static inline uint64_t __host_bingo_kernel_exit(void *arg){
     // This is a special kernel to exit the host kernel loop
     // We can add more clean up work here if needed
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+    uint64_t exit_code = ((uint64_t *)arg)[0];
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
     printf_safe("Chip(%x, %x): [Host] Kernel Exit called with exit code %d\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), exit_code);
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
