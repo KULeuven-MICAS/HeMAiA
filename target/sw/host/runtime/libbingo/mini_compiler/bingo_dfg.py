@@ -208,27 +208,37 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                         dummy_set_node.remote_dep_set_all = False
                         # Add the dummy set node to the graph
                         self.bingo_insert_node_between(cur_node, remote_succ, dummy_set_node)
-            if len(local_succ_list)>1:
+            if len(local_succ_list) > 1:
                 # Now the local multiple successor case
                 # We need local_successors-1 dummy set nodes
                 print(f"Adding dummy set nodes for {cur_node.node_name} with local successors {[succ.node_name for succ in succs_list]}")
-                for i in range(len(succs_list)-1):
+
+                # Prioritize edges where the successor node has the same assigned core as cur_node
+                prioritized_indices = [i for i, succ in enumerate(succs_list)
+                                      if succ.assigned_core_id == cur_node.assigned_core_id]
+                other_indices = [i for i in range(len(succs_list)) if i not in prioritized_indices]
+                # Combine prioritized first, then others
+                ordered_indices = prioritized_indices + other_indices
+
+                # Only need local_successors-1 dummy set nodes
+                for idx in ordered_indices[:len(succs_list)-1]:
+                    succ = succs_list[idx]
                     dummy_set_node = BingoNode(
                         assigned_chiplet_id=cur_node.assigned_chiplet_id,
                         assigned_cluster_id=cur_node.assigned_cluster_id,      # must be the same type of the cur_node to block the execution
                         assigned_core_id=cur_node.assigned_core_id,            # must be the same type of the cur_node to block the execution
-                        kernel_name= None
+                        kernel_name=None
                     )
                     dummy_set_node.node_type = "dummy"
                     dummy_set_node.dep_set_enable = True
-                    dummy_set_node.dep_set_list = [succs_list[i].assigned_core_id]
-                    dummy_set_node.dep_set_cluster_id = succs_list[i].assigned_cluster_id
-                    dummy_set_node.dep_set_chiplet_id = succs_list[i].assigned_chiplet_id
+                    dummy_set_node.dep_set_list = [succ.assigned_core_id]
+                    dummy_set_node.dep_set_cluster_id = succ.assigned_cluster_id
+                    dummy_set_node.dep_set_chiplet_id = succ.assigned_chiplet_id
                     dummy_set_node.dep_check_enable = False
                     dummy_set_node.dep_check_list = []
                     dummy_set_node.remote_dep_set_all = False
                     # Add the dummy set node to the graph
-                    self.bingo_insert_node_between(cur_node, succs_list[i], dummy_set_node)
+                    self.bingo_insert_node_between(cur_node, succ, dummy_set_node)
                     
     def bingo_transform_dfg_add_dummy_check_nodes(self) -> None:
         '''Transform the DFG to add dummy check nodes.'''
@@ -646,33 +656,33 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         # appear immediately after their source node.
         # 1. Get topological sort
         topo_nodes = list(nx.topological_sort(self))
+        all_nodes = topo_nodes
+        # # 2. Apply grouping logic
+        # all_nodes = []
+        # visited = set()
         
-        # 2. Apply grouping logic
-        all_nodes = []
-        visited = set()
-        
-        for node in topo_nodes:
-            if node in visited:
-                continue
+        # for node in topo_nodes:
+        #     if node in visited:
+        #         continue
                 
-            all_nodes.append(node)
-            visited.add(node)
+        #     all_nodes.append(node)
+        #     visited.add(node)
             
-            # Find successors that are dummy set nodes
-            # These nodes must follow the current node immediately in the descriptor list
-            successors = list(self.successors(node))
-            dummy_set_succs = [
-                s for s in successors 
-                if s.node_type == "dummy" and s.dep_set_enable
-            ]
+        #     # Find successors that are dummy set nodes
+        #     # These nodes must follow the current node immediately in the descriptor list
+        #     successors = list(self.successors(node))
+        #     dummy_set_succs = [
+        #         s for s in successors 
+        #         if s.node_type == "dummy" and s.dep_set_enable
+        #     ]
             
-            # Sort by ID for determinism
-            dummy_set_succs.sort(key=lambda x: x.node_id)
+        #     # Sort by ID for determinism
+        #     dummy_set_succs.sort(key=lambda x: x.node_id)
             
-            for dummy in dummy_set_succs:
-                if dummy not in visited:
-                    all_nodes.append(dummy)
-                    visited.add(dummy)
+        #     for dummy in dummy_set_succs:
+        #         if dummy not in visited:
+        #             all_nodes.append(dummy)
+        #             visited.add(dummy)
         
         chiplets_to_process = [target_chiplet_id] if target_chiplet_id is not None else self.chiplet_ids
 
