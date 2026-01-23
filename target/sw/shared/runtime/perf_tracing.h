@@ -6,7 +6,7 @@
 // This mechanism uses "Magic NOPs" to inject markers into the instruction trace
 // without affecting the architectural state of the processor.
 //
-// The markers are implemented as 'ori x0, x0, IMM' instructions.
+// The markers are implemented as 'xori x0, x0, IMM' instructions.
 // - They execute as a valid NOP (writing to zero register).
 // - They carry a 12-bit immediate payload (IMM) visible in the trace dump.
 //
@@ -39,15 +39,16 @@
 
 // --- Hardware Manager Events ---
 // Marks the lifespan of a task within the HW Manager loop
-#define BINGO_TRACE_MGR_GET_READY_START  0x110 // Start reading Ready Queue
-#define BINGO_TRACE_MGR_GET_READY_END    0x111 // End reading Ready Queue
-#define BINGO_TRACE_MGR_PREP_START       0x112 // Start preparing kernel (get args, ptrs)
-#define BINGO_TRACE_MGR_PREP_END         0x113 // End preparing kernel
-#define BINGO_TRACE_MGR_RUN_KERNEL_START 0x114 // Start running kernel
-#define BINGO_TRACE_MGR_RUN_KERNEL_END   0x115 // End running kernel
-#define BINGO_TRACE_MGR_WRITE_DONE_START 0x116 // Start writing Done Queue
-#define BINGO_TRACE_MGR_WRITE_DONE_END   0x117 // End writing Done Queue
-
+#define BINGO_TRACE_MGR_GET_READY_START        0x110 // Start reading Ready Queue
+#define BINGO_TRACE_MGR_GET_READY_END          0x111 // End reading Ready Queue
+#define BINGO_TRACE_MGR_PREP_START             0x112 // Start preparing kernel (get args, ptrs)
+#define BINGO_TRACE_MGR_PREP_END               0x113 // End preparing kernel
+#define BINGO_TRACE_MGR_RUN_KERNEL_START       0x114 // Start running kernel
+#define BINGO_TRACE_MGR_RUN_KERNEL_END         0x115 // End running kernel
+#define BINGO_TRACE_MGR_WRITE_DONE_START       0x116 // Start writing Done Queue
+#define BINGO_TRACE_MGR_WRITE_DONE_END         0x117 // End writing Done Queue
+#define BINGO_TRACE_KERNEL_ARG_PARSE_START     0x118 // Parsing kernel arguments
+#define BINGO_TRACE_KERNEL_ARG_PARSE_END       0x119 // Finished parsing kernel arguments
 // --- Kernel Internal Phases ---
 // These are used inside individual kernels
 // Non-computation kernels (Dummy, Exit)

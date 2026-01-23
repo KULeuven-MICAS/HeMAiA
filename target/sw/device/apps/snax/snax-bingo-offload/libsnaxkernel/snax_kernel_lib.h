@@ -1488,15 +1488,19 @@ SNAX_LIB_DEFINE void __snax_kernel_minimal_cfg_start_gemm_and_wait(void *arg)
 // Those kernels are used together with the bingo hw manager
 
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_dummy(void *arg){
+
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+    uint32_t dummy_input = ((uint32_t *)arg)[0];
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
     // Notice the variables here are all local variables at the TLS section
-    uint32_t dummy_input = ((uint32_t *)arg)[0];
     printf_safe("[Cluster %d Core %d]: Bingo Dummy Kernel called with input %d\r\n", snrt_cluster_idx(), snrt_cluster_core_idx(), dummy_input);
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
     return 0;
 }
 
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_entry_point(void *arg){
+
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
     // This is a special kernel to indicate the bingo hw manager loop has started
     printf_safe("[Cluster %d Core %d]: Start: \r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
@@ -1505,9 +1509,11 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_entry_point(void *arg){
 }
 
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_exit(void *arg){
-    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
     // This is a special kernel to exit the bingo hw manager loop
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
     uint32_t exit_code = ((uint32_t *)arg)[0];
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
     printf_safe("[Cluster %d Core %d]: Exiting with code %d\r\n", snrt_cluster_idx(), snrt_cluster_core_idx(), exit_code);
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
     return 1;
@@ -1523,9 +1529,11 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_1d_copy(void *arg)
     // Arg3: uint32_t dst_addr_lo
     // Arg4: uint32_t size in Byte
     if (snrt_is_dm_core()){
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
         uint64_t src_addr = make_u64(((uint32_t *)arg)[0], ((uint32_t *)arg)[1]);
         uint64_t dst_addr = make_u64(((uint32_t *)arg)[2], ((uint32_t *)arg)[3]);
         uint32_t data_size = ((uint32_t *)arg)[4];
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
         BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_START);
         snrt_dma_start_1d_wideptr(dst_addr, src_addr, data_size);
         BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_END);
@@ -1553,9 +1561,11 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_1d_copy(void *arg)
 
     if (snrt_is_dm_core())
     {
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
         uint64_t src_addr = make_u64(((uint32_t *)arg)[0], ((uint32_t *)arg)[1]);
         uint64_t dst_addr = make_u64(((uint32_t *)arg)[2], ((uint32_t *)arg)[3]);
         uint32_t data_size = ((uint32_t *)arg)[4];
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
         xdma_memcpy_1d_full_addr(src_addr, dst_addr, data_size);
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
@@ -1583,10 +1593,12 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_broadcast(void *arg)
     // Arg3: uint32_t dst_addr_lo
     // Arg4: uint32_t size in Byte
     if (snrt_is_dm_core()){
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
         uint64_t src_addr = make_u64(((uint32_t *)arg)[0], ((uint32_t *)arg)[1]);
         uint64_t dst_addr = make_u64(((uint32_t *)arg)[2], ((uint32_t *)arg)[3]);
         uint64_t dst_addr_broadcast = chiplet_addr_transform_loc(0xF, 0xF, dst_addr);
         uint32_t data_size = ((uint32_t *)arg)[4];
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
         BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_START);
         snrt_dma_start_1d_wideptr(dst_addr_broadcast, src_addr, data_size);
         BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_END);
@@ -1613,6 +1625,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
         printf_safe("[Cluster %d Core %d]: Error! Bingo GEMM full should be called from core 0!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
         return 1;
     }
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
     uint32_t A_addr = ((uint32_t *)arg)[0];
     uint32_t B_addr = ((uint32_t *)arg)[1];
     uint32_t C_addr = ((uint32_t *)arg)[2];
@@ -1627,6 +1640,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
     uint32_t transpose_A = ((uint32_t *)arg)[8];
     uint32_t transpose_B = ((uint32_t *)arg)[9];
     uint32_t accumPrevC = ((uint32_t *)arg)[10];
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
     BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_FULL_CFG_START);
     // some inferenced args
     uint32_t addNonZeroC;
@@ -2045,10 +2059,12 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_minimal(void *arg)
         printf_safe("[Cluster %d Core %d]: Error! Bingo GEMM minimal should be called from core 0!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
         return 1;
     }
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
     uint32_t A_addr = ((uint32_t *)arg)[0];
     uint32_t B_addr = ((uint32_t *)arg)[1];
     uint32_t C_addr = ((uint32_t *)arg)[2];
     uint32_t D_addr = ((uint32_t *)arg)[3];
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
     BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_MIN_CFG_START);
     set_minimal_streamer_cfg(
         A_addr,

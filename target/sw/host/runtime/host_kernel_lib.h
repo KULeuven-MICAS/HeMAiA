@@ -20,8 +20,10 @@ static inline uint64_t __host_bingo_kernel_dummy(void *arg){
 
 static inline uint64_t __host_bingo_kernel_exit(void *arg){
     // This is a special kernel to exit the host kernel loop
-    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
     uint64_t exit_code = ((uint64_t *)arg)[0];
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
     printf_safe("Chip(%x, %x): [Host] Kernel Exit called with exit code %d\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), exit_code);
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
     return EXIT_CODE_SUCC;
@@ -41,10 +43,11 @@ static inline uint64_t __host_bingo_kernel_check_result(void *arg){
     // Arg0: uint64_t golden_data_addr
     // Arg1: uint64_t output_data_addr
     // Arg2: uint64_t data_size in Byte
-
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
     uint8_t* golden_data_addr = (uint8_t*)(((uint64_t *)arg)[0]);
     uint8_t* output_data_addr = (uint8_t*)(((uint64_t *)arg)[1]);
     uint64_t data_size = ((uint64_t *)arg)[2];
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
     uint32_t err = 0;
     for (uint64_t i = 0; i < data_size; i++) {
@@ -68,9 +71,11 @@ static inline uint64_t __host_bingo_kernel_idma(void *arg){
     // Arg0: uint64_t src_addr
     // Arg1: uint64_t dst_addr
     // Arg2: uint64_t size in Byte
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
     uint64_t src_addr = ((uint64_t *)arg)[0];
     uint64_t dst_addr = ((uint64_t *)arg)[1];
     uint64_t size = ((uint64_t *)arg)[2];
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
     BINGO_TRACE_MARKER(BINGO_TRACE_HOST_IDMA_CFG_START);
     uint64_t tf_id = sys_dma_memcpy(get_current_chip_id(), dst_addr, src_addr, size);
     BINGO_TRACE_MARKER(BINGO_TRACE_HOST_IDMA_CFG_END);
