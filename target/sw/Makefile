@@ -165,6 +165,11 @@ host/runtime/host.ld:
 	@echo "[OCCAMYGEN] Generating host.ld"
 	@$(OCCAMYGEN) -c $(CFG) --gen-host-ld --outdir host/runtime
 
+debug-platform-headers: $(PLATFORM_HEADERS)
+	@echo "Generated Platform Headers:"
+	@ls -lh $(PLATFORM_HEADERS)
+
+
 sw: $(PLATFORM_HEADERS) host/runtime/host.ld
 	$(MAKE) -C host libs
 	$(MAKE) -C host TARGET=partial-build
