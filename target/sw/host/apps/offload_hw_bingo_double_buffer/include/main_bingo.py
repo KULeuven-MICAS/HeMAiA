@@ -87,26 +87,20 @@ def define_memory_handles(params):
     # 1. Define Memory Symbols (Existing C variables)
     # The MemSymbol are the variables defined in the data.h file which the memory location is already known at compile time
     # The A tiles
-    mem_handles['A0_data_L3_symbol'] = BingoMemSymbol("A",offset=0*params['A_tile_size'])
-    mem_handles['A1_data_L3_symbol'] = BingoMemSymbol("A",offset=1*params['A_tile_size'])
-    mem_handles['A2_data_L3_symbol'] = BingoMemSymbol("A",offset=2*params['A_tile_size'])
-    mem_handles['A3_data_L3_symbol'] = BingoMemSymbol("A",offset=3*params['A_tile_size'])
+    for i in range(params['num_double_buffers']):
+        mem_handles[f'A{i}_data_L3_symbol'] = BingoMemSymbol("A",offset=i*params['A_tile_size'])
     # B is not tiled, only one symbol
     mem_handles['B_data_L3_symbol'] = BingoMemSymbol("B")
     # The D tiles
-    mem_handles['D0_data_L3_symbol'] = BingoMemSymbol("D",offset=0*params['D_tile_size'])
-    mem_handles['D1_data_L3_symbol'] = BingoMemSymbol("D",offset=1*params['D_tile_size'])
-    mem_handles['D2_data_L3_symbol'] = BingoMemSymbol("D",offset=2*params['D_tile_size'])
-    mem_handles['D3_data_L3_symbol'] = BingoMemSymbol("D",offset=3*params['D_tile_size'])
+    for i in range(params['num_double_buffers']):
+        mem_handles[f'D{i}_data_L3_symbol'] = BingoMemSymbol("D",offset=i*params['D_tile_size'])
     # C is not used
 
     # 2. Define Memory Handles (Dynamic Allocations)
     # The MemHandles are the buffers that need to be allocated at runtime by the bingo runtime
-    mem_handles['D0_L3_buf'] = BingoMemAlloc("D0_L3_buf", size=params['D_tile_size'], mem_level="L3")
-    mem_handles['D1_L3_buf'] = BingoMemAlloc("D1_L3_buf", size=params['D_tile_size'], mem_level="L3")
-    mem_handles['D2_L3_buf'] = BingoMemAlloc("D2_L3_buf", size=params['D_tile_size'], mem_level="L3")
-    mem_handles['D3_L3_buf'] = BingoMemAlloc("D3_L3_buf", size=params['D_tile_size'], mem_level="L3")
-
+    # L3 Buffers
+    for i in range(params['num_double_buffers']):
+        mem_handles[f'D{i}_L3_buf'] = BingoMemAlloc(f"D{i}_L3_buf", size=params['D_tile_size'], mem_level="L3")
     # L1 Buffers
     # Chip 0, Cluster 0
     chip_id = 0
