@@ -69,15 +69,40 @@ uint64_t bingo_get_l2_heap_manager(uint8_t chip_id){
 }
 
 uint64_t bingo_l1_alloc(uint8_t chip_id, uint32_t cluster_id, uint64_t size){
-    return o1heapAllocate(bingo_get_l1_heap_manager(chip_id, cluster_id), size);
+    uint64_t results = o1heapAllocate(bingo_get_l1_heap_manager(chip_id, cluster_id), size);
+    if (results==0UL) {
+        printf_safe("Chip(%x, %x): [Host] L1 malloc failed for size %d on cluster %d\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), size, cluster_id);
+    }
+    BINGO_PRINTF(3, "Chip(%x, %x): [Host] L1 malloc on cluster %d: ptr=0x%lx, size=%d\r\n",
+           get_current_chip_loc_x(), get_current_chip_loc_y(),
+           cluster_id,
+           results,
+           size);
+    return results;
 }
 
 uint64_t bingo_l2_alloc(uint8_t chip_id, uint64_t size){
-    return o1heapAllocate(bingo_get_l2_heap_manager(chip_id), size);
+    uint64_t results = o1heapAllocate(bingo_get_l2_heap_manager(chip_id), size);
+    if (results==0UL) {
+        printf_safe("Chip(%x, %x): [Host] L2 malloc failed for size %d\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), size);
+    }
+    BINGO_PRINTF(3, "Chip(%x, %x): [Host] L2 malloc: ptr=0x%lx, size=%d\r\n",
+           get_current_chip_loc_x(), get_current_chip_loc_y(),
+           results,
+           size);
+    return results;
 }
 
 uint64_t bingo_l3_alloc(uint8_t chip_id, uint64_t size){
-    return o1heapAllocate(bingo_get_l3_heap_manager(chip_id), size);
+    uint64_t results = o1heapAllocate(bingo_get_l3_heap_manager(chip_id), size);
+    if (results==0UL) {
+        printf_safe("Chip(%x, %x): [Host] L3 malloc failed for size %d\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), size);
+    }
+    BINGO_PRINTF(3, "Chip(%x, %x): [Host] L3 malloc: ptr=0x%lx, size=%d\r\n",
+           get_current_chip_loc_x(), get_current_chip_loc_y(),
+           results,
+           size);
+    return results;
 }
 
 void bingo_l1_free(uint8_t chip_id, uint32_t cluster_id, uint64_t ptr){
