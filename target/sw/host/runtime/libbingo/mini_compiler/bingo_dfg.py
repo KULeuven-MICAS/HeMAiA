@@ -690,11 +690,17 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
             local_nodes = [node for node in all_nodes if node.assigned_chiplet_id == chiplet_id]
             num_local_nodes = len(local_nodes)
             
+            # Emit num_tasks at the beginning
+            task_description_list += f"uint32_t num_tasks_chip_{chiplet_id:02x} = {num_local_nodes};\n"
+
             if num_local_nodes == 0:
-                task_description_list += f"uint64_t task_desc_list_chip_{chiplet_id:02x}[1] = {{0}};\n"
+                 # Even if size is 0, we allocate 1 element to avoid issues with size 0 allocation if allocator doesn't support it, or just use 0.
+                 # Using 1 for safety, similar to original array [1]
+                 task_description_list += f"uint64_t* task_desc_list_chip_{chiplet_id:02x} = (uint64_t*)bingo_l3_alloc(0x{chiplet_id:02x}, 1 * sizeof(uint64_t));\n"
+                 task_description_list += f"task_desc_list_chip_{chiplet_id:02x}[0] = 0;\n"
             else:
-                task_description_list += f"uint64_t task_desc_list_chip_{chiplet_id:02x}[{num_local_nodes}] = {{\n"
-                for node in local_nodes:
+                task_description_list += f"uint64_t* task_desc_list_chip_{chiplet_id:02x} = (uint64_t*)bingo_l3_alloc(0x{chiplet_id:02x}, num_tasks_chip_{chiplet_id:02x} * sizeof(uint64_t));\n"
+                for idx, node in enumerate(local_nodes):
                     packed_val = self.bingo_pack_node(node)
                     fields = self.bingo_unpack_node(packed_val)
                     
@@ -705,11 +711,7 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                     comment += f"    //         DepCheck: En={fields['dep_check_en']}, Code=0b{fields['dep_check_code']:0{self.num_cores_per_cluster}b}\n"
                     comment += f"    //         DepSet:   En={fields['dep_set_en']}, All={fields['dep_set_all']}, Chiplet={fields['dep_set_chiplet_id']:02x}, Cluster={fields['dep_set_cluster_id']}, Code=0b{fields['dep_set_code']:0{self.num_cores_per_cluster}b}"
                     
-                    task_description_list += f"    0x{packed_val:016X}, {comment}\n"
-                task_description_list += "};\n"
-            
-            # Emit num_tasks at the end of the list definition
-            task_description_list += f"uint32_t num_tasks_chip_{chiplet_id:02x} = {num_local_nodes};\n"
+                    task_description_list += f"task_desc_list_chip_{chiplet_id:02x}[{idx}] = 0x{packed_val:016X}; {comment}\n"
             
         return task_description_list
     
@@ -726,10 +728,10 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         # 1. Emit global_task_id_to_dev_task_id for each chiplet
         # Also need to emit num_dev_tasks for each chiplet
         for chiplet_id in chiplets_to_process:
-            global_to_dev_lines = []
+            mapping_str += f"int32_t* global_task_id_to_dev_task_id_chip_{chiplet_id:02x} = (int32_t*)bingo_l3_alloc(0x{chiplet_id:02x}, {num_nodes} * sizeof(int32_t));\n"
             dev_task_counter = 0
             
-            for node in all_nodes:
+            for idx, node in enumerate(all_nodes):
                 kernel_name = node.kernel_name
                 # Check if the node is assigned to the current chiplet
                 val = "-1"
@@ -743,18 +745,15 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                     else:
                         comment = f" ({node.node_name})"
                 
-                global_to_dev_lines.append(f"    {val}, // Node ID {node.node_id}{comment}")
+                mapping_str += f"global_task_id_to_dev_task_id_chip_{chiplet_id:02x}[{idx}] = {val}; // Node ID {node.node_id}{comment}\n"
             
-            mapping_str += f"int32_t global_task_id_to_dev_task_id_chip_{chiplet_id:02x}[{num_nodes}] = {{\n"
-            mapping_str += "\n".join(global_to_dev_lines) + "\n"
-            mapping_str += "};\n"
             mapping_str += f"uint32_t num_dev_tasks_chip_{chiplet_id:02x} = {dev_task_counter};\n"
             
         # 2. Emit global_task_id_to_host_task_id
         for chiplet_id in chiplets_to_process:
-            global_to_host_lines = []
+            mapping_str += f"int32_t* global_task_id_to_host_task_id_chip_{chiplet_id:02x} = (int32_t*)bingo_l3_alloc(0x{chiplet_id:02x}, {num_nodes} * sizeof(int32_t));\n"
             host_task_counter = 0
-            for node in all_nodes:
+            for idx, node in enumerate(all_nodes):
                 kernel_name = node.kernel_name
                 val = "-1"
                 comment = ""
@@ -766,11 +765,8 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                     else:
                         comment = f" ({node.node_name})"
 
-                global_to_host_lines.append(f"    {val}, // Node ID {node.node_id}{comment}")
+                mapping_str += f"global_task_id_to_host_task_id_chip_{chiplet_id:02x}[{idx}] = {val}; // Node ID {node.node_id}{comment}\n"
             
-            mapping_str += f"int32_t global_task_id_to_host_task_id_chip_{chiplet_id:02x}[{num_nodes}] = {{\n"
-            mapping_str += "\n".join(global_to_host_lines) + "\n"
-            mapping_str += "};\n"
             mapping_str += f"uint32_t num_host_tasks_chip_{chiplet_id:02x} = {host_task_counter};\n"
         return mapping_str
 
