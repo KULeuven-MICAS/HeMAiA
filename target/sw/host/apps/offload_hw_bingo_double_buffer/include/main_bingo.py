@@ -43,7 +43,7 @@ def define_workload_params():
     # (1 * 8) * (8 * 64) = 1 * 64
     # In the current setting, we suppose A size is 4KB and B size is 4KB and K = 4
     # We tile 4 times for A
-    num_double_buffers = 4
+    num_double_buffers = 8
     A_matrix_size_bytes = 4 * 1024
     B_matrix_size_bytes = 4 * 1024
     K = 4
@@ -327,12 +327,17 @@ def create_dfg(params, mem_handles):
     for i in range(params['num_double_buffers'] - 2):
         bingo_dfg.bingo_add_edge(task_gemm_nodes[i], task_copy_A_nodes[i+2])
         
-    # Prevent overwriting D:
-    # Compute[i+2] (Core 0) cannot start until Store D[i] (Core 2) is done reading D[i]
-    # (Because D[i] and D[i+2] share the same Ping/Pong buffer)
+    # # Prevent overwriting D:
+    # # Compute[i+2] (Core 0) cannot start until Store D[i] (Core 2) is done reading D[i]
+    # # (Because D[i] and D[i+2] share the same Ping/Pong buffer)
     for i in range(params['num_double_buffers'] - 2):
         bingo_dfg.bingo_add_edge(task_copy_D_nodes[i], task_gemm_nodes[i+2])
     
+    for i in range(params['num_double_buffers'] - 3):
+        bingo_dfg.bingo_add_edge(task_copy_D_nodes[i], task_copy_A_nodes[i+3])
+
+    for i in range(params['num_double_buffers'] - 1):
+        bingo_dfg.bingo_add_edge(task_copy_A_nodes[i+1], task_copy_D_nodes[i])
     return bingo_dfg
 
 def compile_dfg(bingo_dfg, output_dir):
