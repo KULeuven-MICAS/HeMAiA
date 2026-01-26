@@ -661,7 +661,7 @@ int64_t* bingo_hw_scheduler_get_host_kernel(int64_t* host_kernel_list_base, uint
 // Then the HW scheduler will read the task list from the memory and schedule the tasks
 // The Host core will also hooked with th ARA core for the simd
 // So its work is just to read the ready queue and write to the done queue when the simd is done
-void bingo_hw_scheduler_init(uint32_t dev_arg_base_addr, uint32_t dev_kernel_base_addr, uint32_t num_dev_tasks, uint32_t global_task_id_to_dev_task_id_base_addr, uint64_t task_desc_list_base, uint32_t num_tasks){
+void bingo_hw_scheduler_init(uint64_t dev_arg_base_addr, uint64_t dev_kernel_base_addr, uint32_t num_dev_tasks, uint64_t global_task_id_to_dev_task_id_base_addr, uint64_t task_desc_list_base, uint32_t num_tasks){
     // For the dev_arg_base_addr, dev_kernel_base_addr, global_task_id_to_dev_task_id_base_addr
     // We use those list when we get a globak task id and need to get the arg/kernel ptr for the device
     // The host core will write those list to the clusters' TCDM to let the device access them directly
