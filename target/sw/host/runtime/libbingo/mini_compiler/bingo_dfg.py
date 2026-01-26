@@ -916,10 +916,10 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         f.write('        printf_safe("Chip(%x, %x): [Host] Init HW Bingo Scheduler\\r\\n",\n')
         f.write('               get_current_chip_loc_x(), get_current_chip_loc_y());\n\n')
 
-        f.write(f"        bingo_hw_scheduler_init((uint32_t)(uintptr_t)device_arg_list_chip_{chiplet_id:02x},\n")
-        f.write(f"                                (uint32_t)(uintptr_t)device_kernel_list_chip_{chiplet_id:02x},\n")
+        f.write(f"        bingo_hw_scheduler_init((uint64_t)(uintptr_t)device_arg_list_chip_{chiplet_id:02x},\n")
+        f.write(f"                                (uint64_t)(uintptr_t)device_kernel_list_chip_{chiplet_id:02x},\n")
         f.write(f"                                num_dev_tasks_chip_{chiplet_id:02x},\n")
-        f.write(f"                                (uint32_t)(uintptr_t)global_task_id_to_dev_task_id_chip_{chiplet_id:02x},\n")
+        f.write(f"                                (uint64_t)(uintptr_t)global_task_id_to_dev_task_id_chip_{chiplet_id:02x},\n")
         f.write(f"                                (uint64_t)(uintptr_t)task_desc_list_chip_{chiplet_id:02x},\n")
         f.write(f"                                num_tasks_chip_{chiplet_id:02x});\n\n")
         
