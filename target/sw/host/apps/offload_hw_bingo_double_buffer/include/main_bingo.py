@@ -288,54 +288,80 @@ def create_dfg(params, mem_handles):
     # 4. Define dependencies
     
     # --- A. Data Validity (Producer -> Consumer) ---
-    
+    # These dependencies enforce the fundamental data flow of the application.
+    # A task consuming data must wait for the task producing it to finish.
     for i in range(params['num_double_buffers']):
-        # Load A[i] -> Compute[i] -> Store D[i]
+        # 1. Load A[i] (DMA) must complete before Compute[i] (GEMM) starts.
+        #    The GEMM kernel reads matrix A from the L1 SPM buffer populated by this load.
         bingo_dfg.bingo_add_edge(task_copy_A_nodes[i], task_gemm_nodes[i])
+        
+        # 2. Compute[i] (GEMM) must complete before Store D[i] (DMA) starts.
+        #    The Store task reads the result matrix D from L1 SPM to move it to L3.
         bingo_dfg.bingo_add_edge(task_gemm_nodes[i], task_copy_D_nodes[i])
 
     # --- B. Core Sequencing (Sequential execution on same core) ---
-    # DMA Load Core 1: Load B -> Load A0 -> Load A1 ...
+    # Although tasks on the same core will naturally execute sequentially if queued,
+    # adding explicit edges makes the execution order deterministic and easier to visualize.
+    
+    # 1. DMA Load Queue (Core 1):
+    #    First load Matrix B (static for all GEMMs), then Load A[0], then Load A[1], etc.
     bingo_dfg.bingo_add_edge(task_copy_B, task_copy_A_nodes[0])
     for i in range(params['num_double_buffers'] - 1):
         bingo_dfg.bingo_add_edge(task_copy_A_nodes[i], task_copy_A_nodes[i+1])
     
-    # Compute Core 0: GEMM 0 -> GEMM 1 ...
+    # 2. Compute Queue (Core 0):
+    #    Perform GEMM operations strictly in order: GEMM 0 -> GEMM 1 -> ...
     for i in range(params['num_double_buffers'] - 1):
         bingo_dfg.bingo_add_edge(task_gemm_nodes[i], task_gemm_nodes[i+1])
     
-    # Host DMA Store Core 2: Store D0 -> Store D1 ...
+    # 3. DMA Store Queue (Core 2):
+    #    Store results strictly in order: Store D[0] -> Store D[1] -> ...
     for i in range(params['num_double_buffers'] - 1):
         bingo_dfg.bingo_add_edge(task_copy_D_nodes[i], task_copy_D_nodes[i+1])
         
-    # The check reuslt nodes
+    # 4. Result Check Sequencing:
+    #    Ensure checks run in order.
     for i in range(params['num_double_buffers'] - 1):
         bingo_dfg.bingo_add_edge(task_check_result_nodes[i], task_check_result_nodes[i+1])
-    # Check Result depends on the last store
+    
+    # 5. Start Verification:
+    #    Start checking results only after the *last* Store D is complete.
+    #    This represents a barrier: Compute All -> Store All -> Verify All.
     bingo_dfg.bingo_add_edge(task_copy_D_nodes[-1], task_check_result_nodes[0])
 
-    # --- C. Buffer Safety (Double Buffering Logic) ---
-    # We must ensure we don't overwrite a buffer that is currently in use.
-    # Buffer A_Ping is used by Compute[0], Compute[2]
-    # Buffer A_Pong is used by Compute[1], Compute[3]
-    # Buffer D_Ping is used by Store[0], Store[2]
-    # Buffer D_Pong is used by Store[1], Store[3]
+    # --- C. Buffer Safety (Double Buffering / Resource Management) ---
+    # Due to limited L1 memory, we reuse a set of buffers (Ping/Pong scheme).
+    # We must add synchronization edges to prevent data hazards (Read-after-Write, Write-after-Read).
     
-    # Prevent overwriting A:
-    # Load A[i+2] (Core 1) cannot start until Compute[i] (Core 0) is done reading A[i] 
-    # (Because A[i] and A[i+2] share the same Ping/Pong buffer)
+    # Buffer Usage Map:
+    # Buffer A_Ping: Used by Load A[0], Compute[0], Load A[2], Compute[2], ... (Even indices)
+    # Buffer A_Pong: Used by Load A[1], Compute[1], Load A[3], Compute[3], ... (Odd indices)
+    # Buffer D_Ping: Used by Compute[0], Store D[0], Compute[2], Store D[2], ... (Even indices)
+    # Buffer D_Pong: Used by Compute[1], Store D[1], Compute[3], Store D[3], ... (Odd indices)
+
+    # 1. Prevent Overwriting Input Buffers (Write-after-Read Hazard):
+    #    We cannot start loading A[i+2] (overwriting Ping) until Compute[i] is finished reading Ping.
+    #    Load A[i+2] depends on Compute[i].
     for i in range(params['num_double_buffers'] - 2):
         bingo_dfg.bingo_add_edge(task_gemm_nodes[i], task_copy_A_nodes[i+2])
         
-    # # Prevent overwriting D:
-    # # Compute[i+2] (Core 0) cannot start until Store D[i] (Core 2) is done reading D[i]
-    # # (Because D[i] and D[i+2] share the same Ping/Pong buffer)
+    # 2. Prevent Overwriting Output Buffers (Write-after-Read Hazard):
+    #    We cannot start computing GEMM[i+2] (writing D into Ping) until Store D[i] is finished reading Ping.
+    #    Compute[i+2] depends on Store D[i].
     for i in range(params['num_double_buffers'] - 2):
         bingo_dfg.bingo_add_edge(task_copy_D_nodes[i], task_gemm_nodes[i+2])
     
+    # 3. Flow Control / Window Size Control:
+    #    This edge limits the "lookahead" of the loader.
+    #    Load A[i+3] depends on Store D[i].
+    #    This ensures we don't have too many active tasks in flight, keeping the pipeline balanced.
+    #    It effectively regulates the distance between the production of results and new inputs.
     for i in range(params['num_double_buffers'] - 3):
         bingo_dfg.bingo_add_edge(task_copy_D_nodes[i], task_copy_A_nodes[i+3])
 
+    # 4. Pipeline Staggering:
+    #    Store D[i] depends on Load A[i+1].
+    #    This artificially delays the store of the current iteration until the load of the next iteration is launched.
     for i in range(params['num_double_buffers'] - 1):
         bingo_dfg.bingo_add_edge(task_copy_A_nodes[i+1], task_copy_D_nodes[i])
     return bingo_dfg
