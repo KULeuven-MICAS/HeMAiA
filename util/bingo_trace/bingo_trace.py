@@ -28,16 +28,19 @@ def parse_trace_file(file_path, event_map):
     """Parses a single trace file for Magic NOP events."""
     events = []
     
-    # regex to match trace lines
+    # regex to match trace lines and capture the first column (simulation time)
     # Example 1 (.txt style): 369000       54        M 0x01000000 ... ori zero, zero, 272 ...
-    # Group 1: Cycle (2nd col)
-    # Group 2: Instruction (Rest of line)
-    txt_pattern = re.compile(r'^\s*\d+\s+(\d+)\s+\w\s+\S+\s+(.*)$')
+    #   First col: simulation time in picoseconds (ps) -> convert to ns
+    #   Second col: cycle counter (kept for compatibility)
+    #   Third group: rest of the instruction text
+    txt_pattern = re.compile(r'^\s*(\d+)\s+(\d+)\s+\w\s+\S+\s+(.*)$')
 
     # Example 2 (.log style, Host Core/Hart 0): 447675ns    74605 M 00000000800004ca 0 20106013 ori            x0, 513
-    # Group 1: Cycle (2nd col)
-    # Group 2: Instruction part (after hex code)
-    log_pattern = re.compile(r'^\s*\d+ns\s+(\d+)\s+\w\s+[0-9a-fA-F]+\s+\d+\s+[0-9a-fA-F]+\s+(.*)$')
+    #   First col: simulation time in nanoseconds
+    #   Second col: cycle counter
+    #   Third group: rest of the instruction text (after other fields)
+    # Capture an optional 'ns' suffix so we can treat those values as already in ns
+    log_pattern = re.compile(r'^\s*(\d+(?:ns)?)\s+(\d+)\s+\w\s+[0-9a-fA-F]+\s+\d+\s+[0-9a-fA-F]+\s+(.*)$')
     
     # regex to match Magic NOP: ori/xori x0, x0, IMM or ori/xori zero, zero, IMM
     # Captures the immediate value
@@ -50,10 +53,19 @@ def parse_trace_file(file_path, event_map):
         for line in f:
             line_match = pattern.match(line)
             if line_match:
-                ts = int(line_match.group(1))
-                # Cycles are used directly, no conversion
-                
-                instr_str = line_match.group(2)
+                raw_ts_str = line_match.group(1)
+                cycle_str = line_match.group(2)
+                cc = int(cycle_str)
+                # If this is a host log and the value ends with 'ns', it's already
+                # in nanoseconds. Otherwise the trace first column is in
+                # picoseconds (ps) and we convert to nanoseconds via integer
+                # division.
+                if is_log_file and raw_ts_str.endswith('ns'):
+                    ts = int(raw_ts_str[:-2])
+                else:
+                    ts = int(raw_ts_str) // 1000
+
+                instr_str = line_match.group(3)
                 
                 nop_match = magic_nop_pattern.search(instr_str)
                 imm = None
@@ -79,6 +91,7 @@ def parse_trace_file(file_path, event_map):
                             
                         events.append({
                             'ts': ts,
+                            'cc': cc,
                             'name': clean_name,
                             'ph': ph,
                             'id': imm
@@ -113,6 +126,9 @@ def convert_to_complete_events(events):
                 new_ev = start_ev.copy()
                 new_ev['ph'] = 'X'
                 new_ev['dur'] = dur
+                # Compute duration in cycles if cycle counters available
+                if 'cc' in start_ev and 'cc' in ev:
+                    new_ev['dur_cc'] = ev['cc'] - start_ev['cc']
                 complete_events.append(new_ev)
             else:
                 # Unmatched End event, treat as instant or ignore?
@@ -179,7 +195,7 @@ def main():
                 "name": ev['name'],
                 "cat": "bingo",
                 "ph": ev['ph'],
-                "ts": ev['ts'], # Cycles
+                "ts": ev['ts'], # ns
                 "pid": f"Chip {chip_id}",
                 "tid": f"Core {hart_id}" if hart_id != 0 else "Host Core",
                 "args": {}
@@ -190,9 +206,21 @@ def main():
                 perfetto_event['dur'] = ev['dur']
                 k_type = ev['name'].replace('BINGO_TRACE_', '')
                 perfetto_event['args']['kernel_type'] = k_type
-                perfetto_event['args']['start_cc'] = ev['ts']
-                perfetto_event['args']['end_cc'] = ev['ts'] + ev['dur']
-                perfetto_event['args']['dur_cc'] = ev['dur']
+                # Use absolute timestamps in nanoseconds for start/end/duration
+                perfetto_event['args']['start_ns'] = ev['ts']
+                perfetto_event['args']['end_ns'] = ev['ts'] + ev['dur']
+                perfetto_event['args']['dur_ns'] = ev['dur']
+                # Include duration in cycles if available
+                if 'dur_cc' in ev:
+                    perfetto_event['args']['dur_cc'] = ev['dur_cc']
+                    # Add frequency calculation
+                    ref_freq_mhz = 1000  # Reference frequency in MHz
+                    if ev['dur'] != 0:
+                        freq_mhz = round((ev['dur_cc'] / ev['dur']) * 1000, 2)  # Convert to MHz
+                        ratio = round(ref_freq_mhz/freq_mhz, 2)
+                        perfetto_event['args']['freq_MHz'] = freq_mhz
+                        perfetto_event['args']['ref_freq_MHz'] = ref_freq_mhz
+                        perfetto_event['args']['freq_ratio'] = ratio
             else:
                 # For others, keep raw_id logic or none?
                 # User said "instead of raw_id". Safe to use raw_id for instant events if needed.
@@ -225,7 +253,7 @@ def main():
     # 5. Write Output
     output_data = {
         "traceEvents": all_trace_events,
-        "displayTimeUnit": "cycles"
+        "displayTimeUnit": "ns"
     }
     
     print(f"Writing {len(all_trace_events)} events to {args.output}")
