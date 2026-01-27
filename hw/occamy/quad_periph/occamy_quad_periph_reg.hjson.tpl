@@ -8,7 +8,12 @@
       desc: "Number of clusters in the chip.",
       type: "int",
       default: "${nr_clusters}"
-    }
+    },
+    { name: "NumTotalCores",
+      desc: "Number of cores in the chip",
+      type: "int",
+      default: "${bingo_hw_manager_nr_cores_per_chiplet}"
+    },    
   ], 
   name: "occamy_quad_periph",
   clock_primary: "clk_i",
@@ -149,5 +154,99 @@
         }
       ]
     },
+    { name: "EN_IDLE_PM",
+      desc: "Enable the idle power optimization",
+      swaccess: "rw",
+      hwaccess: "hro",
+      fields: [
+        {
+          bits: "31:0",
+          resval: "0",
+          name: "EN_IDLE_PM",
+          desc: '''
+                Enable the idle power optimization of the BINGO HW Scheduler.
+                '''
+        }
+      ]
+    },
+    { name: "IDLE_POWER_LEVEL",
+      desc: "Core power level when at idle",
+      swaccess: "rw",
+      hwaccess: "hro",
+      fields: [
+        {
+          bits: "31:0",
+          resval: "0",
+          name: "IDLE_POWER_LEVEL",
+          desc: '''
+                The power level when the core is idle
+                '''
+        }
+      ]
+    },
+    { name: "NORM_POWER_LEVEL",
+      desc: "Core power level when at normal",
+      swaccess: "rw",
+      hwaccess: "hro",
+      fields: [
+        {
+          bits: "31:0",
+          resval: "0",
+          name: "NORM_POWER_LEVEL",
+          desc: '''
+                The power level when the core is running
+                '''
+        }
+      ]
+    },
+    { name: "PM_BASE_ADDR_HI",
+      desc: "The higher 32bit base address of the power manager.",
+      swaccess: "rw",
+      hwaccess: "hro",
+      fields: [
+        {
+          bits: "31:0",
+          resval: "0",
+          name: "PM_BASE_ADDR_HI",
+          desc: '''
+                The higher 32bit base address of the power manager.
+                '''
+        }
+      ]
+    },
+    { name: "PM_BASE_ADDR_LO",
+      desc: "The lower 32bit base address of the power manager.",
+      swaccess: "rw",
+      hwaccess: "hro",
+      fields: [
+        {
+          bits: "31:0",
+          resval: "0",
+          name: "PM_BASE_ADDR_LO",
+          desc: '''
+                The lower 32bit base address of the power manager.
+                '''
+        }
+      ]
+    },
+    { multireg:
+      { name: "CORE_POWER_DOMAIN",
+        desc: "The power domains for each core.",
+        swaccess: "rw",
+        hwaccess: "hro",
+        count: "NumTotalCores",
+        cname: "core_power_domain",
+        fields: [
+          {
+            bits: "31:0",
+            resval: "0",
+            name: "CORE_POWER_DOMAIN",
+            desc: '''
+                  The power domains for each core
+                  '''
+          }
+        ]
+      }
+    },    
   ]
 }

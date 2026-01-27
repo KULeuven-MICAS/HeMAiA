@@ -10,7 +10,6 @@
 #include <stdlib.h>  // NULL
 #include <stdio.h>
 #include "heterogeneous_runtime.h"
-
 uint64_t global_task_id = 0; // Internal monotonically increasing id source, notice this is used in each chiplet
 ///////////////////////////
 // Memory Allocator API  //
@@ -655,6 +654,57 @@ int64_t* bingo_hw_scheduler_get_host_kernel(int64_t* host_kernel_list_base, uint
     return &host_kernel_list_base[host_task_id];
 }
 
+void bingo_hw_scheduler_init_pm(){
+    BINGO_PRINTF(1, "Chip(%x, %x): [Host] Initializing HW Scheduler Power Manager\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+    // Init the power manager
+    // We need to prepare the following registers:
+    // 1. quad_ctrl_idle_power_level_addr: set to the desired power level for idle state
+    // For simulation we can set to roughly 1/4 of the normal speed (6)
+    writew(25,                           (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_idle_power_level_addr()));
+    // 2. quad_ctrl_norm_power_level_addr: set to the desired power level for normal state
+    // For simulation the default value is 6
+    // This is due to the 4Ghz PLL divided by 16 gives
+    // For chip testing, we should choose another value derived from the 4Ghz PLL
+    writew(6,                             (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_norm_power_level_addr()));
+    // 3. quad_ctrl_pm_base_hi_addr: set to the high 32 bits of the power manager base address
+    uint64_t CLK_CONTROLLER_ADDR = chiplet_addr_transform(HEMAIA_CLK_RST_CONTROLLER_BASE_ADDR);
+    writew((uint32_t)(CLK_CONTROLLER_ADDR>>32),       (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_pm_base_hi_addr()));
+    // 4. quad_ctrl_pm_base_lo_addr: set to the low 32 bits of the power manager base address
+    writew((uint32_t)(CLK_CONTROLLER_ADDR),           (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_pm_base_lo_addr()));
+    // 5. quad_ctrl_core_power_domain_addr: set to the core power domain
+    // First iterate the cores and then clusters
+    // cluster 0 core0, cluster 0 core1 cluster 0 core2, cluster 1 core 1
+    // From the hardware design, we have the following power domain mapping:
+    // Domain 0: Host core
+    // Domain 1: Cluster 0
+    // Domain 2: Cluster 1
+    // ...
+    // At most we have 32 domains (0-31)
+    // However, we put the host core to the core 2 of cluster 0
+    // and we not want to change the host core domain
+    // So we need to special case the host core here
+    uint32_t core_power_domain;
+    uint32_t idx;
+    for (uint32_t cluster = 0; cluster < N_CLUSTERS_PER_CHIPLET; cluster++){
+        for (uint32_t core = 0; core < N_CORES_PER_CLUSTER + 1; core++){ // +1 for the host core
+            idx = cluster * (N_CORES_PER_CLUSTER + 1) + core;
+            if (cluster == 0 && core == 2){
+                // Host core, do not change its power domain
+                // In Bingo HW scheduler, it will read this value and compare it with the 32
+                // to decide whether this is a valid domain or not
+                // We set to 99 to indicate it is invalid
+                core_power_domain = 99; 
+            } else {
+                core_power_domain = cluster + 1; // Cluster i
+            }
+            writew(core_power_domain, (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_core_power_domain_addr(idx)));
+        }
+    }
+    // 6. quad_ctrl_enable_idle_pm_addr: set to 1 to enable power manager
+    writew(1,                             (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_enable_idle_pm_addr()));
+}
+
+
 // The task will be initized directly on a .h file generated from the mini compiler
 // So the whole scheduling process will be handled by the hardware scheduler
 // The host-side work is just in the begining to write the task_list_ptr and #num_tasks to the quad ctrl reg
@@ -695,11 +745,13 @@ void bingo_hw_scheduler_init(uint64_t dev_arg_base_addr, uint64_t dev_kernel_bas
         writew(ptr_dev_kernel_base,              (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_kernel_ptr_addr(i)));
         writew(ptr_global_id_to_dev_id_base, (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_global_id_to_dev_id_addr(i)));
     }
-    
+    // Init the power manager
+    bingo_hw_scheduler_init_pm();
+    // Init the task desc list base and num tasks
     writew(task_desc_list_base>>32,       (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_task_desc_base_hi_addr()));
     writew((uint32_t)task_desc_list_base, (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_task_desc_base_lo_addr()));
     writew(num_tasks,                     (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_num_task_addr()));
-    // Start the HW scheduler
+    // Start the HW scheduler to load the task list
     writew(1,                             (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_start_bingo_hw_manager_addr()));
     // Tell the device that the host init is done
     writew(1,                             (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_host_init_done_addr()));

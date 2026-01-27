@@ -37,13 +37,27 @@ module ${name}_quad_ctrl
   output ${quad_ctrl_quad_to_soc_xbar.in_clusters.rsp_type()} quad_in_rsp_o
 );
 
-  // Bingo HW Manager Signals
-  logic [47:0] bingo_hw_manager_task_list_base_addr;
-  logic [31:0] bingo_hw_manager_num_task;
-  logic [31:0] bingo_hw_manager_start;
-  logic [31:0] bingo_hw_manager_reset_start;
+  /// Bingo HW Manager Signals
+  // We will use the CSR interface for the cores to read ready queue and write done queue
+  // CSR Signals for the bingo hw manager
+  // The +1 here is due to the host will also act as a core in cluster
+  // For the TO case each cluster has two cores: gemm(core0) and dma(core1)
+  // The host will be the core2 at cluster 0
+  localparam int unsigned BINGO_HW_MANAGER_NR_CORE_PER_CLUSTER = NrCoresPerCluster[0] + 1;
+  localparam int unsigned CFG_WIDTH = 32;
+  typedef logic [CFG_WIDTH-1:0] cfg_t;
+  //  Task Desp
+  logic [AddrWidth-1:0] bingo_hw_manager_task_list_base_addr;
+  cfg_t bingo_hw_manager_num_task;
+  cfg_t bingo_hw_manager_start;
+  cfg_t bingo_hw_manager_reset_start;
   logic        bingo_hw_manager_reset_start_en;
-
+  //  Power Management
+  logic [AddrWidth-1:0] bingo_hw_manager_pm_base_addr;
+  cfg_t bingo_hw_manager_enable_idle_pm;
+  cfg_t bingo_hw_manager_idle_power_level;
+  cfg_t bingo_hw_manager_norm_power_level;
+  cfg_t [BINGO_HW_MANAGER_NR_CORE_PER_CLUSTER-1:0][NrClustersPerQuad-1:0] bingo_hw_manager_core_power_domain;
 
   // Quadrant Lite xbar
   // Here we have the host to cluster mailboxes
@@ -113,6 +127,8 @@ module ${name}_quad_ctrl
   <% regbus_quad_ctrl = quad_ctrl_axi_lite_narrow_mux.out_quad_ctrl_perpheral \
     .to_reg(context, "axi_lite_to_reg_quad_ctrl_peripheral") %>
   occamy_quad_periph #(
+    .BINGO_HW_MANAGER_NR_CORE_PER_CLUSTER (BINGO_HW_MANAGER_NR_CORE_PER_CLUSTER),
+    .BINGO_HW_MANAGER_NR_CLUSTER          (NrClustersPerQuad),
     .reg_req_t ( ${regbus_quad_ctrl.req_type()} ),
     .reg_rsp_t ( ${regbus_quad_ctrl.rsp_type()} )
   ) i_occamy_quad_periph_regs (
@@ -124,7 +140,12 @@ module ${name}_quad_ctrl
     .bingo_hw_manager_num_task_o            (bingo_hw_manager_num_task           ),
     .bingo_hw_manager_start_o               (bingo_hw_manager_start              ),
     .bingo_hw_manager_reset_start_i         (bingo_hw_manager_reset_start        ),
-    .bingo_hw_manager_reset_start_en_i      (bingo_hw_manager_reset_start_en     )
+    .bingo_hw_manager_reset_start_en_i      (bingo_hw_manager_reset_start_en     ),
+    .bingo_hw_manager_pm_base_addr_o        (bingo_hw_manager_pm_base_addr       ),
+    .bingo_hw_manager_enable_idle_pm_o      (bingo_hw_manager_enable_idle_pm     ),
+    .bingo_hw_manager_idle_power_level_o    (bingo_hw_manager_idle_power_level   ),
+    .bingo_hw_manager_norm_power_level_o    (bingo_hw_manager_norm_power_level   ),
+    .bingo_hw_manager_core_power_domain_o   (bingo_hw_manager_core_power_domain  )
   );
 
 
@@ -163,12 +184,7 @@ module ${name}_quad_ctrl
   // ADDR Space for the axi lite periph
   localparam addr_t CHIPLET_DONE_QUEUE_BASE    = QuadAXILiteBaseAddr + 0 * 4096;
   localparam addr_t HOST_READY_DONE_QUEUE_BASE = QuadAXILiteBaseAddr + 1 * 4096;
-  // We will use the CSR interface for the cores to read ready queue and write done queue
-  // CSR Signals for the bingo hw manager
-  // The +1 here is due to the host will also act as a core in cluster
-  // For the TO case each cluster has two cores: gemm(core0) and dma(core1)
-  // The host will be the core2 at cluster 0
-  localparam int unsigned BINGO_HW_MANAGER_NR_CORE_PER_CLUSTER = NrCoresPerCluster[0] + 1;
+
   csr_req_t [BINGO_HW_MANAGER_NR_CORE_PER_CLUSTER-1:0][NrClustersPerQuad-1:0] bingo_hw_manager_csr_req;
   logic     [BINGO_HW_MANAGER_NR_CORE_PER_CLUSTER-1:0][NrClustersPerQuad-1:0] bingo_hw_manager_csr_req_valid;
   logic     [BINGO_HW_MANAGER_NR_CORE_PER_CLUSTER-1:0][NrClustersPerQuad-1:0] bingo_hw_manager_csr_req_ready;
@@ -225,7 +241,15 @@ module ${name}_quad_ctrl
     .csr_req_ready_o                    (bingo_hw_manager_csr_req_ready               ),
     .csr_rsp_o                          (bingo_hw_manager_csr_rsp                     ),
     .csr_rsp_valid_o                    (bingo_hw_manager_csr_rsp_valid               ),
-    .csr_rsp_ready_i                    (bingo_hw_manager_csr_rsp_ready               )
+    .csr_rsp_ready_i                    (bingo_hw_manager_csr_rsp_ready               ),
+    // The Power Management interface
+    .bingo_hw_manager_enable_idle_pm_i         (bingo_hw_manager_enable_idle_pm              ),
+    .bingo_hw_manager_dle_power_level_i        (bingo_hw_manager_idle_power_level            ),
+    .bingo_hw_manager_normal_power_level_i     (bingo_hw_manager_norm_power_level            ),
+    .bingo_hw_manager_pm_base_addr_i           (bingo_hw_manager_pm_base_addr                ),
+    .bingo_hw_manager_core_power_domain_i      (bingo_hw_manager_core_power_domain           ),
+    .pm_axi_lite_req_o                         (${quad_ctrl_axi_lite_xbar.in_bingo_hw_scheduler_write_pm.req_name()}),
+    .pm_axi_lite_resp_i                        (${quad_ctrl_axi_lite_xbar.in_bingo_hw_scheduler_write_pm.rsp_name()})
   );
 
   // We need an extra work here to connect the host master port to the csr

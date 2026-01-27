@@ -2,8 +2,12 @@
 `include "common_cells/registers.svh"
 
 module occamy_quad_periph import occamy_quad_periph_reg_pkg::*; #(
+  parameter BINGO_HW_MANAGER_NR_CORE_PER_CLUSTER = 4,
+  parameter BINGO_HW_MANAGER_NR_CLUSTER = 1,
+  parameter REG_WIDTH = 32,
   parameter type reg_req_t = logic,
-  parameter type reg_rsp_t = logic
+  parameter type reg_rsp_t = logic,
+  parameter type reg_data_t = logic [REG_WIDTH-1:0]
 ) (
   input clk_i,
   input rst_ni,
@@ -12,22 +16,42 @@ module occamy_quad_periph import occamy_quad_periph_reg_pkg::*; #(
   input  reg_req_t reg_req_i,
   output reg_rsp_t reg_rsp_o,
   // To HW
+  // Task Description Fetch
   output logic [47:0] bingo_hw_manager_task_list_base_addr_o,
-  output logic [31:0] bingo_hw_manager_num_task_o,
-  output logic [31:0] bingo_hw_manager_start_o,
-  input  logic [31:0] bingo_hw_manager_reset_start_i,
-  input  logic        bingo_hw_manager_reset_start_en_i
+  output reg_data_t bingo_hw_manager_num_task_o,
+  output reg_data_t bingo_hw_manager_start_o,
+  input  reg_data_t bingo_hw_manager_reset_start_i,
+  input  logic        bingo_hw_manager_reset_start_en_i,
+  // Power Management
+  output logic [47:0] bingo_hw_manager_pm_base_addr_o,
+  output reg_data_t bingo_hw_manager_enable_idle_pm_o,
+  output reg_data_t bingo_hw_manager_idle_power_level_o,
+  output reg_data_t bingo_hw_manager_norm_power_level_o,
+  output reg_data_t [BINGO_HW_MANAGER_NR_CORE_PER_CLUSTER-1:0][BINGO_HW_MANAGER_NR_CLUSTER-1:0] bingo_hw_manager_core_power_domain_o
 );
 
   occamy_quad_periph_hw2reg_t hw2reg;
   occamy_quad_periph_reg2hw_t reg2hw;
+  // Task Description
   assign bingo_hw_manager_task_list_base_addr_o[31:0] = reg2hw.task_desc_list_base_addr_lo.q;
   assign bingo_hw_manager_task_list_base_addr_o[47:32] = reg2hw.task_desc_list_base_addr_hi.q[15:0];
   assign bingo_hw_manager_num_task_o = reg2hw.num_task.q;
   assign bingo_hw_manager_start_o = reg2hw.start_bingo_hw_manager.q;
   assign hw2reg.start_bingo_hw_manager.d  = bingo_hw_manager_reset_start_i;
   assign hw2reg.start_bingo_hw_manager.de = bingo_hw_manager_reset_start_en_i;
-  // Assignment not ready yet
+  // Power Management
+  assign bingo_hw_manager_pm_base_addr_o[31:0] = reg2hw.pm_base_addr_lo.q;
+  assign bingo_hw_manager_pm_base_addr_o[47:32] = reg2hw.pm_base_addr_hi.q[15:0];
+  assign bingo_hw_manager_enable_idle_pm_o = reg2hw.en_idle_pm.q;
+  assign bingo_hw_manager_idle_power_level_o = reg2hw.idle_power_level.q;
+  assign bingo_hw_manager_norm_power_level_o = reg2hw.norm_power_level.q;
+  always_comb begin
+    for (int core = 0; core < BINGO_HW_MANAGER_NR_CORE_PER_CLUSTER; core++) begin
+      for (int cluster = 0; cluster < BINGO_HW_MANAGER_NR_CLUSTER; cluster++) begin
+        bingo_hw_manager_core_power_domain_o[core][cluster] = reg2hw.core_power_domain[core + cluster*BINGO_HW_MANAGER_NR_CORE_PER_CLUSTER].q;
+      end
+    end
+  end
   occamy_quad_periph_reg_top #(
     .reg_req_t ( reg_req_t ),
     .reg_rsp_t ( reg_rsp_t  )

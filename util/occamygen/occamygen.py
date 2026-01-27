@@ -564,6 +564,7 @@ def main():
     quad_ctrl_axi_lite_xbar.add_input("quad_to_soc")
     quad_ctrl_axi_lite_xbar.add_input("bingo_hw_scheduler_read_local_task")
     quad_ctrl_axi_lite_xbar.add_input("bingo_hw_scheduler_write_remote_done")
+    quad_ctrl_axi_lite_xbar.add_input("bingo_hw_scheduler_write_pm")
     quad_ctrl_axi_lite_xbar.add_output_entry("quad_to_soc", am_quad_to_soc_axi_xbar)
     quad_ctrl_axi_lite_xbar.add_output_entry("bingo_hw_scheduler_chiplet_done_queue", am_quad_axi_lite_peripherals[0])
     quad_ctrl_axi_lite_xbar.add_output_entry("bingo_hw_scheduler_host_ready_done_intf", am_quad_axi_lite_peripherals[1])

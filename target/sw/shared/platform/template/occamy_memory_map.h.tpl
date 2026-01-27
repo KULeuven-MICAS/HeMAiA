@@ -198,6 +198,32 @@ inline uintptr_t quad_ctrl_host_ready_done_queue_addr(){
     return QUAD_HOST_READY_DONE_QUEUE_BASE_ADDR;
 }
 
+inline uintptr_t quad_ctrl_enable_idle_pm_addr(){
+    return QUAD_AXI_LITE_NARROW_PERIPHERALS_BASE_ADDR + OCCAMY_QUAD_PERIPH_EN_IDLE_PM_REG_OFFSET;
+}
+
+inline uintptr_t quad_ctrl_idle_power_level_addr(){
+    return QUAD_AXI_LITE_NARROW_PERIPHERALS_BASE_ADDR + OCCAMY_QUAD_PERIPH_IDLE_POWER_LEVEL_REG_OFFSET;
+}
+
+inline uintptr_t quad_ctrl_norm_power_level_addr(){
+    return QUAD_AXI_LITE_NARROW_PERIPHERALS_BASE_ADDR + OCCAMY_QUAD_PERIPH_NORM_POWER_LEVEL_REG_OFFSET;
+}
+
+inline uintptr_t quad_ctrl_pm_base_hi_addr(){
+    return QUAD_AXI_LITE_NARROW_PERIPHERALS_BASE_ADDR + OCCAMY_QUAD_PERIPH_PM_BASE_ADDR_HI_REG_OFFSET;
+}
+
+inline uintptr_t quad_ctrl_pm_base_lo_addr(){
+    return QUAD_AXI_LITE_NARROW_PERIPHERALS_BASE_ADDR + OCCAMY_QUAD_PERIPH_PM_BASE_ADDR_LO_REG_OFFSET;
+}
+
+inline uintptr_t quad_ctrl_core_power_domain_addr(uint32_t reg_idx){
+    return QUAD_AXI_LITE_NARROW_PERIPHERALS_BASE_ADDR + OCCAMY_QUAD_PERIPH_CORE_POWER_DOMAIN_0_REG_OFFSET + 
+            (reg_idx / OCCAMY_QUAD_PERIPH_CORE_POWER_DOMAIN_CORE_POWER_DOMAIN_FIELDS_PER_REG) * 4;
+}
+
+
 inline uintptr_t clint_msip_addr(uint32_t hartid) {
     return clint_msip_base + (hartid / CLINT_MSIP_P_FIELDS_PER_REG) * 4;
 }

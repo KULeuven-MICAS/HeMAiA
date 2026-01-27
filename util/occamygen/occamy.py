@@ -1043,6 +1043,8 @@ def get_ctrl_kwargs(occamy_cfg, cluster_generators, name):
     # core_per_cluster_list = [cluster_generator.cfg["nr_cores"]
     #                          for cluster_generator in cluster_generators]
     # nr_cores_quadrant = sum(core_per_cluster_list)
+    nr_clusters = len(occamy_cfg["clusters"])
+    nr_cores_per_cluster = cluster_generators[0].cfg["nr_cores"]
     hex_default_boot_addr = hex(default_boot_addr)
     hex_backup_boot_addr = hex(backup_boot_addr)
     # Remove the prefix 0x
@@ -1051,11 +1053,12 @@ def get_ctrl_kwargs(occamy_cfg, cluster_generators, name):
     ctrl_kwargs = {
         "name": name,
         "nr_s1_quadrants": occamy_cfg["nr_s1_quadrant"],
-        "nr_clusters": len(occamy_cfg["clusters"]),
+        "nr_clusters": nr_clusters,
         # "nr_cores": nr_cores_quadrant,
         "default_boot_addr": hex_default_boot_addr,
         "backup_boot_addr": hex_backup_boot_addr,
         "occamy_cfg": occamy_cfg,
-        "addr_width": addr_width
+        "addr_width": addr_width,
+        "bingo_hw_manager_nr_cores_per_chiplet":  nr_clusters * (nr_cores_per_cluster + 1) # +1 for the host core as acc
     }
     return ctrl_kwargs
