@@ -6,7 +6,7 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 # <Try not to blindly include other makefiles>
 # This makefile generates the SW sources for HeMAiA SoC
-.PHONY: sw clean-sw
+.PHONY: sw clean-sw single-sw
 ############
 # Makefrag #
 ############
@@ -175,6 +175,20 @@ sw: $(PLATFORM_HEADERS) host/runtime/host.ld
 	$(MAKE) -C host TARGET=partial-build
 	$(MAKE) -C device all
 	$(MAKE) -C host TARGET=finalize-build
+
+single-sw: $(PLATFORM_HEADERS) host/runtime/host.ld
+	$(MAKE) -C host libs
+	$(MAKE) -C host single_sw TARGET=partial-build \
+		HOST_APP_TYPE=$(HOST_APP_TYPE) \
+		CHIP_TYPE=$(CHIP_TYPE) \
+		WORKLOAD=$(WORKLOAD) \
+		DEV_APP=$(DEV_APP)
+	$(MAKE) -C device all DEVICE_APPS=$(DEV_APP)
+	$(MAKE) -C host single_sw TARGET=finalize-build \
+		HOST_APP_TYPE=$(HOST_APP_TYPE) \
+		CHIP_TYPE=$(CHIP_TYPE) \
+		WORKLOAD=$(WORKLOAD) \
+		DEV_APP=$(DEV_APP)
 
 clean:
 # clean device build

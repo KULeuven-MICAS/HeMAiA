@@ -28,13 +28,13 @@ The sequence performed by this script is:
    identical ensures that absolute paths embedded in the generated
    files continue to work.
 
-3. **Application build.**  The YAML file ``task.yaml`` (located in
+3. **Application build.**  The YAML file ``task_vsim.yaml`` (located in
    the same directory as this script) lists CI tasks under the key
-   ``runs``.  Each entry contains a ``host_app`` and optionally a
-   ``device_app``.  For each run the script invokes ``make apps``
-   inside the container to build the corresponding hex files using
-   ``HOST_APP=<host_app>`` and ``DEVICE_APP=<device_app>`` when
-   provided.  After each invocation the newly generated directories
+   ``runs``.  Each entry contains parameters such as: ``HOST_APP_TYPE``,
+   ``CHIP_TYPE``, ``WORKLOAD``, and ``DEV_APP``.
+   For each run the script invokes ``make apps`` inside the container
+   to build the corresponding hex files using these 4 parameters.
+   After each invocation the newly generated directories
    ``app_chip_0_0``, ``app_chip_0_1``, ``app_chip_1_0`` and
    ``app_chip_1_1`` from ``target/sim/bin`` are copied into a unique
    task folder ``task_<n>/bin`` under ``target/sim/automation/ci``.
@@ -74,6 +74,7 @@ from __future__ import annotations
 import os
 import subprocess
 import shutil
+import yaml
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 import multiprocessing
@@ -131,108 +132,78 @@ def run_in_container(repo_root: Path, docker_image: str, working_dir: Path, comm
     ]
     docker_cmd.extend(command)
     subprocess.run(docker_cmd, check=True)
+    
+def parse_tasks(task_yaml: Path) -> List[Dict[str, str]]:
+    """Parse the CI tasks from a YAML file.
 
-
-def parse_tasks(task_yaml: Path) -> List[Dict[str, Optional[str]]]:
-    """Parse the CI tasks from a YAML file without using an external library.
-
-    The expected YAML format is a top-level ``runs`` key containing a
-    list where each item is a dictionary keyed by an ``app_*`` name.
-    Each dictionary value is a list of single-entry dictionaries
-    specifying ``host_app`` and optionally ``device_app``.  Since this
-    format is simple and regular, we parse it by examining lines rather
-    than using a third-party parser.
-
-    Parameters
-    ----------
-    task_yaml:
-        Path to the YAML file describing the tasks.
-
-    Returns
-    -------
-    List[Dict[str, Optional[str]]]
-        A list of task dictionaries with keys ``host_app`` and
-        ``device_app`` (``None`` if omitted or set to ``null``/``None`` in
-        the YAML).
+    The expected YAML format is:
+    runs:
+      - ci_app_name:
+          - HOST_APP_TYPE: offload_bingo_sw
+          - CHIP_TYPE: single_chip
+          - WORKLOAD: gemm_tiled
+          - DEV_APP: snax-bingo-offload
     """
-    tasks: List[Dict[str, Optional[str]]] = []
-    current_host: Optional[str] = None
-    current_device: Optional[str] = None
-    with task_yaml.open("r") as f:
-        for line in f:
-            stripped = line.strip()
-            # Skip empty lines and comments
-            if not stripped or stripped.startswith("#"):
-                continue
-            # Skip the top-level 'runs:' key
-            if stripped.startswith("runs:"):
-                continue
-            # When a new app entry begins, flush the previous task
-            if stripped.startswith("- app_"):
-                if current_host is not None:
-                    tasks.append(
-                        {"host_app": current_host, "device_app": current_device}
-                    )
-                # Reset for the next entry
-                current_host = None
-                current_device = None
-                continue
-            # Parse host_app assignment
-            if stripped.startswith("- host_app:"):
-                parts = stripped.split(":", 1)
-                current_host = parts[1].strip()
-                continue
-            # Parse device_app assignment
-            if stripped.startswith("- device_app:"):
-                parts = stripped.split(":", 1)
-                value = parts[1].strip()
-                # Interpret 'null', 'none' or empty value as None
-                if value.lower() in ("null", "none", ""):
-                    current_device = None
-                else:
-                    current_device = value
-                continue
-    # Append the last parsed task if present
-    if current_host is not None:
-        tasks.append({"host_app": current_host, "device_app": current_device})
-    # Validate tasks
-    for t in tasks:
-        if t.get("host_app") is None:
-            raise ValueError(
-                "host_app must be specified for every task in the configuration"
-            )
+    with open(task_yaml, 'r') as f:
+        param_data = yaml.safe_load(f)
+
+    tasks: List[Dict[str, str]] = []
+    for app_entry in param_data.get("runs", []):
+        ci_app_name = str(list(app_entry.keys())[0])
+        attributes = app_entry[ci_app_name]
+        attr_dict = {}
+        for attr in attributes:
+            attr_dict.update(attr)
+        
+        # Ensure at least HOST_APP_TYPE is present
+        if 'HOST_APP_TYPE' not in attr_dict:
+            raise ValueError(f"Task {ci_app_name} is missing 'HOST_APP_TYPE'")
+            
+        tasks.append({
+            "host_app_type": str(attr_dict.get('HOST_APP_TYPE', '')),
+            "chip_type": str(attr_dict.get('CHIP_TYPE', '')),
+            "workload": str(attr_dict.get('WORKLOAD', '')),
+            "dev_app": str(attr_dict.get('DEV_APP', '')),
+            "ci_name": ci_app_name
+        })
     return tasks
 
 
 def build_apps(
     repo_root: Path,
     docker_image: str,
-    tasks: List[Dict[str, Optional[str]]],
+    tasks: List[Dict[str, str]],
     task_base_dir: Path,
-) -> List[Tuple[Path, str, Optional[str]]]:
+) -> List[Tuple[Path, str]]:
     """Build application hex files inside the container and prepare task directories.
 
     For each task entry this function runs ``make apps`` inside the
-    container with the appropriate variables.  After each build the
+    container with the standard 4 parameters.  After each build the
     newly generated hex directories are copied into a unique task folder
     under ``task_base_dir``.  The function returns a list of tuples
-    containing the task directory, host_app and device_app for further
-    processing.
+    containing the task directory and descriptive name.
     """
-    results: List[Tuple[Path, str, Optional[str]]] = []
+    results: List[Tuple[Path, str]] = []
     for idx, task in enumerate(tasks):
-        host_app = task["host_app"]
-        device_app = task.get("device_app")
+        host_app_type = task["host_app_type"]
+        chip_type = task.get("chip_type", "")
+        workload = task.get("workload", "")
+        dev_app = task.get("dev_app", "")
+        ci_name = task["ci_name"]
+
         # Build the application inside the container
-        make_cmd: List[str] = ["make", "apps", f"HOST_APP={host_app}"]
-        # If device_app is None or explicitly "null", provide an empty
-        # assignment so the variable exists in the make invocation
-        if device_app not in [None, "null", "None"]:
-            make_cmd.append(f"DEVICE_APP={device_app}")
-        else:
-            make_cmd.append("DEVICE_APP=")
+        make_cmd: List[str] = ["make", "apps", f"HOST_APP_TYPE={host_app_type}"]
+        
+        if chip_type and chip_type != "None":
+            make_cmd.append(f"CHIP_TYPE={chip_type}")
+        if workload and workload != "None":
+            make_cmd.append(f"WORKLOAD={workload}")
+        if dev_app and dev_app != "None":
+            make_cmd.append(f"DEV_APP={dev_app}")
+
         # Execute make inside the container at the repository root
         run_in_container(repo_root, docker_image, repo_root, make_cmd)
+        
         # Prepare task directory
         task_dir = task_base_dir / f"task_{idx}"
         bin_dest = task_dir / "bin"
@@ -247,29 +218,47 @@ def build_apps(
                 if dst.exists():
                     shutil.rmtree(dst)
                 shutil.copytree(src, dst)
-        results.append((task_dir, host_app, device_app))
+        results.append((task_dir, ci_name))
     return results
 
 
-def prepare_and_copy_sim(repo_root: Path, tasks_info: List[Tuple[Path, str, Optional[str]]]) -> None:
-    """Compile the Questasim simulation and copy outputs to each task directory."""
-    # After make hemaia_system_vsim_preparation inside the container, we
-    # compile on the host.  Running make hemaia_system_vsim outside
-    # generates target/sim/bin and target/sim/work-vsim.
-    subprocess.run(["make", "hemaia_system_vsim"], cwd=repo_root, check=True)
-    sim_bin_src = repo_root / "target/sim/bin"
-    work_vsim_src = repo_root / "target/sim/work-vsim"
-    for task_dir, _, _ in tasks_info:
-        for src in [sim_bin_src, work_vsim_src]:
-            if not src.exists():
-                continue
-            dst = task_dir / src.name
-            if dst.exists():
+def prepare_and_copy_sim(repo_root: Path, tasks_info: List[Tuple[Path, str]]) -> None:
+    """Compile the Questasim simulation and copy outputs to each task directory.
+
+    Strategy: treat everything under target/sim as an artifact tree and
+    replicate the same relative paths under each task directory.
+    """
+    subprocess.run(["make", "hemaia_system_vsim", "SIM_WITH_WAVEFORM=0"], cwd=repo_root, check=True)
+
+    sim_root = repo_root / "target/sim"
+    artifacts = [
+        sim_root / "bin" / "occamy_chip.vsim",
+        sim_root / "work-vsim",
+    ]
+
+    def copy_any(src: Path, dst: Path) -> None:
+        if not src.exists():
+            return
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if dst.exists():
+            if dst.is_dir():
                 shutil.rmtree(dst)
+            else:
+                dst.unlink()
+
+        if src.is_dir():
             shutil.copytree(src, dst)
+        else:
+            shutil.copy2(src, dst)
 
+    for task_dir, _ in tasks_info:
+        for src in artifacts:
+            # Mirror the relative location within target/sim into the task directory
+            rel = src.relative_to(sim_root)
+            dst = task_dir / rel
+            copy_any(src, dst)
 
-def run_simulations(tasks_info: List[Tuple[Path, str, Optional[str]]]) -> Dict[str, bool]:
+def run_simulations(tasks_info: List[Tuple[Path, str]]) -> Dict[str, bool]:
     """Run the compiled simulations in parallel and record pass/fail per task.
 
     Returns
@@ -280,12 +269,12 @@ def run_simulations(tasks_info: List[Tuple[Path, str, Optional[str]]]) -> Dict[s
     """
     results: Dict[str, bool] = {}
 
-    def worker(task_dir: Path, host_app: str, device_app: Optional[str]) -> None:
+    def worker(task_dir: Path, ci_name: str) -> None:
         sim_binary = task_dir / "bin" / "occamy_chip.vsim"
         # The simulation must be run from within the bin directory so that
         # relative paths (e.g. work-vsim) are resolved correctly.
         try:
-            print(f"Running simulation with HOST_APP={host_app}, DEVICE_APP={device_app}")
+            print(f"Running simulation for {ci_name}")
             result = subprocess.run(
                 [str(sim_binary)],
                 cwd=task_dir / "bin",
@@ -293,7 +282,7 @@ def run_simulations(tasks_info: List[Tuple[Path, str, Optional[str]]]) -> Dict[s
                 stderr=subprocess.STDOUT,
                 check=False,
             )
-            print(f"Simulation with HOST_APP={host_app}, DEVICE_APP={device_app} is finished with retval of {result.stdout.decode()}")
+            print(f"Simulation for {ci_name} is finished with retval of {result.stdout.decode()}")
             passed = result.returncode == 0
         except Exception:
             passed = False
@@ -303,7 +292,7 @@ def run_simulations(tasks_info: List[Tuple[Path, str, Optional[str]]]) -> Dict[s
 
     # Use a ThreadPoolExecutor with as many workers as logical CPUs
     with ThreadPoolExecutor(max_workers=multiprocessing.cpu_count()) as executor:
-        futures = [executor.submit(worker, td, ha, da) for td, ha, da in tasks_info]
+        futures = [executor.submit(worker, td, cn) for td, cn in tasks_info]
         # Ensure all tasks complete
         for future in futures:
             future.result()
@@ -312,7 +301,7 @@ def run_simulations(tasks_info: List[Tuple[Path, str, Optional[str]]]) -> Dict[s
 
 def write_summary(
     summary_path: Path,
-    tasks_info: List[Tuple[Path, str, Optional[str]]],
+    tasks_info: List[Tuple[Path, str]],
     results: Dict[str, bool],
 ) -> None:
     """Write a Markdown summary of the simulation results."""
@@ -321,12 +310,12 @@ def write_summary(
         username = getpass.getuser()
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         f.write(f"Run by **{username}** at **{now}**\n\n")
-        for idx, (task_dir, host_app, device_app) in enumerate(tasks_info):
+        for idx, (task_dir, ci_name) in enumerate(tasks_info):
             key = str(task_dir)
             passed = results.get(key, False)
             status = "PASS" if passed else "FAIL"
             f.write(
-                f"- **task_{idx}** (HOST_APP={host_app}, DEVICE_APP={device_app}) \u2014 **{status}**\n"
+                f"- **task_{idx}** ({ci_name}) \u2014 **{status}**\n"
             )
 
 

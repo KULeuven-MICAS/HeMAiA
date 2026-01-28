@@ -1,4 +1,4 @@
-.PHONY: clean FORCE bootrom sw rtl occamy_ip_vcu128 occamy_ip_vcu128_gui occamy_system_vcu128 \
+.PHONY: clean FORCE bootrom sw single-sw rtl occamy_ip_vcu128 occamy_ip_vcu128_gui occamy_system_vcu128 \
 		occamy_system_vcu128_gui occamy_system_download_sw open_terminal hemaia_system_vivado_preparation \
 		hemaia_chip_vcu128 hemaia_chip_vcu128_gui hemaia_system_vcu128 hemaia_system_vcu128_gui \
 		occamy_system_vlt occamy_system_vsim_preparation occamy_system_vsim hemaia_system_vsim_preparation \
@@ -70,15 +70,39 @@ endif
 sw: $(CFG)
 	$(MAKE) -C ./target/sw sw CFG=$(CFG) USER_FLAGS="$(USER_FLAGS)"
 
+# Single SW compilation (by category and chip type for precise control)
+# - HOST_APP_TYPE: The category of the host application.
+#   Options: host_only, offload_legacy, offload_bingo_sw, offload_bingo_hw
+# - CHIP_TYPE: The target platform configuration.
+#   Options: single_chip, multi_chip
+# - WORKLOAD: The specific workload or application name.
+#   Note: Set to 'None' for offload_legacy as it does not have workloads, it only has device applications.
+# - DEV_APP: The target device-side accelerator/application.
+#   Note: Set to 'None' for host_only as it does not target a device-side accelerator.
+#         For bingo workloads, set to 'snax-bingo-offload'.
+HOST_APP_TYPE ?= offload_bingo_sw
+CHIP_TYPE     ?= single_chip
+WORKLOAD      ?= gemm_tiled
+DEV_APP       ?= snax-bingo-offload
+single-sw: $(CFG)
+	$(MAKE) -C ./target/sw single-sw CFG=$(CFG) USER_FLAGS="$(USER_FLAGS)" \
+		HOST_APP_TYPE=$(HOST_APP_TYPE) \
+		CHIP_TYPE=$(CHIP_TYPE) \
+		WORKLOAD=$(WORKLOAD) \
+		DEV_APP=$(DEV_APP)
+
 
 
 #########################
 # App Binary Generation #
 #########################
-HOST_APP ?= offload
-DEVICE_APP ?= snax-test-integration
+# This target prepares the software binaries for simulation and/or FPGA execution.
 apps:
-	$(MAKE) -C ./target/sim apps CFG=$(CFG) HOST_APP=$(HOST_APP) DEVICE_APP=$(DEVICE_APP)
+	$(MAKE) -C ./target/sim apps CFG=$(CFG) \
+		HOST_APP_TYPE=$(HOST_APP_TYPE) \
+		CHIP_TYPE=$(CHIP_TYPE) \
+		WORKLOAD=$(WORKLOAD) \
+		DEV_APP=$(DEV_APP)
  
 ######################
 # Bootrom Generation #

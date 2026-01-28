@@ -21,11 +21,6 @@
 #define XDMA_DEBUG_PRINT(...)
 #endif
 
-#ifdef CHECK_RESULT_DEBUG
-#define CHECK_RESULT_DEBUG_PRINT(...) printf_safe(__VA_ARGS__)
-#else
-#define CHECK_RESULT_DEBUG_PRINT(...)
-#endif
 #include <snax_versacore_lib.h>
 #include "versacore_hw_param.h"
 #define SNAX_LIB_NAME_MAX_LEN 64
@@ -69,15 +64,20 @@ inline uint64_t make_u64(uint32_t hi, uint32_t lo)
 
 SNAX_LIB_DEFINE void __snax_kernel_dummy(void *arg)
 {
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
     uint32_t arg0 = ((uint32_t *)arg)[0];
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+
+    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
     if (snrt_is_dm_core())
     {
-        printf(
+        printf_safe(
             "Chip(%x, %x): [Cluster %d] Core(%d) Running Dummy Kernel with "
             "arg[0] = %d\n",
             get_current_chip_loc_x(), get_current_chip_loc_y(),
             snrt_cluster_idx(), snrt_cluster_core_idx(), arg0);
     }
+    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
 }
 
 SNAX_LIB_DEFINE void __snax_kernel_csr(void *arg)
@@ -89,6 +89,7 @@ SNAX_LIB_DEFINE void __snax_kernel_csr(void *arg)
     // shared_ptrs[1] csr_read_value
     if (snrt_is_dm_core())
     {
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
         get_cls_shared_ptrs()[0] = (uint32_t *)snrt_l1_malloc(256);
         get_cls_shared_ptrs()[1] = (uint32_t *)snrt_l1_malloc(4);
         get_cls_shared_ptrs()[0][0] = ((uint32_t *)arg)[0];
@@ -96,7 +97,9 @@ SNAX_LIB_DEFINE void __snax_kernel_csr(void *arg)
         uint32_t csr_addr = get_cls_shared_ptrs()[0][0];
         uint32_t csr_write_value = get_cls_shared_ptrs()[0][1];
         uint32_t csr_read_value = get_cls_shared_ptrs()[1][0];
-        printf(
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+        BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
+        printf_safe(
             "Chip(%x, %x): Running CSR Kernel with arg[0](csr_addr) = %d, "
             "arg[1](csr_value) = %x\n",
             get_current_chip_loc_x(), get_current_chip_loc_y(), csr_addr,
@@ -105,14 +108,15 @@ SNAX_LIB_DEFINE void __snax_kernel_csr(void *arg)
         csr_read_value = csrr_ss(csr_addr);
         if (csr_read_value != csr_write_value)
         {
-            printf("Chip(%x, %x): Error! R/W CSR values are not the same!\n",
+            printf_safe("Chip(%x, %x): Error! R/W CSR values are not the same!\n",
                    get_current_chip_loc_x(), get_current_chip_loc_y());
         }
         else
         {
-            printf("Chip(%x, %x): Pass!\n", get_current_chip_loc_x(),
+            printf_safe("Chip(%x, %x): Pass!\n", get_current_chip_loc_x(),
                    get_current_chip_loc_y());
         }
+        BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
     }
 }
 
@@ -125,13 +129,14 @@ SNAX_LIB_DEFINE void __snax_kernel_check_results(void *arg)
     // Arg2: data_size in Byte
     if (snrt_is_dm_core())
     {
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
         uint32_t golden_data_addr = ((uint32_t *)arg)[0];
         uint32_t output_data_addr = ((uint32_t *)arg)[1];
         uint32_t data_size = ((uint32_t *)arg)[2];
         uint32_t num_errors = 0;
-        CHECK_RESULT_DEBUG_PRINT("Checking results...\n");
-        CHECK_RESULT_DEBUG_PRINT("Golden data address: %x\n", golden_data_addr);
-        CHECK_RESULT_DEBUG_PRINT("Output data address: %x\n", output_data_addr);
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+
+        BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
         for (uint32_t i = 0; i < data_size / sizeof(uint32_t); i++)
         {
             if (((uint32_t *)golden_data_addr)[i] !=
@@ -140,7 +145,7 @@ SNAX_LIB_DEFINE void __snax_kernel_check_results(void *arg)
                 num_errors++;
                 if (num_errors < 10)
                 {
-                    printf("Error at index %d: golden = %x, output = %x\n", i,
+                    printf_safe("Error at index %d: golden = %x, output = %x\n", i,
                            ((uint32_t *)golden_data_addr)[i],
                            ((uint32_t *)output_data_addr)[i]);
                 }
@@ -148,12 +153,13 @@ SNAX_LIB_DEFINE void __snax_kernel_check_results(void *arg)
         }
         if (num_errors == 0)
         {
-            printf("Check Results: PASS! No errors found.\n");
+            printf_safe("Check Results: PASS! No errors found.\n");
         }
         else
         {
-            printf("Check Results: FAIL! %d errors found.\n", num_errors);
+            printf_safe("Check Results: FAIL! %d errors found.\n", num_errors);
         }
+        BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
     }
 }
 
@@ -168,12 +174,15 @@ SNAX_LIB_DEFINE void __snax_kernel_check_results_full(void *arg)
     // Arg4: data_size in Byte
     if (snrt_is_dm_core())
     {
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
         uint32_t golden_data_addr_hi = ((uint32_t *)arg)[0];
         uint32_t golden_data_addr_lo = ((uint32_t *)arg)[1];
         uint32_t output_data_addr_hi = ((uint32_t *)arg)[2];
         uint32_t output_data_addr_lo = ((uint32_t *)arg)[3];
         uint32_t data_size = ((uint32_t *)arg)[4];
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
+        BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
         uint32_t golden_data_l1 =
             snrt_l1_malloc(data_size); // allocate L1 memory for golden data
         uint32_t output_data_l1 =
@@ -211,6 +220,7 @@ SNAX_LIB_DEFINE void __snax_kernel_check_results_full(void *arg)
 
         snrt_l1_free(golden_data_l1);
         snrt_l1_free(output_data_l1);
+        BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
     }
 }
 
@@ -228,7 +238,7 @@ SNAX_LIB_DEFINE void __snax_kernel_load_compute_store(void *arg)
     {
         // We allocate 256 bytes of heap memory for the args
         // Each arg is 4 bytes, so we can store 64 args
-
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
         get_cls_shared_ptrs()[0] = (uint32_t *)snrt_l1_malloc(256);
         get_cls_shared_ptrs()[0][0] = ((uint32_t *)arg)[0];
         get_cls_shared_ptrs()[0][1] = ((uint32_t *)arg)[1];
@@ -237,41 +247,25 @@ SNAX_LIB_DEFINE void __snax_kernel_load_compute_store(void *arg)
         // We then allocate the space for input and output data
         get_cls_shared_ptrs()[1] = (uint32_t *)snrt_l1_malloc(get_cls_shared_ptrs()[0][1]);
         get_cls_shared_ptrs()[2] = (uint32_t *)snrt_l1_malloc(get_cls_shared_ptrs()[0][3]);
-
-        // printf("[Cluster %d] Core(%d) Allocated heap memory for args, input
-        // and output data\n", snrt_cluster_idx(), snrt_cluster_core_idx());
-        // printf("[Cluster %d] Core(%d) Shared pointer at 0x%x\n",
-        // snrt_cluster_idx(), snrt_cluster_core_idx(),get_cls_shared_ptrs());
-        // printf("[Cluster %d] Core(%d) Args at 0x%x\n", snrt_cluster_idx(),
-        // snrt_cluster_core_idx(),get_cls_shared_ptrs()[0]); printf("[Cluster
-        // %d] Core(%d) Input data at 0x%x\n", snrt_cluster_idx(),
-        // snrt_cluster_core_idx(),get_cls_shared_ptrs()[1]); printf("[Cluster
-        // %d] Core(%d) Output data at 0x%x\n", snrt_cluster_idx(),
-        // snrt_cluster_core_idx(),get_cls_shared_ptrs()[2]);
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
     }
     snrt_cluster_hw_barrier();
+    
     if (snrt_is_dm_core())
     {
         // load the input data
+        BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_START);
         snrt_dma_start_1d((void *)get_cls_shared_ptrs()[1],
                           (void *)get_cls_shared_ptrs()[0][0],
                           get_cls_shared_ptrs()[0][1]);
         snrt_dma_wait_all();
-        printf("[Cluster %d] Core(%d) Load Input Data\n", snrt_cluster_idx(),
-               snrt_cluster_core_idx());
+        BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_END);
     }
     snrt_cluster_hw_barrier();
     if (snrt_cluster_core_idx() == 0)
     {
         // We choose the first core to do the dummy +1 computation
-        // printf("[Cluster %d] Core(%d) Inputs...\n", snrt_cluster_idx(),
-        // snrt_cluster_core_idx()); for(uint32_t
-        // i=0;i<get_cls_shared_ptrs()[0][1]/sizeof(uint32_t);i++){
-        //     printf("[Cluster %d] Core(%d) Input[%d] = %d\n",
-        //     snrt_cluster_idx(), snrt_cluster_core_idx(), i,
-        //     get_cls_shared_ptrs()[1][i]);
-        // }
-
+        BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
         printf("[Cluster %d] Core(%d) Compute...\n", snrt_cluster_idx(),
                snrt_cluster_core_idx());
         for (uint32_t i = 0; i < get_cls_shared_ptrs()[0][1] / sizeof(uint32_t);
@@ -286,17 +280,18 @@ SNAX_LIB_DEFINE void __snax_kernel_load_compute_store(void *arg)
         //     snrt_cluster_idx(), snrt_cluster_core_idx(), i,
         //     get_cls_shared_ptrs()[1][i]);
         // }
+        BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
     }
     snrt_cluster_hw_barrier();
     if (snrt_is_dm_core())
     {
         // We store the output data
+        BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_START);
         snrt_dma_start_1d((void *)get_cls_shared_ptrs()[0][2],
                           (void *)get_cls_shared_ptrs()[1],
                           get_cls_shared_ptrs()[0][3]);
         snrt_dma_wait_all();
-        printf("[Cluster %d] Core(%d) Store Data\n", snrt_cluster_idx(),
-               snrt_cluster_core_idx());
+        BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_END);
     }
     snrt_cluster_hw_barrier();
     if (snrt_is_dm_core())
@@ -416,13 +411,17 @@ SNAX_LIB_DEFINE void __snax_kernel_double_buffer_example(void *arg)
                              : ((s + 1) % 3 == 1 ? tile_buf_1 : tile_buf_2);
         if (s == 0)
         {
+            
             // T0: Load tile 0
             if (snrt_is_dm_core())
             {
+                BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_START);
                 snrt_dma_start_1d((void *)load_buf, (void *)input_data_addr,
                                   tile_size);
                 snrt_dma_wait_all();
+                BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_END);
             }
+            
         }
 
         if (s == 1)
@@ -430,17 +429,21 @@ SNAX_LIB_DEFINE void __snax_kernel_double_buffer_example(void *arg)
             // T1: Load tile 1 + Compute tile 0
             if (snrt_is_dm_core())
             {
+                BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_START);
                 snrt_dma_start_1d((void *)load_buf,
                                   (void *)(input_data_addr + tile_size),
                                   tile_size);
                 snrt_dma_wait_all();
+                BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_END);
             }
             if (snrt_cluster_core_idx() == 0)
-            {
+            {   
+                BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
                 for (uint32_t i = 0; i < tile_size / sizeof(uint32_t); i++)
                 {
                     compute_buf[i] += 1;
                 }
+                BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
             }
         }
 
@@ -450,6 +453,7 @@ SNAX_LIB_DEFINE void __snax_kernel_double_buffer_example(void *arg)
             if (snrt_is_dm_core())
             {
                 // Load tile s
+                BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_START);
                 snrt_dma_start_1d((void *)load_buf,
                                   (void *)(input_data_addr + s * tile_size),
                                   tile_size);
@@ -458,14 +462,17 @@ SNAX_LIB_DEFINE void __snax_kernel_double_buffer_example(void *arg)
                     (void *)(output_data_addr + (s - 2) * tile_size),
                     (void *)store_buf, tile_size);
                 snrt_dma_wait_all();
+                BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_END);
             }
             // Compute tile s-1
             if (snrt_cluster_core_idx() == 0)
             {
+                BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
                 for (uint32_t i = 0; i < tile_size / sizeof(uint32_t); i++)
                 {
                     compute_buf[i] += 1;
                 }
+                BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
             }
         }
 
@@ -474,17 +481,21 @@ SNAX_LIB_DEFINE void __snax_kernel_double_buffer_example(void *arg)
             // TS-1: Compute tile s-1 + Store tile s-2
             if (snrt_cluster_core_idx() == 0)
             {
+                BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
                 for (uint32_t i = 0; i < tile_size / sizeof(uint32_t); i++)
                 {
                     compute_buf[i] += 1; // Example computation
                 }
+                BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
             }
             if (snrt_is_dm_core())
             {
+                BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_START);
                 snrt_dma_start_1d(
                     (void *)(output_data_addr + (num_tiles - 2) * tile_size),
                     (void *)store_buf, tile_size);
                 snrt_dma_wait_all();
+                BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_END);
             }
         }
 
@@ -493,10 +504,12 @@ SNAX_LIB_DEFINE void __snax_kernel_double_buffer_example(void *arg)
             // TS: Store tile s-2
             if (snrt_is_dm_core())
             {
+                BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_START);
                 snrt_dma_start_1d(
                     (void *)(output_data_addr + (num_tiles - 1) * tile_size),
                     (void *)store_buf, tile_size);
                 snrt_dma_wait_all();
+                BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_END);
             }
         }
 
@@ -515,16 +528,21 @@ SNAX_LIB_DEFINE void __snax_kernel_xdma_1d_copy(void *arg)
 
     if (snrt_is_dm_core())
     {
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
         uint64_t src_addr = make_u64(((uint32_t *)arg)[0], ((uint32_t *)arg)[1]);
         uint64_t dst_addr = make_u64(((uint32_t *)arg)[2], ((uint32_t *)arg)[3]);
         uint32_t data_size = ((uint32_t *)arg)[4];
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
         xdma_memcpy_1d_full_addr(src_addr, dst_addr, data_size);
         int task_id = xdma_start();
         xdma_remote_wait(task_id);
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
         XDMA_DEBUG_PRINT("XDMA copy completed\n");
         XDMA_DEBUG_PRINT("SRC ADDR = %lx\n", src_addr);
         XDMA_DEBUG_PRINT("DST ADDR = %lx\n", dst_addr);
+        
     }
 }
 
@@ -539,12 +557,16 @@ SNAX_LIB_DEFINE void __snax_kernel_idma_1d_copy(void *arg)
 
     if (snrt_is_dm_core())
     {
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
         uint64_t src_addr = make_u64(((uint32_t *)arg)[0], ((uint32_t *)arg)[1]);
         uint64_t dst_addr = make_u64(((uint32_t *)arg)[2], ((uint32_t *)arg)[3]);
         uint32_t data_size = ((uint32_t *)arg)[4];
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
+        BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_START);
         snrt_dma_start_1d_wideptr(dst_addr, src_addr, data_size);
         snrt_dma_wait_all();
+        BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_END);
         IDMA_DEBUG_PRINT("IDMA copy completed\r\n");
         IDMA_DEBUG_PRINT("SRC ADDR = %lx\r\n", src_addr);
         IDMA_DEBUG_PRINT("DST ADDR = %lx\r\n", dst_addr);
@@ -567,6 +589,7 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm(void *arg)
         ///////////////////////////////////////
         // Allocate the L1 memory //
         ///////////////////////////////////////
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
         get_cls_shared_ptrs()[0] = (uint32_t *)snrt_l1_malloc(128);
         if (!get_cls_shared_ptrs()[0])
         {
@@ -822,6 +845,7 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm(void *arg)
         get_cls_shared_ptrs()[0][24] = load_B ? (uint32_t)get_cls_shared_ptrs()[2] : B_addr_lo;
         get_cls_shared_ptrs()[0][25] = load_C ? (uint32_t)get_cls_shared_ptrs()[3] : C_addr_lo;
         get_cls_shared_ptrs()[0][26] = store_D ? (uint32_t)get_cls_shared_ptrs()[4] : D_addr_lo;
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
     }
     snrt_cluster_hw_barrier();
 
@@ -861,6 +885,7 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm(void *arg)
 
         VERSACORE_DEBUG_PRINT(
             "GEMM Intra-Chiplet Kernel Compute Streamer Cfg Start!\r\n");
+        BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_FULL_CFG_START);
         // the snicth needs to generate these streamer cfgs
         // 22 args in total
         // A 6, B 6, C 5, D 5
@@ -1346,9 +1371,11 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm(void *arg)
 
         // Set CSR to start Streamer
         start_versacore_and_streamer();
-
+        BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_FULL_CFG_END);
         // Poll until Streamer and GEMM accelerator finish
+        BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_FULL_RUN_START);
         wait_versacore_and_streamer();
+        BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_FULL_RUN_END);
 
         VERSACORE_DEBUG_PRINT("GEMM Intra-Chiplet Kernel Compute Done!\r\n");
 
@@ -1366,6 +1393,7 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm(void *arg)
         // If the D addr is not in L1, we need to use the DMA to store the data back according to the input args
         if (store_D)
         {
+
             uint32_t D_addr_hi = get_cls_shared_ptrs()[0][6];
             uint32_t D_addr_lo = get_cls_shared_ptrs()[0][7];
             uint64_t dst_D_addr = make_u64(D_addr_hi, D_addr_lo);
@@ -1384,10 +1412,12 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm(void *arg)
             VERSACORE_DEBUG_PRINT("DMA Store D Src: 0x%lx\r\n", chiplet_addr_transform((uint64_t)local_D_addr));
             VERSACORE_DEBUG_PRINT("DMA Store D Size %d\r\n", D_size);
             // Dst is specified from the args, SRC is L1 addr
+            BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_START);
             snrt_dma_start_1d_wideptr(dst_D_addr,
                                       chiplet_addr_transform((uint64_t)local_D_addr),
                                       D_size);
             snrt_dma_wait_all();
+            BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_END);
         }
         ///////////////////////////////////////
         // Free the L1 memory //
@@ -1441,6 +1471,7 @@ SNAX_LIB_DEFINE void __snax_kernel_minimal_cfg_start_gemm_and_wait(void *arg)
         ///////////////////////////////////////
         // Allocate the L1 memory //
         ///////////////////////////////////////
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
         get_cls_shared_ptrs()[0] = (uint32_t *)snrt_l1_malloc(128);
         if (!get_cls_shared_ptrs()[0])
         {
@@ -1463,6 +1494,7 @@ SNAX_LIB_DEFINE void __snax_kernel_minimal_cfg_start_gemm_and_wait(void *arg)
             (void *)get_cls_shared_ptrs()[0], (void *)arg,
             sizeof(uint32_t) * 4); // 4 uint32_t passed args in total
         snrt_dma_wait_all();
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
     }
 
     snrt_cluster_hw_barrier();
@@ -1477,13 +1509,17 @@ SNAX_LIB_DEFINE void __snax_kernel_minimal_cfg_start_gemm_and_wait(void *arg)
     // new pointers for the streamers
     if (snrt_cluster_core_idx() == 0)
     {
+        BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_MIN_CFG_START);
         set_minimal_streamer_cfg(
             A_addr_lo,
             B_addr_lo,
             C_addr_lo,
             D_addr_lo);
         start_versacore_and_streamer();
+        BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_MIN_CFG_END);
+        BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_MIN_RUN_START);
         wait_versacore_and_streamer();
+        BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_MIN_RUN_END);
     }
 }
 
@@ -2091,17 +2127,22 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_minimal(void *arg)
 //////////////////////// SYMBOL TABLE ////////////////////////
 // Here we create the symbol table
 SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
+    /// Cluster-level Kernels ///
+    /// Used for bingo sw     ///
     // SNAX_EXPORT_FUNC(__snax_kernel_dummy),
-    // SNAX_EXPORT_FUNC(__snax_kernel_check_results),
+    SNAX_EXPORT_FUNC(__snax_kernel_check_results),
     // SNAX_EXPORT_FUNC(__snax_kernel_check_results_full),
     // SNAX_EXPORT_FUNC(__snax_kernel_csr),
     // SNAX_EXPORT_FUNC(__snax_kernel_load_compute_store),
     // SNAX_EXPORT_FUNC(__snax_kernel_double_buffer_example),
-    // SNAX_EXPORT_FUNC(__snax_kernel_xdma_1d_copy),
-    // SNAX_EXPORT_FUNC(__snax_kernel_idma_1d_copy),
-    // SNAX_EXPORT_FUNC(__snax_kernel_gemm),
+    SNAX_EXPORT_FUNC(__snax_kernel_xdma_1d_copy),
+    SNAX_EXPORT_FUNC(__snax_kernel_idma_1d_copy),
+    SNAX_EXPORT_FUNC(__snax_kernel_gemm),
     // SNAX_EXPORT_FUNC(__snax_kernel_minimal_cfg_start_gemm_and_wait),
-    SNAX_EXPORT_FUNC(__snax_bingo_kernel_dummy),
+
+    /// Core-level Kernels ///
+    /// Used for bingo hw  ///
+    // SNAX_EXPORT_FUNC(__snax_bingo_kernel_dummy),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_exit),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_idma_1d_copy),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_idma_broadcast),

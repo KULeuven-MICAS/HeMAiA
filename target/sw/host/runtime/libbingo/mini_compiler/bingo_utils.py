@@ -1,9 +1,21 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 # Took from zigzag util
+import subprocess
+import sys
 from typing import Any, Generic, Iterator, Literal, Sequence, TypeVar, no_type_check, overload
-import networkx as nx
-from networkx import DiGraph
-from typeguard import typeguard_ignore  # type: ignore
+
+def install_package(package):
+    subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+
+try:
+    import networkx as nx
+    from networkx import DiGraph
+except ImportError:
+    print(f"networkx not found. Installing...")
+    install_package("networkx")
+    import networkx as nx
+    from networkx import DiGraph
+
 T = TypeVar("T")
 @no_type_check
 class DiGraphWrapper(Generic[T], DiGraph):
@@ -71,7 +83,6 @@ class DiGraphWrapper(Generic[T], DiGraph):
     def predecessors(self, node: T) -> Iterator[T]:  # type: ignore # pylint: disable=W0246
         return super().predecessors(node)  # type: ignore
 
-    @typeguard_ignore
     def topological_sort(self) -> Iterator[T]:
         return nx.topological_sort(self)  # type: ignore
 

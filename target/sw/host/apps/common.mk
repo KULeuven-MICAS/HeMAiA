@@ -4,11 +4,36 @@
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 
+# Root directory (absolute path to the host directory)
+ifndef HOST_DIR
+HOST_DIR = $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
+endif
+
 # There are three main stages of building a host application:
 # 1) host-partial-build: compile and link the host application without the device binary. This is mainly to determine the relocation
 #    address of the device binary, which is needed to create the origin.ld file.
 # 2) device-build: based on the generated origin.ld file, build the device application to get the device binary.
 # 3) host-finalize-build: compile and link the host application with the device binary
+
+# Each host application will include this common makefile to define the build rules.
+
+# APP name composition
+ifndef APP
+    ifeq ($(HOST_APP_TYPE), host_only)
+        APP = $(WORKLOAD)
+    else ifeq ($(HOST_APP_TYPE), offload_legacy)
+        APP = offload_legacy_$(CHIP_TYPE)
+    else ifneq ($(HOST_APP_TYPE),)
+        APP = $(HOST_APP_TYPE)_$(CHIP_TYPE)_$(WORKLOAD)
+    endif
+endif
+
+# Default DEVICE_APPS from DEV_APP if not explicitly set in the app Makefile
+ifndef DEVICE_APPS
+    ifneq ($(DEV_APP),)
+        DEVICE_APPS = $(DEV_APP)
+    endif
+endif
 
 ######################
 # Invocation options #
@@ -27,16 +52,17 @@ RISCV_OBJCOPY = $(CVA6_GCC_ROOT)/riscv64-unknown-elf-objcopy
 RISCV_OBJDUMP = $(CVA6_GCC_ROOT)/riscv64-unknown-elf-objdump
 RISCV_READELF = $(CVA6_GCC_ROOT)/riscv64-unknown-elf-readelf
 # Directories
-BUILDDIR    = $(abspath build)
-HOST_DIR    = $(abspath ../../)
-SWDIR       = $(abspath ../../../)
+# Notice the build dir is the dir under each app
+BUILDDIR    ?= $(abspath build)
+# Global DIRs
+SWDIR       = $(abspath $(HOST_DIR)/..)
 RUNTIME_DIR = $(abspath $(HOST_DIR)/runtime)
 DEVICE_DIR  = $(abspath $(HOST_DIR)/../device)
 
 # Dependencies
 INCDIRS += $(RUNTIME_DIR)
-INCDIRS += $(HOST_DIR)/../shared/platform/generated
-INCDIRS += $(HOST_DIR)/../shared/runtime
+INCDIRS += $(abspath $(SWDIR)/shared/platform/generated)
+INCDIRS += $(abspath $(SWDIR)/shared/runtime)
 SRCS    += $(RUNTIME_DIR)/start.S
 
 # Include XDMA
@@ -126,6 +152,19 @@ endif
 #########
 # Rules #
 #########
+
+.DEFAULT_GOAL := all
+TARGET ?= all
+
+.PHONY: all partial-build finalize-build clean FORCE
+all:
+ifeq ($(TARGET),all)
+	$(MAKE) partial-build
+	$(MAKE) finalize-build
+else
+	$(MAKE) $(TARGET)
+endif
+
 FORCE:
 
 ifneq (,$(filter $(INCL_DEVICE_BINARY),True true TRUE 1))

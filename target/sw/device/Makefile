@@ -27,11 +27,31 @@ APPDIR += apps/snax/snax-versacore-matmul-profile
 # In the future we only need this offload bingo app
 APPDIR += apps/snax/snax-bingo-offload
 
+# If DEVICE_APPS is specified, filter APPDIR to only include those apps.
+# This is useful for single-sw builds to avoid building everything.
+ifdef DEVICE_APPS
+    # Filter APPDIR entries that end with any of the names in DEVICE_APPS
+    SELECTED_APPS = $(foreach target,$(DEVICE_APPS),$(filter %/$(target),$(APPDIR)))
+    # If filtering returned something, use it; otherwise fallback to nothing or specific error
+    # To be safe, if DEVICE_APPS is 'None' or empty, we build nothing in APPDIR
+    ifeq ($(DEVICE_APPS), None)
+        SELECTED_APPS =
+    else ifeq ($(DEVICE_APPS),)
+        SELECTED_APPS =
+    else
+        # If no match found but it wasn't None/empty, maybe it's a full path or we just use what was given
+        ifeq ($(SELECTED_APPS),)
+            SELECTED_APPS = $(foreach app,$(DEVICE_APPS),apps/snax/$(app))
+        endif
+    endif
+else
+    SELECTED_APPS = $(APPDIR)
+endif
+
 TARGET ?= all
 
 RTDIR    = math
 RTDIR   += runtime
-
 
 ALL_HOST_LIST   = host_app_list.tmp
 ALL_ORIGIN_LIST = host_app_origin.tmp
@@ -57,7 +77,7 @@ $(ALL_DEV_LIST): $(wildcard dev_app_list.*.tmp)
 
 .PHONY: all $(RTDIR) $(APPDIR) aggregate-tmps
 
-all: $(APPDIR)
+all: $(SELECTED_APPS)
 
 $(RTDIR):
 	$(MAKE) -C $@ $(TARGET)

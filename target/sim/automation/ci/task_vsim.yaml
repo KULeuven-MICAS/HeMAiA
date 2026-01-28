@@ -1,40 +1,86 @@
 runs:
   - app_0: 
-    - host_app: offload
-    - device_app: snax-test-integration
+    - HOST_APP_TYPE: offload_legacy
+    - CHIP_TYPE: single_chip
+    - WORKLOAD: None
+    - DEV_APP: snax-test-integration
   - app_1:
-    - host_app: hemaia_clk_rst_configurator
-    - device_app: null
+    - HOST_APP_TYPE: host_only
+    - CHIP_TYPE: single_chip
+    - WORKLOAD: hemaia_clk_rst_configurator
+    - DEV_APP: None
   - app_2: 
-    - host_app: offload
-    - device_app: snax-xdma-copy
+    - HOST_APP_TYPE: offload_legacy
+    - CHIP_TYPE: single_chip
+    - WORKLOAD: None
+    - DEV_APP: snax-xdma-copy
   - app_3: 
-    - host_app: offload
-    - device_app: snax-xdma-hazard
+    - HOST_APP_TYPE: offload_legacy
+    - CHIP_TYPE: single_chip
+    - WORKLOAD: None
+    - DEV_APP: snax-xdma-hazard
   - app_4: 
-    - host_app: offload_bingo_gemm_intra_chiplet_merge_load_and_compute
-    - device_app: snax-bingo-offload
+    - HOST_APP_TYPE: offload_bingo_sw
+    - CHIP_TYPE: single_chip
+    - WORKLOAD: dummy
+    - DEV_APP: snax-bingo-offload
   - app_5: 
-    - host_app: offload_bingo_gemm_intra_chiplet_seperate_load_and_compute
-    - device_app: snax-bingo-offload
+    - HOST_APP_TYPE: offload_bingo_sw
+    - CHIP_TYPE: single_chip
+    - WORKLOAD: gemm_tiled
+    - DEV_APP: snax-bingo-offload
   - app_6: 
-    - host_app: offload_bingo_gemm_multi_chiplet_broadcast
-    - device_app: snax-bingo-offload
+    - HOST_APP_TYPE: offload_bingo_sw
+    - CHIP_TYPE: single_chip
+    - WORKLOAD: gemm_stacked
+    - DEV_APP: snax-bingo-offload
   - app_7: 
-    - host_app: offload_bingo_gemm_multi_chiplet_vanilla
-    - device_app: snax-bingo-offload
+    - HOST_APP_TYPE: offload_bingo_sw
+    - CHIP_TYPE: single_chip
+    - WORKLOAD: gemm_merge_load_and_compute
+    - DEV_APP: snax-bingo-offload
   - app_8: 
-    - host_app: offload_bingo_mempool_xdma
-    - device_app: snax-bingo-offload
+    - HOST_APP_TYPE: offload_bingo_sw
+    - CHIP_TYPE: single_chip
+    - WORKLOAD: gemm_seperate_load_and_compute
+    - DEV_APP: snax-bingo-offload
   - app_9: 
-    - host_app: hemaia_system_xdma_copy
-    - device_app: null
+    - HOST_APP_TYPE: offload_bingo_sw
+    - CHIP_TYPE: multi_chip
+    - WORKLOAD: gemm_broadcast
+    - DEV_APP: snax-bingo-offload
   - app_10: 
-    - host_app: offload
-    - device_app: snax-versacore-matmul-profile
-  - app_11:
-    - host_app: offload_bingo_stacked_gemm_intra_chiplet
-    - device_app: snax-bingo-offload
-  - app_12:
-    - host_app: offload_bingo_tiled_gemm_intra_chiplet
-    - device_app: snax-bingo-offload
+    - HOST_APP_TYPE: offload_bingo_sw
+    - CHIP_TYPE: multi_chip
+    - WORKLOAD: xdma_mempool
+    - DEV_APP: snax-bingo-offload
+  - app_11: 
+    - HOST_APP_TYPE: offload_bingo_hw
+    - CHIP_TYPE: single_chip
+    - WORKLOAD: gemm_double_buffer
+    - DEV_APP: snax-bingo-offload
+  - app_12: 
+    - HOST_APP_TYPE: offload_bingo_hw
+    - CHIP_TYPE: single_chip
+    - WORKLOAD: gemm_seperate_load_and_compute_serial
+    - DEV_APP: snax-bingo-offload
+  - app_13: 
+    - HOST_APP_TYPE: offload_bingo_hw
+    - CHIP_TYPE: single_chip
+    - WORKLOAD: gemm_seperate_load_and_compute_parallel
+    - DEV_APP: snax-bingo-offload
+  - app_14: 
+    - HOST_APP_TYPE: offload_bingo_hw
+    - CHIP_TYPE: single_chip
+    - WORKLOAD: gemm_stacked
+    - DEV_APP: snax-bingo-offload
+  - app_15: 
+    - HOST_APP_TYPE: offload_bingo_hw
+    - CHIP_TYPE: multi_chip
+    - WORKLOAD: gemm_broadcast
+    - DEV_APP: snax-bingo-offload
+  - app_16: 
+    - HOST_APP_TYPE: offload_bingo_hw
+    - CHIP_TYPE: multi_chip
+    - WORKLOAD: gemm_seperate_load_and_compute_parallel
+    - DEV_APP: snax-bingo-offload

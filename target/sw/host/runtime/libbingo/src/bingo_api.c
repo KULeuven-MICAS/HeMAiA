@@ -159,23 +159,6 @@ int bingo_write_h2h_mailbox(uint8_t chip_id, uint64_t dword,
     volatile uint64_t target_h2h_mailbox_status_addr = chiplet_addr_transform_full(chip_id, h2h_mailbox_status_flag_address());
     // Do not check status, just write directly
     writed(dword, (uintptr_t)target_h2h_mailbox_write_addr);
-    // uint64_t start_cycle = bingo_mcycle();
-    // uint32_t retries = 0;
-    // while (1) {
-    //     uint64_t status = readd((uintptr_t)target_h2h_mailbox_status_addr);
-    //     if (!BINGO_EXTRACT_BIT(status, 1)) {
-    //         writed(dword, (uintptr_t)target_h2h_mailbox_write_addr);
-    //         if (retry_hint) *retry_hint = retries;
-    //         return BINGO_MB_OK;
-    //     }
-    //     // FIFO full
-    //     retries++;
-    //     if (timeout_cycles && ((bingo_mcycle() - start_cycle) > timeout_cycles)) {
-    //         if (retry_hint) *retry_hint = retries;
-    //         return BINGO_MB_ERR_TIMEOUT;
-    //     }
-    //     bingo_csleep(HOST_SLEEP_CYCLES);
-    // }
 }
 
 int bingo_read_h2h_mailbox(uint64_t *buffer,
@@ -380,14 +363,14 @@ void bingo_task_add_depend(bingo_task_t *task, bingo_task_t *dep_task) {
 
 void bingo_task_offload(bingo_task_t *task) {
     if (!task){
-        printf("[BINGO] Error: Null task pointer in bingo_task_offload.\r\n");
+        printf_safe("[BINGO] Error: Null task pointer in bingo_task_offload.\r\n");
         return;
     }
     if (task->offloaded){
-        printf("[BINGO] Warning: Task %u already offloaded.\r\n", task->task_id);
+        printf_safe("[BINGO] Warning: Task %u already offloaded.\r\n", task->task_id);
         return;
     }
-    printf("Chip(%x, %x): [Host] Offloaded task %x -> chip %x cluster %d fn=0x%x args=0x%x\r\n",
+    BINGO_PRINTF(1, "Chip(%x, %x): [Host] Offloaded task %x -> chip %x cluster %d fn=0x%x args=0x%x\r\n",
            get_current_chip_loc_x(), get_current_chip_loc_y(),
            (uint32_t)task->task_id,
            (uint32_t)task->assigned_chip_id,
@@ -401,7 +384,7 @@ void bingo_task_offload(bingo_task_t *task) {
     bingo_write_h2c_mailbox(task->assigned_cluster_id, (uint32_t)task->args_ptr, 0, &retry_hint_args);
     total_retries += retry_hint_start + retry_hint_id + retry_hint_fn + retry_hint_args;
     if(total_retries > 100) {
-        printf("Chip(%x, %x): [Host] Warning: High mailbox write retries (%u) when offloading task %u to chip %u cluster %u\r\n",
+        printf_safe("Chip(%x, %x): [Host] Warning: High mailbox write retries (%u) when offloading task %u to chip %u cluster %u\r\n",
                get_current_chip_loc_x(), get_current_chip_loc_y(), total_retries,
                task->task_id, task->assigned_chip_id, task->assigned_cluster_id);
     }
@@ -415,7 +398,7 @@ static void bingo_broadcast_completion(const bingo_task_t *t, uint8_t src_chip) 
     // Iterate remote successors and send messages to the corresponding chips
     // The message is the successor task id
     for (uint8_t i = 0; i < t->num_remote_successors; i++) {
-        printf("Chip(%x, %x): [Host] Broadcasting completion to remote successor with chip %x and task id %u\r\n",
+        BINGO_PRINTF(1, "Chip(%x, %x): [Host] Broadcasting completion to remote successor with chip %x and task id %u\r\n",
                get_current_chip_loc_x(), get_current_chip_loc_y(), t->remote_successors[i].chip_id, t->remote_successors[i].task_id);
         uint8_t dst_chip = t->remote_successors[i].chip_id;
         uint16_t dst_task = t->remote_successors[i].task_id;
@@ -467,7 +450,9 @@ static inline bingo_task_t *sched_dequeue(bingo_chip_sched_t *s){
 }
 
 void bingo_runtime_schedule(bingo_task_t **task_list, uint32_t num_tasks) {
-
+    // We need to set the soc_ctrl_kernel_tab_scratch_addr(3) to indicate we are using the SW scheduler
+    // See target/sw/device/runtime/src/bingo.h for details
+    writew(1,      (uintptr_t)chiplet_addr_transform((uint64_t)soc_ctrl_kernel_tab_scratch_addr(3)));
     uint8_t current_chip = get_current_chip_id();
     // Count local tasks
     uint16_t local_total = 0;
@@ -477,20 +462,21 @@ void bingo_runtime_schedule(bingo_task_t **task_list, uint32_t num_tasks) {
         }
         
     }
-    printf("Chip(%x, %x): [Host] Starting runtime schedule for %u local tasks\r\n",
+    printf_safe("Chip(%x, %x): [Host] Starting runtime schedule for %u local tasks\r\n",
            get_current_chip_loc_x(), get_current_chip_loc_y(), local_total);
     if (local_total == 0) return; // Nothing to do
 
     // Initialize scheduler instance (stack-local for now; could be static per chip)
+    BINGO_TRACE_MARKER(BINGO_TRACE_SW_MGR_INIT_TASK_QUEUE_START);
     uint16_t cap = bingo_next_pow2(local_total * 2); // room for burst readiness
     bingo_task_t **ring = (bingo_task_t **)(uintptr_t)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(bingo_task_t*) * cap);
     if (!ring) {
-        printf("[BINGO] Error: Failed to allocate ready ring.\r\n");
+        printf_safe("[BINGO] Error: Failed to allocate ready ring.\r\n");
         return;
     }
     bingo_chip_sched_t *sched = (bingo_chip_sched_t *)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(bingo_chip_sched_t));
     if (!sched) {
-        printf("[BINGO] Error: Failed to allocate scheduler instance.\r\n");
+        printf_safe("[BINGO] Error: Failed to allocate scheduler instance.\r\n");
         return;
     }
     sched->chip_id = current_chip;
@@ -513,19 +499,21 @@ void bingo_runtime_schedule(bingo_task_t **task_list, uint32_t num_tasks) {
             sched_enqueue(sched, t);
         }
     }
-
+    BINGO_TRACE_MARKER(BINGO_TRACE_SW_MGR_INIT_TASK_QUEUE_END);
     uint16_t local_completed = 0;
     while (local_completed < local_total) {
         // 1. Poll device C2H events (task completions etc.)
         while (1) {
             uint32_t word;
             int r = bingo_try_read_c2h_mailbox(&word);
-            if (r <= 0) break; // no more
+            if (r <= 0) break; // no info yet
+
             bingo_c2h_msg_fields_t msg = bingo_c2h_msg_decode(word);
             switch (msg.flag & 0xF) {
                 case MBOX_DEVICE_DONE: {
+                    BINGO_TRACE_MARKER(BINGO_TRACE_SW_MGR_ENQUEUE_LOCAL_READY_TASKS_START);
                     uint16_t tid = msg.task_id;
-                    printf("Chip(%x, %x): [Host] Task %x completed on chip %x cluster %d \r\n",
+                    BINGO_PRINTF(1, "Chip(%x, %x): [Host] Task %x completed on chip %x cluster %d \r\n",
                            get_current_chip_loc_x(), get_current_chip_loc_y(),
                            (uint32_t)tid, current_chip, (uint32_t)msg.cluster_id);
                     if (tid < num_tasks) {
@@ -533,12 +521,12 @@ void bingo_runtime_schedule(bingo_task_t **task_list, uint32_t num_tasks) {
 
                         bingo_task_t* completed_task = bingo_get_task_from_id(task_list, num_tasks, tid);
                         if (!completed_task) {
-                            printf("Chip(%x, %x): [Host] Error: Completed task %x not found in task list!\r\n",
+                            printf_safe("Chip(%x, %x): [Host] Error: Completed task %x not found in task list!\r\n",
                                    get_current_chip_loc_x(), get_current_chip_loc_y(), (uint32_t)tid);
                             break;
                         }
                         if(completed_task->assigned_chip_id != current_chip) {
-                            printf("Chip(%x, %x): [Host] Error: Completed task %d assigned to chip %x, but current chip is %x!\r\n",
+                            printf_safe("Chip(%x, %x): [Host] Error: Completed task %d assigned to chip %x, but current chip is %x!\r\n",
                                    get_current_chip_loc_x(), get_current_chip_loc_y(),
                                    (uint32_t)tid,
                                    (uint32_t)completed_task->assigned_chip_id,
@@ -567,7 +555,9 @@ void bingo_runtime_schedule(bingo_task_t **task_list, uint32_t num_tasks) {
                             }
 
                         }
+                        
                     }
+                    BINGO_TRACE_MARKER(BINGO_TRACE_SW_MGR_ENQUEUE_LOCAL_READY_TASKS_END);
                     break; }
                 default:
                     break; // Ignore other flags for now
@@ -579,6 +569,7 @@ void bingo_runtime_schedule(bingo_task_t **task_list, uint32_t num_tasks) {
             uint64_t word;
             int rr = bingo_try_read_h2h_mailbox(&word);
             if (rr <= 0) break;
+            BINGO_TRACE_MARKER(BINGO_TRACE_SW_MGR_ENQUEUE_REMOTE_READY_TASKS_START);
             bingo_msg_fields_t f = bingo_msg_decode(word);
             if (f.type == BINGO_MSG_TASK_COMPLETE) {
                 uint16_t tid = f.payload;
@@ -591,17 +582,22 @@ void bingo_runtime_schedule(bingo_task_t **task_list, uint32_t num_tasks) {
                     }                            
                 }
             }
+            BINGO_TRACE_MARKER(BINGO_TRACE_SW_MGR_ENQUEUE_REMOTE_READY_TASKS_END);
         }
 
         // 3. Offload as many ready tasks as possible (could add throttle / inflight cap later)
+        
         while (1) {
             bingo_task_t *t = sched_dequeue(sched);
             if (!t) break;
+            BINGO_TRACE_MARKER(BINGO_TRACE_SW_MGR_SCHED_READY_TASKS_START);
             if (!t->offloaded) {
                 bingo_task_offload(t);
                 sched->inflight++;
             }
+            BINGO_TRACE_MARKER(BINGO_TRACE_SW_MGR_SCHED_READY_TASKS_END);
         }
+        
 
         // 4. Sleep a bit to reduce host busy waiting
         if (local_completed < local_total) {
@@ -712,6 +708,9 @@ void bingo_hw_scheduler_init_pm(){
 // The Host core will also hooked with th ARA core for the simd
 // So its work is just to read the ready queue and write to the done queue when the simd is done
 void bingo_hw_scheduler_init(uint64_t dev_arg_base_addr, uint64_t dev_kernel_base_addr, uint32_t num_dev_tasks, uint64_t global_task_id_to_dev_task_id_base_addr, uint64_t task_desc_list_base, uint32_t num_tasks){
+    // We need to set the soc_ctrl_kernel_tab_scratch_addr(3) to indicate we are using the HW scheduler
+    // See target/sw/device/runtime/src/bingo.h for details
+    writew(2, (uintptr_t)chiplet_addr_transform((uint64_t)soc_ctrl_kernel_tab_scratch_addr(3)));
     // For the dev_arg_base_addr, dev_kernel_base_addr, global_task_id_to_dev_task_id_base_addr
     // We use those list when we get a globak task id and need to get the arg/kernel ptr for the device
     // The host core will write those list to the clusters' TCDM to let the device access them directly

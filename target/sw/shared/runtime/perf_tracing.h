@@ -33,10 +33,22 @@
 // Trace Marker IDs (Events)
 // ============================================================================
 // Hierarchical ID scheme (max 12 bits):
-// 0x1XX: Hardware Manager Events
+// 0x0xx: BINGO SW Manager Events 
+// 0x1XX: BINGO HW Manager Events
 // 0x2XX: Kernel Configuration Events
 // 0x3XX: Accelerator Execution Events
 
+
+// // --- BINGO SW Manager Events ---
+// Marks the lifespan of a task within the SW Manager loop
+#define BINGO_TRACE_SW_MGR_INIT_TASK_QUEUE_START     0x010 // Start processing
+#define BINGO_TRACE_SW_MGR_INIT_TASK_QUEUE_END       0x011 // End processing
+#define BINGO_TRACE_SW_MGR_ENQUEUE_LOCAL_READY_TASKS_START   0x012
+#define BINGO_TRACE_SW_MGR_ENQUEUE_LOCAL_READY_TASKS_END     0x013
+#define BINGO_TRACE_SW_MGR_ENQUEUE_REMOTE_READY_TASKS_START  0x014
+#define BINGO_TRACE_SW_MGR_ENQUEUE_REMOTE_READY_TASKS_END    0x015
+#define BINGO_TRACE_SW_MGR_SCHED_READY_TASKS_START          0x016
+#define BINGO_TRACE_SW_MGR_SCHED_READY_TASKS_END            0x017
 // --- Hardware Manager Events ---
 // Marks the lifespan of a task within the HW Manager loop
 #define BINGO_TRACE_MGR_GET_READY_START        0x110 // Start reading Ready Queue

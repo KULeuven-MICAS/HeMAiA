@@ -2,11 +2,23 @@
 
 import random
 import os
+import subprocess
+import sys
+
+def install_package(package):
+    subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+
+try:
+    import networkx as nx
+except ImportError:
+    print("networkx not found. Installing...")
+    install_package("networkx")
+    import networkx as nx
+
 from bingo_utils import DiGraphWrapper
 from bingo_node import BingoNode
 from bingo_mem_handle import BingoMemAlloc
 from bingo_kernel_args import BingoKernelArgs
-import networkx as nx
 MAX_NUM_CHIPLETS = 8
 class BingoDFG(DiGraphWrapper[BingoNode]):
     """Data Flow Graph (DFG) for Bingo."""
@@ -507,8 +519,14 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         return fields
     def bingo_visualize_dfg(self, filename: str = "dfg_visualization", figsize: tuple = (20, 16)) -> None:
         """Visualize the DFG with different shapes for task types and colors for chiplets."""
-        import matplotlib.pyplot as plt
-        from matplotlib.lines import Line2D
+        try:
+            import matplotlib.pyplot as plt
+            from matplotlib.lines import Line2D
+        except ImportError:
+            print("matplotlib not found. Installing...")
+            install_package("matplotlib")
+            import matplotlib.pyplot as plt
+            from matplotlib.lines import Line2D
 
         # Define shapes for different task types
         task_type_shapes = {

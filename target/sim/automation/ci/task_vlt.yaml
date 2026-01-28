@@ -1,16 +1,26 @@
 runs:
   - app_0: 
-    - host_app: offload
-    - device_app: snax-test-integration
+    - HOST_APP_TYPE: offload_legacy
+    - CHIP_TYPE: single_chip
+    - WORKLOAD: None
+    - DEV_APP: snax-test-integration
   - app_1:
-    - host_app: hemaia_clk_rst_configurator
-    - device_app: null
+    - HOST_APP_TYPE: host_only
+    - CHIP_TYPE: single_chip
+    - WORKLOAD: hemaia_clk_rst_configurator
+    - DEV_APP: None
   - app_2: 
-    - host_app: offload
-    - device_app: snax-xdma-copy
+    - HOST_APP_TYPE: offload_legacy
+    - CHIP_TYPE: single_chip
+    - WORKLOAD: None
+    - DEV_APP: snax-xdma-copy
   - app_3: 
-    - host_app: offload
-    - device_app: snax-xdma-hazard
+    - HOST_APP_TYPE: offload_legacy
+    - CHIP_TYPE: single_chip
+    - WORKLOAD: None
+    - DEV_APP: snax-xdma-hazard
   - app_4: 
-    - host_app: offload_bingo_ci
-    - device_app: snax-bingo-offload
+    - HOST_APP_TYPE: offload_bingo_sw
+    - CHIP_TYPE: single_chip
+    - WORKLOAD: dummy
+    - DEV_APP: snax-bingo-offload
