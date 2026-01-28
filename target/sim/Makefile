@@ -45,6 +45,7 @@ UART_DPI_DIR         ?= $(SIM_MKFILE_DIR)testharness/uartdpi
 SIM_WITH_MACRO ?= 0
 SIM_WITH_NETLIST ?= 0
 SIM_WITH_WAVEFORM ?= 1
+SIM_WITH_INTERPOSER ?= 0
 
 VSIM_BENDER += $(shell cat ../rtl/src/bender_targets.tmp)
 VLT_BENDER  += $(shell cat ../rtl/src/bender_targets.tmp)
@@ -66,11 +67,15 @@ ifeq ($(SIM_WITH_MACRO), 1)
 	VCS_BENDER  += -t tsmc16_sim -t tsmc16
 endif
 
-
-VSIM_BENDER += -t simulation_hemaia
-VLT_BENDER  += -t simulation_hemaia
-VCS_BENDER  += -t simulation_hemaia
-
+ifeq ($(SIM_WITH_INTERPOSER), 1)
+	VSIM_BENDER += -t simulation_hemaia_interposer
+	VLT_BENDER  += -t simulation_hemaia_interposer
+	VCS_BENDER  += -t simulation_hemaia_interposer
+else
+	VSIM_BENDER += -t simulation_hemaia
+	VLT_BENDER  += -t simulation_hemaia
+	VCS_BENDER  += -t simulation_hemaia
+endif
 
 VSIM_FLAGS += -t 1ps
 
