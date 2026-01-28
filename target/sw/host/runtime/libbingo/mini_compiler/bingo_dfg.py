@@ -1,6 +1,7 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 
 import random
+import os
 from bingo_utils import DiGraphWrapper
 from bingo_node import BingoNode
 from bingo_mem_handle import BingoMemAlloc
@@ -211,18 +212,18 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
             if len(local_succ_list) > 1:
                 # Now the local multiple successor case
                 # We need local_successors-1 dummy set nodes
-                print(f"Adding dummy set nodes for {cur_node.node_name} with local successors {[succ.node_name for succ in succs_list]}")
+                print(f"Adding dummy set nodes for {cur_node.node_name} with local successors {[succ.node_name for succ in local_succ_list]}")
 
                 # Prioritize edges where the successor node has the same assigned core as cur_node
-                prioritized_indices = [i for i, succ in enumerate(succs_list)
+                prioritized_indices = [i for i, succ in enumerate(local_succ_list)
                                       if succ.assigned_core_id == cur_node.assigned_core_id]
-                other_indices = [i for i in range(len(succs_list)) if i not in prioritized_indices]
+                other_indices = [i for i in range(len(local_succ_list)) if i not in prioritized_indices]
                 # Combine prioritized first, then others
                 ordered_indices = prioritized_indices + other_indices
 
                 # Only need local_successors-1 dummy set nodes
-                for idx in ordered_indices[:len(succs_list)-1]:
-                    succ = succs_list[idx]
+                for idx in ordered_indices[:len(local_succ_list)-1]:
+                    succ = local_succ_list[idx]
                     dummy_set_node = BingoNode(
                         assigned_chiplet_id=cur_node.assigned_chiplet_id,
                         assigned_cluster_id=cur_node.assigned_cluster_id,      # must be the same type of the cur_node to block the execution
@@ -970,3 +971,31 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
             
             f.write("    return 0;\n")
             f.write("}\n")
+    def bingo_compile_dfg(self, output_dir: str, output_file_name: str, extra_include_header_list: list[str]) -> None:
+        """Compile the DFG by assigning dep info and emitting C code."""
+        # 1. Transformations
+        # Add Entry Node
+        self.bingo_transform_dfg_add_entry_node()
+        # Add Exit Nodes
+        self.bingo_transform_dfg_add_exit_nodes()
+        self.bingo_visualize_dfg(
+            os.path.join(output_dir, "dfg_with_entry_exit_nodes")
+        )
+        # Add Dummy Set/Check Nodes
+        self.bingo_transform_dfg_add_dummy_set_nodes()
+        self.bingo_transform_dfg_add_dummy_check_nodes()
+        self.bingo_visualize_dfg(
+            os.path.join(output_dir, "final_dfg")
+        )
+        self.bingo_export_dfg_to_csv(
+            os.path.join(output_dir, "final_dfg")
+        )
+        # Assign Dep Info
+        self.bingo_assign_normal_node_dep_set_info()
+        self.bingo_assign_normal_node_dep_check_info()
+        
+        # 2. Emit C Code
+        self.bingo_emit_offload_c_code(
+            output_path=os.path.join(output_dir, output_file_name),
+            extra_include_header_list=extra_include_header_list,
+        )
