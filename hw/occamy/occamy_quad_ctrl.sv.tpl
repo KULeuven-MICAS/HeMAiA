@@ -244,7 +244,7 @@ module ${name}_quad_ctrl
     .csr_rsp_ready_i                    (bingo_hw_manager_csr_rsp_ready               ),
     // The Power Management interface
     .bingo_hw_manager_enable_idle_pm_i         (bingo_hw_manager_enable_idle_pm              ),
-    .bingo_hw_manager_dle_power_level_i        (bingo_hw_manager_idle_power_level            ),
+    .bingo_hw_manager_idle_power_level_i       (bingo_hw_manager_idle_power_level            ),
     .bingo_hw_manager_normal_power_level_i     (bingo_hw_manager_norm_power_level            ),
     .bingo_hw_manager_pm_base_addr_i           (bingo_hw_manager_pm_base_addr                ),
     .bingo_hw_manager_core_power_domain_i      (bingo_hw_manager_core_power_domain           ),
