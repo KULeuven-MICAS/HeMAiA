@@ -48,7 +48,7 @@ def define_workload_params():
         'meshRow': meshRow,
         'tileSize': tileSize,
         'meshCol': meshCol,
-        'arrayShapeIdx': 1,
+        'arrayShapeIdx': 0,
         'transposeA': 0,
         'transposeB': 0,
         'accumPrevC': 0
