@@ -223,7 +223,7 @@ def build_apps(
     return results
 
 
-def prepare_and_copy_sim(repo_root: Path, tasks_info: List[Tuple[Path, str, Optional[str]]]) -> None:
+def prepare_and_copy_sim(repo_root: Path, tasks_info: List[Tuple[Path, str]]) -> None:
     """Compile the Questasim simulation and copy outputs to each task directory.
 
     Strategy: treat everything under target/sim as an artifact tree and
@@ -256,7 +256,7 @@ def prepare_and_copy_sim(repo_root: Path, tasks_info: List[Tuple[Path, str, Opti
         else:
             shutil.copy2(src, dst)
 
-    for task_dir, _, _ in tasks_info:
+    for task_dir, _ in tasks_info:
         for src in artifacts:
             # Mirror the relative location within target/sim into the task directory
             rel = src.relative_to(sim_root)
