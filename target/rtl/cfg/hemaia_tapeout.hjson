@@ -1,4 +1,5 @@
 {
+    cfg_name: "hemaia_singlechip",
     bender_target: ["cv64a6_imafdc_sv39", "occamy"],
     // Remote CFG, about to be removed
     is_remote_quadrant: false,
