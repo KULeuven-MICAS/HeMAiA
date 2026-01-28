@@ -46,12 +46,12 @@ int main() {
     // 4. Run the bingo runtime
     ///////////////////////////////
 
-    printf("Chip(%x, %x): [Host] Start Bingo SW\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+    printf_safe("Chip(%x, %x): [Host] Start Bingo Runtime\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
     int ret = kernel_execution();
     // By default the clusters will pull up the interrupt line once the tasks are done
     // So we clean up the interrupt line here
     clear_host_sw_interrupt(current_chip_id);
-    printf("Chip(%x, %x): [Host] Offload Finish with ret = %d\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), ret);
-    printf("Chip(%x, %x): [Host] End Offloading Program\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());   
+    printf_safe("Chip(%x, %x): [Host] Offload Finish with ret = %d\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), ret);
+    printf_safe("Chip(%x, %x): [Host] End Offloading Program\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());   
     return ret;
 }
