@@ -66,6 +66,9 @@ PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/occamy.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/occamy_base_addr.h
 PLATFORM_HEADERS += $(SW_DEVICE_RT_DIR)/generated/occamy_defs.h
 
+$(PLATFORM_HEADERS_DIR):
+	mkdir -p $@
+
 ###########
 # 1.CLINT #
 ###########
@@ -77,7 +80,7 @@ $(TARGET_CLINT_DIR)/clint.hjson: $(SOURCE_CLINT_DIR)/data/clint.hjson.tpl $(CFG)
 	@echo "[OCCAMYGEN] Generate $@"
 	@$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_CLINT_DIR) --chip $<
 # Then the hjson can be used to generate the header file
-$(PLATFORM_HEADERS_DIR)/clint.h: $(TARGET_CLINT_DIR)/clint.hjson
+$(PLATFORM_HEADERS_DIR)/clint.h: $(TARGET_CLINT_DIR)/clint.hjson | $(PLATFORM_HEADERS_DIR)
 	$(call reggen_generate_header,$@,$<)
 
 ###########
@@ -92,7 +95,7 @@ $(TARGET_PLIC_DIR)/rv_plic.hjson: $(SOURCE_PLIC_DIR)/data/rv_plic.hjson.tpl $(CF
 	@$(PLICGEN) -s 73 -t 2 -p 6 $< > $@
 
 # Currently there are no sw related to the the PLIC
-$(PLATFORM_HEADERS_DIR)/rv_plic.h: $(TARGET_PLIC_DIR)/rv_plic.hjson
+$(PLATFORM_HEADERS_DIR)/rv_plic.h: $(TARGET_PLIC_DIR)/rv_plic.hjson | $(PLATFORM_HEADERS_DIR)
 	$(call reggen_generate_header,$@,$<)
 
 ##############
@@ -106,7 +109,7 @@ $(TARGET_SOCCTRL_DIR)/occamy_soc_reg.hjson: $(SOURCE_SOCCTRL_DIR)/occamy_soc_reg
 	@echo "[OCCAMYGEN] Generate $@"
 	@$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_SOCCTRL_DIR) --ctrl $<
 # Then the hjson can be used to generate the header file
-$(PLATFORM_HEADERS_DIR)/occamy_soc_ctrl.h: $(TARGET_SOCCTRL_DIR)/occamy_soc_reg.hjson
+$(PLATFORM_HEADERS_DIR)/occamy_soc_ctrl.h: $(TARGET_SOCCTRL_DIR)/occamy_soc_reg.hjson | $(PLATFORM_HEADERS_DIR)
 	$(call reggen_generate_header,$@,$<)
 
 ###############
@@ -120,39 +123,39 @@ $(TARGET_QUADPERIPH_DIR)/occamy_quad_periph_reg.hjson: $(SOURCE_QUADPERIPH_DIR)/
 	@echo "[OCCAMYGEN] Generate $@"
 	@$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_QUADPERIPH_DIR) --ctrl $<
 # Then the hjson can be used to generate the header file
-$(PLATFORM_HEADERS_DIR)/occamy_quad_periph.h: $(TARGET_QUADPERIPH_DIR)/occamy_quad_periph_reg.hjson
+$(PLATFORM_HEADERS_DIR)/occamy_quad_periph.h: $(TARGET_QUADPERIPH_DIR)/occamy_quad_periph_reg.hjson | $(PLATFORM_HEADERS_DIR)
 	$(call reggen_generate_header,$@,$<)
 ######################
 # Cluster Peripheral #
 ######################
 
-$(PLATFORM_HEADERS_DIR)/snitch_cluster_peripheral.h: $(SNITCH_ROOT)/hw/snitch_cluster/src/snitch_cluster_peripheral/snitch_cluster_peripheral_reg.hjson
+$(PLATFORM_HEADERS_DIR)/snitch_cluster_peripheral.h: $(SNITCH_ROOT)/hw/snitch_cluster/src/snitch_cluster_peripheral/snitch_cluster_peripheral_reg.hjson | $(PLATFORM_HEADERS_DIR)
 	$(call reggen_generate_header,$@,$<)
 
 ########################
 # HeMAiA D2D Link Ctrl #
 ########################
 
-$(PLATFORM_HEADERS_DIR)/hemaia_d2d_link_peripheral.h: $(shell bender path hemaia_d2d_link)/src/ctrl/hemaia_d2d_link_reg.hjson
+$(PLATFORM_HEADERS_DIR)/hemaia_d2d_link_peripheral.h: $(shell bender path hemaia_d2d_link)/src/ctrl/hemaia_d2d_link_reg.hjson | $(PLATFORM_HEADERS_DIR)
 	$(call reggen_generate_header,$@,$<)
 
 #######################
 # HeMAiA Clk Rst Ctrl #
 #######################
 
-$(PLATFORM_HEADERS_DIR)/hemaia_clk_rst_controller_peripheral.h: $(ROOT)/hw/hemaia/hemaia_clk_rst_controller/regs/hemaia_clk_rst_controller_reg.hjson
+$(PLATFORM_HEADERS_DIR)/hemaia_clk_rst_controller_peripheral.h: $(ROOT)/hw/hemaia/hemaia_clk_rst_controller/regs/hemaia_clk_rst_controller_reg.hjson | $(PLATFORM_HEADERS_DIR)
 	$(call reggen_generate_header,$@,$<)
 
 # OCCAMYGEN headers
-$(PLATFORM_HEADERS_DIR)/occamy_memory_map.h: $(PLATFORM_HEADERS_TEMPLATE_DIR)/occamy_memory_map.h.tpl $(CFG)
+$(PLATFORM_HEADERS_DIR)/occamy_memory_map.h: $(PLATFORM_HEADERS_TEMPLATE_DIR)/occamy_memory_map.h.tpl $(CFG) | $(PLATFORM_HEADERS_DIR)
 	@echo "[OCCAMYGEN] Generating $@"
 	@$(OCCAMYGEN) -c $(CFG) --outdir $(PLATFORM_HEADERS_DIR) --cheader $<
 
-$(PLATFORM_HEADERS_DIR)/occamy.h: $(PLATFORM_HEADERS_TEMPLATE_DIR)/occamy.h.tpl $(CFG)
+$(PLATFORM_HEADERS_DIR)/occamy.h: $(PLATFORM_HEADERS_TEMPLATE_DIR)/occamy.h.tpl $(CFG) | $(PLATFORM_HEADERS_DIR)
 	@echo "[OCCAMYGEN] Generating $@"
 	@$(OCCAMYGEN) -c $(CFG) --outdir $(PLATFORM_HEADERS_DIR) --cheader $<
 
-$(PLATFORM_HEADERS_DIR)/occamy_base_addr.h: $(CFG)
+$(PLATFORM_HEADERS_DIR)/occamy_base_addr.h: $(CFG) | $(PLATFORM_HEADERS_DIR)
 	@echo "[OCCAMYGEN] Generating $@"
 	@$(OCCAMYGEN) -c $(CFG) --outdir $(PLATFORM_HEADERS_DIR) -D $@
 	
