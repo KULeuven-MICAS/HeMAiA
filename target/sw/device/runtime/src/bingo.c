@@ -14,4 +14,6 @@ extern void bingo_sw_offload_init();
 extern void bingo_sw_offload_exit();
 extern void bingo_sw_offload_event_loop(uint32_t cluster_core_idx);
 extern void bingo_sw_offload_dispatch(uint32_t (*offloadFn)(uint32_t), uint32_t offloadArgs);
+extern int32_t bingo_sw_offload_manager();
+extern int32_t bingo_hw_offload_manager();
 extern int32_t bingo_offload_manager();

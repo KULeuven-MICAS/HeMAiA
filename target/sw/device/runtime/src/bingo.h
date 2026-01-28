@@ -396,7 +396,7 @@ inline int32_t bingo_hw_offload_manager(){
     return err;
 }
 
-int32_t bingo_offload_manager(){
+inline int32_t bingo_offload_manager(){
     // we use the 4th scratch register to indicate the offload type
     // Not set yet = 0
     // SW offload = 1
