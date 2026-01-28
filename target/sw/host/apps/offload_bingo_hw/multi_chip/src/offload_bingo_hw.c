@@ -28,7 +28,7 @@ int main() {
     hemaia_d2d_link_initialize(current_chip_id);
     // Init the uart for printf
     init_uart(get_current_chip_baseaddress(), 32, 1);
-    printf("Multi-chip Offload SW Bingo Main\r\n");
+    printf("Multi-chip Offload HW Bingo Main\r\n");
     printf("Chip(%x, %x): [Host] Start Offloading Program\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
 
     ///////////////////////////////
