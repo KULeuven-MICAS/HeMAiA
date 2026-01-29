@@ -309,7 +309,7 @@ SNAX_LIB_DEFINE void __snax_kernel_load_compute_store(void *arg)
     }
 }
 
-SNAX_LIB_DEFINE void __snax_kernel_double_buffer_example(void *arg)
+SNAX_LIB_DEFINE void __snax_kernel_double_buffer(void *arg)
 {
     // Example kernel for double buffering
 
@@ -532,6 +532,8 @@ SNAX_LIB_DEFINE void __snax_kernel_xdma_1d_copy(void *arg)
         uint64_t src_addr = make_u64(((uint32_t *)arg)[0], ((uint32_t *)arg)[1]);
         uint64_t dst_addr = make_u64(((uint32_t *)arg)[2], ((uint32_t *)arg)[3]);
         uint32_t data_size = ((uint32_t *)arg)[4];
+        XDMA_DEBUG_PRINT("XDMA copy: src_addr=0x%lx, dst_addr=0x%lx, size=%d bytes\n",
+               src_addr, dst_addr, data_size);
         BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
@@ -539,10 +541,6 @@ SNAX_LIB_DEFINE void __snax_kernel_xdma_1d_copy(void *arg)
         int task_id = xdma_start();
         xdma_remote_wait(task_id);
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
-        XDMA_DEBUG_PRINT("XDMA copy completed\n");
-        XDMA_DEBUG_PRINT("SRC ADDR = %lx\n", src_addr);
-        XDMA_DEBUG_PRINT("DST ADDR = %lx\n", dst_addr);
-        
     }
 }
 
@@ -2129,16 +2127,16 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_minimal(void *arg)
 SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
     /// Cluster-level Kernels ///
     /// Used for bingo sw     ///
-    // SNAX_EXPORT_FUNC(__snax_kernel_dummy),
+    SNAX_EXPORT_FUNC(__snax_kernel_dummy),
     SNAX_EXPORT_FUNC(__snax_kernel_check_results),
     // SNAX_EXPORT_FUNC(__snax_kernel_check_results_full),
     // SNAX_EXPORT_FUNC(__snax_kernel_csr),
     // SNAX_EXPORT_FUNC(__snax_kernel_load_compute_store),
-    // SNAX_EXPORT_FUNC(__snax_kernel_double_buffer_example),
+    SNAX_EXPORT_FUNC(__snax_kernel_double_buffer),
     SNAX_EXPORT_FUNC(__snax_kernel_xdma_1d_copy),
     SNAX_EXPORT_FUNC(__snax_kernel_idma_1d_copy),
     SNAX_EXPORT_FUNC(__snax_kernel_gemm),
-    // SNAX_EXPORT_FUNC(__snax_kernel_minimal_cfg_start_gemm_and_wait),
+    SNAX_EXPORT_FUNC(__snax_kernel_minimal_cfg_start_gemm_and_wait),
 
     /// Core-level Kernels ///
     /// Used for bingo hw  ///
