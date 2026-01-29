@@ -114,7 +114,7 @@ def create_dfg(params, mem_handles):
     task_copy_B = BingoNode(
         assigned_chiplet_id=0,
         assigned_cluster_id=0,
-        assigned_core_id=host_core_id,
+        assigned_core_id=dma_core_id,
         kernel_name="__snax_bingo_kernel_idma_1d_copy",
         kernel_args=SnaxBingoKernelIdma1dCopyArgs(
             src_addr=mem_handles['B_L3'],
