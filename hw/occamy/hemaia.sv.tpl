@@ -65,7 +65,7 @@ module hemaia (
     inout wire        io_uart_rts_no,
     inout wire        io_uart_cts_ni,
     // `gpio` Interface (8)
-    inout wire [ 7:0] io_gpio,
+    inout wire [ 3:0] io_gpio,
 % if spi_slave_present: 
     // `SPI Slave` for Debugging Purposes (6)
     inout wire        io_spis_sck_i,
@@ -91,7 +91,7 @@ module hemaia (
     inout wire        io_jtag_tdo_o
 );
 
-  localparam int NumGpio = 8;
+  localparam int NumGpio = 4;
   localparam int D2DChannel = 3;
   localparam int D2DWidth = 20;
 
@@ -557,7 +557,7 @@ module hemaia (
   logic [31:0] gpio_d_o;
   logic [31:0] gpio_oe_o;
   generate
-    for (genvar i = 0; i < 6; i++) begin : gen_gpio_io_cells
+    for (genvar i = 0; i < 2; i++) begin : gen_gpio_io_cells
       tc_digital_io gpio_io (
           .data_i(gpio_d_o[i]),
           .data_o(gpio_d_i[i]),
@@ -569,7 +569,7 @@ module hemaia (
           .io(io_gpio[i])
       );
     end
-    for (genvar i = 6; i < NumGpio; i++) begin : gen_gpio_io_cells_v
+    for (genvar i = 2; i < NumGpio; i++) begin : gen_gpio_io_cells_v
       tc_digital_io #(
         .VerticalIO(1'b1)
       ) gpio_io (

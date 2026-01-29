@@ -120,11 +120,11 @@ sources:
       - target/rtl/src/occamy_cva6.sv
 
   # HeMAiA bootrom
-  - target: all(hemaia, not(simulation_hemaia))
+  - target: all(hemaia, not(any(simulation_hemaia, simulation_hemaia_interposer)))
     files:
       - target/rtl/bootrom/bootrom_chip/bootrom.sv
   
-  - target: all(hemaia, simulation_hemaia)
+  - target: all(hemaia, any(simulation_hemaia, simulation_hemaia_interposer))
     files:
       - target/rtl/bootrom/bootrom_sim/bootrom.sv
 
@@ -169,3 +169,14 @@ sources:
     files:
       - target/sim/testharness/uartdpi/uartdpi.sv
       - target/sim/testharness/testharness.sv
+
+  - target: simulation_hemaia_interposer
+    files:
+      - target/sim/testharness/uartdpi/uartdpi.sv
+      - target/sim/testharness/interposer/cds_thru.sv
+      - target/sim/testharness/interposer/cds_alias.sv
+      - target/sim/testharness/interposer/four_chiplet_interposer_signalpad.tb.sv
+      - target/sim/testharness/interposer/hemaia_io_pad.tb.sv
+      - target/sim/testharness/interposer/four_chiplet_interposer.lvs.sv
+      - target/sim/testharness/interposer/testharness.sv
+
