@@ -150,7 +150,7 @@ def create_dfg(params, mem_handles):
         kernel_name="__snax_bingo_kernel_idma_1d_copy",
         kernel_args=SnaxBingoKernelIdma1dCopyArgs(
             src_addr=mem_handles['l1_buf_D'],
-            dst_addr=mem_handles['D_L3'],
+            dst_addr=mem_handles['l3_buf_D'],
             size=params['D_size']
         )
     )
