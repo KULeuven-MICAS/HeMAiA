@@ -20,10 +20,9 @@ uint32_t __workload_gemm_merge_load_and_compute(bingo_task_t** task_list) {
     // 3. Set the task dependency
     // 4. Set the assigned chiplet id and cluster id
 
-    uint8_t current_chip_id = get_current_chip_id();
     // only test chip 0 for intra-chiplet gemm
-    uint8_t task_chip_id = 0;
-    uint8_t cluster_id = 0;  // versacore is located at cluster
+    uint8_t assigned_chip_id = 0;
+    uint8_t assigned_cluster_id = 0;
 
     // 1.1 Get the kernel function address by the kernel name
     check_kernel_tab_ready();
@@ -37,42 +36,44 @@ uint32_t __workload_gemm_merge_load_and_compute(bingo_task_t** task_list) {
         __snax_kernel_gemm_func_addr == SNAX_SYMTAB_END_FN_ADDR) {
         printf("Error: Kernel symbol lookup failed!\r\n");
     }
-
+    uint64_t output_data_ptr = bingo_l3_alloc(assigned_chip_id, ARRAY_SIZE_BYTES(D));
     // 1.2 Prepare the args
     // versacore args
-    uint32_t gemm_args[15];
+    __snax_kernel_gemm_intra_chiplet_args* gemm_args = (__snax_kernel_gemm_intra_chiplet_args*)bingo_l3_alloc(
+        assigned_chip_id,
+        sizeof(__snax_kernel_gemm_intra_chiplet_args));
     // A matrix
-    gemm_args[0] = HIGH32(&A[0]);
-    gemm_args[1] = LOW32(&A[0]);
+    gemm_args->input_A_addr_hi = HIGH32(&A[0]);
+    gemm_args->input_A_addr_lo = LOW32(&A[0]);
     // B matrix
-    gemm_args[2] = HIGH32(&B[0]);
-    gemm_args[3] = LOW32(&B[0]);
+    gemm_args->input_B_addr_hi = HIGH32(&B[0]);
+    gemm_args->input_B_addr_lo = LOW32(&B[0]);
     // C matrix
     if (accumPrevC || addZeroC) {
         // When accumPrevC is true, we use D as the previous C matrix
-        gemm_args[4] = 0;
-        gemm_args[5] = 0;
+        gemm_args->input_C_addr_hi = 0;
+        gemm_args->input_C_addr_lo = 0;
     } else {
-        gemm_args[4] = HIGH32(&C[0]);
-        gemm_args[5] = LOW32(&C[0]);
+        gemm_args->input_C_addr_hi = HIGH32(&C[0]);
+        gemm_args->input_C_addr_lo = LOW32(&C[0]);
     }
 
     // D matrix (output)
-    uint64_t output_data_ptr = bingo_l3_alloc(get_current_chip_id(), ARRAY_SIZE_BYTES(D));
-    gemm_args[6] = HIGH32(output_data_ptr);
-    gemm_args[7] = LOW32(output_data_ptr);
+   
+    gemm_args->output_data_addr_hi = HIGH32(output_data_ptr);
+    gemm_args->output_data_addr_lo = LOW32(output_data_ptr);
     // Matrix dimensions
-    gemm_args[8] = M;   // M
-    gemm_args[9] = K;   // K
-    gemm_args[10] = N;  // N
+    gemm_args->M = M;   // M
+    gemm_args->K = K;   // K
+    gemm_args->N = N;  // N
     // SUs
-    gemm_args[11] = array_shape;
+    gemm_args->array_shape = array_shape;
     // transpose A
-    gemm_args[12] = transposed_A;
+    gemm_args->transposed_A = transposed_A;
     // transpose B
-    gemm_args[13] = transposed_B;
+    gemm_args->transposed_B = transposed_B;
     // accumPrevC
-    gemm_args[14] = accumPrevC;
+    gemm_args->accumPrevC = accumPrevC;
 
     // checkresults args
     __snax_kernel_check_results_args_t task_check_results_args;
@@ -83,14 +84,14 @@ uint32_t __workload_gemm_merge_load_and_compute(bingo_task_t** task_list) {
     // 2. Register the tasks
     bingo_task_t* task_versacore = bingo_task_create(
         __snax_kernel_gemm_func_addr,
-        (uint32_t)(uintptr_t)(&gemm_args), task_chip_id, cluster_id);
+        (uint32_t)(uintptr_t)(gemm_args), assigned_chip_id, assigned_cluster_id);
     if (task_versacore == NULL) {
         printf("Error: Task versacore creation failed!\r\n");
     }
     bingo_task_t* task_check_results =
         bingo_task_create(check_results_func_addr,
                           (uint32_t)(uintptr_t)(&task_check_results_args),
-                          task_chip_id, cluster_id);
+                          assigned_chip_id, assigned_cluster_id);
     if (task_check_results == NULL) {
         printf("Error: Task check results creation failed!\r\n");
     }
