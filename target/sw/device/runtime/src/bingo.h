@@ -266,10 +266,6 @@ inline void write_bingo_hw_manager_done_queue(uint32_t task_id){
 inline void bingo_hw_offload_init() {
     // Initialize the HW offload manager
     if (snrt_is_dm_core()) {
-        // Poll the host init done
-        while(readw(quad_ctrl_host_init_done_addr()) == 0){
-            // wait
-        }
         // Now we can read the ptrs
         get_bingo_hw_offload_unit()->dev_arg_list_ptr = readw(quad_ctrl_arg_ptr_addr(snrt_cluster_idx()));
         get_bingo_hw_offload_unit()->dev_kernel_list_ptr = readw(quad_ctrl_kernel_ptr_addr(snrt_cluster_idx()));
@@ -397,22 +393,25 @@ inline int32_t bingo_hw_offload_manager(){
 }
 
 inline int32_t bingo_offload_manager(){
+    // First wait for the host to finish init
+    while(readw(quad_ctrl_host_init_done_addr()) == 0){
+            // wait for the host to finish init
+    }
+    // Determine whether to use SW offload or HW offload
     // we use the 4th scratch register to indicate the offload type
-    // Not set yet = 0
     // SW offload = 1
     // HW offload = 2
-    while(readw(soc_ctrl_kernel_tab_scratch_addr(3))==0){
-        // wait for the host to set the offload type
-    }
-    if (readw(soc_ctrl_kernel_tab_scratch_addr(3))==1){
+    uint32_t offload_type = readw(soc_ctrl_kernel_tab_scratch_addr(3));
+
+    if (offload_type == 1){
         // Software offload
         return bingo_sw_offload_manager();
-    } else if (readw(soc_ctrl_kernel_tab_scratch_addr(3))==2){
+    } else if (offload_type == 2){
         // Hardware offload
         return bingo_hw_offload_manager();
     } else {
         // Invalid offload type
-        printf_safe("[Cluster %d] Error: Invalid offload type %d\r\n", snrt_cluster_idx(), readw(soc_ctrl_kernel_tab_scratch_addr(3)));
+        printf_safe("[Cluster %d] Error: Invalid offload type %d\r\n", snrt_cluster_idx(), offload_type);
         return -1;
-    }   
+    }
 }

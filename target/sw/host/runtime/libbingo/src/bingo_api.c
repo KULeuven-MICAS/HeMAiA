@@ -450,9 +450,12 @@ static inline bingo_task_t *sched_dequeue(bingo_chip_sched_t *s){
 }
 
 void bingo_runtime_schedule(bingo_task_t **task_list, uint32_t num_tasks) {
-    // We need to set the soc_ctrl_kernel_tab_scratch_addr(3) to indicate we are using the SW scheduler
+    // We need to set the soc_ctrl_kernel_tab_scratch_addr(3) to 1 to indicate we are using the SW scheduler
     // See target/sw/device/runtime/src/bingo.h for details
     writew(1,      (uintptr_t)chiplet_addr_transform((uint64_t)soc_ctrl_kernel_tab_scratch_addr(3)));
+    // Tell the device that the host init is done
+    writew(1,      (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_host_init_done_addr()));
+    asm volatile("fence" ::: "memory");
     uint8_t current_chip = get_current_chip_id();
     // Count local tasks
     uint16_t local_total = 0;
@@ -697,7 +700,8 @@ void bingo_hw_scheduler_init_pm(){
         }
     }
     // 6. quad_ctrl_enable_idle_pm_addr: set to 1 to enable power manager
-    writew(1,                             (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_enable_idle_pm_addr()));
+    writew(0,                             (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_enable_idle_pm_addr()));
+    asm volatile("fence" ::: "memory");
 }
 
 
@@ -708,7 +712,7 @@ void bingo_hw_scheduler_init_pm(){
 // The Host core will also hooked with th ARA core for the simd
 // So its work is just to read the ready queue and write to the done queue when the simd is done
 void bingo_hw_scheduler_init(uint64_t dev_arg_base_addr, uint64_t dev_kernel_base_addr, uint32_t num_dev_tasks, uint64_t global_task_id_to_dev_task_id_base_addr, uint64_t task_desc_list_base, uint32_t num_tasks){
-    // We need to set the soc_ctrl_kernel_tab_scratch_addr(3) to indicate we are using the HW scheduler
+    // We need to set the soc_ctrl_kernel_tab_scratch_addr(3) to 2 to indicate we are using the HW scheduler
     // See target/sw/device/runtime/src/bingo.h for details
     writew(2, (uintptr_t)chiplet_addr_transform((uint64_t)soc_ctrl_kernel_tab_scratch_addr(3)));
     // For the dev_arg_base_addr, dev_kernel_base_addr, global_task_id_to_dev_task_id_base_addr
@@ -754,6 +758,7 @@ void bingo_hw_scheduler_init(uint64_t dev_arg_base_addr, uint64_t dev_kernel_bas
     writew(1,                             (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_start_bingo_hw_manager_addr()));
     // Tell the device that the host init is done
     writew(1,                             (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_host_init_done_addr()));
+    asm volatile("fence" ::: "memory");
 }
 
 uint32_t bingo_hw_scheduler(uint64_t* host_arg_list, uint64_t* host_kernel_list, int32_t* global_task_id_to_host_task_id){
