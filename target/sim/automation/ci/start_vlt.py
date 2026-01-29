@@ -57,6 +57,7 @@ def get_apps(task_path):
         shell_script += [f"CHIP_TYPE={chip_type}"] if chip_type and chip_type != "None" else []
         shell_script += [f"WORKLOAD={workload}"] if workload and workload != "None" else []
         shell_script += [f"DEV_APP={dev_app}"] if dev_app and dev_app != "None" else []
+        shell_script += ["DEBUG_LEVEL=0"]
         # Generate the app hex file
         subprocess.run(shell_script, check=True, cwd=sw_path)
     return app_name_list

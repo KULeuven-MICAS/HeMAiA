@@ -200,6 +200,7 @@ def build_apps(
             make_cmd.append(f"WORKLOAD={workload}")
         if dev_app and dev_app != "None":
             make_cmd.append(f"DEV_APP={dev_app}")
+        make_cmd.append("DEBUG_LEVEL=0")
 
         # Execute make inside the container at the repository root
         run_in_container(repo_root, docker_image, repo_root, make_cmd)
