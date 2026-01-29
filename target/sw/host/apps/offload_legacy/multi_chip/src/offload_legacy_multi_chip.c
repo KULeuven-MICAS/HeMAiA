@@ -9,7 +9,7 @@
 int main() {
     // The pointer to the communication buffer
     volatile comm_buffer_t* comm_buffer_ptr = (comm_buffer_t*)0;
-
+    printf("[HeMAiA] Multi-chip Offload Legacy Main\r\n");
     // Reset and ungate all quadrants, deisolate
     uintptr_t current_chip_address_prefix =
         (uintptr_t)get_current_chip_baseaddress();
