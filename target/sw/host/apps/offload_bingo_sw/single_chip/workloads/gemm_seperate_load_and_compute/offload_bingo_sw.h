@@ -28,11 +28,9 @@ uint32_t __workload_gemm_seperate_load_and_compute(bingo_task_t** task_list) {
     // 2. Register the tasks
     // 3. Set the task dependency
     // 4. Set the assigned chiplet id and cluster id
-
-    uint8_t current_chip_id = get_current_chip_id();
     // only test chip 0 for intra-chiplet gemm
-    uint8_t task_chip_id = 0;
-    uint8_t cluster_id = 0;  // versacore is located at cluster
+    uint8_t assigned_chip_id = 0;
+    uint8_t assigned_cluster_id = 0;
 
     // 1.1 Get the kernel function address by the kernel name
     check_kernel_tab_ready();
@@ -77,16 +75,17 @@ uint32_t __workload_gemm_seperate_load_and_compute(bingo_task_t** task_list) {
     HOST_DEBUG_PRINT("Chip(%x, %x): B matrix L3 address: 0x%lx\r\n",
            get_current_chip_loc_x(), get_current_chip_loc_y(), B_addr_l3);
     uint64_t D_addr_golden = chiplet_addr_transform((uint64_t)(uintptr_t)(D1));
-    uint64_t cluster_l1_addr_A = bingo_l1_alloc(current_chip_id, 0, BINGO_CHIPLET_READW(AdataTileSize));
-    uint64_t cluster_l1_addr_B = bingo_l1_alloc(current_chip_id, 0, BINGO_CHIPLET_READW(BdataSize));
-    uint64_t cluster_l1_addr_C = bingo_l1_alloc(current_chip_id, 0, BINGO_CHIPLET_READW(CdataSize));
-    uint64_t cluster_l1_addr_D = bingo_l1_alloc(current_chip_id, 0, BINGO_CHIPLET_READW(D1));
+    uint64_t cluster_l1_addr_A = bingo_l1_alloc(assigned_chip_id, assigned_cluster_id, BINGO_CHIPLET_READW(AdataTileSize));
+    uint64_t cluster_l1_addr_B = bingo_l1_alloc(assigned_chip_id, assigned_cluster_id, BINGO_CHIPLET_READW(BdataSize));
+    uint64_t cluster_l1_addr_C = bingo_l1_alloc(assigned_chip_id, assigned_cluster_id, BINGO_CHIPLET_READW(CdataSize));
+    uint64_t cluster_l1_addr_D = bingo_l1_alloc(assigned_chip_id, assigned_cluster_id, BINGO_CHIPLET_READW(D1));
     // D matrix (output)
-    uint64_t output_data_addr_chip_0x00 = o1heapAllocate(bingo_get_l3_heap_manager(current_chip_id), ARRAY_SIZE_BYTES(D1));
-    __snax_kernel_idma_1d_copy_args_t *task_l3_to_cluster_args_A = 
-        (__snax_kernel_idma_1d_copy_args_t *)o1heapAllocate(
-            bingo_get_l3_heap_manager(current_chip_id),
-            sizeof(__snax_kernel_idma_1d_copy_args_t));
+    uint64_t output_data_addr_chip_0x00 = bingo_l3_alloc(assigned_chip_id, ARRAY_SIZE_BYTES(D1));
+    
+    __snax_kernel_idma_1d_copy_args_t *task_l3_to_cluster_args_A = (__snax_kernel_idma_1d_copy_args_t*) bingo_l3_alloc(
+        assigned_chip_id,
+        sizeof(__snax_kernel_idma_1d_copy_args_t));
+
     task_l3_to_cluster_args_A->src_addr_hi = HIGH32(BINGO_CHIPLET_READD(A1_addr_l3));
     task_l3_to_cluster_args_A->src_addr_lo = LOW32(BINGO_CHIPLET_READD(A1_addr_l3));
     task_l3_to_cluster_args_A->dst_addr_hi = HIGH32(BINGO_CHIPLET_READD(cluster_l1_addr_A));
@@ -99,10 +98,9 @@ uint32_t __workload_gemm_seperate_load_and_compute(bingo_task_t** task_list) {
            task_l3_to_cluster_args_A->dst_addr_hi,
            task_l3_to_cluster_args_A->dst_addr_lo,
            task_l3_to_cluster_args_A->size);
-    __snax_kernel_idma_1d_copy_args_t *task_l3_to_cluster_args_B = 
-        (__snax_kernel_idma_1d_copy_args_t *)o1heapAllocate(
-            bingo_get_l3_heap_manager(current_chip_id),
-            sizeof(__snax_kernel_idma_1d_copy_args_t));
+    __snax_kernel_idma_1d_copy_args_t *task_l3_to_cluster_args_B = (__snax_kernel_idma_1d_copy_args_t*) bingo_l3_alloc(
+        assigned_chip_id,
+        sizeof(__snax_kernel_idma_1d_copy_args_t));
     task_l3_to_cluster_args_B->src_addr_hi = HIGH32(BINGO_CHIPLET_READD(B_addr_l3));
     task_l3_to_cluster_args_B->src_addr_lo = LOW32(BINGO_CHIPLET_READD(B_addr_l3));
     task_l3_to_cluster_args_B->dst_addr_hi = HIGH32(BINGO_CHIPLET_READD(cluster_l1_addr_B));
@@ -116,51 +114,52 @@ uint32_t __workload_gemm_seperate_load_and_compute(bingo_task_t** task_list) {
            task_l3_to_cluster_args_B->dst_addr_lo,
            task_l3_to_cluster_args_B->size);
     // Prepare the args for Chiplet 0
-    uint32_t* gemm_args_chip_0x00 = (uint32_t*)o1heapAllocate(bingo_get_l3_heap_manager(current_chip_id), sizeof(uint32_t) * 15);
+    __snax_kernel_gemm_intra_chiplet_args_t* gemm_args_chip_0x00 = (__snax_kernel_gemm_intra_chiplet_args_t*)bingo_l3_alloc(
+        assigned_chip_id,
+        sizeof(__snax_kernel_gemm_intra_chiplet_args_t));
     // versacore args
     // A matrix
-    gemm_args_chip_0x00[0] = HIGH32(BINGO_CHIPLET_READD(cluster_l1_addr_A));
-    gemm_args_chip_0x00[1] = LOW32(BINGO_CHIPLET_READD(cluster_l1_addr_A));
+    gemm_args_chip_0x00->input_A_addr_hi = HIGH32(BINGO_CHIPLET_READD(cluster_l1_addr_A));
+    gemm_args_chip_0x00->input_A_addr_lo = LOW32(BINGO_CHIPLET_READD(cluster_l1_addr_A));
     // B matrix
-    gemm_args_chip_0x00[2] = HIGH32(BINGO_CHIPLET_READD(cluster_l1_addr_B));
-    gemm_args_chip_0x00[3] = LOW32(BINGO_CHIPLET_READD(cluster_l1_addr_B));
+    gemm_args_chip_0x00->input_B_addr_hi = HIGH32(BINGO_CHIPLET_READD(cluster_l1_addr_B));
+    gemm_args_chip_0x00->input_B_addr_lo = LOW32(BINGO_CHIPLET_READD(cluster_l1_addr_B));
     // C matrix
     if (accumPrevC || addZeroC) {
         // When accumPrevC is true, we use D as the previous C matrix
-        gemm_args_chip_0x00[4] = 0;
-        gemm_args_chip_0x00[5] = 0;
+        gemm_args_chip_0x00->input_C_addr_hi = 0;
+        gemm_args_chip_0x00->input_C_addr_lo = 0;
     } else {
-        gemm_args_chip_0x00[4] = HIGH32(BINGO_CHIPLET_READD(cluster_l1_addr_C));
-        gemm_args_chip_0x00[5] = LOW32(BINGO_CHIPLET_READD(cluster_l1_addr_C));
+        gemm_args_chip_0x00->input_C_addr_hi = HIGH32(BINGO_CHIPLET_READD(cluster_l1_addr_C));
+        gemm_args_chip_0x00->input_C_addr_lo = LOW32(BINGO_CHIPLET_READD(cluster_l1_addr_C));
     }
 
-    gemm_args_chip_0x00[6] = HIGH32(BINGO_CHIPLET_READD(cluster_l1_addr_D));
-    gemm_args_chip_0x00[7] = LOW32(BINGO_CHIPLET_READD(cluster_l1_addr_D));
+    gemm_args_chip_0x00->output_D_addr_hi = HIGH32(BINGO_CHIPLET_READD(cluster_l1_addr_D));
+    gemm_args_chip_0x00->output_D_addr_lo = LOW32(BINGO_CHIPLET_READD(cluster_l1_addr_D));
     // Matrix dimensions
-    gemm_args_chip_0x00[8] = BINGO_CHIPLET_READW(M);   // M
-    gemm_args_chip_0x00[9] = BINGO_CHIPLET_READW(K);   // K
-    gemm_args_chip_0x00[10] = BINGO_CHIPLET_READW(N);  // N
+    gemm_args_chip_0x00->M = BINGO_CHIPLET_READW(M);   // M
+    gemm_args_chip_0x00->K = BINGO_CHIPLET_READW(K);   // K
+    gemm_args_chip_0x00->N = BINGO_CHIPLET_READW(N);  // N
     // SUs
-    gemm_args_chip_0x00[11] = BINGO_CHIPLET_READW(array_shape);
+    gemm_args_chip_0x00->array_shape = BINGO_CHIPLET_READW(array_shape);
     // transpose A
-    gemm_args_chip_0x00[12] = BINGO_CHIPLET_READW(transposed_A);
+    gemm_args_chip_0x00->transpose_A = BINGO_CHIPLET_READW(transposed_A);
     // transpose B
-    gemm_args_chip_0x00[13] = BINGO_CHIPLET_READW(transposed_B);
+    gemm_args_chip_0x00->transpose_B = BINGO_CHIPLET_READW(transposed_B);
     // accumPrevC
-    gemm_args_chip_0x00[14] = BINGO_CHIPLET_READW(accumPrevC);
+    gemm_args_chip_0x00->accumPrevC = BINGO_CHIPLET_READW(accumPrevC);
     HOST_DEBUG_PRINT("Chip(%x, %x): gemm compute Args: A_addr_hi=%x, A_addr_lo=%x, B_addr_hi=%x, B_addr_lo=%x, C_addr_hi=%x, C_addr_lo=%x, D_addr_hi=%x, D_addr_lo=%x, M=%x, K=%x, N=%x\r\n",
            get_current_chip_loc_x(), get_current_chip_loc_y(),
-           gemm_args_chip_0x00[0], gemm_args_chip_0x00[1],
-           gemm_args_chip_0x00[2], gemm_args_chip_0x00[3],
-           gemm_args_chip_0x00[4], gemm_args_chip_0x00[5],
-           gemm_args_chip_0x00[6], gemm_args_chip_0x00[7],
-           gemm_args_chip_0x00[8], gemm_args_chip_0x00[9],
-           gemm_args_chip_0x00[10]);
+           gemm_args_chip_0x00->input_A_addr_hi, gemm_args_chip_0x00->input_A_addr_lo,
+           gemm_args_chip_0x00->input_B_addr_hi, gemm_args_chip_0x00->input_B_addr_lo,
+           gemm_args_chip_0x00->input_C_addr_hi, gemm_args_chip_0x00->input_C_addr_lo,
+           gemm_args_chip_0x00->output_D_addr_hi, gemm_args_chip_0x00->output_D_addr_lo,
+           gemm_args_chip_0x00->M, gemm_args_chip_0x00->K,
+           gemm_args_chip_0x00->N);
     // move the data from cluster L1 to L3 for D matrix
-    __snax_kernel_idma_1d_copy_args_t *task_cluster_to_l3_args_D = 
-        (__snax_kernel_idma_1d_copy_args_t *)o1heapAllocate(
-            bingo_get_l3_heap_manager(current_chip_id),
-            sizeof(__snax_kernel_idma_1d_copy_args_t));
+    __snax_kernel_idma_1d_copy_args_t *task_cluster_to_l3_args_D = (__snax_kernel_idma_1d_copy_args_t*) bingo_l3_alloc(
+        assigned_chip_id,
+        sizeof(__snax_kernel_idma_1d_copy_args_t));
     task_cluster_to_l3_args_D->src_addr_hi = HIGH32(BINGO_CHIPLET_READD(cluster_l1_addr_D));
     task_cluster_to_l3_args_D->src_addr_lo = LOW32(BINGO_CHIPLET_READD(cluster_l1_addr_D));
     task_cluster_to_l3_args_D->dst_addr_hi = HIGH32(BINGO_CHIPLET_READD(output_data_addr_chip_0x00));
@@ -175,14 +174,13 @@ uint32_t __workload_gemm_seperate_load_and_compute(bingo_task_t** task_list) {
            task_cluster_to_l3_args_D->size);
     // args for checking results
     // checkresults args
-    __snax_kernel_check_results_args_t *task_check_results_args_chip_0x00 = 
-        (__snax_kernel_check_results_args_t *)o1heapAllocate(
-            bingo_get_l3_heap_manager(current_chip_id),
-            sizeof(__snax_kernel_check_results_args_t));
+    __snax_kernel_check_results_args_t *task_check_results_args_chip_0x00 = (__snax_kernel_check_results_args_t*) bingo_l3_alloc(
+        assigned_chip_id,
+        sizeof(__snax_kernel_check_results_args_t));
     task_check_results_args_chip_0x00->golden_data_addr = LOW32(BINGO_CHIPLET_READD(D_addr_golden));
     task_check_results_args_chip_0x00->output_data_addr = LOW32(BINGO_CHIPLET_READD(output_data_addr_chip_0x00));
     task_check_results_args_chip_0x00->data_size = ARRAY_SIZE_BYTES(D1);
-    printf("Chip(%x, %x): Check results Args: golden_data_addr=%x, output_data_addr=%x, data_size=%x\r\n",
+    HOST_DEBUG_PRINT("Chip(%x, %x): Check results Args: golden_data_addr=%x, output_data_addr=%x, data_size=%x\r\n",
            get_current_chip_loc_x(), get_current_chip_loc_y(),
            task_check_results_args_chip_0x00->golden_data_addr,
            task_check_results_args_chip_0x00->output_data_addr,
@@ -193,31 +191,26 @@ uint32_t __workload_gemm_seperate_load_and_compute(bingo_task_t** task_list) {
     bingo_task_t* task_idma_l3_to_cluster_A =
         bingo_task_create(__snax_kernel_idma_1d_copy_func_addr,
                           (uint32_t)(uintptr_t)(task_l3_to_cluster_args_A),
-                          task_chip_id, cluster_id);
+                          assigned_chip_id, assigned_cluster_id);
     bingo_task_t* task_idma_l3_to_cluster_B =
         bingo_task_create(__snax_kernel_idma_1d_copy_func_addr,
                           (uint32_t)(uintptr_t)(task_l3_to_cluster_args_B),
-                          task_chip_id, cluster_id);
+                          assigned_chip_id, assigned_cluster_id);
     // versacore gemm compute
     bingo_task_t* task_versacore_chip_0x00 = bingo_task_create(
         __snax_kernel_gemm_func_addr,
-        (uint32_t)(uintptr_t)(gemm_args_chip_0x00), task_chip_id, cluster_id);
-    if (task_versacore_chip_0x00 == NULL) {
-        HOST_DEBUG_PRINT("Error: Task versacore creation failed!\r\n");
-    }
+        (uint32_t)(uintptr_t)(gemm_args_chip_0x00), assigned_chip_id, assigned_cluster_id);
+
     // idma move D back to L3
     bingo_task_t* task_idma_cluster_to_l3_D =
         bingo_task_create(__snax_kernel_idma_1d_copy_func_addr,
                           (uint32_t)(uintptr_t)(task_cluster_to_l3_args_D),
-                          task_chip_id, cluster_id);
+                          assigned_chip_id, assigned_cluster_id);
     // check results at L3
     bingo_task_t* task_check_results_chip_0x00 = bingo_task_create(
         check_results_func_addr,
-        (uint32_t)(uintptr_t)(task_check_results_args_chip_0x00), task_chip_id,
-        cluster_id);
-    if (task_check_results_chip_0x00 == NULL) {
-        HOST_DEBUG_PRINT("Error: Task check results creation failed!\r\n");
-    }
+        (uint32_t)(uintptr_t)(task_check_results_args_chip_0x00), assigned_chip_id,
+        assigned_cluster_id);
 
     // 3. Set the task dependency
     // Here we have only two tasks and simple dependency
@@ -252,21 +245,30 @@ int kernel_execution(){
     // Can be changed if needed
     bingo_task_t *task_list[64] = {0};
     uint32_t num_tasks = 0;
+    if (get_current_chip_id() == 0) {
+        ////////////////////////////
+        // User defined workload
+        ///////////////////////////
+        num_tasks = __workload_gemm_seperate_load_and_compute(task_list);
+        ////////////////////////////
+        // End user defined workload
+        ////////////////////////////
 
-    num_tasks = __workload_gemm_seperate_load_and_compute(task_list);
-    ////////////////////////////
-    // End user defined workload
-    ////////////////////////////
+        // Call bingo runtime
+        bingo_runtime_schedule(
+            task_list, 
+            num_tasks
+        );
+        printf("Chip(%x, %x): [Host] All tasks done.\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+        // Close all the clusters
+        bingo_close_all_clusters(task_list, num_tasks);
+        // Free the output data
 
-    // Call bingo runtime
-    bingo_runtime_schedule(
-        task_list, 
-        num_tasks
-    );
-    printf("Chip(%x, %x): [Host] All tasks done.\n", get_current_chip_loc_x(), get_current_chip_loc_y());
-    // Close all the clusters
-    bingo_close_all_clusters(task_list, num_tasks);
-    // Free the output data
-
-    return 0;
+        return 0;
+    }
+    else
+    {
+        // other chiplets do nothing
+        return 0;
+    }
 }

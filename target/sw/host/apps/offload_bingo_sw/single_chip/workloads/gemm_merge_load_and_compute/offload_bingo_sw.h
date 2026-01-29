@@ -121,21 +121,30 @@ int kernel_execution(){
     // Can be changed if needed
     bingo_task_t *task_list[64] = {0};
     uint32_t num_tasks = 0;
+    if (get_current_chip_id() == 0) {
+        ////////////////////////////
+        // User defined workload
+        ///////////////////////////
+        num_tasks = __workload_gemm_merge_load_and_compute(task_list);
+        ////////////////////////////
+        // End user defined workload
+        ////////////////////////////
 
-    num_tasks = __workload_gemm_merge_load_and_compute(task_list);
-    ////////////////////////////
-    // End user defined workload
-    ////////////////////////////
+        // Call bingo runtime
+        bingo_runtime_schedule(
+            task_list, 
+            num_tasks
+        );
+        printf("Chip(%x, %x): [Host] All tasks done.\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+        // Close all the clusters
+        bingo_close_all_clusters(task_list, num_tasks);
+        // Free the output data
 
-    // Call bingo runtime
-    bingo_runtime_schedule(
-        task_list, 
-        num_tasks
-    );
-    printf("Chip(%x, %x): [Host] All tasks done.\n", get_current_chip_loc_x(), get_current_chip_loc_y());
-    // Close all the clusters
-    bingo_close_all_clusters(task_list, num_tasks);
-    // Free the output data
-
-    return 0;
+        return 0;
+    }
+    else
+    {
+        // other chiplets do nothing
+        return 0;
+    }
 }
