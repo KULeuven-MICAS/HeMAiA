@@ -544,14 +544,15 @@ def am_connect_quad_wide_and_narrow_xbar(am, am_quad_wide_xbar, am_quad_narrow_x
              cluster_base_addr + i * clusters_base_offset + clusters_tcdm_size + clusters_periph_size)
         )
         # We do not have the cluster zero mem
-        # Remaining space is reserved for XDMA, and is only accessible from wide xbar
-        am_clusters_leftover_spaces.append(
-            am.new_leaf(
+        # Remaining space is reserved for XDMA
+        cluster_left_over_space = am.new_leaf(
                 f"quad_wide_cluster_{i}_space_after_tcdm", # name
                 clusters_base_offset - clusters_tcdm_size - clusters_periph_size - clusters_zero_mem_size, # length
                 cluster_base_addr + i * clusters_base_offset + clusters_tcdm_size + clusters_periph_size + clusters_zero_mem_size # addr
-            ).attach_to(am_quad_wide_xbar)
-        )
+            )
+        cluster_left_over_space.attach_to(am_quad_wide_xbar)
+        cluster_left_over_space.attach_to(am_quad_narrow_xbar)
+        am_clusters_leftover_spaces.append(cluster_left_over_space)
         addrs_clusters_leftover_spaces.append(
             (cluster_base_addr + i * clusters_base_offset + clusters_tcdm_size + clusters_periph_size + clusters_zero_mem_size,
              cluster_base_addr + i * clusters_base_offset + clusters_base_offset)

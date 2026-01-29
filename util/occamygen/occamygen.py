@@ -615,7 +615,7 @@ def main():
     quad_narrow_xbar.add_input("soc_to_quad")
     quad_narrow_xbar.add_output_entry("quad_to_soc", am_quad_to_soc_axi_xbar)
     for i in range(nr_s1_clusters):
-        quad_narrow_xbar.add_output_multi_entries("cluster_{}".format(i), [am_clusters[i], am_clusters_periph[i]])
+        quad_narrow_xbar.add_output_multi_entries("cluster_{}".format(i), [am_clusters[i], am_clusters_periph[i], am_clusters_leftover_spaces[i]])
         quad_narrow_xbar.add_input("cluster_{}".format(i))
     
     # wide_xbar_quadrant_s1.add_output("top", [])
