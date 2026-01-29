@@ -833,11 +833,13 @@ module ${name}_quad
 
   <%
     narrow_cluster_in = quad_narrow_xbar.__dict__["out_cluster_{}".format(i)].change_iw(context, cluster_cfgs[i]["id_width_in"], "narrow_in_iwc_{}".format(i)).cut(context, cuts_narrx_with_cluster).cdc(context, target_clk="clk_acc_i[{}]".format(i), target_rst="rst_acc_ni[{}]".format(i), name="narrow_cluster_in_cdc_{}".format(i))
+
     narrow_cluster_out = quad_narrow_xbar.__dict__["in_cluster_{}".format(i)].copy(name="narrow_out_{}".format(i),clk="clk_acc_i[{}]".format(i),rst="rst_acc_ni[{}]".format(i)).declare(context)
     narrow_cluster_out.cdc(context, target_clk="clk_i", target_rst="rst_ni", name="narrow_cluster_out_cdc_{}".format(i)).cut(context, cuts_narrx_with_cluster, to=quad_narrow_xbar.__dict__["in_cluster_{}".format(i)])
 
     wide_cluster_in = quad_wide_xbar.__dict__["out_cluster_{}".format(i)].change_iw(context, cluster_cfgs[i]["dma_id_width_in"], "wide_in_iwc_{}".format(i), max_txns_per_id=wide_trans).cut(context, cuts_widex_with_cluster).cdc(context, target_clk="clk_acc_i[{}]".format(i), target_rst="rst_acc_ni[{}]".format(i), name="wide_cluster_in_cdc_{}".format(i))
-    wide_cluster_out = quad_wide_xbar.__dict__["in_cluster_{}".format(i)].copy(name="wide_out_{}".format(i)).declare(context)
+
+    wide_cluster_out = quad_wide_xbar.__dict__["in_cluster_{}".format(i)].copy(name="wide_out_{}".format(i),clk="clk_acc_i[{}]".format(i),rst="rst_acc_ni[{}]".format(i)).declare(context)
     wide_cluster_out.cdc(context, target_clk="clk_i", target_rst="rst_ni", name="wide_cluster_out_cdc_{}".format(i)).cut(context, cuts_widex_with_cluster, to=quad_wide_xbar.__dict__["in_cluster_{}".format(i)])
   %>
   ${cluster_name}_wrapper i_${name}_cluster_${i} (
