@@ -15,7 +15,8 @@ uint32_t __workload_xdma_1d_copy(bingo_task_t **task_list) {
     // 2. Register the tasks
     // 3. Set the task dependency
     // 4. Set the assigned chiplet id and cluster id
-
+    uint8_t current_chip_id = get_current_chip_id();
+    uint8_t cluster_id = 0;
     // 1.1 Get the kernel function address by the kernel name
     check_kernel_tab_ready();
     printf_safe("Chip(%x, %x): [Host] Preparing XDMA 1D Copy Workload\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
@@ -26,6 +27,9 @@ uint32_t __workload_xdma_1d_copy(bingo_task_t **task_list) {
         printf("Error: Kernel symbol lookup failed! Exiting\r\n");
         return 0;
     }
+    uint64_t ptr_l1_data = bingo_l1_alloc(current_chip_id,cluster_id, ARRAY_SIZE_BYTES(data));
+    uint64_t ptr_output_data = bingo_l3_alloc(current_chip_id, ARRAY_SIZE_BYTES(data));
+    uint64_t data_addr_l3 = chiplet_addr_transform((uint64_t)(uintptr_t)(data));
     // 1.2 Prepare the args
     // Args for the xdma copy tasks
     // Arg0: uint32_t src_addr_hi
@@ -34,44 +38,46 @@ uint32_t __workload_xdma_1d_copy(bingo_task_t **task_list) {
     // Arg3: uint32_t dst_addr_lo
     // Arg4: uint32_t size in Byte
     // Task 0: L3 -> Cluster0
-    __snax_kernel_xdma_1d_copy_args_t task_l3_to_cluster0_args;
-    task_l3_to_cluster0_args.src_addr_hi = HIGH32(&data[0]);
-    task_l3_to_cluster0_args.src_addr_lo = LOW32(&data[0]);
-    task_l3_to_cluster0_args.dst_addr_hi = 0; // in single chiplet system, the cluster high addr is always 0
-    task_l3_to_cluster0_args.dst_addr_lo = (uint32_t)cluster_tcdm_start_addr(0);
-    task_l3_to_cluster0_args.size = ARRAY_SIZE_BYTES(data);
+    __snax_kernel_xdma_1d_copy_args_t *task_l3_to_cluster0_args = ( __snax_kernel_xdma_1d_copy_args_t *)bingo_l3_alloc(
+        current_chip_id,
+        sizeof(__snax_kernel_xdma_1d_copy_args_t));
+    task_l3_to_cluster0_args->src_addr_hi = HIGH32(data_addr_l3);
+    task_l3_to_cluster0_args->src_addr_lo = LOW32(data_addr_l3);
+    task_l3_to_cluster0_args->dst_addr_hi = 0; // in single chiplet system, the cluster high addr is always 0
+    task_l3_to_cluster0_args->dst_addr_lo = (uint32_t)ptr_l1_data;
+    task_l3_to_cluster0_args->size = ARRAY_SIZE_BYTES(data);
     // Task 1: Cluster0 -> L3
-    __snax_kernel_xdma_1d_copy_args_t task_cluster0_to_l3_args;
+    __snax_kernel_xdma_1d_copy_args_t *task_cluster0_to_l3_args = ( __snax_kernel_xdma_1d_copy_args_t *)bingo_l3_alloc(
+        current_chip_id,
+        sizeof(__snax_kernel_xdma_1d_copy_args_t));
     // Here we write back to a different location for easy checking
     // We use allocated memory at main
-    uint64_t output_data_ptr = bingo_l3_alloc(get_current_chip_id(), ARRAY_SIZE_BYTES(data));
-    if (!output_data_ptr) {
-        printf("Error: output buffer allocation failed!\r\n");
-        return 0;
-    }
-    task_cluster0_to_l3_args.src_addr_hi = 0;
-    task_cluster0_to_l3_args.src_addr_lo = (uint32_t)cluster_tcdm_start_addr(0);
-    task_cluster0_to_l3_args.dst_addr_hi = HIGH32(output_data_ptr);
-    task_cluster0_to_l3_args.dst_addr_lo = LOW32(output_data_ptr);
-    task_cluster0_to_l3_args.size = ARRAY_SIZE_BYTES(data);
+    
+    task_cluster0_to_l3_args->src_addr_hi = 0;
+    task_cluster0_to_l3_args->src_addr_lo = (uint32_t)ptr_l1_data;
+    task_cluster0_to_l3_args->dst_addr_hi = HIGH32(ptr_output_data);
+    task_cluster0_to_l3_args->dst_addr_lo = LOW32(ptr_output_data);
+    task_cluster0_to_l3_args->size = ARRAY_SIZE_BYTES(data);
 
     // Task 2: Check result
-    __snax_kernel_check_results_args_t task_check_results_args;
-    task_check_results_args.golden_data_addr = (uint32_t)(uintptr_t)(&data[0]);
-    task_check_results_args.output_data_addr = (uint32_t)output_data_ptr;
-    task_check_results_args.data_size = 64;
+    __snax_kernel_check_results_args_t *task_check_results_args = ( __snax_kernel_check_results_args_t *)bingo_l3_alloc(
+        current_chip_id,
+        sizeof(__snax_kernel_check_results_args_t));
+    task_check_results_args->golden_data_addr = (uint32_t)data_addr_l3;
+    task_check_results_args->output_data_addr = (uint32_t)ptr_output_data;
+    task_check_results_args->data_size = 64;
 
     // 2. Register the tasks
     bingo_task_t *task_l3_to_cluster0 = bingo_task_create(xdma_1d_copy_func_addr,
-                                                         (uint32_t)(uintptr_t)(&task_l3_to_cluster0_args),
+                                                         (uint32_t)(uintptr_t)(task_l3_to_cluster0_args),
                                                          get_current_chip_id(), 
                                                          0);
     bingo_task_t *task_cluster0_to_l3 = bingo_task_create(xdma_1d_copy_func_addr,
-                                                         (uint32_t)(uintptr_t)(&task_cluster0_to_l3_args),
+                                                         (uint32_t)(uintptr_t)(task_cluster0_to_l3_args),
                                                          get_current_chip_id(),
                                                          0);
     bingo_task_t *task_check_results = bingo_task_create(check_results_func_addr,
-                                                        (uint32_t)(uintptr_t)(&task_check_results_args),
+                                                        (uint32_t)(uintptr_t)(task_check_results_args),
                                                         get_current_chip_id(),
                                                         0);
     // 3. Set the task dependency
