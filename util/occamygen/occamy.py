@@ -519,13 +519,15 @@ def am_connect_quad_wide_and_narrow_xbar(am, am_quad_wide_xbar, am_quad_narrow_x
     addrs_clusters_leftover_spaces = []
     for i in range(nr_clusters):
         # TCDM is accessible from both wide/narrow xbar
-        am_clusters.append(
-            am.new_leaf(
+        cluster_tcdm = am.new_leaf(
                 f"quad_wide_cluster_{i}_tcdm", # name
                 clusters_tcdm_size,         # length
                 cluster_base_addr + i * clusters_base_offset # addr
-            ).attach_to(am_quad_wide_xbar).attach_to(am_quad_narrow_xbar)
-        )
+            )
+        cluster_tcdm.attach_to(am_quad_narrow_xbar)
+        cluster_tcdm.attach_to(am_quad_wide_xbar)
+        am_clusters.append(cluster_tcdm)
+        
         addrs_clusters.append(
             (cluster_base_addr + i * clusters_base_offset, cluster_base_addr + i * clusters_base_offset + clusters_tcdm_size)
         )
