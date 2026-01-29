@@ -8,10 +8,14 @@
 
 #define __SNAX_KERNEL_ARGS_DEFINE typedef struct __attribute__((packed, aligned(4)))
 
+
+
 // Define the argument structures for the device kernels
 // Each structure is packed and aligned to 4 bytes
 // The definition should match the kernel function argument parsing in snax_kernel_lib.h
 
+
+///////////////////////// Cluster-level Kernels ////////////////////////
 // Dummy kernel args
 __SNAX_KERNEL_ARGS_DEFINE __snax_kernel_dummy_args {
   uint32_t dummy_arg_0;    
@@ -155,6 +159,7 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_kernel_minimal_cfg_start_gemm_and_wait_args{
   uint32_t output_D_addr_lo;
 } __snax_kernel_minimal_cfg_start_gemm_and_wait_args_t;
 
+//////////////////////// BINGO Core-level Kernels ////////////////////////
 // BINGO Dummy kernel args
 __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_dummy_args {
   uint32_t dummy_input;            
@@ -167,9 +172,6 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_entry_args {
 __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_exit_args {
   uint32_t exit_code;            
 } __snax_bingo_kernel_exit_args_t;
-
-
-
 
 // BINGO IDMA 1D Copy kernel args
 __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_idma_1d_copy_args {
