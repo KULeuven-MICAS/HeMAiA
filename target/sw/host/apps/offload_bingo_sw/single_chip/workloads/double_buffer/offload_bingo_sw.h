@@ -22,6 +22,7 @@ uint32_t __workload_double_buffer(bingo_task_t **task_list) {
 
     // 1.Get the kernel function address by the kernel name
     check_kernel_tab_ready();
+    printf_safe("Chip(%x, %x): [Host] Preparing Double Buffer Workload\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
     uint32_t double_buffer_func_addr = get_device_function("__snax_kernel_double_buffer_example");
     uint32_t check_results_func_addr = get_device_function("__snax_kernel_check_results");
     if (double_buffer_func_addr == SNAX_SYMTAB_END_FN_ADDR || check_results_func_addr == SNAX_SYMTAB_END_FN_ADDR) {

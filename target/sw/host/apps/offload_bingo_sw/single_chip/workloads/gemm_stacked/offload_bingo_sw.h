@@ -45,6 +45,7 @@ uint32_t __workload_gemm_stacked(bingo_task_t **task_list)
 
     // 1 Get the needed kernel function address by the kernel name
     check_kernel_tab_ready();
+    printf_safe("Chip(%x, %x): [Host] Preparing GEMM Stacked Workload\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
 
     uint32_t __snax_kernel_xdma_1d_copy_func_addr = get_device_function("__snax_kernel_xdma_1d_copy");
     uint32_t __snax_kernel_idma_1d_copy_func_addr = get_device_function("__snax_kernel_idma_1d_copy");

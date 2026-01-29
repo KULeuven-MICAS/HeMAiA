@@ -52,7 +52,8 @@ def define_workload_params():
         'transposeA': 0,
         'transposeB': 0,
         'accumPrevC': 0
-    }    
+    }
+    params["app_name"] = "Single-Chip GEMM Seperate Load and Compute Parallel"
     # Derived sizes
     params['A_size'] = params['M'] * params['K'] * params['meshRow'] * params['tileSize'] * 1 # int8
     params['B_size'] = params['K'] * params['N'] * params['meshCol'] * params['tileSize'] * 1 # int8
@@ -194,7 +195,7 @@ def main():
     params = define_workload_params()
     mem_handles = define_memory_handles(params)
     dfg = create_dfg(params, mem_handles)
-    dfg.bingo_compile_dfg(output_dir, output_file_name, extra_include_header_list=["gemm_data.h"])
+    dfg.bingo_compile_dfg(params["app_name"], output_dir, output_file_name, extra_include_header_list=["gemm_data.h"])
 
 
 

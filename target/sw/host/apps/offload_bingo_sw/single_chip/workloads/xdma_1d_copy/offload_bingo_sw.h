@@ -18,6 +18,7 @@ uint32_t __workload_xdma_1d_copy(bingo_task_t **task_list) {
 
     // 1.1 Get the kernel function address by the kernel name
     check_kernel_tab_ready();
+    printf_safe("Chip(%x, %x): [Host] Preparing XDMA 1D Copy Workload\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
     uint32_t xdma_1d_copy_func_addr = get_device_function("__snax_kernel_xdma_1d_copy");
     uint32_t check_results_func_addr = get_device_function("__snax_kernel_check_results");
     if (xdma_1d_copy_func_addr == SNAX_SYMTAB_END_FN_ADDR ||
@@ -58,15 +59,21 @@ uint32_t __workload_xdma_1d_copy(bingo_task_t **task_list) {
     __snax_kernel_check_results_args_t task_check_results_args;
     task_check_results_args.golden_data_addr = (uint32_t)(uintptr_t)(&data[0]);
     task_check_results_args.output_data_addr = (uint32_t)output_data_ptr;
-    task_check_results_args.data_size = ARRAY_SIZE_BYTES(data);
+    task_check_results_args.data_size = 64;
 
     // 2. Register the tasks
     bingo_task_t *task_l3_to_cluster0 = bingo_task_create(xdma_1d_copy_func_addr,
                                                          (uint32_t)(uintptr_t)(&task_l3_to_cluster0_args),
                                                          get_current_chip_id(), 
                                                          0);
-    bingo_task_t *task_cluster0_to_l3 = bingo_task_create(xdma_1d_copy_func_addr, (uint32_t)(uintptr_t)(&task_cluster0_to_l3_args),get_current_chip_id(), 1);
-    bingo_task_t *task_check_results = bingo_task_create(check_results_func_addr, (uint32_t)(uintptr_t)(&task_check_results_args),get_current_chip_id(), 0);
+    bingo_task_t *task_cluster0_to_l3 = bingo_task_create(xdma_1d_copy_func_addr,
+                                                         (uint32_t)(uintptr_t)(&task_cluster0_to_l3_args),
+                                                         get_current_chip_id(),
+                                                         0);
+    bingo_task_t *task_check_results = bingo_task_create(check_results_func_addr,
+                                                        (uint32_t)(uintptr_t)(&task_check_results_args),
+                                                        get_current_chip_id(),
+                                                        0);
     // 3. Set the task dependency
     //      task_l3_to_cluster0
     //       |

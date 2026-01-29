@@ -946,7 +946,7 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         f.write(f"                                          host_kernel_list_chip_{chiplet_id:02x},\n")
         f.write(f"                                          global_task_id_to_host_task_id_chip_{chiplet_id:02x});\n")
 
-    def bingo_emit_offload_c_code(self, extra_include_header_list: list[str], output_path: str) -> None:
+    def bingo_emit_offload_c_code(self, extra_include_header_list: list[str], output_path: str, app_name: str) -> None:
         """Emit the offload_hw_bingo.h file with kernel_execution logic."""
         
         # 1. Collect Handles
@@ -959,11 +959,12 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
             self._emit_headers(f, extra_include_header_list)
             
             # Step 2: Emit Debug Kernel List
-            self._emit_debug_kernel_list(f)
+            self._emit_debug_kernel_list(f, app_name)
 
             # Step 3: Emit kernel_execution function structure
             f.write("int kernel_execution(){\n")
             f.write("    check_kernel_tab_ready();\n")
+            f.write(f"    printf_safe(\"Chip(%x, %x): [Host] Preparing {app_name} Workload\\r\\n\", get_current_chip_loc_x(), get_current_chip_loc_y());\n")
             f.write("    uint32_t current_chip_id = get_current_chip_id();\n\n")
 
             # Step 4: Iterate over each chiplet to generate isolated blocks
@@ -989,7 +990,7 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
             
             f.write("    return 0;\n")
             f.write("}\n")
-    def bingo_compile_dfg(self, output_dir: str, output_file_name: str, extra_include_header_list: list[str]) -> None:
+    def bingo_compile_dfg(self, app_name: str, output_dir: str, output_file_name: str, extra_include_header_list: list[str]) -> None:
         """Compile the DFG by assigning dep info and emitting C code."""
         # 1. Transformations
         # Add Entry Node
@@ -1014,6 +1015,7 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         
         # 2. Emit C Code
         self.bingo_emit_offload_c_code(
+            app_name=app_name,
             output_path=os.path.join(output_dir, output_file_name),
             extra_include_header_list=extra_include_header_list,
         )

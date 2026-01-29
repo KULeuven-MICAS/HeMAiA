@@ -58,6 +58,7 @@ def define_workload_params():
         "transposeB": 0,
         "accumPrevC": 0,
     }
+    params["app_name"] = "Single-Chip GEMM Stacked"
     # Derived sizes
     params["A1_size"] = (
         params["M1"] * params["K1"] * params["meshRow"] * params["tileSize"] * 1
@@ -273,7 +274,7 @@ def main():
     params = define_workload_params()
     mem_handles = define_memory_handles(params)
     dfg = create_dfg(params, mem_handles)
-    dfg.bingo_compile_dfg(output_dir, output_file_name, extra_include_header_list=["gemm_data.h"])
+    dfg.bingo_compile_dfg(params["app_name"], output_dir, output_file_name, extra_include_header_list=["gemm_data.h"])
 
 if __name__ == "__main__":
     main()

@@ -11,6 +11,7 @@
 uint32_t __workload_dummy(bingo_task_t **task_list) {
 
     check_kernel_tab_ready();
+    printf_safe("Chip(%x, %x): [Host] Preparing Dummy Workload\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
     uint32_t dummy_func_addr = get_device_function("__snax_kernel_dummy");
     if (dummy_func_addr == SNAX_SYMTAB_END_FN_ADDR) {
         printf_safe("Error: Kernel symbol lookup failed! Exiting\r\n");
