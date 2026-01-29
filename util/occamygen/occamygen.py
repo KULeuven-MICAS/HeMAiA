@@ -780,13 +780,8 @@ def main():
     ###############
     if args.testharness_sv:
         testharness_kwargs = occamy.get_testharness_kwargs(
-            soc_wide_xbar, soc_axi_lite_narrow_periph_xbar, occamy_cfg["hemaia_multichip"]["single_chip_id"], solder, args.name)
+            occamy_cfg, soc2router_bus, router2soc_bus, name)
         write_template(args.testharness_sv, outdir, **testharness_kwargs)
-
-    if args.multichip_testharness_sv:
-        multichip_testharness_kwargs = occamy.get_multichip_testharness_kwargs(
-            occamy_cfg, soc2router_bus, router2soc_bus, args.name)
-        write_template(args.multichip_testharness_sv, outdir, **multichip_testharness_kwargs)
 
     if args.mem_macro_testharness_sv:
         mem_macro_testharness_kwargs = occamy.get_mem_macro_testharness_kwargs(

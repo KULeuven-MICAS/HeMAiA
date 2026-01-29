@@ -248,15 +248,11 @@ def prepare_and_copy_sim(repo_root: Path, tasks_info: List[Tuple[Path, str]]) ->
                 dst.unlink()
 
         if src.is_dir():
-            else:
-                dst.unlink()
-
-        if src.is_dir():
             shutil.copytree(src, dst)
         else:
             shutil.copy2(src, dst)
 
-    for task_dir, _ in tasks_info:
+    for task_dir, _, _ in tasks_info:
         for src in artifacts:
             # Mirror the relative location within target/sim into the task directory
             rel = src.relative_to(sim_root)
