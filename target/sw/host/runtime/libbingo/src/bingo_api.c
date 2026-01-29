@@ -465,7 +465,7 @@ void bingo_runtime_schedule(bingo_task_t **task_list, uint32_t num_tasks) {
         }
         
     }
-    printf_safe("Chip(%x, %x): [Host] Starting runtime schedule for %u local tasks\r\n",
+    printf_safe("Chip(%x, %x): [Host] Starting Bingo SW schedule for %u local tasks\r\n",
            get_current_chip_loc_x(), get_current_chip_loc_y(), local_total);
     if (local_total == 0) return; // Nothing to do
 
@@ -611,7 +611,7 @@ void bingo_runtime_schedule(bingo_task_t **task_list, uint32_t num_tasks) {
     o1heapFree(bingo_get_l2_heap_manager(get_current_chip_id()), (uint64_t)sched->ready_ring);
     // Desctroy the scheduler instance
     o1heapFree(bingo_get_l2_heap_manager(get_current_chip_id()), (uint64_t)sched);
-    printf("Chip(%x, %x): [Host] Runtime schedule completed for all %u local tasks\r\n",
+    printf_safe("Chip(%x, %x): [Host] Bingo SW schedule completed for all %u local tasks\r\n",
            get_current_chip_loc_x(), get_current_chip_loc_y(), local_total);
 }
 
@@ -699,8 +699,8 @@ void bingo_hw_scheduler_init_pm(){
             writew(core_power_domain, (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_core_power_domain_addr(idx)));
         }
     }
-    // 6. quad_ctrl_enable_idle_pm_addr: set to 1 to enable power manager
-    writew(0,                             (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_enable_idle_pm_addr()));
+    // 6. quad_ctrl_enable_idle_pm_addr: set to 1 to enable idle power management
+    writew(1,                             (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_enable_idle_pm_addr()));
     asm volatile("fence" ::: "memory");
 }
 
