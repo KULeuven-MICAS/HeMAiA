@@ -28,11 +28,35 @@ ifndef APP
     endif
 endif
 
-# Default DEVICE_APPS from DEV_APP if not explicitly set in the app Makefile
-ifndef DEVICE_APPS
-    ifneq ($(DEV_APP),)
-        DEVICE_APPS = $(DEV_APP)
+# Validation of input variables
+ALLOWED_HOST_APP_TYPES = host_only offload_legacy offload_bingo_sw offload_bingo_hw
+ALLOWED_CHIP_TYPES     = single_chip multi_chip
+
+ifeq ($(filter $(HOST_APP_TYPE),$(ALLOWED_HOST_APP_TYPES)),)
+    $(error Invalid or missing HOST_APP_TYPE: "$(HOST_APP_TYPE)". Allowed values: $(ALLOWED_HOST_APP_TYPES))
+endif
+
+ifeq ($(filter $(CHIP_TYPE),$(ALLOWED_CHIP_TYPES)),)
+    $(error Invalid or missing CHIP_TYPE: "$(CHIP_TYPE)". Allowed values: $(ALLOWED_CHIP_TYPES))
+endif
+
+# Check for WORKLOAD if not offload_legacy
+ifneq ($(HOST_APP_TYPE), offload_legacy)
+    ifeq ($(WORKLOAD),)
+        $(error WORKLOAD must be specified for HOST_APP_TYPE=$(HOST_APP_TYPE))
     endif
+endif
+
+# Check for DEV_APP if it's an offload type
+ifneq ($(filter $(HOST_APP_TYPE),offload_legacy offload_bingo_sw offload_bingo_hw),)
+    ifeq ($(DEV_APP),)
+        $(error DEV_APP must be specified for offload applications)
+    endif
+endif
+
+# Use DEV_APP if provided to restrict or set DEVICE_APPS
+ifneq ($(DEV_APP),)
+    DEVICE_APPS := $(DEV_APP)
 endif
 
 ######################
