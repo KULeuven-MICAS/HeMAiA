@@ -39,9 +39,9 @@ uint32_t __workload_gemm_merge_load_and_compute(bingo_task_t** task_list) {
     uint64_t output_data_ptr = bingo_l3_alloc(assigned_chip_id, ARRAY_SIZE_BYTES(D));
     // 1.2 Prepare the args
     // versacore args
-    __snax_kernel_gemm_intra_chiplet_args* gemm_args = (__snax_kernel_gemm_intra_chiplet_args*)bingo_l3_alloc(
+    __snax_kernel_gemm_intra_chiplet_args_t* gemm_args = (__snax_kernel_gemm_intra_chiplet_args_t*)bingo_l3_alloc(
         assigned_chip_id,
-        sizeof(__snax_kernel_gemm_intra_chiplet_args));
+        sizeof(__snax_kernel_gemm_intra_chiplet_args_t));
     // A matrix
     gemm_args->input_A_addr_hi = HIGH32(&A[0]);
     gemm_args->input_A_addr_lo = LOW32(&A[0]);
@@ -60,8 +60,8 @@ uint32_t __workload_gemm_merge_load_and_compute(bingo_task_t** task_list) {
 
     // D matrix (output)
    
-    gemm_args->output_data_addr_hi = HIGH32(output_data_ptr);
-    gemm_args->output_data_addr_lo = LOW32(output_data_ptr);
+    gemm_args->output_D_addr_hi = HIGH32(output_data_ptr);
+    gemm_args->output_D_addr_lo = LOW32(output_data_ptr);
     // Matrix dimensions
     gemm_args->M = M;   // M
     gemm_args->K = K;   // K
@@ -69,9 +69,9 @@ uint32_t __workload_gemm_merge_load_and_compute(bingo_task_t** task_list) {
     // SUs
     gemm_args->array_shape = array_shape;
     // transpose A
-    gemm_args->transposed_A = transposed_A;
+    gemm_args->transpose_A = transposed_A;
     // transpose B
-    gemm_args->transposed_B = transposed_B;
+    gemm_args->transpose_B = transposed_B;
     // accumPrevC
     gemm_args->accumPrevC = accumPrevC;
 
