@@ -53,7 +53,13 @@ def define_workload_params():
         'transposeB': 0,
         'accumPrevC': 0
     }
-  
+    params["app_name"] = "Single-Chip GEMM Seperate Load and Compute Serial"
+    # Derived sizes
+    params['A_size'] = params['M'] * params['K'] * params['meshRow'] * params['tileSize'] * 1 # int8
+    params['B_size'] = params['K'] * params['N'] * params['meshCol'] * params['tileSize'] * 1 # int8
+    params['C_size'] = params['M'] * params['N'] * params['meshRow'] * params['meshCol'] * 4 # int32
+    params['D_size'] = params['M'] * params['N'] * params['meshRow'] * params['meshCol'] * 4 # int32
+    return params
 def define_memory_handles(params):
     """Defines memory handles used in the DFG."""
     # Here we only have A, B, D in L3

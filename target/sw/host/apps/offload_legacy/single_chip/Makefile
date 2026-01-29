@@ -7,6 +7,7 @@
 HOST_APP_TYPE = offload_legacy
 CHIP_TYPE     = single_chip
 SRCS = src/offload_legacy_single_chip.c
+DEV_APP = snax-test-integration
 
 BINGO_HOST ?= 0 # True to include the bingo runtime
 INCL_DEVICE_BINARY ?= 1 # True to include the device binary

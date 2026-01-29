@@ -15,7 +15,7 @@ import os
 import re
 
 # Add data utility path
-sys.path.append(os.path.join(os.path.dirname(__file__), "../../../../../../util/sim/"))
+sys.path.append(os.path.join(os.path.dirname(__file__), "../../../../../../../../util/sim/"))
 from data_utils import format_scalar_definition, format_vector_definition  # noqa E402
 
 np.random.seed(320)

@@ -959,7 +959,7 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
             self._emit_headers(f, extra_include_header_list)
             
             # Step 2: Emit Debug Kernel List
-            self._emit_debug_kernel_list(f, app_name)
+            self._emit_debug_kernel_list(f)
 
             # Step 3: Emit kernel_execution function structure
             f.write("int kernel_execution(){\n")

@@ -237,7 +237,7 @@ def create_dfg(params, mem_handles):
         node_name="Check_D2",
         kernel_name="__host_bingo_kernel_check_result",
         kernel_args=HostBingoKernelCheckResultArgs(
-            golden_data_addr=mem_handles["D2_golden_symbol_l3"],
+            golden_data_addr=mem_handles["D2_symbol_l3"],
             output_data_addr=mem_handles["D2_result_l3"],
             data_size=params["D2_size"],
         ),
