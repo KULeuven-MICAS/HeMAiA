@@ -98,7 +98,7 @@ single-sw: $(CFG)
 #########################
 # This target prepares the software binaries for simulation and/or FPGA execution.
 apps:
-	$(MAKE) -C ./target/sim apps CFG=$(CFG) \
+	$(MAKE) -C ./target/sim apps CFG=$(CFG) USER_FLAGS="$(USER_FLAGS)" \
 		HOST_APP_TYPE=$(HOST_APP_TYPE) \
 		CHIP_TYPE=$(CHIP_TYPE) \
 		WORKLOAD=$(WORKLOAD) \
