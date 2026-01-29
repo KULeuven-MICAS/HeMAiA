@@ -37,9 +37,9 @@ def get_args():
     return parser.parse_args()
 
 def define_workload_params():
-    meshRow = 1
-    tileSize = 8
-    meshCol = 64
+    meshRow = 32
+    tileSize = 4
+    meshCol = 32
     params = {
         'M': 1,
         'K': 1,
@@ -63,9 +63,9 @@ def define_memory_handles(params):
     """Defines memory handles used in the DFG."""
     # Here we only have A, B, D in L3
     mem_handles = {}
-    mem_handles['A_L3'] = BingoMemSymbol('A', params['A_size'])
-    mem_handles['B_L3'] = BingoMemSymbol('B', params['B_size'])
-    mem_handles['D_L3'] = BingoMemSymbol('D', params['D_size'])
+    mem_handles['A_L3'] = BingoMemSymbol('A')
+    mem_handles['B_L3'] = BingoMemSymbol('B')
+    mem_handles['D_L3'] = BingoMemSymbol('D')
     # L1 buffers
     # Chip 0, Cluster 0
     chip_id = 0
