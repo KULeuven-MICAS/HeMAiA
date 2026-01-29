@@ -990,7 +990,7 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
             
             f.write("    return 0;\n")
             f.write("}\n")
-    def bingo_compile_dfg(self, app_name: str, output_dir: str, output_file_name: str, extra_include_header_list: list[str]) -> None:
+    def bingo_compile_dfg(self, app_name: str, output_dir: str, output_file_name: str, extra_include_header_list: list[str] | None) -> None:
         """Compile the DFG by assigning dep info and emitting C code."""
         # 1. Transformations
         # Add Entry Node

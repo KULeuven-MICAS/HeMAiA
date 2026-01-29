@@ -18,7 +18,7 @@
 ///////////////////////// Cluster-level Kernels ////////////////////////
 // Dummy kernel args
 __SNAX_KERNEL_ARGS_DEFINE __snax_kernel_dummy_args {
-  uint32_t dummy_arg_0;    
+  uint32_t dummy_input;    
 } __snax_kernel_dummy_args_t;
 
 // CSR kernel args

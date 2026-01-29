@@ -224,6 +224,17 @@ class SnaxBingoKernelGemmMinimalArgs(BingoKernelArgs):
         self._process_addr(self.output_D_addr, "output_D_addr", assignments, handle_name_map, split_64bit=False)
         return assignments
 
+# HOST BINGO DUMMY
+class HostBingoKernelDummyArgs(BingoKernelArgs):
+    def __init__(self, dummy_input: int):
+        self.dummy_input = dummy_input
+
+    def get_struct_name(self) -> str:
+        return "__host_bingo_kernel_dummy_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        return {"dummy_input": str(self.dummy_input)}
+
 # HOST BINGO Check Result
 class HostBingoKernelCheckResultArgs(BingoKernelArgs):
     def __init__(self,

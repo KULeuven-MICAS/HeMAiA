@@ -780,7 +780,7 @@ def main():
     ###############
     if args.testharness_sv:
         testharness_kwargs = occamy.get_testharness_kwargs(
-            occamy_cfg, soc2router_bus, router2soc_bus, name)
+            occamy_cfg, soc2router_bus, router2soc_bus, args.name)
         write_template(args.testharness_sv, outdir, **testharness_kwargs)
 
     if args.mem_macro_testharness_sv:
