@@ -37,7 +37,8 @@ module hemaia_clock_counter #(
 endmodule
 
 
-(* no_ungroup *) (* no_boundary_optimization *) (* keep_hierarchy *) (* no_clock_gating *) (* KEEP_HIERARCHY = "TRUE" *)
+(* no_ungroup *) (* no_boundary_optimization *) (* keep_hierarchy *) (* no_clock_gating *)
+    (* KEEP_HIERARCHY = "TRUE" *)
 module hemaia_clock_divider #(
     parameter int MaxDivisionWidth = 4,
     parameter int DefaultDivision  = 1
@@ -52,6 +53,7 @@ module hemaia_clock_divider #(
 );
 
   logic [MaxDivisionWidth-1:0] divisor_q;
+  logic clk_gated;
   logic new_divisor_ready;
 
 
@@ -74,10 +76,12 @@ module hemaia_clock_divider #(
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       new_divisor_ready <= '0;
+      clk_gated <= '0;
       divisor_q <= DefaultDivision[MaxDivisionWidth-1:0];
     end else if (new_divisor_ready && (cnt == 0)) begin
       new_divisor_ready <= '0;
-      divisor_q <= divisor_i;
+      clk_gated <= (divisor_i == 0);
+      divisor_q <= (divisor_i != 0) ? divisor_i : divisor_q;
     end else if (divisor_valid_i) begin
       new_divisor_ready <= 1'b1;
     end
@@ -133,7 +137,7 @@ module hemaia_clock_divider #(
   (* DONT_TOUCH = "TRUE" *)
   tc_clk_gating i_clk_o_gate (
       .clk_i(clk_ungated),
-      .en_i(divisor_q != '0 && rst_ni),
+      .en_i((~clk_gated) && rst_ni),
       .test_en_i(test_mode_i),
       .clk_o(clk_o)
   );
