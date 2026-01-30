@@ -12,7 +12,12 @@
 
 module ${name}_quad_ctrl
   import ${name}_pkg::*;
-(
+#(
+  parameter type axi_quad_out_req_t = logic,
+  parameter type axi_quad_out_rsp_t = logic,
+  parameter type axi_quad_in_req_t  = logic,
+  parameter type axi_quad_in_rsp_t  = logic
+)(
   input  logic     clk_i,
   input  logic     rst_ni,
   input  logic     test_mode_i,
@@ -31,10 +36,10 @@ module ${name}_quad_ctrl
   input  ${soc_narrow_xbar.out_quad.req_type()} soc_in_req_i,
   output ${soc_narrow_xbar.out_quad.rsp_type()} soc_in_rsp_o,
   // Quadrant narrow ports
-  output ${quad_ctrl_soc_to_quad_xbar.out_clusters.req_type()} quad_out_req_o,
-  input  ${quad_ctrl_soc_to_quad_xbar.out_clusters.rsp_type()} quad_out_rsp_i,
-  input  ${quad_ctrl_quad_to_soc_xbar.in_clusters.req_type()} quad_in_req_i,
-  output ${quad_ctrl_quad_to_soc_xbar.in_clusters.rsp_type()} quad_in_rsp_o
+  output axi_quad_out_req_t quad_out_req_o,
+  input  axi_quad_out_rsp_t quad_out_rsp_i,
+  input  axi_quad_in_req_t  quad_in_req_i,
+  output axi_quad_in_rsp_t  quad_in_rsp_o
 );
 
   /// Bingo HW Manager Signals

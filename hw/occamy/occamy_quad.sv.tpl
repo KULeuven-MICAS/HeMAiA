@@ -252,28 +252,31 @@ module ${name}_quad
   <%
     quad_narrow_out_id_width = cluster_cfgs[0]["id_width_in"]
     quad_narrow_out_user_width = cluster_cfgs[0]["user_width"]
+    #// We need to connect the cluster output to the quad ctrl first
+    quad_ctrl_in_clusters_id_width = quad_ctrl_quad_to_soc_xbar.in_clusters.iw
+    quad_ctrl_in_clusters_user_width = quad_ctrl_quad_to_soc_xbar.in_clusters.uw
     soc_narrow_out_id_width = soc_narrow_xbar.in_quad.iw
     soc_narrow_out_user_width = soc_narrow_xbar.in_quad.uw
   %>
   
-  ${soc_narrow_xbar.in_quad.req_type()} narrow_cluster_out_iwc_req;
-  ${soc_narrow_xbar.in_quad.rsp_type()} narrow_cluster_out_iwc_rsp;
-  typedef logic [${soc_narrow_xbar.iw-quad_narrow_out_id_width-1}:0] narrow_cluster_out_iwc_pre_id_t;
+  ${quad_ctrl_quad_to_soc_xbar.in_clusters.req_type()} narrow_cluster_out_iwc_req;
+  ${quad_ctrl_quad_to_soc_xbar.in_clusters.rsp_type()} narrow_cluster_out_iwc_rsp;
+  typedef logic [${quad_ctrl_in_clusters_id_width-quad_narrow_out_id_width-1}:0] narrow_cluster_out_iwc_pre_id_t;
 
   axi_id_prepend #(
-    .slv_aw_chan_t  ( floo_${noc_name}_noc_pkg::axi_noc_narrow_out_aw_chan_t ),
-    .slv_w_chan_t   ( floo_${noc_name}_noc_pkg::axi_noc_narrow_out_w_chan_t ),
-    .slv_b_chan_t   ( floo_${noc_name}_noc_pkg::axi_noc_narrow_out_b_chan_t ),
-    .slv_ar_chan_t  ( floo_${noc_name}_noc_pkg::axi_noc_narrow_out_ar_chan_t ),
-    .slv_r_chan_t   ( floo_${noc_name}_noc_pkg::axi_noc_narrow_out_r_chan_t ),
-    .mst_aw_chan_t  ( ${soc_narrow_xbar.in_quad.aw_chan_type()} ),
-    .mst_w_chan_t   ( ${soc_narrow_xbar.in_quad.w_chan_type()}  ),
-    .mst_b_chan_t   ( ${soc_narrow_xbar.in_quad.b_chan_type()}  ),
-    .mst_ar_chan_t  ( ${soc_narrow_xbar.in_quad.ar_chan_type()} ),
-    .mst_r_chan_t   ( ${soc_narrow_xbar.in_quad.r_chan_type()}  ),
+    .slv_aw_chan_t  ( floo_${noc_name}_noc_pkg::axi_noc_narrow_out_aw_chan_t   ),
+    .slv_w_chan_t   ( floo_${noc_name}_noc_pkg::axi_noc_narrow_out_w_chan_t    ),
+    .slv_b_chan_t   ( floo_${noc_name}_noc_pkg::axi_noc_narrow_out_b_chan_t    ),
+    .slv_ar_chan_t  ( floo_${noc_name}_noc_pkg::axi_noc_narrow_out_ar_chan_t   ),
+    .slv_r_chan_t   ( floo_${noc_name}_noc_pkg::axi_noc_narrow_out_r_chan_t    ),
+    .mst_aw_chan_t  ( ${quad_ctrl_quad_to_soc_xbar.in_clusters.aw_chan_type()} ),
+    .mst_w_chan_t   ( ${quad_ctrl_quad_to_soc_xbar.in_clusters.w_chan_type()}  ),
+    .mst_b_chan_t   ( ${quad_ctrl_quad_to_soc_xbar.in_clusters.b_chan_type()}  ),
+    .mst_ar_chan_t  ( ${quad_ctrl_quad_to_soc_xbar.in_clusters.ar_chan_type()} ),
+    .mst_r_chan_t   ( ${quad_ctrl_quad_to_soc_xbar.in_clusters.r_chan_type()}  ),
     .NoBus          ( 1 ),
     .AxiIdWidthSlvPort ( ${quad_narrow_out_id_width} ),
-    .AxiIdWidthMstPort ( ${soc_narrow_out_id_width} )
+    .AxiIdWidthMstPort ( ${quad_ctrl_in_clusters_id_width} )
   ) i_narrow_cluster_out_iwc (
     .pre_id_i           (narrow_cluster_out_iwc_pre_id_t'(0)),
     .slv_aw_chans_i     (narrow_cluster_out_tlb_req.aw),
@@ -308,17 +311,17 @@ module ${name}_quad
     .mst_r_readies_o    (narrow_cluster_out_iwc_req.r_ready)
   );
 
-  ${soc_narrow_xbar.in_quad.req_type()} narrow_cluster_out_ctrl_req;
-  ${soc_narrow_xbar.in_quad.rsp_type()} narrow_cluster_out_ctrl_rsp;
+  ${quad_ctrl_quad_to_soc_xbar.in_clusters.req_type()} narrow_cluster_out_ctrl_req;
+  ${quad_ctrl_quad_to_soc_xbar.in_clusters.rsp_type()} narrow_cluster_out_ctrl_rsp;
   axi_multicut #(
     .NoCuts     ( ${cuts_narrx_with_ctrl}),
-    .aw_chan_t  ( ${soc_narrow_xbar.in_quad.aw_chan_type()}),
-    .w_chan_t   ( ${soc_narrow_xbar.in_quad.w_chan_type()}),
-    .b_chan_t   ( ${soc_narrow_xbar.in_quad.b_chan_type()}),
-    .ar_chan_t  ( ${soc_narrow_xbar.in_quad.ar_chan_type()}),
-    .r_chan_t   ( ${soc_narrow_xbar.in_quad.r_chan_type()}),
-    .axi_req_t  ( ${soc_narrow_xbar.in_quad.req_type()}),
-    .axi_resp_t ( ${soc_narrow_xbar.in_quad.rsp_type()})
+    .aw_chan_t  ( ${quad_ctrl_quad_to_soc_xbar.in_clusters.aw_chan_type()}),
+    .w_chan_t   ( ${quad_ctrl_quad_to_soc_xbar.in_clusters.w_chan_type()} ),
+    .b_chan_t   ( ${quad_ctrl_quad_to_soc_xbar.in_clusters.b_chan_type()} ),
+    .ar_chan_t  ( ${quad_ctrl_quad_to_soc_xbar.in_clusters.ar_chan_type()}),
+    .r_chan_t   ( ${quad_ctrl_quad_to_soc_xbar.in_clusters.r_chan_type()} ),
+    .axi_req_t  ( ${quad_ctrl_quad_to_soc_xbar.in_clusters.req_type()}    ),
+    .axi_resp_t ( ${quad_ctrl_quad_to_soc_xbar.in_clusters.rsp_type()}    )
   ) i_narrow_cluster_out_ctrl (
     .clk_i      (clk_i),
     .rst_ni     (rst_ni),
@@ -658,7 +661,12 @@ module ${name}_quad
   /////////////////////
   // Quad Controller //
   /////////////////////
-  ${name}_quad_ctrl i_${name}_quad_ctrl (
+  ${name}_quad_ctrl #(
+    .axi_quad_out_req_t (${soc_narrow_xbar.out_quad.req_type()}),
+    .axi_quad_out_rsp_t (${soc_narrow_xbar.out_quad.rsp_type()}),
+    .axi_quad_in_req_t  (${quad_ctrl_quad_to_soc_xbar.in_clusters.req_type()}),
+    .axi_quad_in_rsp_t  (${quad_ctrl_quad_to_soc_xbar.in_clusters.rsp_type()})
+  ) i_${name}_quad_ctrl (
     .clk_i,
     .rst_ni,
     .test_mode_i,
@@ -813,21 +821,21 @@ module ${name}_quad
     (* false_path *) .hart_base_id_i      (hart_base_id_${i}),
     (* false_path *) .cluster_base_addr_i (cluster_base_addr[${i}]),
     (* false_path *) .boot_addr_i         (boot_addr_i),
-    .csr_req_o           (csr_req_${i}       ),
-    .csr_req_valid_o     (csr_req_valid_${i} ),
-    .csr_req_ready_i     (csr_req_ready_${i} ),
-    .csr_resp_i          (csr_resp_${i}      ),
-    .csr_resp_valid_i    (csr_resp_valid_${i}),
-    .csr_resp_ready_o    (csr_resp_ready_${i}),
-    .narrow_in_req_i     (narrow_in_cdc_dst_req_${i}),
-    .narrow_in_resp_o    (narrow_in_cdc_dst_rsp_${i}),
+    .csr_req_o           (csr_req_${i}               ),
+    .csr_req_valid_o     (csr_req_valid_${i}         ),
+    .csr_req_ready_i     (csr_req_ready_${i}         ),
+    .csr_resp_i          (csr_rsp_cdc_${i}           ),
+    .csr_resp_valid_i    (csr_rsp_cdc_valid_${i}     ),
+    .csr_resp_ready_o    (csr_rsp_cdc_ready_${i}     ),
+    .narrow_in_req_i     (narrow_in_cdc_dst_req_${i} ),
+    .narrow_in_resp_o    (narrow_in_cdc_dst_rsp_${i} ),
     .narrow_out_req_o    (narrow_out_cdc_src_req_${i}),
     .narrow_out_resp_i   (narrow_out_cdc_src_rsp_${i}),
-    .wide_out_req_o      (wide_out_cdc_src_req_${i}),
-    .wide_out_resp_i     (wide_out_cdc_src_rsp_${i}),
-    .wide_in_req_i       (wide_in_cdc_dst_req_${i}),
-    .wide_in_resp_o      (wide_in_cdc_dst_rsp_${i}),
-    .sram_cfgs_i         (sram_cfg_i.cluster)
+    .wide_out_req_o      (wide_out_cdc_src_req_${i}  ),
+    .wide_out_resp_i     (wide_out_cdc_src_rsp_${i}  ),
+    .wide_in_req_i       (wide_in_cdc_dst_req_${i}   ),
+    .wide_in_resp_o      (wide_in_cdc_dst_rsp_${i}   ),
+    .sram_cfgs_i         (sram_cfg_i.cluster         )
   );
   %else:
 

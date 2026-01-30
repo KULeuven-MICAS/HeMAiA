@@ -87,7 +87,8 @@ CHIP_TYPE     ?= single_chip
 WORKLOAD      ?= gemm_tiled
 DEV_APP       ?= snax-bingo-offload
 single-sw: $(CFG)
-	$(MAKE) -C ./target/sw single-sw CFG=$(CFG) USER_FLAGS="$(USER_FLAGS)" \
+	$(MAKE) -C ./target/sw single-sw \
+		USER_FLAGS="$(USER_FLAGS)" \
 		HOST_APP_TYPE=$(HOST_APP_TYPE) \
 		CHIP_TYPE=$(CHIP_TYPE) \
 		WORKLOAD=$(WORKLOAD) \
@@ -99,7 +100,7 @@ single-sw: $(CFG)
 # App Binary Generation #
 #########################
 # This target prepares the software binaries for simulation and/or FPGA execution.
-apps:
+apps: $(CFG)
 	$(MAKE) -C ./target/sim apps CFG=$(CFG) USER_FLAGS="$(USER_FLAGS)" \
 		HOST_APP_TYPE=$(HOST_APP_TYPE) \
 		CHIP_TYPE=$(CHIP_TYPE) \

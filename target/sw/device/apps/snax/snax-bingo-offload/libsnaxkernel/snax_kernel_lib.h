@@ -1532,7 +1532,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_dummy(void *arg){
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
     // Notice the variables here are all local variables at the TLS section
-    printf_safe("[Cluster %d Core %d]: Bingo Dummy Kernel called with input %d\r\n", snrt_cluster_idx(), snrt_cluster_core_idx(), dummy_input);
+    printf_safe("[Cluster %d Core %d]: Bingo Dummy Kernel: %d\r\n", snrt_cluster_idx(), snrt_cluster_core_idx(), dummy_input);
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
     return BINGO_RET_SUCC;
 }

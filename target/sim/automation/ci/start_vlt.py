@@ -46,9 +46,9 @@ def get_apps(task_path):
         if host_app_type == "host_only":
             app_name = str(workload)
         elif host_app_type == "offload_legacy":
-            app_name = f"offload_legacy_{chip_type}"
+            app_name = f"offload_legacy_{chip_type}_{dev_app}"
         else:
-            app_name = f"{host_app_type}_{chip_type}_{workload}"
+            app_name = f"{host_app_type}_{chip_type}_{workload}_{dev_app}"
 
         app_name_list.append(app_name)
         shell_script = ["make", "apps"]
