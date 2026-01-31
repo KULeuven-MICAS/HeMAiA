@@ -10,7 +10,7 @@ import pathlib
 import sys
 import re
 import logging
-
+# logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 from subprocess import run
 import csv
 
@@ -81,15 +81,15 @@ def main():
     parser.add_argument("--pkg-sv",
                         metavar="PKG_SV",
                         help="Name of top-level package file (output)")
-    parser.add_argument("--quadrant-s1",
-                        metavar="QUADRANT_S1",
-                        help="Name of S1 quadrant template file (output)")
-    parser.add_argument("--quadrant-s1-ctrl",
-                        metavar="QUADRANT_S1_CTL",
-                        help="Name of S1 quadrant controller template file (output)")
-    parser.add_argument("--quadrant-s1-noc",
-                        metavar="QUADRANT_S1_NOC",
-                        help="Name of S1 quadrant NoC template file (output)")
+    parser.add_argument("--quad",
+                        metavar="QUAD",
+                        help="Name of quadrant template file (output)")
+    parser.add_argument("--quad-ctrl",
+                        metavar="QUAD_CTRL",
+                        help="Name of quadrant controller template file (output)")
+    parser.add_argument("--quad-noc",
+                        metavar="QUAD_NOC",
+                        help="Name of quadrant NoC template file (output)")
     parser.add_argument("--xilinx-sv",
                         metavar="XILINX_SV",
                         help="Name of the Xilinx wrapper file (output).")
@@ -209,77 +209,132 @@ def main():
 
     core_per_cluster_list = [cluster_generator.cfg["nr_cores"]
                              for cluster_generator in cluster_generators]
-
+    #####################################
     # Now we create all the am for xbars
+    #####################################
     # Each XBAR is a node
     # Create the address map
     am = solder.AddrMap()
-    # Create a device tree object.
-    dts = device_tree.DeviceTree()
 
     # Toplevel crossbar address map
     am_soc_narrow_xbar = am.new_node("soc_narrow_xbar")
     am_soc_wide_xbar = am.new_node("soc_wide_xbar")
 
-    # Quadrant inter crossbar address map:
-    # am_quadrant_inter_xbar = am.new_node("am_quadrant_inter_xbar")
+    # Toplevel Peripheral crossbar address map
+    am_soc_axi_lite_periph_xbar = am.new_node("soc_axi_lite_periph_xbar")
+    am_soc_axi_lite_narrow_periph_xbar = am.new_node("soc_axi_lite_narrow_periph_xbar")
 
     # Quadrant crossbar address map
-    am_wide_xbar_quadrant_s1 = list()
-    am_narrow_xbar_quadrant_s1 = list()
-    for i in range(nr_s1_quadrants):
-        am_wide_xbar_quadrant_s1.append(
-            am.new_node("wide_xbar_quadrant_s1_{}".format(i)))
-        am_narrow_xbar_quadrant_s1.append(
-            am.new_node("narrow_xbar_quadrant_s1_{}".format(i)))
+    am_quad_wide_xbar = am.new_node("quad_wide_xbar")
+    am_quad_narrow_xbar = am.new_node("quad_narrow_xbar")
+    
+    # We do not have multiple quadrants anymore
+    # am_wide_xbar_quadrant_s1 = list()
+    # am_narrow_xbar_quadrant_s1 = list()
+    # for i in range(nr_s1_quadrants):
+    #     am_wide_xbar_quadrant_s1.append(
+    #         am.new_node("wide_xbar_quadrant_s1_{}".format(i)))
+    #     am_narrow_xbar_quadrant_s1.append(
+    #         am.new_node("narrow_xbar_quadrant_s1_{}".format(i)))
 
-    # Peripheral crossbar address map
-    am_soc_axi_lite_periph_xbar = am.new_node("soc_axi_lite_periph_xbar")
-    am_soc_axi_lite_narrow_periph_xbar = am.new_node(
-        "soc_axi_lite_narrow_periph_xbar")
+    # Quad Ctrl crossbar address map
+    am_soc_to_quad_axi_xbar = am.new_node("soc_to_quad_axi_xbar")
+    am_quad_to_soc_axi_xbar = am.new_node("quad_to_soc_axi_xbar")
 
+    # Quad Ctrl peripheral crossbar address map
+    am_quad_axi_lite_xbar = am.new_node("quad_axi_lite_xbar")
+    am_quad_axi_lite_narrow_xbar = am.new_node("quad_axi_lite_narrow_xbar")
+    ##################################################################
     # After that, we need to create the leaves that connect to xbars
-    am_axi_lite_peripherals = occamy.am_connect_soc_lite_periph_xbar(
+    ##################################################################
+    # The leaves are referred to the endpoints in the system
+    # Like peripherals, memories, etc
+    # Hence we are creating the master ports that connect to the xbars
+    # 64bit SoC AXI Lite Peripherals
+    am_soc_axi_lite_peripherals = occamy.am_connect_soc_lite_periph_xbar(
         am, am_soc_axi_lite_periph_xbar, occamy_cfg)
-
-    am_axi_lite_narrow_peripherals, am_bootrom, am_clint = occamy.am_connect_soc_lite_narrow_periph_xbar(
+    # 32bit SoC AXI Lite Narrow Peripherals
+    am_soc_axi_lite_narrow_peripherals, am_bootrom, am_clint = occamy.am_connect_soc_lite_narrow_periph_xbar(
         am, am_soc_axi_lite_narrow_periph_xbar, occamy_cfg)
 
+    # 64bit Quad AXI Lite Peripherals
+    am_quad_axi_lite_peripherals, addrs_quad_axi_lite_peripherals = occamy.am_connect_quad_axi_lite_xbar(am, am_quad_axi_lite_xbar, occamy_cfg)
+    # 32bit Quad AXI Lite Narrow Peripherals
+    am_quad_axi_lite_narrow_peripheral, am_quad_axi_lite_narrow_h2c_mailboxs, addrs_quad_axi_lite_narrow_peripherals = occamy.am_connect_quad_axi_lite_narrow_xbar(am, am_quad_axi_lite_narrow_xbar, occamy_cfg)
+
+    # SoC Narrow Xbar
     am_spm_narrow, am_sys_idma_cfg, am_narrow_hemaia_xdma_ctrl_io, am_narrow_hemaia_xdma_cfg_io = occamy.am_connect_soc_narrow_xbar_mem(
         am, am_soc_narrow_xbar, occamy_cfg)
-
+    # SoC Wide Xbar
     am_wide_hemaia_mem, am_wide_hemaia_xdma_data_io, am_wide_zero_mem = occamy.am_connect_soc_wide_xbar_mem(
         am, am_soc_wide_xbar, occamy_cfg)
-
-    am_clusters = occamy.am_connect_soc_wide_xbar_quad(
-        am, am_soc_narrow_xbar, am_wide_xbar_quadrant_s1, am_narrow_xbar_quadrant_s1, occamy_cfg, cluster_generators)
+    # Quad Wide and Narrow Xbar
+    am_clusters, am_clusters_periph, am_clusters_leftover_spaces, addrs_clusters, addrs_clusters_periph, addrs_clusters_leftover_spaces = occamy.am_connect_quad_wide_and_narrow_xbar(
+        am, am_quad_wide_xbar, am_quad_narrow_xbar, cluster_generators)
+    ####################################################################
     # Then we connect between xbars
-
-    # Connect quadrants AXI xbar
-    for i in range(nr_s1_quadrants):
-        am_narrow_xbar_quadrant_s1[i].attach(am_wide_xbar_quadrant_s1[i])
-        am_soc_narrow_xbar.attach(am_narrow_xbar_quadrant_s1[i])
-        am_soc_wide_xbar.attach(am_wide_xbar_quadrant_s1[i])
-
-    # Connect quadrant inter xbar
-    # am_soc_wide_xbar.attach(am_quadrant_inter_xbar)
-    # am_quadrant_inter_xbar.attach(am_soc_wide_xbar)
-
-    # Connect narrow xbar
+    ####################################################################
+    # Attach means a master port from one to antoher
+    # e.g
+    # xbar1.attach(xbar2)
+    # means xbar1 has a master port connected to xbar2's slave port
+    # This step is to create the slave ports in each xbar
+    ####################
+    # SoC narrow Xbar  #
+    ####################
+    am_soc_narrow_xbar.attach(am_soc_to_quad_axi_xbar)
     am_soc_narrow_xbar.attach(am_soc_axi_lite_periph_xbar)
     am_soc_narrow_xbar.attach(am_soc_axi_lite_narrow_periph_xbar)
     am_soc_narrow_xbar.attach(am_soc_wide_xbar)
-
-    am_soc_axi_lite_periph_xbar.attach(am_soc_narrow_xbar)
-
-    # Connect wide xbar
+    
+    #####################
+    # SoC wide Xbar     #
+    #####################
+    am_soc_wide_xbar.attach(am_quad_wide_xbar)
     am_soc_wide_xbar.attach(am_soc_narrow_xbar)
-
-    # Next we create the xbars according to am
-    #######################
-    # SoC Peripheral Xbar #
-    #######################
-    # AXI-Lite
+    
+    ###################################
+    # 64 bit SoC AXI Lite Periph Xbar #
+    ###################################
+    # Mainly for spi and jtag
+    am_soc_axi_lite_periph_xbar.attach(am_soc_narrow_xbar)
+    
+    ########################
+    # SoC to Quad AXI Xbar #
+    ########################
+    am_soc_to_quad_axi_xbar.attach(am_quad_narrow_xbar)
+    am_soc_to_quad_axi_xbar.attach(am_quad_axi_lite_xbar)
+    am_soc_to_quad_axi_xbar.attach(am_quad_axi_lite_narrow_xbar)
+    
+    ########################
+    # Quad to SoC AXI Xbar #
+    ########################    
+    am_quad_to_soc_axi_xbar.attach(am_soc_narrow_xbar)
+    am_quad_to_soc_axi_xbar.attach(am_quad_axi_lite_xbar)
+    am_quad_to_soc_axi_xbar.attach(am_quad_axi_lite_narrow_xbar)
+    
+    #############################
+    # 64 bit Quad AXI Lite Xbar #
+    #############################
+    # For the Bingo HW Schedulers
+    am_quad_axi_lite_xbar.attach(am_soc_to_quad_axi_xbar)
+    
+    ########################
+    # Quad Narrow AXI XBar #
+    ########################
+    am_quad_narrow_xbar.attach(am_quad_to_soc_axi_xbar)
+    ######################
+    # Quad Wide AXI XBar #
+    ######################
+    am_quad_wide_xbar.attach(am_soc_wide_xbar)
+    ####################################################################
+    # Next we create the xbars according to am 
+    ####################################################################
+    # The inputs are Xbar Slave ports
+    # The outputs are Xbar Master ports
+    ###################################
+    # 64 bit SoC AXI Lite Periph Xbar #
+    ###################################
     soc_axi_lite_periph_xbar = solder.AxiLiteXbar(
         48,
         64,
@@ -303,11 +358,11 @@ def main():
         if "address" in occamy_cfg["peripherals"]["axi_lite_peripherals"][p]:
             soc_axi_lite_periph_xbar.add_output_entry(
             occamy_cfg["peripherals"]["axi_lite_peripherals"][p]["name"],
-            am_axi_lite_peripherals[p]
+            am_soc_axi_lite_peripherals[p]
             )
-    ##################
-    # AxiLite Narrow #
-    ##################
+    ###################################
+    # 32 bit SoC AXI Lite Periph Xbar #
+    ###################################
     soc_axi_lite_narrow_periph_xbar = solder.AxiLiteXbar(
         48,
         32,
@@ -327,9 +382,8 @@ def main():
     for p in range(nr_axi_lite_narrow_peripherals):
         soc_axi_lite_narrow_periph_xbar.add_output_entry(
             occamy_cfg["peripherals"]["axi_lite_narrow_peripherals"][p]["name"],
-            am_axi_lite_narrow_peripherals[p]
+            am_soc_axi_lite_narrow_peripherals[p]
         )
-
     # add bootrom and clint seperately
     soc_axi_lite_narrow_periph_xbar.add_output_entry("bootrom", am_bootrom)
     soc_axi_lite_narrow_periph_xbar.add_output_entry("clint", am_clint)
@@ -366,12 +420,10 @@ def main():
     soc_wide_xbar.add_input("hemaia_mem")
 
     soc_wide_xbar.add_output_entry("wide_zero_mem", am_wide_zero_mem)
-    for i in range(nr_s1_quadrants):
-        # Default route passes HBI through quadrant 0
-        # --> mask this route, forcing it through default wide xbar
-        soc_wide_xbar.add_output_entry("quadrant_{}".format(i),
-                                       am_wide_xbar_quadrant_s1[i])
-        soc_wide_xbar.add_input("quadrant_{}".format(i))
+    # --> mask this route, forcing it through default wide xbar
+    soc_wide_xbar.add_output_entry("quad",
+                                    am_quad_wide_xbar)
+    soc_wide_xbar.add_input("quad")
 
     ###################
     # SoC Narrow Xbar #
@@ -396,13 +448,14 @@ def main():
     soc_narrow_xbar.add_output_entry("soc_wide", am_soc_wide_xbar)
     soc_narrow_xbar.add_input("soc_wide")
 
-    for i in range(nr_s1_quadrants):
-        soc_narrow_xbar.add_output_symbolic_multi("s1_quadrant_{}".format(i),
-                                            [("ClusterBaseOffset",
-                                            "S1QuadrantAddressSpace"),
-                                            ("S1QuadrantCfgBaseOffset",
-                                            "S1QuadrantCfgAddressSpace")])
-        soc_narrow_xbar.add_input("s1_quadrant_{}".format(i))
+    # Quadrant
+    # soc_narrow_xbar.add_output_symbolic_multi("quad",
+    #                                         [("ClusterBaseOffset",
+    #                                         "QuadrantAddressSpace"),
+    #                                         ("QuadrantCfgBaseOffset",
+    #                                         "QuadrantCfgAddressSpace")])
+    soc_narrow_xbar.add_output_entry("quad", am_soc_to_quad_axi_xbar)
+    soc_narrow_xbar.add_input("quad")
 
     soc_narrow_xbar.add_input("cva6")
     soc_narrow_xbar.add_input("periph")
@@ -416,71 +469,113 @@ def main():
     # hemaia mem system
     soc_narrow_xbar.add_input("hemaia_mem")
     soc_narrow_xbar.add_output_multi_entries("hemaia_mem", [am_narrow_hemaia_xdma_ctrl_io, am_narrow_hemaia_xdma_cfg_io])
-    ##########################
-    # S1 Quadrant controller #
-    ##########################
+    #############
+    # Quad Ctrl #
+    #############
+    quad_ctrl_soc_to_quad_xbar = solder.AxiXbar(
+        48,
+        64,
+        soc_narrow_xbar.iw_out(),
+        soc_narrow_xbar.uw,
+        chipidw=occamy_cfg["hemaia_multichip"]["chip_id_width"], 
+        name="quad_ctrl_soc_to_quad_xbar",  
+        clk="clk_i",
+        rst="rst_ni",
+        max_slv_trans=occamy_cfg["narrow_xbar"]["max_slv_trans"],
+        max_mst_trans=occamy_cfg["narrow_xbar"]["max_mst_trans"],
+        fall_through=occamy_cfg["narrow_xbar"]["fall_through"],
+        latency_mode="axi_pkg::CUT_SLV_PORTS",
+        context="quad_ctrl",
+        node=am_soc_to_quad_axi_xbar
+    )
+    quad_ctrl_soc_to_quad_xbar.add_input("soc_narrow")
+    quad_ctrl_soc_to_quad_xbar.add_output("clusters",
+                                          [*addrs_clusters, *addrs_clusters_periph])
+    quad_ctrl_soc_to_quad_xbar.add_output("quad_axi_lite", addrs_quad_axi_lite_peripherals)
+    quad_ctrl_soc_to_quad_xbar.add_output("quad_axi_lite_narrow", addrs_quad_axi_lite_narrow_peripherals)
+        
 
-    # We need 3 "crossbars", which are really simple muxes and demuxes
-    quadrant_s1_ctrl_xbars = dict()
-    for name, (iw, lm) in {
-        'soc_to_quad': (soc_narrow_xbar.iw_out(), "axi_pkg::CUT_SLV_PORTS"),
-        'quad_to_soc': (soc_narrow_xbar.iw, "axi_pkg::CUT_MST_PORTS"),
-    }.items():
-        # Reuse (preserve) narrow Xbar IDs and max transactions
-        quadrant_s1_ctrl_xbars[name] = solder.AxiXbar(
-            48,
-            64,
-            iw,
-            soc_narrow_xbar.uw,
-            chipidw=occamy_cfg["hemaia_multichip"]["chip_id_width"],
-            name="quadrant_s1_ctrl_{}_xbar".format(name),
-            clk="clk_i",
-            rst="rst_ni",
-            max_slv_trans=occamy_cfg["narrow_xbar"]["max_slv_trans"],
-            max_mst_trans=occamy_cfg["narrow_xbar"]["max_mst_trans"],
-            fall_through=occamy_cfg["narrow_xbar"]["fall_through"],
-            latency_mode=lm,
-            context="quadrant_s1_ctrl")
-
-    for name in ['soc_to_quad', 'quad_to_soc']:
-        quadrant_s1_ctrl_xbars[name].add_output("out", [])
-        quadrant_s1_ctrl_xbars[name].add_input("in")
-        quadrant_s1_ctrl_xbars[name].add_output_symbolic("internal",
-                                                         "internal_xbar_base_addr",
-                                                         "S1QuadrantCfgAddressSpace")
-
-    # AXI Lite mux
+    quad_ctrl_quad_to_soc_xbar = solder.AxiXbar(
+        48,
+        64,
+        soc_narrow_xbar.iw-1, # Very Important!!!!!!!!!! -1 because the quad to soc has two slave ports TODO: Make a clear documentation about this
+        soc_narrow_xbar.uw,
+        chipidw=occamy_cfg["hemaia_multichip"]["chip_id_width"], 
+        name="quad_ctrl_quad_to_soc_xbar",  
+        clk="clk_i",
+        rst="rst_ni",
+        max_slv_trans=occamy_cfg["narrow_xbar"]["max_slv_trans"],
+        max_mst_trans=occamy_cfg["narrow_xbar"]["max_mst_trans"],
+        fall_through=occamy_cfg["narrow_xbar"]["fall_through"],
+        latency_mode="axi_pkg::CUT_MST_PORTS",
+        context="quad_ctrl",
+        node=am_quad_to_soc_axi_xbar)
+    quad_ctrl_quad_to_soc_xbar.add_input("clusters")
+    quad_ctrl_quad_to_soc_xbar.add_input("quad_axi_lite")
+    # Leave it be empty as the default port
+    quad_ctrl_quad_to_soc_xbar.add_output("soc_narrow", [])
+    quad_ctrl_quad_to_soc_xbar.add_output("quad_axi_lite", addrs_quad_axi_lite_peripherals)
+    quad_ctrl_quad_to_soc_xbar.add_output("quad_axi_lite_narrow", addrs_quad_axi_lite_narrow_peripherals)
+    ################################
+    # Quad Ctrl 32bit AXI Lite mux #
+    ################################
     # Here we hook the hw mailboxes
     # The number of mailboxes equals to the number of clusters
-    quadrant_s1_ctrl_mux = solder.AxiLiteXbar(
+    quad_ctrl_axi_lite_narrow_mux = solder.AxiLiteXbar(
         48,
         32,
         chipidw=occamy_cfg["hemaia_multichip"]["chip_id_width"],
-        name="quadrant_s1_ctrl_mux",
+        name="quad_axi_lite_narrow_mux",
         clk="clk_i",
         rst="rst_ni",
         max_slv_trans=occamy_cfg["narrow_xbar"]["max_slv_trans"],
         max_mst_trans=occamy_cfg["narrow_xbar"]["max_mst_trans"],
         fall_through=False,
-        context="quadrant_s1_ctrl")
+        context="quad_ctrl",
+        node=am_quad_axi_lite_narrow_xbar)
 
-    quadrant_s1_ctrl_mux.add_input("soc")
-    quadrant_s1_ctrl_mux.add_input("quad")
+    quad_ctrl_axi_lite_narrow_mux.add_input("soc_to_quad")
+    quad_ctrl_axi_lite_narrow_mux.add_input("quad_to_soc")
+    quad_ctrl_axi_lite_narrow_mux.add_output_entry("quad_ctrl_perpheral", am_quad_axi_lite_narrow_peripheral)
     for i in range(nr_s1_clusters):
-        quadrant_s1_ctrl_mux.add_output_symbolic(f"h2c_mailbox_{i}",
-                                                  "h2c_mailbox_base_addr",
-                                                  "H2CMailboxAddressSpace")
-    ################
-    # S1 Quadrants #
-    ################
-    # Dummy entries to generate associated types.
-    wide_xbar_quadrant_s1 = solder.AxiXbar(
+        quad_ctrl_axi_lite_narrow_mux.add_output_entry(
+            "h2c_mailbox_{}".format(i), am_quad_axi_lite_narrow_h2c_mailboxs[i]
+        )
+
+    ################################
+    # Quad Ctrl 64bit AXI Lite Xbar#
+    ################################
+    quad_ctrl_axi_lite_xbar = solder.AxiLiteXbar(
+        48,
+        64,
+        chipidw=occamy_cfg["hemaia_multichip"]["chip_id_width"],
+        name="quad_axi_lite_xbar",
+        clk="clk_i",
+        rst="rst_ni",
+        max_slv_trans=occamy_cfg["narrow_xbar"]["max_slv_trans"],
+        max_mst_trans=occamy_cfg["narrow_xbar"]["max_mst_trans"],
+        fall_through=False,
+        context="quad_ctrl",
+        node=am_quad_axi_lite_xbar)
+    quad_ctrl_axi_lite_xbar.add_input("soc_to_quad")
+    quad_ctrl_axi_lite_xbar.add_input("quad_to_soc")
+    quad_ctrl_axi_lite_xbar.add_input("bingo_hw_scheduler_read_local_task")
+    quad_ctrl_axi_lite_xbar.add_input("bingo_hw_scheduler_write_remote_done")
+    quad_ctrl_axi_lite_xbar.add_input("bingo_hw_scheduler_write_pm")
+    quad_ctrl_axi_lite_xbar.add_output_entry("quad_to_soc", am_quad_to_soc_axi_xbar)
+    quad_ctrl_axi_lite_xbar.add_output_entry("bingo_hw_scheduler_chiplet_done_queue", am_quad_axi_lite_peripherals[0])
+    quad_ctrl_axi_lite_xbar.add_output_entry("bingo_hw_scheduler_host_ready_done_intf", am_quad_axi_lite_peripherals[1])
+    
+    ##############
+    # Quad XBars #
+    ##############
+    quad_wide_xbar = solder.AxiXbar(
         48,
         512,
         iw=occamy_cfg["s1_quadrant"]["wide_xbar_slv_id_width"],
         uw=occamy_cfg["s1_quadrant"]["wide_xbar_slv_user_width"],
         chipidw=occamy_cfg["hemaia_multichip"]["chip_id_width"],
-        name="wide_xbar_quadrant_s1",
+        name="quad_wide_xbar",
         clk="clk_i",
         rst="rst_ni",
         max_slv_trans=occamy_cfg["s1_quadrant"]["wide_xbar"]["max_slv_trans"],
@@ -488,16 +583,22 @@ def main():
         fall_through=occamy_cfg["s1_quadrant"]["wide_xbar"]["fall_through"],
         no_loopback=True,
         atop_support=False,
-        context="quadrant_s1",
-        node=am_wide_xbar_quadrant_s1[0])
+        context="quad",
+        node=am_quad_wide_xbar)
+    quad_wide_xbar.add_input("soc_wide")
+    quad_wide_xbar.add_output_entry("soc_wide", am_soc_wide_xbar)
+    for i in range(nr_s1_clusters):
+        quad_wide_xbar.add_output_multi_entries("cluster_{}".format(i),
+                                        [am_clusters[i], am_clusters_leftover_spaces[i]])
+        quad_wide_xbar.add_input("cluster_{}".format(i))
 
-    narrow_xbar_quadrant_s1 = solder.AxiXbar(
+    quad_narrow_xbar = solder.AxiXbar(
         48,
         64,
         iw=occamy_cfg["s1_quadrant"]["narrow_xbar_slv_id_width"],
         uw=occamy_cfg["s1_quadrant"]["narrow_xbar_slv_user_width"],
         chipidw=occamy_cfg["hemaia_multichip"]["chip_id_width"],
-        name="narrow_xbar_quadrant_s1",
+        name="quad_narrow_xbar",
         clk="clk_i",
         rst="rst_ni",
         max_slv_trans=occamy_cfg["s1_quadrant"]["narrow_xbar"]
@@ -506,24 +607,30 @@ def main():
         ["max_mst_trans"],
         fall_through=occamy_cfg["s1_quadrant"]["narrow_xbar"]["fall_through"],
         no_loopback=True,
-        context="quadrant_s1")
-
-    wide_xbar_quadrant_s1.add_output("top", [])
-    wide_xbar_quadrant_s1.add_input("top")
-
-    narrow_xbar_quadrant_s1.add_output("top", [])
-    narrow_xbar_quadrant_s1.add_input("top")
-
+        context="quad",
+        node=am_quad_narrow_xbar)
+    quad_narrow_xbar.add_input("soc_to_quad")
+    quad_narrow_xbar.add_output_entry("quad_to_soc", am_quad_to_soc_axi_xbar)
     for i in range(nr_s1_clusters):
-        wide_xbar_quadrant_s1.add_output_symbolic("cluster_{}".format(i),
-                                                  "cluster_base_addr",
-                                                  "ClusterAddressSpace")
+        quad_narrow_xbar.add_output_multi_entries("cluster_{}".format(i), [am_clusters[i], am_clusters_periph[i], am_clusters_leftover_spaces[i]])
+        quad_narrow_xbar.add_input("cluster_{}".format(i))
+    
+    # wide_xbar_quadrant_s1.add_output("top", [])
+    # wide_xbar_quadrant_s1.add_input("top")
 
-        wide_xbar_quadrant_s1.add_input("cluster_{}".format(i))
-        narrow_xbar_quadrant_s1.add_output_symbolic("cluster_{}".format(i),
-                                                    "cluster_base_addr",
-                                                    "ClusterAddressSpace")
-        narrow_xbar_quadrant_s1.add_input("cluster_{}".format(i))
+    # narrow_xbar_quadrant_s1.add_output("top", [])
+    # narrow_xbar_quadrant_s1.add_input("top")
+
+    # for i in range(nr_s1_clusters):
+    #     wide_xbar_quadrant_s1.add_output_symbolic("cluster_{}".format(i),
+    #                                               "cluster_base_addr",
+    #                                               "ClusterAddressSpace")
+
+    #     wide_xbar_quadrant_s1.add_input("cluster_{}".format(i))
+    #     narrow_xbar_quadrant_s1.add_output_symbolic("cluster_{}".format(i),
+    #                                                 "cluster_base_addr",
+    #                                                 "ClusterAddressSpace")
+    #     narrow_xbar_quadrant_s1.add_input("cluster_{}".format(i))
 
     # Generate the Verilog code for occamy_pkg.sv (Only include the definition related to xbars)
     solder.render()
@@ -578,43 +685,46 @@ def main():
                        module=solder.code_module['soc'],
                        soc_periph_xbar=soc_axi_lite_periph_xbar,
                        **soc_kwargs)
-    ##########################
-    # S1 Quadrant controller #
-    ##########################
-    if args.quadrant_s1_ctrl:
-        quadrant_ctrl_kwargs = occamy.get_quadrant_ctrl_kwargs(
-            occamy_cfg, soc_wide_xbar, soc_narrow_xbar, quadrant_s1_ctrl_xbars, quadrant_s1_ctrl_mux, args.name)
-        write_template(args.quadrant_s1_ctrl,
+    #############
+    # Quad CTRL #
+    #############
+    # The "module" will appear at the template file
+    # The "module" is the "context" foe each xbar
+    # It groups the xbars together 
+    if args.quad_ctrl:
+        quad_ctrl_kwargs = occamy.get_quad_ctrl_kwargs(
+            occamy_cfg, soc_wide_xbar, soc_narrow_xbar, quad_ctrl_soc_to_quad_xbar, quad_ctrl_quad_to_soc_xbar, quad_ctrl_axi_lite_narrow_mux, quad_ctrl_axi_lite_xbar, cluster_generators,args.name)
+        write_template(args.quad_ctrl,
                        outdir,
-                       module=solder.code_module['quadrant_s1_ctrl'],
-                       **quadrant_ctrl_kwargs)
-    ###############
-    # S1 Quadrant #
-    ###############
-    if args.quadrant_s1:
+                       module=solder.code_module['quad_ctrl'],
+                       **quad_ctrl_kwargs)
+    ########
+    # Quad #
+    ########
+    if args.quad:
         if occamy_cfg["s1_quadrant"].get("noc_cfg", None):
             quadrant_s1_noc_kwargs = occamy.get_quadrant_noc_kwargs(occamy_cfg, cluster_generators)
-            write_template(args.quadrant_s1_noc,
+            write_template(args.quad_noc,
                         outdir,
                         fname="{}_quad_noc.yml".format(args.name),
                         **quadrant_s1_noc_kwargs)
             occamy.generate_floonoc(f"{outdir}/{args.name}_quad_noc.yml", outdir)
         quadrant_kwargs = occamy.get_quadrant_kwargs(occamy_cfg, cluster_generators, soc_wide_xbar,
-                                              soc_narrow_xbar, wide_xbar_quadrant_s1, narrow_xbar_quadrant_s1, args.name)
+                                              soc_narrow_xbar, quad_wide_xbar, quad_narrow_xbar, quad_ctrl_quad_to_soc_xbar, args.name)
         if nr_s1_quadrants > 0:
-            write_template(args.quadrant_s1,
+            write_template(args.quad,
                            outdir,
-                           fname="{}_quadrant_s1.sv".format(args.name),
-                           module=solder.code_module['quadrant_s1'],
+                           fname="{}_quad.sv".format(args.name),
+                           module=solder.code_module['quad'],
                            **quadrant_kwargs)
         else:
-            tpl_path = args.quadrant_s1
+            tpl_path = args.quad
             if tpl_path:
                 tpl_path = pathlib.Path(tpl_path).absolute()
                 if tpl_path.exists():
                     print(outdir, args.name)
-                    with open("{}/{}_quadrant_s1.sv".format(outdir, args.name), 'w') as f:
-                        f.write("// no quadrants in this design")
+                    with open("{}/{}_quad.sv".format(outdir, args.name), 'w') as f:
+                        f.write("// no quad in this design")
     ##################
     # Xilinx Wrapper #
     ##################
@@ -670,17 +780,17 @@ def main():
     ###############
     if args.testharness_sv:
         testharness_kwargs = occamy.get_testharness_kwargs(
-            occamy_cfg, soc2router_bus, router2soc_bus, name)
+            occamy_cfg, soc2router_bus, router2soc_bus, args.name)
         write_template(args.testharness_sv, outdir, **testharness_kwargs)
 
     if args.mem_macro_testharness_sv:
         mem_macro_testharness_kwargs = occamy.get_mem_macro_testharness_kwargs(
-            occamy_cfg, soc2router_bus, router2soc_bus, name)
+            occamy_cfg, soc2router_bus, router2soc_bus, args.name)
         write_template(args.mem_macro_testharness_sv, outdir, **mem_macro_testharness_kwargs)
 
     if args.netlist_testharness_sv:
         netlist_testharness_kwargs = occamy.get_netlist_testharness_kwargs(
-            occamy_cfg, soc2router_bus, router2soc_bus, name)
+            occamy_cfg, soc2router_bus, router2soc_bus, args.name)
         write_template(args.netlist_testharness_sv, outdir, **netlist_testharness_kwargs)
 
     ############
@@ -851,6 +961,8 @@ def main():
         write_template(args.ctrl, outdir, **ctrl_kwargs)
 
     # Emit the address map as a dot file if requested.
+    # If want to see the graph, apt-get install graphviz and run:
+    # dot -Tpng addrmap.dot -o addrmap.png
     if args.graph:
         with open(args.graph, "w") as file:
             file.write(am.render_graphviz())

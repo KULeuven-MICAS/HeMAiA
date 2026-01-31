@@ -8,10 +8,8 @@
 #include <stdint.h>
 #include <string.h>
 #include "chip_id.h"
-#include "heterogeneous_runtime.h"
 #include "occamy.h"
 #include "sys_dma.h"
-
 // HeMAiA specific peripherals
 #include "uart.c"
 #include "hemaia_clk_rst_controller.h"
@@ -19,7 +17,9 @@
 #include "hemaia-xdma-lib.h"
 #include "mailbox.h"
 #include "io.h"
-
+#include "heterogeneous_runtime.h"
+// Host kernel lib
+#include "host_kernel_lib.h"
 extern uint64_t __narrow_spm_start;
 extern uint64_t __narrow_spm_end;
 extern uint64_t __wide_spm_start;
@@ -148,9 +148,6 @@ static inline void set_sw_interrupt(uint8_t chip_id,
 
 void delay_ns(uint64_t delay);
 
-static inline volatile uint32_t* get_shared_lock(
-    volatile comm_buffer_t* comm_buffer_ptr);
-
 static inline void wait_sw_interrupt();
 
 static inline void clear_sw_interrupt(uint8_t chip_id,
@@ -217,7 +214,7 @@ void initialize_cluster(uint32_t cluster_idx) {
 }
 
 void initialize_all_clusters() {
-    for (uint32_t i = 0; i < N_CLUSTERS; i++) {
+    for (uint32_t i = 0; i < N_CLUSTERS_PER_CHIPLET; i++) {
         initialize_cluster(i);
     }
 }
@@ -241,49 +238,6 @@ void set_d_cache_enable(uint16_t ena) {
 //===============================================================
 
 static inline void fence() { asm volatile("fence" : : : "memory"); }
-
-/**
- * @brief lock a mutex, blocking
- * @details test-and-set (tas) implementation of a lock.
- *          Declare mutex with `static volatile uint32_t mtx = 0;`
- */
-void mutex_tas_acquire(volatile uint32_t* pmtx) {
-    asm volatile(
-        "li            x5,1          # x5 = 1\n"
-        "1:\n"
-        "  amoswap.w.aq  x5,x5,(%0)   # x5 = oldlock & lock = 1\n"
-        "  bnez          x5,1b      # Retry if previously set)\n"
-        : "+r"(pmtx)
-        :
-        : "x5");
-}
-
-/**
- * @brief lock a mutex, blocking
- * @details test-and-test-and-set (ttas) implementation of a lock.
- *          Declare mutex with `static volatile uint32_t mtx = 0;`
- */
-static inline void mutex_ttas_acquire(volatile uint32_t* pmtx) {
-    asm volatile(
-        "1:\n"
-        "  lw x5, 0(%0)\n"
-        "  bnez x5, 1b\n"
-        "  li x5,1          # x5 = 1\n"
-        "2:\n"
-        "  amoswap.w.aq  x5,x5,(%0)   # x5 = oldlock & lock = 1\n"
-        "  bnez          x5,2b      # Retry if previously set)\n"
-        : "+r"(pmtx)
-        :
-        : "x5");
-}
-
-/**
- * @brief Release the mutex
- */
-static inline void mutex_release(volatile uint32_t* pmtx) {
-    asm volatile("amoswap.w.rl  x0,x0,(%0)   # Release lock by storing 0\n"
-                 : "+r"(pmtx));
-}
 
 //===============================================================
 // Device programming
@@ -321,9 +275,9 @@ void wait_snitches_parked(uint32_t timeout) { delay_ns(100000); }
 static inline void program_snitches(uint8_t chip_id,
                                     volatile comm_buffer_t* comm_buffer_ptr) {
     writew((uint32_t)(uintptr_t)snitch_main,
-           (uintptr_t)chiplet_addr_transform_full(chip_id, (uintptr_t)soc_ctrl_scratch_addr(1)));
+           (uintptr_t)chiplet_addr_transform_full(chip_id, (uintptr_t)soc_ctrl_scratch_addr(0)));
     writew((uint32_t)(uintptr_t)comm_buffer_ptr,
-           (uintptr_t)chiplet_addr_transform_full(chip_id, (uintptr_t)soc_ctrl_scratch_addr(2)));
+           (uintptr_t)chiplet_addr_transform_full(chip_id, (uintptr_t)soc_ctrl_scratch_addr(1)));
 }
 
 /**
@@ -358,7 +312,7 @@ void wakeup_snitches(uint8_t chip_id, volatile comm_buffer_t* comm_buffer_ptr) {
  * @detail Send a cluster interrupt to all Snitches
  */
 static inline void wakeup_snitches_cl(uint8_t chip_id) {
-    for (int i = 0; i < N_CLUSTERS; i++) wakeup_cluster(chip_id, i);
+    for (int i = 0; i < N_CLUSTERS_PER_CHIPLET; i++) wakeup_cluster(chip_id, i);
 }
 
 /**
@@ -409,7 +363,7 @@ static inline int wait_snitches_done(uint8_t chip_id) {
     clear_host_sw_interrupt(get_current_chip_id());
 
     uint32_t retval = readw(
-        (uintptr_t)chiplet_addr_transform_full(chip_id, (uintptr_t)soc_ctrl_scratch_addr(3)));
+        (uintptr_t)chiplet_addr_transform_full(chip_id, (uintptr_t)soc_ctrl_scratch_addr(2)));
     // LSB signals completion
     if (retval & 1)
         return retval >> 1;
@@ -417,10 +371,7 @@ static inline int wait_snitches_done(uint8_t chip_id) {
         return -1;
 }
 
-static inline volatile uint32_t* get_shared_lock(
-    volatile comm_buffer_t* comm_buffer_ptr) {
-    return &((*comm_buffer_ptr).lock);
-}
+
 
 //===============================================================
 // Interrupts

@@ -1,11 +1,13 @@
 #!/bin/bash
 script_dir="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 cfg_name="hemaia_tapeout.hjson"
-DEVICE_APP="snax-xdma-local-transpose"
+HOST_APP_TYPE="offload_legacy"
+CHIP_TYPE="single_chip"
+DEVICE_APP="snax-test-integration"
 
 make -C $script_dir/../.. clean
 make -C $script_dir/../.. sw CFG_OVERRIDE=target/rtl/cfg/$cfg_name
-make -C $script_dir/../.. apps DEVICE_APP=$DEVICE_APP
+make -C $script_dir/../.. apps HOST_APP_TYPE=$HOST_APP_TYPE CHIP_TYPE=$CHIP_TYPE DEVICE_APP=$DEVICE_APP
 make -C $script_dir/../.. bootrom CFG_OVERRIDE=target/rtl/cfg/$cfg_name
 make -C $script_dir/../.. rtl CFG_OVERRIDE=target/rtl/cfg/$cfg_name
 make -C "$script_dir/../.." hemaia_system_vsim_preparation SIM_WITH_MACRO=1

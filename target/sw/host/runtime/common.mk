@@ -26,6 +26,7 @@ RISCV_CFLAGS += -fPIC
 RISCV_CFLAGS += -ffunction-sections
 RISCV_CFLAGS += -Wextra
 RISCV_CFLAGS += -Werror
+RISCV_CFLAGS += $(USER_FLAGS)
 BUILD_DIR     = build
 
 $(BUILD_DIR):

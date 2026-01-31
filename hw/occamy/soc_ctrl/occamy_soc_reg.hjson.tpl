@@ -22,7 +22,7 @@
     { name: "NumKernelTabRegs",
       desc: "Number of Kernel Table registers",
       type: "int",
-      default: "3"
+      default: "4"
     }
   ],
   name: "${name}_SoC",
@@ -178,7 +178,7 @@
     },
     { multireg:
       { name: "KERNEL_TAB_SCRATCH",
-        desc: "Scratch register holding the kernel tabel. 1. Ready 2. Kernel Table Start Addr 3. Kernel Table End Addr.",
+        desc: "Scratch register holding the kernel tabel. 1. Ready 2. Kernel Table Start Addr 3. Kernel Table End Addr. 4. Offload Type",
         swaccess: "rw",
         hwaccess: "none",
         count: "NumKernelTabRegs",

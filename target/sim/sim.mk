@@ -1,4 +1,3 @@
-
 # The original common.mk file is pasted here
 
 LOGS_DIR ?= bin/logs
@@ -185,3 +184,16 @@ $(TRACE_CSV): $(EVENT_CSV) $(LAYOUT_FILE) $(LAYOUT_EVENTS_PY)
 
 $(TRACE_JSON): $(TRACE_CSV) $(EVENTVIS_PY)
 	$(PYTHON) $(EVENTVIS_PY) -o $@ $(TRACE_CSV)
+
+# Bingo Trace Visualization
+# This target parses the simulation logs and perf_tracing.h to generate a Perfetto JSON trace.
+BINGO_TRACE_PY   ?= $(ROOT)/util/bingo_trace/bingo_trace.py
+BINGO_PERF_HEADER ?= $(ROOT)/target/sw/shared/runtime/perf_tracing.h
+BINGO_TRACE_JSON ?= $(LOGS_DIR)/bingo_trace.json
+
+.PHONY: bingo-vis-traces
+bingo-vis-traces: $(TXT_TRACES) $(BINGO_TRACE_PY)
+	$(PYTHON) $(BINGO_TRACE_PY) \
+		--trace-header $(BINGO_PERF_HEADER) \
+		--log-dir $(LOGS_DIR) \
+		--output $(BINGO_TRACE_JSON)

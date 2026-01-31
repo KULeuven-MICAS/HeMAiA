@@ -30,13 +30,13 @@ dependencies:
   ara:                    { git:  https://github.com/KULeuven-MICAS/ara.git,                   rev:     main    }
   opentitan_peripherals:  { path: hw/vendor/pulp_platform_opentitan_peripherals                                 }
   register_interface:     { git:  https://github.com/pulp-platform/register_interface.git,     version: 0.3.8   }
-  snitch_cluster:         { git:  https://github.com/KULeuven-MICAS/snax_cluster.git,          rev:     main    }
+  snitch_cluster:         { git:  https://github.com/KULeuven-MICAS/snax_cluster.git,          rev:     kfc/bingo-hw-manager    }
   tech_cells_generic:     { git:  https://github.com/KULeuven-MICAS/tech_cells_generic.git,    version: 0.2.16   }
   cluster_icache:         { git:  https://github.com/KULeuven-MICAS/cluster_icache.git,        rev:     main    }
   hemaia_axi_spi_slave:   { git:  https://github.com/KULeuven-MICAS/hemaia_axi_spi_slave.git,  rev:     main    }
   hemaia_d2d_link:        { git:  https://github.com/KULeuven-MICAS/hemaia_d2d_link.git,       rev:     main    }
-  floo_noc:               { git:  https://github.com/KULeuven-MICAS/FlooNoC,                   rev:     main    }
-
+  floo_noc:               { git:  https://github.com/KULeuven-MICAS/FlooNoC.git,               rev:     main    }
+  bingo_hw_manager:       { git:  https://github.com/KULeuven-MICAS/bingo_hw_manager.git,      rev:     dev     }
 workspace:
   package_links:
     deps/snitch_cluster: snitch_cluster
@@ -85,6 +85,9 @@ sources:
     files:
       - hw/hemaia/hemaia_hw_mailbox/hemaia_axi_lite_mailbox_adapter.sv
       - hw/hemaia/hemaia_hw_mailbox/hemaia_hw_mailbox.sv
+  - target:
+    files:
+      - hw/hemaia/hemaia_hw_manager/axi_lite_to_csr.sv # this interface the host axi lite to the csr interface for the bingo hw manager
   # auto-generated soc
   - target: occamy
     files:
@@ -92,7 +95,12 @@ sources:
       - target/rtl/src/soc_ctrl/occamy_soc_reg_pkg.sv
       - target/rtl/src/soc_ctrl/occamy_soc_reg_top.sv
       - target/rtl/src/soc_ctrl/occamy_soc_ctrl.sv
-  
+      
+      # quad periph
+      - target/rtl/src/quad_periph/occamy_quad_periph_reg_pkg.sv
+      - target/rtl/src/quad_periph/occamy_quad_periph_reg_top.sv
+      - target/rtl/src/quad_periph/occamy_quad_periph.sv
+      
       # rv_plic
       - target/rtl/src/rv_plic/rv_plic_reg_pkg.sv
       - target/rtl/src/rv_plic/rv_plic_reg_top.sv
@@ -105,8 +113,8 @@ sources:
 
       # occamy
       - target/rtl/src/occamy_pkg.sv
-      - target/rtl/src/occamy_quadrant_s1_ctrl.sv
-      - target/rtl/src/occamy_quadrant_s1.sv
+      - target/rtl/src/occamy_quad_ctrl.sv
+      - target/rtl/src/occamy_quad.sv
       - target/rtl/src/occamy_soc.sv
       - target/rtl/src/occamy_top.sv
       - target/rtl/src/occamy_cva6.sv

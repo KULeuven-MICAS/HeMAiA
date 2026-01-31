@@ -10,13 +10,13 @@ typedef enum { SYNC_ALL, SYNC_CLUSTERS, SYNC_NONE } sync_t;
 extern __thread volatile uint32_t ct_barrier_cnt __attribute__((aligned(8)));
 
 inline uint32_t __attribute__((const)) snrt_quadrant_idx() {
-    return snrt_cluster_idx() / N_CLUSTERS_PER_QUAD;
+    return 0;
 }
 
 inline void post_wakeup_cl() { snrt_int_clr_mcip(); }
 
 inline comm_buffer_t* __attribute__((const)) get_communication_buffer() {
-    return (comm_buffer_t*)(*soc_ctrl_scratch_ptr(2));
+    return (comm_buffer_t*)(*soc_ctrl_scratch_ptr(1));
 }
 
 inline uint32_t elect_director(uint32_t num_participants) {

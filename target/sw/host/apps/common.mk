@@ -4,11 +4,63 @@
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 
+# Root directory (absolute path to the host directory)
+ifndef HOST_DIR
+HOST_DIR = $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
+endif
+
 # There are three main stages of building a host application:
 # 1) host-partial-build: compile and link the host application without the device binary. This is mainly to determine the relocation
 #    address of the device binary, which is needed to create the origin.ld file.
 # 2) device-build: based on the generated origin.ld file, build the device application to get the device binary.
 # 3) host-finalize-build: compile and link the host application with the device binary
+
+# Each host application will include this common makefile to define the build rules.
+
+# APP name composition
+ifndef APP
+    ifeq ($(HOST_APP_TYPE), host_only)
+        APP = $(WORKLOAD)
+    else ifeq ($(HOST_APP_TYPE), offload_legacy)
+        APP = offload_legacy_$(CHIP_TYPE)
+    else ifneq ($(HOST_APP_TYPE),)
+        APP = $(HOST_APP_TYPE)_$(CHIP_TYPE)_$(WORKLOAD)
+    endif
+endif
+
+# Validation of input variables
+ALLOWED_HOST_APP_TYPES = host_only offload_legacy offload_bingo_sw offload_bingo_hw
+ALLOWED_CHIP_TYPES     = single_chip multi_chip
+
+# Skip validation for clean target
+ifneq ($(MAKECMDGOALS),clean)
+    ifeq ($(filter $(HOST_APP_TYPE),$(ALLOWED_HOST_APP_TYPES)),)
+        $(error Invalid or missing HOST_APP_TYPE: "$(HOST_APP_TYPE)". Allowed values: $(ALLOWED_HOST_APP_TYPES))
+    endif
+
+    ifeq ($(filter $(CHIP_TYPE),$(ALLOWED_CHIP_TYPES)),)
+        $(error Invalid or missing CHIP_TYPE: "$(CHIP_TYPE)". Allowed values: $(ALLOWED_CHIP_TYPES))
+    endif
+
+    # Check for WORKLOAD if not offload_legacy
+    ifneq ($(HOST_APP_TYPE), offload_legacy)
+        ifeq ($(WORKLOAD),)
+            $(error WORKLOAD must be specified for HOST_APP_TYPE=$(HOST_APP_TYPE))
+        endif
+    endif
+
+    # Check for DEV_APP if it's an offload type
+    ifneq ($(filter $(HOST_APP_TYPE),offload_legacy offload_bingo_sw offload_bingo_hw),)
+        ifeq ($(DEV_APP),)
+            $(error DEV_APP must be specified for offload applications)
+        endif
+    endif
+endif
+
+# Use DEV_APP if provided to restrict or set DEVICE_APPS
+ifneq ($(DEV_APP),)
+    DEVICE_APPS := $(DEV_APP)
+endif
 
 ######################
 # Invocation options #
@@ -27,16 +79,17 @@ RISCV_OBJCOPY = $(CVA6_GCC_ROOT)/riscv64-unknown-elf-objcopy
 RISCV_OBJDUMP = $(CVA6_GCC_ROOT)/riscv64-unknown-elf-objdump
 RISCV_READELF = $(CVA6_GCC_ROOT)/riscv64-unknown-elf-readelf
 # Directories
-BUILDDIR    = $(abspath build)
-HOST_DIR    = $(abspath ../../)
-SWDIR       = $(abspath ../../../)
+# Notice the build dir is the dir under each app
+BUILDDIR    ?= $(abspath build)
+# Global DIRs
+SWDIR       = $(abspath $(HOST_DIR)/..)
 RUNTIME_DIR = $(abspath $(HOST_DIR)/runtime)
 DEVICE_DIR  = $(abspath $(HOST_DIR)/../device)
 
 # Dependencies
 INCDIRS += $(RUNTIME_DIR)
-INCDIRS += $(HOST_DIR)/../shared/platform/generated
-INCDIRS += $(HOST_DIR)/../shared/runtime
+INCDIRS += $(abspath $(SWDIR)/shared/platform/generated)
+INCDIRS += $(abspath $(SWDIR)/shared/runtime)
 SRCS    += $(RUNTIME_DIR)/start.S
 
 # Include XDMA
@@ -57,6 +110,7 @@ RISCV_CFLAGS += -Werror
 ifeq ($(DEBUG),ON)
 RISCV_CFLAGS += -g
 endif
+RISCV_CFLAGS += $(USER_FLAGS)
 
 # Linking sources
 LINKER_SCRIPT = $(abspath $(HOST_DIR)/runtime/host.ld)
@@ -125,6 +179,19 @@ endif
 #########
 # Rules #
 #########
+
+.DEFAULT_GOAL := all
+TARGET ?= all
+
+.PHONY: all partial-build finalize-build clean FORCE
+all:
+ifeq ($(TARGET),all)
+	$(MAKE) partial-build
+	$(MAKE) finalize-build
+else
+	$(MAKE) $(TARGET)
+endif
+
 FORCE:
 
 ifneq (,$(filter $(INCL_DEVICE_BINARY),True true TRUE 1))

@@ -8,16 +8,17 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
-// Generic R/W IO
-#include "io.h"
 
 // Chipid
 #include "chip_id.h"
+// BINGO Perf Tracing
+#include "perf_tracing.h"
 // Occamy specific definitions
 #include "occamy_defs.h"
 #include "occamy_memory_map.h"
 #include "sys_dma.h"
 #include "uart.h"
+#include "heterogeneous_runtime.h"
 // Vendor
 // l1 heap allocator
 #include "o1heap64.h"

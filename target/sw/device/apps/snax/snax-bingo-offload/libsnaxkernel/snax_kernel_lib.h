@@ -6,6 +6,20 @@
 // Xiaoling Yi <xiaoling.yi@kuleuven.be>
 
 #pragma once
+// #define IDMA_DEBUG
+// #define VERSACORE_DEBUG
+// Debug Prints
+#ifdef IDMA_DEBUG
+#define IDMA_DEBUG_PRINT(...) printf_safe(__VA_ARGS__)
+#else
+#define IDMA_DEBUG_PRINT(...)
+#endif
+
+#ifdef XDMA_DEBUG
+#define XDMA_DEBUG_PRINT(...) printf_safe(__VA_ARGS__)
+#else
+#define XDMA_DEBUG_PRINT(...)
+#endif
 
 #include <snax_versacore_lib.h>
 #include "versacore_hw_param.h"
@@ -32,25 +46,12 @@ inline uint64_t make_u64(uint32_t hi, uint32_t lo)
 
 #define EXTRACT_BIT(x, pos) (((x) >> (pos)) & 1)
 
-// Debug Prints
-#ifdef IDMA_DEBUG
-#define IDMA_DEBUG_PRINT(...) printf(__VA_ARGS__)
-#else
-#define IDMA_DEBUG_PRINT(...)
-#endif
 
-#ifdef XDMA_DEBUG
-#define XDMA_DEBUG_PRINT(...) printf(__VA_ARGS__)
-#else
-#define XDMA_DEBUG_PRINT(...)
-#endif
+// We have two sets of kernels:
+// 1. Cluster-level kernels: these kernels are launched on a cluster and can utilize all cores in the cluster. This is used for the pure bingo sw.
+// 2. Core-level kernels: these kernels are launched on each core individually. This is used for the hw bingo.
 
-#ifdef CHECK_RESULT_DEBUG
-#define CHECK_RESULT_DEBUG_PRINT(...) printf(__VA_ARGS__)
-#else
-#define CHECK_RESULT_DEBUG_PRINT(...)
-#endif
-//////////////////////// Kernel functions ////////////////////////
+//////////////////////// Cluster-level Kernel functions ////////////////////////
 // Template for user defined kernels
 // Each kernel function takes a single void* argument
 
@@ -63,15 +64,20 @@ inline uint64_t make_u64(uint32_t hi, uint32_t lo)
 
 SNAX_LIB_DEFINE void __snax_kernel_dummy(void *arg)
 {
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
     uint32_t arg0 = ((uint32_t *)arg)[0];
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+
+    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
     if (snrt_is_dm_core())
     {
-        printf(
+        printf_safe(
             "Chip(%x, %x): [Cluster %d] Core(%d) Running Dummy Kernel with "
             "arg[0] = %d\n",
             get_current_chip_loc_x(), get_current_chip_loc_y(),
             snrt_cluster_idx(), snrt_cluster_core_idx(), arg0);
     }
+    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
 }
 
 SNAX_LIB_DEFINE void __snax_kernel_csr(void *arg)
@@ -83,6 +89,7 @@ SNAX_LIB_DEFINE void __snax_kernel_csr(void *arg)
     // shared_ptrs[1] csr_read_value
     if (snrt_is_dm_core())
     {
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
         get_cls_shared_ptrs()[0] = (uint32_t *)snrt_l1_malloc(256);
         get_cls_shared_ptrs()[1] = (uint32_t *)snrt_l1_malloc(4);
         get_cls_shared_ptrs()[0][0] = ((uint32_t *)arg)[0];
@@ -90,7 +97,9 @@ SNAX_LIB_DEFINE void __snax_kernel_csr(void *arg)
         uint32_t csr_addr = get_cls_shared_ptrs()[0][0];
         uint32_t csr_write_value = get_cls_shared_ptrs()[0][1];
         uint32_t csr_read_value = get_cls_shared_ptrs()[1][0];
-        printf(
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+        BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
+        printf_safe(
             "Chip(%x, %x): Running CSR Kernel with arg[0](csr_addr) = %d, "
             "arg[1](csr_value) = %x\n",
             get_current_chip_loc_x(), get_current_chip_loc_y(), csr_addr,
@@ -99,14 +108,15 @@ SNAX_LIB_DEFINE void __snax_kernel_csr(void *arg)
         csr_read_value = csrr_ss(csr_addr);
         if (csr_read_value != csr_write_value)
         {
-            printf("Chip(%x, %x): Error! R/W CSR values are not the same!\n",
+            printf_safe("Chip(%x, %x): Error! R/W CSR values are not the same!\n",
                    get_current_chip_loc_x(), get_current_chip_loc_y());
         }
         else
         {
-            printf("Chip(%x, %x): Pass!\n", get_current_chip_loc_x(),
+            printf_safe("Chip(%x, %x): Pass!\n", get_current_chip_loc_x(),
                    get_current_chip_loc_y());
         }
+        BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
     }
 }
 
@@ -119,13 +129,14 @@ SNAX_LIB_DEFINE void __snax_kernel_check_results(void *arg)
     // Arg2: data_size in Byte
     if (snrt_is_dm_core())
     {
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
         uint32_t golden_data_addr = ((uint32_t *)arg)[0];
         uint32_t output_data_addr = ((uint32_t *)arg)[1];
         uint32_t data_size = ((uint32_t *)arg)[2];
         uint32_t num_errors = 0;
-        CHECK_RESULT_DEBUG_PRINT("Checking results...\n");
-        CHECK_RESULT_DEBUG_PRINT("Golden data address: %x\n", golden_data_addr);
-        CHECK_RESULT_DEBUG_PRINT("Output data address: %x\n", output_data_addr);
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+
+        BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
         for (uint32_t i = 0; i < data_size / sizeof(uint32_t); i++)
         {
             if (((uint32_t *)golden_data_addr)[i] !=
@@ -134,7 +145,7 @@ SNAX_LIB_DEFINE void __snax_kernel_check_results(void *arg)
                 num_errors++;
                 if (num_errors < 10)
                 {
-                    printf("Error at index %d: golden = %x, output = %x\n", i,
+                    printf_safe("Error at index %d: golden = %x, output = %x\n", i,
                            ((uint32_t *)golden_data_addr)[i],
                            ((uint32_t *)output_data_addr)[i]);
                 }
@@ -142,12 +153,13 @@ SNAX_LIB_DEFINE void __snax_kernel_check_results(void *arg)
         }
         if (num_errors == 0)
         {
-            printf("Check Results: PASS! No errors found.\n");
+            printf_safe("Check Results: PASS! No errors found.\n");
         }
         else
         {
-            printf("Check Results: FAIL! %d errors found.\n", num_errors);
+            printf_safe("Check Results: FAIL! %d errors found.\n", num_errors);
         }
+        BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
     }
 }
 
@@ -162,12 +174,15 @@ SNAX_LIB_DEFINE void __snax_kernel_check_results_full(void *arg)
     // Arg4: data_size in Byte
     if (snrt_is_dm_core())
     {
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
         uint32_t golden_data_addr_hi = ((uint32_t *)arg)[0];
         uint32_t golden_data_addr_lo = ((uint32_t *)arg)[1];
         uint32_t output_data_addr_hi = ((uint32_t *)arg)[2];
         uint32_t output_data_addr_lo = ((uint32_t *)arg)[3];
         uint32_t data_size = ((uint32_t *)arg)[4];
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
+        BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
         uint32_t golden_data_l1 =
             snrt_l1_malloc(data_size); // allocate L1 memory for golden data
         uint32_t output_data_l1 =
@@ -205,6 +220,7 @@ SNAX_LIB_DEFINE void __snax_kernel_check_results_full(void *arg)
 
         snrt_l1_free(golden_data_l1);
         snrt_l1_free(output_data_l1);
+        BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
     }
 }
 
@@ -222,7 +238,7 @@ SNAX_LIB_DEFINE void __snax_kernel_load_compute_store(void *arg)
     {
         // We allocate 256 bytes of heap memory for the args
         // Each arg is 4 bytes, so we can store 64 args
-
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
         get_cls_shared_ptrs()[0] = (uint32_t *)snrt_l1_malloc(256);
         get_cls_shared_ptrs()[0][0] = ((uint32_t *)arg)[0];
         get_cls_shared_ptrs()[0][1] = ((uint32_t *)arg)[1];
@@ -231,41 +247,25 @@ SNAX_LIB_DEFINE void __snax_kernel_load_compute_store(void *arg)
         // We then allocate the space for input and output data
         get_cls_shared_ptrs()[1] = (uint32_t *)snrt_l1_malloc(get_cls_shared_ptrs()[0][1]);
         get_cls_shared_ptrs()[2] = (uint32_t *)snrt_l1_malloc(get_cls_shared_ptrs()[0][3]);
-
-        // printf("[Cluster %d] Core(%d) Allocated heap memory for args, input
-        // and output data\n", snrt_cluster_idx(), snrt_cluster_core_idx());
-        // printf("[Cluster %d] Core(%d) Shared pointer at 0x%x\n",
-        // snrt_cluster_idx(), snrt_cluster_core_idx(),get_cls_shared_ptrs());
-        // printf("[Cluster %d] Core(%d) Args at 0x%x\n", snrt_cluster_idx(),
-        // snrt_cluster_core_idx(),get_cls_shared_ptrs()[0]); printf("[Cluster
-        // %d] Core(%d) Input data at 0x%x\n", snrt_cluster_idx(),
-        // snrt_cluster_core_idx(),get_cls_shared_ptrs()[1]); printf("[Cluster
-        // %d] Core(%d) Output data at 0x%x\n", snrt_cluster_idx(),
-        // snrt_cluster_core_idx(),get_cls_shared_ptrs()[2]);
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
     }
     snrt_cluster_hw_barrier();
+    
     if (snrt_is_dm_core())
     {
         // load the input data
+        BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_START);
         snrt_dma_start_1d((void *)get_cls_shared_ptrs()[1],
                           (void *)get_cls_shared_ptrs()[0][0],
                           get_cls_shared_ptrs()[0][1]);
         snrt_dma_wait_all();
-        printf("[Cluster %d] Core(%d) Load Input Data\n", snrt_cluster_idx(),
-               snrt_cluster_core_idx());
+        BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_END);
     }
     snrt_cluster_hw_barrier();
     if (snrt_cluster_core_idx() == 0)
     {
         // We choose the first core to do the dummy +1 computation
-        // printf("[Cluster %d] Core(%d) Inputs...\n", snrt_cluster_idx(),
-        // snrt_cluster_core_idx()); for(uint32_t
-        // i=0;i<get_cls_shared_ptrs()[0][1]/sizeof(uint32_t);i++){
-        //     printf("[Cluster %d] Core(%d) Input[%d] = %d\n",
-        //     snrt_cluster_idx(), snrt_cluster_core_idx(), i,
-        //     get_cls_shared_ptrs()[1][i]);
-        // }
-
+        BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
         printf("[Cluster %d] Core(%d) Compute...\n", snrt_cluster_idx(),
                snrt_cluster_core_idx());
         for (uint32_t i = 0; i < get_cls_shared_ptrs()[0][1] / sizeof(uint32_t);
@@ -280,17 +280,18 @@ SNAX_LIB_DEFINE void __snax_kernel_load_compute_store(void *arg)
         //     snrt_cluster_idx(), snrt_cluster_core_idx(), i,
         //     get_cls_shared_ptrs()[1][i]);
         // }
+        BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
     }
     snrt_cluster_hw_barrier();
     if (snrt_is_dm_core())
     {
         // We store the output data
+        BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_START);
         snrt_dma_start_1d((void *)get_cls_shared_ptrs()[0][2],
                           (void *)get_cls_shared_ptrs()[1],
                           get_cls_shared_ptrs()[0][3]);
         snrt_dma_wait_all();
-        printf("[Cluster %d] Core(%d) Store Data\n", snrt_cluster_idx(),
-               snrt_cluster_core_idx());
+        BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_END);
     }
     snrt_cluster_hw_barrier();
     if (snrt_is_dm_core())
@@ -308,7 +309,7 @@ SNAX_LIB_DEFINE void __snax_kernel_load_compute_store(void *arg)
     }
 }
 
-SNAX_LIB_DEFINE void __snax_kernel_double_buffer_example(void *arg)
+SNAX_LIB_DEFINE void __snax_kernel_double_buffer(void *arg)
 {
     // Example kernel for double buffering
 
@@ -410,13 +411,17 @@ SNAX_LIB_DEFINE void __snax_kernel_double_buffer_example(void *arg)
                              : ((s + 1) % 3 == 1 ? tile_buf_1 : tile_buf_2);
         if (s == 0)
         {
+            
             // T0: Load tile 0
             if (snrt_is_dm_core())
             {
+                BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_START);
                 snrt_dma_start_1d((void *)load_buf, (void *)input_data_addr,
                                   tile_size);
                 snrt_dma_wait_all();
+                BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_END);
             }
+            
         }
 
         if (s == 1)
@@ -424,17 +429,21 @@ SNAX_LIB_DEFINE void __snax_kernel_double_buffer_example(void *arg)
             // T1: Load tile 1 + Compute tile 0
             if (snrt_is_dm_core())
             {
+                BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_START);
                 snrt_dma_start_1d((void *)load_buf,
                                   (void *)(input_data_addr + tile_size),
                                   tile_size);
                 snrt_dma_wait_all();
+                BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_END);
             }
             if (snrt_cluster_core_idx() == 0)
-            {
+            {   
+                BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
                 for (uint32_t i = 0; i < tile_size / sizeof(uint32_t); i++)
                 {
                     compute_buf[i] += 1;
                 }
+                BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
             }
         }
 
@@ -444,6 +453,7 @@ SNAX_LIB_DEFINE void __snax_kernel_double_buffer_example(void *arg)
             if (snrt_is_dm_core())
             {
                 // Load tile s
+                BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_START);
                 snrt_dma_start_1d((void *)load_buf,
                                   (void *)(input_data_addr + s * tile_size),
                                   tile_size);
@@ -452,14 +462,17 @@ SNAX_LIB_DEFINE void __snax_kernel_double_buffer_example(void *arg)
                     (void *)(output_data_addr + (s - 2) * tile_size),
                     (void *)store_buf, tile_size);
                 snrt_dma_wait_all();
+                BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_END);
             }
             // Compute tile s-1
             if (snrt_cluster_core_idx() == 0)
             {
+                BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
                 for (uint32_t i = 0; i < tile_size / sizeof(uint32_t); i++)
                 {
                     compute_buf[i] += 1;
                 }
+                BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
             }
         }
 
@@ -468,17 +481,21 @@ SNAX_LIB_DEFINE void __snax_kernel_double_buffer_example(void *arg)
             // TS-1: Compute tile s-1 + Store tile s-2
             if (snrt_cluster_core_idx() == 0)
             {
+                BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
                 for (uint32_t i = 0; i < tile_size / sizeof(uint32_t); i++)
                 {
                     compute_buf[i] += 1; // Example computation
                 }
+                BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
             }
             if (snrt_is_dm_core())
             {
+                BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_START);
                 snrt_dma_start_1d(
                     (void *)(output_data_addr + (num_tiles - 2) * tile_size),
                     (void *)store_buf, tile_size);
                 snrt_dma_wait_all();
+                BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_END);
             }
         }
 
@@ -487,10 +504,12 @@ SNAX_LIB_DEFINE void __snax_kernel_double_buffer_example(void *arg)
             // TS: Store tile s-2
             if (snrt_is_dm_core())
             {
+                BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_START);
                 snrt_dma_start_1d(
                     (void *)(output_data_addr + (num_tiles - 1) * tile_size),
                     (void *)store_buf, tile_size);
                 snrt_dma_wait_all();
+                BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_END);
             }
         }
 
@@ -509,16 +528,19 @@ SNAX_LIB_DEFINE void __snax_kernel_xdma_1d_copy(void *arg)
 
     if (snrt_is_dm_core())
     {
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
         uint64_t src_addr = make_u64(((uint32_t *)arg)[0], ((uint32_t *)arg)[1]);
         uint64_t dst_addr = make_u64(((uint32_t *)arg)[2], ((uint32_t *)arg)[3]);
         uint32_t data_size = ((uint32_t *)arg)[4];
+        XDMA_DEBUG_PRINT("XDMA copy: src_addr=0x%lx, dst_addr=0x%lx, size=%d bytes\n",
+               src_addr, dst_addr, data_size);
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
         xdma_memcpy_1d_full_addr(src_addr, dst_addr, data_size);
         int task_id = xdma_start();
         xdma_remote_wait(task_id);
-        XDMA_DEBUG_PRINT("XDMA copy completed\n");
-        XDMA_DEBUG_PRINT("SRC ADDR = %lx\n", src_addr);
-        XDMA_DEBUG_PRINT("DST ADDR = %lx\n", dst_addr);
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
     }
 }
 
@@ -533,12 +555,16 @@ SNAX_LIB_DEFINE void __snax_kernel_idma_1d_copy(void *arg)
 
     if (snrt_is_dm_core())
     {
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
         uint64_t src_addr = make_u64(((uint32_t *)arg)[0], ((uint32_t *)arg)[1]);
         uint64_t dst_addr = make_u64(((uint32_t *)arg)[2], ((uint32_t *)arg)[3]);
         uint32_t data_size = ((uint32_t *)arg)[4];
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
+        BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_START);
         snrt_dma_start_1d_wideptr(dst_addr, src_addr, data_size);
         snrt_dma_wait_all();
+        BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_END);
         IDMA_DEBUG_PRINT("IDMA copy completed\r\n");
         IDMA_DEBUG_PRINT("SRC ADDR = %lx\r\n", src_addr);
         IDMA_DEBUG_PRINT("DST ADDR = %lx\r\n", dst_addr);
@@ -546,1347 +572,6 @@ SNAX_LIB_DEFINE void __snax_kernel_idma_1d_copy(void *arg)
 }
 
 // //////////////////////// VERSACORE ////////////////////////
-// SNAX_LIB_DEFINE void __snax_kernel_versacore_load_compute_store_w_streamer_args(
-//     void* arg) {
-//     // Compute D = A*B + C using versacore
-//     // A: int8
-//     // B: int8
-//     // C: int32
-//     // D: int32
-//     // Inputs
-//     // Arg0: uint32_t input_A_addr_hi
-//     // Arg1: uint32_t input_A_addr_lo
-//     // Arg2: uint32_t input_A_size in Byte
-//     // Arg3: uint32_t input_B_addr_hi
-//     // Arg4: uint32_t input_B_addr_lo
-//     // Arg5: uint32_t input_B_size in Byte
-//     // Arg6: uint32_t input_C_addr_hi
-//     // Arg7: uint32_t input_C_addr_lo
-//     // Arg8: uint32_t input_C_size in Byte
-//     // Outputs
-//     // Arg9: uint32_t output_addr_hi
-//     // Arg10: uint32_t output_addr_lo
-
-//     // Streamer Arguments
-//     // Arg11: uint32_t streamer_cfg_addr_hi
-//     // Arg12: uint32_t streamer_cfg_addr_lo
-//     // Arg13: uint32_t streamer_cfg_size in Byte
-
-//     // Versacore Arguments
-//     // Arg14: uint32_t versacore_cfg_addr_hi
-//     // Arg15: uint32_t versacore_cfg_addr_lo
-//     // Arg16: uint32_t versacore_cfg_size in Byte
-
-//     // Arg length
-//     // Arg17: uint32_t argument length in Byte
-
-//     // shared_ptrs[0] arg_ptr
-//     // shared_ptrs[1] l1_A_data_ptr
-//     // shared_ptrs[2] l1_B_data_ptr
-//     // shared_ptrs[3] l1_C_data_ptr
-//     // shared_ptrs[4] l1_D_data_ptr
-//     // shared_ptrs[5] l1_streamer_cfg_ptr
-//     // shared_ptrs[6] l1_versacore_cfg_ptr
-//     uint64_t l3_input_A_addr, l3_input_B_addr, l3_input_C_addr,
-//         l3_streamer_cfg_addr, l3_versacore_cfg_addr;
-//     uint32_t input_A_size, input_B_size, input_C_size, streamer_cfg_size,
-//         versacore_cfg_size;
-
-//     if (snrt_is_dm_core()) {
-//         // We have two dma in the system
-//         // xdma is optmized for large data transfer
-//         // idma is optmized for 1d data transfer (preferred for loading args)
-//         ///////////////////////////////////////
-//         // Allocate the L1 memory for args   //
-//         ///////////////////////////////////////
-//         // We allocate 128 bytes of heap memory for the args
-//         // Each arg is 4 bytes, so we can store 32 args
-//         get_cls_shared_ptrs()[0] = snrt_l1_malloc(128);
-//         // l1_arg_ptr = get_cls_shared_ptrs()[0];
-
-//         ////////////////////////////////////
-//         // Call the idma to load the args //
-//         ////////////////////////////////////
-//         // First we need to use the DMA to load all the arguments from L3 into
-//         // L1 Here we assume the arguments are packed in a contiguous way in L3
-
-//         snrt_dma_start_1d((void*)get_cls_shared_ptrs()[0], (void*)arg,
-//                           ((uint32_t*)arg)[17]);
-//         snrt_dma_wait_all();
-
-//         // printf("[Cluster %d] Core(%d) Load Kernel Args: Dst = %x, Src =
-//         // %x\n", snrt_cluster_idx(),
-//         //        snrt_cluster_core_idx(), get_cls_shared_ptrs()[0], arg);
-
-//         // printf("[Cluster %d] Core(%d) Kernel Args:\n", snrt_cluster_idx(),
-//         //        snrt_cluster_core_idx());
-//         // for (uint32_t i = 0; i < ((uint32_t *)l1_arg_ptr)[17] /
-//         // sizeof(uint32_t);
-//         //      i++) {
-//         //     printf("[Cluster %d] Core(%d) Arg[%d] = %x\n",
-//         //     snrt_cluster_idx(),
-//         //            snrt_cluster_core_idx(), i, ((uint32_t *)l1_arg_ptr)[i]);
-//         // }
-//         /////////////////////////////////////////
-//         // Allocate the L1 memory for Inputs   //
-//         /////////////////////////////////////////
-//         // Allocate the l1 space specifed by the arg
-//         // Input data A
-//         get_cls_shared_ptrs()[1] = snrt_l1_malloc(get_cls_shared_ptrs()[0][2]);
-//         // l1_A_data_ptr = get_cls_shared_ptrs()[1];
-//         // Input data B
-//         get_cls_shared_ptrs()[2] = snrt_l1_malloc(get_cls_shared_ptrs()[0][5]);
-//         // l1_B_data_ptr = get_cls_shared_ptrs()[2];
-//         // Input data C
-//         get_cls_shared_ptrs()[3] = snrt_l1_malloc(get_cls_shared_ptrs()[0][8]);
-//         // l1_C_data_ptr = get_cls_shared_ptrs()[3];
-//         // output data D
-//         // Size of D is the same as C
-//         get_cls_shared_ptrs()[4] = snrt_l1_malloc(get_cls_shared_ptrs()[0][8]);
-//         // l1_D_data_ptr = get_cls_shared_ptrs()[4];
-//         ///////////////////////////////
-//         // Call the dma to load A    //
-//         ///////////////////////////////
-//         l3_input_A_addr =
-//             make_u64(get_cls_shared_ptrs()[0][0], get_cls_shared_ptrs()[0][1]);
-//         input_A_size = (get_cls_shared_ptrs()[0][2]);
-//         xdma_memcpy_1d((void*)l3_input_A_addr, (void*)get_cls_shared_ptrs()[1],
-//                        input_A_size);
-//         int task_id = xdma_start();
-//         xdma_remote_wait(task_id);
-//         printf("[Cluster %d] Core(%d) Load Input A: Dst = %x, Src = %x\n",
-//                snrt_cluster_idx(), snrt_cluster_core_idx(),
-//                get_cls_shared_ptrs()[1], (uint32_t)l3_input_A_addr);
-//         printf("[Cluster %d] Core(%d) Input A[0] = %d\n", snrt_cluster_idx(),
-//                snrt_cluster_core_idx(), get_cls_shared_ptrs()[1][0]);
-//         ///////////////////////////////
-//         // Call the dma to load B    //
-//         ///////////////////////////////
-//         l3_input_B_addr =
-//             make_u64(get_cls_shared_ptrs()[0][3], get_cls_shared_ptrs()[0][4]);
-//         input_B_size = (get_cls_shared_ptrs()[0][5]);
-//         xdma_memcpy_1d((void*)l3_input_B_addr, (void*)get_cls_shared_ptrs()[2],
-//                        input_B_size);
-//         task_id = xdma_start();
-//         xdma_remote_wait(task_id);
-//         // printf("[Cluster %d] Core(%d) Load Input B: Dst = %x, Src = %x\n",
-//         // snrt_cluster_idx(),
-//         //        snrt_cluster_core_idx(), get_cls_shared_ptrs()[2],
-//         //        (uint32_t)l3_input_B_addr);
-//         printf("[Cluster %d] Core(%d) Input B[0] = %d\n", snrt_cluster_idx(),
-//                snrt_cluster_core_idx(), get_cls_shared_ptrs()[2][0]);
-//         ///////////////////////////////
-//         // Call the dma to load C    //
-//         ///////////////////////////////
-//         l3_input_C_addr =
-//             make_u64(get_cls_shared_ptrs()[0][6], get_cls_shared_ptrs()[0][7]);
-//         input_C_size = (get_cls_shared_ptrs()[0][8]);
-//         xdma_memcpy_1d((void*)l3_input_C_addr, (void*)get_cls_shared_ptrs()[3],
-//                        input_C_size);
-//         task_id = xdma_start();
-//         xdma_remote_wait(task_id);
-//         printf("[Cluster %d] Core(%d) Input C[0] = %d\n", snrt_cluster_idx(),
-//                snrt_cluster_core_idx(), get_cls_shared_ptrs()[3][0]);
-//         // printf("[Cluster %d] Core(%d) Load Input C: Dst = %x, Src = %x\n",
-//         // snrt_cluster_idx(),
-//         //        snrt_cluster_core_idx(), get_cls_shared_ptrs()[3],
-//         //        (uint32_t)l3_input_C_addr);
-//         //////////////////////////////////////////////////////////////
-//         // Allocated the L1 memory for Stream and Versacore CSRs    //
-//         //////////////////////////////////////////////////////////////
-//         get_cls_shared_ptrs()[5] =
-//             snrt_l1_malloc(((uint32_t*)get_cls_shared_ptrs()[0])[13]);
-//         // l1_streamer_cfg_ptr = get_cls_shared_ptrs()[5];
-//         get_cls_shared_ptrs()[6] =
-//             snrt_l1_malloc(((uint32_t*)get_cls_shared_ptrs()[0])[16]);
-//         // l1_versacore_cfg_ptr = get_cls_shared_ptrs()[6];
-
-//         //////////////////////////////////////////
-//         // Call the dma to load streamer cfg    //
-//         //////////////////////////////////////////
-//         l3_streamer_cfg_addr = make_u64(get_cls_shared_ptrs()[0][11],
-//                                         get_cls_shared_ptrs()[0][12]);
-//         streamer_cfg_size = (get_cls_shared_ptrs()[0][13]);
-//         snrt_dma_start_1d((void*)get_cls_shared_ptrs()[5],
-//                           (void*)l3_streamer_cfg_addr, streamer_cfg_size);
-//         snrt_dma_wait_all();
-//         // printf("[Cluster %d] Core(%d) Load Streamer Cfg: Dst = %x, Src =
-//         // %x\n", snrt_cluster_idx(),
-//         //        snrt_cluster_core_idx(), get_cls_shared_ptrs()[5],
-//         //        l3_streamer_cfg_addr);
-//         //////////////////////////////////////////
-//         // Call the dma to load versacore cfg   //
-//         //////////////////////////////////////////
-//         l3_versacore_cfg_addr = make_u64(get_cls_shared_ptrs()[0][14],
-//                                          get_cls_shared_ptrs()[0][15]);
-//         versacore_cfg_size = (get_cls_shared_ptrs()[0][16]);
-//         snrt_dma_start_1d((void*)get_cls_shared_ptrs()[6],
-//                           (void*)l3_versacore_cfg_addr, versacore_cfg_size);
-//         snrt_dma_wait_all();
-//         // printf("[Cluster %d] Core(%d) Load Versacore Cfg: Dst = %x, Src =
-//         // %x\n", snrt_cluster_idx(),
-//         //        snrt_cluster_core_idx(), get_cls_shared_ptrs()[6],
-//         //        l3_versacore_cfg_addr);
-//     }
-//     snrt_cluster_hw_barrier();
-//     // The core 0 will be responsible for configuring and starting the versacore
-//     if (snrt_cluster_core_idx() == 0) {
-//         // Configuration the Steamer and Versacore
-//         // NOTE: The streamer configuration layout in l1_streamer_cfg_ptr is
-//         // currently a flat array of 32-bit words. We treat each index as the
-//         // start of a (possibly single-element) array for stride/bound/channel
-//         // parameters. Adjust the grouping and lengths once the exact packing
-//         // format is defined. For now this fixes the type mismatches so CSR
-//         // writes receive proper scalars vs pointers.
-//         set_versacore_streamer_csr(
-//             (uint32_t)(uintptr_t)get_cls_shared_ptrs()[1],  // A_addr
-//             (uint32_t*)get_cls_shared_ptrs()[5][0],         // Aslstride
-//             (uint32_t*)get_cls_shared_ptrs()[5][1],         // Atlbound[] base
-//             (uint32_t*)get_cls_shared_ptrs()[5][2],         // Atlstride[] base
-//             get_cls_shared_ptrs()[5][3],             // set_addr_remap_index_A
-//             get_cls_shared_ptrs()[5][4],             // transpose_A
-//             (uint32_t*)get_cls_shared_ptrs()[5][5],  // channel_en_A []
-
-//             (uint32_t)(uintptr_t)get_cls_shared_ptrs()[2],  // B_addr
-//             (uint32_t*)get_cls_shared_ptrs()[5][6],         // Bslstride[] base
-//             (uint32_t*)get_cls_shared_ptrs()[5][7],         // Btlbound[] base
-//             (uint32_t*)get_cls_shared_ptrs()[5][8],         // Btlstride[] base
-//             get_cls_shared_ptrs()[5][9],              // set_addr_remap_index_B
-//             get_cls_shared_ptrs()[5][10],             // transpose_B
-//             (uint32_t*)get_cls_shared_ptrs()[5][11],  // channel_en_B []
-
-//             (uint32_t)(uintptr_t)get_cls_shared_ptrs()[3],  // C_addr
-//             (uint32_t*)get_cls_shared_ptrs()[5][12],        // Cslstride[] base
-//             (uint32_t*)get_cls_shared_ptrs()[5][13],        // Ctlbound[] base
-//             (uint32_t*)get_cls_shared_ptrs()[5][14],        // Ctlstride[] base
-//             get_cls_shared_ptrs()[5][15],             // set_addr_remap_index_C
-//             (uint32_t*)get_cls_shared_ptrs()[5][16],  // channel_en_C []
-
-//             (uint32_t)(uintptr_t)get_cls_shared_ptrs()[4],  // D_addr
-//             (uint32_t*)get_cls_shared_ptrs()[5][17],  // D32slstride[] base
-//             (uint32_t*)get_cls_shared_ptrs()[5][18],  // D32tlbound[] base
-//             (uint32_t*)get_cls_shared_ptrs()[5][19],  // D32tlstride[] base
-//             get_cls_shared_ptrs()[5][20],            // set_addr_remap_index_D32
-//             (uint32_t*)get_cls_shared_ptrs()[5][21],  // channel_en_D32 []
-
-//             0, 0, 0, 0, 0, 0, 0
-//         );
-//         // printf("[Cluster %d] Core(%d) Config Streamer\n",snrt_cluster_idx(),
-//         //        snrt_cluster_core_idx());
-//         // printf("[Cluster %d] Core(%d) A_addr = %x\n",snrt_cluster_idx(),
-//         //        snrt_cluster_core_idx(), get_cls_shared_ptrs()[1]);
-//         // printf("[Cluster %d] Core(%d) B_addr = %x\n",snrt_cluster_idx(),
-//         //        snrt_cluster_core_idx(), get_cls_shared_ptrs()[2]);
-//         // printf("[Cluster %d] Core(%d) C_addr = %x\n",snrt_cluster_idx(),
-//         //        snrt_cluster_core_idx(), get_cls_shared_ptrs()[3]);
-//         // printf("[Cluster %d] Core(%d) D_addr = %x\n",snrt_cluster_idx(),
-//         //        snrt_cluster_core_idx(), get_cls_shared_ptrs()[4]);
-//         // for (int i=0; i<22; i++){
-//         //     printf("[Cluster %d] Core(%d) Streamer_cfg[%d] =
-//         //     %x\n",snrt_cluster_idx(),
-//         //        snrt_cluster_core_idx(), i, get_cls_shared_ptrs()[5][i]);
-//         // }
-
-//         set_versacore_csr(
-//             get_cls_shared_ptrs()[6][0],  // tempLoop0
-//             get_cls_shared_ptrs()[6][1],  // tempLoop1
-//             get_cls_shared_ptrs()[6][2],  // tempLoop2
-//             gen_subtraction_config(
-//                 (int8_t)get_cls_shared_ptrs()[6][3],
-//                 (int8_t)get_cls_shared_ptrs()[6][4]),  // subtraction
-//             get_cls_shared_ptrs()[6][5],               // array_shape
-//             get_cls_shared_ptrs()[6][6]                // data_type
-//         );
-//         // printf("[Cluster %d] Core(%d) Config Versacore\n",snrt_cluster_idx(),
-//         //        snrt_cluster_core_idx());
-//         // for (int i=0; i<7; i++){
-//         //     printf("[Cluster %d] Core(%d) Versacore_cfg[%d] =
-//         //     %x\n",snrt_cluster_idx(),
-//         //        snrt_cluster_core_idx(), i, get_cls_shared_ptrs()[6][i]);
-//         // }
-//         ////////////////////////////////////
-//         // Start the Streamer and Versacore
-//         ////////////////////////////////////
-//         start_versacore_and_streamer();
-//         printf("[Cluster %d] Core(%d) Start Versacore\n", snrt_cluster_idx(),
-//                snrt_cluster_core_idx());
-//         // Wait for the Versacore to finish
-//         wait_versacore_and_streamer();
-//     }
-
-//     snrt_cluster_hw_barrier();
-//     if (snrt_is_dm_core()) {
-//         // Send the output data back to L3
-//         uint64_t l3_output_addr =
-//             make_u64(get_cls_shared_ptrs()[0][9], get_cls_shared_ptrs()[0][10]);
-//         uint32_t output_size = get_cls_shared_ptrs()[0][8];
-//         // D is the temporary output buffer in L1
-//         printf("[Cluster %d] Core(%d) Quick check on D[0] = %d\n",
-//                snrt_cluster_idx(), snrt_cluster_core_idx(),
-//                get_cls_shared_ptrs()[4][0]);
-//         xdma_memcpy_1d((void*)get_cls_shared_ptrs()[4], (void*)l3_output_addr,
-//                        output_size);
-//         int task_id = xdma_start();
-//         xdma_remote_wait(task_id);
-//         printf("[Cluster %d] Core(%d) Store Output: Dst = %x, Src = %x\n",
-//                snrt_cluster_idx(), snrt_cluster_core_idx(),
-//                get_cls_shared_ptrs()[4], (uint32_t)l3_output_addr);
-//         // Free the allocated L1 memory
-//         snrt_l1_free(get_cls_shared_ptrs()[0]);
-//         snrt_l1_free(get_cls_shared_ptrs()[1]);
-//         snrt_l1_free(get_cls_shared_ptrs()[2]);
-//         snrt_l1_free(get_cls_shared_ptrs()[3]);
-//         snrt_l1_free(get_cls_shared_ptrs()[4]);
-//         snrt_l1_free(get_cls_shared_ptrs()[5]);
-//         snrt_l1_free(get_cls_shared_ptrs()[6]);
-//         // Reset the shared pointers
-//         snrt_memset(get_cls_shared_ptrs(), 0,
-//                     sizeof(uint32_t*) * NUM_CLS_SHARED_PTRS);
-//     }
-// }
-
-// SNAX_LIB_DEFINE void __snax_kernel_gemm_intra_chiplet(void* arg) {
-//     // move the args to local variables
-//     if (snrt_is_dm_core()) {
-//         // allocate L1 memory for global variables across the cluster
-//         ///////////////////////////////////////
-//         // Allocate the L1 memory //
-//         ///////////////////////////////////////
-//         get_cls_shared_ptrs()[0] = snrt_l1_malloc(128);
-//         if (!get_cls_shared_ptrs()[0]) {
-//             VERSACORE_DEBUG_PRINT("ERROR: arg alloc failed!\r\n");
-//             return;
-//         } else {
-//             VERSACORE_DEBUG_PRINT("Allocated arg at %p\r\n",
-//                                   (void*)get_cls_shared_ptrs()[0]);
-//         }
-
-//         ////////////////////////////////////
-//         // Call the idma to load the args //
-//         ////////////////////////////////////
-//         // First we need to use the DMA to load all the arguments from L3 into
-//         // L1 Here we assume the arguments are packed in a contiguous way in L3
-//         VERSACORE_DEBUG_PRINT("GEMM Intra-Chiplet Kernel Start!\r\n");
-
-//         snrt_dma_start_1d(
-//             (void*)get_cls_shared_ptrs()[0], (void*)arg,
-//             sizeof(uint32_t) * 15);  // 15 uint32_t passed args in total
-//         snrt_dma_wait_all();
-
-//         // we use the following args, they are shared across the cluster
-//         // arg0: uint32_t A_addr_hi get_cls_shared_ptrs()[0][0]
-//         // arg1: uint32_t A_addr_lo get_cls_shared_ptrs()[0][1]
-//         // arg2: uint32_t B_addr_hi get_cls_shared_ptrs()[0][2]
-//         // arg3: uint32_t B_addr_lo get_cls_shared_ptrs()[0][3]
-//         // arg4: uint32_t C_addr_hi get_cls_shared_ptrs()[0][4]
-//         // arg5: uint32_t C_addr_lo get_cls_shared_ptrs()[0][5]
-//         // arg6: uint32_t D_addr_hi get_cls_shared_ptrs()[0][6]
-//         // arg7: uint32_t D_addr_lo get_cls_shared_ptrs()[0][7]
-//         // arg8: uint32_t M get_cls_shared_ptrs()[0][8]
-//         // arg9: uint32_t K get_cls_shared_ptrs()[0][9]
-//         // arg10: uint32_t N get_cls_shared_ptrs()[0][10]
-//         // arg11: uint32_t array_shape_idx get_cls_shared_ptrs()[0][11]
-//         // arg12: transpose A get_cls_shared_ptrs()[0][12]
-//         // arg13: transpose B get_cls_shared_ptrs()[0][13]
-//         // arg14: get_cls_shared_ptrs()[0][14] is used for accumPrevC
-
-//         // get_cls_shared_ptrs()[0][15] is used for addNonZeroC
-//         // get_cls_shared_ptrs()[0][16] is used for meshRow
-//         // get_cls_shared_ptrs()[0][17] is used for tileSize
-//         // get_cls_shared_ptrs()[0][18] is used for meshCol
-
-//         VERSACORE_DEBUG_PRINT("GEMM Intra-Chiplet Kernel Load Args Done!\r\n");
-//         /////////////////////////////////////////
-//         // Allocate the L1 memory for Inputs   //
-//         /////////////////////////////////////////
-//         // Allocate the l1 space specifed by the arg
-//         uint64_t l3_input_A_addr, l3_input_B_addr, l3_input_C_addr;
-
-//         VERSACORE_DEBUG_PRINT(
-//             "M = %d, K = %d, N = %d, array_shape_idx = %d\r\n",
-//             get_cls_shared_ptrs()[0][8], get_cls_shared_ptrs()[0][9],
-//             get_cls_shared_ptrs()[0][10], get_cls_shared_ptrs()[0][11]);
-//         if (get_cls_shared_ptrs()[0][11] == 0) {
-//             get_cls_shared_ptrs()[0][16] = meshRow_0;
-//             get_cls_shared_ptrs()[0][17] = tileSize_0;
-//             get_cls_shared_ptrs()[0][18] = meshCol_0;
-//         } else if (get_cls_shared_ptrs()[0][11] == 1) {
-//             get_cls_shared_ptrs()[0][16] = meshRow_1;
-//             get_cls_shared_ptrs()[0][17] = tileSize_1;
-//             get_cls_shared_ptrs()[0][18] = meshCol_1;
-//         } else if (get_cls_shared_ptrs()[0][11] == 2) {
-//             get_cls_shared_ptrs()[0][16] = meshRow_2;
-//             get_cls_shared_ptrs()[0][17] = tileSize_2;
-//             get_cls_shared_ptrs()[0][18] = meshCol_2;
-//         } else if (get_cls_shared_ptrs()[0][11] == 3) {
-//             get_cls_shared_ptrs()[0][16] = meshRow_3;
-//             get_cls_shared_ptrs()[0][17] = tileSize_3;
-//             get_cls_shared_ptrs()[0][18] = meshCol_3;
-//         } else if (get_cls_shared_ptrs()[0][11] == 4) {
-//             get_cls_shared_ptrs()[0][16] = meshRow_4;
-//             get_cls_shared_ptrs()[0][17] = tileSize_4;
-//             get_cls_shared_ptrs()[0][18] = meshCol_4;
-//         } else {
-//             VERSACORE_DEBUG_PRINT("ERROR: array_shape_idx invalid!\r\n");
-//             return;
-//         }
-
-//         // L1 data addresses for A
-//         uint32_t A_size = (get_cls_shared_ptrs()[0][8]) *
-//                           (get_cls_shared_ptrs()[0][9]) *
-//                           get_cls_shared_ptrs()[0][16] *
-//                           get_cls_shared_ptrs()[0][17] * sizeof(uint8_t);
-//         A_size = (A_size + 63) & ~63;  // align to 64 bytes for xdma granularity
-//         get_cls_shared_ptrs()[1] = snrt_l1_malloc(A_size);
-//         if (!get_cls_shared_ptrs()[1]) {
-//             VERSACORE_DEBUG_PRINT("ERROR: A alloc failed!\r\n");
-//             return;
-//         } else {
-//             VERSACORE_DEBUG_PRINT("Allocated A at %p\r\n",
-//                                   (void*)get_cls_shared_ptrs()[1]);
-//         }
-
-//         // Call the idma to load the inputs
-//         // TODO: align with the sparse interconnect address granularity
-//         l3_input_A_addr =
-//             make_u64(get_cls_shared_ptrs()[0][0], get_cls_shared_ptrs()[0][1]);
-//         xdma_memcpy_1d((void*)l3_input_A_addr, (void*)get_cls_shared_ptrs()[1],
-//                        A_size);
-//         int task_id = xdma_start();
-//         xdma_remote_wait(task_id);
-
-//         // L1 data addresses for B
-//         get_cls_shared_ptrs()[2] = snrt_l1_malloc(
-//             (get_cls_shared_ptrs()[0][9]) * (get_cls_shared_ptrs()[0][10]) *
-//             get_cls_shared_ptrs()[0][17] * get_cls_shared_ptrs()[0][18] *
-//             sizeof(uint8_t));  // B KxN in uint8_t
-//         if (!get_cls_shared_ptrs()[2]) {
-//             VERSACORE_DEBUG_PRINT("ERROR: B alloc failed!\r\n");
-//             return;
-//         } else {
-//             VERSACORE_DEBUG_PRINT("Allocated B at %p\r\n",
-//                                   (void*)get_cls_shared_ptrs()[2]);
-//         }
-
-//         // TODO: align with the sparse interconnect address granularity
-//         l3_input_B_addr =
-//             make_u64(get_cls_shared_ptrs()[0][2], get_cls_shared_ptrs()[0][3]);
-//         xdma_memcpy_1d((void*)l3_input_B_addr, (void*)get_cls_shared_ptrs()[2],
-//                        (get_cls_shared_ptrs()[0][9]) *
-//                            (get_cls_shared_ptrs()[0][10]) *
-//                            get_cls_shared_ptrs()[0][17] *
-//                            get_cls_shared_ptrs()[0][18] * sizeof(uint8_t));
-//         task_id = xdma_start();
-//         xdma_remote_wait(task_id);
-
-//         // L1 data addresses for C
-//         // load C only if C_addr is not 0
-//         // TODO: align with the sparse interconnect address granularity
-//         l3_input_C_addr =
-//             make_u64(get_cls_shared_ptrs()[0][4], get_cls_shared_ptrs()[0][5]);
-//         if (get_cls_shared_ptrs()[0][14]) {
-//             get_cls_shared_ptrs()[0][15] = 0;
-//             get_cls_shared_ptrs()[3] = NULL;
-//             VERSACORE_DEBUG_PRINT("skip loading C since b\r\n");
-//         } else if (l3_input_C_addr != 0) {
-//             get_cls_shared_ptrs()[0][15] = 1;
-//             get_cls_shared_ptrs()[3] = snrt_l1_malloc(
-//                 (get_cls_shared_ptrs()[0][8]) * (get_cls_shared_ptrs()[0][10]) *
-//                 get_cls_shared_ptrs()[0][16] * get_cls_shared_ptrs()[0][18] *
-//                 sizeof(uint32_t));  // C MxN in uint32
-//             if (!get_cls_shared_ptrs()[3]) {
-//                 VERSACORE_DEBUG_PRINT("ERROR: C alloc failed!\r\n");
-//                 return;
-//             } else {
-//                 VERSACORE_DEBUG_PRINT("Allocated C at %p\r\n",
-//                                       (void*)get_cls_shared_ptrs()[3]);
-//             }
-//             xdma_memcpy_1d(
-//                 (void*)l3_input_C_addr, (void*)get_cls_shared_ptrs()[3],
-//                 (get_cls_shared_ptrs()[0][8]) * (get_cls_shared_ptrs()[0][10]) *
-//                     get_cls_shared_ptrs()[0][16] *
-//                     get_cls_shared_ptrs()[0][18] * sizeof(uint32_t));
-//             task_id = xdma_start();
-//             xdma_remote_wait(task_id);
-//         } else {
-//             get_cls_shared_ptrs()[0][15] = 0;
-//             get_cls_shared_ptrs()[3] = NULL;
-//             VERSACORE_DEBUG_PRINT(
-//                 "skip loading C since C_addr is 0, eg., C is always zero\r\n");
-//         }
-
-//         // L1 data addresses for D
-//         get_cls_shared_ptrs()[4] = snrt_l1_malloc(
-//             (get_cls_shared_ptrs()[0][8]) * (get_cls_shared_ptrs()[0][10]) *
-//             get_cls_shared_ptrs()[0][16] * get_cls_shared_ptrs()[0][18] *
-//             sizeof(uint32_t));  // D MxN in uint32
-//         if (!get_cls_shared_ptrs()[4]) {
-//             VERSACORE_DEBUG_PRINT("ERROR: D alloc failed!\r\n");
-//             return;
-//         } else {
-//             VERSACORE_DEBUG_PRINT("Allocated D at %p\r\n",
-//                                   (void*)get_cls_shared_ptrs()[4]);
-//         }
-
-//         VERSACORE_DEBUG_PRINT(
-//             "GEMM Intra-Chiplet Kernel Load Input Data Done!\r\n");
-//     }
-
-//     snrt_cluster_hw_barrier();
-
-//     // The core 0 will be responsible for configuring and starting the versacore
-//     if (snrt_cluster_core_idx() == 0) {
-//         // compute the streamer cfg first
-//         //////////////////////////////////////////////////////////////
-//         // Allocated the L1 memory for Streamer CSRs    //
-//         //////////////////////////////////////////////////////////////
-
-//         VERSACORE_DEBUG_PRINT(
-//             "GEMM Intra-Chiplet Kernel Compute Streamer Cfg Start!\r\n");
-//         // the snicth needs to generate these streamer cfgs
-//         // 22 args in total
-//         // A 6, B 6, C 5, D 5
-//         get_cls_shared_ptrs()[5] = snrt_l1_malloc(sizeof(uint32_t) * 22);
-//         if (!get_cls_shared_ptrs()[5]) {
-//             VERSACORE_DEBUG_PRINT("ERROR: streamer cfg alloc failed!\r\n");
-//             return;
-//         } else {
-//             VERSACORE_DEBUG_PRINT("Allocated streamer cfg at %p\r\n",
-//                                   (void*)get_cls_shared_ptrs()[5]);
-//         }
-//         //////////////////////////////////////////////////////////////
-//         // streamer cfg for A
-//         //////////////////////////////////////////////////////////////
-
-//         // Aslstride0
-//         get_cls_shared_ptrs()[5][0] = bankWidth / 8;
-
-//         // Atlbound0~5
-//         uint32_t* Atlbound = snrt_l1_malloc(sizeof(uint32_t) * 6);
-//         if (!Atlbound) {
-//             VERSACORE_DEBUG_PRINT("ERROR: Atlbound alloc failed!\r\n");
-//             return;
-//         } else {
-//             VERSACORE_DEBUG_PRINT("Allocated Atlbound at %p\r\n",
-//                                   (void*)Atlbound);
-//         }
-//         // Atlbound0
-//         Atlbound[0] = (get_cls_shared_ptrs()[0][9]);
-//         // Atlbound1
-//         Atlbound[1] = (get_cls_shared_ptrs()[0][10]);
-//         // Atlbound2
-//         Atlbound[2] = (get_cls_shared_ptrs()[0][8]);
-//         // Atlbound3
-//         Atlbound[3] = 1;
-//         // Atlbound4
-//         Atlbound[4] = 1;
-//         // Atlbound5
-//         Atlbound[5] = 1;
-//         get_cls_shared_ptrs()[5][1] = (uint32_t)(uintptr_t)Atlbound;
-
-//         // Atlstride0~5
-//         uint32_t* Atlstride = snrt_l1_malloc(sizeof(uint32_t) * 6);
-//         if (!Atlstride) {
-//             VERSACORE_DEBUG_PRINT("ERROR: Atlstride alloc failed!\r\n");
-//             return;
-//         } else {
-//             VERSACORE_DEBUG_PRINT("Allocated Atlstride at %p\r\n",
-//                                   (void*)Atlstride);
-//         }
-//         // Atlstride0
-//         Atlstride[0] =
-//             get_cls_shared_ptrs()[0][16] * get_cls_shared_ptrs()[0][17];
-//         // Atlstride1
-//         Atlstride[1] = 0;
-//         // Atlstride2
-//         Atlstride[2] = get_cls_shared_ptrs()[0][16] *
-//                        get_cls_shared_ptrs()[0][17] *
-//                        get_cls_shared_ptrs()[0][9];
-//         // Atlstride3
-//         Atlstride[3] = 0;
-//         // Atlstride4
-//         Atlstride[4] = 0;
-//         Atlstride[5] = 0;
-//         get_cls_shared_ptrs()[5][2] = (uint32_t)(uintptr_t)Atlstride;
-
-//         // set_addr_remap_index_A
-//         get_cls_shared_ptrs()[5][3] = 0;
-//         // transpose_A
-//         get_cls_shared_ptrs()[5][4] = get_cls_shared_ptrs()[0][12];
-//         // channel_en_A []
-//         if (get_cls_shared_ptrs()[0][11] == 0) {
-//             get_cls_shared_ptrs()[5][5] = channel_en_A_0_0;
-//         } else if (get_cls_shared_ptrs()[0][11] == 1) {
-//             get_cls_shared_ptrs()[5][5] = channel_en_A_1_0;
-//         } else if (get_cls_shared_ptrs()[0][11] == 2) {
-//             get_cls_shared_ptrs()[5][5] = channel_en_A_2_0;
-//         } else if (get_cls_shared_ptrs()[0][11] == 3) {
-//             get_cls_shared_ptrs()[5][5] = channel_en_A_3_0;
-//         }
-//         VERSACORE_DEBUG_PRINT(
-//             "GEMM Intra-Chiplet Kernel Compute Streamer Cfg A Done!\r\n");
-
-//         //////////////////////////////////////////////////////////////
-//         // streamer cfg for B
-//         //////////////////////////////////////////////////////////////
-
-//         // Bslstride0
-//         get_cls_shared_ptrs()[5][6] = bankWidth / 8;
-
-//         // Btlbound0~2
-//         uint32_t* Btlbound = snrt_l1_malloc(sizeof(uint32_t) * 3);
-//         if (!Btlbound) {
-//             VERSACORE_DEBUG_PRINT("ERROR: Btlbound alloc failed!\r\n");
-//             return;
-//         } else {
-//             VERSACORE_DEBUG_PRINT("Allocated Btlbound at %p\r\n",
-//                                   (void*)Btlbound);
-//         }
-//         get_cls_shared_ptrs()[5][7] = (uint32_t)(uintptr_t)Btlbound;
-//         // Btlbound0
-//         Btlbound[0] = (get_cls_shared_ptrs()[0][9]);
-//         // Btlbound1
-//         Btlbound[1] = (get_cls_shared_ptrs()[0][10]);
-//         // Btlbound2
-//         Btlbound[2] = (get_cls_shared_ptrs()[0][8]);
-
-//         // Btlstride0~2
-//         uint32_t* Btlstride = snrt_l1_malloc(sizeof(uint32_t) * 3);
-//         if (!Btlstride) {
-//             VERSACORE_DEBUG_PRINT("ERROR: Btlstride alloc failed!\r\n");
-//             return;
-//         } else {
-//             VERSACORE_DEBUG_PRINT("Allocated Btlstride at %p\r\n",
-//                                   (void*)Btlstride);
-//         }
-//         get_cls_shared_ptrs()[5][8] = (uint32_t)(uintptr_t)Btlstride;
-
-//         // Btlstride0
-//         Btlstride[0] =
-//             get_cls_shared_ptrs()[0][17] * get_cls_shared_ptrs()[0][18];
-//         // Btlstride1
-//         Btlstride[1] = get_cls_shared_ptrs()[0][17] *
-//                        get_cls_shared_ptrs()[0][18] *
-//                        get_cls_shared_ptrs()[0][9];
-
-//         // Btlstride2
-//         Btlstride[2] = 0;
-
-//         // set_addr_remap_index_B
-//         get_cls_shared_ptrs()[5][9] = 0;
-//         // transpose_B
-//         get_cls_shared_ptrs()[5][10] = get_cls_shared_ptrs()[0][13];
-//         // channel_en_B []
-//         uint32_t* channel_en_B = snrt_l1_malloc(sizeof(uint32_t) * 2);
-//         if (!channel_en_B) {
-//             VERSACORE_DEBUG_PRINT("ERROR: channel_en_B alloc failed!\r\n");
-//             return;
-//         } else {
-//             VERSACORE_DEBUG_PRINT("Allocated channel_en_B at %p\r\n",
-//                                   (void*)channel_en_B);
-//         }
-//         if (get_cls_shared_ptrs()[0][11] == 0) {
-//             channel_en_B[0] = channel_en_B_0_0;
-//             channel_en_B[1] = channel_en_B_0_1;
-//         } else if (get_cls_shared_ptrs()[0][11] == 1) {
-//             channel_en_B[0] = channel_en_B_1_0;
-//             channel_en_B[1] = channel_en_B_1_1;
-//         } else if (get_cls_shared_ptrs()[0][11] == 2) {
-//             channel_en_B[0] = channel_en_B_2_0;
-//             channel_en_B[1] = channel_en_B_2_1;
-//         } else if (get_cls_shared_ptrs()[0][11] == 3) {
-//             channel_en_B[0] = channel_en_B_3_0;
-//             channel_en_B[1] = channel_en_B_3_1;
-//         }
-//         get_cls_shared_ptrs()[5][11] = (uint32_t)(uintptr_t)channel_en_B;
-//         VERSACORE_DEBUG_PRINT(
-//             "GEMM Intra-Chiplet Kernel Compute Streamer Cfg B Done!\r\n");
-
-//         //////////////////////////////////////////////////////////////
-//         // streamer cfg for C
-//         //////////////////////////////////////////////////////////////
-//         // Cslstride0
-//         get_cls_shared_ptrs()[5][12] = bankWidth / 8;
-//         // Ctlbound0~3
-//         uint32_t* Ctlbound = snrt_l1_malloc(sizeof(uint32_t) * 4);
-//         if (!Ctlbound) {
-//             VERSACORE_DEBUG_PRINT("ERROR: Ctlbound alloc failed!\r\n");
-//             return;
-//         } else {
-//             VERSACORE_DEBUG_PRINT("Allocated Ctlbound at %p\r\n",
-//                                   (void*)Ctlbound);
-//         }
-//         get_cls_shared_ptrs()[5][13] = (uint32_t)(uintptr_t)Ctlbound;
-//         // Ctlbound0
-//         if (get_cls_shared_ptrs()[0][14] == 1) {
-//             // accumPrevC is true
-//             Ctlbound[0] = 0;
-//         } else if (get_cls_shared_ptrs()[0][11] == 0) { // else bound is normal
-//             Ctlbound[0] = Ctlbound0_0;
-//         } else if (get_cls_shared_ptrs()[0][11] == 1) {
-//             Ctlbound[0] = Ctlbound0_1;
-//         } else if (get_cls_shared_ptrs()[0][11] == 2) {
-//             Ctlbound[0] = Ctlbound0_2;
-//         } else if (get_cls_shared_ptrs()[0][11] == 3) {
-//             Ctlbound[0] = Ctlbound0_3;
-//         }
-//         Ctlbound[1] = (get_cls_shared_ptrs()[0][10]);
-//         Ctlbound[2] = (get_cls_shared_ptrs()[0][8]);
-//         Ctlbound[3] = 1;
-//         // Ctlstride0~3
-//         uint32_t* Ctlstride = snrt_l1_malloc(sizeof(uint32_t) * 4);
-//         if (!Ctlstride) {
-//             VERSACORE_DEBUG_PRINT("ERROR: Ctlstride alloc failed!\r\n");
-//             return;
-//         } else {
-//             VERSACORE_DEBUG_PRINT("Allocated Ctlstride at %p\r\n",
-//                                   (void*)Ctlstride);
-//         }
-//         get_cls_shared_ptrs()[5][14] = (uint32_t)(uintptr_t)Ctlstride;
-
-//         if (get_cls_shared_ptrs()[0][11] == 0) {
-//             // Ctlstride0
-//             Ctlstride[0] = Ctlstride0_0;
-//         } else if (get_cls_shared_ptrs()[0][11] == 1) {
-//             // Ctlstride0
-//             Ctlstride[0] = Ctlstride0_1;
-//         } else if (get_cls_shared_ptrs()[0][11] == 2) {
-//             // Ctlstride0
-//             Ctlstride[0] = Ctlstride0_2;
-//         } else if (get_cls_shared_ptrs()[0][11] == 3) {
-//             // Ctlstride0
-//             Ctlstride[0] = Ctlstride0_3;
-//         }
-
-//         // Ctlstride1
-//         Ctlstride[1] = C_elem_len * get_cls_shared_ptrs()[0][16] *
-//                        get_cls_shared_ptrs()[0][18] / 8;
-//         // Ctlstride2
-//         Ctlstride[2] = get_cls_shared_ptrs()[0][10] * C_elem_len *
-//                        get_cls_shared_ptrs()[0][16] *
-//                        get_cls_shared_ptrs()[0][18] / 8;
-//         // Ctlstride3
-//         Ctlstride[3] = 0;
-//         // set_addr_remap_index_C
-//         get_cls_shared_ptrs()[5][15] = 0;
-//         // channel_en_C []
-//         // set channel_en_C to zero if accumPrevC or addNonZeroC
-//         if (get_cls_shared_ptrs()[0][14] == 1 || get_cls_shared_ptrs()[0][15] == 0) {
-//             get_cls_shared_ptrs()[5][16] = channel_en_C_null_0_0;
-//         } else if (get_cls_shared_ptrs()[0][11] == 0) {
-//             get_cls_shared_ptrs()[5][16] = channel_en_C_0_0;
-//         } else if (get_cls_shared_ptrs()[0][11] == 1) {
-//             get_cls_shared_ptrs()[5][16] = channel_en_C_1_0;
-//         } else if (get_cls_shared_ptrs()[0][11] == 2) {
-//             get_cls_shared_ptrs()[5][16] = channel_en_C_2_0;
-//         } else if (get_cls_shared_ptrs()[0][11] == 3) {
-//             get_cls_shared_ptrs()[5][16] = channel_en_C_3_0;
-//         }
-//         VERSACORE_DEBUG_PRINT(
-//             "GEMM Intra-Chiplet Kernel Compute Streamer Cfg C Done!\r\n");
-
-//         //////////////////////////////////////////////////////////////
-//         // streamer cfg for D
-//         //////////////////////////////////////////////////////////////
-//         // D32slstride0
-//         get_cls_shared_ptrs()[5][17] = bankWidth / 8;
-//         // D32tlbound0~3
-//         uint32_t* D32tlbound = snrt_l1_malloc(sizeof(uint32_t) * 4);
-//         if (!D32tlbound) {
-//             VERSACORE_DEBUG_PRINT("ERROR: D32tlbound alloc failed!\r\n");
-//             return;
-//         } else {
-//             VERSACORE_DEBUG_PRINT("Allocated D32tlbound at %p\r\n",
-//                                   (void*)D32tlbound);
-//         }
-//         get_cls_shared_ptrs()[5][18] = (uint32_t)(uintptr_t)D32tlbound;
-//         // D32tlbound0~3
-//         if (get_cls_shared_ptrs()[0][11] == 0) {
-//             D32tlbound[0] = D32tlbound0_0;
-//         } else if (get_cls_shared_ptrs()[0][11] == 1) {
-//             D32tlbound[0] = D32tlbound0_1;
-//         } else if (get_cls_shared_ptrs()[0][11] == 2) {
-//             D32tlbound[0] = D32tlbound0_2;
-//         } else if (get_cls_shared_ptrs()[0][11] == 3) {
-//             D32tlbound[0] = D32tlbound0_3;
-//         }
-//         D32tlbound[1] = (get_cls_shared_ptrs()[0][10]);
-//         D32tlbound[2] = (get_cls_shared_ptrs()[0][8]);
-//         D32tlbound[3] = 1;
-//         // D32tlstride0~3
-//         uint32_t* D32tlstride = snrt_l1_malloc(sizeof(uint32_t) * 4);
-//         if (!D32tlstride) {
-//             VERSACORE_DEBUG_PRINT("ERROR: D32tlstride alloc failed!\r\n");
-//             return;
-//         } else {
-//             VERSACORE_DEBUG_PRINT("Allocated D32tlstride at %p\r\n",
-//                                   (void*)D32tlstride);
-//         }
-//         get_cls_shared_ptrs()[5][19] = (uint32_t)(uintptr_t)D32tlstride;
-//         if (get_cls_shared_ptrs()[0][11] == 0) {
-//             // D32tlstride0
-//             D32tlstride[0] = D32tlstride0_0;
-//         } else if (get_cls_shared_ptrs()[0][11] == 1) {
-//             // D32tlstride0
-//             D32tlstride[0] = D32tlstride0_1;
-//         } else if (get_cls_shared_ptrs()[0][11] == 2) {
-//             // D32tlstride0
-//             D32tlstride[0] = D32tlstride0_2;
-//         } else if (get_cls_shared_ptrs()[0][11] == 3) {
-//             // D32tlstride0
-//             D32tlstride[0] = D32tlstride0_3;
-//         }
-//         // D32tlstride1
-//         D32tlstride[1] = D32_elem_len * get_cls_shared_ptrs()[0][16] *
-//                          get_cls_shared_ptrs()[0][18] / 8;
-//         // D32tlstride2
-//         D32tlstride[2] = (get_cls_shared_ptrs()[0][10]) * D32_elem_len *
-//                          get_cls_shared_ptrs()[0][16] *
-//                          get_cls_shared_ptrs()[0][18] / 8;
-//         // D32tlstride3
-//         D32tlstride[3] = 0;
-//         // set_addr_remap_index_D32
-//         get_cls_shared_ptrs()[5][20] = 0;
-//         // channel_en_D32 []
-//         if (get_cls_shared_ptrs()[0][11] == 0) {
-//             get_cls_shared_ptrs()[5][21] = channel_en_D32_0_0;
-//         } else if (get_cls_shared_ptrs()[0][11] == 1) {
-//             get_cls_shared_ptrs()[5][21] = channel_en_D32_1_0;
-//         } else if (get_cls_shared_ptrs()[0][11] == 2) {
-//             get_cls_shared_ptrs()[5][21] = channel_en_D32_2_0;
-//         } else if (get_cls_shared_ptrs()[0][11] == 3) {
-//             get_cls_shared_ptrs()[5][21] = channel_en_D32_3_0;
-//         }
-//         VERSACORE_DEBUG_PRINT(
-//             "GEMM Intra-Chiplet Kernel Compute Streamer Cfg D Done!\r\n");
-
-//         //////////////////////////////////////////////////////////////
-//         // Configuration the Steamer and Versacore
-//         //////////////////////////////////////////////////////////////
-
-//         set_versacore_streamer_csr(
-//             (uint32_t)(uintptr_t)get_cls_shared_ptrs()[1],  // A_addr
-//             (uint32_t*)(&get_cls_shared_ptrs()[5][0]),      // Aslstride
-//             (uint32_t*)(get_cls_shared_ptrs()[5][1]),       // Atlbound[] base
-//             (uint32_t*)(get_cls_shared_ptrs()[5][2]),       // Atlstride[] base
-//             get_cls_shared_ptrs()[5][3],  // set_addr_remap_index_A
-//             get_cls_shared_ptrs()[5][4],  // transpose_A
-//             (uint32_t*)(&get_cls_shared_ptrs()[5][5]),  // channel_en_A []
-
-//             (uint32_t)(uintptr_t)get_cls_shared_ptrs()[2],  // B_addr
-//             (uint32_t*)(&get_cls_shared_ptrs()[5][6]),      // Bslstride[] base
-//             (uint32_t*)(get_cls_shared_ptrs()[5][7]),       // Btlbound[] base
-//             (uint32_t*)(get_cls_shared_ptrs()[5][8]),       // Btlstride[] base
-//             get_cls_shared_ptrs()[5][9],   // set_addr_remap_index_B
-//             get_cls_shared_ptrs()[5][10],  // transpose_B
-//             (uint32_t*)(get_cls_shared_ptrs()[5][11]),  // channel_en_B []
-
-//             (uint32_t)(uintptr_t)get_cls_shared_ptrs()[3],  // C_addr
-//             (uint32_t*)(&get_cls_shared_ptrs()[5][12]),     // Cslstride[] base
-//             (uint32_t*)(get_cls_shared_ptrs()[5][13]),      // Ctlbound[] base
-//             (uint32_t*)(get_cls_shared_ptrs()[5][14]),      // Ctlstride[] base
-//             get_cls_shared_ptrs()[5][15],  // set_addr_remap_index_C
-//             (uint32_t*)(&get_cls_shared_ptrs()[5][16]),  // channel_en_C []
-
-//             (uint32_t)(uintptr_t)get_cls_shared_ptrs()[4],  // D_addr
-//             (uint32_t*)(&get_cls_shared_ptrs()[5][17]),  // D32slstride[] base
-//             (uint32_t*)(get_cls_shared_ptrs()[5][18]),   // D32tlbound[] base
-//             (uint32_t*)(get_cls_shared_ptrs()[5][19]),   // D32tlstride[] base
-//             get_cls_shared_ptrs()[5][20],  // set_addr_remap_index_D32
-//             (uint32_t*)(&get_cls_shared_ptrs()[5][21]),  // channel_en_D32 []
-
-//             0, 0, 0, 0, 0, 0, 0
-
-//         );
-
-//         set_versacore_csr(
-//             // accPrevC means takes new C
-//             get_cls_shared_ptrs()[0][14] == 0, get_cls_shared_ptrs()[0][9],
-//             get_cls_shared_ptrs()[0][10] * get_cls_shared_ptrs()[0][8], 0,
-//             get_cls_shared_ptrs()[0][11], 0);
-
-//         VERSACORE_DEBUG_PRINT(
-//             "GEMM Intra-Chiplet Kernel Streamer Configuration Done!\r\n");
-
-//         // Set CSR to start Streamer
-//         start_versacore_and_streamer();
-
-//         // Poll until Streamer and GEMM accelerator finish
-//         wait_versacore_and_streamer();
-
-//         VERSACORE_DEBUG_PRINT("GEMM Intra-Chiplet Kernel Compute Done!\r\n");
-
-//         for (int i = 0;
-//              i <
-//              (get_cls_shared_ptrs()[0][8]) * (get_cls_shared_ptrs()[0][10]) *
-//                  get_cls_shared_ptrs()[0][16] * get_cls_shared_ptrs()[0][18];
-//              i++) {
-//             VERSACORE_DEBUG_PRINT("D[%d] = %d\r\n", i,
-//                                   get_cls_shared_ptrs()[4][i]);
-//         }
-//     }
-
-//     snrt_cluster_hw_barrier();
-
-//     // After computation, dma core will store the output back to L3
-//     if (snrt_is_dm_core()) {
-//         uint32_t output_size = (get_cls_shared_ptrs()[0][8]) *
-//                                (get_cls_shared_ptrs()[0][10]) *
-//                                get_cls_shared_ptrs()[0][16] *
-//                                get_cls_shared_ptrs()[0][18] * sizeof(uint32_t);
-//         uint64_t l3_output_D_addr;
-//         // l3_output_D_addr output address in L3
-//         l3_output_D_addr =
-//             make_u64(get_cls_shared_ptrs()[0][6], get_cls_shared_ptrs()[0][7]);
-//         VERSACORE_DEBUG_PRINT(
-//             "[Cluster %d] Core(%d) Store Output: Dst = %x, Src = %x, size = "
-//             "%d\r\n",
-//             snrt_cluster_idx(), snrt_cluster_core_idx(),
-//             get_cls_shared_ptrs()[4], (uint32_t)l3_output_D_addr, output_size);
-//         xdma_memcpy_1d((void*)get_cls_shared_ptrs()[4], (void*)l3_output_D_addr, output_size);
-//         int task_id = xdma_start();
-//         xdma_remote_wait(task_id);
-//         // Free the allocated L1 memory
-//         snrt_l1_free(get_cls_shared_ptrs()[0]);
-//         snrt_l1_free(get_cls_shared_ptrs()[1]);
-//         snrt_l1_free(get_cls_shared_ptrs()[2]);
-//         // Free C only if it is allocated when accNonZeroC is true
-//         if (get_cls_shared_ptrs()[0][15]) {
-//             snrt_l1_free(get_cls_shared_ptrs()[3]);
-//         }
-//         snrt_l1_free(get_cls_shared_ptrs()[4]);
-//         snrt_l1_free(get_cls_shared_ptrs()[5]);
-//         // Reset the shared pointers
-//         snrt_memset(get_cls_shared_ptrs(), 0,
-//                     sizeof(uint32_t*) * NUM_CLS_SHARED_PTRS);
-//         VERSACORE_DEBUG_PRINT(
-//             "GEMM Intra-Chiplet Kernel Store Output Done!\r\n");
-//     }
-// }
-
-// SNAX_LIB_DEFINE void __snax_kernel_gemm_compute_only_intra_chiplet(void* arg) {
-//     // move the args to local variables
-//     if (snrt_is_dm_core()) {
-//         // allocate L1 memory for global variables across the cluster
-//         ///////////////////////////////////////
-//         // Allocate the L1 memory //
-//         ///////////////////////////////////////
-//         get_cls_shared_ptrs()[0] = (uint32_t*)snrt_l1_malloc(128);
-//         if (!get_cls_shared_ptrs()[0]) {
-//             VERSACORE_DEBUG_PRINT("ERROR: arg alloc failed!\r\n");
-//             return;
-//         } else {
-//             VERSACORE_DEBUG_PRINT("Allocated arg at %p\r\n",
-//                                   (void*)get_cls_shared_ptrs()[0]);
-//         }
-
-//         ////////////////////////////////////
-//         // Call the idma to load the args //
-//         ////////////////////////////////////
-//         // First we need to use the DMA to load all the arguments from L3 into
-//         // L1 Here we assume the arguments are packed in a contiguous way in L3
-//         VERSACORE_DEBUG_PRINT("GEMM Intra-Chiplet Kernel Start!\r\n");
-
-//         snrt_dma_start_1d(
-//             (void*)get_cls_shared_ptrs()[0], (void*)arg,
-//             sizeof(uint32_t) * 15);  // 15 uint32_t passed args in total
-//         snrt_dma_wait_all();
-
-//         // we use the following args, they are shared across the cluster
-//         // arg0: uint32_t A_addr_hi get_cls_shared_ptrs()[0][0]
-//         // arg1: uint32_t A_addr_lo get_cls_shared_ptrs()[0][1]
-//         // arg2: uint32_t B_addr_hi get_cls_shared_ptrs()[0][2]
-//         // arg3: uint32_t B_addr_lo get_cls_shared_ptrs()[0][3]
-//         // arg4: uint32_t C_addr_hi get_cls_shared_ptrs()[0][4]
-//         // arg5: uint32_t C_addr_lo get_cls_shared_ptrs()[0][5]
-//         // arg6: uint32_t D_addr_hi get_cls_shared_ptrs()[0][6]
-//         // arg7: uint32_t D_addr_lo get_cls_shared_ptrs()[0][7]
-//         // these address are all in L1! It's the TCDM local address.
-
-//         // arg8: uint32_t M get_cls_shared_ptrs()[0][8]
-//         // arg9: uint32_t K get_cls_shared_ptrs()[0][9]
-//         // arg10: uint32_t N get_cls_shared_ptrs()[0][10]
-//         // arg11: uint32_t array_shape_idx get_cls_shared_ptrs()[0][11]
-//         // arg12: transpose A get_cls_shared_ptrs()[0][12]
-//         // arg13: transpose B get_cls_shared_ptrs()[0][13]
-//         // arg14: get_cls_shared_ptrs()[0][14] is used for accumPrevC
-
-//         // get_cls_shared_ptrs()[0][15] is used for addNonZeroC
-//         if (get_cls_shared_ptrs()[0][14]) {
-//             get_cls_shared_ptrs()[0][15] = 0;
-//         } else if (make_u64(get_cls_shared_ptrs()[0][4],
-//                             get_cls_shared_ptrs()[0][5]) != 0) {
-//             get_cls_shared_ptrs()[0][15] = 1;
-//         } else {
-//             get_cls_shared_ptrs()[0][15] = 0;
-//         }
-
-//         // get_cls_shared_ptrs()[0][16] is used for meshRow
-//         // get_cls_shared_ptrs()[0][17] is used for tileSize
-//         // get_cls_shared_ptrs()[0][18] is used for meshCol
-//         if (get_cls_shared_ptrs()[0][11] == 0) {
-//             get_cls_shared_ptrs()[0][16] = meshRow_0;
-//             get_cls_shared_ptrs()[0][17] = tileSize_0;
-//             get_cls_shared_ptrs()[0][18] = meshCol_0;
-//         } else {
-//             get_cls_shared_ptrs()[0][16] = meshRow_1;
-//             get_cls_shared_ptrs()[0][17] = tileSize_1;
-//             get_cls_shared_ptrs()[0][18] = meshCol_1;
-//         }
-//     }
-
-//     snrt_cluster_hw_barrier();
-
-//     // The core 0 will be responsible for configuring and starting the versacore
-//     if (snrt_cluster_core_idx() == 0) {
-//         // compute the streamer cfg first
-//         //////////////////////////////////////////////////////////////
-//         // Allocated the L1 memory for Streamer CSRs    //
-//         //////////////////////////////////////////////////////////////
-
-//         VERSACORE_DEBUG_PRINT(
-//             "GEMM Intra-Chiplet Kernel Compute Streamer Cfg Start!\r\n");
-//         // the snicth needs to generate these streamer cfgs
-//         // 22 args in total
-//         // A 6, B 6, C 5, D 5
-//         get_cls_shared_ptrs()[5] = (uint32_t*)snrt_l1_malloc(sizeof(uint32_t) * 22);
-//         if (!get_cls_shared_ptrs()[5]) {
-//             VERSACORE_DEBUG_PRINT("ERROR: streamer cfg alloc failed!\r\n");
-//             return;
-//         } else {
-//             VERSACORE_DEBUG_PRINT("Allocated streamer cfg at %p\r\n",
-//                                   (void*)get_cls_shared_ptrs()[5]);
-//         }
-//         //////////////////////////////////////////////////////////////
-//         // streamer cfg for A
-//         //////////////////////////////////////////////////////////////
-
-//         // Aslstride0
-//         get_cls_shared_ptrs()[5][0] = bankWidth / 8;
-
-//         // Atlbound0~5
-//         uint32_t* Atlbound = (uint32_t*)snrt_l1_malloc(sizeof(uint32_t) * 6);
-//         if (!Atlbound) {
-//             VERSACORE_DEBUG_PRINT("ERROR: Atlbound alloc failed!\r\n");
-//             return;
-//         } else {
-//             VERSACORE_DEBUG_PRINT("Allocated Atlbound at %p\r\n",
-//                                   (void*)Atlbound);
-//         }
-//         // Atlbound0
-//         Atlbound[0] = (get_cls_shared_ptrs()[0][9]);
-//         // Atlbound1
-//         Atlbound[1] = (get_cls_shared_ptrs()[0][10]);
-//         // Atlbound2
-//         Atlbound[2] = (get_cls_shared_ptrs()[0][8]);
-//         // Atlbound3
-//         Atlbound[3] = 1;
-//         // Atlbound4
-//         Atlbound[4] = 1;
-//         // Atlbound5
-//         Atlbound[5] = 1;
-//         get_cls_shared_ptrs()[5][1] = (uint32_t)(uintptr_t)Atlbound;
-
-//         // Atlstride0~5
-//         uint32_t* Atlstride = (uint32_t*)snrt_l1_malloc(sizeof(uint32_t) * 6);
-//         if (!Atlstride) {
-//             VERSACORE_DEBUG_PRINT("ERROR: Atlstride alloc failed!\r\n");
-//             return;
-//         } else {
-//             VERSACORE_DEBUG_PRINT("Allocated Atlstride at %p\r\n",
-//                                   (void*)Atlstride);
-//         }
-//         // Atlstride0
-//         Atlstride[0] =
-//             get_cls_shared_ptrs()[0][16] * get_cls_shared_ptrs()[0][17];
-//         // Atlstride1
-//         Atlstride[1] = 0;
-//         // Atlstride2
-//         Atlstride[2] = get_cls_shared_ptrs()[0][16] *
-//                        get_cls_shared_ptrs()[0][17] *
-//                        get_cls_shared_ptrs()[0][9];
-//         // Atlstride3
-//         Atlstride[3] = 0;
-//         // Atlstride4
-//         Atlstride[4] = 0;
-//         Atlstride[5] = 0;
-//         get_cls_shared_ptrs()[5][2] = (uint32_t)(uintptr_t)Atlstride;
-
-//         // set_addr_remap_index_A
-//         get_cls_shared_ptrs()[5][3] = 0;
-//         // transpose_A
-//         get_cls_shared_ptrs()[5][4] = get_cls_shared_ptrs()[0][12];
-//         // channel_en_A []
-//         if (get_cls_shared_ptrs()[0][11] == 0) {
-//             get_cls_shared_ptrs()[5][5] = channel_en_A_0_0;
-//         } else {
-//             get_cls_shared_ptrs()[5][5] = channel_en_A_1_0;
-//         }
-//         VERSACORE_DEBUG_PRINT(
-//             "GEMM Intra-Chiplet Kernel Compute Streamer Cfg A Done!\r\n");
-
-//         //////////////////////////////////////////////////////////////
-//         // streamer cfg for B
-//         //////////////////////////////////////////////////////////////
-
-//         // Bslstride0
-//         get_cls_shared_ptrs()[5][6] = bankWidth / 8;
-
-//         // Btlbound0~2
-//         uint32_t* Btlbound = (uint32_t*)snrt_l1_malloc(sizeof(uint32_t) * 3);
-//         if (!Btlbound) {
-//             VERSACORE_DEBUG_PRINT("ERROR: Btlbound alloc failed!\r\n");
-//             return;
-//         } else {
-//             VERSACORE_DEBUG_PRINT("Allocated Btlbound at %p\r\n",
-//                                   (void*)Btlbound);
-//         }
-//         get_cls_shared_ptrs()[5][7] = (uint32_t)(uintptr_t)Btlbound;
-//         // Btlbound0
-//         Btlbound[0] = (get_cls_shared_ptrs()[0][9]);
-//         // Btlbound1
-//         Btlbound[1] = (get_cls_shared_ptrs()[0][10]);
-//         // Btlbound2
-//         Btlbound[2] = (get_cls_shared_ptrs()[0][8]);
-
-//         // Btlstride0~2
-//         uint32_t* Btlstride = (uint32_t*)snrt_l1_malloc(sizeof(uint32_t) * 3);
-//         if (!Btlstride) {
-//             VERSACORE_DEBUG_PRINT("ERROR: Btlstride alloc failed!\r\n");
-//             return;
-//         } else {
-//             VERSACORE_DEBUG_PRINT("Allocated Btlstride at %p\r\n",
-//                                   (void*)Btlstride);
-//         }
-//         get_cls_shared_ptrs()[5][8] = (uint32_t)(uintptr_t)Btlstride;
-
-//         // Btlstride0
-//         Btlstride[0] =
-//             get_cls_shared_ptrs()[0][17] * get_cls_shared_ptrs()[0][18];
-//         // Btlstride1
-//         Btlstride[1] = get_cls_shared_ptrs()[0][17] *
-//                        get_cls_shared_ptrs()[0][18] *
-//                        get_cls_shared_ptrs()[0][9];
-
-//         // Btlstride2
-//         Btlstride[2] = 0;
-
-//         // set_addr_remap_index_B
-//         get_cls_shared_ptrs()[5][9] = 0;
-//         // transpose_B
-//         get_cls_shared_ptrs()[5][10] = get_cls_shared_ptrs()[0][13];
-//         // channel_en_B []
-//         uint32_t* channel_en_B = (uint32_t*)snrt_l1_malloc(sizeof(uint32_t) * 2);
-//         if (!channel_en_B) {
-//             VERSACORE_DEBUG_PRINT("ERROR: channel_en_B alloc failed!\r\n");
-//             return;
-//         } else {
-//             VERSACORE_DEBUG_PRINT("Allocated channel_en_B at %p\r\n",
-//                                   (void*)channel_en_B);
-//         }
-//         if (get_cls_shared_ptrs()[0][11] == 0) {
-//             channel_en_B[0] = channel_en_B_0_0;
-//             channel_en_B[1] = channel_en_B_0_1;
-//         } else {
-//             channel_en_B[0] = channel_en_B_1_0;
-//             channel_en_B[1] = channel_en_B_1_1;
-//         }
-//         get_cls_shared_ptrs()[5][11] = (uint32_t)(uintptr_t)channel_en_B;
-//         VERSACORE_DEBUG_PRINT(
-//             "GEMM Intra-Chiplet Kernel Compute Streamer Cfg B Done!\r\n");
-
-//         //////////////////////////////////////////////////////////////
-//         // streamer cfg for C
-//         //////////////////////////////////////////////////////////////
-//         // Cslstride0
-//         get_cls_shared_ptrs()[5][12] = bankWidth / 8;
-//         // Ctlbound0~3
-//         uint32_t* Ctlbound = (uint32_t*)snrt_l1_malloc(sizeof(uint32_t) * 4);
-//         if (!Ctlbound) {
-//             VERSACORE_DEBUG_PRINT("ERROR: Ctlbound alloc failed!\r\n");
-//             return;
-//         } else {
-//             VERSACORE_DEBUG_PRINT("Allocated Ctlbound at %p\r\n",
-//                                   (void*)Ctlbound);
-//         }
-//         get_cls_shared_ptrs()[5][13] = (uint32_t)(uintptr_t)Ctlbound;
-//         // Ctlbound0
-//         if (get_cls_shared_ptrs()[0][14] == 1) {
-//             // accumPrevC is true
-//             Ctlbound[0] = 0;
-//         } else if (get_cls_shared_ptrs()[0][11] == 0) {  // else bound is normal
-//             Ctlbound[0] = Ctlbound0_0;
-//         } else {
-//             Ctlbound[0] = Ctlbound0_1;
-//         }
-//         Ctlbound[1] = (get_cls_shared_ptrs()[0][10]);
-//         Ctlbound[2] = (get_cls_shared_ptrs()[0][8]);
-//         Ctlbound[3] = 1;
-//         // Ctlstride0~3
-//         uint32_t* Ctlstride = (uint32_t*)snrt_l1_malloc(sizeof(uint32_t) * 4);
-//         if (!Ctlstride) {
-//             VERSACORE_DEBUG_PRINT("ERROR: Ctlstride alloc failed!\r\n");
-//             return;
-//         } else {
-//             VERSACORE_DEBUG_PRINT("Allocated Ctlstride at %p\r\n",
-//                                   (void*)Ctlstride);
-//         }
-//         get_cls_shared_ptrs()[5][14] = (uint32_t)(uintptr_t)Ctlstride;
-
-//         if (get_cls_shared_ptrs()[0][11] == 0) {
-//             // Ctlstride0
-//             Ctlstride[0] = Ctlstride0_0;
-//         } else {
-//             // Ctlstride0
-//             Ctlstride[0] = Ctlstride0_1;
-//         }
-//         // Ctlstride1
-//         Ctlstride[1] = C_elem_len * get_cls_shared_ptrs()[0][16] *
-//                        get_cls_shared_ptrs()[0][18] / 8;
-//         // Ctlstride2
-//         Ctlstride[2] = get_cls_shared_ptrs()[0][10] * C_elem_len *
-//                        get_cls_shared_ptrs()[0][16] *
-//                        get_cls_shared_ptrs()[0][18] / 8;
-//         // Ctlstride3
-//         Ctlstride[3] = 0;
-//         // set_addr_remap_index_C
-//         get_cls_shared_ptrs()[5][15] = 0;
-//         // channel_en_C []
-//         // set channel_en_C to zero if accumPrevC or addNonZeroC
-//         if (get_cls_shared_ptrs()[0][14] == 1 ||
-//             get_cls_shared_ptrs()[0][15] == 0) {
-//             get_cls_shared_ptrs()[5][16] = channel_en_C_null_0_0;
-//         } else if (get_cls_shared_ptrs()[0][11] == 0) {
-//             get_cls_shared_ptrs()[5][16] = channel_en_C_0_0;
-//         } else {
-//             get_cls_shared_ptrs()[5][16] = channel_en_C_1_0;
-//         }
-//         VERSACORE_DEBUG_PRINT(
-//             "GEMM Intra-Chiplet Kernel Compute Streamer Cfg C Done!\r\n");
-
-//         //////////////////////////////////////////////////////////////
-//         // streamer cfg for D
-//         //////////////////////////////////////////////////////////////
-//         // D32slstride0
-//         get_cls_shared_ptrs()[5][17] = bankWidth / 8;
-//         // D32tlbound0~3
-//         uint32_t* D32tlbound = (uint32_t*)snrt_l1_malloc(sizeof(uint32_t) * 4);
-//         if (!D32tlbound) {
-//             VERSACORE_DEBUG_PRINT("ERROR: D32tlbound alloc failed!\r\n");
-//             return;
-//         } else {
-//             VERSACORE_DEBUG_PRINT("Allocated D32tlbound at %p\r\n",
-//                                   (void*)D32tlbound);
-//         }
-//         get_cls_shared_ptrs()[5][18] = (uint32_t)(uintptr_t)D32tlbound;
-//         // D32tlbound0~3
-//         if (get_cls_shared_ptrs()[0][11] == 0) {
-//             D32tlbound[0] = D32tlbound0_0;
-//         } else {
-//             D32tlbound[0] = D32tlbound0_1;
-//         }
-//         D32tlbound[1] = (get_cls_shared_ptrs()[0][10]);
-//         D32tlbound[2] = (get_cls_shared_ptrs()[0][8]);
-//         D32tlbound[3] = 1;
-//         // D32tlstride0~3
-//         uint32_t* D32tlstride = (uint32_t*)snrt_l1_malloc(sizeof(uint32_t) * 4);
-//         if (!D32tlstride) {
-//             VERSACORE_DEBUG_PRINT("ERROR: D32tlstride alloc failed!\r\n");
-//             return;
-//         } else {
-//             VERSACORE_DEBUG_PRINT("Allocated D32tlstride at %p\r\n",
-//                                   (void*)D32tlstride);
-//         }
-//         get_cls_shared_ptrs()[5][19] = (uint32_t)(uintptr_t)D32tlstride;
-//         if (get_cls_shared_ptrs()[0][11] == 0) {
-//             // D32tlstride0
-//             D32tlstride[0] = D32tlstride0_0;
-//         } else {
-//             // D32tlstride0
-//             D32tlstride[0] = D32tlstride0_1;
-//         }
-//         // D32tlstride1
-//         D32tlstride[1] = D32_elem_len * get_cls_shared_ptrs()[0][16] *
-//                          get_cls_shared_ptrs()[0][18] / 8;
-//         // D32tlstride2
-//         D32tlstride[2] = (get_cls_shared_ptrs()[0][10]) * D32_elem_len *
-//                          get_cls_shared_ptrs()[0][16] *
-//                          get_cls_shared_ptrs()[0][18] / 8;
-//         // D32tlstride3
-//         D32tlstride[3] = 0;
-//         // set_addr_remap_index_D32
-//         get_cls_shared_ptrs()[5][20] = 0;
-//         // channel_en_D32 []
-//         if (get_cls_shared_ptrs()[0][11] == 0) {
-//             get_cls_shared_ptrs()[5][21] = channel_en_D32_0_0;
-//         } else {
-//             get_cls_shared_ptrs()[5][21] = channel_en_D32_1_0;
-//         }
-//         VERSACORE_DEBUG_PRINT(
-//             "GEMM Intra-Chiplet Kernel Compute Streamer Cfg D Done!\r\n");
-
-//         //////////////////////////////////////////////////////////////
-//         // Configuration the Steamer and Versacore
-//         //////////////////////////////////////////////////////////////
-
-//         set_versacore_streamer_csr(
-//             (uint32_t)(uintptr_t)get_cls_shared_ptrs()[0][1],  // A_addr
-//             (uint32_t*)(&get_cls_shared_ptrs()[5][0]),         // Aslstride
-//             (uint32_t*)(get_cls_shared_ptrs()[5][1]),  // Atlbound[] base
-//             (uint32_t*)(get_cls_shared_ptrs()[5][2]),  // Atlstride[] base
-//             get_cls_shared_ptrs()[5][3],               // set_addr_remap_index_A
-//             get_cls_shared_ptrs()[5][4],               // transpose_A
-//             (uint32_t*)(&get_cls_shared_ptrs()[5][5]),  // channel_en_A []
-
-//             (uint32_t)(uintptr_t)get_cls_shared_ptrs()[0][3],  // B_addr
-//             (uint32_t*)(&get_cls_shared_ptrs()[5][6]),  // Bslstride[] base
-//             (uint32_t*)(get_cls_shared_ptrs()[5][7]),   // Btlbound[] base
-//             (uint32_t*)(get_cls_shared_ptrs()[5][8]),   // Btlstride[] base
-//             get_cls_shared_ptrs()[5][9],   // set_addr_remap_index_B
-//             get_cls_shared_ptrs()[5][10],  // transpose_B
-//             (uint32_t*)(get_cls_shared_ptrs()[5][11]),  // channel_en_B []
-
-//             (uint32_t)(uintptr_t)get_cls_shared_ptrs()[0][5],  // C_addr
-//             (uint32_t*)(&get_cls_shared_ptrs()[5][12]),  // Cslstride[] base
-//             (uint32_t*)(get_cls_shared_ptrs()[5][13]),   // Ctlbound[] base
-//             (uint32_t*)(get_cls_shared_ptrs()[5][14]),   // Ctlstride[] base
-//             get_cls_shared_ptrs()[5][15],  // set_addr_remap_index_C
-//             (uint32_t*)(&get_cls_shared_ptrs()[5][16]),  // channel_en_C []
-
-//             (uint32_t)(uintptr_t)get_cls_shared_ptrs()[0][7],  // D_addr
-//             (uint32_t*)(&get_cls_shared_ptrs()[5][17]),  // D32slstride[] base
-//             (uint32_t*)(get_cls_shared_ptrs()[5][18]),   // D32tlbound[] base
-//             (uint32_t*)(get_cls_shared_ptrs()[5][19]),   // D32tlstride[] base
-//             get_cls_shared_ptrs()[5][20],  // set_addr_remap_index_D32
-//             (uint32_t*)(&get_cls_shared_ptrs()[5][21])  // channel_en_D32 []
-//             ,
-//             0, 0, 0, 0, 0, 0, 0, 0, 0
-//         );
-
-//         set_versacore_csr(
-//             // accPrevC means takes new C
-//             get_cls_shared_ptrs()[0][14] == 0, get_cls_shared_ptrs()[0][9],
-//             get_cls_shared_ptrs()[0][10] * get_cls_shared_ptrs()[0][8], 0,
-//             get_cls_shared_ptrs()[0][11], 0);
-
-//         VERSACORE_DEBUG_PRINT(
-//             "GEMM Intra-Chiplet Kernel Streamer Configuration Done!\r\n");
-
-//         // Set CSR to start Streamer
-//         start_versacore_and_streamer();
-
-//         // Poll until Streamer and GEMM accelerator finish
-//         wait_versacore_and_streamer();
-
-//         VERSACORE_DEBUG_PRINT("GEMM Intra-Chiplet Kernel Compute Done!\r\n");
-
-//         for (int i = 0; i < 10; i++) {
-//             VERSACORE_DEBUG_PRINT("D[%d] = %d\r\n", i,
-//                                   get_cls_shared_ptrs()[0][7][i]);
-//         }
-//     }
-// }
-
 SNAX_LIB_DEFINE void __snax_kernel_gemm(void *arg)
 {
     // Compute GeMM D = A*B + C
@@ -1902,6 +587,7 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm(void *arg)
         ///////////////////////////////////////
         // Allocate the L1 memory //
         ///////////////////////////////////////
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
         get_cls_shared_ptrs()[0] = (uint32_t *)snrt_l1_malloc(128);
         if (!get_cls_shared_ptrs()[0])
         {
@@ -2157,6 +843,7 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm(void *arg)
         get_cls_shared_ptrs()[0][24] = load_B ? (uint32_t)get_cls_shared_ptrs()[2] : B_addr_lo;
         get_cls_shared_ptrs()[0][25] = load_C ? (uint32_t)get_cls_shared_ptrs()[3] : C_addr_lo;
         get_cls_shared_ptrs()[0][26] = store_D ? (uint32_t)get_cls_shared_ptrs()[4] : D_addr_lo;
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
     }
     snrt_cluster_hw_barrier();
 
@@ -2196,6 +883,7 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm(void *arg)
 
         VERSACORE_DEBUG_PRINT(
             "GEMM Intra-Chiplet Kernel Compute Streamer Cfg Start!\r\n");
+        BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_FULL_CFG_START);
         // the snicth needs to generate these streamer cfgs
         // 22 args in total
         // A 6, B 6, C 5, D 5
@@ -2681,9 +1369,11 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm(void *arg)
 
         // Set CSR to start Streamer
         start_versacore_and_streamer();
-
+        BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_FULL_CFG_END);
         // Poll until Streamer and GEMM accelerator finish
+        BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_FULL_RUN_START);
         wait_versacore_and_streamer();
+        BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_FULL_RUN_END);
 
         VERSACORE_DEBUG_PRINT("GEMM Intra-Chiplet Kernel Compute Done!\r\n");
 
@@ -2701,6 +1391,7 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm(void *arg)
         // If the D addr is not in L1, we need to use the DMA to store the data back according to the input args
         if (store_D)
         {
+
             uint32_t D_addr_hi = get_cls_shared_ptrs()[0][6];
             uint32_t D_addr_lo = get_cls_shared_ptrs()[0][7];
             uint64_t dst_D_addr = make_u64(D_addr_hi, D_addr_lo);
@@ -2719,10 +1410,12 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm(void *arg)
             VERSACORE_DEBUG_PRINT("DMA Store D Src: 0x%lx\r\n", chiplet_addr_transform((uint64_t)local_D_addr));
             VERSACORE_DEBUG_PRINT("DMA Store D Size %d\r\n", D_size);
             // Dst is specified from the args, SRC is L1 addr
+            BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_START);
             snrt_dma_start_1d_wideptr(dst_D_addr,
                                       chiplet_addr_transform((uint64_t)local_D_addr),
                                       D_size);
             snrt_dma_wait_all();
+            BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_END);
         }
         ///////////////////////////////////////
         // Free the L1 memory //
@@ -2776,6 +1469,7 @@ SNAX_LIB_DEFINE void __snax_kernel_minimal_cfg_start_gemm_and_wait(void *arg)
         ///////////////////////////////////////
         // Allocate the L1 memory //
         ///////////////////////////////////////
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
         get_cls_shared_ptrs()[0] = (uint32_t *)snrt_l1_malloc(128);
         if (!get_cls_shared_ptrs()[0])
         {
@@ -2798,6 +1492,7 @@ SNAX_LIB_DEFINE void __snax_kernel_minimal_cfg_start_gemm_and_wait(void *arg)
             (void *)get_cls_shared_ptrs()[0], (void *)arg,
             sizeof(uint32_t) * 4); // 4 uint32_t passed args in total
         snrt_dma_wait_all();
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
     }
 
     snrt_cluster_hw_barrier();
@@ -2812,31 +1507,644 @@ SNAX_LIB_DEFINE void __snax_kernel_minimal_cfg_start_gemm_and_wait(void *arg)
     // new pointers for the streamers
     if (snrt_cluster_core_idx() == 0)
     {
+        BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_MIN_CFG_START);
         set_minimal_streamer_cfg(
             A_addr_lo,
             B_addr_lo,
             C_addr_lo,
             D_addr_lo);
         start_versacore_and_streamer();
+        BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_MIN_CFG_END);
+        BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_MIN_RUN_START);
         wait_versacore_and_streamer();
+        BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_MIN_RUN_END);
     }
+}
+
+////////////////////////// Core-level Kernels //////////////////////
+// The bingo kernels are core-level kernels with the return value
+// Those kernels are used together with the bingo hw manager
+
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_dummy(void *arg){
+    // A dummy kernel that does nothing but print the input argument
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+    uint32_t dummy_input = ((uint32_t *)arg)[0];
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
+    // Notice the variables here are all local variables at the TLS section
+    printf_safe("[Cluster %d Core %d]: Bingo Dummy Kernel: %d\r\n", snrt_cluster_idx(), snrt_cluster_core_idx(), dummy_input);
+    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
+    return BINGO_RET_SUCC;
+}
+
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_entry_point(void *arg){
+    // This is a special kernel to indicate the bingo hw manager loop has started
+    // In the future we can add some content here
+    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
+    printf_safe("[Cluster %d Core %d]: Start: \r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
+    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
+    return BINGO_RET_SUCC;
+}
+
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_exit(void *arg){
+    // This is a special kernel to exit the bingo hw manager loop
+    // In the future we can add some profiling info here
+    // Right now we just print the exit code
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+    uint32_t exit_code = ((uint32_t *)arg)[0];
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
+    printf_safe("[Cluster %d Core %d]: Exiting with code %d\r\n", snrt_cluster_idx(), snrt_cluster_core_idx(), exit_code);
+    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
+    return BINGO_RET_EXIT;
+}
+
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_1d_copy(void *arg)
+{
+    
+    // Copy 1d data from src to dst using idma
+    // Arg0: uint32_t src_addr_hi
+    // Arg1: uint32_t src_addr_lo
+    // Arg2: uint32_t dst_addr_hi
+    // Arg3: uint32_t dst_addr_lo
+    // Arg4: uint32_t size in Byte
+    if (snrt_is_dm_core()){
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+        uint64_t src_addr = make_u64(((uint32_t *)arg)[0], ((uint32_t *)arg)[1]);
+        uint64_t dst_addr = make_u64(((uint32_t *)arg)[2], ((uint32_t *)arg)[3]);
+        uint32_t data_size = ((uint32_t *)arg)[4];
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+        BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_START);
+        snrt_dma_start_1d_wideptr(dst_addr, src_addr, data_size);
+        BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_END);
+        BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_START);
+        snrt_dma_wait_all();
+        BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_END);
+        IDMA_DEBUG_PRINT("IDMA copy completed\r\n");
+        IDMA_DEBUG_PRINT("SRC ADDR = %lx\r\n", src_addr);
+        IDMA_DEBUG_PRINT("DST ADDR = %lx\r\n", dst_addr);
+        return BINGO_RET_SUCC;
+    } else{
+        printf_safe("[Cluster %d Core %d]: Error! IDMA 1D copy should be called from a DM core!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+}
+
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_1d_copy(void *arg)
+{
+    // Copy 1d data from src to dst using xdma
+    // Arg0: uint32_t src_addr_hi
+    // Arg1: uint32_t src_addr_lo
+    // Arg2: uint32_t dst_addr_hi
+    // Arg3: uint32_t dst_addr_lo
+    // Arg4: uint32_t size in Byte
+
+    if (snrt_is_dm_core())
+    {
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+        uint64_t src_addr = make_u64(((uint32_t *)arg)[0], ((uint32_t *)arg)[1]);
+        uint64_t dst_addr = make_u64(((uint32_t *)arg)[2], ((uint32_t *)arg)[3]);
+        uint32_t data_size = ((uint32_t *)arg)[4];
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
+        xdma_memcpy_1d_full_addr(src_addr, dst_addr, data_size);
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
+        int task_id = xdma_start();
+        xdma_remote_wait(task_id);
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
+        XDMA_DEBUG_PRINT("XDMA copy completed\n");
+        XDMA_DEBUG_PRINT("SRC ADDR = %lx\n", src_addr);
+        XDMA_DEBUG_PRINT("DST ADDR = %lx\n", dst_addr);
+        return BINGO_RET_SUCC;
+    } else{
+        printf_safe("[Cluster %d Core %d]: Error! XDMA copy should be called from a DM core!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+}
+
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_broadcast(void *arg)
+{
+    
+    // Copy 1d data from src to dst using idma
+    // Arg0: uint32_t src_addr_hi
+    // Arg1: uint32_t src_addr_lo
+    // Arg2: uint32_t dst_addr_hi
+    // Arg3: uint32_t dst_addr_lo
+    // Arg4: uint32_t size in Byte
+    if (snrt_is_dm_core()){
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+        uint64_t src_addr = make_u64(((uint32_t *)arg)[0], ((uint32_t *)arg)[1]);
+        uint64_t dst_addr = make_u64(((uint32_t *)arg)[2], ((uint32_t *)arg)[3]);
+        uint64_t dst_addr_broadcast = chiplet_addr_transform_loc(0xF, 0xF, dst_addr);
+        uint32_t data_size = ((uint32_t *)arg)[4];
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+        BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_START);
+        snrt_dma_start_1d_wideptr(dst_addr_broadcast, src_addr, data_size);
+        BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_END);
+        BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_START);
+        snrt_dma_wait_all();
+        BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_END);
+        IDMA_DEBUG_PRINT("IDMA copy completed\r\n");
+        IDMA_DEBUG_PRINT("SRC ADDR = %lx\r\n", src_addr);
+        IDMA_DEBUG_PRINT("DST ADDR = %lx\r\n", dst_addr_broadcast);
+        return BINGO_RET_SUCC;
+    } else{
+        printf_safe("[Cluster %d Core %d]: Error! IDMA 1D copy should be called from a DM core!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+}
+
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
+{
+    // Assume the matrix data are all in L1
+    // So all the addr are 32bit local addr
+    // This kernel will configure the versacore and streamer and start the computation
+    // There is another __snax_bingo_kernel_gemm_minimal kernel that only starts the versacore and streamer with pre-configured CSRs
+    if (snrt_cluster_core_idx() != 0){
+        printf_safe("[Cluster %d Core %d]: Error! Bingo GEMM full should be called from core 0!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+    uint32_t A_addr = ((uint32_t *)arg)[0];
+    uint32_t B_addr = ((uint32_t *)arg)[1];
+    uint32_t C_addr = ((uint32_t *)arg)[2];
+    uint32_t D_addr = ((uint32_t *)arg)[3];
+    VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Bingo GEMM Full called with A_addr=0x%08x, B_addr=0x%08x, C_addr=0x%08x, D_addr=0x%08x\r\n",
+                          snrt_cluster_idx(), snrt_cluster_core_idx(),
+                          A_addr, B_addr, C_addr, D_addr);
+    uint32_t M = ((uint32_t *)arg)[4];
+    uint32_t K = ((uint32_t *)arg)[5];
+    uint32_t N = ((uint32_t *)arg)[6];
+    uint32_t array_shape_idx = ((uint32_t *)arg)[7];
+    uint32_t transpose_A = ((uint32_t *)arg)[8];
+    uint32_t transpose_B = ((uint32_t *)arg)[9];
+    uint32_t accumPrevC = ((uint32_t *)arg)[10];
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_FULL_CFG_START);
+    // some inferenced args
+    uint32_t addNonZeroC;
+    if (accumPrevC)
+    {
+        addNonZeroC = 0;
+    }
+    else if (C_addr!= 0)
+    {
+        addNonZeroC = 1;
+    }
+    else
+    {
+        addNonZeroC = 0;
+    }
+    uint32_t meshRow;
+    uint32_t tileSize;
+    uint32_t meshCol;
+    switch (array_shape_idx)
+    {
+    case 0:
+        meshRow = meshRow_0;
+        tileSize = tileSize_0;
+        meshCol = meshCol_0;
+        break;
+    case 1:
+        meshRow = meshRow_1;
+        tileSize = tileSize_1;
+        meshCol = meshCol_1;
+        break;
+    case 2:
+        meshRow = meshRow_2;
+        tileSize = tileSize_2;
+        meshCol = meshCol_2;
+        break;
+    case 3:
+        meshRow = meshRow_3;
+        tileSize = tileSize_3;
+        meshCol = meshCol_3;
+        break;
+    case 4:
+        meshRow = meshRow_4;
+        tileSize = tileSize_4;
+        meshCol = meshCol_4;
+        break;
+    default:
+        VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx invalid!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+    // Configuration the Steamer and Versacore
+    //////////////////////////////////////////////////////////////
+    // Streamer cfg for A
+    //////////////////////////////////////////////////////////////
+    
+    // Aslstride0
+    uint32_t Aslstride0 = bankWidth / 8;
+    // Atlbound0~5
+    uint32_t Atlbound[6];
+    // Atlbound0
+    Atlbound[0] = K;
+    // Atlbound1
+    Atlbound[1] = N;
+    // Atlbound2
+    Atlbound[2] = M;
+    // Atlbound3
+    Atlbound[3] = 1;
+    // Atlbound4
+    Atlbound[4] = 1;
+    // Atlbound5
+    Atlbound[5] = 1;
+    uint32_t Atlstride[6];
+    // Atlstride0
+    Atlstride[0] = meshRow * tileSize;
+    // Atlstride1
+    Atlstride[1] = 0;
+    // Atlstride2
+    Atlstride[2] = meshRow * tileSize * K;
+    // Atlstride3
+    Atlstride[3] = 0;
+    // Atlstride4
+    Atlstride[4] = 0;
+    // Atlstride5
+    Atlstride[5] = 0;
+    uint32_t set_addr_remap_index_A = 0;
+    uint32_t channel_en_A;
+    switch (array_shape_idx)
+    {
+    case 0:
+        channel_en_A = channel_en_A_0_0;
+        break;
+    case 1:
+        channel_en_A = channel_en_A_1_0;
+        break;
+    case 2:
+        channel_en_A = channel_en_A_2_0;
+        break;
+    case 3:
+        channel_en_A = channel_en_A_3_0;
+        break;
+    case 4:
+        channel_en_A = channel_en_A_4_0;
+        break;
+    default:
+        VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx invalid!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+    //////////////////////////////////////////////////////////////
+    // Streamer cfg for B
+    //////////////////////////////////////////////////////////////
+    // Bslstride0
+    uint32_t Bslstride0 = bankWidth / 8;
+    // Btlbound0~2
+    uint32_t Btlbound[3];
+    // Btlbound0
+    Btlbound[0] = K;
+    // Btlbound1
+    Btlbound[1] = N;
+    // Btlbound2
+    Btlbound[2] = M;
+    uint32_t Btlstride[3];
+    // Btlstride0
+    Btlstride[0] = tileSize * meshCol;
+    // Btlstride1
+    Btlstride[1] = tileSize * meshCol * K;
+    // Btlstride2
+    Btlstride[2] = 0;
+    uint32_t set_addr_remap_index_B = 0;
+    uint32_t channel_en_B[2];
+    switch (array_shape_idx)
+    {
+    case 0:
+        channel_en_B[0] = channel_en_B_0_0;
+        channel_en_B[1] = channel_en_B_0_1;
+        break;
+    case 1:
+        channel_en_B[0] = channel_en_B_1_0;
+        channel_en_B[1] = channel_en_B_1_1;
+        break;
+    case 2:
+        channel_en_B[0] = channel_en_B_2_0;
+        channel_en_B[1] = channel_en_B_2_1;
+        break;
+    case 3:
+        channel_en_B[0] = channel_en_B_3_0;
+        channel_en_B[1] = channel_en_B_3_1;
+        break;
+    case 4:
+        channel_en_B[0] = channel_en_B_4_0;
+        channel_en_B[1] = channel_en_B_4_1;
+        break;
+    default:
+        VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx invalid!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+    //////////////////////////////////////////////////////////////
+    // Streamer cfg for C
+    //////////////////////////////////////////////////////////////
+    // Cslstride0
+    uint32_t Cslstride0 = bankWidth / 8;
+    // Ctlbound0~3
+    uint32_t Ctlbound[4];
+    if (accumPrevC == 1)
+    {
+        // accumPrevC is true
+        Ctlbound[0] = 0;
+    }
+    else
+    {
+        switch (array_shape_idx)
+        {
+        case 0:
+            Ctlbound[0] = Ctlbound0_0;
+            break;
+        case 1:
+            Ctlbound[0] = Ctlbound0_1;
+            break;
+        case 2:
+            Ctlbound[0] = Ctlbound0_2;
+            break;
+        case 3:
+            Ctlbound[0] = Ctlbound0_3;
+            break;
+        case 4:
+            Ctlbound[0] = Ctlbound0_4;
+            break;
+        default:
+            VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx invalid!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
+            return BINGO_RET_FAIL;
+        }
+    }
+    // Ctlbound1
+    Ctlbound[1] = N;
+    // Ctlbound2
+    Ctlbound[2] = M;
+    // Ctlbound3
+    Ctlbound[3] = 1;
+    uint32_t Ctlstride[4];
+    switch (array_shape_idx)
+    {
+    case 0:
+        // Ctlstride0
+        Ctlstride[0] = Ctlstride0_0;
+        break;
+    case 1:
+        // Ctlstride0
+        Ctlstride[0] = Ctlstride0_1;
+        break;
+    case 2:
+        // Ctlstride0
+        Ctlstride[0] = Ctlstride0_2;
+        break;
+    case 3:
+        // Ctlstride0
+        Ctlstride[0] = Ctlstride0_3;
+        break;
+    case 4:
+        // Ctlstride0
+        Ctlstride[0] = Ctlstride0_4;
+        break;
+    default:
+        VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx invalid!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+    // Ctlstride1
+    Ctlstride[1] = C_elem_len * meshRow *
+                   meshCol / 8;
+    // Ctlstride2
+    Ctlstride[2] = N * C_elem_len *
+                   meshRow *
+                   meshCol / 8;
+    // Ctlstride3
+    Ctlstride[3] = 0;
+    uint32_t set_addr_remap_index_C = 0;
+    uint32_t channel_en_C;
+    // set channel_en_C to zero if accumPrevC or addNonZeroC
+    if (accumPrevC == 1 || addNonZeroC == 0)
+    {
+        channel_en_C = channel_en_C_null_0_0;;
+    }
+    else
+    {
+        switch (array_shape_idx)
+        {
+        case 0:
+            channel_en_C = channel_en_C_0_0;
+            break;
+        case 1:
+            channel_en_C = channel_en_C_1_0;
+            break;
+        case 2:
+            channel_en_C = channel_en_C_2_0;
+            break;
+        case 3:
+            channel_en_C = channel_en_C_3_0;
+            break;
+        case 4:
+            channel_en_C = channel_en_C_4_0;
+            break;
+        default:
+            VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx invalid!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
+            return BINGO_RET_FAIL;
+        }
+    }
+    //////////////////////////////////////////////////////////////
+    // Streamer cfg for D
+    //////////////////////////////////////////////////////////////
+    // D32slstride0
+    uint32_t D32slstride0 = bankWidth / 8;
+    // D32tlbound0~3
+    uint32_t D32tlbound[4];
+    switch (array_shape_idx)
+    {
+    case 0:
+        D32tlbound[0] = D32tlbound0_0;
+        break;
+    case 1:
+        D32tlbound[0] = D32tlbound0_1;
+        break;
+    case 2:
+        D32tlbound[0] = D32tlbound0_2;
+        break;
+    case 3:
+        D32tlbound[0] = D32tlbound0_3;
+        break;
+    case 4:
+        D32tlbound[0] = D32tlbound0_4;
+        break;
+    default:
+        VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx invalid!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+    // D32tlbound1
+    D32tlbound[1] = N;
+    // D32tlbound2
+    D32tlbound[2] = M;
+    // D32tlbound3
+    D32tlbound[3] = 1;
+    uint32_t D32tlstride[4];
+    switch (array_shape_idx)
+    {
+    case 0:
+        // D32tlstride0
+        D32tlstride[0] = D32tlstride0_0;
+        break;
+    case 1:
+        // D32tlstride0
+        D32tlstride[0] = D32tlstride0_1;
+        break;
+    case 2:
+        // D32tlstride0
+        D32tlstride[0] = D32tlstride0_2;
+        break;
+    case 3:
+        // D32tlstride0
+        D32tlstride[0] = D32tlstride0_3;
+        break;
+    case 4:
+        // D32tlstride0
+        D32tlstride[0] = D32tlstride0_4;
+        break;
+    default:
+        VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx invalid!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+    // D32tlstride1
+    D32tlstride[1] = D32_elem_len * meshRow *
+                     meshCol / 8;
+    // D32tlstride2
+    D32tlstride[2] = N * D32_elem_len *
+                     meshRow *
+                     meshCol / 8;
+    // D32tlstride3
+    D32tlstride[3] = 0;
+    uint32_t set_addr_remap_index_D32 = 0;
+    uint32_t channel_en_D32;
+    switch (array_shape_idx)
+    {
+    case 0:
+        channel_en_D32 = channel_en_D32_0_0;
+        break;
+    case 1:
+        channel_en_D32 = channel_en_D32_1_0;
+        break;
+    case 2:
+        channel_en_D32 = channel_en_D32_2_0;
+        break;
+    case 3:
+        channel_en_D32 = channel_en_D32_3_0;
+        break;
+    case 4:
+        channel_en_D32 = channel_en_D32_4_0;
+        break;
+    default:
+        VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx invalid!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+    //////////////////////////////////////////////////////////////
+    // Configuration the Steamer and Versacore
+    //////////////////////////////////////////////////////////////
+    VERSACORE_DEBUG_PRINT(
+        "Bingo GEMM Full Kernel Compute Streamer Cfg Start!\r\n");
+    set_versacore_streamer_csr(
+        A_addr,               // A_addr
+        &Aslstride0,         // Aslstride[] base
+        Atlbound,            // Atlbound[] base
+        Atlstride,           // Atlstride[] base
+        set_addr_remap_index_A, // set_addr_remap_index_A
+        transpose_A,         // transpose_A
+        &channel_en_A,       // channel_en_A []
+        B_addr,              // B_addr
+        &Bslstride0,         // Bslstride[] base
+        Btlbound,            // Btlbound[] base
+        Btlstride,           // Btlstride[] base
+        set_addr_remap_index_B, // set_addr_remap_index_B
+        transpose_B,         // transpose_B
+        channel_en_B,        // channel_en_B []
+        C_addr,               // C_addr
+        &Cslstride0,         // Cslstride[] base
+        Ctlbound,            // Ctlbound[] base
+        Ctlstride,           // Ctlstride[] base
+        set_addr_remap_index_C, // set_addr_remap_index_C
+        &channel_en_C,       // channel_en_C []
+        D_addr,               // D_addr
+        &D32slstride0,         // D32slstride[] base
+        D32tlbound,          // D32tlbound[] base
+        D32tlstride,         // D32tlstride[] base
+        set_addr_remap_index_D32, // set_addr_remap_index_D32
+        &channel_en_D32,     // channel_en_D32 []
+        0, 0, 0, 0, 0, 0, 0, 0, 0);
+    set_versacore_csr(
+        // accPrevC means takes new C
+        accumPrevC == 0,
+        K,
+        N * M,
+        0,
+        array_shape_idx,
+        0);
+    VERSACORE_DEBUG_PRINT(
+        "Bingo GEMM Full Kernel Streamer Configuration Done!\r\n");
+    // Set CSR to start Streamer
+    start_versacore_and_streamer();
+    BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_FULL_CFG_END);
+    // Poll until Streamer and GEMM accelerator finish
+    BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_FULL_RUN_START);
+    wait_versacore_and_streamer();
+    BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_FULL_RUN_END);
+    VERSACORE_DEBUG_PRINT("Bingo GEMM Full Kernel Compute Done!\r\n");
+    return BINGO_RET_SUCC;
+}
+
+
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_minimal(void *arg)
+{
+    // This kernel will only start the versacore and streamer with pre-configured CSRs
+    if (snrt_cluster_core_idx() != 0){
+        printf_safe("[Cluster %d Core %d]: Error! Bingo GEMM minimal should be called from core 0!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+    uint32_t A_addr = ((uint32_t *)arg)[0];
+    uint32_t B_addr = ((uint32_t *)arg)[1];
+    uint32_t C_addr = ((uint32_t *)arg)[2];
+    uint32_t D_addr = ((uint32_t *)arg)[3];
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_MIN_CFG_START);
+    set_minimal_streamer_cfg(
+        A_addr,
+        B_addr,
+        C_addr,
+        D_addr);
+    // Set CSR to start Streamer
+    start_versacore_and_streamer();
+    BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_MIN_CFG_END);
+    // Poll until Streamer and GEMM accelerator finish
+    BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_MIN_RUN_START);
+    wait_versacore_and_streamer();
+    BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_MIN_RUN_END);
+    VERSACORE_DEBUG_PRINT("Bingo GEMM Minimal Kernel Compute Done!\r\n");
+    return BINGO_RET_SUCC;
 }
 
 //////////////////////// SYMBOL TABLE ////////////////////////
 // Here we create the symbol table
 SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
+    /// Cluster-level Kernels ///
+    /// Used for bingo sw     ///
     SNAX_EXPORT_FUNC(__snax_kernel_dummy),
     SNAX_EXPORT_FUNC(__snax_kernel_check_results),
-    SNAX_EXPORT_FUNC(__snax_kernel_check_results_full),
-    SNAX_EXPORT_FUNC(__snax_kernel_csr),
-    SNAX_EXPORT_FUNC(__snax_kernel_load_compute_store),
-    SNAX_EXPORT_FUNC(__snax_kernel_double_buffer_example),
+    // SNAX_EXPORT_FUNC(__snax_kernel_check_results_full),
+    // SNAX_EXPORT_FUNC(__snax_kernel_csr),
+    // SNAX_EXPORT_FUNC(__snax_kernel_load_compute_store),
+    SNAX_EXPORT_FUNC(__snax_kernel_double_buffer),
     SNAX_EXPORT_FUNC(__snax_kernel_xdma_1d_copy),
     SNAX_EXPORT_FUNC(__snax_kernel_idma_1d_copy),
-    // SNAX_EXPORT_FUNC(
-    //     __snax_kernel_versacore_load_compute_store_w_streamer_args),
-    // SNAX_EXPORT_FUNC(__snax_kernel_gemm_intra_chiplet),
-    // SNAX_EXPORT_FUNC(__snax_kernel_gemm_compute_only_intra_chiplet),
     SNAX_EXPORT_FUNC(__snax_kernel_gemm),
     SNAX_EXPORT_FUNC(__snax_kernel_minimal_cfg_start_gemm_and_wait),
-    SNAX_SYMTAB_END};
+
+    /// Core-level Kernels ///
+    /// Used for bingo hw  ///
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_dummy),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_exit),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_idma_1d_copy),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_idma_broadcast),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_gemm_full),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_gemm_minimal),
+    SNAX_SYMTAB_END
+};

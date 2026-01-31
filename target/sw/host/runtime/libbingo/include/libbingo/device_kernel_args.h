@@ -8,13 +8,17 @@
 
 #define __SNAX_KERNEL_ARGS_DEFINE typedef struct __attribute__((packed, aligned(4)))
 
+
+
 // Define the argument structures for the device kernels
 // Each structure is packed and aligned to 4 bytes
 // The definition should match the kernel function argument parsing in snax_kernel_lib.h
 
+
+///////////////////////// Cluster-level Kernels ////////////////////////
 // Dummy kernel args
 __SNAX_KERNEL_ARGS_DEFINE __snax_kernel_dummy_args {
-  uint32_t dummy_arg_0;    
+  uint32_t dummy_input;    
 } __snax_kernel_dummy_args_t;
 
 // CSR kernel args
@@ -154,3 +158,58 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_kernel_minimal_cfg_start_gemm_and_wait_args{
   uint32_t input_C_addr_lo;
   uint32_t output_D_addr_lo;
 } __snax_kernel_minimal_cfg_start_gemm_and_wait_args_t;
+
+//////////////////////// BINGO Core-level Kernels ////////////////////////
+// BINGO Dummy kernel args
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_dummy_args {
+  uint32_t dummy_input;            
+} __snax_bingo_kernel_dummy_args_t;
+// BINGO Entry kernel args
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_entry_args {
+  uint32_t start_cc_reg_addr;            
+} __snax_bingo_kernel_entry_args_t;
+// BINGO Exit kernel args
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_exit_args {
+  uint32_t exit_code;            
+} __snax_bingo_kernel_exit_args_t;
+
+// BINGO IDMA 1D Copy kernel args
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_idma_1d_copy_args {
+  uint32_t src_addr_hi;    
+  uint32_t src_addr_lo;            
+  uint32_t dst_addr_hi;            
+  uint32_t dst_addr_lo;            
+  uint32_t size;        // in Bytes
+} __snax_bingo_kernel_idma_1d_copy_args_t;
+
+// BINGO IDMA Broadcast Kernel Args
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_idma_broadcast_args {
+  uint32_t src_addr_hi;    
+  uint32_t src_addr_lo;            
+  uint32_t dst_addr_hi;            
+  uint32_t dst_addr_lo;            
+  uint32_t size;        // in Bytes
+} __snax_bingo_kernel_idma_broadcast_args_t;
+
+// BINGO GEMM Full kernel args
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_gemm_full_args {
+  uint32_t input_A_addr;            
+  uint32_t input_B_addr;            
+  uint32_t input_C_addr;            
+  uint32_t output_D_addr;            
+  uint32_t M;            
+  uint32_t K;            
+  uint32_t N;            
+  uint32_t array_shape_idx;            
+  uint32_t transpose_A;            
+  uint32_t transpose_B;            
+  uint32_t accumPrevC;            
+} __snax_bingo_kernel_gemm_full_args_t;
+
+// BINGO GEMM Minimal kernel args
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_gemm_minimal_args {
+  uint32_t input_A_addr;            
+  uint32_t input_B_addr;            
+  uint32_t input_C_addr;            
+  uint32_t output_D_addr;            
+} __snax_bingo_kernel_gemm_minimal_args_t;

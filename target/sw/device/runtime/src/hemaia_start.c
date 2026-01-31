@@ -10,7 +10,8 @@
 
 // KEEP IN MIND: All the functions here will be run by all the clusters
 
-#define SNRT_INIT_TLS
+// We do not need the init here since the host will clear the memory
+// #define SNRT_INIT_TLS
 #define SNRT_INIT_CLS
 #define SNRT_CRT0_CALLBACK2
 #define SNRT_INIT_L1_ALLOC
@@ -35,6 +36,11 @@ static inline void snrt_init_tls() {
     // bandwidth of the DMA, the DM core initializes the TLS section
     // for every core in a cluster.
     if (snrt_is_dm_core()) {
+        printf("Core %d initializing TLS sections\n", snrt_cluster_core_idx());
+        printf("  .tbss: 0x%08x - 0x%08x\n", (uint32_t)(&__tbss_start),
+               (uint32_t)(&__tbss_end));
+        printf("  .tdata: 0x%08x - 0x%08x\n", (uint32_t)(&__tdata_start),
+               (uint32_t)(&__tdata_end));
         size = (size_t)(&__tdata_end) - (size_t)(&__tdata_start);
 
         // First initialize the DM core's .tdata section from main memory
@@ -73,25 +79,30 @@ static inline uint32_t snrt_cls_base_addr() {
 #endif
 #ifdef SNRT_INIT_CLS
 static inline void snrt_init_cls() {
-    extern volatile uint32_t __cdata_start, __cdata_end;
-    extern volatile uint32_t __cbss_start, __cbss_end;
-
+    // extern volatile uint32_t __cdata_start, __cdata_end;
+    // extern volatile uint32_t __cbss_start, __cbss_end;
+    // We only need to set the cls pointer here
     _cls_ptr = (cls_t*)snrt_cls_base_addr();
 
-    // Only one core per cluster has to do this
-    if (snrt_is_dm_core()) {
-        void* ptr = (void*)snrt_cls_base_addr();
-        size_t size;
+    // // Only one core per cluster has to do this
+    // if (snrt_is_dm_core()) {
+    //     printf("Core %d initializing CLS sections\n", snrt_cluster_core_idx());
+    //     printf("  .cdata: 0x%08x - 0x%08x\n", (uint32_t)(&__cdata_start),
+    //            (uint32_t)(&__cdata_end));
+    //     printf("  .cbss: 0x%08x - 0x%08x\n", (uint32_t)(&__cbss_start),
+    //            (uint32_t)(&__cbss_end));
+    //     void* ptr = (void*)snrt_cls_base_addr();
+    //     size_t size;
 
-        // Copy cdata section to base of the TCDM
-        size = (size_t)(&__cdata_end) - (size_t)(&__cdata_start);
-        snrt_dma_start_1d(ptr, (void*)(&__cdata_start), size);
+    //     // Copy cdata section to base of the TCDM
+    //     size = (size_t)(&__cdata_end) - (size_t)(&__cdata_start);
+    //     snrt_dma_start_1d(ptr, (void*)(&__cdata_start), size);
 
-        // Clear cbss section
-        ptr = (void*)((uint32_t)ptr + size);
-        size = (size_t)(&__cbss_end) - (size_t)(&__cbss_start);
-        snrt_dma_start_1d(ptr, (void*)(WIDE_ZERO_MEM_BASE_ADDR), size);
-    }
+    //     // Clear cbss section
+    //     ptr = (void*)((uint32_t)ptr + size);
+    //     size = (size_t)(&__cbss_end) - (size_t)(&__cbss_start);
+    //     snrt_dma_start_1d(ptr, (void*)(WIDE_ZERO_MEM_BASE_ADDR), size);
+    // }
 }
 #endif
 
@@ -118,7 +129,7 @@ static inline void snrt_init_l1_alloc() { snrt_l1_malloc_init(); }
 #endif
 
 static inline uint32_t* snrt_exit_code_destination() {
-    return soc_ctrl_scratch_ptr(3);
+    return soc_ctrl_scratch_ptr(2);
 }
 static inline void snrt_exit_default(int exit_code) {
     exit_code = snrt_global_all_to_all_reduction(exit_code);

@@ -26,11 +26,11 @@ TARGET_SRC_DIR        = $(ROOT)/target/rtl/src
 TARGET_CLINT_DIR      = $(TARGET_SRC_DIR)/clint
 TARGET_PLIC_DIR       = $(TARGET_SRC_DIR)/rv_plic
 TARGET_SOCCTRL_DIR	  = $(TARGET_SRC_DIR)/soc_ctrl
-TARGET_QUADCTRL_DIR   = $(TARGET_SRC_DIR)/quadrant_s1_ctrl
+TARGET_QUADPERIPH_DIR = $(TARGET_SRC_DIR)/quad_periph
 SNITCH_ROOT           = $(shell $(BENDER) path snitch_cluster)
 HEMAIA_UTIL           = $(ROOT)/util/hemaia/util.py
 SOURCE_OCCAMY_DIR     = $(ROOT)/hw/occamy
-SOURCE_QUADCTRL_DIR   = $(ROOT)/hw/occamy/quadrant_s1_ctrl
+SOURCE_QUADPERIPH_DIR   = $(ROOT)/hw/occamy/quad_periph
 SOURCE_SOCCTRL_DIR    = $(ROOT)/hw/occamy/soc_ctrl
 SOURCE_PLIC_DIR       = $(ROOT)/hw/vendor/pulp_platform_opentitan_peripherals/src/rv_plic
 SOURCE_CLINT_DIR      = $(shell $(BENDER) path clint)
@@ -53,8 +53,8 @@ CFG		     ?= $(ROOT)/target/rtl/cfg/lru.hjson
 .PHONY: all clean
 all: rtl
 
-.PHONY: rtl clint plic socctrl quadctrl soc
-.PHONY: clean-rtl-src clean-rtl clean-clint clean-plic clean-socctrl clean-quadctrl clean-snax-cluster clean-soc
+.PHONY: rtl clint plic socctrl quadperiph soc
+.PHONY: clean-rtl-src clean-rtl clean-clint clean-plic clean-socctrl clean-quadperiph clean-snax-cluster clean-soc
 
 clean: clean-rtl-src
 ###############
@@ -63,13 +63,13 @@ clean: clean-rtl-src
 
 
 
-rtl: clint plic socctrl quadctrl soc snax-cluster src/bender_targets.tmp
-clean-rtl: clean-clint clean-plic clean-socctrl clean-quadctrl clean-soc clean-snax-cluster
+rtl: clint plic socctrl quadperiph soc snax-cluster src/bender_targets.tmp
+clean-rtl: clean-clint clean-plic clean-socctrl clean-quadperiph clean-soc clean-snax-cluster
 clean-rtl-src:
 	rm -rf $(TARGET_SRC_DIR)
 	rm -rf .snax_cluster_occamygen_targets_group
 	rm -rf .misc_occamygen_targets_group
-	rm -rf .quadctrl_reggen_targets_group
+	rm -rf .quadperiph_reggen_targets_group
 	rm -rf .plic_reggen_targets_group
 	rm -rf .clint_reggen_targets_group
 	rm -rf .socctrl_reggen_targets_group
@@ -126,9 +126,9 @@ $(MISC_OCCAMYGEN_TARGETS): .misc_occamygen_targets_group
 		--chip             $(SOURCE_OCCAMY_DIR)/occamy_chip.sv.tpl \
 		--io               $(SOURCE_OCCAMY_DIR)/hemaia.sv.tpl \
 		--pkg-sv           $(SOURCE_OCCAMY_DIR)/occamy_pkg.sv.tpl \
-		--quadrant-s1      $(SOURCE_OCCAMY_DIR)/occamy_quadrant_s1.sv.tpl \
-		--quadrant-s1-ctrl $(SOURCE_OCCAMY_DIR)/occamy_quadrant_s1_ctrl.sv.tpl \
-		--quadrant-s1-noc  $(SOURCE_OCCAMY_DIR)/quad_noc/quad_noc.yml.tpl \
+		--quad             $(SOURCE_OCCAMY_DIR)/occamy_quad.sv.tpl \
+		--quad-ctrl        $(SOURCE_OCCAMY_DIR)/occamy_quad_ctrl.sv.tpl \
+		--quad-noc         $(SOURCE_OCCAMY_DIR)/quad_noc/quad_noc.yml.tpl \
 		--xilinx-sv        $(SOURCE_OCCAMY_DIR)/occamy_xilinx.sv.tpl \
 		--cva6-sv          $(SOURCE_OCCAMY_DIR)/occamy_cva6.sv.tpl
 
@@ -137,7 +137,7 @@ $(MISC_OCCAMYGEN_TARGETS): .misc_occamygen_targets_group
 	cp -f $(SOURCE_OCCAMY_DIR)/apb_flat.sv $(TARGET_SRC_DIR)
 	@touch $@
 
-.PHONY: debug-soc-gen debug-quadrant-ctrl-gen debug-quadrant-gen debug-occamy-gen
+.PHONY: debug-soc-gen debug-quad-ctrl-gen debug-quad-gen debug-occamy-gen
 
 debug-occamy-gen:
 	$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_SRC_DIR)\
@@ -145,9 +145,9 @@ debug-occamy-gen:
 		--soc-sv           $(SOURCE_OCCAMY_DIR)/occamy_soc.sv.tpl \
 		--chip             $(SOURCE_OCCAMY_DIR)/occamy_chip.sv.tpl \
 		--pkg-sv           $(SOURCE_OCCAMY_DIR)/occamy_pkg.sv.tpl \
-		--quadrant-s1      $(SOURCE_OCCAMY_DIR)/occamy_quadrant_s1.sv.tpl \
-		--quadrant-s1-ctrl $(SOURCE_OCCAMY_DIR)/occamy_quadrant_s1_ctrl.sv.tpl \
-		--quadrant-s1-noc  $(SOURCE_OCCAMY_DIR)/quad_noc/quad_noc.yml.tpl \
+		--quad             $(SOURCE_OCCAMY_DIR)/occamy_quad.sv.tpl \
+		--quad-ctrl        $(SOURCE_OCCAMY_DIR)/occamy_quad_ctrl.sv.tpl \
+		--quad-noc         $(SOURCE_OCCAMY_DIR)/quad_noc/quad_noc.yml.tpl \
 		--xilinx-sv        $(SOURCE_OCCAMY_DIR)/occamy_xilinx.sv.tpl \
 		--cva6-sv          $(SOURCE_OCCAMY_DIR)/occamy_cva6.sv.tpl	
 
@@ -156,13 +156,13 @@ debug-soc-gen:
 	--soc-sv $(SOURCE_OCCAMY_DIR)/occamy_soc.sv.tpl \
 	--top-sv $(SOURCE_OCCAMY_DIR)/occamy_top.sv.tpl
 
-debug-quadrant-ctrl-gen:
-	$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_SRC_DIR) --quadrant-s1-ctrl $(SOURCE_OCCAMY_DIR)/occamy_quadrant_s1_ctrl.sv.tpl
+debug-quad-ctrl-gen:
+	$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_SRC_DIR) --quad-ctrl $(SOURCE_OCCAMY_DIR)/occamy_quad_ctrl.sv.tpl
 
-debug-quadrant-gen:
+debug-quad-gen:
 	$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_SRC_DIR) \
-	--quadrant-s1      $(SOURCE_OCCAMY_DIR)/occamy_quadrant_s1.sv.tpl \
-	--quadrant-s1-noc  $(SOURCE_OCCAMY_DIR)/quad_noc/quad_noc.yml.tpl
+	--quad              $(SOURCE_OCCAMY_DIR)/occamy_quad.sv.tpl \
+	--quad-noc          $(SOURCE_OCCAMY_DIR)/quad_noc/quad_noc.yml.tpl
 
 ###########
 # SOCCTRL #
@@ -195,6 +195,27 @@ clean-socctrl:
 	@$(REGGEN) -r -t $(TARGET_SOCCTRL_DIR) $<
 	@touch $@
 
+###############
+# QUAD PERIPH #
+###############
+QUADPERIPH_HJSON_DIR	    = $(SW_HJSON_DIR)/quad_periph
+$(TARGET_QUADPERIPH_DIR):
+	@mkdir -p $@
+
+QUADPERIPH_REGGEN_TARGETS = $(TARGET_QUADPERIPH_DIR)/occamy_quad_periph_reg_pkg.sv
+QUADPERIPH_REGGEN_TARGETS += $(TARGET_QUADPERIPH_DIR)/occamy_quad_periph_reg_top.sv
+
+$(QUADPERIPH_REGGEN_TARGETS): .quadperiph_reggen_targets_group
+
+quadperiph: $(QUADPERIPH_REGGEN_TARGETS)
+clean-quadperiph:
+	rm -rf $(QUADPERIPH_REGGEN_TARGETS) .quadperiph_reggen_targets_group
+# Generate the reggen targets from the hjson file
+.quadperiph_reggen_targets_group: $(QUADPERIPH_HJSON_DIR)/occamy_quad_periph_reg.hjson | $(TARGET_QUADPERIPH_DIR)
+	@$(REGGEN) -r -t $(TARGET_QUADPERIPH_DIR) $<
+	@cp $(SOURCE_QUADPERIPH_DIR)/occamy_quad_periph.sv $(TARGET_QUADPERIPH_DIR)/occamy_quad_periph.sv
+	@touch $@
+	
 ########
 # PLIC #
 ########

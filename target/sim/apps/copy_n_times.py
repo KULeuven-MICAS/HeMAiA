@@ -15,22 +15,23 @@ def read_json_file(file):
     return obj
 
 def copy_directory_n_times(input_dir, output_dir, folder_names):
+    print(f"Starting to copy {input_dir} to {output_dir}...", flush=True)
     # Check if the input directory exists
     if not os.path.isdir(input_dir):
-        print(f"Error: {input_dir} does not exist or is not a directory.")
+        print(f"Error: {input_dir} does not exist or is not a directory.", flush=True)
         return
     
     os.makedirs(output_dir, exist_ok=True)
     # Loop through m and n to create copies
     for name in folder_names:
         # Define the new directory name
-        app_dir = f"{output_dir}/{name}"
+        app_dir = os.path.join(output_dir, name)
         
         # Copy the directory to the new location
         if os.path.exists(app_dir):
             shutil.rmtree(app_dir)
         shutil.copytree(input_dir, app_dir)
-        print(f"Copied {input_dir} to {app_dir}")
+        print(f"Copied {input_dir} to {app_dir}", flush=True)
 
 def main():
     # Define argument parser

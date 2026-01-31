@@ -32,19 +32,32 @@ def get_apps(task_path):
         attr_dict = {}
         for attr in attributes:
             attr_dict.update(attr)
+        
+        # Try both uppercase and lowercase
+        host_app_type = attr_dict.get('HOST_APP_TYPE', attr_dict.get('host_app_type'))
+        chip_type = attr_dict.get('CHIP_TYPE', attr_dict.get('chip_type'))
+        workload = attr_dict.get('WORKLOAD', attr_dict.get('workload'))
+        dev_app = attr_dict.get('DEV_APP', attr_dict.get('dev_app'))
 
-        host_app = attr_dict.get('host_app', None)
-        device_app = attr_dict.get('device_app', None)
+        if host_app_type is None:
+            raise ValueError("HOST_APP_TYPE must be specified in the configuration.")
+        
+        # Determine the APP name (this should match what common.mk does)
+        if host_app_type == "host_only":
+            app_name = str(workload)
+        elif host_app_type == "offload_legacy":
+            app_name = f"offload_legacy_{chip_type}_{dev_app}"
+        else:
+            app_name = f"{host_app_type}_{chip_type}_{workload}_{dev_app}"
 
-        if host_app is None:
-            raise ValueError("host_app must be specified in the configuration.")
-        # if device_app is None, we assume it is the same as host_app
-        app_name = host_app + "_" + device_app if device_app else host_app
         app_name_list.append(app_name)
         shell_script = ["make", "apps"]
         shell_script += [f"CFG={cfg_path}"]
-        shell_script += [f"HOST_APP={host_app}"]
-        shell_script += [f"DEVICE_APP={device_app}"] if device_app else []
+        shell_script += [f"HOST_APP_TYPE={host_app_type}"]
+        shell_script += [f"CHIP_TYPE={chip_type}"] if chip_type and chip_type != "None" else []
+        shell_script += [f"WORKLOAD={workload}"] if workload and workload != "None" else []
+        shell_script += [f"DEV_APP={dev_app}"] if dev_app and dev_app != "None" else []
+        shell_script += ["DEBUG_LEVEL=0"]
         # Generate the app hex file
         subprocess.run(shell_script, check=True, cwd=sw_path)
     return app_name_list

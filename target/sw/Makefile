@@ -6,7 +6,7 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 # <Try not to blindly include other makefiles>
 # This makefile generates the SW sources for HeMAiA SoC
-.PHONY: sw clean-sw
+.PHONY: sw clean-sw single-sw
 ############
 # Makefrag #
 ############
@@ -24,7 +24,7 @@ TARGET_SRC_DIR        = $(SW_DIR)/shared/platform/template
 TARGET_CLINT_DIR      = $(TARGET_SRC_DIR)/clint
 TARGET_PLIC_DIR       = $(TARGET_SRC_DIR)/rv_plic
 TARGET_SOCCTRL_DIR	  = $(TARGET_SRC_DIR)/soc_ctrl
-TARGET_QUADCTRL_DIR   = $(TARGET_SRC_DIR)/quadrant_s1_ctrl
+TARGET_QUADPERIPH_DIR = $(TARGET_SRC_DIR)/quad_periph
 PLATFORM_HEADERS_DIR  = shared/platform/generated
 PLATFORM_HEADERS_TEMPLATE_DIR = shared/platform/template
 SW_DEVICE_RT_DIR      = device/runtime
@@ -56,15 +56,18 @@ endef
 PLATFORM_HEADERS  = $(PLATFORM_HEADERS_DIR)/clint.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/rv_plic.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/occamy_soc_ctrl.h
+PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/occamy_quad_periph.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/snitch_cluster_peripheral.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/hemaia_d2d_link_peripheral.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/hemaia_clk_rst_controller_peripheral.h
 # OCCAMYGEN headers
-PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/occamy_cfg.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/occamy_memory_map.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/occamy.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/occamy_base_addr.h
 PLATFORM_HEADERS += $(SW_DEVICE_RT_DIR)/generated/occamy_defs.h
+
+$(PLATFORM_HEADERS_DIR):
+	mkdir -p $@
 
 ###########
 # 1.CLINT #
@@ -77,7 +80,7 @@ $(TARGET_CLINT_DIR)/clint.hjson: $(SOURCE_CLINT_DIR)/data/clint.hjson.tpl $(CFG)
 	@echo "[OCCAMYGEN] Generate $@"
 	@$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_CLINT_DIR) --chip $<
 # Then the hjson can be used to generate the header file
-$(PLATFORM_HEADERS_DIR)/clint.h: $(TARGET_CLINT_DIR)/clint.hjson
+$(PLATFORM_HEADERS_DIR)/clint.h: $(TARGET_CLINT_DIR)/clint.hjson | $(PLATFORM_HEADERS_DIR)
 	$(call reggen_generate_header,$@,$<)
 
 ###########
@@ -92,7 +95,7 @@ $(TARGET_PLIC_DIR)/rv_plic.hjson: $(SOURCE_PLIC_DIR)/data/rv_plic.hjson.tpl $(CF
 	@$(PLICGEN) -s 73 -t 2 -p 6 $< > $@
 
 # Currently there are no sw related to the the PLIC
-$(PLATFORM_HEADERS_DIR)/rv_plic.h: $(TARGET_PLIC_DIR)/rv_plic.hjson
+$(PLATFORM_HEADERS_DIR)/rv_plic.h: $(TARGET_PLIC_DIR)/rv_plic.hjson | $(PLATFORM_HEADERS_DIR)
 	$(call reggen_generate_header,$@,$<)
 
 ##############
@@ -106,44 +109,53 @@ $(TARGET_SOCCTRL_DIR)/occamy_soc_reg.hjson: $(SOURCE_SOCCTRL_DIR)/occamy_soc_reg
 	@echo "[OCCAMYGEN] Generate $@"
 	@$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_SOCCTRL_DIR) --ctrl $<
 # Then the hjson can be used to generate the header file
-$(PLATFORM_HEADERS_DIR)/occamy_soc_ctrl.h: $(TARGET_SOCCTRL_DIR)/occamy_soc_reg.hjson
+$(PLATFORM_HEADERS_DIR)/occamy_soc_ctrl.h: $(TARGET_SOCCTRL_DIR)/occamy_soc_reg.hjson | $(PLATFORM_HEADERS_DIR)
 	$(call reggen_generate_header,$@,$<)
 
+###############
+# 4.Quad Ctrl #
+###############
+$(TARGET_QUADPERIPH_DIR):
+	mkdir -p $@
+# SoC Ctrl needs the hjson tmp first to generate the hjson
+SOURCE_QUADPERIPH_DIR = $(ROOT)/hw/occamy/quad_periph
+$(TARGET_QUADPERIPH_DIR)/occamy_quad_periph_reg.hjson: $(SOURCE_QUADPERIPH_DIR)/occamy_quad_periph_reg.hjson.tpl $(CFG)
+	@echo "[OCCAMYGEN] Generate $@"
+	@$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_QUADPERIPH_DIR) --ctrl $<
+# Then the hjson can be used to generate the header file
+$(PLATFORM_HEADERS_DIR)/occamy_quad_periph.h: $(TARGET_QUADPERIPH_DIR)/occamy_quad_periph_reg.hjson | $(PLATFORM_HEADERS_DIR)
+	$(call reggen_generate_header,$@,$<)
 ######################
 # Cluster Peripheral #
 ######################
 
-$(PLATFORM_HEADERS_DIR)/snitch_cluster_peripheral.h: $(SNITCH_ROOT)/hw/snitch_cluster/src/snitch_cluster_peripheral/snitch_cluster_peripheral_reg.hjson
+$(PLATFORM_HEADERS_DIR)/snitch_cluster_peripheral.h: $(SNITCH_ROOT)/hw/snitch_cluster/src/snitch_cluster_peripheral/snitch_cluster_peripheral_reg.hjson | $(PLATFORM_HEADERS_DIR)
 	$(call reggen_generate_header,$@,$<)
 
 ########################
 # HeMAiA D2D Link Ctrl #
 ########################
 
-$(PLATFORM_HEADERS_DIR)/hemaia_d2d_link_peripheral.h: $(shell bender path hemaia_d2d_link)/src/ctrl/hemaia_d2d_link_reg.hjson
+$(PLATFORM_HEADERS_DIR)/hemaia_d2d_link_peripheral.h: $(shell bender path hemaia_d2d_link)/src/ctrl/hemaia_d2d_link_reg.hjson | $(PLATFORM_HEADERS_DIR)
 	$(call reggen_generate_header,$@,$<)
 
 #######################
 # HeMAiA Clk Rst Ctrl #
 #######################
 
-$(PLATFORM_HEADERS_DIR)/hemaia_clk_rst_controller_peripheral.h: $(ROOT)/hw/hemaia/hemaia_clk_rst_controller/regs/hemaia_clk_rst_controller_reg.hjson
+$(PLATFORM_HEADERS_DIR)/hemaia_clk_rst_controller_peripheral.h: $(ROOT)/hw/hemaia/hemaia_clk_rst_controller/regs/hemaia_clk_rst_controller_reg.hjson | $(PLATFORM_HEADERS_DIR)
 	$(call reggen_generate_header,$@,$<)
 
 # OCCAMYGEN headers
-$(PLATFORM_HEADERS_DIR)/occamy_cfg.h: $(PLATFORM_HEADERS_TEMPLATE_DIR)/occamy_cfg.h.tpl $(CFG)
+$(PLATFORM_HEADERS_DIR)/occamy_memory_map.h: $(PLATFORM_HEADERS_TEMPLATE_DIR)/occamy_memory_map.h.tpl $(CFG) | $(PLATFORM_HEADERS_DIR)
 	@echo "[OCCAMYGEN] Generating $@"
 	@$(OCCAMYGEN) -c $(CFG) --outdir $(PLATFORM_HEADERS_DIR) --cheader $<
 
-$(PLATFORM_HEADERS_DIR)/occamy_memory_map.h: $(PLATFORM_HEADERS_TEMPLATE_DIR)/occamy_memory_map.h.tpl $(CFG)
+$(PLATFORM_HEADERS_DIR)/occamy.h: $(PLATFORM_HEADERS_TEMPLATE_DIR)/occamy.h.tpl $(CFG) | $(PLATFORM_HEADERS_DIR)
 	@echo "[OCCAMYGEN] Generating $@"
 	@$(OCCAMYGEN) -c $(CFG) --outdir $(PLATFORM_HEADERS_DIR) --cheader $<
 
-$(PLATFORM_HEADERS_DIR)/occamy.h: $(PLATFORM_HEADERS_TEMPLATE_DIR)/occamy.h.tpl $(CFG)
-	@echo "[OCCAMYGEN] Generating $@"
-	@$(OCCAMYGEN) -c $(CFG) --outdir $(PLATFORM_HEADERS_DIR) --cheader $<
-
-$(PLATFORM_HEADERS_DIR)/occamy_base_addr.h: $(CFG)
+$(PLATFORM_HEADERS_DIR)/occamy_base_addr.h: $(CFG) | $(PLATFORM_HEADERS_DIR)
 	@echo "[OCCAMYGEN] Generating $@"
 	@$(OCCAMYGEN) -c $(CFG) --outdir $(PLATFORM_HEADERS_DIR) -D $@
 	
@@ -156,11 +168,30 @@ host/runtime/host.ld:
 	@echo "[OCCAMYGEN] Generating host.ld"
 	@$(OCCAMYGEN) -c $(CFG) --gen-host-ld --outdir host/runtime
 
+debug-platform-headers: $(PLATFORM_HEADERS)
+	@echo "Generated Platform Headers:"
+	@ls -lh $(PLATFORM_HEADERS)
+
+
 sw: $(PLATFORM_HEADERS) host/runtime/host.ld
 	$(MAKE) -C host libs
 	$(MAKE) -C host TARGET=partial-build
 	$(MAKE) -C device all
 	$(MAKE) -C host TARGET=finalize-build
+
+single-sw: $(PLATFORM_HEADERS) host/runtime/host.ld
+	$(MAKE) -C host libs
+	$(MAKE) -C host single_sw TARGET=partial-build \
+		HOST_APP_TYPE=$(HOST_APP_TYPE) \
+		CHIP_TYPE=$(CHIP_TYPE) \
+		WORKLOAD=$(WORKLOAD) \
+		DEV_APP=$(DEV_APP)
+	$(MAKE) -C device all DEVICE_APPS=$(DEV_APP)
+	$(MAKE) -C host single_sw TARGET=finalize-build \
+		HOST_APP_TYPE=$(HOST_APP_TYPE) \
+		CHIP_TYPE=$(CHIP_TYPE) \
+		WORKLOAD=$(WORKLOAD) \
+		DEV_APP=$(DEV_APP)
 
 clean:
 # clean device build
@@ -174,5 +205,5 @@ clean:
 # clean generated headers
 	rm -f $(PLATFORM_HEADERS)
 # clean generated hjson files
-	rm -rf $(TARGET_CLINT_DIR) $(TARGET_SOCCTRL_DIR) $(TARGET_QUADCTRL_DIR) $(TARGET_PLIC_DIR)
+	rm -rf $(TARGET_CLINT_DIR) $(TARGET_SOCCTRL_DIR) $(TARGET_QUADPERIPH_DIR) $(TARGET_PLIC_DIR)
 	rm -rf host/runtime/host.ld

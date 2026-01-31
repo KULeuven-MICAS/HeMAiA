@@ -338,32 +338,32 @@ def am_connect_soc_lite_periph_xbar(am, am_soc_axi_lite_periph_xbar, occamy_cfg)
     ########################
 
     # AM
-    nr_axi_lite_peripherals = len(
+    nr_soc_axi_lite_peripherals = len(
         occamy_cfg["peripherals"]["axi_lite_peripherals"])
-    am_axi_lite_peripherals = []
+    am_soc_axi_lite_peripherals = []
 
-    for p in range(nr_axi_lite_peripherals):
+    for p in range(nr_soc_axi_lite_peripherals):
         if "address" in occamy_cfg["peripherals"]["axi_lite_peripherals"][p]:
-            am_axi_lite_peripherals.append(
+            am_soc_axi_lite_peripherals.append(
                 am.new_leaf(
                     occamy_cfg["peripherals"]["axi_lite_peripherals"][p]["name"],
                     occamy_cfg["peripherals"]["axi_lite_peripherals"][p]["length"],
                     occamy_cfg["peripherals"]["axi_lite_peripherals"][p]["address"]
                 ).attach_to(am_soc_axi_lite_periph_xbar)
             )
-    return am_axi_lite_peripherals
+    return am_soc_axi_lite_peripherals
 
 
 def am_connect_soc_lite_narrow_periph_xbar(am, am_soc_axi_lite_narrow_periph_xbar, occamy_cfg):
     ##########################
     # AM: Periph Regbus XBar #
     ##########################
-    nr_axi_lite_narrow_peripherals = len(
+    nr_soc_axi_lite_narrow_peripherals = len(
         occamy_cfg["peripherals"]["axi_lite_narrow_peripherals"])
-    am_axi_lite_narrow_peripherals = []
+    am_soc_axi_lite_narrow_peripherals = []
 
-    for p in range(nr_axi_lite_narrow_peripherals):
-        am_axi_lite_narrow_peripherals.append(
+    for p in range(nr_soc_axi_lite_narrow_peripherals):
+        am_soc_axi_lite_narrow_peripherals.append(
             am.new_leaf(
                 occamy_cfg["peripherals"]["axi_lite_narrow_peripherals"][p]["name"],
                 occamy_cfg["peripherals"]["axi_lite_narrow_peripherals"][p]["length"],
@@ -380,7 +380,66 @@ def am_connect_soc_lite_narrow_periph_xbar(am, am_soc_axi_lite_narrow_periph_xba
         "clint",
         occamy_cfg["peripherals"]["clint"]["length"],
         occamy_cfg["peripherals"]["clint"]["address"]).attach_to(am_soc_axi_lite_narrow_periph_xbar)
-    return am_axi_lite_narrow_peripherals, am_bootrom, am_clint
+    return am_soc_axi_lite_narrow_peripherals, am_bootrom, am_clint
+
+def am_connect_quad_axi_lite_xbar(am, am_quad_axi_lite_xbar, occamy_cfg):
+    ##############################
+    # AM: Quadrant AXI Lite XBar #
+    ##############################
+    # Mainly holds the bingo hw scheduler
+    addrs_quad_axi_lite_peripherals = []
+    am_quad_axi_lite_peripherals = []
+    am_quad_chiplet_done_queue = am.new_leaf("quad_chiplet_done_queue",
+                                                4096,
+                                                occamy_cfg["s1_quadrant"]["quad_axi_lite_base_addr"]
+    ).attach_to(am_quad_axi_lite_xbar)
+    addrs_quad_axi_lite_peripherals.append(
+        (occamy_cfg["s1_quadrant"]["quad_axi_lite_base_addr"], occamy_cfg["s1_quadrant"]["quad_axi_lite_base_addr"] + 4096)
+    )
+    am_quad_axi_lite_peripherals.append(am_quad_chiplet_done_queue)
+    
+    am_quad_host_ready_done_intf = am.new_leaf("quad_host_ready_done_queue",
+                                                4096,
+                                                occamy_cfg["s1_quadrant"]["quad_axi_lite_base_addr"] + 1 * 4096
+    ).attach_to(am_quad_axi_lite_xbar)
+    addrs_quad_axi_lite_peripherals.append(
+        (occamy_cfg["s1_quadrant"]["quad_axi_lite_base_addr"] + 4096, occamy_cfg["s1_quadrant"]["quad_axi_lite_base_addr"] + 2 * 4096)
+    )
+    am_quad_axi_lite_peripherals.append(am_quad_host_ready_done_intf)
+    return am_quad_axi_lite_peripherals, addrs_quad_axi_lite_peripherals
+
+
+def am_connect_quad_axi_lite_narrow_xbar(am, am_quad_axi_lite_narrow_xbar, occamy_cfg):
+    ##################################
+    # AM: Quadrant AXI Lite CFG XBar #
+    ##################################
+
+    addrs_quad_axi_lite_narrow_peripherals = []
+    am_quad_axi_lite_narrow_peripheral=am.new_leaf("quad_axi_lite_narrow_peripherals",
+            4096,
+            occamy_cfg["s1_quadrant"]["quad_axi_lite_narrow_base_addr"]
+        ).attach_to(am_quad_axi_lite_narrow_xbar)
+    addrs_quad_axi_lite_narrow_peripherals.append(
+        (occamy_cfg["s1_quadrant"]["quad_axi_lite_narrow_base_addr"], occamy_cfg["s1_quadrant"]["quad_axi_lite_narrow_base_addr"] + 4096)
+    )
+    # Then the mailboxes for each cluster
+    am_quad_axi_lite_narrow_h2c_mailboxs = []
+    nr_s1_clusters = len(occamy_cfg["clusters"])
+    mailboxes_start_addr = occamy_cfg["s1_quadrant"]["quad_axi_lite_narrow_base_addr"] + 4096
+    for i in range(nr_s1_clusters):
+        am_quad_axi_lite_narrow_h2c_mailboxs.append(
+            am.new_leaf(
+                f"h2c_mailbox_{i}",
+                4096,
+                mailboxes_start_addr + i * 4096
+            ).attach_to(am_quad_axi_lite_narrow_xbar)
+        )
+        addrs_quad_axi_lite_narrow_peripherals.append(
+            (mailboxes_start_addr + i * 4096, mailboxes_start_addr + (i + 1) * 4096)
+        )
+
+    return am_quad_axi_lite_narrow_peripheral, am_quad_axi_lite_narrow_h2c_mailboxs, addrs_quad_axi_lite_narrow_peripherals
+
 
 
 def am_connect_soc_narrow_xbar_mem(am, am_soc_narrow_xbar, occamy_cfg):
@@ -434,112 +493,168 @@ def am_connect_soc_wide_xbar_mem(am, am_soc_wide_xbar, occamy_cfg):
         occamy_cfg["wide_zero_mem"]["address"]).attach_to(am_soc_wide_xbar)
     return am_wide_hemaia_mem, am_wide_hemaia_xdma_data_io, am_wide_zero_mem
 
-
-def am_connect_soc_wide_xbar_quad(am, am_soc_narrow_xbar, am_wide_xbar_quadrant_s1, am_narrow_xbar_quadrant_s1, occamy_cfg, cluster_generators):
-    ##############################
-    # AM: Quadrants and Clusters #
-    ##############################
-    clusters_base_offset = [0]
-    clusters_tcdm_size = [0]
-    clusters_periph_size = [0]
-    clusters_zero_mem_size = [0]
-
+def am_connect_quad_wide_and_narrow_xbar(am, am_quad_wide_xbar, am_quad_narrow_xbar, cluster_generators):
+    # We do not support different cluster tcdm size here
     cluster_base_addr = cluster_generators[0].cfg["cluster_base_addr"]
-    nr_s1_clusters = len(cluster_generators)
-    nr_s1_quadrants = occamy_cfg["nr_s1_quadrant"]
-    for i in range(nr_s1_clusters):
-        clusters_base_offset.append(
-            cluster_generators[i].cfg["cluster_base_offset"])
-        clusters_tcdm_size.append(
-            # config is in KiB
-            cluster_generators[i].cfg["tcdm"]["size"] * 1024)
-        clusters_periph_size.append(
-            cluster_generators[i].cfg["cluster_periph_size"] * 1024)
-        clusters_zero_mem_size.append(
-            cluster_generators[i].cfg["zero_mem_size"] * 1024)
-
-        # assert memory region allocation
-        error_str = "ERROR: cluster peripherals, zero memory and tcdm \
-                    do not fit into the allocated memory region!!!"
-        assert (clusters_tcdm_size[i+1] + clusters_periph_size[i+1] + clusters_zero_mem_size[i+1]) <= \
-            clusters_base_offset[i+1], error_str
-
-    quadrant_size = sum(clusters_base_offset)
-    for i in range(nr_s1_quadrants):
-        cluster_i_start_addr = cluster_base_addr + i * quadrant_size
-        am_clusters = list()
-        for j in range(nr_s1_clusters):
-            bases_cluster = list()
-            bases_cluster.append(cluster_i_start_addr +
-                                 sum(clusters_base_offset[0:j+1]) + 0)
-
-            # TCDM is accessible from both narrow and wide xbar
-            am_clusters.append(
-                am.new_leaf(
-                    "quadrant_{}_cluster_{}_tcdm".format(i, j),
-                    clusters_tcdm_size[j+1],
-                    *bases_cluster
-                ).attach_to(
-                    am_narrow_xbar_quadrant_s1[i]
-                ).attach_to(
-                    am_wide_xbar_quadrant_s1[i]
-                )
+    clusters_base_offset = cluster_generators[0].cfg["cluster_base_offset"]
+    clusters_tcdm_size = cluster_generators[0].cfg["tcdm"]["size"] * 1024
+    clusters_periph_size = cluster_generators[0].cfg["cluster_periph_size"] * 1024
+    clusters_zero_mem_size = cluster_generators[0].cfg["zero_mem_size"] * 1024
+    # print(f"Cluster Base Addr: {hex(cluster_base_addr)}")
+    # print(f"Cluster Base Offset: {hex(clusters_base_offset)}")
+    # print(f"Cluster TCDM Size: {hex(clusters_tcdm_size)}")
+    # print(f"Cluster Periph Size: {hex(clusters_periph_size)}")
+    # print(f"Cluster Zero Mem Size: {hex(clusters_zero_mem_size)}")
+    # assert memory region allocation
+    error_str = "ERROR: cluster peripherals, zero memory and tcdm \
+                do not fit into the allocated memory region!!!"
+    assert (clusters_tcdm_size + clusters_periph_size + clusters_zero_mem_size) <= \
+        clusters_base_offset, error_str
+    nr_clusters = len(cluster_generators)
+    am_clusters = []
+    am_clusters_periph = []
+    am_clusters_leftover_spaces = []
+    addrs_clusters = []
+    addrs_clusters_periph = []
+    addrs_clusters_leftover_spaces = []
+    for i in range(nr_clusters):
+        # TCDM is accessible from both wide/narrow xbar
+        cluster_tcdm = am.new_leaf(
+                f"quad_wide_cluster_{i}_tcdm", # name
+                clusters_tcdm_size,         # length
+                cluster_base_addr + i * clusters_base_offset # addr
             )
-
-            # Cluster peripherals are only accessible from narrow xbar
-            bases_cluster = list()
-            bases_cluster.append(cluster_i_start_addr + sum(clusters_base_offset[0:j+1])
-                                 + clusters_tcdm_size[j+1])
-            am_clusters.append(
-                am.new_leaf(
-                    "quadrant_{}_cluster_{}_periph".format(i, j),
-                    clusters_periph_size[j+1],
-                    *bases_cluster
-                ).attach_to(
-                    am_narrow_xbar_quadrant_s1[i]
-                )
-            )
-
-            # Cluster zero memory are only accessible from wide xbar
-            bases_cluster = list()
-            bases_cluster.append(cluster_i_start_addr + sum(clusters_base_offset[0:j+1]) +
-                                 clusters_tcdm_size[j+1] + clusters_periph_size[j+1])
-            am_clusters.append(
-                am.new_leaf(
-                    "quadrant_{}_cluster_{}_zero_mem".format(i, j),
-                    clusters_zero_mem_size[j+1],
-                    *bases_cluster
-                ).attach_to(
-                    am_wide_xbar_quadrant_s1[i]
-                )
-            )
-
-            # The remaining addresses are reserved for XDMA, and are only accessible from wide xbar
-            bases_cluster = list()
-            bases_cluster.append(cluster_i_start_addr + sum(clusters_base_offset[0:j+1]) +
-                                 clusters_tcdm_size[j+1] + clusters_periph_size[j+1] + clusters_zero_mem_size[j+1])
-            am_clusters.append(
-                am.new_leaf(
-                    "quadrant_{}_cluster_{}_space_after_zero_mem".format(i, j),
-                    clusters_base_offset[j+1] - clusters_tcdm_size[j+1] -
-                    clusters_periph_size[j+1] - clusters_zero_mem_size[j+1],
-                    *bases_cluster
-                ).attach_to(
-                    am_wide_xbar_quadrant_s1[i]
-                )
-            )
-
-        am.new_leaf(
-            "quad_{}_cfg".format(i),
-            occamy_cfg["s1_quadrant"]["cfg_base_offset"],
-            occamy_cfg["s1_quadrant"]["cfg_base_addr"] +
-            i * occamy_cfg["s1_quadrant"]["cfg_base_offset"]
-        ).attach_to(
-            am_narrow_xbar_quadrant_s1[i]
-        ).attach_to(
-            am_soc_narrow_xbar
+        cluster_tcdm.attach_to(am_quad_narrow_xbar)
+        cluster_tcdm.attach_to(am_quad_wide_xbar)
+        am_clusters.append(cluster_tcdm)
+        
+        addrs_clusters.append(
+            (cluster_base_addr + i * clusters_base_offset, cluster_base_addr + i * clusters_base_offset + clusters_tcdm_size)
         )
-    return am_clusters
+        # Peripherals are only accessible from narrow xbar
+        am_clusters_periph.append(
+            am.new_leaf(
+                f"quad_narrow_cluster_{i}_periph", # name
+                clusters_periph_size,           # length
+                cluster_base_addr + i * clusters_base_offset + clusters_tcdm_size # addr
+            ).attach_to(am_quad_narrow_xbar)
+        )
+        addrs_clusters_periph.append(
+            (cluster_base_addr + i * clusters_base_offset + clusters_tcdm_size,
+             cluster_base_addr + i * clusters_base_offset + clusters_tcdm_size + clusters_periph_size)
+        )
+        # We do not have the cluster zero mem
+        # Remaining space is reserved for XDMA
+        cluster_left_over_space = am.new_leaf(
+                f"quad_wide_cluster_{i}_space_after_tcdm", # name
+                clusters_base_offset - clusters_tcdm_size - clusters_periph_size - clusters_zero_mem_size, # length
+                cluster_base_addr + i * clusters_base_offset + clusters_tcdm_size + clusters_periph_size + clusters_zero_mem_size # addr
+            )
+        cluster_left_over_space.attach_to(am_quad_wide_xbar)
+        cluster_left_over_space.attach_to(am_quad_narrow_xbar)
+        am_clusters_leftover_spaces.append(cluster_left_over_space)
+        addrs_clusters_leftover_spaces.append(
+            (cluster_base_addr + i * clusters_base_offset + clusters_tcdm_size + clusters_periph_size + clusters_zero_mem_size,
+             cluster_base_addr + i * clusters_base_offset + clusters_base_offset)
+        )  
+        
+    return am_clusters, am_clusters_periph, am_clusters_leftover_spaces, addrs_clusters, addrs_clusters_periph, addrs_clusters_leftover_spaces
+
+# def am_connect_soc_wide_xbar_quad(am, am_soc_narrow_xbar, am_wide_xbar_quadrant_s1, am_narrow_xbar_quadrant_s1, occamy_cfg, cluster_generators):
+#     ##############################
+#     # AM: Quadrants and Clusters #
+#     ##############################
+#     clusters_base_offset = [0]
+#     clusters_tcdm_size = [0]
+#     clusters_periph_size = [0]
+#     clusters_zero_mem_size = [0]
+
+#     cluster_base_addr = cluster_generators[0].cfg["cluster_base_addr"]
+#     nr_s1_clusters = len(cluster_generators)
+#     nr_s1_quadrants = occamy_cfg["nr_s1_quadrant"]
+#     for i in range(nr_s1_clusters):
+#         clusters_base_offset.append(
+#             cluster_generators[i].cfg["cluster_base_offset"])
+#         clusters_tcdm_size.append(
+#             # config is in KiB
+#             cluster_generators[i].cfg["tcdm"]["size"] * 1024)
+#         clusters_periph_size.append(
+#             cluster_generators[i].cfg["cluster_periph_size"] * 1024)
+#         clusters_zero_mem_size.append(
+#             cluster_generators[i].cfg["zero_mem_size"] * 1024)
+
+#         # assert memory region allocation
+#         error_str = "ERROR: cluster peripherals, zero memory and tcdm \
+#                     do not fit into the allocated memory region!!!"
+#         assert (clusters_tcdm_size[i+1] + clusters_periph_size[i+1] + clusters_zero_mem_size[i+1]) <= \
+#             clusters_base_offset[i+1], error_str
+
+#     quadrant_size = sum(clusters_base_offset)
+#     for i in range(nr_s1_quadrants):
+#         cluster_i_start_addr = cluster_base_addr + i * quadrant_size
+#         am_clusters = list()
+#         for j in range(nr_s1_clusters):
+#             bases_cluster = list()
+#             bases_cluster.append(cluster_i_start_addr +
+#                                  sum(clusters_base_offset[0:j+1]) + 0)
+
+#             # TCDM is accessible from both narrow and wide xbar
+#             am_clusters.append(
+#                 am.new_leaf(
+#                     "quadrant_{}_cluster_{}_tcdm".format(i, j),
+#                     clusters_tcdm_size[j+1],
+#                     *bases_cluster
+#                 ).attach_to(
+#                     am_narrow_xbar_quadrant_s1[i]
+#                 ).attach_to(
+#                     am_wide_xbar_quadrant_s1[i]
+#                 )
+#             )
+
+#             # Cluster peripherals are only accessible from narrow xbar
+#             bases_cluster = list()
+#             bases_cluster.append(cluster_i_start_addr + sum(clusters_base_offset[0:j+1])
+#                                  + clusters_tcdm_size[j+1])
+#             am_clusters.append(
+#                 am.new_leaf(
+#                     "quadrant_{}_cluster_{}_periph".format(i, j),
+#                     clusters_periph_size[j+1],
+#                     *bases_cluster
+#                 ).attach_to(
+#                     am_narrow_xbar_quadrant_s1[i]
+#                 )
+#             )
+
+#             # Cluster zero memory are only accessible from wide xbar
+#             bases_cluster = list()
+#             bases_cluster.append(cluster_i_start_addr + sum(clusters_base_offset[0:j+1]) +
+#                                  clusters_tcdm_size[j+1] + clusters_periph_size[j+1])
+#             am_clusters.append(
+#                 am.new_leaf(
+#                     "quadrant_{}_cluster_{}_zero_mem".format(i, j),
+#                     clusters_zero_mem_size[j+1],
+#                     *bases_cluster
+#                 ).attach_to(
+#                     am_wide_xbar_quadrant_s1[i]
+#                 )
+#             )
+
+#             # The remaining addresses are reserved for XDMA, and are only accessible from wide xbar
+#             bases_cluster = list()
+#             bases_cluster.append(cluster_i_start_addr + sum(clusters_base_offset[0:j+1]) +
+#                                  clusters_tcdm_size[j+1] + clusters_periph_size[j+1] + clusters_zero_mem_size[j+1])
+#             am_clusters.append(
+#                 am.new_leaf(
+#                     "quadrant_{}_cluster_{}_space_after_zero_mem".format(i, j),
+#                     clusters_base_offset[j+1] - clusters_tcdm_size[j+1] -
+#                     clusters_periph_size[j+1] - clusters_zero_mem_size[j+1],
+#                     *bases_cluster
+#                 ).attach_to(
+#                     am_wide_xbar_quadrant_s1[i]
+#                 )
+#             )
+#     return am_clusters
+
 
 def get_top_kwargs(occamy_cfg, cluster_generators, soc_axi_lite_narrow_periph_xbar, soc_wide_xbar, soc_narrow_xbar, soc2router_bus, router2soc_bus, util, name):
     core_per_cluster_list = [cluster_generator.cfg["nr_cores"]
@@ -590,23 +705,29 @@ def get_soc_kwargs(occamy_cfg, cluster_generators, soc_narrow_xbar, soc_wide_xba
     return soc_kwargs
 
 
-def get_quadrant_ctrl_kwargs(occamy_cfg, soc_wide_xbar, soc_narrow_xbar, quadrant_s1_ctrl_xbars, quadrant_s1_ctrl_mux, name):
+def get_quad_ctrl_kwargs(occamy_cfg, soc_wide_xbar, soc_narrow_xbar, quad_ctrl_soc_to_quad_xbar, quad_ctrl_quad_to_soc_xbar, quad_ctrl_axi_lite_narrow_mux, quad_ctrl_axi_lite_xbar, cluster_generators, name):
+    
+
     num_clusters = len(occamy_cfg["clusters"])
+    nr_cores_per_cluster = cluster_generators[0].cfg["nr_cores"]
     chip_id_width = occamy_cfg["hemaia_multichip"]["chip_id_width"]
     quadrant_ctrl_kwargs = {
         "name": name,
         "occamy_cfg": occamy_cfg,
         "chip_id_width": chip_id_width,
         "num_clusters": num_clusters,
+        "num_cores_per_cluster": nr_cores_per_cluster,
         "soc_wide_xbar": soc_wide_xbar,
         "soc_narrow_xbar": soc_narrow_xbar,
-        "quadrant_s1_ctrl_xbars": quadrant_s1_ctrl_xbars,
-        "quadrant_s1_ctrl_mux": quadrant_s1_ctrl_mux
+        "quad_ctrl_soc_to_quad_xbar": quad_ctrl_soc_to_quad_xbar,
+        "quad_ctrl_quad_to_soc_xbar": quad_ctrl_quad_to_soc_xbar,
+        "quad_ctrl_axi_lite_narrow_mux": quad_ctrl_axi_lite_narrow_mux,
+        "quad_ctrl_axi_lite_xbar": quad_ctrl_axi_lite_xbar
     }
     return quadrant_ctrl_kwargs
 
 
-def get_quadrant_kwargs(occamy_cfg, cluster_generators, soc_wide_xbar, soc_narrow_xbar, wide_xbar_quadrant_s1, narrow_xbar_quadrant_s1, name):
+def get_quadrant_kwargs(occamy_cfg, cluster_generators, soc_wide_xbar, soc_narrow_xbar, quad_wide_xbar, quad_narrow_xbar, quad_ctrl_quad_to_soc_xbar, name):
     cluster_cfgs = list()
     nr_clusters = len(occamy_cfg["clusters"])
     for i in range(nr_clusters):
@@ -617,8 +738,9 @@ def get_quadrant_kwargs(occamy_cfg, cluster_generators, soc_wide_xbar, soc_narro
         "cluster_cfgs": cluster_cfgs,
         "soc_wide_xbar": soc_wide_xbar,
         "soc_narrow_xbar": soc_narrow_xbar,
-        "wide_xbar_quadrant_s1": wide_xbar_quadrant_s1,
-        "narrow_xbar_quadrant_s1": narrow_xbar_quadrant_s1
+        "quad_wide_xbar": quad_wide_xbar,
+        "quad_narrow_xbar": quad_narrow_xbar,
+        "quad_ctrl_quad_to_soc_xbar": quad_ctrl_quad_to_soc_xbar
     }
     return quadrant_kwargs
 
@@ -734,17 +856,19 @@ def get_pkg_kwargs(occamy_cfg, cluster_generators, util, name):
         "addr_width": occamy_cfg["addr_width"],
         "narrow_user_width": cluster_cfg["user_width"],
         "wide_user_width": cluster_cfg["dma_user_width"],
-        "nr_clusters_s1_quadrant": len(occamy_cfg["clusters"]),
+        "nr_clusters_per_quadrant": len(occamy_cfg["clusters"]),
         "core_per_cluster": core_per_cluster,
         "nr_cores_cluster_offset": nr_cores_cluster_offset,
         "nr_cores_quadrant": nr_cores_quadrant,
         "sram_cfg_fields": cluster_cfg["sram_cfg_fields"],
         "cluster_base_addr": util.to_sv_hex(cluster_cfg["cluster_base_addr"]),
         "cluster_base_offset": util.to_sv_hex(cluster_cfg["cluster_base_offset"]),
-        "quad_cfg_base_addr": util.to_sv_hex(occamy_cfg["s1_quadrant"]["cfg_base_addr"]),
-        "quad_cfg_base_offset": util.to_sv_hex(occamy_cfg["s1_quadrant"]["cfg_base_offset"]),
+        "quad_axi_lite_narrow_base_addr": util.to_sv_hex(occamy_cfg["s1_quadrant"]["quad_axi_lite_narrow_base_addr"]),
+        "quad_axi_lite_narrow_base_offset": util.to_sv_hex(occamy_cfg["s1_quadrant"]["quad_axi_lite_narrow_base_offset"]),
         "hemaia_multichip": occamy_cfg["hemaia_multichip"],
-        "h2c_mailbox_length": util.to_sv_hex(occamy_cfg["s1_quadrant"]["h2c_mailbox_length"])
+        "h2c_mailbox_length": util.to_sv_hex(4096),
+        "quad_axi_lite_base_addr": util.to_sv_hex(occamy_cfg["s1_quadrant"]["quad_axi_lite_base_addr"]),
+        "quad_axi_lite_base_offset": util.to_sv_hex(occamy_cfg["s1_quadrant"]["quad_axi_lite_base_offset"])
     }
     return pkg_kwargs
 
@@ -764,17 +888,15 @@ def get_cva6_kwargs(occamy_cfg, cluster_generators, soc_narrow_xbar, util, name)
 
 
 def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
-    core_per_cluster_list = [cluster_generator.cfg["nr_cores"]
-                             for cluster_generator in cluster_generators]
     if occamy_cfg['hemaia_multichip']['single_chip']:
         nr_chiplets = 1
     else:
         nr_chiplets = len(occamy_cfg['hemaia_multichip']['testbench_cfg']['hemaia_compute_chip'])
-    nr_quads = occamy_cfg['nr_s1_quadrant']
-    nr_clusters = len(occamy_cfg["clusters"])
-    nr_cores = sum(core_per_cluster_list)
-    nr_cores_per_cluster = "{" + \
-        ",".join(map(str, core_per_cluster_list)) + "}"
+    nr_clusters = len(occamy_cfg["clusters"]) * nr_chiplets
+    
+    nr_clusters_per_chiplet = len(occamy_cfg["clusters"])
+    nr_cores_per_cluster = cluster_generators[0].cfg["nr_cores"]
+    nr_cores = nr_clusters * nr_cores_per_cluster
     cluster_offset_list = [cluster_generator.cfg["cluster_base_offset"]
                            for cluster_generator in cluster_generators]
     if not all(cluster_offset == cluster_offset_list[0] for cluster_offset in cluster_offset_list):
@@ -789,13 +911,15 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
     cheader_kwargs = {
         "name": name,
         "nr_chiplets": nr_chiplets,
-        "nr_quads": nr_quads,
         "nr_clusters": nr_clusters,
-        "nr_cores_per_cluster": nr_cores_per_cluster,
         "nr_cores": nr_cores,
+        "nr_clusters_per_chiplet": nr_clusters_per_chiplet,
+        "nr_cores_per_cluster": nr_cores_per_cluster,
+        "clog2_nr_chiplets": clog2(nr_chiplets),
+        "clog2_nr_clusters_per_chiplet": clog2(nr_clusters_per_chiplet),
+        "clog2_nr_cores_per_cluster": clog2(nr_cores_per_cluster),
         "wide_spm_size": hex(wide_spm_size),
         "narrow_spm_size": hex(narrow_spm_size),
-        "h2c_mailbox_size": hex(occamy_cfg["s1_quadrant"]["h2c_mailbox_length"]),
         "cluster_tcdm_size": hex(cluster_tcdm_size),
         "cluster_offset": hex(cluster_offset),
         "cluster_addr_width": cluster_addr_width,
@@ -914,6 +1038,8 @@ def get_ctrl_kwargs(occamy_cfg, cluster_generators, name):
     # core_per_cluster_list = [cluster_generator.cfg["nr_cores"]
     #                          for cluster_generator in cluster_generators]
     # nr_cores_quadrant = sum(core_per_cluster_list)
+    nr_clusters = len(occamy_cfg["clusters"])
+    nr_cores_per_cluster = cluster_generators[0].cfg["nr_cores"]
     hex_default_boot_addr = hex(default_boot_addr)
     hex_backup_boot_addr = hex(backup_boot_addr)
     # Remove the prefix 0x
@@ -922,11 +1048,12 @@ def get_ctrl_kwargs(occamy_cfg, cluster_generators, name):
     ctrl_kwargs = {
         "name": name,
         "nr_s1_quadrants": occamy_cfg["nr_s1_quadrant"],
-        "nr_clusters": len(occamy_cfg["clusters"]),
+        "nr_clusters": nr_clusters,
         # "nr_cores": nr_cores_quadrant,
         "default_boot_addr": hex_default_boot_addr,
         "backup_boot_addr": hex_backup_boot_addr,
         "occamy_cfg": occamy_cfg,
-        "addr_width": addr_width
+        "addr_width": addr_width,
+        "bingo_hw_manager_nr_cores_per_chiplet":  nr_clusters * (nr_cores_per_cluster + 1) # +1 for the host core as acc
     }
     return ctrl_kwargs
