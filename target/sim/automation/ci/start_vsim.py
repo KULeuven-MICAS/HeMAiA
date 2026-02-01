@@ -347,7 +347,7 @@ def main() -> None:
         repo_root,
         docker_image,
         repo_root,
-        ["make", "hemaia_system_vsim_preparation", "SIM_WITH_WAVEFORM=0"],
+        ["make", "hemaia_system_vsim_preparation", "SIM_WITH_WAVEFORM=0", "SIM_WITH_INTERPOSER=1"],
     )
     # Compile Questasim simulation outside the container and copy artefacts (step 5)
     prepare_and_copy_sim(repo_root, tasks_info)
