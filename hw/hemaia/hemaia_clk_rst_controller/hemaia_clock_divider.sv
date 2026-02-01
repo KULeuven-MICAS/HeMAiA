@@ -59,7 +59,6 @@ module hemaia_clock_divider #(
 
   // Counters for edges and local flip-flops
   logic [MaxDivisionWidth-1:0] cnt;
-  logic last_val;
 
   hemaia_clock_counter #(
       .Width(MaxDivisionWidth)
@@ -70,7 +69,7 @@ module hemaia_clock_divider #(
       .clear_i(1'b0),
       .ceiling_i(divisor_q),
       .count_o(cnt),
-      .last_value_o(last_val)
+      .last_value_o()
   );
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
@@ -126,11 +125,21 @@ module hemaia_clock_divider #(
       .clk_o(clk_divided)
   );
 
+  logic clk_sel_o_mux;
+
+  always_ff @(negedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      clk_sel_o_mux <= 1'b0;
+    end else begin
+      clk_sel_o_mux <= (divisor_q == 'd1);
+    end
+  end
+
   (* DONT_TOUCH = "TRUE" *)
   tc_clk_mux2 i_clk_o_mux (
       .clk0_i(clk_divided),
       .clk1_i(clk_i),
-      .clk_sel_i(divisor_q == 'd1),
+      .clk_sel_i(clk_sel_o_mux),
       .clk_o(clk_ungated)
   );
 
