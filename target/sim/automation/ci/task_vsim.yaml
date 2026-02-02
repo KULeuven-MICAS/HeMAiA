@@ -7,7 +7,7 @@ runs:
   - app_1:
     - HOST_APP_TYPE: host_only
     - CHIP_TYPE: single_chip
-    - WORKLOAD: hemaia_clk_rst_configurator
+    - WORKLOAD: clk_rst_configurator
     - DEV_APP: None
   - app_2: 
     - HOST_APP_TYPE: offload_legacy
