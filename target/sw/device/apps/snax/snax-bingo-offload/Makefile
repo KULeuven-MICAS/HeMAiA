@@ -10,6 +10,14 @@ SRCS    = src/snax-bingo-offload.c
 
 INCDIRS += libsnaxkernel
 
+ifeq ($(HOST_APP_TYPE), offload_bingo_sw)
+    RISCV_CFLAGS += -DOFFLOAD_BINGO_SW
+endif
+
+ifeq ($(HOST_APP_TYPE), offload_bingo_hw)
+    RISCV_CFLAGS += -DOFFLOAD_BINGO_HW
+endif
+
 include ./libsnaxkernel/Makefile
 include ../../common.mk
 

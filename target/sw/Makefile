@@ -176,7 +176,7 @@ debug-platform-headers: $(PLATFORM_HEADERS)
 sw: $(PLATFORM_HEADERS) host/runtime/host.ld
 	$(MAKE) -C host libs
 	$(MAKE) -C host TARGET=partial-build
-	$(MAKE) -C device all
+	$(MAKE) -C device all HOST_APP_TYPE=$(HOST_APP_TYPE)
 	$(MAKE) -C host TARGET=finalize-build
 
 single-sw: $(PLATFORM_HEADERS) host/runtime/host.ld
@@ -186,7 +186,7 @@ single-sw: $(PLATFORM_HEADERS) host/runtime/host.ld
 		CHIP_TYPE=$(CHIP_TYPE) \
 		WORKLOAD=$(WORKLOAD) \
 		DEV_APP=$(DEV_APP)
-	$(MAKE) -C device all DEVICE_APPS=$(DEV_APP)
+	$(MAKE) -C device all DEVICE_APPS=$(DEV_APP) HOST_APP_TYPE=$(HOST_APP_TYPE)
 	$(MAKE) -C host single_sw TARGET=finalize-build \
 		HOST_APP_TYPE=$(HOST_APP_TYPE) \
 		CHIP_TYPE=$(CHIP_TYPE) \
