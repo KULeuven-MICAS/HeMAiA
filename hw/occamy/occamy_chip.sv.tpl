@@ -141,7 +141,7 @@ import ${name}_pkg::*;
   ///////////////////
 
   // The latched chip_id
-  (* false_path *) chip_id_t chip_id;
+  chip_id_t chip_id;
 
   always_latch begin
     if (~rst_ni) begin
