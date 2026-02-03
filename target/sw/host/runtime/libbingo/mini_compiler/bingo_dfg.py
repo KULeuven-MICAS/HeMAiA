@@ -19,7 +19,6 @@ from bingo_utils import DiGraphWrapper
 from bingo_node import BingoNode
 from bingo_mem_handle import BingoMemAlloc
 from bingo_kernel_args import BingoKernelArgs
-MAX_NUM_CHIPLETS = 8
 class BingoDFG(DiGraphWrapper[BingoNode]):
     """Data Flow Graph (DFG) for Bingo."""
 
@@ -67,7 +66,27 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         # Add edges to connect the new node between the two existing nodes
         self.add_edge(from_node_obj, new_node_obj)
         self.add_edge(new_node_obj, to_node_obj)
-        
+    
+    def bingo_insert_node_after(self, existing_node_obj: BingoNode, new_node_obj: BingoNode, successors_to_move: list[BingoNode] = None) -> None:
+        """Insert a new node after an existing node in the DFG."""
+        # If no specific successors are provided, move all successors
+        if successors_to_move is None:
+            successors_to_move = list(self.successors(existing_node_obj))
+
+        # Add the new node to the DFG
+        self.bingo_add_node(new_node_obj)
+
+        # Remove edges from the existing node to the target successors
+        for succ in successors_to_move:
+            self.remove_edge(existing_node_obj, succ)
+
+        # Add edge from existing node to new node
+        self.add_edge(existing_node_obj, new_node_obj)
+
+        # Add edges from new node to the specified successors
+        for succ in successors_to_move:
+            self.add_edge(new_node_obj, succ)
+    
     def bingo_transform_dfg_add_entry_node(self) -> None:
         """Transform the DFG to add one entry node."""
         # Find all the start nodes (nodes with no predecessors)
@@ -180,7 +199,7 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
             ]
             if remote_succ_list:
                 # We have a special situation that this node is a broadcast node to set all chiplets
-                if len(set(remote_succ.assigned_chiplet_id for remote_succ in remote_succ_list)) == (MAX_NUM_CHIPLETS -1):
+                if len(set(remote_succ.assigned_chiplet_id for remote_succ in remote_succ_list)) == (self.num_chiplets -1):
                     # All the remote successors must have the same core id
                     if len(set(remote_succ.assigned_core_id for remote_succ in remote_succ_list)) == 1:
                         print(f"Node {cur_node.node_name} is a broadcast node to set all chiplets.")
@@ -198,9 +217,8 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                         dummy_set_node.dep_check_enable = False
                         dummy_set_node.dep_check_list = []
                         dummy_set_node.remote_dep_set_all = True
-                        # Add the dummy set node to the graph
-                        for remote_succ in remote_succ_list:
-                            self.bingo_insert_node_between(cur_node, remote_succ, dummy_set_node)
+                        # Add the dummy set node after cur_node for remote successors
+                        self.bingo_insert_node_after(cur_node, dummy_set_node, remote_succ_list)
                 else:
                     # Now the normal case
                     for remote_succ in remote_succ_list:
