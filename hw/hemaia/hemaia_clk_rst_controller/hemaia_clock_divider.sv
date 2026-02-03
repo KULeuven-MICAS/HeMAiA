@@ -45,9 +45,9 @@ module hemaia_clock_divider #(
 ) (
     input logic clk_i,
     input logic rst_ni,
-    input logic [MaxDivisionWidth-1:0] divisor_i,
+    (* false_path *) input logic test_mode_i,
+    (* false_path *) input logic [MaxDivisionWidth-1:0] divisor_i,
     input logic divisor_valid_i,
-    input  logic                        test_mode_i,
     (* syn_keep = 1, syn_preserve = 1, KEEP = "TRUE", DONT_TOUCH = "TRUE" *)
     output logic clk_o
 );
