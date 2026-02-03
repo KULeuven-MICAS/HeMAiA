@@ -182,9 +182,9 @@ import ${name}_pkg::*;
 
 
   localparam int HeMAiADefaultDivision[${1+num_acc_clk_domain+num_d2d_clk_domain}] = '{
-    6
+    7
   % for _ in range(num_acc_clk_domain):
-    ,6
+    ,7
   % endfor
   % if occamy_cfg["hemaia_multichip"]["single_chip"] is False:
     ,1,1,1,1
