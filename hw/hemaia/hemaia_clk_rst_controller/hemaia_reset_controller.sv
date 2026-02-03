@@ -28,11 +28,11 @@ module hemaia_reset_controller #(
   for (i = 0; i < NumReset; i++) begin : g_rst
 
     //--------------------------------------------------------------------------
-    // Two-flop synchroniser (both flops have async set-to-0)
+    // Three-flop synchroniser (all flops have async set-to-0)
     //---------------------------------------------------------------------------
     logic sync_ff0, sync_ff1, sync_ff2;
 
-    (* false_path *) wire sync_ff_rst;
+    logic sync_ff_rst;
     assign sync_ff_rst = async_local_rst_ni[i] & async_global_rst_ni;
 
     always_ff @(posedge clk_i[i] or negedge sync_ff_rst) begin

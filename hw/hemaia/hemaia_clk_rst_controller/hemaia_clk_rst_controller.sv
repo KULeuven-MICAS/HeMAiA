@@ -231,7 +231,7 @@ module hemaia_clk_rst_controller #(
   assign hw2reg.reset_register.reset_c31.de = reg2hw.reset_register.reset_c31;
 
   // Synchronize valid bits into high frequencies
-  (* async *)logic [31:0] clock_division_reg_valid_d1;
+  logic [31:0] clock_division_reg_valid_d1;
   logic [31:0] clock_division_reg_valid_d2;
   always_ff @(posedge mst_clk_after_pll or negedge mst_rst_n_d2_mst_clk) begin
     if (~mst_rst_n_d2_mst_clk) begin
