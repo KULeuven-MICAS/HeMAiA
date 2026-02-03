@@ -10,7 +10,7 @@ module hemaia_clk_rst_controller #(
     parameter type axi_lite_rsp_t = logic
 ) (
     // Test mode
-    input logic test_mode_i,
+    (* false_path *) input logic test_mode_i,
     // The clock and rst for the controller itself
     input logic control_clk_i,
     (* false_path *) input logic control_rst_ni,
@@ -290,8 +290,8 @@ module hemaia_clk_rst_controller #(
       ) i_clk_divider (
           .clk_i(mst_clk_after_pll),
           .rst_ni(mst_rst_n_d2_mst_clk),
-          (* false_path *) .test_mode_i(test_mode_i),
-          (* false_path *) .divisor_i(clock_division_reg_concat[i][MaxDivisionWidth-1:0]),
+          .test_mode_i(test_mode_i),
+          .divisor_i(clock_division_reg_concat[i][MaxDivisionWidth-1:0]),
           .divisor_valid_i(clock_division_reg_valid_d2[i]),
           .clk_o(clocks_after_division[i])
       );
@@ -307,8 +307,8 @@ module hemaia_clk_rst_controller #(
   ) i_clk_divider (
       .clk_i(mst_clk_after_pll),
       .rst_ni(mst_rst_n_d2_mst_clk),
-      (* false_path *) .test_mode_i(test_mode_i),
-      (* false_path *) .divisor_i(8'd128),
+      .test_mode_i(test_mode_i),
+      .divisor_i(8'd128),
       .divisor_valid_i('0),
       .clk_o(clk_obs_after_division)
   );
@@ -326,7 +326,7 @@ module hemaia_clk_rst_controller #(
   ) i_reset_sync (
       .clk_i(clk_o),
       .async_global_rst_ni(mst_rst_ni),
-      (* false_path *) .async_local_rst_ni(async_local_rst[NumClocks-1:0]),
+      .async_local_rst_ni(async_local_rst[NumClocks-1:0]),
       .sync_rst_no(rst_no)
   );
 
