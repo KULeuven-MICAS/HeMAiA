@@ -22,7 +22,7 @@ BENDER   = bender
 SNITCH_ROOT = $(shell $(BENDER) path snitch_cluster)
 
 $(DATA_H): $(MK_DIR)/gemm_datagen.py $(DATA_CFG) 
-	$< -c $(DATA_CFG) --hwcfg $(SNITCH_ROOT)/target/snitch_cluster/cfg/snax_versacore_to_cluster.hjson> $@
+	$< -c $(DATA_CFG) --hwcfg $(SNITCH_ROOT)/target/snitch_cluster/cfg/snax_versacore_to_cluster.hjson --emit_mini_golden> $@
 
 # Offload
 OFFLOAD_H = offload_bingo_hw.h	

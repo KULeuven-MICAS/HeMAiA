@@ -128,6 +128,10 @@ def emit_matmul_data(**kwargs):
         subtraction_b,
         C,
     )
+
+    if kwargs.get("emit_mini_golden", False):
+        D = D[:64]
+
     data_str += [format_vector_definition("int32_t", "D", D)]
 
     return data_str
@@ -148,6 +152,11 @@ def main():
         required=True,
         help="Select hardware config file kernel",
     )
+    parser.add_argument(
+        "--emit_mini_golden",
+        action="store_true",
+        help="Enable data emission for mini golden model",
+    )
     args = parser.parse_args()
 
     # Load param config file
@@ -159,7 +168,7 @@ def main():
         hw = hjson.loads(f.read())
 
     # Merge dictionaries (hw overrides param in case of conflicts)
-    merged_config = {**param, **hw}
+    merged_config = {**param, **hw, "emit_mini_golden": args.emit_mini_golden}
 
     # Emit header file
     print(emit_header_file(**merged_config))
