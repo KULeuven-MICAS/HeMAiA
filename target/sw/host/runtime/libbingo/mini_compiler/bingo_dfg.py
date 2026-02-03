@@ -558,19 +558,70 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
             "lightcoral", "lightblue", "lightgreen", "moccasin", "plum", "lightgray", "wheat", "lavender", "lightcyan", "mistyrose"
         ]
 
-        # Try to use a hierarchical layout (multipartite) based on topological generations
-        # This gives a much clearer structure for DFGs compared to BFS or Spring
+        # Custom Layout Calculation
+        # X axis: Topological depth
+        # Y axis: Hardware resource location (Chiplet > Cluster > Core)
+        pos = {}
         try:
-            # multiple start nodes are possible
-            for layer, nodes in enumerate(nx.topological_generations(self)):
-                for node in nodes:
-                    self.nodes[node]["layer"] = layer
-            # align='vertical' means layers are vertical strings (x=constant), flow is Left->Right
-            pos = nx.multipartite_layout(self, subset_key="layer", align="vertical", scale=4)
+            generations = list(nx.topological_generations(self))
         except Exception as e:
-            print(f"Warning: Could not use multipartite_layout ({e}), falling back to spring_layout")
-            # Fallback if cyclic or other error
-            pos = nx.spring_layout(self, k=2, iterations=100, seed=42)
+            # Fallback for cycles (should not happen in DAG) or other errors
+            print(f"Warning: Topological sort failed ({e}), treating all nodes as gen 0")
+            generations = [list(self.nodes)]
+        
+        node_gen_map = {}
+        for g_idx, gen in enumerate(generations):
+            for node in gen:
+                node_gen_map[node] = g_idx
+        
+        # Parameters for spacing (Compact)
+        CORE_H = 1.0
+        CLUSTER_PAD = 0.5
+        CHIPLET_PAD = 1.5
+        
+        # To handle multiple nodes at same (gen, core), we shift them in X slightly
+        # Key: (gen, chip, cluster, core) -> count
+        overlap_tracker = {}
+
+        num_clusters = self.num_clusters_per_chiplet
+        num_cores = self.num_cores_per_cluster # includes host core if is_host_as_acc
+        
+        # Height of one cluster block
+        cluster_block_h = (num_cores * CORE_H) + CLUSTER_PAD
+        # Height of one chiplet block
+        chiplet_block_h = (num_clusters * cluster_block_h) + CHIPLET_PAD
+        
+        # Mapping from chiplet_id to its index (0, 1, 2...) for compact layout
+        sorted_chiplets = sorted(self.chiplet_ids)
+        chiplet_idx_map = {cid: idx for idx, cid in enumerate(sorted_chiplets)}
+
+        for node in self.nodes:
+            gen = node_gen_map.get(node, 0)
+            cid = node.assigned_chiplet_id
+            c_idx = chiplet_idx_map.get(cid, 0) # Use the index, not the ID
+            
+            clid = node.assigned_cluster_id
+            coreid = node.assigned_core_id
+            
+            # Base Y (Top is 0, moving down is negative)
+            # Use c_idx for positioning instead of cid
+            y = 0
+            y -= c_idx * chiplet_block_h
+            y -= clid * cluster_block_h
+            y -= coreid * CORE_H
+            
+            # Check overlap
+            key = (gen, cid, clid, coreid)
+            if key not in overlap_tracker:
+                overlap_tracker[key] = 0
+            overlap_count = overlap_tracker[key]
+            overlap_tracker[key] += 1
+            
+            # Shift X for overlaps
+            # Shift by fraction of generation width
+            x = gen + (overlap_count * 0.4)
+            
+            pos[node] = (x, y)
 
         # Separate nodes by task type and chiplet
         node_shapes = {shape: [] for shape in task_type_shapes.values()}
@@ -595,6 +646,62 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
 
         # Create figure
         fig, ax_graph = plt.subplots(figsize=figsize)
+        
+        # Calculate bounds
+        all_x = [p[0] for p in pos.values()]
+        min_x = min(all_x) if all_x else 0
+        max_x = max(all_x) if all_x else 1
+
+        # Draw Region Lines and Labels
+        for cid in sorted_chiplets:
+            c_idx = chiplet_idx_map[cid]
+            # Start Y of this chiplet block, using c_idx
+            chiplet_start_y = -(c_idx * chiplet_block_h)
+            
+            # Label for Chiplet (Column 1)
+            # Position it roughly in the middle of the chiplet block vertically
+            chiplet_mid_y = chiplet_start_y - ((num_clusters * cluster_block_h)/2)
+            ax_graph.text(min_x - 2.5, chiplet_mid_y, 
+                          f"Chip 0x{cid:02x}", fontsize=10, fontweight='bold', 
+                          va='center', ha='center', color='black')
+             
+            # Draw Cluster separators and labels
+            for clid in range(self.num_clusters_per_chiplet):
+                cluster_start_y = chiplet_start_y - (clid * cluster_block_h)
+                cluster_end_y = cluster_start_y - (num_cores * CORE_H)
+                
+                # Label for Cluster (Column 2)
+                cluster_mid_y = cluster_start_y - ((num_cores * CORE_H)/2)
+                ax_graph.text(min_x - 1.5, cluster_mid_y, 
+                              f"Cluster {clid}", fontsize=8, 
+                              va='center', ha='center', color='black')
+                
+                # Label for Cores (Column 3)
+                for coreid in range(num_cores):
+                    core_y = cluster_start_y - (coreid * CORE_H)
+                    ax_graph.text(min_x - 0.8, core_y, 
+                                  f"Core {coreid}", fontsize=6, 
+                                  va='center', ha='center', color='black')
+                    
+                    # Draw Core Separator (Horizontal)
+                    # Don't draw after the last core, as that is the Cluster separator
+                    if coreid < num_cores - 1:
+                        core_sep_y = core_y - (CORE_H / 2.0)
+                        ax_graph.hlines(y=core_sep_y, xmin=min_x-1.0, xmax=max_x+0.5, 
+                                        colors='gray', linestyles='dotted', alpha=0.8, linewidth=1.0)
+
+                # Separator line Y (middle of padding)
+                separator_y = cluster_end_y - (CLUSTER_PAD / 2)
+
+                if clid < self.num_clusters_per_chiplet - 1:
+                    # Inner cluster separator: dotted
+                    ax_graph.hlines(y=separator_y, xmin=min_x-0.5, xmax=max_x+0.5, 
+                                    colors='gray', linestyles='dotted', alpha=0.5)
+            
+            # Separator at bottom of chiplet: dashed
+            chiplet_bottom_line_y = -(c_idx * chiplet_block_h) - (self.num_clusters_per_chiplet * cluster_block_h) - (CHIPLET_PAD/2.0)
+            ax_graph.hlines(y=chiplet_bottom_line_y, xmin=min_x-3.0, xmax=max_x+1.0, 
+                            colors='black', linestyles='dashed', alpha=0.6, linewidth=1.5)
 
         # Draw nodes with different shapes
         for shape, nodes in node_shapes.items():
@@ -602,12 +709,12 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                 self, pos, nodelist=nodes,
                 node_shape=shape,
                 node_color=[node_colors[node] for node in nodes],
-                node_size=500,
+                node_size=300, # Smaller size
                 ax=ax_graph
             )
 
         # Draw edges
-        nx.draw_networkx_edges(self, pos, ax=ax_graph)
+        nx.draw_networkx_edges(self, pos, ax=ax_graph, alpha=0.6, arrows=True)
 
         # Draw labels
         labels = {}
@@ -615,7 +722,7 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
             # Simplified label: just the ID
             label_string = f"{node.node_id}"
             labels[node] = label_string
-        nx.draw_networkx_labels(self, pos, labels=labels, font_size=8, ax=ax_graph)
+        nx.draw_networkx_labels(self, pos, labels=labels, font_size=6, ax=ax_graph)
 
         # Create a legend for task types
         legend_elements = [
