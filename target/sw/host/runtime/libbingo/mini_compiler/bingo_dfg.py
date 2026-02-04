@@ -7,19 +7,29 @@ import sys
 
 def install_package(package):
     subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+    import site
+    from importlib import reload
+    reload(site)
 
 try:
     import networkx as nx
 except ImportError:
     print("networkx not found. Installing...")
     install_package("networkx")
-    import networkx as nx
+    try:
+        import networkx as nx
+    except ImportError:
+        # Manually add user site-packages if reload(site) didn't help
+        import site
+        user_site = site.getusersitepackages()
+        if user_site not in sys.path:
+            sys.path.append(user_site)
+        import networkx as nx
 
 from bingo_utils import DiGraphWrapper
 from bingo_node import BingoNode
 from bingo_mem_handle import BingoMemAlloc
 from bingo_kernel_args import BingoKernelArgs
-MAX_NUM_CHIPLETS = 8
 class BingoDFG(DiGraphWrapper[BingoNode]):
     """Data Flow Graph (DFG) for Bingo."""
 
@@ -67,7 +77,27 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         # Add edges to connect the new node between the two existing nodes
         self.add_edge(from_node_obj, new_node_obj)
         self.add_edge(new_node_obj, to_node_obj)
-        
+    
+    def bingo_insert_node_after(self, existing_node_obj: BingoNode, new_node_obj: BingoNode, successors_to_move: list[BingoNode] = None) -> None:
+        """Insert a new node after an existing node in the DFG."""
+        # If no specific successors are provided, move all successors
+        if successors_to_move is None:
+            successors_to_move = list(self.successors(existing_node_obj))
+
+        # Add the new node to the DFG
+        self.bingo_add_node(new_node_obj)
+
+        # Remove edges from the existing node to the target successors
+        for succ in successors_to_move:
+            self.remove_edge(existing_node_obj, succ)
+
+        # Add edge from existing node to new node
+        self.add_edge(existing_node_obj, new_node_obj)
+
+        # Add edges from new node to the specified successors
+        for succ in successors_to_move:
+            self.add_edge(new_node_obj, succ)
+    
     def bingo_transform_dfg_add_entry_node(self) -> None:
         """Transform the DFG to add one entry node."""
         # Find all the start nodes (nodes with no predecessors)
@@ -180,7 +210,7 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
             ]
             if remote_succ_list:
                 # We have a special situation that this node is a broadcast node to set all chiplets
-                if len(set(remote_succ.assigned_chiplet_id for remote_succ in remote_succ_list)) == (MAX_NUM_CHIPLETS -1):
+                if len(set(remote_succ.assigned_chiplet_id for remote_succ in remote_succ_list)) == (self.num_chiplets -1):
                     # All the remote successors must have the same core id
                     if len(set(remote_succ.assigned_core_id for remote_succ in remote_succ_list)) == 1:
                         print(f"Node {cur_node.node_name} is a broadcast node to set all chiplets.")
@@ -198,9 +228,8 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                         dummy_set_node.dep_check_enable = False
                         dummy_set_node.dep_check_list = []
                         dummy_set_node.remote_dep_set_all = True
-                        # Add the dummy set node to the graph
-                        for remote_succ in remote_succ_list:
-                            self.bingo_insert_node_between(cur_node, remote_succ, dummy_set_node)
+                        # Add the dummy set node after cur_node for remote successors
+                        self.bingo_insert_node_after(cur_node, dummy_set_node, remote_succ_list)
                 else:
                     # Now the normal case
                     for remote_succ in remote_succ_list:
@@ -540,19 +569,70 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
             "lightcoral", "lightblue", "lightgreen", "moccasin", "plum", "lightgray", "wheat", "lavender", "lightcyan", "mistyrose"
         ]
 
-        # Try to use a hierarchical layout (multipartite) based on topological generations
-        # This gives a much clearer structure for DFGs compared to BFS or Spring
+        # Custom Layout Calculation
+        # X axis: Topological depth
+        # Y axis: Hardware resource location (Chiplet > Cluster > Core)
+        pos = {}
         try:
-            # multiple start nodes are possible
-            for layer, nodes in enumerate(nx.topological_generations(self)):
-                for node in nodes:
-                    self.nodes[node]["layer"] = layer
-            # align='vertical' means layers are vertical strings (x=constant), flow is Left->Right
-            pos = nx.multipartite_layout(self, subset_key="layer", align="vertical", scale=4)
+            generations = list(nx.topological_generations(self))
         except Exception as e:
-            print(f"Warning: Could not use multipartite_layout ({e}), falling back to spring_layout")
-            # Fallback if cyclic or other error
-            pos = nx.spring_layout(self, k=2, iterations=100, seed=42)
+            # Fallback for cycles (should not happen in DAG) or other errors
+            print(f"Warning: Topological sort failed ({e}), treating all nodes as gen 0")
+            generations = [list(self.nodes)]
+        
+        node_gen_map = {}
+        for g_idx, gen in enumerate(generations):
+            for node in gen:
+                node_gen_map[node] = g_idx
+        
+        # Parameters for spacing (Compact)
+        CORE_H = 1.0
+        CLUSTER_PAD = 0.5
+        CHIPLET_PAD = 1.5
+        
+        # To handle multiple nodes at same (gen, core), we shift them in X slightly
+        # Key: (gen, chip, cluster, core) -> count
+        overlap_tracker = {}
+
+        num_clusters = self.num_clusters_per_chiplet
+        num_cores = self.num_cores_per_cluster # includes host core if is_host_as_acc
+        
+        # Height of one cluster block
+        cluster_block_h = (num_cores * CORE_H) + CLUSTER_PAD
+        # Height of one chiplet block
+        chiplet_block_h = (num_clusters * cluster_block_h) + CHIPLET_PAD
+        
+        # Mapping from chiplet_id to its index (0, 1, 2...) for compact layout
+        sorted_chiplets = sorted(self.chiplet_ids)
+        chiplet_idx_map = {cid: idx for idx, cid in enumerate(sorted_chiplets)}
+
+        for node in self.nodes:
+            gen = node_gen_map.get(node, 0)
+            cid = node.assigned_chiplet_id
+            c_idx = chiplet_idx_map.get(cid, 0) # Use the index, not the ID
+            
+            clid = node.assigned_cluster_id
+            coreid = node.assigned_core_id
+            
+            # Base Y (Top is 0, moving down is negative)
+            # Use c_idx for positioning instead of cid
+            y = 0
+            y -= c_idx * chiplet_block_h
+            y -= clid * cluster_block_h
+            y -= coreid * CORE_H
+            
+            # Check overlap
+            key = (gen, cid, clid, coreid)
+            if key not in overlap_tracker:
+                overlap_tracker[key] = 0
+            overlap_count = overlap_tracker[key]
+            overlap_tracker[key] += 1
+            
+            # Shift X for overlaps
+            # Shift by fraction of generation width
+            x = gen + (overlap_count * 0.4)
+            
+            pos[node] = (x, y)
 
         # Separate nodes by task type and chiplet
         node_shapes = {shape: [] for shape in task_type_shapes.values()}
@@ -577,6 +657,62 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
 
         # Create figure
         fig, ax_graph = plt.subplots(figsize=figsize)
+        
+        # Calculate bounds
+        all_x = [p[0] for p in pos.values()]
+        min_x = min(all_x) if all_x else 0
+        max_x = max(all_x) if all_x else 1
+
+        # Draw Region Lines and Labels
+        for cid in sorted_chiplets:
+            c_idx = chiplet_idx_map[cid]
+            # Start Y of this chiplet block, using c_idx
+            chiplet_start_y = -(c_idx * chiplet_block_h)
+            
+            # Label for Chiplet (Column 1)
+            # Position it roughly in the middle of the chiplet block vertically
+            chiplet_mid_y = chiplet_start_y - ((num_clusters * cluster_block_h)/2)
+            ax_graph.text(min_x - 2.5, chiplet_mid_y, 
+                          f"Chip 0x{cid:02x}", fontsize=10, fontweight='bold', 
+                          va='center', ha='center', color='black')
+             
+            # Draw Cluster separators and labels
+            for clid in range(self.num_clusters_per_chiplet):
+                cluster_start_y = chiplet_start_y - (clid * cluster_block_h)
+                cluster_end_y = cluster_start_y - (num_cores * CORE_H)
+                
+                # Label for Cluster (Column 2)
+                cluster_mid_y = cluster_start_y - ((num_cores * CORE_H)/2)
+                ax_graph.text(min_x - 1.5, cluster_mid_y, 
+                              f"Cluster {clid}", fontsize=8, 
+                              va='center', ha='center', color='black')
+                
+                # Label for Cores (Column 3)
+                for coreid in range(num_cores):
+                    core_y = cluster_start_y - (coreid * CORE_H)
+                    ax_graph.text(min_x - 0.8, core_y, 
+                                  f"Core {coreid}", fontsize=6, 
+                                  va='center', ha='center', color='black')
+                    
+                    # Draw Core Separator (Horizontal)
+                    # Don't draw after the last core, as that is the Cluster separator
+                    if coreid < num_cores - 1:
+                        core_sep_y = core_y - (CORE_H / 2.0)
+                        ax_graph.hlines(y=core_sep_y, xmin=min_x-1.0, xmax=max_x+0.5, 
+                                        colors='gray', linestyles='dotted', alpha=0.8, linewidth=1.0)
+
+                # Separator line Y (middle of padding)
+                separator_y = cluster_end_y - (CLUSTER_PAD / 2)
+
+                if clid < self.num_clusters_per_chiplet - 1:
+                    # Inner cluster separator: dotted
+                    ax_graph.hlines(y=separator_y, xmin=min_x-0.5, xmax=max_x+0.5, 
+                                    colors='gray', linestyles='dotted', alpha=0.5)
+            
+            # Separator at bottom of chiplet: dashed
+            chiplet_bottom_line_y = -(c_idx * chiplet_block_h) - (self.num_clusters_per_chiplet * cluster_block_h) - (CHIPLET_PAD/2.0)
+            ax_graph.hlines(y=chiplet_bottom_line_y, xmin=min_x-3.0, xmax=max_x+1.0, 
+                            colors='black', linestyles='dashed', alpha=0.6, linewidth=1.5)
 
         # Draw nodes with different shapes
         for shape, nodes in node_shapes.items():
@@ -584,12 +720,12 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                 self, pos, nodelist=nodes,
                 node_shape=shape,
                 node_color=[node_colors[node] for node in nodes],
-                node_size=500,
+                node_size=300, # Smaller size
                 ax=ax_graph
             )
 
         # Draw edges
-        nx.draw_networkx_edges(self, pos, ax=ax_graph)
+        nx.draw_networkx_edges(self, pos, ax=ax_graph, alpha=0.6, arrows=True)
 
         # Draw labels
         labels = {}
@@ -597,7 +733,7 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
             # Simplified label: just the ID
             label_string = f"{node.node_id}"
             labels[node] = label_string
-        nx.draw_networkx_labels(self, pos, labels=labels, font_size=8, ax=ax_graph)
+        nx.draw_networkx_labels(self, pos, labels=labels, font_size=6, ax=ax_graph)
 
         # Create a legend for task types
         legend_elements = [
@@ -710,15 +846,15 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
             num_local_nodes = len(local_nodes)
             
             # Emit num_tasks at the beginning
-            task_description_list += f"uint32_t num_tasks_chip_{chiplet_id:02x} = {num_local_nodes};\n"
+            task_description_list += f"uint32_t bingo_hw_scheduler_num_task_desc_chip_{chiplet_id:02x} = {num_local_nodes};\n"
 
             if num_local_nodes == 0:
                  # Even if size is 0, we allocate 1 element to avoid issues with size 0 allocation if allocator doesn't support it, or just use 0.
                  # Using 1 for safety, similar to original array [1]
-                 task_description_list += f"uint64_t* task_desc_list_chip_{chiplet_id:02x} = (uint64_t*)bingo_l3_alloc(0x{chiplet_id:02x}, 1 * sizeof(uint64_t));\n"
-                 task_description_list += f"task_desc_list_chip_{chiplet_id:02x}[0] = 0;\n"
+                 task_description_list += f"uint64_t* bingo_hw_scheduler_task_desc_list_chip_{chiplet_id:02x} = (uint64_t*)bingo_l3_alloc(0x{chiplet_id:02x}, 1 * sizeof(uint64_t));\n"
+                 task_description_list += f"bingo_hw_scheduler_task_desc_list_chip_{chiplet_id:02x}[0] = 0;\n"
             else:
-                task_description_list += f"uint64_t* task_desc_list_chip_{chiplet_id:02x} = (uint64_t*)bingo_l3_alloc(0x{chiplet_id:02x}, num_tasks_chip_{chiplet_id:02x} * sizeof(uint64_t));\n"
+                task_description_list += f"uint64_t* bingo_hw_scheduler_task_desc_list_chip_{chiplet_id:02x} = (uint64_t*)bingo_l3_alloc(0x{chiplet_id:02x}, bingo_hw_scheduler_num_task_desc_chip_{chiplet_id:02x} * sizeof(uint64_t));\n"
                 for idx, node in enumerate(local_nodes):
                     packed_val = self.bingo_pack_node(node)
                     fields = self.bingo_unpack_node(packed_val)
@@ -730,7 +866,7 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                     comment += f"    //         DepCheck: En={fields['dep_check_en']}, Code=0b{fields['dep_check_code']:0{self.num_cores_per_cluster}b}\n"
                     comment += f"    //         DepSet:   En={fields['dep_set_en']}, All={fields['dep_set_all']}, Chiplet={fields['dep_set_chiplet_id']:02x}, Cluster={fields['dep_set_cluster_id']}, Code=0b{fields['dep_set_code']:0{self.num_cores_per_cluster}b}"
                     
-                    task_description_list += f"task_desc_list_chip_{chiplet_id:02x}[{idx}] = 0x{packed_val:016X}; {comment}\n"
+                    task_description_list += f"bingo_hw_scheduler_task_desc_list_chip_{chiplet_id:02x}[{idx}] = 0x{packed_val:016X}; {comment}\n"
             
         return task_description_list
     
@@ -825,6 +961,7 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
 
     def _emit_task_desc_and_mappings(self, f, chiplet_id):
         """Emit task description and ID mapping lists."""
+        f.write(f"        uint32_t num_total_tasks = {len(self.node_list)};\n")
         f.write("        // Task Description List\n")
         task_desc_str = self.bingo_emit_task_desc_list(chiplet_id)
         indented_task_desc = "\n".join(["        " + line for line in task_desc_str.splitlines()])
@@ -939,8 +1076,9 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         f.write(f"                                (uint64_t)(uintptr_t)device_kernel_list_chip_{chiplet_id:02x},\n")
         f.write(f"                                num_dev_tasks_chip_{chiplet_id:02x},\n")
         f.write(f"                                (uint64_t)(uintptr_t)global_task_id_to_dev_task_id_chip_{chiplet_id:02x},\n")
-        f.write(f"                                (uint64_t)(uintptr_t)task_desc_list_chip_{chiplet_id:02x},\n")
-        f.write(f"                                num_tasks_chip_{chiplet_id:02x});\n\n")
+        f.write(f"                                num_total_tasks,\n")
+        f.write(f"                                (uint64_t)(uintptr_t)bingo_hw_scheduler_task_desc_list_chip_{chiplet_id:02x},\n")
+        f.write(f"                                bingo_hw_scheduler_num_task_desc_chip_{chiplet_id:02x});\n\n")
         
         f.write(f"        uint32_t err = bingo_hw_scheduler(host_arg_list_chip_{chiplet_id:02x},\n")
         f.write(f"                                          host_kernel_list_chip_{chiplet_id:02x},\n")
@@ -965,7 +1103,8 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
             f.write("int kernel_execution(){\n")
             f.write("    check_kernel_tab_ready();\n")
             f.write(f"    printf_safe(\"Chip(%x, %x): [Host] Preparing {app_name} Workload\\r\\n\", get_current_chip_loc_x(), get_current_chip_loc_y());\n")
-            f.write("    uint32_t current_chip_id = get_current_chip_id();\n\n")
+            f.write("    uint32_t current_chip_id = get_current_chip_id();\n")
+            
 
             # Step 4: Iterate over each chiplet to generate isolated blocks
             for chiplet_id in self.chiplet_ids:

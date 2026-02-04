@@ -711,7 +711,7 @@ void bingo_hw_scheduler_init_pm(){
 // Then the HW scheduler will read the task list from the memory and schedule the tasks
 // The Host core will also hooked with th ARA core for the simd
 // So its work is just to read the ready queue and write to the done queue when the simd is done
-void bingo_hw_scheduler_init(uint64_t dev_arg_base_addr, uint64_t dev_kernel_base_addr, uint32_t num_dev_tasks, uint64_t global_task_id_to_dev_task_id_base_addr, uint64_t task_desc_list_base, uint32_t num_tasks){
+void bingo_hw_scheduler_init(uint64_t dev_arg_base_addr, uint64_t dev_kernel_base_addr, uint32_t num_dev_tasks, uint64_t global_task_id_to_dev_task_id_base_addr, uint32_t num_total_tasks, uint64_t bingo_hw_scheduler_task_desc_list_base, uint32_t bingo_hw_scheduler_num_task_desc){
     // We need to set the soc_ctrl_kernel_tab_scratch_addr(3) to 2 to indicate we are using the HW scheduler
     // See target/sw/device/runtime/src/bingo.h for details
     writew(2, (uintptr_t)chiplet_addr_transform((uint64_t)soc_ctrl_kernel_tab_scratch_addr(3)));
@@ -727,7 +727,7 @@ void bingo_hw_scheduler_init(uint64_t dev_arg_base_addr, uint64_t dev_kernel_bas
         // Allocate space in the cluster's L1 for those lists
         uint64_t ptr_dev_arg_base = bingo_l1_alloc(get_current_chip_id(), i, num_dev_tasks * sizeof(uint32_t));
         uint64_t ptr_dev_kernel_base = bingo_l1_alloc(get_current_chip_id(), i, num_dev_tasks * sizeof(uint32_t));
-        uint64_t ptr_global_id_to_dev_id_base = bingo_l1_alloc(get_current_chip_id(), i, num_tasks * sizeof(int32_t));
+        uint64_t ptr_global_id_to_dev_id_base = bingo_l1_alloc(get_current_chip_id(), i, num_total_tasks * sizeof(int32_t));
         // Copy the data using soc dma
         // Copy dev arg list
         sys_dma_blk_memcpy(get_current_chip_id(),
@@ -743,7 +743,7 @@ void bingo_hw_scheduler_init(uint64_t dev_arg_base_addr, uint64_t dev_kernel_bas
         sys_dma_blk_memcpy(get_current_chip_id(),
                             ptr_global_id_to_dev_id_base,
                             (uint64_t)chiplet_addr_transform_full(get_current_chip_id(), global_task_id_to_dev_task_id_base_addr),
-                            num_tasks * sizeof(int32_t));
+                            num_total_tasks * sizeof(int32_t));
         writew(ptr_dev_arg_base,                 (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_arg_ptr_addr(i)));
         writew(ptr_dev_kernel_base,              (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_kernel_ptr_addr(i)));
         writew(ptr_global_id_to_dev_id_base, (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_global_id_to_dev_id_addr(i)));
@@ -751,9 +751,9 @@ void bingo_hw_scheduler_init(uint64_t dev_arg_base_addr, uint64_t dev_kernel_bas
     // Init the power manager
     bingo_hw_scheduler_init_pm();
     // Init the task desc list base and num tasks
-    writew(task_desc_list_base>>32,       (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_task_desc_base_hi_addr()));
-    writew((uint32_t)task_desc_list_base, (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_task_desc_base_lo_addr()));
-    writew(num_tasks,                     (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_num_task_addr()));
+    writew(bingo_hw_scheduler_task_desc_list_base>>32,       (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_task_desc_base_hi_addr()));
+    writew((uint32_t)bingo_hw_scheduler_task_desc_list_base, (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_task_desc_base_lo_addr()));
+    writew(bingo_hw_scheduler_num_task_desc,                     (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_num_task_addr()));
     // Start the HW scheduler to load the task list
     writew(1,                             (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_start_bingo_hw_manager_addr()));
     // Tell the device that the host init is done

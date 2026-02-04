@@ -6,7 +6,6 @@
 #define N_CHIPLETS ${nr_chiplets}
 #define N_CLUSTERS ${nr_clusters}
 #define N_SNITCHES ${nr_cores}
-#define N_HARTS N_SNITCHES + 1
 
 #define N_CHIPLETS_WIDTH               ${clog2_nr_chiplets}
 #define N_CLUSTERS_PER_CHIPLET         ${nr_clusters_per_chiplet}

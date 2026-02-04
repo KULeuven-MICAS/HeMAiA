@@ -2125,7 +2125,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_minimal(void *arg)
 //////////////////////// SYMBOL TABLE ////////////////////////
 // Here we create the symbol table
 SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
-#if defined(OFFLOAD_BINGO_SW) || !defined(OFFLOAD_BINGO_HW)
+// #if defined(OFFLOAD_BINGO_SW) || !defined(OFFLOAD_BINGO_HW)
     /// Cluster-level Kernels ///
     /// Used for bingo sw     ///
     SNAX_EXPORT_FUNC(__snax_kernel_dummy),
@@ -2138,9 +2138,9 @@ SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
     SNAX_EXPORT_FUNC(__snax_kernel_idma_1d_copy),
     SNAX_EXPORT_FUNC(__snax_kernel_gemm),
     SNAX_EXPORT_FUNC(__snax_kernel_minimal_cfg_start_gemm_and_wait),
-#endif
+// #endif
 
-#if defined(OFFLOAD_BINGO_HW) || !defined(OFFLOAD_BINGO_SW)
+// #if defined(OFFLOAD_BINGO_HW) || !defined(OFFLOAD_BINGO_SW)
     /// Core-level Kernels ///
     /// Used for bingo hw  ///
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_dummy),
@@ -2149,6 +2149,6 @@ SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_idma_broadcast),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_gemm_full),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_gemm_minimal),
-#endif
+// #endif
     SNAX_SYMTAB_END
 };
