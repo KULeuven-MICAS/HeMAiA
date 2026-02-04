@@ -33,8 +33,13 @@ def get_args():
         default="offload_bingo_hw.h",
         help="Output filename for the offload header file",
     )
+    parser.add_argument(
+        "--emit_mini_golden",
+        action="store_true",
+        help="Emit mini golden data for verification",
+    )
     return parser.parse_args()
-def define_workload_params():
+def define_workload_params(args):
     """Defines the GeMM workload parameters."""
     
     # TODO: We need a way to unify the gemm generation stage
@@ -88,6 +93,7 @@ def define_workload_params():
     params['num_double_buffers'] = num_double_buffers
     params['A_tile_size'] = params['A_size'] // num_double_buffers
     params['D_tile_size'] = params['D_size'] // num_double_buffers
+    params['emit_mini_golden'] = args.emit_mini_golden
     return params
 
 def define_memory_handles(params):
@@ -102,8 +108,10 @@ def define_memory_handles(params):
     # B is not tiled, only one symbol
     mem_handles['B_data_L3_symbol'] = BingoMemSymbol("B")
     # The D tiles
+    # If emit_mini_golden is True, the D array is compacted to only contain the verification data (64B per tile)
+    golden_stride = 64 if params.get('emit_mini_golden', False) else params['D_tile_size']
     for i in range(params['num_double_buffers']):
-        mem_handles[f'D{i}_data_L3_symbol'] = BingoMemSymbol("D",offset=i*params['D_tile_size'])
+        mem_handles[f'D{i}_data_L3_symbol'] = BingoMemSymbol("D",offset=i*golden_stride)
     # C is not used
 
     # 2. Define Memory Handles (Dynamic Allocations)
@@ -390,7 +398,7 @@ def main():
         os.makedirs(output_dir)
 
     # Execute Pipeline
-    params = define_workload_params()
+    params = define_workload_params(args)
     mem_handles = define_memory_handles(params)
     dfg = create_dfg(params, mem_handles)
     dfg.bingo_compile_dfg(params["app_name"], output_dir, output_file_name, extra_include_header_list=["gemm_data.h"])

@@ -130,7 +130,22 @@ def emit_matmul_data(**kwargs):
     )
 
     if kwargs.get("emit_mini_golden", False):
-        D = D[:64]
+        # Flatten D to ensure we can slice it properly
+        total_elements = D.size
+        # Get number of tiles/double buffers
+        num_tiles = kwargs.get("num_double_buffers", 1)
+        # Calculate elements per tile
+        tile_size_elements = total_elements // num_tiles
+        # We want 64 Bytes per tile. D is int32 (4 bytes). So 16 elements.
+        mini_golden_elements_per_tile = 16
+        
+        new_D = []
+        for i in range(num_tiles):
+            start_idx = i * tile_size_elements
+            # Ensure we don't go out of bounds of the tile
+            end_idx = min(start_idx + mini_golden_elements_per_tile, start_idx + tile_size_elements)
+            new_D.append(D[start_idx:end_idx])
+        D = np.concatenate(new_D)
 
     data_str += [format_vector_definition("int32_t", "D", D)]
 
@@ -157,6 +172,11 @@ def main():
         action="store_true",
         help="Enable data emission for mini golden model",
     )
+    parser.add_argument(
+        "--num_double_buffers",
+        type=int,
+        help="Number of double buffers used in the workload",
+    )
     args = parser.parse_args()
 
     # Load param config file
@@ -168,7 +188,7 @@ def main():
         hw = hjson.loads(f.read())
 
     # Merge dictionaries (hw overrides param in case of conflicts)
-    merged_config = {**param, **hw, "emit_mini_golden": args.emit_mini_golden}
+    merged_config = {**param, **hw, "emit_mini_golden": args.emit_mini_golden, "num_double_buffers": args.num_double_buffers}
 
     # Emit header file
     print(emit_header_file(**merged_config))
