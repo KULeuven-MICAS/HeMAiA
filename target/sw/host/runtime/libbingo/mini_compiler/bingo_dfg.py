@@ -7,13 +7,24 @@ import sys
 
 def install_package(package):
     subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+    import site
+    from importlib import reload
+    reload(site)
 
 try:
     import networkx as nx
 except ImportError:
     print("networkx not found. Installing...")
     install_package("networkx")
-    import networkx as nx
+    try:
+        import networkx as nx
+    except ImportError:
+        # Manually add user site-packages if reload(site) didn't help
+        import site
+        user_site = site.getusersitepackages()
+        if user_site not in sys.path:
+            sys.path.append(user_site)
+        import networkx as nx
 
 from bingo_utils import DiGraphWrapper
 from bingo_node import BingoNode
