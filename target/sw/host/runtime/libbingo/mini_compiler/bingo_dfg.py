@@ -835,15 +835,15 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
             num_local_nodes = len(local_nodes)
             
             # Emit num_tasks at the beginning
-            task_description_list += f"uint32_t num_tasks_chip_{chiplet_id:02x} = {num_local_nodes};\n"
+            task_description_list += f"uint32_t bingo_hw_scheduler_num_task_desc_chip_{chiplet_id:02x} = {num_local_nodes};\n"
 
             if num_local_nodes == 0:
                  # Even if size is 0, we allocate 1 element to avoid issues with size 0 allocation if allocator doesn't support it, or just use 0.
                  # Using 1 for safety, similar to original array [1]
-                 task_description_list += f"uint64_t* task_desc_list_chip_{chiplet_id:02x} = (uint64_t*)bingo_l3_alloc(0x{chiplet_id:02x}, 1 * sizeof(uint64_t));\n"
-                 task_description_list += f"task_desc_list_chip_{chiplet_id:02x}[0] = 0;\n"
+                 task_description_list += f"uint64_t* bingo_hw_scheduler_task_desc_list_chip_{chiplet_id:02x} = (uint64_t*)bingo_l3_alloc(0x{chiplet_id:02x}, 1 * sizeof(uint64_t));\n"
+                 task_description_list += f"bingo_hw_scheduler_task_desc_list_chip_{chiplet_id:02x}[0] = 0;\n"
             else:
-                task_description_list += f"uint64_t* task_desc_list_chip_{chiplet_id:02x} = (uint64_t*)bingo_l3_alloc(0x{chiplet_id:02x}, num_tasks_chip_{chiplet_id:02x} * sizeof(uint64_t));\n"
+                task_description_list += f"uint64_t* bingo_hw_scheduler_task_desc_list_chip_{chiplet_id:02x} = (uint64_t*)bingo_l3_alloc(0x{chiplet_id:02x}, bingo_hw_scheduler_num_task_desc_chip_{chiplet_id:02x} * sizeof(uint64_t));\n"
                 for idx, node in enumerate(local_nodes):
                     packed_val = self.bingo_pack_node(node)
                     fields = self.bingo_unpack_node(packed_val)
@@ -855,7 +855,7 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                     comment += f"    //         DepCheck: En={fields['dep_check_en']}, Code=0b{fields['dep_check_code']:0{self.num_cores_per_cluster}b}\n"
                     comment += f"    //         DepSet:   En={fields['dep_set_en']}, All={fields['dep_set_all']}, Chiplet={fields['dep_set_chiplet_id']:02x}, Cluster={fields['dep_set_cluster_id']}, Code=0b{fields['dep_set_code']:0{self.num_cores_per_cluster}b}"
                     
-                    task_description_list += f"task_desc_list_chip_{chiplet_id:02x}[{idx}] = 0x{packed_val:016X}; {comment}\n"
+                    task_description_list += f"bingo_hw_scheduler_task_desc_list_chip_{chiplet_id:02x}[{idx}] = 0x{packed_val:016X}; {comment}\n"
             
         return task_description_list
     
@@ -950,6 +950,7 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
 
     def _emit_task_desc_and_mappings(self, f, chiplet_id):
         """Emit task description and ID mapping lists."""
+        f.write(f"        uint32_t num_total_tasks = {len(self.node_list)};\n")
         f.write("        // Task Description List\n")
         task_desc_str = self.bingo_emit_task_desc_list(chiplet_id)
         indented_task_desc = "\n".join(["        " + line for line in task_desc_str.splitlines()])
@@ -1064,8 +1065,9 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         f.write(f"                                (uint64_t)(uintptr_t)device_kernel_list_chip_{chiplet_id:02x},\n")
         f.write(f"                                num_dev_tasks_chip_{chiplet_id:02x},\n")
         f.write(f"                                (uint64_t)(uintptr_t)global_task_id_to_dev_task_id_chip_{chiplet_id:02x},\n")
-        f.write(f"                                (uint64_t)(uintptr_t)task_desc_list_chip_{chiplet_id:02x},\n")
-        f.write(f"                                num_tasks_chip_{chiplet_id:02x});\n\n")
+        f.write(f"                                num_total_tasks,\n")
+        f.write(f"                                (uint64_t)(uintptr_t)bingo_hw_scheduler_task_desc_list_chip_{chiplet_id:02x},\n")
+        f.write(f"                                bingo_hw_scheduler_num_task_desc_chip_{chiplet_id:02x});\n\n")
         
         f.write(f"        uint32_t err = bingo_hw_scheduler(host_arg_list_chip_{chiplet_id:02x},\n")
         f.write(f"                                          host_kernel_list_chip_{chiplet_id:02x},\n")
@@ -1090,7 +1092,8 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
             f.write("int kernel_execution(){\n")
             f.write("    check_kernel_tab_ready();\n")
             f.write(f"    printf_safe(\"Chip(%x, %x): [Host] Preparing {app_name} Workload\\r\\n\", get_current_chip_loc_x(), get_current_chip_loc_y());\n")
-            f.write("    uint32_t current_chip_id = get_current_chip_id();\n\n")
+            f.write("    uint32_t current_chip_id = get_current_chip_id();\n")
+            
 
             # Step 4: Iterate over each chiplet to generate isolated blocks
             for chiplet_id in self.chiplet_ids:
