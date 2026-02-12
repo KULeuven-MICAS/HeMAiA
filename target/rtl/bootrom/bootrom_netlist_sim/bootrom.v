@@ -5,32 +5,40 @@
 
 // Author: Yunhao Deng <yunhao.deng@kuleuven.be>
 // This file is used as the in-place replacement of the bootrom in the synthesized netlist for the fast simulation. 
+
 module bootrom (
-    output logic [31:0] data_o,
-    input  logic        \addr_i[12] ,
-    input  logic        \addr_i[11] ,
-    input  logic        \addr_i[10] ,
-    input  logic        \addr_i[9] ,
-    input  logic        \addr_i[8] ,
-    input  logic        \addr_i[7] ,
-    input  logic        \addr_i[6] ,
-    input  logic        \addr_i[5] ,
-    input  logic        \addr_i[4] ,
-    input  logic        \addr_i[3] ,
-    input  logic        \addr_i[2]
+    output reg  [31:0] data_o,
+    input  wire        \addr_i[12] ,
+    input  wire        \addr_i[11] ,
+    input  wire        \addr_i[10] ,
+    input  wire        \addr_i[9] ,
+    input  wire        \addr_i[8] ,
+    input  wire        \addr_i[7] ,
+    input  wire        \addr_i[6] ,
+    input  wire        \addr_i[5] ,
+    input  wire        \addr_i[4] ,
+    input  wire        \addr_i[3] ,
+    input  wire        \addr_i[2] 
 );
 
-    localparam int unsigned AddrWidth = 32;
-    localparam int unsigned DataWidth = 32;
+    localparam AddrWidth = 32;
+    localparam DataWidth = 32;
 
-    localparam unsigned NumWords = 256;
-    logic [$clog2(NumWords)-1:0] word;
+    localparam NumWords = 256;
+    wire [7:0] word;
 
-    assign word = { \addr_i[9], \addr_i[8], \addr_i[7], \addr_i[6], \addr_i[5], \addr_i[4], \addr_i[3], \addr_i[2] };
+    assign word[7] = \addr_i[9] ;
+    assign word[6] = \addr_i[8] ;
+    assign word[5] = \addr_i[7] ;
+    assign word[4] = \addr_i[6] ;
+    assign word[3] = \addr_i[5] ;
+    assign word[2] = \addr_i[4] ;
+    assign word[1] = \addr_i[3] ;
+    assign word[0] = \addr_i[2] ;
 
-    always_comb begin
-        data_o = '0;
-        unique case (word)
+    always @* begin
+        data_o = 32'd0;
+        case (word)
         000: data_o = 32'h00000093 /* 0x0000 */;
             001: data_o = 32'h00000113 /* 0x0004 */;
             002: data_o = 32'h00000193 /* 0x0008 */;
