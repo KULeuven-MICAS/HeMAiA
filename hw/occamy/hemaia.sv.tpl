@@ -134,7 +134,9 @@ module hemaia (
   );
 
   logic clk_obs_o;
-  tc_digital_io clk_obs_o_io (
+  tc_digital_io #(
+    .VerticalIO(1'b1)
+  ) clk_obs_o_io (
       .data_i(clk_obs_o),
       .data_o(),
       .rte_i(rte),
@@ -146,7 +148,9 @@ module hemaia (
   );
 
   logic clk_periph_i;
-  tc_digital_io clk_periph_i_io (
+  tc_digital_io #(
+    .VerticalIO(1'b1)
+  ) clk_periph_i_io (
       .data_i(1'b0),
       .data_o(clk_periph_i),
       .rte_i(rte),
@@ -182,25 +186,113 @@ module hemaia (
   );
 
   logic [7:0] chip_id_i;
-  tc_digital_io #(
-    .VerticalIO(1'b1)
-  ) chip_id_i_io[7:0] (
+  tc_digital_io chip_id_i_io_0 (
       .data_i(1'b0),
-      .data_o(chip_id_i),
+      .data_o(chip_id_i[0]),
       .rte_i(rte),
       .io_direction_oe_ni(1'b1),
       .io_driving_strength_i(4'h0),
       .io_pullup_en_i(1'b0),
       .io_pulldown_en_i(1'b0),
-      .io(io_chip_id_i)
+      .io(io_chip_id_i[0])
+  );
+
+  tc_digital_io #(
+    .VerticalIO(1'b1)
+  ) chip_id_i_io_1 (
+      .data_i(1'b0),
+      .data_o(chip_id_i[1]),
+      .rte_i(rte),
+      .io_direction_oe_ni(1'b1),
+      .io_driving_strength_i(4'h0),
+      .io_pullup_en_i(1'b0),
+      .io_pulldown_en_i(1'b0),
+      .io(io_chip_id_i[1])
+  );
+
+  tc_digital_io #(
+    .VerticalIO(1'b1)
+  ) chip_id_i_io_2 (
+      .data_i(1'b0),
+      .data_o(chip_id_i[2]),
+      .rte_i(rte),
+      .io_direction_oe_ni(1'b1),
+      .io_driving_strength_i(4'h0),
+      .io_pullup_en_i(1'b0),
+      .io_pulldown_en_i(1'b0),
+      .io(io_chip_id_i[2])
+  );
+
+  tc_digital_io #(
+    .VerticalIO(1'b1)
+  ) chip_id_i_io_3 (
+      .data_i(1'b0),
+      .data_o(chip_id_i[3]),
+      .rte_i(rte),
+      .io_direction_oe_ni(1'b1),
+      .io_driving_strength_i(4'h0),
+      .io_pullup_en_i(1'b0),
+      .io_pulldown_en_i(1'b0),
+      .io(io_chip_id_i[3])
+  );
+
+  tc_digital_io #(
+    .VerticalIO(1'b1)
+  ) chip_id_i_io_4 (
+      .data_i(1'b0),
+      .data_o(chip_id_i[4]),
+      .rte_i(rte),
+      .io_direction_oe_ni(1'b1),
+      .io_driving_strength_i(4'h0),
+      .io_pullup_en_i(1'b0),
+      .io_pulldown_en_i(1'b0),
+      .io(io_chip_id_i[4])
+  );
+
+  tc_digital_io #(
+    .VerticalIO(1'b1)
+  ) chip_id_i_io_5 (
+      .data_i(1'b0),
+      .data_o(chip_id_i[5]),
+      .rte_i(rte),
+      .io_direction_oe_ni(1'b1),
+      .io_driving_strength_i(4'h0),
+      .io_pullup_en_i(1'b0),
+      .io_pulldown_en_i(1'b0),
+      .io(io_chip_id_i[5])
+  );
+
+  tc_digital_io #(
+    .VerticalIO(1'b1)
+  ) chip_id_i_io_6 (
+      .data_i(1'b0),
+      .data_o(chip_id_i[6]),
+      .rte_i(rte),
+      .io_direction_oe_ni(1'b1),
+      .io_driving_strength_i(4'h0),
+      .io_pullup_en_i(1'b0),
+      .io_pulldown_en_i(1'b0),
+      .io(io_chip_id_i[6])
+  );
+
+  tc_digital_io #(
+    .VerticalIO(1'b1)
+  ) chip_id_i_io_7 (
+      .data_i(1'b0),
+      .data_o(chip_id_i[7]),
+      .rte_i(rte),
+      .io_direction_oe_ni(1'b1),
+      .io_driving_strength_i(4'h0),
+      .io_pullup_en_i(1'b0),
+      .io_pulldown_en_i(1'b0),
+      .io(io_chip_id_i[7])
   );
 
   logic [1:0] boot_mode_i;
-  tc_digital_io #(
-    .VerticalIO(1'b1)
-  ) boot_mode_i_io[1:0] (
+  assign boot_mode_i[1] = 1'b0;
+  tc_digital_io boot_mode_i_io (
       .data_i(1'b0),
-      .data_o(boot_mode_i),
+      .data_o(boot_mode_i[0]),
       .rte_i(rte),
       .io_direction_oe_ni(1'b1),
       .io_driving_strength_i(4'h0),
@@ -267,7 +359,9 @@ module hemaia (
       .io_pulldown_en_i(1'b0),
       .io(io_flow_control_east_rts_i)
   );
-  tc_digital_io flow_control_east_cts_o_io (
+  tc_digital_io #(
+    .VerticalIO(1'b1)
+  ) flow_control_east_cts_o_io (
       .data_i(flow_control_east_cts_o),
       .data_o(),
       .rte_i(rte),
@@ -295,7 +389,9 @@ module hemaia (
       .io_pulldown_en_i(1'b0),
       .io(io_west_test_being_requested_i)
   );
-  tc_digital_io west_test_request_o_io (
+  tc_digital_io #(
+    .VerticalIO(1'b1)
+  ) west_test_request_o_io (
       .data_i(west_test_request_o),
       .data_o(),
       .rte_i(rte),
@@ -305,7 +401,9 @@ module hemaia (
       .io_pulldown_en_i(1'b0),
       .io(io_west_test_request_o)
   );
-  tc_digital_io flow_control_west_rts_o_io (
+  tc_digital_io #(
+    .VerticalIO(1'b1)
+  ) flow_control_west_rts_o_io (
       .data_i(flow_control_west_rts_o),
       .data_o(),
       .rte_i(rte),
@@ -469,9 +567,7 @@ module hemaia (
       .io_pulldown_en_i(1'b0),
       .io(io_flow_control_south_rts_o)
   );
-  tc_digital_io #(
-    .VerticalIO(1'b1)
-  ) flow_control_south_cts_i_io (
+  tc_digital_io flow_control_south_cts_i_io (
       .data_i(1'b0),
       .data_o(flow_control_south_cts_i),
       .rte_i(rte),
@@ -542,7 +638,9 @@ module hemaia (
       .io_pulldown_en_i(1'b0),
       .io(io_uart_rts_no)
   );
-  tc_digital_io uart_cts_ni_io (
+  tc_digital_io #(
+    .VerticalIO(1'b1)
+  ) uart_cts_ni_io (
       .data_i(1'b0),
       .data_o(uart_cts_ni),
       .rte_i(rte),
@@ -557,22 +655,8 @@ module hemaia (
   logic [31:0] gpio_d_o;
   logic [31:0] gpio_oe_o;
   generate
-    for (genvar i = 0; i < 2; i++) begin : gen_gpio_io_cells
+    for (genvar i = 0; i < NumGpio; i++) begin : gen_gpio_io_cells
       tc_digital_io gpio_io (
-          .data_i(gpio_d_o[i]),
-          .data_o(gpio_d_i[i]),
-          .rte_i(rte),
-          .io_direction_oe_ni(~gpio_oe_o[i]),
-          .io_driving_strength_i(4'hf),
-          .io_pullup_en_i(1'b0),
-          .io_pulldown_en_i(1'b0),
-          .io(io_gpio[i])
-      );
-    end
-    for (genvar i = 2; i < NumGpio; i++) begin : gen_gpio_io_cells_v
-      tc_digital_io #(
-        .VerticalIO(1'b1)
-      ) gpio_io (
           .data_i(gpio_d_o[i]),
           .data_o(gpio_d_i[i]),
           .rte_i(rte),
@@ -681,7 +765,9 @@ module hemaia (
   logic jtag_tms_i;
   logic jtag_tdi_i;
   logic jtag_tdo_o;
-  tc_digital_io jtag_trst_ni_io (
+  tc_digital_io #(
+    .VerticalIO(1'b1)
+  ) jtag_trst_ni_io (
       .data_i(1'b0),
       .data_o(jtag_trst_ni),
       .rte_i(rte),
