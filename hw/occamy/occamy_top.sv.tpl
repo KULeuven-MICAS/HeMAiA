@@ -288,6 +288,7 @@ module ${name}_top
 
   logic [${regbus_debug.dw-1}:0] sba_addr_long;
 
+  (* no_ungroup *) (* no_boundary_optimization *) (* no_clock_gating *)
   dm_top #(
     // .NrHarts (${cores}),
     .NrHarts (1),
@@ -354,6 +355,7 @@ module ${name}_top
 
   );
 
+  (* no_ungroup *) (* no_boundary_optimization *) (* no_clock_gating *)
   dmi_jtag #(
     .IdcodeValue (${name}_pkg::IDCode)
   ) i_dmi_jtag (
