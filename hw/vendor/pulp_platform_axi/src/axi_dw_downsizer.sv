@@ -326,6 +326,8 @@ module axi_dw_downsizer #(
     .oup_data_o      (idqueue_id      ),
     .oup_data_valid_o(idqueue_valid   ),
     .oup_gnt_o       (/* Unused  */   ),
+    .empty_o         (/* Unused  */   ),
+    .full_o          (/* Unused  */   ),
     .exists_data_i   ('0              ),
     .exists_mask_i   ('0              ),
     .exists_req_i    ('0              ),
