@@ -36,7 +36,7 @@ jobs:
     name: Simulate HeMAiA XBar with Verilator
     runs-on: ubuntu-22.04
     container:
-      image: ghcr.io/kuleuven-micas/snax@sha256:4ff37cad4e85d6a898cda3232ee04a1210833eb4618d1f1fd183201c03c4c57c
+      image: ghcr.io/kuleuven-micas/hemaia:main
     steps:
       - uses: actions/checkout@v2
         with:
@@ -56,7 +56,7 @@ jobs:
     name: Simulate HeMAiA NoC with Verilator
     runs-on: ubuntu-22.04
     container:
-      image: ghcr.io/kuleuven-micas/snax@sha256:4ff37cad4e85d6a898cda3232ee04a1210833eb4618d1f1fd183201c03c4c57c
+      image: ghcr.io/kuleuven-micas/hemaia:main
     steps:
       - uses: actions/checkout@v2
         with:
