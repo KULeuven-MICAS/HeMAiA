@@ -21,13 +21,15 @@ DATA_H = $(MK_DIR)/gemm_data.h
 BENDER   = bender
 SNITCH_ROOT = $(shell $(BENDER) path snitch_cluster)
 
-$(DATA_H): $(MK_DIR)/gemm_datagen.py $(DATA_CFG) 
-	$< -c $(DATA_CFG) --hwcfg $(SNITCH_ROOT)/target/snitch_cluster/cfg/snax_versacore_to_cluster.hjson --emit_mini_golden --num_double_buffers 8 > $@
-
-# Offload
-OFFLOAD_H = offload_bingo_hw.h	
-$(OFFLOAD_H): $(MK_DIR)/main_bingo.py
-	python3 $< --output_dir $(MK_DIR) --output_offload_file_name $(OFFLOAD_H) --emit_mini_golden
+$(DATA_H) $(OFFLOAD_H): $(MK_DIR)/main_bingo.py $(DATA_CFG)
+	python3 $(MK_DIR)/main_bingo.py \
+		--output_dir $(MK_DIR) \
+		--output_offload_file_name $(OFFLOAD_H) \
+		--data_h $(DATA_H) \
+		-c $(DATA_CFG) \
+		--hwcfg $(SNITCH_ROOT)/target/snitch_cluster/cfg/snax_versacore_to_cluster.hjson \
+		--emit_mini_golden \
+		--num_double_buffers 8
 
 
 ###############
