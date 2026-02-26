@@ -9,6 +9,7 @@
 # Those apps are standalone apps
 # Will be gradually moved to the kernels
 APPDIR  = apps/snax/snax-test-integration
+APPDIR += apps/snax/snax-test-global-barrier
 APPDIR += apps/snax/snax-xdma-maxpool
 APPDIR += apps/snax/snax-xdma-memset
 APPDIR += apps/snax/snax-xdma-multicast
