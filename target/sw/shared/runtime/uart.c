@@ -10,14 +10,14 @@ static inline int out_ch(char c) {
     return 0;
 }
 
-static int print_unsigned(uint32_t value, uint32_t base, int uppercase,
+static int print_unsigned(uint64_t value, uint32_t base, int uppercase,
                           int width, int zero_pad) {
-    char buf[32];  // enough for 32‑bit 0xFFFFFFFF or 10 decimal digits
+    char buf[64];  // enough for 64-bit entries
     int idx = 0;
 
     // 1. Convert to string in reverse order
     do {
-        uint32_t digit = value % base;
+        uint32_t digit = (uint32_t)(value % base);
         value /= base;
         buf[idx++] = (digit < 10) ? ('0' + digit)
                                   : ((uppercase ? 'A' : 'a') + (digit - 10));
@@ -37,14 +37,17 @@ static int print_unsigned(uint32_t value, uint32_t base, int uppercase,
 // ---------------------------------------------------------------------------
 // print_signed() – handles sign then delegates to print_unsigned().
 // ---------------------------------------------------------------------------
-static int print_signed(int32_t value, int width, int zero_pad) {
+static int print_signed(int64_t value, int width, int zero_pad) {
     int count = 0;
+    uint64_t abs_val;
     if (value < 0) {
         count += out_ch('-');
-        value = -value;
+        abs_val = (uint64_t)(-(value + 1)) + 1; // Handle INT64_MIN safely
         if (width) width--;  // sign consumed one slot
+    } else {
+        abs_val = (uint64_t)value;
     }
-    count += print_unsigned((uint32_t)value, 10, 0, width, zero_pad);
+    count += print_unsigned(abs_val, 10, 0, width, zero_pad);
     return count;
 }
 
@@ -119,15 +122,21 @@ int vprintf(const char *fmt, va_list ap) {
                                         zero_pad);
                 break;
 
-            case 'l': {  // Handle %lx
+            case 'l': {  // Handle %lx, %lX, %ld, %lu
                 char next = *fmt ? *fmt++ : '\0';
                 if (next == 'x' || next == 'X') {
                     uint64_t val = va_arg(ap, uint64_t);
-                    uint32_t hi = (uint32_t)(val >> 32);
-                    uint32_t lo = (uint32_t)(val & 0xffffffffUL);
-                    total += print_unsigned(hi, 16, (next == 'X'), 4, 1);
-                    total += print_unsigned(lo, 16, (next == 'X'), 8, 1);
- 
+                    // Use updated print_unsigned which handles 64-bit
+                    // Note: original code forced 0-padding for split hi/lo.
+                    // New code uses whatever width/zero_pad is set by user, or default behavior.
+                    // If user wants %016lx, they should specify it in format string.
+                    total += print_unsigned(val, 16, (next == 'X'), width, zero_pad);
+                } else if (next == 'd') {
+                    int64_t val = va_arg(ap, int64_t);
+                    total += print_signed(val, width, zero_pad);
+                } else if (next == 'u') {
+                    uint64_t val = va_arg(ap, uint64_t);
+                    total += print_unsigned(val, 10, 0, width, zero_pad);
                 } else {
                     total += out_ch('%');
                     total += out_ch('l');
