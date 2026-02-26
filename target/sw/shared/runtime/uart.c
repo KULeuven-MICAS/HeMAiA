@@ -10,6 +10,33 @@ static inline int out_ch(char c) {
     return 0;
 }
 
+// Helper for 64-bit division on 32-bit architectures without libgcc
+static uint32_t umod64(uint64_t *n, uint32_t base) {
+    uint32_t rem;
+    if (base == 16) {
+        rem = (uint32_t)(*n & 0xF);
+        *n >>= 4;
+    } else if (base == 10) {
+        // Simple long division by 10
+        // To avoid linking __udivdi3, we implement division manually
+        uint64_t q = 0;
+        uint32_t r = 0;
+        for (int i = 63; i >= 0; i--) {
+            r = (r << 1) | (uint32_t)((*n >> i) & 1);
+            if (r >= 10) {
+                r -= 10;
+                q |= (1ULL << i);
+            }
+        }
+        *n = q;
+        rem = r;
+    } else {
+        rem = 0;
+        *n = 0; 
+    }
+    return rem;
+}
+
 static int print_unsigned(uint64_t value, uint32_t base, int uppercase,
                           int width, int zero_pad) {
     char buf[64];  // enough for 64-bit entries
@@ -17,8 +44,7 @@ static int print_unsigned(uint64_t value, uint32_t base, int uppercase,
 
     // 1. Convert to string in reverse order
     do {
-        uint32_t digit = (uint32_t)(value % base);
-        value /= base;
+        uint32_t digit = umod64(&value, base);
         buf[idx++] = (digit < 10) ? ('0' + digit)
                                   : ((uppercase ? 'A' : 'a') + (digit - 10));
     } while (value && idx < (int)sizeof(buf));
