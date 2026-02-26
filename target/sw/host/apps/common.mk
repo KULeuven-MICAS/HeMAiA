@@ -73,11 +73,12 @@ DEBUG ?= OFF # ON to turn on debugging symbols
 ###################
 
 # Compiler toolchain
-CVA6_GCC_ROOT = /tools/riscv/bin
-RISCV_CC      = $(CVA6_GCC_ROOT)/riscv64-unknown-elf-gcc
-RISCV_OBJCOPY = $(CVA6_GCC_ROOT)/riscv64-unknown-elf-objcopy
-RISCV_OBJDUMP = $(CVA6_GCC_ROOT)/riscv64-unknown-elf-objdump
-RISCV_READELF = $(CVA6_GCC_ROOT)/riscv64-unknown-elf-readelf
+# CVA6_GCC_ROOT = /opt/riscv
+CVA6_GCC_ROOT ?= 
+RISCV_CC      = $(CVA6_GCC_ROOT)riscv64-unknown-elf-gcc
+RISCV_OBJCOPY = $(CVA6_GCC_ROOT)riscv64-unknown-elf-objcopy
+RISCV_OBJDUMP = $(CVA6_GCC_ROOT)riscv64-unknown-elf-objdump
+RISCV_READELF = $(CVA6_GCC_ROOT)riscv64-unknown-elf-readelf
 # Directories
 # Notice the build dir is the dir under each app
 BUILDDIR    ?= $(abspath build)
@@ -97,7 +98,7 @@ INCDIRS += $(SWDIR)/shared/vendor/xdma
 
 # Compiler flags
 RISCV_CFLAGS += $(addprefix -I,$(INCDIRS))
-RISCV_CFLAGS += -march=rv64imafdc
+RISCV_CFLAGS += -march=rv64gcv # include the v extention for ara
 RISCV_CFLAGS += -mabi=lp64d
 RISCV_CFLAGS += -mcmodel=medany
 RISCV_CFLAGS += -ffast-math
@@ -107,11 +108,11 @@ RISCV_CFLAGS += -O3
 RISCV_CFLAGS += -ffunction-sections
 RISCV_CFLAGS += -Wextra
 RISCV_CFLAGS += -Werror
+RISCV_CFLAGS += -std=gnu99
 ifeq ($(DEBUG),ON)
 RISCV_CFLAGS += -g
 endif
 RISCV_CFLAGS += $(USER_FLAGS)
-
 # Linking sources
 LINKER_SCRIPT = $(abspath $(HOST_DIR)/runtime/host.ld)
 LD_SRCS       = $(LINKER_SCRIPT)
