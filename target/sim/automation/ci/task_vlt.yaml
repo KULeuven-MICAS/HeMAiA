@@ -32,5 +32,5 @@ runs:
   - app_6:
     - HOST_APP_TYPE: host_only
     - CHIP_TYPE: single_chip
-    - WORKLOAD: None
-    - DEV_APP: ara_test 
+    - WORKLOAD: ara_test
+    - DEV_APP: None
