@@ -790,7 +790,7 @@ module hemaia (
   tc_digital_io_special_block special_blocks ();
   tc_digital_io_power_supply #(.VerticalIO(1'b0)) left_io_power_supply[3:0] ();
   tc_digital_io_power_supply #(.VerticalIO(1'b1)) top_io_power_supply[3:0] ();
-  tc_digital_io_power_supply #(.VerticalIO(1'b0)) right_io_power_supply[3:0] ();
+  tc_digital_io_power_supply #(.VerticalIO(1'b0)) right_io_power_supply[2:0] ();
   tc_digital_io_power_supply #(.VerticalIO(1'b1)) bot_io_power_supply[3:0] ();
 
   tc_core_power_supply #(.VerticalIO(1'b0)) left_core_power_supply[1:0] ();
