@@ -104,7 +104,8 @@ RISCV_CFLAGS += -mcmodel=medany
 RISCV_CFLAGS += -ffast-math
 RISCV_CFLAGS += -fno-builtin-printf
 RISCV_CFLAGS += -fno-common
-RISCV_CFLAGS += -O3
+RISCV_CFLAGS += -O2
+RISCV_CFLAGS += -fno-tree-vectorize -fno-tree-loop-vectorize -fno-tree-slp-vectorize
 RISCV_CFLAGS += -ffunction-sections
 RISCV_CFLAGS += -Wextra
 RISCV_CFLAGS += -Werror

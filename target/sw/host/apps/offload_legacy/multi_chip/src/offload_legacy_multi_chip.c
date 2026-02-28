@@ -8,6 +8,10 @@
 
 int main() {
     // The pointer to the communication buffer
+    uint32_t current_chip_id = get_current_chip_id();
+    init_uart(get_current_chip_baseaddress(), 32, 1);
+    // Enable vector extension
+    enable_vec();
     volatile comm_buffer_t* comm_buffer_ptr = (comm_buffer_t*)0;
     printf("[HeMAiA] Multi-chip Offload Legacy Main\r\n");
     // Reset and ungate all quadrants, deisolate
