@@ -9,6 +9,8 @@
 
 int main() {
     init_uart((uintptr_t)get_current_chip_baseaddress(), 32, 1);
+    // Enable vector extension
+    enable_vec();
     asm volatile("fence" : : : "memory");
 
     // Clock Gating the D2D links

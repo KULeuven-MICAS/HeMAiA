@@ -28,4 +28,9 @@ runs:
     - HOST_APP_TYPE: offload_bingo_hw
     - CHIP_TYPE: single_chip
     - WORKLOAD: dummy_double_buffer_ci
-    - DEV_APP: snax-bingo-offload    
+    - DEV_APP: snax-bingo-offload
+  - app_6:
+    - HOST_APP_TYPE: host_only
+    - CHIP_TYPE: single_chip
+    - WORKLOAD: ara_test
+    - DEV_APP: None

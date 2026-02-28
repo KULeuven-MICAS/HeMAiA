@@ -14,6 +14,8 @@ int main(){
     hemaia_d2d_link_initialize(current_chip_id);
     // Init the uart for printf
     init_uart(get_current_chip_baseaddress(), 32, 1);
+    // Enable vector extension
+    enable_vec();
     printf("Multi-chip HW Mailbox\r\n");
     printf("Chip(%x, %x): [Host] Start Program\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
     ///////////////////////////////
