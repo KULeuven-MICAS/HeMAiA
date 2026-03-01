@@ -208,7 +208,7 @@ def generate_floonoc(floonoc_cfg, out_dir):
         spec = importlib.util.find_spec("floogen")
         if spec is None:
             print("Floogen is not installed!")
-            install_cmd = [python_exec, "-m", "pip", "install", "."]
+            install_cmd = [python_exec, "-m", "pip", "install", ".", "--break-system-packages"]
             print(f"Installing floogen: {' '.join(install_cmd)}")
             result = subprocess.run(
                 install_cmd,

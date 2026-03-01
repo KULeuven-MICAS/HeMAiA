@@ -18,6 +18,8 @@ int main() {
     hemaia_d2d_link_initialize(current_chip_id);
     // Init the uart for printf
     init_uart(get_current_chip_baseaddress(), 32, 1);
+    // Enable vector extension
+    enable_vec();
     enable_sw_interrupts();
 
     // Init bingo runtime
