@@ -30,9 +30,12 @@ module hemaia_clk_rst_controller #(
   //////////////////////////////////////
   //    PLL (Not implemented yet)     //
   //////////////////////////////////////
-  logic mst_clk_after_pll;
-  assign mst_clk_after_pll = mst_clk_i;
 
+  logic mst_clk_after_pll;
+  hemaia_pll i_pll (
+      .clk_i(mst_clk_i),
+      .clk_o(mst_clk_after_pll)
+  );
 
   ///////////////////////////////
   //    Reset Synchronizer     //

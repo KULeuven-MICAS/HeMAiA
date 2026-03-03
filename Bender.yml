@@ -157,6 +157,7 @@ sources:
     files:
       - hw/hemaia/hemaia_clk_rst_controller/regs/hemaia_clk_rst_controller_reg_pkg.sv
       - hw/hemaia/hemaia_clk_rst_controller/regs/hemaia_clk_rst_controller_reg_top.sv
+      - hw/hemaia/hemaia_clk_rst_controller/hemaia_pll.sv
       - hw/hemaia/hemaia_clk_rst_controller/hemaia_clock_divider.sv
       - hw/hemaia/hemaia_clk_rst_controller/hemaia_reset_controller.sv
       - hw/hemaia/hemaia_clk_rst_controller/hemaia_clk_rst_controller.sv
@@ -180,4 +181,3 @@ sources:
       - target/sim/testharness/interposer/hemaia_io_pad.tb.sv
       - target/sim/testharness/interposer/four_chiplet_interposer.lvs.sv
       - target/sim/testharness/interposer/testharness.sv
-
