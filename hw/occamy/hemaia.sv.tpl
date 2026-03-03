@@ -118,7 +118,9 @@ module hemaia (
   );
 
   logic bypass_pll_division_i;
-  tc_digital_io bypass_pll_division_i_io (
+  tc_digital_io #(
+    .VerticalIO(1'b1)
+  ) bypass_pll_division_i_io (
       .data_i(1'b0),
       .data_o(bypass_pll_division_i),
       .io_direction_oe_ni(1'b1),
@@ -177,7 +179,9 @@ module hemaia (
   );
 
   logic [7:0] chip_id_i;
-  tc_digital_io chip_id_i_io_0 (
+  tc_digital_io #(
+    .VerticalIO(1'b1)
+  ) chip_id_i_io_0 (
       .data_i(1'b0),
       .data_o(chip_id_i[0]),
       .io_direction_oe_ni(1'b1),
@@ -336,9 +340,7 @@ module hemaia (
       .io_pulldown_en_i(1'b0),
       .io(io_flow_control_east_rts_i)
   );
-  tc_digital_io #(
-    .VerticalIO(1'b1)
-  ) flow_control_east_cts_o_io (
+  tc_digital_io flow_control_east_cts_o_io (
       .data_i(flow_control_east_cts_o),
       .data_o(),
       .io_direction_oe_ni(1'b0),
@@ -364,9 +366,7 @@ module hemaia (
       .io_pulldown_en_i(1'b0),
       .io(io_west_test_being_requested_i)
   );
-  tc_digital_io #(
-    .VerticalIO(1'b1)
-  ) west_test_request_o_io (
+  tc_digital_io west_test_request_o_io (
       .data_i(west_test_request_o),
       .data_o(),
       .io_direction_oe_ni(1'b0),
@@ -395,7 +395,9 @@ module hemaia (
       .io_pulldown_en_i(1'b0),
       .io(io_flow_control_west_cts_i)
   );
-  tc_digital_io flow_control_west_rts_i_io (
+  tc_digital_io #(
+    .VerticalIO(1'b1)
+  ) flow_control_west_rts_i_io (
       .data_i(1'b0),
       .data_o(flow_control_west_rts_i),
       .io_direction_oe_ni(1'b1),
@@ -593,9 +595,7 @@ module hemaia (
       .io_pulldown_en_i(1'b0),
       .io(io_uart_rts_no)
   );
-  tc_digital_io #(
-    .VerticalIO(1'b1)
-  ) uart_cts_ni_io (
+  tc_digital_io uart_cts_ni_io (
       .data_i(1'b0),
       .data_o(uart_cts_ni),
       .io_direction_oe_ni(1'b1),
@@ -712,9 +712,7 @@ module hemaia (
   logic jtag_tms_i;
   logic jtag_tdi_i;
   logic jtag_tdo_o;
-  tc_digital_io #(
-    .VerticalIO(1'b1)
-  ) jtag_trst_ni_io (
+  tc_digital_io jtag_trst_ni_io (
       .data_i(1'b0),
       .data_o(jtag_trst_ni),
       .io_direction_oe_ni(1'b1),
