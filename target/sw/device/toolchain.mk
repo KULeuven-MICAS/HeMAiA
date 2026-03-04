@@ -48,6 +48,7 @@ RISCV_CFLAGS += -mcmodel=medany
 RISCV_CFLAGS += -ffast-math
 RISCV_CFLAGS += -fno-builtin-printf
 RISCV_CFLAGS += -fno-builtin-sqrtf
+RISCV_CFLAGS += $(USER_FLAGS)
 RISCV_CFLAGS += -fno-common
 RISCV_CFLAGS += -fopenmp
 RISCV_CFLAGS += -ftls-model=local-exec

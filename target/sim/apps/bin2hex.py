@@ -5,6 +5,7 @@ import os
 # Convert a binary file to a hex string and save it to a text file
 def binary_to_hex(input_binary_file, output_text_file, chunk_size):
     try:
+        print(f"Converting {input_binary_file} to hex in {output_text_file} with chunk size {chunk_size}...", flush=True)
         # Open the binary file in read-binary mode
         with open(input_binary_file, 'rb') as bin_file:
             binary_data = bin_file.read()  # Read the entire binary file

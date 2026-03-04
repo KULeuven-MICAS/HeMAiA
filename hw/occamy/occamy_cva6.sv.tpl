@@ -153,8 +153,8 @@ module ${name}_cva6_ara import ${name}_pkg::*; (
   localparam CVA6ConfigDcacheSetAssoc = 4;
   localparam CVA6ConfigDcacheLineWidth = 256;
 
-  localparam CVA6ConfigDcacheFlushOnFence = 1'b0;
-  localparam CVA6ConfigDcacheInvalidateOnFlush = 1'b0;
+  localparam CVA6ConfigDcacheFlushOnFence = 1'b1;
+  localparam CVA6ConfigDcacheInvalidateOnFlush = 1'b1;
 
   localparam CVA6ConfigDcacheIdWidth = 1;
   localparam CVA6ConfigMemTidWidth = 2;

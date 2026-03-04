@@ -62,7 +62,7 @@ _snitch_park:
     wfi
 
 _snitch_resume:
-    la      t0, __soc_ctrl_scratch1
+    la      t0, __soc_ctrl_scratch0
     lw      t0, 0(t0)
     jalr    ra, 0(t0)
     j       _snitch_park

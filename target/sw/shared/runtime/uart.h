@@ -9,7 +9,7 @@
 #include "chip_id.h"
 
 #include "occamy_base_addr.h"
-
+#include "heterogeneous_runtime.h"
 #define UART_RBR UART_BASE_ADDR + 0
 #define UART_THR UART_BASE_ADDR + 0
 #define UART_INTERRUPT_ENABLE UART_BASE_ADDR + 4
@@ -101,3 +101,4 @@ inline static uint8_t scan_char(uintptr_t address_prefix) {
 
 int printf(const char *fmt, ...);
 int scanf(const char *fmt, ...);
+int printf_safe(const char *fmt, ...);

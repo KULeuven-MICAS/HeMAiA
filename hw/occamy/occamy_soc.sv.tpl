@@ -166,26 +166,24 @@ module ${name}_soc
     .axi_resp_i (${cva6_mst.rsp_name()})
   );
 
-  % for i in range(nr_s1_quadrants):
-  //////////////////////
-  // S1 Quadrant ${i} //
-  //////////////////////
+  //////////
+  // Quad //
+  //////////
   <%
     #// Derived parameters
-    nr_cores_s1_quadrant = nr_cores_quadrant
-    lower_core = i * nr_cores_s1_quadrant + 1
+    nr_cores_per_quad = nr_cores_quadrant
+    lower_core =  1
     #// narrow xbar -> quad & quad -> narrow xbar
-    narrow_in = soc_narrow_xbar.__dict__["out_s1_quadrant_{}".format(i)].cut(context, cuts_narrow_to_quad, name="narrow_in_{}".format(i))
-    narrow_out = soc_narrow_xbar.__dict__["in_s1_quadrant_{}".format(i)].copy(name="narrow_out_{}".format(i)).declare(context)
-    narrow_out.cut(context, cuts_quad_to_narrow, name="narrow_out_cut_{}".format(i), to=soc_narrow_xbar.__dict__["in_s1_quadrant_{}".format(i)])
+    narrow_in = soc_narrow_xbar.out_quad.cut(context, cuts_narrow_to_quad, name="narrow_in")
+    narrow_out = soc_narrow_xbar.in_quad.copy(name="narrow_out").declare(context)
+    narrow_out.cut(context, cuts_quad_to_narrow, name="narrow_out_cut", to=soc_narrow_xbar.in_quad)
     #// wide xbar -> quad & quad -> wide xbar
-    wide_in = soc_wide_xbar.__dict__["out_quadrant_{}".format(i)].cut(context, cuts_wide_to_quad, name="wide_in_{}".format(i))
-    #//wide_out = quadrant_pre_xbars[i].in_quadrant.copy(name="wide_out_{}".format(i)).declare(context)
-    wide_out = soc_wide_xbar.__dict__["in_quadrant_{}".format(i)].copy(name="wide_out_{}".format(i)).declare(context)
-    wide_out.cut(context, cuts_quad_to_wide, name="wide_out_cut_{}".format(i), to=soc_wide_xbar.__dict__["in_quadrant_{}".format(i)])
+    wide_in = soc_wide_xbar.out_quad.cut(context, cuts_wide_to_quad, name="wide_in")
+    wide_out = soc_wide_xbar.in_quad.copy(name="wide_out").declare(context)
+    wide_out.cut(context, cuts_quad_to_wide, name="wide_out_cut", to=soc_wide_xbar.in_quad)
   %>\
 
-  ${name}_quadrant_s1 i_${name}_quadrant_s1_${i} (
+  ${name}_quad i_${name}_quad (
     .clk_i (clk_i),
     .rst_ni (rst_ni),
     .clk_acc_i (clk_acc_i),
@@ -194,8 +192,8 @@ module ${name}_soc
     .boot_addr_i (boot_addr_i[31:0]),
     .chip_id_i (chip_id_i),
     .meip_i ('0),
-    .mtip_i (mtip_i[${lower_core + nr_cores_s1_quadrant - 1}:${lower_core}]),
-    .msip_i (msip_i[${lower_core + nr_cores_s1_quadrant - 1}:${lower_core}]),
+    .mtip_i (mtip_i[${lower_core + nr_cores_per_quad - 1}:${lower_core}]),
+    .msip_i (msip_i[${lower_core + nr_cores_per_quad - 1}:${lower_core}]),
     .quadrant_narrow_out_req_o (${narrow_out.req_name()}),
     .quadrant_narrow_out_rsp_i (${narrow_out.rsp_name()}),
     .quadrant_narrow_in_req_i (${narrow_in.req_name()}),
@@ -207,7 +205,6 @@ module ${name}_soc
     .sram_cfg_i (sram_cfgs_i.quadrant)
   );
 
-  % endfor
 
   ////////////////
   // SPM NARROW //

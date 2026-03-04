@@ -14,7 +14,6 @@
 #include <stdbool.h>
 #include "hw_mailbox_decls.h"
 #include "mailbox.h"
-#include "io.h"
 
 // Status bit semantics (mirrors host-side comments):
 // Bit0: EMPTY (1 means read FIFO empty)

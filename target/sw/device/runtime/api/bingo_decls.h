@@ -3,6 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Fanchen Kong <fanchen.kong@kuleuven.be>
+
+typedef struct {
+  uint32_t dev_arg_list_ptr;
+  uint32_t dev_kernel_list_ptr;
+  uint32_t gid_to_dev_tid_list_ptr;
+} bingo_hw_offload_unit_t;
+
+
 typedef struct {
     // Here are the fields that are used by the communication between the host and the cluster
     volatile struct l2_layout *l2l_ptr;       // pointer to the L2 layout
@@ -22,7 +30,7 @@ typedef struct {
     // Here are the fields for performance monitoring
     uint32_t start_cycles;           // start cycles of the offloaded function
     uint32_t end_cycles;             // end cycles of the offloaded function
-} bingo_offload_unit_t;
+} bingo_sw_offload_unit_t;
 
 #define BINGO_C2H_FLAG_MASK        0xFu
 #define BINGO_C2H_CLUSTER_MASK     0xFFu
@@ -49,19 +57,12 @@ static inline uint32_t bingo_c2h_msg_encode(bingo_c2h_msg_fields_t f) {
 /**
  * @brief Initialize the bingo offload unit
  */
-inline void bingo_offload_init();
+inline void bingo_sw_offload_init();
 
 /**
  * @brief send all workers in loop to exit()
  */
-inline void bingo_offload_exit();
-
-/**
- * @brief Enter the event unit loop, never exits
- *
- * @param cluster_core_idx cluster-local core index
- */
-inline void bingo_offload_loop(uint32_t cluster_core_idx);
+inline void bingo_sw_offload_exit();
 
 /**
  * @brief Set function to execute by `nthreads` number of threads
@@ -70,11 +71,11 @@ inline void bingo_offload_loop(uint32_t cluster_core_idx);
  * @param offloadFn pointer to worker function to be executed
  * @param offloadArg pointer to function arguments
  */
-inline void bingo_offload_dispatch(uint32_t (*offloadFn)(uint32_t), uint32_t offloadArg);
+inline void bingo_sw_offload_dispatch(uint32_t (*offloadFn)(uint32_t), uint32_t offloadArg);
 
 
 /**
  * @brief Debugging info to printf
  * @details
  */
-inline void bingo_offload_print_status();
+inline void bingo_sw_offload_print_status();

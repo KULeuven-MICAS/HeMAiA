@@ -28,22 +28,36 @@ docker run --workdir $(realpath ~) -it -v $(realpath ~):$(realpath ~) ghcr.io/ku
 
 Then you can go to the folder where the HeMAiA repo is located at, and execute the following three commands in the container. These four commands are necessary for either simulation or FPGA prototyping:
 
-- Compile the software. The default CFG is the target/rtl/cfg/hemaia_ci.hjson. You can override the configuration to the one you want:
+- Compile the software. The default CFG is `target/rtl/cfg/hemaia_ci.hjson`. You can override the configuration to the one you want:
 
 ```bash
 make sw CFG_OVERRIDE=target/rtl/cfg/<YOUR_CFG>
 ```
 
-We have two different software runtime:
+Alternatively, you can compile a specific software workload with more precise control using `make single-sw`:
 
-- offload / offload_multichip: After initialization of the SoC, CVA6 only transfers the function pointer to snitch core, and wait for interrupt from the snitch. After snitch execute the function, CVA6 is waken up again and collect the returned value from snitch.
+```bash
+make single-sw HOST_APP_TYPE=<TYPE> CHIP_TYPE=<CHIP> WORKLOAD=<WORKLOAD> DEV_APP=<DEV_APP>
+```
 
-- Bingo runtime: The new runtime that asks you to provide a big workload described in DFG, then CVA6 will schedule every workload automatically when one kernel's precondition is all satisfied. Also the stack is implemented for the dynamic memory management.
+The parameters for `single-sw` (and `apps`) are:
+- `HOST_APP_TYPE`: The category of the host application (`host_only`, `offload_legacy`, `offload_bingo_sw`, `offload_bingo_hw`).
+- `CHIP_TYPE`: The target platform configuration (`single_chip`, `multi_chip`).
+- `WORKLOAD`: The specific workload name (e.g., `gemm_tiled`).
+- `DEV_APP`: The target device-side accelerator (e.g., `snax-bingo-offload`).
 
-- Convert one compiled elf file to the hex file so that it can be preloaded into SRAM: Compile the App. The default app is specified in HOST_APP and DEVICE_APP. You can override this configuraiton by:
+We have different software runtime modes:
 
- ```bash
-make apps HOST_APP=<YOUR_HOST_APP_NAME> DEVICE_APP=<YOUR_DEVICE_APP_NAME>
+- **Offload Legacy**: After initialization of the SoC, CVA6 transfers the function pointer to a Snitch core and waits for an interrupt. After execution, CVA6 collects the returned values.
+
+- **Bingo SW Runtime**: A software-managed runtime where the CVA6 schedules workloads represented as Directed Acyclic Graphs (DAGs). Scheduling operates at the **cluster level**, meaning each node in the DFG corresponds to a cluster-wide task. The kernel handles intra-cluster synchronization, while the runtime manages global synchronization.
+
+- **Bingo HW Runtime**: A high-performance runtime that offloads scheduling to the dedicated **Bingo Hardware Manager**. A hardware scheduler manages ready/done queues, allowing cores to poll for tasks via specialized CSRs with zero-overhead dispatch. This enables **core-level scheduling** with fine task granularity. Both cluster-level and global-level synchronization are handled automatically by the hardware manager.
+
+- Convert one compiled elf file to the hex file so that it can be preloaded into SRAM:
+
+```bash
+make apps HOST_APP_TYPE=<TYPE> CHIP_TYPE=<CHIP> WORKLOAD=<WORKLOAD> DEV_APP=<DEV_APP>
 ```
 
 - Compile the Bootrom:

@@ -40,7 +40,7 @@ INCDIRS += $(SW_DIR)/device/runtime/snax/versacore
 INCDIRS += $(SW_DIR)/device/runtime/libsnaxkernel
 
 # vendor o1 heap
-INCDIRS += $(SW_DIR)/shared/vendor/o1heap/o1heap
+INCDIRS += $(SW_DIR)/shared/vendor/o1heap/o1heap64
 
 # Sources
 # SRCS += $(SRC_DIR)/occamy_start.S

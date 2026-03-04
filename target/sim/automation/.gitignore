@@ -4,8 +4,10 @@
 
 !/ci/
 /ci/*
-!/ci/task.yaml
-!/ci/start.py
+!/ci/task_vlt.yaml
+!/ci/task_vsim.yaml
+!/ci/start_vlt.py
+!/ci/start_vsim.py
 
 !/automated-xdma-transpose/
 /automated-xdma-transpose/*

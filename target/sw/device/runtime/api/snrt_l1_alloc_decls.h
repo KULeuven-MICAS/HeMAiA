@@ -5,11 +5,11 @@
 // Fanchen Kong <fanchen.kong@kuleuven.be>
 
 typedef struct {
-    O1HeapInstance *l1_heap_manager;
-    uint32_t l1_heap_start_addr;
-    uint32_t l1_heap_size;
+    uint64_t l1_heap_manager;
+    uint64_t l1_heap_start_addr;
+    uint64_t l1_heap_size;
 } snrt_l1_allocator_t;
 
 // inline uint32_t snrt_l1_malloc_init();
-inline uint32_t *snrt_l1_malloc(uint32_t size);
-inline void snrt_l1_free(uint32_t *addr);
+inline uint32_t snrt_l1_malloc(uint32_t size);
+inline void snrt_l1_free(uint32_t addr);

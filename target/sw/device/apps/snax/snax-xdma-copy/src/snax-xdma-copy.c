@@ -6,29 +6,16 @@
 
 #include "data.h"
 #include "snrt.h"
-
+#define TCDM_OFFSET 0x1000
 int main() {
     // Set err value for checking
     int err = 0;
     // Obtain the start address of the TCDM memory
     uint32_t dma_load_input_start;
     uint32_t dma_load_input_end;
-    uint32_t tcdm_baseaddress = snrt_cluster_base_addrl();
+    uint32_t tcdm_baseaddress = snrt_cluster_base_addrl() + TCDM_OFFSET;
 
     if (snrt_cluster_idx() == 0 && snrt_is_dm_core()) {
-        // First we need to transfer the input data from L3->TCDM
-        if (xdma_disable_dst_ext(0) != 0) {
-            printf("Error in disabling xdma writer extension 0\n");
-            err++;
-        }
-        if (xdma_disable_dst_ext(1) != 0) {
-            printf("Error in disabling xdma writer extension 1\n");
-            err++;
-        }
-        if (xdma_disable_src_ext(0) != 0) {
-            printf("Error in disabling xdma reader extension 0\n");
-            err++;
-        }
         xdma_memcpy_1d(data, (void *)tcdm_baseaddress,
                        data_size * sizeof(data[0]));
         int task_id = xdma_start();
@@ -40,21 +27,6 @@ int main() {
     snrt_global_barrier();
 
     if (snrt_cluster_idx() == 1 && snrt_is_dm_core()) {
-        // Normal copy evaluation
-        // Configure the extension
-        if (xdma_disable_dst_ext(0) != 0) {
-            printf("Error in disabling xdma writer extension 0\n");
-            err++;
-        }
-        if (xdma_disable_dst_ext(1) != 0) {
-            printf("Error in disabling xdma writer extension 1\n");
-            err++;
-        }
-        if (xdma_disable_src_ext(0) != 0) {
-            printf("Error in disabling xdma reader extension 0\n");
-            err++;
-        }
-
         xdma_memcpy_1d((void *)tcdm_baseaddress - cluster_offset,
                        (void *)tcdm_baseaddress, data_size * sizeof(data[0]));
         int task_id = xdma_start();

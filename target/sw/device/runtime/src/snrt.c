@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "snrt.h"
 
-#include "o1heap.c"
+
 #include "cluster_interrupts.c"
 #include "dma.c"
 #include "global_interrupts.c"
@@ -15,6 +15,7 @@
 #include "sys_dma.c"
 #include "team.c"
 #include "uart.c"
+#include "o1heap64.c"
 #include "snrt_l1_alloc.c"
 #include "bingo.c"
 #include "hemaia_cls.c"

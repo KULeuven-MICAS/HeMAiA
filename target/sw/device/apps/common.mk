@@ -69,7 +69,7 @@ INCDIRS += $(SNRT_DIR)/../math/src/include
 INCDIRS += $(SNRT_DIR)/../math/src/internal
 INCDIRS += $(SNRT_DIR)/../math/include/bits
 INCDIRS += $(SNRT_DIR)/../math/include
-INCDIRS += $(SW_DIR)/shared/vendor/o1heap/o1heap
+INCDIRS += $(SW_DIR)/shared/vendor/o1heap/o1heap64
 INCDIRS += $(SW_DIR)/shared/vendor/xdma
 # snax libs
 INCDIRS += $(RUNTIME_DIR)/snax/xdma

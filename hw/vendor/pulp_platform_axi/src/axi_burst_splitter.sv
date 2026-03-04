@@ -543,7 +543,9 @@ module axi_burst_splitter_counters #(
     .oup_req_i        ( cnt_req_i     ),
     .oup_data_o       ( cnt_r_idx     ),
     .oup_data_valid_o ( idq_oup_valid ),
-    .oup_gnt_o        ( idq_oup_gnt   )
+    .oup_gnt_o        ( idq_oup_gnt   ),
+    .empty_o          (/* keep open */),
+    .full_o           (/* keep open */)
   );
   assign idq_inp_req = alloc_req_i & alloc_gnt_o;
   assign alloc_gnt_o = idq_inp_gnt & |(cnt_free);

@@ -1,0 +1,31 @@
+runs:
+  - app_0: 
+    - HOST_APP_TYPE: offload_legacy
+    - CHIP_TYPE: single_chip
+    - WORKLOAD: None
+    - DEV_APP: snax-test-integration
+  - app_1:
+    - HOST_APP_TYPE: host_only
+    - CHIP_TYPE: single_chip
+    - WORKLOAD: clk_rst_configurator
+    - DEV_APP: None
+  - app_2: 
+    - HOST_APP_TYPE: offload_legacy
+    - CHIP_TYPE: single_chip
+    - WORKLOAD: None
+    - DEV_APP: snax-xdma-copy
+  - app_3: 
+    - HOST_APP_TYPE: offload_legacy
+    - CHIP_TYPE: single_chip
+    - WORKLOAD: None
+    - DEV_APP: snax-xdma-hazard
+  - app_4: 
+    - HOST_APP_TYPE: offload_bingo_sw
+    - CHIP_TYPE: single_chip
+    - WORKLOAD: dummy
+    - DEV_APP: snax-bingo-offload
+  - app_5:
+    - HOST_APP_TYPE: offload_bingo_hw
+    - CHIP_TYPE: single_chip
+    - WORKLOAD: dummy_double_buffer_ci
+    - DEV_APP: snax-bingo-offload    

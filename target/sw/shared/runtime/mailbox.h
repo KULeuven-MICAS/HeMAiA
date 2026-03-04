@@ -7,7 +7,7 @@
 #include <stdint.h>
 #include "occamy_base_addr.h"
 #include "occamy_memory_map.h"
-#define H2C_MAILBOX_BASE_ADDR QUAD_0_CFG_BASE_ADDR
+#define H2C_MAILBOX_BASE_ADDR H2C_MAILBOX_0_BASE_ADDR
 
 #define MAILBOX_WRITE_DATA_ADDR_OFFSET           0
 #define MAILBOX_READ_DATA_ADDR_OFFSET            1

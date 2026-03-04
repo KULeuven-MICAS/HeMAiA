@@ -20,10 +20,10 @@ package ${name}_pkg;
   localparam int unsigned NarrowUserWidth = ${narrow_user_width};
   localparam int unsigned WideUserWidth = ${wide_user_width};
 
-  localparam int unsigned NrClustersS1Quadrant = ${nr_clusters_s1_quadrant};
-  localparam int unsigned NrCoresCluster [NrClustersS1Quadrant] = '${core_per_cluster};
-  localparam int unsigned NrCoresClusterOffset [NrClustersS1Quadrant] = '${nr_cores_cluster_offset};
-  localparam int unsigned NrCoresS1Quadrant = ${nr_cores_quadrant};
+  localparam int unsigned NrClustersPerQuad = ${nr_clusters_per_quadrant};
+  localparam int unsigned NrCoresPerCluster [NrClustersPerQuad] = '${core_per_cluster};
+  localparam int unsigned NrCoresPerClusterOffset [NrClustersPerQuad] = '${nr_cores_cluster_offset};
+  localparam int unsigned NrCoresPerQuad = ${nr_cores_quadrant};
 
   // Memory cut configurations: one per memory parameterization
   // SRAM configurations
@@ -120,14 +120,29 @@ package ${name}_pkg;
   localparam addr_t ClusterBaseOffset = ${cluster_base_addr};
   /// The address space set aside for each slave.
   localparam addr_t ClusterAddressSpace = ${cluster_base_offset};
-  /// The address space of a single S1 quadrant.
-  localparam addr_t S1QuadrantAddressSpace = ClusterAddressSpace * NrClustersS1Quadrant;
-  /// The base offset of the quadrant configuration region.
-  localparam addr_t S1QuadrantCfgBaseOffset = ${quad_cfg_base_addr};
+  /// The address space of a single quad.
+  localparam addr_t QuadAddressSpace = ClusterAddressSpace * NrClustersPerQuad;
+  /// The base offset of the quad configuration region.
+  localparam addr_t QuadAXILiteNarrowBaseAddr = ${quad_axi_lite_narrow_base_addr};
   /// The address space set aside for the configuration of each slave.
-  localparam addr_t S1QuadrantCfgAddressSpace = ${quad_cfg_base_offset};
+  localparam addr_t QuadAXILiteNarrowAddressSpace = ${quad_axi_lite_narrow_base_offset};
   /// The host to cluster mailbox allocated space
   localparam addr_t H2CMailboxAddressSpace = ${h2c_mailbox_length};
+  /// The base offset of the quad axi lite region
+  localparam addr_t QuadAXILiteBaseAddr = ${quad_axi_lite_base_addr};
+  /// The address space for quad axi lite 
+  localparam addr_t QuadAXILiteAddressSpace = ${quad_axi_lite_base_offset};
+
+
+  typedef struct packed {
+    addr_t         addr;
+    logic [31:0]   data;
+    logic          write;
+  } csr_req_t;
+
+  typedef struct packed {
+    logic [31:0]   data;
+  } csr_rsp_t;
 
 
   ${package}
