@@ -2,3 +2,4 @@
 /xgui
 /define-sources.tcl
 .Xil/
+component.xml
