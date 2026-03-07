@@ -20,7 +20,7 @@ set script_folder [_tcl::get_script_folder]
 ################################################################
 # Check if script is running in correct Vivado version.
 ################################################################
-set scripts_vivado_version 2023.2
+set scripts_vivado_version 2025.1
 set current_vivado_version [version -short]
 
 if { [string first $scripts_vivado_version $current_vivado_version] == -1 } {
@@ -130,14 +130,14 @@ set bCheckIPsPassed 1
 set bCheckIPs 1
 if { $bCheckIPs == 1 } {
    set list_check_ips "\ 
-xilinx.com:ip:xlconstant:1.1\
-xilinx.com:ip:xlconcat:2.1\
-xilinx.com:ip:util_vector_logic:2.0\
-xilinx.com:ip:util_reduced_logic:2.0\
-xilinx.com:ip:xlslice:1.0\
 MICAS_KUL:user:occamy_chip:1.0\
 xilinx.com:ip:axis_vio:1.0\
 xilinx.com:ip:versal_cips:3.4\
+xilinx.com:inline_hdl:ilslice:1.0\
+xilinx.com:inline_hdl:ilconstant:1.0\
+xilinx.com:inline_hdl:ilconcat:1.0\
+xilinx.com:inline_hdl:ilreduced_logic:1.0\
+xilinx.com:inline_hdl:ilvector_logic:1.0\
 "
 
    set list_ips_missing ""
@@ -224,41 +224,7 @@ proc create_root_design { parentCell } {
   set east_test_being_requested_i_0 [ create_bd_port -dir I east_test_being_requested_i_0 ]
   set flow_control_east_cts_i_0 [ create_bd_port -dir I flow_control_east_cts_i_0 ]
   set flow_control_east_rts_i_0 [ create_bd_port -dir I flow_control_east_rts_i_0 ]
-
-  # Create instance: c_high, and set properties
-  set c_high [ create_bd_cell -type ip -vlnv xilinx.com:ip:xlconstant:1.1 c_high ]
-
-  # Create instance: c_low, and set properties
-  set c_low [ create_bd_cell -type ip -vlnv xilinx.com:ip:xlconstant:1.1 c_low ]
-  set_property CONFIG.CONST_VAL {0} $c_low
-
-
-  # Create instance: concat_rst_core, and set properties
-  set concat_rst_core [ create_bd_cell -type ip -vlnv xilinx.com:ip:xlconcat:2.1 concat_rst_core ]
-
-  # Create instance: rst_core_inv, and set properties
-  set rst_core_inv [ create_bd_cell -type ip -vlnv xilinx.com:ip:util_vector_logic:2.0 rst_core_inv ]
-  set_property -dict [list \
-    CONFIG.C_OPERATION {not} \
-    CONFIG.C_SIZE {1} \
-  ] $rst_core_inv
-
-
-  # Create instance: rst_or_core, and set properties
-  set rst_or_core [ create_bd_cell -type ip -vlnv xilinx.com:ip:util_reduced_logic:2.0 rst_or_core ]
-  set_property -dict [list \
-    CONFIG.C_OPERATION {or} \
-    CONFIG.C_SIZE {2} \
-  ] $rst_or_core
-
-
-  # Create instance: xlslice_1, and set properties
-  set xlslice_1 [ create_bd_cell -type ip -vlnv xilinx.com:ip:xlslice:1.0 xlslice_1 ]
-  set_property -dict [list \
-    CONFIG.DIN_FROM {3} \
-    CONFIG.DOUT_WIDTH {4} \
-  ] $xlslice_1
-
+  set gpio_d_o [ create_bd_port -dir O -from 3 -to 0 gpio_d_o ]
 
   # Create instance: occamy_chip, and set properties
   set occamy_chip [ create_bd_cell -type ip -vlnv MICAS_KUL:user:occamy_chip:1.0 occamy_chip ]
@@ -340,46 +306,134 @@ proc create_root_design { parentCell } {
       SMON_MEAS153 {{ALARM_ENABLE 0} {ALARM_LOWER 0.00} {ALARM_UPPER 2.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {2 V unipolar}} {NAME VP_VN} {SUPPLY_NUM 6}} \
       SMON_TEMP_AVERAGING_SAMPLES {0} \
     } \
+    CONFIG.PS_PMC_CONFIG_APPLIED {1} \
   ] $versal_cips_0
 
 
+  # Create instance: ilslice_0, and set properties
+  set ilslice_0 [ create_bd_cell -type inline_hdl -vlnv xilinx.com:inline_hdl:ilslice:1.0 ilslice_0 ]
+  set_property -dict [list \
+    CONFIG.DIN_FROM {3} \
+    CONFIG.DOUT_WIDTH {4} \
+  ] $ilslice_0
+
+
+  # Create instance: c_high, and set properties
+  set c_high [ create_bd_cell -type inline_hdl -vlnv xilinx.com:inline_hdl:ilconstant:1.0 c_high ]
+
+  # Create instance: c_chipid, and set properties
+  set c_chipid [ create_bd_cell -type inline_hdl -vlnv xilinx.com:inline_hdl:ilconstant:1.0 c_chipid ]
+  set_property -dict [list \
+    CONFIG.CONST_VAL {0} \
+    CONFIG.CONST_WIDTH {8} \
+  ] $c_chipid
+
+
+  # Create instance: c_gpio, and set properties
+  set c_gpio [ create_bd_cell -type inline_hdl -vlnv xilinx.com:inline_hdl:ilconstant:1.0 c_gpio ]
+  set_property -dict [list \
+    CONFIG.CONST_VAL {0} \
+    CONFIG.CONST_WIDTH {32} \
+  ] $c_gpio
+
+
+  # Create instance: c_low, and set properties
+  set c_low [ create_bd_cell -type inline_hdl -vlnv xilinx.com:inline_hdl:ilconstant:1.0 c_low ]
+  set_property CONFIG.CONST_VAL {0} $c_low
+
+
+  # Create instance: concat_rst_core, and set properties
+  set concat_rst_core [ create_bd_cell -type inline_hdl -vlnv xilinx.com:inline_hdl:ilconcat:1.0 concat_rst_core ]
+
+  # Create instance: reduce_or_core, and set properties
+  set reduce_or_core [ create_bd_cell -type inline_hdl -vlnv xilinx.com:inline_hdl:ilreduced_logic:1.0 reduce_or_core ]
+  set_property -dict [list \
+    CONFIG.C_OPERATION {or} \
+    CONFIG.C_SIZE {2} \
+  ] $reduce_or_core
+
+
+  # Create instance: ilvector_logic_0, and set properties
+  set ilvector_logic_0 [ create_bd_cell -type inline_hdl -vlnv xilinx.com:inline_hdl:ilvector_logic:1.0 ilvector_logic_0 ]
+  set_property -dict [list \
+    CONFIG.C_OPERATION {not} \
+    CONFIG.C_SIZE {1} \
+  ] $ilvector_logic_0
+
+
   # Create port connections
-  connect_bd_net -net Net [get_bd_ports east_d2d_io_0] [get_bd_pins occamy_chip/east_d2d_io]
-  connect_bd_net -net axis_vio_0_probe_out2 [get_bd_pins axis_vio_0/probe_out2] [get_bd_pins occamy_chip/test_mode_i]
-  connect_bd_net -net bootmode [get_bd_pins axis_vio_0/probe_out1] [get_bd_pins occamy_chip/boot_mode_i]
-  connect_bd_net -net c_high_dout [get_bd_pins c_high/dout] [get_bd_ports vref_vdd_o] [get_bd_pins occamy_chip/jtag_trst_ni]
-  connect_bd_net -net c_low_dout [get_bd_pins c_low/dout] [get_bd_ports vref_gnd_o] [get_bd_pins occamy_chip/gpio_d_i] [get_bd_pins occamy_chip/chip_id_i]
-  connect_bd_net -net clk_wizard_0_clk_core [get_bd_pins versal_cips_0/pl0_ref_clk] [get_bd_pins axis_vio_0/clk] [get_bd_pins occamy_chip/clk_i]
-  connect_bd_net -net east_test_being_requested_i_0_1 [get_bd_ports east_test_being_requested_i_0] [get_bd_pins occamy_chip/east_test_being_requested_i]
-  connect_bd_net -net flow_control_east_cts_i_0_1 [get_bd_ports flow_control_east_cts_i_0] [get_bd_pins occamy_chip/flow_control_east_cts_i]
-  connect_bd_net -net flow_control_east_rts_i_0_1 [get_bd_ports flow_control_east_rts_i_0] [get_bd_pins occamy_chip/flow_control_east_rts_i]
-  connect_bd_net -net jtag_tck_i_1 [get_bd_ports jtag_tck_i] [get_bd_pins occamy_chip/jtag_tck_i]
+  connect_bd_net -net Net  [get_bd_ports east_d2d_io_0] \
+  [get_bd_pins occamy_chip/east_d2d_io]
+  connect_bd_net -net axis_vio_0_probe_out2  [get_bd_pins axis_vio_0/probe_out2] \
+  [get_bd_pins occamy_chip/test_mode_i]
+  connect_bd_net -net bootmode  [get_bd_pins axis_vio_0/probe_out1] \
+  [get_bd_pins occamy_chip/boot_mode_i]
+  connect_bd_net -net c_chipid_dout  [get_bd_pins c_chipid/dout] \
+  [get_bd_pins occamy_chip/chip_id_i]
+  connect_bd_net -net c_gpio_dout  [get_bd_pins c_gpio/dout] \
+  [get_bd_pins occamy_chip/gpio_d_i]
+  connect_bd_net -net clk_wizard_0_clk_core  [get_bd_pins versal_cips_0/pl0_ref_clk] \
+  [get_bd_pins axis_vio_0/clk] \
+  [get_bd_pins occamy_chip/clk_i]
+  connect_bd_net -net concat_rst_core_dout  [get_bd_pins concat_rst_core/dout] \
+  [get_bd_pins reduce_or_core/Op1]
+  connect_bd_net -net east_test_being_requested_i_0_1  [get_bd_ports east_test_being_requested_i_0] \
+  [get_bd_pins occamy_chip/east_test_being_requested_i]
+  connect_bd_net -net flow_control_east_cts_i_0_1  [get_bd_ports flow_control_east_cts_i_0] \
+  [get_bd_pins occamy_chip/flow_control_east_cts_i]
+  connect_bd_net -net flow_control_east_rts_i_0_1  [get_bd_ports flow_control_east_rts_i_0] \
+  [get_bd_pins occamy_chip/flow_control_east_rts_i]
+  connect_bd_net -net ilconstant_0_dout  [get_bd_pins c_high/dout] \
+  [get_bd_pins occamy_chip/jtag_trst_ni] \
+  [get_bd_ports vref_vdd_o]
+  connect_bd_net -net ilconstant_0_dout1  [get_bd_pins c_low/dout] \
+  [get_bd_ports vref_gnd_o]
+  connect_bd_net -net ilreduced_logic_0_Res  [get_bd_pins reduce_or_core/Res] \
+  [get_bd_pins ilvector_logic_0/Op1]
+  connect_bd_net -net ilslice_0_Dout  [get_bd_pins ilslice_0/Dout] \
+  [get_bd_ports gpio_d_o]
+  connect_bd_net -net jtag_tck_i_1  [get_bd_ports jtag_tck_i] \
+  [get_bd_pins occamy_chip/jtag_tck_i]
   set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_nets jtag_tck_i_1]
-  connect_bd_net -net jtag_tdi_i_1 [get_bd_ports jtag_tdi_i] [get_bd_pins occamy_chip/jtag_tdi_i]
+  connect_bd_net -net jtag_tdi_i_1  [get_bd_ports jtag_tdi_i] \
+  [get_bd_pins occamy_chip/jtag_tdi_i]
   set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_nets jtag_tdi_i_1]
-  connect_bd_net -net jtag_tms_i_1 [get_bd_ports jtag_tms_i] [get_bd_pins occamy_chip/jtag_tms_i]
+  connect_bd_net -net jtag_tms_i_1  [get_bd_ports jtag_tms_i] \
+  [get_bd_pins occamy_chip/jtag_tms_i]
   set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_nets jtag_tms_i_1]
-  connect_bd_net -net occamy_chip_0_gpio_d_o [get_bd_pins occamy_chip/gpio_d_o] [get_bd_pins xlslice_1/Din]
-  connect_bd_net -net occamy_chip_0_jtag_tdo_o [get_bd_pins occamy_chip/jtag_tdo_o] [get_bd_ports jtag_tdo_o]
+  connect_bd_net -net occamy_chip_0_jtag_tdo_o  [get_bd_pins occamy_chip/jtag_tdo_o] \
+  [get_bd_ports jtag_tdo_o]
   set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_nets occamy_chip_0_jtag_tdo_o]
-  connect_bd_net -net occamy_chip_0_uart_rts_no [get_bd_pins occamy_chip/uart_rts_no] [get_bd_ports uart_rts_no]
+  connect_bd_net -net occamy_chip_0_uart_rts_no  [get_bd_pins occamy_chip/uart_rts_no] \
+  [get_bd_ports uart_rts_no]
   set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_nets occamy_chip_0_uart_rts_no]
-  connect_bd_net -net occamy_chip_0_uart_tx_o [get_bd_pins occamy_chip/uart_tx_o] [get_bd_ports uart_tx_o]
+  connect_bd_net -net occamy_chip_0_uart_tx_o  [get_bd_pins occamy_chip/uart_tx_o] \
+  [get_bd_ports uart_tx_o]
   set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_nets occamy_chip_0_uart_tx_o]
-  connect_bd_net -net occamy_chip_east_test_request_o [get_bd_pins occamy_chip/east_test_request_o] [get_bd_ports east_test_request_o_0]
-  connect_bd_net -net occamy_chip_flow_control_east_cts_o [get_bd_pins occamy_chip/flow_control_east_cts_o] [get_bd_ports flow_control_east_cts_o_0]
-  connect_bd_net -net occamy_chip_flow_control_east_rts_o [get_bd_pins occamy_chip/flow_control_east_rts_o] [get_bd_ports flow_control_east_rts_o_0]
-  connect_bd_net -net occamy_rst [get_bd_pins rst_or_core/Res] [get_bd_pins rst_core_inv/Op1]
-  connect_bd_net -net occamy_rstn [get_bd_pins rst_core_inv/Res] [get_bd_pins occamy_chip/rst_ni] [get_bd_pins occamy_chip/rst_periph_ni]
-  connect_bd_net -net reset [get_bd_pins axis_vio_0/probe_out0] [get_bd_pins concat_rst_core/In1]
-  connect_bd_net -net reset_button [get_bd_ports reset] [get_bd_pins concat_rst_core/In0]
-  connect_bd_net -net uart_cts_ni_0_1 [get_bd_ports uart_cts_ni] [get_bd_pins occamy_chip/uart_cts_ni]
+  connect_bd_net -net occamy_chip_east_test_request_o  [get_bd_pins occamy_chip/east_test_request_o] \
+  [get_bd_ports east_test_request_o_0]
+  connect_bd_net -net occamy_chip_flow_control_east_cts_o  [get_bd_pins occamy_chip/flow_control_east_cts_o] \
+  [get_bd_ports flow_control_east_cts_o_0]
+  connect_bd_net -net occamy_chip_flow_control_east_rts_o  [get_bd_pins occamy_chip/flow_control_east_rts_o] \
+  [get_bd_ports flow_control_east_rts_o_0]
+  connect_bd_net -net occamy_chip_gpio_d_o  [get_bd_pins occamy_chip/gpio_d_o] \
+  [get_bd_pins ilslice_0/Din]
+  connect_bd_net -net occamy_rstn  [get_bd_pins ilvector_logic_0/Res] \
+  [get_bd_pins occamy_chip/rst_ni] \
+  [get_bd_pins occamy_chip/rst_periph_ni]
+  connect_bd_net -net reset  [get_bd_pins axis_vio_0/probe_out0] \
+  [get_bd_pins concat_rst_core/In1]
+  connect_bd_net -net reset_button  [get_bd_ports reset] \
+  [get_bd_pins concat_rst_core/In0]
+  connect_bd_net -net uart_cts_ni_0_1  [get_bd_ports uart_cts_ni] \
+  [get_bd_pins occamy_chip/uart_cts_ni]
   set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_nets uart_cts_ni_0_1]
-  connect_bd_net -net uart_rx_i_0_1 [get_bd_ports uart_rx_i] [get_bd_pins occamy_chip/uart_rx_i]
+  connect_bd_net -net uart_rx_i_0_1  [get_bd_ports uart_rx_i] \
+  [get_bd_pins occamy_chip/uart_rx_i]
   set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_nets uart_rx_i_0_1]
-  connect_bd_net -net versal_cips_0_pl1_ref_clk [get_bd_pins versal_cips_0/pl1_ref_clk] [get_bd_pins occamy_chip/rtc_i]
-  connect_bd_net -net versal_cips_0_pl2_ref_clk [get_bd_pins versal_cips_0/pl2_ref_clk] [get_bd_pins occamy_chip/clk_periph_i]
-  connect_bd_net -net xlconcat_2_dout [get_bd_pins concat_rst_core/dout] [get_bd_pins rst_or_core/Op1]
+  connect_bd_net -net versal_cips_0_pl1_ref_clk  [get_bd_pins versal_cips_0/pl1_ref_clk]
+  connect_bd_net -net versal_cips_0_pl2_ref_clk  [get_bd_pins versal_cips_0/pl2_ref_clk] \
+  [get_bd_pins occamy_chip/clk_periph_i]
 
   # Create address segments
 
