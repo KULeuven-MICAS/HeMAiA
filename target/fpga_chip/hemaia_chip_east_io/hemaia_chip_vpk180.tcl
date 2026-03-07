@@ -36,6 +36,13 @@ set_property top occamy_chip [current_fileset]
 
 update_compile_order -fileset sources_1
 set adder_ip [import_ip c_adder_256.xci]
+
+# upgrade ips 
+set locked_ips [get_ips -filter {IS_LOCKED == 1}]
+if {[llength $locked_ips] > 0} {
+    upgrade_ip $locked_ips
+}
+
 synth_ip $adder_ip
 
 # This is just a quick synthesize to ensure there is no errors in source code
