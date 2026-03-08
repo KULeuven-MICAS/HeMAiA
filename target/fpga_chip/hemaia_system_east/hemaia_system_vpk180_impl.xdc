@@ -14,9 +14,9 @@ set d2d_fc_rts_o_port flow_control_east_rts_o_0
 set d2d_test_req_port east_test_request_o_0
 set d2d_test_brq_port east_test_being_requested_i_0
 
-set_property -dict "PACKAGE_PIN BT37 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[0]"]
+set_property -dict "PACKAGE_PIN BT37 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[0]"] 
 set_property -dict "PACKAGE_PIN BU37 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[1]"] 
-set_property -dict "PACKAGE_PIN BT39 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[2]"]
+set_property -dict "PACKAGE_PIN BT39 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[2]"]  
 set_property -dict "PACKAGE_PIN BR39 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[3]"]
 set_property -dict "PACKAGE_PIN BR38 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[4]"]
 set_property -dict "PACKAGE_PIN BR37 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[5]"]
@@ -35,8 +35,8 @@ set_property -dict "PACKAGE_PIN BY41 IOSTANDARD $iostd SLEW FAST" [get_ports "$d
 set_property -dict "PACKAGE_PIN BY39 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[18]"]
 set_property -dict "PACKAGE_PIN BW39 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[19]"]
 set_property -dict "PACKAGE_PIN CA37 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[38]"]
-set_property -dict "PACKAGE_PIN BY38 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[21]"]
-set_property -dict "PACKAGE_PIN BW41 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[39]"]
+set_property -dict "PACKAGE_PIN BY38 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[39]"]
+set_property -dict "PACKAGE_PIN BW41 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[22]"]
 set_property -dict "PACKAGE_PIN BV41 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[23]"]
 set_property -dict "PACKAGE_PIN BU42 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[24]"]
 set_property -dict "PACKAGE_PIN BU41 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[25]"]
@@ -52,8 +52,8 @@ set_property -dict "PACKAGE_PIN CC39 IOSTANDARD $iostd SLEW FAST" [get_ports "$d
 set_property -dict "PACKAGE_PIN CC38 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[35]"]
 set_property -dict "PACKAGE_PIN CB39 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[36]"]
 set_property -dict "PACKAGE_PIN CA38 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[37]"]
-set_property -dict "PACKAGE_PIN BV43 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[20]"]
-set_property -dict "PACKAGE_PIN BW42 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[22]"]
+set_property -dict "PACKAGE_PIN BV43 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[20]"] 
+set_property -dict "PACKAGE_PIN BW42 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[21]"] 
 set_property -dict "PACKAGE_PIN CC47 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[40]"]
 set_property -dict "PACKAGE_PIN CB46 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[41]"]
 set_property -dict "PACKAGE_PIN CD46 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[42]"]
