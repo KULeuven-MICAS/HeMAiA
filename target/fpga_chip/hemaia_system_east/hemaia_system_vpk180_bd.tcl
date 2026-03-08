@@ -20,7 +20,7 @@ set script_folder [_tcl::get_script_folder]
 ################################################################
 # Check if script is running in correct Vivado version.
 ################################################################
-set scripts_vivado_version 2025.1
+set scripts_vivado_version 2025.2
 set current_vivado_version [version -short]
 
 if { [string first $scripts_vivado_version $current_vivado_version] == -1 } {
@@ -384,8 +384,8 @@ proc create_root_design { parentCell } {
   connect_bd_net -net flow_control_east_rts_i_0_1  [get_bd_ports flow_control_east_rts_i_0] \
   [get_bd_pins occamy_chip/flow_control_east_rts_i]
   connect_bd_net -net ilconstant_0_dout  [get_bd_pins c_high/dout] \
-  [get_bd_pins occamy_chip/jtag_trst_ni] \
-  [get_bd_ports vref_vdd_o]
+  [get_bd_ports vref_vdd_o] \
+  [get_bd_pins occamy_chip/jtag_trst_ni]
   connect_bd_net -net ilconstant_0_dout1  [get_bd_pins c_low/dout] \
   [get_bd_ports vref_gnd_o]
   connect_bd_net -net ilreduced_logic_0_Res  [get_bd_pins reduce_or_core/Res] \
