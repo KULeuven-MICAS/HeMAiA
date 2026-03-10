@@ -89,3 +89,8 @@ runs:
     - CHIP_TYPE: multi_chip
     - WORKLOAD: system_xdma_copy
     - DEV_APP: None
+  - app_18:
+    - HOST_APP_TYPE: host_only
+    - CHIP_TYPE: multi_chip
+    - WORKLOAD: multi_d2d_streams
+    - DEV_APP: None

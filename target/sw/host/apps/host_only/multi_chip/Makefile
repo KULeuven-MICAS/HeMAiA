@@ -8,6 +8,7 @@
 SUBDIRS = multichip_mailbox 
 SUBDIRS += multichip_sync
 SUBDIRS += system_xdma_copy
+SUBDIRS += multi_d2d_streams
 
 TARGET ?= all
 
