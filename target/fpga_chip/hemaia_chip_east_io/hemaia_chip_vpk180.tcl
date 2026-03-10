@@ -17,6 +17,19 @@ set project hemaia_chip_east
 create_project $project ./hemaia_chip_east -force -part xcvp1802-lsvc4072-2MP-e-S
 set_property XPM_LIBRARIES XPM_MEMORY [current_project]
 
+set adder_ip [import_ip c_adder_256.xci]
+
+# upgrade ips 
+set locked_ips [get_ips -filter {IS_LOCKED == 1}]
+if {[llength $locked_ips] > 0} {
+    upgrade_ip $locked_ips
+}
+
+# synth_ip $adder_ip
+generate_target all [get_ips c_adder_256]
+create_ip_run [get_ips c_adder_256]
+launch_runs c_adder_256_synth_1
+
 # Define sources
 source define-sources.tcl
 
@@ -35,17 +48,9 @@ set_property IS_ENABLED 0 [get_files -regex .*/reg_intf.sv]
 set_property top occamy_chip [current_fileset]
 
 update_compile_order -fileset sources_1
-set adder_ip [import_ip c_adder_256.xci]
-
-# upgrade ips 
-set locked_ips [get_ips -filter {IS_LOCKED == 1}]
-if {[llength $locked_ips] > 0} {
-    upgrade_ip $locked_ips
-}
-
-synth_ip $adder_ip
 
 # This is just a quick synthesize to ensure there is no errors in source code
+wait_on_run c_adder_256_synth_1
 synth_design -rtl -name rtl_1
 
 ipx::package_project -root_dir . -vendor MICAS_KUL -library user -taxonomy /UserIP -set_current true
