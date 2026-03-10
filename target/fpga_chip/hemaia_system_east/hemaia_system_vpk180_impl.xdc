@@ -210,7 +210,7 @@ set_property IOSTANDARD LVCMOS15 [get_ports gpio_d_o[3]]
 # CPU_RESET pushbutton switch
 # SW4 is the reset button
 set_false_path -from [get_ports reset]
-set_false_path -from [get_pins hemaia_system_i/axis_vio_0/probe*]
+set_false_path -from [get_pins hemaia_system_i/axis_vio_0/probe_out0[0]]
 set_false_path -through [get_pins hemaia_system_i/occamy_chip/rst_ni]
 set_false_path -through [get_pins hemaia_system_i/occamy_chip/rst_periph_ni]
 set_property PACKAGE_PIN BT48 [get_ports reset]
