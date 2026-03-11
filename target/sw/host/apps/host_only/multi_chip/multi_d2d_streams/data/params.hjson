@@ -1,0 +1,3 @@
+{
+  size: 32768,  // Size of the data to be copied in bytes
+}
