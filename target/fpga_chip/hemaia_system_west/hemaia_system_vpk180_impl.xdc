@@ -120,7 +120,10 @@ set_property IOSTANDARD LVCMOS15 [get_ports gpio_d_o[3]]
 
 # CPU_RESET pushbutton switch
 # SW4 is the reset button
-set_false_path -from [get_ports reset] -to [all_registers]
+set_false_path -from [get_ports reset]
+set_false_path -from [get_pins hemaia_system_i/axis_vio_0/probe_out0[0]]
+set_false_path -through [get_pins hemaia_system_i/occamy_chip/rst_ni]
+set_false_path -through [get_pins hemaia_system_i/occamy_chip/rst_periph_ni]
 set_property PACKAGE_PIN BT48 [get_ports reset]
 set_property IOSTANDARD LVCMOS15 [get_ports reset]
 
@@ -331,6 +334,10 @@ set_clock_groups -asynchronous \
 #### The t-pin oddrs are active one cycle before the data
 set_multicycle_path -to [get_pins -hierarchical *oddre1_tpin/D*] 2
 
+
+### D2D false paths
+set_false_path -through [get_nets -hierarchical -filter {NAME =~ *false_path*}]
+set_false_path -through [get_pins -hierarchical -filter {NAME =~ *false_path*}]
 set_false_path -through [get_pins hemaia_system_i/occamy_chip/inst/i_d2d_link/*.i_phy_interface*/*tx_strength_thermometer_i*]
 set_false_path -through [get_pins {hemaia_system_i/occamy_chip/inst/i_d2d_link/i_controller_reg_to_hw/reg2hw[availability_register][*_link_available][q]}]
 set_false_path -through [get_nets hemaia_system_i/occamy_chip/inst/i_d2d_link/**/*false_path*]
@@ -373,6 +380,9 @@ group_path -default -through [get_pins -filter {NAME =~ "*/D"} -of [get_cells -h
 group_path -name {sdotp_fu0} -through [get_pins -filter {NAME =~ "*/D"} -of [get_cells -hier -filter { NAME =~  "*gen_inside_pipeline[0]*" && PARENT =~  "*fpnew_sdotp_multi*" }]]
 group_path -default -through [get_pins -filter {NAME =~ "*/D"} -of [get_cells -hier -filter { NAME =~  "*gen_inside_pipeline[0]*" && PARENT =~  "*fpnew_fma_multi*" }]]
 group_path -name {fma_fu0} -through [get_pins -filter {NAME =~ "*/D"} -of [get_cells -hier -filter { NAME =~  "*gen_inside_pipeline[0]*" && PARENT =~  "*fpnew_fma_multi*" }]]
+
+# Force bufg on out_clk of phy_digital mux
+set_property CLOCK_BUFFER_TYPE BUFG [get_nets -hierarchical -filter {NAME =~ *i_final_clk_mux/out_clk*}]
 
 ################################################################################
 # BIT_STREAM: Versal uses PS to configure PL. Still investigating how to configure... 
