@@ -101,5 +101,9 @@ int main()
             }
         }
     }
+
+    // All chips exit the simulation at the same time
+    chip_barrier(comm_buffer_ptr, 0x00, 0x11, 3);
+
     return 0;
 }
