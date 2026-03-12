@@ -23,7 +23,7 @@ The following files are released under Solderpad v0.51 (`SHL-0.51`) see `hw/LICE
 To get started, you need to use the following command to pull the correct version of SNAX Docker image and mount your home directory to the container: 
 
 ```bash
-docker run --workdir $(realpath ~) -it -v $(realpath ~):$(realpath ~) ghcr.io/kuleuven-micas/snax@sha256:4ff37cad4e85d6a898cda3232ee04a1210833eb4618d1f1fd183201c03c4c57c
+docker run --workdir $(realpath ~) -it -v $(realpath ~):$(realpath ~) ghcr.io/kuleuven-micas/hemaia:main
 ```
 
 Then you can go to the folder where the HeMAiA repo is located at, and execute the following three commands in the container. These four commands are necessary for either simulation or FPGA prototyping:

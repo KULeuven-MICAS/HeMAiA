@@ -11,6 +11,8 @@ int main() {
     uint8_t current_chip_id = get_current_chip_id();
 
     init_uart(current_chip_address_prefix, 32, 1);
+    // Enable vector extension
+    enable_vec();
     printf("Single-chip Offload HW Bingo Main\r\n");
     printf("Chip(%x, %x): [Host] Start Offloading Program\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
 

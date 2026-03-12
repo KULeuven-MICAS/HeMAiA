@@ -20,7 +20,7 @@ The sequence performed by this script is:
    tools not baked into the container.
 
 2. **Initialisation inside Docker.**  A container based on
-   ``ghcr.io/kuleuven-micas/snax@sha256:4ff37cad4e85d6a898cda3232ee04a1210833eb4618d1f1fd183201c03c4c57c``
+   ``ghcr.io/kuleuven-micas/hemaia:main``
    (or ``podman`` equivalent) is launched with the repository mounted at
    exactly the same path as on the host.  Inside this container the
    script runs ``target/tapeout/2_init_inside_docker.sh`` to generate
@@ -328,7 +328,7 @@ def main() -> None:
     task_base_dir = script_path.parent
     # Image digest for the SNAX toolchain
     docker_image = (
-        "ghcr.io/kuleuven-micas/snax@sha256:4ff37cad4e85d6a898cda3232ee04a1210833eb4618d1f1fd183201c03c4c57c"
+        "ghcr.io/kuleuven-micas/hemaia:main"
     )
     # Paths to initialisation scripts
     init_outside = repo_root / "target/tapeout/1_init_outside_docker.sh"

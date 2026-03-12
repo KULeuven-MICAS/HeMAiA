@@ -8,6 +8,7 @@
 SUBDIRS = hello_world
 SUBDIRS += clk_rst_configurator
 SUBDIRS += d2d_link_configurator
+SUBDIRS += ara_test
 TARGET ?= all
 
 .PHONY: all clean partial-build finalize-build $(SUBDIRS)
