@@ -186,9 +186,9 @@ set_false_path -through [get_pins hemaia_system_i/occamy_chip/inst/gpio_oe_o]
 
 
 ########## D2D #############
-set rx_clk_1_io_port "$d2d_io_port[1]"
-set rx_clk_2_io_port "$d2d_io_port[21]"
-set rx_clk_3_io_port "$d2d_io_port[41]"
+set rx_clk_1_io_port "$d2d_io_port[0]"
+set rx_clk_2_io_port "$d2d_io_port[20]"
+set rx_clk_3_io_port "$d2d_io_port[40]"
 set d2d_phy_clk clk_main 
 set d2d_clk_period [get_property PERIOD [get_clocks $d2d_phy_clk]]
 set d2d_path hemaia_system_i/occamy_chip/inst/i_d2d_link
