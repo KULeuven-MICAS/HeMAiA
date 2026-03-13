@@ -233,8 +233,10 @@ proc create_root_design { parentCell } {
   set axis_vio_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axis_vio:1.0 axis_vio_0 ]
   set_property -dict [list \
     CONFIG.C_NUM_PROBE_IN {0} \
-    CONFIG.C_NUM_PROBE_OUT {3} \
+    CONFIG.C_NUM_PROBE_OUT {5} \
     CONFIG.C_PROBE_OUT1_WIDTH {2} \
+    CONFIG.C_PROBE_OUT3_INIT_VAL {0x00} \
+    CONFIG.C_PROBE_OUT3_WIDTH {8} \
   ] $axis_vio_0
 
 
@@ -321,14 +323,6 @@ proc create_root_design { parentCell } {
   # Create instance: c_high, and set properties
   set c_high [ create_bd_cell -type inline_hdl -vlnv xilinx.com:inline_hdl:ilconstant:1.0 c_high ]
 
-  # Create instance: c_chipid, and set properties
-  set c_chipid [ create_bd_cell -type inline_hdl -vlnv xilinx.com:inline_hdl:ilconstant:1.0 c_chipid ]
-  set_property -dict [list \
-    CONFIG.CONST_VAL {0} \
-    CONFIG.CONST_WIDTH {8} \
-  ] $c_chipid
-
-
   # Create instance: c_gpio, and set properties
   set c_gpio [ create_bd_cell -type inline_hdl -vlnv xilinx.com:inline_hdl:ilconstant:1.0 c_gpio ]
   set_property -dict [list \
@@ -361,15 +355,25 @@ proc create_root_design { parentCell } {
   ] $ilvector_logic_0
 
 
+  # Create instance: test_or, and set properties
+  set test_or [ create_bd_cell -type inline_hdl -vlnv xilinx.com:inline_hdl:ilvector_logic:1.0 test_or ]
+  set_property -dict [list \
+    CONFIG.C_OPERATION {or} \
+    CONFIG.C_SIZE {1} \
+  ] $test_or
+
+
   # Create port connections
   connect_bd_net -net Net  [get_bd_ports east_d2d_io_0] \
   [get_bd_pins occamy_chip/east_d2d_io]
   connect_bd_net -net axis_vio_0_probe_out2  [get_bd_pins axis_vio_0/probe_out2] \
   [get_bd_pins occamy_chip/test_mode_i]
+  connect_bd_net -net axis_vio_0_probe_out3  [get_bd_pins axis_vio_0/probe_out3] \
+  [get_bd_pins occamy_chip/chip_id_i]
+  connect_bd_net -net axis_vio_0_probe_out4  [get_bd_pins axis_vio_0/probe_out4] \
+  [get_bd_pins test_or/Op1]
   connect_bd_net -net bootmode  [get_bd_pins axis_vio_0/probe_out1] \
   [get_bd_pins occamy_chip/boot_mode_i]
-  connect_bd_net -net c_chipid_dout  [get_bd_pins c_chipid/dout] \
-  [get_bd_pins occamy_chip/chip_id_i]
   connect_bd_net -net c_gpio_dout  [get_bd_pins c_gpio/dout] \
   [get_bd_pins occamy_chip/gpio_d_i]
   connect_bd_net -net clk_wizard_0_clk_core  [get_bd_pins versal_cips_0/pl0_ref_clk] \
@@ -378,7 +382,7 @@ proc create_root_design { parentCell } {
   connect_bd_net -net concat_rst_core_dout  [get_bd_pins concat_rst_core/dout] \
   [get_bd_pins reduce_or_core/Op1]
   connect_bd_net -net east_test_being_requested_i_0_1  [get_bd_ports east_test_being_requested_i_0] \
-  [get_bd_pins occamy_chip/east_test_being_requested_i]
+  [get_bd_pins test_or/Op2]
   connect_bd_net -net flow_control_east_cts_i_0_1  [get_bd_ports flow_control_east_cts_i_0] \
   [get_bd_pins occamy_chip/flow_control_east_cts_i]
   connect_bd_net -net flow_control_east_rts_i_0_1  [get_bd_ports flow_control_east_rts_i_0] \
@@ -392,6 +396,8 @@ proc create_root_design { parentCell } {
   [get_bd_pins ilvector_logic_0/Op1]
   connect_bd_net -net ilslice_0_Dout  [get_bd_pins ilslice_0/Dout] \
   [get_bd_ports gpio_d_o]
+  connect_bd_net -net ilvector_logic_1_Res  [get_bd_pins test_or/Res] \
+  [get_bd_pins occamy_chip/east_test_being_requested_i]
   connect_bd_net -net jtag_tck_i_1  [get_bd_ports jtag_tck_i] \
   [get_bd_pins occamy_chip/jtag_tck_i]
   set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_nets jtag_tck_i_1]
