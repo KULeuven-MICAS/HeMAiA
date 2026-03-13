@@ -233,7 +233,7 @@ proc create_root_design { parentCell } {
   set axis_vio_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axis_vio:1.0 axis_vio_0 ]
   set_property -dict [list \
     CONFIG.C_NUM_PROBE_IN {0} \
-    CONFIG.C_NUM_PROBE_OUT {4} \
+    CONFIG.C_NUM_PROBE_OUT {5} \
     CONFIG.C_PROBE_OUT1_WIDTH {2} \
     CONFIG.C_PROBE_OUT3_INIT_VAL {0x10} \
     CONFIG.C_PROBE_OUT3_WIDTH {8} \
@@ -355,6 +355,14 @@ proc create_root_design { parentCell } {
   ] $ilvector_logic_0
 
 
+  # Create instance: ilvector_logic_1, and set properties
+  set ilvector_logic_1 [ create_bd_cell -type inline_hdl -vlnv xilinx.com:inline_hdl:ilvector_logic:1.0 ilvector_logic_1 ]
+  set_property -dict [list \
+    CONFIG.C_OPERATION {or} \
+    CONFIG.C_SIZE {1} \
+  ] $ilvector_logic_1
+
+
   # Create port connections
   connect_bd_net -net Net  [get_bd_ports west_d2d_io_0] \
   [get_bd_pins occamy_chip/west_d2d_io]
@@ -362,6 +370,8 @@ proc create_root_design { parentCell } {
   [get_bd_pins occamy_chip/test_mode_i]
   connect_bd_net -net axis_vio_0_probe_out3  [get_bd_pins axis_vio_0/probe_out3] \
   [get_bd_pins occamy_chip/chip_id_i]
+  connect_bd_net -net axis_vio_0_probe_out4  [get_bd_pins axis_vio_0/probe_out4] \
+  [get_bd_pins ilvector_logic_1/Op1]
   connect_bd_net -net bootmode  [get_bd_pins axis_vio_0/probe_out1] \
   [get_bd_pins occamy_chip/boot_mode_i]
   connect_bd_net -net c_gpio_dout  [get_bd_pins c_gpio/dout] \
@@ -384,6 +394,8 @@ proc create_root_design { parentCell } {
   [get_bd_pins ilvector_logic_0/Op1]
   connect_bd_net -net ilslice_0_Dout  [get_bd_pins ilslice_0/Dout] \
   [get_bd_ports gpio_d_o]
+  connect_bd_net -net ilvector_logic_1_Res  [get_bd_pins ilvector_logic_1/Res] \
+  [get_bd_pins occamy_chip/west_test_being_requested_i]
   connect_bd_net -net jtag_tck_i_1  [get_bd_ports jtag_tck_i] \
   [get_bd_pins occamy_chip/jtag_tck_i]
   set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_nets jtag_tck_i_1]
@@ -427,7 +439,7 @@ proc create_root_design { parentCell } {
   connect_bd_net -net versal_cips_0_pl2_ref_clk  [get_bd_pins versal_cips_0/pl2_ref_clk] \
   [get_bd_pins occamy_chip/clk_periph_i]
   connect_bd_net -net west_test_being_requested_i_0_1  [get_bd_ports west_test_being_requested_i_0] \
-  [get_bd_pins occamy_chip/west_test_being_requested_i]
+  [get_bd_pins ilvector_logic_1/Op2]
 
   # Create address segments
 
