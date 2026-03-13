@@ -15,13 +15,13 @@ if {$argc > 1 && [lindex $argv 1]} { set EXT_JTAG true }
 set nproc [exec nproc]
 
 # Create project
-set project hemaia_system_east
+set project hemaia_system_west
 
 create_project $project ./$project -force -part xcvp1802-lsvc4072-2MP-e-S
 set_property board_part xilinx.com:vpk180:part0:1.2 [current_project]
 set_property XPM_LIBRARIES XPM_MEMORY [current_project]
 
-set_property ip_repo_paths ../hemaia_chip_east_io [current_project]
+set_property ip_repo_paths ../hemaia_chip_west_io [current_project]
 update_ip_catalog
 
 # Create block design
@@ -30,28 +30,28 @@ source hemaia_system_vpk180_bd.tcl
 # Add constraint files
 add_files -fileset constrs_1 -norecurse hemaia_system_vpk180_impl.xdc
 import_files -fileset constrs_1 hemaia_system_vpk180_impl.xdc
-set_property used_in_synthesis false [get_files hemaia_system_east/hemaia_system_east.srcs/constrs_1/imports/hemaia_system_east/hemaia_system_vpk180_impl.xdc]
+set_property used_in_synthesis false [get_files hemaia_system_west/hemaia_system_west.srcs/constrs_1/imports/hemaia_system_west/hemaia_system_vpk180_impl.xdc]
 if { $EXT_JTAG } {
     add_files -fileset constrs_1 -norecurse hemaia_system_vpk180_impl_ext_jtag.xdc
     import_files -fileset constrs_1 hemaia_system_vpk180_impl_ext_jtag.xdc
-    set_property used_in_synthesis false [get_files hemaia_system_east/hemaia_system_east.srcs/constrs_1/imports/hemaia_system_east/hemaia_system_vpk180_impl.xdc]
+    set_property used_in_synthesis false [get_files hemaia_system_west/hemaia_system_west.srcs/constrs_1/imports/hemaia_system_west/hemaia_system_vpk180_impl.xdc]
 } else {
     delete_bd_objs [get_bd_nets -of_objects [get_bd_ports "jtag_tck_i jtag_tdi_i jtag_tdo_o jtag_tms_i" ]]
     delete_bd_objs [get_bd_ports jtag_*]
 }
 
 # Generate wrapper
-make_wrapper -files [get_files ./hemaia_system_east/hemaia_system_east.srcs/sources_1/bd/hemaia_system/hemaia_system.bd] -top
-add_files -norecurse ./hemaia_system_east/hemaia_system_east.gen/sources_1/bd/hemaia_system/hdl/hemaia_system_wrapper.v
+make_wrapper -files [get_files ./hemaia_system_west/hemaia_system_west.srcs/sources_1/bd/hemaia_system/hemaia_system.bd] -top
+add_files -norecurse ./hemaia_system_west/hemaia_system_west.gen/sources_1/bd/hemaia_system/hdl/hemaia_system_wrapper.v
 update_compile_order -fileset sources_1
 
 # Create runs
-generate_target all [get_files ./hemaia_system_east/hemaia_system_east.srcs/sources_1/bd/hemaia_system/hemaia_system.bd]
-export_ip_user_files -of_objects [get_files ./hemaia_system_east/hemaia_system_east.srcs/sources_1/bd/hemaia_system/hemaia_system.bd] -no_script -sync -force -quiet
-create_ip_run [get_files -of_objects [get_fileset sources_1] ./hemaia_system_east/hemaia_system_east.srcs/sources_1/bd/hemaia_system/hemaia_system.bd]
+generate_target all [get_files ./hemaia_system_west/hemaia_system_west.srcs/sources_1/bd/hemaia_system/hemaia_system.bd]
+export_ip_user_files -of_objects [get_files ./hemaia_system_west/hemaia_system_west.srcs/sources_1/bd/hemaia_system/hemaia_system.bd] -no_script -sync -force -quiet
+create_ip_run [get_files -of_objects [get_fileset sources_1] ./hemaia_system_west/hemaia_system_west.srcs/sources_1/bd/hemaia_system/hemaia_system.bd]
 
 # Re-add hemaia chip includes
-set build hemaia_system_east
+set build hemaia_system_west
 
 export_ip_user_files -of_objects [get_ips occamy_chip] -no_script -sync -force -quiet
 eval [exec sed {s/current_fileset/get_filesets hemaia_system_occamy_chip_0/} define_defines_includes_no_simset.tcl]
@@ -145,9 +145,9 @@ if ($DEBUG) {
         set netNameLast $netName
     }
 
-    set_property target_constrs_file hemaia_system_east/hemaia_system_east.srcs/constrs_1/imports/hemaia_system_east/hemaia_system_vpk180_impl.xdc [current_fileset -constrset]
+    set_property target_constrs_file hemaia_system_west/hemaia_system_west.srcs/constrs_1/imports/hemaia_system_west/hemaia_system_vpk180_impl.xdc [current_fileset -constrset]
     if { $EXT_JTAG } {
-        set_property target_constrs_file hemaia_system_east/hemaia_system_east.srcs/constrs_1/imports/hemaia_system_east/hemaia_system_vpk180_impl_ext_jtag.xdc [current_fileset -constrset]
+        set_property target_constrs_file hemaia_system_west/hemaia_system_west.srcs/constrs_1/imports/hemaia_system_west/hemaia_system_vpk180_impl_ext_jtag.xdc [current_fileset -constrset]
     }
     save_constraints -force
 

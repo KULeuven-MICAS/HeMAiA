@@ -217,13 +217,13 @@ proc create_root_design { parentCell } {
   set jtag_tck_i [ create_bd_port -dir I -type clk -freq_hz 5000000 jtag_tck_i ]
   set uart_cts_ni [ create_bd_port -dir I uart_cts_ni ]
   set uart_rts_no [ create_bd_port -dir O uart_rts_no ]
-  set east_test_request_o_0 [ create_bd_port -dir O east_test_request_o_0 ]
-  set flow_control_east_rts_o_0 [ create_bd_port -dir O flow_control_east_rts_o_0 ]
-  set flow_control_east_cts_o_0 [ create_bd_port -dir O flow_control_east_cts_o_0 ]
-  set east_d2d_io_0 [ create_bd_port -dir IO -from 59 -to 0 east_d2d_io_0 ]
-  set east_test_being_requested_i_0 [ create_bd_port -dir I east_test_being_requested_i_0 ]
-  set flow_control_east_cts_i_0 [ create_bd_port -dir I flow_control_east_cts_i_0 ]
-  set flow_control_east_rts_i_0 [ create_bd_port -dir I flow_control_east_rts_i_0 ]
+  set west_test_request_o_0 [ create_bd_port -dir O west_test_request_o_0 ]
+  set flow_control_west_rts_o_0 [ create_bd_port -dir O flow_control_west_rts_o_0 ]
+  set flow_control_west_cts_o_0 [ create_bd_port -dir O flow_control_west_cts_o_0 ]
+  set west_d2d_io_0 [ create_bd_port -dir IO -from 59 -to 0 west_d2d_io_0 ]
+  set west_test_being_requested_i_0 [ create_bd_port -dir I west_test_being_requested_i_0 ]
+  set flow_control_west_cts_i_0 [ create_bd_port -dir I flow_control_west_cts_i_0 ]
+  set flow_control_west_rts_i_0 [ create_bd_port -dir I flow_control_west_rts_i_0 ]
   set gpio_d_o [ create_bd_port -dir O -from 3 -to 0 gpio_d_o ]
 
   # Create instance: occamy_chip, and set properties
@@ -235,7 +235,7 @@ proc create_root_design { parentCell } {
     CONFIG.C_NUM_PROBE_IN {0} \
     CONFIG.C_NUM_PROBE_OUT {5} \
     CONFIG.C_PROBE_OUT1_WIDTH {2} \
-    CONFIG.C_PROBE_OUT3_INIT_VAL {0x00} \
+    CONFIG.C_PROBE_OUT3_INIT_VAL {0x10} \
     CONFIG.C_PROBE_OUT3_WIDTH {8} \
   ] $axis_vio_0
 
@@ -355,23 +355,23 @@ proc create_root_design { parentCell } {
   ] $ilvector_logic_0
 
 
-  # Create instance: test_or, and set properties
-  set test_or [ create_bd_cell -type inline_hdl -vlnv xilinx.com:inline_hdl:ilvector_logic:1.0 test_or ]
+  # Create instance: ilvector_logic_1, and set properties
+  set ilvector_logic_1 [ create_bd_cell -type inline_hdl -vlnv xilinx.com:inline_hdl:ilvector_logic:1.0 ilvector_logic_1 ]
   set_property -dict [list \
     CONFIG.C_OPERATION {or} \
     CONFIG.C_SIZE {1} \
-  ] $test_or
+  ] $ilvector_logic_1
 
 
   # Create port connections
-  connect_bd_net -net Net  [get_bd_ports east_d2d_io_0] \
-  [get_bd_pins occamy_chip/east_d2d_io]
+  connect_bd_net -net Net  [get_bd_ports west_d2d_io_0] \
+  [get_bd_pins occamy_chip/west_d2d_io]
   connect_bd_net -net axis_vio_0_probe_out2  [get_bd_pins axis_vio_0/probe_out2] \
   [get_bd_pins occamy_chip/test_mode_i]
   connect_bd_net -net axis_vio_0_probe_out3  [get_bd_pins axis_vio_0/probe_out3] \
   [get_bd_pins occamy_chip/chip_id_i]
   connect_bd_net -net axis_vio_0_probe_out4  [get_bd_pins axis_vio_0/probe_out4] \
-  [get_bd_pins test_or/Op1]
+  [get_bd_pins ilvector_logic_1/Op1]
   connect_bd_net -net bootmode  [get_bd_pins axis_vio_0/probe_out1] \
   [get_bd_pins occamy_chip/boot_mode_i]
   connect_bd_net -net c_gpio_dout  [get_bd_pins c_gpio/dout] \
@@ -381,12 +381,10 @@ proc create_root_design { parentCell } {
   [get_bd_pins occamy_chip/clk_i]
   connect_bd_net -net concat_rst_core_dout  [get_bd_pins concat_rst_core/dout] \
   [get_bd_pins reduce_or_core/Op1]
-  connect_bd_net -net east_test_being_requested_i_0_1  [get_bd_ports east_test_being_requested_i_0] \
-  [get_bd_pins test_or/Op2]
-  connect_bd_net -net flow_control_east_cts_i_0_1  [get_bd_ports flow_control_east_cts_i_0] \
-  [get_bd_pins occamy_chip/flow_control_east_cts_i]
-  connect_bd_net -net flow_control_east_rts_i_0_1  [get_bd_ports flow_control_east_rts_i_0] \
-  [get_bd_pins occamy_chip/flow_control_east_rts_i]
+  connect_bd_net -net flow_control_west_cts_i_0_1  [get_bd_ports flow_control_west_cts_i_0] \
+  [get_bd_pins occamy_chip/flow_control_west_cts_i]
+  connect_bd_net -net flow_control_west_rts_i_0_1  [get_bd_ports flow_control_west_rts_i_0] \
+  [get_bd_pins occamy_chip/flow_control_west_rts_i]
   connect_bd_net -net ilconstant_0_dout  [get_bd_pins c_high/dout] \
   [get_bd_ports vref_vdd_o] \
   [get_bd_pins occamy_chip/jtag_trst_ni]
@@ -396,8 +394,8 @@ proc create_root_design { parentCell } {
   [get_bd_pins ilvector_logic_0/Op1]
   connect_bd_net -net ilslice_0_Dout  [get_bd_pins ilslice_0/Dout] \
   [get_bd_ports gpio_d_o]
-  connect_bd_net -net ilvector_logic_1_Res  [get_bd_pins test_or/Res] \
-  [get_bd_pins occamy_chip/east_test_being_requested_i]
+  connect_bd_net -net ilvector_logic_1_Res  [get_bd_pins ilvector_logic_1/Res] \
+  [get_bd_pins occamy_chip/west_test_being_requested_i]
   connect_bd_net -net jtag_tck_i_1  [get_bd_ports jtag_tck_i] \
   [get_bd_pins occamy_chip/jtag_tck_i]
   set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_nets jtag_tck_i_1]
@@ -416,14 +414,14 @@ proc create_root_design { parentCell } {
   connect_bd_net -net occamy_chip_0_uart_tx_o  [get_bd_pins occamy_chip/uart_tx_o] \
   [get_bd_ports uart_tx_o]
   set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_nets occamy_chip_0_uart_tx_o]
-  connect_bd_net -net occamy_chip_east_test_request_o  [get_bd_pins occamy_chip/east_test_request_o] \
-  [get_bd_ports east_test_request_o_0]
-  connect_bd_net -net occamy_chip_flow_control_east_cts_o  [get_bd_pins occamy_chip/flow_control_east_cts_o] \
-  [get_bd_ports flow_control_east_cts_o_0]
-  connect_bd_net -net occamy_chip_flow_control_east_rts_o  [get_bd_pins occamy_chip/flow_control_east_rts_o] \
-  [get_bd_ports flow_control_east_rts_o_0]
+  connect_bd_net -net occamy_chip_flow_control_west_cts_o  [get_bd_pins occamy_chip/flow_control_west_cts_o] \
+  [get_bd_ports flow_control_west_cts_o_0]
+  connect_bd_net -net occamy_chip_flow_control_west_rts_o  [get_bd_pins occamy_chip/flow_control_west_rts_o] \
+  [get_bd_ports flow_control_west_rts_o_0]
   connect_bd_net -net occamy_chip_gpio_d_o  [get_bd_pins occamy_chip/gpio_d_o] \
   [get_bd_pins ilslice_0/Din]
+  connect_bd_net -net occamy_chip_west_test_request_o  [get_bd_pins occamy_chip/west_test_request_o] \
+  [get_bd_ports west_test_request_o_0]
   connect_bd_net -net occamy_rstn  [get_bd_pins ilvector_logic_0/Res] \
   [get_bd_pins occamy_chip/rst_ni] \
   [get_bd_pins occamy_chip/rst_periph_ni]
@@ -440,6 +438,8 @@ proc create_root_design { parentCell } {
   connect_bd_net -net versal_cips_0_pl1_ref_clk  [get_bd_pins versal_cips_0/pl1_ref_clk]
   connect_bd_net -net versal_cips_0_pl2_ref_clk  [get_bd_pins versal_cips_0/pl2_ref_clk] \
   [get_bd_pins occamy_chip/clk_periph_i]
+  connect_bd_net -net west_test_being_requested_i_0_1  [get_bd_ports west_test_being_requested_i_0] \
+  [get_bd_pins ilvector_logic_1/Op2]
 
   # Create address segments
 
