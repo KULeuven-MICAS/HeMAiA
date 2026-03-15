@@ -278,7 +278,6 @@ clean-vcs: clean-work
 
 clean-work:
 	rm -rf work
-	rm -rf work-vsim
 
 clean-logs:
 	rm -rf $(LOGS_DIR)/

@@ -9,16 +9,16 @@ MKFILE_PATH := $(abspath $(lastword $(MAKEFILE_LIST)))
 MKFILE_DIR  := $(dir $(MKFILE_PATH))
 ROOT        := ${MKFILE_DIR}../../../..
 util		:= $(ROOT)/util
-
-CVA6_GCC_ROOT = /tools/riscv/bin
-CC = $(CVA6_GCC_ROOT)/riscv64-unknown-elf-gcc
-OBJDUMP = $(CVA6_GCC_ROOT)/riscv64-unknown-elf-objdump
-OBJCOPY = $(CVA6_GCC_ROOT)/riscv64-unknown-elf-objcopy
+# CVA6_GCC_ROOT = /opt/riscv/
+CVA6_GCC_ROOT = 
+CC = $(CVA6_GCC_ROOT)riscv64-unknown-elf-gcc
+OBJDUMP = $(CVA6_GCC_ROOT)riscv64-unknown-elf-objdump
+OBJCOPY = $(CVA6_GCC_ROOT)riscv64-unknown-elf-objcopy
 BIN2SV  = $(util)/bin2sv.py
 
 CFLAGS 	= -Os -g -Werror -ffreestanding -fno-strict-aliasing
 CFLAGS += -static -nostartfiles
-CFLAGS += -fno-omit-frame-pointer -fno-optimize-sibling-calls -fno-stack-protector
+CFLAGS += -fno-omit-frame-pointer -fno-optimize-sibling-calls -fno-stack-protector -fno-tree-vectorize
 CFLAGS += -mno-save-restore -mstrict-align
 CFLAGS += -mabi=lp64d -march=rv64imafd
 CFLAGS += -mcmodel=medany

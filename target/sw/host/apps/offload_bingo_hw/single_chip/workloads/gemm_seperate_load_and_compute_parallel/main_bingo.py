@@ -53,7 +53,7 @@ def define_workload_params():
         'transposeB': 0,
         'accumPrevC': 0
     }
-    params["app_name"] = "Single-Chip GEMM Seperate Load and Compute Serial"
+    params["app_name"] = "Single-Chip GEMM Seperate Load and Compute Parallel"
     # Derived sizes
     params['A_size'] = params['M'] * params['K'] * params['meshRow'] * params['tileSize'] * 1 # int8
     params['B_size'] = params['K'] * params['N'] * params['meshCol'] * params['tileSize'] * 1 # int8
