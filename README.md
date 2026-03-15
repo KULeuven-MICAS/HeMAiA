@@ -180,3 +180,32 @@ cd target/fpga_chip_apps
 It takes some time for the handshaking between the computer and the SoC (20 seconds). At the end you will see transfer complete.
 
 - Open minicom and execute the binary by pressing number 7.
+
+
+## Building HeMAiA tapeout with D2D on vpk180
+Due to limitations on FPGA IO available through FMC, only one d2d link can be active in an FPGA build. Therefore two projects one with east link and other with west link are made. The following steps are required to build:
+
+### Generation of RTL
+Note: Make sure bender knows the correct repo of the d2d link. 
+```bash
+# Execute these in podman container
+CFG=target/rtl/cfg/hemaia_tapeout.hjson
+
+make sw CFG_OVERRIDE=$CFG
+make bootrom CFG_OVERRIDE=$CFG
+make rtl CFG_OVERRIDE=$CFG
+```
+
+### Build with vivado (2025.2)
+Note: Build for east and west may take upto 13 hours each and ~12GB disk space per build. If on a quota partition make sure ample space is available or build will crash (learned this the hard way).
+```bash
+# For east 
+make hemaia_chip_east_vivado
+make hemaia_system_east_vivado
+
+# For west
+make hemaia_chip_west_vivado
+make hemaia_system_west_vivado
+```
+
+After build is complete, the projects can be accessed in `target/fpga_chip/hemaia_system_east/hemaia_system_east/hemaia_system_east.xpr` and `target/fpga_chip/hemaia_system_west/hemaia_system_west/hemaia_system_west.xpr` for GUI analysis and device programming.

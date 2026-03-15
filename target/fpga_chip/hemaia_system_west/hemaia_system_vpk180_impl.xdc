@@ -6,102 +6,13 @@
 # Yunhao Deng <yunhao.deng@kuleuven.be>
 
 set iostd LVCMOS12
-set d2d_io_port east_d2d_io_0
-set d2d_fc_cts_i_port flow_control_east_cts_i_0
-set d2d_fc_cts_o_port flow_control_east_cts_o_0
-set d2d_fc_rts_i_port flow_control_east_rts_i_0
-set d2d_fc_rts_o_port flow_control_east_rts_o_0
-set d2d_test_req_port east_test_request_o_0
-set d2d_test_brq_port east_test_being_requested_i_0
-
-## Per bank mode pinout
-# set_property -dict "PACKAGE_PIN BT37 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[0]"] 
-# set_property -dict "PACKAGE_PIN BU37 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[1]"] 
-# set_property -dict "PACKAGE_PIN BT39 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[2]"]  
-# set_property -dict "PACKAGE_PIN BR39 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[3]"]
-# set_property -dict "PACKAGE_PIN BR38 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[4]"]
-# set_property -dict "PACKAGE_PIN BR37 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[5]"]
-# set_property -dict "PACKAGE_PIN BT40 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[6]"] 
-# set_property -dict "PACKAGE_PIN BR41 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[7]"]
-# set_property -dict "PACKAGE_PIN BT41 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[8]"]
-# set_property -dict "PACKAGE_PIN BR42 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[9]"]
-# set_property -dict "PACKAGE_PIN BP40 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[10]"]
-# set_property -dict "PACKAGE_PIN BN40 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[11]"]
-# set_property -dict "PACKAGE_PIN BP38 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[12]"]
-# set_property -dict "PACKAGE_PIN BN39 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[13]"]
-# set_property -dict "PACKAGE_PIN CA39 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[14]"]
-# set_property -dict "PACKAGE_PIN BY40 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[15]"]
-# set_property -dict "PACKAGE_PIN CA41 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[16]"]
-# set_property -dict "PACKAGE_PIN BY41 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[17]"]
-# set_property -dict "PACKAGE_PIN BY39 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[18]"]
-# set_property -dict "PACKAGE_PIN BW39 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[19]"]
-# set_property -dict "PACKAGE_PIN CA37 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[38]"]
-# set_property -dict "PACKAGE_PIN BY38 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[39]"]
-# set_property -dict "PACKAGE_PIN BW41 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[22]"]
-# set_property -dict "PACKAGE_PIN BV41 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[23]"]
-# set_property -dict "PACKAGE_PIN BU42 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[24]"]
-# set_property -dict "PACKAGE_PIN BU41 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[25]"]
-# set_property -dict "PACKAGE_PIN CD43 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[26]"]
-# set_property -dict "PACKAGE_PIN CD42 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[27]"]
-# set_property -dict "PACKAGE_PIN CD41 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[28]"]
-# set_property -dict "PACKAGE_PIN CD40 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[29]"]
-# set_property -dict "PACKAGE_PIN CC42 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[30]"]
-# set_property -dict "PACKAGE_PIN CB41 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[31]"]
-# set_property -dict "PACKAGE_PIN CC40 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[32]"]
-# set_property -dict "PACKAGE_PIN CB40 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[33]"]
-# set_property -dict "PACKAGE_PIN CC39 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[34]"]
-# set_property -dict "PACKAGE_PIN CC38 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[35]"]
-# set_property -dict "PACKAGE_PIN CB39 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[36]"]
-# set_property -dict "PACKAGE_PIN CA38 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[37]"]
-# set_property -dict "PACKAGE_PIN BV43 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[20]"] 
-# set_property -dict "PACKAGE_PIN BW42 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[21]"] 
-# set_property -dict "PACKAGE_PIN CC47 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[40]"]
-# set_property -dict "PACKAGE_PIN CB46 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[41]"]
-# set_property -dict "PACKAGE_PIN CD46 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[42]"]
-# set_property -dict "PACKAGE_PIN CC45 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[43]"]
-# set_property -dict "PACKAGE_PIN CD45 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[44]"]
-# set_property -dict "PACKAGE_PIN CC44 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[45]"]
-# set_property -dict "PACKAGE_PIN CB44 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[46]"]
-# set_property -dict "PACKAGE_PIN CC43 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[47]"]
-# set_property -dict "PACKAGE_PIN CB45 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[48]"]
-# set_property -dict "PACKAGE_PIN CA44 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[49]"]
-# set_property -dict "PACKAGE_PIN BY44 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[50]"]
-# set_property -dict "PACKAGE_PIN BY43 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[51]"]
-# set_property -dict "PACKAGE_PIN CB52 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[52]"]
-# set_property -dict "PACKAGE_PIN CA51 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[53]"] 
-# set_property -dict "PACKAGE_PIN CA52 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[54]"]
-# set_property -dict "PACKAGE_PIN BY51 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[55]"] 
-# set_property -dict "PACKAGE_PIN BW52 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[56]"]
-# set_property -dict "PACKAGE_PIN BW51 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[57]"] 
-# set_property -dict "PACKAGE_PIN BY50 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[58]"]
-# set_property -dict "PACKAGE_PIN BY49 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[59]"] 
-
-# # Test Pins
-# set_property -dict "PACKAGE_PIN CD52 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_test_brq_port"] 
-# set_property -dict "PACKAGE_PIN CD51 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_test_req_port"] 
-
-# # Flow Control
-# set_property -dict "PACKAGE_PIN BW50 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_fc_cts_i_port"] 
-# set_property -dict "PACKAGE_PIN BW49 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_fc_cts_o_port"] 
-# set_property -dict "PACKAGE_PIN BV50 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_fc_rts_i_port"] 
-# set_property -dict "PACKAGE_PIN BV49 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_fc_rts_o_port"] 
-
-# # JTAG
-# set_property -dict "PACKAGE_PIN CC50 IOSTANDARD $iostd" [get_ports {jtag_tck_i}] 
-# set_property -dict "PACKAGE_PIN CB49 IOSTANDARD $iostd" [get_ports {jtag_tdi_i}] 
-# set_property -dict "PACKAGE_PIN CB50 IOSTANDARD $iostd" [get_ports {jtag_tdo_o}] 
-# set_property -dict "PACKAGE_PIN CA49 IOSTANDARD $iostd" [get_ports {jtag_tms_i}] 
-
-
-# # UART FC
-# set_property -dict "PACKAGE_PIN CC52 IOSTANDARD $iostd PULLTYPE PULLUP" [get_ports {uart_cts_ni}]
-# set_property -dict "PACKAGE_PIN CB51 IOSTANDARD $iostd" [get_ports {uart_rts_no}] 
-# set_property -dict "PACKAGE_PIN CD50 IOSTANDARD $iostd" [get_ports {uart_rx_i}] 
-# set_property -dict "PACKAGE_PIN CC49 IOSTANDARD $iostd" [get_ports {uart_tx_o}] 
-
-# #VREF
-# set_property -dict "PACKAGE_PIN CD48 IOSTANDARD $iostd DRIVE 8" [get_ports {vref_vdd_o[0]}] 
-# set_property -dict "PACKAGE_PIN CD47 IOSTANDARD $iostd DRIVE 8" [get_ports {vref_gnd_o[0]}] 
+set d2d_io_port west_d2d_io_0
+set d2d_fc_cts_i_port flow_control_west_cts_i_0
+set d2d_fc_cts_o_port flow_control_west_cts_o_0
+set d2d_fc_rts_i_port flow_control_west_rts_i_0
+set d2d_fc_rts_o_port flow_control_west_rts_o_0
+set d2d_test_req_port west_test_request_o_0
+set d2d_test_brq_port west_test_being_requested_i_0
 
 ## Channel per cable mode pinout
 ## This pinout does not match FPGA banks
@@ -170,14 +81,14 @@ set_property -dict "PACKAGE_PIN CC44 IOSTANDARD $iostd SLEW FAST" [get_ports "$d
 set_property -dict "PACKAGE_PIN CC50 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_io_port[59]"]
 
 # Test Pins
-set_property -dict "PACKAGE_PIN BW50 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_test_req_port"] 
-set_property -dict "PACKAGE_PIN CB51 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_test_brq_port"] 
+set_property -dict "PACKAGE_PIN BW50 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_test_brq_port"] 
+set_property -dict "PACKAGE_PIN CB51 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_test_req_port"] 
 
 # Flow Control
-set_property -dict "PACKAGE_PIN CD46 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_fc_cts_i_port"] 
-set_property -dict "PACKAGE_PIN CD45 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_fc_cts_o_port"] 
-set_property -dict "PACKAGE_PIN BW49 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_fc_rts_i_port"] 
-set_property -dict "PACKAGE_PIN BW42 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_fc_rts_o_port"] 
+set_property -dict "PACKAGE_PIN CD45 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_fc_cts_i_port"] 
+set_property -dict "PACKAGE_PIN CD46 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_fc_cts_o_port"] 
+set_property -dict "PACKAGE_PIN BW42 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_fc_rts_i_port"] 
+set_property -dict "PACKAGE_PIN BW49 IOSTANDARD $iostd SLEW FAST" [get_ports "$d2d_fc_rts_o_port"] 
 
 # JTAG
 set_property -dict "PACKAGE_PIN BY51 IOSTANDARD $iostd" [get_ports {jtag_tck_i}] 
@@ -280,15 +191,15 @@ set_false_path -through [get_pins hemaia_system_i/occamy_chip/inst/gpio_oe_o]
 
 
 ########## D2D #############
-set rx_clk_1_io_port "$d2d_io_port[1]"
-set rx_clk_2_io_port "$d2d_io_port[21]"
-set rx_clk_3_io_port "$d2d_io_port[41]"
+set rx_clk_1_io_port "$d2d_io_port[0]"
+set rx_clk_2_io_port "$d2d_io_port[20]"
+set rx_clk_3_io_port "$d2d_io_port[40]"
 set d2d_phy_clk clk_main 
 set d2d_clk_period [get_property PERIOD [get_clocks $d2d_phy_clk]]
 set d2d_path hemaia_system_i/occamy_chip/inst/i_d2d_link
-set phy_digital_channel1 "$d2d_path/gen_east_phy_enabled.gen_phy_channels[0].i_phy_interface_east/i_phy_digital_interface"
-set phy_digital_channel2 "$d2d_path/gen_east_phy_enabled.gen_phy_channels[1].i_phy_interface_east/i_phy_digital_interface"
-set phy_digital_channel3 "$d2d_path/gen_east_phy_enabled.gen_phy_channels[2].i_phy_interface_east/i_phy_digital_interface"
+set phy_digital_channel1 "$d2d_path/gen_west_phy_enabled.gen_phy_channels[0].i_phy_interface_west/i_phy_digital_interface"
+set phy_digital_channel2 "$d2d_path/gen_west_phy_enabled.gen_phy_channels[1].i_phy_interface_west/i_phy_digital_interface"
+set phy_digital_channel3 "$d2d_path/gen_west_phy_enabled.gen_phy_channels[2].i_phy_interface_west/i_phy_digital_interface"
 
 # create rx clocks
 create_clock -period $d2d_clk_period -name rx_clk_1 [get_ports $rx_clk_1_io_port]
@@ -435,9 +346,9 @@ set_false_path -through [get_pins -hierarchical -filter {NAME =~ *false_path*}]
 set_false_path -through [get_pins hemaia_system_i/occamy_chip/inst/i_d2d_link/*.i_phy_interface*/*tx_strength_thermometer_i*]
 set_false_path -through [get_pins {hemaia_system_i/occamy_chip/inst/i_d2d_link/i_controller_reg_to_hw/reg2hw[availability_register][*_link_available][q]}]
 set_false_path -through [get_nets hemaia_system_i/occamy_chip/inst/i_d2d_link/**/*false_path*]
-set_false_path -through [get_nets {hemaia_system_i/occamy_chip/inst/i_d2d_link/i_controller_reg_to_hw/reg2hw[rx_buffer_threshold_register][east_rx_buffer_threshold][q][*]}]
-set_false_path -through [get_nets {hemaia_system_i/occamy_chip/inst/i_d2d_link/i_controller_reg_to_hw/u_tx_backoff_period_register_east_tx_backoff_period/reg2hw[tx_backoff_period_register][east_tx_backoff_period][q][*]}]
-set_false_path -through [get_nets {hemaia_system_i/occamy_chip/inst/i_d2d_link/reg2hw[tx_hold_period_register][east_tx_hold_period][q][*]}]
+set_false_path -through [get_nets {hemaia_system_i/occamy_chip/inst/i_d2d_link/i_controller_reg_to_hw/reg2hw[rx_buffer_threshold_register][west_rx_buffer_threshold][q][*]}]
+set_false_path -through [get_nets {hemaia_system_i/occamy_chip/inst/i_d2d_link/i_controller_reg_to_hw/u_tx_backoff_period_register_west_tx_backoff_period/reg2hw[tx_backoff_period_register][west_tx_backoff_period][q][*]}]
+set_false_path -through [get_nets {hemaia_system_i/occamy_chip/inst/i_d2d_link/reg2hw[tx_hold_period_register][west_tx_hold_period][q][*]}]
 set_false_path -through [get_nets {hemaia_system_i/occamy_chip/inst/i_d2d_link/hw2reg[fec_unrecoverable_error_register][*][d][*]}]
 set_false_path -through [get_nets {hemaia_system_i/occamy_chip/inst/i_d2d_link/i_controller_reg_to_hw/reg2hw[rx_buffer_threshold_register][*_rx_buffer_threshold][q][*]}]
 set_false_path -through [get_nets {hemaia_system_i/occamy_chip/inst/i_d2d_link/i_controller_reg_to_hw/u_tx_backoff_period_register_*_tx_backoff_period/reg2hw[tx_backoff_period_register][*_tx_backoff_period][q][*]}]

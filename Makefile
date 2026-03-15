@@ -41,8 +41,10 @@ clean:
 	$(MAKE) -C ./target/fpga/vivado_ips/ clean
 	$(MAKE) -C ./target/fpga_chip/hemaia_chip/ clean
 	$(MAKE) -C ./target/fpga_chip/hemaia_chip_east_io/ clean
+	$(MAKE) -C ./target/fpga_chip/hemaia_chip_west_io/ clean
 	$(MAKE) -C ./target/fpga_chip/hemaia_system/ clean
 	$(MAKE) -C ./target/fpga_chip/hemaia_system_east/ clean
+	$(MAKE) -C ./target/fpga_chip/hemaia_system_west/ clean
 	$(MAKE) -C ./target/sw/  clean
 	$(MAKE) -C ./target/rtl/bootrom/  clean
 	$(MAKE) -C ./target/sim/ clean
@@ -164,6 +166,9 @@ hemaia_chip_vivado:	# In ESAT Server
 hemaia_chip_east_vivado:	# In ESAT Server
 	$(MAKE) -C ./target/fpga_chip/hemaia_chip_east_io hemaia_chip_east
 
+hemaia_chip_west_vivado:	# In ESAT Server
+	$(MAKE) -C ./target/fpga_chip/hemaia_chip_west_io hemaia_chip_west
+
 hemaia_chip_vivado_gui: # In ESAT Server
 	sh -c "cd ./target/fpga/fpga_chip/hemaia_chip/hemaia_chip/;vivado hemaia_chip.xpr"
 
@@ -172,6 +177,9 @@ hemaia_system_vivado: hemaia_chip_vivado # In ESAT Server
 
 hemaia_system_east_vivado: hemaia_chip_east_vivado # In ESAT Server
 	$(MAKE) -C ./target/fpga_chip/hemaia_system_east hemaia_system_east
+
+hemaia_system_west_vivado: hemaia_chip_west_vivado # In ESAT Server
+	$(MAKE) -C ./target/fpga_chip/hemaia_system_west hemaia_system_west
 
 hemaia_system_vivado_gui: # In ESAT Server
 	sh -c "cd ./target/fpga_chip/hemaia_system/hemaia_system/;vivado hemaia_system.xpr"
