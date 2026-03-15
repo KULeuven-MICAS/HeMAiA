@@ -94,7 +94,7 @@ _cva6_init:
 	li      t0, 0x80000000
     or      t0, t0, s0
     jalr    t0
-    j       _start
+    j       exception
 exception:
     wfi
     j     exception

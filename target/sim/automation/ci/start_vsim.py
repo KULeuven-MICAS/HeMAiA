@@ -74,7 +74,10 @@ from __future__ import annotations
 import os
 import subprocess
 import shutil
-import yaml
+try:
+    import yaml  # type: ignore
+except Exception:
+    yaml = None
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 import multiprocessing
@@ -133,6 +136,62 @@ def run_in_container(repo_root: Path, docker_image: str, working_dir: Path, comm
     docker_cmd.extend(command)
     subprocess.run(docker_cmd, check=True)
     
+def _simple_task_yaml_loader(task_yaml: Path) -> Dict:
+    """Minimal YAML loader for the limited `task_vsim.yaml` format used here.
+
+    This supports the specific structure documented in this script (a top-level
+    `runs:` key with a sequence of single-key mappings whose values are a
+    sequence of single-key mappings). It intentionally does not implement
+    general YAML.
+    """
+    runs = []
+    with task_yaml.open('r') as f:
+        lines = f.readlines()
+
+    # Find the 'runs:' section
+    i = 0
+    while i < len(lines):
+        if lines[i].strip().startswith('runs:'):
+            i += 1
+            break
+        i += 1
+
+    # Parse each `- name:` block and its indented list of `- KEY: VALUE` entries
+    while i < len(lines):
+        raw = lines[i]
+        stripped = raw.lstrip()
+        if not stripped:
+            i += 1
+            continue
+        if stripped.startswith('- '):
+            after = stripped[2:].strip()
+            if after.endswith(':'):
+                ci_name = after[:-1].strip()
+                attrs = []
+                i += 1
+                while i < len(lines):
+                    nl = lines[i]
+                    if not nl.strip():
+                        i += 1
+                        continue
+                    # stop when dedented back to the level of the '-' that started the block
+                    if (len(nl) - len(nl.lstrip())) <= (len(raw) - len(stripped)):
+                        break
+                    nstripped = nl.lstrip()
+                    if nstripped.startswith('- '):
+                        after_dash = nstripped[2:].strip()
+                        if ':' in after_dash:
+                            k, v = [s.strip() for s in after_dash.split(':', 1)]
+                            if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
+                                v = v[1:-1]
+                            attrs.append({k: v})
+                    i += 1
+                runs.append({ci_name: attrs})
+                continue
+        i += 1
+
+    return {'runs': runs}
+
 def parse_tasks(task_yaml: Path) -> List[Dict[str, str]]:
     """Parse the CI tasks from a YAML file.
 
@@ -144,8 +203,11 @@ def parse_tasks(task_yaml: Path) -> List[Dict[str, str]]:
           - WORKLOAD: gemm_tiled
           - DEV_APP: snax-bingo-offload
     """
-    with open(task_yaml, 'r') as f:
-        param_data = yaml.safe_load(f)
+    if yaml is not None:
+        with open(task_yaml, 'r') as f:
+            param_data = yaml.safe_load(f)
+    else:
+        param_data = _simple_task_yaml_loader(task_yaml)
 
     tasks: List[Dict[str, str]] = []
     for app_entry in param_data.get("runs", []):
@@ -252,7 +314,7 @@ def prepare_and_copy_sim(repo_root: Path, tasks_info: List[Tuple[Path, str]]) ->
         else:
             shutil.copy2(src, dst)
 
-    for task_dir, _, _ in tasks_info:
+    for task_dir, _ in tasks_info:
         for src in artifacts:
             # Mirror the relative location within target/sim into the task directory
             rel = src.relative_to(sim_root)
