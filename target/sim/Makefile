@@ -77,7 +77,7 @@ else
 	VCS_BENDER  += -t simulation_hemaia
 endif
 
-VSIM_FLAGS += -t 1ps
+VSIM_FLAGS += -t 1fs
 
 ifeq ($(SIM_WITH_WAVEFORM), 1)
 	VSIM_FLAGS += -voptargs=+acc

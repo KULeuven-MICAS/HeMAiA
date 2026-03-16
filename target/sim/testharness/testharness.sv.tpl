@@ -36,10 +36,10 @@ min_compute_chiplet_y = min([chip.coordinate[1] for chip in chip_coordinates if 
 spi_slave_present = any(periph["name"] == "spis" for periph in occamy_cfg["peripherals"]["axi_lite_peripherals"])
 spi_master_present = any(periph["name"] == "spim" for periph in occamy_cfg["peripherals"]["axi_lite_narrow_peripherals"])
 i2c_present = any(periph["name"] == "i2c" for periph in occamy_cfg["peripherals"]["axi_lite_narrow_peripherals"])
-
+pll_present = occamy_cfg["use_vendor_pll"]
 %>
 
-`timescale 1ns / 1ps
+`timescale 1ps / 1fs
 `include "axi/typedef.svh"
 
 module testharness
@@ -47,8 +47,18 @@ module testharness
 ();
 
   localparam RTCTCK = 30.518us;        // 32.768 kHz
+  %if pll_present:
+  `define TIMESCALEVAL        1.0e-12
+  `define CLK_FREF_FREQ_MHZ       40.0
+  `define PRI_FREQ_MHZ            32.0
+  `define CLK_FREF_PERIOD         (1.0e-6/`CLK_FREF_FREQ_MHZ/`TIMESCALEVAL)
+  `define PRI_PERIOD              (1.0e-6/`PRI_FREQ_MHZ/`TIMESCALEVAL)
+  localparam CLKTCK = `CLK_FREF_PERIOD; 
+  localparam PRITCK = `PRI_PERIOD;
+  %else:
   localparam CLKTCK = 1ns;             // 1 GHz
   localparam PRITCK = 1ns;             // 1 GHz
+  %endif
   localparam int  SRAM_BANK = ${mem_bank};      // ${mem_bank} Banks architecture
   localparam int  SRAM_DEPTH = ${int(mem_size/8/mem_bank)};
   localparam int  SRAM_WIDTH = 8;      // 8 Bytes Wide
@@ -57,6 +67,18 @@ module testharness
   // Inout/output ports on the DUT must connect to nets (wire/tri). We drive them via separate regs.
   logic rtc_clk_drv, mst_clk_drv, periph_clk_drv, rst_ni_drv;
   wire  rtc_clk_i,  mst_clk_i,  periph_clk_i,  rst_ni;
+  %if pll_present:
+  logic pll_bypass_drv;
+  logic pll_en_drv;
+  logic [1:0] pll_post_div_sel_drv;
+  wire pll_bypass_i;
+  wire pll_en_i;
+  wire [1:0] pll_post_div_sel_i;
+  wire pll_lock_o;
+  assign pll_bypass_i = pll_bypass_drv;
+  assign pll_en_i = pll_en_drv;
+  assign pll_post_div_sel_i = pll_post_div_sel_drv;
+  %endif
   // Some blocks also expect a separate peripheral reset; tie it to rst_ni unless overridden
   wire  rst_periph_ni;
   assign rtc_clk_i     = rtc_clk_drv;
@@ -82,7 +104,23 @@ module testharness
     periph_clk_drv = 0;
     // Init the reset pin
     rst_ni_drv = 1;
-    #0;
+    %if pll_present:
+    // Init the PLL control
+    pll_bypass_drv = 1'b0;
+    pll_en_drv = 1'b0;
+    pll_post_div_sel_drv = 2'b00;
+    // Wait the clk for several cycles
+    for (int i = 0; i < 10; i++) begin
+      @(posedge mst_clk_i);
+    end
+    // Then wait at least 1us
+    #(1us); 
+    // PLL on
+    pll_en_drv = 1'b1;
+    // Wait for phase lock    @(posedge pll_lock_o);
+    $display("PLL Lock asserted");    
+    %endif
+    #(1us);
     rst_ni_drv = 0;
    // Load the binaries
 % for chip in chip_coordinates:
@@ -150,15 +188,15 @@ module testharness
     end
   end
 
-  always #(RTCTCK / 2) begin
+  always #(RTCTCK / 2.0) begin
     rtc_clk_drv = ~rtc_clk_drv;
   end
   
-  always #(CLKTCK / 2) begin
+  always #(CLKTCK / 2.0) begin
     mst_clk_drv = ~mst_clk_drv;
   end
 
-  always #(PRITCK / 2) begin
+  always #(PRITCK / 2.0) begin
     periph_clk_drv = ~periph_clk_drv;
   end
 
@@ -204,7 +242,17 @@ module testharness
   hemaia i_hemaia_${chip.coordinate[0]}_${chip.coordinate[1]} (
       .io_clk_i(mst_clk_i),
       .io_rst_ni(rst_ni),
-      .io_bypass_pll_division_i(const_zero),
+      %if pll_present:
+      .io_pll_bypass_i(pll_bypass_i),
+      .io_pll_en_i (pll_en_i),
+      .io_pll_post_div_sel_i(pll_post_div_sel_i),
+      .io_pll_lock_o(pll_lock_o),
+      %else:
+      .io_pll_bypass_i(const_zero),
+      .io_pll_en_i(const_zero),
+      .io_pll_post_div_sel_i('0),
+      .io_pll_lock_o(),
+      %endif
       .io_clk_obs_o(),
       .io_clk_periph_i(periph_clk_i),
       .io_rst_periph_ni(rst_periph_ni),

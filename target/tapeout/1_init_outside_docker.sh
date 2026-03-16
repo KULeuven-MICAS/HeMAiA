@@ -15,6 +15,8 @@ else
 fi
 if [ ! -d "$script_dir/../../hw/hemaia/hemaia_clk_rst_controller" ]; then
     git clone https://github.com/IveanEx/hemaia_clk_rst_controller.git "$script_dir/../../hw/hemaia/hemaia_clk_rst_controller"
+    cd $script_dir/../../hw/hemaia/hemaia_clk_rst_controller
+    git checkout kfc/add-pll || exit
 else
     cd $script_dir/../../hw/hemaia/hemaia_clk_rst_controller || exit
     git pull
