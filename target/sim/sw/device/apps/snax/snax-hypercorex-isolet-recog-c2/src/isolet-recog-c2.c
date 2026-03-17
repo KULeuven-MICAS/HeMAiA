@@ -49,6 +49,7 @@ int main() {
         // First load the data accordingly
         if (snrt_is_dm_core()) {
             // Load the AM unto the 1st 8 banks
+            uint32_t start_dma_load = snrt_mcycle();
             snrt_dma_start_2d(
                 // Destination address, source address
                 am_start, am_list,
@@ -86,6 +87,8 @@ int main() {
             // Ensure that all DMA tasks finish
             snrt_dma_wait_all();
             bank_left_flag = 1;
+            uint32_t end_dma_load = snrt_mcycle();
+            printf("DMT %d\n", end_dma_load - start_dma_load);
         };
 
         // Synchronize cores
@@ -129,6 +132,7 @@ int main() {
 
             // In parallel do the computations already
             if (snrt_is_compute_core()) {
+                uint32_t core_config_start = snrt_mcycle();
                 if (process_left_flag) {
                     // Configure streamer for high dim A
                     hypercorex_set_streamer_lowdim_a(
@@ -212,8 +216,13 @@ int main() {
                 // Write control registers
                 csrw_ss(HYPERCOREX_CORE_SET_REG_ADDR, 0x00000008);
 
+                uint32_t core_config_end = snrt_mcycle();
+                printf("CGT %d\n", core_config_end - core_config_start);
+
                 // Start hypercorex
                 csrw_ss(HYPERCOREX_CORE_SET_REG_ADDR, 0x00000009);
+
+                uint32_t core_start = snrt_mcycle();
 
                 // Poll the busy-state of Hypercorex
                 // Check both the Hypercorex and Streamer
@@ -222,6 +231,9 @@ int main() {
 
                 // Clear the HDC core... (so stupid)
                 csrw_ss(HYPERCOREX_CORE_SET_REG_ADDR, 0x00000040);
+
+                uint32_t core_end = snrt_mcycle();
+                printf("CRT %d\n", core_end - core_start);
             };
 
             snrt_cluster_hw_barrier();
@@ -231,6 +243,7 @@ int main() {
         // Set everything for the compute core
         //-------------------------------
         if (snrt_is_compute_core()) {
+            uint32_t core_config_start = snrt_mcycle();
             //-------------------------------
             // Configuring the streamers
             //-------------------------------
@@ -312,6 +325,11 @@ int main() {
             // Write control registers
             csrw_ss(HYPERCOREX_CORE_SET_REG_ADDR, 0x00000008);
 
+            uint32_t core_config_end = snrt_mcycle();
+            printf("CGT %d\n", core_config_end - core_config_start);
+
+            uint32_t core_start = snrt_mcycle();
+
             // Start hypercorex
             csrw_ss(HYPERCOREX_CORE_SET_REG_ADDR, 0x00000009);
 
@@ -319,6 +337,9 @@ int main() {
             // Check both the Hypercorex and Streamer
             while (csrr_ss(STREAMER_BUSY_CSR)) {
             };
+
+            uint32_t core_end = snrt_mcycle();
+            printf("CRT %d\n", core_end - core_start);
 
             //-------------------------------
             // Check results

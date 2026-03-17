@@ -13,7 +13,7 @@ DATAGEN_PY = $(DATA_DIR)/datagen.py
 DATA_H = $(DATA_DIR)/data.h
 
 # INPUTS
-INPUT_MUL = 72
+INPUT_MUL = 4
 
 .PHONY: clean clean-data
 

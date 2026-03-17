@@ -45,8 +45,10 @@ DEVICE_DIR  = $(abspath $(HOST_DIR)/../device)
 # DEVICE_APPS += snax/snax-hypercorex-isolet-recog
 # DEVICE_APPS += snax/snax-hypercorex-ucihar-recog
 # DEVICE_APPS += snax/snax-hypercorex-dna-recog
-DEVICE_APPS += snax/snax-nvsa
-# DEVICE_APPS += snax/snax-cgra-cmatmul
+# DEVICE_APPS += snax/snax-nvsa
+# DEVICE_APPS += snax/snax-data-transfer-nvsa
+# DEVICE_APPS += snax/snax-gemmx-conv
+DEVICE_APPS += snax/snax-gemmx-matmul
 
 # Dependencies
 INCDIRS += $(RUNTIME_DIR)

@@ -79,7 +79,7 @@ int main() {
             snrt_dma_wait_all();
 
             uint32_t end_dma_load = snrt_mcycle();
-            printf("DMT %d\n", end_dma_load - start_dma_load);
+            printf("DMA %d\r\n", end_dma_load - start_dma_load);
         };
 
         // Synchronize cores
@@ -159,7 +159,7 @@ int main() {
             csrw_ss(HYPERCOREX_CORE_SET_REG_ADDR, 0x00000008);
 
             uint32_t core_config_end = snrt_mcycle();
-            printf("CGT %d\n", core_config_end - core_config_start);
+            printf("CFG %d\r\n", core_config_end - core_config_start);
 
             uint32_t core_start = snrt_mcycle();
 
@@ -172,7 +172,7 @@ int main() {
             };
 
             uint32_t core_end = snrt_mcycle();
-            printf("CRT %d\n", core_end - core_start);
+            printf("RUN %d\r\n", core_end - core_start);
 
             //-------------------------------
             // Check results
@@ -185,9 +185,9 @@ int main() {
 
             // Return value
             if(err == 0){
-                printf("P\n");
+                printf("P\r\n");
             } else {
-                printf("F\n");
+                printf("F\r\n");
             }
         };
 

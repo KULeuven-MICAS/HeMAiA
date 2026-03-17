@@ -166,7 +166,7 @@ int main() {
             end_cycle = snrt_mcycle();
             // printf("C1DMHW %d \r\n", snrt_get_perf_counter(SNRT_PERF_CNT0));
             // snrt_reset_perf_counter(SNRT_PERF_CNT0);
-            printf("C1DMMC %d \r\n", end_cycle - start_cycle);
+            printf("C1DMA %d \r\n", end_cycle - start_cycle);
 
         }
 
@@ -212,7 +212,7 @@ int main() {
 
             
             end_cycle = snrt_mcycle();
-            printf("C1CGT %d \r\n", end_cycle - start_cycle);
+            printf("C1CFG %d \r\n", end_cycle - start_cycle);
 
             // Set CSR to start Streamer for conv2d
             start_cycle = snrt_mcycle();
@@ -225,11 +225,11 @@ int main() {
             wait_gemmx_and_streamer();
             end_cycle = snrt_mcycle();
 
-            printf("C1CRT %d \r\n", end_cycle - start_cycle);
+            printf("C1RUN %d \r\n", end_cycle - start_cycle);
 
-            performance_counter = read_gemmx_streamer_perf_counter();
+            // performance_counter = read_gemmx_streamer_perf_counter();
 
-            printf("C1CRTP %d \r\n", performance_counter);
+            // printf("C1CRTP %d \r\n", performance_counter);
 
         }
 
@@ -302,14 +302,14 @@ int main() {
                            tstride_src, tbound_src, 3, tstride_dst, tbound_dst,
                            0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF);
             end_cycle = snrt_mcycle();
-            printf("C1MPGT %d \r\n", end_cycle - start_cycle);
+            printf("C1CFG %d \r\n", end_cycle - start_cycle);
 
             start_cycle = snrt_mcycle();
             uint32_t task_id = xdma_start();
             xdma_wait(task_id);
             end_cycle = snrt_mcycle();
 
-            printf("C1MPRT %d \r\n", end_cycle - start_cycle);
+            printf("C1RUN %d \r\n", end_cycle - start_cycle);
         }
 
         //----------------------------
@@ -317,28 +317,28 @@ int main() {
         //----------------------------
         snrt_cluster_hw_barrier();
 
-        if(snrt_is_dm_core()){
-            local_a_fc = (int8_t *)(snrt_l1_next() + delta_local_a_fc);
-            local_b_fc = (int8_t *)(snrt_l1_next() + delta_local_b_fc);
-            local_c_fc = (int32_t *)(snrt_l1_next() + delta_local_c_fc);
-            local_d32_fc = (int32_t *)(snrt_l1_next() + delta_local_d32_fc);
-            local_d8_fc = (int8_t *)(snrt_l1_next() + delta_local_d8_fc);
+        // if(snrt_is_dm_core()){
+        //     local_a_fc = (int8_t *)(snrt_l1_next() + delta_local_a_fc);
+        //     local_b_fc = (int8_t *)(snrt_l1_next() + delta_local_b_fc);
+        //     local_c_fc = (int32_t *)(snrt_l1_next() + delta_local_c_fc);
+        //     local_d32_fc = (int32_t *)(snrt_l1_next() + delta_local_d32_fc);
+        //     local_d8_fc = (int8_t *)(snrt_l1_next() + delta_local_d8_fc);
 
-            // snrt_start_perf_counter(SNRT_PERF_CNT0, SNRT_PERF_CNT_DMA_BUSY,
-            //                         snrt_hartid());
-            start_cycle = snrt_mcycle();
-            snrt_dma_start_1d(
-                local_b_fc, B_fc,
-                N_fc * K_fc * tileSize * meshCol * sizeof(int8_t));
+        //     // snrt_start_perf_counter(SNRT_PERF_CNT0, SNRT_PERF_CNT_DMA_BUSY,
+        //     //                         snrt_hartid());
+        //     start_cycle = snrt_mcycle();
+        //     snrt_dma_start_1d(
+        //         local_b_fc, B_fc,
+        //         N_fc * K_fc * tileSize * meshCol * sizeof(int8_t));
 
-            snrt_dma_wait_all();
-            end_cycle = snrt_mcycle();
-            printf("DMAFC %d \r\n", end_cycle - start_cycle);
-            // printf("DMAFC %d \r\n", snrt_get_perf_counter(SNRT_PERF_CNT0));
-            // snrt_reset_perf_counter(SNRT_PERF_CNT0);
-        }
+        //     snrt_dma_wait_all();
+        //     end_cycle = snrt_mcycle();
+        //     printf("DMAFC %d \r\n", end_cycle - start_cycle);
+        //     // printf("DMAFC %d \r\n", snrt_get_perf_counter(SNRT_PERF_CNT0));
+        //     // snrt_reset_perf_counter(SNRT_PERF_CNT0);
+        // }
 
-        snrt_cluster_hw_barrier();
+        // snrt_cluster_hw_barrier();
 
     //     //----------------------------
     //     // Compute FC layer
@@ -444,103 +444,103 @@ int main() {
         // int err = 0;
         int err_counter;
 
-        if(snrt_is_dm_core()){
-             tcdm_c0_sb0 = (uint32_t*)snrt_cluster_base_addrl();
-            printf("C0 TCDM ADDR %p \r\n", tcdm_c0_sb0);
-            uint32_t dma_start = snrt_mcycle();
-            // Just transfer 1 block 
-            snrt_dma_start_1d(tcdm_c0_sb0, local_d8_fc, 512);
+        // if(snrt_is_dm_core()){
+        //      tcdm_c0_sb0 = (uint32_t*)snrt_cluster_base_addrl();
+        //     printf("C0 TCDM ADDR %p \r\n", tcdm_c0_sb0);
+        //     uint32_t dma_start = snrt_mcycle();
+        //     // Just transfer 1 block 
+        //     snrt_dma_start_1d(tcdm_c0_sb0, tcdm_maxpool_out, 512);
+        //     snrt_dma_wait_all();
+        //     uint32_t dma_end = snrt_mcycle();
+        //     printf("C0DM %d  \r\n", dma_end - dma_start);
+        //     // c0_barr_start = snrt_mcycle();
+        // };
+
+        // snrt_cluster_hw_barrier();
+
+        // if(snrt_cluster_core_idx() == 0){
+        //     printf("CGRA done! \n");
+        // };
+
+        snrt_cluster_hw_barrier();
+
+        int32_t *local_config_data;
+        int16_t *local_d16;
+
+        local_config_data = (int32_t *)(snrt_l1_next() + delta_config_data);
+        local_d16 = (int16_t *)(snrt_l1_next() + delta_store_data);
+
+        // Using DMA only
+        if (snrt_is_dm_core()) {
+            snrt_start_perf_counter(SNRT_PERF_CNT0, SNRT_PERF_CNT_DMA_BUSY,
+                                    snrt_hartid());
+            local_config_data = (int32_t *)(snrt_l1_next() + delta_config_lut);
+            snrt_dma_start_1d(local_config_data, CONFIG_LUT,
+                              CONFIG_SIZE_LUT * sizeof(uint32_t));
             snrt_dma_wait_all();
-            uint32_t dma_end = snrt_mcycle();
-            printf("C0DM %d  \r\n", dma_end - dma_start);
-            // c0_barr_start = snrt_mcycle();
-        };
 
+            local_config_data = (int32_t *)(snrt_l1_next() + delta_config_data);
+            snrt_dma_start_1d(local_config_data, CONFIG_CONST,
+                              CONFIG_SIZE_DATA * sizeof(uint32_t));
+            snrt_dma_wait_all();
+
+            if (CONFIG_SIZE_CMD_0 != 0) {
+                local_config_data =
+                    (int32_t *)(snrt_l1_next() + delta_config_cmd_0);
+                snrt_dma_start_1d(local_config_data, CONFIG_CMD,
+                                  CONFIG_SIZE_CMD_0 * sizeof(uint32_t));
+                snrt_dma_wait_all();
+            }
+
+            local_config_data =
+                (int32_t *)(snrt_l1_next() + delta_config_cmd_ss);
+            snrt_dma_start_1d(local_config_data, CONFIG_CMD_SS,
+                              CONFIG_SIZE_CMD_SS * sizeof(uint32_t));
+            snrt_dma_wait_all();
+
+            local_config_data = (int32_t *)(snrt_l1_next() + delta_comp_data);
+
+            snrt_dma_start_1d(local_config_data, COMP_DATA,
+                            COMP_DATA_SIZE * sizeof(uint32_t));
+            snrt_dma_wait_all();
+    
+            printf("C0DMA %d \r\n", snrt_get_perf_counter(SNRT_PERF_CNT0));
+            snrt_reset_perf_counter(SNRT_PERF_CNT0);
+        }
+    
         snrt_cluster_hw_barrier();
 
-        if(snrt_cluster_core_idx() == 0){
-            printf("CGRA done! \n");
-        };
+        // testing csr -> cgra
+        if (snrt_is_compute_core()) {
+            uint32_t mcycle_timestamps[7];
 
-        snrt_cluster_hw_barrier();
+            launch_cgra_0_config(delta_config_data, delta_comp_data,
+                                 delta_store_data, mcycle_timestamps);
+            launch_cgra_0_go(delta_config_data, delta_comp_data,
+                             delta_store_data, mcycle_timestamps);
 
-        // int32_t *local_config_data;
-        // int16_t *local_d16;
+            cgra_hw_barrier_fast(10, 1e5);
 
-        // local_config_data = (int32_t *)(snrt_l1_next() + delta_config_data);
-        // local_d16 = (int16_t *)(snrt_l1_next() + delta_store_data);
+            launch_cgra_0_relaunch(mcycle_timestamps);
 
-        // // Using DMA only
-        // if (snrt_is_dm_core()) {
-        //     snrt_start_perf_counter(SNRT_PERF_CNT0, SNRT_PERF_CNT_DMA_BUSY,
-        //                             snrt_hartid());
-        //     local_config_data = (int32_t *)(snrt_l1_next() + delta_config_lut);
-        //     snrt_dma_start_1d(local_config_data, CONFIG_LUT,
-        //                       CONFIG_SIZE_LUT * sizeof(uint32_t));
-        //     snrt_dma_wait_all();
-
-        //     local_config_data = (int32_t *)(snrt_l1_next() + delta_config_data);
-        //     snrt_dma_start_1d(local_config_data, CONFIG_CONST,
-        //                       CONFIG_SIZE_DATA * sizeof(uint32_t));
-        //     snrt_dma_wait_all();
-
-        //     if (CONFIG_SIZE_CMD_0 != 0) {
-        //         local_config_data =
-        //             (int32_t *)(snrt_l1_next() + delta_config_cmd_0);
-        //         snrt_dma_start_1d(local_config_data, CONFIG_CMD,
-        //                           CONFIG_SIZE_CMD_0 * sizeof(uint32_t));
-        //         snrt_dma_wait_all();
-        //     }
-
-        //     local_config_data =
-        //         (int32_t *)(snrt_l1_next() + delta_config_cmd_ss);
-        //     snrt_dma_start_1d(local_config_data, CONFIG_CMD_SS,
-        //                       CONFIG_SIZE_CMD_SS * sizeof(uint32_t));
-        //     snrt_dma_wait_all();
-
-        //     local_config_data = (int32_t *)(snrt_l1_next() + delta_comp_data);
-
-        //     snrt_dma_start_1d(local_config_data, COMP_DATA,
-        //                     COMP_DATA_SIZE * sizeof(uint32_t));
-        //     snrt_dma_wait_all();
-    
-        //     printf("DMA %d \r\n", snrt_get_perf_counter(SNRT_PERF_CNT0));
-        //     snrt_reset_perf_counter(SNRT_PERF_CNT0);
-        // }
-    
-        // snrt_cluster_hw_barrier();
-
-        // // testing csr -> cgra
-        // if (snrt_is_compute_core()) {
-        //     uint32_t mcycle_timestamps[7];
-
-        //     launch_cgra_0_config(delta_config_data, delta_comp_data,
-        //                          delta_store_data, mcycle_timestamps);
-        //     launch_cgra_0_go(delta_config_data, delta_comp_data,
-        //                      delta_store_data, mcycle_timestamps);
-
-        //     cgra_hw_barrier_fast(10, 1e5);
-
-        //     launch_cgra_0_relaunch(mcycle_timestamps);
-
-        //     cgra_hw_barrier_fast(10, 1e5);
+            cgra_hw_barrier_fast(10, 1e5);
             
-        //     // // cgra_hw_barrier(10, 1e5, 1, 1);
-        //     // cgra_hw_barrier_fast(10, 1e5);
+            // // cgra_hw_barrier(10, 1e5, 1, 1);
+            // cgra_hw_barrier_fast(10, 1e5);
 
-        //     cgra_hw_profiler();
+            cgra_hw_profiler();
 
-		// 	printf("mcycle cgra_init = %d\r\n", mcycle_timestamps[1] - mcycle_timestamps[0]);
-		// 	printf("mcycle cgra_config_prep = %d\r\n", mcycle_timestamps[2] - mcycle_timestamps[1]);
-		// 	printf("mcycle cgra_data_prep = %d\r\n", mcycle_timestamps[3] - mcycle_timestamps[2]);
-		// 	printf("mcycle cgra_launch_init = %d\r\n", mcycle_timestamps[4] - mcycle_timestamps[3]);
-		// 	printf("mcycle cgra_relaunch_init = %d\r\n", mcycle_timestamps[5] - mcycle_timestamps[4]);
-		// 	printf("mcycle cgra_relaunch_done = %d\r\n", mcycle_timestamps[6] - mcycle_timestamps[5]);
+			printf("mcycle cgra_init = %d\r\n", mcycle_timestamps[1] - mcycle_timestamps[0]);
+			printf("mcycle cgra_config_prep = %d\r\n", mcycle_timestamps[2] - mcycle_timestamps[1]);
+			printf("mcycle cgra_data_prep = %d\r\n", mcycle_timestamps[3] - mcycle_timestamps[2]);
+			printf("mcycle cgra_launch_init = %d\r\n", mcycle_timestamps[4] - mcycle_timestamps[3]);
+			printf("mcycle cgra_relaunch_init = %d\r\n", mcycle_timestamps[5] - mcycle_timestamps[4]);
+			printf("mcycle cgra_relaunch_done = %d\r\n", mcycle_timestamps[6] - mcycle_timestamps[5]);
 
 
 
-        // }
-        // snrt_cluster_hw_barrier();
+        }
+        snrt_cluster_hw_barrier();
     } 
 
     snrt_global_barrier();
@@ -578,7 +578,7 @@ int main() {
             tcdm_c2_sb2 = tcdm_c2_sb1 + 16;
             tcdm_c2_sb3 = tcdm_c2_sb2 + 16;
 
-            printf("C2 TCDM ADDR %p \r\n", tcdm_c2_sb0);
+            // printf("C2 TCDM ADDR %p \r\n", tcdm_c2_sb0);
 
             size_t src_stride = 8 * sizeof(uint64_t);
             size_t dst_stride = 4 * src_stride;
@@ -612,7 +612,7 @@ int main() {
 
             snrt_dma_wait_all();
             uint32_t dma_end = snrt_mcycle();
-            printf("C2DM %d  \r\n", dma_end - dma_start);
+            printf("C2DMA %d  \r\n", dma_end - dma_start);
         }
 
         // BARRIER
@@ -628,7 +628,7 @@ int main() {
                 tcdm_c2_sb3
             );
             uint32_t end_convert = snrt_mcycle();
-            printf("C2CT %d\n", end_convert - start_convert);
+            printf("C2RUN1 %d\n", end_convert - start_convert);
 
             // ACTIVATE HDC TASK
             uint32_t hdc_cfg_start = snrt_mcycle();
@@ -695,7 +695,7 @@ int main() {
             csrw_ss(HYPERCOREX_CORE_SET_REG_ADDR, 0x00000010);
 
             uint32_t hdc_cfg_end = snrt_mcycle();
-            printf("C2CGT: %d\n", hdc_cfg_end - hdc_cfg_start);
+            printf("C2CFG: %d\n", hdc_cfg_end - hdc_cfg_start);
 
 
             uint32_t hdc_core_start = snrt_mcycle();
@@ -709,7 +709,7 @@ int main() {
 
             // csrr_ss(STREAMER_BUSY_CSR)
             uint32_t hdc_core_end = snrt_mcycle();
-            printf("C2CRT %d \r\n", hdc_core_end - hdc_core_start);
+            printf("C2RUN2 %d \r\n", hdc_core_end - hdc_core_start);
 
             csrw_ss(HYPERCOREX_CORE_SET_REG_ADDR, 0x00000040);
 
