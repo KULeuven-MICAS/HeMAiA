@@ -274,7 +274,7 @@ import ${name}_pkg::*;
     .pll_bypass_i('0),
     .pll_en_i('0),
     .pll_post_div_sel_i('0),
-    .pll_lock_o(*/Not Connected*/),
+    .pll_lock_o(/*Not Connected*/),
   %endif
     .clk_o(clk_vec),
     .rst_no(rst_n_vec)

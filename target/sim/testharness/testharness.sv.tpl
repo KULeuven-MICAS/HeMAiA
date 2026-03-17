@@ -38,8 +38,11 @@ spi_master_present = any(periph["name"] == "spim" for periph in occamy_cfg["peri
 i2c_present = any(periph["name"] == "i2c" for periph in occamy_cfg["peripherals"]["axi_lite_narrow_peripherals"])
 pll_present = occamy_cfg["use_vendor_pll"]
 %>
-
+%if pll_present:
 `timescale 1ps / 1fs
+%else:
+`timescale 1ns / 1ps
+%endif
 `include "axi/typedef.svh"
 
 module testharness
@@ -268,11 +271,6 @@ module testharness
       .io_pll_en_i (pll_en_i),
       .io_pll_post_div_sel_i(pll_post_div_sel_i),
       .io_pll_lock_o(pll_lock_o),
-      %else:
-      .io_pll_bypass_i(const_zero),
-      .io_pll_en_i(const_zero),
-      .io_pll_post_div_sel_i('0),
-      .io_pll_lock_o(),
       %endif
       .io_clk_obs_o(),
       .io_clk_periph_i(periph_clk_i),

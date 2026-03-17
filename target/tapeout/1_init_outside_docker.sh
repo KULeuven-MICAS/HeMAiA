@@ -1,6 +1,8 @@
 #!/bin/bash
 script_dir="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 cfg_name="hemaia_tapeout.hjson"
+# Control whether to fetch and enable the vendor PLL support. Default: 1 (maintain previous behavior)
+SIM_WITH_PLL=0
 if [ ! -d "$script_dir/../../hw/hemaia/tech_cells_tsmc16" ]; then
     git clone https://github.com/IveanEx/tech_cells_tsmc16.git "$script_dir/../../hw/hemaia/tech_cells_tsmc16"
 else
@@ -13,14 +15,18 @@ else
     cd $script_dir/../../hw/hemaia/hemaia_d2d_link || exit
     git pull
 fi
-if [ ! -d "$script_dir/../../hw/hemaia/hemaia_clk_rst_controller" ]; then
-    git clone https://github.com/IveanEx/hemaia_clk_rst_controller.git "$script_dir/../../hw/hemaia/hemaia_clk_rst_controller"
-    cd $script_dir/../../hw/hemaia/hemaia_clk_rst_controller || exit
-    git checkout main
-    git pull
+if [ "$SIM_WITH_PLL" -eq 1 ]; then
+    if [ ! -d "$script_dir/../../hw/hemaia/hemaia_clk_rst_controller" ]; then
+        git clone https://github.com/IveanEx/hemaia_clk_rst_controller.git "$script_dir/../../hw/hemaia/hemaia_clk_rst_controller"
+        cd $script_dir/../../hw/hemaia/hemaia_clk_rst_controller || exit
+        git checkout main
+        git pull
+    else
+        cd $script_dir/../../hw/hemaia/hemaia_clk_rst_controller || exit
+        git pull
+    fi
 else
-    cd $script_dir/../../hw/hemaia/hemaia_clk_rst_controller || exit
-    git pull
+    echo "SIM_WITH_PLL!=1: skipping hemaia_clk_rst_controller checkout/update"
 fi
 if [ ! -d "$script_dir/dc_work_hemaia" ]; then
     git clone https://github.com/IveanEx/dc_work_hemaia.git "$script_dir/dc_work_hemaia"
@@ -45,9 +51,13 @@ else
     sed -i '/tech_cells_generic:/c\  tech_cells_generic:  { path: hw/hemaia/tech_cells_tsmc16 }' "$bender_local_file"
 fi
 
-if ! grep -q "hemaia_clk_rst_controller" "$bender_local_file"; then
-    echo '  hemaia_clk_rst_controller:  { path: hw/hemaia/hemaia_clk_rst_controller }' >> "$bender_local_file"
+if [ "$SIM_WITH_PLL" -eq 1 ]; then
+    if ! grep -q "hemaia_clk_rst_controller" "$bender_local_file"; then
+        echo '  hemaia_clk_rst_controller:  { path: hw/hemaia/hemaia_clk_rst_controller }' >> "$bender_local_file"
+    else
+        # Replace the existing hemaia_clk_rst_controller line
+        sed -i '/hemaia_clk_rst_controller:/c\  hemaia_clk_rst_controller:  { path: hw/hemaia/hemaia_clk_rst_controller }' "$bender_local_file"
+    fi
 else
-    # Replace the existing hemaia_clk_rst_controller line
-    sed -i '/hemaia_clk_rst_controller:/c\  hemaia_clk_rst_controller:  { path: hw/hemaia/hemaia_clk_rst_controller }' "$bender_local_file"
+    echo "SIM_WITH_PLL!=1: leaving Bender.local entry for hemaia_clk_rst_controller untouched"
 fi
