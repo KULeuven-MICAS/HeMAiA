@@ -197,34 +197,6 @@
                 }
             }
         },
-        "is_remote_quadrant": {
-            "description": "Set if this is a remote quadrant. Only quadrant ant remote interconnect is generated",
-            "type": "boolean",
-            "default": false
-        },
-        "remote_quadrants": {
-            "title": "Remote Quadrants",
-            "type": "array",
-            "description": "List of attached remote quadrants",
-            "minItems": 0,
-            "items": {
-                "type": "object",
-                "title": "Remote Quadrant Description",
-                "description": "Description of a remote quadrant",
-                "properties": {
-                    "nr_clusters": {
-                        "type": "integer",
-                        "default": 4,
-                        "description": "Number of clusters in an S1 quadrant."
-                    },
-                    "nr_cluster_cores": {
-                        "type": "integer",
-                        "default": 8,
-                        "description": "Number of cores in a cluster"
-                    }
-                }
-            }
-        },
         "s1_quadrant": {
             "title": "S1 Quadrant Properties",
             "type": "object",
