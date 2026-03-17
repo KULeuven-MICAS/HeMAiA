@@ -53,6 +53,8 @@ module testharness
   `define PRI_FREQ_MHZ            32.0
   `define CLK_FREF_PERIOD         (1.0e-6/`CLK_FREF_FREQ_MHZ/`TIMESCALEVAL)
   `define PRI_PERIOD              (1.0e-6/`PRI_FREQ_MHZ/`TIMESCALEVAL)
+  // The PLL_FB_DIV is set to 100
+  // So 40MHZ External CLK => 4000MHz pll output clk
   localparam CLKTCK = `CLK_FREF_PERIOD; 
   localparam PRITCK = `PRI_PERIOD;
   %else:
@@ -102,8 +104,10 @@ module testharness
     rtc_clk_drv    = 0;
     mst_clk_drv    = 0;
     periph_clk_drv = 0;
+
     // Init the reset pin
-    rst_ni_drv = 1;
+    rst_ni_drv = 0;
+
     %if pll_present:
     // Init the PLL control
     pll_bypass_drv = 1'b0;
@@ -117,11 +121,11 @@ module testharness
     #(1us); 
     // PLL on
     pll_en_drv = 1'b1;
-    // Wait for phase lock    @(posedge pll_lock_o);
-    $display("PLL Lock asserted");    
+    // Wait for phase lock
+    @(posedge pll_lock_o);
+    $display("PLL Lock asserted");
     %endif
-    #(1us);
-    rst_ni_drv = 0;
+
    // Load the binaries
 % for chip in chip_coordinates:
 %   if chip.type == ChipletType.COMPUTE:
@@ -145,11 +149,11 @@ module testharness
 %     endfor
 %   endif
 % endfor
-    // Release the reset
-    #(10 + $urandom % 10);
+    // Some random delay
+    #(37us);
+    rst_ni_drv = 1;
     current_time = $time / 1000;
     $display("Reset released at %tns", $time / 1000);
-    rst_ni_drv = 1;
   endtask
 
   // Call the reusable init task from an initial block.
