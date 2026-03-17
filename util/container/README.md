@@ -57,6 +57,6 @@ podman run --rm --workdir /your-gitrepo -it -v /your-gitrepo:/your-gitrepo ghcr.
 ```
 Than you could run 
 ```shell
-$ source start_ising.sh
+$ source start_hemaia.sh
 ```
 under /your-repo.
