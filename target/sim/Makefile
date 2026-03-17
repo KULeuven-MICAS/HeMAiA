@@ -46,9 +46,14 @@ SIM_WITH_MACRO ?= 0
 SIM_WITH_NETLIST ?= 0
 SIM_WITH_WAVEFORM ?= 1
 SIM_WITH_INTERPOSER ?= 0
-SIM_WITH_PLL ?= 0
-
-
+# Derive SIM_WITH_PLL from the configuration file ($(CFG)) unless the
+# variable is overridden on the `make` command line. The HJSON may contain
+# either `use_vendor_pll: true` or simply `use_vendor_pll` (implicit true).
+# If the file explicitly contains `use_vendor_pll: false` we treat it as 0.
+SIM_WITH_PLL ?= $(shell if [ -f "$(CFG)" ]; then \
+	if grep -E -q '^[[:space:]]*use_vendor_pll[[:space:]]*[:=][[:space:]]*false' "$(CFG)"; then echo 0; \
+	elif grep -E -q '^[[:space:]]*use_vendor_pll' "$(CFG)"; then echo 1; \
+	else echo 0; fi; else echo 0; fi)
 
 VSIM_BENDER += $(shell cat ../rtl/src/bender_targets.tmp)
 VLT_BENDER  += $(shell cat ../rtl/src/bender_targets.tmp)
@@ -79,6 +84,14 @@ else
 	VLT_BENDER  += -t simulation_hemaia
 	VCS_BENDER  += -t simulation_hemaia
 endif
+
+ifeq ($(SIM_WITH_PLL), 1)
+	VSIM_BENDER += -t tsmc16_pll_sim 
+	VLT_BENDER  += -t tsmc16_pll_sim 
+	VCS_BENDER  += -t tsmc16_pll_sim
+endif
+
+
 
 ifeq ($(SIM_WITH_PLL), 1)
 VSIM_FLAGS += -t 1fs
