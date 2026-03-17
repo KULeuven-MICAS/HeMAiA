@@ -117,6 +117,7 @@ module hemaia_mem_chip #(
   axi_lite_a48_d32_rsp_t axi_lite_clk_rst_ctrl_rsp;
 
   hemaia_clk_rst_controller #(
+      .USE_VENDOR_PLL(0),
       .NumClocks(5),
       .MaxDivisionWidth(8),
       .DefaultDivision(HeMAiAMemChipDivision),
@@ -133,9 +134,12 @@ module hemaia_mem_chip #(
       // source clock and reset
       .mst_clk_i(clk_i),
       .mst_rst_ni(rst_ni),
-      // Disable the backup functionality
-      .bypass_pll_division_i(1'b0),
-      .clk_obs_o(),
+      // Disable the PLL
+      .pll_bypass_i      (1'b0),
+      .pll_en_i          (1'b0),
+      .pll_post_div_sel_i(2'b00),
+      .pll_lock_o        (/* Not used */),
+      .clk_obs_o         ( /* Not used */),
       // generated clocks and resets
       .clk_o(clk_vec),
       .rst_no(rst_n_vec)

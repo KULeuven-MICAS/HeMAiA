@@ -329,6 +329,11 @@
             "type": "integer",
             "description": "Backup Boot Address",
             "default": 2147483648            
+        },
+        "use_vendor_pll": {
+            "type": "boolean",
+            "description": "Whether to use the vendor PLL or bypass it and use the input clock directly",
+            "default": false
         }
     }
 }
