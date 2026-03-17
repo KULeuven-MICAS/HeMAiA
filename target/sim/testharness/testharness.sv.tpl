@@ -89,6 +89,22 @@ module testharness
   assign rst_ni        = rst_ni_drv;
   assign rst_periph_ni = rst_ni;
 
+  %if pll_present:
+  // Vendor PLL clk monitor
+  clkmon #(.counts(2500), .pcterr(0.35)
+  ) i_pll_mon (
+    .CLK_REF(i_hemaia_0_0.i_occamy_chip.i_hemaia_clk_rst_controller.i_pll.clk_o),
+    .DONE(),
+    .TIMEOUT()
+  );
+  task check_frequency();
+      begin
+          i_pll_mon.run();
+      end
+  endtask
+  %endif
+
+
   // Chip finish signal
   integer chip_finish[${max_compute_chiplet_x}:${min_compute_chiplet_x}][${max_compute_chiplet_y}:${min_compute_chiplet_y}];
 
@@ -124,6 +140,7 @@ module testharness
     // Wait for phase lock
     @(posedge pll_lock_o);
     $display("PLL Lock asserted");
+    check_frequency;
     %endif
 
    // Load the binaries
@@ -150,7 +167,7 @@ module testharness
 %   endif
 % endfor
     // Some random delay
-    #(37us);
+    #(37.13us);
     rst_ni_drv = 1;
     current_time = $time / 1000;
     $display("Reset released at %tns", $time / 1000);
