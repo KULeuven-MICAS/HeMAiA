@@ -57,14 +57,14 @@ int main() {
             snrt_start_perf_counter(SNRT_PERF_CNT0, SNRT_PERF_CNT_DMA_BUSY,
                                     snrt_hartid());
             if (interleaved_address == 1) {
-                start_cycle = snrt_mcycle();
+                // start_cycle = snrt_mcycle();
                 snrt_dma_start_1d(local_a, A,
                                   Nbatch * (H + 2 * pad_h) * (W + 2 * pad_w) *
                                       Cin * sizeof(int8_t));
                 snrt_dma_start_1d(local_b, B,
                                   Cout * Kh * Kw * Cin * sizeof(int8_t));
             } else {
-                start_cycle = snrt_mcycle();
+                // start_cycle = snrt_mcycle();
                 snrt_dma_start_2d(
                     local_a_dma, A, 64 * sizeof(int8_t), 256, 64,
                     Nbatch * (H + 2 * pad_h) * (W + 2 * pad_w) * Cin / 64);
@@ -72,12 +72,12 @@ int main() {
                                   Cout * Kh * Kw * Cin / 64);
             }
             snrt_dma_wait_all();
-            end_cycle = snrt_mcycle();
-            printf("DMA transfer cycle from DMA hardware counter %d  for A and B\r\n",
+            // end_cycle = snrt_mcycle();
+            printf("DMA1 %d\r\n",
                    snrt_get_perf_counter(SNRT_PERF_CNT0));
             snrt_reset_perf_counter(SNRT_PERF_CNT0);
-            printf("DMA transfer cycle from mcycle: %d cycles for A and B \r\n",
-                   end_cycle - start_cycle);
+            // printf("DMA transfer cycle from mcycle: %d cycles for A and B \r\n",
+            //        end_cycle - start_cycle);
         }
 
         // Wait for DMA to finish
@@ -97,11 +97,11 @@ int main() {
             }
             snrt_dma_wait_all();
             end_cycle = snrt_mcycle();
-            printf("DMA transfer cycle from DMA hardware counter %d \r\n",
+            printf("DMA2 %d \r\n",
                    snrt_get_perf_counter(SNRT_PERF_CNT0));
             snrt_reset_perf_counter(SNRT_PERF_CNT0);
-            printf("DMA transfer cycle from mcycle: %d cycles for C \r\n",
-                   end_cycle - start_cycle);
+            // printf("DMA transfer cycle from mcycle: %d cycles for C \r\n",
+            //        end_cycle - start_cycle);
         }
 
         snrt_cluster_hw_barrier();
@@ -140,7 +140,7 @@ int main() {
                 shared_multiplier3, shared_multiplier4, shared_multiplier5,
                 shared_multiplier6, shared_multiplier7, M * N, bypassSIMD);
             end_cycle = snrt_mcycle();
-            printf("Configuration cycles: %d \r\n", end_cycle - start_cycle);
+            printf("CFG %d \r\n", end_cycle - start_cycle);
 
             // Set CSR to start Streamer for conv2d
             start_cycle = snrt_mcycle();
@@ -153,13 +153,13 @@ int main() {
             wait_gemmx_and_streamer();
             end_cycle = snrt_mcycle();
 
-            printf("Compute total cycles from mcycle: %d \r\n",
-                   end_cycle - start_cycle);
+            // printf("Compute total cycles from mcycle: %d \r\n",
+            //        end_cycle - start_cycle);
 
             int performance_counter = 0;
             performance_counter = read_gemmx_streamer_perf_counter();
 
-            printf("GeMM performance counter: %d \r\n", performance_counter);
+            printf("RUN %d \r\n", performance_counter);
 
             int if_inifinit_loop = 0;
             while (0) {

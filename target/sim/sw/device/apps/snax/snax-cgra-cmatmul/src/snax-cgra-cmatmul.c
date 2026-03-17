@@ -90,30 +90,22 @@ int main() {
             // cgra_hw_barrier(10, 1e5, 1, 1);
             cgra_hw_barrier_fast(10, 1e5);
 
-            // cgra_hw_profiler();
+            launch_cgra_0_relaunch(mcycle_timestamps);
 
-            // fast run again, without re-load cfg
-
-            while (1) {
-                launch_cgra_0_relaunch(mcycle_timestamps);
-            }
-
+            cgra_hw_barrier_fast(10, 1e5);
+            
             // // cgra_hw_barrier(10, 1e5, 1, 1);
             // cgra_hw_barrier_fast(10, 1e5);
 
-            // cgra_hw_profiler();
+            cgra_hw_profiler();
 
-            // printf("mcycle cgra_init = %d\r\n", mcycle_timestamps[1] -
-            // mcycle_timestamps[0]); printf("mcycle cgra_config_prep = %d\r\n",
-            // mcycle_timestamps[2] - mcycle_timestamps[1]); printf("mcycle
-            // cgra_data_prep = %d\r\n", mcycle_timestamps[3] -
-            // mcycle_timestamps[2]); printf("mcycle cgra_launch_init = %d\r\n",
-            // mcycle_timestamps[4] - mcycle_timestamps[3]); printf("mcycle
-            // cgra_relaunch_init = %d\r\n", mcycle_timestamps[5] -
-            // mcycle_timestamps[4]); printf("mcycle cgra_relaunch_done =
-            // %d\r\n", mcycle_timestamps[6] - mcycle_timestamps[5]);
-            // printf("mcycle cgra_relaunch_done = %d\r\n", mcycle_timestamps[6]
-            // - mcycle_timestamps[5]);
+			printf("mcycle cgra_init = %d\r\n", mcycle_timestamps[1] - mcycle_timestamps[0]);
+			printf("mcycle cgra_config_prep = %d\r\n", mcycle_timestamps[2] - mcycle_timestamps[1]);
+			printf("mcycle cgra_data_prep = %d\r\n", mcycle_timestamps[3] - mcycle_timestamps[2]);
+			printf("mcycle cgra_launch_init = %d\r\n", mcycle_timestamps[4] - mcycle_timestamps[3]);
+			printf("mcycle cgra_relaunch_init = %d\r\n", mcycle_timestamps[5] - mcycle_timestamps[4]);
+			printf("mcycle cgra_relaunch_done = %d\r\n", mcycle_timestamps[6] - mcycle_timestamps[5]);
+
 
             return 0;
         } else

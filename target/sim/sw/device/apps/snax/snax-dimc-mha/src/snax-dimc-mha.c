@@ -35,13 +35,13 @@ int main() {
         // load WK, K, Q to TCDM
 
         if (snrt_is_dm_core()) {
-            printf("DMA core is configured for K and WK\r\n");
+            // printf("DMA core is configured for K and WK\r\n");
 
             // measure the start of cycle count for preloading data to TCDM
             uint32_t start_dma_load = snrt_mcycle();
 
             // initialize TCDM with matrix K by DMA
-            printf("INITIALIZING TCDM\r\n");
+            // printf("INITIALIZING TCDM\r\n");
 
             // read weight WK and ativation K from data.h
             size_t vector_size = Q_LENGTH * sizeof(uint64_t);
@@ -53,8 +53,9 @@ int main() {
             snrt_dma_wait_all();
 
             // measures the end of the DMA transfer process
+            // printf("DMA core exits after loading K and WK\r\n"); 
             uint32_t end_dma_load = snrt_mcycle();
-            printf("DMA core exits after loading K and WK\r\n"); 
+            printf("DMTI %d\n", end_dma_load - start_dma_load);
         }
 
         /**************************************************************************/
@@ -66,32 +67,36 @@ int main() {
         /**************************************************************************/
 
         if (snrt_is_compute_core()){
-            printf("COMPUTE CORE is configured\r\n");
+            uint32_t core_config_start = snrt_mcycle();
+            // printf("COMPUTE CORE is configured\r\n");
 
-            // configure the accelerator
-            printf("ENTERING MHA MODE\r\n");
+            // // configure the accelerator
+            // printf("ENTERING MHA MODE\r\n");
 
-            uint32_t busy = dimc_query_busy();
-            printf("%d: busy\r\n", busy);
-            printf("QUERYING BUSY SUCCEEDED\r\n");
+            // uint32_t busy = dimc_query_busy();
+            // printf("%d: busy\r\n", busy);
+            // printf("QUERYING BUSY SUCCEEDED\r\n");
 
             configure_accelerator();
 
-            printf("CONFIGURING ACCELERATOR SUCCEEDED\r\n");
+            // printf("CONFIGURING ACCELERATOR SUCCEEDED\r\n");
 
-            uint32_t read_zp_qkv = read_zp();
-            printf("%d: read_zp_qkv\r\n", read_zp_qkv);
-            printf("READING ZP SUCCEEDED\r\n");
+            // uint32_t read_zp_qkv = read_zp();
+            // printf("%d: read_zp_qkv\r\n", read_zp_qkv);
+            // printf("READING ZP SUCCEEDED\r\n");
 
             // send WK
-            printf("CONFIGURING STREAMERS for WK\r\n");
+            // printf("CONFIGURING STREAMERS for WK\r\n");
             dimc_set_streamer_dim_w(0, 0, 0, 0, 0, 0);
             dimc_set_streamer_dim_r0(128, 1, 256, 0, 8, (uint32_t)(weight_ptr));
             dimc_set_streamer_dim_r1(128, 1, 256, 0, 8, (uint32_t)(weight_ptr + 8));
             dimc_set_streamer_dim_r2(128, 1, 256, 0, 8, (uint32_t)(weight_ptr + 16));
             dimc_set_streamer_dim_r3(128, 1, 256, 0, 8, (uint32_t)(weight_ptr + 24));
-            printf("STREAMER CONFIGURED FOR WK\r\n");
+            // printf("STREAMER CONFIGURED FOR WK\r\n");
+            uint32_t core_config_end = snrt_mcycle();
+            printf("CGTP %d\n", core_config_end - core_config_start);
 
+            uint32_t core_start = snrt_mcycle();
             // configure the accelerator to start MHA computation
             dimc_start_mha();
 
@@ -99,6 +104,8 @@ int main() {
             dimc_start_streamer();
 
             while (dimc_is_streamer_busy()) { }
+            uint32_t core_end = snrt_mcycle();
+            printf("CRTP %d\n", core_end - core_start);
         }
 
         /**************************************************************************/
@@ -111,29 +118,39 @@ int main() {
         /**************************************************************************/
 
         if (snrt_is_dm_core()) {
-            printf("DMA core is configured for WQ\r\n");
+            // printf("DMA core is configured for WQ\r\n");
 
             // read weight WQ from data.h
+            uint32_t start_dma_load = snrt_mcycle();
             size_t vector_size = Q_LENGTH * sizeof(uint64_t);
 
             snrt_dma_start_1d(weight_ptr, WQ, vector_size);
 
             snrt_dma_wait_all();
+            uint32_t end_dma_load = snrt_mcycle();
+            // printf("DMTP %d\n", end_dma_load - start_dma_load);
         }
 
         if (snrt_is_compute_core()){
             // send K
-            printf("CONFIGURING STREAMERS for K\r\n");
+            // printf("CONFIGURING STREAMERS for K\r\n");
+            uint32_t core_config_start = snrt_mcycle();
             dimc_set_streamer_dim_w(0, 0, 0, 0, 0, 0);
             dimc_set_streamer_dim_r0(128, 1, 256, 0, 8, (uint32_t)(activation_ptr));
             dimc_set_streamer_dim_r1(128, 1, 256, 0, 8, (uint32_t)(activation_ptr + 8));
             dimc_set_streamer_dim_r2(128, 1, 256, 0, 8, (uint32_t)(activation_ptr + 16));
             dimc_set_streamer_dim_r3(128, 1, 256, 0, 8, (uint32_t)(activation_ptr + 24));
-            printf("STREAMER CONFIGURED FOR K\r\n");
+            // printf("STREAMER CONFIGURED FOR K\r\n");
+            uint32_t core_config_end = snrt_mcycle();
+            printf("CGTP %d\n", core_config_end - core_config_start);
 
+            uint32_t core_start = snrt_mcycle();
             dimc_start_streamer();
 
             while (dimc_is_streamer_busy()) { }
+
+            uint32_t core_end = snrt_mcycle();
+            printf("CRTP %d\n", core_end - core_start);
         }
 
         /**************************************************************************/
@@ -146,17 +163,23 @@ int main() {
 
         if(snrt_is_compute_core()) {
             // send WQ
-            printf("CONFIGURING STREAMERS for WQ\r\n");
+            // printf("CONFIGURING STREAMERS for WQ\r\n");
+            uint32_t core_config_start = snrt_mcycle();
             dimc_set_streamer_dim_w(0, 0, 0, 0, 0, 0);
             dimc_set_streamer_dim_r0(128, 1, 256, 0, 8, (uint32_t)(weight_ptr));
             dimc_set_streamer_dim_r1(128, 1, 256, 0, 8, (uint32_t)(weight_ptr + 8));
             dimc_set_streamer_dim_r2(128, 1, 256, 0, 8, (uint32_t)(weight_ptr + 16));
             dimc_set_streamer_dim_r3(128, 1, 256, 0, 8, (uint32_t)(weight_ptr + 24));
-            printf("STREAMER CONFIGURED for WQ\r\n");
+            // printf("STREAMER CONFIGURED for WQ\r\n");
+            uint32_t core_config_end = snrt_mcycle();
+            printf("CGTP %d\n", core_config_end - core_config_start);
 
+            uint32_t core_start = snrt_mcycle();
             dimc_start_streamer();
 
             while (dimc_is_streamer_busy()) { }
+            uint32_t core_end = snrt_mcycle();
+            printf("CRTP %d\n", core_end - core_start);
         }
 
         /**************************************************************************/
@@ -169,30 +192,39 @@ int main() {
         /**************************************************************************/
 
         if (snrt_is_dm_core()) {
-            printf("DMA core is configured for WQ\r\n");
+            // printf("DMA core is configured for WQ\r\n");
 
             // read weight WK and ativation K from data.h
+            uint32_t start_dma_load = snrt_mcycle();
             size_t vector_size = Q_LENGTH * sizeof(uint64_t);
 
             snrt_dma_start_1d(activation_ptr, V, vector_size);
             snrt_dma_start_1d(weight_ptr, WV, vector_size);
 
             snrt_dma_wait_all();
+            uint32_t end_dma_load = snrt_mcycle();
+            // printf("DMTP %d\n", end_dma_load - start_dma_load);
         }
 
         if (snrt_is_compute_core()){
             // send Q
-            printf("CONFIGURING STREAMERS for Q\r\n");
+            // printf("CONFIGURING STREAMERS for Q\r\n");
+            uint32_t core_config_start = snrt_mcycle();
             dimc_set_streamer_dim_w(64, 1, 64, 0, 8, (uint32_t)(buffer_ptr));
             dimc_set_streamer_dim_r0(128, 1, 256, 0, 8, (uint32_t)(activation_ptr_i));
             dimc_set_streamer_dim_r1(128, 1, 256, 0, 8, (uint32_t)(activation_ptr_i + 8));
             dimc_set_streamer_dim_r2(128, 1, 256, 0, 8, (uint32_t)(activation_ptr_i + 16));
             dimc_set_streamer_dim_r3(128, 1, 256, 0, 8, (uint32_t)(activation_ptr_i + 24));
-            printf("STREAMER CONFIGURED for Q\r\n");
+            // printf("STREAMER CONFIGURED for Q\r\n");
+            uint32_t core_config_end = snrt_mcycle();
+            printf("CGTP %d\n", core_config_end - core_config_start);
 
+            uint32_t core_start = snrt_mcycle();
             dimc_start_streamer();
 
             while (dimc_is_streamer_busy()) { }
+            uint32_t core_end = snrt_mcycle();
+            printf("CRTP %d\n", core_end - core_start);
         }
 
         /**************************************************************************/
@@ -205,17 +237,23 @@ int main() {
 
         if (snrt_is_compute_core()){
             // send V
-            printf("CONFIGURING STREAMERS for V\r\n");
+            // printf("CONFIGURING STREAMERS for V\r\n");
+            uint32_t core_config_start = snrt_mcycle();
             dimc_set_streamer_dim_w(0, 0, 0, 0, 0, 0);
             dimc_set_streamer_dim_r0(128, 1, 256, 0, 8, (uint32_t)(activation_ptr));
             dimc_set_streamer_dim_r1(128, 1, 256, 0, 8, (uint32_t)(activation_ptr + 8));
             dimc_set_streamer_dim_r2(128, 1, 256, 0, 8, (uint32_t)(activation_ptr + 16));
             dimc_set_streamer_dim_r3(128, 1, 256, 0, 8, (uint32_t)(activation_ptr + 24));
-            printf("STREAMER CONFIGURED for V\r\n");
+            // printf("STREAMER CONFIGURED for V\r\n");
+            uint32_t core_config_end = snrt_mcycle();
+            printf("CGTP %d\n", core_config_end - core_config_start);
 
+            uint32_t core_start = snrt_mcycle();
             dimc_start_streamer();
 
             while (dimc_is_streamer_busy()) { }
+            uint32_t core_end = snrt_mcycle();
+            printf("CRTP %d\n", core_end - core_start);
         }
 
         /**************************************************************************/
@@ -228,17 +266,23 @@ int main() {
 
         if (snrt_is_compute_core()) {
             // send WV
-            printf("CONFIGURING STREAMERS for WV\r\n");
+            // printf("CONFIGURING STREAMERS for WV\r\n");
+            uint32_t core_config_start = snrt_mcycle();
             dimc_set_streamer_dim_w(0, 0, 0, 0, 0, 0);
             dimc_set_streamer_dim_r0(128, 1, 256, 0, 8, (uint32_t)(weight_ptr));
             dimc_set_streamer_dim_r1(128, 1, 256, 0, 8, (uint32_t)(weight_ptr + 8));
             dimc_set_streamer_dim_r2(128, 1, 256, 0, 8, (uint32_t)(weight_ptr + 16));
             dimc_set_streamer_dim_r3(128, 1, 256, 0, 8, (uint32_t)(weight_ptr + 24));
-            printf("STREAMER CONFIGURED for WV\r\n");
+            // printf("STREAMER CONFIGURED for WV\r\n");
+            uint32_t core_config_end = snrt_mcycle();
+            printf("CGTP %d\n", core_config_end - core_config_start);
 
+            uint32_t core_start = snrt_mcycle();
             dimc_start_streamer();
 
             while (dimc_is_streamer_busy()) { }
+            uint32_t core_end = snrt_mcycle();
+            printf("CRTP %d\n", core_end - core_start);
         }
 
         /**************************************************************************/
@@ -252,17 +296,23 @@ int main() {
 
         if (snrt_is_compute_core()) {
             // send Q1K1T
-            printf("CONFIGURING STREAMERS for Q1K1T\r\n");
+            // printf("CONFIGURING STREAMERS for Q1K1T\r\n");
+            uint32_t core_config_start = snrt_mcycle();
             dimc_set_streamer_dim_w(64, 1, 64, 0, 8, (uint32_t)(output_ptr));
             dimc_set_streamer_dim_r0(16, 1, 256, 0, 8, (uint32_t)(buffer_ptr));
             dimc_set_streamer_dim_r1(16, 1, 256, 0, 8, (uint32_t)(buffer_ptr + 8));
             dimc_set_streamer_dim_r2(16, 1, 256, 0, 8, (uint32_t)(buffer_ptr + 16));
             dimc_set_streamer_dim_r3(16, 1, 256, 0, 8, (uint32_t)(buffer_ptr + 24));
-            printf("STREAMER CONFIGURED for Q1K1T\r\n");
+            // printf("STREAMER CONFIGURED for Q1K1T\r\n");
+            uint32_t core_config_end = snrt_mcycle();
+            printf("CGTP %d\n", core_config_end - core_config_start);
 
+            uint32_t core_start = snrt_mcycle();
             dimc_start_streamer();
 
             while (dimc_is_streamer_busy()) { }
+            uint32_t core_end = snrt_mcycle();
+            printf("CRTP %d\n", core_end - core_start);
 
             printf("CHECK FINAL RESULT\r\n");
 
