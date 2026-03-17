@@ -185,8 +185,8 @@ module hemaia (
   ) pll_lock_io(
       .data_i(pll_lock_o),
       .data_o(),
-      .io_direction_oe_ni(1'b1),
-      .io_driving_strength_i(4'h0),
+      .io_direction_oe_ni(1'b0),
+      .io_driving_strength_i(4'hf),
       .io_pullup_en_i(1'b0),
       .io_pulldown_en_i(1'b0),
       .io(io_pll_lock_o)
