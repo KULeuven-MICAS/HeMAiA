@@ -74,10 +74,10 @@ CRTL_X2_Y3,west_test_request_o_io
 CRTL_X2_Y2,west_test_being_requested_i_io
 CRTL_X3_Y3,north_test_being_requested_i_io
 CRTL_X4_Y3,north_test_request_o_io
-CRTL_X3_Y2,pll_rsv_0
-CRTL_X4_Y2,pll_rsv_3
-CRTL_X4_Y1,pll_rsv_4
-CRTL_X3_Y1,pll_rsv_1
+CRTL_X3_Y2,pll_rsv_0(pll_lock)
+CRTL_X4_Y2,pll_rsv_3(pll_post_div_sel[0])
+CRTL_X4_Y1,pll_rsv_4(pll_post_div_sel[1])
+CRTL_X3_Y1,pll_rsv_1(pll_en)
 CRTL_X4_Y5,VDD
 CRTL_X3_Y5,VDD_D2D
 CRTL_X2_Y5,VDD_IO
