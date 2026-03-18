@@ -79,17 +79,12 @@ runs:
     - CHIP_TYPE: multi_chip
     - WORKLOAD: gemm_broadcast
     - DEV_APP: snax-bingo-offload
-  - app_16: 
-    - HOST_APP_TYPE: offload_bingo_hw
-    - CHIP_TYPE: multi_chip
-    - WORKLOAD: gemm_seperate_load_and_compute_parallel
-    - DEV_APP: snax-bingo-offload
-  - app_17:
+  - app_16:
     - HOST_APP_TYPE: host_only
     - CHIP_TYPE: multi_chip
     - WORKLOAD: system_xdma_copy
     - DEV_APP: None
-  - app_18:
+  - app_17:
     - HOST_APP_TYPE: host_only
     - CHIP_TYPE: multi_chip
     - WORKLOAD: multi_d2d_streams
