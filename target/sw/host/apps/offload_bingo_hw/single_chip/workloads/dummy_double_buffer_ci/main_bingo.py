@@ -36,7 +36,7 @@ def get_args():
     return parser.parse_args()
 def define_workload_params():
     """Defines the GeMM workload parameters."""
-    num_double_buffers = 8
+    num_double_buffers = 4
     params = {}
     params["num_double_buffers"] = num_double_buffers
     params["dummy_input"] = 1
