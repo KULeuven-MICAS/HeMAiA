@@ -55,12 +55,10 @@ import ${name}_pkg::*;
   // The Clock Reset Controller takes care of clk_i and rst_ni, should not be marked as false_path
   input  logic        clk_i,
   input  logic        rst_ni,
-% if pll_present:
   (* false_path *) input  logic        pll_bypass_i,
   (* false_path *) input  logic        pll_en_i,
   (* false_path *) input  logic [1:0]  pll_post_div_sel_i,
   (* false_path *) output logic        pll_lock_o,
-% endif
   output logic        clk_obs_o,
   input  logic        clk_periph_i,
   // clk_periph_i is directly used by logics, rst_periph_ni should be marked as false_path

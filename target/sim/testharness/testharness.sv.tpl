@@ -72,7 +72,7 @@ module testharness
   // Inout/output ports on the DUT must connect to nets (wire/tri). We drive them via separate regs.
   logic rtc_clk_drv, mst_clk_drv, periph_clk_drv, rst_ni_drv;
   wire  rtc_clk_i,  mst_clk_i,  periph_clk_i,  rst_ni;
-  %if pll_present:
+  
   logic pll_bypass_drv;
   logic pll_en_drv;
   logic [1:0] pll_post_div_sel_drv;
@@ -83,7 +83,7 @@ module testharness
   assign pll_bypass_i = pll_bypass_drv;
   assign pll_en_i = pll_en_drv;
   assign pll_post_div_sel_i = pll_post_div_sel_drv;
-  %endif
+
   // Some blocks also expect a separate peripheral reset; tie it to rst_ni unless overridden
   wire  rst_periph_ni;
   assign rtc_clk_i     = rtc_clk_drv;
@@ -127,11 +127,11 @@ module testharness
     // Init the reset pin
     rst_ni_drv = 0;
 
-    %if pll_present:
     // Init the PLL control
     pll_bypass_drv = 1'b0;
     pll_en_drv = 1'b0;
     pll_post_div_sel_drv = 2'b00;
+    %if pll_present:
     // Wait the clk for several cycles
     for (int i = 0; i < 10; i++) begin
       @(posedge mst_clk_i);
@@ -266,12 +266,10 @@ module testharness
   hemaia i_hemaia_${chip.coordinate[0]}_${chip.coordinate[1]} (
       .io_clk_i(mst_clk_i),
       .io_rst_ni(rst_ni),
-      %if pll_present:
       .io_pll_bypass_i(pll_bypass_i),
       .io_pll_en_i (pll_en_i),
       .io_pll_post_div_sel_i(pll_post_div_sel_i),
       .io_pll_lock_o(pll_lock_o),
-      %endif
       .io_clk_obs_o(),
       .io_clk_periph_i(periph_clk_i),
       .io_rst_periph_ni(rst_periph_ni),
