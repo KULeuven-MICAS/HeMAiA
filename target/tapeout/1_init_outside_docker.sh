@@ -1,6 +1,5 @@
 #!/bin/bash
 script_dir="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
-cfg_name="hemaia_tapeout.hjson"
 # Control whether to fetch and enable the vendor PLL support. Default: 1 (maintain previous behavior)
 SIM_WITH_PLL=0
 if [ ! -d "$script_dir/../../hw/hemaia/tech_cells_tsmc16" ]; then

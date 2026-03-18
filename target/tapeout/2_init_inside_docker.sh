@@ -1,6 +1,6 @@
 #!/bin/bash
 script_dir="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
-cfg_name="hemaia_tapeout.hjson"
+cfg_name="hemaia_tapeout_sim.hjson"
 HOST_APP_TYPE="offload_legacy"
 CHIP_TYPE="single_chip"
 WORKLOAD=""
