@@ -11,23 +11,6 @@ on:
   push:
     branches: [main]
 jobs:
-
-  ########
-  # Docs #
-  ########
-
-  # docs:
-  #   name: Build documentation
-  #   runs-on: ubuntu-22.04
-  #   container:
-  #     image: ghcr.io/pulp-platform/occamy:main
-  #   steps:
-  #     - uses: actions/checkout@v2
-  #     - name: Build docs
-  #       run: |
-  #         bender update && bender checkout
-  #         mkdocs build
-
   #################################################
   # HeMAiA System Software + Hardware Compilation #
   #################################################
