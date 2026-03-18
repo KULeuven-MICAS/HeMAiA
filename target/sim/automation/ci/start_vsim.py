@@ -79,12 +79,13 @@ try:
 except Exception:
     yaml = None
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import multiprocessing
 from typing import Dict, List, Tuple, Optional
 import traceback
 from datetime import datetime
 import getpass
+import time
 
 def run_host_script(script_path: Path) -> None:
     """Execute a shell script on the host.
@@ -332,33 +333,66 @@ def run_simulations(tasks_info: List[Tuple[Path, str]]) -> Dict[str, bool]:
     """
     results: Dict[str, bool] = {}
 
-    def worker(task_dir: Path, ci_name: str) -> None:
-        sim_binary = task_dir / "bin" / "occamy_chip.vsim"
-        # The simulation must be run from within the bin directory so that
-        # relative paths (e.g. work-vsim) are resolved correctly.
+    def remove_task_dir(task_dir: Path) -> None:
         try:
-            print(f"Running simulation for {ci_name}")
-            result = subprocess.run(
+            if task_dir.exists():
+                shutil.rmtree(task_dir)
+                print(f"Removed task directory {task_dir}")
+        except Exception:
+            print(f"Failed to remove task directory {task_dir}:")
+            traceback.print_exc()
+
+    def worker(task_dir: Path, ci_name: str):
+        sim_binary = task_dir / "bin" / "occamy_chip.vsim"
+        try:
+            # Run the simulation from within the bin directory so that relative
+            # paths (e.g. work-vsim) are resolved correctly.
+            proc = subprocess.run(
                 [str(sim_binary)],
                 cwd=task_dir / "bin",
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 check=False,
             )
-            print(f"Simulation for {ci_name} is finished with retval of {result.stdout.decode()}")
-            passed = result.returncode == 0
+            out = proc.stdout.decode(errors='replace') if proc.stdout is not None else ''
+            passed = proc.returncode == 0
+            return str(task_dir), ci_name, passed, out
         except Exception:
-            passed = False
-            print(f"Simulation in {task_dir} failed with exception:")
-            traceback.print_exc()
-        results[str(task_dir)] = passed
+            tb = traceback.format_exc()
+            return str(task_dir), ci_name, False, tb
 
-    # Use a ThreadPoolExecutor with as many workers as logical CPUs
+    # Submit all tasks and print start notifications
     with ThreadPoolExecutor(max_workers=multiprocessing.cpu_count()) as executor:
-        futures = [executor.submit(worker, td, cn) for td, cn in tasks_info]
-        # Ensure all tasks complete
-        for future in futures:
-            future.result()
+        future_to_task = {}
+        for td, cn in tasks_info:
+            print(f"Starting simulation for {cn} (task {td})")
+            fut = executor.submit(worker, td, cn)
+            future_to_task[fut] = (td, cn)
+        for future in as_completed(future_to_task):
+            td, cn = future_to_task[future]
+            print(f"Simulation finished for {cn} (task {td}) — collecting result...")
+            try:
+                task_dir_str, ci_name, passed, output = future.result()
+                results[task_dir_str] = passed
+                status = "PASS" if passed else "FAIL"
+                print(f"{ci_name}: {status}")
+                # Print a short snippet of output for visibility
+                if output:
+                    snippet = output.strip().splitlines()[-10:]
+                    print("--- Output snippet ---")
+                    for line in snippet:
+                        print(line)
+                    print("--- End snippet ---")
+            except Exception:
+                print(f"Error obtaining result for task {td}:")
+                traceback.print_exc()
+            # Remove the task directory now that the simulation finished
+            try:
+                remove_task_dir(td)
+            except Exception:
+                # remove_task_dir already prints errors; continue
+                pass
+
     return results
 
 
