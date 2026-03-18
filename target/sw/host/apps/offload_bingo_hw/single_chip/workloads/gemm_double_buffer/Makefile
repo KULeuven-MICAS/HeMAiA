@@ -17,14 +17,13 @@ INCL_DEVICE_BINARY ?= 1 # True to include the device binary
 # DATA
 DATA_CFG ?= $(MK_DIR)/params.hjson
 DATA_H = $(MK_DIR)/gemm_data.h
-
+OFFLOAD_H = $(MK_DIR)/offload_bingo_hw.h
 BENDER   = bender
 SNITCH_ROOT = $(shell $(BENDER) path snitch_cluster)
 
 $(DATA_H) $(OFFLOAD_H): $(MK_DIR)/main_bingo.py $(DATA_CFG)
 	python3 $(MK_DIR)/main_bingo.py \
 		--output_dir $(MK_DIR) \
-		--output_offload_file_name $(OFFLOAD_H) \
 		--data_h $(DATA_H) \
 		-c $(DATA_CFG) \
 		--hwcfg $(SNITCH_ROOT)/target/snitch_cluster/cfg/snax_versacore_to_cluster.hjson \
