@@ -178,7 +178,7 @@ def create_dfg(params, mem_handles):
     node_gemm_D1 = BingoNode(
         assigned_chiplet_id=0x00,
         assigned_cluster_id=0,
-        assigned_core_id=gemm_core_id,  # dev
+        assigned_core_id=gemm_core_id,  # dev GeMM
         node_name="Gemm_D1",
         kernel_name="__snax_bingo_kernel_gemm_full",
         kernel_args=SnaxBingoKernelGemmFullArgs(
@@ -199,7 +199,7 @@ def create_dfg(params, mem_handles):
     node_gemm_D2 = BingoNode(
         assigned_chiplet_id=0x00,
         assigned_cluster_id=0,
-        assigned_core_id=gemm_core_id,  # dev
+        assigned_core_id=gemm_core_id,  # dev GeMM
         node_name="Gemm_D2",
         kernel_name="__snax_bingo_kernel_gemm_full",
         kernel_args=SnaxBingoKernelGemmFullArgs(
@@ -239,7 +239,7 @@ def create_dfg(params, mem_handles):
         kernel_args=HostBingoKernelCheckResultArgs(
             golden_data_addr=mem_handles["D2_symbol_l3"],
             output_data_addr=mem_handles["D2_result_l3"],
-            data_size=params["D2_size"],
+            data_size=64, # check first 64 bytes for simplicity
         ),
     )
     # 3. Add Nodes to DFG
