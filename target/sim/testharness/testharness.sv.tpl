@@ -227,19 +227,91 @@ module testharness
   // Definition of tri_state bus
 % for chip in chip_coordinates:
   tri [2:0][19:0] chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]+1}_${chip.coordinate[1]}_link;
-  wire chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]+1}_${chip.coordinate[1]}_link_rts;
-  wire chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]+1}_${chip.coordinate[1]}_link_cts;
-  wire chip_${chip.coordinate[0]+1}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_rts;
-  wire chip_${chip.coordinate[0]+1}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_cts;
-  wire chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]+1}_${chip.coordinate[1]}_link_test_request;
-  wire chip_${chip.coordinate[0]+1}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_test_request;
+  wire chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]+1}_${chip.coordinate[1]}_link_rts_east;
+  wire chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]+1}_${chip.coordinate[1]}_link_rts_west;
+  wire_jitter_emulator i_emulator_chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]+1}_${chip.coordinate[1]}_link_rts (
+    .clk_i  (mst_clk_drv),
+    .data_i (chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]+1}_${chip.coordinate[1]}_link_rts_east),
+    .data_o (chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]+1}_${chip.coordinate[1]}_link_rts_west)
+  );
+  wire chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]+1}_${chip.coordinate[1]}_link_cts_west;
+  wire chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]+1}_${chip.coordinate[1]}_link_cts_east;
+  wire_jitter_emulator i_emulator_chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]+1}_${chip.coordinate[1]}_link_cts (
+    .clk_i  (mst_clk_drv),
+    .data_i (chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]+1}_${chip.coordinate[1]}_link_cts_west),
+    .data_o (chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]+1}_${chip.coordinate[1]}_link_cts_east)
+  );
+  wire chip_${chip.coordinate[0]+1}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_rts_west;
+  wire chip_${chip.coordinate[0]+1}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_rts_east;
+  wire_jitter_emulator i_emulator_chip_${chip.coordinate[0]+1}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_rts (
+    .clk_i  (mst_clk_drv),
+    .data_i (chip_${chip.coordinate[0]+1}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_rts_west),
+    .data_o (chip_${chip.coordinate[0]+1}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_rts_east)
+  );
+  wire chip_${chip.coordinate[0]+1}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_cts_east;
+  wire chip_${chip.coordinate[0]+1}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_cts_west;
+  wire_jitter_emulator i_emulator_chip_${chip.coordinate[0]+1}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_cts (
+    .clk_i  (mst_clk_drv),
+    .data_i (chip_${chip.coordinate[0]+1}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_cts_east),
+    .data_o (chip_${chip.coordinate[0]+1}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_cts_west)
+  );
+  wire chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]+1}_${chip.coordinate[1]}_link_test_request_east;
+  wire chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]+1}_${chip.coordinate[1]}_link_test_request_west;
+  wire_jitter_emulator i_emulator_chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]+1}_${chip.coordinate[1]}_link_test_request (
+    .clk_i  (mst_clk_drv),
+    .data_i (chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]+1}_${chip.coordinate[1]}_link_test_request_east),
+    .data_o (chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]+1}_${chip.coordinate[1]}_link_test_request_west)
+  );
+  wire chip_${chip.coordinate[0]+1}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_test_request_west;
+  wire chip_${chip.coordinate[0]+1}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_test_request_east;
+  wire_jitter_emulator i_emulator_chip_${chip.coordinate[0]+1}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_test_request (
+    .clk_i  (mst_clk_drv),
+    .data_i (chip_${chip.coordinate[0]+1}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_test_request_west),
+    .data_o (chip_${chip.coordinate[0]+1}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_test_request_east)
+  );
   tri [2:0][19:0] chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]+1}_link;
-  wire chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]+1}_link_rts;
-  wire chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]+1}_link_cts;
-  wire chip_${chip.coordinate[0]}_${chip.coordinate[1]+1}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_rts;
-  wire chip_${chip.coordinate[0]}_${chip.coordinate[1]+1}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_cts;
-  wire chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]+1}_link_test_request;
-  wire chip_${chip.coordinate[0]}_${chip.coordinate[1]+1}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_test_request;
+  wire chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]+1}_link_rts_south;
+  wire chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]+1}_link_rts_north;
+  wire_jitter_emulator i_emulator_chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]+1}_link_rts (
+    .clk_i  (mst_clk_drv),
+    .data_i (chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]+1}_link_rts_south),
+    .data_o (chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]+1}_link_rts_north)
+  );
+  wire chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]+1}_link_cts_north;
+  wire chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]+1}_link_cts_south;
+  wire_jitter_emulator i_emulator_chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]+1}_link_cts (
+    .clk_i  (mst_clk_drv),
+    .data_i (chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]+1}_link_cts_north),
+    .data_o (chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]+1}_link_cts_south)
+  );
+  wire chip_${chip.coordinate[0]}_${chip.coordinate[1]+1}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_rts_north;
+  wire chip_${chip.coordinate[0]}_${chip.coordinate[1]+1}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_rts_south;
+  wire_jitter_emulator i_emulator_chip_${chip.coordinate[0]}_${chip.coordinate[1]+1}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_rts (
+    .clk_i  (mst_clk_drv),
+    .data_i (chip_${chip.coordinate[0]}_${chip.coordinate[1]+1}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_rts_north),
+    .data_o (chip_${chip.coordinate[0]}_${chip.coordinate[1]+1}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_rts_south)
+  );
+  wire chip_${chip.coordinate[0]}_${chip.coordinate[1]+1}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_cts_south;
+  wire chip_${chip.coordinate[0]}_${chip.coordinate[1]+1}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_cts_north;
+  wire_jitter_emulator i_emulator_chip_${chip.coordinate[0]}_${chip.coordinate[1]+1}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_cts (
+    .clk_i  (mst_clk_drv),
+    .data_i (chip_${chip.coordinate[0]}_${chip.coordinate[1]+1}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_cts_south),
+    .data_o (chip_${chip.coordinate[0]}_${chip.coordinate[1]+1}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_cts_north)
+  );
+  wire chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]+1}_link_test_request_south;
+  wire chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]+1}_link_test_request_north;
+  wire_jitter_emulator i_emulator_chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]+1}_link_test_request (
+    .clk_i  (mst_clk_drv),
+    .data_i (chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]+1}_link_test_request_south),
+    .data_o (chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]+1}_link_test_request_north)
+  );
+  wire chip_${chip.coordinate[0]}_${chip.coordinate[1]+1}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_test_request_north;
+  wire chip_${chip.coordinate[0]}_${chip.coordinate[1]+1}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_test_request_south;
+  wire_jitter_emulator i_emulator_chip_${chip.coordinate[0]}_${chip.coordinate[1]+1}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_test_request (
+    .clk_i  (mst_clk_drv),
+    .data_i (chip_${chip.coordinate[0]}_${chip.coordinate[1]+1}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_test_request_north),
+    .data_o (chip_${chip.coordinate[0]}_${chip.coordinate[1]+1}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_test_request_south)
+  );
 
 % endfor
 
@@ -283,12 +355,12 @@ module testharness
 % if multichip_cfg['single_chip'] is False:
 %   if any(neighborhood.coordinate == (chip.coordinate[0]+1, chip.coordinate[1]) for neighborhood in chip_coordinates):
       .io_east_d2d(chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]+1}_${chip.coordinate[1]}_link),
-      .io_flow_control_east_rts_o(chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]+1}_${chip.coordinate[1]}_link_rts),
-      .io_flow_control_east_cts_i(chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]+1}_${chip.coordinate[1]}_link_cts),
-      .io_flow_control_east_rts_i(chip_${chip.coordinate[0]+1}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_rts),
-      .io_flow_control_east_cts_o(chip_${chip.coordinate[0]+1}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_cts),
-      .io_east_test_being_requested_i(chip_${chip.coordinate[0]+1}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_test_request),
-      .io_east_test_request_o(chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]+1}_${chip.coordinate[1]}_link_test_request),
+      .io_flow_control_east_rts_o(chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]+1}_${chip.coordinate[1]}_link_rts_east),
+      .io_flow_control_east_cts_i(chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]+1}_${chip.coordinate[1]}_link_cts_east),
+      .io_flow_control_east_rts_i(chip_${chip.coordinate[0]+1}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_rts_east),
+      .io_flow_control_east_cts_o(chip_${chip.coordinate[0]+1}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_cts_east),
+      .io_east_test_being_requested_i(chip_${chip.coordinate[0]+1}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_test_request_east),
+      .io_east_test_request_o(chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]+1}_${chip.coordinate[1]}_link_test_request_east),
 %   else:
       .io_east_d2d(),
       .io_flow_control_east_rts_o(),
@@ -300,12 +372,12 @@ module testharness
 %   endif
 %   if any(neighborhood.coordinate == (chip.coordinate[0]-1, chip.coordinate[1]) for neighborhood in chip_coordinates):
       .io_west_d2d(chip_${chip.coordinate[0]-1}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link),
-      .io_flow_control_west_rts_o(chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]-1}_${chip.coordinate[1]}_link_rts),
-      .io_flow_control_west_cts_i(chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]-1}_${chip.coordinate[1]}_link_cts),
-      .io_flow_control_west_rts_i(chip_${chip.coordinate[0]-1}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_rts),
-      .io_flow_control_west_cts_o(chip_${chip.coordinate[0]-1}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_cts),
-      .io_west_test_being_requested_i(chip_${chip.coordinate[0]-1}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_test_request),
-      .io_west_test_request_o(chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]-1}_${chip.coordinate[1]}_link_test_request),
+      .io_flow_control_west_rts_o(chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]-1}_${chip.coordinate[1]}_link_rts_west),
+      .io_flow_control_west_cts_i(chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]-1}_${chip.coordinate[1]}_link_cts_west),
+      .io_flow_control_west_rts_i(chip_${chip.coordinate[0]-1}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_rts_west),
+      .io_flow_control_west_cts_o(chip_${chip.coordinate[0]-1}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_cts_west),
+      .io_west_test_being_requested_i(chip_${chip.coordinate[0]-1}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_test_request_west),
+      .io_west_test_request_o(chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]-1}_${chip.coordinate[1]}_link_test_request_west),
 %   else:
       .io_west_d2d(),
       .io_flow_control_west_rts_o(),
@@ -317,12 +389,12 @@ module testharness
 %   endif
 %   if any(neighborhood.coordinate == (chip.coordinate[0], chip.coordinate[1]-1) for neighborhood in chip_coordinates):
       .io_north_d2d(chip_${chip.coordinate[0]}_${chip.coordinate[1]-1}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link),
-      .io_flow_control_north_rts_o(chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]-1}_link_rts),
-      .io_flow_control_north_cts_i(chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]-1}_link_cts),
-      .io_flow_control_north_rts_i(chip_${chip.coordinate[0]}_${chip.coordinate[1]-1}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_rts),
-      .io_flow_control_north_cts_o(chip_${chip.coordinate[0]}_${chip.coordinate[1]-1}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_cts),
-      .io_north_test_being_requested_i(chip_${chip.coordinate[0]}_${chip.coordinate[1]-1}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_test_request),
-      .io_north_test_request_o(chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]-1}_link_test_request),
+      .io_flow_control_north_rts_o(chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]-1}_link_rts_north),
+      .io_flow_control_north_cts_i(chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]-1}_link_cts_north),
+      .io_flow_control_north_rts_i(chip_${chip.coordinate[0]}_${chip.coordinate[1]-1}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_rts_north),
+      .io_flow_control_north_cts_o(chip_${chip.coordinate[0]}_${chip.coordinate[1]-1}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_cts_north),
+      .io_north_test_being_requested_i(chip_${chip.coordinate[0]}_${chip.coordinate[1]-1}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_test_request_north),
+      .io_north_test_request_o(chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]-1}_link_test_request_north),
 %   else:
       .io_north_d2d(),
       .io_flow_control_north_rts_o(),
@@ -334,12 +406,12 @@ module testharness
 %   endif
 %   if any(neighborhood.coordinate == (chip.coordinate[0], chip.coordinate[1]+1) for neighborhood in chip_coordinates):
       .io_south_d2d(chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]+1}_link),
-      .io_flow_control_south_rts_o(chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]+1}_link_rts),
-      .io_flow_control_south_cts_i(chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]+1}_link_cts),
-      .io_flow_control_south_rts_i(chip_${chip.coordinate[0]}_${chip.coordinate[1]+1}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_rts),
-      .io_flow_control_south_cts_o(chip_${chip.coordinate[0]}_${chip.coordinate[1]+1}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_cts),
-      .io_south_test_being_requested_i(chip_${chip.coordinate[0]}_${chip.coordinate[1]+1}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_test_request),
-      .io_south_test_request_o(chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]+1}_link_test_request),
+      .io_flow_control_south_rts_o(chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]+1}_link_rts_south),
+      .io_flow_control_south_cts_i(chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]+1}_link_cts_south),
+      .io_flow_control_south_rts_i(chip_${chip.coordinate[0]}_${chip.coordinate[1]+1}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_rts_south),
+      .io_flow_control_south_cts_o(chip_${chip.coordinate[0]}_${chip.coordinate[1]+1}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_cts_south),
+      .io_south_test_being_requested_i(chip_${chip.coordinate[0]}_${chip.coordinate[1]+1}_to_${chip.coordinate[0]}_${chip.coordinate[1]}_link_test_request_south),
+      .io_south_test_request_o(chip_${chip.coordinate[0]}_${chip.coordinate[1]}_to_${chip.coordinate[0]}_${chip.coordinate[1]+1}_link_test_request_south),
 %   else:
       .io_south_d2d(),
       .io_flow_control_south_rts_o(),
