@@ -161,6 +161,7 @@ sources:
   - target: simulation_hemaia
     files:
       - target/sim/testharness/uartdpi/uartdpi.sv
+      - target/sim/testharness/wire_jitter_emulator.sv
       - target/sim/testharness/testharness.sv
 
   - target: simulation_hemaia_interposer
