@@ -55,7 +55,7 @@ module testharness;
         comp_chip_x = compute_chip.coordinate[0]
         comp_chip_y = compute_chip.coordinate[1]
     %>
-    logic chip${comp_chip_x}${comp_chip_y}_clk_obs_o;
+    wire chip${comp_chip_x}${comp_chip_y}_clk_obs_o;
     %endfor
     always #(CLKTCK / 2.0) begin
         mst_clk_drv = ~mst_clk_drv;
@@ -64,6 +64,28 @@ module testharness;
         periph_clk_drv = ~periph_clk_drv;
     end
 
+    // CHIP ID
+    %for compute_chip in compute_chips:
+    <%
+        comp_chip_x = compute_chip.coordinate[0]
+        comp_chip_y = compute_chip.coordinate[1]
+        comp_chip_x_str = "{:01x}".format(comp_chip_x)
+        comp_chip_y_str = "{:01x}".format(comp_chip_y)
+    %>
+    wire [7:0] chip${comp_chip_x}${comp_chip_y}_id_i;
+    assign chip${comp_chip_x}${comp_chip_y}_id_i = 8'h${comp_chip_x_str}${comp_chip_y_str};
+    %endfor
+
+    %for mem_chip in mem_chips:
+    <%
+        mem_chip_x = mem_chip.coordinate[0]
+        mem_chip_y = mem_chip.coordinate[1]
+        mem_chip_x_str = "{:01x}".format(mem_chip_x)
+        mem_chip_y_str = "{:01x}".format(mem_chip_y)
+    %>
+    wire [7:0] mem_chip${mem_chip_x}${mem_chip_y}_id_i;
+    assign mem_chip${mem_chip_x}${mem_chip_y}_id_i = 8'h${mem_chip_x_str}${mem_chip_y_str};
+    %endfor 
     // PLL
     %for compute_chip in compute_chips:
     <%
@@ -105,7 +127,7 @@ module testharness;
     %>
     clkmon #(.counts(2500), .pcterr(0.35)
     ) i_pll_mon_${comp_chip_x}_${comp_chip_y} (
-        .CLK_REF(i_hemaia_${comp_chip_x}_${comp_chip_y}.i_occamy_chip.i_hemaia_clk_rst_controller.i_pll.clk_o),
+        .CLK_REF(i_dut.i_hemaia_${comp_chip_x}_${comp_chip_y}.i_occamy_chip.i_hemaia_clk_rst_controller.i_pll.clk_o),
         .DONE(),
         .TIMEOUT()
     );
@@ -319,6 +341,8 @@ module testharness;
         .north_flow_control_cts_i_${x}(north_dut_to_memchip_link_cts_${x}),
         .north_flow_control_rts_i_${x}(north_memchip_to_dut_link_rts_${x}),
         .north_flow_control_cts_o_${x}(north_memchip_to_dut_link_cts_${x}),
+        .north_test_request_o_${x}           (north_dut_to_memchip_link_test_request_${x}),
+        .north_test_being_requested_i_${x}   (north_memchip_to_dut_link_test_request_${x}),
     %endfor
         // South Links (#MAX_X links)
     %for x in range(max_compute_chiplet_x):
@@ -327,6 +351,8 @@ module testharness;
         .south_flow_control_cts_i_${x}(south_dut_to_memchip_link_cts_${x}),
         .south_flow_control_rts_i_${x}(south_memchip_to_dut_link_rts_${x}),
         .south_flow_control_cts_o_${x}(south_memchip_to_dut_link_cts_${x}),
+        .south_test_request_o_${x}           (south_dut_to_memchip_link_test_request_${x}),
+        .south_test_being_requested_i_${x}   (south_memchip_to_dut_link_test_request_${x}),
     %endfor
         // West Links (#MAX_Y links)
     %for y in range(max_compute_chiplet_y):
@@ -335,6 +361,8 @@ module testharness;
         .west_flow_control_cts_i_${y}(west_dut_to_memchip_link_cts_${y}),
         .west_flow_control_rts_i_${y}(west_memchip_to_dut_link_rts_${y}),
         .west_flow_control_cts_o_${y}(west_memchip_to_dut_link_cts_${y}),
+        .west_test_request_o_${y}           (west_dut_to_memchip_link_test_request_${y}),
+        .west_test_being_requested_i_${y}   (west_memchip_to_dut_link_test_request_${y}),
     %endfor
         // East Links (#MAX_Y links)
     %for y in range(max_compute_chiplet_y):
@@ -343,6 +371,8 @@ module testharness;
         .east_flow_control_cts_i_${y}(east_dut_to_memchip_link_cts_${y}),
         .east_flow_control_rts_i_${y}(east_memchip_to_dut_link_rts_${y}),
         .east_flow_control_cts_o_${y}(east_memchip_to_dut_link_cts_${y}),
+        .east_test_request_o_${y}           (east_dut_to_memchip_link_test_request_${y}),
+        .east_test_being_requested_i_${y}   (east_memchip_to_dut_link_test_request_${y}),
     %endfor
         /////////////////////////////////////
         // Each chiplet will have its own periphs
@@ -351,11 +381,9 @@ module testharness;
         <%
             comp_chip_x = compute_chip.coordinate[0]
             comp_chip_y = compute_chip.coordinate[1]
-            comp_chip_x_str = "{:01x}".format(comp_chip_x)
-            comp_chip_y_str = "{:01x}".format(comp_chip_y)
         %>
         // Chip ID
-        .chip${comp_chip_x}${comp_chip_y}_id_i(8'h${comp_chip_x_str}${comp_chip_y_str}),
+        .chip${comp_chip_x}${comp_chip_y}_id_i              (chip${comp_chip_x}${comp_chip_y}_id_i),
         // PLL
         .chip${comp_chip_x}${comp_chip_y}_pll_bypass_i      (chip${comp_chip_x}${comp_chip_y}_pll_bypass_i),
         .chip${comp_chip_x}${comp_chip_y}_pll_en_i          (chip${comp_chip_x}${comp_chip_y}_pll_en_i),
@@ -418,6 +446,7 @@ module testharness;
         enable_sum = enable_north+enable_south+enable_west+enable_east
         assert enable_sum == 1, "Illegal Memchip location!"
     %>
+
     hemaia_mem_chip #(
         .WideSRAMBankNum(16),
         .WideSRAMSize(${mem_chip.size}),
@@ -428,7 +457,7 @@ module testharness;
     ) i_hemaia_mem_chip_${mem_chip_x}_${mem_chip_y} (
         .clk_i    (mst_clk_i),
         .rst_ni   (rst_ni   ),
-        .chip_id_i(chip_id_${mem_chip_x}_${mem_chip_y}),
+        .chip_id_i(mem_chip${mem_chip_x}${mem_chip_y}_id_i),
         // Memchip East D2D Links
         // Should be connected to the Offchip West D2D Link of the asic
         %if enable_east:
