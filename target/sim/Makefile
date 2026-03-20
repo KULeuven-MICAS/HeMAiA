@@ -182,19 +182,35 @@ clean-apps:
 
 OCCAMYGEN ?= $(ROOT)/util/occamygen/occamygen.py
 
-testharness/testharness.sv: testharness/testharness.sv.tpl $(CFG)
-	@echo "[OCCAMYGEN] Generate $@"
+TESTHARNESS_TPL_DIR  = testharness/template
+TESTHARNESS_TPLS     = $(wildcard $(TESTHARNESS_TPL_DIR)/*.sv.tpl)
+TESTHARNESS_OUTPUTS  = testharness/testharness.sv \
+                       testharness/io_wrapper.sv \
+                       testharness/dut.sv \
+                       testharness/util/check_finish.sv \
+                       testharness/util/load_binary.sv
 
-ifneq ($(SIM_WITH_NETLIST), 0)
-	@$(OCCAMYGEN) --cfg $(CFG) --outdir testharness --netlist-testharness-sv $<
-else ifneq ($(SIM_WITH_MACRO), 0)
-	@$(OCCAMYGEN) --cfg $(CFG) --outdir testharness --mem-macro-testharness-sv $<
-else
-	@$(OCCAMYGEN) --cfg $(CFG) --outdir testharness --testharness-sv $<
-endif
+OCCAMYGEN_TH_CMD = $(OCCAMYGEN) --cfg $(CFG) --outdir testharness \
+		--testharness-sv $(TESTHARNESS_TPL_DIR)/testharness.sv.tpl \
+		--sim_with_mem_macro $(SIM_WITH_MACRO) \
+		--sim_with_netlist $(SIM_WITH_NETLIST) \
+		--sim_with_interposer $(SIM_WITH_INTERPOSER) \
+		--sim_with_pll $(SIM_WITH_PLL)
+
+# Primary target: generates all testharness outputs in one invocation
+testharness/testharness.sv: $(TESTHARNESS_TPLS) $(CFG)
+	@echo "[OCCAMYGEN] Generate testharness files"
+	@$(OCCAMYGEN_TH_CMD)
+
+# Secondary outputs are produced by the same recipe
+testharness/io_wrapper.sv testharness/dut.sv testharness/util/check_finish.sv testharness/util/load_binary.sv: testharness/testharness.sv
 
 clean-testharness:
-	rm -rf testharness/testharness.sv
+	rm -rf $(TESTHARNESS_OUTPUTS)
+
+# Debug target: run generation verbosely (no @-silencing)
+debug-testharness-gen:
+	$(OCCAMYGEN_TH_CMD)
 #############
 # Verilator #
 #############
