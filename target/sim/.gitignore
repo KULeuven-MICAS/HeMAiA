@@ -7,6 +7,10 @@
 /apps/.rtlbinary
 /apps/**/*.hex
 /testharness/testharness.sv
+/testharness/io_wrapper.sv
+/testharness/dut.sv
+/testharness/util/check_finish.sv
+/testharness/util/load_binary.sv
 /logs
 /work-vcs
 /work.lib++
