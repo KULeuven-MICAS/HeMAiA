@@ -711,3 +711,20 @@ void chip_barrier(volatile comm_buffer_t* chip_barrier_data_ptr,
     wait_chips_checkpoint(chip_barrier_data_ptr, top_left_chip_id,
                           bottom_right_chip_id, checkpoint);
 }
+
+//===============================================================
+// ARA runtime
+//===============================================================
+
+inline void enable_vec() {
+   asm volatile("csrs mstatus, %[bits];" ::[bits] "r"(0x00000600 & (0x00000600 >> 1)));
+}
+// Return the current value of the cycle counter
+static inline uint64_t ara_get_cycle_count() {
+  uint64_t cycle_count;
+  // The fence is needed to be sure that Ara is idle, and it is not performing
+  // the last vector stores when we read mcycle with stop_timer()
+  asm volatile("fence" ::: "memory");
+  asm volatile("csrr %0, mcycle" : "=r"(cycle_count));
+  return cycle_count;
+};

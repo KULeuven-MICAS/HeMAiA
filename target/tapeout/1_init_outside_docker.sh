@@ -13,6 +13,15 @@ else
     cd $script_dir/../../hw/hemaia/hemaia_d2d_link || exit
     git pull
 fi
+if [ ! -d "$script_dir/../../hw/hemaia/hemaia_clk_rst_controller" ]; then
+    git clone https://github.com/IveanEx/hemaia_clk_rst_controller.git "$script_dir/../../hw/hemaia/hemaia_clk_rst_controller"
+    cd $script_dir/../../hw/hemaia/hemaia_clk_rst_controller || exit
+    git checkout main
+    git pull
+else
+    cd $script_dir/../../hw/hemaia/hemaia_clk_rst_controller || exit
+    git pull
+fi
 if [ ! -d "$script_dir/dc_work_hemaia" ]; then
     git clone https://github.com/IveanEx/dc_work_hemaia.git "$script_dir/dc_work_hemaia"
 else
@@ -34,4 +43,11 @@ if ! grep -q "tech_cells_generic" "$bender_local_file"; then
 else
     # Replace the existing tech_cells_generic line
     sed -i '/tech_cells_generic:/c\  tech_cells_generic:  { path: hw/hemaia/tech_cells_tsmc16 }' "$bender_local_file"
+fi
+
+if ! grep -q "hemaia_clk_rst_controller" "$bender_local_file"; then
+    echo '  hemaia_clk_rst_controller:  { path: hw/hemaia/hemaia_clk_rst_controller }' >> "$bender_local_file"
+else
+    # Replace the existing hemaia_clk_rst_controller line
+    sed -i '/hemaia_clk_rst_controller:/c\  hemaia_clk_rst_controller:  { path: hw/hemaia/hemaia_clk_rst_controller }' "$bender_local_file"
 fi

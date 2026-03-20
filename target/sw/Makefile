@@ -143,7 +143,7 @@ $(PLATFORM_HEADERS_DIR)/hemaia_d2d_link_peripheral.h: $(shell bender path hemaia
 # HeMAiA Clk Rst Ctrl #
 #######################
 
-$(PLATFORM_HEADERS_DIR)/hemaia_clk_rst_controller_peripheral.h: $(ROOT)/hw/hemaia/hemaia_clk_rst_controller/regs/hemaia_clk_rst_controller_reg.hjson | $(PLATFORM_HEADERS_DIR)
+$(PLATFORM_HEADERS_DIR)/hemaia_clk_rst_controller_peripheral.h: $(shell bender path hemaia_clk_rst_controller)/regs/hemaia_clk_rst_controller_reg.hjson | $(PLATFORM_HEADERS_DIR)
 	$(call reggen_generate_header,$@,$<)
 
 # OCCAMYGEN headers

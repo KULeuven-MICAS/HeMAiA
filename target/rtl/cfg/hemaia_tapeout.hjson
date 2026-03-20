@@ -226,5 +226,6 @@
     },
     // backup boot address
     backup_boot_addr: 2147483648 // 0x8000_0000
-
+    // Use Vendor PLL
+    use_vendor_pll: true
 }

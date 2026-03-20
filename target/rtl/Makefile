@@ -144,6 +144,7 @@ debug-occamy-gen:
 		--top-sv           $(SOURCE_OCCAMY_DIR)/occamy_top.sv.tpl \
 		--soc-sv           $(SOURCE_OCCAMY_DIR)/occamy_soc.sv.tpl \
 		--chip             $(SOURCE_OCCAMY_DIR)/occamy_chip.sv.tpl \
+		--io               $(SOURCE_OCCAMY_DIR)/hemaia.sv.tpl \
 		--pkg-sv           $(SOURCE_OCCAMY_DIR)/occamy_pkg.sv.tpl \
 		--quad             $(SOURCE_OCCAMY_DIR)/occamy_quad.sv.tpl \
 		--quad-ctrl        $(SOURCE_OCCAMY_DIR)/occamy_quad_ctrl.sv.tpl \

@@ -13,12 +13,22 @@
   i2c_present = any(periph["name"] == "i2c" for periph in occamy_cfg["peripherals"]["axi_lite_narrow_peripherals"])
 %>
 
+<%
+  pll_present = occamy_cfg["use_vendor_pll"]
+%>
+
 
 module hemaia (
     // Clocks, Boot, ChipId (14)
     inout wire        io_clk_i,
     inout wire        io_rst_ni,
-    inout wire        io_bypass_pll_division_i,
+% if pll_present:
+    // PLL signal
+    inout wire        io_pll_bypass_i,
+    inout wire        io_pll_en_i,
+    inout wire [1:0]  io_pll_post_div_sel_i,
+    inout wire        io_pll_lock_o,
+% endif
     inout wire        io_clk_obs_o,
     inout wire        io_clk_periph_i,
     inout wire        io_rst_periph_ni,
@@ -117,18 +127,71 @@ module hemaia (
       .io(io_rst_ni)
   );
 
-  logic bypass_pll_division_i;
+% if pll_present:
+  logic pll_bypass_i;
   tc_digital_io #(
     .VerticalIO(1'b1)
-  ) bypass_pll_division_i_io (
+  ) pll_bypass_i_io (
       .data_i(1'b0),
-      .data_o(bypass_pll_division_i),
+      .data_o(pll_bypass_i),
       .io_direction_oe_ni(1'b1),
       .io_driving_strength_i(4'h0),
       .io_pullup_en_i(1'b0),
       .io_pulldown_en_i(1'b0),
-      .io(io_bypass_pll_division_i)
+      .io(io_pll_bypass_i)
   );
+
+  logic pll_en_i;
+  tc_digital_io #(
+    .VerticalIO(1'b1)
+  ) pll_en_io (
+      .data_i(1'b1),
+      .data_o(pll_en_i),
+      .io_direction_oe_ni(1'b1),
+      .io_driving_strength_i(4'h0),
+      .io_pullup_en_i(1'b0),
+      .io_pulldown_en_i(1'b0),
+      .io(io_pll_en_i)
+  );
+
+  logic [1:0] pll_post_div_sel_i;
+  tc_digital_io #(
+    .VerticalIO(1'b1)
+  ) pll_post_div_sel_io_0(
+      .data_i(1'b1),
+      .data_o(pll_post_div_sel_i[0]),
+      .io_direction_oe_ni(1'b1),
+      .io_driving_strength_i(4'h0),
+      .io_pullup_en_i(1'b0),
+      .io_pulldown_en_i(1'b0),
+      .io(io_pll_post_div_sel_i[0])
+  );
+
+  tc_digital_io #(
+    .VerticalIO(1'b1)
+  ) pll_post_div_sel_io_1(
+      .data_i(1'b1),
+      .data_o(pll_post_div_sel_i[1]),
+      .io_direction_oe_ni(1'b1),
+      .io_driving_strength_i(4'h0),
+      .io_pullup_en_i(1'b0),
+      .io_pulldown_en_i(1'b0),
+      .io(io_pll_post_div_sel_i[1])
+  );
+
+  logic pll_lock_o;
+  tc_digital_io #(
+    .VerticalIO(1'b1)
+  ) pll_lock_io(
+      .data_i(pll_lock_o),
+      .data_o(),
+      .io_direction_oe_ni(1'b0),
+      .io_driving_strength_i(4'hf),
+      .io_pullup_en_i(1'b0),
+      .io_pulldown_en_i(1'b0),
+      .io(io_pll_lock_o)
+  );
+%endif
 
   logic clk_obs_o;
   tc_digital_io #(

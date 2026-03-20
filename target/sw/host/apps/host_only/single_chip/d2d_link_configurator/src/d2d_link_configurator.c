@@ -11,6 +11,8 @@ int main() {
     uintptr_t address_prefix = (uintptr_t)get_current_chip_baseaddress();
 
     init_uart(address_prefix, 32, 1);
+    // Enable vector extension
+    enable_vec();
     asm volatile("fence" : : : "memory");
 
     // Configure the D2D Topology

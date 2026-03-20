@@ -28,8 +28,7 @@ PERF_CSV_PY      ?= $(UTIL_DIR)/trace/perf_csv.py
 LAYOUT_EVENTS_PY ?= $(UTIL_DIR)/trace/layout_events.py
 EVENTVIS_PY      ?= $(UTIL_DIR)/trace/eventvis.py
 
-VERILATOR_ROOT ?= $(dir $(shell $(VERILATOR_SEPP) which verilator))..
-VLT_ROOT       ?= ${VERILATOR_ROOT}
+VLT_ROOT       ?= /opt/verilator/share/verilator
 VERILATOR_VERSION ?= $(shell $(VLT) --version | grep -oP 'Verilator \K\d+')
 
 MATCH_END := '/+incdir+/ s/$$/\/*\/*/'

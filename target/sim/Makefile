@@ -46,6 +46,14 @@ SIM_WITH_MACRO ?= 0
 SIM_WITH_NETLIST ?= 0
 SIM_WITH_WAVEFORM ?= 1
 SIM_WITH_INTERPOSER ?= 0
+# Derive SIM_WITH_PLL from the configuration file ($(CFG)) unless the
+# variable is overridden on the `make` command line. The HJSON may contain
+# either `use_vendor_pll: true` or simply `use_vendor_pll` (implicit true).
+# If the file explicitly contains `use_vendor_pll: false` we treat it as 0.
+SIM_WITH_PLL ?= $(shell if [ -f "$(CFG)" ]; then \
+	if grep -E -q '^[[:space:]]*use_vendor_pll[[:space:]]*[:=][[:space:]]*false' "$(CFG)"; then echo 0; \
+	elif grep -E -q '^[[:space:]]*use_vendor_pll' "$(CFG)"; then echo 1; \
+	else echo 0; fi; else echo 0; fi)
 
 VSIM_BENDER += $(shell cat ../rtl/src/bender_targets.tmp)
 VLT_BENDER  += $(shell cat ../rtl/src/bender_targets.tmp)
@@ -77,7 +85,19 @@ else
 	VCS_BENDER  += -t simulation_hemaia
 endif
 
+ifeq ($(SIM_WITH_PLL), 1)
+	VSIM_BENDER += -t tsmc16_pll_sim 
+	VLT_BENDER  += -t tsmc16_pll_sim 
+	VCS_BENDER  += -t tsmc16_pll_sim
+endif
+
+
+
+ifeq ($(SIM_WITH_PLL), 1)
+VSIM_FLAGS += -t 1fs
+else
 VSIM_FLAGS += -t 1ps
+endif
 
 ifeq ($(SIM_WITH_WAVEFORM), 1)
 	VSIM_FLAGS += -voptargs=+acc
@@ -89,11 +109,17 @@ VSIM_FLAGS += -do "log -r /*; run -a"
 VSIM_FLAGS += -warning 8386
 
 VLOG_FLAGS += -svinputport=compat
+ifeq ($(SIM_WITH_PLL), 1)
+VLOG_FLAGS += -override_timescale 1ps/1fs
+VLOG_FLAGS += -timescale 1ps/1fs
+else
 VLOG_FLAGS += -override_timescale 1ns/1ps
+VLOG_FLAGS += -timescale 1ns/1ps
+endif
 VLOG_FLAGS += -suppress 2583
 VLOG_FLAGS += -suppress 13314
 VLOG_FLAGS += ${QUESTA_64BIT}
-VLOG_FLAGS += -timescale 1ns/1ps
+
 
 VCS_FLAGS += +nospecify
 VCS_FLAGS += -Mdir=work-vcs
@@ -278,7 +304,6 @@ clean-vcs: clean-work
 
 clean-work:
 	rm -rf work
-	rm -rf work-vsim
 
 clean-logs:
 	rm -rf $(LOGS_DIR)/
