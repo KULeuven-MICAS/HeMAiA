@@ -59,6 +59,10 @@ VSIM_BENDER += $(shell cat ../rtl/src/bender_targets.tmp)
 VLT_BENDER  += $(shell cat ../rtl/src/bender_targets.tmp)
 VCS_BENDER  += $(shell cat ../rtl/src/bender_targets.tmp)
 
+VSIM_BENDER += -t simulation_hemaia
+VLT_BENDER  += -t simulation_hemaia
+VCS_BENDER  += -t simulation_hemaia
+
 ifeq ($(SIM_WITH_NETLIST), 1)
 	VSIM_BENDER += -t hemaia_netlist
 	VLT_BENDER  += -t hemaia_netlist
@@ -73,16 +77,6 @@ ifeq ($(SIM_WITH_MACRO), 1)
 	VSIM_BENDER += -t tsmc16_sim -t tsmc16
 	VLT_BENDER  += -t tsmc16_sim -t tsmc16
 	VCS_BENDER  += -t tsmc16_sim -t tsmc16
-endif
-
-ifeq ($(SIM_WITH_INTERPOSER), 1)
-	VSIM_BENDER += -t simulation_hemaia_interposer
-	VLT_BENDER  += -t simulation_hemaia_interposer
-	VCS_BENDER  += -t simulation_hemaia_interposer
-else
-	VSIM_BENDER += -t simulation_hemaia
-	VLT_BENDER  += -t simulation_hemaia
-	VCS_BENDER  += -t simulation_hemaia
 endif
 
 ifeq ($(SIM_WITH_PLL), 1)
