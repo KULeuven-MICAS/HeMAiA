@@ -61,7 +61,6 @@ int main()
     }
     printf("Chip(%x, %x): [Host] Data will be written to external DRAM at address %lx\r\n",
            get_current_chip_loc_x(), get_current_chip_loc_y(), (uintptr_t)data_dest);
-    chip_barrier(comm_buffer_ptr, 0x00, 0x11, 1);
 
     for (uint32_t i = 0; i < 64; i++)
     {
