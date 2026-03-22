@@ -198,7 +198,7 @@ hemaia_system_vlt: # In SNAX Docker
 # Questasim Workflow #
 ######################
 
-hemaia_system_vsim_preparation: # In SNAX Docker
+hemaia_system_vsim_preparation: $(CFG) # In SNAX Docker
 	$(MAKE) -C ./target/sim work-vsim/compile.vsim.tcl CFG=$(CFG)
 
 hemaia_system_vsim: # In ESAT Server
