@@ -36,16 +36,16 @@ module testharness;
     // Drive the CLK signals
     localparam int SIM_WITH_PLL = ${sim_with_pll};
     %if pll_present:
-    localparam TIMESCALEVAL      = 1.0e-12;    // 1ps
-    localparam CLK_FREF_FREQ_MHZ = 40.0;
-    localparam PRI_FREQ_MHZ      = 32.0;
+    `define TIMESCALEVAL       1.0e-12    // 1ps
+    `define CLK_FREF_FREQ_MHZ  40.0
+    `define PRI_FREQ_MHZ       32.0
     %else:
-    localparam TIMESCALEVAL      = 1.0e-9; // 1ns
-    localparam CLK_FREF_FREQ_MHZ = 1000.0; // 1 GHz
-    localparam PRI_FREQ_MHZ      = 1000.0; // 1 GHz
+    `define TIMESCALEVAL       1.0e-9 // 1ns
+    `define CLK_FREF_FREQ_MHZ  1000.0 // 1 GHz
+    `define PRI_FREQ_MHZ       1000.0 // 1 GHz
     %endif
-    localparam CLKTCK            = (1.0e-6/CLK_FREF_FREQ_MHZ/TIMESCALEVAL);
-    localparam PRITCK            = (1.0e-6/PRI_FREQ_MHZ/TIMESCALEVAL);
+    `define CLK_FREF_PERIOD    (1.0e-6/`CLK_FREF_FREQ_MHZ/`TIMESCALEVAL)
+    `define PRI_FREF_PERIOD    (1.0e-6/`PRI_FREQ_MHZ/`TIMESCALEVAL)
     logic mst_clk_drv, periph_clk_drv;
     wire  mst_clk_i, periph_clk_i;
     assign mst_clk_i     = mst_clk_drv;
@@ -57,12 +57,16 @@ module testharness;
     %>
     wire chip${comp_chip_x}${comp_chip_y}_clk_obs_o;
     %endfor
-    always #(CLKTCK / 2.0) begin
-        mst_clk_drv = ~mst_clk_drv;
+
+    initial begin
+        mst_clk_drv = 0;
+        forever #(`CLK_FREF_PERIOD/2.0) mst_clk_drv = ~mst_clk_drv;
     end
-    always #(PRITCK / 2.0) begin
-        periph_clk_drv = ~periph_clk_drv;
-    end
+
+    initial begin
+        periph_clk_drv = 0;
+        forever #(`PRI_FREF_PERIOD/2.0) periph_clk_drv = ~periph_clk_drv;
+    end   
 
     // CHIP ID
     %for compute_chip in compute_chips:
@@ -149,11 +153,10 @@ module testharness;
         // Wait at least 1us
         #(1us);
         // PLL on
+        // Drive the enable pin in sequence
         %for compute_chip in compute_chips:
         chip${compute_chip.coordinate[0]}${compute_chip.coordinate[1]}_pll_en_drv = 1'b1;
-        %endfor
         // Wait for phase locked
-        %for compute_chip in compute_chips:
         @(posedge chip${compute_chip.coordinate[0]}${compute_chip.coordinate[1]}_pll_lock_o);
         $display("Chip ${compute_chip.coordinate[0]}${compute_chip.coordinate[1]}'s PLL Lock asserted!");
         %endfor
@@ -191,7 +194,7 @@ module testharness;
     assign const_zero = 1'b0;
     assign const_one  = 1'b1;
     // Must be the frequency of i_uart.clk_i in Hz
-    localparam int unsigned UartDPIFreq = PRI_FREQ_MHZ * 1e6;
+    localparam int unsigned UartDPIFreq = `PRI_FREQ_MHZ * 1e6;
     %for compute_chip in compute_chips:
     <%
         comp_chip_x = compute_chip.coordinate[0]
@@ -326,6 +329,58 @@ module testharness;
     wire            east_dut_to_memchip_link_cts_${y};
     wire            east_dut_to_memchip_link_test_request_${y};
     wire            east_memchip_to_dut_link_test_request_${y};
+    %endfor
+
+    // Tie unconnected offchip D2D link input pins to const_zero
+    // to avoid floating inputs on the DUT
+    <%
+        occupied_north = set()
+        occupied_south = set()
+        occupied_west  = set()
+        occupied_east  = set()
+        for mem_chip in mem_chips:
+            mx = mem_chip.coordinate[0]
+            my = mem_chip.coordinate[1]
+            if my == -1:
+                occupied_north.add(mx)
+            if my == max_compute_chiplet_y:
+                occupied_south.add(mx)
+            if mx == -1:
+                occupied_west.add(my)
+            if mx == max_compute_chiplet_x:
+                occupied_east.add(my)
+    %>
+    %for x in range(max_compute_chiplet_x):
+    %if x not in occupied_north:
+    // North link ${x} is not connected to any mem chip
+    assign north_dut_to_memchip_link_cts_${x}      = const_zero;
+    assign north_memchip_to_dut_link_rts_${x}       = const_zero;
+    assign north_memchip_to_dut_link_test_request_${x} = const_zero;
+    %endif
+    %endfor
+    %for x in range(max_compute_chiplet_x):
+    %if x not in occupied_south:
+    // South link ${x} is not connected to any mem chip
+    assign south_dut_to_memchip_link_cts_${x}      = const_zero;
+    assign south_memchip_to_dut_link_rts_${x}       = const_zero;
+    assign south_memchip_to_dut_link_test_request_${x} = const_zero;
+    %endif
+    %endfor
+    %for y in range(max_compute_chiplet_y):
+    %if y not in occupied_west:
+    // West link ${y} is not connected to any mem chip
+    assign west_dut_to_memchip_link_cts_${y}      = const_zero;
+    assign west_memchip_to_dut_link_rts_${y}       = const_zero;
+    assign west_memchip_to_dut_link_test_request_${y} = const_zero;
+    %endif
+    %endfor
+    %for y in range(max_compute_chiplet_y):
+    %if y not in occupied_east:
+    // East link ${y} is not connected to any mem chip
+    assign east_dut_to_memchip_link_cts_${y}      = const_zero;
+    assign east_memchip_to_dut_link_rts_${y}       = const_zero;
+    assign east_memchip_to_dut_link_test_request_${y} = const_zero;
+    %endif
     %endfor
 
     dut #(
