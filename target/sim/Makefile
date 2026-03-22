@@ -42,18 +42,17 @@ UART_DPI_DIR         ?= $(SIM_MKFILE_DIR)testharness/uartdpi
 #####################
 # Simulator options #
 #####################
-SIM_WITH_MACRO ?= 0
-SIM_WITH_NETLIST ?= 0
 SIM_WITH_WAVEFORM ?= 1
-SIM_WITH_INTERPOSER ?= 0
-# Derive SIM_WITH_PLL from the configuration file ($(CFG)) unless the
-# variable is overridden on the `make` command line. The HJSON may contain
-# either `use_vendor_pll: true` or simply `use_vendor_pll` (implicit true).
-# If the file explicitly contains `use_vendor_pll: false` we treat it as 0.
-SIM_WITH_PLL ?= $(shell if [ -f "$(CFG)" ]; then \
-	if grep -E -q '^[[:space:]]*use_vendor_pll[[:space:]]*[:=][[:space:]]*false' "$(CFG)"; then echo 0; \
-	elif grep -E -q '^[[:space:]]*use_vendor_pll' "$(CFG)"; then echo 1; \
+# Extract a boolean flag from CFG: returns 1 if key exists and isn't false, 0 otherwise
+cfg_flag = $(shell if [ -f "$(CFG)" ]; then \
+	if grep -E -q '^[[:space:]]*$(1)[[:space:]]*[:=][[:space:]]*false' "$(CFG)"; then echo 0; \
+	elif grep -E -q '^[[:space:]]*$(1)' "$(CFG)"; then echo 1; \
 	else echo 0; fi; else echo 0; fi)
+
+SIM_WITH_MACRO      ?= $(call cfg_flag,sim_with_macro)
+SIM_WITH_NETLIST    ?= $(call cfg_flag,sim_with_netlist)
+SIM_WITH_INTERPOSER ?= $(call cfg_flag,sim_with_interposer)
+SIM_WITH_PLL        ?= $(call cfg_flag,use_vendor_pll)
 
 VSIM_BENDER += $(shell cat ../rtl/src/bender_targets.tmp)
 VLT_BENDER  += $(shell cat ../rtl/src/bender_targets.tmp)
