@@ -224,4 +224,12 @@
     backup_boot_addr: 2147483648 // 0x8000_0000
     // Use Vendor PLL
     use_vendor_pll: false
+    // Sim with RTL models
+    sim_with_rtl: true
+    // Do not replace the Mem marcs
+    sim_with_mem_macro: false
+    // Do not use netlist
+    sim_with_netlist: false
+    // Sim with interposer
+    sim_with_interposer: false
 }
