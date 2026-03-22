@@ -45,7 +45,7 @@ module dut #(
 
     // North boundary (one per column, chiplets at y=0)
     %for x in range(max_compute_chiplet_x):
-    inout wire [2:0][19:0] north_d2d_link_${x},
+    inout tri [2:0][19:0] north_d2d_link_${x},
     inout wire             north_flow_control_rts_o_${x},
     inout wire             north_flow_control_cts_i_${x},
     inout wire             north_flow_control_rts_i_${x},
@@ -56,7 +56,7 @@ module dut #(
 
     // South boundary (one per column, chiplets at y=${max_compute_chiplet_y - 1})
     %for x in range(max_compute_chiplet_x):
-    inout wire [2:0][19:0] south_d2d_link_${x},
+    inout tri [2:0][19:0] south_d2d_link_${x},
     inout wire             south_flow_control_rts_o_${x},
     inout wire             south_flow_control_cts_i_${x},
     inout wire             south_flow_control_rts_i_${x},
@@ -67,7 +67,7 @@ module dut #(
 
     // West boundary (one per row, chiplets at x=0)
     %for y in range(max_compute_chiplet_y):
-    inout wire [2:0][19:0] west_d2d_link_${y},
+    inout tri [2:0][19:0] west_d2d_link_${y},
     inout wire             west_flow_control_rts_o_${y},
     inout wire             west_flow_control_cts_i_${y},
     inout wire             west_flow_control_rts_i_${y},
@@ -78,7 +78,7 @@ module dut #(
 
     // East boundary (one per row, chiplets at x=${max_compute_chiplet_x - 1})
     %for y in range(max_compute_chiplet_y):
-    inout wire [2:0][19:0] east_d2d_link_${y},
+    inout tri [2:0][19:0] east_d2d_link_${y},
     inout wire             east_flow_control_rts_o_${y},
     inout wire             east_flow_control_cts_i_${y},
     inout wire             east_flow_control_rts_i_${y},
