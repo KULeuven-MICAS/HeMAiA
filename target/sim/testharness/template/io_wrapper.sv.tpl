@@ -814,23 +814,27 @@ def classify_remaining_pad(pad_name, cx, cy):
         %>
         %if ct == 'internal':
         // ${d}: internal link to (${internal_links[(cx,cy,d)][0]}, ${internal_links[(cx,cy,d)][1]})
-        .chip${c}_io_flow_control_${d}_rts_o     (${conn_wire(cx,cy,d,'rts')}),
-        .chip${c}_io_flow_control_${d}_cts_i     (${rev_conn_wire(cx,cy,d,'cts')}),
-        .chip${c}_io_flow_control_${d}_rts_i     (${rev_conn_wire(cx,cy,d,'rts')}),
-        .chip${c}_io_flow_control_${d}_cts_o     (${conn_wire(cx,cy,d,'cts')}),
-        .chip${c}_io_${d}_test_request_o         (${conn_wire(cx,cy,d,'req')}),
-        .chip${c}_io_${d}_test_being_requested_i (${rev_conn_wire(cx,cy,d,'req')}),
+        // IO signal ports connect to DUT chip ports; pad ports (via get_pad_wire)
+        // carry the signal between chips through conn_ wires and cds_thru.
+        .chip${c}_io_flow_control_${d}_rts_o     (chip_${cx}_${cy}_${d}_rts_o),
+        .chip${c}_io_flow_control_${d}_cts_i     (chip_${cx}_${cy}_${d}_cts_i),
+        .chip${c}_io_flow_control_${d}_rts_i     (chip_${cx}_${cy}_${d}_rts_i),
+        .chip${c}_io_flow_control_${d}_cts_o     (chip_${cx}_${cy}_${d}_cts_o),
+        .chip${c}_io_${d}_test_request_o         (chip_${cx}_${cy}_${d}_test_request_o),
+        .chip${c}_io_${d}_test_being_requested_i (chip_${cx}_${cy}_${d}_test_being_requested_i),
         %elif ct == 'offchip':
         <%
             bi = boundary_idx(cx, cy, d)
         %>
         // ${d}: offchip ${d} boundary [${bi}]
-        .chip${c}_io_flow_control_${d}_rts_o     (${d}_flow_control_rts_o_${bi}),
-        .chip${c}_io_flow_control_${d}_cts_i     (${d}_flow_control_cts_i_${bi}),
-        .chip${c}_io_flow_control_${d}_rts_i     (${d}_flow_control_rts_i_${bi}),
-        .chip${c}_io_flow_control_${d}_cts_o     (${d}_flow_control_cts_o_${bi}),
-        .chip${c}_io_${d}_test_request_o         (${d}_test_request_o_${bi}),
-        .chip${c}_io_${d}_test_being_requested_i (${d}_test_being_requested_i_${bi}),
+        // IO signal ports connect to DUT chip ports; pad ports (via get_pad_wire)
+        // route to boundary ports through cds_thru.
+        .chip${c}_io_flow_control_${d}_rts_o     (chip_${cx}_${cy}_${d}_rts_o),
+        .chip${c}_io_flow_control_${d}_cts_i     (chip_${cx}_${cy}_${d}_cts_i),
+        .chip${c}_io_flow_control_${d}_rts_i     (chip_${cx}_${cy}_${d}_rts_i),
+        .chip${c}_io_flow_control_${d}_cts_o     (chip_${cx}_${cy}_${d}_cts_o),
+        .chip${c}_io_${d}_test_request_o         (chip_${cx}_${cy}_${d}_test_request_o),
+        .chip${c}_io_${d}_test_being_requested_i (chip_${cx}_${cy}_${d}_test_being_requested_i),
         %else:
         // ${d}: tied off (no neighbor)
         .chip${c}_io_flow_control_${d}_rts_o     (),
