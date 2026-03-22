@@ -21,7 +21,7 @@ module hemaia_io_pad (
     inout wire              io_pll_lock_o,
     // Aux signals
     inout wire              io_test_mode_i,
-    inout wire [ 7:0]       io_chip_id_i,
+    inout wire [7:0]        io_chip_id_i,
     inout wire              io_boot_mode_i,
     // East side (66)
     inout wire              io_east_test_being_requested_i,

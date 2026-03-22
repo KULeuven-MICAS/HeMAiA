@@ -3981,8 +3981,7 @@ module hemaia_chiplet_interposer_2x2 (
       .R_R10_C2(conn_00_10_R_R10_C2),
       .R_R10_C3(conn_00_10_R_R10_C3),
       .R_R10_C4(conn_00_10_R_R10_C4),
-      .R_R10_C5(conn_00_10_R_R10_C5),
-      .VSS(1'b0)
+      .R_R10_C5(conn_00_10_R_R10_C5)
   );
 
   // conn_00_01: chip(0,0) south <-> chip(0,1) north
@@ -4116,8 +4115,7 @@ module hemaia_chiplet_interposer_2x2 (
       .R_R10_C2(conn_00_01_R_R10_C2),
       .R_R10_C3(conn_00_01_R_R10_C3),
       .R_R10_C4(conn_00_01_R_R10_C4),
-      .R_R10_C5(conn_00_01_R_R10_C5),
-      .VSS(1'b0)
+      .R_R10_C5(conn_00_01_R_R10_C5)
   );
 
   // conn_01_11: chip(0,1) east <-> chip(1,1) west
@@ -4251,8 +4249,7 @@ module hemaia_chiplet_interposer_2x2 (
       .R_R10_C2(conn_01_11_R_R10_C2),
       .R_R10_C3(conn_01_11_R_R10_C3),
       .R_R10_C4(conn_01_11_R_R10_C4),
-      .R_R10_C5(conn_01_11_R_R10_C5),
-      .VSS(1'b0)
+      .R_R10_C5(conn_01_11_R_R10_C5)
   );
 
   // conn_10_11: chip(1,0) south <-> chip(1,1) north
@@ -4386,8 +4383,7 @@ module hemaia_chiplet_interposer_2x2 (
       .R_R10_C2(conn_10_11_R_R10_C2),
       .R_R10_C3(conn_10_11_R_R10_C3),
       .R_R10_C4(conn_10_11_R_R10_C4),
-      .R_R10_C5(conn_10_11_R_R10_C5),
-      .VSS(1'b0)
+      .R_R10_C5(conn_10_11_R_R10_C5)
   );
 
 endmodule

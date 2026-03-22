@@ -135,8 +135,7 @@ module hemaia_chiplet_interconnect_11x6 (
     R_R10_C2,
     R_R10_C3,
     R_R10_C4,
-    R_R10_C5,
-    VSS
+    R_R10_C5
 );
 
   inout  L_R0_C0, L_R0_C1, L_R0_C2, L_R0_C3, L_R0_C4, L_R0_C5, L_R1_C0, 
@@ -157,7 +156,7 @@ module hemaia_chiplet_interconnect_11x6 (
     R_R6_C5, R_R7_C0, R_R7_C1, R_R7_C2, R_R7_C3, R_R7_C4, R_R7_C5, 
     R_R8_C0, R_R8_C1, R_R8_C2, R_R8_C3, R_R8_C4, R_R8_C5, R_R9_C0, 
     R_R9_C1, R_R9_C2, R_R9_C3, R_R9_C4, R_R9_C5, R_R10_C0, R_R10_C1, 
-    R_R10_C2, R_R10_C3, R_R10_C4, R_R10_C5, VSS;
+    R_R10_C2, R_R10_C3, R_R10_C4, R_R10_C5;
 
 
   cds_thru I64 (
