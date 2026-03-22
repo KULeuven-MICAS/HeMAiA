@@ -242,9 +242,21 @@ module testharness;
 
     // Main Working Process
     // The load_binary function
-    `include "util/load_binary.sv"
+% if sim_with_netlist:
+    `include "util/load_binary_netlist.sv"
+% elif sim_with_mem_macro:
+    `include "util/load_binary_mem_macro.sv"
+% else:
+    `include "util/load_binary_rtl.sv"
+% endif
     // The check_finish function
-    `include "util/check_finish.sv"
+% if sim_with_netlist:
+    `include "util/check_finish_netlist.sv"
+% elif sim_with_mem_macro:
+    `include "util/check_finish_mem_macro.sv"
+% else:
+    `include "util/check_finish_rtl.sv"
+% endif
     initial begin
         set_rst();
         init_pll_pins();

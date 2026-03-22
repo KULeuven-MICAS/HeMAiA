@@ -821,8 +821,18 @@ def main():
         write_template(os.path.join(tpl_dir, "dut.sv.tpl"), outdir, fname="dut.sv", **testharness_kwargs)
         # Generate util files → outdir/util/ (testharness/util/)
         util_outdir = os.path.join(str(outdir), "util")
-        write_template(os.path.join(tpl_dir, "load_binary.sv.tpl"), util_outdir, fname="load_binary.sv", **testharness_kwargs)
-        write_template(os.path.join(tpl_dir, "check_finish.sv.tpl"), util_outdir, fname="check_finish.sv", **testharness_kwargs)
+        # Generate all load_binary and check_finish variants from a single template each,
+        # overriding the sim flags to produce one file per mode.
+        # The testharness `include picks the right one based on sim flags.
+        variant_flags = {
+            "rtl":       {"sim_with_mem_macro": 0, "sim_with_netlist": 0},
+            "mem_macro": {"sim_with_mem_macro": 1, "sim_with_netlist": 0},
+            "netlist":   {"sim_with_mem_macro": 0, "sim_with_netlist": 1},
+        }
+        for suffix, flags in variant_flags.items():
+            variant_kwargs = {**testharness_kwargs, **flags}
+            write_template(os.path.join(tpl_dir, "load_binary.sv.tpl"), util_outdir, fname=f"load_binary_{suffix}.sv", **variant_kwargs)
+            write_template(os.path.join(tpl_dir, "check_finish.sv.tpl"), util_outdir, fname=f"check_finish_{suffix}.sv", **variant_kwargs)
 
     ############
     # BOOTDATA #

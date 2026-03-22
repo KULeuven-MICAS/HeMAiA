@@ -180,8 +180,12 @@ TESTHARNESS_TPLS     = $(wildcard $(TESTHARNESS_TPL_DIR)/*.sv.tpl)
 TESTHARNESS_OUTPUTS  = testharness/testharness.sv \
                        testharness/io_wrapper.sv \
                        testharness/dut.sv \
-                       testharness/util/check_finish.sv \
-                       testharness/util/load_binary.sv
+                       testharness/util/load_binary_rtl.sv \
+                       testharness/util/load_binary_mem_macro.sv \
+                       testharness/util/load_binary_netlist.sv \
+                       testharness/util/check_finish_rtl.sv \
+                       testharness/util/check_finish_mem_macro.sv \
+                       testharness/util/check_finish_netlist.sv
 
 OCCAMYGEN_TH_CMD = $(OCCAMYGEN) --cfg $(CFG) --outdir testharness \
 		--testharness-sv $(TESTHARNESS_TPL_DIR)/testharness.sv.tpl \
@@ -196,7 +200,7 @@ testharness/testharness.sv: $(TESTHARNESS_TPLS) $(CFG)
 	@$(OCCAMYGEN_TH_CMD)
 
 # Secondary outputs are produced by the same recipe
-testharness/io_wrapper.sv testharness/dut.sv testharness/util/check_finish.sv testharness/util/load_binary.sv: testharness/testharness.sv
+testharness/io_wrapper.sv testharness/dut.sv testharness/util/load_binary_rtl.sv testharness/util/load_binary_mem_macro.sv testharness/util/load_binary_netlist.sv testharness/util/check_finish_rtl.sv testharness/util/check_finish_mem_macro.sv testharness/util/check_finish_netlist.sv: testharness/testharness.sv
 
 clean-testharness:
 	rm -rf $(TESTHARNESS_OUTPUTS)
