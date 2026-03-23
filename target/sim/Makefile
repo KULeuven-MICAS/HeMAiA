@@ -214,6 +214,7 @@ testharness/io_wrapper.sv testharness/dut.sv testharness/util/load_binary_rtl.sv
 
 clean-testharness:
 	rm -rf $(TESTHARNESS_OUTPUTS)
+	rm -rf testharness/testharness_*.sv
 
 # Debug target: run generation verbosely (no @-silencing)
 debug-testharness-gen:
