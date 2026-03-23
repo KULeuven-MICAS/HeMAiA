@@ -54,7 +54,7 @@ clean:
 	rm -rf Bender.lock .bender deps
 	rm -rf ./target/rtl/src/bender_targets.tmp
 	rm -rf ./target/rtl/cfg/lru.hjson
-
+	cd ./target/tapeout && ./0_reset.sh
 #######################
 # Software Generation #
 #######################
