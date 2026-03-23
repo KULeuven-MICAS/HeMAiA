@@ -157,10 +157,11 @@ sources:
       - hw/hemaia/hemaia_mem_system/hemaia_mem_system_for_mem_chip.sv
       - hw/hemaia/hemaia_mem_system/hemaia_mem_chip.sv
 
-  # target/sim
-  - target: simulation_hemaia
+
+
+  # Interposer model files (excluded from Verilator simulation)
+  - target: simulation_hemaia_interposer_model
     files:
-      - target/sim/testharness/uartdpi/uartdpi.sv
       - target/sim/testharness/interposer/cds_thru.sv
       - target/sim/testharness/interposer/cds_alias.sv
       - target/sim/testharness/interposer/congestion_emulator.sv
@@ -169,5 +170,11 @@ sources:
       - target/sim/testharness/interposer/hemaia_chiplet_interconnect_11x6.sv
       - target/sim/testharness/interposer/hemaia_chiplet_interposer_2x2.sv
       - target/sim/testharness/io_wrapper.sv
+      
+
+  # target/sim
+  - target: simulation_hemaia
+    files:
+      - target/sim/testharness/uartdpi/uartdpi.sv
       - target/sim/testharness/dut.sv
       - target/sim/testharness/testharness.sv

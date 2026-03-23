@@ -38,6 +38,7 @@
 module dut #(
     parameter int SIM_WITH_INTERPOSER = 0
 ) (
+%if not sim_with_verilator:
     /////////////////////////////////////
     // Off-chip D2D links to memory chips
     // (routed through io_wrapper to boundary chiplets)
@@ -86,6 +87,7 @@ module dut #(
     inout wire             east_test_request_o_${y},
     inout wire             east_test_being_requested_i_${y},
     %endfor
+%endif
 
     /////////////////////////////////////
     // Per-chiplet peripheral pins
@@ -135,6 +137,7 @@ module dut #(
     assign const_zero = 1'b0;
     assign const_one  = 1'b1;
 
+%if not sim_with_verilator:
     /////////////////////////////////////
     // Per-chiplet D2D wires
     // Each chiplet's 4 D2D interfaces are exposed as separate wires.
@@ -158,6 +161,7 @@ module dut #(
     %endfor
 
     %endfor
+%endif
 
     /////////////////////////////////////
     // Compute chiplet instances
@@ -200,6 +204,7 @@ module dut #(
         .io_jtag_tck_i        (chip${cx}${cy}_jtag_tck_i),
         .io_jtag_tms_i        (chip${cx}${cy}_jtag_tms_i),
         .io_jtag_tdi_i        (chip${cx}${cy}_jtag_tdi_i),
+%if not sim_with_verilator:
         .io_jtag_tdo_o        (chip${cx}${cy}_jtag_tdo_o),
         // D2D — all 4 directions routed to io_wrapper
         .io_east_d2d                    (chip_${cx}_${cy}_east_d2d),
@@ -230,9 +235,13 @@ module dut #(
         .io_flow_control_south_cts_o     (chip_${cx}_${cy}_south_cts_o),
         .io_south_test_request_o         (chip_${cx}_${cy}_south_test_request_o),
         .io_south_test_being_requested_i (chip_${cx}_${cy}_south_test_being_requested_i)
+%else:
+        .io_jtag_tdo_o        (chip${cx}${cy}_jtag_tdo_o)
+%endif
     );
     %endfor
 
+%if not sim_with_verilator:
     /////////////////////////////////////
     // IO Wrapper instance
     // Handles ALL D2D routing between chiplets and to off-chip boundaries.
@@ -331,5 +340,6 @@ module dut #(
         %endif
         %endfor
     );
+%endif
 
 endmodule

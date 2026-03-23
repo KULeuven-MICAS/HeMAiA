@@ -32,6 +32,11 @@
 // 3. Drive PLL pin if PLL presents
 // 4. Load the Binary from the file using the load_data function in mem
 // 5. Monitor simulation status
+%if pll_present:
+`timescale 1ps / 1fs
+%else:
+`timescale 1ns / 1ps
+%endif
 module testharness;
     // Drive the CLK signals
     localparam int SIM_WITH_PLL = ${sim_with_pll};
@@ -41,8 +46,8 @@ module testharness;
     `define PRI_FREQ_MHZ       32.0
     %else:
     `define TIMESCALEVAL       1.0e-9 // 1ns
-    `define CLK_FREF_FREQ_MHZ  1000.0 // 1 GHz
-    `define PRI_FREQ_MHZ       1000.0 // 1 GHz
+    `define CLK_FREF_FREQ_MHZ  500.0 // 500 MHz
+    `define PRI_FREQ_MHZ       500.0 // 500 MHz
     %endif
     `define CLK_FREF_PERIOD    (1.0e-6/`CLK_FREF_FREQ_MHZ/`TIMESCALEVAL)
     `define PRI_FREF_PERIOD    (1.0e-6/`PRI_FREQ_MHZ/`TIMESCALEVAL)
@@ -261,7 +266,7 @@ module testharness;
         set_rst();
         init_pll_pins();
         // Wait some random time
-        #(11.7us); 
+        #(11us); 
         %if pll_present:
         // Enable the PLL and wait for locked signal
         enable_pll_and_wait_lock();
@@ -269,7 +274,7 @@ module testharness;
         // PLL is not presents
         %endif
         // Wait some random time
-        #(7.9us);
+        #(7us);
         // Load binary
         load_binary();
         // Release the rst
@@ -298,6 +303,7 @@ module testharness;
     //| y=2  | illegal                | possible mem_chip slot | possible mem_chip slot | possible mem_chip slot | illegal                |
     //+------+------------------------+------------------------+------------------------+------------------------+------------------------+
 
+%if not sim_with_verilator:
     // Off-chip links to Mem Chip
     // North Links (#MAX_X links)
     %for x in range(max_compute_chiplet_x):
@@ -394,10 +400,12 @@ module testharness;
     assign east_memchip_to_dut_link_test_request_${y} = const_zero;
     %endif
     %endfor
+%endif
 
     dut #(
         .SIM_WITH_INTERPOSER(${sim_with_interposer})
-    ) i_dut ( 
+    ) i_dut (
+%if not sim_with_verilator:
         /////////////////////////////////////
         // Offchip D2D Links to Memchips
         /////////////////////////////////////
@@ -441,6 +449,7 @@ module testharness;
         .east_test_request_o_${y}           (east_dut_to_memchip_link_test_request_${y}),
         .east_test_being_requested_i_${y}   (east_memchip_to_dut_link_test_request_${y}),
     %endfor
+%endif
         /////////////////////////////////////
         // Each chiplet will have its own periphs
         /////////////////////////////////////
@@ -486,6 +495,7 @@ module testharness;
         .rst_periph_ni(rst_periph_ni)
     );
 
+%if not sim_with_verilator:
     // The mem chips
     %for mem_chip in mem_chips:
     <%
@@ -603,5 +613,6 @@ module testharness;
         %endif
     );
     %endfor
+%endif
 
 endmodule

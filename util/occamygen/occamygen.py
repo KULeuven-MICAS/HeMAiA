@@ -124,6 +124,11 @@ def main():
                         type=str2bool,
                         default=False,
                         help="Generate testharness with PLL.")    
+    parser.add_argument("--sim_with_verilator",
+                        metavar="SIM_WITH_VERILATOR",
+                        type=str2bool,
+                        default=False,
+                        help="Generate testharness for Verilator (no D2D, no interposer).")
     parser.add_argument("--sim_with_netlist",
                         metavar="SIM_WITH_NETLIST",
                         type=str2bool,
@@ -812,6 +817,7 @@ def main():
             args.sim_with_interposer,
             args.sim_with_pll,
             args.sim_with_netlist,
+            args.sim_with_verilator,
             soc2router_bus, router2soc_bus, args.name)
         # Template directory contains all .sv.tpl files
         tpl_dir = os.path.dirname(args.testharness_sv)

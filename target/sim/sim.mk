@@ -71,7 +71,7 @@ VLT_FLAGS    += -Wno-fatal
 VLT_FLAGS    += -Wno-SYMRSVDWORD
 VLT_FLAGS    += -Wno-BLKLOOPINIT
 
-VLT_FLAGS    += +define+SYNTHESIS
+VLT_FLAGS    += +define+SYNTHESIS  
 
 
 VLT_CXXSTD_FLAGS += -std=c++20 -O3 -march=native -flto -pthread -latomic

@@ -964,7 +964,7 @@ def get_bootdata_kwargs(occamy_cfg, cluster_generators, name):
     return bootdata_kwargs
 
 
-def get_testharness_kwargs(occamy_cfg, sim_with_mem_macro, sim_with_interposer, sim_with_pll, sim_with_netlist, soc2router_bus, router2soc_bus, name):
+def get_testharness_kwargs(occamy_cfg, sim_with_mem_macro, sim_with_interposer, sim_with_pll, sim_with_netlist, sim_with_verilator, soc2router_bus, router2soc_bus, name):
     multichip_cfg = occamy_cfg["hemaia_multichip"]
     
     class ChipletType(Enum):
@@ -1005,6 +1005,7 @@ def get_testharness_kwargs(occamy_cfg, sim_with_mem_macro, sim_with_interposer, 
         "sim_with_netlist": 1 if sim_with_netlist else 0,
         "sim_with_interposer": 1 if sim_with_interposer else 0,
         "sim_with_pll": 1 if sim_with_pll else 0,
+        "sim_with_verilator": 1 if sim_with_verilator else 0,
         "pll_present": pll_present,
         "compute_chips": compute_chips,
         "mem_chips": mem_chips,

@@ -58,9 +58,9 @@ VSIM_BENDER += $(shell cat ../rtl/src/bender_targets.tmp)
 VLT_BENDER  += $(shell cat ../rtl/src/bender_targets.tmp)
 VCS_BENDER  += $(shell cat ../rtl/src/bender_targets.tmp)
 
-VSIM_BENDER += -t simulation_hemaia
+VSIM_BENDER += -t simulation_hemaia -t simulation_hemaia_interposer_model
 VLT_BENDER  += -t simulation_hemaia
-VCS_BENDER  += -t simulation_hemaia
+VCS_BENDER  += -t simulation_hemaia -t simulation_hemaia_interposer_model
 
 ifeq ($(SIM_WITH_NETLIST), 1)
 	VSIM_BENDER += -t hemaia_netlist
@@ -137,6 +137,7 @@ VLT_AR     = ${VLT_BUILDDIR}/Vtestharness__ALL.a
 
 # VLT_FLAGS += --trace       # Enable VCD dumping
 VLT_FLAGS += --prof-cfuncs # Enable code profiling
+VLT_FLAGS += -Itestharness  # Include path for testharness utility files
 
 ###############
 # C testbench #
@@ -192,7 +193,16 @@ OCCAMYGEN_TH_CMD = $(OCCAMYGEN) --cfg $(CFG) --outdir testharness \
 		--sim_with_mem_macro $(SIM_WITH_MACRO) \
 		--sim_with_netlist $(SIM_WITH_NETLIST) \
 		--sim_with_interposer $(SIM_WITH_INTERPOSER) \
-		--sim_with_pll $(SIM_WITH_PLL)
+		--sim_with_pll $(SIM_WITH_PLL) \
+		--sim_with_verilator 0
+
+OCCAMYGEN_TH_VLT_CMD = $(OCCAMYGEN) --cfg $(CFG) --outdir testharness \
+		--testharness-sv $(TESTHARNESS_TPL_DIR)/testharness.sv.tpl \
+		--sim_with_mem_macro $(SIM_WITH_MACRO) \
+		--sim_with_netlist $(SIM_WITH_NETLIST) \
+		--sim_with_interposer 0 \
+		--sim_with_pll $(SIM_WITH_PLL) \
+		--sim_with_verilator 1
 
 # Primary target: generates all testharness outputs in one invocation
 testharness/testharness.sv: $(TESTHARNESS_TPLS) $(CFG)
@@ -212,7 +222,12 @@ debug-testharness-gen:
 # Verilator #
 #############
 
-${VLT_AR}: testharness/testharness.sv
+# Regenerate testharness for Verilator (no D2D, no interposer)
+vlt-testharness: $(TESTHARNESS_TPLS) $(CFG)
+	@echo "[OCCAMYGEN] Generate testharness files (Verilator)"
+	@$(OCCAMYGEN_TH_VLT_CMD)
+
+${VLT_AR}: vlt-testharness
 	$(call VERILATE,testharness)
 
 # Quick sanity check, not really meant for simulation.
