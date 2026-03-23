@@ -266,7 +266,7 @@ module testharness;
         set_rst();
         init_pll_pins();
         // Wait some random time
-        #(11us); 
+        #(11ns); 
         %if pll_present:
         // Enable the PLL and wait for locked signal
         enable_pll_and_wait_lock();
@@ -274,7 +274,7 @@ module testharness;
         // PLL is not presents
         %endif
         // Wait some random time
-        #(7us);
+        #(7ns);
         // Load binary
         load_binary();
         // Release the rst
@@ -288,7 +288,13 @@ module testharness;
     // Trigger the reusbale init task when reload_bin becomes high
     logic reload_bin = '0;
     always @(posedge reload_bin) begin
-        init_and_load();
+        set_rst();
+        // Wait some random time
+        #(11ns);
+        // Load binary
+        load_binary();
+        // Release the rst
+        release_rst();
         reload_bin = '0;
     end
 
