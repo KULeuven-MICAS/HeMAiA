@@ -7,11 +7,12 @@
 MKFILE_PATH := $(abspath $(lastword $(MAKEFILE_LIST)))
 MKFILE_DIR := $(dir $(MKFILE_PATH))
 
-CFG_OVERRIDE ?= 
-
+CFG_OVERRIDE ?=
 
 DEFAULT_CFG = $(MKFILE_DIR)target/rtl/cfg/hemaia_ci.hjson
 CFG = $(MKFILE_DIR)target/rtl/cfg/lru.hjson
+DEFAULT_SIM_CFG = $(MKFILE_DIR)target/rtl/cfg/sim_rtl.hjson
+SIM_CFG ?= $(DEFAULT_SIM_CFG)
 # If the configuration file is overriden on the command-line (through
 # CFG_OVERRIDE) and this file differs from the least recently used
 # (LRU) config, all targets depending on the configuration file have
@@ -192,25 +193,25 @@ hemaia_system_east_vivado_gui: # In ESAT Server
 ######################
 
 hemaia_system_vlt: # In SNAX Docker
-	$(MAKE) -C ./target/sim bin/occamy_chip.vlt CFG=$(CFG)
+	$(MAKE) -C ./target/sim bin/occamy_chip.vlt CFG=$(CFG) SIM_CFG=$(SIM_CFG)
 
 #####################
 # Questasim Workflow #
 ######################
 
 hemaia_system_vsim_preparation: $(CFG) # In SNAX Docker
-	$(MAKE) -C ./target/sim work-vsim/compile.vsim.tcl CFG=$(CFG)
+	$(MAKE) -C ./target/sim work-vsim/compile.vsim.tcl CFG=$(CFG) SIM_CFG=$(SIM_CFG)
 
 hemaia_system_vsim: # In ESAT Server
-	$(MAKE) -C ./target/sim bin/occamy_chip.vsim
+	$(MAKE) -C ./target/sim bin/occamy_chip.vsim SIM_CFG=$(SIM_CFG)
 
 ################
 # VCS Workflow #
 ################
 
 hemaia_system_vcs_preparation: # In SNAX Docker
-	$(MAKE) -C ./target/sim work-vcs/compile.sh
+	$(MAKE) -C ./target/sim work-vcs/compile.sh SIM_CFG=$(SIM_CFG)
 
 hemaia_system_vcs: # In ESAT Server
-	$(MAKE) -C ./target/sim bin/occamy_chip.vcs
+	$(MAKE) -C ./target/sim bin/occamy_chip.vcs SIM_CFG=$(SIM_CFG)
 # How to start the execution of the simulation: cd ./target/sim/bin; ./occamy_chip.vcs -gui -R -fgp=num_threads:8

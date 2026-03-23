@@ -11,6 +11,7 @@
 
 DEBUG        ?= OFF # ON to turn on debugging symbols
 CFG          ?= $(realpath $(MKFILE_DIR)../rtl/cfg/lru.hjson)
+SIM_CFG      ?= $(realpath $(MKFILE_DIR)../rtl/cfg/sim_rtl.hjson)
 
 .DEFAULT_GOAL := help
 .PHONY: all apps clean clean-testharness clean-vsim clean-vlt clean-vcs clean-apps clean-logs clean-bin
@@ -43,16 +44,16 @@ UART_DPI_DIR         ?= $(SIM_MKFILE_DIR)testharness/uartdpi
 # Simulator options #
 #####################
 SIM_WITH_WAVEFORM ?= 1
-# Extract a boolean flag from CFG: returns 1 if key exists and isn't false, 0 otherwise
-cfg_flag = $(shell if [ -f "$(CFG)" ]; then \
-	if grep -E -q '^[[:space:]]*$(1)[[:space:]]*[:=][[:space:]]*false' "$(CFG)"; then echo 0; \
-	elif grep -E -q '^[[:space:]]*$(1)' "$(CFG)"; then echo 1; \
+# Extract a boolean flag from a hjson file: returns 1 if key exists and isn't false, 0 otherwise
+cfg_flag = $(shell if [ -f "$(1)" ]; then \
+	if grep -E -q '^[[:space:]]*$(2)[[:space:]]*[:=][[:space:]]*false' "$(1)"; then echo 0; \
+	elif grep -E -q '^[[:space:]]*$(2)' "$(1)"; then echo 1; \
 	else echo 0; fi; else echo 0; fi)
 
-SIM_WITH_MACRO      ?= $(call cfg_flag,sim_with_macro)
-SIM_WITH_NETLIST    ?= $(call cfg_flag,sim_with_netlist)
-SIM_WITH_INTERPOSER ?= $(call cfg_flag,sim_with_interposer)
-SIM_WITH_PLL        ?= $(call cfg_flag,use_vendor_pll)
+SIM_WITH_MACRO      ?= $(call cfg_flag,$(SIM_CFG),sim_with_mem_macro)
+SIM_WITH_NETLIST    ?= $(call cfg_flag,$(SIM_CFG),sim_with_netlist)
+SIM_WITH_INTERPOSER ?= $(call cfg_flag,$(SIM_CFG),sim_with_interposer)
+SIM_WITH_PLL        ?= $(call cfg_flag,$(CFG),use_vendor_pll)
 
 VSIM_BENDER += $(shell cat ../rtl/src/bender_targets.tmp)
 VLT_BENDER  += $(shell cat ../rtl/src/bender_targets.tmp)
@@ -198,14 +199,14 @@ OCCAMYGEN_TH_CMD = $(OCCAMYGEN) --cfg $(CFG) --outdir testharness \
 
 OCCAMYGEN_TH_VLT_CMD = $(OCCAMYGEN) --cfg $(CFG) --outdir testharness \
 		--testharness-sv $(TESTHARNESS_TPL_DIR)/testharness.sv.tpl \
-		--sim_with_mem_macro $(SIM_WITH_MACRO) \
-		--sim_with_netlist $(SIM_WITH_NETLIST) \
+		--sim_with_mem_macro 0 \
+		--sim_with_netlist 0 \
 		--sim_with_interposer 0 \
-		--sim_with_pll $(SIM_WITH_PLL) \
+		--sim_with_pll 0 \
 		--sim_with_verilator 1
 
 # Primary target: generates all testharness outputs in one invocation
-testharness/testharness.sv: $(TESTHARNESS_TPLS) $(CFG)
+testharness/testharness.sv: $(TESTHARNESS_TPLS) $(CFG) $(SIM_CFG)
 	@echo "[OCCAMYGEN] Generate testharness files"
 	@$(OCCAMYGEN_TH_CMD)
 
@@ -224,7 +225,7 @@ debug-testharness-gen:
 #############
 
 # Regenerate testharness for Verilator (no D2D, no interposer)
-vlt-testharness: $(TESTHARNESS_TPLS) $(CFG)
+vlt-testharness: $(TESTHARNESS_TPLS) $(CFG) $(SIM_CFG)
 	@echo "[OCCAMYGEN] Generate testharness files (Verilator)"
 	@$(OCCAMYGEN_TH_VLT_CMD)
 
