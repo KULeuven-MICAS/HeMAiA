@@ -11,7 +11,7 @@ script_dir="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 # Defaults: MARCO=1, D2D=1, PLL=0
 SIM_WITH_MARCO="${SIM_WITH_MARCO:-1}"
 SIM_WITH_D2D="${SIM_WITH_D2D:-1}"
-SIM_WITH_PLL="${SIM_WITH_PLL:-0}"
+SIM_WITH_PLL="${SIM_WITH_PLL:-1}"
 
 # Simple CLI parsing to override the same variables when calling the script.
 while [ $# -gt 0 ]; do
@@ -19,7 +19,7 @@ while [ $# -gt 0 ]; do
         --marco=*) SIM_WITH_MARCO="${1#*=}"; shift ;;
         --d2d=*) SIM_WITH_D2D="${1#*=}"; shift ;;
         --pll=*) SIM_WITH_PLL="${1#*=}"; shift ;;
-        -h|--help) echo "Usage: $0 [--d2d=0|1] [--marco=0|1] [--pll=0|1]"; echo "Defaults: d2d=1, marco=1, pll=0"; exit 0 ;;
+        -h|--help) echo "Usage: $0 [--d2d=0|1] [--marco=0|1] [--pll=0|1]"; echo "Defaults: d2d=1, marco=1, pll=1"; exit 0 ;;
         *) echo "Unknown option: $1"; exit 1 ;;
     esac
 done
