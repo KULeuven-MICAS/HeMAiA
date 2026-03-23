@@ -285,6 +285,13 @@ module testharness;
         check_finish();
     end
 
+    // Trigger the reusbale init task when reload_bin becomes high
+    logic reload_bin = '0;
+    always @(posedge reload_bin) begin
+        init_and_load();
+        reload_bin = '0;
+    end
+
     // The compute chiplet - DUT(The main ASIC)
     // The memory chiplet - External Memory Pool(Will be implemented on a FPGA)
     // And talk to the ASIC also via the D2D Link
