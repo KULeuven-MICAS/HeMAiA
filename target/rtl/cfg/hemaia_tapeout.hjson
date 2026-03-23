@@ -223,11 +223,11 @@
     // Use Vendor PLL
     use_vendor_pll: true
     // Sim with RTL models
-    sim_with_rtl: true
+    sim_with_rtl: false
     // Do not replace the Mem marcs
-    sim_with_mem_macro: false
+    sim_with_mem_macro: true
     // Do not use netlist
     sim_with_netlist: false
     // Sim with interposer
-    sim_with_interposer: true
+    sim_with_interposer: false
 }
