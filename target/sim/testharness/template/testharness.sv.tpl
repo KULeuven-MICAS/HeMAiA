@@ -198,8 +198,6 @@ module testharness;
     wire const_one;
     assign const_zero = 1'b0;
     assign const_one  = 1'b1;
-    // Must be the frequency of i_uart.clk_i in Hz
-    localparam int unsigned UartDPIFreq = `PRI_FREQ_MHZ * 1e6;
     %for compute_chip in compute_chips:
     <%
         comp_chip_x = compute_chip.coordinate[0]
@@ -213,10 +211,9 @@ module testharness;
     assign chip${comp_chip_x}${comp_chip_y}_uart_cts_ni = const_zero;
     // The uart dpi interface
     uartdpi #(
-        .BAUD('d31250000),
-        // Frequency shouldn't matter since we are sending with the same clock.
-        .FREQ(UartDPIFreq),
-        .NAME("uart_chip${comp_chip_x}${comp_chip_y}")
+        .BAUD(1),
+        .FREQ(32),
+        .NAME("uart_chip_${comp_chip_x}_${comp_chip_y}")
     ) i_uart_chip${comp_chip_x}${comp_chip_y} (
         .clk_i (periph_clk_i),
         .rst_ni(rst_ni),
