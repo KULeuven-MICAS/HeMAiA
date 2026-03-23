@@ -6,7 +6,7 @@
 /apps/*.elf
 /apps/.rtlbinary
 /apps/**/*.hex
-/testharness/testharness.sv
+/testharness/testharness*.sv
 /testharness/io_wrapper.sv
 /testharness/dut.sv
 /testharness/util/check_finish_*.sv

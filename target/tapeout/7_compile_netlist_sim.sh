@@ -1,6 +1,6 @@
 #!/bin/bash
 script_dir="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
-cfg_name="hemaia_tapeout.hjson"
+cfg_name="hemaia_tapeout_sim.hjson"
 
 # 
 FILE=/users/micas/shares/project_HeMAiAv2/HeMAiA/hw/hemaia/tech_cells_tsmc16/src/tsmc16/mem_macro/ts1n16ffcllsblvtd1024x64m4sws_150a/VERILOG/ts1n16ffcllsblvtd1024x64m4sws_150a.v
