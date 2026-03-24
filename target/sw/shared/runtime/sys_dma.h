@@ -70,32 +70,26 @@ extern "C" {
 #define IDMA_CONF_SERIALIZE 0
 
 inline volatile uint64_t *sys_dma_src_ptr(uint8_t chip_id) {
-    return (volatile uint64_t *)(IDMA_SRC_ADDR |
-                                 (uintptr_t)get_chip_baseaddress(chip_id));
+    return (volatile uint64_t *)(chiplet_addr_transform_full(chip_id, IDMA_SRC_ADDR));
 }
 inline volatile uint64_t *sys_dma_dst_ptr(uint8_t chip_id) {
-    return (volatile uint64_t *)(IDMA_DST_ADDR |
-                                 (uintptr_t)get_chip_baseaddress(chip_id));
+
+    return (volatile uint64_t *)(chiplet_addr_transform_full(chip_id, IDMA_DST_ADDR));
 }
 inline volatile uint64_t *sys_dma_num_bytes_ptr(uint8_t chip_id) {
-    return (volatile uint64_t *)(IDMA_NUMBYTES_ADDR |
-                                 (uintptr_t)get_chip_baseaddress(chip_id));
+    return (volatile uint64_t *)(chiplet_addr_transform_full(chip_id, IDMA_NUMBYTES_ADDR));
 }
 inline volatile uint64_t *sys_dma_conf_ptr(uint8_t chip_id) {
-    return (volatile uint64_t *)(IDMA_CONF_ADDR |
-                                 (uintptr_t)get_chip_baseaddress(chip_id));
+    return (volatile uint64_t *)(chiplet_addr_transform_full(chip_id, IDMA_CONF_ADDR));
 }
 inline volatile uint64_t *sys_dma_status_ptr(uint8_t chip_id) {
-    return (volatile uint64_t *)(IDMA_STATUS_ADDR |
-                                 (uintptr_t)get_chip_baseaddress(chip_id));
+    return (volatile uint64_t *)(chiplet_addr_transform_full(chip_id, IDMA_STATUS_ADDR));
 }
 inline volatile uint64_t *sys_dma_nextid_ptr(uint8_t chip_id) {
-    return (volatile uint64_t *)(IDMA_NEXTID_ADDR |
-                                 (uintptr_t)get_chip_baseaddress(chip_id));
+    return (volatile uint64_t *)(chiplet_addr_transform_full(chip_id, IDMA_NEXTID_ADDR));
 }
 inline volatile uint64_t *sys_dma_done_ptr(uint8_t chip_id) {
-    return (volatile uint64_t *)(IDMA_DONE_ADDR |
-                                 (uintptr_t)get_chip_baseaddress(chip_id));
+    return (volatile uint64_t *)(chiplet_addr_transform_full(chip_id, IDMA_DONE_ADDR));
 }
 
 static inline uint64_t sys_dma_memcpy(uint8_t chip_id, uint64_t dst, uint64_t src, uint64_t size) {
