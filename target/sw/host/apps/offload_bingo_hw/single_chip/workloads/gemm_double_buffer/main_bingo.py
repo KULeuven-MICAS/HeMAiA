@@ -6,8 +6,6 @@
 import os
 import sys
 import argparse
-import pathlib
-import hjson
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.abspath(os.path.join(current_dir, "../../../../../../../../"))
@@ -15,10 +13,6 @@ ROOT_DIR = os.path.normpath(ROOT_DIR)
 
 print(f"ROOT_DIR: {ROOT_DIR}")
 sys.path.append(f"{ROOT_DIR}/target/sw/host/runtime/libbingo/mini_compiler")
-
-# Import emit_header_file from gemm_datagen to emit gemm_data.h directly
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from gemm_datagen import emit_header_file  # noqa E402
 
 from bingo_dfg import BingoDFG
 from bingo_node import BingoNode
@@ -39,91 +33,62 @@ def get_args():
         default="offload_bingo_hw.h",
         help="Output filename for the offload header file",
     )
-    parser.add_argument(
-        "--emit_mini_golden",
-        action="store_true",
-        help="Emit mini golden data for verification",
-    )
-    parser.add_argument(
-        "-c",
-        "--cfg",
-        type=pathlib.Path,
-        required=True,
-        help="Select param config file (params.hjson)",
-    )
-    parser.add_argument(
-        "--hwcfg",
-        type=pathlib.Path,
-        required=True,
-        help="Select hardware config file",
-    )
-    parser.add_argument(
-        "--data_h",
-        type=pathlib.Path,
-        default=None,
-        help="Output path for the generated data header (e.g. gemm_data.h). If omitted, data header is not written.",
-    )
-    parser.add_argument(
-        "--num_double_buffers",
-        type=int,
-        default=8,
-        help="Number of double buffers (default: 8)",
-    )
     return parser.parse_args()
-def define_workload_params(cfg_path, hwcfg_path, emit_mini_golden=False, num_double_buffers=8):
-    """Load workload params from hjson config files.
-    M, K, N and array_shape come from params.hjson;
-    meshRow/tileSize/meshCol are derived from the hw config.
-    Returns (params dict, merged_config dict).
-    """
-    with open(cfg_path) as f:
-        param = hjson.loads(f.read())
-    with open(hwcfg_path) as f:
-        hw = hjson.loads(f.read())
-    merged = {**param, **hw,
-              "emit_mini_golden": emit_mini_golden,
-              "num_double_buffers": num_double_buffers}
-
-    # Derive meshRow/tileSize/meshCol from the hw config
-    data_type = 0  # int8
-    array_shape = merged["array_shape"]
-    snax_acc_cfg = merged["snax_versacore_core_template"]["snax_acc_cfg"][0]
-    unrolling = snax_acc_cfg["snax_versacore_spatial_unrolling"][data_type][array_shape]
-    meshRow  = unrolling[0]
-    tileSize = unrolling[1]
-    meshCol  = unrolling[2]
-
-    M = merged["M"]
-    K = merged["K"]
-    N = merged["N"]
-    print(f"Loaded M: {M}, K: {K}, N: {N} from config (meshRow={meshRow}, tileSize={tileSize}, meshCol={meshCol})")
-
+def define_workload_params():
+    """Defines the GeMM workload parameters."""
+    
+    # TODO: We need a way to unify the gemm generation stage
+    # Delegate to Xiaoling later
+    
+    # The basic computaiton for gemm is
+    # (meshRow * tileSize) * (tileSize * meshCol) = meshRow * meshCol
+    # And the A matrix has M*K tiles
+    # The B matrix has K*N tiles
+    # The C/D matrix has M*N tiles
+    # The current default parmeters for the meshRow, meshCol, tileSize are
+    # meshRow = 1
+    # meshCol = 64
+    # tileSize = 8
+    # So it will be
+    # (1 * 8) * (8 * 64) = 1 * 64
+    # In the current setting, we suppose A size is 4KB and B size is 4KB and K = 4
+    # We tile 4 times for A
+    num_double_buffers = 8
+    A_matrix_size_bytes = 4 * 1024
+    B_matrix_size_bytes = 4 * 1024
+    K = 4
+    meshRow = 1
+    tileSize = 8
+    meshCol = 64
+    # Derive M and N
+    M = A_matrix_size_bytes // (K * meshRow * tileSize * 1)  # int8
+    N = B_matrix_size_bytes // (K * meshCol * tileSize * 1)     # int8
+    print(f"Derived M: {M}, N: {N} for A size: {A_matrix_size_bytes} bytes, B size: {B_matrix_size_bytes} bytes, K: {K}")
     params = {
         'M': M,
         'K': K,
         'N': N,
-        'meshRow':  meshRow,
+        'meshRow': meshRow,
         'tileSize': tileSize,
-        'meshCol':  meshCol,
-        'arrayShapeIdx': array_shape,
-        'transposeA': merged.get("transposed_A", 0),
-        'transposeB': merged.get("transposed_B", 0),
-        'accumPrevC': merged.get("accumPrevC",  0),
+        'meshCol': meshCol,
+        'arrayShapeIdx': 1,
+        'transposeA': 0,
+        'transposeB': 0,
+        'accumPrevC': 0
     }
     params["app_name"] = "Single-Chip GEMM Double Buffer"
     # Derived sizes
-    params['A_size'] = M * K * meshRow * tileSize * 1  # int8
-    params['B_size'] = K * N * tileSize * meshCol * 1  # int8
-    params['C_size'] = M * N * meshRow * meshCol * 4   # int32
-    params['D_size'] = M * N * meshRow * meshCol * 4   # int32
+    params['A_size'] = params['M'] * params['K'] * params['meshRow'] * params['tileSize'] * 1 # int8
+    params['B_size'] = params['K'] * params['N'] * params['meshCol'] * params['tileSize'] * 1 # int8
+    params['C_size'] = params['M'] * params['N'] * params['meshRow'] * params['meshCol'] * 4 # int32
+    params['D_size'] = params['M'] * params['N'] * params['meshRow'] * params['meshCol'] * 4 # int32
     print(f"Calculated A size: {params['A_size']//1024} kbytes, B size: {params['B_size']//1024} kbytes, C size: {params['C_size']//1024} kbytes, D size: {params['D_size']//1024} kbytes")
-
+    
     # double buffer number
     params['num_double_buffers'] = num_double_buffers
     params['A_tile_size'] = params['A_size'] // num_double_buffers
     params['D_tile_size'] = params['D_size'] // num_double_buffers
-    params['emit_mini_golden'] = emit_mini_golden
-    return params, merged
+    return params
 
 def define_memory_handles(params):
     """Defines memory symbols and handles."""
@@ -137,10 +102,8 @@ def define_memory_handles(params):
     # B is not tiled, only one symbol
     mem_handles['B_data_L3_symbol'] = BingoMemSymbol("B")
     # The D tiles
-    # If emit_mini_golden is True, the D array is compacted to only contain the verification data (64B per tile)
-    golden_stride = 64 if params.get('emit_mini_golden', False) else params['D_tile_size']
     for i in range(params['num_double_buffers']):
-        mem_handles[f'D{i}_data_L3_symbol'] = BingoMemSymbol("D",offset=i*golden_stride)
+        mem_handles[f'D{i}_data_L3_symbol'] = BingoMemSymbol("D",offset=i*params['D_tile_size'])
     # C is not used
 
     # 2. Define Memory Handles (Dynamic Allocations)
@@ -427,19 +390,7 @@ def main():
         os.makedirs(output_dir)
 
     # Execute Pipeline
-    params, merged_config = define_workload_params(
-        args.cfg, args.hwcfg,
-        emit_mini_golden=args.emit_mini_golden,
-        num_double_buffers=args.num_double_buffers
-    )
-
-    # Emit gemm_data.h (same as running gemm_datagen.py separately)
-    if args.data_h is not None:
-        data_h_content = emit_header_file(**merged_config)
-        with open(args.data_h, "w") as f:
-            f.write(data_h_content)
-        print(f"Written data header: {args.data_h}")
-
+    params = define_workload_params()
     mem_handles = define_memory_handles(params)
     dfg = create_dfg(params, mem_handles)
     dfg.bingo_compile_dfg(params["app_name"], output_dir, output_file_name, extra_include_header_list=["gemm_data.h"])

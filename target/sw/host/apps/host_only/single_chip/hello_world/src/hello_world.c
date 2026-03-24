@@ -12,11 +12,5 @@ int main() {
     enable_vec();
     asm volatile("fence" : : : "memory");
     printf("Hello world from HeMAiA! \r\n");
-    char uart_rx_buffer[512];
-    while (1) {
-        scanf("%s", uart_rx_buffer);
-        printf("[HeMAiA] What you said is: %s\r\n", uart_rx_buffer);
-    }
-
     return 0;
 }

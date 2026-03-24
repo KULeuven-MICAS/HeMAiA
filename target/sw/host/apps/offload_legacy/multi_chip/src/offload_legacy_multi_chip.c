@@ -17,7 +17,6 @@ int main() {
     // Reset and ungate all quadrants, deisolate
     uintptr_t current_chip_address_prefix =
         (uintptr_t)get_current_chip_baseaddress();
-    uint32_t current_chip_id = get_current_chip_id();
     hemaia_d2d_link_initialize(current_chip_id);
     int32_t target_chip_id = 0;
 

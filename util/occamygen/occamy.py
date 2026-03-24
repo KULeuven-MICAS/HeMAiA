@@ -9,6 +9,9 @@ import math
 import importlib.util
 from pathlib import Path
 import hjson
+from enum import Enum
+from typing import Tuple
+from dataclasses import dataclass
 from jsonref import JsonRef
 
 sys.path.append(str(Path(__file__).parent /
@@ -961,41 +964,56 @@ def get_bootdata_kwargs(occamy_cfg, cluster_generators, name):
     return bootdata_kwargs
 
 
-def get_testharness_kwargs(occamy_cfg, soc2router_bus, router2soc_bus, name):
-    testharness_kwargs = {
-        "name": name,
-        "mem_macro": False,
-        "netlist": False,
-        "occamy_cfg": occamy_cfg,
-        "multichip_cfg": occamy_cfg["hemaia_multichip"],
-        "soc2router_bus": soc2router_bus,
-        "router2soc_bus": router2soc_bus,
-        "mem_size": occamy_cfg["spm_wide"]["length"],
-        "mem_bank": occamy_cfg["spm_wide"]["banks"],
-    }
-    return testharness_kwargs
+def get_testharness_kwargs(occamy_cfg, sim_with_mem_macro, sim_with_interposer, sim_with_pll, sim_with_netlist, sim_with_verilator, soc2router_bus, router2soc_bus, name):
+    multichip_cfg = occamy_cfg["hemaia_multichip"]
+    
+    class ChipletType(Enum):
+        COMPUTE = "compute"
+        MEMORY = "memory"
 
-def get_mem_macro_testharness_kwargs(occamy_cfg, soc2router_bus, router2soc_bus, name):
-    testharness_kwargs = {
-        "name": name,
-        "mem_macro": True,
-        "netlist": False,
-        "occamy_cfg": occamy_cfg,
-        "multichip_cfg": occamy_cfg["hemaia_multichip"],
-        "soc2router_bus": soc2router_bus,
-        "router2soc_bus": router2soc_bus,
-        "mem_size": occamy_cfg["spm_wide"]["length"],
-        "mem_bank": occamy_cfg["spm_wide"]["banks"],
-    }
-    return testharness_kwargs
+    @dataclass
+    class Chiplet:
+        coordinate: Tuple[int, int]  # (x, y)
+        type: ChipletType
+        size: int = 0  # Only for memory chiplets
 
-def get_netlist_testharness_kwargs(occamy_cfg, soc2router_bus, router2soc_bus, name):
+    compute_chips = []
+    mem_chips = []
+    if multichip_cfg["single_chip"] is True:
+        compute_chips.append(Chiplet(coordinate=(0, 0), type=ChipletType.COMPUTE))
+    else:
+        for compute_chip in multichip_cfg["testbench_cfg"]["hemaia_compute_chip"]:
+            compute_chips.append(Chiplet(coordinate=(compute_chip["coordinate"][0], compute_chip["coordinate"][1]), type=ChipletType.COMPUTE))
+        for mem_chip in multichip_cfg["testbench_cfg"]["hemaia_mem_chip"]:
+            mem_chips.append(Chiplet(coordinate=(mem_chip["coordinate"][0], mem_chip["coordinate"][1]), type=ChipletType.MEMORY, size=mem_chip["mem_size"]))
+    
+    # Derive chiplet grid dimensions from compute chip coordinates
+    if compute_chips:
+        max_compute_chiplet_x = max(c.coordinate[0] for c in compute_chips) + 1
+        max_compute_chiplet_y = max(c.coordinate[1] for c in compute_chips) + 1
+    else:
+        max_compute_chiplet_x = 1
+        max_compute_chiplet_y = 1
+    num_compute_chiplet = len(compute_chips)
+
+    # Whether the vendor PLL IP is present in the design
+    pll_present = occamy_cfg.get("use_vendor_pll", False)
+
     testharness_kwargs = {
         "name": name,
-        "mem_macro": False,
-        "netlist": True,
+        "sim_with_mem_macro": 1 if sim_with_mem_macro else 0,
+        "sim_with_netlist": 1 if sim_with_netlist else 0,
+        "sim_with_interposer": 1 if sim_with_interposer else 0,
+        "sim_with_pll": 1 if sim_with_pll else 0,
+        "sim_with_verilator": 1 if sim_with_verilator else 0,
+        "pll_present": pll_present,
+        "compute_chips": compute_chips,
+        "mem_chips": mem_chips,
+        "num_compute_chiplet": num_compute_chiplet,
+        "max_compute_chiplet_x": max_compute_chiplet_x,
+        "max_compute_chiplet_y": max_compute_chiplet_y,
         "occamy_cfg": occamy_cfg,
-        "multichip_cfg": occamy_cfg["hemaia_multichip"],
+        "multichip_cfg": multichip_cfg,
         "soc2router_bus": soc2router_bus,
         "router2soc_bus": router2soc_bus,
         "mem_size": occamy_cfg["spm_wide"]["length"],

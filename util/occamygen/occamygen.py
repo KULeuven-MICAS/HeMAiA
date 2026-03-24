@@ -5,6 +5,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import argparse
+import os
 import hjson
 import pathlib
 import sys
@@ -34,10 +35,12 @@ DEFAULT_NAME = "occamy"
 def write_template(tpl_path, outdir, fname=None, **kwargs):
     if tpl_path:
         tpl_path = pathlib.Path(tpl_path).absolute()
+        outdir = pathlib.Path(outdir)
         if tpl_path.exists():
             tpl = Template(filename=str(tpl_path))
             fname = tpl_path.with_suffix("").name.replace("occamy", kwargs["name"]) \
                 if not fname else fname
+            outdir.mkdir(parents=True, exist_ok=True)
             with open(outdir / fname, "w") as file:
                 code = tpl.render_unicode(**kwargs)
                 code = re_trailws.sub("", code)
@@ -56,6 +59,16 @@ def read_json_file(file):
     except ValueError:
         raise SystemExit(sys.exc_info()[1])
     return obj
+
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, str):
+        if v.lower() in ('yes', 'true', 't', 'y', '1'):
+            return True
+        if v.lower() in ('no', 'false', 'f', 'n', '0'):
+            return False
+    raise argparse.ArgumentTypeError("Boolean value expected.")
 
 def main():
     """Generate the Occamy system and all corresponding configuration files."""
@@ -95,14 +108,32 @@ def main():
                         help="Name of the Xilinx wrapper file (output).")
     parser.add_argument("--testharness-sv",
                         metavar="TESTHARNESS_SV",
-                        help="Name of the testharness wrapper file (output).")
-    parser.add_argument("--mem-macro-testharness-sv",
-                        metavar="MEM_MACRO_TESTHARNESS_SV",
-                        help="Name of the memory macro testharness wrapper file (output).")
-    parser.add_argument("--netlist-testharness-sv",
-                        metavar="NETLIST_TESTHARNESS_SV",
-                        help="Name of the netlist testharness wrapper file (output).")
-
+                        help="Name of the testharness wrapper file (output).")    
+    parser.add_argument("--sim_with_interposer",
+                        metavar="SIM_WITH_INTERPOSER",
+                        type=str2bool,
+                        default=False,
+                        help="Generate testharness with interposer.")
+    parser.add_argument("--sim_with_mem_macro",
+                        metavar="SIM_WITH_MEM_MACRO",
+                        type=str2bool,
+                        default=False,
+                        help="Generate testharness with memory macro.")
+    parser.add_argument("--sim_with_pll",
+                        metavar="SIM_WITH_PLL",
+                        type=str2bool,
+                        default=False,
+                        help="Generate testharness with PLL.")    
+    parser.add_argument("--sim_with_verilator",
+                        metavar="SIM_WITH_VERILATOR",
+                        type=str2bool,
+                        default=False,
+                        help="Generate testharness for Verilator (no D2D, no interposer).")
+    parser.add_argument("--sim_with_netlist",
+                        metavar="SIM_WITH_NETLIST",
+                        type=str2bool,
+                        default=False,
+                        help="Generate testharness with netlist.")
     parser.add_argument("--cva6-sv",
                         metavar="CVA6_SV",
                         help="Name of the CVA6 wrapper file (output).")
@@ -779,19 +810,35 @@ def main():
     # Testharness #
     ###############
     if args.testharness_sv:
+        # Get the testharness kwargs from occamy.py, which will be used to fill in the testharness and util template
         testharness_kwargs = occamy.get_testharness_kwargs(
-            occamy_cfg, soc2router_bus, router2soc_bus, args.name)
-        write_template(args.testharness_sv, outdir, **testharness_kwargs)
-
-    if args.mem_macro_testharness_sv:
-        mem_macro_testharness_kwargs = occamy.get_mem_macro_testharness_kwargs(
-            occamy_cfg, soc2router_bus, router2soc_bus, args.name)
-        write_template(args.mem_macro_testharness_sv, outdir, **mem_macro_testharness_kwargs)
-
-    if args.netlist_testharness_sv:
-        netlist_testharness_kwargs = occamy.get_netlist_testharness_kwargs(
-            occamy_cfg, soc2router_bus, router2soc_bus, args.name)
-        write_template(args.netlist_testharness_sv, outdir, **netlist_testharness_kwargs)
+            occamy_cfg,
+            args.sim_with_mem_macro,
+            args.sim_with_interposer,
+            args.sim_with_pll,
+            args.sim_with_netlist,
+            args.sim_with_verilator,
+            soc2router_bus, router2soc_bus, args.name)
+        # Template directory contains all .sv.tpl files
+        tpl_dir = os.path.dirname(args.testharness_sv)
+        # Generate testharness.sv, io_wrapper.sv, dut.sv → outdir (testharness/)
+        write_template(args.testharness_sv, outdir, fname="testharness.sv", **testharness_kwargs)
+        write_template(os.path.join(tpl_dir, "io_wrapper.sv.tpl"), outdir, fname="io_wrapper.sv", **testharness_kwargs)
+        write_template(os.path.join(tpl_dir, "dut.sv.tpl"), outdir, fname="dut.sv", **testharness_kwargs)
+        # Generate util files → outdir/util/ (testharness/util/)
+        util_outdir = os.path.join(str(outdir), "util")
+        # Generate all load_binary and check_finish variants from a single template each,
+        # overriding the sim flags to produce one file per mode.
+        # The testharness `include picks the right one based on sim flags.
+        variant_flags = {
+            "rtl":       {"sim_with_mem_macro": 0, "sim_with_netlist": 0},
+            "mem_macro": {"sim_with_mem_macro": 1, "sim_with_netlist": 0},
+            "netlist":   {"sim_with_mem_macro": 0, "sim_with_netlist": 1},
+        }
+        for suffix, flags in variant_flags.items():
+            variant_kwargs = {**testharness_kwargs, **flags}
+            write_template(os.path.join(tpl_dir, "load_binary.sv.tpl"), util_outdir, fname=f"load_binary_{suffix}.sv", **variant_kwargs)
+            write_template(os.path.join(tpl_dir, "check_finish.sv.tpl"), util_outdir, fname=f"check_finish_{suffix}.sv", **variant_kwargs)
 
     ############
     # BOOTDATA #

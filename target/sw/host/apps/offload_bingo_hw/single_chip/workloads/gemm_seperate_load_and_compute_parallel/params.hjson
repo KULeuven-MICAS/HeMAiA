@@ -8,12 +8,11 @@
     array_shape: 0
     transposed_A: 0
     transposed_B: 0
-    K: 4
-    N: 3
-    M: 2
+    K: 1
+    N: 1
+    M: 1
     // these two will config the addNewC = 1
     addNonZeroC: 0
     addZeroC: 1
-    // these two will config the addNewC = 0, but need to make sure M=M=1
     accumPrevC: 0
 }

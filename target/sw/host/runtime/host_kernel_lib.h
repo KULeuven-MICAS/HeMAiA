@@ -63,13 +63,14 @@ static inline uint64_t __host_bingo_kernel_check_result(void *arg){
                    output_data_addr[i], i, golden_data_addr[i]);
         }
     }
+    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
     if (err == 0) {
         printf_safe("Chip(%x, %x): [Host] Kernel Check Result: PASS! All %d bytes match.\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), data_size);
+        return 0;
     } else {
         printf_safe("Chip(%x, %x): [Host] Kernel Check Result: FAIL! %d mismatches found out of %d bytes.\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), err, data_size);
+        return BINGO_RET_FAIL;
     }
-    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
-    return err;
 }
 
 static inline uint64_t __host_bingo_kernel_idma(void *arg){

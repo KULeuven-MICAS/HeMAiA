@@ -22,13 +22,11 @@ module hemaia (
     // Clocks, Boot, ChipId (14)
     inout wire        io_clk_i,
     inout wire        io_rst_ni,
-% if pll_present:
     // PLL signal
     inout wire        io_pll_bypass_i,
     inout wire        io_pll_en_i,
     inout wire [1:0]  io_pll_post_div_sel_i,
     inout wire        io_pll_lock_o,
-% endif
     inout wire        io_clk_obs_o,
     inout wire        io_clk_periph_i,
     inout wire        io_rst_periph_ni,
@@ -127,7 +125,6 @@ module hemaia (
       .io(io_rst_ni)
   );
 
-% if pll_present:
   logic pll_bypass_i;
   tc_digital_io #(
     .VerticalIO(1'b1)
@@ -191,7 +188,6 @@ module hemaia (
       .io_pulldown_en_i(1'b0),
       .io(io_pll_lock_o)
   );
-%endif
 
   logic clk_obs_o;
   tc_digital_io #(

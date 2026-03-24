@@ -55,12 +55,10 @@ import ${name}_pkg::*;
   // The Clock Reset Controller takes care of clk_i and rst_ni, should not be marked as false_path
   input  logic        clk_i,
   input  logic        rst_ni,
-% if pll_present:
   (* false_path *) input  logic        pll_bypass_i,
   (* false_path *) input  logic        pll_en_i,
   (* false_path *) input  logic [1:0]  pll_post_div_sel_i,
   (* false_path *) output logic        pll_lock_o,
-% endif
   output logic        clk_obs_o,
   input  logic        clk_periph_i,
   // clk_periph_i is directly used by logics, rst_periph_ni should be marked as false_path
@@ -247,7 +245,6 @@ import ${name}_pkg::*;
   assign rst_d2d_phy_north_n = rst_n_vec[${3+num_acc_clk_domain}];
   assign rst_d2d_phy_south_n = rst_n_vec[${4+num_acc_clk_domain}];
 % endif
-
   hemaia_clk_rst_controller #(
     .USE_VENDOR_PLL(${use_vendor_pll}),
     .NumClocks(${1+num_acc_clk_domain+num_d2d_clk_domain}),
@@ -269,13 +266,12 @@ import ${name}_pkg::*;
     .pll_bypass_i(pll_bypass_i),
     .pll_en_i(pll_en_i),
     .pll_post_div_sel_i(pll_post_div_sel_i),
-    .pll_lock_o(pll_lock_o),
   %else:
     .pll_bypass_i('0),
     .pll_en_i('0),
     .pll_post_div_sel_i('0),
-    .pll_lock_o(*/Not Connected*/),
   %endif
+    .pll_lock_o(pll_lock_o),
     .clk_o(clk_vec),
     .rst_no(rst_n_vec)
   );

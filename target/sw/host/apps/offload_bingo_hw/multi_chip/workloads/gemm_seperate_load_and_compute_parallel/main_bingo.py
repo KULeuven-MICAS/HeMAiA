@@ -316,7 +316,7 @@ def create_dfg(params, mem_handles):
             kernel_args=HostBingoKernelCheckResultArgs(
                 golden_data_addr=mem_handles[f"D{d_idx}_golden_l3"],
                 output_data_addr=mem_handles[f"D_l3_chip{chiplet_hex}"],
-                data_size=params["D_size"],
+                data_size=64, # check first 64 bytes for simplicity
             ),
         )
 

@@ -228,7 +228,7 @@ void set_versacore_streamer_csr(
     // for the int32 to fp16 conversion
     if (array_shape == 4) {
         // for rescale-down per output channel
-        csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE + 6, 1);
+        csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE + 6, 0);
     } else {
         csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE + 6, 0);
     }
@@ -252,8 +252,8 @@ void start_streamer() { csrw_ss(STREAMER_START_CSR, 1); }
 void start_versacore() { csrw_ss(VERSACORE_START_CSR, 1); }
 
 void start_versacore_and_streamer() {
-    start_versacore();
     start_streamer();
+    start_versacore();
 }
 
 // Set GEMM configuration CSR
@@ -277,6 +277,9 @@ void set_versacore_csr(uint32_t take_in_new_c,
 
 // Stall until Streamer and VERSACORE accelerator finish
 void wait_versacore_and_streamer() {
+    csrw_ss(STREAMER_START_CSR, 0);
+    csrw_ss(STREAMER_START_CSR, 0);
+    csrw_ss(VERSACORE_START_CSR, 0);
     while (csrr_ss(VERSACORE_BUSY)) {
     }
     while (csrr_ss(STREAMER_BUSY_CSR)) {
