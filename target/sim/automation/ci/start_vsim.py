@@ -321,15 +321,6 @@ def step6_run_simulations(tasks_info: List[Tuple[Path, str]]) -> Dict[str, bool]
     """Execute simulations in parallel and return a pass/fail map."""
     results: Dict[str, bool] = {}
 
-    def _remove_task_dir(task_dir: Path) -> None:
-        try:
-            if task_dir.exists():
-                shutil.rmtree(task_dir)
-                print(f"Removed task directory {task_dir}")
-        except Exception:
-            print(f"Failed to remove task directory {task_dir}:")
-            traceback.print_exc()
-
     def _worker(task_dir: Path, ci_name: str):
         sim_binary = task_dir / "bin" / "occamy_chip.vsim"
         try:
@@ -364,8 +355,6 @@ def step6_run_simulations(tasks_info: List[Tuple[Path, str]]) -> Dict[str, bool]
             except Exception:
                 print(f"Error obtaining result for task {td}:")
                 traceback.print_exc()
-
-            _remove_task_dir(td)
 
     return results
 
