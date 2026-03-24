@@ -24,16 +24,16 @@ runs:
     - CHIP_TYPE: single_chip
     - WORKLOAD: dummy
     - DEV_APP: snax-bingo-offload
-  # - app_5: 
-  #   - HOST_APP_TYPE: offload_bingo_sw
-  #   - CHIP_TYPE: single_chip
-  #   - WORKLOAD: gemm_tiled
-  #   - DEV_APP: snax-bingo-offload
-  # - app_6: 
-  #   - HOST_APP_TYPE: offload_bingo_sw
-  #   - CHIP_TYPE: single_chip
-  #   - WORKLOAD: gemm_stacked
-  #   - DEV_APP: snax-bingo-offload
+  - app_5: 
+    - HOST_APP_TYPE: offload_bingo_sw
+    - CHIP_TYPE: single_chip
+    - WORKLOAD: gemm_tiled
+    - DEV_APP: snax-bingo-offload
+  - app_6: 
+    - HOST_APP_TYPE: offload_bingo_sw
+    - CHIP_TYPE: single_chip
+    - WORKLOAD: gemm_stacked
+    - DEV_APP: snax-bingo-offload
   - app_7: 
     - HOST_APP_TYPE: offload_bingo_sw
     - CHIP_TYPE: single_chip
