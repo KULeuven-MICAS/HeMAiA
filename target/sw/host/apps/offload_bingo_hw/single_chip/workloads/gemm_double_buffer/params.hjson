@@ -16,4 +16,6 @@
     addZeroC: 1
     // these two will config the addNewC = 0, but need to make sure M=M=1
     accumPrevC: 0
+    // number of tiles for double buffering
+    num_double_buffers: 8
 }
