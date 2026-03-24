@@ -8,24 +8,24 @@ script_dir="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 # Allow overriding these from the environment or via CLI flags below.
 # Examples: SIM_WITH_PLL=0 ./1_init_outside_docker.sh
 # ./1_init_outside_docker.sh --pll=0 --d2d=0
-# Defaults: MARCO=1, D2D=1, PLL=0
-SIM_WITH_MARCO="${SIM_WITH_MARCO:-1}"
+# Defaults: MACRO=1, D2D=1, PLL=0
+SIM_WITH_MACRO="${SIM_WITH_MACRO:-1}"
 SIM_WITH_D2D="${SIM_WITH_D2D:-1}"
 SIM_WITH_PLL="${SIM_WITH_PLL:-1}"
 
 # Simple CLI parsing to override the same variables when calling the script.
 while [ $# -gt 0 ]; do
     case "$1" in
-        --marco=*) SIM_WITH_MARCO="${1#*=}"; shift ;;
+        --macro=*) SIM_WITH_MACRO="${1#*=}"; shift ;;
         --d2d=*) SIM_WITH_D2D="${1#*=}"; shift ;;
         --pll=*) SIM_WITH_PLL="${1#*=}"; shift ;;
-        -h|--help) echo "Usage: $0 [--d2d=0|1] [--marco=0|1] [--pll=0|1]"; echo "Defaults: d2d=1, marco=1, pll=1"; exit 0 ;;
+        -h|--help) echo "Usage: $0 [--d2d=0|1] [--macro=0|1] [--pll=0|1]"; echo "Defaults: d2d=1, macro=1, pll=1"; exit 0 ;;
         *) echo "Unknown option: $1"; exit 1 ;;
     esac
 done
 
 # Validate that options are either 0 or 1
-for _var in SIM_WITH_D2D SIM_WITH_MARCO SIM_WITH_PLL; do
+for _var in SIM_WITH_D2D SIM_WITH_MACRO SIM_WITH_PLL; do
     val="${!_var}"
     if ! [[ "$val" =~ ^[01]$ ]]; then
         echo "Invalid value for ${_var}: '${val}' (must be 0 or 1)" >&2
@@ -42,7 +42,7 @@ else
 fi
 
 # Initialize submodules
-if [ "$SIM_WITH_MARCO" -eq 1 ]; then
+if [ "$SIM_WITH_MACRO" -eq 1 ]; then
     if [ ! -d "$script_dir/../../hw/hemaia/tech_cells_tsmc16" ]; then
         git clone git@github.com:IveanEx/tech_cells_tsmc16.git "$script_dir/../../hw/hemaia/tech_cells_tsmc16"
     else
@@ -50,7 +50,7 @@ if [ "$SIM_WITH_MARCO" -eq 1 ]; then
         git pull
     fi
 else
-    echo "SIM_WITH_MARCO=0: skipping tech_cells_tsmc16 checkout/update"
+    echo "SIM_WITH_MACRO=0: skipping tech_cells_tsmc16 checkout/update"
 fi
 
 if [ "$SIM_WITH_D2D" -eq 1 ]; then
@@ -88,7 +88,7 @@ else
     echo "SIM_WITH_D2D=0: leaving Bender.local entry for hemaia_d2d_link untouched"
 fi
 
-if [ "$SIM_WITH_MARCO" -eq 1 ]; then
+if [ "$SIM_WITH_MACRO" -eq 1 ]; then
     if ! grep -q "tech_cells_generic" "$bender_local_file"; then
         echo '  tech_cells_generic:  { path: hw/hemaia/tech_cells_tsmc16 }' >> "$bender_local_file"
     else
@@ -96,7 +96,7 @@ if [ "$SIM_WITH_MARCO" -eq 1 ]; then
         sed -i '/tech_cells_generic:/c\  tech_cells_generic:  { path: hw/hemaia/tech_cells_tsmc16 }' "$bender_local_file"
     fi
 else
-    echo "SIM_WITH_MARCO=0: leaving Bender.local entry for tech_cells_generic untouched"
+    echo "SIM_WITH_MACRO=0: leaving Bender.local entry for tech_cells_generic untouched"
 fi
 
 if [ "$SIM_WITH_PLL" -eq 1 ]; then

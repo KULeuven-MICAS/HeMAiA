@@ -10,16 +10,19 @@
 //   - Internal mesh: connects adjacent chiplets' facing D2D ports
 //   - Boundary: connects boundary chiplets' outward D2D ports to off-chip ports
 //
-// SIM_WITH_INTERPOSER = 0 (gen_direct):
+// sim_with_interposer = 0 (direct):
 //   Direct wire connections. Adjacent chiplets' D2D data buses are shorted
 //   using shared tri wires. Flow control and test signals use assign.
 //   This models an ideal interconnect with no physical effects.
 //
-// SIM_WITH_INTERPOSER = 1 (gen_interposer):
+// sim_with_interposer = 1 (interposer):
 //   Wraps hemaia RTL into hemaia_io_pad (IO pad model), then wraps all 4
 //   chiplets into four_chiplet_interposer_chippad_powerpad (interposer
 //   physical routing model). Currently supports 2x2 array only.
 //   Driving signals (clk, rst, peripherals) are routed from the DUT.
+//
+// The mode is selected at Mako template rendering time, so the generated
+// SV file only contains the selected path (no SV generate blocks).
 //
 // This module contains ONLY wires and connections (no behavioral code).
 //
@@ -31,9 +34,7 @@
 //   _test_request_o       : chiplet drives test request outward
 //   _test_being_requested_i: chiplet receives test request from neighbor
 
-module io_wrapper #(
-    parameter int SIM_WITH_INTERPOSER = 0
-) (
+module io_wrapper (
     /////////////////////////////////////
     // Per-chiplet D2D ports (all 4 directions)
     /////////////////////////////////////
@@ -140,8 +141,7 @@ wire const_one;
 assign const_zero = 1'b0;
 assign const_one  = 1'b1;
 
-generate
-if (SIM_WITH_INTERPOSER == 0) begin : gen_direct
+%if sim_with_interposer == 0:
     // ==========================================================
     // Mode 0: Direct wire connections (ideal interconnect)
     // ==========================================================
@@ -226,7 +226,7 @@ if (SIM_WITH_INTERPOSER == 0) begin : gen_direct
     assign chip_${east_x}_${y}_east_test_being_requested_i = east_test_being_requested_i_${y};
     %endfor
 
-end else begin : gen_interposer
+%else:
     // ==========================================================
     // Mode 1: Interposer via hemaia_chiplet_interposer_2x2
     //
@@ -914,7 +914,6 @@ def classify_remaining_pad(pad_name, cx, cy):
         %endfor
     );
 
-end
-endgenerate
+%endif
 
 endmodule

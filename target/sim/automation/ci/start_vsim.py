@@ -208,7 +208,7 @@ def step2_init_private_hemaia_repos(repo_root: Path) -> None:
     """Run ``1_init_outside_docker.sh`` with D2D and macro support enabled."""
     run_host_script(
         repo_root / "target/tapeout/1_init_outside_docker.sh",
-        script_args=["--pll=0", "--d2d=1", "--marco=1"],
+        script_args=["--pll=0", "--d2d=1", "--macro=1"],
     )
 
 
@@ -218,13 +218,14 @@ def step2_init_private_hemaia_repos(repo_root: Path) -> None:
 
 def step3_compile_hemaia_sw_rtl(repo_root: Path, docker_image: str) -> None:
     """Clean, then build SW, bootrom, and RTL inside the container."""
-    ci_cfg = "target/rtl/cfg/hemaia_tapeout_sim_interposer.hjson"
+    ci_cfg = "target/rtl/cfg/hemaia_tapeout_sim.hjson"
 
-    for target in ["clean", "sw", "bootrom", "rtl"]:
-        cmd = ["make", target]
-        if target != "clean":
-            cmd.append(f"CFG_OVERRIDE={ci_cfg}")
-        run_in_container(repo_root, docker_image, repo_root, cmd)
+    # make sw
+    run_in_container(repo_root, docker_image, repo_root, ["make", "sw", f"CFG_OVERRIDE={ci_cfg}"])
+    # make bootrom
+    run_in_container(repo_root, docker_image, repo_root, ["make", "bootrom", f"CFG_OVERRIDE={ci_cfg}"])
+    # make rtl
+    run_in_container(repo_root, docker_image, repo_root, ["make", "rtl", f"CFG_OVERRIDE={ci_cfg}"])
 
 
 # ---------------------------------------------------------------------------
@@ -283,17 +284,20 @@ def step5_prepare_testharness(
     repo_root: Path,
     docker_image: str,
     tasks_info: List[Tuple[Path, str]],
+    sim_cfg: str = "target/rtl/cfg/sim_rtl.hjson",
 ) -> None:
     """Generate filelists in-container, compile on host, distribute artefacts."""
+    sim_cfg_abs = str(repo_root / sim_cfg)
+
     # Generate Questasim filelists inside the container
     run_in_container(
         repo_root, docker_image, repo_root,
-        ["make", "hemaia_system_vsim_preparation", "SIM_WITH_WAVEFORM=0"],
+        ["make", "hemaia_system_vsim_preparation", f"SIM_CFG={sim_cfg_abs}", "SIM_WITH_WAVEFORM=0"],
     )
 
     # Compile the Questasim simulation on the host
     subprocess.run(
-        ["make", "hemaia_system_vsim", "SIM_WITH_WAVEFORM=0"],
+        ["make", "hemaia_system_vsim", f"SIM_CFG={sim_cfg_abs}", "SIM_WITH_WAVEFORM=0"],
         cwd=repo_root, check=True,
     )
 
@@ -395,10 +399,14 @@ def main() -> None:
     task_base_dir = script_path.parent
     docker_image = "ghcr.io/kuleuven-micas/hemaia:main"
     task_yaml = script_path.parent / "task_vsim.yaml"
+    sim_cfg =  "target/rtl/cfg/sim_rtl.hjson"
+
 
     if not task_yaml.exists():
         raise FileNotFoundError(f"Task YAML file {task_yaml} does not exist")
-
+    # Clean the repo
+    run_in_container(repo_root, docker_image, repo_root, ["make", "clean"])
+    
     # Step 0: Parse task definitions from YAML
     tasks = step0_parse_tasks(task_yaml)
 
@@ -415,7 +423,7 @@ def main() -> None:
     tasks_info = step4_build_apps_and_prepare_tasks(repo_root, docker_image, tasks, task_base_dir)
 
     # Step 5: Prepare and compile the Questasim testharness
-    step5_prepare_testharness(repo_root, docker_image, tasks_info)
+    step5_prepare_testharness(repo_root, docker_image, tasks_info, sim_cfg=sim_cfg)
 
     # Step 6: Run all simulations concurrently
     results = step6_run_simulations(tasks_info)

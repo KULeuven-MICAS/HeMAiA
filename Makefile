@@ -209,8 +209,8 @@ hemaia_system_vsim: # In ESAT Server
 # VCS Workflow #
 ################
 
-hemaia_system_vcs_preparation: # In SNAX Docker
-	$(MAKE) -C ./target/sim work-vcs/compile.sh SIM_CFG=$(SIM_CFG)
+hemaia_system_vcs_preparation: $(CFG) # In SNAX Docker
+	$(MAKE) -C ./target/sim work-vcs/compile.sh CFG=$(CFG) SIM_CFG=$(SIM_CFG)
 
 hemaia_system_vcs: # In ESAT Server
 	$(MAKE) -C ./target/sim bin/occamy_chip.vcs SIM_CFG=$(SIM_CFG)

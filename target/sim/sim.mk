@@ -113,6 +113,7 @@ VLOGAN_FLAGS += -assert disable_cover
 VLOGAN_FLAGS += -kdb
 VLOGAN_FLAGS += -timescale=1ns/1ps
 VLOGAN_FLAGS += -override_timescale=1ns/1ps
+VLOGAN_FLAGS += +incdir+testharness
 # VLOGAN_FLAGS += -work ./work-vcs
 VHDLAN_FLAGS += -kdb
 VHDLAN_FLAGS += -timescale=1ns/1ps

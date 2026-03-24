@@ -6,14 +6,20 @@
 #
 # Xiaoling Yi <xiaoling.yi@esat.kuleuven.be>
 
-import numpy as np
 from math import ceil
 
+import numpy as np
 
-# Function to perform 2D convolution on the input data using the specified kernel,
-# stride, and padding. It returns the output feature map.
+
+# Function to perform 2D convolution on the input data using the specified
+# kernel, stride, and padding. It returns the output feature map.
 def conv2d(
-    input_data, kernel, stride=(1, 1), padding=(0, 0), mode="NHWC", hw_sizes=None
+    input_data,
+    kernel,
+    stride=(1, 1),
+    padding=(0, 0),
+    mode="NHWC",
+    hw_sizes=None,
 ):
     if mode == "NHWC":
         batch_size, in_height, in_width, in_channels = input_data.shape
@@ -79,7 +85,14 @@ def conv2d(
 
         # Initialize the output feature map
         output_data = np.zeros(
-            (batch_size, CoutTemp, out_height, out_width // meshRow, meshRow, meshCol),
+            (
+                batch_size,
+                CoutTemp,
+                out_height,
+                out_width // meshRow,
+                meshRow,
+                meshCol,
+            ),
             np.int32,
         )
 
@@ -102,7 +115,8 @@ def conv2d(
                                     b, :, ih_start:ih_end, iw_start:iw_end, :
                                 ]
 
-                                # Slice to extract the corresponding convolution kernel
+                                # Slice to extract the corresponding
+                                # convolution kernel
                                 conv_kernel = kernel[oc, :, :, :, oc8, :]
 
                                 # Perform the convolution calculation
@@ -113,7 +127,8 @@ def conv2d(
     return output_data
 
 
-# Function to transform input data into columns for efficient convolution operations.
+# Function to transform input data into columns for efficient
+# convolution operations.
 # It returns the transformed input data and reshaped kernel.
 def im2col(input_data, kernel, stride=(1, 1), padding=(0, 0), mode="NC8HW8"):
     assert mode == "NC8HW8"
@@ -175,8 +190,8 @@ def im2col(input_data, kernel, stride=(1, 1), padding=(0, 0), mode="NC8HW8"):
     return im2col_matrix, im2col_kernel
 
 
-# Golden model function to perform block matrix multiplication with specific parameters.
-# It returns the resulting matrix after the computation.
+# Golden model function to perform block matrix multiplication with
+# specific parameters. It returns the resulting matrix after the computation.
 def block_gemm_golden_model(
     m, k, n, row, size, col, a, b, subtraction_a, subtraction_b, c
 ):
@@ -209,11 +224,63 @@ def block_gemm_golden_model(
     return d
 
 
-# This function Performs a tiled block General Matrix Multiply (GEMM) operation.
+def block_gemm_golden_model_fp8(
+    M, K, N, meshRow, tileSize, meshCol, A, B, subtraction_a, subtraction_b, C
+):
+    """
+    Golden model for FP8 matrix multiplication with FP32 accumulation.
+
+    Matches hardware accumulation order exactly:
+      1. Within each K-slice: binary adder-tree reduction over tileSize
+         (mirrors the hardware adder tree).
+      2. Across K-slices: sequential FP32 add, starting from C
+         (mirrors the hardware C-feedback loop in input/weight-stationary mode).
+    """
+    A = A.astype(np.float32).reshape(M, K, meshRow, tileSize)
+    B = B.astype(np.float32).reshape(N, K, meshCol, tileSize)
+    C = C.astype(np.float32).reshape(M, N, meshRow, meshCol)
+
+    assert subtraction_a == 0
+    assert subtraction_b == 0
+
+    def adder_tree(arr):
+        """Binary tree reduction over a 1-D float32 array (mirrors hardware adder tree)."""
+        arr = arr.copy()
+        length = len(arr)
+        # Pad to next power-of-2 if necessary
+        import math
+        n = 1 << math.ceil(math.log2(length)) if length > 1 else 1
+        if n > length:
+            arr = np.append(arr, np.zeros(n - length, dtype=np.float32))
+        while len(arr) > 1:
+            arr = np.add(arr[0::2], arr[1::2])  # pairwise FP32 add
+        return arr[0]
+
+    # Initialize output from C (hardware feeds C as starting accumulator value)
+    D = C.copy()
+
+    # Accumulate K-slices sequentially, matching hardware's K-loop order
+    for m in range(M):
+        for n in range(N):
+            for k in range(K):
+                for r in range(meshRow):
+                    for c in range(meshCol):
+                        # FP8 products → FP32 (exact, no rounding needed for FP8×FP8)
+                        products = np.float32(A[m, k, r, :]) * np.float32(B[n, k, c, :])
+                        # Binary adder-tree reduction over tileSize
+                        tile_sum = adder_tree(products)
+                        # Sequential FP32 add to accumulator (C for k=0, prev D for k>0)
+                        D[m, n, r, c] = np.float32(D[m, n, r, c] + tile_sum)
+
+    return D.reshape(M * N * meshRow * meshCol)
+
+
+# This function Performs a tiled block
+# General Matrix Multiply (GEMM) operation.
 #
-# This function breaks down large matrix multiplication into smaller submatrices
-# (tiles) and performs GEMM on these submatrices. The results are then accumulated
-# into a final result matrix.
+# This function breaks down large matrix multiplication into smaller
+# submatrices (tiles) and performs GEMM on these submatrices.
+# The results are then accumulated into a final result matrix.
 #
 # Parameters:
 # m2, k2, n2: int
@@ -289,7 +356,8 @@ def tiled_block_gemm_golden_model(
                     subtraction_b,
                     sub_c,
                 )
-                # Accumulate the result into the final result matrix at the correct position
+                # Accumulate the result into the final result matrix at the
+                # correct position
                 result[
                     (mm2 * n2 + nn2)
                     * m
@@ -305,8 +373,9 @@ def tiled_block_gemm_golden_model(
     return result
 
 
-# Golden model function for reshuffling data with specified parameters. It applies
-# strided layout mapping to the input data and returns the reshuffled data array.
+# Golden model function for reshuffling data with specified parameters.
+# It applies strided layout mapping to the input data and returns
+# the reshuffled data array.
 def data_reshuffler_golden_model(
     tempLoop0,
     tempLoop1,
@@ -369,8 +438,9 @@ def data_reshuffler_golden_model(
     return result_array.ravel()
 
 
-# Golden model function for SIMD postprocessing of data. It performs operations such as
-# zero point subtraction, multiplication, right shift, double rounding, and clipping.
+# Golden model function for SIMD postprocessing of data. It performs
+# operations such as zero point subtraction, multiplication,
+# right shift, double rounding, and clipping.
 def postprocessing_simd_golden_model(
     data_in,
     input_zp_i,
@@ -407,86 +477,95 @@ def postprocessing_simd_golden_model(
     return var
 
 
-def max_pooling(
-    input_tensor,
-    pool_size_w,
-    pool_size_h,
-    stride_w,
-    stride_h,
-    padding_w,
-    padding_h,
-    mode="HWC",
-):
+def golden_model_rescale_up(
+    data_in: int,
+    input_zp_i: int,
+    output_zp_i: int,
+    shift_i: int,
+    max_int_i: int,
+    min_int_i: int,
+    multiplier_i: int,
+) -> int:
+    """
+    This function performs rescaling of data given
+    exact algorithm of TOSA.rescale,
+    """
+    # Step 1: Subtract input zero point
+    var_1 = data_in - input_zp_i
 
-    # if mode == "HWC", C8 is 1, C = realCin
-    # if mode != "HWC", C8 is realCin/8, C = 8
-    C8, H, W, C = input_tensor.shape
-    if mode != "HWC":
-        assert input_tensor.shape[3] == 8 and C == 8
-    elif mode == "HWC":
-        assert input_tensor.shape[0] == 1 and C8 == 1
+    # Step 2: Multiply with the multiplier avoiding overflow
+    var_2 = np.int64(var_1) * np.int64(multiplier_i)
 
-    out_width = (W + 2 * padding_w - pool_size_w) // stride_w + 1
-    out_height = (H + 2 * padding_h - pool_size_h) // stride_h + 1
+    # Step 3: Left shift one
+    shifted_one = np.int64(
+        1 << (shift_i - 1)
+    )  # TODO: check if the minus one is actually correct
 
-    input_padded = np.pad(
-        input_tensor,
-        ((0, 0), (padding_h, padding_h), (padding_w, padding_w), (0, 0)),
-        mode="constant",
-        constant_values=0,
-    )
+    # Step 4: Add shifted one
+    var_3 = np.int64(var_2 + shifted_one)
 
-    pooled_tensor = np.zeros((C8, out_height, out_width, C), dtype=np.int8)
+    # Step 6: Shift right
+    var_6 = np.int32(var_3 >> shift_i)
 
-    for c in range(C8):
-        for i in range(out_height):
-            for j in range(out_width):
-                for k in range(C):
-                    h_start = i * stride_h
-                    h_end = h_start + pool_size_h
-                    w_start = j * stride_w
-                    w_end = w_start + pool_size_w
-                    pooled_tensor[c, i, j, k] = np.max(
-                        input_padded[c, h_start:h_end, w_start:w_end, k]
-                    )
+    # Step 7: Add output zero point
+    var_7 = var_6 + np.int32(output_zp_i)
 
-    return pooled_tensor
+    # Step 8: Clip the values to be within min and max integer range
+    var_8 = np.clip(var_7, min_int_i, max_int_i)
+
+    return int(var_8)
 
 
-def align_wide_addr(addr, alignment=64):
-    if addr % alignment:
-        addr = ((addr // alignment) + 1) * alignment
-    return addr
-
-def block_gemm_golden_model_fp8(
-    M, K, N, meshRow, tileSize, meshCol, A, B, subtraction_a, subtraction_b, C
+def postprocessing_simd_golden_model_V2(
+    data_in,
+    input_zp_i,
+    output_zp_i,
+    shift_i,
+    max_int_i,
+    min_int_i,
+    double_round_i,
+    multiplier_i,
 ):
     """
-    Golden model for FP8 matrix multiplication with FP32 accumulation.
+    This function performs SIMD postprocessing of data given the exact
+    algorithm of TOSA.rescale.
     """
-    # Reshape inputs
-    A = A.astype(np.float32)
-    B = B.astype(np.float32)
-    C = C.astype(np.float32)
-    A = A.reshape(M, K, meshRow, tileSize)
-    B = B.reshape(N, K, meshCol, tileSize)
+    # Step 1: Subtract input zero point
+    var_1 = data_in - input_zp_i
 
-    assert subtraction_a == 0
-    assert subtraction_b == 0
+    # Step 2: Multiply with the multiplier avoiding overflow
+    var_2 = np.int64(var_1) * np.int64(multiplier_i)
 
-    # Initialize output
-    D = np.zeros((M, N, meshRow, meshCol), dtype=np.float32)
+    # Step 3: Left shift one
+    shifted_one = np.int64(1 << (shift_i - 1))
 
-    # Perform matrix multiplication
-    for m in range(M):
-        for n in range(N):
-            # FP8 multiplication with FP32 accumulation
-            D[m, n] = np.tensordot(A[m], B[n], axes=([0, 2], [0, 2]))
+    # Step 4: Add shifted one
+    var_3 = var_2 + shifted_one
 
-    # Add bias/subtraction and C matrix
-    D = D.reshape(M * N * meshRow * meshCol) + C
+    # Step 5: Double rounding if necessary
+    if double_round_i:
+        if var_1 > 0:
+            var_4 = var_3 + np.int64(1 << 30)
+        else:
+            var_4 = var_3 - np.int64(1 << 30)
+    else:
+        var_4 = var_3
 
-    return D.flatten()
+    if shift_i > 31:
+        var_5 = var_4
+    else:
+        var_5 = var_3
+
+    # Step 6: Shift right
+    var_6 = np.int32(var_5 >> shift_i)
+
+    # Step 7: Add output zero point
+    var_7 = var_6 + output_zp_i
+
+    # Step 8: Clip the values to be within min and max integer range
+    var_8 = np.clip(var_7, min_int_i, max_int_i)
+
+    return var_8
 
 
 def postprocessing_simd_golden_model_V3(
@@ -551,6 +630,93 @@ def postprocessing_simd_golden_model_V3(
     var_8 = np.clip(var_7, min_int_i, max_int_i)
 
     return var_8
+
+
+def max_pooling(
+    input_tensor,
+    pool_size_w,
+    pool_size_h,
+    stride_w,
+    stride_h,
+    padding_w,
+    padding_h,
+    mode="HWC",
+):
+
+    # if mode == "HWC", C8 is 1, C = realCin
+    # if mode != "HWC", C8 is realCin/8, C = 8
+    C8, H, W, C = input_tensor.shape
+    if mode != "HWC":
+        assert input_tensor.shape[3] == 8 and C == 8
+    elif mode == "HWC":
+        assert input_tensor.shape[0] == 1 and C8 == 1
+
+    out_width = (W + 2 * padding_w - pool_size_w) // stride_w + 1
+    out_height = (H + 2 * padding_h - pool_size_h) // stride_h + 1
+
+    input_padded = np.pad(
+        input_tensor,
+        ((0, 0), (padding_h, padding_h), (padding_w, padding_w), (0, 0)),
+        mode="constant",
+        constant_values=0,
+    )
+
+    pooled_tensor = np.zeros((C8, out_height, out_width, C), dtype=np.int8)
+
+    for c in range(C8):
+        for i in range(out_height):
+            for j in range(out_width):
+                for k in range(C):
+                    h_start = i * stride_h
+                    h_end = h_start + pool_size_h
+                    w_start = j * stride_w
+                    w_end = w_start + pool_size_w
+                    pooled_tensor[c, i, j, k] = np.max(
+                        input_padded[c, h_start:h_end, w_start:w_end, k]
+                    )
+
+    return pooled_tensor
+
+
+def align_wide_addr(addr, alignment=64):
+    if addr % alignment:
+        addr = ((addr // alignment) + 1) * alignment
+    return addr
+
+
+def sumpool_golden(
+    a_vals: np.ndarray,
+    m: int,
+    n: int,
+    channels: int,
+    m_kernel: int,
+    n_kernel: int,
+    m_stride: int,
+    n_stride: int,
+) -> np.ndarray:
+    """
+    Compute the golden output for maxpool operation.
+    This function simulates the maxpool operation on the input tensor.
+    a should be a 3D array with shape (m, n, channels).
+    """
+    output = np.empty(
+        (
+            ((m - m_kernel) // m_stride + 1),
+            ((n - n_kernel) // n_stride + 1),
+            channels,
+        ),
+        dtype=np.int32,
+    )
+    # Iterate over each channel and apply max pooling
+    for i in range(0, ((m - m_kernel) // m_stride + 1) * m_stride, m_stride):
+        for j in range(0, ((n - n_kernel) // n_stride + 1) * n_stride, n_stride):
+            for c in range(channels):
+                # Extract the kernel region
+                kernel_region = a_vals[i: i + m_kernel, j: j + n_kernel, c]
+                # Compute the maximum value in the kernel region
+                sum_value = int(np.sum(kernel_region))
+                output[i // m_stride, j // n_stride, c] = sum_value
+    return output
 
 
 def int32_to_fp16_golden(x: int) -> int:

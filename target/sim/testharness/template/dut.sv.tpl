@@ -15,7 +15,7 @@
 //
 // This cleanly separates chip RTL (hemaia instances) from the interconnect
 // fabric (io_wrapper), allowing different physical routing models to be
-// selected via SIM_WITH_INTERPOSER without modifying chip instantiation.
+// selected via sim_with_interposer at template rendering time.
 //
 // Hierarchy:
 //   dut
@@ -35,9 +35,7 @@
 // Directions: east = +x, west = -x, south = +y, north = -y
 // This module contains ONLY wires and connections (no behavioral code).
 
-module dut #(
-    parameter int SIM_WITH_INTERPOSER = 0
-) (
+module dut (
 %if not sim_with_verilator:
     /////////////////////////////////////
     // Off-chip D2D links to memory chips
@@ -204,7 +202,7 @@ module dut #(
         .io_jtag_tck_i        (chip${cx}${cy}_jtag_tck_i),
         .io_jtag_tms_i        (chip${cx}${cy}_jtag_tms_i),
         .io_jtag_tdi_i        (chip${cx}${cy}_jtag_tdi_i),
-%if not sim_with_verilator:
+%if not sim_with_verilator and not multichip_cfg["single_chip"]:
         .io_jtag_tdo_o        (chip${cx}${cy}_jtag_tdo_o),
         // D2D — all 4 directions routed to io_wrapper
         .io_east_d2d                    (chip_${cx}_${cy}_east_d2d),
@@ -245,13 +243,10 @@ module dut #(
     /////////////////////////////////////
     // IO Wrapper instance
     // Handles ALL D2D routing between chiplets and to off-chip boundaries.
-    // SIM_WITH_INTERPOSER selects the routing model.
     // Peripheral/driving signals are also passed for interposer mode
     // (where the chippad_powerpad contains its own hemaia instances).
     /////////////////////////////////////
-    io_wrapper #(
-        .SIM_WITH_INTERPOSER(SIM_WITH_INTERPOSER)
-    ) i_io_wrapper (
+    io_wrapper i_io_wrapper (
         // ---- Per-chiplet D2D ports ----
         %for compute_chip in compute_chips:
         <%
