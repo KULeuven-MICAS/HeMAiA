@@ -6,11 +6,12 @@
 #pragma once
 #include <stdint.h>
 #include "chip_id.h"
+#include "hemaia_clk_rst_controller.h"
 #include "hemaia_d2d_link_peripheral.h"
 #include "occamy_memory_map.h"
 
 #define CHANNELS_PER_DIRECTION 3
-#define HEMAIA_D2D_LINK_NUM_DELAYS 8
+#define HEMAIA_D2D_LINK_NUM_DELAYS 32
 #define HEMAIA_D2D_LINK_BROKEN_LINK_REG_SIZE 20
 #define MAX_CFG_ROUND 3
 
@@ -686,8 +687,8 @@ inline D2DPhyMode get_d2d_link_phy_mode(D2DDirection direction) {
     return (D2DPhyMode)((mode_value >> direction) & 0x1);
 }
 
-// Initialize the HeMAiA D2D Link for 4C + 1M topology, set the link topology
-// and multicast domain
+// Initialize the HeMAiA D2D Link for 4C + 1M topology, set the link topology, 
+// multicast domain, and clock division according to the chip ID.
 void hemaia_d2d_link_initialize(uint8_t chip_id) {
     switch (chip_id) {
         case 0x00:  // Chip 00
@@ -701,6 +702,7 @@ void hemaia_d2d_link_initialize(uint8_t chip_id) {
         case 0x10:  // Chip 10
             set_d2d_link_availability(D2D_DIRECTION_NORTH, false);
             set_d2d_link_multicast_fence(D2D_DIRECTION_EAST, false);
+            enable_clk_domain(2, 40);
             break;
         case 0x11:  // Chip 11
             set_d2d_link_availability(D2D_DIRECTION_EAST, false);
