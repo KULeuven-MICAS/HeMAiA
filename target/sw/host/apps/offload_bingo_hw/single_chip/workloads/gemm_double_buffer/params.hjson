@@ -10,7 +10,7 @@
     transposed_B: 0
     K: 4
     N: 2
-    M: 128
+    M: 16
     // these two will config the addNewC = 1
     addNonZeroC: 0
     addZeroC: 1
