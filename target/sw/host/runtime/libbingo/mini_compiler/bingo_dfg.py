@@ -1083,6 +1083,7 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         f.write(f"        uint32_t err = bingo_hw_scheduler(host_arg_list_chip_{chiplet_id:02x},\n")
         f.write(f"                                          host_kernel_list_chip_{chiplet_id:02x},\n")
         f.write(f"                                          global_task_id_to_host_task_id_chip_{chiplet_id:02x});\n")
+        f.write(f"        if (err) return err;\n")
 
     def bingo_emit_offload_c_code(self, extra_include_header_list: list[str], output_path: str, app_name: str) -> None:
         """Emit the offload_hw_bingo.h file with kernel_execution logic."""
