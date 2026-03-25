@@ -382,6 +382,8 @@ module hemaia_mem_chip #(
       .EnableWestPhy(EnableWestPhy),
       .EnableNorthPhy(EnableNorthPhy),
       .EnableSouthPhy(EnableSouthPhy),
+      .SendFifoDepth(4),
+      .RecvFifoDepth(8),
       .chip_id_t(chip_id_t),
       .axi_req_t(axi_a48_d512_i4_u1_req_t),
       .axi_rsp_t(axi_a48_d512_i4_u1_resp_t),
