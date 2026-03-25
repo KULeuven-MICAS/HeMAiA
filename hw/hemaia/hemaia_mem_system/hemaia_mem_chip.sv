@@ -86,7 +86,7 @@ module hemaia_mem_chip #(
   `AXI_LITE_TYPEDEF_ALL_CT(axi_lite_a48_d32, axi_lite_a48_d32_req_t, axi_lite_a48_d32_rsp_t,
                            logic [47:0], logic [32:0], logic [3:0])
 
-  localparam int HeMAiAMemChipDivision[5] = '{4, 1, 1, 1, 1};
+  localparam int HeMAiAMemChipDivision[5] = '{5, 2, 2, 2, 2};
   localparam int HeMAiAResetDelays[5] = '{default: 3};
 
   logic [4:0] clk_vec, rst_n_vec;
