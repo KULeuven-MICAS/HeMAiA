@@ -284,11 +284,17 @@ def create_dfg(params, mem_handles):
     bingo_dfg.bingo_add_node(node_check_D2)
 
     # 4. Define Dependencies
+    # Gemm D1 should happen after the A1 and B1 are loaded
     bingo_dfg.add_edge(node_load_A1, node_gemm_D1)
     bingo_dfg.add_edge(node_load_B1, node_gemm_D1)
+    # Load B2 should happen after B1 is loaded since they both happen at the same dev
+    bingo_dfg.add_edge(node_load_B1, node_load_B2)
+    # Gemm D2 should happen after Gemm D1 and B2 are loaded
     bingo_dfg.add_edge(node_gemm_D1, node_gemm_D2)
     bingo_dfg.add_edge(node_load_B2, node_gemm_D2)
+    # Storing D2 should happen after Gemm D2 is done
     bingo_dfg.add_edge(node_gemm_D2, node_store_D2)
+    # Checking D2 should happen after D2 is stored back to L3
     bingo_dfg.add_edge(node_store_D2, node_check_D2)
     return bingo_dfg
 
