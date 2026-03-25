@@ -421,9 +421,7 @@ module testharness;
     %endfor
 %endif
 
-    dut #(
-        .SIM_WITH_INTERPOSER(${sim_with_interposer})
-    ) i_dut (
+    dut i_dut (
 %if not sim_with_verilator:
         /////////////////////////////////////
         // Offchip D2D Links to Memchips
