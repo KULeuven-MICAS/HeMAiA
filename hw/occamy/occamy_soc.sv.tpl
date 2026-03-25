@@ -114,12 +114,12 @@ module ${name}_soc
   ///////////////////////////////////////
   <% 
     soc2router = soc_wide_xbar.out_hemaia_multichip \
-                              .change_iw(context, soc2router_bus.iw, "soc2router_iwc") \
+                              .change_iw(context, soc2router_bus.iw, "soc2router_iwc",max_txns_per_id=txns_narrow_and_wide) \
                               .cut(context, cuts_soc_to_router, name="soc2router_cut")
     router2soc = router2soc_bus.copy(name="router2soc") \
                                .declare(context)
     router2soc.cut(context, cuts_router_to_soc, name="router2soc_cut") \
-              .change_iw(context, soc_wide_xbar.in_hemaia_multichip.iw, name="router2soc_iwc", to=soc_wide_xbar.in_hemaia_multichip)
+              .change_iw(context, soc_wide_xbar.in_hemaia_multichip.iw, name="router2soc_iwc", to=soc_wide_xbar.in_hemaia_multichip, max_txns_per_id=txns_narrow_and_wide)
   %> \
   assign soc2router_req_o = ${soc2router.req_name()};
   assign ${soc2router.rsp_name()} = soc2router_rsp_i;

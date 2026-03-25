@@ -98,7 +98,7 @@ int main() {
             "The allocation of destination 2 at local SRAM succeed at %lx\r\n",
             (uintptr_t)data_dest2);
     }
-
+    printf("Start IDMA unicast copy from destination %lx to destination %lx! \r\n", (uintptr_t)data_dest1, (uintptr_t)data_dest2);
     sys_dma_blk_memcpy(current_chip_id, (uintptr_t)data_dest2, (uintptr_t)data_dest1, data_size);
     printf("IDMA unicast copy finished to destination 2! \r\n");
     printf("Checking data correctness...\r\n");
