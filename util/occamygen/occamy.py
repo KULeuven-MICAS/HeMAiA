@@ -996,8 +996,8 @@ def get_testharness_kwargs(occamy_cfg, sim_with_mem_macro, sim_with_interposer, 
         max_compute_chiplet_y = 1
     num_compute_chiplet = len(compute_chips)
 
-    # Whether the vendor PLL IP is present in the design
-    pll_present = occamy_cfg.get("use_vendor_pll", False)
+    # Whether the vendor PLL IP is present in the simulation
+    pll_present = sim_with_pll
 
     testharness_kwargs = {
         "name": name,

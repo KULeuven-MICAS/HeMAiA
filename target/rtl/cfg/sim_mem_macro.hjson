@@ -8,4 +8,6 @@
     sim_with_netlist: false
     // Sim with interposer
     sim_with_interposer: false
+    // Sim with PLL
+    sim_with_pll: false
 }
