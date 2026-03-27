@@ -218,7 +218,7 @@ def step2_init_private_hemaia_repos(repo_root: Path) -> None:
 
 def step3_compile_hemaia_sw_rtl(repo_root: Path, docker_image: str) -> None:
     """Clean, then build SW, bootrom, and RTL inside the container."""
-    ci_cfg = "target/rtl/cfg/hemaia_tapeout_sim.hjson"
+    ci_cfg = "target/rtl/cfg/hemaia_tapeout.hjson"
 
     # make sw
     run_in_container(repo_root, docker_image, repo_root, ["make", "sw", f"CFG_OVERRIDE={ci_cfg}"])
