@@ -16,6 +16,12 @@ APPS += idle_all_clk_on
 APPS += offload_cluster_1
 APPS += matmul
 APPS += bin_search
+# APPS += idle_all_clk_on
+# APPS += offload
+# APPS += offload_cluster_2
+APPS  += matmul
+APPS  += conv_last_layer
+APPS  += conv_n_maxpool
 
 TARGET ?= all
 
