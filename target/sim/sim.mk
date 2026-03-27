@@ -1,7 +1,7 @@
 # The original common.mk file is pasted here
 
 LOGS_DIR ?= bin/logs
-UTIL_DIR ?= $(SNITCH_ROOT)/util
+UTIL_DIR ?= $(ROOT)/util
 
 # SEPP packages
 QUESTA_SEPP    ?=

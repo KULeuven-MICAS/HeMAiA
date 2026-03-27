@@ -24,10 +24,9 @@ clean: clean-testharness clean-vsim clean-vlt clean-vcs clean-apps clean-logs cl
 
 # Common definitions used by included Makefiles
 
-MKFILE_PATH := $(abspath $(lastword $(MAKEFILE_LIST)))
+MKFILE_PATH     := $(abspath $(lastword $(MAKEFILE_LIST)))
 SIM_MKFILE_DIR  := $(dir $(MKFILE_PATH))
-ROOT        := $(SIM_MKFILE_DIR)../..
-SNITCH_ROOT := $(shell bender path snitch_cluster)
+ROOT            := $(SIM_MKFILE_DIR)../..
 
 TARGET = occamy_chip
 

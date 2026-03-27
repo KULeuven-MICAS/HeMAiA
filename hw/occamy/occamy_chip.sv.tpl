@@ -435,6 +435,8 @@ import ${name}_pkg::*;
   //////////////////////
 
   hemaia_d2d_link #(
+    .SendFifoDepth(4),
+    .RecvFifoDepth(8),
     .chip_id_t (chip_id_t),
     .axi_req_t (${soc2router_bus.req_type()}),
     .axi_rsp_t (${soc2router_bus.rsp_type()}),

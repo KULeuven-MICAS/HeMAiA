@@ -5,7 +5,7 @@
 #include "heterogeneous_runtime.h"
 #include "perf_tracing.h"
 #define EXIT_CODE_SUCC 1
-
+#define EXIT_CODE_FAIL 2
 // Host Bingo Kernel Implementations
 // Normally the functions ret with 0
 // Only the exit kernel returns the exit code defined by EXIT_CODE_SUCC, for now it is 1
@@ -69,7 +69,7 @@ static inline uint64_t __host_bingo_kernel_check_result(void *arg){
         return 0;
     } else {
         printf_safe("Chip(%x, %x): [Host] Kernel Check Result: FAIL! %d mismatches found out of %d bytes.\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), err, data_size);
-        return BINGO_RET_FAIL;
+        return EXIT_CODE_FAIL;
     }
 }
 

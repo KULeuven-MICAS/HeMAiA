@@ -44,17 +44,21 @@ module testharness;
     `define TIMESCALEVAL       1.0e-12    // 1ps
     `define CLK_FREF_FREQ_MHZ  40.0
     `define PRI_FREQ_MHZ       32.0
+    `define MEMPOOL_FREQ_MHZ   200.0  // 200 MHz, 1/20 of the main clock
     %else:
     `define TIMESCALEVAL       1.0e-9 // 1ns
     `define CLK_FREF_FREQ_MHZ  500.0 // 500 MHz
     `define PRI_FREQ_MHZ       500.0 // 500 MHz
+    `define MEMPOOL_FREQ_MHZ   25.0  //  25 MHz, 1/20 of the main clock
     %endif
-    `define CLK_FREF_PERIOD    (1.0e-6/`CLK_FREF_FREQ_MHZ/`TIMESCALEVAL)
-    `define PRI_FREF_PERIOD    (1.0e-6/`PRI_FREQ_MHZ/`TIMESCALEVAL)
-    logic mst_clk_drv, periph_clk_drv;
-    wire  mst_clk_i, periph_clk_i;
+    `define CLK_FREF_PERIOD     (1.0e-6/`CLK_FREF_FREQ_MHZ/`TIMESCALEVAL)
+    `define PRI_FREF_PERIOD     (1.0e-6/`PRI_FREQ_MHZ/`TIMESCALEVAL)
+    `define MEMPOOL_FREF_PERIOD (1.0e-6/`MEMPOOL_FREQ_MHZ/`TIMESCALEVAL)
+    logic mst_clk_drv, periph_clk_drv, mempool_clk_drv;
+    wire  mst_clk_i, periph_clk_i, mempool_clk_i;
     assign mst_clk_i     = mst_clk_drv;
     assign periph_clk_i  = periph_clk_drv;
+    assign mempool_clk_i = mempool_clk_drv;
     %for compute_chip in compute_chips:
     <%
         comp_chip_x = compute_chip.coordinate[0]
@@ -71,7 +75,12 @@ module testharness;
     initial begin
         periph_clk_drv = 0;
         forever #(`PRI_FREF_PERIOD/2.0) periph_clk_drv = ~periph_clk_drv;
-    end   
+    end
+
+    initial begin
+        mempool_clk_drv = 0;
+        forever #(`MEMPOOL_FREF_PERIOD/2.0) mempool_clk_drv = ~mempool_clk_drv;
+    end
 
     // CHIP ID
     %for compute_chip in compute_chips:
@@ -540,7 +549,7 @@ module testharness;
         .EnableNorthPhy(${enable_north}),
         .EnableSouthPhy(${enable_south})
     ) i_hemaia_mem_chip_${mem_chip_x}_${mem_chip_y} (
-        .clk_i    (mst_clk_i),
+        .clk_i    (mempool_clk_drv),
         .rst_ni   (rst_ni   ),
         .chip_id_i(mem_chip${mem_chip_x}${mem_chip_y}_id_i),
         // Memchip East D2D Links

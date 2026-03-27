@@ -1,3 +1,4 @@
+
 // Copyright 2025 KU Leuven.
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
@@ -6,11 +7,12 @@
 #pragma once
 #include <stdint.h>
 #include "chip_id.h"
+#include "hemaia_clk_rst_controller.h"
 #include "hemaia_d2d_link_peripheral.h"
 #include "occamy_memory_map.h"
 
 #define CHANNELS_PER_DIRECTION 3
-#define HEMAIA_D2D_LINK_NUM_DELAYS 8
+#define HEMAIA_D2D_LINK_NUM_DELAYS 32
 #define HEMAIA_D2D_LINK_BROKEN_LINK_REG_SIZE 20
 #define MAX_CFG_ROUND 3
 
@@ -536,6 +538,39 @@ inline uint8_t get_d2d_link_tx_hold_period(D2DDirection direction) {
     return (val >> (direction * 8U)) & 0xFFU;
 }
 
+// Idle Silence period
+inline void set_d2d_link_idle_silence_period(uint8_t period,
+                                             D2DDirection direction) {
+    uintptr_t base =
+        (uintptr_t)get_current_chip_baseaddress() | HEMAIA_D2D_LINK_BASE_ADDR;
+    base += HEMAIA_D2D_LINK_IDLE_SILENCE_PERIOD_REGISTER_REG_OFFSET;
+    volatile uint32_t* reg = (volatile uint32_t*)base;
+    uint32_t val = *reg;
+    uint32_t shift = direction * 8U;
+    val &= ~(0xFFU << shift);
+    val |= ((uint32_t)period & 0xFFU) << shift;
+    *reg = val;
+}
+
+inline void set_all_d2d_link_idle_silence_period(uint8_t period) {
+    uintptr_t base =
+        (uintptr_t)get_current_chip_baseaddress() | HEMAIA_D2D_LINK_BASE_ADDR;
+    base += HEMAIA_D2D_LINK_IDLE_SILENCE_PERIOD_REGISTER_REG_OFFSET;
+    volatile uint32_t* reg = (volatile uint32_t*)base;
+    uint32_t val = ((uint32_t)period << 24) | ((uint32_t)period << 16) |
+                   ((uint32_t)period << 8) | period;
+    *reg = val;
+}
+
+inline uint8_t get_d2d_link_idle_silence_period(D2DDirection direction) {
+    uintptr_t base =
+        (uintptr_t)get_current_chip_baseaddress() | HEMAIA_D2D_LINK_BASE_ADDR;
+    base += HEMAIA_D2D_LINK_IDLE_SILENCE_PERIOD_REGISTER_REG_OFFSET;
+    volatile uint32_t* reg = (volatile uint32_t*)base;
+    uint32_t val = *reg;
+    return (val >> (direction * 8U)) & 0xFFU;
+}
+
 // Operating mode (False means RX mode; True means TX mode)
 inline bool get_d2d_link_operating_mode(D2DDirection direction) {
     uintptr_t base =
@@ -686,8 +721,8 @@ inline D2DPhyMode get_d2d_link_phy_mode(D2DDirection direction) {
     return (D2DPhyMode)((mode_value >> direction) & 0x1);
 }
 
-// Initialize the HeMAiA D2D Link for 4C + 1M topology, set the link topology
-// and multicast domain
+// Initialize the HeMAiA D2D Link for 4C + 1M topology, set the link topology, 
+// multicast domain, and clock division according to the chip ID.
 void hemaia_d2d_link_initialize(uint8_t chip_id) {
     switch (chip_id) {
         case 0x00:  // Chip 00
@@ -701,6 +736,8 @@ void hemaia_d2d_link_initialize(uint8_t chip_id) {
         case 0x10:  // Chip 10
             set_d2d_link_availability(D2D_DIRECTION_NORTH, false);
             set_d2d_link_multicast_fence(D2D_DIRECTION_EAST, false);
+            set_d2d_link_idle_silence_period(0xFF, D2D_DIRECTION_EAST);
+            enable_clk_domain(2, 40);
             break;
         case 0x11:  // Chip 11
             set_d2d_link_availability(D2D_DIRECTION_EAST, false);

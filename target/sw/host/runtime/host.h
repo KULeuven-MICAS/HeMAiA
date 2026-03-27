@@ -670,7 +670,7 @@ void wait_chip_checkpoint(volatile comm_buffer_t* chip_barrier_data_ptr,
         &((*chip_barrier_data_ptr).chip_level_checkpoint[chip_id]);
     // Broadcast to all Chips
     while (*target_chip_checkpoint != checkpoint) {
-        asm volatile("fence.i" ::: "memory");
+        asm volatile("fence" ::: "memory");
     }
 }
 
@@ -683,7 +683,7 @@ void wait_chips_checkpoint(volatile comm_buffer_t* chip_barrier_data_ptr,
     uint8_t continue_loop = 1;
     while (continue_loop) {
         continue_loop = 0;
-        asm volatile("fence.i" ::: "memory");
+        asm volatile("fence" ::: "memory");
         for (uint8_t i = top_left_chip_id >> 4;
              i <= (bottom_right_chip_id >> 4); i++) {
             for (uint8_t j = top_left_chip_id & 0xF;
