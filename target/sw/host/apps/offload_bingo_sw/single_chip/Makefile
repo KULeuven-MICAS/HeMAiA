@@ -7,7 +7,6 @@
 # Workloads to build separate ELFs for
 APPS = dummy
 APPS+= xdma_1d_copy 
-APPS+= double_buffer 
 APPS+= gemm_merge_load_and_compute 
 APPS+= gemm_seperate_load_and_compute 
 APPS+= gemm_tiled 
