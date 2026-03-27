@@ -9,5 +9,5 @@
     // Sim with interposer
     sim_with_interposer: true
     // Sim with PLL
-    sim_with_pll: false
+    sim_with_pll: true
 }

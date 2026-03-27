@@ -6,13 +6,13 @@ HOST_APP_TYPE="offload_legacy"
 CHIP_TYPE="single_chip"
 WORKLOAD=""
 DEV_APP="snax-test-integration"
-
+# All the tapeout-related files are with the PLL
 make -C $script_dir/../.. sw CFG_OVERRIDE=target/rtl/cfg/$cfg_name
 make -C $script_dir/../.. apps HOST_APP_TYPE=$HOST_APP_TYPE CHIP_TYPE=$CHIP_TYPE WORKLOAD=$WORKLOAD DEV_APP=$DEV_APP
 make -C $script_dir/../.. bootrom CFG_OVERRIDE=target/rtl/cfg/$cfg_name
 make -C $script_dir/../.. rtl CFG_OVERRIDE=target/rtl/cfg/$cfg_name
-# Only the RTL
-make -C "$script_dir/../.." hemaia_system_vsim_preparation SIM_CFG="$sim_cfg_dir/sim_rtl.hjson"
+# RTL + PLL
+make -C "$script_dir/../.." hemaia_system_vsim_preparation SIM_CFG="$sim_cfg_dir/sim_rtl_pll.hjson"
 mv -f "$script_dir/../sim/testharness/testharness.sv" "$script_dir/../sim/testharness/testharness_rtl.sv"
 mv -f "$script_dir/../sim/work-vsim/compile.vsim.tcl" "$script_dir/../sim/work-vsim/compile_rtl.vsim.tcl"
 # Only the macro
