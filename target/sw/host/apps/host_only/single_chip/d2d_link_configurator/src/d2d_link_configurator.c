@@ -20,6 +20,13 @@ int main() {
 
     // Configure the East D2D link
     printf("HeMAiA D2D Link Configurator\r\n");
+    printf("Type frequency divisor: \r\n");
+    uint32_t freq_divisor;
+    scanf("%d", &freq_divisor);
+    printf("Set frequency divisor to %d\r\n", freq_divisor);
+    for (int i = 1; i <= 4; i++) {
+        enable_clk_domain(N_CLUSTERS_PER_CHIPLET + i, freq_divisor);
+    }
     printf("Press 1 to set to DDR mode, 0 to set to SDR mode:\r\n");
     char mode_char = scan_char(address_prefix);
     if (mode_char == '1') {

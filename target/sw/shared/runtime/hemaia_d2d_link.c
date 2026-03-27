@@ -146,6 +146,10 @@ void hemaia_d2d_link_set_delay(D2DDirection direction) {
                 // uint32_t
                 ber[j][i] = 0xFFFFFFFF;
             }
+
+            printf("Direction %d, Channel %d, Delay %d, Total Bit Error: %lu, Total Cycle: %u, BER Index: %u\r\n",
+                   direction, j, i, total_bit_error, total_cycle,
+                   ber[j][i]);
         }
     }
 
