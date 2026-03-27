@@ -49,6 +49,15 @@ REGGEN     	 = $(shell $(BENDER) path register_interface)/vendor/lowrisc_opentit
 # Config prerequisite #
 #######################
 CFG		     ?= $(ROOT)/target/rtl/cfg/lru.hjson
+SIM_CFG      ?= $(ROOT)/target/rtl/cfg/sim_rtl.hjson
+
+# Extract a boolean flag from a hjson file: returns 1 if key exists and isn't false, 0 otherwise
+cfg_flag = $(shell if [ -f "$(1)" ]; then \
+	if grep -E -q '^[[:space:]]*$(2)[[:space:]]*[:=][[:space:]]*false' "$(1)"; then echo 0; \
+	elif grep -E -q '^[[:space:]]*$(2)' "$(1)"; then echo 1; \
+	else echo 0; fi; else echo 0; fi)
+
+SIM_WITH_PLL ?= $(call cfg_flag,$(SIM_CFG),sim_with_pll)
 
 .PHONY: all clean
 all: rtl
@@ -116,7 +125,7 @@ clean-soc:
 	rm -rf $(HEMAIA_MEM_SYS_DIR)/hemaia_mem_chip_xdma.sv
 
 $(MISC_OCCAMYGEN_TARGETS): .misc_occamygen_targets_group
-.misc_occamygen_targets_group: $(CFG) $(MISC_OCCAMYGEN_SV_TEMPLATES)
+.misc_occamygen_targets_group: $(CFG) $(SIM_CFG) $(MISC_OCCAMYGEN_SV_TEMPLATES)
 	@echo "[OCCAMYGEN] Generate $(MISC_OCCAMYGEN_TARGETS)"
 
 	$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_SRC_DIR)\
@@ -130,7 +139,8 @@ $(MISC_OCCAMYGEN_TARGETS): .misc_occamygen_targets_group
 		--quad-ctrl        $(SOURCE_OCCAMY_DIR)/occamy_quad_ctrl.sv.tpl \
 		--quad-noc         $(SOURCE_OCCAMY_DIR)/quad_noc/quad_noc.yml.tpl \
 		--xilinx-sv        $(SOURCE_OCCAMY_DIR)/occamy_xilinx.sv.tpl \
-		--cva6-sv          $(SOURCE_OCCAMY_DIR)/occamy_cva6.sv.tpl
+		--cva6-sv          $(SOURCE_OCCAMY_DIR)/occamy_cva6.sv.tpl \
+		--sim_with_pll     $(SIM_WITH_PLL)
 
 # File included by occamy_xilinx needs to be put in the same folder
 	cp -f $(SOURCE_OCCAMY_DIR)/axi_flat.sv $(TARGET_SRC_DIR)
@@ -150,7 +160,8 @@ debug-occamy-gen:
 		--quad-ctrl        $(SOURCE_OCCAMY_DIR)/occamy_quad_ctrl.sv.tpl \
 		--quad-noc         $(SOURCE_OCCAMY_DIR)/quad_noc/quad_noc.yml.tpl \
 		--xilinx-sv        $(SOURCE_OCCAMY_DIR)/occamy_xilinx.sv.tpl \
-		--cva6-sv          $(SOURCE_OCCAMY_DIR)/occamy_cva6.sv.tpl	
+		--cva6-sv          $(SOURCE_OCCAMY_DIR)/occamy_cva6.sv.tpl \
+		--sim_with_pll     $(SIM_WITH_PLL)
 
 debug-soc-gen:
 	$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_SRC_DIR) \

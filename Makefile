@@ -123,7 +123,7 @@ bootrom: # In SNAX Docker
 # Hardware Generation
 # In SNAX Docker
 rtl: $(CFG)
-	$(MAKE) -C ./target/rtl/ rtl CFG=$(CFG)
+	$(MAKE) -C ./target/rtl/ rtl CFG=$(CFG) SIM_CFG=$(SIM_CFG)
 
 ####################
 # Tapeout Workflow #
