@@ -4,6 +4,13 @@
 
 #include "host.c"
 
+// Option 3: memory clobber (strongest — prevents reordering around other code too)
+void nop_delay(uint32_t count) {
+    for (uint32_t i = 0; i < count; i++) {
+        __asm__ volatile ("nop" ::: "memory");
+    }
+}
+
 int main() {
     // Reset and ungate all quadrants, deisolate
     init_uart(32, 1);
@@ -32,5 +39,10 @@ int main() {
     wakeup_cluster(1);
 
     // Wait for job done and return Snitch exit code
-    return wait_snitches_done();
+    uint32_t snitch_exit_code = wait_snitches_done();
+
+    //Force more cycles for simulation to print the message before exiting
+    nop_delay(1000); 
+
+    return snitch_exit_code;
 }
