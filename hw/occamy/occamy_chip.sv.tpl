@@ -18,7 +18,7 @@
 %>
 
 <%
-  pll_present = occamy_cfg["use_vendor_pll"]
+  pll_present = sim_with_pll
   use_vendor_pll = 1 if pll_present else 0
 %>
 

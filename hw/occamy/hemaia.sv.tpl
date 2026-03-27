@@ -13,11 +13,6 @@
   i2c_present = any(periph["name"] == "i2c" for periph in occamy_cfg["peripherals"]["axi_lite_narrow_peripherals"])
 %>
 
-<%
-  pll_present = occamy_cfg["use_vendor_pll"]
-%>
-
-
 module hemaia (
     // Clocks, Boot, ChipId (14)
     inout wire        io_clk_i,

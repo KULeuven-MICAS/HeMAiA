@@ -52,7 +52,7 @@ cfg_flag = $(shell if [ -f "$(1)" ]; then \
 SIM_WITH_MACRO      ?= $(call cfg_flag,$(SIM_CFG),sim_with_mem_macro)
 SIM_WITH_NETLIST    ?= $(call cfg_flag,$(SIM_CFG),sim_with_netlist)
 SIM_WITH_INTERPOSER ?= $(call cfg_flag,$(SIM_CFG),sim_with_interposer)
-SIM_WITH_PLL        ?= $(call cfg_flag,$(SIM_CFG),use_vendor_pll)
+SIM_WITH_PLL        ?= $(call cfg_flag,$(SIM_CFG),sim_with_pll)
 
 VSIM_BENDER += $(shell cat ../rtl/src/bender_targets.tmp)
 VLT_BENDER  += $(shell cat ../rtl/src/bender_targets.tmp)

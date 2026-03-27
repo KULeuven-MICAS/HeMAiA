@@ -1021,7 +1021,7 @@ def get_testharness_kwargs(occamy_cfg, sim_with_mem_macro, sim_with_interposer, 
     }
     return testharness_kwargs
 
-def get_chip_kwargs(soc_wide_xbar, soc_narrow_xbar, soc_axi_lite_narrow_periph_xbar, soc2router_bus, router2soc_bus, occamy_cfg, cluster_generators, util, name):
+def get_chip_kwargs(soc_wide_xbar, soc_narrow_xbar, soc_axi_lite_narrow_periph_xbar, soc2router_bus, router2soc_bus, occamy_cfg, cluster_generators, util, name, sim_with_pll=False):
     core_per_cluster_list = [cluster_generator.cfg["nr_cores"]
                              for cluster_generator in cluster_generators]
     nr_cores_quadrant = sum(core_per_cluster_list)
@@ -1036,7 +1036,8 @@ def get_chip_kwargs(soc_wide_xbar, soc_narrow_xbar, soc_axi_lite_narrow_periph_x
         "soc_axi_lite_narrow_periph_xbar": soc_axi_lite_narrow_periph_xbar,
         "soc2router_bus": soc2router_bus,
         "router2soc_bus": router2soc_bus,
-        "cores": nr_s1_quadrants * nr_cores_quadrant + 1
+        "cores": nr_s1_quadrants * nr_cores_quadrant + 1,
+        "sim_with_pll": 1 if sim_with_pll else 0
     }
     return chip_kwargs
 

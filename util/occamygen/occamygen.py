@@ -989,7 +989,7 @@ def main():
     ########
     if args.chip:
         chip_kwargs = occamy.get_chip_kwargs(
-            soc_wide_xbar, soc_narrow_xbar, soc_axi_lite_narrow_periph_xbar, soc2router_bus, router2soc_bus, occamy_cfg, cluster_generators, util, args.name)
+            soc_wide_xbar, soc_narrow_xbar, soc_axi_lite_narrow_periph_xbar, soc2router_bus, router2soc_bus, occamy_cfg, cluster_generators, util, args.name, args.sim_with_pll)
         write_template(args.chip, outdir, **chip_kwargs)
 
     ########
