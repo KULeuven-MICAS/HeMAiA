@@ -9,7 +9,7 @@
 #include "snrt.h"
 #include "stdint.h"
 
-#define XDMA_DEBUG
+// #define XDMA_DEBUG
 #ifdef XDMA_DEBUG
 #define XDMA_DEBUG_PRINT(...) printf(__VA_ARGS__)
 #else
