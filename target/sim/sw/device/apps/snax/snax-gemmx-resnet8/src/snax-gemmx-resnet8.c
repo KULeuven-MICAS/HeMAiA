@@ -177,7 +177,7 @@ int main() {
             }
 
             // Set CSR to start Streamer for conv2d
-            if(DBG_GEMMX_CFG_MCYCLE && DBG_PRINT_MODE) {start_cycle = snrt_mcycle();}
+            if(DBG_GEMMX_COMP_MCYCLE && DBG_PRINT_MODE) {start_cycle = snrt_mcycle();}
             set_gemmx_streamer_start();
 
             // Set CSR to start GEMM
@@ -185,9 +185,9 @@ int main() {
 
             // Poll until Streamer and GEMM accelerator finish
             wait_gemmx_and_streamer();
-            if(DBG_GEMMX_CFG_MCYCLE) {end_cycle = snrt_mcycle();}
+            if(DBG_GEMMX_COMP_MCYCLE) {end_cycle = snrt_mcycle();}
 
-            if(DBG_GEMMX_CFG_MCYCLE && DBG_PRINT_MODE) {
+            if(DBG_GEMMX_COMP_MCYCLE && DBG_PRINT_MODE) {
                 printf("[GEMMX] CONV-COMP MC: %d \r\n", end_cycle - start_cycle);
             }
 
@@ -363,12 +363,18 @@ int main() {
         // Transfer weights of the FC from here
         if (snrt_is_dm_core()) {
             if(DBG_DMA_PERF_CNT) {snrt_start_perf_counter(SNRT_PERF_CNT0, SNRT_PERF_CNT_DMA_BUSY, snrt_hartid());}
+            if (DBG_DMA_MCYCLE) {start_cycle = snrt_mcycle();}
             // DMA transfer
             snrt_dma_start_1d(
                 local_b_fc, B_fc,
                 N_fc * K_fc * tileSize * meshCol * sizeof(int8_t));
             // Wait DMA
             snrt_dma_wait_all();
+            if (DBG_DMA_MCYCLE) {end_cycle = snrt_mcycle();}
+            // Debug printing
+            if (DBG_DMA_MCYCLE && DBG_PRINT_MODE) {
+                printf("[GEMMX] FC-DMA %d for B\r\n", end_cycle - start_cycle);
+            }
             if(DBG_DMA_PERF_CNT && DBG_PRINT_MODE) {
                 printf("[GEMMX] FC-DMA %d  for B\r\n", snrt_get_perf_counter(SNRT_PERF_CNT0));
                 snrt_reset_perf_counter(SNRT_PERF_CNT0);
