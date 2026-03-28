@@ -238,11 +238,14 @@ module testharness;
     wire chip${comp_chip_x}${comp_chip_y}_jtag_tms_i;
     wire chip${comp_chip_x}${comp_chip_y}_jtag_tdi_i;
     wire chip${comp_chip_x}${comp_chip_y}_jtag_tdo_o;
-    // Tie to zero
+% if not sim_with_jtag_check:
+    // Tie JTAG to zero when JTAG check is disabled
     assign chip${comp_chip_x}${comp_chip_y}_jtag_trst_ni = const_zero;
     assign chip${comp_chip_x}${comp_chip_y}_jtag_tck_i   = const_zero;
     assign chip${comp_chip_x}${comp_chip_y}_jtag_tms_i   = const_zero;
     assign chip${comp_chip_x}${comp_chip_y}_jtag_tdi_i   = const_zero;
+% endif
+    // When sim_with_jtag_check is enabled, JTAG signals are driven by jtag_debug_test.sv
     // SPI M
     wire chip${comp_chip_x}${comp_chip_y}_spim_sck_o;
     wire chip${comp_chip_x}${comp_chip_y}_spim_csb_o;
@@ -267,6 +270,173 @@ module testharness;
     `include "util/check_finish_mem_macro.sv"
 % else:
     `include "util/check_finish_rtl.sv"
+% endif
+% if sim_with_jtag_check:
+    ///////////////////////////////////////////
+    // JTAG Debug Test for Multi-Chiplet HeMAiA
+    // Verifies JTAG debug works on all chiplets
+    ///////////////////////////////////////////
+
+    localparam time JtagClkPeriod = 100ns; // 10 MHz JTAG clock
+
+    // JTAG clock generation
+    logic jtag_clk;
+    initial begin
+        jtag_clk = 0;
+        forever #(JtagClkPeriod / 2) jtag_clk = ~jtag_clk;
+    end
+
+    // JTAG_DV interfaces and connections for each chiplet
+    %for compute_chip in compute_chips:
+    <%
+        cx = compute_chip.coordinate[0]
+        cy = compute_chip.coordinate[1]
+    %>\
+    JTAG_DV jtag_if_chip${cx}${cy} (.clk_i(jtag_clk));
+    assign chip${cx}${cy}_jtag_tck_i   = jtag_clk;
+    assign chip${cx}${cy}_jtag_tdi_i   = jtag_if_chip${cx}${cy}.tdi;
+    assign chip${cx}${cy}_jtag_tms_i   = jtag_if_chip${cx}${cy}.tms;
+    assign chip${cx}${cy}_jtag_trst_ni = jtag_if_chip${cx}${cy}.trst_n;
+    assign jtag_if_chip${cx}${cy}.tdo  = chip${cx}${cy}_jtag_tdo_o;
+    %endfor
+
+    // JTAG debug test task: halt and resume a core via JTAG
+    task automatic run_jtag_debug_test(
+        input string chip_name,
+        input virtual JTAG_DV jtag_if,
+        output bit pass
+    );
+        automatic jtag_test::jtag_driver #(
+            .IrLength(5), .IDCODE('h1),
+            .TA(JtagClkPeriod * 0.1), .TT(JtagClkPeriod * 0.9)
+        ) jtag_drv = new(jtag_if);
+        automatic jtag_test::riscv_dbg #(
+            .IrLength(5), .IDCODE('h1), .DTMCSR('h10), .DMIACCESS('h11),
+            .TA(JtagClkPeriod * 0.1), .TT(JtagClkPeriod * 0.9)
+        ) dbg = new(jtag_drv);
+        automatic logic [31:0] idcode, dmstatus, dmcontrol;
+        automatic dm::dtm_op_status_e op;
+        automatic int timeout_cnt;
+        pass = 1;
+        $display("[JTAG_TEST] === Testing %s ===", chip_name);
+
+        // Reset JTAG TAP
+        dbg.reset_master();
+        dbg.wait_idle(10);
+
+        // Read IDCODE
+        dbg.get_idcode(idcode);
+        if (idcode == 32'h0 || idcode == 32'hFFFFFFFF) begin
+            $error("[JTAG_TEST] [%s] FAIL: IDCODE=0x%08x (TAP not responding)", chip_name, idcode);
+            pass = 0; return;
+        end
+        $display("[JTAG_TEST] [%s] IDCODE=0x%08x (OK)", chip_name, idcode);
+
+        // Activate debug module
+        dbg.write_dmi(dm::DMControl, 32'h0000_0001);
+        dbg.wait_idle(10);
+        dbg.read_dmi_exp_backoff(dm::DMStatus, dmstatus);
+        $display("[JTAG_TEST] [%s] DMStatus=0x%08x (version=%0d)", chip_name, dmstatus, dmstatus[3:0]);
+        if (dmstatus[3:0] != 4'h2) begin
+            $error("[JTAG_TEST] [%s] FAIL: DMStatus version=%0d, expected 2 (v0.13)", chip_name, dmstatus[3:0]);
+            pass = 0; return;
+        end
+        if (!dmstatus[7]) begin
+            $error("[JTAG_TEST] [%s] FAIL: Not authenticated", chip_name);
+            pass = 0; return;
+        end
+        $display("[JTAG_TEST] [%s] Debug module active, authenticated", chip_name);
+
+        // Halt the core
+        dbg.write_dmi(dm::DMControl, 32'h8000_0001);
+        timeout_cnt = 0;
+        while (timeout_cnt < 200) begin
+            dbg.wait_idle(10);
+            dbg.read_dmi_exp_backoff(dm::DMStatus, dmstatus);
+            if (dmstatus[8]) break;
+            timeout_cnt++;
+        end
+        if (!dmstatus[8]) begin
+            $error("[JTAG_TEST] [%s] FAIL: Core did not halt (DMStatus=0x%08x)", chip_name, dmstatus);
+            pass = 0; return;
+        end
+        $display("[JTAG_TEST] [%s] Core halted (OK)", chip_name);
+
+        // Resume the core
+        dbg.write_dmi(dm::DMControl, 32'h4000_0001);
+        timeout_cnt = 0;
+        while (timeout_cnt < 200) begin
+            dbg.wait_idle(10);
+            dbg.read_dmi_exp_backoff(dm::DMStatus, dmstatus);
+            if (dmstatus[16]) break;
+            timeout_cnt++;
+        end
+        if (!dmstatus[16]) begin
+            $error("[JTAG_TEST] [%s] FAIL: Core did not resume (DMStatus=0x%08x)", chip_name, dmstatus);
+            pass = 0; return;
+        end
+        dbg.write_dmi(dm::DMControl, 32'h0000_0001);
+        dbg.wait_idle(10);
+        $display("[JTAG_TEST] [%s] Core resumed (OK) - PASS", chip_name);
+    endtask
+
+    // Main JTAG test process
+    initial begin
+        automatic int pass_count = 0;
+        automatic int total_chips = ${len(compute_chips)};
+    %for compute_chip in compute_chips:
+    <%
+        cx = compute_chip.coordinate[0]
+        cy = compute_chip.coordinate[1]
+        cxs = "{:01x}".format(cx)
+        cys = "{:01x}".format(cy)
+    %>\
+        automatic bit pass_chip${cx}${cy};
+    %endfor
+
+        @(posedge rst_ni);
+        #(20us);
+        $display("[JTAG_TEST] ========================================");
+        $display("[JTAG_TEST] Starting JTAG Debug Multi-Chiplet Test");
+        $display("[JTAG_TEST] Testing %0d chiplet(s)", total_chips);
+        $display("[JTAG_TEST] ========================================");
+
+    %for compute_chip in compute_chips:
+    <%
+        cx = compute_chip.coordinate[0]
+        cy = compute_chip.coordinate[1]
+        cxs = "{:01x}".format(cx)
+        cys = "{:01x}".format(cy)
+    %>\
+        run_jtag_debug_test("chip${cx}${cy} (id=0x${cxs}${cys})", jtag_if_chip${cx}${cy}, pass_chip${cx}${cy});
+        #(5us);
+    %endfor
+
+    %for compute_chip in compute_chips:
+    <%
+        cx = compute_chip.coordinate[0]
+        cy = compute_chip.coordinate[1]
+    %>\
+        pass_count += pass_chip${cx}${cy};
+    %endfor
+
+        $display("[JTAG_TEST] ========================================");
+        $display("[JTAG_TEST] Results: %0d/%0d PASSED", pass_count, total_chips);
+    %for compute_chip in compute_chips:
+    <%
+        cx = compute_chip.coordinate[0]
+        cy = compute_chip.coordinate[1]
+        cxs = "{:01x}".format(cx)
+        cys = "{:01x}".format(cy)
+    %>\
+        $display("[JTAG_TEST]   chip${cx}${cy} (id=0x${cxs}${cys}): %s", pass_chip${cx}${cy} ? "PASS" : "FAIL");
+    %endfor
+        $display("[JTAG_TEST] ========================================");
+        if (pass_count == total_chips)
+            $display("[JTAG_TEST] ALL TESTS PASSED!");
+        else
+            $error("[JTAG_TEST] %0d TEST(S) FAILED!", total_chips - pass_count);
+    end
 % endif
     initial begin
         set_rst();
