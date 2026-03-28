@@ -9,6 +9,7 @@ APPS =  gemm_double_buffer
 APPS += gemm_seperate_load_and_compute_parallel
 APPS += gemm_seperate_load_and_compute_serial
 APPS += gemm_stacked
+APPS += gemm_sweep
 APPS += dummy_double_buffer_ci
 
 SUBDIRS = $(addprefix workloads/,$(APPS))
