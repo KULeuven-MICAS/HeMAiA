@@ -53,6 +53,7 @@ SIM_WITH_MACRO      ?= $(call cfg_flag,$(SIM_CFG),sim_with_mem_macro)
 SIM_WITH_NETLIST    ?= $(call cfg_flag,$(SIM_CFG),sim_with_netlist)
 SIM_WITH_INTERPOSER ?= $(call cfg_flag,$(SIM_CFG),sim_with_interposer)
 SIM_WITH_PLL        ?= $(call cfg_flag,$(CFG),use_vendor_pll)
+SIM_WITH_JTAG_CHECK ?= $(call cfg_flag,$(SIM_CFG),sim_with_jtag_check)
 
 VSIM_BENDER += $(shell cat ../rtl/src/bender_targets.tmp)
 VLT_BENDER  += $(shell cat ../rtl/src/bender_targets.tmp)
@@ -194,6 +195,7 @@ OCCAMYGEN_TH_CMD = $(OCCAMYGEN) --cfg $(CFG) --outdir testharness \
 		--sim_with_netlist $(SIM_WITH_NETLIST) \
 		--sim_with_interposer $(SIM_WITH_INTERPOSER) \
 		--sim_with_pll $(SIM_WITH_PLL) \
+		--sim_with_jtag_check $(SIM_WITH_JTAG_CHECK) \
 		--sim_with_verilator 0
 
 OCCAMYGEN_TH_VLT_CMD = $(OCCAMYGEN) --cfg $(CFG) --outdir testharness \
@@ -202,6 +204,7 @@ OCCAMYGEN_TH_VLT_CMD = $(OCCAMYGEN) --cfg $(CFG) --outdir testharness \
 		--sim_with_netlist 0 \
 		--sim_with_interposer 0 \
 		--sim_with_pll 0 \
+		--sim_with_jtag_check 0 \
 		--sim_with_verilator 1
 
 # Primary target: generates all testharness outputs in one invocation
@@ -268,7 +271,7 @@ clean-vlt: clean-work
 $(VSIM_BUILDDIR):
 	mkdir -p $@
 
-$(VSIM_BUILDDIR)/compile.vsim.tcl: testharness/testharness.sv  | $(VSIM_BUILDDIR)
+$(VSIM_BUILDDIR)/compile.vsim.tcl: | $(VSIM_BUILDDIR)
 	$(BENDER) script vsim $(VSIM_BENDER) --vlog-arg="$(VLOG_FLAGS) -work $(dir $@) " > $@
 	echo '$(VLOG) -work $(dir $@) $(TB_CC_SOURCES) -vv -ccflags "$(TB_CC_FLAGS)"' >> $@
 	echo 'return 0' >> $@
@@ -310,7 +313,7 @@ clean-vsim: clean-work
 $(VCS_BUILDDIR):
 	mkdir -p $@
 
-$(VCS_BUILDDIR)/compile.sh: testharness/testharness.sv | $(VCS_BUILDDIR)
+$(VCS_BUILDDIR)/compile.sh: | $(VCS_BUILDDIR)
 	mkdir -p $(VCS_BUILDDIR)
 	${BENDER} script vcs ${VCS_BENDER} --vlog-arg="${VLOGAN_FLAGS}" --vcom-arg="${VHDLAN_FLAGS}" > $@
 	chmod +x $@

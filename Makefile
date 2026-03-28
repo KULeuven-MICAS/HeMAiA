@@ -200,6 +200,7 @@ hemaia_system_vlt: # In SNAX Docker
 ######################
 
 hemaia_system_vsim_preparation: $(CFG) # In SNAX Docker
+	$(MAKE) -C ./target/sim testharness/testharness.sv CFG=$(CFG) SIM_CFG=$(SIM_CFG)
 	$(MAKE) -C ./target/sim work-vsim/compile.vsim.tcl CFG=$(CFG) SIM_CFG=$(SIM_CFG)
 
 hemaia_system_vsim: # In ESAT Server
@@ -210,6 +211,7 @@ hemaia_system_vsim: # In ESAT Server
 ################
 
 hemaia_system_vcs_preparation: $(CFG) # In SNAX Docker
+	$(MAKE) -C ./target/sim testharness/testharness.sv CFG=$(CFG) SIM_CFG=$(SIM_CFG)
 	$(MAKE) -C ./target/sim work-vcs/compile.sh CFG=$(CFG) SIM_CFG=$(SIM_CFG)
 
 hemaia_system_vcs: # In ESAT Server

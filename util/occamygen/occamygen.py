@@ -134,6 +134,11 @@ def main():
                         type=str2bool,
                         default=False,
                         help="Generate testharness with netlist.")
+    parser.add_argument("--sim_with_jtag_check",
+                        metavar="SIM_WITH_JTAG_CHECK",
+                        type=str2bool,
+                        default=False,
+                        help="Generate testharness with JTAG debug check.")
     parser.add_argument("--cva6-sv",
                         metavar="CVA6_SV",
                         help="Name of the CVA6 wrapper file (output).")
@@ -818,6 +823,7 @@ def main():
             args.sim_with_pll,
             args.sim_with_netlist,
             args.sim_with_verilator,
+            args.sim_with_jtag_check,
             soc2router_bus, router2soc_bus, args.name)
         # Template directory contains all .sv.tpl files
         tpl_dir = os.path.dirname(args.testharness_sv)
