@@ -1,7 +1,7 @@
 # The original common.mk file is pasted here
 
 LOGS_DIR ?= bin/logs
-UTIL_DIR ?= $(SNITCH_ROOT)/util
+UTIL_DIR ?= $(ROOT)/util
 
 # SEPP packages
 QUESTA_SEPP    ?=
@@ -71,7 +71,7 @@ VLT_FLAGS    += -Wno-fatal
 VLT_FLAGS    += -Wno-SYMRSVDWORD
 VLT_FLAGS    += -Wno-BLKLOOPINIT
 
-VLT_FLAGS    += +define+SYNTHESIS
+VLT_FLAGS    += +define+SYNTHESIS  
 
 
 VLT_CXXSTD_FLAGS += -std=c++20 -O3 -march=native -flto -pthread -latomic
@@ -113,6 +113,7 @@ VLOGAN_FLAGS += -assert disable_cover
 VLOGAN_FLAGS += -kdb
 VLOGAN_FLAGS += -timescale=1ns/1ps
 VLOGAN_FLAGS += -override_timescale=1ns/1ps
+VLOGAN_FLAGS += +incdir+testharness
 # VLOGAN_FLAGS += -work ./work-vcs
 VHDLAN_FLAGS += -kdb
 VHDLAN_FLAGS += -timescale=1ns/1ps

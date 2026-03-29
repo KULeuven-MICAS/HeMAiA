@@ -11,6 +11,7 @@
 
 DEBUG        ?= OFF # ON to turn on debugging symbols
 CFG          ?= $(realpath $(MKFILE_DIR)../rtl/cfg/lru.hjson)
+SIM_CFG      ?= $(realpath $(MKFILE_DIR)../rtl/cfg/sim_rtl.hjson)
 
 .DEFAULT_GOAL := help
 .PHONY: all apps clean clean-testharness clean-vsim clean-vlt clean-vcs clean-apps clean-logs clean-bin
@@ -23,10 +24,9 @@ clean: clean-testharness clean-vsim clean-vlt clean-vcs clean-apps clean-logs cl
 
 # Common definitions used by included Makefiles
 
-MKFILE_PATH := $(abspath $(lastword $(MAKEFILE_LIST)))
+MKFILE_PATH     := $(abspath $(lastword $(MAKEFILE_LIST)))
 SIM_MKFILE_DIR  := $(dir $(MKFILE_PATH))
-ROOT        := $(SIM_MKFILE_DIR)../..
-SNITCH_ROOT := $(shell bender path snitch_cluster)
+ROOT            := $(SIM_MKFILE_DIR)../..
 
 TARGET = occamy_chip
 
@@ -42,22 +42,26 @@ UART_DPI_DIR         ?= $(SIM_MKFILE_DIR)testharness/uartdpi
 #####################
 # Simulator options #
 #####################
-SIM_WITH_MACRO ?= 0
-SIM_WITH_NETLIST ?= 0
 SIM_WITH_WAVEFORM ?= 1
-SIM_WITH_INTERPOSER ?= 0
-# Derive SIM_WITH_PLL from the configuration file ($(CFG)) unless the
-# variable is overridden on the `make` command line. The HJSON may contain
-# either `use_vendor_pll: true` or simply `use_vendor_pll` (implicit true).
-# If the file explicitly contains `use_vendor_pll: false` we treat it as 0.
-SIM_WITH_PLL ?= $(shell if [ -f "$(CFG)" ]; then \
-	if grep -E -q '^[[:space:]]*use_vendor_pll[[:space:]]*[:=][[:space:]]*false' "$(CFG)"; then echo 0; \
-	elif grep -E -q '^[[:space:]]*use_vendor_pll' "$(CFG)"; then echo 1; \
+# Extract a boolean flag from a hjson file: returns 1 if key exists and isn't false, 0 otherwise
+cfg_flag = $(shell if [ -f "$(1)" ]; then \
+	if grep -E -q '^[[:space:]]*$(2)[[:space:]]*[:=][[:space:]]*false' "$(1)"; then echo 0; \
+	elif grep -E -q '^[[:space:]]*$(2)' "$(1)"; then echo 1; \
 	else echo 0; fi; else echo 0; fi)
+
+SIM_WITH_MACRO      ?= $(call cfg_flag,$(SIM_CFG),sim_with_mem_macro)
+SIM_WITH_NETLIST    ?= $(call cfg_flag,$(SIM_CFG),sim_with_netlist)
+SIM_WITH_INTERPOSER ?= $(call cfg_flag,$(SIM_CFG),sim_with_interposer)
+SIM_WITH_PLL        ?= $(call cfg_flag,$(CFG),use_vendor_pll)
+SIM_WITH_JTAG_CHECK ?= $(call cfg_flag,$(SIM_CFG),sim_with_jtag_check)
 
 VSIM_BENDER += $(shell cat ../rtl/src/bender_targets.tmp)
 VLT_BENDER  += $(shell cat ../rtl/src/bender_targets.tmp)
 VCS_BENDER  += $(shell cat ../rtl/src/bender_targets.tmp)
+
+VSIM_BENDER += -t simulation_hemaia -t simulation_hemaia_interposer_model
+VLT_BENDER  += -t simulation_hemaia
+VCS_BENDER  += -t simulation_hemaia -t simulation_hemaia_interposer_model
 
 ifeq ($(SIM_WITH_NETLIST), 1)
 	VSIM_BENDER += -t hemaia_netlist
@@ -73,16 +77,6 @@ ifeq ($(SIM_WITH_MACRO), 1)
 	VSIM_BENDER += -t tsmc16_sim -t tsmc16
 	VLT_BENDER  += -t tsmc16_sim -t tsmc16
 	VCS_BENDER  += -t tsmc16_sim -t tsmc16
-endif
-
-ifeq ($(SIM_WITH_INTERPOSER), 1)
-	VSIM_BENDER += -t simulation_hemaia_interposer
-	VLT_BENDER  += -t simulation_hemaia_interposer
-	VCS_BENDER  += -t simulation_hemaia_interposer
-else
-	VSIM_BENDER += -t simulation_hemaia
-	VLT_BENDER  += -t simulation_hemaia
-	VCS_BENDER  += -t simulation_hemaia
 endif
 
 ifeq ($(SIM_WITH_PLL), 1)
@@ -144,6 +138,7 @@ VLT_AR     = ${VLT_BUILDDIR}/Vtestharness__ALL.a
 
 # VLT_FLAGS += --trace       # Enable VCD dumping
 VLT_FLAGS += --prof-cfuncs # Enable code profiling
+VLT_FLAGS += -Itestharness  # Include path for testharness utility files
 
 ###############
 # C testbench #
@@ -182,24 +177,61 @@ clean-apps:
 
 OCCAMYGEN ?= $(ROOT)/util/occamygen/occamygen.py
 
-testharness/testharness.sv: testharness/testharness.sv.tpl $(CFG)
-	@echo "[OCCAMYGEN] Generate $@"
+TESTHARNESS_TPL_DIR  = testharness/template
+TESTHARNESS_TPLS     = $(wildcard $(TESTHARNESS_TPL_DIR)/*.sv.tpl)
+TESTHARNESS_OUTPUTS  = testharness/testharness.sv \
+                       testharness/io_wrapper.sv \
+                       testharness/dut.sv \
+                       testharness/util/load_binary_rtl.sv \
+                       testharness/util/load_binary_mem_macro.sv \
+                       testharness/util/load_binary_netlist.sv \
+                       testharness/util/check_finish_rtl.sv \
+                       testharness/util/check_finish_mem_macro.sv \
+                       testharness/util/check_finish_netlist.sv
 
-ifneq ($(SIM_WITH_NETLIST), 0)
-	@$(OCCAMYGEN) --cfg $(CFG) --outdir testharness --netlist-testharness-sv $<
-else ifneq ($(SIM_WITH_MACRO), 0)
-	@$(OCCAMYGEN) --cfg $(CFG) --outdir testharness --mem-macro-testharness-sv $<
-else
-	@$(OCCAMYGEN) --cfg $(CFG) --outdir testharness --testharness-sv $<
-endif
+OCCAMYGEN_TH_CMD = $(OCCAMYGEN) --cfg $(CFG) --outdir testharness \
+		--testharness-sv $(TESTHARNESS_TPL_DIR)/testharness.sv.tpl \
+		--sim_with_mem_macro $(SIM_WITH_MACRO) \
+		--sim_with_netlist $(SIM_WITH_NETLIST) \
+		--sim_with_interposer $(SIM_WITH_INTERPOSER) \
+		--sim_with_pll $(SIM_WITH_PLL) \
+		--sim_with_jtag_check $(SIM_WITH_JTAG_CHECK) \
+		--sim_with_verilator 0
+
+OCCAMYGEN_TH_VLT_CMD = $(OCCAMYGEN) --cfg $(CFG) --outdir testharness \
+		--testharness-sv $(TESTHARNESS_TPL_DIR)/testharness.sv.tpl \
+		--sim_with_mem_macro 0 \
+		--sim_with_netlist 0 \
+		--sim_with_interposer 0 \
+		--sim_with_pll 0 \
+		--sim_with_jtag_check 0 \
+		--sim_with_verilator 1
+
+# Primary target: generates all testharness outputs in one invocation
+testharness/testharness.sv: $(TESTHARNESS_TPLS) $(CFG) $(SIM_CFG)
+	@echo "[OCCAMYGEN] Generate testharness files"
+	@$(OCCAMYGEN_TH_CMD)
+
+# Secondary outputs are produced by the same recipe
+testharness/io_wrapper.sv testharness/dut.sv testharness/util/load_binary_rtl.sv testharness/util/load_binary_mem_macro.sv testharness/util/load_binary_netlist.sv testharness/util/check_finish_rtl.sv testharness/util/check_finish_mem_macro.sv testharness/util/check_finish_netlist.sv: testharness/testharness.sv
 
 clean-testharness:
-	rm -rf testharness/testharness.sv
+	rm -rf $(TESTHARNESS_OUTPUTS)
+	rm -rf testharness/testharness_*.sv
+
+# Debug target: run generation verbosely (no @-silencing)
+debug-testharness-gen:
+	$(OCCAMYGEN_TH_CMD)
 #############
 # Verilator #
 #############
 
-${VLT_AR}: testharness/testharness.sv
+# Regenerate testharness for Verilator (no D2D, no interposer)
+vlt-testharness: $(TESTHARNESS_TPLS) $(CFG) $(SIM_CFG)
+	@echo "[OCCAMYGEN] Generate testharness files (Verilator)"
+	@$(OCCAMYGEN_TH_VLT_CMD)
+
+${VLT_AR}: vlt-testharness
 	$(call VERILATE,testharness)
 
 # Quick sanity check, not really meant for simulation.
@@ -239,7 +271,7 @@ clean-vlt: clean-work
 $(VSIM_BUILDDIR):
 	mkdir -p $@
 
-$(VSIM_BUILDDIR)/compile.vsim.tcl: testharness/testharness.sv  | $(VSIM_BUILDDIR)
+$(VSIM_BUILDDIR)/compile.vsim.tcl: | $(VSIM_BUILDDIR)
 	$(BENDER) script vsim $(VSIM_BENDER) --vlog-arg="$(VLOG_FLAGS) -work $(dir $@) " > $@
 	echo '$(VLOG) -work $(dir $@) $(TB_CC_SOURCES) -vv -ccflags "$(TB_CC_FLAGS)"' >> $@
 	echo 'return 0' >> $@
@@ -281,7 +313,7 @@ clean-vsim: clean-work
 $(VCS_BUILDDIR):
 	mkdir -p $@
 
-$(VCS_BUILDDIR)/compile.sh: testharness/testharness.sv | $(VCS_BUILDDIR)
+$(VCS_BUILDDIR)/compile.sh: | $(VCS_BUILDDIR)
 	mkdir -p $(VCS_BUILDDIR)
 	${BENDER} script vcs ${VCS_BENDER} --vlog-arg="${VLOGAN_FLAGS}" --vcom-arg="${VHDLAN_FLAGS}" > $@
 	chmod +x $@

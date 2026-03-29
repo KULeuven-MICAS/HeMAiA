@@ -429,7 +429,10 @@ module hemaia_io_pad (
   hemaia i_hemaia (
       .io_clk_i(CRTL_X1_Y3),
       .io_rst_ni(CRTL_X1_Y1),
-      .io_bypass_pll_division_i(CRTL_X1_Y4),
+      .io_pll_bypass_i(CRTL_X1_Y4),
+      .io_pll_en_i(CRTL_X3_Y1),
+      .io_pll_post_div_sel_i({CRTL_X4_Y1,CRTL_X4_Y2}),
+      .io_pll_lock_o(CRTL_X3_Y2),
       .io_clk_obs_o(CRBL_X5_Y2),
       .io_clk_periph_i(CRTL_X2_Y4),
       .io_rst_periph_ni(CRTL_X1_Y0),

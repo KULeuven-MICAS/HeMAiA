@@ -40,11 +40,6 @@ def get_args():
         help="Output filename for the offload header file",
     )
     parser.add_argument(
-        "--emit_mini_golden",
-        action="store_true",
-        help="Emit mini golden data for verification",
-    )
-    parser.add_argument(
         "-c",
         "--cfg",
         type=pathlib.Path,
@@ -63,16 +58,10 @@ def get_args():
         default=None,
         help="Output path for the generated data header (e.g. gemm_data.h). If omitted, data header is not written.",
     )
-    parser.add_argument(
-        "--num_double_buffers",
-        type=int,
-        default=8,
-        help="Number of double buffers (default: 8)",
-    )
     return parser.parse_args()
-def define_workload_params(cfg_path, hwcfg_path, emit_mini_golden=False, num_double_buffers=8):
+
+def define_workload_params(cfg_path, hwcfg_path):
     """Load workload params from hjson config files.
-    M, K, N and array_shape come from params.hjson;
     meshRow/tileSize/meshCol are derived from the hw config.
     Returns (params dict, merged_config dict).
     """
@@ -80,9 +69,7 @@ def define_workload_params(cfg_path, hwcfg_path, emit_mini_golden=False, num_dou
         param = hjson.loads(f.read())
     with open(hwcfg_path) as f:
         hw = hjson.loads(f.read())
-    merged = {**param, **hw,
-              "emit_mini_golden": emit_mini_golden,
-              "num_double_buffers": num_double_buffers}
+    merged = {**param, **hw}
 
     # Derive meshRow/tileSize/meshCol from the hw config
     data_type = 0  # int8
@@ -96,7 +83,14 @@ def define_workload_params(cfg_path, hwcfg_path, emit_mini_golden=False, num_dou
     M = merged["M"]
     K = merged["K"]
     N = merged["N"]
-    print(f"Loaded M: {M}, K: {K}, N: {N} from config (meshRow={meshRow}, tileSize={tileSize}, meshCol={meshCol})")
+    num_double_buffers = merged["num_double_buffers"]
+
+    # The basic computation for gemm is
+    # (meshRow * tileSize) * (tileSize * meshCol) = meshRow * meshCol
+    # And the A matrix has M*K tiles
+    # The B matrix has K*N tiles
+    # The C/D matrix has M*N tiles
+    print(f"M: {M}, K: {K}, N: {N}, meshRow: {meshRow}, tileSize: {tileSize}, meshCol: {meshCol}")
 
     params = {
         'M': M,
@@ -108,27 +102,26 @@ def define_workload_params(cfg_path, hwcfg_path, emit_mini_golden=False, num_dou
         'arrayShapeIdx': array_shape,
         'transposeA': merged.get("transposed_A", 0),
         'transposeB': merged.get("transposed_B", 0),
-        'accumPrevC': merged.get("accumPrevC",  0),
+        'accumPrevC': merged.get("accumPrevC", 0),
     }
     params["app_name"] = "Single-Chip GEMM Double Buffer"
     # Derived sizes
-    params['A_size'] = M * K * meshRow * tileSize * 1  # int8
-    params['B_size'] = K * N * tileSize * meshCol * 1  # int8
-    params['C_size'] = M * N * meshRow * meshCol * 4   # int32
-    params['D_size'] = M * N * meshRow * meshCol * 4   # int32
+    params['A_size'] = M * K * meshRow * tileSize * 1 # int8
+    params['B_size'] = K * N * meshCol * tileSize * 1 # int8
+    params['C_size'] = M * N * meshRow * meshCol * 4 # int32
+    params['D_size'] = M * N * meshRow * meshCol * 4 # int32
     print(f"Calculated A size: {params['A_size']//1024} kbytes, B size: {params['B_size']//1024} kbytes, C size: {params['C_size']//1024} kbytes, D size: {params['D_size']//1024} kbytes")
 
     # double buffer number
     params['num_double_buffers'] = num_double_buffers
     params['A_tile_size'] = params['A_size'] // num_double_buffers
     params['D_tile_size'] = params['D_size'] // num_double_buffers
-    params['emit_mini_golden'] = emit_mini_golden
     return params, merged
 
 def define_memory_handles(params):
     """Defines memory symbols and handles."""
     mem_handles = {}
-    
+
     # 1. Define Memory Symbols (Existing C variables)
     # The MemSymbol are the variables defined in the data.h file which the memory location is already known at compile time
     # The A tiles
@@ -137,10 +130,8 @@ def define_memory_handles(params):
     # B is not tiled, only one symbol
     mem_handles['B_data_L3_symbol'] = BingoMemSymbol("B")
     # The D tiles
-    # If emit_mini_golden is True, the D array is compacted to only contain the verification data (64B per tile)
-    golden_stride = 64 if params.get('emit_mini_golden', False) else params['D_tile_size']
     for i in range(params['num_double_buffers']):
-        mem_handles[f'D{i}_data_L3_symbol'] = BingoMemSymbol("D",offset=i*golden_stride)
+        mem_handles[f'D{i}_data_L3_symbol'] = BingoMemSymbol("D",offset=i*params['D_tile_size'])
     # C is not used
 
     # 2. Define Memory Handles (Dynamic Allocations)
@@ -192,12 +183,12 @@ def define_memory_handles(params):
     # Epilogue  |                               |                               | Store D3 <- D_pong
     # -------------------------------------------------------------------------------------------------------
 
-    
+
     return mem_handles
 
 def create_dfg(params, mem_handles):
     """Creates the Bingo Data Flow Graph with nodes and dependencies."""
-    
+
     # 1. Initialize DFG
     num_chiplets = 1
     num_clusters_per_chiplet = 1
@@ -217,7 +208,7 @@ def create_dfg(params, mem_handles):
     dma_core_id = 1  # Core 1 for Load
     host_core_id = 2  # Core 2 for Host DMA Store
     # 2. Define Nodes
-    
+
     # Node: Copy B (Static B matrix, loaded once)
     task_copy_B = BingoNode(
         assigned_chiplet_id=0,
@@ -240,12 +231,12 @@ def create_dfg(params, mem_handles):
     task_copy_A_nodes = []
     task_gemm_nodes = []
     task_copy_D_nodes = []
-    
+
     for i in range(params['num_double_buffers']):
         # Determine current buffer (Ping for even, Pong for odd)
         current_l1_A = mem_handles['l1_buf_A_ping'] if i % 2 == 0 else mem_handles['l1_buf_A_pong']
         current_l1_D = mem_handles['l1_buf_D_ping'] if i % 2 == 0 else mem_handles['l1_buf_D_pong']
-        
+
         # --- Node: Copy A[i] ---
         node_copy_A = BingoNode(
             assigned_chiplet_id=0,
@@ -260,11 +251,11 @@ def create_dfg(params, mem_handles):
         )
         task_copy_A_nodes.append(node_copy_A)
         bingo_dfg.bingo_add_node(node_copy_A)
-        
+
         # --- Node: GEMM[i] ---
         # Note: M in GEMM kernel args refers to the tile height
         M_tile = params['M'] // params['num_double_buffers']
-        
+
         if i == 0:
             node_gemm = BingoNode(
                 assigned_chiplet_id=0,
@@ -298,10 +289,10 @@ def create_dfg(params, mem_handles):
                     output_D_addr=current_l1_D,
                 )
             )
-            
+
         task_gemm_nodes.append(node_gemm)
         bingo_dfg.bingo_add_node(node_gemm)
-        
+
         # --- Node: Copy D[i] ---
         node_copy_D = BingoNode(
             assigned_chiplet_id=0,
@@ -328,16 +319,16 @@ def create_dfg(params, mem_handles):
             assigned_core_id=host_core_id, # Core 2 for Host
             kernel_name="__host_bingo_kernel_check_result",
             kernel_args=HostBingoKernelCheckResultArgs(
-                golden_data_addr=mem_handles[f'D{i}_data_L3_symbol'], 
-                output_data_addr=mem_handles[f'D{i}_L3_buf'],         
-                data_size=64                        
+                golden_data_addr=mem_handles[f'D{i}_data_L3_symbol'],
+                output_data_addr=mem_handles[f'D{i}_L3_buf'],
+                data_size=64
             )
         )
         task_check_result_nodes.append(task_check_result)
         bingo_dfg.bingo_add_node(task_check_result)
 
     # 4. Define dependencies
-    
+
     # --- A. Data Validity (Producer -> Consumer) ---
     # These dependencies enforce the fundamental data flow of the application.
     # A task consuming data must wait for the task producing it to finish.
@@ -345,7 +336,7 @@ def create_dfg(params, mem_handles):
         # 1. Load A[i] (DMA) must complete before Compute[i] (GEMM) starts.
         #    The GEMM kernel reads matrix A from the L1 SPM buffer populated by this load.
         bingo_dfg.bingo_add_edge(task_copy_A_nodes[i], task_gemm_nodes[i])
-        
+
         # 2. Compute[i] (GEMM) must complete before Store D[i] (DMA) starts.
         #    The Store task reads the result matrix D from L1 SPM to move it to L3.
         bingo_dfg.bingo_add_edge(task_gemm_nodes[i], task_copy_D_nodes[i])
@@ -353,28 +344,28 @@ def create_dfg(params, mem_handles):
     # --- B. Core Sequencing (Sequential execution on same core) ---
     # Although tasks on the same core will naturally execute sequentially if queued,
     # adding explicit edges makes the execution order deterministic and easier to visualize.
-    
+
     # 1. DMA Load Queue (Core 1):
     #    First load Matrix B (static for all GEMMs), then Load A[0], then Load A[1], etc.
     bingo_dfg.bingo_add_edge(task_copy_B, task_copy_A_nodes[0])
     for i in range(params['num_double_buffers'] - 1):
         bingo_dfg.bingo_add_edge(task_copy_A_nodes[i], task_copy_A_nodes[i+1])
-    
+
     # 2. Compute Queue (Core 0):
     #    Perform GEMM operations strictly in order: GEMM 0 -> GEMM 1 -> ...
     for i in range(params['num_double_buffers'] - 1):
         bingo_dfg.bingo_add_edge(task_gemm_nodes[i], task_gemm_nodes[i+1])
-    
+
     # 3. DMA Store Queue (Core 2):
     #    Store results strictly in order: Store D[0] -> Store D[1] -> ...
     for i in range(params['num_double_buffers'] - 1):
         bingo_dfg.bingo_add_edge(task_copy_D_nodes[i], task_copy_D_nodes[i+1])
-        
+
     # 4. Result Check Sequencing:
     #    Ensure checks run in order.
     for i in range(params['num_double_buffers'] - 1):
         bingo_dfg.bingo_add_edge(task_check_result_nodes[i], task_check_result_nodes[i+1])
-    
+
     # 5. Start Verification:
     #    Start checking results only after the *last* Store D is complete.
     #    This represents a barrier: Compute All -> Store All -> Verify All.
@@ -383,7 +374,7 @@ def create_dfg(params, mem_handles):
     # --- C. Buffer Safety (Double Buffering / Resource Management) ---
     # Due to limited L1 memory, we reuse a set of buffers (Ping/Pong scheme).
     # We must add synchronization edges to prevent data hazards (Read-after-Write, Write-after-Read).
-    
+
     # Buffer Usage Map:
     # Buffer A_Ping: Used by Load A[0], Compute[0], Load A[2], Compute[2], ... (Even indices)
     # Buffer A_Pong: Used by Load A[1], Compute[1], Load A[3], Compute[3], ... (Odd indices)
@@ -395,13 +386,13 @@ def create_dfg(params, mem_handles):
     #    Load A[i+2] depends on Compute[i].
     for i in range(params['num_double_buffers'] - 2):
         bingo_dfg.bingo_add_edge(task_gemm_nodes[i], task_copy_A_nodes[i+2])
-        
+
     # 2. Prevent Overwriting Output Buffers (Write-after-Read Hazard):
     #    We cannot start computing GEMM[i+2] (writing D into Ping) until Store D[i] is finished reading Ping.
     #    Compute[i+2] depends on Store D[i].
     for i in range(params['num_double_buffers'] - 2):
         bingo_dfg.bingo_add_edge(task_copy_D_nodes[i], task_gemm_nodes[i+2])
-    
+
     # 3. Flow Control / Window Size Control:
     #    This edge limits the "lookahead" of the loader.
     #    Load A[i+3] depends on Store D[i].
@@ -416,6 +407,7 @@ def create_dfg(params, mem_handles):
     for i in range(params['num_double_buffers'] - 1):
         bingo_dfg.bingo_add_edge(task_copy_A_nodes[i+1], task_copy_D_nodes[i])
     return bingo_dfg
+
 def main():
     args = get_args()
     output_dir = args.output_dir
@@ -427,11 +419,7 @@ def main():
         os.makedirs(output_dir)
 
     # Execute Pipeline
-    params, merged_config = define_workload_params(
-        args.cfg, args.hwcfg,
-        emit_mini_golden=args.emit_mini_golden,
-        num_double_buffers=args.num_double_buffers
-    )
+    params, merged_config = define_workload_params(args.cfg, args.hwcfg)
 
     # Emit gemm_data.h (same as running gemm_datagen.py separately)
     if args.data_h is not None:

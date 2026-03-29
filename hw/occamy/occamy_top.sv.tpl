@@ -292,7 +292,7 @@ module ${name}_top
     // .NrHarts (${cores}),
     .NrHarts (1),
     .BusWidth (${regbus_debug.dw}),
-    .DmBaseAddress ('h0)
+    .DmBaseAddress ('h1)
   ) i_dm_top (
     .clk_i (${regbus_debug.clk}),
     .rst_ni (${regbus_debug.rst}),

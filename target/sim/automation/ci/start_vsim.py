@@ -3,186 +3,141 @@
 HeMAiA CI automation using Questasim
 ====================================
 
-This script orchestrates the build and simulation flow for the HeMAiA
-project when using the proprietary Questasim simulator.  The previous
-implementation relied on Verilator and ran entirely inside a Docker
-container.  The new flow requires a mixture of host-side and container
-operations because some tools (Questasim and proprietary code download
-scripts) are only available on the host machine while the hardware
-generation happens inside a pre-built Docker image.
+Orchestrates the full build-and-simulate flow for the HeMAiA project with
+Questasim.  Some steps run on the host (Questasim, proprietary downloads)
+while hardware generation runs inside a Docker/Podman container.
 
-The sequence performed by this script is:
-
-1. **Initialisation outside Docker.**  The script runs
-   ``target/tapeout/1_init_outside_docker.sh`` from the repository
-   root.  This script is responsible for pulling proprietary code and
-   must run on the host machine because it relies on credentials and
-   tools not baked into the container.
-
-2. **Initialisation inside Docker.**  A container based on
-   ``ghcr.io/kuleuven-micas/hemaia:main``
-   (or ``podman`` equivalent) is launched with the repository mounted at
-   exactly the same path as on the host.  Inside this container the
-   script runs ``target/tapeout/2_init_inside_docker.sh`` to generate
-   the RTL and build infrastructure.  Keeping the mount point
-   identical ensures that absolute paths embedded in the generated
-   files continue to work.
-
-3. **Application build.**  The YAML file ``task_vsim.yaml`` (located in
-   the same directory as this script) lists CI tasks under the key
-   ``runs``.  Each entry contains parameters such as: ``HOST_APP_TYPE``,
-   ``CHIP_TYPE``, ``WORKLOAD``, and ``DEV_APP``.
-   For each run the script invokes ``make apps`` inside the container
-   to build the corresponding hex files using these 4 parameters.
-   After each invocation the newly generated directories
-   ``app_chip_0_0``, ``app_chip_0_1``, ``app_chip_1_0`` and
-   ``app_chip_1_1`` from ``target/sim/bin`` are copied into a unique
-   task folder ``task_<n>/bin`` under ``target/sim/automation/ci``.
-
-4. **Simulation preparation.**  Still inside the container the
-   script calls ``make hemaia_system_vsim_preparation`` from the
-   repository root to build the Questasim file lists.
-
-5. **Simulation compile.**  On the host machine the script calls
-   ``make hemaia_system_vsim`` in the repository root.  This step
-   compiles the Questasim simulation and produces two important
-   directories: ``target/sim/bin`` (containing ``occamy_chip.sim`` and
-   ancillary scripts) and ``target/sim/work-vsim`` (Questasim work
-   library).  These directories are copied into each previously
-   created task folder so that simulations can run independently in
-   parallel.
-
-6. **Simulation run.**  Using a thread pool, the script executes
-   ``bin/occamy_chip.sim`` in each task folder concurrently.  The
-   return code of each process is recorded to determine whether the
-   test passed (return code 0) or failed.
-
-7. **Summary generation.**  A Markdown file ``simulation_summary.md``
-   is written in the same directory as this script.  It lists each
-   task along with its host and device apps and reports whether the
-   simulation succeeded.  The file can be published as an artifact for
-   CI systems.
-
-To avoid the need for an external YAML library (PyYAML) this script
-includes a minimal parser for the specific ``task.yaml`` format used in
-this project.  Machines without PyYAML installed can therefore run
-this automation without additional dependencies.
+Flow overview:
+  Step 0 - Parse task definitions from task_vsim.yaml
+  Step 1 - Reset private repos and generated files
+  Step 2 - Initialise private repos (host-side, needs credentials)
+  Step 3 - Compile HW and SW inside the container
+  Step 4 - Build application hex files and create per-task directories
+  Step 5 - Prepare Questasim testharness (container) and compile (host)
+  Step 6 - Run simulations concurrently
+  Step 7 - Write Markdown summary
 """
 
 from __future__ import annotations
 
+import getpass
+import multiprocessing
 import os
-import subprocess
 import shutil
+import subprocess
+import time
+import traceback
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+
 try:
     import yaml  # type: ignore
 except Exception:
     yaml = None
-from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor
-import multiprocessing
-from typing import Dict, List, Tuple, Optional
-import traceback
-from datetime import datetime
-import getpass
 
-def run_host_script(script_path: Path) -> None:
-    """Execute a shell script on the host.
 
-    Parameters
-    ----------
-    script_path:
-        Absolute path to the script to run.  The script must be
-        executable; if not, it will be invoked with ``bash``.
-    """
+# ---------------------------------------------------------------------------
+# Utility helpers
+# ---------------------------------------------------------------------------
+
+def run_host_script(script_path: Path, script_args: List[str] = None) -> None:
+    """Execute a shell script on the host via ``bash``."""
     if not script_path.exists():
         raise FileNotFoundError(f"Host script {script_path} does not exist")
-    # Use bash explicitly to ensure scripts with non-executable flags still run
-    subprocess.run(["bash", str(script_path)], check=True, cwd=script_path.parent)
+    subprocess.run(
+        ["bash", str(script_path)] + (script_args or []),
+        check=True,
+        cwd=script_path.parent,
+    )
 
 
-def run_in_container(repo_root: Path, docker_image: str, working_dir: Path, command: List[str]) -> None:
-    """Run a command inside the provided container image.
-
-    This helper mounts the repository root into the container at the
-    same absolute path and sets the working directory accordingly.  It
-    executes the provided command list and waits for completion.
-
-    Parameters
-    ----------
-    repo_root:
-        Absolute path to the repository root on the host.
-    docker_image:
-        Full name (including tag or digest) of the container image to run.
-    working_dir:
-        Directory inside the mounted volume where the command should be
-        executed.
-    command:
-        List of command arguments to run inside the container.
-    """
-    # Build the full run command.  We use '--rm' to clean up containers
-    # immediately and '-v' to mount the repository at the identical
-    # location.  '-w' sets the working directory within the container.
+def run_in_container(
+    repo_root: Path,
+    docker_image: str,
+    working_dir: Path,
+    command: List[str],
+) -> None:
+    """Run *command* inside *docker_image*, mounting *repo_root* at the same path."""
     docker_cmd: List[str] = [
-        "podman",
-        "run",
-        "--rm",
-        "-v",
-        f"{repo_root}:{repo_root}",
-        "-w",
-        str(working_dir),
+        "podman", "run", "--rm",
+        "-v", f"{repo_root}:{repo_root}",
+        "-w", str(working_dir),
         docker_image,
     ]
     docker_cmd.extend(command)
     subprocess.run(docker_cmd, check=True)
-    
-def _simple_task_yaml_loader(task_yaml: Path) -> Dict:
-    """Minimal YAML loader for the limited `task_vsim.yaml` format used here.
 
-    This supports the specific structure documented in this script (a top-level
-    `runs:` key with a sequence of single-key mappings whose values are a
-    sequence of single-key mappings). It intentionally does not implement
-    general YAML.
+
+def _copy_path(src: Path, dst: Path) -> None:
+    """Copy a file or directory from *src* to *dst*, replacing any existing target."""
+    if not src.exists():
+        return
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if dst.exists():
+        if dst.is_dir():
+            shutil.rmtree(dst)
+        else:
+            dst.unlink()
+    if src.is_dir():
+        shutil.copytree(src, dst)
+    else:
+        shutil.copy2(src, dst)
+
+
+# ---------------------------------------------------------------------------
+# Minimal YAML loader (no PyYAML dependency required)
+# ---------------------------------------------------------------------------
+
+def _simple_task_yaml_loader(task_yaml: Path) -> Dict:
+    """Parse the limited ``task_vsim.yaml`` format without PyYAML.
+
+    Supports only the structure used by this project: a top-level ``runs:``
+    key containing a sequence of named blocks, each with ``- KEY: VALUE``
+    attribute entries.
     """
-    runs = []
-    with task_yaml.open('r') as f:
+    runs: list = []
+    with task_yaml.open("r") as f:
         lines = f.readlines()
 
-    # Find the 'runs:' section
+    # Advance to the 'runs:' section
     i = 0
     while i < len(lines):
-        if lines[i].strip().startswith('runs:'):
+        if lines[i].strip().startswith("runs:"):
             i += 1
             break
         i += 1
 
-    # Parse each `- name:` block and its indented list of `- KEY: VALUE` entries
+    # Parse each ``- name:`` block
     while i < len(lines):
         raw = lines[i]
         stripped = raw.lstrip()
         if not stripped:
             i += 1
             continue
-        if stripped.startswith('- '):
+        if stripped.startswith("- "):
             after = stripped[2:].strip()
-            if after.endswith(':'):
+            if after.endswith(":"):
                 ci_name = after[:-1].strip()
-                attrs = []
+                attrs: list = []
                 i += 1
                 while i < len(lines):
                     nl = lines[i]
                     if not nl.strip():
                         i += 1
                         continue
-                    # stop when dedented back to the level of the '-' that started the block
+                    # Stop when indentation returns to the parent level
                     if (len(nl) - len(nl.lstrip())) <= (len(raw) - len(stripped)):
                         break
                     nstripped = nl.lstrip()
-                    if nstripped.startswith('- '):
+                    if nstripped.startswith("- "):
                         after_dash = nstripped[2:].strip()
-                        if ':' in after_dash:
-                            k, v = [s.strip() for s in after_dash.split(':', 1)]
-                            if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
+                        if ":" in after_dash:
+                            k, v = [s.strip() for s in after_dash.split(":", 1)]
+                            if (v.startswith('"') and v.endswith('"')) or (
+                                v.startswith("'") and v.endswith("'")
+                            ):
                                 v = v[1:-1]
                             attrs.append({k: v})
                     i += 1
@@ -190,21 +145,27 @@ def _simple_task_yaml_loader(task_yaml: Path) -> Dict:
                 continue
         i += 1
 
-    return {'runs': runs}
+    return {"runs": runs}
 
-def parse_tasks(task_yaml: Path) -> List[Dict[str, str]]:
-    """Parse the CI tasks from a YAML file.
 
-    The expected YAML format is:
-    runs:
-      - ci_app_name:
-          - HOST_APP_TYPE: offload_bingo_sw
-          - CHIP_TYPE: single_chip
-          - WORKLOAD: gemm_tiled
-          - DEV_APP: snax-bingo-offload
+# ---------------------------------------------------------------------------
+# Step 0 -- Parse task definitions
+# ---------------------------------------------------------------------------
+
+def step0_parse_tasks(task_yaml: Path) -> List[Dict[str, str]]:
+    """Parse CI tasks from *task_yaml*.
+
+    Expected YAML structure::
+
+        runs:
+          - ci_app_name:
+            - HOST_APP_TYPE: offload_bingo_sw
+            - CHIP_TYPE: single_chip
+            - WORKLOAD: gemm_tiled
+            - DEV_APP: snax-bingo-offload
     """
     if yaml is not None:
-        with open(task_yaml, 'r') as f:
+        with open(task_yaml, "r") as f:
             param_data = yaml.safe_load(f)
     else:
         param_data = _simple_task_yaml_loader(task_yaml)
@@ -213,209 +174,250 @@ def parse_tasks(task_yaml: Path) -> List[Dict[str, str]]:
     for app_entry in param_data.get("runs", []):
         ci_app_name = str(list(app_entry.keys())[0])
         attributes = app_entry[ci_app_name]
-        attr_dict = {}
+        attr_dict: Dict[str, str] = {}
         for attr in attributes:
             attr_dict.update(attr)
-        
-        # Ensure at least HOST_APP_TYPE is present
-        if 'HOST_APP_TYPE' not in attr_dict:
+
+        if "HOST_APP_TYPE" not in attr_dict:
             raise ValueError(f"Task {ci_app_name} is missing 'HOST_APP_TYPE'")
-            
+
         tasks.append({
-            "host_app_type": str(attr_dict.get('HOST_APP_TYPE', '')),
-            "chip_type": str(attr_dict.get('CHIP_TYPE', '')),
-            "workload": str(attr_dict.get('WORKLOAD', '')),
-            "dev_app": str(attr_dict.get('DEV_APP', '')),
-            "ci_name": ci_app_name
+            "host_app_type": str(attr_dict.get("HOST_APP_TYPE", "")),
+            "chip_type":     str(attr_dict.get("CHIP_TYPE", "")),
+            "workload":      str(attr_dict.get("WORKLOAD", "")),
+            "dev_app":       str(attr_dict.get("DEV_APP", "")),
+            "ci_name":       ci_app_name,
         })
     return tasks
 
 
-def build_apps(
+# ---------------------------------------------------------------------------
+# Step 1 -- Reset environment
+# ---------------------------------------------------------------------------
+
+def step1_reset(repo_root: Path) -> None:
+    """Run ``0_reset.sh`` to restore a clean state before the flow starts."""
+    run_host_script(repo_root / "target/tapeout/0_reset.sh")
+
+
+# ---------------------------------------------------------------------------
+# Step 2 -- Initialise private repos (host-side)
+# ---------------------------------------------------------------------------
+
+def step2_init_private_hemaia_repos(repo_root: Path) -> None:
+    """Run ``1_init_outside_docker.sh`` with D2D and macro support enabled."""
+    run_host_script(
+        repo_root / "target/tapeout/1_init_outside_docker.sh",
+        script_args=["--pll=0", "--d2d=1", "--macro=1"],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Step 3 -- Compile HW/SW inside the container
+# ---------------------------------------------------------------------------
+
+def step3_compile_hemaia_sw_rtl(repo_root: Path, docker_image: str) -> None:
+    """Clean, then build SW, bootrom, and RTL inside the container."""
+    ci_cfg = "target/rtl/cfg/hemaia_tapeout_sim.hjson"
+
+    # make sw
+    run_in_container(repo_root, docker_image, repo_root, ["make", "sw", f"CFG_OVERRIDE={ci_cfg}"])
+    # make bootrom
+    run_in_container(repo_root, docker_image, repo_root, ["make", "bootrom", f"CFG_OVERRIDE={ci_cfg}"])
+    # make rtl
+    run_in_container(repo_root, docker_image, repo_root, ["make", "rtl", f"CFG_OVERRIDE={ci_cfg}"])
+
+
+# ---------------------------------------------------------------------------
+# Step 4 -- Build applications and prepare per-task directories
+# ---------------------------------------------------------------------------
+
+def step4_build_apps_and_prepare_tasks(
     repo_root: Path,
     docker_image: str,
     tasks: List[Dict[str, str]],
     task_base_dir: Path,
 ) -> List[Tuple[Path, str]]:
-    """Build application hex files inside the container and prepare task directories.
+    """Build hex files inside the container, then copy them into per-task dirs.
 
-    For each task entry this function runs ``make apps`` inside the
-    container with the standard 4 parameters.  After each build the
-    newly generated hex directories are copied into a unique task folder
-    under ``task_base_dir``.  The function returns a list of tuples
-    containing the task directory and descriptive name.
+    Returns a list of ``(task_dir, ci_name)`` tuples.
     """
     results: List[Tuple[Path, str]] = []
+    app_subdirs = ["app_chip_0_0", "app_chip_0_1", "app_chip_1_0", "app_chip_1_1", "mempool"]
+
     for idx, task in enumerate(tasks):
-        host_app_type = task["host_app_type"]
-        chip_type = task.get("chip_type", "")
-        workload = task.get("workload", "")
-        dev_app = task.get("dev_app", "")
         ci_name = task["ci_name"]
 
-        # Build the application inside the container
-        make_cmd: List[str] = ["make", "apps", f"HOST_APP_TYPE={host_app_type}"]
-        
-        if chip_type and chip_type != "None":
-            make_cmd.append(f"CHIP_TYPE={chip_type}")
-        if workload and workload != "None":
-            make_cmd.append(f"WORKLOAD={workload}")
-        if dev_app and dev_app != "None":
-            make_cmd.append(f"DEV_APP={dev_app}")
+        # -- Build the application inside the container --
+        make_cmd: List[str] = ["make", "apps", f"HOST_APP_TYPE={task['host_app_type']}"]
+        for key, var in [("chip_type", "CHIP_TYPE"), ("workload", "WORKLOAD"), ("dev_app", "DEV_APP")]:
+            val = task.get(key, "")
+            if val and val != "None":
+                make_cmd.append(f"{var}={val}")
         make_cmd.append("DEBUG_LEVEL=0")
 
-        # Execute make inside the container at the repository root
         run_in_container(repo_root, docker_image, repo_root, make_cmd)
-        
-        # Prepare task directory
+
+        # -- Copy generated hex directories into a unique task folder --
         task_dir = task_base_dir / f"task_{idx}"
         bin_dest = task_dir / "bin"
         bin_dest.mkdir(parents=True, exist_ok=True)
-        # Copy the generated app directories from target/sim/bin
+
         sim_bin = repo_root / "target/sim/bin"
-        for subdir in ["app_chip_0_0", "app_chip_0_1", "app_chip_1_0", "app_chip_1_1", "mempool"]:
+        for subdir in app_subdirs:
             src = sim_bin / subdir
             if src.exists():
                 dst = bin_dest / subdir
-                # Remove any existing directory to ensure fresh contents
                 if dst.exists():
                     shutil.rmtree(dst)
                 shutil.copytree(src, dst)
+
         results.append((task_dir, ci_name))
     return results
 
 
-def prepare_and_copy_sim(repo_root: Path, tasks_info: List[Tuple[Path, str]]) -> None:
-    """Compile the Questasim simulation and copy outputs to each task directory.
+# ---------------------------------------------------------------------------
+# Step 5 -- Prepare Questasim testharness and compile simulation
+# ---------------------------------------------------------------------------
 
-    Strategy: treat everything under target/sim as an artifact tree and
-    replicate the same relative paths under each task directory.
-    """
-    subprocess.run(["make", "hemaia_system_vsim", "SIM_WITH_WAVEFORM=0"], cwd=repo_root, check=True)
+def step5_prepare_testharness(
+    repo_root: Path,
+    docker_image: str,
+    tasks_info: List[Tuple[Path, str]],
+    sim_cfg: str = "target/rtl/cfg/sim_rtl.hjson",
+) -> None:
+    """Generate filelists in-container, compile on host, distribute artefacts."""
+    sim_cfg_abs = str(repo_root / sim_cfg)
 
+    # Generate Questasim filelists inside the container
+    run_in_container(
+        repo_root, docker_image, repo_root,
+        ["make", "hemaia_system_vsim_preparation", f"SIM_CFG={sim_cfg_abs}", "SIM_WITH_WAVEFORM=0"],
+    )
+
+    # Compile the Questasim simulation on the host
+    subprocess.run(
+        ["make", "hemaia_system_vsim", f"SIM_CFG={sim_cfg_abs}", "SIM_WITH_WAVEFORM=0"],
+        cwd=repo_root, check=True,
+    )
+
+    # Copy simulation artefacts into each task directory
     sim_root = repo_root / "target/sim"
     artifacts = [
         sim_root / "bin" / "occamy_chip.vsim",
         sim_root / "work-vsim",
     ]
-
-    def copy_any(src: Path, dst: Path) -> None:
-        if not src.exists():
-            return
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        if dst.exists():
-            if dst.is_dir():
-                shutil.rmtree(dst)
-            else:
-                dst.unlink()
-
-        if src.is_dir():
-            shutil.copytree(src, dst)
-        else:
-            shutil.copy2(src, dst)
-
     for task_dir, _ in tasks_info:
         for src in artifacts:
-            # Mirror the relative location within target/sim into the task directory
             rel = src.relative_to(sim_root)
-            dst = task_dir / rel
-            copy_any(src, dst)
+            _copy_path(src, task_dir / rel)
 
-def run_simulations(tasks_info: List[Tuple[Path, str]]) -> Dict[str, bool]:
-    """Run the compiled simulations in parallel and record pass/fail per task.
 
-    Returns
-    -------
-    Dict[str, bool]
-        Mapping of task directory string to whether the simulation
-        returned exit code 0.
-    """
+# ---------------------------------------------------------------------------
+# Step 6 -- Run simulations concurrently
+# ---------------------------------------------------------------------------
+
+def step6_run_simulations(tasks_info: List[Tuple[Path, str]]) -> Dict[str, bool]:
+    """Execute simulations in parallel and return a pass/fail map."""
     results: Dict[str, bool] = {}
 
-    def worker(task_dir: Path, ci_name: str) -> None:
+    def _worker(task_dir: Path, ci_name: str):
         sim_binary = task_dir / "bin" / "occamy_chip.vsim"
-        # The simulation must be run from within the bin directory so that
-        # relative paths (e.g. work-vsim) are resolved correctly.
         try:
-            print(f"Running simulation for {ci_name}")
-            result = subprocess.run(
+            proc = subprocess.run(
                 [str(sim_binary)],
                 cwd=task_dir / "bin",
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 check=False,
             )
-            print(f"Simulation for {ci_name} is finished with retval of {result.stdout.decode()}")
-            passed = result.returncode == 0
+            out = proc.stdout.decode(errors="replace") if proc.stdout else ""
+            return str(task_dir), ci_name, proc.returncode == 0, out
         except Exception:
-            passed = False
-            print(f"Simulation in {task_dir} failed with exception:")
-            traceback.print_exc()
-        results[str(task_dir)] = passed
+            return str(task_dir), ci_name, False, traceback.format_exc()
 
-    # Use a ThreadPoolExecutor with as many workers as logical CPUs
     with ThreadPoolExecutor(max_workers=multiprocessing.cpu_count()) as executor:
-        futures = [executor.submit(worker, td, cn) for td, cn in tasks_info]
-        # Ensure all tasks complete
-        for future in futures:
-            future.result()
+        future_to_task = {}
+        for td, cn in tasks_info:
+            print(f"Starting simulation for {cn} ({td})")
+            future_to_task[executor.submit(_worker, td, cn)] = (td, cn)
+
+        for future in as_completed(future_to_task):
+            td, cn = future_to_task[future]
+            try:
+                task_dir_str, ci_name, passed, output = future.result()
+                results[task_dir_str] = passed
+                status = "PASS" if passed else "FAIL"
+                print(f"{ci_name}: {status}")
+                if output:
+                    for line in output.strip().splitlines()[-10:]:
+                        print(line)
+            except Exception:
+                print(f"Error obtaining result for task {td}:")
+                traceback.print_exc()
+
     return results
 
+
+# ---------------------------------------------------------------------------
+# Step 7 -- Write Markdown summary
+# ---------------------------------------------------------------------------
 
 def write_summary(
     summary_path: Path,
     tasks_info: List[Tuple[Path, str]],
     results: Dict[str, bool],
 ) -> None:
-    """Write a Markdown summary of the simulation results."""
+    """Write a Markdown report listing each task's pass/fail status."""
     with summary_path.open("w") as f:
         f.write("# Simulation Summary\n\n")
-        username = getpass.getuser()
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        f.write(f"Run by **{username}** at **{now}**\n\n")
+        f.write(f"Run by **{getpass.getuser()}** at **{datetime.now():%Y-%m-%d %H:%M:%S}**\n\n")
         for idx, (task_dir, ci_name) in enumerate(tasks_info):
-            key = str(task_dir)
-            passed = results.get(key, False)
+            passed = results.get(str(task_dir), False)
             status = "PASS" if passed else "FAIL"
-            f.write(
-                f"- **task_{idx}** ({ci_name}) \u2014 **{status}**\n"
-            )
+            f.write(f"- **task_{idx}** ({ci_name}) \u2014 **{status}**\n")
 
+
+# ---------------------------------------------------------------------------
+# Main entry point
+# ---------------------------------------------------------------------------
 
 def main() -> None:
-    # Determine repository root and base directories
     script_path = Path(__file__).resolve()
-    # The script resides in target/sim/automation/ci; we ascend four levels to reach the repo root
-    repo_root = script_path.parents[4]
+    repo_root = script_path.parents[4]          # target/sim/automation/ci -> repo root
     task_base_dir = script_path.parent
-    # Image digest for the SNAX toolchain
-    docker_image = (
-        "ghcr.io/kuleuven-micas/hemaia:main"
-    )
-    # Paths to initialisation scripts
-    init_outside = repo_root / "target/tapeout/1_init_outside_docker.sh"
-    init_inside = repo_root / "target/tapeout/2_init_inside_docker.sh"
-    # Run initialisation outside the container (step 1)
-    run_host_script(init_outside)
-    # Run initialisation inside the container (step 2)
-    run_in_container(repo_root, docker_image, repo_root, ["bash", str(init_inside)])
-    # Parse tasks (step 3)
+    docker_image = "ghcr.io/kuleuven-micas/hemaia:main"
     task_yaml = script_path.parent / "task_vsim.yaml"
-    tasks = parse_tasks(task_yaml)
-    # Build applications and prepare task directories (step 3)
-    tasks_info = build_apps(repo_root, docker_image, tasks, task_base_dir)
-    # Prepare Questasim filelists inside the container (step 4)
-    run_in_container(
-        repo_root,
-        docker_image,
-        repo_root,
-        ["make", "hemaia_system_vsim_preparation", "SIM_WITH_WAVEFORM=0", "SIM_WITH_INTERPOSER=1"],
-    )
-    # Compile Questasim simulation outside the container and copy artefacts (step 5)
-    prepare_and_copy_sim(repo_root, tasks_info)
-    # Run simulations concurrently (step 6)
-    results = run_simulations(tasks_info)
-    # Write summary (step 7)
+    sim_cfg =  "target/rtl/cfg/sim_rtl.hjson"
+
+
+    if not task_yaml.exists():
+        raise FileNotFoundError(f"Task YAML file {task_yaml} does not exist")
+    # Clean the repo
+    run_in_container(repo_root, docker_image, repo_root, ["make", "clean"])
+    
+    # Step 0: Parse task definitions from YAML
+    tasks = step0_parse_tasks(task_yaml)
+
+    # Step 1: Reset environment to a clean state
+    step1_reset(repo_root)
+
+    # Step 2: Initialise private repos on the host
+    step2_init_private_hemaia_repos(repo_root)
+
+    # Step 3: Compile HW and SW inside the container
+    step3_compile_hemaia_sw_rtl(repo_root, docker_image)
+
+    # Step 4: Build application hex files and create per-task directories
+    tasks_info = step4_build_apps_and_prepare_tasks(repo_root, docker_image, tasks, task_base_dir)
+
+    # Step 5: Prepare and compile the Questasim testharness
+    step5_prepare_testharness(repo_root, docker_image, tasks_info, sim_cfg=sim_cfg)
+
+    # Step 6: Run all simulations concurrently
+    results = step6_run_simulations(tasks_info)
+
+    # Step 7: Write Markdown summary
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     summary_path = script_path.parent / f"simulation_summary_{timestamp}.md"
     write_summary(summary_path, tasks_info, results)

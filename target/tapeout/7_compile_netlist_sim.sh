@@ -1,6 +1,6 @@
 #!/bin/bash
 script_dir="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
-cfg_name="hemaia_tapeout.hjson"
+sim_cfg_dir="$script_dir/../rtl/cfg"
 
 # 
 FILE=/users/micas/shares/project_HeMAiAv2/HeMAiA/hw/hemaia/tech_cells_tsmc16/src/tsmc16/mem_macro/ts1n16ffcllsblvtd1024x64m4sws_150a/VERILOG/ts1n16ffcllsblvtd1024x64m4sws_150a.v
@@ -34,4 +34,4 @@ fi
 cp -f "$script_dir/../sim/testharness/testharness_netlist.sv" "$script_dir/../sim/testharness/testharness.sv"
 cp -f "$script_dir/../sim/work-vsim/compile_netlist.vsim.tcl" "$script_dir/../sim/work-vsim/compile.vsim.tcl"
 
-make -C "$script_dir/../.." hemaia_system_vsim
+make -C "$script_dir/../.." hemaia_system_vsim SIM_CFG="$sim_cfg_dir/sim_netlist.hjson"

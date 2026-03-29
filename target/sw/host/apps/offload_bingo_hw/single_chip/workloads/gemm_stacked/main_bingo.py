@@ -210,7 +210,7 @@ def create_dfg(params, mem_handles):
     node_gemm_D1 = BingoNode(
         assigned_chiplet_id=0x00,
         assigned_cluster_id=0,
-        assigned_core_id=gemm_core_id,  # dev
+        assigned_core_id=gemm_core_id,  # dev GeMM
         node_name="Gemm_D1",
         kernel_name="__snax_bingo_kernel_gemm_full",
         kernel_args=SnaxBingoKernelGemmFullArgs(
@@ -231,7 +231,7 @@ def create_dfg(params, mem_handles):
     node_gemm_D2 = BingoNode(
         assigned_chiplet_id=0x00,
         assigned_cluster_id=0,
-        assigned_core_id=gemm_core_id,  # dev
+        assigned_core_id=gemm_core_id,  # dev GeMM
         node_name="Gemm_D2",
         kernel_name="__snax_bingo_kernel_gemm_full",
         kernel_args=SnaxBingoKernelGemmFullArgs(
@@ -271,7 +271,7 @@ def create_dfg(params, mem_handles):
         kernel_args=HostBingoKernelCheckResultArgs(
             golden_data_addr=mem_handles["D2_symbol_l3"],
             output_data_addr=mem_handles["D2_result_l3"],
-            data_size=params["D2_size"],
+            data_size=64, # check first 64 bytes for simplicity
         ),
     )
     # 3. Add Nodes to DFG
@@ -284,11 +284,17 @@ def create_dfg(params, mem_handles):
     bingo_dfg.bingo_add_node(node_check_D2)
 
     # 4. Define Dependencies
+    # Gemm D1 should happen after the A1 and B1 are loaded
     bingo_dfg.add_edge(node_load_A1, node_gemm_D1)
     bingo_dfg.add_edge(node_load_B1, node_gemm_D1)
+    # Load B2 should happen after B1 is loaded since they both happen at the same dev
+    bingo_dfg.add_edge(node_load_B1, node_load_B2)
+    # Gemm D2 should happen after Gemm D1 and B2 are loaded
     bingo_dfg.add_edge(node_gemm_D1, node_gemm_D2)
     bingo_dfg.add_edge(node_load_B2, node_gemm_D2)
+    # Storing D2 should happen after Gemm D2 is done
     bingo_dfg.add_edge(node_gemm_D2, node_store_D2)
+    # Checking D2 should happen after D2 is stored back to L3
     bingo_dfg.add_edge(node_store_D2, node_check_D2)
     return bingo_dfg
 

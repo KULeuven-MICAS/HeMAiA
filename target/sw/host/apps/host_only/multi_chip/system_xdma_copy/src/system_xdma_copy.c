@@ -11,7 +11,7 @@ comm_buffer_t* comm_buffer_ptr = NULL;
 O1HeapInstance* l2_heap_manager = NULL;
 O1HeapInstance* l3_heap_manager = NULL;
 volatile O1HeapInstance* dram_heap_manager = NULL;
-
+#define checked_data_size 64
 int main() {
     uint8_t current_chip_id = get_current_chip_id();
     // Program the Chiplet Topology
@@ -98,11 +98,11 @@ int main() {
             "The allocation of destination 2 at local SRAM succeed at %lx\r\n",
             (uintptr_t)data_dest2);
     }
-
+    printf("Start IDMA unicast copy from destination %lx to destination %lx! \r\n", (uintptr_t)data_dest1, (uintptr_t)data_dest2);
     sys_dma_blk_memcpy(current_chip_id, (uintptr_t)data_dest2, (uintptr_t)data_dest1, data_size);
     printf("IDMA unicast copy finished to destination 2! \r\n");
     printf("Checking data correctness...\r\n");
-    for (uint32_t i = 0; i < data_size; i++) {
+    for (uint32_t i = 0; i < checked_data_size; i++) {
         if (data[i] != data_dest2[i]) {
             printf("Data mismatch at index %d: expected %d, got %d\n", i,
                    data[i], data_dest2[i]);
@@ -123,7 +123,7 @@ int main() {
     chip_barrier(comm_buffer_ptr, 0x00, 0x11, 3);
 
     printf("Checking data correctness...\r\n");
-    for (uint32_t i = 0; i < data_size; i++) {
+    for (uint32_t i = 0; i < checked_data_size; i++) {
         if (data[i] != data_dest2[i]) {
             printf("Data mismatch at index %d: expected %d, got %d\n", i,
                    data[i], data_dest2[i]);

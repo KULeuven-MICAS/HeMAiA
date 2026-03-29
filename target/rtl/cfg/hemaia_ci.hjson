@@ -1,9 +1,6 @@
 {
     cfg_name: "hemaia_ci",
     bender_target: ["occamy"],
-    // Remote CFG, about to be removed
-    is_remote_quadrant: false,
-    remote_quadrants: [],
     // Multi-chip configuration
     hemaia_multichip: {
       chip_id_width: 8,             // Not verified, should never be changed
@@ -144,9 +141,6 @@
                 address: 4096, // 0x0000_1000
                 length: 4096, // 4 kiB 0x1000
             },
-            {
-              name: "spis", // Only Master port, no slave port
-            },
         ],
         axi_lite_narrow_peripherals: [
             {
@@ -220,8 +214,8 @@
       address: 83886080, // 0x0500_0000
       length: 65536, // 64 kiB 0x1_0000
     },
-    // backup boot address
-    backup_boot_addr: 2147483648 // 0x8000_0000
     // Use Vendor PLL
     use_vendor_pll: false
+    // backup boot address
+    backup_boot_addr: 2147483648 // 0x8000_0000
 }

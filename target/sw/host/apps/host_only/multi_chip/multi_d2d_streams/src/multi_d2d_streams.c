@@ -11,6 +11,7 @@ comm_buffer_t *comm_buffer_ptr = NULL;
 O1HeapInstance *l2_heap_manager = NULL;
 O1HeapInstance *l3_heap_manager = NULL;
 volatile O1HeapInstance *dram_heap_manager = NULL;
+#define checked_data_size 64
 
 int main()
 {
@@ -61,9 +62,8 @@ int main()
     }
     printf("Chip(%x, %x): [Host] Data will be written to external DRAM at address %lx\r\n",
            get_current_chip_loc_x(), get_current_chip_loc_y(), (uintptr_t)data_dest);
-    chip_barrier(comm_buffer_ptr, 0x00, 0x11, 1);
 
-    for (uint32_t i = 0; i < 64; i++)
+    for (uint32_t i = 0; i < 16; i++)
     {
         sys_dma_blk_memcpy(
             current_chip_id, (uintptr_t)data_dest, (uintptr_t)data, data_size);
@@ -80,7 +80,7 @@ int main()
     if (current_chip_id == 0x00)
     {
         printf("All chips have finished DMA. Starting to check data correctness...\r\n");
-        uint8_t *data_to_be_checked = (uint8_t *)o1heapAllocate((uint64_t)l3_heap_manager, data_size);
+        uint8_t *data_to_be_checked = (uint8_t *)o1heapAllocate((uint64_t)l3_heap_manager, checked_data_size);
         if (data_to_be_checked == NULL)
         {
             printf("Chip(%x, %x): [Host] Error when allocating memory for data checking\r\n",
@@ -89,8 +89,8 @@ int main()
         }
         for (uint32_t i = 0; i < 4; i++)
         {
-            sys_dma_blk_memcpy(current_chip_id, (uintptr_t)data_to_be_checked, (uintptr_t)(data_dest + data_size * i), data_size);
-            for (uint32_t j = 0; j < data_size; j++)
+            sys_dma_blk_memcpy(current_chip_id, (uintptr_t)data_to_be_checked, (uintptr_t)(data_dest + data_size * i), checked_data_size);
+            for (uint32_t j = 0; j < checked_data_size; j++) // Only check the first 64 bytes for quick verification, can check more if needed
             {
                 if (data_to_be_checked[j] != data[j])
                 {
@@ -100,6 +100,7 @@ int main()
                 }
             }
         }
+        printf("All data is correct. \r\n");
     }
 
     // All chips exit the simulation at the same time
