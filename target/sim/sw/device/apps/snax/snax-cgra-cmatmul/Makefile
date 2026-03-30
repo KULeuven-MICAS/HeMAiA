@@ -10,9 +10,7 @@ INCDIRS = ./data
 INCDIRS += ../../../snax/snax-cgra/include
 
 RISCV_LDFLAGS += ../../../snax/snax-cgra/build/snax-cgra-lib.o
-# RISCV_LDFLAGS += -Wl,-Map=gc.map
-# RISCV_LDFLAGS += -Wl,--gc-sections
 
 include ../../common.mk
-#include ./data/Makefile
+
 $(DEP): $(DATA_H)
