@@ -11,15 +11,16 @@
 # APPS += idle_cluster_2
 # APPS += idle_cluster_3
 # APPS += idle_all_clk_off
-APPS += idle_all_clk_on
+# APPS += idle_all_clk_on
 # APPS += offload
+APPS += offload_cluster_2
 APPS += offload_cluster_1
+APPS += offload_cluster_0
 APPS += matmul
 APPS += bin_search
 # APPS += idle_all_clk_on
 # APPS += offload
 # APPS += offload_cluster_2
-APPS  += matmul
 APPS  += conv_last_layer
 APPS  += conv_n_maxpool
 

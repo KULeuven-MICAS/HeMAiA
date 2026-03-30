@@ -32,19 +32,20 @@ RUNTIME_DIR = $(abspath $(HOST_DIR)/runtime)
 DEVICE_DIR  = $(abspath $(HOST_DIR)/../device)
 
 # now we only include the snax app
-DEVICE_APPS += snax/snax-hypercorex-test-csr-c2
-DEVICE_APPS += snax/snax-hypercorex-digit-recog-c2
-DEVICE_APPS += snax/snax-hypercorex-isolet-recog-c2
-DEVICE_APPS += snax/snax-hypercorex-ucihar-recog-c2
-DEVICE_APPS += snax/snax-hypercorex-dna-recog-c2
-DEVICE_APPS += snax/snax-hypercorex-lang-recog-c2
-DEVICE_APPS += snax/snax-hypercorex-char-recog
-DEVICE_APPS += snax/snax-hypercorex-high-dim-bind
-DEVICE_APPS += snax/snax-hypercorex-digit-recog
-DEVICE_APPS += snax/snax-hypercorex-lang-recog
-DEVICE_APPS += snax/snax-hypercorex-isolet-recog
-DEVICE_APPS += snax/snax-hypercorex-ucihar-recog
-DEVICE_APPS += snax/snax-hypercorex-dna-recog
+# DEVICE_APPS += snax/snax-hypercorex-test-csr-c2
+# DEVICE_APPS += snax/snax-hypercorex-digit-recog-c2
+# DEVICE_APPS += snax/snax-hypercorex-isolet-recog-c2
+# DEVICE_APPS += snax/snax-hypercorex-ucihar-recog-c2
+# DEVICE_APPS += snax/snax-hypercorex-dna-recog-c2
+# DEVICE_APPS += snax/snax-hypercorex-lang-recog-c2
+# DEVICE_APPS += snax/snax-hypercorex-char-recog
+# DEVICE_APPS += snax/snax-hypercorex-high-dim-bind
+# DEVICE_APPS += snax/snax-hypercorex-digit-recog
+# DEVICE_APPS += snax/snax-hypercorex-lang-recog
+# DEVICE_APPS += snax/snax-hypercorex-isolet-recog
+# DEVICE_APPS += snax/snax-hypercorex-ucihar-recog
+# DEVICE_APPS += snax/snax-hypercorex-dna-recog
+DEVICE_APPS += snax/snax-hypercorex-bin-search
 
 # Dependencies
 INCDIRS += $(RUNTIME_DIR)
