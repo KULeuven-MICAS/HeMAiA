@@ -24,6 +24,9 @@ def main():
     # Working parameters
     num_32b = 20000
     num_bytes = num_32b * 4
+    num_byte_set_0 = 57664
+    num_byte_set_1 = 8320
+    num_byte_set_2 = 8192
 
     # Generating sample query hypervector
     data_set = np.frombuffer(np.random.bytes(num_32b*4), dtype=np.uint32)
@@ -32,6 +35,9 @@ def main():
     # Format output data
     num_32b_str = format_scalar_definition("uint32_t", "num_32b", num_32b)
     num_bytes_str = format_scalar_definition("uint32_t", "num_bytes", num_bytes)
+    num_byte_set_0_str = format_scalar_definition("uint32_t", "num_byte_set_0", num_byte_set_0)
+    num_byte_set_1_str = format_scalar_definition("uint32_t", "num_byte_set_1", num_byte_set_1)
+    num_byte_set_2_str = format_scalar_definition("uint32_t", "num_byte_set_2", num_byte_set_2)
     data_set_str = format_vector_definition("uint32_t", "data_set", data_set)
    
 
@@ -39,6 +45,9 @@ def main():
         [
             num_32b_str,
             num_bytes_str,
+            num_byte_set_0_str,
+            num_byte_set_1_str,
+            num_byte_set_2_str,
             data_set_str,
         ]
     )
