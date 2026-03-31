@@ -12,6 +12,7 @@ APPDIR = apps/snax/snax-gemmx-matmul
 APPDIR = apps/snax/snax-gemmx-resnet8
 APPDIR = apps/snax/snax-cgra-cmatmul
 APPDIR = apps/snax/snax-hypercorex-bin-search
+APPDIR = apps/snax/snax-data-transfer
 TARGET ?= all
 
 
