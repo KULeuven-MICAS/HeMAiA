@@ -409,13 +409,10 @@ proc create_root_design { parentCell } {
   set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_nets jtag_tms_i_1]
   connect_bd_net -net occamy_chip_0_jtag_tdo_o  [get_bd_pins occamy_chip/jtag_tdo_o] \
   [get_bd_ports jtag_tdo_o]
-  set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_nets occamy_chip_0_jtag_tdo_o]
   connect_bd_net -net occamy_chip_0_uart_rts_no  [get_bd_pins occamy_chip/uart_rts_no] \
   [get_bd_ports uart_rts_no]
-  set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_nets occamy_chip_0_uart_rts_no]
   connect_bd_net -net occamy_chip_0_uart_tx_o  [get_bd_pins occamy_chip/uart_tx_o] \
   [get_bd_ports uart_tx_o]
-  set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_nets occamy_chip_0_uart_tx_o]
   connect_bd_net -net occamy_chip_east_test_request_o  [get_bd_pins occamy_chip/east_test_request_o] \
   [get_bd_ports east_test_request_o_0]
   connect_bd_net -net occamy_chip_flow_control_east_cts_o  [get_bd_pins occamy_chip/flow_control_east_cts_o] \
