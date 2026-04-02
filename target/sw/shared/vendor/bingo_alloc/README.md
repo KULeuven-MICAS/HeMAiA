@@ -10,8 +10,8 @@ o1heap rounds every allocation request up to the **next power of 2**. On a
 
 ```
 o1heapAllocate(handle, 300 * 1024)
-  → fragment_size = roundUpToPow2(300 KB + 128) = 512 KB
-  → 512 KB > usable capacity (~508 KB)  → returns NULL
+  -> fragment_size = roundUpToPow2(300 KB + 128) = 512 KB
+  -> 512 KB > usable capacity (~508 KB)  -> returns NULL
 ```
 
 For the DNN workloads, the capacity is more important than the predictive allocation latency.
@@ -54,20 +54,20 @@ heap instance in shared memory (TCDM or SPM).
 ## API
 
 ```c
-#include "bingo_alloc64.h"
+#include "bingo_alloc.h"
 
 // Initialize a heap in a memory region.
-uint64_t handle = bingoAllocInit(base_addr, size);
+uint64_t handle = bingoHeapInit(base_addr, size);
 
 // Allocate a block.
-uint64_t ptr = bingoAllocAllocate(handle, num_bytes);
+uint64_t ptr = bingoHeapMalloc(handle, num_bytes);
 
 // Free a block (coalesces with neighbours).
-bingoAllocFree(handle, ptr);
+bingoHeapFree(handle, ptr);
 
 // Read diagnostics (capacity, allocated, peak, oom_count).
-BingoAllocDiagnostics *d =
-    (BingoAllocDiagnostics *)(uintptr_t)bingoAllocGetDiagnostics(handle);
+BingoHeapDiagnostics *d =
+    (BingoHeapDiagnostics *)(uintptr_t)bingoHeapGetDiagnostics(handle);
 ```
 
 ## Files
@@ -75,7 +75,7 @@ BingoAllocDiagnostics *d =
 ```
 bingo_alloc/
 ├── README.md                  (this file)
-└── bingo_alloc64/
-    ├── bingo_alloc64.h        (types + API declarations)
-    └── bingo_alloc64.c        (implementation)
+└── bingo_alloc/
+    ├── bingo_alloc.h          (types + API declarations)
+    └── bingo_alloc.c          (implementation)
 ```

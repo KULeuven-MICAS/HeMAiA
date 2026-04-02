@@ -4,27 +4,26 @@
 //
 // Fanchen Kong <fanchen.kong@kuleuven.be>
 //
-// Bingo Allocator 64-bit — derived from o1heap by Pavel Kirienko (MIT).
+// Bingo Heap Allocator — derived from o1heap by Pavel Kirienko (MIT).
 //
 // Modifications vs. original o1heap:
 //   1. Alignment-based rounding (not power-of-2) for fragment_size in
-//      bingoAllocAllocate(). This removes the ~capacity/2 ceiling on single
+//      bingoHeapMalloc(). This removes the ~capacity/2 ceiling on single
 //      allocations. A 300 KB tensor can now be allocated from 512 KB TCDM.
 //   2. Search-within-bin: when the first fragment in the optimal bin is too
 //      small, we walk the bin's free list before falling back to a higher bin.
 //      Only the optimal bin needs this search; higher bins are guaranteed to
 //      contain fragments >= 2x the optimal bin's minimum, so first-fit works.
-//   3. All identifiers renamed from o1heap* to bingoAlloc*.
 
-#include "bingo_alloc64.h"
+#include "bingo_alloc.h"
 #include "uart.h"
 
 // ---- Internal constants ----
 
-#define BINGO_ALLOC_MAX          18446744073709551615ULL
-#define FRAGMENT_SIZE_MIN        (BINGO_ALLOC_ALIGNMENT * 2U)
-#define FRAGMENT_SIZE_MAX        ((BINGO_ALLOC_MAX >> 1U) + 1U)
-#define INSTANCE_SIZE_PADDED     ((sizeof(BingoAllocInstance) + BINGO_ALLOC_ALIGNMENT - 1U) & ~(BINGO_ALLOC_ALIGNMENT - 1U))
+#define BINGO_HEAP_MAX           18446744073709551615ULL
+#define FRAGMENT_SIZE_MIN        (BINGO_HEAP_ALIGNMENT * 2U)
+#define FRAGMENT_SIZE_MAX        ((BINGO_HEAP_MAX >> 1U) + 1U)
+#define INSTANCE_SIZE_PADDED     ((sizeof(BingoHeapInstance) + BINGO_HEAP_ALIGNMENT - 1U) & ~(BINGO_HEAP_ALIGNMENT - 1U))
 
 // ---- Pointer casting macros ----
 // These allow both 32-bit Snitch cores and 64-bit CVA6 to share the same
@@ -33,9 +32,9 @@
 #define BINGO_LOW32(x)  ((uint32_t)(((uint64_t)(x) >> 0) & 0xFFFFFFFF))
 
 #define FRAGMENT_PTR(x) \
-    ((BingoAllocFragment*) (void*) ((__riscv_xlen == 64) ? (x) : BINGO_LOW32(x)))
+    ((BingoHeapFragment*) (void*) ((__riscv_xlen == 64) ? (x) : BINGO_LOW32(x)))
 #define HANDLE_PTR(x) \
-    ((BingoAllocInstance*) (void*) ((__riscv_xlen == 64) ? (x) : BINGO_LOW32(x)))
+    ((BingoHeapInstance*) (void*) ((__riscv_xlen == 64) ? (x) : BINGO_LOW32(x)))
 
 // ---- Bit-manipulation helpers (software CLZ for portability) ----
 
@@ -104,15 +103,15 @@ static inline void unbin(uint64_t const handle, uint64_t const frag) {
 
 // ---- Public API ----
 
-uint64_t bingoAllocInit(uint64_t const heap_base_addr, uint64_t const heap_size) {
+uint64_t bingoHeapInit(uint64_t const heap_base_addr, uint64_t const heap_size) {
     uint64_t out = 0U;
     if ((heap_base_addr != 0U) &&
-        ((heap_base_addr % BINGO_ALLOC_ALIGNMENT) == 0U) &&
+        ((heap_base_addr % BINGO_HEAP_ALIGNMENT) == 0U) &&
         (heap_size >= (INSTANCE_SIZE_PADDED + FRAGMENT_SIZE_MIN)))
     {
         out = heap_base_addr;
         HANDLE_PTR(out)->nonempty_bin_mask = 0UL;
-        for (uint64_t i = 0U; i < BINGO_ALLOC_NUM_BINS; i++) {
+        for (uint64_t i = 0U; i < BINGO_HEAP_NUM_BINS; i++) {
             HANDLE_PTR(out)->bins[i] = 0UL;
         }
 
@@ -142,7 +141,7 @@ uint64_t bingoAllocInit(uint64_t const heap_base_addr, uint64_t const heap_size)
     return out;
 }
 
-uint64_t bingoAllocAllocate(uint64_t const handle, const uint64_t amount) {
+uint64_t bingoHeapMalloc(uint64_t const handle, const uint64_t amount) {
     uint64_t out = 0UL;
     if ((amount > 0UL) && (amount <= HANDLE_PTR(handle)->diagnostics.capacity)) {
         // ---- KEY CHANGE vs o1heap ----
@@ -150,10 +149,10 @@ uint64_t bingoAllocAllocate(uint64_t const handle, const uint64_t amount) {
         // This allows allocations up to (capacity - header), not just capacity/2.
         //
         // Example with 512 KB TCDM (capacity ~508 KB after metadata):
-        //   o1heap:      300 KB request → roundUpToPow2(300KB + 128) = 512 KB → FAIL
-        //   bingo_alloc: 300 KB request → alignUp(300KB + 128, 256)  = 300.25 KB → OK
+        //   o1heap:      300 KB request -> roundUpToPow2(300KB + 128) = 512 KB -> FAIL
+        //   bingo_alloc: 300 KB request -> alignUp(300KB + 128, 256)  = 300.25 KB -> OK
         const uint64_t fragment_size =
-            (amount + BINGO_ALLOC_ALIGNMENT + FRAGMENT_SIZE_MIN - 1U) & ~(FRAGMENT_SIZE_MIN - 1U);
+            (amount + BINGO_HEAP_ALIGNMENT + FRAGMENT_SIZE_MIN - 1U) & ~(FRAGMENT_SIZE_MIN - 1U);
 
         // Start from the bin whose minimum size is <= fragment_size.
         // Unlike o1heap (which uses log2Ceil and is guaranteed first-fit),
@@ -187,7 +186,7 @@ uint64_t bingoAllocAllocate(uint64_t const handle, const uint64_t amount) {
                     }
                 }
             }
-            // else: bin_index > optimal_bin_index → fragment is guaranteed large enough
+            // else: bin_index > optimal_bin_index -> fragment is guaranteed large enough
 
             if (frag_ptr != 0U) {
                 unbin(handle, frag_ptr);
@@ -212,7 +211,7 @@ uint64_t bingoAllocAllocate(uint64_t const handle, const uint64_t amount) {
                 }
 
                 FRAGMENT_PTR(frag_ptr)->header.used = 1UL;
-                out = frag_ptr + BINGO_ALLOC_ALIGNMENT;
+                out = frag_ptr + BINGO_HEAP_ALIGNMENT;
             }
         }
     }
@@ -226,9 +225,9 @@ uint64_t bingoAllocAllocate(uint64_t const handle, const uint64_t amount) {
     return out;
 }
 
-void bingoAllocFree(uint64_t const handle, uint64_t const pointer) {
+void bingoHeapFree(uint64_t const handle, uint64_t const pointer) {
     if (pointer != 0UL) {
-        uint64_t const frag = pointer - BINGO_ALLOC_ALIGNMENT;
+        uint64_t const frag = pointer - BINGO_HEAP_ALIGNMENT;
         FRAGMENT_PTR(frag)->header.used = 0UL;
         HANDLE_PTR(handle)->diagnostics.allocated -= FRAGMENT_PTR(frag)->header.size;
 
@@ -238,7 +237,6 @@ void bingoAllocFree(uint64_t const handle, uint64_t const pointer) {
         const bool join_right = (next_frag != 0UL) && (FRAGMENT_PTR(next_frag)->header.used == 0UL);
 
         if (join_left && join_right) {
-            // Merge: [prev][this][next] → [prev]
             unbin(handle, prev_frag);
             unbin(handle, next_frag);
             FRAGMENT_PTR(prev_frag)->header.size +=
@@ -248,14 +246,12 @@ void bingoAllocFree(uint64_t const handle, uint64_t const pointer) {
             interlink(prev_frag, FRAGMENT_PTR(next_frag)->header.next);
             rebin(handle, prev_frag);
         } else if (join_left) {
-            // Merge: [prev][this] → [prev]
             unbin(handle, prev_frag);
             FRAGMENT_PTR(prev_frag)->header.size += FRAGMENT_PTR(frag)->header.size;
             FRAGMENT_PTR(frag)->header.size = 0UL;
             interlink(prev_frag, next_frag);
             rebin(handle, prev_frag);
         } else if (join_right) {
-            // Merge: [this][next] → [this]
             unbin(handle, next_frag);
             FRAGMENT_PTR(frag)->header.size += FRAGMENT_PTR(next_frag)->header.size;
             FRAGMENT_PTR(next_frag)->header.size = 0UL;
@@ -267,6 +263,6 @@ void bingoAllocFree(uint64_t const handle, uint64_t const pointer) {
     }
 }
 
-uint64_t bingoAllocGetDiagnostics(uint64_t const handle) {
-    return handle + offsetof(BingoAllocInstance, diagnostics);
+uint64_t bingoHeapGetDiagnostics(uint64_t const handle) {
+    return handle + offsetof(BingoHeapInstance, diagnostics);
 }
