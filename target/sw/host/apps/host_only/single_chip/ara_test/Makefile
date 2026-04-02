@@ -4,33 +4,28 @@
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 
-# Application specific settings
+# Test all FP32 RVV operator kernels that bingo dispatches to CVA6+Ara.
+
 MK_DIR   := $(dir $(realpath $(lastword $(MAKEFILE_LIST))))
 HOST_APP_TYPE = host_only
 CHIP_TYPE     = single_chip
 WORKLOAD      = ara_test
 SRCS = src/main.c
-BINGO_HOST ?= 0 # True to include the bingo runtime
-INCL_DEVICE_BINARY ?= 0 # True to include the device binary
+BINGO_HOST ?= 0
+INCL_DEVICE_BINARY ?= 0
 
-# Defines
+# Ara config
 NR_LANES ?= 2
-ARA_DEFINES += -DNR_LANES=$(NR_LANES)
-RISCV_CFLAGS += $(ARA_DEFINES)
+RISCV_CFLAGS += -DNR_LANES=$(NR_LANES)
 
-
-# Data generation
-DATA_H = $(MK_DIR)/include/data.h
-$(MK_DIR)/include/data.h: $(MK_DIR)/include/gen_data.py
+# Generated test data
+OP_DATA_H = $(MK_DIR)/include/op_test_data.h
+$(OP_DATA_H): $(MK_DIR)/include/gen_op_data.py
 	python3 $< > $@
+PARTIAL_OUTPUTS += $(OP_DATA_H)
 
-# Clean
-clean:
-	rm -f $(DATA_H)
-###############
-# Build settings
-############### 
+# Include paths
 INCDIRS += $(MK_DIR)/include
-# Add the DATA_H to partial outputs
-PARTIAL_OUTPUTS += $(DATA_H)
+INCDIRS += $(MK_DIR)/../../../../../runtime
+
 include ../../../common.mk
