@@ -8,9 +8,9 @@
 #include "libbingo/bingo_api.h"
 
 comm_buffer_t* comm_buffer_ptr = NULL;
-O1HeapInstance* l2_heap_manager = NULL;
-O1HeapInstance* l3_heap_manager = NULL;
-volatile O1HeapInstance* dram_heap_manager = NULL;
+uint64_t l2_heap_manager = 0;
+uint64_t l3_heap_manager = 0;
+volatile uint64_t dram_heap_manager = 0;
 #define checked_data_size 64
 int main() {
     uint8_t current_chip_id = get_current_chip_id();
@@ -33,43 +33,41 @@ int main() {
     }
 
     comm_buffer_ptr = (comm_buffer_t*)bingo_get_l2_comm_buffer(current_chip_id);
-    l2_heap_manager =
-        (O1HeapInstance*)bingo_get_l2_heap_manager(current_chip_id);
-    l3_heap_manager =
-        (O1HeapInstance*)bingo_get_l3_heap_manager(current_chip_id);
+    l2_heap_manager = bingo_get_l2_heap_manager(current_chip_id);
+    l3_heap_manager = bingo_get_l3_heap_manager(current_chip_id);
 
     // Init external DRAM heap
     if (get_current_chip_id() == 0) {
-        dram_heap_manager = (volatile O1HeapInstance*)o1heapInit(
-            (const uint64_t)chiplet_addr_transform_loc(2, 0,
-                                                       SPM_WIDE_BASE_ADDR),
+        dram_heap_manager = bingoHeapInit(
+            (uint64_t)chiplet_addr_transform_loc(2, 0,
+                                                  SPM_WIDE_BASE_ADDR),
             64 * 1024 * 1024);  // 64 MB DRAM heap
-        if (!dram_heap_manager) {
+        if (dram_heap_manager == 0) {
             printf("Chip(%x, %x): DRAM heap init failed!\r\n",
                    get_current_chip_loc_x(), get_current_chip_loc_y());
             return -1;
         } else {
             printf("Chip(%x, %x): DRAM heap init succeeded at %lx\r\n",
                    get_current_chip_loc_x(), get_current_chip_loc_y(),
-                   (uintptr_t)dram_heap_manager);
+                   dram_heap_manager);
         }
-        *(volatile O1HeapInstance**)(chiplet_addr_transform_loc(
+        *(volatile uint64_t*)(chiplet_addr_transform_loc(
             0xF, 0xF, (uintptr_t)&dram_heap_manager)) = dram_heap_manager;
     } else {
-        while (dram_heap_manager == NULL) {
+        while (dram_heap_manager == 0) {
             // Wait for chip 0 to initialize the dram_heap_manager
             asm volatile("fence" ::: "memory");
         }
         printf("Chip(%x, %x): DRAM heap manager is ready at %lx\r\n",
                get_current_chip_loc_x(), get_current_chip_loc_y(),
-               (uintptr_t)dram_heap_manager);
+               dram_heap_manager);
     }
 
     uint8_t* data_dest1;
 
     if (get_current_chip_id() == 0) {
         // Only chip 0 performs the XDMA copy test
-        data_dest1 = (uint8_t*)o1heapAllocate((const uint64_t)dram_heap_manager,
+        data_dest1 = (uint8_t*)bingoHeapMalloc(dram_heap_manager,
                                               data_size);
         if (!data_dest1) {
             printf("The allocation of destination 1 at DRAM failed!\r\n");
@@ -89,7 +87,7 @@ int main() {
 
     uint8_t* data_dest2;
     data_dest2 =
-        (uint8_t*)o1heapAllocate((const uint64_t)l3_heap_manager, data_size);
+        (uint8_t*)bingoHeapMalloc((uint64_t)l3_heap_manager, data_size);
     if (!data_dest2) {
         printf("The allocation of destination 2 at local SRAM failed!\r\n");
         return -1;
@@ -132,9 +130,9 @@ int main() {
     }
     printf("Data check passed!\n");
     if (get_current_chip_id() == 0) {
-        o1heapFree((const uint64_t)dram_heap_manager,
-                   (const uint64_t)data_dest1);
+        bingoHeapFree((uint64_t)dram_heap_manager,
+                   (uint64_t)data_dest1);
     }
-    o1heapFree((const uint64_t)l3_heap_manager, (const uint64_t)data_dest2);
+    bingoHeapFree((uint64_t)l3_heap_manager, (uint64_t)data_dest2);
     return 0;
 }
