@@ -6,7 +6,7 @@
 
 // inline uint32_t snrt_l1_malloc_init(uint32_t l1_heap_start_addr, uint32_t l1_heap_size) {
 //     if(snrt_l1_allocator.l1_heap_manager == NULL) {
-//         snrt_l1_allocator.l1_heap_manager = o1heapInit((void *)snrt_l1_allocator.l1_heap_start_addr, l1_heap_size);
+//         snrt_l1_allocator.l1_heap_manager = bingoHeapInit((void *)snrt_l1_allocator.l1_heap_start_addr, l1_heap_size);
 //         if (snrt_l1_allocator.l1_heap_manager == NULL) {
 //             return -1;
 //         } else {
@@ -32,7 +32,7 @@ inline snrt_l1_allocator_t *get_snrt_l1_allocator() {
 
 
 inline uint32_t snrt_l1_malloc(uint32_t size){
-    uint64_t result = o1heapAllocate(get_snrt_l1_allocator()->l1_heap_manager, size);
+    uint64_t result = bingoHeapMalloc(get_snrt_l1_allocator()->l1_heap_manager, size);
     if (result==0UL) {
         printf("[Cluster %d] Core(%d) L1 malloc failed for size %d\n", snrt_cluster_idx(), snrt_cluster_core_idx(), size);
         return 0;
@@ -40,7 +40,7 @@ inline uint32_t snrt_l1_malloc(uint32_t size){
     return (uint32_t)result;
 }
 inline void snrt_l1_free(uint32_t addr){
-    o1heapFree(get_snrt_l1_allocator()->l1_heap_manager, (uint64_t)addr);
+    bingoHeapFree(get_snrt_l1_allocator()->l1_heap_manager, (uint64_t)addr);
 }
 
 inline void snrt_l1_malloc_init(){
@@ -59,8 +59,8 @@ inline void snrt_l1_malloc_init(){
         // We put the l1 heap at the start of each cluster tcdm
         get_snrt_l1_allocator()->l1_heap_start_addr = chiplet_addr_transform((uint64_t)snrt_cluster_base_addrl());
         get_snrt_l1_allocator()->l1_heap_size = L1_ALLOC_MAKE_U64(0UL, l1_heap_top_aligned - snrt_cluster_base_addrl());
-        get_snrt_l1_allocator()->l1_heap_manager = o1heapInit(get_snrt_l1_allocator()->l1_heap_start_addr,
-                                                              get_snrt_l1_allocator()->l1_heap_size);
+        get_snrt_l1_allocator()->l1_heap_manager = bingoHeapInit(get_snrt_l1_allocator()->l1_heap_start_addr,
+                                                                  get_snrt_l1_allocator()->l1_heap_size);
         // printf("Chip(%x, %x): [Device] L1 heap start: %lx, size(kB): %d\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), get_snrt_l1_allocator()->l1_heap_start_addr, get_snrt_l1_allocator()->l1_heap_size>>10);
     }
     snrt_cluster_hw_barrier();
