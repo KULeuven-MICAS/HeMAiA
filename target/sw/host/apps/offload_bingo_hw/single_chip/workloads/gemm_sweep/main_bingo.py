@@ -69,23 +69,23 @@ def get_args():
     parser.add_argument("--l1_size_kb", type=int, default=512, help="L1 storage size in kB (default: 512)")
     return parser.parse_args()
 
-def _o1heap_fragment_size(amount, alignment=128):
-    """Model the actual o1heap allocation cost for a given request.
-    Mirrors o1heap64.c: fragment_size = roundUpToPowerOf2(amount + O1HEAP_ALIGNMENT).
+def _bingo_alloc_fragment_size(amount, alignment=128):
+    """Model the actual bingo_alloc allocation cost for a given request.
+    Mirrors bingo_alloc.c: fragment_size = align_up(amount + ALIGNMENT, FRAGMENT_SIZE_MIN).
+    Unlike the original o1heap (power-of-2 rounding), this uses alignment-based
+    rounding, allowing allocations up to ~capacity instead of ~capacity/2.
     """
     fragment_size_min = alignment * 2
     raw = amount + alignment
-    p = 1
-    while p < raw:
-        p <<= 1
-    return max(p, fragment_size_min)
+    frag = (raw + fragment_size_min - 1) & ~(fragment_size_min - 1)
+    return max(frag, fragment_size_min)
 
 
-def _o1heap_capacity(heap_size, alignment=128, num_bins=64):
-    """Compute usable o1heap capacity from a raw heap region size.
-    Subtracts the padded O1HeapInstance struct and aligns down.
+def _bingo_alloc_capacity(heap_size, alignment=128, num_bins=64):
+    """Compute usable bingo_alloc capacity from a raw heap region size.
+    Subtracts the padded BingoHeapInstance struct and aligns down.
     """
-    # O1HeapInstance: bins[num_bins]*8 + nonempty_bin_mask(8) + O1HeapDiagnostics(5*8)
+    # BingoHeapInstance: bins[num_bins]*8 + nonempty_bin_mask(8) + BingoHeapDiagnostics(5*8)
     instance_size = num_bins * 8 + 8 + 5 * 8
     instance_size_padded = (instance_size + alignment - 1) & ~(alignment - 1)
     fragment_size_min = alignment * 2
@@ -146,31 +146,29 @@ def define_workload_params(cfg_path, hwcfg_path, cli_overrides=None, l1_size_kb=
     params['B_size'] = K * N * tileSize * meshCol * 1  # int8
     params['D_size'] = M * N * meshRow * meshCol * 4   # int32
 
-    # L1 storage size check (accounting for o1heap buddy allocator overhead)
-    # o1heap rounds each allocation to next_power_of_2(size + O1HEAP_ALIGNMENT=128)
+    # L1 storage size check (accounting for bingo_alloc allocator overhead)
+    # bingo_alloc rounds each allocation to align_up(size + 128, 256)
     l1_size = l1_size_kb * 1024
-    l1_capacity = _o1heap_capacity(l1_size)
-    A_frag = _o1heap_fragment_size(params['A_size'])
-    B_frag = _o1heap_fragment_size(params['B_size'])
-    D_frag = _o1heap_fragment_size(params['D_size'])
+    l1_capacity = _bingo_alloc_capacity(l1_size)
+    A_frag = _bingo_alloc_fragment_size(params['A_size'])
+    B_frag = _bingo_alloc_fragment_size(params['B_size'])
+    D_frag = _bingo_alloc_fragment_size(params['D_size'])
     total_l1_frag = A_frag + B_frag + D_frag
-    # Each individual allocation must fit (needs one contiguous power-of-2 block)
     for name, raw, frag in [('A', params['A_size'], A_frag), ('B', params['B_size'], B_frag), ('D', params['D_size'], D_frag)]:
         assert frag <= l1_capacity, (
-            f"GEMM {name} allocation ({raw}B) requires o1heap fragment of {frag}B "
-            f"(next_pow2({raw}+128)={frag}), exceeding L1 heap capacity ({l1_capacity}B from {l1_size_kb}KB TCDM). "
+            f"GEMM {name} allocation ({raw}B) requires fragment of {frag}B "
+            f"(align_up({raw}+128, 256)={frag}), exceeding L1 heap capacity ({l1_capacity}B from {l1_size_kb}KB TCDM). "
             f"Reduce M={M}, K={K}, or N={N}."
         )
     assert total_l1_frag <= l1_capacity, (
         f"GEMM data exceeds L1 heap! "
-        f"o1heap fragments: A({A_frag}B) + B({B_frag}B) + D({D_frag}B) = {total_l1_frag}B > capacity {l1_capacity}B. "
-        f"(o1heap rounds each alloc to next_pow2(size+128)). "
+        f"Fragments: A({A_frag}B) + B({B_frag}B) + D({D_frag}B) = {total_l1_frag}B > capacity {l1_capacity}B. "
         f"Reduce M={M}, K={K}, or N={N}."
     )
     A_kb = params['A_size'] / 1024
     B_kb = params['B_size'] / 1024
     D_kb = params['D_size'] / 1024
-    print(f"L1 usage: A({A_kb:.1f}KB) + B({B_kb:.1f}KB) + D({D_kb:.1f}KB) = {(A_frag+B_frag+D_frag)/1024:.1f}KB (o1heap) / {l1_capacity/1024:.1f}KB capacity ({100*total_l1_frag/l1_capacity:.1f}%)")
+    print(f"L1 usage: A({A_kb:.1f}KB) + B({B_kb:.1f}KB) + D({D_kb:.1f}KB) = {(A_frag+B_frag+D_frag)/1024:.1f}KB (bingo_alloc) / {l1_capacity/1024:.1f}KB capacity ({100*total_l1_frag/l1_capacity:.1f}%)")
 
     # Pass l1_size_kb into merged config so gemm_datagen can use it
     merged["l1_size_kb"] = l1_size_kb
