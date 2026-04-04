@@ -391,6 +391,28 @@ inline void xdma_remote_wait(uint32_t task_id) {
     }
 }
 
+// Wait for xdma task completion, automatically choosing local or remote
+// based on whether src and dst are in the same cluster's TCDM.
+inline void xdma_wait_task(uint64_t src_addr, uint64_t dst_addr, uint32_t task_id) {
+    // Different chip (high 32 bits) → remote
+    if ((uint32_t)(src_addr >> 32) != (uint32_t)(dst_addr >> 32)) {
+        xdma_remote_wait(task_id);
+        return;
+    }
+    uint32_t src_lo = (uint32_t)src_addr;
+    uint32_t dst_lo = (uint32_t)dst_addr;
+    // Both in TCDM range and same cluster → local
+    if (src_lo >= SNRT_TCDM_START_ADDR && dst_lo >= SNRT_TCDM_START_ADDR) {
+        uint32_t src_cluster = (src_lo - SNRT_TCDM_START_ADDR) >> CLUSTER_ADDRWIDTH;
+        uint32_t dst_cluster = (dst_lo - SNRT_TCDM_START_ADDR) >> CLUSTER_ADDRWIDTH;
+        if (src_cluster == dst_cluster) {
+            xdma_local_wait(task_id);
+            return;
+        }
+    }
+    xdma_remote_wait(task_id);
+}
+
 inline uint32_t xdma_last_task_cycle() {
     return snax_read_xdma_cfg_reg(XDMA_PERF_CTR_TASK);
 }

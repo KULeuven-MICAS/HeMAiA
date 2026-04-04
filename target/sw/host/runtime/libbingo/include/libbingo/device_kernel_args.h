@@ -206,6 +206,112 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_gemm_full_args {
   uint32_t accumPrevC;            
 } __snax_bingo_kernel_gemm_full_args_t;
 
+// BINGO XDMA 1D Copy kernel args (same layout as cluster-level)
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_1d_copy_args {
+  uint32_t src_addr_hi;
+  uint32_t src_addr_lo;
+  uint32_t dst_addr_hi;
+  uint32_t dst_addr_lo;
+  uint32_t size;        // in Bytes
+} __snax_bingo_kernel_xdma_1d_copy_args_t;
+
+// BINGO XDMA 6D kernel args (fixed-size, max 5 temporal dims = 6 total dims)
+// Exposes full AGU strides/bounds to the user. Unused dims: stride=0, bound=1.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_6d_args {
+  uint32_t src_addr_hi;
+  uint32_t src_addr_lo;
+  uint32_t dst_addr_hi;
+  uint32_t dst_addr_lo;
+  uint32_t spatial_stride_src;
+  uint32_t spatial_stride_dst;
+  uint32_t num_temporal_dims;        // 1..5
+  uint32_t temporal_strides_src[5];  // unused dims = 0
+  uint32_t temporal_bounds_src[5];   // unused dims = 1
+  uint32_t temporal_strides_dst[5];  // unused dims = 0
+  uint32_t temporal_bounds_dst[5];   // unused dims = 1
+} __snax_bingo_kernel_xdma_6d_args_t;
+
+// BINGO XDMA Transpose 2D (high-level: user provides shape, kernel computes strides)
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_transpose_2d_args {
+  uint32_t src_addr_hi;
+  uint32_t src_addr_lo;
+  uint32_t dst_addr_hi;
+  uint32_t dst_addr_lo;
+  uint32_t M;              // source rows
+  uint32_t N;              // source cols
+  uint32_t elem_bytes;     // element size (1=int8, 2=int16, 4=int32)
+} __snax_bingo_kernel_xdma_transpose_2d_args_t;
+
+// BINGO XDMA Submatrix 2D (high-level: user provides shape + slice range)
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_submatrix_2d_args {
+  uint32_t src_addr_hi;
+  uint32_t src_addr_lo;
+  uint32_t dst_addr_hi;
+  uint32_t dst_addr_lo;
+  uint32_t src_rows;       // source matrix rows
+  uint32_t src_cols;       // source matrix cols
+  uint32_t row_start;      // slice start row (inclusive)
+  uint32_t row_end;        // slice end row (exclusive)
+  uint32_t col_start;      // slice start col (inclusive)
+  uint32_t col_end;        // slice end col (exclusive)
+  uint32_t elem_bytes;
+} __snax_bingo_kernel_xdma_submatrix_2d_args_t;
+
+// BINGO XDMA Expand 2D (high-level: broadcast [1, N] -> [M, N])
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_expand_2d_args {
+  uint32_t src_addr_hi;
+  uint32_t src_addr_lo;
+  uint32_t dst_addr_hi;
+  uint32_t dst_addr_lo;
+  uint32_t M;              // number of output rows (broadcast factor)
+  uint32_t N;              // row width (shared by src and dst)
+  uint32_t elem_bytes;
+} __snax_bingo_kernel_xdma_expand_2d_args_t;
+
+// BINGO XDMA Concat 2D (high-level: copy one chunk to offset in larger output)
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_concat_2d_args {
+  uint32_t src_addr_hi;
+  uint32_t src_addr_lo;
+  uint32_t dst_addr_hi;
+  uint32_t dst_addr_lo;
+  uint32_t src_rows;       // rows of THIS input chunk
+  uint32_t src_cols;       // cols of THIS input chunk
+  uint32_t dst_rows;       // rows of FULL output tensor
+  uint32_t dst_cols;       // cols of FULL output tensor
+  uint32_t axis;           // 0 = row-concat, 1 = col-concat
+  uint32_t offset;         // element offset along concat axis
+  uint32_t elem_bytes;
+} __snax_bingo_kernel_xdma_concat_2d_args_t;
+
+// BINGO XDMA Pad 2D (high-level: zero-fill + strided copy into padded output)
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_pad_2d_args {
+  uint32_t src_addr_hi;
+  uint32_t src_addr_lo;
+  uint32_t dst_addr_hi;
+  uint32_t dst_addr_lo;
+  uint32_t src_rows;
+  uint32_t src_cols;
+  uint32_t pad_top;        // padding rows before
+  uint32_t pad_bottom;     // padding rows after
+  uint32_t pad_left;       // padding cols before
+  uint32_t pad_right;      // padding cols after
+  uint32_t elem_bytes;
+} __snax_bingo_kernel_xdma_pad_2d_args_t;
+
+// BINGO XDMA Gather 2D (high-level: select rows by arithmetic stride)
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_gather_2d_args {
+  uint32_t src_addr_hi;
+  uint32_t src_addr_lo;
+  uint32_t dst_addr_hi;
+  uint32_t dst_addr_lo;
+  uint32_t src_rows;       // total rows in source tensor
+  uint32_t src_cols;       // cols per row
+  uint32_t num_indices;    // number of rows to gather
+  uint32_t index_start;    // first row index to gather
+  uint32_t index_stride;   // stride between indices (1 = contiguous)
+  uint32_t elem_bytes;
+} __snax_bingo_kernel_xdma_gather_2d_args_t;
+
 // BINGO GEMM Minimal kernel args
 __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_gemm_minimal_args {
   uint32_t input_A_addr;            

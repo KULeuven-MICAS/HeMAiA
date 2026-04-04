@@ -1,0 +1,8 @@
+{
+    // Test all xDMA data layout transformation operators.
+    // Matrix dimensions (small enough for L1 TCDM).
+    // All dims must be multiples of 8 (xDMA channel width).
+    rows: 16
+    cols: 16
+    elem_bytes: 1
+}
