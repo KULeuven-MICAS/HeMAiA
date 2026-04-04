@@ -413,6 +413,17 @@ inline void xdma_wait_task(uint64_t src_addr, uint64_t dst_addr, uint32_t task_i
     xdma_remote_wait(task_id);
 }
 
+// Disable all xDMA datapath extensions (reader + writer).
+// Must be called before any xDMA transfer to ensure clean state.
+inline void xdma_disable_all_extensions() {
+    for (uint8_t i = 0; i < XDMA_SRC_EXT_NUM; i++) {
+        xdma_disable_src_ext(i);
+    }
+    for (uint8_t i = 0; i < XDMA_DST_EXT_NUM; i++) {
+        xdma_disable_dst_ext(i);
+    }
+}
+
 inline uint32_t xdma_last_task_cycle() {
     return snax_read_xdma_cfg_reg(XDMA_PERF_CTR_TASK);
 }

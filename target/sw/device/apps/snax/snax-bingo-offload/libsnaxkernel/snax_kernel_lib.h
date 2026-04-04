@@ -46,7 +46,6 @@ inline uint64_t make_u64(uint32_t hi, uint32_t lo)
 
 #define EXTRACT_BIT(x, pos) (((x) >> (pos)) & 1)
 
-
 // We have two sets of kernels:
 // 1. Cluster-level kernels: these kernels are launched on a cluster and can utilize all cores in the cluster. This is used for the pure bingo sw.
 // 2. Core-level kernels: these kernels are launched on each core individually. This is used for the hw bingo.
@@ -1607,6 +1606,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_1d_copy(void *arg)
         uint32_t data_size = ((uint32_t *)arg)[4];
         BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
+        xdma_disable_all_extensions();
         xdma_memcpy_1d_full_addr(src_addr, dst_addr, data_size);
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
@@ -1670,6 +1670,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_6d(void *arg)
         // Disable all extensions (pure AGU data movement)
 
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
+        xdma_disable_all_extensions();
         xdma_memcpy_nd_full_addr(
             src_addr, dst_addr,
             spatial_stride_src, spatial_stride_dst,
@@ -1698,8 +1699,12 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_6d(void *arg)
 
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_transpose_2d(void *arg)
 {
-    // Transpose a 2D matrix [M, N] -> [N, M] via xDMA AGU stride trick.
-    // The kernel computes all strides/bounds from the matrix dimensions.
+    // Transpose a 2D matrix [M, N] -> [N, M].
+    // If the xDMA has a Transposer reader extension (XDMA_SRC_EXT_NUM > 0),
+    // uses the HW transposer for tile-level 8×8 transpose.
+    // Otherwise falls back to a CPU byte-by-byte transpose.
+    //
+    // HW path constraints: M % 8 == 0, N * elem % 8 == 0.
     //
     // Arg layout (uint32_t[]):
     //   [0]  src_addr_hi
@@ -1721,10 +1726,79 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_transpose_2d(void *arg)
         uint32_t elem = a[6];
         BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
-        // Software transpose: the xDMA AGU cannot reorder bytes within an
-        // 8-byte channel word, so element-level transpose for sub-8-byte types
-        // requires CPU-side byte shuffling.  For each element src[r][c] we
-        // write it to dst[c][r].
+#if XDMA_SRC_EXT_NUM > 0
+        // ── HW Transposer path ──
+        // The Transposer extension transposes each 8×8 tile of uint8 elements
+        // (or tile_width × tile_width for other element widths) in the reader
+        // data path. The AGU iterates tile-by-tile across the matrix.
+        //
+        // Reference: snax-xdma-transpose datagen.py
+        // For MN→MN transpose with enable_transpose=true, uint8:
+        //   tile_width = 8
+        //   transfer_per_transpose = 1 (8×8×8bit = 512bit fits in one bus word)
+        //   spatial_stride_src = N * elem (row width in src)
+        //   spatial_stride_dst = M * elem (row width in dst, which is N×M transposed)
+        //   temporal: dim0=transfer_per_transpose, dim1=tiles_across_cols, dim2=tiles_across_rows
+        //   src strides: [8, tile_width*elem, N*tile_width*elem]
+        //   dst strides: [8, M*tile_width*elem, tile_width*elem]
+        {
+            uint32_t tile_w = 8;
+            uint32_t elem_bits = elem * 8;
+            uint32_t tpt = (tile_w * tile_w * elem_bits + 511) / 512; // transfers per transpose
+
+            // Disable all, then enable transposer on reader side
+            BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
+            xdma_disable_all_extensions();
+            xdma_enable_src_ext(0, NULL);
+
+            uint32_t spatial_stride_src = N * elem;
+            uint32_t spatial_stride_dst = M * elem;
+
+            uint32_t t_strides_src[3] = {
+                8,                          // dim0: within one transfer
+                tile_w * elem,              // dim1: next tile horizontally
+                N * tile_w * elem           // dim2: next tile-row
+            };
+            uint32_t t_bounds_src[3] = {
+                tpt,                        // transfers per 8×8 tile
+                N / tile_w,                 // tiles across columns
+                M / tile_w                  // tiles across rows
+            };
+
+            // Writer: transposed tile placement
+            // After transpose, each 8×8 block's rows/cols are swapped.
+            // dim1 stride = M*tile_w*elem (stride to next column-block in transposed output)
+            // dim2 stride = tile_w*elem   (stride to next row-block in transposed output)
+            uint32_t t_strides_dst[3] = {
+                8,                          // dim0: within one transfer
+                M * tile_w * elem,          // dim1: next column-block in output
+                tile_w * elem               // dim2: next row-block in output
+            };
+            uint32_t t_bounds_dst[3] = {
+                tpt,
+                N / tile_w,
+                M / tile_w
+            };
+
+            xdma_memcpy_nd_full_addr(
+                src_addr, dst_addr,
+                spatial_stride_src, spatial_stride_dst,
+                3, t_strides_src, t_bounds_src,
+                3, t_strides_dst, t_bounds_dst,
+                0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF
+            );
+            BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
+
+            BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
+            int task_id = xdma_start();
+            xdma_wait_task(src_addr, dst_addr, task_id);
+            BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
+
+            // Disable transposer after use
+            xdma_disable_src_ext(0);
+        }
+#else
+        // ── CPU fallback (no Transposer extension) ──
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
         volatile uint8_t *src = (volatile uint8_t *)(uint32_t)src_addr;
         volatile uint8_t *dst = (volatile uint8_t *)(uint32_t)dst_addr;
@@ -1736,6 +1810,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_transpose_2d(void *arg)
             }
         }
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
+#endif
         return BINGO_RET_SUCC;
     } else {
         printf_safe("[Cluster %d Core %d]: Error! transpose_2d should be called from DM core!\r\n",
@@ -1798,6 +1873,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_submatrix_2d(void *arg)
 
 
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
+        xdma_disable_all_extensions();
         xdma_memcpy_nd_full_addr(
             src_addr, dst_addr,
             spatial_stride_src, spatial_stride_dst,
@@ -1860,6 +1936,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_expand_2d(void *arg)
 
 
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
+        xdma_disable_all_extensions();
         xdma_memcpy_nd_full_addr(
             src_addr, dst_addr,
             spatial_stride_src, spatial_stride_dst,
@@ -1934,6 +2011,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_concat_2d(void *arg)
 
 
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
+        xdma_disable_all_extensions();
         xdma_memcpy_nd_full_addr(
             src_addr, dst_addr,
             spatial_stride_src, spatial_stride_dst,
@@ -2019,6 +2097,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_pad_2d(void *arg)
 
 
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
+        xdma_disable_all_extensions();
         xdma_memcpy_nd_full_addr(
             src_addr, dst_interior,
             spatial_stride_src, spatial_stride_dst,
@@ -2086,6 +2165,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_gather_2d(void *arg)
 
 
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
+        xdma_disable_all_extensions();
         xdma_memcpy_nd_full_addr(
             src_base, dst_addr,
             spatial_stride_src, spatial_stride_dst,
