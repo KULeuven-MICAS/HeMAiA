@@ -95,8 +95,8 @@ class DiGraphWrapper(Generic[T], DiGraph):
     def remove_nodes_from(self, nodes: Iterator[T]) -> None:  # pylint: disable=W0246
         super().remove_nodes_from(nodes)  # type: ignore
 
-    def add_edge(self, edge_from: T, edge_to: T) -> None:  # type: ignore # pylint: disable=W0246
-        super().add_edge(edge_from, edge_to)  # type: ignore
+    def add_edge(self, edge_from: T, edge_to: T, **attr) -> None:  # type: ignore # pylint: disable=W0246
+        super().add_edge(edge_from, edge_to, **attr)  # type: ignore
 
     def add_edges_from(  # type: ignore # pylint: disable=W0246
         self,

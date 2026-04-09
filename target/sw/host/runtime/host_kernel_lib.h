@@ -4,84 +4,90 @@
 #include "uart.h"
 #include "heterogeneous_runtime.h"
 #include "perf_tracing.h"
+#include "libbingo/bingo_utils.h"  // bingo_cerf_update()
 #define EXIT_CODE_SUCC 1
 #define EXIT_CODE_FAIL 2
 // Host Bingo Kernel Implementations
 // Normally the functions ret with 0
 // Only the exit kernel returns the exit code defined by EXIT_CODE_SUCC, for now it is 1
 static inline uint64_t __host_bingo_kernel_dummy(void *arg){
-    // This is a dummy kernel to print a string from the host
-    // Arg[0]: Dummy input
+    // Arg[0]: dummy_input, Arg[1]: scratchpad_ptr
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
     uint64_t dummy_input = ((uint64_t *)arg)[0];
+    bingo_kernel_scratchpad_t* sp = (bingo_kernel_scratchpad_t*)(uintptr_t)((uint64_t *)arg)[1];
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
     printf_safe("Chip(%x, %x): [Host] Kernel Dummy: %d\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), dummy_input);
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
+    sp->return_value = 0;
+    sp->num_return_values = 0;
     return 0;
 }
 
 static inline uint64_t __host_bingo_kernel_exit(void *arg){
-    // This is a special kernel to exit the host kernel loop
-    // We can add more clean up work here if needed
+    // Arg[0]: exit_code, Arg[1]: scratchpad_ptr
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
     uint64_t exit_code = ((uint64_t *)arg)[0];
+    bingo_kernel_scratchpad_t* sp = (bingo_kernel_scratchpad_t*)(uintptr_t)((uint64_t *)arg)[1];
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
     printf_safe("Chip(%x, %x): [Host] Kernel Exit called with exit code %d\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), exit_code);
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
+    sp->return_value = EXIT_CODE_SUCC;
+    sp->num_return_values = 0;
     return EXIT_CODE_SUCC;
 }
 
 static inline uint64_t __host_bingo_kernel_entry(void *arg){
-    // This is a special kernel to book keeping the start CC of the Workload
-    // In the future we can add more contents here when we need to do more initialization work
+    // Arg[0]: start_cc_reg_addr, Arg[1]: scratchpad_ptr
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
+    bingo_kernel_scratchpad_t* sp = (bingo_kernel_scratchpad_t*)(uintptr_t)((uint64_t *)arg)[1];
     uint64_t start_cc;
     asm volatile("csrr %0, mcycle" : "=r"(start_cc));
     printf_safe("Chip(%x, %x): [Host] Start at %d CC\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), start_cc);
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
+    sp->return_value = (uint32_t)start_cc;
+    sp->num_return_values = 0;
     return 0;
-
 }
 static inline uint64_t __host_bingo_kernel_check_result(void *arg){
-    // Check the output data against the golden data
-    // Arg0: uint64_t golden_data_addr
-    // Arg1: uint64_t output_data_addr
-    // Arg2: uint64_t data_size in Byte
+    // Arg0-3: golden, output, size, name; Arg4: scratchpad_ptr
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
     uint8_t* golden_data_addr = (uint8_t*)(((uint64_t *)arg)[0]);
     uint8_t* output_data_addr = (uint8_t*)(((uint64_t *)arg)[1]);
     uint64_t data_size = ((uint64_t *)arg)[2];
+    const char* name = (const char*)(((uint64_t *)arg)[3]);
+    bingo_kernel_scratchpad_t* sp = (bingo_kernel_scratchpad_t*)(uintptr_t)((uint64_t *)arg)[4];
+    if (!name) name = "?";
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
     uint32_t err = 0;
     for (uint64_t i = 0; i < data_size; i++) {
         if (output_data_addr[i] != golden_data_addr[i]) {
             err++;
-            printf_safe("Unequals. output[%d] = %d, golden[%d] = %d\n", i,
-                   output_data_addr[i], i, golden_data_addr[i]);
+            printf_safe("[%s] output[%d]=%d, golden[%d]=%d\n",
+                   name, i, output_data_addr[i], i, golden_data_addr[i]);
         }
     }
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
+    sp->return_value = err;
+    sp->num_return_values = 0;
     if (err == 0) {
-        printf_safe("Chip(%x, %x): [Host] Kernel Check Result: PASS! All %d bytes match.\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), data_size);
+        printf_safe("[Host] Check [%s]: PASS (%d bytes)\r\n", name, data_size);
         return 0;
     } else {
-        printf_safe("Chip(%x, %x): [Host] Kernel Check Result: FAIL! %d mismatches found out of %d bytes.\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), err, data_size);
+        printf_safe("[Host] Check [%s]: FAIL (%d / %d bytes)\r\n", name, err, data_size);
         return EXIT_CODE_FAIL;
     }
 }
 
 static inline uint64_t __host_bingo_kernel_idma(void *arg){
-    // SoC DMA memcpy
-    // Arg0: uint64_t src_addr
-    // Arg1: uint64_t dst_addr
-    // Arg2: uint64_t size in Byte
+    // Arg0-2: src, dst, size; Arg3: scratchpad_ptr
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
     uint64_t src_addr = ((uint64_t *)arg)[0];
     uint64_t dst_addr = ((uint64_t *)arg)[1];
     uint64_t size = ((uint64_t *)arg)[2];
+    bingo_kernel_scratchpad_t* sp = (bingo_kernel_scratchpad_t*)(uintptr_t)((uint64_t *)arg)[3];
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
     BINGO_TRACE_MARKER(BINGO_TRACE_HOST_IDMA_CFG_START);
@@ -207,16 +213,13 @@ static inline uint64_t __host_bingo_kernel_fp32_rmsnorm(void *arg){
 }
 
 static inline uint64_t __host_bingo_kernel_fp32_softmax(void *arg){
-    // Softmax along last dimension using RVV (follows Ara softmax pattern)
-    // Arg0: float* input_addr
-    // Arg1: float* output_addr
-    // Arg2: uint64_t num_rows (channels for Ara softmax convention)
-    // Arg3: uint64_t row_length (innerSize)
+    // Arg0-3: input, output, num_rows, row_length; Arg4: scratchpad_ptr
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
     float* input  = (float*)(((uint64_t *)arg)[0]);
     float* output = (float*)(((uint64_t *)arg)[1]);
     uint64_t num_rows      = ((uint64_t *)arg)[2];
     uint64_t row_length    = ((uint64_t *)arg)[3];
+    bingo_kernel_scratchpad_t* sp = (bingo_kernel_scratchpad_t*)(uintptr_t)((uint64_t *)arg)[4];
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
@@ -266,6 +269,9 @@ static inline uint64_t __host_bingo_kernel_fp32_softmax(void *arg){
         }
     }
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
+    // Write output info to scratchpad for successor gating kernels
+    sp->return_value = (uint32_t)(uintptr_t)output;
+    sp->num_return_values = num_rows * row_length;
     return 0;
 }
 
@@ -338,6 +344,37 @@ DEFINE_FP32_BINARY_KERNEL(mul, __riscv_vfmul_vv_f32m1)
 DEFINE_FP32_BINARY_KERNEL(div, __riscv_vfdiv_vv_f32m1)
 DEFINE_FP32_BINARY_KERNEL(max, __riscv_vfmax_vv_f32m1)
 DEFINE_FP32_BINARY_KERNEL(min, __riscv_vfmin_vv_f32m1)
+
+// ---- INT32 elementwise add (for inter-cluster partial-D accumulation) ----
+// Used when DSE picks K-split tilings: each cluster produces a partial D
+// in INT32, and partial Ds from clusters covering the same (M,N) region
+// must be summed with this kernel to yield the final INT32 D.
+// Arg layout (same as FP32 binary): a_addr, b_addr, output_addr, num_elements
+static inline uint64_t __host_bingo_kernel_int32_add(void *arg){
+    // Arg0-3: a, b, output, num_elements; Arg4: scratchpad_ptr
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+    int32_t* a      = (int32_t*)(((uint64_t *)arg)[0]);
+    int32_t* b      = (int32_t*)(((uint64_t *)arg)[1]);
+    int32_t* output = (int32_t*)(((uint64_t *)arg)[2]);
+    uint64_t num_elements = ((uint64_t *)arg)[3];
+    bingo_kernel_scratchpad_t* sp = (bingo_kernel_scratchpad_t*)(uintptr_t)((uint64_t *)arg)[4];
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
+    uint64_t avl = num_elements;
+    int32_t *a_ptr = a, *b_ptr = b, *o_ptr = output;
+    for (size_t vl = __riscv_vsetvl_e32m1(avl); avl > 0;
+         avl -= vl, a_ptr += vl, b_ptr += vl, o_ptr += vl) {
+        vl = __riscv_vsetvl_e32m1(avl);
+        vint32m1_t va = __riscv_vle32_v_i32m1(a_ptr, vl);
+        vint32m1_t vb = __riscv_vle32_v_i32m1(b_ptr, vl);
+        vint32m1_t result = __riscv_vadd_vv_i32m1(va, vb, vl);
+        __riscv_vse32_v_i32m1(o_ptr, result, vl);
+    }
+    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
+    sp->return_value = (uint32_t)(uintptr_t)output;
+    sp->num_return_values = num_elements;
+    return 0;
+}
 
 // ---- Generic unary elementwise: out[i] = op(x[i]) ----
 // Arg layout: input_addr, output_addr, num_elements
@@ -506,6 +543,206 @@ static inline uint64_t __host_bingo_kernel_fp32_reduce_mean(void *arg){
     }
     *output = acc / (float)num_elements;
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
+    return 0;
+}
+
+// ============================================================
+// Data type conversion kernels for mixed-precision inference
+// FP32 <-> INT8 at the boundary between CVA6 and VersaCore
+// ============================================================
+
+static inline uint64_t __host_bingo_kernel_fp32_quantize(void *arg){
+    // Arg0-3: input, output, scale_out, num_elements; Arg4: scratchpad_ptr
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+    float*   input      = (float*)(((uint64_t *)arg)[0]);
+    int8_t*  output     = (int8_t*)(((uint64_t *)arg)[1]);
+    float*   scale_out  = (float*)(((uint64_t *)arg)[2]);
+    uint64_t num_elements = ((uint64_t *)arg)[3];
+    bingo_kernel_scratchpad_t* sp = (bingo_kernel_scratchpad_t*)(uintptr_t)((uint64_t *)arg)[4];
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+
+    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
+
+    // Pass 1: find max(|x|) using RVV
+    float abs_max = 0.0f;
+    uint64_t avl = num_elements;
+    float *ptr = input;
+    for (size_t vl = __riscv_vsetvl_e32m1(avl); avl > 0; avl -= vl, ptr += vl) {
+        vl = __riscv_vsetvl_e32m1(avl);
+        vfloat32m1_t v = __riscv_vle32_v_f32m1(ptr, vl);
+        vfloat32m1_t neg_v = __riscv_vfneg_v_f32m1(v, vl);
+        vfloat32m1_t abs_v = __riscv_vfmax_vv_f32m1(v, neg_v, vl);
+        vfloat32m1_t init = __riscv_vfmv_v_f_f32m1(abs_max, vl);
+        vfloat32m1_t rmax = __riscv_vfredmax_vs_f32m1_f32m1(abs_v, init, vl);
+        abs_max = __riscv_vfmv_f_s_f32m1_f32(rmax);
+    }
+
+    // Compute scale
+    float scale = abs_max / 127.0f;
+    if (scale < 1e-10f) scale = 1e-10f;  // avoid div-by-zero for near-zero input
+    *scale_out = scale;
+    float inv_scale = 1.0f / scale;
+
+    // Pass 2: quantize — scale, round, clamp, narrow to int8
+    avl = num_elements;
+    ptr = input;
+    int8_t *o_ptr = output;
+    for (size_t vl = __riscv_vsetvl_e32m1(avl); avl > 0;
+         avl -= vl, ptr += vl, o_ptr += vl) {
+        vl = __riscv_vsetvl_e32m1(avl);
+        vfloat32m1_t v = __riscv_vle32_v_f32m1(ptr, vl);
+        vfloat32m1_t scaled = __riscv_vfmul_vf_f32m1(v, inv_scale, vl);
+        // Round to nearest integer
+        vint32m1_t rounded = __riscv_vfcvt_x_f_v_i32m1(scaled, vl);
+        // Clamp to [-128, 127]
+        vint32m1_t lo = __riscv_vmv_v_x_i32m1(-128, vl);
+        vint32m1_t hi = __riscv_vmv_v_x_i32m1(127, vl);
+        rounded = __riscv_vmax_vv_i32m1(rounded, lo, vl);
+        rounded = __riscv_vmin_vv_i32m1(rounded, hi, vl);
+        // Narrow int32 -> int8 via scalar extract (safe for initial bring-up)
+        for (size_t i = 0; i < vl; i++) {
+            int32_t val = __riscv_vmv_x_s_i32m1_i32(
+                __riscv_vslidedown_vx_i32m1(rounded, i, vl));
+            o_ptr[i] = (int8_t)val;
+        }
+    }
+
+    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
+    sp->return_value = (uint32_t)(uintptr_t)output;
+    sp->num_return_values = num_elements;
+    return 0;
+}
+
+static inline uint64_t __host_bingo_kernel_int32_dequantize(void *arg){
+    // Dequantize INT32 GEMM accumulator to FP32
+    // y[i] = int32_input[i] * combined_scale
+    // where combined_scale = scale_a * scale_b (pre-computed, stored at scale_addr)
+    // Arg0-3: input, output, scale, num_elements; Arg4: scratchpad_ptr
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+    int32_t* input     = (int32_t*)(((uint64_t *)arg)[0]);
+    float*   output    = (float*)(((uint64_t *)arg)[1]);
+    float*   scale_ptr = (float*)(((uint64_t *)arg)[2]);
+    uint64_t num_elements = ((uint64_t *)arg)[3];
+    bingo_kernel_scratchpad_t* sp = (bingo_kernel_scratchpad_t*)(uintptr_t)((uint64_t *)arg)[4];
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+
+    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
+    float combined_scale = *scale_ptr;
+
+    uint64_t avl = num_elements;
+    int32_t *i_ptr = input;
+    float   *o_ptr = output;
+    for (size_t vl = __riscv_vsetvl_e32m1(avl); avl > 0;
+         avl -= vl, i_ptr += vl, o_ptr += vl) {
+        vl = __riscv_vsetvl_e32m1(avl);
+        vint32m1_t vi = __riscv_vle32_v_i32m1(i_ptr, vl);
+        vfloat32m1_t vf = __riscv_vfcvt_f_x_v_f32m1(vi, vl);
+        vfloat32m1_t result = __riscv_vfmul_vf_f32m1(vf, combined_scale, vl);
+        __riscv_vse32_v_f32m1(o_ptr, result, vl);
+    }
+
+    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
+    sp->return_value = (uint32_t)(uintptr_t)output;
+    sp->num_return_values = num_elements;
+    return 0;
+}
+
+// ================================================================
+// DARTS Unified CERF Gating Kernel
+// ================================================================
+// Supports multiple activation modes via args->mode:
+//   MODE_TOP_K (0):    Read logits from predecessor scratchpad, select top-k
+//   MODE_THRESHOLD (1): Read confidence from predecessor scratchpad, activate if < threshold
+//   MODE_STATIC (2):   Use compile-time cerf_write_mask directly
+//
+// Args layout (__host_bingo_kernel_cerf_gating_args_t):
+//   [0] mode
+//   [1] pred_scratchpad_addr (unused for static)
+//   [2] cerf_controlled_mask
+//   [3] top_k_or_threshold: top_k | threshold_bits | cerf_write_mask
+//   [4] cerf_group_ids_addr: &cerf_group_ids[] | unused (0)
+//   [5] cond_activation_addr: per-expert uint8_t[] (SW guard for group sharing)
+//   [6] scratchpad_ptr
+//
+// Two-level gating (for >32 experts with CERF group sharing):
+//   Level 1 (HW CERF): Inactive groups skip entire expert clusters at zero cost.
+//   Level 2 (SW guard): Within active groups, only selected experts compute.
+//     The gating kernel writes 1/0 per expert to cond_activation_addr[].
+//     Expert kernels read their slot and early-return if 0.
+//     When experts <= 32 (no sharing), cond_activation_addr can be 0 (skip SW guard).
+static inline uint64_t __host_bingo_kernel_cerf_gating(void *arg){
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+    uint64_t *args = (uint64_t *)arg;
+    uint32_t mode = (uint32_t)args[0];
+    bingo_kernel_scratchpad_t* pred_sp = (bingo_kernel_scratchpad_t*)(uintptr_t)args[1];
+    uint32_t cerf_controlled_mask = (uint32_t)args[2];
+    uint64_t top_k_or_threshold = args[3];
+    uint64_t cerf_group_ids_addr = args[4];
+    uint8_t *cond_activation = (uint8_t *)(uintptr_t)args[5];
+    bingo_kernel_scratchpad_t* sp = (bingo_kernel_scratchpad_t*)(uintptr_t)args[6];
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+
+    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
+
+    uint32_t cerf_write_mask = 0;
+
+    if (mode == BINGO_GATING_MODE_TOP_K) {
+        uint32_t top_k = (uint32_t)top_k_or_threshold;
+        uint8_t *cerf_group_ids = (uint8_t *)(uintptr_t)cerf_group_ids_addr;
+        float *logits = (float *)(uintptr_t)pred_sp->return_value;
+        uint32_t num_experts = pred_sp->num_return_values;
+        if (num_experts > 256) num_experts = 256;  // sanity bound
+
+        // Clear per-expert activation array (all experts start as inactive)
+        if (cond_activation) {
+            for (uint32_t e = 0; e < num_experts; e++)
+                cond_activation[e] = 0;
+        }
+
+        // Top-k selection: find k experts with highest logit values
+        bool used[256] = {false};
+        for (uint32_t k = 0; k < top_k; k++) {
+            float best = -1e30f;
+            uint32_t best_idx = 0;
+            for (uint32_t e = 0; e < num_experts; e++) {
+                if (!used[e] && logits[e] > best) {
+                    best = logits[e];
+                    best_idx = e;
+                }
+            }
+            // Level 1: Mark the CERF group of this expert as active (HW skip)
+            cerf_write_mask |= (1 << cerf_group_ids[best_idx]);
+            // Level 2: Mark this specific expert as active (SW guard)
+            if (cond_activation)
+                cond_activation[best_idx] = 1;
+            used[best_idx] = true;
+        }
+        BINGO_PRINTF(1, "Chip(%x, %x): [Host] CERF Gating top_k: n=%d, k=%d, ctrl=0x%04x, write=0x%04x\r\n",
+               get_current_chip_loc_x(), get_current_chip_loc_y(),
+               num_experts, top_k, cerf_controlled_mask, cerf_write_mask);
+
+    } else if (mode == BINGO_GATING_MODE_THRESHOLD) {
+        union { uint32_t u; float f; } thresh_conv;
+        thresh_conv.u = (uint32_t)top_k_or_threshold;
+        float threshold = thresh_conv.f;
+        float *confidence = (float *)(uintptr_t)pred_sp->return_value;
+
+        if (*confidence < threshold) {
+            cerf_write_mask = cerf_controlled_mask;  // activate all → continue
+        }
+
+    } else if (mode == BINGO_GATING_MODE_STATIC) {
+        cerf_write_mask = (uint32_t)top_k_or_threshold;
+    }
+
+    // Write CERF registers: single bitmask update (read-modify-write)
+    bingo_cerf_update(cerf_controlled_mask, cerf_write_mask);
+
+    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
+    // Store per-expert activation array pointer in scratchpad so expert kernels
+    // can find it via the gating node's scratchpad
+    sp->return_value = (uint32_t)(uintptr_t)cond_activation;
+    sp->num_return_values = 0;
     return 0;
 }
 

@@ -1,0 +1,12 @@
+# MoE4: 4 experts, top-2 — normal CERF (1 group per expert, no sharing)
+{
+    array_shape: 1
+    num_experts: 4
+    top_k: 2
+    M: 1
+    K: 2
+    N: 1
+    transposed_A: 0
+    transposed_B: 0
+    accumPrevC: 0
+}

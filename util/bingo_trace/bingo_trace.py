@@ -152,6 +152,8 @@ def main():
     parser.add_argument("--trace-header", required=True, help="Path to perf_tracing.h")
     parser.add_argument("--log-dir", required=True, help="Directory containing trace log files")
     parser.add_argument("--output", required=True, help="Output JSON file path")
+    parser.add_argument("--cores-per-cluster", type=int, default=2,
+                        help="Number of device cores per cluster (default: 2)")
     
     args = parser.parse_args()
     
@@ -184,12 +186,23 @@ def main():
         # TID = Hart ID
         # Metadata mostly
         
-        print(f"Processing {basename} (Chip {chip_id}, Hart {hart_id})...")
+        # Map hart_id to cluster/core label
+        # Hart 0: Host Core
+        # Hart 1..N: device cores, grouped by cluster
+        cpc = args.cores_per_cluster
+        if hart_id == 0:
+            tid_label = "Host Core"
+        else:
+            cluster = (hart_id - 1) // cpc
+            core_idx = (hart_id - 1) % cpc
+            tid_label = f"Cluster {cluster} Core {core_idx}"
+
+        print(f"Processing {basename} (Chip {chip_id}, {tid_label})...")
         file_events = parse_trace_file(trace_file, event_map)
-        
+
         # Convert B/E pairs to Complete (X) events to calculate duration
         file_events = convert_to_complete_events(file_events)
-        
+
         for ev in file_events:
             perfetto_event = {
                 "name": ev['name'],
@@ -197,7 +210,7 @@ def main():
                 "ph": ev['ph'],
                 "ts": ev['ts'], # ns
                 "pid": f"Chip {chip_id}",
-                "tid": f"Core {hart_id}" if hart_id != 0 else "Host Core",
+                "tid": tid_label,
                 "args": {}
             }
             

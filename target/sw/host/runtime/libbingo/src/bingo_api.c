@@ -882,3 +882,30 @@ uint32_t bingo_hw_scheduler(uint64_t* host_arg_list, uint64_t* host_kernel_list,
     }
     return err;
 }
+
+/////////////////////////////
+// BINGO CERF Runtime API  //
+/////////////////////////////
+
+void bingo_cerf_write_mask(uint32_t mask) {
+    uintptr_t state_addr = (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_cerf_state_addr());
+    uintptr_t en_addr    = (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_cerf_write_en_addr());
+    writew(mask, state_addr);
+    writew(1, en_addr);
+    asm volatile("fence" ::: "memory");
+}
+
+void bingo_cerf_update(uint32_t controlled_mask, uint32_t write_mask) {
+    uintptr_t status_addr = (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_cerf_status_addr());
+    uintptr_t state_addr  = (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_cerf_state_addr());
+    uintptr_t en_addr     = (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_cerf_write_en_addr());
+    uint32_t current = readw(status_addr);  // read actual HW state
+    uint32_t updated = (current & ~controlled_mask) | (write_mask & controlled_mask);
+    writew(updated, state_addr);
+    writew(1, en_addr);
+    asm volatile("fence" ::: "memory");
+}
+
+void bingo_cerf_clear_all(void) {
+    bingo_cerf_write_mask(0);
+}

@@ -8,7 +8,37 @@ class BingoKernelArgs(ABC):
     Abstract base class for Kernel Arguments.
     Subclasses define the specific arguments for each kernel type and how they map to C structs.
     """
-    
+
+    # Internal: set by the compiler during C emission, not by users.
+    _scratchpad_c_expr: str = None    # C expr for this kernel's scratchpad pointer
+    _gating_sp_c_expr: str = None     # C expr for gating kernel's scratchpad (SW guard)
+    _cond_node_index: int = None         # This expert's index in the activation array
+
+    def get_c_field_assignments_with_scratchpad(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        """Return field assignments including SW guard + scratchpad fields.
+
+        For device kernels (uint32_t fields): gating_sp_addr, cond_node_index, scratchpad_ptr
+        For host kernels (uint64_t fields): scratchpad_ptr only (host kernels don't need SW guard)
+        The compiler sets _gating_sp_c_expr/_cond_node_index/_scratchpad_c_expr before calling this.
+        """
+        assignments = self.get_c_field_assignments(handle_name_map)
+        # SW guard fields — only for device kernels (struct name starts with __snax)
+        # Host kernel structs don't have gating_sp_addr/cond_node_index fields.
+        is_device = self.get_struct_name().startswith("__snax")
+        if is_device:
+            if self._gating_sp_c_expr is not None:
+                assignments["gating_sp_addr"] = self._gating_sp_c_expr
+            else:
+                assignments["gating_sp_addr"] = "0"
+            if self._cond_node_index is not None:
+                assignments["cond_node_index"] = str(self._cond_node_index)
+            else:
+                assignments["cond_node_index"] = "0"
+        # Scratchpad pointer (always last field, both host and device)
+        if self._scratchpad_c_expr is not None:
+            assignments["scratchpad_ptr"] = self._scratchpad_c_expr
+        return assignments
+
     @abstractmethod
     def get_struct_name(self) -> str:
         """Returns the C struct type definition name (e.g. __snax_kernel_dummy_args_t)"""
@@ -459,6 +489,161 @@ class SnaxBingoKernelXdmaGather2dArgs(BingoKernelArgs):
         return assignments
 
 
+# ══════════════════════════════════════════════════════════════════════
+# VersaCore blocked-layout conversion kernels (tile-shape-parameterized)
+#
+# Six primitive conversions between row-major and the three VersaCore
+# blocked layouts {A, B, D}. All kernels take tile dimensions (M_T, K_T,
+# N_T) and array-shape dims (meshRow, tileSize, meshCol) so they work
+# for any DSE-chosen tiling. See HeMAiA/util/sim/layout_convert.py for
+# the Python reference.
+# ══════════════════════════════════════════════════════════════════════
+
+
+class SnaxBingoKernelXdmaDToRowMajorArgs(BingoKernelArgs):
+    """D-layout → row-major. D[m,n,r,c] -> R[m*meshRow+r, n*meshCol+c]."""
+    def __init__(self, src_addr: Union[BingoMemAlloc, int],
+                 dst_addr: Union[BingoMemAlloc, int],
+                 M_T: int, N_T: int, meshRow: int, meshCol: int,
+                 elem_bytes: int = 1):
+        self.src_addr = src_addr; self.dst_addr = dst_addr
+        self.M_T = M_T; self.N_T = N_T
+        self.meshRow = meshRow; self.meshCol = meshCol
+        self.elem_bytes = elem_bytes
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_xdma_d_to_row_major_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.src_addr, "src_addr", a, handle_name_map)
+        self._process_addr(self.dst_addr, "dst_addr", a, handle_name_map)
+        a["M_T"] = str(self.M_T); a["N_T"] = str(self.N_T)
+        a["meshRow"] = str(self.meshRow); a["meshCol"] = str(self.meshCol)
+        a["elem_bytes"] = str(self.elem_bytes)
+        return a
+
+
+class SnaxBingoKernelXdmaRowMajorToAArgs(BingoKernelArgs):
+    """row-major → A-layout. R[i,j] -> A[i/meshRow, j/tileSize, i%meshRow, j%tileSize]."""
+    def __init__(self, src_addr: Union[BingoMemAlloc, int],
+                 dst_addr: Union[BingoMemAlloc, int],
+                 M_T: int, K_T: int, meshRow: int, tileSize: int,
+                 elem_bytes: int = 1):
+        self.src_addr = src_addr; self.dst_addr = dst_addr
+        self.M_T = M_T; self.K_T = K_T
+        self.meshRow = meshRow; self.tileSize = tileSize
+        self.elem_bytes = elem_bytes
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_xdma_row_major_to_a_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.src_addr, "src_addr", a, handle_name_map)
+        self._process_addr(self.dst_addr, "dst_addr", a, handle_name_map)
+        a["M_T"] = str(self.M_T); a["K_T"] = str(self.K_T)
+        a["meshRow"] = str(self.meshRow); a["tileSize"] = str(self.tileSize)
+        a["elem_bytes"] = str(self.elem_bytes)
+        return a
+
+
+class SnaxBingoKernelXdmaRowMajorToBArgs(BingoKernelArgs):
+    """row-major → B-layout. R[i,j] -> B[j/meshCol, i/tileSize, j%meshCol, i%tileSize]."""
+    def __init__(self, src_addr: Union[BingoMemAlloc, int],
+                 dst_addr: Union[BingoMemAlloc, int],
+                 K_T: int, N_T: int, tileSize: int, meshCol: int,
+                 elem_bytes: int = 1):
+        self.src_addr = src_addr; self.dst_addr = dst_addr
+        self.K_T = K_T; self.N_T = N_T
+        self.tileSize = tileSize; self.meshCol = meshCol
+        self.elem_bytes = elem_bytes
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_xdma_row_major_to_b_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.src_addr, "src_addr", a, handle_name_map)
+        self._process_addr(self.dst_addr, "dst_addr", a, handle_name_map)
+        a["K_T"] = str(self.K_T); a["N_T"] = str(self.N_T)
+        a["tileSize"] = str(self.tileSize); a["meshCol"] = str(self.meshCol)
+        a["elem_bytes"] = str(self.elem_bytes)
+        return a
+
+
+class SnaxBingoKernelXdmaAToRowMajorArgs(BingoKernelArgs):
+    """A-layout → row-major (inverse of row_major_to_a)."""
+    def __init__(self, src_addr: Union[BingoMemAlloc, int],
+                 dst_addr: Union[BingoMemAlloc, int],
+                 M_T: int, K_T: int, meshRow: int, tileSize: int,
+                 elem_bytes: int = 1):
+        self.src_addr = src_addr; self.dst_addr = dst_addr
+        self.M_T = M_T; self.K_T = K_T
+        self.meshRow = meshRow; self.tileSize = tileSize
+        self.elem_bytes = elem_bytes
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_xdma_a_to_row_major_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.src_addr, "src_addr", a, handle_name_map)
+        self._process_addr(self.dst_addr, "dst_addr", a, handle_name_map)
+        a["M_T"] = str(self.M_T); a["K_T"] = str(self.K_T)
+        a["meshRow"] = str(self.meshRow); a["tileSize"] = str(self.tileSize)
+        a["elem_bytes"] = str(self.elem_bytes)
+        return a
+
+
+class SnaxBingoKernelXdmaBToRowMajorArgs(BingoKernelArgs):
+    """B-layout → row-major (inverse of row_major_to_b)."""
+    def __init__(self, src_addr: Union[BingoMemAlloc, int],
+                 dst_addr: Union[BingoMemAlloc, int],
+                 K_T: int, N_T: int, tileSize: int, meshCol: int,
+                 elem_bytes: int = 1):
+        self.src_addr = src_addr; self.dst_addr = dst_addr
+        self.K_T = K_T; self.N_T = N_T
+        self.tileSize = tileSize; self.meshCol = meshCol
+        self.elem_bytes = elem_bytes
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_xdma_b_to_row_major_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.src_addr, "src_addr", a, handle_name_map)
+        self._process_addr(self.dst_addr, "dst_addr", a, handle_name_map)
+        a["K_T"] = str(self.K_T); a["N_T"] = str(self.N_T)
+        a["tileSize"] = str(self.tileSize); a["meshCol"] = str(self.meshCol)
+        a["elem_bytes"] = str(self.elem_bytes)
+        return a
+
+
+class SnaxBingoKernelXdmaRowMajorToDArgs(BingoKernelArgs):
+    """row-major → D-layout (inverse of d_to_row_major)."""
+    def __init__(self, src_addr: Union[BingoMemAlloc, int],
+                 dst_addr: Union[BingoMemAlloc, int],
+                 M_T: int, N_T: int, meshRow: int, meshCol: int,
+                 elem_bytes: int = 1):
+        self.src_addr = src_addr; self.dst_addr = dst_addr
+        self.M_T = M_T; self.N_T = N_T
+        self.meshRow = meshRow; self.meshCol = meshCol
+        self.elem_bytes = elem_bytes
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_xdma_row_major_to_d_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.src_addr, "src_addr", a, handle_name_map)
+        self._process_addr(self.dst_addr, "dst_addr", a, handle_name_map)
+        a["M_T"] = str(self.M_T); a["N_T"] = str(self.N_T)
+        a["meshRow"] = str(self.meshRow); a["meshCol"] = str(self.meshCol)
+        a["elem_bytes"] = str(self.elem_bytes)
+        return a
+
+
 # HOST BINGO DUMMY
 class HostBingoKernelDummyArgs(BingoKernelArgs):
     def __init__(self, dummy_input: int):
@@ -475,10 +660,12 @@ class HostBingoKernelCheckResultArgs(BingoKernelArgs):
     def __init__(self,
                  golden_data_addr: Union[BingoMemAlloc, int],
                  output_data_addr: Union[BingoMemAlloc, int],
-                 data_size: int):
+                 data_size: int,
+                 name: str = ""):
         self.golden_data_addr = golden_data_addr
         self.output_data_addr = output_data_addr
         self.data_size = data_size
+        self.name = name
 
     def get_struct_name(self) -> str:
         return "__host_bingo_kernel_check_result_args_t"
@@ -488,6 +675,8 @@ class HostBingoKernelCheckResultArgs(BingoKernelArgs):
         self._process_addr(self.golden_data_addr, "golden_data_addr", assignments, handle_name_map, split_64bit=False, as_64bit=True)
         self._process_addr(self.output_data_addr, "output_data_addr", assignments, handle_name_map, split_64bit=False, as_64bit=True)
         assignments["data_size"] = str(self.data_size)
+        if self.name:
+            assignments["name_addr"] = f'(uint64_t)"{self.name}"'
         return assignments
     
 # HOST BINGO IDMA
@@ -508,4 +697,209 @@ class HostBingoKernelIdmaArgs(BingoKernelArgs):
         self._process_addr(self.src_addr, "src_addr", assignments, handle_name_map, split_64bit=False, as_64bit=True)
         self._process_addr(self.dst_addr, "dst_addr", assignments, handle_name_map, split_64bit=False, as_64bit=True)
         assignments["size"] = str(self.size)
+        return assignments
+
+
+# HOST BINGO FP32 Quantize (FP32 -> INT8)
+class HostBingoKernelFp32QuantizeArgs(BingoKernelArgs):
+    def __init__(self,
+                 input_addr: Union[BingoMemAlloc, BingoMemSymbol, int],
+                 output_addr: Union[BingoMemAlloc, BingoMemSymbol, int],
+                 scale_out_addr: Union[BingoMemAlloc, BingoMemSymbol, int],
+                 num_elements: int):
+        self.input_addr = input_addr
+        self.output_addr = output_addr
+        self.scale_out_addr = scale_out_addr
+        self.num_elements = num_elements
+
+    def get_struct_name(self) -> str:
+        return "__host_bingo_kernel_fp32_quantize_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        assignments = {}
+        self._process_addr(self.input_addr, "input_addr", assignments, handle_name_map, split_64bit=False, as_64bit=True)
+        self._process_addr(self.output_addr, "output_addr", assignments, handle_name_map, split_64bit=False, as_64bit=True)
+        self._process_addr(self.scale_out_addr, "scale_out_addr", assignments, handle_name_map, split_64bit=False, as_64bit=True)
+        assignments["num_elements"] = str(self.num_elements)
+        return assignments
+
+
+# HOST BINGO INT32 Dequantize (INT32 -> FP32)
+class HostBingoKernelInt32DequantizeArgs(BingoKernelArgs):
+    def __init__(self,
+                 input_addr: Union[BingoMemAlloc, BingoMemSymbol, int],
+                 output_addr: Union[BingoMemAlloc, BingoMemSymbol, int],
+                 scale_addr: Union[BingoMemAlloc, BingoMemSymbol, int],
+                 num_elements: int):
+        self.input_addr = input_addr
+        self.output_addr = output_addr
+        self.scale_addr = scale_addr
+        self.num_elements = num_elements
+
+    def get_struct_name(self) -> str:
+        return "__host_bingo_kernel_int32_dequantize_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        assignments = {}
+        self._process_addr(self.input_addr, "input_addr", assignments, handle_name_map, split_64bit=False, as_64bit=True)
+        self._process_addr(self.output_addr, "output_addr", assignments, handle_name_map, split_64bit=False, as_64bit=True)
+        self._process_addr(self.scale_addr, "scale_addr", assignments, handle_name_map, split_64bit=False, as_64bit=True)
+        assignments["num_elements"] = str(self.num_elements)
+        return assignments
+
+
+# HOST BINGO INT32 elementwise add
+# For inter-cluster partial-D accumulation in K-split GEMM schemes.
+class HostBingoKernelInt32AddArgs(BingoKernelArgs):
+    def __init__(self,
+                 input_a_addr: Union[BingoMemAlloc, BingoMemSymbol, int],
+                 input_b_addr: Union[BingoMemAlloc, BingoMemSymbol, int],
+                 output_addr: Union[BingoMemAlloc, BingoMemSymbol, int],
+                 num_elements: int):
+        self.input_a_addr = input_a_addr
+        self.input_b_addr = input_b_addr
+        self.output_addr = output_addr
+        self.num_elements = num_elements
+
+    def get_struct_name(self) -> str:
+        return "__host_bingo_kernel_int32_add_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.input_a_addr, "input_a_addr", a, handle_name_map, split_64bit=False, as_64bit=True)
+        self._process_addr(self.input_b_addr, "input_b_addr", a, handle_name_map, split_64bit=False, as_64bit=True)
+        self._process_addr(self.output_addr, "output_addr", a, handle_name_map, split_64bit=False, as_64bit=True)
+        a["num_elements"] = str(self.num_elements)
+        return a
+
+
+# HOST BINGO FP32 Softmax (row-wise along last dim, Ara RVV)
+class HostBingoKernelFp32SoftmaxArgs(BingoKernelArgs):
+    def __init__(self,
+                 input_addr: Union[BingoMemAlloc, BingoMemSymbol, int],
+                 output_addr: Union[BingoMemAlloc, BingoMemSymbol, int],
+                 num_rows: int,
+                 row_length: int):
+        self.input_addr = input_addr
+        self.output_addr = output_addr
+        self.num_rows = num_rows
+        self.row_length = row_length
+
+    def get_struct_name(self) -> str:
+        return "__host_bingo_kernel_fp32_softmax_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        assignments = {}
+        self._process_addr(self.input_addr, "input_addr", assignments, handle_name_map, split_64bit=False, as_64bit=True)
+        self._process_addr(self.output_addr, "output_addr", assignments, handle_name_map, split_64bit=False, as_64bit=True)
+        assignments["num_rows"] = str(self.num_rows)
+        assignments["row_length"] = str(self.row_length)
+        return assignments
+
+
+# ================================================================
+# DARTS Tier 1: MoE Gating Kernels
+# ================================================================
+
+# ================================================================
+# DARTS Tier 1: Unified CERF Gating Args
+# ================================================================
+# Maps to __host_bingo_kernel_cerf_gating_args_t with a mode field.
+# The compiler creates the appropriate instance based on cond_dic['mode'].
+
+BINGO_GATING_MODE_TOP_K = 0
+BINGO_GATING_MODE_THRESHOLD = 1
+BINGO_GATING_MODE_STATIC = 2
+
+class HostBingoKernelCerfGatingArgs(BingoKernelArgs):
+    """Unified gating kernel args. Supports top_k, threshold, and static modes.
+
+    For top_k with >32 experts (CERF group sharing), cond_activation_addr
+    points to a uint8_t[num_experts] array that the gating kernel writes
+    (1=selected, 0=skip). Expert kernels read their slot via SW guard.
+    """
+    def __init__(self,
+                 mode: int = BINGO_GATING_MODE_STATIC,
+                 pred_scratchpad_addr=None,   # wired at emit time by compiler
+                 cerf_controlled_mask: int = 0,
+                 top_k_or_threshold: Union[int, float] = 0,
+                 cerf_group_ids_addr=None,
+                 cond_activation_addr=None):
+        self.mode = mode
+        self.pred_scratchpad_addr = pred_scratchpad_addr
+        self.cerf_controlled_mask = cerf_controlled_mask
+        self.top_k_or_threshold = top_k_or_threshold
+        self.cerf_group_ids_addr = cerf_group_ids_addr
+        self.cond_activation_addr = cond_activation_addr
+
+    def get_struct_name(self) -> str:
+        return "__host_bingo_kernel_cerf_gating_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        assignments = {}
+        assignments["mode"] = str(self.mode)
+        if self.pred_scratchpad_addr is not None:
+            assignments["pred_scratchpad_addr"] = str(self.pred_scratchpad_addr)
+        else:
+            assignments["pred_scratchpad_addr"] = "0"
+        assignments["cerf_controlled_mask"] = f"0x{self.cerf_controlled_mask:04x}"
+
+        if self.mode == BINGO_GATING_MODE_TOP_K:
+            assignments["top_k_or_threshold"] = str(int(self.top_k_or_threshold))
+            if self.cerf_group_ids_addr is not None:
+                self._process_addr(self.cerf_group_ids_addr, "cerf_group_ids_addr", assignments, handle_name_map, split_64bit=False, as_64bit=True)
+            else:
+                assignments["cerf_group_ids_addr"] = "0"
+        elif self.mode == BINGO_GATING_MODE_THRESHOLD:
+            import struct
+            thresh_bits = struct.unpack('<I', struct.pack('<f', float(self.top_k_or_threshold)))[0]
+            assignments["top_k_or_threshold"] = f"0x{thresh_bits:08x}"
+            assignments["cerf_group_ids_addr"] = "0"
+        elif self.mode == BINGO_GATING_MODE_STATIC:
+            assignments["top_k_or_threshold"] = f"0x{int(self.top_k_or_threshold):04x}"
+            assignments["cerf_group_ids_addr"] = "0"
+        else:
+            assignments["top_k_or_threshold"] = str(self.top_k_or_threshold)
+            assignments["cerf_group_ids_addr"] = str(self.cerf_group_ids_addr or 0)
+
+        # Per-expert activation array (SW guard for CERF group sharing)
+        if self.cond_activation_addr is not None:
+            self._process_addr(self.cond_activation_addr, "cond_activation_addr",
+                              assignments, handle_name_map, split_64bit=False, as_64bit=True)
+        else:
+            assignments["cond_activation_addr"] = "0"
+
+        return assignments
+
+
+# Backward-compat aliases
+HostBingoKernelMoeGatingArgs = HostBingoKernelCerfGatingArgs
+HostBingoKernelCerfThresholdArgs = HostBingoKernelCerfGatingArgs
+HostBingoKernelCerfStaticArgs = HostBingoKernelCerfGatingArgs
+
+
+# DEVICE: Dynamic MoE gating (32-bit address space)
+class SnaxBingoKernelMoeGatingArgs(BingoKernelArgs):
+    """Device-side MoE gating. Reads predecessor scratchpad for logits."""
+    def __init__(self,
+                 pred_scratchpad_addr=None,
+                 top_k: int = 2,
+                 cerf_controlled_mask: int = 0,
+                 cerf_group_ids_addr: Union[BingoMemAlloc, BingoMemSymbol, int, None] = None):
+        self.pred_scratchpad_addr = pred_scratchpad_addr
+        self.top_k = top_k
+        self.cerf_controlled_mask = cerf_controlled_mask
+        self.cerf_group_ids_addr = cerf_group_ids_addr
+
+    def get_struct_name(self) -> str:
+        return "__snax_kernel_moe_gating_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        assignments = {}
+        if self.pred_scratchpad_addr is not None:
+            assignments["pred_scratchpad_addr"] = str(self.pred_scratchpad_addr)
+        assignments["top_k"] = str(self.top_k)
+        assignments["cerf_controlled_mask"] = f"0x{self.cerf_controlled_mask:04x}"
+        if self.cerf_group_ids_addr is not None:
+            self._process_addr(self.cerf_group_ids_addr, "cerf_group_ids_addr", assignments, handle_name_map, split_64bit=False)
         return assignments
