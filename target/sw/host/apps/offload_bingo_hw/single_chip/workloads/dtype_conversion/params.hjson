@@ -1,0 +1,12 @@
+{
+    // Small dimensions for simulation / CI
+    array_shape: 0
+    M: 2
+    K: 4
+    N: 2
+    transposed_A: 0
+    transposed_B: 0
+    addNonZeroC: 0
+    addZeroC: 1
+    accumPrevC: 0
+}

@@ -11,8 +11,10 @@ APPS += gemm_seperate_load_and_compute_serial
 APPS += gemm_stacked
 APPS += gemm_sweep
 APPS += xdma_all_ops
+APPS += xdma_sweep
+APPS += dtype_conversion
 APPS += dummy_double_buffer_ci
-
+APPS += moe4
 SUBDIRS = $(addprefix workloads/,$(APPS))
 
 
