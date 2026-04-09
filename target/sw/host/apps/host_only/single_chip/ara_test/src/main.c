@@ -4,76 +4,33 @@
 //
 // Fanchen Kong <fanchen.kong@kuleuven.be>
 //
-// Test all FP32 RVV kernels that the bingo framework dispatches to CVA6+Ara.
-// These correspond to the BingoOp set: elementwise binary (ADD/SUB/MUL/DIV/MAX/MIN),
-// elementwise unary (RELU/NEG/ABS/EXP/SIGMOID/TANH/SQRT/RECIPROCAL/SILU/GELU),
-// reductions (REDUCE_SUM/REDUCE_MAX/REDUCE_MEAN), and compound ops (SOFTMAX/RMSNORM).
+// Cycle-count characterization sweep for the FP32 RVV host kernels.
+// Emits one MCYCLE-style CSV line per (kernel × size × rep) combination,
+// which is then parsed by scripts/characterize_cva6.py to fit a linear
+// model `cycles = overhead + slope·N` per op.  This data populates
+// inputs/rtl_luts/cva6_ops.csv for the framework's `--cost-model=rtl` mode.
+//
+// Paired workload: ci_ara (same kernels, but correctness-only with N=32 —
+// used as the fast CI regression).
+//
+// NOTE: This workload is LONG-RUNNING in RTL simulation (many ops × sizes).
+// Use ci_ara for quick correctness regressions.
 
 #include "host.h"
 #include "host_kernel_lib.h"
 #include "op_test_data.h"
 
-static int tests_passed = 0;
-static int tests_failed = 0;
+// Timing buffers (globals → live in .data, avoid stack overflow).
+// OP_MAX_LEN is 8192 (from gen_op_data.py) → 32 KB per buffer.
+static float timing_output[OP_MAX_LEN] __attribute__((aligned(8)));
+static float timing_fp32_scratch[OP_MAX_LEN] __attribute__((aligned(8)));
+static int8_t timing_int8_scratch[OP_MAX_LEN] __attribute__((aligned(8)));
+static float timing_scale_scratch __attribute__((aligned(8)));
 
-// Tolerance for FP32 comparison (exp/sigmoid have polynomial approximation error)
-#define FP32_TOL 1e-3f
-#define FP32_TOL_LOOSE 1e-2f  // for exp-based ops (Cephes polynomial)
-
-static int check_fp32_array(const char *name, float *result, float *golden, int n, float tol) {
-    int err = 0;
-    for (int i = 0; i < n; i++) {
-        float diff = result[i] - golden[i];
-        if (diff < 0) diff = -diff;
-        float scale = golden[i] < 0 ? -golden[i] : golden[i];
-        if (scale < 1.0f) scale = 1.0f;
-        if (diff / scale > tol) {
-            if (err < 3) {
-                printf("  %s[%d]: got %.6f, expected %.6f (diff=%.6f)\r\n",
-                       name, i, result[i], golden[i], diff);
-            }
-            err++;
-        }
-    }
-    if (err == 0) {
-        printf("  PASS: %s\r\n", name);
-        tests_passed++;
-    } else {
-        printf("  FAIL: %s (%d/%d mismatches)\r\n", name, err, n);
-        tests_failed++;
-    }
-    return err;
-}
-
-static int check_fp32_scalar(const char *name, float result, float golden, float tol) {
-    float diff = result - golden;
-    if (diff < 0) diff = -diff;
-    float scale = golden < 0 ? -golden : golden;
-    if (scale < 1.0f) scale = 1.0f;
-    if (diff / scale > tol) {
-        printf("  FAIL: %s got %.6f, expected %.6f\r\n", name, result, golden);
-        tests_failed++;
-        return 1;
-    }
-    printf("  PASS: %s (%.6f)\r\n", name, result);
-    tests_passed++;
-    return 0;
-}
-
-// Helper: build binary kernel args (a, b, output, n)
-static void setup_binary_args(uint64_t *args, float *a, float *b, float *out, uint64_t n) {
-    args[0] = (uint64_t)(uintptr_t)a;
-    args[1] = (uint64_t)(uintptr_t)b;
-    args[2] = (uint64_t)(uintptr_t)out;
-    args[3] = n;
-}
-
-// Helper: build unary kernel args (input, output, n)
-static void setup_unary_args(uint64_t *args, float *input, float *out, uint64_t n) {
-    args[0] = (uint64_t)(uintptr_t)input;
-    args[1] = (uint64_t)(uintptr_t)out;
-    args[2] = n;
-}
+// Timing sizes that span the TinyLlama workload range.
+#define TIMING_NUM_SIZES 5
+#define TIMING_NUM_REPS  3
+static const uint64_t timing_sizes[TIMING_NUM_SIZES] = { 64, 256, 1024, 4096, 8192 };
 
 int main() {
     uintptr_t address_prefix = (uintptr_t)get_current_chip_baseaddress();
@@ -81,185 +38,108 @@ int main() {
     enable_vec();
     asm volatile("fence" ::: "memory");
 
-    printf("=== FP32 Operator Kernel Tests ===\r\n");
-    printf("Vector length: %d elements\r\n\r\n", OP_TEST_LEN);
+    printf("=== ara_test: CVA6+Ara FP32 cycle sweep ===\r\n");
+    printf("Sizes: ");
+    for (int si = 0; si < TIMING_NUM_SIZES; si++) {
+        printf("%lu ", timing_sizes[si]);
+    }
+    printf("(reps=%d)\r\n\r\n", TIMING_NUM_REPS);
+    printf("CYCLES_HEADER,kernel,N,rep,cycles\r\n");
 
-    float output[OP_TEST_LEN];
-    uint64_t args[8];
+    uint64_t t_args[8];
+    float t_scalar_out;
 
-    // ─── Binary elementwise ────────────────────────────────────
-    printf("[Binary Elementwise]\r\n");
+    for (int si = 0; si < TIMING_NUM_SIZES; si++) {
+        uint64_t N = timing_sizes[si];
 
-    setup_binary_args(args, op_a, op_b, output, OP_TEST_LEN);
-    __host_bingo_kernel_fp32_add(args);
-    check_fp32_array("add", output, golden_add, OP_TEST_LEN, FP32_TOL);
+        for (int rep = 0; rep < TIMING_NUM_REPS; rep++) {
+            uint64_t c0, c1;
 
-    setup_binary_args(args, op_a, op_b, output, OP_TEST_LEN);
-    __host_bingo_kernel_fp32_sub(args);
-    check_fp32_array("sub", output, golden_sub, OP_TEST_LEN, FP32_TOL);
+            // --- Binary elementwise (a, b, out, n) ---
+            #define TIME_BINARY(name, kernel_fn) do { \
+                t_args[0] = (uint64_t)(uintptr_t)op_a_big; \
+                t_args[1] = (uint64_t)(uintptr_t)op_b_big; \
+                t_args[2] = (uint64_t)(uintptr_t)timing_output; \
+                t_args[3] = N; \
+                c0 = ara_get_cycle_count(); \
+                kernel_fn(t_args); \
+                c1 = ara_get_cycle_count(); \
+                printf("CYCLES,%s,%lu,%d,%lu\r\n", name, N, rep, c1 - c0); \
+            } while (0)
 
-    setup_binary_args(args, op_a, op_b, output, OP_TEST_LEN);
-    __host_bingo_kernel_fp32_mul(args);
-    check_fp32_array("mul", output, golden_mul, OP_TEST_LEN, FP32_TOL);
+            TIME_BINARY("add", __host_bingo_kernel_fp32_add);
+            TIME_BINARY("sub", __host_bingo_kernel_fp32_sub);
+            TIME_BINARY("mul", __host_bingo_kernel_fp32_mul);
+            TIME_BINARY("div", __host_bingo_kernel_fp32_div);
+            #undef TIME_BINARY
 
-    setup_binary_args(args, op_a, op_b, output, OP_TEST_LEN);
-    __host_bingo_kernel_fp32_div(args);
-    check_fp32_array("div", output, golden_div, OP_TEST_LEN, FP32_TOL);
+            // --- Unary elementwise (input, out, n) ---
+            #define TIME_UNARY(name, kernel_fn, src) do { \
+                t_args[0] = (uint64_t)(uintptr_t)(src); \
+                t_args[1] = (uint64_t)(uintptr_t)timing_output; \
+                t_args[2] = N; \
+                c0 = ara_get_cycle_count(); \
+                kernel_fn(t_args); \
+                c1 = ara_get_cycle_count(); \
+                printf("CYCLES,%s,%lu,%d,%lu\r\n", name, N, rep, c1 - c0); \
+            } while (0)
 
-    setup_binary_args(args, op_a, op_b, output, OP_TEST_LEN);
-    __host_bingo_kernel_fp32_max(args);
-    check_fp32_array("max", output, golden_max, OP_TEST_LEN, FP32_TOL);
+            TIME_UNARY("exp", __host_bingo_kernel_fp32_exp, op_a_big);           // positive input
+            TIME_UNARY("sigmoid", __host_bingo_kernel_fp32_sigmoid, op_mixed_big);
+            TIME_UNARY("sqrt", __host_bingo_kernel_fp32_sqrt, op_a_big);         // positive input
+            #undef TIME_UNARY
 
-    setup_binary_args(args, op_a, op_b, output, OP_TEST_LEN);
-    __host_bingo_kernel_fp32_min(args);
-    check_fp32_array("min", output, golden_min, OP_TEST_LEN, FP32_TOL);
+            // --- Reductions (input, scalar_out, n) ---
+            #define TIME_REDUCE(name, kernel_fn) do { \
+                t_args[0] = (uint64_t)(uintptr_t)op_a_big; \
+                t_args[1] = (uint64_t)(uintptr_t)&t_scalar_out; \
+                t_args[2] = N; \
+                c0 = ara_get_cycle_count(); \
+                kernel_fn(t_args); \
+                c1 = ara_get_cycle_count(); \
+                printf("CYCLES,%s,%lu,%d,%lu\r\n", name, N, rep, c1 - c0); \
+            } while (0)
 
-    // ─── Unary elementwise ─────────────────────────────────────
-    printf("\r\n[Unary Elementwise]\r\n");
+            TIME_REDUCE("reduce_sum", __host_bingo_kernel_fp32_reduce_sum);
+            TIME_REDUCE("reduce_max", __host_bingo_kernel_fp32_reduce_max);
+            TIME_REDUCE("reduce_mean", __host_bingo_kernel_fp32_reduce_mean);
+            #undef TIME_REDUCE
 
-    setup_unary_args(args, op_mixed, output, OP_TEST_LEN);
-    __host_bingo_kernel_fp32_relu(args);
-    check_fp32_array("relu", output, golden_relu, OP_TEST_LEN, FP32_TOL);
+            // --- Data conversion: quantize (input, int8_out, scale_out, n) ---
+            t_args[0] = (uint64_t)(uintptr_t)op_mixed_big;
+            t_args[1] = (uint64_t)(uintptr_t)timing_int8_scratch;
+            t_args[2] = (uint64_t)(uintptr_t)&timing_scale_scratch;
+            t_args[3] = N;
+            c0 = ara_get_cycle_count();
+            __host_bingo_kernel_fp32_quantize(t_args);
+            c1 = ara_get_cycle_count();
+            printf("CYCLES,quantize,%lu,%d,%lu\r\n", N, rep, c1 - c0);
 
-    setup_unary_args(args, op_mixed, output, OP_TEST_LEN);
-    __host_bingo_kernel_fp32_neg(args);
-    check_fp32_array("neg", output, golden_neg, OP_TEST_LEN, FP32_TOL);
+            // --- Compound: softmax (input, output, num_rows=1, row_len=N) ---
+            t_args[0] = (uint64_t)(uintptr_t)op_mixed_big;
+            t_args[1] = (uint64_t)(uintptr_t)timing_output;
+            t_args[2] = 1;
+            t_args[3] = N;
+            c0 = ara_get_cycle_count();
+            __host_bingo_kernel_fp32_softmax(t_args);
+            c1 = ara_get_cycle_count();
+            printf("CYCLES,softmax,%lu,%d,%lu\r\n", N, rep, c1 - c0);
 
-    setup_unary_args(args, op_mixed, output, OP_TEST_LEN);
-    __host_bingo_kernel_fp32_abs(args);
-    check_fp32_array("abs", output, golden_abs, OP_TEST_LEN, FP32_TOL);
-
-    setup_unary_args(args, op_a, output, OP_TEST_LEN);  // use positive for exp
-    __host_bingo_kernel_fp32_exp(args);
-    check_fp32_array("exp", output, golden_exp, OP_TEST_LEN, FP32_TOL_LOOSE);
-
-    setup_unary_args(args, op_mixed, output, OP_TEST_LEN);
-    __host_bingo_kernel_fp32_sigmoid(args);
-    check_fp32_array("sigmoid", output, golden_sigmoid, OP_TEST_LEN, FP32_TOL_LOOSE);
-
-    setup_unary_args(args, op_mixed, output, OP_TEST_LEN);
-    __host_bingo_kernel_fp32_tanh(args);
-    check_fp32_array("tanh", output, golden_tanh, OP_TEST_LEN, FP32_TOL_LOOSE);
-
-    setup_unary_args(args, op_a, output, OP_TEST_LEN);  // use positive for sqrt
-    __host_bingo_kernel_fp32_sqrt(args);
-    check_fp32_array("sqrt", output, golden_sqrt, OP_TEST_LEN, FP32_TOL);
-
-    setup_unary_args(args, op_a, output, OP_TEST_LEN);  // use positive for reciprocal
-    __host_bingo_kernel_fp32_reciprocal(args);
-    check_fp32_array("reciprocal", output, golden_reciprocal, OP_TEST_LEN, FP32_TOL);
-
-    setup_unary_args(args, op_mixed, output, OP_TEST_LEN);
-    __host_bingo_kernel_fp32_silu(args);
-    check_fp32_array("silu", output, golden_silu, OP_TEST_LEN, FP32_TOL_LOOSE);
-
-    // ─── Reductions ────────────────────────────────────────────
-    printf("\r\n[Reductions]\r\n");
-    float scalar_out;
-
-    setup_unary_args(args, op_a, &scalar_out, OP_TEST_LEN);
-    __host_bingo_kernel_fp32_reduce_sum(args);
-    check_fp32_scalar("reduce_sum", scalar_out, golden_reduce_sum, FP32_TOL);
-
-    setup_unary_args(args, op_a, &scalar_out, OP_TEST_LEN);
-    __host_bingo_kernel_fp32_reduce_max(args);
-    check_fp32_scalar("reduce_max", scalar_out, golden_reduce_max, FP32_TOL);
-
-    setup_unary_args(args, op_a, &scalar_out, OP_TEST_LEN);
-    __host_bingo_kernel_fp32_reduce_mean(args);
-    check_fp32_scalar("reduce_mean", scalar_out, golden_reduce_mean, FP32_TOL);
-
-    // ─── Compound ops ──────────────────────────────────────────
-    printf("\r\n[Compound Ops]\r\n");
-
-    // Softmax (on op_a, treated as 1 row of OP_TEST_LEN)
-    {
-        uint64_t sm_args[4];
-        float sm_out[OP_TEST_LEN];
-        sm_args[0] = (uint64_t)(uintptr_t)op_a;
-        sm_args[1] = (uint64_t)(uintptr_t)sm_out;
-        sm_args[2] = 1;            // num_rows
-        sm_args[3] = OP_TEST_LEN;  // row_length
-        __host_bingo_kernel_fp32_softmax(sm_args);
-        // Verify: all elements > 0 and sum ~ 1.0
-        float sm_sum = 0.0f;
-        int sm_ok = 1;
-        for (int i = 0; i < OP_TEST_LEN; i++) {
-            if (sm_out[i] < 0.0f) sm_ok = 0;
-            sm_sum += sm_out[i];
-        }
-        float sm_diff = sm_sum - 1.0f;
-        if (sm_diff < 0) sm_diff = -sm_diff;
-        if (sm_diff > FP32_TOL_LOOSE) sm_ok = 0;
-        if (sm_ok) {
-            printf("  PASS: softmax (sum=%.6f)\r\n", sm_sum);
-            tests_passed++;
-        } else {
-            printf("  FAIL: softmax (sum=%.6f, expected 1.0)\r\n", sm_sum);
-            tests_failed++;
+            // --- Compound: rmsnorm (input, weight=ones, output, hidden_dim=N, num_tokens=1) ---
+            // Use timing_fp32_scratch as the weight buffer (ones)
+            for (uint64_t i = 0; i < N; i++) timing_fp32_scratch[i] = 1.0f;
+            t_args[0] = (uint64_t)(uintptr_t)op_a_big;
+            t_args[1] = (uint64_t)(uintptr_t)timing_fp32_scratch;
+            t_args[2] = (uint64_t)(uintptr_t)timing_output;
+            t_args[3] = N;
+            t_args[4] = 1;
+            c0 = ara_get_cycle_count();
+            __host_bingo_kernel_fp32_rmsnorm(t_args);
+            c1 = ara_get_cycle_count();
+            printf("CYCLES,rmsnorm,%lu,%d,%lu\r\n", N, rep, c1 - c0);
         }
     }
 
-    // RMSNorm
-    {
-        float rms_weight[OP_TEST_LEN];
-        float rms_out[OP_TEST_LEN];
-        for (int i = 0; i < OP_TEST_LEN; i++) rms_weight[i] = 1.0f;  // identity scale
-        uint64_t rms_args[5];
-        rms_args[0] = (uint64_t)(uintptr_t)op_a;
-        rms_args[1] = (uint64_t)(uintptr_t)rms_weight;
-        rms_args[2] = (uint64_t)(uintptr_t)rms_out;
-        rms_args[3] = OP_TEST_LEN;  // hidden_dim
-        rms_args[4] = 1;            // num_tokens
-        __host_bingo_kernel_fp32_rmsnorm(rms_args);
-        // Verify: output should have unit RMS (approximately)
-        float rms_sq = 0.0f;
-        for (int i = 0; i < OP_TEST_LEN; i++) rms_sq += rms_out[i] * rms_out[i];
-        rms_sq /= OP_TEST_LEN;
-        float rms_diff = rms_sq - 1.0f;
-        if (rms_diff < 0) rms_diff = -rms_diff;
-        if (rms_diff < 0.1f) {
-            printf("  PASS: rmsnorm (output RMS^2=%.4f)\r\n", rms_sq);
-            tests_passed++;
-        } else {
-            printf("  FAIL: rmsnorm (output RMS^2=%.4f, expected ~1.0)\r\n", rms_sq);
-            tests_failed++;
-        }
-    }
-
-    // SiLU * up (compound fused kernel)
-    {
-        float gate[OP_TEST_LEN], up[OP_TEST_LEN], fused_out[OP_TEST_LEN];
-        for (int i = 0; i < OP_TEST_LEN; i++) {
-            gate[i] = op_mixed[i];
-            up[i] = op_a[i];
-        }
-        uint64_t sm_args[4];
-        sm_args[0] = (uint64_t)(uintptr_t)gate;
-        sm_args[1] = (uint64_t)(uintptr_t)up;
-        sm_args[2] = (uint64_t)(uintptr_t)fused_out;
-        sm_args[3] = OP_TEST_LEN;
-        __host_bingo_kernel_fp32_silu_mul(sm_args);
-        // Just verify it doesn't crash and produces non-zero output
-        int nonzero = 0;
-        for (int i = 0; i < OP_TEST_LEN; i++) {
-            if (fused_out[i] != 0.0f) nonzero++;
-        }
-        if (nonzero > 0) {
-            printf("  PASS: silu_mul (%d/%d nonzero)\r\n", nonzero, OP_TEST_LEN);
-            tests_passed++;
-        } else {
-            printf("  FAIL: silu_mul (all zeros)\r\n");
-            tests_failed++;
-        }
-    }
-
-    // ─── Summary ───────────────────────────────────────────────
-    printf("\r\n=== Results: %d passed, %d failed ===\r\n", tests_passed, tests_failed);
-    if (tests_failed > 0) {
-        printf("SOME TESTS FAILED!\r\n");
-        return 1;
-    }
-    printf("ALL TESTS PASSED!\r\n");
+    printf("=== ara_test done ===\r\n");
     return 0;
 }
