@@ -1,0 +1,6 @@
+{
+    // Test the new __host_bingo_kernel_int32_add kernel.
+    // Sums 4 INT32 arrays (one per cluster, simulating partial-D outputs
+    // from a K-split GEMM) into one final INT32 D via 3 chained add calls.
+    num_elements: 1024    // 32 * 32 = attention qk_matmul D size
+}

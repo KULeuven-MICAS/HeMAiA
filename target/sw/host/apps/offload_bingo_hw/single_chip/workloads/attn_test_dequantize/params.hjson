@@ -1,0 +1,8 @@
+{
+    // Attention test: INT32 dequantize kernel in isolation
+    // int32_D -> dequantize (multiply by combined_scale) -> fp32_D
+    array_shape: 0
+    seq_len: 64
+    d_model: 32
+    d_head: 32
+}
