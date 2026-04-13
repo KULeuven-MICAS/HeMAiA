@@ -50,33 +50,150 @@ static inline uint64_t __host_bingo_kernel_entry(void *arg){
     sp->num_return_values = 0;
     return 0;
 }
+// Union-based type punning for fp32 ↔ uint32 (no strict-aliasing UB, portable, zero-cost).
+typedef union { float f; uint32_t u; } __bingo_f32_u32_t;
+
+// Convert IEEE 754 binary16 (half) to binary32 (single) in software.
+// Handles zero, subnormal, normal, inf, NaN. No libm / no _Float16 dependency.
+static inline float __bingo_fp16_to_fp32(uint16_t h) {
+    uint32_t sign = (uint32_t)(h >> 15) & 0x1;
+    uint32_t exp  = (uint32_t)(h >> 10) & 0x1F;
+    uint32_t mant = (uint32_t)(h & 0x3FF);
+    uint32_t f_bits;
+    if (exp == 0) {
+        if (mant == 0) {
+            // +/- zero
+            f_bits = sign << 31;
+        } else {
+            // Subnormal: normalize by shifting mantissa left until bit 10 is 1
+            int shift = 0;
+            while ((mant & 0x400) == 0) { mant <<= 1; shift++; }
+            mant &= 0x3FF;  // clear the implicit bit after normalization
+            uint32_t e = (uint32_t)(127 - 15 - shift);
+            f_bits = (sign << 31) | (e << 23) | (mant << 13);
+        }
+    } else if (exp == 31) {
+        // Inf or NaN
+        f_bits = (sign << 31) | 0x7F800000u | (mant << 13);
+    } else {
+        // Normal
+        uint32_t e = exp - 15 + 127;
+        f_bits = (sign << 31) | (e << 23) | (mant << 13);
+    }
+    __bingo_f32_u32_t u;
+    u.u = f_bits;
+    return u.f;
+}
+
 static inline uint64_t __host_bingo_kernel_check_result(void *arg){
-    // Arg0-3: golden, output, size, name; Arg4: scratchpad_ptr
+    // Arg0-5: golden, output, size, name, check_type, tolerance_bits; Arg6: scratchpad_ptr
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
     uint8_t* golden_data_addr = (uint8_t*)(((uint64_t *)arg)[0]);
     uint8_t* output_data_addr = (uint8_t*)(((uint64_t *)arg)[1]);
-    uint64_t data_size = ((uint64_t *)arg)[2];
-    const char* name = (const char*)(((uint64_t *)arg)[3]);
-    bingo_kernel_scratchpad_t* sp = (bingo_kernel_scratchpad_t*)(uintptr_t)((uint64_t *)arg)[4];
+    uint64_t data_size        = ((uint64_t *)arg)[2];
+    const char* name          = (const char*)(((uint64_t *)arg)[3]);
+    uint64_t check_type       = ((uint64_t *)arg)[4];
+    uint32_t tolerance_bits   = (uint32_t)((uint64_t *)arg)[5];
+    bingo_kernel_scratchpad_t* sp = (bingo_kernel_scratchpad_t*)(uintptr_t)((uint64_t *)arg)[6];
     if (!name) name = "?";
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
+
+    // Reinterpret tolerance uint32 bits as fp32 via union.
+    __bingo_f32_u32_t tol_u;
+    tol_u.u = tolerance_bits;
+    const float tolerance = tol_u.f;
+
     uint32_t err = 0;
-    for (uint64_t i = 0; i < data_size; i++) {
-        if (output_data_addr[i] != golden_data_addr[i]) {
-            err++;
-            printf_safe("[%s] output[%d]=%d, golden[%d]=%d\n",
-                   name, i, output_data_addr[i], i, golden_data_addr[i]);
+
+    if (check_type == BINGO_CHECK_TYPE_BYTE_EXACT) {
+        // Byte-exact (original behavior — preserved verbatim)
+        for (uint64_t i = 0; i < data_size; i++) {
+            if (output_data_addr[i] != golden_data_addr[i]) {
+                err++;
+                printf_safe("[%s] output[%d]=%d, golden[%d]=%d\n",
+                       name, i, output_data_addr[i], i, golden_data_addr[i]);
+            }
         }
-    }
-    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
-    sp->return_value = err;
-    sp->num_return_values = 0;
-    if (err == 0) {
-        printf_safe("[Host] Check [%s]: PASS (%d bytes)\r\n", name, data_size);
-        return 0;
+        BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
+        sp->return_value = err;
+        sp->num_return_values = 0;
+        if (err == 0) {
+            printf_safe("[Host] Check [%s]: PASS (%d bytes)\r\n", name, data_size);
+            return 0;
+        } else {
+            printf_safe("[Host] Check [%s]: FAIL (%d / %d bytes)\r\n", name, err, data_size);
+            return EXIT_CODE_FAIL;
+        }
+    } else if (check_type == BINGO_CHECK_TYPE_FP32_TOL) {
+        // FP32 absolute-tolerance mode
+        const float* out_f    = (const float*)output_data_addr;
+        const float* golden_f = (const float*)golden_data_addr;
+        uint64_t num_elements = data_size / 4;
+        for (uint64_t i = 0; i < num_elements; i++) {
+            float o = out_f[i];
+            float g = golden_f[i];
+            float diff = o - g;
+            if (diff < 0.0f) diff = -diff;
+            if (diff > tolerance) {
+                err++;
+                // Hex-bits printing to avoid reliance on libc %f support
+                __bingo_f32_u32_t uo, ug, ud;
+                uo.f = o; ug.f = g; ud.f = diff;
+                printf_safe("[%s] idx=%d out=0x%08x golden=0x%08x diff=0x%08x tol=0x%08x\n",
+                       name, i, uo.u, ug.u, ud.u, tolerance_bits);
+            }
+        }
+        BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
+        sp->return_value = err;
+        sp->num_return_values = 0;
+        if (err == 0) {
+            printf_safe("[Host] Check [%s]: PASS (%d fp32 elems, tol_bits=0x%08x)\r\n",
+                   name, num_elements, tolerance_bits);
+            return 0;
+        } else {
+            printf_safe("[Host] Check [%s]: FAIL (%d / %d fp32 elems, tol_bits=0x%08x)\r\n",
+                   name, err, num_elements, tolerance_bits);
+            return EXIT_CODE_FAIL;
+        }
+    } else if (check_type == BINGO_CHECK_TYPE_FP16_TOL) {
+        // FP16 absolute-tolerance mode — promote each half to fp32, compare against fp32 tolerance
+        const uint16_t* out_h    = (const uint16_t*)output_data_addr;
+        const uint16_t* golden_h = (const uint16_t*)golden_data_addr;
+        uint64_t num_elements = data_size / 2;
+        for (uint64_t i = 0; i < num_elements; i++) {
+            uint16_t oh = out_h[i];
+            uint16_t gh = golden_h[i];
+            float o = __bingo_fp16_to_fp32(oh);
+            float g = __bingo_fp16_to_fp32(gh);
+            float diff = o - g;
+            if (diff < 0.0f) diff = -diff;
+            if (diff > tolerance) {
+                err++;
+                __bingo_f32_u32_t uo, ug, ud;
+                uo.f = o; ug.f = g; ud.f = diff;
+                printf_safe("[%s] idx=%d out_h=0x%04x golden_h=0x%04x out_f=0x%08x golden_f=0x%08x diff=0x%08x tol=0x%08x\n",
+                       name, i, oh, gh, uo.u, ug.u, ud.u, tolerance_bits);
+            }
+        }
+        BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
+        sp->return_value = err;
+        sp->num_return_values = 0;
+        if (err == 0) {
+            printf_safe("[Host] Check [%s]: PASS (%d fp16 elems, tol_bits=0x%08x)\r\n",
+                   name, num_elements, tolerance_bits);
+            return 0;
+        } else {
+            printf_safe("[Host] Check [%s]: FAIL (%d / %d fp16 elems, tol_bits=0x%08x)\r\n",
+                   name, err, num_elements, tolerance_bits);
+            return EXIT_CODE_FAIL;
+        }
     } else {
-        printf_safe("[Host] Check [%s]: FAIL (%d / %d bytes)\r\n", name, err, data_size);
+        // Unknown check_type — fail loudly
+        BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
+        printf_safe("[Host] Check [%s]: FAIL (unknown check_type=%d)\r\n", name, (int)check_type);
+        sp->return_value = 1;
+        sp->num_return_values = 0;
         return EXIT_CODE_FAIL;
     }
 }

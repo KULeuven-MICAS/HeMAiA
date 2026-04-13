@@ -22,11 +22,18 @@ __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_entry_args {
 } __host_bingo_kernel_entry_args_t;
 
 
+// Check-mode constants for __host_bingo_kernel_check_result
+#define BINGO_CHECK_TYPE_BYTE_EXACT 0
+#define BINGO_CHECK_TYPE_FP32_TOL   1
+#define BINGO_CHECK_TYPE_FP16_TOL   2
+
 __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_check_result_args {
     uint64_t golden_data_addr;
     uint64_t output_data_addr;
-    uint64_t data_size;        // in Bytes
+    uint64_t data_size;        // in Bytes (byte-exact) OR fp-array size in Bytes (fp modes)
     uint64_t name_addr;        // const char* label for printf (0 = no label)
+    uint64_t check_type;       // 0 = byte-exact, 1 = fp32 absolute-tolerance, 2 = fp16 absolute-tolerance
+    uint64_t tolerance_bits;   // FP32 bit pattern of absolute tolerance (used when check_type != 0)
     uint64_t scratchpad_ptr;
 } __host_bingo_kernel_check_result_args_t;
 

@@ -17,7 +17,7 @@ Layouts:
 These functions are used by:
     1. Hand-written attention_datagen.py (via a reusable import)
     2. Emitted datagen.py files (from codegen/onnx_to_hemaia/)
-    3. Golden generators for test_xdma_layout_convert/ workloads
+    3. Golden generators for xdma_layout_transform/ workloads
 """
 
 from __future__ import annotations

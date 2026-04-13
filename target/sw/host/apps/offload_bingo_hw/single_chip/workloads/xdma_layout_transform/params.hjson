@@ -1,0 +1,14 @@
+{
+    // Round-trip test for the 6 xDMA layout transform kernels.
+    //
+    // Spatial unrolling (meshRow, tileSize, meshCol) is taken from the HW
+    // config (snax_versacore_to_cluster.hjson) at index `array_shape`; the
+    // platform topology (chiplets / clusters / cores) comes from occamy.h
+    // and the multichip RTL hjson. Only the DSE-chosen tile counts and
+    // element type live here.
+    array_shape: 3      // VersaCore canonical INT8 shape (8x8x64)
+    M_T: 1
+    K_T: 16
+    N_T: 2
+    elem_bytes: 1       // INT8
+}

@@ -1,6 +1,6 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 from abc import ABC, abstractmethod
-from typing import Union, Dict
+from typing import Union, Dict, Optional
 from bingo_mem_handle import BingoMemAlloc, BingoMemSymbol, BingoMemFixedAddr
 
 class BingoKernelArgs(ABC):
@@ -656,27 +656,105 @@ class HostBingoKernelDummyArgs(BingoKernelArgs):
         return {"dummy_input": str(self.dummy_input)}
 
 # HOST BINGO Check Result
+# Check-mode constants (mirror #defines in host_kernel_args.h)
+BINGO_CHECK_TYPE_BYTE_EXACT = 0
+BINGO_CHECK_TYPE_FP32_TOL   = 1
+BINGO_CHECK_TYPE_FP16_TOL   = 2
+
+
+# Bytes per element for each check mode — used for validation and
+# conversion between num_elements and data_size (bytes).
+_CHECK_TYPE_ELEM_BYTES = {
+    BINGO_CHECK_TYPE_BYTE_EXACT: 1,  # data_size IS the byte count
+    BINGO_CHECK_TYPE_FP32_TOL:   4,
+    BINGO_CHECK_TYPE_FP16_TOL:   2,
+}
+
+
 class HostBingoKernelCheckResultArgs(BingoKernelArgs):
     def __init__(self,
                  golden_data_addr: Union[BingoMemAlloc, int],
                  output_data_addr: Union[BingoMemAlloc, int],
-                 data_size: int,
-                 name: str = ""):
+                 data_size: Optional[int] = None,
+                 name: str = "",
+                 check_type: int = BINGO_CHECK_TYPE_BYTE_EXACT,
+                 tolerance: float = 0.0,
+                 num_elements: Optional[int] = None):
+        """Args for __host_bingo_kernel_check_result.
+
+        The C kernel always reads `data_size` in BYTES, then for fp modes it
+        iterates over `data_size / elem_bytes` floating-point elements
+        (elem_bytes = 4 for fp32, 2 for fp16, 1 for byte-exact).
+
+        This Python constructor accepts EITHER `data_size` (bytes, the raw
+        kernel-level value) OR `num_elements` (logical element count), but
+        not both. `num_elements` is the preferred, unambiguous form for
+        tolerance modes; `data_size` remains for back-compat with byte-exact
+        call-sites.
+
+        check_type:
+            0 (BYTE_EXACT) = byte-exact comparison. data_size = byte count
+                             OR num_elements = byte count (they're identical).
+            1 (FP32_TOL)   = fp32 absolute tolerance: |out[i]-golden[i]| <= tolerance.
+                             num_elements = fp32 element count (→ data_size = num_elements*4)
+            2 (FP16_TOL)   = fp16 absolute tolerance (elements promoted to fp32 for compare).
+                             num_elements = fp16 element count (→ data_size = num_elements*2)
+        tolerance: absolute fp32 tolerance (only meaningful when check_type != 0).
+                   For fp16 mode this is still fp32 — the C kernel promotes
+                   fp16 to fp32 before comparing.
+
+        Validates that exactly one of data_size/num_elements is given and that
+        data_size is a whole multiple of the element size.
+        """
+        check_type = int(check_type)
+        if check_type not in _CHECK_TYPE_ELEM_BYTES:
+            raise ValueError(f"Unknown check_type={check_type}. Must be one of "
+                             f"{list(_CHECK_TYPE_ELEM_BYTES.keys())}.")
+        elem_bytes = _CHECK_TYPE_ELEM_BYTES[check_type]
+
+        if (data_size is None) == (num_elements is None):
+            raise ValueError(
+                "Exactly one of `data_size` (bytes) or `num_elements` must be "
+                "given. For tolerance modes, prefer `num_elements` for clarity."
+            )
+        if num_elements is not None:
+            if num_elements <= 0:
+                raise ValueError(f"num_elements must be positive, got {num_elements}")
+            data_size = int(num_elements) * elem_bytes
+        else:
+            if data_size <= 0:
+                raise ValueError(f"data_size must be positive, got {data_size}")
+            if data_size % elem_bytes != 0:
+                raise ValueError(
+                    f"data_size={data_size} is not a multiple of elem_bytes="
+                    f"{elem_bytes} for check_type={check_type}. This would "
+                    f"cause the kernel's `data_size / elem_bytes` to silently "
+                    f"truncate. Pass num_elements instead or fix data_size."
+                )
+
         self.golden_data_addr = golden_data_addr
         self.output_data_addr = output_data_addr
-        self.data_size = data_size
+        self.data_size = int(data_size)
         self.name = name
+        self.check_type = check_type
+        self.tolerance = float(tolerance)
 
     def get_struct_name(self) -> str:
         return "__host_bingo_kernel_check_result_args_t"
 
     def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        import struct
         assignments = {}
         self._process_addr(self.golden_data_addr, "golden_data_addr", assignments, handle_name_map, split_64bit=False, as_64bit=True)
         self._process_addr(self.output_data_addr, "output_data_addr", assignments, handle_name_map, split_64bit=False, as_64bit=True)
         assignments["data_size"] = str(self.data_size)
         if self.name:
             assignments["name_addr"] = f'(uint64_t)"{self.name}"'
+        # Always emit — L3 alloc is not zeroed, so garbage in these fields could
+        # flip check_type to 1/2 with random tolerance_bits.
+        assignments["check_type"] = str(self.check_type)
+        tol_bits = struct.unpack('<I', struct.pack('<f', self.tolerance))[0]
+        assignments["tolerance_bits"] = f"0x{tol_bits:08x}"
         return assignments
     
 # HOST BINGO IDMA
