@@ -1,5 +1,5 @@
 {
-    cfg_name: "hemaia_singlechip",
+    cfg_name: "hemaia_bingo",
     bender_target: ["cv64a6_imafdc_sv39", "occamy"],
     // Multi-chip configuration
     hemaia_multichip: {
@@ -96,6 +96,9 @@
       quad_axi_lite_base_offset: 65536 // 0x10000
     },
     clusters:[
+      "snax_bingo_cluster",
+      "snax_bingo_cluster",
+      "snax_bingo_cluster",
       "snax_bingo_cluster",
       ],
 
