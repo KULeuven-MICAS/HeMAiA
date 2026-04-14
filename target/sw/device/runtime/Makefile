@@ -5,13 +5,18 @@
 # Luca Colagrande <colluca@iis.ee.ethz.ch>
 
 include ../toolchain.mk
+IS_CLEAN_GOAL := $(filter clean clean-%,$(MAKECMDGOALS))
 
 ###################
 # Build variables #
 ###################
 
 # Directories
+ifeq ($(IS_CLEAN_GOAL),)
 SNITCH_ROOT = $(shell bender path snitch_cluster)
+else
+SNITCH_ROOT =
+endif
 BUILDDIR    = $(abspath build/)
 SRC_DIR     = $(abspath src/)
 SW_DIR      = $(abspath ../../)
@@ -35,6 +40,9 @@ INCDIRS += ./generated
 INCDIRS += ./api/
 # SNAX runtime
 INCDIRS += $(SW_DIR)/device/runtime/snax/xdma
+# Pull in every snax-generated SW-header dir. See common.mk for the rationale;
+# mirrored here because the snRuntime build doesn't go through common.mk.
+INCDIRS += $(wildcard $(SNITCH_ROOT)/target/snitch_cluster/sw/snax/*/include)
 INCDIRS += $(SW_DIR)/device/runtime/snax/versacore
 # SNAX kernel lib
 INCDIRS += $(SW_DIR)/device/runtime/libsnaxkernel

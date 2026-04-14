@@ -6,7 +6,12 @@
 
 # Compiler toolchain
 BENDER ?= bender
+IS_CLEAN_GOAL := $(filter clean clean-%,$(MAKECMDGOALS))
+ifeq ($(IS_CLEAN_GOAL),)
 SNITCH_ROOT = $(shell $(BENDER) path snitch_cluster)
+else
+SNITCH_ROOT =
+endif
 ifeq ($(SELECT_TOOLCHAIN), llvm-snitch)
 # specialized version does not use a version specifier in the binary
 LLVM_BINROOT    = /tools/riscv-llvm/bin/

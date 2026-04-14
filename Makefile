@@ -1,4 +1,4 @@
-.PHONY: clean FORCE bootrom sw single-sw rtl occamy_ip_vcu128 occamy_ip_vcu128_gui occamy_system_vcu128 \
+.PHONY: clean distclean clean-bender FORCE bootrom sw single-sw rtl occamy_ip_vcu128 occamy_ip_vcu128_gui occamy_system_vcu128 \
 		occamy_system_vcu128_gui occamy_system_download_sw open_terminal hemaia_system_vivado_preparation \
 		hemaia_chip_vcu128 hemaia_chip_vcu128_gui hemaia_system_vcu128 hemaia_system_vcu128_gui \
 		occamy_system_vlt occamy_system_vsim_preparation occamy_system_vsim hemaia_system_vsim_preparation \
@@ -52,10 +52,16 @@ clean:
 	$(MAKE) -C ./target/rtl/ clean
 	$(MAKE) -C ./target/fpga/sw clean
 	$(MAKE) -C ./target/tapeout clean
-	rm -rf Bender.lock .bender deps
 	rm -rf ./target/rtl/src/bender_targets.tmp
 	rm -rf ./target/rtl/cfg/lru.hjson
 	cd ./target/tapeout && ./0_reset.sh
+
+clean-bender:
+	rm -f Bender.lock
+	rm -rf deps
+	rm -rf .bender
+
+distclean: clean clean-bender
 #######################
 # Software Generation #
 #######################
