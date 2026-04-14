@@ -8,8 +8,8 @@
 #include "libbingo/bingo_api.h"
 
 comm_buffer_t* comm_buffer_ptr = NULL;
-uint64_t l2_heap_manager = 0;
-uint64_t l3_heap_manager = 0;
+uint64_t local_l2_heap_manager = 0;
+uint64_t local_l3_heap_manager = 0;
 volatile uint64_t dram_heap_manager = 0;
 #define checked_data_size 64
 int main() {
@@ -33,8 +33,9 @@ int main() {
     }
 
     comm_buffer_ptr = (comm_buffer_t*)bingo_get_l2_comm_buffer(current_chip_id);
-    l2_heap_manager = bingo_get_l2_heap_manager(current_chip_id);
-    l3_heap_manager = bingo_get_l3_heap_manager(current_chip_id);
+    local_l2_heap_manager = bingo_get_l2_heap_manager(current_chip_id);
+    local_l3_heap_manager = bingo_get_l3_heap_manager(current_chip_id);
+    (void)local_l2_heap_manager;  // currently unused; kept for parity
 
     // Init external DRAM heap
     if (get_current_chip_id() == 0) {
@@ -87,7 +88,7 @@ int main() {
 
     uint8_t* data_dest2;
     data_dest2 =
-        (uint8_t*)bingoHeapMalloc((uint64_t)l3_heap_manager, data_size);
+        (uint8_t*)bingoHeapMalloc((uint64_t)local_l3_heap_manager, data_size);
     if (!data_dest2) {
         printf("The allocation of destination 2 at local SRAM failed!\r\n");
         return -1;
@@ -133,6 +134,6 @@ int main() {
         bingoHeapFree((uint64_t)dram_heap_manager,
                    (uint64_t)data_dest1);
     }
-    bingoHeapFree((uint64_t)l3_heap_manager, (uint64_t)data_dest2);
+    bingoHeapFree((uint64_t)local_l3_heap_manager, (uint64_t)data_dest2);
     return 0;
 }
