@@ -4,7 +4,9 @@
 #include "uart.h"
 #include "heterogeneous_runtime.h"
 #include "perf_tracing.h"
-#include "libbingo/bingo_utils.h"  // bingo_cerf_update()
+#include "libbingo/bingo_utils.h"
+#include "libbingo/host_kernel_args.h"  // BINGO_CHECK_TYPE_*, BINGO_GATING_MODE_*
+#include "libbingo/bingo_api.h"         // BINGO_PRINTF, bingo_cerf_update()
 #define EXIT_CODE_SUCC 1
 #define EXIT_CODE_FAIL 2
 // Host Bingo Kernel Implementations
