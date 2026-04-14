@@ -25,6 +25,16 @@ from snax_utils import block_gemm_golden_model
 np.random.seed(320)
 
 
+def infer_stacked_gemm2_dims(M1, N1, tileSize, meshCol):
+    M2 = M1
+    stacked_inner_dim = N1 * meshCol
+    assert (
+        stacked_inner_dim % tileSize == 0
+    ), "In stacked GEMM, GEMM1 output columns must align to GEMM2 tileSize"
+    K2 = stacked_inner_dim // tileSize
+    return M2, K2
+
+
 def emit_header_file(**cfg):
     out = ["#pragma once", "#include <stdint.h>"]
     out += emit_stacked_gemm_data(**cfg)
@@ -40,17 +50,12 @@ def emit_stacked_gemm_data(**cfg):
     M1 = cfg["M1"]
     K1 = cfg["K1"]
     N1 = cfg["N1"]
-
-    M2 = cfg["M2"]
-    K2 = cfg["K2"]
     N2 = cfg["N2"]
 
     data += [
         format_scalar_definition("uint32_t", "M1", M1),
         format_scalar_definition("uint32_t", "K1", K1),
         format_scalar_definition("uint32_t", "N1", N1),
-        format_scalar_definition("uint32_t", "M2", M2),
-        format_scalar_definition("uint32_t", "K2", K2),
         format_scalar_definition("uint32_t", "N2", N2),
     ]
 
@@ -61,15 +66,13 @@ def emit_stacked_gemm_data(**cfg):
     data_type = 0  # int8
 
     meshRow, tileSize, meshCol = acc_cfg["snax_versacore_spatial_unrolling"][data_type][array_shape]
+    M2, K2 = infer_stacked_gemm2_dims(M1, N1, tileSize, meshCol)
 
     data += [
         format_scalar_definition("uint32_t", "meshRow", meshRow),
         format_scalar_definition("uint32_t", "tileSize", tileSize),
         format_scalar_definition("uint32_t", "meshCol", meshCol),
     ]
-
-    assert M1 * meshRow == M2 * meshRow, "In stacked GEMM, the output rows of GEMM1 should match the input rows of GEMM2"
-    assert N1 * meshCol == K2 * tileSize, "In stacked GEMM, the output cols of GEMM1 should match the input rows of GEMM2"
 
     data_granularity_a = int(cfg["snax_versacore_core_template"]["snax_acc_cfg"][0]["granularity_a"] * 64 / 8)
     data_granularity_b = int(cfg["snax_versacore_core_template"]["snax_acc_cfg"][0]["granularity_b"] * 64 / 8)
