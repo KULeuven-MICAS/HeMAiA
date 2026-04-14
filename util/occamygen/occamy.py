@@ -136,7 +136,14 @@ def get_cluster_cfg_list(occamy_cfg, cluster_cfg_dir):
     return get_cluster_cfg_list
 
 
-def generate_snitch(cluster_cfg_dir, snitch_path, xmx="8G", xms="8G"):
+def generate_snitch(cluster_cfg_dir, snitch_path, xmx="8G", xms="8G", sw_only=False):
+    """Regenerate snax artifacts for every cluster hjson in cluster_cfg_dir.
+
+    sw_only=True invokes snax's `sw-snax-gen` target instead of `rtl-gen`,
+    which runs the lightweight StreamerSwHeaderGen entry point and only
+    emits SW-facing headers (e.g. streamer_csr_addr_map.h). No SystemVerilog
+    is produced; re-enables keeping DISABLE_HEADER_GEN off.
+    """
     cluster_cfg_dir = set(cluster_cfg_dir)
     env = os.environ.copy()
     jvm_args = f"-Xms{xms} -Xmx{xmx}"
@@ -154,6 +161,10 @@ def generate_snitch(cluster_cfg_dir, snitch_path, xmx="8G", xms="8G"):
     ):
         env[var] = f"{jvm_args} {env.get(var, '')}".strip()
 
+    make_target = "sw-snax-gen" if sw_only else "rtl-gen"
+    # In sw_only mode we *want* the header generated, so drop the suppression.
+    disable_header_gen = "false" if sw_only else "true"
+
     for cfg in cluster_cfg_dir:
         try:
             subprocess.check_call(
@@ -162,8 +173,8 @@ def generate_snitch(cluster_cfg_dir, snitch_path, xmx="8G", xms="8G"):
                     "-C",
                     f"{snitch_path}/target/snitch_cluster",
                     f"CFG_OVERRIDE={cfg}",
-                    "DISABLE_HEADER_GEN=true",
-                    "rtl-gen",
+                    f"DISABLE_HEADER_GEN={disable_header_gen}",
+                    make_target,
                 ],
                 env=env,
             )

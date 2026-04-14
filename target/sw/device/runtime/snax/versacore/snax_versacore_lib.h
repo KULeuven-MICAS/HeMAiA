@@ -3,7 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Xiaoling Yi <xiaoling.yi@kuleuven.be>
-
+// This file should be manually synced with snax-versacore-to-lib.c, which is
+// used for VERSACORE-TO. Structural equivalence is enforced at build time by
+// util/hemaia/check_snax_versacore_lib_sync.py (wired into target/sw/Makefile
+// as a prerequisite of `sw` / `single-sw`): every function defined upstream
+// must also exist here with the same ordered sequence of csrw_ss / csrr_ss
+// CSR accesses (modulo the GEMMX_*→VERSACORE_* rename).
 #pragma once
 
 #include <stdbool.h>
@@ -217,21 +222,10 @@ void set_versacore_streamer_csr(
     csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE + 2, multiplier_i);
     csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE + 3, output_zp_i);
     csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE + 4, shift_i);
-    // for rescale-down per tensor
-    // where needs to have another extra loop
-    if (array_shape == 4) {
-        // for rescale-down per output channel
-        csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE + 5, 1);
-    } else {
-        csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE + 5, 0);
-    }
-    // for the int32 to fp16 conversion
-    if (array_shape == 4) {
-        // for rescale-down per output channel
-        csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE + 6, 0);
-    } else {
-        csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE + 6, 0);
-    }
+    // Select the extra-loop policy by array shape; loop factors are defined in
+    // the scala extension params (kept in sync with snax main).
+    csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE + 5, array_shape);
+    csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE + 6, array_shape);
 #endif
 
 }
@@ -283,6 +277,15 @@ void wait_versacore_and_streamer() {
     while (csrr_ss(VERSACORE_BUSY)) {
     }
     while (csrr_ss(STREAMER_BUSY_CSR)) {
+    }
+}
+
+// Stall until the VERSACORE accelerator finishes (streamer not polled).
+// Ported from upstream snax-versacore-to-lib.c `wait_versacore()`.
+void wait_versacore() {
+    csrw_ss(VERSACORE_START_CSR, 0);
+    csrw_ss(VERSACORE_START_CSR, 0);
+    while (csrr_ss(VERSACORE_BUSY)) {
     }
 }
 
