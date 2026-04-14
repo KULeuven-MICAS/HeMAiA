@@ -1657,6 +1657,15 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_broadcast(void *arg)
 
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
 {
+    // ---------------------------------------------------------
+    // This is the full version of the GEMM call kernel that
+    // (1) takes all the arguments, 
+    // (2) computes all the configurations 
+    // (3) configures the streamer and versacore accordingly
+    // (4) starts the computation and waits for the completion
+    // all of these are done using compute core 0
+    // ---------------------------------------------------------
+
     // Assume the matrix data are all in L1
     // So all the addr are 32bit local addr
     // This kernel will configure the versacore and streamer and start the computation
@@ -1665,6 +1674,8 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
         printf_safe("[Cluster %d Core %d]: Error! Bingo GEMM full should be called from core 0!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
         return BINGO_RET_FAIL;
     }
+
+    // Extract the arguments from the arg pointer
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
     uint32_t A_addr = ((uint32_t *)arg)[0];
     uint32_t B_addr = ((uint32_t *)arg)[1];
@@ -1681,7 +1692,11 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
     uint32_t transpose_B = ((uint32_t *)arg)[9];
     uint32_t accumPrevC = ((uint32_t *)arg)[10];
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+
+    // compute the configurations for the versacore and streamer
+    // and then set the CSRs accordingly
     BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_FULL_CFG_START);
+
     // some inferenced args
     uint32_t addNonZeroC;
     if (accumPrevC)
@@ -1716,25 +1731,16 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
         tileSize = tileSize_2;
         meshCol = meshCol_2;
         break;
-    case 3:
-        meshRow = meshRow_3;
-        tileSize = tileSize_3;
-        meshCol = meshCol_3;
-        break;
-    case 4:
-        meshRow = meshRow_4;
-        tileSize = tileSize_4;
-        meshCol = meshCol_4;
-        break;
     default:
         VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx invalid!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
         return BINGO_RET_FAIL;
     }
+
     // Configuration the Steamer and Versacore
+
     //////////////////////////////////////////////////////////////
     // Streamer cfg for A
     //////////////////////////////////////////////////////////////
-    
     // Aslstride0
     uint32_t Aslstride0 = bankWidth / 8;
     // Atlbound0~5
@@ -1777,16 +1783,11 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
     case 2:
         channel_en_A = channel_en_A_2_0;
         break;
-    case 3:
-        channel_en_A = channel_en_A_3_0;
-        break;
-    case 4:
-        channel_en_A = channel_en_A_4_0;
-        break;
     default:
         VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx invalid!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
         return BINGO_RET_FAIL;
     }
+
     //////////////////////////////////////////////////////////////
     // Streamer cfg for B
     //////////////////////////////////////////////////////////////
@@ -1823,18 +1824,11 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
         channel_en_B[0] = channel_en_B_2_0;
         channel_en_B[1] = channel_en_B_2_1;
         break;
-    case 3:
-        channel_en_B[0] = channel_en_B_3_0;
-        channel_en_B[1] = channel_en_B_3_1;
-        break;
-    case 4:
-        channel_en_B[0] = channel_en_B_4_0;
-        channel_en_B[1] = channel_en_B_4_1;
-        break;
     default:
         VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx invalid!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
         return BINGO_RET_FAIL;
     }
+
     //////////////////////////////////////////////////////////////
     // Streamer cfg for C
     //////////////////////////////////////////////////////////////
@@ -1859,12 +1853,6 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
             break;
         case 2:
             Ctlbound[0] = Ctlbound0_2;
-            break;
-        case 3:
-            Ctlbound[0] = Ctlbound0_3;
-            break;
-        case 4:
-            Ctlbound[0] = Ctlbound0_4;
             break;
         default:
             VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx invalid!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
@@ -1891,14 +1879,6 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
     case 2:
         // Ctlstride0
         Ctlstride[0] = Ctlstride0_2;
-        break;
-    case 3:
-        // Ctlstride0
-        Ctlstride[0] = Ctlstride0_3;
-        break;
-    case 4:
-        // Ctlstride0
-        Ctlstride[0] = Ctlstride0_4;
         break;
     default:
         VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx invalid!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
@@ -1933,17 +1913,12 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
         case 2:
             channel_en_C = channel_en_C_2_0;
             break;
-        case 3:
-            channel_en_C = channel_en_C_3_0;
-            break;
-        case 4:
-            channel_en_C = channel_en_C_4_0;
-            break;
         default:
             VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx invalid!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
             return BINGO_RET_FAIL;
         }
     }
+
     //////////////////////////////////////////////////////////////
     // Streamer cfg for D
     //////////////////////////////////////////////////////////////
@@ -1961,12 +1936,6 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
         break;
     case 2:
         D32tlbound[0] = D32tlbound0_2;
-        break;
-    case 3:
-        D32tlbound[0] = D32tlbound0_3;
-        break;
-    case 4:
-        D32tlbound[0] = D32tlbound0_4;
         break;
     default:
         VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx invalid!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
@@ -1992,14 +1961,6 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
     case 2:
         // D32tlstride0
         D32tlstride[0] = D32tlstride0_2;
-        break;
-    case 3:
-        // D32tlstride0
-        D32tlstride[0] = D32tlstride0_3;
-        break;
-    case 4:
-        // D32tlstride0
-        D32tlstride[0] = D32tlstride0_4;
         break;
     default:
         VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx invalid!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
@@ -2027,16 +1988,11 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
     case 2:
         channel_en_D32 = channel_en_D32_2_0;
         break;
-    case 3:
-        channel_en_D32 = channel_en_D32_3_0;
-        break;
-    case 4:
-        channel_en_D32 = channel_en_D32_4_0;
-        break;
     default:
         VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx invalid!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
         return BINGO_RET_FAIL;
     }
+
     //////////////////////////////////////////////////////////////
     // Configuration the Steamer and Versacore
     //////////////////////////////////////////////////////////////
@@ -2069,6 +2025,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
         D32tlstride,         // D32tlstride[] base
         set_addr_remap_index_D32, // set_addr_remap_index_D32
         &channel_en_D32,     // channel_en_D32 []
+        // all the extensions are set to zero for now
         0, 0, 0, 0, 0, 0, 0, 0, 0);
     set_versacore_csr(
         // accPrevC means takes new C
@@ -2078,16 +2035,21 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
         0,
         array_shape_idx,
         0);
+
     VERSACORE_DEBUG_PRINT(
         "Bingo GEMM Full Kernel Streamer Configuration Done!\r\n");
+
     // Set CSR to start Streamer
     start_versacore_and_streamer();
     BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_FULL_CFG_END);
+
     // Poll until Streamer and GEMM accelerator finish
     BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_FULL_RUN_START);
     wait_versacore_and_streamer();
     BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_FULL_RUN_END);
+
     VERSACORE_DEBUG_PRINT("Bingo GEMM Full Kernel Compute Done!\r\n");
+
     return BINGO_RET_SUCC;
 }
 
