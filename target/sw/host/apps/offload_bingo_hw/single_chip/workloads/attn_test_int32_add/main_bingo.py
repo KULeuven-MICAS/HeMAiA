@@ -37,7 +37,7 @@ def parse_platform_cfg(occamy_h_path, rtlcfg_path):
     - RTL config (lru.hjson/hemaia_*.hjson) provides: chiplet coordinates → chiplet_ids
 
     Chiplet IDs are coordinate-encoded: (x, y) → (x << 4) | y
-    E.g. 2×2 grid: (0,0)=0x00, (0,1)=0x01, (1,0)=0x10, (1,1)=0x11
+    E.g. 2x2 grid: (0,0)=0x00, (0,1)=0x01, (1,0)=0x10, (1,1)=0x11
     """
     defines = {}
     with open(occamy_h_path) as f:

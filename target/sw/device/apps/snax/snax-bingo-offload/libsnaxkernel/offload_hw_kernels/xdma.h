@@ -135,7 +135,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_transpose_2d(void *arg)
     BINGO_SW_GUARD_CHECK(arg, 10);
     // Transpose a 2D matrix [M, N] -> [N, M].
     // If the xDMA has a Transposer reader extension (XDMA_SRC_EXT_NUM > 0),
-    // uses the HW transposer for tile-level 8×8 transpose.
+    // uses the HW transposer for tile-level 8x8 transpose.
     // Otherwise falls back to a CPU byte-by-byte transpose.
     //
     // HW path constraints: M % 8 == 0, N * elem % 8 == 0.
@@ -163,16 +163,16 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_transpose_2d(void *arg)
 
 #if XDMA_SRC_EXT_NUM > 0
         // ── HW Transposer path ──
-        // The Transposer extension transposes each 8×8 tile of uint8 elements
-        // (or tile_width × tile_width for other element widths) in the reader
+        // The Transposer extension transposes each 8x8 tile of uint8 elements
+        // (or tile_width x tile_width for other element widths) in the reader
         // data path. The AGU iterates tile-by-tile across the matrix.
         //
         // Reference: snax-xdma-transpose datagen.py
         // For MN→MN transpose with enable_transpose=true, uint8:
         //   tile_width = 8
-        //   transfer_per_transpose = 1 (8×8×8bit = 512bit fits in one bus word)
+        //   transfer_per_transpose = 1 (8x8x8bit = 512bit fits in one bus word)
         //   spatial_stride_src = N * elem (row width in src)
-        //   spatial_stride_dst = M * elem (row width in dst, which is N×M transposed)
+        //   spatial_stride_dst = M * elem (row width in dst, which is NxM transposed)
         //   temporal: dim0=transfer_per_transpose, dim1=tiles_across_cols, dim2=tiles_across_rows
         //   src strides: [8, tile_width*elem, N*tile_width*elem]
         //   dst strides: [8, M*tile_width*elem, tile_width*elem]
@@ -195,13 +195,13 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_transpose_2d(void *arg)
                 N * tile_w * elem           // dim2: next tile-row
             };
             uint32_t t_bounds_src[3] = {
-                tpt,                        // transfers per 8×8 tile
+                tpt,                        // transfers per 8x8 tile
                 N / tile_w,                 // tiles across columns
                 M / tile_w                  // tiles across rows
             };
 
             // Writer: transposed tile placement
-            // After transpose, each 8×8 block's rows/cols are swapped.
+            // After transpose, each 8x8 block's rows/cols are swapped.
             // dim1 stride = M*tile_w*elem (stride to next column-block in transposed output)
             // dim2 stride = tile_w*elem   (stride to next row-block in transposed output)
             uint32_t t_strides_dst[3] = {
@@ -667,7 +667,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_gather_2d(void *arg)
 //   spatial_stride may be 0 (broadcast, e.g. xdma_expand_2d) or any value
 //     ≥ 8 bytes; consecutive channels' 8-byte beats must not overlap.
 //   HW Transposer extension (READER_EXT_TRANSPOSERROW8COL8BIT8 = 0) is
-//     fixed at an 8×8-byte block; element-aware widths (uint16/uint32) are
+//     fixed at an 8x8-byte block; element-aware widths (uint16/uint32) are
 //     handled by issuing tpt = (8·8·elem_bits)/512 beats per logical block,
 //     mirroring __snax_bingo_kernel_xdma_transpose_2d.
 //
@@ -677,7 +677,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_gather_2d(void *arg)
 // layout-transformed result directly to the user's dst (no stage-out).
 //
 // ─── Spatial-axis decision tree per kernel family ─────────────────────────
-// The 4-axis loop (m, k|n, r, s|c) is mapped onto (spatial=8) × ≤5 temporal
+// The 4-axis loop (m, k|n, r, s|c) is mapped onto (spatial=8) x ≤5 temporal
 // dims. We pick the spatial axis at runtime; the first matching path wins.
 //
 // A↔R kernels — axes (m, k, r, s); inner row = tileSize·elem bytes:
@@ -698,12 +698,12 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_gather_2d(void *arg)
 //
 // B↔R kernels — axes (n, k, c, s); HW Transposer + AGU sub-block iteration:
 //   HW path: XDMA_SRC_EXT_NUM>0 && tileSize %8==0 && meshCol %8==0
-//     For each (n,k) tile, decompose into (meshCol/8) × (tileSize/8) element
+//     For each (n,k) tile, decompose into (meshCol/8) x (tileSize/8) element
 //     sub-blocks; each sub-block goes through one HW Transposer block. The
-//     AGU iterates tpt × c_sub × s_sub × k × n  → 5 temporal dims (max).
+//     AGU iterates tpt x c_sub x s_sub x k x n  → 5 temporal dims (max).
 //   else  : CPU fallback
 //
-// ─── Resulting coverage matrix (VersaCore array_shapes × kernel × elem) ───
+// ─── Resulting coverage matrix (VersaCore array_shapes x kernel x elem) ───
 //   array_shape (mR,tS,mC) | A↔R INT8         | A↔R INT32        | D↔R         | B↔R
 //   ─────────────────────────────────────────────────────────────────────────────────
 //   0 (32,4,32)            | CPU¹             | HW (path 2)      | HW (path 2) | CPU²
@@ -714,7 +714,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_gather_2d(void *arg)
 //
 //   ¹ A-tile inner row = tileSize·elem = 4 < 8 bytes; can't form an 8-byte
 //     beat that's contiguous in both row-major src and packed A dst. CPU.
-//   ² Same root cause: tileSize=4 prevents 8×8-byte sub-blocking of B-tile.
+//   ² Same root cause: tileSize=4 prevents 8x8-byte sub-blocking of B-tile.
 // ==========================================================================
 
 // Dispatch helper for the layout-convert HW paths: configures an AGU-only
@@ -824,7 +824,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_d_to_row_major(void *arg)
             xdma_layout_run(st.xdma_src, dst_addr, row_b_src, row_b_dst,
                             4, ts_src, tb_src, ts_dst, tb_dst, false);
         } else if (path == 3) {
-            // Path 3: spatial = c_chunk_inner (8 chunks × 8 bytes covering a
+            // Path 3: spatial = c_chunk_inner (8 chunks x 8 bytes covering a
             // 64-byte slice of one D-tile row in one xDMA spatial sweep).
             uint32_t c_outer = row_b_src / 64;
             uint32_t ts_src[4] = { 64,      row_b_src,  tile_b,    N_T * tile_b };
@@ -992,8 +992,8 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_row_major_to_a(void *arg)
 
 // row-major → B-layout. B↔R is per-(n,k)-tile transpose-then-tile, so we
 // drive the xDMA Transposer reader extension (mirrors xdma_transpose_2d).
-// The Transposer is fixed at 8×8-byte blocks, so the (n,k) B-tile is
-// decomposed into (meshCol/8) c-sub × (tileSize/8) s-sub element sub-blocks
+// The Transposer is fixed at 8x8-byte blocks, so the (n,k) B-tile is
+// decomposed into (meshCol/8) c-sub x (tileSize/8) s-sub element sub-blocks
 // and the AGU iterates them in addition to (n, k).
 //   Coverage: HW path when XDMA_SRC_EXT_NUM>0 && tileSize%8==0 && meshCol%8==0
 //             (all VersaCore array_shapes 1..4); CPU when tileSize=4 (shape 0).

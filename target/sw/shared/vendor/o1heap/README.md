@@ -128,7 +128,7 @@ The size of the overhead $a$ is represented in the codebase as `O1HEAP_ALIGNMENT
 because it also dictates the allocated memory pointer alignment.
 Due to the overhead, the maximum amount of memory available to the application per allocation is
 $F^\prime{}(r) = F(r) - a$.
-The amount of the overhead per allocation and, therefore, pointer alignment is 4×(pointer width);
+The amount of the overhead per allocation and, therefore, pointer alignment is 4x(pointer width);
 e.g., for a 32-bit platform, the overhead/alignment is 16 bytes (128 bits).
 
 From the above follows that $F(r) \ge 2 a$.

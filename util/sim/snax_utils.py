@@ -265,7 +265,7 @@ def block_gemm_golden_model_fp8(
             for k in range(K):
                 for r in range(meshRow):
                     for c in range(meshCol):
-                        # FP8 products → FP32 (exact, no rounding needed for FP8×FP8)
+                        # FP8 products → FP32 (exact, no rounding needed for FP8xFP8)
                         products = np.float32(A[m, k, r, :]) * np.float32(B[n, k, c, :])
                         # Binary adder-tree reduction over tileSize
                         tile_sum = adder_tree(products)

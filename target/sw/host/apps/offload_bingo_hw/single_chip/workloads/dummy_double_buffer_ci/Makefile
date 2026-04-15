@@ -16,9 +16,16 @@ INCL_DEVICE_BINARY ?= 1 # True to include the device binary
 
 
 # Offload
-OFFLOAD_H = offload_bingo_hw.h	
+OFFLOAD_H = offload_bingo_hw.h
+PLATFORM_H = $(MK_DIR)/../../../../../../../../target/sw/shared/platform/generated/occamy.h
+RTL_CFG    = $(MK_DIR)/../../../../../../../../target/rtl/cfg/lru.hjson
+
 $(OFFLOAD_H): $(MK_DIR)/main_bingo.py
-	python3 $< --output_dir $(MK_DIR) --output_offload_file_name $(OFFLOAD_H)
+	python3 $< \
+		--output_dir $(MK_DIR) \
+		--output_offload_file_name $(OFFLOAD_H) \
+		--platformcfg $(PLATFORM_H) \
+		--rtlcfg $(RTL_CFG)
 
 
 ###############
