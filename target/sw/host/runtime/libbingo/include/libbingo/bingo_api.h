@@ -374,10 +374,11 @@ void bingo_l3_free(uint8_t chip_id, uint64_t ptr);
 
 // Mempool chiplet allocator — allocates on remote mempool chip's SPM Wide.
 // Addresses are D2D-transformed so they are directly usable from compute chiplet.
-void bingo_mempool_init(uint8_t mempool_loc_x, uint8_t mempool_loc_y,
-                        uint64_t base_addr, uint64_t capacity);
-uint64_t bingo_mempool_alloc(uint64_t size);
-void bingo_mempool_free(uint64_t ptr);
+// Heap base is fixed at SPM_WIDE_BASE_ADDR + MEMPOOL_HEAP_OFFSET on the target chip.
+int bingo_mempool_init(uint8_t mempool_loc_x, uint8_t mempool_loc_y, uint64_t capacity);
+uint64_t bingo_get_mempool_heap_manager(uint8_t mempool_loc_x, uint8_t mempool_loc_y);
+uint64_t bingo_mempool_alloc(uint8_t mempool_loc_x, uint8_t mempool_loc_y, uint64_t size);
+void bingo_mempool_free(uint8_t mempool_loc_x, uint8_t mempool_loc_y, uint64_t ptr);
 
 
 // Mailbox read/write functions

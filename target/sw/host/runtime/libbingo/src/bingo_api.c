@@ -47,6 +47,23 @@ int bingo_hemaia_system_mmap_init(){
     return 0;
 }
 
+int bingo_mempool_init(uint8_t mempool_loc_x, uint8_t mempool_loc_y, uint64_t capacity){
+    // Heap start derived from the same formula as bingo_get_mempool_heap_manager
+    // so the init and the getter never diverge.
+    uint64_t mempool_heap_start = bingo_get_mempool_heap_manager(mempool_loc_x, mempool_loc_y);
+    uint64_t mempool_heap_manager = bingoHeapInit(mempool_heap_start, capacity);
+    BINGO_PRINTF(3, "Chip(%x, %x): [Host] Mempool init: base=0x%lx (chip %d,%d), capacity=%lu\r\n",
+           get_current_chip_loc_x(), get_current_chip_loc_y(),
+           mempool_heap_start, mempool_loc_x, mempool_loc_y, capacity);
+    if (mempool_heap_manager == 0) {
+        printf_safe("Chip(%x, %x): [Host] Mempool init failed for chip (%d,%d) with base 0x%lx and capacity %lu\r\n",
+               get_current_chip_loc_x(), get_current_chip_loc_y(),
+               mempool_loc_x, mempool_loc_y, mempool_heap_start, capacity);
+        return -1;
+    }
+    return 0;
+}
+
 uint64_t bingo_get_l1_heap_manager(uint8_t chip_id, uint32_t cluster_id){
     // Notice the l1 heap is init by the cluster at the start of the TCDM of each cluster
     // The L1 heap is initialized by the device at the start of each cluster's TCDM.
@@ -65,6 +82,10 @@ uint64_t bingo_get_l3_heap_manager(uint8_t chip_id){
 
 uint64_t bingo_get_l2_heap_manager(uint8_t chip_id){
     return chiplet_addr_transform_full(chip_id, ALIGN_UP((uintptr_t)SPM_NARROW_BASE_ADDR + sizeof(comm_buffer_t), BINGO_HEAP_ALIGNMENT));
+}
+
+uint64_t bingo_get_mempool_heap_manager(uint8_t mempool_loc_x, uint8_t mempool_loc_y){
+    return chiplet_addr_transform_loc(mempool_loc_x, mempool_loc_y, ALIGN_UP(SPM_WIDE_BASE_ADDR, SPM_WIDE_ALIGNMENT) + MEMPOOL_HEAP_OFFSET);
 }
 
 uint64_t bingo_l1_alloc(uint8_t chip_id, uint32_t cluster_id, uint64_t size){
@@ -125,41 +146,26 @@ void bingo_l3_free(uint8_t chip_id, uint64_t ptr){
     bingoHeapFree(bingo_get_l3_heap_manager(chip_id), ptr);
 }
 
-// Mempool chiplet allocator
-static uint64_t mempool_heap_base = 0;
-
-void bingo_mempool_init(uint8_t mempool_loc_x, uint8_t mempool_loc_y,
-                        uint64_t base_addr, uint64_t capacity){
-    // Transform mempool chip's local SPM Wide address to a D2D-reachable address
-    mempool_heap_base = chiplet_addr_transform_loc(mempool_loc_x, mempool_loc_y, base_addr);
-    uint64_t aligned_base = ALIGN_UP(mempool_heap_base, SPM_WIDE_ALIGNMENT);
-    uint64_t lost = aligned_base - mempool_heap_base;
-    bingoHeapInit(aligned_base, capacity - lost);
-    printf_safe("Chip(%x, %x): [Host] Mempool init: base=0x%lx (chip %d,%d), capacity=%lu\r\n",
-           get_current_chip_loc_x(), get_current_chip_loc_y(),
-           aligned_base, mempool_loc_x, mempool_loc_y, capacity - lost);
-}
-
-uint64_t bingo_mempool_alloc(uint64_t size){
-    if (mempool_heap_base == 0) {
-        printf_safe("ERROR: bingo_mempool_init not called\r\n");
-        return 0;
-    }
-    uint64_t aligned_base = ALIGN_UP(mempool_heap_base, SPM_WIDE_ALIGNMENT);
-    uint64_t results = bingoHeapMalloc(aligned_base, size);
+uint64_t bingo_mempool_alloc(uint8_t mempool_loc_x, uint8_t mempool_loc_y, uint64_t size){
+    uint64_t results = bingoHeapMalloc(bingo_get_mempool_heap_manager(mempool_loc_x, mempool_loc_y), size);
     if (results==0UL) {
-        printf_safe("Chip(%x, %x): [Host] Mempool malloc failed for size %d\r\n",
-               get_current_chip_loc_x(), get_current_chip_loc_y(), size);
+        printf_safe("Chip(%x, %x): [Host] Mempool malloc failed for size %d on mempool chip (%d,%d)\r\n",
+               get_current_chip_loc_x(), get_current_chip_loc_y(),
+               size, mempool_loc_x, mempool_loc_y);
+        BingoHeapDiagnostics *diag = (BingoHeapDiagnostics *)(uintptr_t)bingoHeapGetDiagnostics(bingo_get_mempool_heap_manager(mempool_loc_x, mempool_loc_y));
+        printf_safe("  Mempool heap diag: capacity=%lu, allocated=%lu, peak_allocated=%lu, peak_request_size=%lu, oom_count=%lu\r\n",
+               diag->capacity, diag->allocated, diag->peak_allocated, diag->peak_request_size, diag->oom_count);
     }
-    BINGO_PRINTF(3, "Chip(%x, %x): [Host] Mempool malloc: ptr=0x%lx, size=%d\r\n",
+    BINGO_PRINTF(3, "Chip(%x, %x): [Host] Mempool malloc on chip (%d,%d): ptr=0x%lx, size=%d\r\n",
            get_current_chip_loc_x(), get_current_chip_loc_y(),
-           results, size);
+           mempool_loc_x, mempool_loc_y,
+           results,
+           size);
     return results;
 }
 
-void bingo_mempool_free(uint64_t ptr){
-    uint64_t aligned_base = ALIGN_UP(mempool_heap_base, SPM_WIDE_ALIGNMENT);
-    bingoHeapFree(aligned_base, ptr);
+void bingo_mempool_free(uint8_t mempool_loc_x, uint8_t mempool_loc_y, uint64_t ptr){
+    bingoHeapFree(bingo_get_mempool_heap_manager(mempool_loc_x, mempool_loc_y), ptr);
 }
 
 //////////////////////////
@@ -195,15 +201,16 @@ int bingo_try_read_h2h_mailbox(uint64_t *buffer) {
 
 int bingo_write_h2h_mailbox(uint8_t chip_id, uint64_t dword,
                             uint64_t timeout_cycles, uint32_t *retry_hint) {
+    if (retry_hint) *retry_hint = 0;
     uint8_t current_chip_id = get_current_chip_id();
     if (chip_id == current_chip_id) {
-        printf("Chip(%x, %x): [Host] Error: Cannot write to its own H2H mailbox!\\r\\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+        printf("Chip(%x, %x): [Host] Error: Cannot write to its own H2H mailbox!\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
         return BINGO_MB_ERR_PARAM;
     }
     volatile uint64_t target_h2h_mailbox_write_addr = chiplet_addr_transform_full(chip_id, h2h_mailbox_write_address());
-    volatile uint64_t target_h2h_mailbox_status_addr = chiplet_addr_transform_full(chip_id, h2h_mailbox_status_flag_address());
     // Do not check status, just write directly
     writed(dword, (uintptr_t)target_h2h_mailbox_write_addr);
+    return BINGO_MB_OK;
 }
 
 int bingo_read_h2h_mailbox(uint64_t *buffer,

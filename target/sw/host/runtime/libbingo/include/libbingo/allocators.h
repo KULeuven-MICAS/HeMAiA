@@ -37,4 +37,5 @@ extern uint64_t l3_heap_start, l3_heap_size;
 //   The first 64MB is reserved for static data (weights loaded at init).
 //   The heap manages the remaining capacity for dynamic allocations.
 #define MEMPOOL_HEAP_OFFSET (64 * 1024 * 1024)  // 64MB offset from SPM base
-extern uint8_t mempool_chip_loc_x, mempool_chip_loc_y;
+extern struct BingoHeapInstance *mempool_heap_manager;
+extern uint64_t mempool_heap_base, mempool_heap_capacity;
