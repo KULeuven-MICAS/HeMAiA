@@ -18,6 +18,7 @@
 
 import os
 import sys
+import re
 import argparse
 import pathlib
 import hjson
@@ -45,11 +46,41 @@ from bingo_kernel_args import (  # noqa E402
 )
 
 
+def parse_platform_cfg(occamy_h_path, rtlcfg_path):
+    """Parse HW platform params from generated occamy.h and RTL config hjson.
+    Chiplet IDs are coordinate-encoded: (x, y) -> (x << 4) | y.
+    """
+    defines = {}
+    with open(occamy_h_path) as f:
+        for line in f:
+            m = re.match(r'#define\s+(\w+)\s+(\d+)', line)
+            if m:
+                defines[m.group(1)] = int(m.group(2))
+    with open(rtlcfg_path) as f:
+        rtlcfg = hjson.loads(f.read())
+    multichip = rtlcfg["hemaia_multichip"]
+    if multichip["single_chip"]:
+        chiplet_ids = [0x00]
+    else:
+        chiplet_ids = [(c["coordinate"][0] << 4) | c["coordinate"][1]
+                       for c in multichip["testbench_cfg"]["hemaia_compute_chip"]]
+    return {
+        "num_chiplets": defines["N_CHIPLETS"],
+        "num_clusters_per_chiplet": defines["N_CLUSTERS_PER_CHIPLET"],
+        "num_cores_per_cluster": defines["N_CORES_PER_CLUSTER"],
+        "chiplet_ids": chiplet_ids,
+    }
+
+
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--output_dir", type=str, default=".")
     parser.add_argument("--output_offload_file_name", type=str, default="offload_bingo_hw.h")
     parser.add_argument("-c", "--cfg", type=pathlib.Path, required=True)
+    parser.add_argument("--platformcfg", type=pathlib.Path, required=True,
+                        help="Path to generated occamy.h with HW platform defines")
+    parser.add_argument("--rtlcfg", type=pathlib.Path, required=True,
+                        help="Path to hemaia RTL config hjson")
     parser.add_argument("--data_h", type=pathlib.Path, default=None)
     return parser.parse_args()
 
@@ -98,10 +129,14 @@ def main():
             f.write(emit_header_file(**param))
         print(f"Written data header: {args.data_h}")
 
-    # DFG setup
+    # DFG setup using HW params derived from occamy.h + RTL config
+    platform = parse_platform_cfg(args.platformcfg, args.rtlcfg)
     dfg = BingoDFG(
-        num_chiplets=1, num_clusters_per_chiplet=1,
-        num_cores_per_cluster=2, is_host_as_acc=True, chiplet_ids=[0x00])
+        num_chiplets=platform["num_chiplets"],
+        num_clusters_per_chiplet=platform["num_clusters_per_chiplet"],
+        num_cores_per_cluster=platform["num_cores_per_cluster"],
+        is_host_as_acc=True,
+        chiplet_ids=platform["chiplet_ids"])
     dma_core = 1
     host_core = 2
 

@@ -1,6 +1,6 @@
 # xdma_sweep — xDMA RTL cycle-count characterization
 
-This workload runs a **whole sweep of xDMA ops × sizes in a single DFG** and
+This workload runs a **whole sweep of xDMA ops x sizes in a single DFG** and
 measures per-config cycle counts via the `BINGO_TRACE_XDMA_RUN_*` markers
 embedded in the device xDMA kernels — no host-side mcycle bracketing.
 
@@ -38,7 +38,7 @@ python scripts/characterize_xdma.py
 
 Edit the `CONFIGS` list at the top of `main_bingo.py`.  Each entry is
 `(op, size, rows, cols, elem_bytes)`.  For `copy_1d`, `size` is the total
-bytes; for 2D ops, `rows × cols × elem_bytes` gives the total bytes.
+bytes; for 2D ops, `rows x cols x elem_bytes` gives the total bytes.
 
 ## Files
 

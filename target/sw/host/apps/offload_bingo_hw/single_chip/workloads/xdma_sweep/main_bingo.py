@@ -2,7 +2,7 @@
 #
 # xdma_sweep: RTL cycle characterization for xDMA data-movement kernels.
 #
-# Single DFG that runs many (op × size) configs back-to-back.  Each config
+# Single DFG that runs many (op x size) configs back-to-back.  Each config
 # performs:
 #   1. Load_Input (iDMA L3 → L1)
 #   2. the xDMA op (whose BINGO_TRACE_XDMA_RUN_START/END markers give the
@@ -14,8 +14,10 @@
 
 import os
 import sys
+import re
 import argparse
 import pathlib
+import hjson
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.normpath(os.path.join(current_dir, "../../../../../../../../"))
@@ -65,10 +67,40 @@ OP_NAME_MAP = {
 }
 
 
+def parse_platform_cfg(occamy_h_path, rtlcfg_path):
+    """Parse HW platform params from generated occamy.h and RTL config hjson.
+    Chiplet IDs are coordinate-encoded: (x, y) -> (x << 4) | y.
+    """
+    defines = {}
+    with open(occamy_h_path) as f:
+        for line in f:
+            m = re.match(r'#define\s+(\w+)\s+(\d+)', line)
+            if m:
+                defines[m.group(1)] = int(m.group(2))
+    with open(rtlcfg_path) as f:
+        rtlcfg = hjson.loads(f.read())
+    multichip = rtlcfg["hemaia_multichip"]
+    if multichip["single_chip"]:
+        chiplet_ids = [0x00]
+    else:
+        chiplet_ids = [(c["coordinate"][0] << 4) | c["coordinate"][1]
+                       for c in multichip["testbench_cfg"]["hemaia_compute_chip"]]
+    return {
+        "num_chiplets": defines["N_CHIPLETS"],
+        "num_clusters_per_chiplet": defines["N_CLUSTERS_PER_CHIPLET"],
+        "num_cores_per_cluster": defines["N_CORES_PER_CLUSTER"],
+        "chiplet_ids": chiplet_ids,
+    }
+
+
 def get_args():
     parser = argparse.ArgumentParser(description="xdma_sweep — RTL cycle characterization")
     parser.add_argument("--output_dir", type=str, default=".")
     parser.add_argument("--output_offload_file_name", type=str, default="offload_bingo_hw.h")
+    parser.add_argument("--platformcfg", type=pathlib.Path, required=True,
+                        help="Path to generated occamy.h with HW platform defines")
+    parser.add_argument("--rtlcfg", type=pathlib.Path, required=True,
+                        help="Path to hemaia RTL config hjson")
     parser.add_argument("--data_h", type=pathlib.Path, default=None)
     parser.add_argument("--configs_out", type=pathlib.Path, default=None,
                         help="Optional: dump CONFIGS as JSON for the shell "
@@ -116,7 +148,7 @@ def build_xdma_node(op: str, src, dst, size: int, rows: int, cols: int,
     raise ValueError(f"unknown op: {op}")
 
 
-def create_dfg():
+def create_dfg(platform: dict):
     """Build a DFG that sweeps every xDMA config."""
     # Determine shared L1 buffer sizes
     max_bytes = 0
@@ -124,8 +156,11 @@ def create_dfg():
         max_bytes = max(max_bytes, compute_in_bytes(op, size, rows, cols, elem))
 
     dfg = BingoDFG(
-        num_chiplets=1, num_clusters_per_chiplet=1, num_cores_per_cluster=2,
-        is_host_as_acc=True, chiplet_ids=[0x00],
+        num_chiplets=platform["num_chiplets"],
+        num_clusters_per_chiplet=platform["num_clusters_per_chiplet"],
+        num_cores_per_cluster=platform["num_cores_per_cluster"],
+        is_host_as_acc=True,
+        chiplet_ids=platform["chiplet_ids"],
     )
     dma_core = 1
 
@@ -184,7 +219,8 @@ def main():
             json.dump({"configs": dumped}, f, indent=2)
         print(f"Written configs list: {args.configs_out}")
 
-    dfg = create_dfg()
+    platform = parse_platform_cfg(args.platformcfg, args.rtlcfg)
+    dfg = create_dfg(platform)
     dfg.bingo_compile_dfg(
         "Single-Chip xDMA Sweep",
         args.output_dir, args.output_offload_file_name,

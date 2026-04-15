@@ -20,12 +20,16 @@ INCL_DEVICE_BINARY ?= 1
 DATA_CFG ?= $(MK_DIR)/params.hjson
 DATA_H = $(MK_DIR)/xdma_data.h
 OFFLOAD_H = $(MK_DIR)/offload_bingo_hw.h
+PLATFORM_H = $(MK_DIR)/../../../../../../../../target/sw/shared/platform/generated/occamy.h
+RTL_CFG    = $(MK_DIR)/../../../../../../../../target/rtl/cfg/lru.hjson
 
 $(DATA_H) $(OFFLOAD_H): $(MK_DIR)/main_bingo.py $(DATA_CFG) $(MK_DIR)/xdma_datagen.py
 	python3 $(MK_DIR)/main_bingo.py \
 		--output_dir $(MK_DIR) \
 		--data_h $(DATA_H) \
-		-c $(DATA_CFG)
+		-c $(DATA_CFG) \
+		--platformcfg $(PLATFORM_H) \
+		--rtlcfg $(RTL_CFG)
 
 ###############
 # Build settings

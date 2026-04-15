@@ -20,12 +20,16 @@ INCL_DEVICE_BINARY ?= 1
 DATA_H = $(MK_DIR)/xdma_sweep_data.h
 OFFLOAD_H = $(MK_DIR)/offload_bingo_hw.h
 CONFIGS_JSON = $(MK_DIR)/configs.json
+PLATFORM_H = $(MK_DIR)/../../../../../../../../target/sw/shared/platform/generated/occamy.h
+RTL_CFG    = $(MK_DIR)/../../../../../../../../target/rtl/cfg/lru.hjson
 
 $(DATA_H) $(OFFLOAD_H) $(CONFIGS_JSON): $(MK_DIR)/main_bingo.py
 	python3 $(MK_DIR)/main_bingo.py \
 		--output_dir $(MK_DIR) \
 		--data_h $(DATA_H) \
-		--configs_out $(CONFIGS_JSON)
+		--configs_out $(CONFIGS_JSON) \
+		--platformcfg $(PLATFORM_H) \
+		--rtlcfg $(RTL_CFG)
 
 ###############
 # Build settings
