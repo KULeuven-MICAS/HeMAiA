@@ -34,15 +34,27 @@ def format_vector_define(uid, vector):
     s += '}'
     return s
 
+def format_vector_element(type_name, el, hex_bits=None, cast_hex=False):
+    if hex_bits is not None:
+        if hex_bits % 4 != 0:
+            raise ValueError("hex_bits must be a multiple of 4")
+        mask = (1 << hex_bits) - 1
+        literal = f"0x{int(el) & mask:0{hex_bits // 4}x}"
+        if cast_hex:
+            return f"({type_name}){literal}"
+        return literal
+    if type_name != "char":
+        return f"{el}"
+    return f"0x{el:02x}"
 
-def format_vector_definition(type, uid, vector, alignment=8, section=None):
+
+def format_vector_definition(
+    type, uid, vector, alignment=8, section=None, hex_bits=None, cast_hex=False
+):
     attributes = variable_attributes(alignment, section)
     s = f'{type} {uid}[{len(vector)}] {attributes} = ' + '{\n'
     for el in vector:
-        if type != 'char':
-            el_str = f'{el}'
-        else:
-            el_str = f'0x{el:02x}'
+        el_str = format_vector_element(type, el, hex_bits=hex_bits, cast_hex=cast_hex)
         s += f'\t{el_str},\n'
     s += '};'
     return s
