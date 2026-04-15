@@ -162,8 +162,8 @@ module hemaia_mem_system #(
   logic [AxiWideMasterAddrWidth-1:0] memory_start_address;
   logic [AxiWideMasterAddrWidth-1:0] memory_end_address;
 
-  assign memory_start_address = {chip_id_i, 40'b0} + MemBaseAddr;
-  assign memory_end_address   = {chip_id_i, 40'b0} + MemBaseAddr + MemSize;
+  assign memory_start_address = {chip_id_i, 40'b0} + 32'h80000000;
+  assign memory_end_address   = {chip_id_i, 40'b0} + 32'h80000000 + MemSize;
 
   logic [AxiWideMasterAddrWidth-1:0] xdma_data_region_start_address;
   logic [AxiWideMasterAddrWidth-1:0] xdma_data_region_end_address;
@@ -510,7 +510,7 @@ HeMAiAMemNarrowXbarCfg.NoSlvPorts
   ) i_hemaia_xdma_wrapper (
       .clk_i                 (clk_i),
       .rst_ni                (rst_ni),
-      .cluster_base_addr_i   ({chip_id_i, 40'b0} + MemBaseAddr),
+      .cluster_base_addr_i   ({chip_id_i, 40'b0} + 32'h80000000),
       .tcdm_req_o            (xdma_req),
       .tcdm_rsp_i            (xdma_rsp),
       .csr_req_bits_data_i   (csr_req.wdata),

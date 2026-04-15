@@ -14,7 +14,7 @@ sys.path.append(f"{ROOT_DIR}/target/sw/host/runtime/libbingo/mini_compiler")
 
 # Import emit_header_file from gemm_datagen to emit gemm_data.h directly
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from gemm_datagen import emit_header_file  # noqa E402
+from gemm_datagen import emit_header_file, infer_stacked_gemm2_dims  # noqa E402
 
 # The stacked GeMM workload does the following things:
 # 1. D1 =  A1 X B1 (A1 B1 are int8, D1 is int32)
@@ -125,8 +125,8 @@ def define_workload_params(cfg_path, hwcfg_path):
     tileSize = unrolling[1]
     meshCol  = unrolling[2]
 
-    M1 = merged["M1"]; K1 = merged["K1"]; N1 = merged["N1"]
-    M2 = merged["M2"]; K2 = merged["K2"]; N2 = merged["N2"]
+    M1 = merged["M1"]; K1 = merged["K1"]; N1 = merged["N1"]; N2 = merged["N2"]
+    M2, K2 = infer_stacked_gemm2_dims(M1, N1, tileSize, meshCol)
 
     params = {
         "M1": M1, "K1": K1, "N1": N1,

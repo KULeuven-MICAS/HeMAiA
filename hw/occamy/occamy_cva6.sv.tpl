@@ -233,7 +233,7 @@ module ${name}_cva6_ara import ${name}_pkg::*; (
       BPType: config_pkg::BHT,
       BHTEntries: unsigned'(CVA6ConfigBHTEntries),
       BHTHist: unsigned'(3),
-      DmBaseAddress: 64'h0,
+      DmBaseAddress: 64'h1,
       TvalEn: bit'(CVA6ConfigTvalEn),
       DirectVecOnly: bit'(0),
       NrPMPEntries: unsigned'(CVA6ConfigNrPMPEntries),

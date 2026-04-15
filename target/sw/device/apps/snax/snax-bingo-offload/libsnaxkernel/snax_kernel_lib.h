@@ -40,20 +40,20 @@
 // Exports must be listed in both branches so the .snax_symtab section
 // contains every kernel the device may be asked to run.
 SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
-// #if defined(OFFLOAD_BINGO_SW) || !defined(OFFLOAD_BINGO_HW)
-    /// Cluster-level Kernels ///
-    /// Used for bingo sw     ///
-    SNAX_EXPORT_FUNC(__snax_kernel_dummy),
-    SNAX_EXPORT_FUNC(__snax_kernel_check_results),
-    // SNAX_EXPORT_FUNC(__snax_kernel_check_results_full),
-    // SNAX_EXPORT_FUNC(__snax_kernel_csr),
-    // SNAX_EXPORT_FUNC(__snax_kernel_load_compute_store),
-    SNAX_EXPORT_FUNC(__snax_kernel_double_buffer),
-    SNAX_EXPORT_FUNC(__snax_kernel_xdma_1d_copy),
-    SNAX_EXPORT_FUNC(__snax_kernel_idma_1d_copy),
-    SNAX_EXPORT_FUNC(__snax_kernel_gemm),
-    SNAX_EXPORT_FUNC(__snax_kernel_minimal_cfg_start_gemm_and_wait),
-// #endif
+// // #if defined(OFFLOAD_BINGO_SW) || !defined(OFFLOAD_BINGO_HW)
+//     /// Cluster-level Kernels ///
+//     /// Used for bingo sw     ///
+//     SNAX_EXPORT_FUNC(__snax_kernel_dummy),
+//     SNAX_EXPORT_FUNC(__snax_kernel_check_results),
+//     // SNAX_EXPORT_FUNC(__snax_kernel_check_results_full),
+//     // SNAX_EXPORT_FUNC(__snax_kernel_csr),
+//     // SNAX_EXPORT_FUNC(__snax_kernel_load_compute_store),
+//     SNAX_EXPORT_FUNC(__snax_kernel_double_buffer),
+//     SNAX_EXPORT_FUNC(__snax_kernel_xdma_1d_copy),
+//     SNAX_EXPORT_FUNC(__snax_kernel_idma_1d_copy),
+//     SNAX_EXPORT_FUNC(__snax_kernel_gemm),
+//     SNAX_EXPORT_FUNC(__snax_kernel_minimal_cfg_start_gemm_and_wait),
+// // #endif
 
 // #if defined(OFFLOAD_BINGO_HW) || !defined(OFFLOAD_BINGO_SW)
     /// Core-level Kernels ///
