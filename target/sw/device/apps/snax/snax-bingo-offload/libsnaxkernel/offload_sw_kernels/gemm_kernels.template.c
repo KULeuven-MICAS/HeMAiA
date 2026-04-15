@@ -9,15 +9,14 @@
 // cluster-coordinated GEMM kernels:
 //   - __snax_kernel_gemm                       (full load/compute/store)
 //   - __snax_kernel_minimal_cfg_start_gemm_and_wait
-// Both return `void` and dispatch per array_shape_idx via `if/else if`
-// chains (see __snax_kernel_gemm in particular) rather than `switch`.
+// Both return `void` and dispatch per array_shape_idx via
+// `switch (array_shape_idx)` blocks so the generator can trim unused cases.
 //
 // READ by libsnaxkernel/gen_bingo_gemm_kernels.py which substitutes every
 // HW-parameter macro (meshRow_N, channel_en_A_N_M, bankWidth, …) with the
-// literal value computed from the hwcfg. Any `switch (array_shape_idx)`
-// block in this template (there aren't any today — cluster kernels use
-// if/else) would also get trimmed to the cases actually present in the
-// hwcfg. The emitted file is offload_sw_kernels/gemm.h (gitignored).
+// literal value computed from the hwcfg and strips `case N:` arms for
+// shapes the hwcfg does not define.
+// emitted file is offload_sw_kernels/gemm.h (gitignored).
 //
 // Edit THIS file when you want to change cluster-level GEMM kernel logic.
 // Do not edit the generated offload_sw_kernels/gemm.h — any changes there
@@ -133,38 +132,34 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm(void *arg)
         // get_cls_shared_ptrs()[0][16] is used for meshRow
         // get_cls_shared_ptrs()[0][17] is used for tileSize
         // get_cls_shared_ptrs()[0][18] is used for meshCol
-        if (array_shape_idx == 0)
+        switch (array_shape_idx)
         {
+        case 0:
             arg_ptr[16] = meshRow_0;
             arg_ptr[17] = tileSize_0;
             arg_ptr[18] = meshCol_0;
-        }
-        else if (array_shape_idx == 1)
-        {
+            break;
+        case 1:
             arg_ptr[16] = meshRow_1;
             arg_ptr[17] = tileSize_1;
             arg_ptr[18] = meshCol_1;
-        }
-        else if (array_shape_idx == 2)
-        {
+            break;
+        case 2:
             arg_ptr[16] = meshRow_2;
             arg_ptr[17] = tileSize_2;
             arg_ptr[18] = meshCol_2;
-        }
-        else if (array_shape_idx == 3)
-        {
+            break;
+        case 3:
             arg_ptr[16] = meshRow_3;
             arg_ptr[17] = tileSize_3;
             arg_ptr[18] = meshCol_3;
-        }
-        else if (array_shape_idx == 4)
-        {
+            break;
+        case 4:
             arg_ptr[16] = meshRow_4;
             arg_ptr[17] = tileSize_4;
             arg_ptr[18] = meshCol_4;
-        }
-        else
-        {
+            break;
+        default:
             VERSACORE_DEBUG_PRINT("ERROR: array_shape_idx invalid!\r\n");
             return;
         }
@@ -412,25 +407,25 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm(void *arg)
         // transpose_A
         get_cls_shared_ptrs()[5][4] = transpose_A;
         // channel_en_A []
-        if (array_shape_idx == 0)
+        switch (array_shape_idx)
         {
+        case 0:
             get_cls_shared_ptrs()[5][5] = channel_en_A_0_0;
-        }
-        else if (array_shape_idx == 1)
-        {
+            break;
+        case 1:
             get_cls_shared_ptrs()[5][5] = channel_en_A_1_0;
-        }
-        else if (array_shape_idx == 2)
-        {
+            break;
+        case 2:
             get_cls_shared_ptrs()[5][5] = channel_en_A_2_0;
-        }
-        else if (array_shape_idx == 3)
-        {
+            break;
+        case 3:
             get_cls_shared_ptrs()[5][5] = channel_en_A_3_0;
-        }
-        else if (array_shape_idx == 4)
-        {
+            break;
+        case 4:
             get_cls_shared_ptrs()[5][5] = channel_en_A_4_0;
+            break;
+        default:
+            break;
         }
         VERSACORE_DEBUG_PRINT(
             "GEMM Intra-Chiplet Kernel Compute Streamer Cfg A Done!\r\n");
@@ -500,30 +495,30 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm(void *arg)
             VERSACORE_DEBUG_PRINT("Allocated channel_en_B at %p\r\n",
                                   (void *)channel_en_B);
         }
-        if (array_shape_idx == 0)
+        switch (array_shape_idx)
         {
+        case 0:
             channel_en_B[0] = channel_en_B_0_0;
             channel_en_B[1] = channel_en_B_0_1;
-        }
-        else if (array_shape_idx == 1)
-        {
+            break;
+        case 1:
             channel_en_B[0] = channel_en_B_1_0;
             channel_en_B[1] = channel_en_B_1_1;
-        }
-        else if (array_shape_idx == 2)
-        {
+            break;
+        case 2:
             channel_en_B[0] = channel_en_B_2_0;
             channel_en_B[1] = channel_en_B_2_1;
-        }
-        else if (array_shape_idx == 3)
-        {
+            break;
+        case 3:
             channel_en_B[0] = channel_en_B_3_0;
             channel_en_B[1] = channel_en_B_3_1;
-        }
-        else if (array_shape_idx == 4)
-        {
+            break;
+        case 4:
             channel_en_B[0] = channel_en_B_4_0;
             channel_en_B[1] = channel_en_B_4_1;
+            break;
+        default:
+            break;
         }
         get_cls_shared_ptrs()[5][11] = (uint32_t)(uintptr_t)channel_en_B;
         VERSACORE_DEBUG_PRINT(
@@ -552,25 +547,28 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm(void *arg)
             // accumPrevC is true
             Ctlbound[0] = 0;
         }
-        else if (array_shape_idx == 0)
+        else
         { // else bound is normal
-            Ctlbound[0] = Ctlbound0_0;
-        }
-        else if (array_shape_idx == 1)
-        {
-            Ctlbound[0] = Ctlbound0_1;
-        }
-        else if (array_shape_idx == 2)
-        {
-            Ctlbound[0] = Ctlbound0_2;
-        }
-        else if (array_shape_idx == 3)
-        {
-            Ctlbound[0] = Ctlbound0_3;
-        }
-        else if (array_shape_idx == 4)
-        {
-            Ctlbound[0] = Ctlbound0_4;
+            switch (array_shape_idx)
+            {
+            case 0:
+                Ctlbound[0] = Ctlbound0_0;
+                break;
+            case 1:
+                Ctlbound[0] = Ctlbound0_1;
+                break;
+            case 2:
+                Ctlbound[0] = Ctlbound0_2;
+                break;
+            case 3:
+                Ctlbound[0] = Ctlbound0_3;
+                break;
+            case 4:
+                Ctlbound[0] = Ctlbound0_4;
+                break;
+            default:
+                break;
+            }
         }
         Ctlbound[1] = N;
         Ctlbound[2] = M;
@@ -589,30 +587,26 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm(void *arg)
         }
         get_cls_shared_ptrs()[5][14] = (uint32_t)(uintptr_t)Ctlstride;
 
-        if (array_shape_idx == 0)
+        // Ctlstride0
+        switch (array_shape_idx)
         {
-            // Ctlstride0
+        case 0:
             Ctlstride[0] = Ctlstride0_0;
-        }
-        else if (array_shape_idx == 1)
-        {
-            // Ctlstride0
+            break;
+        case 1:
             Ctlstride[0] = Ctlstride0_1;
-        }
-        else if (array_shape_idx == 2)
-        {
-            // Ctlstride0
+            break;
+        case 2:
             Ctlstride[0] = Ctlstride0_2;
-        }
-        else if (array_shape_idx == 3)
-        {
-            // Ctlstride0
+            break;
+        case 3:
             Ctlstride[0] = Ctlstride0_3;
-        }
-        else if (array_shape_idx == 4)
-        {
-            // Ctlstride0
+            break;
+        case 4:
             Ctlstride[0] = Ctlstride0_4;
+            break;
+        default:
+            break;
         }
         // Ctlstride1
         Ctlstride[1] = C_elem_len * meshRow *
@@ -631,25 +625,28 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm(void *arg)
         {
             get_cls_shared_ptrs()[5][16] = channel_en_C_null_0_0;
         }
-        else if (array_shape_idx == 0)
+        else
         {
-            get_cls_shared_ptrs()[5][16] = channel_en_C_0_0;
-        }
-        else if (array_shape_idx == 1)
-        {
-            get_cls_shared_ptrs()[5][16] = channel_en_C_1_0;
-        }
-        else if (array_shape_idx == 2)
-        {
-            get_cls_shared_ptrs()[5][16] = channel_en_C_2_0;
-        }
-        else if (array_shape_idx == 3)
-        {
-            get_cls_shared_ptrs()[5][16] = channel_en_C_3_0;
-        }
-        else if (array_shape_idx == 4)
-        {
-            get_cls_shared_ptrs()[5][16] = channel_en_C_4_0;
+            switch (array_shape_idx)
+            {
+            case 0:
+                get_cls_shared_ptrs()[5][16] = channel_en_C_0_0;
+                break;
+            case 1:
+                get_cls_shared_ptrs()[5][16] = channel_en_C_1_0;
+                break;
+            case 2:
+                get_cls_shared_ptrs()[5][16] = channel_en_C_2_0;
+                break;
+            case 3:
+                get_cls_shared_ptrs()[5][16] = channel_en_C_3_0;
+                break;
+            case 4:
+                get_cls_shared_ptrs()[5][16] = channel_en_C_4_0;
+                break;
+            default:
+                break;
+            }
         }
         VERSACORE_DEBUG_PRINT(
             "GEMM Intra-Chiplet Kernel Compute Streamer Cfg C Done!\r\n");
@@ -673,25 +670,25 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm(void *arg)
         }
         get_cls_shared_ptrs()[5][18] = (uint32_t)(uintptr_t)D32tlbound;
         // D32tlbound0~3
-        if (array_shape_idx == 0)
+        switch (array_shape_idx)
         {
+        case 0:
             D32tlbound[0] = D32tlbound0_0;
-        }
-        else if (array_shape_idx == 1)
-        {
+            break;
+        case 1:
             D32tlbound[0] = D32tlbound0_1;
-        }
-        else if (array_shape_idx == 2)
-        {
+            break;
+        case 2:
             D32tlbound[0] = D32tlbound0_2;
-        }
-        else if (array_shape_idx == 3)
-        {
+            break;
+        case 3:
             D32tlbound[0] = D32tlbound0_3;
-        }
-        else if (array_shape_idx == 4)
-        {
+            break;
+        case 4:
             D32tlbound[0] = D32tlbound0_4;
+            break;
+        default:
+            break;
         }
         D32tlbound[1] = N;
         D32tlbound[2] = M;
@@ -709,30 +706,26 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm(void *arg)
                                   (void *)D32tlstride);
         }
         get_cls_shared_ptrs()[5][19] = (uint32_t)(uintptr_t)D32tlstride;
-        if (array_shape_idx == 0)
+        // D32tlstride0
+        switch (array_shape_idx)
         {
-            // D32tlstride0
+        case 0:
             D32tlstride[0] = D32tlstride0_0;
-        }
-        else if (array_shape_idx == 1)
-        {
-            // D32tlstride0
+            break;
+        case 1:
             D32tlstride[0] = D32tlstride0_1;
-        }
-        else if (array_shape_idx == 2)
-        {
-            // D32tlstride0
+            break;
+        case 2:
             D32tlstride[0] = D32tlstride0_2;
-        }
-        else if (array_shape_idx == 3)
-        {
-            // D32tlstride0
+            break;
+        case 3:
             D32tlstride[0] = D32tlstride0_3;
-        }
-        else if (array_shape_idx == 4)
-        {
-            // D32tlstride0
+            break;
+        case 4:
             D32tlstride[0] = D32tlstride0_4;
+            break;
+        default:
+            break;
         }
         // D32tlstride1
         D32tlstride[1] = D32_elem_len * meshRow *
@@ -746,25 +739,25 @@ SNAX_LIB_DEFINE void __snax_kernel_gemm(void *arg)
         // set_addr_remap_index_D32
         get_cls_shared_ptrs()[5][20] = 0;
         // channel_en_D32 []
-        if (array_shape_idx == 0)
+        switch (array_shape_idx)
         {
+        case 0:
             get_cls_shared_ptrs()[5][21] = channel_en_D32_0_0;
-        }
-        else if (array_shape_idx == 1)
-        {
+            break;
+        case 1:
             get_cls_shared_ptrs()[5][21] = channel_en_D32_1_0;
-        }
-        else if (array_shape_idx == 2)
-        {
+            break;
+        case 2:
             get_cls_shared_ptrs()[5][21] = channel_en_D32_2_0;
-        }
-        else if (array_shape_idx == 3)
-        {
+            break;
+        case 3:
             get_cls_shared_ptrs()[5][21] = channel_en_D32_3_0;
-        }
-        else if (array_shape_idx == 4)
-        {
+            break;
+        case 4:
             get_cls_shared_ptrs()[5][21] = channel_en_D32_4_0;
+            break;
+        default:
+            break;
         }
         VERSACORE_DEBUG_PRINT(
             "GEMM Intra-Chiplet Kernel Compute Streamer Cfg D Done!\r\n");
