@@ -20,13 +20,17 @@ DATA_H = $(MK_DIR)/gemm_data.h
 OFFLOAD_H = $(MK_DIR)/offload_bingo_hw.h
 BENDER   = bender
 SNITCH_ROOT = $(shell $(BENDER) path snitch_cluster)
+PLATFORM_H = $(MK_DIR)/../../../../../../../../target/sw/shared/platform/generated/occamy.h
+RTL_CFG    = $(MK_DIR)/../../../../../../../../target/rtl/cfg/lru.hjson
 
 $(DATA_H) $(OFFLOAD_H): $(MK_DIR)/main_bingo.py $(DATA_CFG)
 	python3 $(MK_DIR)/main_bingo.py \
 		--output_dir $(MK_DIR) \
 		--data_h $(DATA_H) \
 		-c $(DATA_CFG) \
-		--hwcfg $(SNITCH_ROOT)/target/snitch_cluster/cfg/snax_versacore_to_cluster.hjson
+		--hwcfg $(SNITCH_ROOT)/target/snitch_cluster/cfg/snax_versacore_to_cluster.hjson \
+		--platformcfg $(PLATFORM_H) \
+		--rtlcfg $(RTL_CFG)
 
 
 ###############
