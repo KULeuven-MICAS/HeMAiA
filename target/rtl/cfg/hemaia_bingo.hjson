@@ -96,10 +96,10 @@
       quad_axi_lite_base_offset: 65536 // 0x10000
     },
     clusters:[
-      "snax_bingo_cluster",
-      "snax_bingo_cluster",
-      "snax_bingo_cluster",
-      "snax_bingo_cluster",
+      "snax_versacore_to_cluster",
+      "snax_versacore_to_cluster",
+      "snax_versacore_to_cluster",
+      "snax_versacore_to_cluster",
       ],
 
     hemaia_xdma_cfg: {
