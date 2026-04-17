@@ -138,11 +138,12 @@ When a task finishes locally, the runtime decrements local successors directly; 
 
 ---
 ## 9. Memory Management
-Libbingo uses **O1Heap** arenas per chip & per level:
+Libbingo uses **BingoAlloc** (a modified O1Heap allocator) arenas per chip & per level:
 * L2 heap: low‑latency small allocations (metadata, task descriptors)
 * L3 heap: larger buffers / user data
 
-Helper accessors expose arena managers. Alignments follow O1Heap requirements (usually 64 B). A failed allocation should be instrumented (roadmap includes diagnostics for capacity & fragmentation stats).
+BingoAlloc uses alignment-based rounding (not power-of-2) to allow allocations up to ~capacity, not just capacity/2.
+Helper accessors expose arena managers. Alignments follow BingoAlloc requirements (128 B). A failed allocation is instrumented with diagnostics (capacity, allocated, peak, OOM count).
 
 ---
 ## 10. Multi‑Chip Execution Flow
@@ -167,7 +168,7 @@ bingo_task_t *task_list[2] = NULL;
 uint32_t kernel_fn = get_device_function("__snax_kernel_foo");
 
 // Prepare args structure in L3
-foo_args_t *args = o1heapAllocate(bingo_get_l3_heap_manager(chip_id), sizeof(*args));
+foo_args_t *args = bingoHeapMalloc(bingo_get_l3_heap_manager(chip_id), sizeof(*args));
 args->param = 42;
 
 // Create tasks

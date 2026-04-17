@@ -28,15 +28,25 @@ PERF_CSV_PY      ?= $(UTIL_DIR)/trace/perf_csv.py
 LAYOUT_EVENTS_PY ?= $(UTIL_DIR)/trace/layout_events.py
 EVENTVIS_PY      ?= $(UTIL_DIR)/trace/eventvis.py
 
+IS_CLEAN_GOAL := $(filter clean clean-%,$(MAKECMDGOALS))
+
 VLT_ROOT       ?= /opt/verilator/share/verilator
+ifeq ($(IS_CLEAN_GOAL),)
 VERILATOR_VERSION ?= $(shell $(VLT) --version | grep -oP 'Verilator \K\d+')
+else
+VERILATOR_VERSION ?=
+endif
 
 MATCH_END := '/+incdir+/ s/$$/\/*\/*/'
 MATCH_BGN := 's/+incdir+//g'
 SED_SRCS  := sed -e ${MATCH_END} -e ${MATCH_BGN}
 
 VSIM_BENDER   += -t test -t rtl -t vsim
+ifeq ($(IS_CLEAN_GOAL),)
 VSIM_SOURCES   = $(shell ${BENDER} script flist ${VSIM_BENDER} | ${SED_SRCS})
+else
+VSIM_SOURCES   =
+endif
 VSIM_BUILDDIR ?= work-vsim
 VOPT_FLAGS     = +acc
 VOPT_FLAGS    += +notimingchecks
@@ -44,15 +54,27 @@ VOPT_FLAGS    += +notimingchecks
 # VCS_BUILDDIR should to be the same as the `DEFAULT : ./work-vcs`
 # in target/snitch_cluster/synopsys_sim.setup
 VCS_BENDER   += -t test -t rtl -t vcs
+ifeq ($(IS_CLEAN_GOAL),)
 VCS_SOURCES   = $(shell ${BENDER} script flist ${VCS_BENDER} | ${SED_SRCS})
+else
+VCS_SOURCES   =
+endif
 VCS_BUILDDIR := work-vcs
 
+ifeq ($(IS_CLEAN_GOAL),)
 SYN_SOURCES = $(shell ${BENDER} script synopsys ${SYN_BENDER})
+else
+SYN_SOURCES =
+endif
 SYN_BUILDDIR := work-syn
 
 
 VLT_BENDER   += -t rtl
+ifeq ($(IS_CLEAN_GOAL),)
 VLT_SOURCES   = $(shell ${BENDER} script flist ${VLT_BENDER} | ${SED_SRCS})
+else
+VLT_SOURCES   =
+endif
 VLT_BUILDDIR := work-vlt
 
 VLT_FLAGS    += --timing
@@ -166,7 +188,11 @@ $(LOGS_DIR)/%.txt $(LOGS_DIR)/%_perf.json: $(LOGS_DIR)/%.dasm $(GENTRACE_PY)
 	$(DASM) < $< | $(PYTHON) $(GENTRACE_PY) --permissive -d $(LOGS_DIR)/trace_chip_$$CHIP\_hart_$$HART\_perf.json > $(LOGS_DIR)/trace_chip_$$CHIP\_hart_$$HART.txt
 
 # Generate source-code interleaved traces for all harts.
+ifeq ($(IS_CLEAN_GOAL),)
 BINARY ?= $(shell cat apps/.rtlbinary)
+else
+BINARY ?=
+endif
 
 $(LOGS_DIR)/%.s: $(LOGS_DIR)/%.txt $(ANNOTATE_PY)
 	$(PYTHON) $(ANNOTATE_PY) $(ANNOTATE_FLAGS) -o $@ $(BINARY) $<

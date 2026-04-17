@@ -96,7 +96,7 @@ def emit_stacked_gemm_data(**cfg):
     )
 
     # --------------------------------------------------
-    # Golden GEMM 1: D1 = A1 × B1
+    # Golden GEMM 1: D1 = A1 x B1
     # --------------------------------------------------
     C1 = np.zeros((M1, N1, meshRow, meshCol), dtype=np.int32)
 
@@ -122,7 +122,7 @@ def emit_stacked_gemm_data(**cfg):
         D1_int8[i*4 + 3] = ((val >> 24) & 0xFF).astype(np.int8)
 
     # --------------------------------------------------
-    # Golden GEMM 2: D2 = D1 × B2
+    # Golden GEMM 2: D2 = D1 x B2
     # --------------------------------------------------
     C2 = np.zeros((M2, N2, meshRow, meshCol), dtype=np.int32)
 

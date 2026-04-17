@@ -219,10 +219,19 @@ inline uintptr_t quad_ctrl_pm_base_lo_addr(){
 }
 
 inline uintptr_t quad_ctrl_core_power_domain_addr(uint32_t reg_idx){
-    return QUAD_AXI_LITE_NARROW_PERIPHERALS_BASE_ADDR + OCCAMY_QUAD_PERIPH_CORE_POWER_DOMAIN_0_REG_OFFSET + 
+    return QUAD_AXI_LITE_NARROW_PERIPHERALS_BASE_ADDR + OCCAMY_QUAD_PERIPH_CORE_POWER_DOMAIN_0_REG_OFFSET +
             (reg_idx / OCCAMY_QUAD_PERIPH_CORE_POWER_DOMAIN_CORE_POWER_DOMAIN_FIELDS_PER_REG) * 4;
 }
 
+inline uintptr_t quad_ctrl_cerf_state_addr(){
+    return QUAD_AXI_LITE_NARROW_PERIPHERALS_BASE_ADDR + OCCAMY_QUAD_PERIPH_CERF_STATE_REG_OFFSET;
+}
+inline uintptr_t quad_ctrl_cerf_write_en_addr(){
+    return QUAD_AXI_LITE_NARROW_PERIPHERALS_BASE_ADDR + OCCAMY_QUAD_PERIPH_CERF_WRITE_EN_REG_OFFSET;
+}
+inline uintptr_t quad_ctrl_cerf_status_addr(){
+    return QUAD_AXI_LITE_NARROW_PERIPHERALS_BASE_ADDR + OCCAMY_QUAD_PERIPH_CERF_STATUS_REG_OFFSET;
+}
 
 inline uintptr_t clint_msip_addr(uint32_t hartid) {
     return clint_msip_base + (hartid / CLINT_MSIP_P_FIELDS_PER_REG) * 4;

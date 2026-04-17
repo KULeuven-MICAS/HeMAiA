@@ -238,7 +238,7 @@ typedef struct {
 //////////////////////////////////////
 
 typedef struct hw_manager_task {
-    bool     task_type;            // Task Type 0: Normal Task, 1: Dummy Task 
+    uint8_t  task_type;            // 2-bit: 0=Normal, 1=Dummy, 2=Gating
     uint16_t task_id;              // Task ID
     uint8_t  assigned_chiplet_id;  // Target chiplet for execution
     uint8_t  assigned_cluster_id;  // Target cluster for execution
@@ -247,18 +247,27 @@ typedef struct hw_manager_task {
     uint8_t  dep_check_code;       // Dependency check code
     bool     dep_set_enabled;      // Whether dependency setting is enabled
     bool     dep_set_all_chiplet;  // Whether to set dependency on all chiplets
-    uint8_t  dep_set_code;         // Chiplet ID to set dependency
+    uint8_t  dep_set_code;         // Dependency set code
     uint8_t  dep_set_chiplet_id;   // Chiplet ID to set dependency
     uint8_t  dep_set_cluster_id;   // Cluster ID to set dependency
+    // DARTS Tier 1: Conditional Execution
+    bool     cond_exec_en;         // Conditional execution enabled
+    uint8_t  cond_exec_group_id;   // CERF group (0-15)
+    bool     cond_exec_invert;     // Skip when group ACTIVE (if true)
 } bingo_hw_manager_task_desc_t;
 
 static inline uint64_t encode_bingo_hw_manager_task_desc(bingo_hw_manager_task_desc_t desc) {
     uint64_t encoded = 0;
 
-    // Task type (1 bit) at encoded[0]
+    // DARTS Tier 1: Conditional Execution fields (bits 0-5)
+    encoded |= ENCODE_BITFIELD(desc.cond_exec_invert, COND_EXEC_INVERT_WIDTH, COND_EXEC_INVERT_SHIFT);
+    encoded |= ENCODE_BITFIELD(desc.cond_exec_group_id, COND_EXEC_GROUP_ID_WIDTH, COND_EXEC_GROUP_ID_SHIFT);
+    encoded |= ENCODE_BITFIELD(desc.cond_exec_en, COND_EXEC_EN_WIDTH, COND_EXEC_EN_SHIFT);
+
+    // Task type (2 bits): 0=Normal, 1=Dummy, 2=Gating
     encoded |= ENCODE_BITFIELD(desc.task_type, TASK_TYPE_WIDTH, TASK_TYPE_SHIFT);
 
-    // Task ID (12 bits) at encoded[12:1]
+    // Task ID (12 bits)
     encoded |= ENCODE_BITFIELD(desc.task_id, TASK_ID_WIDTH, TASK_ID_SHIFT);
 
     // Assigned chiplet ID (8 bits)
@@ -294,6 +303,54 @@ static inline uint64_t encode_bingo_hw_manager_task_desc(bingo_hw_manager_task_d
     return encoded;
 }
 
+static inline bingo_hw_manager_task_desc_t decode_bingo_hw_manager_task_desc(uint64_t encoded) {
+    bingo_hw_manager_task_desc_t desc = {0};
+    // DARTS Tier 1: Conditional Execution fields
+    desc.cond_exec_invert   = BINGO_EXTRACT_BITS(encoded, COND_EXEC_INVERT_SHIFT + COND_EXEC_INVERT_WIDTH - 1, COND_EXEC_INVERT_SHIFT);
+    desc.cond_exec_group_id = BINGO_EXTRACT_BITS(encoded, COND_EXEC_GROUP_ID_SHIFT + COND_EXEC_GROUP_ID_WIDTH - 1, COND_EXEC_GROUP_ID_SHIFT);
+    desc.cond_exec_en       = BINGO_EXTRACT_BITS(encoded, COND_EXEC_EN_SHIFT + COND_EXEC_EN_WIDTH - 1, COND_EXEC_EN_SHIFT);
+    desc.task_type          = BINGO_EXTRACT_BITS(encoded, TASK_TYPE_SHIFT + TASK_TYPE_WIDTH - 1, TASK_TYPE_SHIFT);
+    desc.task_id            = BINGO_EXTRACT_BITS(encoded, TASK_ID_SHIFT + TASK_ID_WIDTH - 1, TASK_ID_SHIFT);
+    desc.assigned_chiplet_id = BINGO_EXTRACT_BITS(encoded, ASSIGNED_CHIPLET_ID_SHIFT + ASSIGNED_CHIPLET_ID_WIDTH - 1, ASSIGNED_CHIPLET_ID_SHIFT);
+    desc.assigned_cluster_id = BINGO_EXTRACT_BITS(encoded, ASSIGNED_CLUSTER_ID_SHIFT + ASSIGNED_CLUSTER_ID_WIDTH - 1, ASSIGNED_CLUSTER_ID_SHIFT);
+    desc.assigned_core_id    = BINGO_EXTRACT_BITS(encoded, ASSIGNED_CORE_ID_SHIFT + ASSIGNED_CORE_ID_WIDTH - 1, ASSIGNED_CORE_ID_SHIFT);
+    desc.dep_check_enabled   = BINGO_EXTRACT_BITS(encoded, DEP_CHECK_ENABLED_SHIFT + DEP_CHECK_ENABLED_WIDTH - 1, DEP_CHECK_ENABLED_SHIFT);
+    desc.dep_check_code      = BINGO_EXTRACT_BITS(encoded, DEP_CHECK_CODE_SHIFT + DEP_CHECK_CODE_WIDTH - 1, DEP_CHECK_CODE_SHIFT);
+    desc.dep_set_enabled     = BINGO_EXTRACT_BITS(encoded, DEP_SET_ENABLED_SHIFT + DEP_SET_ENABLED_WIDTH - 1, DEP_SET_ENABLED_SHIFT);
+    desc.dep_set_all_chiplet = BINGO_EXTRACT_BITS(encoded, DEP_SET_ALL_CHIPLET_SHIFT + DEP_SET_ALL_CHIPLET_WIDTH - 1, DEP_SET_ALL_CHIPLET_SHIFT);
+    desc.dep_set_code        = BINGO_EXTRACT_BITS(encoded, DEP_SET_CODE_SHIFT + DEP_SET_CODE_WIDTH - 1, DEP_SET_CODE_SHIFT);
+    desc.dep_set_chiplet_id  = BINGO_EXTRACT_BITS(encoded, DEP_SET_CHIPLET_ID_SHIFT + DEP_SET_CHIPLET_ID_WIDTH - 1, DEP_SET_CHIPLET_ID_SHIFT);
+    desc.dep_set_cluster_id  = BINGO_EXTRACT_BITS(encoded, DEP_SET_CLUSTER_ID_SHIFT + DEP_SET_CLUSTER_ID_WIDTH - 1, DEP_SET_CLUSTER_ID_SHIFT);
+    return desc;
+}
+
+// Builder helpers for conditional tasks
+static inline bingo_hw_manager_task_desc_t bingo_hw_build_gating_task(
+    uint16_t task_id, uint8_t chiplet_id, uint8_t cluster_id, uint8_t core_id) {
+    bingo_hw_manager_task_desc_t desc = {0};
+    desc.task_type = 2;  // gating
+    desc.task_id = task_id;
+    desc.assigned_chiplet_id = chiplet_id;
+    desc.assigned_cluster_id = cluster_id;
+    desc.assigned_core_id = core_id;
+    return desc;
+}
+
+static inline bingo_hw_manager_task_desc_t bingo_hw_build_conditional_task(
+    uint16_t task_id, uint8_t chiplet_id, uint8_t cluster_id, uint8_t core_id,
+    uint8_t cerf_group_id, bool invert) {
+    bingo_hw_manager_task_desc_t desc = {0};
+    desc.task_type = 0;  // normal
+    desc.task_id = task_id;
+    desc.assigned_chiplet_id = chiplet_id;
+    desc.assigned_cluster_id = cluster_id;
+    desc.assigned_core_id = core_id;
+    desc.cond_exec_en = true;
+    desc.cond_exec_group_id = cerf_group_id;
+    desc.cond_exec_invert = invert;
+    return desc;
+}
+
 ////////////////////
 ///// API      /////
 ////////////////////
@@ -314,6 +371,14 @@ uint64_t bingo_l3_alloc(uint8_t chip_id, uint64_t size);
 void bingo_l1_free(uint8_t chip_id, uint32_t cluster_id, uint64_t ptr);
 void bingo_l2_free(uint8_t chip_id, uint64_t ptr);
 void bingo_l3_free(uint8_t chip_id, uint64_t ptr);
+
+// Mempool chiplet allocator — allocates on remote mempool chip's SPM Wide.
+// Addresses are D2D-transformed so they are directly usable from compute chiplet.
+// Heap base is fixed at SPM_WIDE_BASE_ADDR + MEMPOOL_HEAP_OFFSET on the target chip.
+int bingo_mempool_init(uint8_t mempool_loc_x, uint8_t mempool_loc_y, uint64_t capacity);
+uint64_t bingo_get_mempool_heap_manager(uint8_t mempool_loc_x, uint8_t mempool_loc_y);
+uint64_t bingo_mempool_alloc(uint8_t mempool_loc_x, uint8_t mempool_loc_y, uint64_t size);
+void bingo_mempool_free(uint8_t mempool_loc_x, uint8_t mempool_loc_y, uint64_t ptr);
 
 
 // Mailbox read/write functions
@@ -395,3 +460,16 @@ void bingo_close_all_clusters(bingo_task_t **task_list, uint32_t num_tasks);
 void bingo_hw_scheduler_init(uint64_t dev_arg_base_addr, uint64_t dev_kernel_base_addr, uint32_t num_dev_tasks, uint64_t global_task_id_to_dev_task_id_base_addr, uint32_t num_total_tasks, uint64_t bingo_hw_scheduler_task_desc_list_base, uint32_t bingo_hw_scheduler_num_task_desc);
 
 uint32_t bingo_hw_scheduler(uint64_t *host_arg_list, uint64_t *host_kernel_list, int32_t *global_task_id_to_host_task_id);
+
+/////////////////////////////
+// DARTS CERF Runtime API  //
+/////////////////////////////
+// Write full CERF bitmask and trigger latch (bit[i] = group i active)
+void bingo_cerf_write_mask(uint32_t mask);
+
+// Read-modify-write: update only controlled groups, then trigger latch.
+// Preserves other gating nodes' groups during pipelined execution.
+void bingo_cerf_update(uint32_t controlled_mask, uint32_t write_mask);
+
+// Clear all CERF groups (full reset between inference batches)
+void bingo_cerf_clear_all(void);

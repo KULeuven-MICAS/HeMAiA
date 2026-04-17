@@ -20,7 +20,7 @@ def bin2preload(input_file, output_dir):
         if len(chunk) < TOTAL_WIDTH // 8:
             chunk += b'\x00' * (TOTAL_WIDTH // 8 - len(chunk))  # Pad with zeros if necessary
 
-        # Split the chunk into 16 × 64-bit words and distribute to banks
+        # Split the chunk into 16 x 64-bit words and distribute to banks
         for bank_id in range(NUM_BANKS):
             start = bank_id * (BANK_WIDTH // 8)  # 64 bits = 8 bytes
             end = start + (BANK_WIDTH // 8)

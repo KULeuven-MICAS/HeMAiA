@@ -391,6 +391,39 @@ inline void xdma_remote_wait(uint32_t task_id) {
     }
 }
 
+// Wait for xdma task completion, automatically choosing local or remote
+// based on whether src and dst are in the same cluster's TCDM.
+inline void xdma_wait_task(uint64_t src_addr, uint64_t dst_addr, uint32_t task_id) {
+    // Different chip (high 32 bits) → remote
+    if ((uint32_t)(src_addr >> 32) != (uint32_t)(dst_addr >> 32)) {
+        xdma_remote_wait(task_id);
+        return;
+    }
+    uint32_t src_lo = (uint32_t)src_addr;
+    uint32_t dst_lo = (uint32_t)dst_addr;
+    // Both in TCDM range and same cluster → local
+    if (src_lo >= SNRT_TCDM_START_ADDR && dst_lo >= SNRT_TCDM_START_ADDR) {
+        uint32_t src_cluster = (src_lo - SNRT_TCDM_START_ADDR) >> CLUSTER_ADDRWIDTH;
+        uint32_t dst_cluster = (dst_lo - SNRT_TCDM_START_ADDR) >> CLUSTER_ADDRWIDTH;
+        if (src_cluster == dst_cluster) {
+            xdma_local_wait(task_id);
+            return;
+        }
+    }
+    xdma_remote_wait(task_id);
+}
+
+// Disable all xDMA datapath extensions (reader + writer).
+// Must be called before any xDMA transfer to ensure clean state.
+inline void xdma_disable_all_extensions() {
+    for (uint8_t i = 0; i < XDMA_SRC_EXT_NUM; i++) {
+        xdma_disable_src_ext(i);
+    }
+    for (uint8_t i = 0; i < XDMA_DST_EXT_NUM; i++) {
+        xdma_disable_dst_ext(i);
+    }
+}
+
 inline uint32_t xdma_last_task_cycle() {
     return snax_read_xdma_cfg_reg(XDMA_PERF_CTR_TASK);
 }
@@ -401,4 +434,59 @@ inline uint32_t xdma_last_read_cycle() {
 
 inline uint32_t xdma_last_write_cycle() {
     return snax_read_xdma_cfg_reg(XDMA_PERF_CTR_WRITER);
+}
+
+// ============================================================================
+// Layout-convert staging helper
+// ============================================================================
+// xDMA's reader is tied to the calling cluster's L1 TCDM, so the src of a
+// layout-convert transfer must live in local L1. The writer, on the other
+// hand, can target any address in the global space — so dst can be L3 or a
+// remote cluster's L1 directly (no stage-out needed; xDMA performs the layout
+// transform during the write).
+//
+// This helper:
+//   1. If `src` already points inside the calling cluster's local L1, uses it
+//      as-is (zero-copy fast path).
+//   2. Otherwise allocates an L1 scratch buffer, IDMA-copies `bytes` of src
+//      data into it, and returns the staged L1 address as `xdma_src`. The
+//      caller should free it via `xdma_layout_stage_free` after xDMA finishes.
+//
+// Depends on runtime symbols that must already be visible at the include
+// site: snrt_l1_start_addr / snrt_l1_end_addr (occamy_memory.h),
+// snrt_l1_malloc / snrt_l1_free (snrt_l1_alloc.h), chiplet_addr_transform
+// (chip_id.h), snrt_dma_start_1d_wideptr / snrt_dma_wait_all (snitch DMA).
+typedef struct {
+    uint64_t xdma_src;       // src address to pass to xDMA (always local L1)
+    uint32_t stage_in_lo;    // L1 scratch ptr to free, or 0 for fast path
+} xdma_layout_stage_t;
+
+static inline int xdma_layout_stage_in(
+    xdma_layout_stage_t *s, uint64_t src, uint32_t bytes)
+{
+    uint32_t src_lo = (uint32_t)src;
+    bool src_local = (src_lo > snrt_l1_start_addr()) && (src_lo < snrt_l1_end_addr());
+
+    s->stage_in_lo = 0;
+    if (src_local) {
+        s->xdma_src = src;
+        return 0;
+    }
+    s->stage_in_lo = snrt_l1_malloc(bytes);
+    if (!s->stage_in_lo) {
+        return -1;
+    }
+    snrt_dma_start_1d_wideptr(
+        chiplet_addr_transform((uint64_t)s->stage_in_lo),
+        src, bytes);
+    snrt_dma_wait_all();
+    s->xdma_src = chiplet_addr_transform((uint64_t)s->stage_in_lo);
+    return 0;
+}
+
+static inline void xdma_layout_stage_free(xdma_layout_stage_t *s) {
+    if (s->stage_in_lo) {
+        snrt_l1_free(s->stage_in_lo);
+        s->stage_in_lo = 0;
+    }
 }

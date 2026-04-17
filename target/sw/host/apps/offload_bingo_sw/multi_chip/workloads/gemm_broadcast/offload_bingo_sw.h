@@ -144,7 +144,7 @@ uint32_t __workload_gemm_broadcast(bingo_task_t** task_list) {
     if (get_current_chip_id() == 0x00) {
         HOST_DEBUG_PRINT("Setting args for chiplet 0x00\r\n");
         // Load A1 from mempool to L1 at chiplet 0x00
-        task_mempool_to_cluster_args_A1_chip_0x00 = (__snax_kernel_idma_1d_copy_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_idma_1d_copy_args_t));
+        task_mempool_to_cluster_args_A1_chip_0x00 = (__snax_kernel_idma_1d_copy_args_t*)bingoHeapMalloc(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_idma_1d_copy_args_t));
         task_mempool_to_cluster_args_A1_chip_0x00->src_addr_hi = HIGH32((A1_mp));
         task_mempool_to_cluster_args_A1_chip_0x00->src_addr_lo = LOW32((A1_mp));
         task_mempool_to_cluster_args_A1_chip_0x00->dst_addr_hi = HIGH32((A_l1));
@@ -157,7 +157,7 @@ uint32_t __workload_gemm_broadcast(bingo_task_t** task_list) {
         task_mempool_to_cluster_args_A1_chip_0x00->dst_addr_lo,
         task_mempool_to_cluster_args_A1_chip_0x00->size);
         // check A1 loaded correctly at chiplet 0x00
-        task_check_A1_args_chip_0x00 = (__snax_kernel_check_results_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_check_results_args_t));
+        task_check_A1_args_chip_0x00 = (__snax_kernel_check_results_args_t*)bingoHeapMalloc(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_check_results_args_t));
         task_check_A1_args_chip_0x00->golden_data_addr   = LOW32(BINGO_CHIPLET_READD(A1_golden_l3));      // golden A1 at cluster L3
         task_check_A1_args_chip_0x00->output_data_addr   = LOW32(BINGO_CHIPLET_READD(A_l1));       // loaded A1 at L1
         task_check_A1_args_chip_0x00->data_size          = BINGO_CHIPLET_READW(AdataTileSize);
@@ -167,7 +167,7 @@ uint32_t __workload_gemm_broadcast(bingo_task_t** task_list) {
         task_check_A1_args_chip_0x00->data_size);
 
         // Load B from mempool to L1 at chiplet 0x00
-        task_mempool_to_cluster_args_B_chip_0x00 = (__snax_kernel_idma_1d_copy_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_idma_1d_copy_args_t));
+        task_mempool_to_cluster_args_B_chip_0x00 = (__snax_kernel_idma_1d_copy_args_t*)bingoHeapMalloc(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_idma_1d_copy_args_t));
         task_mempool_to_cluster_args_B_chip_0x00->src_addr_hi = HIGH32(BINGO_CHIPLET_READD(B_mp));
         task_mempool_to_cluster_args_B_chip_0x00->src_addr_lo = LOW32(BINGO_CHIPLET_READD(B_mp));
         task_mempool_to_cluster_args_B_chip_0x00->dst_addr_hi = HIGH32(get_current_chip_baseaddress_value());
@@ -181,7 +181,7 @@ uint32_t __workload_gemm_broadcast(bingo_task_t** task_list) {
         task_mempool_to_cluster_args_B_chip_0x00->size);
 
         // Check B loaded correctly at chiplet 0x00
-        task_check_B_args_chip_0x00 = (__snax_kernel_check_results_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_check_results_args_t));
+        task_check_B_args_chip_0x00 = (__snax_kernel_check_results_args_t*)bingoHeapMalloc(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_check_results_args_t));
         task_check_B_args_chip_0x00->golden_data_addr = LOW32(BINGO_CHIPLET_READD(B_golden_l3));      // golden B at cluster L3
         task_check_B_args_chip_0x00->output_data_addr = LOW32(BINGO_CHIPLET_READD(B_l1));             // L1 addr for B
         task_check_B_args_chip_0x00->data_size = BINGO_CHIPLET_READW(BdataSize);
@@ -191,7 +191,7 @@ uint32_t __workload_gemm_broadcast(bingo_task_t** task_list) {
         task_check_B_args_chip_0x00->data_size);
 
         // Args for broadcasting B from chiplet 0x00 to other chiplets
-        task_idma_broadcast_B_args_chip_0x00 = (__snax_kernel_idma_1d_copy_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_idma_1d_copy_args_t));
+        task_idma_broadcast_B_args_chip_0x00 = (__snax_kernel_idma_1d_copy_args_t*)bingoHeapMalloc(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_idma_1d_copy_args_t));
         uintptr_t broadcast_dst_addr_B = chiplet_addr_transform_loc(0xF, 0xF, BINGO_CHIPLET_READD(B_l1));
 
         task_idma_broadcast_B_args_chip_0x00->src_addr_hi = HIGH32(get_current_chip_baseaddress_value());
@@ -207,7 +207,7 @@ uint32_t __workload_gemm_broadcast(bingo_task_t** task_list) {
         task_idma_broadcast_B_args_chip_0x00->size);
 
         // Args for gemm compute at chiplet 0x00
-        task_gemm_args_chip_0x00 = (__snax_kernel_gemm_intra_chiplet_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_gemm_intra_chiplet_args_t));
+        task_gemm_args_chip_0x00 = (__snax_kernel_gemm_intra_chiplet_args_t*)bingoHeapMalloc(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_gemm_intra_chiplet_args_t));
         task_gemm_args_chip_0x00->input_A_addr_hi = HIGH32(get_current_chip_baseaddress_value());
         task_gemm_args_chip_0x00->input_A_addr_lo = LOW32(BINGO_CHIPLET_READD(A_l1)); // L1 addr for A
         task_gemm_args_chip_0x00->input_B_addr_hi = HIGH32(get_current_chip_baseaddress_value());
@@ -244,8 +244,8 @@ uint32_t __workload_gemm_broadcast(bingo_task_t** task_list) {
         task_gemm_args_chip_0x00->N);
 
         // Args for storing output D from L1 to L3 at chiplet 0x00
-        uintptr_t D_dst_addr_chip_0x00 = (uintptr_t)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), DdataSize);
-        task_store_output_args_chip_0x00 = (__snax_kernel_idma_1d_copy_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_idma_1d_copy_args_t));
+        uintptr_t D_dst_addr_chip_0x00 = (uintptr_t)bingoHeapMalloc(bingo_get_l3_heap_manager(get_current_chip_id()), DdataSize);
+        task_store_output_args_chip_0x00 = (__snax_kernel_idma_1d_copy_args_t*)bingoHeapMalloc(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_idma_1d_copy_args_t));
         task_store_output_args_chip_0x00->src_addr_hi = HIGH32(get_current_chip_baseaddress_value());
         task_store_output_args_chip_0x00->src_addr_lo = LOW32(BINGO_CHIPLET_READD(D_l1));
         task_store_output_args_chip_0x00->dst_addr_hi = HIGH32(BINGO_CHIPLET_READD(D_dst_addr_chip_0x00));
@@ -259,7 +259,7 @@ uint32_t __workload_gemm_broadcast(bingo_task_t** task_list) {
         task_store_output_args_chip_0x00->size);
 
         // Args for checking output D1 at chiplet 0x00
-        task_check_D1_args_chip_0x00 = (__snax_kernel_check_results_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_check_results_args_t));
+        task_check_D1_args_chip_0x00 = (__snax_kernel_check_results_args_t*)bingoHeapMalloc(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_check_results_args_t));
         task_check_D1_args_chip_0x00->golden_data_addr = LOW32(BINGO_CHIPLET_READD(D1_golden_l3));   // golden D1 at cluster L3
         task_check_D1_args_chip_0x00->output_data_addr = LOW32(BINGO_CHIPLET_READD(D_dst_addr_chip_0x00));       // stored D1 at L3
         task_check_D1_args_chip_0x00->data_size = BINGO_CHIPLET_READW(DdataSize);
@@ -273,7 +273,7 @@ uint32_t __workload_gemm_broadcast(bingo_task_t** task_list) {
     if (get_current_chip_id() == 0x01) {
         HOST_DEBUG_PRINT("Setting args for chiplet 0x01\r\n");
         // Load A2 from mempool to L1 at chiplet 0x01
-        task_mempool_to_cluster_args_A2_chip_0x01 = (__snax_kernel_idma_1d_copy_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_idma_1d_copy_args_t));
+        task_mempool_to_cluster_args_A2_chip_0x01 = (__snax_kernel_idma_1d_copy_args_t*)bingoHeapMalloc(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_idma_1d_copy_args_t));
         task_mempool_to_cluster_args_A2_chip_0x01->src_addr_hi = HIGH32(BINGO_CHIPLET_READD(A2_mp));
         task_mempool_to_cluster_args_A2_chip_0x01->src_addr_lo = LOW32(BINGO_CHIPLET_READD(A2_mp));
         task_mempool_to_cluster_args_A2_chip_0x01->dst_addr_hi = HIGH32(get_current_chip_baseaddress_value());
@@ -287,7 +287,7 @@ uint32_t __workload_gemm_broadcast(bingo_task_t** task_list) {
         task_mempool_to_cluster_args_A2_chip_0x01->size);
 
         // check A2 loaded correctly at chiplet 0x01
-        task_check_A2_args_chip_0x01 = (__snax_kernel_check_results_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_check_results_args_t));
+        task_check_A2_args_chip_0x01 = (__snax_kernel_check_results_args_t*)bingoHeapMalloc(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_check_results_args_t));
         task_check_A2_args_chip_0x01->golden_data_addr = LOW32(BINGO_CHIPLET_READD(A2_golden_l3));      // golden A2 at cluster L3
         task_check_A2_args_chip_0x01->output_data_addr = LOW32(BINGO_CHIPLET_READD(A_l1));       // loaded A2 at L1
         task_check_A2_args_chip_0x01->data_size = BINGO_CHIPLET_READW(AdataTileSize);
@@ -296,7 +296,7 @@ uint32_t __workload_gemm_broadcast(bingo_task_t** task_list) {
         task_check_A2_args_chip_0x01->output_data_addr,
         task_check_A2_args_chip_0x01->data_size);
         // check B loaded correctly at chiplet 0x01
-        task_check_B_args_chip_0x01 = (__snax_kernel_check_results_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_check_results_args_t));
+        task_check_B_args_chip_0x01 = (__snax_kernel_check_results_args_t*)bingoHeapMalloc(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_check_results_args_t));
         task_check_B_args_chip_0x01->golden_data_addr = LOW32(B_golden_l3);  // golden B at cluster L3
         task_check_B_args_chip_0x01->output_data_addr = LOW32(BINGO_CHIPLET_READD(B_l1));  // loaded B at L1
         task_check_B_args_chip_0x01->data_size = BdataSize;
@@ -305,7 +305,7 @@ uint32_t __workload_gemm_broadcast(bingo_task_t** task_list) {
         task_check_B_args_chip_0x01->output_data_addr,
         task_check_B_args_chip_0x01->data_size);
         // GeMM args for chiplet 0x01
-        task_gemm_args_chip_0x01 = (__snax_kernel_gemm_intra_chiplet_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_gemm_intra_chiplet_args_t));
+        task_gemm_args_chip_0x01 = (__snax_kernel_gemm_intra_chiplet_args_t*)bingoHeapMalloc(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_gemm_intra_chiplet_args_t));
         task_gemm_args_chip_0x01->input_A_addr_hi = HIGH32(get_current_chip_baseaddress_value());
         task_gemm_args_chip_0x01->input_A_addr_lo = LOW32(BINGO_CHIPLET_READD(A_l1));
         task_gemm_args_chip_0x01->input_B_addr_hi = HIGH32(get_current_chip_baseaddress_value());
@@ -342,8 +342,8 @@ uint32_t __workload_gemm_broadcast(bingo_task_t** task_list) {
         task_gemm_args_chip_0x01->N);
 
         // Args for storing output D from L1 to L3 at chiplet 0x01
-        uintptr_t D_dst_addr_chip_0x01 = (uintptr_t)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), DdataSize);
-        task_store_output_args_chip_0x01 = (__snax_kernel_idma_1d_copy_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_idma_1d_copy_args_t));
+        uintptr_t D_dst_addr_chip_0x01 = (uintptr_t)bingoHeapMalloc(bingo_get_l3_heap_manager(get_current_chip_id()), DdataSize);
+        task_store_output_args_chip_0x01 = (__snax_kernel_idma_1d_copy_args_t*)bingoHeapMalloc(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_idma_1d_copy_args_t));
         task_store_output_args_chip_0x01->src_addr_hi = HIGH32(get_current_chip_baseaddress_value());
         task_store_output_args_chip_0x01->src_addr_lo = LOW32(BINGO_CHIPLET_READD(D_l1));
         task_store_output_args_chip_0x01->dst_addr_hi = HIGH32(D_dst_addr_chip_0x01);
@@ -357,7 +357,7 @@ uint32_t __workload_gemm_broadcast(bingo_task_t** task_list) {
         task_store_output_args_chip_0x01->size);
         
         // Args for checking output D2 at chiplet 0x01
-        task_check_D2_args_chip_0x01 = (__snax_kernel_check_results_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_check_results_args_t));
+        task_check_D2_args_chip_0x01 = (__snax_kernel_check_results_args_t*)bingoHeapMalloc(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_check_results_args_t));
         task_check_D2_args_chip_0x01->golden_data_addr = LOW32(D2_golden_l3);  // golden D2
         task_check_D2_args_chip_0x01->output_data_addr = LOW32(D_dst_addr_chip_0x01);       // loaded D2 at L1
         task_check_D2_args_chip_0x01->data_size = DdataSize;
@@ -370,7 +370,7 @@ uint32_t __workload_gemm_broadcast(bingo_task_t** task_list) {
     if (get_current_chip_id() == 0x10) {
         HOST_DEBUG_PRINT("Setting args for chiplet 0x10\r\n");
         // Load A3 from mempool to L1 at chiplet 0x10
-        task_mempool_to_cluster_args_A3_chip_0x10 = (__snax_kernel_idma_1d_copy_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_idma_1d_copy_args_t));
+        task_mempool_to_cluster_args_A3_chip_0x10 = (__snax_kernel_idma_1d_copy_args_t*)bingoHeapMalloc(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_idma_1d_copy_args_t));
         task_mempool_to_cluster_args_A3_chip_0x10->src_addr_hi = HIGH32(A3_mp);
         task_mempool_to_cluster_args_A3_chip_0x10->src_addr_lo = LOW32(A3_mp);
         task_mempool_to_cluster_args_A3_chip_0x10->dst_addr_hi = HIGH32(get_current_chip_baseaddress_value());
@@ -384,7 +384,7 @@ uint32_t __workload_gemm_broadcast(bingo_task_t** task_list) {
         task_mempool_to_cluster_args_A3_chip_0x10->size);
 
         // check A3 loaded correctly at chiplet 0x10
-        task_check_A3_args_chip_0x10 = (__snax_kernel_check_results_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_check_results_args_t));
+        task_check_A3_args_chip_0x10 = (__snax_kernel_check_results_args_t*)bingoHeapMalloc(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_check_results_args_t));
         task_check_A3_args_chip_0x10->golden_data_addr = LOW32(A3_golden_l3);
         task_check_A3_args_chip_0x10->output_data_addr = LOW32(BINGO_CHIPLET_READD(A_l1));       // loaded A3 at L1
         task_check_A3_args_chip_0x10->data_size = BINGO_CHIPLET_READW(AdataTileSize);
@@ -394,7 +394,7 @@ uint32_t __workload_gemm_broadcast(bingo_task_t** task_list) {
         task_check_A3_args_chip_0x10->data_size); 
 
         // check B loaded correctly at chiplet 0x10
-        task_check_B_args_chip_0x10 = (__snax_kernel_check_results_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_check_results_args_t));
+        task_check_B_args_chip_0x10 = (__snax_kernel_check_results_args_t*)bingoHeapMalloc(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_check_results_args_t));
         task_check_B_args_chip_0x10->golden_data_addr = LOW32(B_golden_l3);  // golden B at cluster L3
         task_check_B_args_chip_0x10->output_data_addr = LOW32(BINGO_CHIPLET_READD(B_l1));  // loaded B at L1
         task_check_B_args_chip_0x10->data_size = BdataSize;
@@ -403,7 +403,7 @@ uint32_t __workload_gemm_broadcast(bingo_task_t** task_list) {
         task_check_B_args_chip_0x10->output_data_addr,
         task_check_B_args_chip_0x10->data_size);  
         // GeMM args for chiplet 0x10
-        task_gemm_args_chip_0x10 = (__snax_kernel_gemm_intra_chiplet_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_gemm_intra_chiplet_args_t));
+        task_gemm_args_chip_0x10 = (__snax_kernel_gemm_intra_chiplet_args_t*)bingoHeapMalloc(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_gemm_intra_chiplet_args_t));
         task_gemm_args_chip_0x10->input_A_addr_hi = HIGH32(get_current_chip_baseaddress_value());
         task_gemm_args_chip_0x10->input_A_addr_lo = LOW32(BINGO_CHIPLET_READD(A_l1));
         task_gemm_args_chip_0x10->input_B_addr_hi = HIGH32(get_current_chip_baseaddress_value());
@@ -439,8 +439,8 @@ uint32_t __workload_gemm_broadcast(bingo_task_t** task_list) {
         task_gemm_args_chip_0x10->K,
         task_gemm_args_chip_0x10->N);
         // Args for storing output D from L1 to L3 at chiplet 0x10
-        uintptr_t D_dst_addr_chip_0x10 = (uintptr_t)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), DdataSize);
-        task_store_output_args_chip_0x10 = (__snax_kernel_idma_1d_copy_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_idma_1d_copy_args_t));
+        uintptr_t D_dst_addr_chip_0x10 = (uintptr_t)bingoHeapMalloc(bingo_get_l3_heap_manager(get_current_chip_id()), DdataSize);
+        task_store_output_args_chip_0x10 = (__snax_kernel_idma_1d_copy_args_t*)bingoHeapMalloc(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_idma_1d_copy_args_t));
         task_store_output_args_chip_0x10->src_addr_hi = HIGH32(get_current_chip_baseaddress_value());
         task_store_output_args_chip_0x10->src_addr_lo = LOW32(BINGO_CHIPLET_READD(D_l1));
         task_store_output_args_chip_0x10->dst_addr_hi = HIGH32(D_dst_addr_chip_0x10);
@@ -453,7 +453,7 @@ uint32_t __workload_gemm_broadcast(bingo_task_t** task_list) {
         task_store_output_args_chip_0x10->dst_addr_lo,
         task_store_output_args_chip_0x10->size);
         // Args for checking output D3 at chiplet 0x10
-        task_check_D3_args_chip_0x10 = (__snax_kernel_check_results_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_check_results_args_t));
+        task_check_D3_args_chip_0x10 = (__snax_kernel_check_results_args_t*)bingoHeapMalloc(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_check_results_args_t));
         task_check_D3_args_chip_0x10->golden_data_addr = LOW32(D3_golden_l3);
         task_check_D3_args_chip_0x10->output_data_addr = LOW32(D_dst_addr_chip_0x10);
         task_check_D3_args_chip_0x10->data_size = DdataSize;
@@ -466,7 +466,7 @@ uint32_t __workload_gemm_broadcast(bingo_task_t** task_list) {
     if (get_current_chip_id() == 0x11){
         HOST_DEBUG_PRINT("Setting args for chiplet 0x11\r\n");
         // Load A4 from mempool to L1 at chiplet 0x11
-        task_mempool_to_cluster_args_A4_chip_0x11 = (__snax_kernel_idma_1d_copy_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_idma_1d_copy_args_t));
+        task_mempool_to_cluster_args_A4_chip_0x11 = (__snax_kernel_idma_1d_copy_args_t*)bingoHeapMalloc(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_idma_1d_copy_args_t));
         task_mempool_to_cluster_args_A4_chip_0x11->src_addr_hi = HIGH32(A4_mp);
         task_mempool_to_cluster_args_A4_chip_0x11->src_addr_lo = LOW32(A4_mp);
         task_mempool_to_cluster_args_A4_chip_0x11->dst_addr_hi = HIGH32(get_current_chip_baseaddress_value());
@@ -479,7 +479,7 @@ uint32_t __workload_gemm_broadcast(bingo_task_t** task_list) {
         task_mempool_to_cluster_args_A4_chip_0x11->dst_addr_lo,
         task_mempool_to_cluster_args_A4_chip_0x11->size);
         // check A4 loaded correctly at chiplet 0x11
-        task_check_A4_args_chip_0x11 = (__snax_kernel_check_results_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_check_results_args_t));
+        task_check_A4_args_chip_0x11 = (__snax_kernel_check_results_args_t*)bingoHeapMalloc(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_check_results_args_t));
         task_check_A4_args_chip_0x11->golden_data_addr = LOW32(A4_golden_l3);
         task_check_A4_args_chip_0x11->output_data_addr = LOW32(BINGO_CHIPLET_READD(A_l1));       // loaded A4 at L1
         task_check_A4_args_chip_0x11->data_size = BINGO_CHIPLET_READW(AdataTileSize);
@@ -488,7 +488,7 @@ uint32_t __workload_gemm_broadcast(bingo_task_t** task_list) {
         task_check_A4_args_chip_0x11->output_data_addr,
         task_check_A4_args_chip_0x11->data_size);
         // check B loaded correctly at chiplet 0x11
-        task_check_B_args_chip_0x11 = (__snax_kernel_check_results_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_check_results_args_t));
+        task_check_B_args_chip_0x11 = (__snax_kernel_check_results_args_t*)bingoHeapMalloc(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_check_results_args_t));
         task_check_B_args_chip_0x11->golden_data_addr = LOW32(B_golden_l3);  // golden B at cluster L3
         task_check_B_args_chip_0x11->output_data_addr = LOW32(BINGO_CHIPLET_READD(B_l1));  // loaded B at L1
         task_check_B_args_chip_0x11->data_size = BdataSize;
@@ -497,7 +497,7 @@ uint32_t __workload_gemm_broadcast(bingo_task_t** task_list) {
         task_check_B_args_chip_0x11->output_data_addr,
         task_check_B_args_chip_0x11->data_size);
         // GeMM args for chiplet 0x11
-        task_gemm_args_chip_0x11 = (__snax_kernel_gemm_intra_chiplet_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_gemm_intra_chiplet_args_t));
+        task_gemm_args_chip_0x11 = (__snax_kernel_gemm_intra_chiplet_args_t*)bingoHeapMalloc(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_gemm_intra_chiplet_args_t));
         task_gemm_args_chip_0x11->input_A_addr_hi = HIGH32(get_current_chip_baseaddress_value());
         task_gemm_args_chip_0x11->input_A_addr_lo = LOW32(BINGO_CHIPLET_READD(A_l1));
         task_gemm_args_chip_0x11->input_B_addr_hi = HIGH32(get_current_chip_baseaddress_value());
@@ -533,8 +533,8 @@ uint32_t __workload_gemm_broadcast(bingo_task_t** task_list) {
         task_gemm_args_chip_0x11->K,
         task_gemm_args_chip_0x11->N);
         // Args for storing output D from L1 to L3 at chiplet 0x11
-        uintptr_t D_dst_addr_chip_0x11 = (uintptr_t)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), DdataSize);
-        task_store_output_args_chip_0x11 = (__snax_kernel_idma_1d_copy_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_idma_1d_copy_args_t));
+        uintptr_t D_dst_addr_chip_0x11 = (uintptr_t)bingoHeapMalloc(bingo_get_l3_heap_manager(get_current_chip_id()), DdataSize);
+        task_store_output_args_chip_0x11 = (__snax_kernel_idma_1d_copy_args_t*)bingoHeapMalloc(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_idma_1d_copy_args_t));
         task_store_output_args_chip_0x11->src_addr_hi = HIGH32(get_current_chip_baseaddress_value());
         task_store_output_args_chip_0x11->src_addr_lo = LOW32(BINGO_CHIPLET_READD(D_l1));
         task_store_output_args_chip_0x11->dst_addr_hi = HIGH32(D_dst_addr_chip_0x11);
@@ -547,7 +547,7 @@ uint32_t __workload_gemm_broadcast(bingo_task_t** task_list) {
         task_store_output_args_chip_0x11->dst_addr_lo,
         task_store_output_args_chip_0x11->size);
         // Args for checking output D4 at chiplet 0x11
-        task_check_D4_args_chip_0x11 = (__snax_kernel_check_results_args_t*)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_check_results_args_t));
+        task_check_D4_args_chip_0x11 = (__snax_kernel_check_results_args_t*)bingoHeapMalloc(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_check_results_args_t));
         task_check_D4_args_chip_0x11->golden_data_addr = LOW32(D4_golden_l3);
         task_check_D4_args_chip_0x11->output_data_addr = LOW32(D_dst_addr_chip_0x11);
         task_check_D4_args_chip_0x11->data_size = DdataSize;

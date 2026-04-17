@@ -5,7 +5,10 @@
 # And then the mini-compiler will emit the WORKLOAD.h file
 import os
 import sys
+import re
 import argparse
+import pathlib
+import hjson
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.abspath(os.path.join(current_dir, "../../../../../../../../"))
@@ -18,6 +21,33 @@ from bingo_dfg import BingoDFG
 from bingo_node import BingoNode
 from bingo_mem_handle import BingoMemAlloc, BingoMemSymbol
 from bingo_kernel_args import SnaxBingoKernelDummyArgs, HostBingoKernelDummyArgs
+
+
+def parse_platform_cfg(occamy_h_path, rtlcfg_path):
+    """Parse HW platform params from generated occamy.h and RTL config hjson.
+    Chiplet IDs are coordinate-encoded: (x, y) -> (x << 4) | y.
+    """
+    defines = {}
+    with open(occamy_h_path) as f:
+        for line in f:
+            m = re.match(r'#define\s+(\w+)\s+(\d+)', line)
+            if m:
+                defines[m.group(1)] = int(m.group(2))
+    with open(rtlcfg_path) as f:
+        rtlcfg = hjson.loads(f.read())
+    multichip = rtlcfg["hemaia_multichip"]
+    if multichip["single_chip"]:
+        chiplet_ids = [0x00]
+    else:
+        chiplet_ids = [(c["coordinate"][0] << 4) | c["coordinate"][1]
+                       for c in multichip["testbench_cfg"]["hemaia_compute_chip"]]
+    return {
+        "num_chiplets": defines["N_CHIPLETS"],
+        "num_clusters_per_chiplet": defines["N_CLUSTERS_PER_CHIPLET"],
+        "num_cores_per_cluster": defines["N_CORES_PER_CLUSTER"],
+        "chiplet_ids": chiplet_ids,
+    }
+
 
 def get_args():
     parser = argparse.ArgumentParser(description="Bingo HW Manager")
@@ -32,6 +62,18 @@ def get_args():
         type=str,
         default="offload_bingo_hw.h",
         help="Output filename for the offload header file",
+    )
+    parser.add_argument(
+        "--platformcfg",
+        type=pathlib.Path,
+        required=True,
+        help="Path to generated occamy.h with HW platform defines",
+    )
+    parser.add_argument(
+        "--rtlcfg",
+        type=pathlib.Path,
+        required=True,
+        help="Path to hemaia RTL config hjson",
     )
     return parser.parse_args()
 def define_workload_params():
@@ -49,21 +91,16 @@ def define_memory_handles(params):
     
     return mem_handles
 
-def create_dfg(params, mem_handles):
+def create_dfg(params, mem_handles, platform):
     """Creates the Bingo Data Flow Graph with nodes and dependencies."""
-    
-    # 1. Initialize DFG
-    num_chiplets = 1
-    num_clusters_per_chiplet = 4
-    num_cores_per_cluster = 2
-    is_host_as_acc = True
-    chiplet_ids = [0x00]
+
+    # 1. Initialize DFG using HW params derived from occamy.h + RTL config
     bingo_dfg = BingoDFG(
-        num_chiplets,
-        num_clusters_per_chiplet,
-        num_cores_per_cluster,
-        is_host_as_acc,
-        chiplet_ids,
+        num_chiplets=platform["num_chiplets"],
+        num_clusters_per_chiplet=platform["num_clusters_per_chiplet"],
+        num_cores_per_cluster=platform["num_cores_per_cluster"],
+        is_host_as_acc=True,
+        chiplet_ids=platform["chiplet_ids"],
     )
     gemm_core_id = 0  # Core 0 for Compute
     dma_core_id = 1  # Core 1 for Load
@@ -233,9 +270,10 @@ def main():
         os.makedirs(output_dir)
 
     # Execute Pipeline
+    platform = parse_platform_cfg(args.platformcfg, args.rtlcfg)
     params = define_workload_params()
     mem_handles = define_memory_handles(params)
-    dfg = create_dfg(params, mem_handles)
+    dfg = create_dfg(params, mem_handles, platform)
     dfg.bingo_compile_dfg(params["app_name"], output_dir, output_file_name, extra_include_header_list=[])
 
 if __name__ == "__main__":

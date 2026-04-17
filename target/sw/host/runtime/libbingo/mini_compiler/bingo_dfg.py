@@ -1,6 +1,5 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 
-import random
 import os
 import subprocess
 import sys
@@ -29,7 +28,13 @@ except ImportError:
 from bingo_utils import DiGraphWrapper
 from bingo_node import BingoNode
 from bingo_mem_handle import BingoMemAlloc
-from bingo_kernel_args import BingoKernelArgs
+from bingo_kernel_args import (
+    BingoKernelArgs,
+    HostBingoKernelCerfGatingArgs,
+    BINGO_GATING_MODE_TOP_K,
+    BINGO_GATING_MODE_THRESHOLD,
+    BINGO_GATING_MODE_STATIC,
+)
 class BingoDFG(DiGraphWrapper[BingoNode]):
     """Data Flow Graph (DFG) for Bingo."""
 
@@ -50,6 +55,8 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         # Node ID counter
         # Make sure the node id is starts from 0
         self.id = -1
+        self._next_cerf_group = 0
+        self._gating_cerf_mappings: dict = {}  # gating_node → {expert_idx: cerf_group_id}
     def bingo_add_node(self, node_obj: BingoNode) -> None:
         """Add a node to the DFG."""
 
@@ -58,45 +65,56 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         node_obj.node_id = self.id
         # Add the node to the graph and the lookup dictionaries
         self.add_node(node_obj)
-    def bingo_add_edge(self, from_node_obj: BingoNode, to_node_obj: BingoNode) -> None:
-        """Add an edge to the DFG using node objects."""
-        self.add_edge(from_node_obj, to_node_obj)
+    def bingo_add_edge(self, from_node_obj: BingoNode, to_node_obj: BingoNode, cond: bool = False, cond_dic: dict = None) -> None:
+        """Add an edge to the DFG.
+
+        Args:
+            cond: If True, marks this as a conditional execution edge.
+            cond_dic: Dict with gating policy. Implies cond=True. Keys:
+                mode: 'top_k' | 'threshold' | 'static' | 'custom'
+                k: int (for top_k), threshold: float (for threshold), etc.
+        """
+        if cond_dic is not None:
+            cond = True
+        self.add_edge(from_node_obj, to_node_obj, cond=cond, cond_dic=cond_dic or {})
 
     def bingo_insert_node_between(self, from_node_obj: BingoNode, to_node_obj: BingoNode, new_node_obj: BingoNode) -> None:
         """Insert a new node between two existing nodes in the DFG."""
-        # Ensure the edge exists between the two nodes
         if not self.has_edge(from_node_obj, to_node_obj):
             raise ValueError(f"No edge exists between {from_node_obj.node_name} and {to_node_obj.node_name}")
 
-        # Add the new node to the DFG
-        self.bingo_add_node(new_node_obj)
+        # Preserve edge attributes (e.g. cond) before removal
+        edge_data = dict(self[from_node_obj][to_node_obj])
 
-        # Remove the edge between the two existing nodes
+        self.bingo_add_node(new_node_obj)
         self.remove_edge(from_node_obj, to_node_obj)
 
-        # Add edges to connect the new node between the two existing nodes
+        # src → new_node: unconditional (dummy nodes must always execute)
         self.add_edge(from_node_obj, new_node_obj)
-        self.add_edge(new_node_obj, to_node_obj)
+        # new_node → dst: inherit original edge attributes
+        self.add_edge(new_node_obj, to_node_obj, **edge_data)
     
     def bingo_insert_node_after(self, existing_node_obj: BingoNode, new_node_obj: BingoNode, successors_to_move: list[BingoNode] = None) -> None:
         """Insert a new node after an existing node in the DFG."""
-        # If no specific successors are provided, move all successors
         if successors_to_move is None:
             successors_to_move = list(self.successors(existing_node_obj))
 
-        # Add the new node to the DFG
+        # Preserve edge attributes before removal
+        succ_edge_data = {}
+        for succ in successors_to_move:
+            succ_edge_data[succ] = dict(self[existing_node_obj][succ])
+
         self.bingo_add_node(new_node_obj)
 
-        # Remove edges from the existing node to the target successors
         for succ in successors_to_move:
             self.remove_edge(existing_node_obj, succ)
 
-        # Add edge from existing node to new node
+        # existing → new_node: unconditional
         self.add_edge(existing_node_obj, new_node_obj)
 
-        # Add edges from new node to the specified successors
+        # new_node → successors: inherit original edge attributes
         for succ in successors_to_move:
-            self.add_edge(new_node_obj, succ)
+            self.add_edge(new_node_obj, succ, **succ_edge_data[succ])
     
     def bingo_transform_dfg_add_entry_node(self) -> None:
         """Transform the DFG to add one entry node."""
@@ -283,36 +301,47 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                     self.bingo_insert_node_between(cur_node, succ, dummy_set_node)
                     
     def bingo_transform_dfg_add_dummy_check_nodes(self) -> None:
-        '''Transform the DFG to add dummy check nodes.'''
-        # The idea of the dummy check nodes is to solve the problem of this kind
-        #         dma(Cl0)    dma(Cl1)
-        #          |           |
-        #           \         /
-        #            v       v
-        #            gemm(Cl0) <-cur node
-        # that a node depends on two (more than 1) nodes with same assigned core
+        '''Transform the DFG to add dummy check nodes.
+
+        Two cases require dummy_check insertion:
+
+        Case 1 (same-core): A node has 2+ predecessors on the SAME core
+        (different clusters). Both write to the same dep_matrix column.
+        Insert dummy_checks to serialize consumption of that column.
+
+        Case 2 (multi-core): A node has predecessors from 2+ DIFFERENT cores.
+        Without dummy_checks, the node's dep_check_code would be a multi-bit
+        mask (e.g., 0b110 for core 1 + core 2). This holds one column set
+        while waiting for the other, creating a deadlock window when combined
+        with the dep_matrix overlap detection and done queue HOL blocking.
+
+        Solution: each dep_check (whether dummy or final normal task) must
+        check exactly ONE core column. For N distinct predecessor cores,
+        insert N-1 dummy_check nodes, each consuming one core's signal.
+        The final normal task checks only the last remaining core.
+        '''
         for cur_node in self.node_list:
-            # find all the predecessors
             preds_list = [
                 pred for pred in self.predecessors(cur_node)
             ]
-            # if there are more than 1 predecessor with the same assigned core id, we need to add dummy check nodes
-            # find if there are more than 1 predecessor with same assigned core
+            # Group predecessors by core_id
             predecessor_core_dict = {}
             for pred in preds_list:
                 if pred.assigned_core_id not in predecessor_core_dict:
                     predecessor_core_dict[pred.assigned_core_id] = []
                 predecessor_core_dict[pred.assigned_core_id].append(pred)
-            dummy_check_nodes_to_add = []
+
+            # ---- Case 1: same-core groups with 2+ predecessors ----
             for core_id, preds in predecessor_core_dict.items():
                 if len(preds) >= 2:
-                    print(f"Adding dummy check node for {cur_node.node_name} with predecessors {[pred.node_name for pred in preds]}")
-                    for i in range(len(preds)-1):
+                    print(f"Adding dummy check nodes for {cur_node.node_name} "
+                          f"with same-core predecessors {[p.node_name for p in preds]} (core {core_id})")
+                    for i in range(len(preds) - 1):
                         dummy_check_node = BingoNode(
                             assigned_chiplet_id=cur_node.assigned_chiplet_id,
-                            assigned_cluster_id=cur_node.assigned_cluster_id, # should be fine since it will not be executed
-                            assigned_core_id=cur_node.assigned_core_id,       # should be the same type of the cur_node to block the execution
-                            kernel_name= None
+                            assigned_cluster_id=cur_node.assigned_cluster_id,
+                            assigned_core_id=cur_node.assigned_core_id,
+                            kernel_name=None
                         )
                         dummy_check_node.node_type = "dummy"
                         dummy_check_node.dep_check_enable = True
@@ -322,30 +351,95 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                         dummy_check_node.dep_set_cluster_id = 0
                         dummy_check_node.dep_set_chiplet_id = 0
                         dummy_check_node.remote_dep_set_all = False
-                        dummy_check_nodes_to_add.append(dummy_check_node)
-                        # Add the dummy check node to the graph
                         self.bingo_insert_node_between(preds[i], cur_node, dummy_check_node)
-            # Temporary solution
-            # For the other predecessors, we connect them to the dummy check node
-            for core_id, preds in predecessor_core_dict.items():
-                if len(preds) == 1:
-                    if dummy_check_nodes_to_add:
-                        # Find the dummy dep check nodes with its predecessors is differnet from this predecessor
-                        best_dummy_nodes = [dummy_node for dummy_node in dummy_check_nodes_to_add
-                                           if dummy_node.dep_check_list[0] != preds[0].assigned_core_id]
-                        if not best_dummy_nodes:
-                            print("Warning: Cannot find suitable dummy check node to connect the predecessor, this is unexpected!")
-                        best_dummy_node = random.choice(best_dummy_nodes)
-                        self.remove_edge(preds[0], cur_node)
-                        self.add_edge(preds[0], best_dummy_node)
-                        best_dummy_node.dep_check_list.append(preds[0].assigned_core_id)
+
+            # ---- Case 2: multi-core predecessors ----
+            remaining_preds = [
+                pred for pred in self.predecessors(cur_node)
+                if not (pred.node_type == "dummy" and pred.dep_check_enable)
+            ]
+            remaining_core_ids = sorted(set(pred.assigned_core_id for pred in remaining_preds))
+
+            if len(remaining_core_ids) >= 2:
+                cores_to_split = remaining_core_ids[:-1]
+                for split_core in cores_to_split:
+                    core_preds = [p for p in self.predecessors(cur_node)
+                                  if p.assigned_core_id == split_core
+                                  and not (p.node_type == "dummy" and p.dep_check_enable)]
+                    if not core_preds:
+                        continue
+                    pred = core_preds[0]
+                    print(f"Adding multi-core dummy check for {cur_node.node_name}: "
+                          f"splitting {pred.node_name} (core {split_core})")
+                    dummy_check_node = BingoNode(
+                        assigned_chiplet_id=cur_node.assigned_chiplet_id,
+                        assigned_cluster_id=cur_node.assigned_cluster_id,
+                        assigned_core_id=cur_node.assigned_core_id,
+                        kernel_name=None
+                    )
+                    dummy_check_node.node_type = "dummy"
+                    dummy_check_node.dep_check_enable = True
+                    dummy_check_node.dep_check_list = [split_core]
+                    dummy_check_node.dep_set_enable = False
+                    dummy_check_node.dep_set_list = []
+                    dummy_check_node.dep_set_cluster_id = 0
+                    dummy_check_node.dep_set_chiplet_id = 0
+                    dummy_check_node.remote_dep_set_all = False
+                    self.bingo_insert_node_between(pred, cur_node, dummy_check_node)
+
+    def bingo_transform_add_core_sequencing_edges(self) -> int:
+        """Add edges between consecutive tasks on the same core.
+
+        Ensures deterministic execution order for tasks sharing a core,
+        even when no explicit data dependency exists between them.
+        Without these edges, the HW scheduler could dispatch same-core
+        tasks in any topological order, leading to non-deterministic
+        behavior and harder-to-debug timing.
+
+        Algorithm:
+          1. Topologically sort all nodes (respects existing dependencies).
+          2. Group by (chiplet_id, cluster_id, core_id).
+          3. Within each group, add an edge from node[i] to node[i+1]
+             if no path already connects them (avoids redundant edges).
+
+        Must be called AFTER entry/exit/conditional/dummy transforms
+        (which insert infrastructure nodes on specific cores) and
+        BEFORE dep info assignment.
+
+        Returns:
+            Number of sequencing edges added.
+        """
+        from collections import defaultdict
+
+        topo_order = list(nx.topological_sort(self))
+
+        # Group nodes by their (chiplet, cluster, core) assignment
+        core_groups: dict[tuple, list[BingoNode]] = defaultdict(list)
+        for node in topo_order:
+            key = (node.assigned_chiplet_id, node.assigned_cluster_id, node.assigned_core_id)
+            core_groups[key].append(node)
+
+        edges_added = 0
+        for (chip, cl, core), nodes in core_groups.items():
+            # nodes are already in topological order
+            for i in range(len(nodes) - 1):
+                prev_node = nodes[i]
+                next_node = nodes[i + 1]
+                # Skip if an edge (direct or transitive path) already exists
+                if not self.has_edge(prev_node, next_node) and not nx.has_path(self, prev_node, next_node):
+                    self.add_edge(prev_node, next_node)
+                    edges_added += 1
+
+        if edges_added > 0:
+            print(f"Core sequencing: added {edges_added} edges across "
+                  f"{len(core_groups)} core groups")
+        return edges_added
 
     def bingo_assign_normal_node_dep_check_info(self) -> None:
-        """Assign the dep check info for normal nodes."""
+        """Assign the dep check info for normal and gating nodes."""
         # Iterate over all nodes in the graph
         for cur_node in self.node_list:
-            # Check if the node's task_type is "normal"
-            if cur_node.node_type == "normal":
+            if cur_node.node_type in ("normal", "gating"):
                 # Find predecessors
                 # And not dummy check
                 preds = [
@@ -369,11 +463,10 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                           f"dep_check_enable=False")
 
     def bingo_assign_normal_node_dep_set_info(self) -> None:
-        """Assign the dep set info for normal nodes."""
+        """Assign the dep set info for normal and gating nodes."""
         # Iterate over all nodes in the graph
         for cur_node in self.node_list:
-           # Check if the node's task_type is "normal"
-           if cur_node.node_type == "normal":
+           if cur_node.node_type in ("normal", "gating"):
                 # Find succs
                 # And not dummy set
                 succs = [
@@ -394,6 +487,371 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                     cur_node.remote_dep_set_all = False
                     cur_node.dep_set_cluster_id = 0
                     cur_node.dep_set_chiplet_id = 0
+    # ----------------------------------------------------------------
+    # DARTS Tier 1: Conditional Execution Compilation
+    # ----------------------------------------------------------------
+    def _alloc_cerf_group(self, hint: str = "") -> int:
+        """Allocate the next CERF group ID. Raises on overflow (>31)."""
+        gid = self._next_cerf_group
+        self._next_cerf_group += 1
+        if gid >= 32:
+            raise ValueError(
+                f"CERF group overflow: need group {gid} but max is 31 "
+                f"(WF4 violated). {hint}")
+        return gid
+
+    def bingo_compile_conditional_regions(self) -> dict:
+        """Compile conditional edges into CERF group assignments.
+
+        Also validates that all nodes have valid core assignments
+        (catches missing ``bingo_auto_assign()`` calls).
+
+        Scans every edge for the ``cond`` attribute set by
+        ``bingo_add_edge(..., cond=True)``.  For each gating node (a node
+        with at least one outgoing conditional edge):
+
+        1. Collect the set of conditional targets.
+        2. Build an undirected subgraph of *unconditional* edges among those
+           targets and find connected components — targets connected by
+           unconditional edges share one CERF group.
+        3. Assign one CERF group per component and annotate the target nodes.
+        4. Promote the gating node to ``node_type="gating"`` and record its
+           ``cerf_write_groups``.
+
+        Must be called **before** the dummy-node transforms.
+
+        Returns:
+            dict mapping each conditionally-gated BingoNode to its CERF
+            group id.  Also stored in ``self._node_to_cerf_group``.
+        """
+        # -- Validate core assignments ----------------------------------------
+        unassigned = [n for n in self.node_list if n.assigned_core_id < 0]
+        if unassigned:
+            names = ", ".join(n.node_name for n in unassigned[:5])
+            suffix = f" (and {len(unassigned)-5} more)" if len(unassigned) > 5 else ""
+            raise ValueError(
+                f"{len(unassigned)} node(s) have no core assignment: "
+                f"{names}{suffix}. "
+                f"Call bingo_auto_assign() before compile, or provide "
+                f"explicit (chiplet, cluster, core) in BingoNode()."
+            )
+
+        # -- Step 1: identify gating nodes and their conditional targets ------
+        gating_to_targets: dict[BingoNode, set[BingoNode]] = {}
+        for u, v, data in self.edges(data=True):
+            if data.get("cond", False):
+                gating_to_targets.setdefault(u, set()).add(v)
+
+        if not gating_to_targets:
+            self._node_to_cerf_group = {}
+            return {}
+
+        # -- Sanity: a CERF-gated node must not be the source of new cond edges --
+        # If node X is a conditional target (will be CERF-gated) and also has
+        # outgoing conditional edges, the compiler would insert a gating node on
+        # X's (CERF-skippable) cluster. When that cluster is inactive the gating
+        # node cannot run, deadlocking all downstream targets.
+        all_cond_targets: set[BingoNode] = set()
+        for targets in gating_to_targets.values():
+            all_cond_targets.update(targets)
+        for source_node in gating_to_targets:
+            if source_node in all_cond_targets:
+                parent = next(
+                    (g.node_name for g, ts in gating_to_targets.items()
+                     if source_node in ts), "?")
+                raise ValueError(
+                    f"Node '{source_node.node_name}' has outgoing conditional "
+                    f"edges but is itself a conditional target (gated by "
+                    f"'{parent}'). The auto-inserted gating node would be "
+                    f"placed on a CERF-skippable cluster, causing a deadlock "
+                    f"when that cluster is inactive. To verify results of "
+                    f"CERF-gated computations, use post_execute_code in "
+                    f"bingo_compile_dfg() instead.")
+
+        # -- Auto-insert gating nodes for sources with cond_dic ------
+        inserted_gating_nodes = {}  # source_node → (gating_node, cond_dic)
+        for source_node in list(gating_to_targets.keys()):
+            # Collect cond_dic from edges (all edges from same source share config)
+            cond_dic = {}
+            for _, v, data in self.out_edges(source_node, data=True):
+                if data.get('cond', False) and data.get('cond_dic'):
+                    cond_dic = data['cond_dic']
+                    break
+
+            # Skip if no cond_dic — use legacy promote-in-place
+            if not cond_dic:
+                continue
+
+            # Create gating node on same core as source
+            gating_node = BingoNode(
+                source_node.assigned_chiplet_id,
+                source_node.assigned_cluster_id,
+                source_node.assigned_core_id,
+                node_name=f"__gating_{source_node.node_name}",
+            )
+
+            # Splice: source → gating_node → [conditional targets]
+            cond_succs = [v for v in self.successors(source_node)
+                          if self[source_node][v].get('cond', False)]
+            self.bingo_insert_node_after(source_node, gating_node,
+                                         successors_to_move=cond_succs)
+
+            inserted_gating_nodes[source_node] = (gating_node, cond_dic)
+            # Transfer target ownership from source to gating_node
+            gating_to_targets[gating_node] = gating_to_targets.pop(source_node)
+
+        # -- WF1: Acyclicity (only checked when conditional edges exist) ------
+        if not nx.is_directed_acyclic_graph(self):
+            raise ValueError(
+                "Conditional DFG is not a DAG — it contains a cycle. "
+                "Well-formedness condition WF1 violated."
+            )
+
+        # -- WF2: validate single-gating-source per target --------------------
+        target_to_gating: dict[BingoNode, BingoNode] = {}
+        for gating_node, targets in gating_to_targets.items():
+            for t in targets:
+                if t in target_to_gating:
+                    raise ValueError(
+                        f"Node '{t.node_name}' is conditionally gated by both "
+                        f"'{target_to_gating[t].node_name}' and "
+                        f"'{gating_node.node_name}'.  Hardware supports only "
+                        f"one CERF group per task (WF2 violated)."
+                    )
+                target_to_gating[t] = gating_node
+
+        # -- WF5: gating precedence (each gating node is ancestor of targets) -
+        for gating_node, targets in gating_to_targets.items():
+            for t in targets:
+                if not nx.has_path(self, gating_node, t):
+                    raise ValueError(
+                        f"Gating node '{gating_node.node_name}' is not an "
+                        f"ancestor of conditional target '{t.node_name}'. "
+                        f"Well-formedness condition WF5 violated."
+                    )
+
+        # -- Step 3: per gating node — connected-component grouping -----------
+        #
+        # CERF group reuse: if all gating nodes are totally ordered
+        # (each is an ancestor of the next), their conditional targets
+        # execute at different times and can safely share group IDs.
+        # The clear-before-set protocol in the gating task ensures that
+        # stale group values from a previous layer are overwritten.
+        node_to_group: dict[BingoNode, int] = {}
+
+        gating_ordered = [
+            n for n in nx.topological_sort(self) if n in gating_to_targets
+        ]
+        reuse_groups = len(gating_ordered) > 1 and all(
+            nx.has_path(self, gating_ordered[i], gating_ordered[i + 1])
+            for i in range(len(gating_ordered) - 1)
+        )
+        pool_start = self._next_cerf_group
+
+        for gating_node in gating_ordered:
+            targets = gating_to_targets[gating_node]
+            gating_node.node_type = "gating"
+
+            # Reset group counter to pool start for reuse
+            if reuse_groups:
+                self._next_cerf_group = pool_start
+
+            # Build undirected graph of unconditional edges among targets
+            unc = nx.Graph()
+            unc.add_nodes_from(targets)
+            for t in targets:
+                for _, v, d in self.out_edges(t, data=True):
+                    if v in targets and not d.get("cond", False):
+                        unc.add_edge(t, v)
+                for u, _, d in self.in_edges(t, data=True):
+                    if u in targets and not d.get("cond", False):
+                        unc.add_edge(u, t)
+
+            # Sort components deterministically by lowest node_id so that
+            # expert_i always gets the same CERF group across reused layers.
+            components = sorted(
+                nx.connected_components(unc),
+                key=lambda c: min(n.node_id for n in c),
+            )
+
+            # Assign CERF groups. If more components than 32, share groups
+            # (multiple experts per CERF group — HW skip at group level,
+            # SW guard at expert level within active groups).
+            num_components = len(components)
+            max_cerf = 32 - self._next_cerf_group
+            if max_cerf <= 0:
+                max_cerf = 32  # will overflow, _alloc_cerf_group raises
+
+            # Assign cond_node_index to each target for SW guard
+            expert_idx_counter = 0
+
+            group_ids = []
+            if num_components <= max_cerf:
+                # Normal: 1 CERF group per component (no group sharing)
+                for component in components:
+                    hint = ("Sequential gating reuse is active — "
+                            "too many experts per layer."
+                            if reuse_groups else
+                            "Consider reducing experts or making "
+                            "gating nodes sequential for reuse.")
+                    gid = self._alloc_cerf_group(hint)
+                    for node in component:
+                        node.cond_exec_en = True
+                        node.cond_exec_group_id = gid
+                        node.cond_exec_invert = False
+                        node._cond_node_index = expert_idx_counter
+                        node_to_group[node] = gid
+                    expert_idx_counter += 1
+                    group_ids.append(gid)
+            else:
+                # CERF group sharing: multiple components per group.
+                # Distributes components round-robin across available groups.
+                n_groups = min(max_cerf, 32)
+                allocated_gids = [self._alloc_cerf_group(
+                    f"Sharing mode: {num_components} components across {n_groups} groups"
+                ) for _ in range(n_groups)]
+                for comp_idx, component in enumerate(components):
+                    gid = allocated_gids[comp_idx % n_groups]
+                    for node in component:
+                        node.cond_exec_en = True
+                        node.cond_exec_group_id = gid
+                        node.cond_exec_invert = False
+                        node._cond_node_index = expert_idx_counter
+                        node_to_group[node] = gid
+                    expert_idx_counter += 1
+                    if gid not in group_ids:
+                        group_ids.append(gid)
+                print(f"CERF group sharing: {num_components} components "
+                      f"mapped to {n_groups} groups "
+                      f"({num_components/n_groups:.1f} components/group)")
+
+            gating_node.cerf_write_groups = sorted(set(
+                gating_node.cerf_write_groups + group_ids
+            ))
+            # Set gating node reference on all guarded expert nodes (for SW guard wiring)
+            for target in targets:
+                target._gating_node = gating_node
+
+        self._node_to_cerf_group = node_to_group
+
+        # -- Auto-populate gating kernel args for inserted gating nodes ------
+        # All modes use the unified __host_bingo_kernel_cerf_gating kernel.
+        for source_node, (gating_node, cond_dic) in inserted_gating_nodes.items():
+            cerf_controlled_mask = sum(1 << g for g in gating_node.cerf_write_groups)
+            num_groups = len(gating_node.cerf_write_groups)
+            mode_str = cond_dic.get('mode', 'static')
+
+            gating_node.kernel_name = "__host_bingo_kernel_cerf_gating"
+
+            if mode_str == 'top_k':
+                # Count total conditional targets for per-expert activation array
+                num_experts = len(gating_to_targets[gating_node])
+                cerf_gids_alloc = BingoMemAlloc(
+                    f"__cerf_gids_{source_node.node_name}",
+                    num_experts, "L3",
+                    chip_id=source_node.assigned_chiplet_id, cluster_id=0)
+                # Per-expert activation array (uint8_t[num_experts]):
+                # Gating kernel writes 1 for selected experts, 0 for others.
+                # Expert kernels read their slot via SW guard.
+                expert_activation_alloc = BingoMemAlloc(
+                    f"__cond_act_{source_node.node_name}",
+                    num_experts, "L3",
+                    chip_id=source_node.assigned_chiplet_id, cluster_id=0)
+                gating_node.kernel_args = HostBingoKernelCerfGatingArgs(
+                    mode=BINGO_GATING_MODE_TOP_K,
+                    cerf_controlled_mask=cerf_controlled_mask,
+                    top_k_or_threshold=cond_dic['k'],
+                    cerf_group_ids_addr=cerf_gids_alloc,
+                    cond_activation_addr=expert_activation_alloc,
+                )
+                gating_node._pred_source_node = source_node
+
+            elif mode_str == 'threshold':
+                gating_node.kernel_args = HostBingoKernelCerfGatingArgs(
+                    mode=BINGO_GATING_MODE_THRESHOLD,
+                    cerf_controlled_mask=cerf_controlled_mask,
+                    top_k_or_threshold=cond_dic['threshold'],
+                )
+                gating_node._pred_source_node = source_node
+
+            elif mode_str == 'static':
+                write_mask = cond_dic.get('write_mask', cerf_controlled_mask)
+                gating_node.kernel_args = HostBingoKernelCerfGatingArgs(
+                    mode=BINGO_GATING_MODE_STATIC,
+                    cerf_controlled_mask=cerf_controlled_mask,
+                    top_k_or_threshold=write_mask,
+                )
+
+            elif mode_str == 'custom':
+                gating_node.kernel_name = cond_dic['kernel_name']
+                args_cls = cond_dic.get('kernel_args_cls')
+                args_kwargs = cond_dic.get('kernel_args_kwargs', {})
+                if args_cls:
+                    gating_node.kernel_args = args_cls(
+                        cerf_controlled_mask=cerf_controlled_mask, **args_kwargs)
+
+            else:
+                raise ValueError(f"Unknown gating mode: '{mode_str}'")
+
+            # Store expert→CERF group mapping for cerf_group_ids initialization
+            self._gating_cerf_mappings[gating_node] = {
+                i: gid for i, gid in enumerate(sorted(gating_node.cerf_write_groups))
+            }
+
+        return node_to_group
+
+    def bingo_define_conditional_region(
+        self,
+        gating_node: BingoNode,
+        guarded_nodes: list,
+        group_per_node: bool = False,
+        invert: bool = False,
+    ) -> list[int]:
+        """Define a conditional execution region controlled by a gating task.
+
+        The gating_node is marked as type 'gating' (task_type=2 in RTL).
+        When it completes on a core, the hardware writes the assigned CERF
+        groups, causing guarded_nodes to either execute or be skipped.
+
+        Args:
+            gating_node:    The node whose completion activates the CERF groups.
+            guarded_nodes:  Nodes whose execution depends on the CERF state.
+            group_per_node: If True, each guarded node gets its own CERF group
+                            (MoE: each expert independently gated).
+                            If False, all guarded nodes share one CERF group
+                            (early exit: entire stage gated together).
+            invert:         If True, guarded nodes execute when group is INACTIVE.
+
+        Returns:
+            List of assigned CERF group IDs. Length equals len(guarded_nodes)
+            when group_per_node=True, or [single_id] when False.
+        """
+        gating_node.node_type = "gating"
+
+        if group_per_node:
+            group_ids = []
+            for node in guarded_nodes:
+                gid = self._alloc_cerf_group()
+                node.cond_exec_en = True
+                node.cond_exec_group_id = gid
+                node.cond_exec_invert = invert
+                group_ids.append(gid)
+        else:
+            gid = self._alloc_cerf_group()
+            for node in guarded_nodes:
+                node.cond_exec_en = True
+                node.cond_exec_group_id = gid
+                node.cond_exec_invert = invert
+            group_ids = [gid]
+
+        gating_node.cerf_write_groups = sorted(set(
+            gating_node.cerf_write_groups + group_ids
+        ))
+        return group_ids
+
+    # ----------------------------------------------------------------
+    # Node Packing / Unpacking
+    # ----------------------------------------------------------------
     def bingo_pack_node(self, node: BingoNode) -> int:
         """Pack the normal node into a 64-bit integer."""
         import math
@@ -414,12 +872,25 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         # Initialize the packed value
         packed_val = 0
         current_shift = 0
-        
-        # 1. task_type (1 bit)
-        # 0: Normal, 1: Dummy
-        task_type_val = 1 if node.node_type == "dummy" else 0
-        packed_val |= (task_type_val << current_shift)
+
+        # 1. cond_exec_invert (1 bit) — DARTS Tier 1
+        packed_val |= (int(node.cond_exec_invert) << current_shift)
         current_shift += 1
+
+        # 2. cond_exec_group_id (5 bits) — DARTS Tier 1
+        packed_val |= (node.cond_exec_group_id << current_shift)
+        current_shift += 5
+
+        # 3. cond_exec_en (1 bit) — DARTS Tier 1
+        packed_val |= (int(node.cond_exec_en) << current_shift)
+        current_shift += 1
+
+        # 4. task_type (2 bits) — expanded from 1 bit
+        # 00: Normal, 01: Dummy, 10: Gating
+        task_type_map = {"normal": 0, "dummy": 1, "gating": 2}
+        task_type_val = task_type_map.get(node.node_type, 0)
+        packed_val |= (task_type_val << current_shift)
+        current_shift += 2
         
         # 2. task_id (12 bits)
         packed_val |= (node.node_id << current_shift)
@@ -501,10 +972,22 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         
         current_shift = 0
         fields = {}
-        
-        # 1. task_type (1 bit)
-        fields['task_type'] = (packed_val >> current_shift) & 0x1
+
+        # 1. cond_exec_invert (1 bit) — DARTS Tier 1
+        fields['cond_exec_invert'] = (packed_val >> current_shift) & 0x1
         current_shift += 1
+
+        # 2. cond_exec_group_id (5 bits) — DARTS Tier 1
+        fields['cond_exec_group_id'] = (packed_val >> current_shift) & 0x1F
+        current_shift += 5
+
+        # 3. cond_exec_en (1 bit) — DARTS Tier 1
+        fields['cond_exec_en'] = (packed_val >> current_shift) & 0x1
+        current_shift += 1
+
+        # 4. task_type (2 bits) — 00=normal, 01=dummy, 10=gating
+        fields['task_type'] = (packed_val >> current_shift) & 0x3
+        current_shift += 2
         
         # 2. task_id (12 bits)
         fields['task_id'] = (packed_val >> current_shift) & ((1 << task_id_width) - 1)
@@ -999,72 +1482,124 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         f.write(f"        uint64_t* host_kernel_list_chip_{chiplet_id:02x} = (uint64_t*)bingo_l3_alloc(0x{chiplet_id:02x}, num_host_tasks_chip_{chiplet_id:02x} * sizeof(uint64_t));\n\n")
 
     def _emit_task_initialization(self, f, chiplet_id, sorted_nodes, handle_name_map):
-        """Emit initialization for task arguments."""
+        """Emit initialization for task arguments + per-kernel scratchpad."""
         f.write("        // 3. Task Arguments Init\n")
-        
+
         local_nodes = [node for node in sorted_nodes if node.assigned_chiplet_id == chiplet_id]
-        
-        dev_task_idx = 0
-        host_task_idx = 0
-        
+
+        # Pass 0: Pre-allocate ALL scratchpads so gating node scratchpad C vars
+        # are available when expert nodes reference them via SW guard.
+        f.write("        // 3a. Pre-allocate scratchpads for all tasks\n")
         for node in local_nodes:
             kernel_name = node.kernel_name
             is_device = kernel_name and kernel_name.startswith("__snax")
             is_host = kernel_name and kernel_name.startswith("__host")
-            
             if not (is_device or is_host):
                 continue
-            
+            if is_device:
+                sp_var = f"sp_dev_{node.node_id}"
+                f.write(f"        bingo_kernel_scratchpad_t* {sp_var} = (bingo_kernel_scratchpad_t*)bingo_l1_alloc(0x{chiplet_id:02x}, {node.assigned_cluster_id}, BINGO_KERNEL_SCRATCHPAD_SIZE);\n")
+            else:
+                sp_var = f"sp_host_{node.node_id}"
+                f.write(f"        bingo_kernel_scratchpad_t* {sp_var} = (bingo_kernel_scratchpad_t*)bingo_l3_alloc(0x{chiplet_id:02x}, BINGO_KERNEL_SCRATCHPAD_SIZE);\n")
+            node._scratchpad_c_var = sp_var
+        f.write("\n")
+
+        # Now wire SW guard fields — gating node scratchpad C vars are all known
+        for node in local_nodes:
+            if node.kernel_args and node._gating_node is not None:
+                gating_sp_var = node._gating_node._scratchpad_c_var
+                if gating_sp_var:
+                    is_dev = node.kernel_name and node.kernel_name.startswith("__snax")
+                    cast = "(uint32_t)" if is_dev else "(uint64_t)"
+                    node.kernel_args._gating_sp_c_expr = f"{cast}(uintptr_t){gating_sp_var}"
+                if node._cond_node_index is not None:
+                    node.kernel_args._cond_node_index = node._cond_node_index
+
+        dev_task_idx = 0
+        host_task_idx = 0
+
+        for node in local_nodes:
+            kernel_name = node.kernel_name
+            is_device = kernel_name and kernel_name.startswith("__snax")
+            is_host = kernel_name and kernel_name.startswith("__host")
+
+            if not (is_device or is_host):
+                continue
+
             f.write(f"        // Node ID: {node.node_id} {node.node_name} ({kernel_name})\n")
-            
+
+            # Scratchpad already allocated in pass 0 above
+            sp_var = node._scratchpad_c_var
+            sp_cast = f"(uint32_t)(uintptr_t){sp_var}" if is_device else f"(uint64_t)(uintptr_t){sp_var}"
+
             args_struct_type = ""
             if node.kernel_args:
                 args_struct_type = node.kernel_args.get_struct_name()
-            
+                # Set scratchpad C expression so get_c_field_assignments_with_scratchpad includes it
+                node.kernel_args._scratchpad_c_expr = sp_cast
+
             if is_device:
                 args_var = f"args_dev_chip{chiplet_id:02x}_{node.node_id}"
-                
+
                 if node.kernel_args:
-                    # Allocate args in the assigned cluster's L1 memory
                     f.write(f"        {args_struct_type}* {args_var} = ({args_struct_type}*)bingo_l1_alloc(0x{chiplet_id:02x}, {node.assigned_cluster_id}, sizeof({args_struct_type}));\n")
-                    # Populate fields
-                    field_assignments = node.kernel_args.get_c_field_assignments(handle_name_map)
+                    field_assignments = node.kernel_args.get_c_field_assignments_with_scratchpad(handle_name_map)
                     for field, value in field_assignments.items():
                             f.write(f"        {args_var}->{field} = {value};\n")
+                    # Wire pred_scratchpad_addr for auto-inserted gating nodes
+                    if hasattr(node, '_pred_source_node') and node._pred_source_node:
+                        pred_sp = node._pred_source_node._scratchpad_c_var
+                        f.write(f"        {args_var}->pred_scratchpad_addr = (uint32_t)(uintptr_t){pred_sp};\n")
                     f.write(f"        device_arg_list_chip_{chiplet_id:02x}[{dev_task_idx}] = (uint32_t)(uintptr_t){args_var};\n")
                 else:
-                    # Here is leaved for the special kernels
-                    # Now only the exit kernel needs this
                     if "exit" in kernel_name:
-                        # Exit args allocated in assigned cluster's L1
                         f.write(f"        __snax_bingo_kernel_exit_args_t* {args_var} = (__snax_bingo_kernel_exit_args_t*)bingo_l1_alloc(0x{chiplet_id:02x}, {node.assigned_cluster_id}, sizeof(__snax_bingo_kernel_exit_args_t));\n")
                         f.write(f"        {args_var}->exit_code = 0;\n")
+                        f.write(f"        {args_var}->scratchpad_ptr = {sp_cast};\n")
                         f.write(f"        device_arg_list_chip_{chiplet_id:02x}[{dev_task_idx}] = (uint32_t)(uintptr_t){args_var};\n")
                     else:
                         f.write(f"        device_arg_list_chip_{chiplet_id:02x}[{dev_task_idx}] = 0;\n")
-                
+
                 f.write(f"        device_kernel_list_chip_{chiplet_id:02x}[{dev_task_idx}] = (uint32_t)(uintptr_t)get_device_function(\"{kernel_name}\");\n")
                 dev_task_idx += 1
-                
+
             elif is_host:
                 args_var = f"args_host_chip{chiplet_id:02x}_{node.node_id}"
-                
+
                 if node.kernel_args:
                     f.write(f"        {args_struct_type}* {args_var} = ({args_struct_type}*)bingo_l3_alloc(0x{chiplet_id:02x}, sizeof({args_struct_type}));\n")
-                    field_assignments = node.kernel_args.get_c_field_assignments(handle_name_map)
+                    field_assignments = node.kernel_args.get_c_field_assignments_with_scratchpad(handle_name_map)
                     for field, value in field_assignments.items():
                             f.write(f"        {args_var}->{field} = {value};\n")
+                    # Wire pred_scratchpad_addr for auto-inserted gating nodes
+                    if hasattr(node, '_pred_source_node') and node._pred_source_node:
+                        pred_sp = node._pred_source_node._scratchpad_c_var
+                        f.write(f"        {args_var}->pred_scratchpad_addr = (uint64_t)(uintptr_t){pred_sp};\n")
                     f.write(f"        host_arg_list_chip_{chiplet_id:02x}[{host_task_idx}] = (uint64_t)(uintptr_t){args_var};\n")
                 else:
                     if "exit" in kernel_name:
                         f.write(f"        __host_bingo_kernel_exit_args_t* {args_var} = (__host_bingo_kernel_exit_args_t*)bingo_l3_alloc(0x{chiplet_id:02x}, sizeof(__host_bingo_kernel_exit_args_t));\n")
                         f.write(f"        {args_var}->exit_code = 0;\n")
+                        f.write(f"        {args_var}->scratchpad_ptr = {sp_cast};\n")
                         f.write(f"        host_arg_list_chip_{chiplet_id:02x}[{host_task_idx}] = (uint64_t)(uintptr_t){args_var};\n")
                     else:
                         f.write(f"        host_arg_list_chip_{chiplet_id:02x}[{host_task_idx}] = 0;\n")
-                
+
                 f.write(f"        host_kernel_list_chip_{chiplet_id:02x}[{host_task_idx}] = (uint64_t)(uintptr_t)&{kernel_name};\n")
                 host_task_idx += 1
+
+            # Emit CERF group ID init for auto-inserted gating nodes
+            if node in getattr(self, '_gating_cerf_mappings', {}):
+                mapping = self._gating_cerf_mappings[node]
+                if hasattr(node, 'kernel_args') and node.kernel_args and hasattr(node.kernel_args, 'cerf_group_ids_addr') and node.kernel_args.cerf_group_ids_addr is not None:
+                    cerf_gids_handle = node.kernel_args.cerf_group_ids_addr
+                    cerf_gids_var = handle_name_map.get(cerf_gids_handle)
+                    if cerf_gids_var:
+                        f.write(f"        // Auto-generated CERF group ID mapping\n")
+                        f.write(f"        uint8_t* __cerf_gids_{node.node_id} = (uint8_t*)(uintptr_t){cerf_gids_var};\n")
+                        for expert_idx, cerf_gid in mapping.items():
+                            f.write(f"        __cerf_gids_{node.node_id}[{expert_idx}] = {cerf_gid};\n")
     
     def _emit_scheduler_launch(self, f, chiplet_id):
         """Emit the scheduler initialization and launch calls."""
@@ -1085,7 +1620,38 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         f.write(f"                                          global_task_id_to_host_task_id_chip_{chiplet_id:02x});\n")
         f.write(f"        if (err) return err;\n")
 
-    def bingo_emit_offload_c_code(self, extra_include_header_list: list[str], output_path: str, app_name: str) -> None:
+    def _validate_cerf_cross_group_edges(self):
+        """Detect unconditional edges from CERF-gated nodes to nodes outside
+        their CERF group.  Such edges produce bridge tasks that deadlock when
+        the source's CERF group is skipped (the source never signals)."""
+        node_to_group = getattr(self, '_node_to_cerf_group', {})
+        if not node_to_group:
+            return
+        for u, v, data in self.edges(data=True):
+            if data.get('cond', False):
+                continue
+            if u not in node_to_group:
+                continue
+            if getattr(v, 'node_type', 'normal') in ('entry', 'exit', 'gating'):
+                continue
+            # Exit/entry nodes added by the compiler have SW guard support
+            if v.kernel_name and ('exit' in v.kernel_name or 'entry' in v.kernel_name):
+                continue
+            src_grp = node_to_group[u]
+            dst_grp = node_to_group.get(v)
+            if dst_grp != src_grp:
+                dst_info = (f"CERF group {dst_grp}" if dst_grp is not None
+                            else "not CERF-gated")
+                raise ValueError(
+                    f"Unconditional edge '{u.node_name}' (CERF group "
+                    f"{src_grp}) -> '{v.node_name}' ({dst_info}) crosses a "
+                    f"CERF boundary. When group {src_grp} is skipped, "
+                    f"'{u.node_name}' will not signal completion, "
+                    f"deadlocking '{v.node_name}'. To verify results of "
+                    f"CERF-gated computations, use post_execute_code in "
+                    f"bingo_compile_dfg() instead.")
+
+    def bingo_emit_offload_c_code(self, extra_include_header_list: list[str], output_path: str, app_name: str, post_execute_code: list[str] | None = None) -> None:
         """Emit the offload_hw_bingo.h file with kernel_execution logic."""
         
         # 1. Collect Handles
@@ -1126,11 +1692,17 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                 # E. Emit Scheduler Launch
                 self._emit_scheduler_launch(f, chiplet_id)
 
+                # F. Emit Post-Execute Code (runs after scheduler completes)
+                if post_execute_code:
+                    f.write("\n        // Post-execution check\n")
+                    for line in post_execute_code:
+                        f.write(f"        {line}\n")
+
                 f.write("    }\n")
             
             f.write("    return 0;\n")
             f.write("}\n")
-    def bingo_compile_dfg(self, app_name: str, output_dir: str, output_file_name: str, extra_include_header_list: list[str] | None) -> None:
+    def bingo_compile_dfg(self, app_name: str, output_dir: str, output_file_name: str, extra_include_header_list: list[str] | None, post_execute_code: list[str] | None = None) -> None:
         """Compile the DFG by assigning dep info and emitting C code."""
         # 1. Transformations
         # Add Entry Node
@@ -1140,7 +1712,13 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         self.bingo_visualize_dfg(
             os.path.join(output_dir, "dfg_with_entry_exit_nodes")
         )
+        # Compile conditional regions (CERF group assignment)
+        # Must be called before dummy node transforms.
+        # No-op for non-conditional DFGs (returns empty dict).
+        self.bingo_compile_conditional_regions()
+        self._validate_cerf_cross_group_edges()
         # Add Dummy Set/Check Nodes
+        self.bingo_transform_add_core_sequencing_edges()
         self.bingo_transform_dfg_add_dummy_set_nodes()
         self.bingo_transform_dfg_add_dummy_check_nodes()
         self.bingo_visualize_dfg(
@@ -1158,4 +1736,5 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
             app_name=app_name,
             output_path=os.path.join(output_dir, output_file_name),
             extra_include_header_list=extra_include_header_list,
+            post_execute_code=post_execute_code,
         )

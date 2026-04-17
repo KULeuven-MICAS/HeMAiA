@@ -175,7 +175,7 @@ uint32_t __workload_gemm_stacked(bingo_task_t **task_list)
     gemm2_args->transpose_B = BINGO_CHIPLET_READW(transposed_B);
     gemm2_args->accumPrevC = BINGO_CHIPLET_READW(accumPrevC); // false
     // args for storing E
-    uint64_t D2_addr_l3 = o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), ARRAY_SIZE_BYTES(D2));
+    uint64_t D2_addr_l3 = bingoHeapMalloc(bingo_get_l3_heap_manager(get_current_chip_id()), ARRAY_SIZE_BYTES(D2));
 
     __snax_kernel_xdma_1d_copy_args_t *task_cluster_to_l3_args_D2 = (__snax_kernel_xdma_1d_copy_args_t *) bingo_l3_alloc(
         assigned_chip_id,

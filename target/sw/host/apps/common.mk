@@ -96,6 +96,13 @@ SRCS    += $(RUNTIME_DIR)/start.S
 # Include XDMA
 INCDIRS += $(SWDIR)/shared/vendor/xdma
 
+# libbingo headers are always needed because host_kernel_lib.h (included via
+# host.h in every host app) references libbingo symbols (BINGO_CHECK_TYPE_*,
+# BINGO_GATING_MODE_*, BINGO_PRINTF, bingo_cerf_update, bingo_utils.h helpers).
+# Linking against libbingo remains conditional on BINGO_HOST below.
+INCDIRS += $(abspath $(HOST_DIR)/runtime/libbingo/include)
+INCDIRS += $(SWDIR)/shared/vendor/bingo_alloc/bingo_alloc
+
 # Compiler flags
 RISCV_CFLAGS += $(addprefix -I,$(INCDIRS))
 RISCV_CFLAGS += -march=rv64gcv # include the v extention for ara
@@ -129,10 +136,7 @@ ifneq (,$(filter $(BINGO_HOST),True true TRUE 1))
 LIBBINGO_DIR = $(abspath $(RUNTIME_DIR)/libbingo)
 
 
-# libbingo
-INCDIRS += $(LIBBINGO_DIR)/include
-INCDIRS += $(SWDIR)/shared/vendor/o1heap/o1heap64
-# INCDIRS += $(SWDIR)/host/runtime/o1heap32
+# libbingo (includes already added above unconditionally)
 BINGO_LIB_DIR = $(LIBBINGO_DIR)/build
 BINGO_LIB_NAME = bingo
 BINGO_LIB = $(BINGO_LIB_DIR)/lib$(BINGO_LIB_NAME).a

@@ -15,7 +15,7 @@
 #include "sys_dma.c"
 #include "team.c"
 #include "uart.c"
-#include "o1heap64.c"
+#include "bingo_alloc.c"
 #include "snrt_l1_alloc.c"
 #include "bingo.c"
 #include "hemaia_cls.c"

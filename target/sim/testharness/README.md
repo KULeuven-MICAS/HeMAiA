@@ -17,7 +17,7 @@ testharness  (top-level, drives CLK/RST/PLL/peripherals, loads binary, monitors 
   │     │
   │     └── io_wrapper  (D2D interconnect routing between chiplets and off-chip)
   │           ├── gen_direct       (SIM_WITH_INTERPOSER=0, ideal wire model)
-  │           └── gen_interposer   (SIM_WITH_INTERPOSER=1, IO-pad + interposer model, 2×2 only)
+  │           └── gen_interposer   (SIM_WITH_INTERPOSER=1, IO-pad + interposer model, 2x2 only)
   │
   └── mem_chip instances  (external memory pool, FPGA in real setup, simulated here)
 ```
@@ -54,7 +54,7 @@ Handles all die-to-die (D2D) signal routing. Two modes selected by `SIM_WITH_INT
 | Mode | `SIM_WITH_INTERPOSER` | Description |
 |------|-----------------------|-------------|
 | **Direct** | `0` | Ideal wire connections. Adjacent chiplets' D2D buses are shorted via `tran` gates; flow-control signals use `assign`. No physical effects. |
-| **Interposer** | `1` | Each chiplet is wrapped in `hemaia_io_pad` (IO pad model), then routed through `hemaia_chiplet_interconnect` instances modeling the silicon interposer. **Currently supports 2×2 arrays only.** |
+| **Interposer** | `1` | Each chiplet is wrapped in `hemaia_io_pad` (IO pad model), then routed through `hemaia_chiplet_interconnect` instances modeling the silicon interposer. **Currently supports 2x2 arrays only.** |
 
 Internally, the io_wrapper connects:
 - **Internal mesh** — adjacent chiplets' facing D2D ports (e.g., chip `(0,0)` east ↔ chip `(1,0)` west)

@@ -5,135 +5,84 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
+#
+# Data generator for the gemm_sweep RTL characterization workload.
+# Emits per-config int8 A/B matrices + int32 golden D for every (M,K,N,shape)
+# in CONFIGS.  The DFG in main_bingo.py runs each config twice (gemm_full
+# once to configure the streamers, then gemm_minimal to measure the
+# steady-state cost) and cross-checks the result against these goldens.
 
 import numpy as np
-import argparse
-import pathlib
-import hjson
 import sys
 import os
 
 # Add data utility path
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../../../../../../util/sim/"))
-from data_utils import format_scalar_definition, format_vector_definition  # noqa E402
-
-# Add golden model path
+from data_utils import format_vector_definition  # noqa E402
 from snax_utils import block_gemm_golden_model  # noqa E402
 
 np.random.seed(320)
 
-def emit_header_file(**kwargs):
-    emit_str = ["#include <stdint.h>"]
-    emit_str += emit_matmul_data(**kwargs)
-    return "\n\n".join(emit_str)
 
-def emit_matmul_data(**kwargs):
-    data_str = []
+def mesh_dims(hwcfg: dict, array_shape: int):
+    """Extract (meshRow, tileSize, meshCol) from an hjson hw config."""
+    snax_acc_cfg = hwcfg["snax_versacore_core_template"]["snax_acc_cfg"][0]
+    unrolling = snax_acc_cfg["snax_versacore_spatial_unrolling"][0][array_shape]
+    return unrolling[0], unrolling[1], unrolling[2]
 
-    M = kwargs["M"]
-    K = kwargs["K"]
-    N = kwargs["N"]
 
-    data_str += [format_scalar_definition("uint32_t", "M", M)]
-    data_str += [format_scalar_definition("uint32_t", "K", K)]
-    data_str += [format_scalar_definition("uint32_t", "N", N)]
-
-    array_shape = kwargs["array_shape"]
-    data_str += [format_scalar_definition("uint32_t", "array_shape", array_shape)]
-
-    data_type = 0  # int8 data type
-    snax_acc_cfg = kwargs["snax_versacore_core_template"]["snax_acc_cfg"][0]
-    meshRow = snax_acc_cfg["snax_versacore_spatial_unrolling"][data_type][array_shape][0]
-    tileSize = snax_acc_cfg["snax_versacore_spatial_unrolling"][data_type][array_shape][1]
-    meshCol = snax_acc_cfg["snax_versacore_spatial_unrolling"][data_type][array_shape][2]
-    data_str += [format_scalar_definition("uint32_t", "meshRow", meshRow)]
-    data_str += [format_scalar_definition("uint32_t", "tileSize", tileSize)]
-    data_str += [format_scalar_definition("uint32_t", "meshCol", meshCol)]
-
-    transposed_A = kwargs["transposed_A"]
-    data_str += [format_scalar_definition("uint32_t", "transposed_A", transposed_A)]
-
-    transposed_B = kwargs["transposed_B"]
-    data_str += [format_scalar_definition("uint32_t", "transposed_B", transposed_B)]
-
-    data_str += [format_scalar_definition("uint32_t", "addNonZeroC", kwargs["addNonZeroC"])]
-    data_str += [format_scalar_definition("uint32_t", "addZeroC", kwargs["addZeroC"])]
-    data_str += [format_scalar_definition("uint32_t", "accumPrevC", kwargs["accumPrevC"])]
-    assert sum([kwargs["addNonZeroC"], kwargs["addZeroC"], kwargs["accumPrevC"]]) == 1, \
-        "Only one of addNonZeroC, addZeroC, accumPrevC can be set to 1."
-
-    # L1 storage size check
-    L1_SIZE = kwargs.get("l1_size_kb", 512) * 1024
-    A_size = M * K * meshRow * tileSize * 1  # int8
-    B_size = K * N * tileSize * meshCol * 1  # int8
-    D_size = M * N * meshRow * meshCol * 4   # int32
-    L1_SIZE_KB = kwargs.get("l1_size_kb", 512)
-    total_l1 = A_size + B_size + D_size
-    assert total_l1 <= L1_SIZE, (
-        f"GEMM data exceeds L1 storage! "
-        f"A({A_size/1024:.1f}KB) + B({B_size/1024:.1f}KB) + D({D_size/1024:.1f}KB) = {total_l1/1024:.1f}KB > {L1_SIZE_KB}KB. "
-        f"Reduce M={M}, K={K}, or N={N}."
+def config_sizes(hwcfg: dict, M: int, K: int, N: int, array_shape: int):
+    """Return (A_bytes, B_bytes, D_bytes) for a single config."""
+    meshRow, tileSize, meshCol = mesh_dims(hwcfg, array_shape)
+    return (
+        M * K * meshRow * tileSize,           # int8
+        K * N * tileSize * meshCol,           # int8
+        M * N * meshRow * meshCol * 4,        # int32
     )
 
-    # test data generation
+
+def emit_header_file(configs: list, hwcfg: dict) -> str:
+    """Generate gemm_data.h with per-config A/B input + D golden arrays.
+
+    Args:
+        configs: list of (M, K, N, array_shape) tuples
+        hwcfg:   the parsed snax_versacore_to_cluster.hjson config
+    """
+    lines = ["#include <stdint.h>"]
+
     A_MIN, A_MAX = -128, 127
     B_MIN, B_MAX = -128, 127
 
-    A = np.random.randint(A_MIN, A_MAX, size=(M, K, meshRow, tileSize)).reshape(-1)
+    for i, (M, K, N, shape) in enumerate(configs):
+        meshRow, tileSize, meshCol = mesh_dims(hwcfg, shape)
 
-    # Pad A to be multiple of 64 elements for xdma transfer
-    length = A.size
-    pad_len = (-length) % 64
-    if pad_len > 0:
-        A_padded = np.pad(A, (0, pad_len), mode='constant', constant_values=0)
-    else:
-        A_padded = A
-    data_str += [format_vector_definition("int8_t", "A", A_padded)]
+        A = np.random.randint(
+            A_MIN, A_MAX, size=(M, K, meshRow, tileSize)
+        ).reshape(-1).astype(np.int8)
+        # Pad A to multiple of 64 bytes for xDMA alignment
+        pad_len = (-A.size) % 64
+        if pad_len > 0:
+            A = np.pad(A, (0, pad_len), mode="constant", constant_values=0)
+        lines.append("")
+        lines.append(
+            f"// cfg{i}: M={M} K={K} N={N} shape={shape} "
+            f"(mesh={meshRow}x{tileSize}x{meshCol})"
+        )
+        lines.append(format_vector_definition("int8_t", f"A_cfg{i}", A))
 
-    B = np.random.randint(B_MIN, B_MAX, size=(K, N, tileSize, meshCol)).reshape(-1)
-    data_str += [format_vector_definition("int8_t", "B", B)]
+        B = np.random.randint(
+            B_MIN, B_MAX, size=(K, N, tileSize, meshCol)
+        ).reshape(-1).astype(np.int8)
+        lines.append(format_vector_definition("int8_t", f"B_cfg{i}", B))
 
-    # addZeroC=1: C is zeros, pass NULL
-    C = np.zeros((M, N, meshRow, meshCol), dtype=np.int32).reshape(-1)
-    data_str += [format_scalar_definition("int32_t *", "C", "NULL")]
+        C = np.zeros((M, N, meshRow, meshCol), dtype=np.int32).reshape(-1)
+        D = block_gemm_golden_model(
+            M, K, N, meshRow, tileSize, meshCol,
+            A[: M * K * meshRow * tileSize],  # strip padding for golden
+            B,
+            0, 0,  # subtraction_a, subtraction_b
+            C,
+        )
+        lines.append(format_vector_definition("int32_t", f"D_cfg{i}", D))
 
-    subtraction_a = 0
-    subtraction_b = 0
-
-    D = block_gemm_golden_model(
-        M, K, N,
-        meshRow, tileSize, meshCol,
-        A, B,
-        subtraction_a, subtraction_b,
-        C,
-    )
-    data_str += [format_vector_definition("int32_t", "D", D)]
-
-    return data_str
-
-def main():
-    parser = argparse.ArgumentParser(description="Generating data for kernels")
-    parser.add_argument(
-        "-c", "--cfg",
-        type=pathlib.Path,
-        required=True,
-        help="Select param config file kernel",
-    )
-    parser.add_argument(
-        "--hwcfg",
-        type=pathlib.Path,
-        required=True,
-        help="Select hardware config file kernel",
-    )
-    args = parser.parse_args()
-
-    with args.cfg.open() as f:
-        param = hjson.loads(f.read())
-    with args.hwcfg.open() as f:
-        hw = hjson.loads(f.read())
-
-    merged_config = {**param, **hw}
-    print(emit_header_file(**merged_config))
-
-if __name__ == "__main__":
-    main()
+    return "\n".join(lines) + "\n"

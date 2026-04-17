@@ -20,6 +20,49 @@ typedef struct __attribute__((aligned(8))){
     volatile uint8_t chip_level_checkpoint[256];
 } comm_buffer_t;
 
+// ============================================================================
+// Per-Kernel Scratchpad (64 bytes = 16 x uint32_t)
+// ============================================================================
+// Shared between host (64-bit CVA6) and device (32-bit Snitch) cores.
+// All fields are uint32_t to ensure identical layout on both architectures.
+// The struct is aligned to 4 bytes (natural alignment for uint32_t arrays).
+//
+// return_value + num_return_values are FUNCTIONAL (always written by kernels).
+// Timing fields are PROFILING (gated by BINGO_SCRATCHPAD_PROFILING).
+
+#define BINGO_KERNEL_SCRATCHPAD_SIZE  64
+#define BINGO_KERNEL_SCRATCHPAD_WORDS 16
+
+typedef struct __attribute__((packed, aligned(4))) {
+    uint32_t return_value;      // [0]  Result OR pointer to output data (32-bit)
+    uint32_t num_return_values; // [1]  Element count at return_value ptr (0 = scalar)
+    uint32_t start_time;        // [2]  mcycle at kernel start
+    uint32_t end_time;          // [3]  mcycle at kernel end
+    uint32_t arg_parse_time;    // [4]  Cycles for arg parsing
+    uint32_t cfg_time;          // [5]  Cycles for accelerator config
+    uint32_t kernel_run_time;   // [6]  Cycles for actual computation
+    uint32_t reserved[9];       // [7-15] Future use
+} bingo_kernel_scratchpad_t;
+
+#ifdef BINGO_SCRATCHPAD_PROFILING
+#define BINGO_SP_PROFILE(sp, field, val) ((sp)->field = (val))
+#else
+#define BINGO_SP_PROFILE(sp, field, val) ((void)0)
+#endif
+
+// Extract scratchpad from kernel args struct (architecture-aware).
+// scratchpad_ptr is always the LAST field in the args struct.
+#include <stddef.h>
+#if __riscv_xlen == 64
+// Host (64-bit): scratchpad_ptr is uint64_t
+#define BINGO_GET_SCRATCHPAD(arg, args_type) \
+    ((bingo_kernel_scratchpad_t*)(uintptr_t)(*(uint64_t*)((char*)(arg) + offsetof(args_type, scratchpad_ptr))))
+#elif __riscv_xlen == 32
+// Device (32-bit): scratchpad_ptr is uint32_t
+#define BINGO_GET_SCRATCHPAD(arg, args_type) \
+    ((bingo_kernel_scratchpad_t*)(uintptr_t)(*(uint32_t*)((char*)(arg) + offsetof(args_type, scratchpad_ptr))))
+#endif
+
 /**************/
 /* Interrupts */
 /**************/

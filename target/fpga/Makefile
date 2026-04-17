@@ -20,7 +20,7 @@ BENDER_TARGETS += -t xilinx
 default: all
 all: occamy_vcu128
 
-include $(ROOT)/util/Makefrag
+include $(ROOT)/target/fpga/Makefrag
 
 vivado_ips/occamy_xilinx:
 	${MAKE} -C vivado_ips occamy_xilinx

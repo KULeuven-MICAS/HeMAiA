@@ -45,8 +45,19 @@
 #define NEXT_SHIFT(current_shift, field_width) ((current_shift) + ((field_width) ? (field_width) : 1))
 
 // BINGO HW Task descriptor bit positions and widths
-#define TASK_TYPE_WIDTH            1
-#define TASK_TYPE_SHIFT            0
+// DARTS Tier 1: Conditional Execution fields (bits 0-5)
+#define COND_EXEC_INVERT_WIDTH     1
+#define COND_EXEC_INVERT_SHIFT     0
+
+#define COND_EXEC_GROUP_ID_WIDTH   4
+#define COND_EXEC_GROUP_ID_SHIFT   NEXT_SHIFT(COND_EXEC_INVERT_SHIFT, COND_EXEC_INVERT_WIDTH)
+
+#define COND_EXEC_EN_WIDTH         1
+#define COND_EXEC_EN_SHIFT         NEXT_SHIFT(COND_EXEC_GROUP_ID_SHIFT, COND_EXEC_GROUP_ID_WIDTH)
+
+// Task type: 2 bits (00=normal, 01=dummy, 10=gating)
+#define TASK_TYPE_WIDTH            2
+#define TASK_TYPE_SHIFT            NEXT_SHIFT(COND_EXEC_EN_SHIFT, COND_EXEC_EN_WIDTH)
 
 #define TASK_ID_WIDTH              12
 #define TASK_ID_SHIFT              NEXT_SHIFT(TASK_TYPE_SHIFT, TASK_TYPE_WIDTH)
@@ -79,6 +90,9 @@
 
 #define DEP_SET_CLUSTER_ID_WIDTH   N_CLUSTERS_PER_CHIPLET_WIDTH
 #define DEP_SET_CLUSTER_ID_SHIFT   NEXT_SHIFT(DEP_SET_CHIPLET_ID_SHIFT, DEP_SET_CHIPLET_ID_WIDTH)
+
+// Per-Kernel Scratchpad: defined in heterogeneous_runtime.h (shared between host/device)
+// bingo_kernel_scratchpad_t, BINGO_KERNEL_SCRATCHPAD_SIZE, BINGO_SP_PROFILE
 
 // Mcycle
 static inline uint64_t bingo_mcycle() {

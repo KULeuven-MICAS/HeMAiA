@@ -8,9 +8,9 @@
 #include "libbingo/bingo_api.h"
 
 comm_buffer_t *comm_buffer_ptr = NULL;
-O1HeapInstance *l2_heap_manager = NULL;
-O1HeapInstance *l3_heap_manager = NULL;
-volatile O1HeapInstance *dram_heap_manager = NULL;
+uint64_t local_l2_heap_manager = 0;
+uint64_t local_l3_heap_manager = 0;
+volatile uint64_t dram_heap_manager = 0;
 #define checked_data_size 64
 
 int main()
@@ -36,10 +36,9 @@ int main()
     }
 
     comm_buffer_ptr = (comm_buffer_t *)bingo_get_l2_comm_buffer(current_chip_id);
-    l2_heap_manager =
-        (O1HeapInstance *)bingo_get_l2_heap_manager(current_chip_id);
-    l3_heap_manager =
-        (O1HeapInstance *)bingo_get_l3_heap_manager(current_chip_id);
+    local_l2_heap_manager = bingo_get_l2_heap_manager(current_chip_id);
+    local_l3_heap_manager = bingo_get_l3_heap_manager(current_chip_id);
+    (void)local_l2_heap_manager;
 
     // External DRAM: Chip 0 - 3 get the data from 0x200080000000 + 0 / 64 / 128 / 192KB
     uint8_t *data_dest;
@@ -80,7 +79,7 @@ int main()
     if (current_chip_id == 0x00)
     {
         printf("All chips have finished DMA. Starting to check data correctness...\r\n");
-        uint8_t *data_to_be_checked = (uint8_t *)o1heapAllocate((uint64_t)l3_heap_manager, checked_data_size);
+        uint8_t *data_to_be_checked = (uint8_t *)bingoHeapMalloc((uint64_t)local_l3_heap_manager, checked_data_size);
         if (data_to_be_checked == NULL)
         {
             printf("Chip(%x, %x): [Host] Error when allocating memory for data checking\r\n",

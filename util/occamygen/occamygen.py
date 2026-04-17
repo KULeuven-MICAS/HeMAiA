@@ -82,8 +82,11 @@ def main():
     parser.add_argument("--outdir",
                         "-o",
                         type=pathlib.Path,
-                        required=True,
-                        help="Target directory.")
+                        default=None,
+                        help="Target directory. Required for any mode that "
+                             "emits files; may be omitted for --snitch-sw-only "
+                             "which writes into the bender-managed snax "
+                             "checkout instead.")
     # Parse arguments.
     parser.add_argument("--top-sv",
                         metavar="TOP_SV",
@@ -145,6 +148,13 @@ def main():
     parser.add_argument("--snitch",
                         metavar="SNITCH",
                         help="Define this to generate Snitch Cluster.")
+    parser.add_argument("--snitch-sw-only",
+                        action="store_true",
+                        help="With --snitch, invoke snax's sw-snax-gen target "
+                             "instead of rtl-gen, i.e. regenerate only SW "
+                             "headers (streamer_csr_addr_map.h) via the "
+                             "StreamerSwHeaderGen entry point, with no SV "
+                             "emission.")
     parser.add_argument("--bootdata",
                         metavar="BOOTDATA",
                         help="Name of the bootdata file (output)")
@@ -197,11 +207,16 @@ def main():
         occamy_cfg["cluster"]["name"] = args.name+"_cluster"
         # occamy_cfg["clster"]["name"] = args.name
 
-    # Check the outdir
+    # Check the outdir. In --snitch-sw-only mode occamygen emits nothing
+    # locally (the SW header lands in the bender-managed snax checkout), so
+    # --outdir is optional; for every other mode we need a writable target.
     outdir = args.outdir
-    outdir.mkdir(parents=True, exist_ok=True)
-    if not args.outdir.is_dir():
-        exit("Out directory is not a valid path.")
+    if outdir is not None:
+        outdir.mkdir(parents=True, exist_ok=True)
+        if not outdir.is_dir():
+            exit("Out directory is not a valid path.")
+    elif not (args.snitch and args.snitch_sw_only):
+        exit("--outdir is required unless --snitch --snitch-sw-only is used.")
 
     # We first check the cfg by schema
     occamy.check_occamy_cfg(occamy_cfg)
@@ -231,7 +246,13 @@ def main():
     cluster_cfg_list = occamy.get_cluster_cfg_list(occamy_cfg, cluster_cfg_dir)
     if args.snitch:
         print(cluster_cfg_list)
-        occamy.generate_snitch(cluster_cfg_list, args.snitch)
+        occamy.generate_snitch(
+            cluster_cfg_list, args.snitch, sw_only=args.snitch_sw_only
+        )
+        # SW-only mode has nothing else to do downstream — skip wrapper /
+        # memory / top-level SV rendering.
+        if args.snitch_sw_only:
+            return
 
     if args.wrapper:
         occamy.generate_wrappers(cluster_generators, outdir)

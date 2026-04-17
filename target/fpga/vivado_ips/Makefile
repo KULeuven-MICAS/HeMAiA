@@ -19,7 +19,7 @@ ifeq ($(EXT_JTAG), 0)
 	BENDER_TARGETS += -t bscane
 endif
 
-include $(ROOT)/util/Makefrag
+include $(ROOT)/target/fpga/Makefrag
 
 occamy_xilinx: define-sources.tcl
 	# $(MAKE) -C ../../ update-source

@@ -21,9 +21,9 @@
 #include "heterogeneous_runtime.h"
 // Vendor
 // l1 heap allocator
-#include "o1heap64.h"
+#include "bingo_alloc.h"
 // Forward declarations
-#include "snrt_l1_alloc_decls.h" // snrt l1 allocator using o1heap
+#include "snrt_l1_alloc_decls.h" // snrt l1 allocator using bingo_alloc
 #include "bingo_decls.h"         // bingo offload dependency
 #include "hemaia_cls_decls.h"    // CLS(cluster local storage) decl, which stores the bingo offload unit and the l1 allocator
 // #include "sw_mailbox_decls.h"    // sw mailbox between the host and the cluster

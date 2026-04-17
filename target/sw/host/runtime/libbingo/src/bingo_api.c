@@ -23,9 +23,9 @@ int bingo_hemaia_system_mmap_init(){
     // Start addr is the spm narrow
     // Size is half of the narrow spm
     // The rest is leave to stack
-    uint64_t l2_heap_start = ALIGN_UP(comm_buffer + sizeof(comm_buffer_t), O1HEAP_ALIGNMENT);
-    uint64_t l2_heap_size = ALIGN_UP(NARROW_SPM_SIZE / 2, O1HEAP_ALIGNMENT);
-    uint64_t l2_heap_manager = o1heapInit(l2_heap_start, l2_heap_size);
+    uint64_t l2_heap_start = ALIGN_UP(comm_buffer + sizeof(comm_buffer_t), BINGO_HEAP_ALIGNMENT);
+    uint64_t l2_heap_size = ALIGN_UP(NARROW_SPM_SIZE / 2, BINGO_HEAP_ALIGNMENT);
+    uint64_t l2_heap_manager = bingoHeapInit(l2_heap_start, l2_heap_size);
     // printf("Chip(%x, %x): [Host] L2 heap start: %lx, size(kB): %d\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), l2_heap_manager, l2_heap_size>>10);
     // printf("Chip(%x, %x): [Host] L2 heap start: %lx, size: %lx, heap manager: 0x%lx\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), l2_heap_start, l2_heap_size, l2_heap_manager);
     if(l2_heap_manager==0UL) {
@@ -37,7 +37,7 @@ int bingo_hemaia_system_mmap_init(){
     // Size is from l3 heap start to wide spm end aligned down 1KB
     uint64_t l3_heap_start = ALIGN_UP(chiplet_addr_transform((uint64_t)(&__l3_heap_start)), SPM_WIDE_ALIGNMENT);
     uint64_t l3_heap_size = ALIGN_DOWN(chiplet_addr_transform((uint64_t)(&__wide_spm_end)-SPM_WIDE_ALIGNMENT), SPM_WIDE_ALIGNMENT) - l3_heap_start;
-    uint64_t l3_heap_manager = o1heapInit(l3_heap_start, l3_heap_size);
+    uint64_t l3_heap_manager = bingoHeapInit(l3_heap_start, l3_heap_size);
     // printf("Chip(%x, %x): [Host] L3 heap start: %lx, size(kB): %d\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), l3_heap_manager, l3_heap_size>>10);
     // printf("Chip(%x, %x): [Host] L3 heap start: %lx, size: %lx, heap manager: 0x%lx\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), l3_heap_start, l3_heap_size, l3_heap_manager);
     if(l3_heap_manager==0UL) {
@@ -47,10 +47,27 @@ int bingo_hemaia_system_mmap_init(){
     return 0;
 }
 
+int bingo_mempool_init(uint8_t mempool_loc_x, uint8_t mempool_loc_y, uint64_t capacity){
+    // Heap start derived from the same formula as bingo_get_mempool_heap_manager
+    // so the init and the getter never diverge.
+    uint64_t mempool_heap_start = bingo_get_mempool_heap_manager(mempool_loc_x, mempool_loc_y);
+    uint64_t mempool_heap_manager = bingoHeapInit(mempool_heap_start, capacity);
+    BINGO_PRINTF(3, "Chip(%x, %x): [Host] Mempool init: base=0x%lx (chip %d,%d), capacity=%lu\r\n",
+           get_current_chip_loc_x(), get_current_chip_loc_y(),
+           mempool_heap_start, mempool_loc_x, mempool_loc_y, capacity);
+    if (mempool_heap_manager == 0) {
+        printf_safe("Chip(%x, %x): [Host] Mempool init failed for chip (%d,%d) with base 0x%lx and capacity %lu\r\n",
+               get_current_chip_loc_x(), get_current_chip_loc_y(),
+               mempool_loc_x, mempool_loc_y, mempool_heap_start, capacity);
+        return -1;
+    }
+    return 0;
+}
+
 uint64_t bingo_get_l1_heap_manager(uint8_t chip_id, uint32_t cluster_id){
     // Notice the l1 heap is init by the cluster at the start of the TCDM of each cluster
-    // Here we hack the o1heap sw to force a 32bit version of heap manager so that the host can access to the correct
-    // heap information from the O1HeapInstanc32 structure
+    // The L1 heap is initialized by the device at the start of each cluster's TCDM.
+    // Both 32-bit (Snitch) and 64-bit (CVA6) cores share the same BingoHeapInstance.
     return chiplet_addr_transform_full(chip_id, (uint64_t)cluster_tcdm_start_addr(cluster_id));
 }
 
@@ -64,14 +81,18 @@ uint64_t bingo_get_l3_heap_manager(uint8_t chip_id){
 }
 
 uint64_t bingo_get_l2_heap_manager(uint8_t chip_id){
-    return chiplet_addr_transform_full(chip_id, ALIGN_UP((uintptr_t)SPM_NARROW_BASE_ADDR + sizeof(comm_buffer_t), O1HEAP_ALIGNMENT));
+    return chiplet_addr_transform_full(chip_id, ALIGN_UP((uintptr_t)SPM_NARROW_BASE_ADDR + sizeof(comm_buffer_t), BINGO_HEAP_ALIGNMENT));
+}
+
+uint64_t bingo_get_mempool_heap_manager(uint8_t mempool_loc_x, uint8_t mempool_loc_y){
+    return chiplet_addr_transform_loc(mempool_loc_x, mempool_loc_y, ALIGN_UP(SPM_WIDE_BASE_ADDR, SPM_WIDE_ALIGNMENT) + MEMPOOL_HEAP_OFFSET);
 }
 
 uint64_t bingo_l1_alloc(uint8_t chip_id, uint32_t cluster_id, uint64_t size){
-    uint64_t results = o1heapAllocate(bingo_get_l1_heap_manager(chip_id, cluster_id), size);
+    uint64_t results = bingoHeapMalloc(bingo_get_l1_heap_manager(chip_id, cluster_id), size);
     if (results==0UL) {
         printf_safe("Chip(%x, %x): [Host] L1 malloc failed for size %d on cluster %d\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), size, cluster_id);
-        O1HeapDiagnostics *diag = (O1HeapDiagnostics *)(uintptr_t)o1heapGetDiagnostics(bingo_get_l1_heap_manager(chip_id, cluster_id));
+        BingoHeapDiagnostics *diag = (BingoHeapDiagnostics *)(uintptr_t)bingoHeapGetDiagnostics(bingo_get_l1_heap_manager(chip_id, cluster_id));
         printf_safe("  L1 heap diag: capacity=%lu, allocated=%lu, peak_allocated=%lu, peak_request_size=%lu, oom_count=%lu\r\n",
                diag->capacity, diag->allocated, diag->peak_allocated, diag->peak_request_size, diag->oom_count);
     }
@@ -84,10 +105,10 @@ uint64_t bingo_l1_alloc(uint8_t chip_id, uint32_t cluster_id, uint64_t size){
 }
 
 uint64_t bingo_l2_alloc(uint8_t chip_id, uint64_t size){
-    uint64_t results = o1heapAllocate(bingo_get_l2_heap_manager(chip_id), size);
+    uint64_t results = bingoHeapMalloc(bingo_get_l2_heap_manager(chip_id), size);
     if (results==0UL) {
         printf_safe("Chip(%x, %x): [Host] L2 malloc failed for size %d\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), size);
-        O1HeapDiagnostics *diag = (O1HeapDiagnostics *)(uintptr_t)o1heapGetDiagnostics(bingo_get_l2_heap_manager(chip_id));
+        BingoHeapDiagnostics *diag = (BingoHeapDiagnostics *)(uintptr_t)bingoHeapGetDiagnostics(bingo_get_l2_heap_manager(chip_id));
         printf_safe("  L2 heap diag: capacity=%lu, allocated=%lu, peak_allocated=%lu, peak_request_size=%lu, oom_count=%lu\r\n",
                diag->capacity, diag->allocated, diag->peak_allocated, diag->peak_request_size, diag->oom_count);
     }
@@ -99,10 +120,10 @@ uint64_t bingo_l2_alloc(uint8_t chip_id, uint64_t size){
 }
 
 uint64_t bingo_l3_alloc(uint8_t chip_id, uint64_t size){
-    uint64_t results = o1heapAllocate(bingo_get_l3_heap_manager(chip_id), size);
+    uint64_t results = bingoHeapMalloc(bingo_get_l3_heap_manager(chip_id), size);
     if (results==0UL) {
         printf_safe("Chip(%x, %x): [Host] L3 malloc failed for size %d\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), size);
-        O1HeapDiagnostics *diag = (O1HeapDiagnostics *)(uintptr_t)o1heapGetDiagnostics(bingo_get_l3_heap_manager(chip_id));
+        BingoHeapDiagnostics *diag = (BingoHeapDiagnostics *)(uintptr_t)bingoHeapGetDiagnostics(bingo_get_l3_heap_manager(chip_id));
         printf_safe("  L3 heap diag: capacity=%lu, allocated=%lu, peak_allocated=%lu, peak_request_size=%lu, oom_count=%lu\r\n",
                diag->capacity, diag->allocated, diag->peak_allocated, diag->peak_request_size, diag->oom_count);
     }
@@ -114,17 +135,38 @@ uint64_t bingo_l3_alloc(uint8_t chip_id, uint64_t size){
 }
 
 void bingo_l1_free(uint8_t chip_id, uint32_t cluster_id, uint64_t ptr){
-    o1heapFree(bingo_get_l1_heap_manager(chip_id, cluster_id), ptr);
+    bingoHeapFree(bingo_get_l1_heap_manager(chip_id, cluster_id), ptr);
 }
 
 void bingo_l2_free(uint8_t chip_id, uint64_t ptr){
-    o1heapFree(bingo_get_l2_heap_manager(chip_id), ptr);
+    bingoHeapFree(bingo_get_l2_heap_manager(chip_id), ptr);
 }
 
 void bingo_l3_free(uint8_t chip_id, uint64_t ptr){
-    o1heapFree(bingo_get_l3_heap_manager(chip_id), ptr);
+    bingoHeapFree(bingo_get_l3_heap_manager(chip_id), ptr);
 }
 
+uint64_t bingo_mempool_alloc(uint8_t mempool_loc_x, uint8_t mempool_loc_y, uint64_t size){
+    uint64_t results = bingoHeapMalloc(bingo_get_mempool_heap_manager(mempool_loc_x, mempool_loc_y), size);
+    if (results==0UL) {
+        printf_safe("Chip(%x, %x): [Host] Mempool malloc failed for size %d on mempool chip (%d,%d)\r\n",
+               get_current_chip_loc_x(), get_current_chip_loc_y(),
+               size, mempool_loc_x, mempool_loc_y);
+        BingoHeapDiagnostics *diag = (BingoHeapDiagnostics *)(uintptr_t)bingoHeapGetDiagnostics(bingo_get_mempool_heap_manager(mempool_loc_x, mempool_loc_y));
+        printf_safe("  Mempool heap diag: capacity=%lu, allocated=%lu, peak_allocated=%lu, peak_request_size=%lu, oom_count=%lu\r\n",
+               diag->capacity, diag->allocated, diag->peak_allocated, diag->peak_request_size, diag->oom_count);
+    }
+    BINGO_PRINTF(3, "Chip(%x, %x): [Host] Mempool malloc on chip (%d,%d): ptr=0x%lx, size=%d\r\n",
+           get_current_chip_loc_x(), get_current_chip_loc_y(),
+           mempool_loc_x, mempool_loc_y,
+           results,
+           size);
+    return results;
+}
+
+void bingo_mempool_free(uint8_t mempool_loc_x, uint8_t mempool_loc_y, uint64_t ptr){
+    bingoHeapFree(bingo_get_mempool_heap_manager(mempool_loc_x, mempool_loc_y), ptr);
+}
 
 //////////////////////////
 // Mailbox API          //
@@ -159,15 +201,16 @@ int bingo_try_read_h2h_mailbox(uint64_t *buffer) {
 
 int bingo_write_h2h_mailbox(uint8_t chip_id, uint64_t dword,
                             uint64_t timeout_cycles, uint32_t *retry_hint) {
+    if (retry_hint) *retry_hint = 0;
     uint8_t current_chip_id = get_current_chip_id();
     if (chip_id == current_chip_id) {
-        printf("Chip(%x, %x): [Host] Error: Cannot write to its own H2H mailbox!\\r\\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+        printf("Chip(%x, %x): [Host] Error: Cannot write to its own H2H mailbox!\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
         return BINGO_MB_ERR_PARAM;
     }
     volatile uint64_t target_h2h_mailbox_write_addr = chiplet_addr_transform_full(chip_id, h2h_mailbox_write_address());
-    volatile uint64_t target_h2h_mailbox_status_addr = chiplet_addr_transform_full(chip_id, h2h_mailbox_status_flag_address());
     // Do not check status, just write directly
     writed(dword, (uintptr_t)target_h2h_mailbox_write_addr);
+    return BINGO_MB_OK;
 }
 
 int bingo_read_h2h_mailbox(uint64_t *buffer,
@@ -300,7 +343,7 @@ inline void bingo_task_reset_deps(bingo_task_t *t) {
 // Task creation initializes counters & clears successor lists.
 bingo_task_t *bingo_task_create(uint32_t fn_ptr, uint32_t args_ptr, uint8_t assigned_chip_id, uint8_t assigned_cluster_id) {
 
-    bingo_task_t *task = (bingo_task_t *)(uintptr_t)o1heapAllocate(bingo_get_l2_heap_manager(get_current_chip_id()), sizeof(bingo_task_t));
+    bingo_task_t *task = (bingo_task_t *)(uintptr_t)bingoHeapMalloc(bingo_get_l2_heap_manager(get_current_chip_id()), sizeof(bingo_task_t));
     if (!task){
         printf("[BINGO] Error: Failed to allocate memory for new task.\r\n");
         return NULL;
@@ -481,12 +524,12 @@ void bingo_runtime_schedule(bingo_task_t **task_list, uint32_t num_tasks) {
     // Initialize scheduler instance (stack-local for now; could be static per chip)
     BINGO_TRACE_MARKER(BINGO_TRACE_SW_MGR_INIT_TASK_QUEUE_START);
     uint16_t cap = bingo_next_pow2(local_total * 2); // room for burst readiness
-    bingo_task_t **ring = (bingo_task_t **)(uintptr_t)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(bingo_task_t*) * cap);
+    bingo_task_t **ring = (bingo_task_t **)(uintptr_t)bingoHeapMalloc(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(bingo_task_t*) * cap);
     if (!ring) {
         printf_safe("[BINGO] Error: Failed to allocate ready ring.\r\n");
         return;
     }
-    bingo_chip_sched_t *sched = (bingo_chip_sched_t *)o1heapAllocate(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(bingo_chip_sched_t));
+    bingo_chip_sched_t *sched = (bingo_chip_sched_t *)bingoHeapMalloc(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(bingo_chip_sched_t));
     if (!sched) {
         printf_safe("[BINGO] Error: Failed to allocate scheduler instance.\r\n");
         return;
@@ -617,9 +660,9 @@ void bingo_runtime_schedule(bingo_task_t **task_list, uint32_t num_tasks) {
         }
     }
     // Destroy the allocated ready ring
-    o1heapFree(bingo_get_l2_heap_manager(get_current_chip_id()), (uint64_t)sched->ready_ring);
+    bingoHeapFree(bingo_get_l2_heap_manager(get_current_chip_id()), (uint64_t)sched->ready_ring);
     // Desctroy the scheduler instance
-    o1heapFree(bingo_get_l2_heap_manager(get_current_chip_id()), (uint64_t)sched);
+    bingoHeapFree(bingo_get_l2_heap_manager(get_current_chip_id()), (uint64_t)sched);
     printf_safe("Chip(%x, %x): [Host] Bingo SW schedule completed for all %u local tasks\r\n",
            get_current_chip_loc_x(), get_current_chip_loc_y(), local_total);
 }
@@ -845,4 +888,31 @@ uint32_t bingo_hw_scheduler(uint64_t* host_arg_list, uint64_t* host_kernel_list,
         }
     }
     return err;
+}
+
+/////////////////////////////
+// BINGO CERF Runtime API  //
+/////////////////////////////
+
+void bingo_cerf_write_mask(uint32_t mask) {
+    uintptr_t state_addr = (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_cerf_state_addr());
+    uintptr_t en_addr    = (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_cerf_write_en_addr());
+    writew(mask, state_addr);
+    writew(1, en_addr);
+    asm volatile("fence" ::: "memory");
+}
+
+void bingo_cerf_update(uint32_t controlled_mask, uint32_t write_mask) {
+    uintptr_t status_addr = (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_cerf_status_addr());
+    uintptr_t state_addr  = (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_cerf_state_addr());
+    uintptr_t en_addr     = (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_cerf_write_en_addr());
+    uint32_t current = readw(status_addr);  // read actual HW state
+    uint32_t updated = (current & ~controlled_mask) | (write_mask & controlled_mask);
+    writew(updated, state_addr);
+    writew(1, en_addr);
+    asm volatile("fence" ::: "memory");
+}
+
+void bingo_cerf_clear_all(void) {
+    bingo_cerf_write_mask(0);
 }
