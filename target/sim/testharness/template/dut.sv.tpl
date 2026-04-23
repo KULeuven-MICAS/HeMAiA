@@ -240,12 +240,14 @@ module dut (
     %endfor
 
 %if not sim_with_verilator:
+
     /////////////////////////////////////
     // IO Wrapper instance
     // Handles ALL D2D routing between chiplets and to off-chip boundaries.
     // Peripheral/driving signals are also passed for interposer mode
     // (where the chippad_powerpad contains its own hemaia instances).
     /////////////////////////////////////
+
     io_wrapper i_io_wrapper (
         // ---- Per-chiplet D2D ports ----
         %for compute_chip in compute_chips:
@@ -263,6 +265,7 @@ module dut (
         .chip_${cx}_${cy}_${direction}_test_being_requested_i(chip_${cx}_${cy}_${direction}_test_being_requested_i),
         %endfor
         %endfor
+
         // ---- Off-chip boundary D2D ports ----
         %for x in range(max_compute_chiplet_x):
         .north_d2d_link_${x}                  (north_d2d_link_${x}),
@@ -280,6 +283,7 @@ module dut (
         .south_test_request_o_${x}            (south_test_request_o_${x}),
         .south_test_being_requested_i_${x}    (south_test_being_requested_i_${x}),
         %endfor
+
         %for y in range(max_compute_chiplet_y):
         .west_d2d_link_${y}                   (west_d2d_link_${y}),
         .west_flow_control_rts_o_${y}         (west_flow_control_rts_o_${y}),
@@ -298,6 +302,7 @@ module dut (
         .east_test_request_o_${y}             (east_test_request_o_${y}),
         .east_test_being_requested_i_${y}     (east_test_being_requested_i_${y}),
         %endfor
+
         // ---- Driving signals (for interposer mode) ----
         .mst_clk_i    (mst_clk_i),
         .rst_ni       (rst_ni),
