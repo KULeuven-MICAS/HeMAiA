@@ -3,7 +3,7 @@ script_dir="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 sim_cfg_dir="$script_dir/../rtl/cfg"
 
 # 
-FILE=/users/micas/shares/project_HeMAiAv2/HeMAiA/hw/hemaia/tech_cells_tsmc16/src/tsmc16/mem_macro/ts1n16ffcllsblvtd1024x64m4sws_150a/VERILOG/ts1n16ffcllsblvtd1024x64m4sws_150a.v
+FILE=$script_dir/../../../hw/hemaia/tech_cells_tsmc16/src/tsmc16/mem_macro/ts1n16ffcllsblvtd1024x64m4sws_150a/VERILOG/ts1n16ffcllsblvtd1024x64m4sws_150a.v
 
 # Check if task is already present
 if grep -q "task automatic load_data" "$FILE"; then
@@ -30,8 +30,14 @@ else
     endtask\n' "$FILE"
 fi
 
+# overwrite check_finish_netlist.sv, load_binary_netlist.sv, testharness_netlist.sv and compile.vsim.tcl for netlist sim
 
-cp -f "$script_dir/../sim/testharness/testharness_netlist.sv" "$script_dir/../sim/testharness/testharness.sv"
-cp -f "$script_dir/../sim/work-vsim/compile_netlist.vsim.tcl" "$script_dir/../sim/work-vsim/compile.vsim.tcl"
+cp -f "/users/micas/shares/project_HeMAiAv2/hemaia_testing/netlist_sim_no_sdf/check_finish_netlist.sv" "$script_dir/../sim/testharness/check_finish_netlist.sv"
+cp -f "/users/micas/shares/project_HeMAiAv2/hemaia_testing/netlist_sim_no_sdf/load_binary_netlist.sv" "$script_dir/../sim/testharness/load_binary_netlist.sv"
+cp -f "/users/micas/shares/project_HeMAiAv2/hemaia_testing/netlist_sim_no_sdf/testharness_netlist.sv" "$script_dir/../sim/testharness/testharness.sv"
+cp -f "/users/micas/shares/project_HeMAiAv2/hemaia_testing/netlist_sim_no_sdf/compile_netlist.vsim.tcl" "$script_dir/../sim/work-vsim/compile.vsim.tcl"
 
+# questa-vsim
 make -C "$script_dir/../.." hemaia_system_vsim SIM_CFG="$sim_cfg_dir/sim_netlist.hjson"
+
+# vcs TODO: add vcs support
