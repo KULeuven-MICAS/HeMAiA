@@ -5,7 +5,7 @@
 // Fanchen Kong <fanchen.kong@kuleuven.be>
 //
 // This is the testharness of the Hemaia chip
-// In the test harness there will be have three things：
+// In the test harness there will be have three things:
 // 1. off-chip driving signals
 //    CLK and RST: clk_i, rst_i
 //    PLL Driving Pins: pll_i, pll_o
@@ -32,11 +32,13 @@
 // 3. Drive PLL pin if PLL presents
 // 4. Load the Binary from the file using the load_data function in mem
 // 5. Monitor simulation status
+
 %if pll_present:
 `timescale 1ps / 1fs
 %else:
 `timescale 1ns / 1ps
 %endif
+
 module testharness;
     // Drive the CLK signals
     localparam int SIM_WITH_PLL = ${sim_with_pll};
@@ -51,14 +53,17 @@ module testharness;
     `define PRI_FREQ_MHZ       500.0 // 500 MHz
     `define MEMPOOL_FREQ_MHZ   25.0  //  25 MHz, 1/20 of the main clock
     %endif
+
     `define CLK_FREF_PERIOD     (1.0e-6/`CLK_FREF_FREQ_MHZ/`TIMESCALEVAL)
     `define PRI_FREF_PERIOD     (1.0e-6/`PRI_FREQ_MHZ/`TIMESCALEVAL)
     `define MEMPOOL_FREF_PERIOD (1.0e-6/`MEMPOOL_FREQ_MHZ/`TIMESCALEVAL)
+
     logic mst_clk_drv, periph_clk_drv, mempool_clk_drv;
     wire  mst_clk_i, periph_clk_i, mempool_clk_i;
     assign mst_clk_i     = mst_clk_drv;
     assign periph_clk_i  = periph_clk_drv;
     assign mempool_clk_i = mempool_clk_drv;
+
     %for compute_chip in compute_chips:
     <%
         comp_chip_x = compute_chip.coordinate[0]
@@ -82,7 +87,7 @@ module testharness;
         forever #(`MEMPOOL_FREF_PERIOD/2.0) mempool_clk_drv = ~mempool_clk_drv;
     end
 
-    // CHIP ID
+    // Set CHIP ID
     %for compute_chip in compute_chips:
     <%
         comp_chip_x = compute_chip.coordinate[0]
@@ -104,22 +109,30 @@ module testharness;
     wire [7:0] mem_chip${mem_chip_x}${mem_chip_y}_id_i;
     assign mem_chip${mem_chip_x}${mem_chip_y}_id_i = 8'h${mem_chip_x_str}${mem_chip_y_str};
     %endfor 
+
+    // --------------------------------------------------
     // PLL
+    // --------------------------------------------------
     %for compute_chip in compute_chips:
     <%
         comp_chip_x = compute_chip.coordinate[0]
         comp_chip_y = compute_chip.coordinate[1]
     %>    
+
     logic       chip${comp_chip_x}${comp_chip_y}_pll_bypass_drv;
     logic       chip${comp_chip_x}${comp_chip_y}_pll_en_drv;
     logic [1:0] chip${comp_chip_x}${comp_chip_y}_pll_post_div_sel_drv;
+
     wire        chip${comp_chip_x}${comp_chip_y}_pll_bypass_i;
     wire        chip${comp_chip_x}${comp_chip_y}_pll_en_i;
     wire [1:0]  chip${comp_chip_x}${comp_chip_y}_pll_post_div_sel_i;
+
     wire        chip${comp_chip_x}${comp_chip_y}_pll_lock_o;
+
     assign chip${comp_chip_x}${comp_chip_y}_pll_bypass_i       = chip${comp_chip_x}${comp_chip_y}_pll_bypass_drv;
     assign chip${comp_chip_x}${comp_chip_y}_pll_en_i           = chip${comp_chip_x}${comp_chip_y}_pll_en_drv;
     assign chip${comp_chip_x}${comp_chip_y}_pll_post_div_sel_i = chip${comp_chip_x}${comp_chip_y}_pll_post_div_sel_drv;
+
     %endfor
 
     task init_pll_pins();
@@ -136,8 +149,10 @@ module testharness;
         end
     endtask
 
+    // Only set the PLL pins for the chiplets with PLL present
     %if pll_present:
-    // Vendor PLL clk monitor
+
+    // Instantiate Vendor PLL clk monitor
     %for compute_chip in compute_chips:
     <%
         comp_chip_x = compute_chip.coordinate[0]
@@ -150,6 +165,8 @@ module testharness;
         .TIMEOUT()
     );
     %endfor
+
+    // Set up the task to check the PLL output frequency by the clk monitor
     task check_frequency();
         begin
         %for compute_chip in compute_chips:
@@ -167,19 +184,26 @@ module testharness;
         // Wait at least 1us
         #(1us);
         // PLL on
-        // Drive the enable pin in sequence
+        // Drive the enable pin in sequence, fistly drive, then wait for the lock signal, then drive the next one
         %for compute_chip in compute_chips:
         chip${compute_chip.coordinate[0]}${compute_chip.coordinate[1]}_pll_en_drv = 1'b1;
         // Wait for phase locked
         @(posedge chip${compute_chip.coordinate[0]}${compute_chip.coordinate[1]}_pll_lock_o);
         $display("Chip ${compute_chip.coordinate[0]}${compute_chip.coordinate[1]}'s PLL Lock asserted!");
         %endfor
+
         check_frequency;        
+
         end
     endtask
+
     %endif
-    
-    // Drive rst
+
+    // --------------------------------------------------
+    // PLL
+    // --------------------------------------------------
+
+    // Rst Drive rst
     logic rst_ni_drv, rst_periph_ni_drv;
     wire rst_ni, rst_periph_ni;
     assign rst_ni        = rst_ni_drv;
@@ -212,12 +236,14 @@ module testharness;
         comp_chip_x = compute_chip.coordinate[0]
         comp_chip_y = compute_chip.coordinate[1]
     %>
+
     // UART
     wire chip${comp_chip_x}${comp_chip_y}_uart_tx_o;
     wire chip${comp_chip_x}${comp_chip_y}_uart_rx_i;
     wire chip${comp_chip_x}${comp_chip_y}_uart_rts_no;
     wire chip${comp_chip_x}${comp_chip_y}_uart_cts_ni;
     assign chip${comp_chip_x}${comp_chip_y}_uart_cts_ni = const_zero;
+
     // The uart dpi interface
     uartdpi #(
         .BAUD(1),
@@ -229,9 +255,11 @@ module testharness;
         .tx_o  (chip${comp_chip_x}${comp_chip_y}_uart_rx_i),
         .rx_i  (chip${comp_chip_x}${comp_chip_y}_uart_tx_o)
     );
+
     // I2C
     wire chip${comp_chip_x}${comp_chip_y}_i2c_sda;
     wire chip${comp_chip_x}${comp_chip_y}_i2c_scl;
+
     // JTAG
     wire chip${comp_chip_x}${comp_chip_y}_jtag_trst_ni;
     wire chip${comp_chip_x}${comp_chip_y}_jtag_tck_i;
@@ -246,6 +274,7 @@ module testharness;
     assign chip${comp_chip_x}${comp_chip_y}_jtag_tdi_i   = const_zero;
 % endif
     // When sim_with_jtag_check is enabled, JTAG signals are driven by jtag_debug_test.sv
+
     // SPI M
     wire chip${comp_chip_x}${comp_chip_y}_spim_sck_o;
     wire chip${comp_chip_x}${comp_chip_y}_spim_csb_o;
@@ -254,7 +283,10 @@ module testharness;
     wire [3:0] chip${comp_chip_x}${comp_chip_y}_gpio;
     %endfor
 
+    // -------------------------------------------------------
     // Main Working Process
+    // -------------------------------------------------------
+
     // The load_binary function
 % if sim_with_netlist:
     `include "util/load_binary_netlist.sv"
@@ -271,7 +303,9 @@ module testharness;
 % else:
     `include "util/check_finish_rtl.sv"
 % endif
+
 % if sim_with_jtag_check:
+
     ///////////////////////////////////////////
     // JTAG Debug Test for Multi-Chiplet HeMAiA
     // Verifies JTAG debug works on all chiplets
@@ -438,17 +472,25 @@ module testharness;
             $error("[JTAG_TEST] %0d TEST(S) FAILED!", total_chips - pass_count);
     end
 % endif
+
+    // ------------------------------------------------
+    // The main initial block to drive the simulation
+    // ------------------------------------------------
+
     initial begin
         set_rst();
+
         init_pll_pins();
         // Wait some random time
         #(11ns); 
+
         %if pll_present:
         // Enable the PLL and wait for locked signal
         enable_pll_and_wait_lock();
         %else:
         // PLL is not presents
         %endif
+
         // Wait some random time
         #(7ns);
         // Load binary
@@ -538,7 +580,7 @@ module testharness;
     wire            east_memchip_to_dut_link_test_request_${y};
     %endfor
 
-    // Tie unconnected offchip D2D link input pins to const_zero
+    // Tie unconnected off-chip D2D link input pins to const_zero
     // to avoid floating inputs on the DUT
     <%
         occupied_north = set()
@@ -593,6 +635,7 @@ module testharness;
 
     dut i_dut (
 %if not sim_with_verilator:
+
         /////////////////////////////////////
         // Offchip D2D Links to Memchips
         /////////////////////////////////////
@@ -636,7 +679,9 @@ module testharness;
         .east_test_request_o_${y}           (east_dut_to_memchip_link_test_request_${y}),
         .east_test_being_requested_i_${y}   (east_memchip_to_dut_link_test_request_${y}),
     %endfor
+
 %endif
+
         /////////////////////////////////////
         // Each chiplet will have its own periphs
         /////////////////////////////////////
@@ -675,6 +720,7 @@ module testharness;
         // CLK OBS
         .chip${comp_chip_x}${comp_chip_y}_clk_obs_o         (chip${comp_chip_x}${comp_chip_y}_clk_obs_o),
         %endfor
+        
         // CLK and RST are shared by all the chiplets
         .mst_clk_i    (mst_clk_i    ),
         .rst_ni       (rst_ni       ),
