@@ -3,7 +3,7 @@ script_dir="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 sim_cfg_dir="$script_dir/../rtl/cfg"
 
 # 
-FILE=$script_dir/../../../hw/hemaia/tech_cells_tsmc16/src/tsmc16/mem_macro/ts1n16ffcllsblvtd1024x64m4sws_150a/VERILOG/ts1n16ffcllsblvtd1024x64m4sws_150a.v
+FILE=$script_dir/../../hw/hemaia/tech_cells_tsmc16/src/tsmc16/mem_macro/ts1n16ffcllsblvtd1024x64m4sws_150a/VERILOG/ts1n16ffcllsblvtd1024x64m4sws_150a.v
 
 # Check if task is already present
 if grep -q "task automatic load_data" "$FILE"; then
