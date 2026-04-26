@@ -3,13 +3,13 @@
 
 Uses a seeded PRNG for reproducible but non-trivial input patterns.
 
-Emits only the large (N_BIG=8192) arrays needed by the multi-size timing
+Emits only the large arrays needed by the multi-size timing
 sweep in ara_test/src/main.c.  The correctness checks with their golden
 values live in the paired ci_ara workload.
 """
 import random
 
-N_BIG = 8192   # max size for timing sweep (covers TinyLlama range)
+N_BIG = 4096
 SEED = 42
 
 def main():

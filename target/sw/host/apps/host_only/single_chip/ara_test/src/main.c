@@ -21,16 +21,16 @@
 #include "op_test_data.h"
 
 // Timing buffers (globals → live in .data, avoid stack overflow).
-// OP_MAX_LEN is 8192 (from gen_op_data.py) → 32 KB per buffer.
+// OP_MAX_LEN is 4096 (from gen_op_data.py) → 16 KB per buffer.
 static float timing_output[OP_MAX_LEN] __attribute__((aligned(8)));
 static float timing_fp32_scratch[OP_MAX_LEN] __attribute__((aligned(8)));
 static int8_t timing_int8_scratch[OP_MAX_LEN] __attribute__((aligned(8)));
 static float timing_scale_scratch __attribute__((aligned(8)));
 
 // Timing sizes that span the TinyLlama workload range.
-#define TIMING_NUM_SIZES 5
-#define TIMING_NUM_REPS  3
-static const uint64_t timing_sizes[TIMING_NUM_SIZES] = { 64, 256, 1024, 4096, 8192 };
+#define TIMING_NUM_SIZES 4
+#define TIMING_NUM_REPS  2
+static const uint64_t timing_sizes[TIMING_NUM_SIZES] = { 64, 256, 1024, 4096 };
 
 int main() {
     uintptr_t address_prefix = (uintptr_t)get_current_chip_baseaddress();
