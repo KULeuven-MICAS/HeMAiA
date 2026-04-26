@@ -9,6 +9,7 @@
 #include "gemm_data.h"
 #include "host.h"
 #include "libbingo/bingo_api.h"
+#include <gemm_shapes.h>
 
 // #define HOST_DEBUG
 // #define HOST_DEBUG
@@ -47,11 +48,11 @@ uint32_t __workload_gemm_broadcast(bingo_task_t** task_list) {
 
     uint32_t __snax_kernel_xdma_1d_copy_func_addr = get_device_function("__snax_kernel_xdma_1d_copy");
     uint32_t __snax_kernel_idma_1d_copy_func_addr = get_device_function("__snax_kernel_idma_1d_copy");
-    uint32_t __snax_kernel_gemm = get_device_function("__snax_kernel_gemm");
+    uint32_t __snax_kernel_versacore_load_compute_store_func_addr = get_device_function("__snax_kernel_versacore_load_compute_store");
     uint32_t __snax_kernel_check_results_func_addr = get_device_function("__snax_kernel_check_results");
     if (__snax_kernel_xdma_1d_copy_func_addr == SNAX_SYMTAB_END_FN_ADDR ||
         __snax_kernel_idma_1d_copy_func_addr == SNAX_SYMTAB_END_FN_ADDR ||
-        __snax_kernel_gemm == SNAX_SYMTAB_END_FN_ADDR ||
+        __snax_kernel_versacore_load_compute_store_func_addr == SNAX_SYMTAB_END_FN_ADDR ||
         __snax_kernel_check_results_func_addr == SNAX_SYMTAB_END_FN_ADDR) {
         HOST_DEBUG_PRINT("Error: Kernel symbol lookup failed!\r\n");
     }
@@ -75,10 +76,16 @@ uint32_t __workload_gemm_broadcast(bingo_task_t** task_list) {
     // Those variables are compiled with the address known at compile time, which are all stored in 0x8000_0000 range
     // If we read them directly, it will incur the cross-chiplet traffic
     // By forcing the read by BINGO_CHIPLET_READW marco, we can ensure those variables are read from local chiplet SPM
-    uint32_t AdataTileSize = BINGO_CHIPLET_READW(M) * BINGO_CHIPLET_READW(K) * BINGO_CHIPLET_READW(meshRow) * BINGO_CHIPLET_READW(tileSize) * sizeof(uint8_t);
-    uint32_t BdataSize     = BINGO_CHIPLET_READW(K) * BINGO_CHIPLET_READW(N) * BINGO_CHIPLET_READW(meshCol) * BINGO_CHIPLET_READW(tileSize) * sizeof(uint8_t);
-    uint32_t CdataSize     = BINGO_CHIPLET_READW(M) * BINGO_CHIPLET_READW(N) * BINGO_CHIPLET_READW(meshRow) * BINGO_CHIPLET_READW(meshCol)  * sizeof(uint8_t);
-    uint32_t DdataSize     = BINGO_CHIPLET_READW(M) * BINGO_CHIPLET_READW(N) * BINGO_CHIPLET_READW(meshRow) * BINGO_CHIPLET_READW(meshCol)  * sizeof(uint32_t);
+    // Hoist the chiplet-aware reads once; each macro is a transform + load.
+    uint32_t M_v = BINGO_CHIPLET_READW(M);
+    uint32_t K_v = BINGO_CHIPLET_READW(K);
+    uint32_t N_v = BINGO_CHIPLET_READW(N);
+    const bingo_gemm_shape_params_t *shape =
+        &bingo_gemm_shape_params[BINGO_CHIPLET_READW(array_shape)];
+    uint32_t AdataTileSize = M_v * K_v * shape->meshRow * shape->tileSize * sizeof(uint8_t);
+    uint32_t BdataSize     = K_v * N_v * shape->meshCol * shape->tileSize * sizeof(uint8_t);
+    uint32_t CdataSize     = M_v * N_v * shape->meshRow * shape->meshCol  * sizeof(uint8_t);
+    uint32_t DdataSize     = M_v * N_v * shape->meshRow * shape->meshCol  * sizeof(uint32_t);
     uintptr_t A1_mp        = chiplet_addr_transform_loc(2, 0, SPM_WIDE_BASE_ADDR) + 0 * AdataTileSize;
     uintptr_t A2_mp        = chiplet_addr_transform_loc(2, 0, SPM_WIDE_BASE_ADDR) + 1 * AdataTileSize;
     uintptr_t A3_mp        = chiplet_addr_transform_loc(2, 0, SPM_WIDE_BASE_ADDR) + 2 * AdataTileSize;
@@ -125,10 +132,10 @@ uint32_t __workload_gemm_broadcast(bingo_task_t** task_list) {
     __snax_kernel_check_results_args_t *task_check_B_args_chip_0x10 = NULL;
     __snax_kernel_check_results_args_t *task_check_B_args_chip_0x11 = NULL;
     // Then each chiplet does gemm compute
-    __snax_kernel_gemm_intra_chiplet_args_t *task_gemm_args_chip_0x00 = NULL;
-    __snax_kernel_gemm_intra_chiplet_args_t *task_gemm_args_chip_0x01 = NULL;
-    __snax_kernel_gemm_intra_chiplet_args_t *task_gemm_args_chip_0x10 = NULL;
-    __snax_kernel_gemm_intra_chiplet_args_t *task_gemm_args_chip_0x11 = NULL;
+    __snax_kernel_versacore_load_compute_store_args_t *task_gemm_args_chip_0x00 = NULL;
+    __snax_kernel_versacore_load_compute_store_args_t *task_gemm_args_chip_0x01 = NULL;
+    __snax_kernel_versacore_load_compute_store_args_t *task_gemm_args_chip_0x10 = NULL;
+    __snax_kernel_versacore_load_compute_store_args_t *task_gemm_args_chip_0x11 = NULL;
     // Then each chiplet store the result in local L3
     __snax_kernel_idma_1d_copy_args_t *task_store_output_args_chip_0x00 = NULL;
     __snax_kernel_idma_1d_copy_args_t *task_store_output_args_chip_0x01 = NULL;
@@ -207,7 +214,7 @@ uint32_t __workload_gemm_broadcast(bingo_task_t** task_list) {
         task_idma_broadcast_B_args_chip_0x00->size);
 
         // Args for gemm compute at chiplet 0x00
-        task_gemm_args_chip_0x00 = (__snax_kernel_gemm_intra_chiplet_args_t*)bingoHeapMalloc(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_gemm_intra_chiplet_args_t));
+        task_gemm_args_chip_0x00 = (__snax_kernel_versacore_load_compute_store_args_t*)bingoHeapMalloc(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_versacore_load_compute_store_args_t));
         task_gemm_args_chip_0x00->input_A_addr_hi = HIGH32(get_current_chip_baseaddress_value());
         task_gemm_args_chip_0x00->input_A_addr_lo = LOW32(BINGO_CHIPLET_READD(A_l1)); // L1 addr for A
         task_gemm_args_chip_0x00->input_B_addr_hi = HIGH32(get_current_chip_baseaddress_value());
@@ -305,7 +312,7 @@ uint32_t __workload_gemm_broadcast(bingo_task_t** task_list) {
         task_check_B_args_chip_0x01->output_data_addr,
         task_check_B_args_chip_0x01->data_size);
         // GeMM args for chiplet 0x01
-        task_gemm_args_chip_0x01 = (__snax_kernel_gemm_intra_chiplet_args_t*)bingoHeapMalloc(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_gemm_intra_chiplet_args_t));
+        task_gemm_args_chip_0x01 = (__snax_kernel_versacore_load_compute_store_args_t*)bingoHeapMalloc(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_versacore_load_compute_store_args_t));
         task_gemm_args_chip_0x01->input_A_addr_hi = HIGH32(get_current_chip_baseaddress_value());
         task_gemm_args_chip_0x01->input_A_addr_lo = LOW32(BINGO_CHIPLET_READD(A_l1));
         task_gemm_args_chip_0x01->input_B_addr_hi = HIGH32(get_current_chip_baseaddress_value());
@@ -403,7 +410,7 @@ uint32_t __workload_gemm_broadcast(bingo_task_t** task_list) {
         task_check_B_args_chip_0x10->output_data_addr,
         task_check_B_args_chip_0x10->data_size);  
         // GeMM args for chiplet 0x10
-        task_gemm_args_chip_0x10 = (__snax_kernel_gemm_intra_chiplet_args_t*)bingoHeapMalloc(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_gemm_intra_chiplet_args_t));
+        task_gemm_args_chip_0x10 = (__snax_kernel_versacore_load_compute_store_args_t*)bingoHeapMalloc(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_versacore_load_compute_store_args_t));
         task_gemm_args_chip_0x10->input_A_addr_hi = HIGH32(get_current_chip_baseaddress_value());
         task_gemm_args_chip_0x10->input_A_addr_lo = LOW32(BINGO_CHIPLET_READD(A_l1));
         task_gemm_args_chip_0x10->input_B_addr_hi = HIGH32(get_current_chip_baseaddress_value());
@@ -497,7 +504,7 @@ uint32_t __workload_gemm_broadcast(bingo_task_t** task_list) {
         task_check_B_args_chip_0x11->output_data_addr,
         task_check_B_args_chip_0x11->data_size);
         // GeMM args for chiplet 0x11
-        task_gemm_args_chip_0x11 = (__snax_kernel_gemm_intra_chiplet_args_t*)bingoHeapMalloc(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_gemm_intra_chiplet_args_t));
+        task_gemm_args_chip_0x11 = (__snax_kernel_versacore_load_compute_store_args_t*)bingoHeapMalloc(bingo_get_l3_heap_manager(get_current_chip_id()), sizeof(__snax_kernel_versacore_load_compute_store_args_t));
         task_gemm_args_chip_0x11->input_A_addr_hi = HIGH32(get_current_chip_baseaddress_value());
         task_gemm_args_chip_0x11->input_A_addr_lo = LOW32(BINGO_CHIPLET_READD(A_l1));
         task_gemm_args_chip_0x11->input_B_addr_hi = HIGH32(get_current_chip_baseaddress_value());
@@ -644,7 +651,7 @@ uint32_t __workload_gemm_broadcast(bingo_task_t** task_list) {
         HOST_DEBUG_PRINT("Error: Task mempool to cluster B or check B creation failed!\r\n");
     }
 
-    bingo_task_t* task_versacore_chip_0x00 = bingo_task_create(__snax_kernel_gemm,
+    bingo_task_t* task_versacore_chip_0x00 = bingo_task_create(__snax_kernel_versacore_load_compute_store_func_addr,
                                                               (uint32_t)(uintptr_t)(task_gemm_args_chip_0x00),
                                                               0x00,
                                                               0);
@@ -657,7 +664,7 @@ uint32_t __workload_gemm_broadcast(bingo_task_t** task_list) {
                                                                    0x00,
                                                                    0);
 
-    bingo_task_t* task_versacore_chip_0x01 = bingo_task_create(__snax_kernel_gemm,
+    bingo_task_t* task_versacore_chip_0x01 = bingo_task_create(__snax_kernel_versacore_load_compute_store_func_addr,
                                                               (uint32_t)(uintptr_t)(task_gemm_args_chip_0x01),
                                                               0x01,
                                                               0);
@@ -669,7 +676,7 @@ uint32_t __workload_gemm_broadcast(bingo_task_t** task_list) {
                                                                    (uint32_t)(uintptr_t)(task_check_D2_args_chip_0x01),
                                                                    0x01,
                                                                    0);
-    bingo_task_t* task_versacore_chip_0x10 = bingo_task_create(__snax_kernel_gemm,
+    bingo_task_t* task_versacore_chip_0x10 = bingo_task_create(__snax_kernel_versacore_load_compute_store_func_addr,
                                                               (uint32_t)(uintptr_t)(task_gemm_args_chip_0x10),
                                                               0x10,
                                                               0);
@@ -681,7 +688,7 @@ uint32_t __workload_gemm_broadcast(bingo_task_t** task_list) {
                                                                    (uint32_t)(uintptr_t)(task_check_D3_args_chip_0x10),
                                                                    0x10,
                                                                    0);
-    bingo_task_t* task_versacore_chip_0x11 = bingo_task_create(__snax_kernel_gemm,
+    bingo_task_t* task_versacore_chip_0x11 = bingo_task_create(__snax_kernel_versacore_load_compute_store_func_addr,
                                                               (uint32_t)(uintptr_t)(task_gemm_args_chip_0x11),
                                                               0x11,
                                                               0);

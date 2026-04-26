@@ -55,18 +55,18 @@ def emit_stacked_gemm_data(**cfg):
     ]
 
     array_shape = cfg["array_shape"]
-    data += [format_scalar_definition("uint32_t", "array_shape", array_shape)]
-
     acc_cfg = cfg["snax_versacore_core_template"]["snax_acc_cfg"][0]
     data_type = 0  # int8
+    spatial_unrolling = acc_cfg["snax_versacore_spatial_unrolling"][data_type]
+    assert 0 <= array_shape < len(spatial_unrolling), \
+        f"array_shape={array_shape} out of range; hwcfg has {len(spatial_unrolling)} shapes"
+    data += [format_scalar_definition("uint32_t", "array_shape", array_shape)]
 
-    meshRow, tileSize, meshCol = acc_cfg["snax_versacore_spatial_unrolling"][data_type][array_shape]
-
-    data += [
-        format_scalar_definition("uint32_t", "meshRow", meshRow),
-        format_scalar_definition("uint32_t", "tileSize", tileSize),
-        format_scalar_definition("uint32_t", "meshCol", meshCol),
-    ]
+    # meshRow/tileSize/meshCol are used locally below to reshape the reference
+    # matrices. They are intentionally NOT emitted as globals — the device and
+    # host both read them from bingo_gemm_shape_params[array_shape] in
+    # runtime/snax/versacore/gemm_shapes.h at run time.
+    meshRow, tileSize, meshCol = spatial_unrolling[array_shape]
 
     assert M1 * meshRow == M2 * meshRow, "In stacked GEMM, the output rows of GEMM1 should match the input rows of GEMM2"
     assert N1 * meshCol == K2 * tileSize, "In stacked GEMM, the output cols of GEMM1 should match the input rows of GEMM2"

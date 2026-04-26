@@ -43,22 +43,18 @@ def emit_matmul_data(**kwargs):
     data_str += [format_scalar_definition("uint32_t", "N", N)]
 
     array_shape = kwargs["array_shape"]
+    snax_acc_cfg = kwargs["snax_versacore_core_template"]["snax_acc_cfg"][0]
+    data_type = 0  # int8 data type
+    spatial_unrolling = snax_acc_cfg["snax_versacore_spatial_unrolling"][data_type]
+    assert 0 <= array_shape < len(spatial_unrolling), \
+        f"array_shape={array_shape} out of range; hwcfg has {len(spatial_unrolling)} shapes"
     data_str += [format_scalar_definition("uint32_t", "array_shape", array_shape)]
 
-    if array_shape == 0:
-        meshRow = 32
-        tileSize = 4
-        meshCol = 32
-    elif array_shape == 1:
-        meshRow = 1
-        tileSize = 32
-        meshCol = 16
-    else:
-        raise ValueError("Unsupported array shape!")
-
-    data_str += [format_scalar_definition("uint32_t", "meshRow", meshRow)]
-    data_str += [format_scalar_definition("uint32_t", "tileSize", tileSize)]
-    data_str += [format_scalar_definition("uint32_t", "meshCol", meshCol)]
+    # meshRow/tileSize/meshCol are used locally below to reshape the reference
+    # matrices. They are intentionally NOT emitted as globals — the device and
+    # host both read them from bingo_gemm_shape_params[array_shape] in
+    # runtime/snax/versacore/gemm_shapes.h at run time.
+    meshRow, tileSize, meshCol = spatial_unrolling[array_shape]
 
     transposed_A = kwargs["transposed_A"]
     transposed_B = kwargs["transposed_B"]
@@ -91,9 +87,6 @@ def emit_matmul_data(**kwargs):
 
     for i in range(1, 5):  # A1..A4
         A_i = np.random.randint(A_MIN, A_MAX, size=(M, K, meshRow, tileSize)).reshape(-1)
-        pad_len = (-A_i.size) % 64
-        if pad_len > 0:
-            A_i = np.pad(A_i, (0, pad_len), mode='constant', constant_values=0)
 
         if kwargs["transposed_A"] == 1:
             A_i = A_i.reshape(M, K, meshRow, tileSize)
@@ -106,8 +99,6 @@ def emit_matmul_data(**kwargs):
         else:
             B_i = B
 
-        A_all.append(A_i)
-
         if kwargs["addNonZeroC"] == 1:
             C_i = np.random.randint(C_MIN, C_MAX, size=(M, N, meshRow, meshCol)).reshape(-1)
         else:
@@ -115,9 +106,17 @@ def emit_matmul_data(**kwargs):
 
         subtraction_a = 0
         subtraction_b = 0
-        # D1..D4
+        # D1..D4: golden compute uses the unpadded logical tile.
         D_i = block_gemm_golden_model(M, K, N, meshRow, tileSize, meshCol,
                                       A_i, B_i, subtraction_a, subtraction_b, C_i)
+
+        # Pad the stored A tile so each one starts on a 64-byte boundary in
+        # the L3 mempool layout (concat'd A1..A4).
+        pad_len = (-A_i.size) % 64
+        if pad_len > 0:
+            A_i = np.pad(A_i, (0, pad_len), mode='constant', constant_values=0)
+
+        A_all.append(A_i)
         D_all.append(D_i)
 
     # Concatenate A1..A4 and D1..D4
@@ -158,14 +157,27 @@ def main():
         required=True,
         help="Select param config file kernel",
     )
+    parser.add_argument(
+        "--hwcfg",
+        type=pathlib.Path,
+        required=True,
+        help="Select hardware config file kernel",
+    )
     args = parser.parse_args()
 
     # Load param config file
     with args.cfg.open() as f:
         param = hjson.loads(f.read())
 
+    # Load hardware config file
+    with args.hwcfg.open() as f:
+        hw = hjson.loads(f.read())
+
+    # Merge dictionaries (hw overrides param in case of conflicts)
+    merged = {**param, **hw}
+
     # Emit header file
-    print(emit_header_file(**param))
+    print(emit_header_file(**merged))
 
 
 if __name__ == "__main__":

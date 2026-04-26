@@ -29,8 +29,8 @@ DATA_H = $(MK_DIR)/xdma_data.h
 BENDER   = bender
 SNITCH_ROOT = $(shell $(BENDER) path snitch_cluster)
 
-$(DATA_H): $(MK_DIR)/xdma_datagen.py $(DATA_CFG) 
-	$< -c $(DATA_CFG) > $@
+$(DATA_H): $(MK_DIR)/xdma_datagen.py $(DATA_CFG)
+	$< -c $(DATA_CFG) --hwcfg $(SNITCH_ROOT)/target/snitch_cluster/cfg/snax_versacore_to_cluster.hjson > $@
 
 ###############
 # Build settings

@@ -8,6 +8,7 @@
 #include "gemm_data.h"
 #include "host.h"
 #include "libbingo/bingo_api.h"
+#include <gemm_shapes.h>
 
 // This workload tests the single-chiplet
 // 1. load A and B matrices from L3 to L1
@@ -37,13 +38,13 @@ uint32_t __workload_gemm_seperate_load_and_compute(bingo_task_t** task_list) {
     printf_safe("Chip(%x, %x): [Host] Preparing GEMM Separate Load and Compute Workload\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
     uint32_t __snax_kernel_idma_1d_copy_func_addr =
         get_device_function("__snax_kernel_idma_1d_copy");
-    uint32_t __snax_kernel_gemm_func_addr =
-        get_device_function("__snax_kernel_gemm");
+    uint32_t __snax_kernel_versacore_load_compute_store_func_addr =
+        get_device_function("__snax_kernel_versacore_load_compute_store");
     uint32_t check_results_func_addr =
         get_device_function("__snax_kernel_check_results");
 
     if (__snax_kernel_idma_1d_copy_func_addr == SNAX_SYMTAB_END_FN_ADDR ||
-        __snax_kernel_gemm_func_addr == SNAX_SYMTAB_END_FN_ADDR ||
+        __snax_kernel_versacore_load_compute_store_func_addr == SNAX_SYMTAB_END_FN_ADDR ||
         check_results_func_addr == SNAX_SYMTAB_END_FN_ADDR) {
         printf("Error: Kernel symbol lookup failed!\r\n");
     }
@@ -56,18 +57,17 @@ uint32_t __workload_gemm_seperate_load_and_compute(bingo_task_t** task_list) {
     // Arg3: uint32_t dst_addr_lo
     // Arg4: uint32_t size in Byte
 
-    uint32_t AdataTileSize = BINGO_CHIPLET_READW(M) * BINGO_CHIPLET_READW(K) *
-                             BINGO_CHIPLET_READW(meshRow) *
-                             BINGO_CHIPLET_READW(tileSize) * sizeof(uint8_t);
-    uint32_t BdataSize = BINGO_CHIPLET_READW(K) * BINGO_CHIPLET_READW(N) *
-                         BINGO_CHIPLET_READW(meshCol) *
-                         BINGO_CHIPLET_READW(tileSize) * sizeof(uint8_t);
-    uint32_t CdataSize = BINGO_CHIPLET_READW(M) * BINGO_CHIPLET_READW(N) *
-                         BINGO_CHIPLET_READW(meshRow) *
-                         BINGO_CHIPLET_READW(meshCol) * sizeof(uint8_t);
-    uint32_t DdataSize = BINGO_CHIPLET_READW(M) * BINGO_CHIPLET_READW(N) *
-                         BINGO_CHIPLET_READW(meshRow) *
-                         BINGO_CHIPLET_READW(meshCol) * sizeof(uint32_t);
+    // Hoist the chiplet-aware reads of M/K/N/array_shape once; each macro
+    // expansion is a transform + load.
+    uint32_t M_v = BINGO_CHIPLET_READW(M);
+    uint32_t K_v = BINGO_CHIPLET_READW(K);
+    uint32_t N_v = BINGO_CHIPLET_READW(N);
+    const bingo_gemm_shape_params_t *shape =
+        &bingo_gemm_shape_params[BINGO_CHIPLET_READW(array_shape)];
+    uint32_t AdataTileSize = M_v * K_v * shape->meshRow * shape->tileSize * sizeof(uint8_t);
+    uint32_t BdataSize     = K_v * N_v * shape->meshCol * shape->tileSize * sizeof(uint8_t);
+    uint32_t CdataSize     = M_v * N_v * shape->meshRow * shape->meshCol  * sizeof(uint8_t);
+    uint32_t DdataSize     = M_v * N_v * shape->meshRow * shape->meshCol  * sizeof(uint32_t);
     uint64_t A1_addr_l3 = chiplet_addr_transform((uint64_t)(uintptr_t)(A1));
     HOST_DEBUG_PRINT("Chip(%x, %x): A1 matrix L3 address: 0x%lx\r\n",
            get_current_chip_loc_x(), get_current_chip_loc_y(), A1_addr_l3);
@@ -114,9 +114,9 @@ uint32_t __workload_gemm_seperate_load_and_compute(bingo_task_t** task_list) {
            task_l3_to_cluster_args_B->dst_addr_lo,
            task_l3_to_cluster_args_B->size);
     // Prepare the args for Chiplet 0
-    __snax_kernel_gemm_intra_chiplet_args_t* gemm_args_chip_0x00 = (__snax_kernel_gemm_intra_chiplet_args_t*)bingo_l3_alloc(
+    __snax_kernel_versacore_load_compute_store_args_t* gemm_args_chip_0x00 = (__snax_kernel_versacore_load_compute_store_args_t*)bingo_l3_alloc(
         assigned_chip_id,
-        sizeof(__snax_kernel_gemm_intra_chiplet_args_t));
+        sizeof(__snax_kernel_versacore_load_compute_store_args_t));
     // versacore args
     // A matrix
     gemm_args_chip_0x00->input_A_addr_hi = HIGH32(BINGO_CHIPLET_READD(cluster_l1_addr_A));
@@ -198,7 +198,7 @@ uint32_t __workload_gemm_seperate_load_and_compute(bingo_task_t** task_list) {
                           assigned_chip_id, assigned_cluster_id);
     // versacore gemm compute
     bingo_task_t* task_versacore_chip_0x00 = bingo_task_create(
-        __snax_kernel_gemm_func_addr,
+        __snax_kernel_versacore_load_compute_store_func_addr,
         (uint32_t)(uintptr_t)(gemm_args_chip_0x00), assigned_chip_id, assigned_cluster_id);
 
     // idma move D back to L3

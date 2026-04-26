@@ -9,6 +9,7 @@
 #include "host.h"
 #include "libbingo/bingo_api.h"
 #include "xdma_data.h"
+#include <gemm_shapes.h>
 
 // This workload
 // 1. test xdma copy from mempool to cluster L1
@@ -49,9 +50,10 @@ uint32_t __workload_xdma_mempool(bingo_task_t** task_list) {
     // will incur the cross-chiplet traffic By forcing the read by
     // BINGO_CHIPLET_READW marco, we can ensure those variables are read from
     // local chiplet SPM
+    const bingo_gemm_shape_params_t *shape =
+        &bingo_gemm_shape_params[BINGO_CHIPLET_READW(array_shape)];
     uint32_t AdataTileSize = BINGO_CHIPLET_READW(M) * BINGO_CHIPLET_READW(K) *
-                             BINGO_CHIPLET_READW(meshRow) *
-                             BINGO_CHIPLET_READW(tileSize) * sizeof(uint8_t);
+                             shape->meshRow * shape->tileSize * sizeof(uint8_t);
     uintptr_t A1_mp = A_mp + 0 * AdataTileSize;
     uintptr_t A2_mp = A_mp + 1 * AdataTileSize;
     uintptr_t A3_mp = A_mp + 2 * AdataTileSize;

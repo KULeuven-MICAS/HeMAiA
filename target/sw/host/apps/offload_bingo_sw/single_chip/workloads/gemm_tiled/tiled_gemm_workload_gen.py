@@ -110,6 +110,7 @@ def emit_workload_content(**kwargs):
 #include "gemm_data.h"
 #include "host.h"
 #include "libbingo/bingo_api.h"
+#include <gemm_shapes.h>
 
 // This workload tests the single-chiplet
 // 1. load A and B matrices from L3 to L1
@@ -144,30 +145,29 @@ uint32_t __workload_gemm_tiled(bingo_task_t **task_list)
 
     uint32_t __snax_kernel_xdma_1d_copy_func_addr =
         get_device_function("__snax_kernel_xdma_1d_copy");
-    uint32_t __snax_kernel_gemm_func_addr =
-        get_device_function("__snax_kernel_gemm");
+    uint32_t __snax_kernel_versacore_load_compute_store_func_addr =
+        get_device_function("__snax_kernel_versacore_load_compute_store");
     uint32_t __snax_kernel_start_gemm_and_wait_func_addr =
         get_device_function("__snax_kernel_minimal_cfg_start_gemm_and_wait");
     uint32_t check_results_func_addr =
         get_device_function("__snax_kernel_check_results");
 
     if (__snax_kernel_xdma_1d_copy_func_addr == SNAX_SYMTAB_END_FN_ADDR ||
-        __snax_kernel_gemm_func_addr == SNAX_SYMTAB_END_FN_ADDR || __snax_kernel_start_gemm_and_wait_func_addr == SNAX_SYMTAB_END_FN_ADDR ||
+        __snax_kernel_versacore_load_compute_store_func_addr == SNAX_SYMTAB_END_FN_ADDR || __snax_kernel_start_gemm_and_wait_func_addr == SNAX_SYMTAB_END_FN_ADDR ||
         check_results_func_addr == SNAX_SYMTAB_END_FN_ADDR)
     {
         printf("Error: Kernel symbol lookup failed!\\r\\n");
     }
 
-    // common parameters
-    uint32_t AdataTileSize = BINGO_CHIPLET_READW(M1) * BINGO_CHIPLET_READW(K1) *
-                             BINGO_CHIPLET_READW(meshRow) *
-                             BINGO_CHIPLET_READW(tileSize) * sizeof(uint8_t);
-    uint32_t BdataTileSize = BINGO_CHIPLET_READW(K1) * BINGO_CHIPLET_READW(N1) *
-                             BINGO_CHIPLET_READW(meshCol) *
-                             BINGO_CHIPLET_READW(tileSize) * sizeof(uint8_t);
-    uint32_t DdataTileSize = BINGO_CHIPLET_READW(M1) * BINGO_CHIPLET_READW(N1) *
-                             BINGO_CHIPLET_READW(meshRow) *
-                             BINGO_CHIPLET_READW(meshCol) * sizeof(uint32_t);
+    // Hoist the chiplet-aware reads once; mesh dims come from the shape table.
+    uint32_t M1_v = BINGO_CHIPLET_READW(M1);
+    uint32_t K1_v = BINGO_CHIPLET_READW(K1);
+    uint32_t N1_v = BINGO_CHIPLET_READW(N1);
+    const bingo_gemm_shape_params_t *shape =
+        &bingo_gemm_shape_params[BINGO_CHIPLET_READW(array_shape)];
+    uint32_t AdataTileSize = M1_v * K1_v * shape->meshRow * shape->tileSize * sizeof(uint8_t);
+    uint32_t BdataTileSize = K1_v * N1_v * shape->meshCol * shape->tileSize * sizeof(uint8_t);
+    uint32_t DdataTileSize = M1_v * N1_v * shape->meshRow * shape->meshCol  * sizeof(uint32_t);
 
     // pipeline starting point: load A and B matrices from L3 to L1
     uint64_t A1_addr_l3 = chiplet_addr_transform((uint64_t)(uintptr_t)(A1));
@@ -204,7 +204,7 @@ uint32_t __workload_gemm_tiled(bingo_task_t **task_list)
     task_l3_to_cluster_args_A2->size = ARRAY_SIZE_BYTES(A2);
 
     // args for gemm1
-    __snax_kernel_gemm_intra_chiplet_args_t *gemm1_args = (__snax_kernel_gemm_intra_chiplet_args_t *) bingo_l3_alloc(assigned_chip_id, sizeof(__snax_kernel_gemm_intra_chiplet_args_t));
+    __snax_kernel_versacore_load_compute_store_args_t *gemm1_args = (__snax_kernel_versacore_load_compute_store_args_t *) bingo_l3_alloc(assigned_chip_id, sizeof(__snax_kernel_versacore_load_compute_store_args_t));
     gemm1_args->input_A_addr_hi = HIGH32(BINGO_CHIPLET_READD(cluster_l1_addr_A_ping));
     gemm1_args->input_A_addr_lo = LOW32(BINGO_CHIPLET_READD(cluster_l1_addr_A_ping));
     gemm1_args->input_B_addr_hi = HIGH32(BINGO_CHIPLET_READD(cluster_l1_addr_B_ping));
@@ -337,7 +337,7 @@ uint32_t __workload_gemm_tiled(bingo_task_t **task_list)
         ]
     data_str += ['''// Register task: gemm1
                      bingo_task_t *task_gemm1 =
-        bingo_task_create(__snax_kernel_gemm_func_addr,
+        bingo_task_create(__snax_kernel_versacore_load_compute_store_func_addr,
                           (uint32_t)(uintptr_t)(gemm1_args),
                           assigned_chip_id, assigned_cluster_id);
                           '''

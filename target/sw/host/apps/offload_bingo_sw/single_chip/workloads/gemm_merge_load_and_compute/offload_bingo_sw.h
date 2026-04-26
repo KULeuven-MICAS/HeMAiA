@@ -30,18 +30,18 @@ uint32_t __workload_gemm_merge_load_and_compute(bingo_task_t** task_list) {
 
     uint32_t check_results_func_addr =
         get_device_function("__snax_kernel_check_results");
-    uint32_t __snax_kernel_gemm_func_addr =
-        get_device_function("__snax_kernel_gemm");
+    uint32_t __snax_kernel_versacore_load_compute_store_func_addr =
+        get_device_function("__snax_kernel_versacore_load_compute_store");
     if (check_results_func_addr == SNAX_SYMTAB_END_FN_ADDR ||
-        __snax_kernel_gemm_func_addr == SNAX_SYMTAB_END_FN_ADDR) {
+        __snax_kernel_versacore_load_compute_store_func_addr == SNAX_SYMTAB_END_FN_ADDR) {
         printf("Error: Kernel symbol lookup failed!\r\n");
     }
     uint64_t output_data_ptr = bingo_l3_alloc(assigned_chip_id, ARRAY_SIZE_BYTES(D));
     // 1.2 Prepare the args
     // versacore args
-    __snax_kernel_gemm_intra_chiplet_args_t* gemm_args = (__snax_kernel_gemm_intra_chiplet_args_t*)bingo_l3_alloc(
+    __snax_kernel_versacore_load_compute_store_args_t* gemm_args = (__snax_kernel_versacore_load_compute_store_args_t*)bingo_l3_alloc(
         assigned_chip_id,
-        sizeof(__snax_kernel_gemm_intra_chiplet_args_t));
+        sizeof(__snax_kernel_versacore_load_compute_store_args_t));
     // A matrix
     gemm_args->input_A_addr_hi = HIGH32(&A[0]);
     gemm_args->input_A_addr_lo = LOW32(&A[0]);
@@ -83,7 +83,7 @@ uint32_t __workload_gemm_merge_load_and_compute(bingo_task_t** task_list) {
 
     // 2. Register the tasks
     bingo_task_t* task_versacore = bingo_task_create(
-        __snax_kernel_gemm_func_addr,
+        __snax_kernel_versacore_load_compute_store_func_addr,
         (uint32_t)(uintptr_t)(gemm_args), assigned_chip_id, assigned_cluster_id);
     if (task_versacore == NULL) {
         printf("Error: Task versacore creation failed!\r\n");

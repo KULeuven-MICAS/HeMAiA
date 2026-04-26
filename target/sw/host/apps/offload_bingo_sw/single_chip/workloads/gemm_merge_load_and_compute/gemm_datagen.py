@@ -45,22 +45,18 @@ def emit_matmul_data(**kwargs):
     data_str += [format_scalar_definition("uint32_t", "N", N)]
 
     array_shape = kwargs["array_shape"]
-    data_str += [format_scalar_definition("uint32_t", "array_shape", array_shape)]
-    
     data_type = 0  # int8 data type
     snax_acc_cfg = kwargs["snax_versacore_core_template"]["snax_acc_cfg"][0]
-    meshRow = snax_acc_cfg["snax_versacore_spatial_unrolling"][data_type][array_shape][
-        0
-    ]
-    tileSize = snax_acc_cfg["snax_versacore_spatial_unrolling"][data_type][array_shape][
-        1
-    ]
-    meshCol = snax_acc_cfg["snax_versacore_spatial_unrolling"][data_type][array_shape][
-        2
-    ]
-    data_str += [format_scalar_definition("uint32_t", "meshRow", meshRow)]
-    data_str += [format_scalar_definition("uint32_t", "tileSize", tileSize)]
-    data_str += [format_scalar_definition("uint32_t", "meshCol", meshCol)]
+    spatial_unrolling = snax_acc_cfg["snax_versacore_spatial_unrolling"][data_type]
+    assert 0 <= array_shape < len(spatial_unrolling), \
+        f"array_shape={array_shape} out of range; hwcfg has {len(spatial_unrolling)} shapes"
+    data_str += [format_scalar_definition("uint32_t", "array_shape", array_shape)]
+
+    # meshRow/tileSize/meshCol are used locally below to reshape the reference
+    # matrices. They are intentionally NOT emitted as globals — the device and
+    # host both read them from bingo_gemm_shape_params[array_shape] in
+    # runtime/snax/versacore/gemm_shapes.h at run time.
+    meshRow, tileSize, meshCol = spatial_unrolling[array_shape]
     
     transposed_A = kwargs["transposed_A"]
     data_str += [format_scalar_definition("uint32_t", "transposed_A", transposed_A)]
