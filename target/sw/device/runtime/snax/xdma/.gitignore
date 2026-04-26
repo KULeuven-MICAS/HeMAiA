@@ -1,0 +1,3 @@
+# Mirror of $(SNITCH_ROOT)/target/snitch_cluster/sw/snax/xdma/include/snax-xdma-addr.h,
+# refreshed on every `make snax-sw-gen` (see target/sw/Makefile). Don't commit.
+snax_xdma_addr.h

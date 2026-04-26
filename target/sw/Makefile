@@ -189,7 +189,9 @@ debug-platform-headers: $(PLATFORM_HEADERS)
 # headers) without running Chisel RTL elaboration. 
 SNAX_SW_GEN_MARKER = $(SW_DIR)/.snax_sw_gen_targets_group
 
-snax-sw-gen: $(SNAX_SW_GEN_MARKER)
+SNAX_XDMA_ADDR_H = $(SW_DIR)/device/runtime/snax/xdma/snax_xdma_addr.h
+
+snax-sw-gen: $(SNAX_SW_GEN_MARKER) $(SNAX_XDMA_ADDR_H)
 
 $(SNAX_SW_GEN_MARKER): $(CFG)
 	@echo "[SNAX-SW-GEN] Generate SNAX SW headers"
@@ -205,8 +207,17 @@ $(SNAX_SW_GEN_MARKER): $(CFG)
 		--snitch-sw-only
 	@touch $@
 
+# Mirror the generated snax-xdma-addr.h into the HeMAiA device runtime tree
+# (under HeMAiA's underscored filename) so the snax_xdma_lib.h
+# `#include "snax_xdma_addr.h"` always tracks the active $(CFG). The local
+# file is gitignored — a missing copy on disk triggers this rule even when
+# $(SNAX_SW_GEN_MARKER) is already up-to-date.
+$(SNAX_XDMA_ADDR_H): $(SNAX_SW_GEN_MARKER)
+	@echo "[SNAX-SW-GEN] Mirror snax-xdma-addr.h -> $@"
+	@cp $(SNITCH_ROOT)/target/snitch_cluster/sw/snax/xdma/include/snax-xdma-addr.h $@
+
 clean-snax-sw-gen:
-	rm -rf $(SNAX_SW_GEN_MARKER)
+	rm -f $(SNAX_SW_GEN_MARKER) $(SNAX_XDMA_ADDR_H)
 
 # Structural sync check that every function defined in the upstream
 # snax-versacore-to-lib.c also exists in the local snax_versacore_lib.h and
@@ -220,13 +231,13 @@ check-snax-versacore-sync: $(SNAX_SW_GEN_MARKER)
 	@python3 $(ROOT)/util/hemaia/check_snax_versacore_lib_sync.py \
 		$(SNAX_VERSACORE_LOCAL_H) $(SNAX_VERSACORE_UPSTREAM_C)
 
-sw: $(PLATFORM_HEADERS) host/runtime/host.ld $(SNAX_SW_GEN_MARKER) check-snax-versacore-sync
+sw: snax-sw-gen $(PLATFORM_HEADERS) host/runtime/host.ld check-snax-versacore-sync
 	$(MAKE) -C host libs
 	$(MAKE) -C host TARGET=partial-build
 	$(MAKE) -C device all HOST_APP_TYPE=$(HOST_APP_TYPE)
 	$(MAKE) -C host TARGET=finalize-build
 
-single-sw: $(PLATFORM_HEADERS) host/runtime/host.ld $(SNAX_SW_GEN_MARKER) check-snax-versacore-sync
+single-sw: snax-sw-gen $(PLATFORM_HEADERS) host/runtime/host.ld check-snax-versacore-sync
 	$(MAKE) -C host libs
 	$(MAKE) -C host single_sw TARGET=partial-build \
 		HOST_APP_TYPE=$(HOST_APP_TYPE) \

@@ -103,6 +103,12 @@ INCDIRS += $(SWDIR)/shared/vendor/xdma
 INCDIRS += $(abspath $(HOST_DIR)/runtime/libbingo/include)
 INCDIRS += $(SWDIR)/shared/vendor/bingo_alloc/bingo_alloc
 
+# VersaCore shared headers — notably gemm_shapes.h, used by host workloads
+# that size GEMM buffers from bingo_gemm_shape_params[array_shape]. The
+# device-only snax_versacore_lib.h also lives here; host code should only
+# include <gemm_shapes.h>.
+INCDIRS += $(abspath $(DEVICE_DIR)/runtime/snax/versacore)
+
 # Compiler flags
 RISCV_CFLAGS += $(addprefix -I,$(INCDIRS))
 RISCV_CFLAGS += -march=rv64gcv # include the v extention for ara

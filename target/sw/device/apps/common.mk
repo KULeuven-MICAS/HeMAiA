@@ -87,6 +87,11 @@ INCDIRS += $(RUNTIME_DIR)/snax/xdma
 INCDIRS += $(wildcard $(SNITCH_ROOT)/target/snitch_cluster/sw/snax/*/include)
 INCDIRS += $(RUNTIME_DIR)/snax/versacore
 
+# libbingo headers — host/device share <libbingo/device_kernel_args.h> so
+# the device-side BINGO_GET_SP / BINGO_SW_GUARD_CHECK macros can derive the
+# trailer offset via sizeof(args_t).
+INCDIRS += $(SW_DIR)/host/runtime/libbingo/include
+
 # Linking sources
 BASE_TEMPLATE_LD = $(abspath $(APPSDIR)/base.template.ld)
 

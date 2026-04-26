@@ -5,23 +5,26 @@
 // Fanchen Kong <fanchen.kong@kuleuven.be>
 // Xiaoling Yi <xiaoling.yi@kuleuven.be>
 //
-// Core-level GEMM kernel template (bingo-hw flow). Contains the two
-// single-core GEMM kernels the bingo HW scheduler invokes:
+// Core-level GEMM kernels (bingo-hw flow). Hand-maintained plain C header.
+// Paired with offload_hw_kernels/gemm_shapes.h, which holds the per-shape
+// parameter table and shape-invariant widths. Both headers are validated
+// against the hwcfg at build time by libsnaxkernel/validate_shapes.py —
+// any drift fails `make sw`.
+//
+// Kernels exposed:
 //   - __snax_bingo_kernel_gemm_full       (configures streamer+versacore and runs)
 //   - __snax_bingo_kernel_gemm_minimal    (reuses prior config, just starts/waits)
-// Both return uint32_t (BINGO_RET_SUCC / BINGO_RET_FAIL) and dispatch per
-// array_shape_idx via `switch` blocks, each of which has a `default:` arm
-// returning BINGO_RET_FAIL.
-//
-// READ by libsnaxkernel/gen_bingo_gemm_kernels.py which substitutes every
-// HW-parameter macro (meshRow_N, channel_en_A_N_M, bankWidth, …) with the
-// literal value computed from the hwcfg and strips `case N:` arms for
-// shapes the hwcfg does not define. The emitted file is
-// offload_hw_kernels/gemm.h (gitignored).
-//
-// Edit THIS file when you want to change core-level GEMM kernel logic.
-// Do not edit the generated offload_hw_kernels/gemm.h — any changes there
-// will be overwritten on the next `make sw`.
+// Both return uint32_t (BINGO_RET_SUCC / BINGO_RET_FAIL). Shape-dependent
+// parameters are read via `bingo_gemm_shape_params[array_shape_idx]` —
+// a typed const struct from gemm_shapes.h — rather than dispatched through
+// `switch (array_shape_idx)` blocks. A single bounds check at the top of
+// __snax_bingo_kernel_gemm_full handles out-of-range indices.
+
+#pragma once
+
+#include "../macros.h"
+#include <snax_versacore_lib.h>
+#include <gemm_shapes.h>
 
 // =============================================================
 // Core-level GEMM kernels (bingo-hw)
@@ -29,7 +32,7 @@
 
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
 {
-    BINGO_SW_GUARD_CHECK(arg, 14);
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_gemm_full_args_t);
     // Assume the matrix data are all in L1
     // So all the addr are 32bit local addr
     // This kernel will configure the versacore and streamer and start the computation
@@ -53,9 +56,22 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
     uint32_t transpose_A = ((uint32_t *)arg)[8];
     uint32_t transpose_B = ((uint32_t *)arg)[9];
     uint32_t accumPrevC = ((uint32_t *)arg)[10];
-    bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, 14);
+    bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_gemm_full_args_t);
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
     BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_FULL_CFG_START);
+    // Bounds-check array_shape_idx against the hwcfg, then grab the per-shape
+    // parameter block. All shape-dependent values are read from `shape` below
+    // instead of dispatching through `switch (array_shape_idx)`.
+    if (array_shape_idx >= BINGO_NUM_ARRAY_SHAPES) {
+        VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx=%d invalid (only %d shapes in hwcfg)\r\n",
+                              snrt_cluster_idx(), snrt_cluster_core_idx(),
+                              array_shape_idx, BINGO_NUM_ARRAY_SHAPES);
+        return BINGO_RET_FAIL;
+    }
+    const bingo_gemm_shape_params_t *shape = &bingo_gemm_shape_params[array_shape_idx];
+    const uint32_t meshRow  = shape->meshRow;
+    const uint32_t tileSize = shape->tileSize;
+    const uint32_t meshCol  = shape->meshCol;
     // some inferenced args
     uint32_t addNonZeroC;
     if (accumPrevC)
@@ -70,47 +86,13 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
     {
         addNonZeroC = 0;
     }
-    uint32_t meshRow;
-    uint32_t tileSize;
-    uint32_t meshCol;
-    switch (array_shape_idx)
-    {
-    case 0:
-        meshRow = meshRow_0;
-        tileSize = tileSize_0;
-        meshCol = meshCol_0;
-        break;
-    case 1:
-        meshRow = meshRow_1;
-        tileSize = tileSize_1;
-        meshCol = meshCol_1;
-        break;
-    case 2:
-        meshRow = meshRow_2;
-        tileSize = tileSize_2;
-        meshCol = meshCol_2;
-        break;
-    case 3:
-        meshRow = meshRow_3;
-        tileSize = tileSize_3;
-        meshCol = meshCol_3;
-        break;
-    case 4:
-        meshRow = meshRow_4;
-        tileSize = tileSize_4;
-        meshCol = meshCol_4;
-        break;
-    default:
-        VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx invalid!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
-        return BINGO_RET_FAIL;
-    }
     // Configuration the Steamer and Versacore
     //////////////////////////////////////////////////////////////
     // Streamer cfg for A
     //////////////////////////////////////////////////////////////
     
     // Aslstride0
-    uint32_t Aslstride0 = bankWidth / 8;
+    uint32_t Aslstride0 = BINGO_BANK_WIDTH / 8;
     // Atlbound0~5
     uint32_t Atlbound[6];
     // Atlbound0
@@ -139,33 +121,11 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
     // Atlstride5
     Atlstride[5] = 0;
     uint32_t set_addr_remap_index_A = 0;
-    uint32_t channel_en_A;
-    switch (array_shape_idx)
-    {
-    case 0:
-        channel_en_A = channel_en_A_0_0;
-        break;
-    case 1:
-        channel_en_A = channel_en_A_1_0;
-        break;
-    case 2:
-        channel_en_A = channel_en_A_2_0;
-        break;
-    case 3:
-        channel_en_A = channel_en_A_3_0;
-        break;
-    case 4:
-        channel_en_A = channel_en_A_4_0;
-        break;
-    default:
-        VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx invalid!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
-        return BINGO_RET_FAIL;
-    }
     //////////////////////////////////////////////////////////////
     // Streamer cfg for B
     //////////////////////////////////////////////////////////////
     // Bslstride0
-    uint32_t Bslstride0 = bankWidth / 8;
+    uint32_t Bslstride0 = BINGO_BANK_WIDTH / 8;
     // Btlbound0~2
     uint32_t Btlbound[3];
     // Btlbound0
@@ -182,69 +142,14 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
     // Btlstride2
     Btlstride[2] = 0;
     uint32_t set_addr_remap_index_B = 0;
-    uint32_t channel_en_B[2];
-    switch (array_shape_idx)
-    {
-    case 0:
-        channel_en_B[0] = channel_en_B_0_0;
-        channel_en_B[1] = channel_en_B_0_1;
-        break;
-    case 1:
-        channel_en_B[0] = channel_en_B_1_0;
-        channel_en_B[1] = channel_en_B_1_1;
-        break;
-    case 2:
-        channel_en_B[0] = channel_en_B_2_0;
-        channel_en_B[1] = channel_en_B_2_1;
-        break;
-    case 3:
-        channel_en_B[0] = channel_en_B_3_0;
-        channel_en_B[1] = channel_en_B_3_1;
-        break;
-    case 4:
-        channel_en_B[0] = channel_en_B_4_0;
-        channel_en_B[1] = channel_en_B_4_1;
-        break;
-    default:
-        VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx invalid!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
-        return BINGO_RET_FAIL;
-    }
     //////////////////////////////////////////////////////////////
     // Streamer cfg for C
     //////////////////////////////////////////////////////////////
     // Cslstride0
-    uint32_t Cslstride0 = bankWidth / 8;
+    uint32_t Cslstride0 = BINGO_BANK_WIDTH / 8;
     // Ctlbound0~3
     uint32_t Ctlbound[4];
-    if (accumPrevC == 1)
-    {
-        // accumPrevC is true
-        Ctlbound[0] = 0;
-    }
-    else
-    {
-        switch (array_shape_idx)
-        {
-        case 0:
-            Ctlbound[0] = Ctlbound0_0;
-            break;
-        case 1:
-            Ctlbound[0] = Ctlbound0_1;
-            break;
-        case 2:
-            Ctlbound[0] = Ctlbound0_2;
-            break;
-        case 3:
-            Ctlbound[0] = Ctlbound0_3;
-            break;
-        case 4:
-            Ctlbound[0] = Ctlbound0_4;
-            break;
-        default:
-            VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx invalid!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
-            return BINGO_RET_FAIL;
-        }
-    }
+    Ctlbound[0] = (accumPrevC == 1) ? 0 : shape->Ctlbound0;
     // Ctlbound1
     Ctlbound[1] = N;
     // Ctlbound2
@@ -252,100 +157,31 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
     // Ctlbound3
     Ctlbound[3] = 1;
     uint32_t Ctlstride[4];
-    switch (array_shape_idx)
-    {
-    case 0:
-        // Ctlstride0
-        Ctlstride[0] = Ctlstride0_0;
-        break;
-    case 1:
-        // Ctlstride0
-        Ctlstride[0] = Ctlstride0_1;
-        break;
-    case 2:
-        // Ctlstride0
-        Ctlstride[0] = Ctlstride0_2;
-        break;
-    case 3:
-        // Ctlstride0
-        Ctlstride[0] = Ctlstride0_3;
-        break;
-    case 4:
-        // Ctlstride0
-        Ctlstride[0] = Ctlstride0_4;
-        break;
-    default:
-        VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx invalid!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
-        return BINGO_RET_FAIL;
-    }
+    // Ctlstride0
+    Ctlstride[0] = shape->Ctlstride0;
     // Ctlstride1
-    Ctlstride[1] = C_elem_len * meshRow *
+    Ctlstride[1] = BINGO_C_ELEM_LEN * meshRow *
                    meshCol / 8;
     // Ctlstride2
-    Ctlstride[2] = N * C_elem_len *
+    Ctlstride[2] = N * BINGO_C_ELEM_LEN *
                    meshRow *
                    meshCol / 8;
     // Ctlstride3
     Ctlstride[3] = 0;
     uint32_t set_addr_remap_index_C = 0;
-    uint32_t channel_en_C;
-    // set channel_en_C to zero if accumPrevC or addNonZeroC
-    if (accumPrevC == 1 || addNonZeroC == 0)
-    {
-        channel_en_C = channel_en_C_null_0_0;;
-    }
-    else
-    {
-        switch (array_shape_idx)
-        {
-        case 0:
-            channel_en_C = channel_en_C_0_0;
-            break;
-        case 1:
-            channel_en_C = channel_en_C_1_0;
-            break;
-        case 2:
-            channel_en_C = channel_en_C_2_0;
-            break;
-        case 3:
-            channel_en_C = channel_en_C_3_0;
-            break;
-        case 4:
-            channel_en_C = channel_en_C_4_0;
-            break;
-        default:
-            VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx invalid!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
-            return BINGO_RET_FAIL;
-        }
-    }
+    // Pick the shape's channel_en_C mask, or the shape-invariant zero mask when
+    // accumPrevC or !addNonZeroC.
+    const uint32_t *channel_en_C_ptr = (accumPrevC == 1 || addNonZeroC == 0)
+        ? bingo_channel_en_C_null
+        : shape->channel_en_C;
     //////////////////////////////////////////////////////////////
     // Streamer cfg for D
     //////////////////////////////////////////////////////////////
     // D32slstride0
-    uint32_t D32slstride0 = bankWidth / 8;
+    uint32_t D32slstride0 = BINGO_BANK_WIDTH / 8;
     // D32tlbound0~3
     uint32_t D32tlbound[4];
-    switch (array_shape_idx)
-    {
-    case 0:
-        D32tlbound[0] = D32tlbound0_0;
-        break;
-    case 1:
-        D32tlbound[0] = D32tlbound0_1;
-        break;
-    case 2:
-        D32tlbound[0] = D32tlbound0_2;
-        break;
-    case 3:
-        D32tlbound[0] = D32tlbound0_3;
-        break;
-    case 4:
-        D32tlbound[0] = D32tlbound0_4;
-        break;
-    default:
-        VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx invalid!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
-        return BINGO_RET_FAIL;
-    }
+    D32tlbound[0] = shape->D32tlbound0;
     // D32tlbound1
     D32tlbound[1] = N;
     // D32tlbound2
@@ -353,64 +189,18 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
     // D32tlbound3
     D32tlbound[3] = 1;
     uint32_t D32tlstride[4];
-    switch (array_shape_idx)
-    {
-    case 0:
-        // D32tlstride0
-        D32tlstride[0] = D32tlstride0_0;
-        break;
-    case 1:
-        // D32tlstride0
-        D32tlstride[0] = D32tlstride0_1;
-        break;
-    case 2:
-        // D32tlstride0
-        D32tlstride[0] = D32tlstride0_2;
-        break;
-    case 3:
-        // D32tlstride0
-        D32tlstride[0] = D32tlstride0_3;
-        break;
-    case 4:
-        // D32tlstride0
-        D32tlstride[0] = D32tlstride0_4;
-        break;
-    default:
-        VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx invalid!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
-        return BINGO_RET_FAIL;
-    }
+    // D32tlstride0
+    D32tlstride[0] = shape->D32tlstride0;
     // D32tlstride1
-    D32tlstride[1] = D32_elem_len * meshRow *
+    D32tlstride[1] = BINGO_D32_ELEM_LEN * meshRow *
                      meshCol / 8;
     // D32tlstride2
-    D32tlstride[2] = N * D32_elem_len *
+    D32tlstride[2] = N * BINGO_D32_ELEM_LEN *
                      meshRow *
                      meshCol / 8;
     // D32tlstride3
     D32tlstride[3] = 0;
     uint32_t set_addr_remap_index_D32 = 0;
-    uint32_t channel_en_D32;
-    switch (array_shape_idx)
-    {
-    case 0:
-        channel_en_D32 = channel_en_D32_0_0;
-        break;
-    case 1:
-        channel_en_D32 = channel_en_D32_1_0;
-        break;
-    case 2:
-        channel_en_D32 = channel_en_D32_2_0;
-        break;
-    case 3:
-        channel_en_D32 = channel_en_D32_3_0;
-        break;
-    case 4:
-        channel_en_D32 = channel_en_D32_4_0;
-        break;
-    default:
-        VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx invalid!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
-        return BINGO_RET_FAIL;
-    }
     //////////////////////////////////////////////////////////////
     // Configuration the Steamer and Versacore
     //////////////////////////////////////////////////////////////
@@ -423,26 +213,26 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
         Atlstride,           // Atlstride[] base
         set_addr_remap_index_A, // set_addr_remap_index_A
         transpose_A,         // transpose_A
-        &channel_en_A,       // channel_en_A []
+        (uint32_t *)shape->channel_en_A,   // channel_en_A []
         B_addr,              // B_addr
         &Bslstride0,         // Bslstride[] base
         Btlbound,            // Btlbound[] base
         Btlstride,           // Btlstride[] base
         set_addr_remap_index_B, // set_addr_remap_index_B
         transpose_B,         // transpose_B
-        channel_en_B,        // channel_en_B []
+        (uint32_t *)shape->channel_en_B,   // channel_en_B []
         C_addr,               // C_addr
         &Cslstride0,         // Cslstride[] base
         Ctlbound,            // Ctlbound[] base
         Ctlstride,           // Ctlstride[] base
         set_addr_remap_index_C, // set_addr_remap_index_C
-        &channel_en_C,       // channel_en_C []
+        (uint32_t *)channel_en_C_ptr,      // channel_en_C []
         D_addr,               // D_addr
         &D32slstride0,         // D32slstride[] base
         D32tlbound,          // D32tlbound[] base
         D32tlstride,         // D32tlstride[] base
         set_addr_remap_index_D32, // set_addr_remap_index_D32
-        &channel_en_D32,     // channel_en_D32 []
+        (uint32_t *)shape->channel_en_D32, // channel_en_D32 []
         0, 0, 0, 0, 0, 0, 0, 0, 0);
     set_versacore_csr(
         // accPrevC means takes new C
@@ -470,7 +260,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
 
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_minimal(void *arg)
 {
-    BINGO_SW_GUARD_CHECK(arg, 7);
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_gemm_minimal_args_t);
     // This kernel will only start the versacore and streamer with pre-configured CSRs
     if (snrt_cluster_core_idx() != 0){
         printf_safe("[Cluster %d Core %d]: Error! Bingo GEMM minimal should be called from core 0!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
@@ -481,7 +271,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_minimal(void *arg)
     uint32_t B_addr = ((uint32_t *)arg)[1];
     uint32_t C_addr = ((uint32_t *)arg)[2];
     uint32_t D_addr = ((uint32_t *)arg)[3];
-    bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, 7);
+    bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_gemm_minimal_args_t);
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
     BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_MIN_CFG_START);
     set_minimal_streamer_cfg(
