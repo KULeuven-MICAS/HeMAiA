@@ -1,4 +1,4 @@
-.PHONY: clean distclean clean-bender FORCE bootrom sw single-sw rtl occamy_ip_vcu128 occamy_ip_vcu128_gui occamy_system_vcu128 \
+.PHONY: clean-repo clean-bender FORCE bootrom sw single-sw rtl occamy_ip_vcu128 occamy_ip_vcu128_gui occamy_system_vcu128 \
 		occamy_system_vcu128_gui occamy_system_download_sw open_terminal hemaia_system_vivado_preparation \
 		hemaia_chip_vcu128 hemaia_chip_vcu128_gui hemaia_system_vcu128 hemaia_system_vcu128_gui \
 		occamy_system_vlt occamy_system_vsim_preparation occamy_system_vsim hemaia_system_vsim_preparation \
@@ -37,7 +37,7 @@ FORCE:
 clean-sw: 
 	$(MAKE) -C ./target/sw/ clean
 
-clean:
+clean-repo:
 	$(MAKE) -C ./target/fpga/ clean
 	$(MAKE) -C ./target/fpga/vivado_ips/ clean
 	$(MAKE) -C ./target/fpga_chip/hemaia_chip/ clean
@@ -61,7 +61,7 @@ clean-bender:
 	rm -rf deps
 	rm -rf .bender
 
-distclean: clean clean-bender
+clean: clean-repo clean-bender
 #######################
 # Software Generation #
 #######################
