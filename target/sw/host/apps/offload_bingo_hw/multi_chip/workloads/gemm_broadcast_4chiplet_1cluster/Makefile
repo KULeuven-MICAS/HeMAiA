@@ -8,7 +8,7 @@
 MK_DIR   := $(realpath $(dir $(realpath $(lastword $(MAKEFILE_LIST)))))
 HOST_APP_TYPE = offload_bingo_hw
 CHIP_TYPE     = multi_chip
-WORKLOAD= gemm_broadcast
+WORKLOAD      = gemm_broadcast_4chiplet_1cluster
 DEV_APP       = snax-bingo-offload
 SRCS = ../../src/offload_bingo_hw.c
 BINGO_HOST ?= 1 # True to include the bingo runtime
@@ -22,13 +22,15 @@ DATA_H = $(MK_DIR)/gemm_data.h
 OFFLOAD_H = $(MK_DIR)/offload_bingo_hw.h
 BENDER   = bender
 SNITCH_ROOT = $(shell $(BENDER) path snitch_cluster)
+PLATFORM_H = $(MK_DIR)/../../../../../../../../target/sw/shared/platform/generated/occamy.h
 
 $(DATA_H) $(OFFLOAD_H): $(MK_DIR)/main_bingo.py $(DATA_CFG)
 	python3 $(MK_DIR)/main_bingo.py \
 		--output_dir $(MK_DIR) \
 		--data_h $(DATA_H) \
 		-c $(DATA_CFG) \
-		--hwcfg $(SNITCH_ROOT)/target/snitch_cluster/cfg/snax_versacore_to_cluster.hjson
+		--hwcfg $(SNITCH_ROOT)/target/snitch_cluster/cfg/snax_versacore_to_cluster.hjson \
+		--platformcfg $(PLATFORM_H)
 
 ###############
 # Build settings

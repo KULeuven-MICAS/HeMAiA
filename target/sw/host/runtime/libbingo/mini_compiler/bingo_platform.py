@@ -68,3 +68,25 @@ def guard_cluster_count(param, platform, output_dir, output_offload_file_name):
         file=sys.stderr,
     )
     return False
+
+
+def guard_chiplet_count(param, platform, output_dir, output_offload_file_name):
+    expected = param.get("num_chiplets")
+    if expected is None:
+        raise KeyError("params.hjson must define num_chiplets")
+
+    expected = int(expected)
+    actual = int(platform["num_chiplets"])
+    if expected == actual:
+        return True
+
+    offload_path = os.path.join(output_dir, output_offload_file_name)
+    if os.path.exists(offload_path):
+        os.remove(offload_path)
+    print(
+        f"WARNING: workload expects num_chiplets={expected}, "
+        f"but HW platform has N_CHIPLETS={actual}. "
+        f"Not generating {offload_path}.",
+        file=sys.stderr,
+    )
+    return False

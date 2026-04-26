@@ -5,8 +5,8 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 
 # Workloads to build separate ELFs for
-APPS = gemm_broadcast
-APPS += gemm_seperate_load_and_compute_parallel
+APPS = gemm_broadcast_4chiplet_1cluster
+APPS += gemm_seperate_load_and_compute_parallel_4chiplet_1cluster
 
 SUBDIRS = $(addprefix workloads/,$(APPS))
 

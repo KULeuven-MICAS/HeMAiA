@@ -16,6 +16,11 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from gemm_multi_chiplet_datagen import emit_header_file  # noqa E402
 
 from bingo_dfg import BingoDFG
+from bingo_platform import (
+    parse_platform_cfg,
+    guard_cluster_count,
+    guard_chiplet_count,
+)
 from bingo_node import BingoNode
 from bingo_mem_handle import BingoMemAlloc, BingoMemSymbol, BingoMemFixedAddr
 from bingo_kernel_args import (
@@ -52,6 +57,12 @@ def get_args():
         type=pathlib.Path,
         required=True,
         help="Select hardware config file",
+    )
+    parser.add_argument(
+        "--platformcfg",
+        type=pathlib.Path,
+        required=True,
+        help="Path to generated occamy.h with HW platform defines",
     )
     parser.add_argument(
         "--data_h",
@@ -216,20 +227,15 @@ def define_memory_handles(params):
 
     return mem_handles
 
-def create_dfg(params, mem_handles):
+def create_dfg(params, mem_handles, platform):
     """Creates the Bingo Data Flow Graph with nodes and dependencies."""
-    # 1. Initialize DFG
-    num_chiplets = 4
-    num_clusters_per_chiplet = 1
-    num_cores_per_cluster = 2
-    is_host_as_acc = True
-    chiplet_ids = [0x00, 0x01, 0x10, 0x11]
+    # 1. Initialize DFG using HW params derived from occamy.h + RTL config
     bingo_dfg = BingoDFG(
-        num_chiplets,
-        num_clusters_per_chiplet,
-        num_cores_per_cluster,
-        is_host_as_acc,
-        chiplet_ids,
+        num_chiplets=platform["num_chiplets"],
+        num_clusters_per_chiplet=platform["num_clusters_per_chiplet"],
+        num_cores_per_cluster=platform["num_cores_per_cluster"],
+        is_host_as_acc=True,
+        chiplet_ids=platform["chiplet_ids"],
     )
     gemm_core_id = 0  # Core 0 for Compute
     dma_core_id = 1  # Core 1 for Load
@@ -706,7 +712,12 @@ def main():
         print(f"Written data header: {args.data_h}")
 
     mem_handles = define_memory_handles(params)
-    dfg = create_dfg(params, mem_handles)
+    platform = parse_platform_cfg(args.platformcfg)
+    if not guard_chiplet_count(merged_config, platform, args.output_dir, args.output_offload_file_name):
+        return
+    if not guard_cluster_count(merged_config, platform, args.output_dir, args.output_offload_file_name):
+        return
+    dfg = create_dfg(params, mem_handles, platform)
     dfg.bingo_compile_dfg(params["app_name"], output_dir, output_file_name, extra_include_header_list=["gemm_data.h"])
 
 

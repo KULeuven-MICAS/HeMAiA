@@ -57,27 +57,27 @@ runs:
   - app_11: 
     - HOST_APP_TYPE: offload_bingo_hw
     - CHIP_TYPE: single_chip
-    - WORKLOAD: gemm_double_buffer
+    - WORKLOAD: gemm_double_buffer_1cluster
     - DEV_APP: snax-bingo-offload
   - app_12: 
     - HOST_APP_TYPE: offload_bingo_hw
     - CHIP_TYPE: single_chip
-    - WORKLOAD: gemm_seperate_load_and_compute_serial
+    - WORKLOAD: gemm_seperate_load_and_compute_serial_1cluster
     - DEV_APP: snax-bingo-offload
   - app_13: 
     - HOST_APP_TYPE: offload_bingo_hw
     - CHIP_TYPE: single_chip
-    - WORKLOAD: gemm_seperate_load_and_compute_parallel
+    - WORKLOAD: gemm_seperate_load_and_compute_parallel_1cluster
     - DEV_APP: snax-bingo-offload
   - app_14: 
     - HOST_APP_TYPE: offload_bingo_hw
     - CHIP_TYPE: single_chip
-    - WORKLOAD: gemm_stacked
+    - WORKLOAD: gemm_stacked_1cluster
     - DEV_APP: snax-bingo-offload
-  - app_15: 
+  - app_15:
     - HOST_APP_TYPE: offload_bingo_hw
     - CHIP_TYPE: multi_chip
-    - WORKLOAD: gemm_broadcast
+    - WORKLOAD: gemm_broadcast_4chiplet_1cluster
     - DEV_APP: snax-bingo-offload
   - app_16:
     - HOST_APP_TYPE: host_only

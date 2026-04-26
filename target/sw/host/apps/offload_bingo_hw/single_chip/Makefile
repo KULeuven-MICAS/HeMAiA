@@ -12,7 +12,6 @@ APPS += gemm_stacked_1cluster
 APPS += gemm_sweep_1cluster
 APPS += xdma_all_ops_1cluster
 APPS += xdma_sweep_1cluster
-APPS += dummy_double_buffer_ci_1cluster
 APPS += moe4_4cluster
 APPS += attn_test_single_gemm_4cluster
 APPS += attn_test_quantize_4cluster
