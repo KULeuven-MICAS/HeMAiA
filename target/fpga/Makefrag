@@ -11,6 +11,7 @@ VERILATOR_ROOT ?= $(dir $(shell which $(VLT)))/../share/verilator
 VLT_ROOT	   ?= ${VERILATOR_ROOT}
 
 LOGS_DIR       ?= logs
+IS_CLEAN_GOAL  := $(filter clean clean-%,$(MAKECMDGOALS))
 
 MATCH_END := '/+incdir+/ s/$$/\/*\/*/'
 MATCH_BGN := 's/+incdir+//g'
@@ -19,7 +20,11 @@ TB_SRCS   := $(wildcard ${ROOT}/hw/ip/test/*.sv)
 TB_DIR    := ${ROOT}/hw/ip/test/src
 
 VSIM_BENDER   += -t test -t rtl -t simulation -t vsim -t cv64a6_imafdc_sv39
+ifeq ($(IS_CLEAN_GOAL),)
 VSIM_SOURCES  := $(shell ${BENDER} script flist ${VSIM_BENDER} | ${SED_SRCS})
+else
+VSIM_SOURCES  :=
+endif
 VSIM_BUILDDIR := work-vsim
 
 # fesvr is being installed here
@@ -39,7 +44,11 @@ VLT_FLAGS    += -Wno-UNOPTFLAT
 VLT_FLAGS    += -Wno-fatal
 VLT_FLAGS    += --unroll-count 1024
 VLT_BENDER   += -t rtl -t cv64a6_imafdc_sv39
+ifeq ($(IS_CLEAN_GOAL),)
 VLT_SOURCES  := $(shell ${BENDER} script flist ${VLT_BENDER} | ${SED_SRCS})
+else
+VLT_SOURCES  :=
+endif
 VLT_CFLAGS   += -std=c++14 -pthread
 VLT_CFLAGS   +=-I ${VLT_BUILDDIR} -I $(VLT_ROOT)/include -I $(VLT_ROOT)/include/vltstd -I $(VLT_FESVR)/include -I $(TB_DIR)
 
@@ -188,7 +197,11 @@ $(LOGS_DIR)/trace_hart_%.s: $(LOGS_DIR)/trace_hart_%.txt ${ANNOTATE}
 	$(PYTHON) ${ANNOTATE} ${ANNOTATE_FLAGS} -o $@ $(BINARY) $<
 $(LOGS_DIR)/trace_hart_%.diff: $(LOGS_DIR)/trace_hart_%.txt ${ANNOTATE}
 	$(PYTHON) ${ANNOTATE} ${ANNOTATE_FLAGS} -o $@ $(BINARY) $< -d
+ifeq ($(IS_CLEAN_GOAL),)
 BINARY ?= $(shell cat $(LOGS_DIR)/.rtlbinary)
+else
+BINARY ?=
+endif
 annotate: $(shell (ls $(LOGS_DIR)/trace_hart_*.dasm 2>/dev/null | sed 's/\.dasm/\.s/') || echo "") \
           $(shell (ls $(LOGS_DIR)/trace_hart_*.dasm 2>/dev/null | sed 's/\.dasm/\.diff/') || echo "")
 
