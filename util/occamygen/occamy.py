@@ -901,11 +901,27 @@ def get_cva6_kwargs(occamy_cfg, cluster_generators, soc_narrow_xbar, util, name)
     return cva6_kwargs
 
 
+def get_compute_chiplet_ids(occamy_cfg):
+    multichip_cfg = occamy_cfg["hemaia_multichip"]
+    if multichip_cfg["single_chip"]:
+        return [multichip_cfg.get("single_chip_id", 0x00)]
+
+    chiplet_ids = []
+    for compute_chip in multichip_cfg["testbench_cfg"]["hemaia_compute_chip"]:
+        x, y = compute_chip["coordinate"]
+        chiplet_ids.append((x << 4) | y)
+    return chiplet_ids
+
+
 def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
     if occamy_cfg['hemaia_multichip']['single_chip']:
         nr_chiplets = 1
     else:
         nr_chiplets = len(occamy_cfg['hemaia_multichip']['testbench_cfg']['hemaia_compute_chip'])
+    chiplet_ids = get_compute_chiplet_ids(occamy_cfg)
+    if len(chiplet_ids) != nr_chiplets:
+        raise ValueError(
+            f"Expected {nr_chiplets} compute chiplet IDs, got {len(chiplet_ids)}.")
     nr_clusters = len(occamy_cfg["clusters"]) * nr_chiplets
     
     nr_clusters_per_chiplet = len(occamy_cfg["clusters"])
@@ -925,6 +941,7 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
     cheader_kwargs = {
         "name": name,
         "nr_chiplets": nr_chiplets,
+        "chiplet_ids": chiplet_ids,
         "nr_clusters": nr_clusters,
         "nr_cores": nr_cores,
         "nr_clusters_per_chiplet": nr_clusters_per_chiplet,

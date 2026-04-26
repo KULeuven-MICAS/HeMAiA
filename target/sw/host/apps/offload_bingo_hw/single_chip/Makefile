@@ -5,23 +5,22 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 
 # Workloads to build separate ELFs for
-APPS =  gemm_double_buffer
-APPS += gemm_seperate_load_and_compute_parallel
-APPS += gemm_seperate_load_and_compute_serial
-APPS += gemm_stacked
-APPS += gemm_sweep
-APPS += xdma_all_ops
-APPS += xdma_layout_transform
-APPS += xdma_sweep
-APPS += dummy_double_buffer_ci
-APPS += moe4
-APPS += attn_test_single_gemm
-APPS += attn_test_quantize
-APPS += attn_test_dequantize
-APPS += attn_test_int32_add
-APPS += attn_test_ksplit_gemm
-APPS += attn_test_softmax
-APPS += attn_reference
+APPS =  gemm_double_buffer_1cluster
+APPS += gemm_seperate_load_and_compute_parallel_1cluster
+APPS += gemm_seperate_load_and_compute_serial_1cluster
+APPS += gemm_stacked_1cluster
+APPS += gemm_sweep_1cluster
+APPS += xdma_all_ops_1cluster
+APPS += xdma_sweep_1cluster
+APPS += dummy_double_buffer_ci_1cluster
+APPS += moe4_4cluster
+APPS += attn_test_single_gemm_4cluster
+APPS += attn_test_quantize_4cluster
+APPS += attn_test_dequantize_4cluster
+APPS += attn_test_int32_add_4cluster
+APPS += attn_test_ksplit_gemm_4cluster
+APPS += attn_test_softmax_4cluster
+APPS += attn_reference_4cluster
 SUBDIRS = $(addprefix workloads/,$(APPS))
 
 

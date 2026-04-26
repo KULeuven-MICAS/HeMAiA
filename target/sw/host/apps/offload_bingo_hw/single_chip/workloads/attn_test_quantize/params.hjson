@@ -1,8 +1,0 @@
-{
-    // Attention test: FP32 quantize kernel in isolation
-    // X[seq_len x d_model] -> quantize -> int8_X, scale
-    array_shape: 0
-    seq_len: 64
-    d_model: 32
-    d_head: 32
-}
