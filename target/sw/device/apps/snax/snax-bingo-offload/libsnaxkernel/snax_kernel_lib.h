@@ -44,16 +44,16 @@
 SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
      /// Cluster-level Kernels ///
      /// Used for bingo sw     ///
-//     SNAX_EXPORT_FUNC(__snax_kernel_dummy),
-//     SNAX_EXPORT_FUNC(__snax_kernel_check_results),
-//     SNAX_EXPORT_FUNC(__snax_kernel_check_results_full),
-//     SNAX_EXPORT_FUNC(__snax_kernel_csr),
-//     SNAX_EXPORT_FUNC(__snax_kernel_load_compute_store),
-//     SNAX_EXPORT_FUNC(__snax_kernel_double_buffer),
-//     SNAX_EXPORT_FUNC(__snax_kernel_xdma_1d_copy),
-//     SNAX_EXPORT_FUNC(__snax_kernel_idma_1d_copy),
-//     SNAX_EXPORT_FUNC(__snax_kernel_versacore_load_compute_store),
-//     SNAX_EXPORT_FUNC(__snax_kernel_minimal_cfg_start_gemm_and_wait),
+    SNAX_EXPORT_FUNC(__snax_kernel_dummy),
+    SNAX_EXPORT_FUNC(__snax_kernel_check_results),
+    SNAX_EXPORT_FUNC(__snax_kernel_check_results_full),
+    SNAX_EXPORT_FUNC(__snax_kernel_csr),
+    SNAX_EXPORT_FUNC(__snax_kernel_load_compute_store),
+    SNAX_EXPORT_FUNC(__snax_kernel_double_buffer),
+    SNAX_EXPORT_FUNC(__snax_kernel_xdma_1d_copy),
+    SNAX_EXPORT_FUNC(__snax_kernel_idma_1d_copy),
+    SNAX_EXPORT_FUNC(__snax_kernel_versacore_load_compute_store),
+    SNAX_EXPORT_FUNC(__snax_kernel_minimal_cfg_start_gemm_and_wait),
     /// Core-level Kernels ///
     /// Used for bingo hw  ///
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_dummy),
