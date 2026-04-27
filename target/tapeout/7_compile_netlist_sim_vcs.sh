@@ -35,7 +35,13 @@ fi
 cp -f "/users/micas/shares/project_HeMAiAv2/hemaia_testing/netlist_sim_no_sdf/check_finish_netlist.sv" "$script_dir/../sim/testharness/check_finish_netlist.sv"
 cp -f "/users/micas/shares/project_HeMAiAv2/hemaia_testing/netlist_sim_no_sdf/load_binary_netlist.sv" "$script_dir/../sim/testharness/load_binary_netlist.sv"
 cp -f "/users/micas/shares/project_HeMAiAv2/hemaia_testing/netlist_sim_no_sdf/testharness_netlist.sv" "$script_dir/../sim/testharness/testharness.sv"
-cp -f "/users/micas/shares/project_HeMAiAv2/hemaia_testing/netlist_sim_no_sdf/compile_netlist.vsim.tcl" "$script_dir/../sim/work-vsim/compile.vsim.tcl"
+
+rm -rf "$script_dir/../sim/work-vcs/*"
+cp -f "/users/micas/shares/project_HeMAiAv2/hemaia_testing/netlist_sim_no_sdf/compile.sh" "$script_dir/../sim/work-vcs/compile.sh"
+cp -f "/users/micas/shares/project_HeMAiAv2/hemaia_testing/netlist_sim_no_sdf/run_netlist.vcs.tcl" "$script_dir/../sim/work-vcs/run_netlist.vcs.tcl"
+
+
+sed -E '/^[[:space:]]*module[[:space:]]+bootrom([[:space:]#(;]|$)/,/^[[:space:]]*endmodule([[:space:]]|$)/ s|^|// |' $script_dir/dc_work_hemaia/outputs/hemaia_mapped.v > $script_dir/dc_work_hemaia/outputs/hemaia_mapped_bootrom_commented.v
 
 # vcs
 make -C "$script_dir/../.." hemaia_system_vcs SIM_CFG="$sim_cfg_dir/sim_netlist.hjson"
