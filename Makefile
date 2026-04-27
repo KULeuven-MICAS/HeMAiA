@@ -11,7 +11,7 @@ CFG_OVERRIDE ?=
 
 DEFAULT_CFG = $(MKFILE_DIR)target/rtl/cfg/hemaia_ci.hjson
 CFG = $(MKFILE_DIR)target/rtl/cfg/lru.hjson
-DEFAULT_SIM_CFG = $(MKFILE_DIR)target/rtl/cfg/sim_rtl.hjson
+DEFAULT_SIM_CFG = $(MKFILE_DIR)target/sim/cfg/sim_rtl.hjson
 SIM_CFG ?= $(DEFAULT_SIM_CFG)
 # If the configuration file is overriden on the command-line (through
 # CFG_OVERRIDE) and this file differs from the least recently used

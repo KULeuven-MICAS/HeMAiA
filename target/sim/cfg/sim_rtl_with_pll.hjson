@@ -1,7 +1,9 @@
 {
-    sim_cfg_name: "sim_rtl",
+    sim_cfg_name: "sim_rtl_with_pll",
     // Sim with RTL models
     sim_with_rtl: true
+    // Sim with PLL models
+    sim_with_pll: true
     // Do not replace the Mem macros
     sim_with_mem_macro: false
     // Do not use netlist

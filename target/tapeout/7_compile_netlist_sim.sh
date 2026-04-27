@@ -1,6 +1,6 @@
 #!/bin/bash
 script_dir="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
-sim_cfg_dir="$script_dir/../rtl/cfg"
+sim_cfg_dir="$script_dir/../sim/cfg"
 
 # 
 FILE=/users/micas/shares/project_HeMAiAv2/HeMAiA/hw/hemaia/tech_cells_tsmc16/src/tsmc16/mem_macro/ts1n16ffcllsblvtd1024x64m4sws_150a/VERILOG/ts1n16ffcllsblvtd1024x64m4sws_150a.v

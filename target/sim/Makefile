@@ -11,7 +11,7 @@
 
 DEBUG        ?= OFF # ON to turn on debugging symbols
 CFG          ?= $(realpath $(MKFILE_DIR)../rtl/cfg/lru.hjson)
-SIM_CFG      ?= $(realpath $(MKFILE_DIR)../rtl/cfg/sim_rtl.hjson)
+SIM_CFG      ?= $(realpath $(MKFILE_DIR)cfg/sim_rtl.hjson)
 
 .DEFAULT_GOAL := help
 .PHONY: all apps clean clean-testharness clean-vsim clean-vlt clean-vcs clean-apps clean-logs clean-bin
@@ -52,7 +52,7 @@ cfg_flag = $(shell if [ -f "$(1)" ]; then \
 SIM_WITH_MACRO      ?= $(call cfg_flag,$(SIM_CFG),sim_with_mem_macro)
 SIM_WITH_NETLIST    ?= $(call cfg_flag,$(SIM_CFG),sim_with_netlist)
 SIM_WITH_INTERPOSER ?= $(call cfg_flag,$(SIM_CFG),sim_with_interposer)
-SIM_WITH_PLL        ?= $(call cfg_flag,$(CFG),use_vendor_pll)
+SIM_WITH_PLL        ?= $(call cfg_flag,$(SIM_CFG),sim_with_pll)
 SIM_WITH_JTAG_CHECK ?= $(call cfg_flag,$(SIM_CFG),sim_with_jtag_check)
 
 VSIM_BENDER += $(shell cat ../rtl/src/bender_targets.tmp)
@@ -85,31 +85,19 @@ ifeq ($(SIM_WITH_PLL), 1)
 	VCS_BENDER  += -t tsmc16_pll_sim
 endif
 
-
-
-ifeq ($(SIM_WITH_PLL), 1)
-VSIM_FLAGS += -t 1fs
-else
-VSIM_FLAGS += -t 1ps
-endif
-
 ifeq ($(SIM_WITH_WAVEFORM), 1)
 	VSIM_FLAGS += -voptargs=+acc
 endif
 
+VSIM_FLAGS += -t 1ps
 VSIM_FLAGS += -do "log -r /*; run -a"
 # Downgraded from error as VSIM *wrongly* reports illegal enum assignments in riscv_dbg 4-phase CDCs
 # TODO: Workaround; revise
 VSIM_FLAGS += -warning 8386
 
 VLOG_FLAGS += -svinputport=compat
-ifeq ($(SIM_WITH_PLL), 1)
-VLOG_FLAGS += -override_timescale 1ps/1fs
-VLOG_FLAGS += -timescale 1ps/1fs
-else
 VLOG_FLAGS += -override_timescale 1ns/1ps
 VLOG_FLAGS += -timescale 1ns/1ps
-endif
 VLOG_FLAGS += -suppress 2583
 VLOG_FLAGS += -suppress 13314
 VLOG_FLAGS += ${QUESTA_64BIT}

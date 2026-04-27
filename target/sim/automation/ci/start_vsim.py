@@ -208,7 +208,7 @@ def step2_init_private_hemaia_repos(repo_root: Path) -> None:
     """Run ``1_init_outside_docker.sh`` with D2D and macro support enabled."""
     run_host_script(
         repo_root / "target/tapeout/1_init_outside_docker.sh",
-        script_args=["--pll=0", "--d2d=1", "--macro=1"],
+        script_args=["--pll=1", "--d2d=1", "--macro=1"],
     )
 
 
@@ -218,7 +218,7 @@ def step2_init_private_hemaia_repos(repo_root: Path) -> None:
 
 def step3_compile_hemaia_sw_rtl(repo_root: Path, docker_image: str) -> None:
     """Clean, then build SW, bootrom, and RTL inside the container."""
-    ci_cfg = "target/rtl/cfg/hemaia_tapeout_sim.hjson"
+    ci_cfg = "target/rtl/cfg/hemaia_multichip_ci.hjson"
 
     # make sw
     run_in_container(repo_root, docker_image, repo_root, ["make", "sw", f"CFG_OVERRIDE={ci_cfg}"])
@@ -284,7 +284,7 @@ def step5_prepare_testharness(
     repo_root: Path,
     docker_image: str,
     tasks_info: List[Tuple[Path, str]],
-    sim_cfg: str = "target/rtl/cfg/sim_rtl.hjson",
+    sim_cfg: str = "target/sim/cfg/sim_rtl.hjson",
 ) -> None:
     """Generate filelists in-container, compile on host, distribute artefacts."""
     sim_cfg_abs = str(repo_root / sim_cfg)
@@ -388,7 +388,7 @@ def main() -> None:
     task_base_dir = script_path.parent
     docker_image = "ghcr.io/kuleuven-micas/hemaia:main"
     task_yaml = script_path.parent / "task_vsim.yaml"
-    sim_cfg =  "target/rtl/cfg/sim_rtl.hjson"
+    sim_cfg =  "target/sim/cfg/sim_rtl.hjson"
 
 
     if not task_yaml.exists():

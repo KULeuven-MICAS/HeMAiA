@@ -1,7 +1,7 @@
 #!/bin/bash
 script_dir="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 cfg_name="hemaia_tapeout.hjson"
-sim_cfg_dir="$script_dir/../rtl/cfg"
+sim_cfg_dir="$script_dir/../sim/cfg"
 HOST_APP_TYPE="offload_legacy"
 CHIP_TYPE="single_chip"
 WORKLOAD=""
