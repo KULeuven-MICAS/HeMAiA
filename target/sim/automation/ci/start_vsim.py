@@ -195,9 +195,9 @@ def step0_parse_tasks(task_yaml: Path) -> List[Dict[str, str]]:
 # Step 1 -- Reset environment
 # ---------------------------------------------------------------------------
 
-def step1_reset(repo_root: Path) -> None:
-    """Run ``0_reset.sh`` to restore a clean state before the flow starts."""
-    run_host_script(repo_root / "target/tapeout/0_reset.sh")
+def step1_clean(repo_root: Path, docker_image: str) -> None:
+    """Run make clean to restore a clean state before the flow starts."""
+    run_in_container(repo_root, docker_image, repo_root, ["make", "clean"])
 
 
 # ---------------------------------------------------------------------------
@@ -393,14 +393,11 @@ def main() -> None:
 
     if not task_yaml.exists():
         raise FileNotFoundError(f"Task YAML file {task_yaml} does not exist")
-    # Clean the repo
-    run_in_container(repo_root, docker_image, repo_root, ["make", "clean"])
-    
     # Step 0: Parse task definitions from YAML
     tasks = step0_parse_tasks(task_yaml)
 
     # Step 1: Reset environment to a clean state
-    step1_reset(repo_root)
+    step1_clean(repo_root, docker_image)
 
     # Step 2: Initialise private repos on the host
     step2_init_private_hemaia_repos(repo_root)
