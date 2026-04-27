@@ -25,6 +25,7 @@ import multiprocessing
 import os
 import shutil
 import subprocess
+import sys
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -41,6 +42,18 @@ except Exception:
 # ---------------------------------------------------------------------------
 # Utility helpers
 # ---------------------------------------------------------------------------
+
+def ensure_vsim_available() -> None:
+    """Abort early if ``vsim`` is not on PATH (EDA env not sourced)."""
+    if shutil.which("vsim") is None:
+        print(
+            "ERROR: 'vsim' not found on PATH.\n"
+            "Please source the EDA setup script"
+            "and re-run this script.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
 
 def run_host_script(script_path: Path, script_args: List[str] = None) -> None:
     """Execute a shell script on the host via ``bash``."""
@@ -206,9 +219,10 @@ def step1_clean(repo_root: Path, docker_image: str) -> None:
 
 def step2_init_private_hemaia_repos(repo_root: Path) -> None:
     """Run ``1_init_outside_docker.sh`` with D2D and macro support enabled."""
+    # ci is not running with the PLL, so we disable it to avoid unnecessary errors about missing PLL
     run_host_script(
         repo_root / "target/tapeout/1_init_outside_docker.sh",
-        script_args=["--pll=1", "--d2d=1", "--macro=1"],
+        script_args=["--pll=0", "--d2d=1", "--macro=1"],
     )
 
 
@@ -317,6 +331,9 @@ def step5_prepare_testharness(
 # Step 6 -- Run simulations concurrently
 # ---------------------------------------------------------------------------
 
+SIM_TIMEOUT_SECONDS = 2 * 60 * 60  # 2 hours per simulation thread
+
+
 def step6_run_simulations(tasks_info: List[Tuple[Path, str]]) -> Dict[str, bool]:
     """Execute simulations in parallel and return a pass/fail map."""
     results: Dict[str, bool] = {}
@@ -330,9 +347,18 @@ def step6_run_simulations(tasks_info: List[Tuple[Path, str]]) -> Dict[str, bool]
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 check=False,
+                timeout=SIM_TIMEOUT_SECONDS,
             )
             out = proc.stdout.decode(errors="replace") if proc.stdout else ""
             return str(task_dir), ci_name, proc.returncode == 0, out
+        except subprocess.TimeoutExpired as exc:
+            partial = exc.stdout.decode(errors="replace") if exc.stdout else ""
+            msg = (
+                f"TIMEOUT: simulation exceeded {SIM_TIMEOUT_SECONDS}s "
+                f"({SIM_TIMEOUT_SECONDS // 3600}h) and was killed.\n"
+                + partial
+            )
+            return str(task_dir), ci_name, False, msg
         except Exception:
             return str(task_dir), ci_name, False, traceback.format_exc()
 
@@ -393,6 +419,9 @@ def main() -> None:
 
     if not task_yaml.exists():
         raise FileNotFoundError(f"Task YAML file {task_yaml} does not exist")
+
+    ensure_vsim_available()
+
     # Step 0: Parse task definitions from YAML
     tasks = step0_parse_tasks(task_yaml)
 
