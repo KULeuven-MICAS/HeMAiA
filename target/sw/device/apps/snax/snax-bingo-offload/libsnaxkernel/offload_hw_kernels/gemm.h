@@ -233,7 +233,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
         D32tlstride,         // D32tlstride[] base
         set_addr_remap_index_D32, // set_addr_remap_index_D32
         (uint32_t *)shape->channel_en_D32, // channel_en_D32 []
-        0, 0, 0, 0, 0, 0, 0, 0, 0);
+        array_shape_idx, 0, 0, 0, 0, 0, 0, 0, 0);
     set_versacore_csr(
         // accPrevC means takes new C
         accumPrevC == 0,

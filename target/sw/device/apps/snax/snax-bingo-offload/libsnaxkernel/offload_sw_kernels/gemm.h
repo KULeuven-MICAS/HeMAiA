@@ -450,8 +450,8 @@ SNAX_LIB_DEFINE void __snax_kernel_versacore_load_compute_store(void *arg)
             (uint32_t *)(get_cls_shared_ptrs()[5][19]),  // D32tlstride[] base
             get_cls_shared_ptrs()[5][20],                // set_addr_remap_index_D32
             (uint32_t *)(&get_cls_shared_ptrs()[5][21]), // channel_en_D32 []
-
-            0, 0, 0, 0, 0, 0, 0, 0, 0);
+            array_shape_idx, // array shape index
+            0, 0, 0, 0, 0, 0, 0, 0);
 
         set_versacore_csr(
             // accPrevC means takes new C
