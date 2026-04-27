@@ -5,12 +5,12 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 
 # Workloads to build separate ELFs for
-APPS = dummy
-APPS+= xdma_1d_copy 
-APPS+= gemm_merge_load_and_compute 
-APPS+= gemm_seperate_load_and_compute 
-APPS+= gemm_tiled 
-APPS+= gemm_stacked
+APPS = dummy_1cluster
+APPS+= xdma_1d_copy_1cluster
+APPS+= gemm_merge_load_and_compute_1cluster
+APPS+= gemm_seperate_load_and_compute_1cluster
+APPS+= gemm_tiled_1cluster
+APPS+= gemm_stacked_1cluster
 
 SUBDIRS = $(addprefix workloads/,$(APPS))
 

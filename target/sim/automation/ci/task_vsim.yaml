@@ -1,3 +1,8 @@
+# Notice the apps here are for the HEMAIA TO CFG only
+# With 4chpilets and 1cluster per chiplet
+# It can run both the single_chip and multi_chip workloads
+# In the single_chip workloads, the other 3 chiplets will exit after the init since it has no work to do
+# The multi_chip workloads will run on all 4 chiplets
 runs:
   - app_0: 
     - HOST_APP_TYPE: offload_legacy
@@ -19,40 +24,40 @@ runs:
     - CHIP_TYPE: single_chip
     - WORKLOAD: None
     - DEV_APP: snax-xdma-hazard
-  - app_4: 
+  - app_4:
     - HOST_APP_TYPE: offload_bingo_sw
     - CHIP_TYPE: single_chip
-    - WORKLOAD: dummy
+    - WORKLOAD: dummy_1cluster
     - DEV_APP: snax-bingo-offload
-  - app_5: 
+  - app_5:
     - HOST_APP_TYPE: offload_bingo_sw
     - CHIP_TYPE: single_chip
-    - WORKLOAD: gemm_tiled
+    - WORKLOAD: gemm_tiled_1cluster
     - DEV_APP: snax-bingo-offload
-  - app_6: 
+  - app_6:
     - HOST_APP_TYPE: offload_bingo_sw
     - CHIP_TYPE: single_chip
-    - WORKLOAD: gemm_stacked
+    - WORKLOAD: gemm_stacked_1cluster
     - DEV_APP: snax-bingo-offload
-  - app_7: 
+  - app_7:
     - HOST_APP_TYPE: offload_bingo_sw
     - CHIP_TYPE: single_chip
-    - WORKLOAD: gemm_merge_load_and_compute
+    - WORKLOAD: gemm_merge_load_and_compute_1cluster
     - DEV_APP: snax-bingo-offload
-  - app_8: 
+  - app_8:
     - HOST_APP_TYPE: offload_bingo_sw
     - CHIP_TYPE: single_chip
-    - WORKLOAD: gemm_seperate_load_and_compute
+    - WORKLOAD: gemm_seperate_load_and_compute_1cluster
     - DEV_APP: snax-bingo-offload
-  - app_9: 
+  - app_9:
     - HOST_APP_TYPE: offload_bingo_sw
     - CHIP_TYPE: multi_chip
-    - WORKLOAD: gemm_broadcast
+    - WORKLOAD: gemm_broadcast_4chiplet_1cluster
     - DEV_APP: snax-bingo-offload
-  - app_10: 
+  - app_10:
     - HOST_APP_TYPE: offload_bingo_sw
     - CHIP_TYPE: multi_chip
-    - WORKLOAD: xdma_mempool
+    - WORKLOAD: xdma_mempool_4chiplet_1cluster
     - DEV_APP: snax-bingo-offload
   - app_11: 
     - HOST_APP_TYPE: offload_bingo_hw
@@ -71,8 +76,8 @@ runs:
     - DEV_APP: snax-bingo-offload
   - app_14: 
     - HOST_APP_TYPE: offload_bingo_hw
-    - CHIP_TYPE: single_chip
-    - WORKLOAD: gemm_stacked_1cluster
+    - CHIP_TYPE: multi_chip
+    - WORKLOAD: gemm_stacked_4chiplet_1cluster
     - DEV_APP: snax-bingo-offload
   - app_15:
     - HOST_APP_TYPE: offload_bingo_hw
@@ -80,11 +85,16 @@ runs:
     - WORKLOAD: gemm_broadcast_4chiplet_1cluster
     - DEV_APP: snax-bingo-offload
   - app_16:
+    - HOST_APP_TYPE: offload_bingo_hw
+    - CHIP_TYPE: multi_chip
+    - WORKLOAD: gemm_seperate_load_and_compute_parallel_4chiplet_1cluster
+    - DEV_APP: snax-bingo-offload  
+  - app_17:
     - HOST_APP_TYPE: host_only
     - CHIP_TYPE: multi_chip
     - WORKLOAD: system_xdma_copy
     - DEV_APP: None
-  - app_17:
+  - app_18:
     - HOST_APP_TYPE: host_only
     - CHIP_TYPE: multi_chip
     - WORKLOAD: multi_d2d_streams

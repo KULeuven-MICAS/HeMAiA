@@ -3,12 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Xiaoling Yi <xiaoling.yi@kuleuven.be>
-# Fanchen Kong <fanchen.kong@kuleuven.be>
+
 # Usage of absolute paths is required to externally include this Makefile
+
 MK_DIR   := $(realpath $(dir $(realpath $(lastword $(MAKEFILE_LIST)))))
 HOST_APP_TYPE = offload_bingo_sw
-CHIP_TYPE     = single_chip
-WORKLOAD      = gemm_stacked
+CHIP_TYPE     = multi_chip
+WORKLOAD      = gemm_broadcast_4chiplet_1cluster
 DEV_APP       = snax-bingo-offload
 
 SRCS = ../../src/offload_bingo_sw.c
@@ -16,6 +17,8 @@ SRCS = ../../src/offload_bingo_sw.c
 BINGO_HOST ?= 1 # True to include the bingo runtime
 INCL_DEVICE_BINARY ?= 1 # True to include the device binary
 
+
+# Data
 DATA_CFG ?= $(MK_DIR)/params.hjson
 
 DATA_H = $(MK_DIR)/gemm_data.h

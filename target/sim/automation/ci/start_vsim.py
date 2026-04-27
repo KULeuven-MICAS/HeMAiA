@@ -161,7 +161,7 @@ def step0_parse_tasks(task_yaml: Path) -> List[Dict[str, str]]:
           - ci_app_name:
             - HOST_APP_TYPE: offload_bingo_sw
             - CHIP_TYPE: single_chip
-            - WORKLOAD: gemm_tiled
+            - WORKLOAD: gemm_tiled_1cluster
             - DEV_APP: snax-bingo-offload
     """
     if yaml is not None:

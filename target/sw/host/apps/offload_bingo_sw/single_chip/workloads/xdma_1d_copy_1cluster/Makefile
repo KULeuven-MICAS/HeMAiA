@@ -7,7 +7,7 @@ MK_DIR   := $(abspath $(dir $(realpath $(lastword $(MAKEFILE_LIST)))))
 
 HOST_APP_TYPE = offload_bingo_sw
 CHIP_TYPE     = single_chip
-WORKLOAD      = xdma_1d_copy
+WORKLOAD      = xdma_1d_copy_1cluster
 DEV_APP       = snax-bingo-offload
 
 SRCS = ../../src/offload_bingo_sw.c

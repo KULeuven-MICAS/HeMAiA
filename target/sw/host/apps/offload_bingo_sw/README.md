@@ -18,5 +18,5 @@ The Bingo SW framework introduces a structured way to handle Data-Flow Graphs (D
 
 ## Build Command
 ```bash
-make single-sw HOST_APP_TYPE=offload_bingo_sw CHIP_TYPE=single_chip WORKLOAD=gemm_tiled DEV_APP=snax-bingo-offload
+make single-sw HOST_APP_TYPE=offload_bingo_sw CHIP_TYPE=single_chip WORKLOAD=gemm_tiled_1cluster DEV_APP=snax-bingo-offload
 ```

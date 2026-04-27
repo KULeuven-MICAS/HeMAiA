@@ -19,10 +19,10 @@ runs:
     - CHIP_TYPE: single_chip
     - WORKLOAD: None
     - DEV_APP: snax-xdma-hazard
-  - app_4: 
+  - app_4:
     - HOST_APP_TYPE: offload_bingo_sw
     - CHIP_TYPE: single_chip
-    - WORKLOAD: dummy
+    - WORKLOAD: dummy_1cluster
     - DEV_APP: snax-bingo-offload
   - app_5:
     - HOST_APP_TYPE: offload_bingo_hw

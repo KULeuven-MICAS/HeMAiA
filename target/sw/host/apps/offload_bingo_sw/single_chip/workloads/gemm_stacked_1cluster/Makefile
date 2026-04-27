@@ -8,11 +8,11 @@
 MK_DIR   := $(realpath $(dir $(realpath $(lastword $(MAKEFILE_LIST)))))
 HOST_APP_TYPE = offload_bingo_sw
 CHIP_TYPE     = single_chip
-WORKLOAD      = gemm_seperate_load_and_compute
+WORKLOAD      = gemm_stacked_1cluster
 DEV_APP       = snax-bingo-offload
 
 SRCS = ../../src/offload_bingo_sw.c
-	
+
 BINGO_HOST ?= 1 # True to include the bingo runtime
 INCL_DEVICE_BINARY ?= 1 # True to include the device binary
 
@@ -25,6 +25,7 @@ SNITCH_ROOT = $(shell $(BENDER) path snitch_cluster)
 
 $(DATA_H): $(MK_DIR)/gemm_datagen.py $(DATA_CFG) 
 	$< -c $(DATA_CFG) --hwcfg $(SNITCH_ROOT)/target/snitch_cluster/cfg/snax_versacore_to_cluster.hjson > $@
+
 ###############
 # Build settings
 ############### 
