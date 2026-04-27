@@ -22,24 +22,6 @@ int main() {
     local_c = (int32_t *)(snrt_cluster_base_addrl() + delta_local_c);
     local_d = (int32_t *)(snrt_cluster_base_addrl() + delta_local_d);
 
-    // Transfer data from L3 to L1
-    // Using DMA only
-    if (snrt_cluster_idx() == 0 && snrt_is_dm_core()) {
-        snrt_dma_start_1d(local_a, A, a_data_length);
-        snrt_dma_start_1d(local_b, B, b_data_length);
-        snrt_dma_wait_all();
-    }
-
-    // Wait for DMA to finish
-    snrt_cluster_hw_barrier();
-
-    if (snrt_cluster_idx() == 0 && snrt_is_dm_core()) {
-        snrt_dma_start_1d(local_c, C, c_data_length);
-        snrt_dma_wait_all();
-    }
-
-    snrt_cluster_hw_barrier();
-
     // Set the CSR for the Streamer
     int32_t Aslstride[] = {Aslstride0};
     int32_t Atlbound[] = {Atlbound0, Atlbound1, Atlbound2,
@@ -59,74 +41,109 @@ int main() {
     int32_t D32tlstride[] = {D32tlstride0, D32tlstride1, D32tlstride2,
                              D32tlstride3};
 
-    // Call compute core
-    if (snrt_cluster_idx() == 0 && snrt_global_core_idx() == 0) {
-        // Set Streamer configuration CSR
-        set_versacore_streamer_csr(
-            delta_local_a, Aslstride, Atlbound, Atlstride,
-            set_addr_remap_index_A, transposed_A, channel_en_A,
+    // Run one cluster at a time: cluster 0 first, then cluster 1, etc.
+    for (uint32_t active_cluster = 0; active_cluster < snrt_cluster_num();
+         active_cluster++) {
+        if (snrt_cluster_idx() == active_cluster) {
+            // Transfer data from L3 to L1 using the local DM core.
+            if (snrt_is_dm_core()) {
+                snrt_dma_start_1d(local_a, A, a_data_length);
+                snrt_dma_start_1d(local_b, B, b_data_length);
+                snrt_dma_wait_all();
+            }
 
-            delta_local_b, Bslstride, Btlbound, Btlstride,
-            set_addr_remap_index_B, transposed_B, channel_en_B,
+            // Wait for DMA to finish.
+            snrt_cluster_hw_barrier();
 
-            delta_local_c, Cslstride, Ctlbound, Ctlstride,
-            set_addr_remap_index_C, channel_en_C,
+            if (snrt_is_dm_core()) {
+                snrt_dma_start_1d(local_c, C, c_data_length);
+                snrt_dma_wait_all();
+            }
 
-            delta_local_d, D32slstride, D32tlbound, D32tlstride,
-            set_addr_remap_index_D32, channel_en_D, array_shape,
+            snrt_cluster_hw_barrier();
 
-            quantization_enable, shift_i, multiplier_i, input_zp_i, output_zp_i,
-            int32tofp16_enable, int4_a_enable, int4_b_enable);
+            // Launch compute on cluster-local core 0 only.
+            if (snrt_cluster_core_idx() == 0) {
+                // Set Streamer configuration CSR
+                set_versacore_streamer_csr(
+                    delta_local_a, Aslstride, Atlbound, Atlstride,
+                    set_addr_remap_index_A, transposed_A, channel_en_A,
 
-        // Set GEMMX configuration CSR
-        uint32_t subtraction_setting =
-            gen_subtraction_config(subtraction_a, subtraction_b);
+                    delta_local_b, Bslstride, Btlbound, Btlstride,
+                    set_addr_remap_index_B, transposed_B, channel_en_B,
 
-        if (stationary == 0) {
-            // Set CSR for output-stationary
-            set_versacore_csr(1, K, N * M, subtraction_setting, array_shape,
-                              data_type);
-        } else {
-            // Set CSR for weight-stationary or input-stationary
-            set_versacore_csr(1, 1, N * K * M, subtraction_setting, array_shape,
-                              data_type);
+                    delta_local_c, Cslstride, Ctlbound, Ctlstride,
+                    set_addr_remap_index_C, channel_en_C,
+
+                    delta_local_d, D32slstride, D32tlbound, D32tlstride,
+                    set_addr_remap_index_D32, channel_en_D, array_shape,
+
+                    quantization_enable, shift_i, multiplier_i, input_zp_i,
+                    output_zp_i, int32tofp16_enable, int4_a_enable,
+                    int4_b_enable);
+
+                // Set GEMMX configuration CSR
+                uint32_t subtraction_setting =
+                    gen_subtraction_config(subtraction_a, subtraction_b);
+
+                if (stationary == 0) {
+                    // Set CSR for output-stationary
+                    set_versacore_csr(1, K, N * M, subtraction_setting,
+                                      array_shape, data_type);
+                } else {
+                    // Set CSR for weight-stationary or input-stationary
+                    set_versacore_csr(1, 1, N * K * M, subtraction_setting,
+                                      array_shape, data_type);
+                }
+
+                // Set CSR to start Streamer
+                start_streamer();
+
+                // Set CSR to start GEMM
+                start_versacore();
+
+                // Poll until Streamer and GEMM accelerator finish
+                wait_versacore_and_streamer();
+
+                // Result check
+                if (quantization_enable == 0 && int32tofp16_enable == 0)
+                    err += check_versacore_result_D32(
+                        (int32_t *)local_d, (int32_t *)D, d_data_length, false);
+                else if (quantization_enable == 1 &&
+                         int32tofp16_enable == 0) {
+                    err += check_versacore_result_D32(
+                        (int8_t *)local_d, (int8_t *)D_quantized,
+                        d_data_length, false);
+                } else if (int32tofp16_enable == 1) {
+                    err += check_versacore_result_D32(
+                        (int8_t *)local_d, (int8_t *)D_int32tofp16,
+                        d_data_length, false);
+                }
+
+                printf(
+                    "Cluster %d Array shape: %d, meshRow %d, tileSize %d, "
+                    "meshCol %d, stationary: %d, SNAX GEMM Matmul: %s, "
+                    "Error: %d.\n",
+                    snrt_cluster_idx(), array_shape, meshRow, tileSize,
+                    meshCol, stationary, err ? "FAIL" : "PASS", err);
+
+                int32_t gemmx_cycles = read_versacore_perf_counter();
+                int32_t gemmx_streamer_cycles =
+                    read_versacore_streamer_perf_counter();
+                printf("Cluster %d Workload size: M = %d, N = %d, K = %d\n",
+                       snrt_cluster_idx(), M, N, K);
+                printf("Cluster %d SNAX GEMM Ideal cycles: %d\n",
+                       snrt_cluster_idx(), M * K * N);
+                printf("Cluster %d SNAX GEMM cycles: %d\n",
+                       snrt_cluster_idx(), gemmx_cycles);
+                printf("Cluster %d SNAX GEMM Streamer cycles: %d\n",
+                       snrt_cluster_idx(), gemmx_streamer_cycles);
+            }
         }
 
-        // Set CSR to start Streamer
-        start_streamer();
-
-        // Set CSR to start GEMM
-        start_versacore();
-
-        // Poll until Streamer and GEMM accelerator finish
-        wait_versacore_and_streamer();
-
-        // Result check
-        if (quantization_enable == 0 && int32tofp16_enable == 0)
-            err += check_versacore_result_D32((int32_t *)local_d, (int32_t *)D,
-                                              d_data_length, false);
-        else if (quantization_enable == 1 && int32tofp16_enable == 0) {
-            err += check_versacore_result_D32(
-                (int8_t *)local_d, (int8_t *)D_quantized, d_data_length, false);
-        } else if (int32tofp16_enable == 1) {
-            err += check_versacore_result_D32((int8_t *)local_d,
-                                              (int8_t *)D_int32tofp16,
-                                              d_data_length, false);
-        }
-
-        printf(
-            "Array shape: %d, meshRow %d, tileSize %d, meshCol %d, stationary: "
-            "%d, SNAX GEMM Matmul: %s, Error: %d.\n",
-            array_shape, meshRow, tileSize, meshCol, stationary,
-            err ? "FAIL" : "PASS", err);
-
-        int32_t gemmx_cycles = read_versacore_perf_counter();
-        int32_t gemmx_streamer_cycles = read_versacore_streamer_perf_counter();
-        printf("Workload size: M = %d, N = %d, K = %d\n", M, N, K);
-        printf("SNAX GEMM Ideal cycles: %d\n", M * K * N);
-        printf("SNAX GEMM cycles: %d\n", gemmx_cycles);
-        printf("SNAX GEMM Streamer cycles: %d\n", gemmx_streamer_cycles);
-    };
+        // Do not let the next cluster start until the current one is done.
+        snrt_global_barrier();
+    }
 
     return err;
 }
