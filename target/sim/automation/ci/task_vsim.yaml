@@ -87,14 +87,9 @@ runs:
   - app_16:
     - HOST_APP_TYPE: offload_bingo_hw
     - CHIP_TYPE: multi_chip
-    - WORKLOAD: gemm_stacked_4chiplet_1cluster
-    - DEV_APP: snax-bingo-offload
-  - app_17:
-    - HOST_APP_TYPE: offload_bingo_hw
-    - CHIP_TYPE: multi_chip
     - WORKLOAD: gemm_broadcast_4chiplet_1cluster
     - DEV_APP: snax-bingo-offload
-  - app_18:
+  - app_17:
     - HOST_APP_TYPE: offload_bingo_hw
     - CHIP_TYPE: multi_chip
     - WORKLOAD: gemm_seperate_load_and_compute_parallel_4chiplet_1cluster
