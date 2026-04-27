@@ -6,9 +6,9 @@
 script_dir="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 
 # Allow overriding these from the environment or via CLI flags below.
-# Examples: SIM_WITH_PLL=0 ./1_init_outside_docker.sh
 # ./1_init_outside_docker.sh --pll=0 --d2d=0
-# Defaults: MACRO=1, D2D=1, PLL=0
+# We hardcoded the defaults to 1
+# Defaults: MACRO=1, D2D=1, PLL=1
 SIM_WITH_MACRO="${SIM_WITH_MACRO:-1}"
 SIM_WITH_D2D="${SIM_WITH_D2D:-1}"
 SIM_WITH_PLL="${SIM_WITH_PLL:-1}"
