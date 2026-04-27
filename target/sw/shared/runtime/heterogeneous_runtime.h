@@ -121,6 +121,36 @@ static inline void clear_host_sw_interrupt_unsafe(uint8_t chip_id) {
 #endif
 }
 
+// Cross-chiplet byte read from a Snitch dev core (RV32). The chiplet prefix
+// goes into Mseg (CSR 0xbc0); the inner `lbu` carries the low 32 bits of the
+// remote address; Mseg is restored to the current chiplet immediately after.
+// On RV64 (host) Mseg is unused — the address can be dereferenced directly.
+#if __riscv_xlen == 32
+static inline uint8_t bingo_remote_readb(uint8_t chip_id, uint32_t addr_lo) {
+    uint32_t target_addrh  = get_chip_baseaddress_value(chip_id) >> 32;
+    uint32_t current_addrh = get_current_chip_baseaddress_value() >> 32;
+
+    register uint32_t reg_target_addrh  asm("t0") = target_addrh;
+    register uint32_t reg_value         asm("t1");
+    register uint32_t reg_addr          asm("t2") = addr_lo;
+    register uint32_t reg_current_addrh asm("t3") = current_addrh;
+
+    asm volatile(
+        "csrw 0xbc0, t0;"
+        "lbu  t1, 0(t2);"
+        "csrw 0xbc0, t3;"
+        : "=r"(reg_value)
+        : "r"(reg_target_addrh), "r"(reg_addr), "r"(reg_current_addrh)
+        : "memory");
+    return (uint8_t)reg_value;
+}
+#elif __riscv_xlen == 64
+static inline uint8_t bingo_remote_readb(uint8_t chip_id, uint32_t addr_lo) {
+    volatile uint8_t* p = (uint8_t*)(((uintptr_t)addr_lo) | (uintptr_t)get_chip_baseaddress(chip_id));
+    return *p;
+}
+#endif
+
 static inline void wait_host_sw_interrupt_clear(uint8_t chip_id) {
 #if __riscv_xlen == 64
     volatile uint32_t* msip_ptr =
