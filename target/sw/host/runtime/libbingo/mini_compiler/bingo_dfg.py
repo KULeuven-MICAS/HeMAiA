@@ -227,11 +227,18 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                 if succ.assigned_chiplet_id == cur_node.assigned_chiplet_id
             ]
             if remote_succ_list:
-                # We have a special situation that this node is a broadcast node to set all chiplets
-                if len(set(remote_succ.assigned_chiplet_id for remote_succ in remote_succ_list)) == (self.num_chiplets -1):
-                    # All the remote successors must have the same core id
-                    if len(set(remote_succ.assigned_core_id for remote_succ in remote_succ_list)) == 1:
-                        print(f"Node {cur_node.node_name} is a broadcast node to set all chiplets.")
+                # Group remote successors by assigned_core_id so that each core-group can be
+                # handled independently: a per-core group that covers all other chiplets becomes
+                # a single broadcast dummy_set; otherwise individual dummy_sets are emitted.
+                remote_succs_by_core: dict[int, list[BingoNode]] = {}
+                for remote_succ in remote_succ_list:
+                    remote_succs_by_core.setdefault(remote_succ.assigned_core_id, []).append(remote_succ)
+
+                for core_id, group in remote_succs_by_core.items():
+                    chiplets_in_group = set(s.assigned_chiplet_id for s in group)
+                    if len(chiplets_in_group) == (self.num_chiplets - 1):
+                        # Broadcast: one dummy_set blocks cur_node's core and sets the bit on all chiplets
+                        print(f"Node {cur_node.node_name} is a broadcast node to set all chiplets for core {core_id}.")
                         dummy_set_node = BingoNode(
                             assigned_chiplet_id=cur_node.assigned_chiplet_id,
                             assigned_cluster_id=cur_node.assigned_cluster_id,      # must be the same type of the cur_node to block the execution
@@ -240,34 +247,34 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                         )
                         dummy_set_node.node_type = "dummy"
                         dummy_set_node.dep_set_enable = True
-                        dummy_set_node.dep_set_list = [remote_succ_list[0].assigned_core_id]
-                        dummy_set_node.dep_set_cluster_id = remote_succ_list[0].assigned_cluster_id
-                        dummy_set_node.dep_set_chiplet_id = remote_succ_list[0].assigned_chiplet_id # should be fine since it is a broadcast type
+                        dummy_set_node.dep_set_list = [group[0].assigned_core_id]
+                        dummy_set_node.dep_set_cluster_id = group[0].assigned_cluster_id
+                        dummy_set_node.dep_set_chiplet_id = group[0].assigned_chiplet_id # should be fine since it is a broadcast type
                         dummy_set_node.dep_check_enable = False
                         dummy_set_node.dep_check_list = []
                         dummy_set_node.remote_dep_set_all = True
-                        # Add the dummy set node after cur_node for remote successors
-                        self.bingo_insert_node_after(cur_node, dummy_set_node, remote_succ_list)
-                else:
-                    # Now the normal case
-                    for remote_succ in remote_succ_list:
-                        print(f"Adding dummy set node for {cur_node.node_name} to remote successor {remote_succ.node_name}")
-                        dummy_set_node = BingoNode(
-                            assigned_chiplet_id=cur_node.assigned_chiplet_id,
-                            assigned_cluster_id=cur_node.assigned_cluster_id,      # must be the same type of the cur_node to block the execution
-                            assigned_core_id=cur_node.assigned_core_id,            # must be the same type of the cur_node to block the execution
-                            kernel_name= None
-                        )
-                        dummy_set_node.node_type = "dummy"
-                        dummy_set_node.dep_set_enable = True
-                        dummy_set_node.dep_set_list = [remote_succ.assigned_core_id]
-                        dummy_set_node.dep_set_cluster_id = remote_succ.assigned_cluster_id
-                        dummy_set_node.dep_set_chiplet_id = remote_succ.assigned_chiplet_id
-                        dummy_set_node.dep_check_enable = False
-                        dummy_set_node.dep_check_list = []
-                        dummy_set_node.remote_dep_set_all = False
-                        # Add the dummy set node to the graph
-                        self.bingo_insert_node_between(cur_node, remote_succ, dummy_set_node)
+                        # Add the dummy set node after cur_node for remote successors in this core group
+                        self.bingo_insert_node_after(cur_node, dummy_set_node, group)
+                    else:
+                        # Normal case: one dummy_set per remote successor
+                        for remote_succ in group:
+                            print(f"Adding dummy set node for {cur_node.node_name} to remote successor {remote_succ.node_name}")
+                            dummy_set_node = BingoNode(
+                                assigned_chiplet_id=cur_node.assigned_chiplet_id,
+                                assigned_cluster_id=cur_node.assigned_cluster_id,      # must be the same type of the cur_node to block the execution
+                                assigned_core_id=cur_node.assigned_core_id,            # must be the same type of the cur_node to block the execution
+                                kernel_name= None
+                            )
+                            dummy_set_node.node_type = "dummy"
+                            dummy_set_node.dep_set_enable = True
+                            dummy_set_node.dep_set_list = [remote_succ.assigned_core_id]
+                            dummy_set_node.dep_set_cluster_id = remote_succ.assigned_cluster_id
+                            dummy_set_node.dep_set_chiplet_id = remote_succ.assigned_chiplet_id
+                            dummy_set_node.dep_check_enable = False
+                            dummy_set_node.dep_check_list = []
+                            dummy_set_node.remote_dep_set_all = False
+                            # Add the dummy set node to the graph
+                            self.bingo_insert_node_between(cur_node, remote_succ, dummy_set_node)
             if len(local_succ_list) > 1:
                 # Now the local multiple successor case
                 # We need local_successors-1 dummy set nodes
