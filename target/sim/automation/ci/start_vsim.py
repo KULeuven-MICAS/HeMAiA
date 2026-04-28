@@ -40,6 +40,14 @@ except Exception:
 
 
 # ---------------------------------------------------------------------------
+# Configuration constants
+# ---------------------------------------------------------------------------
+
+CI_CFG = "target/rtl/cfg/hemaia_multichip_ci.hjson"
+SIM_CFG = "target/sim/cfg/sim_rtl.hjson"
+SIM_TIMEOUT_SECONDS = 2 * 60 * 60  # 2 hours per simulation thread
+
+# ---------------------------------------------------------------------------
 # Utility helpers
 # ---------------------------------------------------------------------------
 
@@ -232,14 +240,12 @@ def step2_init_private_hemaia_repos(repo_root: Path) -> None:
 
 def step3_compile_hemaia_sw_rtl(repo_root: Path, docker_image: str) -> None:
     """Clean, then build SW, bootrom, and RTL inside the container."""
-    ci_cfg = "target/rtl/cfg/hemaia_multichip_ci.hjson"
-
     # make sw
-    run_in_container(repo_root, docker_image, repo_root, ["make", "sw", f"CFG_OVERRIDE={ci_cfg}"])
+    run_in_container(repo_root, docker_image, repo_root, ["make", "sw", f"CFG_OVERRIDE={CI_CFG}"])
     # make bootrom
-    run_in_container(repo_root, docker_image, repo_root, ["make", "bootrom", f"CFG_OVERRIDE={ci_cfg}"])
+    run_in_container(repo_root, docker_image, repo_root, ["make", "bootrom", f"CFG_OVERRIDE={CI_CFG}"])
     # make rtl
-    run_in_container(repo_root, docker_image, repo_root, ["make", "rtl", f"CFG_OVERRIDE={ci_cfg}"])
+    run_in_container(repo_root, docker_image, repo_root, ["make", "rtl", f"CFG_OVERRIDE={CI_CFG}"])
 
 
 # ---------------------------------------------------------------------------
@@ -298,10 +304,9 @@ def step5_prepare_testharness(
     repo_root: Path,
     docker_image: str,
     tasks_info: List[Tuple[Path, str]],
-    sim_cfg: str = "target/sim/cfg/sim_rtl.hjson",
 ) -> None:
     """Generate filelists in-container, compile on host, distribute artefacts."""
-    sim_cfg_abs = str(repo_root / sim_cfg)
+    sim_cfg_abs = str(repo_root / SIM_CFG)
 
     # Generate Questasim filelists inside the container
     run_in_container(
@@ -330,9 +335,6 @@ def step5_prepare_testharness(
 # ---------------------------------------------------------------------------
 # Step 6 -- Run simulations concurrently
 # ---------------------------------------------------------------------------
-
-SIM_TIMEOUT_SECONDS = 2 * 60 * 60  # 2 hours per simulation thread
-
 
 def step6_run_simulations(tasks_info: List[Tuple[Path, str]]) -> Dict[str, bool]:
     """Execute simulations in parallel and return a pass/fail map."""
@@ -414,8 +416,6 @@ def main() -> None:
     task_base_dir = script_path.parent
     docker_image = "ghcr.io/kuleuven-micas/hemaia:main"
     task_yaml = script_path.parent / "task_vsim.yaml"
-    sim_cfg =  "target/sim/cfg/sim_rtl.hjson"
-
 
     if not task_yaml.exists():
         raise FileNotFoundError(f"Task YAML file {task_yaml} does not exist")
@@ -438,7 +438,7 @@ def main() -> None:
     tasks_info = step4_build_apps_and_prepare_tasks(repo_root, docker_image, tasks, task_base_dir)
 
     # Step 5: Prepare and compile the Questasim testharness
-    step5_prepare_testharness(repo_root, docker_image, tasks_info, sim_cfg=sim_cfg)
+    step5_prepare_testharness(repo_root, docker_image, tasks_info)
 
     # Step 6: Run all simulations concurrently
     results = step6_run_simulations(tasks_info)
