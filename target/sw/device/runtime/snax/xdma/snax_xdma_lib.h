@@ -274,7 +274,7 @@ inline int32_t xdma_multicast_nd(
 inline int32_t xdma_multicast_1d_full_address(uint64_t src, uint64_t* dst,
                                               uint32_t dst_num, uint32_t size) {
     if (size % XDMA_WIDTH != 0) {
-        XDMA_DEBUG_PRINT("Size is not multiple of XDMA_WIDTH\n");
+        printf_safe("Size is not multiple of XDMA_WIDTH\n");
         return -1;
     }
     uint32_t temporal_stride[1] = {XDMA_WIDTH};
@@ -288,7 +288,7 @@ inline int32_t xdma_multicast_1d_full_address(uint64_t src, uint64_t* dst,
 inline int32_t xdma_multicast_1d(void* src, void** dst, uint32_t dst_num,
                                  uint32_t size) {
     if (size % XDMA_WIDTH != 0) {
-        XDMA_DEBUG_PRINT("Size is not multiple of XDMA_WIDTH\n");
+        printf_safe("Size is not multiple of XDMA_WIDTH\n");
         return -1;
     }
     uint32_t temporal_stride[1] = {XDMA_WIDTH};

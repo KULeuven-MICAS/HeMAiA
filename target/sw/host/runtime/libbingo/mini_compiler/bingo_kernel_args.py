@@ -2,6 +2,7 @@
 from abc import ABC, abstractmethod
 from typing import Union, Dict, Optional
 from bingo_mem_handle import BingoMemAlloc, BingoMemSymbol, BingoMemFixedAddr
+from bingo_helpers import _check_xdma_size_aligned
 
 class BingoKernelArgs(ABC):
     """
@@ -261,6 +262,7 @@ class SnaxBingoKernelGemmMinimalArgs(BingoKernelArgs):
 # BINGO XDMA 1D Copy
 class SnaxBingoKernelXdma1dCopyArgs(BingoKernelArgs):
     def __init__(self, src_addr: Union[BingoMemAlloc, int], dst_addr: Union[BingoMemAlloc, int], size: int):
+        _check_xdma_size_aligned(size, "SnaxBingoKernelXdma1dCopyArgs")
         self.src_addr = src_addr
         self.dst_addr = dst_addr
         self.size = size
