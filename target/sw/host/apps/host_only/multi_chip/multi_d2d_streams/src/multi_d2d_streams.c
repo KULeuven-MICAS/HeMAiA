@@ -66,11 +66,7 @@ int main()
     {
         sys_dma_blk_memcpy(
             current_chip_id, (uintptr_t)data_dest, (uintptr_t)data, data_size);
-
-        if (i % 4 == 0)
-        {
-            printf("%d\r\n", i);
-        }
+        printf("%d\r\n", i);
     }
 
     // Wait for all chips to finish the DMA
