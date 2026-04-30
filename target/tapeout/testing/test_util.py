@@ -34,6 +34,12 @@ VENDOR_MODULES = (
     "hemaia_clk_rst_controller",
 )
 
+# Helper that kills stuck bender/git fetch trees and clears NFS silly-rename
+# files inside .bender/ so that ``make clean-bender`` can succeed.
+UNSTICK_BENDER_SCRIPT = (
+    Path(__file__).resolve().parents[3] / "util" / "unstick_bender.py"
+)
+
 
 # ---------------------------------------------------------------------------
 # Generic command helpers
@@ -145,7 +151,38 @@ def step0_reset(repo_root: Path) -> None:
     if bender_lock.exists():
         bender_lock.unlink()
 
-    run_host_cmd(["make", "clean"], cwd=repo_root)
+    _make_clean_with_unstick(repo_root)
+
+
+def _run_unstick_bender(repo_root: Path, *, purge: bool) -> None:
+    """Best-effort: clear stuck bender/git handles inside .bender/.
+
+    Never raises -- if the helper is missing or fails, the caller will surface
+    the underlying ``make clean`` failure.
+    """
+    if not UNSTICK_BENDER_SCRIPT.exists():
+        return
+    cmd = [sys.executable, str(UNSTICK_BENDER_SCRIPT), "--yes",
+           "--repo-root", str(repo_root)]
+    if purge:
+        cmd.append("--purge")
+    try:
+        subprocess.run(cmd, cwd=repo_root, check=False)
+    except OSError as exc:
+        print(f"WARNING: unstick_bender.py could not run: {exc}",
+              file=sys.stderr)
+
+
+def _make_clean_with_unstick(repo_root: Path) -> None:
+    """Run ``make clean``; if it fails on a stuck .bender/, unstick and retry."""
+    _run_unstick_bender(repo_root, purge=False)
+    try:
+        run_host_cmd(["make", "clean"], cwd=repo_root)
+    except subprocess.CalledProcessError:
+        print("WARNING: 'make clean' failed; escalating unstick_bender "
+              "with --purge and retrying.", file=sys.stderr)
+        _run_unstick_bender(repo_root, purge=True)
+        run_host_cmd(["make", "clean"], cwd=repo_root)
 
 
 # ---------------------------------------------------------------------------
