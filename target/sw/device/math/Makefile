@@ -5,4 +5,13 @@
 # Luca Colagrande <colluca@iis.ee.ethz.ch>
 
 include ../toolchain.mk
+IS_CLEAN_GOAL := $(filter clean clean-%,$(MAKECMDGOALS))
+
+ifeq ($(IS_CLEAN_GOAL),)
 include $(SNITCH_ROOT)/sw/math/Makefile
+else
+
+.PHONY: clean
+clean:
+	rm -rf build
+endif

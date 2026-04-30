@@ -13,6 +13,7 @@
 BENDER      ?= bender
 MKFILE_PATH := $(abspath $(lastword $(MAKEFILE_LIST)))
 MKFILE_DIR  := $(dir $(MKFILE_PATH))
+IS_CLEAN_GOAL := $(filter clean clean-%,$(MAKECMDGOALS))
 
 
 #########################
@@ -27,13 +28,11 @@ TARGET_CLINT_DIR      = $(TARGET_SRC_DIR)/clint
 TARGET_PLIC_DIR       = $(TARGET_SRC_DIR)/rv_plic
 TARGET_SOCCTRL_DIR	  = $(TARGET_SRC_DIR)/soc_ctrl
 TARGET_QUADPERIPH_DIR = $(TARGET_SRC_DIR)/quad_periph
-SNITCH_ROOT           = $(shell $(BENDER) path snitch_cluster)
 HEMAIA_UTIL           = $(ROOT)/util/hemaia/util.py
 SOURCE_OCCAMY_DIR     = $(ROOT)/hw/occamy
 SOURCE_QUADPERIPH_DIR   = $(ROOT)/hw/occamy/quad_periph
 SOURCE_SOCCTRL_DIR    = $(ROOT)/hw/occamy/soc_ctrl
 SOURCE_PLIC_DIR       = $(ROOT)/hw/vendor/pulp_platform_opentitan_peripherals/src/rv_plic
-SOURCE_CLINT_DIR      = $(shell $(BENDER) path clint)
 TARGET_RTL			  = $(ROOT)/target/rtl
 HEMAIA_MEM_SYS_DIR    = $(ROOT)/hw/hemaia/hemaia_mem_system
 ############
@@ -42,7 +41,15 @@ HEMAIA_MEM_SYS_DIR    = $(ROOT)/hw/hemaia/hemaia_mem_system
 
 
 OCCAMYGEN  	 = $(ROOT)/util/occamygen/occamygen.py
-REGGEN     	 = $(shell $(BENDER) path register_interface)/vendor/lowrisc_opentitan/util/regtool.py
+ifeq ($(IS_CLEAN_GOAL),)
+SNITCH_ROOT           = $(shell $(BENDER) path snitch_cluster)
+SOURCE_CLINT_DIR      = $(shell $(BENDER) path clint)
+REGGEN     	         = $(shell $(BENDER) path register_interface)/vendor/lowrisc_opentitan/util/regtool.py
+else
+SNITCH_ROOT           =
+SOURCE_CLINT_DIR      =
+REGGEN     	         =
+endif
 
 
 #######################

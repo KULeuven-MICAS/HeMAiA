@@ -13,6 +13,7 @@
 # this Makefile from multiple different locations
 MK_DIR := $(dir $(realpath $(lastword $(MAKEFILE_LIST))))
 include $(MK_DIR)/../toolchain.mk
+IS_CLEAN_GOAL := $(filter clean clean-%,$(MAKECMDGOALS))
 
 ###############
 # Directories #
@@ -20,7 +21,11 @@ include $(MK_DIR)/../toolchain.mk
 
 # Fixed paths in repository tree
 ROOT         = $(abspath $(MK_DIR)/../../../../)
+ifeq ($(IS_CLEAN_GOAL),)
 SNITCH_ROOT  = $(shell bender path snitch_cluster)
+else
+SNITCH_ROOT  =
+endif
 APPSDIR      = $(abspath $(MK_DIR))
 SNRT_DIR     = $(SNITCH_ROOT)/sw/snRuntime
 SW_DIR       = $(ROOT)/target/sw
@@ -69,11 +74,23 @@ INCDIRS += $(SNRT_DIR)/../math/src/include
 INCDIRS += $(SNRT_DIR)/../math/src/internal
 INCDIRS += $(SNRT_DIR)/../math/include/bits
 INCDIRS += $(SNRT_DIR)/../math/include
-INCDIRS += $(SW_DIR)/shared/vendor/o1heap/o1heap64
+INCDIRS += $(SW_DIR)/shared/vendor/bingo_alloc/bingo_alloc
 INCDIRS += $(SW_DIR)/shared/vendor/xdma
 # snax libs
 INCDIRS += $(RUNTIME_DIR)/snax/xdma
+# Pull in every snax-generated SW-header dir (one per accelerator library,
+# keyed on snax_library_name in the cluster hjson). Using a wildcard avoids
+# hard-coding a single accelerator path, so the SW build transparently picks
+# up whichever libraries `snax-sw-gen` produced for the active $(CFG)
+# (versacore-to, gemmx, bingo, …). Listed before the local fallback so the
+# generated streamer_csr_addr_map.h always wins over any stale checked-in copy.
+INCDIRS += $(wildcard $(SNITCH_ROOT)/target/snitch_cluster/sw/snax/*/include)
 INCDIRS += $(RUNTIME_DIR)/snax/versacore
+
+# libbingo headers — host/device share <libbingo/device_kernel_args.h> so
+# the device-side BINGO_GET_SP / BINGO_SW_GUARD_CHECK macros can derive the
+# trailer offset via sizeof(args_t).
+INCDIRS += $(SW_DIR)/host/runtime/libbingo/include
 
 # Linking sources
 BASE_TEMPLATE_LD = $(abspath $(APPSDIR)/base.template.ld)

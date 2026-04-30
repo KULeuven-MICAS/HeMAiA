@@ -9,6 +9,8 @@
 // cluster 0 fetch data from the l3 -> tcdm0
 // cluster 1 fetch data from tcdm0 -> tcdm1
 // Then each cluster check data is correct or not
+// It can also run with only one cluster, which only fetch data from l3 -> tcdm and check the data
+// This is used in ci to test the basic functionality of the system, including dma, barrier, etc.
 #include "data.h"
 
 #include "snrt.h"
@@ -26,7 +28,7 @@ int main() {
         if (snrt_is_dm_core()) {
             tcdm0_start_addr = (uint64_t)snrt_cluster_base_addrl();
             tcdm0_start_addr += (uint64_t)snrt_cluster_base_addrh() << 32;
-            printf("The C0 TCDM ADDR is %p%p \r\n",
+            printf_safe("The C0 TCDM ADDR is %p%p \r\n",
                    (uint8_t*)(tcdm0_start_addr >> 32),
                    (uint8_t*)tcdm0_start_addr);
         }
@@ -37,7 +39,7 @@ int main() {
         if (snrt_is_dm_core()) {
             tcdm1_start_addr = (uint64_t)snrt_cluster_base_addrl();
             tcdm1_start_addr += (uint64_t)snrt_cluster_base_addrh() << 32;
-            printf("The C1 TCDM ADDR is %p%p \r\n",
+            printf_safe("The C1 TCDM ADDR is %p%p \r\n",
                    (uint8_t*)(tcdm1_start_addr >> 32),
                    (uint8_t*)tcdm1_start_addr);
         }
@@ -48,7 +50,7 @@ int main() {
         if (snrt_is_dm_core()) {
             test_data_start_addr = (uint64_t)test_data;
             test_data_start_addr += (uint64_t)snrt_cluster_base_addrh() << 32;
-            printf("[C0] Start to load data from %lx \r\n", test_data_start_addr+TCDM_OFFSET);
+            printf_safe("[C0] Start to load data from %lx \r\n", test_data_start_addr+TCDM_OFFSET);
             snrt_dma_start_1d_wideptr((tcdm0_start_addr+TCDM_OFFSET), test_data_start_addr,
                                       length_data);
             snrt_dma_wait_all();
@@ -60,7 +62,7 @@ int main() {
     // Thenc C1 fetches data from C0
     if (snrt_cluster_idx() == 1) {
         if (snrt_is_dm_core()) {
-            printf("[C1] Start to load data from %lx \r\n", tcdm0_start_addr+TCDM_OFFSET);
+            printf_safe("[C1] Start to load data from %lx \r\n", tcdm0_start_addr+TCDM_OFFSET);
             snrt_dma_start_1d_wideptr((tcdm1_start_addr+TCDM_OFFSET), (tcdm0_start_addr+TCDM_OFFSET),
                                       length_data);
             snrt_dma_wait_all();

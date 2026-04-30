@@ -10,7 +10,7 @@
 #include "occamy_memory_map.h"
 
 // Reset the HeMAIA domain
-inline void reset_all_clk_domain() {
+static inline void reset_all_clk_domain() {
     volatile uint32_t *hemaia_clk_rst_controller_reset_addr =
         (volatile uint32_t
              *)(((uintptr_t)get_current_chip_baseaddress() |
@@ -20,7 +20,7 @@ inline void reset_all_clk_domain() {
 }
 
 // Reset one specific clock domain
-inline void reset_clk_domain(uint8_t domain) {
+static inline void reset_clk_domain(uint8_t domain) {
     volatile uint32_t *hemaia_clk_rst_controller_reset_addr =
         (volatile uint32_t
              *)(((uintptr_t)get_current_chip_baseaddress() |
@@ -31,7 +31,7 @@ inline void reset_clk_domain(uint8_t domain) {
 }
 
 // Disable the clock of one specific clock domain
-inline void disable_clk_domain(uint8_t domain) {
+static inline void disable_clk_domain(uint8_t domain) {
     volatile uint32_t *hemaia_clk_rst_controller_clock_valid_reg =
         (volatile uint32_t
              *)(((uintptr_t)get_current_chip_baseaddress() |
@@ -51,7 +51,7 @@ inline void disable_clk_domain(uint8_t domain) {
         1 << domain;  // Set the valid bit
 }
 
-inline void enable_clk_domain(uint8_t domain, uint8_t division) {
+static inline void enable_clk_domain(uint8_t domain, uint8_t division) {
     volatile uint32_t *hemaia_clk_rst_controller_clock_valid_reg =
         (volatile uint32_t
              *)(((uintptr_t)get_current_chip_baseaddress() |

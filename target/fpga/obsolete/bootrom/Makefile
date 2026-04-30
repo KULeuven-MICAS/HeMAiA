@@ -8,7 +8,7 @@ MKFILE_PATH := $(abspath $(lastword $(MAKEFILE_LIST)))
 MKFILE_DIR  := $(dir $(MKFILE_PATH))
 ROOT        := ${MKFILE_DIR}../../..
 
-include $(ROOT)/util/Makefrag
+include $(ROOT)/target/fpga/Makefrag
 
 # The necessary file in hero repo (which should be at the same folder with occamy, and pre-compiled)
 # CVA6_SDK  ?= $(ROOT)/../cva6-sdk

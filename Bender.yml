@@ -7,7 +7,7 @@ package:
   authors:
     - Florian Zaruba <zarubaf@iis.ee.ethz.ch>
     - Fabian Schuiki <fschuiki@iis.ee.ethz.ch>
-    - Gianna Paulin <pauling@iis.ee.ethz.ch> # current maintainer
+    - Gianna Paulin <pauling@iis.ee.ethz.ch>
     - Paul Scheffler <paulsc@iis.ee.ethz.ch>
     - Thomas Benz <tbenz@iis.ee.ethz.ch>
     - Tim Fischer <fischeti@iis.ee.ethz.ch>
@@ -17,6 +17,9 @@ package:
     - Nils Wistoff <nwistoff@iis.ee.ethz.ch>
     - Luca Bertaccini <lbertaccini@iis.ee.ethz.ch>
     - Matheus Cavalcante <matheusd@iis.ee.ethz.ch>
+    - Yunhao Deng <yunhao.deng@kuleuven.be>   # HeMAiA current maintainer
+    - Fanchen Kong <fanchen.kong@kuleuven.be> # HeMAiA current maintainer
+    - Xiaoling Yi <xiaoling.yi@kuleuven.be>   # SNAX current maintainer
 
 dependencies:
   apb:                        { git:  https://github.com/pulp-platform/apb.git,                         version:   0.2.0 }
@@ -30,14 +33,14 @@ dependencies:
   ara:                        { git:  https://github.com/KULeuven-MICAS/ara.git,                        rev:     main    }
   opentitan_peripherals:      { path: hw/vendor/pulp_platform_opentitan_peripherals                                      }
   register_interface:         { git:  https://github.com/pulp-platform/register_interface.git,          version: 0.3.8   }
-  snitch_cluster:             { git:  https://github.com/KULeuven-MICAS/snax_cluster.git,               rev:     84426c435c03f3594ae6ad3e330a8dff7d196d7a    }
+  snitch_cluster:             { git:  https://github.com/KULeuven-MICAS/snax_cluster.git,               rev:     main    }
   tech_cells_generic:         { git:  https://github.com/KULeuven-MICAS/tech_cells_generic.git,         version: 0.2.16  }
   cluster_icache:             { git:  https://github.com/KULeuven-MICAS/cluster_icache.git,             rev:     main    }
   hemaia_axi_spi_slave:       { git:  https://github.com/KULeuven-MICAS/hemaia_axi_spi_slave.git,       rev:     main    }
   hemaia_d2d_link:            { git:  https://github.com/KULeuven-MICAS/hemaia_d2d_link.git,            rev:     main    }
-  hemaia_clk_rst_controller:  { git:  https://github.com/KULeuven-MICAS/hemaia_clk_rst_controller.git,  rev:     main     }
+  hemaia_clk_rst_controller:  { git:  https://github.com/KULeuven-MICAS/hemaia_clk_rst_controller.git,  rev:     main    }
   floo_noc:                   { git:  https://github.com/KULeuven-MICAS/FlooNoC.git,                    rev:     main    }
-  bingo_hw_manager:           { git:  https://github.com/KULeuven-MICAS/bingo_hw_manager.git,           rev:     main     }
+  bingo_hw_manager:           { git:  https://github.com/KULeuven-MICAS/bingo_hw_manager.git,           rev:     main    }
 
 workspace:
   package_links:

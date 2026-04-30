@@ -22,7 +22,7 @@ BENDER_TARGETS += -t eastonly
 default: all
 all: hemaia_system_vcu128
 
-include $(ROOT)/util/Makefrag
+include $(ROOT)/target/fpga/Makefrag
 
 ../hemaia_chip_east_io/hemaia_chip_east:
 	${MAKE} -C ../hemaia_chip_east_io hemaia_chip_east

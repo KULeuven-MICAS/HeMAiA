@@ -8,7 +8,12 @@ MKFILE_PATH := $(abspath $(lastword $(MAKEFILE_LIST)))
 MKFILE_DIR  := $(dir $(MKFILE_PATH))
 ROOT        := $(MKFILE_DIR)../..
 BENDER      := bender
+IS_CLEAN_GOAL := $(filter clean clean-%,$(MAKECMDGOALS))
+ifeq ($(IS_CLEAN_GOAL),)
 SNAX_ROOT   := $(shell $(BENDER) path snitch_cluster)
+else
+SNAX_ROOT   :=
+endif
 TAPEOUT_TCL_DIR := $(MKFILE_DIR)/tcl
 
 HEMAIA_UTIL ?= $(ROOT)/util/hemaia/util.py

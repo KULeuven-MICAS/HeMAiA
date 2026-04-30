@@ -136,7 +136,14 @@ def get_cluster_cfg_list(occamy_cfg, cluster_cfg_dir):
     return get_cluster_cfg_list
 
 
-def generate_snitch(cluster_cfg_dir, snitch_path, xmx="8G", xms="8G"):
+def generate_snitch(cluster_cfg_dir, snitch_path, xmx="8G", xms="8G", sw_only=False):
+    """Regenerate snax artifacts for every cluster hjson in cluster_cfg_dir.
+
+    sw_only=True invokes snax's `sw-snax-gen` target instead of `rtl-gen`,
+    which runs the lightweight StreamerSwHeaderGen entry point and only
+    emits SW-facing headers (e.g. streamer_csr_addr_map.h). No SystemVerilog
+    is produced; re-enables keeping DISABLE_HEADER_GEN off.
+    """
     cluster_cfg_dir = set(cluster_cfg_dir)
     env = os.environ.copy()
     jvm_args = f"-Xms{xms} -Xmx{xmx}"
@@ -154,6 +161,10 @@ def generate_snitch(cluster_cfg_dir, snitch_path, xmx="8G", xms="8G"):
     ):
         env[var] = f"{jvm_args} {env.get(var, '')}".strip()
 
+    make_target = "sw-snax-gen" if sw_only else "rtl-gen"
+    # In sw_only mode we *want* the header generated, so drop the suppression.
+    disable_header_gen = "false" if sw_only else "true"
+
     for cfg in cluster_cfg_dir:
         try:
             subprocess.check_call(
@@ -162,8 +173,8 @@ def generate_snitch(cluster_cfg_dir, snitch_path, xmx="8G", xms="8G"):
                     "-C",
                     f"{snitch_path}/target/snitch_cluster",
                     f"CFG_OVERRIDE={cfg}",
-                    "DISABLE_HEADER_GEN=true",
-                    "rtl-gen",
+                    f"DISABLE_HEADER_GEN={disable_header_gen}",
+                    make_target,
                 ],
                 env=env,
             )
@@ -890,11 +901,27 @@ def get_cva6_kwargs(occamy_cfg, cluster_generators, soc_narrow_xbar, util, name)
     return cva6_kwargs
 
 
+def get_compute_chiplet_ids(occamy_cfg):
+    multichip_cfg = occamy_cfg["hemaia_multichip"]
+    if multichip_cfg["single_chip"]:
+        return [multichip_cfg.get("single_chip_id", 0x00)]
+
+    chiplet_ids = []
+    for compute_chip in multichip_cfg["testbench_cfg"]["hemaia_compute_chip"]:
+        x, y = compute_chip["coordinate"]
+        chiplet_ids.append((x << 4) | y)
+    return chiplet_ids
+
+
 def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
     if occamy_cfg['hemaia_multichip']['single_chip']:
         nr_chiplets = 1
     else:
         nr_chiplets = len(occamy_cfg['hemaia_multichip']['testbench_cfg']['hemaia_compute_chip'])
+    chiplet_ids = get_compute_chiplet_ids(occamy_cfg)
+    if len(chiplet_ids) != nr_chiplets:
+        raise ValueError(
+            f"Expected {nr_chiplets} compute chiplet IDs, got {len(chiplet_ids)}.")
     nr_clusters = len(occamy_cfg["clusters"]) * nr_chiplets
     
     nr_clusters_per_chiplet = len(occamy_cfg["clusters"])
@@ -914,6 +941,7 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
     cheader_kwargs = {
         "name": name,
         "nr_chiplets": nr_chiplets,
+        "chiplet_ids": chiplet_ids,
         "nr_clusters": nr_clusters,
         "nr_cores": nr_cores,
         "nr_clusters_per_chiplet": nr_clusters_per_chiplet,

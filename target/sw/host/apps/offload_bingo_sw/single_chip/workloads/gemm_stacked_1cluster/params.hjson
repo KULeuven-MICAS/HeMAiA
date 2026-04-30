@@ -1,0 +1,26 @@
+# Copyright 2025 KU Leuven.
+# Licensed under the Apache License, Version 2.0, see LICENSE for details.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Xiaoling Yi <xiaoling.yi@kuleuven.be>
+
+{
+    // Dimensions must satisfy `N1 * meshCol == K2 * tileSize` (see the
+    // assertion in emit_stacked_gemm_data). With the default versacore-to
+    // cluster cfg, shape 1 has meshCol=32, tileSize=16 → N1*32 == K2*16,
+    // so K2 = 2*N1. Keeping N1=2 and picking K2=4 satisfies that.
+    array_shape: 1
+    transposed_A: 0
+    transposed_B: 0
+    K1: 4
+    N1: 2
+    M1: 2
+    K2: 4
+    N2: 4
+    M2: 2
+    // these two will config the addNewC = 1
+    addNonZeroC: 0
+    addZeroC: 1
+    // these two will config the addNewC = 0, but need to make sure M=M=1
+    accumPrevC: 0
+}

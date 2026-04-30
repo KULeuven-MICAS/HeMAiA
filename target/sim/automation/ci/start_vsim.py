@@ -25,6 +25,7 @@ import multiprocessing
 import os
 import shutil
 import subprocess
+import sys
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -39,8 +40,28 @@ except Exception:
 
 
 # ---------------------------------------------------------------------------
+# Configuration constants
+# ---------------------------------------------------------------------------
+
+CI_CFG = "target/rtl/cfg/hemaia_multichip_ci.hjson"
+SIM_CFG = "target/sim/cfg/sim_rtl.hjson"
+SIM_TIMEOUT_SECONDS = 2 * 60 * 60  # 2 hours per simulation thread
+
+# ---------------------------------------------------------------------------
 # Utility helpers
 # ---------------------------------------------------------------------------
+
+def ensure_vsim_available() -> None:
+    """Abort early if ``vsim`` is not on PATH (EDA env not sourced)."""
+    if shutil.which("vsim") is None:
+        print(
+            "ERROR: 'vsim' not found on PATH.\n"
+            "Please source the EDA setup script"
+            "and re-run this script.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
 
 def run_host_script(script_path: Path, script_args: List[str] = None) -> None:
     """Execute a shell script on the host via ``bash``."""
@@ -161,7 +182,7 @@ def step0_parse_tasks(task_yaml: Path) -> List[Dict[str, str]]:
           - ci_app_name:
             - HOST_APP_TYPE: offload_bingo_sw
             - CHIP_TYPE: single_chip
-            - WORKLOAD: gemm_tiled
+            - WORKLOAD: gemm_tiled_1cluster
             - DEV_APP: snax-bingo-offload
     """
     if yaml is not None:
@@ -195,9 +216,9 @@ def step0_parse_tasks(task_yaml: Path) -> List[Dict[str, str]]:
 # Step 1 -- Reset environment
 # ---------------------------------------------------------------------------
 
-def step1_reset(repo_root: Path) -> None:
-    """Run ``0_reset.sh`` to restore a clean state before the flow starts."""
-    run_host_script(repo_root / "target/tapeout/0_reset.sh")
+def step1_clean(repo_root: Path, docker_image: str) -> None:
+    """Run make clean to restore a clean state before the flow starts."""
+    run_in_container(repo_root, docker_image, repo_root, ["make", "clean"])
 
 
 # ---------------------------------------------------------------------------
@@ -206,6 +227,7 @@ def step1_reset(repo_root: Path) -> None:
 
 def step2_init_private_hemaia_repos(repo_root: Path) -> None:
     """Run ``1_init_outside_docker.sh`` with D2D and macro support enabled."""
+    # ci is not running with the PLL, so we disable it to avoid unnecessary errors about missing PLL
     run_host_script(
         repo_root / "target/tapeout/1_init_outside_docker.sh",
         script_args=["--pll=0", "--d2d=1", "--macro=1"],
@@ -218,14 +240,12 @@ def step2_init_private_hemaia_repos(repo_root: Path) -> None:
 
 def step3_compile_hemaia_sw_rtl(repo_root: Path, docker_image: str) -> None:
     """Clean, then build SW, bootrom, and RTL inside the container."""
-    ci_cfg = "target/rtl/cfg/hemaia_tapeout_sim.hjson"
-
     # make sw
-    run_in_container(repo_root, docker_image, repo_root, ["make", "sw", f"CFG_OVERRIDE={ci_cfg}"])
+    run_in_container(repo_root, docker_image, repo_root, ["make", "sw", f"CFG_OVERRIDE={CI_CFG}"])
     # make bootrom
-    run_in_container(repo_root, docker_image, repo_root, ["make", "bootrom", f"CFG_OVERRIDE={ci_cfg}"])
+    run_in_container(repo_root, docker_image, repo_root, ["make", "bootrom", f"CFG_OVERRIDE={CI_CFG}"])
     # make rtl
-    run_in_container(repo_root, docker_image, repo_root, ["make", "rtl", f"CFG_OVERRIDE={ci_cfg}"])
+    run_in_container(repo_root, docker_image, repo_root, ["make", "rtl", f"CFG_OVERRIDE={CI_CFG}"])
 
 
 # ---------------------------------------------------------------------------
@@ -284,10 +304,9 @@ def step5_prepare_testharness(
     repo_root: Path,
     docker_image: str,
     tasks_info: List[Tuple[Path, str]],
-    sim_cfg: str = "target/rtl/cfg/sim_rtl.hjson",
 ) -> None:
     """Generate filelists in-container, compile on host, distribute artefacts."""
-    sim_cfg_abs = str(repo_root / sim_cfg)
+    sim_cfg_abs = str(repo_root / SIM_CFG)
 
     # Generate Questasim filelists inside the container
     run_in_container(
@@ -330,9 +349,18 @@ def step6_run_simulations(tasks_info: List[Tuple[Path, str]]) -> Dict[str, bool]
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 check=False,
+                timeout=SIM_TIMEOUT_SECONDS,
             )
             out = proc.stdout.decode(errors="replace") if proc.stdout else ""
             return str(task_dir), ci_name, proc.returncode == 0, out
+        except subprocess.TimeoutExpired as exc:
+            partial = exc.stdout.decode(errors="replace") if exc.stdout else ""
+            msg = (
+                f"TIMEOUT: simulation exceeded {SIM_TIMEOUT_SECONDS}s "
+                f"({SIM_TIMEOUT_SECONDS // 3600}h) and was killed.\n"
+                + partial
+            )
+            return str(task_dir), ci_name, False, msg
         except Exception:
             return str(task_dir), ci_name, False, traceback.format_exc()
 
@@ -388,19 +416,17 @@ def main() -> None:
     task_base_dir = script_path.parent
     docker_image = "ghcr.io/kuleuven-micas/hemaia:main"
     task_yaml = script_path.parent / "task_vsim.yaml"
-    sim_cfg =  "target/rtl/cfg/sim_rtl.hjson"
-
 
     if not task_yaml.exists():
         raise FileNotFoundError(f"Task YAML file {task_yaml} does not exist")
-    # Clean the repo
-    run_in_container(repo_root, docker_image, repo_root, ["make", "clean"])
-    
+
+    ensure_vsim_available()
+
     # Step 0: Parse task definitions from YAML
     tasks = step0_parse_tasks(task_yaml)
 
     # Step 1: Reset environment to a clean state
-    step1_reset(repo_root)
+    step1_clean(repo_root, docker_image)
 
     # Step 2: Initialise private repos on the host
     step2_init_private_hemaia_repos(repo_root)
@@ -412,7 +438,7 @@ def main() -> None:
     tasks_info = step4_build_apps_and_prepare_tasks(repo_root, docker_image, tasks, task_base_dir)
 
     # Step 5: Prepare and compile the Questasim testharness
-    step5_prepare_testharness(repo_root, docker_image, tasks_info, sim_cfg=sim_cfg)
+    step5_prepare_testharness(repo_root, docker_image, tasks_info)
 
     # Step 6: Run all simulations concurrently
     results = step6_run_simulations(tasks_info)

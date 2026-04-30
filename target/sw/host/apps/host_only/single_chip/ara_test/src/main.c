@@ -1,112 +1,145 @@
-// Copyright 2020 ETH Zurich and University of Bologna.
-//
+// Copyright 2025 KU Leuven.
+// Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
+// Fanchen Kong <fanchen.kong@kuleuven.be>
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Cycle-count characterization sweep for the FP32 RVV host kernels.
+// Emits one MCYCLE-style CSV line per (kernel x size x rep) combination,
+// which is then parsed by scripts/characterize_cva6.py to fit a linear
+// model `cycles = overhead + slope·N` per op.  This data populates
+// inputs/rtl_luts/cva6_ops.csv for the framework's `--cost-model=rtl` mode.
 //
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-// Author: Matteo Perotti
-
-// Include <riscv_vector.h> to use vector intrinsics
-// Documentation: https://github.com/riscv/rvv-intrinsic-doc
-// Compiler support:
-// https://github.com/riscv/riscv-gnu-toolchain/tree/rvv-intrinsic
+// Paired workload: ci_ara (same kernels, but correctness-only with N=32 —
+// used as the fast CI regression).
+//
+// NOTE: This workload is LONG-RUNNING in RTL simulation (many ops x sizes).
+// Use ci_ara for quick correctness regressions.
 
 #include "host.h"
-#include "vector_defines.h"
-#include "kernels.h"
-#include "data.h"
-// Run also the scalar benchmark
-#define SCALAR 1
+#include "host_kernel_lib.h"
+#include "op_test_data.h"
 
-// Check the vector results against golden vectors
-#define CHECK 1
+// Timing buffers (globals → live in .data, avoid stack overflow).
+// OP_MAX_LEN is 4096 (from gen_op_data.py) → 16 KB per buffer.
+static float timing_output[OP_MAX_LEN] __attribute__((aligned(8)));
+static float timing_fp32_scratch[OP_MAX_LEN] __attribute__((aligned(8)));
+static int8_t timing_int8_scratch[OP_MAX_LEN] __attribute__((aligned(8)));
+static float timing_scale_scratch __attribute__((aligned(8)));
+
+// Timing sizes that span the TinyLlama workload range.
+#define TIMING_NUM_SIZES 4
+#define TIMING_NUM_REPS  2
+static const uint64_t timing_sizes[TIMING_NUM_SIZES] = { 64, 256, 1024, 4096 };
 
 int main() {
-  uintptr_t address_prefix = (uintptr_t)get_current_chip_baseaddress();
-  // Initialize UART for output
-  init_uart(address_prefix, 32, 1);
-  // Turn on the RVV extension
-  enable_vec();
-  // Testing the dotp function
-  printf("\n");
-  printf("==========\n");
-  printf("=  DOTP  =\n");
-  printf("==========\n");
-  printf("\n");
-  printf("\n");
-  // Timer variables
-  uint64_t start_time_s = 0;
-  uint64_t end_time_s = 0;
-  uint64_t runtime_s = 0;
-  uint64_t start_time_v = 0;
-  uint64_t end_time_v = 0;
-  uint64_t runtime_v = 0;
-  // Output variables
+    uintptr_t address_prefix = (uintptr_t)get_current_chip_baseaddress();
+    init_uart(address_prefix, 32, 1);
+    enable_vec();
+    asm volatile("fence" ::: "memory");
 
-  int32_t res32_v, res32_s;
-  int16_t res16_v, res16_s;
-  // Call the main kernel, and measure cycles
-  // 32b dotp
-  for (uint64_t avl = 8; avl <= (vsize >> 2); avl *= 8) {
-    // Dotp
-    printf("Calulating 32b dotp with vectors with length = %lu\n", avl);
-    start_time_v = ara_get_cycle_count();
-    res32_v = dotp_v32b(v32a, v32b, avl);
-    end_time_v = ara_get_cycle_count();
-    runtime_v = end_time_v - start_time_v;
-    printf("Vector runtime: %ld\n", runtime_v);
-
-    if (SCALAR) {
-      start_time_s = ara_get_cycle_count();
-      res32_s = dotp_s32b(v32a, v32b, avl);
-      end_time_s = ara_get_cycle_count();
-      runtime_s = end_time_s - start_time_s;
-      printf("Scalar runtime: %ld\n", runtime_s);
-
-      if (CHECK) {
-        if (res32_v != res32_s) {
-          printf("Error: v = %ld, g = %ld\n", res32_v, res32_s);
-          return -1;
-        }
-      }
+    printf("=== ara_test: CVA6+Ara FP32 cycle sweep ===\r\n");
+    printf("Sizes: ");
+    for (int si = 0; si < TIMING_NUM_SIZES; si++) {
+        printf("%lu ", timing_sizes[si]);
     }
-  }
+    printf("(reps=%d)\r\n\r\n", TIMING_NUM_REPS);
+    printf("CYCLES_HEADER,kernel,N,rep,cycles\r\n");
 
-  for (uint64_t avl = 8; avl <= (vsize >> 1); avl *= 8) {
-    // Dotp
-    printf("Calulating 16b dotp with vectors with length = %lu\n", avl);
-    start_time_v = ara_get_cycle_count();
-    res16_v = dotp_v16b(v16a, v16b, avl);
-    end_time_v = ara_get_cycle_count();
-    runtime_v = end_time_v - start_time_v;
-    printf("Vector runtime: %ld\n", runtime_v);
+    uint64_t t_args[8];
+    float t_scalar_out;
 
-    if (SCALAR) {
-      start_time_s = ara_get_cycle_count();
-      res16_s = dotp_s16b(v16a, v16b, avl);
-      end_time_s = ara_get_cycle_count();
-      runtime_s = end_time_s - start_time_s;
-      printf("Scalar runtime: %ld\n", runtime_s);
+    for (int si = 0; si < TIMING_NUM_SIZES; si++) {
+        uint64_t N = timing_sizes[si];
 
-      if (CHECK) {
-        if (res16_v != res16_s) {
-          printf("Error: v = %ld, g = %ld\n", res16_v, res16_s);
-          return -1;
+        for (int rep = 0; rep < TIMING_NUM_REPS; rep++) {
+            uint64_t c0, c1;
+
+            // --- Binary elementwise (a, b, out, n) ---
+            #define TIME_BINARY(name, kernel_fn) do { \
+                t_args[0] = (uint64_t)(uintptr_t)op_a_big; \
+                t_args[1] = (uint64_t)(uintptr_t)op_b_big; \
+                t_args[2] = (uint64_t)(uintptr_t)timing_output; \
+                t_args[3] = N; \
+                c0 = ara_get_cycle_count(); \
+                kernel_fn(t_args); \
+                c1 = ara_get_cycle_count(); \
+                printf("CYCLES,%s,%lu,%d,%lu\r\n", name, N, rep, c1 - c0); \
+            } while (0)
+
+            TIME_BINARY("add", __host_bingo_kernel_fp32_add);
+            TIME_BINARY("sub", __host_bingo_kernel_fp32_sub);
+            TIME_BINARY("mul", __host_bingo_kernel_fp32_mul);
+            TIME_BINARY("div", __host_bingo_kernel_fp32_div);
+            #undef TIME_BINARY
+
+            // --- Unary elementwise (input, out, n) ---
+            #define TIME_UNARY(name, kernel_fn, src) do { \
+                t_args[0] = (uint64_t)(uintptr_t)(src); \
+                t_args[1] = (uint64_t)(uintptr_t)timing_output; \
+                t_args[2] = N; \
+                c0 = ara_get_cycle_count(); \
+                kernel_fn(t_args); \
+                c1 = ara_get_cycle_count(); \
+                printf("CYCLES,%s,%lu,%d,%lu\r\n", name, N, rep, c1 - c0); \
+            } while (0)
+
+            TIME_UNARY("exp", __host_bingo_kernel_fp32_exp, op_a_big);           // positive input
+            TIME_UNARY("sigmoid", __host_bingo_kernel_fp32_sigmoid, op_mixed_big);
+            TIME_UNARY("sqrt", __host_bingo_kernel_fp32_sqrt, op_a_big);         // positive input
+            #undef TIME_UNARY
+
+            // --- Reductions (input, scalar_out, n) ---
+            #define TIME_REDUCE(name, kernel_fn) do { \
+                t_args[0] = (uint64_t)(uintptr_t)op_a_big; \
+                t_args[1] = (uint64_t)(uintptr_t)&t_scalar_out; \
+                t_args[2] = N; \
+                c0 = ara_get_cycle_count(); \
+                kernel_fn(t_args); \
+                c1 = ara_get_cycle_count(); \
+                printf("CYCLES,%s,%lu,%d,%lu\r\n", name, N, rep, c1 - c0); \
+            } while (0)
+
+            TIME_REDUCE("reduce_sum", __host_bingo_kernel_fp32_reduce_sum);
+            TIME_REDUCE("reduce_max", __host_bingo_kernel_fp32_reduce_max);
+            TIME_REDUCE("reduce_mean", __host_bingo_kernel_fp32_reduce_mean);
+            #undef TIME_REDUCE
+
+            // --- Data conversion: quantize (input, int8_out, scale_out, n) ---
+            t_args[0] = (uint64_t)(uintptr_t)op_mixed_big;
+            t_args[1] = (uint64_t)(uintptr_t)timing_int8_scratch;
+            t_args[2] = (uint64_t)(uintptr_t)&timing_scale_scratch;
+            t_args[3] = N;
+            c0 = ara_get_cycle_count();
+            __host_bingo_kernel_fp32_quantize(t_args);
+            c1 = ara_get_cycle_count();
+            printf("CYCLES,quantize,%lu,%d,%lu\r\n", N, rep, c1 - c0);
+
+            // --- Compound: softmax (input, output, num_rows=1, row_len=N) ---
+            t_args[0] = (uint64_t)(uintptr_t)op_mixed_big;
+            t_args[1] = (uint64_t)(uintptr_t)timing_output;
+            t_args[2] = 1;
+            t_args[3] = N;
+            c0 = ara_get_cycle_count();
+            __host_bingo_kernel_fp32_softmax(t_args);
+            c1 = ara_get_cycle_count();
+            printf("CYCLES,softmax,%lu,%d,%lu\r\n", N, rep, c1 - c0);
+
+            // --- Compound: rmsnorm (input, weight=ones, output, hidden_dim=N, num_tokens=1) ---
+            // Use timing_fp32_scratch as the weight buffer (ones)
+            for (uint64_t i = 0; i < N; i++) timing_fp32_scratch[i] = 1.0f;
+            t_args[0] = (uint64_t)(uintptr_t)op_a_big;
+            t_args[1] = (uint64_t)(uintptr_t)timing_fp32_scratch;
+            t_args[2] = (uint64_t)(uintptr_t)timing_output;
+            t_args[3] = N;
+            t_args[4] = 1;
+            c0 = ara_get_cycle_count();
+            __host_bingo_kernel_fp32_rmsnorm(t_args);
+            c1 = ara_get_cycle_count();
+            printf("CYCLES,rmsnorm,%lu,%d,%lu\r\n", N, rep, c1 - c0);
         }
-      }
     }
-  }
 
-  printf("\nAll tests passed!\n");
-  return 0;
+    printf("=== ara_test done ===\r\n");
+    return 0;
 }

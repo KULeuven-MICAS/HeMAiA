@@ -7,11 +7,16 @@
 # Usage of absolute paths is required to externally include this Makefile
 MK_DIR   := $(dir $(realpath $(lastword $(MAKEFILE_LIST))))
 DATA_DIR := $(realpath $(MK_DIR))
+IS_CLEAN_GOAL := $(filter clean clean-%,$(MAKECMDGOALS))
 
 DATA_CFG ?= $(DATA_DIR)/params.hjson
 
 DATA_H = $(DATA_DIR)/data.h
+ifeq ($(IS_CLEAN_GOAL),)
 SNITCH_ROOT = $(shell $(BENDER) path snitch_cluster)
+else
+SNITCH_ROOT =
+endif
 
 $(DATA_H): $(DATA_DIR)/datagen.py $(DATA_CFG) 
 	$< --swcfg $(DATA_CFG) --hwcfg $(SNITCH_ROOT)/target/snitch_cluster/cfg/snax_versacore_to_cluster.hjson > $@

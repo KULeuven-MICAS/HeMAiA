@@ -1,0 +1,17 @@
+{
+    num_clusters: 4
+    // Attention test: single GEMM on one cluster (proj_q dimensions, no K-split)
+    // X[seq_len x d_model] @ Wq[d_model x d_head] -> Q[seq_len x d_head]
+    //
+    // Tile dimensions (M_T, K_T, N_T) derived at runtime from:
+    //   M_T = seq_len / meshRow
+    //   K_T = d_model / tileSize
+    //   N_T = d_head / meshCol
+    array_shape: 0
+    transposed_A: 0
+    transposed_B: 0
+    accumPrevC: 0
+    seq_len: 64
+    d_model: 32
+    d_head: 32
+}

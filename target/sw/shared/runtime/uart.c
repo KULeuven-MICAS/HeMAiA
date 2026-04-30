@@ -78,7 +78,106 @@ static int print_signed(int64_t value, int width, int zero_pad) {
 }
 
 // ---------------------------------------------------------------------------
-// printf() – minimal subset
+// print_float() – simple %f implementation without libm/libgcc dependency
+// Prints float with 'precision' decimal digits (default 6).
+// Handles negative, zero, inf, nan.  No exponential notation.
+// ---------------------------------------------------------------------------
+static int print_float(double val, int width, int precision) {
+    int count = 0;
+
+    // Handle special cases
+    // NaN: exponent all 1s, mantissa non-zero
+    // Use bit-level check to avoid pulling in fpclassify/isnan from libm
+    union { double d; uint64_t u; } pun;
+    pun.d = val;
+    uint64_t bits = pun.u;
+    uint64_t exp_mask = 0x7FF0000000000000ULL;
+    uint64_t man_mask = 0x000FFFFFFFFFFFFFULL;
+    if ((bits & exp_mask) == exp_mask) {
+        if (bits & man_mask) {
+            // NaN
+            const char *s = "nan";
+            for (int i = 0; s[i]; i++) count += out_ch(s[i]);
+            return count;
+        } else {
+            // Inf
+            if (bits >> 63) count += out_ch('-');
+            const char *s = "inf";
+            for (int i = 0; s[i]; i++) count += out_ch(s[i]);
+            return count;
+        }
+    }
+
+    // Sign
+    if (val < 0.0) {
+        count += out_ch('-');
+        val = -val;
+        if (width) width--;
+    }
+
+    // Default precision
+    if (precision < 0) precision = 6;
+    if (precision > 9) precision = 9;  // cap to avoid overflow in multiplier
+
+    // Compute multiplier for decimal digits: 10^precision
+    uint32_t mult = 1;
+    for (int i = 0; i < precision; i++) mult *= 10;
+
+    // Split into integer and fractional parts
+    // Add 0.5 * 10^(-precision) for rounding
+    double round_add = 0.5;
+    for (int i = 0; i < precision; i++) round_add /= 10.0;
+    val += round_add;
+
+    // Integer part: extract via repeated subtraction to avoid __fixunsdfdi
+    // For values up to ~4 billion this works fine
+    uint32_t int_part = 0;
+    while (val >= 1.0) {
+        if (val >= 1000000000.0) { int_part += 1000000000; val -= 1000000000.0; }
+        else if (val >= 100000000.0) { int_part += 100000000; val -= 100000000.0; }
+        else if (val >= 10000000.0) { int_part += 10000000; val -= 10000000.0; }
+        else if (val >= 1000000.0) { int_part += 1000000; val -= 1000000.0; }
+        else if (val >= 100000.0) { int_part += 100000; val -= 100000.0; }
+        else if (val >= 10000.0) { int_part += 10000; val -= 10000.0; }
+        else if (val >= 1000.0) { int_part += 1000; val -= 1000.0; }
+        else if (val >= 100.0) { int_part += 100; val -= 100.0; }
+        else if (val >= 10.0) { int_part += 10; val -= 10.0; }
+        else { int_part += 1; val -= 1.0; }
+    }
+
+    // Fractional part: multiply by 10^precision, extract as integer
+    // Use repeated multiply-by-10 to avoid __fixunsdfdi on large doubles
+    uint32_t frac_part = 0;
+    double frac = val;
+    for (int i = 0; i < precision; i++) frac *= 10.0;
+    // Now frac should be < mult, extract via subtraction
+    while (frac >= 1.0) {
+        if (frac >= 1000000000.0) { frac_part += 1000000000; frac -= 1000000000.0; }
+        else if (frac >= 100000000.0) { frac_part += 100000000; frac -= 100000000.0; }
+        else if (frac >= 10000000.0) { frac_part += 10000000; frac -= 10000000.0; }
+        else if (frac >= 1000000.0) { frac_part += 1000000; frac -= 1000000.0; }
+        else if (frac >= 100000.0) { frac_part += 100000; frac -= 100000.0; }
+        else if (frac >= 10000.0) { frac_part += 10000; frac -= 10000.0; }
+        else if (frac >= 1000.0) { frac_part += 1000; frac -= 1000.0; }
+        else if (frac >= 100.0) { frac_part += 100; frac -= 100.0; }
+        else if (frac >= 10.0) { frac_part += 10; frac -= 10.0; }
+        else { frac_part += 1; frac -= 1.0; }
+    }
+
+    // Print integer part
+    count += print_unsigned((uint64_t)int_part, 10, 0, 0, 0);
+
+    if (precision > 0) {
+        count += out_ch('.');
+        // Print fractional part with leading zeros
+        count += print_unsigned((uint64_t)frac_part, 10, 0, precision, 1);
+    }
+
+    return count;
+}
+
+// ---------------------------------------------------------------------------
+// printf() – minimal subset (supports %d %u %x %lx %ld %lu %s %c %f %%)
 // ---------------------------------------------------------------------------
 int vprintf(const char *fmt, va_list ap) {
     base_address = (uintptr_t)get_current_chip_baseaddress();
@@ -147,6 +246,36 @@ int vprintf(const char *fmt, va_list ap) {
                 total += print_unsigned(va_arg(ap, unsigned int), 16, 1, width,
                                         zero_pad);
                 break;
+
+            case 'f': {
+                // %f or %<width>.<prec>f
+                // precision was parsed as width if '.' was present
+                // Re-parse: check if we consumed a '.' during width parsing
+                // Since our parser doesn't handle '.', we pass width as-is
+                // and use default precision 6. For %.Nf, the '.' stops the
+                // width parse, so width=0 and precision is lost. Handle '.'
+                // by checking if the character before 'f' was a '.'.
+                // Simple approach: just use default precision.
+                double fval = va_arg(ap, double);
+                total += print_float(fval, width, -1);
+            } break;
+
+            case '.': {
+                // Handle %.<prec>f  (we hit '.' after '%')
+                int prec = 0;
+                while (*fmt >= '0' && *fmt <= '9') {
+                    prec = prec * 10 + (*fmt++ - '0');
+                }
+                char next_spec = *fmt ? *fmt++ : '\0';
+                if (next_spec == 'f') {
+                    double fval = va_arg(ap, double);
+                    total += print_float(fval, width, prec);
+                } else {
+                    total += out_ch('%');
+                    total += out_ch('.');
+                    if (next_spec) total += out_ch(next_spec);
+                }
+            } break;
 
             case 'l': {  // Handle %lx, %lX, %ld, %lu
                 char next = *fmt ? *fmt++ : '\0';

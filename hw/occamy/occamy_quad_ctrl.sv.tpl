@@ -63,6 +63,10 @@ module ${name}_quad_ctrl
   cfg_t bingo_hw_manager_idle_power_level;
   cfg_t bingo_hw_manager_norm_power_level;
   cfg_t [BINGO_HW_MANAGER_NR_CORE_PER_CLUSTER-1:0][NrClustersPerQuad-1:0] bingo_hw_manager_core_power_domain;
+  //  DARTS CERF
+  logic        cerf_write_en;
+  logic [31:0] cerf_write_data;
+  logic [31:0] cerf_state;
 
   // Quadrant Lite xbar
   // Here we have the host to cluster mailboxes
@@ -150,7 +154,11 @@ module ${name}_quad_ctrl
     .bingo_hw_manager_enable_idle_pm_o      (bingo_hw_manager_enable_idle_pm     ),
     .bingo_hw_manager_idle_power_level_o    (bingo_hw_manager_idle_power_level   ),
     .bingo_hw_manager_norm_power_level_o    (bingo_hw_manager_norm_power_level   ),
-    .bingo_hw_manager_core_power_domain_o   (bingo_hw_manager_core_power_domain  )
+    .bingo_hw_manager_core_power_domain_o   (bingo_hw_manager_core_power_domain  ),
+    // DARTS CERF
+    .cerf_write_en_o                        (cerf_write_en                       ),
+    .cerf_write_data_o                      (cerf_write_data                     ),
+    .cerf_state_i                           (cerf_state                          )
   );
 
 
@@ -254,7 +262,13 @@ module ${name}_quad_ctrl
     .bingo_hw_manager_pm_base_addr_i           (bingo_hw_manager_pm_base_addr                ),
     .bingo_hw_manager_core_power_domain_i      (bingo_hw_manager_core_power_domain           ),
     .pm_axi_lite_req_o                         (${quad_ctrl_axi_lite_xbar.in_bingo_hw_scheduler_write_pm.req_name()}),
-    .pm_axi_lite_resp_i                        (${quad_ctrl_axi_lite_xbar.in_bingo_hw_scheduler_write_pm.rsp_name()})
+    .pm_axi_lite_resp_i                        (${quad_ctrl_axi_lite_xbar.in_bingo_hw_scheduler_write_pm.rsp_name()}),
+    // DARTS CERF
+    .cerf_write_en_i                           (cerf_write_en                       ),
+    .cerf_write_data_i                         (cerf_write_data                     ),
+    .cerf_state_o                              (cerf_state                          ),
+    // DARTS: Load Monitor (not connected yet)
+    .load_total_pending_o                      (/* unused */                         )
   );
 
   // We need an extra work here to connect the host master port to the csr

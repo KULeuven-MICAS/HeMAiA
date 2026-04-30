@@ -247,6 +247,46 @@
           }
         ]
       }
-    },    
+    },
+    // DARTS Tier 1: CERF (Conditional Execution Register File) CSRs
+    { name: "CERF_STATE",
+      desc: "DARTS CERF: 32-bit bitmask of active groups (bit[i] = group i)",
+      swaccess: "rw",
+      hwaccess: "hro",
+      fields: [
+        {
+          bits: "31:0",
+          resval: "0",
+          name: "CERF_STATE",
+          desc: '''Bit i = 1 means group i is active'''
+        }
+      ]
+    },
+    { name: "CERF_WRITE_EN",
+      desc: "DARTS CERF: write enable (write 1 to latch CERF_STATE into HW, auto-clears)",
+      swaccess: "rw",
+      hwaccess: "hrw",
+      fields: [
+        {
+          bits: "0",
+          resval: "0",
+          name: "CERF_WRITE_EN",
+          desc: '''Write 1 to trigger CERF latch; HW clears after one cycle'''
+        }
+      ]
+    },
+    { name: "CERF_STATUS",
+      desc: "DARTS CERF: read-back of actual HW CERF state (read-only)",
+      swaccess: "ro",
+      hwaccess: "hwo",
+      fields: [
+        {
+          bits: "31:0",
+          resval: "0",
+          name: "CERF_STATUS",
+          desc: '''Actual CERF bitmask from HW controller (read-only). Use this for read-modify-write.'''
+        }
+      ]
+    },
   ]
 }

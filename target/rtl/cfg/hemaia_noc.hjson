@@ -232,8 +232,6 @@
       address: 83886080, // 0x0500_0000
       length: 65536, // 64 kiB 0x1_0000
     },
-    // Use Vendor PLL
-    use_vendor_pll: false
     // backup boot address
     backup_boot_addr: 2147483648 // 0x8000_0000
 }

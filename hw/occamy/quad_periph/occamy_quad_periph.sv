@@ -27,7 +27,11 @@ module occamy_quad_periph import occamy_quad_periph_reg_pkg::*; #(
   output reg_data_t bingo_hw_manager_enable_idle_pm_o,
   output reg_data_t bingo_hw_manager_idle_power_level_o,
   output reg_data_t bingo_hw_manager_norm_power_level_o,
-  output reg_data_t [BINGO_HW_MANAGER_NR_CORE_PER_CLUSTER-1:0][BINGO_HW_MANAGER_NR_CLUSTER-1:0] bingo_hw_manager_core_power_domain_o
+  output reg_data_t [BINGO_HW_MANAGER_NR_CORE_PER_CLUSTER-1:0][BINGO_HW_MANAGER_NR_CLUSTER-1:0] bingo_hw_manager_core_power_domain_o,
+  // DARTS CERF
+  output logic        cerf_write_en_o,
+  output logic [31:0] cerf_write_data_o,
+  input  logic [31:0] cerf_state_i
 );
 
   occamy_quad_periph_hw2reg_t hw2reg;
@@ -52,6 +56,15 @@ module occamy_quad_periph import occamy_quad_periph_reg_pkg::*; #(
       end
     end
   end
+  // DARTS CERF
+  assign cerf_write_data_o = reg2hw.cerf_state.q;
+  assign cerf_write_en_o   = reg2hw.cerf_write_en.q;
+  // Auto-clear write_en: HW writes 0 back after latch takes effect
+  assign hw2reg.cerf_write_en.d  = '0;
+  assign hw2reg.cerf_write_en.de = reg2hw.cerf_write_en.q;
+  // CERF_STATUS: HW writes actual controller state for SW read-back
+  assign hw2reg.cerf_status.d  = cerf_state_i;
+  assign hw2reg.cerf_status.de = 1'b1;  // always update
   occamy_quad_periph_reg_top #(
     .reg_req_t ( reg_req_t ),
     .reg_rsp_t ( reg_rsp_t  )

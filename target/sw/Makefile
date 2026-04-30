@@ -6,19 +6,19 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 # <Try not to blindly include other makefiles>
 # This makefile generates the SW sources for HeMAiA SoC
-.PHONY: sw clean-sw single-sw
+.PHONY: sw clean-sw single-sw snax-sw-gen clean-snax-sw-gen
 ############
 # Makefrag #
 ############
 BENDER                ?= bender
 MKFILE_PATH           := $(abspath $(lastword $(MAKEFILE_LIST)))
 SIM_MKFILE_DIR        := $(dir $(MKFILE_PATH))
+IS_CLEAN_GOAL         := $(filter clean clean-%,$(MAKECMDGOALS))
 
 #########################
 # Files and directories #
 #########################
 ROOT                  = $(abspath $(SIM_MKFILE_DIR)../..)
-SNITCH_ROOT           = $(shell $(BENDER) path snitch_cluster)
 SW_DIR                = $(ROOT)/target/sw
 TARGET_SRC_DIR        = $(SW_DIR)/shared/platform/template
 TARGET_CLINT_DIR      = $(TARGET_SRC_DIR)/clint
@@ -34,13 +34,26 @@ LIB_BINGO_DIR         = $(HOST_RUNTIME_DIR)/libbingo
 ############
 # Programs #
 ############
-REGGEN     			  = $(shell $(BENDER) path register_interface)/vendor/lowrisc_opentitan/util/regtool.py
 OCCAMYGEN  			  = $(ROOT)/util/occamygen/occamygen.py
 
 #######################
 # Config prerequisite #
 #######################
 CFG				  	  ?= $(ROOT)/target/rtl/cfg/lru.hjson
+
+ifeq ($(IS_CLEAN_GOAL),)
+SNITCH_ROOT                 = $(shell $(BENDER) path snitch_cluster)
+REGGEN     			       = $(shell $(BENDER) path register_interface)/vendor/lowrisc_opentitan/util/regtool.py
+SOURCE_CLINT_DIR            = $(shell $(BENDER) path clint)
+HEMAIA_D2D_LINK_REG_HJSON   = $(shell $(BENDER) path hemaia_d2d_link)/src/ctrl/hemaia_d2d_link_reg.hjson
+HEMAIA_CLK_RST_REG_HJSON    = $(shell $(BENDER) path hemaia_clk_rst_controller)/regs/hemaia_clk_rst_controller_reg.hjson
+else
+SNITCH_ROOT                 =
+REGGEN     			       =
+SOURCE_CLINT_DIR            =
+HEMAIA_D2D_LINK_REG_HJSON   =
+HEMAIA_CLK_RST_REG_HJSON    =
+endif
 ###################
 # Software Headers#
 ###################
@@ -74,7 +87,6 @@ $(PLATFORM_HEADERS_DIR):
 ###########
 $(TARGET_CLINT_DIR):
 	mkdir -p $@
-SOURCE_CLINT_DIR  = $(shell $(BENDER) path clint)
 # CLINT needs the hjson tmp first to generate the hjson
 $(TARGET_CLINT_DIR)/clint.hjson: $(SOURCE_CLINT_DIR)/data/clint.hjson.tpl $(CFG)
 	@echo "[OCCAMYGEN] Generate $@"
@@ -136,14 +148,14 @@ $(PLATFORM_HEADERS_DIR)/snitch_cluster_peripheral.h: $(SNITCH_ROOT)/hw/snitch_cl
 # HeMAiA D2D Link Ctrl #
 ########################
 
-$(PLATFORM_HEADERS_DIR)/hemaia_d2d_link_peripheral.h: $(shell bender path hemaia_d2d_link)/src/ctrl/hemaia_d2d_link_reg.hjson | $(PLATFORM_HEADERS_DIR)
+$(PLATFORM_HEADERS_DIR)/hemaia_d2d_link_peripheral.h: $(HEMAIA_D2D_LINK_REG_HJSON) | $(PLATFORM_HEADERS_DIR)
 	$(call reggen_generate_header,$@,$<)
 
 #######################
 # HeMAiA Clk Rst Ctrl #
 #######################
 
-$(PLATFORM_HEADERS_DIR)/hemaia_clk_rst_controller_peripheral.h: $(shell bender path hemaia_clk_rst_controller)/regs/hemaia_clk_rst_controller_reg.hjson | $(PLATFORM_HEADERS_DIR)
+$(PLATFORM_HEADERS_DIR)/hemaia_clk_rst_controller_peripheral.h: $(HEMAIA_CLK_RST_REG_HJSON) | $(PLATFORM_HEADERS_DIR)
 	$(call reggen_generate_header,$@,$<)
 
 # OCCAMYGEN headers
@@ -173,13 +185,59 @@ debug-platform-headers: $(PLATFORM_HEADERS)
 	@ls -lh $(PLATFORM_HEADERS)
 
 
-sw: $(PLATFORM_HEADERS) host/runtime/host.ld
+# SW-only snax codegen: emits streamer_csr_addr_map.h (and any future SW-side
+# headers) without running Chisel RTL elaboration. 
+SNAX_SW_GEN_MARKER = $(SW_DIR)/.snax_sw_gen_targets_group
+
+SNAX_XDMA_ADDR_H = $(SW_DIR)/device/runtime/snax/xdma/snax_xdma_addr.h
+
+snax-sw-gen: $(SNAX_SW_GEN_MARKER) $(SNAX_XDMA_ADDR_H)
+
+$(SNAX_SW_GEN_MARKER): $(CFG)
+	@echo "[SNAX-SW-GEN] Generate SNAX SW headers"
+	@# Wipe every stale streamer_csr_addr_map.h from the snax SW tree first.
+	@# The device build's INCDIRS globs sw/snax/*/include alphabetically, and
+	@# a header from a previously-active library (e.g. gemmx) will silently
+	@# shadow the current one (e.g. versacore-to) because both file names
+	@# match. Deleting all of them before regeneration guarantees only the
+	@# maps occamygen writes for $(CFG) survive.
+	@find $(SNITCH_ROOT)/target/snitch_cluster/sw/snax -name streamer_csr_addr_map.h -delete
+	$(OCCAMYGEN) --cfg $(CFG) \
+		--snitch $(SNITCH_ROOT) \
+		--snitch-sw-only
+	@touch $@
+
+# Mirror the generated snax-xdma-addr.h into the HeMAiA device runtime tree
+# (under HeMAiA's underscored filename) so the snax_xdma_lib.h
+# `#include "snax_xdma_addr.h"` always tracks the active $(CFG). The local
+# file is gitignored — a missing copy on disk triggers this rule even when
+# $(SNAX_SW_GEN_MARKER) is already up-to-date.
+$(SNAX_XDMA_ADDR_H): $(SNAX_SW_GEN_MARKER)
+	@echo "[SNAX-SW-GEN] Mirror snax-xdma-addr.h -> $@"
+	@cp $(SNITCH_ROOT)/target/snitch_cluster/sw/snax/xdma/include/snax-xdma-addr.h $@
+
+clean-snax-sw-gen:
+	rm -f $(SNAX_SW_GEN_MARKER) $(SNAX_XDMA_ADDR_H)
+
+# Structural sync check that every function defined in the upstream
+# snax-versacore-to-lib.c also exists in the local snax_versacore_lib.h and
+# programs the same ordered sequence of CSRs (modulo the GEMMX_*→VERSACORE_*
+# rename). See util/hemaia/check_snax_versacore_lib_sync.py for the rules.
+# Runs after snax-sw-gen so the bender-managed snax checkout is present.
+.PHONY: check-snax-versacore-sync
+SNAX_VERSACORE_LOCAL_H   = $(SW_DIR)/device/runtime/snax/versacore/snax_versacore_lib.h
+SNAX_VERSACORE_UPSTREAM_C = $(SNITCH_ROOT)/target/snitch_cluster/sw/snax/versacore-to/src/snax-versacore-to-lib.c
+check-snax-versacore-sync: $(SNAX_SW_GEN_MARKER)
+	@python3 $(ROOT)/util/hemaia/check_snax_versacore_lib_sync.py \
+		$(SNAX_VERSACORE_LOCAL_H) $(SNAX_VERSACORE_UPSTREAM_C)
+
+sw: snax-sw-gen $(PLATFORM_HEADERS) host/runtime/host.ld check-snax-versacore-sync
 	$(MAKE) -C host libs
 	$(MAKE) -C host TARGET=partial-build
 	$(MAKE) -C device all HOST_APP_TYPE=$(HOST_APP_TYPE)
 	$(MAKE) -C host TARGET=finalize-build
 
-single-sw: $(PLATFORM_HEADERS) host/runtime/host.ld
+single-sw: snax-sw-gen $(PLATFORM_HEADERS) host/runtime/host.ld check-snax-versacore-sync
 	$(MAKE) -C host libs
 	$(MAKE) -C host single_sw TARGET=partial-build \
 		HOST_APP_TYPE=$(HOST_APP_TYPE) \
@@ -207,3 +265,5 @@ clean:
 # clean generated hjson files
 	rm -rf $(TARGET_CLINT_DIR) $(TARGET_SOCCTRL_DIR) $(TARGET_QUADPERIPH_DIR) $(TARGET_PLIC_DIR)
 	rm -rf host/runtime/host.ld
+# clean snax-sw-gen marker so the next build regenerates
+	rm -rf $(SNAX_SW_GEN_MARKER)

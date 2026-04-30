@@ -4,6 +4,9 @@
 
 #pragma once
 #define N_CHIPLETS ${nr_chiplets}
+% for idx, chiplet_id in enumerate(chiplet_ids):
+#define CHIPLET_ID_${idx} 0x${f"{chiplet_id:02x}"}
+% endfor
 #define N_CLUSTERS ${nr_clusters}
 #define N_SNITCHES ${nr_cores}
 
