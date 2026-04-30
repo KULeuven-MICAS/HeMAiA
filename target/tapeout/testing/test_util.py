@@ -255,6 +255,7 @@ def step2_init_inside_docker(
     run_in_container(
         repo_root, docker_image, repo_root,
         ["make", "apps",
+         f"CFG_OVERRIDE={cfg_override}",
          f"HOST_APP_TYPE={host_app_type}",
          f"CHIP_TYPE={chip_type}",
          f"WORKLOAD={workload}",
