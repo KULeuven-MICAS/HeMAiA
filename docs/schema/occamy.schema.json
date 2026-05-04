@@ -200,11 +200,17 @@
         "cva6_ara": {
             "title": "CVA6+Ara accelerator parameters",
             "type": "object",
+            "description": "Ara vector unit configuration. nr_lanes and vlen MUST be chosen together: Ara documents the strict constraint VLEN > 128 (see ara/config/*.mk), and the upstream-tested pairings are 2 lanes : 2048 VLEN, 4 lanes : 4096 VLEN, 8 lanes : 8192 VLEN, 16 lanes : 16384 VLEN. Mismatched pairings (e.g. nr_lanes=4 with vlen=128) cause vfmv_v_f / scalar-broadcast distribution to misbehave, producing wrong-but-finite results in some kernels and NaNs in others.",
             "properties": {
                 "nr_lanes": {
                     "type": "integer",
-                    "description": "Number of Ara vector lanes.",
+                    "description": "Number of Ara vector lanes. Must be paired with a matching vlen — see object description.",
                     "default": 4
+                },
+                "vlen": {
+                    "type": "integer",
+                    "description": "Vector register length of the Ara unit, in bits. Constraint from upstream Ara: VLEN > 128 (strict). Recommended pairing with nr_lanes: 2:2048, 4:4096, 8:8192, 16:16384.",
+                    "default": 4096
                 }
             }
         },

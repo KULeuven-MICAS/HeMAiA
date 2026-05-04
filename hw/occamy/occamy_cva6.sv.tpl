@@ -369,7 +369,15 @@ module ${name}_cva6_ara import ${name}_pkg::*; (
   /////////
   // ARA //
   /////////
-  localparam int unsigned             VLEN         = 128;
+  // VLEN must satisfy Ara's strict constraint VLEN > 128 (see
+  // ara/config/*.mk in the upstream repo). VLEN is also tightly coupled to
+  // NrLanes: tested upstream pairings are 2:2048, 4:4096, 8:8192, 16:16384.
+  // Picking a too-small VLEN for the lane count breaks vfmv_v_f / scalar-
+  // broadcast distribution at runtime (NaNs from sigmoid/tanh/exp, wrong
+  // results from relu/abs). Both values come from the cva6_ara block in the
+  // hjson cfg so HW and SW (-DNR_LANES via target/sw/host/apps/common.mk)
+  // stay in sync.
+  localparam int unsigned             VLEN         = ${occamy_cfg["cva6_ara"]["vlen"]};
   localparam int unsigned             OSSupport    = 0;
   localparam ara_pkg::fpu_support_e   FPUSupport   = ara_pkg::FPUSupportSingle;
   localparam ara_pkg::fpext_support_e FPExtSupport = ara_pkg::FPExtSupportDisable;

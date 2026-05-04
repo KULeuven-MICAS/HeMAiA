@@ -77,8 +77,13 @@
     txns: {
       narrow_and_wide: 16,
     },
+    // Ara vector unit configuration. nr_lanes and vlen MUST be paired
+    // (Ara constraint: VLEN > 128; tested ratios 2:2048, 4:4096, 8:8192).
+    // A mismatched pairing causes vfmv_v_f / scalar-broadcast to misbehave
+    // (NaNs in sigmoid/tanh, wrong results in relu/abs/exp).
     cva6_ara: {
       nr_lanes: 4,
+      vlen:     4096,
     },
     narrow_xbar_slv_id_width: 4,
     narrow_xbar_user_width: 3, // clog2(total number of clusters)
