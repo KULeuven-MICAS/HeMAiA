@@ -272,7 +272,8 @@ def step3_compile_vsim(repo_root: Path, sim_cfg_name: str) -> None:
     sim_cfg_abs = str(repo_root / "target/sim/cfg" / sim_cfg_name)
     subprocess.run(
         ["make", "hemaia_system_vsim", f"SIM_CFG={sim_cfg_abs}"],
-        cwd=repo_root, check=True,
+        cwd=repo_root,
+        check=True,
     )
 
 
