@@ -34,10 +34,10 @@ for _var in SIM_WITH_D2D SIM_WITH_MACRO SIM_WITH_PLL; do
 done
 
 # DC Scripts
-if [ ! -d "$script_dir/dc_work_hemaia" ]; then
-    git clone git@github.com:IveanEx/dc_work_hemaia.git "$script_dir/dc_work_hemaia"
+if [ ! -d "$script_dir/HeMAiAv2_tapeout" ]; then
+    git clone git@github.com:IveanEx/HeMAiAv2_tapeout.git "$script_dir/HeMAiAv2_tapeout"
 else
-    cd $script_dir/dc_work_hemaia || exit
+    cd $script_dir/HeMAiAv2_tapeout || exit
     git pull
 fi
 
