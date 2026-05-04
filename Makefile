@@ -54,7 +54,7 @@ clean-repo:
 	$(MAKE) -C ./target/tapeout clean
 	rm -rf ./target/rtl/src/bender_targets.tmp
 	rm -rf ./target/rtl/cfg/lru.hjson
-	cd ./target/tapeout && ./0_reset.sh
+	cd ./target/tapeout && ./0_reset_private_modules.sh
 
 clean-bender:
 	rm -f Bender.lock

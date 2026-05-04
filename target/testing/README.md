@@ -2,7 +2,7 @@
 
 End-to-end Python drivers for the three Questasim-based simulation flows used
 during HeMAiA tapeout verification. Each script collapses the legacy shell
-sequence (`0_reset.sh` → `1_init_outside_docker.sh` → `2_init_inside_docker.sh`
+sequence (`0_reset_private_modules.sh` → `1_git_pull_private_modules.sh` → `2_init_inside_docker.sh`
 → host-side `make hemaia_system_vsim`) into a single command.
 
 ## Layout
@@ -28,7 +28,7 @@ new flow, copy any of the existing scripts and flip the `with_macro`,
 | `2_start_tapeout_sim.py`            | `hemaia_tapeout.hjson`        | `sim_rtl_with_pll.hjson` | `tech_cells_tsmc16`, `hemaia_d2d_link`, `hemaia_clk_rst_controller` |
 
 The vendor-repo selection mirrors the `--macro / --d2d / --pll` flags of
-[`../1_init_outside_docker.sh`](../1_init_outside_docker.sh):
+[`../tapeout/1_git_pull_private_modules.sh`](../tapeout/1_git_pull_private_modules.sh):
 
 * **`0` — single-chiplet, open-source.** No TSMC16 macros, no D2D link, no
   vendor PLL. Useful for fast iteration on cluster-level kernels.
@@ -51,11 +51,11 @@ pre-silicon sign-off pass.
 
 All three scripts share the same five-step backbone:
 
-* **Step 0 — Reset** (mirrors `../0_reset.sh`). Removes any of
+* **Step 0 — Reset** (mirrors `../tapeout/0_reset_private_modules.sh`). Removes any of
   `hw/hemaia/{tech_cells_tsmc16,hemaia_d2d_link,hemaia_clk_rst_controller}`
   that exist, drops their `Bender.local` entries, restores the open-source
   `tech_cells_generic` line, deletes `Bender.lock`, and runs `make clean`.
-* **Step 1 — Init outside docker** (mirrors `../1_init_outside_docker.sh`).
+* **Step 1 — Init outside docker** (mirrors `../tapeout/1_git_pull_private_modules.sh`).
   Clones / pulls only the vendor repos enabled by the per-flow `with_macro`,
   `with_d2d`, `with_pll` flags, and upserts the matching `Bender.local`
   entries.
@@ -109,7 +109,7 @@ different workload or host app.
 
 ```bash
 # Source the EDA environment first (vsim on PATH).
-cd HeMAiA/target/tapeout/testing
+cd HeMAiA/target/testing
 
 python3 0_start_single_chiplet_sim.py    # open-source single-chip
 python3 1_start_multi_chiplet_sim.py     # multi-chiplet, no PLL

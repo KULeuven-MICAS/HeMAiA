@@ -2,7 +2,7 @@
 # Author: Yunhao Deng <yunhao.deng@kuleuven.be>
 #         Fanchen Kong <fanchen.kong@kuleuven.be>
 
-# This script is meant to be run outside of the Docker container, on the host machine. It removes all the vendor-specific modules and DC scripts that were initialized by 1_init_outside_docker.sh. This is useful for cleaning up the environment before starting a new tapeout iteration, or for resetting the environment if something goes wrong.
+# This script is meant to be run outside of the Docker container, on the host machine. It removes all the vendor-specific modules and DC scripts that were initialized by 1_git_pull_private_modules.sh. This is useful for cleaning up the environment before starting a new tapeout iteration, or for resetting the environment if something goes wrong.
 
 script_dir="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 
@@ -10,7 +10,7 @@ script_dir="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 repo_root="$(cd "$script_dir/../../" && pwd)"
 
 # Remove DC scripts
-rm -rf "$script_dir/dc_work_hemaia"
+rm -rf "$script_dir/HeMAiAv2_tapeout"
 
 # Remove vendor-specific modules
 rm -rf "$repo_root/hw/hemaia/tech_cells_tsmc16"

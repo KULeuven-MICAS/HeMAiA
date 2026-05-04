@@ -2,10 +2,10 @@
 Shared helpers for the HeMAiA tapeout sim drivers.
 
 The three entrypoints in this directory (single-chiplet / multi-chiplet /
-tapeout) follow the same four-step backbone:
+tapeout) follow the same five-step backbone:
 
-  Step 0: reset the environment (mirrors ``../0_reset.sh``)
-  Step 1: clone/refresh the private vendor repos (mirrors ``../1_init_outside_docker.sh``)
+  Step 0: reset the environment (mirrors ``../tapeout/0_reset_private_modules.sh``)
+  Step 1: clone/refresh the private vendor repos (mirrors ``../tapeout/1_git_pull_private_modules.sh``)
   Step 2: build SW/RTL inside the build container (mirrors ``../2_init_inside_docker.sh``)
   Step 3: compile the Questasim simulation on the host
   Step 4: run the compiled vsim binary and report pass/fail
@@ -37,7 +37,7 @@ VENDOR_MODULES = (
 # Helper that kills stuck bender/git fetch trees and clears NFS silly-rename
 # files inside .bender/ so that ``make clean-bender`` can succeed.
 UNSTICK_BENDER_SCRIPT = (
-    Path(__file__).resolve().parents[3] / "util" / "unstick_bender.py"
+    Path(__file__).resolve().parents[2] / "util" / "unstick_bender.py"
 )
 
 
@@ -116,7 +116,7 @@ def _upsert_bender_entry(text: str, key: str, replacement: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Step 0 -- Reset environment (mirrors ../0_reset.sh)
+# Step 0 -- Reset environment (mirrors ../tapeout/0_reset_private_modules.sh)
 # ---------------------------------------------------------------------------
 
 def step0_reset(repo_root: Path) -> None:
@@ -174,10 +174,10 @@ def _make_clean_with_unstick(repo_root: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Step 1 -- Init outside docker (mirrors ../1_init_outside_docker.sh)
+# Step 1 -- Init outside docker (mirrors ../tapeout/1_git_pull_private_modules.sh)
 # ---------------------------------------------------------------------------
 
-def step1_init_outside_docker(
+def step1_init_private_modules(
     repo_root: Path,
     *,
     with_macro: bool,
@@ -272,7 +272,8 @@ def step3_compile_vsim(repo_root: Path, sim_cfg_name: str) -> None:
     sim_cfg_abs = str(repo_root / "target/sim/cfg" / sim_cfg_name)
     subprocess.run(
         ["make", "hemaia_system_vsim", f"SIM_CFG={sim_cfg_abs}"],
-        cwd=repo_root, check=True,
+        cwd=repo_root,
+        check=True,
     )
 
 
@@ -315,9 +316,9 @@ def step4_run_simulation(repo_root: Path) -> bool:
 # ---------------------------------------------------------------------------
 
 def resolve_repo_root(script_path: Path) -> Path:
-    """Resolve the HeMAiA repo root from a script under ``target/tapeout/testing``."""
-    # testing -> tapeout -> target -> repo root
-    return script_path.resolve().parents[3]
+    """Resolve the HeMAiA repo root from a script under ``target/testing``."""
+    # testing -> target -> repo root
+    return script_path.resolve().parents[2]
 
 
 def run_sim_flow(
@@ -343,7 +344,7 @@ def run_sim_flow(
     step0_reset(repo_root)
 
     print("[Step 1] Initialising private repos (host-side)")
-    step1_init_outside_docker(
+    step1_init_private_modules(
         repo_root,
         with_macro=with_macro,
         with_d2d=with_d2d,

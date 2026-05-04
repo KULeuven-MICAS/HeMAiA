@@ -226,10 +226,10 @@ def step1_clean(repo_root: Path, docker_image: str) -> None:
 # ---------------------------------------------------------------------------
 
 def step2_init_private_hemaia_repos(repo_root: Path) -> None:
-    """Run ``1_init_outside_docker.sh`` with D2D and macro support enabled."""
+    """Run ``1_git_pull_private_modules.sh`` with D2D and macro support enabled."""
     # ci is not running with the PLL, so we disable it to avoid unnecessary errors about missing PLL
     run_host_script(
-        repo_root / "target/tapeout/1_init_outside_docker.sh",
+        repo_root / "target/tapeout/1_git_pull_private_modules.sh",
         script_args=["--pll=0", "--d2d=1", "--macro=1"],
     )
 

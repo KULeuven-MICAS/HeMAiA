@@ -144,8 +144,8 @@ sources:
 
   - target: hemaia_netlist
     files:
-      - target/tapeout/dc_work_hemaia/outputs/hemaia_mapped_retimed_lpo.v
       - target/rtl/bootrom/bootrom_netlist_sim/bootrom.v
+      - target/tapeout/HeMAiAv2_tapeout/outputs/hemaia_mapped_bootrom_commented.v
 
   # target/fpga
   - target: xilinx
