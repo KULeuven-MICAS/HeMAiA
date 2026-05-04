@@ -19,6 +19,11 @@ def main():
     print(f"#define OP_TEST_LEN {N}")
     print()
 
+    # Vector inputs go through Ara, so they must be aligned to the lane stride
+    # (4 bytes per fp32 element × NR_LANES).  NR_LANES is supplied at compile
+    # time via -DNR_LANES (set by target/sw/host/apps/common.mk).
+    ALIGN = "__attribute__((aligned(4 * NR_LANES)))"
+
     # op_a: positive values in [0.3, 4.0] — safe for exp/sqrt/reciprocal
     a_vals = [round(rng.uniform(0.3, 4.0), 4) for _ in range(N)]
     # op_b: positive values in [0.5, 3.0] — avoids div-by-near-zero
@@ -26,13 +31,13 @@ def main():
     # op_mixed: values in [-5, 5] — exercises sign handling for relu/abs/sigmoid/tanh
     mixed = [round(rng.uniform(-5.0, 5.0), 4) for _ in range(N)]
 
-    print(f"static float op_a[{N}] = {{")
+    print(f"static float op_a[{N}] {ALIGN} = {{")
     print("  " + ", ".join(f"{v:.6f}f" for v in a_vals))
     print("};")
-    print(f"static float op_b[{N}] = {{")
+    print(f"static float op_b[{N}] {ALIGN} = {{")
     print("  " + ", ".join(f"{v:.6f}f" for v in b_vals))
     print("};")
-    print(f"static float op_mixed[{N}] = {{")
+    print(f"static float op_mixed[{N}] {ALIGN} = {{")
     print("  " + ", ".join(f"{v:.6f}f" for v in mixed))
     print("};")
 

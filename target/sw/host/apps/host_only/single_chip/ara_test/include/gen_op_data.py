@@ -27,10 +27,11 @@ def main():
     # op_mixed_big: values in [-5, 5] — exercises sign handling
     mixed_big = [round(rng.uniform(-5.0, 5.0), 4) for _ in range(N_BIG)]
 
-    # Large arrays for timing sweeps. Placed in .data with 8-byte alignment
-    # for vector loads.
+    # Large arrays for timing sweeps. Aligned to the Ara lane stride so each
+    # lane sees one contiguous slice per beat — NR_LANES is supplied at compile
+    # time via -DNR_LANES (set by target/sw/host/apps/common.mk).
     def emit_big(name, values):
-        print(f"static float {name}[{N_BIG}] __attribute__((aligned(8))) = {{")
+        print(f"static float {name}[{N_BIG}] __attribute__((aligned(4 * NR_LANES))) = {{")
         # Emit 8 values per line to keep the file compact
         for i in range(0, N_BIG, 8):
             chunk = values[i:i+8]

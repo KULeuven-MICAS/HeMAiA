@@ -87,6 +87,16 @@ SWDIR       = $(abspath $(HOST_DIR)/..)
 RUNTIME_DIR = $(abspath $(HOST_DIR)/runtime)
 DEVICE_DIR  = $(abspath $(HOST_DIR)/../device)
 
+# Ara configuration — read NR_LANES from the same hjson the RTL uses.
+# Override with `make NR_LANES=N` (skips the shell parse) or `make CFG=...`.
+HEMAIA_ROOT ?= $(abspath $(HOST_DIR)/../../..)
+CFG         ?= $(HEMAIA_ROOT)/target/rtl/cfg/lru.hjson
+NR_LANES    ?= $(shell python3 -c "import hjson; cfg=hjson.load(open('$(CFG)')); print(cfg.get('cva6_ara',{}).get('nr_lanes',2))")
+ifeq ($(strip $(NR_LANES)),)
+    $(error NR_LANES could not be resolved from $(CFG))
+endif
+RISCV_CFLAGS += -DNR_LANES=$(NR_LANES)
+
 # Dependencies
 INCDIRS += $(RUNTIME_DIR)
 INCDIRS += $(abspath $(SWDIR)/shared/platform/generated)

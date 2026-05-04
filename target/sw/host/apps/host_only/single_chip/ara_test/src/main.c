@@ -22,10 +22,10 @@
 
 // Timing buffers (globals → live in .data, avoid stack overflow).
 // OP_MAX_LEN is 4096 (from gen_op_data.py) → 16 KB per buffer.
-static float timing_output[OP_MAX_LEN] __attribute__((aligned(8)));
-static float timing_fp32_scratch[OP_MAX_LEN] __attribute__((aligned(8)));
-static int8_t timing_int8_scratch[OP_MAX_LEN] __attribute__((aligned(8)));
-static float timing_scale_scratch __attribute__((aligned(8)));
+static float timing_output[OP_MAX_LEN] ARA_ALIGN;
+static float timing_fp32_scratch[OP_MAX_LEN] ARA_ALIGN;
+static int8_t timing_int8_scratch[OP_MAX_LEN] ARA_ALIGN;
+static float timing_scale_scratch ARA_ALIGN;
 
 // Timing sizes that span the TinyLlama workload range.
 #define TIMING_NUM_SIZES 4

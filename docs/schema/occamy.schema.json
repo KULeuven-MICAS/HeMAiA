@@ -197,6 +197,17 @@
                 }
             }
         },
+        "cva6_ara": {
+            "title": "CVA6+Ara accelerator parameters",
+            "type": "object",
+            "properties": {
+                "nr_lanes": {
+                    "type": "integer",
+                    "description": "Number of Ara vector lanes.",
+                    "default": 4
+                }
+            }
+        },
         "s1_quadrant": {
             "title": "S1 Quadrant Properties",
             "type": "object",

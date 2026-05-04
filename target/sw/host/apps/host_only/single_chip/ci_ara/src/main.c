@@ -92,7 +92,7 @@ int main() {
     printf("=== FP32 Operator Kernel Tests (ci_ara) ===\r\n");
     printf("Vector length: %d elements\r\n\r\n", OP_TEST_LEN);
 
-    float output[OP_TEST_LEN];
+    float output[OP_TEST_LEN] ARA_ALIGN;
     uint64_t args[8];
 
     // ─── Binary elementwise ────────────────────────────────────
@@ -183,7 +183,7 @@ int main() {
     // Softmax (on op_a, treated as 1 row of OP_TEST_LEN)
     {
         uint64_t sm_args[4];
-        float sm_out[OP_TEST_LEN];
+        float sm_out[OP_TEST_LEN] ARA_ALIGN;
         sm_args[0] = (uint64_t)(uintptr_t)op_a;
         sm_args[1] = (uint64_t)(uintptr_t)sm_out;
         sm_args[2] = 1;            // num_rows
@@ -210,8 +210,8 @@ int main() {
 
     // RMSNorm
     {
-        float rms_weight[OP_TEST_LEN];
-        float rms_out[OP_TEST_LEN];
+        float rms_weight[OP_TEST_LEN] ARA_ALIGN;
+        float rms_out[OP_TEST_LEN] ARA_ALIGN;
         for (int i = 0; i < OP_TEST_LEN; i++) rms_weight[i] = 1.0f;  // identity scale
         uint64_t rms_args[5];
         rms_args[0] = (uint64_t)(uintptr_t)op_a;
@@ -237,7 +237,7 @@ int main() {
 
     // SiLU * up (compound fused kernel)
     {
-        float gate[OP_TEST_LEN], up[OP_TEST_LEN], fused_out[OP_TEST_LEN];
+        float gate[OP_TEST_LEN] ARA_ALIGN, up[OP_TEST_LEN] ARA_ALIGN, fused_out[OP_TEST_LEN] ARA_ALIGN;
         for (int i = 0; i < OP_TEST_LEN; i++) {
             gate[i] = op_mixed[i];
             up[i] = op_a[i];

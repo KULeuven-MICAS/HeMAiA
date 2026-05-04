@@ -77,6 +77,9 @@
     txns: {
       narrow_and_wide: 16,
     },
+    cva6_ara: {
+      nr_lanes: 4,
+    },
     narrow_xbar_slv_id_width: 4,
     narrow_xbar_user_width: 3, // clog2(total number of clusters)
     nr_s1_quadrant: 1,

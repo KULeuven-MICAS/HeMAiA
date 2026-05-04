@@ -14,10 +14,6 @@ SRCS = src/main.c
 BINGO_HOST ?= 0
 INCL_DEVICE_BINARY ?= 0
 
-# Ara config
-NR_LANES ?= 2
-RISCV_CFLAGS += -DNR_LANES=$(NR_LANES)
-
 # Generated test data
 OP_DATA_H = $(MK_DIR)/include/op_test_data.h
 $(OP_DATA_H): $(MK_DIR)/include/gen_op_data.py

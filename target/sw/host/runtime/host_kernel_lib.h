@@ -9,6 +9,15 @@
 #include "libbingo/bingo_api.h"         // BINGO_PRINTF, bingo_cerf_update()
 #define EXIT_CODE_SUCC 1
 #define EXIT_CODE_FAIL 2
+
+// Buffer alignment for Ara vector loads — must scale with the lane count so
+// each lane sees one contiguous slice per beat.  NR_LANES is set by
+// target/sw/host/apps/common.mk (-DNR_LANES=N, read from the same hjson the
+// RTL is built with).  Mirrors apps/*/main.c in the upstream Ara repo.
+#ifndef NR_LANES
+#define NR_LANES 4  // fallback incase the build system doesn't set it properly; matches the default in the RTL cfgs and schema. Should be overridden by build system.
+#endif
+#define ARA_ALIGN __attribute__((aligned(4 * NR_LANES)))
 // Host Bingo Kernel Implementations
 // Normally the functions ret with 0
 // Only the exit kernel returns the exit code defined by EXIT_CODE_SUCC, for now it is 1

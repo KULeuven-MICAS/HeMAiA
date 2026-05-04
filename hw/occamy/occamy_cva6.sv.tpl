@@ -398,7 +398,7 @@ module ${name}_cva6_ara import ${name}_pkg::*; (
   );
 
   ara #(
-    .NrLanes           (2                         ),
+    .NrLanes           (${occamy_cfg["cva6_ara"]["nr_lanes"]}),
     .VLEN              (VLEN                      ),
     .OSSupport         (OSSupport                 ),
     .FPUSupport        (FPUSupport                ),
