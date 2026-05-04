@@ -6,7 +6,7 @@
 script_dir="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 
 # Allow overriding these from the environment or via CLI flags below.
-# ./1_init_outside_docker.sh --pll=0 --d2d=0
+# ./1_git_pull_private_modules.sh --pll=0 --d2d=0
 # We hardcoded the defaults to 1
 # Defaults: MACRO=1, D2D=1, PLL=1
 SIM_WITH_MACRO="${SIM_WITH_MACRO:-1}"
@@ -46,7 +46,7 @@ if [ "$SIM_WITH_MACRO" -eq 1 ]; then
     if [ ! -d "$script_dir/../../hw/hemaia/tech_cells_tsmc16" ]; then
         git clone git@github.com:IveanEx/tech_cells_tsmc16.git "$script_dir/../../hw/hemaia/tech_cells_tsmc16"
     else
-        cd $script_dir/../../hw/hemaia/tech_cells_tsmc16 || exit
+        cd "$script_dir/../../hw/hemaia/tech_cells_tsmc16" || exit
         git pull
     fi
 else
@@ -57,7 +57,7 @@ if [ "$SIM_WITH_D2D" -eq 1 ]; then
     if [ ! -d "$script_dir/../../hw/hemaia/hemaia_d2d_link" ]; then
         git clone git@github.com:IveanEx/hemaia_d2d_link.git "$script_dir/../../hw/hemaia/hemaia_d2d_link"
     else
-        cd $script_dir/../../hw/hemaia/hemaia_d2d_link || exit
+        cd "$script_dir/../../hw/hemaia/hemaia_d2d_link" || exit
         git pull
     fi
 else
@@ -67,7 +67,7 @@ if [ "$SIM_WITH_PLL" -eq 1 ]; then
     if [ ! -d "$script_dir/../../hw/hemaia/hemaia_clk_rst_controller" ]; then
         git clone git@github.com:IveanEx/hemaia_clk_rst_controller.git "$script_dir/../../hw/hemaia/hemaia_clk_rst_controller"
     else
-        cd $script_dir/../../hw/hemaia/hemaia_clk_rst_controller || exit
+        cd "$script_dir/../../hw/hemaia/hemaia_clk_rst_controller" || exit
         git pull
     fi
 else
@@ -109,4 +109,3 @@ if [ "$SIM_WITH_PLL" -eq 1 ]; then
 else
     echo "SIM_WITH_PLL=0: leaving Bender.local entry for hemaia_clk_rst_controller untouched"
 fi
-
