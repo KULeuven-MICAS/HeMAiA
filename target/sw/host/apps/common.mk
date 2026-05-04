@@ -88,14 +88,17 @@ RUNTIME_DIR = $(abspath $(HOST_DIR)/runtime)
 DEVICE_DIR  = $(abspath $(HOST_DIR)/../device)
 
 # Ara configuration — read NR_LANES from the same hjson the RTL uses.
-# Override with `make NR_LANES=N` (skips the shell parse) or `make CFG=...`.
-HEMAIA_ROOT ?= $(abspath $(HOST_DIR)/../../..)
-CFG         ?= $(HEMAIA_ROOT)/target/rtl/cfg/lru.hjson
-NR_LANES    ?= $(shell python3 -c "import hjson; cfg=hjson.load(open('$(CFG)')); print(cfg.get('cva6_ara',{}).get('nr_lanes',2))")
+# Override with `make NR_LANES=N` (skips the shell parse)
+HEMAIA_ROOT   ?= $(abspath $(HOST_DIR)/../../..)
+CFG           ?= $(HEMAIA_ROOT)/target/rtl/cfg/lru.hjson
+IS_CLEAN_GOAL := $(filter clean clean-%,$(MAKECMDGOALS))
+ifeq ($(IS_CLEAN_GOAL),)
+NR_LANES      ?= $(shell python3 -c "import hjson, os; print(hjson.load(open('$(CFG)')).get('cva6_ara',{}).get('nr_lanes',4) if os.path.exists('$(CFG)') else 4)")
 ifeq ($(strip $(NR_LANES)),)
-    $(error NR_LANES could not be resolved from $(CFG))
+    $(error NR_LANES could not be resolved (python3 / hjson missing?))
 endif
 RISCV_CFLAGS += -DNR_LANES=$(NR_LANES)
+endif
 
 # Dependencies
 INCDIRS += $(RUNTIME_DIR)
