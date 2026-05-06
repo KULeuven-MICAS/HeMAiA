@@ -5,6 +5,7 @@
 # Xiaoling Yi <xiaoling.yi@kuleuven.be>
 
 {
+    # needed to be checked with the hardware configuration
     num_clusters: 1
     array_shape: 0
     transposed_A: 0
@@ -12,9 +13,7 @@
     K1: 2
     N1: 2
     M1: 1
-    K2: 32
     N2: 2
-    M2: 1
     // these two will config the addNewC = 1
     addNonZeroC: 0
     addZeroC: 1
