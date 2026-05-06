@@ -5,6 +5,14 @@
 // Fanchen Kong <fanchen.kong@kuleuven.be>
 #include "offload_bingo_hw.h"
 
+#ifdef OFFLOAD_BINGO_HW_DEBUG
+#define OFFLOAD_BINGO_HW_DEBUG_PRINT(...) printf(__VA_ARGS__)
+#define OFFLOAD_BINGO_HW_DEBUG_PRINT_SAFE(...) printf_safe(__VA_ARGS__)
+#else
+#define OFFLOAD_BINGO_HW_DEBUG_PRINT(...)
+#define OFFLOAD_BINGO_HW_DEBUG_PRINT_SAFE(...)
+#endif
+
 int main() {
     uintptr_t current_chip_address_prefix =
         (uintptr_t)get_current_chip_baseaddress();
@@ -13,17 +21,23 @@ int main() {
     init_uart(current_chip_address_prefix, 32, 1);
     // Enable vector extension
     enable_vec();
-    printf("Single-chip Offload HW Bingo Main\r\n");
-    printf("Chip(%x, %x): [Host] Start Offloading Program\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+    OFFLOAD_BINGO_HW_DEBUG_PRINT("Single-chip Offload HW Bingo Main\r\n");
+    OFFLOAD_BINGO_HW_DEBUG_PRINT(
+        "Chip(%x, %x): [Host] Start Offloading Program\r\n",
+        get_current_chip_loc_x(), get_current_chip_loc_y());
 
     ///////////////////////////////
     // 2. Init the Allocator
     ///////////////////////////////
     if(bingo_hemaia_system_mmap_init() < 0){
-        printf("Chip(%x, %x): [Host] Error when initializing Allocator\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+        OFFLOAD_BINGO_HW_DEBUG_PRINT(
+            "Chip(%x, %x): [Host] Error when initializing Allocator\r\n",
+            get_current_chip_loc_x(), get_current_chip_loc_y());
         return -1;
     } else {
-        printf("Chip(%x, %x): [Host] Allocator Init Success\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+        OFFLOAD_BINGO_HW_DEBUG_PRINT(
+            "Chip(%x, %x): [Host] Allocator Init Success\r\n",
+            get_current_chip_loc_x(), get_current_chip_loc_y());
     }
     ///////////////////////////////
     // 3. Wake up all the clusters
@@ -42,18 +56,26 @@ int main() {
     // 3.3 Start Snitches
     wakeup_snitches_cl(current_chip_id);
     asm volatile("fence" ::: "memory");
-    printf("Chip(%x, %x): [Host] Wake up clusters\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+    OFFLOAD_BINGO_HW_DEBUG_PRINT(
+        "Chip(%x, %x): [Host] Wake up clusters\r\n",
+        get_current_chip_loc_x(), get_current_chip_loc_y());
 
     ///////////////////////////////
     // 4. Run the bingo runtime
     ///////////////////////////////
 
-    printf_safe("Chip(%x, %x): [Host] Start Bingo Runtime\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+    OFFLOAD_BINGO_HW_DEBUG_PRINT_SAFE(
+        "Chip(%x, %x): [Host] Start Bingo Runtime\r\n",
+        get_current_chip_loc_x(), get_current_chip_loc_y());
     int ret = kernel_execution();
     // By default the clusters will pull up the interrupt line once the tasks are done
     // So we clean up the interrupt line here
     clear_host_sw_interrupt(current_chip_id);
-    printf_safe("Chip(%x, %x): [Host] Offload Finish with ret = %d\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), ret);
-    printf_safe("Chip(%x, %x): [Host] End Offloading Program\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());   
+    OFFLOAD_BINGO_HW_DEBUG_PRINT_SAFE(
+        "Chip(%x, %x): [Host] Offload Finish with ret = %d\r\n",
+        get_current_chip_loc_x(), get_current_chip_loc_y(), ret);
+    OFFLOAD_BINGO_HW_DEBUG_PRINT_SAFE(
+        "Chip(%x, %x): [Host] End Offloading Program\r\n",
+        get_current_chip_loc_x(), get_current_chip_loc_y());   
     return ret;
 }
