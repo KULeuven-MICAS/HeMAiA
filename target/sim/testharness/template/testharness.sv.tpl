@@ -137,19 +137,6 @@ module testharness;
     endtask
 
     %if pll_present:
-    // Vendor PLL clk monitor
-    %for compute_chip in compute_chips:
-    <%
-        comp_chip_x = compute_chip.coordinate[0]
-        comp_chip_y = compute_chip.coordinate[1]
-    %>
-    clkmon #(.counts(2500), .pcterr(0.35)
-    ) i_pll_mon_${comp_chip_x}_${comp_chip_y} (
-        .CLK_REF(i_dut.i_hemaia_${comp_chip_x}_${comp_chip_y}.i_occamy_chip.i_hemaia_clk_rst_controller.i_pll.clk_o),
-        .DONE(),
-        .TIMEOUT()
-    );
-    %endfor
     task check_frequency();
         begin
         %for compute_chip in compute_chips:
