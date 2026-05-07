@@ -60,4 +60,10 @@
 // SNAX runtime
 #include "snax_xdma_lib.h"
 
+#ifdef SANX_OFFLOAD_BINGO_HW_DEBUG
+#define SANX_OFFLOAD_BINGO_HW_DEBUG_PRINT_SAFE(...) printf_safe(__VA_ARGS__)
+#else
+#define SANX_OFFLOAD_BINGO_HW_DEBUG_PRINT_SAFE(...)
+#endif
+
 #endif  // SNRT_H
