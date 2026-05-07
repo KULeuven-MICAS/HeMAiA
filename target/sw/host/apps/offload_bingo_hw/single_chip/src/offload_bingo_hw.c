@@ -13,8 +13,8 @@ int main() {
     init_uart(current_chip_address_prefix, 32, 1);
     // Enable vector extension
     enable_vec();
-    OFFLOAD_BINGO_HW_DEBUG_PRINT("Single-chip Offload HW Bingo Main\r\n");
-    OFFLOAD_BINGO_HW_DEBUG_PRINT(
+    OFFLOAD_BINGO_HW_DEBUG_PRINT_SAFE("Single-chip Offload HW Bingo Main\r\n");
+    OFFLOAD_BINGO_HW_DEBUG_PRINT_SAFE(
         "Chip(%x, %x): [Host] Start Offloading Program\r\n",
         get_current_chip_loc_x(), get_current_chip_loc_y());
 
@@ -22,12 +22,12 @@ int main() {
     // 2. Init the Allocator
     ///////////////////////////////
     if(bingo_hemaia_system_mmap_init() < 0){
-        OFFLOAD_BINGO_HW_DEBUG_PRINT(
+        OFFLOAD_BINGO_HW_DEBUG_PRINT_SAFE(
             "Chip(%x, %x): [Host] Error when initializing Allocator\r\n",
             get_current_chip_loc_x(), get_current_chip_loc_y());
         return -1;
     } else {
-        OFFLOAD_BINGO_HW_DEBUG_PRINT(
+        OFFLOAD_BINGO_HW_DEBUG_PRINT_SAFE(
             "Chip(%x, %x): [Host] Allocator Init Success\r\n",
             get_current_chip_loc_x(), get_current_chip_loc_y());
     }
@@ -48,7 +48,7 @@ int main() {
     // 3.3 Start Snitches
     wakeup_snitches_cl(current_chip_id);
     asm volatile("fence" ::: "memory");
-    OFFLOAD_BINGO_HW_DEBUG_PRINT(
+    OFFLOAD_BINGO_HW_DEBUG_PRINT_SAFE(
         "Chip(%x, %x): [Host] Wake up clusters\r\n",
         get_current_chip_loc_x(), get_current_chip_loc_y());
 
