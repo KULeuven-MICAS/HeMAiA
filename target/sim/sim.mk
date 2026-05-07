@@ -60,6 +60,7 @@ else
 VCS_SOURCES   =
 endif
 VCS_BUILDDIR := work-vcs
+VCS_RUN_SCRIPT := $(VCS_BUILDDIR)/run.vcs.tcl
 
 ifeq ($(IS_CLEAN_GOAL),)
 SYN_SOURCES = $(shell ${BENDER} script synopsys ${SYN_BENDER})
