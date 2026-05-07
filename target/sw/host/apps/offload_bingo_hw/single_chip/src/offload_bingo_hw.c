@@ -5,14 +5,6 @@
 // Fanchen Kong <fanchen.kong@kuleuven.be>
 #include "offload_bingo_hw.h"
 
-#ifdef OFFLOAD_BINGO_HW_DEBUG
-#define OFFLOAD_BINGO_HW_DEBUG_PRINT(...) printf(__VA_ARGS__)
-#define OFFLOAD_BINGO_HW_DEBUG_PRINT_SAFE(...) printf_safe(__VA_ARGS__)
-#else
-#define OFFLOAD_BINGO_HW_DEBUG_PRINT(...)
-#define OFFLOAD_BINGO_HW_DEBUG_PRINT_SAFE(...)
-#endif
-
 int main() {
     uintptr_t current_chip_address_prefix =
         (uintptr_t)get_current_chip_baseaddress();

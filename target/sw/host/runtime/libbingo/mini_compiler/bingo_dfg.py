@@ -1611,7 +1611,7 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
     def _emit_scheduler_launch(self, f, chiplet_id):
         """Emit the scheduler initialization and launch calls."""
         f.write("\n")
-        f.write('        printf_safe("Chip(%x, %x): [Host] Init HW Bingo Scheduler\\r\\n",\n')
+        f.write('        OFFLOAD_BINGO_HW_DEBUG_PRINT_SAFE("Chip(%x, %x): [Host] Init HW Bingo Scheduler\\r\\n",\n')
         f.write('               get_current_chip_loc_x(), get_current_chip_loc_y());\n\n')
 
         f.write(f"        bingo_hw_scheduler_init((uint64_t)(uintptr_t)device_arg_list_chip_{chiplet_id:02x},\n")
@@ -1676,7 +1676,7 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
             # Step 3: Emit kernel_execution function structure
             f.write("int kernel_execution(){\n")
             f.write("    check_kernel_tab_ready();\n")
-            f.write(f"    printf_safe(\"Chip(%x, %x): [Host] Preparing {app_name} Workload\\r\\n\", get_current_chip_loc_x(), get_current_chip_loc_y());\n")
+            f.write(f"    OFFLOAD_BINGO_HW_DEBUG_PRINT_SAFE(\"Chip(%x, %x): [Host] Preparing {app_name} Workload\\r\\n\", get_current_chip_loc_x(), get_current_chip_loc_y());\n")
             f.write("    uint32_t current_chip_id = get_current_chip_id();\n")
             
 

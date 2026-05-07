@@ -9,6 +9,7 @@
 #include "libbingo/bingo_api.h"         // BINGO_PRINTF, bingo_cerf_update()
 #define EXIT_CODE_SUCC 1
 #define EXIT_CODE_FAIL 2
+
 // Host Bingo Kernel Implementations
 // Normally the functions ret with 0
 // Only the exit kernel returns the exit code defined by EXIT_CODE_SUCC, for now it is 1

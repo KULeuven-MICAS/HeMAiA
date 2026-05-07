@@ -54,7 +54,6 @@
 #define BINGO_RET_EXIT 1
 #define BINGO_RET_FAIL 2
 
-
 #ifdef BINGO_DEBUG_LEVEL
 #define _BINGO_PRINTF(...)             \
     if (1) {                        \
@@ -66,6 +65,14 @@
     }
 #else
 #define BINGO_PRINTF(d, ...)
+#endif
+
+#ifdef OFFLOAD_BINGO_HW_DEBUG
+#define OFFLOAD_BINGO_HW_DEBUG_PRINT(...) printf(__VA_ARGS__)
+#define OFFLOAD_BINGO_HW_DEBUG_PRINT_SAFE(...) printf_safe(__VA_ARGS__)
+#else
+#define OFFLOAD_BINGO_HW_DEBUG_PRINT(...)
+#define OFFLOAD_BINGO_HW_DEBUG_PRINT_SAFE(...)
 #endif
 
 
