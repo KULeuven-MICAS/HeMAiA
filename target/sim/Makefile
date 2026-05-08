@@ -117,9 +117,13 @@ VCS_FLAGS += -fgp
 # Debug Options
 VCS_FLAGS += -assert disable_cover
 # Waveform Visibility
+# for looking at the cells
 VCS_FLAGS += -kdb
-VCS_FLAGS += +vcs+fsdbon
-VCS_FLAGS += -debug_access+all
+# for looking at the waveform
+# huge performace decline when enabled, use only for debugging
+# VCS_FLAGS += +vcs+fsdbon
+# VCS_FLAGS += -debug_access+f
+# VCS_FLAGS += -debug_access+all
 
 # Verilated and compiled Occamy system
 VLT_AR     = ${VLT_BUILDDIR}/Vtestharness__ALL.a
