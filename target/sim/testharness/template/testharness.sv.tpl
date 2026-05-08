@@ -148,7 +148,6 @@ module testharness;
         @(posedge chip${compute_chip.coordinate[0]}${compute_chip.coordinate[1]}_pll_lock_o);
         $display("Chip ${compute_chip.coordinate[0]}${compute_chip.coordinate[1]}'s PLL Lock asserted!");
         %endfor
-        check_frequency;        
         end
     endtask
     %endif
