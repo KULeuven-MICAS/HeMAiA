@@ -17,7 +17,7 @@ int main(){
             writew((uint32_t)(uintptr_t)&__snax_symtab_start, kernel_tab_start_addr);
             writew((uint32_t)(uintptr_t)&__snax_symtab_end, kernel_tab_end_addr);
             writew(1, kernel_tab_ready_addr);
-            printf_safe("[Cluster %d] DM core has written the kernel tab to the soc ctrl\n", snrt_cluster_idx());
+            SANX_OFFLOAD_BINGO_HW_DEBUG_PRINT_SAFE("[Cluster %d] DM core has written the kernel tab to the soc ctrl \r\n", snrt_cluster_idx());
         }
     }
     snrt_global_barrier();

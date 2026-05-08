@@ -117,9 +117,13 @@ VCS_FLAGS += -fgp
 # Debug Options
 VCS_FLAGS += -assert disable_cover
 # Waveform Visibility
+# for looking at the cells
 VCS_FLAGS += -kdb
-VCS_FLAGS += +vcs+fsdbon
-VCS_FLAGS += -debug_access+all
+# for looking at the waveform
+# huge performace decline when enabled, use only for debugging
+# VCS_FLAGS += +vcs+fsdbon
+# VCS_FLAGS += -debug_access+f
+# VCS_FLAGS += -debug_access+all
 
 # Verilated and compiled Occamy system
 VLT_AR     = ${VLT_BUILDDIR}/Vtestharness__ALL.a
@@ -306,15 +310,23 @@ $(VCS_BUILDDIR)/compile.sh: | $(VCS_BUILDDIR)
 	${BENDER} script vcs ${VCS_BENDER} --vlog-arg="${VLOGAN_FLAGS}" --vcom-arg="${VHDLAN_FLAGS}" > $@
 	chmod +x $@
 
-$(BIN_DIR)/occamy_chip.vcs: $(VCS_BUILDDIR)/compile.sh
+$(VCS_RUN_SCRIPT): | $(VCS_BUILDDIR)
+	echo 'run' > $@
+
+$(BIN_DIR)/occamy_chip.vcs: $(VCS_BUILDDIR)/compile.sh $(VCS_RUN_SCRIPT)
 	bash work-vcs/compile.sh | tee $(dir $<)vcs_compile.log
 	mkdir -p $(BIN_DIR)
 	$(VCS) $(VCS_FLAGS) -o $(BIN_DIR)/occamy_chip.vcs -cc $(CC) -cpp $(CXX) \
 		-override_timescale=1ns/1ps -full64 -ignore initializer_driver_checks testharness $(TB_CC_SOURCES) $(RTL_CC_SOURCES) \
 		-CFLAGS "$(TB_CC_FLAGS)" -lutil +error+100 | tee $(dir $<)vcs.log
+	@echo "#!/bin/bash" > $@.gui
+	@echo 'script_dir="$$( cd -- "$$( dirname -- "$${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"' >> $@.gui
+	@echo 'cd $$script_dir' >> $@.gui
+	@echo './occamy_chip.vcs -gui -ucli -i ../$(VCS_RUN_SCRIPT) "$$@"' >> $@.gui
+	@chmod +x $@.gui
 .PHONY: clean-vcs
 clean-vcs: clean-work
-	rm -rf $(VCS_BUILDDIR) AN.DB work.lib++ vc_hdrs.h $(BIN_DIR)/$(TARGET).vcs $(BIN_DIR)/inter.fsdb $(BIN_DIR)/$(TARGET).vcs.daidir $(BIN_DIR)/verdi_config_file $(BIN_DIR)/verdiLog $(BIN_DIR)/novas* $(BIN_DIR)/ucli.key
+	rm -rf $(VCS_BUILDDIR) AN.DB work.lib++ vc_hdrs.h $(BIN_DIR)/$(TARGET).vcs $(BIN_DIR)/$(TARGET).vcs.gui $(BIN_DIR)/inter.fsdb $(BIN_DIR)/$(TARGET).vcs.daidir $(BIN_DIR)/verdi_config_file $(BIN_DIR)/verdiLog $(BIN_DIR)/novas* $(BIN_DIR)/ucli.key
 
 ########
 # Util #

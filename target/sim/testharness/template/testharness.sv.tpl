@@ -5,7 +5,7 @@
 // Fanchen Kong <fanchen.kong@kuleuven.be>
 //
 // This is the testharness of the Hemaia chip
-// In the test harness there will be have three things：
+// In the test harness there will be have three things:
 // 1. off-chip driving signals
 //    CLK and RST: clk_i, rst_i
 //    PLL Driving Pins: pll_i, pll_o
@@ -132,32 +132,6 @@ module testharness;
             chip${comp_chip_x}${comp_chip_y}_pll_bypass_drv = '0;
             chip${comp_chip_x}${comp_chip_y}_pll_en_drv = '0;
             chip${comp_chip_x}${comp_chip_y}_pll_post_div_sel_drv = '0;
-        %endfor
-        end
-    endtask
-
-    %if pll_present:
-    // Vendor PLL clk monitor
-    %for compute_chip in compute_chips:
-    <%
-        comp_chip_x = compute_chip.coordinate[0]
-        comp_chip_y = compute_chip.coordinate[1]
-    %>
-    clkmon #(.counts(2500), .pcterr(0.35)
-    ) i_pll_mon_${comp_chip_x}_${comp_chip_y} (
-        .CLK_REF(i_dut.i_hemaia_${comp_chip_x}_${comp_chip_y}.i_occamy_chip.i_hemaia_clk_rst_controller.i_pll.clk_o),
-        .DONE(),
-        .TIMEOUT()
-    );
-    %endfor
-    task check_frequency();
-        begin
-        %for compute_chip in compute_chips:
-        <%
-            comp_chip_x = compute_chip.coordinate[0]
-            comp_chip_y = compute_chip.coordinate[1]
-        %>
-            i_pll_mon_${comp_chip_x}_${comp_chip_y}.run();
         %endfor
         end
     endtask

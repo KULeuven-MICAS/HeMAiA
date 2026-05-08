@@ -121,16 +121,15 @@ def define_workload_params(cfg_path, hwcfg_path):
 def define_memory_handles(params):
     """Defines memory symbols and handles."""
     mem_handles = {}
-    # 1. Define Memory Fixed Addresses
 
-    # 2. Define Memory Symbols
+    # 1. Define Memory Symbols
     # The MemSymbol are the variables defined in the data.h file which the memory location is already known at compile time
     mem_handles["A1_symbol_l3"] = BingoMemSymbol("A1", offset=0)
     mem_handles["B1_symbol_l3"] = BingoMemSymbol("B1", offset=0)
     mem_handles["B2_symbol_l3"] = BingoMemSymbol("B2", offset=0)
     mem_handles["D2_symbol_l3"] = BingoMemSymbol("D2", offset=0)
 
-    # 3. Define Memory Handles (Dynamic Allocations)
+    # 2. Define Memory Handles (Dynamic Allocations)
     # Prepare L1 buffers for A1, B1, D1, B2, D2 and L3 for D2
     mem_handles["A1_l1"] = BingoMemAlloc(
         "A1_l1",
@@ -275,7 +274,7 @@ def create_dfg(params, mem_handles, platform):
         kernel_args=HostBingoKernelCheckResultArgs(
             golden_data_addr=mem_handles["D2_symbol_l3"],
             output_data_addr=mem_handles["D2_result_l3"],
-            data_size=64, # check first 64 bytes for simplicity
+            data_size=params["D2_size"], # check first 64 bytes for simplicity
         ),
     )
     # 3. Add Nodes to DFG
@@ -325,6 +324,7 @@ def main():
     mem_handles = define_memory_handles(params)
     platform = parse_platform_cfg(args.platformcfg)
     if not guard_cluster_count(merged_config, platform, args.output_dir, args.output_offload_file_name):
+        assert False, "Cluster count mismatch between workload and platform. Check warnings and fix the issue before proceeding."
         return
     dfg = create_dfg(params, mem_handles, platform)
     dfg.bingo_compile_dfg(params["app_name"], output_dir, output_file_name, extra_include_header_list=["gemm_data.h"])
