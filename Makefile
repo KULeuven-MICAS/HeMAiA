@@ -222,4 +222,4 @@ hemaia_system_vcs_preparation: $(CFG) # In SNAX Docker
 
 hemaia_system_vcs: # In ESAT Server
 	$(MAKE) -C ./target/sim bin/occamy_chip.vcs SIM_CFG=$(SIM_CFG)
-# How to start the execution of the simulation: cd ./target/sim/bin; ./occamy_chip.vcs -gui -fgp=num_threads:8
+# How to start the execution of the simulation: cd ./target/sim/bin; ./occamy_chip.vcs -gui -fgp=num_threads:8 | tee run.log
