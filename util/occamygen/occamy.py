@@ -64,6 +64,34 @@ def check_occamy_cfg(occamy_cfg):
     generator_obj.validate(occamy_cfg)
 
 
+def check_cva6_ara_cfg(occamy_cfg, ara_axi_dw):
+    # Mirrors Ara's elaboration-time assertions (ara.sv:664-682, ara_soc.sv:23)
+    # so a misconfigured cfg fails fast at occamygen time instead of producing
+    # silent runtime corruption (vfmv_v_f / scalar-broadcast NaNs, etc.).
+    cfg = occamy_cfg["cva6_ara"]
+    nr_lanes = cfg["nr_lanes"]
+    vlen = cfg["vlen"]
+    ELEN, MAX_LANES = 64, 16
+
+    if nr_lanes <= 0 or nr_lanes > MAX_LANES or (nr_lanes & (nr_lanes - 1)):
+        raise ValueError(
+            f"cva6_ara.nr_lanes={nr_lanes} must be a power of 2 in [1,{MAX_LANES}] "
+            f"(Ara assertion, hardware/src/ara.sv:664-671).")
+
+    if vlen <= 0 or vlen < ELEN or (vlen & (vlen - 1)):
+        raise ValueError(
+            f"cva6_ara.vlen={vlen} must be a power of 2 and >= ELEN({ELEN}) "
+            f"(Ara assertion, hardware/src/ara.sv:673-682).")
+
+    expected_dw = nr_lanes * 32
+    if expected_dw != ara_axi_dw:
+        raise ValueError(
+            f"cva6_ara.nr_lanes={nr_lanes} implies AxiDataWidth={expected_dw} "
+            f"(ara_soc.sv:23: AxiDataWidth = 32*NrLanes), but the xbar Ara is "
+            f"connected to has dw={ara_axi_dw}. Either change nr_lanes to "
+            f"{ara_axi_dw // 32}, or move Ara to a wider xbar.")
+
+
 
 
 def get_cluster_generators(occamy_cfg, cluster_cfg_dir):

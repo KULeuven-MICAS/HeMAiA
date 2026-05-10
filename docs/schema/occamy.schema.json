@@ -200,17 +200,17 @@
         "cva6_ara": {
             "title": "CVA6+Ara accelerator parameters",
             "type": "object",
-            "description": "Ara vector unit configuration. nr_lanes and vlen MUST be chosen together: Ara documents the strict constraint VLEN > 128 (see ara/config/*.mk), and the upstream-tested pairings are 2 lanes : 2048 VLEN, 4 lanes : 4096 VLEN, 8 lanes : 8192 VLEN, 16 lanes : 16384 VLEN. Mismatched pairings (e.g. nr_lanes=4 with vlen=128) cause vfmv_v_f / scalar-broadcast distribution to misbehave, producing wrong-but-finite results in some kernels and NaNs in others.",
+            "description": "Ara vector unit configuration. Constraints (enforced at occamygen time by util/occamygen/occamy.py:check_cva6_ara_cfg, mirroring Ara's elaboration-time assertions in ara.sv:664-682 and ara_soc.sv:23): nr_lanes is a power of 2 in [1,16]; vlen is a power of 2 and >= ELEN(64); nr_lanes*32 must equal the AXI dw of the xbar Ara is connected to (today the narrow xbar, dw=64, so nr_lanes=2). When Ara is later moved onto the wide xbar (dw=512) the legal nr_lanes will be 16.",
             "properties": {
                 "nr_lanes": {
                     "type": "integer",
-                    "description": "Number of Ara vector lanes. Must be paired with a matching vlen — see object description.",
-                    "default": 4
+                    "description": "Number of Ara vector lanes. Power of 2 in [1,16]; nr_lanes*32 must match Ara's AXI dw.",
+                    "default": 2
                 },
                 "vlen": {
                     "type": "integer",
-                    "description": "Vector register length of the Ara unit, in bits. Constraint from upstream Ara: VLEN > 128 (strict). Recommended pairing with nr_lanes: 2:2048, 4:4096, 8:8192, 16:16384.",
-                    "default": 4096
+                    "description": "Vector register length of the Ara unit, in bits. Power of 2 and >= ELEN(64).",
+                    "default": 128
                 }
             }
         },

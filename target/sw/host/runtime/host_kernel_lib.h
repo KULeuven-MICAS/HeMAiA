@@ -15,7 +15,7 @@
 // target/sw/host/apps/common.mk (-DNR_LANES=N, read from the same hjson the
 // RTL is built with).  Mirrors apps/*/main.c in the upstream Ara repo.
 #ifndef NR_LANES
-#define NR_LANES 4  // fallback incase the build system doesn't set it properly; matches the default in the RTL cfgs and schema. Should be overridden by build system.
+#define NR_LANES 2  // fallback in case the build system doesn't set it properly; matches the default in the RTL cfgs and schema. Should be overridden by build system.
 #endif
 #define ARA_ALIGN __attribute__((aligned(4 * NR_LANES)))
 // Host Bingo Kernel Implementations

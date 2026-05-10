@@ -501,6 +501,11 @@ def main():
         context="soc",
         node=am_soc_narrow_xbar)
     
+    # Validate the Ara cfg against the AXI dw it will actually be connected to.
+    # Ara is currently an input on soc_narrow_xbar (see add_input("cva6") below).
+    # When Ara is later moved to soc_wide_xbar, swap the argument here.
+    occamy.check_cva6_ara_cfg(occamy_cfg, soc_narrow_xbar.dw)
+
     # Default port: wide xbar (Should stay on the first position)
     soc_narrow_xbar.add_output_entry("soc_wide", am_soc_wide_xbar)
     soc_narrow_xbar.add_input("soc_wide")

@@ -185,6 +185,7 @@ module ${name}_cva6_ara import ${name}_pkg::*; (
 
   localparam config_pkg::cva6_user_cfg_t cva6_user_cfg = '{
       XLEN: unsigned'(CVA6ConfigXlen),
+      // CVA6's virtual-address VLEN (page-walk side); independent of Ara's vector VLEN below.
       VLEN: unsigned'(64),
       FpgaEn: bit'(0),  // for Xilinx and Altera
       FpgaAlteraEn: bit'(0),  // for Altera (only)
@@ -369,14 +370,16 @@ module ${name}_cva6_ara import ${name}_pkg::*; (
   /////////
   // ARA //
   /////////
-  // VLEN must satisfy Ara's strict constraint VLEN > 128 (see
-  // ara/config/*.mk in the upstream repo). VLEN is also tightly coupled to
-  // NrLanes: tested upstream pairings are 2:2048, 4:4096, 8:8192, 16:16384.
-  // Picking a too-small VLEN for the lane count breaks vfmv_v_f / scalar-
-  // broadcast distribution at runtime (NaNs from sigmoid/tanh/exp, wrong
-  // results from relu/abs). Both values come from the cva6_ara block in the
-  // hjson cfg so HW and SW (-DNR_LANES via target/sw/host/apps/common.mk)
-  // stay in sync.
+  // NrLanes / VLEN constraints are validated at occamygen time by
+  // util/occamygen/occamy.py:check_cva6_ara_cfg, mirroring Ara's
+  // elaboration-time assertions in ara.sv:664-682 and ara_soc.sv:23:
+  //   - nr_lanes is a power of 2 in [1,16]
+  //   - vlen is a power of 2 and >= ELEN(64)
+  //   - nr_lanes*32 == AXI dw of the xbar Ara is connected to
+  //     (today: soc_narrow_xbar, dw=64, so nr_lanes=2)
+  // Both values come from the cva6_ara block in the hjson cfg so HW and SW
+  // (-DNR_LANES via target/sw/host/apps/common.mk) stay in sync.
+  localparam int unsigned             NrLanes      = ${occamy_cfg["cva6_ara"]["nr_lanes"]};
   localparam int unsigned             VLEN         = ${occamy_cfg["cva6_ara"]["vlen"]};
   localparam int unsigned             OSSupport    = 0;
   localparam ara_pkg::fpu_support_e   FPUSupport   = ara_pkg::FPUSupportSingle;
@@ -406,7 +409,7 @@ module ${name}_cva6_ara import ${name}_pkg::*; (
   );
 
   ara #(
-    .NrLanes           (${occamy_cfg["cva6_ara"]["nr_lanes"]}),
+    .NrLanes           (NrLanes                   ),
     .VLEN              (VLEN                      ),
     .OSSupport         (OSSupport                 ),
     .FPUSupport        (FPUSupport                ),
