@@ -5,9 +5,10 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 
 # Workloads to build separate ELFs for
-APPS =  gemm_double_buffer_1cluster
-APPS += gemm_seperate_load_and_compute_parallel_1cluster
-APPS += gemm_seperate_load_and_compute_serial_1cluster
+APPS = concurrent_dma_1cluster
+APPS +=  gemm_double_buffer_1cluster
+APPS += gemm_serial_dma_1cluster
+APPS += gemm_parallel_dma_1cluster
 APPS += gemm_stacked_1cluster
 APPS += gemm_sweep_1cluster
 APPS += xdma_all_ops_1cluster

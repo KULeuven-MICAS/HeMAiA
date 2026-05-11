@@ -23,7 +23,11 @@ from bingo_dfg import BingoDFG
 from bingo_platform import guard_cluster_count, parse_platform_cfg  # noqa E402
 from bingo_node import BingoNode
 from bingo_mem_handle import BingoMemAlloc, BingoMemSymbol
-from bingo_kernel_args import SnaxBingoKernelXdma1dCopyArgs
+from bingo_kernel_args import (  # noqa E402
+    SnaxBingoKernelIdma1dCopyArgs,
+    SnaxBingoKernelXdma1dCopyArgs,
+    HostBingoKernelCheckResultArgs,
+)
 from data_utils import format_scalar_definition, format_vector_definition  # noqa E402
 
 
@@ -69,22 +73,9 @@ def get_args():
     return parser.parse_args()
 
 
-def _parse_size(value, name):
-    if isinstance(value, int):
-        return value
-    if isinstance(value, str):
-        product = 1
-        factors = [factor.strip() for factor in value.split("*")]
-        if factors and all(factor.isdecimal() for factor in factors):
-            for factor in factors:
-                product *= int(factor)
-            return product
-    raise ValueError(f"{name} must be an integer byte size, got {value!r}")
-
-
-def _load_simple_hjson(path):
+def define_workload_params(cfg_path, _hwcfg_path):
     params = {}
-    with open(path) as f:
+    with open(cfg_path) as f:
         for line in f:
             line = line.split("//", 1)[0].split("#", 1)[0].strip()
             if not line or line in ("{", "}"):
@@ -92,21 +83,19 @@ def _load_simple_hjson(path):
             key, sep, value = line.partition(":")
             if not sep:
                 continue
-            params[key.strip()] = value.strip().rstrip(",")
-    return params
+            product = 1
+            value = value.strip().rstrip(",")
+            for factor in value.split("*"):
+                product *= int(factor.strip(), 0)
+            params[key.strip()] = product
 
-
-def define_workload_params(cfg_path, _hwcfg_path):
-    params = _load_simple_hjson(cfg_path)
-
-    if "A2_size" not in params and "A2_sise" in params:
-        params["A2_size"] = params["A2_sise"]
-
-    for name in ("num_clusters", "A1_size", "A2_size"):
+    for name in ("num_clusters", "A_size"):
         if name not in params:
             raise KeyError(f"params.hjson must define {name}")
-        params[name] = _parse_size(params[name], name)
 
+    # Rule: one configured A_size is reused for both A1 and A2 DMA inputs.
+    params["A1_size"] = params["A_size"]
+    params["A2_size"] = params["A_size"]
     return params, dict(params)
 
 
@@ -135,7 +124,6 @@ def define_memory_handles(params):
 
     # 1. Define Memory Symbols (Existing C variables)
     # The MemSymbol are the variables defined in the data.h file which the memory location is already known at compile time
-    # The A tiles
 
     mem_handles['A1_data_L3_symbol'] = BingoMemSymbol("A1_l3",offset=0)
     mem_handles['A2_data_L3_symbol'] = BingoMemSymbol("A2_l3",offset=0)
@@ -185,17 +173,48 @@ def create_dfg(params, mem_handles, platform):
         assigned_chiplet_id=cur_chiplet_id,
         assigned_cluster_id=cur_cluster_id,
         assigned_core_id=dma_core_id,
-        kernel_name="__snax_bingo_kernel_xdma_1d_copy",
-        kernel_args=SnaxBingoKernelXdma1dCopyArgs(
+        kernel_name="__snax_bingo_kernel_idma_1d_copy",
+        kernel_args=SnaxBingoKernelIdma1dCopyArgs(
             src_addr=mem_handles['A2_data_L3_symbol'],
             dst_addr=mem_handles['A2_L1_buf'],
             size=params['A2_size']
         )
     )
 
+    task_check_result_A1 = BingoNode(
+        assigned_chiplet_id=cur_chiplet_id,
+        assigned_cluster_id=cur_cluster_id,
+        assigned_core_id=host_core_id,
+        kernel_name="__snax_bingo_kernel_check_result",
+        kernel_args=HostBingoKernelCheckResultArgs(
+            golden_data_addr=mem_handles['A1_data_L3_symbol'],
+            output_data_addr=mem_handles['A1_L1_buf'],
+            data_size=params['A1_size']
+        )
+    )
+
+    task_check_result_A2 = BingoNode(
+        assigned_chiplet_id=cur_chiplet_id,
+        assigned_cluster_id=cur_cluster_id,
+        assigned_core_id=host_core_id,
+        kernel_name="__snax_bingo_kernel_check_result",
+        kernel_args=HostBingoKernelCheckResultArgs(
+            golden_data_addr=mem_handles['A2_data_L3_symbol'],
+            output_data_addr=mem_handles['A2_L1_buf'],
+            data_size=params['A2_size']
+        )
+    )
+
     # 3. Add Nodes to DFG
     bingo_dfg.bingo_add_node(task_copy_A1)
     bingo_dfg.bingo_add_node(task_copy_A2)
+    bingo_dfg.bingo_add_node(task_check_result_A1)
+    bingo_dfg.bingo_add_node(task_check_result_A2)
+    # 4. Define Dependencies
+    # The two copy tasks can run in parallel as they are independent
+    # The check result tasks depend on their respective copy tasks
+    bingo_dfg.bingo_add_edge(task_copy_A1, task_check_result_A1)
+    bingo_dfg.bingo_add_edge(task_copy_A2, task_check_result_A2)
 
     return bingo_dfg
 
