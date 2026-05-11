@@ -8,20 +8,22 @@ import os
 import sys
 import argparse
 import pathlib
-import hjson
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 WORKLOADS_DIR = os.path.dirname(current_dir)
 sys.path.append(WORKLOADS_DIR)
 ROOT_DIR = os.path.abspath(os.path.join(current_dir, "../../../../../../../../"))
 ROOT_DIR = os.path.normpath(ROOT_DIR)
+APP_NAME = "Single-Chip GEMM Seperate Load and Compute Parallel"
 
 print(f"ROOT_DIR: {ROOT_DIR}")
 sys.path.append(f"{ROOT_DIR}/target/sw/host/runtime/libbingo/mini_compiler")
+sys.path.append(f"{ROOT_DIR}/util/sim")
 
 # Import emit_matmul_data from gemm_datagen to derive hardware-specific params
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from gemm_datagen import emit_header_file  # noqa E402
+from snax_utils import define_gemm_workload_params  # noqa E402
 
 from bingo_dfg import BingoDFG
 from bingo_platform import guard_cluster_count, parse_platform_cfg  # noqa E402
@@ -71,52 +73,7 @@ def get_args():
     )
     return parser.parse_args()
 
-def define_workload_params(cfg_path, hwcfg_path):
-    """Load workload params from hjson config files (same as gemm_datagen.py).
-    meshRow/tileSize/meshCol are derived from the hw config.
-    Returns (params dict, merged_config dict) so that main() can also
-    call emit_header_file(**merged_config) to generate gemm_data.h.
-    """
-    with open(cfg_path) as f:
-        param = hjson.loads(f.read())
-    with open(hwcfg_path) as f:
-        hw = hjson.loads(f.read())
-    merged = {**param, **hw}
-
-    # Derive meshRow/tileSize/meshCol from the hw config
-    data_type = 0  # int8
-    array_shape = merged["array_shape"]
-    snax_acc_cfg = merged["snax_versacore_core_template"]["snax_acc_cfg"][0]
-    unrolling = snax_acc_cfg["snax_versacore_spatial_unrolling"][data_type][array_shape]
-    meshRow  = unrolling[0]
-    tileSize = unrolling[1]
-    meshCol  = unrolling[2]
-
-    M = merged["M"]
-    K = merged["K"]
-    N = merged["N"]
-
-    params = {
-        'M': M,
-        'K': K,
-        'N': N,
-        'addZeroC':    merged.get("addZeroC",    1),
-        'addNonZeroC': merged.get("addNonZeroC", 0),
-        'accumPrevC':  merged.get("accumPrevC",  0),
-        'meshRow':  meshRow,
-        'tileSize': tileSize,
-        'meshCol':  meshCol,
-        'arrayShapeIdx': array_shape,
-        'transposeA': merged.get("transposed_A", 0),
-        'transposeB': merged.get("transposed_B", 0),
-    }
-    params["app_name"] = "Single-Chip GEMM Seperate Load and Compute Parallel"
-    # Derived sizes
-    params['A_size'] = M * K * meshRow * tileSize * 1  # int8
-    params['B_size'] = K * N * tileSize * meshCol * 1  # int8
-    params['C_size'] = M * N * meshRow * meshCol * 4   # int32
-    params['D_size'] = M * N * meshRow * meshCol * 4   # int32
-    return params, merged
+define_workload_params = define_gemm_workload_params
 
 def define_memory_handles(params):
     """Defines memory handles used in the DFG."""
@@ -261,7 +218,7 @@ def main():
     if not guard_cluster_count(merged_config, platform, args.output_dir, args.output_offload_file_name):
         return
     dfg = create_dfg(params, mem_handles, platform)
-    dfg.bingo_compile_dfg(params["app_name"], output_dir, output_file_name, extra_include_header_list=["gemm_data.h"])
+    dfg.bingo_compile_dfg(APP_NAME, output_dir, output_file_name, extra_include_header_list=["gemm_data.h"])
 
 
 

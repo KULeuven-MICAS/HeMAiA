@@ -224,6 +224,47 @@ def block_gemm_golden_model(
     return d
 
 
+def get_gemm_mesh_dims(cfg):
+    unrolling = cfg["snax_versacore_core_template"]["snax_acc_cfg"][0][
+        "snax_versacore_spatial_unrolling"
+    ][0][cfg["array_shape"]]
+    return unrolling[0], unrolling[1], unrolling[2]
+
+
+def define_gemm_workload_params(cfg_path, hwcfg_path):
+    import hjson
+
+    with open(cfg_path) as f:
+        param = hjson.loads(f.read())
+    with open(hwcfg_path) as f:
+        hw = hjson.loads(f.read())
+    merged = {**param, **hw}
+    M, K, N = merged["M"], merged["K"], merged["N"]
+    meshRow, tileSize, meshCol = get_gemm_mesh_dims(merged)
+
+    params = {
+        "M": M,
+        "K": K,
+        "N": N,
+        "addZeroC": merged.get("addZeroC", 1),
+        "addNonZeroC": merged.get("addNonZeroC", 0),
+        "accumPrevC": merged.get("accumPrevC", 0),
+        "meshRow": meshRow,
+        "tileSize": tileSize,
+        "meshCol": meshCol,
+        "arrayShapeIdx": merged["array_shape"],
+        "transposeA": merged.get("transposed_A", 0),
+        "transposeB": merged.get("transposed_B", 0),
+    }
+    params.update(
+        A_size=M * K * meshRow * tileSize,
+        B_size=K * N * tileSize * meshCol,
+        C_size=M * N * meshRow * meshCol * 4,
+        D_size=M * N * meshRow * meshCol * 4,
+    )
+    return params, merged
+
+
 def emit_gemm_header_file(**kwargs):
     from data_utils import format_scalar_definition, format_vector_definition
 
@@ -243,18 +284,7 @@ def emit_gemm_header_file(**kwargs):
     array_shape = kwargs["array_shape"]
     data_str += [format_scalar_definition("uint32_t", "array_shape", array_shape)]
 
-    snax_acc_cfg = kwargs["snax_versacore_core_template"]["snax_acc_cfg"][0]
-    data_type = 0  # int8 data type
-
-    meshRow = snax_acc_cfg["snax_versacore_spatial_unrolling"][data_type][array_shape][
-        0
-    ]
-    tileSize = snax_acc_cfg["snax_versacore_spatial_unrolling"][data_type][array_shape][
-        1
-    ]
-    meshCol = snax_acc_cfg["snax_versacore_spatial_unrolling"][data_type][array_shape][
-        2
-    ]
+    meshRow, tileSize, meshCol = get_gemm_mesh_dims(kwargs)
     data_str += [format_scalar_definition("uint32_t", "meshRow", meshRow)]
     data_str += [format_scalar_definition("uint32_t", "tileSize", tileSize)]
     data_str += [format_scalar_definition("uint32_t", "meshCol", meshCol)]

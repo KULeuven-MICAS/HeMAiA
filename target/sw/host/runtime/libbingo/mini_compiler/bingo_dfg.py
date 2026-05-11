@@ -1704,7 +1704,7 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         sorted_nodes = sorted(self.node_list, key=lambda n: n.node_id)
         sorted_handles, handle_name_map = self._collect_memory_handles(sorted_nodes)
         self._validate_memory_handles(sorted_handles)
-        
+
         # 2. Start emitting C code
         with open(output_path, "w") as f:
             # Step 1: Emit Headers
