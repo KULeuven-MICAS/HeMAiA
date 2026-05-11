@@ -185,7 +185,7 @@ def create_dfg(params, mem_handles, platform):
         assigned_chiplet_id=cur_chiplet_id,
         assigned_cluster_id=cur_cluster_id,
         assigned_core_id=host_core_id,
-        kernel_name="__snax_bingo_kernel_check_result",
+        kernel_name="__host_bingo_kernel_check_result",
         kernel_args=HostBingoKernelCheckResultArgs(
             golden_data_addr=mem_handles['A1_data_L3_symbol'],
             output_data_addr=mem_handles['A1_L1_buf'],
@@ -197,7 +197,7 @@ def create_dfg(params, mem_handles, platform):
         assigned_chiplet_id=cur_chiplet_id,
         assigned_cluster_id=cur_cluster_id,
         assigned_core_id=host_core_id,
-        kernel_name="__snax_bingo_kernel_check_result",
+        kernel_name="__host_bingo_kernel_check_result",
         kernel_args=HostBingoKernelCheckResultArgs(
             golden_data_addr=mem_handles['A2_data_L3_symbol'],
             output_data_addr=mem_handles['A2_L1_buf'],
@@ -210,11 +210,13 @@ def create_dfg(params, mem_handles, platform):
     bingo_dfg.bingo_add_node(task_copy_A2)
     bingo_dfg.bingo_add_node(task_check_result_A1)
     bingo_dfg.bingo_add_node(task_check_result_A2)
+
     # 4. Define Dependencies
     # The two copy tasks can run in parallel as they are independent
     # The check result tasks depend on their respective copy tasks
     bingo_dfg.bingo_add_edge(task_copy_A1, task_check_result_A1)
     bingo_dfg.bingo_add_edge(task_copy_A2, task_check_result_A2)
+    bingo_dfg.bingo_add_edge(task_check_result_A1, task_check_result_A2)
 
     return bingo_dfg
 
