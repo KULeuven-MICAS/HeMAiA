@@ -10,10 +10,10 @@
     array_shape: 0
     transposed_A: 0
     transposed_B: 0
-    K1: 1
-    N1: 3
-    M1: 4
-    N2: 2
+    K1: 16
+    N1: 1
+    M1: 1
+    N2: 1
     // these two will config the addNewC = 1
     addNonZeroC: 0
     addZeroC: 1

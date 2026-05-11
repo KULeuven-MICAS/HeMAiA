@@ -45,28 +45,26 @@ from bingo_kernel_args import (  # noqa E402
 #  Sweep configurations: (M, K, N, array_shape)
 #
 #  Values are in mesh tiles (per-config mesh dims come from the hw hjson).
+#  These comments match the current snax_versacore_to_cluster.hjson:
+#    shape 0 = (meshRow=32, tileSize=2,  meshCol=32)
+#    shape 1 = (meshRow=1,  tileSize=16, meshCol=32)
+#    shape 2 = (meshRow=16, tileSize=8,  meshCol=16)
 #  Chosen to:
-#    - Cover shapes 0..4 (all VersaCore array configurations)
+#    - Cover all active VersaCore array configurations
 #    - Vary M, K, N independently so the 3-parameter linear fit is well-
 #      conditioned (cycles = a + b·M·K·N + c·max(M,K,N))
 #    - Keep the A+B+D footprint inside 500 KB TCDM per config
 # ─────────────────────────────────────────────────────────────────────────
 CONFIGS = [
-    # shape 0 (meshRow=32, tileSize=4, meshCol=32)
+    # shape 0 (meshRow=32, tileSize=2, meshCol=32)
     (1, 1, 1, 0), (1, 2, 1, 0), (1, 4, 1, 0), (1, 8, 1, 0),
     (2, 2, 2, 0), (2, 4, 2, 0), (4, 4, 4, 0),
-    # shape 1 (meshRow=1, tileSize=8, meshCol=64)
+    # shape 1 (meshRow=1, tileSize=16, meshCol=32)
     (1, 1, 1, 1), (1, 2, 1, 1), (1, 4, 1, 1), (1, 8, 1, 1),
     (2, 2, 2, 1), (2, 4, 2, 1), (4, 4, 4, 1),
-    # shape 2 (meshRow=4, tileSize=8, meshCol=64)
-    (1, 1, 1, 2), (1, 2, 1, 2), (1, 4, 1, 2),
+    # shape 2 (meshRow=16, tileSize=8, meshCol=16)
+    (1, 1, 1, 2), (1, 2, 1, 2), (1, 4, 1, 2), (1, 8, 1, 2),
     (2, 2, 2, 2), (2, 4, 2, 2), (4, 4, 4, 2),
-    # shape 3 (meshRow=8, tileSize=8, meshCol=64)
-    (1, 1, 1, 3), (1, 2, 1, 3), (1, 4, 1, 3),
-    (2, 2, 2, 3), (4, 4, 4, 3),
-    # shape 4 (meshRow=8, tileSize=32, meshCol=8)
-    (1, 1, 1, 4), (1, 2, 1, 4), (1, 4, 1, 4),
-    (2, 2, 2, 4), (4, 4, 4, 4),
 ]
 
 

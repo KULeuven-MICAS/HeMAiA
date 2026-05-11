@@ -136,6 +136,7 @@ module testharness;
         end
     endtask
 
+    %if pll_present:
     task enable_pll_and_wait_lock();
         begin
         // Wait at least 1us
@@ -151,7 +152,7 @@ module testharness;
         end
     endtask
     %endif
-    
+
     // Drive rst
     logic rst_ni_drv, rst_periph_ni_drv;
     wire rst_ni, rst_periph_ni;
