@@ -360,19 +360,6 @@ def create_dfg(params, mem_handles, platform):
     for i in range(params['num_double_buffers'] - 2):
         bingo_dfg.bingo_add_edge(task_copy_D_nodes[i], task_gemm_nodes[i+2])
 
-    # 3. Flow Control / Window Size Control:
-    #    This edge limits the "lookahead" of the loader.
-    #    Load A[i+3] depends on Store D[i].
-    #    This ensures we don't have too many active tasks in flight, keeping the pipeline balanced.
-    #    It effectively regulates the distance between the production of results and new inputs.
-    for i in range(params['num_double_buffers'] - 3):
-        bingo_dfg.bingo_add_edge(task_copy_D_nodes[i], task_copy_A_nodes[i+3])
-
-    # 4. Pipeline Staggering:
-    #    Store D[i] depends on Load A[i+1].
-    #    This artificially delays the store of the current iteration until the load of the next iteration is launched.
-    for i in range(params['num_double_buffers'] - 1):
-        bingo_dfg.bingo_add_edge(task_copy_A_nodes[i+1], task_copy_D_nodes[i])
     return bingo_dfg
 
 def main():
