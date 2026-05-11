@@ -1429,6 +1429,45 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         handle_name_map = {h: h.get_c_var_name() for h in sorted_handles}
         return sorted_handles, handle_name_map
 
+    def _validate_memory_handles(self, sorted_handles):
+        """Validate memory allocation scopes before emitting C allocation calls."""
+        valid_mem_levels = {"L1", "L2", "L3"}
+        valid_chiplet_ids = set(self.chiplet_ids)
+
+        for h in sorted_handles:
+            if h.mem_level not in valid_mem_levels:
+                raise ValueError(
+                    f"Memory handle '{h.name}' uses invalid mem_level "
+                    f"'{h.mem_level}'. Expected one of {sorted(valid_mem_levels)}."
+                )
+
+            if h.size <= 0:
+                raise ValueError(
+                    f"Memory handle '{h.name}' has invalid size {h.size}. "
+                    "Allocation size must be positive."
+                )
+
+            if h.chip_id not in valid_chiplet_ids:
+                raise ValueError(
+                    f"Memory handle '{h.name}' targets chip_id 0x{h.chip_id:02x}, "
+                    f"but this DFG only has chiplet IDs "
+                    f"{[f'0x{cid:02x}' for cid in self.chiplet_ids]}."
+                )
+
+            if h.mem_level == "L1":
+                if h.cluster_id < 0 or h.cluster_id >= self.num_clusters_per_chiplet:
+                    raise ValueError(
+                        f"Memory handle '{h.name}' targets cluster_id "
+                        f"{h.cluster_id}, but chiplet 0x{h.chip_id:02x} has "
+                        f"clusters 0..{self.num_clusters_per_chiplet - 1}."
+                    )
+            elif h.cluster_id != 0:
+                raise ValueError(
+                    f"Memory handle '{h.name}' is allocated in {h.mem_level}, "
+                    f"but has cluster_id {h.cluster_id}. Only L1 allocations "
+                    "use cluster_id; L2/L3 allocation calls use chip_id only."
+                )
+
     def _emit_headers(self, f, extra_include_header_list):
         """Emit C header includes."""
         f.write("// Auto-generated offload_hw_bingo.h\n")
@@ -1664,6 +1703,7 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         # 1. Collect Handles
         sorted_nodes = sorted(self.node_list, key=lambda n: n.node_id)
         sorted_handles, handle_name_map = self._collect_memory_handles(sorted_nodes)
+        self._validate_memory_handles(sorted_handles)
         
         # 2. Start emitting C code
         with open(output_path, "w") as f:
