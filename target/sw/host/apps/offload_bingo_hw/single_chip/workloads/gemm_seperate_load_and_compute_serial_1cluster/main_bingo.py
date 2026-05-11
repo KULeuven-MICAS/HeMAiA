@@ -5,6 +5,9 @@
 # Users will create the dfg in this file
 # And then the mini-compiler will emit the WORKLOAD.h file
 
+# Conduct D=A*B in a single cluster with separate load and compute, store, and check result.
+# issue the load commands for A and B in sequential using the device DMA.
+
 import os
 import sys
 import argparse
@@ -16,6 +19,8 @@ sys.path.append(WORKLOADS_DIR)
 ROOT_DIR = os.path.abspath(os.path.join(current_dir, "../../../../../../../../"))
 ROOT_DIR = os.path.normpath(ROOT_DIR)
 APP_NAME = "Single-Chip GEMM Seperate Load and Compute Serial"
+cur_chiplet_id = 0x00
+cur_cluster_id = 0
 
 print(f"ROOT_DIR: {ROOT_DIR}")
 sys.path.append(f"{ROOT_DIR}/target/sw/host/runtime/libbingo/mini_compiler")
@@ -85,14 +90,11 @@ def define_memory_handles(params):
     mem_handles['B_L3'] = BingoMemSymbol('B')
     mem_handles['D_L3'] = BingoMemSymbol('D')
     # L1 buffers
-    # Chip 0, Cluster 0
-    chip_id = 0
-    cluster_id = 0
-    mem_handles['l1_buf_A'] = BingoMemAlloc('l1_buf_A',size=params['A_size'], mem_level="L1", chip_id=chip_id, cluster_id=cluster_id)
-    mem_handles['l1_buf_B'] = BingoMemAlloc('l1_buf_B',size=params['B_size'], mem_level="L1", chip_id=chip_id, cluster_id=cluster_id)
-    mem_handles['l1_buf_D'] = BingoMemAlloc('l1_buf_D',size=params['D_size'], mem_level="L1", chip_id=chip_id, cluster_id=cluster_id)
+    mem_handles['l1_buf_A'] = BingoMemAlloc('l1_buf_A',size=params['A_size'], mem_level="L1", chip_id=cur_chiplet_id, cluster_id=cur_cluster_id)
+    mem_handles['l1_buf_B'] = BingoMemAlloc('l1_buf_B',size=params['B_size'], mem_level="L1", chip_id=cur_chiplet_id, cluster_id=cur_cluster_id)
+    mem_handles['l1_buf_D'] = BingoMemAlloc('l1_buf_D',size=params['D_size'], mem_level="L1", chip_id=cur_chiplet_id, cluster_id=cur_cluster_id)
     # L3 buffers
-    mem_handles['l3_buf_D'] = BingoMemAlloc('l3_buf_D',size=params['D_size'], mem_level="L3")
+    mem_handles['l3_buf_D'] = BingoMemAlloc('l3_buf_D',size=params['D_size'], mem_level="L3", chip_id=cur_chiplet_id)
     return mem_handles
 
 def create_dfg(params, mem_handles, platform):
@@ -104,16 +106,14 @@ def create_dfg(params, mem_handles, platform):
         is_host_as_acc=True,
         chiplet_ids=platform["chiplet_ids"],
     )
-    cur_chiplet_id = 0
-    cur_cluster_id = 0
     gemm_core_id = 0  # Core 0 for Compute
     dma_core_id = 1  # Core 1 for Load
     host_core_id = 2  # Core 2 for Host DMA Store
     # 2. Define Nodes
     # Dev IDMA1D Copy A
     task_copy_A = BingoNode(
-        assigned_chiplet_id=0,
-        assigned_cluster_id=0,
+        assigned_chiplet_id=cur_chiplet_id,
+        assigned_cluster_id=cur_cluster_id,
         assigned_core_id=dma_core_id,
         kernel_name="__snax_bingo_kernel_idma_1d_copy",
         kernel_args=SnaxBingoKernelIdma1dCopyArgs(
@@ -124,8 +124,8 @@ def create_dfg(params, mem_handles, platform):
     )
     # Dev IDMA1D Copy B
     task_copy_B = BingoNode(
-        assigned_chiplet_id=0,
-        assigned_cluster_id=0,
+        assigned_chiplet_id=cur_chiplet_id,
+        assigned_cluster_id=cur_cluster_id,
         assigned_core_id=dma_core_id,
         kernel_name="__snax_bingo_kernel_idma_1d_copy",
         kernel_args=SnaxBingoKernelIdma1dCopyArgs(
@@ -136,8 +136,8 @@ def create_dfg(params, mem_handles, platform):
     )
     # Gemm Full Compute
     task_gemm_full = BingoNode(
-        assigned_chiplet_id=0,
-        assigned_cluster_id=0,
+        assigned_chiplet_id=cur_chiplet_id,
+        assigned_cluster_id=cur_cluster_id,
         assigned_core_id=gemm_core_id,
         kernel_name="__snax_bingo_kernel_gemm_full",
         kernel_args=SnaxBingoKernelGemmFullArgs(
@@ -156,8 +156,8 @@ def create_dfg(params, mem_handles, platform):
     )
     # Dev IDMA1D Copy D
     task_copy_D = BingoNode(
-        assigned_chiplet_id=0,
-        assigned_cluster_id=0,
+        assigned_chiplet_id=cur_chiplet_id,
+        assigned_cluster_id=cur_cluster_id,
         assigned_core_id=dma_core_id,
         kernel_name="__snax_bingo_kernel_idma_1d_copy",
         kernel_args=SnaxBingoKernelIdma1dCopyArgs(
@@ -168,8 +168,8 @@ def create_dfg(params, mem_handles, platform):
     )
     # Host check result
     task_check_result = BingoNode(
-            assigned_chiplet_id=0,
-            assigned_cluster_id=0,
+            assigned_chiplet_id=cur_chiplet_id,
+            assigned_cluster_id=cur_cluster_id,
             assigned_core_id=host_core_id,
             kernel_name="__host_bingo_kernel_check_result",
             kernel_args=HostBingoKernelCheckResultArgs(
