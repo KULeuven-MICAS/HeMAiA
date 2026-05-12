@@ -82,12 +82,12 @@ runs:
   - app_15:
     - HOST_APP_TYPE: offload_bingo_hw
     - CHIP_TYPE: single_chip
-    - WORKLOAD: gemm_seperate_load_and_compute_serial_1cluster
+    - WORKLOAD: gemm_serial_dma_1cluster
     - DEV_APP: snax-bingo-offload
   - app_16:
     - HOST_APP_TYPE: offload_bingo_hw
     - CHIP_TYPE: single_chip
-    - WORKLOAD: gemm_seperate_load_and_compute_parallel_1cluster
+    - WORKLOAD: gemm_parallel_dma_1cluster
     - DEV_APP: snax-bingo-offload
   - app_17:
     - HOST_APP_TYPE: offload_bingo_hw
