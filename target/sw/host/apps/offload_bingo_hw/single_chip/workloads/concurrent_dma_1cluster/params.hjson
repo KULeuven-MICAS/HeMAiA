@@ -6,5 +6,5 @@
 
 {
     num_clusters: 1
-    A_size: 1024 * 16
+    A_size: 1024 * 8
 }
