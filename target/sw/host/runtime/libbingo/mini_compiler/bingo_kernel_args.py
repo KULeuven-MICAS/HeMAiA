@@ -759,6 +759,37 @@ class HostBingoKernelCheckResultArgs(BingoKernelArgs):
         assignments["tolerance_bits"] = f"0x{tol_bits:08x}"
         return assignments
     
+# HOST BINGO XDMA 1D Copy
+class HostBingoKernelXdma1dCopyArgs(BingoKernelArgs):
+    """Args for __host_bingo_kernel_xdma_1d_copy.
+
+    Runtime note: the host implementation currently waits on the remote xDMA
+    completion counter only. Use this kernel for transfers that complete as
+    remote xDMA tasks; same-local-memory transfers may hang unless the host
+    kernel is changed to wait on the local completion counter.
+    """
+
+    def __init__(self,
+                 src_addr: Union[BingoMemAlloc, int],
+                 dst_addr: Union[BingoMemAlloc, int],
+                 size: int):
+        _check_xdma_size_aligned(size, "HostBingoKernelXdma1dCopyArgs")
+        self.src_addr = src_addr
+        self.dst_addr = dst_addr
+        self.size = size
+
+    def get_struct_name(self) -> str:
+        return "__host_bingo_kernel_xdma_1d_copy_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        assignments = {}
+        self._process_addr(self.src_addr, "src_addr", assignments, handle_name_map, split_64bit=False, as_64bit=True)
+        self._process_addr(self.dst_addr, "dst_addr", assignments, handle_name_map, split_64bit=False, as_64bit=True)
+        assignments["size"] = str(self.size)
+        return assignments
+
+HostBingoKernelXdmaArgs = HostBingoKernelXdma1dCopyArgs
+
 # HOST BINGO IDMA
 class HostBingoKernelIdmaArgs(BingoKernelArgs):
     def __init__(self,

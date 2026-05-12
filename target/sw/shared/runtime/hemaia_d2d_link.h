@@ -734,6 +734,7 @@ void hemaia_d2d_link_initialize(uint8_t chip_id) {
             set_d2d_link_availability(D2D_DIRECTION_SOUTH, false);
             break;
         case 0x10:  // Chip 10
+            // the chip to communication with FPGA
             set_d2d_link_availability(D2D_DIRECTION_NORTH, false);
             set_d2d_link_multicast_fence(D2D_DIRECTION_EAST, false);
             set_d2d_link_idle_silence_period(0xFF, D2D_DIRECTION_EAST);

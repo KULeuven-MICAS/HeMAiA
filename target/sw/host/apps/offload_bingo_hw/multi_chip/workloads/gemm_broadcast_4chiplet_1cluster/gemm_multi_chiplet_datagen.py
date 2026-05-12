@@ -19,7 +19,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../../../../../../../..
 from data_utils import format_scalar_definition, format_vector_definition, format_scalar_define, format_vector_define  # noqa E402
 
 # # Add golden model path
-from snax_utils import block_gemm_golden_model # noqa E402
+from sim_golden_models import block_gemm_golden_model # noqa E402
 
 np.random.seed(320)
 
@@ -132,6 +132,7 @@ def emit_matmul_data(**kwargs):
     # -------------------------------------------------------------
     out_dir = kwargs.get("out_dir", "./build/")
     os.makedirs(out_dir, exist_ok=True)
+    # mempool.bin should in 64 MiB limitation
     bin_path = os.path.join(out_dir, "mempool.bin")
 
     # Ensure correct data types for binary layout

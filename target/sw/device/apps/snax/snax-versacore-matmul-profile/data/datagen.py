@@ -21,13 +21,13 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../../../../../../../ut
 from data_utils import format_scalar_definition, format_vector_definition  # noqa E402
 
 # Add golden model path
-from snax_utils import (  # noqa E402
+from sim_golden_models import (  # noqa E402
     block_gemm_golden_model,
     block_gemm_golden_model_fp8,
-    align_wide_addr,
     postprocessing_simd_golden_model_V3,
     int32_to_fp16_golden,
 )  # noqa E402
+from snax_utils import align_wide_addr  # noqa E402
 
 np.random.seed(42)
 

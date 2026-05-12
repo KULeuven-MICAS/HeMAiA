@@ -15,7 +15,7 @@ import sys
 import os
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../../../../../../util/sim/"))
-from snax_utils import block_gemm_golden_model  # noqa: E402
+from sim_golden_models import block_gemm_golden_model  # noqa: E402
 
 
 def generate_moe_data(params):
