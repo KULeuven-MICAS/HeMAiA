@@ -130,11 +130,14 @@ def define_memory_handles(params):
 
     # 2. Define Memory Handles (Dynamic Allocations)
     # The MemHandles are the buffers that need to be allocated at runtime by the bingo runtime
-    # L3 Buffers, None here
 
     # L1 Buffers
     mem_handles['A1_L1_buf'] = BingoMemAlloc(f"A1_L1_buf", size=params['A1_size'], mem_level="L1", chip_id=cur_chiplet_id, cluster_id=cur_cluster_id)
     mem_handles['A2_L1_buf'] = BingoMemAlloc(f"A2_L1_buf", size=params['A2_size'], mem_level="L1", chip_id=cur_chiplet_id, cluster_id=cur_cluster_id)
+
+    # L3 Buffers
+    mem_handles['A1_L3_buf'] = BingoMemAlloc(f"A1_L3_buf", size=params['A1_size'], mem_level="L3", chip_id=cur_chiplet_id, cluster_id=cur_cluster_id)
+    mem_handles['A2_L3_buf'] = BingoMemAlloc(f"A2_L3_buf", size=params['A2_size'], mem_level="L3", chip_id=cur_chiplet_id, cluster_id=cur_cluster_id)
 
     return mem_handles
 
@@ -156,8 +159,11 @@ def create_dfg(params, mem_handles, platform):
     )
 
     # 2. Define Nodes
-    # Node: Copy A1 (Static A1 matrix, loaded once)
-    task_copy_A1 = BingoNode(
+
+    # ------------------------------
+    # test1: dev xdma and dev idma, l3 to l1
+    # ------------------------------
+    task_copy_A1_dev_xdma = BingoNode(
         assigned_chiplet_id=cur_chiplet_id,
         assigned_cluster_id=cur_cluster_id,
         assigned_core_id=dma_core_id,
@@ -169,7 +175,7 @@ def create_dfg(params, mem_handles, platform):
         )
     )
 
-    task_copy_A2 = BingoNode(
+    task_copy_A2_dev_idma = BingoNode(
         assigned_chiplet_id=cur_chiplet_id,
         assigned_cluster_id=cur_cluster_id,
         assigned_core_id=dma_core_id,
@@ -181,7 +187,7 @@ def create_dfg(params, mem_handles, platform):
         )
     )
 
-    task_check_result_A1 = BingoNode(
+    task_check_result_A1_host = BingoNode(
         assigned_chiplet_id=cur_chiplet_id,
         assigned_cluster_id=cur_cluster_id,
         assigned_core_id=host_core_id,
@@ -189,11 +195,11 @@ def create_dfg(params, mem_handles, platform):
         kernel_args=HostBingoKernelCheckResultArgs(
             golden_data_addr=mem_handles['A1_data_L3_symbol'],
             output_data_addr=mem_handles['A1_L1_buf'],
-            data_size=params['A1_size']
+            data_size=64
         )
     )
 
-    task_check_result_A2 = BingoNode(
+    task_check_result_A2_host = BingoNode(
         assigned_chiplet_id=cur_chiplet_id,
         assigned_cluster_id=cur_cluster_id,
         assigned_core_id=host_core_id,
@@ -201,22 +207,136 @@ def create_dfg(params, mem_handles, platform):
         kernel_args=HostBingoKernelCheckResultArgs(
             golden_data_addr=mem_handles['A2_data_L3_symbol'],
             output_data_addr=mem_handles['A2_L1_buf'],
-            data_size=params['A2_size']
+            data_size=64
+        )
+    )
+
+    # ------------------------------
+    # test2: host xdma and dev idma, l3 to l1
+    # ------------------------------
+
+    task_copy_A1_host_xdma = BingoNode(
+        assigned_chiplet_id=cur_chiplet_id,
+        assigned_cluster_id=cur_cluster_id,
+        assigned_core_id=host_core_id,
+        kernel_name="__host_bingo_kernel_xdma_1d_copy",
+        kernel_args=HostBingoKernelXdma1dCopyArgs(
+            src_addr=mem_handles['A1_data_L3_symbol'],
+            dst_addr=mem_handles['A1_L1_buf'],
+            size=params['A1_size']
+        )
+    )
+
+    task_copy_A2_dev_idma = BingoNode(
+        assigned_chiplet_id=cur_chiplet_id,
+        assigned_cluster_id=cur_cluster_id,
+        assigned_core_id=dma_core_id,
+        kernel_name="__snax_bingo_kernel_idma_1d_copy",
+        kernel_args=SnaxBingoKernelIdma1dCopyArgs(
+            src_addr=mem_handles['A2_data_L3_symbol'],
+            dst_addr=mem_handles['A2_L1_buf'],
+            size=params['A2_size']
+        )
+    )
+
+    task_check_result_A1_host = BingoNode(
+        assigned_chiplet_id=cur_chiplet_id,
+        assigned_cluster_id=cur_cluster_id,
+        assigned_core_id=host_core_id,
+        kernel_name="__host_bingo_kernel_check_result",
+        kernel_args=HostBingoKernelCheckResultArgs(
+            golden_data_addr=mem_handles['A1_data_L3_symbol'],
+            output_data_addr=mem_handles['A1_L1_buf'],
+            data_size=64
+        )
+    )
+
+    task_check_result_A2_host = BingoNode(
+        assigned_chiplet_id=cur_chiplet_id,
+        assigned_cluster_id=cur_cluster_id,
+        assigned_core_id=host_core_id,
+        kernel_name="__host_bingo_kernel_check_result",
+        kernel_args=HostBingoKernelCheckResultArgs(
+            golden_data_addr=mem_handles['A2_data_L3_symbol'],
+            output_data_addr=mem_handles['A2_L1_buf'],
+            data_size=64
+        )
+    )
+
+    # ------------------------------
+    # test3: host xdma and host idma, l1 to l3
+    # ------------------------------
+
+    task_copy_A1_host_xdma = BingoNode(
+        assigned_chiplet_id=cur_chiplet_id,
+        assigned_cluster_id=cur_cluster_id,
+        assigned_core_id=host_core_id,
+        kernel_name="__host_bingo_kernel_xdma_1d_copy",
+        kernel_args=HostBingoKernelXdma1dCopyArgs(
+            src_addr=mem_handles['A1_data_L3_symbol'],
+            dst_addr=mem_handles['A1_L1_buf'],
+            size=params['A1_size']
+        )
+    )
+
+    task_copy_A2_host_idma = BingoNode(
+        assigned_chiplet_id=cur_chiplet_id,
+        assigned_cluster_id=cur_cluster_id,
+        assigned_core_id=host_core_id,
+        kernel_name="__host_bingo_kernel_idma_1d_copy",
+        kernel_args=HostBingoKernelIdma1dCopyArgs(
+            src_addr=mem_handles['A2_data_L3_symbol'],
+            dst_addr=mem_handles['A2_L1_buf'],
+            size=params['A2_size']
+        )
+    )
+
+    task_check_result_A1_host = BingoNode(
+        assigned_chiplet_id=cur_chiplet_id,
+        assigned_cluster_id=cur_cluster_id,
+        assigned_core_id=host_core_id,
+        kernel_name="__host_bingo_kernel_check_result",
+        kernel_args=HostBingoKernelCheckResultArgs(
+            golden_data_addr=mem_handles['A1_data_L3_symbol'],
+            output_data_addr=mem_handles['A1_L1_buf'],
+            data_size=64
+        )
+    )
+
+    task_check_result_A2_host = BingoNode(
+        assigned_chiplet_id=cur_chiplet_id,
+        assigned_cluster_id=cur_cluster_id,
+        assigned_core_id=host_core_id,
+        kernel_name="__host_bingo_kernel_check_result",
+        kernel_args=HostBingoKernelCheckResultArgs(
+            golden_data_addr=mem_handles['A2_data_L3_symbol'],
+            output_data_addr=mem_handles['A2_L1_buf'],
+            data_size=64
         )
     )
 
     # 3. Add Nodes to DFG
-    bingo_dfg.bingo_add_node(task_copy_A1)
-    bingo_dfg.bingo_add_node(task_copy_A2)
-    bingo_dfg.bingo_add_node(task_check_result_A1)
-    bingo_dfg.bingo_add_node(task_check_result_A2)
+    bingo_dfg.bingo_add_node(task_copy_A1_dev_xdma)
+    bingo_dfg.bingo_add_node(task_copy_A2_dev_idma)
+    bingo_dfg.bingo_add_node(task_check_result_A1_host)
+    bingo_dfg.bingo_add_node(task_check_result_A2_host)
+
+    bingo_dfg.bingo_add_node(task_copy_A1_host_xdma)
+    bingo_dfg.bingo_add_node(task_copy_A2_host_idma)
+    bingo_dfg.bingo_add_node(task_check_result_A1_host)
+    bingo_dfg.bingo_add_node(task_check_result_A2_host)
 
     # 4. Define Dependencies
     # The two copy tasks can run in parallel as they are independent
     # The check result tasks depend on their respective copy tasks
-    bingo_dfg.bingo_add_edge(task_copy_A1, task_check_result_A1)
-    bingo_dfg.bingo_add_edge(task_copy_A2, task_check_result_A2)
-    bingo_dfg.bingo_add_edge(task_check_result_A1, task_check_result_A2)
+    bingo_dfg.bingo_add_edge(task_copy_A1_dev_xdma, task_check_result_A1_host)
+    bingo_dfg.bingo_add_edge(task_copy_A2_dev_idma, task_check_result_A2_host)
+    bingo_dfg.bingo_add_edge(task_check_result_A1_host, task_check_result_A2_host)
+
+    bingo_dfg.bingo_add_edge(task_check_result_A2_host, task_copy_A1_host_xdma)
+    bingo_dfg.bingo_add_edge(task_copy_A1_host_xdma, task_check_result_A1_host)
+    bingo_dfg.bingo_add_edge(task_copy_A2_host_idma, task_check_result_A2_host)
+    bingo_dfg.bingo_add_edge(task_check_result_A1_host, task_check_result_A2_host)
 
     return bingo_dfg
 

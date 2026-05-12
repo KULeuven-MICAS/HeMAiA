@@ -1,8 +1,10 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 
 import os
+import re
 import subprocess
 import sys
+from collections import defaultdict
 
 def install_package(package):
     subprocess.check_call([sys.executable, "-m", "pip", "install", package])
@@ -35,6 +37,59 @@ from bingo_kernel_args import (
     BINGO_GATING_MODE_THRESHOLD,
     BINGO_GATING_MODE_STATIC,
 )
+
+BINGO_HEAP_ALIGNMENT = 128
+BINGO_FRAGMENT_SIZE_MIN = BINGO_HEAP_ALIGNMENT * 2
+BINGO_KERNEL_SCRATCHPAD_SIZE_BYTES = 64
+SPM_WIDE_ALIGNMENT = 1024
+
+_DEFINE_RE = re.compile(r"^\s*#define\s+(\w+)\s+([0-9a-fA-FxX]+)\b")
+
+
+def _align_up(value: int, alignment: int) -> int:
+    return (value + alignment - 1) & ~(alignment - 1)
+
+
+def _align_down(value: int, alignment: int) -> int:
+    return value & ~(alignment - 1)
+
+
+BINGO_HEAP_INSTANCE_SIZE_PADDED = _align_up((64 + 1 + 5) * 8, BINGO_HEAP_ALIGNMENT)
+
+
+def _bingo_heap_alloc_cost(request_size: int) -> int:
+    return _align_up(request_size + BINGO_HEAP_ALIGNMENT, BINGO_FRAGMENT_SIZE_MIN)
+
+
+def _bingo_heap_capacity(heap_size: int) -> int:
+    min_size = BINGO_HEAP_INSTANCE_SIZE_PADDED + BINGO_FRAGMENT_SIZE_MIN
+    return 0 if heap_size < min_size else _align_down(heap_size - BINGO_HEAP_INSTANCE_SIZE_PADDED, BINGO_FRAGMENT_SIZE_MIN)
+
+
+def _parse_c_defines(path: str) -> dict:
+    with open(path) as f:
+        return {match.group(1): int(match.group(2), 0) for line in f if (match := _DEFINE_RE.match(line))}
+
+
+def _default_heap_capacities() -> dict:
+    memory_map_path = os.path.abspath(
+        os.path.join(
+            os.path.dirname(__file__),
+            "../../../../shared/platform/generated/occamy_memory_map.h",
+        )
+    )
+    if not os.path.exists(memory_map_path):
+        return {}
+
+    defines = _parse_c_defines(memory_map_path)
+    sizes = {
+        "L1": defines.get("CLUSTER_TCDM_SIZE"),
+        "L2": _align_up(defines["NARROW_SPM_SIZE"] // 2, BINGO_HEAP_ALIGNMENT) if "NARROW_SPM_SIZE" in defines else None,
+        "L3": _align_down(defines["WIDE_SPM_SIZE"] - SPM_WIDE_ALIGNMENT, SPM_WIDE_ALIGNMENT) if "WIDE_SPM_SIZE" in defines else None,
+    }
+    return {level: _bingo_heap_capacity(size) for level, size in sizes.items() if size is not None}
+
+
 class BingoDFG(DiGraphWrapper[BingoNode]):
     """Data Flow Graph (DFG) for Bingo."""
 
@@ -52,6 +107,7 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         self.is_host_as_acc = is_host_as_acc
         assert num_chiplets == len(chiplet_ids) or chiplet_ids is None, "Length of chiplet_ids must match num_chiplets"
         self.chiplet_ids = chiplet_ids if chiplet_ids else list(range(num_chiplets))
+        self.heap_capacities = _default_heap_capacities()
         # Node ID counter
         # Make sure the node id is starts from 0
         self.id = -1
@@ -1468,6 +1524,181 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                     "use cluster_id; L2/L3 allocation calls use chip_id only."
                 )
 
+    def _validate_kernel_core_assignments(self, sorted_nodes):
+        """Validate that kernel namespace matches the HW scheduler core target."""
+        valid_chiplet_ids = set(self.chiplet_ids)
+        host_core_id = self.num_cores_per_cluster - 1 if self.is_host_as_acc else None
+        num_snax_cores = host_core_id if self.is_host_as_acc else self.num_cores_per_cluster
+        failures = []
+
+        def node_label(node):
+            return (
+                f"Node ID {node.node_id} ('{node.node_name}', "
+                f"kernel={node.kernel_name})"
+            )
+
+        for node in sorted_nodes:
+            if node.assigned_chiplet_id not in valid_chiplet_ids:
+                failures.append(
+                    f"{node_label(node)} targets chiplet 0x{node.assigned_chiplet_id:02x}, "
+                    f"but valid chiplets are {[f'0x{cid:02x}' for cid in self.chiplet_ids]}."
+                )
+
+            if node.assigned_cluster_id < 0 or node.assigned_cluster_id >= self.num_clusters_per_chiplet:
+                failures.append(
+                    f"{node_label(node)} targets cluster {node.assigned_cluster_id}, "
+                    f"but valid clusters are 0..{self.num_clusters_per_chiplet - 1}."
+                )
+
+            if node.assigned_core_id < 0 or node.assigned_core_id >= self.num_cores_per_cluster:
+                failures.append(
+                    f"{node_label(node)} targets core {node.assigned_core_id}, "
+                    f"but valid cores are 0..{self.num_cores_per_cluster - 1}."
+                )
+
+            kernel_name = node.kernel_name or ""
+            if not kernel_name:
+                continue
+
+            if kernel_name.startswith("__host"):
+                if not self.is_host_as_acc:
+                    failures.append(
+                        f"{node_label(node)} is a host kernel, but this DFG was "
+                        "created with is_host_as_acc=False."
+                    )
+                else:
+                    if node.assigned_core_id != host_core_id or node.assigned_cluster_id != 0:
+                        failures.append(
+                            f"{node_label(node)} is a host kernel and must be assigned "
+                            f"to chiplet-local host core cluster 0 core {host_core_id}; "
+                            f"got cluster {node.assigned_cluster_id} core {node.assigned_core_id}."
+                        )
+            elif kernel_name.startswith("__snax"):
+                if node.assigned_core_id >= num_snax_cores:
+                    failures.append(
+                        f"{node_label(node)} is a SNAX/device kernel and must be assigned "
+                        f"to a real cluster core in 0..{num_snax_cores - 1}; "
+                        f"got core {node.assigned_core_id}."
+                    )
+            else:
+                failures.append(
+                    f"{node_label(node)} has an unknown kernel namespace. Kernel names "
+                    "must start with '__host' or '__snax' so the generated host/device "
+                    "task mappings match the HW scheduler routing."
+                )
+
+            if node.kernel_args:
+                struct_name = node.kernel_args.get_struct_name()
+                if kernel_name.startswith("__host") and not struct_name.startswith("__host"):
+                    failures.append(
+                        f"{node_label(node)} uses host kernel namespace but argument "
+                        f"struct '{struct_name}' is not a host argument struct."
+                    )
+                if kernel_name.startswith("__snax") and not struct_name.startswith("__snax"):
+                    failures.append(
+                        f"{node_label(node)} uses SNAX kernel namespace but argument "
+                        f"struct '{struct_name}' is not a SNAX argument struct."
+                    )
+
+        if failures:
+            raise ValueError(
+                "Bingo kernel/core assignment check failed before C generation:\n"
+                + "\n".join(f"- {failure}" for failure in failures)
+            )
+
+    def _heap_location_label(self, key):
+        mem_level, chip_id, cluster_id = key
+        if mem_level == "L1":
+            return f"L1 chip 0x{chip_id:02x} cluster {cluster_id}"
+        return f"{mem_level} chip 0x{chip_id:02x}"
+
+    def _add_heap_usage(self, usage, mem_level, chip_id, cluster_id, request_size, count=1):
+        if count <= 0 or request_size <= 0:
+            return
+        usage[(mem_level, chip_id, cluster_id if mem_level == "L1" else 0)] += _bingo_heap_alloc_cost(request_size) * count
+
+    def _estimate_kernel_arg_request_size(self, node, handle_name_map):
+        kernel_name = node.kernel_name or ""
+        if node.kernel_args:
+            struct_name = node.kernel_args.get_struct_name()
+            assignments = node.kernel_args.get_c_field_assignments(handle_name_map)
+            return 4 * (len(assignments) + 3) if struct_name.startswith("__snax") else 8 * (len(assignments) + 1)
+
+        if "exit" in kernel_name:
+            if kernel_name.startswith("__snax"):
+                return 16  # exit_code + BINGO_KERNEL_ARGS_TRAILER
+            if kernel_name.startswith("__host"):
+                return 16  # exit_code + scratchpad_ptr
+        return 0
+
+    def _estimate_heap_usage(self, sorted_nodes, sorted_handles, handle_name_map):
+        usage = defaultdict(int)
+
+        for handle in sorted_handles:
+            self._add_heap_usage(
+                usage,
+                handle.mem_level,
+                handle.chip_id,
+                handle.cluster_id,
+                handle.size,
+            )
+
+        topo_nodes = list(nx.topological_sort(self))
+        num_total_nodes = len(sorted_nodes)
+        for chiplet_id in self.chiplet_ids:
+            local_nodes = [node for node in topo_nodes if node.assigned_chiplet_id == chiplet_id]
+            dev_nodes = [
+                node for node in local_nodes
+                if node.kernel_name and node.kernel_name.startswith("__snax")
+            ]
+            host_nodes = [
+                node for node in local_nodes
+                if node.kernel_name and node.kernel_name.startswith("__host")
+            ]
+
+            for size in (
+                max(len(local_nodes), 1) * 8,
+                num_total_nodes * 4,
+                num_total_nodes * 4,
+                len(dev_nodes) * 4,
+                len(dev_nodes) * 4,
+                len(host_nodes) * 8,
+                len(host_nodes) * 8,
+            ):
+                self._add_heap_usage(usage, "L3", chiplet_id, 0, size)
+
+            for cluster_id in range(self.num_clusters_per_chiplet):
+                for size in (len(dev_nodes) * 4, len(dev_nodes) * 4, num_total_nodes * 4):
+                    self._add_heap_usage(usage, "L1", chiplet_id, cluster_id, size)
+
+            for node in dev_nodes:
+                self._add_heap_usage(usage, "L1", chiplet_id, node.assigned_cluster_id, BINGO_KERNEL_SCRATCHPAD_SIZE_BYTES)
+                self._add_heap_usage(usage, "L1", chiplet_id, node.assigned_cluster_id, self._estimate_kernel_arg_request_size(node, handle_name_map))
+
+            for node in host_nodes:
+                self._add_heap_usage(usage, "L3", chiplet_id, 0, BINGO_KERNEL_SCRATCHPAD_SIZE_BYTES)
+                self._add_heap_usage(usage, "L3", chiplet_id, 0, self._estimate_kernel_arg_request_size(node, handle_name_map))
+
+        return usage
+
+    def _check_heap_usage_fits(self, usage):
+        failures = []
+        for key in sorted(usage):
+            capacity = self.heap_capacities.get(key[0])
+            if capacity is None:
+                continue
+            required = usage[key]
+            if required > capacity:
+                failures.append(
+                    f"{self._heap_location_label(key)}: required {required} B, "
+                    f"capacity {capacity} B"
+                )
+        if failures:
+            raise ValueError(
+                "Bingo heap allocation check failed before C generation "
+                "(sizes include allocator rounding):\n" + "\n".join(failures)
+            )
+
     def _emit_headers(self, f, extra_include_header_list):
         """Emit C header includes."""
         f.write("// Auto-generated offload_hw_bingo.h\n")
@@ -1703,7 +1934,10 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         # 1. Collect Handles
         sorted_nodes = sorted(self.node_list, key=lambda n: n.node_id)
         sorted_handles, handle_name_map = self._collect_memory_handles(sorted_nodes)
+        self._validate_kernel_core_assignments(sorted_nodes)
         self._validate_memory_handles(sorted_handles)
+        heap_usage = self._estimate_heap_usage(sorted_nodes, sorted_handles, handle_name_map)
+        self._check_heap_usage_fits(heap_usage)
 
         # 2. Start emitting C code
         with open(output_path, "w") as f:
