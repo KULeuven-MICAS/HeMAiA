@@ -16,24 +16,6 @@ where `Xdma_Op` is one of `xdma_1d_copy`, `xdma_transpose_2d`, or
 `xdma_submatrix_2d` with the configured dimensions.  The `XDMA_RUN` trace
 event dur_cc is the cycle count we report.
 
-## Running the sweep
-
-From the repo root:
-
-```bash
-bash scripts/run_xdma_sweep.sh
-```
-
-That script builds the workload, runs the RTL sim **once**, calls
-`make bingo-vis-traces`, and correlates XDMA_RUN events with configs
-(in order) to emit `inputs/rtl_luts/xdma.csv`.
-
-Fit the linear model + save figures with:
-
-```bash
-python scripts/characterize_xdma.py
-```
-
 ## Adding new configs
 
 Edit the `CONFIGS` list at the top of `main_bingo.py`.  Each entry is
