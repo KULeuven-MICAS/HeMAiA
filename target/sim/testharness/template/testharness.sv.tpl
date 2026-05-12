@@ -39,7 +39,6 @@
 %endif
 module testharness;
     // Drive the CLK signals
-    localparam int SIM_WITH_PLL = ${sim_with_pll};
     %if pll_present:
     `define TIMESCALEVAL       1.0e-12    // 1ps
     `define CLK_FREF_FREQ_MHZ  40.0
