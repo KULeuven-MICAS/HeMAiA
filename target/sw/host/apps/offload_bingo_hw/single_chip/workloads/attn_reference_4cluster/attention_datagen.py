@@ -15,7 +15,7 @@ import struct
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../../../../../../util/sim/"))
 from data_utils import format_scalar_definition, format_vector_definition  # noqa E402
-from snax_utils import block_gemm_golden_model  # noqa E402
+from sim_golden_models import block_gemm_golden_model  # noqa E402
 from layout_convert import (  # noqa E402
     row_major_to_a, row_major_to_b, row_major_to_d,
     d_to_row_major,

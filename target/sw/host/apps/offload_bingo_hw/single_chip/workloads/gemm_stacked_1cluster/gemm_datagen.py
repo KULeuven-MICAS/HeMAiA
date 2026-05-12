@@ -20,7 +20,7 @@ from data_utils import (
     format_vector_definition,
 )
 
-from snax_utils import block_gemm_golden_model
+from sim_golden_models import block_gemm_golden_model
 
 np.random.seed(320)
 
