@@ -222,6 +222,44 @@ static inline uint64_t __host_bingo_kernel_idma(void *arg){
     return 0;
 }
 
+static inline uint64_t __host_bingo_kernel_xdma_1d_copy(void *arg){
+    // Arg0-2: src, dst, size; Arg3: scratchpad_ptr
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+    uint64_t src_addr = ((uint64_t *)arg)[0];
+    uint64_t dst_addr = ((uint64_t *)arg)[1];
+    uint64_t size = ((uint64_t *)arg)[2];
+    bingo_kernel_scratchpad_t* sp = (bingo_kernel_scratchpad_t*)(uintptr_t)((uint64_t *)arg)[3];
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+
+    if (size > UINT32_MAX) {
+        printf_safe("[Host] xDMA 1D copy size too large: 0x%lx bytes\r\n", size);
+        sp->return_value = 1;
+        sp->num_return_values = 0;
+        return EXIT_CODE_FAIL;
+    }
+
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
+    int32_t cfg_ret = hemaia_xdma_memcpy_1d((const void*)(uintptr_t)src_addr,
+                                            (void*)(uintptr_t)dst_addr,
+                                            (uint32_t)size);
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
+    if (cfg_ret != 0) {
+        printf_safe("[Host] xDMA 1D copy config failed: %d\r\n", cfg_ret);
+        sp->return_value = (uint32_t)cfg_ret;
+        sp->num_return_values = 0;
+        return EXIT_CODE_FAIL;
+    }
+
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
+    uint32_t task_id = hemaia_xdma_start();
+    // !!! Note: only work when the src and dst memory is not the same!!!
+    hemaia_xdma_remote_wait(task_id);
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
+    sp->return_value = (uint32_t)dst_addr;
+    sp->num_return_values = 0;
+    return 0;
+}
+
 // ============================================================
 // FP32 CVA6+Ara SIMD kernels — operations that VersaCore cannot handle
 // These run on the CVA6 host processor with Ara RVV acceleration.
@@ -865,4 +903,3 @@ static inline uint64_t __host_bingo_kernel_cerf_gating(void *arg){
     sp->num_return_values = 0;
     return 0;
 }
-
