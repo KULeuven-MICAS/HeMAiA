@@ -42,7 +42,11 @@ module testharness;
     %if pll_present:
     `define TIMESCALEVAL       1.0e-12    // 1ps
     `define CLK_FREF_FREQ_MHZ  40.0
+    // Matches with the real chip freq
+    // In this freq, the uart simulation will be super slow
     `define PRI_FREQ_MHZ       32.0
+    // MEMPOOL_FREQ_MHZ must be 1/20 of the main clock to 
+    // make sure the d2d link alongside fpga works well
     `define MEMPOOL_FREQ_MHZ   200.0  // 200 MHz, 1/20 of the main clock
     %else:
     `define TIMESCALEVAL       1.0e-9 // 1ns
