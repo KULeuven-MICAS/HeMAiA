@@ -85,12 +85,14 @@ ifeq ($(SIM_WITH_PLL), 1)
 	VCS_BENDER  += -t tsmc16_pll_sim
 endif
 
+VSIM_DO_CMD = run -a
 ifeq ($(SIM_WITH_WAVEFORM), 1)
 	VSIM_FLAGS += -voptargs=+acc
+	VSIM_DO_CMD = log -r /*; run -a
 endif
 
 VSIM_FLAGS += -t 1ps
-VSIM_FLAGS += -do "log -r /*; run -a"
+VSIM_FLAGS += -do "$(VSIM_DO_CMD)"
 # Downgraded from error as VSIM *wrongly* reports illegal enum assignments in riscv_dbg 4-phase CDCs
 # TODO: Workaround; revise
 VSIM_FLAGS += -warning 8386
