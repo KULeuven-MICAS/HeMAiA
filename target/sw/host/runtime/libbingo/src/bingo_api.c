@@ -660,9 +660,9 @@ void bingo_runtime_schedule(bingo_task_t **task_list, uint32_t num_tasks) {
         }
     }
     // Destroy the allocated ready ring
-    bingoHeapFree(bingo_get_l2_heap_manager(get_current_chip_id()), (uint64_t)sched->ready_ring);
+    bingoHeapFree(bingo_get_l3_heap_manager(get_current_chip_id()), (uint64_t)sched->ready_ring);
     // Desctroy the scheduler instance
-    bingoHeapFree(bingo_get_l2_heap_manager(get_current_chip_id()), (uint64_t)sched);
+    bingoHeapFree(bingo_get_l3_heap_manager(get_current_chip_id()), (uint64_t)sched);
     printf_safe("Chip(%x, %x): [Host] Bingo SW schedule completed for all %u local tasks\r\n",
            get_current_chip_loc_x(), get_current_chip_loc_y(), local_total);
 }
