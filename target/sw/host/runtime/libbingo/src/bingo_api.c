@@ -47,10 +47,12 @@ int bingo_hemaia_system_mmap_init(){
     return 0;
 }
 
-int bingo_mempool_init(uint8_t mempool_loc_x, uint8_t mempool_loc_y, uint64_t capacity){
+int bingo_mempool_init(uint8_t mempool_loc_x, uint8_t mempool_loc_y){
     // Heap start derived from the same formula as bingo_get_mempool_heap_manager
-    // so the init and the getter never diverge.
+    // so the init and the getter never diverge. Capacity is fixed by the
+    // memchip layout (see allocators.h: MEMPOOL_HEAP_BYTES).
     uint64_t mempool_heap_start = bingo_get_mempool_heap_manager(mempool_loc_x, mempool_loc_y);
+    uint64_t capacity = MEMPOOL_HEAP_BYTES;
     uint64_t mempool_heap_manager = bingoHeapInit(mempool_heap_start, capacity);
     BINGO_PRINTF(3, "Chip(%x, %x): [Host] Mempool init: base=0x%lx (chip %d,%d), capacity=%lu\r\n",
            get_current_chip_loc_x(), get_current_chip_loc_y(),
@@ -84,8 +86,14 @@ uint64_t bingo_get_l2_heap_manager(uint8_t chip_id){
     return chiplet_addr_transform_full(chip_id, ALIGN_UP((uintptr_t)SPM_NARROW_BASE_ADDR + sizeof(comm_buffer_t), BINGO_HEAP_ALIGNMENT));
 }
 
+uint64_t bingo_get_mempool_data_base(uint8_t mempool_loc_x, uint8_t mempool_loc_y){
+    return chiplet_addr_transform_loc(mempool_loc_x, mempool_loc_y,
+                                      SPM_WIDE_BASE_ADDR + MEMPOOL_DATA_BASE_OFFSET);
+}
+
 uint64_t bingo_get_mempool_heap_manager(uint8_t mempool_loc_x, uint8_t mempool_loc_y){
-    return chiplet_addr_transform_loc(mempool_loc_x, mempool_loc_y, ALIGN_UP(SPM_WIDE_BASE_ADDR, SPM_WIDE_ALIGNMENT) + MEMPOOL_HEAP_OFFSET);
+    return chiplet_addr_transform_loc(mempool_loc_x, mempool_loc_y,
+                                      ALIGN_UP(SPM_WIDE_BASE_ADDR, SPM_WIDE_ALIGNMENT) + MEMPOOL_HEAP_BASE_OFFSET);
 }
 
 uint64_t bingo_l1_alloc(uint8_t chip_id, uint32_t cluster_id, uint64_t size){

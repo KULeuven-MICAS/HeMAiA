@@ -377,10 +377,14 @@ void bingo_l1_free(uint8_t chip_id, uint32_t cluster_id, uint64_t ptr);
 void bingo_l2_free(uint8_t chip_id, uint64_t ptr);
 void bingo_l3_free(uint8_t chip_id, uint64_t ptr);
 
-// Mempool chiplet allocator — allocates on remote mempool chip's SPM Wide.
-// Addresses are D2D-transformed so they are directly usable from compute chiplet.
-// Heap base is fixed at SPM_WIDE_BASE_ADDR + MEMPOOL_HEAP_OFFSET on the target chip.
-int bingo_mempool_init(uint8_t mempool_loc_x, uint8_t mempool_loc_y, uint64_t capacity);
+// Mempool chiplet allocator — manages the heap region on a remote mempool
+// chip's SPM Wide. The chip is split into a low 32 MiB data region (static
+// weights/inputs) and a top 32 MiB heap region; addresses are D2D-transformed
+// so they are directly usable from any compute chiplet.
+//   bingo_get_mempool_data_base()    -> start of the data region (low 32 MiB)
+//   bingo_get_mempool_heap_manager() -> heap handle (top 32 MiB)
+int bingo_mempool_init(uint8_t mempool_loc_x, uint8_t mempool_loc_y);
+uint64_t bingo_get_mempool_data_base(uint8_t mempool_loc_x, uint8_t mempool_loc_y);
 uint64_t bingo_get_mempool_heap_manager(uint8_t mempool_loc_x, uint8_t mempool_loc_y);
 uint64_t bingo_mempool_alloc(uint8_t mempool_loc_x, uint8_t mempool_loc_y, uint64_t size);
 void bingo_mempool_free(uint8_t mempool_loc_x, uint8_t mempool_loc_y, uint64_t ptr);

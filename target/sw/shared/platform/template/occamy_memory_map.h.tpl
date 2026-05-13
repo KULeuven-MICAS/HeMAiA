@@ -24,6 +24,8 @@
 #define WIDE_SPM_SIZE ${wide_spm_size}
 #define NARROW_SPM_SIZE ${narrow_spm_size}
 #define CLUSTER_TCDM_SIZE ${cluster_tcdm_size}
+// Memchip SRAM size from cfg (hemaia_mem_chip[0].mem_size); 0 if absent.
+#define MEMPOOL_TOTAL_SIZE ${mempool_total_size}
 
 //===============================================================
 // Mailbox

@@ -938,6 +938,9 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
     cluster_tcdm_size =  cluster_generators[0].cfg["tcdm"]["size"]*1024
     wide_spm_size = occamy_cfg["spm_wide"]["length"]
     narrow_spm_size = occamy_cfg["spm_narrow"]["length"]
+    # Memchip total size (chip(2,0) external SRAM); zero if cfg has no memchip.
+    mem_chips = occamy_cfg["hemaia_multichip"]["testbench_cfg"]["hemaia_mem_chip"]
+    mempool_total_size = int(mem_chips[0]["mem_size"]) if mem_chips else 0
     cheader_kwargs = {
         "name": name,
         "nr_chiplets": nr_chiplets,
@@ -954,7 +957,8 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
         "cluster_tcdm_size": hex(cluster_tcdm_size),
         "cluster_offset": hex(cluster_offset),
         "cluster_addr_width": cluster_addr_width,
-        "cluster_base_addr": hex(cluster_base_addr)
+        "cluster_base_addr": hex(cluster_base_addr),
+        "mempool_total_size": hex(mempool_total_size),
     }
     return cheader_kwargs
 
