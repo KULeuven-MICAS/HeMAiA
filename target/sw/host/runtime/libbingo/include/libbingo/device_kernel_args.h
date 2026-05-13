@@ -213,6 +213,14 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_gemm_full_args {
   uint32_t transpose_A;            
   uint32_t transpose_B;            
   uint32_t accumPrevC;            
+  uint32_t quantization_enable;
+  uint32_t shift_i;
+  uint32_t multiplier_i;
+  int32_t input_zp_i;
+  int32_t output_zp_i;
+  int32_t int32tofp16_enable;
+  int32_t int4_a_enable;
+  int32_t int4_b_enable;
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_gemm_full_args_t;
 

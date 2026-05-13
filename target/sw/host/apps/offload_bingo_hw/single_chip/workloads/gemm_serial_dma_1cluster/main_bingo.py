@@ -29,7 +29,7 @@ sys.path.append(f"{ROOT_DIR}/util/sim")
 # Import emit_header_file from gemm_datagen to emit gemm_data.h directly
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from gemm_datagen import emit_header_file  # noqa E402
-from snax_utils import define_gemm_workload_params  # noqa E402
+from gemm_sim_utils import define_gemm_workload_params  # noqa E402
 
 # This idea of this application is to compare with the serial version in bingo sw to show the improvement of the bingo hw manager
 from bingo_dfg import BingoDFG
@@ -151,7 +151,15 @@ def create_dfg(params, mem_handles, platform):
             array_shape_idx=params['arrayShapeIdx'],
             transpose_A=params['transposeA'],
             transpose_B=params['transposeB'],
-            accumPrevC=params['accumPrevC']
+            accumPrevC=params['accumPrevC'],
+            quantization_enable=params['quantization_enable'],
+            shift_i=params['shift_i'],
+            multiplier_i=params['multiplier_i'],
+            input_zp_i=params['input_zp_i'],
+            output_zp_i=params['output_zp_i'],
+            int32tofp16_enable=params['int32tofp16_enable'],
+            int4_a_enable=params['int4_a_enable'],
+            int4_b_enable=params['int4_b_enable']
         )
     )
     # Dev IDMA1D Copy D
@@ -175,7 +183,7 @@ def create_dfg(params, mem_handles, platform):
             kernel_args=HostBingoKernelCheckResultArgs(
                 golden_data_addr=mem_handles['D_L3'],
                 output_data_addr=mem_handles['l3_buf_D'],
-                data_size=64
+                data_size=min(64, params['D_size'])
             )
     )
     # 3. Add Nodes to DFG

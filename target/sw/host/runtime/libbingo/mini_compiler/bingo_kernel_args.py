@@ -204,7 +204,15 @@ class SnaxBingoKernelGemmFullArgs(BingoKernelArgs):
                  array_shape_idx: int,
                  transpose_A: int,
                  transpose_B: int,
-                 accumPrevC: int):
+                 accumPrevC: int,
+                 quantization_enable: int = 0,
+                 shift_i: int = 0,
+                 multiplier_i: int = 0,
+                 input_zp_i: int = 0,
+                 output_zp_i: int = 0,
+                 int32tofp16_enable: int = 0,
+                 int4_a_enable: int = 0,
+                 int4_b_enable: int = 0):
         self.input_A_addr = input_A_addr
         self.input_B_addr = input_B_addr
         self.input_C_addr = input_C_addr
@@ -216,6 +224,14 @@ class SnaxBingoKernelGemmFullArgs(BingoKernelArgs):
         self.transpose_A = transpose_A
         self.transpose_B = transpose_B
         self.accumPrevC = accumPrevC
+        self.quantization_enable = quantization_enable
+        self.shift_i = shift_i
+        self.multiplier_i = multiplier_i
+        self.input_zp_i = input_zp_i
+        self.output_zp_i = output_zp_i
+        self.int32tofp16_enable = int32tofp16_enable
+        self.int4_a_enable = int4_a_enable
+        self.int4_b_enable = int4_b_enable
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_gemm_full_args_t"
@@ -233,6 +249,14 @@ class SnaxBingoKernelGemmFullArgs(BingoKernelArgs):
         assignments["transpose_A"] = str(self.transpose_A)
         assignments["transpose_B"] = str(self.transpose_B)
         assignments["accumPrevC"] = str(self.accumPrevC)
+        assignments["quantization_enable"] = str(self.quantization_enable)
+        assignments["shift_i"] = str(self.shift_i)
+        assignments["multiplier_i"] = str(self.multiplier_i)
+        assignments["input_zp_i"] = str(self.input_zp_i)
+        assignments["output_zp_i"] = str(self.output_zp_i)
+        assignments["int32tofp16_enable"] = str(self.int32tofp16_enable)
+        assignments["int4_a_enable"] = str(self.int4_a_enable)
+        assignments["int4_b_enable"] = str(self.int4_b_enable)
         return assignments
 
 # BINGO GEMM MINIMAL

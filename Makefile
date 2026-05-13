@@ -2,7 +2,7 @@
 		occamy_system_vcu128_gui occamy_system_download_sw open_terminal hemaia_system_vivado_preparation \
 		hemaia_chip_vcu128 hemaia_chip_vcu128_gui hemaia_system_vcu128 hemaia_system_vcu128_gui \
 		occamy_system_vlt occamy_system_vsim_preparation occamy_system_vsim hemaia_system_vsim_preparation \
-		hemaia_system_vsim
+		hemaia_system_vsim bingo-vis-traces
 
 MKFILE_PATH := $(abspath $(lastword $(MAKEFILE_LIST)))
 MKFILE_DIR := $(dir $(MKFILE_PATH))
@@ -115,7 +115,11 @@ apps: $(CFG)
 		CHIP_TYPE=$(CHIP_TYPE) \
 		WORKLOAD=$(WORKLOAD) \
 		DEV_APP=$(DEV_APP)
- 
+
+# Generate the Bingo Perfetto trace from simulation logs via target/sim.
+bingo-vis-traces:
+	$(MAKE) -C ./target/sim bingo-vis-traces CFG=$(CFG) SIM_CFG=$(SIM_CFG)
+
 ######################
 # Bootrom Generation #
 ######################
