@@ -1,7 +1,5 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 
-from __future__ import annotations
-
 import os
 import subprocess
 import sys

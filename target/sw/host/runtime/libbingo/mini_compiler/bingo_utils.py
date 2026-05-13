@@ -1,6 +1,5 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 # Took from zigzag util
-from __future__ import annotations
 
 import subprocess
 import sys
