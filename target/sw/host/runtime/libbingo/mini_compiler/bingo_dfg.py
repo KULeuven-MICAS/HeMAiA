@@ -3,6 +3,7 @@
 import os
 import subprocess
 import sys
+from collections import defaultdict
 
 def install_package(package):
     subprocess.check_call([sys.executable, "-m", "pip", "install", package])
@@ -1344,9 +1345,19 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                  # Even if size is 0, we allocate 1 element to avoid issues with size 0 allocation if allocator doesn't support it, or just use 0.
                  # Using 1 for safety, similar to original array [1]
                  task_description_list += f"uint64_t* bingo_hw_scheduler_task_desc_list_chip_{chiplet_id:02x} = (uint64_t*)bingo_l3_alloc(0x{chiplet_id:02x}, 1 * sizeof(uint64_t));\n"
+                 task_description_list += self._alloc_guard_line(
+                     f"bingo_hw_scheduler_task_desc_list_chip_{chiplet_id:02x}",
+                     "1UL * sizeof(uint64_t)",
+                     f"L3 task descriptor list chip 0x{chiplet_id:02x}",
+                 )
                  task_description_list += f"bingo_hw_scheduler_task_desc_list_chip_{chiplet_id:02x}[0] = 0;\n"
             else:
                 task_description_list += f"uint64_t* bingo_hw_scheduler_task_desc_list_chip_{chiplet_id:02x} = (uint64_t*)bingo_l3_alloc(0x{chiplet_id:02x}, bingo_hw_scheduler_num_task_desc_chip_{chiplet_id:02x} * sizeof(uint64_t));\n"
+                task_description_list += self._alloc_guard_line(
+                    f"bingo_hw_scheduler_task_desc_list_chip_{chiplet_id:02x}",
+                    f"{num_local_nodes}UL * sizeof(uint64_t)",
+                    f"L3 task descriptor list chip 0x{chiplet_id:02x}",
+                )
                 for idx, node in enumerate(local_nodes):
                     packed_val = self.bingo_pack_node(node)
                     fields = self.bingo_unpack_node(packed_val)
@@ -1376,6 +1387,11 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         # Also need to emit num_dev_tasks for each chiplet
         for chiplet_id in chiplets_to_process:
             mapping_str += f"int32_t* global_task_id_to_dev_task_id_chip_{chiplet_id:02x} = (int32_t*)bingo_l3_alloc(0x{chiplet_id:02x}, {num_nodes} * sizeof(int32_t));\n"
+            mapping_str += self._alloc_guard_line(
+                f"global_task_id_to_dev_task_id_chip_{chiplet_id:02x}",
+                f"{num_nodes}UL * sizeof(int32_t)",
+                f"L3 global-to-device task map chip 0x{chiplet_id:02x}",
+            )
             dev_task_counter = 0
             
             for idx, node in enumerate(all_nodes):
@@ -1399,6 +1415,11 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         # 2. Emit global_task_id_to_host_task_id
         for chiplet_id in chiplets_to_process:
             mapping_str += f"int32_t* global_task_id_to_host_task_id_chip_{chiplet_id:02x} = (int32_t*)bingo_l3_alloc(0x{chiplet_id:02x}, {num_nodes} * sizeof(int32_t));\n"
+            mapping_str += self._alloc_guard_line(
+                f"global_task_id_to_host_task_id_chip_{chiplet_id:02x}",
+                f"{num_nodes}UL * sizeof(int32_t)",
+                f"L3 global-to-host task map chip 0x{chiplet_id:02x}",
+            )
             host_task_counter = 0
             for idx, node in enumerate(all_nodes):
                 kernel_name = node.kernel_name
@@ -1552,6 +1573,209 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                 + "\n".join(f"- {failure}" for failure in failures)
             )
 
+    @staticmethod
+    def _c_string_literal(value: str) -> str:
+        return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+    def _alloc_guard_line(self, ptr_expr, request_expr, label, indent: str = "") -> str:
+        return (
+            f"{indent}if (__bingo_check_alloc_result({self._c_string_literal(label)}, "
+            f"(uint64_t)({request_expr}), (uintptr_t)({ptr_expr})) != 0) return -1;\n"
+        )
+
+    def _heap_location_label(self, key):
+        mem_level, chip_id, cluster_id = key
+        if mem_level == "L1":
+            return f"L1 chip 0x{chip_id:02x} cluster {cluster_id}"
+        return f"{mem_level} chip 0x{chip_id:02x}"
+
+    def _heap_var_suffix(self, key):
+        mem_level, chip_id, cluster_id = key
+        suffix = f"{mem_level.lower()}_chip{chip_id:02x}"
+        if mem_level == "L1":
+            suffix += f"_cluster{cluster_id}"
+        return suffix
+
+    def _heap_manager_expr(self, key):
+        mem_level, chip_id, cluster_id = key
+        if mem_level == "L1":
+            return f"bingo_get_l1_heap_manager(0x{chip_id:02x}, {cluster_id})"
+        if mem_level == "L2":
+            return f"bingo_get_l2_heap_manager(0x{chip_id:02x})"
+        return f"bingo_get_l3_heap_manager(0x{chip_id:02x})"
+
+    def _add_heap_request(self, requests, mem_level, chip_id, cluster_id, request_expr, label):
+        if isinstance(request_expr, int):
+            if request_expr <= 0:
+                return
+            request_expr = str(request_expr)
+        requests[(mem_level, chip_id, cluster_id if mem_level == "L1" else 0)].append(
+            (request_expr, label)
+        )
+
+    def _kernel_arg_request_expr(self, node):
+        kernel_name = node.kernel_name or ""
+        if node.kernel_args:
+            return f"sizeof({node.kernel_args.get_struct_name()})"
+        if "exit" in kernel_name:
+            if kernel_name.startswith("__snax"):
+                return "sizeof(__snax_bingo_kernel_exit_args_t)"
+            if kernel_name.startswith("__host"):
+                return "sizeof(__host_bingo_kernel_exit_args_t)"
+        return None
+
+    def _collect_heap_requests(self, sorted_nodes, sorted_handles):
+        requests = defaultdict(list)
+        num_total_tasks = len(sorted_nodes)
+
+        for chiplet_id in self.chiplet_ids:
+            local_nodes = [node for node in sorted_nodes if node.assigned_chiplet_id == chiplet_id]
+            dev_nodes = [
+                node for node in local_nodes
+                if node.kernel_name and node.kernel_name.startswith("__snax")
+            ]
+            host_nodes = [
+                node for node in local_nodes
+                if node.kernel_name and node.kernel_name.startswith("__host")
+            ]
+
+            task_desc_count = max(len(local_nodes), 1)
+            self._add_heap_request(
+                requests, "L3", chiplet_id, 0,
+                f"{task_desc_count}UL * sizeof(uint64_t)",
+                f"HW task descriptor list ({task_desc_count} entries)",
+            )
+            self._add_heap_request(
+                requests, "L3", chiplet_id, 0,
+                f"{num_total_tasks}UL * sizeof(int32_t)",
+                "global task id to device task id map",
+            )
+            self._add_heap_request(
+                requests, "L3", chiplet_id, 0,
+                f"{num_total_tasks}UL * sizeof(int32_t)",
+                "global task id to host task id map",
+            )
+
+            for handle in sorted_handles:
+                if handle.chip_id != chiplet_id:
+                    continue
+                self._add_heap_request(
+                    requests,
+                    handle.mem_level,
+                    handle.chip_id,
+                    handle.cluster_id,
+                    handle.size,
+                    f"memory handle {handle.name}",
+                )
+
+            for request_expr, label in (
+                (f"{len(dev_nodes)}UL * sizeof(uint32_t)", "device argument list"),
+                (f"{len(dev_nodes)}UL * sizeof(uint32_t)", "device kernel list"),
+                (f"{len(host_nodes)}UL * sizeof(uint64_t)", "host argument list"),
+                (f"{len(host_nodes)}UL * sizeof(uint64_t)", "host kernel list"),
+            ):
+                self._add_heap_request(requests, "L3", chiplet_id, 0, request_expr, label)
+
+            for node in local_nodes:
+                kernel_name = node.kernel_name or ""
+                is_device = kernel_name.startswith("__snax")
+                is_host = kernel_name.startswith("__host")
+                if not (is_device or is_host):
+                    continue
+
+                if is_device:
+                    self._add_heap_request(
+                        requests, "L1", chiplet_id, node.assigned_cluster_id,
+                        "BINGO_KERNEL_SCRATCHPAD_SIZE",
+                        f"scratchpad for node {node.node_id}",
+                    )
+                    arg_expr = self._kernel_arg_request_expr(node)
+                    if arg_expr is not None:
+                        self._add_heap_request(
+                            requests, "L1", chiplet_id, node.assigned_cluster_id,
+                            arg_expr,
+                            f"argument struct for node {node.node_id}",
+                        )
+                else:
+                    self._add_heap_request(
+                        requests, "L3", chiplet_id, 0,
+                        "BINGO_KERNEL_SCRATCHPAD_SIZE",
+                        f"scratchpad for node {node.node_id}",
+                    )
+                    arg_expr = self._kernel_arg_request_expr(node)
+                    if arg_expr is not None:
+                        self._add_heap_request(
+                            requests, "L3", chiplet_id, 0,
+                            arg_expr,
+                            f"argument struct for node {node.node_id}",
+                        )
+
+            for cluster_id in range(self.num_clusters_per_chiplet):
+                for request_expr, label in (
+                    (f"{len(dev_nodes)}UL * sizeof(uint32_t)", "HW scheduler device arg cache"),
+                    (f"{len(dev_nodes)}UL * sizeof(uint32_t)", "HW scheduler device kernel cache"),
+                    (f"{num_total_tasks}UL * sizeof(int32_t)", "HW scheduler global task map cache"),
+                ):
+                    self._add_heap_request(requests, "L1", chiplet_id, cluster_id, request_expr, label)
+
+        return requests
+
+    def _emit_heap_check_helpers(self, f):
+        f.write("// Generated heap budget helpers\n")
+        f.write("static inline uint64_t __bingo_heap_alloc_cost(uint64_t amount) {\n")
+        f.write("    if (amount == 0UL) return 0UL;\n")
+        f.write("    const uint64_t fragment_size_min = (uint64_t)BINGO_HEAP_ALIGNMENT * 2UL;\n")
+        f.write("    const uint64_t overhead = (uint64_t)BINGO_HEAP_ALIGNMENT + fragment_size_min - 1UL;\n")
+        f.write("    if (amount > UINT64_MAX - overhead) return UINT64_MAX;\n")
+        f.write("    return (amount + overhead) & ~(fragment_size_min - 1UL);\n")
+        f.write("}\n\n")
+        f.write("static inline int __bingo_check_heap_budget(const char *heap_name, uint64_t heap_manager, uint64_t required) {\n")
+        f.write("    if (required == 0UL) return 0;\n")
+        f.write("    if (heap_manager == 0UL) {\n")
+        f.write("        printf_safe(\"[BINGO] Heap budget check failed for %s: heap manager is null\\r\\n\", heap_name);\n")
+        f.write("        return -1;\n")
+        f.write("    }\n")
+        f.write("    BingoHeapDiagnostics *diag = (BingoHeapDiagnostics *)(uintptr_t)bingoHeapGetDiagnostics(heap_manager);\n")
+        f.write("    const uint64_t available = (diag->capacity >= diag->allocated) ? (diag->capacity - diag->allocated) : 0UL;\n")
+        f.write("    if (required > available) {\n")
+        f.write("        printf_safe(\"[BINGO] Heap budget check failed for %s: required=%lu B, available=%lu B, capacity=%lu B, allocated=%lu B, peak=%lu B, oom=%lu\\r\\n\",\n")
+        f.write("                    heap_name, required, available, diag->capacity, diag->allocated, diag->peak_allocated, diag->oom_count);\n")
+        f.write("        return -1;\n")
+        f.write("    }\n")
+        f.write("    return 0;\n")
+        f.write("}\n\n")
+        f.write("static inline int __bingo_check_alloc_result(const char *label, uint64_t amount, uintptr_t ptr) {\n")
+        f.write("    if ((amount != 0UL) && (ptr == 0UL)) {\n")
+        f.write("        printf_safe(\"[BINGO] Allocation failed after heap pre-check: %s, size=%lu B\\r\\n\", label, amount);\n")
+        f.write("        return -1;\n")
+        f.write("    }\n")
+        f.write("    return 0;\n")
+        f.write("}\n\n")
+
+    def _emit_heap_precheck(self, f, chiplet_id, heap_requests):
+        local_requests = [
+            (key, requests)
+            for key, requests in sorted(heap_requests.items())
+            if key[1] == chiplet_id and requests
+        ]
+        if not local_requests:
+            return
+
+        f.write("        // Runtime heap budget check using live allocator diagnostics\n")
+        for key, requests in local_requests:
+            suffix = self._heap_var_suffix(key)
+            heap_label = self._heap_location_label(key)
+            f.write(f"        const uint64_t __bingo_heap_required_{suffix} =\n")
+            f.write("            0UL")
+            for request_expr, _label in requests:
+                f.write(f"\n            + __bingo_heap_alloc_cost((uint64_t)({request_expr}))")
+            f.write(";\n")
+            f.write(
+                f"        if (__bingo_check_heap_budget({self._c_string_literal(heap_label)}, "
+                f"{self._heap_manager_expr(key)}, __bingo_heap_required_{suffix}) != 0) return -1;\n"
+            )
+        f.write("\n")
+
     def _emit_headers(self, f, extra_include_header_list):
         """Emit C header includes."""
         f.write("// Auto-generated offload_hw_bingo.h\n")
@@ -1601,15 +1825,46 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                         alloc_call = f"bingo_l3_alloc(0x{h.chip_id:02x}, {h.size})"
                 
                 f.write(f"        uint64_t {c_var} = {alloc_call};\n")
+                f.write(self._alloc_guard_line(
+                    c_var,
+                    str(h.size),
+                    f"{h.mem_level} memory handle {h.name}",
+                    indent="        ",
+                ))
             f.write("\n")
 
     def _emit_list_allocations(self, f, chiplet_id):
         """Emit allocations for device/host argument and kernel lists."""
         f.write(f"        // 2. Prepare device/host arg/kernel lists\n")
         f.write(f"        uint32_t* device_arg_list_chip_{chiplet_id:02x} = (uint32_t*)bingo_l3_alloc(0x{chiplet_id:02x}, num_dev_tasks_chip_{chiplet_id:02x} * sizeof(uint32_t));\n")
+        f.write(self._alloc_guard_line(
+            f"device_arg_list_chip_{chiplet_id:02x}",
+            f"num_dev_tasks_chip_{chiplet_id:02x} * sizeof(uint32_t)",
+            f"L3 device argument list chip 0x{chiplet_id:02x}",
+            indent="        ",
+        ))
         f.write(f"        uint32_t* device_kernel_list_chip_{chiplet_id:02x} = (uint32_t*)bingo_l3_alloc(0x{chiplet_id:02x}, num_dev_tasks_chip_{chiplet_id:02x} * sizeof(uint32_t));\n")
+        f.write(self._alloc_guard_line(
+            f"device_kernel_list_chip_{chiplet_id:02x}",
+            f"num_dev_tasks_chip_{chiplet_id:02x} * sizeof(uint32_t)",
+            f"L3 device kernel list chip 0x{chiplet_id:02x}",
+            indent="        ",
+        ))
         f.write(f"        uint64_t* host_arg_list_chip_{chiplet_id:02x} = (uint64_t*)bingo_l3_alloc(0x{chiplet_id:02x}, num_host_tasks_chip_{chiplet_id:02x} * sizeof(uint64_t));\n")
+        f.write(self._alloc_guard_line(
+            f"host_arg_list_chip_{chiplet_id:02x}",
+            f"num_host_tasks_chip_{chiplet_id:02x} * sizeof(uint64_t)",
+            f"L3 host argument list chip 0x{chiplet_id:02x}",
+            indent="        ",
+        ))
         f.write(f"        uint64_t* host_kernel_list_chip_{chiplet_id:02x} = (uint64_t*)bingo_l3_alloc(0x{chiplet_id:02x}, num_host_tasks_chip_{chiplet_id:02x} * sizeof(uint64_t));\n\n")
+        f.write(self._alloc_guard_line(
+            f"host_kernel_list_chip_{chiplet_id:02x}",
+            f"num_host_tasks_chip_{chiplet_id:02x} * sizeof(uint64_t)",
+            f"L3 host kernel list chip 0x{chiplet_id:02x}",
+            indent="        ",
+        ))
+        f.write("\n")
 
     def _emit_task_initialization(self, f, chiplet_id, sorted_nodes, handle_name_map):
         """Emit initialization for task arguments + per-kernel scratchpad."""
@@ -1629,9 +1884,21 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
             if is_device:
                 sp_var = f"sp_dev_{node.node_id}"
                 f.write(f"        bingo_kernel_scratchpad_t* {sp_var} = (bingo_kernel_scratchpad_t*)bingo_l1_alloc(0x{chiplet_id:02x}, {node.assigned_cluster_id}, BINGO_KERNEL_SCRATCHPAD_SIZE);\n")
+                f.write(self._alloc_guard_line(
+                    sp_var,
+                    "BINGO_KERNEL_SCRATCHPAD_SIZE",
+                    f"L1 scratchpad node {node.node_id}",
+                    indent="        ",
+                ))
             else:
                 sp_var = f"sp_host_{node.node_id}"
                 f.write(f"        bingo_kernel_scratchpad_t* {sp_var} = (bingo_kernel_scratchpad_t*)bingo_l3_alloc(0x{chiplet_id:02x}, BINGO_KERNEL_SCRATCHPAD_SIZE);\n")
+                f.write(self._alloc_guard_line(
+                    sp_var,
+                    "BINGO_KERNEL_SCRATCHPAD_SIZE",
+                    f"L3 scratchpad node {node.node_id}",
+                    indent="        ",
+                ))
             node._scratchpad_c_var = sp_var
         f.write("\n")
 
@@ -1674,6 +1941,12 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
 
                 if node.kernel_args:
                     f.write(f"        {args_struct_type}* {args_var} = ({args_struct_type}*)bingo_l1_alloc(0x{chiplet_id:02x}, {node.assigned_cluster_id}, sizeof({args_struct_type}));\n")
+                    f.write(self._alloc_guard_line(
+                        args_var,
+                        f"sizeof({args_struct_type})",
+                        f"L1 argument struct node {node.node_id}",
+                        indent="        ",
+                    ))
                     field_assignments = node.kernel_args.get_c_field_assignments_with_scratchpad(handle_name_map)
                     for field, value in field_assignments.items():
                             f.write(f"        {args_var}->{field} = {value};\n")
@@ -1685,6 +1958,12 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                 else:
                     if "exit" in kernel_name:
                         f.write(f"        __snax_bingo_kernel_exit_args_t* {args_var} = (__snax_bingo_kernel_exit_args_t*)bingo_l1_alloc(0x{chiplet_id:02x}, {node.assigned_cluster_id}, sizeof(__snax_bingo_kernel_exit_args_t));\n")
+                        f.write(self._alloc_guard_line(
+                            args_var,
+                            "sizeof(__snax_bingo_kernel_exit_args_t)",
+                            f"L1 exit argument struct node {node.node_id}",
+                            indent="        ",
+                        ))
                         f.write(f"        {args_var}->exit_code = 0;\n")
                         f.write(f"        {args_var}->scratchpad_ptr = {sp_cast};\n")
                         f.write(f"        device_arg_list_chip_{chiplet_id:02x}[{dev_task_idx}] = (uint32_t)(uintptr_t){args_var};\n")
@@ -1699,6 +1978,12 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
 
                 if node.kernel_args:
                     f.write(f"        {args_struct_type}* {args_var} = ({args_struct_type}*)bingo_l3_alloc(0x{chiplet_id:02x}, sizeof({args_struct_type}));\n")
+                    f.write(self._alloc_guard_line(
+                        args_var,
+                        f"sizeof({args_struct_type})",
+                        f"L3 argument struct node {node.node_id}",
+                        indent="        ",
+                    ))
                     field_assignments = node.kernel_args.get_c_field_assignments_with_scratchpad(handle_name_map)
                     for field, value in field_assignments.items():
                             f.write(f"        {args_var}->{field} = {value};\n")
@@ -1710,6 +1995,12 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                 else:
                     if "exit" in kernel_name:
                         f.write(f"        __host_bingo_kernel_exit_args_t* {args_var} = (__host_bingo_kernel_exit_args_t*)bingo_l3_alloc(0x{chiplet_id:02x}, sizeof(__host_bingo_kernel_exit_args_t));\n")
+                        f.write(self._alloc_guard_line(
+                            args_var,
+                            "sizeof(__host_bingo_kernel_exit_args_t)",
+                            f"L3 exit argument struct node {node.node_id}",
+                            indent="        ",
+                        ))
                         f.write(f"        {args_var}->exit_code = 0;\n")
                         f.write(f"        {args_var}->scratchpad_ptr = {sp_cast};\n")
                         f.write(f"        host_arg_list_chip_{chiplet_id:02x}[{host_task_idx}] = (uint64_t)(uintptr_t){args_var};\n")
@@ -1737,13 +2028,13 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         f.write('        OFFLOAD_BINGO_HW_DEBUG_PRINT_SAFE("Chip(%x, %x): [Host] Init HW Bingo Scheduler\\r\\n",\n')
         f.write('               get_current_chip_loc_x(), get_current_chip_loc_y());\n\n')
 
-        f.write(f"        bingo_hw_scheduler_init((uint64_t)(uintptr_t)device_arg_list_chip_{chiplet_id:02x},\n")
-        f.write(f"                                (uint64_t)(uintptr_t)device_kernel_list_chip_{chiplet_id:02x},\n")
-        f.write(f"                                num_dev_tasks_chip_{chiplet_id:02x},\n")
-        f.write(f"                                (uint64_t)(uintptr_t)global_task_id_to_dev_task_id_chip_{chiplet_id:02x},\n")
-        f.write(f"                                num_total_tasks,\n")
-        f.write(f"                                (uint64_t)(uintptr_t)bingo_hw_scheduler_task_desc_list_chip_{chiplet_id:02x},\n")
-        f.write(f"                                bingo_hw_scheduler_num_task_desc_chip_{chiplet_id:02x});\n\n")
+        f.write(f"        if (bingo_hw_scheduler_init((uint64_t)(uintptr_t)device_arg_list_chip_{chiplet_id:02x},\n")
+        f.write(f"                                      (uint64_t)(uintptr_t)device_kernel_list_chip_{chiplet_id:02x},\n")
+        f.write(f"                                      num_dev_tasks_chip_{chiplet_id:02x},\n")
+        f.write(f"                                      (uint64_t)(uintptr_t)global_task_id_to_dev_task_id_chip_{chiplet_id:02x},\n")
+        f.write(f"                                      num_total_tasks,\n")
+        f.write(f"                                      (uint64_t)(uintptr_t)bingo_hw_scheduler_task_desc_list_chip_{chiplet_id:02x},\n")
+        f.write(f"                                      bingo_hw_scheduler_num_task_desc_chip_{chiplet_id:02x}) != 0) return -1;\n\n")
         
         f.write(f"        uint32_t err = bingo_hw_scheduler(host_arg_list_chip_{chiplet_id:02x},\n")
         f.write(f"                                          host_kernel_list_chip_{chiplet_id:02x},\n")
@@ -1789,11 +2080,13 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         sorted_handles, handle_name_map = self._collect_memory_handles(sorted_nodes)
         self._validate_kernel_core_assignments(sorted_nodes)
         self._validate_memory_handles(sorted_handles)
+        heap_requests = self._collect_heap_requests(sorted_nodes, sorted_handles)
 
         # 2. Start emitting C code
         with open(output_path, "w") as f:
             # Step 1: Emit Headers
             self._emit_headers(f, extra_include_header_list)
+            self._emit_heap_check_helpers(f)
             
             # Step 2: Emit Debug Kernel List
             self._emit_debug_kernel_list(f)
@@ -1808,6 +2101,7 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
             # Step 4: Iterate over each chiplet to generate isolated blocks
             for chiplet_id in self.chiplet_ids:
                 f.write(f"    if (current_chip_id == 0x{chiplet_id:02x}) {{\n")
+                self._emit_heap_precheck(f, chiplet_id, heap_requests)
                 
                 # A. Emit Task Description and Mapping Lists
                 self._emit_task_desc_and_mappings(f, chiplet_id)
