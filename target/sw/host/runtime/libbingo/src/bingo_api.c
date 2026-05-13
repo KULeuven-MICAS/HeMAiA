@@ -36,7 +36,12 @@ int bingo_hemaia_system_mmap_init(){
     // Start addr is the l3 heap start symbol aligned to 1KB
     // Size is from l3 heap start to wide spm end aligned down 1KB
     uint64_t l3_heap_start = ALIGN_UP(chiplet_addr_transform((uint64_t)(&__l3_heap_start)), SPM_WIDE_ALIGNMENT);
-    uint64_t l3_heap_size = ALIGN_DOWN(chiplet_addr_transform((uint64_t)(&__wide_spm_end)-SPM_WIDE_ALIGNMENT), SPM_WIDE_ALIGNMENT) - l3_heap_start;
+    uint64_t l3_heap_end = ALIGN_DOWN(chiplet_addr_transform((uint64_t)(&__wide_spm_end) - SPM_WIDE_ALIGNMENT), SPM_WIDE_ALIGNMENT);
+    if (l3_heap_end <= l3_heap_start) {
+        printf("Error when initializing L3 heap: start=0x%lx end=0x%lx.\r\n", l3_heap_start, l3_heap_end);
+        return -1;
+    }
+    uint64_t l3_heap_size = l3_heap_end - l3_heap_start;
     uint64_t l3_heap_manager = bingoHeapInit(l3_heap_start, l3_heap_size);
     // printf("Chip(%x, %x): [Host] L3 heap start: %lx, size(kB): %d\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), l3_heap_manager, l3_heap_size>>10);
     // printf("Chip(%x, %x): [Host] L3 heap start: %lx, size: %lx, heap manager: 0x%lx\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), l3_heap_start, l3_heap_size, l3_heap_manager);
@@ -763,7 +768,7 @@ void bingo_hw_scheduler_init_pm(){
 // Then the HW scheduler will read the task list from the memory and schedule the tasks
 // The Host core will also hooked with th ARA core for the simd
 // So its work is just to read the ready queue and write to the done queue when the simd is done
-void bingo_hw_scheduler_init(uint64_t dev_arg_base_addr, uint64_t dev_kernel_base_addr, uint32_t num_dev_tasks, uint64_t global_task_id_to_dev_task_id_base_addr, uint32_t num_total_tasks, uint64_t bingo_hw_scheduler_task_desc_list_base, uint32_t bingo_hw_scheduler_num_task_desc){
+int bingo_hw_scheduler_init(uint64_t dev_arg_base_addr, uint64_t dev_kernel_base_addr, uint32_t num_dev_tasks, uint64_t global_task_id_to_dev_task_id_base_addr, uint32_t num_total_tasks, uint64_t bingo_hw_scheduler_task_desc_list_base, uint32_t bingo_hw_scheduler_num_task_desc){
     // We need to set the soc_ctrl_kernel_tab_scratch_addr(3) to 2 to indicate we are using the HW scheduler
     // See target/sw/device/runtime/src/bingo.h for details
     writew(2, (uintptr_t)chiplet_addr_transform((uint64_t)soc_ctrl_kernel_tab_scratch_addr(3)));
@@ -776,26 +781,40 @@ void bingo_hw_scheduler_init(uint64_t dev_arg_base_addr, uint64_t dev_kernel_bas
     // Assign the space in the clusters TCDM for those lists
     for (uint32_t i = 0; i < N_CLUSTERS_PER_CHIPLET; i++)
     {
+        uint64_t dev_task_list_bytes = num_dev_tasks * sizeof(uint32_t);
+        uint64_t task_map_bytes = num_total_tasks * sizeof(int32_t);
         // Allocate space in the cluster's L1 for those lists
-        uint64_t ptr_dev_arg_base = bingo_l1_alloc(get_current_chip_id(), i, num_dev_tasks * sizeof(uint32_t));
-        uint64_t ptr_dev_kernel_base = bingo_l1_alloc(get_current_chip_id(), i, num_dev_tasks * sizeof(uint32_t));
-        uint64_t ptr_global_id_to_dev_id_base = bingo_l1_alloc(get_current_chip_id(), i, num_total_tasks * sizeof(int32_t));
+        uint64_t ptr_dev_arg_base = bingo_l1_alloc(get_current_chip_id(), i, dev_task_list_bytes);
+        uint64_t ptr_dev_kernel_base = bingo_l1_alloc(get_current_chip_id(), i, dev_task_list_bytes);
+        uint64_t ptr_global_id_to_dev_id_base = bingo_l1_alloc(get_current_chip_id(), i, task_map_bytes);
+        if ((dev_task_list_bytes != 0UL && (ptr_dev_arg_base == 0UL || ptr_dev_kernel_base == 0UL)) ||
+            (task_map_bytes != 0UL && ptr_global_id_to_dev_id_base == 0UL)) {
+            printf_safe("Chip(%x, %x): [Host] HW scheduler L1 cache allocation failed on cluster %u\r\n",
+                   get_current_chip_loc_x(), get_current_chip_loc_y(), i);
+            return -1;
+        }
         // Copy the data using soc dma
         // Copy dev arg list
-        sys_dma_blk_memcpy(get_current_chip_id(),
-                            ptr_dev_arg_base,
-                            (uint64_t)chiplet_addr_transform_full(get_current_chip_id(), dev_arg_base_addr),
-                            num_dev_tasks * sizeof(uint32_t));
+        if (dev_task_list_bytes != 0UL) {
+            sys_dma_blk_memcpy(get_current_chip_id(),
+                                ptr_dev_arg_base,
+                                (uint64_t)chiplet_addr_transform_full(get_current_chip_id(), dev_arg_base_addr),
+                                dev_task_list_bytes);
+        }
         // Copy dev kernel list
-        sys_dma_blk_memcpy(get_current_chip_id(),
-                            ptr_dev_kernel_base,
-                            (uint64_t)chiplet_addr_transform_full(get_current_chip_id(), dev_kernel_base_addr),
-                            num_dev_tasks * sizeof(uint32_t));
+        if (dev_task_list_bytes != 0UL) {
+            sys_dma_blk_memcpy(get_current_chip_id(),
+                                ptr_dev_kernel_base,
+                                (uint64_t)chiplet_addr_transform_full(get_current_chip_id(), dev_kernel_base_addr),
+                                dev_task_list_bytes);
+        }
         // Copy global task id to dev task id list
-        sys_dma_blk_memcpy(get_current_chip_id(),
-                            ptr_global_id_to_dev_id_base,
-                            (uint64_t)chiplet_addr_transform_full(get_current_chip_id(), global_task_id_to_dev_task_id_base_addr),
-                            num_total_tasks * sizeof(int32_t));
+        if (task_map_bytes != 0UL) {
+            sys_dma_blk_memcpy(get_current_chip_id(),
+                                ptr_global_id_to_dev_id_base,
+                                (uint64_t)chiplet_addr_transform_full(get_current_chip_id(), global_task_id_to_dev_task_id_base_addr),
+                                task_map_bytes);
+        }
         writew(ptr_dev_arg_base,                 (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_arg_ptr_addr(i)));
         writew(ptr_dev_kernel_base,              (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_kernel_ptr_addr(i)));
         writew(ptr_global_id_to_dev_id_base, (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_global_id_to_dev_id_addr(i)));
@@ -811,6 +830,7 @@ void bingo_hw_scheduler_init(uint64_t dev_arg_base_addr, uint64_t dev_kernel_bas
     // Tell the device that the host init is done
     writew(1,                             (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_host_init_done_addr()));
     asm volatile("fence" ::: "memory");
+    return 0;
 }
 
 uint32_t bingo_hw_scheduler(uint64_t* host_arg_list, uint64_t* host_kernel_list, int32_t* global_task_id_to_host_task_id){
