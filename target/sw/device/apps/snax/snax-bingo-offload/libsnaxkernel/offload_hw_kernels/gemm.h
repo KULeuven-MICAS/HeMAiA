@@ -97,6 +97,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
     const uint32_t d_elem_len = quantization_enable ? 8u
                                                     : (int32tofp16_enable ? 16u : BINGO_D32_ELEM_LEN);
     const uint32_t has_d_extension = quantization_enable || int32tofp16_enable;
+    const uint32_t one_output_tile_bits = meshRow * meshCol * d_elem_len;
     uint32_t channel_en_A_dyn[BINGO_A_CSR_NUM] = {0};
     uint32_t channel_en_B_dyn[BINGO_B_CSR_NUM] = {0};
     uint32_t channel_en_D32_dyn[BINGO_D32_CSR_NUM] = {0};
@@ -274,17 +275,19 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
     uint32_t D32tlstride[4];
     if (has_d_extension)
     {
-        const uint32_t output_bits = meshRow * meshCol * d_elem_len;
-        if (output_bits > BINGO_SERIAL_C_D_WIDTH)
+        if (one_output_tile_bits > BINGO_SERIAL_C_D_WIDTH)
         {
             // one output tile is larger than the streamer width, need to split into multiple stores
-            if ((output_bits % BINGO_SERIAL_C_D_WIDTH) != 0)
+            if ((one_output_tile_bits % BINGO_SERIAL_C_D_WIDTH) != 0)
             {
                 VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! D extension output width is not streamer-aligned\r\n",
                                       snrt_cluster_idx(), snrt_cluster_core_idx());
                 return BINGO_RET_FAIL;
             }
-            D32tlbound[0] = output_bits / BINGO_SERIAL_C_D_WIDTH;
+
+            // D32tlbound[0] times store for one tile
+            D32tlbound[0] = one_output_tile_bits / BINGO_SERIAL_C_D_WIDTH;
+            // in total N * M tile
             D32tlbound[1] = N * M;
             D32tlbound[2] = 1;
             D32tlbound[3] = 1;
@@ -298,20 +301,27 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
         else
         {
             // one output tile fits within the streamer width, will pack multiple tiles into one store
-            D32tlbound[0] = 1;
-            uint32_t output_matrix_per_store = BINGO_SERIAL_C_D_WIDTH / output_bits;
-            if (((M * N * output_bits) % BINGO_SERIAL_C_D_WIDTH) != 0)
+            if ((BINGO_SERIAL_C_D_WIDTH % one_output_tile_bits) != 0)
+            {
+                VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! D extension output width does not divide streamer width\r\n",
+                                      snrt_cluster_idx(), snrt_cluster_core_idx());
+                return BINGO_RET_FAIL;
+            }
+            if (((M * N * one_output_tile_bits) % BINGO_SERIAL_C_D_WIDTH) != 0)
             {
                 VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! D extension output does not fill streamer stores cleanly\r\n",
                                       snrt_cluster_idx(), snrt_cluster_core_idx());
                 return BINGO_RET_FAIL;
             }
+            const uint32_t output_matrix_per_store = BINGO_SERIAL_C_D_WIDTH / one_output_tile_bits;
+            // D32tlbound0 is 1 (many output tiles are packed into one store)
+            D32tlbound[0] = 1;
+            // how many times store (each time stores output_matrix_per_store tiles)
             D32tlbound[1] = N * M / output_matrix_per_store;
             D32tlbound[2] = 1;
             D32tlbound[3] = 1;
-            // bound0 is 0
-            D32tlstride[0] = 0;
-            // each is BINGO_SERIAL_C_D_WIDTH width
+            // Each D writer step is one full serial C/D beat.
+            D32tlstride[0] = BINGO_SERIAL_C_D_WIDTH / 8;
             D32tlstride[1] = BINGO_SERIAL_C_D_WIDTH / 8;
             D32tlstride[2] = 0;
             D32tlstride[3] = 0;
@@ -381,6 +391,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
         int32tofp16_enable,
         int4_a_enable,
         int4_b_enable);
+
     set_versacore_csr(
         // accPrevC means takes new C
         accumPrevC == 0,
