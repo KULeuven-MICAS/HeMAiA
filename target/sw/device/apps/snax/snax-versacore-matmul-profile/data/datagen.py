@@ -27,7 +27,7 @@ from sim_golden_models import (  # noqa E402
     postprocessing_simd_golden_model_V3,
     int32_to_fp16_golden,
 )  # noqa E402
-from snax_utils import align_wide_addr  # noqa E402
+from gemm_sim_utils import align_wide_addr  # noqa E402
 
 np.random.seed(42)
 
