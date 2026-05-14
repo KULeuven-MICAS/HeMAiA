@@ -57,7 +57,14 @@ int main() {
     init_uart(get_current_chip_baseaddress(), 32, 1);
     enable_vec();
     enable_sw_interrupts();
-
+    if (bingo_hemaia_system_mmap_init() < 0) {
+        printf("Chip(%x, %x): [Host] Error when initializing Allocator\r\n",
+               get_current_chip_loc_x(), get_current_chip_loc_y());
+        return -1;
+    }
+    printf("Chip(%x, %x): [Host] Allocator Init Success\r\n",
+           get_current_chip_loc_x(), get_current_chip_loc_y());
+        
     // -----------------------------------------------------------------------
     // Chip 0 issues a LARGE contiguous burst of plain CPU stores (mimicking
     // bingoHeapInit's volume + address) to the mem-chip heap region, fences,
@@ -71,8 +78,17 @@ int main() {
     // -----------------------------------------------------------------------
 #define PROBE_N 64
     if (current_chip_id == 0) {
-        volatile uint64_t* mc = (volatile uint64_t*)chiplet_addr_transform_loc(
-            MEMCHIP_LOC_X, MEMCHIP_LOC_Y, 0x82000000);
+        if (bingo_mempool_init(MEMCHIP_LOC_X, MEMCHIP_LOC_Y) < 0) {
+            printf("Chip(%x, %x): Memchip heap init failed!\r\n",
+                get_current_chip_loc_x(), get_current_chip_loc_y());
+            return -1;
+        } else {
+            printf("Chip(%x, %x): Memchip heap init success!\r\n",
+                get_current_chip_loc_x(), get_current_chip_loc_y());
+        }
+        volatile uint64_t* mc = (uint64_t*)bingo_mempool_alloc(MEMCHIP_LOC_X,
+                                                    MEMCHIP_LOC_Y,
+                                                    8192);
         for (int i = 0; i < PROBE_N; i++) {
             mc[i] = 0xABCD000000000000ULL | (uint64_t)i;
         }
