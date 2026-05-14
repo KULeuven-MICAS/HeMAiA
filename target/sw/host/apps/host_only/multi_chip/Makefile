@@ -9,7 +9,7 @@ SUBDIRS = multichip_mailbox
 SUBDIRS += multichip_sync
 SUBDIRS += system_xdma_copy
 SUBDIRS += multi_d2d_streams
-
+SUBDIRS += d2d_simple_test 
 TARGET ?= all
 
 .PHONY: all clean partial-build finalize-build $(SUBDIRS)
