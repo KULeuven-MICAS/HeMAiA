@@ -114,7 +114,12 @@
       // Cross Cluster Calling Cfg
       max_multicast: 2,
       max_dimension: 5,
-      max_mem_size: 4096,
+      // max_mem_size (KiB) sizes the XDMA cross-cluster pointer width:
+      // crossClusterParam.tcdmAddressWidth = log2Ceil(max_mem_size)+10.
+      // It MUST cover the largest XDMA destination, i.e. the 64 MiB mem
+      // chip. At 4096 it was only 22-bit and silently truncated any
+      // remote write past 4 MiB (e.g. mempool buffers at +32 MiB).
+      max_mem_size: 65536,
       // DataMaestro Cfg
       reader_buffer: 4,
       writer_buffer: 4,

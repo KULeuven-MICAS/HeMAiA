@@ -49,31 +49,24 @@ int main() {
     // -----------------------------------------------------------------------
     // 1. Clock-domain setup.
     //
-    // The HeMAiA clock-reset controller exposes 6 clock channels per chip,
-    // each fed by an independent divider off the 500 MHz master clock. The
-    // reset-time defaults are wired in occamy_chip.sv:165-169 as
-    // {16, 16, 1, 1, 1, 1}; the /16 host clock has been observed to hang
-    // bingoHeapInit's cross-chip store burst into the memchip. Re-program
-    // the host + cluster channels to /8 (= 62.5 MHz) and re-state the four
-    // D2D PHY channels at /1 (pass-through) so this SW doesn't rely on the
-    // RTL default surviving future edits.
+    // The reset-time clock dividers (occamy_chip.sv defaults {16,16,1,1,1,1})
+    // leave the host CPU at 500 MHz / 16. At that 16:1 host-to-D2D-PHY clock
+    // ratio, the D2D narrow write path drops stores from bingoHeapInit's
+    // cross-chip burst into the mem chip: the heap manager's `capacity`
+    // store is written but never lands, so bingo_mempool_alloc later reads
+    // capacity == 0 and every allocation fails. The framer fix removes the
+    // earlier deadlock but NOT this data-loss; it is a separate, still-open
+    // RTL bug in the D2D narrow path / CDC (see RESULTS.md).
+    //
+    // Workaround until that RTL bug is fixed: reprogram the host + cluster
+    // channels to /8 (= 62.5 MHz, an 8:1 ratio that does not drop stores)
+    // and re-state the four D2D PHY channels at /1.
     //
     // Channel layout (see occamy_chip.sv:143-150):
-    //   ch 0  Host CPU (CVA6) clock         — clk_vec[0]
-    //   ch 1  Accelerator cluster clock     — clk_vec[1]
-    //   ch 2  East  D2D TX PHY clock        — clk_vec[2]
-    //   ch 3  West  D2D TX PHY clock        — clk_vec[3]
-    //   ch 4  North D2D TX PHY clock        — clk_vec[4]
-    //   ch 5  South D2D TX PHY clock        — clk_vec[5]
-    //
-    // enable_clk_domain(channel, divisor) writes the per-channel divisor
-    // register; the value IS the divide ratio (matches the RTL semantics in
-    // hemaia_clock_divider.sv), so 7 means "divide by 7".
-    // -----------------------------------------------------------------------
-    // Channel indices follow the layout in hemaia_clk_rst_controller.h:
     //   ch 0                              host CPU
     //   ch 1 .. N_CLUSTERS_PER_CHIPLET    accelerator cluster clocks
     //   ch N+1 .. N+4                     East/West/North/South D2D PHY
+    // -----------------------------------------------------------------------
     enable_clk_domain(0, 8);   // host CPU @ 500 MHz / 8 = 62.5 MHz
     for (uint8_t i = 0; i < N_CLUSTERS_PER_CHIPLET; i++) {
         enable_clk_domain(1 + i, 8);  // cluster i @ 500 MHz / 8 = 62.5 MHz
@@ -120,11 +113,11 @@ int main() {
     // -----------------------------------------------------------------------
     if (current_chip_id == 0){
         if (bingo_mempool_init(MEMCHIP_LOC_X, MEMCHIP_LOC_Y) < 0) {
-            printf("Chip(%x, %x): memchip heap init failed!\r\n",
+            printf("Chip(%x, %x): Memchip heap init failed!\r\n",
                    get_current_chip_loc_x(), get_current_chip_loc_y());
             return -1;
         } else {
-            printf("Chip(%x, %x): memchip heap init success!\r\n",
+            printf("Chip(%x, %x): Memchip heap init success!\r\n",
                    get_current_chip_loc_x(), get_current_chip_loc_y());
         }
     }
@@ -142,7 +135,7 @@ int main() {
         memchip_buf = (uint8_t*)bingo_mempool_alloc(MEMCHIP_LOC_X,
                                                     MEMCHIP_LOC_Y,
                                                     data_size);
-        printf("Chip(%x, %x): memchip_buf allocated at %lx\r\n",
+        printf("Chip(%x, %x): Memchip_buf allocated at %lx\r\n",
                get_current_chip_loc_x(), get_current_chip_loc_y(),
                (uintptr_t)memchip_buf);
 
@@ -214,7 +207,7 @@ int main() {
     // 7. Stage C — chip(2,0)'s IDMA engine broadcasts memchip_buf to every
     //    chip's local_l3_buf in one transfer. Only chip 0 issues the request.
     //    The destination address uses (0xF, 0xF) broadcast prefix; the same
-    //    local offset reaches every chip because allocations in step 6 were
+    //    local offset reaches every chip because allocations in step 5 were
     //    deterministic.
     // -----------------------------------------------------------------------
     if (current_chip_id == 0) {
