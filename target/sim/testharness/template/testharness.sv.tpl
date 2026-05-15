@@ -146,7 +146,7 @@ module testharness;
         %for compute_chip in compute_chips:
         chip${compute_chip.coordinate[0]}${compute_chip.coordinate[1]}_pll_en_drv = 1'b1;
         // Wait for phase locked
-        @(posedge chip${compute_chip.coordinate[0]}${compute_chip.coordinate[1]}_pll_lock_o);
+        wait (chip${compute_chip.coordinate[0]}${compute_chip.coordinate[1]}_pll_lock_o === 1'b1);
         $display("Chip ${compute_chip.coordinate[0]}${compute_chip.coordinate[1]}'s PLL Lock asserted!");
         %endfor
         end
