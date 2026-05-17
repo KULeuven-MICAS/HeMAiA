@@ -26,18 +26,6 @@ int main() {
     }
     printf("Chip(%x, %x): [Host] Allocator Init Success\r\n",
            get_current_chip_loc_x(), get_current_chip_loc_y());
-        
-    // -----------------------------------------------------------------------
-    // Chip 0 issues a LARGE contiguous burst of plain CPU stores (mimicking
-    // bingoHeapInit's volume + address) to the mem-chip heap region, fences,
-    // then reads them all back. At /16 some stores in the burst are silently
-    // lost; at /8 they all land. Reports the total loss count and the first
-    // few lost indices so we know if loss is volume- / position- /
-    // address-dependent. Remove once the RTL bug is fixed.
-    //
-    // PROBE_N stores of 8 bytes each = PROBE_N*8 bytes, starting at the same
-    // 0x82000000 region bingoHeapInit writes.
-    // -----------------------------------------------------------------------
 #define PROBE_N 64
     if (current_chip_id == 0) {
         if (bingo_mempool_init(MEMCHIP_LOC_X, MEMCHIP_LOC_Y) < 0) {
