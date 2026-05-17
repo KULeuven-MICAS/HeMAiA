@@ -15,55 +15,17 @@
 
 int main() {
     uint8_t current_chip_id = get_current_chip_id();
-
-    // -----------------------------------------------------------------------
-    // 1. Clock-domain setup.
-    //
-    // The reset-time clock dividers (occamy_chip.sv defaults {16,16,1,1,1,1})
-    // leave the host CPU at 500 MHz / 16. At that 16:1 host-to-D2D-PHY clock
-    // ratio, the D2D narrow write path drops stores from bingoHeapInit's
-    // cross-chip burst into the mem chip: the heap manager's `capacity`
-    // store is written but never lands, so bingo_mempool_alloc later reads
-    // capacity == 0 and every allocation fails. The framer fix removes the
-    // earlier deadlock but NOT this data-loss; it is a separate, still-open
-    // RTL bug in the D2D narrow path / CDC (see RESULTS.md).
-    //
-    // Workaround until that RTL bug is fixed: reprogram the host + cluster
-    // channels to /8 (= 62.5 MHz, an 8:1 ratio that does not drop stores)
-    // and re-state the four D2D PHY channels at /1.
-    //
-    // Channel layout (see occamy_chip.sv:143-150):
-    //   ch 0                              host CPU
-    //   ch 1 .. N_CLUSTERS_PER_CHIPLET    accelerator cluster clocks
-    //   ch N+1 .. N+4                     East/West/North/South D2D PHY
-    // -----------------------------------------------------------------------
-
-    /////////////////////////////////////////////////////////////////////////
-    // DEBUG(/16 hunt): clock workaround disabled so the test runs at the
-    // /16 RTL default and the D2D narrow-write loss reproduces. Restore by
-    // flipping the #if back to 1.
-#if 0
-    enable_clk_domain(0, 8);   // host CPU @ 500 MHz / 8 = 62.5 MHz
-    for (uint8_t i = 0; i < N_CLUSTERS_PER_CHIPLET; i++) {
-        enable_clk_domain(1 + i, 8);  // cluster i @ 500 MHz / 8 = 62.5 MHz
-    }
-    enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 1, 1);  // East  D2D PHY @ 500 MHz
-    enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 2, 1);  // West  D2D PHY @ 500 MHz
-    enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 3, 1);  // North D2D PHY @ 500 MHz
-    enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 4, 1);  // South D2D PHY @ 500 MHz
-#endif
-
     hemaia_d2d_link_initialize(current_chip_id);
     init_uart(get_current_chip_baseaddress(), 32, 1);
     enable_vec();
     enable_sw_interrupts();
-    // if (bingo_hemaia_system_mmap_init() < 0) {
-    //     printf("Chip(%x, %x): [Host] Error when initializing Allocator\r\n",
-    //            get_current_chip_loc_x(), get_current_chip_loc_y());
-    //     return -1;
-    // }
-    // printf("Chip(%x, %x): [Host] Allocator Init Success\r\n",
-    //        get_current_chip_loc_x(), get_current_chip_loc_y());
+    if (bingo_hemaia_system_mmap_init() < 0) {
+        printf("Chip(%x, %x): [Host] Error when initializing Allocator\r\n",
+               get_current_chip_loc_x(), get_current_chip_loc_y());
+        return -1;
+    }
+    printf("Chip(%x, %x): [Host] Allocator Init Success\r\n",
+           get_current_chip_loc_x(), get_current_chip_loc_y());
         
     // -----------------------------------------------------------------------
     // Chip 0 issues a LARGE contiguous burst of plain CPU stores (mimicking
@@ -78,19 +40,19 @@ int main() {
     // -----------------------------------------------------------------------
 #define PROBE_N 64
     if (current_chip_id == 0) {
-        // if (bingo_mempool_init(MEMCHIP_LOC_X, MEMCHIP_LOC_Y) < 0) {
-        //     printf("Chip(%x, %x): Memchip heap init failed!\r\n",
-        //         get_current_chip_loc_x(), get_current_chip_loc_y());
-        //     return -1;
-        // } else {
-        //     printf("Chip(%x, %x): Memchip heap init success!\r\n",
-        //         get_current_chip_loc_x(), get_current_chip_loc_y());
-        // }
-        // volatile uint64_t* mc = (uint64_t*)bingo_mempool_alloc(MEMCHIP_LOC_X,
-        //                                             MEMCHIP_LOC_Y,
-        //                                             8192);
-        volatile uint64_t* mc = (volatile uint64_t*)chiplet_addr_transform_loc(
-            MEMCHIP_LOC_X, MEMCHIP_LOC_Y, 0x82000000);
+        if (bingo_mempool_init(MEMCHIP_LOC_X, MEMCHIP_LOC_Y) < 0) {
+            printf("Chip(%x, %x): Memchip heap init failed!\r\n",
+                get_current_chip_loc_x(), get_current_chip_loc_y());
+            return -1;
+        } else {
+            printf("Chip(%x, %x): Memchip heap init success!\r\n",
+                get_current_chip_loc_x(), get_current_chip_loc_y());
+        }
+        volatile uint64_t* mc = (uint64_t*)bingo_mempool_alloc(MEMCHIP_LOC_X,
+                                                    MEMCHIP_LOC_Y,
+                                                    8192);
+        // volatile uint64_t* mc = (volatile uint64_t*)chiplet_addr_transform_loc(
+        //     MEMCHIP_LOC_X, MEMCHIP_LOC_Y, 0x82000000);
         for (int i = 0; i < PROBE_N; i++) {
             mc[i] = 0xABCD000000000000ULL | (uint64_t)i;
         }
