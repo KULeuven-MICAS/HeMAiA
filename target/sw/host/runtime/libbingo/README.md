@@ -7,6 +7,8 @@ Libbingo is a lightweight bare‑metal task dependency runtime for the **HeMAiA*
 * Inter‑chip task completion notification using hardware mailboxes
 * Host ↔ Device mailbox/message encoding (H2H, H2C, C2H)
 
+For the hardware offload core-level kernel entry catalog, see [CORE_LEVEL_KERNELS.md](CORE_LEVEL_KERNELS.md).
+
 Its design philosophy borrows ideas from LLVM `libomptarget`, PULP `libhero`, and modern decentralized schedulers, while remaining small enough for bring‑up and experimentation.
 
 ---

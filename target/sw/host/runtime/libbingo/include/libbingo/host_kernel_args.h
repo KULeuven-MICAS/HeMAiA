@@ -106,6 +106,7 @@ __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_fp32_softmax_args {
 #define BINGO_GATING_MODE_TOP_K      0
 #define BINGO_GATING_MODE_THRESHOLD  1
 #define BINGO_GATING_MODE_STATIC     2
+
 __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_cerf_gating_args {
     uint64_t mode;                    // BINGO_GATING_MODE_*
     uint64_t pred_scratchpad_addr;    // predecessor's scratchpad (unused for static)

@@ -91,10 +91,15 @@ runs:
     - DEV_APP: snax-bingo-offload
   - app_17:
     - HOST_APP_TYPE: offload_bingo_hw
+    - CHIP_TYPE: single_chip
+    - WORKLOAD: gemm_mem_chip_1cluster
+    - DEV_APP: snax-bingo-offload
+  - app_18:
+    - HOST_APP_TYPE: offload_bingo_hw
     - CHIP_TYPE: multi_chip
     - WORKLOAD: gemm_broadcast_4chiplet_1cluster
     - DEV_APP: snax-bingo-offload
-  - app_18:
+  - app_19:
     - HOST_APP_TYPE: offload_bingo_hw
     - CHIP_TYPE: multi_chip
     - WORKLOAD: gemm_parallel_dma_4chiplet_1cluster

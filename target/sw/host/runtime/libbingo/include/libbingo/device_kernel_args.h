@@ -64,7 +64,12 @@
 // The definition should match the kernel function argument parsing in snax_kernel_lib.h
 
 
+////////////////////////////////////////////////////////////////////////
 ///////////////////////// Cluster-level Kernels ////////////////////////
+////////////////////////////////////////////////////////////////////////
+
+// Note: name start with __snax_kernel_ 
+
 // Dummy kernel args
 __SNAX_KERNEL_ARGS_DEFINE __snax_kernel_dummy_args {
   uint32_t dummy_input;    
@@ -163,7 +168,12 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_kernel_minimal_cfg_start_gemm_and_wait_args{
   uint32_t output_D_addr_lo;
 } __snax_kernel_minimal_cfg_start_gemm_and_wait_args_t;
 
+////////////////////////////////////////////////////////////////////////
 //////////////////////// BINGO Core-level Kernels ////////////////////////
+////////////////////////////////////////////////////////////////////////
+
+// Note: name start with __snax_bingo_kernel_
+
 // BINGO Dummy kernel args
 __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_dummy_args {
   uint32_t dummy_input;            
