@@ -34,7 +34,11 @@ from bingo_mem_handle import BingoMemAlloc, BingoMemFixedAddr  # noqa E402
 from bingo_node import BingoNode  # noqa E402
 from bingo_platform import guard_cluster_count, parse_platform_cfg  # noqa E402
 from gemm_mem_chip_datagen import emit_header_file  # noqa E402
-from gemm_sim_utils import define_gemm_workload_params  # noqa E402
+from gemm_sim_utils import (  # noqa E402
+    _bytes_for_elements,
+    _gemm_operand_widths,
+    define_gemm_workload_params,
+)
 
 
 def get_args():
@@ -54,9 +58,12 @@ def get_args():
 
 def define_workload_params(cfg_path, hwcfg_path):
     params, merged = define_gemm_workload_params(cfg_path, hwcfg_path)
+    a_len, _, _, _ = _gemm_operand_widths(merged)
+    a_elements = params["M"] * params["K"] * params["meshRow"] * params["tileSize"]
+    params["A_mem_size"] = _bytes_for_elements(a_elements + (-a_elements) % 64, a_len)
     mempool_base = chiplet_addr_transform_loc(2, 0, 0x8000_0000)
     params["A_mp_base_addr"] = mempool_base
-    params["B_mp_base_addr"] = mempool_base + params["A_size"]
+    params["B_mp_base_addr"] = mempool_base + params["A_mem_size"]
     params["D_mp_base_addr"] = params["B_mp_base_addr"] + params["B_size"]
     return params, merged
 
@@ -68,7 +75,7 @@ def define_memory_handles(params):
     mem_handles["D_mp"] = BingoMemFixedAddr(params["D_mp_base_addr"])
     mem_handles["l1_buf_A"] = BingoMemAlloc(
         "l1_buf_A",
-        size=params["A_size"],
+        size=params["A_mem_size"],
         mem_level="L1",
         chip_id=cur_chiplet_id,
         cluster_id=cur_cluster_id,
@@ -118,7 +125,7 @@ def create_dfg(params, mem_handles, platform):
         kernel_args=SnaxBingoKernelIdma1dCopyArgs(
             src_addr=mem_handles["A_mp"],
             dst_addr=mem_handles["l1_buf_A"],
-            size=params["A_size"],
+            size=params["A_mem_size"],
         ),
     )
     load_B = BingoNode(
@@ -151,6 +158,14 @@ def create_dfg(params, mem_handles, platform):
             transpose_A=params["transposeA"],
             transpose_B=params["transposeB"],
             accumPrevC=params["accumPrevC"],
+            quantization_enable=params["quantization_enable"],
+            shift_i=params["shift_i"],
+            multiplier_i=params["multiplier_i"],
+            input_zp_i=params["input_zp_i"],
+            output_zp_i=params["output_zp_i"],
+            int32tofp16_enable=params["int32tofp16_enable"],
+            int4_a_enable=params["int4_a_enable"],
+            int4_b_enable=params["int4_b_enable"],
         ),
     )
     store_D = BingoNode(

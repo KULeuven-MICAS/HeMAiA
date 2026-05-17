@@ -6,18 +6,18 @@
 
 {
     num_clusters: 1
-    array_shape: 1
+    array_shape: 0
     data_type: 0
     transposed_A: 0
     transposed_B: 0
-    int4_a_enable: 0
+    int4_a_enable: 1
     int4_b_enable: 0
-    K: 4
-    N: 1
+    K: 32
+    N: 3
     M: 2
     addNonZeroC: 0
     addZeroC: 1
     accumPrevC: 0
-    quantization_enable: 0
+    quantization_enable: 1
     int32tofp16_enable: 0
 }
