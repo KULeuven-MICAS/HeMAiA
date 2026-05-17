@@ -723,6 +723,12 @@ inline D2DPhyMode get_d2d_link_phy_mode(D2DDirection direction) {
 
 // Initialize the HeMAiA D2D Link for 4C + 1M topology, set the link topology, 
 // multicast domain, and clock division according to the chip ID.
+// We also need to configure the clk div ratio between the core and the D2D link to avoid the CDC issue
+// Right now we set at the RTL that the host core is /14 and the D2D /2 to make sure it has a 1/7 ratio.
+// This means at 4GHZ PLL clock, the host core is running 285MHz and the D2D link is running at 2GHz
+// The default setting is to make sure the system can start from a lower frequency, and then we can set it to the expected frequency after initialization.
+// Here at the SW level we set the RTL to be /7 and the D2D to be /1 to make sure it has a 1/7 ratio as well
+// => Host is running at 570MHz and the D2D is running at 4GHz, which is the same as the chip setting
 void hemaia_d2d_link_initialize(uint8_t chip_id) {
     switch (chip_id) {
         case 0x00:  // Chip 00
@@ -747,4 +753,13 @@ void hemaia_d2d_link_initialize(uint8_t chip_id) {
             // Invalid chip ID
             break;
     }
+    // Set the default clock division ratio for the Host and D2D link to avoid CDC issue
+    enable_clk_domain(0, 7);   // host CPU
+    for (uint8_t i = 0; i < N_CLUSTERS_PER_CHIPLET; i++) {
+        enable_clk_domain(1 + i, 7); // cluster i
+    }
+    enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 1, 1);  // East  D2D PHY 
+    enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 2, 1);  // West  D2D PHY
+    enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 3, 1);  // North D2D PHY
+    enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 4, 1);  // South D2D PHY
 }
