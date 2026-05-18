@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Golden data generator for attn_test_quantize.
+Golden data generator for basic_quantize_host.
 Tests __host_bingo_kernel_fp32_quantize in isolation.
 
 Generates FP32 input X, quantizes to INT8 with symmetric per-tensor quantization,

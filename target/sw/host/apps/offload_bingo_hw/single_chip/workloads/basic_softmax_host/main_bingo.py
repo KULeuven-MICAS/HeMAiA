@@ -36,7 +36,7 @@ from bingo_kernel_args import (  # noqa E402
 
 
 def get_args():
-    parser = argparse.ArgumentParser(description="attn_test_softmax")
+    parser = argparse.ArgumentParser(description="basic_softmax_host")
     parser.add_argument("--output_dir", type=str, default=".")
     parser.add_argument("--output_offload_file_name", type=str, default="offload_bingo_hw.h")
     parser.add_argument("-c", "--cfg", type=pathlib.Path, required=True)
@@ -133,7 +133,7 @@ def main():
     print(f"  num_rows={seq_len}, row_length={seq_len}")
 
     dfg.bingo_compile_dfg(
-        "attn_test_softmax", output_dir, args.output_offload_file_name,
+        "basic_softmax_host", output_dir, args.output_offload_file_name,
         extra_include_header_list=["softmax_data.h"],
     )
 

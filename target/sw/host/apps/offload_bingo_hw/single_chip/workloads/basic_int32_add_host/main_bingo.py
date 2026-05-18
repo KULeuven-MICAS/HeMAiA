@@ -33,7 +33,7 @@ HOST_CORE = 2
 
 
 def get_args():
-    p = argparse.ArgumentParser(description="attn_test_int32_add DFG")
+    p = argparse.ArgumentParser(description="basic_int32_add_host DFG")
     p.add_argument("--output_dir", type=str, default=".")
     p.add_argument("--output_offload_file_name", type=str, default="offload_bingo_hw.h")
     p.add_argument("-c", "--cfg", type=pathlib.Path, required=True)
@@ -113,7 +113,7 @@ def main():
     dfg.bingo_add_edge(check_012, add_final)
     dfg.bingo_add_edge(add_final, check_final)
 
-    dfg.bingo_compile_dfg("attn_test_int32_add", out_dir, args.output_offload_file_name,
+    dfg.bingo_compile_dfg("basic_int32_add_host", out_dir, args.output_offload_file_name,
                           extra_include_header_list=["int32_add_datagen_data.h"])
 
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Golden data generator for attn_test_dequantize.
+Golden data generator for basic_dequantize_host.
 Tests __host_bingo_kernel_int32_dequantize in isolation.
 
 Generates random INT32 data (simulating GEMM output), a known combined_scale,
