@@ -47,37 +47,7 @@ int main() {
     uint8_t current_chip_id = get_current_chip_id();
 
     // -----------------------------------------------------------------------
-    // 1. Clock-domain setup.
-    //
-    // The reset-time clock dividers (occamy_chip.sv defaults {16,16,1,1,1,1})
-    // leave the host CPU at 500 MHz / 16. At that 16:1 host-to-D2D-PHY clock
-    // ratio, the D2D narrow write path drops stores from bingoHeapInit's
-    // cross-chip burst into the mem chip: the heap manager's `capacity`
-    // store is written but never lands, so bingo_mempool_alloc later reads
-    // capacity == 0 and every allocation fails. The framer fix removes the
-    // earlier deadlock but NOT this data-loss; it is a separate, still-open
-    // RTL bug in the D2D narrow path / CDC (see RESULTS.md).
-    //
-    // Workaround until that RTL bug is fixed: reprogram the host + cluster
-    // channels to /8 (= 62.5 MHz, an 8:1 ratio that does not drop stores)
-    // and re-state the four D2D PHY channels at /1.
-    //
-    // Channel layout (see occamy_chip.sv:143-150):
-    //   ch 0                              host CPU
-    //   ch 1 .. N_CLUSTERS_PER_CHIPLET    accelerator cluster clocks
-    //   ch N+1 .. N+4                     East/West/North/South D2D PHY
-    // -----------------------------------------------------------------------
-    enable_clk_domain(0, 8);   // host CPU @ 500 MHz / 8 = 62.5 MHz
-    for (uint8_t i = 0; i < N_CLUSTERS_PER_CHIPLET; i++) {
-        enable_clk_domain(1 + i, 8);  // cluster i @ 500 MHz / 8 = 62.5 MHz
-    }
-    enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 1, 1);  // East  D2D PHY @ 500 MHz
-    enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 2, 1);  // West  D2D PHY @ 500 MHz
-    enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 3, 1);  // North D2D PHY @ 500 MHz
-    enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 4, 1);  // South D2D PHY @ 500 MHz
-
-    // -----------------------------------------------------------------------
-    // 2. Hardware init: D2D links, UART, vector extension, SW interrupts.
+    // 1. Hardware init: D2D links, UART, vector extension, SW interrupts.
     // -----------------------------------------------------------------------
     hemaia_d2d_link_initialize(current_chip_id);
     init_uart(get_current_chip_baseaddress(), 32, 1);
@@ -85,7 +55,7 @@ int main() {
     enable_sw_interrupts();
 
     // -----------------------------------------------------------------------
-    // 3. Allocator init: bring up the per-chip L2 (narrow SPM) and
+    // 2. Allocator init: bring up the per-chip L2 (narrow SPM) and
     //    L3 (wide SPM) heaps. Manager structures land at the start of each
     //    heap region; their addresses are fixed by the linker layout.
     // -----------------------------------------------------------------------
@@ -102,7 +72,7 @@ int main() {
         (comm_buffer_t*)bingo_get_l2_comm_buffer(current_chip_id);
 
     // -----------------------------------------------------------------------
-    // 4. Memchip heap init (chip 0 only).
+    // 3. Memchip heap init (chip 0 only).
     //    Non-chip-0 chips don't touch the memchip heap directly — they only
     //    read memchip_buf (broadcast in stage A) — so no handshake on the
     //    manager handle is needed; the stage-A chip_barrier suffices.
@@ -123,7 +93,7 @@ int main() {
     }
 
     // -----------------------------------------------------------------------
-    // 5. Stage A — chip 0 allocates memchip_buf on the memchip heap, fills
+    // 4. Stage A — chip 0 allocates memchip_buf on the memchip heap, fills
     //    it via XDMA, and broadcasts the pointer to every chip.
     //
     // -----------------------------------------------------------------------
@@ -157,7 +127,7 @@ int main() {
     chip_barrier(comm_buf, BARRIER_TL_CHIP_ID, BARRIER_BR_CHIP_ID, 1);
 
     // -----------------------------------------------------------------------
-    // 6. Stage B — every chip allocates local_l3_buf in its own L3 SPM,
+    // 5. Stage B — every chip allocates local_l3_buf in its own L3 SPM,
     //    IDMA-unicasts memchip_buf (chip(2,0)) into it, verifies, and
     //    zeroes local_l3_buf in preparation for stage C.
     //
@@ -204,7 +174,7 @@ int main() {
     chip_barrier(comm_buf, BARRIER_TL_CHIP_ID, BARRIER_BR_CHIP_ID, 2);
 
     // -----------------------------------------------------------------------
-    // 7. Stage C — chip(2,0)'s IDMA engine broadcasts memchip_buf to every
+    // 6. Stage C — chip(2,0)'s IDMA engine broadcasts memchip_buf to every
     //    chip's local_l3_buf in one transfer. Only chip 0 issues the request.
     //    The destination address uses (0xF, 0xF) broadcast prefix; the same
     //    local offset reaches every chip because allocations in step 5 were
@@ -236,7 +206,7 @@ int main() {
            get_current_chip_loc_x(), get_current_chip_loc_y());
 
     // -----------------------------------------------------------------------
-    // 8. Cleanup.
+    // 7. Cleanup.
     // -----------------------------------------------------------------------
     if (current_chip_id == 0) {
         bingo_mempool_free(MEMCHIP_LOC_X, MEMCHIP_LOC_Y, (uint64_t)memchip_buf);
