@@ -39,8 +39,6 @@ int main() {
         volatile uint64_t* mc = (uint64_t*)bingo_mempool_alloc(MEMCHIP_LOC_X,
                                                     MEMCHIP_LOC_Y,
                                                     8192);
-        // volatile uint64_t* mc = (volatile uint64_t*)chiplet_addr_transform_loc(
-        //     MEMCHIP_LOC_X, MEMCHIP_LOC_Y, 0x82000000);
         for (int i = 0; i < PROBE_N; i++) {
             mc[i] = 0xABCD000000000000ULL | (uint64_t)i;
         }
