@@ -13,6 +13,10 @@
 static int tests_passed = 0;
 static int tests_failed = 0;
 
+// The SNRT startup code already computes the usable L1 heap base and size for
+// this cluster. Re-initializing that arena before each subtest gives every case
+// a clean allocator state while still testing the exact L1 region used on
+// Snitch.
 static uint64_t init_l1_test_heap(void) {
     snrt_l1_allocator_t *allocator = get_snrt_l1_allocator();
     allocator->l1_heap_manager =
@@ -20,10 +24,14 @@ static uint64_t init_l1_test_heap(void) {
     return allocator->l1_heap_manager;
 }
 
+// Keep diagnostics access explicit so the test remains close to the host-side
+// bingo_alloc API instead of relying on SNRT allocator internals.
 static BingoHeapDiagnostics *l1_diagnostics(uint64_t heap) {
     return (BingoHeapDiagnostics *)(uintptr_t)bingoHeapGetDiagnostics(heap);
 }
 
+// bingo_alloc charges the user request plus one alignment-sized fragment
+// header, rounded up to the allocator's minimum fragment size.
 static uint64_t expected_allocated_size(uint64_t amount) {
     const uint64_t fragment_size_min = (uint64_t)BINGO_HEAP_ALIGNMENT * 2U;
     return ((uint64_t)amount + BINGO_HEAP_ALIGNMENT + fragment_size_min - 1U) &
@@ -76,6 +84,9 @@ static void test_large_alloc(void) {
     TEST_REQUIRE(heap != 0, "bingoHeapInit returns non-zero handle");
     BingoHeapDiagnostics *d = l1_diagnostics(heap);
 
+    // These allocations used to expose the o1heap-style power-of-two rounding
+    // limit: a 300 KB request could round up beyond what a 512 KB TCDM could
+    // satisfy. bingo_alloc should round only to fragment granularity.
     const uint64_t request_300kb = 300U * 1024U;
     const uint64_t expected_300kb = expected_allocated_size(request_300kb);
     uint64_t p1 = bingoHeapMalloc(heap, request_300kb);
@@ -103,6 +114,8 @@ static void test_large_alloc(void) {
 
     bingoHeapFree(heap, p2);
 
+    // The largest useful payload is capacity minus one allocation header. The
+    // rounded fragment should consume the complete allocator capacity.
     uint64_t max_request = d->capacity - BINGO_HEAP_ALIGNMENT;
     uint64_t p3 = bingoHeapMalloc(heap, max_request);
     TEST_ASSERT(p3 != 0, "near-capacity alloc succeeds");
@@ -123,6 +136,8 @@ static void test_coalescing(void) {
     TEST_REQUIRE(heap != 0, "bingoHeapInit returns non-zero handle");
     BingoHeapDiagnostics *d = l1_diagnostics(heap);
 
+    // Allocate adjacent chunks, free them in reverse order, and then ask for a
+    // larger block. This checks that the free path coalesces neighbors again.
     uint64_t pA = bingoHeapMalloc(heap, 64U * 1024U);
     uint64_t pB = bingoHeapMalloc(heap, 64U * 1024U);
     uint64_t pD = bingoHeapMalloc(heap, 128U * 1024U);
@@ -153,6 +168,8 @@ static void test_search_within_bin(void) {
     TEST_REQUIRE(heap != 0, "bingoHeapInit returns non-zero handle");
     BingoHeapDiagnostics *d = l1_diagnostics(heap);
 
+    // Freeing only B creates a middle hole. The following 80 KB request should
+    // find that suitable fragment by walking inside the selected size bin.
     uint64_t pA = bingoHeapMalloc(heap, 100U * 1024U);
     uint64_t pB = bingoHeapMalloc(heap, 100U * 1024U);
     uint64_t pC = bingoHeapMalloc(heap, 100U * 1024U);
@@ -181,6 +198,9 @@ static void test_oom(void) {
     TEST_REQUIRE(heap != 0, "bingoHeapInit returns non-zero handle");
     BingoHeapDiagnostics *d = l1_diagnostics(heap);
 
+    // Leave too little space for the next 200 KB request, then verify the
+    // allocator reports OOM without corrupting state. After freeing p1, the
+    // same request should succeed again.
     uint64_t p1 = bingoHeapMalloc(heap, 400U * 1024U);
     TEST_REQUIRE(p1 != 0, "400 KB alloc succeeds");
 
@@ -211,6 +231,8 @@ static void test_diagnostics(void) {
     TEST_ASSERT(d->peak_allocated == 0, "initial peak == 0");
     TEST_ASSERT(d->oom_count == 0, "initial oom_count == 0");
 
+    // Peak counters are monotonic over the lifetime of this heap instance; they
+    // should not drop when individual allocations are freed.
     uint64_t p1 = bingoHeapMalloc(heap, 50U * 1024U);
     uint64_t alloc_after_p1 = d->allocated;
     TEST_ASSERT(alloc_after_p1 > 0, "allocated > 0 after 50KB");
@@ -259,12 +281,19 @@ static void test_edge_cases(void) {
                 "1-byte alloc is aligned");
     bingoHeapFree(heap, p1);
 
+    // A too-small arena is useful here because it exercises init failure
+    // without touching the real L1 heap that the rest of the test uses.
     uint8_t tiny[64] __attribute__((aligned(BINGO_HEAP_ALIGNMENT)));
     uint64_t bad = bingoHeapInit((uint64_t)(uintptr_t)tiny, 64);
     TEST_ASSERT(bad == 0, "init with 64-byte region fails gracefully");
 }
 
 int main() {
+    // One DM core in each cluster owns the allocator test. 
+    // Other cores return cleanly
+    // so the global SNRT exit reduction still sees a successful idle result.
+    // Each cluster has its own L1 heap. For this regression, only cluster 0's DM
+    // core runs the test to avoid shared test-counter races and duplicate output.
     if (snrt_cluster_idx() != 0 || !snrt_is_dm_core()) {
         return 0;
     }

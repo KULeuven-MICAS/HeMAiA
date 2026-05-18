@@ -2,7 +2,7 @@
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Fanchen Kong <fanchen.kong@kuleuven.be>
+# Xiaoling Yi <xiaoling.yi@kuleuven.be>
 
 APP     = snax-test-bingo-alloc
 SRCS    = src/snax-test-bingo-alloc.c
