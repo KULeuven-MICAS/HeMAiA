@@ -730,36 +730,39 @@ inline D2DPhyMode get_d2d_link_phy_mode(D2DDirection direction) {
 // Here at the SW level we set the RTL to be /7 and the D2D to be /1 to make sure it has a 1/7 ratio as well
 // => Host is running at 570MHz and the D2D is running at 4GHz, which is the same as the chip setting
 void hemaia_d2d_link_initialize(uint8_t chip_id) {
-    switch (chip_id) {
-        case 0x00:  // Chip 00
-            set_d2d_link_availability(D2D_DIRECTION_WEST, false);
-            set_d2d_link_availability(D2D_DIRECTION_NORTH, false);
-            break;
-        case 0x01:  // Chip 01
-            set_d2d_link_availability(D2D_DIRECTION_WEST, false);
-            set_d2d_link_availability(D2D_DIRECTION_SOUTH, false);
-            break;
-        case 0x10:  // Chip 10
-            set_d2d_link_availability(D2D_DIRECTION_NORTH, false);
-            set_d2d_link_multicast_fence(D2D_DIRECTION_EAST, false);
-            set_d2d_link_idle_silence_period(0xFF, D2D_DIRECTION_EAST);
-            enable_clk_domain(2, 40);
-            break;
-        case 0x11:  // Chip 11
-            set_d2d_link_availability(D2D_DIRECTION_EAST, false);
-            set_d2d_link_availability(D2D_DIRECTION_SOUTH, false);
-            break;
-        default:
-            // Invalid chip ID
-            break;
-    }
-    // Set the default clock division ratio for the Host and D2D link to avoid CDC issue
-    enable_clk_domain(0, 7);   // host CPU
-    for (uint8_t i = 0; i < N_CLUSTERS_PER_CHIPLET; i++) {
-        enable_clk_domain(1 + i, 7); // cluster i
-    }
-    enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 1, 1);  // East  D2D PHY 
-    enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 2, 1);  // West  D2D PHY
-    enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 3, 1);  // North D2D PHY
-    enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 4, 1);  // South D2D PHY
+        // Set the default clock division ratio for the Host and D2D link to avoid CDC issue
+        enable_clk_domain(0, 7);   // host CPU
+        for (uint8_t i = 0; i < N_CLUSTERS_PER_CHIPLET; i++) {
+            enable_clk_domain(1 + i, 7); // cluster i
+        }
+        enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 1, 1);  // East  D2D PHY 
+        enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 2, 1);  // West  D2D PHY
+        enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 3, 1);  // North D2D PHY
+        enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 4, 1);  // South D2D PHY
+        switch (chip_id) {
+            case 0x00:  // Chip 00
+                set_d2d_link_availability(D2D_DIRECTION_WEST, false);
+                set_d2d_link_availability(D2D_DIRECTION_NORTH, false);
+                break;
+            case 0x01:  // Chip 01
+                set_d2d_link_availability(D2D_DIRECTION_WEST, false);
+                set_d2d_link_availability(D2D_DIRECTION_SOUTH, false);
+                break;
+            case 0x10:  // Chip 10
+                set_d2d_link_availability(D2D_DIRECTION_NORTH, false);
+                set_d2d_link_multicast_fence(D2D_DIRECTION_EAST, false);
+                set_d2d_link_idle_silence_period(0xFF, D2D_DIRECTION_EAST);
+                // DO NOT TOUCH. This will send the clk to the fpga with low speed clk at EAST D2D PHY Port
+                // This is related where to put the memchip
+                // Currently we put the memchip at the (2,0) position which is connected to the EAST D2D PHY Port of Chip 10, so we need to make sure the clk can be sent to the memchip to make it work
+                enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 1, 20); 
+                break;
+            case 0x11:  // Chip 11
+                set_d2d_link_availability(D2D_DIRECTION_EAST, false);
+                set_d2d_link_availability(D2D_DIRECTION_SOUTH, false);
+                break;
+            default:
+                // Invalid chip ID
+                break;
+        }
 }
