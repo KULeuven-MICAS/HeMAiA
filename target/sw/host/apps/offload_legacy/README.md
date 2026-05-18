@@ -12,6 +12,7 @@ In the legacy model, the host performs the following steps:
 ## Supported Device kernels (DEV_APP)
 The legacy host application (`offload_legacy_single_chip.c`) can be linked with various device apps:
 - **snax-test-integration**: Basic verification of the SNAX accelerator interface.
+- **snax-test-bingo-alloc**: SNRT L1 allocator regression, matching the host-side `test_bingo_alloc` coverage.
 - **snax-xdma-copy**: Verification of XDMA engines within the snitch clusters.
 - **snax-xdma-hazard**: Stress test for memory hazards and consistency.
 - **snax-versacore-matmul-profile**: Matrix multiplication implementation running on the Versacore functional unit.

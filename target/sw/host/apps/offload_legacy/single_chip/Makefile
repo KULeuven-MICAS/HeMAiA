@@ -14,6 +14,7 @@ INCL_DEVICE_BINARY ?= 1 # True to include the device binary
 
 # those are the legacy apps that we want to keep supporting and for ci
 DEVICE_APPS = snax-test-integration
+DEVICE_APPS += snax-test-bingo-alloc
 DEVICE_APPS += snax-xdma-copy
 DEVICE_APPS += snax-xdma-hazard
 DEVICE_APPS += snax-versacore-matmul-profile

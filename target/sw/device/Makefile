@@ -10,6 +10,7 @@
 # Will be gradually moved to the kernels
 APPDIR  = apps/snax/snax-test-integration
 APPDIR += apps/snax/snax-test-global-barrier
+APPDIR += apps/snax/snax-test-bingo-alloc
 APPDIR += apps/snax/snax-xdma-maxpool
 APPDIR += apps/snax/snax-xdma-memset
 APPDIR += apps/snax/snax-xdma-multicast
@@ -90,5 +91,4 @@ $(1): $(RTDIR) $(ALL_TMPS)
 endef
 
 $(foreach app,$(APPDIR),$(eval $(call APP_template,$(app))))
-
 

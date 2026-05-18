@@ -25,8 +25,9 @@
 extern "C" {
 #endif
 
-/// Alignment for all allocations. Must be a power of 2.
-/// 128 bytes ensures compatibility with SNAX accelerator DMA requirements.
+/// Alignment for all allocations.
+/// 128 bytes ensures compatibility with SNAX accelerator sparse interconnect requirements.
+/// The max granularity in the current sparse interconnect is 128 bytes. Take care whether this changes in the SNAX side.
 #define BINGO_HEAP_ALIGNMENT 128
 
 /// Maximum number of segregated free-list bins (covers sizes up to 2^63).
