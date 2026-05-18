@@ -115,7 +115,6 @@
       max_multicast: 2,
       max_dimension: 5,
       max_mem_size_kiB: 65536,
-      wordline_width: 64,
       // DataMaestro Cfg
       reader_buffer: 4,
       writer_buffer: 4,
@@ -210,6 +209,7 @@
       address: 2147483648, // 0x8000_0000
       length: 131072,      // 128KiB 0x80000
       banks: 16,
+      wordline_width: 64,
     },
     wide_zero_mem: {
       address: 68719476736, // 0x10_0000_0000

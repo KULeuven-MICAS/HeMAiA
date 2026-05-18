@@ -232,6 +232,11 @@ def main():
     # And each cluster is stores in cluster generator
 
     cluster_cfg_dir = occamy_root / "deps/snitch_cluster/target/snitch_cluster/cfg"
+    # Unify every XDMA's max_mem_size_kiB / wordline_width BEFORE reading
+    # clusters so the cluster generators (and the subsequent snitch make
+    # flow) see the rewritten hjsons.
+    unified_max_mem_size_kiB, unified_wordline_width = occamy.unify_xdma_max_mem_size(
+        occamy_cfg, occamy.get_cluster_cfg_list(occamy_cfg, cluster_cfg_dir))
     cluster_generators = occamy.get_cluster_generators(occamy_cfg, cluster_cfg_dir)
 
     # Check and fix the xbar id/width
@@ -904,9 +909,13 @@ def main():
                 "dma_data_width": 512,
                 "data_width": occamy_cfg["data_width"],
                 "addr_width": occamy_cfg["addr_width"],
+                # wordline_width lives under tcdm{} — it's a TCDM bank
+                # property and the wrapper template reads it from there.
                 "tcdm": {
                     "size": int(occamy_cfg["spm_wide"]["length"]/1024),
-                }
+                    "wordline_width": unified_wordline_width,
+                },
+                "max_mem_size_kiB": unified_max_mem_size_kiB,
             },
             tpl=tpl_rtl_wrapper,
             target_path=str(script_dir / ".." / ".." / "hw" / "hemaia" / "hemaia_mem_system") + "/",
@@ -924,8 +933,20 @@ def main():
             + str(512)
             + " --axiAddrWidth "
             + str(occamy_cfg["addr_width"])
+            # --tcdmSize sizes the *local* TCDM addr port (ReaderWriterParam.tcdmSize)
+            # of the Chisel XDMA. It must match the wrapper's TCDMAddrWidth, which is
+            # derived from the local SPM size (spm_wide.length here).
             + " --tcdmSize "
             + str(int(occamy_cfg["spm_wide"]["length"]/1024))
+            # wordline_width is now a TCDM-side parameter (sourced from
+            # spm_wide / hemaia_mem_chip / cluster.tcdm and unified by
+            # unify_xdma_max_mem_size). The Chisel XDMA reads it via a
+            # dedicated CLI flag, NOT from the --xdmaCfg JSON.
+            + " --wordlineWidth "
+            + str(unified_wordline_width)
+            # hemaia_xdma_cfg was patched in memory by unify_xdma_max_mem_size
+            # so the JSON below already carries the unified `max_mem_size_kiB`
+            # for the Chisel side to consume.
             + " --xdmaCfg "
             + hjson.dumpsJSON(obj=occamy_cfg["hemaia_xdma_cfg"], separators=(",", ":")).replace(" ", "")
             + " --hw-target-dir "
@@ -960,9 +981,13 @@ def main():
                 "dma_data_width": 512,
                 "data_width": occamy_cfg["data_width"],
                 "addr_width": occamy_cfg["addr_width"],
+                # wordline_width lives under tcdm{} — it's a TCDM bank
+                # property and the wrapper template reads it from there.
                 "tcdm": {
                     "size": int(occamy_cfg["hemaia_multichip"]["testbench_cfg"]["hemaia_mem_chip"][0]["mem_size"]/1024),
-                }
+                    "wordline_width": unified_wordline_width,
+                },
+                "max_mem_size_kiB": unified_max_mem_size_kiB,
             },
             tpl=tpl_rtl_wrapper,
             target_path=str(script_dir / ".." / ".." / "hw" / "hemaia" / "hemaia_mem_system") + "/",
@@ -980,8 +1005,22 @@ def main():
             + str(512)
             + " --axiAddrWidth "
             + str(occamy_cfg["addr_width"])
+            # --tcdmSize sizes the *local* TCDM addr port (ReaderWriterParam.tcdmSize)
+            # of the Chisel XDMA. For the mem chip this is the mem-chip-local memory
+            # region; it must match the wrapper's TCDMAddrWidth. max_mem_size_kiB is
+            # separate (carried via --xdmaCfg below) and drives the *cross-cluster*
+            # pointer widths, which are unified across all XDMAs.
             + " --tcdmSize "
             + str(int(occamy_cfg["hemaia_multichip"]["testbench_cfg"]["hemaia_mem_chip"][0]["mem_size"]/1024))
+            # wordline_width is now a TCDM-side parameter (sourced from
+            # spm_wide / hemaia_mem_chip / cluster.tcdm and unified by
+            # unify_xdma_max_mem_size). The Chisel XDMA reads it via a
+            # dedicated CLI flag, NOT from the --xdmaCfg JSON.
+            + " --wordlineWidth "
+            + str(unified_wordline_width)
+            # hemaia_xdma_cfg was patched in memory by unify_xdma_max_mem_size
+            # so the JSON below already carries the unified `max_mem_size_kiB`
+            # for the Chisel side to consume.
             + " --xdmaCfg "
             + hjson.dumpsJSON(obj=occamy_cfg["hemaia_xdma_cfg"], separators=(",", ":")).replace(" ", "")
             + " --hw-target-dir "

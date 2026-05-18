@@ -65,6 +65,130 @@ def check_occamy_cfg(occamy_cfg):
 
 
 
+def unify_xdma_max_mem_size(occamy_cfg, cluster_cfg_paths):
+    """Compute the unified ``max_mem_size_kiB`` and ``wordline_width`` across
+    every XDMA in the system, rewrite each cluster hjson on disk where the
+    unified ``max_mem_size_kiB`` differs, and patch ``occamy_cfg`` in memory.
+
+    Sources of truth:
+      ``max_mem_size_kiB`` candidates (XDMA-specific knob):
+        1. ``hemaia_xdma_cfg.max_mem_size_kiB`` — top cfg.
+        2. ``spm_wide.length`` — wide SPM size in bytes; divided by 1024.
+        3. ``hemaia_multichip.testbench_cfg.hemaia_mem_chip[*].mem_size``
+           in bytes; divided by 1024.
+        4. Each cluster's ``dma_core_template.snax_xdma_cfg.max_mem_size_kiB``.
+
+      ``wordline_width`` sources (TCDM-side — XDMA cfgs no longer carry it):
+        a. ``spm_wide.wordline_width``  — compute-chip wide SPM bank wordline.
+        b. ``hemaia_multichip.testbench_cfg.hemaia_mem_chip[*].wordline_width``.
+        c. Each cluster's ``cluster.tcdm.wordline_width``.
+
+    Both fields are unified to a single value used everywhere:
+      * ``max_mem_size_kiB`` = next power-of-two >= max(all candidates).
+      * ``wordline_width``   = the agreed value (default 64; aborts on
+        conflicting values).
+
+    Cluster hjsons are rewritten on disk only when ``max_mem_size_kiB``
+    changes, so the downstream snitch make flow (which re-reads the hjson)
+    sees the unified value. ``occamy_cfg`` is patched in memory so the
+    inline HeMAiA-XDMA gen calls see it too. ``wordline_width`` is no
+    longer written into any xdma cfg — callers (occamygen / snaxgen) take
+    it from the returned tuple and feed it to the Chisel CLI / wrapper
+    template directly.
+
+    Returns ``(max_mem_size_kiB, wordline_width)``.
+
+    NOTE: The width formula ``log2(max_mem_size_kiB) + 10 - log2(wordline_width/8)``
+    is mirrored in three places that MUST stay in sync — see comments in:
+      * snax_cluster/hw/chisel/.../DesignParams.scala (tcdmAddressWidth)
+      * xdma_axi_adapter/src/xdma_axi_adapter_top.sv (DMALengthWidth)
+      * snax_cluster/hw/templates/snax_xdma_wrapper.sv.tpl (DMALengthWidth)
+    """
+    candidates = []
+    wordline_values = []  # collected TCDM wordline_width values (must all agree)
+
+    # 1. HeMAiA top hemaia_xdma_cfg — max_mem_size only (wordline lives on the TCDM).
+    hemaia_xdma_cfg = occamy_cfg.get("hemaia_xdma_cfg")
+    if hemaia_xdma_cfg is not None and "max_mem_size_kiB" in hemaia_xdma_cfg:
+        candidates.append(int(hemaia_xdma_cfg["max_mem_size_kiB"]))
+
+    # 2. Each mem chip: mem_size is a max-mem candidate; wordline_width is a TCDM source.
+    multichip = occamy_cfg.get("hemaia_multichip", {})
+    mem_chips = multichip.get("testbench_cfg", {}).get("hemaia_mem_chip", []) or []
+    for chip in mem_chips:
+        if "mem_size" in chip:
+            candidates.append(int(chip["mem_size"]) // 1024)
+        if "wordline_width" in chip:
+            wordline_values.append(int(chip["wordline_width"]))
+
+    # 3. Wide SPM: length is a max-mem candidate; wordline_width is a TCDM source.
+    spm_wide = occamy_cfg.get("spm_wide")
+    if spm_wide is not None:
+        if "length" in spm_wide:
+            candidates.append(int(spm_wide["length"]) // 1024)
+        if "wordline_width" in spm_wide:
+            wordline_values.append(int(spm_wide["wordline_width"]))
+
+    # 4. Per-cluster cfgs: max_mem from snax_xdma_cfg, wordline_width from cluster.tcdm.
+    cluster_objs = []
+    for cfg_path in cluster_cfg_paths:
+        with open(cfg_path, "r") as f:
+            cluster_obj = read_json_file(f)
+        cluster_objs.append((cfg_path, cluster_obj))
+        dma_tpl = cluster_obj.get("dma_core_template") or {}
+        snax_xdma_cfg = dma_tpl.get("snax_xdma_cfg")
+        if snax_xdma_cfg is not None and "max_mem_size_kiB" in snax_xdma_cfg:
+            candidates.append(int(snax_xdma_cfg["max_mem_size_kiB"]))
+        cluster_inner = cluster_obj.get("cluster") or {}
+        tcdm = cluster_inner.get("tcdm") or {}
+        if "wordline_width" in tcdm:
+            wordline_values.append(int(tcdm["wordline_width"]))
+
+    if not candidates:
+        raise RuntimeError(
+            "unify_xdma_max_mem_size: no max_mem_size_kiB candidates found")
+
+    # Round up to power of two (>= 4096 KiB sanity floor).
+    max_mem_size_kiB = 1 << (max(candidates) - 1).bit_length()
+    assert max_mem_size_kiB >= 4096, (
+        f"unify_xdma_max_mem_size: unified max_mem_size_kiB={max_mem_size_kiB} "
+        f"is below the 4 KiB floor; check the cfg files.")
+
+    # Unify wordline_width — default 64, abort on conflicting values.
+    unique_wl = set(wordline_values)
+    if not unique_wl:
+        wordline_width = 64
+    elif len(unique_wl) == 1:
+        wordline_width = unique_wl.pop()
+    else:
+        raise RuntimeError(
+            f"unify_xdma_max_mem_size: conflicting wordline_width values "
+            f"{sorted(unique_wl)}; every TCDM source (spm_wide, "
+            f"hemaia_mem_chip[*], cluster.tcdm) must agree.")
+
+    # Patch occamy_cfg in memory (max_mem only — wordline_width flows through
+    # the return value, no injection into any xdma cfg).
+    if hemaia_xdma_cfg is not None:
+        hemaia_xdma_cfg["max_mem_size_kiB"] = max_mem_size_kiB
+
+    # Rewrite cluster hjsons on disk where max_mem_size_kiB needs to change.
+    for cfg_path, cluster_obj in cluster_objs:
+        dma_tpl = cluster_obj.get("dma_core_template") or {}
+        snax_xdma_cfg = dma_tpl.get("snax_xdma_cfg")
+        if snax_xdma_cfg is None:
+            continue
+        old_mm = int(snax_xdma_cfg.get("max_mem_size_kiB", -1))
+        if old_mm != max_mem_size_kiB:
+            snax_xdma_cfg["max_mem_size_kiB"] = max_mem_size_kiB
+            with open(cfg_path, "w") as f:
+                hjson.dump(cluster_obj, f, indent=4)
+            print(
+                f"[unify_xdma_max_mem_size] rewrote {cfg_path}: "
+                f"max_mem_size_kiB {old_mm} -> {max_mem_size_kiB}"
+            )
+
+    return max_mem_size_kiB, wordline_width
+
 
 def get_cluster_generators(occamy_cfg, cluster_cfg_dir):
     cluster_generators = list()
