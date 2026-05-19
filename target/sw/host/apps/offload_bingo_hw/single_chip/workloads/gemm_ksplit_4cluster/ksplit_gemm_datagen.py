@@ -3,9 +3,8 @@
 Golden data generator for gemm_ksplit_4cluster.
 K-split=4 GEMM across 4 clusters with int32_add reduction and dequantize.
 
-Generates:
-- Per K-chunk (0..3): A_k{k} (int8), B_k{k} (int8)
-- Per cluster partial D: D_partial_c{k} (int32)
+Generates `build/mempool.bin` with:
+- A_k{0..3} (int8), then B_k{0..3} (int8), then golden_D_c{0..3} (int32)
 - Running reduction sums: golden_sum_c0_c1, golden_sum_c0_c1_c2, golden_sum_final
 - Dequantized FP32 output: golden_fp32_D
 - combined_scale scalar
@@ -16,7 +15,7 @@ import sys
 import os
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../../../../../../util/sim/"))
-from data_utils import format_scalar_definition, format_vector_definition  # noqa E402
+from data_utils import format_scalar_definition  # noqa E402
 from sim_golden_models import block_gemm_golden_model  # noqa E402
 
 np.random.seed(42)
@@ -60,14 +59,19 @@ def emit_header_file(**kwargs):
     D_size = M * N * meshRow * meshCol                    # int32 element count
     D_bytes = D_size * 4                                  # int32 bytes
 
+    A_tiles = []
+    B_tiles = []
+    golden_D_tiles = []
+    mempool_arrays = []
+
     # Emit per K-chunk A and B tiles
     for k in range(k_split):
         ks = k * K_tile
         ke = ks + K_tile
         A_k = A_full[:, ks:ke, :, :].reshape(-1).copy()
         B_k = B_full[ks:ke, :, :, :].reshape(-1).copy()
-        lines.append(format_vector_definition("int8_t", f"A_k{k}", A_k))
-        lines.append(format_vector_definition("int8_t", f"B_k{k}", B_k))
+        A_tiles.append(A_k.astype(np.int8))
+        B_tiles.append(B_k.astype(np.int8))
 
     # Compute per-cluster partial D via block_gemm_golden_model
     # Each cluster handles one K-chunk (1:1 mapping: cluster i <-> K-chunk i)
@@ -83,14 +87,17 @@ def emit_header_file(**kwargs):
             A_slice, B_slice, 0, 0, C_zero.copy(),
         )
         partial_Ds.append(D_partial)
-        lines.append(format_vector_definition("int32_t", f"D_partial_c{k}", D_partial))
+        golden_D_tiles.append(D_partial.astype(np.int32))
+
+    mempool_arrays.extend(A_tiles)
+    mempool_arrays.extend(B_tiles)
+    mempool_arrays.extend(golden_D_tiles)
 
     # Running inter-cluster reduction sums
     running_sum = partial_Ds[0].copy()
     for i in range(1, k_split):
         running_sum = (running_sum.astype(np.int64) + partial_Ds[i].astype(np.int64)).astype(np.int32)
-        label = "_".join(f"c{c}" for c in range(i + 1))
-        lines.append(format_vector_definition("int32_t", f"golden_sum_{label}", running_sum))
+        mempool_arrays.append(running_sum.astype(np.int32))
 
     # The final sum after all 4 partials
     # golden_sum_c0_c1_c2_c3 is the same as running_sum at this point
@@ -102,11 +109,14 @@ def emit_header_file(**kwargs):
     combined_scale = np.float32(0.0001)
     fp32_input = running_sum.astype(np.float32)
     golden_fp32_D = (fp32_input * combined_scale).astype(np.float32)
-    lines.append(format_vector_definition("float", "golden_fp32_D", golden_fp32_D))
-    # Declare combined_scale as a 1-element array so the kernel arg assignment
-    # uses array-to-pointer decay (correct address). A scalar `float x = ...`
-    # would be cast by value (truncated to int 0) when emitted as a BingoMemSymbol.
-    lines.append(f"float combined_scale[1] __attribute__((aligned(8))) = {{ {float(combined_scale):.10e}f }};")
+    mempool_arrays.append(golden_fp32_D.astype(np.float32))
+    mempool_arrays.append(np.array([combined_scale], dtype=np.float32))
+
+    out_dir = kwargs.get("out_dir", "./build/")
+    os.makedirs(out_dir, exist_ok=True)
+    with open(os.path.join(out_dir, "mempool.bin"), "wb") as f:
+        for array in mempool_arrays:
+            array.tofile(f)
 
     # Emit byte size scalars
     for name, val in [

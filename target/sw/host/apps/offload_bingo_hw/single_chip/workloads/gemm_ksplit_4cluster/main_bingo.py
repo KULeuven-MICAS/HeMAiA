@@ -32,9 +32,10 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from ksplit_gemm_datagen import emit_header_file  # noqa E402
 from bingo_dfg import BingoDFG  # noqa E402
+from bingo_helpers import chiplet_addr_transform_loc  # noqa E402
 from bingo_platform import guard_cluster_count, parse_platform_cfg  # noqa E402
 from bingo_node import BingoNode  # noqa E402
-from bingo_mem_handle import BingoMemAlloc, BingoMemSymbol  # noqa E402
+from bingo_mem_handle import BingoMemAlloc, BingoMemFixedAddr  # noqa E402
 from bingo_kernel_args import (  # noqa E402
     SnaxBingoKernelIdma1dCopyArgs,
     SnaxBingoKernelGemmFullArgs,
@@ -70,7 +71,7 @@ def main():
 
     # Emit data header
     if args.data_h is not None:
-        content = emit_header_file(**merged)
+        content = emit_header_file(**merged, out_dir=os.path.join(args.output_dir, "build"))
         with open(args.data_h, "w") as f:
             f.write(content)
         print(f"Written data header: {args.data_h}")
@@ -104,6 +105,15 @@ def main():
     B_tile_bytes = K_tile * N * tileSize * meshCol         # int8 bytes per K-chunk
     D_num_elements = M * N * meshRow * meshCol             # int32 element count
     D_bytes = D_num_elements * 4                          # int32 bytes
+    fp32_D_bytes = D_num_elements * 4
+
+    mempool_base = chiplet_addr_transform_loc(2, 0, 0x8000_0000)
+    A_mp_base = mempool_base
+    B_mp_base = A_mp_base + k_split * A_tile_bytes
+    golden_D_mp_base = B_mp_base + k_split * B_tile_bytes
+    golden_sum_mp_base = golden_D_mp_base + k_split * D_bytes
+    golden_fp32_mp_base = golden_sum_mp_base + (k_split - 1) * D_bytes
+    combined_scale_mp_base = golden_fp32_mp_base + fp32_D_bytes
 
     # Core IDs
     GEMM_CORE = 0
@@ -112,21 +122,21 @@ def main():
 
     # ── Memory handles ──────────────────────────────────────────────
 
-    # L3 symbols for golden tile inputs (from ksplit_gemm_data.h)
-    sym_A = {}
-    sym_B = {}
-    sym_D_partial = {}
+    # Mem-chip fixed addresses for golden tile inputs and reference outputs.
+    mem_A = {}
+    mem_B = {}
+    mem_golden_D = {}
     for i in range(k_split):
-        sym_A[i] = BingoMemSymbol(f"A_k{i}")
-        sym_B[i] = BingoMemSymbol(f"B_k{i}")
-        sym_D_partial[i] = BingoMemSymbol(f"D_partial_c{i}")
+        mem_A[i] = BingoMemFixedAddr(A_mp_base + i * A_tile_bytes)
+        mem_B[i] = BingoMemFixedAddr(B_mp_base + i * B_tile_bytes)
+        mem_golden_D[i] = BingoMemFixedAddr(golden_D_mp_base + i * D_bytes)
 
     # Golden reduction sums
-    sym_sum_c0_c1 = BingoMemSymbol("golden_sum_c0_c1")
-    sym_sum_c0_c1_c2 = BingoMemSymbol("golden_sum_c0_c1_c2")
-    sym_sum_final = BingoMemSymbol("golden_sum_c0_c1_c2_c3")
-    sym_golden_fp32 = BingoMemSymbol("golden_fp32_D")
-    sym_combined_scale = BingoMemSymbol("combined_scale")
+    mem_sum_c0_c1 = BingoMemFixedAddr(golden_sum_mp_base)
+    mem_sum_c0_c1_c2 = BingoMemFixedAddr(golden_sum_mp_base + D_bytes)
+    mem_sum_final = BingoMemFixedAddr(golden_sum_mp_base + 2 * D_bytes)
+    mem_golden_fp32 = BingoMemFixedAddr(golden_fp32_mp_base)
+    mem_combined_scale = BingoMemFixedAddr(combined_scale_mp_base)
 
     # L1 buffers per cluster (for GEMM compute)
     l1_A = {}
@@ -140,7 +150,7 @@ def main():
         l1_D[i] = BingoMemAlloc(f"l1_D_c{i}", size=D_bytes, mem_level="L1",
                                 chip_id=0, cluster_id=i)
 
-    # L3 buffers for partial D outputs (stored from each cluster)
+    # A big L3 buffers for partial D outputs (stored from each cluster) in a 4 cluster system
     l3_D_partial = {}
     for i in range(k_split):
         l3_D_partial[i] = BingoMemAlloc(f"D_partial_l3_c{i}", size=D_bytes, mem_level="L3")
@@ -151,7 +161,7 @@ def main():
     l3_sum_final = BingoMemAlloc("sum_final_l3", size=D_bytes, mem_level="L3")
 
     # L3 buffer for dequantized FP32 output
-    l3_fp32_D = BingoMemAlloc("fp32_D_l3", size=D_num_elements * 4, mem_level="L3")
+    l3_fp32_D = BingoMemAlloc("fp32_D_l3", size=fp32_D_bytes, mem_level="L3")
 
     # ── DFG ─────────────────────────────────────────────────────────
     dfg = BingoDFG(
@@ -171,23 +181,23 @@ def main():
     node_check_D = {}
 
     for i in range(k_split):
-        # Load A tile: L3 -> L1 via device iDMA
+        # Load A tile: mem-chip -> L1 via device iDMA
         node_load_A[i] = BingoNode(
             assigned_chiplet_id=0, assigned_cluster_id=i, assigned_core_id=DMA_CORE,
             node_name=f"Load_A_k{i}",
             kernel_name="__snax_bingo_kernel_idma_1d_copy",
             kernel_args=SnaxBingoKernelIdma1dCopyArgs(
-                src_addr=sym_A[i], dst_addr=l1_A[i], size=A_tile_bytes,
+                src_addr=mem_A[i], dst_addr=l1_A[i], size=A_tile_bytes,
             ),
         )
 
-        # Load B tile: L3 -> L1 via device iDMA
+        # Load B tile: mem-chip -> L1 via device iDMA
         node_load_B[i] = BingoNode(
             assigned_chiplet_id=0, assigned_cluster_id=i, assigned_core_id=DMA_CORE,
             node_name=f"Load_B_k{i}",
             kernel_name="__snax_bingo_kernel_idma_1d_copy",
             kernel_args=SnaxBingoKernelIdma1dCopyArgs(
-                src_addr=sym_B[i], dst_addr=l1_B[i], size=B_tile_bytes,
+                src_addr=mem_B[i], dst_addr=l1_B[i], size=B_tile_bytes,
             ),
         )
 
@@ -217,12 +227,13 @@ def main():
         )
 
         # Check partial D against golden
+        # host will check the result for all clusters
         node_check_D[i] = BingoNode(
             assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=HOST_CORE,
             node_name=f"Check_D_partial_c{i}",
             kernel_name="__host_bingo_kernel_check_result",
             kernel_args=HostBingoKernelCheckResultArgs(
-                golden_data_addr=sym_D_partial[i],
+                golden_data_addr=mem_golden_D[i],
                 output_data_addr=l3_D_partial[i],
                 data_size=D_bytes,
                 name=f"D_partial_c{i}",
@@ -261,7 +272,7 @@ def main():
         node_name="Check_sum_c0_c1",
         kernel_name="__host_bingo_kernel_check_result",
         kernel_args=HostBingoKernelCheckResultArgs(
-            golden_data_addr=sym_sum_c0_c1,
+            golden_data_addr=mem_sum_c0_c1,
             output_data_addr=l3_sum_c0_c1,
             data_size=D_bytes,
             name="sum_c0_c1",
@@ -286,7 +297,7 @@ def main():
         node_name="Check_sum_c0_c1_c2",
         kernel_name="__host_bingo_kernel_check_result",
         kernel_args=HostBingoKernelCheckResultArgs(
-            golden_data_addr=sym_sum_c0_c1_c2,
+            golden_data_addr=mem_sum_c0_c1_c2,
             output_data_addr=l3_sum_c0_c1_c2,
             data_size=D_bytes,
             name="sum_c0_c1_c2",
@@ -311,7 +322,7 @@ def main():
         node_name="Check_sum_final",
         kernel_name="__host_bingo_kernel_check_result",
         kernel_args=HostBingoKernelCheckResultArgs(
-            golden_data_addr=sym_sum_final,
+            golden_data_addr=mem_sum_final,
             output_data_addr=l3_sum_final,
             data_size=D_bytes,
             name="sum_final",
@@ -326,7 +337,7 @@ def main():
         kernel_args=HostBingoKernelInt32DequantizeArgs(
             input_addr=l3_sum_final,
             output_addr=l3_fp32_D,
-            scale_addr=sym_combined_scale,
+            scale_addr=mem_combined_scale,
             num_elements=D_num_elements,
         ),
     )
@@ -336,9 +347,9 @@ def main():
         node_name="Check_fp32",
         kernel_name="__host_bingo_kernel_check_result",
         kernel_args=HostBingoKernelCheckResultArgs(
-            golden_data_addr=sym_golden_fp32,
+            golden_data_addr=mem_golden_fp32,
             output_data_addr=l3_fp32_D,
-            data_size=D_num_elements * 4,
+            data_size=fp32_D_bytes,
             name="fp32_D",
         ),
     )

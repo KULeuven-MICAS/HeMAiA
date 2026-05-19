@@ -1,5 +1,5 @@
 {
-    cfg_name: "hemaia_bingo",
+    cfg_name: "hemaia_mirror_tapeout_4cluster",
     bender_target: ["cv64a6_imafdc_sv39", "occamy"],
     // Multi-chip configuration
     hemaia_multichip: {
@@ -203,7 +203,7 @@
     },
     spm_wide: {
       address: 2147483648, // 0x8000_0000
-      length: 16777216,    // 16 MiB 0x100_0000
+      length: 4194304,    // 16 MiB 0x100_0000
       banks: 16,
     },
     wide_zero_mem: {
