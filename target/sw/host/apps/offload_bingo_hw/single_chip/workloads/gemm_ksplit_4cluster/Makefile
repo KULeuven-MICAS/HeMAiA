@@ -2,7 +2,7 @@
 MK_DIR   := $(dir $(realpath $(lastword $(MAKEFILE_LIST))))
 HOST_APP_TYPE = offload_bingo_hw
 CHIP_TYPE     = single_chip
-WORKLOAD      = attn_test_ksplit_gemm_4cluster
+WORKLOAD      = gemm_ksplit_4cluster
 DEV_APP       = snax-bingo-offload
 SRCS = ../../src/offload_bingo_hw.c
 BINGO_HOST ?= 1
@@ -39,3 +39,7 @@ gen-data: $(DATA_H)
 gen-offload: $(OFFLOAD_H)
 
 include ../../../../common.mk
+
+# offload_bingo_hw.c includes the generated workload header.  Parent builds can
+# target the final ELF directly, so ensure dependency generation creates it first.
+$(DEP): $(OFFLOAD_H) $(DATA_H)
