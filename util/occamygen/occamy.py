@@ -127,11 +127,8 @@ def unify_xdma_max_mem_size(occamy_cfg, cluster_cfg_paths):
         raise RuntimeError(
             "unify_xdma_max_mem_size: no max_mem_size_kiB candidates found")
 
-    # Round up to power of two (>= 4096 KiB sanity floor).
+    # Round up to power of two
     max_mem_size_kiB = 1 << (max(candidates) - 1).bit_length()
-    assert max_mem_size_kiB >= 4096, (
-        f"unify_xdma_max_mem_size: unified max_mem_size_kiB={max_mem_size_kiB} "
-        f"is below the 4 KiB floor; check the cfg files.")
 
     # Patch occamy_cfg in memory.
     if hemaia_xdma_cfg is not None:
