@@ -7,6 +7,8 @@ Per cluster i (0..3, in parallel):
   -> Store_D_c{i} (DMA,c{i}) -> Load_Golden_D_c{i} (Host,c0)
   -> Check_D_partial_c{i} (Host,c0)
 
+All the testing and golden data are stored in the mem-chip.
+
 Then sequential on host:
   Add_c0_c1 (Host,c0) -> Load_Golden_sum_c0_c1 (Host,c0)
   -> Check_sum_c0_c1 (Host,c0) -> Add_c0_c1_c2 (Host,c0)
