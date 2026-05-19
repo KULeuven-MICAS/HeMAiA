@@ -11,12 +11,11 @@ INCL_DEVICE_BINARY ?= 1
 DATA_CFG ?= $(MK_DIR)/params.hjson
 DATA_H = $(MK_DIR)/ksplit_gemm_data.h
 OFFLOAD_H = $(MK_DIR)/offload_bingo_hw.h
-COMMON_DATAGEN = $(MK_DIR)/../../../../../../../../util/sim/gemm_sim_utils.py
 BENDER   = bender
 SNITCH_ROOT = $(shell $(BENDER) path snitch_cluster)
 PLATFORM_H = $(MK_DIR)/../../../../../../../../target/sw/shared/platform/generated/occamy.h
 
-$(DATA_H) $(OFFLOAD_H): $(MK_DIR)/main_bingo.py $(MK_DIR)/ksplit_gemm_datagen.py $(COMMON_DATAGEN) $(DATA_CFG)
+$(DATA_H) $(OFFLOAD_H): $(MK_DIR)/main_bingo.py $(MK_DIR)/ksplit_gemm_datagen.py $(DATA_CFG)
 	python3 $(MK_DIR)/main_bingo.py \
 		--output_dir $(MK_DIR) \
 		--data_h $(DATA_H) \
@@ -40,3 +39,7 @@ gen-data: $(DATA_H)
 gen-offload: $(OFFLOAD_H)
 
 include ../../../../common.mk
+
+# offload_bingo_hw.c includes the generated workload header.  Parent builds can
+# target the final ELF directly, so ensure dependency generation creates it first.
+$(DEP): $(OFFLOAD_H) $(DATA_H)
