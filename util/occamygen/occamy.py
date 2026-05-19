@@ -65,6 +65,93 @@ def check_occamy_cfg(occamy_cfg):
 
 
 
+def unify_xdma_max_mem_size(occamy_cfg, cluster_cfg_paths):
+    """Compute the unified ``max_mem_size_kiB`` across every XDMA in the
+    system, rewrite each cluster hjson on disk where the unified value
+    differs, and patch ``occamy_cfg`` in memory.
+
+    Sources of truth (``max_mem_size_kiB`` candidates):
+      1. ``hemaia_xdma_cfg.max_mem_size_kiB`` — top cfg.
+      2. ``spm_wide.length`` — wide SPM size in bytes; divided by 1024.
+      3. ``hemaia_multichip.testbench_cfg.hemaia_mem_chip[*].mem_size``
+         in bytes; divided by 1024.
+      4. Each cluster's ``dma_core_template.snax_xdma_cfg.max_mem_size_kiB``.
+
+    The unified value is ``next power-of-two >= max(all candidates)``.
+
+    Cluster hjsons are rewritten on disk only when ``max_mem_size_kiB``
+    changes, so the downstream snitch make flow (which re-reads the hjson)
+    sees the unified value. ``occamy_cfg`` is patched in memory so the
+    inline HeMAiA-XDMA gen calls see it too.
+
+    Returns ``max_mem_size_kiB``.
+
+    NOTE: The width formula ``log2(max_mem_size_kiB) + 10 - log2(data_width/8)``
+    (the TCDM wordline is sourced from ``cluster.data_width``) is mirrored in
+    three places that MUST stay in sync — see comments in:
+      * snax_cluster/hw/chisel/.../DesignParams.scala (tcdmAddressWidth)
+      * xdma_axi_adapter/src/xdma_axi_adapter_top.sv (DMALengthWidth)
+      * snax_cluster/hw/templates/snax_xdma_wrapper.sv.tpl (DMALengthWidth)
+    """
+    candidates = []
+
+    # 1. HeMAiA top hemaia_xdma_cfg.
+    hemaia_xdma_cfg = occamy_cfg.get("hemaia_xdma_cfg")
+    if hemaia_xdma_cfg is not None and "max_mem_size_kiB" in hemaia_xdma_cfg:
+        candidates.append(int(hemaia_xdma_cfg["max_mem_size_kiB"]))
+
+    # 2. Each mem chip's mem_size.
+    multichip = occamy_cfg.get("hemaia_multichip", {})
+    mem_chips = multichip.get("testbench_cfg", {}).get("hemaia_mem_chip", []) or []
+    for chip in mem_chips:
+        if "mem_size" in chip:
+            candidates.append(int(chip["mem_size"]) // 1024)
+
+    # 3. Wide SPM length.
+    spm_wide = occamy_cfg.get("spm_wide")
+    if spm_wide is not None and "length" in spm_wide:
+        candidates.append(int(spm_wide["length"]) // 1024)
+
+    # 4. Per-cluster snax_xdma_cfg.max_mem_size_kiB.
+    cluster_objs = []
+    for cfg_path in cluster_cfg_paths:
+        with open(cfg_path, "r") as f:
+            cluster_obj = read_json_file(f)
+        cluster_objs.append((cfg_path, cluster_obj))
+        dma_tpl = cluster_obj.get("dma_core_template") or {}
+        snax_xdma_cfg = dma_tpl.get("snax_xdma_cfg")
+        if snax_xdma_cfg is not None and "max_mem_size_kiB" in snax_xdma_cfg:
+            candidates.append(int(snax_xdma_cfg["max_mem_size_kiB"]))
+
+    if not candidates:
+        raise RuntimeError(
+            "unify_xdma_max_mem_size: no max_mem_size_kiB candidates found")
+
+    # Round up to power of two
+    max_mem_size_kiB = 1 << (max(candidates) - 1).bit_length()
+
+    # Patch occamy_cfg in memory.
+    if hemaia_xdma_cfg is not None:
+        hemaia_xdma_cfg["max_mem_size_kiB"] = max_mem_size_kiB
+
+    # Rewrite cluster hjsons on disk where max_mem_size_kiB needs to change.
+    for cfg_path, cluster_obj in cluster_objs:
+        dma_tpl = cluster_obj.get("dma_core_template") or {}
+        snax_xdma_cfg = dma_tpl.get("snax_xdma_cfg")
+        if snax_xdma_cfg is None:
+            continue
+        old_mm = int(snax_xdma_cfg.get("max_mem_size_kiB", -1))
+        if old_mm != max_mem_size_kiB:
+            snax_xdma_cfg["max_mem_size_kiB"] = max_mem_size_kiB
+            with open(cfg_path, "w") as f:
+                hjson.dump(cluster_obj, f, indent=4)
+            print(
+                f"[unify_xdma_max_mem_size] rewrote {cfg_path}: "
+                f"max_mem_size_kiB {old_mm} -> {max_mem_size_kiB}"
+            )
+
+    return max_mem_size_kiB
+
 
 def get_cluster_generators(occamy_cfg, cluster_cfg_dir):
     cluster_generators = list()
@@ -938,6 +1025,9 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
     cluster_tcdm_size =  cluster_generators[0].cfg["tcdm"]["size"]*1024
     wide_spm_size = occamy_cfg["spm_wide"]["length"]
     narrow_spm_size = occamy_cfg["spm_narrow"]["length"]
+    # Memchip total size (chip(2,0) external SRAM); zero if cfg has no memchip.
+    mem_chips = occamy_cfg["hemaia_multichip"]["testbench_cfg"]["hemaia_mem_chip"]
+    mempool_total_size = int(mem_chips[0]["mem_size"]) if mem_chips else 0
     cheader_kwargs = {
         "name": name,
         "nr_chiplets": nr_chiplets,
@@ -954,7 +1044,8 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
         "cluster_tcdm_size": hex(cluster_tcdm_size),
         "cluster_offset": hex(cluster_offset),
         "cluster_addr_width": cluster_addr_width,
-        "cluster_base_addr": hex(cluster_base_addr)
+        "cluster_base_addr": hex(cluster_base_addr),
+        "mempool_total_size": hex(mempool_total_size),
     }
     return cheader_kwargs
 

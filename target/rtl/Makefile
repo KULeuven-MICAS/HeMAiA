@@ -172,6 +172,10 @@ debug-quad-gen:
 	--quad              $(SOURCE_OCCAMY_DIR)/occamy_quad.sv.tpl \
 	--quad-noc          $(SOURCE_OCCAMY_DIR)/quad_noc/quad_noc.yml.tpl
 
+debug-mem-system-xdma-gen:
+	$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_SRC_DIR) \
+	--xdma
+
 ###########
 # SOCCTRL #
 ###########
@@ -291,24 +295,5 @@ clean-clint:
 	@$(REGGEN) -r -t $(TARGET_CLINT_DIR) $<
 	@touch $@
 
-###########################################
-# SNAX Accelerator  + Wrapper Generations #
-###########################################
-
-#######################
-# Step 1: Wrapper Gen #
-#######################
-
-# This tag is integrated into SNAX Cluster
-
-###########################
-# Step 2: Accelerator Gen #
-###########################
-
-# This tag is integrated into SNAX Cluster
-
-#############################
-# Step 3: Bender Target Gen #
-#############################
 src/bender_targets.tmp: $(CFG) # Generate bender_targets.tmp file
 	echo $(shell $(HEMAIA_UTIL) --cfg_path $(CFG) --get_bender_targets) > src/bender_targets.tmp
