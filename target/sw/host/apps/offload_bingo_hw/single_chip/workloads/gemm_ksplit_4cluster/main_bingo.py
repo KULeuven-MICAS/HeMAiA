@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-Attention test: K-split=4 GEMM across 4 clusters with int32_add reduction
-and dequantize.
+K-split GEMM test across 4 clusters with int32_add reduction and dequantize.
 
 Per cluster i (0..3, in parallel):
   Load_A_k{i} (DMA,c{i}) -> Load_B_k{i} (DMA,c{i}) -> GEMM_full (GEMM,c{i})
@@ -46,7 +45,7 @@ from bingo_kernel_args import (  # noqa E402
 
 
 def get_args():
-    parser = argparse.ArgumentParser(description="attn_test_ksplit_gemm")
+    parser = argparse.ArgumentParser(description="gemm_ksplit_4cluster")
     parser.add_argument("--output_dir", type=str, default=".")
     parser.add_argument("--output_offload_file_name", type=str, default="offload_bingo_hw.h")
     parser.add_argument("-c", "--cfg", type=pathlib.Path, required=True)
@@ -83,26 +82,27 @@ def main():
 
     # Derive params
     array_shape = merged["array_shape"]
-    seq_len = merged["seq_len"]
-    d_model = merged["d_model"]
-    d_head = merged["d_head"]
+    M = merged["M"]
+    K = merged["K"]
+    N = merged["N"]
     k_split = merged["k_split"]
+    if k_split != 4:
+        raise ValueError(f"gemm_ksplit_4cluster expects k_split=4, got {k_split}")
+    if K % k_split != 0:
+        raise ValueError(f"K ({K}) must be divisible by k_split ({k_split})")
     transpose_A = merged.get("transposed_A", 0)
     transpose_B = merged.get("transposed_B", 0)
     accumPrevC = merged.get("accumPrevC", 0)
 
-    data_type = 0  # int8
+    data_type = merged.get("data_type", 0)  # int8
     snax_acc_cfg = merged["snax_versacore_core_template"]["snax_acc_cfg"][0]
     meshRow, tileSize, meshCol = snax_acc_cfg["snax_versacore_spatial_unrolling"][data_type][array_shape]
 
-    M_T = seq_len // meshRow
-    K_T_full = d_model // tileSize
-    N_T = d_head // meshCol
-    K_T_tile = K_T_full // k_split
+    K_tile = K // k_split
 
-    A_tile_bytes = M_T * K_T_tile * meshRow * tileSize   # int8 bytes per K-chunk
-    B_tile_bytes = K_T_tile * N_T * tileSize * meshCol    # int8 bytes per K-chunk
-    D_num_elements = M_T * N_T * meshRow * meshCol        # int32 element count
+    A_tile_bytes = M * K_tile * meshRow * tileSize        # int8 bytes per K-chunk
+    B_tile_bytes = K_tile * N * tileSize * meshCol         # int8 bytes per K-chunk
+    D_num_elements = M * N * meshRow * meshCol             # int32 element count
     D_bytes = D_num_elements * 4                          # int32 bytes
 
     # Core IDs
@@ -199,7 +199,7 @@ def main():
             kernel_args=SnaxBingoKernelGemmFullArgs(
                 input_A_addr=l1_A[i], input_B_addr=l1_B[i],
                 input_C_addr=0, output_D_addr=l1_D[i],
-                M=M_T, K=K_T_tile, N=N_T,
+                M=M, K=K_tile, N=N,
                 array_shape_idx=array_shape,
                 transpose_A=transpose_A, transpose_B=transpose_B,
                 accumPrevC=accumPrevC,
@@ -373,7 +373,7 @@ def main():
 
     total_nodes = k_split * 5 + 8  # 5 per cluster + 6 reduction/check + dequant + check_fp32
     print(f"Built DFG: {total_nodes} nodes ({k_split} parallel cluster paths + reduction chain)")
-    print(f"  M_T={M_T}, K_T_tile={K_T_tile}, N_T={N_T}, k_split={k_split}")
+    print(f"  M={M}, K_tile={K_tile}, N={N}, k_split={k_split}")
     print(f"  A_tile_bytes={A_tile_bytes}, B_tile_bytes={B_tile_bytes}, D_bytes={D_bytes}")
 
     dfg.bingo_compile_dfg(

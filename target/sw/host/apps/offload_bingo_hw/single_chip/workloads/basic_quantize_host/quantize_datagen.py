@@ -20,12 +20,10 @@ np.random.seed(42)
 def emit_header_file(**kwargs):
     lines = ["#include <stdint.h>"]
 
-    seq_len = kwargs["seq_len"]
-    d_model = kwargs["d_model"]
-    num_elements = seq_len * d_model
+    num_elements = kwargs["num_elements"]
 
-    # Generate FP32 input X, shape (seq_len, d_model), uniform(-1, 1)
-    X = np.random.uniform(-1.0, 1.0, size=(seq_len, d_model)).astype(np.float32)
+    # Generate FP32 input X, uniform(-1, 1)
+    X = np.random.uniform(-1.0, 1.0, size=num_elements).astype(np.float32)
 
     # Quantize: scale = max(abs(X)) / 127; int8_X = clip(round(X / scale), -128, 127)
     abs_max = float(np.max(np.abs(X)))
@@ -34,8 +32,8 @@ def emit_header_file(**kwargs):
     scale = abs_max / 127.0
     golden_int8_X = np.clip(np.round(X.reshape(-1) / scale), -128, 127).astype(np.int8)
 
-    lines.append(f"// Quantize test: {seq_len}x{d_model} = {num_elements} elements")
-    lines.append(format_vector_definition("float", "fp32_X", X.reshape(-1)))
+    lines.append(f"// Quantize test: {num_elements} elements")
+    lines.append(format_vector_definition("float", "fp32_X", X))
     lines.append(format_vector_definition("int8_t", "golden_int8_X", golden_int8_X))
     lines.append(format_scalar_definition("uint32_t", "X_num_elements", num_elements))
 

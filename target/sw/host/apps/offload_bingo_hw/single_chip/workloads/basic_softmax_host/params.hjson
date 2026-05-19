@@ -1,9 +1,8 @@
 {
     num_clusters: 1
     // Attention test: FP32 softmax kernel in isolation
-    // QK_scaled[seq_len x seq_len] -> row-wise softmax -> attn_weights
+    // QK_scaled[num_rows x num_elements_in_one_row] -> row-wise softmax -> attn_weights
     array_shape: 0
-    seq_len: 64
-    d_model: 32
-    d_head: 32
+    num_rows: 32
+    num_elements_in_one_row: 32
 }

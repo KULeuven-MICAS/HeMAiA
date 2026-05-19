@@ -167,11 +167,10 @@ def bingo_softmax_row(x_row):
 def emit_header_file(**kwargs):
     lines = ["#include <stdint.h>"]
 
-    seq_len = kwargs["seq_len"]
-    num_rows = seq_len
-    row_length = seq_len
+    num_rows = kwargs["num_rows"]
+    row_length = kwargs["num_elements_in_one_row"]
 
-    # Generate random FP32 input simulating QK_scaled: shape (seq_len, seq_len)
+    # Generate random FP32 input simulating QK_scaled.
     x = np.random.uniform(-2.0, 2.0, size=(num_rows, row_length)).astype(np.float32)
 
     # Compute softmax row-wise using HW-exact algorithm

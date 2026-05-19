@@ -72,7 +72,9 @@ def main():
         return
 
     # Derive params
-    seq_len = merged["seq_len"]
+    num_rows = merged["num_rows"]
+    row_length = merged["num_elements_in_one_row"]
+    num_elements = num_rows * row_length
 
     # Core IDs
     HOST_CORE = 2
@@ -82,8 +84,8 @@ def main():
     sym_input = BingoMemSymbol("softmax_input")
     sym_golden = BingoMemSymbol("golden_softmax_output")
 
-    # L3 buffer (runtime allocation) - FP32 output = seq_len * seq_len * 4 bytes
-    softmax_out_buf = BingoMemAlloc("softmax_out_buf", size=seq_len * seq_len * 4, mem_level="L3")
+    # L3 buffer (runtime allocation) - FP32 output = num_rows * row_length * 4 bytes
+    softmax_out_buf = BingoMemAlloc("softmax_out_buf", size=num_elements * 4, mem_level="L3")
 
     # -- DFG --
     dfg = BingoDFG(
@@ -102,8 +104,8 @@ def main():
         kernel_args=HostBingoKernelFp32SoftmaxArgs(
             input_addr=sym_input,
             output_addr=softmax_out_buf,
-            num_rows=seq_len,
-            row_length=seq_len,
+            num_rows=num_rows,
+            row_length=row_length,
         ),
     )
 
@@ -115,7 +117,7 @@ def main():
         kernel_args=HostBingoKernelCheckResultArgs(
             golden_data_addr=sym_golden,
             output_data_addr=softmax_out_buf,
-            data_size=seq_len * seq_len * 4,
+            data_size=num_elements * 4,
             name="softmax",
             check_type=BINGO_CHECK_TYPE_FP32_TOL,
             tolerance=1e-6,
@@ -130,7 +132,7 @@ def main():
     dfg.bingo_add_edge(node_softmax, node_check)
 
     print(f"Built DFG: 2 nodes (Softmax -> Check_softmax)")
-    print(f"  num_rows={seq_len}, row_length={seq_len}")
+    print(f"  num_rows={num_rows}, row_length={row_length}")
 
     dfg.bingo_compile_dfg(
         "basic_softmax_host", output_dir, args.output_offload_file_name,

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Golden data generator for attn_test_ksplit_gemm.
+Golden data generator for gemm_ksplit_4cluster.
 K-split=4 GEMM across 4 clusters with int32_add reduction and dequantize.
 
 Generates:
@@ -26,41 +26,44 @@ def emit_header_file(**kwargs):
     lines = ["#include <stdint.h>"]
 
     array_shape = kwargs["array_shape"]
-    seq_len = kwargs["seq_len"]
-    d_model = kwargs["d_model"]
-    d_head = kwargs["d_head"]
+    M = kwargs["M"]
+    K = kwargs["K"]
+    N = kwargs["N"]
     k_split = kwargs["k_split"]
+    if k_split <= 0:
+        raise ValueError(f"k_split ({k_split}) must be positive")
+    if k_split != 4:
+        raise ValueError(f"gemm_ksplit_4cluster expects k_split=4, got {k_split}")
+    if K % k_split != 0:
+        raise ValueError(f"K ({K}) must be divisible by k_split ({k_split})")
 
-    data_type = 0  # int8
+    data_type = kwargs.get("data_type", 0)  # int8
     snax_acc_cfg = kwargs["snax_versacore_core_template"]["snax_acc_cfg"][0]
     meshRow, tileSize, meshCol = snax_acc_cfg["snax_versacore_spatial_unrolling"][data_type][array_shape]
 
-    # Full tile dimensions
-    M_T = seq_len // meshRow
-    K_T_full = d_model // tileSize
-    N_T = d_head // meshCol
-    K_T_tile = K_T_full // k_split
+    # Full tile dimensions. K_tile is the per-cluster K chunk.
+    K_tile = K // k_split
 
-    lines.append(f"// K-split GEMM: M_T={M_T} K_T_full={K_T_full} N_T={N_T} k_split={k_split}")
-    lines.append(f"// K_T_tile={K_T_tile} mesh={meshRow}x{tileSize}x{meshCol}")
+    lines.append(f"// K-split GEMM: M={M} K={K} N={N} k_split={k_split}")
+    lines.append(f"// K_tile={K_tile} mesh={meshRow}x{tileSize}x{meshCol}")
 
     # Generate full A and B in VersaCore block layout
     A_MIN, A_MAX = -128, 127
     B_MIN, B_MAX = -128, 127
 
-    A_full = np.random.randint(A_MIN, A_MAX, size=(M_T, K_T_full, meshRow, tileSize)).astype(np.int8)
-    B_full = np.random.randint(B_MIN, B_MAX, size=(K_T_full, N_T, tileSize, meshCol)).astype(np.int8)
+    A_full = np.random.randint(A_MIN, A_MAX, size=(M, K, meshRow, tileSize)).astype(np.int8)
+    B_full = np.random.randint(B_MIN, B_MAX, size=(K, N, tileSize, meshCol)).astype(np.int8)
 
     # Per K-chunk tile inputs
-    A_tile_size = M_T * K_T_tile * meshRow * tileSize   # int8 bytes
-    B_tile_size = K_T_tile * N_T * tileSize * meshCol    # int8 bytes
-    D_size = M_T * N_T * meshRow * meshCol               # int32 element count
+    A_tile_size = M * K_tile * meshRow * tileSize        # int8 bytes
+    B_tile_size = K_tile * N * tileSize * meshCol         # int8 bytes
+    D_size = M * N * meshRow * meshCol                    # int32 element count
     D_bytes = D_size * 4                                  # int32 bytes
 
     # Emit per K-chunk A and B tiles
     for k in range(k_split):
-        ks = k * K_T_tile
-        ke = ks + K_T_tile
+        ks = k * K_tile
+        ke = ks + K_tile
         A_k = A_full[:, ks:ke, :, :].reshape(-1).copy()
         B_k = B_full[ks:ke, :, :, :].reshape(-1).copy()
         lines.append(format_vector_definition("int8_t", f"A_k{k}", A_k))
@@ -71,12 +74,12 @@ def emit_header_file(**kwargs):
     C_zero = np.zeros(D_size, dtype=np.int32)
     partial_Ds = []
     for k in range(k_split):
-        ks = k * K_T_tile
-        ke = ks + K_T_tile
+        ks = k * K_tile
+        ke = ks + K_tile
         A_slice = A_full[:, ks:ke, :, :].reshape(-1).copy()
         B_slice = B_full[ks:ke, :, :, :].reshape(-1).copy()
         D_partial = block_gemm_golden_model(
-            M_T, K_T_tile, N_T, meshRow, tileSize, meshCol,
+            M, K_tile, N, meshRow, tileSize, meshCol,
             A_slice, B_slice, 0, 0, C_zero.copy(),
         )
         partial_Ds.append(D_partial)
@@ -112,13 +115,15 @@ def emit_header_file(**kwargs):
         ("D_bytes", D_bytes),
         ("D_num_elements", D_size),
         ("k_split", k_split),
-        ("M_T", M_T),
-        ("K_T_tile", K_T_tile),
-        ("N_T", N_T),
+        ("M", M),
+        ("K", K),
+        ("N", N),
+        ("K_tile", K_tile),
         ("meshRow", meshRow),
         ("tileSize", tileSize),
         ("meshCol", meshCol),
         ("array_shape", array_shape),
+        ("data_type", data_type),
     ]:
         lines.append(format_scalar_definition("uint32_t", name, val))
 

@@ -71,9 +71,7 @@ def main():
         return
 
     # Derive params
-    seq_len = merged["seq_len"]
-    d_head = merged["d_head"]
-    num_elements = seq_len * d_head
+    num_elements = merged["num_elements"]
 
     # Core IDs
     HOST_CORE = 2

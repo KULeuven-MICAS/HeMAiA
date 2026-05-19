@@ -20,9 +20,7 @@ np.random.seed(42)
 def emit_header_file(**kwargs):
     lines = ["#include <stdint.h>"]
 
-    seq_len = kwargs["seq_len"]
-    d_head = kwargs["d_head"]
-    num_elements = seq_len * d_head
+    num_elements = kwargs["num_elements"]
 
     # Generate random INT32 D array (simulating GEMM output)
     int32_D = np.random.randint(-10000, 10000, size=num_elements).astype(np.int32)
