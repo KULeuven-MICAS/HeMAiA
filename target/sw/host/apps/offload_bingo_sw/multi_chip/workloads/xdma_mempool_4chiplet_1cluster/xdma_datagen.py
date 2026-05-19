@@ -19,7 +19,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../../../../../../../..
 from data_utils import format_scalar_definition, format_vector_definition, format_scalar_define, format_vector_define  # noqa E402
 
 # # Add golden model path
-from snax_utils import block_gemm_golden_model # noqa E402
+from sim_golden_models import block_gemm_golden_model # noqa E402
 
 np.random.seed(320)
 

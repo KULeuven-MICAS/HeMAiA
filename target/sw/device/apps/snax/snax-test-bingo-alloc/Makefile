@@ -4,7 +4,8 @@
 #
 # Xiaoling Yi <xiaoling.yi@kuleuven.be>
 
-{
-    num_clusters: 1
-    A_size: 1024 * 8
-}
+APP     = snax-test-bingo-alloc
+SRCS    = src/snax-test-bingo-alloc.c
+
+include ../../common.mk
+

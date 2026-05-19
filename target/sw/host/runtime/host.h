@@ -719,6 +719,7 @@ void chip_barrier(volatile comm_buffer_t* chip_barrier_data_ptr,
 inline void enable_vec() {
    asm volatile("csrs mstatus, %[bits];" ::[bits] "r"(0x00000600 & (0x00000600 >> 1)));
 }
+
 // Return the current value of the cycle counter
 static inline uint64_t ara_get_cycle_count() {
   uint64_t cycle_count;

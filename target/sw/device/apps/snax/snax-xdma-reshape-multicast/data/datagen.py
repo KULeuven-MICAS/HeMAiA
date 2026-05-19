@@ -20,7 +20,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../../../../../../../ut
 from data_utils import format_scalar_definition, format_vector_definition, format_scalar_define, format_vector_define  # noqa E402
 
 # # Add golden model path
-# from snax_utils import data_reshuffler_golden_model, max_pooling, im2col  # noqa E402
+# from sim_golden_models import data_reshuffler_golden_model, max_pooling, im2col  # noqa E402
 
 np.random.seed((int(time.time() * 1e9) ^ os.getpid()) % (2**32))
 

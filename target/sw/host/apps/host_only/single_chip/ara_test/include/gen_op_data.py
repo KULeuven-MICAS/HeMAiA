@@ -41,4 +41,5 @@ def main():
     emit_big("op_b_big", b_big)
     emit_big("op_mixed_big", mixed_big)
 
-main()
+if __name__ == "__main__":
+    main()

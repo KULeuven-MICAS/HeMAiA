@@ -129,7 +129,6 @@ def define_workload_params(cfg_path, hwcfg_path):
     return params, merged
 
 
-
 def define_memory_handles(params):
     """Defines memory symbols and handles."""
     mem_handles = {}
@@ -625,6 +624,7 @@ def create_dfg(params, mem_handles, platform):
             data_size=64,
         ),
     )
+
     # 3. Add Nodes to DFG
     # Chiplet 00
     bingo_dfg.bingo_add_node(node_chiplet_00_load_A1)
@@ -669,24 +669,28 @@ def create_dfg(params, mem_handles, platform):
     bingo_dfg.add_edge(node_chiplet_00_broadcast_B, node_chiplet_11_check_B)
     bingo_dfg.add_edge(node_chiplet_00_gemm_A1_B, node_chiplet_00_store_D1)
     bingo_dfg.add_edge(node_chiplet_00_store_D1, node_chiplet_00_check_D1)
+
     # Chiplet 01
     bingo_dfg.add_edge(node_chiplet_01_load_A2, node_chiplet_01_check_A2)
     bingo_dfg.add_edge(node_chiplet_01_check_A2, node_chiplet_01_check_B)
     bingo_dfg.add_edge(node_chiplet_01_check_B, node_chiplet_01_gemm_A2_B)
     bingo_dfg.add_edge(node_chiplet_01_gemm_A2_B, node_chiplet_01_store_D2)
     bingo_dfg.add_edge(node_chiplet_01_store_D2, node_chiplet_01_check_D2)
+
     # Chiplet 10
     bingo_dfg.add_edge(node_chiplet_10_load_A3, node_chiplet_10_check_A3)
     bingo_dfg.add_edge(node_chiplet_10_check_A3, node_chiplet_10_check_B)
     bingo_dfg.add_edge(node_chiplet_10_check_B, node_chiplet_10_gemm_A3_B)
     bingo_dfg.add_edge(node_chiplet_10_gemm_A3_B, node_chiplet_10_store_D3)
     bingo_dfg.add_edge(node_chiplet_10_store_D3, node_chiplet_10_check_D3)
+
     # Chiplet 11
     bingo_dfg.add_edge(node_chiplet_11_load_A4, node_chiplet_11_check_A4)
     bingo_dfg.add_edge(node_chiplet_11_check_A4, node_chiplet_11_check_B)
     bingo_dfg.add_edge(node_chiplet_11_check_B, node_chiplet_11_gemm_A4_B)
     bingo_dfg.add_edge(node_chiplet_11_gemm_A4_B, node_chiplet_11_store_D4)
     bingo_dfg.add_edge(node_chiplet_11_store_D4, node_chiplet_11_check_D4)
+
     return bingo_dfg
 
 def main():

@@ -68,4 +68,5 @@ def main():
     print(f"static float golden_reduce_max = {max(a_vals):.6f}f;")
     print(f"static float golden_reduce_mean = {sum(a_vals)/N:.6f}f;")
 
-main()
+if __name__ == "__main__":
+    main()

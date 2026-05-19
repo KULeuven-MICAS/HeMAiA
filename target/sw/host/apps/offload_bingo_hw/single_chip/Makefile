@@ -9,6 +9,7 @@ APPS = concurrent_dma_1cluster
 APPS +=  gemm_double_buffer_1cluster
 APPS += gemm_serial_dma_1cluster
 APPS += gemm_parallel_dma_1cluster
+APPS += gemm_mem_chip_1cluster
 APPS += gemm_stacked_1cluster
 APPS += gemm_sweep_1cluster
 APPS += xdma_all_ops_1cluster

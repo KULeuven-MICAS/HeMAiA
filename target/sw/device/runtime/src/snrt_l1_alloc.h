@@ -25,6 +25,7 @@
 #define TCDM_ROW_SIZE 512 // 512B per row (8B/Bank*64Bank)
 #define RESERVED_SIZE 4096 // reserve 4kB for future use
 #define L1_ALLOC_MAKE_U64(hi, lo) ((uint64_t)(((uint64_t)(hi) << 32) | ((uint64_t)(lo) & 0xFFFFFFFF)))
+
 // Getter functions for L1 allocator
 inline snrt_l1_allocator_t *get_snrt_l1_allocator() {
     return (snrt_l1_allocator_t *)&(cls()->l1_allocator);

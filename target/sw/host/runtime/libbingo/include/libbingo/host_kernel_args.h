@@ -44,6 +44,14 @@ __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_idma_args {
     uint64_t scratchpad_ptr;
 } __host_bingo_kernel_idma_args_t;
 
+__HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_xdma_1d_copy_args {
+    uint64_t src_addr;
+    uint64_t dst_addr;
+    uint64_t size;        // in Bytes
+    uint64_t scratchpad_ptr;
+} __host_bingo_kernel_xdma_1d_copy_args_t;
+typedef __host_bingo_kernel_xdma_1d_copy_args_t __host_bingo_kernel_xdma_args_t;
+
 // FP32 -> INT8 per-tensor symmetric quantize
 // scale = max(|x|) / 127; q[i] = clamp(round(x[i] / scale), -128, 127)
 __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_fp32_quantize_args {
@@ -98,6 +106,7 @@ __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_fp32_softmax_args {
 #define BINGO_GATING_MODE_TOP_K      0
 #define BINGO_GATING_MODE_THRESHOLD  1
 #define BINGO_GATING_MODE_STATIC     2
+
 __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_cerf_gating_args {
     uint64_t mode;                    // BINGO_GATING_MODE_*
     uint64_t pred_scratchpad_addr;    // predecessor's scratchpad (unused for static)

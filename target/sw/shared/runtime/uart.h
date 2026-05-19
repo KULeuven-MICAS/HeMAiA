@@ -85,6 +85,7 @@ inline static void init_uart(uintptr_t address_prefix, uint32_t freq,
     write_reg_u8(address_prefix | UART_MODEM_CONTROL,
                  0x22);  // Flow control enabled, auto flow control mode
 }
+
 inline static void print_char(uintptr_t address_prefix, char a) {
     while (is_transmit_empty(address_prefix) == 0) {
     };

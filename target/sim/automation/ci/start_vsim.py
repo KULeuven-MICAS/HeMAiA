@@ -20,18 +20,17 @@ Flow overview:
 
 from __future__ import annotations
 
+import argparse
 import getpass
-import multiprocessing
 import os
 import shutil
 import subprocess
 import sys
-import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 try:
     import yaml  # type: ignore
@@ -46,10 +45,54 @@ except Exception:
 CI_CFG = "target/rtl/cfg/hemaia_multichip_ci.hjson"
 SIM_CFG = "target/sim/cfg/sim_rtl.hjson"
 SIM_TIMEOUT_SECONDS = 2 * 60 * 60  # 2 hours per simulation thread
+DEFAULT_MAX_SIM_JOBS = 1
+MAX_SIM_JOBS_ENV = "HEMAIA_VSIM_JOBS"
 
 # ---------------------------------------------------------------------------
 # Utility helpers
 # ---------------------------------------------------------------------------
+
+def positive_int(value: str) -> int:
+    """Argparse validator for positive integer options."""
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"{value!r} is not an integer") from exc
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("value must be >= 1")
+    return parsed
+
+
+def default_max_sim_jobs() -> int:
+    """Read the default simulation parallelism from the environment."""
+    env_value = os.environ.get(MAX_SIM_JOBS_ENV)
+    if env_value is None:
+        return DEFAULT_MAX_SIM_JOBS
+    return positive_int(env_value)
+
+
+def parse_args() -> argparse.Namespace:
+    """Parse command-line options for the CI simulation flow."""
+    parser = argparse.ArgumentParser(
+        description="Build and run HeMAiA Questasim CI tasks.",
+    )
+    parser.add_argument(
+        "-j", "--max-sim-jobs",
+        type=positive_int,
+        default=None,
+        help=(
+            "maximum number of simulations to run in parallel "
+            f"(default: {MAX_SIM_JOBS_ENV} or {DEFAULT_MAX_SIM_JOBS})"
+        ),
+    )
+    args = parser.parse_args()
+    if args.max_sim_jobs is None:
+        try:
+            args.max_sim_jobs = default_max_sim_jobs()
+        except argparse.ArgumentTypeError as exc:
+            parser.error(f"invalid {MAX_SIM_JOBS_ENV}: {exc}")
+    return args
+
 
 def ensure_vsim_available() -> None:
     """Abort early if ``vsim`` is not on PATH (EDA env not sourced)."""
@@ -336,7 +379,10 @@ def step5_prepare_testharness(
 # Step 6 -- Run simulations concurrently
 # ---------------------------------------------------------------------------
 
-def step6_run_simulations(tasks_info: List[Tuple[Path, str]]) -> Dict[str, bool]:
+def step6_run_simulations(
+    tasks_info: List[Tuple[Path, str]],
+    max_workers: int,
+) -> Dict[str, bool]:
     """Execute simulations in parallel and return a pass/fail map."""
     results: Dict[str, bool] = {}
 
@@ -364,7 +410,16 @@ def step6_run_simulations(tasks_info: List[Tuple[Path, str]]) -> Dict[str, bool]
         except Exception:
             return str(task_dir), ci_name, False, traceback.format_exc()
 
-    with ThreadPoolExecutor(max_workers=multiprocessing.cpu_count()) as executor:
+    if not tasks_info:
+        return results
+
+    worker_count = min(max_workers, len(tasks_info))
+    print(
+        f"Running {len(tasks_info)} simulations with up to "
+        f"{worker_count} parallel job(s)"
+    )
+
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
         future_to_task = {}
         for td, cn in tasks_info:
             print(f"Starting simulation for {cn} ({td})")
@@ -407,10 +462,40 @@ def write_summary(
 
 
 # ---------------------------------------------------------------------------
+# Step 8 -- Clean generated task directories
+# ---------------------------------------------------------------------------
+
+def cleanup_generated_task_dirs(
+    tasks_info: List[Tuple[Path, str]],
+    task_base_dir: Path,
+) -> None:
+    """Delete generated ``task_*`` simulation run directories."""
+    base_dir = task_base_dir.resolve()
+    removed = 0
+
+    for task_dir, ci_name in tasks_info:
+        resolved_task_dir = task_dir.resolve()
+        if (
+            resolved_task_dir.parent != base_dir
+            or not resolved_task_dir.name.startswith("task_")
+        ):
+            print(f"Skipping cleanup for unexpected task path: {resolved_task_dir}")
+            continue
+
+        if resolved_task_dir.exists():
+            shutil.rmtree(resolved_task_dir)
+            removed += 1
+            print(f"Deleted generated simulation folder for {ci_name}: {resolved_task_dir}")
+
+    print(f"Cleaned up {removed} generated simulation task folder(s)")
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    args = parse_args()
     script_path = Path(__file__).resolve()
     repo_root = script_path.parents[4]          # target/sim/automation/ci -> repo root
     task_base_dir = script_path.parent
@@ -441,13 +526,16 @@ def main() -> None:
     step5_prepare_testharness(repo_root, docker_image, tasks_info)
 
     # Step 6: Run all simulations concurrently
-    results = step6_run_simulations(tasks_info)
+    results = step6_run_simulations(tasks_info, args.max_sim_jobs)
 
     # Step 7: Write Markdown summary
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     summary_path = script_path.parent / f"simulation_summary_{timestamp}.md"
     write_summary(summary_path, tasks_info, results)
     print(f"Simulation summary written to {summary_path}")
+
+    # Step 8: Delete generated per-task simulation run folders
+    cleanup_generated_task_dirs(tasks_info, task_base_dir)
 
 
 if __name__ == "__main__":

@@ -48,7 +48,8 @@
 #define BINGO_TRACE_SW_MGR_ENQUEUE_REMOTE_READY_TASKS_START  0x014
 #define BINGO_TRACE_SW_MGR_ENQUEUE_REMOTE_READY_TASKS_END    0x015
 #define BINGO_TRACE_SW_MGR_SCHED_READY_TASKS_START          0x016
-#define BINGO_TRACE_SW_MGR_SCHED_READY_TASKS_END            0x017
+#define BINGO_TRACE_SW_MGR_SCHED_READY_TASKS_END  0x017
+
 // --- Hardware Manager Events ---
 // Marks the lifespan of a task within the HW Manager loop
 #define BINGO_TRACE_MGR_GET_READY_START        0x110 // Start reading Ready Queue
@@ -61,6 +62,7 @@
 #define BINGO_TRACE_MGR_WRITE_DONE_END         0x117 // End writing Done Queue
 #define BINGO_TRACE_KERNEL_ARG_PARSE_START     0x118 // Parsing kernel arguments
 #define BINGO_TRACE_KERNEL_ARG_PARSE_END       0x119 // Finished parsing kernel arguments
+
 // --- Kernel Internal Phases ---
 // These are used inside individual kernels
 // Non-computation kernels (Dummy, Exit)

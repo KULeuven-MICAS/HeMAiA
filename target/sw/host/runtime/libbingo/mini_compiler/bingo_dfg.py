@@ -35,6 +35,8 @@ from bingo_kernel_args import (
     BINGO_GATING_MODE_THRESHOLD,
     BINGO_GATING_MODE_STATIC,
 )
+
+
 class BingoDFG(DiGraphWrapper[BingoNode]):
     """Data Flow Graph (DFG) for Bingo."""
 
@@ -1468,6 +1470,88 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                     "use cluster_id; L2/L3 allocation calls use chip_id only."
                 )
 
+    def _validate_kernel_core_assignments(self, sorted_nodes):
+        """Validate that kernel namespace matches the HW scheduler core target."""
+        valid_chiplet_ids = set(self.chiplet_ids)
+        host_core_id = self.num_cores_per_cluster - 1 if self.is_host_as_acc else None
+        num_snax_cores = host_core_id if self.is_host_as_acc else self.num_cores_per_cluster
+        failures = []
+
+        def node_label(node):
+            return (
+                f"Node ID {node.node_id} ('{node.node_name}', "
+                f"kernel={node.kernel_name})"
+            )
+
+        for node in sorted_nodes:
+            if node.assigned_chiplet_id not in valid_chiplet_ids:
+                failures.append(
+                    f"{node_label(node)} targets chiplet 0x{node.assigned_chiplet_id:02x}, "
+                    f"but valid chiplets are {[f'0x{cid:02x}' for cid in self.chiplet_ids]}."
+                )
+
+            if node.assigned_cluster_id < 0 or node.assigned_cluster_id >= self.num_clusters_per_chiplet:
+                failures.append(
+                    f"{node_label(node)} targets cluster {node.assigned_cluster_id}, "
+                    f"but valid clusters are 0..{self.num_clusters_per_chiplet - 1}."
+                )
+
+            if node.assigned_core_id < 0 or node.assigned_core_id >= self.num_cores_per_cluster:
+                failures.append(
+                    f"{node_label(node)} targets core {node.assigned_core_id}, "
+                    f"but valid cores are 0..{self.num_cores_per_cluster - 1}."
+                )
+
+            kernel_name = node.kernel_name or ""
+            if not kernel_name:
+                continue
+
+            if kernel_name.startswith("__host"):
+                if not self.is_host_as_acc:
+                    failures.append(
+                        f"{node_label(node)} is a host kernel, but this DFG was "
+                        "created with is_host_as_acc=False."
+                    )
+                else:
+                    if node.assigned_core_id != host_core_id or node.assigned_cluster_id != 0:
+                        failures.append(
+                            f"{node_label(node)} is a host kernel and must be assigned "
+                            f"to chiplet-local host core cluster 0 core {host_core_id}; "
+                            f"got cluster {node.assigned_cluster_id} core {node.assigned_core_id}."
+                        )
+            elif kernel_name.startswith("__snax"):
+                if node.assigned_core_id >= num_snax_cores:
+                    failures.append(
+                        f"{node_label(node)} is a SNAX/device kernel and must be assigned "
+                        f"to a real cluster core in 0..{num_snax_cores - 1}; "
+                        f"got core {node.assigned_core_id}."
+                    )
+            else:
+                failures.append(
+                    f"{node_label(node)} has an unknown kernel namespace. Kernel names "
+                    "must start with '__host' or '__snax' so the generated host/device "
+                    "task mappings match the HW scheduler routing."
+                )
+
+            if node.kernel_args:
+                struct_name = node.kernel_args.get_struct_name()
+                if kernel_name.startswith("__host") and not struct_name.startswith("__host"):
+                    failures.append(
+                        f"{node_label(node)} uses host kernel namespace but argument "
+                        f"struct '{struct_name}' is not a host argument struct."
+                    )
+                if kernel_name.startswith("__snax") and not struct_name.startswith("__snax"):
+                    failures.append(
+                        f"{node_label(node)} uses SNAX kernel namespace but argument "
+                        f"struct '{struct_name}' is not a SNAX argument struct."
+                    )
+
+        if failures:
+            raise ValueError(
+                "Bingo kernel/core assignment check failed before C generation:\n"
+                + "\n".join(f"- {failure}" for failure in failures)
+            )
+
     def _emit_headers(self, f, extra_include_header_list):
         """Emit C header includes."""
         f.write("// Auto-generated offload_hw_bingo.h\n")
@@ -1703,6 +1787,7 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         # 1. Collect Handles
         sorted_nodes = sorted(self.node_list, key=lambda n: n.node_id)
         sorted_handles, handle_name_map = self._collect_memory_handles(sorted_nodes)
+        self._validate_kernel_core_assignments(sorted_nodes)
         self._validate_memory_handles(sorted_handles)
 
         # 2. Start emitting C code

@@ -31,7 +31,7 @@ sys.path.append(f"{ROOT_DIR}/util/sim")
 # Import emit_matmul_data from gemm_datagen to derive hardware-specific params
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from gemm_datagen import emit_header_file  # noqa E402
-from snax_utils import define_gemm_workload_params  # noqa E402
+from gemm_sim_utils import define_gemm_workload_params  # noqa E402
 
 from bingo_dfg import BingoDFG
 from bingo_platform import guard_cluster_count, parse_platform_cfg  # noqa E402

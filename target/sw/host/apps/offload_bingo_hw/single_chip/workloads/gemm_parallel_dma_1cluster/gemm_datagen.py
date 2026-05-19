@@ -14,7 +14,7 @@ import os
 
 # Add simulation utility path
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../../../../../../util/sim/"))
-from snax_utils import emit_gemm_header_file as emit_header_file  # noqa E402
+from gemm_sim_utils import emit_gemm_header_file as emit_header_file  # noqa E402
 
 
 def main():
