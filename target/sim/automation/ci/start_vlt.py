@@ -26,13 +26,7 @@ def get_apps(task_path):
         param_data = yaml.safe_load(f)
 
     app_name_list = []
-    for app_entry in param_data.get("runs", []):
-        ci_app_name = list(app_entry.keys())[0]
-        attributes = app_entry[ci_app_name]
-        attr_dict = {}
-        for attr in attributes:
-            attr_dict.update(attr)
-        
+    for attr_dict in param_data.get("runs", []):
         # Try both uppercase and lowercase
         host_app_type = attr_dict.get('HOST_APP_TYPE', attr_dict.get('host_app_type'))
         chip_type = attr_dict.get('CHIP_TYPE', attr_dict.get('chip_type'))
