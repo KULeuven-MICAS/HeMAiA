@@ -202,7 +202,6 @@
       address: 2147483648, // 0x8000_0000
       length: 16777216,    // 16 MiB 0x100_0000
       banks: 16,
-      wordline_width: 64,
     },
     wide_zero_mem: {
       address: 68719476736, // 0x10_0000_0000

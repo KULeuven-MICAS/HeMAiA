@@ -16,7 +16,7 @@
           {coordinate: [1,1]}
         ],
         hemaia_mem_chip: [
-          {coordinate: [2,0], mem_size: 67108864, wordline_width: 64},
+          {coordinate: [2,0], mem_size: 67108864},
         ],
         bender_target: ["hemaia_mem_chip"]
       }
@@ -213,7 +213,6 @@
       address: 2147483648, // 0x8000_0000
       length: 131072,      // 128KiB 0x80000
       banks: 16,
-      wordline_width: 64,
     },
     wide_zero_mem: {
       address: 68719476736, // 0x10_0000_0000
