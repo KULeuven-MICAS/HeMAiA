@@ -11,9 +11,10 @@ K-split GEMM test across 4 chiplets with one cluster per chiplet.
 
 Each chiplet i computes one K chunk:
   Load A_i, load B_i, GEMM, store partial D_i to local L3,
-  load local golden D_i, and check locally.
+  load local golden D_i, and check the local L3 result.
 
-After local checks, remote partial D_i buffers are moved into chiplet 0 L3.
+After local checks, remote partial D_i buffers are copied directly into a
+shared chiplet 0 L3 receive slot.
 Chiplet 0 performs the running int32 reductions, checks each running sum,
 then dequantizes and checks the FP32 output.
 """
@@ -43,7 +44,7 @@ from bingo_kernel_args import (  # noqa E402
     SnaxBingoKernelIdma1dCopyArgs,
     SnaxBingoKernelXdma1dCopyArgs,
 )
-from bingo_mem_handle import BingoMemAlloc, BingoMemFixedAddr  # noqa E402
+from bingo_mem_handle import BingoMemAlloc, BingoMemFixedAddr, BingoMemSymbol  # noqa E402
 from bingo_node import BingoNode  # noqa E402
 from bingo_platform import guard_chiplet_count, guard_cluster_count, parse_platform_cfg  # noqa E402
 from ksplit_gemm_multi_chiplet_datagen import emit_header_file  # noqa E402
@@ -64,40 +65,8 @@ def chip_hex(chiplet_id):
     return f"{chiplet_id:02x}"
 
 
-def make_node(chiplet_id, cluster_id, core_id, node_name, kernel_name, kernel_args):
-    return BingoNode(
-        assigned_chiplet_id=chiplet_id,
-        assigned_cluster_id=cluster_id,
-        assigned_core_id=core_id,
-        node_name=node_name,
-        kernel_name=kernel_name,
-        kernel_args=kernel_args,
-    )
-
-
-def add_load_golden_and_check(dfg, producer, chiplet_id, host_core, name, golden_src, golden_l3, output_l3, size):
-    load = make_node(
-        chiplet_id, 0, host_core,
-        f"Load_Golden_{name}",
-        "__host_bingo_kernel_idma",
-        HostBingoKernelIdmaArgs(src_addr=golden_src, dst_addr=golden_l3, size=size),
-    )
-    check = make_node(
-        chiplet_id, 0, host_core,
-        f"Check_{name}",
-        "__host_bingo_kernel_check_result",
-        HostBingoKernelCheckResultArgs(
-            golden_data_addr=golden_l3,
-            output_data_addr=output_l3,
-            data_size=size,
-            name=name,
-        ),
-    )
-    dfg.bingo_add_node(load)
-    dfg.bingo_add_node(check)
-    dfg.bingo_add_edge(producer, load)
-    dfg.bingo_add_edge(load, check)
-    return load, check
+def chiplet_full_addr_expr(chiplet_id, symbol_name):
+    return f"(chiplet_addr_transform_full(0x{chiplet_id:02x}, (uint64_t){symbol_name}))"
 
 
 def main():
@@ -155,7 +124,7 @@ def main():
     D_bytes = D_num_elements * 4
     fp32_D_bytes = D_bytes
     if D_bytes % 64 != 0:
-        raise ValueError(f"D_bytes ({D_bytes}) must be 64-byte aligned for xDMA partial moves")
+        raise ValueError(f"D_bytes ({D_bytes}) must be 64-byte aligned for partial transfers")
 
     mempool_base = chiplet_addr_transform_loc(2, 0, 0x8000_0000)
     A_mp_base = mempool_base
@@ -190,7 +159,7 @@ def main():
     l1_B = {}
     l1_D = {}
     l3_D_local = {}
-    l3_golden_D = {}
+    l3_check_scratch = {}
     l3_D_reduce = {}
     for i, chiplet in enumerate(active_chiplets):
         h = chip_hex(chiplet)
@@ -202,28 +171,13 @@ def main():
                                 chip_id=chiplet, cluster_id=0)
         l3_D_local[i] = BingoMemAlloc(f"D_partial_k{i}_chip{h}_l3", size=D_bytes,
                                       mem_level="L3", chip_id=chiplet)
-        l3_golden_D[i] = BingoMemAlloc(f"golden_D_k{i}_chip{h}_l3", size=D_bytes,
-                                       mem_level="L3", chip_id=chiplet)
+        l3_check_scratch[i] = BingoMemAlloc(f"check_scratch_k{i}_chip{h}_l3",
+                                            size=D_bytes, mem_level="L3",
+                                            chip_id=chiplet)
         if chiplet == reduction_chiplet:
             l3_D_reduce[i] = l3_D_local[i]
         else:
-            l3_D_reduce[i] = BingoMemAlloc(f"D_partial_k{i}_on_chip00_l3", size=D_bytes,
-                                           mem_level="L3", chip_id=reduction_chiplet)
-
-    l3_sum = {
-        i: BingoMemAlloc(f"sum_k0_to_k{i}_chip00_l3", size=D_bytes,
-                         mem_level="L3", chip_id=reduction_chiplet)
-        for i in range(1, k_split)
-    }
-    l3_golden_sum = {
-        i: BingoMemAlloc(f"golden_sum_k0_to_k{i}_chip00_l3", size=D_bytes,
-                         mem_level="L3", chip_id=reduction_chiplet)
-        for i in range(1, k_split)
-    }
-    l3_fp32_D = BingoMemAlloc("fp32_D_chip00_l3", size=fp32_D_bytes,
-                              mem_level="L3", chip_id=reduction_chiplet)
-    l3_golden_fp32_D = BingoMemAlloc("golden_fp32_D_chip00_l3", size=fp32_D_bytes,
-                                     mem_level="L3", chip_id=reduction_chiplet)
+            l3_D_reduce[i] = BingoMemSymbol("D_partial_remote_chip00_l3")
 
     dfg = BingoDFG(
         num_chiplets=platform["num_chiplets"],
@@ -237,29 +191,44 @@ def main():
     node_load_B = {}
     node_gemm = {}
     node_store_D = {}
+    node_load_golden_D = {}
     node_check_D = {}
-    node_move_to_chip0 = {}
+    node_copy_D_to_chip0 = {}
     reduce_ready = {}
 
     for i, chiplet in enumerate(active_chiplets):
         h = chip_hex(chiplet)
-        node_load_A[i] = make_node(
-            chiplet, 0, DMA_CORE,
-            f"Load_A_k{i}_Chip{h}",
-            "__snax_bingo_kernel_idma_1d_copy",
-            SnaxBingoKernelIdma1dCopyArgs(src_addr=mem_A[i], dst_addr=l1_A[i], size=A_tile_bytes),
+        node_load_A[i] = BingoNode(
+            assigned_chiplet_id=chiplet,
+            assigned_cluster_id=0,
+            assigned_core_id=DMA_CORE,
+            node_name=f"Load_A_k{i}_Chip{h}",
+            kernel_name="__snax_bingo_kernel_idma_1d_copy",
+            kernel_args=SnaxBingoKernelIdma1dCopyArgs(
+                src_addr=mem_A[i],
+                dst_addr=l1_A[i],
+                size=A_tile_bytes,
+            ),
         )
-        node_load_B[i] = make_node(
-            chiplet, 0, DMA_CORE,
-            f"Load_B_k{i}_Chip{h}",
-            "__snax_bingo_kernel_idma_1d_copy",
-            SnaxBingoKernelIdma1dCopyArgs(src_addr=mem_B[i], dst_addr=l1_B[i], size=B_tile_bytes),
+        node_load_B[i] = BingoNode(
+            assigned_chiplet_id=chiplet,
+            assigned_cluster_id=0,
+            assigned_core_id=DMA_CORE,
+            node_name=f"Load_B_k{i}_Chip{h}",
+            kernel_name="__snax_bingo_kernel_idma_1d_copy",
+            kernel_args=SnaxBingoKernelIdma1dCopyArgs(
+                src_addr=mem_B[i],
+                dst_addr=l1_B[i],
+                size=B_tile_bytes,
+            ),
         )
-        node_gemm[i] = make_node(
-            chiplet, 0, GEMM_CORE,
-            f"Gemm_k{i}_Chip{h}",
-            "__snax_bingo_kernel_gemm_full",
-            SnaxBingoKernelGemmFullArgs(
+        node_gemm[i] = BingoNode(
+            assigned_chiplet_id=chiplet,
+            assigned_cluster_id=0,
+            assigned_core_id=GEMM_CORE,
+            node_name=f"Gemm_k{i}_Chip{h}",
+            kernel_name="__snax_bingo_kernel_gemm_full",
+            kernel_args=SnaxBingoKernelGemmFullArgs(
                 input_A_addr=l1_A[i],
                 input_B_addr=l1_B[i],
                 input_C_addr=0,
@@ -273,111 +242,185 @@ def main():
                 accumPrevC=accumPrevC,
             ),
         )
-        node_store_D[i] = make_node(
-            chiplet, 0, DMA_CORE,
-            f"Store_D_k{i}_Chip{h}",
-            "__snax_bingo_kernel_idma_1d_copy",
-            SnaxBingoKernelIdma1dCopyArgs(src_addr=l1_D[i], dst_addr=l3_D_local[i], size=D_bytes),
+        node_store_D[i] = BingoNode(
+            assigned_chiplet_id=chiplet,
+            assigned_cluster_id=0,
+            assigned_core_id=DMA_CORE,
+            node_name=f"Store_D_k{i}_Chip{h}",
+            kernel_name="__snax_bingo_kernel_idma_1d_copy",
+            kernel_args=SnaxBingoKernelIdma1dCopyArgs(
+                src_addr=l1_D[i],
+                dst_addr=l3_D_local[i],
+                size=D_bytes,
+            ),
+        )
+        node_load_golden_D[i] = BingoNode(
+            assigned_chiplet_id=chiplet,
+            assigned_cluster_id=0,
+            assigned_core_id=HOST_CORE,
+            node_name=f"Load_Golden_D_partial_k{i}_chip{h}",
+            kernel_name="__host_bingo_kernel_idma",
+            kernel_args=HostBingoKernelIdmaArgs(
+                src_addr=mem_golden_D[i],
+                dst_addr=l3_check_scratch[i],
+                size=D_bytes,
+            ),
+        )
+        node_check_D[i] = BingoNode(
+            assigned_chiplet_id=chiplet,
+            assigned_cluster_id=0,
+            assigned_core_id=HOST_CORE,
+            node_name=f"Check_D_partial_k{i}_chip{h}",
+            kernel_name="__host_bingo_kernel_check_result",
+            kernel_args=HostBingoKernelCheckResultArgs(
+                golden_data_addr=l3_check_scratch[i],
+                output_data_addr=l3_D_local[i],
+                data_size=D_bytes,
+                name=f"D_partial_k{i}_chip{h}",
+            ),
         )
 
-        for node in [node_load_A[i], node_load_B[i], node_gemm[i], node_store_D[i]]:
+        for node in [
+            node_load_A[i],
+            node_load_B[i],
+            node_gemm[i],
+            node_store_D[i],
+            node_load_golden_D[i],
+            node_check_D[i],
+        ]:
             dfg.bingo_add_node(node)
 
         dfg.bingo_add_edge(node_load_A[i], node_load_B[i])
         dfg.bingo_add_edge(node_load_B[i], node_gemm[i])
         dfg.bingo_add_edge(node_gemm[i], node_store_D[i])
-
-        _, node_check_D[i] = add_load_golden_and_check(
-            dfg=dfg,
-            producer=node_store_D[i],
-            chiplet_id=chiplet,
-            host_core=HOST_CORE,
-            name=f"D_partial_k{i}_chip{h}",
-            golden_src=mem_golden_D[i],
-            golden_l3=l3_golden_D[i],
-            output_l3=l3_D_local[i],
-            size=D_bytes,
-        )
+        dfg.bingo_add_edge(node_store_D[i], node_load_golden_D[i])
+        dfg.bingo_add_edge(node_load_golden_D[i], node_check_D[i])
 
         if chiplet == reduction_chiplet:
             reduce_ready[i] = node_check_D[i]
         else:
-            node_move_to_chip0[i] = make_node(
-                chiplet, 0, DMA_CORE,
-                f"Move_D_k{i}_Chip{h}_to_Chip00",
-                "__snax_bingo_kernel_xdma_1d_copy",
-                SnaxBingoKernelXdma1dCopyArgs(
+            node_copy_D_to_chip0[i] = BingoNode(
+                assigned_chiplet_id=chiplet,
+                assigned_cluster_id=0,
+                assigned_core_id=DMA_CORE,
+                node_name=f"Copy_D_partial_k{i}_Chip{h}_to_Chip00_L3",
+                kernel_name="__snax_bingo_kernel_xdma_1d_copy",
+                kernel_args=SnaxBingoKernelXdma1dCopyArgs(
                     src_addr=l3_D_local[i],
-                    dst_addr=l3_D_reduce[i],
+                    dst_addr=chiplet_full_addr_expr(reduction_chiplet,
+                                                   "D_partial_remote_chip00_l3"),
                     size=D_bytes,
                 ),
             )
-            dfg.bingo_add_node(node_move_to_chip0[i])
-            dfg.bingo_add_edge(node_check_D[i], node_move_to_chip0[i])
-            reduce_ready[i] = node_move_to_chip0[i]
+            dfg.bingo_add_node(node_copy_D_to_chip0[i])
+            dfg.bingo_add_edge(node_check_D[i], node_copy_D_to_chip0[i])
+            reduce_ready[i] = node_copy_D_to_chip0[i]
 
+    # sequence the reduction on the reduction chiplet
     prev_sum = l3_D_reduce[0]
     prev_ready = reduce_ready[0]
     final_check = None
     for i in range(1, k_split):
-        add = make_node(
-            reduction_chiplet, 0, HOST_CORE,
-            f"Add_k0_to_k{i}",
-            "__host_bingo_kernel_int32_add",
-            HostBingoKernelInt32AddArgs(
+        add = BingoNode(
+            assigned_chiplet_id=reduction_chiplet,
+            assigned_cluster_id=0,
+            assigned_core_id=HOST_CORE,
+            node_name=f"Add_k0_to_k{i}",
+            kernel_name="__host_bingo_kernel_int32_add",
+            kernel_args=HostBingoKernelInt32AddArgs(
                 input_a_addr=prev_sum,
                 input_b_addr=l3_D_reduce[i],
-                output_addr=l3_sum[i],
+                output_addr=prev_sum,
                 num_elements=D_num_elements,
             ),
         )
+        node_load_golden_sum = BingoNode(
+            assigned_chiplet_id=reduction_chiplet,
+            assigned_cluster_id=0,
+            assigned_core_id=HOST_CORE,
+            node_name=f"Load_Golden_sum_k0_to_k{i}",
+            kernel_name="__host_bingo_kernel_idma",
+            kernel_args=HostBingoKernelIdmaArgs(
+                src_addr=mem_golden_sum[i],
+                dst_addr=l3_check_scratch[0],
+                size=D_bytes,
+            ),
+        )
+        final_check = BingoNode(
+            assigned_chiplet_id=reduction_chiplet,
+            assigned_cluster_id=0,
+            assigned_core_id=HOST_CORE,
+            node_name=f"Check_sum_k0_to_k{i}",
+            kernel_name="__host_bingo_kernel_check_result",
+            kernel_args=HostBingoKernelCheckResultArgs(
+                golden_data_addr=l3_check_scratch[0],
+                output_data_addr=prev_sum,
+                data_size=D_bytes,
+                name=f"sum_k0_to_k{i}",
+            ),
+        )
         dfg.bingo_add_node(add)
+        dfg.bingo_add_node(node_load_golden_sum)
+        dfg.bingo_add_node(final_check)
+        if i in node_copy_D_to_chip0:
+            dfg.bingo_add_edge(prev_ready, node_copy_D_to_chip0[i])
         dfg.bingo_add_edge(prev_ready, add)
         dfg.bingo_add_edge(reduce_ready[i], add)
-
-        _, final_check = add_load_golden_and_check(
-            dfg=dfg,
-            producer=add,
-            chiplet_id=reduction_chiplet,
-            host_core=HOST_CORE,
-            name=f"sum_k0_to_k{i}",
-            golden_src=mem_golden_sum[i],
-            golden_l3=l3_golden_sum[i],
-            output_l3=l3_sum[i],
-            size=D_bytes,
-        )
-        prev_sum = l3_sum[i]
+        dfg.bingo_add_edge(add, node_load_golden_sum)
+        dfg.bingo_add_edge(node_load_golden_sum, final_check)
         prev_ready = final_check
 
-    node_dequant = make_node(
-        reduction_chiplet, 0, HOST_CORE,
-        "Dequant_Chip00",
-        "__host_bingo_kernel_int32_dequantize",
-        HostBingoKernelInt32DequantizeArgs(
+    node_dequant = BingoNode(
+        assigned_chiplet_id=reduction_chiplet,
+        assigned_cluster_id=0,
+        assigned_core_id=HOST_CORE,
+        node_name="Dequant_Chip00",
+        kernel_name="__host_bingo_kernel_int32_dequantize",
+        kernel_args=HostBingoKernelInt32DequantizeArgs(
             input_addr=prev_sum,
-            output_addr=l3_fp32_D,
+            output_addr=prev_sum,
             scale_addr=mem_combined_scale,
             num_elements=D_num_elements,
         ),
     )
     dfg.bingo_add_node(node_dequant)
+
     dfg.bingo_add_edge(final_check, node_dequant)
 
-    _, node_check_fp32 = add_load_golden_and_check(
-        dfg=dfg,
-        producer=node_dequant,
-        chiplet_id=reduction_chiplet,
-        host_core=HOST_CORE,
-        name="fp32_D",
-        golden_src=mem_golden_fp32,
-        golden_l3=l3_golden_fp32_D,
-        output_l3=l3_fp32_D,
-        size=fp32_D_bytes,
+    node_load_golden_fp32 = BingoNode(
+        assigned_chiplet_id=reduction_chiplet,
+        assigned_cluster_id=0,
+        assigned_core_id=HOST_CORE,
+        node_name="Load_Golden_fp32_D",
+        kernel_name="__host_bingo_kernel_idma",
+        kernel_args=HostBingoKernelIdmaArgs(
+            src_addr=mem_golden_fp32,
+            dst_addr=l3_check_scratch[0],
+            size=fp32_D_bytes,
+        ),
     )
+    node_check_fp32 = BingoNode(
+        assigned_chiplet_id=reduction_chiplet,
+        assigned_cluster_id=0,
+        assigned_core_id=HOST_CORE,
+        node_name="Check_fp32_D",
+        kernel_name="__host_bingo_kernel_check_result",
+        kernel_args=HostBingoKernelCheckResultArgs(
+            golden_data_addr=l3_check_scratch[0],
+            output_data_addr=prev_sum,
+            data_size=fp32_D_bytes,
+            name="fp32_D",
+        ),
+    )
+    dfg.bingo_add_node(node_load_golden_fp32)
+    dfg.bingo_add_node(node_check_fp32)
 
-    remote_moves = sum(1 for c in active_chiplets if c != reduction_chiplet)
-    total_nodes = k_split * 6 + remote_moves + (k_split - 1) * 3 + 3
-    print(f"Built DFG: {total_nodes} nodes ({k_split} chiplets, {remote_moves} xDMA moves to chiplet 0)")
+    dfg.bingo_add_edge(node_dequant, node_load_golden_fp32)
+    dfg.bingo_add_edge(node_load_golden_fp32, node_check_fp32)
+
+    remote_chiplets = sum(1 for c in active_chiplets if c != reduction_chiplet)
+    total_nodes = k_split * 6 + remote_chiplets + (k_split - 1) * 3 + 3
+    print(f"Built DFG: {total_nodes} nodes ({k_split} chiplets, {remote_chiplets} direct remote partial copies to chiplet 0)")
     print(f"  active_chiplets={[chip_hex(c) for c in active_chiplets]}")
     print(f"  M={M}, K_tile={K_tile}, N={N}, k_split={k_split}")
     print(f"  A_tile_bytes={A_tile_bytes}, B_tile_bytes={B_tile_bytes}, D_bytes={D_bytes}")
