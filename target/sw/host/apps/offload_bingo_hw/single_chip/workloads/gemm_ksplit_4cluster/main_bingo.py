@@ -49,12 +49,27 @@ from bingo_kernel_args import (  # noqa E402
 )
 
 
+def get_mem_chip_coordinate(system_cfg):
+    mem_chips = (
+        system_cfg.get("hemaia_multichip", {})
+        .get("testbench_cfg", {})
+        .get("hemaia_mem_chip", [])
+    )
+    if not mem_chips:
+        raise ValueError("system cfg does not define hemaia_multichip.testbench_cfg.hemaia_mem_chip")
+    coord = mem_chips[0].get("coordinate")
+    if not isinstance(coord, list) or len(coord) != 2:
+        raise ValueError(f"mem chip coordinate must be [x, y], got {coord!r}")
+    return int(coord[0]), int(coord[1])
+
+
 def get_args():
     parser = argparse.ArgumentParser(description="gemm_ksplit_4cluster")
     parser.add_argument("--output_dir", type=str, default=".")
     parser.add_argument("--output_offload_file_name", type=str, default="offload_bingo_hw.h")
     parser.add_argument("-c", "--cfg", type=pathlib.Path, required=True)
     parser.add_argument("--hwcfg", type=pathlib.Path, required=True)
+    parser.add_argument("--systemcfg", type=pathlib.Path, required=True)
     parser.add_argument("--platformcfg", type=pathlib.Path, required=True)
     parser.add_argument("--data_h", type=pathlib.Path, default=None)
     return parser.parse_args()
@@ -71,6 +86,8 @@ def main():
         param = hjson.loads(f.read())
     with open(args.hwcfg) as f:
         hw = hjson.loads(f.read())
+    with open(args.systemcfg) as f:
+        system_cfg = hjson.loads(f.read())
     merged = {**param, **hw}
 
     # Emit data header
@@ -111,7 +128,8 @@ def main():
     D_bytes = D_num_elements * 4                          # int32 bytes
     fp32_D_bytes = D_num_elements * 4
 
-    mempool_base = chiplet_addr_transform_loc(2, 0, 0x8000_0000)
+    mem_chip_x, mem_chip_y = get_mem_chip_coordinate(system_cfg)
+    mempool_base = chiplet_addr_transform_loc(mem_chip_x, mem_chip_y, 0x8000_0000)
     A_mp_base = mempool_base
     B_mp_base = A_mp_base + k_split * A_tile_bytes
     golden_D_mp_base = B_mp_base + k_split * B_tile_bytes

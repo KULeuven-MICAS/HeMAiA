@@ -11,16 +11,18 @@ INCL_DEVICE_BINARY ?= 1
 DATA_CFG ?= $(MK_DIR)/params.hjson
 DATA_H = $(MK_DIR)/ksplit_gemm_data.h
 OFFLOAD_H = $(MK_DIR)/offload_bingo_hw.h
+SYSTEM_CFG ?= $(if $(CFG),$(CFG),$(MK_DIR)/../../../../../../../../target/rtl/cfg/lru.hjson)
 BENDER   = bender
 SNITCH_ROOT = $(shell $(BENDER) path snitch_cluster)
 PLATFORM_H = $(MK_DIR)/../../../../../../../../target/sw/shared/platform/generated/occamy.h
 
-$(DATA_H) $(OFFLOAD_H): $(MK_DIR)/main_bingo.py $(MK_DIR)/ksplit_gemm_datagen.py $(DATA_CFG)
+$(DATA_H) $(OFFLOAD_H): $(MK_DIR)/main_bingo.py $(MK_DIR)/ksplit_gemm_datagen.py $(DATA_CFG) $(SYSTEM_CFG)
 	python3 $(MK_DIR)/main_bingo.py \
 		--output_dir $(MK_DIR) \
 		--data_h $(DATA_H) \
 		-c $(DATA_CFG) \
 		--hwcfg $(SNITCH_ROOT)/target/snitch_cluster/cfg/snax_versacore_to_cluster.hjson \
+		--systemcfg $(SYSTEM_CFG) \
 		--platformcfg $(PLATFORM_H)
 
 INCDIRS += $(MK_DIR)
