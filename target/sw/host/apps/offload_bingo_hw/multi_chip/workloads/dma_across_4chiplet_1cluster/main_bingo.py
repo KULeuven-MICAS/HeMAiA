@@ -13,7 +13,7 @@ Flow:
   1. Load A1..A4 from the memory chip into the local L3 of chiplets
      00, 01, 10, and 11.
   2. Each chiplet checks its loaded local L3 buffer against its local golden.
-  3. Chiplets 01, 10, and 11 copy their local L3 data back into chip00 L3.
+  3. Chip00 pulls the local L3 data from chiplets 01, 10, and 11 into chip00 L3.
   4. Chip00 checks the received chunks one by one.
 """
 
@@ -87,24 +87,20 @@ def define_memory_handles(data_bytes, mempool_base):
     mem = {
         "mempool_A": {},
         "golden_A": {},
+        "local_A_l3_full": {},
         "recv_A_chip00": {},
-        "recv_A_chip00_full": {},
     }
     mem["local_A_l3"] = BingoMemSymbol("A_local_l3")
 
-    for idx, _chiplet in enumerate(EXPECTED_CHIPLETS):
+    for idx, chiplet in enumerate(EXPECTED_CHIPLETS):
         mem["mempool_A"][idx] = BingoMemFixedAddr(mempool_base + idx * data_bytes)
         mem["golden_A"][idx] = BingoMemSymbol("A_golden_l3", offset=idx * data_bytes)
+        mem["local_A_l3_full"][idx] = chiplet_symbol_expr(chiplet, "A_local_l3")
 
     for idx in range(1, len(EXPECTED_CHIPLETS)):
         mem["recv_A_chip00"][idx] = BingoMemSymbol(
             "A_recv_chip00_l3",
             offset=(idx - 1) * data_bytes,
-        )
-        mem["recv_A_chip00_full"][idx] = chiplet_symbol_expr(
-            0x00,
-            "A_recv_chip00_l3",
-            (idx - 1) * data_bytes,
         )
 
     return mem
@@ -202,14 +198,14 @@ def main():
         h = chip_hex(chiplet)
 
         copy_to_chip00 = BingoNode(
-            assigned_chiplet_id=chiplet,
+            assigned_chiplet_id=0x00,
             assigned_cluster_id=0,
             assigned_core_id=DMA_CORE,
-            node_name=f"Copy_A{idx + 1}_Chip{h}_L3_to_Chip00",
+            node_name=f"Pull_A{idx + 1}_Chip{h}_L3_to_Chip00",
             kernel_name="__snax_bingo_kernel_idma_1d_copy",
             kernel_args=SnaxBingoKernelIdma1dCopyArgs(
-                src_addr=mem["local_A_l3"],
-                dst_addr=mem["recv_A_chip00_full"][idx],
+                src_addr=mem["local_A_l3_full"][idx],
+                dst_addr=mem["recv_A_chip00"][idx],
                 size=data_bytes,
             ),
         )
@@ -233,7 +229,7 @@ def main():
         dfg.bingo_add_edge(copy_to_chip00, check_recv)
         prev_remote_check = check_recv
 
-    print(f"Built DFG: load/check A1..A4, then copy/check A2..A4 back to chip00")
+    print(f"Built DFG: load/check A1..A4, then pull/check A2..A4 back to chip00")
     print(f"  active_chiplets={[chip_hex(c) for c in EXPECTED_CHIPLETS]}")
     print(f"  data_bytes={data_bytes}, total_mempool_bytes={num_data * data_bytes}")
     print(f"  mempool_base=0x{mempool_base:x}")
