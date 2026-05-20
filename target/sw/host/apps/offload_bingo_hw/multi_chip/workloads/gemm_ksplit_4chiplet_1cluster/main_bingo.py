@@ -42,7 +42,6 @@ from bingo_kernel_args import (  # noqa E402
     HostBingoKernelInt32DequantizeArgs,
     SnaxBingoKernelGemmFullArgs,
     SnaxBingoKernelIdma1dCopyArgs,
-    SnaxBingoKernelXdma1dCopyArgs,
 )
 from bingo_mem_handle import BingoMemAlloc, BingoMemFixedAddr, BingoMemSymbol  # noqa E402
 from bingo_node import BingoNode  # noqa E402
@@ -304,8 +303,8 @@ def main():
                 assigned_cluster_id=0,
                 assigned_core_id=DMA_CORE,
                 node_name=f"Copy_D_partial_k{i}_Chip{h}_to_Chip00_L3",
-                kernel_name="__snax_bingo_kernel_xdma_1d_copy",
-                kernel_args=SnaxBingoKernelXdma1dCopyArgs(
+                kernel_name="__snax_bingo_kernel_idma_1d_copy",
+                kernel_args=SnaxBingoKernelIdma1dCopyArgs(
                     src_addr=l3_D_local[i],
                     dst_addr=chiplet_full_addr_expr(reduction_chiplet,
                                                    "D_partial_remote_chip00_l3"),

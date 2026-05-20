@@ -160,8 +160,15 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         # We generate exit nodes for each chiplet in parallel
         print("Adding exit nodes for each chiplet...")
         for chiplet_id in self.chiplet_ids:
+            # A chiplet is locally done when no successor remains on that same
+            # chiplet; remote successors are completion signals for other chips.
             local_end_nodes = [
-                node for node in self.node_list if node.assigned_chiplet_id == chiplet_id and self.out_degree(node) == 0
+                node for node in self.node_list
+                if node.assigned_chiplet_id == chiplet_id
+                and not any(
+                    succ.assigned_chiplet_id == chiplet_id
+                    for succ in self.successors(node)
+                )
             ]
             current_chiplet_exit_nodes = []
             
