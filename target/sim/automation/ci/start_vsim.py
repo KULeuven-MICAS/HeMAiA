@@ -157,10 +157,18 @@ def _copy_path(src: Path, dst: Path) -> None:
 def _simple_task_yaml_loader(task_yaml: Path) -> Dict:
     """Parse the limited ``task_vsim.yaml`` format without PyYAML.
 
-    Supports only the structure used by this project: a top-level ``runs:``
-    key containing a sequence of named blocks, each with ``- KEY: VALUE``
-    attribute entries.
+    Supports a top-level ``runs:`` key containing a sequence of dict entries,
+    each with one or more ``KEY: VALUE`` attribute lines (the first key sits
+    on the same line as the ``- `` dash).
     """
+    def _parse_kv(text: str):
+        k, v = [s.strip() for s in text.split(":", 1)]
+        if (v.startswith('"') and v.endswith('"')) or (
+            v.startswith("'") and v.endswith("'")
+        ):
+            v = v[1:-1]
+        return k, v
+
     runs: list = []
     with task_yaml.open("r") as f:
         lines = f.readlines()
@@ -173,41 +181,41 @@ def _simple_task_yaml_loader(task_yaml: Path) -> Dict:
             break
         i += 1
 
-    # Parse each ``- name:`` block
+    current: Dict[str, str] = None
+    item_indent: int = None
+
     while i < len(lines):
         raw = lines[i]
         stripped = raw.lstrip()
-        if not stripped:
+        if not stripped or stripped.startswith("#"):
             i += 1
             continue
+        indent = len(raw) - len(stripped)
+
         if stripped.startswith("- "):
+            if current is not None:
+                runs.append(current)
+                current = None
             after = stripped[2:].strip()
-            if after.endswith(":"):
-                ci_name = after[:-1].strip()
-                attrs: list = []
-                i += 1
-                while i < len(lines):
-                    nl = lines[i]
-                    if not nl.strip():
-                        i += 1
-                        continue
-                    # Stop when indentation returns to the parent level
-                    if (len(nl) - len(nl.lstrip())) <= (len(raw) - len(stripped)):
-                        break
-                    nstripped = nl.lstrip()
-                    if nstripped.startswith("- "):
-                        after_dash = nstripped[2:].strip()
-                        if ":" in after_dash:
-                            k, v = [s.strip() for s in after_dash.split(":", 1)]
-                            if (v.startswith('"') and v.endswith('"')) or (
-                                v.startswith("'") and v.endswith("'")
-                            ):
-                                v = v[1:-1]
-                            attrs.append({k: v})
-                    i += 1
-                runs.append({ci_name: attrs})
-                continue
+            if ":" not in after:
+                break
+            k, v = _parse_kv(after)
+            current = {k: v}
+            item_indent = indent + 2
+        else:
+            if current is None or item_indent is None:
+                break
+            if indent < item_indent:
+                runs.append(current)
+                current = None
+                break
+            if ":" in stripped:
+                k, v = _parse_kv(stripped)
+                current[k] = v
         i += 1
+
+    if current is not None:
+        runs.append(current)
 
     return {"runs": runs}
 
@@ -216,17 +224,26 @@ def _simple_task_yaml_loader(task_yaml: Path) -> Dict:
 # Step 0 -- Parse task definitions
 # ---------------------------------------------------------------------------
 
+def _derive_ci_name(host_app_type: str, chip_type: str, workload: str, dev_app: str) -> str:
+    """Derive a human-readable, unique task name from its attributes."""
+    parts = [host_app_type, chip_type]
+    if workload and workload != "None":
+        parts.append(workload)
+    if dev_app and dev_app != "None":
+        parts.append(dev_app)
+    return "_".join(p for p in parts if p)
+
+
 def step0_parse_tasks(task_yaml: Path) -> List[Dict[str, str]]:
     """Parse CI tasks from *task_yaml*.
 
     Expected YAML structure::
 
         runs:
-          - ci_app_name:
-            - HOST_APP_TYPE: offload_bingo_sw
-            - CHIP_TYPE: single_chip
-            - WORKLOAD: gemm_tiled_1cluster
-            - DEV_APP: snax-bingo-offload
+          - HOST_APP_TYPE: offload_bingo_sw
+            CHIP_TYPE: single_chip
+            WORKLOAD: gemm_tiled_1cluster
+            DEV_APP: snax-bingo-offload
     """
     if yaml is not None:
         with open(task_yaml, "r") as f:
@@ -235,22 +252,21 @@ def step0_parse_tasks(task_yaml: Path) -> List[Dict[str, str]]:
         param_data = _simple_task_yaml_loader(task_yaml)
 
     tasks: List[Dict[str, str]] = []
-    for app_entry in param_data.get("runs", []):
-        ci_app_name = str(list(app_entry.keys())[0])
-        attributes = app_entry[ci_app_name]
-        attr_dict: Dict[str, str] = {}
-        for attr in attributes:
-            attr_dict.update(attr)
-
+    for attr_dict in param_data.get("runs", []):
         if "HOST_APP_TYPE" not in attr_dict:
-            raise ValueError(f"Task {ci_app_name} is missing 'HOST_APP_TYPE'")
+            raise ValueError(f"Task is missing 'HOST_APP_TYPE': {attr_dict}")
+
+        host_app_type = str(attr_dict.get("HOST_APP_TYPE", ""))
+        chip_type     = str(attr_dict.get("CHIP_TYPE", ""))
+        workload      = str(attr_dict.get("WORKLOAD", ""))
+        dev_app       = str(attr_dict.get("DEV_APP", ""))
 
         tasks.append({
-            "host_app_type": str(attr_dict.get("HOST_APP_TYPE", "")),
-            "chip_type":     str(attr_dict.get("CHIP_TYPE", "")),
-            "workload":      str(attr_dict.get("WORKLOAD", "")),
-            "dev_app":       str(attr_dict.get("DEV_APP", "")),
-            "ci_name":       ci_app_name,
+            "host_app_type": host_app_type,
+            "chip_type":     chip_type,
+            "workload":      workload,
+            "dev_app":       dev_app,
+            "ci_name":       _derive_ci_name(host_app_type, chip_type, workload, dev_app),
         })
     return tasks
 

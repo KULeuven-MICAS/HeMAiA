@@ -32,7 +32,7 @@ void bootrom() {
     sys_dma_blk_memcpy(
         chiplet_addr_transform(SPM_NARROW_BASE_ADDR),
         chiplet_addr_transform(WIDE_ZERO_MEM_BASE_ADDR),
-        stack_pointer - chiplet_addr_transform(SPM_NARROW_BASE_ADDR) - 1024);
+        stack_pointer - chiplet_addr_transform(SPM_NARROW_BASE_ADDR) - 128);
     // Initialize Cluster TCDM
     for (uint32_t i = 0; i < N_CLUSTERS_PER_CHIPLET; i++) {
         // CLUSTER_TCDM_BASE_ADDR = QUAD_WIDE_CLUSTER_0_TCDM_BASE_ADDR + i * cluster_offset

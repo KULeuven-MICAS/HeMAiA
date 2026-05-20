@@ -6,7 +6,7 @@
 
 # Application specific settings
 HOST_APP_TYPE = host_only
-CHIP_TYPE     = single_chip
+CHIP_TYPE     = multi_chip
 WORKLOAD      = d2d_link_configurator
 SRCS = src/d2d_link_configurator.c
 BINGO_HOST ?= 0 # True to include the bingo runtime
