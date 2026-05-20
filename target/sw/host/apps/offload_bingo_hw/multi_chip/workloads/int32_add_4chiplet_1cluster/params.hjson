@@ -1,0 +1,8 @@
+{
+    num_chiplets: 4
+    num_clusters: 1
+    // INT32 add reduction across chiplets 00, 01, 10, and 11.
+    // Each A input is 1 KiB = 256 int32 elements. Across A1..A4 the
+    // generated values are 0, 1, 2, ..., 1023.
+    input_bytes: 1024
+}

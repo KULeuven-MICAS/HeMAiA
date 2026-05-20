@@ -49,6 +49,9 @@ from bingo_platform import guard_chiplet_count, guard_cluster_count, parse_platf
 from ksplit_gemm_multi_chiplet_datagen import emit_header_file  # noqa E402
 
 
+LOW_40_BIT_ADDR_MASK = "0x000000ffffffffffULL"
+
+
 def get_args():
     parser = argparse.ArgumentParser(description="gemm_ksplit_4chiplet_1cluster")
     parser.add_argument("--output_dir", type=str, default=".")
@@ -65,7 +68,8 @@ def chip_hex(chiplet_id):
 
 
 def chiplet_full_addr_expr(chiplet_id, symbol_name):
-    return f"(chiplet_addr_transform_full(0x{chiplet_id:02x}, (uint64_t){symbol_name}))"
+    local_addr_expr = f"((uint64_t)((uintptr_t){symbol_name}) & {LOW_40_BIT_ADDR_MASK})"
+    return f"(chiplet_addr_transform_full(0x{chiplet_id:02x}, {local_addr_expr}))"
 
 
 def main():
