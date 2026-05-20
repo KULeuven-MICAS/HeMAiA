@@ -7,6 +7,7 @@
 # Xiaoling Yi <xiaoling.yi@kuleuven.be>
 
 import numpy as np
+import os
 import random
 
 
@@ -345,6 +346,117 @@ def emit_gemm_header_file(**kwargs):
 
     emit_str += data_str
     return "\n\n".join(emit_str)
+
+
+def emit_ksplit_gemm_header_file(workload_name, **kwargs):
+    from data_utils import format_scalar_definition
+    from sim_golden_models import block_gemm_golden_model
+
+    lines = ["#include <stdint.h>"]
+
+    array_shape = kwargs["array_shape"]
+    M = kwargs["M"]
+    K = kwargs["K"]
+    N = kwargs["N"]
+    k_split = kwargs["k_split"]
+    if k_split <= 0:
+        raise ValueError(f"k_split ({k_split}) must be positive")
+    if k_split != 4:
+        raise ValueError(f"{workload_name} expects k_split=4, got {k_split}")
+    if K % k_split != 0:
+        raise ValueError(f"K ({K}) must be divisible by k_split ({k_split})")
+
+    data_type = kwargs.get("data_type", 0)
+    meshRow, tileSize, meshCol = get_gemm_mesh_dims(kwargs)
+
+    K_tile = K // k_split
+    A_tile_bytes = M * K_tile * meshRow * tileSize
+    B_tile_bytes = K_tile * N * tileSize * meshCol
+    D_num_elements = M * N * meshRow * meshCol
+    D_bytes = D_num_elements * 4
+
+    lines.append(f"// K-split GEMM: M={M} K={K} N={N} k_split={k_split}")
+    lines.append(f"// K_tile={K_tile} mesh={meshRow}x{tileSize}x{meshCol}")
+
+    np.random.seed(42)
+    A_full = np.random.randint(-128, 127, size=(M, K, meshRow, tileSize)).astype(
+        np.int8
+    )
+    B_full = np.random.randint(-128, 127, size=(K, N, tileSize, meshCol)).astype(
+        np.int8
+    )
+
+    A_tiles = []
+    B_tiles = []
+    partial_Ds = []
+    C_zero = np.zeros(D_num_elements, dtype=np.int32)
+
+    for k_idx in range(k_split):
+        ks = k_idx * K_tile
+        ke = ks + K_tile
+        A_k = A_full[:, ks:ke, :, :].reshape(-1).copy()
+        B_k = B_full[ks:ke, :, :, :].reshape(-1).copy()
+        D_k = block_gemm_golden_model(
+            M,
+            K_tile,
+            N,
+            meshRow,
+            tileSize,
+            meshCol,
+            A_k,
+            B_k,
+            0,
+            0,
+            C_zero.copy(),
+        )
+        A_tiles.append(A_k.astype(np.int8))
+        B_tiles.append(B_k.astype(np.int8))
+        partial_Ds.append(D_k.astype(np.int32))
+
+    mempool_arrays = []
+    mempool_arrays.extend(A_tiles)
+    mempool_arrays.extend(B_tiles)
+    mempool_arrays.extend(partial_Ds)
+
+    running_sum = partial_Ds[0].copy()
+    for k_idx in range(1, k_split):
+        running_sum = (
+            running_sum.astype(np.int64) + partial_Ds[k_idx].astype(np.int64)
+        ).astype(np.int32)
+        mempool_arrays.append(running_sum.astype(np.int32))
+
+    combined_scale = np.float32(0.0001)
+    golden_fp32_D = (running_sum.astype(np.float32) * combined_scale).astype(
+        np.float32
+    )
+    mempool_arrays.append(golden_fp32_D.astype(np.float32))
+    mempool_arrays.append(np.array([combined_scale], dtype=np.float32))
+
+    out_dir = kwargs.get("out_dir", "./build/")
+    os.makedirs(out_dir, exist_ok=True)
+    with open(os.path.join(out_dir, "mempool.bin"), "wb") as f:
+        for array in mempool_arrays:
+            array.tofile(f)
+
+    for name, val in [
+        ("A_tile_bytes", A_tile_bytes),
+        ("B_tile_bytes", B_tile_bytes),
+        ("D_bytes", D_bytes),
+        ("D_num_elements", D_num_elements),
+        ("k_split", k_split),
+        ("M", M),
+        ("K", K),
+        ("N", N),
+        ("K_tile", K_tile),
+        ("meshRow", meshRow),
+        ("tileSize", tileSize),
+        ("meshCol", meshCol),
+        ("array_shape", array_shape),
+        ("data_type", data_type),
+    ]:
+        lines.append(format_scalar_definition("uint32_t", name, val))
+
+    return "\n\n".join(lines) + "\n"
 
 
 def align_wide_addr(addr, alignment=64):

@@ -1,4 +1,4 @@
-# Copyright 2025 KU Leuven.
+# Copyright 2026 KU Leuven.
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -8,7 +8,7 @@
 MK_DIR   := $(realpath $(dir $(realpath $(lastword $(MAKEFILE_LIST)))))
 HOST_APP_TYPE = offload_bingo_hw
 CHIP_TYPE     = multi_chip
-WORKLOAD      = gemm_parallel_dma_4chiplet_1cluster
+WORKLOAD      = gemm_msplit_4chiplet_1cluster
 DEV_APP       = snax-bingo-offload
 SRCS = ../../src/offload_bingo_hw.c
 BINGO_HOST ?= 1 # True to include the bingo runtime
@@ -41,7 +41,7 @@ PARTIAL_OUTPUTS += $(DATA_H)
 # Add the OFFLOAD_H to partial outputs
 PARTIAL_OUTPUTS += $(OFFLOAD_H)
 
-.PHONY: clean-data clean-offload clean
+.PHONY: clean-data clean
 
 clean-data:
 	rm -f $(DATA_H)

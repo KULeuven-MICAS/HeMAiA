@@ -1,0 +1,7 @@
+{
+    num_clusters: 1
+    // Attention test: FP32 quantize kernel in isolation
+    // X[num_elements] -> quantize -> int8_X, scale
+    array_shape: 0
+    num_elements: 2048
+}

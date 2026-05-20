@@ -1,0 +1,7 @@
+{
+    num_clusters: 1
+    // Attention test: INT32 dequantize kernel in isolation
+    // int32_D -> dequantize (multiply by combined_scale) -> fp32_D
+    array_shape: 0
+    num_elements: 2048
+}

@@ -15,12 +15,11 @@ APPS += gemm_sweep_1cluster
 APPS += xdma_all_ops_1cluster
 APPS += xdma_sweep_1cluster
 APPS += moe4_4cluster
-APPS += attn_test_single_gemm_4cluster
-APPS += attn_test_quantize_4cluster
-APPS += attn_test_dequantize_4cluster
-APPS += attn_test_int32_add_4cluster
-APPS += attn_test_ksplit_gemm_4cluster
-APPS += attn_test_softmax_4cluster
+APPS += basic_quantize_host
+APPS += basic_dequantize_host
+APPS += basic_int32_add_host
+APPS += gemm_ksplit_4cluster
+APPS += basic_softmax_host
 APPS += attn_reference_4cluster
 SUBDIRS = $(addprefix workloads/,$(APPS))
 

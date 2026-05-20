@@ -132,6 +132,7 @@ def emit_matmul_data(**kwargs):
     # -------------------------------------------------------------
     out_dir = kwargs.get("out_dir", "./build/")
     os.makedirs(out_dir, exist_ok=True)
+    # mempool.bin should in 64 MiB limitation
     bin_path = os.path.join(out_dir, "mempool.bin")
 
     # Ensure correct data types for binary layout

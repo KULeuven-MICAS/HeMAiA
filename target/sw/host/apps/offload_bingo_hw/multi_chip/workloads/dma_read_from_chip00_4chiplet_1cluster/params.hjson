@@ -1,0 +1,8 @@
+{
+    num_chiplets: 4
+    num_clusters: 1
+
+    // Four 1 KiB byte-ramp chunks A1..A4 live in the memory chip.
+    num_data: 4
+    data_bytes: 1024
+}
