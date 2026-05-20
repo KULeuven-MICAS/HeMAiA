@@ -8,7 +8,8 @@
 APPS = gemm_msplit_4chiplet_1cluster
 APPS += gemm_parallel_dma_4chiplet_1cluster
 APPS += gemm_ksplit_4chiplet_1cluster
-APPS += dma_across_4chiplet_1cluster
+APPS += dma_read_from_chip00_4chiplet_1cluster
+APPS += dma_write_from_other_chip_4chiplet_1cluster
 
 SUBDIRS = $(addprefix workloads/,$(APPS))
 
