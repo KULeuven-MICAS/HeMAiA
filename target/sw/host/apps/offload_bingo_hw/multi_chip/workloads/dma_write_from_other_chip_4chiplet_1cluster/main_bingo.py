@@ -34,7 +34,7 @@ from bingo_dfg import BingoDFG  # noqa E402
 from bingo_helpers import chiplet_addr_transform_loc  # noqa E402
 from bingo_kernel_args import (  # noqa E402
     HostBingoKernelCheckResultArgs,
-    HostBingoKernelIdmaArgs,
+    HostBingoKernelXdma1dCopyArgs,
 )
 from bingo_mem_handle import BingoMemFixedAddr, BingoMemSymbol  # noqa E402
 from bingo_node import BingoNode  # noqa E402
@@ -167,8 +167,8 @@ def main():
             assigned_cluster_id=0,
             assigned_core_id=HOST_CORE,
             node_name=f"Load_A{idx + 1}_MemChip_to_Chip{h}_L3",
-            kernel_name="__host_bingo_kernel_idma",
-            kernel_args=HostBingoKernelIdmaArgs(
+            kernel_name="__host_bingo_kernel_xdma_1d_copy",
+            kernel_args=HostBingoKernelXdma1dCopyArgs(
                 src_addr=mem["mempool_A"][idx],
                 dst_addr=mem["local_A_l3"],
                 size=data_bytes,
@@ -205,8 +205,8 @@ def main():
             assigned_cluster_id=0,
             assigned_core_id=HOST_CORE,
             node_name=f"Write_A{idx + 1}_Chip{h}_L3_to_Chip00",
-            kernel_name="__host_bingo_kernel_idma",
-            kernel_args=HostBingoKernelIdmaArgs(
+            kernel_name="__host_bingo_kernel_xdma_1d_copy",
+            kernel_args=HostBingoKernelXdma1dCopyArgs(
                 src_addr=mem["local_A_l3"],
                 dst_addr=mem["recv_A_chip00_full"][idx],
                 size=data_bytes,
