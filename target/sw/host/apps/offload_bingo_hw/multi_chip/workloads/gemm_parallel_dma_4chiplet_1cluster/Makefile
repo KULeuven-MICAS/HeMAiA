@@ -8,7 +8,7 @@
 MK_DIR   := $(realpath $(dir $(realpath $(lastword $(MAKEFILE_LIST)))))
 HOST_APP_TYPE = offload_bingo_hw
 CHIP_TYPE     = multi_chip
-WORKLOAD      = gemm_seperate_load_and_compute_parallel_4chiplet_1cluster
+WORKLOAD      = gemm_parallel_dma_4chiplet_1cluster
 DEV_APP       = snax-bingo-offload
 SRCS = ../../src/offload_bingo_hw.c
 BINGO_HOST ?= 1 # True to include the bingo runtime

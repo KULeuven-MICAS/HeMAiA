@@ -6,7 +6,7 @@
 #
 # Xiaoling Yi <xiaoling.yi@kuleuven.be>
 
-"""Data generator for dma_cross_4chiplet_1cluster."""
+"""Data generator for dma_read_from_chip00_4chiplet_1cluster."""
 
 import argparse
 import os
@@ -33,7 +33,9 @@ def emit_header_file(**kwargs):
     num_data = int(kwargs.get("num_data", 4))
     data_bytes = int(kwargs.get("data_bytes", 1024))
     if num_data != 4:
-        raise ValueError(f"dma_cross_4chiplet_1cluster expects num_data=4, got {num_data}")
+        raise ValueError(
+            f"dma_read_from_chip00_4chiplet_1cluster expects num_data=4, got {num_data}"
+        )
     if data_bytes <= 0:
         raise ValueError(f"data_bytes must be positive, got {data_bytes}")
 

@@ -137,13 +137,33 @@ runs:
     DEV_APP: snax-bingo-offload
 
   # ---- offload_bingo_hw / multi_chip ----
-  # gemm_broadcast_4chiplet_1cluster
+  # gemm_msplit_4chiplet_1cluster
   - HOST_APP_TYPE: offload_bingo_hw
     CHIP_TYPE: multi_chip
-    WORKLOAD: gemm_broadcast_4chiplet_1cluster
+    WORKLOAD: gemm_msplit_4chiplet_1cluster
     DEV_APP: snax-bingo-offload
   # gemm_parallel_dma_4chiplet_1cluster
   - HOST_APP_TYPE: offload_bingo_hw
     CHIP_TYPE: multi_chip
     WORKLOAD: gemm_parallel_dma_4chiplet_1cluster
+    DEV_APP: snax-bingo-offload
+  # gemm_ksplit_4chiplet_1cluster
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: multi_chip
+    WORKLOAD: gemm_ksplit_4chiplet_1cluster
+    DEV_APP: snax-bingo-offload
+  # int32_add_4chiplet_1cluster
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: multi_chip
+    WORKLOAD: int32_add_4chiplet_1cluster
+    DEV_APP: snax-bingo-offload
+  # dma_read_from_chip00_4chiplet_1cluster
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: multi_chip
+    WORKLOAD: dma_read_from_chip00_4chiplet_1cluster
+    DEV_APP: snax-bingo-offload
+  # dma_write_from_other_chip_4chiplet_1cluster
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: multi_chip
+    WORKLOAD: dma_write_from_other_chip_4chiplet_1cluster
     DEV_APP: snax-bingo-offload
