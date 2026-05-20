@@ -46,6 +46,7 @@ WORKLOAD_NAME = "dma_write_from_other_chip_4chiplet_1cluster"
 EXPECTED_CHIPLETS = [0x00, 0x01, 0x10, 0x11]
 
 HOST_CORE = 2
+LOW_40_BIT_ADDR_MASK = "0x000000ffffffffffULL"
 
 
 def get_args():
@@ -64,11 +65,10 @@ def chip_hex(chiplet_id):
 
 
 def chiplet_symbol_expr(chiplet_id, symbol_name, byte_offset=0):
-    offset = f" + {byte_offset}" if byte_offset else ""
-    return (
-        f"(chiplet_addr_transform_full(0x{chiplet_id:02x}, "
-        f"(uint64_t)((uintptr_t){symbol_name}{offset})))"
-    )
+    local_addr_expr = f"((uint64_t)((uintptr_t){symbol_name}) & {LOW_40_BIT_ADDR_MASK})"
+    if byte_offset:
+        local_addr_expr = f"({local_addr_expr} + {byte_offset})"
+    return f"(chiplet_addr_transform_full(0x{chiplet_id:02x}, {local_addr_expr}))"
 
 
 def validate_platform(platform):

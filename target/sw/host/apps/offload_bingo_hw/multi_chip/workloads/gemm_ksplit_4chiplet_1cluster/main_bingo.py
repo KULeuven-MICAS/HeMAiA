@@ -305,10 +305,10 @@ def main():
             node_copy_D_to_chip0[i] = BingoNode(
                 assigned_chiplet_id=chiplet,
                 assigned_cluster_id=0,
-                assigned_core_id=DMA_CORE,
+                assigned_core_id=HOST_CORE,
                 node_name=f"Copy_D_partial_k{i}_Chip{h}_to_Chip00_L3",
-                kernel_name="__snax_bingo_kernel_idma_1d_copy",
-                kernel_args=SnaxBingoKernelIdma1dCopyArgs(
+                kernel_name="__host_bingo_kernel_idma",
+                kernel_args=HostBingoKernelIdmaArgs(
                     src_addr=l3_D_local[i],
                     dst_addr=chiplet_full_addr_expr(reduction_chiplet,
                                                    "D_partial_remote_chip00_l3"),
