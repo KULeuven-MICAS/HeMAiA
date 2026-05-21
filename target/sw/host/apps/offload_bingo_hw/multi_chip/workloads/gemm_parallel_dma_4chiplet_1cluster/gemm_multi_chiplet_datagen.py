@@ -15,7 +15,7 @@ SIM_UTIL_DIR = os.path.abspath(
 if SIM_UTIL_DIR not in sys.path:
     sys.path.append(SIM_UTIL_DIR)
 
-from snax_utils import (  # noqa E402
+from gemm_sim_utils import (  # noqa E402
     emit_multichip_gemm_header_file,
     run_multichip_gemm_datagen,
 )
