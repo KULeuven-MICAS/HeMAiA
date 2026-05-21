@@ -63,9 +63,10 @@ def emit_matadd_data(**kwargs):
     N = kwargs["N"]
     M2 = kwargs.get("M2", M)
     N2 = kwargs.get("N2", N)
+    K2 = kwargs.get("K2", 1)
     assert (
-        M == 1 and N == 1
-    ), "two-call accumulator reuse test expects exactly one output tile (M=1, N=1)"
+        M == 1 and N == 1 and K2 == 1
+    ), "two-call accumulator reuse test expects one hardware tile (M=1, N=1, K2=1)"
     assert M2 >= 1 and N2 >= 1, "software-loop dimensions M2/N2 must be positive"
 
     data_str += [format_scalar_definition("uint32_t", "M", M)]
@@ -73,6 +74,7 @@ def emit_matadd_data(**kwargs):
     data_str += [format_scalar_definition("uint32_t", "N", N)]
     data_str += [format_scalar_definition("uint32_t", "M2", M2)]
     data_str += [format_scalar_definition("uint32_t", "N2", N2)]
+    data_str += [format_scalar_definition("uint32_t", "K2", K2)]
 
     array_shape = kwargs["array_shape"]
     data_str += [format_scalar_definition("uint32_t", "array_shape", array_shape)]
@@ -663,9 +665,8 @@ def emit_matadd_data(**kwargs):
     if kwargs["transposed_A"] == 1:
         A = A.reshape(M2, K, meshRow, tileSize)
         A = A.transpose(0, 1, 3, 2).reshape(-1)
+    # Streamer memory is K-major; the golden model consumes B as N-major.
     B = B.transpose(1, 0, 3, 2).reshape(-1)
-    if kwargs["transposed_B"] == 1:
-        pass
 
     data_str += [
         format_scalar_definition("int32_t", "transposed_A", kwargs["transposed_A"])

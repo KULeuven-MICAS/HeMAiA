@@ -62,105 +62,141 @@ int main() {
 
     // Call compute core
     if (snrt_cluster_idx() == 0 && snrt_global_core_idx() == 0) {
-        // Set Streamer configuration CSR
-        set_versacore_streamer_csr(
-            delta_local_a, Aslstride, Atlbound, Atlstride,
-            set_addr_remap_index_A, transposed_A, channel_en_A,
-
-            delta_local_b, Bslstride, Btlbound, Btlstride,
-            set_addr_remap_index_B, transposed_B, channel_en_B,
-
-            delta_local_c, Cslstride, Ctlbound, Ctlstride,
-            set_addr_remap_index_C, channel_en_C,
-
-            delta_local_d, D32slstride, D32tlbound, D32tlstride,
-            set_addr_remap_index_D32, channel_en_D, array_shape,
-
-            quantization_enable, shift_i, multiplier_i, input_zp_i, output_zp_i,
-            int32tofp16_enable, int4_a_enable, int4_b_enable);
-
-        // Phase 1: D1 = A1*B1 + C1.
         uint32_t subtraction_setting =
             gen_subtraction_config(subtraction_a, subtraction_b);
+        uint32_t output_tile_elements = d_tile_data_length / sizeof(int32_t);
+        int32_t phase1_cycles = 0;
+        int32_t phase1_streamer_cycles = 0;
+        int32_t phase2_cycles = 0;
+        int32_t phase2_streamer_cycles = 0;
+        int phase1_err = 0;
+        int phase2_err = 0;
 
-        if (stationary == 0) {
-            // Set CSR for output-stationary
-            set_versacore_csr(1, K, N * M, subtraction_setting, array_shape,
-                              data_type);
-        } else {
-            // Set CSR for weight-stationary or input-stationary
-            set_versacore_csr(1, 1, N * K * M, subtraction_setting, array_shape,
-                              data_type);
+        for (uint32_t m2 = 0; m2 < M2; m2++) {
+            for (uint32_t n2 = 0; n2 < N2; n2++) {
+                uint32_t tile_id = m2 * N2 + n2;
+                uint32_t a_addr = delta_local_a + m2 * a_sw_tile_data_length;
+                uint32_t b_addr = delta_local_b + n2 * b_k_tile_data_length;
+                uint32_t c_addr = delta_local_c + tile_id * c_tile_data_length;
+                uint32_t d_addr = delta_local_d + tile_id * d_tile_data_length;
+                int32_t *local_tile_d =
+                    (int32_t *)(snrt_cluster_base_addrl() + d_addr);
+
+                // Phase 1: D1[m2,n2] = A[m2]*B[n2] + C[m2,n2].
+                set_versacore_streamer_csr(
+                    a_addr, Aslstride, Atlbound, Atlstride,
+                    set_addr_remap_index_A, transposed_A, channel_en_A,
+
+                    b_addr, Bslstride, Btlbound, Btlstride,
+                    set_addr_remap_index_B, transposed_B, channel_en_B,
+
+                    c_addr, Cslstride, Ctlbound, Ctlstride,
+                    set_addr_remap_index_C, channel_en_C,
+
+                    d_addr, D32slstride, D32tlbound, D32tlstride,
+                    set_addr_remap_index_D32, channel_en_D, array_shape,
+
+                    quantization_enable, shift_i, multiplier_i, input_zp_i,
+                    output_zp_i, int32tofp16_enable, int4_a_enable,
+                    int4_b_enable);
+
+                if (stationary == 0) {
+                    set_versacore_csr(1, K, N * M, subtraction_setting,
+                                      array_shape, data_type);
+                } else {
+                    set_versacore_csr(1, 1, N * K * M, subtraction_setting,
+                                      array_shape, data_type);
+                }
+
+                start_streamer();
+                start_versacore();
+                wait_versacore_and_streamer();
+
+                int tile_phase1_err = check_versacore_result_D32(
+                    (int8_t *)local_tile_d,
+                    (int8_t *)&D1[tile_id * output_tile_elements],
+                    d_tile_data_length, false);
+                if (tile_phase1_err) {
+                    printf("Phase 1 tile check failed: m2 = %d, n2 = %d, "
+                           "tile_id = %d, Error: %d.\n",
+                           m2, n2, tile_id, tile_phase1_err);
+                }
+                phase1_err += tile_phase1_err;
+                err += tile_phase1_err;
+                phase1_cycles += read_versacore_perf_counter();
+                phase1_streamer_cycles +=
+                    read_versacore_streamer_perf_counter();
+
+                // Phase 2: D2[m2,n2] = A[m2]*B[n2] + D1[m2,n2].
+                set_versacore_streamer_csr(
+                    a_addr, Aslstride, Atlbound, Atlstride,
+                    set_addr_remap_index_A, transposed_A, channel_en_A,
+
+                    b_addr, Bslstride, Btlbound, Btlstride,
+                    set_addr_remap_index_B, transposed_B, channel_en_B,
+
+                    c_addr, Cslstride, Ctlbound_accum, Ctlstride,
+                    set_addr_remap_index_C, channel_en_C_zero,
+
+                    d_addr, D32slstride, D32tlbound, D32tlstride,
+                    set_addr_remap_index_D32, channel_en_D, array_shape,
+
+                    quantization_enable, shift_i, multiplier_i, input_zp_i,
+                    output_zp_i, int32tofp16_enable, int4_a_enable,
+                    int4_b_enable);
+
+                if (stationary == 0) {
+                    set_versacore_csr(0, K, N * M, subtraction_setting,
+                                      array_shape, data_type);
+                } else {
+                    set_versacore_csr(0, 1, N * K * M, subtraction_setting,
+                                      array_shape, data_type);
+                }
+
+                start_streamer();
+                start_versacore();
+                wait_versacore_and_streamer();
+
+                int tile_phase2_err = check_versacore_result_D32(
+                    (int8_t *)local_tile_d,
+                    (int8_t *)&D2[tile_id * output_tile_elements],
+                    d_tile_data_length, false);
+                if (tile_phase2_err) {
+                    printf("Phase 2 tile check failed: m2 = %d, n2 = %d, "
+                           "tile_id = %d, Error: %d.\n",
+                           m2, n2, tile_id, tile_phase2_err);
+                }
+                phase2_err += tile_phase2_err;
+                err += tile_phase2_err;
+                phase2_cycles += read_versacore_perf_counter();
+                phase2_streamer_cycles +=
+                    read_versacore_streamer_perf_counter();
+            }
         }
-
-        // Set CSR to start Streamer
-        start_streamer();
-
-        // Set CSR to start GEMM
-        start_versacore();
-
-        // Poll until Streamer and GEMM accelerator finish
-        wait_versacore_and_streamer();
-
-        err += check_versacore_result_D32((int8_t *)local_d, (int8_t *)D1,
-                                          d_data_length, false);
-        int32_t phase1_cycles = read_versacore_perf_counter();
-        int32_t phase1_streamer_cycles =
-            read_versacore_streamer_perf_counter();
 
         printf(
             "Array shape: %d, meshRow %d, tileSize %d, meshCol %d, stationary: "
-            "%d, SNAX GEMM Accum Phase 1: %s, Error: %d.\n",
-            array_shape, meshRow, tileSize, meshCol, stationary,
-            err ? "FAIL" : "PASS", err);
-
-        // Phase 2: D2 = A1*B1 + D1. C is disabled and the accumulator is reused.
-        set_versacore_streamer_csr(
-            delta_local_a, Aslstride, Atlbound, Atlstride,
-            set_addr_remap_index_A, transposed_A, channel_en_A,
-
-            delta_local_b, Bslstride, Btlbound, Btlstride,
-            set_addr_remap_index_B, transposed_B, channel_en_B,
-
-            delta_local_c, Cslstride, Ctlbound_accum, Ctlstride,
-            set_addr_remap_index_C, channel_en_C_zero,
-
-            delta_local_d, D32slstride, D32tlbound, D32tlstride,
-            set_addr_remap_index_D32, channel_en_D, array_shape,
-
-            quantization_enable, shift_i, multiplier_i, input_zp_i, output_zp_i,
-            int32tofp16_enable, int4_a_enable, int4_b_enable);
-
-        if (stationary == 0) {
-            set_versacore_csr(0, K, N * M, subtraction_setting, array_shape,
-                              data_type);
-        } else {
-            set_versacore_csr(0, 1, N * K * M, subtraction_setting, array_shape,
-                              data_type);
-        }
-
-        start_streamer();
-        start_versacore();
-        wait_versacore_and_streamer();
-
-        err += check_versacore_result_D32((int8_t *)local_d, (int8_t *)D2,
-                                          d_data_length, false);
-        int32_t phase2_cycles = read_versacore_perf_counter();
-        int32_t phase2_streamer_cycles =
-            read_versacore_streamer_perf_counter();
+            "%d, software M2: %d, N2: %d, SNAX GEMM Accum Phase 1: %s, "
+            "Error: %d.\n",
+            array_shape, meshRow, tileSize, meshCol, stationary, M2, N2,
+            phase1_err ? "FAIL" : "PASS", phase1_err);
 
         printf(
             "Array shape: %d, meshRow %d, tileSize %d, meshCol %d, stationary: "
-            "%d, SNAX GEMM Accum Phase 2: %s, Error: %d.\n",
-            array_shape, meshRow, tileSize, meshCol, stationary,
-            err ? "FAIL" : "PASS", err);
+            "%d, software M2: %d, N2: %d, SNAX GEMM Accum Phase 2: %s, "
+            "Error: %d.\n",
+            array_shape, meshRow, tileSize, meshCol, stationary, M2, N2,
+            phase2_err ? "FAIL" : "PASS", phase2_err);
 
-        printf("Workload size: M = %d, N = %d, K = %d\n", M, N, K);
-        printf("SNAX GEMM Accum Ideal cycles per phase: %d\n", M * K * N);
-        printf("SNAX GEMM Accum Phase 1 cycles: %d\n", phase1_cycles);
+        printf("Workload size per VersaCore call: M = %d, N = %d, K = %d\n", M,
+               N, K);
+        printf("Software tile loop: M2 = %d, N2 = %d\n", M2, N2);
+        printf("SNAX GEMM Accum Ideal cycles per phase total: %d\n",
+               M2 * N2 * M * K * N);
+        printf("SNAX GEMM Accum Phase 1 total cycles: %d\n", phase1_cycles);
         printf("SNAX GEMM Accum Phase 1 Streamer cycles: %d\n",
                phase1_streamer_cycles);
-        printf("SNAX GEMM Accum Phase 2 cycles: %d\n", phase2_cycles);
+        printf("SNAX GEMM Accum Phase 2 total cycles: %d\n", phase2_cycles);
         printf("SNAX GEMM Accum Phase 2 Streamer cycles: %d\n",
                phase2_streamer_cycles);
     };
