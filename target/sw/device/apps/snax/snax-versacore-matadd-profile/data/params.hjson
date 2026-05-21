@@ -5,7 +5,8 @@
 // Cluster configuration for a VersaCore accumulator testbench system.
 {
   // Phase 1: D1=A1*B1+C1.
-  // Phase 2: D2=A1*B1+D1, reusing the accumulator.
+  // Phase 2: D2=A1*B1+D1, reusing the one output tile left in the accumulator.
+  // M/N are one-tile hardware bounds; M2/N2 are software-loop dimensions.
   array_shape: 1,
   data_type: 0,
   transposed_A: 1,
@@ -14,7 +15,10 @@
   int4_b_enable: 0,
   K: 2,
   N: 1,
-  M: 4,
+  M: 1,
+  N2: 2,
+  M2: 4,
+  K2: 1,
   channel_en_C: 1,
   // 0 for output, 1 for weight, 2 for input
   stationary: 0,

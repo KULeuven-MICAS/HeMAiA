@@ -61,10 +61,18 @@ def emit_matadd_data(**kwargs):
     M = kwargs["M"]
     K = kwargs["K"]
     N = kwargs["N"]
+    M2 = kwargs.get("M2", M)
+    N2 = kwargs.get("N2", N)
+    assert (
+        M == 1 and N == 1
+    ), "two-call accumulator reuse test expects exactly one output tile (M=1, N=1)"
+    assert M2 >= 1 and N2 >= 1, "software-loop dimensions M2/N2 must be positive"
 
     data_str += [format_scalar_definition("uint32_t", "M", M)]
     data_str += [format_scalar_definition("uint32_t", "K", K)]
     data_str += [format_scalar_definition("uint32_t", "N", N)]
+    data_str += [format_scalar_definition("uint32_t", "M2", M2)]
+    data_str += [format_scalar_definition("uint32_t", "N2", N2)]
 
     array_shape = kwargs["array_shape"]
     data_str += [format_scalar_definition("uint32_t", "array_shape", array_shape)]
@@ -176,6 +184,9 @@ def emit_matadd_data(**kwargs):
     assert a_len == 8, "matadd profile uses int8 A"
     assert b_len == 8, "matadd profile uses int8 B"
     assert c_len == 32, "matadd profile uses int32 C/D"
+    assert (
+        kwargs["transposed_B"] == 1
+    ), "software-loop N2 tiling expects transposed_B=1"
     # -------------------------------------------------------------
     # -----------------------A streamer setting-------------------------------
     # --------------------------------------------------------------
@@ -243,7 +254,14 @@ def emit_matadd_data(**kwargs):
         "int32_t channel_en_A[] = { " + ", ".join(map(str, channel_en_A)) + " };"
     ]
 
-    a_data_length = M * K * meshRow * tileSize * a_len / 8  # in bytes
+    a_k_tile_data_length = int(meshRow * tileSize * a_len / 8)
+    a_sw_tile_data_length = int(K * a_k_tile_data_length)
+    a_data_length = int(M2 * a_sw_tile_data_length)
+    data_str += [
+        format_scalar_definition(
+            "int32_t", "a_sw_tile_data_length", a_sw_tile_data_length
+        )
+    ]
     data_str += [format_scalar_definition("int32_t", "a_data_length", a_data_length)]
 
     # -------------------------------------------------------------
@@ -252,11 +270,13 @@ def emit_matadd_data(**kwargs):
 
     data_str += [format_scalar_definition("int32_t", "Bslstride0", bankWidth / 8)]
 
+    b_k_tile_data_length = int(tileSize * meshCol * b_len / 8)
+
     if stationary == output_stationary:
         Btlbound0 = K
-        Btlstride0 = b_len * tileSize * meshCol / 8
+        Btlstride0 = N2 * b_k_tile_data_length
         Btlbound1 = N
-        Btlstride1 = K * b_len * tileSize * meshCol / 8
+        Btlstride1 = K * N2 * b_k_tile_data_length
         Btlbound2 = M
         Btlstride2 = 0
     elif stationary == weight_stationary:
@@ -297,7 +317,10 @@ def emit_matadd_data(**kwargs):
         "int32_t channel_en_B[] = { " + ", ".join(map(str, channel_en_B)) + " };"
     ]
 
-    b_data_length = K * N * tileSize * meshCol * b_len / 8  # in bytes
+    data_str += [
+        format_scalar_definition("int32_t", "b_k_tile_data_length", b_k_tile_data_length)
+    ]
+    b_data_length = int(K * N2 * b_k_tile_data_length)
     data_str += [format_scalar_definition("int32_t", "b_data_length", b_data_length)]
 
     # -----------------------------------------------------------
@@ -389,7 +412,11 @@ def emit_matadd_data(**kwargs):
         + " };"
     ]
 
-    c_data_length = M * N * meshRow * meshCol * c_len / 8
+    c_tile_data_length = int(meshRow * meshCol * c_len / 8)
+    c_data_length = int(M2 * N2 * c_tile_data_length)
+    data_str += [
+        format_scalar_definition("int32_t", "c_tile_data_length", c_tile_data_length)
+    ]
     data_str += [format_scalar_definition("int32_t", "c_data_length", c_data_length)]
 
     # -----------------------------------------------------------
@@ -550,11 +577,20 @@ def emit_matadd_data(**kwargs):
         "int32_t channel_en_D[] = { " + ", ".join(map(str, channel_en_D)) + " };"
     ]
 
-    d_data_length = (
-        M * N * meshRow * meshCol * datapath_extension_d_len / 8
-        if kwargs["quantization_enable"] == 1 or kwargs["int32tofp16_enable"] == 1
-        else M * N * meshRow * meshCol * non_datapath_extension_d_len / 8
+    d_tile_data_length = int(
+        meshRow
+        * meshCol
+        * (
+            datapath_extension_d_len
+            if kwargs["quantization_enable"] == 1 or kwargs["int32tofp16_enable"] == 1
+            else non_datapath_extension_d_len
+        )
+        / 8
     )
+    d_data_length = int(M2 * N2 * d_tile_data_length)
+    data_str += [
+        format_scalar_definition("int32_t", "d_tile_data_length", d_tile_data_length)
+    ]
     data_str += [format_scalar_definition("int32_t", "d_data_length", d_data_length)]
 
     # -----------------------------------------------------------
@@ -563,12 +599,12 @@ def emit_matadd_data(**kwargs):
 
     delta_local_a = 0
     delta_local_a = align_wide_addr(delta_local_a, snax_acc_cfg["granularity_a"] * 8)
-    delta_local_b = K * M * (meshRow * tileSize * a_len / 8)
+    delta_local_b = a_data_length
     # the address alignment for B is 128 bytes
     # in the new sparse interconnect
     # as the data granularity now is 16*64 bits!!!
     delta_local_b = align_wide_addr(delta_local_b, snax_acc_cfg["granularity_b"] * 8)
-    delta_local_c = delta_local_b + K * N * (meshCol * tileSize * b_len / 8)
+    delta_local_c = delta_local_b + b_data_length
     # the address alignment for B is 32 bytes
     # in the new sparse interconnect
     # as the data granularity now is 4*64 bits!!!
@@ -604,27 +640,32 @@ def emit_matadd_data(**kwargs):
     B_MIN, B_MAX = signed_int_range(b_len)
     C_MIN, C_MAX = -2_000_000, 2_000_000
 
-    A = np.random.randint(A_MIN, A_MAX, size=(M, K, meshRow, tileSize)).reshape(-1)
+    A = np.random.randint(A_MIN, A_MAX, size=(M2, K, meshRow, tileSize))
     data_str += [
-        format_vector_definition("int8_t", "A", A, hex_bits=8, cast_hex=True)
+        format_vector_definition(
+            "int8_t", "A", A.reshape(-1), hex_bits=8, cast_hex=True
+        )
     ]
 
-    B = np.random.randint(B_MIN, B_MAX, size=(K, N, tileSize, meshCol)).reshape(-1)
+    B = np.random.randint(B_MIN, B_MAX, size=(K, N2, tileSize, meshCol))
     data_str += [
-        format_vector_definition("int8_t", "B", B, hex_bits=8, cast_hex=True)
+        format_vector_definition(
+            "int8_t", "B", B.reshape(-1), hex_bits=8, cast_hex=True
+        )
     ]
 
-    C = np.random.randint(C_MIN, C_MAX, size=(M, N, meshRow, meshCol)).reshape(-1)
+    C = np.random.randint(C_MIN, C_MAX, size=(M2, N2, meshRow, meshCol)).reshape(-1)
     data_str += [
         format_vector_definition("int32_t", "C", C, hex_bits=32, cast_hex=True)
     ]
 
+    A = A.reshape(-1)
     if kwargs["transposed_A"] == 1:
-        A = A.reshape(M, K, meshRow, tileSize)
+        A = A.reshape(M2, K, meshRow, tileSize)
         A = A.transpose(0, 1, 3, 2).reshape(-1)
+    B = B.transpose(1, 0, 3, 2).reshape(-1)
     if kwargs["transposed_B"] == 1:
-        B = B.reshape(K, N, tileSize, meshCol)
-        B = B.transpose(0, 1, 3, 2).reshape(-1)
+        pass
 
     data_str += [
         format_scalar_definition("int32_t", "transposed_A", kwargs["transposed_A"])
@@ -635,9 +676,9 @@ def emit_matadd_data(**kwargs):
 
     zero_C = np.zeros_like(C)
     AB = block_gemm_golden_model(
-        M,
+        M2,
         K,
-        N,
+        N2,
         meshRow,
         tileSize,
         meshCol,
@@ -649,9 +690,9 @@ def emit_matadd_data(**kwargs):
     )
 
     D1 = block_gemm_golden_model(
-        M,
+        M2,
         K,
-        N,
+        N2,
         meshRow,
         tileSize,
         meshCol,
@@ -661,6 +702,7 @@ def emit_matadd_data(**kwargs):
         subtraction_b,
         C,
     )
+
     D2 = D1 + AB
     data_str += [
         format_vector_definition("int32_t", "D1", D1, hex_bits=32, cast_hex=True)
