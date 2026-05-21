@@ -26,6 +26,7 @@ APPDIR += apps/snax/snax-axi-torture
 APPDIR += apps/snax/snax-axi-torture-devil
 APPDIR += apps/snax/snax-xdma-reshape-multicast
 APPDIR += apps/snax/snax-versacore-matmul-profile
+APPDIR += apps/snax/snax-versacore-matadd-profile
 # In the future we only need this offload bingo app
 APPDIR += apps/snax/snax-bingo-offload
 
@@ -91,4 +92,3 @@ $(1): $(RTDIR) $(ALL_TMPS)
 endef
 
 $(foreach app,$(APPDIR),$(eval $(call APP_template,$(app))))
-

@@ -1,0 +1,23 @@
+// Copyright 2026 KU Leuven.
+// Licensed under the Apache License, Version 2.0, see LICENSE for details.
+// SPDX-License-Identifier: Apache-2.0
+
+// Cluster configuration for a VersaCore accumulator testbench system.
+{
+  // Phase 1: D1=A1*B1+C1.
+  // Phase 2: D2=A1*B1+D1, reusing the accumulator.
+  array_shape: 1,
+  data_type: 0,
+  transposed_A: 1,
+  transposed_B: 1,
+  int4_a_enable: 0,
+  int4_b_enable: 0,
+  K: 2,
+  N: 1,
+  M: 4,
+  channel_en_C: 1,
+  // 0 for output, 1 for weight, 2 for input
+  stationary: 0,
+  quantization_enable: 0,
+  int32tofp16_enable: 0,
+}
