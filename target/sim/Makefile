@@ -114,18 +114,20 @@ VCS_FLAGS += +lint=TFIPC-L
 VCS_FLAGS += -O4
 # Multi-threading compilation
 VCS_FLAGS += -j16
-# Multi-core
-VCS_FLAGS += -fgp
 # Debug Options
 VCS_FLAGS += -assert disable_cover
 # Waveform Visibility
 # for looking at the cells
-VCS_FLAGS += -kdb
 # for looking at the waveform
 # huge performace decline when enabled, use only for debugging
-# VCS_FLAGS += +vcs+fsdbon
-# VCS_FLAGS += -debug_access+f
-# VCS_FLAGS += -debug_access+all
+ifeq ($(SIM_WITH_WAVEFORM), 1)
+	VCS_FLAGS += -kdb
+	VLOGAN_FLAGS += -kdb
+	VHDLAN_FLAGS += -kdb
+	VCS_FLAGS += +vcs+fsdbon
+	VCS_FLAGS += -debug_access+f
+	VCS_FLAGS += -debug_access+all
+endif
 
 # Verilated and compiled Occamy system
 VLT_AR     = ${VLT_BUILDDIR}/Vtestharness__ALL.a
@@ -326,6 +328,7 @@ $(BIN_DIR)/occamy_chip.vcs: $(VCS_BUILDDIR)/compile.sh $(VCS_RUN_SCRIPT)
 	@echo 'cd $$script_dir' >> $@.gui
 	@echo './occamy_chip.vcs -gui -ucli -i ../$(VCS_RUN_SCRIPT) "$$@"' >> $@.gui
 	@chmod +x $@.gui
+
 .PHONY: clean-vcs
 clean-vcs: clean-work
 	rm -rf $(VCS_BUILDDIR) AN.DB work.lib++ vc_hdrs.h $(BIN_DIR)/$(TARGET).vcs $(BIN_DIR)/$(TARGET).vcs.gui $(BIN_DIR)/inter.fsdb $(BIN_DIR)/$(TARGET).vcs.daidir $(BIN_DIR)/verdi_config_file $(BIN_DIR)/verdiLog $(BIN_DIR)/novas* $(BIN_DIR)/ucli.key
