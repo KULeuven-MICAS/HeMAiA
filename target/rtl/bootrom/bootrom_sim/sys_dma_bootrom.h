@@ -28,17 +28,22 @@
     (SYS_IDMA_CFG_BASE_ADDR + IDMA_REG64_1D_LENGTH_LOW_REG_OFFSET)
 
 // conf register (idma_reg64_1d) bit fields:
-//   [0]     decouple_aw   : 1 = send AW only after the first R is received
-//   [1]     decouple_rw   : R and W datapaths decoupled
+//   [0]     decouple_aw   : R-AW coupling. The RTL (idma_channel_coupler.sv) is
+//                           authoritative; the idma_pkg.sv comment is inverted.
+//                           0 = COUPLED  : the write address (AW) is held back until
+//                               the first beat of the matching read arrives, so a
+//                               data-starved write can never grab and hold a shared
+//                               write mux.
+//                           1 = DECOUPLED: AW is issued eagerly, before any read data
+//                               returns -- a starved write can then hold the mux.
+//   [1]     decouple_rw   : R and W datapaths fully decoupled (can deadlock)
 //   [2]     src_reduce_len   [3] dst_reduce_len
 //   [6:4]   src_max_llen     [9:7] dst_max_llen
 //   [10]    enable_nd     : N-D (2D+) transfer mode
 //   [13:11] src_protocol     [16:14] dst_protocol   (0 = AXI)
-// We set ONLY decouple_aw (bit 0); all other fields 0 => plain AXI->AXI 1D copy.
-// decouple_aw breaks the GEMM parallel-DMA deadlock: the host iDMA read no longer
-// backpressures the shared off-chip return when its write-back stalls (that
-// backpressure head-of-line-blocked the cluster's A response).
-#define IDMA_CONF_AXI_MEMCPY (1u << IDMA_REG64_1D_CONF_DECOUPLE_AW_BIT)
+// All fields 0 => plain AXI->AXI 1D copy with decouple_aw=0 (R-AW COUPLED). Coupling
+// avoids the GEMM parallel-DMA deadlock
+#define IDMA_CONF_AXI_MEMCPY (0u)
 
 // The 64-bit src/dst/length each occupy two adjacent 32-bit registers
 // (_LOW then _HIGH); the returned pointer indexes [0]=low, [1]=high.
