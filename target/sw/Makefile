@@ -47,13 +47,15 @@ REGGEN     			       = $(shell $(BENDER) path register_interface)/vendor/lowrisc
 SOURCE_CLINT_DIR            = $(shell $(BENDER) path clint)
 HEMAIA_D2D_LINK_REG_HJSON   = $(shell $(BENDER) path hemaia_d2d_link)/src/ctrl/hemaia_d2d_link_reg.hjson
 HEMAIA_CLK_RST_REG_HJSON    = $(shell $(BENDER) path hemaia_clk_rst_controller)/regs/hemaia_clk_rst_controller_reg.hjson
-IDMA_REG64_1D_HJSON         = $(shell $(BENDER) path idma)/target/rtl/idma_reg64_1d.hjson
+IDMA_ROOT                   = $(shell $(BENDER) path idma)
+IDMA_REG64_1D_HJSON         = $(IDMA_ROOT)/target/rtl/idma_reg64_1d.hjson
 else
 SNITCH_ROOT                 =
 REGGEN     			       =
 SOURCE_CLINT_DIR            =
 HEMAIA_D2D_LINK_REG_HJSON   =
 HEMAIA_CLK_RST_REG_HJSON    =
+IDMA_ROOT                   =
 IDMA_REG64_1D_HJSON         =
 endif
 ###################
@@ -164,6 +166,16 @@ $(PLATFORM_HEADERS_DIR)/hemaia_clk_rst_controller_peripheral.h: $(HEMAIA_CLK_RST
 #############
 # SYS iDMA  #
 #############
+# Upstream iDMA (>= 0.6.x) does not commit the generated register description;
+# it is produced from the frontend template by iDMA's own mario generator.
+# Generate idma_reg64_1d.hjson here, then derive the C header with REGGEN.
+IDMA_GEN            = $(IDMA_ROOT)/util/gen_idma.py
+IDMA_REG_HJSON_TPL  = $(IDMA_ROOT)/src/frontend/reg/tpl/idma_reg.hjson.tpl
+
+$(IDMA_REG64_1D_HJSON): $(IDMA_GEN) $(IDMA_REG_HJSON_TPL)
+	@echo "[IDMA-GEN] Generating $@"
+	@mkdir -p $(dir $@)
+	@python3 $(IDMA_GEN) --entity reg_hjson --tpl $(IDMA_REG_HJSON_TPL) --fids reg64_1d > $@
 
 $(PLATFORM_HEADERS_DIR)/idma_reg64_1d.h: $(IDMA_REG64_1D_HJSON) | $(PLATFORM_HEADERS_DIR)
 	$(call reggen_generate_header,$@,$<)

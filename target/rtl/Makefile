@@ -45,10 +45,12 @@ ifeq ($(IS_CLEAN_GOAL),)
 SNITCH_ROOT           = $(shell $(BENDER) path snitch_cluster)
 SOURCE_CLINT_DIR      = $(shell $(BENDER) path clint)
 REGGEN     	         = $(shell $(BENDER) path register_interface)/vendor/lowrisc_opentitan/util/regtool.py
+IDMA_ROOT             = $(shell $(BENDER) path idma)
 else
 SNITCH_ROOT           =
 SOURCE_CLINT_DIR      =
 REGGEN     	         =
+IDMA_ROOT             =
 endif
 
 
@@ -60,8 +62,8 @@ CFG		     ?= $(ROOT)/target/rtl/cfg/lru.hjson
 .PHONY: all clean
 all: rtl
 
-.PHONY: rtl clint plic socctrl quadperiph soc
-.PHONY: clean-rtl-src clean-rtl clean-clint clean-plic clean-socctrl clean-quadperiph clean-snax-cluster clean-soc
+.PHONY: rtl clint plic socctrl quadperiph soc idma
+.PHONY: clean-rtl-src clean-rtl clean-clint clean-plic clean-socctrl clean-quadperiph clean-snax-cluster clean-soc clean-idma
 
 clean: clean-rtl-src
 ###############
@@ -70,8 +72,8 @@ clean: clean-rtl-src
 
 
 
-rtl: clint plic socctrl quadperiph soc snax-cluster src/bender_targets.tmp
-clean-rtl: clean-clint clean-plic clean-socctrl clean-quadperiph clean-soc clean-snax-cluster
+rtl: clint plic socctrl quadperiph soc snax-cluster idma src/bender_targets.tmp
+clean-rtl: clean-clint clean-plic clean-socctrl clean-quadperiph clean-soc clean-snax-cluster clean-idma
 clean-rtl-src:
 	rm -rf $(TARGET_SRC_DIR)
 	rm -rf .snax_cluster_occamygen_targets_group
@@ -97,6 +99,33 @@ snax-cluster: .snax_cluster_occamygen_targets_group
 	@touch $@
 clean-snax-cluster:
 	rm -rf .snax_cluster_occamygen_targets_group
+
+############
+# SYS iDMA #
+############
+# Upstream iDMA (>= 0.6.x) does not commit its generated RTL. The package's
+# Bender.yml references target/rtl/idma_generated.sv (the concatenated RTL,
+# pulled in by bender target `rtl`) and the target/rtl/include dir (tracer.svh).
+# Delegate to iDMA's own makefile to produce them, resolving all paths via
+# HeMAiA's bender so no nested dependency resolution runs inside the checkout.
+IDMA_GENERATED_RTL = $(IDMA_ROOT)/target/rtl/idma_generated.sv
+IDMA_TRACER_SVH    = $(IDMA_ROOT)/target/rtl/include/idma/tracer.svh
+
+idma:
+	@echo "[IDMA-GEN] Generate iDMA RTL (idma_generated.sv, tracer.svh)"
+	@$(MAKE) -C $(IDMA_ROOT) -f idma.mk \
+		IDMA_ROOT=$(IDMA_ROOT) \
+		IDMA_REGTOOL=$(REGGEN) \
+		BENDER=$(BENDER) \
+		$(IDMA_GENERATED_RTL) $(IDMA_TRACER_SVH)
+# NOTE: IDMA_ROOT is intentionally empty for clean goals (no bender call),
+# so resolve the path here and guard against an empty result before removing.
+clean-idma:
+	@idma_root="$$($(BENDER) path idma 2>/dev/null)"; \
+	if [ -n "$$idma_root" ] && [ -d "$$idma_root/target/rtl" ]; then \
+		echo "[IDMA-GEN] Clean generated iDMA RTL in $$idma_root/target/rtl"; \
+		rm -rf "$$idma_root/target/rtl"/*.sv "$$idma_root/target/rtl"/*.hjson "$$idma_root/target/rtl/include"; \
+	fi
 
 #######
 # SOC #
