@@ -335,14 +335,13 @@ module ${name}_soc
 
   <% out_sys_idma_cfg = soc_narrow_xbar.__dict__["out_sys_idma_cfg"] \
   .atomic_adapter(context, filter=True, max_trans=max_trans_atop_filter_per, name="out_sys_idma_cfg_noatop", inst_name="i_out_sys_idma_cfg_atop_filter") \
+  .change_dw(context, 32, "out_sys_idma_cfg_dw") \
   %>\
-
-  // .change_dw(context, 32, "out_sys_idma_cfg_dw") \
 
   <% in_sys_idma_mst  = soc_wide_xbar.__dict__["in_sys_idma_mst"] %>\
 
   // local regbus definition
-  `REG_BUS_TYPEDEF_ALL(idma_cfg_reg_a${wide_in.aw}_d64, logic [${wide_in.aw-1}:0], logic [63:0], logic [7:0])
+  `REG_BUS_TYPEDEF_ALL(idma_cfg_reg_a${wide_in.aw}_d32, logic [${wide_in.aw-1}:0], logic [31:0], logic [3:0])
 
   localparam int unsigned SysIdmaTFLenWidth = ${in_sys_idma_mst.aw};
 
@@ -364,8 +363,8 @@ module ${name}_soc
   typedef struct packed { sys_idma_axi_write_meta_t axi;            } sys_idma_write_meta_channel_t;
 
   // 1-element regbus arrays for the NumRegs=1 frontend port
-  idma_cfg_reg_a${wide_in.aw}_d64_req_t [0:0] idma_cfg_reg_req;
-  idma_cfg_reg_a${wide_in.aw}_d64_rsp_t [0:0] idma_cfg_reg_rsp;
+  idma_cfg_reg_a${wide_in.aw}_d32_req_t [0:0] idma_cfg_reg_req;
+  idma_cfg_reg_a${wide_in.aw}_d32_rsp_t [0:0] idma_cfg_reg_rsp;
 
   // frontend <-> backend datapath
   sys_idma_req_t        sys_idma_req;
@@ -389,8 +388,8 @@ module ${name}_soc
     .USER_WIDTH( ${out_sys_idma_cfg.uw}                 ),
     .axi_req_t ( ${out_sys_idma_cfg.req_type()}         ),
     .axi_rsp_t ( ${out_sys_idma_cfg.rsp_type()}         ),
-    .reg_req_t ( idma_cfg_reg_a${wide_in.aw}_d64_req_t  ),
-    .reg_rsp_t ( idma_cfg_reg_a${wide_in.aw}_d64_rsp_t  )
+    .reg_req_t ( idma_cfg_reg_a${wide_in.aw}_d32_req_t  ),
+    .reg_rsp_t ( idma_cfg_reg_a${wide_in.aw}_d32_rsp_t  )
   ) i_axi_to_reg_sys_idma_cfg (
     .clk_i,
     .rst_ni,
@@ -404,8 +403,8 @@ module ${name}_soc
   idma_reg64_1d #(
     .NumRegs    ( 32'd1 ),
     .NumStreams ( 32'd1 ),
-    .reg_req_t  ( idma_cfg_reg_a${wide_in.aw}_d64_req_t ),
-    .reg_rsp_t  ( idma_cfg_reg_a${wide_in.aw}_d64_rsp_t ),
+    .reg_req_t  ( idma_cfg_reg_a${wide_in.aw}_d32_req_t ),
+    .reg_rsp_t  ( idma_cfg_reg_a${wide_in.aw}_d32_rsp_t ),
     .dma_req_t  ( sys_idma_req_t )
   ) i_idma_reg64_1d_sys_idma (
     .clk_i,
