@@ -47,12 +47,14 @@ REGGEN     			       = $(shell $(BENDER) path register_interface)/vendor/lowrisc
 SOURCE_CLINT_DIR            = $(shell $(BENDER) path clint)
 HEMAIA_D2D_LINK_REG_HJSON   = $(shell $(BENDER) path hemaia_d2d_link)/src/ctrl/hemaia_d2d_link_reg.hjson
 HEMAIA_CLK_RST_REG_HJSON    = $(shell $(BENDER) path hemaia_clk_rst_controller)/regs/hemaia_clk_rst_controller_reg.hjson
+IDMA_REG64_1D_HJSON         = $(shell $(BENDER) path idma)/target/rtl/idma_reg64_1d.hjson
 else
 SNITCH_ROOT                 =
 REGGEN     			       =
 SOURCE_CLINT_DIR            =
 HEMAIA_D2D_LINK_REG_HJSON   =
 HEMAIA_CLK_RST_REG_HJSON    =
+IDMA_REG64_1D_HJSON         =
 endif
 ###################
 # Software Headers#
@@ -73,6 +75,7 @@ PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/occamy_quad_periph.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/snitch_cluster_peripheral.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/hemaia_d2d_link_peripheral.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/hemaia_clk_rst_controller_peripheral.h
+PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/idma_reg64_1d.h
 # OCCAMYGEN headers
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/occamy_memory_map.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/occamy.h
@@ -156,6 +159,13 @@ $(PLATFORM_HEADERS_DIR)/hemaia_d2d_link_peripheral.h: $(HEMAIA_D2D_LINK_REG_HJSO
 #######################
 
 $(PLATFORM_HEADERS_DIR)/hemaia_clk_rst_controller_peripheral.h: $(HEMAIA_CLK_RST_REG_HJSON) | $(PLATFORM_HEADERS_DIR)
+	$(call reggen_generate_header,$@,$<)
+
+#############
+# SYS iDMA  #
+#############
+
+$(PLATFORM_HEADERS_DIR)/idma_reg64_1d.h: $(IDMA_REG64_1D_HJSON) | $(PLATFORM_HEADERS_DIR)
 	$(call reggen_generate_header,$@,$<)
 
 # OCCAMYGEN headers
