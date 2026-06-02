@@ -8,6 +8,7 @@
 `include "axi/typedef.svh"
 `include "register_interface/typedef.svh"
 `include "common_cells/assertions.svh"
+`include "idma/typedef.svh"
 
 module hemaia_mem_chip #(
     // XDMA Defines
@@ -158,6 +159,8 @@ module hemaia_mem_chip #(
                       logic [47:0], logic [2:0], logic [63:0], logic [7:0], logic [0:0])
   `AXI_TYPEDEF_ALL_CT(axi_a48_d64_i4_u1, axi_a48_d64_i4_u1_req_t, axi_a48_d64_i4_u1_resp_t,
                       logic [47:0], logic [3:0], logic [63:0], logic [7:0], logic [0:0])
+  `AXI_TYPEDEF_ALL_CT(axi_a48_d32_i4_u1, axi_a48_d32_i4_u1_req_t, axi_a48_d32_i4_u1_resp_t,
+                      logic [47:0], logic [3:0], logic [31:0], logic [3:0], logic [0:0])
 
   axi_a48_d512_i4_u1_req_t  axi_wide_mem_sys_to_xbar_req;
   axi_a48_d512_i4_u1_resp_t axi_wide_mem_sys_to_xbar_rsp;
@@ -209,95 +212,194 @@ module hemaia_mem_chip #(
   //  IDMA at Mem Chip for the Broadcast Usage //
   ///////////////////////////////////////////////
 
-  // burst request
-  typedef struct packed {
-    logic [3:0]      id;
-    logic [47:0]     src,         dst;
-    logic [47:0]     num_bytes;
-    axi_pkg::cache_t cache_src,   cache_dst;
-    axi_pkg::burst_t burst_src,   burst_dst;
-    logic            decouple_rw;
-    logic            deburst;
-    logic            serialize;
-  } idma_burst_req_t;
-
   // local regbus definition
-  `REG_BUS_TYPEDEF_ALL(idma_cfg_reg_a48_d64, logic [47:0], logic [63:0], logic [7:0])
+  `REG_BUS_TYPEDEF_ALL(idma_cfg_reg_a48_d32, logic [47:0], logic [31:0], logic [3:0])
 
-  idma_burst_req_t idma_burst_req;
-  logic idma_be_valid;
-  logic idma_be_ready;
-  logic idma_be_idle;
-  logic idma_be_trans_complete;
+  localparam int unsigned SysIdmaTFLenWidth = 48;
 
-  idma_cfg_reg_a48_d64_req_t idma_cfg_reg_req;
-  idma_cfg_reg_a48_d64_rsp_t idma_cfg_reg_rsp;
-  axi_a48_d64_i4_u1_req_t axi_narrow_xbar_to_idma_cfg_req;
+  typedef logic [47:0]                  sys_idma_addr_t;
+  typedef logic [3:0]                   sys_idma_id_t;
+  typedef logic [0:0]                   sys_idma_user_t;
+  typedef logic [SysIdmaTFLenWidth-1:0] sys_idma_tf_len_t;
+
+  // new iDMA request/response structs
+  `IDMA_TYPEDEF_OPTIONS_T(sys_idma_options_t, sys_idma_id_t)
+  `IDMA_TYPEDEF_REQ_T(sys_idma_req_t, sys_idma_tf_len_t, sys_idma_addr_t, sys_idma_options_t, sys_idma_user_t)
+  `IDMA_TYPEDEF_ERR_PAYLOAD_T(sys_idma_err_payload_t, sys_idma_addr_t)
+  `IDMA_TYPEDEF_RSP_T(sys_idma_rsp_t, sys_idma_err_payload_t)
+
+  // backend AXI meta channels (reuse generated channel types -> guaranteed match)
+  typedef struct packed { axi_a48_d512_i4_u1_ar_chan_t ar_chan; } sys_idma_axi_read_meta_t;
+  typedef struct packed { sys_idma_axi_read_meta_t axi;         } sys_idma_read_meta_channel_t;
+  typedef struct packed { axi_a48_d512_i4_u1_aw_chan_t aw_chan; } sys_idma_axi_write_meta_t;
+  typedef struct packed { sys_idma_axi_write_meta_t axi;        } sys_idma_write_meta_channel_t;
+
+  // 1-element regbus arrays for the NumRegs=1 frontend port
+  idma_cfg_reg_a48_d32_req_t [0:0] idma_cfg_reg_req;
+  idma_cfg_reg_a48_d32_rsp_t [0:0] idma_cfg_reg_rsp;
+  axi_a48_d64_i4_u1_req_t  axi_narrow_xbar_to_idma_cfg_req;
   axi_a48_d64_i4_u1_resp_t axi_narrow_xbar_to_idma_cfg_rsp;
+
+  // frontend <-> backend datapath
+  sys_idma_req_t        sys_idma_req;
+  logic                 sys_idma_req_valid, sys_idma_req_ready;
+  sys_idma_rsp_t        sys_idma_rsp;
+  logic                 sys_idma_rsp_valid;
+  idma_pkg::idma_busy_t sys_idma_busy;
+
+  // transfer-id tracking
+  logic [31:0] sys_idma_next_id, sys_idma_done_id;
+  logic        sys_idma_issue, sys_idma_retire;
+
+  // backend split AXI ports (joined below)
+  axi_a48_d512_i4_u1_req_t  sys_idma_axi_read_req,  sys_idma_axi_write_req;
+  axi_a48_d512_i4_u1_resp_t sys_idma_axi_read_rsp,  sys_idma_axi_write_rsp;
+
+  // idma_reg64_1d's reg_top is 32-bit (DW=32). Feeding it a 64-bit reg bus
+  // leaves next_id/done_id (@0x44/0x84) and the _HIGH addr words in the upper,
+  // undriven half -> 4-byte reads return 0 and sys_dma_blk_memcpy never waits.
+  // Downsize the 64-bit narrow-xbar cfg access to 32-bit first.
+  axi_a48_d32_i4_u1_req_t  axi_idma_cfg_dwc_req;
+  axi_a48_d32_i4_u1_resp_t axi_idma_cfg_dwc_rsp;
+
+  axi_dw_converter #(
+      .AxiMaxReads        (16),
+      .AxiSlvPortDataWidth(64),
+      .AxiMstPortDataWidth(32),
+      .AxiAddrWidth       (48),
+      .AxiIdWidth         (4),
+      .aw_chan_t          (axi_a48_d64_i4_u1_aw_chan_t),
+      .mst_w_chan_t       (axi_a48_d32_i4_u1_w_chan_t),
+      .slv_w_chan_t       (axi_a48_d64_i4_u1_w_chan_t),
+      .b_chan_t           (axi_a48_d32_i4_u1_b_chan_t),
+      .ar_chan_t          (axi_a48_d32_i4_u1_ar_chan_t),
+      .mst_r_chan_t       (axi_a48_d32_i4_u1_r_chan_t),
+      .slv_r_chan_t       (axi_a48_d64_i4_u1_r_chan_t),
+      .axi_mst_req_t      (axi_a48_d32_i4_u1_req_t),
+      .axi_mst_resp_t     (axi_a48_d32_i4_u1_resp_t),
+      .axi_slv_req_t      (axi_a48_d64_i4_u1_req_t),
+      .axi_slv_resp_t     (axi_a48_d64_i4_u1_resp_t)
+  ) i_sys_idma_cfg_dw (
+      .clk_i(clk_host),
+      .rst_ni(rst_host_n),
+      .slv_req_i(axi_narrow_xbar_to_idma_cfg_req),
+      .slv_resp_o(axi_narrow_xbar_to_idma_cfg_rsp),
+      .mst_req_o(axi_idma_cfg_dwc_req),
+      .mst_resp_i(axi_idma_cfg_dwc_rsp)
+  );
 
   axi_to_reg #(
       .ADDR_WIDTH(48),
-      .DATA_WIDTH(64),
+      .DATA_WIDTH(32),
       .ID_WIDTH  (4),
       .USER_WIDTH(1),
-      .axi_req_t (axi_a48_d64_i4_u1_req_t),
-      .axi_rsp_t (axi_a48_d64_i4_u1_resp_t),
-      .reg_req_t (idma_cfg_reg_a48_d64_req_t),
-      .reg_rsp_t (idma_cfg_reg_a48_d64_rsp_t)
+      .axi_req_t (axi_a48_d32_i4_u1_req_t),
+      .axi_rsp_t (axi_a48_d32_i4_u1_resp_t),
+      .reg_req_t (idma_cfg_reg_a48_d32_req_t),
+      .reg_rsp_t (idma_cfg_reg_a48_d32_rsp_t)
   ) i_axi_to_reg_sys_idma_cfg (
       .clk_i(clk_host),
       .rst_ni(rst_host_n),
       .testmode_i(1'b0),
-      .axi_req_i(axi_narrow_xbar_to_idma_cfg_req),
-      .axi_rsp_o(axi_narrow_xbar_to_idma_cfg_rsp),
-      .reg_req_o(idma_cfg_reg_req),
-      .reg_rsp_i(idma_cfg_reg_rsp)
+      .axi_req_i(axi_idma_cfg_dwc_req),
+      .axi_rsp_o(axi_idma_cfg_dwc_rsp),
+      .reg_req_o(idma_cfg_reg_req[0]),
+      .reg_rsp_i(idma_cfg_reg_rsp[0])
   );
 
-  idma_reg64_frontend #(
-      .DmaAddrWidth  ('d64),
-      .dma_regs_req_t(idma_cfg_reg_a48_d64_req_t),
-      .dma_regs_rsp_t(idma_cfg_reg_a48_d64_rsp_t),
-      .burst_req_t   (idma_burst_req_t)
-  ) i_idma_reg64_frontend_sys_idma (
-      .clk_i           (clk_host),
-      .rst_ni          (rst_host_n),
-      .dma_ctrl_req_i  (idma_cfg_reg_req),
-      .dma_ctrl_rsp_o  (idma_cfg_reg_rsp),
-      .burst_req_o     (idma_burst_req),
-      .valid_o         (idma_be_valid),
-      .ready_i         (idma_be_ready),
-      .backend_idle_i  (idma_be_idle),
-      .trans_complete_i(idma_be_trans_complete)
+  idma_reg64_1d #(
+      .NumRegs   (32'd1),
+      .NumStreams(32'd1),
+      .reg_req_t (idma_cfg_reg_a48_d32_req_t),
+      .reg_rsp_t (idma_cfg_reg_a48_d32_rsp_t),
+      .dma_req_t (sys_idma_req_t)
+  ) i_idma_reg64_1d_sys_idma (
+      .clk_i         (clk_host),
+      .rst_ni        (rst_host_n),
+      .dma_ctrl_req_i(idma_cfg_reg_req),
+      .dma_ctrl_rsp_o(idma_cfg_reg_rsp),
+      .dma_req_o     (sys_idma_req),
+      .req_valid_o   (sys_idma_req_valid),
+      .req_ready_i   (sys_idma_req_ready),
+      .next_id_i     (sys_idma_next_id),
+      .stream_idx_o  (/* NC */),
+      .done_id_i     (sys_idma_done_id),
+      .busy_i        (sys_idma_busy),
+      .midend_busy_i (1'b0)
+  );
+
+  assign sys_idma_issue  = sys_idma_req_valid & sys_idma_req_ready;
+  assign sys_idma_retire = sys_idma_rsp_valid; // backend rsp_ready tied to 1
+
+  idma_transfer_id_gen #(
+      .IdWidth(32'd32)
+  ) i_sys_idma_transfer_id_gen (
+      .clk_i      (clk_host),
+      .rst_ni     (rst_host_n),
+      .issue_i    (sys_idma_issue),
+      .retire_i   (sys_idma_retire),
+      .next_o     (sys_idma_next_id),
+      .completed_o(sys_idma_done_id)
   );
 
   axi_a48_d512_i4_u1_req_t  axi_idma_to_soc_xbar_req;
   axi_a48_d512_i4_u1_resp_t axi_idma_to_soc_xbar_rsp;
 
-  axi_dma_backend #(
-      .DataWidth     (512),
-      .AddrWidth     (48),
-      .IdWidth       (4),
-      .AxReqFifoDepth('d64),
-      .TransFifoDepth('d16),
-      .BufferDepth   ('d3),
-      .axi_req_t     (axi_a48_d512_i4_u1_req_t),
-      .axi_res_t     (axi_a48_d512_i4_u1_resp_t),
-      .burst_req_t   (idma_burst_req_t),
-      .DmaIdWidth    ('d32),
-      .DmaTracing    (1'b1)
-  ) i_axi_dma_backend_sys_idma (
+  idma_backend_rw_axi #(
+      .DataWidth           (512),
+      .AddrWidth           (48),
+      .UserWidth           (1),
+      .AxiIdWidth          (4),
+      .NumAxInFlight       (32'd64),
+      .BufferDepth         (32'd3),
+      .TFLenWidth          (SysIdmaTFLenWidth),
+      .MemSysDepth         (32'd16),
+      .CombinedShifter     (1'b1),
+      .RAWCouplingAvail    (1'b1),
+      .MaskInvalidData     (1'b1),
+      .HardwareLegalizer   (1'b1),
+      .RejectZeroTransfers (1'b1),
+      .ErrorCap            (idma_pkg::NO_ERROR_HANDLING),
+      .idma_req_t          (sys_idma_req_t),
+      .idma_rsp_t          (sys_idma_rsp_t),
+      .idma_eh_req_t       (idma_pkg::idma_eh_req_t),
+      .idma_busy_t         (idma_pkg::idma_busy_t),
+      .axi_req_t           (axi_a48_d512_i4_u1_req_t),
+      .axi_rsp_t           (axi_a48_d512_i4_u1_resp_t),
+      .read_meta_channel_t (sys_idma_read_meta_channel_t),
+      .write_meta_channel_t(sys_idma_write_meta_channel_t)
+  ) i_idma_backend_rw_axi_sys_idma (
+      .clk_i          (clk_host),
+      .rst_ni         (rst_host_n),
+      .testmode_i     (1'b0),
+      .idma_req_i     (sys_idma_req),
+      .req_valid_i    (sys_idma_req_valid),
+      .req_ready_o    (sys_idma_req_ready),
+      .idma_rsp_o     (sys_idma_rsp),
+      .rsp_valid_o    (sys_idma_rsp_valid),
+      .rsp_ready_i    (1'b1),
+      .idma_eh_req_i  ('0),
+      .eh_req_valid_i (1'b0),
+      .eh_req_ready_o (/* NC */),
+      .axi_read_req_o (sys_idma_axi_read_req),
+      .axi_read_rsp_i (sys_idma_axi_read_rsp),
+      .axi_write_req_o(sys_idma_axi_write_req),
+      .axi_write_rsp_i(sys_idma_axi_write_rsp),
+      .busy_o         (sys_idma_busy)
+  );
+
+  axi_rw_join #(
+      .axi_req_t (axi_a48_d512_i4_u1_req_t),
+      .axi_resp_t(axi_a48_d512_i4_u1_resp_t)
+  ) i_sys_idma_axi_rw_join (
       .clk_i           (clk_host),
       .rst_ni          (rst_host_n),
-      .chip_id_i       (chip_id),
-      .dma_id_i        ('d0),
-      .axi_dma_req_o   (axi_idma_to_soc_xbar_req),
-      .axi_dma_res_i   (axi_idma_to_soc_xbar_rsp),
-      .burst_req_i     (idma_burst_req),
-      .valid_i         (idma_be_valid),
-      .ready_o         (idma_be_ready),
-      .backend_idle_o  (idma_be_idle),
-      .trans_complete_o(idma_be_trans_complete)
+      .slv_read_req_i  (sys_idma_axi_read_req),
+      .slv_read_resp_o (sys_idma_axi_read_rsp),
+      .slv_write_req_i (sys_idma_axi_write_req),
+      .slv_write_resp_o(sys_idma_axi_write_rsp),
+      .mst_req_o       (axi_idma_to_soc_xbar_req),
+      .mst_resp_i      (axi_idma_to_soc_xbar_rsp)
   );
 
   /////////////////
@@ -530,9 +632,6 @@ module hemaia_mem_chip #(
       .en_default_mst_port_i('0),
       .default_mst_port_i   ('0)
   );
-
-  `AXI_TYPEDEF_ALL_CT(axi_a48_d32_i4_u1, axi_a48_d32_i4_u1_req_t, axi_a48_d32_i4_u1_resp_t,
-                      logic [47:0], logic [3:0], logic [31:0], logic [3:0], logic [0:0])
 
   axi_a48_d32_i4_u1_req_t  hemaia_mem_chip_narrow_xbar_to_periph_xbar_dwc_req;
   axi_a48_d32_i4_u1_resp_t hemaia_mem_chip_narrow_xbar_to_periph_xbar_dwc_rsp;

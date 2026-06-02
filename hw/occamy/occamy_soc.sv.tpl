@@ -38,6 +38,7 @@
 `include "common_cells/registers.svh"
 `include "register_interface/typedef.svh"
 `include "axi/assign.svh"
+`include "idma/typedef.svh"
 
 module ${name}_soc
   import ${name}_pkg::*;
@@ -334,35 +335,51 @@ module ${name}_soc
 
   <% out_sys_idma_cfg = soc_narrow_xbar.__dict__["out_sys_idma_cfg"] \
   .atomic_adapter(context, filter=True, max_trans=max_trans_atop_filter_per, name="out_sys_idma_cfg_noatop", inst_name="i_out_sys_idma_cfg_atop_filter") \
+  .change_dw(context, 32, "out_sys_idma_cfg_dw") \
   %>\
-
-  // .change_dw(context, 32, "out_sys_idma_cfg_dw") \
 
   <% in_sys_idma_mst  = soc_wide_xbar.__dict__["in_sys_idma_mst"] %>\
 
-  // burst request
-  typedef struct packed {
-    logic [${wide_in.iw-1}:0] id;
-    logic [${wide_in.aw-1}:0] src, dst;
-    logic [${wide_in.aw-1}:0] num_bytes;
-    axi_pkg::cache_t    cache_src, cache_dst;
-    axi_pkg::burst_t    burst_src, burst_dst;
-    logic               decouple_rw;
-    logic               deburst;
-    logic               serialize;
-  } idma_burst_req_t;
-
   // local regbus definition
-  `REG_BUS_TYPEDEF_ALL(idma_cfg_reg_a${wide_in.aw}_d64, logic [${wide_in.aw-1}:0], logic [63:0], logic [7:0])
+  `REG_BUS_TYPEDEF_ALL(idma_cfg_reg_a${wide_in.aw}_d32, logic [${wide_in.aw-1}:0], logic [31:0], logic [3:0])
 
-  idma_burst_req_t idma_burst_req;
-  logic idma_be_valid;
-  logic idma_be_ready;
-  logic idma_be_idle;
-  logic idma_be_trans_complete;
+  localparam int unsigned SysIdmaTFLenWidth = ${in_sys_idma_mst.aw};
 
-  idma_cfg_reg_a${wide_in.aw}_d64_req_t idma_cfg_reg_req;
-  idma_cfg_reg_a${wide_in.aw}_d64_rsp_t idma_cfg_reg_rsp;
+  typedef logic [${in_sys_idma_mst.aw-1}:0]   sys_idma_addr_t;
+  typedef logic [${in_sys_idma_mst.iw-1}:0]   sys_idma_id_t;
+  typedef logic [${in_sys_idma_mst.uw-1}:0]   sys_idma_user_t;
+  typedef logic [SysIdmaTFLenWidth-1:0]       sys_idma_tf_len_t;
+
+  // new iDMA request/response structs (explicit macros so user width = wide bus uw)
+  `IDMA_TYPEDEF_OPTIONS_T(sys_idma_options_t, sys_idma_id_t)
+  `IDMA_TYPEDEF_REQ_T(sys_idma_req_t, sys_idma_tf_len_t, sys_idma_addr_t, sys_idma_options_t, sys_idma_user_t)
+  `IDMA_TYPEDEF_ERR_PAYLOAD_T(sys_idma_err_payload_t, sys_idma_addr_t)
+  `IDMA_TYPEDEF_RSP_T(sys_idma_rsp_t, sys_idma_err_payload_t)
+
+  // backend AXI meta channels (reuse solder-generated channel types -> guaranteed match)
+  typedef struct packed { ${in_sys_idma_mst.ar_chan_type()} ar_chan; } sys_idma_axi_read_meta_t;
+  typedef struct packed { sys_idma_axi_read_meta_t axi;             } sys_idma_read_meta_channel_t;
+  typedef struct packed { ${in_sys_idma_mst.aw_chan_type()} aw_chan; } sys_idma_axi_write_meta_t;
+  typedef struct packed { sys_idma_axi_write_meta_t axi;            } sys_idma_write_meta_channel_t;
+
+  // 1-element regbus arrays for the NumRegs=1 frontend port
+  idma_cfg_reg_a${wide_in.aw}_d32_req_t [0:0] idma_cfg_reg_req;
+  idma_cfg_reg_a${wide_in.aw}_d32_rsp_t [0:0] idma_cfg_reg_rsp;
+
+  // frontend <-> backend datapath
+  sys_idma_req_t        sys_idma_req;
+  logic                 sys_idma_req_valid, sys_idma_req_ready;
+  sys_idma_rsp_t        sys_idma_rsp;
+  logic                 sys_idma_rsp_valid;
+  idma_pkg::idma_busy_t sys_idma_busy;
+
+  // transfer-id tracking
+  logic [31:0] sys_idma_next_id, sys_idma_done_id;
+  logic        sys_idma_issue, sys_idma_retire;
+
+  // backend split AXI ports (joined below)
+  ${in_sys_idma_mst.req_type()} sys_idma_axi_read_req,  sys_idma_axi_write_req;
+  ${in_sys_idma_mst.rsp_type()} sys_idma_axi_read_rsp,  sys_idma_axi_write_rsp;
 
   axi_to_reg #(
     .ADDR_WIDTH( ${out_sys_idma_cfg.aw}                 ),
@@ -371,59 +388,108 @@ module ${name}_soc
     .USER_WIDTH( ${out_sys_idma_cfg.uw}                 ),
     .axi_req_t ( ${out_sys_idma_cfg.req_type()}         ),
     .axi_rsp_t ( ${out_sys_idma_cfg.rsp_type()}         ),
-    .reg_req_t ( idma_cfg_reg_a${wide_in.aw}_d64_req_t  ),
-    .reg_rsp_t ( idma_cfg_reg_a${wide_in.aw}_d64_rsp_t  )
+    .reg_req_t ( idma_cfg_reg_a${wide_in.aw}_d32_req_t  ),
+    .reg_rsp_t ( idma_cfg_reg_a${wide_in.aw}_d32_rsp_t  )
   ) i_axi_to_reg_sys_idma_cfg (
     .clk_i,
     .rst_ni,
     .testmode_i ( 1'b0                           ),
     .axi_req_i  ( ${out_sys_idma_cfg.req_name()} ),
     .axi_rsp_o  ( ${out_sys_idma_cfg.rsp_name()} ),
-    .reg_req_o  ( idma_cfg_reg_req               ),
-    .reg_rsp_i  ( idma_cfg_reg_rsp               )
+    .reg_req_o  ( idma_cfg_reg_req[0]            ),
+    .reg_rsp_i  ( idma_cfg_reg_rsp[0]            )
   );
 
-  idma_reg64_frontend #(
-    .DmaAddrWidth    ( 'd64                                  ),
-    .dma_regs_req_t  ( idma_cfg_reg_a${wide_in.aw}_d64_req_t ),
-    .dma_regs_rsp_t  ( idma_cfg_reg_a${wide_in.aw}_d64_rsp_t ),
-    .burst_req_t     ( idma_burst_req_t                      )
-  ) i_idma_reg64_frontend_sys_idma (
+  idma_reg64_1d #(
+    .NumRegs    ( 32'd1 ),
+    .NumStreams ( 32'd1 ),
+    .reg_req_t  ( idma_cfg_reg_a${wide_in.aw}_d32_req_t ),
+    .reg_rsp_t  ( idma_cfg_reg_a${wide_in.aw}_d32_rsp_t ),
+    .dma_req_t  ( sys_idma_req_t )
+  ) i_idma_reg64_1d_sys_idma (
     .clk_i,
     .rst_ni,
-    .dma_ctrl_req_i   ( idma_cfg_reg_req       ),
-    .dma_ctrl_rsp_o   ( idma_cfg_reg_rsp       ),
-    .burst_req_o      ( idma_burst_req         ),
-    .valid_o          ( idma_be_valid          ),
-    .ready_i          ( idma_be_ready          ),
-    .backend_idle_i   ( idma_be_idle           ),
-    .trans_complete_i ( idma_be_trans_complete )
+    .dma_ctrl_req_i ( idma_cfg_reg_req   ),
+    .dma_ctrl_rsp_o ( idma_cfg_reg_rsp   ),
+    .dma_req_o      ( sys_idma_req       ),
+    .req_valid_o    ( sys_idma_req_valid ),
+    .req_ready_i    ( sys_idma_req_ready ),
+    .next_id_i      ( sys_idma_next_id   ),
+    .stream_idx_o   ( /* NC */           ),
+    .done_id_i      ( sys_idma_done_id   ),
+    .busy_i         ( sys_idma_busy      ),
+    .midend_busy_i  ( 1'b0               )
   );
 
-  axi_dma_backend #(
-    .DataWidth      ( ${in_sys_idma_mst.dw}         ),
-    .AddrWidth      ( ${in_sys_idma_mst.aw}         ),
-    .IdWidth        ( ${in_sys_idma_mst.iw}         ),
-    .AxReqFifoDepth ( 'd64                          ),
-    .TransFifoDepth ( 'd16                          ),
-    .BufferDepth    ( 'd3                           ),
-    .axi_req_t      ( ${in_sys_idma_mst.req_type()} ),
-    .axi_res_t      ( ${in_sys_idma_mst.rsp_type()} ),
-    .burst_req_t    ( idma_burst_req_t              ),
-    .DmaIdWidth     ( 'd32                          ),
-    .DmaTracing     ( 1'b1                          )
-  ) i_axi_dma_backend_sys_idma (
+  assign sys_idma_issue  = sys_idma_req_valid & sys_idma_req_ready;
+  assign sys_idma_retire = sys_idma_rsp_valid; // backend rsp_ready tied to 1
+
+  idma_transfer_id_gen #(
+    .IdWidth ( 32'd32 )
+  ) i_sys_idma_transfer_id_gen (
     .clk_i,
     .rst_ni,
-    .chip_id_i,
-    .dma_id_i         ( 'd0                           ),
-    .axi_dma_req_o    ( ${in_sys_idma_mst.req_name()} ),
-    .axi_dma_res_i    ( ${in_sys_idma_mst.rsp_name()} ),
-    .burst_req_i      ( idma_burst_req                ),
-    .valid_i          ( idma_be_valid                 ),
-    .ready_o          ( idma_be_ready                 ),
-    .backend_idle_o   ( idma_be_idle                  ),
-    .trans_complete_o ( idma_be_trans_complete        )
+    .issue_i     ( sys_idma_issue   ),
+    .retire_i    ( sys_idma_retire  ),
+    .next_o      ( sys_idma_next_id ),
+    .completed_o ( sys_idma_done_id )
+  );
+
+  idma_backend_rw_axi #(
+    .DataWidth            ( ${in_sys_idma_mst.dw}         ),
+    .AddrWidth            ( ${in_sys_idma_mst.aw}         ),
+    .UserWidth            ( ${in_sys_idma_mst.uw}         ),
+    .AxiIdWidth           ( ${in_sys_idma_mst.iw}         ),
+    .NumAxInFlight        ( 32'd64                        ),
+    .BufferDepth          ( 32'd3                         ),
+    .TFLenWidth           ( SysIdmaTFLenWidth             ),
+    .MemSysDepth          ( 32'd16                        ),
+    .CombinedShifter      ( 1'b1                          ),
+    .RAWCouplingAvail     ( 1'b1                          ),
+    .MaskInvalidData      ( 1'b1                          ),
+    .HardwareLegalizer    ( 1'b1                          ),
+    .RejectZeroTransfers  ( 1'b1                          ),
+    .ErrorCap             ( idma_pkg::NO_ERROR_HANDLING   ),
+    .idma_req_t           ( sys_idma_req_t                ),
+    .idma_rsp_t           ( sys_idma_rsp_t                ),
+    .idma_eh_req_t        ( idma_pkg::idma_eh_req_t       ),
+    .idma_busy_t          ( idma_pkg::idma_busy_t         ),
+    .axi_req_t            ( ${in_sys_idma_mst.req_type()} ),
+    .axi_rsp_t            ( ${in_sys_idma_mst.rsp_type()} ),
+    .read_meta_channel_t  ( sys_idma_read_meta_channel_t  ),
+    .write_meta_channel_t ( sys_idma_write_meta_channel_t )
+  ) i_idma_backend_rw_axi_sys_idma (
+    .clk_i,
+    .rst_ni,
+    .testmode_i      ( 1'b0                   ),
+    .idma_req_i      ( sys_idma_req           ),
+    .req_valid_i     ( sys_idma_req_valid     ),
+    .req_ready_o     ( sys_idma_req_ready     ),
+    .idma_rsp_o      ( sys_idma_rsp           ),
+    .rsp_valid_o     ( sys_idma_rsp_valid     ),
+    .rsp_ready_i     ( 1'b1                   ),
+    .idma_eh_req_i   ( '0                     ),
+    .eh_req_valid_i  ( 1'b0                   ),
+    .eh_req_ready_o  ( /* NC */               ),
+    .axi_read_req_o  ( sys_idma_axi_read_req  ),
+    .axi_read_rsp_i  ( sys_idma_axi_read_rsp  ),
+    .axi_write_req_o ( sys_idma_axi_write_req ),
+    .axi_write_rsp_i ( sys_idma_axi_write_rsp ),
+    .busy_o          ( sys_idma_busy          )
+  );
+
+  axi_rw_join #(
+    .axi_req_t  ( ${in_sys_idma_mst.req_type()} ),
+    .axi_resp_t ( ${in_sys_idma_mst.rsp_type()} )
+  ) i_sys_idma_axi_rw_join (
+    .clk_i,
+    .rst_ni,
+    .slv_read_req_i   ( sys_idma_axi_read_req         ),
+    .slv_read_resp_o  ( sys_idma_axi_read_rsp         ),
+    .slv_write_req_i  ( sys_idma_axi_write_req        ),
+    .slv_write_resp_o ( sys_idma_axi_write_rsp        ),
+    .mst_req_o        ( ${in_sys_idma_mst.req_name()} ),
+    .mst_resp_i       ( ${in_sys_idma_mst.rsp_name()} )
   );
 
 

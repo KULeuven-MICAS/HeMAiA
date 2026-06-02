@@ -6,6 +6,12 @@
 #
 # Xiaoling Yi <xiaoling.yi@kuleuven.be>
 
+# In this test, we do the exactly the same task in each chiplet
+# 1. Load Ai and B from the main memory to each chiplet's L1 using two iDMA (host and snax) in parallel
+# 2. Compute Ai*B on each chiplet using the snax core
+# 3. Store Di back to main memory using snax iDMA
+# 4. Check the result on host
+
 import os
 import sys
 import argparse

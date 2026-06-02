@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import argparse
 import getpass
-import os
 import shutil
 import subprocess
 import sys
@@ -45,31 +44,12 @@ except Exception:
 CI_CFG = "target/rtl/cfg/hemaia_multichip_ci.hjson"
 SIM_CFG = "target/sim/cfg/sim_rtl.hjson"
 SIM_TIMEOUT_SECONDS = 2 * 60 * 60  # 2 hours per simulation thread
-DEFAULT_MAX_SIM_JOBS = 1
-MAX_SIM_JOBS_ENV = "HEMAIA_VSIM_JOBS"
+# Keep in sync with the JOBS default in target/sim/automation/Makefile.
+DEFAULT_MAX_SIM_JOBS = 16
 
 # ---------------------------------------------------------------------------
 # Utility helpers
 # ---------------------------------------------------------------------------
-
-def positive_int(value: str) -> int:
-    """Argparse validator for positive integer options."""
-    try:
-        parsed = int(value)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError(f"{value!r} is not an integer") from exc
-    if parsed < 1:
-        raise argparse.ArgumentTypeError("value must be >= 1")
-    return parsed
-
-
-def default_max_sim_jobs() -> int:
-    """Read the default simulation parallelism from the environment."""
-    env_value = os.environ.get(MAX_SIM_JOBS_ENV)
-    if env_value is None:
-        return DEFAULT_MAX_SIM_JOBS
-    return positive_int(env_value)
-
 
 def parse_args() -> argparse.Namespace:
     """Parse command-line options for the CI simulation flow."""
@@ -78,19 +58,14 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "-j", "--max-sim-jobs",
-        type=positive_int,
-        default=None,
-        help=(
-            "maximum number of simulations to run in parallel "
-            f"(default: {MAX_SIM_JOBS_ENV} or {DEFAULT_MAX_SIM_JOBS})"
-        ),
+        type=int,
+        default=DEFAULT_MAX_SIM_JOBS,
+        help="maximum number of simulations to run in parallel "
+             f"(default: {DEFAULT_MAX_SIM_JOBS})",
     )
     args = parser.parse_args()
-    if args.max_sim_jobs is None:
-        try:
-            args.max_sim_jobs = default_max_sim_jobs()
-        except argparse.ArgumentTypeError as exc:
-            parser.error(f"invalid {MAX_SIM_JOBS_ENV}: {exc}")
+    if args.max_sim_jobs < 1:
+        parser.error("--max-sim-jobs must be >= 1")
     return args
 
 
@@ -481,6 +456,25 @@ def write_summary(
 # Step 8 -- Clean generated task directories
 # ---------------------------------------------------------------------------
 
+def cleanup_stale_task_dirs(task_base_dir: Path) -> None:
+    """Delete any leftover ``task_*`` run directories from previous runs.
+
+    Step 8 only removes folders created by the current run, so a crashed or
+    interrupted run leaves stale ``task_*`` directories behind.  Sweep them all
+    before starting a fresh flow.
+    """
+    removed = 0
+    # Match only numbered run dirs (task_0, task_1, ...)
+    for stale_dir in sorted(task_base_dir.glob("task_[0-9]*")):
+        if stale_dir.is_dir():
+            shutil.rmtree(stale_dir)
+            removed += 1
+            print(f"Removed stale simulation folder: {stale_dir}")
+
+    if removed:
+        print(f"Cleaned up {removed} stale simulation task folder(s)")
+
+
 def cleanup_generated_task_dirs(
     tasks_info: List[Tuple[Path, str]],
     task_base_dir: Path,
@@ -522,6 +516,9 @@ def main() -> None:
         raise FileNotFoundError(f"Task YAML file {task_yaml} does not exist")
 
     ensure_vsim_available()
+
+    # Remove leftover task_* directories from any previous (crashed) run
+    cleanup_stale_task_dirs(task_base_dir)
 
     # Step 0: Parse task definitions from YAML
     tasks = step0_parse_tasks(task_yaml)

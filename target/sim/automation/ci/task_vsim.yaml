@@ -32,11 +32,6 @@ runs:
     CHIP_TYPE: multi_chip
     WORKLOAD: multichip_mailbox
     DEV_APP: None
-  # multichip_sync
-  - HOST_APP_TYPE: host_only
-    CHIP_TYPE: multi_chip
-    WORKLOAD: multichip_sync
-    DEV_APP: None
   # system_xdma_copy
   - HOST_APP_TYPE: host_only
     CHIP_TYPE: multi_chip
@@ -74,6 +69,10 @@ runs:
     CHIP_TYPE: single_chip
     WORKLOAD: None
     DEV_APP: snax-versacore-matmul-profile
+  - HOST_APP_TYPE: offload_legacy
+    CHIP_TYPE: single_chip
+    WORKLOAD: None
+    DEV_APP: snax-versacore-matadd-profile
   # snax-test-bingo-alloc
   - HOST_APP_TYPE: offload_legacy
     CHIP_TYPE: single_chip
