@@ -188,6 +188,7 @@ def create_dfg(hwcfg: dict, platform: dict):
             node_name=f"Check_cfg{i}",
             kernel_name="__host_bingo_kernel_check_result",
             kernel_args=HostBingoKernelCheckResultArgs(
+                name=f"D{i}",
                 golden_data_addr=D_l3_golden, output_data_addr=l1_D,
                 data_size=check_bytes,
             ),

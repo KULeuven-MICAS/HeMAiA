@@ -334,6 +334,7 @@ def create_dfg(params, mem_handles, platform):
             node_name=f"Check_D{d_idx}_Chip{chiplet_hex}",
             kernel_name="__host_bingo_kernel_check_result",
             kernel_args=HostBingoKernelCheckResultArgs(
+                name=f"D{d_idx}",
                 golden_data_addr=mem_handles[f"D{d_idx}_golden_l3"],
                 output_data_addr=mem_handles[f"D_l3_chip{chiplet_hex}"],
                 data_size=64, # check first 64 bytes for simplicity

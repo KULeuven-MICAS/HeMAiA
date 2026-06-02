@@ -195,6 +195,7 @@ def create_dfg(params, mem_handles, platform):
         assigned_core_id=host_core_id,
         kernel_name="__host_bingo_kernel_check_result",
         kernel_args=HostBingoKernelCheckResultArgs(
+            name="A1",
             golden_data_addr=mem_handles['A1_data_L3_symbol'],
             output_data_addr=mem_handles['A1_L1_buf'],
             data_size=64
@@ -207,6 +208,7 @@ def create_dfg(params, mem_handles, platform):
         assigned_core_id=host_core_id,
         kernel_name="__host_bingo_kernel_check_result",
         kernel_args=HostBingoKernelCheckResultArgs(
+            name="A2",
             golden_data_addr=mem_handles['A2_data_L3_symbol'],
             output_data_addr=mem_handles['A2_L1_buf'],
             data_size=64
@@ -247,6 +249,7 @@ def create_dfg(params, mem_handles, platform):
         assigned_core_id=host_core_id,
         kernel_name="__host_bingo_kernel_check_result",
         kernel_args=HostBingoKernelCheckResultArgs(
+            name="A1",
             golden_data_addr=mem_handles['A1_data_L3_symbol'],
             output_data_addr=mem_handles['A1_L1_buf'],
             data_size=64
@@ -259,6 +262,7 @@ def create_dfg(params, mem_handles, platform):
         assigned_core_id=host_core_id,
         kernel_name="__host_bingo_kernel_check_result",
         kernel_args=HostBingoKernelCheckResultArgs(
+            name="A2",
             golden_data_addr=mem_handles['A2_data_L3_symbol'],
             output_data_addr=mem_handles['A2_L1_buf'],
             data_size=64
@@ -299,6 +303,7 @@ def create_dfg(params, mem_handles, platform):
         assigned_core_id=host_core_id,
         kernel_name="__host_bingo_kernel_check_result",
         kernel_args=HostBingoKernelCheckResultArgs(
+            name="A1",
             golden_data_addr=mem_handles['A1_data_L3_symbol'],
             output_data_addr=mem_handles['A1_L3_buf'],
             data_size=64
@@ -311,6 +316,7 @@ def create_dfg(params, mem_handles, platform):
         assigned_core_id=host_core_id,
         kernel_name="__host_bingo_kernel_check_result",
         kernel_args=HostBingoKernelCheckResultArgs(
+            name="A2",
             golden_data_addr=mem_handles['A2_data_L3_symbol'],
             output_data_addr=mem_handles['A2_L3_buf'],
             data_size=64

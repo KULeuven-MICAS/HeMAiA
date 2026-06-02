@@ -272,6 +272,7 @@ def create_dfg(params, mem_handles, platform):
         node_name="Check_A1_Chip00",
         kernel_name="__host_bingo_kernel_check_result",
         kernel_args=HostBingoKernelCheckResultArgs(
+            name="A1",
             golden_data_addr=mem_handles["A1_golden_l3"],
             output_data_addr=mem_handles["A_l1_chip00"],
             data_size=64,
@@ -298,6 +299,7 @@ def create_dfg(params, mem_handles, platform):
         node_name="Check_B_Chip00",
         kernel_name="__host_bingo_kernel_check_result",
         kernel_args=HostBingoKernelCheckResultArgs(
+            name="B",
             golden_data_addr=mem_handles["B_golden_l3"],
             output_data_addr=mem_handles["B_l1_chip00"],
             data_size=64,
@@ -359,6 +361,7 @@ def create_dfg(params, mem_handles, platform):
         node_name="Check_D1_Chip00",
         kernel_name="__host_bingo_kernel_check_result",
         kernel_args=HostBingoKernelCheckResultArgs(
+            name="D1",
             golden_data_addr=mem_handles["D1_golden_l3"],
             output_data_addr=mem_handles["D_l3_chip00"],
             data_size=64,
@@ -388,6 +391,7 @@ def create_dfg(params, mem_handles, platform):
         node_name="Check_A2_Chip01",
         kernel_name="__host_bingo_kernel_check_result",
         kernel_args=HostBingoKernelCheckResultArgs(
+            name="A2",
             golden_data_addr=mem_handles["A2_golden_l3"],
             output_data_addr=mem_handles["A_l1_chip01"],
             data_size=64,
@@ -401,6 +405,7 @@ def create_dfg(params, mem_handles, platform):
         node_name="Check_B_Chip01",
         kernel_name="__host_bingo_kernel_check_result",
         kernel_args=HostBingoKernelCheckResultArgs(
+            name="B",
             golden_data_addr=mem_handles["B_golden_l3"],
             output_data_addr=mem_handles["B_l1_chip01"],
             data_size=64,
@@ -448,6 +453,7 @@ def create_dfg(params, mem_handles, platform):
         node_name="Check_D2_Chip01",
         kernel_name="__host_bingo_kernel_check_result",
         kernel_args=HostBingoKernelCheckResultArgs(
+            name="D2",
             golden_data_addr=mem_handles["D2_golden_l3"],
             output_data_addr=mem_handles["D_l3_chip01"],
             data_size=64,
@@ -478,6 +484,7 @@ def create_dfg(params, mem_handles, platform):
         node_name="Check_A3_Chip10",
         kernel_name="__host_bingo_kernel_check_result",
         kernel_args=HostBingoKernelCheckResultArgs(
+            name="A3",
             golden_data_addr=mem_handles["A3_golden_l3"],
             output_data_addr=mem_handles["A_l1_chip10"],
             data_size=64,
@@ -491,6 +498,7 @@ def create_dfg(params, mem_handles, platform):
         node_name="Check_B_Chip10",
         kernel_name="__host_bingo_kernel_check_result",
         kernel_args=HostBingoKernelCheckResultArgs(
+            name="B",
             golden_data_addr=mem_handles["B_golden_l3"],
             output_data_addr=mem_handles["B_l1_chip10"],
             data_size=64,
@@ -538,6 +546,7 @@ def create_dfg(params, mem_handles, platform):
         node_name="Check_D3_Chip10",
         kernel_name="__host_bingo_kernel_check_result",
         kernel_args=HostBingoKernelCheckResultArgs(
+            name="D3",
             golden_data_addr=mem_handles["D3_golden_l3"],
             output_data_addr=mem_handles["D_l3_chip10"],
             data_size=64,
@@ -567,6 +576,7 @@ def create_dfg(params, mem_handles, platform):
         node_name="Check_A4_Chip11",
         kernel_name="__host_bingo_kernel_check_result",
         kernel_args=HostBingoKernelCheckResultArgs(
+            name="A4",
             golden_data_addr=mem_handles["A4_golden_l3"],
             output_data_addr=mem_handles["A_l1_chip11"],
             data_size=64,
@@ -580,6 +590,7 @@ def create_dfg(params, mem_handles, platform):
         node_name="Check_B_Chip11",
         kernel_name="__host_bingo_kernel_check_result",
         kernel_args=HostBingoKernelCheckResultArgs(
+            name="B",
             golden_data_addr=mem_handles["B_golden_l3"],
             output_data_addr=mem_handles["B_l1_chip11"],
             data_size=64,
@@ -627,6 +638,7 @@ def create_dfg(params, mem_handles, platform):
         node_name="Check_D4_Chip11",
         kernel_name="__host_bingo_kernel_check_result",
         kernel_args=HostBingoKernelCheckResultArgs(
+            name="D4",
             golden_data_addr=mem_handles["D4_golden_l3"],
             output_data_addr=mem_handles["D_l3_chip11"],
             data_size=64,

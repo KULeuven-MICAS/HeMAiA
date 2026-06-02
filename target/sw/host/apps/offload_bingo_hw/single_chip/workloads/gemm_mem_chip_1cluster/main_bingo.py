@@ -199,6 +199,7 @@ def create_dfg(params, mem_handles, platform):
         node_name="Check_D",
         kernel_name="__host_bingo_kernel_check_result",
         kernel_args=HostBingoKernelCheckResultArgs(
+            name="D",
             golden_data_addr=mem_handles["l3_golden_D"],
             output_data_addr=mem_handles["l3_buf_D"],
             data_size=min(64, params["D_size"]),
