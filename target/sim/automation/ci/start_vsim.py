@@ -45,7 +45,7 @@ except Exception:
 CI_CFG = "target/rtl/cfg/hemaia_multichip_ci.hjson"
 SIM_CFG = "target/sim/cfg/sim_rtl.hjson"
 SIM_TIMEOUT_SECONDS = 2 * 60 * 60  # 2 hours per simulation thread
-DEFAULT_MAX_SIM_JOBS = 1
+DEFAULT_MAX_SIM_JOBS = 16
 MAX_SIM_JOBS_ENV = "HEMAIA_VSIM_JOBS"
 
 # ---------------------------------------------------------------------------
