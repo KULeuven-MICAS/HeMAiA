@@ -106,9 +106,9 @@ def first_run_setup() -> None:
     print("[Step 1] Initialising single-chip open-source module setup")
     step1_init_private_modules(
         REPO_ROOT,
-        with_macro=False,
-        with_d2d=False,
-        with_pll=False,
+        with_macro=True,
+        with_d2d=True,
+        with_pll=True,
     )
 
     print("[Step 2] Rebuilding SW/bootrom/RTL and preparing vsim inputs")
