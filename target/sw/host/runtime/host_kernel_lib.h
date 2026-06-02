@@ -6,13 +6,14 @@
 #include "perf_tracing.h"
 #include "libbingo/bingo_utils.h"
 #include "libbingo/host_kernel_args.h"  // BINGO_CHECK_TYPE_*, BINGO_GATING_MODE_*
-#include "libbingo/bingo_api.h"         // BINGO_PRINTF, bingo_cerf_update()
-#define EXIT_CODE_SUCC 1
-#define EXIT_CODE_FAIL 2
+#include "libbingo/bingo_api.h"         // BINGO_PRINTF, bingo_cerf_update(), BINGO_RET_*
 
 // Host Bingo Kernel Implementations
-// Normally the functions ret with 0
-// Only the exit kernel returns the exit code defined by EXIT_CODE_SUCC, for now it is 1
+// Return codes are the unified BINGO_RET_* defined in bingo_api.h:
+//   BINGO_RET_SUCC (0): normal completion, scheduler continues
+//   BINGO_RET_EXIT (1): graceful termination, scheduler exits (only the exit kernel)
+//   BINGO_RET_FAIL (2): failure, scheduler errors out
+// Normally the functions ret with BINGO_RET_SUCC.
 static inline uint64_t __host_bingo_kernel_dummy(void *arg){
     // Arg[0]: dummy_input, Arg[1]: scratchpad_ptr
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
@@ -24,7 +25,7 @@ static inline uint64_t __host_bingo_kernel_dummy(void *arg){
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
     sp->return_value = 0;
     sp->num_return_values = 0;
-    return 0;
+    return BINGO_RET_SUCC;
 }
 
 static inline uint64_t __host_bingo_kernel_exit(void *arg){
@@ -36,9 +37,9 @@ static inline uint64_t __host_bingo_kernel_exit(void *arg){
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
     printf_safe("Chip(%x, %x): [Host] Kernel Exit called with exit code %d\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), exit_code);
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
-    sp->return_value = EXIT_CODE_SUCC;
+    sp->return_value = BINGO_RET_EXIT;
     sp->num_return_values = 0;
-    return EXIT_CODE_SUCC;
+    return BINGO_RET_EXIT;
 }
 
 static inline uint64_t __host_bingo_kernel_entry(void *arg){
@@ -51,7 +52,7 @@ static inline uint64_t __host_bingo_kernel_entry(void *arg){
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
     sp->return_value = (uint32_t)start_cc;
     sp->num_return_values = 0;
-    return 0;
+    return BINGO_RET_SUCC;
 }
 // Union-based type punning for fp32 ↔ uint32 (no strict-aliasing UB, portable, zero-cost).
 typedef union { float f; uint32_t u; } __bingo_f32_u32_t;
@@ -123,10 +124,10 @@ static inline uint64_t __host_bingo_kernel_check_result(void *arg){
         sp->num_return_values = 0;
         if (err == 0) {
             printf_safe("[Host] Check [%s]: PASS (%d bytes)\r\n", name, data_size);
-            return 0;
+            return BINGO_RET_SUCC;
         } else {
             printf_safe("[Host] Check [%s]: FAIL (%d / %d bytes)\r\n", name, err, data_size);
-            return EXIT_CODE_FAIL;
+            return BINGO_RET_FAIL;
         }
     } else if (check_type == BINGO_CHECK_TYPE_FP32_TOL) {
         // FP32 absolute-tolerance mode
@@ -153,11 +154,11 @@ static inline uint64_t __host_bingo_kernel_check_result(void *arg){
         if (err == 0) {
             printf_safe("[Host] Check [%s]: PASS (%d fp32 elems, tol_bits=0x%08x)\r\n",
                    name, num_elements, tolerance_bits);
-            return 0;
+            return BINGO_RET_SUCC;
         } else {
             printf_safe("[Host] Check [%s]: FAIL (%d / %d fp32 elems, tol_bits=0x%08x)\r\n",
                    name, err, num_elements, tolerance_bits);
-            return EXIT_CODE_FAIL;
+            return BINGO_RET_FAIL;
         }
     } else if (check_type == BINGO_CHECK_TYPE_FP16_TOL) {
         // FP16 absolute-tolerance mode — promote each half to fp32, compare against fp32 tolerance
@@ -185,11 +186,11 @@ static inline uint64_t __host_bingo_kernel_check_result(void *arg){
         if (err == 0) {
             printf_safe("[Host] Check [%s]: PASS (%d fp16 elems, tol_bits=0x%08x)\r\n",
                    name, num_elements, tolerance_bits);
-            return 0;
+            return BINGO_RET_SUCC;
         } else {
             printf_safe("[Host] Check [%s]: FAIL (%d / %d fp16 elems, tol_bits=0x%08x)\r\n",
                    name, err, num_elements, tolerance_bits);
-            return EXIT_CODE_FAIL;
+            return BINGO_RET_FAIL;
         }
     } else {
         // Unknown check_type — fail loudly
@@ -197,7 +198,7 @@ static inline uint64_t __host_bingo_kernel_check_result(void *arg){
         printf_safe("[Host] Check [%s]: FAIL (unknown check_type=%d)\r\n", name, (int)check_type);
         sp->return_value = 1;
         sp->num_return_values = 0;
-        return EXIT_CODE_FAIL;
+        return BINGO_RET_FAIL;
     }
 }
 
@@ -219,7 +220,7 @@ static inline uint64_t __host_bingo_kernel_idma(void *arg){
         asm volatile("nop");
     }
     BINGO_TRACE_MARKER(BINGO_TRACE_HOST_IDMA_RUN_END);
-    return 0;
+    return BINGO_RET_SUCC;
 }
 
 static inline uint64_t __host_bingo_kernel_xdma_1d_copy(void *arg){
@@ -235,7 +236,7 @@ static inline uint64_t __host_bingo_kernel_xdma_1d_copy(void *arg){
         printf_safe("[Host] xDMA 1D copy size too large: 0x%lx bytes\r\n", size);
         sp->return_value = 1;
         sp->num_return_values = 0;
-        return EXIT_CODE_FAIL;
+        return BINGO_RET_FAIL;
     }
 
     BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
@@ -247,7 +248,7 @@ static inline uint64_t __host_bingo_kernel_xdma_1d_copy(void *arg){
         printf_safe("[Host] xDMA 1D copy config failed: %d\r\n", cfg_ret);
         sp->return_value = (uint32_t)cfg_ret;
         sp->num_return_values = 0;
-        return EXIT_CODE_FAIL;
+        return BINGO_RET_FAIL;
     }
 
     BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
@@ -257,7 +258,7 @@ static inline uint64_t __host_bingo_kernel_xdma_1d_copy(void *arg){
     BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
     sp->return_value = (uint32_t)dst_addr;
     sp->num_return_values = 0;
-    return 0;
+    return BINGO_RET_SUCC;
 }
 
 // ============================================================
@@ -367,7 +368,7 @@ static inline uint64_t __host_bingo_kernel_fp32_rmsnorm(void *arg){
         }
     }
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
-    return 0;
+    return BINGO_RET_SUCC;
 }
 
 static inline uint64_t __host_bingo_kernel_fp32_softmax(void *arg){
@@ -430,7 +431,7 @@ static inline uint64_t __host_bingo_kernel_fp32_softmax(void *arg){
     // Write output info to scratchpad for successor gating kernels
     sp->return_value = (uint32_t)(uintptr_t)output;
     sp->num_return_values = num_rows * row_length;
-    return 0;
+    return BINGO_RET_SUCC;
 }
 
 static inline uint64_t __host_bingo_kernel_fp32_silu_mul(void *arg){
@@ -467,7 +468,7 @@ static inline uint64_t __host_bingo_kernel_fp32_silu_mul(void *arg){
         __riscv_vse32_v_f32m1(o_ptr, result, vl);
     }
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
-    return 0;
+    return BINGO_RET_SUCC;
 }
 
 // ---- Generic binary elementwise: out[i] = op(a[i], b[i]) ----
@@ -493,7 +494,7 @@ static inline uint64_t __host_bingo_kernel_fp32_##name(void *arg){              
         __riscv_vse32_v_f32m1(o_ptr, result, vl);                              \
     }                                                                           \
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);                           \
-    return 0;                                                                   \
+    return BINGO_RET_SUCC;                                                                   \
 }
 
 DEFINE_FP32_BINARY_KERNEL(add, __riscv_vfadd_vv_f32m1)
@@ -531,7 +532,7 @@ static inline uint64_t __host_bingo_kernel_int32_add(void *arg){
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
     sp->return_value = (uint32_t)(uintptr_t)output;
     sp->num_return_values = num_elements;
-    return 0;
+    return BINGO_RET_SUCC;
 }
 
 // ---- Generic unary elementwise: out[i] = op(x[i]) ----
@@ -556,7 +557,7 @@ static inline uint64_t __host_bingo_kernel_fp32_##name(void *arg){              
         __riscv_vse32_v_f32m1(o_ptr, result, vl);                              \
     }                                                                           \
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);                           \
-    return 0;                                                                   \
+    return BINGO_RET_SUCC;                                                                   \
 }
 
 // relu: max(0, x)
@@ -657,7 +658,7 @@ static inline uint64_t __host_bingo_kernel_fp32_reduce_sum(void *arg){
     }
     *output = acc;
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
-    return 0;
+    return BINGO_RET_SUCC;
 }
 
 static inline uint64_t __host_bingo_kernel_fp32_reduce_max(void *arg){
@@ -679,7 +680,7 @@ static inline uint64_t __host_bingo_kernel_fp32_reduce_max(void *arg){
     }
     *output = max_val;
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
-    return 0;
+    return BINGO_RET_SUCC;
 }
 
 static inline uint64_t __host_bingo_kernel_fp32_reduce_mean(void *arg){
@@ -701,7 +702,7 @@ static inline uint64_t __host_bingo_kernel_fp32_reduce_mean(void *arg){
     }
     *output = acc / (float)num_elements;
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
-    return 0;
+    return BINGO_RET_SUCC;
 }
 
 // ============================================================
@@ -768,7 +769,7 @@ static inline uint64_t __host_bingo_kernel_fp32_quantize(void *arg){
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
     sp->return_value = (uint32_t)(uintptr_t)output;
     sp->num_return_values = num_elements;
-    return 0;
+    return BINGO_RET_SUCC;
 }
 
 static inline uint64_t __host_bingo_kernel_int32_dequantize(void *arg){
@@ -802,7 +803,7 @@ static inline uint64_t __host_bingo_kernel_int32_dequantize(void *arg){
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
     sp->return_value = (uint32_t)(uintptr_t)output;
     sp->num_return_values = num_elements;
-    return 0;
+    return BINGO_RET_SUCC;
 }
 
 // ================================================================
@@ -901,5 +902,5 @@ static inline uint64_t __host_bingo_kernel_cerf_gating(void *arg){
     // can find it via the gating node's scratchpad
     sp->return_value = (uint32_t)(uintptr_t)cond_activation;
     sp->num_return_values = 0;
-    return 0;
+    return BINGO_RET_SUCC;
 }
