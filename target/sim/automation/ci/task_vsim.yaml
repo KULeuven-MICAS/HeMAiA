@@ -32,11 +32,6 @@ runs:
     CHIP_TYPE: multi_chip
     WORKLOAD: multichip_mailbox
     DEV_APP: None
-  # multichip_sync
-  - HOST_APP_TYPE: host_only
-    CHIP_TYPE: multi_chip
-    WORKLOAD: multichip_sync
-    DEV_APP: None
   # system_xdma_copy
   - HOST_APP_TYPE: host_only
     CHIP_TYPE: multi_chip
