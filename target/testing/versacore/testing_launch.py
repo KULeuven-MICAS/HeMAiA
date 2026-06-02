@@ -111,7 +111,13 @@ def first_run_setup() -> None:
         with_pll=False,
     )
 
-    print("[Step 2] Rebuilding bootrom/RTL and preparing vsim inputs")
+    print("[Step 2] Rebuilding SW/bootrom/RTL and preparing vsim inputs")
+    run_in_container(
+        REPO_ROOT,
+        DEFAULT_DOCKER_IMAGE,
+        REPO_ROOT,
+        ["make", "sw", f"CFG_OVERRIDE={cfg_override()}"],
+    )
     run_in_container(
         REPO_ROOT,
         DEFAULT_DOCKER_IMAGE,
