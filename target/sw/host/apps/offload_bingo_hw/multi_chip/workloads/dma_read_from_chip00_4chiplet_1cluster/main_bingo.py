@@ -228,7 +228,7 @@ def main():
         dfg.bingo_add_edge(copy_to_chip00, check_recv)
         prev_remote_check = check_recv
 
-    print(f"Built DFG: load/check A1..A4, then pull/check A2..A4 back to chip00")
+    print("Built DFG: load/check A1..A4, then pull/check A2..A4 back to chip00")
     print(f"  active_chiplets={[chip_hex(c) for c in EXPECTED_CHIPLETS]}")
     print(f"  data_bytes={data_bytes}, total_mempool_bytes={num_data * data_bytes}")
     print(f"  mempool_base=0x{mempool_base:x}")
