@@ -96,8 +96,6 @@ def define_memory_handles(params):
     mem_handles['l1_buf_A'] = BingoMemAlloc('l1_buf_A',size=params['A_size'], mem_level="L1", chip_id=cur_chiplet_id, cluster_id=cur_cluster_id)
     mem_handles['l1_buf_B'] = BingoMemAlloc('l1_buf_B',size=params['B_size'], mem_level="L1", chip_id=cur_chiplet_id, cluster_id=cur_cluster_id)
     mem_handles['l1_buf_D'] = BingoMemAlloc('l1_buf_D',size=params['D_size'], mem_level="L1", chip_id=cur_chiplet_id, cluster_id=cur_cluster_id)
-    # L3 buffers
-    mem_handles['l3_buf_D'] = BingoMemAlloc('l3_buf_D',size=params['D_size'], mem_level="L3", chip_id=cur_chiplet_id)
     return mem_handles
 
 def create_dfg(params, mem_handles, platform):
@@ -159,18 +157,6 @@ def create_dfg(params, mem_handles, platform):
             accumPrevC=params['accumPrevC']
         )
     )
-    # Dev IDMA1D Copy D
-    task_copy_D = BingoNode(
-        assigned_chiplet_id=cur_chiplet_id,
-        assigned_cluster_id=cur_cluster_id,
-        assigned_core_id=dma_core_id,
-        kernel_name="__snax_bingo_kernel_idma_1d_copy",
-        kernel_args=SnaxBingoKernelIdma1dCopyArgs(
-            src_addr=mem_handles['l1_buf_D'],
-            dst_addr=mem_handles['l3_buf_D'],
-            size=params['D_size']
-        )
-    )
     # Host check result
     task_check_result = BingoNode(
             assigned_chiplet_id=cur_chiplet_id,
@@ -178,8 +164,9 @@ def create_dfg(params, mem_handles, platform):
             assigned_core_id=host_core_id,
             kernel_name="__host_bingo_kernel_check_result",
             kernel_args=HostBingoKernelCheckResultArgs(
+                name="D",
                 golden_data_addr=mem_handles['D_L3'], 
-                output_data_addr=mem_handles['l3_buf_D'],         
+                output_data_addr=mem_handles['l1_buf_D'],         
                 data_size=64                        
             )
     )
@@ -188,14 +175,12 @@ def create_dfg(params, mem_handles, platform):
     bingo_dfg.bingo_add_node(task_copy_A)
     bingo_dfg.bingo_add_node(task_copy_B)
     bingo_dfg.bingo_add_node(task_gemm_full)
-    bingo_dfg.bingo_add_node(task_copy_D)
     bingo_dfg.bingo_add_node(task_check_result)
     # 4. Define Edges
     # since we are doing this in parallel with 2 dma engines, we don't need to add edges between copy A and copy B
     bingo_dfg.bingo_add_edge(task_copy_A, task_gemm_full)
     bingo_dfg.bingo_add_edge(task_copy_B, task_gemm_full)
-    bingo_dfg.bingo_add_edge(task_gemm_full, task_copy_D)
-    bingo_dfg.bingo_add_edge(task_copy_D, task_check_result)
+    bingo_dfg.bingo_add_edge(task_gemm_full, task_check_result)
     return bingo_dfg
     
 def main():
