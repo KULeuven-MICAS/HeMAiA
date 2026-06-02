@@ -74,6 +74,10 @@ runs:
     CHIP_TYPE: single_chip
     WORKLOAD: None
     DEV_APP: snax-versacore-matmul-profile
+  - HOST_APP_TYPE: offload_legacy
+    CHIP_TYPE: single_chip
+    WORKLOAD: None
+    DEV_APP: snax-versacore-matadd-profile
   # snax-test-bingo-alloc
   - HOST_APP_TYPE: offload_legacy
     CHIP_TYPE: single_chip
