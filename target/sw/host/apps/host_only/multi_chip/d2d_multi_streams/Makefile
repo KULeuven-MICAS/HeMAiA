@@ -7,8 +7,8 @@
 MK_DIR   := $(realpath $(dir $(realpath $(lastword $(MAKEFILE_LIST)))))
 HOST_APP_TYPE = host_only
 CHIP_TYPE     = multi_chip
-WORKLOAD      = multi_d2d_streams
-SRCS = src/multi_d2d_streams.c
+WORKLOAD      = d2d_multi_streams
+SRCS = src/d2d_multi_streams.c
 BINGO_HOST ?= 1 # True to include the bingo runtime
 INCL_DEVICE_BINARY ?= 0 # True to include the device binary
 
