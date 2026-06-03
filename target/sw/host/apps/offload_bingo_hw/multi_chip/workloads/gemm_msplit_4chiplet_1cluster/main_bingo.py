@@ -151,6 +151,7 @@ def define_memory_handles(params):
     
     # 2. Define Memory Symbols
     # The MemSymbol are the variables defined in the data.h file which the memory location is already known at compile time
+    # every chip will have its own golden A tile and golden B in L3, and golden D in L3 for checking results
     mem_handles["A1_golden_l3"] = BingoMemSymbol("A_data_L3", offset=0)
     mem_handles["A2_golden_l3"] = BingoMemSymbol("A_data_L3", offset=1*params["Atile_size"])
     mem_handles["A3_golden_l3"] = BingoMemSymbol("A_data_L3", offset=2*params["Atile_size"])
@@ -164,6 +165,10 @@ def define_memory_handles(params):
 
     # 3. Define Memory Handles (Dynamic Allocations)
     # Prepare all the A, B, D L1 buffers and final D L3 buffer for all chpiplets
+
+    ###########################
+    # for chip00
+    ###########################
     mem_handles["A_l1_chip00"] = BingoMemAlloc(
         "A_l1_chip00",
         size=params["Atile_size"],
@@ -181,6 +186,9 @@ def define_memory_handles(params):
         "D_l3_chip00", size=params["D_size"], mem_level="L3", chip_id=0x00
     )
 
+    ###########################
+    # for chip01
+    ###########################
     mem_handles["A_l1_chip01"] = BingoMemAlloc(
         "A_l1_chip01",
         size=params["Atile_size"],
@@ -198,6 +206,9 @@ def define_memory_handles(params):
         "D_l3_chip01", size=params["D_size"], mem_level="L3", chip_id=0x01
     )
 
+    ###########################
+    # for chip10
+    ###########################
     mem_handles["A_l1_chip10"] = BingoMemAlloc(
         "A_l1_chip10",
         size=params["Atile_size"],
@@ -215,6 +226,9 @@ def define_memory_handles(params):
         "D_l3_chip10", size=params["D_size"], mem_level="L3", chip_id=0x10
     )
 
+    ###########################
+    # for chip11
+    ###########################
     mem_handles["A_l1_chip11"] = BingoMemAlloc(
         "A_l1_chip11",
         size=params["Atile_size"],
@@ -244,9 +258,11 @@ def create_dfg(params, mem_handles, platform):
         is_host_as_acc=True,
         chiplet_ids=platform["chiplet_ids"],
     )
+
     gemm_core_id = 0  # Core 0 for Compute
     dma_core_id = 1  # Core 1 for Load
     host_core_id = 2  # Core 2 for Host DMA Store
+
     # 2. Define Nodes
     ##############
     # Chiplet 00
@@ -306,6 +322,7 @@ def create_dfg(params, mem_handles, platform):
         ),
     )
     # Broadcast B
+    # use idma to do broadcast for each chiplet
     node_chiplet_00_broadcast_B = BingoNode(
         assigned_chiplet_id=0x00,
         assigned_cluster_id=0,
@@ -314,7 +331,7 @@ def create_dfg(params, mem_handles, platform):
         kernel_name="__snax_bingo_kernel_idma_broadcast",
         kernel_args=SnaxBingoKernelIdmaBroadcastArgs(
             src_addr=mem_handles["B_l1_chip00"],
-            dst_addr=mem_handles["B_l1_chip00"],  # Broadcast to all chiplets
+            dst_addr=mem_handles["B_l1_chip00"],  # Broadcast to all chiplets at this address
             size=params["B_size"],
         ),
     )
