@@ -34,6 +34,7 @@ from bingo_mem_handle import BingoMemAlloc, BingoMemSymbol, BingoMemFixedAddr
 from bingo_kernel_args import (
     SnaxBingoKernelIdma1dCopyArgs,
     SnaxBingoKernelIdmaBroadcastArgs,
+    SnaxBingoKernelXdma1dCopyArgs,
     HostBingoKernelCheckResultArgs,
 )
 from bingo_helpers import chiplet_addr_transform_loc
@@ -210,7 +211,7 @@ def define_memory_handles(params):
 
     return mem_handles
 
-def create_dfg(params, mem_handles, platform, eval_case=0):
+def create_dfg(params, mem_handles, platform, eval_case):
     """Creates the Bingo Data Flow Graph with nodes and dependencies."""
     bingo_dfg = BingoDFG(
         num_chiplets=platform["num_chiplets"],
@@ -581,8 +582,8 @@ def create_dfg(params, mem_handles, platform, eval_case=0):
             assigned_cluster_id=0,
             assigned_core_id=dma_core_id,
             node_name="Load_A1_Chip00",
-            kernel_name="__snax_bingo_kernel_idma_1d_copy",
-            kernel_args=SnaxBingoKernelIdma1dCopyArgs(
+            kernel_name="__snax_bingo_kernel_xdma_1d_copy",
+            kernel_args=SnaxBingoKernelXdma1dCopyArgs(
                 src_addr=mem_handles["A1_mp"],
                 dst_addr=mem_handles["A_l1_chip00"],
                 size=params["Atile_size"],
