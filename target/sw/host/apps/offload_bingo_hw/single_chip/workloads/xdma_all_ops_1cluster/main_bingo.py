@@ -97,7 +97,7 @@ def add_xdma_test(dfg, name, l1_dst, xdma_node, golden_sym, out_size,
         assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=host_core_id,
         node_name=f"Check_{name}",
         kernel_name="__host_bingo_kernel_check_result",
-        kernel_args=HostBingoKernelCheckResultArgs(golden_sym, l3_out, out_size))
+        kernel_args=HostBingoKernelCheckResultArgs(golden_sym, l3_out, out_size, name=f"XDMA_{name}"))
     dfg.bingo_add_node(check)
 
     # Wire: xdma -> store -> check

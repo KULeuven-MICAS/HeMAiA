@@ -475,31 +475,6 @@ def cleanup_stale_task_dirs(task_base_dir: Path) -> None:
         print(f"Cleaned up {removed} stale simulation task folder(s)")
 
 
-def cleanup_generated_task_dirs(
-    tasks_info: List[Tuple[Path, str]],
-    task_base_dir: Path,
-) -> None:
-    """Delete generated ``task_*`` simulation run directories."""
-    base_dir = task_base_dir.resolve()
-    removed = 0
-
-    for task_dir, ci_name in tasks_info:
-        resolved_task_dir = task_dir.resolve()
-        if (
-            resolved_task_dir.parent != base_dir
-            or not resolved_task_dir.name.startswith("task_")
-        ):
-            print(f"Skipping cleanup for unexpected task path: {resolved_task_dir}")
-            continue
-
-        if resolved_task_dir.exists():
-            shutil.rmtree(resolved_task_dir)
-            removed += 1
-            print(f"Deleted generated simulation folder for {ci_name}: {resolved_task_dir}")
-
-    print(f"Cleaned up {removed} generated simulation task folder(s)")
-
-
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
@@ -546,9 +521,6 @@ def main() -> None:
     summary_path = script_path.parent / f"simulation_summary_{timestamp}.md"
     write_summary(summary_path, tasks_info, results)
     print(f"Simulation summary written to {summary_path}")
-
-    # Step 8: Delete generated per-task simulation run folders
-    cleanup_generated_task_dirs(tasks_info, task_base_dir)
 
 
 if __name__ == "__main__":

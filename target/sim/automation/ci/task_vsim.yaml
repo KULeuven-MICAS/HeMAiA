@@ -42,10 +42,10 @@ runs:
     CHIP_TYPE: multi_chip
     WORKLOAD: system_idma_copy
     DEV_APP: None
-  # multi_d2d_streams
+  # d2d_multi_streams
   - HOST_APP_TYPE: host_only
     CHIP_TYPE: multi_chip
-    WORKLOAD: multi_d2d_streams
+    WORKLOAD: d2d_multi_streams
     DEV_APP: None
 
   # ---- offload_legacy / single_chip ----
