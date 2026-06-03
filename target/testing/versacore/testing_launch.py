@@ -14,6 +14,13 @@ from typing import Dict, Iterator
 SCRIPT_DIR = Path(__file__).resolve().parent
 TESTING_DIR = SCRIPT_DIR.parent
 REPO_ROOT = SCRIPT_DIR.parents[2]
+
+CFG_NAME = "hemaia_multichip_ci.hjson"
+SIM_CFG_NAME = "sim_rtl.hjson"
+
+HOST_APP_TYPE = "offload_bingo_hw"
+CHIP_TYPE = "single_chip"
+
 WORKLOAD_NAME = "gemm_mem_chip_1cluster"
 DEV_APP = "snax-bingo-offload"
 WORKLOAD_DIR = (
@@ -25,13 +32,8 @@ PARAMS_PATH = (
     WORKLOAD_DIR
     / "params.hjson"
 )
+
 DEFAULT_WORKLOAD_CSV = SCRIPT_DIR / "testing_workload.csv"
-
-CFG_NAME = "hemaia_multichip_ci.hjson"
-SIM_CFG_NAME = "sim_rtl.hjson"
-
-HOST_APP_TYPE = "offload_bingo_hw"
-CHIP_TYPE = "single_chip"
 
 sys.path.insert(0, str(TESTING_DIR))
 
@@ -193,7 +195,7 @@ def run_one_case(params: Dict[str, int]) -> None:
 
     print("[Per-test] Running VCS simulation binary")
     subprocess.run(
-        ["./occamy_chip.vcs"],
+        ["./occamy_chip.vcs -fgp=num_threads:8 -fgp=auto_affinity:maxLoadForAvailCpu+999 -fgp=allow_less_cores | tee run.log"],
         cwd=REPO_ROOT / "target/sim/bin",
         check=True,
     )
@@ -207,7 +209,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    first_run_setup()
+    # first_run_setup()
     for index, row in enumerate(iter_workload_csv(args.workload_csv)):
         if index == 0:
             params = row_to_params(row)

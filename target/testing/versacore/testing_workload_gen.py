@@ -25,7 +25,8 @@ from gemm_sim_utils import (  # noqa E402
     get_gemm_mesh_dims,
 )
 
-MEMORY_LIMIT_BYTES = int(128 * 1024 * 0.8) # 80% of 512KB to leave some room for metadata, etc.
+L1_MEMORY_LIMIT_BYTES = int(512 * 1024 * 0.6) # 80% of 512KB to leave some room for metadata, etc.
+L3_MEMORY_LIMIT_BYTES = int(128 * 1024 * 0.6) # 80% of 128KB to leave some room for metadata, etc.
 DEFAULT_CSV = Path(__file__).with_name("testing_workload.csv")
 
 PARAM_FIELDS = [
@@ -112,17 +113,21 @@ def merged_params(params: Dict[str, int], hwcfg: dict) -> dict:
     return {**params, **hwcfg}
 
 
-def operand_bytes(params: Dict[str, int], hwcfg: dict) -> int:
+def operand_byte_breakdown(params: Dict[str, int], hwcfg: dict) -> Dict[str, int]:
     merged = merged_params(params, hwcfg)
     mesh_row, tile_size, mesh_col = get_gemm_mesh_dims(merged)
     a_bits, b_bits, c_bits, d_bits = _gemm_operand_widths(merged)
     m, k, n = params["M"], params["K"], params["N"]
-    return (
-        _bytes_for_elements(m * k * mesh_row * tile_size, a_bits)
-        + _bytes_for_elements(k * n * tile_size * mesh_col, b_bits)
-        + _bytes_for_elements(m * n * mesh_row * mesh_col, c_bits)
-        + _bytes_for_elements(m * n * mesh_row * mesh_col, d_bits)
-    )
+    return {
+        "A": _bytes_for_elements(m * k * mesh_row * tile_size, a_bits),
+        "B": _bytes_for_elements(k * n * tile_size * mesh_col, b_bits),
+        "C": _bytes_for_elements(m * n * mesh_row * mesh_col, c_bits),
+        "D": _bytes_for_elements(m * n * mesh_row * mesh_col, d_bits),
+    }
+
+
+def operand_bytes(params: Dict[str, int], hwcfg: dict) -> int:
+    return sum(operand_byte_breakdown(params, hwcfg).values())
 
 
 def valid_shape_rows(
@@ -131,7 +136,10 @@ def valid_shape_rows(
     suite: str,
     array_shapes: Sequence[int],
     overrides: Optional[Dict[str, int]] = None,
-    memory_limit: int = MEMORY_LIMIT_BYTES,
+    m_values: Optional[Sequence[int]] = None,
+    n_values: Optional[Sequence[int]] = None,
+    l1_memory_limit: int = L1_MEMORY_LIMIT_BYTES,
+    l3_memory_limit: int = L3_MEMORY_LIMIT_BYTES,
 ) -> Iterator[dict]:
     base = dict(BASE_PARAMS)
     if overrides:
@@ -155,21 +163,31 @@ def valid_shape_rows(
 
         a_unit = _bytes_for_elements(mesh_row * tile_size, a_bits)
         b_unit = _bytes_for_elements(tile_size * mesh_col, b_bits)
-        cd_unit = _bytes_for_elements(mesh_row * mesh_col, c_bits) + _bytes_for_elements(
-            mesh_row * mesh_col, d_bits
-        )
+        c_unit = _bytes_for_elements(mesh_row * mesh_col, c_bits)
+        d_unit = _bytes_for_elements(mesh_row * mesh_col, d_bits)
+        cd_unit = c_unit + d_unit
 
-        max_mn = int(max(1, memory_limit // cd_unit))
-        for m in range(1, max_mn + 1):
-            for n in range(1, int(max_mn // m) + 1):
-                remaining = memory_limit - (m * n * cd_unit)
+        max_l1_mn = (l1_memory_limit - 1) // cd_unit
+        max_l3_mn = (l3_memory_limit - 1) // (2 * d_unit)
+        max_mn = int(min(max_l1_mn, max_l3_mn))
+        m_range = m_values if m_values is not None else range(1, max_mn + 1)
+        for m in m_range:
+            if m < 1 or m > max_mn:
+                continue
+            max_n = int(max_mn // m)
+            n_range = n_values if n_values is not None else range(1, max_n + 1)
+            for n in n_range:
+                if n < 1 or n > max_n:
+                    continue
+                remaining = l1_memory_limit - (m * n * cd_unit)
                 if remaining < a_unit * m + b_unit * n:
                     continue
-                max_k = int(remaining // (a_unit * m + b_unit * n))
+                max_k = int((remaining - 1) // (a_unit * m + b_unit * n))
                 for k in range(1, max_k + 1):
                     params = {**base, "array_shape": array_shape, "M": m, "K": k, "N": n}
-                    size = operand_bytes(params, hwcfg)
-                    if size <= memory_limit:
+                    sizes = operand_byte_breakdown(params, hwcfg)
+                    size = sum(sizes.values())
+                    if size < l1_memory_limit and 2 * sizes["D"] < l3_memory_limit:
                         yield {
                             "test_name": f"{suite}_as{array_shape}_m{m}_k{k}_n{n}",
                             "suite": suite,
@@ -178,26 +196,137 @@ def valid_shape_rows(
                         }
 
 
-def generate_base_int8_shapes(hwcfg: dict, memory_limit: int) -> Iterable[dict]:
+def generate_base_int8_shapes(
+    hwcfg: dict,
+    l1_memory_limit: int,
+    l3_memory_limit: int,
+) -> Iterable[dict]:
     return valid_shape_rows(
         hwcfg,
         suite="base_int8",
         array_shapes=(0, 1, 2),
-        memory_limit=memory_limit,
+        l1_memory_limit=l1_memory_limit,
+        l3_memory_limit=l3_memory_limit,
+    )
+
+
+def generate_int4_b_shapes(
+    hwcfg: dict,
+    l1_memory_limit: int,
+    l3_memory_limit: int,
+) -> Iterable[dict]:
+    return valid_shape_rows(
+        hwcfg,
+        suite="int4_b",
+        array_shapes=(0, 1, 2),
+        overrides={"int4_b_enable": 1},
+        l1_memory_limit=l1_memory_limit,
+        l3_memory_limit=l3_memory_limit,
+    )
+
+
+def generate_int4_ab_shapes(
+    hwcfg: dict,
+    l1_memory_limit: int,
+    l3_memory_limit: int,
+) -> Iterable[dict]:
+    return valid_shape_rows(
+        hwcfg,
+        suite="int4_ab",
+        array_shapes=(0, 2),
+        overrides={"int4_a_enable": 1, "int4_b_enable": 1},
+        l1_memory_limit=l1_memory_limit,
+        l3_memory_limit=l3_memory_limit,
+    )
+
+
+def remap_suite_rows(
+    hwcfg: dict,
+    rows: Iterable[dict],
+    *,
+    suite: str,
+    overrides: Dict[str, int],
+    l1_memory_limit: int = L1_MEMORY_LIMIT_BYTES,
+    l3_memory_limit: int = L3_MEMORY_LIMIT_BYTES,
+) -> Iterable[dict]:
+    for row in rows:
+        params = {field: row[field] for field in PARAM_FIELDS}
+        params.update(overrides)
+        sizes = operand_byte_breakdown(params, hwcfg)
+        size = sum(sizes.values())
+        if size < l1_memory_limit and 2 * sizes["D"] < l3_memory_limit:
+            yield {
+                "test_name": (
+                    f"{suite}_as{params['array_shape']}"
+                    f"_m{params['M']}_k{params['K']}_n{params['N']}"
+                ),
+                "suite": suite,
+                "operand_bytes": size,
+                **params,
+            }
+
+
+def generate_quantized_shapes(
+    hwcfg: dict,
+    l1_memory_limit: int,
+    l3_memory_limit: int,
+) -> Iterable[dict]:
+    base_rows = valid_shape_rows(
+        hwcfg,
+        suite="base_int8",
+        array_shapes=(0, 1, 2),
+        l1_memory_limit=l1_memory_limit,
+        l3_memory_limit=l3_memory_limit,
+    )
+    return remap_suite_rows(
+        hwcfg,
+        base_rows,
+        suite="quantized",
+        overrides={"quantization_enable": 1},
+        l1_memory_limit=l1_memory_limit,
+        l3_memory_limit=l3_memory_limit,
+    )
+
+
+def generate_int32_to_fp16_shapes(
+    hwcfg: dict,
+    l1_memory_limit: int,
+    l3_memory_limit: int,
+) -> Iterable[dict]:
+    int4_b_rows = valid_shape_rows(
+        hwcfg,
+        suite="int4_b",
+        array_shapes=(0, 1, 2),
+        overrides={"int4_b_enable": 1},
+        l1_memory_limit=l1_memory_limit,
+        l3_memory_limit=l3_memory_limit,
+    )
+    return remap_suite_rows(
+        hwcfg,
+        int4_b_rows,
+        suite="int4_b_int32_to_fp16",
+        overrides={"int32tofp16_enable": 1},
+        l1_memory_limit=l1_memory_limit,
+        l3_memory_limit=l3_memory_limit,
     )
 
 
 def iter_workloads(
     hwcfg: dict,
     *,
-    memory_limit: int = MEMORY_LIMIT_BYTES,
+    l1_memory_limit: int = L1_MEMORY_LIMIT_BYTES,
+    l3_memory_limit: int = L3_MEMORY_LIMIT_BYTES,
 ) -> Iterator[dict]:
     seen = set()
     suites = (
         generate_base_int8_shapes,
+        generate_int4_b_shapes,
+        generate_int4_ab_shapes,
+        generate_quantized_shapes,
+        generate_int32_to_fp16_shapes,
     )
     for suite in suites:
-        for row in suite(hwcfg, memory_limit):
+        for row in suite(hwcfg, l1_memory_limit, l3_memory_limit):
             key = tuple(row[field] for field in PARAM_FIELDS)
             if key in seen:
                 continue
@@ -208,7 +337,8 @@ def iter_workloads(
 def sample_workloads(
     hwcfg: dict,
     *,
-    memory_limit: int,
+    l1_memory_limit: int,
+    l3_memory_limit: int,
     max_cases: int,
     seed: int,
 ) -> tuple[List[dict], int]:
@@ -216,7 +346,11 @@ def sample_workloads(
     sample: List[dict] = []
     total = 0
 
-    for row in iter_workloads(hwcfg, memory_limit=memory_limit):
+    for row in iter_workloads(
+        hwcfg,
+        l1_memory_limit=l1_memory_limit,
+        l3_memory_limit=l3_memory_limit,
+    ):
         total += 1
         if len(sample) < max_cases:
             sample.append(row)
@@ -245,11 +379,12 @@ def write_csv(rows: Iterable[dict], output: Path) -> int:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("-o", "--output", type=Path, default=DEFAULT_CSV)
-    parser.add_argument("--memory-limit", type=int, default=MEMORY_LIMIT_BYTES)
+    parser.add_argument("--l1-memory-limit", type=int, default=L1_MEMORY_LIMIT_BYTES)
+    parser.add_argument("--l3-memory-limit", type=int, default=L3_MEMORY_LIMIT_BYTES)
     parser.add_argument(
         "--max-cases",
         type=int,
-        default=128,
+        default=16,
         help="Randomly sample at most this many rows. Zero means no cap.",
     )
     parser.add_argument("--seed", type=int, default=1)
@@ -263,7 +398,8 @@ def main() -> None:
     if args.max_cases:
         rows, total = sample_workloads(
             hwcfg,
-            memory_limit=args.memory_limit,
+            l1_memory_limit=args.l1_memory_limit,
+            l3_memory_limit=args.l3_memory_limit,
             max_cases=args.max_cases,
             seed=args.seed,
         )
@@ -271,7 +407,11 @@ def main() -> None:
         print(f"Randomly sampled {count} of {total} test cases to {args.output}")
     else:
         count = write_csv(
-            iter_workloads(hwcfg, memory_limit=args.memory_limit),
+            iter_workloads(
+                hwcfg,
+                l1_memory_limit=args.l1_memory_limit,
+                l3_memory_limit=args.l3_memory_limit,
+            ),
             args.output,
         )
         print(f"Wrote {count} test cases to {args.output}")
