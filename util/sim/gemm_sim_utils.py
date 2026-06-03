@@ -6,9 +6,10 @@
 #
 # Xiaoling Yi <xiaoling.yi@kuleuven.be>
 
-import numpy as np
 import os
 import random
+
+import numpy as np
 
 
 def _get_acc_cfg(cfg):
@@ -27,7 +28,7 @@ def get_gemm_mesh_dims(cfg):
 def _bytes_for_elements(num_elements, elem_bits):
     total_bits = num_elements * elem_bits
     assert total_bits % 8 == 0, "Packed GEMM element count must be byte-aligned."
-    return total_bits // 8
+    return int(total_bits // 8)
 
 
 def _signed_int_range(bits):
@@ -42,6 +43,7 @@ def _signed_to_unsigned(val, bit_width):
 
 
 def _pack_signed_nbit(values, bit_width, pack_per_byte=2):
+
     if len(values) % pack_per_byte != 0:
         raise ValueError(
             f"Length {len(values)} must be a multiple of {pack_per_byte} for int{bit_width} packing"
@@ -72,7 +74,10 @@ def _gemm_operand_widths(merged):
         if merged.get("int4_b_enable", 0)
         else acc["snax_versacore_input_b_element_width"][data_type]
     )
-    c_len = acc["snax_versacore_input_c_element_width"][data_type]
+    c_len = 0
+    # only have actual C when addNonZeroC is enabled
+    if merged.get("addNonZeroC", 0) == 1:
+        c_len = acc["snax_versacore_input_c_element_width"][data_type]
     if merged.get("quantization_enable", 0):
         d_len = 8
     elif merged.get("int32tofp16_enable", 0):
@@ -297,6 +302,7 @@ def run_multichip_gemm_datagen():
 
 
 def generate_gemm_test_data(**kwargs):
+
     from sim_golden_models import (
         block_gemm_golden_model,
         int32_to_fp16_golden,
@@ -507,6 +513,7 @@ def emit_gemm_header_file(**kwargs):
 
 
 def emit_ksplit_gemm_header_file(workload_name, **kwargs):
+
     from data_utils import format_scalar_definition
     from sim_golden_models import block_gemm_golden_model
 

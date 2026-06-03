@@ -211,7 +211,7 @@ def create_dfg(params, mem_handles, platform):
     dfg.bingo_add_edge(load_A, gemm)
     dfg.bingo_add_edge(load_B, gemm)
     dfg.bingo_add_edge(gemm, store_D)
-    dfg.bingo_add_edge(store_D, load_golden_D)
+    dfg.bingo_add_edge(store_D, check_D)
     dfg.bingo_add_edge(load_golden_D, check_D)
     return dfg
 
