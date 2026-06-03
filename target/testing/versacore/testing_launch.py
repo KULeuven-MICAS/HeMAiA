@@ -195,7 +195,7 @@ def run_one_case(params: Dict[str, int]) -> None:
 
     print("[Per-test] Running VCS simulation binary")
     subprocess.run(
-        ["./occamy_chip.vcs -fgp=num_threads:8 -fgp=auto_affinity:maxLoadForAvailCpu+999 -fgp=allow_less_cores | tee run.log"],
+        ["./occamy_chip.vcs"],
         cwd=REPO_ROOT / "target/sim/bin",
         check=True,
     )
@@ -211,14 +211,13 @@ def main() -> None:
     args = parse_args()
     # first_run_setup()
     for index, row in enumerate(iter_workload_csv(args.workload_csv)):
-        if index == 0:
-            params = row_to_params(row)
-            test_name = row.get("test_name") or f"row_{index}"
-            print(
-                f"[{index}] {test_name}: "
-                f"M={params['M']} K={params['K']} N={params['N']}"
-            )
-            run_one_case(params)
+        params = row_to_params(row)
+        test_name = row.get("test_name") or f"row_{index}"
+        print(
+            f"[{index}] {test_name}: "
+            f"M={params['M']} K={params['K']} N={params['N']}"
+        )
+        run_one_case(params)
 
 
 if __name__ == "__main__":
