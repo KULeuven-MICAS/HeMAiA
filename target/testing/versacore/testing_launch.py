@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import csv
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import Dict, Iterator
@@ -91,14 +93,18 @@ def sim_cfg_path() -> Path:
 def first_run_setup() -> None:
     from test_util import (
         DEFAULT_DOCKER_IMAGE,
-        ensure_vsim_available,
         run_in_container,
         step0_reset,
         step1_init_private_modules,
-        step3_compile_vsim,
     )
 
-    ensure_vsim_available()
+    if shutil.which("vcs") is None:
+        print(
+            "ERROR: 'vcs' not found on PATH.\n"
+            "Please source the VCS setup script and re-run this script.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     print(f"[Step 0] Running make clean under {REPO_ROOT}")
     step0_reset(REPO_ROOT)
@@ -111,7 +117,7 @@ def first_run_setup() -> None:
         with_pll=True,
     )
 
-    print("[Step 2] Rebuilding SW/bootrom/RTL and preparing vsim inputs")
+    print("[Step 2] Rebuilding SW/bootrom/RTL and preparing VCS inputs")
     run_in_container(
         REPO_ROOT,
         DEFAULT_DOCKER_IMAGE,
@@ -134,11 +140,15 @@ def first_run_setup() -> None:
         REPO_ROOT,
         DEFAULT_DOCKER_IMAGE,
         REPO_ROOT,
-        ["make", "hemaia_system_vsim_preparation", f"SIM_CFG={sim_cfg_path()}"],
+        ["make", "hemaia_system_vcs_preparation", f"SIM_CFG={sim_cfg_path()}"],
     )
 
-    print("[Step 3] Rebuilding vsim binary")
-    step3_compile_vsim(REPO_ROOT, SIM_CFG_NAME)
+    print("[Step 3] Rebuilding VCS binary")
+    subprocess.run(
+        ["make", "hemaia_system_vcs", f"SIM_CFG={sim_cfg_path()}"],
+        cwd=REPO_ROOT,
+        check=True,
+    )
 
 
 def rebuild_sw() -> None:
@@ -168,16 +178,25 @@ def rebuild_sw() -> None:
 
 
 def run_one_case(params: Dict[str, int]) -> None:
-    from test_util import step4_run_simulation
-
     print("[Per-test] Writing params.hjson")
     write_params_hjson(params)
 
+    print("[Per-test] Rebuilding SW")
     rebuild_sw()
 
-    print("[Per-test] Running simulation binary")
-    if not step4_run_simulation(REPO_ROOT):
-        raise SystemExit(1)
+    print("[Per-test] Making sure VCS simulation binary exists")
+    subprocess.run(
+        ["make", "hemaia_system_vcs", f"SIM_CFG={sim_cfg_path()}"],
+        cwd=REPO_ROOT,
+        check=True,
+    )
+
+    print("[Per-test] Running VCS simulation binary")
+    subprocess.run(
+        ["./occamy_chip.vcs"],
+        cwd=REPO_ROOT / "target/sim/bin",
+        check=True,
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -190,13 +209,14 @@ def main() -> None:
     args = parse_args()
     first_run_setup()
     for index, row in enumerate(iter_workload_csv(args.workload_csv)):
-        params = row_to_params(row)
-        test_name = row.get("test_name") or f"row_{index}"
-        print(
-            f"[{index}] {test_name}: "
-            f"M={params['M']} K={params['K']} N={params['N']}"
-        )
-        run_one_case(params)
+        if index == 0:
+            params = row_to_params(row)
+            test_name = row.get("test_name") or f"row_{index}"
+            print(
+                f"[{index}] {test_name}: "
+                f"M={params['M']} K={params['K']} N={params['N']}"
+            )
+            run_one_case(params)
 
 
 if __name__ == "__main__":

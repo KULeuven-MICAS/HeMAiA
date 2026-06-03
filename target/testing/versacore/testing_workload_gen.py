@@ -25,7 +25,7 @@ from gemm_sim_utils import (  # noqa E402
     get_gemm_mesh_dims,
 )
 
-MEMORY_LIMIT_BYTES = int(512 * 1024 * 0.8) # 80% of 512KB to leave some room for metadata, etc.
+MEMORY_LIMIT_BYTES = int(128 * 1024 * 0.8) # 80% of 512KB to leave some room for metadata, etc.
 DEFAULT_CSV = Path(__file__).with_name("testing_workload.csv")
 
 PARAM_FIELDS = [
