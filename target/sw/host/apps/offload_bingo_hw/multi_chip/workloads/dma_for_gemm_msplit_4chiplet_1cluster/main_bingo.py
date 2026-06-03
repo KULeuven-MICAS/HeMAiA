@@ -19,7 +19,7 @@ ROOT_DIR = os.path.normpath(ROOT_DIR)
 print(f"ROOT_DIR: {ROOT_DIR}")
 sys.path.append(f"{ROOT_DIR}/target/sw/host/runtime/libbingo/mini_compiler")
 
-# Import emit_header_file from gemm_multi_chiplet_datagen to emit the data header directly
+# Import emit_header_file from gemm_multi_chiplet_datagen to emit the A/B data header.
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from gemm_multi_chiplet_datagen import emit_header_file  # noqa E402
 
@@ -80,10 +80,7 @@ def get_args():
     return parser.parse_args()
 
 def define_workload_params(cfg_path, hwcfg_path):
-    """Load workload params from hjson config files.
-    meshRow/tileSize/meshCol are derived from the hw config.
-    Returns (params dict, merged_config dict).
-    """
+    """Load workload params and derive DMA buffer sizes from the HW config."""
     with open(cfg_path) as f:
         param = hjson.loads(f.read())
     with open(hwcfg_path) as f:
@@ -111,16 +108,11 @@ def define_workload_params(cfg_path, hwcfg_path):
         "tileSize": tileSize,
         "meshCol":  meshCol,
         "arrayShapeIdx": array_shape,
-        "transposeA": merged.get("transposed_A", 0),
-        "transposeB": merged.get("transposed_B", 0),
-        "accumPrevC": merged.get("accumPrevC",  0),
     }
     params["app_name"] = "DMA for GEMM M-split"
     # Derived sizes
     params["Atile_size"] = M * K * meshRow * tileSize * 1   # int8
     params["B_size"]     = K * N * tileSize * meshCol * 1   # int8
-    params["C_size"]     = M * N * meshRow * meshCol * 4    # int32
-    params["D_size"]     = M * N * meshRow * meshCol * 4    # int32
 
     # The hardcoded MemPool address for A1, A2, A3, A4, B
     main_mem_base_addr = 0x8000_0000
@@ -820,7 +812,7 @@ def main():
     # Execute Pipeline
     params, merged_config = define_workload_params(args.cfg, args.hwcfg)
 
-    # Emit the data header (same as running gemm_multi_chiplet_datagen.py separately)
+    # Emit the A/B data header and mempool.bin.
     # out_dir is passed so datagen can also write mempool.bin there
     if args.data_h is not None:
         build_dir = os.path.join(output_dir, "build")
@@ -835,7 +827,7 @@ def main():
         return
     if not guard_cluster_count(merged_config, platform, args.output_dir, args.output_offload_file_name):
         return
-    dfg = create_dfg(params, mem_handles, platform, eval_case = 0)
+    dfg = create_dfg(params, mem_handles, platform, eval_case=0)
     data_header_name = os.path.basename(args.data_h) if args.data_h is not None else "dma_for_gemm_data.h"
     dfg.bingo_compile_dfg(params["app_name"], output_dir, output_file_name, extra_include_header_list=[data_header_name])
 
