@@ -775,6 +775,7 @@ void hemaia_d2d_link_initialize(uint8_t chip_id) {
         enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 2, 1);  // West  D2D PHY
         enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 3, 1);  // North D2D PHY
         enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 4, 1);  // South D2D PHY
+        set_all_d2d_link_tx_turnaround_silence_period(0);
         switch (chip_id) {
             case 0x00:  // Chip 00
                 set_d2d_link_availability(D2D_DIRECTION_WEST, false);
