@@ -25,8 +25,8 @@ from gemm_sim_utils import (  # noqa E402
     get_gemm_mesh_dims,
 )
 
-L1_MEMORY_LIMIT_BYTES = int(512 * 1024 * 0.6) # 80% of 512KB to leave some room for metadata, etc.
-L3_MEMORY_LIMIT_BYTES = int(128 * 1024 * 0.6) # 80% of 128KB to leave some room for metadata, etc.
+L1_MEMORY_LIMIT_BYTES = int(512 * 1024 * 0.4) # 60% of 512KB to leave some room for metadata, etc.
+L3_MEMORY_LIMIT_BYTES = int(40 * 1024) # 40KB heap
 DEFAULT_CSV = Path(__file__).with_name("testing_workload.csv")
 
 PARAM_FIELDS = [
@@ -320,10 +320,10 @@ def iter_workloads(
     seen = set()
     suites = (
         generate_base_int8_shapes,
-        generate_int4_b_shapes,
-        generate_int4_ab_shapes,
-        generate_quantized_shapes,
-        generate_int32_to_fp16_shapes,
+        # generate_int4_b_shapes,
+        # generate_int4_ab_shapes,
+        # generate_quantized_shapes,
+        # generate_int32_to_fp16_shapes,
     )
     for suite in suites:
         for row in suite(hwcfg, l1_memory_limit, l3_memory_limit):

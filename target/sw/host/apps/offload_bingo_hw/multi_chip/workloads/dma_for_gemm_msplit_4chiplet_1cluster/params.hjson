@@ -1,0 +1,14 @@
+# Copyright 2026 KU Leuven.
+# Licensed under the Apache License, Version 2.0, see LICENSE for details.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Xiaoling Yi <xiaoling.yi@kuleuven.be>
+
+{
+    num_chiplets: 4
+    num_clusters: 1
+    array_shape: 1
+    K: 4
+    N: 1
+    M: 2
+}

@@ -5,11 +5,13 @@ from __future__ import annotations
 
 import argparse
 import csv
+import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
-from typing import Dict, Iterator
+from typing import Dict, Iterator, Optional
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 TESTING_DIR = SCRIPT_DIR.parent
@@ -34,6 +36,10 @@ PARAMS_PATH = (
 )
 
 DEFAULT_WORKLOAD_CSV = SCRIPT_DIR / "testing_workload.csv"
+DEFAULT_RESULTS_CSV = SCRIPT_DIR / "testing_results.csv"
+DEFAULT_LOG_DIR = SCRIPT_DIR / "logs"
+UART_LOG_PATH = REPO_ROOT / "target/sim/bin/uart_chip_0_0.log"
+HOST_CHECK_PASS_RE = re.compile(r"\[Host\]\s+Check\s+\[[^\]]+\]:\s+PASS\s+\(64 bytes\)")
 
 sys.path.insert(0, str(TESTING_DIR))
 
@@ -54,6 +60,16 @@ PARAM_FIELDS = [
     "quantization_enable",
     "int32tofp16_enable",
 ]
+
+RESULT_FIELDS = [
+    "test_name",
+    "suite",
+    "status",
+    "returncode",
+    "elapsed_seconds",
+    "timed_out",
+    "log_path",
+] + PARAM_FIELDS
 
 
 def int_value(value: object) -> int:
@@ -82,6 +98,11 @@ def write_params_hjson(params: Dict[str, int], path: Path = PARAMS_PATH) -> None
 def iter_workload_csv(path: Path) -> Iterator[Dict[str, str]]:
     with path.open(newline="") as f:
         yield from csv.DictReader(f)
+
+
+def log_name(index: int, test_name: str) -> str:
+    safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", test_name).strip("._")
+    return f"{index:05d}_{safe_name or 'test'}.log"
 
 
 def cfg_override() -> str:
@@ -179,46 +200,163 @@ def rebuild_sw() -> None:
     )
 
 
-def run_one_case(params: Dict[str, int]) -> None:
-    print("[Per-test] Writing params.hjson")
-    write_params_hjson(params)
+def check_uart_pass(log_path: Path = UART_LOG_PATH) -> None:
+    if not log_path.exists():
+        raise FileNotFoundError(f"UART log not found: {log_path}")
 
-    print("[Per-test] Rebuilding SW")
-    rebuild_sw()
+    log_text = log_path.read_text(errors="replace")
+    if HOST_CHECK_PASS_RE.search(log_text):
+        print(f"[Per-test] PASS marker found in {log_path}")
+        return
 
-    print("[Per-test] Making sure VCS simulation binary exists")
-    subprocess.run(
-        ["make", "hemaia_system_vcs", f"SIM_CFG={sim_cfg_path()}"],
-        cwd=REPO_ROOT,
-        check=True,
+    raise RuntimeError(
+        f"Missing '[Host] Check [?]: PASS (64 bytes)' marker in {log_path}"
     )
 
-    print("[Per-test] Running VCS simulation binary")
-    subprocess.run(
-        ["./occamy_chip.vcs -fgp=num_threads:8 -fgp=auto_affinity:maxLoadForAvailCpu+999 -fgp=allow_less_cores | tee run.log"],
-        cwd=REPO_ROOT / "target/sim/bin",
-        check=True,
-    )
+
+def run_one_case(
+    params: Dict[str, int],
+    *,
+    log_path: Path,
+    timeout: Optional[float] = None,
+) -> tuple[str, int, bool, float]:
+    start = time.monotonic()
+    timed_out = False
+    returncode = 0
+
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("w") as log:
+        def log_print(message: str) -> None:
+            print(message)
+            print(message, file=log)
+            log.flush()
+
+        try:
+            log_print("[Per-test] Writing params.hjson")
+            write_params_hjson(params)
+
+            log_print("[Per-test] Rebuilding SW")
+            rebuild_sw()
+
+            log_print("[Per-test] Making sure VCS simulation binary exists")
+            subprocess.run(
+                ["make", "hemaia_system_vcs", f"SIM_CFG={sim_cfg_path()}"],
+                cwd=REPO_ROOT,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                check=True,
+            )
+
+            log_print("[Per-test] Running VCS simulation binary")
+            sim = subprocess.run(
+                ["./occamy_chip.vcs"],
+                cwd=REPO_ROOT / "target/sim/bin",
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                timeout=timeout,
+                check=False,
+            )
+            returncode = sim.returncode
+            if returncode != 0:
+                raise subprocess.CalledProcessError(returncode, sim.args)
+
+            check_uart_pass()
+            status = "PASS"
+        except subprocess.TimeoutExpired as exc:
+            timed_out = True
+            returncode = -1
+            log_print(f"[Per-test] TIMEOUT after {timeout} seconds: {exc.cmd}")
+            status = "FAIL"
+        except subprocess.CalledProcessError as exc:
+            returncode = int(exc.returncode)
+            log_print(f"[Per-test] Command failed with return code {returncode}: {exc.cmd}")
+            status = "FAIL"
+        except Exception as exc:
+            returncode = 1
+            log_print(f"[Per-test] {type(exc).__name__}: {exc}")
+            status = "FAIL"
+
+    elapsed_seconds = time.monotonic() - start
+    return status, returncode, timed_out, elapsed_seconds
+
+
+def result_row(
+    row: Dict[str, str],
+    params: Dict[str, int],
+    *,
+    test_name: str,
+    status: str,
+    returncode: int,
+    elapsed_seconds: float,
+    timed_out: bool,
+    log_path: Path,
+) -> Dict[str, object]:
+    return {
+        "test_name": test_name,
+        "suite": row.get("suite", ""),
+        "status": status,
+        "returncode": returncode,
+        "elapsed_seconds": round(elapsed_seconds, 3),
+        "timed_out": int(timed_out),
+        "log_path": str(log_path),
+        **{field: params.get(field, "") for field in PARAM_FIELDS},
+    }
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workload-csv", type=Path, default=DEFAULT_WORKLOAD_CSV)
+    parser.add_argument("--results-csv", type=Path, default=DEFAULT_RESULTS_CSV)
+    parser.add_argument("--log-dir", type=Path, default=DEFAULT_LOG_DIR)
+    parser.add_argument("--timeout", type=float, default=None)
+    parser.add_argument("--stop-on-fail", action="store_true")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     # first_run_setup()
-    for index, row in enumerate(iter_workload_csv(args.workload_csv)):
-        if index == 0:
+    args.results_csv.parent.mkdir(parents=True, exist_ok=True)
+    failed = 0
+    total = 0
+    with args.results_csv.open("w", newline="") as results_file:
+        writer = csv.DictWriter(results_file, fieldnames=RESULT_FIELDS)
+        writer.writeheader()
+        for index, row in enumerate(iter_workload_csv(args.workload_csv)):
+            total += 1
             params = row_to_params(row)
             test_name = row.get("test_name") or f"row_{index}"
+            log_path = args.log_dir / log_name(index, test_name)
             print(
                 f"[{index}] {test_name}: "
                 f"M={params['M']} K={params['K']} N={params['N']}"
             )
-            run_one_case(params)
+            status, returncode, timed_out, elapsed_seconds = run_one_case(
+                params,
+                log_path=log_path,
+                timeout=args.timeout,
+            )
+            if status != "PASS":
+                failed += 1
+            writer.writerow(
+                result_row(
+                    row,
+                    params,
+                    test_name=test_name,
+                    status=status,
+                    returncode=returncode,
+                    elapsed_seconds=elapsed_seconds,
+                    timed_out=timed_out,
+                    log_path=log_path,
+                )
+            )
+            results_file.flush()
+            if status != "PASS" and args.stop_on_fail:
+                break
+
+    print(f"Wrote {total} result rows to {args.results_csv} ({failed} failed)")
+    if failed:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

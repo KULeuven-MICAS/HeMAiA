@@ -17,6 +17,8 @@
 #define MAX_CFG_ROUND 3
 
 #define HEMAIA_D2D_LINK_DEFAULT_TEST_CYCLES 2000
+#define HEMAIA_D2D_LINK_FPGA_TX_YIELD_PERIOD 16
+#define HEMAIA_D2D_LINK_FPGA_TX_TURNAROUND_SILENCE_PERIOD 16
 
 typedef enum {
     D2D_DIRECTION_EAST = 0,
@@ -538,12 +540,12 @@ inline uint8_t get_d2d_link_tx_hold_period(D2DDirection direction) {
     return (val >> (direction * 8U)) & 0xFFU;
 }
 
-// Idle Silence period
-inline void set_d2d_link_idle_silence_period(uint8_t period,
-                                             D2DDirection direction) {
+// TX yield period
+inline void set_d2d_link_tx_yield_period(uint8_t period,
+                                         D2DDirection direction) {
     uintptr_t base =
         (uintptr_t)get_current_chip_baseaddress() | HEMAIA_D2D_LINK_BASE_ADDR;
-    base += HEMAIA_D2D_LINK_IDLE_SILENCE_PERIOD_REGISTER_REG_OFFSET;
+    base += HEMAIA_D2D_LINK_TX_YIELD_PERIOD_REGISTER_REG_OFFSET;
     volatile uint32_t* reg = (volatile uint32_t*)base;
     uint32_t val = *reg;
     uint32_t shift = direction * 8U;
@@ -552,20 +554,54 @@ inline void set_d2d_link_idle_silence_period(uint8_t period,
     *reg = val;
 }
 
-inline void set_all_d2d_link_idle_silence_period(uint8_t period) {
+inline void set_all_d2d_link_tx_yield_period(uint8_t period) {
     uintptr_t base =
         (uintptr_t)get_current_chip_baseaddress() | HEMAIA_D2D_LINK_BASE_ADDR;
-    base += HEMAIA_D2D_LINK_IDLE_SILENCE_PERIOD_REGISTER_REG_OFFSET;
+    base += HEMAIA_D2D_LINK_TX_YIELD_PERIOD_REGISTER_REG_OFFSET;
     volatile uint32_t* reg = (volatile uint32_t*)base;
     uint32_t val = ((uint32_t)period << 24) | ((uint32_t)period << 16) |
                    ((uint32_t)period << 8) | period;
     *reg = val;
 }
 
-inline uint8_t get_d2d_link_idle_silence_period(D2DDirection direction) {
+inline uint8_t get_d2d_link_tx_yield_period(D2DDirection direction) {
     uintptr_t base =
         (uintptr_t)get_current_chip_baseaddress() | HEMAIA_D2D_LINK_BASE_ADDR;
-    base += HEMAIA_D2D_LINK_IDLE_SILENCE_PERIOD_REGISTER_REG_OFFSET;
+    base += HEMAIA_D2D_LINK_TX_YIELD_PERIOD_REGISTER_REG_OFFSET;
+    volatile uint32_t* reg = (volatile uint32_t*)base;
+    uint32_t val = *reg;
+    return (val >> (direction * 8U)) & 0xFFU;
+}
+
+// TX turnaround silence period
+inline void set_d2d_link_tx_turnaround_silence_period(uint8_t period,
+                                                      D2DDirection direction) {
+    uintptr_t base =
+        (uintptr_t)get_current_chip_baseaddress() | HEMAIA_D2D_LINK_BASE_ADDR;
+    base += HEMAIA_D2D_LINK_TX_TURNAROUND_SILENCE_PERIOD_REGISTER_REG_OFFSET;
+    volatile uint32_t* reg = (volatile uint32_t*)base;
+    uint32_t val = *reg;
+    uint32_t shift = direction * 8U;
+    val &= ~(0xFFU << shift);
+    val |= ((uint32_t)period & 0xFFU) << shift;
+    *reg = val;
+}
+
+inline void set_all_d2d_link_tx_turnaround_silence_period(uint8_t period) {
+    uintptr_t base =
+        (uintptr_t)get_current_chip_baseaddress() | HEMAIA_D2D_LINK_BASE_ADDR;
+    base += HEMAIA_D2D_LINK_TX_TURNAROUND_SILENCE_PERIOD_REGISTER_REG_OFFSET;
+    volatile uint32_t* reg = (volatile uint32_t*)base;
+    uint32_t val = ((uint32_t)period << 24) | ((uint32_t)period << 16) |
+                   ((uint32_t)period << 8) | period;
+    *reg = val;
+}
+
+inline uint8_t get_d2d_link_tx_turnaround_silence_period(
+    D2DDirection direction) {
+    uintptr_t base =
+        (uintptr_t)get_current_chip_baseaddress() | HEMAIA_D2D_LINK_BASE_ADDR;
+    base += HEMAIA_D2D_LINK_TX_TURNAROUND_SILENCE_PERIOD_REGISTER_REG_OFFSET;
     volatile uint32_t* reg = (volatile uint32_t*)base;
     uint32_t val = *reg;
     return (val >> (direction * 8U)) & 0xFFU;
@@ -739,6 +775,7 @@ void hemaia_d2d_link_initialize(uint8_t chip_id) {
         enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 2, 1);  // West  D2D PHY
         enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 3, 1);  // North D2D PHY
         enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 4, 1);  // South D2D PHY
+        set_all_d2d_link_tx_turnaround_silence_period(0);
         switch (chip_id) {
             case 0x00:  // Chip 00
                 set_d2d_link_availability(D2D_DIRECTION_WEST, false);
@@ -751,7 +788,11 @@ void hemaia_d2d_link_initialize(uint8_t chip_id) {
             case 0x10:  // Chip 10
                 set_d2d_link_availability(D2D_DIRECTION_NORTH, false);
                 set_d2d_link_multicast_fence(D2D_DIRECTION_EAST, false);
-                set_d2d_link_idle_silence_period(0xFF, D2D_DIRECTION_EAST);
+                set_d2d_link_tx_yield_period(HEMAIA_D2D_LINK_FPGA_TX_YIELD_PERIOD,
+                                             D2D_DIRECTION_EAST);
+                set_d2d_link_tx_turnaround_silence_period(
+                    HEMAIA_D2D_LINK_FPGA_TX_TURNAROUND_SILENCE_PERIOD,
+                    D2D_DIRECTION_EAST);
                 // DO NOT TOUCH. This will send the clk to the fpga with low speed clk at EAST D2D PHY Port
                 // This is related where to put the memchip
                 // Currently we put the memchip at the (2,0) position which is connected to the EAST D2D PHY Port of Chip 10, so we need to make sure the clk can be sent to the memchip to make it work
