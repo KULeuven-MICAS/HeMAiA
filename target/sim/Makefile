@@ -63,11 +63,9 @@ VSIM_BENDER += -t simulation_hemaia -t simulation_hemaia_interposer_model
 VLT_BENDER  += -t simulation_hemaia
 VCS_BENDER  += -t simulation_hemaia -t simulation_hemaia_interposer_model
 
-# The snitch cluster DMA now comes from the remote `idma` dependency: its sources are gated
-# behind `-t rtl` (idma_pkg/backend/midend) and `-t snitch_cluster` (idma_inst64_top/_events).
-VSIM_BENDER += -t rtl -t snitch_cluster
-VLT_BENDER  += -t rtl -t snitch_cluster
-VCS_BENDER  += -t rtl -t snitch_cluster
+VSIM_BENDER += -t rtl
+VLT_BENDER  += -t rtl
+VCS_BENDER  += -t rtl
 
 ifeq ($(SIM_WITH_NETLIST), 1)
 	VSIM_BENDER += -t hemaia_netlist
