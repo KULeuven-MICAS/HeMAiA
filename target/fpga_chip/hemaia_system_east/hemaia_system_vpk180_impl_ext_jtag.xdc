@@ -12,8 +12,17 @@ set_property CLOCK_DEDICATED_ROUTE FALSE [get_nets -of [get_pins jtag_tck_i_IBUF
 set_property CLOCK_BUFFER_TYPE NONE [get_nets -of [get_pins jtag_tck_i_IBUF_inst/O]]
 set_input_jitter jtag_tck_i 1.000
 
-# JTAG clock is asynchronous with every other clocks.
-set_clock_groups -asynchronous -group [get_clocks jtag_tck_i]
+# JTAG crosses into the peripheral domain through CDC. Keep setup bounded so it
+# is not masked by a broad asynchronous clock-group exception.
+set jtag_tck_clocks [get_clocks -quiet jtag_tck_i]
+set jtag_peri_clocks [get_clocks -quiet clk_peri]
+if {[llength $jtag_tck_clocks] != 0 && [llength $jtag_peri_clocks] != 0} {
+  set jtag_peri_period [get_property PERIOD $jtag_peri_clocks]
+  set_max_delay -datapath_only $jtag_peri_period -from $jtag_tck_clocks -to $jtag_peri_clocks
+  set_max_delay -datapath_only $jtag_peri_period -from $jtag_peri_clocks -to $jtag_tck_clocks
+  set_false_path -hold -from $jtag_tck_clocks -to $jtag_peri_clocks
+  set_false_path -hold -from $jtag_peri_clocks -to $jtag_tck_clocks
+}
 
 # Minimize routing delay
 set_input_delay  -clock jtag_tck_i -clock_fall 5 [get_ports jtag_tdi_i]
