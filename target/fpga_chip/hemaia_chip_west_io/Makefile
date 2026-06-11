@@ -14,7 +14,9 @@ VIVADO ?= vivado
 BENDER ?= bender
 TARGET_PLATFORM ?= vpk180
 
-BENDER_TARGETS = $(shell cat $(MKFILE_DIR)../../rtl/src/bender_targets.tmp)
+BENDER_TARGETS = -t rtl
+BENDER_TARGETS += -t exclude_first_pass_decoder
+BENDER_TARGETS += $(shell cat $(MKFILE_DIR)../../rtl/src/bender_targets.tmp)
 BENDER_TARGETS += -t hemaia
 BENDER_TARGETS += -t $(TARGET_PLATFORM)
 BENDER_TARGETS += -t westonly
