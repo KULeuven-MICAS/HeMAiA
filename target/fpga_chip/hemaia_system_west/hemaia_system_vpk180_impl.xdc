@@ -111,8 +111,39 @@ create_generated_clock \
     [get_pins hemaia_system_i/occamy_chip/inst/clk_periph_i]
 
 set hemaia_clk_rst_path {hemaia_system_i/occamy_chip/inst/i_hemaia_clk_rst_controller}
-set clk_main_period [get_property PERIOD [get_clocks clk_main]]
-set clk_peri_period [get_property PERIOD [get_clocks clk_peri]]
+
+proc hemaia_xdc_filter_escape {value} {
+  return [string map [list "\\" "\\\\" "\"" "\\\""] $value]
+}
+
+proc hemaia_get_required_pin {name} {
+  set escaped [hemaia_xdc_filter_escape $name]
+  set pins [get_pins -quiet -hierarchical -filter "NAME == \"$escaped\""]
+  if {[llength $pins] != 1} {
+    error [format {Expected exactly one pin named "%s"; found %d: %s} $name [llength $pins] $pins]
+  }
+  return $pins
+}
+
+proc hemaia_get_required_port {name} {
+  set escaped [hemaia_xdc_filter_escape $name]
+  set ports [get_ports -quiet -filter "NAME == \"$escaped\""]
+  if {[llength $ports] != 1} {
+    error [format {Expected exactly one port named "%s"; found %d: %s} $name [llength $ports] $ports]
+  }
+  return $ports
+}
+
+proc hemaia_get_required_clock_period {clock_name} {
+  set clocks [get_clocks -quiet $clock_name]
+  if {[llength $clocks] != 1} {
+    error [format {Expected exactly one clock named "%s"; found %d: %s} $clock_name [llength $clocks] $clocks]
+  }
+  return [get_property PERIOD $clocks]
+}
+
+set clk_main_period [hemaia_get_required_clock_period clk_main]
+set clk_peri_period [hemaia_get_required_clock_period clk_peri]
 set clock_host_period [expr {$clk_main_period * 6.0}]
 set clock_acc_period [expr {$clk_main_period * 8.0}]
 set clock_d2d_phy_period [expr {$clk_main_period * 1.0}]
@@ -167,14 +198,14 @@ for {set i 0} {$i < 6} {incr i} {
   set odd_pin [format {%s/i_clk_divided_mux/clk1_i} $div_path]
 
   create_generated_clock -name [format {clk_divider_%d_even} $i] \
-    -source [get_pins hemaia_system_i/occamy_chip/inst/clk_i] \
+    -source [hemaia_get_required_pin {hemaia_system_i/occamy_chip/inst/clk_i}] \
     -divide_by 2 -master_clock clk_main \
-    [get_pins $even_pin]
+    [hemaia_get_required_pin $even_pin]
 
   create_generated_clock -name [format {clk_divider_%d_odd} $i] \
-    -source [get_pins hemaia_system_i/occamy_chip/inst/clk_i] \
+    -source [hemaia_get_required_pin {hemaia_system_i/occamy_chip/inst/clk_i}] \
     -divide_by 3 -master_clock clk_main \
-    [get_pins $odd_pin]
+    [hemaia_get_required_pin $odd_pin]
 
   set_clock_groups -logically_exclusive \
     -group [get_clocks [format {clk_divider_%d_even} $i]] \
@@ -182,22 +213,22 @@ for {set i 0} {$i < 6} {incr i} {
 }
 
 create_clock -name clk_host_gen -period $clock_host_period \
-  [get_pins [format {%s/gen_clock_divider[0].i_clk_divider/clk_o} $hemaia_clk_rst_path]]
+  [hemaia_get_required_pin [format {%s/gen_clock_divider[0].i_clk_divider/clk_o} $hemaia_clk_rst_path]]
 
 create_clock -name clk_acc_gen -period $clock_acc_period \
-  [get_pins [format {%s/gen_clock_divider[1].i_clk_divider/clk_o} $hemaia_clk_rst_path]]
+  [hemaia_get_required_pin [format {%s/gen_clock_divider[1].i_clk_divider/clk_o} $hemaia_clk_rst_path]]
 
 create_clock -name clk_d2d_phy_east_gen -period $clock_d2d_phy_period \
-  [get_pins [format {%s/gen_clock_divider[2].i_clk_divider/clk_o} $hemaia_clk_rst_path]]
+  [hemaia_get_required_pin [format {%s/gen_clock_divider[2].i_clk_divider/clk_o} $hemaia_clk_rst_path]]
 
 create_clock -name clk_d2d_phy_west_gen -period $clock_d2d_phy_period \
-  [get_pins [format {%s/gen_clock_divider[3].i_clk_divider/clk_o} $hemaia_clk_rst_path]]
+  [hemaia_get_required_pin [format {%s/gen_clock_divider[3].i_clk_divider/clk_o} $hemaia_clk_rst_path]]
 
 create_clock -name clk_d2d_phy_north_gen -period $clock_d2d_phy_period \
-  [get_pins [format {%s/gen_clock_divider[4].i_clk_divider/clk_o} $hemaia_clk_rst_path]]
+  [hemaia_get_required_pin [format {%s/gen_clock_divider[4].i_clk_divider/clk_o} $hemaia_clk_rst_path]]
 
 create_clock -name clk_d2d_phy_south_gen -period $clock_d2d_phy_period \
-  [get_pins [format {%s/gen_clock_divider[5].i_clk_divider/clk_o} $hemaia_clk_rst_path]]
+  [hemaia_get_required_pin [format {%s/gen_clock_divider[5].i_clk_divider/clk_o} $hemaia_clk_rst_path]]
 
 # Vivado does not support the Synopsys -allow_paths clock-group style used in
 # the chip SDC. Use explicit CDC max-delay plus hold-only false paths instead.
@@ -250,7 +281,7 @@ set rx_clk_1_io_port [format {%s[%d]} $d2d_io_port 0]
 set rx_clk_2_io_port [format {%s[%d]} $d2d_io_port 20]
 set rx_clk_3_io_port [format {%s[%d]} $d2d_io_port 40]
 set d2d_phy_clk clk_d2d_phy_west_gen
-set d2d_clk_period [get_property PERIOD [get_clocks $d2d_phy_clk]]
+set d2d_clk_period [hemaia_get_required_clock_period $d2d_phy_clk]
 set d2d_rx_mux_cdc_period [expr {0.5 * $d2d_clk_period}]
 set d2d_phy_async_period [expr {0.5 * $d2d_clk_period}]
 set d2d_tx_clk_pin [format {%s/gen_clock_divider[3].i_clk_divider/clk_o} $hemaia_clk_rst_path]
@@ -261,9 +292,9 @@ set phy_digital_channel3 [format {%s/gen_west_phy_enabled.gen_phy_channels[2].i_
 proc hemaia_create_d2d_tx_clock {idx phy_path src_pin master_clock} {
   set tx_clock [format {tx_clk_%d} $idx]
   create_generated_clock -name $tx_clock \
-    -source [get_pins $src_pin] \
+    -source [hemaia_get_required_pin $src_pin] \
     -divide_by 1 -master_clock $master_clock \
-    [get_pins [format {%s/clk_phy_tx_i} $phy_path]]
+    [hemaia_get_required_pin [format {%s/clk_phy_tx_i} $phy_path]]
 }
 
 proc hemaia_create_d2d_rx_clocks {idx rx_io_port phy_path period} {
@@ -272,22 +303,22 @@ proc hemaia_create_d2d_rx_clocks {idx rx_io_port phy_path period} {
   set rx_sel1_clock [format {rx_clk_%d_sel1} $idx]
   set rx_out_clock [format {rx_clk_%d_gen} $idx]
 
-  create_clock -period $period -name $rx_port_clock [get_ports $rx_io_port]
+  create_clock -period $period -name $rx_port_clock [hemaia_get_required_port $rx_io_port]
 
   create_generated_clock -name $rx_sel0_clock \
-    -source [get_ports $rx_io_port] \
+    -source [hemaia_get_required_port $rx_io_port] \
     -combinational \
     -master_clock $rx_port_clock \
-    [get_pins [format {%s/i_rx_clk_delay_controller/i_final_clk_mux/clk0} $phy_path]]
+    [hemaia_get_required_pin [format {%s/i_rx_clk_delay_controller/i_final_clk_mux/clk0} $phy_path]]
 
   create_generated_clock -name $rx_sel1_clock \
-    -source [get_ports $rx_io_port] \
+    -source [hemaia_get_required_port $rx_io_port] \
     -combinational \
     -master_clock $rx_port_clock \
-    [get_pins [format {%s/i_rx_clk_delay_controller/i_final_clk_mux/clk1} $phy_path]]
+    [hemaia_get_required_pin [format {%s/i_rx_clk_delay_controller/i_final_clk_mux/clk1} $phy_path]]
 
   create_clock -period $period -name $rx_out_clock \
-    [get_pins [format {%s/i_rx_clk_delay_controller/data_clk_o} $phy_path]]
+    [hemaia_get_required_pin [format {%s/i_rx_clk_delay_controller/data_clk_o} $phy_path]]
 }
 
 hemaia_create_d2d_tx_clock 1 $phy_digital_channel1 $d2d_tx_clk_pin $d2d_phy_clk
