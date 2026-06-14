@@ -14,15 +14,11 @@ set_input_jitter jtag_tck_i 1.000
 
 # JTAG crosses into the peripheral domain through CDC. Keep setup bounded so it
 # is not masked by a broad asynchronous clock-group exception.
-set jtag_tck_clocks [get_clocks -quiet jtag_tck_i]
-set jtag_peri_clocks [get_clocks -quiet clk_peri]
-if {[llength $jtag_tck_clocks] != 0 && [llength $jtag_peri_clocks] != 0} {
-  set jtag_peri_period [get_property PERIOD $jtag_peri_clocks]
-  set_max_delay -datapath_only $jtag_peri_period -from $jtag_tck_clocks -to $jtag_peri_clocks
-  set_max_delay -datapath_only $jtag_peri_period -from $jtag_peri_clocks -to $jtag_tck_clocks
-  set_false_path -hold -from $jtag_tck_clocks -to $jtag_peri_clocks
-  set_false_path -hold -from $jtag_peri_clocks -to $jtag_tck_clocks
-}
+set jtag_peri_period [get_property PERIOD [get_clocks clk_peri]]
+set_max_delay -datapath_only $jtag_peri_period -from [get_clocks jtag_tck_i] -to [get_clocks clk_peri]
+set_max_delay -datapath_only $jtag_peri_period -from [get_clocks clk_peri] -to [get_clocks jtag_tck_i]
+set_false_path -hold -from [get_clocks jtag_tck_i] -to [get_clocks clk_peri]
+set_false_path -hold -from [get_clocks clk_peri] -to [get_clocks jtag_tck_i]
 
 # Minimize routing delay
 set_input_delay  -clock jtag_tck_i -clock_fall 5 [get_ports jtag_tdi_i]
@@ -36,7 +32,7 @@ set_max_delay -from [get_ports { jtag_tdi_i }] 20
 
 set_property LOC SLICE_X306Y0 [get_cells {hemaia_system_i/occamy_chip/inst/i_d2d_link/gen_west_phy_enabled.gen_phy_channels[1].i_phy_interface_west/i_phy_analog_interface/tx_en_delayed_reg_replica_42}]
 create_pblock pblock_i_d2d_link
-add_cells_to_pblock [get_pblocks pblock_i_d2d_link] [get_cells -quiet [list hemaia_system_i/occamy_chip/inst/i_d2d_link]]
+add_cells_to_pblock [get_pblocks pblock_i_d2d_link] [get_cells -quiet {hemaia_system_i/occamy_chip/inst/i_d2d_link}]
 resize_pblock [get_pblocks pblock_i_d2d_link] -add {SLICE_X164Y0:SLICE_X379Y43}
 resize_pblock [get_pblocks pblock_i_d2d_link] -add {BLI_A_GRP0_X74Y0:BLI_A_GRP0_X211Y0}
 resize_pblock [get_pblocks pblock_i_d2d_link] -add {BLI_A_GRP1_X74Y0:BLI_A_GRP1_X211Y0}

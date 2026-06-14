@@ -34,7 +34,7 @@ set_property used_in_synthesis false [get_files hemaia_system_west/hemaia_system
 if { $EXT_JTAG } {
     add_files -fileset constrs_1 -norecurse hemaia_system_vpk180_impl_ext_jtag.xdc
     import_files -fileset constrs_1 hemaia_system_vpk180_impl_ext_jtag.xdc
-    set_property used_in_synthesis false [get_files hemaia_system_west/hemaia_system_west.srcs/constrs_1/imports/hemaia_system_west/hemaia_system_vpk180_impl.xdc]
+    set_property used_in_synthesis false [get_files hemaia_system_west/hemaia_system_west.srcs/constrs_1/imports/hemaia_system_west/hemaia_system_vpk180_impl_ext_jtag.xdc]
 } else {
     delete_bd_objs [get_bd_nets -of_objects [get_bd_ports "jtag_tck_i jtag_tdi_i jtag_tdo_o jtag_tms_i" ]]
     delete_bd_objs [get_bd_ports jtag_*]
@@ -146,9 +146,6 @@ if ($DEBUG) {
     }
 
     set_property target_constrs_file hemaia_system_west/hemaia_system_west.srcs/constrs_1/imports/hemaia_system_west/hemaia_system_vpk180_impl.xdc [current_fileset -constrset]
-    if { $EXT_JTAG } {
-        set_property target_constrs_file hemaia_system_west/hemaia_system_west.srcs/constrs_1/imports/hemaia_system_west/hemaia_system_vpk180_impl_ext_jtag.xdc [current_fileset -constrset]
-    }
     save_constraints -force
 
     implement_debug_core
