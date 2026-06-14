@@ -249,67 +249,68 @@ set clk_peri_period [get_property PERIOD [get_clocks clk_peri]]
 set clock_host_period [expr {$clk_main_period * 6.0}]
 set clock_acc_period [expr {$clk_main_period * 8.0}]
 set clock_d2d_phy_period [expr {$clk_main_period * 1.0}]
+set clock_peri_acc_cdc_period [expr {$clock_acc_period < $clk_peri_period ? $clock_acc_period : $clk_peri_period}]
 
 # Model the programmable divider internals like the chip SDC. The even/odd
 # divider candidates stay related to clk_main; each final channel clock is an
 # independent output-domain clock at the divider output.
 create_generated_clock -name clk_divider_0_even \
   -source [get_pins -hierarchical -filter {NAME == "hemaia_system_i/occamy_chip/inst/clk_i"}] \
-  -divide_by 2 -master_clock clk_main \
+  -divide_by 2 -add -master_clock clk_main \
   [get_pins -hierarchical -filter {NAME == "hemaia_system_i/occamy_chip/inst/i_hemaia_clk_rst_controller/gen_clock_divider[0].i_clk_divider/i_clk_divided_mux/clk0_i"}]
 create_generated_clock -name clk_divider_0_odd \
   -source [get_pins -hierarchical -filter {NAME == "hemaia_system_i/occamy_chip/inst/clk_i"}] \
-  -divide_by 3 -master_clock clk_main \
+  -divide_by 3 -add -master_clock clk_main \
   [get_pins -hierarchical -filter {NAME == "hemaia_system_i/occamy_chip/inst/i_hemaia_clk_rst_controller/gen_clock_divider[0].i_clk_divider/i_clk_divided_mux/clk1_i"}]
 set_clock_groups -logically_exclusive -group [get_clocks clk_divider_0_even] -group [get_clocks clk_divider_0_odd]
 
 create_generated_clock -name clk_divider_1_even \
   -source [get_pins -hierarchical -filter {NAME == "hemaia_system_i/occamy_chip/inst/clk_i"}] \
-  -divide_by 2 -master_clock clk_main \
+  -divide_by 2 -add -master_clock clk_main \
   [get_pins -hierarchical -filter {NAME == "hemaia_system_i/occamy_chip/inst/i_hemaia_clk_rst_controller/gen_clock_divider[1].i_clk_divider/i_clk_divided_mux/clk0_i"}]
 create_generated_clock -name clk_divider_1_odd \
   -source [get_pins -hierarchical -filter {NAME == "hemaia_system_i/occamy_chip/inst/clk_i"}] \
-  -divide_by 3 -master_clock clk_main \
+  -divide_by 3 -add -master_clock clk_main \
   [get_pins -hierarchical -filter {NAME == "hemaia_system_i/occamy_chip/inst/i_hemaia_clk_rst_controller/gen_clock_divider[1].i_clk_divider/i_clk_divided_mux/clk1_i"}]
 set_clock_groups -logically_exclusive -group [get_clocks clk_divider_1_even] -group [get_clocks clk_divider_1_odd]
 
 create_generated_clock -name clk_divider_2_even \
   -source [get_pins -hierarchical -filter {NAME == "hemaia_system_i/occamy_chip/inst/clk_i"}] \
-  -divide_by 2 -master_clock clk_main \
+  -divide_by 2 -add -master_clock clk_main \
   [get_pins -hierarchical -filter {NAME == "hemaia_system_i/occamy_chip/inst/i_hemaia_clk_rst_controller/gen_clock_divider[2].i_clk_divider/i_clk_divided_mux/clk0_i"}]
 create_generated_clock -name clk_divider_2_odd \
   -source [get_pins -hierarchical -filter {NAME == "hemaia_system_i/occamy_chip/inst/clk_i"}] \
-  -divide_by 3 -master_clock clk_main \
+  -divide_by 3 -add -master_clock clk_main \
   [get_pins -hierarchical -filter {NAME == "hemaia_system_i/occamy_chip/inst/i_hemaia_clk_rst_controller/gen_clock_divider[2].i_clk_divider/i_clk_divided_mux/clk1_i"}]
 set_clock_groups -logically_exclusive -group [get_clocks clk_divider_2_even] -group [get_clocks clk_divider_2_odd]
 
 create_generated_clock -name clk_divider_3_even \
   -source [get_pins -hierarchical -filter {NAME == "hemaia_system_i/occamy_chip/inst/clk_i"}] \
-  -divide_by 2 -master_clock clk_main \
+  -divide_by 2 -add -master_clock clk_main \
   [get_pins -hierarchical -filter {NAME == "hemaia_system_i/occamy_chip/inst/i_hemaia_clk_rst_controller/gen_clock_divider[3].i_clk_divider/i_clk_divided_mux/clk0_i"}]
 create_generated_clock -name clk_divider_3_odd \
   -source [get_pins -hierarchical -filter {NAME == "hemaia_system_i/occamy_chip/inst/clk_i"}] \
-  -divide_by 3 -master_clock clk_main \
+  -divide_by 3 -add -master_clock clk_main \
   [get_pins -hierarchical -filter {NAME == "hemaia_system_i/occamy_chip/inst/i_hemaia_clk_rst_controller/gen_clock_divider[3].i_clk_divider/i_clk_divided_mux/clk1_i"}]
 set_clock_groups -logically_exclusive -group [get_clocks clk_divider_3_even] -group [get_clocks clk_divider_3_odd]
 
 create_generated_clock -name clk_divider_4_even \
   -source [get_pins -hierarchical -filter {NAME == "hemaia_system_i/occamy_chip/inst/clk_i"}] \
-  -divide_by 2 -master_clock clk_main \
+  -divide_by 2 -add -master_clock clk_main \
   [get_pins -hierarchical -filter {NAME == "hemaia_system_i/occamy_chip/inst/i_hemaia_clk_rst_controller/gen_clock_divider[4].i_clk_divider/i_clk_divided_mux/clk0_i"}]
 create_generated_clock -name clk_divider_4_odd \
   -source [get_pins -hierarchical -filter {NAME == "hemaia_system_i/occamy_chip/inst/clk_i"}] \
-  -divide_by 3 -master_clock clk_main \
+  -divide_by 3 -add -master_clock clk_main \
   [get_pins -hierarchical -filter {NAME == "hemaia_system_i/occamy_chip/inst/i_hemaia_clk_rst_controller/gen_clock_divider[4].i_clk_divider/i_clk_divided_mux/clk1_i"}]
 set_clock_groups -logically_exclusive -group [get_clocks clk_divider_4_even] -group [get_clocks clk_divider_4_odd]
 
 create_generated_clock -name clk_divider_5_even \
   -source [get_pins -hierarchical -filter {NAME == "hemaia_system_i/occamy_chip/inst/clk_i"}] \
-  -divide_by 2 -master_clock clk_main \
+  -divide_by 2 -add -master_clock clk_main \
   [get_pins -hierarchical -filter {NAME == "hemaia_system_i/occamy_chip/inst/i_hemaia_clk_rst_controller/gen_clock_divider[5].i_clk_divider/i_clk_divided_mux/clk0_i"}]
 create_generated_clock -name clk_divider_5_odd \
   -source [get_pins -hierarchical -filter {NAME == "hemaia_system_i/occamy_chip/inst/clk_i"}] \
-  -divide_by 3 -master_clock clk_main \
+  -divide_by 3 -add -master_clock clk_main \
   [get_pins -hierarchical -filter {NAME == "hemaia_system_i/occamy_chip/inst/i_hemaia_clk_rst_controller/gen_clock_divider[5].i_clk_divider/i_clk_divided_mux/clk1_i"}]
 set_clock_groups -logically_exclusive -group [get_clocks clk_divider_5_even] -group [get_clocks clk_divider_5_odd]
 
@@ -331,7 +332,7 @@ create_clock -name clk_d2d_phy_north_gen -period $clock_d2d_phy_period \
 create_clock -name clk_d2d_phy_south_gen -period $clock_d2d_phy_period \
   [get_pins -hierarchical -filter {NAME == "hemaia_system_i/occamy_chip/inst/i_hemaia_clk_rst_controller/gen_clock_divider[5].i_clk_divider/clk_o"}]
 
-# Vivado does not support the Synopsys -allow_paths clock-group style used in
+# Vivado does not support the Synopsys allow-paths clock-group style used in
 # the chip SDC. Use explicit CDC max-delay plus hold-only false paths instead.
 set_clock_groups -asynchronous -group [get_clocks clk_pl_1]
 
@@ -349,6 +350,11 @@ set_max_delay -datapath_only $clock_host_period -from [get_clocks clk_host_gen] 
 set_max_delay -datapath_only $clock_host_period -from [get_clocks clk_acc_gen] -to [get_clocks clk_host_gen]
 set_false_path -hold -from [get_clocks clk_host_gen] -to [get_clocks clk_acc_gen]
 set_false_path -hold -from [get_clocks clk_acc_gen] -to [get_clocks clk_host_gen]
+
+set_max_delay -datapath_only $clock_peri_acc_cdc_period -from [get_clocks clk_peri] -to [get_clocks clk_acc_gen]
+set_max_delay -datapath_only $clock_peri_acc_cdc_period -from [get_clocks clk_acc_gen] -to [get_clocks clk_peri]
+set_false_path -hold -from [get_clocks clk_peri] -to [get_clocks clk_acc_gen]
+set_false_path -hold -from [get_clocks clk_acc_gen] -to [get_clocks clk_peri]
 
 set_max_delay -datapath_only $clock_d2d_phy_period -from [get_clocks {clk_host_gen clk_peri}] -to [get_clocks clk_d2d_phy_east_gen]
 set_max_delay -datapath_only $clock_d2d_phy_period -from [get_clocks clk_d2d_phy_east_gen] -to [get_clocks {clk_host_gen clk_peri}]
@@ -397,104 +403,21 @@ set_false_path -through [get_pins hemaia_system_i/occamy_chip/inst/gpio_oe_o]
 
 
 ########## D2D #############
-set d2d_clk_period [get_property PERIOD [get_clocks clk_d2d_phy_east_gen]]
-set d2d_rx_mux_cdc_period [expr {0.5 * $d2d_clk_period}]
-set d2d_phy_async_period [expr {0.5 * $d2d_clk_period}]
+set rx_clk_1_io_port {east_d2d_io_0[1]}
+set rx_clk_2_io_port {east_d2d_io_0[21]}
+set rx_clk_3_io_port {east_d2d_io_0[41]}
+set d2d_phy_clk clk_main
+set d2d_clk_period [get_property PERIOD [get_clocks $d2d_phy_clk]]
 
-create_generated_clock -name tx_clk_1 \
-  -source [get_pins -hierarchical -filter {NAME == "hemaia_system_i/occamy_chip/inst/i_hemaia_clk_rst_controller/gen_clock_divider[2].i_clk_divider/clk_o"}] \
-  -divide_by 1 -master_clock clk_d2d_phy_east_gen \
-  [get_pins -hierarchical -filter {NAME == "hemaia_system_i/occamy_chip/inst/i_d2d_link/gen_east_phy_enabled.gen_phy_channels[0].i_phy_interface_east/i_phy_digital_interface/clk_phy_tx_i"}]
-create_generated_clock -name tx_clk_2 \
-  -source [get_pins -hierarchical -filter {NAME == "hemaia_system_i/occamy_chip/inst/i_hemaia_clk_rst_controller/gen_clock_divider[2].i_clk_divider/clk_o"}] \
-  -divide_by 1 -master_clock clk_d2d_phy_east_gen \
-  [get_pins -hierarchical -filter {NAME == "hemaia_system_i/occamy_chip/inst/i_d2d_link/gen_east_phy_enabled.gen_phy_channels[1].i_phy_interface_east/i_phy_digital_interface/clk_phy_tx_i"}]
-create_generated_clock -name tx_clk_3 \
-  -source [get_pins -hierarchical -filter {NAME == "hemaia_system_i/occamy_chip/inst/i_hemaia_clk_rst_controller/gen_clock_divider[2].i_clk_divider/clk_o"}] \
-  -divide_by 1 -master_clock clk_d2d_phy_east_gen \
-  [get_pins -hierarchical -filter {NAME == "hemaia_system_i/occamy_chip/inst/i_d2d_link/gen_east_phy_enabled.gen_phy_channels[2].i_phy_interface_east/i_phy_digital_interface/clk_phy_tx_i"}]
+create_clock -period $d2d_clk_period -name rx_clk_1 [get_ports $rx_clk_1_io_port]
+create_clock -period $d2d_clk_period -name rx_clk_2 [get_ports $rx_clk_2_io_port]
+create_clock -period $d2d_clk_period -name rx_clk_3 [get_ports $rx_clk_3_io_port]
 
-create_clock -period $d2d_clk_period -name rx_clk_1 [get_ports -filter {NAME == "east_d2d_io_0[1]"}]
-create_generated_clock -name rx_clk_1_sel0 \
-  -source [get_ports -filter {NAME == "east_d2d_io_0[1]"}] \
-  -combinational -master_clock rx_clk_1 \
-  [get_pins -hierarchical -filter {NAME == "hemaia_system_i/occamy_chip/inst/i_d2d_link/gen_east_phy_enabled.gen_phy_channels[0].i_phy_interface_east/i_phy_digital_interface/i_rx_clk_delay_controller/i_final_clk_mux/clk0"}]
-create_generated_clock -name rx_clk_1_sel1 \
-  -source [get_ports -filter {NAME == "east_d2d_io_0[1]"}] \
-  -combinational -master_clock rx_clk_1 \
-  [get_pins -hierarchical -filter {NAME == "hemaia_system_i/occamy_chip/inst/i_d2d_link/gen_east_phy_enabled.gen_phy_channels[0].i_phy_interface_east/i_phy_digital_interface/i_rx_clk_delay_controller/i_final_clk_mux/clk1"}]
-create_clock -period $d2d_clk_period -name rx_clk_1_gen \
-  [get_pins -hierarchical -filter {NAME == "hemaia_system_i/occamy_chip/inst/i_d2d_link/gen_east_phy_enabled.gen_phy_channels[0].i_phy_interface_east/i_phy_digital_interface/i_rx_clk_delay_controller/data_clk_o"}]
-
-create_clock -period $d2d_clk_period -name rx_clk_2 [get_ports -filter {NAME == "east_d2d_io_0[21]"}]
-create_generated_clock -name rx_clk_2_sel0 \
-  -source [get_ports -filter {NAME == "east_d2d_io_0[21]"}] \
-  -combinational -master_clock rx_clk_2 \
-  [get_pins -hierarchical -filter {NAME == "hemaia_system_i/occamy_chip/inst/i_d2d_link/gen_east_phy_enabled.gen_phy_channels[1].i_phy_interface_east/i_phy_digital_interface/i_rx_clk_delay_controller/i_final_clk_mux/clk0"}]
-create_generated_clock -name rx_clk_2_sel1 \
-  -source [get_ports -filter {NAME == "east_d2d_io_0[21]"}] \
-  -combinational -master_clock rx_clk_2 \
-  [get_pins -hierarchical -filter {NAME == "hemaia_system_i/occamy_chip/inst/i_d2d_link/gen_east_phy_enabled.gen_phy_channels[1].i_phy_interface_east/i_phy_digital_interface/i_rx_clk_delay_controller/i_final_clk_mux/clk1"}]
-create_clock -period $d2d_clk_period -name rx_clk_2_gen \
-  [get_pins -hierarchical -filter {NAME == "hemaia_system_i/occamy_chip/inst/i_d2d_link/gen_east_phy_enabled.gen_phy_channels[1].i_phy_interface_east/i_phy_digital_interface/i_rx_clk_delay_controller/data_clk_o"}]
-
-create_clock -period $d2d_clk_period -name rx_clk_3 [get_ports -filter {NAME == "east_d2d_io_0[41]"}]
-create_generated_clock -name rx_clk_3_sel0 \
-  -source [get_ports -filter {NAME == "east_d2d_io_0[41]"}] \
-  -combinational -master_clock rx_clk_3 \
-  [get_pins -hierarchical -filter {NAME == "hemaia_system_i/occamy_chip/inst/i_d2d_link/gen_east_phy_enabled.gen_phy_channels[2].i_phy_interface_east/i_phy_digital_interface/i_rx_clk_delay_controller/i_final_clk_mux/clk0"}]
-create_generated_clock -name rx_clk_3_sel1 \
-  -source [get_ports -filter {NAME == "east_d2d_io_0[41]"}] \
-  -combinational -master_clock rx_clk_3 \
-  [get_pins -hierarchical -filter {NAME == "hemaia_system_i/occamy_chip/inst/i_d2d_link/gen_east_phy_enabled.gen_phy_channels[2].i_phy_interface_east/i_phy_digital_interface/i_rx_clk_delay_controller/i_final_clk_mux/clk1"}]
-create_clock -period $d2d_clk_period -name rx_clk_3_gen \
-  [get_pins -hierarchical -filter {NAME == "hemaia_system_i/occamy_chip/inst/i_d2d_link/gen_east_phy_enabled.gen_phy_channels[2].i_phy_interface_east/i_phy_digital_interface/i_rx_clk_delay_controller/data_clk_o"}]
-
-set_max_delay -datapath_only $d2d_clk_period -from [get_clocks {clk_host_gen clk_peri}] -to [get_clocks tx_clk_1]
-set_max_delay -datapath_only $d2d_clk_period -from [get_clocks tx_clk_1] -to [get_clocks {clk_host_gen clk_peri}]
-set_false_path -hold -from [get_clocks {clk_host_gen clk_peri}] -to [get_clocks tx_clk_1]
-set_false_path -hold -from [get_clocks tx_clk_1] -to [get_clocks {clk_host_gen clk_peri}]
-set_max_delay -datapath_only $d2d_clk_period -from [get_clocks {clk_host_gen clk_peri}] -to [get_clocks rx_clk_1_gen]
-set_max_delay -datapath_only $d2d_clk_period -from [get_clocks rx_clk_1_gen] -to [get_clocks {clk_host_gen clk_peri}]
-set_false_path -hold -from [get_clocks {clk_host_gen clk_peri}] -to [get_clocks rx_clk_1_gen]
-set_false_path -hold -from [get_clocks rx_clk_1_gen] -to [get_clocks {clk_host_gen clk_peri}]
-set_max_delay -datapath_only $d2d_rx_mux_cdc_period -from [get_clocks rx_clk_1_sel0] -to [get_clocks rx_clk_1_sel1]
-set_max_delay -datapath_only $d2d_rx_mux_cdc_period -from [get_clocks rx_clk_1_sel1] -to [get_clocks rx_clk_1_sel0]
-set_false_path -hold -from [get_clocks rx_clk_1_sel0] -to [get_clocks rx_clk_1_sel1]
-set_false_path -hold -from [get_clocks rx_clk_1_sel1] -to [get_clocks rx_clk_1_sel0]
-
-set_max_delay -datapath_only $d2d_clk_period -from [get_clocks {clk_host_gen clk_peri}] -to [get_clocks tx_clk_2]
-set_max_delay -datapath_only $d2d_clk_period -from [get_clocks tx_clk_2] -to [get_clocks {clk_host_gen clk_peri}]
-set_false_path -hold -from [get_clocks {clk_host_gen clk_peri}] -to [get_clocks tx_clk_2]
-set_false_path -hold -from [get_clocks tx_clk_2] -to [get_clocks {clk_host_gen clk_peri}]
-set_max_delay -datapath_only $d2d_clk_period -from [get_clocks {clk_host_gen clk_peri}] -to [get_clocks rx_clk_2_gen]
-set_max_delay -datapath_only $d2d_clk_period -from [get_clocks rx_clk_2_gen] -to [get_clocks {clk_host_gen clk_peri}]
-set_false_path -hold -from [get_clocks {clk_host_gen clk_peri}] -to [get_clocks rx_clk_2_gen]
-set_false_path -hold -from [get_clocks rx_clk_2_gen] -to [get_clocks {clk_host_gen clk_peri}]
-set_max_delay -datapath_only $d2d_rx_mux_cdc_period -from [get_clocks rx_clk_2_sel0] -to [get_clocks rx_clk_2_sel1]
-set_max_delay -datapath_only $d2d_rx_mux_cdc_period -from [get_clocks rx_clk_2_sel1] -to [get_clocks rx_clk_2_sel0]
-set_false_path -hold -from [get_clocks rx_clk_2_sel0] -to [get_clocks rx_clk_2_sel1]
-set_false_path -hold -from [get_clocks rx_clk_2_sel1] -to [get_clocks rx_clk_2_sel0]
-
-set_max_delay -datapath_only $d2d_clk_period -from [get_clocks {clk_host_gen clk_peri}] -to [get_clocks tx_clk_3]
-set_max_delay -datapath_only $d2d_clk_period -from [get_clocks tx_clk_3] -to [get_clocks {clk_host_gen clk_peri}]
-set_false_path -hold -from [get_clocks {clk_host_gen clk_peri}] -to [get_clocks tx_clk_3]
-set_false_path -hold -from [get_clocks tx_clk_3] -to [get_clocks {clk_host_gen clk_peri}]
-set_max_delay -datapath_only $d2d_clk_period -from [get_clocks {clk_host_gen clk_peri}] -to [get_clocks rx_clk_3_gen]
-set_max_delay -datapath_only $d2d_clk_period -from [get_clocks rx_clk_3_gen] -to [get_clocks {clk_host_gen clk_peri}]
-set_false_path -hold -from [get_clocks {clk_host_gen clk_peri}] -to [get_clocks rx_clk_3_gen]
-set_false_path -hold -from [get_clocks rx_clk_3_gen] -to [get_clocks {clk_host_gen clk_peri}]
-set_max_delay -datapath_only $d2d_rx_mux_cdc_period -from [get_clocks rx_clk_3_sel0] -to [get_clocks rx_clk_3_sel1]
-set_max_delay -datapath_only $d2d_rx_mux_cdc_period -from [get_clocks rx_clk_3_sel1] -to [get_clocks rx_clk_3_sel0]
-set_false_path -hold -from [get_clocks rx_clk_3_sel0] -to [get_clocks rx_clk_3_sel1]
-set_false_path -hold -from [get_clocks rx_clk_3_sel1] -to [get_clocks rx_clk_3_sel0]
-
-set_max_delay $d2d_phy_async_period -to [get_pins -quiet -hierarchical -filter {NAME =~ *i_d2d_link*async_tx_mode_i}]
-set_false_path -hold -to [get_pins -quiet -hierarchical -filter {NAME =~ *i_d2d_link*async_tx_mode_i}]
-set_max_delay $d2d_phy_async_period -to [get_pins -quiet -hierarchical -filter {NAME =~ *i_d2d_link*async_phy_ready_i}]
-set_false_path -hold -to [get_pins -quiet -hierarchical -filter {NAME =~ *i_d2d_link*async_phy_ready_i}]
-set_max_delay $d2d_phy_async_period -from [get_pins -quiet -hierarchical -filter {NAME =~ *i_d2d_link*async_buffer_empty_o}]
-set_false_path -hold -from [get_pins -quiet -hierarchical -filter {NAME =~ *i_d2d_link*async_buffer_empty_o}]
+set_clock_groups -asynchronous \
+    -group [get_clocks rx_clk_1] \
+    -group [get_clocks rx_clk_2] \
+    -group [get_clocks rx_clk_3] \
+    -group [get_clocks {clk_pl_0 clk_main clk_host_gen clk_acc_gen clk_pl_1 clk_pl_2 clk_peri clk_d2d_phy_east_gen clk_d2d_phy_west_gen clk_d2d_phy_north_gen clk_d2d_phy_south_gen}]
 
 #### The t-pin oddrs are active one cycle before the data
 set_multicycle_path -to [get_pins -hierarchical *oddre1_tpin/D*] 2
@@ -510,6 +433,9 @@ set_false_path -through [get_pins -quiet -hierarchical -filter {NAME =~ *i_d2d_l
 set_false_path -through [get_pins -quiet {hemaia_system_i/occamy_chip/inst/i_d2d_link/i_controller_reg_to_hw/reg2hw[availability_register][*_link_available][q]}]
 set_false_path -through [get_pins -quiet {hemaia_system_i/occamy_chip/inst/i_d2d_link/i_controller_reg_to_hw/reg2hw[multicast_fence_register][*][q]}]
 set_false_path -through [get_nets -quiet {hemaia_system_i/occamy_chip/inst/i_d2d_link/hw2reg[fec_unrecoverable_error_register][*][d][*]}]
+set_false_path -through [get_nets -quiet {hemaia_system_i/occamy_chip/inst/i_d2d_link/i_controller_reg_to_hw/reg2hw[rx_buffer_threshold_register][east_rx_buffer_threshold][q][*]}]
+set_false_path -through [get_nets -quiet {hemaia_system_i/occamy_chip/inst/i_d2d_link/i_controller_reg_to_hw/u_tx_backoff_period_register_east_tx_backoff_period/reg2hw[tx_backoff_period_register][east_tx_backoff_period][q][*]}]
+set_false_path -through [get_nets -quiet {hemaia_system_i/occamy_chip/inst/i_d2d_link/reg2hw[tx_hold_period_register][east_tx_hold_period][q][*]}]
 set_false_path -through [get_nets -quiet {hemaia_system_i/occamy_chip/inst/i_d2d_link/i_controller_reg_to_hw/reg2hw[rx_buffer_threshold_register][*_rx_buffer_threshold][q][*]}]
 set_false_path -through [get_nets -quiet {hemaia_system_i/occamy_chip/inst/i_d2d_link/i_controller_reg_to_hw/u_tx_backoff_period_register_*_tx_backoff_period/reg2hw[tx_backoff_period_register][*_tx_backoff_period][q][*]}]
 set_false_path -through [get_nets -quiet {hemaia_system_i/occamy_chip/inst/i_d2d_link/reg2hw[tx_hold_period_register][*_tx_hold_period][q][*]}]
@@ -522,6 +448,9 @@ set_false_path -through [get_nets -quiet {hemaia_system_i/occamy_chip/inst/i_d2d
 set_false_path -through [get_nets -quiet {hemaia_system_i/occamy_chip/inst/i_d2d_link/reg2hw[*_programmable_clock_delay_register][clock_delay_c*][q][*]}]
 set_false_path -through [get_nets -quiet {hemaia_system_i/occamy_chip/inst/i_d2d_link/reg2hw[phy_ddr_mode_register][*][q]}]
 set_false_path -through [get_nets -quiet {hemaia_system_i/occamy_chip/inst/i_d2d_link/reg2hw[test_mode_register][*_test_request][q]}]
+set_false_path -from [get_pins -quiet -hierarchical -filter {NAME =~ *i_d2d_link*i_controller_reg_to_hw/u_phy_ddr_mode_register_*/*q_reg*/C}]
+set_false_path -through [get_pins -quiet -hierarchical -filter {NAME =~ *i_d2d_link*i_controller_reg_to_hw/u_phy_ddr_mode_register_*/*q_reg*/Q}]
+set_false_path -through [get_nets -quiet -hierarchical -filter {NAME =~ *i_d2d_link*i_controller_reg_to_hw/u_phy_ddr_mode_register_*/*q_reg*}]
 
 
 ################################################################################
