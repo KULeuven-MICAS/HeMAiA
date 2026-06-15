@@ -283,8 +283,6 @@ clean:
 	$(MAKE) -C host TARGET=clean
 # clean host runtimes
 	$(MAKE) -C $(LIB_BINGO_DIR) clean
-# clean the host.ld
-	rm -rf host/runtime/host.ld
 # clean generated tmp files
 	rm -rf $(SW_DIR)/device/*.tmp
 # clean generated headers
