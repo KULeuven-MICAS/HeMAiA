@@ -135,6 +135,11 @@ RISCV_LDFLAGS += -nostartfiles
 RISCV_LDFLAGS += -lm
 RISCV_LDFLAGS += -lgcc
 RISCV_LDFLAGS += -T$(LINKER_SCRIPT)
+# The host runs bare-metal from a unified SPM (host.ld maps code+data+bss into
+# one WIDE_SPM region), so the single PT_LOAD segment is intentionally RWX.
+# Silence binutils >= 2.39's W^X advisory warning (the flag was introduced in
+# the same release that added the warning, so any ld that warns accepts it).
+RISCV_LDFLAGS += -Wl,--no-warn-rwx-segments
 
 
 # if the host application uses the bingo runtime
