@@ -59,11 +59,6 @@ runs:
     CHIP_TYPE: single_chip
     WORKLOAD: None
     DEV_APP: snax-xdma-copy
-  # snax-xdma-hazard
-  - HOST_APP_TYPE: offload_legacy
-    CHIP_TYPE: single_chip
-    WORKLOAD: None
-    DEV_APP: snax-xdma-hazard
   # snax-versacore-matmul-profile
   - HOST_APP_TYPE: offload_legacy
     CHIP_TYPE: single_chip
