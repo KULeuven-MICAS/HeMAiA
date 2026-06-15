@@ -428,6 +428,8 @@ set_false_path -through [get_nets -quiet -hierarchical -filter {NAME =~ *i_d2d_l
 set_false_path -through [get_pins -quiet -hierarchical -filter {NAME =~ *i_d2d_link*false_path*}]
 set_false_path -through [get_pins -quiet {hemaia_system_i/occamy_chip/inst/i_d2d_link/*.i_phy_interface*/*tx_strength_thermometer_i*}]
 set_false_path -through [get_pins -quiet -hierarchical -filter {NAME =~ *i_d2d_link*i_rx_clk_delay_controller/i_final_clk_mux/sel}]
+set_false_path -from [get_pins -quiet -hierarchical -filter {NAME =~ *i_d2d_link*i_rx_clk_delay_controller/i_final_clk_mux/ena2_r2_reg/C}] -to [get_pins -quiet -hierarchical -filter {NAME =~ *i_d2d_link*i_rx_clk_delay_controller/i_final_clk_mux/ena1_r1_reg/D}]
+set_false_path -from [get_pins -quiet -hierarchical -filter {NAME =~ *i_d2d_link*i_rx_clk_delay_controller/i_final_clk_mux/ena1_r2_reg/C}] -to [get_pins -quiet -hierarchical -filter {NAME =~ *i_d2d_link*i_rx_clk_delay_controller/i_final_clk_mux/ena2_r1_reg/D}]
 set_false_path -through [get_pins -quiet -hierarchical -filter {NAME =~ *i_d2d_link*link_available*}]
 set_false_path -through [get_pins -quiet -hierarchical -filter {NAME =~ *i_d2d_link*multicast_available*}]
 set_false_path -through [get_pins -quiet {hemaia_system_i/occamy_chip/inst/i_d2d_link/i_controller_reg_to_hw/reg2hw[availability_register][*_link_available][q]}]
