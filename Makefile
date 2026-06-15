@@ -26,9 +26,12 @@ $(CFG): FORCE
 		echo "Using default config file: $$DEFAULT_CFG"; \
 		cp $$DEFAULT_CFG $@; \
 	fi
-	@# If a config file is provided on the command-line 
-	@# then we override the LRU file with it
-	@if [ $(CFG_OVERRIDE) ] ; then \
+	@# If a config file is provided on the command-line then we override the
+	@# LRU file with it -- but only when it actually differs. cp always bumps
+	@# the mtime, so an unconditional copy makes repeated invocations with the
+	@# same CFG_OVERRIDE (e.g. one per CI task) needlessly retrigger every
+	@# $(CFG)-dependent rebuild (SW headers, host.ld, RTL gen).
+	@if [ $(CFG_OVERRIDE) ] && ! cmp -s $(CFG_OVERRIDE) $@ ; then \
 		echo "Overriding config file with: $(CFG_OVERRIDE)"; \
 		cp $(CFG_OVERRIDE) $@; \
 	fi
