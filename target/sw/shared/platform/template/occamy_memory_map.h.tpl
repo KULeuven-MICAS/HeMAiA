@@ -133,8 +133,7 @@ inline uintptr_t cluster_tcdm_start_addr(uint32_t cluster_idx) {
 }
 
 inline uintptr_t cluster_tcdm_end_addr(uint32_t cluster_idx) {
-    return translate_cluster_address(QUAD_WIDE_CLUSTER_0_TCDM_BASE_ADDR,
-                                     cluster_idx);
+    return cluster_tcdm_start_addr(cluster_idx) + CLUSTER_TCDM_SIZE;
 }
 
 inline uintptr_t cluster_perf_counters_addr(uint32_t cluster_idx) {
