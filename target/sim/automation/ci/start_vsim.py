@@ -452,10 +452,12 @@ def _format_duration(seconds: float) -> str:
 def step6_run_simulations(
     tasks_info: List[Tuple[Path, str]],
     max_workers: int,
-) -> Dict[str, Tuple[bool, float]]:
+) -> Tuple[Dict[str, Tuple[bool, float]], float]:
     """Execute simulations in parallel.
 
-    Returns a map of ``task_dir -> (passed, wall_clock_seconds)``.
+    Returns ``(results, total_wall_clock_seconds)`` where *results* maps
+    ``task_dir -> (passed, wall_clock_seconds)`` and *total_wall_clock_seconds*
+    is the real elapsed time of the whole (concurrent) simulation phase.
     """
     results: Dict[str, Tuple[bool, float]] = {}
 
@@ -503,7 +505,7 @@ def step6_run_simulations(
                 _unregister_pgid(pgid)
 
     if not tasks_info:
-        return results
+        return results, 0.0
 
     worker_count = min(max_workers, len(tasks_info))
     print(
@@ -511,6 +513,7 @@ def step6_run_simulations(
         f"{worker_count} parallel job(s)"
     )
 
+    phase_start = time.monotonic()
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
         future_to_task = {}
         for td, cn in tasks_info:
@@ -531,7 +534,12 @@ def step6_run_simulations(
                 print(f"Error obtaining result for task {td}:")
                 traceback.print_exc()
 
-    return results
+    total_elapsed = time.monotonic() - phase_start
+    print(
+        f"All {len(tasks_info)} simulation(s) finished in "
+        f"{_format_duration(total_elapsed)}"
+    )
+    return results, total_elapsed
 
 
 # ---------------------------------------------------------------------------
@@ -542,6 +550,7 @@ def write_summary(
     summary_path: Path,
     tasks_info: List[Tuple[Path, str]],
     results: Dict[str, Tuple[bool, float]],
+    total_seconds: float,
 ) -> None:
     """Write a Markdown report listing each task's pass/fail status and runtime."""
     with summary_path.open("w") as f:
@@ -552,6 +561,16 @@ def write_summary(
             status = "PASS" if passed else "FAIL"
             runtime = _format_duration(elapsed) if elapsed is not None else "n/a"
             f.write(f"- **task_{idx}** ({ci_name}) \u2014 **{status}** \u2014 {runtime}\n")
+
+        # Totals: real elapsed wall-clock of the (concurrent) sim phase, plus the
+        # cumulative per-task time (their sum, which exceeds the elapsed when
+        # tasks ran in parallel).
+        cumulative = sum(e for _, e in results.values() if e is not None)
+        f.write(
+            f"\n**Total wall-clock time: {_format_duration(total_seconds)}**"
+            f" (cumulative across {len(tasks_info)} task(s): "
+            f"{_format_duration(cumulative)})\n"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -620,12 +639,12 @@ def main() -> None:
     step5_prepare_testharness(repo_root, docker_image, tasks_info)
 
     # Step 6: Run all simulations concurrently
-    results = step6_run_simulations(tasks_info, args.max_sim_jobs)
+    results, total_elapsed = step6_run_simulations(tasks_info, args.max_sim_jobs)
 
     # Step 7: Write Markdown summary
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     summary_path = script_path.parent / f"simulation_summary_{timestamp}.md"
-    write_summary(summary_path, tasks_info, results)
+    write_summary(summary_path, tasks_info, results, total_elapsed)
     print(f"Simulation summary written to {summary_path}")
 
 
