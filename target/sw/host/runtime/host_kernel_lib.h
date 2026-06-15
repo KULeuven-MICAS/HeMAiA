@@ -331,7 +331,7 @@ static inline uint64_t __host_bingo_kernel_fp32_rmsnorm(void *arg){
     uint64_t num_tokens    = ((uint64_t *)arg)[4];
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
-    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
     float eps = 1e-6f;
     for (uint64_t t = 0; t < num_tokens; t++) {
         float *x_row = input + t * hidden_dim;
@@ -367,7 +367,7 @@ static inline uint64_t __host_bingo_kernel_fp32_rmsnorm(void *arg){
             __riscv_vse32_v_f32m1(o_ptr, result, vl);
         }
     }
-    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
     return BINGO_RET_SUCC;
 }
 
@@ -381,7 +381,7 @@ static inline uint64_t __host_bingo_kernel_fp32_softmax(void *arg){
     bingo_kernel_scratchpad_t* sp = (bingo_kernel_scratchpad_t*)(uintptr_t)((uint64_t *)arg)[4];
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
-    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
     for (uint64_t r = 0; r < num_rows; r++) {
         float *in_row = input + r * row_length;
         float *out_row = output + r * row_length;
@@ -427,7 +427,7 @@ static inline uint64_t __host_bingo_kernel_fp32_softmax(void *arg){
             __riscv_vse32_v_f32m1(optr, result, vl);
         }
     }
-    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
     // Write output info to scratchpad for successor gating kernels
     sp->return_value = (uint32_t)(uintptr_t)output;
     sp->num_return_values = num_rows * row_length;
@@ -448,7 +448,7 @@ static inline uint64_t __host_bingo_kernel_fp32_silu_mul(void *arg){
     uint64_t num_elements  = ((uint64_t *)arg)[3];
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
-    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
     uint64_t avl = num_elements;
     float *g_ptr = gate, *u_ptr = up, *o_ptr = output;
     for (size_t vl = __riscv_vsetvl_e32m1(avl); avl > 0;
@@ -467,7 +467,7 @@ static inline uint64_t __host_bingo_kernel_fp32_silu_mul(void *arg){
         vfloat32m1_t result = __riscv_vfmul_vv_f32m1(silu, uv, vl);
         __riscv_vse32_v_f32m1(o_ptr, result, vl);
     }
-    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
     return BINGO_RET_SUCC;
 }
 
@@ -482,7 +482,7 @@ static inline uint64_t __host_bingo_kernel_fp32_##name(void *arg){              
     float* output = (float*)(((uint64_t *)arg)[2]);                             \
     uint64_t num_elements  = ((uint64_t *)arg)[3];                              \
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);                       \
-    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);                         \
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);                         \
     uint64_t avl = num_elements;                                                \
     float *a_ptr = a, *b_ptr = b, *o_ptr = output;                             \
     for (size_t vl = __riscv_vsetvl_e32m1(avl); avl > 0;                       \
@@ -493,7 +493,7 @@ static inline uint64_t __host_bingo_kernel_fp32_##name(void *arg){              
         vfloat32m1_t result = vec_op(va, vb, vl);                              \
         __riscv_vse32_v_f32m1(o_ptr, result, vl);                              \
     }                                                                           \
-    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);                           \
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);                           \
     return BINGO_RET_SUCC;                                                                   \
 }
 
@@ -518,7 +518,7 @@ static inline uint64_t __host_bingo_kernel_int32_add(void *arg){
     uint64_t num_elements = ((uint64_t *)arg)[3];
     bingo_kernel_scratchpad_t* sp = (bingo_kernel_scratchpad_t*)(uintptr_t)((uint64_t *)arg)[4];
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
-    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
     uint64_t avl = num_elements;
     int32_t *a_ptr = a, *b_ptr = b, *o_ptr = output;
     for (size_t vl = __riscv_vsetvl_e32m1(avl); avl > 0;
@@ -529,7 +529,7 @@ static inline uint64_t __host_bingo_kernel_int32_add(void *arg){
         vint32m1_t result = __riscv_vadd_vv_i32m1(va, vb, vl);
         __riscv_vse32_v_i32m1(o_ptr, result, vl);
     }
-    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
     sp->return_value = (uint32_t)(uintptr_t)output;
     sp->num_return_values = num_elements;
     return BINGO_RET_SUCC;
@@ -545,7 +545,7 @@ static inline uint64_t __host_bingo_kernel_fp32_##name(void *arg){              
     float* output = (float*)(((uint64_t *)arg)[1]);                             \
     uint64_t num_elements = ((uint64_t *)arg)[2];                               \
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);                       \
-    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);                         \
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);                         \
     uint64_t avl = num_elements;                                                \
     float *i_ptr = input, *o_ptr = output;                                      \
     for (size_t vl = __riscv_vsetvl_e32m1(avl); avl > 0;                       \
@@ -556,7 +556,7 @@ static inline uint64_t __host_bingo_kernel_fp32_##name(void *arg){              
         body                                                                    \
         __riscv_vse32_v_f32m1(o_ptr, result, vl);                              \
     }                                                                           \
-    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);                           \
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);                           \
     return BINGO_RET_SUCC;                                                                   \
 }
 
@@ -645,7 +645,7 @@ static inline uint64_t __host_bingo_kernel_fp32_reduce_sum(void *arg){
     float* output = (float*)(((uint64_t *)arg)[1]);
     uint64_t num_elements = ((uint64_t *)arg)[2];
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
-    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
     float acc = 0.0f;
     uint64_t avl = num_elements;
     float *ptr = input;
@@ -657,7 +657,7 @@ static inline uint64_t __host_bingo_kernel_fp32_reduce_sum(void *arg){
         acc += __riscv_vfmv_f_s_f32m1_f32(rsum);
     }
     *output = acc;
-    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
     return BINGO_RET_SUCC;
 }
 
@@ -667,7 +667,7 @@ static inline uint64_t __host_bingo_kernel_fp32_reduce_max(void *arg){
     float* output = (float*)(((uint64_t *)arg)[1]);
     uint64_t num_elements = ((uint64_t *)arg)[2];
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
-    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
     float max_val = input[0];
     uint64_t avl = num_elements;
     float *ptr = input;
@@ -679,7 +679,7 @@ static inline uint64_t __host_bingo_kernel_fp32_reduce_max(void *arg){
         max_val = __riscv_vfmv_f_s_f32m1_f32(rmax);
     }
     *output = max_val;
-    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
     return BINGO_RET_SUCC;
 }
 
@@ -689,7 +689,7 @@ static inline uint64_t __host_bingo_kernel_fp32_reduce_mean(void *arg){
     float* output = (float*)(((uint64_t *)arg)[1]);
     uint64_t num_elements = ((uint64_t *)arg)[2];
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
-    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
     float acc = 0.0f;
     uint64_t avl = num_elements;
     float *ptr = input;
@@ -701,7 +701,7 @@ static inline uint64_t __host_bingo_kernel_fp32_reduce_mean(void *arg){
         acc += __riscv_vfmv_f_s_f32m1_f32(rsum);
     }
     *output = acc / (float)num_elements;
-    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
     return BINGO_RET_SUCC;
 }
 
@@ -720,7 +720,7 @@ static inline uint64_t __host_bingo_kernel_fp32_quantize(void *arg){
     bingo_kernel_scratchpad_t* sp = (bingo_kernel_scratchpad_t*)(uintptr_t)((uint64_t *)arg)[4];
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
-    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
 
     // Pass 1: find max(|x|) using RVV
     float abs_max = 0.0f;
@@ -766,7 +766,7 @@ static inline uint64_t __host_bingo_kernel_fp32_quantize(void *arg){
         }
     }
 
-    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
     sp->return_value = (uint32_t)(uintptr_t)output;
     sp->num_return_values = num_elements;
     return BINGO_RET_SUCC;
@@ -785,7 +785,7 @@ static inline uint64_t __host_bingo_kernel_int32_dequantize(void *arg){
     bingo_kernel_scratchpad_t* sp = (bingo_kernel_scratchpad_t*)(uintptr_t)((uint64_t *)arg)[4];
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
-    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
     float combined_scale = *scale_ptr;
 
     uint64_t avl = num_elements;
@@ -800,7 +800,7 @@ static inline uint64_t __host_bingo_kernel_int32_dequantize(void *arg){
         __riscv_vse32_v_f32m1(o_ptr, result, vl);
     }
 
-    BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
     sp->return_value = (uint32_t)(uintptr_t)output;
     sp->num_return_values = num_elements;
     return BINGO_RET_SUCC;
