@@ -6,9 +6,9 @@
 // Xiaoling Yi <xiaoling.yi@kuleuven.be>
 //
 // Core-level GEMM kernels (bingo-hw flow). Hand-maintained plain C header.
-// Paired with offload_hw_kernels/gemm_shapes.h, which holds the per-shape
+// Paired with device/runtime/snax/versacore/gemm_shapes.h, which holds the per-shape
 // parameter table and shape-invariant widths. Both headers are validated
-// against the hwcfg at build time by libsnaxkernel/validate_shapes.py —
+// against the hwcfg at build time by the versacore validate_shapes.py —
 // any drift fails `make sw`.
 //
 // Kernels exposed:
