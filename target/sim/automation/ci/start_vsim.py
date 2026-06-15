@@ -29,6 +29,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
@@ -432,6 +433,18 @@ def step5_prepare_testharness(
             _copy_path(src, task_dir / rel)
 
 
+def _format_duration(seconds: float) -> str:
+    """Format a wall-clock duration as e.g. '1h02m11s', '18m44s', or '44s'."""
+    total = int(round(seconds))
+    hours, rem = divmod(total, 3600)
+    minutes, secs = divmod(rem, 60)
+    if hours:
+        return f"{hours}h{minutes:02d}m{secs:02d}s"
+    if minutes:
+        return f"{minutes}m{secs:02d}s"
+    return f"{secs}s"
+
+
 # ---------------------------------------------------------------------------
 # Step 6 -- Run simulations concurrently
 # ---------------------------------------------------------------------------
@@ -439,14 +452,18 @@ def step5_prepare_testharness(
 def step6_run_simulations(
     tasks_info: List[Tuple[Path, str]],
     max_workers: int,
-) -> Dict[str, bool]:
-    """Execute simulations in parallel and return a pass/fail map."""
-    results: Dict[str, bool] = {}
+) -> Dict[str, Tuple[bool, float]]:
+    """Execute simulations in parallel.
+
+    Returns a map of ``task_dir -> (passed, wall_clock_seconds)``.
+    """
+    results: Dict[str, Tuple[bool, float]] = {}
 
     def _worker(task_dir: Path, ci_name: str):
         sim_binary = task_dir / "bin" / "occamy_chip.vsim"
         proc = None
         pgid = None
+        start = time.monotonic()
         try:
             # start_new_session=True makes the child a session/group leader, so
             # its pgid equals its pid and *all* descendants (vish, vsimk) share
@@ -462,22 +479,25 @@ def step6_run_simulations(
             _register_pgid(pgid)
             try:
                 out_bytes, _ = proc.communicate(timeout=SIM_TIMEOUT_SECONDS)
+                elapsed = time.monotonic() - start
                 out = out_bytes.decode(errors="replace") if out_bytes else ""
-                return str(task_dir), ci_name, proc.returncode == 0, out
+                return str(task_dir), ci_name, proc.returncode == 0, elapsed, out
             except subprocess.TimeoutExpired:
                 _kill_pgid(pgid)
                 out_bytes, _ = proc.communicate()
+                elapsed = time.monotonic() - start
                 partial = out_bytes.decode(errors="replace") if out_bytes else ""
                 msg = (
                     f"TIMEOUT: simulation exceeded {SIM_TIMEOUT_SECONDS}s "
                     f"({SIM_TIMEOUT_SECONDS // 3600}h) and was killed.\n"
                     + partial
                 )
-                return str(task_dir), ci_name, False, msg
+                return str(task_dir), ci_name, False, elapsed, msg
         except Exception:
+            elapsed = time.monotonic() - start
             if pgid is not None:
                 _kill_pgid(pgid)
-            return str(task_dir), ci_name, False, traceback.format_exc()
+            return str(task_dir), ci_name, False, elapsed, traceback.format_exc()
         finally:
             if pgid is not None:
                 _unregister_pgid(pgid)
@@ -500,10 +520,10 @@ def step6_run_simulations(
         for future in as_completed(future_to_task):
             td, cn = future_to_task[future]
             try:
-                task_dir_str, ci_name, passed, output = future.result()
-                results[task_dir_str] = passed
+                task_dir_str, ci_name, passed, elapsed, output = future.result()
+                results[task_dir_str] = (passed, elapsed)
                 status = "PASS" if passed else "FAIL"
-                print(f"{ci_name}: {status}")
+                print(f"{ci_name}: {status} ({_format_duration(elapsed)})")
                 if output:
                     for line in output.strip().splitlines()[-10:]:
                         print(line)
@@ -521,16 +541,17 @@ def step6_run_simulations(
 def write_summary(
     summary_path: Path,
     tasks_info: List[Tuple[Path, str]],
-    results: Dict[str, bool],
+    results: Dict[str, Tuple[bool, float]],
 ) -> None:
-    """Write a Markdown report listing each task's pass/fail status."""
+    """Write a Markdown report listing each task's pass/fail status and runtime."""
     with summary_path.open("w") as f:
         f.write("# Simulation Summary\n\n")
         f.write(f"Run by **{getpass.getuser()}** at **{datetime.now():%Y-%m-%d %H:%M:%S}**\n\n")
         for idx, (task_dir, ci_name) in enumerate(tasks_info):
-            passed = results.get(str(task_dir), False)
+            passed, elapsed = results.get(str(task_dir), (False, None))
             status = "PASS" if passed else "FAIL"
-            f.write(f"- **task_{idx}** ({ci_name}) \u2014 **{status}**\n")
+            runtime = _format_duration(elapsed) if elapsed is not None else "n/a"
+            f.write(f"- **task_{idx}** ({ci_name}) \u2014 **{status}** \u2014 {runtime}\n")
 
 
 # ---------------------------------------------------------------------------
