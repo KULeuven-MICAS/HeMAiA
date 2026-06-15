@@ -373,6 +373,7 @@ def step4_build_apps_and_prepare_tasks(
             val = task.get(key, "")
             if val and val != "None":
                 make_cmd.append(f"{var}={val}")
+        make_cmd.append(f"CFG_OVERRIDE={CI_CFG}")
         make_cmd.append("DEBUG_LEVEL=0")
 
         run_in_container(repo_root, docker_image, repo_root, make_cmd)

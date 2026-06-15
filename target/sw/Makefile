@@ -198,7 +198,10 @@ $(SW_DEVICE_RT_DIR)/generated/occamy_defs.h: $(SW_DEVICE_RT_DIR)/template/occamy
 	@echo "[OCCAMYGEN] Generating $@"
 	@$(OCCAMYGEN) -c $(CFG) --outdir $(SW_DEVICE_RT_DIR)/generated --cheader $<
 
-host/runtime/host.ld:
+# Depend on the config (and template) so host.ld is regenerated whenever the
+# active $(CFG) changes. Without this prerequisite a stale host.ld from a
+# previous config survives, placing __return_pointer$ outside the current SPM.
+host/runtime/host.ld: host/runtime/host.ld.tpl $(CFG)
 	@echo "[OCCAMYGEN] Generating host.ld"
 	@$(OCCAMYGEN) -c $(CFG) --gen-host-ld --outdir host/runtime
 
@@ -280,6 +283,8 @@ clean:
 	$(MAKE) -C host TARGET=clean
 # clean host runtimes
 	$(MAKE) -C $(LIB_BINGO_DIR) clean
+# clean the host.ld
+	rm -rf host/runtime/host.ld
 # clean generated tmp files
 	rm -rf $(SW_DIR)/device/*.tmp
 # clean generated headers
