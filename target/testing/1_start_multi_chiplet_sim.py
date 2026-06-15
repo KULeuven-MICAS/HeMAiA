@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""
+r"""
 HeMAiA multi-chiplet RTL sim
 ============================
 Uses ``target/rtl/cfg/hemaia_multichip_ci.hjson`` and
@@ -10,8 +10,27 @@ Multi-chiplet configuration (2x2 compute + 1 memory chip on the virtual
 interposer). Use this flow to validate cross-chiplet workloads with the
 D2D link and TSMC16 macros enabled, without the overhead of the vendor PLL.
 
-The only difference between this multi-chiplet config and the full tapeout config is the PLL, 
+The only difference between this multi-chiplet config and the full tapeout config is the PLL,
 so this is a good intermediate step to validate the multi-chiplet sim flow before enabling the PLL.
+
+Run it
+------
+From this directory, with ``vsim`` on your PATH and SSH access to the private
+vendor repos (flows 1 and 2 clone them over SSH):
+
+    # Use the defaults set below (offload_bingo_hw / multi_chip / gemm_stacked_1cluster):
+    python3 1_start_multi_chiplet_sim.py
+
+    # Override any SW workload knob from the CLI. The constants below are only
+    # the defaults; the fixed multi-chip cfg / vendor-module flags are not
+    # exposed as arguments.
+    python3 1_start_multi_chiplet_sim.py \
+        --host-app-type offload_bingo_hw \
+        --workload gemm_stacked_1cluster \
+        --dev-app snax-bingo-offload
+
+    # List every flag and its current default:
+    python3 1_start_multi_chiplet_sim.py --help
 
 Simulation time: ~15-40min for modest workloads
 """
@@ -22,6 +41,9 @@ from pathlib import Path
 
 from test_util import parse_workload_args, run_sim_flow
 
+# Default SW workload selection. Each value is overridable on the CLI via
+# --host-app-type / --chip-type / --workload / --dev-app (see --help); the
+# constant is used whenever the matching flag is omitted.
 HOST_APP_TYPE = "offload_bingo_hw"  # host_only | offload_legacy | offload_bingo_hw | offload_bingo_sw
 CHIP_TYPE = "multi_chip"
 WORKLOAD = "gemm_stacked_1cluster"

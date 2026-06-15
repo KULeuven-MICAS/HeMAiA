@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""
+r"""
 HeMAiA single-chiplet RTL sim
 =============================
 Uses ``target/rtl/cfg/hemaia_singlechip.hjson`` and
@@ -8,6 +8,24 @@ no TSMC16 macros, no D2D link, no vendor PLL.
 It is used as a quick sanity check that the RTL sim flow can run end-to-end on a single chiplet configuration, without the overhead of setting up the full multi-chiplet environment.
 
 This can be used to test the current single-cluster and the upcoming multi-cluster RTL sim flow.
+
+Run it
+------
+From this directory, with ``vsim`` on your PATH:
+
+    # Use the defaults set below (offload_legacy / single_chip / no workload):
+    python3 0_start_single_chiplet_sim.py
+
+    # Override any SW workload knob from the CLI. The constants below are only
+    # the defaults; the fixed single-chip cfg / vendor-module flags are not
+    # exposed as arguments.
+    python3 0_start_single_chiplet_sim.py \
+        --host-app-type offload_bingo_hw \
+        --workload gemm_stacked_1cluster \
+        --dev-app snax-bingo-offload
+
+    # List every flag and its current default:
+    python3 0_start_single_chiplet_sim.py --help
 
 Simulation time: ~5 min
 """
@@ -18,6 +36,9 @@ from pathlib import Path
 
 from test_util import parse_workload_args, run_sim_flow
 
+# Default SW workload selection. Each value is overridable on the CLI via
+# --host-app-type / --chip-type / --workload / --dev-app (see --help); the
+# constant is used whenever the matching flag is omitted.
 HOST_APP_TYPE = "offload_legacy" # host_only | offload_legacy | offload_bingo_hw | offload_bingo_sw
 CHIP_TYPE = "single_chip"
 WORKLOAD = "None"
