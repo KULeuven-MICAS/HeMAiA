@@ -10,14 +10,26 @@ The "host-only" category refers to applications where `INCL_DEVICE_BINARY` is se
 
 ## Applications
 
+### Single-chip applications
 - **hello_world**: Simple print verification of the host runtime.
 - **clk_rst_configurator**: Low-level configuration of the clock and reset controller.
+- **ara_test**: Cycle-count characterization sweep for the FP32 RVV host kernels.
+- **ci_ara**: Fast CI regression checking correctness of all FP32 RVV host kernels dispatched to CVA6+Ara.
+- **test_bingo_alloc**: Test suite for the `bingo_alloc` allocator.
+
+### Multi-chip applications
 - **d2d_link_configurator**: Setup and training of the die-to-die communication links.
+- **d2d_simple_test**: Basic D2D verification — the host CPU issues D2D writes to the memory chip, then reads them back and checks.
+- **d2d_multi_streams**: D2D multi-stream test where each chiplet in the 2x2 topology concurrently streams data.
 - **multichip_mailbox**: Verification of inter-chiplet communication.
 - **multichip_sync**: Barrier synchronization across multiple hardware chiplets.
-- **system_xdma_copy**: Benchmarking and verifying system-level XDMA transfers.
+- **system_idma_copy**: Multi-chip system-level iDMA copy test.
+- **system_xdma_copy**: Benchmarking and verifying system-level xDMA transfers.
 
 ## Build Command
 ```bash
+# Single-chip
 make single-sw HOST_APP_TYPE=host_only CHIP_TYPE=single_chip WORKLOAD=hello_world
+# Multi-chip
+make single-sw HOST_APP_TYPE=host_only CHIP_TYPE=multi_chip WORKLOAD=multichip_sync
 ```
