@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from test_util import run_sim_flow
+from test_util import parse_workload_args, run_sim_flow
 
 HOST_APP_TYPE = "offload_bingo_hw"  # host_only | offload_legacy | offload_bingo_hw | offload_bingo_sw
 CHIP_TYPE = "multi_chip"
@@ -28,6 +28,13 @@ WORKLOAD = "gemm_stacked_1cluster"
 DEV_APP = "snax-bingo-offload"
 
 def main() -> None:
+    args = parse_workload_args(
+        default_host_app_type=HOST_APP_TYPE,
+        default_chip_type=CHIP_TYPE,
+        default_workload=WORKLOAD,
+        default_dev_app=DEV_APP,
+        description=__doc__,
+    )
     run_sim_flow(
         cfg_name="hemaia_multichip_ci.hjson",
         sim_cfg_name="sim_rtl.hjson",
@@ -35,11 +42,11 @@ def main() -> None:
         with_macro=True,   # tech_cells_tsmc16
         with_d2d=True,     # hemaia_d2d_link
         with_pll=False,    # hemaia_clk_rst_controller
-        # Workload selection.
-        host_app_type=HOST_APP_TYPE,
-        chip_type=CHIP_TYPE,
-        workload=WORKLOAD,
-        dev_app=DEV_APP,
+        # Workload selection (CLI-overridable; constants above are the defaults).
+        host_app_type=args.host_app_type,
+        chip_type=args.chip_type,
+        workload=args.workload,
+        dev_app=args.dev_app,
         script_path=Path(__file__),
     )
 

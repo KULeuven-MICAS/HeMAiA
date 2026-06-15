@@ -18,6 +18,7 @@ each entrypoint is a one-liner.
 
 from __future__ import annotations
 
+import argparse
 import re
 import shutil
 import subprocess
@@ -319,6 +320,42 @@ def resolve_repo_root(script_path: Path) -> Path:
     """Resolve the HeMAiA repo root from a script under ``target/testing``."""
     # testing -> target -> repo root
     return script_path.resolve().parents[2]
+
+
+def parse_workload_args(
+    *,
+    default_host_app_type: str,
+    default_chip_type: str,
+    default_workload: str,
+    default_dev_app: str,
+    description: Optional[str] = None,
+) -> argparse.Namespace:
+    """Parse CLI overrides for the SW workload-selection knobs.
+
+    Each entrypoint passes its module-level constants as the defaults, so the
+    script keeps working with no arguments while a user can pick a different
+    workload from the command line without editing the file. The sim-flavor
+    knobs (cfg/macros/d2d/pll) stay fixed per script and are intentionally not
+    exposed here.
+    """
+    parser = argparse.ArgumentParser(
+        description=description,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--host-app-type", default=default_host_app_type,
+        help="host_only | offload_legacy | offload_bingo_hw | offload_bingo_sw "
+             "(default: %(default)s)")
+    parser.add_argument(
+        "--chip-type", default=default_chip_type,
+        help="single_chip | multi_chip (default: %(default)s)")
+    parser.add_argument(
+        "--workload", default=default_workload,
+        help="workload directory name, or None (default: %(default)s)")
+    parser.add_argument(
+        "--dev-app", default=default_dev_app,
+        help="device app (default: %(default)s)")
+    return parser.parse_args()
 
 
 def run_sim_flow(
