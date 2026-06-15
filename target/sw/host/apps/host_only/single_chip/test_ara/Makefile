@@ -9,7 +9,7 @@
 MK_DIR   := $(dir $(realpath $(lastword $(MAKEFILE_LIST))))
 HOST_APP_TYPE = host_only
 CHIP_TYPE     = single_chip
-WORKLOAD      = ara_test
+WORKLOAD      = test_ara
 SRCS = src/main.c
 BINGO_HOST ?= 0
 INCL_DEVICE_BINARY ?= 0

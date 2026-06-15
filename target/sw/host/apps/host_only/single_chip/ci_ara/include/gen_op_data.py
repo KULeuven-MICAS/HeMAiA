@@ -3,7 +3,7 @@
 
 Uses a seeded PRNG for reproducible but non-trivial input patterns.
 Only emits the small N=32 arrays + golden values; the large arrays used
-for the timing sweep live in the paired ara_test workload.
+for the timing sweep live in the paired test_ara workload.
 """
 import math
 import random

@@ -38,7 +38,7 @@ int main() {
     enable_vec();
     asm volatile("fence" ::: "memory");
 
-    printf("=== ara_test: CVA6+Ara FP32 cycle sweep ===\r\n");
+    printf("=== test_ara: CVA6+Ara FP32 cycle sweep ===\r\n");
     printf("Sizes: ");
     for (int si = 0; si < TIMING_NUM_SIZES; si++) {
         printf("%lu ", timing_sizes[si]);
@@ -164,6 +164,6 @@ int main() {
         }
     }
 
-    printf("=== ara_test done ===\r\n");
+    printf("=== test_ara done ===\r\n");
     return 0;
 }

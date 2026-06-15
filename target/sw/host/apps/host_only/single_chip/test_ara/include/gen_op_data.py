@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Generate test data for the ara_test timing sweep.
+"""Generate test data for the test_ara timing sweep.
 
 Uses a seeded PRNG for reproducible but non-trivial input patterns.
 
 Emits only the large arrays needed by the multi-size timing
-sweep in ara_test/src/main.c.  The correctness checks with their golden
+sweep in test_ara/src/main.c.  The correctness checks with their golden
 values live in the paired ci_ara workload.
 """
 import random

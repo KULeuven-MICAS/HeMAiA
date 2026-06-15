@@ -13,7 +13,7 @@ The "host-only" category refers to applications where `INCL_DEVICE_BINARY` is se
 ### Single-chip applications
 - **hello_world**: Simple print verification of the host runtime.
 - **clk_rst_configurator**: Low-level configuration of the clock and reset controller.
-- **ara_test**: Cycle-count characterization sweep for the FP32 RVV host kernels.
+- **test_ara**: Cycle-count characterization sweep for the FP32 RVV host kernels.
 - **ci_ara**: Fast CI regression checking correctness of all FP32 RVV host kernels dispatched to CVA6+Ara.
 - **test_bingo_alloc**: Test suite for the `bingo_alloc` allocator.
 
