@@ -275,7 +275,10 @@ def main():
                              BingoMemSymbol("golden_xdma_6d"), data_size, HOST_CORE)
 
     # ── 3. TRANSPOSE ─────────────────────────────────────────────
-    # Software transpose (CPU-based): xDMA AGU can't reorder bytes within 8-byte channels.
+    # Runs on the xDMA HW 8x8-tile transposer (reader extension
+    # READER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16); falls back to a CPU
+    # byte-by-byte transpose when the extension is absent.
+    # HW path constraints: rows % 8 == 0, cols * elem % 8 == 0.
     l1_trans_dst = BingoMemAlloc("l1_trans_dst", size=data_size, mem_level="L1", chip_id=0, cluster_id=0)
     xdma_transpose = BingoNode(
         assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=DMA_CORE,
