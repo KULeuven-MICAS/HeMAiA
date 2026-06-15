@@ -5,10 +5,7 @@
 // Fanchen Kong <fanchen.kong@kuleuven.be>
 //
 // Cycle-count characterization sweep for the FP32 RVV host kernels.
-// Emits one MCYCLE-style CSV line per (kernel x size x rep) combination,
-// which is then parsed by scripts/characterize_cva6.py to fit a linear
-// model `cycles = overhead + slope·N` per op.  This data populates
-// inputs/rtl_luts/cva6_ops.csv for the framework's `--cost-model=rtl` mode.
+// Emits one MCYCLE-style CSV line per (kernel x size x rep) combination
 //
 // Paired workload: ci_ara (same kernels, but correctness-only with N=32 —
 // used as the fast CI regression).
