@@ -21,15 +21,19 @@ Flow overview:
 from __future__ import annotations
 
 import argparse
+import atexit
 import getpass
+import os
 import shutil
+import signal
 import subprocess
 import sys
+import threading
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Set, Tuple
 
 try:
     import yaml  # type: ignore
@@ -46,6 +50,67 @@ SIM_CFG = "target/sim/cfg/sim_rtl.hjson"
 SIM_TIMEOUT_SECONDS = 2 * 60 * 60  # 2 hours per simulation thread
 # Keep in sync with the JOBS default in target/sim/automation/Makefile.
 DEFAULT_MAX_SIM_JOBS = 16
+
+# ---------------------------------------------------------------------------
+# Process-group tracking -- guarantees no stale vsim threads survive
+# ---------------------------------------------------------------------------
+#
+# The ``occamy_chip.vsim`` launcher spawns ``vish`` -> ``vsimk`` as descendant
+# processes.  Killing only the immediate child (as ``subprocess.run`` does on
+# timeout) leaves those descendants orphaned onto ``init`` where they keep
+# pinning a CPU core forever.  We therefore start each simulation in its own
+# session/process group and tear the *whole group* down on timeout, crash, or
+# interrupt, so the script never leaves stale threads behind.
+
+_active_pgids: Set[int] = set()
+_active_pgids_lock = threading.Lock()
+
+
+def _register_pgid(pgid: int) -> None:
+    with _active_pgids_lock:
+        _active_pgids.add(pgid)
+
+
+def _unregister_pgid(pgid: int) -> None:
+    with _active_pgids_lock:
+        _active_pgids.discard(pgid)
+
+
+def _kill_pgid(pgid: int) -> None:
+    """SIGKILL an entire process group, ignoring already-dead groups."""
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, OSError):
+        pass
+
+
+def _terminate_all_sims() -> None:
+    """Kill every still-running simulation process group.
+
+    Registered with ``atexit`` and the SIGINT/SIGTERM handlers so a crash,
+    timeout, or Ctrl-C tears down the full vsim/vish/vsimk process tree instead
+    of orphaning it onto init.
+    """
+    with _active_pgids_lock:
+        pgids = list(_active_pgids)
+        _active_pgids.clear()
+    for pgid in pgids:
+        _kill_pgid(pgid)
+
+
+def _install_cleanup_handlers() -> None:
+    """Ensure simulation process groups are reaped on exit or signal."""
+    atexit.register(_terminate_all_sims)
+
+    def _handler(signum, _frame):
+        _terminate_all_sims()
+        # Restore default disposition and re-raise so the exit status is correct.
+        signal.signal(signum, signal.SIG_DFL)
+        os.kill(os.getpid(), signum)
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(sig, _handler)
+
 
 # ---------------------------------------------------------------------------
 # Utility helpers
@@ -379,27 +444,42 @@ def step6_run_simulations(
 
     def _worker(task_dir: Path, ci_name: str):
         sim_binary = task_dir / "bin" / "occamy_chip.vsim"
+        proc = None
+        pgid = None
         try:
-            proc = subprocess.run(
+            # start_new_session=True makes the child a session/group leader, so
+            # its pgid equals its pid and *all* descendants (vish, vsimk) share
+            # that group and can be killed as a unit -- never orphaned.
+            proc = subprocess.Popen(
                 [str(sim_binary)],
                 cwd=task_dir / "bin",
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                check=False,
-                timeout=SIM_TIMEOUT_SECONDS,
+                start_new_session=True,
             )
-            out = proc.stdout.decode(errors="replace") if proc.stdout else ""
-            return str(task_dir), ci_name, proc.returncode == 0, out
-        except subprocess.TimeoutExpired as exc:
-            partial = exc.stdout.decode(errors="replace") if exc.stdout else ""
-            msg = (
-                f"TIMEOUT: simulation exceeded {SIM_TIMEOUT_SECONDS}s "
-                f"({SIM_TIMEOUT_SECONDS // 3600}h) and was killed.\n"
-                + partial
-            )
-            return str(task_dir), ci_name, False, msg
+            pgid = proc.pid
+            _register_pgid(pgid)
+            try:
+                out_bytes, _ = proc.communicate(timeout=SIM_TIMEOUT_SECONDS)
+                out = out_bytes.decode(errors="replace") if out_bytes else ""
+                return str(task_dir), ci_name, proc.returncode == 0, out
+            except subprocess.TimeoutExpired:
+                _kill_pgid(pgid)
+                out_bytes, _ = proc.communicate()
+                partial = out_bytes.decode(errors="replace") if out_bytes else ""
+                msg = (
+                    f"TIMEOUT: simulation exceeded {SIM_TIMEOUT_SECONDS}s "
+                    f"({SIM_TIMEOUT_SECONDS // 3600}h) and was killed.\n"
+                    + partial
+                )
+                return str(task_dir), ci_name, False, msg
         except Exception:
+            if pgid is not None:
+                _kill_pgid(pgid)
             return str(task_dir), ci_name, False, traceback.format_exc()
+        finally:
+            if pgid is not None:
+                _unregister_pgid(pgid)
 
     if not tasks_info:
         return results
@@ -491,6 +571,10 @@ def main() -> None:
         raise FileNotFoundError(f"Task YAML file {task_yaml} does not exist")
 
     ensure_vsim_available()
+
+    # Guarantee any simulation we launch is fully torn down on exit, timeout,
+    # crash, or Ctrl-C -- no orphaned vsim/vish/vsimk threads left pinning CPUs.
+    _install_cleanup_handlers()
 
     # Remove leftover task_* directories from any previous (crashed) run
     cleanup_stale_task_dirs(task_base_dir)
