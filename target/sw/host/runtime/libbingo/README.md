@@ -63,7 +63,7 @@ Core concepts:
 | Scheduling      | `bingo_runtime_schedule`, `bingo_close_all_clusters` |
 | Mailbox (H2H)   | `bingo_write_h2h_mailbox`, `bingo_read_h2h_mailbox`, `bingo_try_write_h2h_mailbox`, `bingo_try_read_h2h_mailbox` |
 | Mailbox (H2C/C2H)| Device ↔ host variants (see `mailbox.h`, `hw_mailbox.c`) |
-| Message encode  | `bingo_encode_ic_msg`, `bingo_decode_ic_msg`, `bingo_encode_c2h_msg` |
+| Message encode  | `bingo_msg_encode` / `bingo_msg_decode` (inter-chip 64-bit), `bingo_c2h_msg_encode` / `bingo_c2h_msg_decode` (C2H 32-bit) |
 | Heaps           | `bingo_get_l2_heap_manager`, `bingo_get_l3_heap_manager` |
 
 Error codes (typical):
@@ -97,18 +97,18 @@ The implementation wraps these with cycle‑based timeout and optional relaxed s
 ## 6. Message Formats
 ### Inter‑Chip (64‑bit)
 ```
-|63        56|55      48|47                 32|31                 0|
-|  msg_type  | src_chip |   sequence / ext    |      payload       |
+|63        56|55      48|47                16|15        0|
+|  msg_type  | src_chip |   sequence / ext   |  payload  |
 ```
-* `msg_type`: enumeration (task done, wake, control...)
+* `msg_type`: enumeration (task complete, ready, heartbeat, diag...)
 * `src_chip`: physical chip ID
-* `sequence`: monotonic counter (future; currently placeholder)
-* `payload`: task identifier or command argument
+* `sequence`: monotonic counter (optional tracing / wrap-around)
+* `payload`: 16-bit task identifier or command argument
 
 ### C2H Return (32‑bit packed)
 ```
-|31    24|23      16|15        8|7        0|
-| flags  | cluster  |  task_id  |  rsvd    |
+|31      28|27                12|11        4|3      0|
+| reserved |       task_id      | cluster_id |  flag  |
 ```
 Encoding/decoding done via shift/mask helpers (no C bitfields to keep ABI stable across compilers).
 
