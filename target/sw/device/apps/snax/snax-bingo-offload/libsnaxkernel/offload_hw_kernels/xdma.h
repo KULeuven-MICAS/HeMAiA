@@ -391,8 +391,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_transpose_2d(void *arg)
         //   dst strides: [8, M*tile_w*elem_bytes, tile_w*elem_bytes]
         if (elem_bytes == 1 || elem_bytes == 2) {
             uint32_t tile_w = 8;
-            uint32_t elem_bits = elem_bytes * 8;
-            uint32_t tpt = (tile_w * tile_w * elem_bits + 511) / 512; // transfers per transpose
+            uint32_t tpt = (tile_w * tile_w * (elem_bytes * 8) + 511) / 512; // transfers per transpose (8x8 tile of elem_bytes*8-bit elems / 512b bus)
 
             // The xDMA reader is tied to local L1, so stage src into local L1 if
             // it isn't already there (zero-copy fast path when src is already
@@ -1256,8 +1255,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_row_major_to_b(void *arg)
         }
 
         const uint32_t tile_w   = 8;                                    // HW transposer block
-        uint32_t elem_bits      = elem_bytes * 8;
-        uint32_t tpt            = (tile_w * tile_w * elem_bits + 511) / 512;
+        uint32_t tpt            = (tile_w * tile_w * (elem_bytes * 8) + 511) / 512;
         uint32_t row_b_src      = N_T * meshCol * elem_bytes;                 // R row width
         uint32_t b_tile_b       = tileSize * meshCol * elem_bytes;            // one B-tile bytes
         uint32_t c_subs         = meshCol  / tile_w;                    // # 8-elem_bytes c chunks
@@ -1465,8 +1463,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_b_to_row_major(void *arg)
         }
 
         const uint32_t tile_w   = 8;
-        uint32_t elem_bits      = elem_bytes * 8;
-        uint32_t tpt            = (tile_w * tile_w * elem_bits + 511) / 512;
+        uint32_t tpt            = (tile_w * tile_w * (elem_bytes * 8) + 511) / 512;
         uint32_t row_b_dst      = N_T * meshCol * elem_bytes;
         uint32_t b_tile_b       = tileSize * meshCol * elem_bytes;
         uint32_t c_subs         = meshCol  / tile_w;
