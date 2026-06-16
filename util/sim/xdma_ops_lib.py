@@ -123,7 +123,7 @@ class Builder:
 # Each handler: gen_data(cfg, i, ctx) -> list[str] of C defs (inputs+golden),
 #               build(b, cfg, i, prev_chk) -> check node.
 # Naming convention: input sym "in_<i>" (and "_b" for a 2nd input), golden
-# sym "golden_<i>". elem-byte matrices use sequential uint8 values.
+# sym "golden_<i>". elem_bytes-byte matrices use sequential uint8 values.
 
 def _u8_matrix(rows, cols):
     return np.arange(rows * cols, dtype=np.uint8).reshape(rows, cols)
@@ -155,15 +155,15 @@ class Xdma6dOp:
     name = "xdma_6d"
 
     def gen_data(self, c, i, ctx):
-        rows, cols, elem = c["rows"], c["cols"], c["elem"]
-        arr = (np.arange(rows * cols * elem, dtype=np.uint8) & 0xFF)
+        rows, cols, elem_bytes = c["rows"], c["cols"], c["elem_bytes"]
+        arr = (np.arange(rows * cols * elem_bytes, dtype=np.uint8) & 0xFF)
         return [format_vector_definition("uint8_t", f"in_{i}", arr),
                 format_vector_definition("uint8_t", f"golden_{i}", arr)]
 
     def build(self, b, c, i, prev):
-        rows, cols, elem = c["rows"], c["cols"], c["elem"]
-        n = rows * cols * elem
-        row_bytes = cols * elem
+        rows, cols, elem_bytes = c["rows"], c["cols"], c["elem_bytes"]
+        n = rows * cols * elem_bytes
+        row_bytes = cols * elem_bytes
         l1s = b.l1(f"l1s_{i}", n)
         l1d = b.l1(f"l1d_{i}", n)
         load = b.idma_load(f"Load_{i}", b.sym(f"in_{i}"), l1s, n, prev)
@@ -179,23 +179,23 @@ class TransposeOp:
     name = "xdma_transpose_2d"
 
     def gen_data(self, c, i, ctx):
-        rows, cols, elem = c["rows"], c["cols"], c["elem"]
-        # elem>1 handled as elem consecutive bytes per element; build a byte
-        # matrix of shape [rows, cols*elem] and transpose at element grain.
-        base = (np.arange(rows * cols * elem, dtype=np.uint8) & 0xFF)
-        mat = base.reshape(rows, cols, elem)
+        rows, cols, elem_bytes = c["rows"], c["cols"], c["elem_bytes"]
+        # elem_bytes>1 handled as elem_bytes consecutive bytes per element; build a byte
+        # matrix of shape [rows, cols*elem_bytes] and transpose at element grain.
+        base = (np.arange(rows * cols * elem_bytes, dtype=np.uint8) & 0xFF)
+        mat = base.reshape(rows, cols, elem_bytes)
         golden = np.transpose(mat, (1, 0, 2)).reshape(-1)
         return [format_vector_definition("uint8_t", f"in_{i}", base),
                 format_vector_definition("uint8_t", f"golden_{i}", golden)]
 
     def build(self, b, c, i, prev):
-        rows, cols, elem = c["rows"], c["cols"], c["elem"]
-        n = rows * cols * elem
+        rows, cols, elem_bytes = c["rows"], c["cols"], c["elem_bytes"]
+        n = rows * cols * elem_bytes
         l1s = b.l1(f"l1s_{i}", n)
         l1d = b.l1(f"l1d_{i}", n)
         load = b.idma_load(f"Load_{i}", b.sym(f"in_{i}"), l1s, n, prev)
         op = b.op(f"Op_{i}", "__snax_bingo_kernel_xdma_transpose_2d",
-                  SnaxBingoKernelXdmaTranspose2dArgs(l1s, l1d, rows, cols, elem), load)
+                  SnaxBingoKernelXdmaTranspose2dArgs(l1s, l1d, rows, cols, elem_bytes), load)
         return b.store_check(f"transpose_cfg{i}", l1d, op, f"golden_{i}", n)
 
 
@@ -209,24 +209,24 @@ class SubmatrixOp:
         return rs, re, cs, ce
 
     def gen_data(self, c, i, ctx):
-        rows, cols, elem = c["rows"], c["cols"], c["elem"]
+        rows, cols, elem_bytes = c["rows"], c["cols"], c["elem_bytes"]
         rs, re, cs, ce = self._slice(c)
-        mat = _u8_matrix(rows, cols * elem)
-        golden = mat[rs:re, cs * elem:ce * elem].reshape(-1)
+        mat = _u8_matrix(rows, cols * elem_bytes)
+        golden = mat[rs:re, cs * elem_bytes:ce * elem_bytes].reshape(-1)
         return [format_vector_definition("uint8_t", f"in_{i}", mat.reshape(-1)),
                 format_vector_definition("uint8_t", f"golden_{i}", golden)]
 
     def build(self, b, c, i, prev):
-        rows, cols, elem = c["rows"], c["cols"], c["elem"]
+        rows, cols, elem_bytes = c["rows"], c["cols"], c["elem_bytes"]
         rs, re, cs, ce = self._slice(c)
-        n = rows * cols * elem
-        out = (re - rs) * (ce - cs) * elem
+        n = rows * cols * elem_bytes
+        out = (re - rs) * (ce - cs) * elem_bytes
         l1s = b.l1(f"l1s_{i}", n)
         l1d = b.l1(f"l1d_{i}", out)
         load = b.idma_load(f"Load_{i}", b.sym(f"in_{i}"), l1s, n, prev)
         op = b.op(f"Op_{i}", "__snax_bingo_kernel_xdma_submatrix_2d",
                   SnaxBingoKernelXdmaSubmatrix2dArgs(
-                      l1s, l1d, rows, cols, rs, re, cs, ce, elem), load)
+                      l1s, l1d, rows, cols, rs, re, cs, ce, elem_bytes), load)
         return b.store_check(f"submatrix_cfg{i}", l1d, op, f"golden_{i}", out)
 
 
@@ -234,20 +234,20 @@ class ExpandOp:
     name = "xdma_expand_2d"
 
     def gen_data(self, c, i, ctx):
-        rows, cols, elem = c["rows"], c["cols"], c["elem"]
-        mat = _u8_matrix(rows, cols * elem)
+        rows, cols, elem_bytes = c["rows"], c["cols"], c["elem_bytes"]
+        mat = _u8_matrix(rows, cols * elem_bytes)
         golden = np.tile(mat[0:1, :], (rows, 1)).reshape(-1)
         return [format_vector_definition("uint8_t", f"in_{i}", mat.reshape(-1)),
                 format_vector_definition("uint8_t", f"golden_{i}", golden)]
 
     def build(self, b, c, i, prev):
-        rows, cols, elem = c["rows"], c["cols"], c["elem"]
-        n = rows * cols * elem
+        rows, cols, elem_bytes = c["rows"], c["cols"], c["elem_bytes"]
+        n = rows * cols * elem_bytes
         l1s = b.l1(f"l1s_{i}", n)
         l1d = b.l1(f"l1d_{i}", n)
         load = b.idma_load(f"Load_{i}", b.sym(f"in_{i}"), l1s, n, prev)
         op = b.op(f"Op_{i}", "__snax_bingo_kernel_xdma_expand_2d",
-                  SnaxBingoKernelXdmaExpand2dArgs(l1s, l1d, rows, cols, elem), load)
+                  SnaxBingoKernelXdmaExpand2dArgs(l1s, l1d, rows, cols, elem_bytes), load)
         return b.store_check(f"expand_cfg{i}", l1d, op, f"golden_{i}", n)
 
 
@@ -255,30 +255,30 @@ class ConcatOp:
     name = "xdma_concat_2d"
 
     def gen_data(self, c, i, ctx):
-        rows, cols, elem = c["rows"], c["cols"], c["elem"]
-        mat = _u8_matrix(rows, cols * elem)  # reconstruct original via 2 halves
+        rows, cols, elem_bytes = c["rows"], c["cols"], c["elem_bytes"]
+        mat = _u8_matrix(rows, cols * elem_bytes)  # reconstruct original via 2 halves
         return [format_vector_definition("uint8_t", f"in_{i}", mat.reshape(-1)),
                 format_vector_definition("uint8_t", f"golden_{i}", mat.reshape(-1))]
 
     def build(self, b, c, i, prev):
-        rows, cols, elem = c["rows"], c["cols"], c["elem"]
-        n = rows * cols * elem
+        rows, cols, elem_bytes = c["rows"], c["cols"], c["elem_bytes"]
+        n = rows * cols * elem_bytes
         half = rows // 2
-        half_b = half * cols * elem
+        half_b = half * cols * elem_bytes
         l1d = b.l1(f"l1d_{i}", n)
         # top half: read from in[0:half]
         l1_top = b.l1(f"l1top_{i}", half_b)
         load_t = b.idma_load(f"LoadTop_{i}", b.sym(f"in_{i}"), l1_top, half_b, prev)
         ctop = b.op(f"ConcatTop_{i}", "__snax_bingo_kernel_xdma_concat_2d",
                     SnaxBingoKernelXdmaConcat2dArgs(
-                        l1_top, l1d, half, cols, rows, cols, 0, 0, elem), load_t)
+                        l1_top, l1d, half, cols, rows, cols, 0, 0, elem_bytes), load_t)
         # bottom half: read from in[half:]
         l1_bot = b.l1(f"l1bot_{i}", half_b)
         load_b = b.idma_load(f"LoadBot_{i}", b.sym(f"in_{i}", offset=half_b),
                              l1_bot, half_b, ctop)
         cbot = b.op(f"ConcatBot_{i}", "__snax_bingo_kernel_xdma_concat_2d",
                     SnaxBingoKernelXdmaConcat2dArgs(
-                        l1_bot, l1d, half, cols, rows, cols, 0, half, elem), load_b)
+                        l1_bot, l1d, half, cols, rows, cols, 0, half, elem_bytes), load_b)
         return b.store_check(f"concat_cfg{i}", l1d, cbot, f"golden_{i}", n)
 
 
@@ -289,24 +289,24 @@ class PadOp:
         return (c.get("pt", 8), c.get("pb", 0), c.get("pl", 0), c.get("pr", 0))
 
     def gen_data(self, c, i, ctx):
-        rows, cols, elem = c["rows"], c["cols"], c["elem"]
+        rows, cols, elem_bytes = c["rows"], c["cols"], c["elem_bytes"]
         pt, pb, pl, pr = self._pad(c)
-        mat = _u8_matrix(rows, cols * elem)
-        golden = np.pad(mat, ((pt, pb), (pl * elem, pr * elem)),
+        mat = _u8_matrix(rows, cols * elem_bytes)
+        golden = np.pad(mat, ((pt, pb), (pl * elem_bytes, pr * elem_bytes)),
                         mode="constant", constant_values=0).reshape(-1)
         return [format_vector_definition("uint8_t", f"in_{i}", mat.reshape(-1)),
                 format_vector_definition("uint8_t", f"golden_{i}", golden)]
 
     def build(self, b, c, i, prev):
-        rows, cols, elem = c["rows"], c["cols"], c["elem"]
+        rows, cols, elem_bytes = c["rows"], c["cols"], c["elem_bytes"]
         pt, pb, pl, pr = self._pad(c)
-        n = rows * cols * elem
-        out = (rows + pt + pb) * (cols + pl + pr) * elem
+        n = rows * cols * elem_bytes
+        out = (rows + pt + pb) * (cols + pl + pr) * elem_bytes
         l1s = b.l1(f"l1s_{i}", n)
         l1d = b.l1(f"l1d_{i}", out)
         load = b.idma_load(f"Load_{i}", b.sym(f"in_{i}"), l1s, n, prev)
         op = b.op(f"Op_{i}", "__snax_bingo_kernel_xdma_pad_2d",
-                  SnaxBingoKernelXdmaPad2dArgs(l1s, l1d, rows, cols, pt, pb, pl, pr, elem), load)
+                  SnaxBingoKernelXdmaPad2dArgs(l1s, l1d, rows, cols, pt, pb, pl, pr, elem_bytes), load)
         return b.store_check(f"pad_cfg{i}", l1d, op, f"golden_{i}", out)
 
 
@@ -317,25 +317,25 @@ class GatherOp:
         return (c.get("start", 0), c.get("stride", 2))
 
     def gen_data(self, c, i, ctx):
-        rows, cols, elem = c["rows"], c["cols"], c["elem"]
+        rows, cols, elem_bytes = c["rows"], c["cols"], c["elem_bytes"]
         start, stride = self._g(c)
-        mat = _u8_matrix(rows, cols * elem)
+        mat = _u8_matrix(rows, cols * elem_bytes)
         golden = mat[start::stride, :].reshape(-1)
         return [format_vector_definition("uint8_t", f"in_{i}", mat.reshape(-1)),
                 format_vector_definition("uint8_t", f"golden_{i}", golden)]
 
     def build(self, b, c, i, prev):
-        rows, cols, elem = c["rows"], c["cols"], c["elem"]
+        rows, cols, elem_bytes = c["rows"], c["cols"], c["elem_bytes"]
         start, stride = self._g(c)
         count = rows // stride
-        n = rows * cols * elem
-        out = count * cols * elem
+        n = rows * cols * elem_bytes
+        out = count * cols * elem_bytes
         l1s = b.l1(f"l1s_{i}", n)
         l1d = b.l1(f"l1d_{i}", out)
         load = b.idma_load(f"Load_{i}", b.sym(f"in_{i}"), l1s, n, prev)
         op = b.op(f"Op_{i}", "__snax_bingo_kernel_xdma_gather_2d",
                   SnaxBingoKernelXdmaGather2dArgs(
-                      l1s, l1d, rows, cols, count, start, stride, elem), load)
+                      l1s, l1d, rows, cols, count, start, stride, elem_bytes), load)
         return b.store_check(f"gather_cfg{i}", l1d, op, f"golden_{i}", out)
 
 
@@ -370,12 +370,12 @@ def _mesh(ctx, c):
     return int(u[0]), int(u[1]), int(u[2])
 
 
-def _layout_dtype(elem):
-    if elem == 1:
+def _layout_dtype(elem_bytes):
+    if elem_bytes == 1:
         return np.int8, -128, 127, "int8_t"
-    if elem == 4:
+    if elem_bytes == 4:
         return np.int32, -1_000_000, 1_000_000, "int32_t"
-    raise ValueError(f"layout conversion elem_bytes={elem} unsupported")
+    raise ValueError(f"layout conversion elem_bytes={elem_bytes} unsupported")
 
 
 def make_layout_handlers():
@@ -388,8 +388,8 @@ def make_layout_handlers():
         h.kernel = kernel
 
         def gen_data(c, i, ctx, _gen=gen):
-            elem = c["elem"]
-            _, _, _, ctype = _layout_dtype(elem)
+            elem_bytes = c["elem_bytes"]
+            _, _, _, ctype = _layout_dtype(elem_bytes)
             src_arr, golden_arr = _gen(ctx, c)
             return [format_vector_definition(ctype, f"in_{i}", src_arr),
                     format_vector_definition(ctype, f"golden_{i}", golden_arr)]
@@ -413,95 +413,95 @@ def _register_layouts(handlers, reg, mesh_fn):
     # Each entry computes src/golden numpy arrays and the kernel kwargs/sizes.
     def dims(ctx, c):
         mR, tS, mC = mesh_fn(ctx, c)
-        return c["M_T"], c["K_T"], c["N_T"], mR, tS, mC, c["elem"]
+        return c["M_T"], c["K_T"], c["N_T"], mR, tS, mC, c["elem_bytes"]
 
     # row_to_A
     def gen_row_to_a(ctx, c):
-        M_T, K_T, N_T, mR, tS, mC, elem = dims(ctx, c)
-        dt, lo, hi, _ = _layout_dtype(elem)
+        M_T, K_T, N_T, mR, tS, mC, elem_bytes = dims(ctx, c)
+        dt, lo, hi, _ = _layout_dtype(elem_bytes)
         rm = np.random.randint(lo, hi, size=(M_T * mR, K_T * tS), dtype=dt)
         return rm.reshape(-1), row_major_to_a(rm, M_T, K_T, mR, tS)
 
     def sz_row_to_a(b, c):
         mR, tS, mC = _MESH_HOLDER["fn"](_MESH_HOLDER["ctx"], c)
-        nbytes = c["M_T"] * mR * c["K_T"] * tS * c["elem"]
+        nbytes = c["M_T"] * mR * c["K_T"] * tS * c["elem_bytes"]
         return nbytes, nbytes, dict(M_T=c["M_T"], K_T=c["K_T"], meshRow=mR,
-                                    tileSize=tS, elem_bytes=c["elem"])
+                                    tileSize=tS, elem_bytes=c["elem_bytes"])
     reg("row_to_a", "xdma_row_major_to_a", "__snax_bingo_kernel_xdma_row_major_to_a",
         SnaxBingoKernelXdmaRowMajorToAArgs, gen_row_to_a, sz_row_to_a)
 
     # A_to_row
     def gen_a_to_row(ctx, c):
-        M_T, K_T, N_T, mR, tS, mC, elem = dims(ctx, c)
-        dt, lo, hi, _ = _layout_dtype(elem)
+        M_T, K_T, N_T, mR, tS, mC, elem_bytes = dims(ctx, c)
+        dt, lo, hi, _ = _layout_dtype(elem_bytes)
         rm = np.random.randint(lo, hi, size=(M_T * mR, K_T * tS), dtype=dt)
         return row_major_to_a(rm, M_T, K_T, mR, tS), rm.reshape(-1)
 
     def sz_a_to_row(b, c):
         mR, tS, mC = _MESH_HOLDER["fn"](_MESH_HOLDER["ctx"], c)
-        nbytes = c["M_T"] * mR * c["K_T"] * tS * c["elem"]
+        nbytes = c["M_T"] * mR * c["K_T"] * tS * c["elem_bytes"]
         return nbytes, nbytes, dict(M_T=c["M_T"], K_T=c["K_T"], meshRow=mR,
-                                    tileSize=tS, elem_bytes=c["elem"])
+                                    tileSize=tS, elem_bytes=c["elem_bytes"])
     reg("a_to_row", "xdma_a_to_row_major", "__snax_bingo_kernel_xdma_a_to_row_major",
         SnaxBingoKernelXdmaAToRowMajorArgs, gen_a_to_row, sz_a_to_row)
 
     # row_to_B
     def gen_row_to_b(ctx, c):
-        M_T, K_T, N_T, mR, tS, mC, elem = dims(ctx, c)
-        dt, lo, hi, _ = _layout_dtype(elem)
+        M_T, K_T, N_T, mR, tS, mC, elem_bytes = dims(ctx, c)
+        dt, lo, hi, _ = _layout_dtype(elem_bytes)
         rm = np.random.randint(lo, hi, size=(K_T * tS, N_T * mC), dtype=dt)
         return rm.reshape(-1), row_major_to_b(rm, K_T, N_T, tS, mC)
 
     def sz_row_to_b(b, c):
         mR, tS, mC = _MESH_HOLDER["fn"](_MESH_HOLDER["ctx"], c)
-        nbytes = c["K_T"] * tS * c["N_T"] * mC * c["elem"]
+        nbytes = c["K_T"] * tS * c["N_T"] * mC * c["elem_bytes"]
         return nbytes, nbytes, dict(K_T=c["K_T"], N_T=c["N_T"], tileSize=tS,
-                                    meshCol=mC, elem_bytes=c["elem"])
+                                    meshCol=mC, elem_bytes=c["elem_bytes"])
     reg("row_to_b", "xdma_row_major_to_b", "__snax_bingo_kernel_xdma_row_major_to_b",
         SnaxBingoKernelXdmaRowMajorToBArgs, gen_row_to_b, sz_row_to_b)
 
     # B_to_row
     def gen_b_to_row(ctx, c):
-        M_T, K_T, N_T, mR, tS, mC, elem = dims(ctx, c)
-        dt, lo, hi, _ = _layout_dtype(elem)
+        M_T, K_T, N_T, mR, tS, mC, elem_bytes = dims(ctx, c)
+        dt, lo, hi, _ = _layout_dtype(elem_bytes)
         rm = np.random.randint(lo, hi, size=(K_T * tS, N_T * mC), dtype=dt)
         return row_major_to_b(rm, K_T, N_T, tS, mC), rm.reshape(-1)
 
     def sz_b_to_row(b, c):
         mR, tS, mC = _MESH_HOLDER["fn"](_MESH_HOLDER["ctx"], c)
-        nbytes = c["K_T"] * tS * c["N_T"] * mC * c["elem"]
+        nbytes = c["K_T"] * tS * c["N_T"] * mC * c["elem_bytes"]
         return nbytes, nbytes, dict(K_T=c["K_T"], N_T=c["N_T"], tileSize=tS,
-                                    meshCol=mC, elem_bytes=c["elem"])
+                                    meshCol=mC, elem_bytes=c["elem_bytes"])
     reg("b_to_row", "xdma_b_to_row_major", "__snax_bingo_kernel_xdma_b_to_row_major",
         SnaxBingoKernelXdmaBToRowMajorArgs, gen_b_to_row, sz_b_to_row)
 
     # row_to_D
     def gen_row_to_d(ctx, c):
-        M_T, K_T, N_T, mR, tS, mC, elem = dims(ctx, c)
-        dt, lo, hi, _ = _layout_dtype(elem)
+        M_T, K_T, N_T, mR, tS, mC, elem_bytes = dims(ctx, c)
+        dt, lo, hi, _ = _layout_dtype(elem_bytes)
         rm = np.random.randint(lo, hi, size=(M_T * mR, N_T * mC), dtype=dt)
         return rm.reshape(-1), row_major_to_d(rm, M_T, N_T, mR, mC)
 
     def sz_row_to_d(b, c):
         mR, tS, mC = _MESH_HOLDER["fn"](_MESH_HOLDER["ctx"], c)
-        nbytes = c["M_T"] * mR * c["N_T"] * mC * c["elem"]
+        nbytes = c["M_T"] * mR * c["N_T"] * mC * c["elem_bytes"]
         return nbytes, nbytes, dict(M_T=c["M_T"], N_T=c["N_T"], meshRow=mR,
-                                    meshCol=mC, elem_bytes=c["elem"])
+                                    meshCol=mC, elem_bytes=c["elem_bytes"])
     reg("row_to_d", "xdma_row_major_to_d", "__snax_bingo_kernel_xdma_row_major_to_d",
         SnaxBingoKernelXdmaRowMajorToDArgs, gen_row_to_d, sz_row_to_d)
 
     # D_to_row
     def gen_d_to_row(ctx, c):
-        M_T, K_T, N_T, mR, tS, mC, elem = dims(ctx, c)
-        dt, lo, hi, _ = _layout_dtype(elem)
+        M_T, K_T, N_T, mR, tS, mC, elem_bytes = dims(ctx, c)
+        dt, lo, hi, _ = _layout_dtype(elem_bytes)
         rm = np.random.randint(lo, hi, size=(M_T * mR, N_T * mC), dtype=dt)
         return row_major_to_d(rm, M_T, N_T, mR, mC), rm.reshape(-1)
 
     def sz_d_to_row(b, c):
         mR, tS, mC = _MESH_HOLDER["fn"](_MESH_HOLDER["ctx"], c)
-        nbytes = c["M_T"] * mR * c["N_T"] * mC * c["elem"]
+        nbytes = c["M_T"] * mR * c["N_T"] * mC * c["elem_bytes"]
         return nbytes, nbytes, dict(M_T=c["M_T"], N_T=c["N_T"], meshRow=mR,
-                                    meshCol=mC, elem_bytes=c["elem"])
+                                    meshCol=mC, elem_bytes=c["elem_bytes"])
     reg("d_to_row", "xdma_d_to_row_major", "__snax_bingo_kernel_xdma_d_to_row_major",
         SnaxBingoKernelXdmaDToRowMajorArgs, gen_d_to_row, sz_d_to_row)
 

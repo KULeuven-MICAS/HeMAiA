@@ -19,8 +19,8 @@ sys.path.append(f"{ROOT_DIR}/util/sim")
 from xdma_ops_lib import run_op_workload  # noqa E402
 
 CONFIGS = [
-    {"rows": 16, "cols": 16, "elem": 1},
-    {"rows": 32, "cols": 32, "elem": 1},
+    {"rows": 16, "cols": 16, "elem_bytes": 1},
+    {"rows": 32, "cols": 32, "elem_bytes": 1},
 ]
 
 if __name__ == "__main__":

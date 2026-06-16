@@ -31,13 +31,13 @@ def emit_xdma_data(**kwargs):
     data_str = []
     rows = kwargs["rows"]
     cols = kwargs["cols"]
-    elem = kwargs["elem_bytes"]
+    elem_bytes = kwargs["elem_bytes"]
     total_elems = rows * cols
 
     data_str += [format_scalar_definition("uint32_t", "test_rows", rows)]
     data_str += [format_scalar_definition("uint32_t", "test_cols", cols)]
-    data_str += [format_scalar_definition("uint32_t", "test_elem_bytes", elem)]
-    data_str += [format_scalar_definition("uint32_t", "test_total_bytes", total_elems * elem)]
+    data_str += [format_scalar_definition("uint32_t", "test_elem_bytes", elem_bytes)]
+    data_str += [format_scalar_definition("uint32_t", "test_total_bytes", total_elems * elem_bytes)]
 
     # Input: [rows, cols] uint8 matrix (sequential values for easy visual checking)
     input_data = np.arange(total_elems, dtype=np.uint8)
@@ -138,18 +138,18 @@ def emit_xdma_data(**kwargs):
     B_cols = N_T * meshCol
     D_rows = M_T * meshRow
     D_cols = N_T * meshCol
-    A_bytes = A_rows * A_cols * elem
-    B_bytes = B_rows * B_cols * elem
-    D_bytes = D_rows * D_cols * elem
+    A_bytes = A_rows * A_cols * elem_bytes
+    B_bytes = B_rows * B_cols * elem_bytes
+    D_bytes = D_rows * D_cols * elem_bytes
     for k, v in [("A_bytes", A_bytes), ("B_bytes", B_bytes), ("D_bytes", D_bytes)]:
         data_str += [format_scalar_definition("uint32_t", k, v)]
 
-    if elem == 1:
+    if elem_bytes == 1:
         dtype, lo, hi, ctype = np.int8, -128, 127, "int8_t"
-    elif elem == 4:
+    elif elem_bytes == 4:
         dtype, lo, hi, ctype = np.int32, -1_000_000, 1_000_000, "int32_t"
     else:
-        raise ValueError(f"elem_bytes={elem} not supported by layout conversion datagen")
+        raise ValueError(f"elem_bytes={elem_bytes} not supported by layout conversion datagen")
 
     A_rm = np.random.randint(lo, hi, size=(A_rows, A_cols), dtype=dtype)
     B_rm = np.random.randint(lo, hi, size=(B_rows, B_cols), dtype=dtype)

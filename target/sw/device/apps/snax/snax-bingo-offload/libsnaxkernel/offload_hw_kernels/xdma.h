@@ -331,14 +331,14 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_elementwise_add_ab(void *arg)
 // element width — used for widths the HW transposer has no native mode for
 // (int32) and when the Transposer extension is absent. src/dst must be local L1.
 static inline void xdma_cpu_transpose_2d(uint64_t src_addr, uint64_t dst_addr,
-                                         uint32_t M, uint32_t N, uint32_t elem)
+                                         uint32_t M, uint32_t N, uint32_t elem_bytes)
 {
     volatile uint8_t *src = (volatile uint8_t *)(uint32_t)src_addr;
     volatile uint8_t *dst = (volatile uint8_t *)(uint32_t)dst_addr;
     for (uint32_t r = 0; r < M; r++)
         for (uint32_t c = 0; c < N; c++)
-            for (uint32_t b = 0; b < elem; b++)
-                dst[(c * M + r) * elem + b] = src[(r * N + c) * elem + b];
+            for (uint32_t b = 0; b < elem_bytes; b++)
+                dst[(c * M + r) * elem_bytes + b] = src[(r * N + c) * elem_bytes + b];
 }
 
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_transpose_2d(void *arg)
@@ -346,13 +346,13 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_transpose_2d(void *arg)
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_transpose_2d_args_t);
     // Transpose a 2D matrix [M, N] -> [N, M].
     // Element-width dispatch:
-    //   - int8  (elem=1): HW transposer, 8-bit mode  (CSR0=0)
-    //   - int16 (elem=2): HW transposer, 16-bit mode (CSR0=1)
-    //   - int32 (elem=4): SW transpose (no native 32-bit HW mode)
+    //   - int8  (elem_bytes=1): HW transposer, 8-bit mode  (CSR0=0)
+    //   - int16 (elem_bytes=2): HW transposer, 16-bit mode (CSR0=1)
+    //   - int32 (elem_bytes=4): SW transpose (no native 32-bit HW mode)
     // When the Transposer extension is absent (WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16
     // undefined), all widths use the SW transpose.
     //
-    // HW path constraints: M % 8 == 0, N * elem % 8 == 0.
+    // HW path constraints: M % 8 == 0, N * elem_bytes % 8 == 0.
     //
     // Arg layout (uint32_t[]):
     //   [0]  src_addr_hi
@@ -371,7 +371,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_transpose_2d(void *arg)
         uint64_t dst_addr = make_u64(a[2], a[3]);
         uint32_t M = a[4];
         uint32_t N = a[5];
-        uint32_t elem = a[6];
+        uint32_t elem_bytes = a[6];
         bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_transpose_2d_args_t);
         BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
@@ -386,19 +386,19 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_transpose_2d(void *arg)
         // the writer side — so 32-bit falls through to the SW transpose below.
         //
         //   tile_width = 8; tpt = ceil(8*8*elem_bits/512) beats per 8x8 tile
-        //   spatial_stride_src = N*elem; spatial_stride_dst = M*elem
-        //   src strides: [8, tile_w*elem, N*tile_w*elem]
-        //   dst strides: [8, M*tile_w*elem, tile_w*elem]
-        if (elem == 1 || elem == 2) {
+        //   spatial_stride_src = N*elem_bytes; spatial_stride_dst = M*elem_bytes
+        //   src strides: [8, tile_w*elem_bytes, N*tile_w*elem_bytes]
+        //   dst strides: [8, M*tile_w*elem_bytes, tile_w*elem_bytes]
+        if (elem_bytes == 1 || elem_bytes == 2) {
             uint32_t tile_w = 8;
-            uint32_t elem_bits = elem * 8;
+            uint32_t elem_bits = elem_bytes * 8;
             uint32_t tpt = (tile_w * tile_w * elem_bits + 511) / 512; // transfers per transpose
 
             // The xDMA reader is tied to local L1, so stage src into local L1 if
             // it isn't already there (zero-copy fast path when src is already
             // local). dst is written by the global-addressing writer, so it
             // needs no staging.
-            uint32_t bytes = M * N * elem;
+            uint32_t bytes = M * N * elem_bytes;
             xdma_layout_stage_t st;
             if (xdma_layout_stage_in(&st, src_addr, bytes) != 0) {
                 printf_safe("[Cluster %d Core %d]: transpose_2d L1 alloc failed!\r\n",
@@ -411,16 +411,16 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_transpose_2d(void *arg)
             // 0 = 8-bit (int8), 1 = 16-bit (int16).
             BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
             xdma_disable_all_extensions();
-            uint32_t tp_csr[1] = { (elem == 2) ? 1u : 0u };
+            uint32_t tp_csr[1] = { (elem_bytes == 2) ? 1u : 0u };
             xdma_enable_dst_ext(WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16, tp_csr);
 
-            uint32_t spatial_stride_src = N * elem;
-            uint32_t spatial_stride_dst = M * elem;
+            uint32_t spatial_stride_src = N * elem_bytes;
+            uint32_t spatial_stride_dst = M * elem_bytes;
 
             uint32_t t_strides_src[3] = {
                 8,                          // dim0: within one transfer
-                tile_w * elem,              // dim1: next tile horizontally
-                N * tile_w * elem           // dim2: next tile-row
+                tile_w * elem_bytes,              // dim1: next tile horizontally
+                N * tile_w * elem_bytes           // dim2: next tile-row
             };
             uint32_t t_bounds_src[3] = {
                 tpt,                        // transfers per 8x8 tile
@@ -430,12 +430,12 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_transpose_2d(void *arg)
 
             // Writer: transposed tile placement
             // After transpose, each 8x8 block's rows/cols are swapped.
-            // dim1 stride = M*tile_w*elem (stride to next column-block in transposed output)
-            // dim2 stride = tile_w*elem   (stride to next row-block in transposed output)
+            // dim1 stride = M*tile_w*elem_bytes (stride to next column-block in transposed output)
+            // dim2 stride = tile_w*elem_bytes   (stride to next row-block in transposed output)
             uint32_t t_strides_dst[3] = {
                 8,                          // dim0: within one transfer
-                M * tile_w * elem,          // dim1: next column-block in output
-                tile_w * elem               // dim2: next row-block in output
+                M * tile_w * elem_bytes,          // dim1: next column-block in output
+                tile_w * elem_bytes               // dim2: next row-block in output
             };
             uint32_t t_bounds_dst[3] = {
                 tpt,
@@ -469,7 +469,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_transpose_2d(void *arg)
         // Correct for any element width; reached for 32-bit (no native HW
         // transposer mode) or when the Transposer extension is absent.
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
-        xdma_cpu_transpose_2d(src_addr, dst_addr, M, N, elem);
+        xdma_cpu_transpose_2d(src_addr, dst_addr, M, N, elem_bytes);
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
         sp->return_value = (uint32_t)dst_addr;
         sp->num_return_values = 0;
@@ -487,7 +487,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_submatrix_2d(void *arg)
     // Extract a sub-region A[row_start:row_end, col_start:col_end] from [src_rows, src_cols].
     // Tile-level: 8 spatial channels span 8 consecutive rows, temporal dims
     // iterate within rows (by 8 bytes) and across groups of 8 rows.
-    // Constraints: out_rows % 8 == 0, out_cols*elem % 8 == 0, col_start*elem % 8 == 0.
+    // Constraints: out_rows % 8 == 0, out_cols*elem_bytes % 8 == 0, col_start*elem_bytes % 8 == 0.
     //
     // Arg layout (uint32_t[]):
     //   [0]  src_addr_hi
@@ -513,17 +513,17 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_submatrix_2d(void *arg)
         uint32_t row_end   = a[7];
         uint32_t col_start = a[8];
         uint32_t col_end   = a[9];
-        uint32_t elem      = a[10];
+        uint32_t elem_bytes      = a[10];
         bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_submatrix_2d_args_t);
         BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
         uint32_t out_rows = row_end - row_start;
         uint32_t out_cols = col_end - col_start;
-        uint32_t src_row_bytes = src_cols * elem;
-        uint32_t out_row_bytes = out_cols * elem;
+        uint32_t src_row_bytes = src_cols * elem_bytes;
+        uint32_t out_row_bytes = out_cols * elem_bytes;
 
         // Offset source to start of sub-region
-        src_addr += (uint64_t)(row_start * src_cols + col_start) * elem;
+        src_addr += (uint64_t)(row_start * src_cols + col_start) * elem_bytes;
 
         // Spatial: 8 channels across 8 consecutive rows
         uint32_t spatial_stride_src = src_row_bytes;
@@ -567,7 +567,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_expand_2d(void *arg)
     // Broadcast a single row [1, N] to [M, N] by repeating it M times.
     // Tile-level: spatial_stride_src=0 makes all 8 channels read the same row.
     // 8 dst channels write to 8 consecutive output rows.
-    // Constraints: M % 8 == 0, N*elem % 8 == 0.
+    // Constraints: M % 8 == 0, N*elem_bytes % 8 == 0.
     //
     // Arg layout (uint32_t[]):
     //   [0]  src_addr_hi
@@ -586,11 +586,11 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_expand_2d(void *arg)
         uint64_t dst_addr = make_u64(a[2], a[3]);
         uint32_t M    = a[4];
         uint32_t N    = a[5];
-        uint32_t elem = a[6];
+        uint32_t elem_bytes = a[6];
         bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_expand_2d_args_t);
         BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
-        uint32_t row_bytes = N * elem;
+        uint32_t row_bytes = N * elem_bytes;
 
         // Spatial: src stride=0 (all channels read same row), dst stride=row_bytes
         uint32_t spatial_stride_src = 0;
@@ -655,21 +655,21 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_concat_2d(void *arg)
         uint32_t dst_cols = a[7];
         uint32_t axis     = a[8];
         uint32_t offset   = a[9];
-        uint32_t elem     = a[10];
+        uint32_t elem_bytes     = a[10];
         bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_concat_2d_args_t);
         BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
         // Apply offset to destination base address
         if (axis == 0) {
             // Row concat: offset entire rows
-            dst_addr += (uint64_t)offset * dst_cols * elem;
+            dst_addr += (uint64_t)offset * dst_cols * elem_bytes;
         } else {
             // Column concat: offset within each row
-            dst_addr += (uint64_t)offset * elem;
+            dst_addr += (uint64_t)offset * elem_bytes;
         }
 
-        uint32_t src_row_bytes = src_cols * elem;
-        uint32_t dst_row_bytes = dst_cols * elem;
+        uint32_t src_row_bytes = src_cols * elem_bytes;
+        uint32_t dst_row_bytes = dst_cols * elem_bytes;
 
         // Spatial: 8 channels across 8 consecutive rows
         uint32_t spatial_stride_src = src_row_bytes;
@@ -734,13 +734,13 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_pad_2d(void *arg)
         uint32_t pad_bottom = a[7];
         uint32_t pad_left   = a[8];
         uint32_t pad_right  = a[9];
-        uint32_t elem       = a[10];
+        uint32_t elem_bytes       = a[10];
         bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_pad_2d_args_t);
         BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
         uint32_t dst_rows = src_rows + pad_top + pad_bottom;
         uint32_t dst_cols = src_cols + pad_left + pad_right;
-        uint32_t total_bytes = dst_rows * dst_cols * elem;
+        uint32_t total_bytes = dst_rows * dst_cols * elem_bytes;
 
         // Phase 1: CPU zero-fill the entire output buffer
         BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
@@ -756,10 +756,10 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_pad_2d(void *arg)
         BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
 
         // Phase 2: xDMA strided copy of source into padded interior
-        uint64_t dst_interior = dst_addr + (uint64_t)(pad_top * dst_cols + pad_left) * elem;
+        uint64_t dst_interior = dst_addr + (uint64_t)(pad_top * dst_cols + pad_left) * elem_bytes;
 
-        uint32_t src_row_bytes = src_cols * elem;
-        uint32_t dst_row_bytes = dst_cols * elem;
+        uint32_t src_row_bytes = src_cols * elem_bytes;
+        uint32_t dst_row_bytes = dst_cols * elem_bytes;
 
         // Spatial: 8 channels across 8 consecutive rows
         uint32_t spatial_stride_src = src_row_bytes;
@@ -824,14 +824,14 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_gather_2d(void *arg)
         uint32_t num_indices  = a[6];
         uint32_t index_start  = a[7];
         uint32_t index_stride = a[8];
-        uint32_t elem         = a[9];
+        uint32_t elem_bytes         = a[9];
         bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_gather_2d_args_t);
         BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
         // Offset source to the first gathered row
-        uint64_t src_base = src_addr + (uint64_t)index_start * src_cols * elem;
+        uint64_t src_base = src_addr + (uint64_t)index_start * src_cols * elem_bytes;
 
-        uint32_t row_bytes = src_cols * elem;
+        uint32_t row_bytes = src_cols * elem_bytes;
 
         // Spatial: src channels span gathered rows, dst channels span consecutive rows
         uint32_t spatial_stride_src = index_stride * row_bytes;
@@ -905,20 +905,20 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_gather_2d(void *arg)
 // The 4-axis loop (m, k|n, r, s|c) is mapped onto (spatial=8) x ≤5 temporal
 // dims. We pick the spatial axis at runtime; the first matching path wins.
 //
-// A↔R kernels — axes (m, k, r, s); inner row = tileSize·elem bytes:
-//   Path 1: meshRow == 8 && (tileSize·elem) % 8 == 0     spatial = r
+// A↔R kernels — axes (m, k, r, s); inner row = tileSize·elem_bytes bytes:
+//   Path 1: meshRow == 8 && (tileSize·elem_bytes) % 8 == 0     spatial = r
 //   Path 2: meshRow > 8 && meshRow % 8 == 0 && …%8 == 0  spatial = r_inner
-//   Path 3: meshRow ∈ {1,2,4} && (tileSize·elem) % 64==0 spatial = s_chunk_inner
-//   Path 4: (tileSize·elem) %8==0 && K_T %8==0           spatial = k_inner
-//   Path 5: (tileSize·elem) %8==0 && M_T %8==0           spatial = m_inner
+//   Path 3: meshRow ∈ {1,2,4} && (tileSize·elem_bytes) % 64==0 spatial = s_chunk_inner
+//   Path 4: (tileSize·elem_bytes) %8==0 && K_T %8==0           spatial = k_inner
+//   Path 5: (tileSize·elem_bytes) %8==0 && M_T %8==0           spatial = m_inner
 //   else  : CPU fallback
 //
-// D↔R kernels — axes (m, n, r, c); inner row = meshCol·elem bytes:
-//   Path 1: meshRow == 8 && (meshCol·elem) % 8 == 0      spatial = r
+// D↔R kernels — axes (m, n, r, c); inner row = meshCol·elem_bytes bytes:
+//   Path 1: meshRow == 8 && (meshCol·elem_bytes) % 8 == 0      spatial = r
 //   Path 2: meshRow > 8 && meshRow % 8 == 0 && …%8 == 0  spatial = r_inner
-//   Path 3: meshRow ∈ {1,2,4} && (meshCol·elem) % 64==0  spatial = c_chunk_inner
-//   Path 4: (meshCol·elem) %8==0 && N_T %8==0            spatial = n_inner
-//   Path 5: (meshCol·elem) %8==0 && M_T %8==0            spatial = m_inner
+//   Path 3: meshRow ∈ {1,2,4} && (meshCol·elem_bytes) % 64==0  spatial = c_chunk_inner
+//   Path 4: (meshCol·elem_bytes) %8==0 && N_T %8==0            spatial = n_inner
+//   Path 5: (meshCol·elem_bytes) %8==0 && M_T %8==0            spatial = m_inner
 //   else  : CPU fallback
 //
 // B↔R kernels — axes (n, k, c, s); HW Transposer + AGU sub-block iteration:
@@ -928,7 +928,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_gather_2d(void *arg)
 //     AGU iterates tpt x c_sub x s_sub x k x n  → 5 temporal dims (max).
 //   else  : CPU fallback
 //
-// ─── Resulting coverage matrix (VersaCore array_shapes x kernel x elem) ───
+// ─── Resulting coverage matrix (VersaCore array_shapes x kernel x elem_bytes) ───
 //   array_shape (mR,tS,mC) | A↔R INT8         | A↔R INT32        | D↔R         | B↔R
 //   ─────────────────────────────────────────────────────────────────────────────────
 //   0 (32,4,32)            | CPU¹             | HW (path 2)      | HW (path 2) | CPU²
@@ -937,7 +937,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_gather_2d(void *arg)
 //   3 (8,8,64)             | HW (path 1)      | HW (path 1)      | HW (path 1) | HW
 //   4 (8,32,8)             | HW (path 1)      | HW (path 1)      | HW (path 1) | HW
 //
-//   ¹ A-tile inner row = tileSize·elem = 4 < 8 bytes; can't form an 8-byte
+//   ¹ A-tile inner row = tileSize·elem_bytes = 4 < 8 bytes; can't form an 8-byte
 //     beat that's contiguous in both row-major src and packed A dst. CPU.
 //   ² Same root cause: tileSize=4 prevents 8x8-byte sub-blocking of B-tile.
 // ==========================================================================
@@ -984,10 +984,10 @@ static inline void xdma_layout_run(
 //   Coverage: paths 1–5 cover all 5 VersaCore array_shapes via paths 1–3.
 //   Arg layout: src_hi/lo, dst_hi/lo, M_T, N_T, meshRow, meshCol, elem_bytes.
 //   Strides used by all paths (factored out for readability):
-//     row_bytes_dst       = N_T * meshCol * elem   (full row of row-major R)
+//     row_bytes_dst       = N_T * meshCol * elem_bytes   (full row of row-major R)
 //     tile_bytes_dst_skip = meshRow * row_bytes_dst (advance past meshRow rows)
-//     tile_bytes_src      = meshRow * meshCol * elem (one D-tile worth of bytes)
-//     row_bytes_src       = meshCol * elem         (one row inside a D-tile)
+//     tile_bytes_src      = meshRow * meshCol * elem_bytes (one D-tile worth of bytes)
+//     row_bytes_src       = meshCol * elem_bytes         (one row inside a D-tile)
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_d_to_row_major(void *arg)
 {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_d_to_row_major_args_t);
@@ -1002,14 +1002,14 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_d_to_row_major(void *arg)
     uint64_t dst_addr = make_u64(a[2], a[3]);
     uint32_t M_T = a[4], N_T = a[5];
     uint32_t meshRow = a[6], meshCol = a[7];
-    uint32_t elem = a[8];
+    uint32_t elem_bytes = a[8];
     bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_d_to_row_major_args_t);
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
-    uint32_t bytes     = M_T * N_T * meshRow * meshCol * elem;
-    uint32_t row_b_src = meshCol * elem;          // 1 row of a D-tile
-    uint32_t row_b_dst = N_T * meshCol * elem;    // 1 row of row-major R
-    uint32_t tile_b    = meshRow * meshCol * elem;
+    uint32_t bytes     = M_T * N_T * meshRow * meshCol * elem_bytes;
+    uint32_t row_b_src = meshCol * elem_bytes;          // 1 row of a D-tile
+    uint32_t row_b_dst = N_T * meshCol * elem_bytes;    // 1 row of row-major R
+    uint32_t tile_b    = meshRow * meshCol * elem_bytes;
     bool hw_done = false;
 
     // Decide which HW path applies before staging, so we don't allocate L1
@@ -1093,9 +1093,9 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_d_to_row_major(void *arg)
         for (uint32_t n = 0; n < N_T; n++)
         for (uint32_t r = 0; r < meshRow; r++)
         for (uint32_t c = 0; c < meshCol; c++) {
-            uint32_t src_off = (((m * N_T + n) * meshRow + r) * meshCol + c) * elem;
-            uint32_t dst_off = ((m * meshRow + r) * N_cols + n * meshCol + c) * elem;
-            for (uint32_t b = 0; b < elem; b++) dst[dst_off + b] = src[src_off + b];
+            uint32_t src_off = (((m * N_T + n) * meshRow + r) * meshCol + c) * elem_bytes;
+            uint32_t dst_off = ((m * meshRow + r) * N_cols + n * meshCol + c) * elem_bytes;
+            for (uint32_t b = 0; b < elem_bytes; b++) dst[dst_off + b] = src[src_off + b];
         }
     }
     sp->return_value = (uint32_t)dst_addr;
@@ -1104,7 +1104,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_d_to_row_major(void *arg)
 }
 
 // row-major → A-layout. See section banner for the path table.
-//   Coverage: paths 1–5; array_shape 0 INT8 (tileSize·elem=4) lacks any
+//   Coverage: paths 1–5; array_shape 0 INT8 (tileSize·elem_bytes=4) lacks any
 //   8-byte beat that's contiguous in both src (row-major rows) and dst
 //   (packed A) → CPU. Other shapes hit a HW path.
 //   Arg layout: src_hi/lo, dst_hi/lo, M_T, K_T, meshRow, tileSize, elem_bytes.
@@ -1122,14 +1122,14 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_row_major_to_a(void *arg)
     uint64_t dst_addr = make_u64(a[2], a[3]);
     uint32_t M_T = a[4], K_T = a[5];
     uint32_t meshRow = a[6], tileSize = a[7];
-    uint32_t elem = a[8];
+    uint32_t elem_bytes = a[8];
     bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_row_major_to_a_args_t);
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
-    uint32_t bytes     = M_T * K_T * meshRow * tileSize * elem;
-    uint32_t row_b_blk = tileSize * elem;          // 1 row inside one A-tile (dst-packed)
-    uint32_t row_b_rm  = K_T * tileSize * elem;    // 1 row of row-major R (src-side)
-    uint32_t tile_b    = meshRow * tileSize * elem;
+    uint32_t bytes     = M_T * K_T * meshRow * tileSize * elem_bytes;
+    uint32_t row_b_blk = tileSize * elem_bytes;          // 1 row inside one A-tile (dst-packed)
+    uint32_t row_b_rm  = K_T * tileSize * elem_bytes;    // 1 row of row-major R (src-side)
+    uint32_t tile_b    = meshRow * tileSize * elem_bytes;
     bool hw_done = false;
 
     int path = 0;
@@ -1207,9 +1207,9 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_row_major_to_a(void *arg)
         for (uint32_t k = 0; k < K_T; k++)
         for (uint32_t r = 0; r < meshRow; r++)
         for (uint32_t s = 0; s < tileSize; s++) {
-            uint32_t src_off = ((m * meshRow + r) * K_cols + k * tileSize + s) * elem;
-            uint32_t dst_off = (((m * K_T + k) * meshRow + r) * tileSize + s) * elem;
-            for (uint32_t b = 0; b < elem; b++) dst[dst_off + b] = src[src_off + b];
+            uint32_t src_off = ((m * meshRow + r) * K_cols + k * tileSize + s) * elem_bytes;
+            uint32_t dst_off = (((m * K_T + k) * meshRow + r) * tileSize + s) * elem_bytes;
+            for (uint32_t b = 0; b < elem_bytes; b++) dst[dst_off + b] = src[src_off + b];
         }
     }
     sp->return_value = (uint32_t)dst_addr;
@@ -1239,11 +1239,11 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_row_major_to_b(void *arg)
     uint64_t dst_addr = make_u64(a[2], a[3]);
     uint32_t K_T = a[4], N_T = a[5];
     uint32_t tileSize = a[6], meshCol = a[7];
-    uint32_t elem = a[8];
+    uint32_t elem_bytes = a[8];
     bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_row_major_to_b_args_t);
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
-    uint32_t bytes  = K_T * tileSize * N_T * meshCol * elem;
+    uint32_t bytes  = K_T * tileSize * N_T * meshCol * elem_bytes;
     bool hw_done = false;
 
 #ifdef WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16
@@ -1256,37 +1256,37 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_row_major_to_b(void *arg)
         }
 
         const uint32_t tile_w   = 8;                                    // HW transposer block
-        uint32_t elem_bits      = elem * 8;
+        uint32_t elem_bits      = elem_bytes * 8;
         uint32_t tpt            = (tile_w * tile_w * elem_bits + 511) / 512;
-        uint32_t row_b_src      = N_T * meshCol * elem;                 // R row width
-        uint32_t b_tile_b       = tileSize * meshCol * elem;            // one B-tile bytes
-        uint32_t c_subs         = meshCol  / tile_w;                    // # 8-elem c chunks
-        uint32_t s_subs         = tileSize / tile_w;                    // # 8-elem s chunks
+        uint32_t row_b_src      = N_T * meshCol * elem_bytes;                 // R row width
+        uint32_t b_tile_b       = tileSize * meshCol * elem_bytes;            // one B-tile bytes
+        uint32_t c_subs         = meshCol  / tile_w;                    // # 8-elem_bytes c chunks
+        uint32_t s_subs         = tileSize / tile_w;                    // # 8-elem_bytes s chunks
 
         // 8 channels = 8 byte-rows of one transposer block (= 8 c values).
         // Each channel writes to a c_inner position in B; spatial_stride_dst
-        // crosses one c step inside the B-tile = tileSize·elem bytes.
+        // crosses one c step inside the B-tile = tileSize·elem_bytes bytes.
         uint32_t spatial_stride_src = row_b_src;
-        uint32_t spatial_stride_dst = tileSize * elem;
+        uint32_t spatial_stride_dst = tileSize * elem_bytes;
 
         // 5 temporal dims max:
-        //   [0] tpt          : within transposer block (1 for elem=1, 4 for elem=4)
+        //   [0] tpt          : within transposer block (1 for elem_bytes=1, 4 for elem_bytes=4)
         //   [1] c_sub        : next 8 c-elements inside the B-tile
         //   [2] s_sub        : next 8 s-elements inside the B-tile
         //   [3] k            : next R row-tile / next (n,k) tile in B
         //   [4] n            : next R col-tile / next n-group in B
         uint32_t ts_src[5] = {
             8,                          // tpt: advance 8 bytes within channel
-            tile_w * elem,              // c_sub: +8 cols in R
+            tile_w * elem_bytes,              // c_sub: +8 cols in R
             tile_w * row_b_src,         // s_sub: +8 rows in R
             tileSize * row_b_src,       // k: +tileSize rows in R
-            meshCol * elem              // n: +meshCol cols in R
+            meshCol * elem_bytes              // n: +meshCol cols in R
         };
         uint32_t tb_src[5] = { tpt, c_subs, s_subs, K_T, N_T };
         uint32_t ts_dst[5] = {
             8,                          // tpt: 8 bytes within channel
-            tile_w * tileSize * elem,   // c_sub: +8 c-rows in B-tile (each c-row = tileSize·elem)
-            tile_w * elem,              // s_sub: +8 s-bytes in each c-row of B-tile
+            tile_w * tileSize * elem_bytes,   // c_sub: +8 c-rows in B-tile (each c-row = tileSize·elem_bytes)
+            tile_w * elem_bytes,              // s_sub: +8 s-bytes in each c-row of B-tile
             b_tile_b,                   // k: next (n,k) tile within n-group
             K_T * b_tile_b              // n: next n-group of K_T tiles in B
         };
@@ -1309,9 +1309,9 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_row_major_to_b(void *arg)
         for (uint32_t k = 0; k < K_T; k++)
         for (uint32_t c = 0; c < meshCol; c++)
         for (uint32_t s = 0; s < tileSize; s++) {
-            uint32_t src_off = ((k * tileSize + s) * N_cols + n * meshCol + c) * elem;
-            uint32_t dst_off = (((n * K_T + k) * meshCol + c) * tileSize + s) * elem;
-            for (uint32_t b = 0; b < elem; b++) dst[dst_off + b] = src[src_off + b];
+            uint32_t src_off = ((k * tileSize + s) * N_cols + n * meshCol + c) * elem_bytes;
+            uint32_t dst_off = (((n * K_T + k) * meshCol + c) * tileSize + s) * elem_bytes;
+            for (uint32_t b = 0; b < elem_bytes; b++) dst[dst_off + b] = src[src_off + b];
         }
     }
     sp->return_value = (uint32_t)dst_addr;
@@ -1337,14 +1337,14 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_a_to_row_major(void *arg)
     uint64_t dst_addr = make_u64(a[2], a[3]);
     uint32_t M_T = a[4], K_T = a[5];
     uint32_t meshRow = a[6], tileSize = a[7];
-    uint32_t elem = a[8];
+    uint32_t elem_bytes = a[8];
     bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_a_to_row_major_args_t);
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
-    uint32_t bytes     = M_T * K_T * meshRow * tileSize * elem;
-    uint32_t row_b_blk = tileSize * elem;          // 1 row inside one A-tile (src-packed)
-    uint32_t row_b_rm  = K_T * tileSize * elem;    // 1 row of row-major R (dst-side)
-    uint32_t tile_b    = meshRow * tileSize * elem;
+    uint32_t bytes     = M_T * K_T * meshRow * tileSize * elem_bytes;
+    uint32_t row_b_blk = tileSize * elem_bytes;          // 1 row inside one A-tile (src-packed)
+    uint32_t row_b_rm  = K_T * tileSize * elem_bytes;    // 1 row of row-major R (dst-side)
+    uint32_t tile_b    = meshRow * tileSize * elem_bytes;
     bool hw_done = false;
 
     int path = 0;
@@ -1419,9 +1419,9 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_a_to_row_major(void *arg)
         for (uint32_t k = 0; k < K_T; k++)
         for (uint32_t r = 0; r < meshRow; r++)
         for (uint32_t s = 0; s < tileSize; s++) {
-            uint32_t src_off = (((m * K_T + k) * meshRow + r) * tileSize + s) * elem;
-            uint32_t dst_off = ((m * meshRow + r) * K_cols + k * tileSize + s) * elem;
-            for (uint32_t b = 0; b < elem; b++) dst[dst_off + b] = src[src_off + b];
+            uint32_t src_off = (((m * K_T + k) * meshRow + r) * tileSize + s) * elem_bytes;
+            uint32_t dst_off = ((m * meshRow + r) * K_cols + k * tileSize + s) * elem_bytes;
+            for (uint32_t b = 0; b < elem_bytes; b++) dst[dst_off + b] = src[src_off + b];
         }
     }
     sp->return_value = (uint32_t)dst_addr;
@@ -1448,11 +1448,11 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_b_to_row_major(void *arg)
     uint64_t dst_addr = make_u64(a[2], a[3]);
     uint32_t K_T = a[4], N_T = a[5];
     uint32_t tileSize = a[6], meshCol = a[7];
-    uint32_t elem = a[8];
+    uint32_t elem_bytes = a[8];
     bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_b_to_row_major_args_t);
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
-    uint32_t bytes  = K_T * tileSize * N_T * meshCol * elem;
+    uint32_t bytes  = K_T * tileSize * N_T * meshCol * elem_bytes;
     bool hw_done = false;
 
 #ifdef WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16
@@ -1465,16 +1465,16 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_b_to_row_major(void *arg)
         }
 
         const uint32_t tile_w   = 8;
-        uint32_t elem_bits      = elem * 8;
+        uint32_t elem_bits      = elem_bytes * 8;
         uint32_t tpt            = (tile_w * tile_w * elem_bits + 511) / 512;
-        uint32_t row_b_dst      = N_T * meshCol * elem;
-        uint32_t b_tile_b       = tileSize * meshCol * elem;
+        uint32_t row_b_dst      = N_T * meshCol * elem_bytes;
+        uint32_t b_tile_b       = tileSize * meshCol * elem_bytes;
         uint32_t c_subs         = meshCol  / tile_w;
         uint32_t s_subs         = tileSize / tile_w;
 
         // Reader: 8 channels each read one byte-row of the src 8x8 block;
-        // within a B-tile, byte-rows (c values) are tileSize·elem apart.
-        uint32_t spatial_stride_src = tileSize * elem;
+        // within a B-tile, byte-rows (c values) are tileSize·elem_bytes apart.
+        uint32_t spatial_stride_src = tileSize * elem_bytes;
         // Writer: after transpose, channel c_inner writes 8 bytes representing
         // one s position; consecutive channels write to consecutive R rows.
         uint32_t spatial_stride_dst = row_b_dst;
@@ -1487,18 +1487,18 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_b_to_row_major(void *arg)
         //   [4] n     : next n-group in B / next R col-tile
         uint32_t ts_src[5] = {
             8,                          // tpt
-            tile_w * tileSize * elem,   // c_sub: +8 c-rows in B-tile
-            tile_w * elem,              // s_sub: +8 s-bytes in each c-row of B-tile
+            tile_w * tileSize * elem_bytes,   // c_sub: +8 c-rows in B-tile
+            tile_w * elem_bytes,              // s_sub: +8 s-bytes in each c-row of B-tile
             b_tile_b,                   // k: next (n,k) tile within n-group
             K_T * b_tile_b              // n: next n-group of K_T tiles
         };
         uint32_t tb_src[5] = { tpt, c_subs, s_subs, K_T, N_T };
         uint32_t ts_dst[5] = {
             8,                          // tpt
-            tile_w * elem,              // c_sub: +8 cols in R (same row band)
+            tile_w * elem_bytes,              // c_sub: +8 cols in R (same row band)
             tile_w * row_b_dst,         // s_sub: +8 rows down in R
             tileSize * row_b_dst,       // k: +tileSize rows in R
-            meshCol * elem              // n: +meshCol cols in R
+            meshCol * elem_bytes              // n: +meshCol cols in R
         };
         uint32_t tb_dst[5] = { tpt, c_subs, s_subs, K_T, N_T };
 
@@ -1519,9 +1519,9 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_b_to_row_major(void *arg)
         for (uint32_t k = 0; k < K_T; k++)
         for (uint32_t c = 0; c < meshCol; c++)
         for (uint32_t s = 0; s < tileSize; s++) {
-            uint32_t src_off = (((n * K_T + k) * meshCol + c) * tileSize + s) * elem;
-            uint32_t dst_off = ((k * tileSize + s) * N_cols + n * meshCol + c) * elem;
-            for (uint32_t b = 0; b < elem; b++) dst[dst_off + b] = src[src_off + b];
+            uint32_t src_off = (((n * K_T + k) * meshCol + c) * tileSize + s) * elem_bytes;
+            uint32_t dst_off = ((k * tileSize + s) * N_cols + n * meshCol + c) * elem_bytes;
+            for (uint32_t b = 0; b < elem_bytes; b++) dst[dst_off + b] = src[src_off + b];
         }
     }
     sp->return_value = (uint32_t)dst_addr;
@@ -1547,14 +1547,14 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_row_major_to_d(void *arg)
     uint64_t dst_addr = make_u64(a[2], a[3]);
     uint32_t M_T = a[4], N_T = a[5];
     uint32_t meshRow = a[6], meshCol = a[7];
-    uint32_t elem = a[8];
+    uint32_t elem_bytes = a[8];
     bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_row_major_to_d_args_t);
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
-    uint32_t bytes     = M_T * N_T * meshRow * meshCol * elem;
-    uint32_t row_b_blk = meshCol * elem;          // 1 row of a D-tile (dst-side packing)
-    uint32_t row_b_rm  = N_T * meshCol * elem;    // 1 row of row-major R (src-side)
-    uint32_t tile_b    = meshRow * meshCol * elem;
+    uint32_t bytes     = M_T * N_T * meshRow * meshCol * elem_bytes;
+    uint32_t row_b_blk = meshCol * elem_bytes;          // 1 row of a D-tile (dst-side packing)
+    uint32_t row_b_rm  = N_T * meshCol * elem_bytes;    // 1 row of row-major R (src-side)
+    uint32_t tile_b    = meshRow * meshCol * elem_bytes;
     bool hw_done = false;
 
     int path = 0;
@@ -1632,9 +1632,9 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_row_major_to_d(void *arg)
         for (uint32_t n = 0; n < N_T; n++)
         for (uint32_t r = 0; r < meshRow; r++)
         for (uint32_t c = 0; c < meshCol; c++) {
-            uint32_t src_off = ((m * meshRow + r) * N_cols + n * meshCol + c) * elem;
-            uint32_t dst_off = (((m * N_T + n) * meshRow + r) * meshCol + c) * elem;
-            for (uint32_t b = 0; b < elem; b++) dst[dst_off + b] = src[src_off + b];
+            uint32_t src_off = ((m * meshRow + r) * N_cols + n * meshCol + c) * elem_bytes;
+            uint32_t dst_off = (((m * N_T + n) * meshRow + r) * meshCol + c) * elem_bytes;
+            for (uint32_t b = 0; b < elem_bytes; b++) dst[dst_off + b] = src[src_off + b];
         }
     }
     sp->return_value = (uint32_t)dst_addr;

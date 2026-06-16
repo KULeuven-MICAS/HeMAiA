@@ -212,9 +212,9 @@ def main():
 
     rows = int(param["rows"])
     cols = int(param["cols"])
-    elem = int(param["elem_bytes"])
-    data_size = rows * cols * elem
-    row_bytes = cols * elem
+    elem_bytes = int(param["elem_bytes"])
+    data_size = rows * cols * elem_bytes
+    row_bytes = cols * elem_bytes
 
     # Emit data header
     if args.data_h is not None:
@@ -280,13 +280,13 @@ def main():
     # Runs on the xDMA HW 8x8-tile transposer (reader extension
     # READER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16); falls back to a CPU
     # byte-by-byte transpose when the extension is absent.
-    # HW path constraints: rows % 8 == 0, cols * elem % 8 == 0.
+    # HW path constraints: rows % 8 == 0, cols * elem_bytes % 8 == 0.
     l1_trans_dst = BingoMemAlloc("l1_trans_dst", size=data_size, mem_level="L1", chip_id=0, cluster_id=0)
     xdma_transpose = BingoNode(
         assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=DMA_CORE,
         node_name="XDMA_transpose",
         kernel_name="__snax_bingo_kernel_xdma_transpose_2d",
-        kernel_args=SnaxBingoKernelXdmaTranspose2dArgs(l1_input, l1_trans_dst, rows, cols, elem))
+        kernel_args=SnaxBingoKernelXdmaTranspose2dArgs(l1_input, l1_trans_dst, rows, cols, elem_bytes))
     dfg.bingo_add_node(xdma_transpose)
     dfg.bingo_add_edge(prev_chk, xdma_transpose)
     prev_chk = add_xdma_test(dfg, "transpose", l1_trans_dst, xdma_transpose, BingoMemSymbol("golden_transpose"),
@@ -298,14 +298,14 @@ def main():
     sub_cs, sub_ce = 8, cols
     sub_rows = sub_re - sub_rs
     sub_cols = sub_ce - sub_cs
-    sub_out_size = sub_rows * sub_cols * elem
+    sub_out_size = sub_rows * sub_cols * elem_bytes
     l1_sub_dst = BingoMemAlloc("l1_sub_dst", size=sub_out_size, mem_level="L1", chip_id=0, cluster_id=0)
     xdma_submatrix = BingoNode(
         assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=DMA_CORE,
         node_name="XDMA_submatrix",
         kernel_name="__snax_bingo_kernel_xdma_submatrix_2d",
         kernel_args=SnaxBingoKernelXdmaSubmatrix2dArgs(
-            l1_input, l1_sub_dst, rows, cols, sub_rs, sub_re, sub_cs, sub_ce, elem))
+            l1_input, l1_sub_dst, rows, cols, sub_rs, sub_re, sub_cs, sub_ce, elem_bytes))
     dfg.bingo_add_node(xdma_submatrix)
     dfg.bingo_add_edge(prev_chk, xdma_submatrix)
     prev_chk = add_xdma_test(dfg, "submatrix", l1_sub_dst, xdma_submatrix, BingoMemSymbol("golden_submatrix"),
@@ -319,7 +319,7 @@ def main():
         assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=DMA_CORE,
         node_name="XDMA_expand",
         kernel_name="__snax_bingo_kernel_xdma_expand_2d",
-        kernel_args=SnaxBingoKernelXdmaExpand2dArgs(l1_input, l1_expand_dst, rows, cols, elem))
+        kernel_args=SnaxBingoKernelXdmaExpand2dArgs(l1_input, l1_expand_dst, rows, cols, elem_bytes))
     dfg.bingo_add_node(xdma_expand)
     dfg.bingo_add_edge(prev_chk, xdma_expand)
     prev_chk = add_xdma_test(dfg, "expand", l1_expand_dst, xdma_expand, BingoMemSymbol("golden_expand"),
@@ -327,7 +327,7 @@ def main():
 
     # ── 6. CONCAT ────────────────────────────────────────────────
     half = rows // 2
-    half_size = half * cols * elem
+    half_size = half * cols * elem_bytes
     l1_concat_dst = BingoMemAlloc("l1_concat_dst", size=data_size, mem_level="L1", chip_id=0, cluster_id=0)
 
     # Concat top half (offset=0)
@@ -336,7 +336,7 @@ def main():
         node_name="XDMA_concat_top",
         kernel_name="__snax_bingo_kernel_xdma_concat_2d",
         kernel_args=SnaxBingoKernelXdmaConcat2dArgs(
-            l1_input, l1_concat_dst, half, cols, rows, cols, 0, 0, elem))
+            l1_input, l1_concat_dst, half, cols, rows, cols, 0, 0, elem_bytes))
     dfg.bingo_add_node(xdma_concat_top)
     dfg.bingo_add_edge(prev_chk, xdma_concat_top)
 
@@ -357,7 +357,7 @@ def main():
         node_name="XDMA_concat_bottom",
         kernel_name="__snax_bingo_kernel_xdma_concat_2d",
         kernel_args=SnaxBingoKernelXdmaConcat2dArgs(
-            l1_concat_src_bottom, l1_concat_dst, half, cols, rows, cols, 0, half, elem))
+            l1_concat_src_bottom, l1_concat_dst, half, cols, rows, cols, 0, half, elem_bytes))
     dfg.bingo_add_node(xdma_concat_bottom)
     dfg.bingo_add_edge(load_bottom, xdma_concat_bottom)
     prev_chk = add_xdma_test(dfg, "concat", l1_concat_dst, xdma_concat_bottom, BingoMemSymbol("golden_concat"),
@@ -368,13 +368,13 @@ def main():
     pt, pb, pl, pr = 8, 0, 0, 0
     padded_rows = rows + pt + pb
     padded_cols = cols + pl + pr
-    padded_size = padded_rows * padded_cols * elem
+    padded_size = padded_rows * padded_cols * elem_bytes
     l1_pad_dst = BingoMemAlloc("l1_pad_dst", size=padded_size, mem_level="L1", chip_id=0, cluster_id=0)
     xdma_pad = BingoNode(
         assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=DMA_CORE,
         node_name="XDMA_pad",
         kernel_name="__snax_bingo_kernel_xdma_pad_2d",
-        kernel_args=SnaxBingoKernelXdmaPad2dArgs(l1_input, l1_pad_dst, rows, cols, pt, pb, pl, pr, elem))
+        kernel_args=SnaxBingoKernelXdmaPad2dArgs(l1_input, l1_pad_dst, rows, cols, pt, pb, pl, pr, elem_bytes))
     dfg.bingo_add_node(xdma_pad)
     dfg.bingo_add_edge(prev_chk, xdma_pad)
     prev_chk = add_xdma_test(dfg, "pad", l1_pad_dst, xdma_pad, BingoMemSymbol("golden_pad"),
@@ -383,14 +383,14 @@ def main():
     # ── 8. GATHER ────────────────────────────────────────────────
     g_start, g_stride = 0, 2
     g_count = rows // g_stride
-    g_out_size = g_count * cols * elem
+    g_out_size = g_count * cols * elem_bytes
     l1_gather_dst = BingoMemAlloc("l1_gather_dst", size=g_out_size, mem_level="L1", chip_id=0, cluster_id=0)
     xdma_gather = BingoNode(
         assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=DMA_CORE,
         node_name="XDMA_gather",
         kernel_name="__snax_bingo_kernel_xdma_gather_2d",
         kernel_args=SnaxBingoKernelXdmaGather2dArgs(
-            l1_input, l1_gather_dst, rows, cols, g_count, g_start, g_stride, elem))
+            l1_input, l1_gather_dst, rows, cols, g_count, g_start, g_stride, elem_bytes))
     dfg.bingo_add_node(xdma_gather)
     dfg.bingo_add_edge(prev_chk, xdma_gather)
     prev_chk = add_xdma_test(dfg, "gather", l1_gather_dst, xdma_gather, BingoMemSymbol("golden_gather"),
@@ -467,7 +467,7 @@ def main():
     M_T = int(param["M_T"])
     K_T = int(param["K_T"])
     N_T = int(param["N_T"])
-    convs = layout_conversions(M_T, K_T, N_T, meshRow, tileSize, meshCol, elem)
+    convs = layout_conversions(M_T, K_T, N_T, meshRow, tileSize, meshCol, elem_bytes)
 
     for name, src, src_size, kernel_name, kernel_args_cls, kwargs, dst_size, golden in convs:
         prev_chk = add_l1_layout_test(
