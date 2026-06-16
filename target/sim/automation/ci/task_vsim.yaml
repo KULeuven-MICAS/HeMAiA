@@ -134,6 +134,11 @@ runs:
     CHIP_TYPE: single_chip
     WORKLOAD: gemm_mem_chip_1cluster
     DEV_APP: snax-bingo-offload
+  # xdma_ci_ops_1cluster
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: single_chip
+    WORKLOAD: xdma_ci_ops_1cluster
+    DEV_APP: snax-bingo-offload
 
   # ---- offload_bingo_hw / multi_chip ----
   # gemm_msplit_4chiplet_1cluster
