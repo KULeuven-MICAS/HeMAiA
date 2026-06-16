@@ -48,7 +48,7 @@ except Exception:
 
 CI_CFG = "target/rtl/cfg/hemaia_multichip_ci.hjson"
 SIM_CFG = "target/sim/cfg/sim_rtl.hjson"
-SIM_TIMEOUT_SECONDS = 2 * 60 * 60  # 2 hours per simulation thread
+SIM_TIMEOUT_SECONDS = 4 * 60 * 60  # 4 hours per simulation thread
 # Keep in sync with the JOBS default in target/sim/automation/Makefile.
 DEFAULT_MAX_SIM_JOBS = 16
 
