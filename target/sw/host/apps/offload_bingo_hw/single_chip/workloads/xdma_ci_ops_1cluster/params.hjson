@@ -1,0 +1,17 @@
+{
+    num_clusters: 1
+    // Test all xDMA operators in one workload.
+    // Matrix dimensions for generic 1D/6D/2D ops (small enough for L1 TCDM).
+    // All dims must be multiples of 8 (xDMA channel width).
+    rows: 16
+    cols: 16
+    elem_bytes: 1
+
+    // Tile dimensions for VersaCore A/B/D layout transforms.
+    // Spatial unrolling (meshRow, tileSize, meshCol) comes from --hwcfg at
+    // this array_shape index.
+    array_shape: 0
+    M_T: 1
+    K_T: 16
+    N_T: 2
+}
