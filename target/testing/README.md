@@ -77,33 +77,35 @@ All three scripts share the same five-step backbone:
 
 ## Configuring the workload
 
-The HW configuration is fixed by the cfg files listed above. The SW
-workload knobs sit at the top of each entrypoint and feed straight into
-`run_sim_flow`:
+The HW configuration is fixed by the cfg files listed above. The SW workload
+knobs are exposed two ways — pick whichever fits:
 
-```python
-HOST_APP_TYPE = "offload_bingo_hw"  # host_only | offload_legacy | offload_bingo_hw | offload_bingo_sw
-CHIP_TYPE     = "single_chip"       # or "multi_chip"
-WORKLOAD      = "gemm_stacked_1cluster"
-DEV_APP       = "snax-bingo-offload"
+**1. CLI flags (no editing).** Every entrypoint accepts `--host-app-type`,
+`--chip-type`, `--workload`, and `--dev-app`. Any flag you omit falls back to
+the script's default. Run `--help` to see the flags and their current defaults:
 
-def main() -> None:
-    run_sim_flow(
-        cfg_name="hemaia_singlechip.hjson",
-        sim_cfg_name="sim_rtl.hjson",
-        with_macro=False,
-        with_d2d=False,
-        with_pll=False,
-        host_app_type=HOST_APP_TYPE,
-        chip_type=CHIP_TYPE,
-        workload=WORKLOAD,
-        dev_app=DEV_APP,
-        script_path=Path(__file__),
-    )
+```bash
+python3 0_start_single_chiplet_sim.py --help
+
+python3 0_start_single_chiplet_sim.py \
+    --host-app-type offload_bingo_hw \
+    --workload gemm_stacked_1cluster \
+    --dev-app snax-bingo-offload
 ```
 
-Edit those constants in the relevant script before launching to point at a
-different workload or host app.
+**2. Editing the defaults.** The defaults live as constants at the top of each
+entrypoint and feed `parse_workload_args` → `run_sim_flow`:
+
+```python
+HOST_APP_TYPE = "offload_legacy"   # host_only | offload_legacy | offload_bingo_hw | offload_bingo_sw
+CHIP_TYPE     = "single_chip"       # or "multi_chip"
+WORKLOAD      = "None"
+DEV_APP       = "snax-versacore-matmul-profile"
+```
+
+Editing a constant changes the default used when the matching CLI flag is
+omitted. The sim-flavor knobs (`cfg_name`, `with_macro` / `with_d2d` /
+`with_pll`) are fixed per script and are deliberately not exposed as flags.
 
 ## Usage
 
@@ -111,9 +113,15 @@ different workload or host app.
 # Source the EDA environment first (vsim on PATH).
 cd HeMAiA/target/testing
 
+# Run a flow with its built-in defaults:
 python3 0_start_single_chiplet_sim.py    # open-source single-chip
 python3 1_start_multi_chiplet_sim.py     # multi-chiplet, no PLL
 python3 2_start_tapeout_sim.py           # full tapeout with PLL
+
+# Or override the SW workload on the fly (omitted flags keep their defaults):
+python3 0_start_single_chiplet_sim.py \
+    --host-app-type offload_bingo_hw --workload gemm_stacked_1cluster \
+    --dev-app snax-bingo-offload
 ```
 
 Each script is idempotent — re-running it triggers a full reset → re-init

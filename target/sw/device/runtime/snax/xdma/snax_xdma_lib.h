@@ -23,6 +23,16 @@ static inline void snax_write_xdma_cfg_reg(uint32_t addr, uint32_t value) {
     csrw_ss(SNAX_XDMA_CFG_ADDR + addr, value);
 }
 
+// Is `addr` inside the calling cluster's local L1 (TCDM)? The xDMA engine is
+// cluster-local: it only has a port into local L1, so a plain transfer needs at
+// least one endpoint here. Uses the low-32 bits (cross-chiplet high-32
+// addressing is out of scope). snrt_l1_start_addr / snrt_l1_end_addr
+// (occamy_memory.h) are visible here via snrt.h's include order.
+static inline bool xdma_addr_in_local_l1(uint64_t addr) {
+    uint32_t lo = (uint32_t)addr;
+    return (lo >= snrt_l1_start_addr()) && (lo < snrt_l1_end_addr());
+}
+
 // Data Copy Task
 inline int32_t xdma_memcpy_nd_full_addr(
     uint64_t src, uint64_t dst, uint32_t spatial_stride_src,
@@ -31,6 +41,14 @@ inline int32_t xdma_memcpy_nd_full_addr(
     uint32_t* temp_stride_dst, uint32_t* temp_bound_dst,
     uint32_t enabled_chan_src, uint32_t enabled_chan_dst,
     uint32_t enabled_byte_dst) {
+    // xDMA is cluster-local: it only has a port into the calling cluster's L1,
+    // so at least one endpoint must live there. Enforced here so every memcpy
+    // path (xdma_memcpy_1d_full_addr / _nd / _1d all delegate to this) is
+    // covered without each caller repeating the check. Returns the error code
+    // only; the caller-side wrapper (BINGO_XDMA_TRY) reports it.
+    if (!xdma_addr_in_local_l1(src) && !xdma_addr_in_local_l1(dst)) {
+        return -2;  // no transfer endpoint in local L1
+    }
     snax_write_xdma_cfg_reg(XDMA_SRC_ADDR_PTR_LSB, (uint32_t)src);
     snax_write_xdma_cfg_reg(XDMA_SRC_ADDR_PTR_MSB, (uint32_t)(src >> 32));
 
@@ -464,8 +482,7 @@ typedef struct {
 static inline int xdma_layout_stage_in(
     xdma_layout_stage_t *s, uint64_t src, uint32_t bytes)
 {
-    uint32_t src_lo = (uint32_t)src;
-    bool src_local = (src_lo > snrt_l1_start_addr()) && (src_lo < snrt_l1_end_addr());
+    bool src_local = xdma_addr_in_local_l1(src);
 
     s->stage_in_lo = 0;
     if (src_local) {

@@ -21,6 +21,22 @@
 
 uint32_t time[SNRT_CLUSTER_NUM];
 #define TCDM_OFFSET 0x1000
+
+// Run a blocking 1D xDMA copy. xdma_memcpy_1d returns a negative code on a
+// config error (e.g. -2 when neither src nor dst is in the calling cluster's
+// local L1); report it and skip start/wait, rather than issuing a bogus task
+// that would hang in xdma_remote_wait.
+static inline void xdma_copy_1d_checked(void *src, void *dst, uint32_t size) {
+    int32_t ret = xdma_memcpy_1d(src, dst, size);
+    if (ret != 0) {
+        printf("ERROR: xdma_memcpy_1d failed (ret=%d), skipping transfer\r\n",
+               ret);
+        return;
+    }
+    int task_id = xdma_start();
+    xdma_remote_wait(task_id);
+}
+
 int main() {
     // Set err value for checking
     int err = 0;
@@ -32,10 +48,8 @@ int main() {
         printf("Now start to let clusters to read %dB data from L3\r\n", data_size * sizeof(data[0]));
     }
     if (snrt_is_dm_core()) {
-        xdma_memcpy_1d(data, (void *)tcdm_baseaddress,
-                       data_size * sizeof(data[0]));
-        int task_id = xdma_start();
-        xdma_remote_wait(task_id);
+        xdma_copy_1d_checked(data, (void *)tcdm_baseaddress,
+                             data_size * sizeof(data[0]));
         time[snrt_cluster_idx()] = xdma_last_task_cycle();
     }
 
@@ -53,10 +67,9 @@ int main() {
     }
     if ((snrt_cluster_idx() != 0) && snrt_is_dm_core()) {
 
-        xdma_memcpy_1d((void *)tcdm_baseaddress - cluster_offset,
-                       (void *)tcdm_baseaddress, data_size * sizeof(data[0]));
-        int task_id = xdma_start();
-        xdma_remote_wait(task_id);
+        xdma_copy_1d_checked((void *)tcdm_baseaddress - cluster_offset,
+                             (void *)tcdm_baseaddress,
+                             data_size * sizeof(data[0]));
         time[snrt_cluster_idx()] = xdma_last_task_cycle();
     }
 
@@ -74,11 +87,9 @@ int main() {
         printf("Now start to write %dB data between Clusters\r\n", data_size * sizeof(data[0]));
     }
     if ((snrt_cluster_idx() != snrt_cluster_num() - 1) && snrt_is_dm_core()) {
-        xdma_memcpy_1d((void *)tcdm_baseaddress,
-                       (void *)tcdm_baseaddress + cluster_offset,
-                       data_size * sizeof(data[0]));
-        int task_id = xdma_start();
-        xdma_remote_wait(task_id);
+        xdma_copy_1d_checked((void *)tcdm_baseaddress,
+                             (void *)tcdm_baseaddress + cluster_offset,
+                             data_size * sizeof(data[0]));
         time[snrt_cluster_idx()] = xdma_last_task_cycle();
     }
 
@@ -111,10 +122,8 @@ int main() {
         printf("Now start to let cluster to write back the %dB data to L3\r\n", data_size * sizeof(data[0]));
     }    
     if (snrt_is_dm_core()) {
-        xdma_memcpy_1d((void *)tcdm_baseaddress, data,
-                       data_size * sizeof(data[0]));
-        int task_id = xdma_start();
-        xdma_remote_wait(task_id);
+        xdma_copy_1d_checked((void *)tcdm_baseaddress, data,
+                             data_size * sizeof(data[0]));
         time[snrt_cluster_idx()] = xdma_last_task_cycle();
     }
     snrt_global_barrier();

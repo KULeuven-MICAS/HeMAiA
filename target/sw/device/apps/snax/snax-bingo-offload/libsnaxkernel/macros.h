@@ -192,3 +192,25 @@ inline uint64_t make_u64(uint32_t hi, uint32_t lo) {
 // kernels can keep their familiar BINGO_GET_SP(arg, args_t) name while the
 // actual offset comes from offsetof(args_t, scratchpad_ptr).
 #define BINGO_GET_SP(arg, args_t) BINGO_GET_SCRATCHPAD((arg), args_t)
+
+// Issue an xDMA library call and propagate a failure to the bingo scheduler.
+// The snax xDMA helpers (xdma_memcpy_1d_full_addr / _nd_full_addr) return 0 on
+// success or a negative code. This wrapper turns any non-zero into a kernel-
+// level BINGO_RET_FAIL (so the runtime sees the error instead of the kernel
+// silently proceeding to xdma_start() on an unconfigured transfer) and reports
+// the decoded reason — the lib itself only returns the code.
+#define BINGO_XDMA_TRY(call, kname)                                          \
+    do {                                                                     \
+        int32_t _xr = (call);                                                \
+        if (_xr != 0) {                                                      \
+            const char *_why = (_xr == -2) ? "src/dst not in local L1"       \
+                             : (_xr == -1) ? "bad size"                       \
+                             : (_xr == -4) ? "too many dims"                  \
+                             : "unknown";                                     \
+            printf_safe("[Cluster %d Core %d]: Error! " kname                 \
+                        " xDMA cfg failed: %s (ret=%d)\r\n",                  \
+                        snrt_cluster_idx(), snrt_cluster_core_idx(),         \
+                        _why, _xr);                                          \
+            return BINGO_RET_FAIL;                                            \
+        }                                                                    \
+    } while (0)

@@ -5,10 +5,7 @@
 // Fanchen Kong <fanchen.kong@kuleuven.be>
 //
 // Cycle-count characterization sweep for the FP32 RVV host kernels.
-// Emits one MCYCLE-style CSV line per (kernel x size x rep) combination,
-// which is then parsed by scripts/characterize_cva6.py to fit a linear
-// model `cycles = overhead + slope·N` per op.  This data populates
-// inputs/rtl_luts/cva6_ops.csv for the framework's `--cost-model=rtl` mode.
+// Emits one MCYCLE-style CSV line per (kernel x size x rep) combination
 //
 // Paired workload: ci_ara (same kernels, but correctness-only with N=32 —
 // used as the fast CI regression).
@@ -26,10 +23,13 @@ static float timing_output[OP_MAX_LEN] __attribute__((aligned(8)));
 static float timing_fp32_scratch[OP_MAX_LEN] __attribute__((aligned(8)));
 static int8_t timing_int8_scratch[OP_MAX_LEN] __attribute__((aligned(8)));
 static float timing_scale_scratch __attribute__((aligned(8)));
+// dequantize: int32 accumulator input + its scale + the kernel's return scratchpad (arg[4]).
+static int32_t timing_int32_src[OP_MAX_LEN] __attribute__((aligned(8)));
+static float timing_dequant_scale __attribute__((aligned(8)));
+static bingo_kernel_scratchpad_t timing_scratchpad __attribute__((aligned(8)));
 
-// Timing sizes that span the TinyLlama workload range.
 #define TIMING_NUM_SIZES 4
-#define TIMING_NUM_REPS  2
+#define TIMING_NUM_REPS  1
 static const uint64_t timing_sizes[TIMING_NUM_SIZES] = { 64, 256, 1024, 4096 };
 
 int main() {
@@ -38,7 +38,7 @@ int main() {
     enable_vec();
     asm volatile("fence" ::: "memory");
 
-    printf("=== ara_test: CVA6+Ara FP32 cycle sweep ===\r\n");
+    printf("=== test_ara: CVA6+Ara FP32 cycle sweep ===\r\n");
     printf("Sizes: ");
     for (int si = 0; si < TIMING_NUM_SIZES; si++) {
         printf("%lu ", timing_sizes[si]);
@@ -71,6 +71,9 @@ int main() {
             TIME_BINARY("sub", __host_bingo_kernel_fp32_sub);
             TIME_BINARY("mul", __host_bingo_kernel_fp32_mul);
             TIME_BINARY("div", __host_bingo_kernel_fp32_div);
+            TIME_BINARY("max", __host_bingo_kernel_fp32_max);
+            TIME_BINARY("min", __host_bingo_kernel_fp32_min);
+            TIME_BINARY("silu_mul", __host_bingo_kernel_fp32_silu_mul);   // (gate,up,out,n) = binary layout
             #undef TIME_BINARY
 
             // --- Unary elementwise (input, out, n) ---
@@ -87,6 +90,13 @@ int main() {
             TIME_UNARY("exp", __host_bingo_kernel_fp32_exp, op_a_big);           // positive input
             TIME_UNARY("sigmoid", __host_bingo_kernel_fp32_sigmoid, op_mixed_big);
             TIME_UNARY("sqrt", __host_bingo_kernel_fp32_sqrt, op_a_big);         // positive input
+            TIME_UNARY("relu", __host_bingo_kernel_fp32_relu, op_mixed_big);
+            TIME_UNARY("neg", __host_bingo_kernel_fp32_neg, op_mixed_big);
+            TIME_UNARY("abs", __host_bingo_kernel_fp32_abs, op_mixed_big);
+            TIME_UNARY("tanh", __host_bingo_kernel_fp32_tanh, op_mixed_big);
+            TIME_UNARY("reciprocal", __host_bingo_kernel_fp32_reciprocal, op_a_big);  // positive (no 1/0)
+            TIME_UNARY("silu", __host_bingo_kernel_fp32_silu, op_mixed_big);
+            TIME_UNARY("gelu", __host_bingo_kernel_fp32_gelu, op_mixed_big);
             #undef TIME_UNARY
 
             // --- Reductions (input, scalar_out, n) ---
@@ -115,6 +125,20 @@ int main() {
             c1 = ara_get_cycle_count();
             printf("CYCLES,quantize,%lu,%d,%lu\r\n", N, rep, c1 - c0);
 
+            // --- Data conversion: dequantize (int32 in, fp32 out, scale, n, scratchpad) ---
+            // Fill the int32 source OUTSIDE the timing window so the cast doesn't pollute cycles.
+            for (uint64_t i = 0; i < N; i++) timing_int32_src[i] = (int32_t)(op_a_big[i] * 100.0f);
+            timing_dequant_scale = 0.01f;
+            t_args[0] = (uint64_t)(uintptr_t)timing_int32_src;
+            t_args[1] = (uint64_t)(uintptr_t)timing_output;
+            t_args[2] = (uint64_t)(uintptr_t)&timing_dequant_scale;
+            t_args[3] = N;
+            t_args[4] = (uint64_t)(uintptr_t)&timing_scratchpad;
+            c0 = ara_get_cycle_count();
+            __host_bingo_kernel_int32_dequantize(t_args);
+            c1 = ara_get_cycle_count();
+            printf("CYCLES,dequantize,%lu,%d,%lu\r\n", N, rep, c1 - c0);
+
             // --- Compound: softmax (input, output, num_rows=1, row_len=N) ---
             t_args[0] = (uint64_t)(uintptr_t)op_mixed_big;
             t_args[1] = (uint64_t)(uintptr_t)timing_output;
@@ -140,6 +164,6 @@ int main() {
         }
     }
 
-    printf("=== ara_test done ===\r\n");
+    printf("=== test_ara done ===\r\n");
     return 0;
 }

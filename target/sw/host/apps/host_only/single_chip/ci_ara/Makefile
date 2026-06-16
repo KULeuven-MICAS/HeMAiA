@@ -6,7 +6,7 @@
 
 # Fast CI regression: correctness tests for the FP32 RVV operator kernels.
 # Uses a small vector length (OP_TEST_LEN=32) so the RTL sim finishes quickly.
-# Pair workload: ara_test (same kernels, long-running timing sweep).
+# Pair workload: test_ara (same kernels, long-running timing sweep).
 
 MK_DIR   := $(dir $(realpath $(lastword $(MAKEFILE_LIST))))
 HOST_APP_TYPE = host_only

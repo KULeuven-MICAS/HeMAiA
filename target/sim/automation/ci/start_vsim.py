@@ -21,15 +21,20 @@ Flow overview:
 from __future__ import annotations
 
 import argparse
+import atexit
 import getpass
+import os
 import shutil
+import signal
 import subprocess
 import sys
+import threading
+import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Set, Tuple
 
 try:
     import yaml  # type: ignore
@@ -43,9 +48,70 @@ except Exception:
 
 CI_CFG = "target/rtl/cfg/hemaia_multichip_ci.hjson"
 SIM_CFG = "target/sim/cfg/sim_rtl.hjson"
-SIM_TIMEOUT_SECONDS = 2 * 60 * 60  # 2 hours per simulation thread
+SIM_TIMEOUT_SECONDS = 4 * 60 * 60  # 4 hours per simulation thread
 # Keep in sync with the JOBS default in target/sim/automation/Makefile.
 DEFAULT_MAX_SIM_JOBS = 16
+
+# ---------------------------------------------------------------------------
+# Process-group tracking -- guarantees no stale vsim threads survive
+# ---------------------------------------------------------------------------
+#
+# The ``occamy_chip.vsim`` launcher spawns ``vish`` -> ``vsimk`` as descendant
+# processes.  Killing only the immediate child (as ``subprocess.run`` does on
+# timeout) leaves those descendants orphaned onto ``init`` where they keep
+# pinning a CPU core forever.  We therefore start each simulation in its own
+# session/process group and tear the *whole group* down on timeout, crash, or
+# interrupt, so the script never leaves stale threads behind.
+
+_active_pgids: Set[int] = set()
+_active_pgids_lock = threading.Lock()
+
+
+def _register_pgid(pgid: int) -> None:
+    with _active_pgids_lock:
+        _active_pgids.add(pgid)
+
+
+def _unregister_pgid(pgid: int) -> None:
+    with _active_pgids_lock:
+        _active_pgids.discard(pgid)
+
+
+def _kill_pgid(pgid: int) -> None:
+    """SIGKILL an entire process group, ignoring already-dead groups."""
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, OSError):
+        pass
+
+
+def _terminate_all_sims() -> None:
+    """Kill every still-running simulation process group.
+
+    Registered with ``atexit`` and the SIGINT/SIGTERM handlers so a crash,
+    timeout, or Ctrl-C tears down the full vsim/vish/vsimk process tree instead
+    of orphaning it onto init.
+    """
+    with _active_pgids_lock:
+        pgids = list(_active_pgids)
+        _active_pgids.clear()
+    for pgid in pgids:
+        _kill_pgid(pgid)
+
+
+def _install_cleanup_handlers() -> None:
+    """Ensure simulation process groups are reaped on exit or signal."""
+    atexit.register(_terminate_all_sims)
+
+    def _handler(signum, _frame):
+        _terminate_all_sims()
+        # Restore default disposition and re-raise so the exit status is correct.
+        signal.signal(signum, signal.SIG_DFL)
+        os.kill(os.getpid(), signum)
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(sig, _handler)
+
 
 # ---------------------------------------------------------------------------
 # Utility helpers
@@ -308,6 +374,7 @@ def step4_build_apps_and_prepare_tasks(
             val = task.get(key, "")
             if val and val != "None":
                 make_cmd.append(f"{var}={val}")
+        make_cmd.append(f"CFG_OVERRIDE={CI_CFG}")
         make_cmd.append("DEBUG_LEVEL=0")
 
         run_in_container(repo_root, docker_image, repo_root, make_cmd)
@@ -366,6 +433,18 @@ def step5_prepare_testharness(
             _copy_path(src, task_dir / rel)
 
 
+def _format_duration(seconds: float) -> str:
+    """Format a wall-clock duration as e.g. '1h02m11s', '18m44s', or '44s'."""
+    total = int(round(seconds))
+    hours, rem = divmod(total, 3600)
+    minutes, secs = divmod(rem, 60)
+    if hours:
+        return f"{hours}h{minutes:02d}m{secs:02d}s"
+    if minutes:
+        return f"{minutes}m{secs:02d}s"
+    return f"{secs}s"
+
+
 # ---------------------------------------------------------------------------
 # Step 6 -- Run simulations concurrently
 # ---------------------------------------------------------------------------
@@ -373,36 +452,60 @@ def step5_prepare_testharness(
 def step6_run_simulations(
     tasks_info: List[Tuple[Path, str]],
     max_workers: int,
-) -> Dict[str, bool]:
-    """Execute simulations in parallel and return a pass/fail map."""
-    results: Dict[str, bool] = {}
+) -> Tuple[Dict[str, Tuple[bool, float]], float]:
+    """Execute simulations in parallel.
+
+    Returns ``(results, total_wall_clock_seconds)`` where *results* maps
+    ``task_dir -> (passed, wall_clock_seconds)`` and *total_wall_clock_seconds*
+    is the real elapsed time of the whole (concurrent) simulation phase.
+    """
+    results: Dict[str, Tuple[bool, float]] = {}
 
     def _worker(task_dir: Path, ci_name: str):
         sim_binary = task_dir / "bin" / "occamy_chip.vsim"
+        proc = None
+        pgid = None
+        start = time.monotonic()
         try:
-            proc = subprocess.run(
+            # start_new_session=True makes the child a session/group leader, so
+            # its pgid equals its pid and *all* descendants (vish, vsimk) share
+            # that group and can be killed as a unit -- never orphaned.
+            proc = subprocess.Popen(
                 [str(sim_binary)],
                 cwd=task_dir / "bin",
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                check=False,
-                timeout=SIM_TIMEOUT_SECONDS,
+                start_new_session=True,
             )
-            out = proc.stdout.decode(errors="replace") if proc.stdout else ""
-            return str(task_dir), ci_name, proc.returncode == 0, out
-        except subprocess.TimeoutExpired as exc:
-            partial = exc.stdout.decode(errors="replace") if exc.stdout else ""
-            msg = (
-                f"TIMEOUT: simulation exceeded {SIM_TIMEOUT_SECONDS}s "
-                f"({SIM_TIMEOUT_SECONDS // 3600}h) and was killed.\n"
-                + partial
-            )
-            return str(task_dir), ci_name, False, msg
+            pgid = proc.pid
+            _register_pgid(pgid)
+            try:
+                out_bytes, _ = proc.communicate(timeout=SIM_TIMEOUT_SECONDS)
+                elapsed = time.monotonic() - start
+                out = out_bytes.decode(errors="replace") if out_bytes else ""
+                return str(task_dir), ci_name, proc.returncode == 0, elapsed, out
+            except subprocess.TimeoutExpired:
+                _kill_pgid(pgid)
+                out_bytes, _ = proc.communicate()
+                elapsed = time.monotonic() - start
+                partial = out_bytes.decode(errors="replace") if out_bytes else ""
+                msg = (
+                    f"TIMEOUT: simulation exceeded {SIM_TIMEOUT_SECONDS}s "
+                    f"({SIM_TIMEOUT_SECONDS // 3600}h) and was killed.\n"
+                    + partial
+                )
+                return str(task_dir), ci_name, False, elapsed, msg
         except Exception:
-            return str(task_dir), ci_name, False, traceback.format_exc()
+            elapsed = time.monotonic() - start
+            if pgid is not None:
+                _kill_pgid(pgid)
+            return str(task_dir), ci_name, False, elapsed, traceback.format_exc()
+        finally:
+            if pgid is not None:
+                _unregister_pgid(pgid)
 
     if not tasks_info:
-        return results
+        return results, 0.0
 
     worker_count = min(max_workers, len(tasks_info))
     print(
@@ -410,6 +513,7 @@ def step6_run_simulations(
         f"{worker_count} parallel job(s)"
     )
 
+    phase_start = time.monotonic()
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
         future_to_task = {}
         for td, cn in tasks_info:
@@ -419,10 +523,10 @@ def step6_run_simulations(
         for future in as_completed(future_to_task):
             td, cn = future_to_task[future]
             try:
-                task_dir_str, ci_name, passed, output = future.result()
-                results[task_dir_str] = passed
+                task_dir_str, ci_name, passed, elapsed, output = future.result()
+                results[task_dir_str] = (passed, elapsed)
                 status = "PASS" if passed else "FAIL"
-                print(f"{ci_name}: {status}")
+                print(f"{ci_name}: {status} ({_format_duration(elapsed)})")
                 if output:
                     for line in output.strip().splitlines()[-10:]:
                         print(line)
@@ -430,7 +534,12 @@ def step6_run_simulations(
                 print(f"Error obtaining result for task {td}:")
                 traceback.print_exc()
 
-    return results
+    total_elapsed = time.monotonic() - phase_start
+    print(
+        f"All {len(tasks_info)} simulation(s) finished in "
+        f"{_format_duration(total_elapsed)}"
+    )
+    return results, total_elapsed
 
 
 # ---------------------------------------------------------------------------
@@ -440,16 +549,28 @@ def step6_run_simulations(
 def write_summary(
     summary_path: Path,
     tasks_info: List[Tuple[Path, str]],
-    results: Dict[str, bool],
+    results: Dict[str, Tuple[bool, float]],
+    total_seconds: float,
 ) -> None:
-    """Write a Markdown report listing each task's pass/fail status."""
+    """Write a Markdown report listing each task's pass/fail status and runtime."""
     with summary_path.open("w") as f:
         f.write("# Simulation Summary\n\n")
         f.write(f"Run by **{getpass.getuser()}** at **{datetime.now():%Y-%m-%d %H:%M:%S}**\n\n")
         for idx, (task_dir, ci_name) in enumerate(tasks_info):
-            passed = results.get(str(task_dir), False)
+            passed, elapsed = results.get(str(task_dir), (False, None))
             status = "PASS" if passed else "FAIL"
-            f.write(f"- **task_{idx}** ({ci_name}) \u2014 **{status}**\n")
+            runtime = _format_duration(elapsed) if elapsed is not None else "n/a"
+            f.write(f"- **task_{idx}** ({ci_name}) \u2014 **{status}** \u2014 {runtime}\n")
+
+        # Totals: real elapsed wall-clock of the (concurrent) sim phase, plus the
+        # cumulative per-task time (their sum, which exceeds the elapsed when
+        # tasks ran in parallel).
+        cumulative = sum(e for _, e in results.values() if e is not None)
+        f.write(
+            f"\n**Total wall-clock time: {_format_duration(total_seconds)}**"
+            f" (cumulative across {len(tasks_info)} task(s): "
+            f"{_format_duration(cumulative)})\n"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -492,6 +613,10 @@ def main() -> None:
 
     ensure_vsim_available()
 
+    # Guarantee any simulation we launch is fully torn down on exit, timeout,
+    # crash, or Ctrl-C -- no orphaned vsim/vish/vsimk threads left pinning CPUs.
+    _install_cleanup_handlers()
+
     # Remove leftover task_* directories from any previous (crashed) run
     cleanup_stale_task_dirs(task_base_dir)
 
@@ -514,12 +639,12 @@ def main() -> None:
     step5_prepare_testharness(repo_root, docker_image, tasks_info)
 
     # Step 6: Run all simulations concurrently
-    results = step6_run_simulations(tasks_info, args.max_sim_jobs)
+    results, total_elapsed = step6_run_simulations(tasks_info, args.max_sim_jobs)
 
     # Step 7: Write Markdown summary
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     summary_path = script_path.parent / f"simulation_summary_{timestamp}.md"
-    write_summary(summary_path, tasks_info, results)
+    write_summary(summary_path, tasks_info, results, total_elapsed)
     print(f"Simulation summary written to {summary_path}")
 
 

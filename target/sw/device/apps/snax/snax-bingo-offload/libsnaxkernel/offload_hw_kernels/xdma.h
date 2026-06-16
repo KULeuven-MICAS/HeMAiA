@@ -34,7 +34,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_1d_copy(void *arg)
         BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
         xdma_disable_all_extensions();
-        xdma_memcpy_1d_full_addr(src_addr, dst_addr, data_size);
+        BINGO_XDMA_TRY(xdma_memcpy_1d_full_addr(src_addr, dst_addr, data_size), "xdma_1d_copy");
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
         int task_id = xdma_start();
@@ -102,13 +102,13 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_6d(void *arg)
 
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
         xdma_disable_all_extensions();
-        xdma_memcpy_nd_full_addr(
+        BINGO_XDMA_TRY(xdma_memcpy_nd_full_addr(
             src_addr, dst_addr,
             spatial_stride_src, spatial_stride_dst,
             num_dims, t_strides_src, t_bounds_src,
             num_dims, t_strides_dst, t_bounds_dst,
             0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF
-        );
+        ), "xdma_6d");
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
 
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
@@ -182,6 +182,18 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_transpose_2d(void *arg)
             uint32_t elem_bits = elem * 8;
             uint32_t tpt = (tile_w * tile_w * elem_bits + 511) / 512; // transfers per transpose
 
+            // The reader-side transposer can only read from local L1; stage src
+            // into local L1 if it isn't already there (zero-copy fast path when
+            // src is already local). dst is written by the global-addressing
+            // writer, so it needs no staging.
+            uint32_t bytes = M * N * elem;
+            xdma_layout_stage_t st;
+            if (xdma_layout_stage_in(&st, src_addr, bytes) != 0) {
+                printf_safe("[Cluster %d Core %d]: transpose_2d L1 alloc failed!\r\n",
+                            snrt_cluster_idx(), snrt_cluster_core_idx());
+                return BINGO_RET_FAIL;
+            }
+
             // Disable all, then enable transposer on reader side
             BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
             xdma_disable_all_extensions();
@@ -217,7 +229,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_transpose_2d(void *arg)
             };
 
             xdma_memcpy_nd_full_addr(
-                src_addr, dst_addr,
+                st.xdma_src, dst_addr,
                 spatial_stride_src, spatial_stride_dst,
                 3, t_strides_src, t_bounds_src,
                 3, t_strides_dst, t_bounds_dst,
@@ -227,11 +239,12 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_transpose_2d(void *arg)
 
             BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
             int task_id = xdma_start();
-            xdma_wait_task(src_addr, dst_addr, task_id);
+            xdma_wait_task(st.xdma_src, dst_addr, task_id);
             BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
 
             // Disable transposer after use
             xdma_disable_src_ext(0);
+            xdma_layout_stage_free(&st);
         }
 #else
         // ── CPU fallback (no Transposer extension) ──
@@ -314,13 +327,13 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_submatrix_2d(void *arg)
 
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
         xdma_disable_all_extensions();
-        xdma_memcpy_nd_full_addr(
+        BINGO_XDMA_TRY(xdma_memcpy_nd_full_addr(
             src_addr, dst_addr,
             spatial_stride_src, spatial_stride_dst,
             2, t_strides_src, t_bounds_src,
             2, t_strides_dst, t_bounds_dst,
             0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF
-        );
+        ), "xdma_submatrix_2d");
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
 
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
@@ -381,13 +394,13 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_expand_2d(void *arg)
 
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
         xdma_disable_all_extensions();
-        xdma_memcpy_nd_full_addr(
+        BINGO_XDMA_TRY(xdma_memcpy_nd_full_addr(
             src_addr, dst_addr,
             spatial_stride_src, spatial_stride_dst,
             2, t_strides_src, t_bounds_src,
             2, t_strides_dst, t_bounds_dst,
             0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF
-        );
+        ), "xdma_expand_2d");
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
 
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
@@ -460,13 +473,13 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_concat_2d(void *arg)
 
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
         xdma_disable_all_extensions();
-        xdma_memcpy_nd_full_addr(
+        BINGO_XDMA_TRY(xdma_memcpy_nd_full_addr(
             src_addr, dst_addr,
             spatial_stride_src, spatial_stride_dst,
             2, t_strides_src, t_bounds_src,
             2, t_strides_dst, t_bounds_dst,
             0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF
-        );
+        ), "xdma_concat_2d");
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
 
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
@@ -550,13 +563,13 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_pad_2d(void *arg)
 
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
         xdma_disable_all_extensions();
-        xdma_memcpy_nd_full_addr(
+        BINGO_XDMA_TRY(xdma_memcpy_nd_full_addr(
             src_addr, dst_interior,
             spatial_stride_src, spatial_stride_dst,
             2, t_strides_src, t_bounds_src,
             2, t_strides_dst, t_bounds_dst,
             0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF
-        );
+        ), "xdma_pad_2d");
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
 
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
@@ -622,13 +635,13 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_gather_2d(void *arg)
 
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
         xdma_disable_all_extensions();
-        xdma_memcpy_nd_full_addr(
+        BINGO_XDMA_TRY(xdma_memcpy_nd_full_addr(
             src_base, dst_addr,
             spatial_stride_src, spatial_stride_dst,
             2, t_strides_src, t_bounds_src,
             2, t_strides_dst, t_bounds_dst,
             0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF
-        );
+        ), "xdma_gather_2d");
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
 
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);

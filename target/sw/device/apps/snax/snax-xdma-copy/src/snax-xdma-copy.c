@@ -10,6 +10,22 @@
 #include "snrt.h"
 #define TCDM_OFFSET 0x1000
 #define CHECK_SIZE_BYTES 256
+
+// Run a blocking 1D xDMA copy. xdma_memcpy_1d returns a negative code on a
+// config error (e.g. -2 when neither src nor dst is in the calling cluster's
+// local L1); report it and skip start/wait, rather than issuing a bogus task
+// that would hang in xdma_remote_wait.
+static inline void xdma_copy_1d_checked(void *src, void *dst, uint32_t size) {
+    int32_t ret = xdma_memcpy_1d(src, dst, size);
+    if (ret != 0) {
+        printf("ERROR: xdma_memcpy_1d failed (ret=%d), skipping transfer\r\n",
+               ret);
+        return;
+    }
+    int task_id = xdma_start();
+    xdma_remote_wait(task_id);
+}
+
 int main() {
     // Set err value for checking
     int err = 0;
@@ -19,10 +35,8 @@ int main() {
     uint32_t tcdm_baseaddress = snrt_cluster_base_addrl() + TCDM_OFFSET;
 
     if (snrt_cluster_idx() == 0 && snrt_is_dm_core()) {
-        xdma_memcpy_1d(data, (void *)tcdm_baseaddress,
-                       data_size * sizeof(data[0]));
-        int task_id = xdma_start();
-        xdma_remote_wait(task_id);
+        xdma_copy_1d_checked(data, (void *)tcdm_baseaddress,
+                             data_size * sizeof(data[0]));
         printf("XDMA copy from L3 to TCDM C0 is done in %d cycles.\r\n",
                xdma_last_task_cycle());
 
@@ -41,10 +55,9 @@ int main() {
     snrt_global_barrier();
 
     if (snrt_cluster_idx() == 1 && snrt_is_dm_core()) {
-        xdma_memcpy_1d((void *)tcdm_baseaddress - cluster_offset,
-                       (void *)tcdm_baseaddress, data_size * sizeof(data[0]));
-        int task_id = xdma_start();
-        xdma_remote_wait(task_id);
+        xdma_copy_1d_checked((void *)tcdm_baseaddress - cluster_offset,
+                             (void *)tcdm_baseaddress,
+                             data_size * sizeof(data[0]));
         printf("XDMA copy from TCDM C0 to TCDM C1 is done in %d cycles.\r\n",
                xdma_last_task_cycle());
 
@@ -58,10 +71,8 @@ int main() {
             }
         }
         printf("Checking is done. All values are right\n");
-        xdma_memcpy_1d((void *)tcdm_baseaddress, (void *)data,
-                       data_size * sizeof(data[0]));
-        task_id = xdma_start();
-        xdma_remote_wait(task_id);
+        xdma_copy_1d_checked((void *)tcdm_baseaddress, (void *)data,
+                             data_size * sizeof(data[0]));
         printf("XDMA copy from TCDM C1 to L3 is done in %d cycles.\r\n",
                xdma_last_task_cycle());
         // Check the first CHECK_SIZE_BYTES of the result
