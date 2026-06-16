@@ -409,10 +409,10 @@ def make_layout_handlers():
     return handlers, reg
 
 
-def _register_layouts(handlers, reg, mesh_fn):
+def _register_layouts(handlers, reg):
     # Each entry computes src/golden numpy arrays and the kernel kwargs/sizes.
     def dims(ctx, c):
-        mR, tS, mC = mesh_fn(ctx, c)
+        mR, tS, mC = _mesh(ctx, c)
         return c["M_T"], c["K_T"], c["N_T"], mR, tS, mC, c["elem_bytes"]
 
     # row_to_A
@@ -423,7 +423,7 @@ def _register_layouts(handlers, reg, mesh_fn):
         return rm.reshape(-1), row_major_to_a(rm, M_T, K_T, mR, tS)
 
     def sz_row_to_a(b, c):
-        mR, tS, mC = _MESH_HOLDER["fn"](_MESH_HOLDER["ctx"], c)
+        mR, tS, mC = _mesh(_MESH_HOLDER["ctx"], c)
         nbytes = c["M_T"] * mR * c["K_T"] * tS * c["elem_bytes"]
         return nbytes, nbytes, dict(M_T=c["M_T"], K_T=c["K_T"], meshRow=mR,
                                     tileSize=tS, elem_bytes=c["elem_bytes"])
@@ -438,7 +438,7 @@ def _register_layouts(handlers, reg, mesh_fn):
         return row_major_to_a(rm, M_T, K_T, mR, tS), rm.reshape(-1)
 
     def sz_a_to_row(b, c):
-        mR, tS, mC = _MESH_HOLDER["fn"](_MESH_HOLDER["ctx"], c)
+        mR, tS, mC = _mesh(_MESH_HOLDER["ctx"], c)
         nbytes = c["M_T"] * mR * c["K_T"] * tS * c["elem_bytes"]
         return nbytes, nbytes, dict(M_T=c["M_T"], K_T=c["K_T"], meshRow=mR,
                                     tileSize=tS, elem_bytes=c["elem_bytes"])
@@ -453,7 +453,7 @@ def _register_layouts(handlers, reg, mesh_fn):
         return rm.reshape(-1), row_major_to_b(rm, K_T, N_T, tS, mC)
 
     def sz_row_to_b(b, c):
-        mR, tS, mC = _MESH_HOLDER["fn"](_MESH_HOLDER["ctx"], c)
+        mR, tS, mC = _mesh(_MESH_HOLDER["ctx"], c)
         nbytes = c["K_T"] * tS * c["N_T"] * mC * c["elem_bytes"]
         return nbytes, nbytes, dict(K_T=c["K_T"], N_T=c["N_T"], tileSize=tS,
                                     meshCol=mC, elem_bytes=c["elem_bytes"])
@@ -468,7 +468,7 @@ def _register_layouts(handlers, reg, mesh_fn):
         return row_major_to_b(rm, K_T, N_T, tS, mC), rm.reshape(-1)
 
     def sz_b_to_row(b, c):
-        mR, tS, mC = _MESH_HOLDER["fn"](_MESH_HOLDER["ctx"], c)
+        mR, tS, mC = _mesh(_MESH_HOLDER["ctx"], c)
         nbytes = c["K_T"] * tS * c["N_T"] * mC * c["elem_bytes"]
         return nbytes, nbytes, dict(K_T=c["K_T"], N_T=c["N_T"], tileSize=tS,
                                     meshCol=mC, elem_bytes=c["elem_bytes"])
@@ -483,7 +483,7 @@ def _register_layouts(handlers, reg, mesh_fn):
         return rm.reshape(-1), row_major_to_d(rm, M_T, N_T, mR, mC)
 
     def sz_row_to_d(b, c):
-        mR, tS, mC = _MESH_HOLDER["fn"](_MESH_HOLDER["ctx"], c)
+        mR, tS, mC = _mesh(_MESH_HOLDER["ctx"], c)
         nbytes = c["M_T"] * mR * c["N_T"] * mC * c["elem_bytes"]
         return nbytes, nbytes, dict(M_T=c["M_T"], N_T=c["N_T"], meshRow=mR,
                                     meshCol=mC, elem_bytes=c["elem_bytes"])
@@ -498,7 +498,7 @@ def _register_layouts(handlers, reg, mesh_fn):
         return row_major_to_d(rm, M_T, N_T, mR, mC), rm.reshape(-1)
 
     def sz_d_to_row(b, c):
-        mR, tS, mC = _MESH_HOLDER["fn"](_MESH_HOLDER["ctx"], c)
+        mR, tS, mC = _mesh(_MESH_HOLDER["ctx"], c)
         nbytes = c["M_T"] * mR * c["N_T"] * mC * c["elem_bytes"]
         return nbytes, nbytes, dict(M_T=c["M_T"], N_T=c["N_T"], meshRow=mR,
                                     meshCol=mC, elem_bytes=c["elem_bytes"])
@@ -507,8 +507,8 @@ def _register_layouts(handlers, reg, mesh_fn):
 
 
 # Holder so the size-callbacks (which only get the Builder + cfg) can reach the
-# mesh function + parsed hwcfg context resolved at run time.
-_MESH_HOLDER = {"fn": None, "ctx": None}
+# parsed hwcfg context resolved at run time.
+_MESH_HOLDER = {"ctx": None}
 
 
 def _build_registry():
@@ -524,7 +524,7 @@ def _build_registry():
         "elementwise_add": ElementwiseAddOp(),
     }
     layout_handlers, layout_reg = make_layout_handlers()
-    _register_layouts(layout_handlers, layout_reg, _mesh)
+    _register_layouts(layout_handlers, layout_reg)
     reg.update(layout_handlers)
     return reg
 
@@ -557,7 +557,6 @@ def run_op_workload(op, configs):
         hwcfg = hjson.loads(f.read())
     ctx = {"hwcfg": hwcfg, "param": param,
            "array_shape": int(param.get("array_shape", 0))}
-    _MESH_HOLDER["fn"] = _mesh
     _MESH_HOLDER["ctx"] = ctx
 
     # Emit data header (inputs + goldens for every config).
