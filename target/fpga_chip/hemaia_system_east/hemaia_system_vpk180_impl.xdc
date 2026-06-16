@@ -409,14 +409,36 @@ set rx_clk_3_io_port {east_d2d_io_0[41]}
 set d2d_phy_clk clk_main
 set d2d_clk_period [get_property PERIOD [get_clocks $d2d_phy_clk]]
 
-create_clock -period $d2d_clk_period -name rx_clk_1 [get_ports $rx_clk_1_io_port]
-create_clock -period $d2d_clk_period -name rx_clk_2 [get_ports $rx_clk_2_io_port]
-create_clock -period $d2d_clk_period -name rx_clk_3 [get_ports $rx_clk_3_io_port]
+set d2d_rx_mux_period [expr {0.5 * $d2d_clk_period}]
+set d2d_rx_phy_channels [list \
+    {hemaia_system_i/occamy_chip/inst/i_d2d_link/gen_east_phy_enabled.gen_phy_channels[0].i_phy_interface_east/i_phy_digital_interface} \
+    {hemaia_system_i/occamy_chip/inst/i_d2d_link/gen_east_phy_enabled.gen_phy_channels[1].i_phy_interface_east/i_phy_digital_interface} \
+    {hemaia_system_i/occamy_chip/inst/i_d2d_link/gen_east_phy_enabled.gen_phy_channels[2].i_phy_interface_east/i_phy_digital_interface} \
+]
+
+set d2d_rx_clk_groups {}
+for {set d2d_rx_ch 0} {$d2d_rx_ch < [llength $d2d_rx_phy_channels]} {incr d2d_rx_ch} {
+    set d2d_rx_phy_channel [lindex $d2d_rx_phy_channels $d2d_rx_ch]
+    set rx_clk_sel0 "rx_clk_sel0_ch$d2d_rx_ch"
+    set rx_clk_sel1 "rx_clk_sel1_ch$d2d_rx_ch"
+    set rx_clk "rx_clk_ch$d2d_rx_ch"
+
+    create_clock -period $d2d_clk_period -name $rx_clk_sel0 [get_pins "$d2d_rx_phy_channel/i_rx_clk_delay_controller/i_final_clk_mux/clk0"]
+    create_clock -period $d2d_clk_period -name $rx_clk_sel1 [get_pins "$d2d_rx_phy_channel/i_rx_clk_delay_controller/i_final_clk_mux/clk1"]
+    create_clock -period $d2d_clk_period -name $rx_clk [get_pins "$d2d_rx_phy_channel/i_rx_clk_delay_controller/i_final_clk_mux/out_clk"]
+
+    set_max_delay -datapath_only $d2d_rx_mux_period -from [get_clocks $rx_clk_sel0] -to [get_clocks $rx_clk_sel1]
+    set_max_delay -datapath_only $d2d_rx_mux_period -from [get_clocks $rx_clk_sel1] -to [get_clocks $rx_clk_sel0]
+    set_false_path -hold -from [get_clocks $rx_clk_sel0] -to [get_clocks $rx_clk_sel1]
+    set_false_path -hold -from [get_clocks $rx_clk_sel1] -to [get_clocks $rx_clk_sel0]
+
+    lappend d2d_rx_clk_groups [list $rx_clk_sel0 $rx_clk_sel1 $rx_clk]
+}
 
 set_clock_groups -asynchronous \
-    -group [get_clocks rx_clk_1] \
-    -group [get_clocks rx_clk_2] \
-    -group [get_clocks rx_clk_3] \
+    -group [get_clocks [lindex $d2d_rx_clk_groups 0]] \
+    -group [get_clocks [lindex $d2d_rx_clk_groups 1]] \
+    -group [get_clocks [lindex $d2d_rx_clk_groups 2]] \
     -group [get_clocks {clk_pl_0 clk_main clk_host_gen clk_acc_gen clk_pl_1 clk_pl_2 clk_peri clk_d2d_phy_east_gen clk_d2d_phy_west_gen clk_d2d_phy_north_gen clk_d2d_phy_south_gen}]
 
 #### The t-pin oddrs are active one cycle before the data
@@ -428,8 +450,6 @@ set_false_path -through [get_nets -quiet -hierarchical -filter {NAME =~ *i_d2d_l
 set_false_path -through [get_pins -quiet -hierarchical -filter {NAME =~ *i_d2d_link*false_path*}]
 set_false_path -through [get_pins -quiet {hemaia_system_i/occamy_chip/inst/i_d2d_link/*.i_phy_interface*/*tx_strength_thermometer_i*}]
 set_false_path -through [get_pins -quiet -hierarchical -filter {NAME =~ *i_d2d_link*i_rx_clk_delay_controller/i_final_clk_mux/sel}]
-set_false_path -from [get_pins -quiet -hierarchical -filter {NAME =~ *i_d2d_link*i_rx_clk_delay_controller/i_final_clk_mux/ena2_r2_reg/C}] -to [get_pins -quiet -hierarchical -filter {NAME =~ *i_d2d_link*i_rx_clk_delay_controller/i_final_clk_mux/ena1_r1_reg/D}]
-set_false_path -from [get_pins -quiet -hierarchical -filter {NAME =~ *i_d2d_link*i_rx_clk_delay_controller/i_final_clk_mux/ena1_r2_reg/C}] -to [get_pins -quiet -hierarchical -filter {NAME =~ *i_d2d_link*i_rx_clk_delay_controller/i_final_clk_mux/ena2_r1_reg/D}]
 set_false_path -through [get_pins -quiet -hierarchical -filter {NAME =~ *i_d2d_link*link_available*}]
 set_false_path -through [get_pins -quiet -hierarchical -filter {NAME =~ *i_d2d_link*multicast_available*}]
 set_false_path -through [get_pins -quiet {hemaia_system_i/occamy_chip/inst/i_d2d_link/i_controller_reg_to_hw/reg2hw[availability_register][*_link_available][q]}]
