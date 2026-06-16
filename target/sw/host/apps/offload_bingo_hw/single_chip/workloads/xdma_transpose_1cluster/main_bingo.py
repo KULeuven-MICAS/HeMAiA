@@ -18,18 +18,18 @@ sys.path.append(f"{ROOT_DIR}/util/sim")
 
 from xdma_ops_lib import run_op_workload  # noqa E402
 
-# NOTE: only elem=1 (single 8x8-byte beat) is correct on the writer-side
-# transposer. elem>=2 (tpt>1 multi-beat) currently produces WRONG data on the
-# writer side — the per-beat 8x8 block transpose no longer composes into an
-# element transpose the way it did on the reader side. Wide-element transpose
-# was never correctness-checked before (xdma_ci_ops uses elem=1; the previous
-# xDMA sweep checked against all-zero goldens), so this is a latent gap, not a
-# regression. Re-add an elem>=2 config once the writer multi-beat path is fixed.
+# Element-width coverage (see __snax_bingo_kernel_xdma_transpose_2d):
+#   - int8  -> HW transposer, 8-bit mode
+#   - int16 -> HW transposer, native 16-bit mode (CSR0=1)
+#   - int32 -> SW transpose (no native 32-bit HW mode)
+# The int16 HW-16-bit path is newly wired; this sweep (real numpy goldens for
+# every width) is the check that confirms it — run it in sim after a build.
 CONFIGS = [
     {"rows": 8, "cols": 8, "elem": 1},
     {"rows": 16, "cols": 16, "elem": 1},
     {"rows": 32, "cols": 32, "elem": 1},
-    {"rows": 64, "cols": 64, "elem": 1},
+    {"rows": 16, "cols": 16, "elem": 2},   # int16 -> HW 16-bit mode
+    {"rows": 16, "cols": 16, "elem": 4},   # int32 -> SW transpose
 ]
 
 if __name__ == "__main__":

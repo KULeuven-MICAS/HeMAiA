@@ -327,14 +327,30 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_elementwise_add_ab(void *arg)
 // These wrap the low-level reshape kernel with automatic stride computation.
 // ==========================================================================
 
+// SW 2D transpose [M,N] -> [N,M] at element granularity. Correct for any
+// element width — used for widths the HW transposer has no native mode for
+// (int32) and when the Transposer extension is absent. src/dst must be local L1.
+static inline void xdma_cpu_transpose_2d(uint64_t src_addr, uint64_t dst_addr,
+                                         uint32_t M, uint32_t N, uint32_t elem)
+{
+    volatile uint8_t *src = (volatile uint8_t *)(uint32_t)src_addr;
+    volatile uint8_t *dst = (volatile uint8_t *)(uint32_t)dst_addr;
+    for (uint32_t r = 0; r < M; r++)
+        for (uint32_t c = 0; c < N; c++)
+            for (uint32_t b = 0; b < elem; b++)
+                dst[(c * M + r) * elem + b] = src[(r * N + c) * elem + b];
+}
+
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_transpose_2d(void *arg)
 {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_transpose_2d_args_t);
     // Transpose a 2D matrix [M, N] -> [N, M].
-    // If the xDMA was generated with the 8x8-tile transposer writer
-    // extension (WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16 is defined in
-    // snax_xdma_addr.h), uses the HW transposer for tile-level 8x8
-    // transpose. Otherwise falls back to a CPU byte-by-byte transpose.
+    // Element-width dispatch:
+    //   - int8  (elem=1): HW transposer, 8-bit mode  (CSR0=0)
+    //   - int16 (elem=2): HW transposer, 16-bit mode (CSR0=1)
+    //   - int32 (elem=4): SW transpose (no native 32-bit HW mode)
+    // When the Transposer extension is absent (WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16
+    // undefined), all widths use the SW transpose.
     //
     // HW path constraints: M % 8 == 0, N * elem % 8 == 0.
     //
@@ -360,21 +376,20 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_transpose_2d(void *arg)
         BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
 #ifdef WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16
-        // ── HW Transposer path ──
-        // The Transposer extension transposes each 8x8 tile of uint8 elements
-        // (or tile_width x tile_width for other element widths) in the writer
-        // data path. The AGU iterates tile-by-tile across the matrix.
+        // ── HW Transposer path (8-bit / 16-bit native modes) ──
+        // The 8x8 Transposer in the writer datapath has two native element-width
+        // modes, selected by CSR0 (0 = 8-bit, 1 = 16-bit; from the cfg's
+        // elementWidth:[8,16]). In a native mode the transposer does the
+        // element-aware transpose internally (assembling tpt beats per 8x8
+        // tile), so it works on the writer side. 32-bit has NO native mode — and
+        // the byte-mode multi-beat compose that would emulate it does not hold on
+        // the writer side — so 32-bit falls through to the SW transpose below.
         //
-        // Reference: snax-xdma-transpose datagen.py
-        // For MN→MN transpose with enable_transpose=true, uint8:
-        //   tile_width = 8
-        //   transfer_per_transpose = 1 (8x8x8bit = 512bit fits in one bus word)
-        //   spatial_stride_src = N * elem (row width in src)
-        //   spatial_stride_dst = M * elem (row width in dst, which is NxM transposed)
-        //   temporal: dim0=transfer_per_transpose, dim1=tiles_across_cols, dim2=tiles_across_rows
-        //   src strides: [8, tile_width*elem, N*tile_width*elem]
-        //   dst strides: [8, M*tile_width*elem, tile_width*elem]
-        {
+        //   tile_width = 8; tpt = ceil(8*8*elem_bits/512) beats per 8x8 tile
+        //   spatial_stride_src = N*elem; spatial_stride_dst = M*elem
+        //   src strides: [8, tile_w*elem, N*tile_w*elem]
+        //   dst strides: [8, M*tile_w*elem, tile_w*elem]
+        if (elem == 1 || elem == 2) {
             uint32_t tile_w = 8;
             uint32_t elem_bits = elem * 8;
             uint32_t tpt = (tile_w * tile_w * elem_bits + 511) / 512; // transfers per transpose
@@ -392,11 +407,11 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_transpose_2d(void *arg)
             }
 
             // Disable all, then enable the transposer on the writer side.
-            // CSR0 = 0 selects the 8x8-byte (8-bit) transpose mode; wider
-            // elements are handled by the tpt multi-beat AGU arrangement.
+            // CSR0 selects the element width the transposer transposes at:
+            // 0 = 8-bit (int8), 1 = 16-bit (int16).
             BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
             xdma_disable_all_extensions();
-            uint32_t tp_csr[1] = {0};
+            uint32_t tp_csr[1] = { (elem == 2) ? 1u : 0u };
             xdma_enable_dst_ext(WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16, tp_csr);
 
             uint32_t spatial_stride_src = N * elem;
@@ -445,21 +460,17 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_transpose_2d(void *arg)
             // Disable transposer after use
             xdma_disable_dst_ext(WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16);
             xdma_layout_stage_free(&st);
+            sp->return_value = (uint32_t)dst_addr;
+            sp->num_return_values = 0;
+            return BINGO_RET_SUCC;
         }
-#else
-        // ── CPU fallback (no Transposer extension) ──
-        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
-        volatile uint8_t *src = (volatile uint8_t *)(uint32_t)src_addr;
-        volatile uint8_t *dst = (volatile uint8_t *)(uint32_t)dst_addr;
-        for (uint32_t r = 0; r < M; r++) {
-            for (uint32_t c = 0; c < N; c++) {
-                for (uint32_t b = 0; b < elem; b++) {
-                    dst[(c * M + r) * elem + b] = src[(r * N + c) * elem + b];
-                }
-            }
-        }
-        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
 #endif
+        // ── SW transpose ──
+        // Correct for any element width; reached for 32-bit (no native HW
+        // transposer mode) or when the Transposer extension is absent.
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
+        xdma_cpu_transpose_2d(src_addr, dst_addr, M, N, elem);
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
         sp->return_value = (uint32_t)dst_addr;
         sp->num_return_values = 0;
         return BINGO_RET_SUCC;
