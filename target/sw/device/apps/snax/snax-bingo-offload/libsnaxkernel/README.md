@@ -28,9 +28,11 @@ libsnaxkernel/
 └── offload_hw_kernels/     — core-level kernels (bingo-hw flow)
     ├── basic.h             — bingo dummy / entry_point / exit
     ├── idma.h              — bingo iDMA copy + broadcast
-    ├── xdma.h              — bingo xDMA: 1d/6d copies, layout transforms,
-    │                          2d helpers (transpose, submatrix, expand,
-    │                          concat, pad, gather)
+    ├── xdma.h              — bingo xDMA: 1d/6d copies, layout transforms
+    │                          (row-major ↔ A/B/D), 2d helpers (transpose,
+    │                          submatrix, expand, concat, pad, gather), and the
+    │                          writer-side ElementwiseAdd accumulate
+    │                          (elementwise_add / elementwise_add_ab)
     └── gemm.h              — bingo GEMM full / minimal
 ```
 
@@ -83,8 +85,18 @@ longer emits per-workload `meshRow`/`tileSize`/`meshCol` globals.
 4. Add a matching `__SNAX_KERNEL_ARGS_DEFINE` struct under
    `host/runtime/libbingo/include/libbingo/device_kernel_args.h` so the
    host can construct args with the same layout the kernel parses.
-5. Register the kernel in the `__snax_symtab[]` block of
+5. Add the matching Python arg class in
+   `host/runtime/libbingo/mini_compiler/bingo_kernel_args.py` — its
+   `get_struct_name()` returns the `…_args_t` typedef and its emitted
+   fields must match the struct order — so host DFGs / the mini-compiler
+   can build the args for this kernel.
+6. Register the kernel in the `__snax_symtab[]` block of
    `snax_kernel_lib.h` so `get_device_function("…")` can resolve it.
+
+The kernel name string (e.g. `__snax_bingo_kernel_xdma_elementwise_add`) is
+the single source of truth tying these five sites together — keep it
+identical across the C function, the `…_args_t` struct, the Python class's
+`get_struct_name()`, the symtab export, and the host `kernel_name=`.
 
 ## Common helpers (`macros.h`)
 

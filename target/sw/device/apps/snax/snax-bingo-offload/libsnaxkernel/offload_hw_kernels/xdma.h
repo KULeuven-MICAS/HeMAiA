@@ -126,6 +126,203 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_6d(void *arg)
 }
 
 // ==========================================================================
+// xDMA writer ElementwiseAdd kernels
+//
+// What the HW does
+// ----------------
+// The HasElementwiseAdd writer extension sits in the xDMA *writer* datapath and
+// accumulates `num_operands` consecutive vectors that flow through it into a
+// single output vector — an N:1 reduction. The xDMA bus is 512-bit, so one
+// "vector"/"tile" is 512b = 16 int32 elements (elementWidth=32 in the cfg). The
+// extension keeps a per-lane accumulator: it loads on the 1st of every group of
+// `num_operands` inputs, adds the next (num_operands-1), and emits the sum, then
+// resets for the next group. So the reader feeds num_operands x more vectors
+// than the writer stores.
+//
+// How we drive the AGU
+// --------------------
+// To make the N operands of one output tile arrive back-to-back, the reader AGU
+// uses the operand index as its INNERMOST temporal dim, then iterates tiles:
+//   reader: dim0 = operand  [bound=num_operands, stride=operand_stride]
+//           dim1 = tile      [bound=tiles,        stride=64 bytes]
+//   writer: dim0 = tile      [bound=tiles,        stride=64 bytes]
+// where tiles = num_int32_per_operand / 16. Reader address for (operand o,
+// tile t) = src_base + o*operand_stride + t*64.
+//
+// Worked example: sum 3 operands, 32 int32 each (tiles = 32/16 = 2)
+// ----------------------------------------------------------------
+//   L1 layout (operand_stride = 32*4 = 128 bytes):
+//     src_base+0x00 : A[0..15] | A[16..31]          (operand 0, tiles A0,A1)
+//     src_base+0x80 : B[0..15] | B[16..31]          (operand 1, tiles B0,B1)
+//     src_base+0x100: C[0..15] | C[16..31]          (operand 2, tiles C0,C1)
+//   Reader emission order (operand inner, tile outer):
+//     A0,B0,C0, A1,B1,C1
+//   Writer extension groups every num_operands=3:
+//     out tile0 = A0+B0+C0   (dst+0x00, 16 int32)
+//     out tile1 = A1+B1+C1   (dst+0x40, 16 int32)
+//   => dst[i] = A[i] + B[i] + C[i] for i in 0..31, in one streaming pass.
+//
+// Why this kernel exists
+// ----------------------
+// It fuses the GEMM K-split partial-sum reduction (D = D0 + D1 + ... ) into a
+// single xDMA pass, replacing the sequential host int32-add chain
+// (__host_bingo_kernel_int32_add) that walks L3<->host once per pair.
+//
+// Two entry points
+// ----------------
+//   __snax_bingo_kernel_xdma_elementwise_add        : general N-operand form,
+//       caller supplies src_base, num_operands, operand_stride.
+//   __snax_bingo_kernel_xdma_elementwise_add_ab : convenience dst = a + b;
+//       derives operand_stride = src_b - src_a (so src_b must be the higher
+//       address — the reader can only stride forward, see below).
+//
+// Constraints / fallback
+// ----------------------
+//   - num_int32_per_operand must be a multiple of 16 (one 512b bus word).
+//   - operands must be laid out at a constant FORWARD stride (ascending
+//     addresses); a wrapped "negative" stride makes the reader generate an
+//     out-of-range address and stall.
+//   - Falls back to a plain CPU int32 accumulate when the writer extension is
+//     not present in the generated HW (WRITER_EXT_ELEMENTWISEADDBIT32 undefined).
+// ==========================================================================
+static inline uint32_t xdma_elementwise_add_run(
+    uint64_t src_base, uint64_t dst_addr,
+    uint32_t num_int32_per_operand, uint32_t num_operands,
+    uint32_t operand_stride)
+{
+    // Each output vector is one 512b bus word = XDMA_WIDTH/4 = 16 int32, so the
+    // per-operand element count must be a whole, non-zero number of bus words;
+    // otherwise the tile count truncates and the transfer would be wrong.
+    if (num_int32_per_operand == 0 ||
+        (num_int32_per_operand % (XDMA_WIDTH / 4)) != 0) {
+        printf_safe("[Cluster %d Core %d]: Error! xDMA elementwise_add "
+                    "num_int32_per_operand=%u must be a positive multiple of %u\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx(),
+                    num_int32_per_operand, (unsigned)(XDMA_WIDTH / 4));
+        return BINGO_RET_FAIL;
+    }
+    uint32_t tiles = num_int32_per_operand / (XDMA_WIDTH / 4);  // 16 int32/vector
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
+#ifdef WRITER_EXT_ELEMENTWISEADDBIT32
+    xdma_disable_all_extensions();
+    uint32_t csr[1] = { num_operands };
+    xdma_enable_dst_ext(WRITER_EXT_ELEMENTWISEADDBIT32, csr);
+
+    // Reader: dim0 = operand index (inner), dim1 = output tiles.
+    uint32_t ts_src[2] = { operand_stride, XDMA_WIDTH };
+    uint32_t tb_src[2] = { num_operands,   tiles      };
+    // Writer: one accumulated vector per output tile.
+    uint32_t ts_dst[1] = { XDMA_WIDTH };
+    uint32_t tb_dst[1] = { tiles      };
+    BINGO_XDMA_TRY(xdma_memcpy_nd_full_addr(
+        src_base, dst_addr,
+        XDMA_WIDTH / XDMA_SPATIAL_CHAN, XDMA_WIDTH / XDMA_SPATIAL_CHAN,
+        2, ts_src, tb_src, 1, ts_dst, tb_dst,
+        0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF), "xdma_elementwise_add");
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
+    int task_id = xdma_start();
+    xdma_wait_task(src_base, dst_addr, task_id);
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
+    xdma_disable_dst_ext(WRITER_EXT_ELEMENTWISEADDBIT32);
+#else
+    // CPU fallback: dst[e] = sum_o src[o][e] over int32 elements.
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
+    volatile int32_t *dst = (volatile int32_t *)(uint32_t)dst_addr;
+    for (uint32_t e = 0; e < num_int32_per_operand; e++) {
+        int32_t acc = 0;
+        for (uint32_t o = 0; o < num_operands; o++) {
+            volatile int32_t *src =
+                (volatile int32_t *)((uint32_t)src_base + o * operand_stride);
+            acc += src[e];
+        }
+        dst[e] = acc;
+    }
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
+    (void)tiles;
+#endif
+    return BINGO_RET_SUCC;
+}
+
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_elementwise_add(void *arg)
+{
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_elementwise_add_args_t);
+    // General N-operand form: dst[i] = sum over o of operand_o[i].
+    //   [0] src_addr_hi  [1] src_addr_lo  [2] dst_addr_hi  [3] dst_addr_lo
+    //   [4] num_int32_per_operand (multiple of 16)
+    //   [5] num_operands  [6] operand_stride (bytes between operands)
+    //
+    // The N operands must be EVENLY SPACED and ASCENDING: operand o lives at
+    // src_base + o*operand_stride (the reader only strides forward). Use this
+    // when partials are a regular array, e.g. a contiguous [N, M] int32 block
+    // -> num_operands = N, operand_stride = M*4.
+    //
+    // The 2-operand _ab variant below is just this kernel specialized to
+    // num_operands = 2 with operand_stride derived from the two addresses:
+    //   add_ab(a, b, dst, n)  ==  add(a, dst, n, 2, b - a).
+    if (snrt_is_dm_core()) {
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+        uint32_t *a = (uint32_t *)arg;
+        uint64_t src_base = make_u64(a[0], a[1]);
+        uint64_t dst_addr = make_u64(a[2], a[3]);
+        uint32_t num_int32_per_operand = a[4];
+        uint32_t num_operands = a[5];
+        uint32_t operand_stride = a[6];
+        bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_elementwise_add_args_t);
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+        if (xdma_elementwise_add_run(src_base, dst_addr, num_int32_per_operand,
+                                     num_operands, operand_stride) != BINGO_RET_SUCC)
+            return BINGO_RET_FAIL;
+        sp->return_value = (uint32_t)dst_addr;
+        sp->num_return_values = 0;
+        return BINGO_RET_SUCC;
+    } else {
+        printf_safe("[Cluster %d Core %d]: Error! xDMA elementwise_add should be called from a DM core!\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+}
+
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_elementwise_add_ab(void *arg)
+{
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_elementwise_add_ab_args_t);
+    // Two-operand convenience form: dst = a + b (int32, num_int32 elems, mult of 16).
+    //   [0] src_a_hi [1] src_a_lo [2] src_b_hi [3] src_b_lo
+    //   [4] dst_hi   [5] dst_lo   [6] num_int32
+    //
+    // Identical HW path to the N-operand kernel above, fixed to num_operands = 2
+    // with the stride derived from the two addresses instead of passed in:
+    //   add_ab(a, b, dst, n)  ==  add(a, dst, n, 2, b - a).
+    // Use this when you have two independent buffers and don't want to compute a
+    // stride. The two buffers can be anywhere, BUT src_b must be at a HIGHER
+    // address than src_a (the reader only strides forward; see below).
+    if (snrt_is_dm_core()) {
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+        uint32_t *a = (uint32_t *)arg;
+        uint64_t src_a = make_u64(a[0], a[1]);
+        uint64_t src_b = make_u64(a[2], a[3]);
+        uint64_t dst_addr = make_u64(a[4], a[5]);
+        uint32_t num_int32 = a[6];
+        bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_elementwise_add_ab_args_t);
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+        // The reader AGU strides FORWARD from src_a by (src_b - src_a) to reach
+        // operand b, so src_b must lie at a higher address than src_a (a wrapped
+        // "negative" stride would generate an out-of-range read and stall).
+        uint32_t operand_stride = (uint32_t)src_b - (uint32_t)src_a;
+        if (xdma_elementwise_add_run(src_a, dst_addr, num_int32, 2, operand_stride) != BINGO_RET_SUCC)
+            return BINGO_RET_FAIL;
+        sp->return_value = (uint32_t)dst_addr;
+        sp->num_return_values = 0;
+        return BINGO_RET_SUCC;
+    } else {
+        printf_safe("[Cluster %d Core %d]: Error! xDMA elementwise_add_ab should be called from a DM core!\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+}
+
+// ==========================================================================
 // High-level xDMA kernels: user provides shapes, kernel computes AGU config.
 // These wrap the low-level reshape kernel with automatic stride computation.
 // ==========================================================================
@@ -134,8 +331,8 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_transpose_2d(void *arg)
 {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_transpose_2d_args_t);
     // Transpose a 2D matrix [M, N] -> [N, M].
-    // If the xDMA was generated with the 8x8-tile transposer reader
-    // extension (READER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16 is defined in
+    // If the xDMA was generated with the 8x8-tile transposer writer
+    // extension (WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16 is defined in
     // snax_xdma_addr.h), uses the HW transposer for tile-level 8x8
     // transpose. Otherwise falls back to a CPU byte-by-byte transpose.
     //
@@ -162,10 +359,10 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_transpose_2d(void *arg)
         bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_transpose_2d_args_t);
         BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
-#ifdef READER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16
+#ifdef WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16
         // ── HW Transposer path ──
         // The Transposer extension transposes each 8x8 tile of uint8 elements
-        // (or tile_width x tile_width for other element widths) in the reader
+        // (or tile_width x tile_width for other element widths) in the writer
         // data path. The AGU iterates tile-by-tile across the matrix.
         //
         // Reference: snax-xdma-transpose datagen.py
@@ -182,10 +379,10 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_transpose_2d(void *arg)
             uint32_t elem_bits = elem * 8;
             uint32_t tpt = (tile_w * tile_w * elem_bits + 511) / 512; // transfers per transpose
 
-            // The reader-side transposer can only read from local L1; stage src
-            // into local L1 if it isn't already there (zero-copy fast path when
-            // src is already local). dst is written by the global-addressing
-            // writer, so it needs no staging.
+            // The xDMA reader is tied to local L1, so stage src into local L1 if
+            // it isn't already there (zero-copy fast path when src is already
+            // local). dst is written by the global-addressing writer, so it
+            // needs no staging.
             uint32_t bytes = M * N * elem;
             xdma_layout_stage_t st;
             if (xdma_layout_stage_in(&st, src_addr, bytes) != 0) {
@@ -194,10 +391,13 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_transpose_2d(void *arg)
                 return BINGO_RET_FAIL;
             }
 
-            // Disable all, then enable transposer on reader side
+            // Disable all, then enable the transposer on the writer side.
+            // CSR0 = 0 selects the 8x8-byte (8-bit) transpose mode; wider
+            // elements are handled by the tpt multi-beat AGU arrangement.
             BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
             xdma_disable_all_extensions();
-            xdma_enable_src_ext(0, NULL);
+            uint32_t tp_csr[1] = {0};
+            xdma_enable_dst_ext(WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16, tp_csr);
 
             uint32_t spatial_stride_src = N * elem;
             uint32_t spatial_stride_dst = M * elem;
@@ -243,7 +443,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_transpose_2d(void *arg)
             BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
 
             // Disable transposer after use
-            xdma_disable_src_ext(0);
+            xdma_disable_dst_ext(WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16);
             xdma_layout_stage_free(&st);
         }
 #else
@@ -680,7 +880,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_gather_2d(void *arg)
 //   XDMA_{SRC,DST}_TEMP_DIM = 5 each (≤ 5 temporal dims per side)
 //   spatial_stride may be 0 (broadcast, e.g. xdma_expand_2d) or any value
 //     ≥ 8 bytes; consecutive channels' 8-byte beats must not overlap.
-//   HW Transposer extension (defined(READER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16)) is
+//   HW Transposer extension (defined(WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16)) is
 //     fixed at an 8x8-byte block; element-aware widths (uint16/uint32) are
 //     handled by issuing tpt = (8·8·elem_bits)/512 beats per logical block,
 //     mirroring __snax_bingo_kernel_xdma_transpose_2d.
@@ -711,7 +911,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_gather_2d(void *arg)
 //   else  : CPU fallback
 //
 // B↔R kernels — axes (n, k, c, s); HW Transposer + AGU sub-block iteration:
-//   HW path: defined(READER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16) && tileSize %8==0 && meshCol %8==0
+//   HW path: defined(WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16) && tileSize %8==0 && meshCol %8==0
 //     For each (n,k) tile, decompose into (meshCol/8) x (tileSize/8) element
 //     sub-blocks; each sub-block goes through one HW Transposer block. The
 //     AGU iterates tpt x c_sub x s_sub x k x n  → 5 temporal dims (max).
@@ -744,8 +944,10 @@ static inline void xdma_layout_run(
 {
     BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
     xdma_disable_all_extensions();
-#ifdef READER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16
-    if (use_transposer) xdma_enable_src_ext(0, NULL);
+#ifdef WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16
+    uint32_t tp_csr[1] = {0};  // 8x8-byte (8-bit) transpose mode
+    if (use_transposer)
+        xdma_enable_dst_ext(WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16, tp_csr);
 #else
     (void)use_transposer;
 #endif
@@ -762,8 +964,8 @@ static inline void xdma_layout_run(
     xdma_wait_task(src, dst, task_id);
     BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
 
-#ifdef READER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16
-    if (use_transposer) xdma_disable_src_ext(0);
+#ifdef WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16
+    if (use_transposer) xdma_disable_dst_ext(WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16);
 #endif
 }
 
@@ -1005,11 +1207,11 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_row_major_to_a(void *arg)
 }
 
 // row-major → B-layout. B↔R is per-(n,k)-tile transpose-then-tile, so we
-// drive the xDMA Transposer reader extension (mirrors xdma_transpose_2d).
+// drive the xDMA Transposer writer extension (mirrors xdma_transpose_2d).
 // The Transposer is fixed at 8x8-byte blocks, so the (n,k) B-tile is
 // decomposed into (meshCol/8) c-sub x (tileSize/8) s-sub element sub-blocks
 // and the AGU iterates them in addition to (n, k).
-//   Coverage: HW path when defined(READER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16) && tileSize%8==0 && meshCol%8==0
+//   Coverage: HW path when defined(WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16) && tileSize%8==0 && meshCol%8==0
 //             (all VersaCore array_shapes 1..4); CPU when tileSize=4 (shape 0).
 //   Arg layout: src_hi/lo, dst_hi/lo, K_T, N_T, tileSize, meshCol, elem_bytes.
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_row_major_to_b(void *arg)
@@ -1033,7 +1235,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_row_major_to_b(void *arg)
     uint32_t bytes  = K_T * tileSize * N_T * meshCol * elem;
     bool hw_done = false;
 
-#ifdef READER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16
+#ifdef WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16
     if ((tileSize % 8) == 0 && (meshCol % 8) == 0) {
         xdma_layout_stage_t st;
         if (xdma_layout_stage_in(&st, src_addr, bytes) != 0) {
@@ -1242,7 +1444,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_b_to_row_major(void *arg)
     uint32_t bytes  = K_T * tileSize * N_T * meshCol * elem;
     bool hw_done = false;
 
-#ifdef READER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16
+#ifdef WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16
     if ((tileSize % 8) == 0 && (meshCol % 8) == 0) {
         xdma_layout_stage_t st;
         if (xdma_layout_stage_in(&st, src_addr, bytes) != 0) {
