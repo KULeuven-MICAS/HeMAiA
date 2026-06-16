@@ -9,7 +9,7 @@ Load_input (iDMA L3→L1) → XDMA_copy (xdma_1d_copy L1→L1) → Store (L1→L
 
 The copy is the identity, so the golden equals the input; the host check
 confirms the bytes round-trip unchanged. This is the simplest xDMA smoke test
-(use the per-op `xdma_copy_1cluster` dir for a copy-size sweep with cycle LUTs).
+(see the per-op `xdma_<op>_1cluster` dirs for shape/size sweeps with cycle LUTs).
 
 ## Files
 

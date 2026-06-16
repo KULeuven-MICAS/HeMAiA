@@ -21,8 +21,8 @@ separate ELF through the corresponding `single_chip` or `multi_chip` Makefile.
 - **gemm_mem_chip_1cluster**: Vanilla GEMM with data loaded from the memory chip into the compute chiplet before execution.
 - **gemm_stacked_1cluster**: Stacked GEMM tasks for stressing hardware-managed task dispatch.
 - **gemm_sweep_1cluster**: GEMM characterization sweep across multiple `(M, K, N, array_shape)` configurations.
-- **xdma_all_ops_1cluster**: Runs all xDMA operator types in one workload.
-- **xdma_sweep_1cluster**: xDMA characterization sweep across operation and size configurations.
+- **xdma_ci_ops_1cluster**: Runs all xDMA operator types in one workload.
+- **xdma_1d_1cluster**: Minimal single xDMA 1D-copy functional test (load → copy → store → check).
 - **moe4_4cluster**: Four-cluster mixture-of-experts workload.
 - **basic_quantize_host**: Host-kernel smoke test for quantization.
 - **basic_dequantize_host**: Host-kernel smoke test for dequantization.

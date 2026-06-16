@@ -6,7 +6,7 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 #
 # Shared library for the per-op xDMA workloads. Each per-op workload dir
-# (xdma_copy_1cluster, xdma_transpose_1cluster, ...) defines just an op name
+# (xdma_transpose_1cluster, xdma_pad_1cluster, ...) defines just an op name
 # and a CONFIGS list of shapes, then calls run_op_workload(). For every config
 # this builds a functional + cycle-characterization chain:
 #
