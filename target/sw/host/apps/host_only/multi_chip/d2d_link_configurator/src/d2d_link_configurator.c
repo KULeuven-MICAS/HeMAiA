@@ -7,6 +7,51 @@
 #include "hemaia_d2d_link.c"
 #include "host.h"
 
+#define D2D_LINK_CLOCK_DIVISION_DEFAULT 1U
+#define D2D_LINK_CLOCK_DIVISION_MAX 255U
+#define D2D_LINK_BYPASSED_WIRE_DEFAULT 16U
+
+static uint8_t select_d2d_link_clock_division() {
+    uint32_t clock_division = D2D_LINK_CLOCK_DIVISION_DEFAULT;
+
+    printf("Enter D2D link clock division (1-255), then press Enter:\r\n");
+    if (scanf("%u", &clock_division) != 1 || clock_division == 0 ||
+        clock_division > D2D_LINK_CLOCK_DIVISION_MAX) {
+        clock_division = D2D_LINK_CLOCK_DIVISION_DEFAULT;
+        printf("Invalid selection. Using D2D link clock division /%d.\r\n",
+               (int)clock_division);
+    }
+
+    return (uint8_t)clock_division;
+}
+
+static void set_all_d2d_link_clock_division(uint8_t clock_division) {
+    for (uint8_t i = 1; i <= 4; i++) {
+        enable_clk_domain(N_CLUSTERS_PER_CHIPLET + i, clock_division);
+    }
+    asm volatile("fence" : : : "memory");
+    printf("Set D2D link clock division to /%d.\r\n", clock_division);
+}
+
+static void reset_all_d2d_link_bypassed_wires() {
+    for (uint8_t direction = D2D_DIRECTION_EAST;
+         direction <= D2D_DIRECTION_SOUTH; direction++) {
+        for (uint8_t channel = 0; channel < CHANNELS_PER_DIRECTION; channel++) {
+            set_d2d_link_broken_link((D2DDirection)direction, channel,
+                                     D2D_LINK_BYPASSED_WIRE_DEFAULT);
+        }
+    }
+    asm volatile("fence" : : : "memory");
+}
+
+static char scan_non_newline_char(uintptr_t address_prefix) {
+    char input_char;
+    do {
+        input_char = scan_char(address_prefix);
+    } while (input_char == '\r' || input_char == '\n');
+    return input_char;
+}
+
 int main() {
     uintptr_t address_prefix = (uintptr_t)get_current_chip_baseaddress();
 
@@ -20,8 +65,13 @@ int main() {
 
     // Configure the East D2D link
     printf("HeMAiA D2D Link Configurator\r\n");
+    reset_all_d2d_link_bypassed_wires();
+
+    uint8_t clock_division = select_d2d_link_clock_division();
+    set_all_d2d_link_clock_division(clock_division);
+
     printf("Press 1 to set to DDR mode, 0 to set to SDR mode:\r\n");
-    char mode_char = scan_char(address_prefix);
+    char mode_char = scan_non_newline_char(address_prefix);
     if (mode_char == '1') {
         set_all_d2d_link_phy_mode(D2D_PHY_MODE_DDR);
         printf("Set to DDR mode.\r\n");
