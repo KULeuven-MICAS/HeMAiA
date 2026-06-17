@@ -43,7 +43,7 @@ make apps HOST_APP_TYPE=offload_bingo_hw CHIP_TYPE=single_chip \
      WORKLOAD=xdma_transpose_1cluster DEV_APP=snax-bingo-offload
 
 # or simulate it end-to-end
-python3 target/testing/0_start_single_chiplet_sim.py \
+python3 target/sim/automation/test/0_start_single_chiplet_sim.py \
     --host-app-type offload_bingo_hw --chip-type single_chip \
     --workload xdma_transpose_1cluster --dev-app snax-bingo-offload
 ```

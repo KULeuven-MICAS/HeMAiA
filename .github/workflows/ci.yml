@@ -31,9 +31,9 @@ jobs:
           make rtl
           make hemaia_system_vlt -j$(nproc)
       - name: Run Tests
-        working-directory: target/sim/automation/ci
+        working-directory: target/sim/automation/ci/git_ci
         run: |
-          python3 start_vlt.py
+          python3 run_git_ci.py --cfg target/rtl/cfg/hemaia_ci.hjson
 
   hemaia-noc-verilator:
     name: Simulate HeMAiA NoC with Verilator
@@ -51,6 +51,6 @@ jobs:
           make rtl
           make hemaia_system_vlt -j$(nproc)
       - name: Run Tests
-        working-directory: target/sim/automation/ci
+        working-directory: target/sim/automation/ci/git_ci
         run: |
-          python3 start_vlt.py
+          python3 run_git_ci.py --cfg target/rtl/cfg/hemaia_ci_noc.hjson

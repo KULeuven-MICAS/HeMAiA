@@ -1,0 +1,76 @@
+# xDMA op-cost LUT sweeps — focused task list for gathering per-op cycle LUTs.
+# Run with: python3 run_xdma_sweep.py -j <N>   (then python3 gather_xdma_luts.py)
+# Each per-op workload sweeps a shape grid (CONFIGS in its main_bingo.py) and
+# emits one BINGO_TRACE_XDMA_RUN event per config; gather_xdma_luts.py
+# pairs those with the workload's configs.json to build the cycle CSV.
+# All single_chip -> run on chip00 (the other 3 chiplets idle).
+runs:
+  # ---- bytes-keyed ops (linear fit) ----
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: single_chip
+    WORKLOAD: xdma_6d_1cluster
+    DEV_APP: snax-bingo-offload
+
+  # ---- rows x cols ops (bilinear fit) ----
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: single_chip
+    WORKLOAD: xdma_transpose_1cluster
+    DEV_APP: snax-bingo-offload
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: single_chip
+    WORKLOAD: xdma_submatrix_1cluster
+    DEV_APP: snax-bingo-offload
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: single_chip
+    WORKLOAD: xdma_expand_1cluster
+    DEV_APP: snax-bingo-offload
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: single_chip
+    WORKLOAD: xdma_concat_1cluster
+    DEV_APP: snax-bingo-offload
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: single_chip
+    WORKLOAD: xdma_pad_1cluster
+    DEV_APP: snax-bingo-offload
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: single_chip
+    WORKLOAD: xdma_gather_1cluster
+    DEV_APP: snax-bingo-offload
+
+  # ---- layout conversions (bilinear fit) ----
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: single_chip
+    WORKLOAD: xdma_row_to_a_1cluster
+    DEV_APP: snax-bingo-offload
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: single_chip
+    WORKLOAD: xdma_a_to_row_1cluster
+    DEV_APP: snax-bingo-offload
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: single_chip
+    WORKLOAD: xdma_row_to_b_1cluster
+    DEV_APP: snax-bingo-offload
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: single_chip
+    WORKLOAD: xdma_b_to_row_1cluster
+    DEV_APP: snax-bingo-offload
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: single_chip
+    WORKLOAD: xdma_row_to_d_1cluster
+    DEV_APP: snax-bingo-offload
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: single_chip
+    WORKLOAD: xdma_d_to_row_1cluster
+    DEV_APP: snax-bingo-offload
+
+  # ---- n-keyed reduction (linear fit) ----
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: single_chip
+    WORKLOAD: xdma_elementwise_add_1cluster
+    DEV_APP: snax-bingo-offload
+
+  # ---- functional cross-check (all ops in one DFG) ----
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: single_chip
+    WORKLOAD: xdma_ci_ops_1cluster
+    DEV_APP: snax-bingo-offload
