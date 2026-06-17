@@ -11,6 +11,12 @@
 #include <stdio.h>
 #include "heterogeneous_runtime.h"
 uint64_t global_task_id = 0; // Internal monotonically increasing id source, notice this is used in each chiplet
+
+// Non-zero exit code reported when a heap allocation cannot be satisfied. A
+// failed alloc is unrecoverable (every caller uses the result as a pointer
+// without checking), so we fail fast via host_abort() instead of returning 0
+// and letting the caller spin/scribble on a NULL address.
+#define BINGO_EXIT_OOM 1UL
 ///////////////////////////
 // Memory Allocator API  //
 ///////////////////////////
@@ -103,6 +109,7 @@ uint64_t bingo_l1_alloc(uint8_t chip_id, uint32_t cluster_id, uint64_t size){
         BingoHeapDiagnostics *diag = (BingoHeapDiagnostics *)(uintptr_t)bingoHeapGetDiagnostics(bingo_get_l1_heap_manager(chip_id, cluster_id));
         printf_safe("  L1 heap diag: capacity=%lu, allocated=%lu, peak_allocated=%lu, peak_request_size=%lu, oom_count=%lu\r\n",
                diag->capacity, diag->allocated, diag->peak_allocated, diag->peak_request_size, diag->oom_count);
+        host_abort(BINGO_EXIT_OOM);
     }
     BINGO_PRINTF(3, "Chip(%x, %x): [Host] L1 malloc on cluster %d: ptr=0x%lx, size=%d\r\n",
            get_current_chip_loc_x(), get_current_chip_loc_y(),
@@ -119,6 +126,7 @@ uint64_t bingo_l2_alloc(uint8_t chip_id, uint64_t size){
         BingoHeapDiagnostics *diag = (BingoHeapDiagnostics *)(uintptr_t)bingoHeapGetDiagnostics(bingo_get_l2_heap_manager(chip_id));
         printf_safe("  L2 heap diag: capacity=%lu, allocated=%lu, peak_allocated=%lu, peak_request_size=%lu, oom_count=%lu\r\n",
                diag->capacity, diag->allocated, diag->peak_allocated, diag->peak_request_size, diag->oom_count);
+        host_abort(BINGO_EXIT_OOM);
     }
     BINGO_PRINTF(3, "Chip(%x, %x): [Host] L2 malloc: ptr=0x%lx, size=%d\r\n",
            get_current_chip_loc_x(), get_current_chip_loc_y(),
@@ -134,6 +142,7 @@ uint64_t bingo_l3_alloc(uint8_t chip_id, uint64_t size){
         BingoHeapDiagnostics *diag = (BingoHeapDiagnostics *)(uintptr_t)bingoHeapGetDiagnostics(bingo_get_l3_heap_manager(chip_id));
         printf_safe("  L3 heap diag: capacity=%lu, allocated=%lu, peak_allocated=%lu, peak_request_size=%lu, oom_count=%lu\r\n",
                diag->capacity, diag->allocated, diag->peak_allocated, diag->peak_request_size, diag->oom_count);
+        host_abort(BINGO_EXIT_OOM);
     }
     BINGO_PRINTF(3, "Chip(%x, %x): [Host] L3 malloc: ptr=0x%lx, size=%d\r\n",
            get_current_chip_loc_x(), get_current_chip_loc_y(),
@@ -163,6 +172,7 @@ uint64_t bingo_mempool_alloc(uint8_t mempool_loc_x, uint8_t mempool_loc_y, uint6
         BingoHeapDiagnostics *diag = (BingoHeapDiagnostics *)(uintptr_t)bingoHeapGetDiagnostics(bingo_get_mempool_heap_manager(mempool_loc_x, mempool_loc_y));
         printf_safe("  Mempool heap diag: capacity=%lu, allocated=%lu, peak_allocated=%lu, peak_request_size=%lu, oom_count=%lu\r\n",
                diag->capacity, diag->allocated, diag->peak_allocated, diag->peak_request_size, diag->oom_count);
+        host_abort(BINGO_EXIT_OOM);
     }
     BINGO_PRINTF(3, "Chip(%x, %x): [Host] Mempool malloc on chip (%d,%d): ptr=0x%lx, size=%d\r\n",
            get_current_chip_loc_x(), get_current_chip_loc_y(),
