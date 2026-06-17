@@ -18,9 +18,11 @@ sys.path.append(f"{ROOT_DIR}/util/sim")
 
 from xdma_ops_lib import run_op_workload  # noqa E402
 
-CONFIGS = [
-    {"M_T": 1, "K_T": 16, "N_T": 2, "elem_bytes": 1},
-]
+# Cycle-LUT sweep: rows x cols grid (elem=1) for the bilinear fit. Uses
+# array_shape=2 (mesh [16,8,16]) so tileSize=8 (%8==0) takes the HW path; the
+# A-operand shape is rows = M_T*meshRow = M_T*16, cols = K_T*tileSize = K_T*8.
+CONFIGS = [{"M_T": m, "K_T": k, "N_T": 1, "elem_bytes": 1, "array_shape": 2}
+           for m in (1, 2, 4) for k in (4, 8, 16)]   # rows 16..64, cols 32..128
 
 if __name__ == "__main__":
     run_op_workload("row_to_a", CONFIGS)
