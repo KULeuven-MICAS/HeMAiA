@@ -85,6 +85,11 @@ ENGINES: Dict[str, Dict] = {
         "compile_in_container": False,
         "binary": "occamy_chip.vcs",
         "stage": ["bin/occamy_chip.vcs", "bin/occamy_chip.vcs.daidir"],
+        # With many parallel jobs the VCS runtime license seats run out; without
+        # this flag the simv that loses the race exits immediately ("Licensed
+        # number of users already reached for VCS-BASE-RUNTIME") and is wrongly
+        # reported as FAIL.  +vcs+lic+wait makes it queue for a seat instead.
+        "run_args": ["+vcs+lic+wait"],
     },
     "vlt": {
         "tool": None,                    # Verilator builds in-container; no host tool
@@ -602,7 +607,7 @@ class HeMAiASimRunner:
                 # start_new_session=True makes the child a session/group leader,
                 # so all descendants share that group and can be killed as a unit.
                 proc = subprocess.Popen(
-                    [str(sim_binary)],
+                    [str(sim_binary), *self.spec.get("run_args", [])],
                     cwd=task_dir / "bin",
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
@@ -656,7 +661,13 @@ class HeMAiASimRunner:
                     results[task_dir_str] = (passed, elapsed)
                     status = "PASS" if passed else "FAIL"
                     print(f"{ci_name}: {status} ({_format_duration(elapsed)})")
+                    # Persist the full sim stdout/stderr per task so a failure can
+                    # be triaged afterwards (the console only shows the last lines).
                     if output:
+                        try:
+                            (Path(task_dir_str) / "bin" / "sim_run.log").write_text(output)
+                        except OSError:
+                            pass
                         for line in output.strip().splitlines()[-10:]:
                             print(line)
                 except Exception:

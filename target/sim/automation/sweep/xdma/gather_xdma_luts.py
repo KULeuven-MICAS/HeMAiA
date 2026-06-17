@@ -235,7 +235,7 @@ def gather_one(workload, idx, ci_dir, mesh, drop_warmup=True, verbose=True):
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--task-yaml",
-                    default=os.path.join(_XDMA_DIR, "task_vsim_xdma_lut.yaml"))
+                    default=os.path.join(_XDMA_DIR, "task_xdma.yaml"))
     ap.add_argument("--ci-dir", default=_XDMA_DIR,
                     help="dir holding the task_<idx> run dirs (default: xdma sweep dir)")
     ap.add_argument("--out", default=_DEFAULT_OUT,
