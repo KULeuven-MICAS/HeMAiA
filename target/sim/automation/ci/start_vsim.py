@@ -129,6 +129,29 @@ def parse_args() -> argparse.Namespace:
         help="maximum number of simulations to run in parallel "
              f"(default: {DEFAULT_MAX_SIM_JOBS})",
     )
+    parser.add_argument(
+        "-f", "--task-yaml",
+        default=None,
+        help="path to the task list YAML (default: task_vsim.yaml next to this "
+             "script). A relative path is resolved against the ci dir, then cwd.",
+    )
+    parser.add_argument(
+        "--cfg",
+        default=CI_CFG,
+        help="RTL/SW config (CFG_OVERRIDE) for the whole flow (default: %(default)s). "
+             "Use target/rtl/cfg/hemaia_singlechip.hjson for the single-chip build "
+             "(16 MiB host WIDE_SPM, no D2D/macro) -- pair it with --no-d2d --no-macro.",
+    )
+    parser.add_argument(
+        "--d2d", action=argparse.BooleanOptionalAction, default=True,
+        help="init the hemaia_d2d_link private module (needed for multi_chip cfgs; "
+             "use --no-d2d for single-chip).",
+    )
+    parser.add_argument(
+        "--macro", action=argparse.BooleanOptionalAction, default=True,
+        help="init the tech_cells_tsmc16 private module (use --no-macro for the "
+             "open-source single-chip flow, which uses tech_cells_generic).",
+    )
     args = parser.parse_args()
     if args.max_sim_jobs < 1:
         parser.error("--max-sim-jobs must be >= 1")
@@ -325,12 +348,22 @@ def step1_clean(repo_root: Path, docker_image: str) -> None:
 # Step 2 -- Initialise private repos (host-side)
 # ---------------------------------------------------------------------------
 
-def step2_init_private_hemaia_repos(repo_root: Path) -> None:
-    """Run ``1_git_pull_private_modules.sh`` with D2D and macro support enabled."""
-    # ci is not running with the PLL, so we disable it to avoid unnecessary errors about missing PLL
+def step2_init_private_hemaia_repos(
+    repo_root: Path, *, with_d2d: bool = True, with_macro: bool = True,
+) -> None:
+    """Reset vendor modules to a clean slate, then init the enabled private repos.
+
+    ``0_reset_private_modules.sh`` first restores the open-source ``tech_cells_generic``
+    entry and drops the D2D/PLL entries from Bender.local (so a single-chip run does not
+    inherit tsmc16/D2D from a previous multi-chip run); then ``1_git_pull`` clones only
+    the modules enabled by the flags. The PLL is always off in this CI flow.
+    """
+    run_host_script(repo_root / "target/tapeout/0_reset_private_modules.sh")
     run_host_script(
         repo_root / "target/tapeout/1_git_pull_private_modules.sh",
-        script_args=["--pll=0", "--d2d=1", "--macro=1"],
+        script_args=["--pll=0",
+                     f"--d2d={1 if with_d2d else 0}",
+                     f"--macro={1 if with_macro else 0}"],
     )
 
 
@@ -338,14 +371,14 @@ def step2_init_private_hemaia_repos(repo_root: Path) -> None:
 # Step 3 -- Compile HW/SW inside the container
 # ---------------------------------------------------------------------------
 
-def step3_compile_hemaia_sw_rtl(repo_root: Path, docker_image: str) -> None:
+def step3_compile_hemaia_sw_rtl(repo_root: Path, docker_image: str, cfg: str) -> None:
     """Clean, then build SW, bootrom, and RTL inside the container."""
     # make sw
-    run_in_container(repo_root, docker_image, repo_root, ["make", "sw", f"CFG_OVERRIDE={CI_CFG}"])
+    run_in_container(repo_root, docker_image, repo_root, ["make", "sw", f"CFG_OVERRIDE={cfg}"])
     # make bootrom
-    run_in_container(repo_root, docker_image, repo_root, ["make", "bootrom", f"CFG_OVERRIDE={CI_CFG}"])
+    run_in_container(repo_root, docker_image, repo_root, ["make", "bootrom", f"CFG_OVERRIDE={cfg}"])
     # make rtl
-    run_in_container(repo_root, docker_image, repo_root, ["make", "rtl", f"CFG_OVERRIDE={CI_CFG}"])
+    run_in_container(repo_root, docker_image, repo_root, ["make", "rtl", f"CFG_OVERRIDE={cfg}"])
 
 
 # ---------------------------------------------------------------------------
@@ -357,6 +390,7 @@ def step4_build_apps_and_prepare_tasks(
     docker_image: str,
     tasks: List[Dict[str, str]],
     task_base_dir: Path,
+    cfg: str,
 ) -> List[Tuple[Path, str]]:
     """Build hex files inside the container, then copy them into per-task dirs.
 
@@ -374,7 +408,7 @@ def step4_build_apps_and_prepare_tasks(
             val = task.get(key, "")
             if val and val != "None":
                 make_cmd.append(f"{var}={val}")
-        make_cmd.append(f"CFG_OVERRIDE={CI_CFG}")
+        make_cmd.append(f"CFG_OVERRIDE={cfg}")
         make_cmd.append("DEBUG_LEVEL=0")
 
         run_in_container(repo_root, docker_image, repo_root, make_cmd)
@@ -606,10 +640,23 @@ def main() -> None:
     repo_root = script_path.parents[4]          # target/sim/automation/ci -> repo root
     task_base_dir = script_path.parent
     docker_image = "ghcr.io/kuleuven-micas/hemaia:main"
-    task_yaml = script_path.parent / "task_vsim.yaml"
+
+    # Resolve the task list: explicit --task-yaml (relative -> ci dir, then cwd),
+    # else the default task_vsim.yaml next to this script.
+    if args.task_yaml:
+        candidate = Path(args.task_yaml)
+        if candidate.is_absolute():
+            task_yaml = candidate
+        elif (script_path.parent / candidate).exists():
+            task_yaml = script_path.parent / candidate
+        else:
+            task_yaml = (Path.cwd() / candidate).resolve()
+    else:
+        task_yaml = script_path.parent / "task_vsim.yaml"
 
     if not task_yaml.exists():
         raise FileNotFoundError(f"Task YAML file {task_yaml} does not exist")
+    print(f"Using task list: {task_yaml}")
 
     ensure_vsim_available()
 
@@ -623,17 +670,20 @@ def main() -> None:
     # Step 0: Parse task definitions from YAML
     tasks = step0_parse_tasks(task_yaml)
 
+    cfg = args.cfg
+    print(f"Using cfg: {cfg}  (d2d={args.d2d}, macro={args.macro})")
+
     # Step 1: Reset environment to a clean state
     step1_clean(repo_root, docker_image)
 
-    # Step 2: Initialise private repos on the host
-    step2_init_private_hemaia_repos(repo_root)
+    # Step 2: Reset + initialise the private repos the cfg needs on the host
+    step2_init_private_hemaia_repos(repo_root, with_d2d=args.d2d, with_macro=args.macro)
 
     # Step 3: Compile HW and SW inside the container
-    step3_compile_hemaia_sw_rtl(repo_root, docker_image)
+    step3_compile_hemaia_sw_rtl(repo_root, docker_image, cfg)
 
     # Step 4: Build application hex files and create per-task directories
-    tasks_info = step4_build_apps_and_prepare_tasks(repo_root, docker_image, tasks, task_base_dir)
+    tasks_info = step4_build_apps_and_prepare_tasks(repo_root, docker_image, tasks, task_base_dir, cfg)
 
     # Step 5: Prepare and compile the Questasim testharness
     step5_prepare_testharness(repo_root, docker_image, tasks_info)

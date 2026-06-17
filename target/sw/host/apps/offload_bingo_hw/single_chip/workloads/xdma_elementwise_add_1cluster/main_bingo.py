@@ -18,12 +18,10 @@ sys.path.append(f"{ROOT_DIR}/util/sim")
 
 from xdma_ops_lib import run_op_workload  # noqa E402
 
-CONFIGS = [
-    {"num_operands": 2, "per_op": 64},
-    {"num_operands": 4, "per_op": 64},
-    {"num_operands": 4, "per_op": 256},
-    {"num_operands": 8, "per_op": 64},
-]
+# Cycle-LUT sweep: n = per_op (output int32 elems); num_operands fixed = 2 (the
+# cost model's reduce_cc queries this op by n). per_op is a multiple of 16
+# (one 512b bus word = 16 int32) for the linear n->cycles fit.
+CONFIGS = [{"num_operands": 2, "per_op": p} for p in (16, 64, 256, 1024, 4096)]
 
 if __name__ == "__main__":
     run_op_workload("elementwise_add", CONFIGS)

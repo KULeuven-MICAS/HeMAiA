@@ -18,10 +18,10 @@ sys.path.append(f"{ROOT_DIR}/util/sim")
 
 from xdma_ops_lib import run_op_workload  # noqa E402
 
-CONFIGS = [
-    {"rows": 16, "cols": 16, "elem_bytes": 1},
-    {"rows": 32, "cols": 16, "elem_bytes": 1},
-]
+# Cycle-LUT sweep: rows x cols grid (elem=1) for the bilinear fit.
+# rows = output rows (broadcast), cols = row width; both multiples of 8.
+_RC = [16, 64, 128]
+CONFIGS = [{"rows": r, "cols": c, "elem_bytes": 1} for r in _RC for c in _RC]
 
 if __name__ == "__main__":
     run_op_workload("expand", CONFIGS)

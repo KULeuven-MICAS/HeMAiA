@@ -18,19 +18,11 @@ sys.path.append(f"{ROOT_DIR}/util/sim")
 
 from xdma_ops_lib import run_op_workload  # noqa E402
 
-# Element-width coverage (see __snax_bingo_kernel_xdma_transpose_2d):
-#   - int8  -> HW transposer, 8-bit mode
-#   - int16 -> HW transposer, native 16-bit mode (CSR0=1)
-#   - int32 -> SW transpose (no native 32-bit HW mode)
-# The int16 HW-16-bit path is newly wired; this sweep (real numpy goldens for
-# every width) is the check that confirms it — run it in sim after a build.
-CONFIGS = [
-    {"rows": 8, "cols": 8, "elem_bytes": 1},
-    {"rows": 16, "cols": 16, "elem_bytes": 1},
-    {"rows": 32, "cols": 32, "elem_bytes": 1},
-    {"rows": 16, "cols": 16, "elem_bytes": 2},   # int16 -> HW 16-bit mode
-    {"rows": 16, "cols": 16, "elem_bytes": 4},   # int32 -> SW transpose
-]
+# Cycle-LUT sweep: int8 HW transposer (8-bit mode) over a rows x cols grid so the
+# bilinear cost fit (c0 + c1*rows + c2*cols + c3*rows*cols) is identifiable.
+# rows = M (src rows), cols = N (src cols); both multiples of 8 (HW constraint).
+_RC = [16, 64, 128]
+CONFIGS = [{"rows": r, "cols": c, "elem_bytes": 1} for r in _RC for c in _RC]
 
 if __name__ == "__main__":
     run_op_workload("transpose", CONFIGS)

@@ -18,10 +18,12 @@ sys.path.append(f"{ROOT_DIR}/util/sim")
 
 from xdma_ops_lib import run_op_workload  # noqa E402
 
-CONFIGS = [
-    {"rows": 16, "cols": 16, "elem_bytes": 1},
-    {"rows": 32, "cols": 32, "elem_bytes": 1},
-]
+# Cycle-LUT sweep: extract an R x C sub-block (output rows R, cols C) over a grid
+# for the bilinear fit. Slice honors re-rs=R %8, ce-cs=C %8, cs=8 (cs*elem %8).
+_RC = [16, 64, 128]
+CONFIGS = [{"rows": R, "cols": C + 8, "elem_bytes": 1,
+            "rs": 0, "re": R, "cs": 8, "ce": 8 + C}
+           for R in _RC for C in _RC]
 
 if __name__ == "__main__":
     run_op_workload("submatrix", CONFIGS)
