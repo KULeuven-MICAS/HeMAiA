@@ -7,8 +7,7 @@
 #
 # Shared markdown cycle-report for the sweep CSVs (ara_cycles.csv / xdma_cycles.csv).
 # Groups the measured points by op and prints a per-op table of the measured
-# cycles -- documentation only, no curve fitting (that lives in the bingo
-# framework, which consumes the CSVs).  The per-sweep report scripts are thin
+# cycles -- documentation only.  The per-sweep report scripts are thin
 # wrappers that just supply their op list + default CSV path and call run_cli().
 
 import argparse

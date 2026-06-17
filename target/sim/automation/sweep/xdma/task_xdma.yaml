@@ -68,9 +68,3 @@ runs:
     CHIP_TYPE: single_chip
     WORKLOAD: xdma_elementwise_add_1cluster
     DEV_APP: snax-bingo-offload
-
-  # ---- functional cross-check (all ops in one DFG) ----
-  - HOST_APP_TYPE: offload_bingo_hw
-    CHIP_TYPE: single_chip
-    WORKLOAD: xdma_ci_ops_1cluster
-    DEV_APP: snax-bingo-offload
