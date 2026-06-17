@@ -388,6 +388,8 @@ def parse_workload_args(
     default_chip_type: str,
     default_workload: str,
     default_dev_app: str,
+    default_engine: str = "vsim",
+    default_waveform: int = 1,
     description: Optional[str] = None,
 ) -> argparse.Namespace:
     """Parse CLI overrides for the SW workload-selection knobs (test drivers).
@@ -416,10 +418,10 @@ def parse_workload_args(
         "--dev-app", default=default_dev_app,
         help="device app (default: %(default)s)")
     parser.add_argument(
-        "--engine", choices=sorted(ENGINES), default="vsim",
+        "--engine", choices=sorted(ENGINES), default=default_engine,
         help="simulation engine (default: %(default)s)")
     parser.add_argument(
-        "--waveform", type=int, choices=(0, 1), default=1,
+        "--waveform", type=int, choices=(0, 1), default=default_waveform,
         help="SIM_WITH_WAVEFORM: record a waveform/log (default: %(default)s)")
     return parser.parse_args()
 

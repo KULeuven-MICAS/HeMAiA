@@ -50,6 +50,8 @@ HOST_APP_TYPE = "offload_legacy"  # host_only | offload_legacy | offload_bingo_h
 CHIP_TYPE = "single_chip"
 WORKLOAD = "None"
 DEV_APP = "snax-versacore-matmul-profile"
+ENGINE = "vsim"
+SIM_WITH_WAVEFORM = 1
 
 
 def main() -> None:
@@ -58,6 +60,8 @@ def main() -> None:
         default_chip_type=CHIP_TYPE,
         default_workload=WORKLOAD,
         default_dev_app=DEV_APP,
+        default_engine=ENGINE,
+        default_waveform=SIM_WITH_WAVEFORM,
         description=__doc__,
     )
     runner = HeMAiASimRunner(
