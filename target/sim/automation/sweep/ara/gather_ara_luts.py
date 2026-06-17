@@ -88,12 +88,13 @@ def gather_all(ci_dir, out_csv, only=None, verbose=True):
             print(f"{kernel}: no OP_SPEC entry (skipped)")
             continue
         op_node = OP_SPEC[kernel]
-        points = sorted(agg[kernel].items())  # (n, [cycles,...])
-        for n, cycs in points:
-            rows.append({"op_name": kernel, "op_node": op_node,
-                         "n": n, "cycles": round(sum(cycs) / len(cycs))})
+        # Average cycles per N once, then reuse for both the CSV rows and the log.
+        points = [(n, round(sum(cycs) / len(cycs)))
+                  for n, cycs in sorted(agg[kernel].items())]
+        for n, cyc in points:
+            rows.append({"op_name": kernel, "op_node": op_node, "n": n, "cycles": cyc})
         if verbose:
-            pts = ", ".join(f"n={n}:{round(sum(c)/len(c))}" for n, c in points)
+            pts = ", ".join(f"n={n}:{cyc}" for n, cyc in points)
             print(f"{kernel}: {len(points)} points  [{pts}]")
 
     if rows:

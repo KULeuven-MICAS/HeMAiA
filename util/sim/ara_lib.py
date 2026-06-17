@@ -15,6 +15,7 @@ exp approximation, so the C-side checks apply a loose tolerance for exp-based op
 (see ARA_TOL in each ara_<kernel>/src/main.c).
 """
 import math
+import random
 import sys
 
 SEED = 42
@@ -27,7 +28,6 @@ SIZES = (64, 256, 1024, 4096)  # sweep sizes -- must match main.c timing_sizes
 # ---------------------------------------------------------------------------
 
 def _inputs(n, seed=SEED):
-    import random
     rng = random.Random(seed)
     a = [round(rng.uniform(0.3, 4.0), 4) for _ in range(n)]   # >0: exp/sqrt/recip safe
     b = [round(rng.uniform(0.5, 3.0), 4) for _ in range(n)]   # >0: no div-by-~0

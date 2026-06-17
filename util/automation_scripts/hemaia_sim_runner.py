@@ -327,6 +327,18 @@ def make_task(
     }
 
 
+def resolve_task_yaml(arg) -> Path:
+    """Resolve a ``--task-yaml`` value to a concrete path: an absolute path is
+    returned as-is, a relative one is resolved against the current directory.
+
+    Drivers set the argparse default to ``<script_dir>/<name>.yaml`` (an absolute
+    path), so the no-flag case already points next to the script regardless of
+    cwd.  Shared so every driver resolves task lists the same way.
+    """
+    p = Path(arg)
+    return p if p.is_absolute() else (Path.cwd() / p).resolve()
+
+
 def parse_tasks(task_yaml: Path) -> List[Dict[str, str]]:
     """Parse simulation tasks from *task_yaml*.
 

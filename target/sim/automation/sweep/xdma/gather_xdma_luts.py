@@ -173,15 +173,17 @@ def _xdma_run_cycles(bingo_json):
 
 
 def gather_one(workload, idx, ci_dir, mesh, drop_warmup=True, verbose=True):
-    """Return (op_name, op_node, op_fit, params, points) for *workload*, or None.
+    """Return (op_name, op_node, params, points) for *workload*, or None.
 
     *points* is a list of dicts, each the op's params plus a "cycles" value.
+    (op_fit in OP_SPEC is left as in-code documentation; the CSV carries only the
+    measured cycles -- curve fitting lives in the bingo framework.)
     """
     if workload not in OP_SPEC:
         if verbose:
             print(f"task_{idx} {workload}: no LUT spec (skipped)")
         return None
-    op_name, op_node, op_fit, params, epc, point_fn = OP_SPEC[workload]
+    op_name, op_node, _op_fit, params, epc, point_fn = OP_SPEC[workload]
     logs_dir = os.path.join(ci_dir, f"task_{idx}", "bin", "logs")
     cfg_path = os.path.join(_WORKLOADS, workload, "configs.json")
     if not os.path.isdir(logs_dir):
@@ -227,7 +229,7 @@ def gather_one(workload, idx, ci_dir, mesh, drop_warmup=True, verbose=True):
     print(f"task_{idx} {workload}: {len(points)} points")
     for pt in points:
         print("    " + ", ".join(f"{k}={pt[k]}" for k in (params + ["cycles"])))
-    return op_name, op_node, op_fit, params, points
+    return op_name, op_node, params, points
 
 
 def main():
@@ -257,7 +259,7 @@ def main():
                          drop_warmup=not args.keep_warmup)
         if not res:
             continue
-        op_name, op_node, _op_fit, params, points = res  # fit type is bingo's job
+        op_name, op_node, params, points = res
         for p in params:
             if p not in param_cols:
                 param_cols.append(p)

@@ -6,12 +6,12 @@
 /ci/*
 !/ci/local_ci/
 /ci/local_ci/*
-!/ci/local_ci/run_ci.py
+!/ci/local_ci/run_local_ci.py
 !/ci/local_ci/task_local_ci.yaml
 !/ci/git_ci/
 /ci/git_ci/*
 !/ci/git_ci/run_git_ci.py
-!/ci/git_ci/task_vlt.yaml
+!/ci/git_ci/task_git_ci.yaml
 
 !/sweep/
 /sweep/*

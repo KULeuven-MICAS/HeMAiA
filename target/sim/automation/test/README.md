@@ -155,11 +155,11 @@ This skips the RTL/bootrom/vsim recompile and keeps the vendor-repo and
 These test drivers share `HeMAiASimRunner` with two batch flows in the sibling
 directories:
 
-* `../ci/local_ci` — the local CI suite (`run_ci.py`, `task_vsim.yaml`), VCS
-  engine, no waveform, full orchestration on a host with the EDA tools. Run via
-  `make -C target/sim/automation local-ci`.
+* `../ci/local_ci` — the local CI suite (`run_local_ci.py`, `task_local_ci.yaml`),
+  VCS engine, no waveform, full orchestration on a host with the EDA tools. Run
+  via `make -C target/sim/automation local-ci`.
 * `../ci/git_ci` — the GitHub Actions Verilator CI (`run_git_ci.py`,
-  `task_vlt.yaml`). It runs inside the `hemaia:main` container with the HW/sim
+  `task_git_ci.yaml`). It runs inside the `hemaia:main` container with the HW/sim
   pre-built by the workflow, so it drives the common class in its lightweight
   mode (`in_container` + `skip_setup/build/compile`). Triggered by
   `.github/workflows/ci.yml`.

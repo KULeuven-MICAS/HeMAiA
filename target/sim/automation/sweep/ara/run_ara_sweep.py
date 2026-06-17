@@ -27,7 +27,7 @@ _REPO_ROOT = _SCRIPT.parents[5]  # target/sim/automation/sweep/ara -> repo root
 sys.path.insert(0, str(_REPO_ROOT / "util" / "automation_scripts"))
 
 from hemaia_sim_runner import (  # noqa: E402
-    DEFAULT_MAX_SIM_JOBS, ENGINES, HeMAiASimRunner, parse_tasks,
+    DEFAULT_MAX_SIM_JOBS, ENGINES, HeMAiASimRunner, parse_tasks, resolve_task_yaml,
 )
 
 # host_only single-chip; the kernels run on CVA6+Ara, no D2D/macro.
@@ -41,7 +41,7 @@ def parse_args() -> argparse.Namespace:
         "-j", "--max-sim-jobs", type=int, default=DEFAULT_MAX_SIM_JOBS,
         help=f"max simulations to run in parallel (default: {DEFAULT_MAX_SIM_JOBS})")
     parser.add_argument(
-        "-f", "--task-yaml", default=None,
+        "-f", "--task-yaml", default=_SCRIPT.parent / "task_ara.yaml",
         help="task list YAML (default: task_ara.yaml next to this script).")
     parser.add_argument(
         "--engine", choices=sorted(ENGINES), default="vcs",
@@ -57,11 +57,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    if args.task_yaml:
-        candidate = Path(args.task_yaml)
-        task_yaml = candidate if candidate.is_absolute() else _SCRIPT.parent / candidate
-    else:
-        task_yaml = _SCRIPT.parent / "task_ara.yaml"
+    task_yaml = resolve_task_yaml(args.task_yaml)
     if not task_yaml.exists():
         raise FileNotFoundError(f"Task YAML file {task_yaml} does not exist")
     print(f"Using task list: {task_yaml}")

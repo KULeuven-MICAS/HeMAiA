@@ -5,7 +5,7 @@ JOBS ?= 16
 
 # Local CI: Questasim/VCS regression, run on a host with the EDA tools.
 local-ci:
-	cd ci/local_ci && python3 run_ci.py -j $(JOBS)
+	cd ci/local_ci && python3 run_local_ci.py -j $(JOBS)
 
 # Git CI: Verilator regression. Normally run by GitHub Actions; run it manually
 # only from *inside* the hemaia container with the HW/sim already built.

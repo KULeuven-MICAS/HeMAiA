@@ -8,8 +8,8 @@ Builds and runs the full ``task_local_ci.yaml`` CI suite through the shared
 (fast batch runs); pass ``--engine vsim --waveform 1`` to reproduce a failing
 task under Questasim with a waveform for debugging.
 
-    python3 run_ci.py [-j JOBS] [-f task.yaml] [--cfg CFG] [--engine vcs|vsim]
-                      [--waveform 0|1] [--no-d2d] [--no-macro]
+    python3 run_local_ci.py [-j JOBS] [-f task.yaml] [--cfg CFG] [--engine vcs|vsim]
+                            [--waveform 0|1] [--no-d2d] [--no-macro]
 """
 
 from __future__ import annotations
@@ -23,11 +23,12 @@ _REPO_ROOT = _SCRIPT.parents[5]  # target/sim/automation/ci/local_ci -> repo roo
 sys.path.insert(0, str(_REPO_ROOT / "util" / "automation_scripts"))
 
 from hemaia_sim_runner import (  # noqa: E402
-    DEFAULT_MAX_SIM_JOBS, ENGINES, HeMAiASimRunner, parse_tasks,
+    DEFAULT_MAX_SIM_JOBS, ENGINES, HeMAiASimRunner, parse_tasks, resolve_task_yaml,
 )
 
 CI_CFG = "target/rtl/cfg/hemaia_multichip_ci.hjson"
 SIM_CFG = "target/sim/cfg/sim_rtl.hjson"
+DEFAULT_TASK_YAML = "task_local_ci.yaml"
 
 
 def parse_args() -> argparse.Namespace:
@@ -36,9 +37,8 @@ def parse_args() -> argparse.Namespace:
         "-j", "--max-sim-jobs", type=int, default=DEFAULT_MAX_SIM_JOBS,
         help=f"max simulations to run in parallel (default: {DEFAULT_MAX_SIM_JOBS})")
     parser.add_argument(
-        "-f", "--task-yaml", default=None,
-        help="task list YAML (default: task_local_ci.yaml next to this script). A "
-             "relative path is resolved against the local_ci dir, then cwd.")
+        "-f", "--task-yaml", default=_SCRIPT.parent / DEFAULT_TASK_YAML,
+        help=f"task list YAML (default: {DEFAULT_TASK_YAML} next to this script).")
     parser.add_argument(
         "--cfg", default=CI_CFG,
         help="RTL/SW config (CFG_OVERRIDE) for the whole flow (default: %(default)s).")
@@ -60,20 +60,9 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-def _resolve_task_yaml(arg: str | None) -> Path:
-    if not arg:
-        return _SCRIPT.parent / "task_local_ci.yaml"
-    candidate = Path(arg)
-    if candidate.is_absolute():
-        return candidate
-    if (_SCRIPT.parent / candidate).exists():
-        return _SCRIPT.parent / candidate
-    return (Path.cwd() / candidate).resolve()
-
-
 def main() -> None:
     args = parse_args()
-    task_yaml = _resolve_task_yaml(args.task_yaml)
+    task_yaml = resolve_task_yaml(args.task_yaml)
     if not task_yaml.exists():
         raise FileNotFoundError(f"Task YAML file {task_yaml} does not exist")
     print(f"Using task list: {task_yaml}")
