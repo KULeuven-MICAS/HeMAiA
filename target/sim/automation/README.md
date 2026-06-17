@@ -198,10 +198,12 @@ This skips the RTL/bootrom/vsim recompile and keeps the vendor-repo and
   VCS engine, no waveform, full orchestration on a host with the EDA tools. Run
   via `make local-ci` (or `make -C target/sim/automation local-ci`).
 * `ci/git_ci` — the GitHub Actions Verilator CI (`run_git_ci.py`,
-  `task_git_ci.yaml`). It runs inside the `hemaia:main` container with the HW/sim
-  pre-built by the workflow, so it drives the common class in its lightweight
-  mode (`in_container` + `skip_setup/build/compile`). Triggered by
-  `.github/workflows/ci.yml`; run manually with `make git-ci`.
+  `task_git_ci.yaml`). It drives the full build+compile+run flow itself (so
+  `.github/workflows/ci.yml` just checks out the repo and calls the script),
+  using `in_container=True` (the job already runs in the `hemaia:main`
+  container) and `skip_setup=True` (no SSH for private vendor repos; the
+  Verilator cfg is open-source single-chip). Run manually from inside the
+  container with `make git-ci`.
 
 # Op-cost sweeps (`sweep/`)
 

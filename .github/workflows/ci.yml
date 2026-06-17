@@ -24,13 +24,7 @@ jobs:
       - uses: actions/checkout@v2
         with:
           submodules: "recursive"
-      - name: Compile everything
-        run: |
-          make sw CFG_OVERRIDE=target/rtl/cfg/hemaia_ci.hjson
-          make bootrom 
-          make rtl
-          make hemaia_system_vlt -j$(nproc)
-      - name: Run Tests
+      - name: Build and run tests
         working-directory: target/sim/automation/ci/git_ci
         run: |
           python3 run_git_ci.py -f task_git_ci.yaml --cfg target/rtl/cfg/hemaia_ci.hjson
@@ -44,13 +38,7 @@ jobs:
       - uses: actions/checkout@v2
         with:
           submodules: "recursive"
-      - name: Compile everything
-        run: |
-          make sw CFG_OVERRIDE=target/rtl/cfg/hemaia_ci_noc.hjson
-          make bootrom 
-          make rtl
-          make hemaia_system_vlt -j$(nproc)
-      - name: Run Tests
+      - name: Build and run tests
         working-directory: target/sim/automation/ci/git_ci
         run: |
           python3 run_git_ci.py -f task_git_ci.yaml --cfg target/rtl/cfg/hemaia_ci_noc.hjson

@@ -3,9 +3,8 @@
 HeMAiA simulation automation -- common runner
 =============================================
 
-A single, parameterised driver for the three HeMAiA simulation flows that used
-to live as two separate code bases (``target/testing`` and
-``target/sim/automation/ci``).  All of them share the same backbone:
+A single, parameterised driver shared by the HeMAiA test, CI, and sweep flows
+under ``target/sim/automation``.  All of them share the same backbone:
 
   Step 0 - Parse / accept the task list
   Step 1 - ``make clean`` (container) then reset + init the private vendor repos
@@ -451,6 +450,7 @@ class HeMAiASimRunner:
         skip_setup: bool = False,
         skip_build: bool = False,
         skip_compile: bool = False,
+        compile_jobs: Optional[int] = None,
     ) -> None:
         if engine not in ENGINES:
             raise ValueError(f"Unknown engine {engine!r}; choose from {sorted(ENGINES)}")
@@ -466,17 +466,20 @@ class HeMAiASimRunner:
         self.with_pll = with_pll
         self.max_jobs = max_jobs
         self.docker_image = docker_image
-        # Environment switches for the git CI, which already runs *inside* the
-        # build container with the HW/sim pre-built by the workflow:
-        #   in_container -- run the "container" make steps directly (no podman)
-        #   skip_setup   -- skip reset + private-repo init (no SSH on GH runners)
-        #   skip_build   -- skip the sw/bootrom/rtl build (workflow did it)
+        # Optional flow switches (e.g. the git CI runs inside the build container
+        # but has no SSH for the private vendor repos):
+        #   in_container -- run the "container" make steps directly, no podman
+        #   skip_setup   -- skip reset + private-repo init
+        #   skip_build   -- skip the sw/bootrom/rtl build (built elsewhere)
         #   skip_compile -- skip the sim prepare+compile, but still stage the
         #                   already-built binary into each task dir
         self.in_container = in_container
         self.skip_setup = skip_setup
         self.skip_build = skip_build
         self.skip_compile = skip_compile
+        # Parallelism for the sim compile (``make -j``); None = no -j flag. The
+        # Verilator build in particular is far too slow serially on a CI runner.
+        self.compile_jobs = compile_jobs
 
     # -- helpers -----------------------------------------------------------
 
@@ -575,6 +578,8 @@ class HeMAiASimRunner:
 
             # Compile the simulation -- in the container (Verilator) or on the host.
             compile_cmd = ["make", self.spec["compile_target"], f"SIM_CFG={sim_cfg_abs}", wave]
+            if self.compile_jobs:
+                compile_cmd.append(f"-j{self.compile_jobs}")
             if self.spec["compile_in_container"]:
                 self._container(compile_cmd)
             else:

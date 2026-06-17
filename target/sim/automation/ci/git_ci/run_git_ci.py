@@ -3,17 +3,20 @@
 HeMAiA git (GitHub Actions) CI runner
 =====================================
 
-Runs the ``task_git_ci.yaml`` Verilator regression on a GitHub runner.  Unlike the
-local CI, this executes *inside* the ``hemaia:main`` container with the HW/sim
-already built by the workflow steps (``make sw/bootrom/rtl/hemaia_system_vlt``).
+Runs the ``task_git_ci.yaml`` Verilator regression on a GitHub runner.  Like the
+local CI, this drives the *whole* flow end-to-end (build sw/bootrom/rtl, compile
+the Verilator binary, build the per-task apps, run) so the workflow only has to
+check out the repo and call this one script -- no duplicated build steps in
+``ci.yml``.
 
-It therefore drives the shared :class:`HeMAiASimRunner` in its lightweight mode:
+The GitHub runner imposes two constraints that the shared :class:`HeMAiASimRunner`
+handles via switches:
 
-  * ``in_container``  -- run make directly (no podman-in-container)
-  * ``skip_setup``    -- no reset / private-repo clone (no SSH on GH runners)
-  * ``skip_build``    -- the workflow already built sw/bootrom/rtl
-  * ``skip_compile``  -- the workflow already built the Verilator binary; just
-                         build the per-task apps, stage the binary, and run.
+  * ``in_container`` -- the job already runs *inside* the ``hemaia:main``
+    container, so the "container" make steps run directly (no podman-in-podman).
+  * ``skip_setup``   -- no reset / private-repo clone: GH runners have no SSH for
+    the private vendor repos, and the Verilator CI cfg is open-source single-chip
+    (no tsmc16 / D2D / PLL), so there is nothing to clone.
 
     python3 run_git_ci.py [-j JOBS] [-f task.yaml] [--cfg CFG]
 """
@@ -21,6 +24,7 @@ It therefore drives the shared :class:`HeMAiASimRunner` in its lightweight mode:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -32,10 +36,10 @@ from hemaia_sim_runner import (  # noqa: E402
     DEFAULT_MAX_SIM_JOBS, HeMAiASimRunner, parse_tasks, resolve_task_yaml,
 )
 
-# Must match the CFG_OVERRIDE the workflow built sw/rtl with (the NoC job passes
+# RTL/SW config the whole flow is built with (the NoC job passes
 # --cfg target/rtl/cfg/hemaia_ci_noc.hjson).
 GIT_CI_CFG = "target/rtl/cfg/hemaia_ci.hjson"
-SIM_CFG = "target/sim/cfg/sim_rtl.hjson"  # unused (skip_compile), kept for completeness
+SIM_CFG = "target/sim/cfg/sim_rtl.hjson"
 DEFAULT_TASK_YAML = "task_git_ci.yaml"
 
 
@@ -74,11 +78,12 @@ def main() -> None:
         with_d2d=False,
         with_pll=False,
         max_jobs=args.max_sim_jobs,
-        # GitHub runner: already inside the container with HW/sim pre-built.
+        # GitHub runner: already inside the build container, but with no SSH for
+        # the private vendor repos.  Build/compile are driven here (not skipped),
+        # parallelising the Verilator compile across all available cores.
         in_container=True,
         skip_setup=True,
-        skip_build=True,
-        skip_compile=True,
+        compile_jobs=os.cpu_count(),
     )
     runner.run(parse_tasks(task_yaml))
 
