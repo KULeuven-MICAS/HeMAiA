@@ -24,10 +24,10 @@ runs:
     CHIP_TYPE: single_chip
     WORKLOAD: dummy_1cluster
     DEV_APP: snax-bingo-offload
-  # offload_bingo_hw / single_chip: attn_test_single_gemm_4cluster
+  # offload_bingo_hw / single_chip: attn_reference_4cluster
   - HOST_APP_TYPE: offload_bingo_hw
     CHIP_TYPE: single_chip
-    WORKLOAD: attn_test_single_gemm_4cluster
+    WORKLOAD: attn_reference_4cluster
     DEV_APP: snax-bingo-offload
   # host_only / single_chip: ci_ara
   - HOST_APP_TYPE: host_only
