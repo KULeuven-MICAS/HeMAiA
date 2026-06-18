@@ -9,11 +9,11 @@ runs:
     CHIP_TYPE: single_chip
     WORKLOAD: clk_rst_configurator
     DEV_APP: None
-  # offload_legacy / single_chip: snax-xdma-hazard
+  # offload_legacy / single_chip: snax-xdma-copy
   - HOST_APP_TYPE: offload_legacy
     CHIP_TYPE: single_chip
     WORKLOAD: None
-    DEV_APP: snax-xdma-hazard
+    DEV_APP: snax-xdma-copy
   # offload_legacy / single_chip: snax-versacore-matmul-profile
   - HOST_APP_TYPE: offload_legacy
     CHIP_TYPE: single_chip
