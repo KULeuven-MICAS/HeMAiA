@@ -5,6 +5,13 @@
 
 static uintptr_t base_address;
 
+#if __riscv_xlen == 64
+#define UART_STRING_PTR(addr) \
+    ((const char *)(uintptr_t)chiplet_addr_transform((uint64_t)(uintptr_t)(addr)))
+#else
+#define UART_STRING_PTR(addr) (addr)
+#endif
+
 static inline int out_ch(char c) {
     print_char(base_address, c);
     return 0;
@@ -216,6 +223,7 @@ int vprintf(const char *fmt, va_list ap) {
             case 's': {
                 const char *s = va_arg(ap, const char *);
                 if (!s) s = "(null)";
+                s = UART_STRING_PTR(s);
                 int len = 0;
                 while (s[len]) len++;
                 // Width & padding
