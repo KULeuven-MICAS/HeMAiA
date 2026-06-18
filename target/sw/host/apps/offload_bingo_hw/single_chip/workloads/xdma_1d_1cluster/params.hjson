@@ -1,0 +1,5 @@
+{
+    num_clusters: 1
+    // Total bytes for the 1D copy (must be a multiple of 64, the xDMA bus width).
+    size: 4096
+}

@@ -360,6 +360,11 @@ static inline bingo_hw_manager_task_desc_t bingo_hw_build_conditional_task(
 ///// API      /////
 ////////////////////
 
+// Fatal exit: terminate the simulation with a non-zero exit code, never returns.
+// Implemented in start.S; used to fail fast (rather than spin) on unrecoverable
+// runtime errors such as a heap out-of-memory.
+__attribute__((noreturn)) void host_abort(uint64_t exit_code);
+
 // Allocator init (L2 and L3)
 int bingo_hemaia_system_mmap_init();
 

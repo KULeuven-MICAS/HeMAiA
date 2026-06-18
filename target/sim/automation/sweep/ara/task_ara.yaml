@@ -1,0 +1,106 @@
+# Ara FP32 RVV op-cost sweep — one task per host kernel (decomposed test_ara).
+# Run with: python3 run_ara_sweep.py -j <N>   (then python3 gather_ara_luts.py)
+# Each ara_<kernel> app times its single kernel across N = 64/256/1024/4096 and
+# prints CYCLES,<kernel>,<N>,<rep>,<cycles>; gather_ara_luts.py turns those UART
+# lines into a per-kernel cycle LUT. All host_only / single_chip (CVA6+Ara).
+runs:
+  # Binary elementwise
+  - HOST_APP_TYPE: host_only
+    CHIP_TYPE: single_chip
+    WORKLOAD: ara_add
+    DEV_APP: None
+  - HOST_APP_TYPE: host_only
+    CHIP_TYPE: single_chip
+    WORKLOAD: ara_sub
+    DEV_APP: None
+  - HOST_APP_TYPE: host_only
+    CHIP_TYPE: single_chip
+    WORKLOAD: ara_mul
+    DEV_APP: None
+  - HOST_APP_TYPE: host_only
+    CHIP_TYPE: single_chip
+    WORKLOAD: ara_div
+    DEV_APP: None
+  - HOST_APP_TYPE: host_only
+    CHIP_TYPE: single_chip
+    WORKLOAD: ara_max
+    DEV_APP: None
+  - HOST_APP_TYPE: host_only
+    CHIP_TYPE: single_chip
+    WORKLOAD: ara_min
+    DEV_APP: None
+  - HOST_APP_TYPE: host_only
+    CHIP_TYPE: single_chip
+    WORKLOAD: ara_silu_mul
+    DEV_APP: None
+  # Unary elementwise
+  - HOST_APP_TYPE: host_only
+    CHIP_TYPE: single_chip
+    WORKLOAD: ara_exp
+    DEV_APP: None
+  - HOST_APP_TYPE: host_only
+    CHIP_TYPE: single_chip
+    WORKLOAD: ara_sigmoid
+    DEV_APP: None
+  - HOST_APP_TYPE: host_only
+    CHIP_TYPE: single_chip
+    WORKLOAD: ara_sqrt
+    DEV_APP: None
+  - HOST_APP_TYPE: host_only
+    CHIP_TYPE: single_chip
+    WORKLOAD: ara_relu
+    DEV_APP: None
+  - HOST_APP_TYPE: host_only
+    CHIP_TYPE: single_chip
+    WORKLOAD: ara_neg
+    DEV_APP: None
+  - HOST_APP_TYPE: host_only
+    CHIP_TYPE: single_chip
+    WORKLOAD: ara_abs
+    DEV_APP: None
+  - HOST_APP_TYPE: host_only
+    CHIP_TYPE: single_chip
+    WORKLOAD: ara_tanh
+    DEV_APP: None
+  - HOST_APP_TYPE: host_only
+    CHIP_TYPE: single_chip
+    WORKLOAD: ara_reciprocal
+    DEV_APP: None
+  - HOST_APP_TYPE: host_only
+    CHIP_TYPE: single_chip
+    WORKLOAD: ara_silu
+    DEV_APP: None
+  - HOST_APP_TYPE: host_only
+    CHIP_TYPE: single_chip
+    WORKLOAD: ara_gelu
+    DEV_APP: None
+  # Reductions
+  - HOST_APP_TYPE: host_only
+    CHIP_TYPE: single_chip
+    WORKLOAD: ara_reduce_sum
+    DEV_APP: None
+  - HOST_APP_TYPE: host_only
+    CHIP_TYPE: single_chip
+    WORKLOAD: ara_reduce_max
+    DEV_APP: None
+  - HOST_APP_TYPE: host_only
+    CHIP_TYPE: single_chip
+    WORKLOAD: ara_reduce_mean
+    DEV_APP: None
+  # Data conversion + compound
+  - HOST_APP_TYPE: host_only
+    CHIP_TYPE: single_chip
+    WORKLOAD: ara_quantize
+    DEV_APP: None
+  - HOST_APP_TYPE: host_only
+    CHIP_TYPE: single_chip
+    WORKLOAD: ara_dequantize
+    DEV_APP: None
+  - HOST_APP_TYPE: host_only
+    CHIP_TYPE: single_chip
+    WORKLOAD: ara_softmax
+    DEV_APP: None
+  - HOST_APP_TYPE: host_only
+    CHIP_TYPE: single_chip
+    WORKLOAD: ara_rmsnorm
+    DEV_APP: None

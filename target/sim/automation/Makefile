@@ -1,21 +1,21 @@
-.PHONY: all automated-xdma-maxpool automated-xdma-multicast automated-xdma-transpose automated-xdma-reshape local-ci
+.PHONY: local-ci git-ci sweep-xdma sweep-ara
 
-# Number of simulations to run in parallel for local-ci (override: make local-ci JOBS=4)
+# Number of simulations to run in parallel (override: make local-ci JOBS=4)
 JOBS ?= 16
 
-all: automated-xdma-maxpool automated-xdma-multicast automated-xdma-transpose automated-xdma-reshape
-
-automated-xdma-maxpool:
-	cd automated-xdma-maxpool && python3 start.py
-
-automated-xdma-multicast:
-	cd automated-xdma-multicast && python3 start.py
-
-automated-xdma-transpose:
-	cd automated-xdma-transpose && python3 start.py
-
-automated-xdma-reshape:
-	cd automated-xdma-reshape && python3 start.py
-
+# Local CI: Questasim/VCS regression, run on a host with the EDA tools.
 local-ci:
-	cd ci && python3 start_vsim.py -j $(JOBS)
+	cd ci/local_ci && python3 run_local_ci.py -j $(JOBS)
+
+# Git CI: Verilator regression. Normally run by GitHub Actions; run it manually
+# only from *inside* the hemaia container with the HW/sim already built.
+git-ci:
+	cd ci/git_ci && python3 run_git_ci.py -j $(JOBS)
+
+# xDMA op-cost LUT sweep.
+sweep-xdma:
+	cd sweep/xdma && python3 run_xdma_sweep.py -j $(JOBS)
+
+# Ara FP32 op-cost sweep (decomposed per-kernel apps).
+sweep-ara:
+	cd sweep/ara && python3 run_ara_sweep.py -j $(JOBS)

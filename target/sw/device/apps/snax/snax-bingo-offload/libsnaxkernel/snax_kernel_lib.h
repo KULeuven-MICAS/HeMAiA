@@ -70,6 +70,8 @@ SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_concat_2d),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_pad_2d),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_gather_2d),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_elementwise_add),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_elementwise_add_ab),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_d_to_row_major),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_row_major_to_a),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_row_major_to_b),

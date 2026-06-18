@@ -8,8 +8,8 @@
 // by the bingo framework to CVA6+Ara.  Uses a small vector length
 // (OP_TEST_LEN=32) so the RTL simulation finishes quickly.
 //
-// Paired workload: test_ara (same kernels, but with a long-running
-// multi-size timing sweep used for RTL cycle-count characterization).
+// Paired sweep: the ara_<kernel> apps (same kernels, but each runs a
+// per-kernel multi-size timing sweep for RTL cycle-count characterization).
 //
 // Kernels tested:
 //   - Binary elementwise: ADD/SUB/MUL/DIV/MAX/MIN

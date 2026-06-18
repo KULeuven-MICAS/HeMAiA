@@ -42,6 +42,30 @@ _exit:
     addi        sp, sp, 16
     ret
 
+# void host_abort(uint64_t exit_code) -- C-callable fatal exit.
+# Mirrors _exit's termination stores (fesvr tohost + hemaia return pointer) but
+# spins afterwards instead of returning, so it is safe to call from any depth in
+# the call stack (e.g. an out-of-memory allocator failure). Never returns.
+.globl host_abort
+host_abort:
+    slli        a0, a0, 1
+    ori         a0, a0, 1   # (exit code << 1) | 1
+
+    # Return exit code to host to terminate fesvr simulation
+    la          t0, tohost
+    sw          a0, 0(t0)
+
+    # Return exit code to host to terminate hemaia simulation
+    csrr        t0, 0xf15
+    slli        t0, t0, 40
+    la          t1, __return_pointer$
+    or          t0, t1, t0
+    sw          a0, 0(t0)
+    fence.i
+
+1:  wfi
+    j           1b
+
 # HTIF sections
 .pushsection .htif,"aw",@progbits;
 .align 6; .global tohost; tohost: .dword 0;

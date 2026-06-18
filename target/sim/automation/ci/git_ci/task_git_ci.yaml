@@ -1,0 +1,22 @@
+runs:
+  # offload_legacy / single_chip: snax-test-integration
+  - HOST_APP_TYPE: offload_legacy
+    CHIP_TYPE: single_chip
+    WORKLOAD: None
+    DEV_APP: snax-test-integration
+  # host_only / single_chip: clk_rst_configurator
+  - HOST_APP_TYPE: host_only
+    CHIP_TYPE: single_chip
+    WORKLOAD: clk_rst_configurator
+    DEV_APP: None
+  # offload_legacy / single_chip: snax-xdma-hazard
+  - HOST_APP_TYPE: offload_legacy
+    CHIP_TYPE: single_chip
+    WORKLOAD: None
+    DEV_APP: snax-xdma-hazard
+  # offload_legacy / single_chip: snax-versacore-matmul-profile
+  - HOST_APP_TYPE: offload_legacy
+    CHIP_TYPE: single_chip
+    WORKLOAD: None
+    DEV_APP: snax-versacore-matmul-profile
+
