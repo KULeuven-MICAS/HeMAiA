@@ -68,8 +68,9 @@ ENV PATH="/opt/riscv/bin:${PATH}"
 #-------------------------------------------------------------------------------
 # Stage 4: Verilator
 #-------------------------------------------------------------------------------
+# Update the Verilator verison from 5.024 to 5.048
 # Follow the https://verilator.org/guide/latest/install.html
-ARG VERILATOR_VERSION=5.024
+ARG VERILATOR_VERSION=5.048
 RUN apt-get install -y git help2man perl python3 make autoconf g++ flex bison ccache \
     libgoogle-perftools-dev numactl perl-doc \
     libfl2 \
