@@ -9,28 +9,14 @@ runs:
     CHIP_TYPE: single_chip
     WORKLOAD: clk_rst_configurator
     DEV_APP: None
-  # offload_legacy / single_chip: snax-xdma-copy
-  - HOST_APP_TYPE: offload_legacy
-    CHIP_TYPE: single_chip
-    WORKLOAD: None
-    DEV_APP: snax-xdma-copy
   # offload_legacy / single_chip: snax-xdma-hazard
   - HOST_APP_TYPE: offload_legacy
     CHIP_TYPE: single_chip
     WORKLOAD: None
     DEV_APP: snax-xdma-hazard
-  # offload_bingo_sw / single_chip: dummy_1cluster
-  - HOST_APP_TYPE: offload_bingo_sw
+  # offload_legacy / single_chip: snax-versacore-matmul-profile
+  - HOST_APP_TYPE: offload_legacy
     CHIP_TYPE: single_chip
-    WORKLOAD: dummy_1cluster
-    DEV_APP: snax-bingo-offload
-  # offload_bingo_hw / single_chip: attn_reference_4cluster
-  - HOST_APP_TYPE: offload_bingo_hw
-    CHIP_TYPE: single_chip
-    WORKLOAD: attn_reference_4cluster
-    DEV_APP: snax-bingo-offload
-  # host_only / single_chip: ci_ara
-  - HOST_APP_TYPE: host_only
-    CHIP_TYPE: single_chip
-    WORKLOAD: ci_ara
-    DEV_APP: None
+    WORKLOAD: None
+    DEV_APP: snax-versacore-matmul-profile
+
