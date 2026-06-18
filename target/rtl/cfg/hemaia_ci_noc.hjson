@@ -75,7 +75,7 @@
         en_floonoc: true,
         routing_algo: "XY",
         noc_name: "quad_mesh_xy",
-        noc_array: [2, 2]
+        noc_array: [1, 2]
       },
       // number of pending transactions on the narrow/wide network
       narrow_trans: 32,
