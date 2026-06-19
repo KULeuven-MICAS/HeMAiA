@@ -16,6 +16,7 @@ exp approximation, so the C-side checks apply a loose tolerance for exp-based op
 """
 import math
 import random
+import struct
 import sys
 
 SEED = 42
@@ -83,8 +84,22 @@ def _quantize(xs):  # scale = max|x|/127 (min 1e-10); q = clamp(round(x/scale), 
     return scale, q
 
 
-def _dequantize(xs):  # mirrors main.c: int32_src[i] = (int32)(a[i]*100); out = src*0.01
-    return [float(int(x * 100.0)) * 0.01 for x in xs]
+def _f32(x):  # round a Python float to its IEEE-754 binary32 value
+    return struct.unpack("f", struct.pack("f", x))[0]
+
+
+def _dequantize(xs):  # mirrors main.c EXACTLY in fp32: int32_src[i] = (int32_t)(op_a_big[i]*100.0f); out = src*0.01f
+    # The kernel and test operate on the *emitted* fp32 value of op_a_big (a %.6f
+    # literal) and do every step in fp32. Computing the golden in fp64 diverges
+    # from the kernel at quantization boundaries (e.g. 0.57*100 = 56.9999.. in
+    # fp64 -> trunc 56, but = 57.0 in fp32 -> trunc 57), a 0.01 jump that fails
+    # the tight tolerance. Replicate the fp32 path so the golden bit-matches.
+    out = []
+    for x in xs:
+        a32 = _f32(float(f"{x:.6f}"))          # == op_a_big[i] at runtime
+        q = int(_f32(a32 * _f32(100.0)))       # (int32_t)(op_a_big[i]*100.0f), trunc toward zero
+        out.append(_f32(_f32(float(q)) * _f32(0.01)))  # vfcvt.f.x.v then *0.01f
+    return out
 
 
 # ---------------------------------------------------------------------------

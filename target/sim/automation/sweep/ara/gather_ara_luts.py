@@ -35,15 +35,17 @@ _ARA_DIR = _THIS
 _DEFAULT_OUT = os.path.join(_ARA_DIR, "ara_cycles.csv")
 
 # kernel name (as printed in the CYCLES line) -> bingo op_node fn name.
-# All but dequantize are __host_bingo_kernel_fp32_<name>.
+# All but quantize/dequantize are __host_bingo_kernel_<name>_f32 (the conversions
+# carry an in->out suffix: quantize_f32i8, dequantize_i32f32).
 _FP32 = [
     "add", "sub", "mul", "div", "max", "min", "silu_mul",
     "exp", "sigmoid", "sqrt", "relu", "neg", "abs", "tanh", "reciprocal",
     "silu", "gelu", "reduce_sum", "reduce_max", "reduce_mean",
-    "quantize", "softmax", "rmsnorm",
+    "softmax", "rmsnorm",
 ]
-OP_SPEC = {k: f"__host_bingo_kernel_fp32_{k}" for k in _FP32}
-OP_SPEC["dequantize"] = "__host_bingo_kernel_int32_dequantize"
+OP_SPEC = {k: f"__host_bingo_kernel_{k}_f32" for k in _FP32}
+OP_SPEC["quantize"] = "__host_bingo_kernel_quantize_f32i8"
+OP_SPEC["dequantize"] = "__host_bingo_kernel_dequantize_i32f32"
 
 _CYCLES_RE = re.compile(r"CYCLES,([^,]+),([^,]+),(\d+),(\d+),(\d+)")
 

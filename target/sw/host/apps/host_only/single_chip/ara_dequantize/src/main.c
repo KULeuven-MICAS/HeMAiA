@@ -56,7 +56,7 @@ int main() {
             t_args[3] = N;
             t_args[4] = (uint64_t)(uintptr_t)&timing_scratchpad;
             c0 = ara_get_cycle_count();
-            __host_bingo_kernel_int32_dequantize(t_args);
+            __host_bingo_kernel_dequantize_i32f32(t_args);
             c1 = ara_get_cycle_count();
             printf("CYCLES,dequantize,%lu,%d,%lu\r\n", N, rep, c1 - c0);
 

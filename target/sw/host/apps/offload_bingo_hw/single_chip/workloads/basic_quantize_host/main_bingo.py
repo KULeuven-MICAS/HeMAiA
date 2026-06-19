@@ -4,7 +4,7 @@ Attention test: FP32 quantize kernel in isolation.
 
 DFG: Quantize_X (Host,c0) -> Check_int8_X (Host,c0)
 
-Tests __host_bingo_kernel_fp32_quantize by quantizing a FP32 input
+Tests __host_bingo_kernel_quantize_f32i8 by quantizing a FP32 input
 and checking the INT8 output against a golden reference.
 """
 
@@ -30,7 +30,7 @@ from bingo_node import BingoNode  # noqa E402
 from bingo_mem_handle import BingoMemAlloc, BingoMemSymbol  # noqa E402
 from bingo_kernel_args import (  # noqa E402
     HostBingoKernelCheckResultArgs,
-    HostBingoKernelFp32QuantizeArgs,
+    HostBingoKernelQuantizeF32I8Args,
 )
 
 
@@ -98,8 +98,8 @@ def main():
     node_quantize = BingoNode(
         assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=HOST_CORE,
         node_name="Quantize_X",
-        kernel_name="__host_bingo_kernel_fp32_quantize",
-        kernel_args=HostBingoKernelFp32QuantizeArgs(
+        kernel_name="__host_bingo_kernel_quantize_f32i8",
+        kernel_args=HostBingoKernelQuantizeF32I8Args(
             input_addr=sym_fp32_X,
             output_addr=int8_X_buf,
             scale_out_addr=scale_X_buf,

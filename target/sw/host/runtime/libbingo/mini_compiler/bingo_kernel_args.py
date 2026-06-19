@@ -10,6 +10,10 @@ class BingoKernelArgs(ABC):
     Subclasses define the specific arguments for each kernel type and how they map to C structs.
     """
 
+    # Optional: the C dispatcher this args struct pairs with. When set on a
+    # subclass, BingoNode infers `kernel_name` from the args if none is given.
+    KERNEL_NAME: Optional[str] = None
+
     # Internal: set by the compiler during C emission, not by users.
     _scratchpad_c_expr: str = None    # C expr for this kernel's scratchpad pointer
     _gating_sp_c_expr: str = None     # C expr for gating kernel's scratchpad (SW guard)
@@ -1008,8 +1012,9 @@ class HostBingoKernelIdmaArgs(BingoKernelArgs):
         return assignments
 
 
-# HOST BINGO FP32 Quantize (FP32 -> INT8)
-class HostBingoKernelFp32QuantizeArgs(BingoKernelArgs):
+# HOST BINGO FP32 Quantize (FP32 -> INT8) -- unified ara_convert struct
+class HostBingoKernelQuantizeF32I8Args(BingoKernelArgs):
+    KERNEL_NAME = "__host_bingo_kernel_quantize_f32i8"
     def __init__(self,
                  input_addr: Union[BingoMemAlloc, BingoMemSymbol, int],
                  output_addr: Union[BingoMemAlloc, BingoMemSymbol, int],
@@ -1021,19 +1026,21 @@ class HostBingoKernelFp32QuantizeArgs(BingoKernelArgs):
         self.num_elements = num_elements
 
     def get_struct_name(self) -> str:
-        return "__host_bingo_kernel_fp32_quantize_args_t"
+        return "__host_bingo_kernel_ara_convert_args_t"
 
     def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
         assignments = {}
         self._process_addr(self.input_addr, "input_addr", assignments, handle_name_map, split_64bit=False, as_64bit=True)
         self._process_addr(self.output_addr, "output_addr", assignments, handle_name_map, split_64bit=False, as_64bit=True)
-        self._process_addr(self.scale_out_addr, "scale_out_addr", assignments, handle_name_map, split_64bit=False, as_64bit=True)
+        self._process_addr(self.scale_out_addr, "scale_addr", assignments, handle_name_map, split_64bit=False, as_64bit=True)
         assignments["num_elements"] = str(self.num_elements)
+        assignments["precision"] = "0"  # BINGO_PREC_FP32 (no-op for the conversion)
         return assignments
 
 
-# HOST BINGO INT32 Dequantize (INT32 -> FP32)
-class HostBingoKernelInt32DequantizeArgs(BingoKernelArgs):
+# HOST BINGO INT32 Dequantize (INT32 -> FP32) -- unified ara_convert struct
+class HostBingoKernelDequantizeI32F32Args(BingoKernelArgs):
+    KERNEL_NAME = "__host_bingo_kernel_dequantize_i32f32"
     def __init__(self,
                  input_addr: Union[BingoMemAlloc, BingoMemSymbol, int],
                  output_addr: Union[BingoMemAlloc, BingoMemSymbol, int],
@@ -1045,7 +1052,7 @@ class HostBingoKernelInt32DequantizeArgs(BingoKernelArgs):
         self.num_elements = num_elements
 
     def get_struct_name(self) -> str:
-        return "__host_bingo_kernel_int32_dequantize_args_t"
+        return "__host_bingo_kernel_ara_convert_args_t"
 
     def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
         assignments = {}
@@ -1053,12 +1060,14 @@ class HostBingoKernelInt32DequantizeArgs(BingoKernelArgs):
         self._process_addr(self.output_addr, "output_addr", assignments, handle_name_map, split_64bit=False, as_64bit=True)
         self._process_addr(self.scale_addr, "scale_addr", assignments, handle_name_map, split_64bit=False, as_64bit=True)
         assignments["num_elements"] = str(self.num_elements)
+        assignments["precision"] = "0"  # BINGO_PREC_FP32 (no-op for the conversion)
         return assignments
 
 
-# HOST BINGO INT32 elementwise add
+# HOST BINGO INT32 elementwise add -- unified ara_binary struct
 # For inter-cluster partial-D accumulation in K-split GEMM schemes.
-class HostBingoKernelInt32AddArgs(BingoKernelArgs):
+class HostBingoKernelAddI32Args(BingoKernelArgs):
+    KERNEL_NAME = "__host_bingo_kernel_add_i32"
     def __init__(self,
                  input_a_addr: Union[BingoMemAlloc, BingoMemSymbol, int],
                  input_b_addr: Union[BingoMemAlloc, BingoMemSymbol, int],
@@ -1070,7 +1079,7 @@ class HostBingoKernelInt32AddArgs(BingoKernelArgs):
         self.num_elements = num_elements
 
     def get_struct_name(self) -> str:
-        return "__host_bingo_kernel_int32_add_args_t"
+        return "__host_bingo_kernel_ara_binary_args_t"
 
     def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
         a = {}
@@ -1078,11 +1087,14 @@ class HostBingoKernelInt32AddArgs(BingoKernelArgs):
         self._process_addr(self.input_b_addr, "input_b_addr", a, handle_name_map, split_64bit=False, as_64bit=True)
         self._process_addr(self.output_addr, "output_addr", a, handle_name_map, split_64bit=False, as_64bit=True)
         a["num_elements"] = str(self.num_elements)
+        a["precision"] = "0"  # BINGO_PREC_FP32 slot (no-op; add_i32 is int32)
         return a
 
 
-# HOST BINGO FP32 Softmax (row-wise along last dim, Ara RVV)
-class HostBingoKernelFp32SoftmaxArgs(BingoKernelArgs):
+# HOST BINGO FP32 Softmax (row-wise along last dim, Ara RVV) -- unified ara_softmax
+# struct via the multi-precision softmax dispatcher (precision=FP32 -> softmax_f32).
+class HostBingoKernelSoftmaxF32Args(BingoKernelArgs):
+    KERNEL_NAME = "__host_bingo_kernel_softmax"
     def __init__(self,
                  input_addr: Union[BingoMemAlloc, BingoMemSymbol, int],
                  output_addr: Union[BingoMemAlloc, BingoMemSymbol, int],
@@ -1094,7 +1106,7 @@ class HostBingoKernelFp32SoftmaxArgs(BingoKernelArgs):
         self.row_length = row_length
 
     def get_struct_name(self) -> str:
-        return "__host_bingo_kernel_fp32_softmax_args_t"
+        return "__host_bingo_kernel_ara_softmax_args_t"
 
     def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
         assignments = {}
@@ -1102,7 +1114,151 @@ class HostBingoKernelFp32SoftmaxArgs(BingoKernelArgs):
         self._process_addr(self.output_addr, "output_addr", assignments, handle_name_map, split_64bit=False, as_64bit=True)
         assignments["num_rows"] = str(self.num_rows)
         assignments["row_length"] = str(self.row_length)
+        assignments["precision"] = "0"  # BINGO_PREC_FP32 -> dispatcher delegates to softmax_f32
         return assignments
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Multi-precision Ara kernel args (runtime-typed __host_bingo_kernel_<op>
+# dispatchers in host_kernel_lib.h). One thin class per op (1:1) over four
+# shared C structs (by shape). `precision` is a BINGO_PREC_* word; for FP32 the
+# dispatcher delegates to the matching <op>_f32 kernel. Each class carries
+# KERNEL_NAME, so a node may omit kernel_name (BingoNode infers it from args).
+# Pair example: BingoNode(..., kernel_args=HostBingoKernelAraExpArgs(in, out, n,
+# precision=BINGO_PREC_FP16))  ->  kernel_name auto-set to __host_bingo_kernel_exp.
+# ══════════════════════════════════════════════════════════════════════
+BINGO_PREC_FP32  = 0
+BINGO_PREC_FP16  = 1
+BINGO_PREC_INT8  = 2
+BINGO_PREC_INT16 = 3
+
+_Addr = Union[BingoMemAlloc, BingoMemSymbol, int]
+
+
+class _HostBingoKernelAraBinaryArgs(BingoKernelArgs):
+    """Shared shape: {input_a, input_b, output, num_elements, precision}."""
+    def __init__(self, input_a_addr: _Addr, input_b_addr: _Addr, output_addr: _Addr,
+                 num_elements: int, precision: int = BINGO_PREC_FP32):
+        self.input_a_addr = input_a_addr
+        self.input_b_addr = input_b_addr
+        self.output_addr = output_addr
+        self.num_elements = num_elements
+        self.precision = precision
+
+    def get_struct_name(self) -> str:
+        return "__host_bingo_kernel_ara_binary_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.input_a_addr, "input_a_addr", a, handle_name_map, split_64bit=False, as_64bit=True)
+        self._process_addr(self.input_b_addr, "input_b_addr", a, handle_name_map, split_64bit=False, as_64bit=True)
+        self._process_addr(self.output_addr,  "output_addr",  a, handle_name_map, split_64bit=False, as_64bit=True)
+        a["num_elements"] = str(self.num_elements)
+        a["precision"] = str(self.precision)
+        return a
+
+
+class HostBingoKernelAraAddArgs(_HostBingoKernelAraBinaryArgs): KERNEL_NAME = "__host_bingo_kernel_add"
+class HostBingoKernelAraSubArgs(_HostBingoKernelAraBinaryArgs): KERNEL_NAME = "__host_bingo_kernel_sub"
+class HostBingoKernelAraMulArgs(_HostBingoKernelAraBinaryArgs): KERNEL_NAME = "__host_bingo_kernel_mul"
+class HostBingoKernelAraDivArgs(_HostBingoKernelAraBinaryArgs): KERNEL_NAME = "__host_bingo_kernel_div"
+class HostBingoKernelAraMaxArgs(_HostBingoKernelAraBinaryArgs): KERNEL_NAME = "__host_bingo_kernel_max"
+class HostBingoKernelAraMinArgs(_HostBingoKernelAraBinaryArgs): KERNEL_NAME = "__host_bingo_kernel_min"
+
+
+class HostBingoKernelAraSiluMulArgs(_HostBingoKernelAraBinaryArgs):
+    """silu_mul: out = silu(gate) * up (gate->input_a, up->input_b)."""
+    KERNEL_NAME = "__host_bingo_kernel_silu_mul"
+    def __init__(self, gate_addr: _Addr, up_addr: _Addr, output_addr: _Addr,
+                 num_elements: int, precision: int = BINGO_PREC_FP32):
+        super().__init__(gate_addr, up_addr, output_addr, num_elements, precision)
+
+
+class _HostBingoKernelAraUnaryArgs(BingoKernelArgs):
+    """Shared shape: {input, output, num_elements, precision} (elementwise + reduce)."""
+    def __init__(self, input_addr: _Addr, output_addr: _Addr,
+                 num_elements: int, precision: int = BINGO_PREC_FP32):
+        self.input_addr = input_addr
+        self.output_addr = output_addr
+        self.num_elements = num_elements
+        self.precision = precision
+
+    def get_struct_name(self) -> str:
+        return "__host_bingo_kernel_ara_unary_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.input_addr,  "input_addr",  a, handle_name_map, split_64bit=False, as_64bit=True)
+        self._process_addr(self.output_addr, "output_addr", a, handle_name_map, split_64bit=False, as_64bit=True)
+        a["num_elements"] = str(self.num_elements)
+        a["precision"] = str(self.precision)
+        return a
+
+
+class HostBingoKernelAraReluArgs(_HostBingoKernelAraUnaryArgs):       KERNEL_NAME = "__host_bingo_kernel_relu"
+class HostBingoKernelAraNegArgs(_HostBingoKernelAraUnaryArgs):        KERNEL_NAME = "__host_bingo_kernel_neg"
+class HostBingoKernelAraAbsArgs(_HostBingoKernelAraUnaryArgs):        KERNEL_NAME = "__host_bingo_kernel_abs"
+class HostBingoKernelAraExpArgs(_HostBingoKernelAraUnaryArgs):        KERNEL_NAME = "__host_bingo_kernel_exp"
+class HostBingoKernelAraSigmoidArgs(_HostBingoKernelAraUnaryArgs):    KERNEL_NAME = "__host_bingo_kernel_sigmoid"
+class HostBingoKernelAraSqrtArgs(_HostBingoKernelAraUnaryArgs):       KERNEL_NAME = "__host_bingo_kernel_sqrt"
+class HostBingoKernelAraTanhArgs(_HostBingoKernelAraUnaryArgs):       KERNEL_NAME = "__host_bingo_kernel_tanh"
+class HostBingoKernelAraReciprocalArgs(_HostBingoKernelAraUnaryArgs): KERNEL_NAME = "__host_bingo_kernel_reciprocal"
+class HostBingoKernelAraSiluArgs(_HostBingoKernelAraUnaryArgs):       KERNEL_NAME = "__host_bingo_kernel_silu"
+class HostBingoKernelAraGeluArgs(_HostBingoKernelAraUnaryArgs):       KERNEL_NAME = "__host_bingo_kernel_gelu"
+# reduce ops share the unary shape (output is a scalar float/int32)
+class HostBingoKernelAraReduceSumArgs(_HostBingoKernelAraUnaryArgs):  KERNEL_NAME = "__host_bingo_kernel_reduce_sum"
+class HostBingoKernelAraReduceMaxArgs(_HostBingoKernelAraUnaryArgs):  KERNEL_NAME = "__host_bingo_kernel_reduce_max"
+class HostBingoKernelAraReduceMeanArgs(_HostBingoKernelAraUnaryArgs): KERNEL_NAME = "__host_bingo_kernel_reduce_mean"
+
+
+class HostBingoKernelAraSoftmaxArgs(BingoKernelArgs):
+    """softmax (multi-precision): {input, output, num_rows, row_length, precision}."""
+    KERNEL_NAME = "__host_bingo_kernel_softmax"
+    def __init__(self, input_addr: _Addr, output_addr: _Addr,
+                 num_rows: int, row_length: int, precision: int = BINGO_PREC_FP32):
+        self.input_addr = input_addr
+        self.output_addr = output_addr
+        self.num_rows = num_rows
+        self.row_length = row_length
+        self.precision = precision
+
+    def get_struct_name(self) -> str:
+        return "__host_bingo_kernel_ara_softmax_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.input_addr,  "input_addr",  a, handle_name_map, split_64bit=False, as_64bit=True)
+        self._process_addr(self.output_addr, "output_addr", a, handle_name_map, split_64bit=False, as_64bit=True)
+        a["num_rows"] = str(self.num_rows)
+        a["row_length"] = str(self.row_length)
+        a["precision"] = str(self.precision)
+        return a
+
+
+class HostBingoKernelAraRmsnormArgs(BingoKernelArgs):
+    """rmsnorm (multi-precision): {input, weight, output, hidden_dim, num_tokens, precision}."""
+    KERNEL_NAME = "__host_bingo_kernel_rmsnorm"
+    def __init__(self, input_addr: _Addr, weight_addr: _Addr, output_addr: _Addr,
+                 hidden_dim: int, num_tokens: int, precision: int = BINGO_PREC_FP32):
+        self.input_addr = input_addr
+        self.weight_addr = weight_addr
+        self.output_addr = output_addr
+        self.hidden_dim = hidden_dim
+        self.num_tokens = num_tokens
+        self.precision = precision
+
+    def get_struct_name(self) -> str:
+        return "__host_bingo_kernel_ara_rmsnorm_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.input_addr,  "input_addr",  a, handle_name_map, split_64bit=False, as_64bit=True)
+        self._process_addr(self.weight_addr, "weight_addr", a, handle_name_map, split_64bit=False, as_64bit=True)
+        self._process_addr(self.output_addr, "output_addr", a, handle_name_map, split_64bit=False, as_64bit=True)
+        a["hidden_dim"] = str(self.hidden_dim)
+        a["num_tokens"] = str(self.num_tokens)
+        a["precision"] = str(self.precision)
+        return a
 
 
 # ================================================================

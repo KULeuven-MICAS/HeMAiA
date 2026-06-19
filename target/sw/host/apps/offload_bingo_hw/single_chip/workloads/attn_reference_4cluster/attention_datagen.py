@@ -32,7 +32,7 @@ np.random.seed(42)
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# HW-exact softmax (mirrors __host_bingo_kernel_fp32_softmax in host_kernel_lib.h)
+# HW-exact softmax (mirrors __host_bingo_kernel_softmax_f32 in host_kernel_lib.h)
 # Uses the same Cephes polynomial exp, FMA via fp64 intermediate trick,
 # chunked ordered reduction (VLMAX=4 on Ara NrLanes=2 VLEN=128), and
 # multiplication by 1/sum (not direct division).
@@ -105,7 +105,7 @@ def bingo_exp_f32(x_val):
 
 
 def bingo_softmax_row(x_row):
-    """Mirror HW __host_bingo_kernel_fp32_softmax for a single row.
+    """Mirror HW __host_bingo_kernel_softmax_f32 for a single row.
     Chunked ordered reduction with VLMAX=4.
     """
     row_length = len(x_row)

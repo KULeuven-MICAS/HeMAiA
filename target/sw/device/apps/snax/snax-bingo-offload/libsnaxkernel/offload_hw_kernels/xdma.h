@@ -166,7 +166,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_6d(void *arg)
 // ----------------------
 // It fuses the GEMM K-split partial-sum reduction (D = D0 + D1 + ... ) into a
 // single xDMA pass, replacing the sequential host int32-add chain
-// (__host_bingo_kernel_int32_add) that walks L3<->host once per pair.
+// (__host_bingo_kernel_add_i32) that walks L3<->host once per pair.
 //
 // Two entry points
 // ----------------

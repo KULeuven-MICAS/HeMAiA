@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Golden data generator for basic_softmax_host.
-Tests __host_bingo_kernel_fp32_softmax in isolation.
+Tests __host_bingo_kernel_softmax_f32 in isolation.
 
 The HW softmax uses a Cephes polynomial approximation of exp() with FMA,
 ordered reduction via vfredosum, and multiplication by 1/sum (not direct
@@ -122,7 +122,7 @@ _VLMAX_F32 = 4
 
 
 def bingo_softmax_row(x_row):
-    """Mirror HW __host_bingo_kernel_fp32_softmax for a single row.
+    """Mirror HW __host_bingo_kernel_softmax_f32 for a single row.
 
     Ara has VLMAX=4 fp32 elements. The reduction loop chunks through
     row_length in groups of 4, doing vfredosum per chunk with init=0,

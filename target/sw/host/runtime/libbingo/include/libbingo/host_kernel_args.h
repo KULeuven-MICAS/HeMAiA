@@ -28,8 +28,8 @@ __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_entry_args {
 #define BINGO_CHECK_TYPE_FP16_TOL   2
 
 // Precision selector for the runtime-typed Ara kernels (__host_bingo_kernel_<op>
-// dispatchers in host_kernel_lib.h). Passed as a plain arg word; the legacy
-// __host_bingo_kernel_fp32_<op> entry points keep their original FP32-only
+// dispatchers in host_kernel_lib.h). Passed as a plain arg word; the typed
+// __host_bingo_kernel_<op>_f32 entry points keep their original FP32-only
 // behaviour and ignore precision.
 #define BINGO_PREC_FP32  0
 #define BINGO_PREC_FP16  1
@@ -61,45 +61,73 @@ __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_xdma_1d_copy_args {
 } __host_bingo_kernel_xdma_1d_copy_args_t;
 typedef __host_bingo_kernel_xdma_1d_copy_args_t __host_bingo_kernel_xdma_args_t;
 
-// FP32 -> INT8 per-tensor symmetric quantize
-// scale = max(|x|) / 127; q[i] = clamp(round(x[i] / scale), -128, 127)
-__HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_fp32_quantize_args {
-    uint64_t input_addr;       // float* FP32 input array
-    uint64_t output_addr;      // int8_t* INT8 output array
-    uint64_t scale_out_addr;   // float* write computed scale here
-    uint64_t num_elements;
-    uint64_t scratchpad_ptr;
-} __host_bingo_kernel_fp32_quantize_args_t;
+// NOTE: the per-kernel typed arg structs for quantize / dequantize / int32-add /
+// softmax were folded into the unified Ara shapes below. Their kernels
+// (__host_bingo_kernel_quantize_f32i8 / dequantize_i32f32 / add_i32, and the
+// softmax dispatcher) read the shared ara_convert / ara_binary / ara_softmax
+// structs — the kernels only touch the leading address/size slots, so the extra
+// trailing `precision` field is a harmless no-op for the single-precision ops.
 
-// INT32 -> FP32 dequantize (after VersaCore GEMM accumulator)
-// y[i] = int32_input[i] * combined_scale
-__HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_int32_dequantize_args {
-    uint64_t input_addr;       // int32_t* INT32 input (GEMM accumulator)
-    uint64_t output_addr;      // float* FP32 output
-    uint64_t scale_addr;       // float* read combined_scale = scale_a * scale_b
+// ==========================================================================
+// Multi-precision Ara kernel args (runtime-typed __host_bingo_kernel_<op>
+// dispatchers in host_kernel_lib.h). The `precision` field is a BINGO_PREC_*
+// word that the dispatcher reads to pick the fp32/fp16/int8/int16 path. Four
+// shapes are shared across the ops (the field order matches the arg indices
+// the dispatchers read; scratchpad_ptr stays last per the convention):
+//   ara_binary : add/sub/mul/div/max/min, silu_mul        (a, b, out, n)
+//   ara_unary  : relu/neg/abs/exp/sigmoid/sqrt/tanh/reciprocal/silu/gelu,
+//                reduce_sum/reduce_max/reduce_mean         (in, out, n)
+//   ara_softmax: softmax                                   (in, out, rows, len)
+//   ara_rmsnorm: rmsnorm                          (in, weight, out, hidden, tokens)
+//   ara_convert: quantize_f32i8 / dequantize_i32f32        (in, out, scale, n)
+// ==========================================================================
+__HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_ara_binary_args {
+    uint64_t input_a_addr;     // operand A (silu_mul: gate)
+    uint64_t input_b_addr;     // operand B (silu_mul: up)
+    uint64_t output_addr;
     uint64_t num_elements;
+    uint64_t precision;        // BINGO_PREC_*
     uint64_t scratchpad_ptr;
-} __host_bingo_kernel_int32_dequantize_args_t;
+} __host_bingo_kernel_ara_binary_args_t;
 
-// INT32 elementwise add: out[i] = a[i] + b[i]
-// Used for inter-cluster partial-D accumulation in K-split GEMM schemes.
-__HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_int32_add_args {
-    uint64_t input_a_addr;     // int32_t* operand A
-    uint64_t input_b_addr;     // int32_t* operand B
-    uint64_t output_addr;      // int32_t* output (may alias A or B for in-place)
+__HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_ara_unary_args {
+    uint64_t input_addr;
+    uint64_t output_addr;      // elementwise: array; reduce: scalar (float / int32)
     uint64_t num_elements;
+    uint64_t precision;        // BINGO_PREC_*
     uint64_t scratchpad_ptr;
-} __host_bingo_kernel_int32_add_args_t;
+} __host_bingo_kernel_ara_unary_args_t;
 
-// FP32 softmax along last dimension (Ara RVV).
-// out[r,c] = exp(in[r,c] - max(in[r,:])) / sum(exp(in[r,:] - max(in[r,:])))
-__HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_fp32_softmax_args {
-    uint64_t input_addr;       // float* FP32 input
-    uint64_t output_addr;      // float* FP32 output
-    uint64_t num_rows;         // outer dim (batch of softmaxes)
-    uint64_t row_length;       // inner dim (length of each softmax row)
+__HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_ara_softmax_args {
+    uint64_t input_addr;
+    uint64_t output_addr;
+    uint64_t num_rows;
+    uint64_t row_length;
+    uint64_t precision;        // BINGO_PREC_*
     uint64_t scratchpad_ptr;
-} __host_bingo_kernel_fp32_softmax_args_t;
+} __host_bingo_kernel_ara_softmax_args_t;
+
+__HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_ara_rmsnorm_args {
+    uint64_t input_addr;
+    uint64_t weight_addr;
+    uint64_t output_addr;
+    uint64_t hidden_dim;
+    uint64_t num_tokens;
+    uint64_t precision;        // BINGO_PREC_*
+    uint64_t scratchpad_ptr;
+} __host_bingo_kernel_ara_rmsnorm_args_t;
+
+// Conversion ops with a scale pointer (quantize: writes scale; dequantize: reads
+// scale). The kernels read only {input, output, scale, num_elements}; precision
+// is a passthrough no-op (kept for a uniform shape).
+__HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_ara_convert_args {
+    uint64_t input_addr;
+    uint64_t output_addr;
+    uint64_t scale_addr;       // quantize: write computed scale; dequantize: read scale
+    uint64_t num_elements;
+    uint64_t precision;        // BINGO_PREC_* (no-op for the conversions)
+    uint64_t scratchpad_ptr;
+} __host_bingo_kernel_ara_convert_args_t;
 
 // DARTS Tier 1: Unified CERF Gating kernel
 // Supports multiple activation modes via the `mode` field.

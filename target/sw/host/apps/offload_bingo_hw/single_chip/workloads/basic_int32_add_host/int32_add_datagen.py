@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Test workload for __host_bingo_kernel_int32_add (the new kernel used
+# Test workload for __host_bingo_kernel_add_i32 (the new kernel used
 # for inter-cluster partial-D accumulation in K-split GEMM schemes).
 #
 # Generates 4 random INT32 partial arrays (simulating cluster outputs)
