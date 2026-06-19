@@ -8,7 +8,7 @@
 // kernels. Each ara_<op>/src/main.c includes, IN THIS ORDER:
 //     #include "host.h"
 //     #include "host_kernel_lib.h"
-//     #include "op_test_data.h"   // big inputs + golden from util/sim/ara_lib.py
+//     #include "op_test_data.h"   // big inputs + golden from util/sim/ara/ara_lib.py
 //     #include "ara_sweep.h"
 // and then invokes one ARA_MAIN_* macro. The macro sweeps the op's applicable
 // precisions x sizes, calls the precision dispatcher __host_bingo_kernel_<op>

@@ -18,8 +18,8 @@ INCL_DEVICE_BINARY ?= 0
 NR_LANES ?= 2
 RISCV_CFLAGS += -DNR_LANES=$(NR_LANES)
 
-# Generated inputs + golden (shared generator lives in util/sim/ara_lib.py).
-GEN_OP_DATA = $(abspath $(MK_DIR)../../../../../../../util/sim/ara_lib.py)
+# Generated inputs + golden (shared generator lives in util/sim/ara/ara_lib.py).
+GEN_OP_DATA = $(abspath $(MK_DIR)../../../../../../../util/sim/ara/ara_lib.py)
 OP_DATA_H = $(MK_DIR)/include/op_test_data.h
 $(OP_DATA_H): $(GEN_OP_DATA)
 	@mkdir -p $(@D)

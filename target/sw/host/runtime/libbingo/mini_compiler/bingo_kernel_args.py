@@ -694,7 +694,7 @@ class SnaxBingoKernelXdmaElementwiseAddAbArgs(BingoKernelArgs):
 # Six primitive conversions between row-major and the three VersaCore
 # blocked layouts {A, B, D}. All kernels take tile dimensions (M_T, K_T,
 # N_T) and array-shape dims (meshRow, tileSize, meshCol) so they work
-# for any DSE-chosen tiling. See HeMAiA/util/sim/layout_convert.py for
+# for any DSE-chosen tiling. See HeMAiA/util/sim/xdma/layout_convert.py for
 # the Python reference.
 # ══════════════════════════════════════════════════════════════════════
 

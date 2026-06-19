@@ -13,7 +13,7 @@ The "host-only" category refers to applications where `INCL_DEVICE_BINARY` is se
 ### Single-chip applications
 - **hello_world**: Simple print verification of the host runtime.
 - **clk_rst_configurator**: Low-level configuration of the clock and reset controller.
-- **ara_\<kernel\>** (ara_add, ara_exp, ara_softmax, ...): Per-kernel cycle-count characterization for the FP32 RVV host kernels. Decomposed from the old monolithic `test_ara`; each is a self-contained app (its own `src/main.c`) that times one kernel and generates its test data via the shared `util/sim/ara_lib.py`. Driven as a sweep by `target/sim/automation/sweep/ara/`.
+- **ara_\<kernel\>** (ara_add, ara_exp, ara_softmax, ...): Per-kernel cycle-count characterization for the FP32 RVV host kernels. Decomposed from the old monolithic `test_ara`; each is a self-contained app (its own `src/main.c`) that times one kernel and generates its test data via the shared `util/sim/ara/ara_lib.py`. Driven as a sweep by `target/sim/automation/sweep/ara/`.
 - **ci_ara**: Fast CI regression checking correctness of all FP32 RVV host kernels dispatched to CVA6+Ara.
 - **test_bingo_alloc**: Test suite for the `bingo_alloc` allocator.
 

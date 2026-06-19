@@ -438,7 +438,7 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_elementwise_add_ab_args {
 //     D_stored[m, n, r, c] = R_logical[m*meshRow + r, n*meshCol + c]
 //
 // The Python reference implementation lives at
-// HeMAiA/util/sim/layout_convert.py — kernels must produce byte-identical
+// HeMAiA/util/sim/xdma/layout_convert.py — kernels must produce byte-identical
 // output to the reference functions.
 // ──────────────────────────────────────────────────────────────────────
 

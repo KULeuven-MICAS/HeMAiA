@@ -8,8 +8,18 @@
 
 import os
 import random
+import sys
 
 import numpy as np
+
+# Grouped util/sim layout: this module lives in util/sim/gemm/; its (lazy)
+# `from data_utils import ...` / `from sim_golden_models import ...` need the
+# sibling common/ dir on sys.path. Add common/ + the other engine subdirs.
+_USIM = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # util/sim
+for _sub in ("common", "gemm", "xdma", "ara"):
+    _p = os.path.join(_USIM, _sub)
+    if _p not in sys.path:
+        sys.path.append(_p)
 
 
 def _get_acc_cfg(cfg):

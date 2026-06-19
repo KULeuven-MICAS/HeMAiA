@@ -7,44 +7,62 @@
 #
 # Gather per-(precision, shape) VersaCore GEMM cycle measurements into a CSV.
 #
-# Unlike the Ara sweep (which prints CYCLES over UART), the device GEMM kernel
-# carries no UART timing -- it brackets its compute with the magic-NOP markers
-# BINGO_TRACE_GEMM_FULL_RUN_START/END (perf_tracing.h, enabled by default via
-# -DBINGO_PERF_TRACING).  run_gemm_sweep.py runs ONE sim per config and stages
-# that run's instruction traces + the config into gemm/task_<idx>/.  For each
-# task this script (mirroring gather_xdma_luts.py):
+# After run_gemm_sweep.py finishes, each gemm_psweep_<prec>_1cluster task has run
+# in its own gemm/task_<idx>/bin/ dir. The device GEMM kernels carry no UART
+# timing -- they bracket compute with the magic-NOP markers
+# BINGO_TRACE_GEMM_FULL_RUN_START/END (perf_tracing.h, on by default). Each task
+# sweeps the shared (M,K,N,array_shape) grid in one sim, emitting one
+# GEMM_FULL_RUN event per config (in CONFIGS order). For every task this script
+# (mirroring gather_xdma_luts.py):
 #   1. converts the cluster-core traces (.dasm -> .txt via spike-dasm |
 #      util/trace/gen_trace.py --permissive),
 #   2. runs util/bingo_trace/bingo_trace.py to emit bingo_trace.json,
-#   3. reads the GEMM_FULL_RUN dur_cc (one compute per config; summed if >1),
-#   4. pairs it with task_<idx>/config.json (the precision suite + M/K/N/shape),
+#   3. reads the ordered GEMM_FULL_RUN dur_cc values,
+#   4. pairs the Nth value with the workload's configs.json[N] = (M,K,N,shape)
+#      and the precision (from configs.json),
 #   5. writes one CSV: op_name,op_node,prec,array_shape,M,K,N,cycles.
 #
-# The `prec` column is the GEMM_PRECISIONS suite name (base_int8/int4_b/int4_ab/
-# quantized/int4_b_int32_to_fp16) -- the same precision axis the Ara LUT carries,
-# so the co-design / curve-fitting step can pair the two engines.
+# The `prec` column is the GEMM precision (i8i8_i32 / i8i4_i32 / i4i4_i32 /
+# i8i8_i8 / i8i4_f16) -- the axis the co-design / curve-fitting step pairs with
+# the Ara LUT. task_<idx> -> workload mapping follows task_gemm.yaml order.
 
 import argparse
 import csv
-import glob
 import json
 import os
 import subprocess
+import sys
 
 _THIS = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.normpath(os.path.join(_THIS, "../../../../../"))
 _GEN_TRACE = os.path.join(_ROOT, "util/trace/gen_trace.py")
 _BINGO_TRACE = os.path.join(_ROOT, "util/bingo_trace/bingo_trace.py")
 _PERF_HEADER = os.path.join(_ROOT, "target/sw/shared/runtime/perf_tracing.h")
+_WORKLOADS = os.path.join(
+    _ROOT, "target/sw/host/apps/offload_bingo_hw/single_chip/workloads")
 _DEFAULT_OUT = os.path.join(_THIS, "gemm_cycles.csv")
 
 OP_NAME = "gemm_full"
-OP_NODE = "__snax_bingo_kernel_gemm_full"
-SHAPE_FIELDS = ["array_shape", "M", "K", "N"]
+# precision -> device wrapper symbol that produced the measurement.
+PREC_KERNEL = {
+    "i8i8_i32": "__snax_bingo_kernel_gemm_i8i8_i32",
+    "i8i4_i32": "__snax_bingo_kernel_gemm_i8i4_i32",
+    "i4i4_i32": "__snax_bingo_kernel_gemm_i4i4_i32",
+    "i8i8_i8":  "__snax_bingo_kernel_gemm_i8i8_i8",
+    "i8i4_f16": "__snax_bingo_kernel_gemm_i8i4_f16",
+}
+
+
+def _parse_task_order(task_yaml):
+    sys.path.insert(0, os.path.join(_ROOT, "util/automation_scripts"))
+    from hemaia_sim_runner import parse_tasks  # noqa: E402
+    from pathlib import Path
+    return [t["workload"] for t in parse_tasks(Path(task_yaml))]
 
 
 def _convert_traces(logs_dir, verbose=True):
     """spike-dasm | gen_trace.py --permissive  for every .dasm lacking a .txt."""
+    import glob
     made = 0
     for dasm in sorted(glob.glob(os.path.join(logs_dir, "trace_chip_*_hart_*.dasm"))):
         txt = dasm[:-len(".dasm")] + ".txt"
@@ -73,53 +91,61 @@ def _run_bingo_trace(logs_dir):
     return out
 
 
-def gemm_run_cycles(bingo_json):
-    """Sum of GEMM_FULL_RUN dur_cc events (one GEMM compute per config sim)."""
+def _gemm_full_run_cycles(bingo_json):
+    """Ordered list of GEMM_FULL_RUN dur_cc values (by timestamp)."""
     with open(bingo_json) as f:
         trace = json.load(f)
     events = trace["traceEvents"] if isinstance(trace, dict) else trace
     runs = [e for e in events
             if e.get("ph") == "X" and "GEMM_FULL_RUN" in str(e.get("name", ""))]
-    return sum(int(e.get("args", {}).get("dur_cc", 0)) for e in runs), len(runs)
+    runs.sort(key=lambda e: e.get("ts", 0))
+    return [int(e.get("args", {}).get("dur_cc", 0)) for e in runs]
 
 
-def gather_all(sweep_dir, out_csv, verbose=True):
+def gather_one(workload, idx, ci_dir, verbose=True):
+    logs_dir = os.path.join(ci_dir, f"task_{idx}", "bin", "logs")
+    cfg_path = os.path.join(_WORKLOADS, workload, "configs.json")
+    if not os.path.isdir(logs_dir):
+        print(f"task_{idx} {workload}: MISSING logs dir {logs_dir}")
+        return []
+    if not os.path.exists(cfg_path):
+        print(f"task_{idx} {workload}: MISSING configs.json {cfg_path}")
+        return []
+    with open(cfg_path) as f:
+        cj = json.load(f)
+    prec = cj.get("precision", "?")
+    configs = cj["configs"]
+    op_node = PREC_KERNEL.get(prec, f"__snax_bingo_kernel_gemm_{prec}")
+
+    _convert_traces(logs_dir, verbose)
+    bingo_json = _run_bingo_trace(logs_dir)
+    if not bingo_json:
+        return []
+    cycles = _gemm_full_run_cycles(bingo_json)
+    if len(cycles) != len(configs):
+        print(f"task_{idx} {workload}: {len(cycles)} GEMM_FULL_RUN events vs "
+              f"{len(configs)} configs (pairing first {min(len(cycles), len(configs))})")
+
     rows = []
-    task_dirs = sorted(glob.glob(os.path.join(sweep_dir, "task_*")))
-    if not task_dirs:
-        print(f"No task_* dirs under {sweep_dir}")
-        return 0
-    for task in task_dirs:
-        idx = os.path.basename(task)
-        logs_dir = os.path.join(task, "bin", "logs")
-        cfg_path = os.path.join(task, "config.json")
-        if not os.path.isdir(logs_dir) or not os.path.exists(cfg_path):
-            print(f"{idx}: missing logs dir or config.json (skipped)")
-            continue
-        with open(cfg_path) as f:
-            cfg = json.load(f)
-        _convert_traces(logs_dir, verbose)
-        bingo_json = _run_bingo_trace(logs_dir)
-        if not bingo_json:
-            continue
-        cyc, n_events = gemm_run_cycles(bingo_json)
-        if n_events == 0:
-            print(f"{idx} [{cfg.get('suite')}]: no GEMM_FULL_RUN event (skipped)")
-            continue
-        if n_events > 1:
-            print(f"{idx} [{cfg.get('suite')}]: {n_events} GEMM_FULL_RUN events (summed)")
-        row = {"op_name": OP_NAME, "op_node": OP_NODE,
-               "prec": cfg.get("suite", ""), "cycles": cyc}
-        for k in SHAPE_FIELDS:
-            row[k] = cfg.get(k, "")
-        rows.append(row)
-        if verbose:
-            shp = " ".join(f"{k}={cfg.get(k)}" for k in SHAPE_FIELDS)
-            print(f"{idx} [{row['prec']}] {shp}: {cyc} cc")
+    for (M, K, N, shape), cyc in zip(configs, cycles):
+        rows.append({"op_name": OP_NAME, "op_node": op_node, "prec": prec,
+                     "array_shape": shape, "M": M, "K": K, "N": N, "cycles": cyc})
+    if verbose:
+        pts = ", ".join(f"({r['M']},{r['K']},{r['N']},s{r['array_shape']}):{r['cycles']}"
+                        for r in rows)
+        print(f"task_{idx} {workload} [{prec}]: {len(rows)} points  [{pts}]")
+    return rows
 
+
+def gather_all(task_yaml, ci_dir, out_csv, verbose=True):
+    order = _parse_task_order(task_yaml)
+    print(f"Expected {len(order)} gemm tasks from {os.path.basename(task_yaml)}")
+    rows = []
+    for idx, workload in enumerate(order):
+        rows.extend(gather_one(workload, idx, ci_dir, verbose))
     if rows:
         os.makedirs(os.path.dirname(os.path.abspath(out_csv)), exist_ok=True)
-        fields = ["op_name", "op_node", "prec"] + SHAPE_FIELDS + ["cycles"]
+        fields = ["op_name", "op_node", "prec", "array_shape", "M", "K", "N", "cycles"]
         with open(out_csv, "w", newline="") as f:
             w = csv.DictWriter(f, fieldnames=fields)
             w.writeheader()
@@ -129,11 +155,12 @@ def gather_all(sweep_dir, out_csv, verbose=True):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--sweep-dir", default=_THIS,
+    ap.add_argument("--task-yaml", default=os.path.join(_THIS, "task_gemm.yaml"))
+    ap.add_argument("--ci-dir", default=_THIS,
                     help="dir holding the task_<idx> run dirs (default: this dir)")
     ap.add_argument("--out", default=_DEFAULT_OUT, help="output CSV (default: %(default)s)")
     args = ap.parse_args()
-    n = gather_all(args.sweep_dir, args.out)
+    n = gather_all(args.task_yaml, args.ci_dir, args.out)
     print(f"\nWrote {n} row(s) to {args.out}")
 
 

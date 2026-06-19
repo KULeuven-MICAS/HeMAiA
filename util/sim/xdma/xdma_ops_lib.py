@@ -27,10 +27,17 @@ import hjson
 import numpy as np
 
 _THIS = os.path.dirname(os.path.abspath(__file__))
-_ROOT = os.path.normpath(os.path.join(_THIS, "../../"))
+_ROOT = os.path.normpath(os.path.join(_THIS, "../../../"))  # util/sim/xdma -> repo root
 sys.path.append(f"{_ROOT}/target/sw/host/runtime/libbingo/mini_compiler")
 sys.path.append(f"{_ROOT}/util/sim")
 
+# __usg__ grouped util/sim: make common/gemm/xdma/ara importable
+import os as _usg_os, sys as _usg_sys
+for _usg_p in [p for p in list(_usg_sys.path) if str(p).rstrip('/').endswith('util/sim')]:
+    for _usg_s in ('common', 'gemm', 'xdma', 'ara'):
+        _usg_sub = _usg_os.path.join(_usg_p, _usg_s)
+        if _usg_sub not in _usg_sys.path:
+            _usg_sys.path.append(_usg_sub)
 from data_utils import format_scalar_definition, format_vector_definition  # noqa E402
 from layout_convert import row_major_to_a, row_major_to_b, row_major_to_d  # noqa E402
 from bingo_dfg import BingoDFG  # noqa E402

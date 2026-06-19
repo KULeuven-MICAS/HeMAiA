@@ -7,7 +7,7 @@
 // Single-kernel cycle-count sweep + correctness check for the FP32 RVV host
 // kernel "quantize" (bingo dispatches it to CVA6+Ara).  Per size it prints:
 //   CYCLES,quantize,<N>,<rep>,<cycles>   (timing)
-//   CHECK,quantize,<N>,PASS|FAIL         (output vs golden from util/sim/ara_lib.py)
+//   CHECK,quantize,<N>,PASS|FAIL         (output vs golden from util/sim/ara/ara_lib.py)
 // gather_ara_luts.py turns the CYCLES lines into a CSV.  Golden uses exact math;
 // ARA_TOL is loose for exp-based kernels (the HW path uses a poly approximation).
 
@@ -18,7 +18,7 @@
 #define ARA_TOL 0.001f
 
 // Timing buffers (globals -> live in .data, avoid stack overflow).
-// OP_MAX_LEN is 4096 (from util/sim/ara_lib.py) -> 16 KB per fp32 buffer.
+// OP_MAX_LEN is 4096 (from util/sim/ara/ara_lib.py) -> 16 KB per fp32 buffer.
 static int8_t timing_int8_scratch[OP_MAX_LEN] __attribute__((aligned(8)));
 static float timing_scale_scratch __attribute__((aligned(8)));
 static bingo_kernel_scratchpad_t timing_scratchpad __attribute__((aligned(8)));

@@ -1,0 +1,27 @@
+# VersaCore GEMM precision-sweep tasks — one per precision, run in parallel.
+# Run with: python3 run_gemm_sweep.py -j <N>   (then python3 gather_gemm_luts.py)
+# Each workload sweeps the shared (M,K,N,array_shape) grid in gemm_psweep_lib.CONFIGS
+# via its precision wrapper kernel and emits one BINGO_TRACE_GEMM_FULL_RUN event +
+# a configs.json per config; gather_gemm_luts.py pairs them into a per-(precision,
+# shape) cycle CSV. All single_chip -> run on chip00.
+runs:
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: single_chip
+    WORKLOAD: gemm_psweep_i8i8_i32_1cluster
+    DEV_APP: snax-bingo-offload
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: single_chip
+    WORKLOAD: gemm_psweep_i8i4_i32_1cluster
+    DEV_APP: snax-bingo-offload
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: single_chip
+    WORKLOAD: gemm_psweep_i4i4_i32_1cluster
+    DEV_APP: snax-bingo-offload
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: single_chip
+    WORKLOAD: gemm_psweep_i8i8_i8_1cluster
+    DEV_APP: snax-bingo-offload
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: single_chip
+    WORKLOAD: gemm_psweep_i8i4_f16_1cluster
+    DEV_APP: snax-bingo-offload
