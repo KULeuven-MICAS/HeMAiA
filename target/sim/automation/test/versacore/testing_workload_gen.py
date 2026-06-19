@@ -68,6 +68,36 @@ BASE_PARAMS = {
 }
 
 
+# ---------------------------------------------------------------------------
+# GEMM precision contract
+# ---------------------------------------------------------------------------
+# Single source of truth for "which precision" -> the VersaCore params flags that
+# select it on the Int8 (snax_versacore_to_cluster) build. The core precision is
+# passed as data_type (the DATA_TYPE_CFG CSR via set_versacore_csr) plus the SW
+# packing/output flags below; datagen.py + the kernel consume them. Each entry is
+# one test suite. `derive_from` reuses another suite's exact shapes (apples-to-
+# apples across precisions) and only adds the extra output-stage flag.
+#
+#   base_int8            : int8 x int8 -> int32   (baseline)
+#   int4_b               : int4 x int8 -> int32   (int4_b_enable: pack B to 4-bit)
+#   int4_ab              : int4 x int4 -> int32   (int4_a_enable + int4_b_enable)
+#   quantized            : int8 x int8 -> int8    (quantization_enable: int32->int8)
+#   int4_b_int32_to_fp16 : int4 x int8 -> fp16    (int4_b_enable + int32tofp16_enable)
+GEMM_PRECISIONS = {
+    "base_int8":            {"array_shapes": (0, 1, 2), "overrides": {},
+                             "derive_from": None},
+    "int4_b":               {"array_shapes": (0, 1, 2), "overrides": {"int4_b_enable": 1},
+                             "derive_from": None},
+    "int4_ab":              {"array_shapes": (0, 2),
+                             "overrides": {"int4_a_enable": 1, "int4_b_enable": 1},
+                             "derive_from": None},
+    "quantized":            {"overrides": {"quantization_enable": 1},
+                             "derive_from": "base_int8"},
+    "int4_b_int32_to_fp16": {"overrides": {"int32tofp16_enable": 1},
+                             "derive_from": "int4_b"},
+}
+
+
 def repo_root() -> Path:
     return REPO_ROOT
 
@@ -196,50 +226,6 @@ def valid_shape_rows(
                         }
 
 
-def generate_base_int8_shapes(
-    hwcfg: dict,
-    l1_memory_limit: int,
-    l3_memory_limit: int,
-) -> Iterable[dict]:
-    return valid_shape_rows(
-        hwcfg,
-        suite="base_int8",
-        array_shapes=(0, 1, 2),
-        l1_memory_limit=l1_memory_limit,
-        l3_memory_limit=l3_memory_limit,
-    )
-
-
-def generate_int4_b_shapes(
-    hwcfg: dict,
-    l1_memory_limit: int,
-    l3_memory_limit: int,
-) -> Iterable[dict]:
-    return valid_shape_rows(
-        hwcfg,
-        suite="int4_b",
-        array_shapes=(0, 1, 2),
-        overrides={"int4_b_enable": 1},
-        l1_memory_limit=l1_memory_limit,
-        l3_memory_limit=l3_memory_limit,
-    )
-
-
-def generate_int4_ab_shapes(
-    hwcfg: dict,
-    l1_memory_limit: int,
-    l3_memory_limit: int,
-) -> Iterable[dict]:
-    return valid_shape_rows(
-        hwcfg,
-        suite="int4_ab",
-        array_shapes=(0, 2),
-        overrides={"int4_a_enable": 1, "int4_b_enable": 1},
-        l1_memory_limit=l1_memory_limit,
-        l3_memory_limit=l3_memory_limit,
-    )
-
-
 def remap_suite_rows(
     hwcfg: dict,
     rows: Iterable[dict],
@@ -266,67 +252,55 @@ def remap_suite_rows(
             }
 
 
-def generate_quantized_shapes(
+def generate_precision_suite(
     hwcfg: dict,
+    name: str,
     l1_memory_limit: int,
     l3_memory_limit: int,
 ) -> Iterable[dict]:
-    base_rows = valid_shape_rows(
-        hwcfg,
-        suite="base_int8",
-        array_shapes=(0, 1, 2),
-        l1_memory_limit=l1_memory_limit,
-        l3_memory_limit=l3_memory_limit,
-    )
-    return remap_suite_rows(
-        hwcfg,
-        base_rows,
-        suite="quantized",
-        overrides={"quantization_enable": 1},
-        l1_memory_limit=l1_memory_limit,
-        l3_memory_limit=l3_memory_limit,
-    )
-
-
-def generate_int32_to_fp16_shapes(
-    hwcfg: dict,
-    l1_memory_limit: int,
-    l3_memory_limit: int,
-) -> Iterable[dict]:
-    int4_b_rows = valid_shape_rows(
-        hwcfg,
-        suite="int4_b",
-        array_shapes=(0, 1, 2),
-        overrides={"int4_b_enable": 1},
-        l1_memory_limit=l1_memory_limit,
-        l3_memory_limit=l3_memory_limit,
-    )
-    return remap_suite_rows(
-        hwcfg,
-        int4_b_rows,
-        suite="int4_b_int32_to_fp16",
-        overrides={"int32tofp16_enable": 1},
-        l1_memory_limit=l1_memory_limit,
-        l3_memory_limit=l3_memory_limit,
-    )
+    """Yield the workload rows for one GEMM_PRECISIONS suite."""
+    spec = GEMM_PRECISIONS[name]
+    if spec["derive_from"] is None:
+        yield from valid_shape_rows(
+            hwcfg,
+            suite=name,
+            array_shapes=spec["array_shapes"],
+            overrides=spec["overrides"],
+            l1_memory_limit=l1_memory_limit,
+            l3_memory_limit=l3_memory_limit,
+        )
+    else:
+        base = GEMM_PRECISIONS[spec["derive_from"]]
+        base_rows = valid_shape_rows(
+            hwcfg,
+            suite=spec["derive_from"],
+            array_shapes=base["array_shapes"],
+            overrides=base["overrides"],
+            l1_memory_limit=l1_memory_limit,
+            l3_memory_limit=l3_memory_limit,
+        )
+        yield from remap_suite_rows(
+            hwcfg,
+            base_rows,
+            suite=name,
+            overrides=spec["overrides"],
+            l1_memory_limit=l1_memory_limit,
+            l3_memory_limit=l3_memory_limit,
+        )
 
 
 def iter_workloads(
     hwcfg: dict,
     *,
+    suites: Optional[Sequence[str]] = None,
     l1_memory_limit: int = L1_MEMORY_LIMIT_BYTES,
     l3_memory_limit: int = L3_MEMORY_LIMIT_BYTES,
 ) -> Iterator[dict]:
     seen = set()
-    suites = (
-        generate_base_int8_shapes,
-        # generate_int4_b_shapes,
-        # generate_int4_ab_shapes,
-        # generate_quantized_shapes,
-        # generate_int32_to_fp16_shapes,
-    )
-    for suite in suites:
-        for row in suite(hwcfg, l1_memory_limit, l3_memory_limit):
+    # Default: sweep every precision in the contract (co-design needs them all).
+    suite_names = list(suites) if suites is not None else list(GEMM_PRECISIONS)
+    for name in suite_names:
+        for row in generate_precision_suite(hwcfg, name, l1_memory_limit, l3_memory_limit):
             key = tuple(row[field] for field in PARAM_FIELDS)
             if key in seen:
                 continue
@@ -337,6 +311,7 @@ def iter_workloads(
 def sample_workloads(
     hwcfg: dict,
     *,
+    suites: Optional[Sequence[str]] = None,
     l1_memory_limit: int,
     l3_memory_limit: int,
     max_cases: int,
@@ -348,6 +323,7 @@ def sample_workloads(
 
     for row in iter_workloads(
         hwcfg,
+        suites=suites,
         l1_memory_limit=l1_memory_limit,
         l3_memory_limit=l3_memory_limit,
     ):
@@ -388,6 +364,13 @@ def parse_args() -> argparse.Namespace:
         help="Randomly sample at most this many rows. Zero means no cap.",
     )
     parser.add_argument("--seed", type=int, default=1)
+    parser.add_argument(
+        "--suites",
+        nargs="*",
+        choices=list(GEMM_PRECISIONS),
+        default=None,
+        help="Precision suites to generate (default: all in GEMM_PRECISIONS).",
+    )
     return parser.parse_args()
 
 
@@ -398,6 +381,7 @@ def main() -> None:
     if args.max_cases:
         rows, total = sample_workloads(
             hwcfg,
+            suites=args.suites,
             l1_memory_limit=args.l1_memory_limit,
             l3_memory_limit=args.l3_memory_limit,
             max_cases=args.max_cases,
@@ -409,6 +393,7 @@ def main() -> None:
         count = write_csv(
             iter_workloads(
                 hwcfg,
+                suites=args.suites,
                 l1_memory_limit=args.l1_memory_limit,
                 l3_memory_limit=args.l3_memory_limit,
             ),

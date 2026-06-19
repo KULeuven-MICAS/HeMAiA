@@ -283,6 +283,132 @@ class SnaxBingoKernelGemmMinimalArgs(BingoKernelArgs):
         self._process_addr(self.output_D_addr, "output_D_addr", assignments, handle_name_map, split_64bit=False)
         return assignments
 
+# -------------------------------------------------------------------------
+# Clean per-precision GEMM wrappers (1:1 with the precision-named kernels in
+# offload_hw_kernels/gemm.h). The four "plain" precisions share one C struct
+# (__snax_bingo_kernel_gemm_args_t); the quantized one adds requant params
+# (__snax_bingo_kernel_gemm_quant_args_t). Pair each class with its kernel_name,
+# e.g. kernel_name="__snax_bingo_kernel_gemm_i8i4_i32" + SnaxBingoKernelGemmI8I4I32Args.
+# -------------------------------------------------------------------------
+class _SnaxBingoKernelGemmPlainArgs(BingoKernelArgs):
+    """Shared base for the plain GEMM wrappers (int32 / int4-packed / fp16 out,
+    no requantization). Subclasses are named per precision for a clean 1:1
+    kernel<->args mapping and add no fields."""
+    def __init__(self,
+                 input_A_addr: Union[BingoMemAlloc, int],
+                 input_B_addr: Union[BingoMemAlloc, int],
+                 input_C_addr: Union[BingoMemAlloc, int],
+                 output_D_addr: Union[BingoMemAlloc, int],
+                 M: int, K: int, N: int,
+                 array_shape_idx: int,
+                 transpose_A: int = 0,
+                 transpose_B: int = 0,
+                 accumPrevC: int = 0):
+        self.input_A_addr = input_A_addr
+        self.input_B_addr = input_B_addr
+        self.input_C_addr = input_C_addr
+        self.output_D_addr = output_D_addr
+        self.M = M
+        self.K = K
+        self.N = N
+        self.array_shape_idx = array_shape_idx
+        self.transpose_A = transpose_A
+        self.transpose_B = transpose_B
+        self.accumPrevC = accumPrevC
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_gemm_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        assignments = {}
+        self._process_addr(self.input_A_addr, "input_A_addr", assignments, handle_name_map, split_64bit=False)
+        self._process_addr(self.input_B_addr, "input_B_addr", assignments, handle_name_map, split_64bit=False)
+        self._process_addr(self.input_C_addr, "input_C_addr", assignments, handle_name_map, split_64bit=False)
+        self._process_addr(self.output_D_addr, "output_D_addr", assignments, handle_name_map, split_64bit=False)
+        assignments["M"] = str(self.M)
+        assignments["K"] = str(self.K)
+        assignments["N"] = str(self.N)
+        assignments["array_shape_idx"] = str(self.array_shape_idx)
+        assignments["transpose_A"] = str(self.transpose_A)
+        assignments["transpose_B"] = str(self.transpose_B)
+        assignments["accumPrevC"] = str(self.accumPrevC)
+        return assignments
+
+
+# int8 x int8 -> int32  : kernel_name="__snax_bingo_kernel_gemm_i8i8_i32"
+class SnaxBingoKernelGemmI8I8I32Args(_SnaxBingoKernelGemmPlainArgs):
+    pass
+
+
+# int8 x int4 -> int32  (weight B int4) : "__snax_bingo_kernel_gemm_i8i4_i32"
+class SnaxBingoKernelGemmI8I4I32Args(_SnaxBingoKernelGemmPlainArgs):
+    pass
+
+
+# int4 x int4 -> int32  : "__snax_bingo_kernel_gemm_i4i4_i32"
+class SnaxBingoKernelGemmI4I4I32Args(_SnaxBingoKernelGemmPlainArgs):
+    pass
+
+
+# int8 x int4 -> fp16   (weight B int4) : "__snax_bingo_kernel_gemm_i8i4_f16"
+class SnaxBingoKernelGemmI8I4F16Args(_SnaxBingoKernelGemmPlainArgs):
+    pass
+
+
+# int8 x int8 -> int8   (requantized) : "__snax_bingo_kernel_gemm_i8i8_i8"
+class SnaxBingoKernelGemmI8I8I8Args(BingoKernelArgs):
+    def __init__(self,
+                 input_A_addr: Union[BingoMemAlloc, int],
+                 input_B_addr: Union[BingoMemAlloc, int],
+                 input_C_addr: Union[BingoMemAlloc, int],
+                 output_D_addr: Union[BingoMemAlloc, int],
+                 M: int, K: int, N: int,
+                 array_shape_idx: int,
+                 shift_i: int,
+                 multiplier_i: int,
+                 input_zp_i: int,
+                 output_zp_i: int,
+                 transpose_A: int = 0,
+                 transpose_B: int = 0,
+                 accumPrevC: int = 0):
+        self.input_A_addr = input_A_addr
+        self.input_B_addr = input_B_addr
+        self.input_C_addr = input_C_addr
+        self.output_D_addr = output_D_addr
+        self.M = M
+        self.K = K
+        self.N = N
+        self.array_shape_idx = array_shape_idx
+        self.shift_i = shift_i
+        self.multiplier_i = multiplier_i
+        self.input_zp_i = input_zp_i
+        self.output_zp_i = output_zp_i
+        self.transpose_A = transpose_A
+        self.transpose_B = transpose_B
+        self.accumPrevC = accumPrevC
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_gemm_quant_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        assignments = {}
+        self._process_addr(self.input_A_addr, "input_A_addr", assignments, handle_name_map, split_64bit=False)
+        self._process_addr(self.input_B_addr, "input_B_addr", assignments, handle_name_map, split_64bit=False)
+        self._process_addr(self.input_C_addr, "input_C_addr", assignments, handle_name_map, split_64bit=False)
+        self._process_addr(self.output_D_addr, "output_D_addr", assignments, handle_name_map, split_64bit=False)
+        assignments["M"] = str(self.M)
+        assignments["K"] = str(self.K)
+        assignments["N"] = str(self.N)
+        assignments["array_shape_idx"] = str(self.array_shape_idx)
+        assignments["transpose_A"] = str(self.transpose_A)
+        assignments["transpose_B"] = str(self.transpose_B)
+        assignments["accumPrevC"] = str(self.accumPrevC)
+        assignments["shift_i"] = str(self.shift_i)
+        assignments["multiplier_i"] = str(self.multiplier_i)
+        assignments["input_zp_i"] = str(self.input_zp_i)
+        assignments["output_zp_i"] = str(self.output_zp_i)
+        return assignments
+
 # BINGO XDMA 1D Copy
 class SnaxBingoKernelXdma1dCopyArgs(BingoKernelArgs):
     def __init__(self, src_addr: Union[BingoMemAlloc, int], dst_addr: Union[BingoMemAlloc, int], size: int):

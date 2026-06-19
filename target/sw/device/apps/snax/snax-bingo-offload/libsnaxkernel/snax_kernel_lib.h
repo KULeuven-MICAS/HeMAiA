@@ -61,6 +61,12 @@ SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_idma_1d_copy),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_idma_broadcast),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_gemm_full),
+    // Clean per-precision GEMM wrappers (over gemm_full) — see offload_hw_kernels/gemm.h.
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_gemm_i8i8_i32),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_gemm_i8i4_i32),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_gemm_i4i4_i32),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_gemm_i8i8_i8),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_gemm_i8i4_f16),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_gemm_minimal),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_1d_copy),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_6d),

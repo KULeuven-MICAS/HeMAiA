@@ -38,7 +38,9 @@ DEFAULT_WORKLOAD_CSV = SCRIPT_DIR / "testing_workload.csv"
 DEFAULT_RESULTS_CSV = SCRIPT_DIR / "testing_results.csv"
 DEFAULT_LOG_DIR = SCRIPT_DIR / "logs"
 UART_LOG_PATH = REPO_ROOT / "target/sim/bin/uart_chip_0_0.log"
-HOST_CHECK_PASS_RE = re.compile(r"\[Host\]\s+Check\s+\[[^\]]+\]:\s+PASS\s+\(64 bytes\)")
+# Output size varies by shape and precision (the check covers min(64, D_size)
+# bytes), so match any byte count rather than a fixed 64.
+HOST_CHECK_PASS_RE = re.compile(r"\[Host\]\s+Check\s+\[[^\]]+\]:\s+PASS\s+\(\d+ bytes\)")
 
 sys.path.insert(0, str(REPO_ROOT / "util" / "automation_scripts"))
 

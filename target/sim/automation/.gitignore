@@ -27,6 +27,10 @@
 !/sweep/ara/gather_ara_luts.py
 !/sweep/ara/ara_lut_report.py
 !/sweep/ara/task_ara.yaml
+!/sweep/gemm/
+/sweep/gemm/*
+!/sweep/gemm/run_gemm_sweep.py
+!/sweep/gemm/gather_gemm_luts.py
 
 !/test/
 /test/*

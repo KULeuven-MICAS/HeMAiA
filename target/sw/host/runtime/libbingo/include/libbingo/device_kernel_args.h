@@ -234,6 +234,52 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_gemm_full_args {
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_gemm_full_args_t;
 
+// ---------------------------------------------------------
+// Clean per-precision GEMM wrappers (over __snax_bingo_kernel_gemm_full)
+// ---------------------------------------------------------
+// These two structs back the precision-named GEMM wrapper kernels in
+// offload_hw_kernels/gemm.h, which hide gemm_full's 8 precision/quant flags.
+// Each wrapper picks the precision; the user only fills the GEMM operands/shape.
+//   plain  -> __snax_bingo_kernel_gemm_i8i8_i32 / _i8i4_i32 / _i4i4_i32 / _i8i4_f16
+//   quant  -> __snax_bingo_kernel_gemm_i8i8_i8  (adds requantization params)
+// Compute: D = A*B + C. A/B/C/D are 32-bit cluster-local (L1) addresses.
+
+// Shared "plain" GEMM args (int32 / int4-packed / fp16 outputs — no requant).
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_gemm_args {
+  uint32_t input_A_addr;
+  uint32_t input_B_addr;
+  uint32_t input_C_addr;
+  uint32_t output_D_addr;
+  uint32_t M;
+  uint32_t K;
+  uint32_t N;
+  uint32_t array_shape_idx;
+  uint32_t transpose_A;
+  uint32_t transpose_B;
+  uint32_t accumPrevC;
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_gemm_args_t;
+
+// Quantized GEMM args (int8 output): plain fields + requantization params.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_gemm_quant_args {
+  uint32_t input_A_addr;
+  uint32_t input_B_addr;
+  uint32_t input_C_addr;
+  uint32_t output_D_addr;
+  uint32_t M;
+  uint32_t K;
+  uint32_t N;
+  uint32_t array_shape_idx;
+  uint32_t transpose_A;
+  uint32_t transpose_B;
+  uint32_t accumPrevC;
+  uint32_t shift_i;
+  uint32_t multiplier_i;
+  int32_t  input_zp_i;
+  int32_t  output_zp_i;
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_gemm_quant_args_t;
+
 // BINGO XDMA 1D Copy kernel args (same layout as cluster-level)
 __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_1d_copy_args {
   uint32_t src_addr_hi;
