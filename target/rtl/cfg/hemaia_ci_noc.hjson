@@ -75,7 +75,7 @@
         en_floonoc: true,
         routing_algo: "XY",
         noc_name: "quad_mesh_xy",
-        noc_array: [2, 2]
+        noc_array: [1, 2]
       },
       // number of pending transactions on the narrow/wide network
       narrow_trans: 32,
@@ -99,10 +99,8 @@
       quad_axi_lite_base_offset: 65536 // 0x10000
     },
     clusters:[
-      "snax_KUL_cluster",
-      "snax_KUL_cluster",
-      "snax_KUL_cluster",
-      "snax_KUL_cluster",
+      "snax_versacore_to_cluster",
+      "snax_versacore_to_cluster",
       ],
 
     hemaia_xdma_cfg: {

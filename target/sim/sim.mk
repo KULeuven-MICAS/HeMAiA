@@ -94,6 +94,11 @@ VLT_FLAGS    += -Wno-fatal
 VLT_FLAGS    += -Wno-SYMRSVDWORD
 VLT_FLAGS    += -Wno-BLKLOOPINIT
 
+# Workaround for Verilator 5.048 internal error in V3DfgSynthesize.cpp:993
+# ("Different default drivers") triggered by ara simd_mul.sv. Disabling the
+# DFG (data flow graph) optimization pass avoids the buggy code path without
+# changing observable simulation behavior.
+VLT_FLAGS    += -fno-dfg
 VLT_FLAGS    += +define+SYNTHESIS  
 
 

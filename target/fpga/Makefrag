@@ -2,7 +2,6 @@
 BENDER		   ?= bender
 DASM 	       ?= spike-dasm
 VLT			   ?= verilator
-VERIBLE_FMT    ?= verible-verilog-format
 BIN2JTAG       ?= $(ROOT)/util/bin2jtag.py
 ANNOTATE	   ?= ${ROOT}/util/trace/annotate.py
 CLANG_FORMAT   ?= clang-format
