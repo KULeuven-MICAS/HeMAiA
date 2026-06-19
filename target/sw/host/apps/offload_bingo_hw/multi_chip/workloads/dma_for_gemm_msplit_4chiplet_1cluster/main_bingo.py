@@ -289,6 +289,7 @@ def create_dfg(params, mem_handles, platform, eval_case):
                 bingo_dfg.bingo_add_node(node)
 
             # sequentially load A then load B, and check A then check B.
+            # four chiplet work in parrellel, but the dma request is never optimized
             bingo_dfg.add_edge(load_a, load_b)
             bingo_dfg.add_edge(load_b, check_a)
             bingo_dfg.add_edge(check_a, check_b)
@@ -576,6 +577,7 @@ def create_dfg(params, mem_handles, platform, eval_case):
                 size=params["B_size"],
             ),
         )
+
         # Load A1 using xdma
         node_chiplet_00_load_A1 = BingoNode(
             assigned_chiplet_id=0x00,
@@ -793,6 +795,8 @@ def create_dfg(params, mem_handles, platform, eval_case):
         ########################baseline dma###################
         #####with broadcast, with dual-dma, with half-duplex###
         #######################################################
+
+
         pass
 
     else:

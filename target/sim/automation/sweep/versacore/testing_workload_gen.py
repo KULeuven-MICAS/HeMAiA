@@ -384,7 +384,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-cases",
         type=int,
-        default=16,
+        default=1,
         help="Randomly sample at most this many rows. Zero means no cap.",
     )
     parser.add_argument("--seed", type=int, default=1)

@@ -39,4 +39,3 @@
 !/test/0_start_single_chiplet_sim.py
 !/test/1_start_multi_chiplet_sim.py
 !/test/2_start_tapeout_sim.py
-!/test/versacore/
