@@ -120,7 +120,13 @@ module ${name}_cva6_ara import ${name}_pkg::*; (
   // We do not need the FPU in CVA6, the FPU is offloaded to the Ara
   localparam CVA6ConfigRVF = 1;       // Support single-precision FP
   localparam CVA6ConfigRVD = 1;       // Support double-precision FP
-  localparam CVA6ConfigF16En = 0;
+  // The multi-precision Ara host kernels (ara_sweep.h) use C _Float16. Built with
+  // -march=rv64gcv_zvfh, the toolchain emits *scalar* zfhmin conversions/load-stores
+  // (flh/fsh/fcvt.h.s/fcvt.s.h) for the host-side f16<->f32 casts; these run on CVA6,
+  // not Ara, and the decoder gates FLH/FSH/FCVT on XF16. So XF16 must be enabled or
+  // those casts trap as illegal instructions. (_Float16 is IEEE binary16 = XF16, not
+  // the alternative format, so XF16ALT stays off.)
+  localparam CVA6ConfigF16En = 1;     // Support IEEE half-precision (zfh/zfhmin) scalar ops
   localparam CVA6ConfigF16AltEn = 0;
   localparam CVA6ConfigF8En = 0;
   localparam CVA6ConfigF8AltEn = 0;
@@ -371,7 +377,12 @@ module ${name}_cva6_ara import ${name}_pkg::*; (
   /////////
   localparam int unsigned             VLEN         = 128;
   localparam int unsigned             OSSupport    = 0;
-  localparam ara_pkg::fpu_support_e   FPUSupport   = ara_pkg::FPUSupportSingle;
+  // FPUSupportHalfSingle (not ...Single): the fp16 Ara kernels issue vector FP ops at
+  // SEW=16 (native e16 elementwise/reduce) and widening vfwcvt/vfncvt from e16. The Ara
+  // dispatcher marks any vector FP op whose vsew/eew is not allowed by FPUSupport as an
+  // illegal instruction, so e16 float ops require Half here. (int8/int16 are integer
+  // vector ops and are unaffected by FPUSupport.)
+  localparam ara_pkg::fpu_support_e   FPUSupport   = ara_pkg::FPUSupportHalfSingle;
   localparam ara_pkg::fpext_support_e FPExtSupport = ara_pkg::FPExtSupportDisable;
   localparam ara_pkg::fixpt_support_e FixPtSupport = ara_pkg::FixedPointEnable;
   localparam ara_pkg::seg_support_e   SegSupport   = ara_pkg::SegSupportEnable;
