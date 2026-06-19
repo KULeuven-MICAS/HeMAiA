@@ -933,6 +933,26 @@ static inline uint64_t __host_bingo_kernel_cerf_gating(void *arg){
 #define BINGO_HAVE_FP16_VEC 0
 #endif
 
+#if BINGO_HAVE_FP16_VEC
+// Narrow one f32m1 vector to f16mf2. WORKAROUND for an Ara HW bug: the in-place
+// narrowing fp conversion the compiler emits for __riscv_vfncvt_f_f_w_f16mf2()
+// (e.g. "vfncvt.f.f.w v4,v4", dest reg overlapping the lowest part of the wide
+// source reg group -- spec-legal) produces a wrong f32->f16 result on Ara.
+// Forcing the destination into a register distinct from the source (early-clobber
+// "=&vr") computes correctly. Verified: every transcendental/compound fp16 kernel
+// (exp/sigmoid/sqrt/tanh/reciprocal/gelu/silu/silu_mul/softmax/rmsnorm) FAILs the
+// op-cost-sweep correctness check with the in-place narrow and PASSes with this.
+// The vsetvli is inside the asm because the asm is opaque to the compiler's vtype
+// tracking; the caller's next vector op re-establishes vtype as needed.
+static inline vfloat16mf2_t __bingo_narrow_f32m1_f16mf2(vfloat32m1_t w, size_t vl) {
+    vfloat16mf2_t d;
+    asm volatile("vsetvli zero, %2, e16, mf2, ta, ma\n\t"
+                 "vfncvt.f.f.w %0, %1"
+                 : "=&vr"(d) : "vr"(w), "r"(vl));
+    return d;
+}
+#endif
+
 // ---- typed native binary impls: out[i] = vop(a[i], b[i]) ----
 #define __BINGO_BINARY_IMPL(op, P, T, ESET, ELD, EST, VT, VOP)                 \
 static inline void __bingo_##op##_##P(const T* a, const T* b, T* o, uint64_t n){\
@@ -1035,7 +1055,7 @@ static inline void __bingo_##op##_FP16(const _Float16* in, _Float16* o, uint64_t
         vl = __riscv_vsetvl_e16mf2(avl);                                       \
         vfloat32m1_t v = __riscv_vfwcvt_f_f_v_f32m1(__riscv_vle16_v_f16mf2(ip,vl), vl); \
         vfloat32m1_t result; BODY32;                                          \
-        __riscv_vse16_v_f16mf2(op_, __riscv_vfncvt_f_f_w_f16mf2(result, vl), vl); \
+        __riscv_vse16_v_f16mf2(op_, __bingo_narrow_f32m1_f16mf2(result, vl), vl); \
     }                                                                          \
 }
 #else
@@ -1254,7 +1274,7 @@ static inline void __bingo_silu_mul_FP16(const _Float16* g, const _Float16* u,
         vfloat32m1_t en  = __bingo_exp_f32(__riscv_vfneg_v_f32m1(gv, vl), vl);
         vfloat32m1_t sig = __riscv_vfdiv_vv_f32m1(one, __riscv_vfadd_vv_f32m1(one, en, vl), vl);
         vfloat32m1_t r   = __riscv_vfmul_vv_f32m1(__riscv_vfmul_vv_f32m1(gv, sig, vl), uv, vl);
-        __riscv_vse16_v_f16mf2(op_, __riscv_vfncvt_f_f_w_f16mf2(r, vl), vl);
+        __riscv_vse16_v_f16mf2(op_, __bingo_narrow_f32m1_f16mf2(r, vl), vl);
     }
 }
 static inline void __bingo_softmax_row_FP16(const _Float16* in, _Float16* out, uint64_t len){
@@ -1271,7 +1291,7 @@ static inline void __bingo_softmax_row_FP16(const _Float16* in, _Float16* out, u
           vl = __riscv_vsetvl_e16mf2(rem);
           vfloat32m1_t v  = __riscv_vfwcvt_f_f_v_f32m1(__riscv_vle16_v_f16mf2(p, vl), vl);
           vfloat32m1_t ev = __bingo_exp_f32(__riscv_vfsub_vf_f32m1(v, maxv, vl), vl);
-          __riscv_vse16_v_f16mf2(op_, __riscv_vfncvt_f_f_w_f16mf2(ev, vl), vl);
+          __riscv_vse16_v_f16mf2(op_, __bingo_narrow_f32m1_f16mf2(ev, vl), vl);
           vfloat32m1_t z = __riscv_vfmv_v_f_f32m1(0.0f, vl);
           sum += __riscv_vfmv_f_s_f32m1_f32(__riscv_vfredosum_vs_f32m1_f32m1(ev, z, vl)); } }
     float inv = 1.0f / sum;
@@ -1280,7 +1300,7 @@ static inline void __bingo_softmax_row_FP16(const _Float16* in, _Float16* out, u
           vl = __riscv_vsetvl_e16mf2(rem);
           vfloat32m1_t v = __riscv_vfwcvt_f_f_v_f32m1(__riscv_vle16_v_f16mf2(op_, vl), vl);
           vfloat32m1_t r = __riscv_vfmul_vf_f32m1(v, inv, vl);
-          __riscv_vse16_v_f16mf2(op_, __riscv_vfncvt_f_f_w_f16mf2(r, vl), vl); } }
+          __riscv_vse16_v_f16mf2(op_, __bingo_narrow_f32m1_f16mf2(r, vl), vl); } }
 }
 static inline void __bingo_rmsnorm_row_FP16(const _Float16* in, const _Float16* w,
                                             _Float16* out, uint64_t hidden){
@@ -1299,7 +1319,7 @@ static inline void __bingo_rmsnorm_row_FP16(const _Float16* in, const _Float16* 
           vfloat32m1_t v  = __riscv_vfwcvt_f_f_v_f32m1(__riscv_vle16_v_f16mf2(ip, vl), vl);
           vfloat32m1_t wv = __riscv_vfwcvt_f_f_v_f32m1(__riscv_vle16_v_f16mf2(wp, vl), vl);
           vfloat32m1_t r  = __riscv_vfmul_vv_f32m1(__riscv_vfmul_vf_f32m1(v, rms, vl), wv, vl);
-          __riscv_vse16_v_f16mf2(op_, __riscv_vfncvt_f_f_w_f16mf2(r, vl), vl); } }
+          __riscv_vse16_v_f16mf2(op_, __bingo_narrow_f32m1_f16mf2(r, vl), vl); } }
 }
 #endif // BINGO_HAVE_FP16_VEC
 
