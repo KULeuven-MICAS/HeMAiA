@@ -27,6 +27,15 @@ __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_entry_args {
 #define BINGO_CHECK_TYPE_FP32_TOL   1
 #define BINGO_CHECK_TYPE_FP16_TOL   2
 
+// Precision selector for the runtime-typed Ara kernels (__host_bingo_kernel_<op>
+// dispatchers in host_kernel_lib.h). Passed as a plain arg word; the legacy
+// __host_bingo_kernel_fp32_<op> entry points keep their original FP32-only
+// behaviour and ignore precision.
+#define BINGO_PREC_FP32  0
+#define BINGO_PREC_FP16  1
+#define BINGO_PREC_INT8  2
+#define BINGO_PREC_INT16 3
+
 __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_check_result_args {
     uint64_t golden_data_addr;
     uint64_t output_data_addr;
