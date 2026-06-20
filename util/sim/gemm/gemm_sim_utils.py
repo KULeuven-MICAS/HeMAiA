@@ -348,12 +348,38 @@ def generate_gemm_test_data(**kwargs):
     C_MIN, C_MAX = -2147483648, 2147483647
 
     A = np.random.randint(A_MIN, A_MAX, size=(M, K, meshRow, tileSize)).reshape(-1)
-    A_padded = np.pad(A, (0, (-A.size) % 64), mode="constant", constant_values=0)
-    A_to_emit = (
-        _pack_signed_nbit(A_padded, bit_width=4, pack_per_byte=2)
-        if int4_a_enable
-        else A_padded
-    )
+    if int4_a_enable:
+        # The A reader's sparse interconnect wires read-port i only to banks of
+        # parity (i % granularity_a); the device kernel rounds each int4 A K-tile
+        # stride UP to granularity_a banks (offload_hw_kernels/gemm.h). Pad each
+        # (meshRow*tileSize) K-tile here to that same width so the emitted byte
+        # offsets match exactly what the streamer reads — the pad lands in the
+        # skipped bank and is never consumed as A data. (Shapes whose tile is
+        # already a granularity_a-bank multiple are byte-identical to before, so
+        # i8i4/i4i4 on shapes 0/2 are unchanged; only int4 A at shape 1 grows.)
+        GRANULARITY_A = 2            # banks; mirrors hwcfg granularity_a
+        BANK_BITS = 64
+        A_ELEM_BITS = 4
+        elems_per_bank = BANK_BITS // A_ELEM_BITS       # 16 int4 per 64-bit bank
+        tile_elems = meshRow * tileSize
+        tile_banks = (tile_elems * A_ELEM_BITS + BANK_BITS - 1) // BANK_BITS
+        tile_banks_aligned = (
+            (tile_banks + GRANULARITY_A - 1) // GRANULARITY_A * GRANULARITY_A
+        )
+        padded_tile_elems = tile_banks_aligned * elems_per_bank
+        A_tiles = A.reshape(M * K, tile_elems)
+        A_tiles = np.pad(
+            A_tiles, ((0, 0), (0, padded_tile_elems - tile_elems)),
+            mode="constant", constant_values=0,
+        )
+        A_padded = A_tiles.reshape(-1)
+        A_padded = np.pad(A_padded, (0, (-A_padded.size) % 64),
+                          mode="constant", constant_values=0)
+        A_to_emit = _pack_signed_nbit(A_padded, bit_width=4, pack_per_byte=2)
+    else:
+        A_padded = np.pad(A, (0, (-A.size) % 64), mode="constant",
+                          constant_values=0)
+        A_to_emit = A_padded
 
     B = np.random.randint(B_MIN, B_MAX, size=(K, N, tileSize, meshCol)).reshape(-1)
     B_to_emit = (

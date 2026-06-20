@@ -220,12 +220,29 @@ static uint32_t __bingo_gemm_run(
     // Atlbound5
     Atlbound[5] = 1;
     uint32_t Atlstride[6];
-    // Atlstride0
-    Atlstride[0] = a_elem_len * meshRow * tileSize / 8;
+    // Atlstride0 — A K-tile pitch in bytes. The A reader's sparse interconnect
+    // wires read-port i only to banks of parity (i % BINGO_GRANULARITY_A), so
+    // the K-tile stride (in banks) must be a multiple of BINGO_GRANULARITY_A or
+    // a later K step walks port 0 onto an odd bank (unroutable -> fatal). For
+    // int8 A the tile is already an even number of banks for every shape; for
+    // int4 A at array_shape 1 the tile is a single bank, so round the pitch UP
+    // to BINGO_GRANULARITY_A banks. The datagen pads each int4 A K-tile to the
+    // same width (gemm_sim_utils.py), so the pad bytes land in the skipped bank
+    // and the VersaCore still consumes the valid tile (channel_en is unchanged).
+    uint32_t a_tile_banks =
+        (a_elem_len * meshRow * tileSize + BINGO_BANK_WIDTH - 1) / BINGO_BANK_WIDTH;
+    if (a_tile_banks == 0)
+    {
+        a_tile_banks = 1;
+    }
+    uint32_t a_tile_banks_aligned =
+        ((a_tile_banks + BINGO_GRANULARITY_A - 1) / BINGO_GRANULARITY_A) *
+        BINGO_GRANULARITY_A;
+    Atlstride[0] = a_tile_banks_aligned * (BINGO_BANK_WIDTH / 8);
     // Atlstride1
     Atlstride[1] = 0;
-    // Atlstride2
-    Atlstride[2] = a_elem_len * meshRow * tileSize * K / 8;
+    // Atlstride2 — one full K-run, using the (granularity-aligned) K-tile pitch.
+    Atlstride[2] = Atlstride[0] * K;
     // Atlstride3
     Atlstride[3] = 0;
     // Atlstride4
@@ -328,6 +345,15 @@ static uint32_t __bingo_gemm_run(
                                       snrt_cluster_idx(), snrt_cluster_core_idx());
                 return BINGO_RET_FAIL;
             }
+            // The D-extension output serializer PACKS output_matrix_per_store
+            // narrowed tiles into one BINGO_SERIAL_C_D_WIDTH beat and only emits a
+            // beat once it is full, so M*N must fill whole beats. If it does not
+            // (e.g. array_shape 1 small GEMMs where one narrowed tile <
+            // BINGO_SERIAL_C_D_WIDTH and M*N < output_matrix_per_store) the
+            // serializer would stall waiting for tiles that never come (sim hang).
+            // Bail cleanly; the sweep workload drops these unsupported configs up
+            // front (util/sim/gemm/gemm_psweep_lib.py) so this guard is never hit
+            // there. (Padding M/N to fill a beat would change the measured GEMM.)
             if (((M * N * one_output_tile_bits) % BINGO_SERIAL_C_D_WIDTH) != 0)
             {
                 VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! D extension output does not fill streamer stores cleanly\r\n",

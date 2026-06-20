@@ -50,6 +50,14 @@
 #define BINGO_D32_ELEM_LEN        32
 #define BINGO_SERIAL_C_D_WIDTH    1024
 
+// A-reader sparse-interconnect access granularity, in banks — must match the
+// hwcfg snax_acc_cfg `granularity_a` in snax_versacore_to_cluster.hjson. The A
+// reader's sparse TCDM crossbar wires read-port i only to banks of parity
+// (i % BINGO_GRANULARITY_A), so each A-reader K-tile stride must be a multiple
+// of this many banks (else a later K step walks port 0 onto an odd bank, which
+// is physically unroutable -> SparseInterconnect "Illegal bank access" fatal).
+#define BINGO_GRANULARITY_A       2
+
 // Per-stream CSR counts (how many uint32 words each channel-enable mask
 // spans). Derived from the hwcfg's array-width fields.
 #define BINGO_A_CSR_NUM           1

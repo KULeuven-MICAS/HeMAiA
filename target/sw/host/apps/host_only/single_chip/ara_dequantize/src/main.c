@@ -54,7 +54,12 @@ int main() {
             t_args[1] = (uint64_t)(uintptr_t)timing_output;
             t_args[2] = (uint64_t)(uintptr_t)&timing_dequant_scale;
             t_args[3] = N;
-            t_args[4] = (uint64_t)(uintptr_t)&timing_scratchpad;
+            // Arg4 is precision (ignored by the dequant kernel); the scratchpad
+            // pointer is Arg5 — see __host_bingo_kernel_dequantize_i32f32. Setting
+            // it at [4] left [5] uninitialised (the kernel then wrote through a
+            // garbage scratchpad pointer, and -Werror=maybe-uninitialized caught it).
+            t_args[4] = 0;
+            t_args[5] = (uint64_t)(uintptr_t)&timing_scratchpad;
             c0 = ara_get_cycle_count();
             __host_bingo_kernel_dequantize_i32f32(t_args);
             c1 = ara_get_cycle_count();

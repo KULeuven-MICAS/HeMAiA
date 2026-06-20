@@ -71,6 +71,31 @@ CONFIGS = [
 
 _CTYPE_BYTES = {"int8_t": 1, "uint16_t": 2, "int32_t": 4}
 
+# BINGO_SERIAL_C_D_WIDTH from gemm_shapes.h — the VersaCore C/D serializer beat
+# width (bits). The D-extension (requant->int8 / int32->fp16) output stage has two
+# kernel paths (offload_hw_kernels/gemm.h): when one narrowed output tile spans
+# >= one beat (meshRow*meshCol*d_bits >= 1024 — array_shape 0 and 2 here) the
+# streamer splits it into whole beats and works; when one tile is SMALLER than a
+# beat (the narrow meshRow=1 array_shape 1) the "pack multiple tiles into one
+# beat" path stalls the accelerator (observed: shape-1 hangs even when M*N fills
+# whole beats, e.g. (2,2,2,1)). So a D-extension config is only emittable when one
+# output tile already fills >= one serializer beat.
+_SERIAL_C_D_WIDTH = 1024
+
+
+def _d_extension_emittable(spec, gd):
+    """Whether the D-extension output stage can emit this config without stalling.
+    int32-output precisions have no D extension -> always emittable. For the
+    requant-int8 / int32->fp16 precisions, only configs whose single narrowed
+    output tile fills >= one serializer beat work (the small-tile packing path
+    hangs); in this sweep that excludes every array_shape-1 config."""
+    flags = spec["flags"]
+    if not (flags.get("quantization_enable", 0) or flags.get("int32tofp16_enable", 0)):
+        return True
+    d_bits = _CTYPE_BYTES[spec["d_ctype"]] * 8
+    one_output_tile_bits = gd["meshRow"] * gd["meshCol"] * d_bits
+    return one_output_tile_bits >= _SERIAL_C_D_WIDTH
+
 
 def _plain_args(cls):
     def make(A, B, C, D, M, K, N, shape, gd):
@@ -245,6 +270,23 @@ def run(prec_name):
               f"kept {len(configs)}/{len(CONFIGS)} configs")
 
     gen = _gen_configs(configs, hwcfg, spec["flags"])
+
+    # Drop configs the D-extension output serializer can't emit (would hang the
+    # accelerator). Only affects the requant-int8 / int32->fp16 precisions at the
+    # shapes/sizes whose narrowed output doesn't fill whole serializer beats
+    # (here: shape 1 with M*N too small). Padding M/N to fill a beat would change
+    # the measured GEMM, so these points are simply absent from the cycle LUT;
+    # int32-output precisions keep every config. Filter configs+gen together so
+    # configs.json (used by gather_gemm_luts.py) stays aligned with the DFG.
+    keep = [_d_extension_emittable(spec, gd) for gd in gen]
+    if not all(keep):
+        dropped = [c for c, k in zip(configs, keep) if not k]
+        print(f"[gemm_psweep:{prec_name}] dropped {len(dropped)} D-extension config(s) "
+              f"whose narrowed output can't fill whole {_SERIAL_C_D_WIDTH}-bit serializer "
+              f"beats (would hang): {dropped}")
+        configs = [c for c, k in zip(configs, keep) if k]
+        gen = [gd for gd, k in zip(gen, keep) if k]
+
     _check_fits_in_l1(gen, spec, args.l1_size_kb)
 
     if args.data_h is not None:
