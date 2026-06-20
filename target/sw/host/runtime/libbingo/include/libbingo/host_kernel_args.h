@@ -35,6 +35,7 @@ __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_entry_args {
 #define BINGO_PREC_FP16  1
 #define BINGO_PREC_INT8  2
 #define BINGO_PREC_INT16 3
+#define BINGO_PREC_INT32 4
 
 __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_check_result_args {
     uint64_t golden_data_addr;

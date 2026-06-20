@@ -28,7 +28,7 @@ from bingo_mem_handle import BingoMemAlloc, BingoMemSymbol
 from bingo_kernel_args import (
     SnaxBingoKernelIdma1dCopyArgs,
     SnaxBingoKernelGemmFullArgs,
-    HostBingoKernelSoftmaxF32Args,
+    HostBingoKernelAraSoftmaxArgs,
 )
 
 CHIPLET_ID = 0x00
@@ -102,7 +102,7 @@ def main():
     logits = BingoMemAlloc("logits", num_experts * 4, "L3")
     router = BingoNode(CHIPLET_ID, 0, HOST_CORE, node_name="router",
                        kernel_name="__host_bingo_kernel_softmax",
-                       kernel_args=HostBingoKernelSoftmaxF32Args(
+                       kernel_args=HostBingoKernelAraSoftmaxArgs(
                            input_addr=BingoMemSymbol("router_logits", offset=0),
                            output_addr=logits, num_rows=1, row_length=num_experts))
     dfg.bingo_add_node(router)

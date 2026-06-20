@@ -82,10 +82,11 @@ from bingo_kernel_args import (  # noqa E402
     SnaxBingoKernelGemmFullArgs,
     SnaxBingoKernelXdmaDToRowMajorArgs,
     HostBingoKernelCheckResultArgs,
-    HostBingoKernelQuantizeF32I8Args,
-    HostBingoKernelDequantizeI32F32Args,
-    HostBingoKernelSoftmaxF32Args,
-    HostBingoKernelAddI32Args,
+    HostBingoKernelAraQuantizeF32I8Args,
+    HostBingoKernelAraDequantizeI32F32Args,
+    HostBingoKernelAraSoftmaxArgs,
+    HostBingoKernelAraAddArgs,
+    BINGO_PREC_INT32,
     BINGO_CHECK_TYPE_BYTE_EXACT,
     BINGO_CHECK_TYPE_FP32_TOL,
 )
@@ -251,7 +252,7 @@ def emit_quantize_pattern(dfg: BingoDFG, mem: dict, hw: HwParams, *,
         assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=HOST_CORE,
         node_name="Quantize_X",
         kernel_name="__host_bingo_kernel_quantize_f32i8",
-        kernel_args=HostBingoKernelQuantizeF32I8Args(
+        kernel_args=HostBingoKernelAraQuantizeF32I8Args(
             input_addr=fp32_in, output_addr=int8_out,
             scale_out_addr=scale_out, num_elements=num_elements,
         ),
@@ -455,11 +456,12 @@ def emit_ksplit_gemm_pattern(dfg: BingoDFG, mem: dict, hw: HwParams,
             assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=HOST_CORE,
             node_name=f"Add_{name}_{label}",
             kernel_name="__host_bingo_kernel_add_i32",
-            kernel_args=HostBingoKernelAddI32Args(
+            kernel_args=HostBingoKernelAraAddArgs(
                 input_a_addr=running_buf,
                 input_b_addr=mem[f"{name}_D_partial_c{cid}_l3"],
                 output_addr=out_buf,
                 num_elements=D_num_elements,
+                precision=BINGO_PREC_INT32,
             ),
         )
         dfg.bingo_add_node(add_node)
@@ -508,7 +510,7 @@ def emit_ksplit_gemm_pattern(dfg: BingoDFG, mem: dict, hw: HwParams,
         assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=HOST_CORE,
         node_name=f"Dequant_{name}",
         kernel_name="__host_bingo_kernel_dequantize_i32f32",
-        kernel_args=HostBingoKernelDequantizeI32F32Args(
+        kernel_args=HostBingoKernelAraDequantizeI32F32Args(
             input_addr=running_buf, output_addr=fp32_dblk_buf,
             scale_addr=_sym(mem, spec.scale_sym_name),
             num_elements=D_num_elements,
@@ -586,7 +588,7 @@ def emit_softmax_pattern(dfg: BingoDFG, mem: dict, hw: HwParams, *,
         assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=HOST_CORE,
         node_name="Softmax",
         kernel_name="__host_bingo_kernel_softmax",
-        kernel_args=HostBingoKernelSoftmaxF32Args(
+        kernel_args=HostBingoKernelAraSoftmaxArgs(
             input_addr=in_buf, output_addr=out_buf,
             num_rows=num_rows, row_length=row_length,
         ),

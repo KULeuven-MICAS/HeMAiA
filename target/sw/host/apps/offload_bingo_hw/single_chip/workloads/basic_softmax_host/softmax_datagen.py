@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Golden data generator for basic_softmax_host.
-Tests __host_bingo_kernel_softmax_f32 in isolation.
+Tests the FP32 softmax host kernel in isolation.
 
 The HW softmax uses a Cephes polynomial approximation of exp() with FMA,
 ordered reduction via vfredosum, and multiplication by 1/sum (not direct

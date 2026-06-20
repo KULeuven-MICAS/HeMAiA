@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Golden data generator for basic_dequantize_host.
-Tests __host_bingo_kernel_dequantize_i32f32 in isolation.
+Tests the INT32->FP32 dequantize host kernel in isolation.
 
 Generates random INT32 data (simulating GEMM output), a known combined_scale,
 and the expected FP32 dequantized output for verification.

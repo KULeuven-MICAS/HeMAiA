@@ -510,13 +510,14 @@ DEFINE_FP32_BINARY_KERNEL(min, __riscv_vfmin_vv_f32m1)
 // must be summed with this kernel to yield the final INT32 D.
 // Arg layout (same as FP32 binary): a_addr, b_addr, output_addr, num_elements
 static inline uint64_t __host_bingo_kernel_add_i32(void *arg){
-    // Arg0-3: a, b, output, num_elements; Arg4: scratchpad_ptr
+    // Arg0-3: a, b, output, num_elements; Arg4: precision (ignored); Arg5: scratchpad_ptr
+    // (reads the unified ara_binary_args layout; precision is a no-op for int32 add)
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
     int32_t* a      = (int32_t*)(((uint64_t *)arg)[0]);
     int32_t* b      = (int32_t*)(((uint64_t *)arg)[1]);
     int32_t* output = (int32_t*)(((uint64_t *)arg)[2]);
     uint64_t num_elements = ((uint64_t *)arg)[3];
-    bingo_kernel_scratchpad_t* sp = (bingo_kernel_scratchpad_t*)(uintptr_t)((uint64_t *)arg)[4];
+    bingo_kernel_scratchpad_t* sp = (bingo_kernel_scratchpad_t*)(uintptr_t)((uint64_t *)arg)[5];
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
     uint64_t avl = num_elements;
@@ -711,13 +712,14 @@ static inline uint64_t __host_bingo_kernel_reduce_mean_f32(void *arg){
 // ============================================================
 
 static inline uint64_t __host_bingo_kernel_quantize_f32i8(void *arg){
-    // Arg0-3: input, output, scale_out, num_elements; Arg4: scratchpad_ptr
+    // Arg0-3: input, output, scale_out, num_elements; Arg4: precision (ignored); Arg5: scratchpad_ptr
+    // (reads the unified ara_convert_args layout; precision is a no-op for the conversion)
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
     float*   input      = (float*)(((uint64_t *)arg)[0]);
     int8_t*  output     = (int8_t*)(((uint64_t *)arg)[1]);
     float*   scale_out  = (float*)(((uint64_t *)arg)[2]);
     uint64_t num_elements = ((uint64_t *)arg)[3];
-    bingo_kernel_scratchpad_t* sp = (bingo_kernel_scratchpad_t*)(uintptr_t)((uint64_t *)arg)[4];
+    bingo_kernel_scratchpad_t* sp = (bingo_kernel_scratchpad_t*)(uintptr_t)((uint64_t *)arg)[5];
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
@@ -776,13 +778,14 @@ static inline uint64_t __host_bingo_kernel_dequantize_i32f32(void *arg){
     // Dequantize INT32 GEMM accumulator to FP32
     // y[i] = int32_input[i] * combined_scale
     // where combined_scale = scale_a * scale_b (pre-computed, stored at scale_addr)
-    // Arg0-3: input, output, scale, num_elements; Arg4: scratchpad_ptr
+    // Arg0-3: input, output, scale, num_elements; Arg4: precision (ignored); Arg5: scratchpad_ptr
+    // (reads the unified ara_convert_args layout; precision is a no-op for the conversion)
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
     int32_t* input     = (int32_t*)(((uint64_t *)arg)[0]);
     float*   output    = (float*)(((uint64_t *)arg)[1]);
     float*   scale_ptr = (float*)(((uint64_t *)arg)[2]);
     uint64_t num_elements = ((uint64_t *)arg)[3];
-    bingo_kernel_scratchpad_t* sp = (bingo_kernel_scratchpad_t*)(uintptr_t)((uint64_t *)arg)[4];
+    bingo_kernel_scratchpad_t* sp = (bingo_kernel_scratchpad_t*)(uintptr_t)((uint64_t *)arg)[5];
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
