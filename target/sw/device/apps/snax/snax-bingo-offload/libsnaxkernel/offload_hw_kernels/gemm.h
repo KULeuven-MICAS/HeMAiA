@@ -71,6 +71,60 @@
 // -------------------------------------------------------------
 
 // -------------------------------------------------------------
+// The "+C" term and accumPrevC  (D = A*B + C)
+// -------------------------------------------------------------
+// Every GEMM here computes D = A*B + C. The accumPrevC flag selects WHERE the
+// "+C" addend comes from: a C operand in memory, or the value already sitting
+// in the VersaCore accumulator register from the previous compute. There are
+// three mutually-exclusive C-handling modes (the host datagen asserts exactly
+// one is active):
+//
+//   1. add a real C (accumPrevC=0, C_addr != 0)  -> D = A*B + C_mem
+//        C is streamed from L1 using the shape's channel_en_C mask.
+//        Internally addNonZeroC=1 is inferred below.
+//   2. add zero  (accumPrevC=0, C_addr == 0)      -> D = A*B
+//        C is forced to 0: the C reader uses bingo_channel_en_C_null, so the
+//        accumulator is seeded with the bare product. addNonZeroC=0.
+//   3. accumulate previous (accumPrevC=1)         -> D = A*B + prev_reg
+//        NO C is streamed (Ctlbound0=0, channel_en_C_null). The array adds the
+//        new product on top of whatever its accumulator register still holds
+//        from the prior kernel call. addNonZeroC=0.
+//
+// How it reaches the hardware:
+//   set_versacore_csr(accumPrevC == 0, ...) writes the OVERWRITE_ACCUM CSR =
+//   take_in_new_c. In the array (chisel_acc .../versacore/{VersaCore,Accumulator,
+//   Array}.scala) this drives accAddExtIn, which is asserted only on the FIRST
+//   of the K accumulation steps of each output tile:
+//     accAddExtIn = (computeFireCounter==0) && take_in_new_c && busy
+//   On that first step the accumulator register is initialized to:
+//     take_in_new_c=1 (accumPrevC=0): reg := product[0] + C_external  (fresh: C or 0)
+//     take_in_new_c=0 (accumPrevC=1): reg := product[0] + reg_old     (keeps prior sum)
+//   Steps 1..K-1 always do reg += product[k] (the normal K reduction). The
+//   register is NOT cleared between kernel calls, which is exactly what lets a
+//   later accumPrevC=1 call continue a sum left by an earlier call.
+//
+// CONSTRAINT: accumPrevC=1 requires M == 1 && N == 1. The accumulator register
+// holds only ONE output tile (meshRow x meshCol). With M>1 or N>1 the array
+// walks to other tiles and overwrites the register, so "previous C" is only
+// well-defined for a single tile. (The host datagen asserts M==N==1 here.)
+//
+// Worked example — on-chip K-split / chained accumulation of one output tile,
+// computing  D = A0*B0 + A1*B1 + A2*B2  without ever loading/storing a partial
+// C to L1 between passes (M=N=1, same D_addr each call):
+//
+//   // pass 0: seed the register with A0*B0 (no C, accumPrevC=0)
+//   gemm(A0,B0, C=0,    D, M=1,K,N=1, accumPrevC=0); // reg = A0*B0,           D=reg
+//   // pass 1: add A1*B1 onto the kept register (accumPrevC=1, C ignored)
+//   gemm(A1,B1, C=0/ign,D, M=1,K,N=1, accumPrevC=1); // reg = A0*B0+A1*B1,     D=reg
+//   // pass 2: add A2*B2 onto the kept register
+//   gemm(A2,B2, C=0/ign,D, M=1,K,N=1, accumPrevC=1); // reg = A0*B0+A1*B1+A2*B2,D=reg
+//
+// After pass 2, D holds the full sum. Versus mode 1, this saves the C-load +
+// C-store memory traffic on every pass by keeping the running sum on-chip.
+// (To instead seed pass 0 with a bias term, use accumPrevC=0 with C_addr != 0.)
+// -------------------------------------------------------------
+
+// -------------------------------------------------------------
 // Shared GEMM core: configure the streamer + VersaCore and run.
 // All precision/quant fields are explicit parameters so the precision-named
 // wrappers (and gemm_full) below select them; the body is unchanged from the
