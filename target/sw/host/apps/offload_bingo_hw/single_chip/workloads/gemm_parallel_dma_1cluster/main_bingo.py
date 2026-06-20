@@ -27,13 +27,7 @@ cur_cluster_id = 0
 print(f"ROOT_DIR: {ROOT_DIR}")
 sys.path.append(f"{ROOT_DIR}/target/sw/host/runtime/libbingo/mini_compiler")
 sys.path.append(f"{ROOT_DIR}/util/sim")
-# __usg__ grouped util/sim: make common/gemm/xdma/ara importable
-import os as _usg_os, sys as _usg_sys
-for _usg_p in [p for p in list(_usg_sys.path) if str(p).rstrip('/').endswith('util/sim')]:
-    for _usg_s in ('common', 'gemm', 'xdma', 'ara'):
-        _usg_sub = _usg_os.path.join(_usg_p, _usg_s)
-        if _usg_sub not in _usg_sys.path:
-            _usg_sys.path.append(_usg_sub)
+import _usg_paths  # noqa: F401,E402  (registers util/sim/{common,gemm,xdma,ara} on sys.path)
 
 # Import emit_matmul_data from gemm_datagen to derive hardware-specific params
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))

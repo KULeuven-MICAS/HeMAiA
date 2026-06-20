@@ -30,14 +30,15 @@ import argparse
 import csv
 import json
 import os
-import subprocess
 import sys
 
 _THIS = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.normpath(os.path.join(_THIS, "../../../../../"))
-_GEN_TRACE = os.path.join(_ROOT, "util/trace/gen_trace.py")
-_BINGO_TRACE = os.path.join(_ROOT, "util/bingo_trace/bingo_trace.py")
-_PERF_HEADER = os.path.join(_ROOT, "target/sw/shared/runtime/perf_tracing.h")
+sys.path.insert(0, os.path.join(_ROOT, "util/automation_scripts"))
+from bingo_trace_gather import (  # noqa: E402
+    convert_traces, extract_run_cycles, parse_task_order, run_bingo_trace,
+)
+
 _WORKLOADS = os.path.join(
     _ROOT, "target/sw/host/apps/offload_bingo_hw/single_chip/workloads")
 _DEFAULT_OUT = os.path.join(_THIS, "gemm_cycles.csv")
@@ -51,55 +52,6 @@ PREC_KERNEL = {
     "i8i8_i8":  "__snax_bingo_kernel_gemm_i8i8_i8",
     "i8i4_f16": "__snax_bingo_kernel_gemm_i8i4_f16",
 }
-
-
-def _parse_task_order(task_yaml):
-    sys.path.insert(0, os.path.join(_ROOT, "util/automation_scripts"))
-    from hemaia_sim_runner import parse_tasks  # noqa: E402
-    from pathlib import Path
-    return [t["workload"] for t in parse_tasks(Path(task_yaml))]
-
-
-def _convert_traces(logs_dir, verbose=True):
-    """spike-dasm | gen_trace.py --permissive  for every .dasm lacking a .txt."""
-    import glob
-    made = 0
-    for dasm in sorted(glob.glob(os.path.join(logs_dir, "trace_chip_*_hart_*.dasm"))):
-        txt = dasm[:-len(".dasm")] + ".txt"
-        if os.path.exists(txt) and os.path.getmtime(txt) >= os.path.getmtime(dasm):
-            continue
-        cmd = f"spike-dasm < {dasm!r} | python3 {_GEN_TRACE!r} --permissive > {txt!r}"
-        r = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True)
-        if r.returncode != 0:
-            print(f"  ! gen_trace failed on {os.path.basename(dasm)}: "
-                  f"{r.stderr.strip()[:200]}")
-            continue
-        made += 1
-    if verbose:
-        print(f"  converted {made} .dasm -> .txt in {logs_dir}")
-
-
-def _run_bingo_trace(logs_dir):
-    out = os.path.join(logs_dir, "bingo_trace.json")
-    r = subprocess.run(
-        ["python3", _BINGO_TRACE, "--trace-header", _PERF_HEADER,
-         "--log-dir", logs_dir, "--output", out],
-        capture_output=True, text=True)
-    if r.returncode != 0:
-        print(f"  ! bingo_trace failed: {r.stderr.strip()[:300]}")
-        return None
-    return out
-
-
-def _gemm_full_run_cycles(bingo_json):
-    """Ordered list of GEMM_FULL_RUN dur_cc values (by timestamp)."""
-    with open(bingo_json) as f:
-        trace = json.load(f)
-    events = trace["traceEvents"] if isinstance(trace, dict) else trace
-    runs = [e for e in events
-            if e.get("ph") == "X" and "GEMM_FULL_RUN" in str(e.get("name", ""))]
-    runs.sort(key=lambda e: e.get("ts", 0))
-    return [int(e.get("args", {}).get("dur_cc", 0)) for e in runs]
 
 
 def gather_one(workload, idx, ci_dir, verbose=True):
@@ -117,11 +69,11 @@ def gather_one(workload, idx, ci_dir, verbose=True):
     configs = cj["configs"]
     op_node = PREC_KERNEL.get(prec, f"__snax_bingo_kernel_gemm_{prec}")
 
-    _convert_traces(logs_dir, verbose)
-    bingo_json = _run_bingo_trace(logs_dir)
+    convert_traces(logs_dir, verbose)
+    bingo_json = run_bingo_trace(logs_dir)
     if not bingo_json:
         return []
-    cycles = _gemm_full_run_cycles(bingo_json)
+    cycles = extract_run_cycles(bingo_json, "GEMM_FULL_RUN")
     if len(cycles) != len(configs):
         print(f"task_{idx} {workload}: {len(cycles)} GEMM_FULL_RUN events vs "
               f"{len(configs)} configs (pairing first {min(len(cycles), len(configs))})")
@@ -138,7 +90,7 @@ def gather_one(workload, idx, ci_dir, verbose=True):
 
 
 def gather_all(task_yaml, ci_dir, out_csv, verbose=True):
-    order = _parse_task_order(task_yaml)
+    order = parse_task_order(task_yaml)
     print(f"Expected {len(order)} gemm tasks from {os.path.basename(task_yaml)}")
     rows = []
     for idx, workload in enumerate(order):

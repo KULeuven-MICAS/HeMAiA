@@ -31,6 +31,9 @@ import sys
 
 _THIS = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.normpath(os.path.join(_THIS, "../../../../../"))
+sys.path.insert(0, os.path.join(_ROOT, "util/automation_scripts"))
+from bingo_trace_gather import parse_task_order  # noqa: E402
+
 _ARA_DIR = _THIS
 _DEFAULT_OUT = os.path.join(_ARA_DIR, "ara_cycles.csv")
 
@@ -48,14 +51,6 @@ OP_SPEC["quantize"] = "__host_bingo_kernel_quantize_f32i8"
 OP_SPEC["dequantize"] = "__host_bingo_kernel_dequantize_i32f32"
 
 _CYCLES_RE = re.compile(r"CYCLES,([^,]+),([^,]+),(\d+),(\d+),(\d+)")
-
-
-def _parse_task_order(task_yaml):
-    """Return the ordered workload names from the task YAML (= task_<idx>)."""
-    sys.path.insert(0, os.path.join(_ROOT, "util/automation_scripts"))
-    from hemaia_sim_runner import parse_tasks  # noqa E402  (no PyYAML needed)
-    from pathlib import Path
-    return [t["workload"] for t in parse_tasks(Path(task_yaml))]
 
 
 def _parse_cycles(uart_log):
@@ -131,7 +126,7 @@ def main():
     args = ap.parse_args()
 
     if os.path.exists(args.task_yaml):
-        order = _parse_task_order(args.task_yaml)
+        order = parse_task_order(args.task_yaml)
         print(f"Expected {len(order)} ara tasks from {os.path.basename(args.task_yaml)}")
 
     n = gather_all(args.ci_dir, args.out, only=args.only)

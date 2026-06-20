@@ -43,24 +43,8 @@ UART_LOG_PATH = REPO_ROOT / "target/sim/bin/uart_chip_0_0.log"
 HOST_CHECK_PASS_RE = re.compile(r"\[Host\]\s+Check\s+\[[^\]]+\]:\s+PASS\s+\(\d+ bytes\)")
 
 sys.path.insert(0, str(REPO_ROOT / "util" / "automation_scripts"))
-
-PARAM_FIELDS = [
-    "num_clusters",
-    "array_shape",
-    "data_type",
-    "transposed_A",
-    "transposed_B",
-    "int4_a_enable",
-    "int4_b_enable",
-    "K",
-    "N",
-    "M",
-    "addNonZeroC",
-    "addZeroC",
-    "accumPrevC",
-    "quantization_enable",
-    "int32tofp16_enable",
-]
+sys.path.insert(0, str(SCRIPT_DIR))
+from versacore_params import PARAM_FIELDS  # noqa: E402
 
 RESULT_FIELDS = [
     "test_name",

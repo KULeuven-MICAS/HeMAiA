@@ -19,13 +19,7 @@ import hjson
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
 sys.path.append(str(REPO_ROOT / "util/sim"))
-# __usg__ grouped util/sim: make common/gemm/xdma/ara importable
-import os as _usg_os, sys as _usg_sys
-for _usg_p in [p for p in list(_usg_sys.path) if str(p).rstrip('/').endswith('util/sim')]:
-    for _usg_s in ('common', 'gemm', 'xdma', 'ara'):
-        _usg_sub = _usg_os.path.join(_usg_p, _usg_s)
-        if _usg_sub not in _usg_sys.path:
-            _usg_sys.path.append(_usg_sub)
+import _usg_paths  # noqa: F401,E402  (registers util/sim/{common,gemm,xdma,ara} on sys.path)
 from gemm_sim_utils import (  # noqa E402
     _bytes_for_elements,
     _gemm_operand_widths,
@@ -36,23 +30,8 @@ L1_MEMORY_LIMIT_BYTES = int(512 * 1024 * 0.4) # 60% of 512KB to leave some room 
 L3_MEMORY_LIMIT_BYTES = int(40 * 1024) # 40KB heap
 DEFAULT_CSV = Path(__file__).with_name("testing_workload.csv")
 
-PARAM_FIELDS = [
-    "num_clusters",
-    "array_shape",
-    "data_type",
-    "transposed_A",
-    "transposed_B",
-    "int4_a_enable",
-    "int4_b_enable",
-    "K",
-    "N",
-    "M",
-    "addNonZeroC",
-    "addZeroC",
-    "accumPrevC",
-    "quantization_enable",
-    "int32tofp16_enable",
-]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from versacore_params import PARAM_FIELDS  # noqa: E402
 
 CSV_FIELDS = ["test_name", "suite", "operand_bytes"] + PARAM_FIELDS
 
