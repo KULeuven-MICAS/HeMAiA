@@ -1267,6 +1267,29 @@ class HostBingoKernelAraQuantizeF32I8Args(BingoKernelArgs):
         return a
 
 
+class HostBingoKernelAraQuantizeF16I8Args(BingoKernelArgs):
+    """FP16 -> INT8 per-tensor symmetric quantize. scale_out_addr receives the scale."""
+    KERNEL_NAME = "__host_bingo_kernel_quantize_f16i8"
+    def __init__(self, input_addr: _Addr, output_addr: _Addr,
+                 scale_out_addr: _Addr, num_elements: int):
+        self.input_addr = input_addr
+        self.output_addr = output_addr
+        self.scale_out_addr = scale_out_addr
+        self.num_elements = num_elements
+
+    def get_struct_name(self) -> str:
+        return "__host_bingo_kernel_ara_convert_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.input_addr,     "input_addr",  a, handle_name_map, split_64bit=False, as_64bit=True)
+        self._process_addr(self.output_addr,    "output_addr", a, handle_name_map, split_64bit=False, as_64bit=True)
+        self._process_addr(self.scale_out_addr, "scale_addr",  a, handle_name_map, split_64bit=False, as_64bit=True)
+        a["num_elements"] = str(self.num_elements)
+        a["precision"] = "0"  # no-op for the conversion (input type is fixed fp16)
+        return a
+
+
 class HostBingoKernelAraDequantizeI32F32Args(BingoKernelArgs):
     """INT32 -> FP32 dequantize. scale_addr is read (combined_scale = scale_a * scale_b)."""
     KERNEL_NAME = "__host_bingo_kernel_dequantize_i32f32"

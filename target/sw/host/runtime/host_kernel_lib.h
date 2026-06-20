@@ -709,6 +709,8 @@ static inline uint64_t __host_bingo_kernel_reduce_mean_f32(void *arg){
 // ============================================================
 // Data type conversion kernels for mixed-precision inference
 // FP32 <-> INT8 at the boundary between CVA6 and VersaCore
+// (FP16 -> INT8 quantize lives further down, after the BINGO_HAVE_FP16_VEC
+//  block: see __host_bingo_kernel_quantize_f16i8.)
 // ============================================================
 
 static inline uint64_t __host_bingo_kernel_quantize_f32i8(void *arg){
@@ -955,6 +957,100 @@ static inline vfloat16mf2_t __bingo_narrow_f32m1_f16mf2(vfloat32m1_t w, size_t v
     return d;
 }
 #endif
+
+// ============================================================
+// FP16 -> INT8 quantize. Sibling of __host_bingo_kernel_quantize_f32i8
+// (see the FP32<->INT8 conversion section above); lives here because it
+// uses the BINGO_HAVE_FP16_VEC widen path defined just above. Identical
+// per-tensor symmetric scheme (scale = max(|x|)/127), only the input load
+// differs: FP16 is widened to FP32 (vfwcvt) before reusing the f32 math.
+// ============================================================
+static inline uint64_t __host_bingo_kernel_quantize_f16i8(void *arg){
+    // Arg0-3: input(fp16), output(int8), scale_out, num_elements; Arg4: precision (ignored); Arg5: scratchpad_ptr
+    // (reads the unified ara_convert_args layout; precision is a no-op for the conversion)
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+    uint16_t* input      = (uint16_t*)(((uint64_t *)arg)[0]);
+    int8_t*   output     = (int8_t*)(((uint64_t *)arg)[1]);
+    float*    scale_out  = (float*)(((uint64_t *)arg)[2]);
+    uint64_t  num_elements = ((uint64_t *)arg)[3];
+    bingo_kernel_scratchpad_t* sp = (bingo_kernel_scratchpad_t*)(uintptr_t)((uint64_t *)arg)[5];
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
+
+#if BINGO_HAVE_FP16_VEC
+    // Pass 1: widen fp16->fp32, find max(|x|) using RVV
+    float abs_max = 0.0f;
+    uint64_t avl = num_elements;
+    _Float16 *ptr = (_Float16*)input;
+    for (size_t vl = __riscv_vsetvl_e16mf2(avl); avl > 0; avl -= vl, ptr += vl) {
+        vl = __riscv_vsetvl_e16mf2(avl);
+        vfloat32m1_t v = __riscv_vfwcvt_f_f_v_f32m1(__riscv_vle16_v_f16mf2(ptr, vl), vl);
+        vfloat32m1_t neg_v = __riscv_vfneg_v_f32m1(v, vl);
+        vfloat32m1_t abs_v = __riscv_vfmax_vv_f32m1(v, neg_v, vl);
+        vfloat32m1_t init = __riscv_vfmv_v_f_f32m1(abs_max, vl);
+        vfloat32m1_t rmax = __riscv_vfredmax_vs_f32m1_f32m1(abs_v, init, vl);
+        abs_max = __riscv_vfmv_f_s_f32m1_f32(rmax);
+    }
+
+    // Compute scale
+    float scale = abs_max / 127.0f;
+    if (scale < 1e-10f) scale = 1e-10f;  // avoid div-by-zero for near-zero input
+    *scale_out = scale;
+    float inv_scale = 1.0f / scale;
+
+    // Pass 2: widen fp16->fp32, scale, round, clamp, narrow to int8
+    avl = num_elements;
+    ptr = (_Float16*)input;
+    int8_t *o_ptr = output;
+    for (size_t vl = __riscv_vsetvl_e16mf2(avl); avl > 0;
+         avl -= vl, ptr += vl, o_ptr += vl) {
+        vl = __riscv_vsetvl_e16mf2(avl);
+        vfloat32m1_t v = __riscv_vfwcvt_f_f_v_f32m1(__riscv_vle16_v_f16mf2(ptr, vl), vl);
+        vfloat32m1_t scaled = __riscv_vfmul_vf_f32m1(v, inv_scale, vl);
+        // Round to nearest integer
+        vint32m1_t rounded = __riscv_vfcvt_x_f_v_i32m1(scaled, vl);
+        // Clamp to [-128, 127]
+        vint32m1_t lo = __riscv_vmv_v_x_i32m1(-128, vl);
+        vint32m1_t hi = __riscv_vmv_v_x_i32m1(127, vl);
+        rounded = __riscv_vmax_vv_i32m1(rounded, lo, vl);
+        rounded = __riscv_vmin_vv_i32m1(rounded, hi, vl);
+        // Narrow int32 -> int8 via scalar extract (safe for initial bring-up)
+        for (size_t i = 0; i < vl; i++) {
+            int32_t val = __riscv_vmv_x_s_i32m1_i32(
+                __riscv_vslidedown_vx_i32m1(rounded, i, vl));
+            o_ptr[i] = (int8_t)val;
+        }
+    }
+#else
+    // Scalar fallback (no fp16 vector support): convert each half to fp32 in SW.
+    // Pass 1: find max(|x|)
+    float abs_max = 0.0f;
+    for (uint64_t i = 0; i < num_elements; i++) {
+        float x = __bingo_fp16_to_fp32(input[i]);
+        float ax = x < 0.0f ? -x : x;
+        if (ax > abs_max) abs_max = ax;
+    }
+    // Compute scale
+    float scale = abs_max / 127.0f;
+    if (scale < 1e-10f) scale = 1e-10f;
+    *scale_out = scale;
+    float inv_scale = 1.0f / scale;
+    // Pass 2: scale, round, clamp to int8
+    for (uint64_t i = 0; i < num_elements; i++) {
+        float scaled = __bingo_fp16_to_fp32(input[i]) * inv_scale;
+        int32_t r = (int32_t)(scaled < 0.0f ? scaled - 0.5f : scaled + 0.5f);
+        if (r < -128) r = -128;
+        if (r > 127)  r = 127;
+        output[i] = (int8_t)r;
+    }
+#endif
+
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
+    sp->return_value = (uint32_t)(uintptr_t)output;
+    sp->num_return_values = num_elements;
+    return BINGO_RET_SUCC;
+}
 
 // ---- typed native binary impls: out[i] = vop(a[i], b[i]) ----
 #define __BINGO_BINARY_IMPL(op, P, T, ESET, ELD, EST, VT, VOP)                 \

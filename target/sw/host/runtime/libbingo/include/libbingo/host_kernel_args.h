@@ -80,7 +80,8 @@ typedef __host_bingo_kernel_xdma_1d_copy_args_t __host_bingo_kernel_xdma_args_t;
 //                reduce_sum/reduce_max/reduce_mean         (in, out, n)
 //   ara_softmax: softmax                                   (in, out, rows, len)
 //   ara_rmsnorm: rmsnorm                          (in, weight, out, hidden, tokens)
-//   ara_convert: quantize_f32i8 / dequantize_i32f32        (in, out, scale, n)
+//   ara_convert: quantize_f32i8 / quantize_f16i8 / dequantize_i32f32
+//                                                          (in, out, scale, n)
 // ==========================================================================
 __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_ara_binary_args {
     uint64_t input_a_addr;     // operand A (silu_mul: gate)
@@ -120,7 +121,8 @@ __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_ara_rmsnorm_args {
 
 // Conversion ops with a scale pointer (quantize: writes scale; dequantize: reads
 // scale). The kernels read only {input, output, scale, num_elements}; precision
-// is a passthrough no-op (kept for a uniform shape).
+// is a passthrough no-op (kept for a uniform shape). Consumed by quantize_f32i8,
+// quantize_f16i8 (fp16 input), and dequantize_i32f32.
 __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_ara_convert_args {
     uint64_t input_addr;
     uint64_t output_addr;
