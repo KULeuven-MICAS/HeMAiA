@@ -44,9 +44,8 @@ from bingo_kernel_args import (  # noqa E402
     SnaxBingoKernelGemmFullArgs,
     HostBingoKernelCheckResultArgs,
     HostBingoKernelIdmaArgs,
-    HostBingoKernelAraAddArgs,
+    HostBingoKernelAraAddI32Args,
     HostBingoKernelAraDequantizeI32F32Args,
-    BINGO_PREC_INT32,
 )
 
 
@@ -303,12 +302,11 @@ def main():
         assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=HOST_CORE,
         node_name="Add_c0_c1",
         kernel_name="__host_bingo_kernel_add_i32",
-        kernel_args=HostBingoKernelAraAddArgs(
+        kernel_args=HostBingoKernelAraAddI32Args(
             input_a_addr=l3_D_partial[0],
             input_b_addr=l3_D_partial[1],
             output_addr=l3_sum_c0_c1,
             num_elements=D_num_elements,
-            precision=BINGO_PREC_INT32,
         ),
     )
 
@@ -340,12 +338,11 @@ def main():
         assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=HOST_CORE,
         node_name="Add_c0_c1_c2",
         kernel_name="__host_bingo_kernel_add_i32",
-        kernel_args=HostBingoKernelAraAddArgs(
+        kernel_args=HostBingoKernelAraAddI32Args(
             input_a_addr=l3_sum_c0_c1,
             input_b_addr=l3_D_partial[2],
             output_addr=l3_sum_c0_c1_c2,
             num_elements=D_num_elements,
-            precision=BINGO_PREC_INT32,
         ),
     )
 
@@ -377,12 +374,11 @@ def main():
         assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=HOST_CORE,
         node_name="Add_c0_c1_c2_c3",
         kernel_name="__host_bingo_kernel_add_i32",
-        kernel_args=HostBingoKernelAraAddArgs(
+        kernel_args=HostBingoKernelAraAddI32Args(
             input_a_addr=l3_sum_c0_c1_c2,
             input_b_addr=l3_D_partial[3],
             output_addr=l3_sum_final,
             num_elements=D_num_elements,
-            precision=BINGO_PREC_INT32,
         ),
     )
 

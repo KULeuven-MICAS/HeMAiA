@@ -975,6 +975,9 @@ static inline void __bingo_##op##_##P(const T* a, const T* b, T* o, uint64_t n){
 #define __BINGO_BINARY_I16(op, VOP)                                            \
     __BINGO_BINARY_IMPL(op, i16, int16_t, __riscv_vsetvl_e16m1,              \
         __riscv_vle16_v_i16m1, __riscv_vse16_v_i16m1, vint16m1_t, VOP)
+#define __BINGO_BINARY_I32(op, VOP)                                            \
+    __BINGO_BINARY_IMPL(op, i32, int32_t, __riscv_vsetvl_e32m1,              \
+        __riscv_vle32_v_i32m1, __riscv_vse32_v_i32m1, vint32m1_t, VOP)
 
 #if BINGO_HAVE_FP16_VEC
 #define __BINGO_BINARY_CASE_FP16(op)                                           \
@@ -991,6 +994,12 @@ static inline void __bingo_##op##_##P(const T* a, const T* b, T* o, uint64_t n){
     case BINGO_PREC_INT16:                                                     \
         __bingo_##op##_i16((const int16_t*)A[0], (const int16_t*)A[1],       \
                              (int16_t*)A[2], n); break;
+// int8 + int16 + int32 (for ops with a native int32 vector impl)
+#define __BINGO_BINARY_CASE_INT_ALL(op)                                        \
+    __BINGO_BINARY_CASE_INT_BOTH(op)                                           \
+    case BINGO_PREC_INT32:                                                     \
+        __bingo_##op##_i32((const int32_t*)A[0], (const int32_t*)A[1],       \
+                             (int32_t*)A[2], n); break;
 #define __BINGO_BINARY_CASE_INT_NONE(op)
 
 // Binary dispatcher: arg = {a, b, out, n, precision}.
@@ -1018,15 +1027,18 @@ __BINGO_BINARY_F16(max, __riscv_vfmax_vv_f16m1)
 __BINGO_BINARY_F16(min, __riscv_vfmin_vv_f16m1)
 #endif
 __BINGO_BINARY_I8(add, __riscv_vadd_vv_i8m1)   __BINGO_BINARY_I16(add, __riscv_vadd_vv_i16m1)
-__BINGO_BINARY_I8(sub, __riscv_vsub_vv_i8m1)   __BINGO_BINARY_I16(sub, __riscv_vsub_vv_i16m1)
-__BINGO_BINARY_I8(mul, __riscv_vmul_vv_i8m1)   __BINGO_BINARY_I16(mul, __riscv_vmul_vv_i16m1)
-__BINGO_BINARY_I8(max, __riscv_vmax_vv_i8m1)   __BINGO_BINARY_I16(max, __riscv_vmax_vv_i16m1)
-__BINGO_BINARY_I8(min, __riscv_vmin_vv_i8m1)   __BINGO_BINARY_I16(min, __riscv_vmin_vv_i16m1)
+__BINGO_BINARY_I8(sub, __riscv_vsub_vv_i8m1)   __BINGO_BINARY_I16(sub, __riscv_vsub_vv_i16m1)   __BINGO_BINARY_I32(sub, __riscv_vsub_vv_i32m1)
+__BINGO_BINARY_I8(mul, __riscv_vmul_vv_i8m1)   __BINGO_BINARY_I16(mul, __riscv_vmul_vv_i16m1)   __BINGO_BINARY_I32(mul, __riscv_vmul_vv_i32m1)
+__BINGO_BINARY_I8(max, __riscv_vmax_vv_i8m1)   __BINGO_BINARY_I16(max, __riscv_vmax_vv_i16m1)   __BINGO_BINARY_I32(max, __riscv_vmax_vv_i32m1)
+__BINGO_BINARY_I8(min, __riscv_vmin_vv_i8m1)   __BINGO_BINARY_I16(min, __riscv_vmin_vv_i16m1)   __BINGO_BINARY_I32(min, __riscv_vmin_vv_i32m1)
+// add keeps INT_BOTH: its int32 path is the distinct __host_bingo_kernel_add_i32
+// kernel (K-split accumulation, writes scratchpad return-values). sub/mul/max/min
+// take int32 through the dispatcher.
 __BINGO_BINARY_DISPATCH(add, __BINGO_BINARY_CASE_INT_BOTH)
-__BINGO_BINARY_DISPATCH(sub, __BINGO_BINARY_CASE_INT_BOTH)
-__BINGO_BINARY_DISPATCH(mul, __BINGO_BINARY_CASE_INT_BOTH)
-__BINGO_BINARY_DISPATCH(max, __BINGO_BINARY_CASE_INT_BOTH)
-__BINGO_BINARY_DISPATCH(min, __BINGO_BINARY_CASE_INT_BOTH)
+__BINGO_BINARY_DISPATCH(sub, __BINGO_BINARY_CASE_INT_ALL)
+__BINGO_BINARY_DISPATCH(mul, __BINGO_BINARY_CASE_INT_ALL)
+__BINGO_BINARY_DISPATCH(max, __BINGO_BINARY_CASE_INT_ALL)
+__BINGO_BINARY_DISPATCH(min, __BINGO_BINARY_CASE_INT_ALL)
 __BINGO_BINARY_DISPATCH(div, __BINGO_BINARY_CASE_INT_NONE)
 
 // ---- typed native unary impls: out[i] = body(in[i]) ----
@@ -1047,6 +1059,9 @@ static inline void __bingo_##op##_##P(const T* in, T* o, uint64_t n){          \
 #define __BINGO_UNARY_I16(op, BODY)                                            \
     __BINGO_UNARY_IMPL(op, i16, int16_t, __riscv_vsetvl_e16m1,              \
         __riscv_vle16_v_i16m1, __riscv_vse16_v_i16m1, vint16m1_t, BODY)
+#define __BINGO_UNARY_I32(op, BODY)                                            \
+    __BINGO_UNARY_IMPL(op, i32, int32_t, __riscv_vsetvl_e32m1,              \
+        __riscv_vle32_v_i32m1, __riscv_vse32_v_i32m1, vint32m1_t, BODY)
 
 // fp16 transcendental: widen f16->f32 (mf2->m1 keeps vl in range), reuse the
 // fp32 body, narrow f32->f16. BODY32 reads vfloat32m1_t v -> sets result.
@@ -1077,6 +1092,11 @@ static inline void __bingo_##op##_f16(const _Float16* in, _Float16* o, uint64_t 
         __bingo_##op##_i8((const int8_t*)A[0], (int8_t*)A[1], n); break;     \
     case BINGO_PREC_INT16:                                                     \
         __bingo_##op##_i16((const int16_t*)A[0], (int16_t*)A[1], n); break;
+// int8 + int16 + int32 (for ops with a native int32 vector impl)
+#define __BINGO_UNARY_CASE_INT_ALL(op)                                         \
+    __BINGO_UNARY_CASE_INT_BOTH(op)                                            \
+    case BINGO_PREC_INT32:                                                     \
+        __bingo_##op##_i32((const int32_t*)A[0], (int32_t*)A[1], n); break;
 #define __BINGO_UNARY_CASE_INT_NONE(op)
 
 // Unary dispatcher: arg = {in, out, n, precision}.
@@ -1103,13 +1123,16 @@ __BINGO_UNARY_F16_NATIVE(abs,  { result = __riscv_vfmax_vv_f16m1(v, __riscv_vfne
 #endif
 __BINGO_UNARY_I8 (relu, { result = __riscv_vmax_vx_i8m1(v, 0, vl); })
 __BINGO_UNARY_I16(relu, { result = __riscv_vmax_vx_i16m1(v, 0, vl); })
+__BINGO_UNARY_I32(relu, { result = __riscv_vmax_vx_i32m1(v, 0, vl); })
 __BINGO_UNARY_I8 (neg,  { result = __riscv_vneg_v_i8m1(v, vl); })
 __BINGO_UNARY_I16(neg,  { result = __riscv_vneg_v_i16m1(v, vl); })
+__BINGO_UNARY_I32(neg,  { result = __riscv_vneg_v_i32m1(v, vl); })
 __BINGO_UNARY_I8 (abs,  { result = __riscv_vmax_vv_i8m1(v, __riscv_vneg_v_i8m1(v, vl), vl); })
 __BINGO_UNARY_I16(abs,  { result = __riscv_vmax_vv_i16m1(v, __riscv_vneg_v_i16m1(v, vl), vl); })
-__BINGO_UNARY_DISPATCH(relu, __BINGO_UNARY_CASE_INT_BOTH)
-__BINGO_UNARY_DISPATCH(neg,  __BINGO_UNARY_CASE_INT_BOTH)
-__BINGO_UNARY_DISPATCH(abs,  __BINGO_UNARY_CASE_INT_BOTH)
+__BINGO_UNARY_I32(abs,  { result = __riscv_vmax_vv_i32m1(v, __riscv_vneg_v_i32m1(v, vl), vl); })
+__BINGO_UNARY_DISPATCH(relu, __BINGO_UNARY_CASE_INT_ALL)
+__BINGO_UNARY_DISPATCH(neg,  __BINGO_UNARY_CASE_INT_ALL)
+__BINGO_UNARY_DISPATCH(abs,  __BINGO_UNARY_CASE_INT_ALL)
 
 // float-only unary ops (fp16 via widen/narrow, reusing the fp32 math).
 __BINGO_UNARY_F16_VIA_F32(exp, { result = __bingo_exp_f32(v, vl); })
@@ -1214,9 +1237,31 @@ static inline int32_t __bingo_reduce_max_i16(const int16_t* in, uint64_t n){
     }
     return (int32_t)mv;
 }
+// int32 reduce: int32 in -> int32 scalar out (same out type as the i8/i16 reduce).
+// The sum accumulates in int32 and can overflow (same caveat as a chained int32 add).
+static inline int32_t __bingo_reduce_sum_i32(const int32_t* in, uint64_t n){
+    int32_t acc = 0; uint64_t avl = n; const int32_t *p = in;
+    for (size_t vl = __riscv_vsetvl_e32m1(avl); avl>0; avl-=vl, p+=vl){
+        vl = __riscv_vsetvl_e32m1(avl);
+        vint32m1_t v = __riscv_vle32_v_i32m1(p, vl);
+        vint32m1_t z = __riscv_vmv_v_x_i32m1(0, vl);
+        acc += __riscv_vmv_x_s_i32m1_i32(__riscv_vredsum_vs_i32m1_i32m1(v, z, vl));
+    }
+    return acc;
+}
+static inline int32_t __bingo_reduce_max_i32(const int32_t* in, uint64_t n){
+    int32_t mv = in[0]; uint64_t avl = n; const int32_t *p = in;
+    for (size_t vl = __riscv_vsetvl_e32m1(avl); avl>0; avl-=vl, p+=vl){
+        vl = __riscv_vsetvl_e32m1(avl);
+        vint32m1_t v = __riscv_vle32_v_i32m1(p, vl);
+        vint32m1_t i = __riscv_vmv_v_x_i32m1(mv, vl);
+        mv = __riscv_vmv_x_s_i32m1_i32(__riscv_vredmax_vs_i32m1_i32m1(v, i, vl));
+    }
+    return mv;
+}
 
 // reduce dispatchers: arg = {in, out, n, precision}.
-// FP32 -> float out (legacy). FP16 -> float out. INT8/INT16 -> int32 out.
+// FP32 -> float out (legacy). FP16 -> float out. INT8/INT16/INT32 -> int32 out.
 static inline uint64_t __host_bingo_kernel_reduce_sum(void *arg){
     uint64_t *A = (uint64_t*)arg; uint64_t prec = A[3];
     if (prec == BINGO_PREC_FP32) return __host_bingo_kernel_reduce_sum_f32(arg);
@@ -1228,6 +1273,7 @@ static inline uint64_t __host_bingo_kernel_reduce_sum(void *arg){
 #endif
         case BINGO_PREC_INT8:  *(int32_t*)A[1] = __bingo_reduce_sum_i8((const int8_t*)A[0], n); break;
         case BINGO_PREC_INT16: *(int32_t*)A[1] = __bingo_reduce_sum_i16((const int16_t*)A[0], n); break;
+        case BINGO_PREC_INT32: *(int32_t*)A[1] = __bingo_reduce_sum_i32((const int32_t*)A[0], n); break;
         default: ret = BINGO_RET_FAIL;
     }
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
@@ -1244,6 +1290,7 @@ static inline uint64_t __host_bingo_kernel_reduce_max(void *arg){
 #endif
         case BINGO_PREC_INT8:  *(int32_t*)A[1] = __bingo_reduce_max_i8((const int8_t*)A[0], n); break;
         case BINGO_PREC_INT16: *(int32_t*)A[1] = __bingo_reduce_max_i16((const int16_t*)A[0], n); break;
+        case BINGO_PREC_INT32: *(int32_t*)A[1] = __bingo_reduce_max_i32((const int32_t*)A[0], n); break;
         default: ret = BINGO_RET_FAIL;
     }
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);

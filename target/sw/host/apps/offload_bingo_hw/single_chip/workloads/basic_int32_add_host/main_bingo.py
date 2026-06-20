@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Attention test DFG for the int32 add host kernel (HostBingoKernelAraAddArgs, precision=BINGO_PREC_INT32).
+# Attention test DFG for the int32 add host kernel (HostBingoKernelAraAddI32Args).
 # Chains 3 add calls: ((p0 + p1) + p2) + p3 → golden_sum_final.
 # Validates the kernel needed for inter-cluster partial-D accumulation
 # in K-split GEMM schemes (used by attn_test_ksplit_gemm).
@@ -26,8 +26,7 @@ from bingo_node import BingoNode  # noqa E402
 from bingo_mem_handle import BingoMemAlloc, BingoMemSymbol  # noqa E402
 from bingo_kernel_args import (  # noqa E402
     HostBingoKernelCheckResultArgs,
-    HostBingoKernelAraAddArgs,
-    BINGO_PREC_INT32,
+    HostBingoKernelAraAddI32Args,
 )
 
 HOST_CORE = 2
@@ -86,10 +85,9 @@ def main():
         return BingoNode(
             assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=HOST_CORE,
             node_name=name, kernel_name="__host_bingo_kernel_add_i32",
-            kernel_args=HostBingoKernelAraAddArgs(
+            kernel_args=HostBingoKernelAraAddI32Args(
                 input_a_addr=a_sym, input_b_addr=b_sym,
-                output_addr=out_buf, num_elements=num_elements,
-                precision=BINGO_PREC_INT32))
+                output_addr=out_buf, num_elements=num_elements))
 
     def check_node(name, golden_sym, output_buf):
         return BingoNode(

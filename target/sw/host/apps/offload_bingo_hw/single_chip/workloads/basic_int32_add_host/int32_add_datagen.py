@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Test workload for the int32 add host kernel (HostBingoKernelAraAddArgs, precision=BINGO_PREC_INT32), used
+# Test workload for the int32 add host kernel (HostBingoKernelAraAddI32Args), used
 # for inter-cluster partial-D accumulation in K-split GEMM schemes).
 #
 # Generates 4 random INT32 partial arrays (simulating cluster outputs)

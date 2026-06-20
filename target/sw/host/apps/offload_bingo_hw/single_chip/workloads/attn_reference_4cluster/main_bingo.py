@@ -84,9 +84,8 @@ from bingo_kernel_args import (  # noqa E402
     HostBingoKernelCheckResultArgs,
     HostBingoKernelAraQuantizeF32I8Args,
     HostBingoKernelAraDequantizeI32F32Args,
-    HostBingoKernelAraSoftmaxArgs,
-    HostBingoKernelAraAddArgs,
-    BINGO_PREC_INT32,
+    HostBingoKernelAraSoftmaxF32Args,
+    HostBingoKernelAraAddI32Args,
     BINGO_CHECK_TYPE_BYTE_EXACT,
     BINGO_CHECK_TYPE_FP32_TOL,
 )
@@ -456,12 +455,11 @@ def emit_ksplit_gemm_pattern(dfg: BingoDFG, mem: dict, hw: HwParams,
             assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=HOST_CORE,
             node_name=f"Add_{name}_{label}",
             kernel_name="__host_bingo_kernel_add_i32",
-            kernel_args=HostBingoKernelAraAddArgs(
+            kernel_args=HostBingoKernelAraAddI32Args(
                 input_a_addr=running_buf,
                 input_b_addr=mem[f"{name}_D_partial_c{cid}_l3"],
                 output_addr=out_buf,
                 num_elements=D_num_elements,
-                precision=BINGO_PREC_INT32,
             ),
         )
         dfg.bingo_add_node(add_node)
@@ -588,7 +586,7 @@ def emit_softmax_pattern(dfg: BingoDFG, mem: dict, hw: HwParams, *,
         assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=HOST_CORE,
         node_name="Softmax",
         kernel_name="__host_bingo_kernel_softmax",
-        kernel_args=HostBingoKernelAraSoftmaxArgs(
+        kernel_args=HostBingoKernelAraSoftmaxF32Args(
             input_addr=in_buf, output_addr=out_buf,
             num_rows=num_rows, row_length=row_length,
         ),

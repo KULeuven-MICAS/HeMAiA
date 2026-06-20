@@ -4,7 +4,7 @@ Attention test: FP32 softmax kernel in isolation.
 
 DFG: Softmax (Host,c0) -> Check_softmax (Host,c0)
 
-Tests the softmax host kernel (HostBingoKernelAraSoftmaxArgs, FP32 via the
+Tests the softmax host kernel (HostBingoKernelAraSoftmaxF32Args, FP32 via the
 multi-precision softmax dispatcher) by computing row-wise softmax on a FP32
 input and checking the output against a golden reference.
 """
@@ -31,7 +31,7 @@ from bingo_node import BingoNode  # noqa E402
 from bingo_mem_handle import BingoMemAlloc, BingoMemSymbol  # noqa E402
 from bingo_kernel_args import (  # noqa E402
     HostBingoKernelCheckResultArgs,
-    HostBingoKernelAraSoftmaxArgs,
+    HostBingoKernelAraSoftmaxF32Args,
     BINGO_CHECK_TYPE_FP32_TOL,
 )
 
@@ -102,7 +102,7 @@ def main():
         assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=HOST_CORE,
         node_name="Softmax",
         kernel_name="__host_bingo_kernel_softmax",
-        kernel_args=HostBingoKernelAraSoftmaxArgs(
+        kernel_args=HostBingoKernelAraSoftmaxF32Args(
             input_addr=sym_input,
             output_addr=softmax_out_buf,
             num_rows=num_rows,

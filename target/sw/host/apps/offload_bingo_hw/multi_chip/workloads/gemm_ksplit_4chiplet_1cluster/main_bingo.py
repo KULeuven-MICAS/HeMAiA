@@ -38,9 +38,8 @@ from bingo_helpers import chiplet_addr_transform_loc  # noqa E402
 from bingo_kernel_args import (  # noqa E402
     HostBingoKernelCheckResultArgs,
     HostBingoKernelIdmaArgs,
-    HostBingoKernelAraAddArgs,
+    HostBingoKernelAraAddI32Args,
     HostBingoKernelAraDequantizeI32F32Args,
-    BINGO_PREC_INT32,
     SnaxBingoKernelGemmFullArgs,
     SnaxBingoKernelIdma1dCopyArgs,
 )
@@ -331,12 +330,11 @@ def main():
             assigned_core_id=HOST_CORE,
             node_name=f"Add_k0_to_k{i}",
             kernel_name="__host_bingo_kernel_add_i32",
-            kernel_args=HostBingoKernelAraAddArgs(
+            kernel_args=HostBingoKernelAraAddI32Args(
                 input_a_addr=prev_sum,
                 input_b_addr=l3_D_reduce[i],
                 output_addr=prev_sum,
                 num_elements=D_num_elements,
-                precision=BINGO_PREC_INT32,
             ),
         )
         node_load_golden_sum = BingoNode(

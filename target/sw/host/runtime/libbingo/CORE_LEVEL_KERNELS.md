@@ -43,17 +43,30 @@ The typed `__host_bingo_kernel_<op>_f32` / `_i32` kernels (plus `quantize_f32i8`
 `dequantize_i32f32`) below are the single-precision entry points. The elementwise /
 reduce / softmax / rmsnorm / silu_mul ops also have a runtime-typed multi-precision
 **dispatcher** `__host_bingo_kernel_<op>` that picks fp32/fp16/int8/int16 from a
-`precision` arg (`BINGO_PREC_*`) and delegates the fp32 case to the typed kernel. From
-the mini-compiler, drive these via the unified `HostBingoKernelAra*Args` classes (one
-per op, sharing the `ara_binary` / `ara_unary` / `ara_softmax` / `ara_rmsnorm` /
-`ara_convert` arg structs — all carrying `precision` at arg index [4] and
-`scratchpad_ptr` at [5]).
+`precision` word (`BINGO_PREC_*`, at arg index [4] for binary / [3] for unary; the
+shared `ara_*` structs keep `scratchpad_ptr` last) and delegates the fp32 case to the
+typed kernel.
 
-The `precision` selectors are `BINGO_PREC_FP32`/`FP16`/`INT8`/`INT16`, plus
-`BINGO_PREC_INT32` (=4) for elementwise add: `HostBingoKernelAraAddArgs(...,
-precision=BINGO_PREC_INT32)` routes to the distinct `__host_bingo_kernel_add_i32`
-kernel (K-split partial-D accumulation) instead of the multi-precision `add`
-dispatcher. The two fixed-type conversions are driven by precision-in-name classes
+From the mini-compiler, the precision is **baked into the class name**, not passed as an
+argument: one class per `(op, precision)`, named `HostBingoKernelAra<Op><Prec>Args` with
+`<Prec>` ∈ {`F32`,`F16`,`I8`,`I16`,`I32`} (the operand element type; for reductions the
+**input** type — int8/int16 reduce to an int32 scalar). Each class fixes its
+`PRECISION`, so callers just write `HostBingoKernelAraAddI32Args(...)` or
+`HostBingoKernelAraExpF16Args(...)` and never set `precision=`. Only the
+dispatcher-supported combos exist as classes, so an unsupported `(op, precision)` is a
+missing-class error at author time rather than a `BINGO_RET_FAIL` in sim:
+
+| `<Op>` | precisions exposed |
+|--------|--------------------|
+| `Add` | F32, F16, I8, I16, **I32** (I32 → distinct `__host_bingo_kernel_add_i32`, K-split accumulation) |
+| `Sub`, `Mul`, `Max`, `Min`, `Relu`, `Neg`, `Abs`, `ReduceSum`, `ReduceMax` | F32, F16, I8, I16, I32 |
+| `Div`, `SiluMul`, `Exp`, `Sigmoid`, `Sqrt`, `Tanh`, `Reciprocal`, `Silu`, `Gelu`, `ReduceMean`, `Softmax`, `Rmsnorm` | F32, F16 |
+
+`Add` is the only op whose I32 path is a separate kernel; the other I32 ops go through the
+normal multi-precision dispatcher (`__host_bingo_kernel_<op>` with `precision=I32`). I32
+reductions accumulate in int32 (the sum can overflow, same as a chained int32 add).
+
+The two fixed-type conversions are the precision-in-name classes
 `HostBingoKernelAraQuantizeF32I8Args` (FP32→INT8) and
 `HostBingoKernelAraDequantizeI32F32Args` (INT32→FP32); their `precision` field is a
 no-op passthrough.
