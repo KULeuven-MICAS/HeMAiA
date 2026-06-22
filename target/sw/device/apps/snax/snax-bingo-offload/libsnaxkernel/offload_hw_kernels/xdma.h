@@ -166,7 +166,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_6d(void *arg)
 // ----------------------
 // It fuses the GEMM K-split partial-sum reduction (D = D0 + D1 + ... ) into a
 // single xDMA pass, replacing the sequential host int32-add chain
-// (__host_bingo_kernel_int32_add) that walks L3<->host once per pair.
+// (__host_bingo_kernel_add_i32) that walks L3<->host once per pair.
 //
 // Two entry points
 // ----------------
@@ -874,7 +874,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_gather_2d(void *arg)
 // Each kernel converts between row-major (logical 2D) and one of the three
 // VersaCore blocked layouts {A, B, D}. Arguments are parameterized by the
 // scheduler's tile dimensions so the same kernel works for any DSE-chosen
-// tiling. See HeMAiA/util/sim/layout_convert.py for the Python reference.
+// tiling. See HeMAiA/util/sim/xdma/layout_convert.py for the Python reference.
 //
 // Layout definitions (elem_bytes=1 for INT8, 4 for INT32/FP32):
 //   A-layout [M_T, K_T, meshRow, tileSize]:

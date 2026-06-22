@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Test workload for __host_bingo_kernel_int32_add (the new kernel used
+# Test workload for the int32 add host kernel (HostBingoKernelAraAddI32Args), used
 # for inter-cluster partial-D accumulation in K-split GEMM schemes).
 #
 # Generates 4 random INT32 partial arrays (simulating cluster outputs)
@@ -13,6 +13,7 @@ import sys
 import os
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../../../../../../util/sim/"))
+import _usg_paths  # noqa: F401,E402  (registers util/sim/{common,gemm,xdma,ara} on sys.path)
 from data_utils import format_scalar_definition, format_vector_definition  # noqa E402
 
 np.random.seed(42)

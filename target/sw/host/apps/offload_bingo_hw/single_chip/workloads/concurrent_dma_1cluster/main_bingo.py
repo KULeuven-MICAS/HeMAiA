@@ -18,6 +18,7 @@ APP_NAME = "Single-Chip Concurrent DMA"
 print(f"ROOT_DIR: {ROOT_DIR}")
 sys.path.append(f"{ROOT_DIR}/target/sw/host/runtime/libbingo/mini_compiler")
 sys.path.append(f"{ROOT_DIR}/util/sim")
+import _usg_paths  # noqa: F401,E402  (registers util/sim/{common,gemm,xdma,ara} on sys.path)
 
 from bingo_dfg import BingoDFG
 from bingo_platform import guard_cluster_count, parse_platform_cfg  # noqa E402

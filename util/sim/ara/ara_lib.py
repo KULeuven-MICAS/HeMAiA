@@ -16,6 +16,7 @@ exp approximation, so the C-side checks apply a loose tolerance for exp-based op
 """
 import math
 import random
+import struct
 import sys
 
 SEED = 42
@@ -83,8 +84,22 @@ def _quantize(xs):  # scale = max|x|/127 (min 1e-10); q = clamp(round(x/scale), 
     return scale, q
 
 
-def _dequantize(xs):  # mirrors main.c: int32_src[i] = (int32)(a[i]*100); out = src*0.01
-    return [float(int(x * 100.0)) * 0.01 for x in xs]
+def _f32(x):  # round a Python float to its IEEE-754 binary32 value
+    return struct.unpack("f", struct.pack("f", x))[0]
+
+
+def _dequantize(xs):  # mirrors main.c EXACTLY in fp32: int32_src[i] = (int32_t)(op_a_big[i]*100.0f); out = src*0.01f
+    # The kernel and test operate on the *emitted* fp32 value of op_a_big (a %.6f
+    # literal) and do every step in fp32. Computing the golden in fp64 diverges
+    # from the kernel at quantization boundaries (e.g. 0.57*100 = 56.9999.. in
+    # fp64 -> trunc 56, but = 57.0 in fp32 -> trunc 57), a 0.01 jump that fails
+    # the tight tolerance. Replicate the fp32 path so the golden bit-matches.
+    out = []
+    for x in xs:
+        a32 = _f32(float(f"{x:.6f}"))          # == op_a_big[i] at runtime
+        q = int(_f32(a32 * _f32(100.0)))       # (int32_t)(op_a_big[i]*100.0f), trunc toward zero
+        out.append(_f32(_f32(float(q)) * _f32(0.01)))  # vfcvt.f.x.v then *0.01f
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -116,6 +131,58 @@ def _emit_int8_array(name, n, vals):
     print(f"static const int8_t {name}[{n}] __attribute__((aligned(8))) = {{")
     print(_ints(vals))
     print("};")
+
+
+def _emit_int_array(name, n, vals, ctype):
+    print(f"static const {ctype} {name}[{n}] __attribute__((aligned(8))) = {{")
+    print(_ints(vals))
+    print("};")
+
+
+# ---------------------------------------------------------------------------
+# Integer inputs + golden for the int8/int16 precision sweep.
+# Only integer-meaningful ops get int variants (see ara_sweep.h applicability).
+# Ranges are per-op so the exact-integer golden never overflows the target width
+# (add/sub: sum fits; mul: product fits; reduce_sum widens to int32).
+# ---------------------------------------------------------------------------
+
+INT_BINARY = {"add": lambda a, b: a + b, "sub": lambda a, b: a - b,
+              "mul": lambda a, b: a * b, "max": max, "min": min}
+INT_UNARY = {"relu": lambda x: max(0, x), "neg": lambda x: -x, "abs": abs}
+INT_REDUCE = {"reduce_sum": sum, "reduce_max": max}
+
+# Symmetric input range [-r, r] per op, per width.
+_I8_R = {"add": 50, "sub": 50, "mul": 8, "max": 100, "min": 100,
+         "relu": 100, "neg": 100, "abs": 100, "reduce_sum": 100, "reduce_max": 100}
+_I16_R = {"add": 10000, "sub": 10000, "mul": 150, "max": 20000, "min": 20000,
+          "relu": 20000, "neg": 20000, "abs": 20000, "reduce_sum": 20000, "reduce_max": 20000}
+
+
+def _int_arr(n, r, seed):
+    rng = random.Random(seed)
+    return [rng.randint(-r, r) for _ in range(n)]
+
+
+def _emit_int_variants(kernel):
+    """Emit op_a_i8/op_b_i8/golden_i8 (+ i16) for int-capable kernels."""
+    for ctype, suffix, ranges, seed_a, seed_b in (
+            ("int8_t", "i8", _I8_R, SEED + 10, SEED + 11),
+            ("int16_t", "i16", _I16_R, SEED + 12, SEED + 13)):
+        r = ranges[kernel]
+        a = _int_arr(N_BIG, r, seed_a)
+        _emit_int_array(f"op_a_{suffix}", N_BIG, a, ctype)
+        if kernel in INT_BINARY:
+            b = _int_arr(N_BIG, r, seed_b)
+            _emit_int_array(f"op_b_{suffix}", N_BIG, b, ctype)
+            g = [INT_BINARY[kernel](a[i], b[i]) for i in range(N_BIG)]
+            _emit_int_array(f"golden_{suffix}", N_BIG, g, ctype)
+        elif kernel in INT_UNARY:
+            g = [INT_UNARY[kernel](x) for x in a]
+            _emit_int_array(f"golden_{suffix}", N_BIG, g, ctype)
+        elif kernel in INT_REDUCE:
+            vals = [INT_REDUCE[kernel](a[:n]) for n in SIZES]  # int32 scalars per size
+            print(f"static const int32_t golden_reduce_{suffix}[{len(SIZES)}] = {{ "
+                  + ", ".join(str(v) for v in vals) + " };")
 
 
 # ---------------------------------------------------------------------------
@@ -165,6 +232,12 @@ def emit_sweep_header(kernel):
               + ", ".join(f"{s:.9g}f" for s in scales) + " };")
     else:
         raise SystemExit(f"ara_lib.py: unknown kernel '{kernel}'")
+
+    # int8/int16 inputs + golden (only for integer-meaningful ops; fp16 reuses
+    # the fp32 arrays above, cast at runtime in the app).
+    if kernel in INT_BINARY or kernel in INT_UNARY or kernel in INT_REDUCE:
+        print()
+        _emit_int_variants(kernel)
 
 
 # ---------------------------------------------------------------------------

@@ -39,6 +39,38 @@ Sources of truth:
 
 ## Host Kernels
 
+The typed `__host_bingo_kernel_<op>_f32` / `_i32` kernels (plus `quantize_f32i8` /
+`dequantize_i32f32`) below are the single-precision entry points. The elementwise /
+reduce / softmax / rmsnorm / silu_mul ops also have a runtime-typed multi-precision
+**dispatcher** `__host_bingo_kernel_<op>` that picks fp32/fp16/int8/int16 from a
+`precision` word (`BINGO_PREC_*`, at arg index [4] for binary / [3] for unary; the
+shared `ara_*` structs keep `scratchpad_ptr` last) and delegates the fp32 case to the
+typed kernel.
+
+From the mini-compiler, the precision is **baked into the class name**, not passed as an
+argument: one class per `(op, precision)`, named `HostBingoKernelAra<Op><Prec>Args` with
+`<Prec>` ∈ {`F32`,`F16`,`I8`,`I16`,`I32`} (the operand element type; for reductions the
+**input** type — int8/int16 reduce to an int32 scalar). Each class fixes its
+`PRECISION`, so callers just write `HostBingoKernelAraAddI32Args(...)` or
+`HostBingoKernelAraExpF16Args(...)` and never set `precision=`. Only the
+dispatcher-supported combos exist as classes, so an unsupported `(op, precision)` is a
+missing-class error at author time rather than a `BINGO_RET_FAIL` in sim:
+
+| `<Op>` | precisions exposed |
+|--------|--------------------|
+| `Add` | F32, F16, I8, I16, **I32** (I32 → distinct `__host_bingo_kernel_add_i32`, K-split accumulation) |
+| `Sub`, `Mul`, `Max`, `Min`, `Relu`, `Neg`, `Abs`, `ReduceSum`, `ReduceMax` | F32, F16, I8, I16, I32 |
+| `Div`, `SiluMul`, `Exp`, `Sigmoid`, `Sqrt`, `Tanh`, `Reciprocal`, `Silu`, `Gelu`, `ReduceMean`, `Softmax`, `Rmsnorm` | F32, F16 |
+
+`Add` is the only op whose I32 path is a separate kernel; the other I32 ops go through the
+normal multi-precision dispatcher (`__host_bingo_kernel_<op>` with `precision=I32`). I32
+reductions accumulate in int32 (the sum can overflow, same as a chained int32 add).
+
+The two fixed-type conversions are the precision-in-name classes
+`HostBingoKernelAraQuantizeF32I8Args` (FP32→INT8) and
+`HostBingoKernelAraDequantizeI32F32Args` (INT32→FP32); their `precision` field is a
+no-op passthrough.
+
 | Kernel name | Function description |
 |-------------|----------------------|
 | `__host_bingo_kernel_entry` | Marks host-side task-graph entry, records the start cycle counter in the task scratchpad, and returns success. |
@@ -47,29 +79,29 @@ Sources of truth:
 | `__host_bingo_kernel_check_result` | Compares output data against golden data. Supports byte-exact, FP32 tolerance, and FP16 tolerance modes. |
 | `__host_bingo_kernel_idma` | Runs a host-side system DMA copy through `sys_dma_memcpy` and waits for the chip DMA completion counter. |
 | `__host_bingo_kernel_xdma_1d_copy` | Runs a host-side 1D xDMA copy through the HeMAiA xDMA library and waits for remote xDMA completion. |
-| `__host_bingo_kernel_fp32_rmsnorm` | Computes FP32 RMSNorm over `num_tokens` rows with Ara/RVV vectorization. |
-| `__host_bingo_kernel_fp32_softmax` | Computes FP32 row-wise softmax with max subtraction, exponential approximation, and Ara/RVV vectorization. |
-| `__host_bingo_kernel_fp32_silu_mul` | Computes fused FP32 SiLU-and-multiply: `out = silu(gate) * up`. |
-| `__host_bingo_kernel_fp32_add` | Computes elementwise FP32 addition. |
-| `__host_bingo_kernel_fp32_sub` | Computes elementwise FP32 subtraction. |
-| `__host_bingo_kernel_fp32_mul` | Computes elementwise FP32 multiplication. |
-| `__host_bingo_kernel_fp32_div` | Computes elementwise FP32 division. |
-| `__host_bingo_kernel_fp32_max` | Computes elementwise FP32 maximum. |
-| `__host_bingo_kernel_fp32_min` | Computes elementwise FP32 minimum. |
-| `__host_bingo_kernel_int32_add` | Computes elementwise INT32 addition, mainly for accumulating K-split GEMM partial results. |
-| `__host_bingo_kernel_fp32_relu` | Computes elementwise FP32 ReLU. |
-| `__host_bingo_kernel_fp32_neg` | Computes elementwise FP32 negation. |
-| `__host_bingo_kernel_fp32_abs` | Computes elementwise FP32 absolute value. |
-| `__host_bingo_kernel_fp32_exp` | Computes elementwise FP32 exponential using the local Cephes-style approximation. |
-| `__host_bingo_kernel_fp32_sigmoid` | Computes elementwise FP32 sigmoid. |
-| `__host_bingo_kernel_fp32_tanh` | Computes elementwise FP32 tanh using the exponential approximation. |
-| `__host_bingo_kernel_fp32_sqrt` | Computes elementwise FP32 square root. |
-| `__host_bingo_kernel_fp32_reciprocal` | Computes elementwise FP32 reciprocal. |
-| `__host_bingo_kernel_fp32_silu` | Computes elementwise FP32 SiLU. |
-| `__host_bingo_kernel_fp32_gelu` | Computes elementwise FP32 fast GELU approximation. |
-| `__host_bingo_kernel_fp32_reduce_sum` | Reduces an FP32 array to one sum value. |
-| `__host_bingo_kernel_fp32_reduce_max` | Reduces an FP32 array to one maximum value. |
-| `__host_bingo_kernel_fp32_reduce_mean` | Reduces an FP32 array to one mean value. |
-| `__host_bingo_kernel_fp32_quantize` | Quantizes FP32 input to INT8 with per-tensor symmetric scaling and writes the computed scale. |
-| `__host_bingo_kernel_int32_dequantize` | Dequantizes INT32 GEMM accumulator data to FP32 using a provided combined scale. |
+| `__host_bingo_kernel_rmsnorm_f32` | Computes FP32 RMSNorm over `num_tokens` rows with Ara/RVV vectorization. |
+| `__host_bingo_kernel_softmax_f32` | Computes FP32 row-wise softmax with max subtraction, exponential approximation, and Ara/RVV vectorization. |
+| `__host_bingo_kernel_silu_mul_f32` | Computes fused FP32 SiLU-and-multiply: `out = silu(gate) * up`. |
+| `__host_bingo_kernel_add_f32` | Computes elementwise FP32 addition. |
+| `__host_bingo_kernel_sub_f32` | Computes elementwise FP32 subtraction. |
+| `__host_bingo_kernel_mul_f32` | Computes elementwise FP32 multiplication. |
+| `__host_bingo_kernel_div_f32` | Computes elementwise FP32 division. |
+| `__host_bingo_kernel_max_f32` | Computes elementwise FP32 maximum. |
+| `__host_bingo_kernel_min_f32` | Computes elementwise FP32 minimum. |
+| `__host_bingo_kernel_add_i32` | Computes elementwise INT32 addition, mainly for accumulating K-split GEMM partial results. |
+| `__host_bingo_kernel_relu_f32` | Computes elementwise FP32 ReLU. |
+| `__host_bingo_kernel_neg_f32` | Computes elementwise FP32 negation. |
+| `__host_bingo_kernel_abs_f32` | Computes elementwise FP32 absolute value. |
+| `__host_bingo_kernel_exp_f32` | Computes elementwise FP32 exponential using the local Cephes-style approximation. |
+| `__host_bingo_kernel_sigmoid_f32` | Computes elementwise FP32 sigmoid. |
+| `__host_bingo_kernel_tanh_f32` | Computes elementwise FP32 tanh using the exponential approximation. |
+| `__host_bingo_kernel_sqrt_f32` | Computes elementwise FP32 square root. |
+| `__host_bingo_kernel_reciprocal_f32` | Computes elementwise FP32 reciprocal. |
+| `__host_bingo_kernel_silu_f32` | Computes elementwise FP32 SiLU. |
+| `__host_bingo_kernel_gelu_f32` | Computes elementwise FP32 fast GELU approximation. |
+| `__host_bingo_kernel_reduce_sum_f32` | Reduces an FP32 array to one sum value. |
+| `__host_bingo_kernel_reduce_max_f32` | Reduces an FP32 array to one maximum value. |
+| `__host_bingo_kernel_reduce_mean_f32` | Reduces an FP32 array to one mean value. |
+| `__host_bingo_kernel_quantize_f32i8` | Quantizes FP32 input to INT8 with per-tensor symmetric scaling and writes the computed scale. |
+| `__host_bingo_kernel_dequantize_i32f32` | Dequantizes INT32 GEMM accumulator data to FP32 using a provided combined scale. |
 | `__host_bingo_kernel_cerf_gating` | Computes CERF gating masks for top-k, threshold, or static modes and writes optional per-expert activation flags for software guards. |

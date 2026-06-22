@@ -99,66 +99,66 @@ int main() {
     printf("[Binary Elementwise]\r\n");
 
     setup_binary_args(args, op_a, op_b, output, OP_TEST_LEN);
-    __host_bingo_kernel_fp32_add(args);
+    __host_bingo_kernel_add_f32(args);
     check_fp32_array("add", output, golden_add, OP_TEST_LEN, FP32_TOL);
 
     setup_binary_args(args, op_a, op_b, output, OP_TEST_LEN);
-    __host_bingo_kernel_fp32_sub(args);
+    __host_bingo_kernel_sub_f32(args);
     check_fp32_array("sub", output, golden_sub, OP_TEST_LEN, FP32_TOL);
 
     setup_binary_args(args, op_a, op_b, output, OP_TEST_LEN);
-    __host_bingo_kernel_fp32_mul(args);
+    __host_bingo_kernel_mul_f32(args);
     check_fp32_array("mul", output, golden_mul, OP_TEST_LEN, FP32_TOL);
 
     setup_binary_args(args, op_a, op_b, output, OP_TEST_LEN);
-    __host_bingo_kernel_fp32_div(args);
+    __host_bingo_kernel_div_f32(args);
     check_fp32_array("div", output, golden_div, OP_TEST_LEN, FP32_TOL);
 
     setup_binary_args(args, op_a, op_b, output, OP_TEST_LEN);
-    __host_bingo_kernel_fp32_max(args);
+    __host_bingo_kernel_max_f32(args);
     check_fp32_array("max", output, golden_max, OP_TEST_LEN, FP32_TOL);
 
     setup_binary_args(args, op_a, op_b, output, OP_TEST_LEN);
-    __host_bingo_kernel_fp32_min(args);
+    __host_bingo_kernel_min_f32(args);
     check_fp32_array("min", output, golden_min, OP_TEST_LEN, FP32_TOL);
 
     // ─── Unary elementwise ─────────────────────────────────────
     printf("\r\n[Unary Elementwise]\r\n");
 
     setup_unary_args(args, op_mixed, output, OP_TEST_LEN);
-    __host_bingo_kernel_fp32_relu(args);
+    __host_bingo_kernel_relu_f32(args);
     check_fp32_array("relu", output, golden_relu, OP_TEST_LEN, FP32_TOL);
 
     setup_unary_args(args, op_mixed, output, OP_TEST_LEN);
-    __host_bingo_kernel_fp32_neg(args);
+    __host_bingo_kernel_neg_f32(args);
     check_fp32_array("neg", output, golden_neg, OP_TEST_LEN, FP32_TOL);
 
     setup_unary_args(args, op_mixed, output, OP_TEST_LEN);
-    __host_bingo_kernel_fp32_abs(args);
+    __host_bingo_kernel_abs_f32(args);
     check_fp32_array("abs", output, golden_abs, OP_TEST_LEN, FP32_TOL);
 
     setup_unary_args(args, op_a, output, OP_TEST_LEN);  // use positive for exp
-    __host_bingo_kernel_fp32_exp(args);
+    __host_bingo_kernel_exp_f32(args);
     check_fp32_array("exp", output, golden_exp, OP_TEST_LEN, FP32_TOL_LOOSE);
 
     setup_unary_args(args, op_mixed, output, OP_TEST_LEN);
-    __host_bingo_kernel_fp32_sigmoid(args);
+    __host_bingo_kernel_sigmoid_f32(args);
     check_fp32_array("sigmoid", output, golden_sigmoid, OP_TEST_LEN, FP32_TOL_LOOSE);
 
     setup_unary_args(args, op_mixed, output, OP_TEST_LEN);
-    __host_bingo_kernel_fp32_tanh(args);
+    __host_bingo_kernel_tanh_f32(args);
     check_fp32_array("tanh", output, golden_tanh, OP_TEST_LEN, FP32_TOL_LOOSE);
 
     setup_unary_args(args, op_a, output, OP_TEST_LEN);  // use positive for sqrt
-    __host_bingo_kernel_fp32_sqrt(args);
+    __host_bingo_kernel_sqrt_f32(args);
     check_fp32_array("sqrt", output, golden_sqrt, OP_TEST_LEN, FP32_TOL);
 
     setup_unary_args(args, op_a, output, OP_TEST_LEN);  // use positive for reciprocal
-    __host_bingo_kernel_fp32_reciprocal(args);
+    __host_bingo_kernel_reciprocal_f32(args);
     check_fp32_array("reciprocal", output, golden_reciprocal, OP_TEST_LEN, FP32_TOL);
 
     setup_unary_args(args, op_mixed, output, OP_TEST_LEN);
-    __host_bingo_kernel_fp32_silu(args);
+    __host_bingo_kernel_silu_f32(args);
     check_fp32_array("silu", output, golden_silu, OP_TEST_LEN, FP32_TOL_LOOSE);
 
     // ─── Reductions ────────────────────────────────────────────
@@ -166,15 +166,15 @@ int main() {
     float scalar_out;
 
     setup_unary_args(args, op_a, &scalar_out, OP_TEST_LEN);
-    __host_bingo_kernel_fp32_reduce_sum(args);
+    __host_bingo_kernel_reduce_sum_f32(args);
     check_fp32_scalar("reduce_sum", scalar_out, golden_reduce_sum, FP32_TOL);
 
     setup_unary_args(args, op_a, &scalar_out, OP_TEST_LEN);
-    __host_bingo_kernel_fp32_reduce_max(args);
+    __host_bingo_kernel_reduce_max_f32(args);
     check_fp32_scalar("reduce_max", scalar_out, golden_reduce_max, FP32_TOL);
 
     setup_unary_args(args, op_a, &scalar_out, OP_TEST_LEN);
-    __host_bingo_kernel_fp32_reduce_mean(args);
+    __host_bingo_kernel_reduce_mean_f32(args);
     check_fp32_scalar("reduce_mean", scalar_out, golden_reduce_mean, FP32_TOL);
 
     // ─── Compound ops ──────────────────────────────────────────
@@ -188,7 +188,7 @@ int main() {
         sm_args[1] = (uint64_t)(uintptr_t)sm_out;
         sm_args[2] = 1;            // num_rows
         sm_args[3] = OP_TEST_LEN;  // row_length
-        __host_bingo_kernel_fp32_softmax(sm_args);
+        __host_bingo_kernel_softmax_f32(sm_args);
         // Verify: all elements > 0 and sum ~ 1.0
         float sm_sum = 0.0f;
         int sm_ok = 1;
@@ -219,7 +219,7 @@ int main() {
         rms_args[2] = (uint64_t)(uintptr_t)rms_out;
         rms_args[3] = OP_TEST_LEN;  // hidden_dim
         rms_args[4] = 1;            // num_tokens
-        __host_bingo_kernel_fp32_rmsnorm(rms_args);
+        __host_bingo_kernel_rmsnorm_f32(rms_args);
         // Verify: output should have unit RMS (approximately)
         float rms_sq = 0.0f;
         for (int i = 0; i < OP_TEST_LEN; i++) rms_sq += rms_out[i] * rms_out[i];
@@ -247,7 +247,7 @@ int main() {
         sm_args[1] = (uint64_t)(uintptr_t)up;
         sm_args[2] = (uint64_t)(uintptr_t)fused_out;
         sm_args[3] = OP_TEST_LEN;
-        __host_bingo_kernel_fp32_silu_mul(sm_args);
+        __host_bingo_kernel_silu_mul_f32(sm_args);
         // Just verify it doesn't crash and produces non-zero output
         int nonzero = 0;
         for (int i = 0; i < OP_TEST_LEN; i++) {

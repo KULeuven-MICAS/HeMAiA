@@ -44,8 +44,8 @@ from bingo_kernel_args import (  # noqa E402
     SnaxBingoKernelGemmFullArgs,
     HostBingoKernelCheckResultArgs,
     HostBingoKernelIdmaArgs,
-    HostBingoKernelInt32AddArgs,
-    HostBingoKernelInt32DequantizeArgs,
+    HostBingoKernelAraAddI32Args,
+    HostBingoKernelAraDequantizeI32F32Args,
 )
 
 
@@ -301,8 +301,8 @@ def main():
     node_add_01 = BingoNode(
         assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=HOST_CORE,
         node_name="Add_c0_c1",
-        kernel_name="__host_bingo_kernel_int32_add",
-        kernel_args=HostBingoKernelInt32AddArgs(
+        kernel_name="__host_bingo_kernel_add_i32",
+        kernel_args=HostBingoKernelAraAddI32Args(
             input_a_addr=l3_D_partial[0],
             input_b_addr=l3_D_partial[1],
             output_addr=l3_sum_c0_c1,
@@ -337,8 +337,8 @@ def main():
     node_add_012 = BingoNode(
         assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=HOST_CORE,
         node_name="Add_c0_c1_c2",
-        kernel_name="__host_bingo_kernel_int32_add",
-        kernel_args=HostBingoKernelInt32AddArgs(
+        kernel_name="__host_bingo_kernel_add_i32",
+        kernel_args=HostBingoKernelAraAddI32Args(
             input_a_addr=l3_sum_c0_c1,
             input_b_addr=l3_D_partial[2],
             output_addr=l3_sum_c0_c1_c2,
@@ -373,8 +373,8 @@ def main():
     node_add_final = BingoNode(
         assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=HOST_CORE,
         node_name="Add_c0_c1_c2_c3",
-        kernel_name="__host_bingo_kernel_int32_add",
-        kernel_args=HostBingoKernelInt32AddArgs(
+        kernel_name="__host_bingo_kernel_add_i32",
+        kernel_args=HostBingoKernelAraAddI32Args(
             input_a_addr=l3_sum_c0_c1_c2,
             input_b_addr=l3_D_partial[3],
             output_addr=l3_sum_final,
@@ -409,8 +409,8 @@ def main():
     node_dequant = BingoNode(
         assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=HOST_CORE,
         node_name="Dequant",
-        kernel_name="__host_bingo_kernel_int32_dequantize",
-        kernel_args=HostBingoKernelInt32DequantizeArgs(
+        kernel_name="__host_bingo_kernel_dequantize_i32f32",
+        kernel_args=HostBingoKernelAraDequantizeI32F32Args(
             input_addr=l3_sum_final,
             output_addr=l3_fp32_D,
             scale_addr=mem_combined_scale,

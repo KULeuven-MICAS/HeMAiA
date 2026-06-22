@@ -7,7 +7,7 @@
 // Single-kernel cycle-count sweep + correctness check for the FP32 RVV host
 // kernel "dequantize" (bingo dispatches it to CVA6+Ara).  Per size it prints:
 //   CYCLES,dequantize,<N>,<rep>,<cycles>   (timing)
-//   CHECK,dequantize,<N>,PASS|FAIL         (output vs golden from util/sim/ara_lib.py)
+//   CHECK,dequantize,<N>,PASS|FAIL         (output vs golden from util/sim/ara/ara_lib.py)
 // gather_ara_luts.py turns the CYCLES lines into a CSV.  Golden uses exact math;
 // ARA_TOL is loose for exp-based kernels (the HW path uses a poly approximation).
 
@@ -18,7 +18,7 @@
 #define ARA_TOL 0.001f
 
 // Timing buffers (globals -> live in .data, avoid stack overflow).
-// OP_MAX_LEN is 4096 (from util/sim/ara_lib.py) -> 16 KB per fp32 buffer.
+// OP_MAX_LEN is 4096 (from util/sim/ara/ara_lib.py) -> 16 KB per fp32 buffer.
 static float timing_output[OP_MAX_LEN] __attribute__((aligned(8)));
 static int32_t timing_int32_src[OP_MAX_LEN] __attribute__((aligned(8)));
 static float timing_dequant_scale __attribute__((aligned(8)));
@@ -54,9 +54,14 @@ int main() {
             t_args[1] = (uint64_t)(uintptr_t)timing_output;
             t_args[2] = (uint64_t)(uintptr_t)&timing_dequant_scale;
             t_args[3] = N;
-            t_args[4] = (uint64_t)(uintptr_t)&timing_scratchpad;
+            // Arg4 is precision (ignored by the dequant kernel); the scratchpad
+            // pointer is Arg5 — see __host_bingo_kernel_dequantize_i32f32. Setting
+            // it at [4] left [5] uninitialised (the kernel then wrote through a
+            // garbage scratchpad pointer, and -Werror=maybe-uninitialized caught it).
+            t_args[4] = 0;
+            t_args[5] = (uint64_t)(uintptr_t)&timing_scratchpad;
             c0 = ara_get_cycle_count();
-            __host_bingo_kernel_int32_dequantize(t_args);
+            __host_bingo_kernel_dequantize_i32f32(t_args);
             c1 = ara_get_cycle_count();
             printf("CYCLES,dequantize,%lu,%d,%lu\r\n", N, rep, c1 - c0);
 

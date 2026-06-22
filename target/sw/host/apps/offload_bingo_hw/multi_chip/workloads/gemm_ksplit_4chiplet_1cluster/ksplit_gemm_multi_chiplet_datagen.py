@@ -12,6 +12,7 @@ import os
 import sys
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../../../../../../util/sim/"))
+import _usg_paths  # noqa: F401,E402  (registers util/sim/{common,gemm,xdma,ara} on sys.path)
 from gemm_sim_utils import emit_ksplit_gemm_header_file, get_gemm_mesh_dims  # noqa E402
 
 

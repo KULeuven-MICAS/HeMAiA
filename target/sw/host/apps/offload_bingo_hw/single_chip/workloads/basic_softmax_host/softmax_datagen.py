@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Golden data generator for basic_softmax_host.
-Tests __host_bingo_kernel_fp32_softmax in isolation.
+Tests the FP32 softmax host kernel in isolation.
 
 The HW softmax uses a Cephes polynomial approximation of exp() with FMA,
 ordered reduction via vfredosum, and multiplication by 1/sum (not direct
@@ -15,6 +15,7 @@ import sys
 import os
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../../../../../../util/sim/"))
+import _usg_paths  # noqa: F401,E402  (registers util/sim/{common,gemm,xdma,ara} on sys.path)
 from data_utils import format_scalar_definition, format_vector_definition  # noqa E402
 
 np.random.seed(42)
@@ -115,7 +116,7 @@ _VLMAX_F32 = 4
 
 
 def bingo_softmax_row(x_row):
-    """Mirror HW __host_bingo_kernel_fp32_softmax for a single row.
+    """Mirror HW __host_bingo_kernel_softmax_f32 for a single row.
 
     Ara has VLMAX=4 fp32 elements. The reduction loop chunks through
     row_length in groups of 4, doing vfredosum per chunk with init=0,

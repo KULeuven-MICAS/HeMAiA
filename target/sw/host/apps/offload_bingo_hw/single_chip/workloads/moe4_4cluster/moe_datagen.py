@@ -15,6 +15,7 @@ import sys
 import os
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../../../../../../util/sim/"))
+import _usg_paths  # noqa: F401,E402  (registers util/sim/{common,gemm,xdma,ara} on sys.path)
 from sim_golden_models import block_gemm_golden_model  # noqa: E402
 
 

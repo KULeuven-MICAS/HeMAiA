@@ -16,6 +16,7 @@ SIM_UTIL_DIR = os.path.abspath(
 if SIM_UTIL_DIR not in sys.path:
     sys.path.append(SIM_UTIL_DIR)
 
+import _usg_paths  # noqa: F401,E402  (registers util/sim/{common,gemm,xdma,ara} on sys.path)
 from data_utils import (  # noqa E402
     format_vector_definition,
 )
