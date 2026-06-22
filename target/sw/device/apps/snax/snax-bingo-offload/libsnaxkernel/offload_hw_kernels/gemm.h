@@ -29,46 +29,122 @@
 // =============================================================
 // Core-level GEMM kernels (bingo-hw)
 // =============================================================
+//
+// -------------------------------------------------------------
+// Precision support & how to configure it
+// -------------------------------------------------------------
+// The MAC datatype is fixed by the hardware build (this is the int8
+// `snax_versacore_to_cluster` config): the VersaCore array multiplies
+// INT8 x INT8 and accumulates into an INT32 C/D. Element widths come from
+// gemm_shapes.h: BINGO_A_ELEM_LEN = BINGO_B_ELEM_LEN = 8,
+// BINGO_C_ELEM_LEN = BINGO_D32_ELEM_LEN = 32. Changing the *MAC* datatype
+// (e.g. FP8/FP16 multiply) needs a different RTL build (e.g. the FP8
+// `snax_versacore_dse_cluster`) and cannot be selected at runtime here.
+//
+// On this int8 build, precision is selected per call via the
+// __snax_bingo_kernel_gemm_full_args_t fields below (no rebuild needed); they
+// flow host -> device as: params.hjson -> the workload datagen -> these kernel
+// args. The flags only change operand packing and the output stage:
+//   - int4_a_enable / int4_b_enable : pack operand A / B to 4-bit
+//       (a_elem_len / b_elem_len 8 -> 4). Inputs only; the MAC still runs on
+//       the int8 array. The A/B channel-enable masks are rebuilt dynamically.
+//   - quantization_enable (+ shift_i, multiplier_i, input_zp_i, output_zp_i):
+//       requantize the INT32 accumulator down to an INT8 output
+//       (d_elem_len 32 -> 8).
+//   - int32tofp16_enable : convert the INT32 accumulator to an FP16 output
+//       (d_elem_len 32 -> 16).
+//   - none set : INT32 output (d_elem_len = 32, the baseline).
+// quantization_enable and int32tofp16_enable are mutually exclusive (the only
+// two output-stage extensions); both set -> BINGO_RET_FAIL.
+//
+// The 6 reachable precision modes (input_A x input_B -> output_D), i.e. the
+// GEMM_PRECISIONS suites in
+// target/sim/automation/test/versacore/testing_workload_gen.py. Each has a
+// clean precision-named wrapper kernel below (preferred); gemm_full stays the
+// low-level escape hatch that exposes all flags:
+//   int8 x int8 -> int32   (all flags 0)                    -> gemm_i8i8_i32
+//   int8 x int4 -> int32   (int4_b_enable)                  -> gemm_i8i4_i32
+//   int4 x int4 -> int32   (int4_a_enable + int4_b_enable)  -> gemm_i4i4_i32
+//   int8 x int8 -> int8    (quantization_enable + requant)  -> gemm_i8i8_i8
+//   int8 x int4 -> fp16    (int4_b_enable + int32tofp16)    -> gemm_i8i4_f16
+//   int8 x int8 -> fp16    (int32tofp16)                    -> gemm_i8i8_f16
+// (B is the weight operand; int4_b packs B to 4-bit.)
+// -------------------------------------------------------------
 
-SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
+// -------------------------------------------------------------
+// The "+C" term and accumPrevC  (D = A*B + C)
+// -------------------------------------------------------------
+// Every GEMM here computes D = A*B + C. The accumPrevC flag selects WHERE the
+// "+C" addend comes from: a C operand in memory, or the value already sitting
+// in the VersaCore accumulator register from the previous compute. There are
+// three mutually-exclusive C-handling modes (the host datagen asserts exactly
+// one is active):
+//
+//   1. add a real C (accumPrevC=0, C_addr != 0)  -> D = A*B + C_mem
+//        C is streamed from L1 using the shape's channel_en_C mask.
+//        Internally addNonZeroC=1 is inferred below.
+//   2. add zero  (accumPrevC=0, C_addr == 0)      -> D = A*B
+//        C is forced to 0: the C reader uses bingo_channel_en_C_null, so the
+//        accumulator is seeded with the bare product. addNonZeroC=0.
+//   3. accumulate previous (accumPrevC=1)         -> D = A*B + prev_reg
+//        NO C is streamed (Ctlbound0=0, channel_en_C_null). The array adds the
+//        new product on top of whatever its accumulator register still holds
+//        from the prior kernel call. addNonZeroC=0.
+//
+// How it reaches the hardware:
+//   set_versacore_csr(accumPrevC == 0, ...) writes the OVERWRITE_ACCUM CSR =
+//   take_in_new_c. In the array (chisel_acc .../versacore/{VersaCore,Accumulator,
+//   Array}.scala) this drives accAddExtIn, which is asserted only on the FIRST
+//   of the K accumulation steps of each output tile:
+//     accAddExtIn = (computeFireCounter==0) && take_in_new_c && busy
+//   On that first step the accumulator register is initialized to:
+//     take_in_new_c=1 (accumPrevC=0): reg := product[0] + C_external  (fresh: C or 0)
+//     take_in_new_c=0 (accumPrevC=1): reg := product[0] + reg_old     (keeps prior sum)
+//   Steps 1..K-1 always do reg += product[k] (the normal K reduction). The
+//   register is NOT cleared between kernel calls, which is exactly what lets a
+//   later accumPrevC=1 call continue a sum left by an earlier call.
+//
+// CONSTRAINT: accumPrevC=1 requires M == 1 && N == 1. The accumulator register
+// holds only ONE output tile (meshRow x meshCol). With M>1 or N>1 the array
+// walks to other tiles and overwrites the register, so "previous C" is only
+// well-defined for a single tile. (The host datagen asserts M==N==1 here.)
+//
+// Worked example — on-chip K-split / chained accumulation of one output tile,
+// computing  D = A0*B0 + A1*B1 + A2*B2  without ever loading/storing a partial
+// C to L1 between passes (M=N=1, same D_addr each call):
+//
+//   // pass 0: seed the register with A0*B0 (no C, accumPrevC=0)
+//   gemm(A0,B0, C=0,    D, M=1,K,N=1, accumPrevC=0); // reg = A0*B0,           D=reg
+//   // pass 1: add A1*B1 onto the kept register (accumPrevC=1, C ignored)
+//   gemm(A1,B1, C=0/ign,D, M=1,K,N=1, accumPrevC=1); // reg = A0*B0+A1*B1,     D=reg
+//   // pass 2: add A2*B2 onto the kept register
+//   gemm(A2,B2, C=0/ign,D, M=1,K,N=1, accumPrevC=1); // reg = A0*B0+A1*B1+A2*B2,D=reg
+//
+// After pass 2, D holds the full sum. Versus mode 1, this saves the C-load +
+// C-store memory traffic on every pass by keeping the running sum on-chip.
+// (To instead seed pass 0 with a bias term, use accumPrevC=0 with C_addr != 0.)
+// -------------------------------------------------------------
+
+// -------------------------------------------------------------
+// Shared GEMM core: configure the streamer + VersaCore and run.
+// All precision/quant fields are explicit parameters so the precision-named
+// wrappers (and gemm_full) below select them; the body is unchanged from the
+// original gemm_full. Emits the shared GEMM_FULL_RUN trace markers for every
+// caller, so the sweep/gemm cycle LUT works for all precisions.
+// Caller must already have done the core-0 check + SW guard + arg parse.
+// -------------------------------------------------------------
+static uint32_t __bingo_gemm_run(
+    uint32_t A_addr, uint32_t B_addr, uint32_t C_addr, uint32_t D_addr,
+    uint32_t M, uint32_t K, uint32_t N, uint32_t array_shape_idx,
+    uint32_t transpose_A, uint32_t transpose_B, uint32_t accumPrevC,
+    uint32_t quantization_enable, uint32_t shift_i, uint32_t multiplier_i,
+    int32_t input_zp_i, int32_t output_zp_i, int32_t int32tofp16_enable,
+    int32_t int4_a_enable, int32_t int4_b_enable,
+    bingo_kernel_scratchpad_t *sp)
 {
-    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_gemm_full_args_t);
-    // Assume the matrix data are all in L1
-    // So all the addr are 32bit local addr
-    // This kernel will configure the versacore and streamer and start the computation
-    // There is another __snax_bingo_kernel_gemm_minimal kernel that only starts the versacore and streamer with pre-configured CSRs
-    if (snrt_cluster_core_idx() != 0)
-    {
-        printf_safe("[Cluster %d Core %d]: Error! Bingo GEMM full should be called from core 0!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
-        return BINGO_RET_FAIL;
-    }
-    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
-    const __snax_bingo_kernel_gemm_full_args_t *args =
-        (const __snax_bingo_kernel_gemm_full_args_t *)arg;
-    uint32_t A_addr = args->input_A_addr;
-    uint32_t B_addr = args->input_B_addr;
-    uint32_t C_addr = args->input_C_addr;
-    uint32_t D_addr = args->output_D_addr;
-    VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Bingo GEMM Full called with A_addr=0x%08x, B_addr=0x%08x, C_addr=0x%08x, D_addr=0x%08x\r\n",
+    VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Bingo GEMM run A=0x%08x B=0x%08x C=0x%08x D=0x%08x\r\n",
                           snrt_cluster_idx(), snrt_cluster_core_idx(),
                           A_addr, B_addr, C_addr, D_addr);
-    uint32_t M = args->M;
-    uint32_t K = args->K;
-    uint32_t N = args->N;
-    uint32_t array_shape_idx = args->array_shape_idx;
-    uint32_t transpose_A = args->transpose_A;
-    uint32_t transpose_B = args->transpose_B;
-    uint32_t accumPrevC = args->accumPrevC;
-    uint32_t quantization_enable = args->quantization_enable;
-    uint32_t shift_i = args->shift_i;
-    uint32_t multiplier_i = args->multiplier_i;
-    int32_t input_zp_i = args->input_zp_i;
-    int32_t output_zp_i = args->output_zp_i;
-    int32_t int32tofp16_enable = args->int32tofp16_enable;
-    int32_t int4_a_enable = args->int4_a_enable;
-    int32_t int4_b_enable = args->int4_b_enable;
-    bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_gemm_full_args_t);
-    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
     BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_FULL_CFG_START);
     // Bounds-check array_shape_idx against the hwcfg, then grab the per-shape
     // parameter block. All shape-dependent values are read from `shape` below
@@ -199,12 +275,29 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
     // Atlbound5
     Atlbound[5] = 1;
     uint32_t Atlstride[6];
-    // Atlstride0
-    Atlstride[0] = a_elem_len * meshRow * tileSize / 8;
+    // Atlstride0 — A K-tile pitch in bytes. The A reader's sparse interconnect
+    // wires read-port i only to banks of parity (i % BINGO_GRANULARITY_A), so
+    // the K-tile stride (in banks) must be a multiple of BINGO_GRANULARITY_A or
+    // a later K step walks port 0 onto an odd bank (unroutable -> fatal). For
+    // int8 A the tile is already an even number of banks for every shape; for
+    // int4 A at array_shape 1 the tile is a single bank, so round the pitch UP
+    // to BINGO_GRANULARITY_A banks. The datagen pads each int4 A K-tile to the
+    // same width (gemm_sim_utils.py), so the pad bytes land in the skipped bank
+    // and the VersaCore still consumes the valid tile (channel_en is unchanged).
+    uint32_t a_tile_banks =
+        (a_elem_len * meshRow * tileSize + BINGO_BANK_WIDTH - 1) / BINGO_BANK_WIDTH;
+    if (a_tile_banks == 0)
+    {
+        a_tile_banks = 1;
+    }
+    uint32_t a_tile_banks_aligned =
+        ((a_tile_banks + BINGO_GRANULARITY_A - 1) / BINGO_GRANULARITY_A) *
+        BINGO_GRANULARITY_A;
+    Atlstride[0] = a_tile_banks_aligned * (BINGO_BANK_WIDTH / 8);
     // Atlstride1
     Atlstride[1] = 0;
-    // Atlstride2
-    Atlstride[2] = a_elem_len * meshRow * tileSize * K / 8;
+    // Atlstride2 — one full K-run, using the (granularity-aligned) K-tile pitch.
+    Atlstride[2] = Atlstride[0] * K;
     // Atlstride3
     Atlstride[3] = 0;
     // Atlstride4
@@ -307,6 +400,15 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
                                       snrt_cluster_idx(), snrt_cluster_core_idx());
                 return BINGO_RET_FAIL;
             }
+            // The D-extension output serializer PACKS output_matrix_per_store
+            // narrowed tiles into one BINGO_SERIAL_C_D_WIDTH beat and only emits a
+            // beat once it is full, so M*N must fill whole beats. If it does not
+            // (e.g. array_shape 1 small GEMMs where one narrowed tile <
+            // BINGO_SERIAL_C_D_WIDTH and M*N < output_matrix_per_store) the
+            // serializer would stall waiting for tiles that never come (sim hang).
+            // Bail cleanly; the sweep workload drops these unsupported configs up
+            // front (util/sim/gemm/gemm_psweep_lib.py) so this guard is never hit
+            // there. (Padding M/N to fill a beat would change the measured GEMM.)
             if (((M * N * one_output_tile_bits) % BINGO_SERIAL_C_D_WIDTH) != 0)
             {
                 VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! D extension output does not fill streamer stores cleanly\r\n",
@@ -413,6 +515,123 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
     sp->return_value = D_addr;
     sp->num_return_values = M * N;
     return BINGO_RET_SUCC;
+}
+
+// -------------------------------------------------------------
+// gemm_full: low-level entry point exposing every precision/quant flag.
+// Thin parser over __bingo_gemm_run (behavior identical to the original).
+// -------------------------------------------------------------
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
+{
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_gemm_full_args_t);
+    if (snrt_cluster_core_idx() != 0)
+    {
+        printf_safe("[Cluster %d Core %d]: Error! Bingo GEMM full should be called from core 0!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+    const __snax_bingo_kernel_gemm_full_args_t *a =
+        (const __snax_bingo_kernel_gemm_full_args_t *)arg;
+    bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_gemm_full_args_t);
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+    return __bingo_gemm_run(
+        a->input_A_addr, a->input_B_addr, a->input_C_addr, a->output_D_addr,
+        a->M, a->K, a->N, a->array_shape_idx,
+        a->transpose_A, a->transpose_B, a->accumPrevC,
+        a->quantization_enable, a->shift_i, a->multiplier_i,
+        a->input_zp_i, a->output_zp_i, a->int32tofp16_enable,
+        a->int4_a_enable, a->int4_b_enable, sp);
+}
+
+// -------------------------------------------------------------
+// Clean per-precision wrappers (preferred user interface). Each fixes the
+// precision flags; the user passes only operands/shape (the quantized one
+// also takes requant params). All delegate to __bingo_gemm_run, which emits
+// the shared GEMM_FULL_RUN trace markers.
+// -------------------------------------------------------------
+
+// Shared prologue for the "plain" (non-requant) wrappers. NOTE: contains early
+// returns (SW guard + core-0 check), so it must expand inside the kernel body.
+// Declares `a` (args) and `sp` (scratchpad) for the run macro below.
+#define BINGO_GEMM_PLAIN_PROLOGUE()                                                            \
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_gemm_args_t);                                 \
+    if (snrt_cluster_core_idx() != 0)                                                           \
+    {                                                                                          \
+        printf_safe("[Cluster %d Core %d]: Error! Bingo GEMM should be called from core 0!\r\n", \
+                    snrt_cluster_idx(), snrt_cluster_core_idx());                               \
+        return BINGO_RET_FAIL;                                                                  \
+    }                                                                                          \
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);                                     \
+    const __snax_bingo_kernel_gemm_args_t *a =                                                  \
+        (const __snax_bingo_kernel_gemm_args_t *)arg;                                           \
+    bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_gemm_args_t);         \
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END)
+
+// __bingo_gemm_run call for a plain wrapper with the given precision flags
+// (no requantization: quant=0, shift/mult/zp=0).
+#define BINGO_GEMM_PLAIN_RUN(int4_a, int4_b, int32tofp16)                                      \
+    __bingo_gemm_run(a->input_A_addr, a->input_B_addr, a->input_C_addr, a->output_D_addr,       \
+                     a->M, a->K, a->N, a->array_shape_idx,                                      \
+                     a->transpose_A, a->transpose_B, a->accumPrevC,                             \
+                     0, 0, 0, 0, 0, (int32tofp16), (int4_a), (int4_b), sp)
+
+// int8 x int8 -> int32 (baseline).
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_i8i8_i32(void *arg)
+{
+    BINGO_GEMM_PLAIN_PROLOGUE();
+    return BINGO_GEMM_PLAIN_RUN(/*int4_a*/ 0, /*int4_b*/ 0, /*int32tofp16*/ 0);
+}
+
+// int8 x int4 -> int32 (weight operand B packed to 4-bit).
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_i8i4_i32(void *arg)
+{
+    BINGO_GEMM_PLAIN_PROLOGUE();
+    return BINGO_GEMM_PLAIN_RUN(/*int4_a*/ 0, /*int4_b*/ 1, /*int32tofp16*/ 0);
+}
+
+// int4 x int4 -> int32 (both operands packed to 4-bit).
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_i4i4_i32(void *arg)
+{
+    BINGO_GEMM_PLAIN_PROLOGUE();
+    return BINGO_GEMM_PLAIN_RUN(/*int4_a*/ 1, /*int4_b*/ 1, /*int32tofp16*/ 0);
+}
+
+// int8 x int4 -> fp16 (weight B int4; int32 accumulator converted to fp16).
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_i8i4_f16(void *arg)
+{
+    BINGO_GEMM_PLAIN_PROLOGUE();
+    return BINGO_GEMM_PLAIN_RUN(/*int4_a*/ 0, /*int4_b*/ 1, /*int32tofp16*/ 1);
+}
+
+// int8 x int8 -> fp16 (no input packing; int32 accumulator converted to fp16).
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_i8i8_f16(void *arg)
+{
+    BINGO_GEMM_PLAIN_PROLOGUE();
+    return BINGO_GEMM_PLAIN_RUN(/*int4_a*/ 0, /*int4_b*/ 0, /*int32tofp16*/ 1);
+}
+
+// int8 x int8 -> int8 (int32 accumulator requantized to int8). Takes the
+// requant params (shift/multiplier/zero-points) in its dedicated args struct.
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_i8i8_i8(void *arg)
+{
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_gemm_quant_args_t);
+    if (snrt_cluster_core_idx() != 0)
+    {
+        printf_safe("[Cluster %d Core %d]: Error! Bingo GEMM should be called from core 0!\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+    const __snax_bingo_kernel_gemm_quant_args_t *a =
+        (const __snax_bingo_kernel_gemm_quant_args_t *)arg;
+    bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_gemm_quant_args_t);
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+    return __bingo_gemm_run(
+        a->input_A_addr, a->input_B_addr, a->input_C_addr, a->output_D_addr,
+        a->M, a->K, a->N, a->array_shape_idx,
+        a->transpose_A, a->transpose_B, a->accumPrevC,
+        /*quant*/ 1, a->shift_i, a->multiplier_i, a->input_zp_i, a->output_zp_i,
+        /*int32tofp16*/ 0, /*int4_a*/ 0, /*int4_b*/ 0, sp);
 }
 
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_minimal(void *arg)

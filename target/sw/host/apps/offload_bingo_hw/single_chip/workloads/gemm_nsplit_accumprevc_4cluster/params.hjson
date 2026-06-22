@@ -1,0 +1,23 @@
+{
+    num_clusters: 4
+    // Design C: GEMM parallelized along N across the 4 clusters, with the K
+    // reduction done ON-CHIP inside each cluster via the VersaCore accumPrevC
+    // feature -- so there is NO host-side reduction (unlike gemm_ksplit_4cluster).
+    //
+    // Each cluster owns exactly ONE output tile (M=1, N_per_cluster=1) -- the
+    // accumPrevC tile constraint -- and walks K in `k_chunks` chunks. Chunk 0 runs
+    // with accumPrevC=0 (seed); chunks >=1 run with accumPrevC=1 (accumulate onto
+    // the on-chip accumulator register left by the previous GEMM call).
+    //
+    // Global GEMM seen by the 4 clusters together:
+    //   M = 1 (one M-tile), N = num_clusters * N_per_cluster, K = k_chunks * K_per_chunk
+    // M/K/N here are VersaCore TILE counts (mesh = 32x2x32 for array_shape 0).
+    array_shape: 0
+    data_type: 0
+    M: 1
+    N_per_cluster: 1
+    k_chunks: 2
+    K_per_chunk: 1
+    transposed_A: 0
+    transposed_B: 0
+}
