@@ -319,37 +319,134 @@ set rx_clk_2_io_port {west_d2d_io_0[20]}
 set rx_clk_3_io_port {west_d2d_io_0[40]}
 set d2d_phy_clk clk_main
 set d2d_clk_period [get_property PERIOD [get_clocks $d2d_phy_clk]]
+set d2d_path hemaia_system_i/occamy_chip/inst/i_d2d_link
+set phy_digital_channel1 "$d2d_path/gen_west_phy_enabled.gen_phy_channels[0].i_phy_interface_west/i_phy_digital_interface"
+set phy_digital_channel2 "$d2d_path/gen_west_phy_enabled.gen_phy_channels[1].i_phy_interface_west/i_phy_digital_interface"
+set phy_digital_channel3 "$d2d_path/gen_west_phy_enabled.gen_phy_channels[2].i_phy_interface_west/i_phy_digital_interface"
 
-set d2d_rx_mux_period [expr {0.5 * $d2d_clk_period}]
-set d2d_rx_phy_channels [list \
-    {hemaia_system_i/occamy_chip/inst/i_d2d_link/gen_west_phy_enabled.gen_phy_channels[0].i_phy_interface_west/i_phy_digital_interface} \
-    {hemaia_system_i/occamy_chip/inst/i_d2d_link/gen_west_phy_enabled.gen_phy_channels[1].i_phy_interface_west/i_phy_digital_interface} \
-    {hemaia_system_i/occamy_chip/inst/i_d2d_link/gen_west_phy_enabled.gen_phy_channels[2].i_phy_interface_west/i_phy_digital_interface} \
-]
+# create rx clocks
+create_clock -period $d2d_clk_period -name rx_clk_1 [get_ports $rx_clk_1_io_port]
+create_clock -period $d2d_clk_period -name rx_clk_2 [get_ports $rx_clk_2_io_port]
+create_clock -period $d2d_clk_period -name rx_clk_3 [get_ports $rx_clk_3_io_port]
 
-set d2d_rx_clk_groups {}
-for {set d2d_rx_ch 0} {$d2d_rx_ch < [llength $d2d_rx_phy_channels]} {incr d2d_rx_ch} {
-    set d2d_rx_phy_channel [lindex $d2d_rx_phy_channels $d2d_rx_ch]
-    set rx_clk_sel0 "rx_clk_sel0_ch$d2d_rx_ch"
-    set rx_clk_sel1 "rx_clk_sel1_ch$d2d_rx_ch"
-    set rx_clk "rx_clk_ch$d2d_rx_ch"
+create_generated_clock -name rx_clk_s1_a_gen_1 \
+    -source [get_ports $rx_clk_1_io_port] \
+    -multiply_by 1 \
+    -combinational \
+    -add \
+    -master_clock rx_clk_1 \
+    [get_pins "$phy_digital_channel1/i_rx_clk_delay_controller/i_clk_mux_a/clk_o"]
 
-    create_clock -period $d2d_clk_period -name $rx_clk_sel0 [get_pins "$d2d_rx_phy_channel/i_rx_clk_delay_controller/i_final_clk_mux/clk0"]
-    create_clock -period $d2d_clk_period -name $rx_clk_sel1 [get_pins "$d2d_rx_phy_channel/i_rx_clk_delay_controller/i_final_clk_mux/clk1"]
-    create_clock -period $d2d_clk_period -name $rx_clk [get_pins "$d2d_rx_phy_channel/i_rx_clk_delay_controller/i_final_clk_mux/out_clk"]
+create_generated_clock -name rx_clk_s1_a_gen_2 \
+    -source [get_ports $rx_clk_2_io_port] \
+    -multiply_by 1 \
+    -combinational \
+    -add \
+    -master_clock rx_clk_2 \
+    [get_pins "$phy_digital_channel2/i_rx_clk_delay_controller/i_clk_mux_a/clk_o"]
 
-    set_max_delay -datapath_only $d2d_rx_mux_period -from [get_clocks $rx_clk_sel0] -to [get_clocks $rx_clk_sel1]
-    set_max_delay -datapath_only $d2d_rx_mux_period -from [get_clocks $rx_clk_sel1] -to [get_clocks $rx_clk_sel0]
-    set_false_path -hold -from [get_clocks $rx_clk_sel0] -to [get_clocks $rx_clk_sel1]
-    set_false_path -hold -from [get_clocks $rx_clk_sel1] -to [get_clocks $rx_clk_sel0]
+create_generated_clock -name rx_clk_s1_a_gen_3 \
+    -source [get_ports $rx_clk_3_io_port] \
+    -multiply_by 1 \
+    -combinational \
+    -add \
+    -master_clock rx_clk_3 \
+    [get_pins "$phy_digital_channel3/i_rx_clk_delay_controller/i_clk_mux_a/clk_o"]
 
-    lappend d2d_rx_clk_groups [list $rx_clk_sel0 $rx_clk_sel1 $rx_clk]
-}
+create_generated_clock -name rx_clk_s1_b_gen_1 \
+    -source [get_ports $rx_clk_1_io_port] \
+    -multiply_by 1 \
+    -combinational \
+    -add \
+    -master_clock rx_clk_1 \
+    [get_pins "$phy_digital_channel1/i_rx_clk_delay_controller/i_clk_mux_b/clk_o"]
+
+create_generated_clock -name rx_clk_s1_b_gen_2 \
+    -source [get_ports $rx_clk_2_io_port] \
+    -multiply_by 1 \
+    -combinational \
+    -add \
+    -master_clock rx_clk_2 \
+    [get_pins "$phy_digital_channel2/i_rx_clk_delay_controller/i_clk_mux_b/clk_o"]
+
+create_generated_clock -name rx_clk_s1_b_gen_3 \
+    -source [get_ports $rx_clk_3_io_port] \
+    -multiply_by 1 \
+    -combinational \
+    -add \
+    -master_clock rx_clk_3 \
+    [get_pins "$phy_digital_channel3/i_rx_clk_delay_controller/i_clk_mux_b/clk_o"]
 
 set_clock_groups -asynchronous \
-    -group [get_clocks [lindex $d2d_rx_clk_groups 0]] \
-    -group [get_clocks [lindex $d2d_rx_clk_groups 1]] \
-    -group [get_clocks [lindex $d2d_rx_clk_groups 2]] \
+    -group [get_clocks rx_clk_s1_a_gen_1] \
+    -group [get_clocks rx_clk_s1_a_gen_2] \
+    -group [get_clocks rx_clk_s1_a_gen_3] \
+    -group [get_clocks rx_clk_s1_b_gen_1] \
+    -group [get_clocks rx_clk_s1_b_gen_2] \
+    -group [get_clocks rx_clk_s1_b_gen_3]
+
+################## Stage 2 Mux constraints
+create_generated_clock -name rx_clk_s2_a_gen_1 \
+    -source [get_pins "$phy_digital_channel1/i_rx_clk_delay_controller/i_final_clk_mux/clk0"] \
+    -multiply_by 1 \
+    -add \
+    -combinational \
+    -master_clock rx_clk_s1_a_gen_1 \
+    [get_pins "$phy_digital_channel1/i_rx_clk_delay_controller/i_final_clk_mux/out_clk"]
+
+create_generated_clock -name rx_clk_s2_a_gen_2 \
+    -source [get_pins "$phy_digital_channel2/i_rx_clk_delay_controller/i_final_clk_mux/clk0"] \
+    -multiply_by 1 \
+    -add \
+    -combinational \
+    -master_clock rx_clk_s1_a_gen_2 \
+    [get_pins "$phy_digital_channel2/i_rx_clk_delay_controller/i_final_clk_mux/out_clk"]
+
+create_generated_clock -name rx_clk_s2_a_gen_3 \
+    -source [get_pins "$phy_digital_channel3/i_rx_clk_delay_controller/i_final_clk_mux/clk0"] \
+    -multiply_by 1 \
+    -add \
+    -combinational \
+    -master_clock rx_clk_s1_a_gen_3 \
+    [get_pins "$phy_digital_channel3/i_rx_clk_delay_controller/i_final_clk_mux/out_clk"]
+
+create_generated_clock -name rx_clk_s2_b_gen_1 \
+    -source [get_pins "$phy_digital_channel1/i_rx_clk_delay_controller/i_final_clk_mux/clk1"] \
+    -multiply_by 1 \
+    -add \
+    -combinational \
+    -master_clock rx_clk_s1_b_gen_1 \
+    [get_pins "$phy_digital_channel1/i_rx_clk_delay_controller/i_final_clk_mux/out_clk"]
+
+create_generated_clock -name rx_clk_s2_b_gen_2 \
+    -source [get_pins "$phy_digital_channel2/i_rx_clk_delay_controller/i_final_clk_mux/clk1"] \
+    -multiply_by 1 \
+    -add \
+    -combinational \
+    -master_clock rx_clk_s1_b_gen_2 \
+    [get_pins "$phy_digital_channel2/i_rx_clk_delay_controller/i_final_clk_mux/out_clk"]
+
+create_generated_clock -name rx_clk_s2_b_gen_3 \
+    -source [get_pins "$phy_digital_channel3/i_rx_clk_delay_controller/i_final_clk_mux/clk1"] \
+    -multiply_by 1 \
+    -add \
+    -combinational \
+    -master_clock rx_clk_s1_b_gen_3 \
+    [get_pins "$phy_digital_channel3/i_rx_clk_delay_controller/i_final_clk_mux/out_clk"]
+
+################### Groups
+set_clock_groups -logically_exclusive \
+    -group [get_clocks rx_clk_s2_a_gen_1] \
+    -group [get_clocks rx_clk_s2_b_gen_1] \
+    -group [get_clocks rx_clk_s2_a_gen_2] \
+    -group [get_clocks rx_clk_s2_b_gen_2] \
+    -group [get_clocks rx_clk_s2_a_gen_3] \
+    -group [get_clocks rx_clk_s2_b_gen_3]
+
+set_clock_groups -asynchronous \
+    -group [get_clocks {rx_clk_1 rx_clk_s1_a_gen_1 rx_clk_s1_b_gen_1 rx_clk_s2_a_gen_1 rx_clk_s2_b_gen_1}] \
+    -group [get_clocks {rx_clk_2 rx_clk_s1_a_gen_2 rx_clk_s1_b_gen_2 rx_clk_s2_a_gen_2 rx_clk_s2_b_gen_2}] \
+    -group [get_clocks {rx_clk_3 rx_clk_s1_a_gen_3 rx_clk_s1_b_gen_3 rx_clk_s2_a_gen_3 rx_clk_s2_b_gen_3}] \
     -group [get_clocks {clk_pl_0 clk_main clk_host_gen clk_acc_gen clk_pl_1 clk_pl_2 clk_peri clk_d2d_phy_east_gen clk_d2d_phy_west_gen clk_d2d_phy_north_gen clk_d2d_phy_south_gen}]
 
 #### The t-pin oddrs are active one cycle before the data
