@@ -49,7 +49,10 @@ int main() {
             t_args[1] = (uint64_t)(uintptr_t)timing_int8_scratch;
             t_args[2] = (uint64_t)(uintptr_t)&timing_scale_scratch;
             t_args[3] = N;
-            t_args[4] = (uint64_t)(uintptr_t)&timing_scratchpad;
+            // Arg4 is precision (ignored by the conversion kernel); the scratchpad
+            // pointer is Arg5 — see __host_bingo_kernel_quantize_f32i8.
+            t_args[4] = 0;
+            t_args[5] = (uint64_t)(uintptr_t)&timing_scratchpad;
             c0 = ara_get_cycle_count();
             __host_bingo_kernel_quantize_f32i8(t_args);
             c1 = ara_get_cycle_count();
