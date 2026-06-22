@@ -15,6 +15,7 @@ import os
 
 # util paths
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../../../../../../util/sim/"))
+import _usg_paths  # noqa: F401,E402  (registers util/sim/{common,gemm,xdma,ara} on sys.path)
 from data_utils import (
     format_scalar_definition,
     format_vector_definition,

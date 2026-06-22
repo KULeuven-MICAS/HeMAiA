@@ -4,7 +4,7 @@ Attention test: INT32 dequantize kernel in isolation.
 
 DFG: Dequantize (Host,c0) -> Check_fp32 (Host,c0)
 
-Tests __host_bingo_kernel_int32_dequantize by dequantizing an INT32 input
+Tests the INT32->FP32 dequantize host kernel (HostBingoKernelAraDequantizeI32F32Args) by dequantizing an INT32 input
 with a known scale and checking the FP32 output against a golden reference.
 """
 
@@ -30,7 +30,7 @@ from bingo_node import BingoNode  # noqa E402
 from bingo_mem_handle import BingoMemAlloc, BingoMemSymbol  # noqa E402
 from bingo_kernel_args import (  # noqa E402
     HostBingoKernelCheckResultArgs,
-    HostBingoKernelInt32DequantizeArgs,
+    HostBingoKernelAraDequantizeI32F32Args,
 )
 
 
@@ -98,8 +98,8 @@ def main():
     node_dequant = BingoNode(
         assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=HOST_CORE,
         node_name="Dequantize",
-        kernel_name="__host_bingo_kernel_int32_dequantize",
-        kernel_args=HostBingoKernelInt32DequantizeArgs(
+        kernel_name="__host_bingo_kernel_dequantize_i32f32",
+        kernel_args=HostBingoKernelAraDequantizeI32F32Args(
             input_addr=sym_int32_D,
             output_addr=fp32_D_buf,
             scale_addr=sym_scale,

@@ -16,7 +16,7 @@ RISCV_OBJCOPY = $(CVA6_GCC_ROOT)riscv64-unknown-elf-objcopy
 RISCV_OBJDUMP = $(CVA6_GCC_ROOT)riscv64-unknown-elf-objdump
 RISCV_READELF = $(CVA6_GCC_ROOT)riscv64-unknown-elf-readelf
 
-RISCV_CFLAGS += -march=rv64gcv # include the v extention for ara
+RISCV_CFLAGS += -march=rv64gcv_zvfh # v extension for ara + zvfh for fp16 vectors
 RISCV_CFLAGS += -mabi=lp64d
 RISCV_CFLAGS += -mcmodel=medany
 RISCV_CFLAGS += -ffast-math

@@ -16,6 +16,7 @@ import hjson
 sys.path.append(
     os.path.join(os.path.dirname(__file__), "../../../../../../../../util/sim/")
 )
+import _usg_paths  # noqa: F401,E402  (registers util/sim/{common,gemm,xdma,ara} on sys.path)
 from gemm_sim_utils import generate_gemm_test_data  # noqa E402
 
 

@@ -9,15 +9,18 @@
 #
 # After `target/sim/automation/sweep/ara/run_ara_sweep.py` finishes, each
 # ara_<kernel> workload has run in its own ara/task_<idx>/bin/ dir and printed
-#   CYCLES,<kernel>,<N>,<rep>,<cycles>
-# over UART (uart_chip_0_0.log).  This script:
+#   CYCLES,<kernel>,<prec>,<N>,<rep>,<cycles>
+# over UART (uart_chip_0_0.log).  <prec> is fp32/fp16/int8/int16 — the apps sweep
+# precision via the __host_bingo_kernel_<op> dispatcher (precision is a runtime
+# arg).  This script:
 #   1. parses those CYCLES lines from each task's UART log,
-#   2. averages cycles per (kernel, N) over reps,
-#   3. writes one consolidated CSV (op_name,op_node,n,cycles).
+#   2. averages cycles per (kernel, prec, N) over reps,
+#   3. writes one consolidated CSV (op_name,op_node,prec,n,cycles).
 #
 # This stays at the measurement level only — curve fitting lives in the bingo
 # framework, which consumes this CSV.  op_node is the HeMAiA kernel symbol that
-# produced each measurement (adjust OP_SPEC if a kernel is renamed).
+# produced each measurement; `prec` is the precision feature the co-design model
+# pairs against the GEMM LUT (adjust OP_SPEC if a kernel is renamed).
 
 import argparse
 import csv
@@ -28,60 +31,58 @@ import sys
 
 _THIS = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.normpath(os.path.join(_THIS, "../../../../../"))
+sys.path.insert(0, os.path.join(_ROOT, "util/automation_scripts"))
+from bingo_trace_gather import parse_task_order  # noqa: E402
+
 _ARA_DIR = _THIS
 _DEFAULT_OUT = os.path.join(_ARA_DIR, "ara_cycles.csv")
 
 # kernel name (as printed in the CYCLES line) -> bingo op_node fn name.
-# All but dequantize are __host_bingo_kernel_fp32_<name>.
+# All but quantize/dequantize are __host_bingo_kernel_<name>_f32 (the conversions
+# carry an in->out suffix: quantize_f32i8, dequantize_i32f32).
 _FP32 = [
     "add", "sub", "mul", "div", "max", "min", "silu_mul",
     "exp", "sigmoid", "sqrt", "relu", "neg", "abs", "tanh", "reciprocal",
     "silu", "gelu", "reduce_sum", "reduce_max", "reduce_mean",
-    "quantize", "softmax", "rmsnorm",
+    "softmax", "rmsnorm",
 ]
-OP_SPEC = {k: f"__host_bingo_kernel_fp32_{k}" for k in _FP32}
-OP_SPEC["dequantize"] = "__host_bingo_kernel_int32_dequantize"
+OP_SPEC = {k: f"__host_bingo_kernel_{k}_f32" for k in _FP32}
+OP_SPEC["quantize"] = "__host_bingo_kernel_quantize_f32i8"
+OP_SPEC["dequantize"] = "__host_bingo_kernel_dequantize_i32f32"
 
-_CYCLES_RE = re.compile(r"CYCLES,([^,]+),(\d+),(\d+),(\d+)")
-
-
-def _parse_task_order(task_yaml):
-    """Return the ordered workload names from the task YAML (= task_<idx>)."""
-    sys.path.insert(0, os.path.join(_ROOT, "util/automation_scripts"))
-    from hemaia_sim_runner import parse_tasks  # noqa E402  (no PyYAML needed)
-    from pathlib import Path
-    return [t["workload"] for t in parse_tasks(Path(task_yaml))]
+_CYCLES_RE = re.compile(r"CYCLES,([^,]+),([^,]+),(\d+),(\d+),(\d+)")
 
 
 def _parse_cycles(uart_log):
-    """kernel -> {N: [cycles, ...]} from the CYCLES lines in a UART log."""
+    """(kernel, prec) -> {N: [cycles, ...]} from the CYCLES lines in a UART log."""
     out = {}
     with open(uart_log, errors="replace") as f:
         for line in f:
             m = _CYCLES_RE.search(line)
             if not m:
                 continue
-            kernel, n, _rep, cyc = m.group(1), int(m.group(2)), m.group(3), int(m.group(4))
-            out.setdefault(kernel, {}).setdefault(n, []).append(cyc)
+            kernel, prec, n, _rep, cyc = (m.group(1), m.group(2), int(m.group(3)),
+                                          m.group(4), int(m.group(5)))
+            out.setdefault((kernel, prec), {}).setdefault(n, []).append(cyc)
     return out
 
 
 def gather_all(ci_dir, out_csv, only=None, verbose=True):
-    # Aggregate CYCLES across every task UART log, keyed by the kernel name in
-    # the CSV itself (so the result is independent of task ordering).
-    agg = {}  # kernel -> {N: [cycles,...]}
+    # Aggregate CYCLES across every task UART log, keyed by (kernel, prec) in the
+    # CSV itself (so the result is independent of task ordering).
+    agg = {}  # (kernel, prec) -> {N: [cycles,...]}
     logs = sorted(glob.glob(os.path.join(ci_dir, "task_*", "bin", "uart_chip_0_0.log")))
     if not logs:
         print(f"No UART logs found under {ci_dir}/task_*/bin/uart_chip_0_0.log")
         return 0
     for log in logs:
-        for kernel, by_n in _parse_cycles(log).items():
-            dst = agg.setdefault(kernel, {})
+        for key, by_n in _parse_cycles(log).items():
+            dst = agg.setdefault(key, {})
             for n, cycs in by_n.items():
                 dst.setdefault(n, []).extend(cycs)
 
     rows = []
-    for kernel in sorted(agg):
+    for kernel, prec in sorted(agg):
         if only and kernel not in only:
             continue
         if kernel not in OP_SPEC:
@@ -90,21 +91,23 @@ def gather_all(ci_dir, out_csv, only=None, verbose=True):
         op_node = OP_SPEC[kernel]
         # Average cycles per N once, then reuse for both the CSV rows and the log.
         points = [(n, round(sum(cycs) / len(cycs)))
-                  for n, cycs in sorted(agg[kernel].items())]
+                  for n, cycs in sorted(agg[(kernel, prec)].items())]
         for n, cyc in points:
-            rows.append({"op_name": kernel, "op_node": op_node, "n": n, "cycles": cyc})
+            rows.append({"op_name": kernel, "op_node": op_node,
+                         "prec": prec, "n": n, "cycles": cyc})
         if verbose:
             pts = ", ".join(f"n={n}:{cyc}" for n, cyc in points)
-            print(f"{kernel}: {len(points)} points  [{pts}]")
+            print(f"{kernel} [{prec}]: {len(points)} points  [{pts}]")
 
     if rows:
         os.makedirs(os.path.dirname(os.path.abspath(out_csv)), exist_ok=True)
         with open(out_csv, "w", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=["op_name", "op_node", "n", "cycles"])
+            w = csv.DictWriter(f, fieldnames=["op_name", "op_node", "prec", "n", "cycles"])
             w.writeheader()
             w.writerows(rows)
 
-    missing = [k for k in OP_SPEC if k not in agg]
+    seen = {k for (k, _p) in agg}
+    missing = [k for k in OP_SPEC if k not in seen]
     if missing:
         print(f"\nNo CYCLES data for: {', '.join(sorted(missing))}")
     return len(rows)
@@ -123,7 +126,7 @@ def main():
     args = ap.parse_args()
 
     if os.path.exists(args.task_yaml):
-        order = _parse_task_order(args.task_yaml)
+        order = parse_task_order(args.task_yaml)
         print(f"Expected {len(order)} ara tasks from {os.path.basename(args.task_yaml)}")
 
     n = gather_all(args.ci_dir, args.out, only=args.only)

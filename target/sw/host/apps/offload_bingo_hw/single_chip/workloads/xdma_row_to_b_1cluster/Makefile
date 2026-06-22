@@ -2,7 +2,7 @@
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Per-op xDMA sweep workload for "row_to_b". See util/sim/xdma_ops_lib.md.
+# Per-op xDMA sweep workload for "row_to_b". See util/sim/xdma/xdma_ops_lib.md.
 
 MK_DIR   := $(dir $(realpath $(lastword $(MAKEFILE_LIST))))
 HOST_APP_TYPE = offload_bingo_hw

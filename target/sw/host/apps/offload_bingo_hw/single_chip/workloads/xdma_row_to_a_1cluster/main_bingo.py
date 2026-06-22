@@ -7,7 +7,7 @@
 # Per-op xDMA workload: functional check + cycle sweep for the "row_to_a" op.
 # Each CONFIGS entry runs Load -> xDMA row_to_a -> Store -> Check and emits one
 # XDMA_RUN trace event (in CONFIGS order) for the cycle LUT. Shared machinery
-# lives in util/sim/xdma_ops_lib.py.
+# lives in util/sim/xdma/xdma_ops_lib.py.
 
 import os
 import sys
@@ -15,6 +15,7 @@ import sys
 current_dir = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.normpath(os.path.join(current_dir, "../../../../../../../../"))
 sys.path.append(f"{ROOT_DIR}/util/sim")
+import _usg_paths  # noqa: F401,E402  (registers util/sim/{common,gemm,xdma,ara} on sys.path)
 
 from xdma_ops_lib import run_op_workload  # noqa E402
 

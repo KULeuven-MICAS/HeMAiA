@@ -18,6 +18,7 @@ import os
 
 # Add data utility path
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../../../../../../util/sim/"))
+import _usg_paths  # noqa: F401,E402  (registers util/sim/{common,gemm,xdma,ara} on sys.path)
 from data_utils import format_vector_definition  # noqa E402
 from sim_golden_models import block_gemm_golden_model  # noqa E402
 

@@ -21,11 +21,15 @@ class BingoNode(metaclass=ABCMeta):
         self._assigned_core_id = assigned_core_id
         self._kernel_name = kernel_name
         self._kernel_args = kernel_args
+
+        # Infer kernel name from args if not explicitly provided. Args classes
+        # that pair 1:1 with a C dispatcher (e.g. the Ara HostBingoKernelAra*Args)
+        # expose KERNEL_NAME; an explicit kernel_name always takes precedence.
+        if not self._kernel_name and kernel_args is not None:
+            self._kernel_name = getattr(kernel_args, "KERNEL_NAME", None) or ""
+
         self._node_name = node_name if node_name else f"Node_ID{self._node_id}_Chiplet{self._assigned_chiplet_id}_Cluster{self._assigned_cluster_id}_Core{self._assigned_core_id}_Kernel{self._kernel_name}"
-        
-        # Infer kernel name from args if not provided, but args is provided
-        # Or validate them if both are provided (optional, for now just trust user or prioritized args)
-        
+
         self._node_type: Literal['normal', 'dummy', 'gating'] = "normal"
         self._dep_check_enable: bool = False
         self._dep_check_list: list[int] = []

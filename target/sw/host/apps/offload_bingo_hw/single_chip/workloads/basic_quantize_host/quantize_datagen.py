@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Golden data generator for basic_quantize_host.
-Tests __host_bingo_kernel_fp32_quantize in isolation.
+Tests the FP32->INT8 quantize host kernel in isolation.
 
 Generates FP32 input X, quantizes to INT8 with symmetric per-tensor quantization,
 and emits the golden INT8 output for verification.
@@ -12,6 +12,7 @@ import sys
 import os
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../../../../../../util/sim/"))
+import _usg_paths  # noqa: F401,E402  (registers util/sim/{common,gemm,xdma,ara} on sys.path)
 from data_utils import format_scalar_definition, format_vector_definition  # noqa E402
 
 np.random.seed(42)

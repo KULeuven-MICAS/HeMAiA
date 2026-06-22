@@ -15,7 +15,7 @@ APPS += gemm_sweep_1cluster
 APPS += xdma_ci_ops_1cluster
 APPS += xdma_1d_1cluster
 # Per-op xDMA sweep workloads (one op per dir; functional check + cycle LUT).
-# Shared machinery in util/sim/xdma_ops_lib.py. See util/sim/xdma_ops_lib.md.
+# Shared machinery in util/sim/xdma/xdma_ops_lib.py. See util/sim/xdma/xdma_ops_lib.md.
 APPS += xdma_6d_1cluster
 APPS += xdma_transpose_1cluster
 APPS += xdma_submatrix_1cluster

@@ -29,17 +29,18 @@ import argparse
 import csv
 import json
 import os
-import subprocess
 import sys
 
 _THIS = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.normpath(os.path.join(_THIS, "../../../../../"))
+sys.path.insert(0, os.path.join(_ROOT, "util/automation_scripts"))
+from bingo_trace_gather import (  # noqa: E402
+    convert_traces, extract_run_cycles, parse_task_order, run_bingo_trace,
+)
+
 _XDMA_DIR = _THIS
 _WORKLOADS = os.path.join(
     _ROOT, "target/sw/host/apps/offload_bingo_hw/single_chip/workloads")
-_GEN_TRACE = os.path.join(_ROOT, "util/trace/gen_trace.py")
-_BINGO_TRACE = os.path.join(_ROOT, "util/bingo_trace/bingo_trace.py")
-_PERF_HEADER = os.path.join(_ROOT, "target/sw/shared/runtime/perf_tracing.h")
 _DEFAULT_OUT = os.path.join(_XDMA_DIR, "xdma_cycles.csv")
 
 # Mesh dims for the layout ops (snax_versacore_spatial_unrolling[array_shape=0]
@@ -121,57 +122,6 @@ OP_SPEC = {
 }
 
 
-def _parse_task_order(task_yaml):
-    """Return the ordered list of workload names from the task YAML (= task_<idx>)."""
-    sys.path.insert(0, os.path.join(_ROOT, "util/automation_scripts"))
-    from hemaia_sim_runner import parse_tasks  # noqa E402  (no PyYAML needed)
-    from pathlib import Path
-    tasks = parse_tasks(Path(task_yaml))
-    return [t["workload"] for t in tasks]
-
-
-def _convert_traces(logs_dir, verbose=True):
-    """spike-dasm | gen_trace.py --permissive  for every .dasm lacking a .txt."""
-    import glob
-    made = 0
-    for dasm in sorted(glob.glob(os.path.join(logs_dir, "trace_chip_*_hart_*.dasm"))):
-        txt = dasm[:-len(".dasm")] + ".txt"
-        if os.path.exists(txt) and os.path.getmtime(txt) >= os.path.getmtime(dasm):
-            continue
-        cmd = f"spike-dasm < {dasm!r} | python3 {_GEN_TRACE!r} --permissive > {txt!r}"
-        r = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True)
-        if r.returncode != 0:
-            print(f"  ! gen_trace failed on {os.path.basename(dasm)}: "
-                  f"{r.stderr.strip()[:200]}")
-            continue
-        made += 1
-    if verbose:
-        print(f"  converted {made} .dasm -> .txt in {logs_dir}")
-
-
-def _run_bingo_trace(logs_dir):
-    out = os.path.join(logs_dir, "bingo_trace.json")
-    r = subprocess.run(
-        ["python3", _BINGO_TRACE, "--trace-header", _PERF_HEADER,
-         "--log-dir", logs_dir, "--output", out],
-        capture_output=True, text=True)
-    if r.returncode != 0:
-        print(f"  ! bingo_trace failed: {r.stderr.strip()[:300]}")
-        return None
-    return out
-
-
-def _xdma_run_cycles(bingo_json):
-    """Ordered list of XDMA_RUN dur_cc values (by timestamp)."""
-    with open(bingo_json) as f:
-        trace = json.load(f)
-    events = trace["traceEvents"] if isinstance(trace, dict) else trace
-    runs = [e for e in events
-            if e.get("ph") == "X" and "XDMA_RUN" in str(e.get("name", ""))]
-    runs.sort(key=lambda e: e.get("ts", 0))
-    return [int(e.get("args", {}).get("dur_cc", 0)) for e in runs]
-
-
 def gather_one(workload, idx, ci_dir, mesh, drop_warmup=True, verbose=True):
     """Return (op_name, op_node, params, points) for *workload*, or None.
 
@@ -193,12 +143,13 @@ def gather_one(workload, idx, ci_dir, mesh, drop_warmup=True, verbose=True):
         print(f"task_{idx} {workload}: MISSING configs.json {cfg_path}")
         return None
 
-    _convert_traces(logs_dir, verbose)
-    bingo_json = _run_bingo_trace(logs_dir)
+    convert_traces(logs_dir, verbose)
+    bingo_json = run_bingo_trace(logs_dir)
     if not bingo_json:
         return None
-    cycles = _xdma_run_cycles(bingo_json)
-    configs = json.load(open(cfg_path))["configs"]
+    cycles = extract_run_cycles(bingo_json, "XDMA_RUN")
+    with open(cfg_path) as f:
+        configs = json.load(f)["configs"]
 
     # The first kernel invocation of a sweep pays a one-time cold-start penalty
     # (i-cache fill + first xDMA config) that is ~10x the steady-state cost and
@@ -249,7 +200,7 @@ def main():
     args = ap.parse_args()
     mesh = tuple(int(x) for x in args.mesh.split(","))
 
-    order = _parse_task_order(args.task_yaml)
+    order = parse_task_order(args.task_yaml)
     rows = []
     param_cols = []  # union of param names, in first-seen order
     for idx, workload in enumerate(order):

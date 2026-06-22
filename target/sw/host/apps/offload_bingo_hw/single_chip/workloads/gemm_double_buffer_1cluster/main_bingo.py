@@ -21,6 +21,7 @@ APP_NAME = "Single-Chip GEMM Double Buffer"
 print(f"ROOT_DIR: {ROOT_DIR}")
 sys.path.append(f"{ROOT_DIR}/target/sw/host/runtime/libbingo/mini_compiler")
 sys.path.append(f"{ROOT_DIR}/util/sim")
+import _usg_paths  # noqa: F401,E402  (registers util/sim/{common,gemm,xdma,ara} on sys.path)
 
 # Import emit_header_file from gemm_datagen to emit gemm_data.h directly
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))

@@ -15,6 +15,7 @@ SIM_UTIL_DIR = os.path.abspath(
 if SIM_UTIL_DIR not in sys.path:
     sys.path.append(SIM_UTIL_DIR)
 
+import _usg_paths  # noqa: F401,E402  (registers util/sim/{common,gemm,xdma,ara} on sys.path)
 from gemm_sim_utils import (  # noqa E402
     emit_multichip_gemm_header_file,
     run_multichip_gemm_datagen,

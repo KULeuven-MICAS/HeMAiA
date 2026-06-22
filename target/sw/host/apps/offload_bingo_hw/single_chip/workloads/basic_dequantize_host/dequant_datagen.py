@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Golden data generator for basic_dequantize_host.
-Tests __host_bingo_kernel_int32_dequantize in isolation.
+Tests the INT32->FP32 dequantize host kernel in isolation.
 
 Generates random INT32 data (simulating GEMM output), a known combined_scale,
 and the expected FP32 dequantized output for verification.
@@ -12,6 +12,7 @@ import sys
 import os
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../../../../../../util/sim/"))
+import _usg_paths  # noqa: F401,E402  (registers util/sim/{common,gemm,xdma,ara} on sys.path)
 from data_utils import format_scalar_definition, format_vector_definition  # noqa E402
 
 np.random.seed(42)

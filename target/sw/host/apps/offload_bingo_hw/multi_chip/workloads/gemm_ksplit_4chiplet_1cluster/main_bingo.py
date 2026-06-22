@@ -38,8 +38,8 @@ from bingo_helpers import chiplet_addr_transform_loc  # noqa E402
 from bingo_kernel_args import (  # noqa E402
     HostBingoKernelCheckResultArgs,
     HostBingoKernelIdmaArgs,
-    HostBingoKernelInt32AddArgs,
-    HostBingoKernelInt32DequantizeArgs,
+    HostBingoKernelAraAddI32Args,
+    HostBingoKernelAraDequantizeI32F32Args,
     SnaxBingoKernelGemmFullArgs,
     SnaxBingoKernelIdma1dCopyArgs,
 )
@@ -329,8 +329,8 @@ def main():
             assigned_cluster_id=0,
             assigned_core_id=HOST_CORE,
             node_name=f"Add_k0_to_k{i}",
-            kernel_name="__host_bingo_kernel_int32_add",
-            kernel_args=HostBingoKernelInt32AddArgs(
+            kernel_name="__host_bingo_kernel_add_i32",
+            kernel_args=HostBingoKernelAraAddI32Args(
                 input_a_addr=prev_sum,
                 input_b_addr=l3_D_reduce[i],
                 output_addr=prev_sum,
@@ -378,8 +378,8 @@ def main():
         assigned_cluster_id=0,
         assigned_core_id=HOST_CORE,
         node_name="Dequant_Chip00",
-        kernel_name="__host_bingo_kernel_int32_dequantize",
-        kernel_args=HostBingoKernelInt32DequantizeArgs(
+        kernel_name="__host_bingo_kernel_dequantize_i32f32",
+        kernel_args=HostBingoKernelAraDequantizeI32F32Args(
             input_addr=prev_sum,
             output_addr=prev_sum,
             scale_addr=mem_combined_scale,

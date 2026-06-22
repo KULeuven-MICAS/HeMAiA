@@ -111,7 +111,7 @@ INCDIRS += $(abspath $(DEVICE_DIR)/runtime/snax/versacore)
 
 # Compiler flags
 RISCV_CFLAGS += $(addprefix -I,$(INCDIRS))
-RISCV_CFLAGS += -march=rv64gcv # include the v extention for ara
+RISCV_CFLAGS += -march=rv64gcv_zvfh # v extension for ara + zvfh for fp16 vectors
 RISCV_CFLAGS += -mabi=lp64d
 RISCV_CFLAGS += -mcmodel=medany
 RISCV_CFLAGS += -ffast-math
