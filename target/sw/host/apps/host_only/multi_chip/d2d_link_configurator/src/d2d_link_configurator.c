@@ -10,6 +10,9 @@
 #define D2D_LINK_CLOCK_DIVISION_DEFAULT 1U
 #define D2D_LINK_CLOCK_DIVISION_MAX 255U
 #define D2D_LINK_BYPASSED_WIRE_DEFAULT 16U
+#ifndef D2D_LINK_ENABLE_DELAY_SWEEP_DEBUG
+#define D2D_LINK_ENABLE_DELAY_SWEEP_DEBUG 1U
+#endif
 
 static uint8_t select_d2d_link_clock_division() {
     uint32_t clock_division = D2D_LINK_CLOCK_DIVISION_DEFAULT;
@@ -42,6 +45,92 @@ static void reset_all_d2d_link_bypassed_wires() {
         }
     }
     asm volatile("fence" : : : "memory");
+}
+
+static const char* get_d2d_link_direction_name(D2DDirection direction) {
+    switch (direction) {
+        case D2D_DIRECTION_EAST:
+            return "East";
+        case D2D_DIRECTION_WEST:
+            return "West";
+        case D2D_DIRECTION_NORTH:
+            return "North";
+        case D2D_DIRECTION_SOUTH:
+            return "South";
+        default:
+            return "Unknown";
+    }
+}
+
+static uint32_t get_d2d_link_selectable_error_sum(D2DDirection direction,
+                                                  uint8_t channel) {
+    uint32_t sum = 0;
+    for (uint8_t wire = 1; wire <= 16; wire++) {
+        sum += get_d2d_link_error_cycle_one_wire(direction, channel, wire);
+    }
+    return sum;
+}
+
+static void print_d2d_link_compact_lock_data(D2DDirection direction,
+                                             uint8_t delay) {
+    const char* direction_name = get_d2d_link_direction_name(direction);
+    printf("%s delay=%d:", direction_name, (int)delay);
+    for (uint8_t channel = 0; channel < CHANNELS_PER_DIRECTION; channel++) {
+        printf(" C%d cycles=%lu W0=%u W1_16_sum=%lu", (int)channel,
+               (unsigned long)get_d2d_link_tested_cycle(direction, channel),
+               (unsigned int)get_d2d_link_error_cycle_one_wire(
+                   direction, channel, 0),
+               (unsigned long)get_d2d_link_selectable_error_sum(direction,
+                                                                channel));
+    }
+    printf("\r\n");
+}
+
+static void restore_d2d_link_selected_clock_delays(
+    D2DDirection direction, const uint8_t* selected_delay) {
+    for (uint8_t channel = 0; channel < CHANNELS_PER_DIRECTION; channel++) {
+        set_d2d_link_clock_delay(direction, channel, selected_delay[channel]);
+    }
+    asm volatile("fence" : : : "memory");
+}
+
+static void debug_sweep_d2d_link_clock_delays(D2DDirection direction) {
+    if (!D2D_LINK_ENABLE_DELAY_SWEEP_DEBUG) {
+        return;
+    }
+
+    uint8_t selected_delay[CHANNELS_PER_DIRECTION];
+    for (uint8_t channel = 0; channel < CHANNELS_PER_DIRECTION; channel++) {
+        selected_delay[channel] =
+            get_d2d_link_clock_delay(direction, channel);
+    }
+
+    printf("%s delay sweep: selected C0=%d C1=%d C2=%d\r\n",
+           get_d2d_link_direction_name(direction), (int)selected_delay[0],
+           (int)selected_delay[1], (int)selected_delay[2]);
+
+    for (uint8_t delay = 0; delay < HEMAIA_D2D_LINK_NUM_DELAYS; delay++) {
+        set_d2d_link_clock_delay_all_channels(direction, delay);
+        asm volatile("fence" : : : "memory");
+        hemaia_d2d_link_require_test_one_direction(
+            direction, HEMAIA_D2D_LINK_DEFAULT_TEST_CYCLES);
+        print_d2d_link_compact_lock_data(direction, delay);
+    }
+
+    restore_d2d_link_selected_clock_delays(direction, selected_delay);
+    hemaia_d2d_link_require_test_one_direction(
+        direction, HEMAIA_D2D_LINK_DEFAULT_TEST_CYCLES);
+    printf("%s selected-delay retest: ", get_d2d_link_direction_name(direction));
+    for (uint8_t channel = 0; channel < CHANNELS_PER_DIRECTION; channel++) {
+        printf("C%d delay=%d cycles=%lu W0=%u W1_16_sum=%lu ", (int)channel,
+               (int)get_d2d_link_clock_delay(direction, channel),
+               (unsigned long)get_d2d_link_tested_cycle(direction, channel),
+               (unsigned int)get_d2d_link_error_cycle_one_wire(
+                   direction, channel, 0),
+               (unsigned long)get_d2d_link_selectable_error_sum(direction,
+                                                                channel));
+    }
+    printf("\r\n");
 }
 
 static char scan_non_newline_char(uintptr_t address_prefix) {
@@ -86,6 +175,7 @@ int main() {
     for (uint8_t i = 0; i < MAX_CFG_ROUND; i++) {
         printf("Round %d\r\n", i);
         hemaia_d2d_link_set_delay(D2D_DIRECTION_EAST);
+        debug_sweep_d2d_link_clock_delays(D2D_DIRECTION_EAST);
         for (uint8_t j = 0; j < CHANNELS_PER_DIRECTION; j++) {
             hemaia_d2d_link_set_bypass_link(D2D_DIRECTION_EAST, j);
         }
@@ -104,6 +194,7 @@ int main() {
     for (uint8_t i = 0; i < MAX_CFG_ROUND; i++) {
         printf("Round %d\r\n", i);
         hemaia_d2d_link_set_delay(D2D_DIRECTION_WEST);
+        debug_sweep_d2d_link_clock_delays(D2D_DIRECTION_WEST);
         for (uint8_t j = 0; j < CHANNELS_PER_DIRECTION; j++) {
             hemaia_d2d_link_set_bypass_link(D2D_DIRECTION_WEST, j);
         }
@@ -121,6 +212,7 @@ int main() {
     for (uint8_t i = 0; i < MAX_CFG_ROUND; i++) {
         printf("Round %d\r\n", i);
         hemaia_d2d_link_set_delay(D2D_DIRECTION_NORTH);
+        debug_sweep_d2d_link_clock_delays(D2D_DIRECTION_NORTH);
         for (uint8_t j = 0; j < CHANNELS_PER_DIRECTION; j++) {
             hemaia_d2d_link_set_bypass_link(D2D_DIRECTION_NORTH, j);
         }
@@ -138,6 +230,7 @@ int main() {
     for (uint8_t i = 0; i < MAX_CFG_ROUND; i++) {
         printf("Round %d\r\n", i);
         hemaia_d2d_link_set_delay(D2D_DIRECTION_SOUTH);
+        debug_sweep_d2d_link_clock_delays(D2D_DIRECTION_SOUTH);
         for (uint8_t j = 0; j < CHANNELS_PER_DIRECTION; j++) {
             hemaia_d2d_link_set_bypass_link(D2D_DIRECTION_SOUTH, j);
         }
