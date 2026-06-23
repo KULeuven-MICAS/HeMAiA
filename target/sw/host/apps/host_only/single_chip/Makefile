@@ -8,10 +8,10 @@
 SUBDIRS = hello_world
 SUBDIRS += clk_rst_configurator
 SUBDIRS += ci_ara
-SUBDIRS += test_bingo_alloc
-# Decomposed Ara FP32 op-cost sweep: one self-contained app per kernel
+# New decomposed Ara FP32 op-cost tests: one self-contained app per kernel
 # (ara_add, ara_exp, ...); each has its own src/main.c.
 SUBDIRS += $(wildcard ara_*)
+SUBDIRS += test_bingo_alloc
 TARGET ?= all
 
 .PHONY: all clean partial-build finalize-build $(SUBDIRS)

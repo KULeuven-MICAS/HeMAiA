@@ -832,7 +832,7 @@ def main():
         return
     if not guard_cluster_count(merged_config, platform, args.output_dir, args.output_offload_file_name):
         return
-    dfg = create_dfg(params, mem_handles, platform, eval_case=0)
+    dfg = create_dfg(params, mem_handles, platform, eval_case=1)
     data_header_name = os.path.basename(args.data_h) if args.data_h is not None else "dma_for_gemm_data.h"
     dfg.bingo_compile_dfg(params["app_name"], output_dir, output_file_name, extra_include_header_list=[data_header_name])
 

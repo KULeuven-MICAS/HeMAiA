@@ -1,0 +1,13 @@
+// Copyright 2026 KU Leuven.
+// Licensed under the Apache License, Version 2.0, see LICENSE for details.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Xiaoling Yi <xiaoling.yi@esat.kuleuven.be>
+
+{
+    // Four chunks map to compute chiplets 00, 01, 10, and 11.
+    // mempool.bin contains the same byte image as mem_chip_access_golden_l3.
+    num_chunks: 4
+    data_bytes: 1024
+    mem_chip_local_base: 0x80000000
+}
