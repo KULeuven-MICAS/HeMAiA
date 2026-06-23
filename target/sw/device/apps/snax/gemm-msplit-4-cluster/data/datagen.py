@@ -90,7 +90,7 @@ def emit_header_file(**kwargs):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate mem-chip-access data")
+    parser = argparse.ArgumentParser(description="Generate gemm-msplit-4-cluster data")
     parser.add_argument(
         "-c",
         "--cfg",

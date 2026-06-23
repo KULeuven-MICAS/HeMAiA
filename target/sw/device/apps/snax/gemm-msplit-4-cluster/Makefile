@@ -4,11 +4,11 @@
 #
 # Xiaoling Yi <xiaoling.yi@esat.kuleuven.be>
 
-APP     = mem-chip-access
+APP     = gemm-msplit-4-cluster
 
 INCDIRS += data
 
-SRCS    = src/mem-chip-access.c
+SRCS    = src/gemm-msplit-4-cluster.c
 
 include ./data/Makefile
 include ../../common.mk

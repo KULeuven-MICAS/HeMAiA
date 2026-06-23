@@ -101,7 +101,7 @@ int main() {
         return -1;
     }
 
-    printf_safe("Chip(%x, %x): mem-chip-access check passed for chunk %d\r\n",
+    printf_safe("Chip(%x, %x): data check passed for chunk %d\r\n",
                 get_current_chip_loc_x(), get_current_chip_loc_y(),
                 chunk_index);
     return 0;
