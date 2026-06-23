@@ -12,7 +12,6 @@ SUBDIRS += system_idma_copy
 SUBDIRS += d2d_multi_streams
 SUBDIRS += d2d_simple_test 
 SUBDIRS += d2d_link_configurator
-SUBDIRS += mem-chip-access
 TARGET ?= all
 
 .PHONY: all clean partial-build finalize-build $(SUBDIRS)
