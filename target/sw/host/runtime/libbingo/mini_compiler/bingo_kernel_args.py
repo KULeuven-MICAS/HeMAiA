@@ -698,6 +698,153 @@ class SnaxBingoKernelXdmaElementwiseAddAbArgs(BingoKernelArgs):
 
 
 # ══════════════════════════════════════════════════════════════════════
+# xDMA FP16 streaming-SIMD primitives (reader extensions)
+#
+# The 3 generic ops the LLM layers (softmax/rmsnorm/silu/swiglu/rope) decompose
+# into. The named sub-ops (reduce_max, map_exp, map_norm, ew_mul, ...) are these
+# 3 classes constructed with preset op/func + FP32-bit operands. One row =
+# `beats` x 64-byte beats (64 B = 32 FP16). csr_mode picks FULL (0, completely
+# configure the AGU — the default) vs STICKY (1, retask-only, reuse the persisted
+# same-shape config — the opt-in). dst_bound0 is the WRITER beat count.
+#
+# CSR encodings: StreamMap func 0=LINEAR(a*x+b) 1=EXP 2=SILU; StreamReduce op
+# 0=MAX 1=ADD 2=SUMSQ, |0x100 = TAP; StreamElementwise op 0=MUL 1=ADD.
+# ══════════════════════════════════════════════════════════════════════
+
+class SnaxBingoKernelXdmaStreamReduceArgs(BingoKernelArgs):
+    """StreamReduce: row -> scalar. op: 0=MAX 1=ADD 2=SUMSQ. red_tap: 0, or 0x100
+    to pass the row through and append the reduced scalar (dst_bound0 = beats+1)."""
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_stream_reduce"
+
+    def __init__(self, src_addr: Union[BingoMemAlloc, int], dst_addr: Union[BingoMemAlloc, int],
+                 beats: int, op: int, red_tap: int = 0, csr_mode: int = 0, dst_bound0: int = 1):
+        self.src_addr = src_addr
+        self.dst_addr = dst_addr
+        self.beats = beats
+        self.op = op
+        self.red_tap = red_tap
+        self.csr_mode = csr_mode
+        self.dst_bound0 = dst_bound0
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_xdma_stream_reduce_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.src_addr, "src_addr", a, handle_name_map)
+        self._process_addr(self.dst_addr, "dst_addr", a, handle_name_map)
+        a["beats"] = str(self.beats)
+        a["op"] = str(self.op)
+        a["red_tap"] = str(self.red_tap)
+        a["csr_mode"] = str(self.csr_mode)
+        a["dst_bound0"] = str(self.dst_bound0)
+        return a
+
+
+class SnaxBingoKernelXdmaStreamMapArgs(BingoKernelArgs):
+    """StreamMap: out = func(a*x + b). a_f32bits/b_f32bits are FP32 bit patterns
+    (a defaults to 1.0f). tap_reduce_op != 0xFFFFFFFF chains a StreamReduce-tap in
+    the same dispatch (softmax EXP+Σ; pass dst_bound0 = beats+1). out_dtype=1 fuses
+    FP16->INT8 quant with inv_scale_f32bits (pass dst_bound0 = beats//2)."""
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_stream_map"
+
+    def __init__(self, src_addr: Union[BingoMemAlloc, int], dst_addr: Union[BingoMemAlloc, int],
+                 beats: int, func: int, a_f32bits: int = 0x3F800000, b_f32bits: int = 0,
+                 tap_reduce_op: int = 0xFFFFFFFF, csr_mode: int = 0, dst_bound0: Optional[int] = None,
+                 out_dtype: int = 0, inv_scale_f32bits: int = 0,
+                 a_addr: Union[BingoMemAlloc, int, None] = None,
+                 b_addr: Union[BingoMemAlloc, int, None] = None):
+        self.src_addr = src_addr
+        self.dst_addr = dst_addr
+        self.beats = beats
+        self.func = func
+        self.a_f32bits = a_f32bits
+        self.b_f32bits = b_f32bits
+        self.tap_reduce_op = tap_reduce_op
+        self.csr_mode = csr_mode
+        self.dst_bound0 = beats if dst_bound0 is None else dst_bound0
+        self.out_dtype = out_dtype
+        self.inv_scale_f32bits = inv_scale_f32bits
+        # 0 = use the a_f32bits/b_f32bits immediate; a handle/addr = read from L1 at run time.
+        self.a_addr = 0 if a_addr is None else a_addr
+        self.b_addr = 0 if b_addr is None else b_addr
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_xdma_stream_map_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.src_addr, "src_addr", a, handle_name_map)
+        self._process_addr(self.dst_addr, "dst_addr", a, handle_name_map)
+        a["beats"] = str(self.beats)
+        a["a_f32bits"] = str(self.a_f32bits)
+        a["b_f32bits"] = str(self.b_f32bits)
+        a["func"] = str(self.func)
+        a["tap_reduce_op"] = str(self.tap_reduce_op)
+        a["csr_mode"] = str(self.csr_mode)
+        a["dst_bound0"] = str(self.dst_bound0)
+        a["out_dtype"] = str(self.out_dtype)
+        a["inv_scale_f32bits"] = str(self.inv_scale_f32bits)
+        # Optional runtime operands. Split ints in Python (a C-side `0 >> 32` on a
+        # 32-bit literal trips -Werror=shift-count-overflow); use _process_addr for
+        # real handles (it splits a uint64 C expr safely).
+        for base, val in (("a_addr", self.a_addr), ("b_addr", self.b_addr)):
+            if isinstance(val, int):
+                a[f"{base}_lo"] = str(val & 0xFFFFFFFF)
+                a[f"{base}_hi"] = str((val >> 32) & 0xFFFFFFFF)
+            else:
+                self._process_addr(val, base, a, handle_name_map)
+        return a
+
+
+class SnaxBingoKernelXdmaStreamElementwiseArgs(BingoKernelArgs):
+    """StreamElementwise: out = op(operand_0, operand_1, ...) over `operand_count`
+    interleaved streams operand_stride bytes apart. op: 0=MUL 1=ADD. out_dtype=1
+    fuses FP16->INT8 quant with inv_scale_f32bits (pass dst_bound0 = beats//2)."""
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_stream_elementwise"
+
+    def __init__(self, src_addr: Union[BingoMemAlloc, int], dst_addr: Union[BingoMemAlloc, int],
+                 beats: int, op: int, operand_stride: int = 0, operand_count: int = 2,
+                 csr_mode: int = 0, dst_bound0: Optional[int] = None,
+                 out_dtype: int = 0, inv_scale_f32bits: int = 0,
+                 src_b_addr: Union[BingoMemAlloc, int, None] = None):
+        self.src_addr = src_addr
+        self.dst_addr = dst_addr
+        self.beats = beats
+        self.operand_stride = operand_stride
+        self.operand_count = operand_count
+        self.op = op
+        self.csr_mode = csr_mode
+        self.dst_bound0 = beats if dst_bound0 is None else dst_bound0
+        self.out_dtype = out_dtype
+        self.inv_scale_f32bits = inv_scale_f32bits
+        # 0 = use operand_stride; a handle = derive stride from src_b - src_addr at run time.
+        self.src_b_addr = 0 if src_b_addr is None else src_b_addr
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_xdma_stream_elementwise_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.src_addr, "src_addr", a, handle_name_map)
+        self._process_addr(self.dst_addr, "dst_addr", a, handle_name_map)
+        a["beats"] = str(self.beats)
+        a["operand_stride"] = str(self.operand_stride)
+        a["operand_count"] = str(self.operand_count)
+        a["op"] = str(self.op)
+        a["csr_mode"] = str(self.csr_mode)
+        a["dst_bound0"] = str(self.dst_bound0)
+        a["out_dtype"] = str(self.out_dtype)
+        a["inv_scale_f32bits"] = str(self.inv_scale_f32bits)
+        if isinstance(self.src_b_addr, int):
+            a["src_b_addr_lo"] = str(self.src_b_addr & 0xFFFFFFFF)
+            a["src_b_addr_hi"] = str((self.src_b_addr >> 32) & 0xFFFFFFFF)
+        else:
+            self._process_addr(self.src_b_addr, "src_b_addr", a, handle_name_map)
+        return a
+
+
+# ══════════════════════════════════════════════════════════════════════
 # VersaCore blocked-layout conversion kernels (tile-shape-parameterized)
 #
 # Six primitive conversions between row-major and the three VersaCore
@@ -1015,6 +1162,40 @@ class HostBingoKernelIdmaArgs(BingoKernelArgs):
         self._process_addr(self.dst_addr, "dst_addr", assignments, handle_name_map, split_64bit=False, as_64bit=True)
         assignments["size"] = str(self.size)
         return assignments
+
+
+# HOST BINGO scalar bridge: read ONE fp16 from L1 (a device reduction), compute a
+# scalar on the CVA6, write ONE fp32 back to L1 for a downstream device StreamMap
+# operand. op: 0=NEG (-x), 1=RECIP (1/x), 2=RSQRT_MEAN (1/sqrt(x/n)).
+BINGO_HOST_SCALAR_NEG        = 0
+BINGO_HOST_SCALAR_RECIP      = 1
+BINGO_HOST_SCALAR_RSQRT_MEAN = 2
+
+
+class HostBingoKernelHostScalarArgs(BingoKernelArgs):
+    KERNEL_NAME = "__host_bingo_kernel_host_scalar"
+
+    def __init__(self,
+                 in_addr: Union[BingoMemAlloc, BingoMemSymbol, int],
+                 out_addr: Union[BingoMemAlloc, BingoMemSymbol, int],
+                 op: int, n: int = 1, in_offset: int = 0):
+        self.in_addr = in_addr
+        self.out_addr = out_addr
+        self.op = op
+        self.n = n
+        self.in_offset = in_offset
+
+    def get_struct_name(self) -> str:
+        return "__host_bingo_kernel_host_scalar_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.in_addr, "in_addr", a, handle_name_map, split_64bit=False, as_64bit=True)
+        self._process_addr(self.out_addr, "out_addr", a, handle_name_map, split_64bit=False, as_64bit=True)
+        a["op"] = str(self.op)
+        a["n"] = str(self.n)
+        a["in_offset"] = str(self.in_offset)
+        return a
 
 
 # ══════════════════════════════════════════════════════════════════════

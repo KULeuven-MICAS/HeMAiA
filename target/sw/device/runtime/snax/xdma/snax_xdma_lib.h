@@ -143,6 +143,24 @@ inline int32_t xdma_memcpy_nd(void* src, void* dst, uint32_t spatial_stride_src,
         enabled_chan_dst, enabled_byte_dst);
 }
 
+// Minimal re-task of a transfer whose temporal SHAPE (dims, strides, channels) is unchanged
+// from a prior memcpy_nd (config is sticky): rewrites only the src/dst base addresses and the
+// dst dim-0 bound. 5 CSR writes instead of ~44. Use for successive same-shape tasks (e.g.
+// softmax T2/T3 all stream `beats` src beats; only the addresses and the writer's beat count
+// change). The opt-in "sticky CSR" path: the first op of a same-shape group does a full
+// xdma_memcpy_nd_full_addr, the rest retask. Unicast only.
+inline int32_t xdma_retask_1d(void* src, void* dst, uint32_t dst_bound0) {
+    uint64_t h = (uint64_t)snrt_cluster_base_addrh() << 32;
+    uint64_t s = (uint64_t)src + h;
+    uint64_t d = (uint64_t)dst + h;
+    snax_write_xdma_cfg_reg(XDMA_SRC_ADDR_PTR_LSB, (uint32_t)s);
+    snax_write_xdma_cfg_reg(XDMA_SRC_ADDR_PTR_MSB, (uint32_t)(s >> 32));
+    snax_write_xdma_cfg_reg(XDMA_DST_ADDR_PTR_LSB, (uint32_t)d);
+    snax_write_xdma_cfg_reg(XDMA_DST_ADDR_PTR_MSB, (uint32_t)(d >> 32));
+    snax_write_xdma_cfg_reg(XDMA_DST_TEMP_BOUND_PTR, dst_bound0);
+    return 0;
+}
+
 inline int32_t xdma_memcpy_1d_full_addr(uint64_t src, uint64_t dst,
                                         uint32_t size) {
     if (size % XDMA_WIDTH != 0) {

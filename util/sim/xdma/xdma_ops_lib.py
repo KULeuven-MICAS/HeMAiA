@@ -49,6 +49,9 @@ from bingo_kernel_args import (  # noqa E402
     SnaxBingoKernelXdmaPad2dArgs,
     SnaxBingoKernelXdmaGather2dArgs,
     SnaxBingoKernelXdmaElementwiseAddArgs,
+    SnaxBingoKernelXdmaStreamReduceArgs,
+    SnaxBingoKernelXdmaStreamMapArgs,
+    SnaxBingoKernelXdmaStreamElementwiseArgs,
     SnaxBingoKernelXdmaRowMajorToAArgs,
     SnaxBingoKernelXdmaAToRowMajorArgs,
     SnaxBingoKernelXdmaRowMajorToBArgs,
@@ -363,6 +366,107 @@ class ElementwiseAddOp:
         return b.store_check(f"eltadd_cfg{i}", l1d, op, f"golden_{i}", out_bytes)
 
 
+# ── FP16 streaming-SIMD primitive: softmax (reduce + map+tap + map[+quant]) ──
+# Decomposes one softmax row onto the 3 new stream kernels and validates the
+# fp16 output to tolerance. Exercises ALL the new capabilities in one chain:
+#   T1  reduce(MAX)                       FULL   -> establishes the shared AGU
+#   T2  map(EXP, b=-max) + reduce(ADD|TAP) STICKY -> exp row + Σexp, 2-ext fusion
+#   T3  map(LINEAR, a=inv_sum)            STICKY -> softmax probs (checked, fp16)
+#   Tq  map(LINEAR) + Fp16ToInt8          STICKY -> fused FP16->INT8 (path exercised)
+# The host scalars (-max, inv_sum) are baked into the args (as the standalone
+# snax-xdma-softmax app precomputes them in data.h); on real HeMAiA they come
+# from host nodes — that wiring is the bingo_framework next phase. int8 numeric
+# correctness is covered by the standalone app (no int8-tolerance check here).
+
+def _f32bits(x):
+    return int(np.float32(x).view(np.uint32))
+
+
+def _softmax_ref(beats, i):
+    """Deterministic per-config softmax reference, mimicking the HW fp16 datapath.
+    Returns (x_fp16, y_fp16, yq_int8, neg_max_bits, inv_sum_bits, inv_scale_bits).
+
+    The input is PEAKY (a few large entries on a small-uniform background) so the
+    dominant probabilities stay O(0.1-0.7) regardless of N — otherwise large-N
+    softmax flattens to ~1/N and an absolute-tolerance check passes even garbage.
+    """
+    n = beats * 32  # 64 B beat = 32 fp16
+    rng = np.random.RandomState(20240601 + i)
+    x = rng.uniform(-2.0, 2.0, size=n).astype(np.float32)
+    for pos, val in ((0, 6.0), (n // 3, 5.0), (2 * n // 3, 4.5)):
+        x[pos] = val
+    x = x.astype(np.float16)
+    xf = x.astype(np.float32)
+    m = np.float16(xf.max())                                   # HW T1: fp16 row max
+    e16 = np.exp(xf - np.float32(m)).astype(np.float16)        # HW T2: fp16 exp
+    s = np.float32(e16.astype(np.float32).sum())               # HW T2 tap: Σ over fp16
+    inv_sum = np.float32(1.0) / s                              # host reciprocal
+    y = (e16.astype(np.float32) * inv_sum).astype(np.float16)  # HW T3: normalize
+    inv_scale = np.float32(127.0)                              # probs in [0,1] -> int8
+    yq = np.clip(np.rint(y.astype(np.float32) * inv_scale), -128, 127).astype(np.int8)
+    return x, y, yq, _f32bits(-np.float32(m)), _f32bits(inv_sum), _f32bits(inv_scale)
+
+
+class SoftmaxOp:
+    name = "softmax"
+
+    def gen_data(self, c, i, ctx):
+        x, y, _yq, _nm, _is, _isc = _softmax_ref(c["beats"], i)
+        return [format_vector_definition("uint16_t", f"in_{i}", x.view(np.uint16)),
+                format_vector_definition("uint16_t", f"golden_{i}", y.view(np.uint16))]
+
+    def _store_check_fp16(self, b, name, l1_dst, op_node, golden_sym, n_elems, tol):
+        out_bytes = n_elems * 2
+        l3 = BingoMemAlloc(f"out_{name}", size=out_bytes, mem_level="L3")
+        store = BingoNode(
+            assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=HOST_CORE,
+            node_name=f"Store_{name}", kernel_name="__host_bingo_kernel_idma",
+            kernel_args=HostBingoKernelIdmaArgs(l1_dst, l3, out_bytes))
+        check = BingoNode(
+            assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=HOST_CORE,
+            node_name=f"Check_{name}", kernel_name="__host_bingo_kernel_check_result",
+            kernel_args=HostBingoKernelCheckResultArgs(
+                b.sym(golden_sym), l3, name=name,
+                check_type=2, num_elements=n_elems, tolerance=tol))  # 2 = FP16_TOL
+        b.dfg.bingo_add_node(store)
+        b.dfg.bingo_add_node(check)
+        b.dfg.bingo_add_edge(op_node, store)
+        b.dfg.bingo_add_edge(store, check)
+        return check
+
+    def build(self, b, c, i, prev):
+        beats = c["beats"]
+        n = beats * 32
+        row_b = beats * 64
+        x, y, yq, neg_max_bits, inv_sum_bits, inv_scale_bits = _softmax_ref(beats, i)
+        l1_x   = b.l1(f"smx_x_{i}", row_b)
+        l1_max = b.l1(f"smx_max_{i}", 64)
+        l1_exp = b.l1(f"smx_exp_{i}", (beats + 1) * 64)
+        l1_out = b.l1(f"smx_out_{i}", row_b)
+        l1_i8  = b.l1(f"smx_i8_{i}", n)
+        load = b.idma_load(f"Load_{i}", b.sym(f"in_{i}"), l1_x, row_b, prev)
+        # T1 max — FULL config establishes the AGU shape the STICKY ops reuse.
+        t1 = b.op(f"Max_{i}", "__snax_bingo_kernel_xdma_stream_reduce",
+                  SnaxBingoKernelXdmaStreamReduceArgs(l1_x, l1_max, beats, op=0,
+                      red_tap=0, csr_mode=0, dst_bound0=1), load)
+        # T2 exp(x-max) + Σexp fused (StreamMap EXP -||> StreamReduce ADD|TAP), STICKY.
+        t2 = b.op(f"ExpSum_{i}", "__snax_bingo_kernel_xdma_stream_map",
+                  SnaxBingoKernelXdmaStreamMapArgs(l1_x, l1_exp, beats, func=1,
+                      b_f32bits=neg_max_bits, tap_reduce_op=(1 | 0x100),
+                      csr_mode=1, dst_bound0=beats + 1), t1)
+        # T3 out = inv_sum * exp (StreamMap LINEAR), STICKY.
+        t3 = b.op(f"Norm_{i}", "__snax_bingo_kernel_xdma_stream_map",
+                  SnaxBingoKernelXdmaStreamMapArgs(l1_exp, l1_out, beats, func=0,
+                      a_f32bits=inv_sum_bits, csr_mode=1, dst_bound0=beats), t2)
+        chk = self._store_check_fp16(b, f"softmax_cfg{i}", l1_out, t3, f"golden_{i}", n, 0.02)
+        # Tq fused FP16->INT8 quant — exercises the Fp16ToInt8 datapath (leaf, no check).
+        tq = b.op(f"Quant_{i}", "__snax_bingo_kernel_xdma_stream_map",
+                  SnaxBingoKernelXdmaStreamMapArgs(l1_exp, l1_i8, beats, func=0,
+                      a_f32bits=inv_sum_bits, csr_mode=1, dst_bound0=beats // 2,
+                      out_dtype=1, inv_scale_f32bits=inv_scale_bits), chk)
+        return tq
+
+
 # ── VersaCore layout conversions (need meshRow/tileSize/meshCol from hwcfg) ──
 def _mesh(ctx, c):
     array_shape = c.get("array_shape", ctx["array_shape"])
@@ -523,6 +627,7 @@ def _build_registry():
         "pad": PadOp(),
         "gather": GatherOp(),
         "elementwise_add": ElementwiseAddOp(),
+        "softmax": SoftmaxOp(),
     }
     layout_handlers, layout_reg = make_layout_handlers()
     _register_layouts(layout_handlers, layout_reg)

@@ -636,6 +636,57 @@ DEFINE_FP32_UNARY_KERNEL(gelu, {
     result = __riscv_vfmul_vv_f32m1(v, sig, vl);
 })
 
+// ---- Host scalar bridge ----
+// Read ONE fp16 scalar that a device xDMA reduction left in cluster L1, compute
+// a scalar on the CVA6 (FPU), and write ONE fp32 back to L1 where the downstream
+// device StreamMap reads it as its `a`/`b` CSR operand. The CVA6 accesses the
+// cluster TCDM directly (in/out are full global L1 addresses). fp16->fp32 uses
+// integer bit-manipulation so it does not depend on scalar zfh support.
+//   op: 0=NEG (-x), 1=RECIP (1/x), 2=RSQRT_MEAN (1/sqrt(x/n))
+// Arg layout: in_addr, out_addr, op, n, scratchpad_ptr.
+#define BINGO_HOST_SCALAR_NEG         0
+#define BINGO_HOST_SCALAR_RECIP       1
+#define BINGO_HOST_SCALAR_RSQRT_MEAN  2
+
+static inline float __bingo_host_f16bits_to_f32(uint16_t h){
+    uint32_t sign = (uint32_t)(h >> 15) & 1u;
+    uint32_t exp  = (uint32_t)(h >> 10) & 0x1Fu;
+    uint32_t mant = (uint32_t)(h & 0x3FFu);
+    uint32_t bits;
+    if (exp == 0u) {
+        if (mant == 0u) { bits = sign << 31; }
+        else { int s = 0; while (!(mant & 0x400u)) { mant <<= 1; s++; }
+               mant &= 0x3FFu; bits = (sign << 31) | ((uint32_t)(127 - 15 - s) << 23) | (mant << 13); }
+    } else if (exp == 0x1Fu) {
+        bits = (sign << 31) | 0x7F800000u | (mant << 13);
+    } else {
+        bits = (sign << 31) | ((exp - 15u + 127u) << 23) | (mant << 13);
+    }
+    float f; __builtin_memcpy(&f, &bits, sizeof f); return f;
+}
+
+static inline uint64_t __host_bingo_kernel_host_scalar(void *arg){
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+    uint64_t in_addr   = ((uint64_t *)arg)[0];
+    uint64_t out_addr  = ((uint64_t *)arg)[1];
+    uint64_t op        = ((uint64_t *)arg)[2];
+    uint64_t n         = ((uint64_t *)arg)[3];
+    uint64_t in_offset = ((uint64_t *)arg)[4];
+    bingo_kernel_scratchpad_t* sp = (bingo_kernel_scratchpad_t*)(uintptr_t)((uint64_t *)arg)[5];
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
+    float v = __bingo_host_f16bits_to_f32(*(volatile uint16_t*)(uintptr_t)(in_addr + in_offset));
+    float r;
+    if (op == BINGO_HOST_SCALAR_NEG)        r = -v;
+    else if (op == BINGO_HOST_SCALAR_RECIP) r = 1.0f / v;
+    else                                    r = 1.0f / __builtin_sqrtf(v / (float)n);
+    *(volatile float*)(uintptr_t)out_addr = r;
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
+    sp->return_value = (uint32_t)(uintptr_t)out_addr;
+    sp->num_return_values = 1;
+    return BINGO_RET_SUCC;
+}
+
 // ---- Reduction kernels ----
 // out[0] = reduce_op(x[0..n])
 // Arg layout: input_addr, output_addr, num_elements

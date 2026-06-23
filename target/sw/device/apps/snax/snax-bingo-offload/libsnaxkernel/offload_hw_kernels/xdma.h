@@ -323,6 +323,222 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_elementwise_add_ab(void *arg)
 }
 
 // ==========================================================================
+// xDMA FP16 streaming-SIMD primitives (reader extensions)
+//
+// The 3 generic ops the LLM layers (softmax / rmsnorm / silu / swiglu / rope)
+// decompose into. Each is a thin wrapper that programs one reader extension,
+// launches a single xDMA task over a row, and waits. A row is `beats` x 64-byte
+// beats (64 B = 32 FP16). The op/func selector and FP32-bit operands come in as
+// args, so the named sub-ops (reduce_max, map_exp, map_norm, ew_mul, ...) are
+// just these 3 kernels invoked with preset args by the Python minicompiler.
+//
+// CSR encodings (passed verbatim into the extension CSRs by the caller):
+//   StreamMap        func: 0=LINEAR(a*x+b)  1=EXP  2=SILU   CSR={a_f32,b_f32,func}
+//   StreamReduce     op:   0=MAX  1=ADD  2=SUMSQ   |0x100=TAP   CSR={beats,op|tap}
+//   StreamElementwise op:  0=MUL  1=ADD            CSR={operand_count,op}
+//   Fp16ToInt8       CSR={inv_scale_f32}   (fused quant: FP16 stream -> packed INT8)
+//
+// Sticky CSR: the row AGU shape is identical across a same-shape group, so
+// csr_mode selects FULL (full xdma_memcpy_nd_full_addr) for the first op of a
+// group, or STICKY (xdma_retask_1d: 5 writes, reuse the persisted shape) for the
+// rest. dst_bound0 is the WRITER beat count the caller computes.
+// ==========================================================================
+
+// Shared launch for the stream primitives: program the AGU (full config or sticky
+// retask), run one xDMA task, and wait. The reader extension(s) must already be
+// enabled by the caller. src AGU is 2D; dst is 1D {64-byte beat, dst_bound0}.
+// Returns BINGO_RET_SUCC, or BINGO_RET_FAIL (via BINGO_XDMA_TRY) on a cfg error.
+static inline uint32_t xdma_stream_launch(
+    uint64_t src_addr, uint64_t dst_addr,
+    uint32_t *src_str, uint32_t *src_bnd, uint32_t dst_bound0, uint32_t csr_mode)
+{
+    if (csr_mode == 0u) {  // FULL: completely configure the AGU (default)
+        uint32_t dst_str[1] = { XDMA_WIDTH };
+        uint32_t dst_bnd[1] = { dst_bound0 };
+        BINGO_XDMA_TRY(xdma_memcpy_nd_full_addr(
+            src_addr, dst_addr,
+            XDMA_WIDTH / XDMA_SPATIAL_CHAN, XDMA_WIDTH / XDMA_SPATIAL_CHAN,
+            2, src_str, src_bnd, 1, dst_str, dst_bnd,
+            0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF), "xdma_stream");
+    } else {               // STICKY: reuse the persisted same-shape config (opt-in)
+        BINGO_XDMA_TRY(xdma_retask_1d(
+            (void *)(uint32_t)src_addr, (void *)(uint32_t)dst_addr, dst_bound0),
+            "xdma_stream_retask");
+    }
+    int task_id = xdma_start();
+    xdma_wait_task(src_addr, dst_addr, task_id);
+    return BINGO_RET_SUCC;
+}
+
+// StreamReduce: row -> scalar. op = MAX/ADD/SUMSQ; red_tap = 0 or 0x100 (pass the
+// row through and append the reduced scalar as a trailing beat). dst_bound0 = 1
+// for a pure reduce, beats+1 when tapped.
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_stream_reduce(void *arg)
+{
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_stream_reduce_args_t);
+    if (snrt_is_dm_core()) {
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+        uint32_t *a = (uint32_t *)arg;
+        uint64_t src_addr = make_u64(a[0], a[1]);
+        uint64_t dst_addr = make_u64(a[2], a[3]);
+        uint32_t beats      = a[4];
+        uint32_t op         = a[5];
+        uint32_t red_tap    = a[6];
+        uint32_t csr_mode   = a[7];
+        uint32_t dst_bound0 = a[8];
+        bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_stream_reduce_args_t);
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+#if defined(READER_EXT_STREAMREDUCE)
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
+        uint32_t src_str[2] = { XDMA_WIDTH, beats * XDMA_WIDTH };
+        uint32_t src_bnd[2] = { beats, 1 };
+        uint32_t csr_red[2] = { beats, op | red_tap };
+        xdma_enable_src_ext(READER_EXT_STREAMREDUCE, csr_red);
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
+        uint32_t rc = xdma_stream_launch(src_addr, dst_addr, src_str, src_bnd, dst_bound0, csr_mode);
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
+        xdma_disable_src_ext(READER_EXT_STREAMREDUCE);
+        if (rc != BINGO_RET_SUCC) return BINGO_RET_FAIL;
+#else
+        #error "Regenerate the XDMA CSR map (make snax-sw-gen): missing READER_EXT_STREAMREDUCE."
+#endif
+        sp->return_value = (uint32_t)dst_addr;
+        sp->num_return_values = 0;
+        return BINGO_RET_SUCC;
+    } else {
+        printf_safe("[Cluster %d Core %d]: Error! xDMA stream_reduce should be called from a DM core!\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+}
+
+// StreamMap: out = func(a*x + b). Optional chained StreamReduce-tap (tap_reduce_op
+// != 0xFFFFFFFF folds softmax's EXP + Σ into one dispatch; the Σ scalar lands at
+// dst + beats*64, so pass dst_bound0 = beats+1). Optional fused FP16->INT8 quant.
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_stream_map(void *arg)
+{
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_stream_map_args_t);
+    if (snrt_is_dm_core()) {
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+        uint32_t *a = (uint32_t *)arg;
+        uint64_t src_addr = make_u64(a[0], a[1]);
+        uint64_t dst_addr = make_u64(a[2], a[3]);
+        uint32_t beats         = a[4];
+        uint32_t a_f32bits     = a[5];
+        uint32_t b_f32bits     = a[6];
+        uint32_t func          = a[7];
+        uint32_t tap_reduce_op = a[8];
+        uint32_t csr_mode      = a[9];
+        uint32_t dst_bound0    = a[10];
+        uint32_t out_dtype     = a[11];
+        uint32_t inv_scale     = a[12];
+        uint32_t a_addr_hi     = a[13];
+        uint32_t a_addr_lo     = a[14];
+        uint32_t b_addr_hi     = a[15];
+        uint32_t b_addr_lo     = a[16];
+        bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_stream_map_args_t);
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+#if defined(READER_EXT_STREAMMAP) && defined(READER_EXT_STREAMREDUCE) && defined(READER_EXT_FP16TOINT8)
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
+        // Optional runtime operands: a nonzero a_addr/b_addr means a host kernel
+        // wrote the fp32 bits into that L1 word; the DM core reads it (local low
+        // addr) instead of the baked immediate.
+        if (a_addr_lo || a_addr_hi) a_f32bits = *(volatile uint32_t *)(uint32_t)a_addr_lo;
+        if (b_addr_lo || b_addr_hi) b_f32bits = *(volatile uint32_t *)(uint32_t)b_addr_lo;
+        uint32_t src_str[2] = { XDMA_WIDTH, beats * XDMA_WIDTH };
+        uint32_t src_bnd[2] = { beats, 1 };
+        uint32_t csr_map[3] = { a_f32bits, b_f32bits, func };
+        xdma_enable_src_ext(READER_EXT_STREAMMAP, csr_map);
+        if (tap_reduce_op != 0xFFFFFFFFu) {
+            uint32_t csr_red[2] = { beats, tap_reduce_op };
+            xdma_enable_src_ext(READER_EXT_STREAMREDUCE, csr_red);
+        }
+        if (out_dtype == 1u) {
+            uint32_t csr_q[1] = { inv_scale };
+            xdma_enable_src_ext(READER_EXT_FP16TOINT8, csr_q);
+        }
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
+        uint32_t rc = xdma_stream_launch(src_addr, dst_addr, src_str, src_bnd, dst_bound0, csr_mode);
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
+        if (out_dtype == 1u) xdma_disable_src_ext(READER_EXT_FP16TOINT8);
+        if (tap_reduce_op != 0xFFFFFFFFu) xdma_disable_src_ext(READER_EXT_STREAMREDUCE);
+        xdma_disable_src_ext(READER_EXT_STREAMMAP);
+        if (rc != BINGO_RET_SUCC) return BINGO_RET_FAIL;
+#else
+        #error "Regenerate the XDMA CSR map (make snax-sw-gen): missing READER_EXT_STREAMMAP/STREAMREDUCE/FP16TOINT8."
+#endif
+        sp->return_value = (uint32_t)dst_addr;
+        sp->num_return_values = 0;
+        return BINGO_RET_SUCC;
+    } else {
+        printf_safe("[Cluster %d Core %d]: Error! xDMA stream_map should be called from a DM core!\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+}
+
+// StreamElementwise: out = op(operand_0, operand_1, ...) over `operand_count`
+// interleaved streams spaced operand_stride bytes apart (the reader reads
+// {op0[beat], op1[beat], ...} as the inner AGU dim). Optional fused FP16->INT8.
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_stream_elementwise(void *arg)
+{
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_stream_elementwise_args_t);
+    if (snrt_is_dm_core()) {
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+        uint32_t *a = (uint32_t *)arg;
+        uint64_t src_addr = make_u64(a[0], a[1]);
+        uint64_t dst_addr = make_u64(a[2], a[3]);
+        uint32_t beats          = a[4];
+        uint32_t operand_stride = a[5];
+        uint32_t operand_count  = a[6];
+        uint32_t op             = a[7];
+        uint32_t csr_mode       = a[8];
+        uint32_t dst_bound0     = a[9];
+        uint32_t out_dtype      = a[10];
+        uint32_t inv_scale      = a[11];
+        uint32_t src_b_addr_hi  = a[12];
+        uint32_t src_b_addr_lo  = a[13];
+        bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_stream_elementwise_args_t);
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+#if defined(READER_EXT_STREAMELEMENTWISE) && defined(READER_EXT_FP16TOINT8)
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
+        // If a 2nd operand address is given, derive the operand stride from the two
+        // separate buffers at run time (operand 1 must be the higher address).
+        if (src_b_addr_lo || src_b_addr_hi)
+            operand_stride = src_b_addr_lo - (uint32_t)src_addr;
+        // Interleaved src: inner dim = operand index (stride operand_stride),
+        // outer dim = beats (stride one 64-byte beat).
+        uint32_t src_str[2] = { operand_stride, XDMA_WIDTH };
+        uint32_t src_bnd[2] = { operand_count, beats };
+        uint32_t csr_ew[2]  = { operand_count, op };
+        xdma_enable_src_ext(READER_EXT_STREAMELEMENTWISE, csr_ew);
+        if (out_dtype == 1u) {
+            uint32_t csr_q[1] = { inv_scale };
+            xdma_enable_src_ext(READER_EXT_FP16TOINT8, csr_q);
+        }
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
+        uint32_t rc = xdma_stream_launch(src_addr, dst_addr, src_str, src_bnd, dst_bound0, csr_mode);
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
+        if (out_dtype == 1u) xdma_disable_src_ext(READER_EXT_FP16TOINT8);
+        xdma_disable_src_ext(READER_EXT_STREAMELEMENTWISE);
+        if (rc != BINGO_RET_SUCC) return BINGO_RET_FAIL;
+#else
+        #error "Regenerate the XDMA CSR map (make snax-sw-gen): missing READER_EXT_STREAMELEMENTWISE/FP16TOINT8."
+#endif
+        sp->return_value = (uint32_t)dst_addr;
+        sp->num_return_values = 0;
+        return BINGO_RET_SUCC;
+    } else {
+        printf_safe("[Cluster %d Core %d]: Error! xDMA stream_elementwise should be called from a DM core!\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+}
+
+// ==========================================================================
 // High-level xDMA kernels: user provides shapes, kernel computes AGU config.
 // These wrap the low-level reshape kernel with automatic stride computation.
 // ==========================================================================

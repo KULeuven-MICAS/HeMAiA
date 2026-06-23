@@ -24,6 +24,8 @@ extern int32_t xdma_memcpy_nd(void* src, void* dst, uint32_t spatial_stride_src,
                               uint32_t enabled_chan_dst,
                               uint32_t enabled_byte_dst);
 
+extern int32_t xdma_retask_1d(void* src, void* dst, uint32_t dst_bound0);
+
 extern int32_t xdma_memcpy_1d_full_addr(uint64_t src, uint64_t dst,
                                         uint32_t size);
 

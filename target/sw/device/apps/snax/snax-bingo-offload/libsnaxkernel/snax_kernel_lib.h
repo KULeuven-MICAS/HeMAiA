@@ -79,6 +79,10 @@ SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_gather_2d),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_elementwise_add),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_elementwise_add_ab),
+    // FP16 streaming-SIMD primitives (LLM layers: softmax/rmsnorm/silu/swiglu/rope).
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_stream_reduce),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_stream_map),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_stream_elementwise),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_d_to_row_major),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_row_major_to_a),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_row_major_to_b),
