@@ -4,14 +4,17 @@
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 #
-# xDMA FP16 RMSNorm — explicit, self-contained workload graph (no xdma_ops_lib).
-# Real device->host->device hand-off (host computes inv_rms = 1/sqrt(Sigma x^2 / N)):
-#   Load x
-#   T1  reduce(SUMSQ)                FULL    x       -> ssq          [dev]
-#   H1  host RSQRT_MEAN(n=N)                 ssq     -> inv_rms(f32) [host]
-#   T2  map(LINEAR, a=inv_rms)       STICKY  x       -> out          [dev]
-#   Store(out) + Check(fp16 tol)                                     [host]
-#   Tq  map(LINEAR, a=inv_rms)+quant STICKY  x       -> out_i8       [dev]
+# xDMA FP16 RMSNorm — multi-row, explicit workload graph (no xdma_ops_lib).
+# Per-row device->host->device hand-off over [rows, D] tiles (host computes the
+# per-row inv_rms = 1/sqrt(Sigma x^2 / N) and broadcasts it):
+#   Load x[rows,D]
+#   T1  reduce(SUMSQ, rows)               x         -> ssq[rows]         [dev]
+#   H1  host bcast(RSQRT_MEAN, N=D)       ssq[rows] -> inv_bcast[rows,D]  [host]
+#   T2  elementwise(MUL, {x, inv_bcast})  x         -> out[rows,D]       [dev]
+#   Store(out) + Check(fp16 tol)                                          [host]
+#   Tq  elementwise(MUL)+quant            x         -> out_i8            [dev]
+# The MUL reads x and inv_bcast as two SEPARATE L1 buffers via the stream_elementwise
+# src_b mechanism; buffers are NAME-prefixed so inv_bcast allocates above x.
 
 import os
 import sys
@@ -39,31 +42,38 @@ from bingo_mem_handle import BingoMemAlloc, BingoMemSymbol  # noqa: E402
 from bingo_kernel_args import (                           # noqa: E402
     SnaxBingoKernelIdma1dCopyArgs,
     SnaxBingoKernelXdmaStreamReduceArgs,
-    SnaxBingoKernelXdmaStreamMapArgs,
-    HostBingoKernelHostScalarArgs,
+    SnaxBingoKernelXdmaStreamElementwiseArgs,
+    HostBingoKernelHostScalarBcastArgs,
     HostBingoKernelIdmaArgs,
     HostBingoKernelCheckResultArgs,
     BINGO_HOST_SCALAR_RSQRT_MEAN,
 )
 
 DMA_CORE, HOST_CORE = 1, 2
-F_LINEAR = 0
 R_SUMSQ = 2
+EW_MUL = 0
 CHECK_FP16_TOL = 2
 INV_SCALE = int(np.float32(64.0).view(np.uint32))
 
-CONFIGS = [{"beats": b} for b in (2, 8, 32, 128)]  # N = beats*32 (power of two)
+# (rows, beats); D = beats*32 = per-row reduction length, total elements = rows*D.
+CONFIGS = [{"rows": 1, "beats": 2}, {"rows": 1, "beats": 8},
+           {"rows": 4, "beats": 2}, {"rows": 8, "beats": 2}]
 
 
-def _rmsnorm_ref(beats, i):
-    n = beats * 32
+def _rmsnorm_ref(rows, beats, i):
+    D = beats * 32
     rng = np.random.RandomState(3300 + i)
-    x = rng.uniform(-4.0, 4.0, size=n).astype(np.float16)
-    xf = x.astype(np.float32)
-    ssq = np.float16(np.float32((xf ** 2).sum()))         # HW: fp32 accumulate -> fp16
-    inv_rms = np.float32(1.0) / np.float32(np.sqrt(ssq.astype(np.float32) / np.float32(n)))
-    y = (xf * inv_rms).astype(np.float16)
-    return x, y
+    x_rows, y_rows = [], []
+    for r in range(rows):
+        x = rng.uniform(-4.0, 4.0, size=D).astype(np.float16)
+        xf = x.astype(np.float32)
+        ssq = np.float16(np.float32((xf ** 2).sum()))      # HW: fp32 accumulate -> fp16 scalar
+        inv = np.float32(1.0) / np.float32(np.sqrt(ssq.astype(np.float32) / np.float32(D)))
+        inv16 = np.float16(inv)                            # host narrows to fp16 for the broadcast
+        y = (xf * inv16.astype(np.float32)).astype(np.float16)  # fp16 elementwise MUL
+        x_rows.append(x)
+        y_rows.append(y)
+    return np.concatenate(x_rows), np.concatenate(y_rows)
 
 
 class G:
@@ -83,42 +93,46 @@ class G:
 
 
 def gen_data(i):
-    x, y = _rmsnorm_ref(CONFIGS[i]["beats"], i)
+    x, y = _rmsnorm_ref(CONFIGS[i]["rows"], CONFIGS[i]["beats"], i)
     return [format_vector_definition("uint16_t", f"in_{i}", x.view(np.uint16)),
             format_vector_definition("uint16_t", f"golden_{i}", y.view(np.uint16))]
 
 
 def build_config(g, i, prev):
+    rows  = CONFIGS[i]["rows"]
     beats = CONFIGS[i]["beats"]
-    n = beats * 32
-    row_b = beats * 64
-    l1_x      = g.l1(f"rms_x_{i}", row_b)
-    l1_ssq    = g.l1(f"rms_ssq_{i}", 64)
-    l1_invrms = g.l1(f"rms_invrms_{i}", 8)
-    l1_out    = g.l1(f"rms_out_{i}", row_b)
-    l1_i8     = g.l1(f"rms_i8_{i}", n)
+    D     = beats * 32                 # per-row width / reduction length
+    n     = rows * D                   # total elements
+    tot_b = rows * beats * 64          # [rows, D] fp16 bytes
+    # Name prefixes 0x < 1ssq < 2invb < 3out < 4i8 => allocator places inv_bcast above x.
+    l1_x    = g.l1(f"rms0x_{i}", tot_b)
+    l1_ssq  = g.l1(f"rms1ssq_{i}", rows * 64)   # one splatted 64-B beat per row
+    l1_invb = g.l1(f"rms2invb_{i}", tot_b)      # [rows, D] fp16 broadcast
+    l1_out  = g.l1(f"rms3out_{i}", tot_b)
+    l1_i8   = g.l1(f"rms4i8_{i}", n)
     load = g.node(f"Load_{i}", DMA_CORE, "__snax_bingo_kernel_idma_1d_copy",
-                  SnaxBingoKernelIdma1dCopyArgs(BingoMemSymbol(f"in_{i}"), l1_x, row_b), prev)
+                  SnaxBingoKernelIdma1dCopyArgs(BingoMemSymbol(f"in_{i}"), l1_x, tot_b), prev)
     t1 = g.node(f"SumSq_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_stream_reduce",
                 SnaxBingoKernelXdmaStreamReduceArgs(l1_x, l1_ssq, beats, op=R_SUMSQ,
-                    red_tap=0, csr_mode=0, dst_bound0=1), load)
-    h1 = g.node(f"HostRsqrt_{i}", HOST_CORE, "__host_bingo_kernel_host_scalar",
-                HostBingoKernelHostScalarArgs(l1_ssq, l1_invrms,
-                    op=BINGO_HOST_SCALAR_RSQRT_MEAN, n=n), t1)
-    t2 = g.node(f"Scale_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_stream_map",
-                SnaxBingoKernelXdmaStreamMapArgs(l1_x, l1_out, beats, func=F_LINEAR,
-                    a_addr=l1_invrms, csr_mode=1, dst_bound0=beats), h1)
-    l3_out = BingoMemAlloc(f"out_rmsnorm_{i}", size=row_b, mem_level="L3")
+                    rows=rows, csr_mode=0), load)
+    h1 = g.node(f"HostRsqrt_{i}", HOST_CORE, "__host_bingo_kernel_host_scalar_bcast",
+                HostBingoKernelHostScalarBcastArgs(l1_ssq, l1_invb,
+                    op=BINGO_HOST_SCALAR_RSQRT_MEAN, rows=rows, D=D, N=D), t1)
+    t2 = g.node(f"Scale_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_stream_elementwise",
+                SnaxBingoKernelXdmaStreamElementwiseArgs(l1_x, l1_out, beats, op=EW_MUL,
+                    operand_count=2, rows=rows, src_b_addr=l1_invb, csr_mode=0,
+                    dst_bound0=rows * beats), h1)
+    l3_out = BingoMemAlloc(f"out_rmsnorm_{i}", size=tot_b, mem_level="L3")
     store = g.node(f"Store_{i}", HOST_CORE, "__host_bingo_kernel_idma",
-                   HostBingoKernelIdmaArgs(l1_out, l3_out, row_b), t2)
+                   HostBingoKernelIdmaArgs(l1_out, l3_out, tot_b), t2)
     chk = g.node(f"Check_rmsnorm_cfg{i}", HOST_CORE, "__host_bingo_kernel_check_result",
                  HostBingoKernelCheckResultArgs(BingoMemSymbol(f"golden_{i}"), l3_out,
                      name=f"rmsnorm_cfg{i}", check_type=CHECK_FP16_TOL, num_elements=n,
                      tolerance=0.03), store)
-    g.node(f"Quant_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_stream_map",
-           SnaxBingoKernelXdmaStreamMapArgs(l1_x, l1_i8, beats, func=F_LINEAR,
-               a_addr=l1_invrms, csr_mode=1, dst_bound0=beats // 2,
-               out_dtype=1, inv_scale_f32bits=INV_SCALE), chk)
+    g.node(f"Quant_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_stream_elementwise",
+           SnaxBingoKernelXdmaStreamElementwiseArgs(l1_x, l1_i8, beats, op=EW_MUL,
+               operand_count=2, rows=rows, src_b_addr=l1_invb, csr_mode=1,
+               dst_bound0=rows * beats // 2, out_dtype=1, inv_scale_f32bits=INV_SCALE), chk)
     return chk
 
 

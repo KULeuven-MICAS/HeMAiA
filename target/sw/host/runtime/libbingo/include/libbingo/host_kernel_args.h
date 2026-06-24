@@ -132,18 +132,21 @@ __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_ara_convert_args {
     uint64_t scratchpad_ptr;
 } __host_bingo_kernel_ara_convert_args_t;
 
-// Host scalar bridge (__host_bingo_kernel_host_scalar): read ONE fp16 scalar a
-// device xDMA reduction left in cluster L1, compute a scalar on the CVA6, write
-// ONE fp32 back to L1 for a downstream device StreamMap operand. op selects the
-// math (0=NEG -x, 1=RECIP 1/x, 2=RSQRT_MEAN 1/sqrt(x/n)); n = row length.
-__HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_host_scalar_args {
-    uint64_t in_addr;          // L1 base addr of the fp16 reduction scalar (read)
-    uint64_t out_addr;         // L1 addr to write the fp32 result (consumed by device)
+// Host scalar broadcast (__host_bingo_kernel_host_scalar_bcast): read `rows` per-row
+// fp16 scalars a device xDMA reduction left in cluster L1 (row r at fp16 index
+// r*32, one splatted 64-B beat apart), compute a per-row scalar on the CVA6, and
+// splat each fp16 result across a [rows, D] fp16 broadcast buffer that a downstream
+// device StreamElementwise multiplies/adds against x. op selects the math
+// (0=NEG -x, 1=RECIP 1/x, 2=RSQRT_MEAN 1/sqrt(x/N)); N = per-row reduction length.
+__HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_host_scalar_bcast_args {
+    uint64_t in_addr;          // L1 base addr of the fp16 per-row reduce scalars (read)
+    uint64_t out_addr;         // L1 base addr of the [rows, D] fp16 broadcast buffer (write)
     uint64_t op;               // 0=NEG, 1=RECIP, 2=RSQRT_MEAN
-    uint64_t n;                // row length (only used by RSQRT_MEAN)
-    uint64_t in_offset;        // byte offset added to in_addr (e.g. Sigma tap at beats*64)
+    uint64_t rows;             // number of per-row scalars
+    uint64_t D;                // row width in fp16 elements (= beats*32)
+    uint64_t N;                // per-row reduction length (only used by RSQRT_MEAN)
     uint64_t scratchpad_ptr;
-} __host_bingo_kernel_host_scalar_args_t;
+} __host_bingo_kernel_host_scalar_bcast_args_t;
 
 // DARTS Tier 1: Unified CERF Gating kernel
 // Supports multiple activation modes via the `mode` field.

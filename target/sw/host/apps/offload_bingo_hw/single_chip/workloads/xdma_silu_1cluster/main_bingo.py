@@ -5,8 +5,9 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 #
 # xDMA FP16 SiLU — explicit, self-contained workload graph (no xdma_ops_lib).
-# Fully on-device (unary, no host scalar):
-#   Load x -> T1 map(SILU, a=1, b=0) -> Store+Check(fp16) -> Tq map(SILU)+quant
+# Fully on-device (unary, no host scalar). Element-wise, so multi-row is just a
+# larger flat outer bound rows*beats:
+#   Load x[rows,D] -> T1 map(SILU, a=1, b=0) -> Store+Check(fp16) -> Tq map(SILU)+quant
 
 import os
 import sys
@@ -44,11 +45,13 @@ CHECK_FP16_TOL = 2
 ONE_F32 = int(np.float32(1.0).view(np.uint32))
 INV_SCALE = int(np.float32(16.0).view(np.uint32))
 
-CONFIGS = [{"beats": b} for b in (2, 8, 32, 128)]  # N = beats*32
+# (rows, beats); D = beats*32 per-row width, total elements = rows*beats*32.
+CONFIGS = [{"rows": 1, "beats": 2}, {"rows": 1, "beats": 8},
+           {"rows": 4, "beats": 2}, {"rows": 8, "beats": 2}]
 
 
-def _silu_ref(beats, i):
-    n = beats * 32
+def _silu_ref(rows, beats, i):
+    n = rows * beats * 32
     rng = np.random.RandomState(3200 + i)
     x = rng.uniform(-8.0, 8.0, size=n).astype(np.float16)
     xf = x.astype(np.float32)
@@ -73,34 +76,36 @@ class G:
 
 
 def gen_data(i):
-    x, y = _silu_ref(CONFIGS[i]["beats"], i)
+    x, y = _silu_ref(CONFIGS[i]["rows"], CONFIGS[i]["beats"], i)
     return [format_vector_definition("uint16_t", f"in_{i}", x.view(np.uint16)),
             format_vector_definition("uint16_t", f"golden_{i}", y.view(np.uint16))]
 
 
 def build_config(g, i, prev):
+    rows  = CONFIGS[i]["rows"]
     beats = CONFIGS[i]["beats"]
-    n = beats * 32
-    row_b = beats * 64
-    l1_x   = g.l1(f"silu_x_{i}", row_b)
-    l1_out = g.l1(f"silu_out_{i}", row_b)
+    n     = rows * beats * 32          # total elements
+    tot_b = rows * beats * 64          # [rows, D] fp16 bytes
+    l1_x   = g.l1(f"silu_x_{i}", tot_b)
+    l1_out = g.l1(f"silu_out_{i}", tot_b)
     l1_i8  = g.l1(f"silu_i8_{i}", n)
     load = g.node(f"Load_{i}", DMA_CORE, "__snax_bingo_kernel_idma_1d_copy",
-                  SnaxBingoKernelIdma1dCopyArgs(BingoMemSymbol(f"in_{i}"), l1_x, row_b), prev)
+                  SnaxBingoKernelIdma1dCopyArgs(BingoMemSymbol(f"in_{i}"), l1_x, tot_b), prev)
     t1 = g.node(f"Silu_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_stream_map",
                 SnaxBingoKernelXdmaStreamMapArgs(l1_x, l1_out, beats, func=F_SILU,
-                    a_f32bits=ONE_F32, b_f32bits=0, csr_mode=0, dst_bound0=beats), load)
-    l3_out = BingoMemAlloc(f"out_silu_{i}", size=row_b, mem_level="L3")
+                    a_f32bits=ONE_F32, b_f32bits=0, rows=rows, csr_mode=0,
+                    dst_bound0=rows * beats), load)
+    l3_out = BingoMemAlloc(f"out_silu_{i}", size=tot_b, mem_level="L3")
     store = g.node(f"Store_{i}", HOST_CORE, "__host_bingo_kernel_idma",
-                   HostBingoKernelIdmaArgs(l1_out, l3_out, row_b), t1)
+                   HostBingoKernelIdmaArgs(l1_out, l3_out, tot_b), t1)
     chk = g.node(f"Check_silu_cfg{i}", HOST_CORE, "__host_bingo_kernel_check_result",
                  HostBingoKernelCheckResultArgs(BingoMemSymbol(f"golden_{i}"), l3_out,
                      name=f"silu_cfg{i}", check_type=CHECK_FP16_TOL, num_elements=n,
                      tolerance=0.05), store)
     g.node(f"Quant_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_stream_map",
            SnaxBingoKernelXdmaStreamMapArgs(l1_x, l1_i8, beats, func=F_SILU,
-               a_f32bits=ONE_F32, b_f32bits=0, csr_mode=1, dst_bound0=beats // 2,
-               out_dtype=1, inv_scale_f32bits=INV_SCALE), chk)
+               a_f32bits=ONE_F32, b_f32bits=0, rows=rows, csr_mode=1,
+               dst_bound0=rows * beats // 2, out_dtype=1, inv_scale_f32bits=INV_SCALE), chk)
     return chk
 
 

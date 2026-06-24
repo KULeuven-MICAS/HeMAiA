@@ -638,14 +638,16 @@ DEFINE_FP32_UNARY_KERNEL(gelu, {
     result = __riscv_vfmul_vv_f32m1(v, sig, vl);
 })
 
-// ---- Host scalar bridge ----
-// Read ONE fp16 scalar that a device xDMA reduction left in cluster L1, compute
-// a scalar on the CVA6 (FPU), and write ONE fp32 back to L1 where the downstream
-// device StreamMap reads it as its `a`/`b` CSR operand. The CVA6 accesses the
-// cluster TCDM directly (in/out are full global L1 addresses). fp16->fp32 uses
-// integer bit-manipulation so it does not depend on scalar zfh support.
-//   op: 0=NEG (-x), 1=RECIP (1/x), 2=RSQRT_MEAN (1/sqrt(x/n))
-// Arg layout: in_addr, out_addr, op, n, scratchpad_ptr.
+// ---- Host scalar broadcast bridge ----
+// Read `rows` per-row fp16 scalars a device xDMA reduction left in cluster L1
+// (row r at fp16 index r*32 — one splatted 64-B beat apart), compute a per-row
+// scalar on the CVA6 (FPU), and splat each fp16 result across a [rows, D] fp16
+// broadcast buffer that the downstream device StreamElementwise multiplies/adds
+// against x. The CVA6 accesses the cluster TCDM directly (in/out are full global
+// L1 addresses). fp16<->fp32 use integer bit-manipulation so they do not depend
+// on scalar zfh support.
+//   op: 0=NEG (-x), 1=RECIP (1/x), 2=RSQRT_MEAN (1/sqrt(x/N))
+// Arg layout: in_addr, out_addr, op, rows, D, N, scratchpad_ptr.
 #define BINGO_HOST_SCALAR_NEG         0
 #define BINGO_HOST_SCALAR_RECIP       1
 #define BINGO_HOST_SCALAR_RSQRT_MEAN  2
@@ -667,22 +669,58 @@ static inline float __bingo_host_f16bits_to_f32(uint16_t h){
     float f; __builtin_memcpy(&f, &bits, sizeof f); return f;
 }
 
-static inline uint64_t __host_bingo_kernel_host_scalar(void *arg){
+// f32 -> fp16 bits, round-to-nearest-even. Integer-only (no scalar zfh needed).
+static inline uint16_t __bingo_host_f32_to_f16bits(float f){
+    uint32_t x; __builtin_memcpy(&x, &f, sizeof x);
+    uint32_t sign = (x >> 16) & 0x8000u;
+    uint32_t e    = (x >> 23) & 0xFFu;
+    uint32_t mant = x & 0x7FFFFFu;
+    if (e == 0xFFu) return (uint16_t)(sign | 0x7C00u | (mant ? 0x200u : 0u));  // Inf/NaN
+    int32_t exp = (int32_t)e - 127 + 15;
+    if (exp >= 0x1F) return (uint16_t)(sign | 0x7C00u);                        // overflow -> Inf
+    if (exp <= 0) {                                                            // subnormal/underflow
+        if (exp < -10) return (uint16_t)sign;                                  // too small -> 0
+        mant |= 0x800000u;
+        uint32_t shift   = (uint32_t)(14 - exp);
+        uint32_t half    = mant >> shift;
+        uint32_t rem     = mant & ((1u << shift) - 1u);
+        uint32_t halfway = 1u << (shift - 1);
+        if (rem > halfway || (rem == halfway && (half & 1u))) half++;          // RNE
+        return (uint16_t)(sign | half);
+    }
+    uint16_t half = (uint16_t)((exp << 10) | (mant >> 13));
+    uint32_t rem  = mant & 0x1FFFu;
+    if (rem > 0x1000u || (rem == 0x1000u && (half & 1u))) half++;              // RNE (carries up)
+    return (uint16_t)(sign | half);
+}
+
+static inline uint64_t __host_bingo_kernel_host_scalar_bcast(void *arg){
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
-    uint64_t in_addr   = ((uint64_t *)arg)[0];
-    uint64_t out_addr  = ((uint64_t *)arg)[1];
-    uint64_t op        = ((uint64_t *)arg)[2];
-    uint64_t n         = ((uint64_t *)arg)[3];
-    uint64_t in_offset = ((uint64_t *)arg)[4];
-    bingo_kernel_scratchpad_t* sp = (bingo_kernel_scratchpad_t*)(uintptr_t)((uint64_t *)arg)[5];
+    uint64_t in_addr  = ((uint64_t *)arg)[0];
+    uint64_t out_addr = ((uint64_t *)arg)[1];
+    uint64_t op       = ((uint64_t *)arg)[2];
+    uint64_t rows     = ((uint64_t *)arg)[3];
+    uint64_t D        = ((uint64_t *)arg)[4];
+    uint64_t N        = ((uint64_t *)arg)[5];
+    bingo_kernel_scratchpad_t* sp = (bingo_kernel_scratchpad_t*)(uintptr_t)((uint64_t *)arg)[6];
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
-    float v = __bingo_host_f16bits_to_f32(*(volatile uint16_t*)(uintptr_t)(in_addr + in_offset));
-    float r;
-    if (op == BINGO_HOST_SCALAR_NEG)        r = -v;
-    else if (op == BINGO_HOST_SCALAR_RECIP) r = 1.0f / v;
-    else                                    r = 1.0f / __builtin_sqrtf(v / (float)n);
-    *(volatile float*)(uintptr_t)out_addr = r;
+    const uint32_t LANES = 32;  // XDMA_WIDTH(64 B) / sizeof(fp16): per-row scalar stride
+    volatile uint16_t* in  = (volatile uint16_t*)(uintptr_t)in_addr;
+    volatile uint16_t* out = (volatile uint16_t*)(uintptr_t)out_addr;
+    for (uint64_t r = 0; r < rows; r++) {
+        uint16_t s16 = in[r * LANES];
+        uint16_t h;
+        if (op == BINGO_HOST_SCALAR_NEG) {
+            h = (uint16_t)(s16 ^ 0x8000u);                       // -x: fp16 sign flip (no FPU)
+        } else {
+            float v   = __bingo_host_f16bits_to_f32(s16);
+            float res = (op == BINGO_HOST_SCALAR_RECIP) ? (1.0f / v)
+                                                        : (1.0f / __builtin_sqrtf(v / (float)N));
+            h = __bingo_host_f32_to_f16bits(res);
+        }
+        for (uint64_t c = 0; c < D; c++) out[r * D + c] = h;     // splat across the row
+    }
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
     sp->return_value = (uint32_t)(uintptr_t)out_addr;
     sp->num_return_values = 1;

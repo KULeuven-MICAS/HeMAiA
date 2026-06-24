@@ -430,61 +430,56 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_elementwise_add_ab_args {
 // beats/2 for map/elementwise when fused-quant packs FP16->INT8).
 // ──────────────────────────────────────────────────────────────────────
 
-// StreamReduce: row -> scalar (op over the row), optionally tapped (pass the
-// row through and append the reduced scalar as a trailing beat).
+// StreamReduce: per-row reduction (row -> scalar, op over each row). Runs `rows`
+// independent reductions in one dispatch, emitting one splatted scalar beat per
+// row (dst_bound0 = rows).
 __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_stream_reduce_args {
   uint32_t src_addr_hi;
   uint32_t src_addr_lo;
   uint32_t dst_addr_hi;
   uint32_t dst_addr_lo;
-  uint32_t beats;            // src beats (N FP16 elems = beats*32)
+  uint32_t beats;            // beats per row (D FP16 elems = beats*32)
   uint32_t op;               // 0=MAX_FP16, 1=ADD_FP16, 2=SUMSQ_FP16
-  uint32_t red_tap;          // 0, or 0x100 (RED_TAP): pass row + trailing scalar
+  uint32_t rows;             // independent per-row reductions (1 = single row)
   uint32_t csr_mode;         // 0=FULL, 1=STICKY
-  uint32_t dst_bound0;       // writer beats (1 pure reduce; beats+1 tapped)
+  uint32_t dst_bound0;       // writer beats (= rows)
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_xdma_stream_reduce_args_t;
 
-// StreamMap: out = func(a*x + b) per element. Optional chained StreamReduce-tap
-// (softmax T2 = EXP + sum in one dispatch) and optional fused FP16->INT8 quant.
+// StreamMap: out = func(a*x + b) per element, over rows*beats flat beats. Optional
+// fused FP16->INT8 quant.
 __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_stream_map_args {
   uint32_t src_addr_hi;
   uint32_t src_addr_lo;
   uint32_t dst_addr_hi;
   uint32_t dst_addr_lo;
-  uint32_t beats;            // src beats
+  uint32_t beats;            // beats per row
   uint32_t a_f32bits;        // StreamMap operand a (FP32 bit pattern)
   uint32_t b_f32bits;        // StreamMap operand b (FP32 bit pattern)
   uint32_t func;             // 0=LINEAR_FP16, 1=EXP_FP16, 2=SILU_FP16
-  uint32_t tap_reduce_op;    // 0xFFFFFFFF=none; else reduce op|tap chained in-dispatch
+  uint32_t rows;             // independent rows (flat outer bound = rows*beats)
   uint32_t csr_mode;         // 0=FULL, 1=STICKY
-  uint32_t dst_bound0;       // writer beats (beats; beats/2 if quantizing; beats+1 if tapped)
+  uint32_t dst_bound0;       // writer beats (rows*beats; rows*beats/2 if quantizing)
   uint32_t out_dtype;        // 0=FP16, 1=INT8 (chain Fp16ToInt8)
   uint32_t inv_scale_f32bits;// Fp16ToInt8 inv_scale (FP32 bits), read only if out_dtype==1
-  // Optional runtime operands: if a_addr (hi|lo) != 0 the DM core reads `a` from
-  // that L1 address at run time (a host kernel wrote the fp32 bits there) instead
-  // of the a_f32bits immediate; likewise for b_addr. Enables the real
-  // device->host->device hand-off (softmax inv_sum/neg_max, rmsnorm inv_rms).
-  uint32_t a_addr_hi;
-  uint32_t a_addr_lo;
-  uint32_t b_addr_hi;
-  uint32_t b_addr_lo;
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_xdma_stream_map_args_t;
 
 // StreamElementwise: out = op(operand_0, operand_1, ...) over `operand_count`
-// interleaved streams (stride operand_stride bytes). Optional fused quant.
+// interleaved streams (stride operand_stride bytes), across rows*beats flat beats.
+// Optional fused quant.
 __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_stream_elementwise_args {
   uint32_t src_addr_hi;      // base of operand 0
   uint32_t src_addr_lo;
   uint32_t dst_addr_hi;
   uint32_t dst_addr_lo;
-  uint32_t beats;            // beats per operand
+  uint32_t beats;            // beats per row per operand
   uint32_t operand_stride;   // bytes between operands (inner AGU stride)
   uint32_t operand_count;    // number of interleaved operands (e.g. 2)
   uint32_t op;               // 0=MUL_FP16, 1=ADD_FP16
+  uint32_t rows;             // independent rows (flat outer bound = rows*beats)
   uint32_t csr_mode;         // 0=FULL, 1=STICKY
-  uint32_t dst_bound0;       // writer beats (beats; beats/2 if quantizing)
+  uint32_t dst_bound0;       // writer beats (rows*beats; rows*beats/2 if quantizing)
   uint32_t out_dtype;        // 0=FP16, 1=INT8 (chain Fp16ToInt8)
   uint32_t inv_scale_f32bits;// Fp16ToInt8 inv_scale (FP32 bits), read only if out_dtype==1
   // Optional 2nd operand address: if src_b_addr (hi|lo) != 0, operand_stride is
