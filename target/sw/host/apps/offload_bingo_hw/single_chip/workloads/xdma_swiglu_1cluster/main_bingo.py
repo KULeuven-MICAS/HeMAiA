@@ -53,11 +53,13 @@ CHECK_FP16_TOL = 2
 ONE_F32 = int(np.float32(1.0).view(np.uint32))
 INV_SCALE = int(np.float32(16.0).view(np.uint32))
 
-CONFIGS = [{"beats": b} for b in (2, 8, 32, 128)]
+# (rows, beats); D = beats*32 per-row width, total elements = rows*beats*32.
+CONFIGS = [{"rows": 1, "beats": 2}, {"rows": 1, "beats": 8},
+           {"rows": 4, "beats": 2}, {"rows": 8, "beats": 2}]
 
 
-def _swiglu_ref(beats, i):
-    n = beats * 32
+def _swiglu_ref(rows, beats, i):
+    n = rows * beats * 32
     rng = np.random.RandomState(3400 + i)
     gate = rng.uniform(-8.0, 8.0, size=n).astype(np.float16)
     up = rng.uniform(-2.0, 2.0, size=n).astype(np.float16)
@@ -84,43 +86,46 @@ class G:
 
 
 def gen_data(i):
-    gate, up, out = _swiglu_ref(CONFIGS[i]["beats"], i)
+    gate, up, out = _swiglu_ref(CONFIGS[i]["rows"], CONFIGS[i]["beats"], i)
     return [format_vector_definition("uint16_t", f"gate_{i}", gate.view(np.uint16)),
             format_vector_definition("uint16_t", f"up_{i}", up.view(np.uint16)),
             format_vector_definition("uint16_t", f"golden_{i}", out.view(np.uint16))]
 
 
 def build_config(g, i, prev):
+    rows  = CONFIGS[i]["rows"]
     beats = CONFIGS[i]["beats"]
-    n = beats * 32
-    row_b = beats * 64
+    n     = rows * beats * 32          # total elements
+    tot_b = rows * beats * 64          # [rows, D] fp16 bytes
     # Name prefixes 0gate < 1sg < 2up < 3out < 4i8 => allocator places up after sg.
-    l1_g   = g.l1(f"sw0gate_{i}", row_b)
-    l1_sg  = g.l1(f"sw1sg_{i}", row_b)
-    l1_up  = g.l1(f"sw2up_{i}", row_b)
-    l1_out = g.l1(f"sw3out_{i}", row_b)
+    l1_g   = g.l1(f"sw0gate_{i}", tot_b)
+    l1_sg  = g.l1(f"sw1sg_{i}", tot_b)
+    l1_up  = g.l1(f"sw2up_{i}", tot_b)
+    l1_out = g.l1(f"sw3out_{i}", tot_b)
     l1_i8  = g.l1(f"sw4i8_{i}", n)
     lg = g.node(f"LoadGate_{i}", DMA_CORE, "__snax_bingo_kernel_idma_1d_copy",
-                SnaxBingoKernelIdma1dCopyArgs(BingoMemSymbol(f"gate_{i}"), l1_g, row_b), prev)
+                SnaxBingoKernelIdma1dCopyArgs(BingoMemSymbol(f"gate_{i}"), l1_g, tot_b), prev)
     lu = g.node(f"LoadUp_{i}", DMA_CORE, "__snax_bingo_kernel_idma_1d_copy",
-                SnaxBingoKernelIdma1dCopyArgs(BingoMemSymbol(f"up_{i}"), l1_up, row_b), lg)
+                SnaxBingoKernelIdma1dCopyArgs(BingoMemSymbol(f"up_{i}"), l1_up, tot_b), lg)
     t1 = g.node(f"Silu_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_stream_map",
                 SnaxBingoKernelXdmaStreamMapArgs(l1_g, l1_sg, beats, func=F_SILU,
-                    a_f32bits=ONE_F32, b_f32bits=0, csr_mode=0, dst_bound0=beats), lu)
+                    a_f32bits=ONE_F32, b_f32bits=0, rows=rows, csr_mode=0,
+                    dst_bound0=rows * beats), lu)
     t2 = g.node(f"Mul_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_stream_elementwise",
                 SnaxBingoKernelXdmaStreamElementwiseArgs(l1_sg, l1_out, beats, op=EW_MUL,
-                    operand_count=2, src_b_addr=l1_up, csr_mode=0, dst_bound0=beats), t1)
-    l3_out = BingoMemAlloc(f"out_swiglu_{i}", size=row_b, mem_level="L3")
+                    operand_count=2, rows=rows, src_b_addr=l1_up, csr_mode=0,
+                    dst_bound0=rows * beats), t1)
+    l3_out = BingoMemAlloc(f"out_swiglu_{i}", size=tot_b, mem_level="L3")
     store = g.node(f"Store_{i}", HOST_CORE, "__host_bingo_kernel_idma",
-                   HostBingoKernelIdmaArgs(l1_out, l3_out, row_b), t2)
+                   HostBingoKernelIdmaArgs(l1_out, l3_out, tot_b), t2)
     chk = g.node(f"Check_swiglu_cfg{i}", HOST_CORE, "__host_bingo_kernel_check_result",
                  HostBingoKernelCheckResultArgs(BingoMemSymbol(f"golden_{i}"), l3_out,
                      name=f"swiglu_cfg{i}", check_type=CHECK_FP16_TOL, num_elements=n,
                      tolerance=0.1), store)
     g.node(f"MulQuant_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_stream_elementwise",
            SnaxBingoKernelXdmaStreamElementwiseArgs(l1_sg, l1_i8, beats, op=EW_MUL,
-               operand_count=2, src_b_addr=l1_up, csr_mode=1, dst_bound0=beats // 2,
-               out_dtype=1, inv_scale_f32bits=INV_SCALE), chk)
+               operand_count=2, rows=rows, src_b_addr=l1_up, csr_mode=1,
+               dst_bound0=rows * beats // 2, out_dtype=1, inv_scale_f32bits=INV_SCALE), chk)
     return chk
 
 

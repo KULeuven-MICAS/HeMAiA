@@ -51,25 +51,26 @@ CHECK_FP16_TOL = 2
 ROPE_BASE = 10000.0
 ROPE_POS = 1
 
-CONFIGS = [{"beats": b} for b in (2, 8, 32, 128)]
+# (rows, beats); D = beats*32 per-row width. Each row is a distinct token position
+# (ROPE_POS + r), so cos/sin/xswap are per-row [rows, D] tables.
+CONFIGS = [{"rows": 1, "beats": 2}, {"rows": 1, "beats": 8},
+           {"rows": 4, "beats": 2}, {"rows": 8, "beats": 2}]
 
 
-def _rope_ref(beats, i):
-    n = beats * 32
-    half = n // 2
+def _rope_row(rng, D, pos):
+    half = D // 2
     inv_freq = ROPE_BASE ** (-(np.arange(half).astype(np.float64)) / half)
-    ang = ROPE_POS * inv_freq
+    ang = pos * inv_freq
     c = np.cos(ang).astype(np.float16).astype(np.float32)
     s = np.sin(ang).astype(np.float16).astype(np.float32)
-    rng = np.random.RandomState(3500 + i)
-    x = rng.uniform(-4.0, 4.0, size=n).astype(np.float16)
+    x = rng.uniform(-4.0, 4.0, size=D).astype(np.float16)
     cos_full = np.repeat(c, 2).astype(np.float16)
-    sin_signed = np.empty(n, np.float32)
+    sin_signed = np.empty(D, np.float32)
     sin_signed[0::2] = -s
     sin_signed[1::2] = +s
     sin_signed = sin_signed.astype(np.float16)
     xu = x.view(np.uint16)
-    xsw = np.empty(n, np.uint16)
+    xsw = np.empty(D, np.uint16)
     xsw[0::2] = xu[1::2]
     xsw[1::2] = xu[0::2]
     xswap = xsw.view(np.float16)
@@ -77,6 +78,16 @@ def _rope_ref(beats, i):
     tmp2 = (xswap.astype(np.float32) * sin_signed.astype(np.float32)).astype(np.float16)
     out = (tmp1.astype(np.float32) + tmp2.astype(np.float32)).astype(np.float16)
     return x, cos_full, xswap, sin_signed, out
+
+
+def _rope_ref(rows, beats, i):
+    D = beats * 32
+    rng = np.random.RandomState(3500 + i)
+    cols = [[], [], [], [], []]
+    for r in range(rows):
+        for k, v in enumerate(_rope_row(rng, D, ROPE_POS + r)):
+            cols[k].append(v)
+    return tuple(np.concatenate(c) for c in cols)
 
 
 class G:
@@ -96,7 +107,7 @@ class G:
 
 
 def gen_data(i):
-    x, cos_full, xswap, sin_signed, out = _rope_ref(CONFIGS[i]["beats"], i)
+    x, cos_full, xswap, sin_signed, out = _rope_ref(CONFIGS[i]["rows"], CONFIGS[i]["beats"], i)
     return [format_vector_definition("uint16_t", f"x_{i}", x.view(np.uint16)),
             format_vector_definition("uint16_t", f"cos_{i}", cos_full.view(np.uint16)),
             format_vector_definition("uint16_t", f"xswap_{i}", xswap.view(np.uint16)),
@@ -105,37 +116,41 @@ def gen_data(i):
 
 
 def build_config(g, i, prev):
+    rows  = CONFIGS[i]["rows"]
     beats = CONFIGS[i]["beats"]
-    n = beats * 32
-    row_b = beats * 64
+    n     = rows * beats * 32          # total elements
+    tot_b = rows * beats * 64          # [rows, D] fp16 bytes
     # Name prefixes ensure operand1 > operand0 per pair: 0x<1cos, 2xswap<3sin, 4tmp1<5tmp2.
-    l1_x     = g.l1(f"rp0x_{i}", row_b)
-    l1_cos   = g.l1(f"rp1cos_{i}", row_b)
-    l1_xswap = g.l1(f"rp2xswap_{i}", row_b)
-    l1_sin   = g.l1(f"rp3sin_{i}", row_b)
-    l1_tmp1  = g.l1(f"rp4tmp1_{i}", row_b)
-    l1_tmp2  = g.l1(f"rp5tmp2_{i}", row_b)
-    l1_out   = g.l1(f"rp6out_{i}", row_b)
+    l1_x     = g.l1(f"rp0x_{i}", tot_b)
+    l1_cos   = g.l1(f"rp1cos_{i}", tot_b)
+    l1_xswap = g.l1(f"rp2xswap_{i}", tot_b)
+    l1_sin   = g.l1(f"rp3sin_{i}", tot_b)
+    l1_tmp1  = g.l1(f"rp4tmp1_{i}", tot_b)
+    l1_tmp2  = g.l1(f"rp5tmp2_{i}", tot_b)
+    l1_out   = g.l1(f"rp6out_{i}", tot_b)
     lx = g.node(f"LoadX_{i}", DMA_CORE, "__snax_bingo_kernel_idma_1d_copy",
-                SnaxBingoKernelIdma1dCopyArgs(BingoMemSymbol(f"x_{i}"), l1_x, row_b), prev)
+                SnaxBingoKernelIdma1dCopyArgs(BingoMemSymbol(f"x_{i}"), l1_x, tot_b), prev)
     lc = g.node(f"LoadCos_{i}", DMA_CORE, "__snax_bingo_kernel_idma_1d_copy",
-                SnaxBingoKernelIdma1dCopyArgs(BingoMemSymbol(f"cos_{i}"), l1_cos, row_b), lx)
+                SnaxBingoKernelIdma1dCopyArgs(BingoMemSymbol(f"cos_{i}"), l1_cos, tot_b), lx)
     lxs = g.node(f"LoadXswap_{i}", DMA_CORE, "__snax_bingo_kernel_idma_1d_copy",
-                 SnaxBingoKernelIdma1dCopyArgs(BingoMemSymbol(f"xswap_{i}"), l1_xswap, row_b), lc)
+                 SnaxBingoKernelIdma1dCopyArgs(BingoMemSymbol(f"xswap_{i}"), l1_xswap, tot_b), lc)
     ls = g.node(f"LoadSin_{i}", DMA_CORE, "__snax_bingo_kernel_idma_1d_copy",
-                SnaxBingoKernelIdma1dCopyArgs(BingoMemSymbol(f"sin_{i}"), l1_sin, row_b), lxs)
+                SnaxBingoKernelIdma1dCopyArgs(BingoMemSymbol(f"sin_{i}"), l1_sin, tot_b), lxs)
     p1 = g.node(f"MulCos_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_stream_elementwise",
                 SnaxBingoKernelXdmaStreamElementwiseArgs(l1_x, l1_tmp1, beats, op=EW_MUL,
-                    operand_count=2, src_b_addr=l1_cos, csr_mode=0, dst_bound0=beats), ls)
+                    operand_count=2, rows=rows, src_b_addr=l1_cos, csr_mode=0,
+                    dst_bound0=rows * beats), ls)
     p2 = g.node(f"MulSin_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_stream_elementwise",
                 SnaxBingoKernelXdmaStreamElementwiseArgs(l1_xswap, l1_tmp2, beats, op=EW_MUL,
-                    operand_count=2, src_b_addr=l1_sin, csr_mode=0, dst_bound0=beats), p1)
+                    operand_count=2, rows=rows, src_b_addr=l1_sin, csr_mode=0,
+                    dst_bound0=rows * beats), p1)
     p3 = g.node(f"Add_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_stream_elementwise",
                 SnaxBingoKernelXdmaStreamElementwiseArgs(l1_tmp1, l1_out, beats, op=EW_ADD,
-                    operand_count=2, src_b_addr=l1_tmp2, csr_mode=0, dst_bound0=beats), p2)
-    l3_out = BingoMemAlloc(f"out_rope_{i}", size=row_b, mem_level="L3")
+                    operand_count=2, rows=rows, src_b_addr=l1_tmp2, csr_mode=0,
+                    dst_bound0=rows * beats), p2)
+    l3_out = BingoMemAlloc(f"out_rope_{i}", size=tot_b, mem_level="L3")
     store = g.node(f"Store_{i}", HOST_CORE, "__host_bingo_kernel_idma",
-                   HostBingoKernelIdmaArgs(l1_out, l3_out, row_b), p3)
+                   HostBingoKernelIdmaArgs(l1_out, l3_out, tot_b), p3)
     chk = g.node(f"Check_rope_cfg{i}", HOST_CORE, "__host_bingo_kernel_check_result",
                  HostBingoKernelCheckResultArgs(BingoMemSymbol(f"golden_{i}"), l3_out,
                      name=f"rope_cfg{i}", check_type=CHECK_FP16_TOL, num_elements=n,

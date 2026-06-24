@@ -4,19 +4,24 @@
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 #
-# xDMA FP16 SOFTMAX — explicit, self-contained workload graph (no xdma_ops_lib).
-# Real device->host->device hand-off: the device computes the reductions on the
-# xDMA, the CVA6 host computes the scalars (-max, 1/Sigma exp) from cluster L1,
-# and the device's StreamMap reads them back from L1 (a_addr/b_addr).
+# xDMA FP16 SOFTMAX — multi-row, explicit workload graph (no xdma_ops_lib).
+# Per-row device->host->device hand-off over [rows, D] tiles: the device computes
+# the per-row reductions on the xDMA, the CVA6 host computes & broadcasts the
+# per-row scalars (-max, 1/Sigma exp), and the device's StreamElementwise reads the
+# [rows, D] broadcast buffers via the src_b mechanism.
 #
-#   Load x (iDMA L3->L1)
-#   T1  reduce(MAX)                       FULL   x        -> max          [dev]
-#   H1  host NEG                                 max      -> neg_max(f32) [host]
-#   T2  map(EXP, b=neg_max) + reduce(ADD|TAP) STICKY x   -> exp + Sigma   [dev]
-#   H2  host RECIP                               Sigma    -> inv_sum(f32) [host]
-#   T3  map(LINEAR, a=inv_sum)            STICKY exp       -> out          [dev]
-#   Store(out) + Check(fp16 tol)                                          [host]
-#   Tq  map(LINEAR, a=inv_sum)+Fp16ToInt8 STICKY exp      -> out_i8       [dev]
+#   Load x[rows,D] (iDMA L3->L1)
+#   T1  reduce(MAX, rows)                  x          -> max[rows]          [dev]
+#   H1  host bcast(NEG)                    max[rows]  -> negmax_bc[rows,D]   [host]
+#   T2  elementwise(ADD, {x, negmax_bc})   x          -> xs[rows,D]         [dev]
+#   T3  map(EXP, a=1, b=0)                 xs         -> exp[rows,D]        [dev]
+#   T4  reduce(ADD, rows)                  exp        -> sum[rows]          [dev]
+#   H2  host bcast(RECIP)                  sum[rows]  -> recip_bc[rows,D]    [host]
+#   T5  elementwise(MUL, {exp, recip_bc})  exp        -> out[rows,D]        [dev]
+#   Store(out) + Check(fp16 tol)                                            [host]
+#   Tq  elementwise(MUL)+Fp16ToInt8        exp        -> out_i8            [dev]
+# Buffers are NAME-prefixed so each elementwise src_b operand allocates above its
+# operand 0 (the reader strides forward).
 
 import os
 import sys
@@ -45,7 +50,8 @@ from bingo_kernel_args import (                           # noqa: E402
     SnaxBingoKernelIdma1dCopyArgs,
     SnaxBingoKernelXdmaStreamReduceArgs,
     SnaxBingoKernelXdmaStreamMapArgs,
-    HostBingoKernelHostScalarArgs,
+    SnaxBingoKernelXdmaStreamElementwiseArgs,
+    HostBingoKernelHostScalarBcastArgs,
     HostBingoKernelIdmaArgs,
     HostBingoKernelCheckResultArgs,
     BINGO_HOST_SCALAR_NEG, BINGO_HOST_SCALAR_RECIP,
@@ -53,28 +59,39 @@ from bingo_kernel_args import (                           # noqa: E402
 
 DMA_CORE = 1
 HOST_CORE = 2
-# StreamMap func / StreamReduce op encodings.
-F_LINEAR, F_EXP = 0, 1
-R_MAX, R_ADD, RED_TAP = 0, 1, 0x100
+# StreamMap func / StreamReduce op / StreamElementwise op encodings.
+F_EXP = 1
+R_MAX, R_ADD = 0, 1
+EW_MUL, EW_ADD = 0, 1
 CHECK_FP16_TOL = 2
+ONE_F32 = int(np.float32(1.0).view(np.uint32))
+INV_SCALE = int(np.float32(127.0).view(np.uint32))
 
-CONFIGS = [{"beats": b} for b in (2, 8, 32, 128)]  # N = beats*32 = 64/256/1024/4096
+# (rows, beats); D = beats*32 = per-row length, total elements = rows*D.
+CONFIGS = [{"rows": 1, "beats": 2}, {"rows": 1, "beats": 8},
+           {"rows": 4, "beats": 2}, {"rows": 8, "beats": 2}]
 
 
 # ----- deterministic peaky softmax reference (mirrors the HW fp16 datapath) -----
-def _softmax_ref(beats, i):
-    n = beats * 32
+def _softmax_ref(rows, beats, i):
+    D = beats * 32
     rng = np.random.RandomState(20240601 + i)
-    x = rng.uniform(-2.0, 2.0, size=n).astype(np.float32)
-    for pos, val in ((0, 6.0), (n // 3, 5.0), (2 * n // 3, 4.5)):
-        x[pos] = val
-    x = x.astype(np.float16)
-    xf = x.astype(np.float32)
-    m = np.float16(xf.max())
-    e16 = np.exp(xf - np.float32(m)).astype(np.float16)
-    s = np.float32(e16.astype(np.float32).sum())
-    y = (e16.astype(np.float32) * (np.float32(1.0) / s)).astype(np.float16)
-    return x, y
+    x_rows, y_rows = [], []
+    for r in range(rows):
+        x = rng.uniform(-2.0, 2.0, size=D).astype(np.float32)
+        for pos, val in ((0, 6.0), (D // 3, 5.0), (2 * D // 3, 4.5)):
+            x[pos] = val
+        x = x.astype(np.float16)
+        xf = x.astype(np.float32)
+        m = np.float16(xf.max())                                  # reduce(MAX) -> fp16
+        xs = (xf - m.astype(np.float32)).astype(np.float16)       # ew(ADD): x + (-max), fp16
+        e16 = np.exp(xs.astype(np.float32)).astype(np.float16)    # map(EXP), fp16
+        s = np.float16(np.float32(e16.astype(np.float32).sum()))  # reduce(ADD) -> fp16
+        inv16 = np.float16(np.float32(1.0) / s.astype(np.float32))  # host RECIP, fp16
+        y = (e16.astype(np.float32) * inv16.astype(np.float32)).astype(np.float16)  # ew(MUL)
+        x_rows.append(x)
+        y_rows.append(y)
+    return np.concatenate(x_rows), np.concatenate(y_rows)
 
 
 # ----- tiny graph helpers (explicit graph; no xdma_ops_lib) -----
@@ -95,53 +112,68 @@ class G:
 
 
 def gen_data(i):
-    x, y = _softmax_ref(CONFIGS[i]["beats"], i)
+    x, y = _softmax_ref(CONFIGS[i]["rows"], CONFIGS[i]["beats"], i)
     return [format_vector_definition("uint16_t", f"in_{i}", x.view(np.uint16)),
             format_vector_definition("uint16_t", f"golden_{i}", y.view(np.uint16))]
 
 
 def build_config(g, i, prev):
+    rows  = CONFIGS[i]["rows"]
     beats = CONFIGS[i]["beats"]
-    n = beats * 32
-    row_b = beats * 64
-    l1_x      = g.l1(f"smx_x_{i}", row_b)
-    l1_max    = g.l1(f"smx_max_{i}", 64)
-    l1_negmax = g.l1(f"smx_negmax_{i}", 8)
-    l1_exp    = g.l1(f"smx_exp_{i}", (beats + 1) * 64)
-    l1_invsum = g.l1(f"smx_invsum_{i}", 8)
-    l1_out    = g.l1(f"smx_out_{i}", row_b)
-    l1_i8     = g.l1(f"smx_i8_{i}", n)
+    D     = beats * 32                 # per-row length
+    n     = rows * D                   # total elements
+    tot_b = rows * beats * 64          # [rows, D] fp16 bytes
+    # Name prefixes 0x<1max<2negb<3xs<4expb<5sum<6recipb<7out<8i8 order the allocator
+    # so each elementwise src_b operand (negb, recipb) sits above its operand 0.
+    l1_x      = g.l1(f"smx0x_{i}", tot_b)
+    l1_max    = g.l1(f"smx1max_{i}", rows * 64)
+    l1_negb   = g.l1(f"smx2negb_{i}", tot_b)
+    l1_xs     = g.l1(f"smx3xs_{i}", tot_b)
+    l1_expb   = g.l1(f"smx4expb_{i}", tot_b)
+    l1_sum    = g.l1(f"smx5sum_{i}", rows * 64)
+    l1_recipb = g.l1(f"smx6recipb_{i}", tot_b)
+    l1_out    = g.l1(f"smx7out_{i}", tot_b)
+    l1_i8     = g.l1(f"smx8i8_{i}", n)
 
     load = g.node(f"Load_{i}", DMA_CORE, "__snax_bingo_kernel_idma_1d_copy",
-                  SnaxBingoKernelIdma1dCopyArgs(BingoMemSymbol(f"in_{i}"), l1_x, row_b), prev)
+                  SnaxBingoKernelIdma1dCopyArgs(BingoMemSymbol(f"in_{i}"), l1_x, tot_b), prev)
     t1 = g.node(f"Max_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_stream_reduce",
                 SnaxBingoKernelXdmaStreamReduceArgs(l1_x, l1_max, beats, op=R_MAX,
-                    red_tap=0, csr_mode=0, dst_bound0=1), load)
-    h1 = g.node(f"HostNeg_{i}", HOST_CORE, "__host_bingo_kernel_host_scalar",
-                HostBingoKernelHostScalarArgs(l1_max, l1_negmax, op=BINGO_HOST_SCALAR_NEG), t1)
-    t2 = g.node(f"ExpSum_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_stream_map",
-                SnaxBingoKernelXdmaStreamMapArgs(l1_x, l1_exp, beats, func=F_EXP,
-                    b_addr=l1_negmax, tap_reduce_op=(R_ADD | RED_TAP),
-                    csr_mode=1, dst_bound0=beats + 1), h1)
-    h2 = g.node(f"HostRecip_{i}", HOST_CORE, "__host_bingo_kernel_host_scalar",
-                HostBingoKernelHostScalarArgs(l1_exp, l1_invsum, op=BINGO_HOST_SCALAR_RECIP,
-                    in_offset=beats * 64), t2)
-    t3 = g.node(f"Norm_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_stream_map",
-                SnaxBingoKernelXdmaStreamMapArgs(l1_exp, l1_out, beats, func=F_LINEAR,
-                    a_addr=l1_invsum, csr_mode=1, dst_bound0=beats), h2)
+                    rows=rows, csr_mode=0), load)
+    h1 = g.node(f"HostNeg_{i}", HOST_CORE, "__host_bingo_kernel_host_scalar_bcast",
+                HostBingoKernelHostScalarBcastArgs(l1_max, l1_negb,
+                    op=BINGO_HOST_SCALAR_NEG, rows=rows, D=D), t1)
+    t2 = g.node(f"SubMax_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_stream_elementwise",
+                SnaxBingoKernelXdmaStreamElementwiseArgs(l1_x, l1_xs, beats, op=EW_ADD,
+                    operand_count=2, rows=rows, src_b_addr=l1_negb, csr_mode=0,
+                    dst_bound0=rows * beats), h1)
+    t3 = g.node(f"Exp_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_stream_map",
+                SnaxBingoKernelXdmaStreamMapArgs(l1_xs, l1_expb, beats, func=F_EXP,
+                    a_f32bits=ONE_F32, b_f32bits=0, rows=rows, csr_mode=0,
+                    dst_bound0=rows * beats), t2)
+    t4 = g.node(f"Sum_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_stream_reduce",
+                SnaxBingoKernelXdmaStreamReduceArgs(l1_expb, l1_sum, beats, op=R_ADD,
+                    rows=rows, csr_mode=0), t3)
+    h2 = g.node(f"HostRecip_{i}", HOST_CORE, "__host_bingo_kernel_host_scalar_bcast",
+                HostBingoKernelHostScalarBcastArgs(l1_sum, l1_recipb,
+                    op=BINGO_HOST_SCALAR_RECIP, rows=rows, D=D), t4)
+    t5 = g.node(f"Norm_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_stream_elementwise",
+                SnaxBingoKernelXdmaStreamElementwiseArgs(l1_expb, l1_out, beats, op=EW_MUL,
+                    operand_count=2, rows=rows, src_b_addr=l1_recipb, csr_mode=0,
+                    dst_bound0=rows * beats), h2)
     # Store + tolerant fp16 check of the softmax output.
-    l3_out = BingoMemAlloc(f"out_softmax_{i}", size=row_b, mem_level="L3")
+    l3_out = BingoMemAlloc(f"out_softmax_{i}", size=tot_b, mem_level="L3")
     store = g.node(f"Store_{i}", HOST_CORE, "__host_bingo_kernel_idma",
-                   HostBingoKernelIdmaArgs(l1_out, l3_out, row_b), t3)
+                   HostBingoKernelIdmaArgs(l1_out, l3_out, tot_b), t5)
     chk = g.node(f"Check_softmax_cfg{i}", HOST_CORE, "__host_bingo_kernel_check_result",
                  HostBingoKernelCheckResultArgs(BingoMemSymbol(f"golden_{i}"), l3_out,
                      name=f"softmax_cfg{i}", check_type=CHECK_FP16_TOL,
                      num_elements=n, tolerance=0.02), store)
     # Tq fused FP16->INT8 quant — exercises the path (leaf, no numeric check).
-    g.node(f"Quant_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_stream_map",
-           SnaxBingoKernelXdmaStreamMapArgs(l1_exp, l1_i8, beats, func=F_LINEAR,
-               a_addr=l1_invsum, csr_mode=1, dst_bound0=beats // 2,
-               out_dtype=1, inv_scale_f32bits=int(np.float32(127.0).view(np.uint32))), chk)
+    g.node(f"Quant_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_stream_elementwise",
+           SnaxBingoKernelXdmaStreamElementwiseArgs(l1_expb, l1_i8, beats, op=EW_MUL,
+               operand_count=2, rows=rows, src_b_addr=l1_recipb, csr_mode=1,
+               dst_bound0=rows * beats // 2, out_dtype=1, inv_scale_f32bits=INV_SCALE), chk)
     return chk
 
 
