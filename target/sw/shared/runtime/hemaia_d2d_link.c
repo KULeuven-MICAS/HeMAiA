@@ -1,4 +1,135 @@
+#include <stdio.h>
 #include "hemaia_d2d_link.h"
+
+typedef struct {
+    uint32_t error_sum;
+    uint32_t cycle_count;
+} D2DLinkDelaySample;
+
+static const char* hemaia_d2d_link_direction_name(D2DDirection direction) {
+    switch (direction) {
+        case D2D_DIRECTION_EAST:
+            return "East";
+        case D2D_DIRECTION_WEST:
+            return "West";
+        case D2D_DIRECTION_NORTH:
+            return "North";
+        case D2D_DIRECTION_SOUTH:
+            return "South";
+        default:
+            return "Unknown";
+    }
+}
+
+static bool hemaia_d2d_link_is_bypassable_wire(uint8_t wire) {
+    return wire >= D2D_LINK_FIRST_BYPASSABLE_WIRE &&
+           wire <= D2D_LINK_LAST_BYPASSABLE_WIRE;
+}
+
+static uint32_t hemaia_d2d_link_error_sum_range(D2DDirection direction,
+                                                uint8_t channel,
+                                                uint8_t first_wire,
+                                                uint8_t last_wire,
+                                                uint8_t excluded_wire) {
+    uint32_t sum = 0;
+    for (uint8_t wire = first_wire; wire <= last_wire; wire++) {
+        if (wire == excluded_wire) {
+            continue;
+        }
+        sum += get_d2d_link_error_cycle_one_wire(direction, channel, wire);
+    }
+    return sum;
+}
+
+uint32_t hemaia_d2d_link_get_debug_data_error_sum(D2DDirection direction,
+                                                  uint8_t channel) {
+    return hemaia_d2d_link_error_sum_range(
+        direction, channel, D2D_LINK_DEBUG_SUM_FIRST_WIRE,
+        D2D_LINK_DEBUG_SUM_LAST_WIRE, HEMAIA_D2D_LINK_BROKEN_LINK_REG_SIZE);
+}
+
+uint32_t hemaia_d2d_link_get_scored_data_error_sum(D2DDirection direction,
+                                                   uint8_t channel) {
+    uint8_t bypassed_wire = get_d2d_link_broken_link(direction, channel);
+    uint8_t excluded_wire = HEMAIA_D2D_LINK_BROKEN_LINK_REG_SIZE;
+    if (hemaia_d2d_link_is_bypassable_wire(bypassed_wire)) {
+        excluded_wire = bypassed_wire;
+    }
+    return hemaia_d2d_link_error_sum_range(
+        direction, channel, D2D_LINK_DEBUG_SUM_FIRST_WIRE,
+        D2D_LINK_DEBUG_SUM_LAST_WIRE, excluded_wire);
+}
+
+static void hemaia_d2d_link_print_delay_sample(D2DDirection direction,
+                                               uint8_t delay) {
+    printf("%s delay=%d:", hemaia_d2d_link_direction_name(direction),
+           (int)delay);
+    for (uint8_t channel = 0; channel < CHANNELS_PER_DIRECTION; channel++) {
+        printf(" C%d cycles=%lu W0=%u W1_16_sum=%lu", (int)channel,
+               (unsigned long)get_d2d_link_tested_cycle(direction, channel),
+               (unsigned int)get_d2d_link_error_cycle_one_wire(
+                   direction, channel, D2D_LINK_VALID_WIRE),
+               (unsigned long)hemaia_d2d_link_get_debug_data_error_sum(
+                   direction, channel));
+    }
+    printf("\r\n");
+}
+
+static bool hemaia_d2d_link_error_rate_is_better(uint32_t error,
+                                                 uint32_t cycles,
+                                                 uint32_t best_error,
+                                                 uint32_t best_cycles) {
+    if (cycles == 0) {
+        return false;
+    }
+    if (best_cycles == 0) {
+        return true;
+    }
+    return ((uint64_t)error * best_cycles) <
+           ((uint64_t)best_error * cycles);
+}
+
+static uint8_t hemaia_d2d_link_select_delay(
+    const D2DLinkDelaySample* samples) {
+    uint8_t best_zero_start = 0;
+    uint8_t best_zero_len = 0;
+    uint8_t delay = 0;
+
+    while (delay < HEMAIA_D2D_LINK_NUM_DELAYS) {
+        if (samples[delay].cycle_count == 0 || samples[delay].error_sum != 0) {
+            delay++;
+            continue;
+        }
+
+        uint8_t zero_start = delay;
+        while (delay < HEMAIA_D2D_LINK_NUM_DELAYS &&
+               samples[delay].cycle_count > 0 &&
+               samples[delay].error_sum == 0) {
+            delay++;
+        }
+
+        uint8_t zero_len = delay - zero_start;
+        if (zero_len > best_zero_len) {
+            best_zero_start = zero_start;
+            best_zero_len = zero_len;
+        }
+    }
+
+    if (best_zero_len > 0) {
+        return best_zero_start + ((best_zero_len - 1) / 2);
+    }
+
+    uint8_t best_delay = 0;
+    for (delay = 1; delay < HEMAIA_D2D_LINK_NUM_DELAYS; delay++) {
+        if (hemaia_d2d_link_error_rate_is_better(
+                samples[delay].error_sum, samples[delay].cycle_count,
+                samples[best_delay].error_sum,
+                samples[best_delay].cycle_count)) {
+            best_delay = delay;
+        }
+    }
+    return best_delay;
+}
 
 void hemaia_d2d_link_require_test_one_direction(D2DDirection direction,
                                                 uint32_t cycles) {
@@ -28,186 +159,88 @@ void hemaia_d2d_link_require_test_all_directions(uint32_t cycles) {
     set_d2d_link_test_mode(D2D_DIRECTION_SOUTH, false);
 }
 
-// Helpers to get the error cycle of one channel
-// For uint8_t *array
-
-inline uint32_t get_non_zero_element_index_u8(uint8_t *array,
-                                              uint32_t start_index,
-                                              uint32_t size) {
-    for (uint32_t i = start_index; i < size; ++i) {
-        if (array[i] != 0) {
-            return i;
-        }
-    }
-    return size;
-}
-
-inline uint32_t get_zero_element_index_u8(uint8_t *array, uint32_t start_index,
-                                          uint32_t size) {
-    for (uint32_t i = start_index; i < size; ++i) {
-        if (array[i] == 0) {
-            return i;
-        }
-    }
-    return size;
-}
-
-inline uint32_t get_smallest_element_index_u8(uint8_t *array, uint32_t size) {
-    uint32_t min_index = 0;
-    for (uint32_t i = 1; i < size; ++i) {
-        if (array[i] < array[min_index]) {
-            min_index = i;
-        }
-    }
-    return min_index;
-}
-
-inline uint32_t get_array_sum_u8(uint8_t *array, uint32_t size) {
-    uint32_t sum = 0;
-    for (uint32_t i = 0; i < size; ++i) {
-        sum += array[i];
-    }
-    return sum;
-}
-
-// For uint32_t *array
-
-inline uint32_t get_non_zero_element_index_u32(uint32_t *array,
-                                               uint32_t start_index,
-                                               uint32_t size) {
-    for (uint32_t i = start_index; i < size; ++i) {
-        if (array[i] != 0) {
-            return i;
-        }
-    }
-    return size;
-}
-
-inline uint32_t get_zero_element_index_u32(uint32_t *array,
-                                           uint32_t start_index,
-                                           uint32_t size) {
-    for (uint32_t i = start_index; i < size; ++i) {
-        if (array[i] == 0) {
-            return i;
-        }
-    }
-    return size;
-}
-
-inline uint32_t get_smallest_element_index_u32(uint32_t *array, uint32_t size) {
-    uint32_t min_index = 0;
-    for (uint32_t i = 1; i < size; ++i) {
-        if (array[i] < array[min_index]) {
-            min_index = i;
-        }
-    }
-    return min_index;
-}
-
-inline uint32_t get_array_sum_u32(uint32_t *array, uint32_t size) {
-    uint32_t sum = 0;
-    for (uint32_t i = 0; i < size; ++i) {
-        sum += array[i];
-    }
-    return sum;
-}
-
 // The function to set the delay for each channel in a direction
 void hemaia_d2d_link_set_delay(D2DDirection direction) {
-    uint32_t ber[CHANNELS_PER_DIRECTION][HEMAIA_D2D_LINK_NUM_DELAYS] = {0};
-    for (uint8_t i = 0; i < HEMAIA_D2D_LINK_NUM_DELAYS; i++) {
-        // Set the delay and require one test
-        set_d2d_link_clock_delay_all_channels(direction, i);
+    D2DLinkDelaySample samples[CHANNELS_PER_DIRECTION]
+                              [HEMAIA_D2D_LINK_NUM_DELAYS] = {0};
+
+    for (uint8_t delay = 0; delay < HEMAIA_D2D_LINK_NUM_DELAYS; delay++) {
+        set_d2d_link_clock_delay_all_channels(direction, delay);
         asm volatile("fence" : : : "memory");
         hemaia_d2d_link_require_test_one_direction(
             direction, HEMAIA_D2D_LINK_DEFAULT_TEST_CYCLES);
 
-        // Calculate the BER Index for each channels
-        for (uint8_t j = 0; j < CHANNELS_PER_DIRECTION; j++) {
-            uint8_t ber_counter_result[HEMAIA_D2D_LINK_BROKEN_LINK_REG_SIZE] = {
-                0};
-            get_d2d_link_error_cycle_one_channel(direction, j,
-                                                 ber_counter_result);
-            uint64_t total_bit_error = (uint64_t)(get_array_sum_u8(
-                ber_counter_result, HEMAIA_D2D_LINK_BROKEN_LINK_REG_SIZE));
-            // Exclude the total bit error of the channel that is being bypassed
-            total_bit_error -= get_d2d_link_error_cycle_one_wire(
-                direction, j, get_d2d_link_broken_link(direction, j));
-            uint32_t total_cycle = get_d2d_link_tested_cycle(direction, j);
+        hemaia_d2d_link_print_delay_sample(direction, delay);
 
-            if (total_cycle > 0) {
-                // When total cycle is larger than 0, it means that the
-                // pseudorandom code is successfully locked, so that calculating
-                // ber index is meaningful
-                ber[j][i] = (total_bit_error << 32) /
-                            get_d2d_link_tested_cycle(direction, j);
-            } else {
-                // Otherwise, the corresponding ber is set to maximal value in
-                // uint32_t
-                ber[j][i] = 0xFFFFFFFF;
-            }
+        for (uint8_t channel = 0; channel < CHANNELS_PER_DIRECTION;
+             channel++) {
+            samples[channel][delay].cycle_count =
+                get_d2d_link_tested_cycle(direction, channel);
+            samples[channel][delay].error_sum =
+                hemaia_d2d_link_get_scored_data_error_sum(direction, channel);
         }
     }
 
-    // Followed by getting the BER index, this function will set the optimal
-    // delays for each channels
-    for (uint8_t i = 0; i < CHANNELS_PER_DIRECTION; i++) {
-        // First, take a look at whether there is a zero
-        uint32_t first_zero_element_index =
-            get_zero_element_index_u32(ber[i], 0, HEMAIA_D2D_LINK_NUM_DELAYS);
-
-        if (first_zero_element_index == HEMAIA_D2D_LINK_NUM_DELAYS) {
-            // There is no zeros, so possibly there is a broken link
-            uint32_t smallest_element_index = get_smallest_element_index_u32(
-                ber[i], HEMAIA_D2D_LINK_NUM_DELAYS);
-            // Set the delay to the smallest element
-            set_d2d_link_clock_delay(direction, i, smallest_element_index);
-            // Since there is no zero, it means that the link is still not
-            // available
-            set_d2d_link_availability(direction, false);
-        } else {
-            // There is one or multiple zeros, so find the beginning and end of
-            // the zeros and set the delay to the middle of the zeros
-            uint32_t second_zero_element_index = first_zero_element_index;
-            while (second_zero_element_index < HEMAIA_D2D_LINK_NUM_DELAYS) {
-                uint32_t temp_index = get_zero_element_index_u32(
-                    ber[i], second_zero_element_index + 1,
-                    HEMAIA_D2D_LINK_NUM_DELAYS);
-                if (temp_index != second_zero_element_index + 1)
-                    break;
-                else
-                    second_zero_element_index = temp_index;
-            }
-            // Set the delay to the middle of the zeros
-            set_d2d_link_clock_delay(
-                direction, i,
-                (first_zero_element_index + second_zero_element_index) / 2);
-
-            // Since there is a zero, it means that the link is available from
-            // this moment on
-            set_d2d_link_availability(direction, true);
-        }
+    printf("%s selected delays:", hemaia_d2d_link_direction_name(direction));
+    for (uint8_t channel = 0; channel < CHANNELS_PER_DIRECTION; channel++) {
+        uint8_t selected_delay =
+            hemaia_d2d_link_select_delay(samples[channel]);
+        set_d2d_link_clock_delay(direction, channel, selected_delay);
+        printf(" C%d=%d", (int)channel, (int)selected_delay);
     }
+    printf("\r\n");
+
+    asm volatile("fence" : : : "memory");
+    hemaia_d2d_link_require_test_one_direction(
+        direction, HEMAIA_D2D_LINK_DEFAULT_TEST_CYCLES);
 }
 
 // The function to set the broken link for one channel in a direction
-int32_t hemaia_d2d_link_set_bypass_link(D2DDirection direction, uint8_t channel) {
-    uint8_t ber_counter_result[HEMAIA_D2D_LINK_BROKEN_LINK_REG_SIZE] = {0};
-    get_d2d_link_error_cycle_one_channel(direction, channel,
-                                         ber_counter_result);
-    uint32_t index = get_non_zero_element_index_u8(
-        ber_counter_result, 0, HEMAIA_D2D_LINK_BROKEN_LINK_REG_SIZE);
-    if (index < HEMAIA_D2D_LINK_BROKEN_LINK_REG_SIZE) {
-        set_d2d_link_broken_link(direction, channel, index);
-        // There is one zero, so try to find another zero
-        index = get_non_zero_element_index_u8(
-            ber_counter_result, index, HEMAIA_D2D_LINK_BROKEN_LINK_REG_SIZE);
-        if (index == HEMAIA_D2D_LINK_BROKEN_LINK_REG_SIZE) {
-            // There is no second zero, so normal return. The bypassed link is
-            // returned
-            return index;
-        } else
-            // There is second zero, so more than one wire is broken.
-            return -1;
+int32_t hemaia_d2d_link_set_bypass_link(D2DDirection direction,
+                                        uint8_t channel) {
+    uint8_t wire_error[HEMAIA_D2D_LINK_BROKEN_LINK_REG_SIZE] = {0};
+    get_d2d_link_error_cycle_one_channel(direction, channel, wire_error);
+
+    uint8_t selected_wire = D2D_LINK_NO_BYPASS;
+    uint8_t bad_wire_count = 0;
+    for (uint8_t wire = D2D_LINK_FIRST_BYPASSABLE_WIRE;
+         wire <= D2D_LINK_LAST_BYPASSABLE_WIRE; wire++) {
+        if (wire_error[wire] == 0) {
+            continue;
+        }
+        selected_wire = wire;
+        bad_wire_count++;
     }
+
+    if (bad_wire_count > 1) {
+        printf("%s C%d has multiple bad bypassable wires:",
+               hemaia_d2d_link_direction_name(direction), (int)channel);
+        for (uint8_t wire = D2D_LINK_FIRST_BYPASSABLE_WIRE;
+             wire <= D2D_LINK_LAST_BYPASSABLE_WIRE; wire++) {
+            if (wire_error[wire] != 0) {
+                printf(" W%d=%u", (int)wire, (unsigned int)wire_error[wire]);
+            }
+        }
+        printf("; selecting largest bad wire W%d.\r\n", (int)selected_wire);
+    }
+
+    set_d2d_link_broken_link(direction, channel, selected_wire);
+    return selected_wire;
+}
+
+bool hemaia_d2d_link_update_availability_from_current_errors(
+    D2DDirection direction) {
+    bool available = true;
+
+    for (uint8_t channel = 0; channel < CHANNELS_PER_DIRECTION; channel++) {
+        uint32_t cycles = get_d2d_link_tested_cycle(direction, channel);
+        uint32_t errors =
+            hemaia_d2d_link_get_scored_data_error_sum(direction, channel);
+        if (cycles == 0 || errors != 0) {
+            available = false;
+        }
+    }
+
+    set_d2d_link_availability(direction, available);
+    return available;
 }
