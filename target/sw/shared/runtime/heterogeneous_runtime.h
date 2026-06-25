@@ -15,7 +15,15 @@ typedef struct __attribute__((aligned(8))){
     volatile uint32_t lock;
     volatile uint32_t chip_id;
     volatile uint32_t usr_data_ptr;
-    volatile uint32_t chip_barrier;
+    // Chip-level barrier bookkeeping (was: an unused uint32_t `chip_barrier`).
+    // These three bytes are per-chip and local-access-only (never broadcast):
+    // each chip reaches them through its own `cb` pointer, so the app never
+    // applies a chiplet prefix. Driven by snrt_chip_barrier_init() /
+    // snrt_chip_global_barrier() (target/sw/device/runtime/src/chip_sync.h).
+    volatile uint8_t chip_barrier_checkpoint;  // hidden per-chip monotonic counter
+    volatile uint8_t chip_barrier_tl;          // barrier rectangle: top-left chip id
+    volatile uint8_t chip_barrier_br;          // barrier rectangle: bottom-right chip id
+    volatile uint8_t chip_barrier_rsvd;        // pad (keeps the 8B-aligned layout)
     // Chip Level synchronization mechanism: 16x16 chip matrix
     volatile uint8_t chip_level_checkpoint[256];
 } comm_buffer_t;
