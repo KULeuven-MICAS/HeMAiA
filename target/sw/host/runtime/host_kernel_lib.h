@@ -694,6 +694,20 @@ static inline uint16_t __bingo_host_f32_to_f16bits(float f){
     return (uint16_t)(sign | half);
 }
 
+// True if `addr` is in a host-cacheable main-memory region (WideSPM / NarrowSPM),
+// where the device wrote through the global map and a `fence` (WT-dcache
+// invalidate; DcacheFlushOnFence=1) gives the host a coherent read. False => the
+// address is in cluster TCDM / other non-cacheable PMA (L1): so it must be staged
+// into main memory via the system iDMA first. Chip-id lives in addr bits >= 40
+// (get_chip_baseaddress = chip_id << 40); strip it before the range compare.
+static inline int __bingo_host_addr_is_mainmem(uint64_t addr){
+    uint64_t local = addr & ((1ULL << 40) - 1);
+    return ((local >= (uint64_t)SPM_WIDE_BASE_ADDR) &&
+            (local <  (uint64_t)SPM_WIDE_BASE_ADDR   + WIDE_SPM_SIZE)) ||
+           ((local >= (uint64_t)SPM_NARROW_BASE_ADDR) &&
+            (local <  (uint64_t)SPM_NARROW_BASE_ADDR + NARROW_SPM_SIZE));
+}
+
 static inline uint64_t __host_bingo_kernel_host_scalar_bcast(void *arg){
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
     uint64_t in_addr  = ((uint64_t *)arg)[0];
@@ -706,10 +720,33 @@ static inline uint64_t __host_bingo_kernel_host_scalar_bcast(void *arg){
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
     const uint32_t LANES = 32;  // XDMA_WIDTH(64 B) / sizeof(fp16): per-row scalar stride
-    volatile uint16_t* in  = (volatile uint16_t*)(uintptr_t)in_addr;
     volatile uint16_t* out = (volatile uint16_t*)(uintptr_t)out_addr;
+
+    // The reduce's per-row `ssq` scalars sit at `in_addr` (fp16 at stride
+    // LANES*2 = 64 B). If `in_addr` is already host-cacheable main memory, read it
+    // in place -- the device wrote it behind the write-through dcache, so a `fence`
+    // (DcacheFlushOnFence=1 in occamy_cva6.sv -> wt_dcache_missunit FLUSH clears
+    // every line) before the read refetches the fresh value. If instead it lives in
+    // cluster TCDM, stage each scalar into a main-memory bounce word via
+    // the system iDMA -- the wide AXI path the reduce/Load already use to reach
+    // cluster L1 -- then fence + read the bounce.
+    static volatile uint16_t bingo_host_scalar_bounce;  // host .bss -> WideSPM
+    uint8_t chip = get_current_chip_id();
+    int in_mainmem = __bingo_host_addr_is_mainmem(in_addr);
     for (uint64_t r = 0; r < rows; r++) {
-        uint16_t s16 = in[r * LANES];
+        uint64_t src_addr = in_addr + (uint64_t)r * LANES * sizeof(uint16_t);
+        const volatile uint16_t* src;
+        if (in_mainmem) {
+            src = (const volatile uint16_t*)(uintptr_t)src_addr;   // read in place
+        } else {
+            uint32_t tf = (uint32_t)sys_dma_memcpy(
+                chip, (uint64_t)(uintptr_t)&bingo_host_scalar_bounce,
+                src_addr, sizeof(uint16_t));
+            while (*(sys_dma_done_ptr(chip)) != tf) asm volatile("nop");
+            src = &bingo_host_scalar_bounce;                       // read the staged copy
+        }
+        asm volatile("fence" ::: "memory");  // WT-dcache invalidate before the read
+        uint16_t s16 = *src;
         uint16_t h;
         if (op == BINGO_HOST_SCALAR_NEG) {
             h = (uint16_t)(s16 ^ 0x8000u);                       // -x: fp16 sign flip (no FPU)
