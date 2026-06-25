@@ -464,6 +464,11 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_stream_map_args {
   uint32_t dst_bound0;       // writer beats (rows*beats; rows*beats/2 if quantizing)
   uint32_t out_dtype;        // 0=FP16, 1=INT8 (chain Fp16ToInt8)
   uint32_t inv_scale_f32bits;// Fp16ToInt8 inv_scale (FP32 bits), read only if out_dtype==1
+  // Optional runtime scale: if a_addr (hi|lo) != 0, the DM core reads one FP32 from
+  // that L1 word and uses it as the StreamMap 'a' operand (the GEMM->swiglu dequant
+  // qsc) instead of the compile-time a_f32bits. One scalar applies to the whole tile.
+  uint32_t a_addr_hi;
+  uint32_t a_addr_lo;
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_xdma_stream_map_args_t;
 
