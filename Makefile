@@ -38,12 +38,12 @@ clean-sw:
 	$(MAKE) -C ./target/sw/ clean
 
 clean-repo:
-	$(MAKE) -C ./target/fpga_chip/hemaia_chip/ clean
-	$(MAKE) -C ./target/fpga_chip/hemaia_chip_east_io/ clean
-	$(MAKE) -C ./target/fpga_chip/hemaia_chip_west_io/ clean
-	$(MAKE) -C ./target/fpga_chip/hemaia_system/ clean
-	$(MAKE) -C ./target/fpga_chip/hemaia_system_east/ clean
-	$(MAKE) -C ./target/fpga_chip/hemaia_system_west/ clean
+	$(MAKE) -C ./target/fpga/hemaia_chip/ clean
+	$(MAKE) -C ./target/fpga/hemaia_chip_east_io/ clean
+	$(MAKE) -C ./target/fpga/hemaia_chip_west_io/ clean
+	$(MAKE) -C ./target/fpga/hemaia_system/ clean
+	$(MAKE) -C ./target/fpga/hemaia_system_east/ clean
+	$(MAKE) -C ./target/fpga/hemaia_system_west/ clean
 	$(MAKE) -C ./target/sw/  clean
 	$(MAKE) -C ./target/rtl/bootrom/  clean
 	$(MAKE) -C ./target/sim/ clean
@@ -152,35 +152,35 @@ tapeout_syn_flist:
 # FPGA Workflow
 # Please be attention that in this configuration, injecting any binary files by Xilinx Vivado are not possible anymore; please use JTAG or embedded bootrom to load the binary
 hemaia_system_vivado_preparation: # In SNAX Docker
-	$(MAKE) -C ./target/fpga_chip/hemaia_system/ define_defines_includes_no_simset.tcl
-	$(MAKE) -C ./target/fpga_chip/hemaia_chip/ define-sources.tcl
+	$(MAKE) -C ./target/fpga/hemaia_system/ define_defines_includes_no_simset.tcl
+	$(MAKE) -C ./target/fpga/hemaia_chip/ define-sources.tcl
 
 hemaia_chip_vivado:	# In ESAT Server
-	$(MAKE) -C ./target/fpga_chip/hemaia_chip hemaia_chip
+	$(MAKE) -C ./target/fpga/hemaia_chip hemaia_chip
 
 hemaia_chip_east_vivado:	# In ESAT Server
-	$(MAKE) -C ./target/fpga_chip/hemaia_chip_east_io hemaia_chip_east
+	$(MAKE) -C ./target/fpga/hemaia_chip_east_io hemaia_chip_east
 
 hemaia_chip_west_vivado:	# In ESAT Server
-	$(MAKE) -C ./target/fpga_chip/hemaia_chip_west_io hemaia_chip_west
+	$(MAKE) -C ./target/fpga/hemaia_chip_west_io hemaia_chip_west
 
 hemaia_chip_vivado_gui: # In ESAT Server
-	sh -c "cd ./target/fpga_chip/hemaia_chip/hemaia_chip/;vivado hemaia_chip.xpr"
+	sh -c "cd ./target/fpga/hemaia_chip/hemaia_chip/;vivado hemaia_chip.xpr"
 
 hemaia_system_vivado: hemaia_chip_vivado # In ESAT Server
-	$(MAKE) -C ./target/fpga_chip/hemaia_system hemaia_system
+	$(MAKE) -C ./target/fpga/hemaia_system hemaia_system
 
 hemaia_system_east_vivado: hemaia_chip_east_vivado # In ESAT Server
-	$(MAKE) -C ./target/fpga_chip/hemaia_system_east hemaia_system_east
+	$(MAKE) -C ./target/fpga/hemaia_system_east hemaia_system_east
 
 hemaia_system_west_vivado: hemaia_chip_west_vivado # In ESAT Server
-	$(MAKE) -C ./target/fpga_chip/hemaia_system_west hemaia_system_west
+	$(MAKE) -C ./target/fpga/hemaia_system_west hemaia_system_west
 
 hemaia_system_vivado_gui: # In ESAT Server
-	sh -c "cd ./target/fpga_chip/hemaia_system/hemaia_system/;vivado hemaia_system.xpr"
+	sh -c "cd ./target/fpga/hemaia_system/hemaia_system/;vivado hemaia_system.xpr"
 
 hemaia_system_east_vivado_gui: # In ESAT Server
-	sh -c "cd ./target/fpga_chip/hemaia_system_east/hemaia_system_east/;vivado hemaia_system_east.xpr"
+	sh -c "cd ./target/fpga/hemaia_system_east/hemaia_system_east/;vivado hemaia_system_east.xpr"
 
 ######################
 # Verilator Workflow #

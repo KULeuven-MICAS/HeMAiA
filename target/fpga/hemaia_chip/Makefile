@@ -24,7 +24,7 @@ ifeq ($(EXT_JTAG), 0)
 	BENDER_TARGETS += -t bscane
 endif
 
-include $(ROOT)/target/fpga_chip/Makefrag
+include $(ROOT)/target/fpga/Makefrag
 
 hemaia_chip: define-sources.tcl
 	# $(MAKE) -C ../../ update-source

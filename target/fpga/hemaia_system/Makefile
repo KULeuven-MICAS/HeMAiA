@@ -21,7 +21,7 @@ BENDER_TARGETS += -t $(TARGET_PLATFORM)
 default: all
 all: hemaia_system_vcu128
 
-include $(ROOT)/target/fpga_chip/Makefrag
+include $(ROOT)/target/fpga/Makefrag
 
 ../hemaia_chip/hemaia_chip:
 	${MAKE} -C ../hemaia_chip hemaia_chip

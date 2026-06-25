@@ -145,7 +145,7 @@ HeMAiA now only provides the support for AMD Versal VPK180 board. Vivado 2023.2 
 make hemaia_system_vivado_preparation CFG_OVERRIDE=target/rtl/cfg/<YOUR_CFG> TARGET_PLATFORM=vpk180
 ```
 
-- Exit the container and call Vivado to synthesize and implement the hardware. The constraint is especially for the MICAS Debugger board, thus modification may be needed for different peripherals. The constraint is at **target/fpga_chip/hemaia_system/hemaia_system_vpk180_impl.xdc** and **target/fpga_chip/hemaia_system/hemaia_system_vpk180_impl_ext_jtag.xdc**.
+- Exit the container and call Vivado to synthesize and implement the hardware. The constraint is especially for the MICAS Debugger board, thus modification may be needed for different peripherals. The constraint is at **target/fpga/hemaia_system/hemaia_system_vpk180_impl.xdc** and **target/fpga/hemaia_system/hemaia_system_vpk180_impl_ext_jtag.xdc**.
 
 ```bash
 make hemaia_system_vivado TARGET_PLATFORM=vpk180
@@ -168,12 +168,12 @@ minicom -D /dev/ttyUSB? -b 500000
 If you open the correct UART, then you will see Bootrom printing something.
 After finding the correct port, exit minicom by pressing **Ctrl + A**, then **X**.
 
-- Modify the Software download script to the correct port. The file is at ***target/fpga_chip/apps/send_uart.sh***. Every UART string should be replaced by the one that you found earlier.
+- Modify the Software download script to the correct port. The file is at ***target/fpga/apps/send_uart.sh***. Every UART string should be replaced by the one that you found earlier.
 
 - If you see the **Welcome to HeMAiA Bootrom** from minicom (after pressing one random key on the keyboard), you are ready to download the binary to the SoC. You can download the binary by exeucting:
 
 ```bash
-cd target/fpga_chip_apps
+cd target/fpga/apps
 ./send_uart.sh [Followed by the path of the binary]
 ```
 
@@ -208,4 +208,4 @@ make hemaia_chip_west_vivado
 make hemaia_system_west_vivado
 ```
 
-After build is complete, the projects can be accessed in `target/fpga_chip/hemaia_system_east/hemaia_system_east/hemaia_system_east.xpr` and `target/fpga_chip/hemaia_system_west/hemaia_system_west/hemaia_system_west.xpr` for GUI analysis and device programming.
+After build is complete, the projects can be accessed in `target/fpga/hemaia_system_east/hemaia_system_east/hemaia_system_east.xpr` and `target/fpga/hemaia_system_west/hemaia_system_west/hemaia_system_west.xpr` for GUI analysis and device programming.

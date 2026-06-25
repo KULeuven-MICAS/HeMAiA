@@ -19,15 +19,15 @@ BENDER_TARGETS += -t exclude_first_pass_decoder
 BENDER_TARGETS += $(shell cat $(MKFILE_DIR)../../rtl/src/bender_targets.tmp)
 BENDER_TARGETS += -t hemaia
 BENDER_TARGETS += -t $(TARGET_PLATFORM)
-BENDER_TARGETS += -t eastonly
+BENDER_TARGETS += -t westonly
 
 ifeq ($(EXT_JTAG), 0)
 	BENDER_TARGETS += -t bscane
 endif
 
-include $(ROOT)/target/fpga_chip/Makefrag
+include $(ROOT)/target/fpga/Makefrag
 
-hemaia_chip_east: define-sources.tcl
+hemaia_chip_west: define-sources.tcl
 	# $(MAKE) -C ../../ update-source
 	# $(MAKE) -C ../../sim rtl
 
@@ -37,4 +37,4 @@ define-sources.tcl:
 	${BENDER} script vivado $(BENDER_TARGETS) > $@
 
 clean:
-	rm -rf .Xil hemaia_chip_east vivado* define-sources.tcl component.xml xgui *.jou *.log
+	rm -rf .Xil hemaia_chip_west vivado* define-sources.tcl component.xml xgui *.jou *.log
