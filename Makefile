@@ -1,8 +1,8 @@
-.PHONY: clean-repo clean-bender FORCE bootrom sw single-sw rtl occamy_ip_vcu128 occamy_ip_vcu128_gui occamy_system_vcu128 \
-		occamy_system_vcu128_gui occamy_system_download_sw open_terminal hemaia_system_vivado_preparation \
-		hemaia_chip_vcu128 hemaia_chip_vcu128_gui hemaia_system_vcu128 hemaia_system_vcu128_gui \
-		occamy_system_vlt occamy_system_vsim_preparation occamy_system_vsim hemaia_system_vsim_preparation \
-		hemaia_system_vsim bingo-vis-traces
+.PHONY: clean-repo clean-bender FORCE bootrom sw single-sw rtl open_terminal hemaia_system_vivado_preparation \
+		hemaia_chip_vivado hemaia_chip_east_vivado hemaia_chip_west_vivado hemaia_chip_vivado_gui \
+		hemaia_system_vivado hemaia_system_east_vivado hemaia_system_west_vivado hemaia_system_vivado_gui \
+		hemaia_system_east_vivado_gui hemaia_system_vlt occamy_system_vsim_preparation occamy_system_vsim \
+		hemaia_system_vsim_preparation hemaia_system_vsim bingo-vis-traces
 
 MKFILE_PATH := $(abspath $(lastword $(MAKEFILE_LIST)))
 MKFILE_DIR := $(dir $(MKFILE_PATH))
@@ -38,8 +38,6 @@ clean-sw:
 	$(MAKE) -C ./target/sw/ clean
 
 clean-repo:
-	$(MAKE) -C ./target/fpga/ clean
-	$(MAKE) -C ./target/fpga/vivado_ips/ clean
 	$(MAKE) -C ./target/fpga_chip/hemaia_chip/ clean
 	$(MAKE) -C ./target/fpga_chip/hemaia_chip_east_io/ clean
 	$(MAKE) -C ./target/fpga_chip/hemaia_chip_west_io/ clean
@@ -50,7 +48,6 @@ clean-repo:
 	$(MAKE) -C ./target/rtl/bootrom/  clean
 	$(MAKE) -C ./target/sim/ clean
 	$(MAKE) -C ./target/rtl/ clean
-	$(MAKE) -C ./target/fpga/sw clean
 	$(MAKE) -C ./target/tapeout clean
 	rm -rf ./target/rtl/src/bender_targets.tmp
 	rm -rf ./target/rtl/cfg/lru.hjson
@@ -152,20 +149,7 @@ tapeout_syn_flist:
 # FPGA Workflow #
 #################
 
-occamy_system_vivado_preparation: # In SNAX Docker
-	$(MAKE) -C ./target/fpga/ define_defines_includes_no_simset.tcl
-	$(MAKE) -C ./target/fpga/vivado_ips/ define-sources.tcl
-
-occamy_system_vivado: occamy_ip_vcu128 # In ESAT Server
-	$(MAKE) -C ./target/fpga occamy_vcu128
-
-occamy_system_download_sw: # In ESAT Server; this procedure will only inject the bootrom at present; however, it can also inject the software.
-	$(MAKE) -C ./target/fpga/sw download_sw
-
-open_terminal:	# It opens ttyUSB1 without locking it, and set baudrate at 1Mbps
-	$(info "shell minicom -D /dev/ttyUSB1 -b 1000000 -o")
-
-# FPGA Workflow (with no Xilinx IP - tapeout configuration)
+# FPGA Workflow
 # Please be attention that in this configuration, injecting any binary files by Xilinx Vivado are not possible anymore; please use JTAG or embedded bootrom to load the binary
 hemaia_system_vivado_preparation: # In SNAX Docker
 	$(MAKE) -C ./target/fpga_chip/hemaia_system/ define_defines_includes_no_simset.tcl
@@ -181,7 +165,7 @@ hemaia_chip_west_vivado:	# In ESAT Server
 	$(MAKE) -C ./target/fpga_chip/hemaia_chip_west_io hemaia_chip_west
 
 hemaia_chip_vivado_gui: # In ESAT Server
-	sh -c "cd ./target/fpga/fpga_chip/hemaia_chip/hemaia_chip/;vivado hemaia_chip.xpr"
+	sh -c "cd ./target/fpga_chip/hemaia_chip/hemaia_chip/;vivado hemaia_chip.xpr"
 
 hemaia_system_vivado: hemaia_chip_vivado # In ESAT Server
 	$(MAKE) -C ./target/fpga_chip/hemaia_system hemaia_system

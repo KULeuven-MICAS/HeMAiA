@@ -910,16 +910,6 @@ def get_quadrant_noc_kwargs(occamy_cfg, cluster_generators):
     return quadrant_noc_kwargs
 
 
-def get_xilinx_kwargs(occamy_cfg, soc_wide_xbar, soc_axi_lite_narrow_periph_xbar, name):
-    xilinx_kwargs = {
-        "name": name,
-        "occamy_cfg": occamy_cfg,
-        "soc_wide_xbar": soc_wide_xbar,
-        "soc_axi_lite_narrow_periph_xbar": soc_axi_lite_narrow_periph_xbar
-    }
-    return xilinx_kwargs
-
-
 def get_cores_cluster_offset(core_per_cluster):
     # We need the offset for each cores
     # e.g we have three clusters with different cores

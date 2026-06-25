@@ -106,9 +106,6 @@ def main():
     parser.add_argument("--quad-noc",
                         metavar="QUAD_NOC",
                         help="Name of quadrant NoC template file (output)")
-    parser.add_argument("--xilinx-sv",
-                        metavar="XILINX_SV",
-                        help="Name of the Xilinx wrapper file (output).")
     parser.add_argument("--testharness-sv",
                         metavar="TESTHARNESS_SV",
                         help="Name of the testharness wrapper file (output).")    
@@ -787,18 +784,6 @@ def main():
                     print(outdir, args.name)
                     with open("{}/{}_quad.sv".format(outdir, args.name), 'w') as f:
                         f.write("// no quad in this design")
-    ##################
-    # Xilinx Wrapper #
-    ##################
-    if args.xilinx_sv:
-        xilinx_kwargs = occamy.get_xilinx_kwargs(
-            occamy_cfg, soc_wide_xbar, soc_axi_lite_narrow_periph_xbar, args.name)
-        write_template(args.xilinx_sv,
-                       outdir,
-                       fname="{}_xilinx.sv".format(args.name),
-                       module="",
-                       **xilinx_kwargs)
-
     ###########
     # Package #
     ###########
