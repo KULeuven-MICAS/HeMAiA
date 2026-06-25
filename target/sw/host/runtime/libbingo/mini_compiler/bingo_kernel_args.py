@@ -708,22 +708,34 @@ class SnaxBingoKernelXdmaElementwiseAddAbArgs(BingoKernelArgs):
 # same-shape config — the opt-in). dst_bound0 is the WRITER beat count.
 #
 # CSR encodings: StreamMap func 0=LINEAR(a*x+b) 1=EXP 2=SILU; StreamReduce op
-# 0=MAX 1=ADD 2=SUMSQ, |0x100 = TAP; StreamElementwise op 0=MUL 1=ADD.
+# 0=MAX 1=ADD 2=SUMSQ, |0x100 = TAP, |0x200 = OUT_FP32; StreamElementwise op
+# 0=MUL 1=ADD.
 # ══════════════════════════════════════════════════════════════════════
+
+# StreamReduce op-CSR flag bits (OR'd into `op`). REDUCE_OUT_FP32 keeps the per-row
+# scalar in FP32 instead of narrowing it to the FP16 transport -- use it whenever the
+# reduction can exceed fp16 range (e.g. SUMSQ of unscaled activations), since the FP16
+# narrow wraps to garbage (NOT inf) on overflow. The host consumer must then read the
+# scalar as fp32 (stride 16) instead of u16 (stride 32) -- see HostScalarBcast in_fp32.
+REDUCE_OP_TAP   = 1 << 8   # 0x100: pass the row through, then emit the scalar beat
+REDUCE_OUT_FP32 = 1 << 9   # 0x200: emit the per-row scalar in FP32 (no FP16 narrow)
+
 
 class SnaxBingoKernelXdmaStreamReduceArgs(BingoKernelArgs):
     """StreamReduce: per-row reduction (row -> scalar). op: 0=MAX 1=ADD 2=SUMSQ.
     Runs `rows` independent reductions in one dispatch (rows=1 = single row),
-    emitting one splatted scalar beat per row (dst_bound0 defaults to rows)."""
+    emitting one splatted scalar beat per row (dst_bound0 defaults to rows).
+    out_fp32=True ORs REDUCE_OUT_FP32 into op so the scalar reaches the host in FP32
+    (the host reader then uses in_fp32=1); use it when the reduction can overflow fp16."""
     KERNEL_NAME = "__snax_bingo_kernel_xdma_stream_reduce"
 
     def __init__(self, src_addr: Union[BingoMemAlloc, int], dst_addr: Union[BingoMemAlloc, int],
                  beats: int, op: int, rows: int = 1, csr_mode: int = 0,
-                 dst_bound0: Optional[int] = None):
+                 dst_bound0: Optional[int] = None, out_fp32: bool = False):
         self.src_addr = src_addr
         self.dst_addr = dst_addr
         self.beats = beats
-        self.op = op
+        self.op = (op | REDUCE_OUT_FP32) if out_fp32 else op
         self.rows = rows
         self.csr_mode = csr_mode
         self.dst_bound0 = rows if dst_bound0 is None else dst_bound0
@@ -1154,10 +1166,10 @@ class HostBingoKernelIdmaArgs(BingoKernelArgs):
         return assignments
 
 
-# HOST BINGO scalar broadcast bridge: read `rows` per-row fp16 reduce scalars from
-# L1 (row r at fp16 index r*32), compute a per-row scalar on the CVA6, and splat
-# each fp16 result across a [rows, D] fp16 broadcast buffer for a downstream device
-# StreamElementwise. op: 0=NEG (-x), 1=RECIP (1/x), 2=RSQRT_MEAN (1/sqrt(x/N)).
+# HOST BINGO scalar broadcast bridge: read `rows` per-row reduce scalars from L1
+# (row r one splatted 64-B beat apart), compute a per-row scalar on the CVA6, and
+# splat each fp16 result across a [rows, D] fp16 broadcast buffer for a downstream
+# device StreamElementwise. op: 0=NEG (-x), 1=RECIP (1/x), 2=RSQRT_MEAN (1/sqrt(x/N)).
 BINGO_HOST_SCALAR_NEG        = 0
 BINGO_HOST_SCALAR_RECIP      = 1
 BINGO_HOST_SCALAR_RSQRT_MEAN = 2
@@ -1169,13 +1181,17 @@ class HostBingoKernelHostScalarBcastArgs(BingoKernelArgs):
     def __init__(self,
                  in_addr: Union[BingoMemAlloc, BingoMemSymbol, int],
                  out_addr: Union[BingoMemAlloc, BingoMemSymbol, int],
-                 op: int, rows: int, D: int, N: int = 1):
+                 op: int, rows: int, D: int, N: int = 1, in_fp32: bool = False):
+        # in_fp32: the producing xDMA reduce ran with REDUCE_OUT_FP32, so the scalar
+        # is fp32 at lane 0 (stride 16 f32) -- read it directly instead of fp16
+        # (stride 32 u16). Pair it with SnaxBingoKernelXdmaStreamReduceArgs(out_fp32=True).
         self.in_addr = in_addr
         self.out_addr = out_addr
         self.op = op
         self.rows = rows
         self.D = D
         self.N = N
+        self.in_fp32 = in_fp32
 
     def get_struct_name(self) -> str:
         return "__host_bingo_kernel_host_scalar_bcast_args_t"
@@ -1188,6 +1204,7 @@ class HostBingoKernelHostScalarBcastArgs(BingoKernelArgs):
         a["rows"] = str(self.rows)
         a["D"] = str(self.D)
         a["N"] = str(self.N)
+        a["in_fp32"] = str(int(self.in_fp32))
         return a
 
 

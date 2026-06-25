@@ -342,6 +342,17 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_elementwise_add_ab(void *arg)
 // CSR encodings (passed verbatim into the extension CSRs by the caller):
 //   StreamMap        func: 0=LINEAR(a*x+b)  1=EXP  2=SILU   CSR={a_f32,b_f32,func}
 //   StreamReduce     op:   0=MAX  1=ADD  2=SUMSQ            CSR={beats,op}
+//                    op bit8  (0x100) = TAP        : pass the row through 1:1, then
+//                                                    emit the scalar as a trailing beat.
+//                    op bit9  (0x200) = OUT_FP32   : emit the per-row scalar in FP32
+//                                                    (no narrow to the FP16 transport).
+//                                                    Use whenever the reduction can
+//                                                    exceed ~6e4 (e.g. SUMSQ of unscaled
+//                                                    activations), since the FP16 narrow
+//                                                    wraps to garbage (NOT inf) on overflow.
+//                                                    The host then reads the scalar as
+//                                                    `float` at stride 16 (FP32/beat)
+//                                                    instead of `uint16_t` at stride 32.
 //   StreamElementwise op:  0=MUL  1=ADD                     CSR={operand_count,op}
 //   Fp16ToInt8       CSR={inv_scale_f32}   (fused quant: FP16 stream -> packed INT8)
 //
@@ -377,9 +388,20 @@ static inline uint32_t xdma_stream_launch(
     return BINGO_RET_SUCC;
 }
 
+// StreamReduce op-CSR flag bits, OR'd into `op` by the caller (the minicompiler).
+// The op CSR is passed verbatim into the extension, so these need no datapath change
+// here — only the host's read-back stride changes for OUT_FP32 (see comment above).
+#ifndef REDUCE_OP_TAP
+#define REDUCE_OP_TAP   (1u << 8)   // pass the row through, then emit the scalar beat
+#endif
+#ifndef REDUCE_OUT_FP32
+#define REDUCE_OUT_FP32 (1u << 9)   // emit the per-row scalar in FP32 (no FP16 narrow)
+#endif
+
 // StreamReduce: per-row reduction (row -> scalar). op = MAX/ADD/SUMSQ. Runs `rows`
 // independent reductions in one dispatch: the reader is 2D {beats inner, rows
 // outer}, the writer emits one splatted scalar beat per row (dst_bound0 = rows).
+// OR REDUCE_OUT_FP32 into `op` to keep the scalar in FP32 (read back at stride 16).
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_stream_reduce(void *arg)
 {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_stream_reduce_args_t);

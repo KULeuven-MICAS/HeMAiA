@@ -716,43 +716,53 @@ static inline uint64_t __host_bingo_kernel_host_scalar_bcast(void *arg){
     uint64_t rows     = ((uint64_t *)arg)[3];
     uint64_t D        = ((uint64_t *)arg)[4];
     uint64_t N        = ((uint64_t *)arg)[5];
-    bingo_kernel_scratchpad_t* sp = (bingo_kernel_scratchpad_t*)(uintptr_t)((uint64_t *)arg)[6];
+    uint64_t in_fp32  = ((uint64_t *)arg)[6];   // 0=fp16 scalar, 1=REDUCE_OUT_FP32 fp32 scalar
+    bingo_kernel_scratchpad_t* sp = (bingo_kernel_scratchpad_t*)(uintptr_t)((uint64_t *)arg)[7];
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
     const uint32_t LANES = 32;  // XDMA_WIDTH(64 B) / sizeof(fp16): per-row scalar stride
     volatile uint16_t* out = (volatile uint16_t*)(uintptr_t)out_addr;
 
-    // The reduce's per-row `ssq` scalars sit at `in_addr` (fp16 at stride
-    // LANES*2 = 64 B). If `in_addr` is already host-cacheable main memory, read it
-    // in place -- the device wrote it behind the write-through dcache, so a `fence`
-    // (DcacheFlushOnFence=1 in occamy_cva6.sv -> wt_dcache_missunit FLUSH clears
-    // every line) before the read refetches the fresh value. If instead it lives in
-    // cluster TCDM, stage each scalar into a main-memory bounce word via
-    // the system iDMA -- the wide AXI path the reduce/Load already use to reach
-    // cluster L1 -- then fence + read the bounce.
-    static volatile uint16_t bingo_host_scalar_bounce;  // host .bss -> WideSPM
+    // The reduce's per-row scalars sit at `in_addr`, one splatted 64-B beat apart.
+    // Lane 0 is fp16 (REDUCE_OUT_FP32=0) or fp32 (REDUCE_OUT_FP32=1, the unnarrowed
+    // FP32 value) -- either way the per-row beat stride is the same 64 B, only the
+    // element width read at lane 0 differs. If `in_addr` is already host-cacheable
+    // main memory, read it in place -- the device wrote it behind the write-through
+    // dcache, so a `fence` (DcacheFlushOnFence=1 in occamy_cva6.sv ->
+    // wt_dcache_missunit FLUSH clears every line) before the read refetches the
+    // fresh value. If instead it lives in cluster TCDM, stage each scalar into a
+    // main-memory bounce word via the system iDMA -- the wide AXI path the
+    // reduce/Load already use to reach cluster L1 -- then fence + read the bounce.
+    static volatile uint32_t bingo_host_scalar_bounce;  // host .bss -> WideSPM (holds u16 or f32)
     uint8_t chip = get_current_chip_id();
     int in_mainmem = __bingo_host_addr_is_mainmem(in_addr);
+    uint32_t elem_bytes = in_fp32 ? sizeof(uint32_t) : sizeof(uint16_t);
     for (uint64_t r = 0; r < rows; r++) {
-        uint64_t src_addr = in_addr + (uint64_t)r * LANES * sizeof(uint16_t);
-        const volatile uint16_t* src;
+        uint64_t src_addr = in_addr + (uint64_t)r * LANES * sizeof(uint16_t);  // r * 64 B beat
+        const volatile void* src;
         if (in_mainmem) {
-            src = (const volatile uint16_t*)(uintptr_t)src_addr;   // read in place
+            src = (const volatile void*)(uintptr_t)src_addr;      // read in place
         } else {
             uint32_t tf = (uint32_t)sys_dma_memcpy(
                 chip, (uint64_t)(uintptr_t)&bingo_host_scalar_bounce,
-                src_addr, sizeof(uint16_t));
+                src_addr, elem_bytes);
             while (*(sys_dma_done_ptr(chip)) != tf) asm volatile("nop");
-            src = &bingo_host_scalar_bounce;                       // read the staged copy
+            src = &bingo_host_scalar_bounce;                      // read the staged copy
         }
         asm volatile("fence" ::: "memory");  // WT-dcache invalidate before the read
-        uint16_t s16 = *src;
         uint16_t h;
-        if (op == BINGO_HOST_SCALAR_NEG) {
-            h = (uint16_t)(s16 ^ 0x8000u);                       // -x: fp16 sign flip (no FPU)
+        if (op == BINGO_HOST_SCALAR_NEG && !in_fp32) {
+            h = (uint16_t)(*(const volatile uint16_t*)src ^ 0x8000u);  // -x: fp16 sign flip (no FPU)
         } else {
-            float v   = __bingo_host_f16bits_to_f32(s16);
-            float res = (op == BINGO_HOST_SCALAR_RECIP) ? (1.0f / v)
+            float v;
+            if (in_fp32) {
+                uint32_t b = *(const volatile uint32_t*)src;     // true FP32 scalar bits
+                __builtin_memcpy(&v, &b, sizeof v);
+            } else {
+                v = __bingo_host_f16bits_to_f32(*(const volatile uint16_t*)src);
+            }
+            float res = (op == BINGO_HOST_SCALAR_NEG)   ? (-v)
+                      : (op == BINGO_HOST_SCALAR_RECIP) ? (1.0f / v)
                                                         : (1.0f / __builtin_sqrtf(v / (float)N));
             h = __bingo_host_f32_to_f16bits(res);
         }
