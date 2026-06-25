@@ -143,8 +143,6 @@ soc: $(MISC_OCCAMYGEN_TARGETS)
 clean-soc:
 	rm -rf $(MISC_OCCAMYGEN_TARGETS) .misc_occamygen_targets_group
 	rm -rf $(TARGET_SRC_DIR)/*noc*
-	rm -rf $(TARGET_SRC_DIR)/axi_flat.sv
-	rm -rf $(TARGET_SRC_DIR)/apb_flat.sv
 	rm -rf $(TARGET_SRC_DIR)/bender_targets.tmp
 	rm -rf $(HEMAIA_MEM_SYS_DIR)/hemaia_xdma_wrapper.sv
 	rm -rf $(HEMAIA_MEM_SYS_DIR)/hemaia_xdma.sv
@@ -165,12 +163,8 @@ $(MISC_OCCAMYGEN_TARGETS): .misc_occamygen_targets_group
 		--quad             $(SOURCE_OCCAMY_DIR)/occamy_quad.sv.tpl \
 		--quad-ctrl        $(SOURCE_OCCAMY_DIR)/occamy_quad_ctrl.sv.tpl \
 		--quad-noc         $(SOURCE_OCCAMY_DIR)/quad_noc/quad_noc.yml.tpl \
-		--xilinx-sv        $(SOURCE_OCCAMY_DIR)/occamy_xilinx.sv.tpl \
 		--cva6-sv          $(SOURCE_OCCAMY_DIR)/occamy_cva6.sv.tpl
 
-# File included by occamy_xilinx needs to be put in the same folder
-	cp -f $(SOURCE_OCCAMY_DIR)/axi_flat.sv $(TARGET_SRC_DIR)
-	cp -f $(SOURCE_OCCAMY_DIR)/apb_flat.sv $(TARGET_SRC_DIR)
 	@touch $@
 
 .PHONY: debug-soc-gen debug-quad-ctrl-gen debug-quad-gen debug-occamy-gen
@@ -185,7 +179,6 @@ debug-occamy-gen:
 		--quad             $(SOURCE_OCCAMY_DIR)/occamy_quad.sv.tpl \
 		--quad-ctrl        $(SOURCE_OCCAMY_DIR)/occamy_quad_ctrl.sv.tpl \
 		--quad-noc         $(SOURCE_OCCAMY_DIR)/quad_noc/quad_noc.yml.tpl \
-		--xilinx-sv        $(SOURCE_OCCAMY_DIR)/occamy_xilinx.sv.tpl \
 		--cva6-sv          $(SOURCE_OCCAMY_DIR)/occamy_cva6.sv.tpl	
 
 debug-soc-gen:

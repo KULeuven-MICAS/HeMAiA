@@ -148,11 +148,6 @@ sources:
       - target/rtl/bootrom/bootrom_netlist_sim/bootrom.v
       - target/tapeout/HeMAiAv2_tapeout/outputs/hemaia_mapped_bootrom_commented.v
 
-  # target/fpga
-  - target: xilinx
-    files:
-      - target/rtl/src/occamy_xilinx.sv
-
   # HeMAiA Mem Chip
   - target: hemaia_mem_chip
     files:
