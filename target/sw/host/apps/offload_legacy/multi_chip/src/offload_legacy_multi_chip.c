@@ -2,56 +2,47 @@
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 // Yunhao Deng <yunhao.deng@kuleuven.be>
+// Fanchen Kong <fanchen.kong@kuleuven.be>
 
 #include "host.h"
 #include "hemaia_clk_rst_controller.h"
 
+// Multi-chip offload entry point: the SAME binary runs on every compute chip.
+// Each chip brings up its own D2D links and a zero-initialised communication
+// buffer (so the device-side chip_barrier checkpoints start clean), then wakes
+// ITS OWN Snitch cluster and waits. The device kernel performs the cross-chip
+// data movement and synchronisation (e.g. gemm-msplit-1cluster-4chip).
 int main() {
-    // The pointer to the communication buffer
     uint32_t current_chip_id = get_current_chip_id();
     init_uart(get_current_chip_baseaddress(), 32, 1);
     // Enable vector extension
     enable_vec();
-    volatile comm_buffer_t* comm_buffer_ptr = (comm_buffer_t*)0;
-    printf("[HeMAiA] Multi-chip Offload Legacy Main\r\n");
-    // Reset and ungate all quadrants, deisolate
-    uintptr_t current_chip_address_prefix =
-        (uintptr_t)get_current_chip_baseaddress();
+    printf("[HeMAiA] Multi-chip Offload Legacy Main (chip %x%x)\r\n",
+           current_chip_id >> 4, current_chip_id & 0x0F);
+
+    // Bring up the D2D links so cross-chip transfers / barriers work.
     hemaia_d2d_link_initialize(current_chip_id);
-    int32_t target_chip_id = 0;
 
-    init_uart(current_chip_address_prefix, 32, 1);
-    printf("[HeMAiA] Current Chip ID is: %x%x\r\n", current_chip_id >> 4,
-           current_chip_id & 0x0F);
-
-    printf("[HeMAiA] Chip ID to execute binary: \r\n");
-    scanf("%x", &target_chip_id);
-    if (target_chip_id < 0) {
-        printf("[HeMAiA] Invalid Chip ID. Exiting.\r\n");
-        return -1;  // Invalid chip ID, exit
-    }
-
-    uintptr_t target_chip_address_prefix =
-        (uintptr_t)get_chip_baseaddress(target_chip_id);
-
-    comm_buffer_ptr = (comm_buffer_t*)(((uint64_t)&__narrow_spm_start) |
-                                       target_chip_address_prefix);
+    // Communication buffer lives at the local narrow SPM, identical address on
+    // every chip so the device chip_barrier broadcast lands at the same offset.
+    volatile comm_buffer_t* comm_buffer_ptr =
+        (comm_buffer_t*)chiplet_addr_transform((uint64_t)&__narrow_spm_start);
+    // Zero the whole buffer (incl. chip_level_checkpoint) before the device runs.
+    initialize_comm_buffer((comm_buffer_t*)comm_buffer_ptr);
 
     enable_sw_interrupts();
-    // Program Snitch entry point and communication buffer
     comm_buffer_ptr->lock = 0;
     comm_buffer_ptr->chip_id = current_chip_id;
-    program_snitches(target_chip_id, comm_buffer_ptr);
-
+    program_snitches(current_chip_id, comm_buffer_ptr);
     asm volatile("fence" ::: "memory");
 
-    printf("[HeMAiA] Calling snitch cluster on chip %d to execute the task\r\n",
-           target_chip_id);
+    printf("[HeMAiA] Calling snitch cluster on chip %x%x to execute the task\r\n",
+           current_chip_id >> 4, current_chip_id & 0x0F);
 
-    // Start Snitches
-    wakeup_snitches_cl(target_chip_id);
+    // Start the local Snitch cluster
+    wakeup_snitches_cl(current_chip_id);
 
-    int ret = wait_snitches_done(target_chip_id);
+    int ret = wait_snitches_done(current_chip_id);
 
     printf("[HeMAiA] Snitch cluster done with exit code %d\r\n", ret);
 
