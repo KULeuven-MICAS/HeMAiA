@@ -650,67 +650,10 @@ void delay_ns(uint64_t delay) {
     clear_timer_interrupt(chip_id);
 }
 
-//===============================================================
-// Chip Level Synchronization Mechanism
-//===============================================================
-
-void announce_chip_checkpoint(volatile comm_buffer_t* chip_barrier_data_ptr,
-                              uint8_t checkpoint) {
-    volatile uint8_t* this_chip_checkpoint =
-        &((*chip_barrier_data_ptr).chip_level_checkpoint[get_current_chip_id()]);
-    // Broadcast to all Chips
-    this_chip_checkpoint =
-        (uint8_t*)(((uint64_t)this_chip_checkpoint) | (((uint64_t)0xFF) << 40));
-    *this_chip_checkpoint = checkpoint;
-}
-
-void wait_chip_checkpoint(volatile comm_buffer_t* chip_barrier_data_ptr,
-                          uint8_t chip_id, uint8_t checkpoint) {
-    volatile uint8_t* target_chip_checkpoint =
-        &((*chip_barrier_data_ptr).chip_level_checkpoint[chip_id]);
-    // Broadcast to all Chips
-    while (*target_chip_checkpoint < checkpoint) {
-        asm volatile("fence" ::: "memory");
-    }
-}
-
-void wait_chips_checkpoint(volatile comm_buffer_t* chip_barrier_data_ptr,
-                           uint8_t top_left_chip_id,
-                           uint8_t bottom_right_chip_id, uint8_t checkpoint) {
-    volatile uint8_t* chip_level_checkpoint =
-        &((*chip_barrier_data_ptr).chip_level_checkpoint[0]);
-    uint8_t current_chip_id = get_current_chip_id();
-    uint8_t continue_loop = 1;
-    while (continue_loop) {
-        continue_loop = 0;
-        asm volatile("fence" ::: "memory");
-        for (uint8_t i = top_left_chip_id >> 4;
-             i <= (bottom_right_chip_id >> 4); i++) {
-            for (uint8_t j = top_left_chip_id & 0xF;
-                 j <= (bottom_right_chip_id & 0xF); j++) {
-                if ((*(chip_level_checkpoint + ((i << 4) + j)) < checkpoint) &&
-                    (current_chip_id != ((i << 4) + j))) {
-                    continue_loop = 1;
-                    break;
-                }
-            }
-        }
-    }
-}
-
-// Barrier is realized in software, to ensure that all other chips have reached
-// a certain checkpoint
-void chip_barrier(volatile comm_buffer_t* chip_barrier_data_ptr,
-                  uint8_t top_left_chip_id, uint8_t bottom_right_chip_id,
-                  uint8_t checkpoint) {
-    volatile uint8_t* chip_level_checkpoint =
-        &((*chip_barrier_data_ptr).chip_level_checkpoint[0]);
-    // Broadcast to all other chip on the progress of the chip
-    announce_chip_checkpoint(chip_barrier_data_ptr, checkpoint);
-    // Change the pointer back
-    wait_chips_checkpoint(chip_barrier_data_ptr, top_left_chip_id,
-                          bottom_right_chip_id, checkpoint);
-}
+// The chip-level synchronization mechanism (announce_chip_checkpoint,
+// wait_chip_checkpoint, wait_chips_checkpoint, chip_barrier) now lives in the
+// shared heterogeneous_runtime.h (included above) so both the host and the
+// device can use it.
 
 //===============================================================
 // ARA runtime
