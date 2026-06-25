@@ -133,18 +133,23 @@ __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_ara_convert_args {
 } __host_bingo_kernel_ara_convert_args_t;
 
 // Host scalar broadcast (__host_bingo_kernel_host_scalar_bcast): read `rows` per-row
-// fp16 scalars a device xDMA reduction left in cluster L1 (row r at fp16 index
-// r*32, one splatted 64-B beat apart), compute a per-row scalar on the CVA6, and
-// splat each fp16 result across a [rows, D] fp16 broadcast buffer that a downstream
-// device StreamElementwise multiplies/adds against x. op selects the math
-// (0=NEG -x, 1=RECIP 1/x, 2=RSQRT_MEAN 1/sqrt(x/N)); N = per-row reduction length.
+// scalars a device xDMA reduction left in cluster L1 (row r one splatted 64-B beat
+// apart), compute a per-row scalar on the CVA6, and splat each fp16 result across a
+// [rows, D] fp16 broadcast buffer that a downstream device StreamElementwise
+// multiplies/adds against x. op selects the math (0=NEG -x, 1=RECIP 1/x,
+// 2=RSQRT_MEAN 1/sqrt(x/N)); N = per-row reduction length. in_fp32 picks how the
+// reduce scalar is read: 0 = fp16 at lane 0 (stride 32 u16), 1 = the xDMA reduce
+// ran with REDUCE_OUT_FP32 so the scalar is fp32 at lane 0 (stride 16 f32). Use
+// in_fp32=1 whenever the reduction can exceed fp16 range (e.g. SUMSQ of unscaled
+// activations), since the fp16 narrow wraps to garbage (NOT inf) on overflow.
 __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_host_scalar_bcast_args {
-    uint64_t in_addr;          // L1 base addr of the fp16 per-row reduce scalars (read)
+    uint64_t in_addr;          // L1 base addr of the per-row reduce scalars (read)
     uint64_t out_addr;         // L1 base addr of the [rows, D] fp16 broadcast buffer (write)
     uint64_t op;               // 0=NEG, 1=RECIP, 2=RSQRT_MEAN
     uint64_t rows;             // number of per-row scalars
     uint64_t D;                // row width in fp16 elements (= beats*32)
     uint64_t N;                // per-row reduction length (only used by RSQRT_MEAN)
+    uint64_t in_fp32;          // 0=fp16 scalar (stride 32 u16), 1=fp32 scalar (stride 16 f32)
     uint64_t scratchpad_ptr;
 } __host_bingo_kernel_host_scalar_bcast_args_t;
 

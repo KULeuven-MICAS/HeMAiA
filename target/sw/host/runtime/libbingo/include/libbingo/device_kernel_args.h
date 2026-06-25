@@ -439,7 +439,9 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_stream_reduce_args {
   uint32_t dst_addr_hi;
   uint32_t dst_addr_lo;
   uint32_t beats;            // beats per row (D FP16 elems = beats*32)
-  uint32_t op;               // 0=MAX_FP16, 1=ADD_FP16, 2=SUMSQ_FP16
+  uint32_t op;               // 0=MAX 1=ADD 2=SUMSQ; |0x100=TAP; |0x200=OUT_FP32
+                             // (OUT_FP32: scalar emitted in FP32, no FP16 narrow ->
+                             //  host reads it as float at stride 16, not u16 at stride 32)
   uint32_t rows;             // independent per-row reductions (1 = single row)
   uint32_t csr_mode;         // 0=FULL, 1=STICKY
   uint32_t dst_bound0;       // writer beats (= rows)
