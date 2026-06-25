@@ -15,11 +15,11 @@
 
 // Define the base address of XDMA MMIO
 #define SNAX_XDMA_CFG_ADDR 960
-static inline uint32_t snax_read_xdma_cfg_reg(uint32_t addr) {
+__attribute__((always_inline)) static inline uint32_t snax_read_xdma_cfg_reg(uint32_t addr) {
     return csrr_ss(SNAX_XDMA_CFG_ADDR + addr);
 }
 
-static inline void snax_write_xdma_cfg_reg(uint32_t addr, uint32_t value) {
+__attribute__((always_inline)) static inline void snax_write_xdma_cfg_reg(uint32_t addr, uint32_t value) {
     csrw_ss(SNAX_XDMA_CFG_ADDR + addr, value);
 }
 
