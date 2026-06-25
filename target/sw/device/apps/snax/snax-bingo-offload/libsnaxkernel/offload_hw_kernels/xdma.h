@@ -462,6 +462,8 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_stream_map(void *arg)
         uint32_t dst_bound0    = a[10];
         uint32_t out_dtype     = a[11];
         uint32_t inv_scale     = a[12];
+        uint32_t a_addr_hi     = a[13];
+        uint32_t a_addr_lo     = a[14];
         bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_stream_map_args_t);
         BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 #if defined(READER_EXT_STREAMMAP) && defined(READER_EXT_FP16TOINT8)
@@ -469,6 +471,9 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_stream_map(void *arg)
         uint32_t flat = rows * beats;
         uint32_t src_str[2] = { XDMA_WIDTH, flat * XDMA_WIDTH };
         uint32_t src_bnd[2] = { flat, 1 };
+        // Optional runtime 'a': a nonzero a_addr means a kernel wrote the FP32 bits
+        // into that L1 word (the dequant qsc); read it instead of the baked immediate.
+        if (a_addr_lo || a_addr_hi) a_f32bits = *(volatile uint32_t *)a_addr_lo;
         uint32_t csr_map[3] = { a_f32bits, b_f32bits, func };
         xdma_enable_src_ext(READER_EXT_STREAMMAP, csr_map);
         if (out_dtype == 1u) {

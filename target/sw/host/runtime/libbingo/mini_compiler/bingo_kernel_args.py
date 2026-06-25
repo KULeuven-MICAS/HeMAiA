@@ -764,7 +764,8 @@ class SnaxBingoKernelXdmaStreamMapArgs(BingoKernelArgs):
     def __init__(self, src_addr: Union[BingoMemAlloc, int], dst_addr: Union[BingoMemAlloc, int],
                  beats: int, func: int, a_f32bits: int = 0x3F800000, b_f32bits: int = 0,
                  rows: int = 1, csr_mode: int = 0, dst_bound0: Optional[int] = None,
-                 out_dtype: int = 0, inv_scale_f32bits: int = 0):
+                 out_dtype: int = 0, inv_scale_f32bits: int = 0,
+                 a_addr: Union[BingoMemAlloc, int, None] = None):
         self.src_addr = src_addr
         self.dst_addr = dst_addr
         self.beats = beats
@@ -776,6 +777,8 @@ class SnaxBingoKernelXdmaStreamMapArgs(BingoKernelArgs):
         self.dst_bound0 = rows * beats if dst_bound0 is None else dst_bound0
         self.out_dtype = out_dtype
         self.inv_scale_f32bits = inv_scale_f32bits
+        # 0 = use a_f32bits; a handle = read the runtime 'a' (dequant qsc) from L1 at run time.
+        self.a_addr = 0 if a_addr is None else a_addr
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_xdma_stream_map_args_t"
@@ -793,6 +796,11 @@ class SnaxBingoKernelXdmaStreamMapArgs(BingoKernelArgs):
         a["dst_bound0"] = str(self.dst_bound0)
         a["out_dtype"] = str(self.out_dtype)
         a["inv_scale_f32bits"] = str(self.inv_scale_f32bits)
+        if isinstance(self.a_addr, int):
+            a["a_addr_lo"] = str(self.a_addr & 0xFFFFFFFF)
+            a["a_addr_hi"] = str((self.a_addr >> 32) & 0xFFFFFFFF)
+        else:
+            self._process_addr(self.a_addr, "a_addr", a, handle_name_map)
         return a
 
 
