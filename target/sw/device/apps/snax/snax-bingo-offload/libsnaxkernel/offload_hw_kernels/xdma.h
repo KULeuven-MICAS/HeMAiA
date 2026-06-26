@@ -173,15 +173,18 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_6d(void *arg)
 //   __snax_bingo_kernel_xdma_elementwise_add        : general N-operand form,
 //       caller supplies src_base, num_operands, operand_stride.
 //   __snax_bingo_kernel_xdma_elementwise_add_ab : convenience dst = a + b;
-//       derives operand_stride = src_b - src_a (so src_b must be the higher
-//       address — the reader can only stride forward, see below).
+//       derives the stride from src_a/src_b. The two buffers may be in EITHER order:
+//       the wrapper bases the reader at the LOWER address and strides up to the higher
+//       (valid because add is commutative), so the caller need not pre-order them.
 //
 // Constraints / fallback
 // ----------------------
 //   - num_int32_per_operand must be a multiple of 16 (one 512b bus word).
-//   - operands must be laid out at a constant FORWARD stride (ascending
-//     addresses); a wrapped "negative" stride makes the reader generate an
-//     out-of-range address and stall.
+//   - The reader AGU strides FORWARD only (an unsigned-wrapping "negative" stride
+//     reads out of range and stalls). The 2-operand convenience wrappers (add_ab,
+//     StreamElementwise w/ src_b_addr) hide this by swapping to the lower base for
+//     commutative ops; the GENERAL N-operand form (explicit operand_stride) still
+//     requires operands laid out at a constant ascending stride.
 //   - Falls back to a plain CPU int32 accumulate when the writer extension is
 //     not present in the generated HW (WRITER_EXT_ELEMENTWISEADDBIT32 undefined).
 // ==========================================================================
@@ -295,8 +298,10 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_elementwise_add_ab(void *arg)
     // with the stride derived from the two addresses instead of passed in:
     //   add_ab(a, b, dst, n)  ==  add(a, dst, n, 2, b - a).
     // Use this when you have two independent buffers and don't want to compute a
-    // stride. The two buffers can be anywhere, BUT src_b must be at a HIGHER
-    // address than src_a (the reader only strides forward; see below).
+    // stride. The two buffers may be in EITHER order: the reader AGU only strides
+    // FORWARD, so the body bases at the LOWER address and strides up to the higher
+    // (a swap; valid because add is commutative). See the StreamElementwise header
+    // for the full layout contract + the HW sign-extend TODO that would drop the swap.
     if (snrt_is_dm_core()) {
         BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
         uint32_t *a = (uint32_t *)arg;
@@ -306,11 +311,19 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_elementwise_add_ab(void *arg)
         uint32_t num_int32 = a[6];
         bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_elementwise_add_ab_args_t);
         BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
-        // The reader AGU strides FORWARD from src_a by (src_b - src_a) to reach
-        // operand b, so src_b must lie at a higher address than src_a (a wrapped
-        // "negative" stride would generate an out-of-range read and stall).
-        uint32_t operand_stride = (uint32_t)src_b - (uint32_t)src_a;
-        if (xdma_elementwise_add_run(src_a, dst_addr, num_int32, 2, operand_stride) != BINGO_RET_SUCC)
+        // The reader AGU strides FORWARD only, so the base must be the LOWER of the two
+        // operands. If src_b sits below src_a, swap (base = the lower, stride up to the
+        // higher); valid because add is commutative (a + b == b + a).
+        uint64_t lo_base;
+        uint32_t operand_stride;
+        if ((uint32_t)src_b >= (uint32_t)src_a) {
+            lo_base = src_a;
+            operand_stride = (uint32_t)src_b - (uint32_t)src_a;
+        } else {
+            lo_base = src_b;
+            operand_stride = (uint32_t)src_a - (uint32_t)src_b;
+        }
+        if (xdma_elementwise_add_run(lo_base, dst_addr, num_int32, 2, operand_stride) != BINGO_RET_SUCC)
             return BINGO_RET_FAIL;
         sp->return_value = (uint32_t)dst_addr;
         sp->num_return_values = 0;
@@ -504,6 +517,37 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_stream_map(void *arg)
 // interleaved streams spaced operand_stride bytes apart (the reader reads
 // {op0[beat], op1[beat], ...} as the inner AGU dim), across `rows*beats` flat
 // beats. Optional fused FP16->INT8.
+//
+// REQUIRED DATA LAYOUT (read this before laying out the operands)
+// ---------------------------------------------------------------
+// The reader AGU computes operand addresses as base + o*operand_stride and can only
+// stride FORWARD: operand_stride must be a small, ASCENDING byte offset. The 2-operand
+// mode passes the operands as two separate addresses (src_a = a[0:1], src_b = a[13:14])
+// and derives operand_stride = src_b - src_a at run time. So the two operand buffers:
+//   - must be the SAME size and identically laid out ([rows, beats], one 64-B beat per
+//     (row,beat)), so operand_0[beat] and operand_1[beat] are a constant stride apart, and
+//   - the stride must be small relative to the 48-bit AxiAddressWidth (a few KB, i.e. the
+//     two buffers near each other in L1) -- a wrapped "negative" stride reads out of range
+//     and the reader STALLS (the xdma never completes -> hang, no error).
+//
+// To tolerate EITHER operand order, this kernel SWAPS when src_b < src_a: it bases the
+// reader at the lower address and strides up to the higher. That is only valid because the
+// StreamElementwise ops in use (MUL=0, ADD=1) are COMMUTATIVE -- op(a,b)==op(b,a) per beat
+// and the output beat order is unchanged. Callers (e.g. bingo, whose allocator may place
+// the broadcast operand below the input) therefore need NOT pre-order the operands.
+//
+// TODO (Solution B -- make this fully op-agnostic, incl. NON-commutative ops):
+//   The swap only works for commutative ops. The clean order-preserving fix is a 1-line,
+//   backward-compatible HW change in the reader AGU: SIGN-EXTEND the 32-bit temporal-stride
+//   CSR word to the 48-bit stride instead of zero-extending it --
+//     snax_cluster .../readerWriter/AddressGenUnit.scala, connectWithList():
+//       temporalStrides(i) := remainingCSR.head
+//         ->  temporalStrides(i) := remainingCSR.head.asSInt.pad(param.addressWidth).asUInt
+//   Then a negative operand_stride (src_b below src_a) carries the right two's-complement
+//   bits and `ptr + o*stride` wraps (UInt add, already truncating) onto the lower operand
+//   WITHOUT reordering -- so any op and any layout work, at zero SW cost. A positive stride
+//   sign-extends to itself, so existing callers are unaffected. Once that lands, drop the
+//   swap below and just pass operand_stride = src_b - src_a unconditionally.
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_stream_elementwise(void *arg)
 {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_stream_elementwise_args_t);
@@ -528,9 +572,22 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_stream_elementwise(void *arg)
 #if defined(READER_EXT_STREAMELEMENTWISE) && defined(READER_EXT_FP16TOINT8)
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
         // If a 2nd operand address is given, derive the operand stride from the two
-        // separate buffers at run time (operand 1 must be the higher address).
-        if (src_b_addr_lo || src_b_addr_hi)
-            operand_stride = src_b_addr_lo - (uint32_t)src_addr;
+        // separate buffers at run time. The reader AGU can only stride FORWARD, so the
+        // base must be the LOWER of the two operands. If operand 1 (src_b) sits below
+        // operand 0 (src_a) -- e.g. the bingo allocator places the broadcast operand
+        // before the input -- swap them: read from the lower address and stride up to
+        // the higher. Safe because the StreamElementwise op is commutative (MUL/ADD):
+        // op(op0,op1) == op(op1,op0) per beat and the output beat order is unchanged.
+        // (A non-commutative op would need real per-operand AGU bases / signed strides.)
+        if (src_b_addr_lo || src_b_addr_hi) {
+            uint32_t a_lo = (uint32_t)src_addr;
+            if (src_b_addr_lo >= a_lo) {
+                operand_stride = src_b_addr_lo - a_lo;
+            } else {
+                src_addr = make_u64(src_b_addr_hi, src_b_addr_lo);  // base = the lower operand
+                operand_stride = a_lo - src_b_addr_lo;
+            }
+        }
         // Interleaved src: inner dim = operand index (stride operand_stride),
         // outer dim = rows*beats (stride one 64-byte beat).
         uint32_t src_str[2] = { operand_stride, XDMA_WIDTH };
