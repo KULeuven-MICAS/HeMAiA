@@ -625,16 +625,30 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_stream_elementwise(void *arg)
 
 // SW 2D transpose [M,N] -> [N,M] at element granularity. Correct for any
 // element width — used for widths the HW transposer has no native mode for
-// (int32) and when the Transposer extension is absent. src/dst must be local L1.
-static inline void xdma_cpu_transpose_2d(uint64_t src_addr, uint64_t dst_addr,
-                                         uint32_t M, uint32_t N, uint32_t elem_bytes)
+// (int32) and when the Transposer extension is absent. The DM-core CPU loop is
+// not coherent with L3, so non-local (L3) operands are staged through L1 (src
+// via xdma_layout_stage_in, dst via xdma_layout_stage_out + flush), matching the
+// HW path's L1-or-L3 contract. Returns BINGO_RET_SUCC, or BINGO_RET_FAIL on L1
+// staging-alloc failure.
+static inline uint32_t xdma_cpu_transpose_2d(uint64_t src_addr, uint64_t dst_addr,
+                                             uint32_t M, uint32_t N, uint32_t elem_bytes)
 {
-    volatile uint8_t *src = (volatile uint8_t *)(uint32_t)src_addr;
-    volatile uint8_t *dst = (volatile uint8_t *)(uint32_t)dst_addr;
+    uint32_t bytes = M * N * elem_bytes;
+    xdma_layout_stage_t si;
+    xdma_layout_stage_out_t so;
+    if (xdma_layout_stage_in(&si, src_addr, bytes) != 0 ||
+        xdma_layout_stage_out(&so, dst_addr, bytes) != 0) {
+        xdma_layout_stage_free(&si);   // frees src scratch if staged; no-op otherwise
+        return BINGO_RET_FAIL;
+    }
+    volatile uint8_t *src = (volatile uint8_t *)(uint32_t)si.xdma_src;
+    volatile uint8_t *dst = (volatile uint8_t *)so.l1;
     for (uint32_t r = 0; r < M; r++)
         for (uint32_t c = 0; c < N; c++)
             for (uint32_t b = 0; b < elem_bytes; b++)
                 dst[(c * M + r) * elem_bytes + b] = src[(r * N + c) * elem_bytes + b];
+    xdma_layout_stage_out_flush(&si, &so, dst_addr, bytes);   // transfer + flush + free both
+    return BINGO_RET_SUCC;
 }
 
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_transpose_2d(void *arg)
@@ -764,8 +778,13 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_transpose_2d(void *arg)
         // Correct for any element width; reached for 32-bit (no native HW
         // transposer mode) or when the Transposer extension is absent.
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
-        xdma_cpu_transpose_2d(src_addr, dst_addr, M, N, elem_bytes);
+        uint32_t sw_rc = xdma_cpu_transpose_2d(src_addr, dst_addr, M, N, elem_bytes);
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
+        if (sw_rc != BINGO_RET_SUCC) {
+            printf_safe("[Cluster %d Core %d]: transpose_2d CPU-fallback L1 alloc failed!\r\n",
+                        snrt_cluster_idx(), snrt_cluster_core_idx());
+            return BINGO_RET_FAIL;
+        }
         sp->return_value = (uint32_t)dst_addr;
         sp->num_return_values = 0;
         return BINGO_RET_SUCC;
@@ -1226,15 +1245,17 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_gather_2d(void *arg)
 // ─── Resulting coverage matrix (VersaCore array_shapes x kernel x elem_bytes) ───
 //   array_shape (mR,tS,mC) | A↔R INT8         | A↔R INT32        | D↔R         | B↔R
 //   ─────────────────────────────────────────────────────────────────────────────────
-//   0 (32,4,32)            | CPU¹             | HW (path 2)      | HW (path 2) | CPU²
+//   0 (32,2,32)            | CPU¹             | HW (path 2)      | HW (path 2) | CPU²
 //   1 (1,8,64)             | HW (p4 if K_T%8) | HW (p4 if K_T%8) | HW (path 3) | HW
 //   2 (4,8,64)             | HW (p4 if K_T%8) | HW (p4 if K_T%8) | HW (path 3) | HW
 //   3 (8,8,64)             | HW (path 1)      | HW (path 1)      | HW (path 1) | HW
 //   4 (8,32,8)             | HW (path 1)      | HW (path 1)      | HW (path 1) | HW
 //
-//   ¹ A-tile inner row = tileSize·elem_bytes = 4 < 8 bytes; can't form an 8-byte
-//     beat that's contiguous in both row-major src and packed A dst. CPU.
-//   ² Same root cause: tileSize=4 prevents 8x8-byte sub-blocking of B-tile.
+//   ¹ A-tile inner row = tileSize·elem_bytes = 2 < 8 bytes (INT8); can't form an
+//     8-byte beat contiguous in both row-major src and packed A dst. CPU.
+//   ² Same root cause: tileSize=2 prevents 8x8-byte sub-blocking of B-tile.
+//   CPU paths run on the DM core, which is not coherent with L3, so they stage
+//   non-local (L3) operands through L1 via xdma_cpu_stage_* (snax_xdma_lib.h).
 // ==========================================================================
 
 // Dispatch helper for the layout-convert HW paths: configures an AGU-only
@@ -1380,10 +1401,20 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_d_to_row_major(void *arg)
     }
 
     if (!hw_done) {
-        // CPU fallback (no HW path matched the shape).
+        // CPU fallback (no HW path matched the shape). Stage non-local (L3)
+        // operands through L1: the DM core is not coherent with L3.
         uint32_t N_cols = N_T * meshCol;
-        volatile uint8_t *src = (volatile uint8_t *)(uint32_t)src_addr;
-        volatile uint8_t *dst = (volatile uint8_t *)(uint32_t)dst_addr;
+        xdma_layout_stage_t si;
+        xdma_layout_stage_out_t so;
+        if (xdma_layout_stage_in(&si, src_addr, bytes) != 0 ||
+            xdma_layout_stage_out(&so, dst_addr, bytes) != 0) {
+            xdma_layout_stage_free(&si);   // frees src scratch if staged; no-op otherwise
+            printf_safe("[Cluster %d Core %d]: d_to_row_major CPU-fallback L1 alloc failed!\r\n",
+                        snrt_cluster_idx(), snrt_cluster_core_idx());
+            return BINGO_RET_FAIL;
+        }
+        volatile uint8_t *src = (volatile uint8_t *)(uint32_t)si.xdma_src;
+        volatile uint8_t *dst = (volatile uint8_t *)so.l1;
         for (uint32_t m = 0; m < M_T; m++)
         for (uint32_t n = 0; n < N_T; n++)
         for (uint32_t r = 0; r < meshRow; r++)
@@ -1392,6 +1423,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_d_to_row_major(void *arg)
             uint32_t dst_off = ((m * meshRow + r) * N_cols + n * meshCol + c) * elem_bytes;
             for (uint32_t b = 0; b < elem_bytes; b++) dst[dst_off + b] = src[src_off + b];
         }
+        xdma_layout_stage_out_flush(&si, &so, dst_addr, bytes);   // transfer + flush + free both
     }
     sp->return_value = (uint32_t)dst_addr;
     sp->num_return_values = 0;
@@ -1399,7 +1431,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_d_to_row_major(void *arg)
 }
 
 // row-major → A-layout. See section banner for the path table.
-//   Coverage: paths 1–5; array_shape 0 INT8 (tileSize·elem_bytes=4) lacks any
+//   Coverage: paths 1–5; array_shape 0 INT8 (tileSize·elem_bytes=2) lacks any
 //   8-byte beat that's contiguous in both src (row-major rows) and dst
 //   (packed A) → CPU. Other shapes hit a HW path.
 //   Arg layout: src_hi/lo, dst_hi/lo, M_T, K_T, meshRow, tileSize, elem_bytes.
@@ -1496,8 +1528,18 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_row_major_to_a(void *arg)
 
     if (!hw_done) {
         uint32_t K_cols = K_T * tileSize;
-        volatile uint8_t *src = (volatile uint8_t *)(uint32_t)src_addr;
-        volatile uint8_t *dst = (volatile uint8_t *)(uint32_t)dst_addr;
+        // CPU fallback: stage non-local (L3) operands through L1.
+        xdma_layout_stage_t si;
+        xdma_layout_stage_out_t so;
+        if (xdma_layout_stage_in(&si, src_addr, bytes) != 0 ||
+            xdma_layout_stage_out(&so, dst_addr, bytes) != 0) {
+            xdma_layout_stage_free(&si);   // frees src scratch if staged; no-op otherwise
+            printf_safe("[Cluster %d Core %d]: row_major_to_a CPU-fallback L1 alloc failed!\r\n",
+                        snrt_cluster_idx(), snrt_cluster_core_idx());
+            return BINGO_RET_FAIL;
+        }
+        volatile uint8_t *src = (volatile uint8_t *)(uint32_t)si.xdma_src;
+        volatile uint8_t *dst = (volatile uint8_t *)so.l1;
         for (uint32_t m = 0; m < M_T; m++)
         for (uint32_t k = 0; k < K_T; k++)
         for (uint32_t r = 0; r < meshRow; r++)
@@ -1506,6 +1548,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_row_major_to_a(void *arg)
             uint32_t dst_off = (((m * K_T + k) * meshRow + r) * tileSize + s) * elem_bytes;
             for (uint32_t b = 0; b < elem_bytes; b++) dst[dst_off + b] = src[src_off + b];
         }
+        xdma_layout_stage_out_flush(&si, &so, dst_addr, bytes);   // transfer + flush + free both
     }
     sp->return_value = (uint32_t)dst_addr;
     sp->num_return_values = 0;
@@ -1518,7 +1561,8 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_row_major_to_a(void *arg)
 // decomposed into (meshCol/8) c-sub x (tileSize/8) s-sub element sub-blocks
 // and the AGU iterates them in addition to (n, k).
 //   Coverage: HW path when defined(WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16) && tileSize%8==0 && meshCol%8==0
-//             (all VersaCore array_shapes 1..4); CPU when tileSize=4 (shape 0).
+//             (all VersaCore array_shapes 1..4); CPU when tileSize=2 (shape 0).
+//   The CPU path stages non-local (L3) operands through L1 (xdma_cpu_stage_*).
 //   Arg layout: src_hi/lo, dst_hi/lo, K_T, N_T, tileSize, meshCol, elem_bytes.
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_row_major_to_b(void *arg)
 {
@@ -1597,8 +1641,19 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_row_major_to_b(void *arg)
 
     if (!hw_done) {
         uint32_t N_cols = N_T * meshCol;
-        volatile uint8_t *src = (volatile uint8_t *)(uint32_t)src_addr;
-        volatile uint8_t *dst = (volatile uint8_t *)(uint32_t)dst_addr;
+        // CPU fallback: stage non-local (L3) operands through L1 — the DM core
+        // is not coherent with L3, so a direct CPU deref there returns garbage.
+        xdma_layout_stage_t si;
+        xdma_layout_stage_out_t so;
+        if (xdma_layout_stage_in(&si, src_addr, bytes) != 0 ||
+            xdma_layout_stage_out(&so, dst_addr, bytes) != 0) {
+            xdma_layout_stage_free(&si);   // frees src scratch if staged; no-op otherwise
+            printf_safe("[Cluster %d Core %d]: row_major_to_b CPU-fallback L1 alloc failed!\r\n",
+                        snrt_cluster_idx(), snrt_cluster_core_idx());
+            return BINGO_RET_FAIL;
+        }
+        volatile uint8_t *src = (volatile uint8_t *)(uint32_t)si.xdma_src;
+        volatile uint8_t *dst = (volatile uint8_t *)so.l1;
         for (uint32_t n = 0; n < N_T; n++)
         for (uint32_t k = 0; k < K_T; k++)
         for (uint32_t c = 0; c < meshCol; c++)
@@ -1607,6 +1662,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_row_major_to_b(void *arg)
             uint32_t dst_off = (((n * K_T + k) * meshCol + c) * tileSize + s) * elem_bytes;
             for (uint32_t b = 0; b < elem_bytes; b++) dst[dst_off + b] = src[src_off + b];
         }
+        xdma_layout_stage_out_flush(&si, &so, dst_addr, bytes);   // transfer + flush + free both
     }
     sp->return_value = (uint32_t)dst_addr;
     sp->num_return_values = 0;
@@ -1707,8 +1763,18 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_a_to_row_major(void *arg)
 
     if (!hw_done) {
         uint32_t K_cols = K_T * tileSize;
-        volatile uint8_t *src = (volatile uint8_t *)(uint32_t)src_addr;
-        volatile uint8_t *dst = (volatile uint8_t *)(uint32_t)dst_addr;
+        // CPU fallback: stage non-local (L3) operands through L1.
+        xdma_layout_stage_t si;
+        xdma_layout_stage_out_t so;
+        if (xdma_layout_stage_in(&si, src_addr, bytes) != 0 ||
+            xdma_layout_stage_out(&so, dst_addr, bytes) != 0) {
+            xdma_layout_stage_free(&si);   // frees src scratch if staged; no-op otherwise
+            printf_safe("[Cluster %d Core %d]: a_to_row_major CPU-fallback L1 alloc failed!\r\n",
+                        snrt_cluster_idx(), snrt_cluster_core_idx());
+            return BINGO_RET_FAIL;
+        }
+        volatile uint8_t *src = (volatile uint8_t *)(uint32_t)si.xdma_src;
+        volatile uint8_t *dst = (volatile uint8_t *)so.l1;
         for (uint32_t m = 0; m < M_T; m++)
         for (uint32_t k = 0; k < K_T; k++)
         for (uint32_t r = 0; r < meshRow; r++)
@@ -1717,6 +1783,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_a_to_row_major(void *arg)
             uint32_t dst_off = ((m * meshRow + r) * K_cols + k * tileSize + s) * elem_bytes;
             for (uint32_t b = 0; b < elem_bytes; b++) dst[dst_off + b] = src[src_off + b];
         }
+        xdma_layout_stage_out_flush(&si, &so, dst_addr, bytes);   // transfer + flush + free both
     }
     sp->return_value = (uint32_t)dst_addr;
     sp->num_return_values = 0;
@@ -1806,8 +1873,18 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_b_to_row_major(void *arg)
 
     if (!hw_done) {
         uint32_t N_cols = N_T * meshCol;
-        volatile uint8_t *src = (volatile uint8_t *)(uint32_t)src_addr;
-        volatile uint8_t *dst = (volatile uint8_t *)(uint32_t)dst_addr;
+        // CPU fallback: stage non-local (L3) operands through L1.
+        xdma_layout_stage_t si;
+        xdma_layout_stage_out_t so;
+        if (xdma_layout_stage_in(&si, src_addr, bytes) != 0 ||
+            xdma_layout_stage_out(&so, dst_addr, bytes) != 0) {
+            xdma_layout_stage_free(&si);   // frees src scratch if staged; no-op otherwise
+            printf_safe("[Cluster %d Core %d]: b_to_row_major CPU-fallback L1 alloc failed!\r\n",
+                        snrt_cluster_idx(), snrt_cluster_core_idx());
+            return BINGO_RET_FAIL;
+        }
+        volatile uint8_t *src = (volatile uint8_t *)(uint32_t)si.xdma_src;
+        volatile uint8_t *dst = (volatile uint8_t *)so.l1;
         for (uint32_t n = 0; n < N_T; n++)
         for (uint32_t k = 0; k < K_T; k++)
         for (uint32_t c = 0; c < meshCol; c++)
@@ -1816,6 +1893,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_b_to_row_major(void *arg)
             uint32_t dst_off = ((k * tileSize + s) * N_cols + n * meshCol + c) * elem_bytes;
             for (uint32_t b = 0; b < elem_bytes; b++) dst[dst_off + b] = src[src_off + b];
         }
+        xdma_layout_stage_out_flush(&si, &so, dst_addr, bytes);   // transfer + flush + free both
     }
     sp->return_value = (uint32_t)dst_addr;
     sp->num_return_values = 0;
@@ -1919,8 +1997,18 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_row_major_to_d(void *arg)
 
     if (!hw_done) {
         uint32_t N_cols = N_T * meshCol;
-        volatile uint8_t *src = (volatile uint8_t *)(uint32_t)src_addr;
-        volatile uint8_t *dst = (volatile uint8_t *)(uint32_t)dst_addr;
+        // CPU fallback: stage non-local (L3) operands through L1.
+        xdma_layout_stage_t si;
+        xdma_layout_stage_out_t so;
+        if (xdma_layout_stage_in(&si, src_addr, bytes) != 0 ||
+            xdma_layout_stage_out(&so, dst_addr, bytes) != 0) {
+            xdma_layout_stage_free(&si);   // frees src scratch if staged; no-op otherwise
+            printf_safe("[Cluster %d Core %d]: row_major_to_d CPU-fallback L1 alloc failed!\r\n",
+                        snrt_cluster_idx(), snrt_cluster_core_idx());
+            return BINGO_RET_FAIL;
+        }
+        volatile uint8_t *src = (volatile uint8_t *)(uint32_t)si.xdma_src;
+        volatile uint8_t *dst = (volatile uint8_t *)so.l1;
         for (uint32_t m = 0; m < M_T; m++)
         for (uint32_t n = 0; n < N_T; n++)
         for (uint32_t r = 0; r < meshRow; r++)
@@ -1929,6 +2017,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_row_major_to_d(void *arg)
             uint32_t dst_off = (((m * N_T + n) * meshRow + r) * meshCol + c) * elem_bytes;
             for (uint32_t b = 0; b < elem_bytes; b++) dst[dst_off + b] = src[src_off + b];
         }
+        xdma_layout_stage_out_flush(&si, &so, dst_addr, bytes);   // transfer + flush + free both
     }
     sp->return_value = (uint32_t)dst_addr;
     sp->num_return_values = 0;

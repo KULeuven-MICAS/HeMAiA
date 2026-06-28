@@ -525,3 +525,47 @@ static inline void xdma_layout_stage_free(xdma_layout_stage_t *s) {
         s->stage_in_lo = 0;
     }
 }
+
+// ── Out-side staging for CPU-loop layout converts ─────────────────────────
+typedef struct {
+    uint32_t l1;          // L1 address the CPU loop writes (dst itself, or scratch)
+    uint32_t scratch_lo;  // L1 scratch to DMA out + free in _flush, or 0 if zero-copy
+} xdma_layout_stage_out_t;
+
+// Returns 0 with s->l1 set to a CPU-writable local-L1 address, or -1 on L1 alloc
+// failure (nothing to free in that case). Pair a successful call with
+// xdma_layout_stage_out_flush.
+static inline int xdma_layout_stage_out(
+    xdma_layout_stage_out_t *s, uint64_t dst, uint32_t bytes)
+{
+    if (xdma_addr_in_local_l1(dst)) {        // zero-copy: write straight to dst
+        s->scratch_lo = 0;
+        s->l1 = (uint32_t)dst;
+        return 0;
+    }
+    s->scratch_lo = snrt_l1_malloc(bytes);   // non-local: write a scratch, flush later
+    if (!s->scratch_lo) return -1;
+    s->l1 = s->scratch_lo;
+    return 0;
+}
+
+// Single teardown for a CPU-loop layout convert: DMA the staged dst scratch out
+// to its real dst (no-op when zero-copy), wait for completion, then free BOTH
+// the dst scratch and the src staging buffer. One call after the loop — does the
+// transfer, the flush, and the free together. Pass the same dst/bytes given to
+// xdma_layout_stage_out. (The dst L1 buffer must be allocated by
+// xdma_layout_stage_out *before* the loop, since the loop writes it, so the
+// alloc stays separate; only the teardown is combined here.)
+static inline void xdma_layout_stage_out_flush(
+    xdma_layout_stage_t *si, xdma_layout_stage_out_t *so,
+    uint64_t dst, uint32_t bytes)
+{
+    if (so->scratch_lo) {
+        snrt_dma_start_1d_wideptr(
+            dst, chiplet_addr_transform((uint64_t)so->scratch_lo), bytes);
+        snrt_dma_wait_all();
+        snrt_l1_free(so->scratch_lo);
+        so->scratch_lo = 0;
+    }
+    xdma_layout_stage_free(si);   // release the src staging buffer too
+}
