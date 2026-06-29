@@ -417,6 +417,97 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                     dummy_check_node.remote_dep_set_all = False
                     self.bingo_insert_node_between(pred, cur_node, dummy_check_node)
 
+    def bingo_transform_dfg_serialize_shared_counter_consumers(self) -> None:
+        """Serialize producers that feed a SHARED dependency-matrix counter cell.
+
+        Corner case
+        -----------
+        The dependency matrix holds one 8-bit *counter* per
+        ``(consumer_core, producer_core)`` pair, and a ``dep_check`` passes as
+        soon as ``counter[R][C] >= 1`` -- it knows the COUNT of pending signals
+        from core ``C``, not WHICH producer raised them. When two or more normal
+        consumers sit on the SAME core ``R`` and each waits (cross-core) on the
+        SAME producer core ``C``, they all check the SAME cell ``counter[R][C]``,
+        and every producer feeding any of them increments that one cell. A
+        consumer can then drain a *different* consumer's producer increment and
+        dispatch before its own input is actually ready.
+
+        Example: consumer A needs producers {a1 (early), a2 (late)} and consumer
+        B needs {b1 (early)}. All three increment ``counter[R][C]``; A's two
+        checks pass on the two EARLY increments (a1, b1) instead of (a1, a2), so
+        A dispatches before a2 has completed and reads stale data.
+
+        Fix
+        ---
+        Order the producers so each consumer's producers complete before the
+        next consumer's, matching the consumers' queue (topological) order.
+        Because the producers all live on the same core ``C``, this is a pure
+        queue-order / head-of-line serialization (same-core edges, no extra
+        cross-core counter traffic): add an edge from every earlier-consumer
+        producer to every later-consumer producer (skipping shared producers and
+        any edge that would create a cycle). The shared counter then accumulates
+        each consumer's increments contiguously and in order, so every consumer
+        drains exactly its own producers' signals.
+
+        MUST run BEFORE ``bingo_transform_add_core_sequencing_edges`` (and the
+        dummy_set / dummy_check passes): the per-core sequencing chains same-core
+        nodes in topological order, so the producer ordering added here is then
+        honored by the sequencing instead of conflicting with it.
+        """
+        topo = list(nx.topological_sort(self))
+        pos = {n: i for i, n in enumerate(topo)}
+        # (consumer_core R, producer_core C) -> [(consumer, [its producers on core C]), ...]
+        cells: dict = {}
+        for con in self.node_list:
+            if con.node_type != "normal":
+                continue
+            R = con.assigned_core_id
+            prods_by_core: dict = {}
+            for pred in self.predecessors(con):
+                if pred.assigned_core_id != R:                 # cross-core producer
+                    prods_by_core.setdefault(pred.assigned_core_id, []).append(pred)
+            for C, prods in prods_by_core.items():
+                # The dependency matrix is PER (chiplet, cluster): a consumer on
+                # cluster K checks that cluster's own counter[R][C], so only
+                # consumers on the SAME (chiplet, cluster) actually share a cell.
+                cells.setdefault((con.assigned_chiplet_id, con.assigned_cluster_id, R, C),
+                                 []).append((con, prods))
+
+        for (chip, cl, R, C), entries in cells.items():
+            if len(entries) < 2:                               # cell not shared -> nothing to do
+                continue
+            entries.sort(key=lambda e: pos[e[0]])              # consumers in queue (topo) order
+            for i in range(1, len(entries)):
+                prev_prods, cur_prods = entries[i - 1][1], entries[i][1]
+                for cp in cur_prods:
+                    for pp in prev_prods:
+                        if pp is cp or self.has_edge(pp, cp):
+                            continue
+                        if nx.has_path(self, cp, pp):
+                            # cp is already sequenced BEFORE pp on its core (a
+                            # pre-existing same-core chain orders cp ... pp). Adding
+                            # pp -> cp would cycle, so re-splice: cut cp's same-core
+                            # successor edge that leads to pp (pure sequencing -- cp's
+                            # data goes cross-core to its consumer), freeing cp; the
+                            # freed successor is re-sequenced by the later core
+                            # sequencing pass. Then order cp after pp below.
+                            succ = next((s for s in self.successors(cp)
+                                         if s.assigned_core_id == cp.assigned_core_id
+                                         and (s is pp or nx.has_path(self, s, pp))), None)
+                            if succ is None:
+                                continue                       # cannot safely reorder
+                            self.remove_edge(cp, succ)
+                            if nx.has_path(self, cp, pp):
+                                # another path still orders cp before pp: reordering
+                                # would cycle. Restore and leave this pair as-is.
+                                self.add_edge(cp, succ)
+                                continue
+                        self.add_edge(pp, cp)
+                        print(f"Serializing shared counter[c{chip}.{cl}][{R}][{C}]: "
+                              f"{pp.node_name} -> {cp.node_name} (producer of "
+                              f"'{entries[i-1][0].node_name}' before producer of "
+                              f"'{entries[i][0].node_name}')")
+
     def bingo_transform_add_core_sequencing_edges(self) -> int:
         """Add edges between consecutive tasks on the same core.
 
@@ -2062,12 +2153,10 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         # No-op for non-conditional DFGs (returns empty dict).
         self.bingo_compile_conditional_regions()
         self._validate_cerf_cross_group_edges()
-        # Identity-aware deps: per-edge tags are allocated LAST (after dep-info
-        # assignment). The allocator's min-chain-cover reuses a tag across edges
-        # that can never be live together (happens-before / same-core order), so
-        # no separate concurrency-bounding pass is needed. The legacy
-        # serialize_shared_counter_consumers mitigation was removed -- per-edge
-        # tags supersede it. (Untagged mode has no counter-sharing mitigation.)
+        # Serialize producers that share a (consumer_core, producer_core) counter cell
+        # across multiple consumers. MUST run before core sequencing so the producer
+        # ordering it adds is reflected in the topological sort used for sequencing.
+        self.bingo_transform_dfg_serialize_shared_counter_consumers()
         # Add Dummy Set/Check Nodes
         self.bingo_transform_add_core_sequencing_edges()
         self.bingo_transform_dfg_add_dummy_set_nodes()
