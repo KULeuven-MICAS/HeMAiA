@@ -699,20 +699,89 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_transpose_2d(void *arg)
         //   spatial_stride_src = N*elem_bytes; spatial_stride_dst = M*elem_bytes
         //   src strides: [8, tile_w*elem_bytes, N*tile_w*elem_bytes]
         //   dst strides: [8, M*tile_w*elem_bytes, tile_w*elem_bytes]
+        //
+        // ── Working principle: the Transposer writes into the writer's LOCAL
+        //    memory, so a fused transpose+transfer is a READ-from-another-memory,
+        //    never a write-into-another-memory ─────────────────────────────────
+        // The writer emits its 8 spatial channels at spatial_stride_dst
+        // (= M*elem_bytes) — one transposed row-slice per channel — while the
+        // Transposer reorders the bytes WITHIN each 8x8 tile. That per-channel
+        // scatter is realized as 8 independently-addressed requests ONLY when the
+        // writer targets its OWN LOCAL TCDM ("only local write", XDMACtrl). So the
+        // transpose is fused correctly into the data move exactly when the move
+        // READS from another memory (a remote cluster's TCDM, or L3) and WRITES
+        // the transposed result into LOCAL TCDM. See the worked example
+        //   target/sw/device/apps/snax/snax-xdma-transpose
+        // — its experiment group sets src = a *remote* cluster's TCDM
+        // (tcdm_baseaddress + cluster_offset) and dst = its *local* TCDM, enables
+        // this writer Transposer, and the host check is byte-exact.
+        //
+        // The mirror image — transposing straight INTO another memory (writing the
+        // transpose out to L3 / off-cluster) — is not a fused operation the cluster
+        // xDMA can express: there is no local writer at that destination, so the
+        // writer's per-channel scatter cannot be placed there and the global write
+        // is drained as one CONTIGUOUS AXI burst
+        // (xdma_axi_adapter/xdma_burst_reshaper). The byte transpose then degrades
+        // to 8-byte-word granularity (only the 8-byte-aligned columns, c%8==0, come
+        // out transposed). Therefore "transpose then move OUT to L3" must be split
+        // into two steps: transpose into LOCAL memory, then a plain move out.
+        //
+        // SW BYPASS (implemented below): when dst is non-local, transpose into a
+        // LOCAL L1 scratch (scatter into local TCDM = correct), then a plain
+        // CONTIGUOUS copy L1->dst (xdma_layout_stage_out + _flush). A contiguous
+        // move carries no per-channel scatter, so it is exact to any memory. For a
+        // local dst this is a zero-copy passthrough (the fused path above,
+        // unchanged). Cost: one L1 scratch (M*N*elem_bytes) + an L1->dst 1D DMA.
+        //
+        // To instead fuse transpose+write-to-L3 in a single op (NOT done here;
+        // needs RTL/gen changes) one of:
+        //  (1) Give the mem-system xDMA a Transposer. hemaia_mem_system.sv's
+        //      hemaia_xdma writes L3 through its OWN local tcdm_req_o, so ITS
+        //      writes are local/scatter-capable. It has no Transposer today
+        //      (hemaia_xdma_cfg.writer_extensions is empty) but is built by the
+        //      SAME snax.xdma.xdmaTop.XDMATopGen as this cluster xDMA, so adding
+        //      `HasTransposer:{row:[8,8],col:[8,8],elementWidth:[8,16]}` to
+        //      hemaia_xdma_cfg.writer_extensions + regen lets the HOST
+        //      (hemaia-xdma-lib.h) drive the L3-side engine to READ L1 + transpose
+        //      + write L3 locally — i.e. L3 reading L1 and transposing into itself.
+        //  (2) Carry spatial_stride_dst (+ per-channel strobes) on the xDMA
+        //      toRemote descriptor and have xdma_axi_adapter emit scattered AW +
+        //      real w_strb instead of a contiguous burst (changes the
+        //      cross-cluster write protocol).
         if (elem_bytes == 1 || elem_bytes == 2) {
             uint32_t tile_w = 8;
             uint32_t tpt = (tile_w * tile_w * (elem_bytes * 8) + 511) / 512; // transfers per transpose (8x8 tile of elem_bytes*8-bit elems / 512b bus)
 
             // The xDMA reader is tied to local L1, so stage src into local L1 if
             // it isn't already there (zero-copy fast path when src is already
-            // local). dst is written by the global-addressing writer, so it
-            // needs no staging.
+            // local).
             uint32_t bytes = M * N * elem_bytes;
             xdma_layout_stage_t st;
             if (xdma_layout_stage_in(&st, src_addr, bytes) != 0) {
                 printf_safe("[Cluster %d Core %d]: transpose_2d L1 alloc failed!\r\n",
                             snrt_cluster_idx(), snrt_cluster_core_idx());
                 return BINGO_RET_FAIL;
+            }
+
+            // SW BYPASS: the writer must scatter into LOCAL memory for a correct
+            // byte transpose. If dst is non-local, transpose into a local L1
+            // scratch and flush it contiguously to dst afterwards; if dst is
+            // local, write straight through (so = zero-copy passthrough).
+            bool dst_local = xdma_addr_in_local_l1(dst_addr);
+            xdma_layout_stage_out_t so;
+            uint64_t xpose_dst = dst_addr;
+            if (!dst_local) {
+                if (xdma_layout_stage_out(&so, dst_addr, bytes) != 0) {
+                    xdma_layout_stage_free(&st);
+                    printf_safe("[Cluster %d Core %d]: transpose_2d bypass L1 alloc failed!\r\n",
+                                snrt_cluster_idx(), snrt_cluster_core_idx());
+                    return BINGO_RET_FAIL;
+                }
+                // Writer target = the local scratch (chiplet-transformed like the
+                // staged reader src), so the write scatters into local L1.
+                xpose_dst = chiplet_addr_transform((uint64_t)so.l1);
+                XDMA_DEBUG_PRINT("[transpose_2d] non-local dst 0x%llx -> local-scratch bypass\r\n",
+                                 (unsigned long long)dst_addr);
             }
 
             // Disable all, then enable the transposer on the writer side.
@@ -752,8 +821,9 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_transpose_2d(void *arg)
                 M / tile_w
             };
 
+            // Transpose into xpose_dst (the local scratch when bypassing, else dst).
             xdma_memcpy_nd_full_addr(
-                st.xdma_src, dst_addr,
+                st.xdma_src, xpose_dst,
                 spatial_stride_src, spatial_stride_dst,
                 3, t_strides_src, t_bounds_src,
                 3, t_strides_dst, t_bounds_dst,
@@ -763,12 +833,18 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_transpose_2d(void *arg)
 
             BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
             int task_id = xdma_start();
-            xdma_wait_task(st.xdma_src, dst_addr, task_id);
+            xdma_wait_task(st.xdma_src, xpose_dst, task_id);
             BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
 
             // Disable transposer after use
             xdma_disable_dst_ext(WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16);
-            xdma_layout_stage_free(&st);
+            if (dst_local) {
+                xdma_layout_stage_free(&st);              // src staging only
+            } else {
+                // Contiguous copy local scratch -> real (non-local) dst, then free
+                // both the dst scratch and the src staging buffer.
+                xdma_layout_stage_out_flush(&st, &so, dst_addr, bytes);
+            }
             sp->return_value = (uint32_t)dst_addr;
             sp->num_return_values = 0;
             return BINGO_RET_SUCC;
