@@ -38,6 +38,10 @@ class BingoNode(metaclass=ABCMeta):
         self._dep_set_list: list[int] = []
         self._dep_set_chiplet_id: int = 0
         self._dep_set_cluster_id: int = 0
+        # Per-edge identity tags (EnableTaggedDeps). None until the tag-allocator
+        # pass runs; packed as 0 otherwise so untagged descriptors are unchanged.
+        self._dep_check_tag: int | None = None
+        self._dep_set_tag: int | None = None
         # DARTS Tier 1: Conditional Execution
         self._cond_exec_en: bool = False
         self._cond_exec_group_id: int = 0
@@ -179,6 +183,22 @@ class BingoNode(metaclass=ABCMeta):
     @dep_set_cluster_id.setter
     def dep_set_cluster_id(self, value: int) -> None:
         self._dep_set_cluster_id = value
+
+    @property
+    def dep_check_tag(self) -> int | None:
+        return self._dep_check_tag
+
+    @dep_check_tag.setter
+    def dep_check_tag(self, value: int | None) -> None:
+        self._dep_check_tag = value
+
+    @property
+    def dep_set_tag(self) -> int | None:
+        return self._dep_set_tag
+
+    @dep_set_tag.setter
+    def dep_set_tag(self, value: int | None) -> None:
+        self._dep_set_tag = value
 
     @property
     def cond_exec_en(self) -> bool:
