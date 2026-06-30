@@ -54,6 +54,12 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         self.is_host_as_acc = is_host_as_acc
         assert num_chiplets == len(chiplet_ids) or chiplet_ids is None, "Length of chiplet_ids must match num_chiplets"
         self.chiplet_ids = chiplet_ids if chiplet_ids else list(range(num_chiplets))
+        # Identity-aware dependencies. Must match the hw_manager's EnableTaggedDeps
+        # / DepTagWidth parameters. When enabled, bingo_compile_dfg runs the spill +
+        # per-edge tag-allocation passes; the tag bits are always present in the
+        # packed descriptor (= 0 when disabled), matching the RTL struct layout.
+        self.enable_tagged_deps = True
+        self.dep_tag_width = 4
         # Node ID counter
         # Make sure the node id is starts from 0
         self.id = -1
@@ -403,97 +409,6 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                     dummy_check_node.remote_dep_set_all = False
                     self.bingo_insert_node_between(pred, cur_node, dummy_check_node)
 
-    def bingo_transform_dfg_serialize_shared_counter_consumers(self) -> None:
-        """Serialize producers that feed a SHARED dependency-matrix counter cell.
-
-        Corner case
-        -----------
-        The dependency matrix holds one 8-bit *counter* per
-        ``(consumer_core, producer_core)`` pair, and a ``dep_check`` passes as
-        soon as ``counter[R][C] >= 1`` -- it knows the COUNT of pending signals
-        from core ``C``, not WHICH producer raised them. When two or more normal
-        consumers sit on the SAME core ``R`` and each waits (cross-core) on the
-        SAME producer core ``C``, they all check the SAME cell ``counter[R][C]``,
-        and every producer feeding any of them increments that one cell. A
-        consumer can then drain a *different* consumer's producer increment and
-        dispatch before its own input is actually ready.
-
-        Example: consumer A needs producers {a1 (early), a2 (late)} and consumer
-        B needs {b1 (early)}. All three increment ``counter[R][C]``; A's two
-        checks pass on the two EARLY increments (a1, b1) instead of (a1, a2), so
-        A dispatches before a2 has completed and reads stale data.
-
-        Fix
-        ---
-        Order the producers so each consumer's producers complete before the
-        next consumer's, matching the consumers' queue (topological) order.
-        Because the producers all live on the same core ``C``, this is a pure
-        queue-order / head-of-line serialization (same-core edges, no extra
-        cross-core counter traffic): add an edge from every earlier-consumer
-        producer to every later-consumer producer (skipping shared producers and
-        any edge that would create a cycle). The shared counter then accumulates
-        each consumer's increments contiguously and in order, so every consumer
-        drains exactly its own producers' signals.
-
-        MUST run BEFORE ``bingo_transform_add_core_sequencing_edges`` (and the
-        dummy_set / dummy_check passes): the per-core sequencing chains same-core
-        nodes in topological order, so the producer ordering added here is then
-        honored by the sequencing instead of conflicting with it.
-        """
-        topo = list(nx.topological_sort(self))
-        pos = {n: i for i, n in enumerate(topo)}
-        # (consumer_core R, producer_core C) -> [(consumer, [its producers on core C]), ...]
-        cells: dict = {}
-        for con in self.node_list:
-            if con.node_type != "normal":
-                continue
-            R = con.assigned_core_id
-            prods_by_core: dict = {}
-            for pred in self.predecessors(con):
-                if pred.assigned_core_id != R:                 # cross-core producer
-                    prods_by_core.setdefault(pred.assigned_core_id, []).append(pred)
-            for C, prods in prods_by_core.items():
-                # The dependency matrix is PER (chiplet, cluster): a consumer on
-                # cluster K checks that cluster's own counter[R][C], so only
-                # consumers on the SAME (chiplet, cluster) actually share a cell.
-                cells.setdefault((con.assigned_chiplet_id, con.assigned_cluster_id, R, C),
-                                 []).append((con, prods))
-
-        for (chip, cl, R, C), entries in cells.items():
-            if len(entries) < 2:                               # cell not shared -> nothing to do
-                continue
-            entries.sort(key=lambda e: pos[e[0]])              # consumers in queue (topo) order
-            for i in range(1, len(entries)):
-                prev_prods, cur_prods = entries[i - 1][1], entries[i][1]
-                for cp in cur_prods:
-                    for pp in prev_prods:
-                        if pp is cp or self.has_edge(pp, cp):
-                            continue
-                        if nx.has_path(self, cp, pp):
-                            # cp is already sequenced BEFORE pp on its core (a
-                            # pre-existing same-core chain orders cp ... pp). Adding
-                            # pp -> cp would cycle, so re-splice: cut cp's same-core
-                            # successor edge that leads to pp (pure sequencing -- cp's
-                            # data goes cross-core to its consumer), freeing cp; the
-                            # freed successor is re-sequenced by the later core
-                            # sequencing pass. Then order cp after pp below.
-                            succ = next((s for s in self.successors(cp)
-                                         if s.assigned_core_id == cp.assigned_core_id
-                                         and (s is pp or nx.has_path(self, s, pp))), None)
-                            if succ is None:
-                                continue                       # cannot safely reorder
-                            self.remove_edge(cp, succ)
-                            if nx.has_path(self, cp, pp):
-                                # another path still orders cp before pp: reordering
-                                # would cycle. Restore and leave this pair as-is.
-                                self.add_edge(cp, succ)
-                                continue
-                        self.add_edge(pp, cp)
-                        print(f"Serializing shared counter[c{chip}.{cl}][{R}][{C}]: "
-                              f"{pp.node_name} -> {cp.node_name} (producer of "
-                              f"'{entries[i-1][0].node_name}' before producer of "
-                              f"'{entries[i][0].node_name}')")
-
     def bingo_transform_add_core_sequencing_edges(self) -> int:
         """Add edges between consecutive tasks on the same core.
 
@@ -594,6 +509,171 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                     cur_node.remote_dep_set_all = False
                     cur_node.dep_set_cluster_id = 0
                     cur_node.dep_set_chiplet_id = 0
+
+    # ----------------------------------------------------------------
+    # Identity-aware dependencies (EnableTaggedDeps): per-edge tags
+    # ----------------------------------------------------------------
+    def bingo_transform_dfg_spill_for_tag_capacity(self, tag_width: int = 3) -> None:
+        """Auto-spill: bound every dep-matrix cell to <= 2**tag_width
+        concurrently-live edges so the later tag allocator fits a SMALL fixed HW
+        tag width (keeps the scoreboard tiny; the heavy lifting is here in SW).
+
+        Run BEFORE core sequencing / the dummy-set / dummy-check passes and the
+        dep-info assignment, so the ordering edges this inserts become REAL,
+        enforced dependencies.
+
+        Mechanism (a windowed throttle): group the original producer->consumer
+        edges by physical cell ``(consumer_chiplet, consumer_cluster, R, C)``; if a
+        cell has more than ``cap = 2**tag_width`` edges, add an ordering edge from
+        edge[i-cap]'s CONSUMER to edge[i]'s PRODUCER. Edge[i] then cannot set until
+        edge[i-cap] has drained, so at most ``cap`` of the cell's edges are ever
+        live at once. Only ADDS happens-before ordering, so it can never make
+        tagging unsafe (the allocator's per-cell coloring + 2**tag_width backstop
+        remain the correctness guard); cycle-creating throttles are skipped.
+        """
+        cap = 1 << tag_width
+        topo = list(nx.topological_sort(self))
+        pos = {n: i for i, n in enumerate(topo)}
+
+        cells: dict = {}                      # (chip, cl, R, C) -> [(producer, consumer), ...]
+        for u, v in self.edges():
+            if u.node_type == "dummy" or v.node_type == "dummy":
+                continue
+            cells.setdefault((v.assigned_chiplet_id, v.assigned_cluster_id,
+                              v.assigned_core_id, u.assigned_core_id), []).append((u, v))
+
+        for key, edges in cells.items():
+            if len(edges) <= cap:
+                continue                       # cell already within tag budget
+            edges.sort(key=lambda e: (pos[e[0]], pos[e[1]]))
+            for i in range(cap, len(edges)):
+                donor_consumer = edges[i - cap][1]   # whose drain frees a tag
+                recv_producer  = edges[i][0]         # who must wait for that tag
+                if donor_consumer is recv_producer:
+                    continue
+                if self.has_edge(donor_consumer, recv_producer):
+                    continue
+                if nx.has_path(self, recv_producer, donor_consumer):
+                    continue                   # would create a cycle -> skip (backstop covers it)
+                self.bingo_add_edge(donor_consumer, recv_producer)
+                print(f"Spill throttle cell c{key[0]}.{key[1]}[{key[2]}][{key[3]}]: "
+                      f"{donor_consumer.node_name} -> {recv_producer.node_name} (cap={cap})")
+
+    def bingo_transform_dfg_allocate_dep_tags(self, tag_width: int = 3) -> None:
+        """Assign per-edge identity tags so a consumer drains only ITS producer's
+        increment, never a stray that happens to share the same dep-matrix cell.
+
+        Must run LAST -- after the dummy-set / dummy-check passes and the dep-info
+        assignment -- when every set/check operation is final. By then each
+        dependency is a single DIRECT edge ``set_node -> check_node`` (the dummy
+        passes split every fork / multi-producer into single-edge ops), so one
+        ``dep_set_tag`` and one ``dep_check_tag`` per node suffice.
+
+        Physical cell = ``(consumer_chiplet, consumer_cluster, R, C)`` with
+        ``R = consumer core`` and ``C = producer core`` (the bare-core column, so
+        cross-cluster / cross-chiplet producers fold onto the same cell -- the tag
+        is what keeps them apart). Per cell, the MINIMUM number of tags is a
+        minimum chain-cover of the edges under the happens-before partial order
+        (edge a may share b's tag iff a's consumer drains before b's producer
+        sets): by Dilworth the minimum #chains == the largest antichain == the max
+        number of simultaneously-live edges. Solved optimally via bipartite
+        matching. If a cell needs more than ``2**tag_width`` tags, raise -- run
+        bingo_transform_dfg_spill_for_tag_capacity first.
+        """
+        max_tags = 1 << tag_width
+        topo = list(nx.topological_sort(self))
+        pos = {n: i for i, n in enumerate(topo)}
+
+        cells: dict = {}                      # (chip, cl, R, C) -> [(set_node, check_node), ...]
+        set_edge_count: dict = {}
+        check_edge_count: dict = {}
+        for u, v in self.edges():
+            if not (u.dep_set_enable and v.dep_check_enable):
+                continue
+            C, R = u.assigned_core_id, v.assigned_core_id
+            if C not in v.dep_check_list or R not in u.dep_set_list:
+                continue                      # u sets / v checks, but not THIS pair
+            cells.setdefault((v.assigned_chiplet_id, v.assigned_cluster_id, R, C),
+                             []).append((u, v))
+            set_edge_count[u] = set_edge_count.get(u, 0) + 1
+            check_edge_count[v] = check_edge_count.get(v, 0) + 1
+
+        # A node driving/draining >1 edge would need >1 tag (only true broadcast
+        # dep-sets do this today). Tagging those needs a shared reserved tag per
+        # broadcast group -- not yet implemented; fail loudly instead of guessing.
+        multi = [n.node_id for n, c in set_edge_count.items() if c > 1] + \
+                [n.node_id for n, c in check_edge_count.items() if c > 1]
+        if multi:
+            raise NotImplementedError(
+                "dep-tag allocation: multi-target set/check ops (e.g. broadcast "
+                f"dep_set) need shared reserved tags; not yet supported: {multi}")
+
+        # Same-core HOL reachability: at runtime each core dispatches its tasks in
+        # topological (= push) order, so a same-core node that comes later is
+        # effectively reachable from an earlier one. Add those consecutive same-core
+        # edges to a SCRATCH graph used only for tag-reuse reachability (no real
+        # edges, dep info unchanged). This collapses same-core (diagonal R==C) cells
+        # -- which are serialized by the core queue -- to a chain, so they need few
+        # tags instead of one per edge.
+        hb = nx.DiGraph()
+        hb.add_nodes_from(self.nodes())
+        hb.add_edges_from(self.edges())
+        by_core_hb: dict = {}
+        for nd in topo:
+            by_core_hb.setdefault((nd.assigned_chiplet_id, nd.assigned_cluster_id,
+                                   nd.assigned_core_id), []).append(nd)
+        for seq in by_core_hb.values():
+            for i in range(len(seq) - 1):
+                hb.add_edge(seq[i], seq[i + 1])
+
+        for key, edges in cells.items():
+            edges.sort(key=lambda e: (pos[e[0]], pos[e[1]]))
+            n = len(edges)
+            # reach[a] = nodes reachable from edge a's consumer (its drain point)
+            reach = [nx.descendants(hb, cv) for (_su, cv) in edges]
+            B = nx.Graph()
+            for a in range(n):
+                B.add_node(("L", a)); B.add_node(("R", a))
+            for a in range(n):
+                for b in range(n):
+                    if a == b:
+                        continue
+                    # a precedes b (may share a tag) iff edge a's drain happens
+                    # before edge b's set: they meet at one node (a's consumer IS
+                    # b's producer), b's producer is reachable from a's consumer,
+                    # or a's consumer and b's producer are on the SAME core (run
+                    # serially in topological = push = HOL dispatch order, which
+                    # collapses same-core diagonal cells with no explicit path).
+                    if edges[b][0] is edges[a][1] or edges[b][0] in reach[a]:
+                        B.add_edge(("L", a), ("R", b))
+            match = (nx.algorithms.bipartite.hopcroft_karp_matching(
+                         B, top_nodes=[("L", a) for a in range(n)])
+                     if B.number_of_edges() else {})
+            succ, has_pred = {}, set()
+            for node, m in match.items():
+                if node[0] == "L":
+                    succ[node[1]] = m[1]; has_pred.add(m[1])
+            tag_of, n_chains = {}, 0
+            for a in range(n):
+                if a in has_pred:
+                    continue                   # not a chain head
+                cur = a
+                while True:
+                    tag_of[cur] = n_chains
+                    if cur in succ:
+                        cur = succ[cur]
+                    else:
+                        break
+                n_chains += 1
+            if n_chains > max_tags:
+                raise ValueError(
+                    f"dep-tag allocation: cell {key} needs {n_chains} > {max_tags} "
+                    f"concurrent tags (tag_width={tag_width}); run "
+                    f"bingo_transform_dfg_spill_for_tag_capacity or widen tag_width.")
+            for i, (su, cv) in enumerate(edges):
+                su.dep_set_tag = tag_of[i]
+                cv.dep_check_tag = tag_of[i]
+
     # ----------------------------------------------------------------
     # DARTS Tier 1: Conditional Execution Compilation
     # ----------------------------------------------------------------
@@ -1028,7 +1108,12 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
             dep_check_code_val |= (1 << core_id)
         packed_val |= (dep_check_code_val << current_shift)
         current_shift += num_cores
-        
+
+        # dep_check_tag (dep_tag_width bits) — MSB of dep_check_info; always present
+        # to match the RTL struct (0 when identity-aware deps are disabled).
+        packed_val |= ((node.dep_check_tag or 0) << current_shift)
+        current_shift += self.dep_tag_width
+
         # 7. dep_set_info
         
         # dep_set_en (1 bit)
@@ -1055,7 +1140,11 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
             dep_set_code_val |= (1 << core_id)
         packed_val |= (dep_set_code_val << current_shift)
         current_shift += num_cores
-        
+
+        # dep_set_tag (dep_tag_width bits) — MSB of dep_set_info; always present.
+        packed_val |= ((node.dep_set_tag or 0) << current_shift)
+        current_shift += self.dep_tag_width
+
         # Check if we exceeded 64 bits
         if current_shift > 64:
             raise ValueError(f"Packed task descriptor exceeds 64 bits: {current_shift} bits used.")
@@ -1118,7 +1207,10 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         
         fields['dep_check_code'] = (packed_val >> current_shift) & ((1 << num_cores) - 1)
         current_shift += num_cores
-        
+
+        fields['dep_check_tag'] = (packed_val >> current_shift) & ((1 << self.dep_tag_width) - 1)
+        current_shift += self.dep_tag_width
+
         # 7. dep_set_info
         fields['dep_set_en'] = (packed_val >> current_shift) & 0x1
         current_shift += 1
@@ -1134,7 +1226,10 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         
         fields['dep_set_code'] = (packed_val >> current_shift) & ((1 << num_cores) - 1)
         current_shift += num_cores
-        
+
+        fields['dep_set_tag'] = (packed_val >> current_shift) & ((1 << self.dep_tag_width) - 1)
+        current_shift += self.dep_tag_width
+
         return fields
     def bingo_visualize_dfg(self, filename: str = "dfg_visualization", figsize: tuple = (20, 16)) -> None:
         """Visualize the DFG with different shapes for task types and colors for chiplets."""
@@ -1950,7 +2045,13 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         # Serialize producers that share a (consumer_core, producer_core) counter cell
         # across multiple consumers. MUST run before core sequencing so the producer
         # ordering it adds is reflected in the topological sort used for sequencing.
-        self.bingo_transform_dfg_serialize_shared_counter_consumers()
+        # Identity-aware deps (default ON): bound each cell's concurrent edges to
+        # 2**DepTagWidth BEFORE the dummy/sequencing passes so the throttle edges
+        # become enforced dependencies. The legacy serialize_shared_counter_consumers
+        # mitigation has been removed -- per-edge tags supersede it. (Untagged mode
+        # has no counter-sharing mitigation.)
+        if self.enable_tagged_deps:
+            self.bingo_transform_dfg_spill_for_tag_capacity(tag_width=self.dep_tag_width)
         # Add Dummy Set/Check Nodes
         self.bingo_transform_add_core_sequencing_edges()
         self.bingo_transform_dfg_add_dummy_set_nodes()
@@ -1964,7 +2065,11 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         # Assign Dep Info
         self.bingo_assign_normal_node_dep_set_info()
         self.bingo_assign_normal_node_dep_check_info()
-        
+        # Identity-aware deps: allocate per-edge tags LAST, once every set/check
+        # op (incl. dummies) is final. Packed into the descriptor by bingo_pack_node.
+        if self.enable_tagged_deps:
+            self.bingo_transform_dfg_allocate_dep_tags(tag_width=self.dep_tag_width)
+
         # 2. Emit C Code
         self.bingo_emit_offload_c_code(
             app_name=app_name,

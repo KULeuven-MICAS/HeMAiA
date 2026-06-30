@@ -44,12 +44,17 @@
 /// @param field_width   Width of the current field (if 0, defaults to 1)
 #define NEXT_SHIFT(current_shift, field_width) ((current_shift) + ((field_width) ? (field_width) : 1))
 
-// BINGO HW Task descriptor bit positions and widths
-// DARTS Tier 1: Conditional Execution fields (bits 0-5)
+// BINGO HW Task descriptor bit positions and widths.
+// MUST mirror the RTL packed struct bingo_hw_manager_task_desc_t (and the Python
+// bingo_pack_node) bit-for-bit: LSB->MSB the order is cond_exec_invert,
+// cond_exec_group_id, cond_exec_en, task_type, task_id, assigned_{chiplet,cluster,
+// core}_id, then dep_check_info {en, code, tag} and dep_set_info {en, all_chiplet,
+// chiplet_id, cluster_id, code, tag}.
+// DARTS Tier 1: Conditional Execution fields
 #define COND_EXEC_INVERT_WIDTH     1
 #define COND_EXEC_INVERT_SHIFT     0
 
-#define COND_EXEC_GROUP_ID_WIDTH   4
+#define COND_EXEC_GROUP_ID_WIDTH   5   // matches RTL cond_exec_group_id [4:0]
 #define COND_EXEC_GROUP_ID_SHIFT   NEXT_SHIFT(COND_EXEC_INVERT_SHIFT, COND_EXEC_INVERT_WIDTH)
 
 #define COND_EXEC_EN_WIDTH         1
@@ -76,20 +81,30 @@
 #define DEP_CHECK_CODE_WIDTH       N_CORES_PER_CLUSTER
 #define DEP_CHECK_CODE_SHIFT       NEXT_SHIFT(DEP_CHECK_ENABLED_SHIFT, DEP_CHECK_ENABLED_WIDTH)
 
+// Per-edge identity tag (EnableTaggedDeps). MUST match the hw_manager DepTagWidth.
+// One tag sits at the MSB of each dep_*_info struct (right after the dep code).
+#define DEP_TAG_WIDTH              4
+
+#define DEP_CHECK_TAG_WIDTH        DEP_TAG_WIDTH
+#define DEP_CHECK_TAG_SHIFT        NEXT_SHIFT(DEP_CHECK_CODE_SHIFT, DEP_CHECK_CODE_WIDTH)
+
 #define DEP_SET_ENABLED_WIDTH      1
-#define DEP_SET_ENABLED_SHIFT      NEXT_SHIFT(DEP_CHECK_CODE_SHIFT, DEP_CHECK_CODE_WIDTH)
+#define DEP_SET_ENABLED_SHIFT      NEXT_SHIFT(DEP_CHECK_TAG_SHIFT, DEP_CHECK_TAG_WIDTH)
 
 #define DEP_SET_ALL_CHIPLET_WIDTH  1
 #define DEP_SET_ALL_CHIPLET_SHIFT  NEXT_SHIFT(DEP_SET_ENABLED_SHIFT, DEP_SET_ENABLED_WIDTH)
 
-#define DEP_SET_CODE_WIDTH         N_CORES_PER_CLUSTER
-#define DEP_SET_CODE_SHIFT         NEXT_SHIFT(DEP_SET_ALL_CHIPLET_SHIFT, DEP_SET_ALL_CHIPLET_WIDTH)
-
 #define DEP_SET_CHIPLET_ID_WIDTH   N_CHIPLETS_WIDTH
-#define DEP_SET_CHIPLET_ID_SHIFT   NEXT_SHIFT(DEP_SET_CODE_SHIFT, DEP_SET_CODE_WIDTH)
+#define DEP_SET_CHIPLET_ID_SHIFT   NEXT_SHIFT(DEP_SET_ALL_CHIPLET_SHIFT, DEP_SET_ALL_CHIPLET_WIDTH)
 
 #define DEP_SET_CLUSTER_ID_WIDTH   N_CLUSTERS_PER_CHIPLET_WIDTH
 #define DEP_SET_CLUSTER_ID_SHIFT   NEXT_SHIFT(DEP_SET_CHIPLET_ID_SHIFT, DEP_SET_CHIPLET_ID_WIDTH)
+
+#define DEP_SET_CODE_WIDTH         N_CORES_PER_CLUSTER
+#define DEP_SET_CODE_SHIFT         NEXT_SHIFT(DEP_SET_CLUSTER_ID_SHIFT, DEP_SET_CLUSTER_ID_WIDTH)
+
+#define DEP_SET_TAG_WIDTH          DEP_TAG_WIDTH
+#define DEP_SET_TAG_SHIFT          NEXT_SHIFT(DEP_SET_CODE_SHIFT, DEP_SET_CODE_WIDTH)
 
 // Per-Kernel Scratchpad: defined in heterogeneous_runtime.h (shared between host/device)
 // bingo_kernel_scratchpad_t, BINGO_KERNEL_SCRATCHPAD_SIZE, BINGO_SP_PROFILE
