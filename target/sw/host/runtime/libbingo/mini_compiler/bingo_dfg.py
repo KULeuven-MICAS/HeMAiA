@@ -513,52 +513,6 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
     # ----------------------------------------------------------------
     # Identity-aware dependencies (EnableTaggedDeps): per-edge tags
     # ----------------------------------------------------------------
-    def bingo_transform_dfg_spill_for_tag_capacity(self, tag_width: int = 3) -> None:
-        """Auto-spill: bound every dep-matrix cell to <= 2**tag_width
-        concurrently-live edges so the later tag allocator fits a SMALL fixed HW
-        tag width (keeps the scoreboard tiny; the heavy lifting is here in SW).
-
-        Run BEFORE core sequencing / the dummy-set / dummy-check passes and the
-        dep-info assignment, so the ordering edges this inserts become REAL,
-        enforced dependencies.
-
-        Mechanism (a windowed throttle): group the original producer->consumer
-        edges by physical cell ``(consumer_chiplet, consumer_cluster, R, C)``; if a
-        cell has more than ``cap = 2**tag_width`` edges, add an ordering edge from
-        edge[i-cap]'s CONSUMER to edge[i]'s PRODUCER. Edge[i] then cannot set until
-        edge[i-cap] has drained, so at most ``cap`` of the cell's edges are ever
-        live at once. Only ADDS happens-before ordering, so it can never make
-        tagging unsafe (the allocator's per-cell coloring + 2**tag_width backstop
-        remain the correctness guard); cycle-creating throttles are skipped.
-        """
-        cap = 1 << tag_width
-        topo = list(nx.topological_sort(self))
-        pos = {n: i for i, n in enumerate(topo)}
-
-        cells: dict = {}                      # (chip, cl, R, C) -> [(producer, consumer), ...]
-        for u, v in self.edges():
-            if u.node_type == "dummy" or v.node_type == "dummy":
-                continue
-            cells.setdefault((v.assigned_chiplet_id, v.assigned_cluster_id,
-                              v.assigned_core_id, u.assigned_core_id), []).append((u, v))
-
-        for key, edges in cells.items():
-            if len(edges) <= cap:
-                continue                       # cell already within tag budget
-            edges.sort(key=lambda e: (pos[e[0]], pos[e[1]]))
-            for i in range(cap, len(edges)):
-                donor_consumer = edges[i - cap][1]   # whose drain frees a tag
-                recv_producer  = edges[i][0]         # who must wait for that tag
-                if donor_consumer is recv_producer:
-                    continue
-                if self.has_edge(donor_consumer, recv_producer):
-                    continue
-                if nx.has_path(self, recv_producer, donor_consumer):
-                    continue                   # would create a cycle -> skip (backstop covers it)
-                self.bingo_add_edge(donor_consumer, recv_producer)
-                print(f"Spill throttle cell c{key[0]}.{key[1]}[{key[2]}][{key[3]}]: "
-                      f"{donor_consumer.node_name} -> {recv_producer.node_name} (cap={cap})")
-
     def bingo_transform_dfg_allocate_dep_tags(self, tag_width: int = 3) -> None:
         """Assign per-edge identity tags so a consumer drains only ITS producer's
         increment, never a stray that happens to share the same dep-matrix cell.
@@ -577,8 +531,8 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         (edge a may share b's tag iff a's consumer drains before b's producer
         sets): by Dilworth the minimum #chains == the largest antichain == the max
         number of simultaneously-live edges. Solved optimally via bipartite
-        matching. If a cell needs more than ``2**tag_width`` tags, raise -- run
-        bingo_transform_dfg_spill_for_tag_capacity first.
+        matching. If a cell needs more than ``2**tag_width`` tags, raise (reduce
+        the cell's concurrency in placement, or widen DepTagWidth).
         """
         max_tags = 1 << tag_width
         topo = list(nx.topological_sort(self))
@@ -668,8 +622,8 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
             if n_chains > max_tags:
                 raise ValueError(
                     f"dep-tag allocation: cell {key} needs {n_chains} > {max_tags} "
-                    f"concurrent tags (tag_width={tag_width}); run "
-                    f"bingo_transform_dfg_spill_for_tag_capacity or widen tag_width.")
+                    f"concurrent tags (tag_width={tag_width}); reduce this cell's "
+                    f"concurrency in placement or widen DepTagWidth.")
             for i, (su, cv) in enumerate(edges):
                 su.dep_set_tag = tag_of[i]
                 cv.dep_check_tag = tag_of[i]
@@ -2042,16 +1996,12 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         # No-op for non-conditional DFGs (returns empty dict).
         self.bingo_compile_conditional_regions()
         self._validate_cerf_cross_group_edges()
-        # Serialize producers that share a (consumer_core, producer_core) counter cell
-        # across multiple consumers. MUST run before core sequencing so the producer
-        # ordering it adds is reflected in the topological sort used for sequencing.
-        # Identity-aware deps (default ON): bound each cell's concurrent edges to
-        # 2**DepTagWidth BEFORE the dummy/sequencing passes so the throttle edges
-        # become enforced dependencies. The legacy serialize_shared_counter_consumers
-        # mitigation has been removed -- per-edge tags supersede it. (Untagged mode
-        # has no counter-sharing mitigation.)
-        if self.enable_tagged_deps:
-            self.bingo_transform_dfg_spill_for_tag_capacity(tag_width=self.dep_tag_width)
+        # Identity-aware deps: per-edge tags are allocated LAST (after dep-info
+        # assignment). The allocator's min-chain-cover reuses a tag across edges
+        # that can never be live together (happens-before / same-core order), so
+        # no separate concurrency-bounding pass is needed. The legacy
+        # serialize_shared_counter_consumers mitigation was removed -- per-edge
+        # tags supersede it. (Untagged mode has no counter-sharing mitigation.)
         # Add Dummy Set/Check Nodes
         self.bingo_transform_add_core_sequencing_edges()
         self.bingo_transform_dfg_add_dummy_set_nodes()
