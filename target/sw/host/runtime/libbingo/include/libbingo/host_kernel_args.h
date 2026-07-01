@@ -26,6 +26,10 @@ __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_entry_args {
 #define BINGO_CHECK_TYPE_BYTE_EXACT 0
 #define BINGO_CHECK_TYPE_FP32_TOL   1
 #define BINGO_CHECK_TYPE_FP16_TOL   2
+// fp16 RELATIVE tolerance: pass when |out-golden| <= rtol*|golden| + 0.05. The rms (fpnew rsqrt)
+// and softmax (Cephes exp) feed int8 requants whose 1-LSB rounding differs from an fp32 golden by
+// a magnitude-proportional amount, so a fixed abs-tol is unusable on large GEMM outputs (~1000s).
+#define BINGO_CHECK_TYPE_FP16_RELTOL 3
 
 // Precision selector for the runtime-typed Ara kernels (__host_bingo_kernel_<op>
 // dispatchers in host_kernel_lib.h). Passed as a plain arg word; the typed
