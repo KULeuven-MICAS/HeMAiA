@@ -618,6 +618,113 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_stream_elementwise(void *arg)
     }
 }
 
+// One 2-operand StreamElementwise pass for the fused rope kernel:
+// dst = op(src_a, src_b) over rows*beats 64-byte beats (FULL config, no quant). The
+// reader strides FORWARD only, so base at the LOWER operand and stride up to the
+// higher -- valid because the ops used are commutative (MUL=0, ADD=1). Enables and
+// disables READER_EXT_STREAMELEMENTWISE around the launch. See the standalone
+// __snax_bingo_kernel_xdma_stream_elementwise above for the full rationale.
+#if defined(READER_EXT_STREAMELEMENTWISE)
+static inline uint32_t xdma_stream_ew2(uint64_t src_a, uint64_t src_b, uint64_t dst,
+                                       uint32_t rows, uint32_t beats, uint32_t op)
+{
+    uint32_t a_lo = (uint32_t)src_a, b_lo = (uint32_t)src_b;
+    uint64_t base = src_a;
+    uint32_t operand_stride;
+    if (b_lo >= a_lo) { operand_stride = b_lo - a_lo; }
+    else { base = src_b; operand_stride = a_lo - b_lo; }
+    uint32_t src_str[2] = { operand_stride, XDMA_WIDTH };
+    uint32_t src_bnd[2] = { 2u, rows * beats };
+    uint32_t csr_ew[2]  = { 2u, op };
+    xdma_enable_src_ext(READER_EXT_STREAMELEMENTWISE, csr_ew);
+    uint32_t rc = xdma_stream_launch(base, dst, src_str, src_bnd, rows * beats, 0u /*FULL*/);
+    xdma_disable_src_ext(READER_EXT_STREAMELEMENTWISE);
+    return rc;
+}
+#endif
+
+// Fused FP16 RoPE (interleaved / complex-rotation convention) -- ALL DMA-engine ops:
+//   xswap = adjacent fp16-pair swap of x       (iDMA, two strided 2-byte copies)
+//   tmp1  = x     (.) cos_full                 (xDMA StreamElementwise MUL)
+//   tmp2  = xswap (.) sin_signed               (xDMA StreamElementwise MUL)
+//   out   = tmp1  (+) tmp2                      (xDMA StreamElementwise ADD)
+// cos_full (cos duplicated per pair) and sin_signed (sin with alternating sign) are
+// PRECOMPUTED tables -- the sign flip is not a DMA op. x is the runtime Q/K, so the
+// swap is computed ON-DEVICE here (this is what enables in-layer rope_q/rope_k, which
+// cannot precompute xswap). The scratch block [xswap | tmp1 | tmp2] is allocated from
+// L1 here and freed on exit. Folds the standalone snax-xdma-rope flow into one kernel.
+//
+// Arg layout (uint32_t[]):
+//   [0..1]  x_addr     (input,  fp16 [rows, D], D = beats*32 elems/row)
+//   [2..3]  cos_addr   (cos_full table, same shape)
+//   [4..5]  sin_addr   (sin_signed table, same shape)
+//   [6..7]  out_addr   (output, same shape)
+//   [8]     beats      (D = beats*32 fp16 per row)
+//   [9]     rows       (rows / token positions)
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_rope(void *arg)
+{
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_rope_args_t);
+    if (snrt_is_dm_core()) {
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+        uint32_t *a = (uint32_t *)arg;
+        uint64_t x_addr   = make_u64(a[0], a[1]);
+        uint64_t cos_addr = make_u64(a[2], a[3]);
+        uint64_t sin_addr = make_u64(a[4], a[5]);
+        uint64_t out_addr = make_u64(a[6], a[7]);
+        uint32_t beats = a[8];
+        uint32_t rows  = a[9];
+        bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_rope_args_t);
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+#if defined(READER_EXT_STREAMELEMENTWISE)
+        uint32_t row_beats = rows * beats;            // total 64-byte beats
+        uint32_t tot_b     = row_beats * XDMA_WIDTH;  // bytes per [rows, D] fp16 buffer
+        uint32_t num_elems = row_beats * 32u;         // fp16 elements (32 per 64-B beat)
+
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
+        // One L1 scratch block [xswap | tmp1 | tmp2], 64-byte aligned for the beat reads.
+        uint32_t scratch_lo = snrt_l1_malloc(3u * tot_b + 64u);
+        if (!scratch_lo) {
+            printf_safe("[Cluster %d Core %d]: rope L1 scratch alloc failed!\r\n",
+                        snrt_cluster_idx(), snrt_cluster_core_idx());
+            return BINGO_RET_FAIL;
+        }
+        uint32_t base_lo = (scratch_lo + 63u) & ~63u;
+        uint64_t xswap = chiplet_addr_transform((uint64_t)base_lo);
+        uint64_t tmp1  = xswap + tot_b;
+        uint64_t tmp2  = xswap + 2u * tot_b;
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
+
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
+        // 1) xswap = adjacent fp16-pair swap of x (dst[i] = x[i^1]) on the iDMA.
+        uint32_t pairs = num_elems / 2u;
+        snrt_dma_start_2d_wideptr(xswap,      x_addr + 2u, 2u, 4u, 4u, pairs);  // xswap[2k]   = x[2k+1]
+        snrt_dma_start_2d_wideptr(xswap + 2u, x_addr,      2u, 4u, 4u, pairs);  // xswap[2k+1] = x[2k]
+        snrt_dma_wait_all();
+        // 2) tmp1 = x (.) cos ; 3) tmp2 = xswap (.) sin ; 4) out = tmp1 (+) tmp2.
+        uint32_t rc = xdma_stream_ew2(x_addr, cos_addr, tmp1, rows, beats, 0u /*MUL*/);
+        if (rc == BINGO_RET_SUCC) rc = xdma_stream_ew2(xswap, sin_addr, tmp2, rows, beats, 0u /*MUL*/);
+        if (rc == BINGO_RET_SUCC) rc = xdma_stream_ew2(tmp1, tmp2, out_addr, rows, beats, 1u /*ADD*/);
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
+
+        snrt_l1_free(scratch_lo);
+        if (rc != BINGO_RET_SUCC) {
+            printf_safe("[Cluster %d Core %d]: rope StreamElementwise pass failed!\r\n",
+                        snrt_cluster_idx(), snrt_cluster_core_idx());
+            return BINGO_RET_FAIL;
+        }
+#else
+        #error "Regenerate the XDMA CSR map (make snax-sw-gen): missing READER_EXT_STREAMELEMENTWISE."
+#endif
+        sp->return_value = (uint32_t)out_addr;
+        sp->num_return_values = 0;
+        return BINGO_RET_SUCC;
+    } else {
+        printf_safe("[Cluster %d Core %d]: Error! xDMA rope should be called from a DM core!\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+}
+
 // ==========================================================================
 // High-level xDMA kernels: user provides shapes, kernel computes AGU config.
 // These wrap the low-level reshape kernel with automatic stride computation.

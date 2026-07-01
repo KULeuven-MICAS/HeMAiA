@@ -4,16 +4,16 @@
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 #
-# xDMA FP16 RoPE — explicit, self-contained workload graph (no xdma_ops_lib).
-# Zero new HW: 3 StreamElementwise passes over per-pair-duplicated tables.
-#   inputs x, cos_full, xswap (adjacent-halfword swap of x), sin_signed (precomputed)
-#   P1  elementwise(MUL, {x, cos})        -> tmp1     [dev]
-#   P2  elementwise(MUL, {xswap, sin})    -> tmp2     [dev]
-#   P3  elementwise(ADD, {tmp1, tmp2})    -> out      [dev]
+# xDMA FP16 RoPE — single fused kernel (__snax_bingo_kernel_xdma_rope).
+# RoPE is all DMA-engine ops, so the whole flow is ONE offload node:
+#   inputs x, cos_full, sin_signed (precomputed tables); xswap computed ON-DEVICE.
+#   xswap = adjacent fp16-pair swap of x          (iDMA, inside the kernel)
+#   P1 x*cos -> tmp1 ; P2 xswap*sin -> tmp2 ; P3 tmp1+tmp2 -> out  (xDMA, in-kernel)
 #   Store(out) + Check(fp16 tol)
-# Each pass reads two SEPARATE L1 buffers via the stream_elementwise src_b
-# mechanism; buffers are NAME-prefixed so operand 1 always allocates above
-# operand 0 (the reader strides forward). Each pass is FULL (distinct stride).
+# The kernel allocates its own xswap/tmp1/tmp2 scratch from L1, so the DFG only
+# loads x/cos/sin and provides out. (Was: 4 loads + 3 StreamElementwise nodes;
+# now folded into the kernel, and xswap is no longer a precomputed input — which
+# is what makes in-layer rope_q/rope_k possible.)
 
 import os
 import sys
@@ -40,13 +40,12 @@ from bingo_node import BingoNode                          # noqa: E402
 from bingo_mem_handle import BingoMemAlloc, BingoMemSymbol  # noqa: E402
 from bingo_kernel_args import (                           # noqa: E402
     SnaxBingoKernelIdma1dCopyArgs,
-    SnaxBingoKernelXdmaStreamElementwiseArgs,
+    SnaxBingoKernelXdmaRopeArgs,
     HostBingoKernelIdmaArgs,
     HostBingoKernelCheckResultArgs,
 )
 
 DMA_CORE, HOST_CORE = 1, 2
-EW_MUL, EW_ADD = 0, 1
 CHECK_FP16_TOL = 2
 ROPE_BASE = 10000.0
 ROPE_POS = 1
@@ -107,10 +106,11 @@ class G:
 
 
 def gen_data(i):
-    x, cos_full, xswap, sin_signed, out = _rope_ref(CONFIGS[i]["rows"], CONFIGS[i]["beats"], i)
+    # xswap is computed on-device by the kernel, so it is NOT emitted; _rope_ref
+    # still builds it internally for the golden.
+    x, cos_full, _xswap, sin_signed, out = _rope_ref(CONFIGS[i]["rows"], CONFIGS[i]["beats"], i)
     return [format_vector_definition("uint16_t", f"x_{i}", x.view(np.uint16)),
             format_vector_definition("uint16_t", f"cos_{i}", cos_full.view(np.uint16)),
-            format_vector_definition("uint16_t", f"xswap_{i}", xswap.view(np.uint16)),
             format_vector_definition("uint16_t", f"sin_{i}", sin_signed.view(np.uint16)),
             format_vector_definition("uint16_t", f"golden_{i}", out.view(np.uint16))]
 
@@ -118,39 +118,24 @@ def gen_data(i):
 def build_config(g, i, prev):
     rows  = CONFIGS[i]["rows"]
     beats = CONFIGS[i]["beats"]
-    n     = rows * beats * 32          # total elements
+    n     = rows * beats * 32          # total fp16 elements
     tot_b = rows * beats * 64          # [rows, D] fp16 bytes
-    # Name prefixes ensure operand1 > operand0 per pair: 0x<1cos, 2xswap<3sin, 4tmp1<5tmp2.
-    l1_x     = g.l1(f"rp0x_{i}", tot_b)
-    l1_cos   = g.l1(f"rp1cos_{i}", tot_b)
-    l1_xswap = g.l1(f"rp2xswap_{i}", tot_b)
-    l1_sin   = g.l1(f"rp3sin_{i}", tot_b)
-    l1_tmp1  = g.l1(f"rp4tmp1_{i}", tot_b)
-    l1_tmp2  = g.l1(f"rp5tmp2_{i}", tot_b)
-    l1_out   = g.l1(f"rp6out_{i}", tot_b)
+    # Only the real I/O lives in the DFG; the kernel mallocs xswap/tmp1/tmp2 itself.
+    l1_x   = g.l1(f"rp_x_{i}", tot_b)
+    l1_cos = g.l1(f"rp_cos_{i}", tot_b)
+    l1_sin = g.l1(f"rp_sin_{i}", tot_b)
+    l1_out = g.l1(f"rp_out_{i}", tot_b)
     lx = g.node(f"LoadX_{i}", DMA_CORE, "__snax_bingo_kernel_idma_1d_copy",
                 SnaxBingoKernelIdma1dCopyArgs(BingoMemSymbol(f"x_{i}"), l1_x, tot_b), prev)
     lc = g.node(f"LoadCos_{i}", DMA_CORE, "__snax_bingo_kernel_idma_1d_copy",
                 SnaxBingoKernelIdma1dCopyArgs(BingoMemSymbol(f"cos_{i}"), l1_cos, tot_b), lx)
-    lxs = g.node(f"LoadXswap_{i}", DMA_CORE, "__snax_bingo_kernel_idma_1d_copy",
-                 SnaxBingoKernelIdma1dCopyArgs(BingoMemSymbol(f"xswap_{i}"), l1_xswap, tot_b), lc)
     ls = g.node(f"LoadSin_{i}", DMA_CORE, "__snax_bingo_kernel_idma_1d_copy",
-                SnaxBingoKernelIdma1dCopyArgs(BingoMemSymbol(f"sin_{i}"), l1_sin, tot_b), lxs)
-    p1 = g.node(f"MulCos_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_stream_elementwise",
-                SnaxBingoKernelXdmaStreamElementwiseArgs(l1_x, l1_tmp1, beats, op=EW_MUL,
-                    operand_count=2, rows=rows, src_b_addr=l1_cos, csr_mode=0,
-                    dst_bound0=rows * beats), ls)
-    p2 = g.node(f"MulSin_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_stream_elementwise",
-                SnaxBingoKernelXdmaStreamElementwiseArgs(l1_xswap, l1_tmp2, beats, op=EW_MUL,
-                    operand_count=2, rows=rows, src_b_addr=l1_sin, csr_mode=0,
-                    dst_bound0=rows * beats), p1)
-    p3 = g.node(f"Add_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_stream_elementwise",
-                SnaxBingoKernelXdmaStreamElementwiseArgs(l1_tmp1, l1_out, beats, op=EW_ADD,
-                    operand_count=2, rows=rows, src_b_addr=l1_tmp2, csr_mode=0,
-                    dst_bound0=rows * beats), p2)
+                SnaxBingoKernelIdma1dCopyArgs(BingoMemSymbol(f"sin_{i}"), l1_sin, tot_b), lc)
+    rope = g.node(f"Rope_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_rope",
+                  SnaxBingoKernelXdmaRopeArgs(l1_x, l1_cos, l1_sin, l1_out, beats, rows), ls)
     l3_out = BingoMemAlloc(f"out_rope_{i}", size=tot_b, mem_level="L3")
     store = g.node(f"Store_{i}", HOST_CORE, "__host_bingo_kernel_idma",
-                   HostBingoKernelIdmaArgs(l1_out, l3_out, tot_b), p3)
+                   HostBingoKernelIdmaArgs(l1_out, l3_out, tot_b), rope)
     chk = g.node(f"Check_rope_cfg{i}", HOST_CORE, "__host_bingo_kernel_check_result",
                  HostBingoKernelCheckResultArgs(BingoMemSymbol(f"golden_{i}"), l3_out,
                      name=f"rope_cfg{i}", check_type=CHECK_FP16_TOL, num_elements=n,
