@@ -251,7 +251,15 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
 
                 for core_id, group in remote_succs_by_core.items():
                     chiplets_in_group = set(s.assigned_chiplet_id for s in group)
-                    if len(chiplets_in_group) == (self.num_chiplets - 1):
+                    # A genuine broadcast covers ALL other chiplets AND there are at
+                    # least two of them. The `num_chiplets > 2` guard is essential:
+                    # at num_chiplets==2 a single point-to-point remote edge trivially
+                    # "covers all (one) other chiplets" and would be mis-flagged as a
+                    # broadcast -> the RTL multicasts (AW=0xFF) to EVERY chiplet,
+                    # including the producer's own, leaving a stray (tagged) set with
+                    # no consumer to drain it. Such a single edge must use a targeted
+                    # dummy_set instead.
+                    if self.num_chiplets > 2 and len(chiplets_in_group) == (self.num_chiplets - 1):
                         # Broadcast: one dummy_set blocks cur_node's core and sets the bit on all chiplets
                         print(f"Node {cur_node.node_name} is a broadcast node to set all chiplets for core {core_id}.")
                         dummy_set_node = BingoNode(
@@ -518,28 +526,43 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         increment, never a stray that happens to share the same dep-matrix cell.
 
         Must run LAST -- after the dummy-set / dummy-check passes and the dep-info
-        assignment -- when every set/check operation is final. By then each
-        dependency is a single DIRECT edge ``set_node -> check_node`` (the dummy
-        passes split every fork / multi-producer into single-edge ops), so one
-        ``dep_set_tag`` and one ``dep_check_tag`` per node suffice.
+        assignment -- when every set/check operation is final.
 
         Physical cell = ``(consumer_chiplet, consumer_cluster, R, C)`` with
         ``R = consumer core`` and ``C = producer core`` (the bare-core column, so
         cross-cluster / cross-chiplet producers fold onto the same cell -- the tag
-        is what keeps them apart). Per cell, the MINIMUM number of tags is a
-        minimum chain-cover of the edges under the happens-before partial order
-        (edge a may share b's tag iff a's consumer drains before b's producer
-        sets): by Dilworth the minimum #chains == the largest antichain == the max
-        number of simultaneously-live edges. Solved optimally via bipartite
-        matching. If a cell needs more than ``2**tag_width`` tags, raise (reduce
-        the cell's concurrency in placement, or widen DepTagWidth).
+        is what keeps them apart). A task descriptor carries exactly ONE
+        ``dep_set_tag`` and ONE ``dep_check_tag``, so the tag is a property of the
+        NODE, not of the edge: every set->check edge ``(u, v)`` requires
+        ``u.dep_set_tag == v.dep_check_tag``.
+
+        Two kinds of set op exist after the dummy passes:
+
+        * **Single-edge** ``set -> check``. The common case (the dummy passes split
+          local forks / multi-core consumers into single-edge ops). Per cell, the
+          MINIMUM number of tags is a minimum chain-cover of these edges under the
+          happens-before partial order (edge a may share b's tag iff a's consumer
+          drains before b's producer sets): by Dilworth the minimum #chains == the
+          largest antichain == the max number of simultaneously-live edges. Solved
+          optimally via bipartite matching.
+
+        * **Broadcast** ``set -> {check_chip_i}`` (``remote_dep_set_all``). One set
+          op writes a single tag to one ``(cluster, R, C)`` position replicated on
+          every target chiplet, so ALL of its edges -- which land in one cell per
+          chiplet -- and all of their consumer checks MUST share ONE reserved tag.
+          That tag is reserved (excluded from the local chain-cover) in every cell
+          the broadcast touches. Broadcast groups that land in a common cell get
+          distinct tags (greedy graph-colouring on the share-a-cell conflict).
+
+        If a cell needs more than ``2**tag_width`` tags, raise (reduce the cell's
+        concurrency in placement, or widen DepTagWidth).
         """
         max_tags = 1 << tag_width
         topo = list(nx.topological_sort(self))
         pos = {n: i for i, n in enumerate(topo)}
 
         cells: dict = {}                      # (chip, cl, R, C) -> [(set_node, check_node), ...]
-        set_edge_count: dict = {}
+        set_edges: dict = {}                  # set_node -> [(set_node, check_node), ...]
         check_edge_count: dict = {}
         for u, v in self.edges():
             if not (u.dep_set_enable and v.dep_check_enable):
@@ -549,18 +572,52 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                 continue                      # u sets / v checks, but not THIS pair
             cells.setdefault((v.assigned_chiplet_id, v.assigned_cluster_id, R, C),
                              []).append((u, v))
-            set_edge_count[u] = set_edge_count.get(u, 0) + 1
+            set_edges.setdefault(u, []).append((u, v))
             check_edge_count[v] = check_edge_count.get(v, 0) + 1
 
-        # A node driving/draining >1 edge would need >1 tag (only true broadcast
-        # dep-sets do this today). Tagging those needs a shared reserved tag per
-        # broadcast group -- not yet implemented; fail loudly instead of guessing.
-        multi = [n.node_id for n, c in set_edge_count.items() if c > 1] + \
-                [n.node_id for n, c in check_edge_count.items() if c > 1]
-        if multi:
+        # A dep_check op draining >1 producer edge has no HW representation: it owns
+        # one dep_check_tag, but the multi-core / same-core dummy_check passes are
+        # supposed to split every consumer down to a single producer column. If one
+        # survives, the graph is malformed for tagging -- fail loudly.
+        multi_check = sorted(v.node_id for v, c in check_edge_count.items() if c > 1)
+        if multi_check:
             raise NotImplementedError(
-                "dep-tag allocation: multi-target set/check ops (e.g. broadcast "
-                f"dep_set) need shared reserved tags; not yet supported: {multi}")
+                "dep-tag allocation: a dep_check op drains multiple producer edges "
+                f"(needs HW broadcast-check); not supported: {multi_check}")
+
+        # Broadcast groups: a set node driving >1 set->check edge. Its single
+        # dep_set_tag must cover one (cluster, R, C) position replicated across the
+        # distinct target chiplets, so verify the edges form exactly that shape.
+        cell_of = lambda u, v: (v.assigned_chiplet_id, v.assigned_cluster_id,
+                                v.assigned_core_id, u.assigned_core_id)
+        bcast = {u: el for u, el in set_edges.items() if len(el) > 1}
+        for u, el in bcast.items():
+            positions = {(v.assigned_cluster_id, v.assigned_core_id, u.assigned_core_id)
+                         for (_u, v) in el}
+            landing = {cell_of(_u, v) for (_u, v) in el}
+            if len(positions) != 1 or len(landing) != len(el):
+                raise NotImplementedError(
+                    f"dep-tag allocation: multi-target dep_set op {u.node_id} is not "
+                    "a uniform per-chiplet broadcast (its edges must share one "
+                    "(cluster, R, C) and land on distinct chiplets); a single shared "
+                    "tag cannot represent it.")
+
+        # Reserve one tag per broadcast group. Two groups that land in a common cell
+        # must differ -> greedy-colour them on the share-a-cell conflict graph.
+        bcast_landing = {u: {cell_of(_u, v) for (_u, v) in el} for u, el in bcast.items()}
+        reserved: dict = {}                   # broadcast set_node -> reserved tag
+        for u in sorted(bcast, key=lambda n: n.node_id):
+            taken = {reserved[w] for w in reserved
+                     if bcast_landing[w] & bcast_landing[u]}
+            tag = next((t for t in range(max_tags) if t not in taken), None)
+            if tag is None:
+                raise ValueError(
+                    "dep-tag allocation: too many broadcast groups share a cell for "
+                    f"tag_width={tag_width}; widen DepTagWidth.")
+            reserved[u] = tag
+            u.dep_set_tag = tag
+            for (_u, v) in bcast[u]:
+                v.dep_check_tag = tag
 
         # Same-core HOL reachability: at runtime each core dispatches its tasks in
         # topological (= push) order, so a same-core node that comes later is
@@ -580,8 +637,8 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
             for i in range(len(seq) - 1):
                 hb.add_edge(seq[i], seq[i + 1])
 
-        for key, edges in cells.items():
-            edges.sort(key=lambda e: (pos[e[0]], pos[e[1]]))
+        def min_chain_cover(edges: list) -> dict:
+            """Map each edge index -> chain id (0-based) via min chain-cover."""
             n = len(edges)
             # reach[a] = nodes reachable from edge a's consumer (its drain point)
             reach = [nx.descendants(hb, cv) for (_su, cv) in edges]
@@ -594,10 +651,8 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                         continue
                     # a precedes b (may share a tag) iff edge a's drain happens
                     # before edge b's set: they meet at one node (a's consumer IS
-                    # b's producer), b's producer is reachable from a's consumer,
-                    # or a's consumer and b's producer are on the SAME core (run
-                    # serially in topological = push = HOL dispatch order, which
-                    # collapses same-core diagonal cells with no explicit path).
+                    # b's producer), or b's producer is reachable from a's consumer
+                    # in the happens-before (incl. same-core HOL) order.
                     if edges[b][0] is edges[a][1] or edges[b][0] in reach[a]:
                         B.add_edge(("L", a), ("R", b))
             match = (nx.algorithms.bipartite.hopcroft_karp_matching(
@@ -607,26 +662,37 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
             for node, m in match.items():
                 if node[0] == "L":
                     succ[node[1]] = m[1]; has_pred.add(m[1])
-            tag_of, n_chains = {}, 0
+            chain_of, n_chains = {}, 0
             for a in range(n):
                 if a in has_pred:
                     continue                   # not a chain head
                 cur = a
                 while True:
-                    tag_of[cur] = n_chains
-                    if cur in succ:
-                        cur = succ[cur]
-                    else:
+                    chain_of[cur] = n_chains
+                    cur = succ.get(cur)
+                    if cur is None:
                         break
                 n_chains += 1
-            if n_chains > max_tags:
+            return chain_of
+
+        for key, all_edges in cells.items():
+            # Broadcast edges already carry their reserved tag; chain-cover only the
+            # local (single-edge) producers, drawing tags from the pool MINUS the
+            # reserved tags of any broadcast that also lands in this cell.
+            edges = [(u, v) for (u, v) in all_edges if u not in bcast]
+            skip = {reserved[u] for (u, _v) in all_edges if u in bcast}
+            avail = [t for t in range(max_tags) if t not in skip]
+            edges.sort(key=lambda e: (pos[e[0]], pos[e[1]]))
+            chain_of = min_chain_cover(edges)
+            n_chains = len(set(chain_of.values())) if chain_of else 0
+            if n_chains > len(avail):
                 raise ValueError(
-                    f"dep-tag allocation: cell {key} needs {n_chains} > {max_tags} "
-                    f"concurrent tags (tag_width={tag_width}); reduce this cell's "
-                    f"concurrency in placement or widen DepTagWidth.")
+                    f"dep-tag allocation: cell {key} needs {n_chains} local + "
+                    f"{len(skip)} reserved > {max_tags} tags (tag_width={tag_width}); "
+                    f"reduce this cell's concurrency in placement or widen DepTagWidth.")
             for i, (su, cv) in enumerate(edges):
-                su.dep_set_tag = tag_of[i]
-                cv.dep_check_tag = tag_of[i]
+                su.dep_set_tag = avail[chain_of[i]]
+                cv.dep_check_tag = avail[chain_of[i]]
 
     # ----------------------------------------------------------------
     # DARTS Tier 1: Conditional Execution Compilation

@@ -40,6 +40,7 @@ from bingo_node import BingoNode  # noqa E402
 from bingo_mem_handle import BingoMemAlloc, BingoMemSymbol  # noqa E402
 from bingo_kernel_args import (  # noqa E402
     SnaxBingoKernelIdma1dCopyArgs,
+    SnaxBingoKernelIdmaPairwiseSwapArgs,
     SnaxBingoKernelXdma1dCopyArgs,
     SnaxBingoKernelXdma6dArgs,
     SnaxBingoKernelXdmaTranspose2dArgs,
@@ -201,6 +202,30 @@ class TransposeOp:
         op = b.op(f"Op_{i}", "__snax_bingo_kernel_xdma_transpose_2d",
                   SnaxBingoKernelXdmaTranspose2dArgs(l1s, l1d, rows, cols, elem_bytes), load)
         return b.store_check(f"transpose_cfg{i}", l1d, op, f"golden_{i}", n)
+
+
+class SwapOp:
+    name = "idma_pairwise_swap"
+
+    def gen_data(self, c, i, ctx):
+        # Adjacent element-pair swap: dst[i] = src[i^1]. Build a byte matrix of
+        # shape [num_pairs, 2, elem_bytes] and reverse the size-2 (pair) axis.
+        num_elems, elem_bytes = c["num_elems"], c["elem_bytes"]
+        base = (np.arange(num_elems * elem_bytes, dtype=np.uint8) & 0xFF)
+        mat = base.reshape(num_elems // 2, 2, elem_bytes)
+        golden = mat[:, ::-1, :].reshape(-1)
+        return [format_vector_definition("uint8_t", f"in_{i}", base),
+                format_vector_definition("uint8_t", f"golden_{i}", golden)]
+
+    def build(self, b, c, i, prev):
+        num_elems, elem_bytes = c["num_elems"], c["elem_bytes"]
+        n = num_elems * elem_bytes
+        l1s = b.l1(f"l1s_{i}", n)
+        l1d = b.l1(f"l1d_{i}", n)
+        load = b.idma_load(f"Load_{i}", b.sym(f"in_{i}"), l1s, n, prev)
+        op = b.op(f"Op_{i}", "__snax_bingo_kernel_idma_pairwise_swap",
+                  SnaxBingoKernelIdmaPairwiseSwapArgs(l1s, l1d, num_elems, elem_bytes), load)
+        return b.store_check(f"swap_cfg{i}", l1d, op, f"golden_{i}", n)
 
 
 class SubmatrixOp:
@@ -621,6 +646,7 @@ def _build_registry():
         "copy": CopyOp(),
         "xdma_6d": Xdma6dOp(),
         "transpose": TransposeOp(),
+        "swap": SwapOp(),
         "submatrix": SubmatrixOp(),
         "expand": ExpandOp(),
         "concat": ConcatOp(),

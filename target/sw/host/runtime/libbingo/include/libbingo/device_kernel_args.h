@@ -210,6 +210,18 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_idma_broadcast_args {
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_idma_broadcast_args_t;
 
+// BINGO IDMA Pairwise Swap (flat adjacent-element-pair swap: dst[i] = src[i^1]).
+// The data half of RoPE rotate_half; produced on-device via two strided iDMA copies.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_idma_pairwise_swap_args {
+  uint32_t src_addr_hi;
+  uint32_t src_addr_lo;
+  uint32_t dst_addr_hi;
+  uint32_t dst_addr_lo;
+  uint32_t num_elems;      // total element count (must be even)
+  uint32_t elem_bytes;     // element size (1=int8, 2=int16/fp16, 4=int32)
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_idma_pairwise_swap_args_t;
+
 // BINGO GEMM Full kernel args
 __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_gemm_full_args {
   uint32_t input_A_addr;            
@@ -497,6 +509,23 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_stream_elementwise_args {
   uint32_t src_b_addr_lo;
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_xdma_stream_elementwise_args_t;
+
+// Fused FP16 RoPE: iDMA adjacent-pair swap of x + 3 StreamElementwise passes
+// (x*cos, xswap*sin, +) -> out. cos_full/sin_signed are precomputed tables; the
+// kernel allocates its xswap/tmp1/tmp2 scratch from L1. D = beats*32 fp16 per row.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_rope_args {
+  uint32_t x_addr_hi;        // input x (runtime Q/K), fp16 [rows, D]
+  uint32_t x_addr_lo;
+  uint32_t cos_addr_hi;      // cos_full table, same shape
+  uint32_t cos_addr_lo;
+  uint32_t sin_addr_hi;      // sin_signed table, same shape
+  uint32_t sin_addr_lo;
+  uint32_t out_addr_hi;      // output, same shape
+  uint32_t out_addr_lo;
+  uint32_t beats;            // D = beats*32 fp16 elements per row
+  uint32_t rows;             // rows / token positions
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_xdma_rope_args_t;
 
 // ──────────────────────────────────────────────────────────────────────
 // VersaCore blocked-layout conversion kernels

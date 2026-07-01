@@ -193,6 +193,26 @@ class SnaxBingoKernelIdmaBroadcastArgs(BingoKernelArgs):
         assignments["size"] = str(self.size)
         return assignments
 
+# BINGO IDMA Pairwise Swap (flat adjacent-element-pair swap: dst[i] = src[i^1])
+class SnaxBingoKernelIdmaPairwiseSwapArgs(BingoKernelArgs):
+    def __init__(self, src_addr: Union[BingoMemAlloc, int], dst_addr: Union[BingoMemAlloc, int],
+                 num_elems: int, elem_bytes: int = 2):
+        self.src_addr = src_addr
+        self.dst_addr = dst_addr
+        self.num_elems = num_elems
+        self.elem_bytes = elem_bytes
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_idma_pairwise_swap_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        assignments = {}
+        self._process_addr(self.src_addr, "src_addr", assignments, handle_name_map)
+        self._process_addr(self.dst_addr, "dst_addr", assignments, handle_name_map)
+        assignments["num_elems"] = str(self.num_elems)
+        assignments["elem_bytes"] = str(self.elem_bytes)
+        return assignments
+
 
 
 # BINGO GEMM FULL
@@ -851,6 +871,37 @@ class SnaxBingoKernelXdmaStreamElementwiseArgs(BingoKernelArgs):
             a["src_b_addr_hi"] = str((self.src_b_addr >> 32) & 0xFFFFFFFF)
         else:
             self._process_addr(self.src_b_addr, "src_b_addr", a, handle_name_map)
+        return a
+
+
+class SnaxBingoKernelXdmaRopeArgs(BingoKernelArgs):
+    """Fused FP16 RoPE: iDMA adjacent-pair swap of x + 3 StreamElementwise passes
+    (x*cos_full, xswap*sin_signed, +) -> out. cos_full/sin_signed are precomputed
+    tables; the kernel allocates xswap/tmp1/tmp2 scratch from L1. D = beats*32 fp16
+    elements per row, rows independent token positions."""
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_rope"
+
+    def __init__(self, x_addr: Union[BingoMemAlloc, int], cos_addr: Union[BingoMemAlloc, int],
+                 sin_addr: Union[BingoMemAlloc, int], out_addr: Union[BingoMemAlloc, int],
+                 beats: int, rows: int = 1):
+        self.x_addr = x_addr
+        self.cos_addr = cos_addr
+        self.sin_addr = sin_addr
+        self.out_addr = out_addr
+        self.beats = beats
+        self.rows = rows
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_xdma_rope_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.x_addr, "x_addr", a, handle_name_map)
+        self._process_addr(self.cos_addr, "cos_addr", a, handle_name_map)
+        self._process_addr(self.sin_addr, "sin_addr", a, handle_name_map)
+        self._process_addr(self.out_addr, "out_addr", a, handle_name_map)
+        a["beats"] = str(self.beats)
+        a["rows"] = str(self.rows)
         return a
 
 
