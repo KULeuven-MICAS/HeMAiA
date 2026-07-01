@@ -1076,6 +1076,7 @@ class HostBingoKernelDummyArgs(BingoKernelArgs):
 BINGO_CHECK_TYPE_BYTE_EXACT = 0
 BINGO_CHECK_TYPE_FP32_TOL   = 1
 BINGO_CHECK_TYPE_FP16_TOL   = 2
+BINGO_CHECK_TYPE_FP16_RELTOL = 3  # fp16 relative tol: |out-g| <= rtol*|g| + 0.05 (magnitude-scaled)
 
 
 # Bytes per element for each check mode — used for validation and
@@ -1084,6 +1085,7 @@ _CHECK_TYPE_ELEM_BYTES = {
     BINGO_CHECK_TYPE_BYTE_EXACT: 1,  # data_size IS the byte count
     BINGO_CHECK_TYPE_FP32_TOL:   4,
     BINGO_CHECK_TYPE_FP16_TOL:   2,
+    BINGO_CHECK_TYPE_FP16_RELTOL: 2,  # fp16 elements, relative-tolerance compare
 }
 
 

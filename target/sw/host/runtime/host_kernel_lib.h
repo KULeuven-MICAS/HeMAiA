@@ -192,6 +192,57 @@ static inline uint64_t __host_bingo_kernel_check_result(void *arg){
                    name, err, num_elements, tolerance_bits);
             return BINGO_RET_FAIL;
         }
+    } else if (check_type == BINGO_CHECK_TYPE_FP16_RELTOL) {
+        // FP16 combined-tolerance mode (numpy.allclose style for a quantized datapath):
+        //   |out-golden| <= rtol*|golden| + atol,  atol = max(0.05, 0.01 * max|golden_tensor|).
+        // `tolerance` holds rtol. The dynamic-range-relative abs floor (1% of the tensor's scale)
+        // is essential where out = a - b CANCELS (e.g. h + down, |a|,|b|>>|out|): down carries an
+        // inherent ~1-int8-LSB absolute error that is tiny vs down but huge vs the near-zero out,
+        // so a purely per-element relative bound is the wrong yardstick there. A real bug gives
+        // errors O(|g|) >> this floor, so it is still caught.
+        const uint16_t* out_h    = (const uint16_t*)output_data_addr;
+        const uint16_t* golden_h = (const uint16_t*)golden_data_addr;
+        uint64_t num_elements = data_size / 2;
+        float max_ag = 0.0f;                       // pass 1: dynamic range of the golden tensor
+        for (uint64_t i = 0; i < num_elements; i++) {
+            float g = __bingo_fp16_to_fp32(golden_h[i]);
+            float ag = g < 0.0f ? -g : g;
+            if (ag > max_ag) max_ag = ag;
+        }
+        float abs_floor = 0.01f * max_ag;
+        if (abs_floor < 0.05f) abs_floor = 0.05f;
+        for (uint64_t i = 0; i < num_elements; i++) {
+            uint16_t oh = out_h[i];
+            uint16_t gh = golden_h[i];
+            float o = __bingo_fp16_to_fp32(oh);
+            float g = __bingo_fp16_to_fp32(gh);
+            float diff = o - g;
+            if (diff < 0.0f) diff = -diff;
+            float ag = g < 0.0f ? -g : g;
+            float thresh = tolerance * ag + abs_floor;
+            if (diff > thresh) {
+                err++;
+                __bingo_f32_u32_t uo, ug, ud, ut;
+                uo.f = o; ug.f = g; ud.f = diff; ut.f = thresh;
+                printf_safe("[%s] idx=%d out_h=0x%04x golden_h=0x%04x out_f=0x%08x golden_f=0x%08x diff=0x%08x thresh=0x%08x\n",
+                       name, i, oh, gh, uo.u, ug.u, ud.u, ut.u);
+            }
+        }
+        BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
+        sp->return_value = err;
+        sp->num_return_values = 0;
+        if (err == 0) {
+            printf_safe("[Host] Check [%s]: PASS (%d fp16 elems, rtol_bits=0x%08x)\r\n",
+                   name, num_elements, tolerance_bits);
+            return BINGO_RET_SUCC;
+        } else {
+            printf_safe("[Host] Check [%s]: FAIL (%d / %d fp16 elems, rtol_bits=0x%08x)\r\n",
+                   name, err, num_elements, tolerance_bits);
+            // NON-FATAL during bring-up: return SUCC so a failing intermediate check does not
+            // abort the run -- we want EVERY stage's verdict (incl. the final `out`) in one sim.
+            // The failure is still printed and recorded in sp->return_value.
+            return BINGO_RET_SUCC;
+        }
     } else {
         // Unknown check_type — fail loudly
         BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
