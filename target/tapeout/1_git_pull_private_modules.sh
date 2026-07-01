@@ -35,7 +35,7 @@ done
 
 # DC Scripts
 if [ ! -d "$script_dir/HeMAiAv2_tapeout" ]; then
-    git clone git@github.com:IveanEx/HeMAiAv2_tapeout.git "$script_dir/HeMAiAv2_tapeout"
+    git clone --branch two_clusters git@github.com:IveanEx/HeMAiAv2_tapeout.git "$script_dir/HeMAiAv2_tapeout"
 else
     cd $script_dir/HeMAiAv2_tapeout || exit
     git pull
