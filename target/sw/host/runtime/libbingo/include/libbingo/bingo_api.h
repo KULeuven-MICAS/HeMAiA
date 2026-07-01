@@ -250,9 +250,11 @@ typedef struct hw_manager_task {
     uint8_t  assigned_core_id;     // Target core for execution
     bool     dep_check_enabled;    // Whether dependency checking is enabled
     uint8_t  dep_check_code;       // Dependency check code
+    uint8_t  dep_check_tag;        // Per-edge identity tag this check expects (EnableTaggedDeps)
     bool     dep_set_enabled;      // Whether dependency setting is enabled
     bool     dep_set_all_chiplet;  // Whether to set dependency on all chiplets
     uint8_t  dep_set_code;         // Dependency set code
+    uint8_t  dep_set_tag;          // Per-edge identity tag this set carries (EnableTaggedDeps)
     uint8_t  dep_set_chiplet_id;   // Chiplet ID to set dependency
     uint8_t  dep_set_cluster_id;   // Cluster ID to set dependency
     // DARTS Tier 1: Conditional Execution
@@ -290,20 +292,26 @@ static inline uint64_t encode_bingo_hw_manager_task_desc(bingo_hw_manager_task_d
     // Dep check code (N_CORES_PER_CLUSTER bits)
     encoded |= ENCODE_BITFIELD(desc.dep_check_code, DEP_CHECK_CODE_WIDTH, DEP_CHECK_CODE_SHIFT);
 
+    // Dep check tag (DEP_TAG_WIDTH bits) -- MSB of dep_check_info
+    encoded |= ENCODE_BITFIELD(desc.dep_check_tag, DEP_CHECK_TAG_WIDTH, DEP_CHECK_TAG_SHIFT);
+
     // Dep set enabled (1 bit)
     encoded |= ENCODE_BITFIELD(desc.dep_set_enabled, DEP_SET_ENABLED_WIDTH, DEP_SET_ENABLED_SHIFT);
 
     // Dep set all chiplet (1 bit)
     encoded |= ENCODE_BITFIELD(desc.dep_set_all_chiplet, DEP_SET_ALL_CHIPLET_WIDTH, DEP_SET_ALL_CHIPLET_SHIFT);
 
-    // Dep set code (N_CORES_PER_CLUSTER bits)
-    encoded |= ENCODE_BITFIELD(desc.dep_set_code, DEP_SET_CODE_WIDTH, DEP_SET_CODE_SHIFT);
-
     // Dep set chiplet ID (N_CHIPLETS_WIDTH bits)
     encoded |= ENCODE_BITFIELD(desc.dep_set_chiplet_id, DEP_SET_CHIPLET_ID_WIDTH, DEP_SET_CHIPLET_ID_SHIFT);
 
     // Dep set cluster ID (N_CLUSTERS_WIDTH bits)
     encoded |= ENCODE_BITFIELD(desc.dep_set_cluster_id, DEP_SET_CLUSTER_ID_WIDTH, DEP_SET_CLUSTER_ID_SHIFT);
+
+    // Dep set code (N_CORES_PER_CLUSTER bits)
+    encoded |= ENCODE_BITFIELD(desc.dep_set_code, DEP_SET_CODE_WIDTH, DEP_SET_CODE_SHIFT);
+
+    // Dep set tag (DEP_TAG_WIDTH bits) -- MSB of dep_set_info
+    encoded |= ENCODE_BITFIELD(desc.dep_set_tag, DEP_SET_TAG_WIDTH, DEP_SET_TAG_SHIFT);
 
     return encoded;
 }
@@ -321,11 +329,13 @@ static inline bingo_hw_manager_task_desc_t decode_bingo_hw_manager_task_desc(uin
     desc.assigned_core_id    = BINGO_EXTRACT_BITS(encoded, ASSIGNED_CORE_ID_SHIFT + ASSIGNED_CORE_ID_WIDTH - 1, ASSIGNED_CORE_ID_SHIFT);
     desc.dep_check_enabled   = BINGO_EXTRACT_BITS(encoded, DEP_CHECK_ENABLED_SHIFT + DEP_CHECK_ENABLED_WIDTH - 1, DEP_CHECK_ENABLED_SHIFT);
     desc.dep_check_code      = BINGO_EXTRACT_BITS(encoded, DEP_CHECK_CODE_SHIFT + DEP_CHECK_CODE_WIDTH - 1, DEP_CHECK_CODE_SHIFT);
+    desc.dep_check_tag       = BINGO_EXTRACT_BITS(encoded, DEP_CHECK_TAG_SHIFT + DEP_CHECK_TAG_WIDTH - 1, DEP_CHECK_TAG_SHIFT);
     desc.dep_set_enabled     = BINGO_EXTRACT_BITS(encoded, DEP_SET_ENABLED_SHIFT + DEP_SET_ENABLED_WIDTH - 1, DEP_SET_ENABLED_SHIFT);
     desc.dep_set_all_chiplet = BINGO_EXTRACT_BITS(encoded, DEP_SET_ALL_CHIPLET_SHIFT + DEP_SET_ALL_CHIPLET_WIDTH - 1, DEP_SET_ALL_CHIPLET_SHIFT);
-    desc.dep_set_code        = BINGO_EXTRACT_BITS(encoded, DEP_SET_CODE_SHIFT + DEP_SET_CODE_WIDTH - 1, DEP_SET_CODE_SHIFT);
     desc.dep_set_chiplet_id  = BINGO_EXTRACT_BITS(encoded, DEP_SET_CHIPLET_ID_SHIFT + DEP_SET_CHIPLET_ID_WIDTH - 1, DEP_SET_CHIPLET_ID_SHIFT);
     desc.dep_set_cluster_id  = BINGO_EXTRACT_BITS(encoded, DEP_SET_CLUSTER_ID_SHIFT + DEP_SET_CLUSTER_ID_WIDTH - 1, DEP_SET_CLUSTER_ID_SHIFT);
+    desc.dep_set_code        = BINGO_EXTRACT_BITS(encoded, DEP_SET_CODE_SHIFT + DEP_SET_CODE_WIDTH - 1, DEP_SET_CODE_SHIFT);
+    desc.dep_set_tag         = BINGO_EXTRACT_BITS(encoded, DEP_SET_TAG_SHIFT + DEP_SET_TAG_WIDTH - 1, DEP_SET_TAG_SHIFT);
     return desc;
 }
 

@@ -144,8 +144,8 @@ uint32_t __workload_gemm_tiled(bingo_task_t **task_list)
     check_kernel_tab_ready();
     printf_safe("Chip(%x, %x): [Host] Preparing GEMM Tiled Workload\\r\\n", get_current_chip_loc_x(), get_current_chip_loc_y());
 
-    uint32_t __snax_kernel_xdma_1d_copy_func_addr =
-        get_device_function("__snax_kernel_xdma_1d_copy");
+    uint32_t __snax_kernel_idma_1d_copy_func_addr =
+        get_device_function("__snax_kernel_idma_1d_copy");
     uint32_t __snax_kernel_versacore_load_compute_store_func_addr =
         get_device_function("__snax_kernel_versacore_load_compute_store");
     uint32_t __snax_kernel_start_gemm_and_wait_func_addr =
@@ -153,7 +153,7 @@ uint32_t __workload_gemm_tiled(bingo_task_t **task_list)
     uint32_t check_results_func_addr =
         get_device_function("__snax_kernel_check_results");
 
-    if (__snax_kernel_xdma_1d_copy_func_addr == SNAX_SYMTAB_END_FN_ADDR ||
+    if (__snax_kernel_idma_1d_copy_func_addr == SNAX_SYMTAB_END_FN_ADDR ||
         __snax_kernel_versacore_load_compute_store_func_addr == SNAX_SYMTAB_END_FN_ADDR || __snax_kernel_start_gemm_and_wait_func_addr == SNAX_SYMTAB_END_FN_ADDR ||
         check_results_func_addr == SNAX_SYMTAB_END_FN_ADDR)
     {
@@ -321,7 +321,7 @@ uint32_t __workload_gemm_tiled(bingo_task_t **task_list)
     
     data_str += ['''// Register task: load B matrix
                      bingo_task_t *task_xdma_l3_to_cluster_B =
-        bingo_task_create(__snax_kernel_xdma_1d_copy_func_addr,
+        bingo_task_create(__snax_kernel_idma_1d_copy_func_addr,
                           (uint32_t)(uintptr_t)(task_l3_to_cluster_args_B),
                           assigned_chip_id, assigned_cluster_id);
                           '''
@@ -331,7 +331,7 @@ uint32_t __workload_gemm_tiled(bingo_task_t **task_list)
         data_str += [
             f'''    // Register task: load A tile {tile_idx}
     bingo_task_t *task_xdma_l3_to_cluster_A{tile_idx} =
-        bingo_task_create(__snax_kernel_xdma_1d_copy_func_addr,
+        bingo_task_create(__snax_kernel_idma_1d_copy_func_addr,
                           (uint32_t)(uintptr_t)(task_l3_to_cluster_args_A{tile_idx}),
                           assigned_chip_id, assigned_cluster_id);
             '''
@@ -358,7 +358,7 @@ uint32_t __workload_gemm_tiled(bingo_task_t **task_list)
         data_str += [
             f'''    // Register task: store D tile {tile_idx}
     bingo_task_t *task_xdma_cluster_to_l3_D{tile_idx} =
-        bingo_task_create(__snax_kernel_xdma_1d_copy_func_addr,
+        bingo_task_create(__snax_kernel_idma_1d_copy_func_addr,
                           (uint32_t)(uintptr_t)(task_cluster_to_l3_args_D{tile_idx}),
                           assigned_chip_id, assigned_cluster_id);
             '''
