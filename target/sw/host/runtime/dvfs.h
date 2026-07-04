@@ -8,9 +8,20 @@
 // a transition, publishes the requested action in the quad_periph DVFS_REQUEST
 // register and rings a doorbell by setting the host's dedicated CLINT MSIP bit.
 // The host takes a machine software interrupt, reads DVFS_REQUEST, drives the
-// PMIC (voltage) and the clk/rst controller (frequency) in the safe order
-// (raise: V then F; lower: F then V), acknowledges the PM, and clears the
-// doorbell. The PM re-arm handshake converges on the latest desired state.
+// PMIC (voltage) and the clk/rst controller (frequency) in the safe order,
+// acknowledges the PM, and clears the doorbell. The PM re-arm handshake converges
+// on the latest desired state.
+//
+// SAFETY CONTRACT. The chip must never
+// clock fast at low Vdd, so the actuation order is not optional:
+//   RAISE (busy):  pmic_set_voltage(hi)  -- BLOCKS until Vdd confirmed settled --
+//                  then raise frequency.
+//   LOWER (idle):  lower frequency (ensure applied), then pmic_set_voltage(lo).
+// The RTL has no voltage feedback, so this ordering + the settle/confirm wait
+// (pmic_set_voltage() does not return until Vdd has reached target) are enforced
+// ONLY here in software. Write DVFS_ACK only after the full V+F transition is
+// applied. The actuation below is mimicked (records + prints); the real PMIC-over
+// -I2C + clk/rst writes, keeping this order, are the deferred SW effort.
 //
 // This header depends on helpers defined earlier in host.h (interrupt/CLINT/clk
 // helpers, chip-id + quad_ctrl address helpers), so it is included at the end of

@@ -14,11 +14,14 @@
 
 #include <stdint.h>
 
-// Program the external PMIC to the voltage corresponding to `level`
-// (the same power/clock-division code the PM published in DVFS_REQUEST).
+// Program the external PMIC to the voltage corresponding to `level` (the same
+// power/clock-division code the PM published in DVFS_REQUEST). Blocks until the
+// voltage is confirmed settled (see the SAFETY CONTRACT above) before returning.
 static inline void pmic_set_voltage(uint8_t level) {
     // TODO(deferred): drive the OpenTitan I2C master at I2C_BASE_ADDR to write the
-    // PMIC voltage register. For now, only log and model the regulator settle time.
+    // PMIC voltage register, then confirm before returning -- either poll the PMIC
+    // status over I2C until it reports `level` / in-regulation, or busy-wait the
+    // datasheet worst-case settle time. Do NOT return until the target is reached.
     printf("[dvfs] pmic_set_voltage(level=%u) [STUB]\n", (unsigned)level);
     for (volatile int i = 0; i < 100; i++) {
         asm volatile("nop");
