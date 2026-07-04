@@ -96,7 +96,9 @@ static inline void dvfs_service_request(void) {
         _dvfs_log_count++;
         // Live proof that the host took + is servicing this interrupt.
         if (_dvfs_log_count <= DVFS_ISR_PRINT_MAX) {
-            dvfs_isr_puts("[dvfs][isr] chip0 host handled DVFS doorbell #");
+            dvfs_isr_puts("[dvfs][isr] chip");
+            dvfs_isr_putdec(_dvfs_chip_id);
+            dvfs_isr_puts(" host handled DVFS doorbell #");
             dvfs_isr_putdec(_dvfs_log_count);
             dvfs_isr_puts((req & DVFS_REQ_DIR_MASK) ? ": RAISE (V up,F up) level="
                                                     : ": LOWER (F down,V down) level=");
