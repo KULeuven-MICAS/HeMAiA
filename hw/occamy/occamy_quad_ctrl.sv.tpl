@@ -219,6 +219,9 @@ module ${name}_quad_ctrl
     .TASK_QUEUE_TYPE                    (1), // 1: AXI Lite Master 0: Default AXI Lite Slave 
     .NUM_CORES_PER_CLUSTER    (BINGO_HW_MANAGER_NR_CORE_PER_CLUSTER    ),
     .NUM_CLUSTERS_PER_CHIPLET (NrClustersPerQuad       ),
+    // DVFS doorbell MSIP bit: injected here so the PM is not hardcoded (see occamy.py
+    // hw_manager_ipi_idx; must match HW_MANAGER_DVFS_MSIP_BIT / occamy_soc.sv ipi_i).
+    .HOST_DVFS_MSIP_BIT       (${hw_manager_ipi_idx}                     ),
     .HostAxiLiteAddrWidth     (${quad_ctrl_axi_lite_xbar.aw}             ),
     .HostAxiLiteDataWidth     (${quad_ctrl_axi_lite_xbar.dw}             ),
     .DeviceAxiLiteAddrWidth   (${quad_ctrl_axi_lite_narrow_mux.aw}       ),

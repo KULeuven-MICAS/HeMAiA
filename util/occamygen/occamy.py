@@ -842,6 +842,10 @@ def get_quad_ctrl_kwargs(occamy_cfg, soc_wide_xbar, soc_narrow_xbar, quad_ctrl_s
         "chip_id_width": chip_id_width,
         "num_clusters": num_clusters,
         "num_cores_per_cluster": nr_cores_per_cluster,
+        # MSIP bit index of the HW-manager DVFS doorbell (first CLINT target after the
+        # harts). Passed to bingo_hw_manager_top so the PM's doorbell bit is not hardcoded;
+        # same source as HW_MANAGER_DVFS_MSIP_BIT / hw_manager_ipi_idx (occamy_soc.sv).
+        "hw_manager_ipi_idx": nr_harts_per_chiplet(occamy_cfg, cluster_generators),
         "soc_wide_xbar": soc_wide_xbar,
         "soc_narrow_xbar": soc_narrow_xbar,
         "quad_ctrl_soc_to_quad_xbar": quad_ctrl_soc_to_quad_xbar,
