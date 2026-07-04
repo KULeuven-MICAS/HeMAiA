@@ -149,8 +149,9 @@ module ${name}_top
     // The original chip_id is disabled, and replaced by chip_id of HeMAiA
   end
 
-  // Machine timer and machine software interrupt pending.
-  logic [${cores-1}:0] mtip, msip;
+  // Machine timer and machine software interrupt pending, one bit per CLINT interrupt
+  // target: the harts plus the HW-manager DVFS doorbell(s) (see nr_ipi_targets).
+  logic [${nr_ipi_targets-1}:0] mtip, msip;
   // Supervisor and machine-mode external interrupt pending.
   logic [1:0] eip;
   logic [0:0] debug_req;

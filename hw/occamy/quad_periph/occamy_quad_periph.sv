@@ -31,7 +31,12 @@ module occamy_quad_periph import occamy_quad_periph_reg_pkg::*; #(
   // DARTS CERF
   output logic        cerf_write_en_o,
   output logic [31:0] cerf_write_data_o,
-  input  logic [31:0] cerf_state_i
+  input  logic [31:0] cerf_state_i,
+  // DVFS: mode select, CLINT doorbell address, host ack, published request
+  output reg_data_t   bingo_hw_manager_pm_mode_o,
+  output logic [47:0] bingo_hw_manager_dvfs_clint_msip_addr_o,
+  output reg_data_t   bingo_hw_manager_dvfs_ack_o,
+  input  reg_data_t   bingo_hw_manager_dvfs_request_i
 );
 
   occamy_quad_periph_hw2reg_t hw2reg;
@@ -65,6 +70,14 @@ module occamy_quad_periph import occamy_quad_periph_reg_pkg::*; #(
   // CERF_STATUS: HW writes actual controller state for SW read-back
   assign hw2reg.cerf_status.d  = cerf_state_i;
   assign hw2reg.cerf_status.de = 1'b1;  // always update
+  // DVFS: SW->HW config
+  assign bingo_hw_manager_pm_mode_o = reg2hw.pm_mode.q;
+  assign bingo_hw_manager_dvfs_clint_msip_addr_o[31:0]  = reg2hw.dvfs_clint_msip_addr_lo.q;
+  assign bingo_hw_manager_dvfs_clint_msip_addr_o[47:32] = reg2hw.dvfs_clint_msip_addr_hi.q[15:0];
+  assign bingo_hw_manager_dvfs_ack_o = reg2hw.dvfs_ack.q;
+  // DVFS_REQUEST: HW publishes the request for SW read-back (always update)
+  assign hw2reg.dvfs_request.d  = bingo_hw_manager_dvfs_request_i;
+  assign hw2reg.dvfs_request.de = 1'b1;
   occamy_quad_periph_reg_top #(
     .reg_req_t ( reg_req_t ),
     .reg_rsp_t ( reg_rsp_t  )

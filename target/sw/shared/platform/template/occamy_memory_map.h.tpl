@@ -234,6 +234,23 @@ inline uintptr_t quad_ctrl_cerf_status_addr(){
     return QUAD_AXI_LITE_NARROW_PERIPHERALS_BASE_ADDR + OCCAMY_QUAD_PERIPH_CERF_STATUS_REG_OFFSET;
 }
 
+// DVFS: mode select + host<->PM doorbell handshake registers
+inline uintptr_t quad_ctrl_pm_mode_addr(){
+    return QUAD_AXI_LITE_NARROW_PERIPHERALS_BASE_ADDR + OCCAMY_QUAD_PERIPH_PM_MODE_REG_OFFSET;
+}
+inline uintptr_t quad_ctrl_dvfs_clint_msip_hi_addr(){
+    return QUAD_AXI_LITE_NARROW_PERIPHERALS_BASE_ADDR + OCCAMY_QUAD_PERIPH_DVFS_CLINT_MSIP_ADDR_HI_REG_OFFSET;
+}
+inline uintptr_t quad_ctrl_dvfs_clint_msip_lo_addr(){
+    return QUAD_AXI_LITE_NARROW_PERIPHERALS_BASE_ADDR + OCCAMY_QUAD_PERIPH_DVFS_CLINT_MSIP_ADDR_LO_REG_OFFSET;
+}
+inline uintptr_t quad_ctrl_dvfs_request_addr(){
+    return QUAD_AXI_LITE_NARROW_PERIPHERALS_BASE_ADDR + OCCAMY_QUAD_PERIPH_DVFS_REQUEST_REG_OFFSET;
+}
+inline uintptr_t quad_ctrl_dvfs_ack_addr(){
+    return QUAD_AXI_LITE_NARROW_PERIPHERALS_BASE_ADDR + OCCAMY_QUAD_PERIPH_DVFS_ACK_REG_OFFSET;
+}
+
 inline uintptr_t clint_msip_addr(uint32_t hartid) {
     return clint_msip_base + (hartid / CLINT_MSIP_P_FIELDS_PER_REG) * 4;
 }

@@ -15,3 +15,8 @@
 #define N_CLUSTERS_PER_CHIPLET_WIDTH   ${clog2_nr_clusters_per_chiplet}
 #define N_CORES_PER_CLUSTER            ${nr_cores_per_cluster}
 #define N_CORES_PER_CLUSTER_WIDTH      ${clog2_nr_cores_per_cluster}
+
+// CLINT MSIP bit the bingo HW manager writes to ring the host DVFS doorbell (a
+// dedicated interrupt target appended after this chiplet's harts). Keep in sync with
+// occamy.py hw_manager_ipi_idx / occamy_soc.sv.tpl.
+#define HW_MANAGER_DVFS_MSIP_BIT       ${hw_manager_dvfs_msip_bit}

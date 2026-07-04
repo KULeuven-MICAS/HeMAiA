@@ -729,12 +729,12 @@ void bingo_hw_scheduler_init_pm(){
     // We need to prepare the following registers:
     // 1. quad_ctrl_idle_power_level_addr: set to the desired power level for idle state
     // For simulation we can set to roughly 1/4 of the normal speed (6)
-    writew(25,                           (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_idle_power_level_addr()));
+    writew(BINGO_PM_IDLE_POWER_LEVEL,    (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_idle_power_level_addr()));
     // 2. quad_ctrl_norm_power_level_addr: set to the desired power level for normal state
     // For simulation the default value is 6
     // This is due to the 4Ghz PLL divided by 16 gives
     // For chip testing, we should choose another value derived from the 4Ghz PLL
-    writew(6,                             (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_norm_power_level_addr()));
+    writew(BINGO_PM_NORMAL_POWER_LEVEL,  (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_norm_power_level_addr()));
     // 3. quad_ctrl_pm_base_hi_addr: set to the high 32 bits of the power manager base address
     uint64_t CLK_CONTROLLER_ADDR = chiplet_addr_transform(HEMAIA_CLK_RST_CONTROLLER_BASE_ADDR);
     writew((uint32_t)(CLK_CONTROLLER_ADDR>>32),       (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_pm_base_hi_addr()));

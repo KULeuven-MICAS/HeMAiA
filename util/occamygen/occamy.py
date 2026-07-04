@@ -19,6 +19,22 @@ sys.path.append(str(Path(__file__).parent /
 from cluster import Generator, PMA, PMACfg, SnitchCluster, clog2  # noqa: E402
 
 
+# Extra CLINT MSIP (software-interrupt) targets beyond the real harts. The bingo HW
+# manager's DVFS notifier needs one dedicated MSIP bit to ring the host: it is an
+# interrupt *source*, not a core, so it is counted separately from the hart count and
+# appended after the harts in the MSIP / mtip / msip vectors and the CLINT NumCores.
+NR_HW_MANAGER_IPI = 1
+
+
+def nr_harts_per_chiplet(occamy_cfg, cluster_generators):
+    """Number of RISC-V harts on one chiplet: host CVA6 (+1) plus the snitch cores.
+    This is the honest core count; the HW-manager DVFS doorbell(s) are extra MSIP
+    targets appended AFTER these harts (see NR_HW_MANAGER_IPI). The first such
+    doorbell therefore sits at MSIP bit index == this hart count."""
+    nr_cores_quadrant = sum(cg.cfg["nr_cores"] for cg in cluster_generators)
+    return occamy_cfg["nr_s1_quadrant"] * nr_cores_quadrant + 1
+
+
 def read_json_file(file):
     try:
         srcfull = file.read()
@@ -758,10 +774,7 @@ def am_connect_quad_wide_and_narrow_xbar(am, am_quad_wide_xbar, am_quad_narrow_x
 
 
 def get_top_kwargs(occamy_cfg, cluster_generators, soc_axi_lite_narrow_periph_xbar, soc_wide_xbar, soc_narrow_xbar, soc2router_bus, router2soc_bus, util, name):
-    core_per_cluster_list = [cluster_generator.cfg["nr_cores"]
-                             for cluster_generator in cluster_generators]
-    nr_cores_quadrant = sum(core_per_cluster_list)
-    nr_s1_quadrants = occamy_cfg["nr_s1_quadrant"]
+    nr_harts = nr_harts_per_chiplet(occamy_cfg, cluster_generators)
     chip_id_width = occamy_cfg["hemaia_multichip"]["chip_id_width"]
     for p in range(len(occamy_cfg["peripherals"]["axi_lite_peripherals"])):
         if occamy_cfg["peripherals"]["axi_lite_peripherals"][p]["name"] == "h2h_mailbox":
@@ -779,7 +792,12 @@ def get_top_kwargs(occamy_cfg, cluster_generators, soc_axi_lite_narrow_periph_xb
         "soc_narrow_xbar": soc_narrow_xbar,
         "soc2router_bus": soc2router_bus,
         "router2soc_bus": router2soc_bus,
-        "cores": nr_s1_quadrants * nr_cores_quadrant + 1,
+        # Honest hart count: host CVA6 + the snitch cores.
+        "cores": nr_harts,
+        # CLINT / mtip / msip interrupt targets = harts + HW-manager doorbell(s).
+        "nr_ipi_targets": nr_harts + NR_HW_MANAGER_IPI,
+        # MSIP bit index of the HW-manager DVFS doorbell (first target after the harts).
+        "hw_manager_ipi_idx": nr_harts,
         "h2h_mailbox_base_addr": util.to_sv_hex(h2h_mailbox_base_addr),
         "c2h_mailbox_base_addr": util.to_sv_hex(c2h_mailbox_base_addr)
     }
@@ -791,6 +809,7 @@ def get_soc_kwargs(occamy_cfg, cluster_generators, soc_narrow_xbar, soc_wide_xba
                              for cluster_generator in cluster_generators]
     nr_cores_quadrant = sum(core_per_cluster_list)
     nr_s1_quadrants = occamy_cfg["nr_s1_quadrant"]
+    nr_harts = nr_harts_per_chiplet(occamy_cfg, cluster_generators)
     soc_kwargs = {
         "name": name,
         "util": util,
@@ -799,7 +818,12 @@ def get_soc_kwargs(occamy_cfg, cluster_generators, soc_narrow_xbar, soc_wide_xba
         "soc_wide_xbar": soc_wide_xbar,
         "soc2router_bus": soc2router_bus,
         "router2soc_bus": router2soc_bus,
-        "cores": nr_s1_quadrants * nr_cores_quadrant + 1,
+        # Honest hart count: host CVA6 + the snitch cores.
+        "cores": nr_harts,
+        # CLINT / mtip / msip interrupt targets = harts + HW-manager doorbell(s).
+        "nr_ipi_targets": nr_harts + NR_HW_MANAGER_IPI,
+        # MSIP bit index of the HW-manager DVFS doorbell (first target after the harts).
+        "hw_manager_ipi_idx": nr_harts,
         "nr_s1_quadrants": nr_s1_quadrants,
         "nr_cores_quadrant": nr_cores_quadrant
     }
@@ -1018,6 +1042,10 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
     # Memchip total size (chip(2,0) external SRAM); zero if cfg has no memchip.
     mem_chips = occamy_cfg["hemaia_multichip"]["testbench_cfg"]["hemaia_mem_chip"]
     mempool_total_size = int(mem_chips[0]["mem_size"]) if mem_chips else 0
+    # CLINT MSIP bit the bingo HW manager writes to ring the host DVFS doorbell: it is
+    # appended right after this chiplet's harts, so its index == the hart count. Exposed
+    # to SW so dvfs.h does not hardcode it (must match hw_manager_ipi_idx / occamy_soc.sv).
+    hw_manager_dvfs_msip_bit = nr_harts_per_chiplet(occamy_cfg, cluster_generators)
     cheader_kwargs = {
         "name": name,
         "nr_chiplets": nr_chiplets,
@@ -1026,6 +1054,7 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
         "nr_cores": nr_cores,
         "nr_clusters_per_chiplet": nr_clusters_per_chiplet,
         "nr_cores_per_cluster": nr_cores_per_cluster,
+        "hw_manager_dvfs_msip_bit": hw_manager_dvfs_msip_bit,
         "clog2_nr_chiplets": clog2(nr_chiplets),
         "clog2_nr_clusters_per_chiplet": clog2(nr_clusters_per_chiplet),
         "clog2_nr_cores_per_cluster": clog2(nr_cores_per_cluster),
@@ -1132,10 +1161,7 @@ def get_testharness_kwargs(occamy_cfg, sim_with_mem_macro, sim_with_interposer, 
     return testharness_kwargs
 
 def get_chip_kwargs(soc_wide_xbar, soc_narrow_xbar, soc_axi_lite_narrow_periph_xbar, soc2router_bus, router2soc_bus, occamy_cfg, cluster_generators, util, name):
-    core_per_cluster_list = [cluster_generator.cfg["nr_cores"]
-                             for cluster_generator in cluster_generators]
-    nr_cores_quadrant = sum(core_per_cluster_list)
-    nr_s1_quadrants = occamy_cfg["nr_s1_quadrant"]
+    nr_harts = nr_harts_per_chiplet(occamy_cfg, cluster_generators)
     chip_kwargs = {
         "name": name,
         "util": util,
@@ -1146,7 +1172,11 @@ def get_chip_kwargs(soc_wide_xbar, soc_narrow_xbar, soc_axi_lite_narrow_periph_x
         "soc_axi_lite_narrow_periph_xbar": soc_axi_lite_narrow_periph_xbar,
         "soc2router_bus": soc2router_bus,
         "router2soc_bus": router2soc_bus,
-        "cores": nr_s1_quadrants * nr_cores_quadrant + 1
+        # Consumed ONLY by the CLINT template (clint.{hjson,sv}.tpl read ${cores} to size
+        # NumCores); occamy_chip.sv.tpl does not use it. The CLINT allocates one MSIP+timer
+        # target per interrupt source -- the harts PLUS the HW-manager DVFS doorbell(s) --
+        # so this is the interrupt-target count, not the hart count.
+        "cores": nr_harts + NR_HW_MANAGER_IPI
     }
     return chip_kwargs
 

@@ -481,6 +481,17 @@ void bingo_close_all_clusters(bingo_task_t **task_list, uint32_t num_tasks);
 /////////////////////////
 // BINGO HW Scheduler //
 /////////////////////////
+// Idle / normal clock-division power levels programmed by bingo_hw_scheduler_init_pm().
+// Exposed so DVFS can seed its ack with the correct boot (= normal) level instead of a
+// stale 0 (which would otherwise cause a spurious initial RAISE doorbell).
+#define BINGO_PM_IDLE_POWER_LEVEL   25
+#define BINGO_PM_NORMAL_POWER_LEVEL 6
+
+// Configure the power-management registers (idle/normal power levels, per-core
+// power domains, EN_IDLE_PM) without starting a task offload. Exposed so a test
+// can arm the PM + DVFS on a single chiplet.
+void bingo_hw_scheduler_init_pm(void);
+
 void bingo_hw_scheduler_init(uint64_t dev_arg_base_addr, uint64_t dev_kernel_base_addr, uint32_t num_dev_tasks, uint64_t global_task_id_to_dev_task_id_base_addr, uint32_t num_total_tasks, uint64_t bingo_hw_scheduler_task_desc_list_base, uint32_t bingo_hw_scheduler_num_task_desc);
 
 uint32_t bingo_hw_scheduler(uint64_t *host_arg_list, uint64_t *host_kernel_list, int32_t *global_task_id_to_host_task_id);

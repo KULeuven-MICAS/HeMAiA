@@ -288,5 +288,71 @@
         }
       ]
     },
+    // DVFS: mode select + host<->PM doorbell handshake registers
+    { name: "PM_MODE",
+      desc: "Power management mode: 0 = DFS (PM scales clock), 1 = DVFS (PM notifies host)",
+      swaccess: "rw",
+      hwaccess: "hro",
+      fields: [
+        {
+          bits: "31:0",
+          resval: "0",
+          name: "PM_MODE",
+          desc: '''0 = DFS (autonomous clock scaling), 1 = DVFS (notify host to scale V+F)'''
+        }
+      ]
+    },
+    { name: "DVFS_CLINT_MSIP_ADDR_HI",
+      desc: "Higher 32bit of the CLINT MSIP word address used for the DVFS doorbell.",
+      swaccess: "rw",
+      hwaccess: "hro",
+      fields: [
+        {
+          bits: "31:0",
+          resval: "0",
+          name: "DVFS_CLINT_MSIP_ADDR_HI",
+          desc: '''Higher 32bit of the CLINT MSIP word address (host programs {chip_id, 0x0400_0000}).'''
+        }
+      ]
+    },
+    { name: "DVFS_CLINT_MSIP_ADDR_LO",
+      desc: "Lower 32bit of the CLINT MSIP word address used for the DVFS doorbell.",
+      swaccess: "rw",
+      hwaccess: "hro",
+      fields: [
+        {
+          bits: "31:0",
+          resval: "0",
+          name: "DVFS_CLINT_MSIP_ADDR_LO",
+          desc: '''Lower 32bit of the CLINT MSIP word address.'''
+        }
+      ]
+    },
+    { name: "DVFS_REQUEST",
+      desc: "DVFS request published by the PM for the host ISR (read-only).",
+      swaccess: "ro",
+      hwaccess: "hwo",
+      fields: [
+        {
+          bits: "31:0",
+          resval: "0",
+          name: "DVFS_REQUEST",
+          desc: '''bit0 = pending, bit1 = direction (1=raise/0=lower), bits[15:8] = target level'''
+        }
+      ]
+    },
+    { name: "DVFS_ACK",
+      desc: "Host acknowledge: the power level the host has applied (closes the DVFS handshake).",
+      swaccess: "rw",
+      hwaccess: "hro",
+      fields: [
+        {
+          bits: "31:0",
+          resval: "0",
+          name: "DVFS_ACK",
+          desc: '''Host writes the applied target level here after driving PMIC + clk/rst.'''
+        }
+      ]
+    },
   ]
 }

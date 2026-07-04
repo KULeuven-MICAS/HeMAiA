@@ -22,6 +22,9 @@
 //       (see details in the bingo_runtime_schedule function in bingo_api.c)
 
 #include "offload_bingo_hw.h"
+// DVFS runtime (trap handler + dvfs_init). Included here (not in host.h) so only
+// this test links the DVFS handler + its printf footprint; other apps are unaffected.
+#include "dvfs.h"
 
 int main() {
     // Bear in mind that all the function calls here will be executed by all the chiplets
@@ -66,19 +69,38 @@ int main() {
     asm volatile("fence" ::: "memory");
     // printf("Chip(%x, %x): [Host] Wake up clusters\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
     ///////////////////////////////
-    // 4. Run the bingo runtime
+    // 4. DVFS bring-up test
     ///////////////////////////////
-    // We need to first sync all the chiplets
-    // uint8_t sync_checkpoint = 1;
-    // chip_barrier(comm_buffer_ptr, 0x00, 0x11, sync_checkpoint);
-    // sync_checkpoint++;
-    // printf("Chip(%x, %x): [Host] All chiplets synced, start Bingo\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
+    // Only chip(0,0) exercises the scheduler PM + new DVFS notify path. Its clusters
+    // were woken above and now block on the (empty) ready queue, so once we arm DVFS the
+    // PM sees the whole chiplet idle and rings the host MSIP doorbell -> dvfs_trap_handler
+    // prints the (mimicked) voltage/frequency control sequence and acks the PM. The other
+    // chiplets run no workload; they only sit at the barrier below so they do not return
+    // early (which would end the multi-chip simulation before chip00 finishes).
     int ret = 0;
+    // Arm DVFS on chip(0,0) BEFORE the workload so its PM monitors chip00's busy<->idle
+    // transitions during execution and rings the host doorbell. Only chip00 enables DVFS;
+    // the other chiplets run the workload normally without DVFS.
+    if (current_chip_id == 0x00) {
+        // boot_level = normal: seed DVFS_ACK so the PM starts at "normal" and only rings
+        // once chip00 actually goes idle (no spurious initial RAISE).
+        dvfs_init(N_CLUSTERS_PER_CHIPLET + 1, BINGO_PM_NORMAL_POWER_LEVEL);
+        printf("[dvfs][chip0] DVFS armed before workload\n");
+    }
+    // All chiplets run their part of the (cross-chiplet) int32_add workload. This releases
+    // the clusters and produces real busy<->idle transitions; chip00's PM then rings the
+    // DVFS doorbell and dvfs_trap_handler prints the mimicked V/F control sequence.
     ret = kernel_execution();
     clear_host_sw_interrupt(current_chip_id);
+    if (current_chip_id == 0x00) {
+        // Stop further DVFS traps before printing (the ISR records silently; printing
+        // happens here, outside interrupt context, to stay reentrant-safe).
+        asm volatile("csrc mstatus, %0" ::"r"(1 << 3));  // clear mstatus.MIE
+        printf("[dvfs][chip0] workload done\n");
+        dvfs_dump_log();
+    }
+    // Keep all four compute chiplets alive at a rendezvous so none returns early.
+    chip_barrier((volatile comm_buffer_t *)comm_buffer_ptr, 0x00, 0x11, 1);
     OFFLOAD_BINGO_HW_DEBUG_PRINT_SAFE("Chip(%x, %x): [Host] Offload Finish\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
-    // Sync before exit
-    // chip_barrier(comm_buffer_ptr, 0x00, 0x11, sync_checkpoint);
-    // sync_checkpoint++;
     return ret;
 }
