@@ -63,6 +63,11 @@ module ${name}_quad_ctrl
   cfg_t bingo_hw_manager_idle_power_level;
   cfg_t bingo_hw_manager_norm_power_level;
   cfg_t [BINGO_HW_MANAGER_NR_CORE_PER_CLUSTER-1:0][NrClustersPerQuad-1:0] bingo_hw_manager_core_power_domain;
+  //  DVFS
+  cfg_t                 bingo_hw_manager_pm_mode;
+  logic [AddrWidth-1:0] bingo_hw_manager_dvfs_clint_msip_addr;
+  cfg_t                 bingo_hw_manager_dvfs_ack;
+  cfg_t                 bingo_hw_manager_dvfs_request;
   //  DARTS CERF
   logic        cerf_write_en;
   logic [31:0] cerf_write_data;
@@ -155,6 +160,11 @@ module ${name}_quad_ctrl
     .bingo_hw_manager_idle_power_level_o    (bingo_hw_manager_idle_power_level   ),
     .bingo_hw_manager_norm_power_level_o    (bingo_hw_manager_norm_power_level   ),
     .bingo_hw_manager_core_power_domain_o   (bingo_hw_manager_core_power_domain  ),
+    // DVFS
+    .bingo_hw_manager_pm_mode_o             (bingo_hw_manager_pm_mode            ),
+    .bingo_hw_manager_dvfs_clint_msip_addr_o(bingo_hw_manager_dvfs_clint_msip_addr),
+    .bingo_hw_manager_dvfs_ack_o            (bingo_hw_manager_dvfs_ack           ),
+    .bingo_hw_manager_dvfs_request_i        (bingo_hw_manager_dvfs_request       ),
     // DARTS CERF
     .cerf_write_en_o                        (cerf_write_en                       ),
     .cerf_write_data_o                      (cerf_write_data                     ),
@@ -209,6 +219,9 @@ module ${name}_quad_ctrl
     .TASK_QUEUE_TYPE                    (1), // 1: AXI Lite Master 0: Default AXI Lite Slave 
     .NUM_CORES_PER_CLUSTER    (BINGO_HW_MANAGER_NR_CORE_PER_CLUSTER    ),
     .NUM_CLUSTERS_PER_CHIPLET (NrClustersPerQuad       ),
+    // DVFS doorbell MSIP bit: injected here so the PM is not hardcoded (see occamy.py
+    // hw_manager_ipi_idx; must match HW_MANAGER_DVFS_MSIP_BIT / occamy_soc.sv ipi_i).
+    .HOST_DVFS_MSIP_BIT       (${hw_manager_ipi_idx}                     ),
     .HostAxiLiteAddrWidth     (${quad_ctrl_axi_lite_xbar.aw}             ),
     .HostAxiLiteDataWidth     (${quad_ctrl_axi_lite_xbar.dw}             ),
     .DeviceAxiLiteAddrWidth   (${quad_ctrl_axi_lite_narrow_mux.aw}       ),
@@ -261,6 +274,11 @@ module ${name}_quad_ctrl
     .bingo_hw_manager_normal_power_level_i     (bingo_hw_manager_norm_power_level            ),
     .bingo_hw_manager_pm_base_addr_i           (bingo_hw_manager_pm_base_addr                ),
     .bingo_hw_manager_core_power_domain_i      (bingo_hw_manager_core_power_domain           ),
+    // DVFS
+    .bingo_hw_manager_pm_mode_i                (bingo_hw_manager_pm_mode                     ),
+    .bingo_hw_manager_dvfs_clint_msip_addr_i   (bingo_hw_manager_dvfs_clint_msip_addr        ),
+    .bingo_hw_manager_dvfs_ack_i               (bingo_hw_manager_dvfs_ack                    ),
+    .bingo_hw_manager_dvfs_request_o           (bingo_hw_manager_dvfs_request                ),
     .pm_axi_lite_req_o                         (${quad_ctrl_axi_lite_xbar.in_bingo_hw_scheduler_write_pm.req_name()}),
     .pm_axi_lite_resp_i                        (${quad_ctrl_axi_lite_xbar.in_bingo_hw_scheduler_write_pm.rsp_name()}),
     // DARTS CERF

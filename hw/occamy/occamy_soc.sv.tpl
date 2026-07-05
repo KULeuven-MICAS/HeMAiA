@@ -93,8 +93,8 @@ module ${name}_soc
   output logic [1:0] spm_wide_rerror_o,
 
   // Interrupts and debug requests
-  input  logic [${cores-1}:0] mtip_i,
-  input  logic [${cores-1}:0] msip_i,
+  input  logic [${nr_ipi_targets-1}:0] mtip_i,
+  input  logic [${nr_ipi_targets-1}:0] msip_i,
   input  logic [1:0] eip_i,
   input  logic [0:0] debug_req_i,
 
@@ -159,7 +159,9 @@ module ${name}_soc
     .rst_ni (rst_ni),
     .chip_id_i (chip_id_i),
     .irq_i (eip_i),
-    .ipi_i (msip_i[0]),
+    // msip_i[0] = host CVA6 IPI; msip_i[${hw_manager_ipi_idx}] = the bingo HW-manager DVFS doorbell
+    // (a dedicated MSIP target appended after the harts, not a core).
+    .ipi_i (msip_i[0] | msip_i[${hw_manager_ipi_idx}]),
     .time_irq_i (mtip_i[0]),
     .debug_req_i (debug_req_i[0]),
     .boot_addr_i (boot_addr_i),

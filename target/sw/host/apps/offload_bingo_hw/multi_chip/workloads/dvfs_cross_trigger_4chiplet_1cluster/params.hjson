@@ -1,0 +1,30 @@
+# Copyright 2026 KU Leuven.
+# Licensed under the Apache License, Version 2.0, see LICENSE for details.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Xiaoling Yi <xiaoling.yi@kuleuven.be>
+
+{
+    // DVFS stress: each chiplet runs num_stages sequential gemm super-stages, each
+    // ending in a host-core check (an all-cluster-idle gap). => ~num_stages RAISE/LOWER
+    // DVFS doorbell pairs per chiplet. Bump for more transitions.
+    // chip00 (producer) runs this many gemm stages while chip01/10/11 sit idle at low
+    // power; then it broadcasts to trigger them to high power.
+    producer_stages: 6
+    // each consumer (chip01/10/11) runs this many gemm stages once triggered, so its
+    // high-power (busy) window is clearly sustained.
+    consumer_stages: 4
+    num_chiplets: 4
+    num_clusters: 1
+    array_shape: 1
+    transposed_A: 0
+    transposed_B: 0
+    K: 4
+    N: 1
+    M: 2
+    // these two will config the addNewC = 1
+    addNonZeroC: 0
+    addZeroC: 1
+    // these two will config the addNewC = 0, but need to make sure M=M=1
+    accumPrevC: 0
+}
