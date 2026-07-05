@@ -143,11 +143,13 @@ void dvfs_trap_handler(void) {
     asm volatile("csrr %0, mcause" : "=r"(mcause));
     if ((mcause & 0xff) == 3) {  // machine software interrupt
         dvfs_service_request();
-        // The DVFS doorbell (msip bit 3) and the host IPI (msip bit 0) share this
-        // machine-software-interrupt cause. The device sets msip[0] on cluster
-        // start/exit but the host never blocks on it (offload sync is via the
-        // mailbox queues), so ack it here too to avoid re-trapping on it.
-        clear_sw_interrupt_unsafe(_dvfs_chip_id, 0);
+        // The DVFS doorbell (HOST_DVFS_MSIP_BIT) and the host's own IPI share the
+        // machine-software-interrupt cause. dvfs_service_request() already cleared the
+        // doorbell bit; the device also sets the host IPI on cluster start/exit but the
+        // host never blocks on it (offload sync is via the mailbox queues), so clear the
+        // host IPI here via the shared helper -- no hardcoded bit index -- to stop it
+        // re-trapping.
+        clear_host_sw_interrupt_unsafe(_dvfs_chip_id);
     }
 }
 
