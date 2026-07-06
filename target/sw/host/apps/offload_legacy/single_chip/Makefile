@@ -17,6 +17,6 @@ DEVICE_APPS = snax-test-integration
 DEVICE_APPS += snax-test-bingo-alloc
 DEVICE_APPS += snax-xdma-copy
 DEVICE_APPS += snax-xdma-hazard
-DEVICE_APPS += snax-versacore-matmul-profile
+DEVICE_APPS += versacore-matmul-profile-1cluster-4chip
 
 include ../../common.mk

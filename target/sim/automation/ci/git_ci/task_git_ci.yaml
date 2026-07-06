@@ -14,9 +14,9 @@ runs:
     CHIP_TYPE: single_chip
     WORKLOAD: None
     DEV_APP: snax-xdma-copy
-  # offload_legacy / single_chip: snax-versacore-matmul-profile
+  # offload_legacy / single_chip: versacore-matmul-profile-1cluster-4chip
   - HOST_APP_TYPE: offload_legacy
     CHIP_TYPE: single_chip
     WORKLOAD: None
-    DEV_APP: snax-versacore-matmul-profile
+    DEV_APP: versacore-matmul-profile-1cluster-4chip
 

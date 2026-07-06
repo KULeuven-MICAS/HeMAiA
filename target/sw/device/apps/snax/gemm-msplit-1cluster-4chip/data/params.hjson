@@ -6,7 +6,7 @@
 // D = A x B is split along M: B is shared, A and D are split into `num_chips`
 // row-blocks. M is the TOTAL number of rows and must be divisible by num_chips,
 // so each chip computes a (M/num_chips, N, K) GEMM block. The per-chip shape
-// here (2, 4, 4) matches the proven snax-versacore-matmul-profile reference.
+// here (2, 4, 4) matches the proven versacore-matmul-profile-1cluster-4chip reference.
 {
   // gemm configurations
   array_shape: 1,
