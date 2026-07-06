@@ -81,6 +81,10 @@ runs:
     CHIP_TYPE: multi_chip
     WORKLOAD: None
     DEV_APP: gemm-msplit-1cluster-4chip
+  - HOST_APP_TYPE: offload_legacy
+    CHIP_TYPE: multi_chip
+    WORKLOAD: None
+    DEV_APP: gemm-msplit-4cluster-1chip
 
   # ---- offload_bingo_sw / single_chip ----
   # dummy_1cluster
