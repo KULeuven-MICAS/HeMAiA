@@ -6,6 +6,7 @@
 
 # Workloads to build separate ELFs for
 APPS = gemm_msplit_4chiplet_1cluster
+APPS += gemm_msplit_4chiplet_2cluster_basic
 APPS += gemm_msplit_4chiplet_2cluster
 APPS += gemm_parallel_dma_4chiplet_1cluster
 APPS += gemm_ksplit_4chiplet_1cluster

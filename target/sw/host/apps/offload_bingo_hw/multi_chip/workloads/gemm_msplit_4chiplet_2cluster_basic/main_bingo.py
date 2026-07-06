@@ -18,8 +18,8 @@ A is split into A1..A8 and B is stored in the memory chip.  The tile mapping is:
 Flow:
   1. Load A1..A8 from the memory chip into local TCDM.
   2. Load B from the memory chip into chiplet 00 cluster 0 TCDM.
-  3. Broadcast B once to the remote chiplets' cluster 0 TCDM, then copy B from
-     cluster 0 to cluster 1 inside each chiplet.
+  3. Fan out B to the remote chiplets' cluster 0 TCDM with point-to-point D2D
+     copies, then copy B from cluster 0 to cluster 1 inside each chiplet.
   4. Run GEMM on every active cluster and store each D tile from TCDM to the
      chiplet-local L3.
   5. Check each local L3 D tile against the corresponding golden D tile.
@@ -42,8 +42,7 @@ from bingo_dfg import BingoDFG  # noqa E402
 from bingo_helpers import chiplet_addr_transform_loc  # noqa E402
 from bingo_kernel_args import (  # noqa E402
     HostBingoKernelCheckResultArgs,
-    SnaxBingoKernelIdma1dCopyArgs,
-    SnaxBingoKernelIdmaBroadcastArgs,
+    HostBingoKernelIdmaArgs,
     SnaxBingoKernelGemmFullArgs,
 )
 from bingo_mem_handle import BingoMemAlloc, BingoMemFixedAddr, BingoMemSymbol  # noqa E402
@@ -60,6 +59,7 @@ CLUSTER_IDS = [0, 1]
 GEMM_CORE = 0
 DMA_CORE = 1
 XDMA_WIDTH_BYTES = 64
+LOW_40_BIT_ADDR_MASK = "0x000000ffffffffffULL"
 
 
 def get_args():
@@ -83,6 +83,11 @@ def data_index(chiplet_pos, cluster_id):
 
 def align_up(value, alignment):
     return ((value + alignment - 1) // alignment) * alignment
+
+
+def chiplet_alloc_expr(chiplet_id, alloc):
+    local_addr_expr = f"((uint64_t){alloc.get_c_var_name()} & {LOW_40_BIT_ADDR_MASK})"
+    return f"(chiplet_addr_transform_full(0x{chiplet_id:02x}, {local_addr_expr}))"
 
 
 def load_hjson(path):
@@ -213,17 +218,17 @@ def add_node(dfg, node):
 
 
 # load a tile from memory chip to chiplet cluster TCDM
-def make_a_load_node(dfg, mem, params, chiplet, cluster_id, idx):
+def make_a_load_node(dfg, mem, params, chiplet, cluster_id, idx, host_core_id):
     h = chip_hex(chiplet)
     return add_node(
         dfg,
         BingoNode(
             assigned_chiplet_id=chiplet,
-            assigned_cluster_id=cluster_id,
-            assigned_core_id=DMA_CORE,
+            assigned_cluster_id=0,
+            assigned_core_id=host_core_id,
             node_name=f"Load_A{idx + 1}_MemChip_to_Chip{h}_C{cluster_id}_TCDM",
-            kernel_name="__snax_bingo_kernel_idma_1d_copy",
-            kernel_args=SnaxBingoKernelIdma1dCopyArgs(
+            kernel_name="__host_bingo_kernel_idma",
+            kernel_args=HostBingoKernelIdmaArgs(
                 src_addr=mem["A_mp"][idx],
                 dst_addr=mem["A_l1"][(chiplet, cluster_id)],
                 size=params["Atile_size"],
@@ -233,16 +238,16 @@ def make_a_load_node(dfg, mem, params, chiplet, cluster_id, idx):
 
 
 # load B tile from memory chip to chip00 cluster0 TCDM
-def make_load_b_node(dfg, mem, params):
+def make_load_b_node(dfg, mem, params, host_core_id):
     return add_node(
         dfg,
         BingoNode(
             assigned_chiplet_id=0x00,
             assigned_cluster_id=0,
-            assigned_core_id=DMA_CORE,
+            assigned_core_id=host_core_id,
             node_name="Load_B_MemChip_to_Chip00_C0_TCDM",
-            kernel_name="__snax_bingo_kernel_idma_1d_copy",
-            kernel_args=SnaxBingoKernelIdma1dCopyArgs(
+            kernel_name="__host_bingo_kernel_idma",
+            kernel_args=HostBingoKernelIdmaArgs(
                 src_addr=mem["B_mp"],
                 dst_addr=mem["B_l1"][(0x00, 0)],
                 size=params["B_size"],
@@ -251,19 +256,24 @@ def make_load_b_node(dfg, mem, params):
     )
 
 
-# Broadcast B tile from chip00 cluster0 TCDM to all remote chiplet cluster0 TCDMs
-def make_broadcast_b_node(dfg, mem, params):
+# Fan out B tile from chip00 cluster0 TCDM to remote chiplet cluster0 TCDM
+def make_fanout_b_node(dfg, mem, params, chiplet, host_core_id):
+    h = chip_hex(chiplet)
+    # The copy is emitted in chip00's host branch, where only chip00 allocation
+    # variables are in scope.  The B buffers are allocated in the same order on
+    # every chiplet, so retarget chip00's local B address to the remote chiplet.
+    dst_addr = chiplet_alloc_expr(chiplet, mem["B_l1"][(0x00, 0)])
     return add_node(
         dfg,
         BingoNode(
             assigned_chiplet_id=0x00,
             assigned_cluster_id=0,
-            assigned_core_id=DMA_CORE,
-            node_name="Broadcast_B_Chip00_C0_to_Remote_C0_TCDM",
-            kernel_name="__snax_bingo_kernel_idma_broadcast",
-            kernel_args=SnaxBingoKernelIdmaBroadcastArgs(
+            assigned_core_id=host_core_id,
+            node_name=f"Copy_B_Chip00_C0_to_Chip{h}_C0_TCDM",
+            kernel_name="__host_bingo_kernel_idma",
+            kernel_args=HostBingoKernelIdmaArgs(
                 src_addr=mem["B_l1"][(0x00, 0)],
-                dst_addr=mem["B_l1"][(0x00, 0)],
+                dst_addr=dst_addr,
                 size=params["B_size"],
             ),
         ),
@@ -271,17 +281,17 @@ def make_broadcast_b_node(dfg, mem, params):
 
 
 # Copy B tile from cluster0 to cluster1 inside each chiplet
-def make_copy_b_to_cluster1_node(dfg, mem, params, chiplet):
+def make_copy_b_to_cluster1_node(dfg, mem, params, chiplet, host_core_id):
     h = chip_hex(chiplet)
     return add_node(
         dfg,
         BingoNode(
             assigned_chiplet_id=chiplet,
             assigned_cluster_id=0,
-            assigned_core_id=DMA_CORE,
+            assigned_core_id=host_core_id,
             node_name=f"Copy_B_Chip{h}_C0_to_C1_TCDM",
-            kernel_name="__snax_bingo_kernel_idma_1d_copy",
-            kernel_args=SnaxBingoKernelIdma1dCopyArgs(
+            kernel_name="__host_bingo_kernel_idma",
+            kernel_args=HostBingoKernelIdmaArgs(
                 src_addr=mem["B_l1"][(chiplet, 0)],
                 dst_addr=mem["B_l1"][(chiplet, 1)],
                 size=params["B_size"],
@@ -317,17 +327,17 @@ def make_gemm_node(dfg, mem, params, chiplet, cluster_id, idx):
     )
 
 # store D tile from TCDM to chiplet-local L3
-def make_store_d_node(dfg, mem, params, chiplet, cluster_id, idx):
+def make_store_d_node(dfg, mem, params, chiplet, cluster_id, idx, host_core_id):
     h = chip_hex(chiplet)
     return add_node(
         dfg,
         BingoNode(
             assigned_chiplet_id=chiplet,
-            assigned_cluster_id=cluster_id,
-            assigned_core_id=DMA_CORE,
+            assigned_cluster_id=0,
+            assigned_core_id=host_core_id,
             node_name=f"Store_D{idx + 1}_Chip{h}_C{cluster_id}_TCDM_to_L3",
-            kernel_name="__snax_bingo_kernel_idma_1d_copy",
-            kernel_args=SnaxBingoKernelIdma1dCopyArgs(
+            kernel_name="__host_bingo_kernel_idma",
+            kernel_args=HostBingoKernelIdmaArgs(
                 src_addr=mem["D_l1"][(chiplet, cluster_id)],
                 dst_addr=mem["D_l3"][(chiplet, cluster_id)],
                 size=params["D_size"],
@@ -372,51 +382,58 @@ def create_dfg(params, mem, platform):
         chiplet_ids=platform["chiplet_ids"],
     )
 
-    # Load A tiles from memory chip to each chiplet cluster TCDM. These loads
-    # have no data dependency on each other.
+    # Load A tiles from memory chip to each chiplet cluster TCDM
+    # init the load a tasks and store them in a list to connect them in order
     load_a = {}
+    ordered_loads = []
     for chiplet_pos, chiplet in enumerate(EXPECTED_CHIPLETS):
         for cluster_id in CLUSTER_IDS:
             idx = data_index(chiplet_pos, cluster_id)
             load_a[(chiplet, cluster_id)] = make_a_load_node(
-                dfg, mem, params, chiplet, cluster_id, idx
+                dfg, mem, params, chiplet, cluster_id, idx, host_core_id
             )
+            ordered_loads.append(load_a[(chiplet, cluster_id)])
 
     # Load B tile from memory chip to chip00 cluster0 TCDM
-    load_b = make_load_b_node(dfg, mem, params)
-    broadcast_b = make_broadcast_b_node(dfg, mem, params)
-    dfg.bingo_add_edge(load_b, broadcast_b)
+    load_b = make_load_b_node(dfg, mem, params, host_core_id)
+    # Connect the A load tasks in order, then connect the last A load to the B load
+    for prev_node, next_node in zip(ordered_loads, ordered_loads[1:]):
+        dfg.bingo_add_edge(prev_node, next_node)
+    dfg.bingo_add_edge(ordered_loads[-1], load_b)
+
+    # The D2D broadcast address includes the source chiplet and causes the
+    # source write leg to wait indefinitely.
+    # Use explicit remote copies instead;
+    # chip00 cluster0 already has B from load_b.
+    prev_node = load_b
+    for chiplet in EXPECTED_CHIPLETS[1:]:
+        fanout_b = make_fanout_b_node(dfg, mem, params, chiplet, host_core_id)
+        dfg.bingo_add_edge(prev_node, fanout_b)
+        prev_node = fanout_b
 
     copy_b_to_c1 = {}
     for chiplet in EXPECTED_CHIPLETS:
         copy_b_to_c1[chiplet] = make_copy_b_to_cluster1_node(
-            dfg, mem, params, chiplet
+            dfg, mem, params, chiplet, host_core_id
         )
-        b_c0_ready = load_b if chiplet == 0x00 else broadcast_b
-        dfg.bingo_add_edge(b_c0_ready, copy_b_to_c1[chiplet])
+        dfg.bingo_add_edge(prev_node, copy_b_to_c1[chiplet])
+        prev_node = copy_b_to_c1[chiplet]
 
     for chiplet_pos, chiplet in enumerate(EXPECTED_CHIPLETS):
         for cluster_id in CLUSTER_IDS:
             idx = data_index(chiplet_pos, cluster_id)
             gemm = make_gemm_node(dfg, mem, params, chiplet, cluster_id, idx)
             store = make_store_d_node(
-                dfg, mem, params, chiplet, cluster_id, idx
+                dfg, mem, params, chiplet, cluster_id, idx, host_core_id
             )
             check = make_check_d_node(
                 dfg, mem, params, chiplet, cluster_id, idx, host_core_id
             )
 
-            b_ready = (
-                load_b
-                if chiplet == 0x00 and cluster_id == 0
-                else broadcast_b
-                if cluster_id == 0
-                else copy_b_to_c1[chiplet]
-            )
-            dfg.bingo_add_edge(load_a[(chiplet, cluster_id)], gemm)
-            dfg.bingo_add_edge(b_ready, gemm)
+            dfg.bingo_add_edge(prev_node, gemm)
             dfg.bingo_add_edge(gemm, store)
             dfg.bingo_add_edge(store, check)
+            prev_node = check
 
     return dfg
 
@@ -445,7 +462,7 @@ def main():
     mem = define_memory_handles(params)
     dfg = create_dfg(params, mem, platform)
 
-    print("Built DFG: independent load A1..A8, broadcast B to cluster0, copy B to cluster1, GEMM/check D1..D8")
+    print("Built DFG: load A1..A8, fan out B to cluster0, copy B to cluster1, GEMM/check D1..D8")
     print(f"  active_chiplets={[chip_hex(c) for c in EXPECTED_CHIPLETS]}")
     print(f"  active_clusters={CLUSTER_IDS}")
     print(
