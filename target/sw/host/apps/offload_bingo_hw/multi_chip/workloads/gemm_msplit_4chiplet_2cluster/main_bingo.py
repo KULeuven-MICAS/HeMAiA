@@ -162,6 +162,7 @@ def define_memory_handles(params):
     }
 
     for idx in range(params["tile_count"]):
+        # The A tiles are stored in the memory chip at fixed offsets from the base address.
         mem["A_mp"][idx] = BingoMemFixedAddr(
             params["mem_pool_base_addr"] + idx * params["Atile_size"]
         )
@@ -171,6 +172,7 @@ def define_memory_handles(params):
         mem["D_golden_l3"][idx] = BingoMemSymbol(
             "D_data_L3", offset=idx * params["D_size"]
         )
+    # The B tile is stored in the memory chip at a fixed offset from the base address.
     mem["B_mp"] = BingoMemFixedAddr(params["B_mp_base_addr"])
     mem["B_golden_l3"] = BingoMemSymbol("B_data_L3")
 
@@ -215,6 +217,7 @@ def add_node(dfg, node):
     return node
 
 
+# load a tile from memory chip to chiplet cluster TCDM
 def make_a_load_node(dfg, mem, params, chiplet, cluster_id, idx, host_core_id):
     h = chip_hex(chiplet)
     return add_node(
@@ -234,6 +237,7 @@ def make_a_load_node(dfg, mem, params, chiplet, cluster_id, idx, host_core_id):
     )
 
 
+# load B tile from memory chip to chip00 cluster0 TCDM
 def make_load_b_node(dfg, mem, params, host_core_id):
     return add_node(
         dfg,
@@ -252,6 +256,7 @@ def make_load_b_node(dfg, mem, params, host_core_id):
     )
 
 
+# Fan out B tile from chip00 cluster0 TCDM to remote chiplet cluster0 TCDM
 def make_fanout_b_node(dfg, mem, params, chiplet, host_core_id):
     h = chip_hex(chiplet)
     # The copy is emitted in chip00's host branch, where only chip00 allocation
@@ -275,6 +280,7 @@ def make_fanout_b_node(dfg, mem, params, chiplet, host_core_id):
     )
 
 
+# Copy B tile from cluster0 to cluster1 inside each chiplet
 def make_copy_b_to_cluster1_node(dfg, mem, params, chiplet, host_core_id):
     h = chip_hex(chiplet)
     return add_node(
@@ -293,7 +299,7 @@ def make_copy_b_to_cluster1_node(dfg, mem, params, chiplet, host_core_id):
         ),
     )
 
-
+# Run GEMM on each chiplet cluster
 def make_gemm_node(dfg, mem, params, chiplet, cluster_id, idx):
     h = chip_hex(chiplet)
     return add_node(
@@ -320,7 +326,7 @@ def make_gemm_node(dfg, mem, params, chiplet, cluster_id, idx):
         ),
     )
 
-
+# store D tile from TCDM to chiplet-local L3
 def make_store_d_node(dfg, mem, params, chiplet, cluster_id, idx, host_core_id):
     h = chip_hex(chiplet)
     return add_node(
@@ -376,6 +382,8 @@ def create_dfg(params, mem, platform):
         chiplet_ids=platform["chiplet_ids"],
     )
 
+    # Load A tiles from memory chip to each chiplet cluster TCDM
+    # init the load a tasks and store them in a list to connect them in order
     load_a = {}
     ordered_loads = []
     for chiplet_pos, chiplet in enumerate(EXPECTED_CHIPLETS):
@@ -386,13 +394,16 @@ def create_dfg(params, mem, platform):
             )
             ordered_loads.append(load_a[(chiplet, cluster_id)])
 
+    # Load B tile from memory chip to chip00 cluster0 TCDM
     load_b = make_load_b_node(dfg, mem, params, host_core_id)
+    # Connect the A load tasks in order, then connect the last A load to the B load
     for prev_node, next_node in zip(ordered_loads, ordered_loads[1:]):
         dfg.bingo_add_edge(prev_node, next_node)
     dfg.bingo_add_edge(ordered_loads[-1], load_b)
 
     # The D2D broadcast address includes the source chiplet and causes the
-    # source write leg to wait indefinitely. Use explicit remote copies instead;
+    # source write leg to wait indefinitely.
+    # Use explicit remote copies instead;
     # chip00 cluster0 already has B from load_b.
     prev_node = load_b
     for chiplet in EXPECTED_CHIPLETS[1:]:
