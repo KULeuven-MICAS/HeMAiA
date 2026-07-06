@@ -78,6 +78,9 @@ int main() {
             l3_a_all, mem_a_all,
             (uint32_t)num_clusters * (uint32_t)a_data_length);
         snrt_dma_wait_all();
+        printf("Chip(%x,%x) cluster %u block %u: loaded A-blocks from memchip into L3\n",
+               get_current_chip_loc_x(), get_current_chip_loc_y(), cluster_id,
+               block);
     }
     snrt_global_barrier();
 
@@ -87,6 +90,9 @@ int main() {
             chiplet_addr_transform((uint64_t)(uintptr_t)local_a), l3_a_block,
             a_data_length);
         snrt_dma_wait_all();
+        printf("Chip(%x,%x) cluster %u block %u: loaded A-block from L3 into local TCDM\n",
+               get_current_chip_loc_x(), get_current_chip_loc_y(), cluster_id,
+               block);
     }
     snrt_global_barrier();
 
@@ -94,6 +100,9 @@ int main() {
     if (is_active_cluster && is_hub_cluster && snrt_is_dm_core()) {
         snrt_dma_start_1d_wideptr(l3_b, mem_b, b_data_length);
         snrt_dma_wait_all();
+        printf("Chip(%x,%x) cluster %u block %u: loaded B-block from memchip into L3\n",
+               get_current_chip_loc_x(), get_current_chip_loc_y(), cluster_id,
+               block);
     }
     snrt_global_barrier();
 
@@ -103,6 +112,9 @@ int main() {
             chiplet_addr_transform((uint64_t)(uintptr_t)local_b), l3_b,
             b_data_length);
         snrt_dma_wait_all();
+        printf("Chip(%x,%x) cluster %u block %u: loaded B-block from L3 into local TCDM\n",
+               get_current_chip_loc_x(), get_current_chip_loc_y(), cluster_id,
+               block);
     }
     snrt_global_barrier();
 
@@ -151,6 +163,10 @@ int main() {
         start_streamer();
         start_versacore();
         wait_versacore_and_streamer();
+
+        printf("Chip(%x,%x) cluster %u block %u: gemm-msplit-4cluster-1chip finish\n",
+               get_current_chip_loc_x(), get_current_chip_loc_y(), cluster_id,
+               block);
 
         int32_t* golden =
             (int32_t*)D + block * (M_block * N * meshRow * meshCol);
