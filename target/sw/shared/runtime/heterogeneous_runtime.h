@@ -15,7 +15,15 @@ typedef struct __attribute__((aligned(8))){
     volatile uint32_t lock;
     volatile uint32_t chip_id;
     volatile uint32_t usr_data_ptr;
-    volatile uint32_t chip_barrier;
+    // Chip-level barrier bookkeeping (was: an unused uint32_t `chip_barrier`).
+    // These three bytes are per-chip and local-access-only (never broadcast):
+    // each chip reaches them through its own `cb` pointer, so the app never
+    // applies a chiplet prefix. Driven by snrt_chip_barrier_init() /
+    // snrt_chip_global_barrier() (target/sw/device/runtime/src/chip_sync.h).
+    volatile uint8_t chip_barrier_checkpoint;  // hidden per-chip monotonic counter
+    volatile uint8_t chip_barrier_tl;          // barrier rectangle: top-left chip id
+    volatile uint8_t chip_barrier_br;          // barrier rectangle: bottom-right chip id
+    volatile uint8_t chip_barrier_rsvd;        // pad (keeps the 8B-aligned layout)
     // Chip Level synchronization mechanism: 16x16 chip matrix
     volatile uint8_t chip_level_checkpoint[256];
 } comm_buffer_t;
@@ -239,5 +247,100 @@ static inline volatile uint32_t* get_shared_lock() {
 #elif __riscv_xlen == 32
     uint32_t comm_buffer_ptr = readw(soc_ctrl_scratch_addr(1));
     return &(((comm_buffer_t *)comm_buffer_ptr)->lock);
-#endif    
+#endif
+}
+
+//===============================================================
+// Chip Level Synchronization Mechanism
+//===============================================================
+// Shared by host (RV64) and device (RV32) cores: both reach the chip-level
+// checkpoint array through the same comm_buffer_t. Marked `static inline` so the
+// shared header can be included by many translation units without colliding.
+
+#if __riscv_xlen == 64
+static inline void announce_chip_checkpoint(
+    volatile comm_buffer_t* chip_barrier_data_ptr, uint8_t checkpoint) {
+    volatile uint8_t* this_chip_checkpoint =
+        &((*chip_barrier_data_ptr).chip_level_checkpoint[get_current_chip_id()]);
+    // Broadcast to all Chips (host RV64: the 48-bit broadcast address fits a
+    // pointer, so OR in the 0xFF chiplet prefix and store directly).
+    this_chip_checkpoint =
+        (uint8_t*)(((uint64_t)this_chip_checkpoint) | (((uint64_t)0xFF) << 40));
+    *this_chip_checkpoint = checkpoint;
+}
+#elif __riscv_xlen == 32
+static inline void announce_chip_checkpoint(
+    volatile comm_buffer_t* chip_barrier_data_ptr, uint8_t checkpoint) {
+    // Broadcast to all Chips (device RV32): a 48-bit address cannot live in a
+    // 32-bit pointer, so set the Mseg CSR (0xbc0) high bits to the broadcast
+    // chiplet prefix (chip 0xFF), store the checkpoint byte to the local offset,
+    // then restore Mseg to the current chip. Mirrors set_host_sw_interrupt().
+    uint32_t local_off =
+        (uint32_t)(uintptr_t)&(chip_barrier_data_ptr
+                                   ->chip_level_checkpoint[get_current_chip_id()]);
+    uint32_t bcast_addrh = (uint32_t)((((uint64_t)0xFF) << 40) >> 32);
+    uint32_t current_addrh = (uint32_t)(get_current_chip_baseaddress_value() >> 32);
+
+    register uint32_t reg_bcast_addrh asm("t0") = bcast_addrh;
+    register uint32_t reg_value asm("t1") = (uint32_t)checkpoint;
+    register uint32_t reg_addr asm("t2") = local_off;
+    register uint32_t reg_current_addrh asm("t3") = current_addrh;
+
+    asm volatile(
+        "csrw 0xbc0, t0;"
+        "sb   t1, 0(t2);"
+        "csrw 0xbc0, t3;"
+        :
+        : "r"(reg_bcast_addrh), "r"(reg_value), "r"(reg_addr),
+          "r"(reg_current_addrh)
+        : "memory");
+}
+#endif
+
+static inline void wait_chip_checkpoint(
+    volatile comm_buffer_t* chip_barrier_data_ptr, uint8_t chip_id,
+    uint8_t checkpoint) {
+    volatile uint8_t* target_chip_checkpoint =
+        &((*chip_barrier_data_ptr).chip_level_checkpoint[chip_id]);
+    // Broadcast to all Chips
+    while (*target_chip_checkpoint < checkpoint) {
+        asm volatile("fence" ::: "memory");
+    }
+}
+
+static inline void wait_chips_checkpoint(
+    volatile comm_buffer_t* chip_barrier_data_ptr, uint8_t top_left_chip_id,
+    uint8_t bottom_right_chip_id, uint8_t checkpoint) {
+    volatile uint8_t* chip_level_checkpoint =
+        &((*chip_barrier_data_ptr).chip_level_checkpoint[0]);
+    uint8_t current_chip_id = get_current_chip_id();
+    uint8_t continue_loop = 1;
+    while (continue_loop) {
+        continue_loop = 0;
+        asm volatile("fence" ::: "memory");
+        for (uint8_t i = top_left_chip_id >> 4;
+             i <= (bottom_right_chip_id >> 4); i++) {
+            for (uint8_t j = top_left_chip_id & 0xF;
+                 j <= (bottom_right_chip_id & 0xF); j++) {
+                if ((*(chip_level_checkpoint + ((i << 4) + j)) < checkpoint) &&
+                    (current_chip_id != ((i << 4) + j))) {
+                    continue_loop = 1;
+                    break;
+                }
+            }
+        }
+    }
+}
+
+// Barrier is realized in software, to ensure that all other chips have reached
+// a certain checkpoint
+static inline void chip_barrier(volatile comm_buffer_t* chip_barrier_data_ptr,
+                                uint8_t top_left_chip_id,
+                                uint8_t bottom_right_chip_id,
+                                uint8_t checkpoint) {
+    // Broadcast to all other chip on the progress of the chip
+    announce_chip_checkpoint(chip_barrier_data_ptr, checkpoint);
+    // Change the pointer back
+    wait_chips_checkpoint(chip_barrier_data_ptr, top_left_chip_id,
+                          bottom_right_chip_id, checkpoint);
 }

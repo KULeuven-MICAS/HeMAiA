@@ -49,6 +49,8 @@
 // #include "ssr.h"
 #include "sync.h"
 #include "team.h"
+// Cross-chip barrier (snrt_chip_global_barrier) — needs sync.h/team.h/occamy_device.h above.
+#include "chip_sync.h"
 
 #include "csr.h"
 

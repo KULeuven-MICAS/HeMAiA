@@ -22,11 +22,10 @@ APPDIR += apps/snax/snax-xdma-reshape
 APPDIR += apps/snax/snax-xdma-multicast-chiplet
 APPDIR += apps/snax/snax-xdma-multicast-exploration
 APPDIR += apps/snax/snax-xdma-overhead
-APPDIR += apps/snax/snax-axi-torture
-APPDIR += apps/snax/snax-axi-torture-devil
 APPDIR += apps/snax/snax-xdma-reshape-multicast
 APPDIR += apps/snax/snax-versacore-matmul-profile
 APPDIR += apps/snax/snax-versacore-matadd-profile
+APPDIR += apps/snax/gemm-msplit-1cluster-4chip
 # In the future we only need this offload bingo app
 APPDIR += apps/snax/snax-bingo-offload
 

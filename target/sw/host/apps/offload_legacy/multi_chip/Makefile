@@ -5,7 +5,7 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 HOST_APP_TYPE = offload_legacy
 CHIP_TYPE     = multi_chip
-DEV_APP = snax-xdma-multicast-chiplet
+DEV_APP = gemm-msplit-1cluster-4chip
 
 SRCS = src/offload_legacy_multi_chip.c
 
@@ -14,4 +14,17 @@ INCL_DEVICE_BINARY ?= 1 # True to include the device binary
 
 # Include more dev apps here
 DEVICE_APPS = snax-xdma-multicast-chiplet
+DEVICE_APPS += gemm-msplit-1cluster-4chip
 include ../../common.mk
+
+# The gemm-msplit-1cluster-4chip device app preloads its input matrices into the
+# memory chip through a mempool.bin image produced by its datagen. The target/sim
+# apps build expects that image at $(BUILDDIR)/mempool.bin (see APP_MEM in
+# target/sim/apps/Makefile), so copy it across once the device build has produced
+# it (it exists by the finalize-build stage of single-sw). Gated on DEV_APP.
+ifeq ($(DEV_APP),gemm-msplit-1cluster-4chip)
+MEMPOOL_SRC = $(DEVICE_DIR)/apps/snax/$(DEV_APP)/data/mempool.bin
+finalize-build: $(BUILDDIR)/mempool.bin
+$(BUILDDIR)/mempool.bin: $(MEMPOOL_SRC) | $(BUILDDIR)
+	cp -f $< $@
+endif
