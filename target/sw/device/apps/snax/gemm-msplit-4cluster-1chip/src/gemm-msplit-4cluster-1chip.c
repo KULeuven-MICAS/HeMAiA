@@ -163,21 +163,31 @@ int main() {
         start_streamer();
         start_versacore();
         wait_versacore_and_streamer();
-
-        printf("Chip(%x,%x) cluster %u block %u: gemm-msplit-4cluster-1chip finish\n",
-               get_current_chip_loc_x(), get_current_chip_loc_y(), cluster_id,
-               block);
-
-        int32_t* golden =
-            (int32_t*)D + block * (M_block * N * meshRow * meshCol);
-        err += check_versacore_result_D32((int32_t*)local_d, (int32_t*)golden,
-                                          d_data_length, false);
-
-        printf("Chip(%x,%x) cluster %u block %u: gemm-msplit-4cluster-1chip %s, err=%d\n",
-               get_current_chip_loc_x(), get_current_chip_loc_y(), cluster_id,
-               block, err ? "FAIL" : "PASS", err);
     }
+    // sync between cluster cores to ensure all cores have finished computing before checking results
     snrt_cluster_hw_barrier();
+
+    // Serialize per-cluster result checking so any mismatch prints are readable.
+    for (uint32_t print_cluster = 0; print_cluster < num_clusters;
+         print_cluster++) {
+        if (is_active_cluster && cluster_id == print_cluster &&
+            snrt_cluster_core_idx() == 0) {
+            printf("Chip(%x,%x) cluster %u block %u: gemm-msplit-4cluster-1chip finish. \n",
+                   get_current_chip_loc_x(), get_current_chip_loc_y(), cluster_id,
+                   block);
+
+            int32_t* golden =
+                (int32_t*)D + block * (M_block * N * meshRow * meshCol);
+            err += check_versacore_result_D32((int32_t*)local_d,
+                                              (int32_t*)golden, d_data_length,
+                                              false);
+
+            printf("Chip(%x,%x) cluster %u block %u: gemm-msplit-4cluster-1chip %s, err=%d\n",
+                   get_current_chip_loc_x(), get_current_chip_loc_y(), cluster_id,
+                   block, err ? "FAIL" : "PASS", err);
+        }
+        snrt_global_barrier();
+    }
 
     // ---- Step 4c: store the D-block back to the memory chip ----
     if (is_active_cluster && snrt_is_dm_core()) {
