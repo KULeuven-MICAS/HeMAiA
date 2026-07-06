@@ -2,13 +2,13 @@
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Yunhao Deng <yunhao.deng@kuleuven.be>
+# Xiaoling Yi <xiaoling.yi@esat.kuleuven.be>
 
-APP     = snax-versacore-matadd-profile
+APP     = versacore-matadd-profile-1cluster-4chip
 
 INCDIRS += data ../../runtime/snax/versacore/include
 
-SRCS    = src/snax-versacore-matadd-profile.c
+SRCS    = src/versacore-matadd-profile-1cluster-4chip.c
 
 include ./data/Makefile
 include ../../common.mk

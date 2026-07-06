@@ -49,7 +49,7 @@ from hemaia_sim_runner import (  # noqa: E402
 HOST_APP_TYPE = "offload_legacy"  # host_only | offload_legacy | offload_bingo_hw | offload_bingo_sw
 CHIP_TYPE = "single_chip"
 WORKLOAD = "None"
-DEV_APP = "snax-versacore-matmul-profile"
+DEV_APP = "versacore-matmul-profile-1cluster-4chip"
 ENGINE = "vsim"
 SIM_WITH_WAVEFORM = 1
 

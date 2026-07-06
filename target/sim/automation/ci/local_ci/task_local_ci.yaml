@@ -3,6 +3,7 @@
 # It can run both the single_chip and multi_chip workloads
 # In the single_chip workloads, the other 3 chiplets will exit after the init since it has no work to do
 # The multi_chip workloads will run on all 4 chiplets
+
 runs:
   # ---- host_only / single_chip ----
   # hello_world
@@ -59,20 +60,31 @@ runs:
     CHIP_TYPE: single_chip
     WORKLOAD: None
     DEV_APP: snax-xdma-copy
-  # snax-versacore-matmul-profile
+  # versacore-matmul-profile-1cluster-4chip
   - HOST_APP_TYPE: offload_legacy
     CHIP_TYPE: single_chip
     WORKLOAD: None
-    DEV_APP: snax-versacore-matmul-profile
+    DEV_APP: versacore-matmul-profile-1cluster-4chip
   - HOST_APP_TYPE: offload_legacy
     CHIP_TYPE: single_chip
     WORKLOAD: None
-    DEV_APP: snax-versacore-matadd-profile
+    DEV_APP: versacore-matadd-profile-1cluster-4chip
   # snax-test-bingo-alloc
   - HOST_APP_TYPE: offload_legacy
     CHIP_TYPE: single_chip
     WORKLOAD: None
     DEV_APP: snax-test-bingo-alloc
+
+  # ---- offload_legacy / multi_chip ----
+  # snax-test-integration
+  - HOST_APP_TYPE: offload_legacy
+    CHIP_TYPE: multi_chip
+    WORKLOAD: None
+    DEV_APP: gemm-msplit-1cluster-4chip
+  - HOST_APP_TYPE: offload_legacy
+    CHIP_TYPE: multi_chip
+    WORKLOAD: None
+    DEV_APP: gemm-msplit-4cluster-1chip
 
   # ---- offload_bingo_sw / single_chip ----
   # dummy_1cluster

@@ -101,6 +101,11 @@ int main() {
         // Poll until Streamer and GEMM accelerator finish
         wait_versacore_and_streamer();
 
+        printf(
+            "Array shape: %d, meshRow %d, tileSize %d, meshCol %d, stationary: "
+            "%d, SNAX GEMM Matmul: %s.\n",
+            array_shape, meshRow, tileSize, meshCol, stationary);
+
         // Result check
         if (quantization_enable == 0 && int32tofp16_enable == 0)
             err += check_versacore_result_D32((int32_t *)local_d, (int32_t *)D,
