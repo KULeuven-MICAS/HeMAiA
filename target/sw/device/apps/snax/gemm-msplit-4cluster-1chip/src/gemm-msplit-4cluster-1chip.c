@@ -34,6 +34,14 @@
 #define MEM_CHIP_LOC_Y 0x0
 #define HUB_CLUSTER_ID 0
 
+#ifndef GEMM_MSPLIT_CHECK_RESULT
+#define GEMM_MSPLIT_CHECK_RESULT 1
+#endif
+
+#ifndef GEMM_MSPLIT_ENABLE_DEBUG_PRINT
+#define GEMM_MSPLIT_ENABLE_DEBUG_PRINT 0
+#endif
+
 int main() {
     int err = 0;
 
@@ -72,15 +80,19 @@ int main() {
         (uint64_t)mem_chip_local_base + mem_off_D_base +
             (uint64_t)block * (uint32_t)d_data_length);
 
+    uint32_t cycles = snrt_mcycle();
+
     // ---- Step 1: cluster 0 loads all A-blocks from memchip into L3 ----
     if (is_active_cluster && is_hub_cluster && snrt_is_dm_core()) {
         snrt_dma_start_1d_wideptr(
             l3_a_all, mem_a_all,
             (uint32_t)num_clusters * (uint32_t)a_data_length);
         snrt_dma_wait_all();
+#if GEMM_MSPLIT_ENABLE_DEBUG_PRINT
         printf("Chip(%x,%x) cluster %u block %u: loaded A-blocks from memchip into L3\n",
                get_current_chip_loc_x(), get_current_chip_loc_y(), cluster_id,
                block);
+#endif
     }
     snrt_global_barrier();
 
@@ -90,9 +102,11 @@ int main() {
             chiplet_addr_transform((uint64_t)(uintptr_t)local_a), l3_a_block,
             a_data_length);
         snrt_dma_wait_all();
+#if GEMM_MSPLIT_ENABLE_DEBUG_PRINT
         printf("Chip(%x,%x) cluster %u block %u: loaded A-block from L3 into local TCDM\n",
                get_current_chip_loc_x(), get_current_chip_loc_y(), cluster_id,
                block);
+#endif
     }
     snrt_global_barrier();
 
@@ -100,9 +114,11 @@ int main() {
     if (is_active_cluster && is_hub_cluster && snrt_is_dm_core()) {
         snrt_dma_start_1d_wideptr(l3_b, mem_b, b_data_length);
         snrt_dma_wait_all();
+#if GEMM_MSPLIT_ENABLE_DEBUG_PRINT
         printf("Chip(%x,%x) cluster %u block %u: loaded B-block from memchip into L3\n",
                get_current_chip_loc_x(), get_current_chip_loc_y(), cluster_id,
                block);
+#endif
     }
     snrt_global_barrier();
 
@@ -112,9 +128,11 @@ int main() {
             chiplet_addr_transform((uint64_t)(uintptr_t)local_b), l3_b,
             b_data_length);
         snrt_dma_wait_all();
+#if GEMM_MSPLIT_ENABLE_DEBUG_PRINT
         printf("Chip(%x,%x) cluster %u block %u: loaded B-block from L3 into local TCDM\n",
                get_current_chip_loc_x(), get_current_chip_loc_y(), cluster_id,
                block);
+#endif
     }
     snrt_global_barrier();
 
@@ -164,10 +182,46 @@ int main() {
         start_versacore();
         wait_versacore_and_streamer();
     }
-    // sync between cluster cores to ensure all cores have finished computing before checking results
+
+    // sync between cluster cores to ensure all cores have finished computing before copying data back to memory chip
     snrt_cluster_hw_barrier();
 
-    // Serialize per-cluster result checking so any mismatch prints are readable.
+    // Store the D-block back to the memory chip
+    if (is_active_cluster && snrt_is_dm_core()) {
+        snrt_dma_start_1d_wideptr(
+            mem_d, chiplet_addr_transform((uint64_t)(uintptr_t)local_d),
+            d_data_length);
+        snrt_dma_wait_all();
+    }
+
+    // Sync between clusters to ensure the finish of the layer
+    snrt_global_barrier();
+
+    cycles = snrt_mcycle() - cycles;
+
+    if (snrt_cluster_idx() == 0 && snrt_cluster_core_idx() == 0) {
+        printf("Chip(%x,%x) cluster %u block %u: gemm-msplit-4cluster-1chip cycles = %u\n",
+               get_current_chip_loc_x(), get_current_chip_loc_y(), cluster_id, block, cycles);
+    }
+
+#if GEMM_MSPLIT_CHECK_RESULT
+    // Check each cluster's D-block in parallel. Keep this silent so only the
+    // summary prints below need serialization.
+    if (is_active_cluster && snrt_cluster_core_idx() == 0) {
+        int8_t* output = (int8_t*)local_d;
+        int8_t* golden =
+            (int8_t*)((int32_t*)D + block * (M_block * N * meshRow * meshCol));
+        for (int32_t i = 0; i < d_data_length; i++) {
+            if (output[i] != golden[i]) {
+                err++;
+            }
+        }
+    }
+#endif
+
+    snrt_global_barrier();
+
+    // Serialize per-cluster status prints so the output stays readable.
     for (uint32_t print_cluster = 0; print_cluster < num_clusters;
          print_cluster++) {
         if (is_active_cluster && cluster_id == print_cluster &&
@@ -176,27 +230,18 @@ int main() {
                    get_current_chip_loc_x(), get_current_chip_loc_y(), cluster_id,
                    block);
 
-            int32_t* golden =
-                (int32_t*)D + block * (M_block * N * meshRow * meshCol);
-            err += check_versacore_result_D32((int32_t*)local_d,
-                                              (int32_t*)golden, d_data_length,
-                                              false);
-
+#if GEMM_MSPLIT_CHECK_RESULT
             printf("Chip(%x,%x) cluster %u block %u: gemm-msplit-4cluster-1chip %s, err=%d\n",
                    get_current_chip_loc_x(), get_current_chip_loc_y(), cluster_id,
                    block, err ? "FAIL" : "PASS", err);
+#else
+            printf("Chip(%x,%x) cluster %u block %u: gemm-msplit-4cluster-1chip result check skipped\n",
+                   get_current_chip_loc_x(), get_current_chip_loc_y(), cluster_id,
+                   block);
+#endif
         }
         snrt_global_barrier();
     }
-
-    // ---- Step 4c: store the D-block back to the memory chip ----
-    if (is_active_cluster && snrt_is_dm_core()) {
-        snrt_dma_start_1d_wideptr(
-            mem_d, chiplet_addr_transform((uint64_t)(uintptr_t)local_d),
-            d_data_length);
-        snrt_dma_wait_all();
-    }
-    snrt_global_barrier();
 
     return err;
 }
