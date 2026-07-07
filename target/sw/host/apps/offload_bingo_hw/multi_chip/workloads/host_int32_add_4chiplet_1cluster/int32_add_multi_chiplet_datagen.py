@@ -6,7 +6,7 @@
 #
 # Xiaoling Yi <xiaoling.yi@kuleuven.be>
 
-"""Generate MemPool-backed data for int32_add_4chiplet_1cluster."""
+"""Generate MemPool-backed data for host_int32_add_4chiplet_1cluster."""
 
 import argparse
 import os
@@ -34,7 +34,7 @@ def emit_header_file(**kwargs):
 def emit_int32_add_data(**kwargs):
     num_chiplets = int(kwargs.get("num_chiplets", 4))
     if num_chiplets != 4:
-        raise ValueError(f"int32_add_4chiplet_1cluster expects num_chiplets=4, got {num_chiplets}")
+        raise ValueError(f"host_int32_add_4chiplet_1cluster expects num_chiplets=4, got {num_chiplets}")
 
     input_bytes = _input_bytes(kwargs)
     num_elements = input_bytes // 4
@@ -74,7 +74,7 @@ def emit_int32_add_data(**kwargs):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="int32_add_4chiplet_1cluster data")
+    parser = argparse.ArgumentParser(description="host_int32_add_4chiplet_1cluster data")
     parser.add_argument("-c", "--cfg", type=pathlib.Path, required=True)
     parser.add_argument("--hwcfg", type=pathlib.Path, required=True)
     parser.add_argument("-o", "--output", type=pathlib.Path, required=True)

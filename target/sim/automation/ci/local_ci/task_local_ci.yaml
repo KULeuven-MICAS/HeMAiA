@@ -168,10 +168,10 @@ runs:
     CHIP_TYPE: multi_chip
     WORKLOAD: dma_for_gemm_msplit_4chiplet_1cluster
     DEV_APP: snax-bingo-offload
-  # int32_add_4chiplet_1cluster
+  # host_int32_add_4chiplet_1cluster
   - HOST_APP_TYPE: offload_bingo_hw
     CHIP_TYPE: multi_chip
-    WORKLOAD: int32_add_4chiplet_1cluster
+    WORKLOAD: host_int32_add_4chiplet_1cluster
     DEV_APP: snax-bingo-offload
   # dma_read_from_chip00_4chiplet_1cluster
   - HOST_APP_TYPE: offload_bingo_hw

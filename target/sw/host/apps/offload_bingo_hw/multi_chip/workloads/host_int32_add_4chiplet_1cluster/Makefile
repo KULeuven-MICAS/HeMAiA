@@ -2,7 +2,7 @@
 MK_DIR   := $(realpath $(dir $(realpath $(lastword $(MAKEFILE_LIST)))))
 HOST_APP_TYPE = offload_bingo_hw
 CHIP_TYPE     = multi_chip
-WORKLOAD      = int32_add_4chiplet_1cluster
+WORKLOAD      = host_int32_add_4chiplet_1cluster
 DEV_APP       = snax-bingo-offload
 SRCS = ../../src/offload_bingo_hw.c
 BINGO_HOST ?= 1

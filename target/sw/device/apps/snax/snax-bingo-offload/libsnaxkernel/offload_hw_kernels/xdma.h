@@ -146,7 +146,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_6d(void *arg)
 //   reader: dim0 = operand  [bound=num_operands, stride=operand_stride]
 //           dim1 = tile      [bound=tiles,        stride=64 bytes]
 //   writer: dim0 = tile      [bound=tiles,        stride=64 bytes]
-// where tiles = num_int32_per_operand / 16. Reader address for (operand o,
+// where tiles = num_elem_per_operand / 16. Reader address for (operand o,
 // tile t) = src_base + o*operand_stride + t*64.
 //
 // Worked example: sum 3 operands, 32 int32 each (tiles = 32/16 = 2)
@@ -178,7 +178,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_6d(void *arg)
 //
 // Constraints / fallback
 // ----------------------
-//   - num_int32_per_operand must be a multiple of 16 (one 512b bus word).
+//   - num_elem_per_operand must be a multiple of 16 (one 512b bus word).
 //   - operands must be laid out at a constant FORWARD stride (ascending
 //     addresses); a wrapped "negative" stride makes the reader generate an
 //     out-of-range address and stall.
@@ -187,21 +187,21 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_6d(void *arg)
 // ==========================================================================
 static inline uint32_t xdma_elementwise_add_run(
     uint64_t src_base, uint64_t dst_addr,
-    uint32_t num_int32_per_operand, uint32_t num_operands,
+    uint32_t num_elem_per_operand, uint32_t num_operands,
     uint32_t operand_stride)
 {
     // Each output vector is one 512b bus word = XDMA_WIDTH/4 = 16 int32, so the
     // per-operand element count must be a whole, non-zero number of bus words;
     // otherwise the tile count truncates and the transfer would be wrong.
-    if (num_int32_per_operand == 0 ||
-        (num_int32_per_operand % (XDMA_WIDTH / 4)) != 0) {
+    if (num_elem_per_operand == 0 ||
+        (num_elem_per_operand % (XDMA_WIDTH / 4)) != 0) {
         printf_safe("[Cluster %d Core %d]: Error! xDMA elementwise_add "
-                    "num_int32_per_operand=%u must be a positive multiple of %u\r\n",
+                    "num_elem_per_operand=%u must be a positive multiple of %u\r\n",
                     snrt_cluster_idx(), snrt_cluster_core_idx(),
-                    num_int32_per_operand, (unsigned)(XDMA_WIDTH / 4));
+                    num_elem_per_operand, (unsigned)(XDMA_WIDTH / 4));
         return BINGO_RET_FAIL;
     }
-    uint32_t tiles = num_int32_per_operand / (XDMA_WIDTH / 4);  // 16 int32/vector
+    uint32_t tiles = num_elem_per_operand / (XDMA_WIDTH / 4);  // 16 int32/vector
     BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
 #ifdef WRITER_EXT_ELEMENTWISEADDBIT32
     xdma_disable_all_extensions();
@@ -230,7 +230,7 @@ static inline uint32_t xdma_elementwise_add_run(
     BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
     BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
     volatile int32_t *dst = (volatile int32_t *)(uint32_t)dst_addr;
-    for (uint32_t e = 0; e < num_int32_per_operand; e++) {
+    for (uint32_t e = 0; e < num_elem_per_operand; e++) {
         int32_t acc = 0;
         for (uint32_t o = 0; o < num_operands; o++) {
             volatile int32_t *src =
@@ -250,7 +250,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_elementwise_add(void *arg)
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_elementwise_add_args_t);
     // General N-operand form: dst[i] = sum over o of operand_o[i].
     //   [0] src_addr_hi  [1] src_addr_lo  [2] dst_addr_hi  [3] dst_addr_lo
-    //   [4] num_int32_per_operand (multiple of 16)
+    //   [4] num_elem_per_operand (multiple of 16)
     //   [5] num_operands  [6] operand_stride (bytes between operands)
     //
     // The N operands must be EVENLY SPACED and ASCENDING: operand o lives at
@@ -266,12 +266,12 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_elementwise_add(void *arg)
         uint32_t *a = (uint32_t *)arg;
         uint64_t src_base = make_u64(a[0], a[1]);
         uint64_t dst_addr = make_u64(a[2], a[3]);
-        uint32_t num_int32_per_operand = a[4];
+        uint32_t num_elem_per_operand = a[4];
         uint32_t num_operands = a[5];
         uint32_t operand_stride = a[6];
         bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_elementwise_add_args_t);
         BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
-        if (xdma_elementwise_add_run(src_base, dst_addr, num_int32_per_operand,
+        if (xdma_elementwise_add_run(src_base, dst_addr, num_elem_per_operand,
                                      num_operands, operand_stride) != BINGO_RET_SUCC)
             return BINGO_RET_FAIL;
         sp->return_value = (uint32_t)dst_addr;
