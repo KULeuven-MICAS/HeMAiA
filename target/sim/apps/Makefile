@@ -41,6 +41,10 @@ APP_BIN  = $(SW_HOST_APPS_DIR)$(APP_REL_PATH)/build/$(APP_NAME).bin
 APP_DUMP = $(SW_HOST_APPS_DIR)$(APP_REL_PATH)/build/$(APP_NAME).dump
 APP_MEM  = $(SW_HOST_APPS_DIR)$(APP_REL_PATH)/build/mempool.bin
 
+BINGO_TRACE_HEADER_DIR      = $(MKFILE_DIR)bingo_trace_headers
+BINGO_TRACE_HEADER_MANIFEST = $(MKFILE_DIR).bingo_trace_headers
+BINGO_SHARED_TRACE_HEADER   = $(MKFILE_DIR)../../sw/shared/runtime/perf_tracing.h
+
 .PHONY: apps hex clean-apps
 
 $(APP_ELF):
@@ -62,7 +66,25 @@ apps: $(APP_ELF)
 		python3 bin2hex.py -i mempool.bin; \
 		cp -r -f $(MKFILE_DIR)/mempool $(BIN_DIR); \
 	fi
+	rm -rf $(BINGO_TRACE_HEADER_DIR)
+	mkdir -p $(BINGO_TRACE_HEADER_DIR)
+	cp -f $(BINGO_SHARED_TRACE_HEADER) $(BINGO_TRACE_HEADER_DIR)/perf_tracing.h
+	printf '%s\n' apps/bingo_trace_headers/perf_tracing.h > $(BINGO_TRACE_HEADER_MANIFEST)
+	app_trace_root="$(SW_DEVICE_APPS_DIR)$(DEV_APP)"; \
+	if [ -n "$(DEV_APP)" ] && [ -d "$$app_trace_root" ]; then \
+		find "$$app_trace_root/src" "$$app_trace_root/include" -type f -name '*.h' 2>/dev/null | \
+		while IFS= read -r hdr; do \
+			if grep -Eq '^[[:space:]]*#define[[:space:]]+BINGO_TRACE_[[:alnum:]_]+[[:space:]]+(0[xX][[:xdigit:]]+|[0-9]+)([[:space:]]|$$)' "$$hdr"; then \
+				rel="$${hdr#$$app_trace_root/}"; \
+				staged="$(BINGO_TRACE_HEADER_DIR)/$$rel"; \
+				mkdir -p "$$(dirname "$$staged")"; \
+				cp -f "$$hdr" "$$staged"; \
+				printf '%s\n' "apps/bingo_trace_headers/$$rel" >> $(BINGO_TRACE_HEADER_MANIFEST); \
+			fi; \
+		done; \
+	fi
 clean-apps:
 	@rm -rf .rtlbinary
+	@rm -rf $(BINGO_TRACE_HEADER_DIR) $(BINGO_TRACE_HEADER_MANIFEST)
 	@rm -f $(MKFILE_DIR)/*.bin $(MKFILE_DIR)/*.hex $(MKFILE_DIR)/*.elf $(MKFILE_DIR)/*.dump
 	@find $(MKFILE_DIR) -mindepth 1 -type d -exec rm -rf {} +

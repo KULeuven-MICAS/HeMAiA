@@ -12,16 +12,40 @@ import os
 import glob
 
 def parse_perf_tracing_header(header_path):
-    """Parses perf_tracing.h to extract event IDs and names."""
+    """Parses a trace header to extract event IDs and names."""
     event_map = {}
     with open(header_path, 'r') as f:
         for line in f:
-            match = re.search(r'#define\s+(BINGO_TRACE_\w+)\s+(0x[0-9a-fA-F]+|\d+)', line)
+            match = re.search(r'#define\s+(BINGO_TRACE_\w+)\s+(0[xX][0-9a-fA-F]+|\d+)', line)
             if match:
                 name = match.group(1)
                 value_str = match.group(2)
-                value = int(value_str, 16) if value_str.startswith('0x') else int(value_str)
+                value = int(value_str, 16) if value_str.lower().startswith('0x') else int(value_str)
+                if value in event_map and event_map[value] != name:
+                    raise ValueError(
+                        f"Conflicting Bingo trace ID 0x{value:x} in {header_path}: "
+                        f"{event_map[value]} vs {name}")
                 event_map[value] = name
+    return event_map
+
+def parse_perf_tracing_headers(header_paths):
+    """Parses and merges one or more trace headers."""
+    event_map = {}
+    event_sources = {}
+
+    for header_path in header_paths:
+        header_events = parse_perf_tracing_header(header_path)
+        for value, name in header_events.items():
+            if value in event_map:
+                if event_map[value] != name:
+                    raise ValueError(
+                        f"Conflicting Bingo trace ID 0x{value:x}: "
+                        f"{event_map[value]} from {event_sources[value]} vs "
+                        f"{name} from {header_path}")
+                continue
+            event_map[value] = name
+            event_sources[value] = header_path
+
     return event_map
 
 def parse_trace_file(file_path, event_map):
@@ -149,7 +173,8 @@ def convert_to_complete_events(events):
 
 def main():
     parser = argparse.ArgumentParser(description="Generate Perfetto JSON trace from simulation logs.")
-    parser.add_argument("--trace-header", required=True, help="Path to perf_tracing.h")
+    parser.add_argument("--trace-header", action="append", required=True,
+                        help="Path to a Bingo trace header; may be passed multiple times")
     parser.add_argument("--log-dir", required=True, help="Directory containing trace log files")
     parser.add_argument("--output", required=True, help="Output JSON file path")
     parser.add_argument("--cores-per-cluster", type=int, default=2,
@@ -158,8 +183,12 @@ def main():
     args = parser.parse_args()
     
     # 1. Parse Event Map
-    print(f"Parsing header: {args.trace_header}")
-    event_map = parse_perf_tracing_header(args.trace_header)
+    for trace_header in args.trace_header:
+        print(f"Parsing header: {trace_header}")
+    try:
+        event_map = parse_perf_tracing_headers(args.trace_header)
+    except ValueError as err:
+        parser.error(str(err))
     print(f"Found {len(event_map)} event types.")
 
     # 2. Find Trace Files (Both .txt and .log)

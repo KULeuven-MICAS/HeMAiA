@@ -216,14 +216,18 @@ $(TRACE_JSON): $(TRACE_CSV) $(EVENTVIS_PY)
 	$(PYTHON) $(EVENTVIS_PY) -o $@ $(TRACE_CSV)
 
 # Bingo Trace Visualization
-# This target parses the simulation logs and perf_tracing.h to generate a Perfetto JSON trace.
-BINGO_TRACE_PY   ?= $(ROOT)/util/bingo_trace/bingo_trace.py
-BINGO_PERF_HEADER ?= $(ROOT)/target/sw/shared/runtime/perf_tracing.h
-BINGO_TRACE_JSON ?= $(LOGS_DIR)/bingo_trace.json
+# This target parses simulation logs with the trace headers staged by make apps.
+BINGO_TRACE_PY              ?= $(ROOT)/util/bingo_trace/bingo_trace.py
+BINGO_TRACE_HEADER_MANIFEST ?= apps/.bingo_trace_headers
+BINGO_TRACE_JSON            ?= $(LOGS_DIR)/bingo_trace.json
 
 .PHONY: bingo-vis-traces
 bingo-vis-traces: $(TXT_TRACES) $(BINGO_TRACE_PY)
-	$(PYTHON) $(BINGO_TRACE_PY) \
-		--trace-header $(BINGO_PERF_HEADER) \
+	@if [ ! -s "$(BINGO_TRACE_HEADER_MANIFEST)" ]; then \
+		echo "ERROR: Missing Bingo trace header manifest: $(BINGO_TRACE_HEADER_MANIFEST). Run make apps first."; \
+		exit 1; \
+	fi
+	trace_header_args=$$(sed 's|^|--trace-header |' "$(BINGO_TRACE_HEADER_MANIFEST)"); \
+	$(PYTHON) $(BINGO_TRACE_PY) $$trace_header_args \
 		--log-dir $(LOGS_DIR) \
 		--output $(BINGO_TRACE_JSON)
