@@ -1,0 +1,15 @@
+{
+    num_chiplets: 4
+    num_clusters: 2
+    // K-split GEMM across 4 chiplets, two clusters per chiplet.
+    // M/K/N are VersaCore tile counts, matching the single-chip k-split test.
+    array_shape: 0
+    data_type: 0
+    M: 1
+    K: 16
+    N: 1
+    k_split: 8
+    transposed_A: 0
+    transposed_B: 0
+    accumPrevC: 0
+}

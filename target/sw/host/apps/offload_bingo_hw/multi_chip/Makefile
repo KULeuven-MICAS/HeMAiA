@@ -10,6 +10,7 @@ APPS += gemm_msplit_4chiplet_2cluster_basic
 APPS += gemm_msplit_4chiplet_2cluster
 APPS += gemm_parallel_dma_4chiplet_1cluster
 APPS += gemm_ksplit_4chiplet_1cluster
+APPS += gemm_ksplit_4chiplet_2cluster
 APPS += dma_for_gemm_msplit_4chiplet_1cluster
 APPS += int32_add_4chiplet_1cluster
 APPS += dma_read_from_chip00_4chiplet_1cluster
