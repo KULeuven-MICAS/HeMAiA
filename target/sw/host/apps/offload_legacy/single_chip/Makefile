@@ -20,6 +20,7 @@ DEVICE_APPS += snax-test-bingo-alloc
 DEVICE_APPS += snax-xdma-copy
 DEVICE_APPS += snax-xdma-hazard
 DEVICE_APPS += versacore-matmul-profile-1cluster-4chip
+DEVICE_APPS += versacore-matmul-profile-2cluster-4chip
 
 include ../../common.mk
 
