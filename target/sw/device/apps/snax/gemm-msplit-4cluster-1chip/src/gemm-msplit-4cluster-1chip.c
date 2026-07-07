@@ -85,87 +85,76 @@ int main() {
 
     // ---- Step 1: cluster 0 loads all A-blocks from memchip into L3 ----
     if (is_active_cluster && is_hub_cluster && snrt_is_dm_core()) {
-        GEMM_MSPLIT_TRACE_MARKER(
-            BINGO_TRACE_GEMM_MSPLIT_A_MEM_TO_L3_START);
+        GEMM_MSPLIT_TRACE_MARKER(BINGO_TRACE_LOAD_A_L3_START);
         snrt_dma_start_1d_wideptr(
             l3_a_all, mem_a_all,
             (uint32_t)num_clusters * (uint32_t)a_data_length);
         snrt_dma_wait_all();
-        GEMM_MSPLIT_TRACE_MARKER(BINGO_TRACE_GEMM_MSPLIT_A_MEM_TO_L3_END);
+        GEMM_MSPLIT_TRACE_MARKER(BINGO_TRACE_LOAD_A_L3_END);
 #if GEMM_MSPLIT_ENABLE_DEBUG_PRINT
         printf("Chip(%x,%x) cluster %u block %u: loaded A-blocks from memchip into L3\n",
                get_current_chip_loc_x(), get_current_chip_loc_y(), cluster_id,
                block);
 #endif
     }
-    GEMM_MSPLIT_TRACE_MARKER(
-        BINGO_TRACE_GEMM_MSPLIT_SYNC_AFTER_A_MEM_TO_L3_START);
+    GEMM_MSPLIT_TRACE_MARKER(BINGO_TRACE_GLOBAL_SYNC_START);
     snrt_global_barrier();
-    GEMM_MSPLIT_TRACE_MARKER(
-        BINGO_TRACE_GEMM_MSPLIT_SYNC_AFTER_A_MEM_TO_L3_END);
+    GEMM_MSPLIT_TRACE_MARKER(BINGO_TRACE_GLOBAL_SYNC_END);
 
     // ---- Step 2: each cluster pulls its A-block from L3 into local TCDM ----
     if (is_active_cluster && snrt_is_dm_core()) {
-        GEMM_MSPLIT_TRACE_MARKER(
-            BINGO_TRACE_GEMM_MSPLIT_A_L3_TO_TCDM_START);
+        GEMM_MSPLIT_TRACE_MARKER(BINGO_TRACE_LOAD_A_TCDM_START);
         snrt_dma_start_1d_wideptr(
             chiplet_addr_transform((uint64_t)(uintptr_t)local_a), l3_a_block,
             a_data_length);
         snrt_dma_wait_all();
-        GEMM_MSPLIT_TRACE_MARKER(BINGO_TRACE_GEMM_MSPLIT_A_L3_TO_TCDM_END);
+        GEMM_MSPLIT_TRACE_MARKER(BINGO_TRACE_LOAD_A_TCDM_END);
 #if GEMM_MSPLIT_ENABLE_DEBUG_PRINT
         printf("Chip(%x,%x) cluster %u block %u: loaded A-block from L3 into local TCDM\n",
                get_current_chip_loc_x(), get_current_chip_loc_y(), cluster_id,
                block);
 #endif
     }
-    GEMM_MSPLIT_TRACE_MARKER(
-        BINGO_TRACE_GEMM_MSPLIT_SYNC_AFTER_A_L3_TO_TCDM_START);
+    GEMM_MSPLIT_TRACE_MARKER(BINGO_TRACE_GLOBAL_SYNC_START);
     snrt_global_barrier();
-    GEMM_MSPLIT_TRACE_MARKER(
-        BINGO_TRACE_GEMM_MSPLIT_SYNC_AFTER_A_L3_TO_TCDM_END);
+    GEMM_MSPLIT_TRACE_MARKER(BINGO_TRACE_GLOBAL_SYNC_END);
 
     // ---- Step 3: cluster 0 loads the shared B-block from memchip into L3 ----
     if (is_active_cluster && is_hub_cluster && snrt_is_dm_core()) {
-        GEMM_MSPLIT_TRACE_MARKER(
-            BINGO_TRACE_GEMM_MSPLIT_B_MEM_TO_L3_START);
+        GEMM_MSPLIT_TRACE_MARKER(BINGO_TRACE_LOAD_B_L3_START);
         snrt_dma_start_1d_wideptr(l3_b, mem_b, b_data_length);
         snrt_dma_wait_all();
-        GEMM_MSPLIT_TRACE_MARKER(BINGO_TRACE_GEMM_MSPLIT_B_MEM_TO_L3_END);
+        GEMM_MSPLIT_TRACE_MARKER(BINGO_TRACE_LOAD_B_L3_END);
 #if GEMM_MSPLIT_ENABLE_DEBUG_PRINT
         printf("Chip(%x,%x) cluster %u block %u: loaded B-block from memchip into L3\n",
                get_current_chip_loc_x(), get_current_chip_loc_y(), cluster_id,
                block);
 #endif
     }
-    GEMM_MSPLIT_TRACE_MARKER(
-        BINGO_TRACE_GEMM_MSPLIT_SYNC_AFTER_B_MEM_TO_L3_START);
+    GEMM_MSPLIT_TRACE_MARKER(BINGO_TRACE_GLOBAL_SYNC_START);
     snrt_global_barrier();
-    GEMM_MSPLIT_TRACE_MARKER(
-        BINGO_TRACE_GEMM_MSPLIT_SYNC_AFTER_B_MEM_TO_L3_END);
+    GEMM_MSPLIT_TRACE_MARKER(BINGO_TRACE_GLOBAL_SYNC_END);
 
     // ---- Step 4a: each cluster pulls B from L3 into local TCDM ----
     if (is_active_cluster && snrt_is_dm_core()) {
-        GEMM_MSPLIT_TRACE_MARKER(
-            BINGO_TRACE_GEMM_MSPLIT_B_L3_TO_TCDM_START);
+        GEMM_MSPLIT_TRACE_MARKER(BINGO_TRACE_LOAD_B_TCDM_START);
         snrt_dma_start_1d_wideptr(
             chiplet_addr_transform((uint64_t)(uintptr_t)local_b), l3_b,
             b_data_length);
         snrt_dma_wait_all();
-        GEMM_MSPLIT_TRACE_MARKER(BINGO_TRACE_GEMM_MSPLIT_B_L3_TO_TCDM_END);
+        GEMM_MSPLIT_TRACE_MARKER(BINGO_TRACE_LOAD_B_TCDM_END);
 #if GEMM_MSPLIT_ENABLE_DEBUG_PRINT
         printf("Chip(%x,%x) cluster %u block %u: loaded B-block from L3 into local TCDM\n",
                get_current_chip_loc_x(), get_current_chip_loc_y(), cluster_id,
                block);
 #endif
     }
-    GEMM_MSPLIT_TRACE_MARKER(
-        BINGO_TRACE_GEMM_MSPLIT_SYNC_AFTER_B_L3_TO_TCDM_START);
+    GEMM_MSPLIT_TRACE_MARKER(BINGO_TRACE_GLOBAL_SYNC_START);
     snrt_global_barrier();
-    GEMM_MSPLIT_TRACE_MARKER(
-        BINGO_TRACE_GEMM_MSPLIT_SYNC_AFTER_B_L3_TO_TCDM_END);
+    GEMM_MSPLIT_TRACE_MARKER(BINGO_TRACE_GLOBAL_SYNC_END);
 
     // ---- Step 4b: compute D-block = A-block x B (output-stationary) ----
+    GEMM_MSPLIT_TRACE_MARKER(BINGO_TRACE_LOAD_CFG_START);
     int32_t Aslstride[] = {Aslstride0};
     int32_t Atlbound[] = {Atlbound0, Atlbound1, Atlbound2,
                           Atlbound3, Atlbound4, Atlbound5};
@@ -183,9 +172,10 @@ int main() {
     int32_t D32tlbound[] = {D32tlbound0, D32tlbound1, D32tlbound2, D32tlbound3};
     int32_t D32tlstride[] = {D32tlstride0, D32tlstride1, D32tlstride2,
                              D32tlstride3};
+    GEMM_MSPLIT_TRACE_MARKER(BINGO_TRACE_LOAD_CFG_END);
 
     if (is_active_cluster && snrt_cluster_core_idx() == 0) {
-        GEMM_MSPLIT_TRACE_MARKER(BINGO_TRACE_GEMM_MSPLIT_COMPUTE_CFG_START);
+        GEMM_MSPLIT_TRACE_MARKER(BINGO_TRACE_PROGRAM_CSR_START);
         set_versacore_streamer_csr(
             delta_local_a, Aslstride, Atlbound, Atlstride,
             set_addr_remap_index_A, transposed_A, channel_en_A,
@@ -210,35 +200,31 @@ int main() {
 
         start_streamer();
         start_versacore();
-        GEMM_MSPLIT_TRACE_MARKER(BINGO_TRACE_GEMM_MSPLIT_COMPUTE_CFG_END);
-        GEMM_MSPLIT_TRACE_MARKER(BINGO_TRACE_GEMM_MSPLIT_COMPUTE_RUN_START);
+        GEMM_MSPLIT_TRACE_MARKER(BINGO_TRACE_PROGRAM_CSR_END);
+        GEMM_MSPLIT_TRACE_MARKER(BINGO_TRACE_COMPUTE_START);
         wait_versacore_and_streamer();
-        GEMM_MSPLIT_TRACE_MARKER(BINGO_TRACE_GEMM_MSPLIT_COMPUTE_RUN_END);
+        GEMM_MSPLIT_TRACE_MARKER(BINGO_TRACE_COMPUTE_END);
     }
 
     // sync between cluster cores to ensure all cores have finished computing before copying data back to memory chip
-    GEMM_MSPLIT_TRACE_MARKER(
-        BINGO_TRACE_GEMM_MSPLIT_CLUSTER_SYNC_AFTER_COMPUTE_START);
+    GEMM_MSPLIT_TRACE_MARKER(BINGO_TRACE_CLUSTER_SYNC_START);
     snrt_cluster_hw_barrier();
-    GEMM_MSPLIT_TRACE_MARKER(
-        BINGO_TRACE_GEMM_MSPLIT_CLUSTER_SYNC_AFTER_COMPUTE_END);
+    GEMM_MSPLIT_TRACE_MARKER(BINGO_TRACE_CLUSTER_SYNC_END);
 
     // Store the D-block back to the memory chip
     if (is_active_cluster && snrt_is_dm_core()) {
-        GEMM_MSPLIT_TRACE_MARKER(BINGO_TRACE_GEMM_MSPLIT_D_WRITEBACK_START);
+        GEMM_MSPLIT_TRACE_MARKER(BINGO_TRACE_STORE_D_START);
         snrt_dma_start_1d_wideptr(
             mem_d, chiplet_addr_transform((uint64_t)(uintptr_t)local_d),
             d_data_length);
         snrt_dma_wait_all();
-        GEMM_MSPLIT_TRACE_MARKER(BINGO_TRACE_GEMM_MSPLIT_D_WRITEBACK_END);
+        GEMM_MSPLIT_TRACE_MARKER(BINGO_TRACE_STORE_D_END);
     }
 
     // Sync between clusters to ensure the finish of the layer
-    GEMM_MSPLIT_TRACE_MARKER(
-        BINGO_TRACE_GEMM_MSPLIT_SYNC_AFTER_D_WRITEBACK_START);
+    GEMM_MSPLIT_TRACE_MARKER(BINGO_TRACE_GLOBAL_SYNC_START);
     snrt_global_barrier();
-    GEMM_MSPLIT_TRACE_MARKER(
-        BINGO_TRACE_GEMM_MSPLIT_SYNC_AFTER_D_WRITEBACK_END);
+    GEMM_MSPLIT_TRACE_MARKER(BINGO_TRACE_GLOBAL_SYNC_END);
 
     cycles = snrt_mcycle() - cycles;
 
