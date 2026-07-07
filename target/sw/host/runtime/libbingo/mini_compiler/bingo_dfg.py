@@ -246,14 +246,16 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                 if succ.assigned_chiplet_id == cur_node.assigned_chiplet_id
             ]
             if remote_succ_list:
-                # Group remote successors by assigned_core_id so that each core-group can be
-                # handled independently: a per-core group that covers all other chiplets becomes
-                # a single broadcast dummy_set; otherwise individual dummy_sets are emitted.
-                remote_succs_by_core: dict[int, list[BingoNode]] = {}
+                # Group remote successors by target cluster and core. A broadcast
+                # dep-set has one (cluster, target_core, source_core) position
+                # replicated across chiplets, so mixing clusters in one group
+                # cannot be represented by a single dependency tag.
+                remote_succs_by_cluster_core: dict[tuple[int, int], list[BingoNode]] = {}
                 for remote_succ in remote_succ_list:
-                    remote_succs_by_core.setdefault(remote_succ.assigned_core_id, []).append(remote_succ)
+                    key = (remote_succ.assigned_cluster_id, remote_succ.assigned_core_id)
+                    remote_succs_by_cluster_core.setdefault(key, []).append(remote_succ)
 
-                for core_id, group in remote_succs_by_core.items():
+                for (_cluster_id, core_id), group in remote_succs_by_cluster_core.items():
                     chiplets_in_group = set(s.assigned_chiplet_id for s in group)
                     # A genuine broadcast covers ALL other chiplets AND there are at
                     # least two of them. The `num_chiplets > 2` guard is essential:
