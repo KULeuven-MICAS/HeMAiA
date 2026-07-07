@@ -53,7 +53,7 @@ LOW_40_BIT_ADDR_MASK = "0x000000ffffffffffULL"
 
 
 def get_args():
-    parser = argparse.ArgumentParser(description="gemm_ksplit_4chiplet_1cluster")
+    parser = argparse.ArgumentParser(description="gemm_ksplit_4chiplet_1cluster_basic")
     parser.add_argument("--output_dir", type=str, default=".")
     parser.add_argument("--output_offload_file_name", type=str, default="offload_bingo_hw.h")
     parser.add_argument("-c", "--cfg", type=pathlib.Path, required=True)
@@ -106,7 +106,7 @@ def main():
     N = merged["N"]
     k_split = merged["k_split"]
     if k_split != 4:
-        raise ValueError(f"gemm_ksplit_4chiplet_1cluster expects k_split=4, got {k_split}")
+        raise ValueError(f"gemm_ksplit_4chiplet_1cluster_basic expects k_split=4, got {k_split}")
     if K % k_split != 0:
         raise ValueError(f"K ({K}) must be divisible by k_split ({k_split})")
     if len(chiplets) < k_split:
@@ -429,7 +429,7 @@ def main():
     print(f"  A_tile_bytes={A_tile_bytes}, B_tile_bytes={B_tile_bytes}, D_bytes={D_bytes}")
 
     dfg.bingo_compile_dfg(
-        "gemm_ksplit_4chiplet_1cluster",
+        "gemm_ksplit_4chiplet_1cluster_basic",
         output_dir,
         args.output_offload_file_name,
         extra_include_header_list=["ksplit_gemm_data.h"],

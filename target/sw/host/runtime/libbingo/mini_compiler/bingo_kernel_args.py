@@ -520,15 +520,15 @@ class SnaxBingoKernelXdmaGather2dArgs(BingoKernelArgs):
 
 
 # BINGO XDMA ElementwiseAdd (writer ext: dst = sum of `num_operands` int32
-# operand buffers). Each operand holds `num_elem_per_operand` int32 (must be
+# operand buffers). Each operand holds `num_int32_elem_per_operand` int32 (must be
 # a multiple of 16); consecutive operands are `operand_stride` bytes apart.
 # Used to fuse the GEMM K-split partial-sum adds into one streaming pass.
 class SnaxBingoKernelXdmaElementwiseAddArgs(BingoKernelArgs):
     def __init__(self, src_addr: Union[BingoMemAlloc, int], dst_addr: Union[BingoMemAlloc, int],
-                 num_elem_per_operand: int, num_operands: int, operand_stride: int):
+                 num_int32_elem_per_operand: int, num_operands: int, operand_stride: int):
         self.src_addr = src_addr
         self.dst_addr = dst_addr
-        self.num_elem_per_operand = num_elem_per_operand
+        self.num_int32_elem_per_operand = num_int32_elem_per_operand
         self.num_operands = num_operands
         self.operand_stride = operand_stride
 
@@ -539,7 +539,7 @@ class SnaxBingoKernelXdmaElementwiseAddArgs(BingoKernelArgs):
         a = {}
         self._process_addr(self.src_addr, "src_addr", a, handle_name_map)
         self._process_addr(self.dst_addr, "dst_addr", a, handle_name_map)
-        a["num_elem_per_operand"] = str(self.num_elem_per_operand)
+        a["num_int32_elem_per_operand"] = str(self.num_int32_elem_per_operand)
         a["num_operands"] = str(self.num_operands)
         a["operand_stride"] = str(self.operand_stride)
         return a
@@ -548,11 +548,11 @@ class SnaxBingoKernelXdmaElementwiseAddArgs(BingoKernelArgs):
 # BINGO XDMA ElementwiseAdd AB (two-operand) (convenience: dst = a + b, int32).
 class SnaxBingoKernelXdmaElementwiseAddAbArgs(BingoKernelArgs):
     def __init__(self, src_a_addr: Union[BingoMemAlloc, int], src_b_addr: Union[BingoMemAlloc, int],
-                 dst_addr: Union[BingoMemAlloc, int], num_int32: int):
+                 dst_addr: Union[BingoMemAlloc, int], num_int32_elements: int):
         self.src_a_addr = src_a_addr
         self.src_b_addr = src_b_addr
         self.dst_addr = dst_addr
-        self.num_int32 = num_int32
+        self.num_int32_elements = num_int32_elements
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_xdma_elementwise_add_ab_args_t"
@@ -562,7 +562,7 @@ class SnaxBingoKernelXdmaElementwiseAddAbArgs(BingoKernelArgs):
         self._process_addr(self.src_a_addr, "src_a_addr", a, handle_name_map)
         self._process_addr(self.src_b_addr, "src_b_addr", a, handle_name_map)
         self._process_addr(self.dst_addr, "dst_addr", a, handle_name_map)
-        a["num_int32"] = str(self.num_int32)
+        a["num_int32_elements"] = str(self.num_int32_elements)
         return a
 
 

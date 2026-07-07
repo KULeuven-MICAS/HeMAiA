@@ -33,7 +33,7 @@ separate ELF through the corresponding `single_chip` or `multi_chip` Makefile.
 
 ### Multi-chip workloads
 - **gemm_msplit_4chiplet_1cluster**: Four-chiplet GEMM with M-dimension output partitioning.
-- **gemm_ksplit_4chiplet_1cluster**: Four-chiplet GEMM with K-dimension splitting and cross-chiplet reduction.
+- **gemm_ksplit_4chiplet_1cluster_basic**: Four-chiplet GEMM with K-dimension splitting and cross-chiplet reduction.
 - **gemm_parallel_dma_4chiplet_1cluster**: Four-chiplet vanilla GEMM with parallel host and cluster iDMA load.
 - **dma_for_gemm_msplit_4chiplet_1cluster**: Four-chiplet DMA-only M-split data movement test for evaluating the proposed data-movement techniques without running GEMM. The ablation cases gradually introduce optimizations: (0) no broadcast, no dual-DMA, no half-duplex; each chiplet loads its own A tile and B directly from the memory chip and checks both buffers. (1) broadcast; chiplet `00` loads B once and broadcasts it while each chiplet loads and checks its own A tile. (2) broadcast with dual-DMA. (3) broadcast with dual-DMA and half-duplex.
 - **host_int32_add_4chiplet_1cluster**: Four-chiplet int32 cross chip addition workload.
