@@ -7,7 +7,6 @@
       router_to_soc_iw: 4,          // soc_to_router_iw + clog2(chips)
       soc_to_router_iw: 4,          // Not beneficial for iw > 6
       single_chip: false,
-      same_memchip_speed: true,
       testbench_cfg: {              // The total number of homogeneous chips (x * y) on the virtual interposer
         // Emulate a 2*2C + 2M configuration
         hemaia_compute_chip: [
@@ -105,7 +104,8 @@
       quad_axi_lite_base_offset: 65536 // 0x10000
     },
     clusters:[
-      "snax_versacore_to_cluster",
+      "snax_versacore_to_256KB_cluster",
+      "snax_versacore_to_256KB_cluster",
       ],
 
     hemaia_xdma_cfg: {

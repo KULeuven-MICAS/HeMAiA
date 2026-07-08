@@ -91,10 +91,10 @@ sw: $(CFG)
 # - DEV_APP: The target device-side accelerator/application.
 #   Note: Set to 'None' for host_only as it does not target a device-side accelerator.
 #         For bingo workloads, set to 'snax-bingo-offload'.
-HOST_APP_TYPE ?= offload_bingo_sw
+HOST_APP_TYPE ?= offload_legacy
 CHIP_TYPE     ?= single_chip
-WORKLOAD      ?= gemm_tiled
-DEV_APP       ?= snax-bingo-offload
+WORKLOAD      ?= None
+DEV_APP       ?= snax-versacore-matmul-profile
 single-sw: $(CFG)
 	$(MAKE) -C ./target/sw single-sw \
 		USER_FLAGS="$(USER_FLAGS)" \
