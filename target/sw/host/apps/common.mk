@@ -120,6 +120,7 @@ RISCV_CFLAGS += -fno-common
 RISCV_CFLAGS += -O2
 RISCV_CFLAGS += -fno-tree-vectorize -fno-tree-loop-vectorize -fno-tree-slp-vectorize
 RISCV_CFLAGS += -ffunction-sections
+RISCV_CFLAGS += -fdata-sections
 RISCV_CFLAGS += -Wextra
 RISCV_CFLAGS += -Werror
 RISCV_CFLAGS += -std=gnu99
@@ -140,6 +141,11 @@ RISCV_LDFLAGS += -T$(LINKER_SCRIPT)
 # Silence binutils >= 2.39's W^X advisory warning (the flag was introduced in
 # the same release that added the warning, so any ld that warns accepts it).
 RISCV_LDFLAGS += -Wl,--no-warn-rwx-segments
+# GC unreferenced functions/data (paired with -ffunction-sections/-fdata-sections): the multichip
+# 1-cluster chips have a small 128 KiB wide SPM, and linking all of libbingo's host kernels leaves
+# too little for the L3 task-metadata heap -> host L3 OOM. Stripping unused kernels shrinks .text and
+# frees the heap. The offload_bingo_hw.h references its live kernels by &symbol, so they are kept.
+RISCV_LDFLAGS += -Wl,--gc-sections
 
 
 # if the host application uses the bingo runtime
