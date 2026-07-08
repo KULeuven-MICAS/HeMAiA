@@ -824,6 +824,49 @@ class SnaxBingoKernelXdmaStreamMapArgs(BingoKernelArgs):
         return a
 
 
+class SnaxBingoKernelXdmaFp16ToInt8Args(BingoKernelArgs):
+    """Fp16ToInt8: out = clamp(round(x * inv_scale), -128, 127) over `rows*beats` flat beats,
+    on the HasFp16ToInt8 xDMA datapath -- the dedicated activation fp16 -> int8 GEMM-operand
+    requant that replaces the host quantize_f16i8. inv_scale_f32bits = FP32 bits of 127/max|x|
+    (the producer computes max|x| via MAX(x)+MAX(-x) reduces). dst_bound0 = rows*beats//2
+    (int8 packs two elements per fp16 lane)."""
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_fp16_to_int8"
+
+    def __init__(self, src_addr: Union[BingoMemAlloc, int], dst_addr: Union[BingoMemAlloc, int],
+                 beats: int, rows: int, inv_scale_f32bits: int = 0,
+                 csr_mode: int = 0, dst_bound0: Optional[int] = None,
+                 inv_scale_addr: Union[BingoMemAlloc, int, None] = None):
+        self.src_addr = src_addr
+        self.dst_addr = dst_addr
+        self.beats = beats
+        self.rows = rows
+        self.inv_scale_f32bits = inv_scale_f32bits
+        self.csr_mode = csr_mode
+        self.dst_bound0 = (rows * beats) // 2 if dst_bound0 is None else dst_bound0
+        # 0 = use inv_scale_f32bits; a handle = read the runtime inv_scale (127/max|x| that
+        # requant_scale wrote) from L1 at run time.
+        self.inv_scale_addr = 0 if inv_scale_addr is None else inv_scale_addr
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_xdma_fp16_to_int8_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.src_addr, "src_addr", a, handle_name_map)
+        self._process_addr(self.dst_addr, "dst_addr", a, handle_name_map)
+        a["beats"] = str(self.beats)
+        a["rows"] = str(self.rows)
+        a["inv_scale_f32bits"] = str(self.inv_scale_f32bits)
+        a["csr_mode"] = str(self.csr_mode)
+        a["dst_bound0"] = str(self.dst_bound0)
+        if isinstance(self.inv_scale_addr, int):
+            a["inv_scale_addr_lo"] = str(self.inv_scale_addr & 0xFFFFFFFF)
+            a["inv_scale_addr_hi"] = str((self.inv_scale_addr >> 32) & 0xFFFFFFFF)
+        else:
+            self._process_addr(self.inv_scale_addr, "inv_scale_addr", a, handle_name_map)
+        return a
+
+
 class SnaxBingoKernelXdmaStreamElementwiseArgs(BingoKernelArgs):
     """StreamElementwise: out = op(operand_0, operand_1, ...) over `operand_count`
     interleaved streams operand_stride bytes apart, across `rows*beats` flat beats.
@@ -1266,6 +1309,35 @@ class HostBingoKernelHostScalarBcastArgs(BingoKernelArgs):
         a["D"] = str(self.D)
         a["N"] = str(self.N)
         a["in_fp32"] = str(int(self.in_fp32))
+        return a
+
+
+class HostBingoKernelRequantScaleArgs(BingoKernelArgs):
+    """Per-tensor fp16->int8 requant scale: reads xmax,nmax (max(x), max(-x) fp16 scalars the xDMA
+    StreamReduce(MAX) passes wrote to cluster L1) and writes scale = max|x|/127 (fp32 dequant qsc) +
+    inv_scale = 127/max|x| (fp32, the xDMA fp16_to_int8 runtime CSR). Replaces the host quantize_f16i8
+    (which streamed the whole tensor from L3); this reads/writes 2+2 scalars only."""
+    KERNEL_NAME = "__host_bingo_kernel_requant_scale"
+
+    def __init__(self,
+                 xmax_addr: Union[BingoMemAlloc, BingoMemSymbol, int],
+                 nmax_addr: Union[BingoMemAlloc, BingoMemSymbol, int],
+                 scale_out_addr: Union[BingoMemAlloc, BingoMemSymbol, int],
+                 inv_scale_out_addr: Union[BingoMemAlloc, BingoMemSymbol, int]):
+        self.xmax_addr = xmax_addr
+        self.nmax_addr = nmax_addr
+        self.scale_out_addr = scale_out_addr
+        self.inv_scale_out_addr = inv_scale_out_addr
+
+    def get_struct_name(self) -> str:
+        return "__host_bingo_kernel_requant_scale_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.xmax_addr, "xmax_addr", a, handle_name_map, split_64bit=False, as_64bit=True)
+        self._process_addr(self.nmax_addr, "nmax_addr", a, handle_name_map, split_64bit=False, as_64bit=True)
+        self._process_addr(self.scale_out_addr, "scale_out_addr", a, handle_name_map, split_64bit=False, as_64bit=True)
+        self._process_addr(self.inv_scale_out_addr, "inv_scale_out_addr", a, handle_name_map, split_64bit=False, as_64bit=True)
         return a
 
 

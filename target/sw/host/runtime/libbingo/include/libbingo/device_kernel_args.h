@@ -484,6 +484,24 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_stream_map_args {
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_xdma_stream_map_args_t;
 
+// Fp16ToInt8: out = clamp(round(x * inv_scale), -128, 127) over rows*beats flat beats, on the
+// HasFp16ToInt8 xDMA datapath (dedicated activation fp16 -> int8 GEMM-operand requant, replacing
+// the host quantize_f16i8). inv_scale_f32bits = FP32 bits of 127/max|x|. dst_bound0 = rows*beats/2.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_fp16_to_int8 {
+  uint32_t src_addr_hi;
+  uint32_t src_addr_lo;
+  uint32_t dst_addr_hi;
+  uint32_t dst_addr_lo;
+  uint32_t beats;             // beats per row
+  uint32_t rows;              // independent rows (flat outer bound = rows*beats)
+  uint32_t inv_scale_f32bits; // Fp16ToInt8 inv_scale (FP32 bits) = 127/max|x| (compile-time immediate)
+  uint32_t csr_mode;          // 0=FULL, 1=STICKY
+  uint32_t dst_bound0;        // int8 writer beats (rows*beats/2)
+  uint32_t inv_scale_addr_hi; // optional: L1 addr of a runtime inv_scale FP32 word (requant_scale
+  uint32_t inv_scale_addr_lo; // wrote it); read instead of the immediate when (hi|lo) != 0
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_xdma_fp16_to_int8_args_t;
+
 // StreamElementwise: out = op(operand_0, operand_1, ...) over `operand_count`
 // interleaved streams (stride operand_stride bytes), across rows*beats flat beats.
 // Optional fused quant.

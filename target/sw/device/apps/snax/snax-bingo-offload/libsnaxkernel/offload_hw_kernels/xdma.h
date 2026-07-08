@@ -513,6 +513,63 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_stream_map(void *arg)
     }
 }
 
+// Fp16ToInt8: out[i] = clamp(round(in[i] * inv_scale), -128, 127) over `rows*beats` flat beats.
+// A dedicated fp16 activation -> int8 GEMM-operand requant on the xDMA (HasFp16ToInt8 datapath),
+// replacing the host CVA6 quantize_f16i8 (which reads the fp16 from L3 element-by-element -- the host
+// makespan wall). The narrow is chained after an IDENTITY StreamMap (LINEAR a=1,b=0) so the reader
+// emits the fp16 stream the FP16TOINT8 lane consumes -- the same proven path stream_map takes at
+// out_dtype=1, just with a fixed passthrough map and no `func`/`a`/`b` for the caller to set.
+// inv_scale = FP32 bits of 127/max|x| (the symmetric per-tensor scale; the producer computes max|x|
+// via MAX(x)+MAX(-x) reduces). dst_bound0 = rows*beats/2 (int8 packs two elements per fp16 lane).
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_fp16_to_int8(void *arg)
+{
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_fp16_to_int8_args_t);
+    if (snrt_is_dm_core()) {
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+        uint32_t *a = (uint32_t *)arg;
+        uint64_t src_addr = make_u64(a[0], a[1]);
+        uint64_t dst_addr = make_u64(a[2], a[3]);
+        uint32_t beats      = a[4];
+        uint32_t rows       = a[5];
+        uint32_t inv_scale     = a[6];   // FP32 bits of 127/max|x| (compile-time immediate)
+        uint32_t csr_mode      = a[7];
+        uint32_t dst_bound0    = a[8];
+        uint32_t inv_scale_hi  = a[9];   // optional: if (hi|lo)!=0, read the runtime inv_scale
+        uint32_t inv_scale_lo  = a[10];  // (127/max|x|, FP32 bits) that requant_scale wrote to L1
+        bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_fp16_to_int8_args_t);
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+#if defined(READER_EXT_STREAMMAP) && defined(READER_EXT_FP16TOINT8)
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
+        uint32_t flat = rows * beats;
+        uint32_t src_str[2] = { XDMA_WIDTH, flat * XDMA_WIDTH };
+        uint32_t src_bnd[2] = { flat, 1 };
+        // The requant scale is per-tensor and computed at run time (max|x| via MAX(x)+MAX(-x) on the
+        // xDMA, then requant_scale on the host) -> read it from L1 when an address is given.
+        if (inv_scale_lo || inv_scale_hi) inv_scale = *(volatile uint32_t *)inv_scale_lo;
+        uint32_t csr_map[3] = { 0x3F800000u, 0u, 0u };        // identity: a=1.0, b=0, func=LINEAR
+        xdma_enable_src_ext(READER_EXT_STREAMMAP, csr_map);
+        uint32_t csr_q[1] = { inv_scale };
+        xdma_enable_src_ext(READER_EXT_FP16TOINT8, csr_q);
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
+        uint32_t rc = xdma_stream_launch(src_addr, dst_addr, src_str, src_bnd, dst_bound0, csr_mode);
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
+        xdma_disable_src_ext(READER_EXT_FP16TOINT8);
+        xdma_disable_src_ext(READER_EXT_STREAMMAP);
+        if (rc != BINGO_RET_SUCC) return BINGO_RET_FAIL;
+#else
+        #error "Regenerate the XDMA CSR map (make snax-sw-gen): missing READER_EXT_STREAMMAP/FP16TOINT8."
+#endif
+        sp->return_value = (uint32_t)dst_addr;
+        sp->num_return_values = 0;
+        return BINGO_RET_SUCC;
+    } else {
+        printf_safe("[Cluster %d Core %d]: Error! xDMA fp16_to_int8 should be called from a DM core!\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+}
+
 // StreamElementwise: out = op(operand_0, operand_1, ...) over `operand_count`
 // interleaved streams spaced operand_stride bytes apart (the reader reads
 // {op0[beat], op1[beat], ...} as the inner AGU dim), across `rows*beats` flat

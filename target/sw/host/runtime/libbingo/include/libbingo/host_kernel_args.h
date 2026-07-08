@@ -157,6 +157,18 @@ __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_host_scalar_bcast_args {
     uint64_t scratchpad_ptr;
 } __host_bingo_kernel_host_scalar_bcast_args_t;
 
+// Per-tensor fp16->int8 requant scale: reads xmax,nmax (max(x), max(-x) fp16 scalars in cluster L1),
+// writes scale = max|x|/127 (fp32, the downstream dequant qsc) and inv_scale = 127/max|x| (fp32, the
+// xDMA fp16_to_int8 runtime CSR). ~free vs the host quantize_f16i8 it replaces (2+2 scalars, not the
+// 4096-element tensor).
+__HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_requant_scale_args {
+    uint64_t xmax_addr;        // L1: lane 0 of the MAX(x) reduce beat  (fp16)
+    uint64_t nmax_addr;        // L1: lane 0 of the MAX(-x) reduce beat (fp16)
+    uint64_t scale_out_addr;   // out: fp32 scale = max|x|/127
+    uint64_t inv_scale_out_addr; // out: fp32 inv_scale = 127/max|x|
+    uint64_t scratchpad_ptr;
+} __host_bingo_kernel_requant_scale_args_t;
+
 // DARTS Tier 1: Unified CERF Gating kernel
 // Supports multiple activation modes via the `mode` field.
 // Mode 0 (top_k):    Read logits from predecessor scratchpad, select top-k experts

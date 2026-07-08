@@ -770,9 +770,8 @@ static inline uint64_t __host_bingo_kernel_host_scalar_bcast(void *arg){
     uint64_t in_fp32  = ((uint64_t *)arg)[6];   // 0=fp16 scalar, 1=REDUCE_OUT_FP32 fp32 scalar
     bingo_kernel_scratchpad_t* sp = (bingo_kernel_scratchpad_t*)(uintptr_t)((uint64_t *)arg)[7];
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
-    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
+    BINGO_TRACE_MARKER(BINGO_TRACE_SCALAR_RUN_START);
     const uint32_t LANES = 32;  // XDMA_WIDTH(64 B) / sizeof(fp16): per-row scalar stride
-    volatile uint16_t* out = (volatile uint16_t*)(uintptr_t)out_addr;
 
     // The reduce's per-row scalars sit at `in_addr`, one splatted 64-B beat apart.
     // Lane 0 is fp16 (REDUCE_OUT_FP32=0) or fp32 (REDUCE_OUT_FP32=1, the unnarrowed
@@ -784,23 +783,32 @@ static inline uint64_t __host_bingo_kernel_host_scalar_bcast(void *arg){
     // fresh value. If instead it lives in cluster TCDM, stage each scalar into a
     // main-memory bounce word via the system iDMA -- the wide AXI path the
     // reduce/Load already use to reach cluster L1 -- then fence + read the bounce.
-    static volatile uint32_t bingo_host_scalar_bounce;  // host .bss -> WideSPM (holds u16 or f32)
+    // BATCH the per-row scalar gather. The producing xDMA reduce wrote `rows` splatted 64-B beats
+    // CONTIGUOUSLY at in_addr (one per row, scalar at lane 0), so stage them ALL into a gather buffer
+    // the kernel allocates ITSELF (bingo_l3_alloc, sized to `rows` -- no arg, no hardcoded cap) in ONE
+    // sys_dma + ONE dcache fence, then read lane 0 of each beat locally -- instead of a cross-cluster
+    // DMA round-trip + a full WT-dcache flush PER ROW (the makespan wall: `rows` serial NoC round-trips
+    // for `rows` 2-4 B scalars).
     uint8_t chip = get_current_chip_id();
     int in_mainmem = __bingo_host_addr_is_mainmem(in_addr);
-    uint32_t elem_bytes = in_fp32 ? sizeof(uint32_t) : sizeof(uint16_t);
+    uint64_t beat = (uint64_t)LANES * sizeof(uint16_t);         // 64 B per-row scalar beat
+    uint64_t gather = in_mainmem ? in_addr : bingo_l3_alloc(chip, rows * beat);  // freed below
+    const volatile uint8_t* base = (const volatile uint8_t*)(uintptr_t)gather;   // lane 0 of each beat
+    if (!in_mainmem) {
+        uint32_t tf = (uint32_t)sys_dma_memcpy(chip, gather, in_addr, rows * beat);   // ONE staged copy
+        while (*(sys_dma_done_ptr(chip)) != tf) asm volatile("nop");
+    }
+    asm volatile("fence" ::: "memory");  // ONE WT-dcache invalidate before the (now-local) reads
+    // OUT: build the [rows, D] fp16 broadcast in fast host-local (WIDE_SPM) memory, then push it to
+    // the (cross-cluster) out_addr in ONE sys_dma. Splatting straight to a cluster-L1 out_addr is
+    // `rows*D` slow cross-cluster write-through stores -- the REAL host_scalar_bcast wall (NEG, which
+    // has no fdiv/fsqrt, measured the SAME cost as RECIP, so the splat dominates, not the gather/FPU).
+    int out_mainmem = __bingo_host_addr_is_mainmem(out_addr);
+    uint64_t out_bytes = (uint64_t)rows * D * sizeof(uint16_t);
+    uint64_t out_stage = out_mainmem ? out_addr : bingo_l3_alloc(chip, out_bytes);  // freed below
+    volatile uint16_t* out = (volatile uint16_t*)(uintptr_t)out_stage;
     for (uint64_t r = 0; r < rows; r++) {
-        uint64_t src_addr = in_addr + (uint64_t)r * LANES * sizeof(uint16_t);  // r * 64 B beat
-        const volatile void* src;
-        if (in_mainmem) {
-            src = (const volatile void*)(uintptr_t)src_addr;      // read in place
-        } else {
-            uint32_t tf = (uint32_t)sys_dma_memcpy(
-                chip, (uint64_t)(uintptr_t)&bingo_host_scalar_bounce,
-                src_addr, elem_bytes);
-            while (*(sys_dma_done_ptr(chip)) != tf) asm volatile("nop");
-            src = &bingo_host_scalar_bounce;                      // read the staged copy
-        }
-        asm volatile("fence" ::: "memory");  // WT-dcache invalidate before the read
+        const volatile void* src = (const volatile void*)(base + (uint64_t)r * beat);  // lane 0 of row r
         uint16_t h;
         if (op == BINGO_HOST_SCALAR_NEG && !in_fp32) {
             h = (uint16_t)(*(const volatile uint16_t*)src ^ 0x8000u);  // -x: fp16 sign flip (no FPU)
@@ -817,11 +825,68 @@ static inline uint64_t __host_bingo_kernel_host_scalar_bcast(void *arg){
                                                         : (1.0f / __builtin_sqrtf(v / (float)N));
             h = __bingo_host_f32_to_f16bits(res);
         }
-        for (uint64_t c = 0; c < D; c++) out[r * D + c] = h;     // splat across the row
+        for (uint64_t c = 0; c < D; c++) out[r * D + c] = h;     // fast local stores (WIDE_SPM)
     }
-    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
+    if (!out_mainmem) {                          // one bulk push of the whole [rows,D] broadcast
+        asm volatile("fence" ::: "memory");      // flush the local stores before the DMA reads them
+        uint32_t tf = (uint32_t)sys_dma_memcpy(chip, out_addr, out_stage, out_bytes);
+        while (*(sys_dma_done_ptr(chip)) != tf) asm volatile("nop");
+        bingo_l3_free(chip, out_stage);
+    }
+    if (!in_mainmem) bingo_l3_free(chip, gather);
+    BINGO_TRACE_MARKER(BINGO_TRACE_SCALAR_RUN_END);
     sp->return_value = (uint32_t)(uintptr_t)out_addr;
     sp->num_return_values = 1;
+    return BINGO_RET_SUCC;
+}
+
+// Per-tensor fp16->int8 REQUANT SCALE. The xDMA computes max|x| = max(MAX(x), MAX(-x)) via two
+// StreamReduce(MAX) passes writing one splatted fp16 scalar each (lane 0 of a 64-B beat) to cluster L1;
+// this tiny host kernel reads those two scalars, computes scale = max|x|/127 (the fp32 dequant qsc a
+// downstream op multiplies by) and inv_scale = 127/max|x| (the fp32 the xDMA fp16_to_int8 narrow reads
+// as a runtime CSR), and writes them out. It reads/writes 2+2 scalars, NOT the 4096-element tensor the
+// host quantize_f16i8 streamed from L3 -- so it is ~free and moves the whole requant onto the xDMA.
+// Mirrors host_scalar_bcast's cluster-L1 bounce: read/write in place if host-cacheable main memory,
+// else stage through the system iDMA + a fence.
+static inline uint64_t __host_bingo_kernel_requant_scale(void *arg){
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+    uint64_t xmax_addr  = ((uint64_t *)arg)[0];   // L1: lane 0 of the MAX(x) reduce beat  (fp16)
+    uint64_t nmax_addr  = ((uint64_t *)arg)[1];   // L1: lane 0 of the MAX(-x) reduce beat (fp16)
+    uint64_t scale_addr = ((uint64_t *)arg)[2];   // out: fp32 scale = max|x|/127 (downstream qsc)
+    uint64_t inv_addr   = ((uint64_t *)arg)[3];   // out: fp32 inv_scale = 127/max|x| (fp16_to_int8 CSR)
+    bingo_kernel_scratchpad_t* sp = (bingo_kernel_scratchpad_t*)(uintptr_t)((uint64_t *)arg)[4];
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_QUANT_RUN_START);
+    uint8_t chip = get_current_chip_id();
+    static volatile uint32_t rq_bounce;            // host .bss -> WideSPM (holds one u16 or f32)
+    // read one cluster-L1 fp16 scalar (lane 0), bouncing through main memory if the addr is cluster TCDM
+    #define RQ_READ_F16(addr) ({ \
+        uint64_t _a = (addr); const volatile uint16_t* _p; \
+        if (__bingo_host_addr_is_mainmem(_a)) { _p = (const volatile uint16_t*)(uintptr_t)_a; } \
+        else { uint32_t _tf = (uint32_t)sys_dma_memcpy(chip, (uint64_t)(uintptr_t)&rq_bounce, _a, \
+                   sizeof(uint16_t)); while (*(sys_dma_done_ptr(chip)) != _tf) asm volatile("nop"); \
+               _p = (const volatile uint16_t*)&rq_bounce; } \
+        asm volatile("fence" ::: "memory"); __bingo_host_f16bits_to_f32(*_p); })
+    float xmax = RQ_READ_F16(xmax_addr);
+    float nmax = RQ_READ_F16(nmax_addr);
+    #undef RQ_READ_F16
+    float maxabs = xmax > nmax ? xmax : nmax;      // both are max of a non-negated / negated stream
+    if (maxabs < 1e-10f) maxabs = 1e-10f;          // match _requant_f16i8's floor (avoid div-by-zero)
+    float scale = maxabs / 127.0f, inv_scale = 127.0f / maxabs;
+    // write one fp32 out (in place if main memory, else stage + system-iDMA to cluster L1)
+    #define RQ_WRITE_F32(addr, val) do { \
+        uint64_t _a = (addr); float _v = (val); \
+        if (__bingo_host_addr_is_mainmem(_a)) { __builtin_memcpy((void*)(uintptr_t)_a, &_v, 4); \
+            asm volatile("fence" ::: "memory"); } \
+        else { __builtin_memcpy((void*)&rq_bounce, &_v, 4); asm volatile("fence" ::: "memory"); \
+            uint32_t _tf = (uint32_t)sys_dma_memcpy(chip, _a, (uint64_t)(uintptr_t)&rq_bounce, 4); \
+            while (*(sys_dma_done_ptr(chip)) != _tf) asm volatile("nop"); } } while (0)
+    RQ_WRITE_F32(scale_addr, scale);
+    RQ_WRITE_F32(inv_addr, inv_scale);
+    #undef RQ_WRITE_F32
+    BINGO_TRACE_MARKER(BINGO_TRACE_QUANT_RUN_END);
+    sp->return_value = (uint32_t)(uintptr_t)inv_addr;
+    sp->num_return_values = 0;
     return BINGO_RET_SUCC;
 }
 
@@ -913,7 +978,7 @@ static inline uint64_t __host_bingo_kernel_quantize_f32i8(void *arg){
     bingo_kernel_scratchpad_t* sp = (bingo_kernel_scratchpad_t*)(uintptr_t)((uint64_t *)arg)[5];
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
-    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
+    BINGO_TRACE_MARKER(BINGO_TRACE_QUANT_RUN_START);
 
     // Pass 1: find max(|x|) using RVV
     float abs_max = 0.0f;
@@ -959,7 +1024,7 @@ static inline uint64_t __host_bingo_kernel_quantize_f32i8(void *arg){
         }
     }
 
-    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_QUANT_RUN_END);
     sp->return_value = (uint32_t)(uintptr_t)output;
     sp->num_return_values = num_elements;
     return BINGO_RET_SUCC;
@@ -1165,7 +1230,7 @@ static inline uint64_t __host_bingo_kernel_quantize_f16i8(void *arg){
     bingo_kernel_scratchpad_t* sp = (bingo_kernel_scratchpad_t*)(uintptr_t)((uint64_t *)arg)[5];
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
-    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
+    BINGO_TRACE_MARKER(BINGO_TRACE_QUANT_RUN_START);
 
 #if BINGO_HAVE_FP16_VEC
     // Pass 1: widen fp16->fp32, find max(|x|) using RVV
@@ -1235,7 +1300,7 @@ static inline uint64_t __host_bingo_kernel_quantize_f16i8(void *arg){
     }
 #endif
 
-    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_QUANT_RUN_END);
     sp->return_value = (uint32_t)(uintptr_t)output;
     sp->num_return_values = num_elements;
     return BINGO_RET_SUCC;
