@@ -32,8 +32,8 @@ SNAX_LIB_DEFINE void __snax_kernel_xdma_1d_copy(void *arg)
 
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
         xdma_memcpy_1d_full_addr(src_addr, dst_addr, data_size);
-        int task_id = xdma_start();
-        xdma_wait_task(src_addr, dst_addr, task_id);
+        xdma_task_t task_id = xdma_start();
+        xdma_wait_task(task_id);
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
     }
 }

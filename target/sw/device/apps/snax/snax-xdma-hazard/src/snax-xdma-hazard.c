@@ -33,7 +33,7 @@ static inline void xdma_copy_1d_checked(void *src, void *dst, uint32_t size) {
                ret);
         return;
     }
-    int task_id = xdma_start();
+    int task_id = xdma_start().task_id;
     xdma_remote_wait(task_id);
 }
 

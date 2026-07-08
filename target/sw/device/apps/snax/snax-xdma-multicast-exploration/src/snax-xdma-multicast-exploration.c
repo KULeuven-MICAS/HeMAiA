@@ -62,7 +62,7 @@ int main() {
         // Experiment group 1:
         xdma_multicast_1d((void *)tcdm_baseaddress, dest, MULTICAST_NUM,
                           data_size * sizeof(data[0]));
-        int task_id = xdma_start();
+        int task_id = xdma_start().task_id;
         xdma_remote_wait(task_id);
         printf(
             "The XDMA normal copy to %d dest is finished in %d cycles with %d "
@@ -77,7 +77,7 @@ int main() {
         }
         xdma_multicast_1d((void *)tcdm_baseaddress, dest, MULTICAST_NUM,
                           data_size * sizeof(data[0]));
-        task_id = xdma_start();
+        task_id = xdma_start().task_id;
         xdma_remote_wait(task_id);
         printf(
             "The XDMA optimal copy to %d dest is finished in %d cycles with %d "

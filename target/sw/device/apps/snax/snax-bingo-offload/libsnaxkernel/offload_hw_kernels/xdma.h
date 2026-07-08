@@ -37,8 +37,8 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_1d_copy(void *arg)
         BINGO_XDMA_TRY(xdma_memcpy_1d_full_addr(src_addr, dst_addr, data_size), "xdma_1d_copy");
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
-        int task_id = xdma_start();
-        xdma_wait_task(src_addr, dst_addr, task_id);
+        xdma_task_t task_id = xdma_start();
+        xdma_wait_task(task_id);
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
         XDMA_DEBUG_PRINT("XDMA copy completed\n");
         XDMA_DEBUG_PRINT("SRC ADDR = %lx\n", src_addr);
@@ -112,8 +112,8 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_6d(void *arg)
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
 
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
-        int task_id = xdma_start();
-        xdma_wait_task(src_addr, dst_addr, task_id);
+        xdma_task_t task_id = xdma_start();
+        xdma_wait_task(task_id);
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
         sp->return_value = (uint32_t)dst_addr;
         sp->num_return_values = 0;
@@ -224,8 +224,8 @@ static inline uint32_t xdma_elementwise_add_run(
         0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF), "xdma_elementwise_add");
     BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
     BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
-    int task_id = xdma_start();
-    xdma_wait_task(src_base, dst_addr, task_id);
+    xdma_task_t task_id = xdma_start();
+    xdma_wait_task(task_id);
     BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
     xdma_disable_dst_ext(WRITER_EXT_ELEMENTWISEADDBIT32);
 #else
@@ -396,8 +396,8 @@ static inline uint32_t xdma_stream_launch(
             (void *)(uint32_t)src_addr, (void *)(uint32_t)dst_addr, dst_bound0),
             "xdma_stream_retask");
     }
-    int task_id = xdma_start();
-    xdma_wait_task(src_addr, dst_addr, task_id);
+    xdma_task_t task_id = xdma_start();
+    xdma_wait_task(task_id);
     return BINGO_RET_SUCC;
 }
 
@@ -996,8 +996,8 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_transpose_2d(void *arg)
             BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
 
             BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
-            int task_id = xdma_start();
-            xdma_wait_task(st.xdma_src, xpose_dst, task_id);
+            xdma_task_t task_id = xdma_start();
+            xdma_wait_task(task_id);
             BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
 
             // Disable transposer after use
@@ -1102,8 +1102,8 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_submatrix_2d(void *arg)
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
 
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
-        int task_id = xdma_start();
-        xdma_wait_task(src_addr, dst_addr, task_id);
+        xdma_task_t task_id = xdma_start();
+        xdma_wait_task(task_id);
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
         sp->return_value = (uint32_t)dst_addr;
         sp->num_return_values = 0;
@@ -1169,8 +1169,8 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_expand_2d(void *arg)
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
 
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
-        int task_id = xdma_start();
-        xdma_wait_task(src_addr, dst_addr, task_id);
+        xdma_task_t task_id = xdma_start();
+        xdma_wait_task(task_id);
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
         sp->return_value = (uint32_t)dst_addr;
         sp->num_return_values = 0;
@@ -1248,8 +1248,8 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_concat_2d(void *arg)
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
 
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
-        int task_id = xdma_start();
-        xdma_wait_task(src_addr, dst_addr, task_id);
+        xdma_task_t task_id = xdma_start();
+        xdma_wait_task(task_id);
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
         sp->return_value = (uint32_t)dst_addr;
         sp->num_return_values = 0;
@@ -1338,8 +1338,8 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_pad_2d(void *arg)
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
 
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
-        int task_id = xdma_start();
-        xdma_wait_task(src_addr, dst_interior, task_id);
+        xdma_task_t task_id = xdma_start();
+        xdma_wait_task(task_id);
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
         sp->return_value = (uint32_t)dst_addr;
         sp->num_return_values = 0;
@@ -1410,8 +1410,8 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_gather_2d(void *arg)
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
 
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
-        int task_id = xdma_start();
-        xdma_wait_task(src_base, dst_addr, task_id);
+        xdma_task_t task_id = xdma_start();
+        xdma_wait_task(task_id);
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
         sp->return_value = (uint32_t)dst_addr;
         sp->num_return_values = 0;
@@ -1527,8 +1527,8 @@ static inline void xdma_layout_run(
     BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
 
     BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
-    int task_id = xdma_start();
-    xdma_wait_task(src, dst, task_id);
+    xdma_task_t task_id = xdma_start();
+    xdma_wait_task(task_id);
     BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
 
 #ifdef WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16

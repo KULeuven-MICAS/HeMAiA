@@ -42,7 +42,7 @@ int main() {
 
         xdma_memcpy_1d((void *)tcdm_baseaddress - cluster_offset,
                        (void *)(tcdm_baseaddress), data_size * sizeof(data[0]));
-        int task_id = xdma_start();
+        int task_id = xdma_start().task_id;
         xdma_remote_wait(task_id);
         printf("The XDMA copy is finished in %d cycles\r\n",
                xdma_last_task_cycle());
@@ -88,7 +88,7 @@ int main() {
             // Experiment group:
             xdma_multicast_1d((void *)tcdm_baseaddress, dest, j,
                               data_size * sizeof(data[0]));
-            int task_id = xdma_start();
+            int task_id = xdma_start().task_id;
             xdma_remote_wait(task_id);
             printf("The XDMA copy to %d dest is finished in %d cycles\r\n", j,
                    xdma_last_task_cycle());

@@ -78,7 +78,7 @@ int main() {
         snrt_dma_start_1d(tcdm_in, DataIn, input_data_len * sizeof(int8_t));
         snrt_dma_wait_all();
         // Then start XDMA to do the maxpool
-        int task_id = xdma_start();
+        int task_id = xdma_start().task_id;
         xdma_local_wait(task_id);
         __asm__ volatile("csrr %0, mcycle;" : "=r"(end_time));
         printf("The IDMA + MaxPool copy is finished in %d cycles\r\n",
@@ -103,7 +103,7 @@ int main() {
                        0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF);
         __asm__ volatile("csrr %0, mcycle;" : "=r"(start_time));
         // Start XDMA to do the maxpool
-        task_id = xdma_start();
+        task_id = xdma_start().task_id;
         xdma_remote_wait(task_id);
         __asm__ volatile("csrr %0, mcycle;" : "=r"(end_time));
         printf("The XDMA copy is finished in %d cycles\r\n",

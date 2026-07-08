@@ -57,10 +57,10 @@ extern int32_t xdma_disable_src_ext(uint8_t ext);
 extern int32_t xdma_enable_dst_ext(uint8_t ext, uint32_t* csr_value);
 extern int32_t xdma_disable_dst_ext(uint8_t ext);
 
-extern uint32_t xdma_start();
+extern xdma_task_t xdma_start();
 extern void xdma_local_wait(uint32_t task_id);
 extern void xdma_remote_wait(uint32_t task_id);
-extern void xdma_wait_task(uint64_t src_addr, uint64_t dst_addr, uint32_t task_id);
+extern void xdma_wait_task(xdma_task_t task);
 extern void xdma_disable_all_extensions();
 extern uint32_t xdma_last_task_cycle();
 extern uint32_t xdma_last_read_cycle();

@@ -58,7 +58,7 @@ int main() {
                        temporal_dimension_dst, temporal_strides_dst,
                        temporal_bounds_dst, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF);
 
-        int task_id = xdma_start();
+        int task_id = xdma_start().task_id;
         xdma_local_wait(task_id);
         printf("xdma task %d is done in %d cycles\r\n", task_id,
                xdma_last_task_cycle());

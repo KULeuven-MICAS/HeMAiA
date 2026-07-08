@@ -396,8 +396,20 @@ inline int32_t xdma_disable_dst_ext(uint8_t ext) {
     return 0;
 }
 
+// Handle for one issued xDMA transfer. `task_id` is the value the committed finish counter
+// must reach; `remote` records WHICH counter the HW bumped (0 = LOCAL, 1 = REMOTE). The xDMA
+// HW decides local vs remote from the transfer's writer/dst path; xdma_start() observes which
+// COMMIT counter it bumped and returns it here, so xdma_wait_task() polls the MATCHING finish
+// counter instead of guessing from the (ambiguous) src/dst addresses. Carrying the bit in the
+// returned handle keeps the provenance per-transfer -- no shared global, no dependence on
+// start/wait being called back-to-back, and reentrant across in-flight transfers.
+typedef struct {
+    uint32_t task_id;
+    uint8_t remote;
+} xdma_task_t;
+
 // Start
-inline uint32_t xdma_start() {
+inline xdma_task_t xdma_start() {
     int local_task_id = snax_read_xdma_cfg_reg(XDMA_COMMIT_LOCAL_TASK_PTR);
     int remote_task_id = snax_read_xdma_cfg_reg(XDMA_COMMIT_REMOTE_TASK_PTR);
     snax_write_xdma_cfg_reg(XDMA_START_PTR, 1);
@@ -405,11 +417,15 @@ inline uint32_t xdma_start() {
         // Wait for xdma to start
         if (snax_read_xdma_cfg_reg(XDMA_COMMIT_LOCAL_TASK_PTR) !=
             local_task_id) {
-            return snax_read_xdma_cfg_reg(XDMA_COMMIT_LOCAL_TASK_PTR);
+            // HW committed a LOCAL task
+            return (xdma_task_t){
+                snax_read_xdma_cfg_reg(XDMA_COMMIT_LOCAL_TASK_PTR), 0};
         }
         if (snax_read_xdma_cfg_reg(XDMA_COMMIT_REMOTE_TASK_PTR) !=
             remote_task_id) {
-            return snax_read_xdma_cfg_reg(XDMA_COMMIT_REMOTE_TASK_PTR);
+            // HW committed a REMOTE task
+            return (xdma_task_t){
+                snax_read_xdma_cfg_reg(XDMA_COMMIT_REMOTE_TASK_PTR), 1};
         }
     }
 }
@@ -427,26 +443,21 @@ inline void xdma_remote_wait(uint32_t task_id) {
     }
 }
 
-// Wait for xdma task completion, automatically choosing local or remote
-// based on whether src and dst are in the same cluster's TCDM.
-inline void xdma_wait_task(uint64_t src_addr, uint64_t dst_addr, uint32_t task_id) {
-    // Different chip (high 32 bits) → remote
-    if ((uint32_t)(src_addr >> 32) != (uint32_t)(dst_addr >> 32)) {
-        xdma_remote_wait(task_id);
-        return;
+// Wait for xdma task completion. The xDMA HW routes each transfer to EITHER the local or
+// the remote finish counter, decided by the writer/dst datapath -- which is NOT reliably
+// decodable from the src/dst addresses alone (a same-chip wide-SPM/L3 reblock and a genuine
+// cross-chip transfer can look alike in the address bits, and the wide SPM is not cluster-
+// partitioned). xdma_start() already recorded which COMMIT counter the HW bumped in the
+// returned handle, so poll the MATCHING finish counter. The old address heuristic mis-fired
+// both ways -- it waited on REMOTE for a local L3<->L3 reblock (multichip llama3 swiglu), and
+// on LOCAL for a transfer the HW ran remote -- and either way the DM core spun forever on a
+// counter that never advances.
+inline void xdma_wait_task(xdma_task_t task) {
+    if (task.remote) {
+        xdma_remote_wait(task.task_id);
+    } else {
+        xdma_local_wait(task.task_id);
     }
-    uint32_t src_lo = (uint32_t)src_addr;
-    uint32_t dst_lo = (uint32_t)dst_addr;
-    // Both in TCDM range and same cluster → local
-    if (src_lo >= SNRT_TCDM_START_ADDR && dst_lo >= SNRT_TCDM_START_ADDR) {
-        uint32_t src_cluster = (src_lo - SNRT_TCDM_START_ADDR) >> CLUSTER_ADDRWIDTH;
-        uint32_t dst_cluster = (dst_lo - SNRT_TCDM_START_ADDR) >> CLUSTER_ADDRWIDTH;
-        if (src_cluster == dst_cluster) {
-            xdma_local_wait(task_id);
-            return;
-        }
-    }
-    xdma_remote_wait(task_id);
 }
 
 // Disable all xDMA datapath extensions (reader + writer).
