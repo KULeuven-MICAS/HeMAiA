@@ -1,0 +1,5 @@
+{
+    // Regression for device -> host iDMA -> host check dependency ordering.
+    num_clusters: 1
+    size: 256
+}

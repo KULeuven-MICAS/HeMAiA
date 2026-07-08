@@ -37,6 +37,7 @@ APPS += basic_int32_add_host
 APPS += gemm_ksplit_4cluster
 APPS += basic_softmax_host
 APPS += attn_reference_4cluster
+APPS += device_host_idma_check_1cluster
 SUBDIRS = $(addprefix workloads/,$(APPS))
 
 
