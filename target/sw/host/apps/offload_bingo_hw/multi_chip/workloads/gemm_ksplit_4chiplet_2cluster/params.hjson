@@ -6,7 +6,7 @@
     array_shape: 0
     data_type: 0
     M: 1
-    K: 16
+    K: 8
     N: 1
     k_split: 8
     transposed_A: 0

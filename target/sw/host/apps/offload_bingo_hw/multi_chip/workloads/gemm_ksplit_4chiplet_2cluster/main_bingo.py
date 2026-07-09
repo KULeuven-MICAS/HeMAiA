@@ -52,9 +52,9 @@ Task dependency graph:
     Reduce_Add_k0_to_k4 + Pull_D_k5_to_chip00_c0_tcdm -> Reduce_Add_k0_to_k5
     Reduce_Add_k0_to_k5 + Pull_D_k6_to_chip00_c0_tcdm -> Reduce_Add_k0_to_k6
     Reduce_Add_k0_to_k6 + Pull_D_k7_to_chip00_c0_tcdm -> Reduce_Add_k0_to_k7
-    Reduce_Add_k0_to_k7 -> Load_Golden_Final_i32_D -> Check_Final_i32_D
+    Reduce_Add_k0_to_k7 -> Check_Final_i32_D
     Check_Final_i32_D -> Dequant_Final_i32_to_fp32
-    Dequant_Final_i32_to_fp32 -> Load_Golden_fp32_D -> Check_fp32_D
+    Dequant_Final_i32_to_fp32 -> Check_fp32_D
 """
 
 import argparse
@@ -77,10 +77,9 @@ from bingo_kernel_args import (  # noqa E402
     HostBingoKernelAraAddI32Args,
     HostBingoKernelAraDequantizeI32F32Args,
     HostBingoKernelCheckResultArgs,
-    HostBingoKernelIdmaArgs,
-    HostBingoKernelXdma1dCopyArgs,
     SnaxBingoKernelGemmFullArgs,
     SnaxBingoKernelIdma1dCopyArgs,
+    SnaxBingoKernelXdma1dCopyArgs,
 )
 from bingo_mem_handle import BingoMemAlloc, BingoMemFixedAddr, BingoMemSymbol  # noqa E402
 from bingo_node import BingoNode  # noqa E402
@@ -278,32 +277,24 @@ def define_memory_handles(params):
                 )
 
     mem["D_reduce_l1"][0] = mem["D_l1"][(0x00, 0)]
-    for idx in range(1, params["k_split"]):
-        mem["D_reduce_l1"][idx] = BingoMemAlloc(
-            f"D_reduce_k{idx}_chip00_c0_l1",
+    reduce_partial_l1 = [
+        BingoMemAlloc(
+            f"D_reduce_partial_slot{slot}_chip00_c0_l1",
             size=params["D_bytes"],
             mem_level="L1",
             chip_id=0x00,
             cluster_id=0,
         )
+        for slot in range(2)
+    ]
+    for idx in range(1, params["k_split"]):
+        mem["D_reduce_l1"][idx] = reduce_partial_l1[(idx - 1) % len(reduce_partial_l1)]
 
     mem["golden_sum_final_mp"] = BingoMemFixedAddr(params["golden_sum_final_mp"])
     mem["golden_fp32_mp"] = BingoMemFixedAddr(params["golden_fp32_mp"])
     mem["combined_scale_mp"] = BingoMemFixedAddr(params["combined_scale_mp"])
-    mem["golden_sum_final_l3"] = BingoMemAlloc(
-        "golden_sum_final_l3",
-        size=params["D_bytes"],
-        mem_level="L3",
-        chip_id=0x00,
-    )
     mem["fp32_D_l3"] = BingoMemAlloc(
         "fp32_D_l3",
-        size=params["fp32_D_bytes"],
-        mem_level="L3",
-        chip_id=0x00,
-    )
-    mem["golden_fp32_l3"] = BingoMemAlloc(
-        "golden_fp32_D_l3",
         size=params["fp32_D_bytes"],
         mem_level="L3",
         chip_id=0x00,
@@ -406,19 +397,31 @@ def make_remote_partial_store_node(dfg, mem, params, chiplet, cluster_id, idx):
     )
 
 
-def make_remote_partial_copy_node(dfg, mem, params, chiplet, cluster_id, idx, host_core_id):
+def make_remote_partial_copy_node(dfg, mem, params, chiplet, cluster_id, idx):
     h = chip_hex(chiplet)
+    dst = mem["D_reduce_l1"][idx]
+    if not (
+        isinstance(dst, BingoMemAlloc)
+        and dst.mem_level == "L1"
+        and dst.chip_id == 0x00
+        and dst.cluster_id == 0
+    ):
+        raise ValueError("SNAX XDMA pull must terminate in chip00 cluster0 TCDM")
+
+    # SNAX XDMA only works when either src or dst is attached to the issuing
+    # XDMA core. These pulls run on chip00 C0's DMA core, so the destination
+    # must stay in chip00 C0 TCDM.
     return add_node(
         dfg,
         BingoNode(
             assigned_chiplet_id=0x00,
             assigned_cluster_id=0,
-            assigned_core_id=host_core_id,
+            assigned_core_id=DMA_CORE,
             node_name=f"Pull_D_k{idx}_Chip{h}_C{cluster_id}_to_Chip00_C0_TCDM",
-            kernel_name="__host_bingo_kernel_xdma_1d_copy",
-            kernel_args=HostBingoKernelXdma1dCopyArgs(
+            kernel_name="__snax_bingo_kernel_xdma_1d_copy",
+            kernel_args=SnaxBingoKernelXdma1dCopyArgs(
                 src_addr=mem["D_remote_l3_full"][(chiplet, cluster_id)],
-                dst_addr=mem["D_reduce_l1"][idx],
+                dst_addr=dst,
                 size=params["D_bytes"],
             ),
         ),
@@ -482,7 +485,6 @@ def create_dfg(params, mem, platform):
                     chiplet,
                     cluster_id,
                     idx,
-                    host_core_id,
                 )
                 dfg.bingo_add_edge(gemm, store)
                 dfg.bingo_add_edge(store, copy_nodes[idx])
@@ -490,7 +492,15 @@ def create_dfg(params, mem, platform):
 
     prev_sum = mem["D_reduce_l1"][0]
     prev_ready = reduce_ready[0]
+    partial_slot_last_consumer = {}
     for idx in range(1, params["k_split"]):
+        partial_slot = mem["D_reduce_l1"][idx]
+        last_consumer = partial_slot_last_consumer.get(partial_slot)
+        if last_consumer is not None:
+            # k>0 partials ping-pong through two chip00 C0 L1 receive slots.
+            # A slot can be refilled as soon as the add using its previous
+            # contents has consumed it.
+            dfg.bingo_add_edge(last_consumer, reduce_ready[idx])
         add = add_node(
             dfg,
             BingoNode(
@@ -509,23 +519,9 @@ def create_dfg(params, mem, platform):
         )
         dfg.bingo_add_edge(prev_ready, add)
         dfg.bingo_add_edge(reduce_ready[idx], add)
+        partial_slot_last_consumer[partial_slot] = add
         prev_ready = add
 
-    load_golden_sum = add_node(
-        dfg,
-        BingoNode(
-            assigned_chiplet_id=0x00,
-            assigned_cluster_id=0,
-            assigned_core_id=host_core_id,
-            node_name="Load_Golden_Final_i32_D",
-            kernel_name="__host_bingo_kernel_idma",
-            kernel_args=HostBingoKernelIdmaArgs(
-                src_addr=mem["golden_sum_final_mp"],
-                dst_addr=mem["golden_sum_final_l3"],
-                size=params["D_bytes"],
-            ),
-        ),
-    )
     check_final_i32 = add_node(
         dfg,
         BingoNode(
@@ -535,7 +531,7 @@ def create_dfg(params, mem, platform):
             node_name="Check_Final_i32_D",
             kernel_name="__host_bingo_kernel_check_result",
             kernel_args=HostBingoKernelCheckResultArgs(
-                golden_data_addr=mem["golden_sum_final_l3"],
+                golden_data_addr=mem["golden_sum_final_mp"],
                 output_data_addr=prev_sum,
                 data_size=params["D_bytes"],
                 name="final_i32_D",
@@ -558,21 +554,6 @@ def create_dfg(params, mem, platform):
             ),
         ),
     )
-    load_golden_fp32 = add_node(
-        dfg,
-        BingoNode(
-            assigned_chiplet_id=0x00,
-            assigned_cluster_id=0,
-            assigned_core_id=host_core_id,
-            node_name="Load_Golden_fp32_D",
-            kernel_name="__host_bingo_kernel_idma",
-            kernel_args=HostBingoKernelIdmaArgs(
-                src_addr=mem["golden_fp32_mp"],
-                dst_addr=mem["golden_fp32_l3"],
-                size=params["fp32_D_bytes"],
-            ),
-        ),
-    )
     check_fp32 = add_node(
         dfg,
         BingoNode(
@@ -582,7 +563,7 @@ def create_dfg(params, mem, platform):
             node_name="Check_fp32_D",
             kernel_name="__host_bingo_kernel_check_result",
             kernel_args=HostBingoKernelCheckResultArgs(
-                golden_data_addr=mem["golden_fp32_l3"],
+                golden_data_addr=mem["golden_fp32_mp"],
                 output_data_addr=mem["fp32_D_l3"],
                 data_size=params["fp32_D_bytes"],
                 name="fp32_D",
@@ -590,11 +571,9 @@ def create_dfg(params, mem, platform):
         ),
     )
 
-    dfg.bingo_add_edge(prev_ready, load_golden_sum)
-    dfg.bingo_add_edge(load_golden_sum, check_final_i32)
+    dfg.bingo_add_edge(prev_ready, check_final_i32)
     dfg.bingo_add_edge(check_final_i32, dequant)
-    dfg.bingo_add_edge(dequant, load_golden_fp32)
-    dfg.bingo_add_edge(load_golden_fp32, check_fp32)
+    dfg.bingo_add_edge(dequant, check_fp32)
 
     return dfg, check_fp32
 
@@ -627,7 +606,7 @@ def main():
     total_remote_store_nodes = (len(EXPECTED_CHIPLETS) - 1) * len(CLUSTER_IDS)
     total_copy_nodes = params["k_split"] - 1
     total_reduce_nodes = params["k_split"] - 1
-    total_final_nodes = 5
+    total_final_nodes = 3
     total_nodes = (
         total_compute_nodes
         + total_remote_store_nodes
