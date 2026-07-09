@@ -16,6 +16,9 @@
 #define N_CORES_PER_CLUSTER            ${nr_cores_per_cluster}
 #define N_CORES_PER_CLUSTER_WIDTH      ${clog2_nr_cores_per_cluster}
 
+// Whether the testharness memchip clock runs at the same speed as the host clock.
+#define HEMAIA_SAME_MEMCHIP_SPEED      ${same_memchip_speed}
+
 // CLINT MSIP bit the bingo HW manager writes to ring the host DVFS doorbell (a
 // dedicated interrupt target appended after this chiplet's harts). Keep in sync with
 // occamy.py hw_manager_ipi_idx / occamy_soc.sv.tpl.

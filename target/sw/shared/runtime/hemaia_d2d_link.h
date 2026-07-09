@@ -27,6 +27,10 @@
 #define HEMAIA_D2D_LINK_FPGA_TX_YIELD_PERIOD 16
 #define HEMAIA_D2D_LINK_FPGA_TX_TURNAROUND_SILENCE_PERIOD 16
 
+#ifndef HEMAIA_SAME_MEMCHIP_SPEED
+#define HEMAIA_SAME_MEMCHIP_SPEED 0
+#endif
+
 typedef enum {
     D2D_DIRECTION_EAST = 0,
     D2D_DIRECTION_WEST = 1,
@@ -800,12 +804,14 @@ void hemaia_d2d_link_initialize_4c1m(uint8_t chip_id) {
                 // This is related where to put the memchip
                 // Currently we put the memchip at the (2,0) position which is connected to the EAST D2D PHY Port of Chip 10, so we need to make sure the clk can be sent to the memchip to make it work
 
+#if !HEMAIA_SAME_MEMCHIP_SPEED
                 set_d2d_link_tx_yield_period(HEMAIA_D2D_LINK_FPGA_TX_YIELD_PERIOD,
                                              D2D_DIRECTION_EAST);
                 set_d2d_link_tx_turnaround_silence_period(
                     HEMAIA_D2D_LINK_FPGA_TX_TURNAROUND_SILENCE_PERIOD,
                     D2D_DIRECTION_EAST);
                 enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 1, 20); 
+#endif
                 break;
             case 0x11:  // Chip 11
                 set_d2d_link_availability(D2D_DIRECTION_EAST, false);
@@ -840,10 +846,12 @@ void hemaia_d2d_link_initialize_1c1m(uint8_t chip_id) {
         set_d2d_link_availability(D2D_DIRECTION_WEST, false);
         // East D2D PHY Port is connected to the slower memchip
         set_d2d_link_multicast_fence(D2D_DIRECTION_EAST, false);
+#if !HEMAIA_SAME_MEMCHIP_SPEED
         set_d2d_link_tx_yield_period(HEMAIA_D2D_LINK_FPGA_TX_YIELD_PERIOD,
                                         D2D_DIRECTION_EAST);
         set_d2d_link_tx_turnaround_silence_period(
             HEMAIA_D2D_LINK_FPGA_TX_TURNAROUND_SILENCE_PERIOD,
             D2D_DIRECTION_EAST);
         enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 1, 20); 
+#endif
 }

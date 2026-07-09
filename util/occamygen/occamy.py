@@ -1019,10 +1019,12 @@ def get_compute_chiplet_ids(occamy_cfg):
 
 
 def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
-    if occamy_cfg['hemaia_multichip']['single_chip']:
+    multichip_cfg = occamy_cfg["hemaia_multichip"]
+    same_memchip_speed = bool(multichip_cfg.get("same_memchip_speed", False))
+    if multichip_cfg['single_chip']:
         nr_chiplets = 1
     else:
-        nr_chiplets = len(occamy_cfg['hemaia_multichip']['testbench_cfg']['hemaia_compute_chip'])
+        nr_chiplets = len(multichip_cfg['testbench_cfg']['hemaia_compute_chip'])
     chiplet_ids = get_compute_chiplet_ids(occamy_cfg)
     if len(chiplet_ids) != nr_chiplets:
         raise ValueError(
@@ -1044,7 +1046,7 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
     wide_spm_size = occamy_cfg["spm_wide"]["length"]
     narrow_spm_size = occamy_cfg["spm_narrow"]["length"]
     # Memchip total size (chip(2,0) external SRAM); zero if cfg has no memchip.
-    mem_chips = occamy_cfg["hemaia_multichip"]["testbench_cfg"]["hemaia_mem_chip"]
+    mem_chips = multichip_cfg["testbench_cfg"]["hemaia_mem_chip"]
     mempool_total_size = int(mem_chips[0]["mem_size"]) if mem_chips else 0
     # CLINT MSIP bit the bingo HW manager writes to ring the host DVFS doorbell: it is
     # appended right after this chiplet's harts, so its index == the hart count. Exposed
@@ -1069,6 +1071,7 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
         "cluster_addr_width": cluster_addr_width,
         "cluster_base_addr": hex(cluster_base_addr),
         "mempool_total_size": hex(mempool_total_size),
+        "same_memchip_speed": 1 if same_memchip_speed else 0,
     }
     return cheader_kwargs
 
@@ -1108,6 +1111,7 @@ def get_bootdata_kwargs(occamy_cfg, cluster_generators, name):
 
 def get_testharness_kwargs(occamy_cfg, sim_with_mem_macro, sim_with_interposer, sim_with_pll, sim_with_netlist, sim_with_verilator, sim_with_jtag_check, soc2router_bus, router2soc_bus, name):
     multichip_cfg = occamy_cfg["hemaia_multichip"]
+    same_memchip_speed = bool(multichip_cfg.get("same_memchip_speed", False))
     
     class ChipletType(Enum):
         COMPUTE = "compute"
@@ -1150,6 +1154,7 @@ def get_testharness_kwargs(occamy_cfg, sim_with_mem_macro, sim_with_interposer, 
         "sim_with_verilator": 1 if sim_with_verilator else 0,
         "sim_with_jtag_check": 1 if sim_with_jtag_check else 0,
         "pll_present": pll_present,
+        "same_memchip_speed": same_memchip_speed,
         "compute_chips": compute_chips,
         "mem_chips": mem_chips,
         "num_compute_chiplet": num_compute_chiplet,

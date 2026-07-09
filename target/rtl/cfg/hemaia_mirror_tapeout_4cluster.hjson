@@ -7,6 +7,7 @@
       router_to_soc_iw: 4,          // soc_to_router_iw + clog2(chips)
       soc_to_router_iw: 4,          // Not beneficial for iw > 6
       single_chip: false,
+      same_memchip_speed: true,
       testbench_cfg: {
         hemaia_compute_chip: [
           {coordinate: [0,0]}
