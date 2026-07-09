@@ -350,13 +350,13 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_gather_2d_args {
 
 // BINGO XDMA ElementwiseAdd (writer ext: accumulate N int32 operands -> 1).
 // Fuses the GEMM K-split partial-sum adds into one streaming xDMA pass.
-// num_int32_per_operand must be a multiple of 16 (512b bus / 32b element).
+// num_int32_elem_per_operand must be a multiple of 16 (512b bus / 32b element).
 __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_elementwise_add_args {
   uint32_t src_addr_hi;
   uint32_t src_addr_lo;
   uint32_t dst_addr_hi;
   uint32_t dst_addr_lo;
-  uint32_t num_int32_per_operand;
+  uint32_t num_int32_elem_per_operand;
   uint32_t num_operands;
   uint32_t operand_stride;   // bytes between consecutive operand buffers
   BINGO_KERNEL_ARGS_TRAILER;
@@ -370,7 +370,7 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_elementwise_add_ab_args {
   uint32_t src_b_addr_lo;
   uint32_t dst_addr_hi;
   uint32_t dst_addr_lo;
-  uint32_t num_int32;        // multiple of 16
+  uint32_t num_int32_elements;        // multiple of 16
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_xdma_elementwise_add_ab_args_t;
 

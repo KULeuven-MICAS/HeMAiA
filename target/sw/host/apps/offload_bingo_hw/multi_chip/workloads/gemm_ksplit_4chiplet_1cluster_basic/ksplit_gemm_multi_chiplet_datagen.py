@@ -6,7 +6,7 @@
 #
 # Xiaoling Yi <xiaoling.yi@kuleuven.be>
 
-"""Golden-data wrapper for gemm_ksplit_4chiplet_1cluster."""
+"""Golden-data wrapper for gemm_ksplit_4chiplet_1cluster_basic."""
 
 import os
 import sys
@@ -17,7 +17,7 @@ from gemm_sim_utils import emit_ksplit_gemm_header_file, get_gemm_mesh_dims  # n
 
 
 def emit_header_file(**kwargs):
-    content = emit_ksplit_gemm_header_file("gemm_ksplit_4chiplet_1cluster", **kwargs)
+    content = emit_ksplit_gemm_header_file("gemm_ksplit_4chiplet_1cluster_basic", **kwargs)
 
     meshRow, _, meshCol = get_gemm_mesh_dims(kwargs)
     d_num_elements = kwargs["M"] * kwargs["N"] * meshRow * meshCol

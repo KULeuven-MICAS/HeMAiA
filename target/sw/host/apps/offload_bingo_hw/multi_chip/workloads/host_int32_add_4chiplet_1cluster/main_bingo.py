@@ -46,7 +46,7 @@ from bingo_platform import guard_chiplet_count, guard_cluster_count, parse_platf
 from int32_add_multi_chiplet_datagen import emit_header_file  # noqa E402
 
 
-APP_NAME = "int32_add_4chiplet_1cluster"
+APP_NAME = "host_int32_add_4chiplet_1cluster"
 REQUIRED_CHIPLETS = [0x00, 0x01, 0x10, 0x11]
 REDUCTION_CHIPLET = 0x00
 HOST_CORE = 2

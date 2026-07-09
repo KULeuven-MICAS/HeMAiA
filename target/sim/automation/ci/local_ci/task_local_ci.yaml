@@ -146,6 +146,11 @@ runs:
     CHIP_TYPE: single_chip
     WORKLOAD: gemm_mem_chip_1cluster
     DEV_APP: snax-bingo-offload
+  # device_host_idma_check_1cluster
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: single_chip
+    WORKLOAD: device_host_idma_check_1cluster
+    DEV_APP: snax-bingo-offload
 
   # ---- offload_bingo_hw / multi_chip ----
   # gemm_msplit_4chiplet_1cluster
@@ -158,20 +163,30 @@ runs:
     CHIP_TYPE: multi_chip
     WORKLOAD: gemm_parallel_dma_4chiplet_1cluster
     DEV_APP: snax-bingo-offload
-  # gemm_ksplit_4chiplet_1cluster
+  # gemm_ksplit_4chiplet_1cluster_basic
   - HOST_APP_TYPE: offload_bingo_hw
     CHIP_TYPE: multi_chip
-    WORKLOAD: gemm_ksplit_4chiplet_1cluster
+    WORKLOAD: gemm_ksplit_4chiplet_1cluster_basic
+    DEV_APP: snax-bingo-offload
+  # gemm_ksplit_4chiplet_1cluster_xdma_add
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: multi_chip
+    WORKLOAD: gemm_ksplit_4chiplet_1cluster_xdma_add
     DEV_APP: snax-bingo-offload
   # dma_for_gemm_msplit_4chiplet_1cluster
   - HOST_APP_TYPE: offload_bingo_hw
     CHIP_TYPE: multi_chip
     WORKLOAD: dma_for_gemm_msplit_4chiplet_1cluster
     DEV_APP: snax-bingo-offload
-  # int32_add_4chiplet_1cluster
+  # host_int32_add_4chiplet_1cluster
   - HOST_APP_TYPE: offload_bingo_hw
     CHIP_TYPE: multi_chip
-    WORKLOAD: int32_add_4chiplet_1cluster
+    WORKLOAD: host_int32_add_4chiplet_1cluster
+    DEV_APP: snax-bingo-offload
+  # xdma_int32_add_4chiplet_1cluster
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: multi_chip
+    WORKLOAD: xdma_int32_add_4chiplet_1cluster
     DEV_APP: snax-bingo-offload
   # dma_read_from_chip00_4chiplet_1cluster
   - HOST_APP_TYPE: offload_bingo_hw

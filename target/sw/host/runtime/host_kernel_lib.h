@@ -108,6 +108,8 @@ static inline uint64_t __host_bingo_kernel_check_result(void *arg){
     tol_u.u = tolerance_bits;
     const float tolerance = tol_u.f;
 
+    // add a fence here before check to get the latest data in the main mem
+    asm volatile("fence" ::: "memory");
     uint32_t err = 0;
 
     if (check_type == BINGO_CHECK_TYPE_BYTE_EXACT) {

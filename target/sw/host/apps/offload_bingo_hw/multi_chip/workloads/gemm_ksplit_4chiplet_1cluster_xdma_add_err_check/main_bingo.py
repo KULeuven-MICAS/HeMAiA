@@ -13,10 +13,10 @@ Each chiplet i computes one K chunk:
   Load A_i, load B_i, GEMM, store partial D_i to local L3,
   load local golden D_i, and check the local L3 result.
 
-After local checks, remote partial D_i buffers are copied directly into a
-shared chiplet 0 L3 receive slot.
-Chiplet 0 performs the running int32 reductions, checks each running sum,
-then dequantizes and checks the FP32 output.
+After local checks, chiplet 0 pulls remote partial D_i buffers directly from
+the remote chiplet cluster-0 TCDM into chiplet-0 cluster-0 TCDM, then reduces
+them with chiplet-0 cluster-0 xDMA elementwise int32 add. Chiplet 0 checks
+each running sum, then dequantizes and checks the FP32 output.
 """
 
 import argparse
@@ -38,12 +38,12 @@ from bingo_helpers import chiplet_addr_transform_loc  # noqa E402
 from bingo_kernel_args import (  # noqa E402
     HostBingoKernelCheckResultArgs,
     HostBingoKernelIdmaArgs,
-    HostBingoKernelAraAddI32Args,
     HostBingoKernelAraDequantizeI32F32Args,
     SnaxBingoKernelGemmFullArgs,
     SnaxBingoKernelIdma1dCopyArgs,
+    SnaxBingoKernelXdmaElementwiseAddAbArgs,
 )
-from bingo_mem_handle import BingoMemAlloc, BingoMemFixedAddr, BingoMemSymbol  # noqa E402
+from bingo_mem_handle import BingoMemAlloc, BingoMemFixedAddr  # noqa E402
 from bingo_node import BingoNode  # noqa E402
 from bingo_platform import guard_chiplet_count, guard_cluster_count, parse_platform_cfg  # noqa E402
 from ksplit_gemm_multi_chiplet_datagen import emit_header_file  # noqa E402
@@ -53,7 +53,7 @@ LOW_40_BIT_ADDR_MASK = "0x000000ffffffffffULL"
 
 
 def get_args():
-    parser = argparse.ArgumentParser(description="gemm_ksplit_4chiplet_1cluster")
+    parser = argparse.ArgumentParser(description="gemm_ksplit_4chiplet_1cluster_xdma_add_err_check")
     parser.add_argument("--output_dir", type=str, default=".")
     parser.add_argument("--output_offload_file_name", type=str, default="offload_bingo_hw.h")
     parser.add_argument("-c", "--cfg", type=pathlib.Path, required=True)
@@ -67,8 +67,8 @@ def chip_hex(chiplet_id):
     return f"{chiplet_id:02x}"
 
 
-def chiplet_full_addr_expr(chiplet_id, symbol_name):
-    local_addr_expr = f"((uint64_t)((uintptr_t){symbol_name}) & {LOW_40_BIT_ADDR_MASK})"
+def chiplet_full_addr_from_c_expr(chiplet_id, c_expr):
+    local_addr_expr = f"((uint64_t)({c_expr}) & {LOW_40_BIT_ADDR_MASK})"
     return f"(chiplet_addr_transform_full(0x{chiplet_id:02x}, {local_addr_expr}))"
 
 
@@ -106,7 +106,7 @@ def main():
     N = merged["N"]
     k_split = merged["k_split"]
     if k_split != 4:
-        raise ValueError(f"gemm_ksplit_4chiplet_1cluster expects k_split=4, got {k_split}")
+        raise ValueError(f"gemm_ksplit_4chiplet_1cluster_xdma_add_err_check expects k_split=4, got {k_split}")
     if K % k_split != 0:
         raise ValueError(f"K ({K}) must be divisible by k_split ({k_split})")
     if len(chiplets) < k_split:
@@ -163,7 +163,6 @@ def main():
     l1_D = {}
     l3_D_local = {}
     l3_check_scratch = {}
-    l3_D_reduce = {}
     for i, chiplet in enumerate(active_chiplets):
         h = chip_hex(chiplet)
         l1_A[i] = BingoMemAlloc(f"l1_A_k{i}_chip{h}", size=A_tile_bytes, mem_level="L1",
@@ -177,10 +176,16 @@ def main():
         l3_check_scratch[i] = BingoMemAlloc(f"check_scratch_k{i}_chip{h}_l3",
                                             size=D_bytes, mem_level="L3",
                                             chip_id=chiplet)
-        if chiplet == reduction_chiplet:
-            l3_D_reduce[i] = l3_D_local[i]
-        else:
-            l3_D_reduce[i] = BingoMemSymbol("D_partial_remote_chip00_l3")
+
+    l1_reduce_remote = BingoMemAlloc("l1_zz_reduce_remote_chip00", size=D_bytes,
+                                     mem_level="L1", chip_id=reduction_chiplet,
+                                     cluster_id=0)
+    l1_reduce_sum_ping = BingoMemAlloc("l1_reduce_sum_ping_chip00", size=D_bytes,
+                                       mem_level="L1", chip_id=reduction_chiplet,
+                                       cluster_id=0)
+    l1_reduce_sum_pong = BingoMemAlloc("l1_reduce_sum_pong_chip00", size=D_bytes,
+                                       mem_level="L1", chip_id=reduction_chiplet,
+                                       cluster_id=0)
 
     dfg = BingoDFG(
         num_chiplets=platform["num_chiplets"],
@@ -196,7 +201,6 @@ def main():
     node_store_D = {}
     node_load_golden_D = {}
     node_check_D = {}
-    node_copy_D_to_chip0 = {}
     reduce_ready = {}
 
     for i, chiplet in enumerate(active_chiplets):
@@ -299,42 +303,44 @@ def main():
         dfg.bingo_add_edge(node_store_D[i], node_load_golden_D[i])
         dfg.bingo_add_edge(node_load_golden_D[i], node_check_D[i])
 
-        if chiplet == reduction_chiplet:
-            reduce_ready[i] = node_check_D[i]
-        else:
-            node_copy_D_to_chip0[i] = BingoNode(
-                assigned_chiplet_id=chiplet,
-                assigned_cluster_id=0,
-                assigned_core_id=HOST_CORE,
-                node_name=f"Copy_D_partial_k{i}_Chip{h}_to_Chip00_L3",
-                kernel_name="__host_bingo_kernel_idma",
-                kernel_args=HostBingoKernelIdmaArgs(
-                    src_addr=l3_D_local[i],
-                    dst_addr=chiplet_full_addr_expr(reduction_chiplet,
-                                                   "D_partial_remote_chip00_l3"),
-                    size=D_bytes,
-                ),
-            )
-            dfg.bingo_add_node(node_copy_D_to_chip0[i])
-            dfg.bingo_add_edge(node_check_D[i], node_copy_D_to_chip0[i])
-            reduce_ready[i] = node_copy_D_to_chip0[i]
+        reduce_ready[i] = node_check_D[i]
 
     # sequence the reduction on the reduction chiplet
-    prev_sum = l3_D_reduce[0]
+    prev_sum = l1_D[0]
     prev_ready = reduce_ready[0]
     final_check = None
+    sum_outputs = [l1_reduce_sum_ping, l1_reduce_sum_pong]
+    # All chiplets allocate A/B/D in the same L1 order and sizes, so chiplet
+    # 00 can reuse its local D pointer's low bits as the remote D TCDM offset.
+    local_d_c_var = l1_D[0].get_c_var_name()
     for i in range(1, k_split):
+        source_chiplet = active_chiplets[i]
+        source_h = chip_hex(source_chiplet)
+        remote_d_src = chiplet_full_addr_from_c_expr(source_chiplet, local_d_c_var)
+        dst_sum = sum_outputs[(i - 1) % len(sum_outputs)]
+        node_load_remote_to_l1 = BingoNode(
+            assigned_chiplet_id=reduction_chiplet,
+            assigned_cluster_id=0,
+            assigned_core_id=DMA_CORE,
+            node_name=f"Copy_D_partial_k{i}_Chip{source_h}_to_Chip00_L1",
+            kernel_name="__snax_bingo_kernel_idma_1d_copy",
+            kernel_args=SnaxBingoKernelIdma1dCopyArgs(
+                src_addr=remote_d_src,
+                dst_addr=l1_reduce_remote,
+                size=D_bytes,
+            ),
+        )
         add = BingoNode(
             assigned_chiplet_id=reduction_chiplet,
             assigned_cluster_id=0,
-            assigned_core_id=HOST_CORE,
-            node_name=f"Add_k0_to_k{i}",
-            kernel_name="__host_bingo_kernel_add_i32",
-            kernel_args=HostBingoKernelAraAddI32Args(
-                input_a_addr=prev_sum,
-                input_b_addr=l3_D_reduce[i],
-                output_addr=prev_sum,
-                num_elements=D_num_elements,
+            assigned_core_id=DMA_CORE,
+            node_name=f"XDMA_Add_k0_to_k{i}",
+            kernel_name="__snax_bingo_kernel_xdma_elementwise_add_ab",
+            kernel_args=SnaxBingoKernelXdmaElementwiseAddAbArgs(
+                src_a_addr=prev_sum,
+                src_b_addr=l1_reduce_remote,
+                dst_addr=dst_sum,
+                num_int32_elements=D_num_elements,
             ),
         )
         node_load_golden_sum = BingoNode(
@@ -357,22 +363,27 @@ def main():
             kernel_name="__host_bingo_kernel_check_result",
             kernel_args=HostBingoKernelCheckResultArgs(
                 golden_data_addr=l3_check_scratch[0],
-                output_data_addr=prev_sum,
+                output_data_addr=dst_sum,
                 data_size=D_bytes,
                 name=f"sum_k0_to_k{i}",
             ),
         )
+
+        dfg.bingo_add_node(node_load_remote_to_l1)
         dfg.bingo_add_node(add)
         dfg.bingo_add_node(node_load_golden_sum)
         dfg.bingo_add_node(final_check)
-        if i in node_copy_D_to_chip0:
-            dfg.bingo_add_edge(prev_ready, node_copy_D_to_chip0[i])
+
+        dfg.bingo_add_edge(prev_ready, node_load_remote_to_l1)
+        dfg.bingo_add_edge(reduce_ready[i], node_load_remote_to_l1)
+        dfg.bingo_add_edge(node_load_remote_to_l1, add)
         dfg.bingo_add_edge(prev_ready, add)
-        dfg.bingo_add_edge(reduce_ready[i], add)
         dfg.bingo_add_edge(add, node_load_golden_sum)
         dfg.bingo_add_edge(node_load_golden_sum, final_check)
+        prev_sum = dst_sum
         prev_ready = final_check
 
+    # quantize the final sum to FP32 and check against the golden FP32 result
     node_dequant = BingoNode(
         assigned_chiplet_id=reduction_chiplet,
         assigned_cluster_id=0,
@@ -422,14 +433,14 @@ def main():
     dfg.bingo_add_edge(node_load_golden_fp32, node_check_fp32)
 
     remote_chiplets = sum(1 for c in active_chiplets if c != reduction_chiplet)
-    total_nodes = k_split * 6 + remote_chiplets + (k_split - 1) * 3 + 3
-    print(f"Built DFG: {total_nodes} nodes ({k_split} chiplets, {remote_chiplets} direct remote partial copies to chiplet 0)")
+    total_nodes = k_split * 6 + (k_split - 1) * 4 + 3
+    print(f"Built DFG: {total_nodes} nodes ({k_split} chiplets, {remote_chiplets} direct remote-to-L1 copies, xDMA reduction on chiplet 0)")
     print(f"  active_chiplets={[chip_hex(c) for c in active_chiplets]}")
     print(f"  M={M}, K_tile={K_tile}, N={N}, k_split={k_split}")
     print(f"  A_tile_bytes={A_tile_bytes}, B_tile_bytes={B_tile_bytes}, D_bytes={D_bytes}")
 
     dfg.bingo_compile_dfg(
-        "gemm_ksplit_4chiplet_1cluster",
+        "gemm_ksplit_4chiplet_1cluster_xdma_add_err_check",
         output_dir,
         args.output_offload_file_name,
         extra_include_header_list=["ksplit_gemm_data.h"],

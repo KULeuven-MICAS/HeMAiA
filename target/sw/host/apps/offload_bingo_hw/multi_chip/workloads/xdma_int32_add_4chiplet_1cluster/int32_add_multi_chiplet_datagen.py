@@ -6,7 +6,7 @@
 #
 # Xiaoling Yi <xiaoling.yi@kuleuven.be>
 
-"""Generate MemPool-backed data for int32_add_4chiplet_1cluster."""
+"""Generate MemPool-backed data for xdma_int32_add_4chiplet_1cluster."""
 
 import argparse
 import os
@@ -23,7 +23,7 @@ def _input_bytes(kwargs):
     if input_bytes % 4 != 0:
         raise ValueError(f"input_bytes ({input_bytes}) must be divisible by sizeof(int32_t)")
     if input_bytes % 64 != 0:
-        raise ValueError(f"input_bytes ({input_bytes}) must be 64-byte aligned for host DMA")
+        raise ValueError(f"input_bytes ({input_bytes}) must be 64-byte aligned for xDMA")
     return input_bytes
 
 
@@ -34,7 +34,7 @@ def emit_header_file(**kwargs):
 def emit_int32_add_data(**kwargs):
     num_chiplets = int(kwargs.get("num_chiplets", 4))
     if num_chiplets != 4:
-        raise ValueError(f"int32_add_4chiplet_1cluster expects num_chiplets=4, got {num_chiplets}")
+        raise ValueError(f"xdma_int32_add_4chiplet_1cluster expects num_chiplets=4, got {num_chiplets}")
 
     input_bytes = _input_bytes(kwargs)
     num_elements = input_bytes // 4
@@ -66,15 +66,12 @@ def emit_int32_add_data(**kwargs):
         f"uint32_t int32_add_num_chiplets = {num_chiplets};",
         f"uint32_t int32_add_input_bytes = {input_bytes};",
         f"uint32_t int32_add_num_elements = {num_elements};",
-        "",
-        "// Shared chiplet-0 L3 target for direct remote A-tile stores.",
-        f"int32_t A_remote_chip00_l3[{num_elements}] __attribute__ ((aligned (64)));",
     ]
     return lines
 
 
 def main():
-    parser = argparse.ArgumentParser(description="int32_add_4chiplet_1cluster data")
+    parser = argparse.ArgumentParser(description="xdma_int32_add_4chiplet_1cluster data")
     parser.add_argument("-c", "--cfg", type=pathlib.Path, required=True)
     parser.add_argument("--hwcfg", type=pathlib.Path, required=True)
     parser.add_argument("-o", "--output", type=pathlib.Path, required=True)
