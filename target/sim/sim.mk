@@ -220,6 +220,7 @@ $(TRACE_JSON): $(TRACE_CSV) $(EVENTVIS_PY)
 BINGO_TRACE_PY              ?= $(ROOT)/util/bingo_trace/bingo_trace.py
 BINGO_TRACE_HEADER_MANIFEST ?= apps/.bingo_trace_headers
 BINGO_TRACE_JSON            ?= $(LOGS_DIR)/bingo_trace.json
+BINGO_TRACE_HTML            ?= $(patsubst %.json,%.html,$(BINGO_TRACE_JSON))
 
 .PHONY: bingo-vis-traces
 bingo-vis-traces: $(TXT_TRACES) $(BINGO_TRACE_PY)
@@ -230,4 +231,5 @@ bingo-vis-traces: $(TXT_TRACES) $(BINGO_TRACE_PY)
 	trace_header_args=$$(sed 's|^|--trace-header |' "$(BINGO_TRACE_HEADER_MANIFEST)"); \
 	$(PYTHON) $(BINGO_TRACE_PY) $$trace_header_args \
 		--log-dir $(LOGS_DIR) \
-		--output $(BINGO_TRACE_JSON)
+		--output $(BINGO_TRACE_JSON) \
+		--html-output $(BINGO_TRACE_HTML)

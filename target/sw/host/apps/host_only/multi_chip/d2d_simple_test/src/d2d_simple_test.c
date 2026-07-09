@@ -15,7 +15,7 @@
 
 int main() {
     uint8_t current_chip_id = get_current_chip_id();
-    hemaia_d2d_link_initialize(current_chip_id);
+    hemaia_d2d_link_initialize_4c1m(current_chip_id);
     init_uart(get_current_chip_baseaddress(), 32, 1);
     enable_vec();
     enable_sw_interrupts();

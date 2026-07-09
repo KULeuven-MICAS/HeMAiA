@@ -61,7 +61,7 @@ volatile uint64_t memchip_heap_manager = 0;
 static int chip_init(uint8_t current_chip_id)
 {
     // Program the chiplet topology so the D2D links know their neighbours.
-    hemaia_d2d_link_initialize(current_chip_id);
+    hemaia_d2d_link_initialize_4c1m(current_chip_id);
     // Bring up the UART so printf() works, then enable software interrupts.
     init_uart(get_current_chip_baseaddress(), 32, 1);
     enable_sw_interrupts();

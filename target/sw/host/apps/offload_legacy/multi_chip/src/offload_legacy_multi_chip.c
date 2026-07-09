@@ -21,7 +21,7 @@ int main() {
            current_chip_id >> 4, current_chip_id & 0x0F);
 
     // Bring up the D2D links so cross-chip transfers / barriers work.
-    hemaia_d2d_link_initialize(current_chip_id);
+    hemaia_d2d_link_initialize_4c1m(current_chip_id);
 
     // Communication buffer lives at the local narrow SPM, identical address on
     // every chip so the device chip_barrier broadcast lands at the same offset.

@@ -8,15 +8,15 @@
 // divisible by num_clusters, so each cluster computes one M-block.
 {
   // gemm configurations
-  array_shape: 1,
+  array_shape: 2,
   data_type: 0,
   transposed_A: 1,
   transposed_B: 1,
   int4_a_enable: 0,
   int4_b_enable: 0,
-  K: 4,
-  N: 4,
-  M: 8,
+  K: 97,
+  N: 13,
+  M: 52,
   num_clusters: 4,
   channel_en_C: 0,
   // 0 for output, 1 for weight, 2 for input
