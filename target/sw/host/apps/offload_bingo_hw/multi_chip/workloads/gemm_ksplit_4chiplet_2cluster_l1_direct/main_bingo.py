@@ -15,37 +15,43 @@ A3,B3 to cluster 0 of chiplet 1, A4,B4 to cluster 1 of chiplet 1, and so on.
 Each cluster computes one K chunk:
   Load A_i, load B_i, GEMM.
 
-Partial D_i buffers are reduced on cluster 0 of chiplet 0. Every remote partial
-is copied directly from its producer L1 buffer into a chiplet 00 cluster 0 L1
-receive slot. The graph only checks the final INT32 reduction result and the
-final dequantized FP32 output.
+Partial D_i buffers are reduced on cluster 0 of chiplet 0. Remote partials are
+staged into chiplet-local L3 symbols, then copied directly into chiplet 0
+cluster 0 TCDM receive slots. The graph only checks the final INT32 reduction
+result and the final dequantized FP32 output.
+
+Remote partials are staged from L1/TCDM back to chiplet-local L3 because the L1
+buffers are dynamic BingoMemAlloc objects. Their generated C pointer variables
+only exist inside the remote chiplet's kernel_execution block, so chip00 cannot
+compile a direct reference to them. The L3 staging buffer is a static symbol, so
+chip00 can form a valid remote address with chiplet_addr_transform_full().
 
 Task dependency graph:
 
   Per-cluster compute lanes:
     k0 chip00 c0: Load_A0 -> Load_B0 -> Gemm_k0
     k1 chip00 c1: Load_A1 -> Load_B1 -> Gemm_k1 -> Copy_D_k1_to_chip00_c0_tcdm
-    k2 chip01 c0: Load_A2 -> Load_B2 -> Gemm_k2
-                  -> Pull_D_k2_chip01_l1_to_chip00_c0_l1
-    k3 chip01 c1: Load_A3 -> Load_B3 -> Gemm_k3
-                  -> Pull_D_k3_chip01_l1_to_chip00_c0_l1
-    k4 chip10 c0: Load_A4 -> Load_B4 -> Gemm_k4
-                  -> Pull_D_k4_chip10_l1_to_chip00_c0_l1
-    k5 chip10 c1: Load_A5 -> Load_B5 -> Gemm_k5
-                  -> Pull_D_k5_chip10_l1_to_chip00_c0_l1
-    k6 chip11 c0: Load_A6 -> Load_B6 -> Gemm_k6
-                  -> Pull_D_k6_chip11_l1_to_chip00_c0_l1
-    k7 chip11 c1: Load_A7 -> Load_B7 -> Gemm_k7
-                  -> Pull_D_k7_chip11_l1_to_chip00_c0_l1
+    k2 chip01 c0: Load_A2 -> Load_B2 -> Gemm_k2 -> Store_D_k2_to_chip01_l3
+                  -> Pull_D_k2_to_chip00_c0_tcdm
+    k3 chip01 c1: Load_A3 -> Load_B3 -> Gemm_k3 -> Store_D_k3_to_chip01_l3
+                  -> Pull_D_k3_to_chip00_c0_tcdm
+    k4 chip10 c0: Load_A4 -> Load_B4 -> Gemm_k4 -> Store_D_k4_to_chip10_l3
+                  -> Pull_D_k4_to_chip00_c0_tcdm
+    k5 chip10 c1: Load_A5 -> Load_B5 -> Gemm_k5 -> Store_D_k5_to_chip10_l3
+                  -> Pull_D_k5_to_chip00_c0_tcdm
+    k6 chip11 c0: Load_A6 -> Load_B6 -> Gemm_k6 -> Store_D_k6_to_chip11_l3
+                  -> Pull_D_k6_to_chip00_c0_tcdm
+    k7 chip11 c1: Load_A7 -> Load_B7 -> Gemm_k7 -> Store_D_k7_to_chip11_l3
+                  -> Pull_D_k7_to_chip00_c0_tcdm
 
   Chip00 c0 reduction and checks:
     Gemm_k0 + Copy_D_k1_to_chip00_c0_tcdm -> Reduce_Add_k0_to_k1
-    Reduce_Add_k0_to_k1 + Pull_D_k2_chip01_l1_to_chip00_c0_l1 -> Reduce_Add_k0_to_k2
-    Reduce_Add_k0_to_k2 + Pull_D_k3_chip01_l1_to_chip00_c0_l1 -> Reduce_Add_k0_to_k3
-    Reduce_Add_k0_to_k3 + Pull_D_k4_chip10_l1_to_chip00_c0_l1 -> Reduce_Add_k0_to_k4
-    Reduce_Add_k0_to_k4 + Pull_D_k5_chip10_l1_to_chip00_c0_l1 -> Reduce_Add_k0_to_k5
-    Reduce_Add_k0_to_k5 + Pull_D_k6_chip11_l1_to_chip00_c0_l1 -> Reduce_Add_k0_to_k6
-    Reduce_Add_k0_to_k6 + Pull_D_k7_chip11_l1_to_chip00_c0_l1 -> Reduce_Add_k0_to_k7
+    Reduce_Add_k0_to_k1 + Pull_D_k2_to_chip00_c0_tcdm -> Reduce_Add_k0_to_k2
+    Reduce_Add_k0_to_k2 + Pull_D_k3_to_chip00_c0_tcdm -> Reduce_Add_k0_to_k3
+    Reduce_Add_k0_to_k3 + Pull_D_k4_to_chip00_c0_tcdm -> Reduce_Add_k0_to_k4
+    Reduce_Add_k0_to_k4 + Pull_D_k5_to_chip00_c0_tcdm -> Reduce_Add_k0_to_k5
+    Reduce_Add_k0_to_k5 + Pull_D_k6_to_chip00_c0_tcdm -> Reduce_Add_k0_to_k6
+    Reduce_Add_k0_to_k6 + Pull_D_k7_to_chip00_c0_tcdm -> Reduce_Add_k0_to_k7
     Reduce_Add_k0_to_k7 -> Check_Final_i32_D
     Check_Final_i32_D -> Dequant_Final_i32_to_fp32
     Dequant_Final_i32_to_fp32 -> Check_fp32_D
@@ -75,7 +81,7 @@ from bingo_kernel_args import (  # noqa E402
     SnaxBingoKernelIdma1dCopyArgs,
     SnaxBingoKernelXdma1dCopyArgs,
 )
-from bingo_mem_handle import BingoMemAlloc, BingoMemFixedAddr  # noqa E402
+from bingo_mem_handle import BingoMemAlloc, BingoMemFixedAddr, BingoMemSymbol  # noqa E402
 from bingo_node import BingoNode  # noqa E402
 from bingo_platform import guard_chiplet_count, guard_cluster_count, parse_platform_cfg  # noqa E402
 from ksplit_gemm_multi_chiplet_datagen import emit_header_file  # noqa E402
@@ -219,6 +225,8 @@ def define_memory_handles(params):
         "B_l1": {},
         "D_l1": {},
         "D_reduce_l1": {},
+        "D_remote_l3": {},
+        "D_remote_l3_full": {},
     }
 
     for idx in range(params["k_split"]):
@@ -256,6 +264,17 @@ def define_memory_handles(params):
                 chip_id=chiplet,
                 cluster_id=cluster_id,
             )
+            if chiplet != 0x00:
+                l3_offset = cluster_id * params["D_bytes"]
+                mem["D_remote_l3"][key] = BingoMemSymbol(
+                    "D_partial_local_l3",
+                    offset=l3_offset,
+                )
+                mem["D_remote_l3_full"][key] = chiplet_symbol_expr(
+                    chiplet,
+                    "D_partial_local_l3",
+                    l3_offset,
+                )
 
     mem["D_reduce_l1"][0] = mem["D_l1"][(0x00, 0)]
     reduce_partial_l1 = [
@@ -356,8 +375,29 @@ def make_local_partial_copy_node(dfg, mem, params, cluster_id, idx):
     )
 
 
+def make_remote_partial_store_node(dfg, mem, params, chiplet, cluster_id, idx):
+    # Stage remote partial D into a static L3 symbol before chip00 pulls it.
+    # Chip00 cannot reference the remote chiplet's dynamic L1 allocation
+    # variable, but it can address this symbol through chiplet_addr_transform_full.
+    h = chip_hex(chiplet)
+    return add_node(
+        dfg,
+        BingoNode(
+            assigned_chiplet_id=chiplet,
+            assigned_cluster_id=cluster_id,
+            assigned_core_id=DMA_CORE,
+            node_name=f"Store_D_k{idx}_Chip{h}_C{cluster_id}_TCDM_to_Local_L3",
+            kernel_name="__snax_bingo_kernel_idma_1d_copy",
+            kernel_args=SnaxBingoKernelIdma1dCopyArgs(
+                src_addr=mem["D_l1"][(chiplet, cluster_id)],
+                dst_addr=mem["D_remote_l3"][(chiplet, cluster_id)],
+                size=params["D_bytes"],
+            ),
+        ),
+    )
+
+
 def make_remote_partial_copy_node(dfg, mem, params, chiplet, cluster_id, idx):
-    """Pull a remote partial directly from its producer L1 into chip00 C0 L1."""
     h = chip_hex(chiplet)
     dst = mem["D_reduce_l1"][idx]
     if not (
@@ -368,25 +408,20 @@ def make_remote_partial_copy_node(dfg, mem, params, chiplet, cluster_id, idx):
     ):
         raise ValueError("SNAX XDMA pull must terminate in chip00 cluster0 TCDM")
 
-    # Every chiplet allocates equal-sized A, B, and D buffers in the same order,
-    # so the corresponding D buffer has the same chiplet-local address. Build
-    # the remote full address from chip00's in-scope counterpart; referring to
-    # the remote BingoMemAlloc directly would emit an out-of-scope C variable.
-    remote_src = chiplet_symbol_expr(
-        chiplet,
-        mem["D_l1"][(0x00, cluster_id)].get_c_var_name(),
-    )
+    # SNAX XDMA only works when either src or dst is attached to the issuing
+    # XDMA core. These pulls run on chip00 C0's DMA core, so the destination
+    # must stay in chip00 C0 TCDM.
     return add_node(
         dfg,
         BingoNode(
             assigned_chiplet_id=0x00,
             assigned_cluster_id=0,
             assigned_core_id=DMA_CORE,
-            node_name=f"Pull_D_k{idx}_Chip{h}_C{cluster_id}_L1_to_Chip00_C0_L1",
+            node_name=f"Pull_D_k{idx}_Chip{h}_C{cluster_id}_to_Chip00_C0_TCDM",
             kernel_name="__snax_bingo_kernel_xdma_1d_copy",
             kernel_args=SnaxBingoKernelXdma1dCopyArgs(
-                src_addr=remote_src,
-                dst_addr=mem["D_reduce_l1"][idx],
+                src_addr=mem["D_remote_l3_full"][(chiplet, cluster_id)],
+                dst_addr=dst,
                 size=params["D_bytes"],
             ),
         ),
@@ -435,6 +470,14 @@ def create_dfg(params, mem, platform):
                 dfg.bingo_add_edge(gemm, copy_nodes[idx])
                 reduce_ready[idx] = copy_nodes[idx]
             else:
+                store = make_remote_partial_store_node(
+                    dfg,
+                    mem,
+                    params,
+                    chiplet,
+                    cluster_id,
+                    idx,
+                )
                 copy_nodes[idx] = make_remote_partial_copy_node(
                     dfg,
                     mem,
@@ -443,7 +486,8 @@ def create_dfg(params, mem, platform):
                     cluster_id,
                     idx,
                 )
-                dfg.bingo_add_edge(gemm, copy_nodes[idx])
+                dfg.bingo_add_edge(gemm, store)
+                dfg.bingo_add_edge(store, copy_nodes[idx])
                 reduce_ready[idx] = copy_nodes[idx]
 
     prev_sum = mem["D_reduce_l1"][0]
@@ -559,7 +603,7 @@ def main():
     dfg, check_fp32 = create_dfg(params, mem, platform)
 
     total_compute_nodes = params["k_split"] * 3
-    total_remote_store_nodes = 0
+    total_remote_store_nodes = (len(EXPECTED_CHIPLETS) - 1) * len(CLUSTER_IDS)
     total_copy_nodes = params["k_split"] - 1
     total_reduce_nodes = params["k_split"] - 1
     total_final_nodes = 3
@@ -571,8 +615,8 @@ def main():
         + total_final_nodes
     )
     print(
-        "Built DFG: A/B load + GEMM on 8 clusters, direct remote L1 pulls "
-        "to chip00 C0 TCDM, reduce, final INT32 check, "
+        "Built DFG: A/B load + GEMM on 8 clusters, stage remote partials, "
+        "copy partials to chip00 C0 TCDM, reduce, final INT32 check, "
         "dequantize, FP32 check"
     )
     print(f"  active_chiplets={[chip_hex(c) for c in EXPECTED_CHIPLETS]}")
