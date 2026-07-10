@@ -133,7 +133,7 @@ int main() {
     asm volatile("fence" : : : "memory");
 
     // Configure the D2D Topology
-    hemaia_d2d_link_initialize(get_current_chip_id());
+    hemaia_d2d_link_initialize_4c1m(get_current_chip_id());
 
     // Configure the East D2D link
     printf("HeMAiA D2D Link Configurator\r\n");

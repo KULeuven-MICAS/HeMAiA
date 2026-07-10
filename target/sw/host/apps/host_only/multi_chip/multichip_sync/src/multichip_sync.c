@@ -18,7 +18,7 @@ int main() {
     // Enable vector extension
     enable_vec();
     // Initialize the D2D link topology
-    hemaia_d2d_link_initialize(get_current_chip_id());
+    hemaia_d2d_link_initialize_4c1m(get_current_chip_id());
 
     for (uint8_t i = 1;; i++) {
         printf("[HeMAiA] Press to run barrier %d \r\n", i);

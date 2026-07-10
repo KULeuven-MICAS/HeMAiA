@@ -737,6 +737,30 @@ def emit_matmul_data(**kwargs):
     elif stationary == input_stationary:
         delta_local_d = delta_local_c
 
+    tcdm_size_kib = int(kwargs.get("cluster", {}).get("tcdm", {}).get("size", 512))
+    tcdm_size_bytes = tcdm_size_kib * 1024
+    cluster_hives = kwargs.get("cluster", {}).get("hives", [])
+    num_cores_per_cluster = sum(
+        len(hive.get("cores", [])) for hive in cluster_hives
+    ) or 2
+    stack_size = num_cores_per_cluster * ((1 << 10) + 8)
+    ret_value_size = 8
+    cls_size = int(kwargs.get("tcdm_cls_size", 160))
+    reserved_size = int(kwargs.get("tcdm_reserved_size", 4096))
+    tcdm_row_size = 512
+    usable_tcdm = (
+        tcdm_size_bytes - stack_size - ret_value_size - cls_size - reserved_size
+    ) // tcdm_row_size * tcdm_row_size
+    tcdm_footprint = max(
+        int(delta_local_a + a_data_length),
+        int(delta_local_b + b_data_length),
+        int(delta_local_d + d_data_length),
+    )
+    assert tcdm_footprint <= usable_tcdm, (
+        f"Per-cluster TCDM footprint {tcdm_footprint} B exceeds usable "
+        f"TCDM budget {usable_tcdm} B after stack/runtime reservations"
+    )
+
     data_str += [format_scalar_definition("int32_t", "delta_local_a", delta_local_a)]
     data_str += [format_scalar_definition("int32_t", "delta_local_b", delta_local_b)]
     data_str += [format_scalar_definition("int32_t", "delta_local_c", delta_local_c)]

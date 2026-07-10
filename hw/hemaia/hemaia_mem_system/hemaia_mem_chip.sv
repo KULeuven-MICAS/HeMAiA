@@ -80,14 +80,14 @@ module hemaia_mem_chip #(
   ////////////////////////////////////////////
 
 
-  // Master Clock / clk_i: 3.6 GHz
-  // Clock Channel 0 / clk_o[0]: SRAM Clock = 3.6 GHz / 4 = 0.9 GHz
-  // Clock Channel 1 / clk_o[1]: West D2D TX Clock = 3.6 GHz
+  // Master Clock / clk_i: testharness memchip clock
+  // Clock Channel 0 / clk_o[0]: Mem/control clock = clk_i / 6
+  // Clock Channels 1..4 / clk_o[1..4]: D2D TX clocks = clk_i
 
   `AXI_LITE_TYPEDEF_ALL_CT(axi_lite_a48_d32, axi_lite_a48_d32_req_t, axi_lite_a48_d32_rsp_t,
                            logic [47:0], logic [32:0], logic [3:0])
 
-  localparam int HeMAiAMemChipDivision[5] = '{5, 2, 2, 2, 2};
+  localparam int HeMAiAMemChipDivision[5] = '{6, 1, 1, 1, 1};
   localparam int HeMAiAResetDelays[5] = '{default: 3};
 
   logic [4:0] clk_vec, rst_n_vec;

@@ -27,6 +27,10 @@
 #define HEMAIA_D2D_LINK_FPGA_TX_YIELD_PERIOD 16
 #define HEMAIA_D2D_LINK_FPGA_TX_TURNAROUND_SILENCE_PERIOD 16
 
+#ifndef HEMAIA_SAME_MEMCHIP_SPEED
+#define HEMAIA_SAME_MEMCHIP_SPEED 0
+#endif
+
 typedef enum {
     D2D_DIRECTION_EAST = 0,
     D2D_DIRECTION_WEST = 1,
@@ -772,7 +776,7 @@ inline D2DPhyMode get_d2d_link_phy_mode(D2DDirection direction) {
 // The default setting is to make sure the system can start from a lower frequency, and then we can set it to the expected frequency after initialization.
 // Here at the SW level we set the RTL to be /7 and the D2D to be /1 to make sure it has a 1/7 ratio as well
 // => Host is running at 570MHz and the D2D is running at 4GHz, which is the same as the chip setting
-void hemaia_d2d_link_initialize(uint8_t chip_id) {
+void hemaia_d2d_link_initialize_4c1m(uint8_t chip_id) {
         // Set the default clock division ratio for the Host and D2D link to avoid CDC issue
         enable_clk_domain(0, 7);   // host CPU
         for (uint8_t i = 0; i < N_CLUSTERS_PER_CHIPLET; i++) {
@@ -795,15 +799,19 @@ void hemaia_d2d_link_initialize(uint8_t chip_id) {
             case 0x10:  // Chip 10
                 set_d2d_link_availability(D2D_DIRECTION_NORTH, false);
                 set_d2d_link_multicast_fence(D2D_DIRECTION_EAST, false);
+                // Interface for the slower memchip, currently disabled for the to avoid mem bottleneck
+                // DO NOT TOUCH. This will send the clk to the fpga with low speed clk at EAST D2D PHY Port
+                // This is related where to put the memchip
+                // Currently we put the memchip at the (2,0) position which is connected to the EAST D2D PHY Port of Chip 10, so we need to make sure the clk can be sent to the memchip to make it work
+
+#if !HEMAIA_SAME_MEMCHIP_SPEED
                 set_d2d_link_tx_yield_period(HEMAIA_D2D_LINK_FPGA_TX_YIELD_PERIOD,
                                              D2D_DIRECTION_EAST);
                 set_d2d_link_tx_turnaround_silence_period(
                     HEMAIA_D2D_LINK_FPGA_TX_TURNAROUND_SILENCE_PERIOD,
                     D2D_DIRECTION_EAST);
-                // DO NOT TOUCH. This will send the clk to the fpga with low speed clk at EAST D2D PHY Port
-                // This is related where to put the memchip
-                // Currently we put the memchip at the (2,0) position which is connected to the EAST D2D PHY Port of Chip 10, so we need to make sure the clk can be sent to the memchip to make it work
                 enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 1, 20); 
+#endif
                 break;
             case 0x11:  // Chip 11
                 set_d2d_link_availability(D2D_DIRECTION_EAST, false);
@@ -813,4 +821,37 @@ void hemaia_d2d_link_initialize(uint8_t chip_id) {
                 // Invalid chip ID
                 break;
         }
+}
+
+
+// Initialize the HeMAiA D2D Link for 1C + 1M topology, set the link topology, 
+// multicast domain, and clock division according to the chip ID.
+// We also need to configure the clk div ratio between the core and the D2D link to avoid the CDC issue
+// Right now we set at the RTL that the host core is /14 and the D2D /2 to make sure it has a 1/7 ratio.
+// This means at 4GHZ PLL clock, the host core is running 285MHz and the D2D link is running at 2GHz
+// The default setting is to make sure the system can start from a lower frequency, and then we can set it to the expected frequency after initialization.
+// Here at the SW level we set the RTL to be /7 and the D2D to be /1 to make sure it has a 1/7 ratio as well
+// => Host is running at 570MHz and the D2D is running at 4GHz, which is the same as the chip setting
+void hemaia_d2d_link_initialize_1c1m(uint8_t chip_id) {
+        // Set the default clock division ratio for the Host and D2D link to avoid CDC issue
+        enable_clk_domain(0, 7);   // host CPU
+        for (uint8_t i = 0; i < N_CLUSTERS_PER_CHIPLET; i++) {
+            enable_clk_domain(1 + i, 7); // cluster i
+        }
+        enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 2, 0);  // West  D2D PHY
+        enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 3, 0);  // North D2D PHY
+        enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 4, 0);  // South D2D PHY
+        set_d2d_link_availability(D2D_DIRECTION_NORTH, false);
+        set_d2d_link_availability(D2D_DIRECTION_SOUTH, false);
+        set_d2d_link_availability(D2D_DIRECTION_WEST, false);
+        // East D2D PHY Port is connected to the slower memchip
+        set_d2d_link_multicast_fence(D2D_DIRECTION_EAST, false);
+#if !HEMAIA_SAME_MEMCHIP_SPEED
+        set_d2d_link_tx_yield_period(HEMAIA_D2D_LINK_FPGA_TX_YIELD_PERIOD,
+                                        D2D_DIRECTION_EAST);
+        set_d2d_link_tx_turnaround_silence_period(
+            HEMAIA_D2D_LINK_FPGA_TX_TURNAROUND_SILENCE_PERIOD,
+            D2D_DIRECTION_EAST);
+        enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 1, 20); 
+#endif
 }

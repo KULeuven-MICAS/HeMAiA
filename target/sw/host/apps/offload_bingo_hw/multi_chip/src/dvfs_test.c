@@ -27,7 +27,7 @@ int main() {
     uint8_t x = get_current_chip_loc_x();
     uint8_t y = get_current_chip_loc_y();
     // Program the Chiplet Topology
-    hemaia_d2d_link_initialize(current_chip_id);
+    hemaia_d2d_link_initialize_4c1m(current_chip_id);
     // Init the uart for printf
     init_uart(get_current_chip_baseaddress(), 32, 1);
     // Enable vector extension

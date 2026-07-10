@@ -10,18 +10,43 @@ import json
 import argparse
 import os
 import glob
+import html
 
 def parse_perf_tracing_header(header_path):
-    """Parses perf_tracing.h to extract event IDs and names."""
+    """Parses a trace header to extract event IDs and names."""
     event_map = {}
     with open(header_path, 'r') as f:
         for line in f:
-            match = re.search(r'#define\s+(BINGO_TRACE_\w+)\s+(0x[0-9a-fA-F]+|\d+)', line)
+            match = re.search(r'#define\s+(BINGO_TRACE_\w+)\s+(0[xX][0-9a-fA-F]+|\d+)', line)
             if match:
                 name = match.group(1)
                 value_str = match.group(2)
-                value = int(value_str, 16) if value_str.startswith('0x') else int(value_str)
+                value = int(value_str, 16) if value_str.lower().startswith('0x') else int(value_str)
+                if value in event_map and event_map[value] != name:
+                    raise ValueError(
+                        f"Conflicting Bingo trace ID 0x{value:x} in {header_path}: "
+                        f"{event_map[value]} vs {name}")
                 event_map[value] = name
+    return event_map
+
+def parse_perf_tracing_headers(header_paths):
+    """Parses and merges one or more trace headers."""
+    event_map = {}
+    event_sources = {}
+
+    for header_path in header_paths:
+        header_events = parse_perf_tracing_header(header_path)
+        for value, name in header_events.items():
+            if value in event_map:
+                if event_map[value] != name:
+                    raise ValueError(
+                        f"Conflicting Bingo trace ID 0x{value:x}: "
+                        f"{event_map[value]} from {event_sources[value]} vs "
+                        f"{name} from {header_path}")
+                continue
+            event_map[value] = name
+            event_sources[value] = header_path
+
     return event_map
 
 def parse_trace_file(file_path, event_map):
@@ -147,19 +172,188 @@ def convert_to_complete_events(events):
         
     return complete_events
 
+def clean_event_name(name):
+    """Returns a compact display name for trace viewers."""
+    prefix = "BINGO_TRACE_"
+    return name[len(prefix):] if name.startswith(prefix) else name
+
+def lane_sort_key(label):
+    """Sorts Host Core first, then cluster/core lanes numerically."""
+    if label == "Host Core":
+        return (-1, -1, label)
+
+    match = re.search(r'Cluster\s+(\d+)\s+Core\s+(\d+)', label)
+    if match:
+        return (int(match.group(1)), int(match.group(2)), label)
+
+    return (10**9, 10**9, label)
+
+def write_html_timeline(trace_events, json_path, html_path):
+    """Writes a small standalone HTML timeline from Perfetto-style events."""
+    complete_events = [
+        ev for ev in trace_events
+        if ev.get("ph") == "X" and "ts" in ev and "dur" in ev
+    ]
+    complete_events.sort(key=lambda ev: (lane_sort_key(str(ev.get("tid", ""))),
+                                         int(ev.get("ts", 0))))
+
+    if complete_events:
+        start_ns = min(int(ev["ts"]) for ev in complete_events)
+        end_ns = max(int(ev["ts"]) + int(ev.get("dur", 0))
+                     for ev in complete_events)
+    else:
+        start_ns = 0
+        end_ns = 1
+
+    span_ns = max(end_ns - start_ns, 1)
+    lanes = {}
+    for ev in complete_events:
+        lane = str(ev.get("tid", "Unknown"))
+        lanes.setdefault(lane, []).append(ev)
+
+    colors = [
+        "#2563eb", "#16a34a", "#dc2626", "#9333ea", "#ea580c", "#0891b2",
+        "#4f46e5", "#65a30d", "#be123c", "#0d9488", "#7c3aed", "#ca8a04",
+    ]
+    color_by_name = {}
+
+    def color_for(name):
+        if name not in color_by_name:
+            color_by_name[name] = colors[len(color_by_name) % len(colors)]
+        return color_by_name[name]
+
+    lane_html = []
+    for lane in sorted(lanes, key=lane_sort_key):
+        bars = []
+        for ev in lanes[lane]:
+            ts = int(ev["ts"])
+            dur = int(ev.get("dur", 0))
+            left = (ts - start_ns) / span_ns * 100.0
+            width = max(dur / span_ns * 100.0, 0.08)
+            if left + width > 100:
+                width = max(0.08, 100 - left)
+
+            name = clean_event_name(str(ev.get("name", "")))
+            args = ev.get("args", {}) or {}
+            title_lines = [
+                name,
+                str(lane),
+                f"start_ns={ts}",
+                f"dur_ns={dur}",
+            ]
+            if "dur_cc" in args:
+                title_lines.append(f"dur_cc={args['dur_cc']}")
+            if "freq_MHz" in args:
+                title_lines.append(f"freq_MHz={args['freq_MHz']}")
+
+            bars.append(
+                '<div class="bar" '
+                f'style="left:{left:.6f}%;width:{width:.6f}%;'
+                f'background:{color_for(name)}" '
+                f'title="{html.escape(chr(10).join(title_lines), quote=True)}">'
+                f'{html.escape(name)}</div>'
+            )
+
+        lane_html.append(
+            '<div class="lane">'
+            f'<div class="lane-label">{html.escape(lane)}</div>'
+            f'<div class="lane-track">{"".join(bars)}</div>'
+            '</div>'
+        )
+
+    rows = []
+    for ev in complete_events:
+        name = clean_event_name(str(ev.get("name", "")))
+        args = ev.get("args", {}) or {}
+        rows.append(
+            "<tr>"
+            f'<td>{html.escape(str(ev.get("tid", "")))}</td>'
+            f"<td>{html.escape(name)}</td>"
+            f'<td>{int(ev.get("ts", 0))}</td>'
+            f'<td>{int(ev.get("dur", 0))}</td>'
+            f'<td>{html.escape(str(args.get("dur_cc", "")))}</td>'
+            f'<td>{html.escape(str(args.get("freq_MHz", "")))}</td>'
+            "</tr>"
+        )
+
+    source = html.escape(json_path)
+    meta = (
+        f"Source: <code>{source}</code> | complete events: "
+        f"{len(complete_events)} | range: {start_ns} ns to {end_ns} ns | "
+        f"span: {span_ns} ns"
+    )
+
+    html_doc = f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Bingo Trace Timeline</title>
+<style>
+:root {{ color-scheme: light; font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }}
+body {{ margin: 0; background: #f6f7f9; color: #14161a; }}
+header {{ padding: 20px 24px 12px; background: #ffffff; border-bottom: 1px solid #d9dde5; position: sticky; top: 0; z-index: 2; }}
+h1 {{ margin: 0 0 6px; font-size: 22px; font-weight: 650; }}
+.meta {{ color: #5d6675; font-size: 13px; }}
+main {{ padding: 18px 24px 32px; }}
+.timeline {{ background: #ffffff; border: 1px solid #d9dde5; border-radius: 8px; overflow: hidden; }}
+.axis {{ height: 32px; display: flex; align-items: center; padding-left: 180px; border-bottom: 1px solid #e6e9ef; color: #5d6675; font-size: 12px; }}
+.lane {{ display: grid; grid-template-columns: 180px 1fr; min-height: 46px; border-bottom: 1px solid #edf0f4; }}
+.lane:last-child {{ border-bottom: 0; }}
+.lane-label {{ padding: 12px 12px; font-size: 13px; font-weight: 600; background: #fbfcfd; border-right: 1px solid #e6e9ef; }}
+.lane-track {{ position: relative; min-height: 46px; overflow: hidden; }}
+.bar {{ position: absolute; top: 9px; height: 28px; border-radius: 4px; color: #fff; font-size: 10px; line-height: 28px; padding: 0 5px; box-sizing: border-box; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-shadow: inset 0 -1px 0 rgba(0,0,0,.16); }}
+section {{ margin-top: 18px; }}
+table {{ width: 100%; border-collapse: collapse; background: #ffffff; border: 1px solid #d9dde5; border-radius: 8px; overflow: hidden; font-size: 12px; }}
+th, td {{ padding: 7px 9px; border-bottom: 1px solid #edf0f4; text-align: left; }}
+th {{ background: #fbfcfd; color: #3d4654; font-weight: 650; position: sticky; top: 79px; }}
+tr:last-child td {{ border-bottom: 0; }}
+code {{ background: #eef1f5; padding: 2px 5px; border-radius: 4px; }}
+</style>
+</head>
+<body>
+<header>
+  <h1>Bingo Trace Timeline</h1>
+  <div class="meta">{meta}</div>
+</header>
+<main>
+  <div class="timeline">
+    <div class="axis">Timeline, normalized to full trace span. Hover bars for exact timing.</div>
+    {"".join(lane_html)}
+  </div>
+  <section>
+    <table>
+      <thead><tr><th>Lane</th><th>Event</th><th>Start ns</th><th>Duration ns</th><th>Duration cycles</th><th>MHz</th></tr></thead>
+      <tbody>{"".join(rows)}</tbody>
+    </table>
+  </section>
+</main>
+</body>
+</html>
+"""
+
+    print(f"Writing HTML trace to {html_path}")
+    with open(html_path, "w") as f:
+        f.write(html_doc)
+
 def main():
     parser = argparse.ArgumentParser(description="Generate Perfetto JSON trace from simulation logs.")
-    parser.add_argument("--trace-header", required=True, help="Path to perf_tracing.h")
+    parser.add_argument("--trace-header", action="append", required=True,
+                        help="Path to a Bingo trace header; may be passed multiple times")
     parser.add_argument("--log-dir", required=True, help="Directory containing trace log files")
     parser.add_argument("--output", required=True, help="Output JSON file path")
+    parser.add_argument("--html-output", help="Optional output HTML timeline path")
     parser.add_argument("--cores-per-cluster", type=int, default=2,
                         help="Number of device cores per cluster (default: 2)")
     
     args = parser.parse_args()
     
     # 1. Parse Event Map
-    print(f"Parsing header: {args.trace_header}")
-    event_map = parse_perf_tracing_header(args.trace_header)
+    for trace_header in args.trace_header:
+        print(f"Parsing header: {trace_header}")
+    try:
+        event_map = parse_perf_tracing_headers(args.trace_header)
+    except ValueError as err:
+        parser.error(str(err))
     print(f"Found {len(event_map)} event types.")
 
     # 2. Find Trace Files (Both .txt and .log)
@@ -272,6 +466,9 @@ def main():
     print(f"Writing {len(all_trace_events)} events to {args.output}")
     with open(args.output, 'w') as f:
         json.dump(output_data, f, indent=2)
+
+    if args.html_output:
+        write_html_timeline(all_trace_events, args.output, args.html_output)
 
 if __name__ == "__main__":
     main()

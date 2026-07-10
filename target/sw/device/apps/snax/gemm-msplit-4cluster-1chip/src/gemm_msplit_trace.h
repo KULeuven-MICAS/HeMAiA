@@ -1,0 +1,40 @@
+// Copyright 2026 KU Leuven.
+// Licensed under the Apache License, Version 2.0, see LICENSE for details.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Application-local low-overhead trace markers for gemm-msplit-4cluster-1chip.
+
+#pragma once
+
+#include "perf_tracing.h"
+
+#ifndef GEMM_MSPLIT_ENABLE_TRACE
+#define GEMM_MSPLIT_ENABLE_TRACE 1
+#endif
+
+#if GEMM_MSPLIT_ENABLE_TRACE
+#define GEMM_MSPLIT_TRACE_MARKER(id) BINGO_TRACE_MARKER(id)
+#else
+#define GEMM_MSPLIT_TRACE_MARKER(id) ((void)0)
+#endif
+
+#define BINGO_TRACE_LOAD_A_L3_START 0x400
+#define BINGO_TRACE_LOAD_A_L3_END 0x401
+#define BINGO_TRACE_GLOBAL_SYNC_START 0x402
+#define BINGO_TRACE_GLOBAL_SYNC_END 0x403
+#define BINGO_TRACE_LOAD_A_TCDM_START 0x404
+#define BINGO_TRACE_LOAD_A_TCDM_END 0x405
+#define BINGO_TRACE_LOAD_B_L3_START 0x408
+#define BINGO_TRACE_LOAD_B_L3_END 0x409
+#define BINGO_TRACE_LOAD_B_TCDM_START 0x40C
+#define BINGO_TRACE_LOAD_B_TCDM_END 0x40D
+#define BINGO_TRACE_LOAD_CFG_START 0x40E
+#define BINGO_TRACE_LOAD_CFG_END 0x40F
+#define BINGO_TRACE_PROGRAM_CSR_START 0x410
+#define BINGO_TRACE_PROGRAM_CSR_END 0x411
+#define BINGO_TRACE_COMPUTE_START 0x412
+#define BINGO_TRACE_COMPUTE_END 0x413
+#define BINGO_TRACE_CLUSTER_SYNC_START 0x414
+#define BINGO_TRACE_CLUSTER_SYNC_END 0x415
+#define BINGO_TRACE_STORE_D_START 0x416
+#define BINGO_TRACE_STORE_D_END 0x417

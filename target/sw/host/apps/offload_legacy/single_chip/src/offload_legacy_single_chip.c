@@ -14,6 +14,7 @@ int main() {
     // Enable vector extension
     enable_vec();
     printf("[HeMAiA] Single-chip Offload Legacy Main\r\n");
+    hemaia_d2d_link_initialize_1c1m(current_chip_id);
     comm_buffer_ptr = (comm_buffer_t*)chiplet_addr_transform(((uint64_t)&__narrow_spm_start));
     enable_sw_interrupts();
     comm_buffer_ptr->lock = 0;

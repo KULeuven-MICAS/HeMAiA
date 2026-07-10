@@ -5,6 +5,8 @@
 /apps/*.dump
 /apps/*.elf
 /apps/.rtlbinary
+/apps/.bingo_trace_headers
+/apps/bingo_trace_headers
 /apps/**/*.hex
 /testharness/testharness*.sv
 /testharness/io_wrapper.sv
