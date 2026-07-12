@@ -377,11 +377,14 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_elementwise_add_ab(void *arg)
 
 // Shared launch for the stream primitives: program the AGU (full config or sticky
 // retask), run one xDMA task, and wait. The reader extension(s) must already be
-// enabled by the caller. src AGU is 2D; dst is 1D {64-byte beat, dst_bound0}.
+// enabled by the caller. The src AGU has `src_dims` temporal dims (2 for the flat
+// {beat, 1} stream shape; 3 for the PADDED-ROW {operand, beat, row} shape the
+// elementwise op uses to read a TAP-padded tensor); dst is 1D {64-byte beat, dst_bound0}.
 // Returns BINGO_RET_SUCC, or BINGO_RET_FAIL (via BINGO_XDMA_TRY) on a cfg error.
 static inline uint32_t xdma_stream_launch(
     uint64_t src_addr, uint64_t dst_addr,
-    uint32_t *src_str, uint32_t *src_bnd, uint32_t dst_bound0, uint32_t csr_mode)
+    uint32_t *src_str, uint32_t *src_bnd, uint32_t src_dims,
+    uint32_t dst_bound0, uint32_t csr_mode)
 {
     if (csr_mode == 0u) {  // FULL: completely configure the AGU (default)
         uint32_t dst_str[1] = { XDMA_WIDTH };
@@ -389,7 +392,7 @@ static inline uint32_t xdma_stream_launch(
         BINGO_XDMA_TRY(xdma_memcpy_nd_full_addr(
             src_addr, dst_addr,
             XDMA_WIDTH / XDMA_SPATIAL_CHAN, XDMA_WIDTH / XDMA_SPATIAL_CHAN,
-            2, src_str, src_bnd, 1, dst_str, dst_bnd,
+            src_dims, src_str, src_bnd, 1, dst_str, dst_bnd,
             0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF), "xdma_stream");
     } else {               // STICKY: reuse the persisted same-shape config (opt-in)
         BINGO_XDMA_TRY(xdma_retask_1d(
@@ -438,7 +441,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_stream_reduce(void *arg)
         xdma_enable_src_ext(READER_EXT_STREAMREDUCE, csr_red);
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
-        uint32_t rc = xdma_stream_launch(src_addr, dst_addr, src_str, src_bnd, dst_bound0, csr_mode);
+        uint32_t rc = xdma_stream_launch(src_addr, dst_addr, src_str, src_bnd, 2u, dst_bound0, csr_mode);
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
         xdma_disable_src_ext(READER_EXT_STREAMREDUCE);
         if (rc != BINGO_RET_SUCC) return BINGO_RET_FAIL;
@@ -495,7 +498,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_stream_map(void *arg)
         }
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
-        uint32_t rc = xdma_stream_launch(src_addr, dst_addr, src_str, src_bnd, dst_bound0, csr_mode);
+        uint32_t rc = xdma_stream_launch(src_addr, dst_addr, src_str, src_bnd, 2u, dst_bound0, csr_mode);
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
         if (out_dtype == 1u) xdma_disable_src_ext(READER_EXT_FP16TOINT8);
         xdma_disable_src_ext(READER_EXT_STREAMMAP);
@@ -610,7 +613,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_stream_map_reduce(void *arg)
         xdma_enable_src_ext(READER_EXT_STREAMREDUCE, csr_red);
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
-        uint32_t rc = xdma_stream_launch(src_addr, dst_addr, src_str, src_bnd, dst_bound0, csr_mode);
+        uint32_t rc = xdma_stream_launch(src_addr, dst_addr, src_str, src_bnd, 2u, dst_bound0, csr_mode);
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
         xdma_disable_src_ext(READER_EXT_STREAMREDUCE);
         xdma_disable_src_ext(READER_EXT_STREAMMAP);
@@ -667,7 +670,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_fp16_to_int8(void *arg)
         xdma_enable_src_ext(READER_EXT_FP16TOINT8, csr_q);
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
-        uint32_t rc = xdma_stream_launch(src_addr, dst_addr, src_str, src_bnd, dst_bound0, csr_mode);
+        uint32_t rc = xdma_stream_launch(src_addr, dst_addr, src_str, src_bnd, 2u, dst_bound0, csr_mode);
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
         xdma_disable_src_ext(READER_EXT_FP16TOINT8);
         xdma_disable_src_ext(READER_EXT_STREAMMAP);
@@ -739,6 +742,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_stream_elementwise(void *arg)
         uint32_t inv_scale      = a[12];
         uint32_t src_b_addr_hi  = a[13];
         uint32_t src_b_addr_lo  = a[14];
+        uint32_t src_row_stride = a[15];
         bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_stream_elementwise_args_t);
         BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 #if defined(READER_EXT_STREAMELEMENTWISE) && defined(READER_EXT_FP16TOINT8)
@@ -760,10 +764,24 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_stream_elementwise(void *arg)
                 operand_stride = a_lo - src_b_addr_lo;
             }
         }
-        // Interleaved src: inner dim = operand index (stride operand_stride),
-        // outer dim = rows*beats (stride one 64-byte beat).
-        uint32_t src_str[2] = { operand_stride, XDMA_WIDTH };
-        uint32_t src_bnd[2] = { operand_count, rows * beats };
+        // Interleaved src. Two reader shapes:
+        //   src_row_stride == 0 (default): 2D {operand, beat} over a FLAT [rows,D] tensor --
+        //     the operands are packed, so one flat beat counter walks the whole tensor.
+        //   src_row_stride != 0: 3D {operand, beat, row} over PADDED rows -- each row occupies
+        //     src_row_stride bytes of which only the first `beats` beats are data. This is how
+        //     an operand produced by the merged map+reduce in TAP mode is consumed: its rows are
+        //     (beats+1)*64 bytes apart and the trailing scalar beat must be SKIPPED, which a flat
+        //     reader cannot do. BOTH operands must share src_row_stride (so the interleave delta
+        //     stays constant across rows) -- the broadcast operand is therefore written at the
+        //     same padded row stride by the xDMA broadcast pass that builds it.
+        // The writer stays 1D: the output is packed [rows,D] (or int8), never padded.
+        uint32_t src_str[3] = { operand_stride, XDMA_WIDTH, src_row_stride };
+        uint32_t src_bnd[3] = { operand_count, beats, rows };
+        uint32_t src_dims   = 3u;
+        if (src_row_stride == 0u) {          // flat: collapse the beat/row dims into one
+            src_bnd[1] = rows * beats;
+            src_dims   = 2u;
+        }
         uint32_t csr_ew[2]  = { operand_count, op };
         xdma_enable_src_ext(READER_EXT_STREAMELEMENTWISE, csr_ew);
         if (out_dtype == 1u) {
@@ -772,7 +790,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_stream_elementwise(void *arg)
         }
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
-        uint32_t rc = xdma_stream_launch(src_addr, dst_addr, src_str, src_bnd, dst_bound0, csr_mode);
+        uint32_t rc = xdma_stream_launch(src_addr, dst_addr, src_str, src_bnd, src_dims, dst_bound0, csr_mode);
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
         if (out_dtype == 1u) xdma_disable_src_ext(READER_EXT_FP16TOINT8);
         xdma_disable_src_ext(READER_EXT_STREAMELEMENTWISE);
@@ -809,7 +827,7 @@ static inline uint32_t xdma_stream_ew2(uint64_t src_a, uint64_t src_b, uint64_t 
     uint32_t src_bnd[2] = { 2u, rows * beats };
     uint32_t csr_ew[2]  = { 2u, op };
     xdma_enable_src_ext(READER_EXT_STREAMELEMENTWISE, csr_ew);
-    uint32_t rc = xdma_stream_launch(base, dst, src_str, src_bnd, rows * beats, 0u /*FULL*/);
+    uint32_t rc = xdma_stream_launch(base, dst, src_str, src_bnd, 2u, rows * beats, 0u /*FULL*/);
     xdma_disable_src_ext(READER_EXT_STREAMELEMENTWISE);
     return rc;
 }

@@ -560,6 +560,16 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_stream_elementwise_args {
   // at a HIGHER address than src_addr (the reader only strides forward).
   uint32_t src_b_addr_hi;
   uint32_t src_b_addr_lo;
+  // Row stride (BYTES) of the operand tensors, for reading PADDED rows.
+  //   0 (default) = the operands are flat/packed [rows,D] -> 2D reader {operand, beat}.
+  //   != 0        = each row occupies src_row_stride bytes of which only the first
+  //                 `beats` beats are data -> 3D reader {operand, beat, row}, skipping
+  //                 the rest. This is how an operand produced by the merged map+reduce
+  //                 in TAP mode (rows (beats+1)*64 B apart, trailing scalar beat) is
+  //                 consumed. BOTH operands must share this stride, so the broadcast
+  //                 operand is written at the same padded stride by the xDMA broadcast
+  //                 pass that builds it. The writer is always packed, never padded.
+  uint32_t src_row_stride;
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_xdma_stream_elementwise_args_t;
 

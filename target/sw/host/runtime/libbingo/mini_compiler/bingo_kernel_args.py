@@ -1,7 +1,7 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 from abc import ABC, abstractmethod
 from typing import Union, Dict, Optional
-from bingo_mem_handle import BingoMemAlloc, BingoMemSymbol, BingoMemFixedAddr
+from bingo_mem_handle import BingoMemAlloc, BingoMemAllocView, BingoMemSymbol, BingoMemFixedAddr
 from bingo_helpers import _check_xdma_size_aligned
 
 class BingoKernelArgs(ABC):
@@ -106,6 +106,27 @@ class BingoKernelArgs(ABC):
                     assignments[base_name] = f"(uint64_t)0 /* UNREF_HANDLE: {val.name} */"
                 else:
                     assignments[base_name] = f"(uint32_t)0 /* UNREF_HANDLE: {val.name} */"
+        elif isinstance(val, BingoMemAllocView):
+            # A byte offset into an allocation another node owns -> `ptr_<base> + offset`.
+            # The base buffer is allocated once; this emits no allocation of its own.
+            if val.base in handle_name_map:
+                c_var = handle_name_map[val.base]
+                c_expr = f"({c_var} + {val.offset})" if val.offset else c_var
+                if split_64bit:
+                    assignments[f"{base_name}_lo"] = f"(uint32_t){c_expr}"
+                    assignments[f"{base_name}_hi"] = f"(uint32_t)({c_expr} >> 32)"
+                elif as_64bit:
+                    assignments[base_name] = f"(uint64_t){c_expr}"
+                else:
+                    assignments[base_name] = f"(uint32_t){c_expr}"
+            else:
+                if split_64bit:
+                    assignments[f"{base_name}_lo"] = f"(uint32_t)0 /* UNREF_HANDLE: {val.base.name} */"
+                    assignments[f"{base_name}_hi"] = f"(uint32_t)0"
+                elif as_64bit:
+                    assignments[base_name] = f"(uint64_t)0 /* UNREF_HANDLE: {val.base.name} */"
+                else:
+                    assignments[base_name] = f"(uint32_t)0 /* UNREF_HANDLE: {val.base.name} */"
         elif isinstance(val, BingoMemSymbol):
             c_var = val.symbol_name
             offset_op = f" + {val.offset}" if val.offset != 0 else ""
@@ -736,7 +757,7 @@ class SnaxBingoKernelXdmaElementwiseAddAbArgs(BingoKernelArgs):
 # scalar in FP32 instead of narrowing it to the FP16 transport -- use it whenever the
 # reduction can exceed fp16 range (e.g. SUMSQ of unscaled activations), since the FP16
 # narrow wraps to garbage (NOT inf) on overflow. The host consumer must then read the
-# scalar as fp32 (stride 16) instead of u16 (stride 32) -- see HostScalarBcast in_fp32.
+# scalar as fp32 (stride 16) instead of u16 (stride 32).
 REDUCE_OP_TAP   = 1 << 8   # 0x100: pass the row through, then emit the scalar beat
 REDUCE_OUT_FP32 = 1 << 9   # 0x200: emit the per-row scalar in FP32 (no FP16 narrow)
 
@@ -948,7 +969,8 @@ class SnaxBingoKernelXdmaStreamElementwiseArgs(BingoKernelArgs):
                  beats: int, op: int, operand_stride: int = 0, operand_count: int = 2,
                  rows: int = 1, csr_mode: int = 0, dst_bound0: Optional[int] = None,
                  out_dtype: int = 0, inv_scale_f32bits: int = 0,
-                 src_b_addr: Union[BingoMemAlloc, int, None] = None):
+                 src_b_addr: Union[BingoMemAlloc, int, None] = None,
+                 src_row_stride: int = 0):
         self.src_addr = src_addr
         self.dst_addr = dst_addr
         self.beats = beats
@@ -962,6 +984,12 @@ class SnaxBingoKernelXdmaStreamElementwiseArgs(BingoKernelArgs):
         self.inv_scale_f32bits = inv_scale_f32bits
         # 0 = use operand_stride; a handle = derive stride from src_b - src_addr at run time.
         self.src_b_addr = 0 if src_b_addr is None else src_b_addr
+        # 0 = flat/packed operands (2D reader). Nonzero = PADDED rows this many bytes apart,
+        # of which only the first `beats` beats are data -> 3D {operand, beat, row} reader that
+        # skips the slack. Use it to consume a TAP-padded map+reduce output (stride
+        # (beats+1)*64); BOTH operands must share the stride, so the broadcast operand is built
+        # at the same pitch by the xDMA stride-0 broadcast pass that produces it.
+        self.src_row_stride = src_row_stride
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_xdma_stream_elementwise_args_t"
@@ -984,6 +1012,7 @@ class SnaxBingoKernelXdmaStreamElementwiseArgs(BingoKernelArgs):
             a["src_b_addr_hi"] = str((self.src_b_addr >> 32) & 0xFFFFFFFF)
         else:
             self._process_addr(self.src_b_addr, "src_b_addr", a, handle_name_map)
+        a["src_row_stride"] = str(self.src_row_stride)
         return a
 
 
@@ -1344,44 +1373,6 @@ class HostBingoKernelIdmaArgs(BingoKernelArgs):
 # (row r one splatted 64-B beat apart), compute a per-row scalar on the CVA6, and
 # splat each fp16 result across a [rows, D] fp16 broadcast buffer for a downstream
 # device StreamElementwise. op: 0=NEG (-x), 1=RECIP (1/x), 2=RSQRT_MEAN (1/sqrt(x/N)).
-BINGO_HOST_SCALAR_NEG        = 0
-BINGO_HOST_SCALAR_RECIP      = 1
-BINGO_HOST_SCALAR_RSQRT_MEAN = 2
-
-
-class HostBingoKernelHostScalarBcastArgs(BingoKernelArgs):
-    KERNEL_NAME = "__host_bingo_kernel_host_scalar_bcast"
-
-    def __init__(self,
-                 in_addr: Union[BingoMemAlloc, BingoMemSymbol, int],
-                 out_addr: Union[BingoMemAlloc, BingoMemSymbol, int],
-                 op: int, rows: int, D: int, N: int = 1, in_fp32: bool = False):
-        # in_fp32: the producing xDMA reduce ran with REDUCE_OUT_FP32, so the scalar
-        # is fp32 at lane 0 (stride 16 f32) -- read it directly instead of fp16
-        # (stride 32 u16). Pair it with SnaxBingoKernelXdmaStreamReduceArgs(out_fp32=True).
-        self.in_addr = in_addr
-        self.out_addr = out_addr
-        self.op = op
-        self.rows = rows
-        self.D = D
-        self.N = N
-        self.in_fp32 = in_fp32
-
-    def get_struct_name(self) -> str:
-        return "__host_bingo_kernel_host_scalar_bcast_args_t"
-
-    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
-        a = {}
-        self._process_addr(self.in_addr, "in_addr", a, handle_name_map, split_64bit=False, as_64bit=True)
-        self._process_addr(self.out_addr, "out_addr", a, handle_name_map, split_64bit=False, as_64bit=True)
-        a["op"] = str(self.op)
-        a["rows"] = str(self.rows)
-        a["D"] = str(self.D)
-        a["N"] = str(self.N)
-        a["in_fp32"] = str(int(self.in_fp32))
-        return a
-
-
 class HostBingoKernelRequantScaleArgs(BingoKernelArgs):
     """Per-tensor fp16->int8 requant scale: reads xmax,nmax (max(x), max(-x) fp16 scalars the xDMA
     StreamReduce(MAX) passes wrote to cluster L1) and writes scale = max|x|/127 (fp32 dequant qsc) +

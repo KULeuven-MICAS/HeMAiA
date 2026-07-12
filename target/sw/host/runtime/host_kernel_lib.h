@@ -689,20 +689,7 @@ DEFINE_FP32_UNARY_KERNEL(gelu, {
     result = __riscv_vfmul_vv_f32m1(v, sig, vl);
 })
 
-// ---- Host scalar broadcast bridge ----
-// Read `rows` per-row fp16 scalars a device xDMA reduction left in cluster L1
-// (row r at fp16 index r*32 — one splatted 64-B beat apart), compute a per-row
-// scalar on the CVA6 (FPU), and splat each fp16 result across a [rows, D] fp16
-// broadcast buffer that the downstream device StreamElementwise multiplies/adds
-// against x. The CVA6 accesses the cluster TCDM directly (in/out are full global
-// L1 addresses). fp16<->fp32 use integer bit-manipulation so they do not depend
-// on scalar zfh support.
-//   op: 0=NEG (-x), 1=RECIP (1/x), 2=RSQRT_MEAN (1/sqrt(x/N))
-// Arg layout: in_addr, out_addr, op, rows, D, N, scratchpad_ptr.
-#define BINGO_HOST_SCALAR_NEG         0
-#define BINGO_HOST_SCALAR_RECIP       1
-#define BINGO_HOST_SCALAR_RSQRT_MEAN  2
-
+// fp16 <-> fp32 bit conversions (integer-only, so no scalar zfh needed).
 static inline float __bingo_host_f16bits_to_f32(uint16_t h){
     uint32_t sign = (uint32_t)(h >> 15) & 1u;
     uint32_t exp  = (uint32_t)(h >> 10) & 0x1Fu;
@@ -758,95 +745,13 @@ static inline int __bingo_host_addr_is_mainmem(uint64_t addr){
            ((local >= (uint64_t)SPM_NARROW_BASE_ADDR) &&
             (local <  (uint64_t)SPM_NARROW_BASE_ADDR + NARROW_SPM_SIZE));
 }
-
-static inline uint64_t __host_bingo_kernel_host_scalar_bcast(void *arg){
-    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
-    uint64_t in_addr  = ((uint64_t *)arg)[0];
-    uint64_t out_addr = ((uint64_t *)arg)[1];
-    uint64_t op       = ((uint64_t *)arg)[2];
-    uint64_t rows     = ((uint64_t *)arg)[3];
-    uint64_t D        = ((uint64_t *)arg)[4];
-    uint64_t N        = ((uint64_t *)arg)[5];
-    uint64_t in_fp32  = ((uint64_t *)arg)[6];   // 0=fp16 scalar, 1=REDUCE_OUT_FP32 fp32 scalar
-    bingo_kernel_scratchpad_t* sp = (bingo_kernel_scratchpad_t*)(uintptr_t)((uint64_t *)arg)[7];
-    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
-    BINGO_TRACE_MARKER(BINGO_TRACE_SCALAR_RUN_START);
-    const uint32_t LANES = 32;  // XDMA_WIDTH(64 B) / sizeof(fp16): per-row scalar stride
-
-    // The reduce's per-row scalars sit at `in_addr`, one splatted 64-B beat apart.
-    // Lane 0 is fp16 (REDUCE_OUT_FP32=0) or fp32 (REDUCE_OUT_FP32=1, the unnarrowed
-    // FP32 value) -- either way the per-row beat stride is the same 64 B, only the
-    // element width read at lane 0 differs. If `in_addr` is already host-cacheable
-    // main memory, read it in place -- the device wrote it behind the write-through
-    // dcache, so a `fence` (DcacheFlushOnFence=1 in occamy_cva6.sv ->
-    // wt_dcache_missunit FLUSH clears every line) before the read refetches the
-    // fresh value. If instead it lives in cluster TCDM, stage each scalar into a
-    // main-memory bounce word via the system iDMA -- the wide AXI path the
-    // reduce/Load already use to reach cluster L1 -- then fence + read the bounce.
-    // BATCH the per-row scalar gather. The producing xDMA reduce wrote `rows` splatted 64-B beats
-    // CONTIGUOUSLY at in_addr (one per row, scalar at lane 0), so stage them ALL into a gather buffer
-    // the kernel allocates ITSELF (bingo_l3_alloc, sized to `rows` -- no arg, no hardcoded cap) in ONE
-    // sys_dma + ONE dcache fence, then read lane 0 of each beat locally -- instead of a cross-cluster
-    // DMA round-trip + a full WT-dcache flush PER ROW (the makespan wall: `rows` serial NoC round-trips
-    // for `rows` 2-4 B scalars).
-    uint8_t chip = get_current_chip_id();
-    int in_mainmem = __bingo_host_addr_is_mainmem(in_addr);
-    uint64_t beat = (uint64_t)LANES * sizeof(uint16_t);         // 64 B per-row scalar beat
-    uint64_t gather = in_mainmem ? in_addr : bingo_l3_alloc(chip, rows * beat);  // freed below
-    const volatile uint8_t* base = (const volatile uint8_t*)(uintptr_t)gather;   // lane 0 of each beat
-    if (!in_mainmem) {
-        uint32_t tf = (uint32_t)sys_dma_memcpy(chip, gather, in_addr, rows * beat);   // ONE staged copy
-        while (*(sys_dma_done_ptr(chip)) != tf) asm volatile("nop");
-    }
-    asm volatile("fence" ::: "memory");  // ONE WT-dcache invalidate before the (now-local) reads
-    // OUT: build the [rows, D] fp16 broadcast in fast host-local (WIDE_SPM) memory, then push it to
-    // the (cross-cluster) out_addr in ONE sys_dma. Splatting straight to a cluster-L1 out_addr is
-    // `rows*D` slow cross-cluster write-through stores -- the REAL host_scalar_bcast wall (NEG, which
-    // has no fdiv/fsqrt, measured the SAME cost as RECIP, so the splat dominates, not the gather/FPU).
-    int out_mainmem = __bingo_host_addr_is_mainmem(out_addr);
-    uint64_t out_bytes = (uint64_t)rows * D * sizeof(uint16_t);
-    uint64_t out_stage = out_mainmem ? out_addr : bingo_l3_alloc(chip, out_bytes);  // freed below
-    volatile uint16_t* out = (volatile uint16_t*)(uintptr_t)out_stage;
-    for (uint64_t r = 0; r < rows; r++) {
-        const volatile void* src = (const volatile void*)(base + (uint64_t)r * beat);  // lane 0 of row r
-        uint16_t h;
-        if (op == BINGO_HOST_SCALAR_NEG && !in_fp32) {
-            h = (uint16_t)(*(const volatile uint16_t*)src ^ 0x8000u);  // -x: fp16 sign flip (no FPU)
-        } else {
-            float v;
-            if (in_fp32) {
-                uint32_t b = *(const volatile uint32_t*)src;     // true FP32 scalar bits
-                __builtin_memcpy(&v, &b, sizeof v);
-            } else {
-                v = __bingo_host_f16bits_to_f32(*(const volatile uint16_t*)src);
-            }
-            float res = (op == BINGO_HOST_SCALAR_NEG)   ? (-v)
-                      : (op == BINGO_HOST_SCALAR_RECIP) ? (1.0f / v)
-                                                        : (1.0f / __builtin_sqrtf(v / (float)N));
-            h = __bingo_host_f32_to_f16bits(res);
-        }
-        for (uint64_t c = 0; c < D; c++) out[r * D + c] = h;     // fast local stores (WIDE_SPM)
-    }
-    if (!out_mainmem) {                          // one bulk push of the whole [rows,D] broadcast
-        asm volatile("fence" ::: "memory");      // flush the local stores before the DMA reads them
-        uint32_t tf = (uint32_t)sys_dma_memcpy(chip, out_addr, out_stage, out_bytes);
-        while (*(sys_dma_done_ptr(chip)) != tf) asm volatile("nop");
-        bingo_l3_free(chip, out_stage);
-    }
-    if (!in_mainmem) bingo_l3_free(chip, gather);
-    BINGO_TRACE_MARKER(BINGO_TRACE_SCALAR_RUN_END);
-    sp->return_value = (uint32_t)(uintptr_t)out_addr;
-    sp->num_return_values = 1;
-    return BINGO_RET_SUCC;
-}
-
 // Per-tensor fp16->int8 REQUANT SCALE. The xDMA computes max|x| = max(MAX(x), MAX(-x)) via two
 // StreamReduce(MAX) passes writing one splatted fp16 scalar each (lane 0 of a 64-B beat) to cluster L1;
 // this tiny host kernel reads those two scalars, computes scale = max|x|/127 (the fp32 dequant qsc a
 // downstream op multiplies by) and inv_scale = 127/max|x| (the fp32 the xDMA fp16_to_int8 narrow reads
 // as a runtime CSR), and writes them out. It reads/writes 2+2 scalars, NOT the 4096-element tensor the
 // host quantize_f16i8 streamed from L3 -- so it is ~free and moves the whole requant onto the xDMA.
-// Mirrors host_scalar_bcast's cluster-L1 bounce: read/write in place if host-cacheable main memory,
+// Uses the usual cluster-L1 bounce: read/write in place if host-cacheable main memory,
 // else stage through the system iDMA + a fence.
 static inline uint64_t __host_bingo_kernel_requant_scale(void *arg){
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);

@@ -27,7 +27,7 @@ except ImportError:
 
 from bingo_utils import DiGraphWrapper
 from bingo_node import BingoNode
-from bingo_mem_handle import BingoMemAlloc
+from bingo_mem_handle import BingoMemAlloc, BingoMemAllocView
 from bingo_kernel_args import (
     BingoKernelArgs,
     HostBingoKernelCerfGatingArgs,
@@ -1639,6 +1639,10 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                 for attr, value in node.kernel_args.__dict__.items():
                      if isinstance(value, BingoMemAlloc):
                          unique_handles.add(value)
+                     # A view is not its own allocation -- collect the buffer it points into, so a
+                     # base only ever referenced through a view is still allocated.
+                     elif isinstance(value, BingoMemAllocView):
+                         unique_handles.add(value.base)
         
         sorted_handles = sorted(list(unique_handles), key=lambda h: h.name)
         handle_name_map = {h: h.get_c_var_name() for h in sorted_handles}
