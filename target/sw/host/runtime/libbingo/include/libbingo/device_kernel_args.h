@@ -484,6 +484,41 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_stream_map_args {
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_xdma_stream_map_args_t;
 
+// MERGED StreamMap -||> StreamReduce: map AND reduce in ONE xDMA task, i.e. per row
+// out = reduce(reduce_op, map(func, a*x + b)). Both reader extensions are enabled for
+// a single task, so the map feeds the reduce inside the datapath and the mapped row is
+// never written out and re-read (this is the softmax exp+Sexp fusion; it replaces a
+// map task followed by a reduce task that re-reads the whole mapped tensor).
+//
+// Output layout depends on the TAP bit (0x100) in reduce_op:
+//   TAP set   -> the mapped row is passed through 1:1 AND the row scalar is appended as
+//                a trailing beat: a PADDED [rows, beats+1] beat tensor. Downstream
+//                readers of the mapped data must respect the (beats+1)*64-byte row
+//                stride (rows=1 needs nothing: a flat `beats`-beat read stops short of
+//                the scalar). dst_bound0 = rows*(beats+1).
+//   TAP clear -> only the per-row scalar beats are written (a stream_reduce over the
+//                MAPPED values, no passthrough).                dst_bound0 = rows.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_stream_map_reduce_args {
+  uint32_t src_addr_hi;
+  uint32_t src_addr_lo;
+  uint32_t dst_addr_hi;
+  uint32_t dst_addr_lo;
+  uint32_t beats;            // beats per row; also the StreamReduce operandCount
+  uint32_t a_f32bits;        // StreamMap operand a (FP32 bit pattern)
+  uint32_t b_f32bits;        // StreamMap operand b (FP32 bit pattern)
+  uint32_t func;             // StreamMap: 0=LINEAR_FP16, 1=EXP_FP16, 2=SILU_FP16
+  uint32_t reduce_op;        // StreamReduce: 0=MAX 1=ADD 2=SUMSQ; |0x100=TAP; |0x200=OUT_FP32
+  uint32_t rows;             // independent rows (flat reader bound = rows*beats)
+  uint32_t csr_mode;         // 0=FULL, 1=STICKY
+  uint32_t dst_bound0;       // writer beats: rows*(beats+1) with TAP, rows without
+  // Optional runtime scale, exactly as in stream_map: if a_addr (hi|lo) != 0 the DM core
+  // reads one FP32 from that L1 word and uses it as the StreamMap 'a' operand (the
+  // GEMM->rmsnorm dequant qsc) instead of the compile-time a_f32bits.
+  uint32_t a_addr_hi;
+  uint32_t a_addr_lo;
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_xdma_stream_map_reduce_args_t;
+
 // Fp16ToInt8: out = clamp(round(x * inv_scale), -128, 127) over rows*beats flat beats, on the
 // HasFp16ToInt8 xDMA datapath (dedicated activation fp16 -> int8 GEMM-operand requant, replacing
 // the host quantize_f16i8). inv_scale_f32bits = FP32 bits of 127/max|x|. dst_bound0 = rows*beats/2.

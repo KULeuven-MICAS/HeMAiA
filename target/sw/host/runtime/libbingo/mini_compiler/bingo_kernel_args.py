@@ -824,6 +824,76 @@ class SnaxBingoKernelXdmaStreamMapArgs(BingoKernelArgs):
         return a
 
 
+class SnaxBingoKernelXdmaStreamMapReduceArgs(BingoKernelArgs):
+    """MERGED StreamMap -||> StreamReduce: the map AND the reduce in ONE xDMA task,
+    i.e. per row out = reduce(reduce_op, map(func, a*x + b)). Both reader extensions are
+    enabled for a single task, so the map feeds the reduce inside the datapath and the
+    mapped row is never written out and re-read -- this is the softmax exp+Sexp fusion,
+    replacing a map task plus a reduce task that re-reads the whole mapped tensor.
+
+    reduce_op: 0=MAX 1=ADD 2=SUMSQ. tap/out_fp32 OR the flag bits in for you.
+
+    Output layout (and the dst_bound0 default) depends on `tap`:
+      tap=True  -> the mapped row passes through 1:1 AND the row scalar is appended as a
+                   trailing beat: a PADDED [rows, beats+1] beat tensor. Allocate
+                   rows*(beats+1)*64 bytes, and mind the padded row stride downstream --
+                   a consumer of the mapped data must either be single-row (rows=1: a
+                   flat `beats`-beat read stops short of the scalar) or address rows at
+                   the (beats+1)*64-byte stride.       dst_bound0 = rows*(beats+1)
+      tap=False -> only the per-row scalar beats are written (a stream_reduce over the
+                   MAPPED values, no passthrough).     dst_bound0 = rows
+    """
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_stream_map_reduce"
+
+    def __init__(self, src_addr: Union[BingoMemAlloc, int], dst_addr: Union[BingoMemAlloc, int],
+                 beats: int, func: int, reduce_op: int, a_f32bits: int = 0x3F800000,
+                 b_f32bits: int = 0, tap: bool = True, out_fp32: bool = False,
+                 rows: int = 1, csr_mode: int = 0, dst_bound0: Optional[int] = None,
+                 a_addr: Union[BingoMemAlloc, int, None] = None):
+        self.src_addr = src_addr
+        self.dst_addr = dst_addr
+        self.beats = beats
+        self.func = func
+        self.a_f32bits = a_f32bits
+        self.b_f32bits = b_f32bits
+        op = reduce_op
+        if tap:
+            op |= REDUCE_OP_TAP
+        if out_fp32:
+            op |= REDUCE_OUT_FP32
+        self.reduce_op = op
+        self.rows = rows
+        self.csr_mode = csr_mode
+        if dst_bound0 is None:
+            # TAP writes beats mapped beats + 1 scalar beat per row; otherwise 1 beat/row.
+            dst_bound0 = rows * (beats + 1) if tap else rows
+        self.dst_bound0 = dst_bound0
+        # 0 = use a_f32bits; a handle = read the runtime 'a' (dequant qsc) from L1 at run time.
+        self.a_addr = 0 if a_addr is None else a_addr
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_xdma_stream_map_reduce_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.src_addr, "src_addr", a, handle_name_map)
+        self._process_addr(self.dst_addr, "dst_addr", a, handle_name_map)
+        a["beats"] = str(self.beats)
+        a["a_f32bits"] = str(self.a_f32bits)
+        a["b_f32bits"] = str(self.b_f32bits)
+        a["func"] = str(self.func)
+        a["reduce_op"] = str(self.reduce_op)
+        a["rows"] = str(self.rows)
+        a["csr_mode"] = str(self.csr_mode)
+        a["dst_bound0"] = str(self.dst_bound0)
+        if isinstance(self.a_addr, int):
+            a["a_addr_lo"] = str(self.a_addr & 0xFFFFFFFF)
+            a["a_addr_hi"] = str((self.a_addr >> 32) & 0xFFFFFFFF)
+        else:
+            self._process_addr(self.a_addr, "a_addr", a, handle_name_map)
+        return a
+
+
 class SnaxBingoKernelXdmaFp16ToInt8Args(BingoKernelArgs):
     """Fp16ToInt8: out = clamp(round(x * inv_scale), -128, 127) over `rows*beats` flat beats,
     on the HasFp16ToInt8 xDMA datapath -- the dedicated activation fp16 -> int8 GEMM-operand

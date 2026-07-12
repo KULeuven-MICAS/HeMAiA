@@ -52,6 +52,7 @@ from bingo_kernel_args import (  # noqa E402
     SnaxBingoKernelXdmaElementwiseAddArgs,
     SnaxBingoKernelXdmaStreamReduceArgs,
     SnaxBingoKernelXdmaStreamMapArgs,
+    SnaxBingoKernelXdmaStreamMapReduceArgs,
     SnaxBingoKernelXdmaStreamElementwiseArgs,
     SnaxBingoKernelXdmaRowMajorToAArgs,
     SnaxBingoKernelXdmaAToRowMajorArgs,
@@ -473,12 +474,14 @@ class SoftmaxOp:
         # T1 max — FULL config establishes the AGU shape the STICKY ops reuse.
         t1 = b.op(f"Max_{i}", "__snax_bingo_kernel_xdma_stream_reduce",
                   SnaxBingoKernelXdmaStreamReduceArgs(l1_x, l1_max, beats, op=0,
-                      red_tap=0, csr_mode=0, dst_bound0=1), load)
-        # T2 exp(x-max) + Σexp fused (StreamMap EXP -||> StreamReduce ADD|TAP), STICKY.
-        t2 = b.op(f"ExpSum_{i}", "__snax_bingo_kernel_xdma_stream_map",
-                  SnaxBingoKernelXdmaStreamMapArgs(l1_x, l1_exp, beats, func=1,
-                      b_f32bits=neg_max_bits, tap_reduce_op=(1 | 0x100),
-                      csr_mode=1, dst_bound0=beats + 1), t1)
+                      csr_mode=0, dst_bound0=1), load)
+        # T2 exp(x-max) + Σexp fused in ONE task on the MERGED map+reduce kernel
+        # (StreamMap EXP -||> StreamReduce ADD|TAP), STICKY. The subtract folds into the
+        # map's `b` because this op is single-row (one shared -max); TAP appends Σexp as
+        # a trailing beat, so l1_exp is the PADDED [1, beats+1] layout.
+        t2 = b.op(f"ExpSum_{i}", "__snax_bingo_kernel_xdma_stream_map_reduce",
+                  SnaxBingoKernelXdmaStreamMapReduceArgs(l1_x, l1_exp, beats, func=1,
+                      reduce_op=1, b_f32bits=neg_max_bits, tap=True, csr_mode=1), t1)
         # T3 out = inv_sum * exp (StreamMap LINEAR), STICKY.
         t3 = b.op(f"Norm_{i}", "__snax_bingo_kernel_xdma_stream_map",
                   SnaxBingoKernelXdmaStreamMapArgs(l1_exp, l1_out, beats, func=0,

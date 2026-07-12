@@ -513,6 +513,121 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_stream_map(void *arg)
     }
 }
 
+// ==========================================================================
+// MERGED StreamMap -||> StreamReduce: the map AND the reduce in ONE xDMA task.
+//
+// Per row: out = reduce(reduce_op, map(func, a*x + b)). Both reader extensions are
+// enabled for a single task. The reader extensions are chained in the hjson's list
+// order (StreamMap, StreamReduce, StreamElementwise, Fp16ToInt8), so the map's output
+// feeds the reduce INSIDE the datapath: the mapped row is never written out and
+// re-read, and two tasks collapse into one.
+//
+// This is the fusion the snax-xdma-softmax-fold / -rmsnorm-fold apps measure. On
+// softmax it replaces the deployed 2-task pair
+//     map(EXP)    -> expb        [task 1, writes rows*beats beats]
+//     reduce(ADD) -> sum[rows]   [task 2, RE-READS all of expb]
+// with one task that emits both, removing a whole pass over the tensor and a whole
+// task setup (~600 cc of CSR orchestration; at rows=4,D=64 the fused task is 242 cc
+// vs 86+197=283 cc for the pair).
+//
+// TWO OUTPUT MODES, selected by the TAP bit (REDUCE_OP_TAP, 0x100) in `reduce_op`:
+//
+//   TAP SET -- "map and reduce, keep both". The mapped row is passed through 1:1 AND
+//     the row's reduction scalar is appended as a TRAILING BEAT. The output is a
+//     PADDED [rows, beats+1] beat tensor:
+//         row r = [ mapped beat 0 ... mapped beat beats-1 | splatted scalar beat ]
+//     dst_bound0 = rows*(beats+1); dst buffer = rows*(beats+1)*64 bytes.
+//     MIND THE PADDED ROW STRIDE. A downstream consumer of the mapped data must
+//     either be single-row (rows=1: a flat reader of `beats` beats simply stops
+//     before the trailing scalar) or address rows at the (beats+1)*64-byte stride
+//     explicitly -- a flat [rows,D] reader would walk the scalar beats as if they
+//     were data. This is the one cost of the fusion.
+//
+//   TAP CLEAR -- "reduce of a mapped stream", no passthrough. Only the per-row scalar
+//     beats are written, exactly like stream_reduce but over the MAPPED values (e.g.
+//     SUMSQ of a dequantized GEMM output without materializing the dequantized tile).
+//     dst_bound0 = rows; dst buffer = rows*64 bytes.
+//
+// OR REDUCE_OUT_FP32 (0x200) into reduce_op to keep the per-row scalar in FP32 instead
+// of narrowing it to the FP16 transport -- see the stream_reduce header; use it
+// whenever the reduction can exceed fp16 range (the narrow wraps to garbage, not inf).
+//
+// The reduce runs over the MAPPED values, so ordering is map-then-reduce and nothing
+// else: an elementwise op can never precede the map in one task (it sits later in the
+// chain). Softmax's x-max subtract therefore stays its own StreamElementwise pass; the
+// scalar `b` only folds the subtract in when every row shares one b (i.e. rows == 1).
+//
+// Arg layout (__snax_bingo_kernel_xdma_stream_map_reduce_args_t):
+//   [0..1] src_addr   [2..3] dst_addr
+//   [4]  beats        (beats per row; also the reduce's operandCount)
+//   [5]  a_f32bits    (StreamMap a, FP32 bits; 1.0f = 0x3F800000)
+//   [6]  b_f32bits    (StreamMap b, FP32 bits)
+//   [7]  func         (StreamMap: 0=LINEAR 1=EXP 2=SILU)
+//   [8]  reduce_op    (StreamReduce: 0=MAX 1=ADD 2=SUMSQ; |0x100=TAP; |0x200=OUT_FP32)
+//   [9]  rows
+//   [10] csr_mode     (0=FULL, 1=STICKY)
+//   [11] dst_bound0   (writer beats: rows*(beats+1) with TAP, rows without)
+//   [12..13] a_addr   (optional runtime 'a', as in stream_map: if nonzero, read the
+//                      FP32 bits from that L1 word instead of the a_f32bits immediate)
+// ==========================================================================
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_stream_map_reduce(void *arg)
+{
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_stream_map_reduce_args_t);
+    if (snrt_is_dm_core()) {
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+        uint32_t *a = (uint32_t *)arg;
+        uint64_t src_addr = make_u64(a[0], a[1]);
+        uint64_t dst_addr = make_u64(a[2], a[3]);
+        uint32_t beats      = a[4];
+        uint32_t a_f32bits  = a[5];
+        uint32_t b_f32bits  = a[6];
+        uint32_t func       = a[7];
+        uint32_t reduce_op  = a[8];
+        uint32_t rows       = a[9];
+        uint32_t csr_mode   = a[10];
+        uint32_t dst_bound0 = a[11];
+        uint32_t a_addr_hi  = a[12];
+        uint32_t a_addr_lo  = a[13];
+        bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_stream_map_reduce_args_t);
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+#if defined(READER_EXT_STREAMMAP) && defined(READER_EXT_STREAMREDUCE)
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
+        // Reader is the flat [rows*beats] beat stream, as in stream_map: the reduce
+        // re-inits per row off its own operandCount=beats counter, so the reader does
+        // not need a row dim of its own. The writer beat count (dst_bound0) is what
+        // differs between the TAP and non-TAP modes, and the caller supplies it.
+        uint32_t flat = rows * beats;
+        uint32_t src_str[2] = { XDMA_WIDTH, flat * XDMA_WIDTH };
+        uint32_t src_bnd[2] = { flat, 1 };
+        // Optional runtime 'a' (same escape hatch as stream_map): a nonzero a_addr means
+        // a kernel wrote the FP32 bits into that L1 word (the dequant qsc); read it
+        // instead of the baked immediate.
+        if (a_addr_lo || a_addr_hi) a_f32bits = *(volatile uint32_t *)a_addr_lo;
+        uint32_t csr_map[3] = { a_f32bits, b_f32bits, func };
+        uint32_t csr_red[2] = { beats, reduce_op };
+        // BOTH extensions on for the one task -- this is the merge.
+        xdma_enable_src_ext(READER_EXT_STREAMMAP, csr_map);
+        xdma_enable_src_ext(READER_EXT_STREAMREDUCE, csr_red);
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
+        uint32_t rc = xdma_stream_launch(src_addr, dst_addr, src_str, src_bnd, dst_bound0, csr_mode);
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
+        xdma_disable_src_ext(READER_EXT_STREAMREDUCE);
+        xdma_disable_src_ext(READER_EXT_STREAMMAP);
+        if (rc != BINGO_RET_SUCC) return BINGO_RET_FAIL;
+#else
+        #error "Regenerate the XDMA CSR map (make snax-sw-gen): missing READER_EXT_STREAMMAP/STREAMREDUCE."
+#endif
+        sp->return_value = (uint32_t)dst_addr;
+        sp->num_return_values = 0;
+        return BINGO_RET_SUCC;
+    } else {
+        printf_safe("[Cluster %d Core %d]: Error! xDMA stream_map_reduce should be called from a DM core!\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+}
+
 // Fp16ToInt8: out[i] = clamp(round(in[i] * inv_scale), -128, 127) over `rows*beats` flat beats.
 // A dedicated fp16 activation -> int8 GEMM-operand requant on the xDMA (HasFp16ToInt8 datapath),
 // replacing the host CVA6 quantize_f16i8 (which reads the fp16 from L3 element-by-element -- the host
