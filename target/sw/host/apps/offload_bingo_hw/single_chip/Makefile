@@ -35,6 +35,7 @@ APPS += basic_quantize_host
 APPS += basic_dequantize_host
 APPS += basic_int32_add_host
 APPS += gemm_ksplit_4cluster
+APPS += gemm_nsplit_accumprevc_4cluster
 APPS += basic_softmax_host
 APPS += attn_reference_4cluster
 APPS += device_host_idma_check_1cluster
