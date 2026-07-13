@@ -34,7 +34,7 @@ int main() {
     asm volatile("fence" ::: "memory");
 
     printf("=== ara sweep: quantize ===\r\n");
-    printf("CYCLES_HEADER,kernel,N,rep,cycles\r\n");
+    printf("CYCLES_HEADER,kernel,prec,N,rep,cycles\r\n");
 
     uint64_t t_args[8];
 
@@ -56,7 +56,10 @@ int main() {
             c0 = ara_get_cycle_count();
             __host_bingo_kernel_quantize_f32i8(t_args);
             c1 = ara_get_cycle_count();
-            printf("CYCLES,quantize,%lu,%d,%lu\r\n", N, rep, c1 - c0);
+            // The "prec" token for a conversion is its in->out PAIR -- which is also the bingo
+            // op id suffix (quantize_f32i8). Without this field the gather regex (which
+            // expects CYCLES,<op>,<prec>,<N>,<rep>,<cyc>) silently dropped every row.
+            printf("CYCLES,quantize,f32i8,%lu,%d,%lu\r\n", N, rep, c1 - c0);
 
             {
                 const int8_t *gq = golden_q[si];

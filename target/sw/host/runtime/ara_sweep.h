@@ -25,9 +25,23 @@
 #pragma once
 
 #define ARA_TOL_FP16   0.05f   // loose: fp16 rounding + (compound) intermediate narrowing
-#define ARA_NSIZES     4
+// Sizes must BRACKET the n the model actually queries, or every query is an extrapolation.
+// Once the per-row scalar+broadcast kernel is gone, the CVA6 does ONLY the per-row scalar math -- an
+// ordinary elementwise unary over the `rows` splatted beats, i.e. n = rows * 32 lanes:
+//
+//   decode  (rows = 1)       -> n =    32     <-- was BELOW the old 64..4096 range
+//   prefill (rows = S = 256) -> n =  8192     <-- was ABOVE it
+//   host-only baseline       -> n = 65536     (the whole [S,D] tensor, xDMA offload disabled)
+//
+// Small n is where extrapolation hurts most (the fixed per-call overhead dominates there), and n=32 is
+// exactly the DECODE operating point -- so 32 and 128 are the highest-value additions, and they are
+// free (still <= OP_MAX_LEN, no buffer growth).
+// Going ABOVE 4096 needs OP_MAX_LEN raised in util/sim/ara/ara_lib.py (N_BIG) -- each fp32 timing
+// buffer is 4*OP_MAX_LEN bytes, so 8192 costs 32 KB/buffer. Add 8192 there when the .data budget allows;
+// until then the prefill point (n=8192) is a 2x linear extrapolation, which these curves tolerate.
+#define ARA_NSIZES     6
 
-static const uint64_t ara_sizes[ARA_NSIZES] = { 64, 256, 1024, 4096 };
+static const uint64_t ara_sizes[ARA_NSIZES] = { 32, 64, 128, 256, 1024, 4096 };
 
 static inline const char *ara_prec_name(uint64_t p) {
     switch (p) {
@@ -61,21 +75,27 @@ static _Float16 ara_b_f16[OP_MAX_LEN] __attribute__((aligned(8)));             \
 static _Float16 ara_o_f16[OP_MAX_LEN] __attribute__((aligned(8)));             \
 static int8_t   ara_o_i8 [OP_MAX_LEN] __attribute__((aligned(8)));             \
 static int16_t  ara_o_i16[OP_MAX_LEN] __attribute__((aligned(8)));             \
+static int32_t  ara_o_i32[OP_MAX_LEN] __attribute__((aligned(8)));             \
 int main(void) {                                                               \
     ARA_SWEEP_INIT(opname);                                                     \
-    static const uint64_t precs[4] = { BINGO_PREC_FP32, BINGO_PREC_FP16,        \
-                                       BINGO_PREC_INT8, BINGO_PREC_INT16 };     \
+    /* INT32 is a first-class Ara precision (an args class exists for every int-capable op at    */ \
+    /* int32, and add_int32 IS the K-split reduce kernel) but was never swept -- so bingo had no */ \
+    /* curve for any of the 10 int32 ops.                                                        */ \
+    static const uint64_t precs[5] = { BINGO_PREC_FP32, BINGO_PREC_FP16,        \
+                                       BINGO_PREC_INT8, BINGO_PREC_INT16,       \
+                                       BINGO_PREC_INT32 };                      \
     for (uint64_t i = 0; i < OP_MAX_LEN; i++) {                                 \
         ara_a_f16[i] = (_Float16)op_a_big[i];                                   \
         ara_b_f16[i] = (_Float16)op_b_big[i]; }                                 \
     uint64_t t[8];                                                              \
-    for (int pi = 0; pi < 4; pi++) { uint64_t prec = precs[pi];                 \
+    for (int pi = 0; pi < 5; pi++) { uint64_t prec = precs[pi];                 \
         for (int si = 0; si < ARA_NSIZES; si++) { uint64_t N = ara_sizes[si];   \
             const void *A, *B; void *O;                                         \
             if (prec == BINGO_PREC_FP32)      { A = op_a_big; B = op_b_big; O = ara_o_f32; } \
             else if (prec == BINGO_PREC_FP16) { A = ara_a_f16; B = ara_b_f16; O = ara_o_f16; } \
             else if (prec == BINGO_PREC_INT8) { A = op_a_i8;  B = op_b_i8;  O = ara_o_i8; }  \
-            else                              { A = op_a_i16; B = op_b_i16; O = ara_o_i16; } \
+            else if (prec == BINGO_PREC_INT16){ A = op_a_i16; B = op_b_i16; O = ara_o_i16; } \
+            else                              { A = op_a_i32; B = op_b_i32; O = ara_o_i32; } \
             t[0] = (uint64_t)(uintptr_t)A; t[1] = (uint64_t)(uintptr_t)B;       \
             t[2] = (uint64_t)(uintptr_t)O; t[3] = N; t[4] = prec;               \
             uint64_t c0 = ara_get_cycle_count();                               \
@@ -119,8 +139,15 @@ int main(void) {                                                               \
             uint64_t c1 = ara_get_cycle_count();                               \
             printf("CYCLES," #opname ",%s,%lu,0,%lu\r\n", ara_prec_name(prec), N, c1 - c0); \
             int errs = 0; float tol = (prec == BINGO_PREC_FP16) ? ARA_TOL_FP16 : (TOLF); \
-            for (uint64_t i=0;i<N;i++) { float ov = (prec==BINGO_PREC_FP16)?(float)ara_o_f16[i]:ara_o_f32[i]; \
-                ARA_FCHECK(ov, golden_big[i], tol, errs); }                    \
+            if (prec == BINGO_PREC_INT8)  { for (uint64_t i=0;i<N;i++)          \
+                    if (ara_o_i8[i]  != golden_i8[i])  errs++; }                \
+            else if (prec == BINGO_PREC_INT16) { for (uint64_t i=0;i<N;i++)     \
+                    if (ara_o_i16[i] != golden_i16[i]) errs++; }                \
+            else if (prec == BINGO_PREC_INT32) { for (uint64_t i=0;i<N;i++)     \
+                    if (ara_o_i32[i] != golden_i32[i]) errs++; }                \
+            else { for (uint64_t i=0;i<N;i++) {                                 \
+                float ov = (prec==BINGO_PREC_FP16)?(float)ara_o_f16[i]:ara_o_f32[i]; \
+                ARA_FCHECK(ov, golden_big[i], tol, errs); } }                   \
             printf("CHECK," #opname ",%s,%lu,%s\r\n", ara_prec_name(prec), N, errs ? "FAIL" : "PASS"); \
         } }                                                                     \
     printf("=== ara " #opname " done ===\r\n"); return 0;                       \
@@ -134,19 +161,25 @@ static _Float16 ara_i_f16[OP_MAX_LEN] __attribute__((aligned(8)));             \
 static _Float16 ara_o_f16[OP_MAX_LEN] __attribute__((aligned(8)));             \
 static int8_t   ara_o_i8 [OP_MAX_LEN] __attribute__((aligned(8)));             \
 static int16_t  ara_o_i16[OP_MAX_LEN] __attribute__((aligned(8)));             \
+static int32_t  ara_o_i32[OP_MAX_LEN] __attribute__((aligned(8)));             \
 int main(void) {                                                               \
     ARA_SWEEP_INIT(opname);                                                     \
-    static const uint64_t precs[4] = { BINGO_PREC_FP32, BINGO_PREC_FP16,        \
-                                       BINGO_PREC_INT8, BINGO_PREC_INT16 };     \
+    /* INT32 is a first-class Ara precision (an args class exists for every int-capable op at    */ \
+    /* int32, and add_int32 IS the K-split reduce kernel) but was never swept -- so bingo had no */ \
+    /* curve for any of the 10 int32 ops.                                                        */ \
+    static const uint64_t precs[5] = { BINGO_PREC_FP32, BINGO_PREC_FP16,        \
+                                       BINGO_PREC_INT8, BINGO_PREC_INT16,       \
+                                       BINGO_PREC_INT32 };                      \
     for (uint64_t i = 0; i < OP_MAX_LEN; i++) ara_i_f16[i] = (_Float16)(SRC)[i]; \
     uint64_t t[8];                                                              \
-    for (int pi = 0; pi < 4; pi++) { uint64_t prec = precs[pi];                 \
+    for (int pi = 0; pi < 5; pi++) { uint64_t prec = precs[pi];                 \
         for (int si = 0; si < ARA_NSIZES; si++) { uint64_t N = ara_sizes[si];   \
             const void *A; void *O;                                             \
             if (prec == BINGO_PREC_FP32)      { A = (SRC);     O = ara_o_f32; }  \
             else if (prec == BINGO_PREC_FP16) { A = ara_i_f16; O = ara_o_f16; }  \
             else if (prec == BINGO_PREC_INT8) { A = op_a_i8;   O = ara_o_i8; }   \
-            else                              { A = op_a_i16;  O = ara_o_i16; }  \
+            else if (prec == BINGO_PREC_INT16){ A = op_a_i16;  O = ara_o_i16; }  \
+            else                              { A = op_a_i32;  O = ara_o_i32; }  \
             t[0] = (uint64_t)(uintptr_t)A; t[1] = (uint64_t)(uintptr_t)O;       \
             t[2] = N; t[3] = prec;                                              \
             uint64_t c0 = ara_get_cycle_count();                               \
@@ -185,8 +218,15 @@ int main(void) {                                                               \
             uint64_t c1 = ara_get_cycle_count();                               \
             printf("CYCLES," #opname ",%s,%lu,0,%lu\r\n", ara_prec_name(prec), N, c1 - c0); \
             int errs = 0; float tol = (prec == BINGO_PREC_FP16) ? ARA_TOL_FP16 : (TOLF); \
-            for (uint64_t i=0;i<N;i++) { float ov = (prec==BINGO_PREC_FP16)?(float)ara_o_f16[i]:ara_o_f32[i]; \
-                ARA_FCHECK(ov, golden_big[i], tol, errs); }                    \
+            if (prec == BINGO_PREC_INT8)  { for (uint64_t i=0;i<N;i++)          \
+                    if (ara_o_i8[i]  != golden_i8[i])  errs++; }                \
+            else if (prec == BINGO_PREC_INT16) { for (uint64_t i=0;i<N;i++)     \
+                    if (ara_o_i16[i] != golden_i16[i]) errs++; }                \
+            else if (prec == BINGO_PREC_INT32) { for (uint64_t i=0;i<N;i++)     \
+                    if (ara_o_i32[i] != golden_i32[i]) errs++; }                \
+            else { for (uint64_t i=0;i<N;i++) {                                 \
+                float ov = (prec==BINGO_PREC_FP16)?(float)ara_o_f16[i]:ara_o_f32[i]; \
+                ARA_FCHECK(ov, golden_big[i], tol, errs); } }                   \
             printf("CHECK," #opname ",%s,%lu,%s\r\n", ara_prec_name(prec), N, errs ? "FAIL" : "PASS"); \
         } }                                                                     \
     printf("=== ara " #opname " done ===\r\n"); return 0;                       \
@@ -199,17 +239,19 @@ int main(void) {                                                               \
 static _Float16 ara_i_f16[OP_MAX_LEN] __attribute__((aligned(8)));             \
 int main(void) {                                                               \
     ARA_SWEEP_INIT(opname);                                                     \
-    static const uint64_t precs[4] = { BINGO_PREC_FP32, BINGO_PREC_FP16,        \
-                                       BINGO_PREC_INT8, BINGO_PREC_INT16 };     \
+    static const uint64_t precs[5] = { BINGO_PREC_FP32, BINGO_PREC_FP16,        \
+                                       BINGO_PREC_INT8, BINGO_PREC_INT16,       \
+                                       BINGO_PREC_INT32 };                      \
     for (uint64_t i = 0; i < OP_MAX_LEN; i++) ara_i_f16[i] = (_Float16)op_a_big[i]; \
     uint64_t t[8]; float sc_f = 0.0f; int32_t sc_i = 0;                         \
-    for (int pi = 0; pi < 4; pi++) { uint64_t prec = precs[pi];                 \
+    for (int pi = 0; pi < 5; pi++) { uint64_t prec = precs[pi];                 \
         for (int si = 0; si < ARA_NSIZES; si++) { uint64_t N = ara_sizes[si];   \
             const void *A; void *O;                                            \
             if (prec == BINGO_PREC_FP32)      { A = op_a_big;  O = &sc_f; }      \
             else if (prec == BINGO_PREC_FP16) { A = ara_i_f16; O = &sc_f; }      \
             else if (prec == BINGO_PREC_INT8) { A = op_a_i8;   O = &sc_i; }      \
-            else                              { A = op_a_i16;  O = &sc_i; }      \
+            else if (prec == BINGO_PREC_INT16){ A = op_a_i16;  O = &sc_i; }      \
+            else                              { A = op_a_i32;  O = &sc_i; }      \
             t[0] = (uint64_t)(uintptr_t)A; t[1] = (uint64_t)(uintptr_t)O;       \
             t[2] = N; t[3] = prec;                                              \
             uint64_t c0 = ara_get_cycle_count();                               \

@@ -156,6 +156,12 @@ _I8_R = {"add": 50, "sub": 50, "mul": 8, "max": 100, "min": 100,
          "relu": 100, "neg": 100, "abs": 100, "reduce_sum": 100, "reduce_max": 100}
 _I16_R = {"add": 10000, "sub": 10000, "mul": 150, "max": 20000, "min": 20000,
           "relu": 20000, "neg": 20000, "abs": 20000, "reduce_sum": 20000, "reduce_max": 20000}
+# INT32 is a first-class Ara precision (BINGO_PREC_INT32 -- HeMAiA has an args class for every
+# int-capable op at int32), but it was never swept, so bingo had no curve for any of the 10 int32 ops.
+# `add_int32` is also the K-split reduce kernel. Ranges keep the exact-integer golden inside int32:
+# reduce_sum over N_BIG=4096 elements of +-100k stays well under 2^31.
+_I32_R = {"add": 1000000, "sub": 1000000, "mul": 30000, "max": 2000000, "min": 2000000,
+          "relu": 2000000, "neg": 2000000, "abs": 2000000, "reduce_sum": 100000, "reduce_max": 2000000}
 
 
 def _int_arr(n, r, seed):
@@ -164,10 +170,11 @@ def _int_arr(n, r, seed):
 
 
 def _emit_int_variants(kernel):
-    """Emit op_a_i8/op_b_i8/golden_i8 (+ i16) for int-capable kernels."""
+    """Emit op_a_i8/op_b_i8/golden_i8 (+ i16, i32) for int-capable kernels."""
     for ctype, suffix, ranges, seed_a, seed_b in (
             ("int8_t", "i8", _I8_R, SEED + 10, SEED + 11),
-            ("int16_t", "i16", _I16_R, SEED + 12, SEED + 13)):
+            ("int16_t", "i16", _I16_R, SEED + 12, SEED + 13),
+            ("int32_t", "i32", _I32_R, SEED + 14, SEED + 15)):
         r = ranges[kernel]
         a = _int_arr(N_BIG, r, seed_a)
         _emit_int_array(f"op_a_{suffix}", N_BIG, a, ctype)
