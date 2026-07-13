@@ -80,7 +80,7 @@ from bingo_mem_handle import BingoMemAlloc, BingoMemSymbol  # noqa E402
 from bingo_kernel_args import (  # noqa E402
     SnaxBingoKernelIdma1dCopyArgs,
     SnaxBingoKernelGemmFullArgs,
-    SnaxBingoKernelXdmaDToRowMajorArgs,
+    xdma_conv_args,
     HostBingoKernelCheckResultArgs,
     HostBingoKernelAraQuantizeF32I8Args,
     HostBingoKernelAraDequantizeI32F32Args,
@@ -519,14 +519,16 @@ def emit_ksplit_gemm_pattern(dfg: BingoDFG, mem: dict, hw: HwParams,
 
     # Reshape step: D-block layout → row-major, fp32 (elem_bytes=4).
     # Runs on the DMA core (core 1) — the kernel asserts this requirement.
+    # the mesh + elem_bytes are the KERNEL, not its args: pick the wrapper bound to (meshRow, meshCol)
+    # at 4-byte elements -- `..._e4_M<meshRow>N<meshCol>`.
+    d2rm_cls = xdma_conv_args("xdma_d_to_row_major", hw.meshRow, hw.meshCol, 4)
     reshape = BingoNode(
         assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=DMA_CORE,
         node_name=f"Reshape_{name}_d2rm",
-        kernel_name="__snax_bingo_kernel_xdma_d_to_row_major",
-        kernel_args=SnaxBingoKernelXdmaDToRowMajorArgs(
+        kernel_name=d2rm_cls.KERNEL_NAME,
+        kernel_args=d2rm_cls(
             src_addr=fp32_dblk_buf, dst_addr=fp32_rm_buf,
-            M_T=M_T, N_T=N_T, meshRow=hw.meshRow, meshCol=hw.meshCol,
-            elem_bytes=4,
+            M_T=M_T, N_T=N_T,
         ),
     )
     dfg.bingo_add_node(reshape)

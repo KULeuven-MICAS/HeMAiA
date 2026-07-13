@@ -619,9 +619,8 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_d_to_row_major_args {
   uint32_t dst_addr_lo;
   uint32_t M_T;           // VersaCore M-tile count
   uint32_t N_T;           // VersaCore N-tile count
-  uint32_t meshRow;
-  uint32_t meshCol;
-  uint32_t elem_bytes;    // 1 for INT8, 4 for INT32/FP32
+  // NOTE: meshRow/meshCol/elem_bytes are NOT fields. They are part of the KERNEL:
+  // __snax_bingo_kernel_xdma_d_to_row_major_e<elem_bytes>_<mesh> binds them as constants.
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_xdma_d_to_row_major_args_t;
 
@@ -632,9 +631,8 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_row_major_to_a_args {
   uint32_t dst_addr_lo;
   uint32_t M_T;
   uint32_t K_T;
-  uint32_t meshRow;
-  uint32_t tileSize;
-  uint32_t elem_bytes;
+  // NOTE: meshRow/tileSize/elem_bytes are NOT fields. They are part of the KERNEL:
+  // __snax_bingo_kernel_xdma_row_major_to_a_e<elem_bytes>_<mesh> binds them as constants.
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_xdma_row_major_to_a_args_t;
 
@@ -645,9 +643,8 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_row_major_to_b_args {
   uint32_t dst_addr_lo;
   uint32_t K_T;
   uint32_t N_T;
-  uint32_t tileSize;
-  uint32_t meshCol;
-  uint32_t elem_bytes;
+  // NOTE: tileSize/meshCol/elem_bytes are NOT fields. They are part of the KERNEL:
+  // __snax_bingo_kernel_xdma_row_major_to_b_e<elem_bytes>_<mesh> binds them as constants.
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_xdma_row_major_to_b_args_t;
 
@@ -658,9 +655,8 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_a_to_row_major_args {
   uint32_t dst_addr_lo;
   uint32_t M_T;
   uint32_t K_T;
-  uint32_t meshRow;
-  uint32_t tileSize;
-  uint32_t elem_bytes;
+  // NOTE: meshRow/tileSize/elem_bytes are NOT fields. They are part of the KERNEL:
+  // __snax_bingo_kernel_xdma_a_to_row_major_e<elem_bytes>_<mesh> binds them as constants.
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_xdma_a_to_row_major_args_t;
 
@@ -671,9 +667,8 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_b_to_row_major_args {
   uint32_t dst_addr_lo;
   uint32_t K_T;
   uint32_t N_T;
-  uint32_t tileSize;
-  uint32_t meshCol;
-  uint32_t elem_bytes;
+  // NOTE: tileSize/meshCol/elem_bytes are NOT fields. They are part of the KERNEL:
+  // __snax_bingo_kernel_xdma_b_to_row_major_e<elem_bytes>_<mesh> binds them as constants.
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_xdma_b_to_row_major_args_t;
 
@@ -684,9 +679,8 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_row_major_to_d_args {
   uint32_t dst_addr_lo;
   uint32_t M_T;
   uint32_t N_T;
-  uint32_t meshRow;
-  uint32_t meshCol;
-  uint32_t elem_bytes;
+  // NOTE: meshRow/meshCol/elem_bytes are NOT fields. They are part of the KERNEL:
+  // __snax_bingo_kernel_xdma_row_major_to_d_e<elem_bytes>_<mesh> binds them as constants.
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_xdma_row_major_to_d_args_t;
 

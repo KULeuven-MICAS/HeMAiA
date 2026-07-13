@@ -48,12 +48,7 @@ from bingo_kernel_args import (  # noqa E402
     SnaxBingoKernelXdmaGather2dArgs,
     SnaxBingoKernelXdmaElementwiseAddArgs,
     SnaxBingoKernelXdmaElementwiseAddAbArgs,
-    SnaxBingoKernelXdmaDToRowMajorArgs,
-    SnaxBingoKernelXdmaRowMajorToDArgs,
-    SnaxBingoKernelXdmaRowMajorToAArgs,
-    SnaxBingoKernelXdmaAToRowMajorArgs,
-    SnaxBingoKernelXdmaRowMajorToBArgs,
-    SnaxBingoKernelXdmaBToRowMajorArgs,
+    xdma_conv_args,
     HostBingoKernelIdmaArgs,
     HostBingoKernelCheckResultArgs,
 )
@@ -174,28 +169,34 @@ def add_l3_direct_layout_test(dfg, name, src_sym, kernel_name, kernel_args_cls,
 
 
 def layout_conversions(M_T, K_T, N_T, meshRow, tileSize, meshCol, elem_bytes):
-    A_kw = dict(M_T=M_T, K_T=K_T, meshRow=meshRow, tileSize=tileSize,
-                elem_bytes=elem_bytes)
-    B_kw = dict(K_T=K_T, N_T=N_T, tileSize=tileSize, meshCol=meshCol,
-                elem_bytes=elem_bytes)
-    D_kw = dict(M_T=M_T, N_T=N_T, meshRow=meshRow, meshCol=meshCol,
-                elem_bytes=elem_bytes)
+    """The 6 layout converters at this (mesh, elem_bytes).
+
+    The mesh and the element width are no longer kernel ARGUMENTS -- they decide which xDMA AGU path
+    the device takes, so each is baked into its own wrapper (`..._e1_M32K2`). `xdma_conv_args` resolves
+    the (family, mesh, elem_bytes) triple to that wrapper's args class, which names the C symbol in
+    KERNEL_NAME. What is left in the args is the two addresses and the two tile counts.
+    """
+    A_kw = dict(M_T=M_T, K_T=K_T)
+    B_kw = dict(K_T=K_T, N_T=N_T)
+    D_kw = dict(M_T=M_T, N_T=N_T)
     A_bytes = M_T * meshRow * K_T * tileSize * elem_bytes
     B_bytes = K_T * tileSize * N_T * meshCol * elem_bytes
     D_bytes = M_T * meshRow * N_T * meshCol * elem_bytes
+    # (family, the two mesh dims its block spans)
+    cls = lambda fam, d1, d2: xdma_conv_args(fam, d1, d2, elem_bytes)
+    rm2a, a2rm = (cls("xdma_row_major_to_a", meshRow, tileSize),
+                  cls("xdma_a_to_row_major", meshRow, tileSize))
+    rm2b, b2rm = (cls("xdma_row_major_to_b", tileSize, meshCol),
+                  cls("xdma_b_to_row_major", tileSize, meshCol))
+    rm2d, d2rm = (cls("xdma_row_major_to_d", meshRow, meshCol),
+                  cls("xdma_d_to_row_major", meshRow, meshCol))
     return [
-        ("row_to_A", "src_A_rm", A_bytes, "__snax_bingo_kernel_xdma_row_major_to_a",
-         SnaxBingoKernelXdmaRowMajorToAArgs, A_kw, A_bytes, "golden_A_layout"),
-        ("A_to_row", "src_A_layout", A_bytes, "__snax_bingo_kernel_xdma_a_to_row_major",
-         SnaxBingoKernelXdmaAToRowMajorArgs, A_kw, A_bytes, "golden_A_rm"),
-        ("row_to_B", "src_B_rm", B_bytes, "__snax_bingo_kernel_xdma_row_major_to_b",
-         SnaxBingoKernelXdmaRowMajorToBArgs, B_kw, B_bytes, "golden_B_layout"),
-        ("B_to_row", "src_B_layout", B_bytes, "__snax_bingo_kernel_xdma_b_to_row_major",
-         SnaxBingoKernelXdmaBToRowMajorArgs, B_kw, B_bytes, "golden_B_rm"),
-        ("row_to_D", "src_D_rm", D_bytes, "__snax_bingo_kernel_xdma_row_major_to_d",
-         SnaxBingoKernelXdmaRowMajorToDArgs, D_kw, D_bytes, "golden_D_layout"),
-        ("D_to_row", "src_D_layout", D_bytes, "__snax_bingo_kernel_xdma_d_to_row_major",
-         SnaxBingoKernelXdmaDToRowMajorArgs, D_kw, D_bytes, "golden_D_rm"),
+        ("row_to_A", "src_A_rm", A_bytes, rm2a.KERNEL_NAME, rm2a, A_kw, A_bytes, "golden_A_layout"),
+        ("A_to_row", "src_A_layout", A_bytes, a2rm.KERNEL_NAME, a2rm, A_kw, A_bytes, "golden_A_rm"),
+        ("row_to_B", "src_B_rm", B_bytes, rm2b.KERNEL_NAME, rm2b, B_kw, B_bytes, "golden_B_layout"),
+        ("B_to_row", "src_B_layout", B_bytes, b2rm.KERNEL_NAME, b2rm, B_kw, B_bytes, "golden_B_rm"),
+        ("row_to_D", "src_D_rm", D_bytes, rm2d.KERNEL_NAME, rm2d, D_kw, D_bytes, "golden_D_layout"),
+        ("D_to_row", "src_D_layout", D_bytes, d2rm.KERNEL_NAME, d2rm, D_kw, D_bytes, "golden_D_rm"),
     ]
 
 

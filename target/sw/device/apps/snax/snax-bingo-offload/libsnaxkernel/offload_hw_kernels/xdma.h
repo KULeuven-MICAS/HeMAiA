@@ -1615,20 +1615,40 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_gather_2d(void *arg)
 //     AGU iterates tpt x c_sub x s_sub x k x n  → 5 temporal dims (max).
 //   else  : CPU fallback
 //
-// ─── Resulting coverage matrix (VersaCore array_shapes x kernel x elem_bytes) ───
-//   array_shape (mR,tS,mC) | A↔R INT8         | A↔R INT32        | D↔R         | B↔R
-//   ─────────────────────────────────────────────────────────────────────────────────
-//   0 (32,2,32)            | CPU¹             | HW (path 2)      | HW (path 2) | CPU²
-//   1 (1,8,64)             | HW (p4 if K_T%8) | HW (p4 if K_T%8) | HW (path 3) | HW
-//   2 (4,8,64)             | HW (p4 if K_T%8) | HW (p4 if K_T%8) | HW (path 3) | HW
-//   3 (8,8,64)             | HW (path 1)      | HW (path 1)      | HW (path 1) | HW
-//   4 (8,32,8)             | HW (path 1)      | HW (path 1)      | HW (path 1) | HW
+// ─── Resulting coverage matrix ────────────────────────────────────────────
+// The mesh and elem_bytes are COMPILE-TIME constants of each kernel (see the wrapper
+// blocks below), so the decision trees above fold: every kernel below IS exactly one
+// path. This table therefore names kernels, not runtime outcomes. It is DERIVED from
+// the conditions above -- if you change them, regenerate it.
 //
-//   ¹ A-tile inner row = tileSize·elem_bytes = 2 < 8 bytes (INT8); can't form an
-//     8-byte beat contiguous in both row-major src and packed A dst. CPU.
-//   ² Same root cause: tileSize=2 prevents 8x8-byte sub-blocking of B-tile.
+// array_shape (mR,tS,mC) = snax_versacore_to_cluster.hjson spatial_unrolling[0]:
+//   idx 0 = (32,2,32)   idx 1 = (1,16,32)   idx 2 = (16,8,16)
+// elem_bytes: e1 = INT8, e2 = FP16, e4 = INT32/FP32.
+//
+//   e#  shape (mR,tS,mC) | A<->R                            | D<->R                            | B<->R
+//   ----------------------------------------------------------------------------------------------------------
+//   e1  0 (32, 2, 32)    | _M32K2  CPU (1)                  | _M32N32 HW p2                    | _K2N32  CPU (2)
+//   e1  1 (1, 16, 32)    | _M1K16  HW p4/p5 (3)             | _M1N32  HW p4/p5 (3)             | _K16N32 HW
+//   e1  2 (16, 8, 16)    | _M16K8  HW p2                    | _M16N16 HW p2                    | _K8N16  HW
+//   e2  0 (32, 2, 32)    | _M32K2  CPU (1)                  | _M32N32 HW p2                    | _K2N32  CPU (2)
+//   e2  1 (1, 16, 32)    | _M1K16  HW p4/p5 (3)             | _M1N32  HW p3                    | _K16N32 HW
+//   e2  2 (16, 8, 16)    | _M16K8  HW p2                    | _M16N16 HW p2                    | _K8N16  HW
+//   e4  0 (32, 2, 32)    | _M32K2  HW p2                    | _M32N32 HW p2                    | _K2N32  CPU (2)
+//   e4  1 (1, 16, 32)    | _M1K16  HW p3                    | _M1N32  HW p3                    | _K16N32 HW
+//   e4  2 (16, 8, 16)    | _M16K8  HW p2                    | _M16N16 HW p2                    | _K8N16  HW
+//
+//   (1) A-tile inner row = tileSize*elem_bytes = 2 (e1) or 4 (e2) < 8 bytes; cannot form
+//       an 8-byte beat contiguous in both row-major src and packed A dst. CPU.
+//   (2) Same root cause: tileSize=2 prevents 8x8-byte sub-blocking of the B-tile, for
+//       every elem_bytes -- the HW Transposer needs tileSize%8 and meshCol%8.
+//   (3) meshRow=1 with a 16-byte inner row misses paths 1-3, so it needs K_T%8 (p4) or
+//       M_T%8 (p5), else CPU. These are the ONLY kernels whose path still depends on a
+//       runtime tile count; everything else is decided at compile time.
 //   CPU paths run on the DM core, which is not coherent with L3, so they stage
 //   non-local (L3) operands through L1 via xdma_cpu_stage_* (snax_xdma_lib.h).
+//
+// NOTE: this table used to list five array shapes -- (32,2,32), (1,8,64), (4,8,64),
+// (8,8,64), (8,32,8) -- which are NOT this RTL build's. Corrected against the cfg.
 // ==========================================================================
 
 // Dispatch helper for the layout-convert HW paths: configures an AGU-only
@@ -1677,7 +1697,7 @@ static inline void xdma_layout_run(
 //     tile_bytes_dst_skip = meshRow * row_bytes_dst (advance past meshRow rows)
 //     tile_bytes_src      = meshRow * meshCol * elem_bytes (one D-tile worth of bytes)
 //     row_bytes_src       = meshCol * elem_bytes         (one row inside a D-tile)
-SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_d_to_row_major(void *arg)
+static inline uint32_t __xdma_d_to_row_major_impl(void *arg, uint32_t meshRow, uint32_t meshCol, uint32_t elem_bytes)
 {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_d_to_row_major_args_t);
     if (!snrt_is_dm_core()) {
@@ -1690,8 +1710,6 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_d_to_row_major(void *arg)
     uint64_t src_addr = make_u64(a[0], a[1]);
     uint64_t dst_addr = make_u64(a[2], a[3]);
     uint32_t M_T = a[4], N_T = a[5];
-    uint32_t meshRow = a[6], meshCol = a[7];
-    uint32_t elem_bytes = a[8];
     bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_d_to_row_major_args_t);
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
@@ -1803,12 +1821,32 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_d_to_row_major(void *arg)
     return BINGO_RET_SUCC;
 }
 
+// The 9 runnable xdma_d_to_row_major kernels = (array shape) x (elem_bytes). Each binds its mesh and
+// element width as compile-time constants, so the AGU-path decision tree above folds away and
+// the wrapper IS its path -- there is no runtime `if` left to pick the wrong one.
+#define BINGO_DEF_XDMA_D_TO_ROW_MAJOR(suffix, d1, d2, eb)                            \
+    SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_d_to_row_major_##suffix(void *arg)     \
+    { return __xdma_d_to_row_major_impl(arg, (d1), (d2), (eb)); }
+
+BINGO_DEF_XDMA_D_TO_ROW_MAJOR(e1_M32N32, 32, 32, 1)
+BINGO_DEF_XDMA_D_TO_ROW_MAJOR(e2_M32N32, 32, 32, 2)
+BINGO_DEF_XDMA_D_TO_ROW_MAJOR(e4_M32N32, 32, 32, 4)
+BINGO_DEF_XDMA_D_TO_ROW_MAJOR(e1_M1N32, 1, 32, 1)
+BINGO_DEF_XDMA_D_TO_ROW_MAJOR(e2_M1N32, 1, 32, 2)
+BINGO_DEF_XDMA_D_TO_ROW_MAJOR(e4_M1N32, 1, 32, 4)
+BINGO_DEF_XDMA_D_TO_ROW_MAJOR(e1_M16N16, 16, 16, 1)
+BINGO_DEF_XDMA_D_TO_ROW_MAJOR(e2_M16N16, 16, 16, 2)
+BINGO_DEF_XDMA_D_TO_ROW_MAJOR(e4_M16N16, 16, 16, 4)
+
+    return BINGO_RET_SUCC;
+}
+
 // row-major → A-layout. See section banner for the path table.
 //   Coverage: paths 1–5; array_shape 0 INT8 (tileSize·elem_bytes=2) lacks any
 //   8-byte beat that's contiguous in both src (row-major rows) and dst
 //   (packed A) → CPU. Other shapes hit a HW path.
 //   Arg layout: src_hi/lo, dst_hi/lo, M_T, K_T, meshRow, tileSize, elem_bytes.
-SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_row_major_to_a(void *arg)
+static inline uint32_t __xdma_row_major_to_a_impl(void *arg, uint32_t meshRow, uint32_t tileSize, uint32_t elem_bytes)
 {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_row_major_to_a_args_t);
     if (!snrt_is_dm_core()) {
@@ -1821,8 +1859,6 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_row_major_to_a(void *arg)
     uint64_t src_addr = make_u64(a[0], a[1]);
     uint64_t dst_addr = make_u64(a[2], a[3]);
     uint32_t M_T = a[4], K_T = a[5];
-    uint32_t meshRow = a[6], tileSize = a[7];
-    uint32_t elem_bytes = a[8];
     bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_row_major_to_a_args_t);
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
@@ -1928,6 +1964,26 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_row_major_to_a(void *arg)
     return BINGO_RET_SUCC;
 }
 
+// The 9 runnable xdma_row_major_to_a kernels = (array shape) x (elem_bytes). Each binds its mesh and
+// element width as compile-time constants, so the AGU-path decision tree above folds away and
+// the wrapper IS its path -- there is no runtime `if` left to pick the wrong one.
+#define BINGO_DEF_XDMA_ROW_MAJOR_TO_A(suffix, d1, d2, eb)                            \
+    SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_row_major_to_a_##suffix(void *arg)     \
+    { return __xdma_row_major_to_a_impl(arg, (d1), (d2), (eb)); }
+
+BINGO_DEF_XDMA_ROW_MAJOR_TO_A(e1_M32K2, 32, 2, 1)
+BINGO_DEF_XDMA_ROW_MAJOR_TO_A(e2_M32K2, 32, 2, 2)
+BINGO_DEF_XDMA_ROW_MAJOR_TO_A(e4_M32K2, 32, 2, 4)
+BINGO_DEF_XDMA_ROW_MAJOR_TO_A(e1_M1K16, 1, 16, 1)
+BINGO_DEF_XDMA_ROW_MAJOR_TO_A(e2_M1K16, 1, 16, 2)
+BINGO_DEF_XDMA_ROW_MAJOR_TO_A(e4_M1K16, 1, 16, 4)
+BINGO_DEF_XDMA_ROW_MAJOR_TO_A(e1_M16K8, 16, 8, 1)
+BINGO_DEF_XDMA_ROW_MAJOR_TO_A(e2_M16K8, 16, 8, 2)
+BINGO_DEF_XDMA_ROW_MAJOR_TO_A(e4_M16K8, 16, 8, 4)
+
+    return BINGO_RET_SUCC;
+}
+
 // row-major → B-layout. B↔R is per-(n,k)-tile transpose-then-tile, so we
 // drive the xDMA Transposer writer extension (mirrors xdma_transpose_2d).
 // The Transposer is fixed at 8x8-byte blocks, so the (n,k) B-tile is
@@ -1937,7 +1993,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_row_major_to_a(void *arg)
 //             (all VersaCore array_shapes 1..4); CPU when tileSize=2 (shape 0).
 //   The CPU path stages non-local (L3) operands through L1 (xdma_cpu_stage_*).
 //   Arg layout: src_hi/lo, dst_hi/lo, K_T, N_T, tileSize, meshCol, elem_bytes.
-SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_row_major_to_b(void *arg)
+static inline uint32_t __xdma_row_major_to_b_impl(void *arg, uint32_t tileSize, uint32_t meshCol, uint32_t elem_bytes)
 {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_row_major_to_b_args_t);
     if (!snrt_is_dm_core()) {
@@ -1950,8 +2006,6 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_row_major_to_b(void *arg)
     uint64_t src_addr = make_u64(a[0], a[1]);
     uint64_t dst_addr = make_u64(a[2], a[3]);
     uint32_t K_T = a[4], N_T = a[5];
-    uint32_t tileSize = a[6], meshCol = a[7];
-    uint32_t elem_bytes = a[8];
     bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_row_major_to_b_args_t);
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
@@ -2042,11 +2096,31 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_row_major_to_b(void *arg)
     return BINGO_RET_SUCC;
 }
 
+// The 9 runnable xdma_row_major_to_b kernels = (array shape) x (elem_bytes). Each binds its mesh and
+// element width as compile-time constants, so the AGU-path decision tree above folds away and
+// the wrapper IS its path -- there is no runtime `if` left to pick the wrong one.
+#define BINGO_DEF_XDMA_ROW_MAJOR_TO_B(suffix, d1, d2, eb)                            \
+    SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_row_major_to_b_##suffix(void *arg)     \
+    { return __xdma_row_major_to_b_impl(arg, (d1), (d2), (eb)); }
+
+BINGO_DEF_XDMA_ROW_MAJOR_TO_B(e1_K2N32, 2, 32, 1)
+BINGO_DEF_XDMA_ROW_MAJOR_TO_B(e2_K2N32, 2, 32, 2)
+BINGO_DEF_XDMA_ROW_MAJOR_TO_B(e4_K2N32, 2, 32, 4)
+BINGO_DEF_XDMA_ROW_MAJOR_TO_B(e1_K16N32, 16, 32, 1)
+BINGO_DEF_XDMA_ROW_MAJOR_TO_B(e2_K16N32, 16, 32, 2)
+BINGO_DEF_XDMA_ROW_MAJOR_TO_B(e4_K16N32, 16, 32, 4)
+BINGO_DEF_XDMA_ROW_MAJOR_TO_B(e1_K8N16, 8, 16, 1)
+BINGO_DEF_XDMA_ROW_MAJOR_TO_B(e2_K8N16, 8, 16, 2)
+BINGO_DEF_XDMA_ROW_MAJOR_TO_B(e4_K8N16, 8, 16, 4)
+
+    return BINGO_RET_SUCC;
+}
+
 // A-layout → row-major. Inverse of row_major_to_a: src/dst stride arrays
 // are swapped versus the forward kernel; same path-selection logic.
 //   Coverage: paths 1–5; same CPU-only cell as forward (array_shape 0 INT8).
 //   Arg layout: src_hi/lo, dst_hi/lo, M_T, K_T, meshRow, tileSize, elem_bytes.
-SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_a_to_row_major(void *arg)
+static inline uint32_t __xdma_a_to_row_major_impl(void *arg, uint32_t meshRow, uint32_t tileSize, uint32_t elem_bytes)
 {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_a_to_row_major_args_t);
     if (!snrt_is_dm_core()) {
@@ -2059,8 +2133,6 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_a_to_row_major(void *arg)
     uint64_t src_addr = make_u64(a[0], a[1]);
     uint64_t dst_addr = make_u64(a[2], a[3]);
     uint32_t M_T = a[4], K_T = a[5];
-    uint32_t meshRow = a[6], tileSize = a[7];
-    uint32_t elem_bytes = a[8];
     bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_a_to_row_major_args_t);
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
@@ -2163,12 +2235,32 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_a_to_row_major(void *arg)
     return BINGO_RET_SUCC;
 }
 
+// The 9 runnable xdma_a_to_row_major kernels = (array shape) x (elem_bytes). Each binds its mesh and
+// element width as compile-time constants, so the AGU-path decision tree above folds away and
+// the wrapper IS its path -- there is no runtime `if` left to pick the wrong one.
+#define BINGO_DEF_XDMA_A_TO_ROW_MAJOR(suffix, d1, d2, eb)                            \
+    SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_a_to_row_major_##suffix(void *arg)     \
+    { return __xdma_a_to_row_major_impl(arg, (d1), (d2), (eb)); }
+
+BINGO_DEF_XDMA_A_TO_ROW_MAJOR(e1_M32K2, 32, 2, 1)
+BINGO_DEF_XDMA_A_TO_ROW_MAJOR(e2_M32K2, 32, 2, 2)
+BINGO_DEF_XDMA_A_TO_ROW_MAJOR(e4_M32K2, 32, 2, 4)
+BINGO_DEF_XDMA_A_TO_ROW_MAJOR(e1_M1K16, 1, 16, 1)
+BINGO_DEF_XDMA_A_TO_ROW_MAJOR(e2_M1K16, 1, 16, 2)
+BINGO_DEF_XDMA_A_TO_ROW_MAJOR(e4_M1K16, 1, 16, 4)
+BINGO_DEF_XDMA_A_TO_ROW_MAJOR(e1_M16K8, 16, 8, 1)
+BINGO_DEF_XDMA_A_TO_ROW_MAJOR(e2_M16K8, 16, 8, 2)
+BINGO_DEF_XDMA_A_TO_ROW_MAJOR(e4_M16K8, 16, 8, 4)
+
+    return BINGO_RET_SUCC;
+}
+
 // B-layout → row-major. Inverse of row_major_to_b: same per-(n,k)-tile
 // transpose, src/dst stride arrays swapped, AGU iterates the same
 // (c_sub, s_sub, k, n) sub-block grid.
 //   Coverage: same as forward — HW for shapes 1..4, CPU for shape 0.
 //   Arg layout: src_hi/lo, dst_hi/lo, K_T, N_T, tileSize, meshCol, elem_bytes.
-SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_b_to_row_major(void *arg)
+static inline uint32_t __xdma_b_to_row_major_impl(void *arg, uint32_t tileSize, uint32_t meshCol, uint32_t elem_bytes)
 {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_b_to_row_major_args_t);
     if (!snrt_is_dm_core()) {
@@ -2181,8 +2273,6 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_b_to_row_major(void *arg)
     uint64_t src_addr = make_u64(a[0], a[1]);
     uint64_t dst_addr = make_u64(a[2], a[3]);
     uint32_t K_T = a[4], N_T = a[5];
-    uint32_t tileSize = a[6], meshCol = a[7];
-    uint32_t elem_bytes = a[8];
     bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_b_to_row_major_args_t);
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
@@ -2273,11 +2363,31 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_b_to_row_major(void *arg)
     return BINGO_RET_SUCC;
 }
 
+// The 9 runnable xdma_b_to_row_major kernels = (array shape) x (elem_bytes). Each binds its mesh and
+// element width as compile-time constants, so the AGU-path decision tree above folds away and
+// the wrapper IS its path -- there is no runtime `if` left to pick the wrong one.
+#define BINGO_DEF_XDMA_B_TO_ROW_MAJOR(suffix, d1, d2, eb)                            \
+    SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_b_to_row_major_##suffix(void *arg)     \
+    { return __xdma_b_to_row_major_impl(arg, (d1), (d2), (eb)); }
+
+BINGO_DEF_XDMA_B_TO_ROW_MAJOR(e1_K2N32, 2, 32, 1)
+BINGO_DEF_XDMA_B_TO_ROW_MAJOR(e2_K2N32, 2, 32, 2)
+BINGO_DEF_XDMA_B_TO_ROW_MAJOR(e4_K2N32, 2, 32, 4)
+BINGO_DEF_XDMA_B_TO_ROW_MAJOR(e1_K16N32, 16, 32, 1)
+BINGO_DEF_XDMA_B_TO_ROW_MAJOR(e2_K16N32, 16, 32, 2)
+BINGO_DEF_XDMA_B_TO_ROW_MAJOR(e4_K16N32, 16, 32, 4)
+BINGO_DEF_XDMA_B_TO_ROW_MAJOR(e1_K8N16, 8, 16, 1)
+BINGO_DEF_XDMA_B_TO_ROW_MAJOR(e2_K8N16, 8, 16, 2)
+BINGO_DEF_XDMA_B_TO_ROW_MAJOR(e4_K8N16, 8, 16, 4)
+
+    return BINGO_RET_SUCC;
+}
+
 // row-major → D-layout. Inverse of d_to_row_major: src/dst stride arrays
 // are swapped versus the forward kernel; same path-selection logic.
 //   Coverage: paths 1–5 cover all 5 VersaCore array_shapes via paths 1–3.
 //   Arg layout: src_hi/lo, dst_hi/lo, M_T, N_T, meshRow, meshCol, elem_bytes.
-SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_row_major_to_d(void *arg)
+static inline uint32_t __xdma_row_major_to_d_impl(void *arg, uint32_t meshRow, uint32_t meshCol, uint32_t elem_bytes)
 {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_row_major_to_d_args_t);
     if (!snrt_is_dm_core()) {
@@ -2290,8 +2400,6 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_row_major_to_d(void *arg)
     uint64_t src_addr = make_u64(a[0], a[1]);
     uint64_t dst_addr = make_u64(a[2], a[3]);
     uint32_t M_T = a[4], N_T = a[5];
-    uint32_t meshRow = a[6], meshCol = a[7];
-    uint32_t elem_bytes = a[8];
     bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_row_major_to_d_args_t);
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
@@ -2394,6 +2502,26 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_row_major_to_d(void *arg)
     }
     sp->return_value = (uint32_t)dst_addr;
     sp->num_return_values = 0;
+    return BINGO_RET_SUCC;
+}
+
+// The 9 runnable xdma_row_major_to_d kernels = (array shape) x (elem_bytes). Each binds its mesh and
+// element width as compile-time constants, so the AGU-path decision tree above folds away and
+// the wrapper IS its path -- there is no runtime `if` left to pick the wrong one.
+#define BINGO_DEF_XDMA_ROW_MAJOR_TO_D(suffix, d1, d2, eb)                            \
+    SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_row_major_to_d_##suffix(void *arg)     \
+    { return __xdma_row_major_to_d_impl(arg, (d1), (d2), (eb)); }
+
+BINGO_DEF_XDMA_ROW_MAJOR_TO_D(e1_M32N32, 32, 32, 1)
+BINGO_DEF_XDMA_ROW_MAJOR_TO_D(e2_M32N32, 32, 32, 2)
+BINGO_DEF_XDMA_ROW_MAJOR_TO_D(e4_M32N32, 32, 32, 4)
+BINGO_DEF_XDMA_ROW_MAJOR_TO_D(e1_M1N32, 1, 32, 1)
+BINGO_DEF_XDMA_ROW_MAJOR_TO_D(e2_M1N32, 1, 32, 2)
+BINGO_DEF_XDMA_ROW_MAJOR_TO_D(e4_M1N32, 1, 32, 4)
+BINGO_DEF_XDMA_ROW_MAJOR_TO_D(e1_M16N16, 16, 16, 1)
+BINGO_DEF_XDMA_ROW_MAJOR_TO_D(e2_M16N16, 16, 16, 2)
+BINGO_DEF_XDMA_ROW_MAJOR_TO_D(e4_M16N16, 16, 16, 4)
+
     return BINGO_RET_SUCC;
 }
 
