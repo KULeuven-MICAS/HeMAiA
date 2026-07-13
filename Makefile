@@ -94,7 +94,7 @@ sw: $(CFG)
 HOST_APP_TYPE ?= offload_legacy
 CHIP_TYPE     ?= single_chip
 WORKLOAD      ?= None
-DEV_APP       ?= snax-versacore-matmul-profile
+DEV_APP       ?= versacore-matmul-profile-1cluster-4chip
 single-sw: $(CFG)
 	$(MAKE) -C ./target/sw single-sw \
 		USER_FLAGS="$(USER_FLAGS)" \
