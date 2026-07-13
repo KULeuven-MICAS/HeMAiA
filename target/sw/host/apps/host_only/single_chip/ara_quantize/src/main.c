@@ -23,6 +23,41 @@
 static int8_t timing_int8_scratch[OP_MAX_LEN] __attribute__((aligned(8)));
 static float timing_scale_scratch __attribute__((aligned(8)));
 static bingo_kernel_scratchpad_t timing_scratchpad __attribute__((aligned(8)));
+// f16i8 input: the fp32 sweep input cast to fp16 at run time (same convention the
+// fp16 arms of ara_sweep.h use -- one input array, cast per precision).
+static _Float16 timing_f16_src[OP_MAX_LEN] __attribute__((aligned(8)));
+
+// One measured point: run the conversion, print its CYCLES row, check the int8 codes
+// AND the emitted per-tensor scale against this size's golden. A macro (not a function
+// taking a kernel pointer) so the kernel call stays DIRECT -- an indirect call would sit
+// inside the cycle window and tax the measurement.
+//
+// PREC_TOK is the in->out pair, which is also the bingo op id suffix (quantize_f32i8 /
+// quantize_f16i8) -- both the CYCLES and CHECK rows carry it, so the two conversions of
+// this one app stay distinguishable.
+#define QUANT_POINT(PREC_TOK, KFN, SRC, GQ, GS)                                     \
+    do {                                                                            \
+        t_args[0] = (uint64_t)(uintptr_t)(SRC);                                     \
+        t_args[1] = (uint64_t)(uintptr_t)timing_int8_scratch;                       \
+        t_args[2] = (uint64_t)(uintptr_t)&timing_scale_scratch;                     \
+        t_args[3] = N;                                                              \
+        t_args[4] = 0;  /* Arg4 = precision: a no-op for the conversion kernels */  \
+        t_args[5] = (uint64_t)(uintptr_t)&timing_scratchpad;                        \
+        uint64_t _c0 = ara_get_cycle_count();                                       \
+        KFN(t_args);                                                                \
+        uint64_t _c1 = ara_get_cycle_count();                                       \
+        printf("CYCLES,quantize," PREC_TOK ",%lu,%d,%lu\r\n", N, rep, _c1 - _c0);   \
+        int _errs = 0;                                                              \
+        for (uint64_t i = 0; i < N; i++) {                                          \
+            int _d = (int)timing_int8_scratch[i] - (int)(GQ)[si][i];                \
+            if (_d < 0) _d = -_d;                                                   \
+            if (_d > 1) _errs++;            /* allow +/-1 rounding */               \
+        }                                                                           \
+        float _ds = timing_scale_scratch - (GS)[si]; if (_ds < 0) _ds = -_ds;       \
+        float _gs = (GS)[si] > 1e-9f ? (GS)[si] : 1e-9f;                            \
+        if (_ds / _gs > 1e-3f) _errs++;                                             \
+        printf("CHECK,quantize," PREC_TOK ",%lu,%s\r\n", N, _errs ? "FAIL" : "PASS"); \
+    } while (0)
 
 // Sizes come from ara_sweep.h. They MUST be the same list ara_lib.py emitted the
 // per-size goldens for: this app indexes golden_q[si]/golden_scale[si] BY SIZE INDEX,
@@ -44,42 +79,22 @@ int main() {
 
     uint64_t t_args[8];
 
+    // f16i8 reuses the fp32 sweep input, cast once to fp16.
+    for (uint64_t i = 0; i < OP_MAX_LEN; i++)
+        timing_f16_src[i] = (_Float16)op_mixed_big[i];
+
     for (int si = 0; si < TIMING_NUM_SIZES; si++) {
         uint64_t N = timing_sizes[si];
 
         for (int rep = 0; rep < TIMING_NUM_REPS; rep++) {
-            uint64_t c0, c1;
-
-            // Quantize (input, int8_out, scale_out, n, scratchpad).
-            t_args[0] = (uint64_t)(uintptr_t)op_mixed_big;
-            t_args[1] = (uint64_t)(uintptr_t)timing_int8_scratch;
-            t_args[2] = (uint64_t)(uintptr_t)&timing_scale_scratch;
-            t_args[3] = N;
-            // Arg4 is precision (ignored by the conversion kernel); the scratchpad
-            // pointer is Arg5 — see __host_bingo_kernel_quantize_f32i8.
-            t_args[4] = 0;
-            t_args[5] = (uint64_t)(uintptr_t)&timing_scratchpad;
-            c0 = ara_get_cycle_count();
-            __host_bingo_kernel_quantize_f32i8(t_args);
-            c1 = ara_get_cycle_count();
-            // The "prec" token for a conversion is its in->out PAIR -- which is also the bingo
-            // op id suffix (quantize_f32i8). Without this field the gather regex (which
-            // expects CYCLES,<op>,<prec>,<N>,<rep>,<cyc>) silently dropped every row.
-            printf("CYCLES,quantize,f32i8,%lu,%d,%lu\r\n", N, rep, c1 - c0);
-
-            {
-                const int8_t *gq = golden_q[si];
-                int errs = 0;
-                for (uint64_t i = 0; i < N; i++) {
-                    int diff = (int)timing_int8_scratch[i] - (int)gq[i];
-                    if (diff < 0) diff = -diff;
-                    if (diff > 1) errs++;   /* allow +/-1 rounding */
-                }
-                float ds = timing_scale_scratch - golden_scale[si]; if (ds < 0) ds = -ds;
-                float gs = golden_scale[si] > 1e-9f ? golden_scale[si] : 1e-9f;
-                if (ds / gs > 1e-3f) errs++;
-                printf("CHECK,quantize,%lu,%s\r\n", N, errs ? "FAIL" : "PASS");
-            }
+            // Both quantize conversions bingo can dispatch. f16i8 is the one the
+            // fp16 activation path feeds (the host-side sibling of the xDMA
+            // Fp16ToInt8 datapath); it has its OWN golden, since rounding the input
+            // to fp16 moves max|x| and therefore the scale and the int8 codes.
+            QUANT_POINT("f32i8", __host_bingo_kernel_quantize_f32i8,
+                        op_mixed_big, golden_q, golden_scale);
+            QUANT_POINT("f16i8", __host_bingo_kernel_quantize_f16i8,
+                        timing_f16_src, golden_q16, golden_scale16);
         }
     }
 

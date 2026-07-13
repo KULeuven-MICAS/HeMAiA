@@ -171,6 +171,13 @@ endif
 # Outputs #
 ###########
 
+# Whatever the APP declared as generated (data headers, offload headers, ...) -- captured
+# HERE, before common.mk appends its own outputs to PARTIAL_OUTPUTS below, so this is the
+# app's generated files and nothing else. $(SRCS) #include some of them (gemm_data.h,
+# xdma_data.h, offload_bingo_hw.h, op_test_data.h), so the -MM dependency scan must not
+# run until they exist -- see the $(DEP) rule.
+APP_GEN_FILES := $(PARTIAL_OUTPUTS)
+
 PARTIAL_ELF     = $(abspath $(BUILDDIR)/$(APP).part.elf)
 PARTIAL_DUMP    = $(abspath $(BUILDDIR)/$(APP).part.dump)
 DEP             = $(abspath $(BUILDDIR)/$(APP).d)
@@ -287,11 +294,40 @@ $(BUILDDIR):
 $(DEVICE_BUILDDIR):
 	mkdir -p $@
 
-$(DEP): $(SRCS) | $(BUILDDIR)
-	$(RISCV_CC) $(RISCV_CFLAGS) -MM -MT '$(PARTIAL_ELF)' $< > $@
-	for elf in $(ELFS); do \
-		$(RISCV_CC) $(RISCV_CFLAGS) -MM -MT '$$elf' $< >> $@; \
-	done
+# Every target whose recipe COMPILES $(SRCS). They must all carry the header
+# prerequisites the compiler discovers. ($(ELFS) and $(ELF) are set in mutually
+# exclusive branches above, so exactly one of them is non-empty here.)
+DEP_TARGETS = $(PARTIAL_ELF) $(ELFS) $(ELF)
+
+# $(APP_GEN_FILES) are prerequisites, not just $(SRCS): the -MM scan COMPILES the sources,
+# which #include the app's generated headers, so those must be generated first. Without
+# them here, `-include $(DEP)` (below) made make remake $(DEP) during its parse phase --
+# ahead of any normal target ordering -- and the scan died on the not-yet-generated
+# gemm_data.h / xdma_data.h.
+$(DEP): $(SRCS) $(APP_GEN_FILES) | $(BUILDDIR)
+	$(RISCV_CC) $(RISCV_CFLAGS) -MM -MT '$(strip $(DEP_TARGETS))' $< > $@
+
+# Read the discovered prerequisites. WITHOUT this include, the .d file was generated and
+# then never consulted: $(DEP) itself only depends on $(SRCS), so editing a HEADER
+# (host_kernel_lib.h, ara_sweep.h, ...) regenerated nothing, left $(DEP) untouched, and
+# make declared the ELF up to date -- "Nothing to be done for 'partial-build'" -- while
+# silently re-staging a binary built from the OLD header. Only a full `make clean`, which
+# the sweep runner happens to do, ever picked up a kernel edit.
+# (make re-makes an included file if it is out of date, so this stays self-updating.)
+#
+# But a bingo_hw workload's $(SRCS) #includes a GENERATED header ($(OFFLOAD_H)), and
+# including $(DEP) makes `make` REMAKE it -- which runs the compiler's -MM pass over those
+# sources. So only pull $(DEP) in once that header exists. Otherwise the -MM pass dies on
+# the missing include, and for a workload the platform guard above deliberately skips
+# (wrong chiplet/cluster count) the header NEVER appears, so it would die every time --
+# turning a clean "[skip]" into a hard error. On the very first build the header is not
+# there yet either, but that build compiles everything from scratch anyway, and the next
+# one picks the deps up.
+ifeq ($(strip $(OFFLOAD_H)),)
+-include $(DEP)
+else ifneq ($(wildcard $(OFFLOAD_H)),)
+-include $(DEP)
+endif
 
 # Partially linked object
 $(PARTIAL_ELF): $(DEP) $(LD_SRCS) | $(BUILDDIR)

@@ -92,6 +92,10 @@ def _f32(x):  # round a Python float to its IEEE-754 binary32 value
     return struct.unpack("f", struct.pack("f", x))[0]
 
 
+def _f16(x):  # round a Python float to its IEEE-754 binary16 value
+    return struct.unpack("e", struct.pack("e", x))[0]
+
+
 def _dequantize(xs):  # mirrors main.c EXACTLY in fp32: int32_src[i] = (int32_t)(op_a_big[i]*100.0f); out = src*0.01f
     # The kernel and test operate on the *emitted* fp32 value of op_a_big (a %.6f
     # literal) and do every step in fp32. Computing the golden in fp64 diverges
@@ -232,6 +236,7 @@ def emit_sweep_header(kernel):
         print(f"static const float* const golden_vec[{len(SIZES)}] = {{ "
               + ", ".join(f"golden_v{si}" for si in range(len(SIZES))) + " };")
     elif kernel == "quantize":
+        # f32i8: quantize the fp32 input directly.
         scales = []
         for si, n in enumerate(SIZES):
             scale, q = _quantize(m[:n])
@@ -241,6 +246,20 @@ def emit_sweep_header(kernel):
               + ", ".join(f"golden_q{si}" for si in range(len(SIZES))) + " };")
         print(f"static const float golden_scale[{len(SIZES)}] = {{ "
               + ", ".join(f"{s:.9g}f" for s in scales) + " };")
+        # f16i8: __host_bingo_kernel_quantize_f16i8 widens the fp16 input back to fp32
+        # and runs the IDENTICAL symmetric scheme, so its exact golden is _quantize()
+        # over the fp16-ROUNDED input -- not the fp32 one. Rounding to fp16 moves
+        # max|x|, hence a different scale, hence different int8 codes; reusing the f32
+        # golden here would only "pass" by hiding behind the +/-1 tolerance.
+        scales16 = []
+        for si, n in enumerate(SIZES):
+            scale, q = _quantize([_f16(x) for x in m[:n]])
+            scales16.append(scale)
+            _emit_int8_array(f"golden_q16_{si}", n, q)
+        print(f"static const int8_t* const golden_q16[{len(SIZES)}] = {{ "
+              + ", ".join(f"golden_q16_{si}" for si in range(len(SIZES))) + " };")
+        print(f"static const float golden_scale16[{len(SIZES)}] = {{ "
+              + ", ".join(f"{s:.9g}f" for s in scales16) + " };")
     else:
         raise SystemExit(f"ara_lib.py: unknown kernel '{kernel}'")
 

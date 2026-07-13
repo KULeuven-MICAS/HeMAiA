@@ -45,9 +45,19 @@ BINGO_TRACE_HEADER_DIR      = $(MKFILE_DIR)bingo_trace_headers
 BINGO_TRACE_HEADER_MANIFEST = $(MKFILE_DIR).bingo_trace_headers
 BINGO_SHARED_TRACE_HEADER   = $(MKFILE_DIR)../../sw/shared/runtime/perf_tracing.h
 
-.PHONY: apps hex clean-apps
+.PHONY: apps hex clean-apps FORCE
 
-$(APP_ELF):
+FORCE:
+
+# FORCE, so the SW build is always consulted. Without it this rule has NO
+# prerequisites: make then treats any existing $(APP_ELF) as up to date and never
+# descends into target/sw, so `make apps` silently re-staged a STALE ELF after a
+# source change (edit main.c / a kernel header -> rebuild -> same old binary; even
+# deleting a generated data header went unnoticed). Only a prior `make clean` --
+# which the sweep runner happens to do -- ever forced a real rebuild.
+# The sub-make does the actual dependency checking, so this is a no-op when the app
+# really is current; it just costs one recursive make.
+$(APP_ELF): FORCE
 	$(MAKE) -C $(MKFILE_DIR)../../sw single-sw CFG=$(CFG) \
 		HOST_APP_TYPE=$(HOST_APP_TYPE) \
 		CHIP_TYPE=$(CHIP_TYPE) \
