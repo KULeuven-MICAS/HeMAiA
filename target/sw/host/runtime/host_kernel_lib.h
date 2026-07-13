@@ -1281,15 +1281,19 @@ __BINGO_BINARY_F16(div, __riscv_vfdiv_vv_f16m1)
 __BINGO_BINARY_F16(max, __riscv_vfmax_vv_f16m1)
 __BINGO_BINARY_F16(min, __riscv_vfmin_vv_f16m1)
 #endif
-__BINGO_BINARY_I8(add, __riscv_vadd_vv_i8m1)   __BINGO_BINARY_I16(add, __riscv_vadd_vv_i16m1)
+__BINGO_BINARY_I8(add, __riscv_vadd_vv_i8m1)   __BINGO_BINARY_I16(add, __riscv_vadd_vv_i16m1)   __BINGO_BINARY_I32(add, __riscv_vadd_vv_i32m1)
 __BINGO_BINARY_I8(sub, __riscv_vsub_vv_i8m1)   __BINGO_BINARY_I16(sub, __riscv_vsub_vv_i16m1)   __BINGO_BINARY_I32(sub, __riscv_vsub_vv_i32m1)
 __BINGO_BINARY_I8(mul, __riscv_vmul_vv_i8m1)   __BINGO_BINARY_I16(mul, __riscv_vmul_vv_i16m1)   __BINGO_BINARY_I32(mul, __riscv_vmul_vv_i32m1)
 __BINGO_BINARY_I8(max, __riscv_vmax_vv_i8m1)   __BINGO_BINARY_I16(max, __riscv_vmax_vv_i16m1)   __BINGO_BINARY_I32(max, __riscv_vmax_vv_i32m1)
 __BINGO_BINARY_I8(min, __riscv_vmin_vv_i8m1)   __BINGO_BINARY_I16(min, __riscv_vmin_vv_i16m1)   __BINGO_BINARY_I32(min, __riscv_vmin_vv_i32m1)
-// add keeps INT_BOTH: its int32 path is the distinct __host_bingo_kernel_add_i32
-// kernel (K-split accumulation, writes scratchpad return-values). sub/mul/max/min
-// take int32 through the dispatcher.
-__BINGO_BINARY_DISPATCH(add, __BINGO_BINARY_CASE_INT_BOTH)
+// add takes int32 through the dispatcher like every other int-capable op. The
+// separate __host_bingo_kernel_add_i32 (K-split partial-D accumulation) stays: it
+// runs the SAME vadd but also publishes the result via the scratchpad at arg[5],
+// which the plain {a,b,out,n,prec} callers (e.g. the ara sweep) do not pass. Before
+// this, `add` dispatched on INT_BOTH and an int32 add fell through to `default:
+// ret = BINGO_RET_FAIL` -- the output was never written, so every add/int32 point
+// silently failed its check.
+__BINGO_BINARY_DISPATCH(add, __BINGO_BINARY_CASE_INT_ALL)
 __BINGO_BINARY_DISPATCH(sub, __BINGO_BINARY_CASE_INT_ALL)
 __BINGO_BINARY_DISPATCH(mul, __BINGO_BINARY_CASE_INT_ALL)
 __BINGO_BINARY_DISPATCH(max, __BINGO_BINARY_CASE_INT_ALL)

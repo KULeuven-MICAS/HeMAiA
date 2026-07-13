@@ -214,3 +214,21 @@ inline uint64_t make_u64(uint32_t hi, uint32_t lo) {
             return BINGO_RET_FAIL;                                            \
         }                                                                    \
     } while (0)
+
+// Refuse a kernel whose xDMA extension the current RTL cfg did not generate.
+// The reader/writer extensions (StreamMap/StreamReduce/StreamElementwise/
+// Fp16ToInt8/...) are OPTIONAL hardware: snax_xdma_addr.h only defines a
+// READER_EXT_*/WRITER_EXT_* index for the ones the cfg actually built. A kernel
+// that needs an absent extension must still COMPILE — the library is shared by
+// every cfg, and an extension is an addition to the base xDMA, not a
+// precondition for it. So the restriction lives at CALL time: the kernel body is
+// dead-code-eliminated (its BINGO_HAS_* flag is a literal 0) and the node fails
+// loudly in the runtime instead of breaking the build of every other kernel.
+#define BINGO_XDMA_EXT_UNSUPPORTED(kname, exts)                              \
+    do {                                                                     \
+        printf_safe("[Cluster %d Core %d]: Error! " kname " needs the xDMA " \
+                    exts " extension, which this RTL cfg does not "          \
+                    "generate. Kernel not executed.\r\n",                    \
+                    snrt_cluster_idx(), snrt_cluster_core_idx());            \
+        return BINGO_RET_FAIL;                                               \
+    } while (0)

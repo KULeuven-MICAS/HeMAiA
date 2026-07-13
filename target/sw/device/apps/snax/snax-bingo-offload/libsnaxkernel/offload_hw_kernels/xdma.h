@@ -14,6 +14,57 @@
 
 #include "../macros.h"
 
+// ==========================================================================
+// Optional xDMA reader-extension availability
+//
+// The streaming-SIMD extensions (StreamMap, StreamReduce, StreamElementwise,
+// Fp16ToInt8) are an EXTENSION to the base xDMA and are only present if the RTL
+// cfg asked for them; the generated snax_xdma_addr.h defines a READER_EXT_* index
+// only for the ones that exist. A cfg without them must still be able to BUILD
+// this library — it just may not CALL those kernels. So each extension gets:
+//
+//   BINGO_HAS_<EXT>  1/0 compile-time flag. The kernels branch on it, and because
+//                    it is a literal the compiler folds the branch away: on a cfg
+//                    that has the extension the check costs nothing, and on one
+//                    that lacks it the whole body is dead-code-eliminated down to
+//                    the BINGO_XDMA_EXT_UNSUPPORTED report.
+//   READER_EXT_<EXT> sentinel 0xFF when absent, so the (unreachable) body still
+//                    compiles. 0xFF is out of range for every cfg, and
+//                    xdma_enable_src_ext() rejects any index >= XDMA_SRC_EXT_NUM,
+//                    so even a mis-gated call cannot program the wrong extension.
+//
+// The WRITER_EXT_* extensions below (ElementwiseAdd, Transposer) are NOT listed
+// here on purpose: those kernels already carry a real CPU fallback and so keep
+// their plain #ifdef, which selects an implementation rather than failing.
+// ==========================================================================
+#if defined(READER_EXT_STREAMMAP)
+#define BINGO_HAS_STREAMMAP 1
+#else
+#define BINGO_HAS_STREAMMAP 0
+#define READER_EXT_STREAMMAP 0xFFu
+#endif
+
+#if defined(READER_EXT_STREAMREDUCE)
+#define BINGO_HAS_STREAMREDUCE 1
+#else
+#define BINGO_HAS_STREAMREDUCE 0
+#define READER_EXT_STREAMREDUCE 0xFFu
+#endif
+
+#if defined(READER_EXT_STREAMELEMENTWISE)
+#define BINGO_HAS_STREAMELEMENTWISE 1
+#else
+#define BINGO_HAS_STREAMELEMENTWISE 0
+#define READER_EXT_STREAMELEMENTWISE 0xFFu
+#endif
+
+#if defined(READER_EXT_FP16TOINT8)
+#define BINGO_HAS_FP16TOINT8 1
+#else
+#define BINGO_HAS_FP16TOINT8 0
+#define READER_EXT_FP16TOINT8 0xFFu
+#endif
+
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_1d_copy(void *arg)
 {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_1d_copy_args_t);
@@ -433,7 +484,8 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_stream_reduce(void *arg)
         uint32_t dst_bound0 = a[8];
         bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_stream_reduce_args_t);
         BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
-#if defined(READER_EXT_STREAMREDUCE)
+        if (!BINGO_HAS_STREAMREDUCE)
+            BINGO_XDMA_EXT_UNSUPPORTED("xdma_stream_reduce", "StreamReduce");
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
         uint32_t src_str[2] = { XDMA_WIDTH, beats * XDMA_WIDTH };
         uint32_t src_bnd[2] = { beats, rows };
@@ -445,9 +497,6 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_stream_reduce(void *arg)
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
         xdma_disable_src_ext(READER_EXT_STREAMREDUCE);
         if (rc != BINGO_RET_SUCC) return BINGO_RET_FAIL;
-#else
-        #error "Regenerate the XDMA CSR map (make snax-sw-gen): missing READER_EXT_STREAMREDUCE."
-#endif
         sp->return_value = (uint32_t)dst_addr;
         sp->num_return_values = 0;
         return BINGO_RET_SUCC;
@@ -482,7 +531,12 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_stream_map(void *arg)
         uint32_t a_addr_lo     = a[14];
         bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_stream_map_args_t);
         BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
-#if defined(READER_EXT_STREAMMAP) && defined(READER_EXT_FP16TOINT8)
+        // The fused quant lane is only touched at out_dtype=1, so a cfg without
+        // Fp16ToInt8 can still run every fp16 map — only the int8 output is refused.
+        if (!BINGO_HAS_STREAMMAP)
+            BINGO_XDMA_EXT_UNSUPPORTED("xdma_stream_map", "StreamMap");
+        if (out_dtype == 1u && !BINGO_HAS_FP16TOINT8)
+            BINGO_XDMA_EXT_UNSUPPORTED("xdma_stream_map with out_dtype=int8", "Fp16ToInt8");
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
         uint32_t flat = rows * beats;
         uint32_t src_str[2] = { XDMA_WIDTH, flat * XDMA_WIDTH };
@@ -503,9 +557,6 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_stream_map(void *arg)
         if (out_dtype == 1u) xdma_disable_src_ext(READER_EXT_FP16TOINT8);
         xdma_disable_src_ext(READER_EXT_STREAMMAP);
         if (rc != BINGO_RET_SUCC) return BINGO_RET_FAIL;
-#else
-        #error "Regenerate the XDMA CSR map (make snax-sw-gen): missing READER_EXT_STREAMMAP/FP16TOINT8."
-#endif
         sp->return_value = (uint32_t)dst_addr;
         sp->num_return_values = 0;
         return BINGO_RET_SUCC;
@@ -593,7 +644,9 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_stream_map_reduce(void *arg)
         uint32_t a_addr_lo  = a[13];
         bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_stream_map_reduce_args_t);
         BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
-#if defined(READER_EXT_STREAMMAP) && defined(READER_EXT_STREAMREDUCE)
+        // The merge chains both reader extensions in one task, so both must exist.
+        if (!BINGO_HAS_STREAMMAP || !BINGO_HAS_STREAMREDUCE)
+            BINGO_XDMA_EXT_UNSUPPORTED("xdma_stream_map_reduce", "StreamMap+StreamReduce");
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
         // Reader is the flat [rows*beats] beat stream, as in stream_map: the reduce
         // re-inits per row off its own operandCount=beats counter, so the reader does
@@ -618,9 +671,6 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_stream_map_reduce(void *arg)
         xdma_disable_src_ext(READER_EXT_STREAMREDUCE);
         xdma_disable_src_ext(READER_EXT_STREAMMAP);
         if (rc != BINGO_RET_SUCC) return BINGO_RET_FAIL;
-#else
-        #error "Regenerate the XDMA CSR map (make snax-sw-gen): missing READER_EXT_STREAMMAP/STREAMREDUCE."
-#endif
         sp->return_value = (uint32_t)dst_addr;
         sp->num_return_values = 0;
         return BINGO_RET_SUCC;
@@ -656,7 +706,9 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_fp16_to_int8(void *arg)
         uint32_t inv_scale_lo  = a[10];  // (127/max|x|, FP32 bits) that requant_scale wrote to L1
         bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_fp16_to_int8_args_t);
         BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
-#if defined(READER_EXT_STREAMMAP) && defined(READER_EXT_FP16TOINT8)
+        // The narrow is chained after an identity StreamMap, so this one needs both.
+        if (!BINGO_HAS_STREAMMAP || !BINGO_HAS_FP16TOINT8)
+            BINGO_XDMA_EXT_UNSUPPORTED("xdma_fp16_to_int8", "StreamMap+Fp16ToInt8");
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
         uint32_t flat = rows * beats;
         uint32_t src_str[2] = { XDMA_WIDTH, flat * XDMA_WIDTH };
@@ -675,9 +727,6 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_fp16_to_int8(void *arg)
         xdma_disable_src_ext(READER_EXT_FP16TOINT8);
         xdma_disable_src_ext(READER_EXT_STREAMMAP);
         if (rc != BINGO_RET_SUCC) return BINGO_RET_FAIL;
-#else
-        #error "Regenerate the XDMA CSR map (make snax-sw-gen): missing READER_EXT_STREAMMAP/FP16TOINT8."
-#endif
         sp->return_value = (uint32_t)dst_addr;
         sp->num_return_values = 0;
         return BINGO_RET_SUCC;
@@ -745,7 +794,12 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_stream_elementwise(void *arg)
         uint32_t src_row_stride = a[15];
         bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_stream_elementwise_args_t);
         BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
-#if defined(READER_EXT_STREAMELEMENTWISE) && defined(READER_EXT_FP16TOINT8)
+        // As in stream_map: the quant lane is only used at out_dtype=1, so a cfg
+        // without Fp16ToInt8 still runs every fp16 elementwise op.
+        if (!BINGO_HAS_STREAMELEMENTWISE)
+            BINGO_XDMA_EXT_UNSUPPORTED("xdma_stream_elementwise", "StreamElementwise");
+        if (out_dtype == 1u && !BINGO_HAS_FP16TOINT8)
+            BINGO_XDMA_EXT_UNSUPPORTED("xdma_stream_elementwise with out_dtype=int8", "Fp16ToInt8");
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
         // If a 2nd operand address is given, derive the operand stride from the two
         // separate buffers at run time. The reader AGU can only stride FORWARD, so the
@@ -795,9 +849,6 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_stream_elementwise(void *arg)
         if (out_dtype == 1u) xdma_disable_src_ext(READER_EXT_FP16TOINT8);
         xdma_disable_src_ext(READER_EXT_STREAMELEMENTWISE);
         if (rc != BINGO_RET_SUCC) return BINGO_RET_FAIL;
-#else
-        #error "Regenerate the XDMA CSR map (make snax-sw-gen): missing READER_EXT_STREAMELEMENTWISE/FP16TOINT8."
-#endif
         sp->return_value = (uint32_t)dst_addr;
         sp->num_return_values = 0;
         return BINGO_RET_SUCC;
@@ -814,7 +865,8 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_stream_elementwise(void *arg)
 // higher -- valid because the ops used are commutative (MUL=0, ADD=1). Enables and
 // disables READER_EXT_STREAMELEMENTWISE around the launch. See the standalone
 // __snax_bingo_kernel_xdma_stream_elementwise above for the full rationale.
-#if defined(READER_EXT_STREAMELEMENTWISE)
+// Callers must check BINGO_HAS_STREAMELEMENTWISE first — this helper assumes the
+// extension exists (on a cfg without it, its only caller returns before reaching here).
 static inline uint32_t xdma_stream_ew2(uint64_t src_a, uint64_t src_b, uint64_t dst,
                                        uint32_t rows, uint32_t beats, uint32_t op)
 {
@@ -831,7 +883,6 @@ static inline uint32_t xdma_stream_ew2(uint64_t src_a, uint64_t src_b, uint64_t 
     xdma_disable_src_ext(READER_EXT_STREAMELEMENTWISE);
     return rc;
 }
-#endif
 
 // Fused FP16 RoPE (interleaved / complex-rotation convention) -- ALL DMA-engine ops:
 //   xswap = adjacent fp16-pair swap of x       (iDMA, two strided 2-byte copies)
@@ -865,7 +916,10 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_rope(void *arg)
         uint32_t rows  = a[9];
         bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_rope_args_t);
         BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
-#if defined(READER_EXT_STREAMELEMENTWISE)
+        // All three of rope's passes are StreamElementwise MUL/ADD; without the
+        // extension there is no DMA-only path left, so refuse the call.
+        if (!BINGO_HAS_STREAMELEMENTWISE)
+            BINGO_XDMA_EXT_UNSUPPORTED("xdma_rope", "StreamElementwise");
         uint32_t row_beats = rows * beats;            // total 64-byte beats
         uint32_t tot_b     = row_beats * XDMA_WIDTH;  // bytes per [rows, D] fp16 buffer
         uint32_t num_elems = row_beats * 32u;         // fp16 elements (32 per 64-B beat)
@@ -902,9 +956,6 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_rope(void *arg)
                         snrt_cluster_idx(), snrt_cluster_core_idx());
             return BINGO_RET_FAIL;
         }
-#else
-        #error "Regenerate the XDMA CSR map (make snax-sw-gen): missing READER_EXT_STREAMELEMENTWISE."
-#endif
         sp->return_value = (uint32_t)out_addr;
         sp->num_return_values = 0;
         return BINGO_RET_SUCC;
@@ -1838,9 +1889,6 @@ BINGO_DEF_XDMA_D_TO_ROW_MAJOR(e1_M16N16, 16, 16, 1)
 BINGO_DEF_XDMA_D_TO_ROW_MAJOR(e2_M16N16, 16, 16, 2)
 BINGO_DEF_XDMA_D_TO_ROW_MAJOR(e4_M16N16, 16, 16, 4)
 
-    return BINGO_RET_SUCC;
-}
-
 // row-major → A-layout. See section banner for the path table.
 //   Coverage: paths 1–5; array_shape 0 INT8 (tileSize·elem_bytes=2) lacks any
 //   8-byte beat that's contiguous in both src (row-major rows) and dst
@@ -1981,9 +2029,6 @@ BINGO_DEF_XDMA_ROW_MAJOR_TO_A(e1_M16K8, 16, 8, 1)
 BINGO_DEF_XDMA_ROW_MAJOR_TO_A(e2_M16K8, 16, 8, 2)
 BINGO_DEF_XDMA_ROW_MAJOR_TO_A(e4_M16K8, 16, 8, 4)
 
-    return BINGO_RET_SUCC;
-}
-
 // row-major → B-layout. B↔R is per-(n,k)-tile transpose-then-tile, so we
 // drive the xDMA Transposer writer extension (mirrors xdma_transpose_2d).
 // The Transposer is fixed at 8x8-byte blocks, so the (n,k) B-tile is
@@ -2112,9 +2157,6 @@ BINGO_DEF_XDMA_ROW_MAJOR_TO_B(e4_K16N32, 16, 32, 4)
 BINGO_DEF_XDMA_ROW_MAJOR_TO_B(e1_K8N16, 8, 16, 1)
 BINGO_DEF_XDMA_ROW_MAJOR_TO_B(e2_K8N16, 8, 16, 2)
 BINGO_DEF_XDMA_ROW_MAJOR_TO_B(e4_K8N16, 8, 16, 4)
-
-    return BINGO_RET_SUCC;
-}
 
 // A-layout → row-major. Inverse of row_major_to_a: src/dst stride arrays
 // are swapped versus the forward kernel; same path-selection logic.
@@ -2252,9 +2294,6 @@ BINGO_DEF_XDMA_A_TO_ROW_MAJOR(e1_M16K8, 16, 8, 1)
 BINGO_DEF_XDMA_A_TO_ROW_MAJOR(e2_M16K8, 16, 8, 2)
 BINGO_DEF_XDMA_A_TO_ROW_MAJOR(e4_M16K8, 16, 8, 4)
 
-    return BINGO_RET_SUCC;
-}
-
 // B-layout → row-major. Inverse of row_major_to_b: same per-(n,k)-tile
 // transpose, src/dst stride arrays swapped, AGU iterates the same
 // (c_sub, s_sub, k, n) sub-block grid.
@@ -2379,9 +2418,6 @@ BINGO_DEF_XDMA_B_TO_ROW_MAJOR(e4_K16N32, 16, 32, 4)
 BINGO_DEF_XDMA_B_TO_ROW_MAJOR(e1_K8N16, 8, 16, 1)
 BINGO_DEF_XDMA_B_TO_ROW_MAJOR(e2_K8N16, 8, 16, 2)
 BINGO_DEF_XDMA_B_TO_ROW_MAJOR(e4_K8N16, 8, 16, 4)
-
-    return BINGO_RET_SUCC;
-}
 
 // row-major → D-layout. Inverse of d_to_row_major: src/dst stride arrays
 // are swapped versus the forward kernel; same path-selection logic.
@@ -2521,7 +2557,3 @@ BINGO_DEF_XDMA_ROW_MAJOR_TO_D(e4_M1N32, 1, 32, 4)
 BINGO_DEF_XDMA_ROW_MAJOR_TO_D(e1_M16N16, 16, 16, 1)
 BINGO_DEF_XDMA_ROW_MAJOR_TO_D(e2_M16N16, 16, 16, 2)
 BINGO_DEF_XDMA_ROW_MAJOR_TO_D(e4_M16N16, 16, 16, 4)
-
-    return BINGO_RET_SUCC;
-}
-

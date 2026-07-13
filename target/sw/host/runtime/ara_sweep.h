@@ -49,6 +49,7 @@ static inline const char *ara_prec_name(uint64_t p) {
         case BINGO_PREC_FP16:  return "fp16";
         case BINGO_PREC_INT8:  return "int8";
         case BINGO_PREC_INT16: return "int16";
+        case BINGO_PREC_INT32: return "int32";
         default:               return "?";
     }
 }
@@ -67,7 +68,7 @@ static inline const char *ara_prec_name(uint64_t p) {
          if (_d / _s > (tol)) (errs)++; } while (0)
 
 // ----- binary elementwise (a, b, out, n, precision) -----
-// INT variant: {fp32, fp16, int8, int16}.  golden_big / golden_i8 / golden_i16.
+// INT variant: {fp32, fp16, int8, int16, int32}.  golden_big / golden_i8 / golden_i16 / golden_i32.
 #define ARA_MAIN_BINARY_INT(opname, TOLF)                                       \
 static float    ara_o_f32[OP_MAX_LEN] __attribute__((aligned(8)));             \
 static _Float16 ara_a_f16[OP_MAX_LEN] __attribute__((aligned(8)));             \
@@ -105,6 +106,7 @@ int main(void) {                                                               \
             int errs = 0;                                                       \
             if (prec == BINGO_PREC_INT8)  { for (uint64_t i=0;i<N;i++) if (ara_o_i8[i]  != golden_i8[i])  errs++; } \
             else if (prec == BINGO_PREC_INT16) { for (uint64_t i=0;i<N;i++) if (ara_o_i16[i] != golden_i16[i]) errs++; } \
+            else if (prec == BINGO_PREC_INT32) { for (uint64_t i=0;i<N;i++) if (ara_o_i32[i] != golden_i32[i]) errs++; } \
             else { float tol = (prec == BINGO_PREC_FP16) ? ARA_TOL_FP16 : (TOLF); \
                 for (uint64_t i=0;i<N;i++) { float ov = (prec==BINGO_PREC_FP16)?(float)ara_o_f16[i]:ara_o_f32[i]; \
                     ARA_FCHECK(ov, golden_big[i], tol, errs); } }              \
@@ -138,16 +140,12 @@ int main(void) {                                                               \
             __host_bingo_kernel_##opname(t);                                    \
             uint64_t c1 = ara_get_cycle_count();                               \
             printf("CYCLES," #opname ",%s,%lu,0,%lu\r\n", ara_prec_name(prec), N, c1 - c0); \
+            /* Float-only op: this sweep runs {fp32, fp16} only (precs[2]), and     */ \
+            /* ara_lib.py emits no int golden for it -- so there is no int arm here. */ \
             int errs = 0; float tol = (prec == BINGO_PREC_FP16) ? ARA_TOL_FP16 : (TOLF); \
-            if (prec == BINGO_PREC_INT8)  { for (uint64_t i=0;i<N;i++)          \
-                    if (ara_o_i8[i]  != golden_i8[i])  errs++; }                \
-            else if (prec == BINGO_PREC_INT16) { for (uint64_t i=0;i<N;i++)     \
-                    if (ara_o_i16[i] != golden_i16[i]) errs++; }                \
-            else if (prec == BINGO_PREC_INT32) { for (uint64_t i=0;i<N;i++)     \
-                    if (ara_o_i32[i] != golden_i32[i]) errs++; }                \
-            else { for (uint64_t i=0;i<N;i++) {                                 \
+            for (uint64_t i=0;i<N;i++) {                                        \
                 float ov = (prec==BINGO_PREC_FP16)?(float)ara_o_f16[i]:ara_o_f32[i]; \
-                ARA_FCHECK(ov, golden_big[i], tol, errs); } }                   \
+                ARA_FCHECK(ov, golden_big[i], tol, errs); }                     \
             printf("CHECK," #opname ",%s,%lu,%s\r\n", ara_prec_name(prec), N, errs ? "FAIL" : "PASS"); \
         } }                                                                     \
     printf("=== ara " #opname " done ===\r\n"); return 0;                       \
@@ -189,6 +187,7 @@ int main(void) {                                                               \
             int errs = 0;                                                       \
             if (prec == BINGO_PREC_INT8)  { for (uint64_t i=0;i<N;i++) if (ara_o_i8[i]  != golden_i8[i])  errs++; } \
             else if (prec == BINGO_PREC_INT16) { for (uint64_t i=0;i<N;i++) if (ara_o_i16[i] != golden_i16[i]) errs++; } \
+            else if (prec == BINGO_PREC_INT32) { for (uint64_t i=0;i<N;i++) if (ara_o_i32[i] != golden_i32[i]) errs++; } \
             else { float tol = (prec == BINGO_PREC_FP16) ? ARA_TOL_FP16 : (TOLF); \
                 for (uint64_t i=0;i<N;i++) { float ov = (prec==BINGO_PREC_FP16)?(float)ara_o_f16[i]:ara_o_f32[i]; \
                     ARA_FCHECK(ov, golden_big[i], tol, errs); } }              \
@@ -217,24 +216,20 @@ int main(void) {                                                               \
             __host_bingo_kernel_##opname(t);                                    \
             uint64_t c1 = ara_get_cycle_count();                               \
             printf("CYCLES," #opname ",%s,%lu,0,%lu\r\n", ara_prec_name(prec), N, c1 - c0); \
+            /* Float-only op: this sweep runs {fp32, fp16} only (precs[2]), and     */ \
+            /* ara_lib.py emits no int golden for it -- so there is no int arm here. */ \
             int errs = 0; float tol = (prec == BINGO_PREC_FP16) ? ARA_TOL_FP16 : (TOLF); \
-            if (prec == BINGO_PREC_INT8)  { for (uint64_t i=0;i<N;i++)          \
-                    if (ara_o_i8[i]  != golden_i8[i])  errs++; }                \
-            else if (prec == BINGO_PREC_INT16) { for (uint64_t i=0;i<N;i++)     \
-                    if (ara_o_i16[i] != golden_i16[i]) errs++; }                \
-            else if (prec == BINGO_PREC_INT32) { for (uint64_t i=0;i<N;i++)     \
-                    if (ara_o_i32[i] != golden_i32[i]) errs++; }                \
-            else { for (uint64_t i=0;i<N;i++) {                                 \
+            for (uint64_t i=0;i<N;i++) {                                        \
                 float ov = (prec==BINGO_PREC_FP16)?(float)ara_o_f16[i]:ara_o_f32[i]; \
-                ARA_FCHECK(ov, golden_big[i], tol, errs); } }                   \
+                ARA_FCHECK(ov, golden_big[i], tol, errs); }                     \
             printf("CHECK," #opname ",%s,%lu,%s\r\n", ara_prec_name(prec), N, errs ? "FAIL" : "PASS"); \
         } }                                                                     \
     printf("=== ara " #opname " done ===\r\n"); return 0;                       \
 }
 
 // ----- reductions (in, scalar_out, n, precision) -----
-// fp32/fp16 write a float; int8/int16 write an int32. golden_reduce[] (float),
-// golden_reduce_i8[]/golden_reduce_i16[] (int32), one entry per sweep size.
+// fp32/fp16 write a float; int8/int16/int32 all write an int32 scalar. golden_reduce[]
+// (float), golden_reduce_i8/_i16/_i32[] (int32), one entry per sweep size.
 #define ARA_MAIN_REDUCE_INT(opname, TOLF)                                       \
 static _Float16 ara_i_f16[OP_MAX_LEN] __attribute__((aligned(8)));             \
 int main(void) {                                                               \
@@ -261,6 +256,7 @@ int main(void) {                                                               \
             int errs = 0;                                                       \
             if (prec == BINGO_PREC_INT8)       { if (sc_i != golden_reduce_i8[si])  errs++; } \
             else if (prec == BINGO_PREC_INT16) { if (sc_i != golden_reduce_i16[si]) errs++; } \
+            else if (prec == BINGO_PREC_INT32) { if (sc_i != golden_reduce_i32[si]) errs++; } \
             else { float tol = (prec == BINGO_PREC_FP16) ? ARA_TOL_FP16 : (TOLF); \
                 ARA_FCHECK(sc_f, golden_reduce[si], tol, errs); }              \
             printf("CHECK," #opname ",%s,%lu,%s\r\n", ara_prec_name(prec), N, errs ? "FAIL" : "PASS"); \

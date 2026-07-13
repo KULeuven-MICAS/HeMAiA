@@ -14,6 +14,7 @@
 #include "host.h"
 #include "host_kernel_lib.h"
 #include "op_test_data.h"
+#include "ara_sweep.h"   // ara_sizes[] / ARA_NSIZES -- the ONE sweep-size list
 
 #define ARA_TOL 0.001f
 
@@ -24,9 +25,11 @@ static int32_t timing_int32_src[OP_MAX_LEN] __attribute__((aligned(8)));
 static float timing_dequant_scale __attribute__((aligned(8)));
 static bingo_kernel_scratchpad_t timing_scratchpad __attribute__((aligned(8)));
 
-#define TIMING_NUM_SIZES 4
+// Sizes come from ara_sweep.h, so this app sweeps the same n as every other one
+// (incl. the n=32 decode point) instead of a private, drifting list.
+#define TIMING_NUM_SIZES ARA_NSIZES
 #define TIMING_NUM_REPS  1
-static const uint64_t timing_sizes[TIMING_NUM_SIZES] = { 64, 256, 1024, 4096 };
+#define timing_sizes     ara_sizes
 
 int main() {
     uintptr_t address_prefix = (uintptr_t)get_current_chip_baseaddress();

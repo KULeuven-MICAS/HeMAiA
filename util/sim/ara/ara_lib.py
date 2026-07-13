@@ -21,7 +21,11 @@ import sys
 
 SEED = 42
 N_BIG = 4096                 # big arrays for the timing sweep
-SIZES = (64, 256, 1024, 4096)  # sweep sizes -- must match main.c timing_sizes
+# Sweep sizes. MUST match ara_sizes[] / ARA_NSIZES in target/sw/host/runtime/ara_sweep.h --
+# the per-size goldens emitted here (golden_vec[], golden_reduce*[]) are indexed by the
+# sweep's size loop, so a short list here is an out-of-bounds read there. 32 and 128 were
+# added for the decode operating point (n = rows*32 lanes = 32 at rows=1).
+SIZES = (32, 64, 128, 256, 1024, 4096)
 
 
 # ---------------------------------------------------------------------------

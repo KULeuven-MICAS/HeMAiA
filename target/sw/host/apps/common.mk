@@ -234,11 +234,47 @@ endif
 
 
 
+# ---- Platform-applicability guard (bingo_hw workloads only) -----------------
+# A bingo workload declares the platform it targets (num_chiplets / num_clusters in
+# its params.hjson). The mini_compiler enforces that: guard_chiplet_count /
+# guard_cluster_count REFUSE to emit $(OFFLOAD_H) when the HW actually built does not
+# match (e.g. a 4-chiplet workload under a 1-chiplet cfg), print a WARNING, and exit
+# cleanly -- "this workload does not apply to this platform".
+#
+# make used to ignore that and compile the .c anyway, dying on the missing include
+# ("fatal error: offload_bingo_hw.h: No such file or directory"). Because the app
+# trees build their workloads as ordinary prerequisites, make stops at the FIRST
+# inapplicable one -- so a single non-matching workload (gemm_msplit_4chiplet_1cluster,
+# first in APPS) took down every other workload behind it, and the only reason the
+# tree ever built was a stale offload header left on disk from a matching cfg.
+#
+# So honour the guard here: generate the header first, and if the guard declined to
+# produce it, build nothing for this workload and say so. Applicable workloads take
+# the identical path as before (the header is already made when the outputs are built).
+ifneq ($(strip $(OFFLOAD_H)),)
+
+.PHONY: partial-build finalize-build __bingo-partial __bingo-finalize
+
+partial-build finalize-build:
+	@$(MAKE) --no-print-directory $(OFFLOAD_H)
+	@if [ -f "$(OFFLOAD_H)" ]; then \
+	    $(MAKE) --no-print-directory __bingo-$(patsubst %-build,%,$@); \
+	else \
+	    echo "[skip] $(APP): platform guard did not emit $(notdir $(OFFLOAD_H)) — workload does not target this HW cfg; nothing to build"; \
+	fi
+
+__bingo-partial: $(PARTIAL_OUTPUTS)
+__bingo-finalize: $(FINAL_OUTPUTS)
+
+else
+
 .PHONY: partial-build
 partial-build: $(PARTIAL_OUTPUTS)
 
 .PHONY: finalize-build
 finalize-build: $(FINAL_OUTPUTS)
+
+endif
 
 .PHONY: clean
 clean:

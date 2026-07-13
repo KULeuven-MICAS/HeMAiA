@@ -14,6 +14,7 @@
 #include "host.h"
 #include "host_kernel_lib.h"
 #include "op_test_data.h"
+#include "ara_sweep.h"   // ara_sizes[] / ARA_NSIZES -- the ONE sweep-size list
 
 #define ARA_TOL 0.001f
 
@@ -23,9 +24,14 @@ static int8_t timing_int8_scratch[OP_MAX_LEN] __attribute__((aligned(8)));
 static float timing_scale_scratch __attribute__((aligned(8)));
 static bingo_kernel_scratchpad_t timing_scratchpad __attribute__((aligned(8)));
 
-#define TIMING_NUM_SIZES 4
+// Sizes come from ara_sweep.h. They MUST be the same list ara_lib.py emitted the
+// per-size goldens for: this app indexes golden_q[si]/golden_scale[si] BY SIZE INDEX,
+// so a private size list silently compares size si against the golden of a different
+// size (a local {64,256,1024,4096} against a 6-entry golden checked N=64 vs the N=32
+// golden, and every quantize point failed).
+#define TIMING_NUM_SIZES ARA_NSIZES
 #define TIMING_NUM_REPS  1
-static const uint64_t timing_sizes[TIMING_NUM_SIZES] = { 64, 256, 1024, 4096 };
+#define timing_sizes     ara_sizes
 
 int main() {
     uintptr_t address_prefix = (uintptr_t)get_current_chip_baseaddress();

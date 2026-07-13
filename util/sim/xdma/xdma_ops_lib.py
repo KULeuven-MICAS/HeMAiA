@@ -54,15 +54,10 @@ from bingo_kernel_args import (  # noqa E402
     SnaxBingoKernelXdmaStreamMapArgs,
     SnaxBingoKernelXdmaStreamMapReduceArgs,
     SnaxBingoKernelXdmaStreamElementwiseArgs,
-    SnaxBingoKernelXdmaRowMajorToAArgs,
-    SnaxBingoKernelXdmaAToRowMajorArgs,
-    SnaxBingoKernelXdmaRowMajorToBArgs,
-    SnaxBingoKernelXdmaBToRowMajorArgs,
-    SnaxBingoKernelXdmaRowMajorToDArgs,
-    SnaxBingoKernelXdmaDToRowMajorArgs,
     HostBingoKernelIdmaArgs,
     HostBingoKernelCheckResultArgs,
 )
+import bingo_kernel_args as _bka  # noqa E402  (layout classes are resolved by shape)
 
 DMA_CORE = 1
 HOST_CORE = 2
@@ -511,14 +506,39 @@ def _layout_dtype(elem_bytes):
     raise ValueError(f"layout conversion elem_bytes={elem_bytes} unsupported")
 
 
+def _layout_cls(family, mesh, elem_bytes):
+    """Resolve the concrete layout-conversion args class for (mesh, elem_bytes).
+
+    The layout kernels used to be ONE class per conversion, taking the mesh and the
+    element width as constructor args. They are now one class per RUNNABLE kernel =
+    (array shape, elem width): the mesh and width are baked into the class
+    (MESH_1/MESH_2/ELEM_BYTES) and select the C symbol it dispatches to (KERNEL_NAME),
+    exactly as the GEMM classes bake ARRAY_SHAPE_IDX. So the caller no longer passes
+    meshRow/tileSize/elem_bytes as args -- it picks the class that already has them,
+    which is what makes "the operands were blocked for this mesh" structural.
+
+    *mesh* is the (MESH_1, MESH_2) pair the family is indexed by:
+      A (row_to_a / a_to_row): (meshRow, tileSize)
+      B (row_to_b / b_to_row): (tileSize, meshCol)
+      D (row_to_d / d_to_row): (meshRow, meshCol)
+    """
+    base = getattr(_bka, f"_SnaxBingoKernelXdma{family}Base")
+    for cls in base.__subclasses__():
+        if (cls.MESH_1, cls.MESH_2, cls.ELEM_BYTES) == (mesh[0], mesh[1], elem_bytes):
+            return cls
+    have = sorted((c.MESH_1, c.MESH_2, c.ELEM_BYTES) for c in base.__subclasses__())
+    raise ValueError(f"no {family} kernel for mesh={mesh} elem_bytes={elem_bytes}; "
+                     f"generated (mesh_1, mesh_2, elem_bytes): {have}")
+
+
 def make_layout_handlers():
     handlers = {}
 
-    def reg(tag, name, kernel, args_cls, gen, sizes):
+    def reg(tag, name, family, gen, sizes):
         h = type(f"Layout_{tag}", (), {})()
         h.tag = tag
         h.name = name
-        h.kernel = kernel
+        h.family = family
 
         def gen_data(c, i, ctx, _gen=gen):
             elem_bytes = c["elem_bytes"]
@@ -527,12 +547,15 @@ def make_layout_handlers():
             return [format_vector_definition(ctype, f"in_{i}", src_arr),
                     format_vector_definition(ctype, f"golden_{i}", golden_arr)]
 
-        def build(b, c, i, prev, _sizes=sizes, _args=args_cls, _kernel=kernel, _tag=tag):
-            n_src, n_dst, kwargs = _sizes(b, c)
+        def build(b, c, i, prev, _sizes=sizes, _fam=family, _tag=tag):
+            n_src, n_dst, kwargs, mesh = _sizes(b, c)
+            cls = _layout_cls(_fam, mesh, c["elem_bytes"])
             l1s = b.l1(f"l1s_{i}", n_src)
             l1d = b.l1(f"l1d_{i}", n_dst)
             load = b.idma_load(f"Load_{i}", b.sym(f"in_{i}"), l1s, n_src, prev)
-            op = b.op(f"Op_{i}", _kernel, _args(src_addr=l1s, dst_addr=l1d, **kwargs), load)
+            # The class names the C kernel: one runnable symbol per (shape, elem width).
+            op = b.op(f"Op_{i}", cls.KERNEL_NAME,
+                      cls(src_addr=l1s, dst_addr=l1d, **kwargs), load)
             return b.store_check(f"{_tag}_cfg{i}", l1d, op, f"golden_{i}", n_dst)
 
         h.gen_data = gen_data
@@ -558,10 +581,8 @@ def _register_layouts(handlers, reg):
     def sz_row_to_a(b, c):
         mR, tS, mC = _mesh(_MESH_HOLDER["ctx"], c)
         nbytes = c["M_T"] * mR * c["K_T"] * tS * c["elem_bytes"]
-        return nbytes, nbytes, dict(M_T=c["M_T"], K_T=c["K_T"], meshRow=mR,
-                                    tileSize=tS, elem_bytes=c["elem_bytes"])
-    reg("row_to_a", "xdma_row_major_to_a", "__snax_bingo_kernel_xdma_row_major_to_a",
-        SnaxBingoKernelXdmaRowMajorToAArgs, gen_row_to_a, sz_row_to_a)
+        return nbytes, nbytes, dict(M_T=c["M_T"], K_T=c["K_T"]), (mR, tS)
+    reg("row_to_a", "xdma_row_major_to_a", "RowMajorToA", gen_row_to_a, sz_row_to_a)
 
     # A_to_row
     def gen_a_to_row(ctx, c):
@@ -573,10 +594,8 @@ def _register_layouts(handlers, reg):
     def sz_a_to_row(b, c):
         mR, tS, mC = _mesh(_MESH_HOLDER["ctx"], c)
         nbytes = c["M_T"] * mR * c["K_T"] * tS * c["elem_bytes"]
-        return nbytes, nbytes, dict(M_T=c["M_T"], K_T=c["K_T"], meshRow=mR,
-                                    tileSize=tS, elem_bytes=c["elem_bytes"])
-    reg("a_to_row", "xdma_a_to_row_major", "__snax_bingo_kernel_xdma_a_to_row_major",
-        SnaxBingoKernelXdmaAToRowMajorArgs, gen_a_to_row, sz_a_to_row)
+        return nbytes, nbytes, dict(M_T=c["M_T"], K_T=c["K_T"]), (mR, tS)
+    reg("a_to_row", "xdma_a_to_row_major", "AToRowMajor", gen_a_to_row, sz_a_to_row)
 
     # row_to_B
     def gen_row_to_b(ctx, c):
@@ -588,10 +607,8 @@ def _register_layouts(handlers, reg):
     def sz_row_to_b(b, c):
         mR, tS, mC = _mesh(_MESH_HOLDER["ctx"], c)
         nbytes = c["K_T"] * tS * c["N_T"] * mC * c["elem_bytes"]
-        return nbytes, nbytes, dict(K_T=c["K_T"], N_T=c["N_T"], tileSize=tS,
-                                    meshCol=mC, elem_bytes=c["elem_bytes"])
-    reg("row_to_b", "xdma_row_major_to_b", "__snax_bingo_kernel_xdma_row_major_to_b",
-        SnaxBingoKernelXdmaRowMajorToBArgs, gen_row_to_b, sz_row_to_b)
+        return nbytes, nbytes, dict(K_T=c["K_T"], N_T=c["N_T"]), (tS, mC)
+    reg("row_to_b", "xdma_row_major_to_b", "RowMajorToB", gen_row_to_b, sz_row_to_b)
 
     # B_to_row
     def gen_b_to_row(ctx, c):
@@ -603,10 +620,8 @@ def _register_layouts(handlers, reg):
     def sz_b_to_row(b, c):
         mR, tS, mC = _mesh(_MESH_HOLDER["ctx"], c)
         nbytes = c["K_T"] * tS * c["N_T"] * mC * c["elem_bytes"]
-        return nbytes, nbytes, dict(K_T=c["K_T"], N_T=c["N_T"], tileSize=tS,
-                                    meshCol=mC, elem_bytes=c["elem_bytes"])
-    reg("b_to_row", "xdma_b_to_row_major", "__snax_bingo_kernel_xdma_b_to_row_major",
-        SnaxBingoKernelXdmaBToRowMajorArgs, gen_b_to_row, sz_b_to_row)
+        return nbytes, nbytes, dict(K_T=c["K_T"], N_T=c["N_T"]), (tS, mC)
+    reg("b_to_row", "xdma_b_to_row_major", "BToRowMajor", gen_b_to_row, sz_b_to_row)
 
     # row_to_D
     def gen_row_to_d(ctx, c):
@@ -618,10 +633,8 @@ def _register_layouts(handlers, reg):
     def sz_row_to_d(b, c):
         mR, tS, mC = _mesh(_MESH_HOLDER["ctx"], c)
         nbytes = c["M_T"] * mR * c["N_T"] * mC * c["elem_bytes"]
-        return nbytes, nbytes, dict(M_T=c["M_T"], N_T=c["N_T"], meshRow=mR,
-                                    meshCol=mC, elem_bytes=c["elem_bytes"])
-    reg("row_to_d", "xdma_row_major_to_d", "__snax_bingo_kernel_xdma_row_major_to_d",
-        SnaxBingoKernelXdmaRowMajorToDArgs, gen_row_to_d, sz_row_to_d)
+        return nbytes, nbytes, dict(M_T=c["M_T"], N_T=c["N_T"]), (mR, mC)
+    reg("row_to_d", "xdma_row_major_to_d", "RowMajorToD", gen_row_to_d, sz_row_to_d)
 
     # D_to_row
     def gen_d_to_row(ctx, c):
@@ -633,10 +646,8 @@ def _register_layouts(handlers, reg):
     def sz_d_to_row(b, c):
         mR, tS, mC = _mesh(_MESH_HOLDER["ctx"], c)
         nbytes = c["M_T"] * mR * c["N_T"] * mC * c["elem_bytes"]
-        return nbytes, nbytes, dict(M_T=c["M_T"], N_T=c["N_T"], meshRow=mR,
-                                    meshCol=mC, elem_bytes=c["elem_bytes"])
-    reg("d_to_row", "xdma_d_to_row_major", "__snax_bingo_kernel_xdma_d_to_row_major",
-        SnaxBingoKernelXdmaDToRowMajorArgs, gen_d_to_row, sz_d_to_row)
+        return nbytes, nbytes, dict(M_T=c["M_T"], N_T=c["N_T"]), (mR, mC)
+    reg("d_to_row", "xdma_d_to_row_major", "DToRowMajor", gen_d_to_row, sz_d_to_row)
 
 
 # Holder so the size-callbacks (which only get the Builder + cfg) can reach the
