@@ -19,6 +19,10 @@ SHELL        := /bin/bash
 DEBUG        ?= OFF # ON to turn on debugging symbols
 CFG          ?= $(realpath $(MKFILE_DIR)../rtl/cfg/lru.hjson)
 SIM_CFG      ?= $(realpath $(MKFILE_DIR)cfg/sim_rtl.hjson)
+# Backend-only mode: consume the immutable outputs of the prepare phase.  A
+# command-line assignment is inherited through the root Makefile's recursive
+# $(MAKE), so `make hemaia_system_vcs PREPARED_SIM_INPUTS=1` reaches this file.
+PREPARED_SIM_INPUTS ?= 0
 
 # A recipe that dies after the shell has already created/truncated `$@` leaves a
 # partial file with a fresh mtime, which make then treats as up to date -- the next
@@ -220,6 +224,39 @@ TESTHARNESS_OUTPUTS  = testharness/testharness.sv \
                        testharness/util/check_finish_mem_macro.sv \
                        testharness/util/check_finish_netlist.sv
 
+ifeq ($(PREPARED_SIM_INPUTS), 1)
+.PHONY: check-prepared-vsim-inputs check-prepared-vcs-inputs
+
+PREPARED_VSIM_INPUTS = $(VSIM_BUILDDIR)/compile.vsim.tcl $(TESTHARNESS_OUTPUTS)
+PREPARED_VCS_INPUTS  = $(VCS_BUILDDIR)/compile.sh $(TESTHARNESS_OUTPUTS)
+
+check-prepared-vsim-inputs:
+	@missing=0; \
+	for input in $(PREPARED_VSIM_INPUTS); do \
+		if [ ! -s "$$input" ]; then \
+			echo "ERROR: PREPARED_SIM_INPUTS=1 requires transferred Questa input: $$input" >&2; \
+			missing=1; \
+		fi; \
+	done; \
+	if [ "$$missing" -ne 0 ]; then \
+		echo "Run the simulation prepare phase and transfer its generated inputs before backend compilation." >&2; \
+		exit 1; \
+	fi
+
+check-prepared-vcs-inputs:
+	@missing=0; \
+	for input in $(PREPARED_VCS_INPUTS); do \
+		if [ ! -s "$$input" ]; then \
+			echo "ERROR: PREPARED_SIM_INPUTS=1 requires transferred VCS input: $$input" >&2; \
+			missing=1; \
+		fi; \
+	done; \
+	if [ "$$missing" -ne 0 ]; then \
+		echo "Run the simulation prepare phase and transfer its generated inputs before backend compilation." >&2; \
+		exit 1; \
+	fi
+endif
+
 OCCAMYGEN_TH_CMD = $(OCCAMYGEN) --cfg $(CFG) --outdir testharness \
 		--testharness-sv $(TESTHARNESS_TPL_DIR)/testharness.sv.tpl \
 		--sim_with_mem_macro $(SIM_WITH_MACRO) \
@@ -302,10 +339,16 @@ clean-vlt: clean-work
 $(VSIM_BUILDDIR):
 	mkdir -p $@
 
+ifeq ($(PREPARED_SIM_INPUTS), 1)
+$(VSIM_BUILDDIR)/compile.vsim.tcl:
+	@echo "ERROR: PREPARED_SIM_INPUTS=1 requires transferred Questa input: $@" >&2
+	@exit 1
+else
 $(VSIM_BUILDDIR)/compile.vsim.tcl: | $(VSIM_BUILDDIR)
 	$(BENDER) script vsim $(VSIM_BENDER) --vlog-arg="$(VLOG_FLAGS) -work $(dir $@) " > $@
 	echo '$(VLOG) -work $(dir $@) $(TB_CC_SOURCES) -vv -ccflags "$(TB_CC_FLAGS)"' >> $@
 	echo 'return 0' >> $@
+endif
 
 $(BIN_DIR):
 	mkdir -p $@
@@ -333,6 +376,10 @@ $(BIN_DIR)/occamy_chip.vsim: $(VSIM_BUILDDIR)/compile.vsim.tcl |$(BIN_DIR)
 				testharness_opt +permissive-off ++$$1' >> $@.gui
 	@chmod +x $@.gui
 
+ifeq ($(PREPARED_SIM_INPUTS), 1)
+$(BIN_DIR)/occamy_chip.vsim: | check-prepared-vsim-inputs
+endif
+
 clean-vsim: clean-work
 	rm -rf $(BIN_DIR)/$(TARGET).vsim $(BIN_DIR)/$(TARGET).vsim.gui $(VSIM_BUILDDIR) $(BIN_DIR)/vsim.wlf $(BIN_DIR)/transcript transcript
 
@@ -348,10 +395,18 @@ $(VCS_BUILDDIR):
 # bender_targets.tmp (cfg-dependent) -- and of the bender manifests, so both are real
 # prerequisites: switching CFG has to re-emit the script, or VCS analyses the source
 # set of a configuration that is no longer the active one.
+ifeq ($(PREPARED_SIM_INPUTS), 1)
+$(VCS_BUILDDIR)/compile.sh:
+	@echo "ERROR: PREPARED_SIM_INPUTS=1 requires transferred VCS input: $@" >&2
+	@exit 1
+VCS_TESTHARNESS_PREREQUISITES :=
+else
 $(VCS_BUILDDIR)/compile.sh: $(BENDER_TARGETS_FILE) $(ROOT)/Bender.yml $(ROOT)/Bender.lock | $(VCS_BUILDDIR)
 	mkdir -p $(VCS_BUILDDIR)
 	${BENDER} script vcs ${VCS_BENDER} --vlog-arg="${VLOGAN_FLAGS}" --vcom-arg="${VHDLAN_FLAGS}" > $@
 	chmod +x $@
+VCS_TESTHARNESS_PREREQUISITES := $(TESTHARNESS_OUTPUTS)
+endif
 
 $(VCS_RUN_SCRIPT): | $(VCS_BUILDDIR)
 	echo 'run' > $@
@@ -359,7 +414,7 @@ $(VCS_RUN_SCRIPT): | $(VCS_BUILDDIR)
 # $(VCS_SOURCES) is the RTL file list bender resolves for these targets. It is a
 # prerequisite so that editing any .sv -- or regenerating target/rtl/src -- rebuilds
 # the simulation binary.
-$(BIN_DIR)/occamy_chip.vcs: $(VCS_BUILDDIR)/compile.sh $(VCS_RUN_SCRIPT) $(VCS_SOURCES) $(TESTHARNESS_OUTPUTS)
+$(BIN_DIR)/occamy_chip.vcs: $(VCS_BUILDDIR)/compile.sh $(VCS_RUN_SCRIPT) $(VCS_SOURCES) $(VCS_TESTHARNESS_PREREQUISITES)
 	bash work-vcs/compile.sh | tee $(dir $<)vcs_compile.log
 	mkdir -p $(BIN_DIR)
 	$(VCS) $(VCS_FLAGS) -o $(BIN_DIR)/occamy_chip.vcs -cc $(CC) -cpp $(CXX) \
@@ -370,6 +425,10 @@ $(BIN_DIR)/occamy_chip.vcs: $(VCS_BUILDDIR)/compile.sh $(VCS_RUN_SCRIPT) $(VCS_S
 	@echo 'cd $$script_dir' >> $@.gui
 	@echo './occamy_chip.vcs -gui -ucli -i ../$(VCS_RUN_SCRIPT) "$$@"' >> $@.gui
 	@chmod +x $@.gui
+
+ifeq ($(PREPARED_SIM_INPUTS), 1)
+$(BIN_DIR)/occamy_chip.vcs: | check-prepared-vcs-inputs
+endif
 
 .PHONY: clean-vcs
 clean-vcs: clean-work

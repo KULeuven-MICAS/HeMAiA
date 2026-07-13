@@ -40,7 +40,6 @@
 module testharness;
     // Drive the CLK signals
     %if pll_present:
-    `define TIMESCALEVAL       1.0e-12    // 1ps
     `define CLK_FREF_FREQ_MHZ  40.0
     // Matches with the real chip freq
     // In this freq, the uart simulation will be super slow
@@ -53,7 +52,6 @@ module testharness;
     `define MEMPOOL_FREQ_MHZ   200.0  // 200 MHz, 1/20 of the main clock
     %endif
     %else:
-    `define TIMESCALEVAL       1.0e-9 // 1ns
     `define CLK_FREF_FREQ_MHZ  500.0 // 500 MHz
     `define PRI_FREQ_MHZ       500.0 // 500 MHz
     %if same_memchip_speed:
@@ -62,9 +60,11 @@ module testharness;
     `define MEMPOOL_FREQ_MHZ   25.0  //  25 MHz, 1/20 of the main clock
     %endif
     %endif
-    `define CLK_FREF_PERIOD     (1.0e-6/`CLK_FREF_FREQ_MHZ/`TIMESCALEVAL)
-    `define PRI_FREF_PERIOD     (1.0e-6/`PRI_FREQ_MHZ/`TIMESCALEVAL)
-    `define MEMPOOL_FREF_PERIOD (1.0e-6/`MEMPOOL_FREQ_MHZ/`TIMESCALEVAL)
+    // Use an explicit unit so simulator-wide -override_timescale flags cannot
+    // reinterpret these numeric periods (notably 40 MHz as 40 kHz in PLL mode).
+    `define CLK_FREF_PERIOD     (1us/`CLK_FREF_FREQ_MHZ)
+    `define PRI_FREF_PERIOD     (1us/`PRI_FREQ_MHZ)
+    `define MEMPOOL_FREF_PERIOD (1us/`MEMPOOL_FREQ_MHZ)
     logic mst_clk_drv, periph_clk_drv, mempool_clk_drv;
     wire  mst_clk_i, periph_clk_i, mempool_clk_i;
     assign mst_clk_i     = mst_clk_drv;

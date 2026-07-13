@@ -42,7 +42,11 @@ MATCH_BGN := 's/+incdir+//g'
 SED_SRCS  := sed -e ${MATCH_END} -e ${MATCH_BGN}
 
 VSIM_BENDER   += -t test -t rtl -t vsim
-ifeq ($(IS_CLEAN_GOAL),)
+# Prepared compiler scripts already contain the resolved source list.  Avoid
+# consulting the backend checkout's live Bender graph in hand-off mode.
+ifeq ($(PREPARED_SIM_INPUTS),1)
+VSIM_SOURCES   =
+else ifeq ($(IS_CLEAN_GOAL),)
 VSIM_SOURCES   = $(shell ${BENDER} script flist ${VSIM_BENDER} | ${SED_SRCS})
 else
 VSIM_SOURCES   =
@@ -54,7 +58,9 @@ VOPT_FLAGS    += +notimingchecks
 # VCS_BUILDDIR should to be the same as the `DEFAULT : ./work-vcs`
 # in target/snitch_cluster/synopsys_sim.setup
 VCS_BENDER   += -t test -t rtl -t vcs
-ifeq ($(IS_CLEAN_GOAL),)
+ifeq ($(PREPARED_SIM_INPUTS),1)
+VCS_SOURCES   =
+else ifeq ($(IS_CLEAN_GOAL),)
 VCS_SOURCES   = $(shell ${BENDER} script flist ${VCS_BENDER} | ${SED_SRCS})
 else
 VCS_SOURCES   =

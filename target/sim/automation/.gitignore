@@ -28,6 +28,10 @@
 /ci/git_ci/*
 !/ci/git_ci/run_git_ci.py
 !/ci/git_ci/task_git_ci.yaml
+!/ci/netlist_ci/
+/ci/netlist_ci/*
+!/ci/netlist_ci/README.md
+!/ci/netlist_ci/run_netlist_ci.py
 
 !/sweep/
 /sweep/*
