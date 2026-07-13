@@ -137,15 +137,26 @@ ALL_OUTPUTS += $$(ELF_$(1)) $$(BIN_$(1)) $$(DUMP_$(1)) $$(DWARF_$(1))
 
 RISCV_LDFLAGS_$(1) = $(RISCV_LDFLAGS) -T$$(BASE_LD_$(1))
 
-# Origin LD generation
-$$(ORIGIN_LD_$(1)): | $(BUILDDIR)
+# Origin LD generation.
+#
+# Written ATOMICALLY (one redirection into a temp, then mv) instead of six sequential
+# `echo >>` appends. The append form is not crash-safe: an interrupted or re-entered build
+# leaves a PARTIAL .ld on disk, and because this rule has no file prerequisites make then
+# considers that stale fragment "up to date" forever and never rewrites it. The next build
+# dies in the linker on a malformed script ("{ expected" / "MEMORY") in a file nobody
+# touched -- a failure with no visible connection to whatever was actually interrupted.
+# A single redirection means the file is either the old one or the complete new one.
+#
+# It also depends on the ORIGIN LIST now: the origin is baked into the file, so if the host
+# app relocates the script MUST be regenerated. With no prerequisites at all it never was.
+$$(ORIGIN_LD_$(1)): $(DEVICE_DIR)/host_app_origin.tmp | $(BUILDDIR)
 	@echo "Generating origin LD for $(1) with origin $(2)"
-	echo "L3_ORIGIN = $(2);" > $$@
-	echo "L3_LENGTH = 0x100000000 - L3_ORIGIN;" >> $$@
-	echo "MEMORY" >> $$@
-	echo "{" >> $$@
-	echo "    L3 (rwxa) : ORIGIN = L3_ORIGIN, LENGTH = L3_LENGTH" >> $$@
-	echo "}" >> $$@
+	@{ echo "L3_ORIGIN = $(2);"; \
+	   echo "L3_LENGTH = 0x100000000 - L3_ORIGIN;"; \
+	   echo "MEMORY"; \
+	   echo "{"; \
+	   echo "    L3 (rwxa) : ORIGIN = L3_ORIGIN, LENGTH = L3_LENGTH"; \
+	   echo "}"; } > $$@.tmp && mv -f $$@.tmp $$@
 
 # Base LD generation
 $$(BASE_LD_$(1)): $(BASE_TEMPLATE_LD) | $(BUILDDIR)
