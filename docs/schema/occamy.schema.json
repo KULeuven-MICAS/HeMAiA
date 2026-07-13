@@ -281,6 +281,12 @@
                     "type": "integer",
                     "description": "Allocated size and offset of each quadrant axi lite configuration. defaults to 0x10000",
                     "default": 65536
+                },
+                "dep_tag_width": {
+                    "type": "integer",
+                    "description": "Width of the bingo HW manager per-edge dependency tag (DepTagWidth). Bounds the number of concurrently live producers a dependency cell can distinguish; exported to SW as BINGO_DEP_TAG_WIDTH so the task-descriptor packing matches the RTL.",
+                    "minimum": 1,
+                    "default": 4
                 }
 
             }

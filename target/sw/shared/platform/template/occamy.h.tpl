@@ -23,3 +23,9 @@
 // dedicated interrupt target appended after this chiplet's harts). Keep in sync with
 // occamy.py hw_manager_ipi_idx / occamy_soc.sv.tpl.
 #define HW_MANAGER_DVFS_MSIP_BIT       ${hw_manager_dvfs_msip_bit}
+
+// Per-edge dependency tag width of the bingo HW manager (s1_quadrant.dep_tag_width ->
+// bingo_hw_manager_top DepTagWidth). The task descriptor packs one tag at the MSB of
+// each dep_*_info field, so SW must use the same width as the RTL: bingo_utils.h derives
+// DEP_TAG_WIDTH from this, and the mini-compiler passes it to BingoDFG(dep_tag_width=).
+#define BINGO_DEP_TAG_WIDTH            ${dep_tag_width}

@@ -846,6 +846,9 @@ def get_quad_ctrl_kwargs(occamy_cfg, soc_wide_xbar, soc_narrow_xbar, quad_ctrl_s
         # harts). Passed to bingo_hw_manager_top so the PM's doorbell bit is not hardcoded;
         # same source as HW_MANAGER_DVFS_MSIP_BIT / hw_manager_ipi_idx (occamy_soc.sv).
         "hw_manager_ipi_idx": nr_harts_per_chiplet(occamy_cfg, cluster_generators),
+        # Per-edge dependency tag width of the bingo HW manager (DepTagWidth). Exported to
+        # SW as BINGO_DEP_TAG_WIDTH so the task-descriptor packing tracks the RTL width.
+        "dep_tag_width": occamy_cfg["s1_quadrant"]["dep_tag_width"],
         "soc_wide_xbar": soc_wide_xbar,
         "soc_narrow_xbar": soc_narrow_xbar,
         "quad_ctrl_soc_to_quad_xbar": quad_ctrl_soc_to_quad_xbar,
@@ -1061,6 +1064,7 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
         "nr_clusters_per_chiplet": nr_clusters_per_chiplet,
         "nr_cores_per_cluster": nr_cores_per_cluster,
         "hw_manager_dvfs_msip_bit": hw_manager_dvfs_msip_bit,
+        "dep_tag_width": occamy_cfg["s1_quadrant"]["dep_tag_width"],
         "clog2_nr_chiplets": clog2(nr_chiplets),
         "clog2_nr_clusters_per_chiplet": clog2(nr_clusters_per_chiplet),
         "clog2_nr_cores_per_cluster": clog2(nr_cores_per_cluster),
