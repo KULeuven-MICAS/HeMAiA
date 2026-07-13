@@ -313,19 +313,23 @@ $(DEP): $(SRCS) $(APP_GEN_FILES) | $(BUILDDIR)
 # make declared the ELF up to date -- "Nothing to be done for 'partial-build'" -- while
 # silently re-staging a binary built from the OLD header. Only a full `make clean`, which
 # the sweep runner happens to do, ever picked up a kernel edit.
-# (make re-makes an included file if it is out of date, so this stays self-updating.)
 #
-# But a bingo_hw workload's $(SRCS) #includes a GENERATED header ($(OFFLOAD_H)), and
-# including $(DEP) makes `make` REMAKE it -- which runs the compiler's -MM pass over those
-# sources. So only pull $(DEP) in once that header exists. Otherwise the -MM pass dies on
-# the missing include, and for a workload the platform guard above deliberately skips
-# (wrong chiplet/cluster count) the header NEVER appears, so it would die every time --
-# turning a clean "[skip]" into a hard error. On the very first build the header is not
-# there yet either, but that build compiles everything from scratch anyway, and the next
-# one picks the deps up.
-ifeq ($(strip $(OFFLOAD_H)),)
--include $(DEP)
-else ifneq ($(wildcard $(OFFLOAD_H)),)
+# Include it ONLY IF IT ALREADY EXISTS. Including a file makes `make` try to REMAKE it
+# during its PARSE phase -- before any normal target ordering -- and remaking $(DEP) runs
+# the compiler's -MM scan over $(SRCS). Those sources #include headers that other parts of
+# the build GENERATE: the app's own (gemm_data.h, offload_bingo_hw.h) and, crucially, the
+# GLOBAL platform headers (host.h -> occamy.h, allocators.h -> occamy_memory_map.h) which
+# `make sw` produces via its own prerequisites. On a clean tree none of them exist yet, so
+# an unconditional include made the parse-phase scan die on occamy.h and the app was
+# silently dropped from the build (the app trees swallow per-workload failures).
+#
+# The wildcard breaks that: a from-scratch build has no .d, so nothing is included, normal
+# target ordering generates the headers and then compiles (the ELF depends on $(DEP), which
+# is built at the right time). Once the app HAS been built its .d exists, every later build
+# reads it, and a header edit correctly forces a rebuild. It also means a workload the
+# platform guard skips -- which never compiles and so never gets a .d -- can't be dragged
+# into a parse-time scan of a header that will never be generated.
+ifneq ($(wildcard $(DEP)),)
 -include $(DEP)
 endif
 

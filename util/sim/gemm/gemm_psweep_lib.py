@@ -46,15 +46,53 @@ from bingo_platform import guard_cluster_count, parse_platform_cfg   # noqa: E40
 from bingo_kernel_args import (                                      # noqa: E402
     SnaxBingoKernelIdma1dCopyArgs,
     HostBingoKernelCheckResultArgs,
-    SnaxBingoKernelGemmI8I8I32Args,
-    SnaxBingoKernelGemmI8I4I32Args,
-    SnaxBingoKernelGemmI4I4I32Args,
-    SnaxBingoKernelGemmI8I4F16Args,
-    SnaxBingoKernelGemmI8I8F16Args,
-    SnaxBingoKernelGemmI8I8I8Args,
 )
+import bingo_kernel_args as _bka                                     # noqa: E402
 from gemm_sim_utils import generate_gemm_test_data                   # noqa: E402
 from data_utils import format_vector_definition                     # noqa: E402
+
+# ---------------------------------------------------------------------------
+# Kernel-id resolution: ONE class per RUNNABLE kernel = (precision mode, array shape).
+#
+# The mini_compiler no longer has a flat SnaxBingoKernelGemm<Mode>Args taking
+# array_shape_idx as a constructor argument. Each (mode, shape) is its own class, with
+# ARRAY_SHAPE_IDX baked in -- that is what makes the bingo op id, the CSR the wrapper
+# writes, the operand block geometry and the cost curve agree by construction. Each also
+# has a `Minimal` sibling: the REUSE kernel, which dispatches to the single
+# __snax_bingo_kernel_gemm_minimal and reprograms only base addresses, inheriting the
+# mode AND shape CSRs from the configure that ran before it.
+#
+# ---------------------------------------------------------------------------
+_MODE_STEM = {
+    "i8i8_i32": "I8I8I32", "i8i4_i32": "I8I4I32", "i4i4_i32": "I4I4I32",
+    "i8i8_i8": "I8I8I8", "i8i4_f16": "I8I4F16", "i8i8_f16": "I8I8F16",
+}
+
+
+def shape_tag(mesh):
+    """(mu, ku, nu) -> the M<mu>K<ku>N<nu> tag used in every kernel id and LUT name."""
+    return "M{}K{}N{}".format(*mesh)
+
+
+def op_id(mode, mesh, minimal=False):
+    """The bingo op id, e.g. gemm_i8i8_i32_M32K2N32 / ..._minimal."""
+    return f"gemm_{mode}_{shape_tag(mesh)}" + ("_minimal" if minimal else "")
+
+
+def gemm_args_cls(mode, mesh, minimal=False):
+    name = (f"SnaxBingoKernelGemm{_MODE_STEM[mode]}{shape_tag(mesh)}"
+            f"{'Minimal' if minimal else ''}Args")
+    cls = getattr(_bka, name, None)
+    if cls is None:
+        raise ValueError(f"mini_compiler has no {name} (mode={mode} mesh={mesh})")
+    return cls
+
+
+def meshes_of(hwcfg):
+    """The array shapes the hwcfg exposes, as (mu, ku, nu) per array_shape index."""
+    u = (hwcfg["snax_versacore_core_template"]["snax_acc_cfg"][0]
+         ["snax_versacore_spatial_unrolling"][0])
+    return [tuple(int(x) for x in s) for s in u]
 
 # Size grid (M, K, N, array_shape) in mesh-tile units — shared by all precisions
 # so the cycle LUTs are directly comparable. Same grid as gemm_sweep_1cluster.
@@ -98,50 +136,59 @@ def _d_extension_emittable(spec, gd):
     return one_output_tile_bits >= _SERIAL_C_D_WIDTH
 
 
-def _plain_args(cls):
-    def make(A, B, C, D, M, K, N, shape, gd):
-        return cls(input_A_addr=A, input_B_addr=B, input_C_addr=C, output_D_addr=D,
-                   M=M, K=K, N=N, array_shape_idx=shape)
-    return make
+def make_gemm_args(mode, mesh, A, B, C, D, M, K, N, gd):
+    """Args for the CONFIGURE kernel of (mode, mesh). The shape is baked into the class,
+    so it is NOT passed; only the requantizing mode adds fields."""
+    cls = gemm_args_cls(mode, mesh)
+    kw = dict(input_A_addr=A, input_B_addr=B, input_C_addr=C, output_D_addr=D,
+              M=M, K=K, N=N)
+    if mode == "i8i8_i8":
+        cfg = gd["config"]
+        kw.update(shift_i=cfg["shift_i"], multiplier_i=cfg["multiplier_i"],
+                  input_zp_i=cfg["input_zp_i"], output_zp_i=cfg["output_zp_i"])
+    return cls(**kw)
 
 
-def _quant_args(A, B, C, D, M, K, N, shape, gd):
-    cfg = gd["config"]
-    return SnaxBingoKernelGemmI8I8I8Args(
-        input_A_addr=A, input_B_addr=B, input_C_addr=C, output_D_addr=D,
-        M=M, K=K, N=N, array_shape_idx=shape,
-        shift_i=cfg["shift_i"], multiplier_i=cfg["multiplier_i"],
-        input_zp_i=cfg["input_zp_i"], output_zp_i=cfg["output_zp_i"])
+def make_gemm_minimal_args(mode, mesh, A, B, C, D):
+    """Args for the REUSE kernel: base addresses only. M/K/N and every mode/shape CSR are
+    inherited from the configure that precedes it -- that is the whole point of the kernel,
+    and why its cost is a different curve worth measuring."""
+    return gemm_args_cls(mode, mesh, minimal=True)(
+        input_A_addr=A, input_B_addr=B, input_C_addr=C, output_D_addr=D)
 
 
-# Precision registry: name -> kernel symbol, datagen flags, args factory, D ctype.
+# Precision registry: name -> device wrapper symbol, datagen flags, D ctype.
 # Names + flags mirror the GEMM_PRECISIONS test contract and the gemm.h wrappers.
+# (The args factory is no longer per-precision: it is resolved per (mode, shape) above.)
 PRECISIONS = {
     "i8i8_i32": dict(
         kernel="__snax_bingo_kernel_gemm_i8i8_i32",
         flags=dict(int4_a_enable=0, int4_b_enable=0, quantization_enable=0, int32tofp16_enable=0),
-        make_args=_plain_args(SnaxBingoKernelGemmI8I8I32Args), d_ctype="int32_t"),
+        d_ctype="int32_t"),
     "i8i4_i32": dict(
         kernel="__snax_bingo_kernel_gemm_i8i4_i32",
         flags=dict(int4_a_enable=0, int4_b_enable=1, quantization_enable=0, int32tofp16_enable=0),
-        make_args=_plain_args(SnaxBingoKernelGemmI8I4I32Args), d_ctype="int32_t"),
+        d_ctype="int32_t"),
     "i4i4_i32": dict(
         kernel="__snax_bingo_kernel_gemm_i4i4_i32",
         flags=dict(int4_a_enable=1, int4_b_enable=1, quantization_enable=0, int32tofp16_enable=0),
-        make_args=_plain_args(SnaxBingoKernelGemmI4I4I32Args), d_ctype="int32_t"),
+        d_ctype="int32_t"),
     "i8i8_i8": dict(
         kernel="__snax_bingo_kernel_gemm_i8i8_i8",
         flags=dict(int4_a_enable=0, int4_b_enable=0, quantization_enable=1, int32tofp16_enable=0),
-        make_args=_quant_args, d_ctype="int8_t"),
+        d_ctype="int8_t"),
     "i8i4_f16": dict(
         kernel="__snax_bingo_kernel_gemm_i8i4_f16",
         flags=dict(int4_a_enable=0, int4_b_enable=1, quantization_enable=0, int32tofp16_enable=1),
-        make_args=_plain_args(SnaxBingoKernelGemmI8I4F16Args), d_ctype="uint16_t"),
+        d_ctype="uint16_t"),
     "i8i8_f16": dict(
         kernel="__snax_bingo_kernel_gemm_i8i8_f16",
         flags=dict(int4_a_enable=0, int4_b_enable=0, quantization_enable=0, int32tofp16_enable=1),
-        make_args=_plain_args(SnaxBingoKernelGemmI8I8F16Args), d_ctype="uint16_t"),
+        d_ctype="uint16_t"),
 }
+
+# The reuse kernel every Minimal class dispatches to.
+MINIMAL_KERNEL = "__snax_bingo_kernel_gemm_minimal"
 
 
 def _pad64(n):
@@ -177,7 +224,7 @@ def _emit_header(gen, d_ctype):
     return "\n".join(lines) + "\n"
 
 
-def _create_dfg(configs, gen, spec, platform):
+def _create_dfg(configs, gen, spec, platform, mode, meshes):
     dbytes = _CTYPE_BYTES[spec["d_ctype"]]
     a_sz = [_pad64(len(gd["A"])) for gd in gen]   # xDMA-aligned
     b_sz = [len(gd["B"]) for gd in gen]
@@ -209,24 +256,43 @@ def _create_dfg(configs, gen, spec, platform):
             assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=dma_core,
             node_name=f"Load_B_cfg{i}", kernel_name="__snax_bingo_kernel_idma_1d_copy",
             kernel_args=SnaxBingoKernelIdma1dCopyArgs(B_l3, l1_B, b_sz[i]))
+        mesh = meshes[shape]
+        # CONFIGURE: programs every mode/shape CSR, then runs. -> GEMM_FULL_{CFG,RUN}
         gemm = BingoNode(
             assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=gemm_core,
             node_name=f"Gemm_cfg{i}", kernel_name=spec["kernel"],
-            kernel_args=spec["make_args"](l1_A, l1_B, 0, l1_D, M, K, N, shape, gen[i]))
+            kernel_args=make_gemm_args(mode, mesh, l1_A, l1_B, 0, l1_D, M, K, N, gen[i]))
         check = BingoNode(
             assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=host_core,
             node_name=f"Check_cfg{i}", kernel_name="__host_bingo_kernel_check_result",
             kernel_args=HostBingoKernelCheckResultArgs(
                 name=f"D{i}", golden_data_addr=D_l3, output_data_addr=l1_D,
                 data_size=min(d_sz[i], 256)))
-        for n in (load_A, load_B, gemm, check):
+        # REUSE: same operands, same result, but reprograms ONLY the base addresses and
+        # inherits the mode+shape CSRs this configure just wrote. Edged directly after it
+        # on the same core, so what it inherits is unambiguous -- that ordering IS the
+        # kernel's contract. It re-emits D identically, so the same golden checks it.
+        # -> GEMM_MIN_{CFG,RUN}, the second cost curve of this (mode, shape).
+        gemm_min = BingoNode(
+            assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=gemm_core,
+            node_name=f"GemmMin_cfg{i}", kernel_name=MINIMAL_KERNEL,
+            kernel_args=make_gemm_minimal_args(mode, mesh, l1_A, l1_B, 0, l1_D))
+        check_min = BingoNode(
+            assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=host_core,
+            node_name=f"CheckMin_cfg{i}", kernel_name="__host_bingo_kernel_check_result",
+            kernel_args=HostBingoKernelCheckResultArgs(
+                name=f"Dmin{i}", golden_data_addr=D_l3, output_data_addr=l1_D,
+                data_size=min(d_sz[i], 256)))
+        for n in (load_A, load_B, gemm, check, gemm_min, check_min):
             dfg.bingo_add_node(n)
         dfg.bingo_add_edge(load_A, load_B)
         dfg.bingo_add_edge(load_B, gemm)
         dfg.bingo_add_edge(gemm, check)
+        dfg.bingo_add_edge(check, gemm_min)      # keeps the reuse strictly after its configure
+        dfg.bingo_add_edge(gemm_min, check_min)
         if prev_check is not None:
             dfg.bingo_add_edge(prev_check, load_A)
-        prev_check = check
+        prev_check = check_min
     return dfg
 
 
@@ -266,9 +332,8 @@ def run(prec_name):
         hwcfg = hjson.loads(f.read())
 
     # Drop configs whose array_shape isn't exposed by the active hwcfg.
-    num_shapes = len(
-        hwcfg["snax_versacore_core_template"]["snax_acc_cfg"][0]
-        ["snax_versacore_spatial_unrolling"][0])
+    meshes = meshes_of(hwcfg)
+    num_shapes = len(meshes)
     configs = [c for c in CONFIGS if c[3] < num_shapes]
     if len(configs) != len(CONFIGS):
         print(f"[gemm_psweep:{prec_name}] hwcfg exposes {num_shapes} shapes; "
@@ -299,16 +364,27 @@ def run(prec_name):
             f.write(_emit_header(gen, spec["d_ctype"]))
         print(f"Written data header: {args.data_h}")
     if args.configs_out is not None:
+        # Carry the MESH per config, so gather_gemm_luts.py can build the op id
+        # (gemm_<mode>_M<mu>K<ku>N<nu>[_minimal]) without re-reading the hwcfg -- the
+        # sweep and the LUT then cannot disagree about which shape a number belongs to.
         with open(args.configs_out, "w") as f:
-            json.dump({"precision": prec_name, "configs": configs}, f, indent=2)
+            json.dump({
+                "precision": prec_name,
+                "configs": configs,
+                "meshes": {str(s): list(meshes[s]) for s in sorted({c[3] for c in configs})},
+                "op_ids": [op_id(prec_name, meshes[c[3]]) for c in configs],
+                "op_ids_minimal": [op_id(prec_name, meshes[c[3]], minimal=True) for c in configs],
+            }, f, indent=2)
         print(f"Written configs list: {args.configs_out}")
 
     platform = parse_platform_cfg(args.platformcfg)
     if not guard_cluster_count(param, platform, args.output_dir, args.output_offload_file_name):
         return
-    dfg = _create_dfg(configs, gen, spec, platform)
+    dfg = _create_dfg(configs, gen, spec, platform, prec_name, meshes)
     dfg.bingo_compile_dfg(
         f"Single-Chip GEMM precision sweep ({prec_name})",
         args.output_dir, args.output_offload_file_name,
         extra_include_header_list=["gemm_data.h"])
-    print(f"Generated DFG: {prec_name} x {len(configs)} configs")
+    ids = sorted({op_id(prec_name, meshes[c[3]]) for c in configs})
+    print(f"Generated DFG: {prec_name} x {len(configs)} configs "
+          f"-> {len(ids)} shape(s), each measured as configure + minimal: {ids}")
