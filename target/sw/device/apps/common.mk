@@ -54,6 +54,17 @@ HOST_APP_INDICES := $(shell \
     done < $(DEVICE_DIR)/dev_app_list.tmp \
 )
 
+# Optional single-host-app filter. host_app_list.tmp accumulates EVERY host app that
+# has ever registered (55 today, 53 of which offload to snax-bingo-offload), so without
+# this a build of one workload still emitted that device binary -- plus its dump and
+# dwarf -- once per host app, 53 times over. `single-sw` passes the one host app it is
+# building as HOST_APPS; `make sw` leaves it empty and still builds the full matrix.
+# Filtering on the INDICES keeps the names and origins below in sync.
+ifneq ($(strip $(HOST_APPS)),)
+HOST_APP_INDICES := $(foreach idx,$(HOST_APP_INDICES),\
+    $(if $(filter $(HOST_APPS),$(word $(idx),$(HOST_APP_NAMES))),$(idx)))
+endif
+
 # Get the host app names and origins that use this device app
 HOST_APPS_FOR_DEV := $(foreach idx,$(HOST_APP_INDICES),$(word $(idx),$(HOST_APP_NAMES)))
 HOST_ORIGINS_FOR_DEV := $(foreach idx,$(HOST_APP_INDICES),$(word $(idx),$(HOST_APP_ORIGINS)))

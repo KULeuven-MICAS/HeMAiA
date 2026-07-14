@@ -225,18 +225,39 @@ endif
 FORCE:
 
 ifneq (,$(filter $(INCL_DEVICE_BINARY),True true TRUE 1))
+# The three registration files below keep their FORCE prerequisite -- they must be
+# re-DERIVED on every build so a renamed app or a relocated origin is never missed --
+# but they are only re-WRITTEN when the derived content actually differs.
+#
+# An unconditional `>` bumps the mtime even when nothing changed, and that mtime is
+# load-bearing: device/Makefile concatenates these into host_app_origin.tmp, and
+# device/apps/common.mk hangs every origin_<host>.ld off that file. So one no-op host
+# build re-generated all 53 origin scripts, relinked all 53 device ELFs, and re-ran
+# llvm-objdump + llvm-dwarfdump on each -- ~90 s of work producing byte-identical
+# output. Writing through a .new temp and mv-ing only on a real change keeps the
+# re-derivation while leaving the mtime (and the whole downstream chain) alone.
+#
+# The temp is named .new, NOT .tmp: device/Makefile globs host_app_*.*.tmp, and a
+# transient *.tmp would be swept into the aggregated lists.
+define commit_if_changed
+	@if cmp -s $@.new $@; then rm -f $@.new; else mv -f $@.new $@; fi
+endef
+
 # Host app list
 $(PARTIAL_HOST_APP_LIST): FORCE | $(DEVICE_BUILDDIR)
-	echo "$(APP)" > $@
+	@echo "$(APP)" > $@.new
+	$(commit_if_changed)
 
 # Host app origin (from partial ELF)
 $(PARTIAL_HOST_APP_ORIGIN): $(PARTIAL_ELF) FORCE | $(DEVICE_BUILDDIR)
 	@RELOC_ADDR=$$($(RISCV_OBJDUMP) -t $< | grep snitch_main | cut -c9-16); \
-	echo "0x$$RELOC_ADDR" > $@
+	echo "0x$$RELOC_ADDR" > $@.new
+	$(commit_if_changed)
 
 # Dev app list (for each host app -> which device apps it needs)
 $(PARTIAL_DEV_APP_LIST): FORCE | $(DEVICE_BUILDDIR)
-	echo "$(DEVICE_APPS)" > $@
+	@echo "$(DEVICE_APPS)" > $@.new
+	$(commit_if_changed)
 endif
 
 

@@ -262,6 +262,17 @@ sw: snax-sw-gen $(PLATFORM_HEADERS) host/runtime/host.ld check-snax-versacore-sy
 	$(MAKE) -C device all HOST_APP_TYPE=$(HOST_APP_TYPE)
 	$(MAKE) -C host TARGET=finalize-build
 
+# The host app name `single-sw` is building, mirroring the APP composition in
+# host/apps/common.mk. Handed to the device build as HOST_APPS so it emits the device
+# binary for THIS host app only, instead of for every host app in host_app_list.tmp.
+ifeq ($(HOST_APP_TYPE),host_only)
+SINGLE_HOST_APP = $(WORKLOAD)
+else ifeq ($(HOST_APP_TYPE),offload_legacy)
+SINGLE_HOST_APP = offload_legacy_$(CHIP_TYPE)
+else
+SINGLE_HOST_APP = $(HOST_APP_TYPE)_$(CHIP_TYPE)_$(WORKLOAD)
+endif
+
 single-sw: snax-sw-gen $(PLATFORM_HEADERS) host/runtime/host.ld check-snax-versacore-sync
 	$(MAKE) -C host libs
 	$(MAKE) -C host single_sw TARGET=partial-build \
@@ -269,7 +280,8 @@ single-sw: snax-sw-gen $(PLATFORM_HEADERS) host/runtime/host.ld check-snax-versa
 		CHIP_TYPE=$(CHIP_TYPE) \
 		WORKLOAD=$(WORKLOAD) \
 		DEV_APP=$(DEV_APP)
-	$(MAKE) -C device all DEVICE_APPS=$(DEV_APP) HOST_APP_TYPE=$(HOST_APP_TYPE)
+	$(MAKE) -C device all DEVICE_APPS=$(DEV_APP) HOST_APP_TYPE=$(HOST_APP_TYPE) \
+		HOST_APPS=$(SINGLE_HOST_APP)
 	$(MAKE) -C host single_sw TARGET=finalize-build \
 		HOST_APP_TYPE=$(HOST_APP_TYPE) \
 		CHIP_TYPE=$(CHIP_TYPE) \
