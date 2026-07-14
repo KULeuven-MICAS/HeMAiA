@@ -69,7 +69,7 @@ def main() -> None:
         output_dir=_SCRIPT.parent,
         engine=args.engine,
         with_waveform=bool(args.waveform),
-        cfg="target/rtl/cfg/hemaia_singlechiplet_1cluster.hjson",
+        cfg="target/rtl/cfg/hemaia_singlechiplet_16MB_1cluster.hjson",
         sim_cfg="target/sim/cfg/sim_rtl.hjson",
         # Single chiplet needs none of the private vendor modules.
         with_macro=False,
