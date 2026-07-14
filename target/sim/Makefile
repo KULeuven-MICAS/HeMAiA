@@ -9,14 +9,39 @@
 # Makefile invocation #
 #######################
 
+# Every EDA compile below pipes its output through `| tee <log>`, and a shell
+# pipeline reports the LAST command's status -- tee's, which is always 0. pipefail
+# is what lets a dead simulator (vlog/vopt/vcs failing to start, an elaboration
+# error) fail the build instead of leaving make green with no simulation binary.
+SHELL        := /bin/bash
+.SHELLFLAGS  := -o pipefail -c
+
 DEBUG        ?= OFF # ON to turn on debugging symbols
 CFG          ?= $(realpath $(MKFILE_DIR)../rtl/cfg/lru.hjson)
 SIM_CFG      ?= $(realpath $(MKFILE_DIR)cfg/sim_rtl.hjson)
 
+# A recipe that dies after the shell has already created/truncated `$@` leaves a
+# partial file with a fresh mtime, which make then treats as up to date -- the next
+# build happily feeds a half-written compile.sh / .d / .hjson to the next tool.
+.DELETE_ON_ERROR:
+
 .DEFAULT_GOAL := help
-.PHONY: all apps clean clean-testharness clean-vsim clean-vlt clean-vcs clean-apps clean-logs clean-bin
-all: apps addrmap
+.PHONY: help all apps clean clean-testharness clean-vsim clean-vlt clean-vcs clean-apps clean-logs clean-bin
+all: apps
 clean: clean-testharness clean-vsim clean-vlt clean-vcs clean-apps clean-logs clean-bin
+
+help:
+	@echo "HeMAiA simulation targets (run from target/sim):"
+	@echo "  apps                          build the host+device app binaries"
+	@echo "                                needs HOST_APP_TYPE=, CHIP_TYPE=, WORKLOAD=, DEV_APP="
+	@echo "  bin/occamy_chip.vcs           compile the VCS simulation binary"
+	@echo "  bin/occamy_chip.vsim          compile the Questasim simulation binary"
+	@echo "  bin/occamy_chip.vlt           compile the Verilator simulation binary"
+	@echo "  testharness/testharness.sv    generate the testharness"
+	@echo "  clean                         remove every build/ and bin/ artefact"
+	@echo
+	@echo "Most users go through target/sim/automation instead:"
+	@echo "  make -C ../sim/automation local-ci SUITE=tapeout"
 
 ############
 # Makefrag #
@@ -55,9 +80,15 @@ SIM_WITH_INTERPOSER ?= $(call cfg_flag,$(SIM_CFG),sim_with_interposer)
 SIM_WITH_PLL        ?= $(call cfg_flag,$(SIM_CFG),sim_with_pll)
 SIM_WITH_JTAG_CHECK ?= $(call cfg_flag,$(SIM_CFG),sim_with_jtag_check)
 
-VSIM_BENDER += $(shell cat ../rtl/src/bender_targets.tmp)
-VLT_BENDER  += $(shell cat ../rtl/src/bender_targets.tmp)
-VCS_BENDER  += $(shell cat ../rtl/src/bender_targets.tmp)
+# The cfg-dependent bender target set, written by `make -C target/rtl`. Read once
+# (:=) so the shell is forked a single time, and named by absolute path so it
+# resolves from any working directory.
+BENDER_TARGETS_FILE := $(ROOT)/target/rtl/src/bender_targets.tmp
+BENDER_TARGETS      := $(shell cat $(BENDER_TARGETS_FILE) 2>/dev/null)
+
+VSIM_BENDER += $(BENDER_TARGETS)
+VLT_BENDER  += $(BENDER_TARGETS)
+VCS_BENDER  += $(BENDER_TARGETS)
 
 VSIM_BENDER += -t simulation_hemaia -t simulation_hemaia_interposer_model
 VLT_BENDER  += -t simulation_hemaia
@@ -313,7 +344,11 @@ clean-vsim: clean-work
 $(VCS_BUILDDIR):
 	mkdir -p $@
 
-$(VCS_BUILDDIR)/compile.sh: | $(VCS_BUILDDIR)
+# The script's contents are a function of $(VCS_BENDER) -- which is read from
+# bender_targets.tmp (cfg-dependent) -- and of the bender manifests, so both are real
+# prerequisites: switching CFG has to re-emit the script, or VCS analyses the source
+# set of a configuration that is no longer the active one.
+$(VCS_BUILDDIR)/compile.sh: $(BENDER_TARGETS_FILE) $(ROOT)/Bender.yml $(ROOT)/Bender.lock | $(VCS_BUILDDIR)
 	mkdir -p $(VCS_BUILDDIR)
 	${BENDER} script vcs ${VCS_BENDER} --vlog-arg="${VLOGAN_FLAGS}" --vcom-arg="${VHDLAN_FLAGS}" > $@
 	chmod +x $@
@@ -321,7 +356,10 @@ $(VCS_BUILDDIR)/compile.sh: | $(VCS_BUILDDIR)
 $(VCS_RUN_SCRIPT): | $(VCS_BUILDDIR)
 	echo 'run' > $@
 
-$(BIN_DIR)/occamy_chip.vcs: $(VCS_BUILDDIR)/compile.sh $(VCS_RUN_SCRIPT)
+# $(VCS_SOURCES) is the RTL file list bender resolves for these targets. It is a
+# prerequisite so that editing any .sv -- or regenerating target/rtl/src -- rebuilds
+# the simulation binary.
+$(BIN_DIR)/occamy_chip.vcs: $(VCS_BUILDDIR)/compile.sh $(VCS_RUN_SCRIPT) $(VCS_SOURCES) $(TESTHARNESS_OUTPUTS)
 	bash work-vcs/compile.sh | tee $(dir $<)vcs_compile.log
 	mkdir -p $(BIN_DIR)
 	$(VCS) $(VCS_FLAGS) -o $(BIN_DIR)/occamy_chip.vcs -cc $(CC) -cpp $(CXX) \

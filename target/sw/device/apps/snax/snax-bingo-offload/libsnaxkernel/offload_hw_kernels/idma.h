@@ -78,12 +78,12 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_pairwise_swap(void *arg)
 {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_idma_pairwise_swap_args_t);
     // Adjacent element-pair swap over a flat buffer: dst[i] = src[i ^ 1]
-    // (x[1],x[0],x[3],x[2],...) — the data half of RoPE rotate_half, produced on
-    // the device so in-layer rope_q/rope_k can swap a runtime Q/K buffer (the
-    // datagen can no longer precompute it). Offloaded to the iDMA as two strided
-    // element copies (odd->even, even->odd slots), exactly like the one-time swap
-    // staging in snax-xdma-rope — the DM core only issues the descriptors. Works
-    // for any operand memory (L1/L3) since the iDMA addresses the full hierarchy.
+    // (x[1],x[0],x[3],x[2],...) — the data half of RoPE rotate_half. In-layer
+    // rope_q/rope_k swap a Q/K buffer that only exists at run time, so the swap is
+    // produced on the device rather than by the datagen. It is offloaded to the iDMA
+    // as two strided element copies (odd->even, even->odd slots); the DM core only
+    // issues the descriptors. Works for any operand memory (L1/L3) since the iDMA
+    // addresses the full hierarchy.
     // src and dst must NOT alias (the two strided copies would overlap).
     //
     // Arg layout (uint32_t[]):

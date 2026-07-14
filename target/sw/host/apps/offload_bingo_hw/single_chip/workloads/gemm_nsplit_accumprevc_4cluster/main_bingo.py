@@ -4,9 +4,7 @@ gemm_nsplit_accumprevc_4cluster
 
 Parallelize a GEMM along N across the 4 clusters (each owns one disjoint output
 tile) and do the K reduction ON-CHIP inside each cluster with the VersaCore
-`accumPrevC` feature -- so the host core never sums anything. Contrast
-gemm_ksplit_4cluster, which computes parallel K-partials and then reduces them
-with a serial host int32_add chain.
+`accumPrevC` feature -- so the host core never sums anything.
 
 Why accumPrevC works here (and not across a parallel K-split): the accumulator
 register is private to ONE cluster's VersaCore and is never cleared at kernel

@@ -13,14 +13,9 @@
 # per kernel, not one per precision (see target/sw/host/runtime/ara_sweep.h).
 #
 # --------------------------------------------------------------------------------------------------
-# WHY THE OLD CSV LOOKED WRONG
+# THE CSV KEY
 #
-# The old OP_SPEC hardcoded `__host_bingo_kernel_<op>_f32` for EVERY row -- including the fp16/int8/
-# int16 ones. That symbol is the fp32-ONLY kernel; it is not what the apps call. The cycle numbers were
-# always right (they plainly differ per precision), but every row was LABELLED with the wrong kernel,
-# so the CSV read as "all precisions ran the fp32 kernel". Fixed: op_node is the bare dispatcher.
-#
-# The CSV is now keyed on the id the bingo framework actually uses, where PRECISION IS A SUFFIX:
+# Rows are keyed on the id the bingo framework uses, where PRECISION IS A SUFFIX:
 #
 #     abs        + fp16   -> abs_fp16              regular op:  <base>_<prec>
 #     reduce_sum + int8   -> reduce_sum_int8
@@ -29,6 +24,9 @@
 #
 # so `calibrate/ingest_ara_csv.py` (bingo) maps a row straight onto inputs/op_lib/simd/<op_id>.hjson
 # with no translation table. Keep the two in step: the op ids here ARE the framework's op ids.
+#
+# `op_node` is the C symbol the app actually calls, which for a regular op is the bare dispatcher --
+# `__host_bingo_kernel_<op>` -- because precision is a runtime arg, not part of the symbol name.
 # --------------------------------------------------------------------------------------------------
 #
 # This stays at the MEASUREMENT level: no fitting, no scaling, no derived rows. The bingo LUT holds RTL
@@ -60,7 +58,7 @@ _CONVERSION_NODE = {
 
 
 def op_node(kernel: str, prec: str) -> str:
-    """The C symbol that actually ran. NOT `<kernel>_f32` -- that was the old bug."""
+    """The C symbol that ran: the bare dispatcher, or a conversion's own per-pair symbol."""
     if kernel in _CONVERSION_NODE:
         return _CONVERSION_NODE[kernel].get(prec, f"__host_bingo_kernel_{kernel}")
     return f"__host_bingo_kernel_{kernel}"
@@ -71,12 +69,12 @@ def op_id(kernel: str, prec: str) -> str:
     return f"{kernel}_{prec}"
 
 
-# CYCLES,<kernel>,<prec>,<N>,<rep>,<cycles>   -- the current, precision-swept format.
+# CYCLES,<kernel>,<prec>,<N>,<rep>,<cycles>   -- the precision-swept format.
 _CYCLES_RE = re.compile(r"CYCLES,([A-Za-z0-9_]+),([A-Za-z0-9]+),(\d+),(\d+),(\d+)")
-# CYCLES,<kernel>,<N>,<rep>,<cycles>          -- LEGACY (no precision field). The two conversion apps
-# still print this, which is EXACTLY why quantize/dequantize produced NO rows in the old CSV: their
-# lines never matched the 6-field regex and were silently dropped. Parsed here so the data is not lost,
-# but those apps should be updated to emit a prec token so every app speaks one format.
+# CYCLES,<kernel>,<N>,<rep>,<cycles>          -- 5-field form, carrying NO precision token. The two
+# conversion apps print this; each runs a single in->out pair, so its precision is filled in from
+# _LEGACY_PREC. A kernel printing this form without an entry there cannot be typed and its lines are
+# dropped, so an app must emit a prec token to be swept at more than one precision.
 _LEGACY_RE = re.compile(r"CYCLES,([A-Za-z0-9_]+),(\d+),(\d+),(\d+)\s*$")
 _LEGACY_PREC = {"quantize": "f32i8", "dequantize": "i32f32"}
 

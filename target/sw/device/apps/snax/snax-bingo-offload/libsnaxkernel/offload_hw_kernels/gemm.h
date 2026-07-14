@@ -16,8 +16,7 @@
 //   - __snax_bingo_kernel_gemm_minimal    (reuses prior config, just starts/waits)
 // Both return uint32_t (BINGO_RET_SUCC / BINGO_RET_FAIL). Shape-dependent
 // parameters are read via `bingo_gemm_shape_params[array_shape_idx]` —
-// a typed const struct from gemm_shapes.h — rather than dispatched through
-// `switch (array_shape_idx)` blocks. A single bounds check at the top of
+// a typed const struct from gemm_shapes.h. A single bounds check at the top of
 // __snax_bingo_kernel_gemm_full handles out-of-range indices.
 
 #pragma once
@@ -127,10 +126,9 @@
 
 // -------------------------------------------------------------
 // Shared GEMM core: configure the streamer + VersaCore and run.
-// All precision/quant fields are explicit parameters so the precision-named
-// wrappers (and gemm_full) below select them; the body is unchanged from the
-// original gemm_full. Emits the shared GEMM_FULL_RUN trace markers for every
-// caller, so the sweep/gemm cycle LUT works for all precisions.
+// All precision/quant fields are explicit parameters, so the precision-named
+// wrappers (and gemm_full) below select them. Emits the shared GEMM_FULL_RUN trace
+// markers for every caller, so the sweep/gemm cycle LUT works for all precisions.
 // Caller must already have done the core-0 check + SW guard + arg parse.
 // -------------------------------------------------------------
 static uint32_t __bingo_gemm_run(
@@ -147,8 +145,7 @@ static uint32_t __bingo_gemm_run(
                           A_addr, B_addr, C_addr, D_addr);
     BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_FULL_CFG_START);
     // Bounds-check array_shape_idx against the hwcfg, then grab the per-shape
-    // parameter block. All shape-dependent values are read from `shape` below
-    // instead of dispatching through `switch (array_shape_idx)`.
+    // parameter block. All shape-dependent values below are read from `shape`.
     if (array_shape_idx >= BINGO_NUM_ARRAY_SHAPES)
     {
         VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! array_shape_idx=%d invalid (only %d shapes in hwcfg)\r\n",
@@ -519,7 +516,7 @@ static uint32_t __bingo_gemm_run(
 
 // -------------------------------------------------------------
 // gemm_full: low-level entry point exposing every precision/quant flag.
-// Thin parser over __bingo_gemm_run (behavior identical to the original).
+// Thin arg parser over __bingo_gemm_run.
 // -------------------------------------------------------------
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
 {

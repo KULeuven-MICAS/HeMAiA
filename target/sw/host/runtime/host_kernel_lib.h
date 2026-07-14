@@ -113,7 +113,7 @@ static inline uint64_t __host_bingo_kernel_check_result(void *arg){
     uint32_t err = 0;
 
     if (check_type == BINGO_CHECK_TYPE_BYTE_EXACT) {
-        // Byte-exact (original behavior — preserved verbatim)
+        // Byte-exact comparison over the whole buffer.
         for (uint64_t i = 0; i < data_size; i++) {
             if (output_data_addr[i] != golden_data_addr[i]) {
                 err++;
@@ -880,12 +880,12 @@ static inline uint64_t __host_bingo_kernel_reduce_mean_f32(void *arg){
 
 // Narrow i32 -> i16 -> i8, one width step each, with a DISTINCT destination register.
 //
-// Same Ara HW bug as __bingo_narrow_f32m1_f16mf2 (see the note there): a narrowing op
+// Ara HW limit (the same one __bingo_narrow_f32m1_f16mf2 works around): a narrowing op
 // whose destination register overlaps the low part of the wide source register group --
 // spec-legal, and exactly what the compiler emits for __riscv_vncvt_x_x_w_* ("vnsrl.wi
-// v1,v1,0") -- returns WRONG data on Ara. The kernel runs at full speed and every
-// quantize CHECK fails. Forcing the destination clear of the source with an early-clobber
-// ("=&vr") is the same fix that made the fp16 narrow correct.
+// v1,v1,0") -- returns WRONG data on Ara. The early-clobber ("=&vr") forces the
+// destination clear of the source, which is why the narrow is written as inline asm here
+// instead of the plain intrinsic.
 // The vsetvli lives inside the asm because the asm is opaque to the compiler's vtype
 // tracking; the caller's next vector op re-establishes vtype as needed.
 static inline vint16mf2_t __bingo_narrow_i32m1_i16mf2(vint32m1_t w, size_t vl) {
@@ -954,16 +954,11 @@ static inline uint64_t __host_bingo_kernel_quantize_f32i8(void *arg){
         rounded = __riscv_vmin_vv_i32m1(rounded, hi, vl);
         // Narrow int32 -> int8 with two plain narrowing shifts (vncvt == vnsrl by 0).
         //
-        // This replaces a scalar-extract loop that, per OUTPUT ELEMENT, issued a
-        // full-vector vslidedown plus a vmv.x.s -- O(vl) vector instructions per
-        // element. It dominated the kernel: both quantize kernels measured ~64
-        // cycles/element, an order of magnitude off every other vector kernel here.
-        //
         // NOT vnclip: the saturating narrow would fold the clamp above into itself, but
         // it is a FIXED-POINT op, so the intrinsic first writes the vxrm CSR -- and Ara
-        // does not implement vxrm. The csrwi traps (Illegal Instruction, tval=0x00a05073),
-        // and because the compiler hoists it into the prologue the kernel died before
-        // main() printed its first line. Keep the explicit clamp; the narrow truncates.
+        // does not implement vxrm. The csrwi traps (Illegal Instruction, tval=0x00a05073)
+        // in the prologue the compiler hoists it into. Keep the explicit clamp; the
+        // narrow truncates.
         //
         // The helpers (not the bare __riscv_vncvt_x_x_w_* intrinsics) because the plain
         // intrinsic lets the compiler pick an in-place destination, which Ara miscomputes.
@@ -1141,14 +1136,14 @@ static inline uint64_t __host_bingo_kernel_cerf_gating(void *arg){
 #endif
 
 #if BINGO_HAVE_FP16_VEC
-// Narrow one f32m1 vector to f16mf2. WORKAROUND for an Ara HW bug: the in-place
+// Narrow one f32m1 vector to f16mf2. WORKAROUND for an Ara HW limit: the in-place
 // narrowing fp conversion the compiler emits for __riscv_vfncvt_f_f_w_f16mf2()
 // (e.g. "vfncvt.f.f.w v4,v4", dest reg overlapping the lowest part of the wide
-// source reg group -- spec-legal) produces a wrong f32->f16 result on Ara.
+// source reg group -- spec-legal) produces a wrong f32->f16 result on Ara. Every
+// transcendental/compound fp16 kernel (exp/sigmoid/sqrt/tanh/reciprocal/gelu/silu/
+// silu_mul/softmax/rmsnorm) goes through this narrow, so all of them depend on it.
 // Forcing the destination into a register distinct from the source (early-clobber
-// "=&vr") computes correctly. Verified: every transcendental/compound fp16 kernel
-// (exp/sigmoid/sqrt/tanh/reciprocal/gelu/silu/silu_mul/softmax/rmsnorm) FAILs the
-// op-cost-sweep correctness check with the in-place narrow and PASSes with this.
+// "=&vr") computes correctly.
 // The vsetvli is inside the asm because the asm is opaque to the compiler's vtype
 // tracking; the caller's next vector op re-establishes vtype as needed.
 static inline vfloat16mf2_t __bingo_narrow_f32m1_f16mf2(vfloat32m1_t w, size_t vl) {
@@ -1235,10 +1230,9 @@ static inline uint64_t __host_bingo_kernel_quantize_f16i8(void *arg){
         vint32m1_t hi = __riscv_vmv_v_x_i32m1(127, vl);
         rounded = __riscv_vmax_vv_i32m1(rounded, lo, vl);
         rounded = __riscv_vmin_vv_i32m1(rounded, hi, vl);
-        // Two-step narrow i32 -> i16 -> i8, replacing the per-element vslidedown +
-        // vmv.x.s extract loop. NOT vnclip (needs the vxrm CSR, which Ara traps on), and
-        // via the early-clobber helpers, not the bare intrinsics (Ara miscomputes an
-        // in-place narrow). See quantize_f32i8 for the full note.
+        // Two-step narrow i32 -> i16 -> i8. NOT vnclip (needs the vxrm CSR, which Ara
+        // traps on), and via the early-clobber helpers, not the bare intrinsics (Ara
+        // miscomputes an in-place narrow). See quantize_f32i8 for the full note.
         vint16mf2_t n16 = __bingo_narrow_i32m1_i16mf2(rounded, vl);
         vint8mf4_t  n8  = __bingo_narrow_i16mf2_i8mf4(n16, vl);
         __riscv_vse8_v_i8mf4(o_ptr, n8, vl);
@@ -1349,12 +1343,10 @@ __BINGO_BINARY_I8(mul, __riscv_vmul_vv_i8m1)   __BINGO_BINARY_I16(mul, __riscv_v
 __BINGO_BINARY_I8(max, __riscv_vmax_vv_i8m1)   __BINGO_BINARY_I16(max, __riscv_vmax_vv_i16m1)   __BINGO_BINARY_I32(max, __riscv_vmax_vv_i32m1)
 __BINGO_BINARY_I8(min, __riscv_vmin_vv_i8m1)   __BINGO_BINARY_I16(min, __riscv_vmin_vv_i16m1)   __BINGO_BINARY_I32(min, __riscv_vmin_vv_i32m1)
 // add takes int32 through the dispatcher like every other int-capable op. The
-// separate __host_bingo_kernel_add_i32 (K-split partial-D accumulation) stays: it
-// runs the SAME vadd but also publishes the result via the scratchpad at arg[5],
-// which the plain {a,b,out,n,prec} callers (e.g. the ara sweep) do not pass. Before
-// this, `add` dispatched on INT_BOTH and an int32 add fell through to `default:
-// ret = BINGO_RET_FAIL` -- the output was never written, so every add/int32 point
-// silently failed its check.
+// separate __host_bingo_kernel_add_i32 (K-split partial-D accumulation) exists
+// alongside it: it runs the SAME vadd but also publishes the result via the
+// scratchpad at arg[5], which the plain {a,b,out,n,prec} callers (e.g. the ara
+// sweep) do not pass.
 __BINGO_BINARY_DISPATCH(add, __BINGO_BINARY_CASE_INT_ALL)
 __BINGO_BINARY_DISPATCH(sub, __BINGO_BINARY_CASE_INT_ALL)
 __BINGO_BINARY_DISPATCH(mul, __BINGO_BINARY_CASE_INT_ALL)
@@ -1387,12 +1379,10 @@ static inline void __bingo_##op##_##P(const T* in, T* o, uint64_t n){          \
 // fp16 transcendental: widen f16->f32, reuse the fp32 math, narrow f32->f16.
 // BODY32 reads vfloat32m2_t v -> sets result.
 //
-// Load at e16m1 and widen to f32m2, so an iteration covers VLEN/16 elements. The old
-// code loaded f16mf2 so the widened value landed in f32m1 -- but a fractional LMUL
-// exactly cancels the narrower SEW (VLEN/16 x 1/2 == VLEN/32), so it retired the SAME
-// elements per iteration as the fp32 kernel and paid a widen+narrow on top. That is
-// why every one of these ops measured SLOWER in fp16 than in fp32 (0.86-0.96x) while
-// the natively-fp16 ops (add/mul/relu/... at e16m1) measured a clean 2.00x faster.
+// The load is e16m1 and the widened value lands in f32m2, so one iteration covers
+// VLEN/16 elements -- twice the fp32 kernel's VLEN/32. The LMUL matters: a fractional
+// LMUL exactly cancels the narrower SEW (VLEN/16 x 1/2 == VLEN/32), which would retire
+// no more elements per iteration than fp32 while still paying the widen+narrow pair.
 #if BINGO_HAVE_FP16_VEC
 #define __BINGO_UNARY_F16_VIA_F32(op, BODY32)                                  \
 static inline void __bingo_##op##_f16(const _Float16* in, _Float16* o, uint64_t n){ \
@@ -1462,16 +1452,14 @@ __BINGO_UNARY_DISPATCH(relu, __BINGO_UNARY_CASE_INT_ALL)
 __BINGO_UNARY_DISPATCH(neg,  __BINGO_UNARY_CASE_INT_ALL)
 __BINGO_UNARY_DISPATCH(abs,  __BINGO_UNARY_CASE_INT_ALL)
 
-// float-only unary ops (fp16 via widen/narrow, reusing the fp32 math).
-// These bodies now run at f32m2 (see __BINGO_UNARY_F16_VIA_F32) -- 2x the elements per
-// iteration. The math is identical, only the LMUL of the intrinsics changed.
+// float-only unary ops (fp16 via widen/narrow, reusing the fp32 math). The bodies
+// compute at f32m2 -- see __BINGO_UNARY_F16_VIA_F32.
 __BINGO_UNARY_F16_VIA_F32(exp, { result = __bingo_exp_f32_m2(v, vl); })
 // sqrt and reciprocal have NATIVE fp16 instructions (zvfh), so they need no fp32
 // detour: computing them in f16m1 doubles the elements per iteration and drops the
 // widen+narrow pair. Accuracy is unaffected in any way that survives the fp16 store --
 // the result is rounded to fp16 regardless, and vfsqrt/vfdiv are correctly rounded, so
-// this is at most 1/2 ulp of fp16 from the widened path. Previously both were 0.75-0.89x
-// the speed of their fp32 siblings; they should now be ~2x faster.
+// this is at most 1/2 ulp of fp16 from the widened path.
 __BINGO_UNARY_F16_NATIVE(sqrt, { result = __riscv_vfsqrt_v_f16m1(v, vl); })
 __BINGO_UNARY_F16_NATIVE(reciprocal, {
     result = __riscv_vfrdiv_vf_f16m1(v, (_Float16)1.0f, vl);
@@ -1522,9 +1510,8 @@ __BINGO_UNARY_DISPATCH(gelu,       __BINGO_UNARY_CASE_INT_NONE)
 //      unit, which is worse to debug than an illegal instruction.
 //
 // So a reduction must consume LMUL=1, which forces the widened value into f32m1, which
-// forces the fp16 load down to f16mf2 -- VLEN/32 elements, the same as fp32. That is
-// inherent to Ara, not an oversight here. (Contrast __bingo_reduce_max_f16 below, which
-// needs no widening at all and so DOES run at f16m1 for a clean 2x.)
+// forces the fp16 load down to f16mf2 -- VLEN/32 elements, the same as fp32.
+// (__bingo_reduce_max_f16 below needs no widening at all, so it does run at f16m1.)
 static inline float __bingo_reduce_sum_f16(const _Float16* in, uint64_t n){
     float acc = 0.0f; uint64_t avl = n; const _Float16 *p = in;
     for (size_t vl = __riscv_vsetvl_e16mf2(avl); avl>0; avl-=vl, p+=vl){
@@ -1555,8 +1542,8 @@ static inline float __bingo_reduce_max_f16(const _Float16* in, uint64_t n){
 // VLEN/32 elements, no better than int32 itself. That is why reduce_sum is the one op
 // where the NARROWEST type is the SLOWEST (int8 77900 cc vs int32 58458 cc): int8 pays
 // two widening converts and retires no extra elements for them. Loading i8m1 and widening
-// up to i32m4 (4x the elements) is the obvious fix and is what the code did briefly --
-// but Ara silently hangs on vredsum.vs with an m4 source, so it cannot be used.
+// up to i32m4 (4x the elements) is not available: Ara silently hangs on vredsum.vs with
+// an m4 source.
 static inline int32_t __bingo_reduce_sum_i8(const int8_t* in, uint64_t n){
     int32_t acc = 0; uint64_t avl = n; const int8_t *p = in;
     for (size_t vl = __riscv_vsetvl_e8mf4(avl); avl>0; avl-=vl, p+=vl){

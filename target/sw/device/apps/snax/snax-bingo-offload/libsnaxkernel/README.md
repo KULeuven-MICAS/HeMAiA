@@ -69,8 +69,8 @@ To add a shape:
 4. `make sw` — the validator will confirm the numbers.
 
 Host workloads under `offload_bingo_sw/**/` include `<gemm_shapes.h>`
-directly and read mesh dims via the same table; `gemm_datagen.py` no
-longer emits per-workload `meshRow`/`tileSize`/`meshCol` globals.
+directly and read the mesh dims from that same table, so the table is the
+one place `meshRow`/`tileSize`/`meshCol` are defined.
 
 ## Adding a new kernel
 

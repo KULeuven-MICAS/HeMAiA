@@ -48,19 +48,20 @@ from bingo_kernel_args import (                                      # noqa: E40
     HostBingoKernelCheckResultArgs,
 )
 import bingo_kernel_args as _bka                                     # noqa: E402
-from gemm_sim_utils import generate_gemm_test_data                   # noqa: E402
+from gemm_sim_utils import (                                          # noqa: E402
+    generate_gemm_test_data, _bytes_for_elements, _gemm_operand_widths,
+)
 from data_utils import format_vector_definition                     # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Kernel-id resolution: ONE class per RUNNABLE kernel = (precision mode, array shape).
 #
-# The mini_compiler no longer has a flat SnaxBingoKernelGemm<Mode>Args taking
-# array_shape_idx as a constructor argument. Each (mode, shape) is its own class, with
-# ARRAY_SHAPE_IDX baked in -- that is what makes the bingo op id, the CSR the wrapper
-# writes, the operand block geometry and the cost curve agree by construction. Each also
-# has a `Minimal` sibling: the REUSE kernel, which dispatches to the single
-# __snax_bingo_kernel_gemm_minimal and reprograms only base addresses, inheriting the
-# mode AND shape CSRs from the configure that ran before it.
+# The mini_compiler exposes one args class per (mode, shape), with ARRAY_SHAPE_IDX baked
+# into the class rather than passed as a constructor argument -- that is what makes the
+# bingo op id, the CSR the wrapper writes, the operand block geometry and the cost curve
+# agree by construction. Each class also has a `Minimal` sibling: the REUSE kernel, which
+# dispatches to the single __snax_bingo_kernel_gemm_minimal and reprograms only base
+# addresses, inheriting the mode AND shape CSRs from the configure that ran before it.
 #
 # ---------------------------------------------------------------------------
 _MODE_STEM = {
@@ -94,19 +95,145 @@ def meshes_of(hwcfg):
          ["snax_versacore_spatial_unrolling"][0])
     return [tuple(int(x) for x in s) for s in u]
 
-# Size grid (M, K, N, array_shape) in mesh-tile units — shared by all precisions
-# so the cycle LUTs are directly comparable. Same grid as gemm_sweep_1cluster.
-CONFIGS = [
-    # shape 0 (meshRow=32, tileSize=2, meshCol=32)
-    (1, 1, 1, 0), (1, 2, 1, 0), (1, 4, 1, 0), (1, 8, 1, 0),
-    (2, 2, 2, 0), (2, 4, 2, 0), (4, 4, 4, 0),
-    # shape 1 (meshRow=1, tileSize=16, meshCol=32)
-    (1, 1, 1, 1), (1, 2, 1, 1), (1, 4, 1, 1), (1, 8, 1, 1),
-    (2, 2, 2, 1), (2, 4, 2, 1), (4, 4, 4, 1),
-    # shape 2 (meshRow=16, tileSize=8, meshCol=16)
-    (1, 1, 1, 2), (1, 2, 1, 2), (1, 4, 1, 2), (1, 8, 1, 2),
-    (2, 2, 2, 2), (2, 4, 2, 2), (4, 4, 4, 2),
-]
+# M/K/N are mesh-TILE counts: the element extents are M*meshRow, K*tileSize, N*meshCol.
+#
+# The grid these three lists span is what a GEMM cost model is fitted to, so it has to
+# COVER the shapes the model will later be asked to price. This near-diagonal base is
+# small and shallow in K: at shape 0 (tileSize=2), K=8 tiles is a K of just 16 ELEMENTS,
+# while an llama3 layer reduces over K=4096 (Q/K/V/O, FFN gate/up) and 14336 (FFN down).
+# On its own it would force the model to extrapolate by 2-3 orders of magnitude in K, and
+# being diagonal it cannot tell an m*n term from an m*k*n one. The deep-K ladder and the
+# off-diagonal (m,n) points below supply exactly those two missing directions.
+LEGACY_CONFIGS = [(1, 1, 1), (1, 2, 1), (1, 4, 1), (1, 8, 1),
+                  (2, 2, 2), (2, 4, 2), (4, 4, 4)]
+
+# Deep-K ladder, run at (m,n)=(1,1) so K can go as deep as L1 allows. Stated in ELEMENTS,
+# not tiles: a tile is 2 elements at shape 0 but 16 at shape 1, so a ladder in tiles walks
+# the shapes to wildly different physical depths and lets the deepest one inflate the
+# SHARED l1_B (which scales with tileSize*meshCol) until the other shapes are starved.
+# Elements are also the units llama3's K is quoted in, which is what the grid must cover.
+K_ELEM_LADDER = [16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384]
+
+# Off-diagonal (m,n) points at a modest K: they are what separates an m*n term from an
+# m*k*n term, which a grid with m==n cannot do.
+MN_POINTS = [(1, 2), (2, 1), (2, 2), (1, 4), (4, 1), (2, 4), (4, 2), (4, 4), (8, 8)]
+MN_KS = [8, 64]
+
+
+def _frag(x):
+    """bingo_l1_alloc's per-allocation overhead + 256 B alignment."""
+    return (x + 128 + 255) & ~255
+
+
+# Every node placed on a CLUSTER core costs two L1 allocations that bingo_dfg makes up
+# front and never frees: its bingo_kernel_scratchpad_t, and its kernel args struct. Both
+# are far below the allocator's 256 B granularity, so each one occupies a whole slot
+# regardless of its nominal size -- which is what makes them expensive in bulk.
+L1_ALLOC_SLOT = _frag(1)                 # smallest slot bingo_l1_alloc can hand out
+ALLOCS_PER_CLUSTER_NODE = 2              # scratchpad + kernel args
+
+# Cluster nodes _create_dfg emits per config: Load_A, Load_B (dma core), Gemm, GemmMin
+# (gemm core). The two Check nodes run on the HOST, whose scratchpad and args go to L3,
+# so they cost no L1.
+CLUSTER_NODES_PER_CONFIG = 4
+EXIT_NODES = 2                           # bingo_dfg's own exit nodes, one per cluster core
+
+
+def _node_alloc_bytes(n_configs):
+    """L1 the per-node allocations take.
+
+    These scale with the NUMBER of configs, not their size: at 4 cluster nodes a config,
+    2 allocations a node and a 256 B slot each, a 92-config grid spends ~184 KiB here --
+    over a third of the cluster's 504 KiB TCDM. Budgeting the operand buffers against the
+    whole heap therefore overcommits it, and the grid dies at bingo_l1_alloc.
+    """
+    nodes = CLUSTER_NODES_PER_CONFIG * n_configs + EXIT_NODES
+    return nodes * ALLOCS_PER_CLUSTER_NODE * L1_ALLOC_SLOT
+
+
+def _operand_bytes(M, K, N, mesh, a_len, b_len, d_len):
+    """A/B/D bytes for one config -- analytic, so the grid can be sized without
+    generating the arrays."""
+    mu, ku, nu = mesh
+    a = _pad64(_bytes_for_elements(M * K * mu * ku, a_len))
+    b = _bytes_for_elements(K * N * ku * nu, b_len)
+    d = _bytes_for_elements(M * N * mu * nu, d_len)
+    return a, b, d
+
+
+def _l1_footprint(configs, meshes, a_len, b_len, d_len):
+    """THE binding L1 constraint, and it is not per-config.
+
+    _create_dfg allocates ONE l1_A / l1_B / l1_D for the whole binary, each sized at the
+    MAX over every config (see `max_A, max_B, max_D` below), and bingo_dfg never emits a
+    free -- so all three live simultaneously for the entire run. The budget is therefore
+    max_A + max_B + max_D, NOT max over configs of (A+B+D). A grid whose configs each fit
+    individually can still blow L1 and die at bingo_l1_alloc -> host_abort(BINGO_EXIT_OOM).
+
+    On top of those three sit the per-node scratchpads, which grow with the NUMBER of
+    configs rather than their size. They are the reason a grid cannot simply be extended
+    until the operand buffers fill the heap: each config added costs its own scratchpads
+    whether or not it enlarges any buffer.
+    """
+    if not configs:
+        return 0, 0, 0, 0
+    szs = [_operand_bytes(M, K, N, meshes[s], a_len, b_len, d_len) for (M, K, N, s) in configs]
+    mA = max(_frag(s[0]) for s in szs)
+    mB = max(_frag(s[1]) for s in szs)
+    mD = max(_frag(s[2]) for s in szs)
+    return mA + mB + mD + _node_alloc_bytes(len(configs)), mA, mB, mD
+
+
+def build_configs(meshes, a_len, b_len, d_len, l1_size_kb, verbose=True):
+    """Grow the grid greedily, keeping the whole L1 footprint inside the budget.
+
+    The K ladder is climbed in LOCKSTEP across the array shapes -- one rung for every
+    shape, then the next rung -- rather than one shape at a time. The shapes compete for a
+    single budget (l1_A/l1_B/l1_D are sized at the max over ALL configs, whatever shape
+    set it), so a shape-at-a-time walk lets whichever shape goes first climb until the
+    budget is gone and leaves the rest with a K range too short to fit a curve through.
+    Climbing in lockstep spends the budget on the rung every shape can still afford.
+
+    How deep that gets differs per shape anyway, because the operands scale with different
+    mesh dims (B with tileSize*meshCol: 512 at shape 1 against 64 at shape 0), so a shape
+    simply stops when its next rung no longer fits.
+    """
+    budget = l1_size_kb * 1024
+    nsh = len(meshes)
+    cfgs = [(m, k, n, s) for s in range(nsh) for (m, k, n) in LEGACY_CONFIGS]
+
+    def fits(extra):
+        return _l1_footprint(cfgs + [extra], meshes, a_len, b_len, d_len)[0] <= budget
+
+    kmax = {s: 0 for s in range(nsh)}
+    live = set(range(nsh))                  # shapes whose ladder has not yet hit the wall
+    for k_elem in K_ELEM_LADDER:
+        for s in sorted(live):
+            tile = meshes[s][1]             # tileSize: the K elements one K-tile holds
+            k = k_elem // tile
+            if k < 1 or k * tile != k_elem:  # this depth is not a whole number of tiles here
+                continue
+            if fits((1, k, 1, s)):
+                cfgs.append((1, k, 1, s))
+                kmax[s] = k
+            else:
+                live.discard(s)             # this shape is done; the others keep climbing
+        if not live:
+            break
+    for s in range(nsh):
+        for (m, n) in MN_POINTS:
+            for k in MN_KS:
+                if fits((m, k, n, s)):
+                    cfgs.append((m, k, n, s))
+
+    cfgs = sorted(set(cfgs))
+    tot, mA, mB, mD = _l1_footprint(cfgs, meshes, a_len, b_len, d_len)
+    if verbose:
+        kel = {s: kmax[s] * meshes[s][1] for s in range(nsh)}
+        print(f"[gemm_psweep] {len(cfgs)} configs | L1 {tot/1024:.1f}/{l1_size_kb} KiB "
+              f"(A{mA//1024} B{mB//1024} D{mD//1024}) | max K per shape {kmax} "
+              f"= {kel} ELEMENTS")
+    return cfgs
 
 _CTYPE_BYTES = {"int8_t": 1, "uint16_t": 2, "int32_t": 4}
 
@@ -159,7 +286,7 @@ def make_gemm_minimal_args(mode, mesh, A, B, C, D):
 
 # Precision registry: name -> device wrapper symbol, datagen flags, D ctype.
 # Names + flags mirror the GEMM_PRECISIONS test contract and the gemm.h wrappers.
-# (The args factory is no longer per-precision: it is resolved per (mode, shape) above.)
+# The args class is not listed here: it is resolved per (mode, shape) above.
 PRECISIONS = {
     "i8i8_i32": dict(
         kernel="__snax_bingo_kernel_gemm_i8i8_i32",
@@ -283,7 +410,16 @@ def _create_dfg(configs, gen, spec, platform, mode, meshes):
             kernel_args=HostBingoKernelCheckResultArgs(
                 name=f"Dmin{i}", golden_data_addr=D_l3, output_data_addr=l1_D,
                 data_size=min(d_sz[i], 256)))
-        for n in (load_A, load_B, gemm, check, gemm_min, check_min):
+        nodes = (load_A, load_B, gemm, check, gemm_min, check_min)
+        on_cluster = [n for n in nodes if n.assigned_core_id != host_core]
+        assert len(on_cluster) == CLUSTER_NODES_PER_CONFIG, (
+            f"this config places {len(on_cluster)} nodes on a cluster core, but the L1 "
+            f"budget is computed for CLUSTER_NODES_PER_CONFIG={CLUSTER_NODES_PER_CONFIG}. "
+            f"Each of them costs {ALLOCS_PER_CLUSTER_NODE} x {L1_ALLOC_SLOT} B of L1 "
+            f"(scratchpad + args) that is never freed, so the grid would be sized against "
+            f"the wrong footprint and the sim would die at bingo_l1_alloc. Update "
+            f"CLUSTER_NODES_PER_CONFIG.")
+        for n in nodes:
             dfg.bingo_add_node(n)
         dfg.bingo_add_edge(load_A, load_B)
         dfg.bingo_add_edge(load_B, gemm)
@@ -297,13 +433,31 @@ def _create_dfg(configs, gen, spec, platform, mode, meshes):
 
 
 def _check_fits_in_l1(gen, spec, l1_size_kb):
+    """Assert the grid fits L1 -- against the constraint that ACTUALLY binds.
+
+    The quantity to check is the PER-AXIS max, not the per-config total: _create_dfg
+    allocates ONE l1_A/l1_B/l1_D sized at max_A / max_B / max_D over all configs, and
+    nothing is ever freed, so the binary needs max_A + max_B + max_D live simultaneously.
+    Checking each config in isolation (max over i of A_i+B_i+D_i) would let a grid whose
+    configs each fit individually sail past this assert and then die at runtime in
+    bingo_l1_alloc -> host_abort(BINGO_EXIT_OOM).
+    """
     dbytes = _CTYPE_BYTES[spec["d_ctype"]]
     budget = l1_size_kb * 1024
-    frag = lambda x: (x + 128 + 255) & ~255
-    for i, gd in enumerate(gen):
-        total = frag(_pad64(len(gd["A"]))) + frag(len(gd["B"])) + frag(len(gd["D"]) * dbytes)
-        assert total <= budget, (
-            f"cfg{i} (M={gd['M']},K={gd['K']},N={gd['N']}) needs {total} B > L1 {budget}")
+    if not gen:
+        return
+    max_A = max(_frag(_pad64(len(gd["A"]))) for gd in gen)
+    max_B = max(_frag(len(gd["B"])) for gd in gen)
+    max_D = max(_frag(len(gd["D"]) * dbytes) for gd in gen)
+    nodes = _node_alloc_bytes(len(gen))
+    total = max_A + max_B + max_D + nodes
+    assert total <= budget, (
+        f"grid needs max_A+max_B+max_D+per-node = {max_A}+{max_B}+{max_D}+{nodes} "
+        f"= {total} B > L1 budget {budget} B ({l1_size_kb} KiB). The three operand "
+        f"buffers are ONE shared allocation each, sized at the max over all {len(gen)} "
+        f"configs; on top of them every cluster node costs a scratchpad and an args "
+        f"struct, {CLUSTER_NODES_PER_CONFIG} nodes x {ALLOCS_PER_CLUSTER_NODE} allocs x "
+        f"{L1_ALLOC_SLOT} B per config. Nothing is freed, so all of it is live at once.")
 
 
 def _get_args():
@@ -331,13 +485,18 @@ def run(prec_name):
     with open(args.hwcfg) as f:
         hwcfg = hjson.loads(f.read())
 
-    # Drop configs whose array_shape isn't exposed by the active hwcfg.
+    # Build the grid for THIS precision, against the real L1 budget. It has to be
+    # per-precision: how deep K can go depends on the operand bit widths (an i4 B operand
+    # is half the bytes of i8, so it reaches twice the K), and the D buffer depends on the
+    # output width. A single fixed config list shared by all precisions could not express
+    # that.
     meshes = meshes_of(hwcfg)
-    num_shapes = len(meshes)
-    configs = [c for c in CONFIGS if c[3] < num_shapes]
-    if len(configs) != len(CONFIGS):
-        print(f"[gemm_psweep:{prec_name}] hwcfg exposes {num_shapes} shapes; "
-              f"kept {len(configs)}/{len(CONFIGS)} configs")
+    merged = dict(hwcfg)
+    merged.update(spec["flags"])
+    a_len, b_len, _c_len, d_len = _gemm_operand_widths(merged)
+    print(f"[gemm_psweep:{prec_name}] operand widths a={a_len}b b={b_len}b d={d_len}b; "
+          f"hwcfg exposes {len(meshes)} array shape(s)")
+    configs = build_configs(meshes, a_len, b_len, d_len, args.l1_size_kb)
 
     gen = _gen_configs(configs, hwcfg, spec["flags"])
 

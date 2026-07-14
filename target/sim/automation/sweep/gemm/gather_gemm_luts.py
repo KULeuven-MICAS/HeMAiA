@@ -9,9 +9,8 @@
 #
 # A GEMM kernel id is a precision MODE plus a runtime ARRAY SHAPE, and each of those has a
 # REUSE ("_minimal") sibling: 6 modes x 3 shapes x 2 = 36 -- exactly the 36 op files in the
-# framework's lut/gemm/. This script emits that id, not a single generic "gemm_full", so a
-# measurement can never be attributed to the wrong shape or to the wrong side of the
-# configure/reuse split (the whole point of baking the shape into the kernel id).
+# framework's lut/gemm/. Every row carries that full id, so a measurement cannot be
+# attributed to the wrong shape or to the wrong side of the configure/reuse split.
 #
 # Each gemm_psweep_<mode>_1cluster task sweeps the shared (M,K,N,array_shape) grid in one
 # sim. Per config the DFG runs the CONFIGURE kernel and then its REUSE kernel on the same

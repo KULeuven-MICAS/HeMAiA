@@ -26,8 +26,9 @@
 #
 # The [rows,D] operand still has to exist -- the StreamElementwise interleave is a single affine
 # address stream and cannot hold inv_rms[r] fixed while x walks the row -- but the xDMA builds it
-# (B1, reader stride 0), not the CVA6. So the host touches only rows*32 lanes, independent of D,
-# instead of the old rows*D stores + rows*D*2 push that dominated the makespan as D grew.
+# (B1, reader stride 0), not the CVA6. The host therefore touches only rows*32 lanes, a cost
+# independent of D; a host-side broadcast would be rows*D stores and dominate the makespan as D
+# grows.
 #
 # The MUL reads x and inv_bcast as two SEPARATE L1 buffers via the stream_elementwise
 # src_b mechanism; buffers are NAME-prefixed so inv_bcast allocates above x.

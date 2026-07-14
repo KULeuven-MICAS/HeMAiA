@@ -33,8 +33,7 @@ __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_entry_args {
 
 // Precision selector for the runtime-typed Ara kernels (__host_bingo_kernel_<op>
 // dispatchers in host_kernel_lib.h). Passed as a plain arg word; the typed
-// __host_bingo_kernel_<op>_f32 entry points keep their original FP32-only
-// behaviour and ignore precision.
+// __host_bingo_kernel_<op>_f32 entry points are FP32-only and ignore precision.
 #define BINGO_PREC_FP32  0
 #define BINGO_PREC_FP16  1
 #define BINGO_PREC_INT8  2
@@ -66,12 +65,11 @@ __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_xdma_1d_copy_args {
 } __host_bingo_kernel_xdma_1d_copy_args_t;
 typedef __host_bingo_kernel_xdma_1d_copy_args_t __host_bingo_kernel_xdma_args_t;
 
-// NOTE: the per-kernel typed arg structs for quantize / dequantize / int32-add /
-// softmax were folded into the unified Ara shapes below. Their kernels
-// (__host_bingo_kernel_quantize_f32i8 / dequantize_i32f32 / add_i32, and the
-// softmax dispatcher) read the shared ara_convert / ara_binary / ara_softmax
-// structs — the kernels only touch the leading address/size slots, so the extra
-// trailing `precision` field is a harmless no-op for the single-precision ops.
+// NOTE: quantize / dequantize / int32-add / softmax have no arg struct of their own.
+// Those kernels (__host_bingo_kernel_quantize_f32i8 / dequantize_i32f32 / add_i32, and
+// the softmax dispatcher) read the shared ara_convert / ara_binary / ara_softmax structs
+// below — they only touch the leading address/size slots, so the trailing `precision`
+// field is a no-op for the single-precision ones.
 
 // ==========================================================================
 // Multi-precision Ara kernel args (runtime-typed __host_bingo_kernel_<op>

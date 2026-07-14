@@ -24,7 +24,7 @@ PLATFORM_H = $(MK_DIR)/../../../../../../../../target/sw/shared/platform/generat
 
 MODE ?= debug
 
-$(DATA_H) $(OFFLOAD_H): $(MK_DIR)/main_bingo.py $(DATA_CFG)
+$(DATA_H) $(OFFLOAD_H): $(MK_DIR)/main_bingo.py $(DATA_CFG) $(PLATFORM_H)
 	python3 $(MK_DIR)/main_bingo.py \
 		--output_dir $(MK_DIR) \
 		--data_h $(DATA_H) \

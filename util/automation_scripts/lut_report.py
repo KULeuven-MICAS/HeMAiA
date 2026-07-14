@@ -13,10 +13,10 @@
 import argparse
 import csv
 
-# Label columns -- identify the curve, are NOT numeric features to fit/tabulate.
-# op_id/prec exist only in the precision-swept ara CSV (op_id = "<op>_<prec>", the
-# bingo LUT key); the xdma CSV has neither. Leaving them out of _META made the
-# loader try int(float("abs_fp16")) and blow up.
+# Label columns -- they identify the curve and are NOT numeric features to fit/tabulate.
+# Every column outside this set is parsed as a number, so a non-numeric column has to be
+# listed here. op_id/prec exist only in the precision-swept ara CSV (op_id = "<op>_<prec>",
+# the bingo LUT key); the xdma CSV has neither.
 _META = {"op_id", "op_name", "op_node", "prec", "cycles"}
 
 

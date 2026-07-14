@@ -216,8 +216,8 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_6d(void *arg)
 // Why this kernel exists
 // ----------------------
 // It fuses the GEMM K-split partial-sum reduction (D = D0 + D1 + ... ) into a
-// single xDMA pass, replacing the sequential host int32-add chain
-// (__host_bingo_kernel_add_i32) that walks L3<->host once per pair.
+// single xDMA pass. The alternative is the sequential host int32-add chain
+// (__host_bingo_kernel_add_i32), which walks L3<->host once per pair.
 //
 // Two entry points
 // ----------------
@@ -393,7 +393,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_elementwise_add_ab(void *arg)
 // decompose into. Each is a thin wrapper that programs one reader extension,
 // launches a single xDMA task over `rows` x `beats` 64-byte beats, and waits.
 // A row is `beats` x 64-byte beats (64 B = 32 FP16); `rows` independent rows are
-// processed in one dispatch (rows=1 is the back-compatible single-row case). The
+// processed in one dispatch (rows=1 is the single-row case). The
 // op/func selector and FP32-bit operands come in as args, so the named sub-ops
 // (reduce_max, map_exp, ew_mul, ...) are just these 3 kernels invoked with preset
 // args by the Python minicompiler.
@@ -577,12 +577,12 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_stream_map(void *arg)
 // re-read, and two tasks collapse into one.
 //
 // This is the fusion the snax-xdma-softmax-fold / -rmsnorm-fold apps measure. On
-// softmax it replaces the deployed 2-task pair
+// softmax it does in ONE task what otherwise takes a pair
 //     map(EXP)    -> expb        [task 1, writes rows*beats beats]
 //     reduce(ADD) -> sum[rows]   [task 2, RE-READS all of expb]
-// with one task that emits both, removing a whole pass over the tensor and a whole
-// task setup (~600 cc of CSR orchestration; at rows=4,D=64 the fused task is 242 cc
-// vs 86+197=283 cc for the pair).
+// emitting both outputs, so it saves a whole pass over the tensor and a whole task
+// setup (~600 cc of CSR orchestration; at rows=4,D=64 the fused task is 242 cc vs
+// 86+197=283 cc for the pair).
 //
 // TWO OUTPUT MODES, selected by the TAP bit (REDUCE_OP_TAP, 0x100) in `reduce_op`:
 //
@@ -682,11 +682,11 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_stream_map_reduce(void *arg)
 }
 
 // Fp16ToInt8: out[i] = clamp(round(in[i] * inv_scale), -128, 127) over `rows*beats` flat beats.
-// A dedicated fp16 activation -> int8 GEMM-operand requant on the xDMA (HasFp16ToInt8 datapath),
-// replacing the host CVA6 quantize_f16i8 (which reads the fp16 from L3 element-by-element -- the host
-// makespan wall). The narrow is chained after an IDENTITY StreamMap (LINEAR a=1,b=0) so the reader
-// emits the fp16 stream the FP16TOINT8 lane consumes -- the same proven path stream_map takes at
-// out_dtype=1, just with a fixed passthrough map and no `func`/`a`/`b` for the caller to set.
+// A dedicated fp16 activation -> int8 GEMM-operand requant on the xDMA (HasFp16ToInt8 datapath); the
+// alternative is the host CVA6 quantize_f16i8, which reads the fp16 from L3 element-by-element and
+// sits on the host makespan. The narrow is chained after an IDENTITY StreamMap (LINEAR a=1,b=0) so the
+// reader emits the fp16 stream the FP16TOINT8 lane consumes -- the same path stream_map takes at
+// out_dtype=1, with a fixed passthrough map and no `func`/`a`/`b` for the caller to set.
 // inv_scale = FP32 bits of 127/max|x| (the symmetric per-tensor scale; the producer computes max|x|
 // via MAX(x)+MAX(-x) reduces). dst_bound0 = rows*beats/2 (int8 packs two elements per fp16 lane).
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_fp16_to_int8(void *arg)
@@ -1078,8 +1078,8 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_transpose_2d(void *arg)
         // LOCAL L1 scratch (scatter into local TCDM = correct), then a plain
         // CONTIGUOUS copy L1->dst (xdma_layout_stage_out + _flush). A contiguous
         // move carries no per-channel scatter, so it is exact to any memory. For a
-        // local dst this is a zero-copy passthrough (the fused path above,
-        // unchanged). Cost: one L1 scratch (M*N*elem_bytes) + an L1->dst 1D DMA.
+        // local dst this is a zero-copy passthrough (the fused path above).
+        // Cost: one L1 scratch (M*N*elem_bytes) + an L1->dst 1D DMA.
         //
         // To instead fuse transpose+write-to-L3 in a single op (NOT done here;
         // needs RTL/gen changes) one of:
@@ -1660,7 +1660,8 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_gather_2d(void *arg)
 //   else  : CPU fallback
 //
 // B↔R kernels — axes (n, k, c, s); HW Transposer + AGU sub-block iteration:
-//   HW path: defined(WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16) && tileSize %8==0 && meshCol %8==0
+//   HW path: defined(WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16) && tileSize %8==0
+//            && meshCol %8==0 && elem_bytes == 1
 //     For each (n,k) tile, decompose into (meshCol/8) x (tileSize/8) element
 //     sub-blocks; each sub-block goes through one HW Transposer block. The
 //     AGU iterates tpt x c_sub x s_sub x k x n  → 5 temporal dims (max).
@@ -1682,11 +1683,11 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_gather_2d(void *arg)
 //   e1  1 (1, 16, 32)    | _M1K16  HW p4/p5 (3)             | _M1N32  HW p4/p5 (3)             | _K16N32 HW
 //   e1  2 (16, 8, 16)    | _M16K8  HW p2                    | _M16N16 HW p2                    | _K8N16  HW
 //   e2  0 (32, 2, 32)    | _M32K2  CPU (1)                  | _M32N32 HW p2                    | _K2N32  CPU (2)
-//   e2  1 (1, 16, 32)    | _M1K16  HW p4/p5 (3)             | _M1N32  HW p3                    | _K16N32 HW
-//   e2  2 (16, 8, 16)    | _M16K8  HW p2                    | _M16N16 HW p2                    | _K8N16  HW
+//   e2  1 (1, 16, 32)    | _M1K16  HW p4/p5 (3)             | _M1N32  HW p3                    | _K16N32 CPU (4)
+//   e2  2 (16, 8, 16)    | _M16K8  HW p2                    | _M16N16 HW p2                    | _K8N16  CPU (4)
 //   e4  0 (32, 2, 32)    | _M32K2  HW p2                    | _M32N32 HW p2                    | _K2N32  CPU (2)
-//   e4  1 (1, 16, 32)    | _M1K16  HW p3                    | _M1N32  HW p3                    | _K16N32 HW
-//   e4  2 (16, 8, 16)    | _M16K8  HW p2                    | _M16N16 HW p2                    | _K8N16  HW
+//   e4  1 (1, 16, 32)    | _M1K16  HW p3                    | _M1N32  HW p3                    | _K16N32 CPU (4)
+//   e4  2 (16, 8, 16)    | _M16K8  HW p2                    | _M16N16 HW p2                    | _K8N16  CPU (4)
 //
 //   (1) A-tile inner row = tileSize*elem_bytes = 2 (e1) or 4 (e2) < 8 bytes; cannot form
 //       an 8-byte beat contiguous in both row-major src and packed A dst. CPU.
@@ -1695,11 +1696,10 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_gather_2d(void *arg)
 //   (3) meshRow=1 with a 16-byte inner row misses paths 1-3, so it needs K_T%8 (p4) or
 //       M_T%8 (p5), else CPU. These are the ONLY kernels whose path still depends on a
 //       runtime tile count; everything else is decided at compile time.
+//   (4) The B↔R HW path drives the 8x8 BYTE-granular Transposer, whose block is an 8x8
+//       ELEMENT block only at elem_bytes=1; wider elements take the CPU loop.
 //   CPU paths run on the DM core, which is not coherent with L3, so they stage
 //   non-local (L3) operands through L1 via xdma_cpu_stage_* (snax_xdma_lib.h).
-//
-// NOTE: this table used to list five array shapes -- (32,2,32), (1,8,64), (4,8,64),
-// (8,8,64), (8,32,8) -- which are NOT this RTL build's. Corrected against the cfg.
 // ==========================================================================
 
 // Dispatch helper for the layout-convert HW paths: configures an AGU-only
@@ -1741,7 +1741,7 @@ static inline void xdma_layout_run(
 }
 
 // D-layout → row-major. See section banner for the path table.
-//   Coverage: paths 1–5 cover all 5 VersaCore array_shapes via paths 1–3.
+//   Coverage: paths 1–5; which one each kernel takes is in that table.
 //   Arg layout: src_hi/lo, dst_hi/lo, M_T, N_T, meshRow, meshCol, elem_bytes.
 //   Strides used by all paths (factored out for readability):
 //     row_bytes_dst       = N_T * meshCol * elem_bytes   (full row of row-major R)
@@ -1857,6 +1857,11 @@ static inline uint32_t __xdma_d_to_row_major_impl(void *arg, uint32_t meshRow, u
         }
         volatile uint8_t *src = (volatile uint8_t *)(uint32_t)si.xdma_src;
         volatile uint8_t *dst = (volatile uint8_t *)so.l1;
+        // The CPU fallback is a real cost the model must price, so it emits the same
+        // XDMA_RUN markers as the HW path (xdma_layout_run). The sweep pairs events to
+        // configs POSITIONALLY: a config that emitted no event would shift every later
+        // measurement onto the wrong config.
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
         for (uint32_t m = 0; m < M_T; m++)
         for (uint32_t n = 0; n < N_T; n++)
         for (uint32_t r = 0; r < meshRow; r++)
@@ -1865,6 +1870,7 @@ static inline uint32_t __xdma_d_to_row_major_impl(void *arg, uint32_t meshRow, u
             uint32_t dst_off = ((m * meshRow + r) * N_cols + n * meshCol + c) * elem_bytes;
             for (uint32_t b = 0; b < elem_bytes; b++) dst[dst_off + b] = src[src_off + b];
         }
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
         xdma_layout_stage_out_flush(&si, &so, dst_addr, bytes);   // transfer + flush + free both
     }
     sp->return_value = (uint32_t)dst_addr;
@@ -1997,6 +2003,11 @@ static inline uint32_t __xdma_row_major_to_a_impl(void *arg, uint32_t meshRow, u
         }
         volatile uint8_t *src = (volatile uint8_t *)(uint32_t)si.xdma_src;
         volatile uint8_t *dst = (volatile uint8_t *)so.l1;
+        // The CPU fallback is a real cost the model must price, so it emits the same
+        // XDMA_RUN markers as the HW path (xdma_layout_run). The sweep pairs events to
+        // configs POSITIONALLY: a config that emitted no event would shift every later
+        // measurement onto the wrong config.
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
         for (uint32_t m = 0; m < M_T; m++)
         for (uint32_t k = 0; k < K_T; k++)
         for (uint32_t r = 0; r < meshRow; r++)
@@ -2005,6 +2016,7 @@ static inline uint32_t __xdma_row_major_to_a_impl(void *arg, uint32_t meshRow, u
             uint32_t dst_off = (((m * K_T + k) * meshRow + r) * tileSize + s) * elem_bytes;
             for (uint32_t b = 0; b < elem_bytes; b++) dst[dst_off + b] = src[src_off + b];
         }
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
         xdma_layout_stage_out_flush(&si, &so, dst_addr, bytes);   // transfer + flush + free both
     }
     sp->return_value = (uint32_t)dst_addr;
@@ -2034,8 +2046,8 @@ BINGO_DEF_XDMA_ROW_MAJOR_TO_A(e4_M16K8, 16, 8, 4)
 // The Transposer is fixed at 8x8-byte blocks, so the (n,k) B-tile is
 // decomposed into (meshCol/8) c-sub x (tileSize/8) s-sub element sub-blocks
 // and the AGU iterates them in addition to (n, k).
-//   Coverage: HW path when defined(WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16) && tileSize%8==0 && meshCol%8==0
-//             (all VersaCore array_shapes 1..4); CPU when tileSize=2 (shape 0).
+//   Coverage: HW path when defined(WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16) && tileSize%8==0
+//             && meshCol%8==0 && elem_bytes==1 (see the gate below); CPU otherwise.
 //   The CPU path stages non-local (L3) operands through L1 (xdma_cpu_stage_*).
 //   Arg layout: src_hi/lo, dst_hi/lo, K_T, N_T, tileSize, meshCol, elem_bytes.
 static inline uint32_t __xdma_row_major_to_b_impl(void *arg, uint32_t tileSize, uint32_t meshCol, uint32_t elem_bytes)
@@ -2058,7 +2070,15 @@ static inline uint32_t __xdma_row_major_to_b_impl(void *arg, uint32_t tileSize, 
     bool hw_done = false;
 
 #ifdef WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16
-    if ((tileSize % 8) == 0 && (meshCol % 8) == 0) {
+    // The HW transposer path requires elem_bytes == 1.
+    //
+    // WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16 is an 8x8 BYTE-granular block transposer, so
+    // one 8x8 byte block is one 8x8 ELEMENT block only when an element is a single byte. The
+    // stride scheme below is built on that identity; at 2- or 4-byte elements it does not
+    // compose and the transposed tile is wrong. Wider elements therefore take the CPU loop,
+    // which is slower but correct at any width. A width can join the HW path once the
+    // transposer has a native mode for it.
+    if ((tileSize % 8) == 0 && (meshCol % 8) == 0 && elem_bytes == 1) {
         xdma_layout_stage_t st;
         if (xdma_layout_stage_in(&st, src_addr, bytes) != 0) {
             printf_safe("[Cluster %d Core %d]: row_major_to_b L1 alloc failed!\r\n",
@@ -2126,6 +2146,11 @@ static inline uint32_t __xdma_row_major_to_b_impl(void *arg, uint32_t tileSize, 
         }
         volatile uint8_t *src = (volatile uint8_t *)(uint32_t)si.xdma_src;
         volatile uint8_t *dst = (volatile uint8_t *)so.l1;
+        // The CPU fallback is a real cost the model must price, so it emits the same
+        // XDMA_RUN markers as the HW path (xdma_layout_run). The sweep pairs events to
+        // configs POSITIONALLY: a config that emitted no event would shift every later
+        // measurement onto the wrong config.
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
         for (uint32_t n = 0; n < N_T; n++)
         for (uint32_t k = 0; k < K_T; k++)
         for (uint32_t c = 0; c < meshCol; c++)
@@ -2134,6 +2159,7 @@ static inline uint32_t __xdma_row_major_to_b_impl(void *arg, uint32_t tileSize, 
             uint32_t dst_off = (((n * K_T + k) * meshCol + c) * tileSize + s) * elem_bytes;
             for (uint32_t b = 0; b < elem_bytes; b++) dst[dst_off + b] = src[src_off + b];
         }
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
         xdma_layout_stage_out_flush(&si, &so, dst_addr, bytes);   // transfer + flush + free both
     }
     sp->return_value = (uint32_t)dst_addr;
@@ -2262,6 +2288,11 @@ static inline uint32_t __xdma_a_to_row_major_impl(void *arg, uint32_t meshRow, u
         }
         volatile uint8_t *src = (volatile uint8_t *)(uint32_t)si.xdma_src;
         volatile uint8_t *dst = (volatile uint8_t *)so.l1;
+        // The CPU fallback is a real cost the model must price, so it emits the same
+        // XDMA_RUN markers as the HW path (xdma_layout_run). The sweep pairs events to
+        // configs POSITIONALLY: a config that emitted no event would shift every later
+        // measurement onto the wrong config.
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
         for (uint32_t m = 0; m < M_T; m++)
         for (uint32_t k = 0; k < K_T; k++)
         for (uint32_t r = 0; r < meshRow; r++)
@@ -2270,6 +2301,7 @@ static inline uint32_t __xdma_a_to_row_major_impl(void *arg, uint32_t meshRow, u
             uint32_t dst_off = ((m * meshRow + r) * K_cols + k * tileSize + s) * elem_bytes;
             for (uint32_t b = 0; b < elem_bytes; b++) dst[dst_off + b] = src[src_off + b];
         }
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
         xdma_layout_stage_out_flush(&si, &so, dst_addr, bytes);   // transfer + flush + free both
     }
     sp->return_value = (uint32_t)dst_addr;
@@ -2297,7 +2329,8 @@ BINGO_DEF_XDMA_A_TO_ROW_MAJOR(e4_M16K8, 16, 8, 4)
 // B-layout → row-major. Inverse of row_major_to_b: same per-(n,k)-tile
 // transpose, src/dst stride arrays swapped, AGU iterates the same
 // (c_sub, s_sub, k, n) sub-block grid.
-//   Coverage: same as forward — HW for shapes 1..4, CPU for shape 0.
+//   Coverage: same as the forward kernel — HW only at elem_bytes==1 with
+//             tileSize%8==0 && meshCol%8==0; CPU otherwise.
 //   Arg layout: src_hi/lo, dst_hi/lo, K_T, N_T, tileSize, meshCol, elem_bytes.
 static inline uint32_t __xdma_b_to_row_major_impl(void *arg, uint32_t tileSize, uint32_t meshCol, uint32_t elem_bytes)
 {
@@ -2319,7 +2352,15 @@ static inline uint32_t __xdma_b_to_row_major_impl(void *arg, uint32_t tileSize, 
     bool hw_done = false;
 
 #ifdef WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16
-    if ((tileSize % 8) == 0 && (meshCol % 8) == 0) {
+    // The HW transposer path requires elem_bytes == 1.
+    //
+    // WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16 is an 8x8 BYTE-granular block transposer, so
+    // one 8x8 byte block is one 8x8 ELEMENT block only when an element is a single byte. The
+    // stride scheme below is built on that identity; at 2- or 4-byte elements it does not
+    // compose and the transposed tile is wrong. Wider elements therefore take the CPU loop,
+    // which is slower but correct at any width. A width can join the HW path once the
+    // transposer has a native mode for it.
+    if ((tileSize % 8) == 0 && (meshCol % 8) == 0 && elem_bytes == 1) {
         xdma_layout_stage_t st;
         if (xdma_layout_stage_in(&st, src_addr, bytes) != 0) {
             printf_safe("[Cluster %d Core %d]: b_to_row_major L1 alloc failed!\r\n",
@@ -2387,6 +2428,11 @@ static inline uint32_t __xdma_b_to_row_major_impl(void *arg, uint32_t tileSize, 
         }
         volatile uint8_t *src = (volatile uint8_t *)(uint32_t)si.xdma_src;
         volatile uint8_t *dst = (volatile uint8_t *)so.l1;
+        // The CPU fallback is a real cost the model must price, so it emits the same
+        // XDMA_RUN markers as the HW path (xdma_layout_run). The sweep pairs events to
+        // configs POSITIONALLY: a config that emitted no event would shift every later
+        // measurement onto the wrong config.
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
         for (uint32_t n = 0; n < N_T; n++)
         for (uint32_t k = 0; k < K_T; k++)
         for (uint32_t c = 0; c < meshCol; c++)
@@ -2395,6 +2441,7 @@ static inline uint32_t __xdma_b_to_row_major_impl(void *arg, uint32_t tileSize, 
             uint32_t dst_off = ((k * tileSize + s) * N_cols + n * meshCol + c) * elem_bytes;
             for (uint32_t b = 0; b < elem_bytes; b++) dst[dst_off + b] = src[src_off + b];
         }
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
         xdma_layout_stage_out_flush(&si, &so, dst_addr, bytes);   // transfer + flush + free both
     }
     sp->return_value = (uint32_t)dst_addr;
@@ -2421,7 +2468,7 @@ BINGO_DEF_XDMA_B_TO_ROW_MAJOR(e4_K8N16, 8, 16, 4)
 
 // row-major → D-layout. Inverse of d_to_row_major: src/dst stride arrays
 // are swapped versus the forward kernel; same path-selection logic.
-//   Coverage: paths 1–5 cover all 5 VersaCore array_shapes via paths 1–3.
+//   Coverage: paths 1–5; which one each kernel takes is in the section-banner table.
 //   Arg layout: src_hi/lo, dst_hi/lo, M_T, N_T, meshRow, meshCol, elem_bytes.
 static inline uint32_t __xdma_row_major_to_d_impl(void *arg, uint32_t meshRow, uint32_t meshCol, uint32_t elem_bytes)
 {
@@ -2526,6 +2573,11 @@ static inline uint32_t __xdma_row_major_to_d_impl(void *arg, uint32_t meshRow, u
         }
         volatile uint8_t *src = (volatile uint8_t *)(uint32_t)si.xdma_src;
         volatile uint8_t *dst = (volatile uint8_t *)so.l1;
+        // The CPU fallback is a real cost the model must price, so it emits the same
+        // XDMA_RUN markers as the HW path (xdma_layout_run). The sweep pairs events to
+        // configs POSITIONALLY: a config that emitted no event would shift every later
+        // measurement onto the wrong config.
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
         for (uint32_t m = 0; m < M_T; m++)
         for (uint32_t n = 0; n < N_T; n++)
         for (uint32_t r = 0; r < meshRow; r++)
@@ -2534,6 +2586,7 @@ static inline uint32_t __xdma_row_major_to_d_impl(void *arg, uint32_t meshRow, u
             uint32_t dst_off = (((m * N_T + n) * meshRow + r) * meshCol + c) * elem_bytes;
             for (uint32_t b = 0; b < elem_bytes; b++) dst[dst_off + b] = src[src_off + b];
         }
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
         xdma_layout_stage_out_flush(&si, &so, dst_addr, bytes);   // transfer + flush + free both
     }
     sp->return_value = (uint32_t)dst_addr;

@@ -3,7 +3,8 @@
 Per-op sweep workload for the **swap** op: an adjacent element-pair swap over a flat
 buffer, `dst[i] = src[i ^ 1]` (`x[1],x[0],x[3],x[2],…`). This is the data half of RoPE's
 `rotate_half` (`xswap`), produced **on-device** so in-layer `rope_q`/`rope_k` can swap a
-runtime `Q`/`K` buffer (which the datagen can no longer precompute). It is implemented as
+runtime `Q`/`K` buffer — one the datagen cannot precompute, since its contents only exist
+at run time. It is implemented as
 two strided **iDMA** copies (`__snax_bingo_kernel_idma_pairwise_swap`: odd→even and
 even→odd slots, ~2 cyc/elem) — the same one-time swap staging used in the `snax-xdma-rope`
 reference app. There is no HW xDMA swap path (the xDMA reader AGU strides forward only and

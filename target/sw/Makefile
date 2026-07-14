@@ -6,6 +6,10 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 # <Try not to blindly include other makefiles>
 # This makefile generates the SW sources for HeMAiA SoC
+# A recipe that dies after the shell has created/truncated `$@` leaves a partial
+# file with a fresh mtime, which make then treats as up to date.
+.DELETE_ON_ERROR:
+
 .PHONY: sw clean-sw single-sw snax-sw-gen clean-snax-sw-gen
 ############
 # Makefrag #
@@ -42,7 +46,7 @@ OCCAMYGEN  			  = $(ROOT)/util/occamygen/occamygen.py
 CFG				  	  ?= $(ROOT)/target/rtl/cfg/lru.hjson
 
 ifeq ($(IS_CLEAN_GOAL),)
-SNITCH_ROOT                 = $(shell $(BENDER) path snitch_cluster)
+SNITCH_ROOT                 := $(shell $(BENDER) path snitch_cluster)
 REGGEN     			       = $(shell $(BENDER) path register_interface)/vendor/lowrisc_opentitan/util/regtool.py
 SOURCE_CLINT_DIR            = $(shell $(BENDER) path clint)
 HEMAIA_D2D_LINK_REG_HJSON   = $(shell $(BENDER) path hemaia_d2d_link)/src/ctrl/hemaia_d2d_link_reg.hjson
@@ -198,9 +202,9 @@ $(SW_DEVICE_RT_DIR)/generated/occamy_defs.h: $(SW_DEVICE_RT_DIR)/template/occamy
 	@echo "[OCCAMYGEN] Generating $@"
 	@$(OCCAMYGEN) -c $(CFG) --outdir $(SW_DEVICE_RT_DIR)/generated --cheader $<
 
-# Depend on the config (and template) so host.ld is regenerated whenever the
-# active $(CFG) changes. Without this prerequisite a stale host.ld from a
-# previous config survives, placing __return_pointer$ outside the current SPM.
+# host.ld encodes the memory map of the active $(CFG) -- it places __return_pointer$
+# inside that config's SPM -- so the config is a prerequisite: a cfg switch must
+# regenerate the script.
 host/runtime/host.ld: host/runtime/host.ld.tpl $(CFG)
 	@echo "[OCCAMYGEN] Generating host.ld"
 	@$(OCCAMYGEN) -c $(CFG) --gen-host-ld --outdir host/runtime
@@ -256,11 +260,59 @@ check-snax-versacore-sync: $(SNAX_SW_GEN_MARKER)
 	@python3 $(ROOT)/util/hemaia/check_snax_versacore_lib_sync.py \
 		$(SNAX_VERSACORE_LOCAL_H) $(SNAX_VERSACORE_UPSTREAM_C)
 
+# `make sw` is a FLEET build: ~96 host apps against ONE HW cfg. Several legitimately do not
+# fit that cfg (a 128 kiB WIDE_SPM cannot hold gemm_sweep's D_cfg tables) or do not target it
+# at all (a 4-chiplet workload on a 1-chiplet build). SW_NONFATAL=1 isolates such an app: it
+# is purged and RECORDED, and the rest of the fleet still builds. sw-summary prints every
+# FAIL/SKIP at the end, and `make sw SW_STRICT=1` makes them a non-zero exit for a
+# zero-tolerance gate.
+#
+# `single-sw` / `make apps` are STRICT (SW_NONFATAL=0), which is what makes the above safe: a
+# binary only reaches a simulation via single-sw, so an app skipped by `make sw` can never be
+# staged silently -- the task fails loudly at `make apps`.
+SW_STATUS_DIR = $(abspath tmp/status)
+SW_SUMMARY    = $(abspath tmp/sw_build_summary.txt)
+SW_STRICT    ?= 0
+
+.PHONY: sw sw-summary
+
 sw: snax-sw-gen $(PLATFORM_HEADERS) host/runtime/host.ld check-snax-versacore-sync
+	@rm -rf $(SW_STATUS_DIR) && mkdir -p $(SW_STATUS_DIR)
 	$(MAKE) -C host libs
-	$(MAKE) -C host TARGET=partial-build
+	$(MAKE) -C host TARGET=partial-build SW_NONFATAL=1
 	$(MAKE) -C device all HOST_APP_TYPE=$(HOST_APP_TYPE)
-	$(MAKE) -C host TARGET=finalize-build
+	$(MAKE) -C host TARGET=finalize-build SW_NONFATAL=1
+	@$(MAKE) --no-print-directory sw-summary
+
+# One status shard per app (written by host/apps/common.mk) -> one summary.
+# Shards, not a shared file, so concurrent -j writers never collide.
+sw-summary:
+	@mkdir -p $(SW_STATUS_DIR)
+	@n_ok=$$(grep -lc '^OK'   $(SW_STATUS_DIR)/*.status 2>/dev/null | wc -l); \
+	 n_fail=$$(grep -lc '^FAIL' $(SW_STATUS_DIR)/*.status 2>/dev/null | wc -l); \
+	 n_skip=$$(grep -lc '^SKIP' $(SW_STATUS_DIR)/*.status 2>/dev/null | wc -l); \
+	 n_all=$$(( n_ok + n_fail + n_skip )); \
+	 { echo "# HeMAiA SW build summary"; \
+	   echo "# cfg  : $(CFG)"; \
+	   echo "# date : $$(date -Is)"; \
+	   echo "# apps : $$n_all total | $$n_ok OK | $$n_fail FAIL | $$n_skip SKIP"; \
+	   echo "#"; \
+	   printf '# %-6s\t%-52s\t%-9s\t%s\n' STATUS APP STAGE DETAIL; \
+	   cat $(SW_STATUS_DIR)/*.status 2>/dev/null | grep '^FAIL' | sort; \
+	   cat $(SW_STATUS_DIR)/*.status 2>/dev/null | grep '^SKIP' | sort; \
+	   cat $(SW_STATUS_DIR)/*.status 2>/dev/null | grep '^OK'   | sort; \
+	 } > $(SW_SUMMARY); \
+	 echo ""; \
+	 echo "=== SW build summary: $$n_all apps | $$n_ok OK | $$n_fail FAIL | $$n_skip SKIP"; \
+	 echo "=== full report: $(SW_SUMMARY)"; \
+	 if [ "$$n_fail" -gt 0 ]; then \
+	    echo ""; echo "--- FAILED apps ---"; \
+	    cat $(SW_STATUS_DIR)/*.status 2>/dev/null | grep '^FAIL' | sort \
+	      | awk -F'\t' '{printf "  %-52s %-9s %s\n", $$2, $$3, $$4}'; \
+	    if [ "$(SW_STRICT)" = "1" ]; then \
+	       echo ""; echo "SW_STRICT=1: failing the build."; exit 1; \
+	    fi; \
+	 fi
 
 # The host app name `single-sw` is building, mirroring the APP composition in
 # host/apps/common.mk. Handed to the device build as HOST_APPS so it emits the device

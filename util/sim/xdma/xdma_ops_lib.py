@@ -388,16 +388,15 @@ class ElementwiseAddOp:
 
 
 # ── FP16 streaming-SIMD primitive: softmax (reduce + map+tap + map[+quant]) ──
-# Decomposes one softmax row onto the 3 new stream kernels and validates the
-# fp16 output to tolerance. Exercises ALL the new capabilities in one chain:
+# Decomposes one softmax row onto the 3 stream kernels and validates the fp16
+# output to tolerance. One chain covers every stream capability:
 #   T1  reduce(MAX)                       FULL   -> establishes the shared AGU
 #   T2  map(EXP, b=-max) + reduce(ADD|TAP) STICKY -> exp row + Σexp, 2-ext fusion
 #   T3  map(LINEAR, a=inv_sum)            STICKY -> softmax probs (checked, fp16)
 #   Tq  map(LINEAR) + Fp16ToInt8          STICKY -> fused FP16->INT8 (path exercised)
-# The host scalars (-max, inv_sum) are baked into the args (as the standalone
-# snax-xdma-softmax app precomputes them in data.h); on real HeMAiA they come
-# from host nodes — that wiring is the bingo_framework next phase. int8 numeric
-# correctness is covered by the standalone app (no int8-tolerance check here).
+# The host scalars (-max, inv_sum) are baked into the args, as the standalone
+# snax-xdma-softmax app precomputes them in data.h. int8 numeric correctness is
+# covered by that standalone app (no int8-tolerance check here).
 
 def _f32bits(x):
     return int(np.float32(x).view(np.uint32))
@@ -499,8 +498,14 @@ def _mesh(ctx, c):
 
 
 def _layout_dtype(elem_bytes):
+    # The layout kernels exist for e1/e2/e4 only (9 per family = 3 array shapes x 3
+    # widths), so those are the only widths a config may ask for. layout_convert.py is
+    # dtype-agnostic (pure reshape/transpose), so each width needs nothing but its entry
+    # here: the numpy dtype, the random-value range, and the C type of the emitted arrays.
     if elem_bytes == 1:
         return np.int8, -128, 127, "int8_t"
+    if elem_bytes == 2:
+        return np.int16, -32_768, 32_767, "int16_t"
     if elem_bytes == 4:
         return np.int32, -1_000_000, 1_000_000, "int32_t"
     raise ValueError(f"layout conversion elem_bytes={elem_bytes} unsupported")
@@ -509,13 +514,12 @@ def _layout_dtype(elem_bytes):
 def _layout_cls(family, mesh, elem_bytes):
     """Resolve the concrete layout-conversion args class for (mesh, elem_bytes).
 
-    The layout kernels used to be ONE class per conversion, taking the mesh and the
-    element width as constructor args. They are now one class per RUNNABLE kernel =
-    (array shape, elem width): the mesh and width are baked into the class
-    (MESH_1/MESH_2/ELEM_BYTES) and select the C symbol it dispatches to (KERNEL_NAME),
-    exactly as the GEMM classes bake ARRAY_SHAPE_IDX. So the caller no longer passes
-    meshRow/tileSize/elem_bytes as args -- it picks the class that already has them,
-    which is what makes "the operands were blocked for this mesh" structural.
+    There is one class per RUNNABLE kernel = (array shape, elem width): the mesh and the
+    width are baked into the class (MESH_1/MESH_2/ELEM_BYTES) and select the C symbol it
+    dispatches to (KERNEL_NAME), exactly as the GEMM classes bake ARRAY_SHAPE_IDX. The
+    caller therefore does not pass meshRow/tileSize/elem_bytes as kernel args; it picks
+    the class that already carries them, which is what makes "the operands were blocked
+    for this mesh" structural rather than a value the caller could get wrong.
 
     *mesh* is the (MESH_1, MESH_2) pair the family is indexed by:
       A (row_to_a / a_to_row): (meshRow, tileSize)
@@ -529,6 +533,11 @@ def _layout_cls(family, mesh, elem_bytes):
     have = sorted((c.MESH_1, c.MESH_2, c.ELEM_BYTES) for c in base.__subclasses__())
     raise ValueError(f"no {family} kernel for mesh={mesh} elem_bytes={elem_bytes}; "
                      f"generated (mesh_1, mesh_2, elem_bytes): {have}")
+
+
+# tag -> (l1s, l1d) shared BingoMemAlloc handles, sized at the max over all configs.
+# Filled by run_op_workload() before the DFG is built; see the note in build() below.
+_SHARED_L1 = {}
 
 
 def make_layout_handlers():
@@ -550,8 +559,16 @@ def make_layout_handlers():
         def build(b, c, i, prev, _sizes=sizes, _fam=family, _tag=tag):
             n_src, n_dst, kwargs, mesh = _sizes(b, c)
             cls = _layout_cls(_fam, mesh, c["elem_bytes"])
-            l1s = b.l1(f"l1s_{i}", n_src)
-            l1d = b.l1(f"l1d_{i}", n_dst)
+            # Every config of a layout workload shares ONE src/dst pair, sized at the max
+            # over all of them. Both halves of that are load-bearing:
+            #  - Necessary: bingo_dfg never emits a free, so a per-config l1s_<i>/l1d_<i>
+            #    would keep every config's buffers live at once. The full 3 shapes x 3
+            #    widths x 9 points grid needs ~557 KiB that way, over the 512 KiB TCDM
+            #    (bingo_l1_alloc -> host_abort(OOM)).
+            #  - Sufficient: the configs are STRICTLY CHAINED -- run_op_workload threads
+            #    `prev`, so config i's golden check completes before config i+1's load
+            #    overwrites the buffer. Only one config's data is ever live.
+            l1s, l1d = _SHARED_L1[_tag]
             load = b.idma_load(f"Load_{i}", b.sym(f"in_{i}"), l1s, n_src, prev)
             # The class names the C kernel: one runnable symbol per (shape, elem width).
             op = b.op(f"Op_{i}", cls.KERNEL_NAME,
@@ -560,6 +577,8 @@ def make_layout_handlers():
 
         h.gen_data = gen_data
         h.build = build
+        h.sizes = sizes
+        h.is_layout = True
         handlers[tag] = h
 
     return handlers, reg
@@ -715,10 +734,28 @@ def run_op_workload(op, configs):
         print(f"Written data header: {args.data_h}")
 
     # Dump configs.json for the LUT driver (CONFIGS order == XDMA_RUN order).
+    #
+    # `op_ids` carries ONE id per config, naming the exact runnable kernel
+    # (family x array shape x elem width), e.g. xdma_row_major_to_a_e2_M1K16. A workload
+    # may sweep several (shape, width) variants, so the family name alone would not say
+    # which kernel a cycle count belongs to; emitting the id from the same class the DFG
+    # instantiates makes the sweep and the LUT structurally unable to disagree about it.
+    # Mirrors the GEMM sweep's contract.
     if args.configs_out is not None:
+        payload = {"op": handler.name, "configs": [dict(c) for c in configs]}
+        if getattr(handler, "is_layout", False):
+            # sizes(b, c) ignores b; [3] is the family's (MESH_1, MESH_2) pair.
+            payload["op_ids"] = [
+                _layout_cls(handler.family, handler.sizes(None, c)[3], c["elem_bytes"])
+                .KERNEL_NAME[len("__snax_bingo_kernel_"):]
+                for c in configs
+            ]
+            payload["meshes"] = {
+                str(c.get("array_shape", ctx["array_shape"])): list(_mesh(ctx, c))
+                for c in configs
+            }
         with open(args.configs_out, "w") as f:
-            json.dump({"op": handler.name,
-                       "configs": [dict(c) for c in configs]}, f, indent=2)
+            json.dump(payload, f, indent=2)
         print(f"Written configs: {args.configs_out}")
 
     platform = parse_platform_cfg(args.platformcfg)
@@ -733,6 +770,18 @@ def run_op_workload(op, configs):
         chiplet_ids=platform["chiplet_ids"])
 
     b = Builder(dfg)
+
+    # One shared L1 src/dst pair per layout workload, sized at the max over every config.
+    # See the note in the layout build(): L1 buffers are never freed, so a (3 shapes x 3
+    # widths) grid of per-config buffers would exceed the 512 KiB TCDM.
+    if getattr(handler, "is_layout", False):
+        sizes = [handler.sizes(None, c)[:2] for c in configs]
+        max_src = max(s[0] for s in sizes)
+        max_dst = max(s[1] for s in sizes)
+        _SHARED_L1[handler.tag] = (b.l1("l1s", max_src), b.l1("l1d", max_dst))
+        print(f"Shared L1: src={max_src}B dst={max_dst}B "
+              f"(total {(max_src + max_dst) / 1024:.1f} KiB for {len(configs)} configs)")
+
     prev = None
     for i, c in enumerate(configs):
         prev = handler.build(b, c, i, prev)

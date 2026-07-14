@@ -14,6 +14,7 @@ that identical argparse + runner construction so each runner is a one-line call.
 
 from __future__ import annotations
 
+import os
 import argparse
 import sys
 from pathlib import Path
@@ -70,6 +71,9 @@ def run_sweep_cli(script_file, *, description, default_task_name,
         with_macro=False,
         with_d2d=False,
         with_pll=False,
+        # The SW fleet build (~96 host apps) dominates a sweep's setup and is -j-safe;
+        # `rtl`/`bootrom` are not, and stay serial.
+        build_jobs=os.cpu_count(),
         max_jobs=args.max_sim_jobs,
     )
     runner.run(parse_tasks(task_yaml))

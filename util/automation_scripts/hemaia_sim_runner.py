@@ -112,6 +112,33 @@ ENGINES: Dict[str, Dict] = {
 GENERATED_CFG_DIR = "target/rtl/cfg/generated"
 
 
+# The testharness' verdict, printed by ``target/sim/testharness/util/check_finish_*.sv``
+# once every chip has written its end-of-computation marker.
+SIM_OK_MARKER = "All chips finished successfully"
+SIM_ERR_MARKER = "finished with errors"
+
+
+def _sim_passed(returncode: int, out: str) -> bool:
+    """Did the simulation actually succeed?
+
+    The exit code cannot answer this. ``$finish(-1)`` does not set one -- in
+    SystemVerilog that argument selects the diagnostic verbosity, not a status -- so a
+    simulator whose testharness detected a nonzero EOC code still exits 0. A workload
+    that aborts (an L1 OOM, a failed golden check) is therefore indistinguishable from a
+    clean run by exit code alone.
+
+    The testharness' own verdict is authoritative, so require it: every chip must have
+    reached the success marker, and no chip may have reported an error. Absence of both
+    means the run died before the EOC check (a crash, a kill, a licence failure) and is
+    not a pass either.
+    """
+    if returncode != 0:
+        return False
+    if SIM_ERR_MARKER in out:
+        return False
+    return SIM_OK_MARKER in out
+
+
 # ---------------------------------------------------------------------------
 # RTL config resolution
 # ---------------------------------------------------------------------------
@@ -548,6 +575,7 @@ class HeMAiASimRunner:
         skip_build: bool = False,
         skip_compile: bool = False,
         compile_jobs: Optional[int] = None,
+        build_jobs: Optional[int] = None,
     ) -> None:
         if engine not in ENGINES:
             raise ValueError(f"Unknown engine {engine!r}; choose from {sorted(ENGINES)}")
@@ -583,6 +611,10 @@ class HeMAiASimRunner:
         # Parallelism for the sim compile (``make -j``); None = no -j flag. The
         # Verilator build in particular is far too slow serially on a CI runner.
         self.compile_jobs = compile_jobs
+        # `make -jN` for the SW build. Only `sw` is parallel-safe (and it is the slow
+        # one: ~96 host apps x ~20 device apps). `rtl` runs occamygen + bender script
+        # generation and `bootrom` takes seconds -- both stay serial.
+        self.build_jobs = build_jobs
 
     # -- helpers -----------------------------------------------------------
 
@@ -630,7 +662,13 @@ class HeMAiASimRunner:
     def build_hw_sw(self) -> None:
         """Build SW, bootrom, and RTL inside the container."""
         for target in ("sw", "bootrom", "rtl"):
-            self._container(["make", target, f"CFG_OVERRIDE={self.effective_cfg}"])
+            cmd = ["make"]
+            if self.build_jobs and target == "sw":
+                # Never inside a recipe: every recursion uses $(MAKE), so one top-level
+                # -jN hands the whole tree a single jobserver.
+                cmd.append(f"-j{self.build_jobs}")
+            cmd += [target, f"CFG_OVERRIDE={self.effective_cfg}"]
+            self._container(cmd)
 
     # -- Step 3: build apps and stage per-task directories -----------------
 
@@ -688,12 +726,11 @@ class HeMAiASimRunner:
             else:
                 subprocess.run(compile_cmd, cwd=self.repo_root, check=True)
 
-        # ``make`` can report success without producing a binary: target/sim pipes
-        # the compile through ``| tee``, so the shell reports *tee's* status and a
-        # dead EDA tool (e.g. a VCS/glibc mismatch) goes unnoticed.  Catch that
-        # here -- otherwise _copy_path() skips the missing source and every task
-        # dies at launch with a bare FileNotFoundError, which reads like N failing
-        # tests rather than one failed build.
+        # Insist the compile produced a binary before staging it.  ``_copy_path()``
+        # silently skips a missing source, so a ``make`` that exits 0 without one (a dead
+        # EDA tool, e.g. a VCS/glibc mismatch) would otherwise surface as every task dying
+        # at launch with a bare FileNotFoundError -- which reads like N failing tests
+        # rather than one failed build.
         sim_root = self.repo_root / "target/sim"
         binary = sim_root / "bin" / self.spec["binary"]
         if not binary.exists():
@@ -744,7 +781,7 @@ class HeMAiASimRunner:
                     out_bytes, _ = proc.communicate(timeout=SIM_TIMEOUT_SECONDS)
                     elapsed = time.monotonic() - start
                     out = out_bytes.decode(errors="replace") if out_bytes else ""
-                    return str(task_dir), ci_name, proc.returncode == 0, elapsed, out
+                    return str(task_dir), ci_name, _sim_passed(proc.returncode, out), elapsed, out
                 except subprocess.TimeoutExpired:
                     _kill_pgid(pgid)
                     out_bytes, _ = proc.communicate()

@@ -23,8 +23,8 @@ SEED = 42
 N_BIG = 4096                 # big arrays for the timing sweep
 # Sweep sizes. MUST match ara_sizes[] / ARA_NSIZES in target/sw/host/runtime/ara_sweep.h --
 # the per-size goldens emitted here (golden_vec[], golden_reduce*[]) are indexed by the
-# sweep's size loop, so a short list here is an out-of-bounds read there. 32 and 128 were
-# added for the decode operating point (n = rows*32 lanes = 32 at rows=1).
+# sweep's size loop, so a short list here is an out-of-bounds read there. 32 and 128 cover the
+# decode operating point (n = rows*32 lanes = 32 at rows=1).
 SIZES = (32, 64, 128, 256, 1024, 4096)
 
 
@@ -165,9 +165,9 @@ _I8_R = {"add": 50, "sub": 50, "mul": 8, "max": 100, "min": 100,
 _I16_R = {"add": 10000, "sub": 10000, "mul": 150, "max": 20000, "min": 20000,
           "relu": 20000, "neg": 20000, "abs": 20000, "reduce_sum": 20000, "reduce_max": 20000}
 # INT32 is a first-class Ara precision (BINGO_PREC_INT32 -- HeMAiA has an args class for every
-# int-capable op at int32), but it was never swept, so bingo had no curve for any of the 10 int32 ops.
-# `add_int32` is also the K-split reduce kernel. Ranges keep the exact-integer golden inside int32:
-# reduce_sum over N_BIG=4096 elements of +-100k stays well under 2^31.
+# int-capable op at int32), so all 10 int32 ops are swept here; `add_int32` is also the K-split
+# reduce kernel. Ranges keep the exact-integer golden inside int32: reduce_sum over N_BIG=4096
+# elements of +-100k stays well under 2^31.
 _I32_R = {"add": 1000000, "sub": 1000000, "mul": 30000, "max": 2000000, "min": 2000000,
           "relu": 2000000, "neg": 2000000, "abs": 2000000, "reduce_sum": 100000, "reduce_max": 2000000}
 

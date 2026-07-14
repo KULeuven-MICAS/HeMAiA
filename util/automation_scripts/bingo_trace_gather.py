@@ -8,9 +8,8 @@
 
 ``gather_{ara,gemm,xdma}_luts.py`` all need the same building blocks: the task
 order from a task YAML, the dasm -> txt -> bingo_trace.json conversion pipeline,
-and the per-event ``dur_cc`` extraction. Those used to be copy-pasted (byte for
-byte) into each gatherer; they live here once now. Only the op-specific event
-name (``GEMM_FULL_RUN`` / ``XDMA_RUN``) differs and is passed in.
+and the per-event ``dur_cc`` extraction. They live here once; only the op-specific
+event name (``GEMM_FULL_RUN`` / ``XDMA_RUN``) differs and is passed in.
 """
 
 import json

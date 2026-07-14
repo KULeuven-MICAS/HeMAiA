@@ -127,7 +127,7 @@ Transitions:
 					    mailbox message / local completion
 ```
 
-This replaces earlier O(N) scans per iteration, lowering latency and scaling with active rather than total tasks.
+Dispatch latency therefore scales with the number of *active* tasks, not with the total size of the task graph: no iteration of the scheduler loop scans the full task array.
 
 ---
 ## 8. Dependency Model
@@ -144,7 +144,7 @@ Libbingo uses **BingoAlloc** (a modified O1Heap allocator) arenas per chip & per
 * L2 heap: low‑latency small allocations (metadata, task descriptors)
 * L3 heap: larger buffers / user data
 
-BingoAlloc uses alignment-based rounding (not power-of-2) to allow allocations up to ~capacity, not just capacity/2.
+BingoAlloc rounds a request up to its alignment rather than to a power of two, so a single allocation can span nearly the whole arena.
 Helper accessors expose arena managers. Alignments follow BingoAlloc requirements (128 B). A failed allocation is instrumented with diagnostics (capacity, allocated, peak, OOM count).
 
 ---

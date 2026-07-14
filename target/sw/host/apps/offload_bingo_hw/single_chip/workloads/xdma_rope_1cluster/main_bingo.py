@@ -11,9 +11,9 @@
 #   P1 x*cos -> tmp1 ; P2 xswap*sin -> tmp2 ; P3 tmp1+tmp2 -> out  (xDMA, in-kernel)
 #   Store(out) + Check(fp16 tol)
 # The kernel allocates its own xswap/tmp1/tmp2 scratch from L1, so the DFG only
-# loads x/cos/sin and provides out. (Was: 4 loads + 3 StreamElementwise nodes;
-# now folded into the kernel, and xswap is no longer a precomputed input — which
-# is what makes in-layer rope_q/rope_k possible.)
+# loads x/cos/sin and provides out. xswap being derived inside the kernel rather
+# than supplied as an input is what lets rope_q/rope_k run in-layer, on an x that
+# only exists at run time.
 
 import os
 import sys

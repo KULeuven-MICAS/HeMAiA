@@ -70,17 +70,31 @@ aggregate-tmps: $(ALL_TMPS)
 # globbed back into $^ below) and mv only on a real change.
 define concat_if_changed
 	@> $@.new
-	@$(foreach f,$^,cat $(f) >> $@.new;)
+	@$(foreach f,$(filter-out FORCE,$^),cat $(f) >> $@.new;)
 	@if cmp -s $@.new $@; then rm -f $@.new; else mv -f $@.new $@; fi
 endef
 
-$(ALL_HOST_LIST): $(wildcard host_app_list.*.tmp)
+.PHONY: FORCE
+FORCE:
+
+# FORCE, because DELETING a prerequisite does not make a target out of date.
+#
+# A host app whose link fails is DE-registered: host/apps/common.mk removes its three
+# host_app_*.<APP>.tmp shards. Without FORCE the aggregate -- still newer than every
+# surviving shard -- would never be rebuilt and would keep naming the dead app, so the
+# device build would emit binaries for a host ELF that does not exist, at an origin that
+# belongs to some other app. (Likewise when a workload is dropped from an APPS list.)
+#
+# It costs nothing: concat_if_changed already cmp's and only mv's on a real change, so when
+# nothing changed the mtime -- and the whole device-ELF relink chain hanging off it -- is
+# left alone.
+$(ALL_HOST_LIST): $(wildcard host_app_list.*.tmp) FORCE
 	$(concat_if_changed)
 
-$(ALL_ORIGIN_LIST): $(wildcard host_app_origin.*.tmp)
+$(ALL_ORIGIN_LIST): $(wildcard host_app_origin.*.tmp) FORCE
 	$(concat_if_changed)
 
-$(ALL_DEV_LIST): $(wildcard dev_app_list.*.tmp)
+$(ALL_DEV_LIST): $(wildcard dev_app_list.*.tmp) FORCE
 	$(concat_if_changed)
 
 .PHONY: all $(RTDIR) $(APPDIR) aggregate-tmps

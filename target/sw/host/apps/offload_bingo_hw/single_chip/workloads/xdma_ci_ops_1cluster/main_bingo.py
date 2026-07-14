@@ -171,10 +171,10 @@ def add_l3_direct_layout_test(dfg, name, src_sym, kernel_name, kernel_args_cls,
 def layout_conversions(M_T, K_T, N_T, meshRow, tileSize, meshCol, elem_bytes):
     """The 6 layout converters at this (mesh, elem_bytes).
 
-    The mesh and the element width are no longer kernel ARGUMENTS -- they decide which xDMA AGU path
-    the device takes, so each is baked into its own wrapper (`..._e1_M32K2`). `xdma_conv_args` resolves
+    The mesh and the element width are not kernel ARGUMENTS: they decide which xDMA AGU path the
+    device takes, so each combination has its own wrapper (`..._e1_M32K2`). `xdma_conv_args` resolves
     the (family, mesh, elem_bytes) triple to that wrapper's args class, which names the C symbol in
-    KERNEL_NAME. What is left in the args is the two addresses and the two tile counts.
+    KERNEL_NAME. The args themselves carry only the two addresses and the two tile counts.
     """
     A_kw = dict(M_T=M_T, K_T=K_T)
     B_kw = dict(K_T=K_T, N_T=N_T)

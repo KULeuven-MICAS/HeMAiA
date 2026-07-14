@@ -37,15 +37,15 @@
 # lanes, independent of D. Two plain strided copies (bcast/gather) carry all the layout work.
 #
 # T34 is the map+reduce MERGE (the snax-xdma-softmax-fold "B3" fusion): StreamMap(EXP)
-# chained into StreamReduce(ADD|TAP) in ONE xDMA task. It replaces the old T3 map(EXP) +
-# T4 reduce(ADD) pair, whose reduce RE-READ the whole exp tensor -- so it removes a full
-# pass over [rows,D] and one task setup (~600 cc of CSR orchestration).
+# chained into StreamReduce(ADD|TAP) in ONE xDMA task. The reduce consumes the map's output
+# stream, so Sexp costs no extra pass over [rows,D] and no second task setup (~600 cc of CSR
+# orchestration).
 #
 # The cost of TAP is a PADDED exp: each row is [beats mapped beats | 1 scalar beat], i.e.
-# (beats+1)*64 bytes, with the row's Sexp inline as the trailing beat. That ripples into
-# the two consumers, which is why they take strides now:
+# (beats+1)*64 bytes, with the row's Sexp inline as the trailing beat. That ripples into the
+# two consumers, which is why they take strides:
 #   H2 reads the per-row scalars as a strided column INSIDE exp -- exp.view(beats*64) with
-#      in_row_stride=pad_row (there is no separate sum[] buffer any more).
+#      in_row_stride=pad_row (there is no separate sum[] buffer).
 #   B2 lays the recip broadcast down at exp's PADDED pitch, so recip_bc and exp share a row
 #      stride and T5's interleave delta is constant.
 #   T5/Tq read exp with src_row_stride=pad_row -> a 3D {operand, beat, row} reader that skips
@@ -227,9 +227,9 @@ def build_config(g, i, prev):
                 SnaxBingoKernelXdmaStreamElementwiseArgs(l1_x, l1_xs, beats, op=EW_ADD,
                     operand_count=2, rows=rows, src_b_addr=l1_negbc, csr_mode=0,
                     dst_bound0=rows * beats), b1)
-    # MERGED: exp(xs) and Sexp in ONE task -- StreamMap(EXP) -||> StreamReduce(ADD|TAP).
-    # Replaces the old Exp + Sum pair (the Sum re-read the whole exp tensor). The subtract
-    # cannot fold into the map's `b` here: rows>1, and each row has its own max.
+    # MERGED: exp(xs) and Sexp in ONE task -- StreamMap(EXP) -||> StreamReduce(ADD|TAP), so
+    # the sum is taken off the map's output stream and never re-reads the exp tensor. The
+    # subtract cannot fold into the map's `b` here: rows>1, and each row has its own max.
     t34 = g.node(f"ExpSum_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_stream_map_reduce",
                  SnaxBingoKernelXdmaStreamMapReduceArgs(l1_xs, l1_expb, beats, func=F_EXP,
                      reduce_op=R_ADD, tap=True, a_f32bits=ONE_F32, b_f32bits=0,
