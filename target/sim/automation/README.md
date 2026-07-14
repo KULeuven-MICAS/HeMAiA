@@ -14,17 +14,33 @@ waveform / vendor-module knobs they set.
 | `test/`       | Interactive single-task drivers (`0/1/2_start_*_sim.py`) — vsim + waveform, for debug. |
 | `ci/`         | Regression suites: `local_ci` (host VCS) and `git_ci` (containerised Verilator).       |
 | `sweep/`      | Op-cost LUT sweeps: `xdma` and `ara` (many tasks, VCS, no waveform).                    |
-| `Makefile`    | Convenience targets (`local-ci`, `git-ci`, `sweep-xdma`, `sweep-ara`).                  |
+| `Makefile`    | Convenience targets (`local-ci`, `git-ci`, `sweep-xdma`, `sweep-ara`, `clean`).         |
 
-Run any batch flow through the Makefile (`JOBS` overrides the parallel-sim count):
+Run any batch flow through the Makefile (`JOBS` overrides the parallel-sim count,
+`SUITE` picks the local-CI suite — see [Local CI suites](#local-ci-suites)):
 
 ```bash
+source /users/micas/fkong/no_backup/src_hemaia_eda.sh   # EDA env, see note below
+
 cd HeMAiA/target/sim/automation
-make local-ci   JOBS=8     # host VCS regression
-make git-ci                # Verilator regression (inside the hemaia container)
-make sweep-xdma            # xDMA op-cost LUT sweep
-make sweep-ara             # Ara FP32 op-cost sweep
+make local-ci   JOBS=8                    # host VCS regression, SUITE=tapeout
+make local-ci   SUITE=tapeout_2c JOBS=8   # …a different tapeout cfg
+make git-ci                               # Verilator regression (in the hemaia container)
+make sweep-xdma                           # xDMA op-cost LUT sweep
+make sweep-ara                            # Ara FP32 op-cost sweep
+make clean                                # drop task_<idx>/, summaries, __pycache__
 ```
+
+`make clean` is also reachable from the repo root as `make clean-automation`. It is
+deliberately **not** part of `clean-repo`: every simulation run begins by calling
+`make clean`, so folding it in would make each run wipe the results of every other
+flow. Sweep LUTs and CSVs are never removed — re-deriving one costs hours of
+simulation.
+
+> **Source the EDA environment first.** Without it, `vcs` can resolve to a version
+> that cannot start on this host. The failure is silent — `target/sim` compiles via
+> `bash compile.sh | tee …`, and a pipe reports *tee's* exit status, so `make`
+> claims success with no `simv` and every task comes back `FAIL (0s)`.
 
 > **VCS license note.** The batch flows launch up to `JOBS` parallel VCS sims.
 > The launcher passes `+vcs+lic+wait` so a sim that loses the runtime-license
@@ -61,11 +77,11 @@ flags, the cfg/sim_cfg, and the workload knobs.
 
 ## Flows
 
-| Script                              | RTL cfg                       | Sim cfg                  | Vendor repos pulled                                |
-| ----------------------------------- | ----------------------------- | ------------------------ | -------------------------------------------------- |
-| `test/0_start_single_chiplet_sim.py`| `hemaia_singlechip.hjson`     | `sim_rtl.hjson`          | none (open-source `tech_cells_generic` only)       |
-| `test/1_start_multi_chiplet_sim.py` | `hemaia_multichip_ci.hjson`   | `sim_rtl.hjson`          | `tech_cells_tsmc16`, `hemaia_d2d_link`             |
-| `test/2_start_tapeout_sim.py`       | `hemaia_tapeout.hjson`        | `sim_rtl_with_pll.hjson` | `tech_cells_tsmc16`, `hemaia_d2d_link`, `hemaia_clk_rst_controller` |
+| Script                              | RTL cfg                                | Sim cfg                  | Vendor repos pulled                                |
+| ----------------------------------- | -------------------------------------- | ------------------------ | -------------------------------------------------- |
+| `test/0_start_single_chiplet_sim.py`| `hemaia_singlechiplet_1cluster.hjson`  | `sim_rtl.hjson`          | none (open-source `tech_cells_generic` only)       |
+| `test/1_start_multi_chiplet_sim.py` | `hemaia_tapeout.hjson` (PLL off)       | `sim_rtl.hjson`          | `tech_cells_tsmc16`, `hemaia_d2d_link`             |
+| `test/2_start_tapeout_sim.py`       | `hemaia_tapeout.hjson`                 | `sim_rtl_with_pll.hjson` | `tech_cells_tsmc16`, `hemaia_d2d_link`, `hemaia_clk_rst_controller` |
 
 The vendor-repo selection mirrors the `--macro / --d2d / --pll` flags of
 [`../../tapeout/1_git_pull_private_modules.sh`](../../tapeout/1_git_pull_private_modules.sh):
@@ -75,9 +91,9 @@ The vendor-repo selection mirrors the `--macro / --d2d / --pll` flags of
   Simulation time: ~5–10 min.
 * **`1` — multi-chiplet (no PLL).** 2×2 compute + 1 memory chip on the
   virtual interposer. Pulls the TSMC16 macros and the D2D link, but keeps
-  the open-source clock/reset controller. The only delta from flow `2` is
-  the PLL, so this is a good intermediate stop before enabling it.
-  Simulation time: ~15–40 min.
+  the open-source clock/reset controller. It runs the *same*
+  `hemaia_tapeout.hjson` as flow `2`, so the PLL is the only delta — a good
+  intermediate stop before enabling it. Simulation time: ~15–40 min.
 * **`2` — full tapeout.** Same multi-chiplet setup as flow `1` plus the
   vendor PLL controller (`use_vendor_pll: true` in `hemaia_tapeout.hjson`,
   `sim_with_pll: true` in `sim_rtl_with_pll.hjson`). Pulls all three
@@ -86,6 +102,59 @@ The vendor-repo selection mirrors the `--macro / --d2d / --pll` flags of
 Recommended ladder: validate the SW with flow `0`, promote to flow `1` to
 exercise the cross-chiplet path, and only run flow `2` for the final
 pre-silicon sign-off pass.
+
+### `with_pll` and `use_vendor_pll`
+
+`with_pll` is the single source of truth for the vendor PLL. It selects the
+private clock/reset controller in `Bender.local` **and** drives `use_vendor_pll`
+in the RTL cfg: `occamy_chip.sv.tpl` instantiates `hemaia_clk_rst_controller`
+unconditionally, so a cfg claiming `use_vendor_pll: true` under `with_pll=False`
+would elaborate the *public* module with `USE_VENDOR_PLL(1)`.
+
+`resolve_rtl_cfg()` reconciles the two: when the cfg disagrees with `with_pll`
+it writes a patched copy under `target/rtl/cfg/generated/` (gitignored) and
+passes that as `CFG_OVERRIDE`. A flow therefore names a tapeout cfg and states
+the PLL setting it wants. The sim cfg is *not* derived — `sim_with_pll` is
+chosen by picking `sim_rtl.hjson` vs `sim_rtl_with_pll.hjson`.
+
+### `spm_wide_size` (local CI only)
+
+The same mechanism sets `spm_wide.length` (the `WIDE_SPM` region in `host.ld`).
+Only the `ci/local_ci/*` runners use it, via `--spm-wide-size BYTES` (default
+16 MiB; `0` keeps the cfg's own value). They need it because the tapeout's
+**128 kiB** SPM is too small for one task in the suite —
+`gemm-msplit-4cluster-1chip` embeds a ~2 MiB `.devicebin` that overflows
+`WIDE_SPM` at *link* time.
+
+The three `test/` flows leave it unset and run whatever their cfg declares, so
+flow `2` exercises the real tapeout SPM. As a result the local CI and flow `1`
+resolve to different cfgs: an SPM-capacity failure in CI reproduces under flow
+`1` only if you pass a matching `spm_wide_size`.
+
+## Local CI suites
+
+`ci/local_ci/` holds one subdirectory per tapeout RTL cfg. Each is self-contained
+— its own `run_local_ci.py` (with the cfg hardcoded), its own
+`task_local_ci.yaml`, and its own `task_<idx>/` run dirs — so the suites never
+clobber one another:
+
+| Suite dir         | RTL cfg                        | Clusters / chiplet                    | Tasks |
+| ----------------- | ------------------------------ | ------------------------------------- | ----- |
+| `tapeout/`        | `hemaia_tapeout.hjson`         | 1x `snax_versacore_to_cluster`         | the full 36-task suite |
+| `tapeout_1c_simd/`| `hemaia_tapeout_1c_simd.hjson` | 1x `snax_versacore_to_simd_cluster`    | the 5 `xdma_*` per-op workloads |
+| `tapeout_2c/`     | `hemaia_tapeout_2c.hjson`      | 2x `snax_versacore_to_256KB_cluster`   | `dummy_2cluster` (placeholder) |
+| `tapeout_2c_simd/`| `hemaia_tapeout_2c_simd.hjson` | 2x `..._256KB_simd_cluster`            | `dummy_simd_2cluster` (placeholder) |
+
+    cd ci/local_ci/tapeout_2c && python3 run_local_ci.py -j 8
+
+**A task list is only valid for its own cfg.** `guard_cluster_count()` compares a
+workload's `params.hjson` `num_clusters` against `N_CLUSTERS_PER_CHIPLET` in the
+generated `occamy.h`; on a mismatch it *deletes* the workload's
+`offload_bingo_hw.h` and the app fails to link. So a 2-cluster workload belongs
+only in a 2-cluster suite. For the same reason, a workload whose DFG is generated
+from the platform header must list `$(PLATFORM_H)` as a prerequisite of its
+generated header, or the first build after a cfg switch runs against a stale
+`occamy.h`.
 
 ## Flow inside each script
 

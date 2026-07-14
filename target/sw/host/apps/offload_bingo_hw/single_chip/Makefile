@@ -46,6 +46,9 @@ APPS += gemm_nsplit_accumprevc_4cluster
 APPS += basic_softmax_host
 APPS += attn_reference_4cluster
 APPS += device_host_idma_check_1cluster
+# Placeholders for the 2-cluster tapeout CI suites (hemaia_tapeout_2c[_simd]).
+APPS += dummy_2cluster
+APPS += dummy_simd_2cluster
 SUBDIRS = $(addprefix workloads/,$(APPS))
 
 

@@ -16,8 +16,11 @@ from typing import Dict, Iterator, Optional
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parents[4]
 
-CFG_NAME = "hemaia_multichip_ci.hjson"
+CFG_NAME = "hemaia_tapeout.hjson"
 SIM_CFG_NAME = "sim_rtl.hjson"
+# The vendor PLL: gates the private clk/rst controller *and* ``use_vendor_pll``
+# in the RTL cfg. Keep it in step with SIM_CFG_NAME (sim_rtl_with_pll.hjson).
+WITH_PLL = False
 
 HOST_APP_TYPE = "offload_bingo_hw"
 CHIP_TYPE = "single_chip"
@@ -91,7 +94,14 @@ def log_name(index: int, test_name: str) -> str:
 
 
 def cfg_override() -> str:
-    return f"target/rtl/cfg/{CFG_NAME}"
+    """The RTL cfg to hand to ``CFG_OVERRIDE``, with the PLL flag reconciled.
+
+    Resolved on every call rather than cached: ``first_run_setup()`` runs
+    ``make clean``, which wipes the generated-cfg directory.
+    """
+    from hemaia_sim_runner import resolve_rtl_cfg
+
+    return resolve_rtl_cfg(REPO_ROOT, f"target/rtl/cfg/{CFG_NAME}", with_pll=WITH_PLL)
 
 
 def sim_cfg_path() -> Path:
@@ -121,7 +131,7 @@ def first_run_setup() -> None:
     run_host_script(tapeout / "0_reset_private_modules.sh")
     run_host_script(
         tapeout / "1_git_pull_private_modules.sh",
-        ["--macro=1", "--d2d=1", "--pll=1"],
+        ["--macro=1", "--d2d=1", f"--pll={1 if WITH_PLL else 0}"],
     )
 
     print("[Step 2] Rebuilding SW/bootrom/RTL and preparing VCS inputs")

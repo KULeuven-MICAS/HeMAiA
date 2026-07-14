@@ -24,7 +24,7 @@ from hemaia_sim_runner import (  # noqa: E402
 )
 
 # Single-chip: host WIDE_SPM holds the baked per-config arrays; no D2D/macro/PLL.
-DEFAULT_CFG = "target/rtl/cfg/hemaia_singlechip.hjson"
+DEFAULT_CFG = "target/rtl/cfg/hemaia_singlechiplet_1cluster.hjson"
 DEFAULT_SIM_CFG = "target/sim/cfg/sim_rtl.hjson"
 
 

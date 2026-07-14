@@ -25,9 +25,20 @@ _PERF_HEADER = os.path.join(_ROOT, "target/sw/shared/runtime/perf_tracing.h")
 
 
 def parse_task_order(task_yaml):
-    """Return the ordered workload names from the task YAML (= task_<idx>)."""
+    """Return the ordered workload names from the task YAML (index = task idx)."""
     from hemaia_sim_runner import parse_tasks  # noqa: E402  (no PyYAML needed)
     return [t["workload"] for t in parse_tasks(Path(task_yaml))]
+
+
+def task_dir(ci_dir, idx):
+    """Path to the run directory for task *idx*, or None if it is absent.
+
+    Run directories are named ``task_<idx>_<ci_name>``; look them up by index
+    rather than assembling the name, since only the index is known here.
+    """
+    from hemaia_sim_runner import find_task_dir  # noqa: E402
+    found = find_task_dir(ci_dir, idx)
+    return str(found) if found is not None else None
 
 
 def convert_traces(logs_dir, verbose=True):

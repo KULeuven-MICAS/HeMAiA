@@ -1,4 +1,4 @@
-.PHONY: clean-repo clean-bender FORCE bootrom sw single-sw rtl open_terminal hemaia_system_vivado_preparation \
+.PHONY: clean-repo clean-bender clean-automation FORCE bootrom sw single-sw rtl open_terminal hemaia_system_vivado_preparation \
 		hemaia_chip_vivado hemaia_chip_east_vivado hemaia_chip_west_vivado hemaia_chip_vivado_gui \
 		hemaia_system_vivado hemaia_system_east_vivado hemaia_system_west_vivado hemaia_system_vivado_gui \
 		hemaia_system_east_vivado_gui hemaia_system_vlt occamy_system_vsim_preparation occamy_system_vsim \
@@ -37,8 +37,16 @@ $(CFG): FORCE
 	fi
 FORCE:
 
-clean-sw: 
+clean-sw:
 	$(MAKE) -C ./target/sw/ clean
+
+# Drop the task_<idx>/ run dirs, summaries and __pycache__ that the CI / sweep /
+# test flows leave under target/sim/automation.  Kept out of clean-repo on
+# purpose: every simulation run starts by calling `make clean`, so folding this in
+# would make each run wipe the results of every other flow.  Sweep LUTs/CSVs are
+# preserved either way.
+clean-automation:
+	$(MAKE) -C ./target/sim/automation clean
 
 clean-repo:
 	$(MAKE) -C ./target/fpga/hemaia_chip/ clean
@@ -54,6 +62,7 @@ clean-repo:
 	$(MAKE) -C ./target/tapeout clean
 	rm -rf ./target/rtl/src/bender_targets.tmp
 	rm -rf ./target/rtl/cfg/lru.hjson
+	rm -rf ./target/rtl/cfg/generated
 	cd ./target/tapeout && ./0_reset_private_modules.sh
 
 clean-bender:

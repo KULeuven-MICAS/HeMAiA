@@ -42,7 +42,7 @@ _THIS = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.normpath(os.path.join(_THIS, "../../../../../"))
 sys.path.insert(0, os.path.join(_ROOT, "util/automation_scripts"))
 from bingo_trace_gather import (  # noqa: E402
-    convert_traces, extract_run_cycles, parse_task_order, run_bingo_trace,
+    convert_traces, extract_run_cycles, parse_task_order, run_bingo_trace, task_dir,
 )
 
 _WORKLOADS = os.path.join(
@@ -73,7 +73,11 @@ def _pair(stream, configs, what, workload, verbose):
 
 
 def gather_one(workload, idx, ci_dir, verbose=True):
-    logs_dir = os.path.join(ci_dir, f"task_{idx}", "bin", "logs")
+    tdir = task_dir(ci_dir, idx)
+    if tdir is None:
+        print(f"task_{idx} {workload}: MISSING run dir under {ci_dir}")
+        return []
+    logs_dir = os.path.join(tdir, "bin", "logs")
     cfg_path = os.path.join(_WORKLOADS, workload, "configs.json")
     if not os.path.isdir(logs_dir):
         print(f"task_{idx} {workload}: MISSING logs dir {logs_dir}")

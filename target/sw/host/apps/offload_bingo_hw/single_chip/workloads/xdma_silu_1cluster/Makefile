@@ -26,7 +26,7 @@ $(DATA_H) $(OFFLOAD_H) $(CONFIGS_JSON): $(MK_DIR)/main_bingo.py $(DATA_CFG)
 		--output_dir $(MK_DIR) \
 		--data_h $(DATA_H) \
 		-c $(DATA_CFG) \
-		--hwcfg $(SNITCH_ROOT)/target/snitch_cluster/cfg/snax_versacore_to_cluster.hjson \
+		--hwcfg $(SNITCH_ROOT)/target/snitch_cluster/cfg/snax_versacore_to_simd_cluster.hjson \
 		--platformcfg $(PLATFORM_H) \
 		--configs_out $(CONFIGS_JSON)
 

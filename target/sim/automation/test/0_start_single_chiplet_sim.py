@@ -2,7 +2,7 @@
 r"""
 HeMAiA single-chiplet RTL sim
 =============================
-Uses ``target/rtl/cfg/hemaia_singlechip.hjson`` and
+Uses ``target/rtl/cfg/hemaia_singlechiplet_1cluster.hjson`` and
 ``target/sim/cfg/sim_rtl.hjson``. No private vendor modules are required:
 no TSMC16 macros, no D2D link, no vendor PLL.
 It is used as a quick sanity check that the RTL sim flow can run end-to-end on a
@@ -69,7 +69,7 @@ def main() -> None:
         output_dir=_SCRIPT.parent,
         engine=args.engine,
         with_waveform=bool(args.waveform),
-        cfg="target/rtl/cfg/hemaia_singlechip.hjson",
+        cfg="target/rtl/cfg/hemaia_singlechiplet_1cluster.hjson",
         sim_cfg="target/sim/cfg/sim_rtl.hjson",
         # Single chiplet needs none of the private vendor modules.
         with_macro=False,

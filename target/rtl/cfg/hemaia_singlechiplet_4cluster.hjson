@@ -1,5 +1,5 @@
 {
-    cfg_name: "hemaia_bingo",
+    cfg_name: "hemaia_singlechiplet_4cluster",
     bender_target: ["cv64a6_imafdc_sv39", "occamy"],
     // Multi-chip configuration
     hemaia_multichip: {
@@ -99,10 +99,10 @@
       dep_tag_width: 4
     },
     clusters:[
-      "snax_versacore_to_cluster",
-      "snax_versacore_to_cluster",
-      "snax_versacore_to_cluster",
-      "snax_versacore_to_cluster",
+      "snax_versacore_to_simd_cluster",
+      "snax_versacore_to_simd_cluster",
+      "snax_versacore_to_simd_cluster",
+      "snax_versacore_to_simd_cluster",
       ],
 
     hemaia_xdma_cfg: {

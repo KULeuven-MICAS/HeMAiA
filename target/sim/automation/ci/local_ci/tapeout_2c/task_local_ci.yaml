@@ -1,0 +1,16 @@
+# Tasks for the HEMAIA TO 2C CFG only (hemaia_tapeout_2c.hjson).
+# 4 chiplets, 2x snax_versacore_to_256KB_cluster per chiplet.
+#
+# Only 2-cluster workloads belong in this list: guard_cluster_count() rejects a
+# workload whose params.hjson `num_clusters` differs from the cfg's cluster
+# count, and the app then fails to link.
+#
+# dummy_2cluster is a placeholder that exercises the boot + bingo DFG path.
+
+runs:
+  # ---- offload_bingo_hw / single_chip ----
+  # dummy_2cluster
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: single_chip
+    WORKLOAD: dummy_2cluster
+    DEV_APP: snax-bingo-offload

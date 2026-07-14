@@ -1,5 +1,6 @@
 /.*_targets_group
 /cfg/lru.hjson
+/cfg/generated/
 
 # Auto-generated sources
 /src/

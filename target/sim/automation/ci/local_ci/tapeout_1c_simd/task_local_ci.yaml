@@ -1,0 +1,34 @@
+# Tasks for the HEMAIA TO 1C_SIMD CFG only (hemaia_tapeout_1c_simd.hjson).
+# 4 chiplets, 1x snax_versacore_to_simd_cluster per chiplet.
+#
+# The xDMA per-op workloads exercise the SIMD datapath, so they live here rather
+# than in the plain `tapeout` suite. Their data-gen reads the SIMD cluster hwcfg
+# (snax_versacore_to_simd_cluster.hjson) -- see each workload's Makefile.
+
+runs:
+  # ---- offload_bingo_hw / single_chip ----
+  # xdma_softmax_1cluster
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: single_chip
+    WORKLOAD: xdma_softmax_1cluster
+    DEV_APP: snax-bingo-offload
+  # xdma_rmsnorm_1cluster
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: single_chip
+    WORKLOAD: xdma_rmsnorm_1cluster
+    DEV_APP: snax-bingo-offload
+  # xdma_silu_1cluster
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: single_chip
+    WORKLOAD: xdma_silu_1cluster
+    DEV_APP: snax-bingo-offload
+  # xdma_swiglu_1cluster
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: single_chip
+    WORKLOAD: xdma_swiglu_1cluster
+    DEV_APP: snax-bingo-offload
+  # xdma_rope_1cluster
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: single_chip
+    WORKLOAD: xdma_rope_1cluster
+    DEV_APP: snax-bingo-offload
