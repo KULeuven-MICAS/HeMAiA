@@ -1,7 +1,7 @@
 # xdma_ops_lib — shared tooling for the per-op xDMA sweep workloads
 
-This library (`util/sim/xdma_ops_lib.py`) + the LUT helper
-(`util/sim/build_lut.py`) back the per-op `xdma_<op>_1cluster` workloads under
+This library (`util/sim/xdma/xdma_ops_lib.py`) + the LUT helper
+(`util/sim/xdma/build_lut.py`) back the per-op `xdma_<op>_1cluster` workloads under
 `target/sw/host/apps/offload_bingo_hw/single_chip/workloads/`.
 
 `xdma_ci_ops_1cluster` runs every xDMA op in one DFG (good for a single
@@ -19,9 +19,9 @@ cycle counts for a look-up table (LUT).
 
 All the real machinery — golden generators, the Load→op→Store→Check chain
 builder, and the data/DFG emitters — lives once in
-`util/sim/xdma_ops_lib.py` (the `REGISTRY` of op handlers). To add a
+`util/sim/xdma/xdma_ops_lib.py` (the `REGISTRY` of op handlers). To add a
 config, edit only the `CONFIGS` list. To add an op, add a handler to the
-registry and create a dir (see `gen` note below).
+registry and create a per-op dir with the three files above.
 
 ## How the sweep + correctness work
 
@@ -54,7 +54,7 @@ After a sim run:
 
 ```bash
 cd target/sim && make traces        # produces bin/logs/bingo_trace.json
-python3 util/sim/build_lut.py \
+python3 util/sim/xdma/build_lut.py \
     --trace target/sim/bin/logs/bingo_trace.json \
     --configs <workload>/configs.json
 ```

@@ -15,11 +15,11 @@
 
 // Define the base address of XDMA MMIO
 #define SNAX_XDMA_CFG_ADDR 960
-static inline uint32_t snax_read_xdma_cfg_reg(uint32_t addr) {
+__attribute__((always_inline)) static inline uint32_t snax_read_xdma_cfg_reg(uint32_t addr) {
     return csrr_ss(SNAX_XDMA_CFG_ADDR + addr);
 }
 
-static inline void snax_write_xdma_cfg_reg(uint32_t addr, uint32_t value) {
+__attribute__((always_inline)) static inline void snax_write_xdma_cfg_reg(uint32_t addr, uint32_t value) {
     csrw_ss(SNAX_XDMA_CFG_ADDR + addr, value);
 }
 
@@ -141,6 +141,24 @@ inline int32_t xdma_memcpy_nd(void* src, void* dst, uint32_t spatial_stride_src,
         spatial_stride_dst, temp_dim_src, temp_stride_src, temp_bound_src,
         temp_dim_dst, temp_stride_dst, temp_bound_dst, enabled_chan_src,
         enabled_chan_dst, enabled_byte_dst);
+}
+
+// Minimal re-task of a transfer whose temporal SHAPE (dims, strides, channels) is unchanged
+// from a prior memcpy_nd (config is sticky): rewrites only the src/dst base addresses and the
+// dst dim-0 bound. 5 CSR writes instead of ~44. Use for successive same-shape tasks (e.g.
+// softmax T2/T3 all stream `beats` src beats; only the addresses and the writer's beat count
+// change). The opt-in "sticky CSR" path: the first op of a same-shape group does a full
+// xdma_memcpy_nd_full_addr, the rest retask. Unicast only.
+inline int32_t xdma_retask_1d(void* src, void* dst, uint32_t dst_bound0) {
+    uint64_t h = (uint64_t)snrt_cluster_base_addrh() << 32;
+    uint64_t s = (uint64_t)src + h;
+    uint64_t d = (uint64_t)dst + h;
+    snax_write_xdma_cfg_reg(XDMA_SRC_ADDR_PTR_LSB, (uint32_t)s);
+    snax_write_xdma_cfg_reg(XDMA_SRC_ADDR_PTR_MSB, (uint32_t)(s >> 32));
+    snax_write_xdma_cfg_reg(XDMA_DST_ADDR_PTR_LSB, (uint32_t)d);
+    snax_write_xdma_cfg_reg(XDMA_DST_ADDR_PTR_MSB, (uint32_t)(d >> 32));
+    snax_write_xdma_cfg_reg(XDMA_DST_TEMP_BOUND_PTR, dst_bound0);
+    return 0;
 }
 
 inline int32_t xdma_memcpy_1d_full_addr(uint64_t src, uint64_t dst,
@@ -378,8 +396,20 @@ inline int32_t xdma_disable_dst_ext(uint8_t ext) {
     return 0;
 }
 
+// Handle for one issued xDMA transfer. `task_id` is the value the committed finish counter
+// must reach; `remote` records WHICH counter the HW bumped (0 = LOCAL, 1 = REMOTE). The xDMA
+// HW decides local vs remote from the transfer's writer/dst path; xdma_start() observes which
+// COMMIT counter it bumped and returns it here, so xdma_wait_task() polls the MATCHING finish
+// counter instead of guessing from the (ambiguous) src/dst addresses. Carrying the bit in the
+// returned handle keeps the provenance per-transfer -- no shared global, no dependence on
+// start/wait being called back-to-back, and reentrant across in-flight transfers.
+typedef struct {
+    uint32_t task_id;
+    uint8_t remote;
+} xdma_task_t;
+
 // Start
-inline uint32_t xdma_start() {
+inline xdma_task_t xdma_start() {
     int local_task_id = snax_read_xdma_cfg_reg(XDMA_COMMIT_LOCAL_TASK_PTR);
     int remote_task_id = snax_read_xdma_cfg_reg(XDMA_COMMIT_REMOTE_TASK_PTR);
     snax_write_xdma_cfg_reg(XDMA_START_PTR, 1);
@@ -387,11 +417,15 @@ inline uint32_t xdma_start() {
         // Wait for xdma to start
         if (snax_read_xdma_cfg_reg(XDMA_COMMIT_LOCAL_TASK_PTR) !=
             local_task_id) {
-            return snax_read_xdma_cfg_reg(XDMA_COMMIT_LOCAL_TASK_PTR);
+            // HW committed a LOCAL task
+            return (xdma_task_t){
+                snax_read_xdma_cfg_reg(XDMA_COMMIT_LOCAL_TASK_PTR), 0};
         }
         if (snax_read_xdma_cfg_reg(XDMA_COMMIT_REMOTE_TASK_PTR) !=
             remote_task_id) {
-            return snax_read_xdma_cfg_reg(XDMA_COMMIT_REMOTE_TASK_PTR);
+            // HW committed a REMOTE task
+            return (xdma_task_t){
+                snax_read_xdma_cfg_reg(XDMA_COMMIT_REMOTE_TASK_PTR), 1};
         }
     }
 }
@@ -409,26 +443,21 @@ inline void xdma_remote_wait(uint32_t task_id) {
     }
 }
 
-// Wait for xdma task completion, automatically choosing local or remote
-// based on whether src and dst are in the same cluster's TCDM.
-inline void xdma_wait_task(uint64_t src_addr, uint64_t dst_addr, uint32_t task_id) {
-    // Different chip (high 32 bits) → remote
-    if ((uint32_t)(src_addr >> 32) != (uint32_t)(dst_addr >> 32)) {
-        xdma_remote_wait(task_id);
-        return;
+// Wait for xdma task completion. The xDMA HW routes each transfer to EITHER the local or
+// the remote finish counter, decided by the writer/dst datapath -- which is NOT reliably
+// decodable from the src/dst addresses alone (a same-chip wide-SPM/L3 reblock and a genuine
+// cross-chip transfer can look alike in the address bits, and the wide SPM is not cluster-
+// partitioned). xdma_start() already recorded which COMMIT counter the HW bumped in the
+// returned handle, so poll the MATCHING finish counter. The old address heuristic mis-fired
+// both ways -- it waited on REMOTE for a local L3<->L3 reblock (multichip llama3 swiglu), and
+// on LOCAL for a transfer the HW ran remote -- and either way the DM core spun forever on a
+// counter that never advances.
+inline void xdma_wait_task(xdma_task_t task) {
+    if (task.remote) {
+        xdma_remote_wait(task.task_id);
+    } else {
+        xdma_local_wait(task.task_id);
     }
-    uint32_t src_lo = (uint32_t)src_addr;
-    uint32_t dst_lo = (uint32_t)dst_addr;
-    // Both in TCDM range and same cluster → local
-    if (src_lo >= SNRT_TCDM_START_ADDR && dst_lo >= SNRT_TCDM_START_ADDR) {
-        uint32_t src_cluster = (src_lo - SNRT_TCDM_START_ADDR) >> CLUSTER_ADDRWIDTH;
-        uint32_t dst_cluster = (dst_lo - SNRT_TCDM_START_ADDR) >> CLUSTER_ADDRWIDTH;
-        if (src_cluster == dst_cluster) {
-            xdma_local_wait(task_id);
-            return;
-        }
-    }
-    xdma_remote_wait(task_id);
 }
 
 // Disable all xDMA datapath extensions (reader + writer).
@@ -506,4 +535,48 @@ static inline void xdma_layout_stage_free(xdma_layout_stage_t *s) {
         snrt_l1_free(s->stage_in_lo);
         s->stage_in_lo = 0;
     }
+}
+
+// ── Out-side staging for CPU-loop layout converts ─────────────────────────
+typedef struct {
+    uint32_t l1;          // L1 address the CPU loop writes (dst itself, or scratch)
+    uint32_t scratch_lo;  // L1 scratch to DMA out + free in _flush, or 0 if zero-copy
+} xdma_layout_stage_out_t;
+
+// Returns 0 with s->l1 set to a CPU-writable local-L1 address, or -1 on L1 alloc
+// failure (nothing to free in that case). Pair a successful call with
+// xdma_layout_stage_out_flush.
+static inline int xdma_layout_stage_out(
+    xdma_layout_stage_out_t *s, uint64_t dst, uint32_t bytes)
+{
+    if (xdma_addr_in_local_l1(dst)) {        // zero-copy: write straight to dst
+        s->scratch_lo = 0;
+        s->l1 = (uint32_t)dst;
+        return 0;
+    }
+    s->scratch_lo = snrt_l1_malloc(bytes);   // non-local: write a scratch, flush later
+    if (!s->scratch_lo) return -1;
+    s->l1 = s->scratch_lo;
+    return 0;
+}
+
+// Single teardown for a CPU-loop layout convert: DMA the staged dst scratch out
+// to its real dst (no-op when zero-copy), wait for completion, then free BOTH
+// the dst scratch and the src staging buffer. One call after the loop — does the
+// transfer, the flush, and the free together. Pass the same dst/bytes given to
+// xdma_layout_stage_out. (The dst L1 buffer must be allocated by
+// xdma_layout_stage_out *before* the loop, since the loop writes it, so the
+// alloc stays separate; only the teardown is combined here.)
+static inline void xdma_layout_stage_out_flush(
+    xdma_layout_stage_t *si, xdma_layout_stage_out_t *so,
+    uint64_t dst, uint32_t bytes)
+{
+    if (so->scratch_lo) {
+        snrt_dma_start_1d_wideptr(
+            dst, chiplet_addr_transform((uint64_t)so->scratch_lo), bytes);
+        snrt_dma_wait_all();
+        snrt_l1_free(so->scratch_lo);
+        so->scratch_lo = 0;
+    }
+    xdma_layout_stage_free(si);   // release the src staging buffer too
 }

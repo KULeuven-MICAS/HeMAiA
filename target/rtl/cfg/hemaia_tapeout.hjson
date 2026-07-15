@@ -44,11 +44,11 @@
     cuts: {
       soc_to_router: 1,
       router_to_soc: 1,
-      narrow_to_quad: 3,
-      quad_to_narrow: 3,
-      wide_to_quad: 3,
-      quad_to_wide: 3,
-      narrow_to_cva6: 2,
+      narrow_to_quad: 1,
+      quad_to_narrow: 1,
+      wide_to_quad: 1,
+      quad_to_wide: 1,
+      narrow_to_cva6: 1,
       narrow_conv_to_spm_narrow: 1,
       narrow_and_wide: 1,
       wide_to_hemaia_mem: 1,
@@ -103,6 +103,9 @@
       quad_axi_lite_narrow_base_offset: 65536 // 0x10000
       quad_axi_lite_base_addr: 167772160, // 0x0a000000
       quad_axi_lite_base_offset: 65536 // 0x10000
+      // Bingo HW manager per-edge dependency tag width (DepTagWidth). Must match
+      // the SW DEP_TAG_WIDTH; exported via occamy.h as BINGO_DEP_TAG_WIDTH.
+      dep_tag_width: 4
     },
     clusters:[
       "snax_versacore_to_cluster",

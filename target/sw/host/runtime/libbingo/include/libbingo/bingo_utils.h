@@ -81,9 +81,11 @@
 #define DEP_CHECK_CODE_WIDTH       N_CORES_PER_CLUSTER
 #define DEP_CHECK_CODE_SHIFT       NEXT_SHIFT(DEP_CHECK_ENABLED_SHIFT, DEP_CHECK_ENABLED_WIDTH)
 
-// Per-edge identity tag (EnableTaggedDeps). MUST match the hw_manager DepTagWidth.
-// One tag sits at the MSB of each dep_*_info struct (right after the dep code).
-#define DEP_TAG_WIDTH              4
+// Per-edge identity tag (EnableTaggedDeps). MUST match the hw_manager DepTagWidth,
+// so it comes from the generated occamy.h (cfg s1_quadrant.dep_tag_width) rather than
+// being hardcoded here. One tag sits at the MSB of each dep_*_info struct (right after
+// the dep code).
+#define DEP_TAG_WIDTH              BINGO_DEP_TAG_WIDTH
 
 #define DEP_CHECK_TAG_WIDTH        DEP_TAG_WIDTH
 #define DEP_CHECK_TAG_SHIFT        NEXT_SHIFT(DEP_CHECK_CODE_SHIFT, DEP_CHECK_CODE_WIDTH)

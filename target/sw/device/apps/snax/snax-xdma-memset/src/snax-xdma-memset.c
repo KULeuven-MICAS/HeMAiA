@@ -62,7 +62,7 @@ int main() {
             return err;
         }
 
-        int task_id = xdma_start();
+        int task_id = xdma_start().task_id;
         printf(
             "The xdma is started, setting memory region to 0xFF. The task id "
             "is %d\r\n",
@@ -109,7 +109,7 @@ int main() {
             return err;
         }
 
-        task_id = xdma_start();
+        task_id = xdma_start().task_id;
         printf(
             "The xdma is started, setting memory region to 0x00. The task id "
             "is %d\r\n",
@@ -169,7 +169,7 @@ int main() {
             return err;
         }
 
-        task_id = xdma_start();
+        task_id = xdma_start().task_id;
         printf(
             "The xdma is started, setting memory region to 0x0000000000000001 "
             "(uint64_t 1). The task id is %d\r\n",

@@ -14,6 +14,7 @@
 #include "host.h"
 #include "host_kernel_lib.h"
 #include "op_test_data.h"
+#include "ara_sweep.h"   // ara_sizes[] / ARA_NSIZES -- the ONE sweep-size list
 
 #define ARA_TOL 0.001f
 
@@ -24,9 +25,11 @@ static int32_t timing_int32_src[OP_MAX_LEN] __attribute__((aligned(8)));
 static float timing_dequant_scale __attribute__((aligned(8)));
 static bingo_kernel_scratchpad_t timing_scratchpad __attribute__((aligned(8)));
 
-#define TIMING_NUM_SIZES 4
+// Sizes come from ara_sweep.h, so this app sweeps the same n as every other one
+// (incl. the n=32 decode point) instead of a private, drifting list.
+#define TIMING_NUM_SIZES ARA_NSIZES
 #define TIMING_NUM_REPS  1
-static const uint64_t timing_sizes[TIMING_NUM_SIZES] = { 64, 256, 1024, 4096 };
+#define timing_sizes     ara_sizes
 
 int main() {
     uintptr_t address_prefix = (uintptr_t)get_current_chip_baseaddress();
@@ -35,7 +38,7 @@ int main() {
     asm volatile("fence" ::: "memory");
 
     printf("=== ara sweep: dequantize ===\r\n");
-    printf("CYCLES_HEADER,kernel,N,rep,cycles\r\n");
+    printf("CYCLES_HEADER,kernel,prec,N,rep,cycles\r\n");
 
     uint64_t t_args[8];
 
@@ -63,7 +66,10 @@ int main() {
             c0 = ara_get_cycle_count();
             __host_bingo_kernel_dequantize_i32f32(t_args);
             c1 = ara_get_cycle_count();
-            printf("CYCLES,dequantize,%lu,%d,%lu\r\n", N, rep, c1 - c0);
+            // The "prec" token for a conversion is its in->out PAIR -- which is also the bingo
+            // op id suffix (dequantize_i32f32). Without this field the gather regex (which
+            // expects CYCLES,<op>,<prec>,<N>,<rep>,<cyc>) silently dropped every row.
+            printf("CYCLES,dequantize,i32f32,%lu,%d,%lu\r\n", N, rep, c1 - c0);
 
             {
                 int errs = 0;

@@ -102,9 +102,15 @@
 // Minimal GEMM
 #define BINGO_TRACE_GEMM_MIN_RUN_START    0x340
 #define BINGO_TRACE_GEMM_MIN_RUN_END      0x341
-// SIMD
+// SIMD (generic host RVV kernels: reduce/silu/softmax/rmsnorm/add)
 #define BINGO_TRACE_SIMD_RUN_START        0x350
 #define BINGO_TRACE_SIMD_RUN_END          0x351
+// HOST QUANTIZE (fp16/fp32 activation -> int8 GEMM-operand requant on the CVA6)
+#define BINGO_TRACE_QUANT_RUN_START       0x352
+#define BINGO_TRACE_QUANT_RUN_END         0x353
+// HOST SCALAR_BCAST (per-row sqrt/recip/neg special-functions the xDMA can't do)
+#define BINGO_TRACE_SCALAR_RUN_START      0x354
+#define BINGO_TRACE_SCALAR_RUN_END        0x355
 // HOST IDMA
 #define BINGO_TRACE_HOST_IDMA_RUN_START   0x360
 #define BINGO_TRACE_HOST_IDMA_RUN_END     0x361

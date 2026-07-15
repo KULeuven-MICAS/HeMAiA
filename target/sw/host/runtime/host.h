@@ -651,9 +651,9 @@ void delay_ns(uint64_t delay) {
 }
 
 // The chip-level synchronization mechanism (announce_chip_checkpoint,
-// wait_chip_checkpoint, wait_chips_checkpoint, chip_barrier) now lives in the
-// shared heterogeneous_runtime.h (included above) so both the host and the
-// device can use it.
+// wait_chip_checkpoint, wait_chips_checkpoint, chip_barrier) lives in the shared
+// heterogeneous_runtime.h (included above) so both the host and the device can
+// use it.
 
 //===============================================================
 // ARA runtime

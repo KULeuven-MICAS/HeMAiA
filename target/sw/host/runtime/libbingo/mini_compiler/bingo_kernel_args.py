@@ -1,7 +1,7 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 from abc import ABC, abstractmethod
 from typing import Union, Dict, Optional
-from bingo_mem_handle import BingoMemAlloc, BingoMemSymbol, BingoMemFixedAddr
+from bingo_mem_handle import BingoMemAlloc, BingoMemAllocView, BingoMemSymbol, BingoMemFixedAddr
 from bingo_helpers import _check_xdma_size_aligned
 
 class BingoKernelArgs(ABC):
@@ -106,6 +106,27 @@ class BingoKernelArgs(ABC):
                     assignments[base_name] = f"(uint64_t)0 /* UNREF_HANDLE: {val.name} */"
                 else:
                     assignments[base_name] = f"(uint32_t)0 /* UNREF_HANDLE: {val.name} */"
+        elif isinstance(val, BingoMemAllocView):
+            # A byte offset into an allocation another node owns -> `ptr_<base> + offset`.
+            # The base buffer is allocated once; this emits no allocation of its own.
+            if val.base in handle_name_map:
+                c_var = handle_name_map[val.base]
+                c_expr = f"({c_var} + {val.offset})" if val.offset else c_var
+                if split_64bit:
+                    assignments[f"{base_name}_lo"] = f"(uint32_t){c_expr}"
+                    assignments[f"{base_name}_hi"] = f"(uint32_t)({c_expr} >> 32)"
+                elif as_64bit:
+                    assignments[base_name] = f"(uint64_t){c_expr}"
+                else:
+                    assignments[base_name] = f"(uint32_t){c_expr}"
+            else:
+                if split_64bit:
+                    assignments[f"{base_name}_lo"] = f"(uint32_t)0 /* UNREF_HANDLE: {val.base.name} */"
+                    assignments[f"{base_name}_hi"] = f"(uint32_t)0"
+                elif as_64bit:
+                    assignments[base_name] = f"(uint64_t)0 /* UNREF_HANDLE: {val.base.name} */"
+                else:
+                    assignments[base_name] = f"(uint32_t)0 /* UNREF_HANDLE: {val.base.name} */"
         elif isinstance(val, BingoMemSymbol):
             c_var = val.symbol_name
             offset_op = f" + {val.offset}" if val.offset != 0 else ""
@@ -191,6 +212,26 @@ class SnaxBingoKernelIdmaBroadcastArgs(BingoKernelArgs):
         self._process_addr(self.src_addr, "src_addr", assignments, handle_name_map)
         self._process_addr(self.dst_addr, "dst_addr", assignments, handle_name_map)
         assignments["size"] = str(self.size)
+        return assignments
+
+# BINGO IDMA Pairwise Swap (flat adjacent-element-pair swap: dst[i] = src[i^1])
+class SnaxBingoKernelIdmaPairwiseSwapArgs(BingoKernelArgs):
+    def __init__(self, src_addr: Union[BingoMemAlloc, int], dst_addr: Union[BingoMemAlloc, int],
+                 num_elems: int, elem_bytes: int = 2):
+        self.src_addr = src_addr
+        self.dst_addr = dst_addr
+        self.num_elems = num_elems
+        self.elem_bytes = elem_bytes
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_idma_pairwise_swap_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        assignments = {}
+        self._process_addr(self.src_addr, "src_addr", assignments, handle_name_map)
+        self._process_addr(self.dst_addr, "dst_addr", assignments, handle_name_map)
+        assignments["num_elems"] = str(self.num_elems)
+        assignments["elem_bytes"] = str(self.elem_bytes)
         return assignments
 
 
@@ -288,26 +329,41 @@ class SnaxBingoKernelGemmMinimalArgs(BingoKernelArgs):
         return assignments
 
 # -------------------------------------------------------------------------
-# Clean per-precision GEMM wrappers (1:1 with the precision-named kernels in
-# offload_hw_kernels/gemm.h). The four "plain" precisions share one C struct
-# (__snax_bingo_kernel_gemm_args_t); the quantized one adds requant params
-# (__snax_bingo_kernel_gemm_quant_args_t). Pair each class with its kernel_name,
-# e.g. kernel_name="__snax_bingo_kernel_gemm_i8i4_i32" + SnaxBingoKernelGemmI8I4I32Args.
+# GEMM args: ONE class per runnable kernel = (precision mode, runtime array shape).
+#
+# The C side takes both as inputs to one `__bingo_gemm_run`: the mode picks the
+# wrapper (which bakes int4_a / int4_b / int32tofp16), and `array_shape_idx` is a
+# CSR the wrapper writes to reconfigure the spatial unrolling. But array_shape_idx
+# is NOT free -- it must match the mesh the operands were blocked for and the mesh
+# the cost model priced. Baking it into the class (ARRAY_SHAPE_IDX) instead of
+# taking it as a constructor argument makes that agreement structural: you cannot
+# instantiate a M32K2N32 kernel and hand it a shape-1 mesh.
+#
+# The five plain modes share one C struct (__snax_bingo_kernel_gemm_args_t) and the
+# quantized one adds requant params (__snax_bingo_kernel_gemm_quant_args_t), so the
+# struct name cannot name the dispatcher -- each class names it via KERNEL_NAME.
+# Every reuse (Minimal) class dispatches to the single __snax_bingo_kernel_gemm_minimal,
+# which reprograms only base addresses and inherits whatever CSRs (mode AND shape) the
+# preceding configure programmed; its class name records which those were.
 # -------------------------------------------------------------------------
 class _SnaxBingoKernelGemmPlainArgs(BingoKernelArgs):
-    """Shared base for the plain GEMM wrappers (int32 / int4-packed / fp16 out,
-    no requantization). Subclasses are named per precision for a clean 1:1
-    kernel<->args mapping and add no fields."""
+    """Shared base for the plain GEMM wrappers (int32 / int4-packed / fp16 out, no
+    requantization). Subclasses bind KERNEL_NAME (the C dispatcher) and
+    ARRAY_SHAPE_IDX (the ARRAY_SHAPE_CFG value) and add no fields."""
+    ARRAY_SHAPE_IDX: int = None          # bound by each (mode, shape) subclass
+
     def __init__(self,
                  input_A_addr: Union[BingoMemAlloc, int],
                  input_B_addr: Union[BingoMemAlloc, int],
                  input_C_addr: Union[BingoMemAlloc, int],
                  output_D_addr: Union[BingoMemAlloc, int],
                  M: int, K: int, N: int,
-                 array_shape_idx: int,
                  transpose_A: int = 0,
                  transpose_B: int = 0,
                  accumPrevC: int = 0):
+        if type(self).ARRAY_SHAPE_IDX is None:
+            raise TypeError(f"{type(self).__name__} binds no ARRAY_SHAPE_IDX; instantiate a "
+                            f"per-shape subclass, not the base")
         self.input_A_addr = input_A_addr
         self.input_B_addr = input_B_addr
         self.input_C_addr = input_C_addr
@@ -315,7 +371,7 @@ class _SnaxBingoKernelGemmPlainArgs(BingoKernelArgs):
         self.M = M
         self.K = K
         self.N = N
-        self.array_shape_idx = array_shape_idx
+        self.array_shape_idx = type(self).ARRAY_SHAPE_IDX
         self.transpose_A = transpose_A
         self.transpose_B = transpose_B
         self.accumPrevC = accumPrevC
@@ -339,40 +395,17 @@ class _SnaxBingoKernelGemmPlainArgs(BingoKernelArgs):
         return assignments
 
 
-# int8 x int8 -> int32  : kernel_name="__snax_bingo_kernel_gemm_i8i8_i32"
-class SnaxBingoKernelGemmI8I8I32Args(_SnaxBingoKernelGemmPlainArgs):
-    pass
+class _SnaxBingoKernelGemmQuantArgs(BingoKernelArgs):
+    """Shared base for the requantizing GEMM wrapper (int8 x int8 -> int8): the plain
+    fields plus the requant params (shift / multiplier / zero-points)."""
+    ARRAY_SHAPE_IDX: int = None          # bound by each shape subclass
 
-
-# int8 x int4 -> int32  (weight B int4) : "__snax_bingo_kernel_gemm_i8i4_i32"
-class SnaxBingoKernelGemmI8I4I32Args(_SnaxBingoKernelGemmPlainArgs):
-    pass
-
-
-# int4 x int4 -> int32  : "__snax_bingo_kernel_gemm_i4i4_i32"
-class SnaxBingoKernelGemmI4I4I32Args(_SnaxBingoKernelGemmPlainArgs):
-    pass
-
-
-# int8 x int4 -> fp16   (weight B int4) : "__snax_bingo_kernel_gemm_i8i4_f16"
-class SnaxBingoKernelGemmI8I4F16Args(_SnaxBingoKernelGemmPlainArgs):
-    pass
-
-
-# int8 x int8 -> fp16   (no input packing) : "__snax_bingo_kernel_gemm_i8i8_f16"
-class SnaxBingoKernelGemmI8I8F16Args(_SnaxBingoKernelGemmPlainArgs):
-    pass
-
-
-# int8 x int8 -> int8   (requantized) : "__snax_bingo_kernel_gemm_i8i8_i8"
-class SnaxBingoKernelGemmI8I8I8Args(BingoKernelArgs):
     def __init__(self,
                  input_A_addr: Union[BingoMemAlloc, int],
                  input_B_addr: Union[BingoMemAlloc, int],
                  input_C_addr: Union[BingoMemAlloc, int],
                  output_D_addr: Union[BingoMemAlloc, int],
                  M: int, K: int, N: int,
-                 array_shape_idx: int,
                  shift_i: int,
                  multiplier_i: int,
                  input_zp_i: int,
@@ -380,6 +413,9 @@ class SnaxBingoKernelGemmI8I8I8Args(BingoKernelArgs):
                  transpose_A: int = 0,
                  transpose_B: int = 0,
                  accumPrevC: int = 0):
+        if type(self).ARRAY_SHAPE_IDX is None:
+            raise TypeError(f"{type(self).__name__} binds no ARRAY_SHAPE_IDX; instantiate a "
+                            f"per-shape subclass, not the base")
         self.input_A_addr = input_A_addr
         self.input_B_addr = input_B_addr
         self.input_C_addr = input_C_addr
@@ -387,7 +423,7 @@ class SnaxBingoKernelGemmI8I8I8Args(BingoKernelArgs):
         self.M = M
         self.K = K
         self.N = N
-        self.array_shape_idx = array_shape_idx
+        self.array_shape_idx = type(self).ARRAY_SHAPE_IDX
         self.shift_i = shift_i
         self.multiplier_i = multiplier_i
         self.input_zp_i = input_zp_i
@@ -417,6 +453,213 @@ class SnaxBingoKernelGemmI8I8I8Args(BingoKernelArgs):
         assignments["input_zp_i"] = str(self.input_zp_i)
         assignments["output_zp_i"] = str(self.output_zp_i)
         return assignments
+
+
+class _SnaxBingoKernelGemmMinimalBase(SnaxBingoKernelGemmMinimalArgs):
+    """Shared base for the reuse kernels. All 18 dispatch to the SAME C function and
+    emit the same fields -- they differ only in name, which records the (mode, shape)
+    configure whose CSRs they reuse. That is what makes the framework's kernel id and
+    this class 1:1, and what lets the cost model price a reuse at its real shape."""
+    KERNEL_NAME = "__snax_bingo_kernel_gemm_minimal"
+    ARRAY_SHAPE_IDX: int = None
+
+
+# i8i8_i32 @ mesh (mu,ku,nu)=(32, 2, 32) -> op id gemm_i8i8_i32_M32K2N32
+class SnaxBingoKernelGemmI8I8I32M32K2N32Args(_SnaxBingoKernelGemmPlainArgs):
+    KERNEL_NAME = "__snax_bingo_kernel_gemm_i8i8_i32"
+    ARRAY_SHAPE_IDX = 0
+
+
+# i8i8_i32 @ mesh (mu,ku,nu)=(1, 16, 32) -> op id gemm_i8i8_i32_M1K16N32
+class SnaxBingoKernelGemmI8I8I32M1K16N32Args(_SnaxBingoKernelGemmPlainArgs):
+    KERNEL_NAME = "__snax_bingo_kernel_gemm_i8i8_i32"
+    ARRAY_SHAPE_IDX = 1
+
+
+# i8i8_i32 @ mesh (mu,ku,nu)=(16, 8, 16) -> op id gemm_i8i8_i32_M16K8N16
+class SnaxBingoKernelGemmI8I8I32M16K8N16Args(_SnaxBingoKernelGemmPlainArgs):
+    KERNEL_NAME = "__snax_bingo_kernel_gemm_i8i8_i32"
+    ARRAY_SHAPE_IDX = 2
+
+
+# i8i4_i32 @ mesh (mu,ku,nu)=(32, 2, 32) -> op id gemm_i8i4_i32_M32K2N32
+class SnaxBingoKernelGemmI8I4I32M32K2N32Args(_SnaxBingoKernelGemmPlainArgs):
+    KERNEL_NAME = "__snax_bingo_kernel_gemm_i8i4_i32"
+    ARRAY_SHAPE_IDX = 0
+
+
+# i8i4_i32 @ mesh (mu,ku,nu)=(1, 16, 32) -> op id gemm_i8i4_i32_M1K16N32
+class SnaxBingoKernelGemmI8I4I32M1K16N32Args(_SnaxBingoKernelGemmPlainArgs):
+    KERNEL_NAME = "__snax_bingo_kernel_gemm_i8i4_i32"
+    ARRAY_SHAPE_IDX = 1
+
+
+# i8i4_i32 @ mesh (mu,ku,nu)=(16, 8, 16) -> op id gemm_i8i4_i32_M16K8N16
+class SnaxBingoKernelGemmI8I4I32M16K8N16Args(_SnaxBingoKernelGemmPlainArgs):
+    KERNEL_NAME = "__snax_bingo_kernel_gemm_i8i4_i32"
+    ARRAY_SHAPE_IDX = 2
+
+
+# i4i4_i32 @ mesh (mu,ku,nu)=(32, 2, 32) -> op id gemm_i4i4_i32_M32K2N32
+class SnaxBingoKernelGemmI4I4I32M32K2N32Args(_SnaxBingoKernelGemmPlainArgs):
+    KERNEL_NAME = "__snax_bingo_kernel_gemm_i4i4_i32"
+    ARRAY_SHAPE_IDX = 0
+
+
+# i4i4_i32 @ mesh (mu,ku,nu)=(1, 16, 32) -> op id gemm_i4i4_i32_M1K16N32
+class SnaxBingoKernelGemmI4I4I32M1K16N32Args(_SnaxBingoKernelGemmPlainArgs):
+    KERNEL_NAME = "__snax_bingo_kernel_gemm_i4i4_i32"
+    ARRAY_SHAPE_IDX = 1
+
+
+# i4i4_i32 @ mesh (mu,ku,nu)=(16, 8, 16) -> op id gemm_i4i4_i32_M16K8N16
+class SnaxBingoKernelGemmI4I4I32M16K8N16Args(_SnaxBingoKernelGemmPlainArgs):
+    KERNEL_NAME = "__snax_bingo_kernel_gemm_i4i4_i32"
+    ARRAY_SHAPE_IDX = 2
+
+
+# i8i8_i8 @ mesh (mu,ku,nu)=(32, 2, 32) -> op id gemm_i8i8_i8_M32K2N32
+class SnaxBingoKernelGemmI8I8I8M32K2N32Args(_SnaxBingoKernelGemmQuantArgs):
+    KERNEL_NAME = "__snax_bingo_kernel_gemm_i8i8_i8"
+    ARRAY_SHAPE_IDX = 0
+
+
+# i8i8_i8 @ mesh (mu,ku,nu)=(1, 16, 32) -> op id gemm_i8i8_i8_M1K16N32
+class SnaxBingoKernelGemmI8I8I8M1K16N32Args(_SnaxBingoKernelGemmQuantArgs):
+    KERNEL_NAME = "__snax_bingo_kernel_gemm_i8i8_i8"
+    ARRAY_SHAPE_IDX = 1
+
+
+# i8i8_i8 @ mesh (mu,ku,nu)=(16, 8, 16) -> op id gemm_i8i8_i8_M16K8N16
+class SnaxBingoKernelGemmI8I8I8M16K8N16Args(_SnaxBingoKernelGemmQuantArgs):
+    KERNEL_NAME = "__snax_bingo_kernel_gemm_i8i8_i8"
+    ARRAY_SHAPE_IDX = 2
+
+
+# i8i4_f16 @ mesh (mu,ku,nu)=(32, 2, 32) -> op id gemm_i8i4_f16_M32K2N32
+class SnaxBingoKernelGemmI8I4F16M32K2N32Args(_SnaxBingoKernelGemmPlainArgs):
+    KERNEL_NAME = "__snax_bingo_kernel_gemm_i8i4_f16"
+    ARRAY_SHAPE_IDX = 0
+
+
+# i8i4_f16 @ mesh (mu,ku,nu)=(1, 16, 32) -> op id gemm_i8i4_f16_M1K16N32
+class SnaxBingoKernelGemmI8I4F16M1K16N32Args(_SnaxBingoKernelGemmPlainArgs):
+    KERNEL_NAME = "__snax_bingo_kernel_gemm_i8i4_f16"
+    ARRAY_SHAPE_IDX = 1
+
+
+# i8i4_f16 @ mesh (mu,ku,nu)=(16, 8, 16) -> op id gemm_i8i4_f16_M16K8N16
+class SnaxBingoKernelGemmI8I4F16M16K8N16Args(_SnaxBingoKernelGemmPlainArgs):
+    KERNEL_NAME = "__snax_bingo_kernel_gemm_i8i4_f16"
+    ARRAY_SHAPE_IDX = 2
+
+
+# i8i8_f16 @ mesh (mu,ku,nu)=(32, 2, 32) -> op id gemm_i8i8_f16_M32K2N32
+class SnaxBingoKernelGemmI8I8F16M32K2N32Args(_SnaxBingoKernelGemmPlainArgs):
+    KERNEL_NAME = "__snax_bingo_kernel_gemm_i8i8_f16"
+    ARRAY_SHAPE_IDX = 0
+
+
+# i8i8_f16 @ mesh (mu,ku,nu)=(1, 16, 32) -> op id gemm_i8i8_f16_M1K16N32
+class SnaxBingoKernelGemmI8I8F16M1K16N32Args(_SnaxBingoKernelGemmPlainArgs):
+    KERNEL_NAME = "__snax_bingo_kernel_gemm_i8i8_f16"
+    ARRAY_SHAPE_IDX = 1
+
+
+# i8i8_f16 @ mesh (mu,ku,nu)=(16, 8, 16) -> op id gemm_i8i8_f16_M16K8N16
+class SnaxBingoKernelGemmI8I8F16M16K8N16Args(_SnaxBingoKernelGemmPlainArgs):
+    KERNEL_NAME = "__snax_bingo_kernel_gemm_i8i8_f16"
+    ARRAY_SHAPE_IDX = 2
+
+
+# reuse of gemm_i8i8_i32_M32K2N32 -> op id gemm_i8i8_i32_M32K2N32_minimal
+class SnaxBingoKernelGemmI8I8I32M32K2N32MinimalArgs(_SnaxBingoKernelGemmMinimalBase):
+    ARRAY_SHAPE_IDX = 0
+
+
+# reuse of gemm_i8i8_i32_M1K16N32 -> op id gemm_i8i8_i32_M1K16N32_minimal
+class SnaxBingoKernelGemmI8I8I32M1K16N32MinimalArgs(_SnaxBingoKernelGemmMinimalBase):
+    ARRAY_SHAPE_IDX = 1
+
+
+# reuse of gemm_i8i8_i32_M16K8N16 -> op id gemm_i8i8_i32_M16K8N16_minimal
+class SnaxBingoKernelGemmI8I8I32M16K8N16MinimalArgs(_SnaxBingoKernelGemmMinimalBase):
+    ARRAY_SHAPE_IDX = 2
+
+
+# reuse of gemm_i8i4_i32_M32K2N32 -> op id gemm_i8i4_i32_M32K2N32_minimal
+class SnaxBingoKernelGemmI8I4I32M32K2N32MinimalArgs(_SnaxBingoKernelGemmMinimalBase):
+    ARRAY_SHAPE_IDX = 0
+
+
+# reuse of gemm_i8i4_i32_M1K16N32 -> op id gemm_i8i4_i32_M1K16N32_minimal
+class SnaxBingoKernelGemmI8I4I32M1K16N32MinimalArgs(_SnaxBingoKernelGemmMinimalBase):
+    ARRAY_SHAPE_IDX = 1
+
+
+# reuse of gemm_i8i4_i32_M16K8N16 -> op id gemm_i8i4_i32_M16K8N16_minimal
+class SnaxBingoKernelGemmI8I4I32M16K8N16MinimalArgs(_SnaxBingoKernelGemmMinimalBase):
+    ARRAY_SHAPE_IDX = 2
+
+
+# reuse of gemm_i4i4_i32_M32K2N32 -> op id gemm_i4i4_i32_M32K2N32_minimal
+class SnaxBingoKernelGemmI4I4I32M32K2N32MinimalArgs(_SnaxBingoKernelGemmMinimalBase):
+    ARRAY_SHAPE_IDX = 0
+
+
+# reuse of gemm_i4i4_i32_M1K16N32 -> op id gemm_i4i4_i32_M1K16N32_minimal
+class SnaxBingoKernelGemmI4I4I32M1K16N32MinimalArgs(_SnaxBingoKernelGemmMinimalBase):
+    ARRAY_SHAPE_IDX = 1
+
+
+# reuse of gemm_i4i4_i32_M16K8N16 -> op id gemm_i4i4_i32_M16K8N16_minimal
+class SnaxBingoKernelGemmI4I4I32M16K8N16MinimalArgs(_SnaxBingoKernelGemmMinimalBase):
+    ARRAY_SHAPE_IDX = 2
+
+
+# reuse of gemm_i8i8_i8_M32K2N32 -> op id gemm_i8i8_i8_M32K2N32_minimal
+class SnaxBingoKernelGemmI8I8I8M32K2N32MinimalArgs(_SnaxBingoKernelGemmMinimalBase):
+    ARRAY_SHAPE_IDX = 0
+
+
+# reuse of gemm_i8i8_i8_M1K16N32 -> op id gemm_i8i8_i8_M1K16N32_minimal
+class SnaxBingoKernelGemmI8I8I8M1K16N32MinimalArgs(_SnaxBingoKernelGemmMinimalBase):
+    ARRAY_SHAPE_IDX = 1
+
+
+# reuse of gemm_i8i8_i8_M16K8N16 -> op id gemm_i8i8_i8_M16K8N16_minimal
+class SnaxBingoKernelGemmI8I8I8M16K8N16MinimalArgs(_SnaxBingoKernelGemmMinimalBase):
+    ARRAY_SHAPE_IDX = 2
+
+
+# reuse of gemm_i8i4_f16_M32K2N32 -> op id gemm_i8i4_f16_M32K2N32_minimal
+class SnaxBingoKernelGemmI8I4F16M32K2N32MinimalArgs(_SnaxBingoKernelGemmMinimalBase):
+    ARRAY_SHAPE_IDX = 0
+
+
+# reuse of gemm_i8i4_f16_M1K16N32 -> op id gemm_i8i4_f16_M1K16N32_minimal
+class SnaxBingoKernelGemmI8I4F16M1K16N32MinimalArgs(_SnaxBingoKernelGemmMinimalBase):
+    ARRAY_SHAPE_IDX = 1
+
+
+# reuse of gemm_i8i4_f16_M16K8N16 -> op id gemm_i8i4_f16_M16K8N16_minimal
+class SnaxBingoKernelGemmI8I4F16M16K8N16MinimalArgs(_SnaxBingoKernelGemmMinimalBase):
+    ARRAY_SHAPE_IDX = 2
+
+
+# reuse of gemm_i8i8_f16_M32K2N32 -> op id gemm_i8i8_f16_M32K2N32_minimal
+class SnaxBingoKernelGemmI8I8F16M32K2N32MinimalArgs(_SnaxBingoKernelGemmMinimalBase):
+    ARRAY_SHAPE_IDX = 0
+
+
+# reuse of gemm_i8i8_f16_M1K16N32 -> op id gemm_i8i8_f16_M1K16N32_minimal
+class SnaxBingoKernelGemmI8I8F16M1K16N32MinimalArgs(_SnaxBingoKernelGemmMinimalBase):
+    ARRAY_SHAPE_IDX = 1
+
+
+# reuse of gemm_i8i8_f16_M16K8N16 -> op id gemm_i8i8_f16_M16K8N16_minimal
+class SnaxBingoKernelGemmI8I8F16M16K8N16MinimalArgs(_SnaxBingoKernelGemmMinimalBase):
+    ARRAY_SHAPE_IDX = 2
 
 # BINGO XDMA 1D Copy
 class SnaxBingoKernelXdma1dCopyArgs(BingoKernelArgs):
@@ -698,6 +941,315 @@ class SnaxBingoKernelXdmaElementwiseAddAbArgs(BingoKernelArgs):
 
 
 # ══════════════════════════════════════════════════════════════════════
+# xDMA FP16 streaming-SIMD primitives (reader extensions)
+#
+# The 3 generic ops the LLM layers (softmax/rmsnorm/silu/swiglu/rope) decompose
+# into. The named sub-ops (reduce_max, map_exp, map_norm, ew_mul, ...) are these
+# 3 classes constructed with preset op/func + FP32-bit operands. One row =
+# `beats` x 64-byte beats (64 B = 32 FP16). csr_mode picks FULL (0, completely
+# configure the AGU — the default) vs STICKY (1, retask-only, reuse the persisted
+# same-shape config — the opt-in). dst_bound0 is the WRITER beat count.
+#
+# CSR encodings: StreamMap func 0=LINEAR(a*x+b) 1=EXP 2=SILU; StreamReduce op
+# 0=MAX 1=ADD 2=SUMSQ, |0x100 = TAP, |0x200 = OUT_FP32; StreamElementwise op
+# 0=MUL 1=ADD.
+# ══════════════════════════════════════════════════════════════════════
+
+# StreamReduce op-CSR flag bits (OR'd into `op`). REDUCE_OUT_FP32 keeps the per-row
+# scalar in FP32 instead of narrowing it to the FP16 transport -- use it whenever the
+# reduction can exceed fp16 range (e.g. SUMSQ of unscaled activations), since the FP16
+# narrow wraps to garbage (NOT inf) on overflow. The host consumer must then read the
+# scalar as fp32 (stride 16) instead of u16 (stride 32).
+REDUCE_OP_TAP   = 1 << 8   # 0x100: pass the row through, then emit the scalar beat
+REDUCE_OUT_FP32 = 1 << 9   # 0x200: emit the per-row scalar in FP32 (no FP16 narrow)
+
+
+class SnaxBingoKernelXdmaStreamReduceArgs(BingoKernelArgs):
+    """StreamReduce: per-row reduction (row -> scalar). op: 0=MAX 1=ADD 2=SUMSQ.
+    Runs `rows` independent reductions in one dispatch (rows=1 = single row),
+    emitting one splatted scalar beat per row (dst_bound0 defaults to rows).
+    out_fp32=True ORs REDUCE_OUT_FP32 into op so the scalar reaches the host in FP32
+    (the host reader then uses in_fp32=1); use it when the reduction can overflow fp16."""
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_stream_reduce"
+
+    def __init__(self, src_addr: Union[BingoMemAlloc, int], dst_addr: Union[BingoMemAlloc, int],
+                 beats: int, op: int, rows: int = 1, csr_mode: int = 0,
+                 dst_bound0: Optional[int] = None, out_fp32: bool = False):
+        self.src_addr = src_addr
+        self.dst_addr = dst_addr
+        self.beats = beats
+        self.op = (op | REDUCE_OUT_FP32) if out_fp32 else op
+        self.rows = rows
+        self.csr_mode = csr_mode
+        self.dst_bound0 = rows if dst_bound0 is None else dst_bound0
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_xdma_stream_reduce_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.src_addr, "src_addr", a, handle_name_map)
+        self._process_addr(self.dst_addr, "dst_addr", a, handle_name_map)
+        a["beats"] = str(self.beats)
+        a["op"] = str(self.op)
+        a["rows"] = str(self.rows)
+        a["csr_mode"] = str(self.csr_mode)
+        a["dst_bound0"] = str(self.dst_bound0)
+        return a
+
+
+class SnaxBingoKernelXdmaStreamMapArgs(BingoKernelArgs):
+    """StreamMap: out = func(a*x + b) per element, over `rows*beats` flat beats.
+    a_f32bits/b_f32bits are FP32 bit patterns (a defaults to 1.0f). out_dtype=1
+    fuses FP16->INT8 quant with inv_scale_f32bits (pass dst_bound0 = rows*beats//2)."""
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_stream_map"
+
+    def __init__(self, src_addr: Union[BingoMemAlloc, int], dst_addr: Union[BingoMemAlloc, int],
+                 beats: int, func: int, a_f32bits: int = 0x3F800000, b_f32bits: int = 0,
+                 rows: int = 1, csr_mode: int = 0, dst_bound0: Optional[int] = None,
+                 out_dtype: int = 0, inv_scale_f32bits: int = 0,
+                 a_addr: Union[BingoMemAlloc, int, None] = None):
+        self.src_addr = src_addr
+        self.dst_addr = dst_addr
+        self.beats = beats
+        self.func = func
+        self.a_f32bits = a_f32bits
+        self.b_f32bits = b_f32bits
+        self.rows = rows
+        self.csr_mode = csr_mode
+        self.dst_bound0 = rows * beats if dst_bound0 is None else dst_bound0
+        self.out_dtype = out_dtype
+        self.inv_scale_f32bits = inv_scale_f32bits
+        # 0 = use a_f32bits; a handle = read the runtime 'a' (dequant qsc) from L1 at run time.
+        self.a_addr = 0 if a_addr is None else a_addr
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_xdma_stream_map_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.src_addr, "src_addr", a, handle_name_map)
+        self._process_addr(self.dst_addr, "dst_addr", a, handle_name_map)
+        a["beats"] = str(self.beats)
+        a["a_f32bits"] = str(self.a_f32bits)
+        a["b_f32bits"] = str(self.b_f32bits)
+        a["func"] = str(self.func)
+        a["rows"] = str(self.rows)
+        a["csr_mode"] = str(self.csr_mode)
+        a["dst_bound0"] = str(self.dst_bound0)
+        a["out_dtype"] = str(self.out_dtype)
+        a["inv_scale_f32bits"] = str(self.inv_scale_f32bits)
+        if isinstance(self.a_addr, int):
+            a["a_addr_lo"] = str(self.a_addr & 0xFFFFFFFF)
+            a["a_addr_hi"] = str((self.a_addr >> 32) & 0xFFFFFFFF)
+        else:
+            self._process_addr(self.a_addr, "a_addr", a, handle_name_map)
+        return a
+
+
+class SnaxBingoKernelXdmaStreamMapReduceArgs(BingoKernelArgs):
+    """MERGED StreamMap -||> StreamReduce: the map AND the reduce in ONE xDMA task,
+    i.e. per row out = reduce(reduce_op, map(func, a*x + b)). Both reader extensions are
+    enabled for a single task, so the map feeds the reduce inside the datapath and the
+    mapped row is never written out and re-read -- this is the softmax exp+Sexp fusion,
+    replacing a map task plus a reduce task that re-reads the whole mapped tensor.
+
+    reduce_op: 0=MAX 1=ADD 2=SUMSQ. tap/out_fp32 OR the flag bits in for you.
+
+    Output layout (and the dst_bound0 default) depends on `tap`:
+      tap=True  -> the mapped row passes through 1:1 AND the row scalar is appended as a
+                   trailing beat: a PADDED [rows, beats+1] beat tensor. Allocate
+                   rows*(beats+1)*64 bytes, and mind the padded row stride downstream --
+                   a consumer of the mapped data must either be single-row (rows=1: a
+                   flat `beats`-beat read stops short of the scalar) or address rows at
+                   the (beats+1)*64-byte stride.       dst_bound0 = rows*(beats+1)
+      tap=False -> only the per-row scalar beats are written (a stream_reduce over the
+                   MAPPED values, no passthrough).     dst_bound0 = rows
+    """
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_stream_map_reduce"
+
+    def __init__(self, src_addr: Union[BingoMemAlloc, int], dst_addr: Union[BingoMemAlloc, int],
+                 beats: int, func: int, reduce_op: int, a_f32bits: int = 0x3F800000,
+                 b_f32bits: int = 0, tap: bool = True, out_fp32: bool = False,
+                 rows: int = 1, csr_mode: int = 0, dst_bound0: Optional[int] = None,
+                 a_addr: Union[BingoMemAlloc, int, None] = None):
+        self.src_addr = src_addr
+        self.dst_addr = dst_addr
+        self.beats = beats
+        self.func = func
+        self.a_f32bits = a_f32bits
+        self.b_f32bits = b_f32bits
+        op = reduce_op
+        if tap:
+            op |= REDUCE_OP_TAP
+        if out_fp32:
+            op |= REDUCE_OUT_FP32
+        self.reduce_op = op
+        self.rows = rows
+        self.csr_mode = csr_mode
+        if dst_bound0 is None:
+            # TAP writes beats mapped beats + 1 scalar beat per row; otherwise 1 beat/row.
+            dst_bound0 = rows * (beats + 1) if tap else rows
+        self.dst_bound0 = dst_bound0
+        # 0 = use a_f32bits; a handle = read the runtime 'a' (dequant qsc) from L1 at run time.
+        self.a_addr = 0 if a_addr is None else a_addr
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_xdma_stream_map_reduce_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.src_addr, "src_addr", a, handle_name_map)
+        self._process_addr(self.dst_addr, "dst_addr", a, handle_name_map)
+        a["beats"] = str(self.beats)
+        a["a_f32bits"] = str(self.a_f32bits)
+        a["b_f32bits"] = str(self.b_f32bits)
+        a["func"] = str(self.func)
+        a["reduce_op"] = str(self.reduce_op)
+        a["rows"] = str(self.rows)
+        a["csr_mode"] = str(self.csr_mode)
+        a["dst_bound0"] = str(self.dst_bound0)
+        if isinstance(self.a_addr, int):
+            a["a_addr_lo"] = str(self.a_addr & 0xFFFFFFFF)
+            a["a_addr_hi"] = str((self.a_addr >> 32) & 0xFFFFFFFF)
+        else:
+            self._process_addr(self.a_addr, "a_addr", a, handle_name_map)
+        return a
+
+
+class SnaxBingoKernelXdmaFp16ToInt8Args(BingoKernelArgs):
+    """Fp16ToInt8: out = clamp(round(x * inv_scale), -128, 127) over `rows*beats` flat beats,
+    on the HasFp16ToInt8 xDMA datapath -- the dedicated activation fp16 -> int8 GEMM-operand
+    requant that replaces the host quantize_f16i8. inv_scale_f32bits = FP32 bits of 127/max|x|
+    (the producer computes max|x| via MAX(x)+MAX(-x) reduces). dst_bound0 = rows*beats//2
+    (int8 packs two elements per fp16 lane)."""
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_fp16_to_int8"
+
+    def __init__(self, src_addr: Union[BingoMemAlloc, int], dst_addr: Union[BingoMemAlloc, int],
+                 beats: int, rows: int, inv_scale_f32bits: int = 0,
+                 csr_mode: int = 0, dst_bound0: Optional[int] = None,
+                 inv_scale_addr: Union[BingoMemAlloc, int, None] = None):
+        self.src_addr = src_addr
+        self.dst_addr = dst_addr
+        self.beats = beats
+        self.rows = rows
+        self.inv_scale_f32bits = inv_scale_f32bits
+        self.csr_mode = csr_mode
+        self.dst_bound0 = (rows * beats) // 2 if dst_bound0 is None else dst_bound0
+        # 0 = use inv_scale_f32bits; a handle = read the runtime inv_scale (127/max|x| that
+        # requant_scale wrote) from L1 at run time.
+        self.inv_scale_addr = 0 if inv_scale_addr is None else inv_scale_addr
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_xdma_fp16_to_int8_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.src_addr, "src_addr", a, handle_name_map)
+        self._process_addr(self.dst_addr, "dst_addr", a, handle_name_map)
+        a["beats"] = str(self.beats)
+        a["rows"] = str(self.rows)
+        a["inv_scale_f32bits"] = str(self.inv_scale_f32bits)
+        a["csr_mode"] = str(self.csr_mode)
+        a["dst_bound0"] = str(self.dst_bound0)
+        if isinstance(self.inv_scale_addr, int):
+            a["inv_scale_addr_lo"] = str(self.inv_scale_addr & 0xFFFFFFFF)
+            a["inv_scale_addr_hi"] = str((self.inv_scale_addr >> 32) & 0xFFFFFFFF)
+        else:
+            self._process_addr(self.inv_scale_addr, "inv_scale_addr", a, handle_name_map)
+        return a
+
+
+class SnaxBingoKernelXdmaStreamElementwiseArgs(BingoKernelArgs):
+    """StreamElementwise: out = op(operand_0, operand_1, ...) over `operand_count`
+    interleaved streams operand_stride bytes apart, across `rows*beats` flat beats.
+    op: 0=MUL 1=ADD. out_dtype=1 fuses FP16->INT8 quant with inv_scale_f32bits
+    (pass dst_bound0 = rows*beats//2)."""
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_stream_elementwise"
+
+    def __init__(self, src_addr: Union[BingoMemAlloc, int], dst_addr: Union[BingoMemAlloc, int],
+                 beats: int, op: int, operand_stride: int = 0, operand_count: int = 2,
+                 rows: int = 1, csr_mode: int = 0, dst_bound0: Optional[int] = None,
+                 out_dtype: int = 0, inv_scale_f32bits: int = 0,
+                 src_b_addr: Union[BingoMemAlloc, int, None] = None,
+                 src_row_stride: int = 0):
+        self.src_addr = src_addr
+        self.dst_addr = dst_addr
+        self.beats = beats
+        self.operand_stride = operand_stride
+        self.operand_count = operand_count
+        self.op = op
+        self.rows = rows
+        self.csr_mode = csr_mode
+        self.dst_bound0 = rows * beats if dst_bound0 is None else dst_bound0
+        self.out_dtype = out_dtype
+        self.inv_scale_f32bits = inv_scale_f32bits
+        # 0 = use operand_stride; a handle = derive stride from src_b - src_addr at run time.
+        self.src_b_addr = 0 if src_b_addr is None else src_b_addr
+        # 0 = flat/packed operands (2D reader). Nonzero = PADDED rows this many bytes apart,
+        # of which only the first `beats` beats are data -> 3D {operand, beat, row} reader that
+        # skips the slack. Use it to consume a TAP-padded map+reduce output (stride
+        # (beats+1)*64); BOTH operands must share the stride, so the broadcast operand is built
+        # at the same pitch by the xDMA stride-0 broadcast pass that produces it.
+        self.src_row_stride = src_row_stride
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_xdma_stream_elementwise_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.src_addr, "src_addr", a, handle_name_map)
+        self._process_addr(self.dst_addr, "dst_addr", a, handle_name_map)
+        a["beats"] = str(self.beats)
+        a["operand_stride"] = str(self.operand_stride)
+        a["operand_count"] = str(self.operand_count)
+        a["op"] = str(self.op)
+        a["rows"] = str(self.rows)
+        a["csr_mode"] = str(self.csr_mode)
+        a["dst_bound0"] = str(self.dst_bound0)
+        a["out_dtype"] = str(self.out_dtype)
+        a["inv_scale_f32bits"] = str(self.inv_scale_f32bits)
+        if isinstance(self.src_b_addr, int):
+            a["src_b_addr_lo"] = str(self.src_b_addr & 0xFFFFFFFF)
+            a["src_b_addr_hi"] = str((self.src_b_addr >> 32) & 0xFFFFFFFF)
+        else:
+            self._process_addr(self.src_b_addr, "src_b_addr", a, handle_name_map)
+        a["src_row_stride"] = str(self.src_row_stride)
+        return a
+
+
+class SnaxBingoKernelXdmaRopeArgs(BingoKernelArgs):
+    """Fused FP16 RoPE: iDMA adjacent-pair swap of x + 3 StreamElementwise passes
+    (x*cos_full, xswap*sin_signed, +) -> out. cos_full/sin_signed are precomputed
+    tables; the kernel allocates xswap/tmp1/tmp2 scratch from L1. D = beats*32 fp16
+    elements per row, rows independent token positions."""
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_rope"
+
+    def __init__(self, x_addr: Union[BingoMemAlloc, int], cos_addr: Union[BingoMemAlloc, int],
+                 sin_addr: Union[BingoMemAlloc, int], out_addr: Union[BingoMemAlloc, int],
+                 beats: int, rows: int = 1):
+        self.x_addr = x_addr
+        self.cos_addr = cos_addr
+        self.sin_addr = sin_addr
+        self.out_addr = out_addr
+        self.beats = beats
+        self.rows = rows
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_xdma_rope_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.x_addr, "x_addr", a, handle_name_map)
+        self._process_addr(self.cos_addr, "cos_addr", a, handle_name_map)
+        self._process_addr(self.sin_addr, "sin_addr", a, handle_name_map)
+        self._process_addr(self.out_addr, "out_addr", a, handle_name_map)
+        a["beats"] = str(self.beats)
+        a["rows"] = str(self.rows)
+        return a
+
+
+# ══════════════════════════════════════════════════════════════════════
 # VersaCore blocked-layout conversion kernels (tile-shape-parameterized)
 #
 # Six primitive conversions between row-major and the three VersaCore
@@ -708,16 +1260,46 @@ class SnaxBingoKernelXdmaElementwiseAddAbArgs(BingoKernelArgs):
 # ══════════════════════════════════════════════════════════════════════
 
 
-class SnaxBingoKernelXdmaDToRowMajorArgs(BingoKernelArgs):
-    """D-layout → row-major. D[m,n,r,c] -> R[m*meshRow+r, n*meshCol+c]."""
+# -------------------------------------------------------------------------
+# xDMA blocked-layout converters: ONE class per runnable kernel =
+# (converter, array shape, elem_bytes).
+#
+# meshRow / tileSize / meshCol and elem_bytes used to be struct fields the caller
+# filled in. They are not arguments -- they decide which AGU path the kernel takes,
+# and they must match the mesh the operands were actually blocked for. So each is a
+# COMPILE-TIME constant of a device wrapper (`..._e1_M32K2`), and here a class
+# constant. What is left in the struct is genuinely per-call: the addresses and the
+# two tile counts.
+#
+# The 9 wrappers of a converter share one C struct, so the struct-name -> C-fn
+# convention cannot name the dispatcher; each class names it via KERNEL_NAME.
+#
+# Naming: e<elem_bytes>_<mesh token>, where the mesh token names the two axes the
+# block spans -- M<meshRow>K<tileSize> for A, K<tileSize>N<meshCol> for B,
+# M<meshRow>N<meshCol> for D. Same (mu,ku,nu) order as the GEMM kernels.
+# -------------------------------------------------------------------------
+class _SnaxBingoKernelXdmaDToRowMajorBase(BingoKernelArgs):
+    """D-layout -> row-major. D[m,n,r,c] -> R[m*meshRow+r, n*meshCol+c].
+
+    Subclasses bind MESH_1 / MESH_2 (the two mesh dims their block spans) and ELEM_BYTES."""
+    KERNEL_NAME: str = None
+    MESH_1: int = None
+    MESH_2: int = None
+    ELEM_BYTES: int = None
+
     def __init__(self, src_addr: Union[BingoMemAlloc, int],
                  dst_addr: Union[BingoMemAlloc, int],
-                 M_T: int, N_T: int, meshRow: int, meshCol: int,
-                 elem_bytes: int = 1):
-        self.src_addr = src_addr; self.dst_addr = dst_addr
-        self.M_T = M_T; self.N_T = N_T
-        self.meshRow = meshRow; self.meshCol = meshCol
-        self.elem_bytes = elem_bytes
+                 M_T: int, N_T: int):
+        if type(self).KERNEL_NAME is None:
+            raise TypeError(f"{type(self).__name__} binds no mesh; instantiate a per-(shape, "
+                            f"elem_bytes) subclass, not the base")
+        self.src_addr = src_addr
+        self.dst_addr = dst_addr
+        self.M_T = M_T
+        self.N_T = N_T
+        # exposed for cost/debug tooling; NOT emitted -- they are part of the kernel, not the args
+        self.mesh = (type(self).MESH_1, type(self).MESH_2)
+        self.elem_bytes = type(self).ELEM_BYTES
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_xdma_d_to_row_major_args_t"
@@ -726,22 +1308,105 @@ class SnaxBingoKernelXdmaDToRowMajorArgs(BingoKernelArgs):
         a = {}
         self._process_addr(self.src_addr, "src_addr", a, handle_name_map)
         self._process_addr(self.dst_addr, "dst_addr", a, handle_name_map)
-        a["M_T"] = str(self.M_T); a["N_T"] = str(self.N_T)
-        a["meshRow"] = str(self.meshRow); a["meshCol"] = str(self.meshCol)
-        a["elem_bytes"] = str(self.elem_bytes)
+        a["M_T"] = str(self.M_T)
+        a["N_T"] = str(self.N_T)
         return a
 
 
-class SnaxBingoKernelXdmaRowMajorToAArgs(BingoKernelArgs):
-    """row-major → A-layout. R[i,j] -> A[i/meshRow, j/tileSize, i%meshRow, j%tileSize]."""
+# meshRow=32, meshCol=32, elem_bytes=1
+class SnaxBingoKernelXdmaDToRowMajorE1M32N32Args(_SnaxBingoKernelXdmaDToRowMajorBase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_d_to_row_major_e1_M32N32"
+    MESH_1 = 32
+    MESH_2 = 32
+    ELEM_BYTES = 1
+
+
+# meshRow=32, meshCol=32, elem_bytes=2
+class SnaxBingoKernelXdmaDToRowMajorE2M32N32Args(_SnaxBingoKernelXdmaDToRowMajorBase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_d_to_row_major_e2_M32N32"
+    MESH_1 = 32
+    MESH_2 = 32
+    ELEM_BYTES = 2
+
+
+# meshRow=32, meshCol=32, elem_bytes=4
+class SnaxBingoKernelXdmaDToRowMajorE4M32N32Args(_SnaxBingoKernelXdmaDToRowMajorBase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_d_to_row_major_e4_M32N32"
+    MESH_1 = 32
+    MESH_2 = 32
+    ELEM_BYTES = 4
+
+
+# meshRow=1, meshCol=32, elem_bytes=1
+class SnaxBingoKernelXdmaDToRowMajorE1M1N32Args(_SnaxBingoKernelXdmaDToRowMajorBase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_d_to_row_major_e1_M1N32"
+    MESH_1 = 1
+    MESH_2 = 32
+    ELEM_BYTES = 1
+
+
+# meshRow=1, meshCol=32, elem_bytes=2
+class SnaxBingoKernelXdmaDToRowMajorE2M1N32Args(_SnaxBingoKernelXdmaDToRowMajorBase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_d_to_row_major_e2_M1N32"
+    MESH_1 = 1
+    MESH_2 = 32
+    ELEM_BYTES = 2
+
+
+# meshRow=1, meshCol=32, elem_bytes=4
+class SnaxBingoKernelXdmaDToRowMajorE4M1N32Args(_SnaxBingoKernelXdmaDToRowMajorBase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_d_to_row_major_e4_M1N32"
+    MESH_1 = 1
+    MESH_2 = 32
+    ELEM_BYTES = 4
+
+
+# meshRow=16, meshCol=16, elem_bytes=1
+class SnaxBingoKernelXdmaDToRowMajorE1M16N16Args(_SnaxBingoKernelXdmaDToRowMajorBase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_d_to_row_major_e1_M16N16"
+    MESH_1 = 16
+    MESH_2 = 16
+    ELEM_BYTES = 1
+
+
+# meshRow=16, meshCol=16, elem_bytes=2
+class SnaxBingoKernelXdmaDToRowMajorE2M16N16Args(_SnaxBingoKernelXdmaDToRowMajorBase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_d_to_row_major_e2_M16N16"
+    MESH_1 = 16
+    MESH_2 = 16
+    ELEM_BYTES = 2
+
+
+# meshRow=16, meshCol=16, elem_bytes=4
+class SnaxBingoKernelXdmaDToRowMajorE4M16N16Args(_SnaxBingoKernelXdmaDToRowMajorBase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_d_to_row_major_e4_M16N16"
+    MESH_1 = 16
+    MESH_2 = 16
+    ELEM_BYTES = 4
+
+
+class _SnaxBingoKernelXdmaRowMajorToABase(BingoKernelArgs):
+    """row-major -> A-layout. R[i,j] -> A[i/meshRow, j/tileSize, i%meshRow, j%tileSize].
+
+    Subclasses bind MESH_1 / MESH_2 (the two mesh dims their block spans) and ELEM_BYTES."""
+    KERNEL_NAME: str = None
+    MESH_1: int = None
+    MESH_2: int = None
+    ELEM_BYTES: int = None
+
     def __init__(self, src_addr: Union[BingoMemAlloc, int],
                  dst_addr: Union[BingoMemAlloc, int],
-                 M_T: int, K_T: int, meshRow: int, tileSize: int,
-                 elem_bytes: int = 1):
-        self.src_addr = src_addr; self.dst_addr = dst_addr
-        self.M_T = M_T; self.K_T = K_T
-        self.meshRow = meshRow; self.tileSize = tileSize
-        self.elem_bytes = elem_bytes
+                 M_T: int, K_T: int):
+        if type(self).KERNEL_NAME is None:
+            raise TypeError(f"{type(self).__name__} binds no mesh; instantiate a per-(shape, "
+                            f"elem_bytes) subclass, not the base")
+        self.src_addr = src_addr
+        self.dst_addr = dst_addr
+        self.M_T = M_T
+        self.K_T = K_T
+        # exposed for cost/debug tooling; NOT emitted -- they are part of the kernel, not the args
+        self.mesh = (type(self).MESH_1, type(self).MESH_2)
+        self.elem_bytes = type(self).ELEM_BYTES
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_xdma_row_major_to_a_args_t"
@@ -750,22 +1415,105 @@ class SnaxBingoKernelXdmaRowMajorToAArgs(BingoKernelArgs):
         a = {}
         self._process_addr(self.src_addr, "src_addr", a, handle_name_map)
         self._process_addr(self.dst_addr, "dst_addr", a, handle_name_map)
-        a["M_T"] = str(self.M_T); a["K_T"] = str(self.K_T)
-        a["meshRow"] = str(self.meshRow); a["tileSize"] = str(self.tileSize)
-        a["elem_bytes"] = str(self.elem_bytes)
+        a["M_T"] = str(self.M_T)
+        a["K_T"] = str(self.K_T)
         return a
 
 
-class SnaxBingoKernelXdmaRowMajorToBArgs(BingoKernelArgs):
-    """row-major → B-layout. R[i,j] -> B[j/meshCol, i/tileSize, j%meshCol, i%tileSize]."""
+# meshRow=32, tileSize=2, elem_bytes=1
+class SnaxBingoKernelXdmaRowMajorToAE1M32K2Args(_SnaxBingoKernelXdmaRowMajorToABase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_a_e1_M32K2"
+    MESH_1 = 32
+    MESH_2 = 2
+    ELEM_BYTES = 1
+
+
+# meshRow=32, tileSize=2, elem_bytes=2
+class SnaxBingoKernelXdmaRowMajorToAE2M32K2Args(_SnaxBingoKernelXdmaRowMajorToABase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_a_e2_M32K2"
+    MESH_1 = 32
+    MESH_2 = 2
+    ELEM_BYTES = 2
+
+
+# meshRow=32, tileSize=2, elem_bytes=4
+class SnaxBingoKernelXdmaRowMajorToAE4M32K2Args(_SnaxBingoKernelXdmaRowMajorToABase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_a_e4_M32K2"
+    MESH_1 = 32
+    MESH_2 = 2
+    ELEM_BYTES = 4
+
+
+# meshRow=1, tileSize=16, elem_bytes=1
+class SnaxBingoKernelXdmaRowMajorToAE1M1K16Args(_SnaxBingoKernelXdmaRowMajorToABase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_a_e1_M1K16"
+    MESH_1 = 1
+    MESH_2 = 16
+    ELEM_BYTES = 1
+
+
+# meshRow=1, tileSize=16, elem_bytes=2
+class SnaxBingoKernelXdmaRowMajorToAE2M1K16Args(_SnaxBingoKernelXdmaRowMajorToABase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_a_e2_M1K16"
+    MESH_1 = 1
+    MESH_2 = 16
+    ELEM_BYTES = 2
+
+
+# meshRow=1, tileSize=16, elem_bytes=4
+class SnaxBingoKernelXdmaRowMajorToAE4M1K16Args(_SnaxBingoKernelXdmaRowMajorToABase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_a_e4_M1K16"
+    MESH_1 = 1
+    MESH_2 = 16
+    ELEM_BYTES = 4
+
+
+# meshRow=16, tileSize=8, elem_bytes=1
+class SnaxBingoKernelXdmaRowMajorToAE1M16K8Args(_SnaxBingoKernelXdmaRowMajorToABase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_a_e1_M16K8"
+    MESH_1 = 16
+    MESH_2 = 8
+    ELEM_BYTES = 1
+
+
+# meshRow=16, tileSize=8, elem_bytes=2
+class SnaxBingoKernelXdmaRowMajorToAE2M16K8Args(_SnaxBingoKernelXdmaRowMajorToABase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_a_e2_M16K8"
+    MESH_1 = 16
+    MESH_2 = 8
+    ELEM_BYTES = 2
+
+
+# meshRow=16, tileSize=8, elem_bytes=4
+class SnaxBingoKernelXdmaRowMajorToAE4M16K8Args(_SnaxBingoKernelXdmaRowMajorToABase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_a_e4_M16K8"
+    MESH_1 = 16
+    MESH_2 = 8
+    ELEM_BYTES = 4
+
+
+class _SnaxBingoKernelXdmaRowMajorToBBase(BingoKernelArgs):
+    """row-major -> B-layout. R[i,j] -> B[j/meshCol, i/tileSize, j%meshCol, i%tileSize].
+
+    Subclasses bind MESH_1 / MESH_2 (the two mesh dims their block spans) and ELEM_BYTES."""
+    KERNEL_NAME: str = None
+    MESH_1: int = None
+    MESH_2: int = None
+    ELEM_BYTES: int = None
+
     def __init__(self, src_addr: Union[BingoMemAlloc, int],
                  dst_addr: Union[BingoMemAlloc, int],
-                 K_T: int, N_T: int, tileSize: int, meshCol: int,
-                 elem_bytes: int = 1):
-        self.src_addr = src_addr; self.dst_addr = dst_addr
-        self.K_T = K_T; self.N_T = N_T
-        self.tileSize = tileSize; self.meshCol = meshCol
-        self.elem_bytes = elem_bytes
+                 K_T: int, N_T: int):
+        if type(self).KERNEL_NAME is None:
+            raise TypeError(f"{type(self).__name__} binds no mesh; instantiate a per-(shape, "
+                            f"elem_bytes) subclass, not the base")
+        self.src_addr = src_addr
+        self.dst_addr = dst_addr
+        self.K_T = K_T
+        self.N_T = N_T
+        # exposed for cost/debug tooling; NOT emitted -- they are part of the kernel, not the args
+        self.mesh = (type(self).MESH_1, type(self).MESH_2)
+        self.elem_bytes = type(self).ELEM_BYTES
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_xdma_row_major_to_b_args_t"
@@ -774,22 +1522,105 @@ class SnaxBingoKernelXdmaRowMajorToBArgs(BingoKernelArgs):
         a = {}
         self._process_addr(self.src_addr, "src_addr", a, handle_name_map)
         self._process_addr(self.dst_addr, "dst_addr", a, handle_name_map)
-        a["K_T"] = str(self.K_T); a["N_T"] = str(self.N_T)
-        a["tileSize"] = str(self.tileSize); a["meshCol"] = str(self.meshCol)
-        a["elem_bytes"] = str(self.elem_bytes)
+        a["K_T"] = str(self.K_T)
+        a["N_T"] = str(self.N_T)
         return a
 
 
-class SnaxBingoKernelXdmaAToRowMajorArgs(BingoKernelArgs):
-    """A-layout → row-major (inverse of row_major_to_a)."""
+# tileSize=2, meshCol=32, elem_bytes=1
+class SnaxBingoKernelXdmaRowMajorToBE1K2N32Args(_SnaxBingoKernelXdmaRowMajorToBBase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_b_e1_K2N32"
+    MESH_1 = 2
+    MESH_2 = 32
+    ELEM_BYTES = 1
+
+
+# tileSize=2, meshCol=32, elem_bytes=2
+class SnaxBingoKernelXdmaRowMajorToBE2K2N32Args(_SnaxBingoKernelXdmaRowMajorToBBase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_b_e2_K2N32"
+    MESH_1 = 2
+    MESH_2 = 32
+    ELEM_BYTES = 2
+
+
+# tileSize=2, meshCol=32, elem_bytes=4
+class SnaxBingoKernelXdmaRowMajorToBE4K2N32Args(_SnaxBingoKernelXdmaRowMajorToBBase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_b_e4_K2N32"
+    MESH_1 = 2
+    MESH_2 = 32
+    ELEM_BYTES = 4
+
+
+# tileSize=16, meshCol=32, elem_bytes=1
+class SnaxBingoKernelXdmaRowMajorToBE1K16N32Args(_SnaxBingoKernelXdmaRowMajorToBBase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_b_e1_K16N32"
+    MESH_1 = 16
+    MESH_2 = 32
+    ELEM_BYTES = 1
+
+
+# tileSize=16, meshCol=32, elem_bytes=2
+class SnaxBingoKernelXdmaRowMajorToBE2K16N32Args(_SnaxBingoKernelXdmaRowMajorToBBase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_b_e2_K16N32"
+    MESH_1 = 16
+    MESH_2 = 32
+    ELEM_BYTES = 2
+
+
+# tileSize=16, meshCol=32, elem_bytes=4
+class SnaxBingoKernelXdmaRowMajorToBE4K16N32Args(_SnaxBingoKernelXdmaRowMajorToBBase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_b_e4_K16N32"
+    MESH_1 = 16
+    MESH_2 = 32
+    ELEM_BYTES = 4
+
+
+# tileSize=8, meshCol=16, elem_bytes=1
+class SnaxBingoKernelXdmaRowMajorToBE1K8N16Args(_SnaxBingoKernelXdmaRowMajorToBBase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_b_e1_K8N16"
+    MESH_1 = 8
+    MESH_2 = 16
+    ELEM_BYTES = 1
+
+
+# tileSize=8, meshCol=16, elem_bytes=2
+class SnaxBingoKernelXdmaRowMajorToBE2K8N16Args(_SnaxBingoKernelXdmaRowMajorToBBase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_b_e2_K8N16"
+    MESH_1 = 8
+    MESH_2 = 16
+    ELEM_BYTES = 2
+
+
+# tileSize=8, meshCol=16, elem_bytes=4
+class SnaxBingoKernelXdmaRowMajorToBE4K8N16Args(_SnaxBingoKernelXdmaRowMajorToBBase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_b_e4_K8N16"
+    MESH_1 = 8
+    MESH_2 = 16
+    ELEM_BYTES = 4
+
+
+class _SnaxBingoKernelXdmaAToRowMajorBase(BingoKernelArgs):
+    """A-layout -> row-major (the inverse of row_major_to_a).
+
+    Subclasses bind MESH_1 / MESH_2 (the two mesh dims their block spans) and ELEM_BYTES."""
+    KERNEL_NAME: str = None
+    MESH_1: int = None
+    MESH_2: int = None
+    ELEM_BYTES: int = None
+
     def __init__(self, src_addr: Union[BingoMemAlloc, int],
                  dst_addr: Union[BingoMemAlloc, int],
-                 M_T: int, K_T: int, meshRow: int, tileSize: int,
-                 elem_bytes: int = 1):
-        self.src_addr = src_addr; self.dst_addr = dst_addr
-        self.M_T = M_T; self.K_T = K_T
-        self.meshRow = meshRow; self.tileSize = tileSize
-        self.elem_bytes = elem_bytes
+                 M_T: int, K_T: int):
+        if type(self).KERNEL_NAME is None:
+            raise TypeError(f"{type(self).__name__} binds no mesh; instantiate a per-(shape, "
+                            f"elem_bytes) subclass, not the base")
+        self.src_addr = src_addr
+        self.dst_addr = dst_addr
+        self.M_T = M_T
+        self.K_T = K_T
+        # exposed for cost/debug tooling; NOT emitted -- they are part of the kernel, not the args
+        self.mesh = (type(self).MESH_1, type(self).MESH_2)
+        self.elem_bytes = type(self).ELEM_BYTES
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_xdma_a_to_row_major_args_t"
@@ -798,22 +1629,105 @@ class SnaxBingoKernelXdmaAToRowMajorArgs(BingoKernelArgs):
         a = {}
         self._process_addr(self.src_addr, "src_addr", a, handle_name_map)
         self._process_addr(self.dst_addr, "dst_addr", a, handle_name_map)
-        a["M_T"] = str(self.M_T); a["K_T"] = str(self.K_T)
-        a["meshRow"] = str(self.meshRow); a["tileSize"] = str(self.tileSize)
-        a["elem_bytes"] = str(self.elem_bytes)
+        a["M_T"] = str(self.M_T)
+        a["K_T"] = str(self.K_T)
         return a
 
 
-class SnaxBingoKernelXdmaBToRowMajorArgs(BingoKernelArgs):
-    """B-layout → row-major (inverse of row_major_to_b)."""
+# meshRow=32, tileSize=2, elem_bytes=1
+class SnaxBingoKernelXdmaAToRowMajorE1M32K2Args(_SnaxBingoKernelXdmaAToRowMajorBase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_a_to_row_major_e1_M32K2"
+    MESH_1 = 32
+    MESH_2 = 2
+    ELEM_BYTES = 1
+
+
+# meshRow=32, tileSize=2, elem_bytes=2
+class SnaxBingoKernelXdmaAToRowMajorE2M32K2Args(_SnaxBingoKernelXdmaAToRowMajorBase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_a_to_row_major_e2_M32K2"
+    MESH_1 = 32
+    MESH_2 = 2
+    ELEM_BYTES = 2
+
+
+# meshRow=32, tileSize=2, elem_bytes=4
+class SnaxBingoKernelXdmaAToRowMajorE4M32K2Args(_SnaxBingoKernelXdmaAToRowMajorBase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_a_to_row_major_e4_M32K2"
+    MESH_1 = 32
+    MESH_2 = 2
+    ELEM_BYTES = 4
+
+
+# meshRow=1, tileSize=16, elem_bytes=1
+class SnaxBingoKernelXdmaAToRowMajorE1M1K16Args(_SnaxBingoKernelXdmaAToRowMajorBase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_a_to_row_major_e1_M1K16"
+    MESH_1 = 1
+    MESH_2 = 16
+    ELEM_BYTES = 1
+
+
+# meshRow=1, tileSize=16, elem_bytes=2
+class SnaxBingoKernelXdmaAToRowMajorE2M1K16Args(_SnaxBingoKernelXdmaAToRowMajorBase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_a_to_row_major_e2_M1K16"
+    MESH_1 = 1
+    MESH_2 = 16
+    ELEM_BYTES = 2
+
+
+# meshRow=1, tileSize=16, elem_bytes=4
+class SnaxBingoKernelXdmaAToRowMajorE4M1K16Args(_SnaxBingoKernelXdmaAToRowMajorBase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_a_to_row_major_e4_M1K16"
+    MESH_1 = 1
+    MESH_2 = 16
+    ELEM_BYTES = 4
+
+
+# meshRow=16, tileSize=8, elem_bytes=1
+class SnaxBingoKernelXdmaAToRowMajorE1M16K8Args(_SnaxBingoKernelXdmaAToRowMajorBase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_a_to_row_major_e1_M16K8"
+    MESH_1 = 16
+    MESH_2 = 8
+    ELEM_BYTES = 1
+
+
+# meshRow=16, tileSize=8, elem_bytes=2
+class SnaxBingoKernelXdmaAToRowMajorE2M16K8Args(_SnaxBingoKernelXdmaAToRowMajorBase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_a_to_row_major_e2_M16K8"
+    MESH_1 = 16
+    MESH_2 = 8
+    ELEM_BYTES = 2
+
+
+# meshRow=16, tileSize=8, elem_bytes=4
+class SnaxBingoKernelXdmaAToRowMajorE4M16K8Args(_SnaxBingoKernelXdmaAToRowMajorBase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_a_to_row_major_e4_M16K8"
+    MESH_1 = 16
+    MESH_2 = 8
+    ELEM_BYTES = 4
+
+
+class _SnaxBingoKernelXdmaBToRowMajorBase(BingoKernelArgs):
+    """B-layout -> row-major (the inverse of row_major_to_b).
+
+    Subclasses bind MESH_1 / MESH_2 (the two mesh dims their block spans) and ELEM_BYTES."""
+    KERNEL_NAME: str = None
+    MESH_1: int = None
+    MESH_2: int = None
+    ELEM_BYTES: int = None
+
     def __init__(self, src_addr: Union[BingoMemAlloc, int],
                  dst_addr: Union[BingoMemAlloc, int],
-                 K_T: int, N_T: int, tileSize: int, meshCol: int,
-                 elem_bytes: int = 1):
-        self.src_addr = src_addr; self.dst_addr = dst_addr
-        self.K_T = K_T; self.N_T = N_T
-        self.tileSize = tileSize; self.meshCol = meshCol
-        self.elem_bytes = elem_bytes
+                 K_T: int, N_T: int):
+        if type(self).KERNEL_NAME is None:
+            raise TypeError(f"{type(self).__name__} binds no mesh; instantiate a per-(shape, "
+                            f"elem_bytes) subclass, not the base")
+        self.src_addr = src_addr
+        self.dst_addr = dst_addr
+        self.K_T = K_T
+        self.N_T = N_T
+        # exposed for cost/debug tooling; NOT emitted -- they are part of the kernel, not the args
+        self.mesh = (type(self).MESH_1, type(self).MESH_2)
+        self.elem_bytes = type(self).ELEM_BYTES
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_xdma_b_to_row_major_args_t"
@@ -822,22 +1736,105 @@ class SnaxBingoKernelXdmaBToRowMajorArgs(BingoKernelArgs):
         a = {}
         self._process_addr(self.src_addr, "src_addr", a, handle_name_map)
         self._process_addr(self.dst_addr, "dst_addr", a, handle_name_map)
-        a["K_T"] = str(self.K_T); a["N_T"] = str(self.N_T)
-        a["tileSize"] = str(self.tileSize); a["meshCol"] = str(self.meshCol)
-        a["elem_bytes"] = str(self.elem_bytes)
+        a["K_T"] = str(self.K_T)
+        a["N_T"] = str(self.N_T)
         return a
 
 
-class SnaxBingoKernelXdmaRowMajorToDArgs(BingoKernelArgs):
-    """row-major → D-layout (inverse of d_to_row_major)."""
+# tileSize=2, meshCol=32, elem_bytes=1
+class SnaxBingoKernelXdmaBToRowMajorE1K2N32Args(_SnaxBingoKernelXdmaBToRowMajorBase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_b_to_row_major_e1_K2N32"
+    MESH_1 = 2
+    MESH_2 = 32
+    ELEM_BYTES = 1
+
+
+# tileSize=2, meshCol=32, elem_bytes=2
+class SnaxBingoKernelXdmaBToRowMajorE2K2N32Args(_SnaxBingoKernelXdmaBToRowMajorBase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_b_to_row_major_e2_K2N32"
+    MESH_1 = 2
+    MESH_2 = 32
+    ELEM_BYTES = 2
+
+
+# tileSize=2, meshCol=32, elem_bytes=4
+class SnaxBingoKernelXdmaBToRowMajorE4K2N32Args(_SnaxBingoKernelXdmaBToRowMajorBase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_b_to_row_major_e4_K2N32"
+    MESH_1 = 2
+    MESH_2 = 32
+    ELEM_BYTES = 4
+
+
+# tileSize=16, meshCol=32, elem_bytes=1
+class SnaxBingoKernelXdmaBToRowMajorE1K16N32Args(_SnaxBingoKernelXdmaBToRowMajorBase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_b_to_row_major_e1_K16N32"
+    MESH_1 = 16
+    MESH_2 = 32
+    ELEM_BYTES = 1
+
+
+# tileSize=16, meshCol=32, elem_bytes=2
+class SnaxBingoKernelXdmaBToRowMajorE2K16N32Args(_SnaxBingoKernelXdmaBToRowMajorBase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_b_to_row_major_e2_K16N32"
+    MESH_1 = 16
+    MESH_2 = 32
+    ELEM_BYTES = 2
+
+
+# tileSize=16, meshCol=32, elem_bytes=4
+class SnaxBingoKernelXdmaBToRowMajorE4K16N32Args(_SnaxBingoKernelXdmaBToRowMajorBase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_b_to_row_major_e4_K16N32"
+    MESH_1 = 16
+    MESH_2 = 32
+    ELEM_BYTES = 4
+
+
+# tileSize=8, meshCol=16, elem_bytes=1
+class SnaxBingoKernelXdmaBToRowMajorE1K8N16Args(_SnaxBingoKernelXdmaBToRowMajorBase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_b_to_row_major_e1_K8N16"
+    MESH_1 = 8
+    MESH_2 = 16
+    ELEM_BYTES = 1
+
+
+# tileSize=8, meshCol=16, elem_bytes=2
+class SnaxBingoKernelXdmaBToRowMajorE2K8N16Args(_SnaxBingoKernelXdmaBToRowMajorBase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_b_to_row_major_e2_K8N16"
+    MESH_1 = 8
+    MESH_2 = 16
+    ELEM_BYTES = 2
+
+
+# tileSize=8, meshCol=16, elem_bytes=4
+class SnaxBingoKernelXdmaBToRowMajorE4K8N16Args(_SnaxBingoKernelXdmaBToRowMajorBase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_b_to_row_major_e4_K8N16"
+    MESH_1 = 8
+    MESH_2 = 16
+    ELEM_BYTES = 4
+
+
+class _SnaxBingoKernelXdmaRowMajorToDBase(BingoKernelArgs):
+    """row-major -> D-layout (the inverse of d_to_row_major).
+
+    Subclasses bind MESH_1 / MESH_2 (the two mesh dims their block spans) and ELEM_BYTES."""
+    KERNEL_NAME: str = None
+    MESH_1: int = None
+    MESH_2: int = None
+    ELEM_BYTES: int = None
+
     def __init__(self, src_addr: Union[BingoMemAlloc, int],
                  dst_addr: Union[BingoMemAlloc, int],
-                 M_T: int, N_T: int, meshRow: int, meshCol: int,
-                 elem_bytes: int = 1):
-        self.src_addr = src_addr; self.dst_addr = dst_addr
-        self.M_T = M_T; self.N_T = N_T
-        self.meshRow = meshRow; self.meshCol = meshCol
-        self.elem_bytes = elem_bytes
+                 M_T: int, N_T: int):
+        if type(self).KERNEL_NAME is None:
+            raise TypeError(f"{type(self).__name__} binds no mesh; instantiate a per-(shape, "
+                            f"elem_bytes) subclass, not the base")
+        self.src_addr = src_addr
+        self.dst_addr = dst_addr
+        self.M_T = M_T
+        self.N_T = N_T
+        # exposed for cost/debug tooling; NOT emitted -- they are part of the kernel, not the args
+        self.mesh = (type(self).MESH_1, type(self).MESH_2)
+        self.elem_bytes = type(self).ELEM_BYTES
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_xdma_row_major_to_d_args_t"
@@ -846,13 +1843,103 @@ class SnaxBingoKernelXdmaRowMajorToDArgs(BingoKernelArgs):
         a = {}
         self._process_addr(self.src_addr, "src_addr", a, handle_name_map)
         self._process_addr(self.dst_addr, "dst_addr", a, handle_name_map)
-        a["M_T"] = str(self.M_T); a["N_T"] = str(self.N_T)
-        a["meshRow"] = str(self.meshRow); a["meshCol"] = str(self.meshCol)
-        a["elem_bytes"] = str(self.elem_bytes)
+        a["M_T"] = str(self.M_T)
+        a["N_T"] = str(self.N_T)
         return a
 
 
-# HOST BINGO DUMMY
+# meshRow=32, meshCol=32, elem_bytes=1
+class SnaxBingoKernelXdmaRowMajorToDE1M32N32Args(_SnaxBingoKernelXdmaRowMajorToDBase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_d_e1_M32N32"
+    MESH_1 = 32
+    MESH_2 = 32
+    ELEM_BYTES = 1
+
+
+# meshRow=32, meshCol=32, elem_bytes=2
+class SnaxBingoKernelXdmaRowMajorToDE2M32N32Args(_SnaxBingoKernelXdmaRowMajorToDBase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_d_e2_M32N32"
+    MESH_1 = 32
+    MESH_2 = 32
+    ELEM_BYTES = 2
+
+
+# meshRow=32, meshCol=32, elem_bytes=4
+class SnaxBingoKernelXdmaRowMajorToDE4M32N32Args(_SnaxBingoKernelXdmaRowMajorToDBase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_d_e4_M32N32"
+    MESH_1 = 32
+    MESH_2 = 32
+    ELEM_BYTES = 4
+
+
+# meshRow=1, meshCol=32, elem_bytes=1
+class SnaxBingoKernelXdmaRowMajorToDE1M1N32Args(_SnaxBingoKernelXdmaRowMajorToDBase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_d_e1_M1N32"
+    MESH_1 = 1
+    MESH_2 = 32
+    ELEM_BYTES = 1
+
+
+# meshRow=1, meshCol=32, elem_bytes=2
+class SnaxBingoKernelXdmaRowMajorToDE2M1N32Args(_SnaxBingoKernelXdmaRowMajorToDBase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_d_e2_M1N32"
+    MESH_1 = 1
+    MESH_2 = 32
+    ELEM_BYTES = 2
+
+
+# meshRow=1, meshCol=32, elem_bytes=4
+class SnaxBingoKernelXdmaRowMajorToDE4M1N32Args(_SnaxBingoKernelXdmaRowMajorToDBase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_d_e4_M1N32"
+    MESH_1 = 1
+    MESH_2 = 32
+    ELEM_BYTES = 4
+
+
+# meshRow=16, meshCol=16, elem_bytes=1
+class SnaxBingoKernelXdmaRowMajorToDE1M16N16Args(_SnaxBingoKernelXdmaRowMajorToDBase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_d_e1_M16N16"
+    MESH_1 = 16
+    MESH_2 = 16
+    ELEM_BYTES = 1
+
+
+# meshRow=16, meshCol=16, elem_bytes=2
+class SnaxBingoKernelXdmaRowMajorToDE2M16N16Args(_SnaxBingoKernelXdmaRowMajorToDBase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_d_e2_M16N16"
+    MESH_1 = 16
+    MESH_2 = 16
+    ELEM_BYTES = 2
+
+
+# meshRow=16, meshCol=16, elem_bytes=4
+class SnaxBingoKernelXdmaRowMajorToDE4M16N16Args(_SnaxBingoKernelXdmaRowMajorToDBase):
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_d_e4_M16N16"
+    MESH_1 = 16
+    MESH_2 = 16
+    ELEM_BYTES = 4
+
+# -------------------------------------------------------------------------
+# Resolve a converter args class from (family, mesh, elem_bytes). Hand-written
+# workloads parameterize their mesh at runtime; this is how they pick the kernel.
+# -------------------------------------------------------------------------
+def xdma_conv_args(family: str, mesh_1: int, mesh_2: int, elem_bytes: int):
+    """The args class for `family` bound to that mesh and element width, e.g.
+    xdma_conv_args("xdma_row_major_to_a", 32, 2, 1) -> SnaxBingoKernelXdmaRowMajorToAE1M32K2Args.
+
+    Raises LookupError if the RTL build has no such kernel -- the mesh must be one of the array
+    shapes and elem_bytes one of the widths the device wrappers were generated for."""
+    prefix = f"__snax_bingo_kernel_{family}_e{elem_bytes}_"
+    for name, obj in globals().items():
+        if not (isinstance(obj, type) and name.startswith("SnaxBingoKernelXdma") and name.endswith("Args")):
+            continue
+        kn = getattr(obj, "KERNEL_NAME", None)
+        if kn and kn.startswith(prefix) and (obj.MESH_1, obj.MESH_2) == (mesh_1, mesh_2):
+            return obj
+    raise LookupError(f"no device kernel for {family} at mesh ({mesh_1}, {mesh_2}) with "
+                      f"{elem_bytes}-byte elements")
+
+
 class HostBingoKernelDummyArgs(BingoKernelArgs):
     def __init__(self, dummy_input: int):
         self.dummy_input = dummy_input
@@ -868,6 +1955,7 @@ class HostBingoKernelDummyArgs(BingoKernelArgs):
 BINGO_CHECK_TYPE_BYTE_EXACT = 0
 BINGO_CHECK_TYPE_FP32_TOL   = 1
 BINGO_CHECK_TYPE_FP16_TOL   = 2
+BINGO_CHECK_TYPE_FP16_RELTOL = 3  # fp16 relative tol: |out-g| <= rtol*|g| + 0.05 (magnitude-scaled)
 
 
 # Bytes per element for each check mode — used for validation and
@@ -876,6 +1964,7 @@ _CHECK_TYPE_ELEM_BYTES = {
     BINGO_CHECK_TYPE_BYTE_EXACT: 1,  # data_size IS the byte count
     BINGO_CHECK_TYPE_FP32_TOL:   4,
     BINGO_CHECK_TYPE_FP16_TOL:   2,
+    BINGO_CHECK_TYPE_FP16_RELTOL: 2,  # fp16 elements, relative-tolerance compare
 }
 
 
@@ -1015,6 +2104,39 @@ class HostBingoKernelIdmaArgs(BingoKernelArgs):
         self._process_addr(self.dst_addr, "dst_addr", assignments, handle_name_map, split_64bit=False, as_64bit=True)
         assignments["size"] = str(self.size)
         return assignments
+
+
+# HOST BINGO scalar broadcast bridge: read `rows` per-row reduce scalars from L1
+# (row r one splatted 64-B beat apart), compute a per-row scalar on the CVA6, and
+# splat each fp16 result across a [rows, D] fp16 broadcast buffer for a downstream
+# device StreamElementwise. op: 0=NEG (-x), 1=RECIP (1/x), 2=RSQRT_MEAN (1/sqrt(x/N)).
+class HostBingoKernelRequantScaleArgs(BingoKernelArgs):
+    """Per-tensor fp16->int8 requant scale: reads xmax,nmax (max(x), max(-x) fp16 scalars the xDMA
+    StreamReduce(MAX) passes wrote to cluster L1) and writes scale = max|x|/127 (fp32 dequant qsc) +
+    inv_scale = 127/max|x| (fp32, the xDMA fp16_to_int8 runtime CSR). Replaces the host quantize_f16i8
+    (which streamed the whole tensor from L3); this reads/writes 2+2 scalars only."""
+    KERNEL_NAME = "__host_bingo_kernel_requant_scale"
+
+    def __init__(self,
+                 xmax_addr: Union[BingoMemAlloc, BingoMemSymbol, int],
+                 nmax_addr: Union[BingoMemAlloc, BingoMemSymbol, int],
+                 scale_out_addr: Union[BingoMemAlloc, BingoMemSymbol, int],
+                 inv_scale_out_addr: Union[BingoMemAlloc, BingoMemSymbol, int]):
+        self.xmax_addr = xmax_addr
+        self.nmax_addr = nmax_addr
+        self.scale_out_addr = scale_out_addr
+        self.inv_scale_out_addr = inv_scale_out_addr
+
+    def get_struct_name(self) -> str:
+        return "__host_bingo_kernel_requant_scale_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.xmax_addr, "xmax_addr", a, handle_name_map, split_64bit=False, as_64bit=True)
+        self._process_addr(self.nmax_addr, "nmax_addr", a, handle_name_map, split_64bit=False, as_64bit=True)
+        self._process_addr(self.scale_out_addr, "scale_out_addr", a, handle_name_map, split_64bit=False, as_64bit=True)
+        self._process_addr(self.inv_scale_out_addr, "inv_scale_out_addr", a, handle_name_map, split_64bit=False, as_64bit=True)
+        return a
 
 
 # ══════════════════════════════════════════════════════════════════════

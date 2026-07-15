@@ -45,8 +45,35 @@ class BingoMemAlloc:
     def get_c_var_name(self):
         return f"ptr_{self.name}"
 
+    def view(self, offset: int):
+        """A byte-offset VIEW into this allocation (see BingoMemAllocView). No new allocation."""
+        return BingoMemAllocView(self, offset)
+
     def __repr__(self):
         return f"BingoMemAlloc(name='{self.name}', size={self.size}, level='{self.mem_level}')"
+
+class BingoMemAllocView:
+    """
+    A byte-offset view into an existing BingoMemAlloc. NOT a new allocation: the C emitter
+    resolves it to `ptr_<base> + offset`, and the underlying buffer is still allocated once.
+
+    Exists so a node can address a sub-region of a buffer another node produced. The motivating
+    case is the merged map+reduce in TAP mode, which writes PADDED rows
+    [mapped beat 0 .. beats-1 | scalar beat]: the per-row scalars are a strided column INSIDE the
+    output, so the host reciprocal reads them as
+
+        exp  = BingoMemAlloc("exp", size=rows*(beats+1)*64, mem_level="L1", ...)
+        sums = exp.view(beats * 64)     # row 0's scalar beat; the rows are (beats+1)*64 apart
+
+    (Constructing a second BingoMemAlloc at an offset would emit a second allocation with a
+    clashing C variable name -- hence this view.)
+    """
+    def __init__(self, base: "BingoMemAlloc", offset: int):
+        self.base = base
+        self.offset = offset
+
+    def __repr__(self):
+        return f"BingoMemAllocView(base='{self.base.name}', offset={self.offset})"
 
 class BingoMemSymbol:
     """

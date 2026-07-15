@@ -56,12 +56,12 @@ int main() {
             err++;
         }
         xdma_memcpy_1d(tcdm_c1, tcdm_c0, matrix_size * sizeof(input_matrix[0]));
-        int task_id = xdma_start();
+        int task_id = xdma_start().task_id;
         xdma_remote_wait(task_id);
         printf("3: %d\r\n", xdma_last_task_cycle());
         // Experiment Group 4: XDMA remote write copy
         xdma_memcpy_1d(tcdm_c0, tcdm_c1, matrix_size * sizeof(input_matrix[0]));
-        task_id = xdma_start();
+        task_id = xdma_start().task_id;
         xdma_remote_wait(task_id);
         printf("4: %d\r\n", xdma_last_task_cycle());
         // Experiment Group 5: XDMA chain write to 2 dests
@@ -71,7 +71,7 @@ int main() {
         dest[1] = tcdm_c2;
         xdma_multicast_1d(tcdm_c0, dest, 2,
                           matrix_size * sizeof(input_matrix[0]));
-        task_id = xdma_start();
+        task_id = xdma_start().task_id;
         xdma_remote_wait(task_id);
         printf("5: %d\r\n", xdma_last_task_cycle());
         // Experiment Group 6: XDMA nD chain write to 2 dests
@@ -81,7 +81,7 @@ int main() {
                           temporal_dimension_dst_xdma,
                           temporal_strides_dst_xdma, temporal_bounds_dst_xdma,
                           0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF);
-        task_id = xdma_start();
+        task_id = xdma_start().task_id;
         xdma_remote_wait(task_id);
         printf("6: %d\r\n", xdma_last_task_cycle());
 

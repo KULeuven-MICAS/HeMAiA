@@ -104,7 +104,7 @@ int main() {
         snrt_dma_start_1d(tcdm_middle, tcdm_in,
                           matrix_size * sizeof(input_matrix[0]));
         snrt_dma_wait_all();
-        int task_id = xdma_start();
+        int task_id = xdma_start().task_id;
         xdma_local_wait(task_id);
         __asm__ volatile("csrr %0, mcycle;" : "=r"(end_time));
         printf("The IDMA copy + XDMA Reshape is finished in %d cycles\r\n",
@@ -121,7 +121,7 @@ int main() {
                        0xFFFFFFFF);
 
         __asm__ volatile("csrr %0, mcycle;" : "=r"(start_time));
-        task_id = xdma_start();
+        task_id = xdma_start().task_id;
         xdma_remote_wait(task_id);
         __asm__ volatile("csrr %0, mcycle;" : "=r"(end_time));
         printf("The XDMA copy is finished in %d cycles\r\n",

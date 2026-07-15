@@ -27,7 +27,7 @@ except ImportError:
 
 from bingo_utils import DiGraphWrapper
 from bingo_node import BingoNode
-from bingo_mem_handle import BingoMemAlloc
+from bingo_mem_handle import BingoMemAlloc, BingoMemAllocView
 from bingo_kernel_args import (
     BingoKernelArgs,
     HostBingoKernelCerfGatingArgs,
@@ -45,7 +45,8 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                  num_clusters_per_chiplet: int,
                  num_cores_per_cluster: int,
                  is_host_as_acc: bool,
-                 chiplet_ids: list[int] = None) -> None:
+                 chiplet_ids: list[int] = None,
+                 dep_tag_width: int = 4) -> None:
         super().__init__()
         # HW architecture parameters
         self.num_chiplets = num_chiplets
@@ -59,7 +60,10 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         # per-edge tag-allocation passes; the tag bits are always present in the
         # packed descriptor (= 0 when disabled), matching the RTL struct layout.
         self.enable_tagged_deps = True
-        self.dep_tag_width = 4
+        # Keep in sync with the RTL: cfg s1_quadrant.dep_tag_width -> DepTagWidth, exported
+        # to SW as BINGO_DEP_TAG_WIDTH (occamy.h) / DEP_TAG_WIDTH (bingo_utils.h). The
+        # default matches the schema default; pass dep_tag_width= when the cfg overrides it.
+        self.dep_tag_width = dep_tag_width
         # Node ID counter
         # Make sure the node id is starts from 0
         self.id = -1
@@ -1639,6 +1643,10 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                 for attr, value in node.kernel_args.__dict__.items():
                      if isinstance(value, BingoMemAlloc):
                          unique_handles.add(value)
+                     # A view is not its own allocation -- collect the buffer it points into, so a
+                     # base only ever referenced through a view is still allocated.
+                     elif isinstance(value, BingoMemAllocView):
+                         unique_handles.add(value.base)
         
         sorted_handles = sorted(list(unique_handles), key=lambda h: h.name)
         handle_name_map = {h: h.get_c_var_name() for h in sorted_handles}

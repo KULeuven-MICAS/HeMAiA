@@ -19,13 +19,21 @@ INCDIRS      += $(SW_DIR)/shared/runtime # for print/mailbox/chipid
 INCDIRS      += $(SW_DIR)/shared/platform/generated # for occamy_memory_map
 RISCV_CFLAGS += $(addprefix -I,$(INCDIRS))
 
+# Emit a .d next to every object. Without it these objects had NO header
+# prerequisites at all: editing bingo_api.h / bingo_alloc.h / device_kernel_args.h
+# recompiled nothing, libbingo.a stayed "up to date", and because it sits in the
+# apps' LD_SRCS none of them relinked either -- every host app silently kept the
+# old library until someone ran `make clean`.
+RISCV_CFLAGS  += -MMD -MP
+
 SRCS           = src/bingo_api.c
 OBJS           = $(BUILD_DIR)/bingo_alloc.o
 OBJS          += $(BUILD_DIR)/bingo_api.o
+DEPS           = $(OBJS:.o=.d)
 BINGO_LIB      = $(BUILD_DIR)/libbingo.a
 BINGO_LIB_DUMP = $(BUILD_DIR)/libbingo.dump
 ALL_OUTPUTS   = $(OBJS) $(BINGO_LIB) $(BINGO_LIB_DUMP)
-.PHONY: gen-lib 
+.PHONY: gen-lib
 gen-lib: $(ALL_OUTPUTS)
 
 $(BUILD_DIR)/bingo_alloc.o: $(SW_DIR)/shared/vendor/bingo_alloc/bingo_alloc/bingo_alloc.c | $(BUILD_DIR)
@@ -39,3 +47,5 @@ $(BINGO_LIB): $(OBJS) | $(BUILD_DIR)
 
 $(BINGO_LIB_DUMP): $(BINGO_LIB)
 	$(RISCV_OBJDUMP) -D $< > $@
+
+-include $(DEPS)

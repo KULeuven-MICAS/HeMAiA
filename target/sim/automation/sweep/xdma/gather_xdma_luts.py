@@ -35,7 +35,7 @@ _THIS = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.normpath(os.path.join(_THIS, "../../../../../"))
 sys.path.insert(0, os.path.join(_ROOT, "util/automation_scripts"))
 from bingo_trace_gather import (  # noqa: E402
-    convert_traces, extract_run_cycles, parse_task_order, run_bingo_trace,
+    convert_traces, extract_run_cycles, parse_task_order, run_bingo_trace, task_dir,
 )
 
 _XDMA_DIR = _THIS
@@ -123,33 +123,49 @@ OP_SPEC = {
 
 
 def gather_one(workload, idx, ci_dir, mesh, drop_warmup=True, verbose=True):
-    """Return (op_name, op_node, params, points) for *workload*, or None.
+    """Return a list of (op_name, op_node, params, points) groups for *workload*.
+
+    One workload can feed SEVERAL LUTs. A converter sweeps 3 array shapes x 3 element
+    widths, and each (shape, width) pair is a distinct runnable kernel with its own
+    LUT -- so its 81 configs split into 9 groups. The non-layout ops yield exactly one
+    group.
+
+    The variant is read from configs.json's `op_ids` (written by xdma_ops_lib), NOT
+    reconstructed here: the sweep decides which kernel each config runs, so letting
+    it name the LUT is what stops the two from ever disagreeing. `meshes` likewise
+    gives the per-config (meshRow, tileSize, meshCol); the single global --mesh is
+    only correct for a workload that sweeps ONE shape.
 
     *points* is a list of dicts, each the op's params plus a "cycles" value.
-    (op_fit in OP_SPEC is left as in-code documentation; the CSV carries only the
-    measured cycles -- curve fitting lives in the bingo framework.)
     """
     if workload not in OP_SPEC:
         if verbose:
             print(f"task_{idx} {workload}: no LUT spec (skipped)")
-        return None
+        return []
     op_name, op_node, _op_fit, params, epc, point_fn = OP_SPEC[workload]
-    logs_dir = os.path.join(ci_dir, f"task_{idx}", "bin", "logs")
+    tdir = task_dir(ci_dir, idx)
+    if tdir is None:
+        print(f"task_{idx} {workload}: MISSING run dir under {ci_dir}")
+        return []
+    logs_dir = os.path.join(tdir, "bin", "logs")
     cfg_path = os.path.join(_WORKLOADS, workload, "configs.json")
     if not os.path.isdir(logs_dir):
         print(f"task_{idx} {workload}: MISSING logs dir {logs_dir}")
-        return None
+        return []
     if not os.path.exists(cfg_path):
         print(f"task_{idx} {workload}: MISSING configs.json {cfg_path}")
-        return None
+        return []
 
     convert_traces(logs_dir, verbose)
     bingo_json = run_bingo_trace(logs_dir)
     if not bingo_json:
-        return None
+        return []
     cycles = extract_run_cycles(bingo_json, "XDMA_RUN")
     with open(cfg_path) as f:
-        configs = json.load(f)["configs"]
+        cj = json.load(f)
+    configs = cj["configs"]
+    op_ids = cj.get("op_ids")                      # layout workloads only
+    meshes = {int(k): tuple(v) for k, v in cj.get("meshes", {}).items()}
 
     # The first kernel invocation of a sweep pays a one-time cold-start penalty
     # (i-cache fill + first xDMA config) that is ~10x the steady-state cost and
@@ -157,30 +173,43 @@ def gather_one(workload, idx, ci_dir, mesh, drop_warmup=True, verbose=True):
     if drop_warmup and len(configs) > 1 and len(cycles) >= 2 * epc:
         configs = configs[1:]
         cycles = cycles[epc:]
+        if op_ids:
+            op_ids = op_ids[1:]
 
     need = len(configs) * epc
     if len(cycles) != need:
-        print(f"task_{idx} {workload}: WARNING {len(cycles)} XDMA_RUN events vs "
-              f"{need} expected ({len(configs)} cfgs x {epc}) — pairing first "
-              f"{min(len(cycles), need)}")
+        # Events pair with configs POSITIONALLY: every config emits exactly `epc` XDMA_RUN
+        # events (CPU fallbacks mark themselves too), so the counts must match exactly. A
+        # mismatch means the pairing has SHIFTED and every later point is attributed to the
+        # wrong config -- refuse rather than emit silently-wrong LUTs.
+        print(f"task_{idx} {workload}: ERROR {len(cycles)} XDMA_RUN events vs {need} "
+              f"expected ({len(configs)} cfgs x {epc}). Refusing to pair -- the "
+              f"config<->event alignment cannot be trusted.")
+        return []
 
-    points = []
+    # group -> points
+    groups = {}
     for ci, cfg in enumerate(configs):
         grp = cycles[ci * epc:(ci + 1) * epc]
-        if len(grp) < epc:
-            break
-        pt = point_fn(cfg, mesh)
+        this_op = op_ids[ci] if op_ids else op_name
+        this_node = f"__snax_bingo_kernel_{this_op}" if op_ids else op_node
+        this_mesh = meshes.get(int(cfg.get("array_shape", 0)), mesh) if meshes else mesh
+        pt = point_fn(cfg, this_mesh)
         pt["cycles"] = sum(grp)         # concat sums top+bottom; others 1 value
-        points.append(pt)
+        groups.setdefault((this_op, this_node), []).append(pt)
 
-    if not points:
+    if not groups:
         print(f"task_{idx} {workload}: no usable points")
-        return None
+        return []
 
-    print(f"task_{idx} {workload}: {len(points)} points")
-    for pt in points:
-        print("    " + ", ".join(f"{k}={pt[k]}" for k in (params + ["cycles"])))
-    return op_name, op_node, params, points
+    print(f"task_{idx} {workload}: {len(configs)} configs -> {len(groups)} LUT(s)")
+    out = []
+    for (nm, node), pts in sorted(groups.items()):
+        print(f"    {nm}: {len(pts)} points")
+        for pt in pts:
+            print("      " + ", ".join(f"{k}={pt[k]}" for k in (params + ["cycles"])))
+        out.append((nm, node, params, pts))
+    return out
 
 
 def main():
@@ -206,18 +235,15 @@ def main():
     for idx, workload in enumerate(order):
         if args.only and workload not in args.only:
             continue
-        res = gather_one(workload, idx, args.ci_dir, mesh,
-                         drop_warmup=not args.keep_warmup)
-        if not res:
-            continue
-        op_name, op_node, params, points = res
-        for p in params:
-            if p not in param_cols:
-                param_cols.append(p)
-        for pt in points:
-            row = {"op_name": op_name, "op_node": op_node, "cycles": pt["cycles"]}
-            row.update({p: pt[p] for p in params})
-            rows.append(row)
+        for op_name, op_node, params, points in gather_one(
+                workload, idx, args.ci_dir, mesh, drop_warmup=not args.keep_warmup):
+            for p in params:
+                if p not in param_cols:
+                    param_cols.append(p)
+            for pt in points:
+                row = {"op_name": op_name, "op_node": op_node, "cycles": pt["cycles"]}
+                row.update({p: pt[p] for p in params})
+                rows.append(row)
 
     if rows:
         fieldnames = ["op_name", "op_node"] + param_cols + ["cycles"]

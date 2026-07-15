@@ -24,13 +24,13 @@ PLATFORM_H = $(MK_DIR)/../../../../../../../../target/sw/shared/platform/generat
 
 MODE ?= debug
 
-$(DATA_H) $(OFFLOAD_H): $(MK_DIR)/main_bingo.py $(DATA_CFG)
+$(DATA_H) $(OFFLOAD_H): $(MK_DIR)/main_bingo.py $(DATA_CFG) $(PLATFORM_H)
 	python3 $(MK_DIR)/main_bingo.py \
 		--output_dir $(MK_DIR) \
 		--data_h $(DATA_H) \
 		-c $(DATA_CFG) \
 		--hwcfg $(SNITCH_ROOT)/target/snitch_cluster/cfg/snax_versacore_to_cluster.hjson \
-		--platformcfg $(PLATFORM_H)
+		--platformcfg $(PLATFORM_H) \
 		--debug-mode $(MODE)
 
 INCDIRS += $(MK_DIR)

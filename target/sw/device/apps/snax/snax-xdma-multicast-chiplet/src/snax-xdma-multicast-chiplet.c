@@ -48,7 +48,7 @@ int main() {
         xdma_multicast_1d_full_address((uint64_t)tcdm_baseaddress,
                                        (uint64_t *)dest, 3,
                                        data_size * sizeof(data[0]));
-        int task_id = xdma_start();
+        int task_id = xdma_start().task_id;
         xdma_remote_wait(task_id);
         printf("The XDMA copy is finished in %d cycles\r\n",
                xdma_last_task_cycle());
@@ -61,7 +61,7 @@ int main() {
         xdma_multicast_1d_full_address((uint64_t)tcdm_baseaddress,
                                        (uint64_t *)dest, 3,
                                        data_size * sizeof(data[0]));
-        task_id = xdma_start();
+        task_id = xdma_start().task_id;
         xdma_remote_wait(task_id);
         printf("The XDMA copy is finished in %d cycles\r\n",
                xdma_last_task_cycle());

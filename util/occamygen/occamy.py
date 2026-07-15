@@ -6,6 +6,7 @@ import subprocess
 import os
 import sys
 import math
+import tempfile
 import importlib.util
 from pathlib import Path
 import hjson
@@ -151,6 +152,20 @@ def unify_xdma_max_mem_size(occamy_cfg, cluster_cfg_paths):
         hemaia_xdma_cfg["max_mem_size_kiB"] = max_mem_size_kiB
 
     # Rewrite cluster hjsons on disk where max_mem_size_kiB needs to change.
+    #
+    # ATOMICALLY. This runs on EVERY occamygen invocation, and `make sw` has nine
+    # independent occamygen prerequisites (--chip, two --ctrl, four --cheader/-D,
+    # --gen-host-ld, snax-sw-gen). Serially that is harmless. Under `make -j` they all
+    # compute the same unified value, all see old != new, and a plain
+    # `open(path, "w")` would truncate the SAME shared cluster hjson concurrently --
+    # while sibling processes (get_cluster_cfg_list / generate_snitch) are reading it.
+    # A reader landing mid-write gets a truncated file and dies with a parse error that
+    # points at a config nobody edited. It fires exactly when spm_wide.length changes,
+    # i.e. the local-CI `spm_wide_size` path.
+    #
+    # write-temp-then-os.replace makes each write atomic: every writer produces byte
+    # -identical content, and a reader always sees either the whole old file or the whole
+    # new one. The temp lives in the same directory so the replace stays on one filesystem.
     for cfg_path, cluster_obj in cluster_objs:
         dma_tpl = cluster_obj.get("dma_core_template") or {}
         snax_xdma_cfg = dma_tpl.get("snax_xdma_cfg")
@@ -159,8 +174,13 @@ def unify_xdma_max_mem_size(occamy_cfg, cluster_cfg_paths):
         old_mm = int(snax_xdma_cfg.get("max_mem_size_kiB", -1))
         if old_mm != max_mem_size_kiB:
             snax_xdma_cfg["max_mem_size_kiB"] = max_mem_size_kiB
-            with open(cfg_path, "w") as f:
+            cfg_path = Path(cfg_path)
+            with tempfile.NamedTemporaryFile(
+                    "w", dir=cfg_path.parent, prefix=f".{cfg_path.name}.",
+                    suffix=".tmp", delete=False) as f:
                 hjson.dump(cluster_obj, f, indent=4)
+                tmp_name = f.name
+            os.replace(tmp_name, cfg_path)
             print(
                 f"[unify_xdma_max_mem_size] rewrote {cfg_path}: "
                 f"max_mem_size_kiB {old_mm} -> {max_mem_size_kiB}"
@@ -846,6 +866,9 @@ def get_quad_ctrl_kwargs(occamy_cfg, soc_wide_xbar, soc_narrow_xbar, quad_ctrl_s
         # harts). Passed to bingo_hw_manager_top so the PM's doorbell bit is not hardcoded;
         # same source as HW_MANAGER_DVFS_MSIP_BIT / hw_manager_ipi_idx (occamy_soc.sv).
         "hw_manager_ipi_idx": nr_harts_per_chiplet(occamy_cfg, cluster_generators),
+        # Per-edge dependency tag width of the bingo HW manager (DepTagWidth). Exported to
+        # SW as BINGO_DEP_TAG_WIDTH so the task-descriptor packing tracks the RTL width.
+        "dep_tag_width": occamy_cfg["s1_quadrant"]["dep_tag_width"],
         "soc_wide_xbar": soc_wide_xbar,
         "soc_narrow_xbar": soc_narrow_xbar,
         "quad_ctrl_soc_to_quad_xbar": quad_ctrl_soc_to_quad_xbar,
@@ -1061,6 +1084,7 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
         "nr_clusters_per_chiplet": nr_clusters_per_chiplet,
         "nr_cores_per_cluster": nr_cores_per_cluster,
         "hw_manager_dvfs_msip_bit": hw_manager_dvfs_msip_bit,
+        "dep_tag_width": occamy_cfg["s1_quadrant"]["dep_tag_width"],
         "clog2_nr_chiplets": clog2(nr_chiplets),
         "clog2_nr_clusters_per_chiplet": clog2(nr_clusters_per_chiplet),
         "clog2_nr_cores_per_cluster": clog2(nr_cores_per_cluster),

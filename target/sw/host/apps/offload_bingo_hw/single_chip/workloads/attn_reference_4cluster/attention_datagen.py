@@ -257,9 +257,9 @@ def emit_attention_data(**kwargs):
         format_vector_definition("int32_t", "golden_Q_int32", gq["int32_D_dblk"]),
         format_vector_definition("int32_t", "golden_K_int32", gk["int32_D_dblk"]),
         format_vector_definition("int32_t", "golden_V_int32", gv["int32_D_dblk"]),
-        # Emit fp32 goldens under both old (Q/K/V) and gemm-name (proj_q/k/v) labels.
-        # The task graph's check_result tasks reference golden_{gemm}_fp32, so those
-        # must exist. Legacy Q/K/V names are kept for any external consumers.
+        # The same fp32 golden is emitted under two labels: the task graph's check_result
+        # tasks reference golden_{gemm}_fp32 (proj_q/k/v), while the Q/K/V names are the
+        # ones external consumers of this header use.
         # Row-major (logical) layout — HW path converts block→row-major via
         # xdma_d_to_row_major after dequantize, then the check compares here.
         format_vector_definition("float", "golden_Q_fp32", gq["fp32_D_log"].reshape(-1)),

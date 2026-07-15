@@ -10,6 +10,10 @@
 ############
 # Makefrag #
 ############
+# A recipe that dies after the shell has created/truncated `$@` leaves a partial
+# file with a fresh mtime, which make then treats as up to date.
+.DELETE_ON_ERROR:
+
 BENDER      ?= bender
 MKFILE_PATH := $(abspath $(lastword $(MAKEFILE_LIST)))
 MKFILE_DIR  := $(dir $(MKFILE_PATH))
@@ -258,9 +262,14 @@ PLICGEN      = $(SOURCE_PLIC_DIR)/util/reg_rv_plic.py
 # PLIC do not need the occamygen
 $(TARGET_PLIC_DIR):
 	@mkdir -p $@
+# Must be assigned BEFORE the mkdir rule below: make expands a rule's target list at
+# parse time, so an empty value here leaves that rule with no target and make silently
+# drops it -- and the order-only `| $(PLIC_HJSON_DIR)` prerequisites below then have no
+# rule to create the directory.
+PLIC_HJSON_DIR       = $(SW_HJSON_DIR)/rv_plic
+
 $(PLIC_HJSON_DIR):
 	@mkdir -p $@
-PLIC_HJSON_DIR       = $(SW_HJSON_DIR)/rv_plic
 PLIC_RTL_TARGET     = $(TARGET_PLIC_DIR)/rv_plic.sv
 PLIC_REGGEN_TARGETS = $(TARGET_PLIC_DIR)/rv_plic_reg_pkg.sv
 PLIC_REGGEN_TARGETS += $(TARGET_PLIC_DIR)/rv_plic_reg_top.sv
@@ -311,7 +320,7 @@ $(CLINT_RTL_TARGET): $(SOURCE_CLINT_DIR)/data/clint.sv.tpl | $(TARGET_CLINT_DIR)
 
 clint: $(CLINT_RTL_TARGET) $(CLINT_REGGEN_TARGETS)
 clean-clint:
-	rm -rf $(CLINT_RTL_TARGET)$(CLINT_REGGEN_TARGETS) .clint_reggen_targets_group
+	rm -rf $(CLINT_RTL_TARGET) $(CLINT_REGGEN_TARGETS) .clint_reggen_targets_group
 # Generate the reggen targets from the hjson file
 .clint_reggen_targets_group: $(CLINT_HJSON_DIR)/clint.hjson | $(TARGET_CLINT_DIR)
 	@$(REGGEN) -r -t $(TARGET_CLINT_DIR) $<

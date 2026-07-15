@@ -354,9 +354,9 @@ def generate_gemm_test_data(**kwargs):
         # stride UP to granularity_a banks (offload_hw_kernels/gemm.h). Pad each
         # (meshRow*tileSize) K-tile here to that same width so the emitted byte
         # offsets match exactly what the streamer reads — the pad lands in the
-        # skipped bank and is never consumed as A data. (Shapes whose tile is
-        # already a granularity_a-bank multiple are byte-identical to before, so
-        # i8i4/i4i4 on shapes 0/2 are unchanged; only int4 A at shape 1 grows.)
+        # skipped bank and is never consumed as A data. (For a tile that already
+        # spans a granularity_a multiple of banks the pad is empty; only int4 A
+        # at shape 1 actually grows.)
         GRANULARITY_A = 2            # banks; mirrors hwcfg granularity_a
         BANK_BITS = 64
         A_ELEM_BITS = 4

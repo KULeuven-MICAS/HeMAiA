@@ -2,16 +2,17 @@
 r"""
 HeMAiA multi-chiplet RTL sim
 ============================
-Uses ``target/rtl/cfg/hemaia_multichip_ci.hjson`` and
-``target/sim/cfg/sim_rtl.hjson``. Pulls the TSMC16 macros and the D2D-link
-private repos but does NOT pull the vendor PLL controller.
+Uses ``target/rtl/cfg/hemaia_tapeout.hjson`` and ``target/sim/cfg/sim_rtl.hjson``.
+Pulls the TSMC16 macros and the D2D-link private repos but does NOT pull the
+vendor PLL controller.
 
 Multi-chiplet configuration (2x2 compute + 1 memory chip on the virtual
 interposer). Use this flow to validate cross-chiplet workloads with the
 D2D link and TSMC16 macros enabled, without the overhead of the vendor PLL.
 
-The only difference between this multi-chiplet config and the full tapeout
-config is the PLL, so this is a good intermediate step before enabling it.
+``with_pll=False`` makes the runner set ``use_vendor_pll: false`` in the cfg, so
+this flow differs from ``2_start_tapeout_sim.py`` only in the PLL -- a good
+intermediate step before enabling it.
 
 Defaults to the Questasim (vsim) engine with a recorded waveform/log so the run
 is easy to debug; pass ``--engine vcs --waveform 0`` for a fast batch run.
@@ -55,7 +56,7 @@ HOST_APP_TYPE = "offload_bingo_hw"  # host_only | offload_legacy | offload_bingo
 CHIP_TYPE = "multi_chip"
 WORKLOAD = "gemm_stacked_1cluster"
 DEV_APP = "snax-bingo-offload"
-ENGINE = "vsim" 
+ENGINE = "vsim"
 SIM_WITH_WAVEFORM = 1
 
 
@@ -74,7 +75,7 @@ def main() -> None:
         output_dir=_SCRIPT.parent,
         engine=args.engine,
         with_waveform=bool(args.waveform),
-        cfg="target/rtl/cfg/hemaia_multichip_ci.hjson",
+        cfg="target/rtl/cfg/hemaia_tapeout.hjson",
         sim_cfg="target/sim/cfg/sim_rtl.hjson",
         # Multi-chiplet uses macros + D2D, no vendor PLL.
         with_macro=True,

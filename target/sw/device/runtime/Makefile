@@ -13,7 +13,7 @@ IS_CLEAN_GOAL := $(filter clean clean-%,$(MAKECMDGOALS))
 
 # Directories
 ifeq ($(IS_CLEAN_GOAL),)
-SNITCH_ROOT = $(shell bender path snitch_cluster)
+SNITCH_ROOT := $(shell $(BENDER) path snitch_cluster)
 else
 SNITCH_ROOT =
 endif

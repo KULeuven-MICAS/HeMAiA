@@ -26,11 +26,14 @@ __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_entry_args {
 #define BINGO_CHECK_TYPE_BYTE_EXACT 0
 #define BINGO_CHECK_TYPE_FP32_TOL   1
 #define BINGO_CHECK_TYPE_FP16_TOL   2
+// fp16 RELATIVE tolerance: pass when |out-golden| <= rtol*|golden| + 0.05. The rms (fpnew rsqrt)
+// and softmax (Cephes exp) feed int8 requants whose 1-LSB rounding differs from an fp32 golden by
+// a magnitude-proportional amount, so a fixed abs-tol is unusable on large GEMM outputs (~1000s).
+#define BINGO_CHECK_TYPE_FP16_RELTOL 3
 
 // Precision selector for the runtime-typed Ara kernels (__host_bingo_kernel_<op>
 // dispatchers in host_kernel_lib.h). Passed as a plain arg word; the typed
-// __host_bingo_kernel_<op>_f32 entry points keep their original FP32-only
-// behaviour and ignore precision.
+// __host_bingo_kernel_<op>_f32 entry points are FP32-only and ignore precision.
 #define BINGO_PREC_FP32  0
 #define BINGO_PREC_FP16  1
 #define BINGO_PREC_INT8  2
@@ -62,12 +65,11 @@ __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_xdma_1d_copy_args {
 } __host_bingo_kernel_xdma_1d_copy_args_t;
 typedef __host_bingo_kernel_xdma_1d_copy_args_t __host_bingo_kernel_xdma_args_t;
 
-// NOTE: the per-kernel typed arg structs for quantize / dequantize / int32-add /
-// softmax were folded into the unified Ara shapes below. Their kernels
-// (__host_bingo_kernel_quantize_f32i8 / dequantize_i32f32 / add_i32, and the
-// softmax dispatcher) read the shared ara_convert / ara_binary / ara_softmax
-// structs — the kernels only touch the leading address/size slots, so the extra
-// trailing `precision` field is a harmless no-op for the single-precision ops.
+// NOTE: quantize / dequantize / int32-add / softmax have no arg struct of their own.
+// Those kernels (__host_bingo_kernel_quantize_f32i8 / dequantize_i32f32 / add_i32, and
+// the softmax dispatcher) read the shared ara_convert / ara_binary / ara_softmax structs
+// below — they only touch the leading address/size slots, so the trailing `precision`
+// field is a no-op for the single-precision ones.
 
 // ==========================================================================
 // Multi-precision Ara kernel args (runtime-typed __host_bingo_kernel_<op>
@@ -131,6 +133,19 @@ __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_ara_convert_args {
     uint64_t precision;        // BINGO_PREC_* (no-op for the conversions)
     uint64_t scratchpad_ptr;
 } __host_bingo_kernel_ara_convert_args_t;
+
+
+// Per-tensor fp16->int8 requant scale: reads xmax,nmax (max(x), max(-x) fp16 scalars in cluster L1),
+// writes scale = max|x|/127 (fp32, the downstream dequant qsc) and inv_scale = 127/max|x| (fp32, the
+// xDMA fp16_to_int8 runtime CSR). ~free vs the host quantize_f16i8 it replaces (2+2 scalars, not the
+// 4096-element tensor).
+__HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_requant_scale_args {
+    uint64_t xmax_addr;        // L1: lane 0 of the MAX(x) reduce beat  (fp16)
+    uint64_t nmax_addr;        // L1: lane 0 of the MAX(-x) reduce beat (fp16)
+    uint64_t scale_out_addr;   // out: fp32 scale = max|x|/127
+    uint64_t inv_scale_out_addr; // out: fp32 inv_scale = 127/max|x|
+    uint64_t scratchpad_ptr;
+} __host_bingo_kernel_requant_scale_args_t;
 
 // DARTS Tier 1: Unified CERF Gating kernel
 // Supports multiple activation modes via the `mode` field.

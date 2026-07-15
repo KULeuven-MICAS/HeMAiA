@@ -11,6 +11,10 @@
 
 # Usage of absolute paths is required to externally include
 # this Makefile from multiple different locations
+# A recipe that dies after the shell has created/truncated `$@` leaves a partial
+# file with a fresh mtime, which make then treats as up to date.
+.DELETE_ON_ERROR:
+
 MK_DIR := $(dir $(realpath $(lastword $(MAKEFILE_LIST))))
 include $(MK_DIR)/../toolchain.mk
 IS_CLEAN_GOAL := $(filter clean clean-%,$(MAKECMDGOALS))
@@ -22,7 +26,7 @@ IS_CLEAN_GOAL := $(filter clean clean-%,$(MAKECMDGOALS))
 # Fixed paths in repository tree
 ROOT         = $(abspath $(MK_DIR)/../../../../)
 ifeq ($(IS_CLEAN_GOAL),)
-SNITCH_ROOT  = $(shell bender path snitch_cluster)
+SNITCH_ROOT  := $(shell $(BENDER) path snitch_cluster)
 else
 SNITCH_ROOT  =
 endif
@@ -41,6 +45,17 @@ HOST_APP_NAMES := $(shell cat $(DEVICE_DIR)/host_app_list.tmp)
 HOST_APP_ORIGINS := $(shell cat $(DEVICE_DIR)/host_app_origin.tmp)
 DEV_APP_LISTS := $(shell cat $(DEVICE_DIR)/dev_app_list.tmp)
 
+# Names and origins are paired POSITIONALLY below ($(word $(idx),...)). If the two
+# lists ever differ in length, every device ELF from the offending index onward is
+# linked at another host app's L3_ORIGIN -- silently, with no error. Refuse instead.
+# (DEV_APP_LISTS is not checked: it holds several device apps per line, so its word
+# count legitimately differs.)
+ifneq ($(words $(HOST_APP_NAMES)),$(words $(HOST_APP_ORIGINS)))
+    $(error host_app_list.tmp ($(words $(HOST_APP_NAMES)) apps) and host_app_origin.tmp \
+      ($(words $(HOST_APP_ORIGINS)) origins) are out of step -- \
+      rm $(DEVICE_DIR)/*.tmp and rebuild)
+endif
+
 # Find which host apps use the current device app
 HOST_APP_INDICES := $(shell \
     idx=1; \
@@ -53,6 +68,17 @@ HOST_APP_INDICES := $(shell \
         idx=$$((idx+1)); \
     done < $(DEVICE_DIR)/dev_app_list.tmp \
 )
+
+# Optional single-host-app filter. host_app_list.tmp accumulates EVERY host app that has
+# registered (55 today, 53 of which offload to snax-bingo-offload), so an unfiltered build
+# of one workload emits that device binary -- plus its dump and dwarf -- once per host app,
+# 53 times over. `single-sw` passes the one host app it is building as HOST_APPS; `make sw`
+# leaves it empty and builds the full matrix. Filtering on the INDICES keeps the names and
+# origins below in sync.
+ifneq ($(strip $(HOST_APPS)),)
+HOST_APP_INDICES := $(foreach idx,$(HOST_APP_INDICES),\
+    $(if $(filter $(HOST_APPS),$(word $(idx),$(HOST_APP_NAMES))),$(idx)))
+endif
 
 # Get the host app names and origins that use this device app
 HOST_APPS_FOR_DEV := $(foreach idx,$(HOST_APP_INDICES),$(word $(idx),$(HOST_APP_NAMES)))
@@ -137,15 +163,23 @@ ALL_OUTPUTS += $$(ELF_$(1)) $$(BIN_$(1)) $$(DUMP_$(1)) $$(DWARF_$(1))
 
 RISCV_LDFLAGS_$(1) = $(RISCV_LDFLAGS) -T$$(BASE_LD_$(1))
 
-# Origin LD generation
-$$(ORIGIN_LD_$(1)): | $(BUILDDIR)
+# Origin LD generation.
+#
+# Written ATOMICALLY: one redirection into a temp, then mv, so the file on disk is either
+# the old one or the complete new one. An interrupted or re-entered build must not be able
+# to leave a PARTIAL .ld behind -- the linker would then die on a malformed script
+# ("{ expected" / "MEMORY") in a file nobody touched.
+#
+# The origin value is baked into the file, so the ORIGIN LIST is a prerequisite: if the host
+# app relocates, the script is regenerated.
+$$(ORIGIN_LD_$(1)): $(DEVICE_DIR)/host_app_origin.tmp | $(BUILDDIR)
 	@echo "Generating origin LD for $(1) with origin $(2)"
-	echo "L3_ORIGIN = $(2);" > $$@
-	echo "L3_LENGTH = 0x100000000 - L3_ORIGIN;" >> $$@
-	echo "MEMORY" >> $$@
-	echo "{" >> $$@
-	echo "    L3 (rwxa) : ORIGIN = L3_ORIGIN, LENGTH = L3_LENGTH" >> $$@
-	echo "}" >> $$@
+	@{ echo "L3_ORIGIN = $(2);"; \
+	   echo "L3_LENGTH = 0x100000000 - L3_ORIGIN;"; \
+	   echo "MEMORY"; \
+	   echo "{"; \
+	   echo "    L3 (rwxa) : ORIGIN = L3_ORIGIN, LENGTH = L3_LENGTH"; \
+	   echo "}"; } > $$@.tmp && mv -f $$@.tmp $$@
 
 # Base LD generation
 $$(BASE_LD_$(1)): $(BASE_TEMPLATE_LD) | $(BUILDDIR)
@@ -153,8 +187,12 @@ $$(BASE_LD_$(1)): $(BASE_TEMPLATE_LD) | $(BUILDDIR)
 	sed 's|/\* INCLUDE directive will be replaced by Makefile with correct origin file \*/|INCLUDE origin_$(1).ld|' $$< > $$@
 
 # Dependencies
+# -MT names the .d ITSELF as well as the ELF, so the .d is regenerated whenever any header
+# it lists changes. That is what keeps its header set current when an #include is added to
+# a HEADER rather than to $(SRCS) or $(DATA_H); otherwise a later edit to that header alone
+# would rebuild nothing and the device binary would go stale.
 $$(DEP_$(1)): $(SRCS) $(DATA_H) | $(BUILDDIR)
-	$(RISCV_CC) $(RISCV_CFLAGS) -MM -MT '$$(ELF_$(1))' $$< > $$@
+	$(RISCV_CC) $(RISCV_CFLAGS) -MM -MT '$$(ELF_$(1)) $$(DEP_$(1))' $$< > $$@
 
 # ELF generation
 $$(ELF_$(1)): $$(DEP_$(1)) $$(BASE_LD_$(1)) $$(ORIGIN_LD_$(1)) $(SNRT_LIB) | $(BUILDDIR)

@@ -73,7 +73,7 @@ int main() {
         snrt_dma_start_1d(tcdm_in, input_matrix,
                           matrix_size * sizeof(input_matrix[0]));
         snrt_dma_wait_all();
-        int task_id = xdma_start();
+        int task_id = xdma_start().task_id;
         xdma_local_wait(task_id);
         __asm__ volatile("csrr %0, mcycle;" : "=r"(end_time));
         printf("The IDMA + Transposer copy is finished in %d cycles\r\n",
@@ -92,7 +92,7 @@ int main() {
 
         __asm__ volatile("fence" ::: "memory");
         __asm__ volatile("csrr %0, mcycle;" : "=r"(start_time));
-        task_id = xdma_start();
+        task_id = xdma_start().task_id;
         xdma_remote_wait(task_id);
         __asm__ volatile("csrr %0, mcycle;" : "=r"(end_time));
         printf("The XDMA copy is finished in %d cycles\r\n",

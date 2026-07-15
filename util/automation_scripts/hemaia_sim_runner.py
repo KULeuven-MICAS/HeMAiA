@@ -20,7 +20,11 @@ The flows differ only by parameters captured on :class:`HeMAiASimRunner`:
     ``"vlt"`` (Verilator)
   * ``with_waveform``-- ``SIM_WITH_WAVEFORM`` (0 for CI/sweep, 1 for test)
   * ``cfg`` / ``sim_cfg``           -- RTL and simulation config files
-  * ``with_macro`` / ``with_d2d`` / ``with_pll`` -- private vendor modules
+  * ``with_macro`` / ``with_d2d``   -- private vendor modules
+  * ``with_pll``     -- the vendor PLL: selects the private clk/rst controller
+    *and* sets ``use_vendor_pll`` in the RTL cfg (see :func:`resolve_rtl_cfg`)
+  * ``spm_wide_size``-- sets ``spm_wide.length`` in the RTL cfg, sizing the
+    ``WIDE_SPM`` region a simulation gets
 
 The ``engine`` is reduced to a small lookup (:data:`ENGINES`) of the make
 targets and artefacts that differ between the simulators; everything else is
@@ -35,6 +39,7 @@ import atexit
 import argparse
 import getpass
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -46,6 +51,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
+
+import hjson
 
 try:
     import yaml  # type: ignore
@@ -99,6 +106,94 @@ ENGINES: Dict[str, Dict] = {
         "stage": ["bin/occamy_chip.vlt"],
     },
 }
+
+
+# Derived RTL cfgs land here (gitignored, wiped by ``make clean-repo``).
+GENERATED_CFG_DIR = "target/rtl/cfg/generated"
+
+
+# The testharness' verdict, printed by ``target/sim/testharness/util/check_finish_*.sv``
+# once every chip has written its end-of-computation marker.
+SIM_OK_MARKER = "All chips finished successfully"
+SIM_ERR_MARKER = "finished with errors"
+
+
+def _sim_passed(returncode: int, out: str) -> bool:
+    """Did the simulation actually succeed?
+
+    The exit code cannot answer this. ``$finish(-1)`` does not set one -- in
+    SystemVerilog that argument selects the diagnostic verbosity, not a status -- so a
+    simulator whose testharness detected a nonzero EOC code still exits 0. A workload
+    that aborts (an L1 OOM, a failed golden check) is therefore indistinguishable from a
+    clean run by exit code alone.
+
+    The testharness' own verdict is authoritative, so require it: every chip must have
+    reached the success marker, and no chip may have reported an error. Absence of both
+    means the run died before the EOC check (a crash, a kill, a licence failure) and is
+    not a pass either.
+    """
+    if returncode != 0:
+        return False
+    if SIM_ERR_MARKER in out:
+        return False
+    return SIM_OK_MARKER in out
+
+
+# ---------------------------------------------------------------------------
+# RTL config resolution
+# ---------------------------------------------------------------------------
+
+def resolve_rtl_cfg(
+    repo_root: Path,
+    cfg: str,
+    *,
+    with_pll: bool,
+    spm_wide_size: Optional[int] = None,
+) -> str:
+    """Return the repo-relative RTL cfg to pass as ``CFG_OVERRIDE``.
+
+    A flow names a tapeout cfg and states the two fields a simulation may need to
+    differ on; this reconciles them:
+
+    * ``with_pll`` is the single source of truth for the vendor PLL.  It selects
+      the private clk/rst controller in ``Bender.local``, and it must agree with
+      ``use_vendor_pll`` in the RTL cfg: ``occamy_chip.sv.tpl`` instantiates
+      ``hemaia_clk_rst_controller`` unconditionally, so a cfg claiming
+      ``use_vendor_pll: true`` under ``with_pll=False`` elaborates the *public*
+      module with ``USE_VENDOR_PLL(1)``.
+    * ``spm_wide_size`` (bytes, ``None`` = leave the cfg alone) sets
+      ``spm_wide.length``, i.e. the ``WIDE_SPM`` region in ``host.ld``.  128 kiB
+      is too small for parts of the SW tree -- a 2 MiB ``.devicebin`` and the gemm
+      sweep's ``D_cfg`` tables overflow it at link time.
+
+    A cfg that already matches on every requested field is returned untouched; a
+    patched copy is only written when something actually differs, so flows that
+    ask for exactly what their cfg declares run it byte-for-byte.  The copy lands
+    under :data:`GENERATED_CFG_DIR`, named after the fields it changed.
+    """
+    src = repo_root / cfg
+    cfg_dict = hjson.loads(src.read_text())
+
+    suffixes: List[str] = []
+    if bool(cfg_dict.get("use_vendor_pll", False)) != with_pll:
+        cfg_dict["use_vendor_pll"] = with_pll
+        suffixes.append("pll" if with_pll else "nopll")
+    if spm_wide_size is not None and cfg_dict["spm_wide"]["length"] != spm_wide_size:
+        cfg_dict["spm_wide"]["length"] = spm_wide_size
+        suffixes.append(f"spm{spm_wide_size // 1024}k")
+
+    if not suffixes:
+        return cfg
+
+    gen_dir = repo_root / GENERATED_CFG_DIR
+    gen_dir.mkdir(parents=True, exist_ok=True)
+    dst = gen_dir / f"{'_'.join([src.stem, *suffixes])}.hjson"
+    # The dump must be deterministic: the root Makefile only re-copies
+    # CFG_OVERRIDE onto lru.hjson (and thus retriggers every cfg-dependent
+    # rebuild) when the two differ byte-for-byte.
+    dst.write_text(hjson.dumps(cfg_dict, indent=4) + "\n")
+    print(f"Derived RTL cfg from {cfg} [{', '.join(suffixes)}]: {dst}")
+    return str(dst.relative_to(repo_root))
 
 
 # ---------------------------------------------------------------------------
@@ -314,6 +409,34 @@ def _derive_ci_name(host_app_type: str, chip_type: str, workload: str, dev_app: 
     return "_".join(p for p in parts if p)
 
 
+def task_dir_name(idx: int, ci_name: str) -> str:
+    """Run-directory name for task *idx*: ``task_<idx>_<ci_name>``.
+
+    The numeric index stays in front and stays authoritative: it is the task's
+    position in the task YAML, which is how the sweep gatherers pair a run
+    directory with the workload that produced it (see :func:`find_task_dir`).
+    The ``ci_name`` suffix is what makes the directory readable on disk.
+
+    Every task directory carries the suffix -- :func:`find_task_dir` looks for
+    ``task_<idx>_*`` and would not see a bare ``task_<idx>``.
+    """
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "_", ci_name).strip("_")
+    if not slug:
+        raise ValueError(f"task {idx}: ci_name {ci_name!r} has no usable characters")
+    return f"task_{idx}_{slug}"
+
+
+def find_task_dir(root, idx: int) -> Optional[Path]:
+    """Locate the run directory for task *idx* under *root*, or None.
+
+    Matches on the ``task_<idx>_`` prefix rather than reconstructing the full
+    name, so a consumer only needs the index, not the task list.  The trailing
+    underscore is what keeps ``task_1_*`` from also matching ``task_12_...``.
+    """
+    hits = sorted(Path(root).glob(f"task_{idx}_*"))
+    return hits[0] if hits else None
+
+
 def make_task(
     *,
     host_app_type: str,
@@ -444,6 +567,7 @@ class HeMAiASimRunner:
         with_macro: bool,
         with_d2d: bool,
         with_pll: bool,
+        spm_wide_size: Optional[int] = None,
         max_jobs: int = DEFAULT_MAX_SIM_JOBS,
         docker_image: str = DEFAULT_DOCKER_IMAGE,
         in_container: bool = False,
@@ -451,6 +575,7 @@ class HeMAiASimRunner:
         skip_build: bool = False,
         skip_compile: bool = False,
         compile_jobs: Optional[int] = None,
+        build_jobs: Optional[int] = None,
     ) -> None:
         if engine not in ENGINES:
             raise ValueError(f"Unknown engine {engine!r}; choose from {sorted(ENGINES)}")
@@ -459,11 +584,17 @@ class HeMAiASimRunner:
         self.engine = engine
         self.spec = ENGINES[engine]
         self.waveform = "1" if with_waveform else "0"
-        self.cfg = cfg              # repo-relative RTL cfg (CFG_OVERRIDE)
+        self.cfg = cfg              # repo-relative RTL cfg as requested
+        # The cfg actually handed to make as CFG_OVERRIDE.  ``run()`` re-resolves
+        # it through resolve_rtl_cfg(), which derives a patched copy when the cfg
+        # disagrees with ``with_pll`` / ``spm_wide_size``.
+        self.effective_cfg = cfg
         self.sim_cfg = sim_cfg      # repo-relative sim cfg
         self.with_macro = with_macro
         self.with_d2d = with_d2d
         self.with_pll = with_pll
+        # spm_wide.length (bytes) to patch into the cfg; None = keep the cfg's own.
+        self.spm_wide_size = spm_wide_size
         self.max_jobs = max_jobs
         self.docker_image = docker_image
         # Optional flow switches (e.g. the git CI runs inside the build container
@@ -480,6 +611,10 @@ class HeMAiASimRunner:
         # Parallelism for the sim compile (``make -j``); None = no -j flag. The
         # Verilator build in particular is far too slow serially on a CI runner.
         self.compile_jobs = compile_jobs
+        # `make -jN` for the SW build. Only `sw` is parallel-safe (and it is the slow
+        # one: ~96 host apps x ~20 device apps). `rtl` runs occamygen + bender script
+        # generation and `bootrom` takes seconds -- both stay serial.
+        self.build_jobs = build_jobs
 
     # -- helpers -----------------------------------------------------------
 
@@ -527,7 +662,14 @@ class HeMAiASimRunner:
     def build_hw_sw(self) -> None:
         """Build SW, bootrom, and RTL inside the container."""
         for target in ("sw", "bootrom", "rtl"):
-            self._container(["make", target, f"CFG_OVERRIDE={self.cfg}"])
+            cmd = ["make", target, f"CFG_OVERRIDE={self.effective_cfg}"]
+            if self.build_jobs and target == "sw":
+                # `sw` parallelises through SW_JOBS: the Makefile applies -j to the sw
+                # sub-make only. Set that rather than a top-level -j, which would fight
+                # the sub-make's jobserver. bootrom/rtl are not -j-safe, so they stay
+                # serial.
+                cmd.append(f"SW_JOBS={self.build_jobs}")
+            self._container(cmd)
 
     # -- Step 3: build apps and stage per-task directories -----------------
 
@@ -546,11 +688,11 @@ class HeMAiASimRunner:
                 val = task.get(key, "")
                 if val and val != "None":
                     make_cmd.append(f"{var}={val}")
-            make_cmd.append(f"CFG_OVERRIDE={self.cfg}")
+            make_cmd.append(f"CFG_OVERRIDE={self.effective_cfg}")
             make_cmd.append("DEBUG_LEVEL=0")
             self._container(make_cmd)
 
-            task_dir = self.output_dir / f"task_{idx}"
+            task_dir = self.output_dir / task_dir_name(idx, task["ci_name"])
             bin_dest = task_dir / "bin"
             bin_dest.mkdir(parents=True, exist_ok=True)
             for subdir in app_subdirs:
@@ -585,8 +727,22 @@ class HeMAiASimRunner:
             else:
                 subprocess.run(compile_cmd, cwd=self.repo_root, check=True)
 
-        # Copy the engine's simulation artefacts into each task directory.
+        # Insist the compile produced a binary before staging it.  ``_copy_path()``
+        # silently skips a missing source, so a ``make`` that exits 0 without one (a dead
+        # EDA tool, e.g. a VCS/glibc mismatch) would otherwise surface as every task dying
+        # at launch with a bare FileNotFoundError -- which reads like N failing tests
+        # rather than one failed build.
         sim_root = self.repo_root / "target/sim"
+        binary = sim_root / "bin" / self.spec["binary"]
+        if not binary.exists():
+            raise RuntimeError(
+                f"{self.engine} compile produced no {binary.name}: {binary} does not "
+                f"exist.\nThe make target exited 0 anyway -- inspect "
+                f"target/sim/work-{self.engine}/ for the real error "
+                f"(e.g. {self.spec['tool'] or self.engine} failing to start)."
+            )
+
+        # Copy the engine's simulation artefacts into each task directory.
         for rel in self.spec["stage"]:
             src = sim_root / rel
             for task_dir, _ in tasks_info:
@@ -626,7 +782,7 @@ class HeMAiASimRunner:
                     out_bytes, _ = proc.communicate(timeout=SIM_TIMEOUT_SECONDS)
                     elapsed = time.monotonic() - start
                     out = out_bytes.decode(errors="replace") if out_bytes else ""
-                    return str(task_dir), ci_name, proc.returncode == 0, elapsed, out
+                    return str(task_dir), ci_name, _sim_passed(proc.returncode, out), elapsed, out
                 except subprocess.TimeoutExpired:
                     _kill_pgid(pgid)
                     out_bytes, _ = proc.communicate()
@@ -701,11 +857,13 @@ class HeMAiASimRunner:
             f.write(f"Run by **{getpass.getuser()}** at "
                     f"**{datetime.now():%Y-%m-%d %H:%M:%S}** "
                     f"(engine: {self.engine}, waveform: {self.waveform})\n\n")
-            for idx, (task_dir, ci_name) in enumerate(tasks_info):
+            # The directory name already carries the ci_name, so it identifies the
+            # task on its own and doubles as the path to go look at.
+            for task_dir, _ci_name in tasks_info:
                 passed, elapsed = results.get(str(task_dir), (False, None))
                 status = "PASS" if passed else "FAIL"
                 runtime = _format_duration(elapsed) if elapsed is not None else "n/a"
-                f.write(f"- **task_{idx}** ({ci_name}) — **{status}** — {runtime}\n")
+                f.write(f"- **{task_dir.name}** — **{status}** — {runtime}\n")
 
             cumulative = sum(e for _, e in results.values() if e is not None)
             f.write(
@@ -738,13 +896,21 @@ class HeMAiASimRunner:
         self.cleanup_stale_task_dirs()
 
         print(f"Engine: {self.engine}  waveform: {self.waveform}  cfg: {self.cfg}")
-        print(f"  (macro={self.with_macro}, d2d={self.with_d2d}, pll={self.with_pll})")
+        spm = "cfg" if self.spm_wide_size is None else f"{self.spm_wide_size // 1024} kiB"
+        print(f"  (macro={self.with_macro}, d2d={self.with_d2d}, pll={self.with_pll}, "
+              f"spm_wide={spm})")
 
         if self.skip_setup:
             print("[Step 1] Skipping reset/init (skip_setup)")
         else:
             print("[Step 1] Cleaning and initialising private repos")
             self.reset_and_init()
+
+        # Must run after Step 1: reset_and_init() calls ``make clean``, which wipes
+        # the generated-cfg directory.
+        self.effective_cfg = resolve_rtl_cfg(
+            self.repo_root, self.cfg,
+            with_pll=self.with_pll, spm_wide_size=self.spm_wide_size)
 
         if self.skip_build:
             print("[Step 2] Skipping SW/bootrom/RTL build (skip_build)")

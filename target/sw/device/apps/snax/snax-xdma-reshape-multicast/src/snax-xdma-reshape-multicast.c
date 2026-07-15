@@ -97,7 +97,7 @@ int main() {
                            temporal_dimension_dst_xdma,
                            temporal_strides_dst_xdma, temporal_bounds_dst_xdma,
                            0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF);
-            task_id = xdma_start();
+            task_id = xdma_start().task_id;
             xdma_remote_wait(task_id);
             elapsed_time += xdma_last_task_cycle();
         }
@@ -111,7 +111,7 @@ int main() {
             temporal_strides_src_xdma, temporal_bounds_src_xdma,
             temporal_dimension_dst_xdma, temporal_strides_dst_xdma,
             temporal_bounds_dst_xdma, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF);
-        task_id = xdma_start();
+        task_id = xdma_start().task_id;
         xdma_remote_wait(task_id);
         printf("The XDMA multicast to %d dest is finished in %d cycles\r\n",
                MULTICAST_NUM, xdma_last_task_cycle());

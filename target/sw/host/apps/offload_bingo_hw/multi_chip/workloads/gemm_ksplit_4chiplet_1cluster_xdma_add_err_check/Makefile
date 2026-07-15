@@ -16,7 +16,7 @@ BENDER = bender
 SNITCH_ROOT = $(shell $(BENDER) path snitch_cluster)
 PLATFORM_H = $(MK_DIR)/../../../../../../../../target/sw/shared/platform/generated/occamy.h
 
-$(DATA_H) $(OFFLOAD_H): $(MK_DIR)/main_bingo.py $(MK_DIR)/ksplit_gemm_multi_chiplet_datagen.py $(COMMON_DATAGEN) $(DATA_CFG)
+$(DATA_H) $(OFFLOAD_H): $(MK_DIR)/main_bingo.py $(MK_DIR)/ksplit_gemm_multi_chiplet_datagen.py $(COMMON_DATAGEN) $(DATA_CFG) $(PLATFORM_H)
 	python3 $(MK_DIR)/main_bingo.py \
 		--output_dir $(MK_DIR) \
 		--data_h $(DATA_H) \

@@ -8,7 +8,7 @@
 BENDER ?= bender
 IS_CLEAN_GOAL := $(filter clean clean-%,$(MAKECMDGOALS))
 ifeq ($(IS_CLEAN_GOAL),)
-SNITCH_ROOT = $(shell $(BENDER) path snitch_cluster)
+SNITCH_ROOT := $(shell $(BENDER) path snitch_cluster)
 else
 SNITCH_ROOT =
 endif

@@ -210,6 +210,18 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_idma_broadcast_args {
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_idma_broadcast_args_t;
 
+// BINGO IDMA Pairwise Swap (flat adjacent-element-pair swap: dst[i] = src[i^1]).
+// The data half of RoPE rotate_half; produced on-device via two strided iDMA copies.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_idma_pairwise_swap_args {
+  uint32_t src_addr_hi;
+  uint32_t src_addr_lo;
+  uint32_t dst_addr_hi;
+  uint32_t dst_addr_lo;
+  uint32_t num_elems;      // total element count (must be even)
+  uint32_t elem_bytes;     // element size (1=int8, 2=int16/fp16, 4=int32)
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_idma_pairwise_swap_args_t;
+
 // BINGO GEMM Full kernel args
 __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_gemm_full_args {
   uint32_t input_A_addr;            
@@ -421,6 +433,164 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_elementwise_add_ab_args {
 } __snax_bingo_kernel_xdma_elementwise_add_ab_args_t;
 
 // ──────────────────────────────────────────────────────────────────────
+// xDMA FP16 streaming-SIMD primitives (reader extensions): the 3 generic ops
+// the LLM layers (softmax/rmsnorm/silu/swiglu/rope) decompose into. One row =
+// `beats` x 64-byte beats (64 B = 32 FP16). The AGU shape is identical across
+// a same-shape group, so csr_mode lets a chain reuse it: 0=FULL (full AGU
+// config), 1=STICKY (retask only — addresses + dst bound). dst_bound0 is the
+// WRITER beat count the caller computes (1 / beats+1 for reduce; beats /
+// beats/2 for map/elementwise when fused-quant packs FP16->INT8).
+// ──────────────────────────────────────────────────────────────────────
+
+// StreamReduce: per-row reduction (row -> scalar, op over each row). Runs `rows`
+// independent reductions in one dispatch, emitting one splatted scalar beat per
+// row (dst_bound0 = rows).
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_stream_reduce_args {
+  uint32_t src_addr_hi;
+  uint32_t src_addr_lo;
+  uint32_t dst_addr_hi;
+  uint32_t dst_addr_lo;
+  uint32_t beats;            // beats per row (D FP16 elems = beats*32)
+  uint32_t op;               // 0=MAX 1=ADD 2=SUMSQ; |0x100=TAP; |0x200=OUT_FP32
+                             // (OUT_FP32: scalar emitted in FP32, no FP16 narrow ->
+                             //  host reads it as float at stride 16, not u16 at stride 32)
+  uint32_t rows;             // independent per-row reductions (1 = single row)
+  uint32_t csr_mode;         // 0=FULL, 1=STICKY
+  uint32_t dst_bound0;       // writer beats (= rows)
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_xdma_stream_reduce_args_t;
+
+// StreamMap: out = func(a*x + b) per element, over rows*beats flat beats. Optional
+// fused FP16->INT8 quant.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_stream_map_args {
+  uint32_t src_addr_hi;
+  uint32_t src_addr_lo;
+  uint32_t dst_addr_hi;
+  uint32_t dst_addr_lo;
+  uint32_t beats;            // beats per row
+  uint32_t a_f32bits;        // StreamMap operand a (FP32 bit pattern)
+  uint32_t b_f32bits;        // StreamMap operand b (FP32 bit pattern)
+  uint32_t func;             // 0=LINEAR_FP16, 1=EXP_FP16, 2=SILU_FP16
+  uint32_t rows;             // independent rows (flat outer bound = rows*beats)
+  uint32_t csr_mode;         // 0=FULL, 1=STICKY
+  uint32_t dst_bound0;       // writer beats (rows*beats; rows*beats/2 if quantizing)
+  uint32_t out_dtype;        // 0=FP16, 1=INT8 (chain Fp16ToInt8)
+  uint32_t inv_scale_f32bits;// Fp16ToInt8 inv_scale (FP32 bits), read only if out_dtype==1
+  // Optional runtime scale: if a_addr (hi|lo) != 0, the DM core reads one FP32 from
+  // that L1 word and uses it as the StreamMap 'a' operand (the GEMM->swiglu dequant
+  // qsc) instead of the compile-time a_f32bits. One scalar applies to the whole tile.
+  uint32_t a_addr_hi;
+  uint32_t a_addr_lo;
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_xdma_stream_map_args_t;
+
+// MERGED StreamMap -||> StreamReduce: map AND reduce in ONE xDMA task, i.e. per row
+// out = reduce(reduce_op, map(func, a*x + b)). Both reader extensions are enabled for
+// a single task, so the map feeds the reduce inside the datapath and the mapped row is
+// never written out and re-read (this is the softmax exp+Sexp fusion; it replaces a
+// map task followed by a reduce task that re-reads the whole mapped tensor).
+//
+// Output layout depends on the TAP bit (0x100) in reduce_op:
+//   TAP set   -> the mapped row is passed through 1:1 AND the row scalar is appended as
+//                a trailing beat: a PADDED [rows, beats+1] beat tensor. Downstream
+//                readers of the mapped data must respect the (beats+1)*64-byte row
+//                stride (rows=1 needs nothing: a flat `beats`-beat read stops short of
+//                the scalar). dst_bound0 = rows*(beats+1).
+//   TAP clear -> only the per-row scalar beats are written (a stream_reduce over the
+//                MAPPED values, no passthrough).                dst_bound0 = rows.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_stream_map_reduce_args {
+  uint32_t src_addr_hi;
+  uint32_t src_addr_lo;
+  uint32_t dst_addr_hi;
+  uint32_t dst_addr_lo;
+  uint32_t beats;            // beats per row; also the StreamReduce operandCount
+  uint32_t a_f32bits;        // StreamMap operand a (FP32 bit pattern)
+  uint32_t b_f32bits;        // StreamMap operand b (FP32 bit pattern)
+  uint32_t func;             // StreamMap: 0=LINEAR_FP16, 1=EXP_FP16, 2=SILU_FP16
+  uint32_t reduce_op;        // StreamReduce: 0=MAX 1=ADD 2=SUMSQ; |0x100=TAP; |0x200=OUT_FP32
+  uint32_t rows;             // independent rows (flat reader bound = rows*beats)
+  uint32_t csr_mode;         // 0=FULL, 1=STICKY
+  uint32_t dst_bound0;       // writer beats: rows*(beats+1) with TAP, rows without
+  // Optional runtime scale, exactly as in stream_map: if a_addr (hi|lo) != 0 the DM core
+  // reads one FP32 from that L1 word and uses it as the StreamMap 'a' operand (the
+  // GEMM->rmsnorm dequant qsc) instead of the compile-time a_f32bits.
+  uint32_t a_addr_hi;
+  uint32_t a_addr_lo;
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_xdma_stream_map_reduce_args_t;
+
+// Fp16ToInt8: out = clamp(round(x * inv_scale), -128, 127) over rows*beats flat beats, on the
+// HasFp16ToInt8 xDMA datapath (dedicated activation fp16 -> int8 GEMM-operand requant, replacing
+// the host quantize_f16i8). inv_scale_f32bits = FP32 bits of 127/max|x|. dst_bound0 = rows*beats/2.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_fp16_to_int8 {
+  uint32_t src_addr_hi;
+  uint32_t src_addr_lo;
+  uint32_t dst_addr_hi;
+  uint32_t dst_addr_lo;
+  uint32_t beats;             // beats per row
+  uint32_t rows;              // independent rows (flat outer bound = rows*beats)
+  uint32_t inv_scale_f32bits; // Fp16ToInt8 inv_scale (FP32 bits) = 127/max|x| (compile-time immediate)
+  uint32_t csr_mode;          // 0=FULL, 1=STICKY
+  uint32_t dst_bound0;        // int8 writer beats (rows*beats/2)
+  uint32_t inv_scale_addr_hi; // optional: L1 addr of a runtime inv_scale FP32 word (requant_scale
+  uint32_t inv_scale_addr_lo; // wrote it); read instead of the immediate when (hi|lo) != 0
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_xdma_fp16_to_int8_args_t;
+
+// StreamElementwise: out = op(operand_0, operand_1, ...) over `operand_count`
+// interleaved streams (stride operand_stride bytes), across rows*beats flat beats.
+// Optional fused quant.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_stream_elementwise_args {
+  uint32_t src_addr_hi;      // base of operand 0
+  uint32_t src_addr_lo;
+  uint32_t dst_addr_hi;
+  uint32_t dst_addr_lo;
+  uint32_t beats;            // beats per row per operand
+  uint32_t operand_stride;   // bytes between operands (inner AGU stride)
+  uint32_t operand_count;    // number of interleaved operands (e.g. 2)
+  uint32_t op;               // 0=MUL_FP16, 1=ADD_FP16
+  uint32_t rows;             // independent rows (flat outer bound = rows*beats)
+  uint32_t csr_mode;         // 0=FULL, 1=STICKY
+  uint32_t dst_bound0;       // writer beats (rows*beats; rows*beats/2 if quantizing)
+  uint32_t out_dtype;        // 0=FP16, 1=INT8 (chain Fp16ToInt8)
+  uint32_t inv_scale_f32bits;// Fp16ToInt8 inv_scale (FP32 bits), read only if out_dtype==1
+  // Optional 2nd operand address: if src_b_addr (hi|lo) != 0, operand_stride is
+  // computed at run time as src_b - src_addr (lets operand 0 and 1 be SEPARATE
+  // L1 buffers, like __snax_bingo_kernel_xdma_elementwise_add_ab). src_b must be
+  // at a HIGHER address than src_addr (the reader only strides forward).
+  uint32_t src_b_addr_hi;
+  uint32_t src_b_addr_lo;
+  // Row stride (BYTES) of the operand tensors, for reading PADDED rows.
+  //   0 (default) = the operands are flat/packed [rows,D] -> 2D reader {operand, beat}.
+  //   != 0        = each row occupies src_row_stride bytes of which only the first
+  //                 `beats` beats are data -> 3D reader {operand, beat, row}, skipping
+  //                 the rest. This is how an operand produced by the merged map+reduce
+  //                 in TAP mode (rows (beats+1)*64 B apart, trailing scalar beat) is
+  //                 consumed. BOTH operands must share this stride, so the broadcast
+  //                 operand is written at the same padded stride by the xDMA broadcast
+  //                 pass that builds it. The writer is always packed, never padded.
+  uint32_t src_row_stride;
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_xdma_stream_elementwise_args_t;
+
+// Fused FP16 RoPE: iDMA adjacent-pair swap of x + 3 StreamElementwise passes
+// (x*cos, xswap*sin, +) -> out. cos_full/sin_signed are precomputed tables; the
+// kernel allocates its xswap/tmp1/tmp2 scratch from L1. D = beats*32 fp16 per row.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_rope_args {
+  uint32_t x_addr_hi;        // input x (runtime Q/K), fp16 [rows, D]
+  uint32_t x_addr_lo;
+  uint32_t cos_addr_hi;      // cos_full table, same shape
+  uint32_t cos_addr_lo;
+  uint32_t sin_addr_hi;      // sin_signed table, same shape
+  uint32_t sin_addr_lo;
+  uint32_t out_addr_hi;      // output, same shape
+  uint32_t out_addr_lo;
+  uint32_t beats;            // D = beats*32 fp16 elements per row
+  uint32_t rows;             // rows / token positions
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_xdma_rope_args_t;
+
+// ──────────────────────────────────────────────────────────────────────
 // VersaCore blocked-layout conversion kernels
 //
 // All six kernels convert between row-major (logical 2D) and the three
@@ -449,9 +619,8 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_d_to_row_major_args {
   uint32_t dst_addr_lo;
   uint32_t M_T;           // VersaCore M-tile count
   uint32_t N_T;           // VersaCore N-tile count
-  uint32_t meshRow;
-  uint32_t meshCol;
-  uint32_t elem_bytes;    // 1 for INT8, 4 for INT32/FP32
+  // NOTE: meshRow/meshCol/elem_bytes are NOT fields. They are part of the KERNEL:
+  // __snax_bingo_kernel_xdma_d_to_row_major_e<elem_bytes>_<mesh> binds them as constants.
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_xdma_d_to_row_major_args_t;
 
@@ -462,9 +631,8 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_row_major_to_a_args {
   uint32_t dst_addr_lo;
   uint32_t M_T;
   uint32_t K_T;
-  uint32_t meshRow;
-  uint32_t tileSize;
-  uint32_t elem_bytes;
+  // NOTE: meshRow/tileSize/elem_bytes are NOT fields. They are part of the KERNEL:
+  // __snax_bingo_kernel_xdma_row_major_to_a_e<elem_bytes>_<mesh> binds them as constants.
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_xdma_row_major_to_a_args_t;
 
@@ -475,9 +643,8 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_row_major_to_b_args {
   uint32_t dst_addr_lo;
   uint32_t K_T;
   uint32_t N_T;
-  uint32_t tileSize;
-  uint32_t meshCol;
-  uint32_t elem_bytes;
+  // NOTE: tileSize/meshCol/elem_bytes are NOT fields. They are part of the KERNEL:
+  // __snax_bingo_kernel_xdma_row_major_to_b_e<elem_bytes>_<mesh> binds them as constants.
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_xdma_row_major_to_b_args_t;
 
@@ -488,9 +655,8 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_a_to_row_major_args {
   uint32_t dst_addr_lo;
   uint32_t M_T;
   uint32_t K_T;
-  uint32_t meshRow;
-  uint32_t tileSize;
-  uint32_t elem_bytes;
+  // NOTE: meshRow/tileSize/elem_bytes are NOT fields. They are part of the KERNEL:
+  // __snax_bingo_kernel_xdma_a_to_row_major_e<elem_bytes>_<mesh> binds them as constants.
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_xdma_a_to_row_major_args_t;
 
@@ -501,9 +667,8 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_b_to_row_major_args {
   uint32_t dst_addr_lo;
   uint32_t K_T;
   uint32_t N_T;
-  uint32_t tileSize;
-  uint32_t meshCol;
-  uint32_t elem_bytes;
+  // NOTE: tileSize/meshCol/elem_bytes are NOT fields. They are part of the KERNEL:
+  // __snax_bingo_kernel_xdma_b_to_row_major_e<elem_bytes>_<mesh> binds them as constants.
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_xdma_b_to_row_major_args_t;
 
@@ -514,9 +679,8 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_row_major_to_d_args {
   uint32_t dst_addr_lo;
   uint32_t M_T;
   uint32_t N_T;
-  uint32_t meshRow;
-  uint32_t meshCol;
-  uint32_t elem_bytes;
+  // NOTE: meshRow/meshCol/elem_bytes are NOT fields. They are part of the KERNEL:
+  // __snax_bingo_kernel_xdma_row_major_to_d_e<elem_bytes>_<mesh> binds them as constants.
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_xdma_row_major_to_d_args_t;
 

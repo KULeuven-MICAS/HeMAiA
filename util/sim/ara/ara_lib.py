@@ -21,7 +21,11 @@ import sys
 
 SEED = 42
 N_BIG = 4096                 # big arrays for the timing sweep
-SIZES = (64, 256, 1024, 4096)  # sweep sizes -- must match main.c timing_sizes
+# Sweep sizes. MUST match ara_sizes[] / ARA_NSIZES in target/sw/host/runtime/ara_sweep.h --
+# the per-size goldens emitted here (golden_vec[], golden_reduce*[]) are indexed by the
+# sweep's size loop, so a short list here is an out-of-bounds read there. 32 and 128 cover the
+# decode operating point (n = rows*32 lanes = 32 at rows=1).
+SIZES = (32, 64, 128, 256, 1024, 4096)
 
 
 # ---------------------------------------------------------------------------
@@ -86,6 +90,10 @@ def _quantize(xs):  # scale = max|x|/127 (min 1e-10); q = clamp(round(x/scale), 
 
 def _f32(x):  # round a Python float to its IEEE-754 binary32 value
     return struct.unpack("f", struct.pack("f", x))[0]
+
+
+def _f16(x):  # round a Python float to its IEEE-754 binary16 value
+    return struct.unpack("e", struct.pack("e", x))[0]
 
 
 def _dequantize(xs):  # mirrors main.c EXACTLY in fp32: int32_src[i] = (int32_t)(op_a_big[i]*100.0f); out = src*0.01f
@@ -156,6 +164,12 @@ _I8_R = {"add": 50, "sub": 50, "mul": 8, "max": 100, "min": 100,
          "relu": 100, "neg": 100, "abs": 100, "reduce_sum": 100, "reduce_max": 100}
 _I16_R = {"add": 10000, "sub": 10000, "mul": 150, "max": 20000, "min": 20000,
           "relu": 20000, "neg": 20000, "abs": 20000, "reduce_sum": 20000, "reduce_max": 20000}
+# INT32 is a first-class Ara precision (BINGO_PREC_INT32 -- HeMAiA has an args class for every
+# int-capable op at int32), so all 10 int32 ops are swept here; `add_int32` is also the K-split
+# reduce kernel. Ranges keep the exact-integer golden inside int32: reduce_sum over N_BIG=4096
+# elements of +-100k stays well under 2^31.
+_I32_R = {"add": 1000000, "sub": 1000000, "mul": 30000, "max": 2000000, "min": 2000000,
+          "relu": 2000000, "neg": 2000000, "abs": 2000000, "reduce_sum": 100000, "reduce_max": 2000000}
 
 
 def _int_arr(n, r, seed):
@@ -164,10 +178,11 @@ def _int_arr(n, r, seed):
 
 
 def _emit_int_variants(kernel):
-    """Emit op_a_i8/op_b_i8/golden_i8 (+ i16) for int-capable kernels."""
+    """Emit op_a_i8/op_b_i8/golden_i8 (+ i16, i32) for int-capable kernels."""
     for ctype, suffix, ranges, seed_a, seed_b in (
             ("int8_t", "i8", _I8_R, SEED + 10, SEED + 11),
-            ("int16_t", "i16", _I16_R, SEED + 12, SEED + 13)):
+            ("int16_t", "i16", _I16_R, SEED + 12, SEED + 13),
+            ("int32_t", "i32", _I32_R, SEED + 14, SEED + 15)):
         r = ranges[kernel]
         a = _int_arr(N_BIG, r, seed_a)
         _emit_int_array(f"op_a_{suffix}", N_BIG, a, ctype)
@@ -221,6 +236,7 @@ def emit_sweep_header(kernel):
         print(f"static const float* const golden_vec[{len(SIZES)}] = {{ "
               + ", ".join(f"golden_v{si}" for si in range(len(SIZES))) + " };")
     elif kernel == "quantize":
+        # f32i8: quantize the fp32 input directly.
         scales = []
         for si, n in enumerate(SIZES):
             scale, q = _quantize(m[:n])
@@ -230,6 +246,20 @@ def emit_sweep_header(kernel):
               + ", ".join(f"golden_q{si}" for si in range(len(SIZES))) + " };")
         print(f"static const float golden_scale[{len(SIZES)}] = {{ "
               + ", ".join(f"{s:.9g}f" for s in scales) + " };")
+        # f16i8: __host_bingo_kernel_quantize_f16i8 widens the fp16 input back to fp32
+        # and runs the IDENTICAL symmetric scheme, so its exact golden is _quantize()
+        # over the fp16-ROUNDED input -- not the fp32 one. Rounding to fp16 moves
+        # max|x|, hence a different scale, hence different int8 codes; reusing the f32
+        # golden here would only "pass" by hiding behind the +/-1 tolerance.
+        scales16 = []
+        for si, n in enumerate(SIZES):
+            scale, q = _quantize([_f16(x) for x in m[:n]])
+            scales16.append(scale)
+            _emit_int8_array(f"golden_q16_{si}", n, q)
+        print(f"static const int8_t* const golden_q16[{len(SIZES)}] = {{ "
+              + ", ".join(f"golden_q16_{si}" for si in range(len(SIZES))) + " };")
+        print(f"static const float golden_scale16[{len(SIZES)}] = {{ "
+              + ", ".join(f"{s:.9g}f" for s in scales16) + " };")
     else:
         raise SystemExit(f"ara_lib.py: unknown kernel '{kernel}'")
 

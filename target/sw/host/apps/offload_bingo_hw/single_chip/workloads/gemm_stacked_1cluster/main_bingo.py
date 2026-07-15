@@ -324,8 +324,12 @@ def main():
 
     mem_handles = define_memory_handles(params)
     platform = parse_platform_cfg(args.platformcfg)
+    # Return, don't assert: guard_cluster_count() already removed $(OFFLOAD_H), and
+    # common.mk keys the clean "[skip] … workload does not target this HW cfg" path
+    # off that file's absence plus a ZERO exit. Raising here instead made this the
+    # one workload of 37 that hard-failed `make sw` on any cfg whose cluster count
+    # it does not match.
     if not guard_cluster_count(merged_config, platform, args.output_dir, args.output_offload_file_name):
-        assert False, "Cluster count mismatch between workload and platform. Check warnings and fix the issue before proceeding."
         return
     dfg = create_dfg(params, mem_handles, platform)
     dfg.bingo_compile_dfg(params["app_name"], output_dir, output_file_name, extra_include_header_list=["gemm_data.h"])

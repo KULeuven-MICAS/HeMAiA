@@ -5,22 +5,33 @@
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 #
-# Gather per-kernel Ara (CVA6+Ara FP32) cycle measurements into a single CSV.
+# Gather the Ara (CVA6+Ara) cycle sweep into one CSV, keyed by the BINGO OP ID.
 #
-# After `target/sim/automation/sweep/ara/run_ara_sweep.py` finishes, each
-# ara_<kernel> workload has run in its own ara/task_<idx>/bin/ dir and printed
-#   CYCLES,<kernel>,<prec>,<N>,<rep>,<cycles>
-# over UART (uart_chip_0_0.log).  <prec> is fp32/fp16/int8/int16 — the apps sweep
-# precision via the __host_bingo_kernel_<op> dispatcher (precision is a runtime
-# arg).  This script:
-#   1. parses those CYCLES lines from each task's UART log,
-#   2. averages cycles per (kernel, prec, N) over reps,
-#   3. writes one consolidated CSV (op_name,op_node,prec,n,cycles).
+# Each ara_<kernel> app sweeps precision AND size and prints, over UART:
+#     CYCLES,<kernel>,<prec>,<N>,<rep>,<cycles>
+# Precision is a RUNTIME ARG to the `__host_bingo_kernel_<kernel>` DISPATCHER -- there is ONE C symbol
+# per kernel, not one per precision (see target/sw/host/runtime/ara_sweep.h).
 #
-# This stays at the measurement level only — curve fitting lives in the bingo
-# framework, which consumes this CSV.  op_node is the HeMAiA kernel symbol that
-# produced each measurement; `prec` is the precision feature the co-design model
-# pairs against the GEMM LUT (adjust OP_SPEC if a kernel is renamed).
+# --------------------------------------------------------------------------------------------------
+# THE CSV KEY
+#
+# Rows are keyed on the id the bingo framework uses, where PRECISION IS A SUFFIX:
+#
+#     abs        + fp16   -> abs_fp16              regular op:  <base>_<prec>
+#     reduce_sum + int8   -> reduce_sum_int8
+#     quantize   + f32i8  -> quantize_f32i8        conversion:  the prec token IS the in->out pair,
+#     dequantize + i32f32 -> dequantize_i32f32                  exactly as the C kernel names it
+#
+# so `calibrate/ingest_ara_csv.py` (bingo) maps a row straight onto inputs/op_lib/simd/<op_id>.hjson
+# with no translation table. Keep the two in step: the op ids here ARE the framework's op ids.
+#
+# `op_node` is the C symbol the app actually calls, which for a regular op is the bare dispatcher --
+# `__host_bingo_kernel_<op>` -- because precision is a runtime arg, not part of the symbol name.
+# --------------------------------------------------------------------------------------------------
+#
+# This stays at the MEASUREMENT level: no fitting, no scaling, no derived rows. The bingo LUT holds RTL
+# measurements and nothing else -- an op it has no points for REFUSES to price rather than being
+# guessed at -- so a row that was not measured here must simply be absent.
 
 import argparse
 import csv
@@ -37,46 +48,70 @@ from bingo_trace_gather import parse_task_order  # noqa: E402
 _ARA_DIR = _THIS
 _DEFAULT_OUT = os.path.join(_ARA_DIR, "ara_cycles.csv")
 
-# kernel name (as printed in the CYCLES line) -> bingo op_node fn name.
-# All but quantize/dequantize are __host_bingo_kernel_<name>_f32 (the conversions
-# carry an in->out suffix: quantize_f32i8, dequantize_i32f32).
-_FP32 = [
-    "add", "sub", "mul", "div", "max", "min", "silu_mul",
-    "exp", "sigmoid", "sqrt", "relu", "neg", "abs", "tanh", "reciprocal",
-    "silu", "gelu", "reduce_sum", "reduce_max", "reduce_mean",
-    "softmax", "rmsnorm",
-]
-OP_SPEC = {k: f"__host_bingo_kernel_{k}_f32" for k in _FP32}
-OP_SPEC["quantize"] = "__host_bingo_kernel_quantize_f32i8"
-OP_SPEC["dequantize"] = "__host_bingo_kernel_dequantize_i32f32"
+# Every regular kernel is reached through the BARE dispatcher; precision is a runtime arg. The two
+# conversions are their own C symbols (their "precision" is an in->out pair, not a mode).
+_CONVERSION_NODE = {
+    "quantize": {"f32i8": "__host_bingo_kernel_quantize_f32i8",
+                 "f16i8": "__host_bingo_kernel_quantize_f16i8"},
+    "dequantize": {"i32f32": "__host_bingo_kernel_dequantize_i32f32"},
+}
 
-_CYCLES_RE = re.compile(r"CYCLES,([^,]+),([^,]+),(\d+),(\d+),(\d+)")
+
+def op_node(kernel: str, prec: str) -> str:
+    """The C symbol that ran: the bare dispatcher, or a conversion's own per-pair symbol."""
+    if kernel in _CONVERSION_NODE:
+        return _CONVERSION_NODE[kernel].get(prec, f"__host_bingo_kernel_{kernel}")
+    return f"__host_bingo_kernel_{kernel}"
+
+
+def op_id(kernel: str, prec: str) -> str:
+    """The BINGO op id: precision is a SUFFIX. Uniform for regular ops and conversions alike."""
+    return f"{kernel}_{prec}"
+
+
+# CYCLES,<kernel>,<prec>,<N>,<rep>,<cycles>   -- the precision-swept format.
+_CYCLES_RE = re.compile(r"CYCLES,([A-Za-z0-9_]+),([A-Za-z0-9]+),(\d+),(\d+),(\d+)")
+# CYCLES,<kernel>,<N>,<rep>,<cycles>          -- 5-field form, carrying NO precision token. The two
+# conversion apps print this; each runs a single in->out pair, so its precision is filled in from
+# _LEGACY_PREC. A kernel printing this form without an entry there cannot be typed and its lines are
+# dropped, so an app must emit a prec token to be swept at more than one precision.
+_LEGACY_RE = re.compile(r"CYCLES,([A-Za-z0-9_]+),(\d+),(\d+),(\d+)\s*$")
+_LEGACY_PREC = {"quantize": "f32i8", "dequantize": "i32f32"}
 
 
 def _parse_cycles(uart_log):
-    """(kernel, prec) -> {N: [cycles, ...]} from the CYCLES lines in a UART log."""
-    out = {}
+    """(kernel, prec) -> {N: [cycles, ...]} from one UART log; plus the kernels seen in legacy form."""
+    out, legacy = {}, set()
     with open(uart_log, errors="replace") as f:
         for line in f:
             m = _CYCLES_RE.search(line)
-            if not m:
-                continue
-            kernel, prec, n, _rep, cyc = (m.group(1), m.group(2), int(m.group(3)),
-                                          m.group(4), int(m.group(5)))
+            if m:
+                kernel, prec = m.group(1), m.group(2)
+                n, cyc = int(m.group(3)), int(m.group(5))
+            else:
+                m = _LEGACY_RE.search(line)
+                if not m:
+                    continue
+                kernel = m.group(1)
+                prec = _LEGACY_PREC.get(kernel)
+                if prec is None:
+                    continue                 # a 5-field line for a kernel we cannot type: skip it
+                n, cyc = int(m.group(2)), int(m.group(4))
+                legacy.add(kernel)
             out.setdefault((kernel, prec), {}).setdefault(n, []).append(cyc)
-    return out
+    return out, legacy
 
 
 def gather_all(ci_dir, out_csv, only=None, verbose=True):
-    # Aggregate CYCLES across every task UART log, keyed by (kernel, prec) in the
-    # CSV itself (so the result is independent of task ordering).
-    agg = {}  # (kernel, prec) -> {N: [cycles,...]}
+    agg, legacy = {}, set()
     logs = sorted(glob.glob(os.path.join(ci_dir, "task_*", "bin", "uart_chip_0_0.log")))
     if not logs:
         print(f"No UART logs found under {ci_dir}/task_*/bin/uart_chip_0_0.log")
         return 0
     for log in logs:
-        for key, by_n in _parse_cycles(log).items():
+        got, leg = _parse_cycles(log)
+        legacy |= leg
+        for key, by_n in got.items():
             dst = agg.setdefault(key, {})
             for n, cycs in by_n.items():
                 dst.setdefault(n, []).extend(cycs)
@@ -85,52 +120,45 @@ def gather_all(ci_dir, out_csv, only=None, verbose=True):
     for kernel, prec in sorted(agg):
         if only and kernel not in only:
             continue
-        if kernel not in OP_SPEC:
-            print(f"{kernel}: no OP_SPEC entry (skipped)")
-            continue
-        op_node = OP_SPEC[kernel]
-        # Average cycles per N once, then reuse for both the CSV rows and the log.
-        points = [(n, round(sum(cycs) / len(cycs)))
-                  for n, cycs in sorted(agg[(kernel, prec)].items())]
+        points = [(n, round(sum(c) / len(c))) for n, c in sorted(agg[(kernel, prec)].items())]
         for n, cyc in points:
-            rows.append({"op_name": kernel, "op_node": op_node,
-                         "prec": prec, "n": n, "cycles": cyc})
+            rows.append({"op_id": op_id(kernel, prec), "op_name": kernel, "prec": prec,
+                         "op_node": op_node(kernel, prec), "n": n, "cycles": cyc})
         if verbose:
             pts = ", ".join(f"n={n}:{cyc}" for n, cyc in points)
-            print(f"{kernel} [{prec}]: {len(points)} points  [{pts}]")
+            print(f"{op_id(kernel, prec):22} {len(points)} points  [{pts}]")
 
     if rows:
         os.makedirs(os.path.dirname(os.path.abspath(out_csv)), exist_ok=True)
         with open(out_csv, "w", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=["op_name", "op_node", "prec", "n", "cycles"])
+            w = csv.DictWriter(f, fieldnames=["op_id", "op_name", "prec", "op_node", "n", "cycles"])
             w.writeheader()
             w.writerows(rows)
 
-    seen = {k for (k, _p) in agg}
-    missing = [k for k in OP_SPEC if k not in seen]
-    if missing:
-        print(f"\nNo CYCLES data for: {', '.join(sorted(missing))}")
+    if legacy:
+        print(f"\n[legacy format] {', '.join(sorted(legacy))} still print CYCLES with NO precision "
+              f"field; typed here by assumption ({_LEGACY_PREC}). Update those apps to emit a prec "
+              f"token so the format is uniform (and so quantize_f16i8 can be swept at all).")
     return len(rows)
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--task-yaml", default=os.path.join(_ARA_DIR, "task_ara.yaml"),
-                    help="only used to report the expected task order")
-    ap.add_argument("--ci-dir", default=_ARA_DIR,
-                    help="dir holding the task_<idx> run dirs (default: ara sweep dir)")
-    ap.add_argument("--out", default=_DEFAULT_OUT,
-                    help="output CSV path (default: %(default)s)")
-    ap.add_argument("--only", nargs="*", default=None,
-                    help="restrict to these kernel names")
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--task-yaml", default=os.path.join(_ARA_DIR, "task_ara.yaml"))
+    ap.add_argument("--ci-dir", default=_ARA_DIR)
+    ap.add_argument("--out", default=_DEFAULT_OUT)
+    ap.add_argument("--only", nargs="*", default=None)
     args = ap.parse_args()
 
     if os.path.exists(args.task_yaml):
         order = parse_task_order(args.task_yaml)
-        print(f"Expected {len(order)} ara tasks from {os.path.basename(args.task_yaml)}")
+        print(f"Expected {len(order)} ara tasks from {os.path.basename(args.task_yaml)}\n")
 
     n = gather_all(args.ci_dir, args.out, only=args.only)
     print(f"\nWrote {n} row(s) to {args.out}")
+    print("Ingest into the framework's LUT (from the bingo repo):\n"
+          "    ./.venv/bin/python -m calibrate.ingest_ara_csv <this csv>")
 
 
 if __name__ == "__main__":

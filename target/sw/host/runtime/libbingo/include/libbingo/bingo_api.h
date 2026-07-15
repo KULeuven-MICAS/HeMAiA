@@ -85,9 +85,9 @@
 // Forward declaration for remote successor struct (defined below)
 struct bingo_remote_succ;
 
-// Distributed runtime task descriptor.
-// NOTE: We keep original fields for backward compatibility and extend with
-// explicit local/remote dependency tracking required for decentralized scheduling.
+// Distributed runtime task descriptor. Carries the task's identity and execution
+// info plus explicit local/remote dependency tracking, which decentralized
+// scheduling needs.
 typedef struct task {
   // ---- Identity & user-specified execution info ----
   uint16_t task_id;             // Globally unique task id (stable across chips)

@@ -40,6 +40,7 @@ from bingo_node import BingoNode  # noqa E402
 from bingo_mem_handle import BingoMemAlloc, BingoMemSymbol  # noqa E402
 from bingo_kernel_args import (  # noqa E402
     SnaxBingoKernelIdma1dCopyArgs,
+    SnaxBingoKernelIdmaPairwiseSwapArgs,
     SnaxBingoKernelXdma1dCopyArgs,
     SnaxBingoKernelXdma6dArgs,
     SnaxBingoKernelXdmaTranspose2dArgs,
@@ -49,15 +50,14 @@ from bingo_kernel_args import (  # noqa E402
     SnaxBingoKernelXdmaPad2dArgs,
     SnaxBingoKernelXdmaGather2dArgs,
     SnaxBingoKernelXdmaElementwiseAddArgs,
-    SnaxBingoKernelXdmaRowMajorToAArgs,
-    SnaxBingoKernelXdmaAToRowMajorArgs,
-    SnaxBingoKernelXdmaRowMajorToBArgs,
-    SnaxBingoKernelXdmaBToRowMajorArgs,
-    SnaxBingoKernelXdmaRowMajorToDArgs,
-    SnaxBingoKernelXdmaDToRowMajorArgs,
+    SnaxBingoKernelXdmaStreamReduceArgs,
+    SnaxBingoKernelXdmaStreamMapArgs,
+    SnaxBingoKernelXdmaStreamMapReduceArgs,
+    SnaxBingoKernelXdmaStreamElementwiseArgs,
     HostBingoKernelIdmaArgs,
     HostBingoKernelCheckResultArgs,
 )
+import bingo_kernel_args as _bka  # noqa E402  (layout classes are resolved by shape)
 
 DMA_CORE = 1
 HOST_CORE = 2
@@ -198,6 +198,30 @@ class TransposeOp:
         op = b.op(f"Op_{i}", "__snax_bingo_kernel_xdma_transpose_2d",
                   SnaxBingoKernelXdmaTranspose2dArgs(l1s, l1d, rows, cols, elem_bytes), load)
         return b.store_check(f"transpose_cfg{i}", l1d, op, f"golden_{i}", n)
+
+
+class SwapOp:
+    name = "idma_pairwise_swap"
+
+    def gen_data(self, c, i, ctx):
+        # Adjacent element-pair swap: dst[i] = src[i^1]. Build a byte matrix of
+        # shape [num_pairs, 2, elem_bytes] and reverse the size-2 (pair) axis.
+        num_elems, elem_bytes = c["num_elems"], c["elem_bytes"]
+        base = (np.arange(num_elems * elem_bytes, dtype=np.uint8) & 0xFF)
+        mat = base.reshape(num_elems // 2, 2, elem_bytes)
+        golden = mat[:, ::-1, :].reshape(-1)
+        return [format_vector_definition("uint8_t", f"in_{i}", base),
+                format_vector_definition("uint8_t", f"golden_{i}", golden)]
+
+    def build(self, b, c, i, prev):
+        num_elems, elem_bytes = c["num_elems"], c["elem_bytes"]
+        n = num_elems * elem_bytes
+        l1s = b.l1(f"l1s_{i}", n)
+        l1d = b.l1(f"l1d_{i}", n)
+        load = b.idma_load(f"Load_{i}", b.sym(f"in_{i}"), l1s, n, prev)
+        op = b.op(f"Op_{i}", "__snax_bingo_kernel_idma_pairwise_swap",
+                  SnaxBingoKernelIdmaPairwiseSwapArgs(l1s, l1d, num_elems, elem_bytes), load)
+        return b.store_check(f"swap_cfg{i}", l1d, op, f"golden_{i}", n)
 
 
 class SubmatrixOp:
@@ -363,6 +387,108 @@ class ElementwiseAddOp:
         return b.store_check(f"eltadd_cfg{i}", l1d, op, f"golden_{i}", out_bytes)
 
 
+# ── FP16 streaming-SIMD primitive: softmax (reduce + map+tap + map[+quant]) ──
+# Decomposes one softmax row onto the 3 stream kernels and validates the fp16
+# output to tolerance. One chain covers every stream capability:
+#   T1  reduce(MAX)                       FULL   -> establishes the shared AGU
+#   T2  map(EXP, b=-max) + reduce(ADD|TAP) STICKY -> exp row + Σexp, 2-ext fusion
+#   T3  map(LINEAR, a=inv_sum)            STICKY -> softmax probs (checked, fp16)
+#   Tq  map(LINEAR) + Fp16ToInt8          STICKY -> fused FP16->INT8 (path exercised)
+# The host scalars (-max, inv_sum) are baked into the args, as the standalone
+# snax-xdma-softmax app precomputes them in data.h. int8 numeric correctness is
+# covered by that standalone app (no int8-tolerance check here).
+
+def _f32bits(x):
+    return int(np.float32(x).view(np.uint32))
+
+
+def _softmax_ref(beats, i):
+    """Deterministic per-config softmax reference, mimicking the HW fp16 datapath.
+    Returns (x_fp16, y_fp16, yq_int8, neg_max_bits, inv_sum_bits, inv_scale_bits).
+
+    The input is PEAKY (a few large entries on a small-uniform background) so the
+    dominant probabilities stay O(0.1-0.7) regardless of N — otherwise large-N
+    softmax flattens to ~1/N and an absolute-tolerance check passes even garbage.
+    """
+    n = beats * 32  # 64 B beat = 32 fp16
+    rng = np.random.RandomState(20240601 + i)
+    x = rng.uniform(-2.0, 2.0, size=n).astype(np.float32)
+    for pos, val in ((0, 6.0), (n // 3, 5.0), (2 * n // 3, 4.5)):
+        x[pos] = val
+    x = x.astype(np.float16)
+    xf = x.astype(np.float32)
+    m = np.float16(xf.max())                                   # HW T1: fp16 row max
+    e16 = np.exp(xf - np.float32(m)).astype(np.float16)        # HW T2: fp16 exp
+    s = np.float32(e16.astype(np.float32).sum())               # HW T2 tap: Σ over fp16
+    inv_sum = np.float32(1.0) / s                              # host reciprocal
+    y = (e16.astype(np.float32) * inv_sum).astype(np.float16)  # HW T3: normalize
+    inv_scale = np.float32(127.0)                              # probs in [0,1] -> int8
+    yq = np.clip(np.rint(y.astype(np.float32) * inv_scale), -128, 127).astype(np.int8)
+    return x, y, yq, _f32bits(-np.float32(m)), _f32bits(inv_sum), _f32bits(inv_scale)
+
+
+class SoftmaxOp:
+    name = "softmax"
+
+    def gen_data(self, c, i, ctx):
+        x, y, _yq, _nm, _is, _isc = _softmax_ref(c["beats"], i)
+        return [format_vector_definition("uint16_t", f"in_{i}", x.view(np.uint16)),
+                format_vector_definition("uint16_t", f"golden_{i}", y.view(np.uint16))]
+
+    def _store_check_fp16(self, b, name, l1_dst, op_node, golden_sym, n_elems, tol):
+        out_bytes = n_elems * 2
+        l3 = BingoMemAlloc(f"out_{name}", size=out_bytes, mem_level="L3")
+        store = BingoNode(
+            assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=HOST_CORE,
+            node_name=f"Store_{name}", kernel_name="__host_bingo_kernel_idma",
+            kernel_args=HostBingoKernelIdmaArgs(l1_dst, l3, out_bytes))
+        check = BingoNode(
+            assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=HOST_CORE,
+            node_name=f"Check_{name}", kernel_name="__host_bingo_kernel_check_result",
+            kernel_args=HostBingoKernelCheckResultArgs(
+                b.sym(golden_sym), l3, name=name,
+                check_type=2, num_elements=n_elems, tolerance=tol))  # 2 = FP16_TOL
+        b.dfg.bingo_add_node(store)
+        b.dfg.bingo_add_node(check)
+        b.dfg.bingo_add_edge(op_node, store)
+        b.dfg.bingo_add_edge(store, check)
+        return check
+
+    def build(self, b, c, i, prev):
+        beats = c["beats"]
+        n = beats * 32
+        row_b = beats * 64
+        x, y, yq, neg_max_bits, inv_sum_bits, inv_scale_bits = _softmax_ref(beats, i)
+        l1_x   = b.l1(f"smx_x_{i}", row_b)
+        l1_max = b.l1(f"smx_max_{i}", 64)
+        l1_exp = b.l1(f"smx_exp_{i}", (beats + 1) * 64)
+        l1_out = b.l1(f"smx_out_{i}", row_b)
+        l1_i8  = b.l1(f"smx_i8_{i}", n)
+        load = b.idma_load(f"Load_{i}", b.sym(f"in_{i}"), l1_x, row_b, prev)
+        # T1 max — FULL config establishes the AGU shape the STICKY ops reuse.
+        t1 = b.op(f"Max_{i}", "__snax_bingo_kernel_xdma_stream_reduce",
+                  SnaxBingoKernelXdmaStreamReduceArgs(l1_x, l1_max, beats, op=0,
+                      csr_mode=0, dst_bound0=1), load)
+        # T2 exp(x-max) + Σexp fused in ONE task on the MERGED map+reduce kernel
+        # (StreamMap EXP -||> StreamReduce ADD|TAP), STICKY. The subtract folds into the
+        # map's `b` because this op is single-row (one shared -max); TAP appends Σexp as
+        # a trailing beat, so l1_exp is the PADDED [1, beats+1] layout.
+        t2 = b.op(f"ExpSum_{i}", "__snax_bingo_kernel_xdma_stream_map_reduce",
+                  SnaxBingoKernelXdmaStreamMapReduceArgs(l1_x, l1_exp, beats, func=1,
+                      reduce_op=1, b_f32bits=neg_max_bits, tap=True, csr_mode=1), t1)
+        # T3 out = inv_sum * exp (StreamMap LINEAR), STICKY.
+        t3 = b.op(f"Norm_{i}", "__snax_bingo_kernel_xdma_stream_map",
+                  SnaxBingoKernelXdmaStreamMapArgs(l1_exp, l1_out, beats, func=0,
+                      a_f32bits=inv_sum_bits, csr_mode=1, dst_bound0=beats), t2)
+        chk = self._store_check_fp16(b, f"softmax_cfg{i}", l1_out, t3, f"golden_{i}", n, 0.02)
+        # Tq fused FP16->INT8 quant — exercises the Fp16ToInt8 datapath (leaf, no check).
+        tq = b.op(f"Quant_{i}", "__snax_bingo_kernel_xdma_stream_map",
+                  SnaxBingoKernelXdmaStreamMapArgs(l1_exp, l1_i8, beats, func=0,
+                      a_f32bits=inv_sum_bits, csr_mode=1, dst_bound0=beats // 2,
+                      out_dtype=1, inv_scale_f32bits=inv_scale_bits), chk)
+        return tq
+
+
 # ── VersaCore layout conversions (need meshRow/tileSize/meshCol from hwcfg) ──
 def _mesh(ctx, c):
     array_shape = c.get("array_shape", ctx["array_shape"])
@@ -372,21 +498,56 @@ def _mesh(ctx, c):
 
 
 def _layout_dtype(elem_bytes):
+    # The layout kernels exist for e1/e2/e4 only (9 per family = 3 array shapes x 3
+    # widths), so those are the only widths a config may ask for. layout_convert.py is
+    # dtype-agnostic (pure reshape/transpose), so each width needs nothing but its entry
+    # here: the numpy dtype, the random-value range, and the C type of the emitted arrays.
     if elem_bytes == 1:
         return np.int8, -128, 127, "int8_t"
+    if elem_bytes == 2:
+        return np.int16, -32_768, 32_767, "int16_t"
     if elem_bytes == 4:
         return np.int32, -1_000_000, 1_000_000, "int32_t"
     raise ValueError(f"layout conversion elem_bytes={elem_bytes} unsupported")
 
 
+def _layout_cls(family, mesh, elem_bytes):
+    """Resolve the concrete layout-conversion args class for (mesh, elem_bytes).
+
+    There is one class per RUNNABLE kernel = (array shape, elem width): the mesh and the
+    width are baked into the class (MESH_1/MESH_2/ELEM_BYTES) and select the C symbol it
+    dispatches to (KERNEL_NAME), exactly as the GEMM classes bake ARRAY_SHAPE_IDX. The
+    caller therefore does not pass meshRow/tileSize/elem_bytes as kernel args; it picks
+    the class that already carries them, which is what makes "the operands were blocked
+    for this mesh" structural rather than a value the caller could get wrong.
+
+    *mesh* is the (MESH_1, MESH_2) pair the family is indexed by:
+      A (row_to_a / a_to_row): (meshRow, tileSize)
+      B (row_to_b / b_to_row): (tileSize, meshCol)
+      D (row_to_d / d_to_row): (meshRow, meshCol)
+    """
+    base = getattr(_bka, f"_SnaxBingoKernelXdma{family}Base")
+    for cls in base.__subclasses__():
+        if (cls.MESH_1, cls.MESH_2, cls.ELEM_BYTES) == (mesh[0], mesh[1], elem_bytes):
+            return cls
+    have = sorted((c.MESH_1, c.MESH_2, c.ELEM_BYTES) for c in base.__subclasses__())
+    raise ValueError(f"no {family} kernel for mesh={mesh} elem_bytes={elem_bytes}; "
+                     f"generated (mesh_1, mesh_2, elem_bytes): {have}")
+
+
+# tag -> (l1s, l1d) shared BingoMemAlloc handles, sized at the max over all configs.
+# Filled by run_op_workload() before the DFG is built; see the note in build() below.
+_SHARED_L1 = {}
+
+
 def make_layout_handlers():
     handlers = {}
 
-    def reg(tag, name, kernel, args_cls, gen, sizes):
+    def reg(tag, name, family, gen, sizes):
         h = type(f"Layout_{tag}", (), {})()
         h.tag = tag
         h.name = name
-        h.kernel = kernel
+        h.family = family
 
         def gen_data(c, i, ctx, _gen=gen):
             elem_bytes = c["elem_bytes"]
@@ -395,16 +556,29 @@ def make_layout_handlers():
             return [format_vector_definition(ctype, f"in_{i}", src_arr),
                     format_vector_definition(ctype, f"golden_{i}", golden_arr)]
 
-        def build(b, c, i, prev, _sizes=sizes, _args=args_cls, _kernel=kernel, _tag=tag):
-            n_src, n_dst, kwargs = _sizes(b, c)
-            l1s = b.l1(f"l1s_{i}", n_src)
-            l1d = b.l1(f"l1d_{i}", n_dst)
+        def build(b, c, i, prev, _sizes=sizes, _fam=family, _tag=tag):
+            n_src, n_dst, kwargs, mesh = _sizes(b, c)
+            cls = _layout_cls(_fam, mesh, c["elem_bytes"])
+            # Every config of a layout workload shares ONE src/dst pair, sized at the max
+            # over all of them. Both halves of that are load-bearing:
+            #  - Necessary: bingo_dfg never emits a free, so a per-config l1s_<i>/l1d_<i>
+            #    would keep every config's buffers live at once. The full 3 shapes x 3
+            #    widths x 9 points grid needs ~557 KiB that way, over the 512 KiB TCDM
+            #    (bingo_l1_alloc -> host_abort(OOM)).
+            #  - Sufficient: the configs are STRICTLY CHAINED -- run_op_workload threads
+            #    `prev`, so config i's golden check completes before config i+1's load
+            #    overwrites the buffer. Only one config's data is ever live.
+            l1s, l1d = _SHARED_L1[_tag]
             load = b.idma_load(f"Load_{i}", b.sym(f"in_{i}"), l1s, n_src, prev)
-            op = b.op(f"Op_{i}", _kernel, _args(src_addr=l1s, dst_addr=l1d, **kwargs), load)
+            # The class names the C kernel: one runnable symbol per (shape, elem width).
+            op = b.op(f"Op_{i}", cls.KERNEL_NAME,
+                      cls(src_addr=l1s, dst_addr=l1d, **kwargs), load)
             return b.store_check(f"{_tag}_cfg{i}", l1d, op, f"golden_{i}", n_dst)
 
         h.gen_data = gen_data
         h.build = build
+        h.sizes = sizes
+        h.is_layout = True
         handlers[tag] = h
 
     return handlers, reg
@@ -426,10 +600,8 @@ def _register_layouts(handlers, reg):
     def sz_row_to_a(b, c):
         mR, tS, mC = _mesh(_MESH_HOLDER["ctx"], c)
         nbytes = c["M_T"] * mR * c["K_T"] * tS * c["elem_bytes"]
-        return nbytes, nbytes, dict(M_T=c["M_T"], K_T=c["K_T"], meshRow=mR,
-                                    tileSize=tS, elem_bytes=c["elem_bytes"])
-    reg("row_to_a", "xdma_row_major_to_a", "__snax_bingo_kernel_xdma_row_major_to_a",
-        SnaxBingoKernelXdmaRowMajorToAArgs, gen_row_to_a, sz_row_to_a)
+        return nbytes, nbytes, dict(M_T=c["M_T"], K_T=c["K_T"]), (mR, tS)
+    reg("row_to_a", "xdma_row_major_to_a", "RowMajorToA", gen_row_to_a, sz_row_to_a)
 
     # A_to_row
     def gen_a_to_row(ctx, c):
@@ -441,10 +613,8 @@ def _register_layouts(handlers, reg):
     def sz_a_to_row(b, c):
         mR, tS, mC = _mesh(_MESH_HOLDER["ctx"], c)
         nbytes = c["M_T"] * mR * c["K_T"] * tS * c["elem_bytes"]
-        return nbytes, nbytes, dict(M_T=c["M_T"], K_T=c["K_T"], meshRow=mR,
-                                    tileSize=tS, elem_bytes=c["elem_bytes"])
-    reg("a_to_row", "xdma_a_to_row_major", "__snax_bingo_kernel_xdma_a_to_row_major",
-        SnaxBingoKernelXdmaAToRowMajorArgs, gen_a_to_row, sz_a_to_row)
+        return nbytes, nbytes, dict(M_T=c["M_T"], K_T=c["K_T"]), (mR, tS)
+    reg("a_to_row", "xdma_a_to_row_major", "AToRowMajor", gen_a_to_row, sz_a_to_row)
 
     # row_to_B
     def gen_row_to_b(ctx, c):
@@ -456,10 +626,8 @@ def _register_layouts(handlers, reg):
     def sz_row_to_b(b, c):
         mR, tS, mC = _mesh(_MESH_HOLDER["ctx"], c)
         nbytes = c["K_T"] * tS * c["N_T"] * mC * c["elem_bytes"]
-        return nbytes, nbytes, dict(K_T=c["K_T"], N_T=c["N_T"], tileSize=tS,
-                                    meshCol=mC, elem_bytes=c["elem_bytes"])
-    reg("row_to_b", "xdma_row_major_to_b", "__snax_bingo_kernel_xdma_row_major_to_b",
-        SnaxBingoKernelXdmaRowMajorToBArgs, gen_row_to_b, sz_row_to_b)
+        return nbytes, nbytes, dict(K_T=c["K_T"], N_T=c["N_T"]), (tS, mC)
+    reg("row_to_b", "xdma_row_major_to_b", "RowMajorToB", gen_row_to_b, sz_row_to_b)
 
     # B_to_row
     def gen_b_to_row(ctx, c):
@@ -471,10 +639,8 @@ def _register_layouts(handlers, reg):
     def sz_b_to_row(b, c):
         mR, tS, mC = _mesh(_MESH_HOLDER["ctx"], c)
         nbytes = c["K_T"] * tS * c["N_T"] * mC * c["elem_bytes"]
-        return nbytes, nbytes, dict(K_T=c["K_T"], N_T=c["N_T"], tileSize=tS,
-                                    meshCol=mC, elem_bytes=c["elem_bytes"])
-    reg("b_to_row", "xdma_b_to_row_major", "__snax_bingo_kernel_xdma_b_to_row_major",
-        SnaxBingoKernelXdmaBToRowMajorArgs, gen_b_to_row, sz_b_to_row)
+        return nbytes, nbytes, dict(K_T=c["K_T"], N_T=c["N_T"]), (tS, mC)
+    reg("b_to_row", "xdma_b_to_row_major", "BToRowMajor", gen_b_to_row, sz_b_to_row)
 
     # row_to_D
     def gen_row_to_d(ctx, c):
@@ -486,10 +652,8 @@ def _register_layouts(handlers, reg):
     def sz_row_to_d(b, c):
         mR, tS, mC = _mesh(_MESH_HOLDER["ctx"], c)
         nbytes = c["M_T"] * mR * c["N_T"] * mC * c["elem_bytes"]
-        return nbytes, nbytes, dict(M_T=c["M_T"], N_T=c["N_T"], meshRow=mR,
-                                    meshCol=mC, elem_bytes=c["elem_bytes"])
-    reg("row_to_d", "xdma_row_major_to_d", "__snax_bingo_kernel_xdma_row_major_to_d",
-        SnaxBingoKernelXdmaRowMajorToDArgs, gen_row_to_d, sz_row_to_d)
+        return nbytes, nbytes, dict(M_T=c["M_T"], N_T=c["N_T"]), (mR, mC)
+    reg("row_to_d", "xdma_row_major_to_d", "RowMajorToD", gen_row_to_d, sz_row_to_d)
 
     # D_to_row
     def gen_d_to_row(ctx, c):
@@ -501,10 +665,8 @@ def _register_layouts(handlers, reg):
     def sz_d_to_row(b, c):
         mR, tS, mC = _mesh(_MESH_HOLDER["ctx"], c)
         nbytes = c["M_T"] * mR * c["N_T"] * mC * c["elem_bytes"]
-        return nbytes, nbytes, dict(M_T=c["M_T"], N_T=c["N_T"], meshRow=mR,
-                                    meshCol=mC, elem_bytes=c["elem_bytes"])
-    reg("d_to_row", "xdma_d_to_row_major", "__snax_bingo_kernel_xdma_d_to_row_major",
-        SnaxBingoKernelXdmaDToRowMajorArgs, gen_d_to_row, sz_d_to_row)
+        return nbytes, nbytes, dict(M_T=c["M_T"], N_T=c["N_T"]), (mR, mC)
+    reg("d_to_row", "xdma_d_to_row_major", "DToRowMajor", gen_d_to_row, sz_d_to_row)
 
 
 # Holder so the size-callbacks (which only get the Builder + cfg) can reach the
@@ -517,12 +679,14 @@ def _build_registry():
         "copy": CopyOp(),
         "xdma_6d": Xdma6dOp(),
         "transpose": TransposeOp(),
+        "swap": SwapOp(),
         "submatrix": SubmatrixOp(),
         "expand": ExpandOp(),
         "concat": ConcatOp(),
         "pad": PadOp(),
         "gather": GatherOp(),
         "elementwise_add": ElementwiseAddOp(),
+        "softmax": SoftmaxOp(),
     }
     layout_handlers, layout_reg = make_layout_handlers()
     _register_layouts(layout_handlers, layout_reg)
@@ -570,10 +734,28 @@ def run_op_workload(op, configs):
         print(f"Written data header: {args.data_h}")
 
     # Dump configs.json for the LUT driver (CONFIGS order == XDMA_RUN order).
+    #
+    # `op_ids` carries ONE id per config, naming the exact runnable kernel
+    # (family x array shape x elem width), e.g. xdma_row_major_to_a_e2_M1K16. A workload
+    # may sweep several (shape, width) variants, so the family name alone would not say
+    # which kernel a cycle count belongs to; emitting the id from the same class the DFG
+    # instantiates makes the sweep and the LUT structurally unable to disagree about it.
+    # Mirrors the GEMM sweep's contract.
     if args.configs_out is not None:
+        payload = {"op": handler.name, "configs": [dict(c) for c in configs]}
+        if getattr(handler, "is_layout", False):
+            # sizes(b, c) ignores b; [3] is the family's (MESH_1, MESH_2) pair.
+            payload["op_ids"] = [
+                _layout_cls(handler.family, handler.sizes(None, c)[3], c["elem_bytes"])
+                .KERNEL_NAME[len("__snax_bingo_kernel_"):]
+                for c in configs
+            ]
+            payload["meshes"] = {
+                str(c.get("array_shape", ctx["array_shape"])): list(_mesh(ctx, c))
+                for c in configs
+            }
         with open(args.configs_out, "w") as f:
-            json.dump({"op": handler.name,
-                       "configs": [dict(c) for c in configs]}, f, indent=2)
+            json.dump(payload, f, indent=2)
         print(f"Written configs: {args.configs_out}")
 
     platform = parse_platform_cfg(args.platformcfg)
@@ -588,6 +770,18 @@ def run_op_workload(op, configs):
         chiplet_ids=platform["chiplet_ids"])
 
     b = Builder(dfg)
+
+    # One shared L1 src/dst pair per layout workload, sized at the max over every config.
+    # See the note in the layout build(): L1 buffers are never freed, so a (3 shapes x 3
+    # widths) grid of per-config buffers would exceed the 512 KiB TCDM.
+    if getattr(handler, "is_layout", False):
+        sizes = [handler.sizes(None, c)[:2] for c in configs]
+        max_src = max(s[0] for s in sizes)
+        max_dst = max(s[1] for s in sizes)
+        _SHARED_L1[handler.tag] = (b.l1("l1s", max_src), b.l1("l1d", max_dst))
+        print(f"Shared L1: src={max_src}B dst={max_dst}B "
+              f"(total {(max_src + max_dst) / 1024:.1f} KiB for {len(configs)} configs)")
+
     prev = None
     for i, c in enumerate(configs):
         prev = handler.build(b, c, i, prev)

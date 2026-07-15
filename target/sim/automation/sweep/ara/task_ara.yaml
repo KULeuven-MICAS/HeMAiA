@@ -1,6 +1,6 @@
 # Ara FP32 RVV op-cost sweep — one task per host kernel (decomposed test_ara).
 # Run with: python3 run_ara_sweep.py -j <N>   (then python3 gather_ara_luts.py)
-# Each ara_<kernel> app times its single kernel across N = 64/256/1024/4096 and
+# Each ara_<kernel> app times its single kernel across N = 32/64/128/256/1024/4096 and
 # prints CYCLES,<kernel>,<N>,<rep>,<cycles>; gather_ara_luts.py turns those UART
 # lines into a per-kernel cycle LUT. All host_only / single_chip (CVA6+Ara).
 runs:

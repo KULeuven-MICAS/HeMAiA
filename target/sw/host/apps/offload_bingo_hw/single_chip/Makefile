@@ -14,6 +14,8 @@ APPS += gemm_stacked_1cluster
 APPS += gemm_sweep_1cluster
 APPS += xdma_ci_ops_1cluster
 APPS += xdma_1d_1cluster
+# iDMA adjacent-pair swap (RoPE xswap enabler); shares the per-op sweep harness.
+APPS += idma_swap_1cluster
 # Per-op xDMA sweep workloads (one op per dir; functional check + cycle LUT).
 # Shared machinery in util/sim/xdma/xdma_ops_lib.py. See util/sim/xdma/xdma_ops_lib.md.
 APPS += xdma_6d_1cluster
@@ -24,6 +26,11 @@ APPS += xdma_concat_1cluster
 APPS += xdma_pad_1cluster
 APPS += xdma_gather_1cluster
 APPS += xdma_elementwise_add_1cluster
+APPS += xdma_softmax_1cluster
+APPS += xdma_rmsnorm_1cluster
+APPS += xdma_silu_1cluster
+APPS += xdma_swiglu_1cluster
+APPS += xdma_rope_1cluster
 APPS += xdma_row_to_a_1cluster
 APPS += xdma_a_to_row_1cluster
 APPS += xdma_row_to_b_1cluster
@@ -39,6 +46,9 @@ APPS += gemm_nsplit_accumprevc_4cluster
 APPS += basic_softmax_host
 APPS += attn_reference_4cluster
 APPS += device_host_idma_check_1cluster
+# Placeholders for the 2-cluster tapeout CI suites (hemaia_tapeout_2c[_simd]).
+APPS += dummy_2cluster
+APPS += dummy_simd_2cluster
 SUBDIRS = $(addprefix workloads/,$(APPS))
 
 

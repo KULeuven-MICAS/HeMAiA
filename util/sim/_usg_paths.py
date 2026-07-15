@@ -3,11 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """Make the grouped ``util/sim`` subdirs importable with flat module names.
 
-The shared sim helpers were regrouped into ``common/``, ``gemm/``, ``xdma/`` and
-``ara/`` subpackages, but most consumers still ``from data_utils import ...``.
-Importing this module (after ``util/sim`` is on ``sys.path``) appends those four
-subdirs to ``sys.path`` so the flat imports keep resolving. This replaces a
-7-line bootstrap that used to be copy-pasted into every datagen/main_bingo.
+The shared sim helpers live in the ``common/``, ``gemm/``, ``xdma/`` and ``ara/``
+subdirs, but consumers import them flat (``from data_utils import ...``).
+Importing this module -- once ``util/sim`` itself is on ``sys.path`` -- appends
+those four subdirs to ``sys.path``, which is what makes the flat imports resolve.
+Every datagen / main_bingo that uses the helpers must import it first.
 """
 
 import os

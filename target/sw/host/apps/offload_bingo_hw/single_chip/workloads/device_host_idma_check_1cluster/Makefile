@@ -13,7 +13,7 @@ DATA_H = $(MK_DIR)/device_host_idma_check_data.h
 OFFLOAD_H = $(MK_DIR)/offload_bingo_hw.h
 PLATFORM_H = $(MK_DIR)/../../../../../../../../target/sw/shared/platform/generated/occamy.h
 
-$(DATA_H) $(OFFLOAD_H): $(MK_DIR)/main_bingo.py $(DATA_CFG) $(MK_DIR)/device_host_idma_check_datagen.py
+$(DATA_H) $(OFFLOAD_H): $(MK_DIR)/main_bingo.py $(DATA_CFG) $(MK_DIR)/device_host_idma_check_datagen.py $(PLATFORM_H)
 	python3 $(MK_DIR)/main_bingo.py \
 		--output_dir $(MK_DIR) \
 		--data_h $(DATA_H) \

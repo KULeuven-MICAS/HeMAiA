@@ -19,11 +19,17 @@ import _usg_paths  # noqa: F401,E402  (registers util/sim/{common,gemm,xdma,ara}
 
 from xdma_ops_lib import run_op_workload  # noqa E402
 
-# Cycle-LUT sweep: rows x cols grid (elem=1) for the bilinear fit. Uses
-# array_shape=2 (mesh [16,8,16]) so tileSize=8 (%8==0) takes the HW path; the
-# A-operand shape is rows = M_T*meshRow = M_T*16, cols = K_T*tileSize = K_T*8.
-CONFIGS = [{"M_T": m, "K_T": k, "N_T": 1, "elem_bytes": 1, "array_shape": 2}
-           for m in (1, 2, 4) for k in (4, 8, 16)]   # rows 16..64, cols 32..128
+# Cycle-LUT sweep: an (M_T, K_T) tile grid per variant, for the bilinear fit. The mesh
+# comes from each config's array_shape, and the A-operand it converts has shape
+# rows = M_T*meshRow, cols = K_T*tileSize.
+# Sweep every RUNNABLE variant of this converter: 3 array shapes x 3 element widths
+# x 9 (tile) points = 81 configs.  Each (shape, width) pair is a DISTINCT kernel and a
+# DISTINCT LUT (xdma_<family>_e<N>_<SHAPE>), so one workload run fills 9 LUTs.
+# The grid is capped so the largest single buffer stays <= 64 KiB: the L1 src/dst pair is
+# shared across configs (xdma_ops_lib), but it is sized at the max over all of them.
+CONFIGS = [{"M_T": m, "K_T": k, "N_T": 1, "elem_bytes": eb, "array_shape": s}
+           for s in (0, 1, 2) for eb in (1, 2, 4)
+           for m in (1, 2, 4) for k in (4, 8, 16)]
 
 if __name__ == "__main__":
     run_op_workload("row_to_a", CONFIGS)

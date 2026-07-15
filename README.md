@@ -34,6 +34,18 @@ Then you can go to the folder where the HeMAiA repo is located at, and execute t
 make sw CFG_OVERRIDE=target/rtl/cfg/<YOUR_CFG>
 ```
 
+`make sw` builds the workloads in parallel by default (it is the one build target that is
+safe to run with `-j`; the RTL and simulator builds are not). The job count defaults to the
+host's core count — override it with `SW_JOBS`, or serialise with `SW_JOBS=1`:
+
+```bash
+make sw SW_JOBS=8 CFG_OVERRIDE=target/rtl/cfg/<YOUR_CFG>
+```
+
+A workload that overflows its linker script does not abort the build: its binary is skipped
+and the rest continue. The per-app result (OK / FAIL / SKIP, with the `ld` error for any
+failure) is written to `target/sw/tmp/sw_build_summary.txt`.
+
 Alternatively, you can compile a specific software workload with more precise control using `make single-sw`:
 
 ```bash
