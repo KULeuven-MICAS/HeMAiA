@@ -662,12 +662,13 @@ class HeMAiASimRunner:
     def build_hw_sw(self) -> None:
         """Build SW, bootrom, and RTL inside the container."""
         for target in ("sw", "bootrom", "rtl"):
-            cmd = ["make"]
+            cmd = ["make", target, f"CFG_OVERRIDE={self.effective_cfg}"]
             if self.build_jobs and target == "sw":
-                # Never inside a recipe: every recursion uses $(MAKE), so one top-level
-                # -jN hands the whole tree a single jobserver.
-                cmd.append(f"-j{self.build_jobs}")
-            cmd += [target, f"CFG_OVERRIDE={self.effective_cfg}"]
+                # `sw` parallelises through SW_JOBS: the Makefile applies -j to the sw
+                # sub-make only. Set that rather than a top-level -j, which would fight
+                # the sub-make's jobserver. bootrom/rtl are not -j-safe, so they stay
+                # serial.
+                cmd.append(f"SW_JOBS={self.build_jobs}")
             self._container(cmd)
 
     # -- Step 3: build apps and stage per-task directories -----------------

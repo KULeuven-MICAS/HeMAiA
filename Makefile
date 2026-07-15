@@ -87,8 +87,15 @@ ifeq ($(PERF_TRACING), 1)
     USER_FLAGS += -DBINGO_PERF_TRACING
 endif
 
+# `sw` is the one build that is safe to run in parallel (the RTL gen and the sim
+# compile are not), and it is the slow one, so it builds with -j by default. SW_JOBS
+# sets the job count -- defaults to the host's core count; SW_JOBS=1 serialises. The -j
+# is applied only to this sub-make, so it never leaks to a full `make` that also builds
+# RTL or the simulator.
+SW_JOBS ?= $(shell nproc 2>/dev/null || echo 8)
+
 sw: $(CFG)
-	$(MAKE) -C ./target/sw sw CFG=$(CFG) USER_FLAGS="$(USER_FLAGS)"
+	$(MAKE) -j$(SW_JOBS) -C ./target/sw sw CFG=$(CFG) USER_FLAGS="$(USER_FLAGS)"
 
 # Single SW compilation (by category and chip type for precise control)
 # - HOST_APP_TYPE: The category of the host application.
