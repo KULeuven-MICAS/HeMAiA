@@ -6,14 +6,18 @@
 
 # Workloads to build separate ELFs for
 APPS = gemm_msplit_4chiplet_1cluster
+APPS += gemm_msplit_4chiplet_2cluster_basic
+APPS += gemm_msplit_4chiplet_2cluster
 APPS += gemm_parallel_dma_4chiplet_1cluster
 APPS += gemm_ksplit_4chiplet_1cluster_basic
 APPS += gemm_ksplit_4chiplet_1cluster_xdma_add
 APPS += gemm_ksplit_4chiplet_1cluster_xdma_add_err_check
+APPS += gemm_ksplit_4chiplet_2cluster
 APPS += dma_for_gemm_msplit_4chiplet_1cluster
 APPS += host_int32_add_4chiplet_1cluster
 APPS += xdma_int32_add_4chiplet_1cluster
 APPS += dma_read_from_chip00_4chiplet_1cluster
+APPS += dma_read_from_chip00_4chiplet_2cluster
 APPS += dma_write_from_other_chip_4chiplet_1cluster
 APPS += dvfs_cross_trigger_4chiplet_1cluster
 

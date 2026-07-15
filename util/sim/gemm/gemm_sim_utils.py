@@ -560,10 +560,11 @@ def emit_ksplit_gemm_header_file(workload_name, **kwargs):
     K = kwargs["K"]
     N = kwargs["N"]
     k_split = kwargs["k_split"]
+    expected_k_split = kwargs.get("expected_k_split", 4)
     if k_split <= 0:
         raise ValueError(f"k_split ({k_split}) must be positive")
-    if k_split != 4:
-        raise ValueError(f"{workload_name} expects k_split=4, got {k_split}")
+    if k_split != expected_k_split:
+        raise ValueError(f"{workload_name} expects k_split={expected_k_split}, got {k_split}")
     if K % k_split != 0:
         raise ValueError(f"K ({K}) must be divisible by k_split ({k_split})")
 
