@@ -119,7 +119,9 @@ ENGINES: Dict[str, Dict] = {
         # this flag the simv that loses the race exits immediately ("Licensed
         # number of users already reached for VCS-BASE-RUNTIME") and is wrongly
         # reported as FAIL.  +vcs+lic+wait makes it queue for a seat instead.
-        "run_args": ["+vcs+lic+wait"],
+        # This testbench never uses $save/$restart.  Disabling that facility
+        # avoids VCS re-executing every simv under ASLR before time zero.
+        "run_args": ["+vcs+lic+wait", "-no_save"],
     },
     "vlt": {
         "tool": None,                    # Verilator builds in-container; no host tool

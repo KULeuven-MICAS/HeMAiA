@@ -126,8 +126,22 @@ endif
 
 VSIM_DO_CMD = run -a
 ifeq ($(SIM_WITH_WAVEFORM), 1)
-	VSIM_FLAGS += -voptargs=+acc
+	# Preserve broad signal visibility only in the explicitly requested debug
+	# build.  Keeping +acc out of batch builds lets vopt optimize the design.
+	VOPT_FLAGS += +acc
 	VSIM_DO_CMD = log -r /*; run -a
+endif
+
+# This flow does not annotate SDF: the gate-level netlist is a functional,
+# zero-delay simulation.  These switches let vopt discard the unused timing
+# structures.  Dead-cell elimination is reserved for non-waveform batches so
+# a debug build keeps every otherwise-unused object available for inspection.
+ifeq ($(SIM_WITH_NETLIST), 1)
+	VOPT_FLAGS += +nospecify
+	VOPT_FLAGS += -nosdf
+ifeq ($(SIM_WITH_WAVEFORM), 0)
+	VOPT_FLAGS += -dce
+endif
 endif
 
 VSIM_FLAGS += -t 1ps
@@ -152,9 +166,23 @@ VCS_FLAGS += +lint=TFIPC-L
 # Additional Optimizations
 VCS_FLAGS += -O4
 # Multi-threading compilation
-VCS_FLAGS += -j16
+VCS_COMPILE_JOBS ?= 16
+VCS_FLAGS += -j$(VCS_COMPILE_JOBS)
 # Debug Options
 VCS_FLAGS += -assert disable_cover
+
+# VCS documents these as compile-time runtime optimizers; -hsopt=gates is
+# specifically intended for functional and SDF gate-level designs.  None of
+# them enables Fine-Grained Parallelism at simulation time.
+ifeq ($(SIM_WITH_NETLIST), 1)
+	VCS_FLAGS += -hsopt=gates
+	VCS_FLAGS += -Xkeyopt=rtopt
+	VCS_FLAGS += +rad
+endif
+
+# Independent CI simulations provide the process-level parallelism.  Do not
+# add VCS -fgp or Questa -mc2 here: each batch simulation should remain
+# single-core-friendly when many jobs are launched concurrently.
 # Waveform Visibility
 # for looking at the cells
 # for looking at the waveform
@@ -164,7 +192,6 @@ ifeq ($(SIM_WITH_WAVEFORM), 1)
 	VLOGAN_FLAGS += -kdb
 	VHDLAN_FLAGS += -kdb
 	VCS_FLAGS += +vcs+fsdbon
-	VCS_FLAGS += -debug_access+f
 	VCS_FLAGS += -debug_access+all
 endif
 
