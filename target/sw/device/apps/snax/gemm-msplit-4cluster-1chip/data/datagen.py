@@ -766,6 +766,15 @@ def emit_matmul_data(**kwargs):
     data_str += [format_scalar_definition("int32_t", "delta_local_c", delta_local_c)]
     data_str += [format_scalar_definition("int32_t", "delta_local_d", delta_local_d)]
 
+    # The on-device result check stages the golden D-block (DMA'd back from the
+    # memory chip) in the A/B TCDM region freed after the compute, starting at
+    # delta_local_a. That region must be at least one D-block wide.
+    assert delta_local_d >= d_data_length, (
+        "golden D-block does not fit in the freed A/B TCDM region",
+        delta_local_d,
+        d_data_length,
+    )
+
     # -----------------------------------------------------------
     # Test Data generation
     # -----------------------------------------------------------
@@ -843,48 +852,9 @@ def emit_matmul_data(**kwargs):
         A = np.random.randint(A_MIN, A_MAX, size=(M_full, K, meshRow, tileSize)).reshape(
             -1
         )
-        if a_len == 4:
-            data_str += [
-                format_vector_definition(
-                    "int8_t", "A_orginal_4bits", A, hex_bits=8, cast_hex=True
-                )
-            ]
-            A_packed = pack_signed_nbit(A, bit_width=4, pack_per_byte=2)
-            data_str += [
-                format_vector_definition(
-                    "int8_t", "A", A_packed, hex_bits=8, cast_hex=True
-                )
-            ]
-        elif a_len == 8:
-            data_str += [
-                format_vector_definition("int8_t", "A", A, hex_bits=8, cast_hex=True)
-            ]
-        elif a_len == 16:
-            data_str += [
-                format_vector_definition("int16_t", "A", A, hex_bits=16, cast_hex=True)
-            ]
-        else:
-            raise ValueError("Invalid A data type")
-
         B = np.random.randint(B_MIN, B_MAX, size=(K, N, tileSize, meshCol)).reshape(-1)
-        if b_len == 4:
-            data_str += [
-                format_vector_definition(
-                    "int8_t", "B_orginal_4bits", B, hex_bits=8, cast_hex=True
-                )
-            ]
-            B_packed = pack_signed_nbit(B, bit_width=4, pack_per_byte=2)
-            data_str += [
-                format_vector_definition(
-                    "int8_t", "B", B_packed, hex_bits=8, cast_hex=True
-                )
-            ]
-        elif b_len == 8:
-            data_str += [
-                format_vector_definition("int8_t", "B", B, hex_bits=8, cast_hex=True)
-            ]
-        else:
-            raise ValueError("Invalid B data type")
+        # A/B are not baked into the device binary; the device DMAs them from the
+        # memory-chip image (A_mem/B_mem) assembled below.
 
         if enable_full_C == 1:
             C = np.random.randint(
@@ -894,9 +864,7 @@ def emit_matmul_data(**kwargs):
             C = np.random.randint(0, 1, size=(M_full, N, meshRow, meshCol)).reshape(-1)
 
         assert c_len == 32, "C data type must be 32 bits for now"
-        data_str += [
-            format_vector_definition("int32_t", "C", C, hex_bits=32, cast_hex=True)
-        ]
+        # C is not baked into the device binary (unused by this workload).
 
     # Snapshot the PRE-transpose A and B: these raw bytes are what the device
     # DMAs out of the memory chip, and the versacore transpose units re-apply
@@ -955,9 +923,8 @@ def emit_matmul_data(**kwargs):
             subtraction_b,
             C,
         )
-        data_str += [
-            format_vector_definition("int32_t", "D", D, hex_bits=32, cast_hex=True)
-        ]
+        # D (golden) is not baked into the device binary; it is written into the
+        # memory-chip image below and DMA'd back for the on-device result check.
 
     data_str += [format_scalar_definition("int32_t", "set_addr_remap_index_A", 0)]
     data_str += [format_scalar_definition("int32_t", "set_addr_remap_index_B", 0)]
@@ -977,30 +944,9 @@ def emit_matmul_data(**kwargs):
     data_str += [format_scalar_definition("int32_t", "input_zp_i", input_zp_i)]
     data_str += [format_scalar_definition("int32_t", "output_zp_i", output_zp_i)]
 
-    output_matrix = []
-
-    for data_element in D:
-        output_matrix.append(
-            # V3 Holds the approximation of the TOSA.Rescale operation.
-            # use V2 for the exact model
-            postprocessing_simd_golden_model_V3(
-                data_element,
-                input_zp_i,
-                output_zp_i,
-                shift_i,
-                max_in_range,
-                -max_in_range,
-                True,
-                multiplier,
-            )
-        )
-    output_matrix = np.array(output_matrix, dtype=np.uint8)
-
-    data_str += [
-        format_vector_definition(
-            "int8_t", "D_quantized", output_matrix, hex_bits=8, cast_hex=True
-        )
-    ]
+    # D_quantized / D_int32tofp16 reference outputs are intentionally NOT baked
+    # into the device binary; this workload's result check compares the int32 D
+    # golden fetched from the memory chip (see the mempool image below).
 
     # Int32 to FP16 conversion
     data_str += [
@@ -1013,25 +959,14 @@ def emit_matmul_data(**kwargs):
         kwargs["quantization_enable"] + kwargs["int32tofp16_enable"] <= 1
     ), "Only one of quantization and int32 to fp16 conversion can be enabled."
 
-    fp_output_matrix = []
-
-    for data_element in D:
-        fp_output_matrix.append(int32_to_fp16_golden(data_element))
-    fp_output_matrix = np.array(fp_output_matrix, dtype=np.uint16)
-
-    data_str += [
-        format_vector_definition(
-            "int16_t", "D_int32tofp16", fp_output_matrix, hex_bits=16, cast_hex=True
-        )
-    ]
-
     # -----------------------------------------------------------
     # Memory-chip image (mempool.bin) + layout offsets
     # -----------------------------------------------------------
     # The memory chip holds, in order: the shared B matrix, then the
-    # num_clusters A row-blocks, then a zeroed D region (one block per cluster).
-    # The device writes its computed D-block back here. Region starts are
-    # 64-byte aligned.
+    # num_clusters A row-blocks, then a zeroed compute-D region (one block per
+    # cluster, which the device fills with its computed output), then the golden
+    # D region (one block per cluster) the device DMAs back for the on-device
+    # result check. Region starts are 64-byte aligned.
     def _align64(value):
         return (int(value) + 63) // 64 * 64
 
@@ -1043,7 +978,8 @@ def emit_matmul_data(**kwargs):
     mem_off_B = 0
     mem_off_A_base = _align64(mem_off_B + b_total_bytes)
     mem_off_D_base = _align64(mem_off_A_base + num_clusters * a_block_bytes)
-    image_bytes = mem_off_D_base + num_clusters * d_block_bytes
+    mem_off_D_golden = _align64(mem_off_D_base + num_clusters * d_block_bytes)
+    image_bytes = mem_off_D_golden + num_clusters * d_block_bytes
 
     data_str += [
         format_scalar_definition("uint64_t", "mem_chip_local_base", mem_chip_local_base)
@@ -1051,19 +987,28 @@ def emit_matmul_data(**kwargs):
     data_str += [format_scalar_definition("uint32_t", "mem_off_B", mem_off_B)]
     data_str += [format_scalar_definition("uint32_t", "mem_off_A_base", mem_off_A_base)]
     data_str += [format_scalar_definition("uint32_t", "mem_off_D_base", mem_off_D_base)]
+    data_str += [
+        format_scalar_definition("uint32_t", "mem_off_D_golden", mem_off_D_golden)
+    ]
 
     b_image = B_mem.tobytes()
     a_image = A_mem.tobytes()
+    d_golden_image = np.asarray(D, dtype=np.int32).tobytes()
     assert len(b_image) == b_total_bytes, (len(b_image), b_total_bytes)
     assert len(a_image) == num_clusters * a_block_bytes, (
         len(a_image),
         num_clusters * a_block_bytes,
     )
+    assert len(d_golden_image) == num_clusters * d_block_bytes, (
+        len(d_golden_image),
+        num_clusters * d_block_bytes,
+    )
 
     image = bytearray(image_bytes)
     image[mem_off_B : mem_off_B + b_total_bytes] = b_image
     image[mem_off_A_base : mem_off_A_base + len(a_image)] = a_image
-    # The D region stays zero-initialised; the device fills it at run time.
+    image[mem_off_D_golden : mem_off_D_golden + len(d_golden_image)] = d_golden_image
+    # The compute-D region stays zero-initialised; the device fills it at run time.
 
     out_dir = pathlib.Path(kwargs.get("out_dir", os.path.dirname(__file__)))
     out_dir.mkdir(parents=True, exist_ok=True)
