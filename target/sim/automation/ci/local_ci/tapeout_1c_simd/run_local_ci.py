@@ -16,16 +16,15 @@ run directories, so the suites do not clobber each other:
     tapeout_2c/       hemaia_tapeout_2c.hjson        2x versacore 256KB
     tapeout_2c_simd/  hemaia_tapeout_2c_simd.hjson   2x versacore 256KB+SIMD
 
-The runner sets ``use_vendor_pll: false`` and a 16 MiB ``spm_wide`` in the cfg
-before building (see ``resolve_rtl_cfg``); the patched copy lands in
-``target/rtl/cfg/generated/``.
+The runner sets ``use_vendor_pll: false`` in the cfg before building (see
+``resolve_rtl_cfg``); the patched copy lands in ``target/rtl/cfg/generated/``.
+The suite builds against the cfg's own ``spm_wide`` (the tapeout's real 128 kiB).
 
 Defaults to the VCS engine with no waveform (fast batch runs); pass
 ``--engine vsim --waveform 1`` to reproduce a failing task under Questasim.
 
     python3 run_local_ci.py [-j JOBS] [-f task.yaml] [--cfg CFG] [--engine vcs|vsim]
                             [--waveform 0|1] [--no-d2d] [--no-macro]
-                            [--spm-wide-size BYTES]
 """
 
 from __future__ import annotations
@@ -45,10 +44,6 @@ from hemaia_sim_runner import (  # noqa: E402
 CI_CFG = "target/rtl/cfg/hemaia_tapeout_1c_simd.hjson"
 SIM_CFG = "target/sim/cfg/sim_rtl.hjson"
 DEFAULT_TASK_YAML = "task_local_ci.yaml"
-# The tapeout's real 128 kiB spm_wide is too small for parts of the SW tree
-# (a ~2 MiB .devicebin overflows WIDE_SPM at link time). Give the simulation a
-# 16 MiB scratchpad instead; pass --spm-wide-size 0 to run the real 128 kiB.
-DEFAULT_SPM_WIDE_SIZE = 16 * 1024 * 1024
 
 
 def parse_args() -> argparse.Namespace:
@@ -74,10 +69,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--macro", action=argparse.BooleanOptionalAction, default=True,
         help="init the tech_cells_tsmc16 private module (use --no-macro for the single-chip flow).")
-    parser.add_argument(
-        "--spm-wide-size", type=int, default=DEFAULT_SPM_WIDE_SIZE,
-        help="spm_wide.length in bytes, patched into the cfg (default: %(default)s = 16 MiB). "
-             "Pass 0 to keep the cfg's own value (the tapeout's real 128 kiB).")
     args = parser.parse_args()
     if args.max_sim_jobs < 1:
         parser.error("--max-sim-jobs must be >= 1")
@@ -101,7 +92,6 @@ def main() -> None:
         with_macro=args.macro,
         with_d2d=args.d2d,
         with_pll=False,
-        spm_wide_size=args.spm_wide_size or None,
         max_jobs=args.max_sim_jobs,
     )
     runner.run(parse_tasks(task_yaml))

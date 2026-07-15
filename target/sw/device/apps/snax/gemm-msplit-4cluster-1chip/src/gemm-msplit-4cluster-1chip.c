@@ -187,10 +187,26 @@ int main() {
 #if GEMM_MSPLIT_CHECK_RESULT
     // Check each cluster's D-block in parallel. Keep this silent so only the
     // summary prints below need serialization.
+    //
+    // The golden D lives on the memory chip (mem_off_D_golden), not baked into
+    // the device binary. The DM core DMAs this cluster's golden D-block into the
+    // TCDM region freed after the compute (the A/B staging area at
+    // delta_local_a, sized >= one D-block by the datagen), then core 0 compares
+    // it against the computed D-block.
+    uint64_t mem_d_golden = chiplet_addr_transform_loc(
+        MEM_CHIP_LOC_X, MEM_CHIP_LOC_Y,
+        (uint64_t)mem_chip_local_base + mem_off_D_golden +
+            (uint64_t)block * (uint32_t)d_data_length);
+    int8_t* golden = (int8_t*)(base + delta_local_a);
+    if (is_active_cluster && snrt_is_dm_core()) {
+        snrt_dma_start_1d_wideptr(
+            chiplet_addr_transform((uint64_t)(uintptr_t)golden), mem_d_golden,
+            d_data_length);
+        snrt_dma_wait_all();
+    }
+    snrt_cluster_hw_barrier();
     if (is_active_cluster && snrt_cluster_core_idx() == 0) {
         int8_t* output = (int8_t*)local_d;
-        int8_t* golden =
-            (int8_t*)((int32_t*)D + block * (M_block * N * meshRow * meshCol));
         for (int32_t i = 0; i < d_data_length; i++) {
             if (output[i] != golden[i]) {
                 err++;

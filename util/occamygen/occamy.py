@@ -160,8 +160,8 @@ def unify_xdma_max_mem_size(occamy_cfg, cluster_cfg_paths):
     # `open(path, "w")` would truncate the SAME shared cluster hjson concurrently --
     # while sibling processes (get_cluster_cfg_list / generate_snitch) are reading it.
     # A reader landing mid-write gets a truncated file and dies with a parse error that
-    # points at a config nobody edited. It fires exactly when spm_wide.length changes,
-    # i.e. the local-CI `spm_wide_size` path.
+    # points at a config nobody edited. It fires whenever a cfg field feeding the
+    # unified cluster hjson changes between runs.
     #
     # write-temp-then-os.replace makes each write atomic: every writer produces byte
     # -identical content, and a reader always sees either the whole old file or the whole

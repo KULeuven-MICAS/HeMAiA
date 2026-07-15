@@ -23,8 +23,6 @@ The flows differ only by parameters captured on :class:`HeMAiASimRunner`:
   * ``with_macro`` / ``with_d2d``   -- private vendor modules
   * ``with_pll``     -- the vendor PLL: selects the private clk/rst controller
     *and* sets ``use_vendor_pll`` in the RTL cfg (see :func:`resolve_rtl_cfg`)
-  * ``spm_wide_size``-- sets ``spm_wide.length`` in the RTL cfg, sizing the
-    ``WIDE_SPM`` region a simulation gets
 
 The ``engine`` is reduced to a small lookup (:data:`ENGINES`) of the make
 targets and artefacts that differ between the simulators; everything else is
@@ -148,12 +146,11 @@ def resolve_rtl_cfg(
     cfg: str,
     *,
     with_pll: bool,
-    spm_wide_size: Optional[int] = None,
 ) -> str:
     """Return the repo-relative RTL cfg to pass as ``CFG_OVERRIDE``.
 
-    A flow names a tapeout cfg and states the two fields a simulation may need to
-    differ on; this reconciles them:
+    A flow names a tapeout cfg and states the ``with_pll`` field a simulation may
+    need to differ on; this reconciles it:
 
     * ``with_pll`` is the single source of truth for the vendor PLL.  It selects
       the private clk/rst controller in ``Bender.local``, and it must agree with
@@ -161,10 +158,6 @@ def resolve_rtl_cfg(
       ``hemaia_clk_rst_controller`` unconditionally, so a cfg claiming
       ``use_vendor_pll: true`` under ``with_pll=False`` elaborates the *public*
       module with ``USE_VENDOR_PLL(1)``.
-    * ``spm_wide_size`` (bytes, ``None`` = leave the cfg alone) sets
-      ``spm_wide.length``, i.e. the ``WIDE_SPM`` region in ``host.ld``.  128 kiB
-      is too small for parts of the SW tree -- a 2 MiB ``.devicebin`` and the gemm
-      sweep's ``D_cfg`` tables overflow it at link time.
 
     A cfg that already matches on every requested field is returned untouched; a
     patched copy is only written when something actually differs, so flows that
@@ -178,9 +171,6 @@ def resolve_rtl_cfg(
     if bool(cfg_dict.get("use_vendor_pll", False)) != with_pll:
         cfg_dict["use_vendor_pll"] = with_pll
         suffixes.append("pll" if with_pll else "nopll")
-    if spm_wide_size is not None and cfg_dict["spm_wide"]["length"] != spm_wide_size:
-        cfg_dict["spm_wide"]["length"] = spm_wide_size
-        suffixes.append(f"spm{spm_wide_size // 1024}k")
 
     if not suffixes:
         return cfg
@@ -567,7 +557,6 @@ class HeMAiASimRunner:
         with_macro: bool,
         with_d2d: bool,
         with_pll: bool,
-        spm_wide_size: Optional[int] = None,
         max_jobs: int = DEFAULT_MAX_SIM_JOBS,
         docker_image: str = DEFAULT_DOCKER_IMAGE,
         in_container: bool = False,
@@ -587,14 +576,12 @@ class HeMAiASimRunner:
         self.cfg = cfg              # repo-relative RTL cfg as requested
         # The cfg actually handed to make as CFG_OVERRIDE.  ``run()`` re-resolves
         # it through resolve_rtl_cfg(), which derives a patched copy when the cfg
-        # disagrees with ``with_pll`` / ``spm_wide_size``.
+        # disagrees with ``with_pll``.
         self.effective_cfg = cfg
         self.sim_cfg = sim_cfg      # repo-relative sim cfg
         self.with_macro = with_macro
         self.with_d2d = with_d2d
         self.with_pll = with_pll
-        # spm_wide.length (bytes) to patch into the cfg; None = keep the cfg's own.
-        self.spm_wide_size = spm_wide_size
         self.max_jobs = max_jobs
         self.docker_image = docker_image
         # Optional flow switches (e.g. the git CI runs inside the build container
@@ -896,9 +883,7 @@ class HeMAiASimRunner:
         self.cleanup_stale_task_dirs()
 
         print(f"Engine: {self.engine}  waveform: {self.waveform}  cfg: {self.cfg}")
-        spm = "cfg" if self.spm_wide_size is None else f"{self.spm_wide_size // 1024} kiB"
-        print(f"  (macro={self.with_macro}, d2d={self.with_d2d}, pll={self.with_pll}, "
-              f"spm_wide={spm})")
+        print(f"  (macro={self.with_macro}, d2d={self.with_d2d}, pll={self.with_pll})")
 
         if self.skip_setup:
             print("[Step 1] Skipping reset/init (skip_setup)")
@@ -909,8 +894,7 @@ class HeMAiASimRunner:
         # Must run after Step 1: reset_and_init() calls ``make clean``, which wipes
         # the generated-cfg directory.
         self.effective_cfg = resolve_rtl_cfg(
-            self.repo_root, self.cfg,
-            with_pll=self.with_pll, spm_wide_size=self.spm_wide_size)
+            self.repo_root, self.cfg, with_pll=self.with_pll)
 
         if self.skip_build:
             print("[Step 2] Skipping SW/bootrom/RTL build (skip_build)")
