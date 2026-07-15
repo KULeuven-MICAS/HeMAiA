@@ -14,3 +14,24 @@ runs:
     CHIP_TYPE: single_chip
     WORKLOAD: dummy_2cluster
     DEV_APP: snax-bingo-offload
+  # ---- offload_bingo_hw / multi_chip ----
+  # gemm_msplit_4chiplet_2cluster_basic
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: multi_chip
+    WORKLOAD: gemm_msplit_4chiplet_2cluster_basic
+    DEV_APP: snax-bingo-offload
+  # gemm_msplit_4chiplet_2cluster
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: multi_chip
+    WORKLOAD: gemm_msplit_4chiplet_2cluster
+    DEV_APP: snax-bingo-offload
+  # gemm_ksplit_4chiplet_2cluster
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: multi_chip
+    WORKLOAD: gemm_ksplit_4chiplet_2cluster
+    DEV_APP: snax-bingo-offload
+  # dma_read_from_chip00_4chiplet_2cluster
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: multi_chip
+    WORKLOAD: dma_read_from_chip00_4chiplet_2cluster
+    DEV_APP: snax-bingo-offload
