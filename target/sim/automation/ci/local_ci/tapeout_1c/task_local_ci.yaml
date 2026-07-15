@@ -1,8 +1,8 @@
-# Notice the apps here are for the HEMAIA TO CFG only
-# With 4chpilets and 1cluster per chiplet
-# It can run both the single_chip and multi_chip workloads
-# In the single_chip workloads, the other 3 chiplets will exit after the init since it has no work to do
-# The multi_chip workloads will run on all 4 chiplets
+# Tasks for the HEMAIA TO 1C CFG only (hemaia_tapeout_1c.hjson).
+# 4 chiplets, 1x snax_versacore_to_cluster per chiplet.
+# It can run both single-chip and multi-chip workloads. For single-chip
+# workloads, the other three chiplets exit after initialization because they
+# have no work; multi-chip workloads run on all four chiplets.
 
 runs:
   # ---- host_only / single_chip ----

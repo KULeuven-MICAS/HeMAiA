@@ -26,14 +26,14 @@ The supported profiles reuse main's categorized local-CI task lists directly:
 
 | `--hardware` | Tapeout cfg | Categorized suite | Tasks |
 | --- | --- | --- | ---: |
-| `1c` | `hemaia_tapeout.hjson` | `local_ci/tapeout` | 36 |
-| `1c_simd` | `hemaia_tapeout_1c_simd.hjson` | `local_ci/tapeout_1c_simd` | 5 |
+| `1c` | `hemaia_tapeout_1c.hjson` | `local_ci/tapeout_1c` | 36 |
+| `1c_simd` | `hemaia_tapeout_1c_simd.hjson` | `local_ci/tapeout_1c_simd` | 41 |
 | `2c` | `hemaia_tapeout_2c.hjson` | `local_ci/tapeout_2c` | 6 |
-| `2c_simd` | `hemaia_tapeout_2c_simd.hjson` | `local_ci/tapeout_2c_simd` | 1 |
+| `2c_simd` | `hemaia_tapeout_2c_simd.hjson` | `local_ci/tapeout_2c_simd` | 7 |
 
-The historical plain `hemaia_tapeout.hjson` is the `1c` profile. Netlist CI
-does not maintain separate task YAML copies, so changes to main's categorized
-suites automatically reach their matching netlist profiles.
+Each cfg has an explicitly named local-CI suite. Netlist CI does not maintain
+separate task YAML copies, so changes to main's categorized suites automatically
+reach their matching netlist profiles.
 
 The task directories and preparation manifest share this directory as one
 active handoff. Preparing any hardware profile replaces the previous one;

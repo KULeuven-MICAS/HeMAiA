@@ -41,8 +41,8 @@ class HardwareProfile:
 
 HARDWARE_PROFILES = {
     "1c": HardwareProfile(
-        cfg="target/rtl/cfg/hemaia_tapeout.hjson",
-        task_yaml="target/sim/automation/ci/local_ci/tapeout/task_local_ci.yaml",
+        cfg="target/rtl/cfg/hemaia_tapeout_1c.hjson",
+        task_yaml="target/sim/automation/ci/local_ci/tapeout_1c/task_local_ci.yaml",
         clusters=("snax_versacore_to_cluster",),
     ),
     "1c_simd": HardwareProfile(

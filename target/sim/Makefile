@@ -45,7 +45,7 @@ help:
 	@echo "  clean                         remove every build/ and bin/ artefact"
 	@echo
 	@echo "Most users go through target/sim/automation instead:"
-	@echo "  make -C ../sim/automation local-ci SUITE=tapeout"
+	@echo "  make -C ../sim/automation local-ci SUITE=tapeout_1c"
 
 ############
 # Makefrag #

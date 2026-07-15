@@ -201,7 +201,7 @@ Due to limitations on FPGA IO available through FMC, only one d2d link can be ac
 Note: Make sure bender knows the correct repo of the d2d link. 
 ```bash
 # Execute these in podman container
-CFG=target/rtl/cfg/hemaia_tapeout.hjson
+CFG=target/rtl/cfg/hemaia_tapeout_1c.hjson
 
 make sw CFG_OVERRIDE=$CFG
 make bootrom CFG_OVERRIDE=$CFG

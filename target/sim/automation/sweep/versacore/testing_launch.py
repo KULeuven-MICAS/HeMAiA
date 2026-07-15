@@ -16,7 +16,7 @@ from typing import Dict, Iterator, Optional
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parents[4]
 
-CFG_NAME = "hemaia_tapeout.hjson"
+CFG_NAME = "hemaia_tapeout_1c.hjson"
 SIM_CFG_NAME = "sim_rtl.hjson"
 # The vendor PLL: gates the private clk/rst controller *and* ``use_vendor_pll``
 # in the RTL cfg. Keep it in step with SIM_CFG_NAME (sim_rtl_with_pll.hjson).

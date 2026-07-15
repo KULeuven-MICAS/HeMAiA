@@ -1,14 +1,46 @@
 # Tasks for the HEMAIA TO 2C_SIMD CFG only (hemaia_tapeout_2c_simd.hjson).
 # 4 chiplets, 2x snax_versacore_to_256KB_simd_cluster per chiplet.
 #
-# Only 2-cluster workloads belong in this list: guard_cluster_count() rejects a
-# workload whose params.hjson `num_clusters` differs from the cfg's cluster
-# count, and the app then fails to link.
-#
-# dummy_simd_2cluster is a placeholder that exercises the boot + bingo DFG path.
+# The SIMD clusters contain the base GEMM cores and all other 2C functionality,
+# so this suite runs every task from tapeout_2c first. The SIMD-specific dummy
+# task is appended after the six base tasks.
 
 runs:
   # ---- offload_bingo_hw / single_chip ----
+  # dummy_2cluster
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: single_chip
+    WORKLOAD: dummy_2cluster
+    DEV_APP: snax-bingo-offload
+  # ---- offload_bingo_hw / multi_chip ----
+  # gemm_msplit_4chiplet_2cluster_basic
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: multi_chip
+    WORKLOAD: gemm_msplit_4chiplet_2cluster_basic
+    DEV_APP: snax-bingo-offload
+  # gemm_msplit_4chiplet_2cluster
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: multi_chip
+    WORKLOAD: gemm_msplit_4chiplet_2cluster
+    DEV_APP: snax-bingo-offload
+  # gemm_ksplit_4chiplet_2cluster
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: multi_chip
+    WORKLOAD: gemm_ksplit_4chiplet_2cluster
+    DEV_APP: snax-bingo-offload
+  # dma_read_from_chip00_4chiplet_2cluster
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: multi_chip
+    WORKLOAD: dma_read_from_chip00_4chiplet_2cluster
+    DEV_APP: snax-bingo-offload
+  # ---- offload_legacy / single_chip ----
+  # versacore-matmul-profile-2cluster-4chip
+  - HOST_APP_TYPE: offload_legacy
+    CHIP_TYPE: single_chip
+    WORKLOAD: None
+    DEV_APP: versacore-matmul-profile-2cluster-4chip
+
+  # ---- SIMD-only offload_bingo_hw / single_chip ----
   # dummy_simd_2cluster
   - HOST_APP_TYPE: offload_bingo_hw
     CHIP_TYPE: single_chip

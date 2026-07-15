@@ -23,7 +23,7 @@ Run any batch flow through the Makefile (`JOBS` overrides the parallel-sim count
 source /users/micas/fkong/no_backup/src_hemaia_eda.sh   # EDA env, see note below
 
 cd HeMAiA/target/sim/automation
-make local-ci   JOBS=8                    # host VCS regression, SUITE=tapeout
+make local-ci   JOBS=8                    # host VCS regression, SUITE=tapeout_1c
 make local-ci   SUITE=tapeout_2c JOBS=8   # …a different tapeout cfg
 make git-ci                               # Verilator regression (in the hemaia container)
 make sweep-xdma                           # xDMA op-cost LUT sweep
@@ -79,8 +79,8 @@ flags, the cfg/sim_cfg, and the workload knobs.
 | Script                              | RTL cfg                                | Sim cfg                  | Vendor repos pulled                                |
 | ----------------------------------- | -------------------------------------- | ------------------------ | -------------------------------------------------- |
 | `test/0_start_single_chiplet_sim.py`| `hemaia_singlechiplet_1cluster.hjson`  | `sim_rtl.hjson`          | none (open-source `tech_cells_generic` only)       |
-| `test/1_start_multi_chiplet_sim.py` | `hemaia_tapeout.hjson` (PLL off)       | `sim_rtl.hjson`          | `tech_cells_tsmc16`, `hemaia_d2d_link`             |
-| `test/2_start_tapeout_sim.py`       | `hemaia_tapeout.hjson`                 | `sim_rtl_with_pll.hjson` | `tech_cells_tsmc16`, `hemaia_d2d_link`, `hemaia_clk_rst_controller` |
+| `test/1_start_multi_chiplet_sim.py` | `hemaia_tapeout_1c.hjson` (PLL off)    | `sim_rtl.hjson`          | `tech_cells_tsmc16`, `hemaia_d2d_link`             |
+| `test/2_start_tapeout_sim.py`       | `hemaia_tapeout_1c.hjson`              | `sim_rtl_with_pll.hjson` | `tech_cells_tsmc16`, `hemaia_d2d_link`, `hemaia_clk_rst_controller` |
 
 The vendor-repo selection mirrors the `--macro / --d2d / --pll` flags of
 [`../../tapeout/1_git_pull_private_modules.sh`](../../tapeout/1_git_pull_private_modules.sh):
@@ -91,10 +91,10 @@ The vendor-repo selection mirrors the `--macro / --d2d / --pll` flags of
 * **`1` — multi-chiplet (no PLL).** 2×2 compute + 1 memory chip on the
   virtual interposer. Pulls the TSMC16 macros and the D2D link, but keeps
   the open-source clock/reset controller. It runs the *same*
-  `hemaia_tapeout.hjson` as flow `2`, so the PLL is the only delta — a good
+  `hemaia_tapeout_1c.hjson` as flow `2`, so the PLL is the only delta — a good
   intermediate stop before enabling it. Simulation time: ~15–40 min.
 * **`2` — full tapeout.** Same multi-chiplet setup as flow `1` plus the
-  vendor PLL controller (`use_vendor_pll: true` in `hemaia_tapeout.hjson`,
+  vendor PLL controller (`use_vendor_pll: true` in `hemaia_tapeout_1c.hjson`,
   `sim_with_pll: true` in `sim_rtl_with_pll.hjson`). Pulls all three
   private repos. Simulation time: >2 h.
 
@@ -139,10 +139,10 @@ clobber one another:
 
 | Suite dir         | RTL cfg                        | Clusters / chiplet                    | Tasks |
 | ----------------- | ------------------------------ | ------------------------------------- | ----- |
-| `tapeout/`        | `hemaia_tapeout.hjson`         | 1x `snax_versacore_to_cluster`         | the full 36-task suite |
-| `tapeout_1c_simd/`| `hemaia_tapeout_1c_simd.hjson` | 1x `snax_versacore_to_simd_cluster`    | the 5 `xdma_*` per-op workloads |
-| `tapeout_2c/`     | `hemaia_tapeout_2c.hjson`      | 2x `snax_versacore_to_256KB_cluster`   | `dummy_2cluster` (placeholder) |
-| `tapeout_2c_simd/`| `hemaia_tapeout_2c_simd.hjson` | 2x `..._256KB_simd_cluster`            | `dummy_simd_2cluster` (placeholder) |
+| `tapeout_1c/`     | `hemaia_tapeout_1c.hjson`      | 1x `snax_versacore_to_cluster`         | the full 36-task suite |
+| `tapeout_1c_simd/`| `hemaia_tapeout_1c_simd.hjson` | 1x `snax_versacore_to_simd_cluster`    | 36 base tasks + 5 SIMD `xdma_*` tasks |
+| `tapeout_2c/`     | `hemaia_tapeout_2c.hjson`      | 2x `snax_versacore_to_256KB_cluster`   | the full 6-task 2-cluster suite |
+| `tapeout_2c_simd/`| `hemaia_tapeout_2c_simd.hjson` | 2x `..._256KB_simd_cluster`            | 6 base tasks + `dummy_simd_2cluster` |
 
     cd ci/local_ci/tapeout_2c && python3 run_local_ci.py -j 8
 
