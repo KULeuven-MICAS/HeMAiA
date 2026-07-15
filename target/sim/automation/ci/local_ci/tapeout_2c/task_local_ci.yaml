@@ -35,3 +35,9 @@ runs:
     CHIP_TYPE: multi_chip
     WORKLOAD: dma_read_from_chip00_4chiplet_2cluster
     DEV_APP: snax-bingo-offload
+  # ---- offload_legacy / single_chip ----
+  # versacore-matmul-profile-2cluster-4chip
+  - HOST_APP_TYPE: offload_legacy
+    CHIP_TYPE: single_chip
+    WORKLOAD: None
+    DEV_APP: versacore-matmul-profile-2cluster-4chip
