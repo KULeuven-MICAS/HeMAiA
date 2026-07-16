@@ -68,3 +68,15 @@ runs:
     CHIP_TYPE: single_chip
     WORKLOAD: xdma_elementwise_add_1cluster
     DEV_APP: snax-bingo-offload
+
+  # ---- fused SIMD kernels: whole-kernel cost, rows x cols (bilinear fit) ----
+  # Multi-pass fused ops (variable passes/config) -> cost = MGR_RUN_KERNEL span, not a pass.
+  # gather_xdma_luts.py handles these via SIMD_OP_SPEC (the f16 invocation of each config).
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: single_chip
+    WORKLOAD: xdma_softmax_1cluster
+    DEV_APP: snax-bingo-offload
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: single_chip
+    WORKLOAD: xdma_rmsnorm_1cluster
+    DEV_APP: snax-bingo-offload

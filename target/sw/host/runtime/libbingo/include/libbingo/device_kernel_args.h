@@ -585,10 +585,40 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_rope_args {
   uint32_t sin_addr_lo;
   uint32_t out_addr_hi;      // output, same shape
   uint32_t out_addr_lo;
-  uint32_t beats;            // D = beats*32 fp16 elements per row
+  uint32_t cols;             // per-row fp16 length D (a multiple of 32)
   uint32_t rows;             // rows / token positions
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_xdma_rope_args_t;
+
+// Whole FP16 softmax in one DM-core kernel: reduce-MAX, device negate (fp16 sign
+// flip), broadcast, sub-max, merged EXP+Sexp, integer reciprocal (rv32iM divu),
+// broadcast, normalize-MUL, and an optional fused FP16->INT8 quant leaf. The host
+// is left with only Load / Store / Check. The user gives just the tensors and shape;
+// the kernel derives everything else (beats = cols/32, and the int8 quant scale --
+// softmax output is in [0,1], so a fixed 127.0 needs no user input).
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_softmax_args {
+  uint32_t input_addr_hi;        // input x, fp16 [rows, cols], packed
+  uint32_t input_addr_lo;
+  uint32_t output_addr_hi;       // fp16 softmax(x), [rows, cols], packed
+  uint32_t output_addr_lo;
+  uint32_t rows;                 // independent softmax rows
+  uint32_t cols;                 // per-row fp16 length D (a multiple of 32)
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_xdma_softmax_args_t;
+
+// Whole FP16 rmsnorm in one DM-core kernel: reduce-SUMSQ, integer 1/sqrt(Sxx/N) (no FPU),
+// broadcast, normalize-MUL, and an optional fused FP16->INT8 quant leaf. Same shape/args as
+// softmax; the kernel derives beats = cols/32 and the int8 scale (a fixed 64.0). N = cols is
+// taken to be a power of two.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_rmsnorm_args {
+  uint32_t input_addr_hi;        // input x, fp16 [rows, cols], packed
+  uint32_t input_addr_lo;
+  uint32_t output_addr_hi;       // fp16 rmsnorm(x), [rows, cols], packed
+  uint32_t output_addr_lo;
+  uint32_t rows;                 // independent rmsnorm rows
+  uint32_t cols;                 // per-row fp16 length D (a power-of-two multiple of 32)
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_xdma_rmsnorm_args_t;
 
 // ──────────────────────────────────────────────────────────────────────
 // VersaCore blocked-layout conversion kernels

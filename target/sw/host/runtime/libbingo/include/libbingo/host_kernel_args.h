@@ -30,6 +30,10 @@ __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_entry_args {
 // and softmax (Cephes exp) feed int8 requants whose 1-LSB rounding differs from an fp32 golden by
 // a magnitude-proportional amount, so a fixed abs-tol is unusable on large GEMM outputs (~1000s).
 #define BINGO_CHECK_TYPE_FP16_RELTOL 3
+// signed-int8 ABSOLUTE tolerance: pass when |out-golden| <= tol (LSBs). int8 = quantize(fp16);
+// a 1-ULP fp16 difference (HW exp/rsqrt vs a numpy golden) flips +-1 int8 LSB at rounding
+// boundaries, so byte-exact is too strict for a quantized activation. tolerance (fp32) -> int LSB.
+#define BINGO_CHECK_TYPE_INT8_TOL 4
 
 // Precision selector for the runtime-typed Ara kernels (__host_bingo_kernel_<op>
 // dispatchers in host_kernel_lib.h). Passed as a plain arg word; the typed
