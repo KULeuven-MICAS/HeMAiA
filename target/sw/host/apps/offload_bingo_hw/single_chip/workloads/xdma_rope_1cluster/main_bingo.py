@@ -58,12 +58,12 @@ CHECK_FP16_TOL = 2
 ROPE_BASE = 10000.0
 ROPE_POS = 1
 
-# (rows, beats); D = cols = beats*32. Each row is a distinct token position (ROPE_POS + r), so
-# cos/sin/xswap are per-row [rows, D] tables. A rows x cols grid for the fused-kernel cost LUT
-# (bilinear, keyed [rows, cols]): rows {1,2,4,8} x cols {64,128,256}, so the bilinear cols slope
-# de-confounds from the rows==1 fast-path drop.
+# (rows, cols); D = cols. Each row is a distinct token position (ROPE_POS + r), so cos/sin/xswap
+# are per-row [rows, D] tables. A rows x cols grid for the fused-kernel cost LUT (bilinear, keyed
+# [rows, cols]): rows {1,2,4,8} x cols {64,128,256}, so the bilinear cols slope de-confounds from
+# the rows==1 fast-path drop.
 _LUT_GRID = [(r, c) for r in (1, 2, 4, 8) for c in (64, 128, 256)]
-CONFIGS = [{"rows": r, "beats": c // 32} for (r, c) in _LUT_GRID]
+CONFIGS = [{"rows": r, "cols": c} for (r, c) in _LUT_GRID]
 
 
 def _rope_row(rng, D, pos):
@@ -89,8 +89,8 @@ def _rope_row(rng, D, pos):
     return x, cos_full, xswap, sin_signed, out
 
 
-def _rope_ref(rows, beats, i):
-    D = beats * 32
+def _rope_ref(rows, cols, i):
+    D = cols
     rng = np.random.RandomState(3500 + i)
     cols = [[], [], [], [], []]
     for r in range(rows):
@@ -118,7 +118,7 @@ class G:
 def gen_data(i):
     # xswap is computed on-device by the kernel, so it is NOT emitted; _rope_ref
     # still builds it internally for the golden.
-    x, cos_full, _xswap, sin_signed, out = _rope_ref(CONFIGS[i]["rows"], CONFIGS[i]["beats"], i)
+    x, cos_full, _xswap, sin_signed, out = _rope_ref(CONFIGS[i]["rows"], CONFIGS[i]["cols"], i)
     return [format_vector_definition("uint16_t", f"x_{i}", x.view(np.uint16)),
             format_vector_definition("uint16_t", f"cos_{i}", cos_full.view(np.uint16)),
             format_vector_definition("uint16_t", f"sin_{i}", sin_signed.view(np.uint16)),
@@ -127,10 +127,9 @@ def gen_data(i):
 
 def build_config(g, i, prev):
     rows  = CONFIGS[i]["rows"]
-    beats = CONFIGS[i]["beats"]
-    D     = beats * 32                 # per-row fp16 length (cols)
-    n     = rows * beats * 32          # total fp16 elements
-    tot_b = rows * beats * 64          # [rows, D] fp16 bytes
+    D     = CONFIGS[i]["cols"]         # per-row fp16 length (cols)
+    n     = rows * D                   # total fp16 elements
+    tot_b = rows * D * 2               # [rows, D] fp16 bytes
     # Only the real I/O lives in the DFG; the kernel mallocs xswap/tmp1/tmp2 itself.
     l1_x   = g.l1(f"rp_x_{i}", tot_b)
     l1_cos = g.l1(f"rp_cos_{i}", tot_b)

@@ -5,7 +5,7 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 #
 # xDMA FP16 SOFTMAX — multi-row, ONE fused all-device kernel.
-# out[r,:] = softmax(x[r,:]) over [rows, D] tiles (D = beats*32). The whole pipeline runs in a
+# out[r,:] = softmax(x[r,:]) over [rows, D] tiles (D = cols). The whole pipeline runs in a
 # single DM-core kernel; the host only loads the input, stores the output, and checks it.
 #
 #   Load x[rows,D] (iDMA L3->L1)
@@ -65,16 +65,16 @@ CHECK_INT8_TOL = 4      # int8 output: +-1 LSB tol (softmax exp is a HW LUT != n
                         # would spuriously fail and abort the sweep; +-1 is the correct budget)
 
 
-# (rows, beats); D = cols = beats*32. A rows x cols grid for the fused-kernel cost LUT
-# (bilinear fit): rows {1,2,4,8} x cols {64,128,256} -- cols now varies at EVERY row, so the
-# cols slope de-confounds from the rows==1 fast-path drop (the old 4-point grid could not).
+# (rows, cols); each row is a length-cols tile (cols a multiple of 32). A rows x cols grid for the
+# fused-kernel cost LUT (bilinear fit): rows {1,2,4,8} x cols {64,128,256} -- cols varies at EVERY
+# row so the cols slope de-confounds from the rows==1 fast-path drop.
 _LUT_GRID = [(r, c) for r in (1, 2, 4, 8) for c in (64, 128, 256)]
-CONFIGS = [{"rows": r, "beats": c // 32} for (r, c) in _LUT_GRID]
+CONFIGS = [{"rows": r, "cols": c} for (r, c) in _LUT_GRID]
 
 
 # ----- deterministic peaky softmax reference (mirrors the HW fp16 datapath) -----
-def _softmax_ref(rows, beats, i):
-    D = beats * 32
+def _softmax_ref(rows, cols, i):
+    D = cols
     rng = np.random.RandomState(20240601 + i)
     x_rows, y_rows = [], []
     for r in range(rows):
@@ -112,7 +112,7 @@ class G:
 
 
 def gen_data(i):
-    x, y = _softmax_ref(CONFIGS[i]["rows"], CONFIGS[i]["beats"], i)
+    x, y = _softmax_ref(CONFIGS[i]["rows"], CONFIGS[i]["cols"], i)
     # int8 golden = quantize(softmax) at the kernel's baked 127.0 scale (softmax out in [0,1]).
     yq = np.clip(np.rint(y.astype(np.float32) * 127.0), -128, 127).astype(np.int8)
     return [format_vector_definition("uint16_t", f"in_{i}", x.view(np.uint16)),
@@ -122,10 +122,9 @@ def gen_data(i):
 
 def build_config(g, i, prev):
     rows  = CONFIGS[i]["rows"]
-    beats = CONFIGS[i]["beats"]
-    D     = beats * 32                 # per-row length (cols)
+    D     = CONFIGS[i]["cols"]         # per-row length (cols)
     n     = rows * D                   # total elements
-    tot_b = rows * beats * 64          # [rows, D] fp16 bytes (packed)
+    tot_b = rows * D * 2               # [rows, D] fp16 bytes (packed)
 
     # One fused kernel runs the whole softmax on the DM core; the host only loads the input,
     # stores the output, and checks it. The precision is picked by KERNEL NAME (f16_f16 /

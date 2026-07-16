@@ -94,6 +94,12 @@ SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
     // Whole FP16 rmsnorm fused into one DM-core kernel (integer sqrt + reciprocal).
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_rmsnorm_f16_f16),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_rmsnorm_f16_i8),
+    // Whole FP16 silu / swiglu fused into one DM-core kernel (StreamMap / StreamMap+Elementwise).
+    // Precision picked by name: fp16 out, or int8 out (fused Fp16ToInt8, baked 16.0 scale).
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_silu_f16_f16),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_silu_f16_i8),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_swiglu_f16_f16),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_swiglu_f16_i8),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_d_to_row_major_e1_M32N32),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_d_to_row_major_e2_M32N32),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_d_to_row_major_e4_M32N32),

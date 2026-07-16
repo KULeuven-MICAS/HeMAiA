@@ -225,12 +225,12 @@ def gather_simd_one(workload, idx, ci_dir, drop_warmup=True, verbose=True):
         key_mode = spec[3] if len(spec) > 3 else "rows_cols"
         if key_mode == "n":
             params = ["n"]
-            points = [{"n": cfg["rows"] * cfg["beats"] * 32,
+            points = [{"n": cfg["rows"] * cfg["cols"],
                        "cycles": cycles[ci * kpc + si]} for ci, cfg in enumerate(configs)]
             desc = lambda pt: f"n={pt['n']}, cycles={pt['cycles']}"
         else:
             params = ["rows", "cols"]
-            points = [{"rows": cfg["rows"], "cols": cfg["beats"] * 32,
+            points = [{"rows": cfg["rows"], "cols": cfg["cols"],
                        "cycles": cycles[ci * kpc + si]} for ci, cfg in enumerate(configs)]
             desc = lambda pt: f"rows={pt['rows']}, cols={pt['cols']}, cycles={pt['cycles']}"
         print(f"task_{idx} {workload}: {op_name}: {len(points)} points")

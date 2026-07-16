@@ -1553,6 +1553,168 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_rmsnorm_f16_i8(void *arg) {
     return __snax_bingo_kernel_xdma_rmsnorm(arg, XDMA_OUT_I8);
 }
 
+// Single StreamMap out = func(a*x + b) over the first rows*beats flat beats, optional fused
+// Fp16ToInt8 (out_dtype=1, dst packs 2:1). Mirrors __snax_bingo_kernel_xdma_stream_map's body
+// (the flat {beat, 1} shape via xdma_stream_launch, which handles external L1 src/dst), just
+// factored out so the fused silu / swiglu kernels can call it directly.
+static inline uint32_t xdma_stream_map1(uint64_t src, uint64_t dst, uint32_t rows, uint32_t beats,
+                                        uint32_t a_bits, uint32_t b_bits, uint32_t func,
+                                        uint32_t out_dtype, uint32_t inv_scale)
+{
+    uint32_t flat = rows * beats;
+    uint32_t src_str[2] = { XDMA_WIDTH, flat * XDMA_WIDTH };
+    uint32_t src_bnd[2] = { flat, 1 };
+    uint32_t csr_map[3] = { a_bits, b_bits, func };
+    xdma_enable_src_ext(READER_EXT_STREAMMAP, csr_map);
+    if (out_dtype == 1u) { uint32_t csr_q[1] = { inv_scale }; xdma_enable_src_ext(READER_EXT_FP16TOINT8, csr_q); }
+    uint32_t dst_bound0 = (out_dtype == 1u) ? (flat / 2u) : flat;
+    uint32_t rc = xdma_stream_launch(src, dst, src_str, src_bnd, 2u, dst_bound0, 0u /*full*/);
+    if (out_dtype == 1u) xdma_disable_src_ext(READER_EXT_FP16TOINT8);
+    xdma_disable_src_ext(READER_EXT_STREAMMAP);
+    return rc;
+}
+
+// Fp16ToInt8 scale for the silu / swiglu int8 output (their range is wider than softmax's [0,1]).
+#define BINGO_SILU_INT8_SCALE 0x41800000u   // 16.0f
+
+// ==========================================================================
+// Fused FP16 SiLU -- one StreamMap pass in ONE DM-core kernel: out = silu(x) = x*sigmoid(x),
+// elementwise over [rows, cols] (cols = beats*32 fp16 per row). The host does only Load / Store /
+// Check; the user gives just { input_addr, output_addr, rows, cols } -- no StreamMap / beat / quant
+// detail. out_prec picks the writer: XDMA_OUT_F16 -> fp16 output; XDMA_OUT_I8 -> fused Fp16ToInt8
+// (baked 16.0 scale). The two SNAX_LIB_DEFINE wrappers below fix out_prec by name.
+static inline uint32_t __snax_bingo_kernel_xdma_silu(void *arg, uint32_t out_prec)
+{
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_silu_args_t);
+    if (snrt_is_dm_core()) {
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+        uint32_t *a = (uint32_t *)arg;
+        uint64_t in_addr  = make_u64(a[0], a[1]);
+        uint64_t out_addr = make_u64(a[2], a[3]);
+        uint32_t rows     = a[4];
+        uint32_t cols     = a[5];
+        bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_silu_args_t);
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+        if (!BINGO_HAS_STREAMMAP)
+            BINGO_XDMA_EXT_UNSUPPORTED("xdma_silu", "StreamMap");
+        uint32_t out_i8 = (out_prec == XDMA_OUT_I8);
+        if (out_i8 && !BINGO_HAS_FP16TOINT8)
+            BINGO_XDMA_EXT_UNSUPPORTED("xdma_silu_f16_i8", "Fp16ToInt8");
+        uint32_t beats     = cols >> 5u;                          // cols / 32 fp16 per 64-B beat
+        uint32_t inv_scale = out_i8 ? BINGO_SILU_INT8_SCALE : 0u;
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
+        uint32_t rc = xdma_stream_map1(in_addr, out_addr, rows, beats,
+                                       0x3F800000u /*a=1.0*/, 0u /*b=0*/, 2u /*SILU*/,
+                                       out_i8 ? 1u : 0u, inv_scale);
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
+        if (rc != BINGO_RET_SUCC) {
+            printf_safe("[Cluster %d Core %d]: silu StreamMap pass failed!\r\n",
+                        snrt_cluster_idx(), snrt_cluster_core_idx());
+            return BINGO_RET_FAIL;
+        }
+        sp->return_value = (uint32_t)out_addr;
+        sp->num_return_values = 0;
+        return BINGO_RET_SUCC;
+    } else {
+        printf_safe("[Cluster %d Core %d]: Error! xDMA silu should be called from a DM core!\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+}
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_silu_f16_f16(void *arg) {
+    return __snax_bingo_kernel_xdma_silu(arg, XDMA_OUT_F16);
+}
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_silu_f16_i8(void *arg) {
+    return __snax_bingo_kernel_xdma_silu(arg, XDMA_OUT_I8);
+}
+
+// ==========================================================================
+// Fused FP16 SwiGLU -- StreamMap(SiLU) + StreamElementwise(MUL) in ONE DM-core kernel:
+//   sg  = silu(gate)                 (StreamMap SILU,          gate -> sg scratch)
+//   out = sg (.) up                  (StreamElementwise MUL,   sg,up -> out)
+// elementwise over [rows, cols]. The kernel allocates the sg scratch from L1 and frees it; the
+// host does only Load / Store / Check, and the user gives { gate_addr, up_addr, output_addr, rows,
+// cols }. out_prec picks the MUL writer: fp16, or fused Fp16ToInt8 (baked 16.0 scale).
+#define BINGO_SWIGLU_SCRATCH_POOL 8192u    // sg[rows*cols] fp16 for the sweep tiles + headroom
+static inline uint32_t __snax_bingo_kernel_xdma_swiglu(void *arg, uint32_t out_prec)
+{
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_swiglu_args_t);
+    if (snrt_is_dm_core()) {
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+        uint32_t *a = (uint32_t *)arg;
+        uint64_t gate_addr = make_u64(a[0], a[1]);
+        uint64_t up_addr   = make_u64(a[2], a[3]);
+        uint64_t out_addr  = make_u64(a[4], a[5]);
+        uint32_t rows      = a[6];
+        uint32_t cols      = a[7];
+        bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_swiglu_args_t);
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+        if (!BINGO_HAS_STREAMMAP || !BINGO_HAS_STREAMELEMENTWISE)
+            BINGO_XDMA_EXT_UNSUPPORTED("xdma_swiglu", "StreamMap+StreamElementwise");
+        uint32_t out_i8 = (out_prec == XDMA_OUT_I8);
+        if (out_i8 && !BINGO_HAS_FP16TOINT8)
+            BINGO_XDMA_EXT_UNSUPPORTED("xdma_swiglu_f16_i8", "Fp16ToInt8");
+        uint32_t beats     = cols >> 5u;                 // cols / 32 fp16 per 64-B beat
+        uint32_t row_b     = beats * XDMA_WIDTH;         // packed row pitch (bytes)
+        uint32_t tot_b     = rows * row_b;               // [rows, cols] fp16 bytes
+        uint32_t inv_scale = out_i8 ? BINGO_SILU_INT8_SCALE : 0u;
+
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
+        // One L1 scratch buffer sg[rows, cols], 64-B aligned. Persistent pool (allocate once, reuse)
+        // to skip the ~5k-cc bingo heap malloc/free (see the softmax / rope pool rationale).
+        uint32_t scratch_bytes = tot_b + 64u;
+        static uint32_t s_pool = 0u;
+        uint32_t scratch_lo, from_pool = 0u;
+        if (scratch_bytes <= BINGO_SWIGLU_SCRATCH_POOL) {
+            if (!s_pool) s_pool = snrt_l1_malloc(BINGO_SWIGLU_SCRATCH_POOL);
+            scratch_lo = s_pool;
+            from_pool = 1u;
+        } else {
+            scratch_lo = snrt_l1_malloc(scratch_bytes);   // rare: oversized tile
+        }
+        if (!scratch_lo) {
+            printf_safe("[Cluster %d Core %d]: swiglu L1 scratch alloc failed!\r\n",
+                        snrt_cluster_idx(), snrt_cluster_core_idx());
+            return BINGO_RET_FAIL;
+        }
+        uint32_t base_lo = (scratch_lo + 63u) & ~63u;
+        uint64_t sg_g = chiplet_addr_transform((uint64_t)base_lo);   // DMA-global view of sg
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
+
+        // 1) sg = silu(gate)  (StreamMap SILU, fp16 out).
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
+        uint32_t rc = xdma_stream_map1(gate_addr, sg_g, rows, beats,
+                                       0x3F800000u /*a=1.0*/, 0u /*b=0*/, 2u /*SILU*/, 0u, 0u);
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
+        // 2) out = sg (.) up  [+ Fp16ToInt8 when int8]. Packed operands, so pad_row = row_b (flat).
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
+        if (rc == BINGO_RET_SUCC)
+            rc = xdma_stream_ew2_padded(sg_g, up_addr, out_addr, rows, beats, row_b,
+                                        0u /*MUL*/, out_i8 ? 1u : 0u, inv_scale, 0u /*full*/);
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
+
+        if (!from_pool) snrt_l1_free(scratch_lo);   // the persistent pool is never freed
+        if (rc != BINGO_RET_SUCC) {
+            printf_safe("[Cluster %d Core %d]: swiglu pass failed!\r\n",
+                        snrt_cluster_idx(), snrt_cluster_core_idx());
+            return BINGO_RET_FAIL;
+        }
+        sp->return_value = (uint32_t)out_addr;
+        sp->num_return_values = 0;
+        return BINGO_RET_SUCC;
+    } else {
+        printf_safe("[Cluster %d Core %d]: Error! xDMA swiglu should be called from a DM core!\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+}
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_swiglu_f16_f16(void *arg) {
+    return __snax_bingo_kernel_xdma_swiglu(arg, XDMA_OUT_F16);
+}
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_swiglu_f16_i8(void *arg) {
+    return __snax_bingo_kernel_xdma_swiglu(arg, XDMA_OUT_I8);
+}
+
 // ==========================================================================
 // High-level xDMA kernels: user provides shapes, kernel computes AGU config.
 // These wrap the low-level reshape kernel with automatic stride computation.

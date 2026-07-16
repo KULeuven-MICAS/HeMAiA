@@ -620,6 +620,34 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_rmsnorm_args {
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_xdma_rmsnorm_args_t;
 
+// Whole FP16 SiLU (x*sigmoid(x)) in one DM-core kernel: a single StreamMap pass, plus an optional
+// fused FP16->INT8 quant leaf. Elementwise; the kernel derives beats = cols/32 and the int8 scale
+// (a fixed 16.0). The user gives just the tensors and shape -- no StreamMap / beat / quant detail.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_silu_args {
+  uint32_t input_addr_hi;        // input x, fp16 [rows, cols], packed
+  uint32_t input_addr_lo;
+  uint32_t output_addr_hi;       // fp16 silu(x), [rows, cols], packed
+  uint32_t output_addr_lo;
+  uint32_t rows;                 // independent silu rows
+  uint32_t cols;                 // per-row fp16 length D (a multiple of 32)
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_xdma_silu_args_t;
+
+// Whole FP16 SwiGLU (silu(gate) * up) in one DM-core kernel: StreamMap(SiLU) gate->sg (L1 scratch
+// the kernel allocates), then StreamElementwise(MUL) sg*up->out, plus an optional fused FP16->INT8
+// quant leaf. Elementwise; the kernel derives beats = cols/32 and the int8 scale (a fixed 16.0).
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_swiglu_args {
+  uint32_t gate_addr_hi;         // gate input, fp16 [rows, cols], packed
+  uint32_t gate_addr_lo;
+  uint32_t up_addr_hi;           // up input, fp16 [rows, cols], packed
+  uint32_t up_addr_lo;
+  uint32_t output_addr_hi;       // fp16 swiglu, [rows, cols], packed
+  uint32_t output_addr_lo;
+  uint32_t rows;                 // independent swiglu rows
+  uint32_t cols;                 // per-row fp16 length D (a multiple of 32)
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_xdma_swiglu_args_t;
+
 // ──────────────────────────────────────────────────────────────────────
 // VersaCore blocked-layout conversion kernels
 //

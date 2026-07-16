@@ -4,21 +4,14 @@
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 #
-# xDMA FP16 SwiGLU — explicit, self-contained workload graph (no xdma_ops_lib).
-# Fully on-device (no host scalar):
-#   Load gate, up
-#   T1  map(SILU)                         gate        -> sg              [dev]
-#   T2  elementwise(MUL, {sg, up})        STICKY?FULL -> out             [dev]
-#   Store(out) + Check(fp16 tol)
-#   Tq  elementwise(MUL, {sg, up})+quant  STICKY      -> out_i8
-# The MUL reads two SEPARATE L1 buffers (sg, up) via the stream_elementwise
-# src_b mechanism. Buffers are NAME-prefixed so the allocator (name-sorted) puts
-# `up` at a higher address than `sg` (the reader strides forward sg -> up).
+# xDMA FP16 SwiGLU — one fused all-device kernel (__snax_bingo_kernel_xdma_swiglu_f16_f16).
+# out[r,:] = silu(gate[r,:]) * up[r,:] over [rows, cols] tiles. The whole op runs in a single
+# DM-core kernel (StreamMap SiLU + StreamElementwise MUL, the kernel allocates the silu(gate)
+# scratch itself); the host only loads gate/up, stores the output, and checks it.
 #
-# The MUL span measures the shared xdma_streamelementwise LUT (the SILU span measures xdma_streammap).
-# Measured MUL cost
-#     n         512    1024    2048    4096
-#     cycles    552     808    1320    2344      (n=256 is the warm-up config)
+#   Load gate, up -> SwiGLU __snax_bingo_kernel_xdma_swiglu_f16_f16 -> Store + Check(fp16 tol)
+#
+# Args are HW-free: { gate_addr, up_addr, output_addr, rows, cols }; the kernel derives the rest.
 
 import os
 import sys
@@ -45,30 +38,23 @@ from bingo_node import BingoNode                          # noqa: E402
 from bingo_mem_handle import BingoMemAlloc, BingoMemSymbol  # noqa: E402
 from bingo_kernel_args import (                           # noqa: E402
     SnaxBingoKernelIdma1dCopyArgs,
-    SnaxBingoKernelXdmaStreamMapArgs,
-    SnaxBingoKernelXdmaStreamElementwiseArgs,
+    SnaxBingoKernelXdmaSwigluF16F16Args,
     HostBingoKernelIdmaArgs,
     HostBingoKernelCheckResultArgs,
 )
 
 DMA_CORE, HOST_CORE = 1, 2
-F_SILU = 2
-EW_MUL = 0
 CHECK_FP16_TOL = 2
-ONE_F32 = int(np.float32(1.0).view(np.uint32))
-INV_SCALE = int(np.float32(16.0).view(np.uint32))
 
-# n-linear sweep for the xdma_streamelementwise cost LUT (op_fit "linear", keyed on n = rows*cols).
-# SwiGLU lowers to StreamMap(silu) + StreamElementwise(mul); this workload's mul span IS an
-# xdma_streamelementwise measurement (its silu span also measures xdma_streammap). As in the silu
-# workload: fix multi-row, sweep cols so n moves with the per-pass config intercept held.
-_STREAM_ROWS = 4
-_STREAM_COLS = [64, 128, 256, 512, 1024]              # n = 256, 512, 1024, 2048, 4096
-CONFIGS = [{"rows": _STREAM_ROWS, "beats": c // 32} for c in _STREAM_COLS]
+# (rows, cols); each row is a length-cols tile (cols a multiple of 32). A rows x cols grid for the
+# fused-kernel cost LUT (bilinear fit): rows {1,2,4,8} x cols {64,128,256} -- cols varies at EVERY
+# row so the cols slope de-confounds from the rows==1 fast-path drop.
+_LUT_GRID = [(r, c) for r in (1, 2, 4, 8) for c in (64, 128, 256)]
+CONFIGS = [{"rows": r, "cols": c} for (r, c) in _LUT_GRID]
 
 
-def _swiglu_ref(rows, beats, i):
-    n = rows * beats * 32
+def _swiglu_ref(rows, cols, i):
+    n = rows * cols
     rng = np.random.RandomState(3400 + i)
     gate = rng.uniform(-8.0, 8.0, size=n).astype(np.float16)
     up = rng.uniform(-2.0, 2.0, size=n).astype(np.float16)
@@ -95,7 +81,7 @@ class G:
 
 
 def gen_data(i):
-    gate, up, out = _swiglu_ref(CONFIGS[i]["rows"], CONFIGS[i]["beats"], i)
+    gate, up, out = _swiglu_ref(CONFIGS[i]["rows"], CONFIGS[i]["cols"], i)
     return [format_vector_definition("uint16_t", f"gate_{i}", gate.view(np.uint16)),
             format_vector_definition("uint16_t", f"up_{i}", up.view(np.uint16)),
             format_vector_definition("uint16_t", f"golden_{i}", out.view(np.uint16))]
@@ -103,38 +89,25 @@ def gen_data(i):
 
 def build_config(g, i, prev):
     rows  = CONFIGS[i]["rows"]
-    beats = CONFIGS[i]["beats"]
-    n     = rows * beats * 32          # total elements
-    tot_b = rows * beats * 64          # [rows, D] fp16 bytes
-    # Name prefixes 0gate < 1sg < 2up < 3out < 4i8 => allocator places up after sg.
-    l1_g   = g.l1(f"sw0gate_{i}", tot_b)
-    l1_sg  = g.l1(f"sw1sg_{i}", tot_b)
-    l1_up  = g.l1(f"sw2up_{i}", tot_b)
-    l1_out = g.l1(f"sw3out_{i}", tot_b)
-    l1_i8  = g.l1(f"sw4i8_{i}", n)
+    cols  = CONFIGS[i]["cols"]         # per-row length
+    n     = rows * cols                # total elements
+    tot_b = rows * cols * 2            # [rows, cols] fp16 bytes
+    l1_g   = g.l1(f"sw_gate_{i}", tot_b)
+    l1_up  = g.l1(f"sw_up_{i}", tot_b)
+    l1_out = g.l1(f"sw_out_{i}", tot_b)
     lg = g.node(f"LoadGate_{i}", DMA_CORE, "__snax_bingo_kernel_idma_1d_copy",
                 SnaxBingoKernelIdma1dCopyArgs(BingoMemSymbol(f"gate_{i}"), l1_g, tot_b), prev)
     lu = g.node(f"LoadUp_{i}", DMA_CORE, "__snax_bingo_kernel_idma_1d_copy",
                 SnaxBingoKernelIdma1dCopyArgs(BingoMemSymbol(f"up_{i}"), l1_up, tot_b), lg)
-    t1 = g.node(f"Silu_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_stream_map",
-                SnaxBingoKernelXdmaStreamMapArgs(l1_g, l1_sg, beats, func=F_SILU,
-                    a_f32bits=ONE_F32, b_f32bits=0, rows=rows, csr_mode=0,
-                    dst_bound0=rows * beats), lu)
-    t2 = g.node(f"Mul_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_stream_elementwise",
-                SnaxBingoKernelXdmaStreamElementwiseArgs(l1_sg, l1_out, beats, op=EW_MUL,
-                    operand_count=2, rows=rows, src_b_addr=l1_up, csr_mode=0,
-                    dst_bound0=rows * beats), t1)
+    swi = g.node(f"SwiGLU_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_swiglu_f16_f16",
+                 SnaxBingoKernelXdmaSwigluF16F16Args(l1_g, l1_up, l1_out, rows, cols), lu)
     l3_out = BingoMemAlloc(f"out_swiglu_{i}", size=tot_b, mem_level="L3")
     store = g.node(f"Store_{i}", HOST_CORE, "__host_bingo_kernel_idma",
-                   HostBingoKernelIdmaArgs(l1_out, l3_out, tot_b), t2)
+                   HostBingoKernelIdmaArgs(l1_out, l3_out, tot_b), swi)
     chk = g.node(f"Check_swiglu_cfg{i}", HOST_CORE, "__host_bingo_kernel_check_result",
                  HostBingoKernelCheckResultArgs(BingoMemSymbol(f"golden_{i}"), l3_out,
                      name=f"swiglu_cfg{i}", check_type=CHECK_FP16_TOL, num_elements=n,
                      tolerance=0.1), store)
-    g.node(f"MulQuant_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_stream_elementwise",
-           SnaxBingoKernelXdmaStreamElementwiseArgs(l1_sg, l1_i8, beats, op=EW_MUL,
-               operand_count=2, rows=rows, src_b_addr=l1_up, csr_mode=1,
-               dst_bound0=rows * beats // 2, out_dtype=1, inv_scale_f32bits=INV_SCALE), chk)
     return chk
 
 
@@ -171,7 +144,7 @@ def main():
     for i in range(len(CONFIGS)):
         prev = build_config(g, i, prev)
     os.makedirs(args.output_dir, exist_ok=True)
-    dfg.bingo_compile_dfg("xDMA swiglu (explicit)", args.output_dir,
+    dfg.bingo_compile_dfg("xDMA swiglu (fused)", args.output_dir,
                           args.output_offload_file_name,
                           extra_include_header_list=["swiglu_data.h"])
     print(f"Generated swiglu: {len(CONFIGS)} configs")

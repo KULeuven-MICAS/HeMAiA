@@ -60,11 +60,11 @@ CHECK_INT8_TOL = 4      # int8 output: +-1 LSB tol. The golden uses the device i
                         # ULP -> +-1 LSB at boundaries; +-1 is the right budget, robust across sizes.
 
 
-# (rows, beats); D = cols = beats*32 (a power of two). A rows x cols grid for the fused-kernel
-# cost LUT (bilinear fit): rows {1,2,4,8} x cols {64,128,256} -- cols varies at EVERY row so the
-# cols slope de-confounds from the rows==1 fast-path drop.
+# (rows, cols); each row is a length-cols tile (cols a power of two). A rows x cols grid for the
+# fused-kernel cost LUT (bilinear fit): rows {1,2,4,8} x cols {64,128,256} -- cols varies at EVERY
+# row so the cols slope de-confounds from the rows==1 fast-path drop.
 _LUT_GRID = [(r, c) for r in (1, 2, 4, 8) for c in (64, 128, 256)]
-CONFIGS = [{"rows": r, "beats": c // 32} for (r, c) in _LUT_GRID]
+CONFIGS = [{"rows": r, "cols": c} for (r, c) in _LUT_GRID]
 
 
 # Integer fp16 rsqrt mirroring the DEVICE (snax_fp16_math.h) bit-for-bit. The DM core is
@@ -98,8 +98,8 @@ def _recip_f16(s):
     return (((29 - E) << 10) | ((q - 1024) & 0x3FF)) & 0xFFFF
 
 
-def _rmsnorm_ref(rows, beats, i):
-    D = beats * 32
+def _rmsnorm_ref(rows, cols, i):
+    D = cols
     log2D = D.bit_length() - 1                              # D is a power of two
     rng = np.random.RandomState(3300 + i)
     x_rows, y_rows = [], []
@@ -134,7 +134,7 @@ class G:
 
 
 def gen_data(i):
-    x, y = _rmsnorm_ref(CONFIGS[i]["rows"], CONFIGS[i]["beats"], i)
+    x, y = _rmsnorm_ref(CONFIGS[i]["rows"], CONFIGS[i]["cols"], i)
     # int8 golden = quantize(rmsnorm) at the kernel's baked 64.0 scale. y already comes from the
     # device's integer rsqrt (above), so this byte-matches the HW Fp16ToInt8 output.
     yq = np.clip(np.rint(y.astype(np.float32) * 64.0), -128, 127).astype(np.int8)
@@ -145,10 +145,9 @@ def gen_data(i):
 
 def build_config(g, i, prev):
     rows  = CONFIGS[i]["rows"]
-    beats = CONFIGS[i]["beats"]
-    D     = beats * 32                 # per-row width / reduction length (cols)
+    D     = CONFIGS[i]["cols"]         # per-row width / reduction length (cols)
     n     = rows * D                   # total elements
-    tot_b = rows * beats * 64          # [rows, D] fp16 bytes
+    tot_b = rows * D * 2               # [rows, D] fp16 bytes
 
     # One fused kernel runs the whole rmsnorm on the DM core; precision is in the kernel name.
     l1_x   = g.l1(f"rms0x_{i}", tot_b)     # [rows,D] packed input

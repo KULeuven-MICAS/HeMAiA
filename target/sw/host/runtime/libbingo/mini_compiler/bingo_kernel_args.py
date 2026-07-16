@@ -1309,6 +1309,60 @@ class SnaxBingoKernelXdmaRmsnormF16I8Args(_SnaxBingoKernelXdmaSimdArgs):
     STRUCT_NAME = "__snax_bingo_kernel_xdma_rmsnorm_args_t"
 
 
+class SnaxBingoKernelXdmaSiluF16F16Args(_SnaxBingoKernelXdmaSimdArgs):
+    """Whole FP16 SiLU (x*sigmoid(x)) in ONE DM-core kernel -> fp16 output (one StreamMap pass).
+    Host does only Load / Store / Check."""
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_silu_f16_f16"
+    STRUCT_NAME = "__snax_bingo_kernel_xdma_silu_args_t"
+
+
+class SnaxBingoKernelXdmaSiluF16I8Args(_SnaxBingoKernelXdmaSimdArgs):
+    """Same fused silu -> int8 output (fused Fp16ToInt8, baked 16.0 scale). output_addr is the
+    int8 [rows, cols] buffer."""
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_silu_f16_i8"
+    STRUCT_NAME = "__snax_bingo_kernel_xdma_silu_args_t"
+
+
+class _SnaxBingoKernelXdmaSwigluArgs(BingoKernelArgs):
+    """Shared base for the fused fp16 SwiGLU kernel (out = silu(gate) * up): two input tensors
+    (gate, up) + one output, all [rows, cols] (cols a multiple of 32). Output precision is chosen
+    by the subclass: F16F16 -> fp16 output; F16I8 -> int8 (fused Fp16ToInt8, baked 16.0 scale).
+    The kernel allocates the intermediate silu(gate) scratch itself. Subclasses set KERNEL_NAME."""
+    STRUCT_NAME = "__snax_bingo_kernel_xdma_swiglu_args_t"
+
+    def __init__(self, gate_addr: Union[BingoMemAlloc, int], up_addr: Union[BingoMemAlloc, int],
+                 output_addr: Union[BingoMemAlloc, int], rows: int, cols: int):
+        self.gate_addr = gate_addr
+        self.up_addr = up_addr
+        self.output_addr = output_addr
+        self.rows = rows
+        self.cols = cols
+
+    def get_struct_name(self) -> str:
+        return self.STRUCT_NAME
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.gate_addr, "gate_addr", a, handle_name_map)
+        self._process_addr(self.up_addr, "up_addr", a, handle_name_map)
+        self._process_addr(self.output_addr, "output_addr", a, handle_name_map)
+        a["rows"] = str(self.rows)
+        a["cols"] = str(self.cols)
+        return a
+
+
+class SnaxBingoKernelXdmaSwigluF16F16Args(_SnaxBingoKernelXdmaSwigluArgs):
+    """Whole FP16 SwiGLU in ONE DM-core kernel -> fp16 output (StreamMap SiLU + StreamElementwise
+    MUL). Host does only Load / Store / Check."""
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_swiglu_f16_f16"
+
+
+class SnaxBingoKernelXdmaSwigluF16I8Args(_SnaxBingoKernelXdmaSwigluArgs):
+    """Same fused swiglu -> int8 output (fused Fp16ToInt8, baked 16.0 scale). output_addr is the
+    int8 [rows, cols] buffer."""
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_swiglu_f16_i8"
+
+
 # ══════════════════════════════════════════════════════════════════════
 # VersaCore blocked-layout conversion kernels (tile-shape-parameterized)
 #
