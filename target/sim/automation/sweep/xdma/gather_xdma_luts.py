@@ -146,18 +146,12 @@ SIMD_OP_SPEC = {
     "xdma_rope_1cluster": [
         ("xdma_rope",       "__snax_bingo_kernel_xdma_rope", 0),
     ],
-    # silu = one StreamMap pass (fp16 span0, i8 quant span1) -> measures xdma_streammap, n-keyed.
+    # silu / swiglu: one fused whole-op kernel each -> bilinear [rows, cols], like softmax/rmsnorm/rope.
     "xdma_silu_1cluster": [
-        ("xdma_streammap",    "__snax_bingo_kernel_xdma_stream_map", 0, "n"),
-        ("xdma_streammap_i8", "__snax_bingo_kernel_xdma_stream_map", 1, "n"),
+        ("xdma_silu",   "__snax_bingo_kernel_xdma_silu_f16_f16", 0),
     ],
-    # swiglu = StreamMap(silu) span0 + StreamElementwise(mul) span1 + StreamElementwise(mulquant i8)
-    # span2. The mul span measures xdma_streamelementwise; streammap is taken from the silu workload,
-    # so swiglu's span0 is a reference-only row.
     "xdma_swiglu_1cluster": [
-        ("xdma_streammap_swiglu_ref", "__snax_bingo_kernel_xdma_stream_map",         0, "n"),
-        ("xdma_streamelementwise",    "__snax_bingo_kernel_xdma_stream_elementwise",  1, "n"),
-        ("xdma_streamelementwise_i8", "__snax_bingo_kernel_xdma_stream_elementwise",  2, "n"),
+        ("xdma_swiglu", "__snax_bingo_kernel_xdma_swiglu_f16_f16", 0),
     ],
 }
 
