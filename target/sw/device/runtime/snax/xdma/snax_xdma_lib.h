@@ -340,23 +340,62 @@ inline int32_t xdma_multicast_1d(void* src, void** dst, uint32_t dst_num,
 
 // Extension
 // xdma extension interface
+//
+// xdma_enable_{src,dst}_ext take an extension index and its parameter CSR values and program the
+// extension. The per-extension CSR layout comes from the generated header: XDMA_{SRC,DST}_EXT_NUM
+// extensions, with the XDMA_{SRC,DST}_EXT_CUSTOM_CSR_NUM list giving each extension's CSR count. An
+// extension's parameter CSRs occupy a contiguous slot range that starts at the prefix sum of the
+// preceding extensions' counts.
+//
+// Each parameter CSR is written through xdma_{src,dst}_ext_csr_write(slot, val): a switch(slot) whose
+// arms each write to a compile-time-constant CSR address (base + slot), so snax_write_xdma_cfg_reg /
+// csrw_ss resolves to a single csrw. The switches cover a fixed slot cap; the _Static_assert checks
+// the generated total CSR count stays within that cap.
+#define BINGO_XDMA_EXT_CSR_CASE(base, k) \
+    case (k): snax_write_xdma_cfg_reg((base) + (k), val); break
+
+static inline void xdma_src_ext_csr_write(uint32_t slot, uint32_t val) {
+    _Static_assert(XDMA_SRC_EXT_CSR_NUM <= 16,
+        "src ext CSRs exceed the 16-slot dispatch cap; extend the case list below.");
+    switch (slot) {
+        BINGO_XDMA_EXT_CSR_CASE(XDMA_SRC_EXT_CSR_PTR, 0);  BINGO_XDMA_EXT_CSR_CASE(XDMA_SRC_EXT_CSR_PTR, 1);
+        BINGO_XDMA_EXT_CSR_CASE(XDMA_SRC_EXT_CSR_PTR, 2);  BINGO_XDMA_EXT_CSR_CASE(XDMA_SRC_EXT_CSR_PTR, 3);
+        BINGO_XDMA_EXT_CSR_CASE(XDMA_SRC_EXT_CSR_PTR, 4);  BINGO_XDMA_EXT_CSR_CASE(XDMA_SRC_EXT_CSR_PTR, 5);
+        BINGO_XDMA_EXT_CSR_CASE(XDMA_SRC_EXT_CSR_PTR, 6);  BINGO_XDMA_EXT_CSR_CASE(XDMA_SRC_EXT_CSR_PTR, 7);
+        BINGO_XDMA_EXT_CSR_CASE(XDMA_SRC_EXT_CSR_PTR, 8);  BINGO_XDMA_EXT_CSR_CASE(XDMA_SRC_EXT_CSR_PTR, 9);
+        BINGO_XDMA_EXT_CSR_CASE(XDMA_SRC_EXT_CSR_PTR, 10); BINGO_XDMA_EXT_CSR_CASE(XDMA_SRC_EXT_CSR_PTR, 11);
+        BINGO_XDMA_EXT_CSR_CASE(XDMA_SRC_EXT_CSR_PTR, 12); BINGO_XDMA_EXT_CSR_CASE(XDMA_SRC_EXT_CSR_PTR, 13);
+        BINGO_XDMA_EXT_CSR_CASE(XDMA_SRC_EXT_CSR_PTR, 14); BINGO_XDMA_EXT_CSR_CASE(XDMA_SRC_EXT_CSR_PTR, 15);
+        default: break;
+    }
+}
+
+static inline void xdma_dst_ext_csr_write(uint32_t slot, uint32_t val) {
+    _Static_assert(XDMA_DST_EXT_CSR_NUM <= 8,
+        "dst ext CSRs exceed the 8-slot dispatch cap; extend the case list below.");
+    switch (slot) {
+        BINGO_XDMA_EXT_CSR_CASE(XDMA_DST_EXT_CSR_PTR, 0); BINGO_XDMA_EXT_CSR_CASE(XDMA_DST_EXT_CSR_PTR, 1);
+        BINGO_XDMA_EXT_CSR_CASE(XDMA_DST_EXT_CSR_PTR, 2); BINGO_XDMA_EXT_CSR_CASE(XDMA_DST_EXT_CSR_PTR, 3);
+        BINGO_XDMA_EXT_CSR_CASE(XDMA_DST_EXT_CSR_PTR, 4); BINGO_XDMA_EXT_CSR_CASE(XDMA_DST_EXT_CSR_PTR, 5);
+        BINGO_XDMA_EXT_CSR_CASE(XDMA_DST_EXT_CSR_PTR, 6); BINGO_XDMA_EXT_CSR_CASE(XDMA_DST_EXT_CSR_PTR, 7);
+        default: break;
+    }
+}
+#undef BINGO_XDMA_EXT_CSR_CASE
+
 inline int32_t xdma_enable_src_ext(uint8_t ext, uint32_t* csr_value) {
     if (ext >= XDMA_SRC_EXT_NUM) {
         return -1;
     }
-    uint8_t custom_csr_list[XDMA_SRC_EXT_NUM] = XDMA_SRC_EXT_CUSTOM_CSR_NUM;
-    uint32_t csr_offset = XDMA_SRC_EXT_CSR_PTR;
-    for (uint8_t i = 0; i < ext; i++) {
-        csr_offset += custom_csr_list[i];
-    }
-
+    // Set the extension's enable bit.
     snax_write_xdma_cfg_reg(
         XDMA_SRC_ENABLE_PTR,
         snax_read_xdma_cfg_reg(XDMA_SRC_ENABLE_PTR) | (1 << ext));
-
-    for (uint8_t i = 0; i < custom_csr_list[ext]; i++) {
-        snax_write_xdma_cfg_reg(csr_offset + i, csr_value[i]);
-    }
+    // Write ext's parameter CSRs; its first slot is the prefix sum of the preceding extensions' counts.
+    const uint8_t counts[XDMA_SRC_EXT_NUM] = XDMA_SRC_EXT_CUSTOM_CSR_NUM;
+    uint32_t slot = 0;
+    for (uint8_t e = 0; e < ext; e++) slot += counts[e];
+    for (uint8_t i = 0; i < counts[ext]; i++) xdma_src_ext_csr_write(slot + i, csr_value[i]);
     return 0;
 }
 
@@ -364,18 +403,13 @@ inline int32_t xdma_enable_dst_ext(uint8_t ext, uint32_t* csr_value) {
     if (ext >= XDMA_DST_EXT_NUM) {
         return -1;
     }
-    uint8_t custom_csr_list[XDMA_DST_EXT_NUM] = XDMA_DST_EXT_CUSTOM_CSR_NUM;
-    uint32_t csr_offset = XDMA_DST_EXT_CSR_PTR;
-    for (uint8_t i = 0; i < ext; i++) {
-        csr_offset += custom_csr_list[i];
-    }
-
     snax_write_xdma_cfg_reg(
         XDMA_DST_ENABLE_PTR,
         snax_read_xdma_cfg_reg(XDMA_DST_ENABLE_PTR) | (1 << ext));
-    for (uint8_t i = 0; i < custom_csr_list[ext]; i++) {
-        snax_write_xdma_cfg_reg(csr_offset + i, csr_value[i]);
-    }
+    const uint8_t counts[XDMA_DST_EXT_NUM] = XDMA_DST_EXT_CUSTOM_CSR_NUM;
+    uint32_t slot = 0;
+    for (uint8_t e = 0; e < ext; e++) slot += counts[e];
+    for (uint8_t i = 0; i < counts[ext]; i++) xdma_dst_ext_csr_write(slot + i, csr_value[i]);
     return 0;
 }
 

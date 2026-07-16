@@ -14,6 +14,11 @@
 # The MUL reads two SEPARATE L1 buffers (sg, up) via the stream_elementwise
 # src_b mechanism. Buffers are NAME-prefixed so the allocator (name-sorted) puts
 # `up` at a higher address than `sg` (the reader strides forward sg -> up).
+#
+# The MUL span measures the shared xdma_streamelementwise LUT (the SILU span measures xdma_streammap).
+# Measured MUL cost
+#     n         512    1024    2048    4096
+#     cycles    552     808    1320    2344      (n=256 is the warm-up config)
 
 import os
 import sys
@@ -53,9 +58,13 @@ CHECK_FP16_TOL = 2
 ONE_F32 = int(np.float32(1.0).view(np.uint32))
 INV_SCALE = int(np.float32(16.0).view(np.uint32))
 
-# (rows, beats); D = beats*32 per-row width, total elements = rows*beats*32.
-CONFIGS = [{"rows": 1, "beats": 2}, {"rows": 1, "beats": 8},
-           {"rows": 4, "beats": 2}, {"rows": 8, "beats": 2}]
+# n-linear sweep for the xdma_streamelementwise cost LUT (op_fit "linear", keyed on n = rows*cols).
+# SwiGLU lowers to StreamMap(silu) + StreamElementwise(mul); this workload's mul span IS an
+# xdma_streamelementwise measurement (its silu span also measures xdma_streammap). As in the silu
+# workload: fix multi-row, sweep cols so n moves with the per-pass config intercept held.
+_STREAM_ROWS = 4
+_STREAM_COLS = [64, 128, 256, 512, 1024]              # n = 256, 512, 1024, 2048, 4096
+CONFIGS = [{"rows": _STREAM_ROWS, "beats": c // 32} for c in _STREAM_COLS]
 
 
 def _swiglu_ref(rows, beats, i):

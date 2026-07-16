@@ -80,3 +80,20 @@ runs:
     CHIP_TYPE: single_chip
     WORKLOAD: xdma_rmsnorm_1cluster
     DEV_APP: snax-bingo-offload
+  # rope: whole fused kernel (__snax_bingo_kernel_xdma_rope), keyed rows x cols (bilinear).
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: single_chip
+    WORKLOAD: xdma_rope_1cluster
+    DEV_APP: snax-bingo-offload
+
+  # ---- generic streaming passes: n-keyed linear fit ----
+  # silu measures xdma_streammap (its fp16 span is one StreamMap pass); swiglu's mul span measures
+  # xdma_streamelementwise. Both sweep a fixed-rows x cols grid so n moves cleanly.
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: single_chip
+    WORKLOAD: xdma_silu_1cluster
+    DEV_APP: snax-bingo-offload
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: single_chip
+    WORKLOAD: xdma_swiglu_1cluster
+    DEV_APP: snax-bingo-offload

@@ -8,6 +8,11 @@
 # Fully on-device (unary, no host scalar). Element-wise, so multi-row is just a
 # larger flat outer bound rows*beats:
 #   Load x[rows,D] -> T1 map(SILU, a=1, b=0) -> Store+Check(fp16) -> Tq map(SILU)+quant
+#
+# Silu IS one StreamMap pass, so this workload's fp16 span measures the shared xdma_streammap LUT.
+# Measured cost
+#     n         512    1024    2048    4096
+#     cycles    420     544     800    1316      (n=256 is the warm-up config)
 
 import os
 import sys
@@ -45,9 +50,14 @@ CHECK_FP16_TOL = 2
 ONE_F32 = int(np.float32(1.0).view(np.uint32))
 INV_SCALE = int(np.float32(16.0).view(np.uint32))
 
-# (rows, beats); D = beats*32 per-row width, total elements = rows*beats*32.
-CONFIGS = [{"rows": 1, "beats": 2}, {"rows": 1, "beats": 8},
-           {"rows": 4, "beats": 2}, {"rows": 8, "beats": 2}]
+# n-linear sweep for the xdma_streammap cost LUT (op_fit "linear", keyed on element count
+# n = rows*cols). Silu lowers to ONE StreamMap pass, so this workload's fp16 span IS an
+# xdma_streammap measurement. The per-pass config intercept is rows-independent (one xDMA launch
+# configures all rows via the ND descriptor's row loop), so we FIX rows past the rows==1 fast path
+# and sweep cols to move n cleanly -> a clean intercept+slope. (cols = beats*32, D per row.)
+_STREAMMAP_ROWS = 4
+_STREAMMAP_COLS = [64, 128, 256, 512, 1024]           # n = 256, 512, 1024, 2048, 4096
+CONFIGS = [{"rows": _STREAMMAP_ROWS, "beats": c // 32} for c in _STREAMMAP_COLS]
 
 
 def _silu_ref(rows, beats, i):

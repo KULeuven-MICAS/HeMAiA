@@ -129,7 +129,10 @@ OP_SPEC = {
 # precisions (f16 then i8), and we emit BOTH as separate LUT ops so the int8-output cost is
 # measured too (xdma_softmax gets the f16; xdma_softmax_i8 is measured for reference -- the
 # emitter only fills an op that has its own LUT file, so the i8 row lands in the CSV either way).
-#   workload: [ (op_name, op_node, span_index_within_config), ... ]  (len == kernels/config)
+# A spec is (op_name, op_node, span_index[, key_mode]); len(list) == XDMA-passes/config (kpc).
+# key_mode "rows_cols" (default) -> bilinear [rows, cols]; "n" -> linear [n] (n = rows*cols), for
+# the generic streaming passes whose LUTs are element-count keyed. Ops with no LUT file (the _i8 /
+# _ref rows) still land in the CSV; the emitter discards them loudly (measured for reference).
 SIMD_OP_SPEC = {
     "xdma_softmax_1cluster": [
         ("xdma_softmax",    "__snax_bingo_kernel_xdma_softmax_f16_f16", 0),
@@ -138,6 +141,23 @@ SIMD_OP_SPEC = {
     "xdma_rmsnorm_1cluster": [
         ("xdma_rmsnorm",    "__snax_bingo_kernel_xdma_rmsnorm_f16_f16", 0),
         ("xdma_rmsnorm_i8", "__snax_bingo_kernel_xdma_rmsnorm_f16_i8",  1),
+    ],
+    # rope: one fused whole-op kernel -> bilinear [rows, cols], like softmax/rmsnorm.
+    "xdma_rope_1cluster": [
+        ("xdma_rope",       "__snax_bingo_kernel_xdma_rope", 0),
+    ],
+    # silu = one StreamMap pass (fp16 span0, i8 quant span1) -> measures xdma_streammap, n-keyed.
+    "xdma_silu_1cluster": [
+        ("xdma_streammap",    "__snax_bingo_kernel_xdma_stream_map", 0, "n"),
+        ("xdma_streammap_i8", "__snax_bingo_kernel_xdma_stream_map", 1, "n"),
+    ],
+    # swiglu = StreamMap(silu) span0 + StreamElementwise(mul) span1 + StreamElementwise(mulquant i8)
+    # span2. The mul span measures xdma_streamelementwise; streammap is taken from the silu workload,
+    # so swiglu's span0 is a reference-only row.
+    "xdma_swiglu_1cluster": [
+        ("xdma_streammap_swiglu_ref", "__snax_bingo_kernel_xdma_stream_map",         0, "n"),
+        ("xdma_streamelementwise",    "__snax_bingo_kernel_xdma_stream_elementwise",  1, "n"),
+        ("xdma_streamelementwise_i8", "__snax_bingo_kernel_xdma_stream_elementwise",  2, "n"),
     ],
 }
 
@@ -200,13 +220,23 @@ def gather_simd_one(workload, idx, ci_dir, drop_warmup=True, verbose=True):
         return []
 
     out = []
-    for op_name, op_node, si in specs:
-        points = [{"rows": cfg["rows"], "cols": cfg["beats"] * 32,
-                   "cycles": cycles[ci * kpc + si]} for ci, cfg in enumerate(configs)]
+    for spec in specs:
+        op_name, op_node, si = spec[0], spec[1], spec[2]
+        key_mode = spec[3] if len(spec) > 3 else "rows_cols"
+        if key_mode == "n":
+            params = ["n"]
+            points = [{"n": cfg["rows"] * cfg["beats"] * 32,
+                       "cycles": cycles[ci * kpc + si]} for ci, cfg in enumerate(configs)]
+            desc = lambda pt: f"n={pt['n']}, cycles={pt['cycles']}"
+        else:
+            params = ["rows", "cols"]
+            points = [{"rows": cfg["rows"], "cols": cfg["beats"] * 32,
+                       "cycles": cycles[ci * kpc + si]} for ci, cfg in enumerate(configs)]
+            desc = lambda pt: f"rows={pt['rows']}, cols={pt['cols']}, cycles={pt['cycles']}"
         print(f"task_{idx} {workload}: {op_name}: {len(points)} points")
         for pt in points:
-            print(f"      rows={pt['rows']}, cols={pt['cols']}, cycles={pt['cycles']}")
-        out.append((op_name, op_node, ["rows", "cols"], points))
+            print(f"      {desc(pt)}")
+        out.append((op_name, op_node, params, points))
     return out
 
 

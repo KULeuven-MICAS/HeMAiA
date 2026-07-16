@@ -4,34 +4,23 @@
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 #
-# xDMA FP16 RMSNorm — multi-row, explicit workload graph (no xdma_ops_lib).
-# Per-row device->host->device hand-off over [rows, D] tiles (host computes the
-# per-row inv_rms = 1/sqrt(Sigma x^2 / N) and broadcasts it):
-#   Load x[rows,D]
-#   T1  reduce(SUMSQ, rows)               x         -> ssq_bt[rows]      [dev]
-#   M1  map(LINEAR, a=1/N)                ssq_bt    -> mean_bt[rows]     [dev]
-#   H1  sqrt       (GENERIC fp16 unary)   mean_bt   -> rms_bt[rows]      [host]
-#   H2  reciprocal (GENERIC fp16 unary)   rms_bt    -> inv_bt[rows]      [host]
-#   B1  xDMA broadcast (reader stride 0)  inv_bt    -> inv_bcast[rows,D] [dev]
-#   T2  elementwise(MUL, {x, inv_bcast})  x         -> out[rows,D]       [dev]
-#   Store(out) + Check(fp16 tol)                                          [host]
-#   Tq  elementwise(MUL)+quant            x         -> out_i8            [dev]
+# xDMA FP16 RMSNorm — multi-row, ONE fused all-device kernel.
+# out[r,:] = x[r,:] / sqrt(mean_j x[r,j]^2) over [rows, D] tiles (D = cols). The whole pipeline
+# runs in a single DM-core kernel; the host only loads the input, stores the output, and checks it.
 #
-# NO bespoke scalar-broadcast kernel. inv_rms = 1/sqrt(ssq/N) is assembled from ORDINARY ops:
-# the /N is a generic xDMA StreamMap(LINEAR), and the sqrt + reciprocal are the ordinary host
-# elementwise unaries at BINGO_PREC_FP16. That works because StreamReduce emits each row's
-# scalar SPLATTED across all 32 lanes of its beat (StreamReduce.scala: "splatted across all
-# lanes of one output beat"), so every step is a plain elementwise op over the rows*32 lanes
-# and the result stays splatted -- the splat is free and no op needs to know about rows/beats.
+#   Load x[rows,D] -> RMSNorm __snax_bingo_kernel_xdma_rmsnorm_f16_f16 -> Store + Check(fp16 tol)
+#   (also) __snax_bingo_kernel_xdma_rmsnorm_f16_i8 -> int8 out + Check(int8 +-1)
 #
-# The [rows,D] operand still has to exist -- the StreamElementwise interleave is a single affine
-# address stream and cannot hold inv_rms[r] fixed while x walks the row -- but the xDMA builds it
-# (B1, reader stride 0), not the CVA6. The host therefore touches only rows*32 lanes, a cost
-# independent of D; a host-side broadcast would be rows*D stores and dominate the makespan as D
-# grows.
+# Args are HW-free: { input_addr, output_addr, rows, cols }; precision is in the kernel name.
+# Inside the one kernel, all on the DM core (rv32ima, no FPU): reduce(SUMSQ) -> inv_rms =
+# 1/sqrt(Sxx/N) via INTEGER sqrt_f16 + recip_f16 -> normalize (x * inv_rms) -> fused Fp16ToInt8.
 #
-# The MUL reads x and inv_bcast as two SEPARATE L1 buffers via the stream_elementwise
-# src_b mechanism; buffers are NAME-prefixed so inv_bcast allocates above x.
+# Measured cost LUT
+#     rows\cols     64     128     256
+#        1           -      901     964
+#        2         3207    1399    1599
+#        4         1755    1961    2361
+#        8         2676    3085    3886      ((1,64) is the warm-up config)
 
 import os
 import sys
@@ -58,60 +47,74 @@ from bingo_node import BingoNode                          # noqa: E402
 from bingo_mem_handle import BingoMemAlloc, BingoMemSymbol  # noqa: E402
 from bingo_kernel_args import (                           # noqa: E402
     SnaxBingoKernelIdma1dCopyArgs,
-    SnaxBingoKernelXdma6dArgs,
-    SnaxBingoKernelXdmaStreamReduceArgs,
-    SnaxBingoKernelXdmaStreamMapArgs,
-    SnaxBingoKernelXdmaStreamElementwiseArgs,
-    HostBingoKernelAraSqrtF16Args,
-    HostBingoKernelAraReciprocalF16Args,
+    SnaxBingoKernelXdmaRmsnormF16F16Args,
+    SnaxBingoKernelXdmaRmsnormF16I8Args,
     HostBingoKernelIdmaArgs,
     HostBingoKernelCheckResultArgs,
 )
 
 DMA_CORE, HOST_CORE = 1, 2
-R_SUMSQ = 2
-EW_MUL = 0
-F_LINEAR = 0       # StreamMap func: out = a*x + b
 CHECK_FP16_TOL = 2
-INV_SCALE = int(np.float32(64.0).view(np.uint32))
-BEAT = 64          # xDMA bus beat in bytes
-BEAT_FP16 = 32     # fp16 lanes per beat (StreamReduce splats the row scalar across all of them)
+CHECK_INT8_TOL = 4      # int8 output: +-1 LSB tol. The golden uses the device integer rsqrt
+                        # (below) so it's near-exact, but the SUMSQ reduce can still differ by a
+                        # ULP -> +-1 LSB at boundaries; +-1 is the right budget, robust across sizes.
 
-# (rows, beats); D = beats*32 = per-row reduction length, total elements = rows*D.
-CONFIGS = [{"rows": 1, "beats": 2}, {"rows": 1, "beats": 8},
-           {"rows": 4, "beats": 2}, {"rows": 8, "beats": 2}]
+
+# (rows, beats); D = cols = beats*32 (a power of two). A rows x cols grid for the fused-kernel
+# cost LUT (bilinear fit): rows {1,2,4,8} x cols {64,128,256} -- cols varies at EVERY row so the
+# cols slope de-confounds from the rows==1 fast-path drop.
+_LUT_GRID = [(r, c) for r in (1, 2, 4, 8) for c in (64, 128, 256)]
+CONFIGS = [{"rows": r, "beats": c // 32} for (r, c) in _LUT_GRID]
+
+
+# Integer fp16 rsqrt mirroring the DEVICE (snax_fp16_math.h) bit-for-bit. The DM core is
+# rv32ima (no FPU), so inv_rms = recip_f16(sqrt_f16(mean)) is computed with integer ops, NOT
+# a float rsqrt. The float rsqrt differs by ~0.0012 rel (absorbed by the fp16 tol check) but
+# would flip +-1 int8 LSB at rounding boundaries -- so the int8 golden must use the SAME
+# integer path the HW does.
+def _sqrt_f16(v):
+    E = (v >> 10) & 0x1F
+    if E == 0:
+        return 0
+    M = 1024 + (v & 0x3FF)
+    e = E - 15
+    if e & 1:
+        sig = 2 * M; oe = (e - 1) >> 1
+    else:
+        sig = M;     oe = e >> 1
+    n = sig << 10
+    x = 1448
+    for _ in range(5):
+        x = (x + n // x) >> 1
+    return (((oe + 15) << 10) | ((x - 1024) & 0x3FF)) & 0xFFFF
+
+
+def _recip_f16(s):
+    E = (s >> 10) & 0x1F
+    M = 1024 + (s & 0x3FF)
+    q = ((1 << 21) + (M >> 1)) // M
+    if q >= 2048:
+        return ((30 - E) << 10) & 0xFFFF
+    return (((29 - E) << 10) | ((q - 1024) & 0x3FF)) & 0xFFFF
 
 
 def _rmsnorm_ref(rows, beats, i):
     D = beats * 32
+    log2D = D.bit_length() - 1                              # D is a power of two
     rng = np.random.RandomState(3300 + i)
     x_rows, y_rows = [], []
     for r in range(rows):
         x = rng.uniform(-4.0, 4.0, size=D).astype(np.float16)
         xf = x.astype(np.float32)
         ssq = np.float16(np.float32((xf ** 2).sum()))      # HW: fp32 accumulate -> fp16 scalar
-        inv = np.float32(1.0) / np.float32(np.sqrt(ssq.astype(np.float32) / np.float32(D)))
-        inv16 = np.float16(inv)                            # host narrows to fp16 for the broadcast
-        y = (xf * inv16.astype(np.float32)).astype(np.float16)  # fp16 elementwise MUL
+        ssq_bits = int(np.float16(ssq).view(np.uint16))
+        Es = (ssq_bits >> 10) & 0x1F
+        mean_bits = (((Es - log2D) << 10) | (ssq_bits & 0x3FF)) & 0xFFFF  # ssq / D (D pow2, exact)
+        inv16 = np.uint16(_recip_f16(_sqrt_f16(mean_bits))).view(np.float16)  # integer 1/sqrt
+        y = (xf * np.float32(inv16)).astype(np.float16)    # fp16 elementwise MUL (map a*x)
         x_rows.append(x)
         y_rows.append(y)
     return np.concatenate(x_rows), np.concatenate(y_rows)
-
-
-def bcast(g, name, src_beat, dst, beats, rows, dst_row_stride, after):
-    """xDMA stride-0 BROADCAST: expand [rows] splatted scalar beats -> [rows, D].
-
-    The reader's inner temporal dim has stride 0, so the row's single scalar beat is RE-READ
-    `beats` times (the AGU's trip count comes from its own index counter, so a 0 step holds the
-    address while the loop still runs); the outer dim steps one scalar beat per row.
-
-    This is a plain strided copy -- no extension -- so the generic xdma_6d kernel expresses it.
-    """
-    return g.node(name, DMA_CORE, "__snax_bingo_kernel_xdma_6d",
-                  SnaxBingoKernelXdma6dArgs(src_beat, dst, 8, 8,
-                      [0, BEAT], [beats, rows],                # reader: stride-0 inner
-                      [BEAT, dst_row_stride], [beats, rows]),  # writer: one row per scalar
-                  after)
 
 
 class G:
@@ -132,65 +135,50 @@ class G:
 
 def gen_data(i):
     x, y = _rmsnorm_ref(CONFIGS[i]["rows"], CONFIGS[i]["beats"], i)
+    # int8 golden = quantize(rmsnorm) at the kernel's baked 64.0 scale. y already comes from the
+    # device's integer rsqrt (above), so this byte-matches the HW Fp16ToInt8 output.
+    yq = np.clip(np.rint(y.astype(np.float32) * 64.0), -128, 127).astype(np.int8)
     return [format_vector_definition("uint16_t", f"in_{i}", x.view(np.uint16)),
-            format_vector_definition("uint16_t", f"golden_{i}", y.view(np.uint16))]
+            format_vector_definition("uint16_t", f"golden_{i}", y.view(np.uint16)),
+            format_vector_definition("int8_t", f"golden_i8_{i}", yq)]
 
 
 def build_config(g, i, prev):
     rows  = CONFIGS[i]["rows"]
     beats = CONFIGS[i]["beats"]
-    D     = beats * 32                 # per-row width / reduction length
+    D     = beats * 32                 # per-row width / reduction length (cols)
     n     = rows * D                   # total elements
     tot_b = rows * beats * 64          # [rows, D] fp16 bytes
-    row_b = beats * 64                 # row pitch of the [rows, D] operand
-    lanes = rows * BEAT_FP16           # fp16 lanes in the `rows` splatted scalar beats
-    inv_n = int(np.float32(1.0 / D).view(np.uint32))   # StreamMap `a` for the /N
-    # Name prefixes 0x < 1ssq < 2mean < 3rms < 4inv < 5invbc < 6out < 7i8 => the allocator
-    # places inv_bcast above x (the elementwise reader strides forward).
-    l1_x     = g.l1(f"rms0x_{i}", tot_b)
-    l1_ssqbt = g.l1(f"rms1ssqbt_{i}", rows * BEAT)   # reduce out: one SPLATTED beat per row
-    l1_menbt = g.l1(f"rms2menbt_{i}", rows * BEAT)   # ssq/N
-    l1_rmsbt = g.l1(f"rms3rmsbt_{i}", rows * BEAT)   # sqrt(ssq/N)
-    l1_invbt = g.l1(f"rms4invbt_{i}", rows * BEAT)   # 1/sqrt(ssq/N)
-    l1_invbc = g.l1(f"rms5invbc_{i}", tot_b)         # [rows, D] operand, built by the xDMA
-    l1_out   = g.l1(f"rms6out_{i}", tot_b)
-    l1_i8    = g.l1(f"rms7i8_{i}", n)
+
+    # One fused kernel runs the whole rmsnorm on the DM core; precision is in the kernel name.
+    l1_x   = g.l1(f"rms0x_{i}", tot_b)     # [rows,D] packed input
+    l1_f16 = g.l1(f"rms1f16_{i}", tot_b)   # [rows,D] packed fp16 rmsnorm output
+    l1_i8  = g.l1(f"rms2i8_{i}", n)        # [rows,D] int8 rmsnorm output
+
     load = g.node(f"Load_{i}", DMA_CORE, "__snax_bingo_kernel_idma_1d_copy",
                   SnaxBingoKernelIdma1dCopyArgs(BingoMemSymbol(f"in_{i}"), l1_x, tot_b), prev)
-    t1 = g.node(f"SumSq_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_stream_reduce",
-                SnaxBingoKernelXdmaStreamReduceArgs(l1_x, l1_ssqbt, beats, op=R_SUMSQ,
-                    rows=rows, csr_mode=0), load)
-    # inv_rms = 1/sqrt(ssq/N), built WITHOUT any bespoke kernel. StreamReduce splats each row's
-    # ssq across all 32 lanes of its beat, so every step below is a plain elementwise op over the
-    # rows*32 lanes and the result stays splatted:
-    #   M1  xDMA StreamMap(LINEAR, a=1/N)  -- the /N, on the device (generic map)
-    #   H1  generic fp16 `sqrt`            -- host
-    #   H2  generic fp16 `reciprocal`      -- host
-    # (The two host ops are the ordinary elementwise unaries; they know nothing about rows/beats.)
-    m1 = g.node(f"Mean_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_stream_map",
-                SnaxBingoKernelXdmaStreamMapArgs(l1_ssqbt, l1_menbt, beats=rows, func=F_LINEAR,
-                    a_f32bits=inv_n, b_f32bits=0, rows=1, csr_mode=0, dst_bound0=rows), t1)
-    h1 = g.node(f"Sqrt_{i}", HOST_CORE, "__host_bingo_kernel_sqrt",
-                HostBingoKernelAraSqrtF16Args(l1_menbt, l1_rmsbt, lanes), m1)
-    h2 = g.node(f"Recip_{i}", HOST_CORE, "__host_bingo_kernel_reciprocal",
-                HostBingoKernelAraReciprocalF16Args(l1_rmsbt, l1_invbt, lanes), h1)
-    b1 = bcast(g, f"BcastInv_{i}", l1_invbt, l1_invbc, beats, rows, row_b, h2)
-    t2 = g.node(f"Scale_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_stream_elementwise",
-                SnaxBingoKernelXdmaStreamElementwiseArgs(l1_x, l1_out, beats, op=EW_MUL,
-                    operand_count=2, rows=rows, src_b_addr=l1_invbc, csr_mode=0,
-                    dst_bound0=rows * beats), b1)
-    l3_out = BingoMemAlloc(f"out_rmsnorm_{i}", size=tot_b, mem_level="L3")
-    store = g.node(f"Store_{i}", HOST_CORE, "__host_bingo_kernel_idma",
-                   HostBingoKernelIdmaArgs(l1_out, l3_out, tot_b), t2)
-    chk = g.node(f"Check_rmsnorm_cfg{i}", HOST_CORE, "__host_bingo_kernel_check_result",
-                 HostBingoKernelCheckResultArgs(BingoMemSymbol(f"golden_{i}"), l3_out,
-                     name=f"rmsnorm_cfg{i}", check_type=CHECK_FP16_TOL, num_elements=n,
-                     tolerance=0.03), store)
-    g.node(f"Quant_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_stream_elementwise",
-           SnaxBingoKernelXdmaStreamElementwiseArgs(l1_x, l1_i8, beats, op=EW_MUL,
-               operand_count=2, rows=rows, src_b_addr=l1_invbc, csr_mode=1,
-               dst_bound0=rows * beats // 2, out_dtype=1, inv_scale_f32bits=INV_SCALE), chk)
-    return chk
+    # fp16 output: reduce-SUMSQ, integer 1/sqrt(Sxx/N), normalize.
+    rn_f = g.node(f"RMSNormF16_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_rmsnorm_f16_f16",
+                  SnaxBingoKernelXdmaRmsnormF16F16Args(l1_x, l1_f16, rows, D), load)
+    l3_f = BingoMemAlloc(f"out_rmsnorm_f16_{i}", size=tot_b, mem_level="L3")
+    st_f = g.node(f"StoreF16_{i}", HOST_CORE, "__host_bingo_kernel_idma",
+                  HostBingoKernelIdmaArgs(l1_f16, l3_f, tot_b), rn_f)
+    ck_f = g.node(f"Check_rmsnorm_cfg{i}", HOST_CORE, "__host_bingo_kernel_check_result",
+                  HostBingoKernelCheckResultArgs(BingoMemSymbol(f"golden_{i}"), l3_f,
+                      name=f"rmsnorm_cfg{i}", check_type=CHECK_FP16_TOL, num_elements=n,
+                      tolerance=0.03), st_f)
+    # int8 output: same pipeline, final pass fuses Fp16ToInt8. +-1 LSB check vs the quantized
+    # golden (the golden's y uses the device integer rsqrt, so it's near-exact).
+    rn_q = g.node(f"RMSNormI8_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_rmsnorm_f16_i8",
+                  SnaxBingoKernelXdmaRmsnormF16I8Args(l1_x, l1_i8, rows, D), ck_f)
+    l3_q = BingoMemAlloc(f"out_rmsnorm_i8_{i}", size=n, mem_level="L3")
+    st_q = g.node(f"StoreI8_{i}", HOST_CORE, "__host_bingo_kernel_idma",
+                  HostBingoKernelIdmaArgs(l1_i8, l3_q, n), rn_q)
+    ck_q = g.node(f"Check_rmsnorm_i8_cfg{i}", HOST_CORE, "__host_bingo_kernel_check_result",
+                  HostBingoKernelCheckResultArgs(BingoMemSymbol(f"golden_i8_{i}"), l3_q,
+                      name=f"rmsnorm_i8_cfg{i}", check_type=CHECK_INT8_TOL,
+                      num_elements=n, tolerance=1.0), st_q)
+    return ck_q
 
 
 def main():
@@ -226,7 +214,7 @@ def main():
     for i in range(len(CONFIGS)):
         prev = build_config(g, i, prev)
     os.makedirs(args.output_dir, exist_ok=True)
-    dfg.bingo_compile_dfg("xDMA rmsnorm (explicit + host rsqrt)", args.output_dir,
+    dfg.bingo_compile_dfg("xDMA rmsnorm (fused)", args.output_dir,
                           args.output_offload_file_name,
                           extra_include_header_list=["rmsnorm_data.h"])
     print(f"Generated rmsnorm: {len(CONFIGS)} configs")
