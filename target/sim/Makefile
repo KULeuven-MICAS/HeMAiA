@@ -175,6 +175,7 @@ VCS_FLAGS += -assert disable_cover
 # specifically intended for functional and SDF gate-level designs.  None of
 # them enables Fine-Grained Parallelism at simulation time.
 ifeq ($(SIM_WITH_NETLIST), 1)
+	VCS_FLAGS += +notimingcheck
 	VCS_FLAGS += -hsopt=gates
 	VCS_FLAGS += -Xkeyopt=rtopt
 	VCS_FLAGS += +rad
