@@ -6,6 +6,31 @@
 #
 # Xiaoling Yi <xiaoling.yi@kuleuven.be>
 
+# BEGIN WORKLOAD DESCRIPTION AND TASK GRAPH
+# Cross-chiplet DMA write test. Every chiplet first loads and checks a local L3
+# chunk. Chiplets 01, 10, and 11 then push their chunks into receive buffers on
+# chiplet 00, where chiplet 00 checks the received data.
+#
+# Task dependency graph:
+#
+# Local load/check phase:
+#   Load_A1_MemChip_to_Chip00_L3 -> Check_A1_Chip00_Local_L3
+#   Check_A1_Chip00_Local_L3 -> Check_A2_Chip01_Local_L3
+#   Load_A2_MemChip_to_Chip01_L3 -> Check_A2_Chip01_Local_L3
+#   Check_A2_Chip01_Local_L3 -> Check_A3_Chip10_Local_L3
+#   Load_A3_MemChip_to_Chip10_L3 -> Check_A3_Chip10_Local_L3
+#   Check_A3_Chip10_Local_L3 -> Check_A4_Chip11_Local_L3
+#   Load_A4_MemChip_to_Chip11_L3 -> Check_A4_Chip11_Local_L3
+#
+# Remote write phase:
+#   Check_A4_Chip11_Local_L3 -> Write_A2_Chip01_L3_to_Chip00
+#   Write_A2_Chip01_L3_to_Chip00 -> Check_A2_Received_from_Chip01
+#   Check_A2_Received_from_Chip01 -> Write_A3_Chip10_L3_to_Chip00
+#   Write_A3_Chip10_L3_to_Chip00 -> Check_A3_Received_from_Chip10
+#   Check_A3_Received_from_Chip10 -> Write_A4_Chip11_L3_to_Chip00
+#   Write_A4_Chip11_L3_to_Chip00 -> Check_A4_Received_from_Chip11
+# END WORKLOAD DESCRIPTION AND TASK GRAPH
+
 """
 Cross-chiplet DMA sub-test extracted from the 4-chiplet K-split GEMM flow.
 

@@ -51,6 +51,40 @@ buffers against goldens from attention_datagen.py. In RUN mode only the
 final checks are emitted (smaller DFG, faster simulation).
 """
 
+# BEGIN WORKLOAD DESCRIPTION AND TASK GRAPH
+# Reference attention graph built from quantize, K-split GEMM, softmax, and
+# layout-conversion patterns. In debug mode, every stage compares against
+# goldens; the graph still carries inter-stage edges so run mode can replace
+# golden inputs with runtime buffers later.
+#
+# Task dependency graph:
+#
+# Top-level attention flow:
+#   Quantize_X -> Check_X_int8
+#   Check_X_int8 -> proj_q
+#   Check_X_int8 -> proj_k
+#   Check_X_int8 -> proj_v
+#   proj_q + proj_k -> qk_matmul
+#   qk_matmul -> Softmax -> Check_attn_weights
+#   Check_attn_weights + proj_v -> av_matmul
+#   av_matmul -> proj_o -> Check_proj_o_fp32
+#
+# Each K-split GEMM stage, for each cluster c:
+#   Load_<stage>_c<c>_k<k>_A -> Load_<stage>_c<c>_k<k>_B
+#   Load_<stage>_c<c>_k<k>_B -> Gemm_<stage>_c<c>_k<k>
+#   Gemm_<stage>_c<c>_k<k> -> Store_<stage>_c<c>
+#   Store_<stage>_c<c> -> Check_<stage>_D_partial_c<c>    in debug mode
+#
+# Each K-split GEMM stage reduction:
+#   Store_<stage>_c0 + Store_<stage>_c1 -> Add_<stage>_c0_c1
+#   Add/check running sums with c2 and c3 in order
+#   Final_sum -> Dequant_<stage> -> Reshape_<stage>_d2rm
+#   Reshape_<stage>_d2rm -> Check_<stage>_fp32              in debug mode
+#
+# Softmax pattern:
+#   qk_matmul_fp32_rm_l3 -> Softmax -> Check_attn_weights
+# END WORKLOAD DESCRIPTION AND TASK GRAPH
+
 from __future__ import annotations
 
 # ─── SECTION 1: Imports + HW config ───────────────────────────────────────

@@ -18,6 +18,34 @@ Then sequential on host:
 Total: ~36 nodes
 """
 
+# BEGIN WORKLOAD DESCRIPTION AND TASK GRAPH
+# Single-chip, four-cluster K-split GEMM. Each cluster computes one K chunk,
+# stores and checks its partial result, then cluster 0 host code reduces the
+# partials, dequantizes the final INT32 result to FP32, and checks the FP32
+# output.
+#
+# Task dependency graph:
+#
+# Per-cluster compute lanes:
+#   c0: Load_A_k0 -> Load_B_k0 -> Gemm_c0 -> Store_D_c0
+#       -> Load_Golden_D_c0 -> Check_D_partial_c0
+#   c1: Load_A_k1 -> Load_B_k1 -> Gemm_c1 -> Store_D_c1
+#       -> Load_Golden_D_c1 -> Check_D_partial_c1
+#   c2: Load_A_k2 -> Load_B_k2 -> Gemm_c2 -> Store_D_c2
+#       -> Load_Golden_D_c2 -> Check_D_partial_c2
+#   c3: Load_A_k3 -> Load_B_k3 -> Gemm_c3 -> Store_D_c3
+#       -> Load_Golden_D_c3 -> Check_D_partial_c3
+#
+# Reduction and checks on host:
+#   Check_D_partial_c0 + Check_D_partial_c1 -> Add_c0_c1
+#   Add_c0_c1 -> Load_Golden_sum_c0_c1 -> Check_sum_c0_c1
+#   Check_sum_c0_c1 + Check_D_partial_c2 -> Add_c0_c1_c2
+#   Add_c0_c1_c2 -> Load_Golden_sum_c0_c1_c2 -> Check_sum_c0_c1_c2
+#   Check_sum_c0_c1_c2 + Check_D_partial_c3 -> Add_c0_c1_c2_c3
+#   Add_c0_c1_c2_c3 -> Load_Golden_sum_final -> Check_sum_final
+#   Check_sum_final -> Dequant -> Load_Golden_fp32 -> Check_fp32
+# END WORKLOAD DESCRIPTION AND TASK GRAPH
+
 import os
 import sys
 import argparse

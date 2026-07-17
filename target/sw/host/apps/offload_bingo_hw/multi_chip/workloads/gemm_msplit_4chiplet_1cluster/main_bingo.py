@@ -6,6 +6,34 @@
 #
 # Xiaoling Yi <xiaoling.yi@kuleuven.be>
 
+# BEGIN WORKLOAD DESCRIPTION AND TASK GRAPH
+# Four-chiplet M-split GEMM. Chiplet 00 loads and broadcasts B; every chiplet
+# loads its own A tile, checks local inputs, computes one output partition, stores
+# D, and checks D.
+#
+# Task dependency graph:
+#
+# Chip00 setup:
+#   Load_A1_Chip00 -> Check_A1_Chip00 -> Load_B_Chip00
+#   Load_B_Chip00 -> Check_B_Chip00 -> Broadcast_B_Chip00
+#
+# Chip00 compute:
+#   Broadcast_B_Chip00 -> Gemm_A1_B_Chip00 -> Store_D1_Chip00 -> Check_D1_Chip00
+#
+# Remote chiplet lanes:
+#   chip01: Load_A2_Chip01 -> Check_A2_Chip01 -> Check_B_Chip01
+#           Check_B_Chip01 -> Gemm_A2_B_Chip01 -> Store_D2_Chip01 -> Check_D2_Chip01
+#   chip10: Load_A3_Chip10 -> Check_A3_Chip10 -> Check_B_Chip10
+#           Check_B_Chip10 -> Gemm_A3_B_Chip10 -> Store_D3_Chip10 -> Check_D3_Chip10
+#   chip11: Load_A4_Chip11 -> Check_A4_Chip11 -> Check_B_Chip11
+#           Check_B_Chip11 -> Gemm_A4_B_Chip11 -> Store_D4_Chip11 -> Check_D4_Chip11
+#
+# Broadcast fanout:
+#   Broadcast_B_Chip00 -> Check_B_Chip01
+#   Broadcast_B_Chip00 -> Check_B_Chip10
+#   Broadcast_B_Chip00 -> Check_B_Chip11
+# END WORKLOAD DESCRIPTION AND TASK GRAPH
+
 import os
 import sys
 import argparse

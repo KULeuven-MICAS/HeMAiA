@@ -9,6 +9,15 @@
 # issue the load commands for A and B in parallel using the host DMA and device DMA respectively, 
 # to show the improvement of the bingo hw manager in scheduling and issuing commands to different engines in parallel
 
+# BEGIN WORKLOAD DESCRIPTION AND TASK GRAPH
+# Single-cluster GEMM variant with A loaded by device iDMA and B loaded by host
+# iDMA. The two loads run in parallel and both feed the GEMM.
+#
+# Task dependency graph:
+#
+# Load_A + Load_B -> Gemm_Full -> Check_D
+# END WORKLOAD DESCRIPTION AND TASK GRAPH
+
 import os
 import sys
 import argparse

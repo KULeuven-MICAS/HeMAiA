@@ -6,6 +6,28 @@
 #
 # Xiaoling Yi <xiaoling.yi@kuleuven.be>
 
+# BEGIN WORKLOAD DESCRIPTION AND TASK GRAPH
+# DMA-only version of the M-split GEMM data movement. It loads A tiles on each
+# chiplet, loads B on chip00, broadcasts B, and checks the local A/B buffers.
+#
+# Task dependency graph:
+#
+# Chip00:
+#   Load_A1_Chip00 -> Load_B_Chip00
+#   Load_B_Chip00 -> Check_A1_Chip00 -> Check_B_Chip00
+#   Load_B_Chip00 -> Broadcast_B_Chip00
+#
+# Remote chiplet A lanes:
+#   chip01: Load_A2_Chip01 -> Check_A2_Chip01 -> Check_B_Chip01
+#   chip10: Load_A3_Chip10 -> Check_A3_Chip10 -> Check_B_Chip10
+#   chip11: Load_A4_Chip11 -> Check_A4_Chip11 -> Check_B_Chip11
+#
+# Broadcast fanout:
+#   Broadcast_B_Chip00 -> Check_B_Chip01
+#   Broadcast_B_Chip00 -> Check_B_Chip10
+#   Broadcast_B_Chip00 -> Check_B_Chip11
+# END WORKLOAD DESCRIPTION AND TASK GRAPH
+
 import os
 import sys
 import argparse

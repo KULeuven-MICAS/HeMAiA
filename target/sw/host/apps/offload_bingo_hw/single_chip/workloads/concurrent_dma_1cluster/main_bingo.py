@@ -3,6 +3,33 @@
 # This file is the main entry point for the bingo offload application
 # Users will create the dfg in this file
 # And then the mini-compiler will emit the WORKLOAD.h file
+
+# BEGIN WORKLOAD DESCRIPTION AND TASK GRAPH
+# Concurrent DMA smoke test in one cluster. It compares device xDMA, device iDMA,
+# host xDMA, and host iDMA copy paths across three serialized sub-tests.
+#
+# Task dependency graph:
+#
+# Test 1, L3 to L1 with device engines:
+#   Dev_XDMA_A1_L3_to_L1 -> Check_A1_L1
+#   Dev_IDMA_A2_L3_to_L1 -> Check_A2_L1
+#   Check_A1_L1 -> Check_A2_L1
+#
+# Test 2, L3 to L1 with host xDMA plus device iDMA:
+#   Check_A2_L1 -> Host_XDMA_A1_L3_to_L1
+#   Check_A2_L1 -> Dev_IDMA_A2_L3_to_L1
+#   Host_XDMA_A1_L3_to_L1 -> Check_A1_L1_test2
+#   Dev_IDMA_A2_L3_to_L1 -> Check_A2_L1_test2
+#   Check_A1_L1_test2 -> Check_A2_L1_test2
+#
+# Test 3, L1 to L3 with host xDMA plus host iDMA:
+#   Check_A2_L1_test2 -> Host_XDMA_A1_L1_to_L3
+#   Check_A2_L1_test2 -> Host_IDMA_A2_L1_to_L3
+#   Host_XDMA_A1_L1_to_L3 -> Check_A1_L3
+#   Host_IDMA_A2_L1_to_L3 -> Check_A2_L3
+#   Check_A1_L3 -> Check_A2_L3
+# END WORKLOAD DESCRIPTION AND TASK GRAPH
+
 import os
 import sys
 import argparse

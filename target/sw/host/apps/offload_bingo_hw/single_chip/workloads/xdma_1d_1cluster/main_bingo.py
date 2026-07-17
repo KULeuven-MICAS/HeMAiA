@@ -9,6 +9,14 @@
 #   -> Store (host iDMA L1 -> L3) -> Host check against golden.
 # The xDMA 1d_copy is the identity, so golden == input.
 
+# BEGIN WORKLOAD DESCRIPTION AND TASK GRAPH
+# Minimal single xDMA 1D copy functional test.
+#
+# Task dependency graph:
+#
+# Load_input -> XDMA_copy -> Store_copy -> Check_copy
+# END WORKLOAD DESCRIPTION AND TASK GRAPH
+
 import os
 import sys
 import argparse

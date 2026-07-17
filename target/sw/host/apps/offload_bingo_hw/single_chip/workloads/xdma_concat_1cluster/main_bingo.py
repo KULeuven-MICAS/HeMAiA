@@ -9,6 +9,20 @@
 # XDMA_RUN trace event (in CONFIGS order) for the cycle LUT. Shared machinery
 # lives in util/sim/xdma/xdma_ops_lib.py.
 
+# BEGIN WORKLOAD DESCRIPTION AND TASK GRAPH
+# Per-op xDMA concat sweep over nine configurations. Each config concatenates a
+# top half and bottom half before storing and checking the result.
+#
+# Task dependency graph:
+#
+# For each config i = 0..8:
+#   LoadTop_i -> ConcatTop_i -> LoadBot_i -> ConcatBot_i
+#   ConcatBot_i -> Store_concat_cfg[i] -> Check_concat_cfg[i]
+#
+# Config ordering:
+#   Check_concat_cfg[i] -> LoadTop_[i+1]    for i = 0..7
+# END WORKLOAD DESCRIPTION AND TASK GRAPH
+
 import os
 import sys
 

@@ -12,6 +12,8 @@ The Bingo HW framework offloads the "Manager" logic from software to dedicated h
 ## Workloads
 The workload directories are split by chip topology. Each workload emits a
 separate ELF through the corresponding `single_chip` or `multi_chip` Makefile.
+Each workload's `main_bingo.py` includes a workload description and task
+dependency graph comment block.
 
 ### Single-chip workloads
 - **concurrent_dma_1cluster**: Exercises concurrent DMA operations within one cluster.

@@ -9,6 +9,19 @@
 # XDMA_RUN trace event (in CONFIGS order) for the cycle LUT. Shared machinery
 # lives in util/sim/xdma/xdma_ops_lib.py.
 
+# BEGIN WORKLOAD DESCRIPTION AND TASK GRAPH
+# Per-op VersaCore B-layout to row-major conversion sweep over nine
+# configurations.
+#
+# Task dependency graph:
+#
+# For each config i = 0..8:
+#   Load_i -> Op_i -> Store_b_to_row_cfg[i] -> Check_b_to_row_cfg[i]
+#
+# Config ordering:
+#   Check_b_to_row_cfg[i] -> Load_[i+1]    for i = 0..7
+# END WORKLOAD DESCRIPTION AND TASK GRAPH
+
 import os
 import sys
 

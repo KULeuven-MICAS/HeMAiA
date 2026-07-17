@@ -1,3 +1,15 @@
+# BEGIN WORKLOAD DESCRIPTION AND TASK GRAPH
+# Two GEMMs are stacked in one cluster. The output of the first GEMM is reused as
+# the A input of the second GEMM.
+#
+# Task dependency graph:
+#
+# Load_A1 + Load_B1 -> Gemm_D1
+# Load_B1 -> Load_B2
+# Gemm_D1 + Load_B2 -> Gemm_D2
+# Gemm_D2 -> Store_D2 -> Check_D2
+# END WORKLOAD DESCRIPTION AND TASK GRAPH
+
 import os
 import sys
 import argparse

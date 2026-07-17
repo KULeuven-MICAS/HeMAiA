@@ -8,6 +8,15 @@
 # Conduct D=A*B in a single cluster with separate load and compute, store, and check result.
 # issue the load commands for A and B in sequential using the device DMA.
 
+# BEGIN WORKLOAD DESCRIPTION AND TASK GRAPH
+# Single-cluster GEMM baseline. A and B are both loaded by the device DMA engine,
+# so their loads are serialized before GEMM.
+#
+# Task dependency graph:
+#
+# Load_A -> Load_B -> Gemm_Full -> Store_D -> Check_D
+# END WORKLOAD DESCRIPTION AND TASK GRAPH
+
 import os
 import sys
 import argparse
