@@ -6,6 +6,34 @@
 # This file is the main entry point for the bingo offload application
 # Users will create the dfg in this file
 # And then the mini-compiler will emit the WORKLOAD.h file
+
+# BEGIN WORKLOAD DESCRIPTION AND TASK GRAPH
+# Tiled single-cluster GEMM with ping-pong A and D buffers. Matrix B is loaded
+# once, then eight A tiles are streamed through GEMM and store stages. Extra
+# edges protect buffer reuse hazards.
+#
+# Task dependency graph:
+#
+# Static setup:
+#   Load_B -> Load_A[0]
+#
+# Per tile i = 0..7:
+#   Load_A[i] -> Gemm[i] -> Store_D[i]
+#
+# Deterministic same-core ordering:
+#   Load_A[i] -> Load_A[i+1]        for i = 0..6
+#   Gemm[i] -> Gemm[i+1]            for i = 0..6
+#   Store_D[i] -> Store_D[i+1]      for i = 0..6
+#
+# Result checking:
+#   Store_D[7] -> Check_D[0]
+#   Check_D[i] -> Check_D[i+1]      for i = 0..6
+#
+# Ping-pong buffer safety:
+#   Gemm[i] -> Load_A[i+2]          for i = 0..5
+#   Store_D[i] -> Gemm[i+2]         for i = 0..5
+# END WORKLOAD DESCRIPTION AND TASK GRAPH
+
 import os
 import sys
 import argparse

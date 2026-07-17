@@ -6,6 +6,16 @@
 #
 # Xiaoling Yi <xiaoling.yi@kuleuven.be>
 
+# BEGIN WORKLOAD DESCRIPTION AND TASK GRAPH
+# Dependency-tag regression. The host check must wait for the host iDMA golden
+# load, not only for the earlier device iDMA copy.
+#
+# Task dependency graph:
+#
+# Device_Copy_Input_to_L1 -> Host_Load_Golden_to_L3
+# Host_Load_Golden_to_L3 -> Host_Check_Device_Output
+# END WORKLOAD DESCRIPTION AND TASK GRAPH
+
 """
 Regression workload for Bingo HW dependency generation.
 

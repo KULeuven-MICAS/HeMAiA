@@ -4,6 +4,15 @@
 # Validates the kernel needed for inter-cluster partial-D accumulation
 # in K-split GEMM schemes (used by attn_test_ksplit_gemm).
 
+# BEGIN WORKLOAD DESCRIPTION AND TASK GRAPH
+# Host/Ara int32 addition smoke test. It forms running sums and checks each
+# stage.
+#
+# Task dependency graph:
+#
+# Add_01 -> Check_01 -> Add_012 -> Check_012 -> Add_Final -> Check_Final
+# END WORKLOAD DESCRIPTION AND TASK GRAPH
+
 import os
 import sys
 import argparse

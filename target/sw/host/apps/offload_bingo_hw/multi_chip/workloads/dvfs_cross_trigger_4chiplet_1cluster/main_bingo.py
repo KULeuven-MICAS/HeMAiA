@@ -6,6 +6,31 @@
 #
 # Xiaoling Yi <xiaoling.yi@kuleuven.be>
 
+# BEGIN WORKLOAD DESCRIPTION AND TASK GRAPH
+# Four-chiplet DVFS cross-trigger workload. Chip00 performs a longer six-GEMM
+# sequence, then broadcasts B to trigger shorter remote GEMM sequences on
+# chiplets 01, 10, and 11.
+#
+# Task dependency graph:
+#
+# Chip00 primary lane:
+#   Load_A_chip00 -> Load_B_chip00 -> Gemm_s0_chip00 -> Gemm_s1_chip00
+#   Gemm_s1_chip00 -> Gemm_s2_chip00 -> Gemm_s3_chip00
+#   Gemm_s3_chip00 -> Gemm_s4_chip00 -> Gemm_s5_chip00
+#   Gemm_s5_chip00 -> Store_chip00 -> Check_chip00
+#   Gemm_s5_chip00 -> Broadcast_B_chip00
+#
+# Remote lanes after broadcast:
+#   Broadcast_B_chip00 -> Load_A_chip01 -> Gemm_s0_chip01 -> Gemm_s1_chip01
+#   Gemm_s1_chip01 -> Gemm_s2_chip01 -> Gemm_s3_chip01 -> Store_chip01 -> Check_chip01
+#
+#   Broadcast_B_chip00 -> Load_A_chip10 -> Gemm_s0_chip10 -> Gemm_s1_chip10
+#   Gemm_s1_chip10 -> Gemm_s2_chip10 -> Gemm_s3_chip10 -> Store_chip10 -> Check_chip10
+#
+#   Broadcast_B_chip00 -> Load_A_chip11 -> Gemm_s0_chip11 -> Gemm_s1_chip11
+#   Gemm_s1_chip11 -> Gemm_s2_chip11 -> Gemm_s3_chip11 -> Store_chip11 -> Check_chip11
+# END WORKLOAD DESCRIPTION AND TASK GRAPH
+
 import os
 import sys
 import argparse

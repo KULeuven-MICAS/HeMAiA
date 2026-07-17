@@ -8,6 +8,14 @@ Tests the FP32->INT8 quantize host kernel (HostBingoKernelAraQuantizeF32I8Args) 
 and checking the INT8 output against a golden reference.
 """
 
+# BEGIN WORKLOAD DESCRIPTION AND TASK GRAPH
+# Host/Ara quantization smoke test from FP32 input to INT8 output.
+#
+# Task dependency graph:
+#
+# Quantize_X -> Check_int8_X
+# END WORKLOAD DESCRIPTION AND TASK GRAPH
+
 import os
 import sys
 import argparse

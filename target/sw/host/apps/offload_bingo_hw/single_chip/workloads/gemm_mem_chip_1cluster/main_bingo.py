@@ -5,6 +5,19 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Xiaoling Yi <xiaoling.yi@kuleuven.be>
+
+# BEGIN WORKLOAD DESCRIPTION AND TASK GRAPH
+# Single-cluster GEMM where A, B, and golden D live in the memory chip address
+# space. A and B are moved into local L1, GEMM computes D, and the result is
+# stored to L3 before checking against a golden loaded from the memory chip.
+#
+# Task dependency graph:
+#
+# Load_A_From_MemChip + Load_B_From_MemChip -> Gemm_A_B
+# Gemm_A_B -> Store_D -> Check_D
+# Load_Golden_D_From_MemChip -> Check_D
+# END WORKLOAD DESCRIPTION AND TASK GRAPH
+
 import argparse
 import os
 import pathlib

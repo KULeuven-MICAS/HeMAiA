@@ -5,6 +5,24 @@ The user only specifies cond_dic on edges. The compiler auto-inserts the
 gating node, assigns CERF groups, and populates all kernel args.
 """
 
+# BEGIN WORKLOAD DESCRIPTION AND TASK GRAPH
+# Four-expert mixture-of-experts test with top-2 routing. The router runs a
+# host softmax over logits. Conditional edges from the router gate the expert
+# lanes; the compiler later inserts the CERF/gating support.
+#
+# Task dependency graph:
+#
+# Router:
+#   router
+#
+# For each expert e = 0..3 on cluster e:
+#   router --top_k(2)--> e_ldA
+#   router --top_k(2)--> e_ldB
+#   router --top_k(2)--> e_gemm
+#   router --top_k(2)--> e_stD
+#   e_ldA + e_ldB -> e_gemm -> e_stD
+# END WORKLOAD DESCRIPTION AND TASK GRAPH
+
 import os
 import sys
 import argparse

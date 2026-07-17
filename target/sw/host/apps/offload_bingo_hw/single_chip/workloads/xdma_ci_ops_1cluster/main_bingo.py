@@ -15,8 +15,49 @@
 #   8. GATHER        - select every Nth row
 #   9. A/B/D layout  - row-major <-> VersaCore blocked layouts
 #
-# Each test: IDMA load -> xDMA transform -> Host store -> Host check
-# All tests run independently (no inter-test dependency).
+# Each test: IDMA load -> xDMA transform -> Host store -> Host check.
+# Tests are serialized through each check for deterministic shared-buffer reuse.
+
+# BEGIN WORKLOAD DESCRIPTION AND TASK GRAPH
+# One DFG that runs the CI coverage set for xDMA copy, 6D, transpose, submatrix,
+# expand, concat, pad, gather, elementwise add, and VersaCore layout conversion
+# operators. The current source serializes the tests through each check.
+#
+# Task dependency graph:
+#
+# Load_input -> XDMA_copy -> Store_copy -> Check_copy
+# Check_copy -> XDMA_6d -> Store_xdma_6d -> Check_xdma_6d
+# Check_xdma_6d -> XDMA_transpose -> Store_transpose -> Check_transpose
+# Check_transpose -> XDMA_submatrix -> Store_submatrix -> Check_submatrix
+# Check_submatrix -> XDMA_expand -> Store_expand -> Check_expand
+#
+# Concat:
+#   Check_expand -> XDMA_concat_top -> Load_input_bottom
+#   Load_input_bottom -> XDMA_concat_bottom -> Store_concat -> Check_concat
+#
+# Remaining xDMA ops:
+#   Check_concat -> XDMA_pad -> Store_pad -> Check_pad
+#   Check_pad -> XDMA_gather -> Store_gather -> Check_gather
+#
+# Elementwise add:
+#   Check_gather -> Load_eltadd -> XDMA_eltadd -> Store_eltadd -> Check_eltadd
+#   Check_eltadd -> Load_eltadd_a -> Load_eltadd_b
+#   Load_eltadd_b -> XDMA_eltadd_binary -> Store_eltadd_binary
+#   Store_eltadd_binary -> Check_eltadd_binary
+#
+# Layout conversions:
+#   Check_eltadd_binary -> Load_row_to_A -> Conv_row_to_A -> Store_row_to_A -> Check_row_to_A
+#   Check_row_to_A -> Load_A_to_row -> Conv_A_to_row -> Store_A_to_row -> Check_A_to_row
+#   Check_A_to_row -> Load_row_to_B -> Conv_row_to_B -> Store_row_to_B -> Check_row_to_B
+#   Check_row_to_B -> Load_B_to_row -> Conv_B_to_row -> Store_B_to_row -> Check_B_to_row
+#   Check_B_to_row -> Load_row_to_D -> Conv_row_to_D -> Store_row_to_D -> Check_row_to_D
+#   Check_row_to_D -> Load_D_to_row -> Conv_D_to_row -> Store_D_to_row -> Check_D_to_row
+#
+# Direct L3 layout conversions:
+#   Check_D_to_row -> ConvL3_row_to_A -> CheckL3_row_to_A
+#   CheckL3_row_to_A -> ConvL3_row_to_B -> CheckL3_row_to_B
+#   CheckL3_row_to_B -> ConvL3_row_to_D -> CheckL3_row_to_D
+# END WORKLOAD DESCRIPTION AND TASK GRAPH
 
 import os
 import sys

@@ -12,6 +12,17 @@
 # 3. Store Di back to main memory using snax iDMA
 # 4. Check the result on host
 
+# BEGIN WORKLOAD DESCRIPTION AND TASK GRAPH
+# Four-chiplet GEMM where each chiplet independently runs a parallel-load GEMM
+# lane. A uses device iDMA and B uses host iDMA on each chiplet.
+#
+# Task dependency graph:
+#
+# For each chiplet x in {00, 01, 10, 11}:
+#   Load_Ax_Chip<x> + Load_B_Chip<x> -> Gemm_Ax_B_Chip<x>
+#   Gemm_Ax_B_Chip<x> -> Store_Dx_Chip<x> -> Check_Dx_Chip<x>
+# END WORKLOAD DESCRIPTION AND TASK GRAPH
+
 import os
 import sys
 import argparse

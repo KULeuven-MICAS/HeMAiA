@@ -9,6 +9,14 @@ multi-precision softmax dispatcher) by computing row-wise softmax on a FP32
 input and checking the output against a golden reference.
 """
 
+# BEGIN WORKLOAD DESCRIPTION AND TASK GRAPH
+# Host/Ara softmax smoke test over FP32 input rows.
+#
+# Task dependency graph:
+#
+# Softmax -> Check_softmax
+# END WORKLOAD DESCRIPTION AND TASK GRAPH
+
 import os
 import sys
 import argparse

@@ -15,6 +15,21 @@
 # produces bin/logs/bingo_trace.json with one GEMM_FULL_RUN + one GEMM_MIN_RUN
 # event per config (in the order configs are listed below).
 
+# BEGIN WORKLOAD DESCRIPTION AND TASK GRAPH
+# GEMM characterization sweep. The current config emits 21 configurations, each
+# as a load/load/full-GEMM/minimal-GEMM/check chain. The checks serialize configs
+# so trace events remain in config order.
+#
+# Task dependency graph:
+#
+# For each config i = 0..20:
+#   Load_A_cfg[i] -> Load_B_cfg[i] -> Gemm_Full_cfg[i]
+#   Gemm_Full_cfg[i] -> Gemm_Minimal_cfg[i] -> Check_cfg[i]
+#
+# Config ordering:
+#   Check_cfg[i] -> Load_A_cfg[i+1]    for i = 0..19
+# END WORKLOAD DESCRIPTION AND TASK GRAPH
+
 import os
 import sys
 import argparse

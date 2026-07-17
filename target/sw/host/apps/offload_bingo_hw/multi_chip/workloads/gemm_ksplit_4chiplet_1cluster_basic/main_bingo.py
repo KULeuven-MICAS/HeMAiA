@@ -6,6 +6,36 @@
 #
 # Xiaoling Yi <xiaoling.yi@kuleuven.be>
 
+# BEGIN WORKLOAD DESCRIPTION AND TASK GRAPH
+# Four-chiplet K-split GEMM with host-side reduction. Each chiplet computes and
+# checks one partial D. Chiplet 00 then pulls remote partials to L3 and performs
+# host int32 additions with intermediate checks.
+#
+# Task dependency graph:
+#
+# Per-chiplet compute lanes:
+#   k0 chip00: Load_A_k0 -> Load_B_k0 -> Gemm_k0 -> Store_D_k0
+#              -> Load_Golden_D_k0 -> Check_D_partial_k0
+#   k1 chip01: Load_A_k1 -> Load_B_k1 -> Gemm_k1 -> Store_D_k1
+#              -> Load_Golden_D_k1 -> Check_D_partial_k1
+#              -> Copy_D_partial_k1_to_Chip00_L3
+#   k2 chip10: Load_A_k2 -> Load_B_k2 -> Gemm_k2 -> Store_D_k2
+#              -> Load_Golden_D_k2 -> Check_D_partial_k2
+#              -> Copy_D_partial_k2_to_Chip00_L3
+#   k3 chip11: Load_A_k3 -> Load_B_k3 -> Gemm_k3 -> Store_D_k3
+#              -> Load_Golden_D_k3 -> Check_D_partial_k3
+#              -> Copy_D_partial_k3_to_Chip00_L3
+#
+# Reduction on chip00 host:
+#   Check_D_partial_k0 + Copy_D_partial_k1_to_Chip00_L3 -> Add_k0_to_k1
+#   Add_k0_to_k1 -> Load_Golden_sum_k0_to_k1 -> Check_sum_k0_to_k1
+#   Check_sum_k0_to_k1 + Copy_D_partial_k2_to_Chip00_L3 -> Add_k0_to_k2
+#   Add_k0_to_k2 -> Load_Golden_sum_k0_to_k2 -> Check_sum_k0_to_k2
+#   Check_sum_k0_to_k2 + Copy_D_partial_k3_to_Chip00_L3 -> Add_k0_to_k3
+#   Add_k0_to_k3 -> Load_Golden_sum_k0_to_k3 -> Check_sum_k0_to_k3
+#   Check_sum_k0_to_k3 -> Dequant_Chip00 -> Load_Golden_fp32_D -> Check_fp32_D
+# END WORKLOAD DESCRIPTION AND TASK GRAPH
+
 """
 K-split GEMM test across 4 chiplets with one cluster per chiplet.
 

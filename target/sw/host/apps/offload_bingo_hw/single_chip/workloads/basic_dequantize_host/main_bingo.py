@@ -8,6 +8,14 @@ Tests the INT32->FP32 dequantize host kernel (HostBingoKernelAraDequantizeI32F32
 with a known scale and checking the FP32 output against a golden reference.
 """
 
+# BEGIN WORKLOAD DESCRIPTION AND TASK GRAPH
+# Host/Ara dequantization smoke test from INT32 input to FP32 output.
+#
+# Task dependency graph:
+#
+# Dequantize -> Check_fp32
+# END WORKLOAD DESCRIPTION AND TASK GRAPH
+
 import os
 import sys
 import argparse

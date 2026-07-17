@@ -9,6 +9,19 @@
 # XDMA_RUN trace event (in CONFIGS order) for the cycle LUT. Shared machinery
 # lives in util/sim/xdma/xdma_ops_lib.py.
 
+# BEGIN WORKLOAD DESCRIPTION AND TASK GRAPH
+# Per-op xDMA 6D sweep. The current source emits six configs and serializes them
+# through their checks.
+#
+# Task dependency graph:
+#
+# For each config i = 0..5:
+#   Load_i -> Op_i -> Store_xdma6d_cfg[i] -> Check_xdma6d_cfg[i]
+#
+# Config ordering:
+#   Check_xdma6d_cfg[i] -> Load_[i+1]    for i = 0..4
+# END WORKLOAD DESCRIPTION AND TASK GRAPH
+
 import os
 import sys
 

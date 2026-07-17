@@ -6,6 +6,33 @@
 #
 # Xiaoling Yi <xiaoling.yi@kuleuven.be>
 
+# BEGIN WORKLOAD DESCRIPTION AND TASK GRAPH
+# Four-chiplet int32 add using chip00 xDMA elementwise-add. Each chiplet loads
+# one input array into L1; chip00 copies remote arrays into local L1 slots and
+# reduces them with xDMA.
+#
+# Task dependency graph:
+#
+# Initial loads:
+#   Load_A1_MemPool_to_Chip00_L1
+#   Load_A2_MemPool_to_Chip01_L1
+#   Load_A3_MemPool_to_Chip10_L1
+#   Load_A4_MemPool_to_Chip11_L1
+#
+# Running xDMA reduction on chip00:
+#   Load_A1 + Load_A2 -> Copy_A2_Chip01_to_Chip00_L1
+#   Load_A1 + Copy_A2_Chip01_to_Chip00_L1 -> XDMA_Add_A1_to_A2
+#   XDMA_Add_A1_to_A2 -> Check_A1_to_A2
+#
+#   Check_A1_to_A2 + Load_A3 -> Copy_A3_Chip10_to_Chip00_L1
+#   Check_A1_to_A2 + Copy_A3_Chip10_to_Chip00_L1 -> XDMA_Add_A1_to_A3
+#   XDMA_Add_A1_to_A3 -> Check_A1_to_A3
+#
+#   Check_A1_to_A3 + Load_A4 -> Copy_A4_Chip11_to_Chip00_L1
+#   Check_A1_to_A3 + Copy_A4_Chip11_to_Chip00_L1 -> XDMA_Add_A1_to_A4
+#   XDMA_Add_A1_to_A4 -> Check_A1_to_A4
+# END WORKLOAD DESCRIPTION AND TASK GRAPH
+
 """
 INT32 add reduction across 4 chiplets with one cluster per chiplet.
 
