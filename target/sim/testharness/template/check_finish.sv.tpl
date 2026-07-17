@@ -4,65 +4,105 @@
 // Yunhao Deng <yunhao.deng@kuleuven.be>
 // Fanchen Kong <fanchen.kong@kuleuven.be>
 
-// Simulation finish monitor
-// Polls the last word of the last SRAM bank in each compute chip every clock cycle.
-// When the software writes a non-zero value to that location:
-//   1  => simulation passed
-//   else => simulation failed with error code
-//
-// Hierarchy (both interposer and non-interposer modes):
-//   i_dut.i_hemaia_X_Y.i_occamy_chip.i_hemaia_mem_system.i_hemaia_mem
-//     .gen_banks[K].i_data_mem.i_tc_sram
+// Poll the final word of the final SPM bank in every compute chip.  Software
+// writes 1 for success and another non-zero value for failure.  Unknown values
+// are ignored until the memory has reached a stable, software-written state.
 
 <%
-    sram_depth = int(mem_size / 8 / mem_bank)
-    sram_width = 8  ## 8 Bytes Wide
+    # The mapped tapeout netlist has a fixed 128 KiB compute-chip SPM:
+    # 16 banks x 1024 64-bit words.  Do not derive its physical hierarchy
+    # from a simulation configuration override.
+    netlist_sram_bank_count = 16
+    netlist_sram_bank_depth = 1024
+    compute_bank_count = netlist_sram_bank_count if sim_with_netlist else mem_bank
+    sram_depth = (
+        netlist_sram_bank_depth
+        if sim_with_netlist
+        else int(mem_size / 8 / mem_bank)
+    )
+    sram_width_bits = 64
+    # TSMC's 2048x64 macro uses M8; the other 64-bit macros used by tc_sram
+    # use M4.  The mapped tapeout SRAM is 1024x64 M4.
+    macro_column_count = 8 if sram_depth == 2048 else 4
+    finish_macro_row = (sram_depth - 1) // macro_column_count
+    finish_macro_column = (sram_depth - 1) % macro_column_count
 %>
 
-// check_finish task: polls SRAM and blocks until all compute chips have finished
 task automatic check_finish();
+% for compute_chip in compute_chips:
+<%
+    cx = compute_chip.coordinate[0]
+    cy = compute_chip.coordinate[1]
+%>
+    integer      chip_finish_${cx}_${cy};
+    logic [31:0] chip_status_${cx}_${cy};
+% endfor
+    integer all_finished;
+    integer all_correct;
+
     begin
 % for compute_chip in compute_chips:
 <%
     cx = compute_chip.coordinate[0]
     cy = compute_chip.coordinate[1]
 %>
-        automatic integer chip_finish_${cx}_${cy} = 0;
+        chip_finish_${cx}_${cy} = 0;
 % endfor
+
         forever begin
             @(posedge mst_clk_i);
-            begin
-                automatic integer allFinished = 1;
-                automatic integer allCorrect = 1;
+            all_finished = 1;
+            all_correct = 1;
+
 % for compute_chip in compute_chips:
 <%
     cx = compute_chip.coordinate[0]
     cy = compute_chip.coordinate[1]
-    sram_path = "i_dut.i_hemaia_%d_%d.i_occamy_chip.i_hemaia_mem_system.i_hemaia_mem.gen_banks[%d].i_data_mem.i_tc_sram" % (cx, cy, mem_bank - 1)
-    sram_word = "%s.sram[%d][%d-:32]" % (sram_path, sram_depth - 1, sram_width * 8 - 1)
+    if sim_with_netlist:
+        sram_word = (
+            "i_dut.i_hemaia_%d_%d.\\i_occamy_chip/i_hemaia_mem_system/i_hemaia_mem "
+            ".\\gen_banks_%d__i_data_mem/i_tc_sram/gen_mem_gen_%dx64_u_sram "
+            ".MEMORY[%d][%d][%d-:32]"
+            % (cx, cy, compute_bank_count - 1, sram_depth, finish_macro_row,
+               finish_macro_column, sram_width_bits - 1)
+        )
+    elif sim_with_mem_macro:
+        sram_word = (
+            "i_dut.i_hemaia_%d_%d.i_occamy_chip.i_hemaia_mem_system.i_hemaia_mem"
+            ".gen_banks[%d].i_data_mem.i_tc_sram.gen_mem.gen_%dx64.u_sram"
+            ".MEMORY[%d][%d][%d-:32]"
+            % (cx, cy, compute_bank_count - 1, sram_depth, finish_macro_row,
+               finish_macro_column, sram_width_bits - 1)
+        )
+    else:
+        sram_word = (
+            "i_dut.i_hemaia_%d_%d.i_occamy_chip.i_hemaia_mem_system.i_hemaia_mem"
+            ".gen_banks[%d].i_data_mem.i_tc_sram.sram[%d][%d-:32]"
+            % (cx, cy, compute_bank_count - 1, sram_depth - 1, sram_width_bits - 1)
+        )
 %>
-                // Chip (${cx}, ${cy})
-                if (chip_finish_${cx}_${cy} == 0 && ${sram_word} != 0) begin
-                    if (${sram_word} == 32'd1) begin
-                        $display("Simulation of chip_${cx}_${cy} is finished at %tns", $time / 1000);
-                        chip_finish_${cx}_${cy} = 1;
-                    end else begin
-                        $error("Simulation of chip_${cx}_${cy} is finished with errors %d at %tns",
-                               ${sram_word}, $time / 1000);
-                        chip_finish_${cx}_${cy} = -1;
-                    end
+            chip_status_${cx}_${cy} = ${sram_word};
+            if (chip_finish_${cx}_${cy} == 0 &&
+                !$isunknown(chip_status_${cx}_${cy}) && chip_status_${cx}_${cy} != 0) begin
+                if (chip_status_${cx}_${cy} == 32'd1) begin
+                    $display("Simulation of chip_${cx}_${cy} finished successfully at %0t", $time);
+                    chip_finish_${cx}_${cy} = 1;
+                end else begin
+                    $error("Simulation of chip_${cx}_${cy} finished with status %0d at %0t",
+                           chip_status_${cx}_${cy}, $time);
+                    chip_finish_${cx}_${cy} = -1;
                 end
-                if (chip_finish_${cx}_${cy} == 0) allFinished = 0;
-                if (chip_finish_${cx}_${cy} == -1) allCorrect = 0;
+            end
+            if (chip_finish_${cx}_${cy} == 0) all_finished = 0;
+            if (chip_finish_${cx}_${cy} == -1) all_correct = 0;
+
 % endfor
-                if (allFinished == 1) begin
-                    if (allCorrect == 1) begin
-                        $display("All chips finished successfully at %tns", $time / 1000);
-                        $finish;
-                    end else begin
-                        $error("All chips finished with errors at %tns", $time / 1000);
-                        $finish(-1);
-                    end
+            if (all_finished == 1) begin
+                if (all_correct == 1) begin
+                    $display("All chips finished successfully at %0t", $time);
+                    $finish;
+                end else begin
+                    $fatal(1, "All chips finished with errors at %0t", $time);
                 end
             end
         end

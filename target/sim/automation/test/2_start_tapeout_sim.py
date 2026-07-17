@@ -2,7 +2,7 @@
 r"""
 HeMAiA tapeout RTL sim (with vendor PLL)
 ========================================
-Uses ``target/rtl/cfg/hemaia_tapeout.hjson`` and
+Uses ``target/rtl/cfg/hemaia_tapeout_1c.hjson`` and
 ``target/sim/cfg/sim_rtl_with_pll.hjson``. Pulls the full set of private
 vendor repos: TSMC16 macros, D2D link, and the vendor PLL controller.
 
@@ -71,7 +71,7 @@ def main() -> None:
         output_dir=_SCRIPT.parent,
         engine=args.engine,
         with_waveform=bool(args.waveform),
-        cfg="target/rtl/cfg/hemaia_tapeout.hjson",
+        cfg="target/rtl/cfg/hemaia_tapeout_1c.hjson",
         sim_cfg="target/sim/cfg/sim_rtl_with_pll.hjson",
         # Tapeout sim needs all three vendor modules.
         with_macro=True,

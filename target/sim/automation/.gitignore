@@ -8,10 +8,10 @@
 /ci/local_ci/*
 # One suite subdir per tapeout RTL cfg; each keeps its own driver + task list
 # (the task_<idx>/ run dirs it produces stay ignored).
-!/ci/local_ci/tapeout/
-/ci/local_ci/tapeout/*
-!/ci/local_ci/tapeout/run_local_ci.py
-!/ci/local_ci/tapeout/task_local_ci.yaml
+!/ci/local_ci/tapeout_1c/
+/ci/local_ci/tapeout_1c/*
+!/ci/local_ci/tapeout_1c/run_local_ci.py
+!/ci/local_ci/tapeout_1c/task_local_ci.yaml
 !/ci/local_ci/tapeout_1c_simd/
 /ci/local_ci/tapeout_1c_simd/*
 !/ci/local_ci/tapeout_1c_simd/run_local_ci.py
@@ -28,6 +28,10 @@
 /ci/git_ci/*
 !/ci/git_ci/run_git_ci.py
 !/ci/git_ci/task_git_ci.yaml
+!/ci/netlist_ci/
+/ci/netlist_ci/*
+!/ci/netlist_ci/README.md
+!/ci/netlist_ci/run_netlist_ci.py
 
 !/sweep/
 /sweep/*

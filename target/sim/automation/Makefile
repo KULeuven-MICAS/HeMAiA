@@ -5,11 +5,11 @@ JOBS ?= 16
 
 # Which local-CI suite to run. One subdirectory of ci/local_ci/ per tapeout RTL
 # cfg; each pairs a cfg with the task list valid for it.
-#   tapeout          hemaia_tapeout.hjson          1x versacore
+#   tapeout_1c       hemaia_tapeout_1c.hjson       1x versacore
 #   tapeout_1c_simd  hemaia_tapeout_1c_simd.hjson  1x versacore+SIMD
 #   tapeout_2c       hemaia_tapeout_2c.hjson       2x versacore 256KB
 #   tapeout_2c_simd  hemaia_tapeout_2c_simd.hjson  2x versacore 256KB+SIMD
-SUITE ?= tapeout
+SUITE ?= tapeout_1c
 
 # Local CI: Questasim/VCS regression, run on a host with the EDA tools.
 # Source the EDA environment first, or VCS resolves to a version that cannot

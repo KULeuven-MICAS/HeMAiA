@@ -28,7 +28,7 @@
 #include "chip_id.h"
 #include "snax_versacore_lib.h"
 
-// Memory chip coordinate (see target/rtl/cfg/hemaia_tapeout.hjson).
+// Memory chip coordinate (see target/rtl/cfg/hemaia_tapeout_1c.hjson).
 #define MEM_CHIP_LOC_X 0x2
 #define MEM_CHIP_LOC_Y 0x0
 // The chip that fetches B and all A-blocks from the memchip and distributes them.

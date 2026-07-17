@@ -2,7 +2,7 @@
 r"""
 HeMAiA multi-chiplet RTL sim
 ============================
-Uses ``target/rtl/cfg/hemaia_tapeout.hjson`` and ``target/sim/cfg/sim_rtl.hjson``.
+Uses ``target/rtl/cfg/hemaia_tapeout_1c.hjson`` and ``target/sim/cfg/sim_rtl.hjson``.
 Pulls the TSMC16 macros and the D2D-link private repos but does NOT pull the
 vendor PLL controller.
 
@@ -75,7 +75,7 @@ def main() -> None:
         output_dir=_SCRIPT.parent,
         engine=args.engine,
         with_waveform=bool(args.waveform),
-        cfg="target/rtl/cfg/hemaia_tapeout.hjson",
+        cfg="target/rtl/cfg/hemaia_tapeout_1c.hjson",
         sim_cfg="target/sim/cfg/sim_rtl.hjson",
         # Multi-chiplet uses macros + D2D, no vendor PLL.
         with_macro=True,

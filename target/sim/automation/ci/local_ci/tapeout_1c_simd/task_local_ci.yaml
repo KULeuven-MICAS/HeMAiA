@@ -1,12 +1,206 @@
 # Tasks for the HEMAIA TO 1C_SIMD CFG only (hemaia_tapeout_1c_simd.hjson).
 # 4 chiplets, 1x snax_versacore_to_simd_cluster per chiplet.
 #
-# The xDMA per-op workloads exercise the SIMD datapath, so they live here rather
-# than in the plain `tapeout` suite. Their data-gen reads the SIMD cluster hwcfg
-# (snax_versacore_to_simd_cluster.hjson) -- see each workload's Makefile.
+# The SIMD cluster contains the base GEMM core and all other 1C functionality,
+# so this suite runs every task from tapeout_1c first. Five SIMD-specific xDMA
+# per-op workloads are appended after the 36 base tasks.
 
 runs:
+  # ---- host_only / single_chip ----
+  # hello_world
+  - HOST_APP_TYPE: host_only
+    CHIP_TYPE: single_chip
+    WORKLOAD: hello_world
+    DEV_APP: None
+  # clk_rst_configurator
+  - HOST_APP_TYPE: host_only
+    CHIP_TYPE: single_chip
+    WORKLOAD: clk_rst_configurator
+    DEV_APP: None
+  # ci_ara
+  - HOST_APP_TYPE: host_only
+    CHIP_TYPE: single_chip
+    WORKLOAD: ci_ara
+    DEV_APP: None
+  # test_bingo_alloc
+  - HOST_APP_TYPE: host_only
+    CHIP_TYPE: single_chip
+    WORKLOAD: test_bingo_alloc
+    DEV_APP: None
+
+  # ---- host_only / multi_chip ----
+  # multichip_mailbox
+  - HOST_APP_TYPE: host_only
+    CHIP_TYPE: multi_chip
+    WORKLOAD: multichip_mailbox
+    DEV_APP: None
+  # system_xdma_copy
+  - HOST_APP_TYPE: host_only
+    CHIP_TYPE: multi_chip
+    WORKLOAD: system_xdma_copy
+    DEV_APP: None
+  # system_idma_copy
+  - HOST_APP_TYPE: host_only
+    CHIP_TYPE: multi_chip
+    WORKLOAD: system_idma_copy
+    DEV_APP: None
+  # d2d_multi_streams
+  - HOST_APP_TYPE: host_only
+    CHIP_TYPE: multi_chip
+    WORKLOAD: d2d_multi_streams
+    DEV_APP: None
+
+  # ---- offload_legacy / single_chip ----
+  # snax-test-integration
+  - HOST_APP_TYPE: offload_legacy
+    CHIP_TYPE: single_chip
+    WORKLOAD: None
+    DEV_APP: snax-test-integration
+  # snax-xdma-copy
+  - HOST_APP_TYPE: offload_legacy
+    CHIP_TYPE: single_chip
+    WORKLOAD: None
+    DEV_APP: snax-xdma-copy
+  # versacore-matmul-profile-1cluster-4chip
+  - HOST_APP_TYPE: offload_legacy
+    CHIP_TYPE: single_chip
+    WORKLOAD: None
+    DEV_APP: versacore-matmul-profile-1cluster-4chip
+  - HOST_APP_TYPE: offload_legacy
+    CHIP_TYPE: single_chip
+    WORKLOAD: None
+    DEV_APP: versacore-matadd-profile-1cluster-4chip
+  # snax-test-bingo-alloc
+  - HOST_APP_TYPE: offload_legacy
+    CHIP_TYPE: single_chip
+    WORKLOAD: None
+    DEV_APP: snax-test-bingo-alloc
+
+  # ---- offload_legacy / multi_chip ----
+  # snax-test-integration
+  - HOST_APP_TYPE: offload_legacy
+    CHIP_TYPE: multi_chip
+    WORKLOAD: None
+    DEV_APP: gemm-msplit-1cluster-4chip
+  - HOST_APP_TYPE: offload_legacy
+    CHIP_TYPE: multi_chip
+    WORKLOAD: None
+    DEV_APP: gemm-msplit-4cluster-1chip
+
+  # ---- offload_bingo_sw / single_chip ----
+  # dummy_1cluster
+  - HOST_APP_TYPE: offload_bingo_sw
+    CHIP_TYPE: single_chip
+    WORKLOAD: dummy_1cluster
+    DEV_APP: snax-bingo-offload
+  # gemm_tiled_1cluster
+  - HOST_APP_TYPE: offload_bingo_sw
+    CHIP_TYPE: single_chip
+    WORKLOAD: gemm_tiled_1cluster
+    DEV_APP: snax-bingo-offload
+  # gemm_stacked_1cluster
+  - HOST_APP_TYPE: offload_bingo_sw
+    CHIP_TYPE: single_chip
+    WORKLOAD: gemm_stacked_1cluster
+    DEV_APP: snax-bingo-offload
+  # gemm_merge_load_and_compute_1cluster
+  - HOST_APP_TYPE: offload_bingo_sw
+    CHIP_TYPE: single_chip
+    WORKLOAD: gemm_merge_load_and_compute_1cluster
+    DEV_APP: snax-bingo-offload
+  # gemm_seperate_load_and_compute_1cluster
+  - HOST_APP_TYPE: offload_bingo_sw
+    CHIP_TYPE: single_chip
+    WORKLOAD: gemm_seperate_load_and_compute_1cluster
+    DEV_APP: snax-bingo-offload
+
+  # ---- offload_bingo_sw / multi_chip ----
+  # gemm_broadcast_4chiplet_1cluster
+  - HOST_APP_TYPE: offload_bingo_sw
+    CHIP_TYPE: multi_chip
+    WORKLOAD: gemm_broadcast_4chiplet_1cluster
+    DEV_APP: snax-bingo-offload
+  # xdma_mempool_4chiplet_1cluster
+  - HOST_APP_TYPE: offload_bingo_sw
+    CHIP_TYPE: multi_chip
+    WORKLOAD: xdma_mempool_4chiplet_1cluster
+    DEV_APP: snax-bingo-offload
+
   # ---- offload_bingo_hw / single_chip ----
+  # gemm_double_buffer_1cluster
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: single_chip
+    WORKLOAD: gemm_double_buffer_1cluster
+    DEV_APP: snax-bingo-offload
+  # gemm_serial_dma_1cluster
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: single_chip
+    WORKLOAD: gemm_serial_dma_1cluster
+    DEV_APP: snax-bingo-offload
+  # gemm_parallel_dma_1cluster
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: single_chip
+    WORKLOAD: gemm_parallel_dma_1cluster
+    DEV_APP: snax-bingo-offload
+  # gemm_mem_chip_1cluster
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: single_chip
+    WORKLOAD: gemm_mem_chip_1cluster
+    DEV_APP: snax-bingo-offload
+  # device_host_idma_check_1cluster
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: single_chip
+    WORKLOAD: device_host_idma_check_1cluster
+    DEV_APP: snax-bingo-offload
+
+  # ---- offload_bingo_hw / multi_chip ----
+  # gemm_msplit_4chiplet_1cluster
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: multi_chip
+    WORKLOAD: gemm_msplit_4chiplet_1cluster
+    DEV_APP: snax-bingo-offload
+  # gemm_parallel_dma_4chiplet_1cluster
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: multi_chip
+    WORKLOAD: gemm_parallel_dma_4chiplet_1cluster
+    DEV_APP: snax-bingo-offload
+  # gemm_ksplit_4chiplet_1cluster_basic
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: multi_chip
+    WORKLOAD: gemm_ksplit_4chiplet_1cluster_basic
+    DEV_APP: snax-bingo-offload
+  # gemm_ksplit_4chiplet_1cluster_xdma_add
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: multi_chip
+    WORKLOAD: gemm_ksplit_4chiplet_1cluster_xdma_add
+    DEV_APP: snax-bingo-offload
+  # dma_for_gemm_msplit_4chiplet_1cluster
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: multi_chip
+    WORKLOAD: dma_for_gemm_msplit_4chiplet_1cluster
+    DEV_APP: snax-bingo-offload
+  # host_int32_add_4chiplet_1cluster
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: multi_chip
+    WORKLOAD: host_int32_add_4chiplet_1cluster
+    DEV_APP: snax-bingo-offload
+  # xdma_int32_add_4chiplet_1cluster
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: multi_chip
+    WORKLOAD: xdma_int32_add_4chiplet_1cluster
+    DEV_APP: snax-bingo-offload
+  # dma_read_from_chip00_4chiplet_1cluster
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: multi_chip
+    WORKLOAD: dma_read_from_chip00_4chiplet_1cluster
+    DEV_APP: snax-bingo-offload
+  # dma_write_from_other_chip_4chiplet_1cluster
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: multi_chip
+    WORKLOAD: dma_write_from_other_chip_4chiplet_1cluster
+    DEV_APP: snax-bingo-offload
+
+  # ---- SIMD-only offload_bingo_hw / single_chip ----
   # xdma_softmax_1cluster
   - HOST_APP_TYPE: offload_bingo_hw
     CHIP_TYPE: single_chip

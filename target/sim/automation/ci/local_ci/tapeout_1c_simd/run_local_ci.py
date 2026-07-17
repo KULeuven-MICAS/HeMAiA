@@ -11,7 +11,7 @@ One of four per-cfg suites under ``ci/local_ci/``. Each subdirectory pairs one
 tapeout RTL cfg with the task list valid for it, and owns its own ``task_<idx>/``
 run directories, so the suites do not clobber each other:
 
-    tapeout/          hemaia_tapeout.hjson           1x versacore
+    tapeout_1c/       hemaia_tapeout_1c.hjson        1x versacore
     tapeout_1c_simd/  hemaia_tapeout_1c_simd.hjson   1x versacore+SIMD
     tapeout_2c/       hemaia_tapeout_2c.hjson        2x versacore 256KB
     tapeout_2c_simd/  hemaia_tapeout_2c_simd.hjson   2x versacore 256KB+SIMD

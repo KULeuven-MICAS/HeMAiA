@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-HeMAiA CI runner -- ``hemaia_tapeout`` suite
-============================================
+HeMAiA CI runner -- ``hemaia_tapeout_1c`` suite
+===============================================
 
 Builds and runs the ``task_local_ci.yaml`` next to this script through the shared
-:class:`HeMAiASimRunner`, against ``target/rtl/cfg/hemaia_tapeout.hjson``:
+:class:`HeMAiASimRunner`, against ``target/rtl/cfg/hemaia_tapeout_1c.hjson``:
 4 chiplets, 1x ``snax_versacore_to_cluster`` per chiplet.
 
 One of four per-cfg suites under ``ci/local_ci/``. Each subdirectory pairs one
 tapeout RTL cfg with the task list valid for it, and owns its own ``task_<idx>/``
 run directories, so the suites do not clobber each other:
 
-    tapeout/          hemaia_tapeout.hjson           1x versacore
+    tapeout_1c/       hemaia_tapeout_1c.hjson        1x versacore
     tapeout_1c_simd/  hemaia_tapeout_1c_simd.hjson   1x versacore+SIMD
     tapeout_2c/       hemaia_tapeout_2c.hjson        2x versacore 256KB
     tapeout_2c_simd/  hemaia_tapeout_2c_simd.hjson   2x versacore 256KB+SIMD
@@ -41,7 +41,7 @@ from hemaia_sim_runner import (  # noqa: E402
     DEFAULT_MAX_SIM_JOBS, ENGINES, HeMAiASimRunner, parse_tasks, resolve_task_yaml,
 )
 
-CI_CFG = "target/rtl/cfg/hemaia_tapeout.hjson"
+CI_CFG = "target/rtl/cfg/hemaia_tapeout_1c.hjson"
 SIM_CFG = "target/sim/cfg/sim_rtl.hjson"
 DEFAULT_TASK_YAML = "task_local_ci.yaml"
 

@@ -20,6 +20,13 @@ VOPT         ?= $(QUESTA_SEPP) vopt
 VLOG         ?= $(QUESTA_SEPP) vlog
 VLIB         ?= $(QUESTA_SEPP) vlib
 
+# The VCS launcher in the installed W-2024.09-SP2 release mis-detects modern
+# x86_64 Linux hosts as its obsolete 32-bit target before it can process
+# `-full64`.  Export the matching target architecture for VCS and for the
+# vlogan/vhdlan commands emitted into work-vcs/compile.sh.
+VCS_TARGET_ARCH ?= linux64
+export VCS_TARGET_ARCH
+
 # Internal executables
 GENTRACE_PY      ?= $(UTIL_DIR)/trace/gen_trace.py
 ANNOTATE_PY      ?= $(UTIL_DIR)/trace/annotate.py
@@ -42,19 +49,27 @@ MATCH_BGN := 's/+incdir+//g'
 SED_SRCS  := sed -e ${MATCH_END} -e ${MATCH_BGN}
 
 VSIM_BENDER   += -t test -t rtl -t vsim
-ifeq ($(IS_CLEAN_GOAL),)
+# Prepared compiler scripts already contain the resolved source list.  Avoid
+# consulting the backend checkout's live Bender graph in hand-off mode.
+ifeq ($(PREPARED_SIM_INPUTS),1)
+VSIM_SOURCES   =
+else ifeq ($(IS_CLEAN_GOAL),)
 VSIM_SOURCES   = $(shell ${BENDER} script flist ${VSIM_BENDER} | ${SED_SRCS})
 else
 VSIM_SOURCES   =
 endif
 VSIM_BUILDDIR ?= work-vsim
-VOPT_FLAGS     = +acc
+# vopt defaults to -O4.  -O5 enables its additional compiler optimizations;
+# debug visibility is added by the top-level Makefile only for waveform runs.
+VOPT_FLAGS     = -O5
 VOPT_FLAGS    += +notimingchecks
 
 # VCS_BUILDDIR should to be the same as the `DEFAULT : ./work-vcs`
 # in target/snitch_cluster/synopsys_sim.setup
 VCS_BENDER   += -t test -t rtl -t vcs
-ifeq ($(IS_CLEAN_GOAL),)
+ifeq ($(PREPARED_SIM_INPUTS),1)
+VCS_SOURCES   =
+else ifeq ($(IS_CLEAN_GOAL),)
 VCS_SOURCES   = $(shell ${BENDER} script flist ${VCS_BENDER} | ${SED_SRCS})
 else
 VCS_SOURCES   =

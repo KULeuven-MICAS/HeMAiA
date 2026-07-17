@@ -24,6 +24,12 @@ The flows differ only by parameters captured on :class:`HeMAiASimRunner`:
   * ``with_pll``     -- the vendor PLL: selects the private clk/rst controller
     *and* sets ``use_vendor_pll`` in the RTL cfg (see :func:`resolve_rtl_cfg`)
 
+The local netlist flow can split those steps across machines: ``prepare`` builds
+all application images and produces relocatable VCS/Questa compile inputs,
+whereas ``simulate`` validates that immutable hand-off before invoking the EDA
+compiler and running the tasks.  The default ``all`` phase retains the original
+end-to-end behaviour.
+
 The ``engine`` is reduced to a small lookup (:data:`ENGINES`) of the make
 targets and artefacts that differ between the simulators; everything else is
 engine-agnostic.  ``with_waveform`` is forwarded to the make targets, which gate
@@ -36,6 +42,8 @@ from __future__ import annotations
 import atexit
 import argparse
 import getpass
+import hashlib
+import json
 import os
 import re
 import shutil
@@ -48,9 +56,7 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
-
-import hjson
+from typing import Any, Dict, Iterable, List, NamedTuple, Optional, Sequence, Set, Tuple
 
 try:
     import yaml  # type: ignore
@@ -65,6 +71,26 @@ except Exception:
 DEFAULT_DOCKER_IMAGE = "ghcr.io/kuleuven-micas/hemaia:main"
 SIM_TIMEOUT_SECONDS = 4 * 60 * 60  # 4 hours per simulation thread
 DEFAULT_MAX_SIM_JOBS = 16
+PREPARATION_MANIFEST = "netlist_ci_preparation_manifest.json"
+PREPARATION_MANIFEST_VERSION = 6
+MEMPOOL_BANK_COUNT = 16
+_HEX_LINE_RE = re.compile(r"(?:[0-9a-fA-F_xXzZ]+|@[0-9a-fA-F_]+)\Z")
+_HDL_SOURCE_SUFFIXES = {".sv", ".v", ".vhd", ".vhdl"}
+_HDL_INCLUDE_SUFFIXES = {".svh", ".vh"}
+
+
+class SimulationSuiteFailed(RuntimeError):
+    """Raised after writing a summary when one or more simulations failed."""
+
+
+class PlatformLayout(NamedTuple):
+    """Memory geometry needed to validate and stage simulation images."""
+
+    coordinates: List[Tuple[int, int]]
+    compute_bank_count: int
+    compute_bank_depth: int
+    mempool_bank_count: int
+    mempool_bank_depth: Optional[int]
 
 # Per-engine differences: the make targets to run, where the compile happens, the
 # produced binary, and the artefacts to stage into each task directory (paths are
@@ -93,7 +119,9 @@ ENGINES: Dict[str, Dict] = {
         # this flag the simv that loses the race exits immediately ("Licensed
         # number of users already reached for VCS-BASE-RUNTIME") and is wrongly
         # reported as FAIL.  +vcs+lic+wait makes it queue for a seat instead.
-        "run_args": ["+vcs+lic+wait"],
+        # This testbench never uses $save/$restart.  Disabling that facility
+        # avoids VCS re-executing every simv under ASLR before time zero.
+        "run_args": ["+vcs+lic+wait", "-no_save"],
     },
     "vlt": {
         "tool": None,                    # Verilator builds in-container; no host tool
@@ -164,6 +192,17 @@ def resolve_rtl_cfg(
     ask for exactly what their cfg declares run it byte-for-byte.  The copy lands
     under :data:`GENERATED_CFG_DIR`, named after the fields it changed.
     """
+    # Config derivation happens only in the build/preparation phases.  Keep the
+    # dependency lazy so an EDA backend can validate and consume a prepared
+    # hand-off with only the Python standard library installed.
+    try:
+        import hjson  # type: ignore
+    except ImportError as error:
+        raise RuntimeError(
+            "The hjson Python package is required to derive the RTL config; "
+            "run preparation in the HeMAiA build image."
+        ) from error
+
     src = repo_root / cfg
     cfg_dict = hjson.loads(src.read_text())
 
@@ -317,6 +356,15 @@ def _format_duration(seconds: float) -> str:
     if minutes:
         return f"{minutes}m{secs:02d}s"
     return f"{secs}s"
+
+
+def _sha256(path: Path) -> str:
+    """Return the SHA-256 digest of *path* without loading it all in memory."""
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -565,6 +613,10 @@ class HeMAiASimRunner:
         skip_compile: bool = False,
         compile_jobs: Optional[int] = None,
         build_jobs: Optional[int] = None,
+        build_sw_fleet: bool = True,
+        task_yaml: Optional[Path] = None,
+        fail_on_task_failure: bool = False,
+        timeout_seconds: int = SIM_TIMEOUT_SECONDS,
     ) -> None:
         if engine not in ENGINES:
             raise ValueError(f"Unknown engine {engine!r}; choose from {sorted(ENGINES)}")
@@ -602,6 +654,17 @@ class HeMAiASimRunner:
         # one: ~96 host apps x ~20 device apps). `rtl` runs occamygen + bender script
         # generation and `bootrom` takes seconds -- both stay serial.
         self.build_jobs = build_jobs
+        # The broad ``make sw`` fleet intentionally includes applications that
+        # do not target every hardware profile.  Fixed netlist CI instead builds
+        # only its checked-in task list through strict ``make apps`` calls.
+        self.build_sw_fleet = build_sw_fleet
+        # The task source is optional for legacy/test callers.  Split CI flows
+        # provide it so the hand-off manifest can detect task-list changes.
+        self.task_yaml = task_yaml.resolve() if task_yaml is not None else None
+        self.fail_on_task_failure = fail_on_task_failure
+        if timeout_seconds < 1:
+            raise ValueError("timeout_seconds must be >= 1")
+        self.timeout_seconds = timeout_seconds
 
     # -- helpers -----------------------------------------------------------
 
@@ -623,6 +686,418 @@ class HeMAiASimRunner:
             subprocess.run(command, cwd=self.repo_root, check=True)
         else:
             run_in_container(self.repo_root, self.docker_image, self.repo_root, command)
+
+    def _repo_path(self, path: str | Path) -> Path:
+        candidate = Path(path)
+        return candidate if candidate.is_absolute() else self.repo_root / candidate
+
+    def _platform_layout(self) -> PlatformLayout:
+        """Read chip coordinates and memory geometry from the effective cfg.
+
+        ``hjson`` is part of the HeMAiA build image.  The deliberately small
+        fallback parser covers the generated cfg format as well, keeping the
+        backend-only phase usable with the Python standard library alone.
+        """
+        cfg_path = self._repo_path(self.effective_cfg)
+        if not cfg_path.is_file():
+            raise FileNotFoundError(f"RTL/SW configuration does not exist: {cfg_path}")
+
+        try:
+            import hjson  # type: ignore
+
+            with cfg_path.open("r") as source:
+                data = hjson.load(source)
+            multichip = data["hemaia_multichip"]
+            testbench_cfg = multichip.get("testbench_cfg")
+            if testbench_cfg is None and bool(multichip.get("single_chip")):
+                coordinates = [(0, 0)]
+            else:
+                coordinates = [
+                    (int(chip["coordinate"][0]), int(chip["coordinate"][1]))
+                    for chip in testbench_cfg["hemaia_compute_chip"]
+                ]
+            compute_bank_count = int(data["spm_wide"]["banks"])
+            compute_size = int(data["spm_wide"]["length"])
+            mem_sizes = (
+                []
+                if testbench_cfg is None
+                else [int(chip["mem_size"]) for chip in testbench_cfg["hemaia_mem_chip"]]
+            )
+        except (ImportError, KeyError, TypeError, ValueError):
+            text = cfg_path.read_text()
+            chip_start = text.find("hemaia_compute_chip")
+            mem_start = text.find("hemaia_mem_chip", chip_start)
+            if chip_start >= 0 and mem_start >= 0:
+                coordinates = [
+                    (int(x), int(y))
+                    for x, y in re.findall(
+                        r"coordinate\s*:\s*\[\s*(\d+)\s*,\s*(\d+)\s*\]",
+                        text[chip_start:mem_start],
+                    )
+                ]
+            elif re.search(r"\bsingle_chip\s*:\s*true\b", text):
+                coordinates = [(0, 0)]
+            else:
+                raise ValueError(
+                    f"Cannot determine compute-chip layout from {cfg_path}"
+                )
+            spm_match = re.search(
+                r"spm_wide\s*:\s*\{(?P<body>.*?)\}",
+                text,
+                flags=re.DOTALL,
+            )
+            if spm_match is None:
+                raise ValueError(f"Cannot determine SPM geometry from {cfg_path}")
+            spm_body = spm_match.group("body")
+            bank_match = re.search(r"\bbanks\s*:\s*(\d+)", spm_body)
+            size_match = re.search(r"\blength\s*:\s*(\d+)", spm_body)
+            if bank_match is None or size_match is None:
+                raise ValueError(f"Cannot determine SPM geometry from {cfg_path}")
+            compute_bank_count = int(bank_match.group(1))
+            compute_size = int(size_match.group(1))
+
+            mem_chip_start = text.find("hemaia_mem_chip")
+            mem_list_start = text.find("[", mem_chip_start)
+            if mem_chip_start < 0 or mem_list_start < 0:
+                raise ValueError(f"Cannot determine memory-chip layout from {cfg_path}")
+            mem_chip_end = -1
+            bracket_depth = 0
+            for offset in range(mem_list_start, len(text)):
+                if text[offset] == "[":
+                    bracket_depth += 1
+                elif text[offset] == "]":
+                    bracket_depth -= 1
+                    if bracket_depth == 0:
+                        mem_chip_end = offset + 1
+                        break
+            if mem_chip_end < 0:
+                raise ValueError(f"Cannot determine memory-chip layout from {cfg_path}")
+            mem_sizes = [
+                int(size)
+                for size in re.findall(
+                    r"\bmem_size\s*:\s*(\d+)",
+                    text[mem_chip_start:mem_chip_end],
+                )
+            ]
+
+        if not coordinates:
+            raise ValueError(f"No compute chips found in {cfg_path}")
+        if len(set(coordinates)) != len(coordinates):
+            raise ValueError(f"Duplicate compute-chip coordinates in {cfg_path}")
+        if compute_bank_count < 1:
+            raise ValueError(
+                f"Invalid SPM bank count {compute_bank_count} in {cfg_path}"
+            )
+        compute_bank_bytes = 8 * compute_bank_count
+        if compute_size < compute_bank_bytes or compute_size % compute_bank_bytes:
+            raise ValueError(
+                f"SPM size {compute_size} in {cfg_path} is not a positive multiple "
+                f"of {compute_bank_count} 64-bit banks"
+            )
+        compute_bank_depth = compute_size // compute_bank_bytes
+
+        mempool_bank_depth: Optional[int] = None
+        if mem_sizes:
+            mempool_bank_bytes = 8 * MEMPOOL_BANK_COUNT
+            invalid_sizes = [
+                size
+                for size in mem_sizes
+                if size < mempool_bank_bytes or size % mempool_bank_bytes
+            ]
+            if invalid_sizes:
+                raise ValueError(
+                    f"Memory-chip size(s) {invalid_sizes} in {cfg_path} are not positive "
+                    f"multiples of {MEMPOOL_BANK_COUNT} 64-bit banks"
+                )
+            # The same mempool image is loaded into every memory chip.  Its safe
+            # upper bound is therefore the smallest configured chip.
+            mempool_bank_depth = min(mem_sizes) // mempool_bank_bytes
+
+        return PlatformLayout(
+            coordinates=coordinates,
+            compute_bank_count=compute_bank_count,
+            compute_bank_depth=compute_bank_depth,
+            mempool_bank_count=MEMPOOL_BANK_COUNT,
+            mempool_bank_depth=mempool_bank_depth,
+        )
+
+    def _clear_generated_app_images(self) -> None:
+        """Remove images that ``make apps`` otherwise leaves between workloads."""
+        sim_bin = self.repo_root / "target/sim/bin"
+        for generated in sim_bin.glob("app_chip_*"):
+            if generated.is_dir():
+                shutil.rmtree(generated)
+        for generated in (
+            sim_bin / "mempool",
+            self.repo_root / "target/sim/apps/mempool",
+        ):
+            if generated.is_dir():
+                shutil.rmtree(generated)
+        mempool_bin = self.repo_root / "target/sim/apps/mempool.bin"
+        if mempool_bin.exists():
+            mempool_bin.unlink()
+
+    @staticmethod
+    def _validate_hex_dir(
+        directory: Path,
+        bank_count: int,
+        label: str,
+        max_depth: Optional[int] = None,
+    ) -> None:
+        """Require a complete bank set with valid, in-bounds readmemh data."""
+        if not directory.is_dir():
+            raise FileNotFoundError(f"Missing {label} hex directory: {directory}")
+        if bank_count < 1:
+            raise ValueError(f"Invalid {label} bank count: {bank_count}")
+        if max_depth is not None and max_depth < 1:
+            raise ValueError(f"Invalid {label} bank depth: {max_depth}")
+
+        expected = {f"bank_{idx}.hex" for idx in range(bank_count)}
+        actual = {path.name for path in directory.glob("bank_*.hex") if path.is_file()}
+        missing = sorted(expected - actual)
+        unexpected = sorted(actual - expected)
+        if missing or unexpected:
+            details = []
+            if missing:
+                details.append(f"missing {', '.join(missing)}")
+            if unexpected:
+                details.append(f"unexpected {', '.join(unexpected)}")
+            raise ValueError(f"Invalid {label} bank set in {directory}: {'; '.join(details)}")
+
+        for name in sorted(expected):
+            path = directory / name
+            saw_data = False
+            address = 0
+            with path.open("r", encoding="ascii") as source:
+                for line_number, raw_line in enumerate(source, start=1):
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    if _HEX_LINE_RE.fullmatch(line) is None:
+                        raise ValueError(
+                            f"Invalid readmemh data in {path}:{line_number}: {line!r}"
+                        )
+                    if line.startswith("@"):
+                        address_text = line[1:].replace("_", "")
+                        try:
+                            address = int(address_text, 16)
+                        except ValueError as error:
+                            raise ValueError(
+                                f"Invalid readmemh address in {path}:{line_number}: {line!r}"
+                            ) from error
+                        if max_depth is not None and address >= max_depth:
+                            raise ValueError(
+                                f"Readmemh address 0x{address:x} in {path}:{line_number} "
+                                f"exceeds {label} bank depth {max_depth}"
+                            )
+                        continue
+
+                    saw_data = True
+                    if max_depth is not None and address >= max_depth:
+                        raise ValueError(
+                            f"Readmemh data in {path}:{line_number} exceeds {label} "
+                            f"bank depth {max_depth}"
+                        )
+                    address += 1
+            if not saw_data:
+                raise ValueError(f"Empty hex bank is not allowed: {path}")
+
+    def _sim_make_args(self) -> List[str]:
+        return [
+            f"CFG_OVERRIDE={self.effective_cfg}",
+            f"SIM_CFG={self._repo_path(self.sim_cfg)}",
+            f"SIM_WITH_WAVEFORM={self.waveform}",
+            f"SIM_WITH_PLL={1 if self.with_pll else 0}",
+        ]
+
+    def _sim_cfg_flag(self, name: str) -> bool:
+        text = self._repo_path(self.sim_cfg).read_text()
+        match = re.search(
+            rf"^[ \t]*{re.escape(name)}[ \t]*[:=][ \t]*(true|false|0|1)\b",
+            text,
+            flags=re.MULTILINE | re.IGNORECASE,
+        )
+        return match is not None and match.group(1).lower() in ("true", "1")
+
+    def _compile_input_path(self, engine: str) -> Optional[Path]:
+        if engine == "vcs":
+            return self.repo_root / "target/sim/work-vcs/compile.sh"
+        if engine == "vsim":
+            return self.repo_root / "target/sim/work-vsim/compile.vsim.tcl"
+        return None
+
+    def _make_compile_input_relocatable(self, engine: str) -> None:
+        """Make a generated compiler script relocatable and netlist-safe."""
+        path = self._compile_input_path(engine)
+        if path is None:
+            return
+        if not path.is_file():
+            raise FileNotFoundError(f"{engine} preparation did not produce {path}")
+
+        contents = path.read_text()
+        if engine == "vcs":
+            replacement = (
+                'ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." '
+                '&& pwd)"'
+            )
+            contents, replacements = re.subn(
+                r"^ROOT=.*$", replacement, contents, count=1, flags=re.MULTILINE
+            )
+        else:
+            replacement = (
+                "set ROOT [file normalize [file join [file dirname [info script]] "
+                ".. .. ..]]"
+            )
+            contents, replacements = re.subn(
+                r"^set ROOT\s+.*$", replacement, contents, count=1, flags=re.MULTILINE
+            )
+
+        if replacements != 1:
+            raise ValueError(f"Cannot locate Bender ROOT prologue in {path}")
+
+        # The Questa Makefile appends its UART DPI source and -I flag after the
+        # Bender-generated body.  SIM_MKFILE_DIR is absolute, so rewrite those
+        # prefixes (and any future repo-local appended arguments) through the
+        # same script-local ROOT variable as the HDL list.
+        contents = contents.replace(str(self.repo_root), "$ROOT")
+        if self._sim_cfg_flag("sim_with_netlist"):
+            contents = self._postprocess_netlist_compile_input(engine, path, contents)
+        path.write_text(contents)
+        self._validate_relocatable_compile_input(engine)
+
+    @staticmethod
+    def _postprocess_netlist_compile_input(
+        engine: str,
+        path: Path,
+        contents: str,
+    ) -> str:
+        """Keep the mapped chip and reject accidental compute-chip RTL.
+
+        Selecting Bender's ``hemaia`` target solely to obtain CVA6's HeMAiA
+        configuration also selects the synthesizable compute-chip hierarchy.
+        A gate-level build must instead retain the narrow ``hemaia_netlist``
+        source set and replace only CVA6's generic configuration package in
+        the generated compiler script.
+        """
+        generic_config = "/core/include/config_pkg.sv"
+        hemaia_config = "/core/include/config_hemaia_pkg.sv"
+        generic_count = contents.count(generic_config)
+        hemaia_count = contents.count(hemaia_config)
+        if generic_count == 1 and hemaia_count == 0:
+            contents = contents.replace(generic_config, hemaia_config, 1)
+        elif generic_count != 0 or hemaia_count != 1:
+            raise ValueError(
+                f"Prepared {engine} netlist input has an ambiguous CVA6 config "
+                f"selection in {path}: generic={generic_count}, hemaia={hemaia_count}"
+            )
+
+        required_sources = (
+            "/target/rtl/bootrom/bootrom_netlist_sim/bootrom.v",
+            "/target/tapeout/HeMAiAv2_tapeout/outputs/"
+            "hemaia_mapped_bootrom_commented.v",
+            "/hw/hemaia/hemaia_mem_system/hemaia_mem_chip.sv",
+            "/target/sim/testharness/testharness.sv",
+        )
+        missing = [source for source in required_sources if source not in contents]
+        if missing:
+            raise ValueError(
+                f"Prepared {engine} netlist input is missing required sources in "
+                f"{path}: {missing}"
+            )
+
+        compute_rtl_sources = (
+            "/target/rtl/bootrom/bootrom_chip/bootrom.sv",
+            "/target/rtl/bootrom/bootrom_sim/bootrom.sv",
+            "/hw/hemaia/hemaia_mem_system/hemaia_xdma.sv",
+            "/hw/hemaia/hemaia_mem_system/hemaia_xdma_wrapper.sv",
+            "/hw/hemaia/hemaia_mem_system/hemaia_mem_system.sv",
+            "/target/rtl/src/occamy_chip.sv",
+            "/target/rtl/src/hemaia.sv",
+        )
+        unexpected = [source for source in compute_rtl_sources if source in contents]
+        if unexpected:
+            raise ValueError(
+                f"Prepared {engine} netlist input also selects compute-chip RTL in "
+                f"{path}: {unexpected}"
+            )
+        return contents
+
+    def _validate_relocatable_compile_input(self, engine: str) -> None:
+        path = self._compile_input_path(engine)
+        if path is None or not path.is_file():
+            raise FileNotFoundError(f"Missing prepared {engine} compile input: {path}")
+        contents = path.read_text()
+        marker = "${BASH_SOURCE[0]}" if engine == "vcs" else "[info script]"
+        if marker not in contents:
+            raise ValueError(f"Prepared {engine} compile input is not relocatable: {path}")
+        if str(self.repo_root) in contents:
+            raise ValueError(f"Prepared {engine} compile input embeds {self.repo_root}: {path}")
+
+    def _compile_dependency_state(
+        self,
+        engines: Iterable[str],
+    ) -> Tuple[Set[Path], Set[Path]]:
+        """Resolve compile inputs and include directories unavailable on this host.
+
+        Hashing only ``compile.sh``/``compile.vsim.tcl`` is insufficient: the
+        scripts name the real mapped netlist, SRAM models, D2D/PLL sources, and
+        headers by path.  Step 6.1 can run without technology access, so explicit
+        sources and include roots that do not exist yet are returned for deferred
+        validation by step 6.2 instead of making preparation fail.
+        """
+        dependencies: Set[Path] = set()
+        include_dirs: Set[Path] = set()
+        missing_include_dirs: Set[Path] = set()
+        compile_cwd = self.repo_root / "target/sim"
+
+        def _resolve_script_path(value: str) -> Path:
+            expanded = value.replace("${ROOT}", str(self.repo_root))
+            expanded = expanded.replace("$ROOT", str(self.repo_root))
+            candidate = Path(expanded)
+            if not candidate.is_absolute():
+                candidate = compile_cwd / candidate
+            return candidate.resolve()
+
+        for engine in dict.fromkeys(engines):
+            script = self._compile_input_path(engine)
+            if script is None:
+                continue
+            if not script.is_file():
+                raise FileNotFoundError(f"Missing prepared {engine} compile input: {script}")
+            contents = script.read_text()
+
+            # Bender quotes every HDL source and +incdir argument in both its
+            # shell and Tcl backends.  Ignore quoted compiler flags and retain
+            # only paths with an HDL suffix.
+            for value in re.findall(r'"([^"\n]+)"', contents):
+                if value.startswith("+incdir+"):
+                    include_dirs.add(_resolve_script_path(value[len("+incdir+"):]))
+                    continue
+                path = _resolve_script_path(value)
+                if path.suffix.lower() in _HDL_SOURCE_SUFFIXES:
+                    dependencies.add(path)
+
+        # These are consumed by the simulator-link recipes rather than emitted
+        # into Bender's HDL scripts, so record them explicitly as well.
+        for direct_input in (
+            self.repo_root / "Makefile",
+            self.repo_root / "target/sim/Makefile",
+            self.repo_root / "target/sim/sim.mk",
+            self.repo_root / "target/sim/testharness/uartdpi/uartdpi.c",
+            self.repo_root / "target/sim/testharness/uartdpi/uartdpi.h",
+        ):
+            dependencies.add(direct_input.resolve())
+
+        # Included SV/V headers do not appear as compilation units.  Traverse
+        # only declared include roots and only hash HDL header suffixes.
+        for include_dir in include_dirs:
+            if not include_dir.is_dir():
+                missing_include_dirs.add(include_dir)
+                continue
+            for candidate in include_dir.rglob("*"):
+                if candidate.is_file() and candidate.suffix.lower() in _HDL_INCLUDE_SUFFIXES:
+                    dependencies.add(candidate.resolve())
+        return dependencies, missing_include_dirs
 
     # -- Step 1: reset + init private repos --------------------------------
 
@@ -647,8 +1122,9 @@ class HeMAiASimRunner:
     # -- Step 2: build SW / bootrom / RTL ----------------------------------
 
     def build_hw_sw(self) -> None:
-        """Build SW, bootrom, and RTL inside the container."""
-        for target in ("sw", "bootrom", "rtl"):
+        """Build the requested shared SW fleet, bootrom, and RTL in-container."""
+        targets = ("sw", "bootrom", "rtl") if self.build_sw_fleet else ("bootrom", "rtl")
+        for target in targets:
             cmd = ["make", target, f"CFG_OVERRIDE={self.effective_cfg}"]
             if self.build_jobs and target == "sw":
                 # `sw` parallelises through SW_JOBS: the Makefile applies -j to the sw
@@ -666,61 +1142,199 @@ class HeMAiASimRunner:
         Returns a list of ``(task_dir, ci_name)`` tuples.
         """
         results: List[Tuple[Path, str]] = []
-        app_subdirs = ["app_chip_0_0", "app_chip_0_1", "app_chip_1_0", "app_chip_1_1", "mempool"]
         sim_bin = self.repo_root / "target/sim/bin"
+        layout = self._platform_layout()
+        app_subdirs = [f"app_chip_{x}_{y}" for x, y in layout.coordinates]
 
         for idx, task in enumerate(tasks):
+            # ``target/sim/apps/Makefile`` only overwrites mempool when a
+            # workload produces one.  Clear all generated images first so the
+            # next task cannot silently inherit the previous task's contents.
+            self._clear_generated_app_images()
             make_cmd: List[str] = ["make", "apps", f"HOST_APP_TYPE={task['host_app_type']}"]
-            for key, var in [("chip_type", "CHIP_TYPE"), ("workload", "WORKLOAD"), ("dev_app", "DEV_APP")]:
+            app_arguments = [
+                ("chip_type", "CHIP_TYPE"),
+                ("workload", "WORKLOAD"),
+                ("dev_app", "DEV_APP"),
+            ]
+            for key, var in app_arguments:
                 val = task.get(key, "")
-                if val and val != "None":
+                # Forward the explicit ``None`` sentinel as well.  The root
+                # Makefile now has nonempty workload/device defaults; omitting
+                # a task's None would let those defaults leak into host-only or
+                # legacy builds and compile an unrelated device application.
+                if val:
                     make_cmd.append(f"{var}={val}")
             make_cmd.append(f"CFG_OVERRIDE={self.effective_cfg}")
             make_cmd.append("DEBUG_LEVEL=0")
             self._container(make_cmd)
 
+            generated_apps = {
+                path.name for path in sim_bin.glob("app_chip_*") if path.is_dir()
+            }
+            if generated_apps != set(app_subdirs):
+                raise ValueError(
+                    "Generated compute-chip images do not match the configuration: "
+                    f"expected {sorted(app_subdirs)}, got {sorted(generated_apps)}"
+                )
+            for subdir in app_subdirs:
+                self._validate_hex_dir(
+                    sim_bin / subdir,
+                    layout.compute_bank_count,
+                    subdir,
+                    layout.compute_bank_depth,
+                )
+
+            generated_mempool = sim_bin / "mempool"
+            has_real_mempool = generated_mempool.is_dir()
+            if has_real_mempool:
+                self._validate_hex_dir(
+                    generated_mempool,
+                    layout.mempool_bank_count,
+                    "mempool",
+                    layout.mempool_bank_depth,
+                )
+
             task_dir = self.output_dir / task_dir_name(idx, task["ci_name"])
+            if task_dir.is_symlink() or task_dir.is_file():
+                task_dir.unlink()
+            elif task_dir.is_dir():
+                shutil.rmtree(task_dir)
             bin_dest = task_dir / "bin"
             bin_dest.mkdir(parents=True, exist_ok=True)
             for subdir in app_subdirs:
                 _copy_path(sim_bin / subdir, bin_dest / subdir)
+
+            mempool_dest = bin_dest / "mempool"
+            if has_real_mempool:
+                _copy_path(generated_mempool, mempool_dest)
+                mempool_kind = "generated"
+            else:
+                mempool_dest.mkdir(parents=True, exist_ok=True)
+                for bank in range(layout.mempool_bank_count):
+                    (mempool_dest / f"bank_{bank}.hex").write_text("0\n")
+                mempool_kind = "zero_fallback"
+            (mempool_dest / ".image_kind").write_text(f"{mempool_kind}\n")
+
+            for subdir in app_subdirs:
+                self._validate_hex_dir(
+                    bin_dest / subdir,
+                    layout.compute_bank_count,
+                    subdir,
+                    layout.compute_bank_depth,
+                )
+            self._validate_hex_dir(
+                mempool_dest,
+                layout.mempool_bank_count,
+                "mempool",
+                layout.mempool_bank_depth,
+            )
 
             results.append((task_dir, task["ci_name"]))
         return results
 
     # -- Step 4: prepare + compile the simulation --------------------------
 
-    def prepare_and_compile(self, tasks_info: List[Tuple[Path, str]]) -> None:
-        """Build the simulation and distribute its artefacts to each task dir.
+    def prepare_simulation_inputs(self, engines: Sequence[str]) -> None:
+        """Generate testbench/filelist inputs without invoking an EDA compiler."""
+        unique_engines = list(dict.fromkeys(engines))
+        for engine in unique_engines:
+            if engine not in ENGINES:
+                raise ValueError(f"Unknown engine {engine!r}")
 
-        vsim/vcs prepare the testharness/filelists in the container, then compile
-        on the host (EDA tools are host-only).  Verilator has no separate prep step
-        and builds entirely in the container.
+        # These Make targets do not encode every simulation-mode flag in their
+        # output dependencies.  Remove only generated testbench/filelist state
+        # so changing RTL -> netlist (or PLL mode) cannot reuse a stale harness.
+        for generated in self._generated_simulation_files([]):
+            if generated.is_file():
+                generated.unlink()
+        work_dirs = [
+            self.repo_root / f"target/sim/work-{engine}"
+            for engine in unique_engines
+            if engine in ("vcs", "vsim")
+        ]
+        for work_dir in work_dirs:
+            if work_dir.is_symlink():
+                work_dir.unlink()
+            elif work_dir.is_dir():
+                shutil.rmtree(work_dir)
+        if "vcs" in unique_engines:
+            for compiled_product in (
+                self.repo_root / "target/sim/AN.DB",
+                self.repo_root / "target/sim/work.lib++",
+                self.repo_root / "target/sim/vc_hdrs.h",
+            ):
+                if compiled_product.is_symlink() or compiled_product.is_file():
+                    compiled_product.unlink()
+                elif compiled_product.is_dir():
+                    shutil.rmtree(compiled_product)
+        sim_bin = self.repo_root / "target/sim/bin"
+        for engine in unique_engines:
+            if engine not in ("vcs", "vsim"):
+                continue
+            binary = sim_bin / ENGINES[engine]["binary"]
+            for old_product in (
+                binary,
+                Path(f"{binary}.gui"),
+                Path(f"{binary}.daidir"),
+            ):
+                if old_product.is_symlink():
+                    old_product.unlink()
+                elif old_product.is_dir():
+                    shutil.rmtree(old_product)
+                elif old_product.exists():
+                    old_product.unlink()
+
+        for engine in unique_engines:
+            spec = ENGINES[engine]
+            prep_target = spec["prep_target"]
+            if prep_target is None:
+                # Verilator has no separable preparation phase.
+                continue
+
+            print(f"Preparing relocatable {engine} simulation inputs")
+            self._container(["make", prep_target, *self._sim_make_args()])
+            self._make_compile_input_relocatable(engine)
+
+    def compile_simulation(self, *, prepared_inputs: bool = False) -> None:
+        """Compile only the selected engine's shared simulation model.
+
+        ``prepared_inputs`` is used by the EDA-backend half of the split flow.
+        It tells make to consume the transferred testharness and compiler script
+        without consulting Bender or regenerating either from backend-local
+        source state.
         """
-        if not self.skip_compile:
-            sim_cfg_abs = str(self.repo_root / self.sim_cfg)
-            wave = f"SIM_WITH_WAVEFORM={self.waveform}"
+        if self.skip_compile:
+            return
+        if self.spec["prep_target"]:
+            self._validate_relocatable_compile_input(self.engine)
 
-            # Optional container-side preparation (testharness/filelists).
-            if self.spec["prep_target"]:
-                self._container(["make", self.spec["prep_target"], f"SIM_CFG={sim_cfg_abs}", wave])
-
-            # Compile the simulation -- in the container (Verilator) or on the host.
-            compile_cmd = ["make", self.spec["compile_target"], f"SIM_CFG={sim_cfg_abs}", wave]
-            if self.compile_jobs:
-                compile_cmd.append(f"-j{self.compile_jobs}")
-            if self.spec["compile_in_container"]:
-                self._container(compile_cmd)
-            else:
-                subprocess.run(compile_cmd, cwd=self.repo_root, check=True)
-
-        # Insist the compile produced a binary before staging it.  ``_copy_path()``
-        # silently skips a missing source, so a ``make`` that exits 0 without one (a dead
-        # EDA tool, e.g. a VCS/glibc mismatch) would otherwise surface as every task dying
-        # at launch with a bare FileNotFoundError -- which reads like N failing tests
-        # rather than one failed build.
+        # Do not let a binary copied from the preparation host make this target
+        # look up-to-date on the EDA backend.
         sim_root = self.repo_root / "target/sim"
         binary = sim_root / "bin" / self.spec["binary"]
+        if binary.is_symlink() or binary.is_file():
+            binary.unlink()
+        elif binary.is_dir():
+            shutil.rmtree(binary)
+        daidir = Path(f"{binary}.daidir")
+        if daidir.is_symlink() or daidir.is_file():
+            daidir.unlink()
+        elif daidir.is_dir():
+            shutil.rmtree(daidir)
+
+        compile_cmd = ["make", self.spec["compile_target"], *self._sim_make_args()]
+        if prepared_inputs:
+            compile_cmd.append("PREPARED_SIM_INPUTS=1")
+        if self.compile_jobs:
+            compile_cmd.append(f"-j{self.compile_jobs}")
+        if self.spec["compile_in_container"]:
+            self._container(compile_cmd)
+        else:
+            subprocess.run(compile_cmd, cwd=self.repo_root, check=True)
+
+        # A few EDA launch failures still let make return zero.  Surface that as
+        # one compile failure instead of N opaque task-launch failures.
         if not binary.exists():
             raise RuntimeError(
                 f"{self.engine} compile produced no {binary.name}: {binary} does not "
@@ -729,11 +1343,40 @@ class HeMAiASimRunner:
                 f"(e.g. {self.spec['tool'] or self.engine} failing to start)."
             )
 
-        # Copy the engine's simulation artefacts into each task directory.
+    def stage_simulation_artifacts(self, tasks_info: List[Tuple[Path, str]]) -> None:
+        """Copy the selected shared simulator artefacts to every prepared task."""
+        sim_root = self.repo_root / "target/sim"
+        link_large_directories = self._sim_cfg_flag("sim_with_netlist")
         for rel in self.spec["stage"]:
             src = sim_root / rel
+            if not src.exists():
+                raise FileNotFoundError(
+                    f"Simulation compile did not produce required {self.engine} artefact: {src}"
+                )
             for task_dir, _ in tasks_info:
-                _copy_path(src, task_dir / rel)
+                dst = task_dir / rel
+                # Compiled libraries can be hundreds of gigabytes for a gate
+                # netlist.  Keep one backend copy and use relocatable links from
+                # each task rather than duplicating work-vsim/simv.daidir.
+                if src.is_dir() and link_large_directories:
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    if dst.is_symlink() or dst.is_file():
+                        dst.unlink()
+                    elif dst.is_dir():
+                        shutil.rmtree(dst)
+                    dst.symlink_to(
+                        os.path.relpath(src, start=dst.parent),
+                        target_is_directory=True,
+                    )
+                else:
+                    _copy_path(src, dst)
+
+    def prepare_and_compile(self, tasks_info: List[Tuple[Path, str]]) -> None:
+        """Compatibility wrapper for the original all-in-one runner API."""
+        if not self.skip_compile:
+            self.prepare_simulation_inputs([self.engine])
+            self.compile_simulation()
+        self.stage_simulation_artifacts(tasks_info)
 
     # -- Step 5: run simulations concurrently ------------------------------
 
@@ -750,6 +1393,12 @@ class HeMAiASimRunner:
 
         def _worker(task_dir: Path, ci_name: str):
             sim_binary = task_dir / "bin" / binary_name
+            # A backend rerun intentionally preserves the prepared hex images,
+            # but an empty/crashed rerun must not leave the previous log looking
+            # like its output.
+            old_log = task_dir / "bin/sim_run.log"
+            if old_log.exists():
+                old_log.unlink()
             proc = None
             pgid = None
             start = time.monotonic()
@@ -766,7 +1415,7 @@ class HeMAiASimRunner:
                 pgid = proc.pid
                 _register_pgid(pgid)
                 try:
-                    out_bytes, _ = proc.communicate(timeout=SIM_TIMEOUT_SECONDS)
+                    out_bytes, _ = proc.communicate(timeout=self.timeout_seconds)
                     elapsed = time.monotonic() - start
                     out = out_bytes.decode(errors="replace") if out_bytes else ""
                     return str(task_dir), ci_name, _sim_passed(proc.returncode, out), elapsed, out
@@ -776,8 +1425,8 @@ class HeMAiASimRunner:
                     elapsed = time.monotonic() - start
                     partial = out_bytes.decode(errors="replace") if out_bytes else ""
                     msg = (
-                        f"TIMEOUT: simulation exceeded {SIM_TIMEOUT_SECONDS}s "
-                        f"({SIM_TIMEOUT_SECONDS // 3600}h) and was killed.\n"
+                        f"TIMEOUT: simulation exceeded {self.timeout_seconds}s "
+                        f"({_format_duration(self.timeout_seconds)}) and was killed.\n"
                         + partial
                     )
                     return str(task_dir), ci_name, False, elapsed, msg
@@ -859,6 +1508,459 @@ class HeMAiASimRunner:
                 f"{_format_duration(cumulative)})\n"
             )
 
+    # -- Split-flow hand-off manifest --------------------------------------
+
+    def _portable_path(self, path: Path) -> str:
+        resolved = path.resolve()
+        try:
+            return str(resolved.relative_to(self.repo_root))
+        except ValueError:
+            return str(resolved)
+
+    def _manifest_path_to_host(self, value: str) -> Path:
+        path = Path(value)
+        return path if path.is_absolute() else self.repo_root / path
+
+    def _generated_simulation_files(self, engines: Iterable[str]) -> List[Path]:
+        testharness = self.repo_root / "target/sim/testharness"
+        generated = [
+            testharness / "testharness.sv",
+            testharness / "dut.sv",
+            testharness / "io_wrapper.sv",
+            testharness / "util/load_binary_rtl.sv",
+            testharness / "util/load_binary_mem_macro.sv",
+            testharness / "util/load_binary_netlist.sv",
+            testharness / "util/check_finish_rtl.sv",
+            testharness / "util/check_finish_mem_macro.sv",
+            testharness / "util/check_finish_netlist.sv",
+        ]
+        generated.extend(
+            path
+            for path in (self._compile_input_path(engine) for engine in engines)
+            if path is not None
+        )
+        return generated
+
+    def _task_hex_state(
+        self,
+        tasks: List[Dict[str, str]],
+        tasks_info: List[Tuple[Path, str]],
+    ) -> List[Dict[str, Any]]:
+        if len(tasks) != len(tasks_info):
+            raise ValueError(
+                f"Task metadata mismatch: {len(tasks)} task(s), "
+                f"{len(tasks_info)} task directories"
+            )
+        layout = self._platform_layout()
+        app_subdirs = [f"app_chip_{x}_{y}" for x, y in layout.coordinates]
+        state: List[Dict[str, Any]] = []
+
+        for idx, (task, (task_dir, ci_name)) in enumerate(zip(tasks, tasks_info)):
+            expected_dir_name = task_dir_name(idx, task["ci_name"])
+            if task_dir.name != expected_dir_name:
+                raise ValueError(
+                    f"Expected {expected_dir_name} at manifest position {idx}, got {task_dir}"
+                )
+            if ci_name != task["ci_name"]:
+                raise ValueError(
+                    f"Task {idx} name mismatch: metadata has {ci_name!r}, "
+                    f"task list has {task['ci_name']!r}"
+                )
+            bin_dir = task_dir / "bin"
+            hex_files: Dict[str, str] = {}
+            for subdir in app_subdirs:
+                bank_dir = bin_dir / subdir
+                self._validate_hex_dir(
+                    bank_dir,
+                    layout.compute_bank_count,
+                    subdir,
+                    layout.compute_bank_depth,
+                )
+                for bank in range(layout.compute_bank_count):
+                    path = bank_dir / f"bank_{bank}.hex"
+                    hex_files[str(path.relative_to(task_dir))] = _sha256(path)
+
+            mempool_dir = bin_dir / "mempool"
+            self._validate_hex_dir(
+                mempool_dir,
+                layout.mempool_bank_count,
+                "mempool",
+                layout.mempool_bank_depth,
+            )
+            for bank in range(layout.mempool_bank_count):
+                path = mempool_dir / f"bank_{bank}.hex"
+                hex_files[str(path.relative_to(task_dir))] = _sha256(path)
+
+            kind_path = bin_dir / "mempool/.image_kind"
+            if not kind_path.is_file():
+                raise FileNotFoundError(f"Missing mempool image marker: {kind_path}")
+            mempool_kind = kind_path.read_text().strip()
+            if mempool_kind not in ("generated", "zero_fallback"):
+                raise ValueError(f"Invalid mempool image marker in {kind_path}: {mempool_kind!r}")
+
+            state.append({
+                "index": idx,
+                "ci_name": ci_name,
+                "parameters": task,
+                "mempool_image": mempool_kind,
+                "hex_files": dict(sorted(hex_files.items())),
+            })
+        return state
+
+    def _manifest_settings(self) -> Dict[str, Any]:
+        """Return the complete build/profile identity for a split hand-off."""
+        layout = self._platform_layout()
+        return {
+            "cfg": self._portable_path(self._repo_path(self.cfg)),
+            "effective_cfg": self._portable_path(self._repo_path(self.effective_cfg)),
+            "sim_cfg": self._portable_path(self._repo_path(self.sim_cfg)),
+            "waveform": int(self.waveform),
+            "with_macro": self.with_macro,
+            "with_d2d": self.with_d2d,
+            "with_pll": self.with_pll,
+            "build_sw_fleet": self.build_sw_fleet,
+            "platform": {
+                "compute_coordinates": [list(coordinate) for coordinate in layout.coordinates],
+                "compute_bank_count": layout.compute_bank_count,
+                "compute_bank_depth": layout.compute_bank_depth,
+                "mempool_bank_count": layout.mempool_bank_count,
+                "mempool_bank_depth": layout.mempool_bank_depth,
+            },
+        }
+
+    def write_preparation_manifest(
+        self,
+        tasks: List[Dict[str, str]],
+        tasks_info: List[Tuple[Path, str]],
+        prepared_engines: Sequence[str],
+    ) -> Path:
+        """Record every input required to safely resume on an EDA backend."""
+        engines = list(dict.fromkeys(prepared_engines))
+        for engine in engines:
+            self._validate_relocatable_compile_input(engine)
+
+        inputs: Dict[str, Dict[str, str]] = {}
+        input_paths: List[Tuple[str, Path]] = [
+            ("cfg", self._repo_path(self.cfg)),
+            ("effective_cfg", self._repo_path(self.effective_cfg)),
+            ("sim_cfg", self._repo_path(self.sim_cfg)),
+        ]
+        if self.task_yaml is not None:
+            input_paths.append(("task_yaml", self.task_yaml))
+
+        for name, path in input_paths:
+            if not path.is_file():
+                raise FileNotFoundError(f"Missing preparation input {name}: {path}")
+            portable_path = self._portable_path(path)
+            if Path(portable_path).is_absolute():
+                raise ValueError(
+                    f"Split preparation input {name} must reside inside the repository: {path}"
+                )
+            inputs[name] = {"path": portable_path, "sha256": _sha256(path)}
+
+        generated_files: Dict[str, str] = {}
+        for path in self._generated_simulation_files(engines):
+            if not path.is_file():
+                raise FileNotFoundError(f"Missing generated simulation input: {path}")
+            generated_files[self._portable_path(path)] = _sha256(path)
+
+        # Record the actual files named by both prepared compiler scripts, not
+        # just the scripts themselves.  Step 6.1 deliberately runs on a host
+        # without the mapped netlist or technology views, so keep their paths
+        # as deferred backend dependencies rather than trying to read them.
+        already_recorded = {entry["path"] for entry in inputs.values()}
+        compile_sources: Dict[str, str] = {}
+        backend_dependencies: List[str] = []
+        dependency_paths, missing_include_dirs = self._compile_dependency_state(engines)
+        for path in sorted(dependency_paths):
+            portable_path = self._portable_path(path)
+            if portable_path in already_recorded:
+                continue
+            if path.is_file():
+                compile_sources[portable_path] = _sha256(path)
+            else:
+                backend_dependencies.append(portable_path)
+
+        manifest: Dict[str, Any] = {
+            "schema_version": PREPARATION_MANIFEST_VERSION,
+            "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "settings": self._manifest_settings(),
+            "prepared_engines": engines,
+            "inputs": inputs,
+            "generated_files": dict(sorted(generated_files.items())),
+            "compile_sources": dict(sorted(compile_sources.items())),
+            "backend_dependencies": sorted(backend_dependencies),
+            "backend_include_dirs": sorted(
+                self._portable_path(path) for path in missing_include_dirs
+            ),
+            "tasks": self._task_hex_state(tasks, tasks_info),
+        }
+
+        manifest_path = self.output_dir / PREPARATION_MANIFEST
+        temporary = manifest_path.with_suffix(manifest_path.suffix + ".tmp")
+        temporary.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+        temporary.replace(manifest_path)
+        print(f"Preparation manifest written to {manifest_path}")
+        return manifest_path
+
+    def validate_preparation_manifest(
+        self,
+        tasks: List[Dict[str, str]],
+    ) -> Tuple[Path, List[Tuple[Path, str]]]:
+        """Validate a preparation hand-off and reconstruct existing task dirs."""
+        manifest_path = self.output_dir / PREPARATION_MANIFEST
+        if not manifest_path.is_file():
+            raise FileNotFoundError(
+                f"Preparation manifest not found: {manifest_path}; run phase 'prepare' first"
+            )
+        manifest = json.loads(manifest_path.read_text())
+        if manifest.get("schema_version") != PREPARATION_MANIFEST_VERSION:
+            raise ValueError(
+                f"Unsupported preparation manifest version in {manifest_path}: "
+                f"{manifest.get('schema_version')!r}"
+            )
+
+        prepared_settings = manifest.get("settings")
+        if not isinstance(prepared_settings, dict):
+            raise ValueError("Preparation manifest has invalid settings")
+
+        requested_settings = {
+            "cfg": self._portable_path(self._repo_path(self.cfg)),
+            "sim_cfg": self._portable_path(self._repo_path(self.sim_cfg)),
+            "waveform": int(self.waveform),
+            "with_macro": self.with_macro,
+            "with_d2d": self.with_d2d,
+            "with_pll": self.with_pll,
+            "build_sw_fleet": self.build_sw_fleet,
+        }
+        prepared_request = {
+            name: prepared_settings.get(name) for name in requested_settings
+        }
+        if prepared_request != requested_settings:
+            raise ValueError(
+                "Preparation settings do not match this simulation request:\n"
+                f"prepared: {prepared_request}\nrequested: {requested_settings}"
+            )
+
+        # The derived cfg may have been generated only on the preparation host.
+        # Adopt its recorded repo-relative name before parsing the platform on a
+        # backend (which intentionally need not have hjson installed).
+        effective_cfg = prepared_settings.get("effective_cfg")
+        if not isinstance(effective_cfg, str) or not effective_cfg:
+            raise ValueError("Preparation manifest does not identify its effective cfg")
+        if Path(effective_cfg).is_absolute():
+            raise ValueError("Preparation effective cfg must be repository-relative")
+        effective_cfg_path = (self.repo_root / effective_cfg).resolve()
+        try:
+            effective_cfg_path.relative_to(self.repo_root)
+        except ValueError as error:
+            raise ValueError(
+                f"Preparation effective cfg escapes the repository: {effective_cfg}"
+            ) from error
+        self.effective_cfg = str(effective_cfg_path.relative_to(self.repo_root))
+        expected_settings = self._manifest_settings()
+        if prepared_settings != expected_settings:
+            raise ValueError(
+                "Prepared effective configuration/profile no longer matches:\n"
+                f"prepared: {prepared_settings}\ncurrent: {expected_settings}"
+            )
+
+        effective_entry = manifest.get("inputs", {}).get("effective_cfg")
+        if not isinstance(effective_entry, dict) or effective_entry.get("path") != effective_cfg:
+            raise ValueError("Preparation manifest has inconsistent effective cfg metadata")
+        if self.task_yaml is not None:
+            task_yaml_entry = manifest.get("inputs", {}).get("task_yaml")
+            if task_yaml_entry is None:
+                raise ValueError("Preparation manifest does not identify its task YAML")
+            if task_yaml_entry.get("path") != self._portable_path(self.task_yaml):
+                raise ValueError(
+                    "Requested task YAML differs from the preparation manifest: "
+                    f"{self.task_yaml}"
+                )
+        if self.engine not in manifest.get("prepared_engines", []):
+            raise ValueError(
+                f"Engine {self.engine!r} was not prepared; available: "
+                f"{manifest.get('prepared_engines', [])}"
+            )
+
+        for name, entry in manifest.get("inputs", {}).items():
+            path = self._manifest_path_to_host(entry["path"])
+            if not path.is_file():
+                raise FileNotFoundError(f"Prepared input {name} is missing: {path}")
+            digest = _sha256(path)
+            if digest != entry["sha256"]:
+                raise ValueError(f"Prepared input {name} changed after preparation: {path}")
+
+        for path_text, expected_digest in manifest.get("generated_files", {}).items():
+            path = self._manifest_path_to_host(path_text)
+            if not path.is_file():
+                raise FileNotFoundError(f"Generated simulation input is missing: {path}")
+            if _sha256(path) != expected_digest:
+                raise ValueError(f"Generated simulation input changed after preparation: {path}")
+        self._validate_relocatable_compile_input(self.engine)
+
+        prepared_engines = manifest.get("prepared_engines", [])
+        recorded_compile_sources = manifest.get("compile_sources")
+        if not isinstance(recorded_compile_sources, dict) or not recorded_compile_sources:
+            raise ValueError("Preparation manifest does not record compiler source dependencies")
+        backend_dependencies = manifest.get("backend_dependencies")
+        if not isinstance(backend_dependencies, list) or not all(
+            isinstance(path, str) for path in backend_dependencies
+        ):
+            raise ValueError("Preparation manifest has invalid backend dependencies")
+        backend_include_dirs = manifest.get("backend_include_dirs")
+        if not isinstance(backend_include_dirs, list) or not all(
+            isinstance(path, str) for path in backend_include_dirs
+        ):
+            raise ValueError("Preparation manifest has invalid backend include directories")
+
+        deferred_include_roots = [
+            self._manifest_path_to_host(path).resolve() for path in backend_include_dirs
+        ]
+        for include_dir in deferred_include_roots:
+            if not include_dir.is_dir():
+                raise FileNotFoundError(
+                    f"Backend HDL include directory is unavailable: {include_dir}"
+                )
+
+        dependency_paths, missing_include_dirs = self._compile_dependency_state(
+            prepared_engines
+        )
+        if missing_include_dirs:
+            raise FileNotFoundError(
+                "Backend HDL include directories are unavailable: "
+                + ", ".join(str(path) for path in sorted(missing_include_dirs))
+            )
+
+        recorded_input_paths = {
+            entry["path"] for entry in manifest.get("inputs", {}).values()
+        }
+        recorded_dependencies = set(recorded_compile_sources) | set(backend_dependencies)
+
+        # Headers below an include directory which was absent during 6.1 can
+        # only be discovered on the backend.  Validate that directory exists,
+        # while retaining exact-set checking for every explicitly named source
+        # and every include tree that was accessible during preparation.
+        expected_dependencies: Set[str] = set()
+        for path in dependency_paths:
+            portable_path = self._portable_path(path)
+            if portable_path in recorded_input_paths:
+                continue
+            newly_discovered_header = (
+                portable_path not in recorded_dependencies
+                and any(
+                    path == include_root or path.is_relative_to(include_root)
+                    for include_root in deferred_include_roots
+                )
+            )
+            if not newly_discovered_header:
+                expected_dependencies.add(portable_path)
+
+        if recorded_dependencies != expected_dependencies:
+            missing = sorted(expected_dependencies - recorded_dependencies)
+            stale = sorted(recorded_dependencies - expected_dependencies)
+            raise ValueError(
+                "Prepared compiler dependency set changed after preparation: "
+                f"missing manifest entries={missing}, stale manifest entries={stale}"
+            )
+        for path_text, expected_digest in recorded_compile_sources.items():
+            path = self._manifest_path_to_host(path_text)
+            if not path.is_file():
+                raise FileNotFoundError(f"Prepared compiler source is missing: {path}")
+            if _sha256(path) != expected_digest:
+                raise ValueError(f"Prepared compiler source changed after preparation: {path}")
+        for path_text in backend_dependencies:
+            path = self._manifest_path_to_host(path_text)
+            if not path.is_file():
+                raise FileNotFoundError(f"Backend compiler source is unavailable: {path}")
+
+        prepared_tasks = manifest.get("tasks", [])
+        prepared_parameters = [entry.get("parameters") for entry in prepared_tasks]
+        if prepared_parameters != tasks:
+            raise ValueError("Task list changed after preparation")
+        tasks_info = [
+            (self.output_dir / task_dir_name(idx, task["ci_name"]), task["ci_name"])
+            for idx, task in enumerate(tasks)
+        ]
+        current_state = self._task_hex_state(tasks, tasks_info)
+        if current_state != prepared_tasks:
+            raise ValueError("Staged application/mempool hex changed after preparation")
+
+        print(f"Validated preparation manifest: {manifest_path}")
+        return manifest_path, tasks_info
+
+    def _backend_dependency_hashes(self, manifest_path: Path) -> Dict[str, str]:
+        """Return hashes for explicit and include-discovered backend inputs."""
+        manifest = json.loads(manifest_path.read_text())
+        dependencies = manifest.get("backend_dependencies")
+        include_dirs = manifest.get("backend_include_dirs")
+        if not isinstance(dependencies, list) or not all(
+            isinstance(path, str) for path in dependencies
+        ):
+            raise ValueError("Preparation manifest has invalid backend dependencies")
+        if not isinstance(include_dirs, list) or not all(
+            isinstance(path, str) for path in include_dirs
+        ):
+            raise ValueError("Preparation manifest has invalid backend include directories")
+
+        state: Dict[str, str] = {}
+        for path_text in dependencies:
+            path = self._manifest_path_to_host(path_text)
+            if not path.is_file():
+                raise FileNotFoundError(f"Backend compiler source is unavailable: {path}")
+            state[path_text] = _sha256(path)
+
+        # An include root can be absent on the preparation machine, in which
+        # case its headers cannot be listed in the manifest. Discover and hash
+        # the complete header tree once it is available on the backend.
+        for include_text in include_dirs:
+            include_dir = self._manifest_path_to_host(include_text)
+            if not include_dir.is_dir():
+                raise FileNotFoundError(
+                    f"Backend HDL include directory is unavailable: {include_dir}"
+                )
+            for path in sorted(include_dir.rglob("*")):
+                if path.is_file() and path.suffix.lower() in _HDL_INCLUDE_SUFFIXES:
+                    state[self._portable_path(path)] = _sha256(path)
+        return state
+
+    def snapshot_backend_dependencies(self, manifest_path: Path) -> Dict[str, str]:
+        """Hash deferred backend-only compiler inputs before EDA compilation.
+
+        These files are intentionally unavailable during the software/filelist
+        preparation phase, so their digests cannot be stored in the hand-off
+        manifest.  Snapshot them as soon as the backend has validated the
+        manifest, then compare the same state after compilation.  In
+        particular, this prevents the selected mapped netlist from being
+        replaced between compile and simulation staging.
+        """
+        state = self._backend_dependency_hashes(manifest_path)
+        print(f"Snapshotted {len(state)} backend-only compiler input(s)")
+        return state
+
+    def validate_backend_dependencies_unchanged(
+        self,
+        manifest_path: Path,
+        expected_state: Dict[str, str],
+    ) -> None:
+        """Require deferred backend compiler inputs to match their snapshot."""
+        current_state = self._backend_dependency_hashes(manifest_path)
+        if current_state != expected_state:
+            expected_paths = set(expected_state)
+            current_paths = set(current_state)
+            missing = sorted(expected_paths - current_paths)
+            added = sorted(current_paths - expected_paths)
+            changed = sorted(
+                path
+                for path in expected_paths & current_paths
+                if expected_state[path] != current_state[path]
+            )
+            raise ValueError(
+                "Backend compiler inputs changed during compilation: "
+                f"missing={missing}, added={added}, modified={changed}"
+            )
+        print("Backend-only compiler inputs remained unchanged during compilation")
+
     # -- Housekeeping ------------------------------------------------------
 
     def cleanup_stale_task_dirs(self) -> None:
@@ -874,22 +1976,70 @@ class HeMAiASimRunner:
 
     # -- Orchestrator ------------------------------------------------------
 
-    def run(self, tasks: List[Dict[str, str]]) -> Path:
-        """Run the full flow for *tasks* and return the summary path."""
-        self._ensure_engine_available()
-        # Guarantee any simulation we launch is torn down on exit/timeout/crash.
-        _install_cleanup_handlers()
+    def run(
+        self,
+        tasks: List[Dict[str, str]],
+        *,
+        phase: str = "all",
+        prepare_engines: Sequence[str] = ("vcs", "vsim"),
+    ) -> Path:
+        """Run ``all``, preparation-only, or backend simulation-only.
+
+        The keyword-only additions preserve every existing ``run(tasks)``
+        caller.  ``prepare`` intentionally avoids the destructive repository
+        reset/clean step.  It generates all software, hex, testbench, and
+        compiler inputs without accessing the mapped netlist or technology
+        source files; those are supplied and validated by step 6.2.
+        """
+        if phase not in ("all", "prepare", "simulate"):
+            raise ValueError(f"Unknown phase {phase!r}; choose all, prepare, or simulate")
+        if not tasks:
+            raise ValueError("At least one simulation task is required")
+
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        print(
+            f"Phase: {phase}  engine: {self.engine}  waveform: {self.waveform}  "
+            f"cfg: {self.cfg}  sim_cfg: {self.sim_cfg}"
+        )
+        print(
+            f"  (macro={self.with_macro}, d2d={self.with_d2d}, pll={self.with_pll})"
+        )
+
+        if phase == "simulate":
+            manifest_path, tasks_info = self.validate_preparation_manifest(tasks)
+            backend_dependency_state = self.snapshot_backend_dependencies(manifest_path)
+            self._ensure_engine_available()
+            _install_cleanup_handlers()
+            print("[Backend 1/5] Compiling the prepared simulation model")
+            self.compile_simulation(prepared_inputs=True)
+            print("[Backend 2/5] Revalidating immutable preparation inputs")
+            _, tasks_info = self.validate_preparation_manifest(tasks)
+            self.validate_backend_dependencies_unchanged(
+                manifest_path, backend_dependency_state
+            )
+            print("[Backend 3/5] Staging the shared simulation artefacts")
+            self.stage_simulation_artifacts(tasks_info)
+            print("[Backend 4/5] Running simulations")
+            results, total_elapsed = self.run_simulations(tasks_info)
+            print("[Backend 5/5] Writing summary")
+            summary_path = self._finish_run(tasks_info, results, total_elapsed)
+            return summary_path
+
         self.cleanup_stale_task_dirs()
+        stale_manifest = self.output_dir / PREPARATION_MANIFEST
+        if stale_manifest.exists():
+            stale_manifest.unlink()
 
-        print(f"Engine: {self.engine}  waveform: {self.waveform}  cfg: {self.cfg}")
-        print(f"  (macro={self.with_macro}, d2d={self.with_d2d}, pll={self.with_pll})")
-
-        if self.skip_setup:
-            print("[Step 1] Skipping reset/init (skip_setup)")
+        if phase == "all":
+            self._ensure_engine_available()
+            _install_cleanup_handlers()
+            if self.skip_setup:
+                print("[Step 1] Skipping reset/init (skip_setup)")
+            else:
+                print("[Step 1] Cleaning and initialising private repos")
+                self.reset_and_init()
         else:
-            print("[Step 1] Cleaning and initialising private repos")
-            self.reset_and_init()
+            print("[Prepare 1/4] Preserving generated RTL and local package manifests")
 
         # Must run after Step 1: reset_and_init() calls ``make clean``, which wipes
         # the generated-cfg directory.
@@ -897,13 +2047,32 @@ class HeMAiASimRunner:
             self.repo_root, self.cfg, with_pll=self.with_pll)
 
         if self.skip_build:
-            print("[Step 2] Skipping SW/bootrom/RTL build (skip_build)")
-        else:
+            print("[Step 2] Skipping shared SW/bootrom/RTL build (skip_build)")
+            print("[Step 3] Building apps and staging per-task directories")
+            tasks_info = self.build_apps_and_stage(tasks)
+        elif self.build_sw_fleet:
             print("[Step 2] Building SW/bootrom/RTL")
             self.build_hw_sw()
+            print("[Step 3] Building apps and staging per-task directories")
+            tasks_info = self.build_apps_and_stage(tasks)
+        else:
+            # A clean bootrom build consumes generated platform headers.  The
+            # strict selected app builds create those headers, so netlist CI
+            # deliberately performs software/binary generation first.
+            print("[Step 2] Building selected apps and staging task directories")
+            tasks_info = self.build_apps_and_stage(tasks)
+            print("[Step 3] Building bootrom/RTL for the selected hardware")
+            self.build_hw_sw()
 
-        print("[Step 3] Building apps and staging per-task directories")
-        tasks_info = self.build_apps_and_stage(tasks)
+        if phase == "prepare":
+            engines = list(dict.fromkeys(prepare_engines))
+            if set(engines) != {"vcs", "vsim"}:
+                raise ValueError(
+                    "Split CI preparation must generate both VCS and Questa inputs"
+                )
+            print("[Prepare 4/4] Preparing VCS and Questa inputs (no EDA compile)")
+            self.prepare_simulation_inputs(engines)
+            return self.write_preparation_manifest(tasks, tasks_info, engines)
 
         if self.skip_compile:
             print("[Step 4] Staging the pre-built simulation (skip_compile)")
@@ -913,10 +2082,28 @@ class HeMAiASimRunner:
 
         print("[Step 5] Running simulations")
         results, total_elapsed = self.run_simulations(tasks_info)
-
         print("[Step 6] Writing summary")
+        return self._finish_run(tasks_info, results, total_elapsed)
+
+    def _finish_run(
+        self,
+        tasks_info: List[Tuple[Path, str]],
+        results: Dict[str, Tuple[bool, float]],
+        total_elapsed: float,
+    ) -> Path:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         summary_path = self.output_dir / f"simulation_summary_{timestamp}.md"
         self.write_summary(summary_path, tasks_info, results, total_elapsed)
         print(f"Simulation summary written to {summary_path}")
+
+        failed = [
+            ci_name
+            for task_dir, ci_name in tasks_info
+            if not results.get(str(task_dir), (False, 0.0))[0]
+        ]
+        if failed and self.fail_on_task_failure:
+            raise SimulationSuiteFailed(
+                f"{len(failed)} of {len(tasks_info)} simulation(s) failed; "
+                f"see {summary_path}"
+            )
         return summary_path
