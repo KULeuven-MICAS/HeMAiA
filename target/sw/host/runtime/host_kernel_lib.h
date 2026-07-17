@@ -131,6 +131,30 @@ static inline uint64_t __host_bingo_kernel_check_result(void *arg){
             printf_safe("[Host] Check [%s]: FAIL (%d / %d bytes)\r\n", name, err, data_size);
             return BINGO_RET_FAIL;
         }
+    } else if (check_type == BINGO_CHECK_TYPE_INT8_TOL) {
+        // Signed-int8 with an absolute LSB tolerance: int8 = quantize(fp16), and a 1-ULP fp16
+        // difference (HW exp/rsqrt vs the numpy golden) flips +-1 LSB at rounding boundaries, so
+        // byte-exact is too strict. tolerance (fp32) is the integer LSB budget (e.g. 1.0 -> +-1).
+        int tol = (int)tolerance;
+        for (uint64_t i = 0; i < data_size; i++) {
+            int d = (int)(int8_t)output_data_addr[i] - (int)(int8_t)golden_data_addr[i];
+            if (d < 0) d = -d;
+            if (d > tol) {
+                err++;
+                printf_safe("[%s] output[%d]=%d, golden[%d]=%d\n", name, i,
+                            (int)(int8_t)output_data_addr[i], i, (int)(int8_t)golden_data_addr[i]);
+            }
+        }
+        BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
+        sp->return_value = err;
+        sp->num_return_values = 0;
+        if (err == 0) {
+            printf_safe("[Host] Check [%s]: PASS (%d int8, tol=%d)\r\n", name, data_size, tol);
+            return BINGO_RET_SUCC;
+        } else {
+            printf_safe("[Host] Check [%s]: FAIL (%d / %d int8, tol=%d)\r\n", name, err, data_size, tol);
+            return BINGO_RET_FAIL;
+        }
     } else if (check_type == BINGO_CHECK_TYPE_FP32_TOL) {
         // FP32 absolute-tolerance mode
         const float* out_f    = (const float*)output_data_addr;

@@ -13,6 +13,7 @@
 #pragma once
 
 #include "../macros.h"
+#include "snax_fp16_math.h"   // integer fp16 recip/sqrt/f16_to_f32bits (runtime/snax/xdma)
 
 // ==========================================================================
 // Optional xDMA reader-extension availability
@@ -426,6 +427,64 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_elementwise_add_ab(void *arg)
 // rest. dst_bound0 is the WRITER beat count the caller computes.
 // ==========================================================================
 
+// The register-resident stream config below routes its FULL config through
+// xdma_memcpy_nd_unrolled (now in snax_xdma_lib.h, runtime/snax/xdma); the sticky path
+// stays xdma_retask_1d.
+
+// Register-resident AGU config + run for a stream pass. The temporal strides/bounds arrive
+// as SCALARS (not stack arrays), so the temporal CSR writes come straight from registers --
+// no array store->load round-trip and no `(K < nsrc)` ternary branch, the two biggest chunks
+// of a tiny-tile full-config pass (the src/dst ADDR writes were already register-resident;
+// only the temporal dims went through the array). Covers 3 src + 2 dst temporal dims (every
+// softmax/rmsnorm/rope stream shape); the higher dims are the fixed {bound 1, stride 0} fill.
+// Spatial stride 8, all channels/bytes enabled. Full config only (sticky -> xdma_retask_run).
+static inline uint32_t xdma_cfg_run_rr(
+    uint64_t src, uint64_t dst,
+    uint32_t ss0, uint32_t sb0, uint32_t ss1, uint32_t sb1, uint32_t ss2, uint32_t sb2,
+    uint32_t ds0, uint32_t db0, uint32_t ds1, uint32_t db1)
+{
+    if (!xdma_addr_in_local_l1(src) && !xdma_addr_in_local_l1(dst)) return BINGO_RET_FAIL;
+    uint32_t sp = XDMA_WIDTH / XDMA_SPATIAL_CHAN;   // 8
+    snax_write_xdma_cfg_reg(XDMA_SRC_ADDR_PTR_LSB, (uint32_t)src);
+    snax_write_xdma_cfg_reg(XDMA_SRC_ADDR_PTR_MSB, (uint32_t)(src >> 32));
+    snax_write_xdma_cfg_reg(XDMA_DST_ADDR_PTR_LSB, (uint32_t)dst);
+    snax_write_xdma_cfg_reg(XDMA_DST_ADDR_PTR_MSB, (uint32_t)(dst >> 32));
+#define XSM_ZDST(K) do { snax_write_xdma_cfg_reg(XDMA_DST_ADDR_PTR_LSB + (K) * 2, 0); \
+                         snax_write_xdma_cfg_reg(XDMA_DST_ADDR_PTR_MSB + (K) * 2, 0); } while (0)
+    XSM_ZDST(1);  XSM_ZDST(2);  XSM_ZDST(3);  XSM_ZDST(4);  XSM_ZDST(5);
+    XSM_ZDST(6);  XSM_ZDST(7);  XSM_ZDST(8);  XSM_ZDST(9);  XSM_ZDST(10);
+    XSM_ZDST(11); XSM_ZDST(12); XSM_ZDST(13); XSM_ZDST(14); XSM_ZDST(15);
+#undef XSM_ZDST
+    snax_write_xdma_cfg_reg(XDMA_SRC_SPATIAL_STRIDE_PTR, sp);
+    snax_write_xdma_cfg_reg(XDMA_DST_SPATIAL_STRIDE_PTR, sp);
+    snax_write_xdma_cfg_reg(XDMA_SRC_TEMP_BOUND_PTR + 0, sb0); snax_write_xdma_cfg_reg(XDMA_SRC_TEMP_STRIDE_PTR + 0, ss0);
+    snax_write_xdma_cfg_reg(XDMA_SRC_TEMP_BOUND_PTR + 1, sb1); snax_write_xdma_cfg_reg(XDMA_SRC_TEMP_STRIDE_PTR + 1, ss1);
+    snax_write_xdma_cfg_reg(XDMA_SRC_TEMP_BOUND_PTR + 2, sb2); snax_write_xdma_cfg_reg(XDMA_SRC_TEMP_STRIDE_PTR + 2, ss2);
+    snax_write_xdma_cfg_reg(XDMA_SRC_TEMP_BOUND_PTR + 3, 1u);  snax_write_xdma_cfg_reg(XDMA_SRC_TEMP_STRIDE_PTR + 3, 0u);
+    snax_write_xdma_cfg_reg(XDMA_SRC_TEMP_BOUND_PTR + 4, 1u);  snax_write_xdma_cfg_reg(XDMA_SRC_TEMP_STRIDE_PTR + 4, 0u);
+    snax_write_xdma_cfg_reg(XDMA_DST_TEMP_BOUND_PTR + 0, db0); snax_write_xdma_cfg_reg(XDMA_DST_TEMP_STRIDE_PTR + 0, ds0);
+    snax_write_xdma_cfg_reg(XDMA_DST_TEMP_BOUND_PTR + 1, db1); snax_write_xdma_cfg_reg(XDMA_DST_TEMP_STRIDE_PTR + 1, ds1);
+    snax_write_xdma_cfg_reg(XDMA_DST_TEMP_BOUND_PTR + 2, 1u);  snax_write_xdma_cfg_reg(XDMA_DST_TEMP_STRIDE_PTR + 2, 0u);
+    snax_write_xdma_cfg_reg(XDMA_DST_TEMP_BOUND_PTR + 3, 1u);  snax_write_xdma_cfg_reg(XDMA_DST_TEMP_STRIDE_PTR + 3, 0u);
+    snax_write_xdma_cfg_reg(XDMA_DST_TEMP_BOUND_PTR + 4, 1u);  snax_write_xdma_cfg_reg(XDMA_DST_TEMP_STRIDE_PTR + 4, 0u);
+    snax_write_xdma_cfg_reg(XDMA_SRC_ENABLED_CHAN_PTR, 0xFFFFFFFFu);
+    snax_write_xdma_cfg_reg(XDMA_DST_ENABLED_CHAN_PTR, 0xFFFFFFFFu);
+    snax_write_xdma_cfg_reg(XDMA_DST_ENABLED_BYTE_PTR, 0xFFFFFFFFu);
+    xdma_task_t t = xdma_start();
+    xdma_wait_task(t);
+    return BINGO_RET_SUCC;
+}
+
+// Sticky reuse: retask a prior same-shape config (5 constant-address CSR writes) + run.
+static inline uint32_t xdma_retask_run(uint64_t src, uint64_t dst, uint32_t dst_bound0)
+{
+    BINGO_XDMA_TRY(xdma_retask_1d((void *)(uint32_t)src, (void *)(uint32_t)dst, dst_bound0),
+                   "xdma_retask");
+    xdma_task_t t = xdma_start();
+    xdma_wait_task(t);
+    return BINGO_RET_SUCC;
+}
+
 // Shared launch for the stream primitives: program the AGU (full config or sticky
 // retask), run one xDMA task, and wait. The reader extension(s) must already be
 // enabled by the caller. The src AGU has `src_dims` temporal dims (2 for the flat
@@ -440,7 +499,7 @@ static inline uint32_t xdma_stream_launch(
     if (csr_mode == 0u) {  // FULL: completely configure the AGU (default)
         uint32_t dst_str[1] = { XDMA_WIDTH };
         uint32_t dst_bnd[1] = { dst_bound0 };
-        BINGO_XDMA_TRY(xdma_memcpy_nd_full_addr(
+        BINGO_XDMA_TRY(xdma_memcpy_nd_unrolled(
             src_addr, dst_addr,
             XDMA_WIDTH / XDMA_SPATIAL_CHAN, XDMA_WIDTH / XDMA_SPATIAL_CHAN,
             src_dims, src_str, src_bnd, 1, dst_str, dst_bnd,
@@ -875,11 +934,11 @@ static inline uint32_t xdma_stream_ew2(uint64_t src_a, uint64_t src_b, uint64_t 
     uint32_t operand_stride;
     if (b_lo >= a_lo) { operand_stride = b_lo - a_lo; }
     else { base = src_b; operand_stride = a_lo - b_lo; }
-    uint32_t src_str[2] = { operand_stride, XDMA_WIDTH };
-    uint32_t src_bnd[2] = { 2u, rows * beats };
     uint32_t csr_ew[2]  = { 2u, op };
     xdma_enable_src_ext(READER_EXT_STREAMELEMENTWISE, csr_ew);
-    uint32_t rc = xdma_stream_launch(base, dst, src_str, src_bnd, 2u, rows * beats, 0u /*FULL*/);
+    // src {operand@2, beat@rows*beats}; dst 1D {beat@rows*beats}.
+    uint32_t rc = xdma_cfg_run_rr(base, dst, operand_stride, 2u, XDMA_WIDTH, rows * beats, 0u, 1u,
+                                  XDMA_WIDTH, rows * beats, 0u, 1u);
     xdma_disable_src_ext(READER_EXT_STREAMELEMENTWISE);
     return rc;
 }
@@ -902,6 +961,7 @@ static inline uint32_t xdma_stream_ew2(uint64_t src_a, uint64_t src_b, uint64_t 
 //   [6..7]  out_addr   (output, same shape)
 //   [8]     beats      (D = beats*32 fp16 per row)
 //   [9]     rows       (rows / token positions)
+#define BINGO_ROPE_SCRATCH_POOL 8192u   // covers [xswap|tmp1|tmp2] for the sweep tiles + headroom
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_rope(void *arg)
 {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_rope_args_t);
@@ -912,7 +972,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_rope(void *arg)
         uint64_t cos_addr = make_u64(a[2], a[3]);
         uint64_t sin_addr = make_u64(a[4], a[5]);
         uint64_t out_addr = make_u64(a[6], a[7]);
-        uint32_t beats = a[8];
+        uint32_t cols  = a[8];                        // per-row fp16 length D (a multiple of 32)
         uint32_t rows  = a[9];
         bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_rope_args_t);
         BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
@@ -920,13 +980,24 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_rope(void *arg)
         // extension there is no DMA-only path left, so refuse the call.
         if (!BINGO_HAS_STREAMELEMENTWISE)
             BINGO_XDMA_EXT_UNSUPPORTED("xdma_rope", "StreamElementwise");
+        uint32_t beats     = cols >> 5u;              // cols / 32 fp16 lanes per 64-B beat
         uint32_t row_beats = rows * beats;            // total 64-byte beats
         uint32_t tot_b     = row_beats * XDMA_WIDTH;  // bytes per [rows, D] fp16 buffer
         uint32_t num_elems = row_beats * 32u;         // fp16 elements (32 per 64-B beat)
 
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
         // One L1 scratch block [xswap | tmp1 | tmp2], 64-byte aligned for the beat reads.
-        uint32_t scratch_lo = snrt_l1_malloc(3u * tot_b + 64u);
+        // Persistent pool (allocate once, reuse) to skip the ~5k-cc bingo heap malloc/free.
+        uint32_t scratch_bytes = 3u * tot_b + 64u;
+        static uint32_t s_pool = 0u;
+        uint32_t scratch_lo, from_pool = 0u;
+        if (scratch_bytes <= BINGO_ROPE_SCRATCH_POOL) {
+            if (!s_pool) s_pool = snrt_l1_malloc(BINGO_ROPE_SCRATCH_POOL);
+            scratch_lo = s_pool;
+            from_pool = 1u;
+        } else {
+            scratch_lo = snrt_l1_malloc(scratch_bytes);   // rare: oversized tile
+        }
         if (!scratch_lo) {
             printf_safe("[Cluster %d Core %d]: rope L1 scratch alloc failed!\r\n",
                         snrt_cluster_idx(), snrt_cluster_core_idx());
@@ -950,7 +1021,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_rope(void *arg)
         if (rc == BINGO_RET_SUCC) rc = xdma_stream_ew2(tmp1, tmp2, out_addr, rows, beats, 1u /*ADD*/);
         BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
 
-        snrt_l1_free(scratch_lo);
+        if (!from_pool) snrt_l1_free(scratch_lo);   // the persistent pool is never freed
         if (rc != BINGO_RET_SUCC) {
             printf_safe("[Cluster %d Core %d]: rope StreamElementwise pass failed!\r\n",
                         snrt_cluster_idx(), snrt_cluster_core_idx());
@@ -966,6 +1037,684 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_rope(void *arg)
     }
 }
 
+// recip_f16 / sqrt_f16 moved to snax_fp16_math.h (runtime/snax/xdma), included above.
+
+// Broadcast `rows` splatted scalar beats to `rows` rows of `beats` beats each:
+// bc[r, b] = src_beat[r] for every b. The reader re-reads each row's single beat
+// with a stride-0 inner dim; the writer lays `beats` copies down at dst_row_stride.
+// This is the Python softmax `bcast` helper (a stride-0 xdma_6d) folded in-kernel;
+// softmax uses it twice (negmax at the packed row_b pitch, 1/Sexp at pad_row).
+static inline uint32_t xdma_bcast_beats(uint64_t src_beat, uint64_t dst,
+                                        uint32_t beats, uint32_t rows,
+                                        uint32_t dst_row_stride)
+{
+    xdma_disable_all_extensions();
+    // src {re-read same beat@beats (stride 0), next row's beat@rows}; dst {beat@beats, row@rows}
+    // laid down at dst_row_stride. Register-resident config (no arrays, no ternary).
+    return xdma_cfg_run_rr(src_beat, dst, 0u, beats, XDMA_WIDTH, rows, 0u, 1u,
+                           XDMA_WIDTH, beats, dst_row_stride, rows);
+}
+
+// Same stride-0 broadcast, but with a fused StreamMap LINEAR (out = a*x) applied on the
+// fly. softmax's per-row -max broadcast uses a = -1.0 so the negate happens INSIDE the
+// broadcast pass -- no separate DM-core negate loop (the reduce's max is re-read and
+// negated as it is expanded to [rows, D]).
+static inline uint32_t xdma_bcast_map(uint64_t src_beat, uint64_t dst,
+                                      uint32_t beats, uint32_t rows,
+                                      uint32_t dst_row_stride, uint32_t a_bits)
+{
+    uint32_t csr_map[3] = { a_bits, 0u, 0u /*LINEAR*/ };
+    xdma_enable_src_ext(READER_EXT_STREAMMAP, csr_map);
+    uint32_t rc = xdma_cfg_run_rr(src_beat, dst, 0u, beats, XDMA_WIDTH, rows, 0u, 1u,
+                                  XDMA_WIDTH, beats, dst_row_stride, rows);
+    xdma_disable_src_ext(READER_EXT_STREAMMAP);
+    return rc;
+}
+
+// StreamElementwise MUL/ADD over two PADDED operands: rows are pad_row bytes apart
+// and only the first `beats` beats per row are data (the merged map+reduce TAP
+// layout -- the trailing scalar beat is skipped). 3D reader {operand, beat, row};
+// packed 1D writer. Optional fused FP16->INT8 (out_dtype=1, dst packs 2:1). Like
+// xdma_stream_ew2 it bases the reader at the LOWER operand and strides up, valid
+// because MUL/ADD commute. The flat (unpadded) case is served by xdma_stream_ew2.
+// csr_mode=1 reuses the AGU of a prior SAME-shape padded pass (sticky retask) -- used
+// to fold the int8 quant leaf onto the fp16 normalize pass's config (only the writer
+// dst + bound and the added Fp16ToInt8 lane change).
+static inline uint32_t xdma_stream_ew2_padded(uint64_t src_a, uint64_t src_b, uint64_t dst,
+                                              uint32_t rows, uint32_t beats, uint32_t pad_row,
+                                              uint32_t op, uint32_t out_dtype, uint32_t inv_scale,
+                                              uint32_t csr_mode)
+{
+    uint32_t a_lo = (uint32_t)src_a, b_lo = (uint32_t)src_b;
+    uint64_t base = src_a;
+    uint32_t operand_stride;
+    if (b_lo >= a_lo) { operand_stride = b_lo - a_lo; }
+    else { base = src_b; operand_stride = a_lo - b_lo; }
+    uint32_t csr_ew[2]  = { 2u, op };
+    xdma_enable_src_ext(READER_EXT_STREAMELEMENTWISE, csr_ew);
+    if (out_dtype == 1u) {
+        uint32_t csr_q[1] = { inv_scale };
+        xdma_enable_src_ext(READER_EXT_FP16TOINT8, csr_q);
+    }
+    uint32_t dst_bound0 = (out_dtype == 1u) ? (rows * beats / 2u) : (rows * beats);
+    // src 3D {operand@2, beat@beats, row@rows}; dst 1D {beat@dst_bound0}.
+    uint32_t rc = (csr_mode == 0u)
+        ? xdma_cfg_run_rr(base, dst, operand_stride, 2u, XDMA_WIDTH, beats, pad_row, rows,
+                          XDMA_WIDTH, dst_bound0, 0u, 1u)
+        : xdma_retask_run(base, dst, dst_bound0);
+    if (out_dtype == 1u) xdma_disable_src_ext(READER_EXT_FP16TOINT8);
+    xdma_disable_src_ext(READER_EXT_STREAMELEMENTWISE);
+    return rc;
+}
+
+// f16_to_f32bits moved to snax_fp16_math.h (runtime/snax/xdma), included above.
+
+// Per-row reduce to one splatted scalar beat/row (softmax MAX). 2D reader {beat, row}.
+static inline uint32_t xdma_softmax_reduce(uint64_t src, uint64_t dst, uint32_t rows,
+                                           uint32_t beats, uint32_t op)
+{
+    uint32_t csr_red[2] = { beats, op };
+    xdma_enable_src_ext(READER_EXT_STREAMREDUCE, csr_red);
+    // src {beat@beats, row@rows}; dst 1D {row@rows}.
+    uint32_t rc = xdma_cfg_run_rr(src, dst, XDMA_WIDTH, beats, beats * XDMA_WIDTH, rows, 0u, 1u,
+                                  XDMA_WIDTH, rows, 0u, 1u);
+    xdma_disable_src_ext(READER_EXT_STREAMREDUCE);
+    return rc;
+}
+
+// Merged EXP-map |> ADD-reduce(TAP): out = padded [rows, beats+1] (exp beats + trailing
+// Sexp). b_bits folds a per-TENSOR subtract into the map (rows==1: -max, so the reader
+// consumes x directly and the sub-max + broadcast passes vanish; rows>1: 0). csr_mode=1
+// reuses a prior same-src-shape pass's AGU (the rows==1 chain reduce->map->norm all read
+// `beats` beats at stride 64, so map + norm retask off the reduce's full config).
+static inline uint32_t xdma_softmax_expsum(uint64_t src, uint64_t dst, uint32_t rows,
+                                           uint32_t beats, uint32_t b_bits, uint32_t csr_mode)
+{
+    uint32_t flat = rows * beats;
+    uint32_t csr_map[3] = { 0x3F800000u /*a=1*/, b_bits, 1u /*EXP*/ };
+    uint32_t csr_red[2] = { beats, (1u /*ADD*/ | REDUCE_OP_TAP) };
+    xdma_enable_src_ext(READER_EXT_STREAMMAP, csr_map);
+    xdma_enable_src_ext(READER_EXT_STREAMREDUCE, csr_red);
+    // src {beat@flat, 1}; dst 1D {beat@rows*(beats+1)} (TAP-padded output).
+    uint32_t rc = (csr_mode == 0u)
+        ? xdma_cfg_run_rr(src, dst, XDMA_WIDTH, flat, flat * XDMA_WIDTH, 1u, 0u, 1u,
+                          XDMA_WIDTH, rows * (beats + 1u), 0u, 1u)
+        : xdma_retask_run(src, dst, rows * (beats + 1u));
+    xdma_disable_src_ext(READER_EXT_STREAMREDUCE);
+    xdma_disable_src_ext(READER_EXT_STREAMMAP);
+    return rc;
+}
+
+// Single StreamMap LINEAR (out = a_bits * x) over the first `rows*beats` flat beats,
+// optional fused Fp16ToInt8 (out_dtype=1). csr_mode=1 reuses a prior same-shape map's
+// AGU (sticky). rows==1 normalize: expb's trailing Sexp beat sits just past `flat`, so a
+// flat reader of `flat` beats skips it -- this replaces the 1/Sexp broadcast + ew(MUL).
+static inline uint32_t xdma_softmax_scale(uint64_t src, uint64_t dst, uint32_t rows, uint32_t beats,
+                                          uint32_t a_bits, uint32_t out_dtype, uint32_t inv_scale,
+                                          uint32_t csr_mode)
+{
+    uint32_t flat = rows * beats;
+    uint32_t csr_map[3] = { a_bits, 0u, 0u /*LINEAR*/ };
+    xdma_enable_src_ext(READER_EXT_STREAMMAP, csr_map);
+    if (out_dtype == 1u) { uint32_t csr_q[1] = { inv_scale }; xdma_enable_src_ext(READER_EXT_FP16TOINT8, csr_q); }
+    uint32_t dst_bound0 = (out_dtype == 1u) ? (flat / 2u) : flat;
+    // src {beat@flat, 1}; dst 1D {beat@dst_bound0}.
+    uint32_t rc = (csr_mode == 0u)
+        ? xdma_cfg_run_rr(src, dst, XDMA_WIDTH, flat, flat * XDMA_WIDTH, 1u, 0u, 1u,
+                          XDMA_WIDTH, dst_bound0, 0u, 1u)
+        : xdma_retask_run(src, dst, dst_bound0);
+    if (out_dtype == 1u) xdma_disable_src_ext(READER_EXT_FP16TOINT8);
+    xdma_disable_src_ext(READER_EXT_STREAMMAP);
+    return rc;
+}
+
+// ==========================================================================
+// Fused FP16 softmax -- the WHOLE pipeline in ONE DMA-engine kernel.
+//
+// out[r, :] = softmax(x[r, :]) for r in 0..rows, D = beats*32 fp16 per row.
+// Replaces the ~11-node host DFG (reduce-MAX, host neg, broadcast, sub-max,
+// merged EXP+Sexp, gather, host reciprocal, broadcast, normalize-MUL, quant):
+// everything runs on the DM core, so the host only does Load / Store / Check.
+//
+// The two per-row SCALAR transforms the DFG sent to the host CVA6 are done here
+// on the DM core as INTEGER bit-ops on the fp16 pattern (the cluster cores are
+// rv32ima, no FPU -- a float op would trap):
+//   -max    : XOR 0x8000 (fp16 sign flip); 1/Sexp: recip_f16() (integer `divu`).
+// The gather also vanishes: the reciprocal reads each row's Sexp straight out of the
+// merged-reduce TAP trailing beat, in place.
+//
+// TWO PATHS (chosen by `rows`):
+//
+//  rows == 1  -- FAST PATH. A single row shares one -max and one 1/Sexp, so both fold
+//  into the StreamMap scalar CSRs (b and a) and the broadcasts + elementwise passes
+//  vanish entirely -- 3 xDMA tasks (+1 for int8), no broadcast, no operand interleave:
+//    [x] reduce(MAX)                    x    -> bt
+//    [c] b = -max (f32 bits)
+//    [x] map(EXP, a=1, b=-max) |> reduce(ADD,TAP)   x    -> expb  (subtract folded in)
+//    [c] a = 1/Sexp (f32 bits)
+//    [x] map(LINEAR, a=1/Sexp)          expb -> out          (normalize; no broadcast/MUL)
+//    [x] (opt, STICKY) map(LINEAR,a) + Fp16ToInt8  expb -> int8
+//
+//  rows > 1  -- GENERAL PATH. Each row has its OWN -max / 1/Sexp, and StreamMap's a,b
+//  are single scalars while StreamElementwise's operand-B has no independent AGU (frozen
+//  RTL), so the per-row scalars must be broadcast to [rows,cols] and applied elementwise:
+//    [x] reduce(MAX); [c] negate; [x] bcast(-max); [x] ew(ADD) x-max;
+//    [x] map(EXP)|>reduce(ADD,TAP); [c] recip; [x] bcast(1/Sexp);
+//    [x] ew(MUL) fp16;  [x] (opt, STICKY) ew(MUL)+Fp16ToInt8 int8
+//  The int8 leaf reuses the fp16 normalize pass's AGU via a sticky retask (csr_mode=1).
+//
+// Arg layout (__snax_bingo_kernel_xdma_softmax_args_t):
+//   [0..1] input_addr        (x, fp16 [rows, cols], packed)
+//   [2..3] output_addr       (softmax(x), fp16 [rows, cols], packed)
+//   [4]    rows
+//   [5]    cols              (per-row fp16 length D; must be a multiple of 32)
+//   [6..7] int8_output_addr  (optional; 0 = fp16 output only. When set, the kernel
+//                             ALSO writes the int8 quant of the result. The user supplies
+//                             no scale: softmax output is in [0,1], so the kernel bakes a
+//                             fixed 127.0 Fp16ToInt8 scale.)
+//
+// The per-pass BINGO_TRACE_MARKERs make each stage a span in `bingo-vis-traces`
+// (xDMA passes share the XDMA_RUN label, DM-core scalar prep shares SCALAR_RUN;
+// read them in timestamp order to attribute per-stage cycles).
+// ==========================================================================
+// Persistent scratch-pool size (bytes). Covers the sweep tiles up to ~[8, 512] fp16 with
+// headroom; a bigger tile falls back to a per-call heap malloc/free. See the pool logic below.
+#define BINGO_SOFTMAX_SCRATCH_POOL 8192u
+// Output precision for the fused SIMD kernels (softmax/rmsnorm). The final writer pass
+// emits fp16, or int8 via the Fp16ToInt8 writer extension. It is chosen by the kernel-name
+// WRAPPER (__..._f16_f16 / __..._f16_i8), never a user arg -- so the user's kernel args stay
+// {input_addr, output_addr, rows, cols} with no HW/quant detail leaking through.
+#define XDMA_OUT_F16 0u
+#define XDMA_OUT_I8  1u
+// Base implementation (not a symtab entry). `out_prec` selects the writer dtype of the SINGLE
+// output pass: XDMA_OUT_F16 writes fp16 to output_addr; XDMA_OUT_I8 writes int8 to output_addr
+// (fused Fp16ToInt8, baked 127.0 scale -- softmax output is in [0,1]). The two SNAX_LIB_DEFINE
+// wrappers below fix out_prec by name.
+static inline uint32_t __snax_bingo_kernel_xdma_softmax(void *arg, uint32_t out_prec)
+{
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_softmax_args_t);
+    if (snrt_is_dm_core()) {
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+        uint32_t *a = (uint32_t *)arg;
+        uint64_t in_addr   = make_u64(a[0], a[1]);
+        uint64_t out_addr  = make_u64(a[2], a[3]);
+        uint32_t rows      = a[4];
+        uint32_t cols      = a[5];
+        bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_softmax_args_t);
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+
+        // The pipeline chains StreamMap + StreamReduce + StreamElementwise; refuse on a
+        // cfg lacking any of them (the body is dead-coded where BINGO_HAS_* is a literal 0).
+        if (!BINGO_HAS_STREAMMAP || !BINGO_HAS_STREAMREDUCE || !BINGO_HAS_STREAMELEMENTWISE)
+            BINGO_XDMA_EXT_UNSUPPORTED("xdma_softmax", "StreamMap+StreamReduce+StreamElementwise");
+        uint32_t out_i8 = (out_prec == XDMA_OUT_I8);
+        if (out_i8 && !BINGO_HAS_FP16TOINT8)
+            BINGO_XDMA_EXT_UNSUPPORTED("xdma_softmax_f16_i8", "Fp16ToInt8");
+
+        uint32_t out_dt    = out_i8 ? 1u : 0u;          // writer dtype: 0 fp16, 1 int8
+        uint32_t beats     = cols >> 5u;                // cols / 32 fp16 lanes per 64-B beat
+        uint32_t inv_scale = out_i8 ? 0x42FE0000u : 0u; // 127.0f Fp16ToInt8 scale (out in [0,1])
+        uint32_t row_b     = beats * XDMA_WIDTH;         // packed row pitch (bytes)
+        uint32_t pad_row   = (beats + 1u) * XDMA_WIDTH;  // TAP row: beats data + 1 scalar beat
+        uint32_t tot_b     = rows * row_b;               // packed [rows,cols] bytes
+        uint32_t pad_b     = rows * pad_row;             // padded [rows,beats+1] bytes
+
+        // One L1 scratch block, 64-B aligned: [ bt | bc | xs | expb ]. The rows==1 fast
+        // path uses only bt + expb; bc/xs sit unused there (a few hundred spare bytes).
+        //   bt   (rows*64)  splatted per-row scalar beats (max->neg, then Sexp->inv)
+        //   bc   (pad_b)    broadcast operand (rows>1 only)
+        //   xs   (tot_b)    x - max            (rows>1 only)
+        //   expb (pad_b)    exp + trailing Sexp (TAP)
+        uint32_t bt_off = 0u, bc_off = rows * XDMA_WIDTH;
+        uint32_t xs_off = bc_off + pad_b, expb_off = xs_off + tot_b;
+        uint32_t scratch_bytes = expb_off + pad_b + 64u;
+        // The bingo L1 heap malloc/free is a real free-list allocator (~5k cc/call). The
+        // softmax scratch is small and the SAME buffer serves every config, so keep a
+        // persistent pool: allocate it ONCE (lazily) and reuse it -- one heap call ever,
+        // no per-config malloc/free. Only a tile bigger than the pool falls back to a
+        // per-call malloc/free. `s_pool` persists across invocations (DM core only, no race).
+        static uint32_t s_pool = 0u;
+        uint32_t scratch_lo, from_pool = 0u;
+        if (scratch_bytes <= BINGO_SOFTMAX_SCRATCH_POOL) {
+            if (!s_pool) s_pool = snrt_l1_malloc(BINGO_SOFTMAX_SCRATCH_POOL);
+            scratch_lo = s_pool;
+            from_pool = 1u;
+        } else {
+            scratch_lo = snrt_l1_malloc(scratch_bytes);   // rare: oversized tile
+        }
+        if (!scratch_lo) {
+            printf_safe("[Cluster %d Core %d]: softmax L1 scratch alloc failed!\r\n",
+                        snrt_cluster_idx(), snrt_cluster_core_idx());
+            return BINGO_RET_FAIL;
+        }
+        uint32_t base_lo = (scratch_lo + 63u) & ~63u;
+        uint64_t g0 = chiplet_addr_transform((uint64_t)base_lo);      // DMA-global view of scratch
+        uint64_t bt_g = g0 + bt_off, bc_g = g0 + bc_off, xs_g = g0 + xs_off, expb_g = g0 + expb_off;
+        volatile uint16_t *bt_l   = (volatile uint16_t *)(base_lo + bt_off);    // CPU (local) view
+        volatile uint16_t *expb_l = (volatile uint16_t *)(base_lo + expb_off);
+        uint32_t sum_h = beats * 32u;                   // lane offset of the TAP trailing scalar beat
+
+        uint32_t rc = BINGO_RET_SUCC;
+
+        // [x] reduce(MAX): x -> bt (one splatted scalar beat per row).
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
+        rc = xdma_softmax_reduce(in_addr, bt_g, rows, beats, 0u /*MAX*/);
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
+
+        if (rows == 1u) {
+            // ---- rows==1 FAST PATH: fold -max into map.b and 1/Sexp into normalize map.a ----
+            // [c] b = -max (fp32 bits): read the splatted max, sign-flip, widen to fp32.
+            BINGO_TRACE_MARKER(BINGO_TRACE_SCALAR_RUN_START);
+            uint32_t b_bits = 0u;
+            if (rc == BINGO_RET_SUCC) b_bits = f16_to_f32bits((uint16_t)(bt_l[0] ^ 0x8000u));
+            BINGO_TRACE_MARKER(BINGO_TRACE_SCALAR_RUN_END);
+            // [x] map(EXP, a=1, b=-max) |> reduce(ADD, TAP): x -> expb (subtract folded in).
+            //     STICKY: reduce/map/norm all read `beats` beats at stride 64 (same src AGU),
+            //     so map retasks off the reduce's full config (dst/bound + extension only).
+            BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
+            if (rc == BINGO_RET_SUCC) rc = xdma_softmax_expsum(in_addr, expb_g, rows, beats, b_bits, 1u /*sticky*/);
+            BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
+            // [c] a = 1/Sexp (fp32 bits): recip the TAP trailing beat, widen to fp32.
+            BINGO_TRACE_MARKER(BINGO_TRACE_SCALAR_RUN_START);
+            uint32_t a_bits = 0u;
+            if (rc == BINGO_RET_SUCC) a_bits = f16_to_f32bits(recip_f16(expb_l[sum_h]));
+            BINGO_TRACE_MARKER(BINGO_TRACE_SCALAR_RUN_END);
+            // [x] map(LINEAR, a=1/Sexp) [+ Fp16ToInt8 when int8]: expb -> out (normalize; no
+            //     broadcast, no MUL). STICKY off the expsum (same {beats,1} src AGU).
+            BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
+            if (rc == BINGO_RET_SUCC)
+                rc = xdma_softmax_scale(expb_g, out_addr, rows, beats, a_bits, out_dt, inv_scale, 1u /*sticky*/);
+            BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
+        } else {
+            // ---- rows>1 GENERAL PATH: per-row -max/1/Sexp need broadcast + elementwise ----
+            // [x] map-broadcast: bc = -max[rows,D]. The reduce's per-row max is re-read
+            //     (stride-0) and negated by a fused StreamMap LINEAR(a=-1) as it expands --
+            //     no separate DM-core negate pass.
+            BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
+            if (rc == BINGO_RET_SUCC)
+                rc = xdma_bcast_map(bt_g, bc_g, beats, rows, row_b, 0xBF800000u /*a=-1.0*/);
+            BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
+            // [x] ew(ADD): xs = x + (-max). Flat/packed operands.
+            BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
+            if (rc == BINGO_RET_SUCC) rc = xdma_stream_ew2(in_addr, bc_g, xs_g, rows, beats, 1u /*ADD*/);
+            BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
+            // [x] map(EXP) |> reduce(ADD, TAP): xs -> expb (padded; Sexp = trailing beat).
+            //     Full cfg: the preceding bcast/ew passes leave a different AGU shape.
+            BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
+            if (rc == BINGO_RET_SUCC) rc = xdma_softmax_expsum(xs_g, expb_g, rows, beats, 0u, 0u /*full*/);
+            BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
+            // [c] reciprocal: per row inv = recip_f16(Sexp), splat across bt's row beat.
+            BINGO_TRACE_MARKER(BINGO_TRACE_SCALAR_RUN_START);
+            if (rc == BINGO_RET_SUCC) {
+                uint32_t pad_row_h = (beats + 1u) * 32u;
+                for (uint32_t r = 0u; r < rows; r++) {
+                    uint16_t inv = recip_f16(expb_l[r * pad_row_h + sum_h]);
+                    uint32_t inv2 = ((uint32_t)inv << 16) | inv;   // two lanes per store
+                    volatile uint32_t *row32 = (volatile uint32_t *)(bt_l + r * 32u);
+                    for (uint32_t l = 0u; l < 16u; l++) row32[l] = inv2;
+                }
+            }
+            BINGO_TRACE_MARKER(BINGO_TRACE_SCALAR_RUN_END);
+            // [x] broadcast bt(1/Sexp) -> bc, PADDED (pad_row) so the MUL interleave delta is constant.
+            BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
+            if (rc == BINGO_RET_SUCC) rc = xdma_bcast_beats(bt_g, bc_g, beats, rows, pad_row);
+            BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
+            // [x] ew(MUL) [+ Fp16ToInt8 when int8]: out = exp * (1/Sexp). Padded read, packed
+            //     write, full cfg (this is the sole output pass).
+            BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
+            if (rc == BINGO_RET_SUCC)
+                rc = xdma_stream_ew2_padded(expb_g, bc_g, out_addr, rows, beats, pad_row,
+                                            0u /*MUL*/, out_dt, inv_scale, 0u /*full*/);
+            BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
+        }
+
+        if (!from_pool) snrt_l1_free(scratch_lo);   // the persistent pool is never freed
+        if (rc != BINGO_RET_SUCC) {
+            printf_safe("[Cluster %d Core %d]: softmax pass failed!\r\n",
+                        snrt_cluster_idx(), snrt_cluster_core_idx());
+            return BINGO_RET_FAIL;
+        }
+        sp->return_value = (uint32_t)out_addr;
+        sp->num_return_values = 0;
+        return BINGO_RET_SUCC;
+    } else {
+        printf_safe("[Cluster %d Core %d]: Error! xDMA softmax should be called from a DM core!\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+}
+
+// User-facing softmax entry points. The precision is in the NAME; the args are identical and
+// HW-free: { input_addr, output_addr, rows, cols }. output_addr is the fp16 buffer (f16_f16)
+// or the int8 buffer (f16_i8).
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_softmax_f16_f16(void *arg) {
+    return __snax_bingo_kernel_xdma_softmax(arg, XDMA_OUT_F16);
+}
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_softmax_f16_i8(void *arg) {
+    return __snax_bingo_kernel_xdma_softmax(arg, XDMA_OUT_I8);
+}
+
+// ==========================================================================
+// Fused FP16 RMSNorm -- the WHOLE pipeline in ONE DMA-engine kernel.
+//
+// out[r, :] = x[r, :] / sqrt(mean_j x[r,j]^2)  for r in 0..rows, D = cols fp16 per row.
+// Replaces the granular host DFG (reduce-SUMSQ, /N map, host sqrt, host reciprocal,
+// broadcast, normalize-MUL, quant): everything runs on the DM core, host only does
+// Load / Store / Check. Same shape/args as xdma_softmax; the differences are the
+// reduction (SUMSQ, not MAX), the scalar (inv_rms = 1/sqrt(Sxx/N) via integer
+// sqrt_f16 + recip_f16, no FPU), and that the normalize reads x DIRECTLY (no exp, no
+// sub-max, no TAP padding). N = cols is taken to be a power of two (D = beats*32).
+//
+//  rows == 1  -- FAST PATH: the single inv_rms folds into a normalize map's `a`, and the
+//  reduce and normalize both read x with the same {beats,1} AGU, so the normalize (+int8)
+//  retask off the reduce's one full config:
+//    [x] reduce(SUMSQ)              x -> bt
+//    [c] inv_rms = recip(sqrt(ssq/N))
+//    [x] map(LINEAR, a=inv_rms)     x -> out        (STICKY)
+//    [x] (opt) map(LINEAR,a)+Fp16ToInt8  x -> int8  (STICKY)
+//
+//  rows > 1  -- per-row inv_rms broadcast + elementwise MUL (StreamMap a is one scalar):
+//    [x] reduce(SUMSQ); [c] per-row inv_rms splat; [x] broadcast; [x] ew(MUL) x*inv;
+//    [x] (opt) ew(MUL)+Fp16ToInt8 int8 (STICKY off the fp16 MUL)
+//
+// Arg layout (__snax_bingo_kernel_xdma_rmsnorm_args_t): input_addr[2], output_addr[2],
+// rows, cols, int8_output_addr[2] -- identical to xdma_softmax. int8 scale is a fixed
+// 64.0 (rmsnorm output is ~[-2,2]); no user scale.
+// ==========================================================================
+#define BINGO_RMSNORM_SCRATCH_POOL 8192u
+// Base implementation (not a symtab entry). See __snax_bingo_kernel_xdma_softmax for the
+// out_prec / wrapper convention -- identical here. int8 scale is a fixed 64.0 (rmsnorm output
+// is ~[-2,2]).
+static inline uint32_t __snax_bingo_kernel_xdma_rmsnorm(void *arg, uint32_t out_prec)
+{
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_rmsnorm_args_t);
+    if (snrt_is_dm_core()) {
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+        uint32_t *a = (uint32_t *)arg;
+        uint64_t in_addr   = make_u64(a[0], a[1]);
+        uint64_t out_addr  = make_u64(a[2], a[3]);
+        uint32_t rows      = a[4];
+        uint32_t cols      = a[5];
+        bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_rmsnorm_args_t);
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+
+        if (!BINGO_HAS_STREAMMAP || !BINGO_HAS_STREAMREDUCE || !BINGO_HAS_STREAMELEMENTWISE)
+            BINGO_XDMA_EXT_UNSUPPORTED("xdma_rmsnorm", "StreamMap+StreamReduce+StreamElementwise");
+        uint32_t out_i8 = (out_prec == XDMA_OUT_I8);
+        if (out_i8 && !BINGO_HAS_FP16TOINT8)
+            BINGO_XDMA_EXT_UNSUPPORTED("xdma_rmsnorm_f16_i8", "Fp16ToInt8");
+
+        uint32_t out_dt    = out_i8 ? 1u : 0u;           // writer dtype: 0 fp16, 1 int8
+        uint32_t beats     = cols >> 5u;                 // cols / 32 fp16 lanes per beat
+        uint32_t inv_scale = out_i8 ? 0x42800000u : 0u;  // 64.0f Fp16ToInt8 scale (out ~[-2,2])
+        uint32_t row_b     = beats * XDMA_WIDTH;          // packed row pitch (bytes)
+        uint32_t tot_b     = rows * row_b;                // packed [rows,cols] bytes
+        uint32_t log2D = 0u;                              // D = cols, assumed power of two
+        for (uint32_t t = cols; t > 1u; t >>= 1u) log2D++;
+
+        // One L1 scratch block: [ bt (rows*64) | bc (tot_b) ]. No exp/xs -- rmsnorm reads x
+        // directly. Persistent pool (allocate once, reuse) to skip the ~5k-cc heap malloc/free.
+        uint32_t bt_off = 0u, bc_off = rows * XDMA_WIDTH;
+        uint32_t scratch_bytes = bc_off + tot_b + 64u;
+        static uint32_t s_pool = 0u;
+        uint32_t scratch_lo, from_pool = 0u;
+        if (scratch_bytes <= BINGO_RMSNORM_SCRATCH_POOL) {
+            if (!s_pool) s_pool = snrt_l1_malloc(BINGO_RMSNORM_SCRATCH_POOL);
+            scratch_lo = s_pool;
+            from_pool = 1u;
+        } else {
+            scratch_lo = snrt_l1_malloc(scratch_bytes);
+        }
+        if (!scratch_lo) {
+            printf_safe("[Cluster %d Core %d]: rmsnorm L1 scratch alloc failed!\r\n",
+                        snrt_cluster_idx(), snrt_cluster_core_idx());
+            return BINGO_RET_FAIL;
+        }
+        uint32_t base_lo = (scratch_lo + 63u) & ~63u;
+        uint64_t g0 = chiplet_addr_transform((uint64_t)base_lo);
+        uint64_t bt_g = g0 + bt_off, bc_g = g0 + bc_off;
+        volatile uint16_t *bt_l = (volatile uint16_t *)(base_lo + bt_off);
+
+        uint32_t rc = BINGO_RET_SUCC;
+
+        // [x] reduce(SUMSQ): x -> bt (one splatted per-row sum-of-squares beat).
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
+        rc = xdma_softmax_reduce(in_addr, bt_g, rows, beats, 2u /*SUMSQ*/);
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
+
+        if (rows == 1u) {
+            // [c] inv_rms = 1/sqrt(ssq/N): mean via exponent subtract (N power of 2), then
+            //     integer sqrt + reciprocal, widened to fp32 for the map scalar.
+            BINGO_TRACE_MARKER(BINGO_TRACE_SCALAR_RUN_START);
+            uint32_t a_bits = 0u;
+            if (rc == BINGO_RET_SUCC) {
+                uint16_t ssq = bt_l[0];
+                uint32_t Es = (ssq >> 10) & 0x1Fu;
+                uint16_t mean = (uint16_t)(((Es - log2D) << 10) | (ssq & 0x3FFu));
+                a_bits = f16_to_f32bits(recip_f16(sqrt_f16(mean)));
+            }
+            BINGO_TRACE_MARKER(BINGO_TRACE_SCALAR_RUN_END);
+            // [x] map(LINEAR, a=inv_rms) [+ Fp16ToInt8 when int8]: x -> out. STICKY: reduce+
+            //     normalize both read x {beats,1}.
+            BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
+            if (rc == BINGO_RET_SUCC)
+                rc = xdma_softmax_scale(in_addr, out_addr, rows, beats, a_bits, out_dt, inv_scale, 1u /*sticky*/);
+            BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
+        } else {
+            // [c] per-row inv_rms, splatted across bt's row beat (two lanes per store).
+            BINGO_TRACE_MARKER(BINGO_TRACE_SCALAR_RUN_START);
+            if (rc == BINGO_RET_SUCC) {
+                for (uint32_t r = 0u; r < rows; r++) {
+                    uint16_t ssq = bt_l[r * 32u];
+                    uint32_t Es = (ssq >> 10) & 0x1Fu;
+                    uint16_t mean = (uint16_t)(((Es - log2D) << 10) | (ssq & 0x3FFu));
+                    uint16_t inv = recip_f16(sqrt_f16(mean));
+                    uint32_t inv2 = ((uint32_t)inv << 16) | inv;
+                    volatile uint32_t *row32 = (volatile uint32_t *)(bt_l + r * 32u);
+                    for (uint32_t l = 0u; l < 16u; l++) row32[l] = inv2;
+                }
+            }
+            BINGO_TRACE_MARKER(BINGO_TRACE_SCALAR_RUN_END);
+            // [x] broadcast bt(inv_rms) -> bc, packed (row pitch = row_b).
+            BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
+            if (rc == BINGO_RET_SUCC) rc = xdma_bcast_beats(bt_g, bc_g, beats, rows, row_b);
+            BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
+            // [x] ew(MUL) [+ Fp16ToInt8 when int8]: out = x * inv_rms. Both operands packed
+            //     (pad_row = row_b). Sole output pass.
+            BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
+            if (rc == BINGO_RET_SUCC)
+                rc = xdma_stream_ew2_padded(in_addr, bc_g, out_addr, rows, beats, row_b,
+                                            0u /*MUL*/, out_dt, inv_scale, 0u /*full*/);
+            BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
+        }
+
+        if (!from_pool) snrt_l1_free(scratch_lo);
+        if (rc != BINGO_RET_SUCC) {
+            printf_safe("[Cluster %d Core %d]: rmsnorm pass failed!\r\n",
+                        snrt_cluster_idx(), snrt_cluster_core_idx());
+            return BINGO_RET_FAIL;
+        }
+        sp->return_value = (uint32_t)out_addr;
+        sp->num_return_values = 0;
+        return BINGO_RET_SUCC;
+    } else {
+        printf_safe("[Cluster %d Core %d]: Error! xDMA rmsnorm should be called from a DM core!\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+}
+
+// User-facing rmsnorm entry points. Precision in the NAME; args { input_addr, output_addr,
+// rows, cols }. output_addr is the fp16 buffer (f16_f16) or the int8 buffer (f16_i8).
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_rmsnorm_f16_f16(void *arg) {
+    return __snax_bingo_kernel_xdma_rmsnorm(arg, XDMA_OUT_F16);
+}
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_rmsnorm_f16_i8(void *arg) {
+    return __snax_bingo_kernel_xdma_rmsnorm(arg, XDMA_OUT_I8);
+}
+
+// Single StreamMap out = func(a*x + b) over the first rows*beats flat beats, optional fused
+// Fp16ToInt8 (out_dtype=1, dst packs 2:1). Mirrors __snax_bingo_kernel_xdma_stream_map's body
+// (the flat {beat, 1} shape via xdma_stream_launch, which handles external L1 src/dst), just
+// factored out so the fused silu / swiglu kernels can call it directly.
+static inline uint32_t xdma_stream_map1(uint64_t src, uint64_t dst, uint32_t rows, uint32_t beats,
+                                        uint32_t a_bits, uint32_t b_bits, uint32_t func,
+                                        uint32_t out_dtype, uint32_t inv_scale)
+{
+    uint32_t flat = rows * beats;
+    uint32_t src_str[2] = { XDMA_WIDTH, flat * XDMA_WIDTH };
+    uint32_t src_bnd[2] = { flat, 1 };
+    uint32_t csr_map[3] = { a_bits, b_bits, func };
+    xdma_enable_src_ext(READER_EXT_STREAMMAP, csr_map);
+    if (out_dtype == 1u) { uint32_t csr_q[1] = { inv_scale }; xdma_enable_src_ext(READER_EXT_FP16TOINT8, csr_q); }
+    uint32_t dst_bound0 = (out_dtype == 1u) ? (flat / 2u) : flat;
+    uint32_t rc = xdma_stream_launch(src, dst, src_str, src_bnd, 2u, dst_bound0, 0u /*full*/);
+    if (out_dtype == 1u) xdma_disable_src_ext(READER_EXT_FP16TOINT8);
+    xdma_disable_src_ext(READER_EXT_STREAMMAP);
+    return rc;
+}
+
+// Fp16ToInt8 scale for the silu / swiglu int8 output (their range is wider than softmax's [0,1]).
+#define BINGO_SILU_INT8_SCALE 0x41800000u   // 16.0f
+
+// ==========================================================================
+// Fused FP16 SiLU -- one StreamMap pass in ONE DM-core kernel: out = silu(x) = x*sigmoid(x),
+// elementwise over [rows, cols] (cols = beats*32 fp16 per row). The host does only Load / Store /
+// Check; the user gives just { input_addr, output_addr, rows, cols } -- no StreamMap / beat / quant
+// detail. out_prec picks the writer: XDMA_OUT_F16 -> fp16 output; XDMA_OUT_I8 -> fused Fp16ToInt8
+// (baked 16.0 scale). The two SNAX_LIB_DEFINE wrappers below fix out_prec by name.
+static inline uint32_t __snax_bingo_kernel_xdma_silu(void *arg, uint32_t out_prec)
+{
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_silu_args_t);
+    if (snrt_is_dm_core()) {
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+        uint32_t *a = (uint32_t *)arg;
+        uint64_t in_addr  = make_u64(a[0], a[1]);
+        uint64_t out_addr = make_u64(a[2], a[3]);
+        uint32_t rows     = a[4];
+        uint32_t cols     = a[5];
+        bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_silu_args_t);
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+        if (!BINGO_HAS_STREAMMAP)
+            BINGO_XDMA_EXT_UNSUPPORTED("xdma_silu", "StreamMap");
+        uint32_t out_i8 = (out_prec == XDMA_OUT_I8);
+        if (out_i8 && !BINGO_HAS_FP16TOINT8)
+            BINGO_XDMA_EXT_UNSUPPORTED("xdma_silu_f16_i8", "Fp16ToInt8");
+        uint32_t beats     = cols >> 5u;                          // cols / 32 fp16 per 64-B beat
+        uint32_t inv_scale = out_i8 ? BINGO_SILU_INT8_SCALE : 0u;
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
+        uint32_t rc = xdma_stream_map1(in_addr, out_addr, rows, beats,
+                                       0x3F800000u /*a=1.0*/, 0u /*b=0*/, 2u /*SILU*/,
+                                       out_i8 ? 1u : 0u, inv_scale);
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
+        if (rc != BINGO_RET_SUCC) {
+            printf_safe("[Cluster %d Core %d]: silu StreamMap pass failed!\r\n",
+                        snrt_cluster_idx(), snrt_cluster_core_idx());
+            return BINGO_RET_FAIL;
+        }
+        sp->return_value = (uint32_t)out_addr;
+        sp->num_return_values = 0;
+        return BINGO_RET_SUCC;
+    } else {
+        printf_safe("[Cluster %d Core %d]: Error! xDMA silu should be called from a DM core!\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+}
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_silu_f16_f16(void *arg) {
+    return __snax_bingo_kernel_xdma_silu(arg, XDMA_OUT_F16);
+}
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_silu_f16_i8(void *arg) {
+    return __snax_bingo_kernel_xdma_silu(arg, XDMA_OUT_I8);
+}
+
+// ==========================================================================
+// Fused FP16 SwiGLU -- StreamMap(SiLU) + StreamElementwise(MUL) in ONE DM-core kernel:
+//   sg  = silu(gate)                 (StreamMap SILU,          gate -> sg scratch)
+//   out = sg (.) up                  (StreamElementwise MUL,   sg,up -> out)
+// elementwise over [rows, cols]. The kernel allocates the sg scratch from L1 and frees it; the
+// host does only Load / Store / Check, and the user gives { gate_addr, up_addr, output_addr, rows,
+// cols }. out_prec picks the MUL writer: fp16, or fused Fp16ToInt8 (baked 16.0 scale).
+#define BINGO_SWIGLU_SCRATCH_POOL 8192u    // sg[rows*cols] fp16 for the sweep tiles + headroom
+static inline uint32_t __snax_bingo_kernel_xdma_swiglu(void *arg, uint32_t out_prec)
+{
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_swiglu_args_t);
+    if (snrt_is_dm_core()) {
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+        uint32_t *a = (uint32_t *)arg;
+        uint64_t gate_addr = make_u64(a[0], a[1]);
+        uint64_t up_addr   = make_u64(a[2], a[3]);
+        uint64_t out_addr  = make_u64(a[4], a[5]);
+        uint32_t rows      = a[6];
+        uint32_t cols      = a[7];
+        bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_swiglu_args_t);
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+        if (!BINGO_HAS_STREAMMAP || !BINGO_HAS_STREAMELEMENTWISE)
+            BINGO_XDMA_EXT_UNSUPPORTED("xdma_swiglu", "StreamMap+StreamElementwise");
+        uint32_t out_i8 = (out_prec == XDMA_OUT_I8);
+        if (out_i8 && !BINGO_HAS_FP16TOINT8)
+            BINGO_XDMA_EXT_UNSUPPORTED("xdma_swiglu_f16_i8", "Fp16ToInt8");
+        uint32_t beats     = cols >> 5u;                 // cols / 32 fp16 per 64-B beat
+        uint32_t row_b     = beats * XDMA_WIDTH;         // packed row pitch (bytes)
+        uint32_t tot_b     = rows * row_b;               // [rows, cols] fp16 bytes
+        uint32_t inv_scale = out_i8 ? BINGO_SILU_INT8_SCALE : 0u;
+
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
+        // One L1 scratch buffer sg[rows, cols], 64-B aligned. Persistent pool (allocate once, reuse)
+        // to skip the ~5k-cc bingo heap malloc/free (see the softmax / rope pool rationale).
+        uint32_t scratch_bytes = tot_b + 64u;
+        static uint32_t s_pool = 0u;
+        uint32_t scratch_lo, from_pool = 0u;
+        if (scratch_bytes <= BINGO_SWIGLU_SCRATCH_POOL) {
+            if (!s_pool) s_pool = snrt_l1_malloc(BINGO_SWIGLU_SCRATCH_POOL);
+            scratch_lo = s_pool;
+            from_pool = 1u;
+        } else {
+            scratch_lo = snrt_l1_malloc(scratch_bytes);   // rare: oversized tile
+        }
+        if (!scratch_lo) {
+            printf_safe("[Cluster %d Core %d]: swiglu L1 scratch alloc failed!\r\n",
+                        snrt_cluster_idx(), snrt_cluster_core_idx());
+            return BINGO_RET_FAIL;
+        }
+        uint32_t base_lo = (scratch_lo + 63u) & ~63u;
+        uint64_t sg_g = chiplet_addr_transform((uint64_t)base_lo);   // DMA-global view of sg
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
+
+        // 1) sg = silu(gate)  (StreamMap SILU, fp16 out).
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
+        uint32_t rc = xdma_stream_map1(gate_addr, sg_g, rows, beats,
+                                       0x3F800000u /*a=1.0*/, 0u /*b=0*/, 2u /*SILU*/, 0u, 0u);
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
+        // 2) out = sg (.) up  [+ Fp16ToInt8 when int8]. Packed operands, so pad_row = row_b (flat).
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
+        if (rc == BINGO_RET_SUCC)
+            rc = xdma_stream_ew2_padded(sg_g, up_addr, out_addr, rows, beats, row_b,
+                                        0u /*MUL*/, out_i8 ? 1u : 0u, inv_scale, 0u /*full*/);
+        BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
+
+        if (!from_pool) snrt_l1_free(scratch_lo);   // the persistent pool is never freed
+        if (rc != BINGO_RET_SUCC) {
+            printf_safe("[Cluster %d Core %d]: swiglu pass failed!\r\n",
+                        snrt_cluster_idx(), snrt_cluster_core_idx());
+            return BINGO_RET_FAIL;
+        }
+        sp->return_value = (uint32_t)out_addr;
+        sp->num_return_values = 0;
+        return BINGO_RET_SUCC;
+    } else {
+        printf_safe("[Cluster %d Core %d]: Error! xDMA swiglu should be called from a DM core!\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+}
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_swiglu_f16_f16(void *arg) {
+    return __snax_bingo_kernel_xdma_swiglu(arg, XDMA_OUT_F16);
+}
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_swiglu_f16_i8(void *arg) {
+    return __snax_bingo_kernel_xdma_swiglu(arg, XDMA_OUT_I8);
+}
+
 // ==========================================================================
 // High-level xDMA kernels: user provides shapes, kernel computes AGU config.
 // These wrap the low-level reshape kernel with automatic stride computation.
@@ -975,29 +1724,9 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_rope(void *arg)
 // element width — used for widths the HW transposer has no native mode for
 // (int32) and when the Transposer extension is absent. The DM-core CPU loop is
 // not coherent with L3, so non-local (L3) operands are staged through L1 (src
-// via xdma_layout_stage_in, dst via xdma_layout_stage_out + flush), matching the
-// HW path's L1-or-L3 contract. Returns BINGO_RET_SUCC, or BINGO_RET_FAIL on L1
-// staging-alloc failure.
-static inline uint32_t xdma_cpu_transpose_2d(uint64_t src_addr, uint64_t dst_addr,
-                                             uint32_t M, uint32_t N, uint32_t elem_bytes)
-{
-    uint32_t bytes = M * N * elem_bytes;
-    xdma_layout_stage_t si;
-    xdma_layout_stage_out_t so;
-    if (xdma_layout_stage_in(&si, src_addr, bytes) != 0 ||
-        xdma_layout_stage_out(&so, dst_addr, bytes) != 0) {
-        xdma_layout_stage_free(&si);   // frees src scratch if staged; no-op otherwise
-        return BINGO_RET_FAIL;
-    }
-    volatile uint8_t *src = (volatile uint8_t *)(uint32_t)si.xdma_src;
-    volatile uint8_t *dst = (volatile uint8_t *)so.l1;
-    for (uint32_t r = 0; r < M; r++)
-        for (uint32_t c = 0; c < N; c++)
-            for (uint32_t b = 0; b < elem_bytes; b++)
-                dst[(c * M + r) * elem_bytes + b] = src[(r * N + c) * elem_bytes + b];
-    xdma_layout_stage_out_flush(&si, &so, dst_addr, bytes);   // transfer + flush + free both
-    return BINGO_RET_SUCC;
-}
+// xdma_cpu_transpose_2d moved to snax_xdma_lib.h (runtime/snax/xdma); it now returns the
+// lib's native int32_t 0/-1. Callers here test only `!= BINGO_RET_SUCC` (== 0), so the
+// -1 error code is transparent.
 
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_transpose_2d(void *arg)
 {
@@ -1702,43 +2431,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_gather_2d(void *arg)
 //   non-local (L3) operands through L1 via xdma_cpu_stage_* (snax_xdma_lib.h).
 // ==========================================================================
 
-// Dispatch helper for the layout-convert HW paths: configures an AGU-only
-// or AGU+Transposer xDMA transfer with the given strides/bounds, kicks it,
-// and waits for completion. Keeps the per-path bodies short.
-static inline void xdma_layout_run(
-    uint64_t src, uint64_t dst,
-    uint32_t spatial_stride_src, uint32_t spatial_stride_dst,
-    uint32_t ndims,
-    uint32_t *t_strides_src, uint32_t *t_bounds_src,
-    uint32_t *t_strides_dst, uint32_t *t_bounds_dst,
-    bool use_transposer)
-{
-    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
-    xdma_disable_all_extensions();
-#ifdef WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16
-    uint32_t tp_csr[1] = {0};  // 8x8-byte (8-bit) transpose mode
-    if (use_transposer)
-        xdma_enable_dst_ext(WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16, tp_csr);
-#else
-    (void)use_transposer;
-#endif
-    xdma_memcpy_nd_full_addr(
-        src, dst,
-        spatial_stride_src, spatial_stride_dst,
-        ndims, t_strides_src, t_bounds_src,
-        ndims, t_strides_dst, t_bounds_dst,
-        0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF);
-    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
-
-    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
-    xdma_task_t task_id = xdma_start();
-    xdma_wait_task(task_id);
-    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
-
-#ifdef WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16
-    if (use_transposer) xdma_disable_dst_ext(WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16);
-#endif
-}
+// xdma_layout_run moved to snax_xdma_lib.h (runtime/snax/xdma).
 
 // D-layout → row-major. See section banner for the path table.
 //   Coverage: paths 1–5; which one each kernel takes is in that table.

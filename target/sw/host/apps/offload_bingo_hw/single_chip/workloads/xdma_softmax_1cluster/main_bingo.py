@@ -4,55 +4,27 @@
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 #
-# xDMA FP16 SOFTMAX — multi-row, explicit workload graph (no xdma_ops_lib).
-# Per-row device->host->device hand-off over [rows, D] tiles: the device computes
-# the per-row reductions on the xDMA, the CVA6 host computes & broadcasts the
-# per-row scalars (-max, 1/Sigma exp), and the device's StreamElementwise reads the
-# [rows, D] broadcast buffers via the src_b mechanism.
+# xDMA FP16 SOFTMAX — multi-row, ONE fused all-device kernel.
+# out[r,:] = softmax(x[r,:]) over [rows, D] tiles (D = cols). The whole pipeline runs in a
+# single DM-core kernel; the host only loads the input, stores the output, and checks it.
 #
 #   Load x[rows,D] (iDMA L3->L1)
-#   T1  reduce(MAX, rows)                  x          -> max_bt[rows]       [dev]
-#   H1  neg      (GENERIC fp16 unary)      max_bt     -> negmax_bt[rows]    [host]
-#   B1  xDMA broadcast (reader stride 0)   negmax_bt  -> negmax_bc[rows,D]  [dev]
-#   T2  elementwise(ADD, {x, negmax_bc})   x          -> xs[rows,D]         [dev]
-#   T34 map(EXP) -||> reduce(ADD, TAP)     xs         -> exp[rows,beats+1]  [dev]  <-- MERGED
-#   G1  xDMA gather (strided)              exp's TAP  -> sum_bt[rows]       [dev]
-#   H2  reciprocal (GENERIC fp16 unary)    sum_bt     -> inv_bt[rows]       [host]
-#   B2  xDMA broadcast (reader stride 0)   inv_bt     -> inv_bc[rows,*]     [dev]
-#   T5  elementwise(MUL, {exp, inv_bc})    exp        -> out[rows,D]        [dev]
-#   Store(out) + Check(fp16 tol)                                            [host]
-#   Tq  elementwise(MUL)+Fp16ToInt8        exp        -> out_i8            [dev]
+#   Softmax  __snax_bingo_kernel_xdma_softmax_f16_f16   x -> out[rows,D] fp16
+#   Store(out) + Check(fp16 tol)
+#   (also) __snax_bingo_kernel_xdma_softmax_f16_i8      x -> out[rows,D] int8  + Check(int8 +-1)
 #
-# NO bespoke scalar-broadcast kernel. The host still does the fp16 scalar math, but through the
-# ORDINARY elementwise unary kernels (__host_bingo_kernel_neg / _reciprocal at BINGO_PREC_FP16).
-# That works because StreamReduce emits each row's scalar SPLATTED across all 32 lanes of its
-# beat (see StreamReduce.scala: "splatted across all lanes of one output beat", and the TAP
-# variant emits "one extra beat (the scalar, splatted)"). So running a plain elementwise unary
-# over the rows*32 lanes transforms every lane and the result is STILL splatted -- the splat is
-# free, and the host op is a generic array op that knows nothing about rows, beats or broadcast.
+# Precision is picked by KERNEL NAME (f16_f16 / f16_i8), not an arg -- the args are HW-free:
+# { input_addr, output_addr, rows, cols }. Inside the one kernel (offload_hw_kernels/xdma.h) all
+# on the DM core: reduce(MAX) -> negate -> sub-max -> merged EXP+Sexp -> integer reciprocal
+# (rv32iM divu, no FPU) -> normalize-MUL, and the fused Fp16ToInt8 quant for the i8 variant.
 #
-# The [rows,D] operand itself still has to exist: the StreamElementwise interleave is a single
-# affine address stream, so it cannot hold the scalar's address fixed while x walks the row. But
-# the xDMA builds it (B1/B2, reader stride 0), not the CVA6 -- so the host touches only rows*32
-# lanes, independent of D. Two plain strided copies (bcast/gather) carry all the layout work.
-#
-# T34 is the map+reduce MERGE (the snax-xdma-softmax-fold "B3" fusion): StreamMap(EXP)
-# chained into StreamReduce(ADD|TAP) in ONE xDMA task. The reduce consumes the map's output
-# stream, so Sexp costs no extra pass over [rows,D] and no second task setup (~600 cc of CSR
-# orchestration).
-#
-# The cost of TAP is a PADDED exp: each row is [beats mapped beats | 1 scalar beat], i.e.
-# (beats+1)*64 bytes, with the row's Sexp inline as the trailing beat. That ripples into the
-# two consumers, which is why they take strides:
-#   H2 reads the per-row scalars as a strided column INSIDE exp -- exp.view(beats*64) with
-#      in_row_stride=pad_row (there is no separate sum[] buffer).
-#   B2 lays the recip broadcast down at exp's PADDED pitch, so recip_bc and exp share a row
-#      stride and T5's interleave delta is constant.
-#   T5/Tq read exp with src_row_stride=pad_row -> a 3D {operand, beat, row} reader that skips
-#      each row's trailing scalar beat. Both operands must share the pitch, because the
-#      interleave derives operand 1 as operand 0 + a CONSTANT delta. The OUTPUT is packed.
-# Buffers are NAME-prefixed so each elementwise src_b operand allocates above its
-# operand 0 (the reader strides forward).
+# Measured cost LUT (single-chip RTL sweep, whole-kernel DM-core cycles)
+#     rows\cols     64     128     256
+#        1           -      834     926
+#        2         3993    2048    2501
+#        4         2292    2752    3658
+#        8         3244    4159      -     ((1,64) is the warm-up config; (8,256) dropped: its
+#                                           scratch overflows the L1 pool -> a fixed malloc spike)
 
 import os
 import sys
@@ -79,69 +51,30 @@ from bingo_node import BingoNode                          # noqa: E402
 from bingo_mem_handle import BingoMemAlloc, BingoMemSymbol  # noqa: E402
 from bingo_kernel_args import (                           # noqa: E402
     SnaxBingoKernelIdma1dCopyArgs,
-    SnaxBingoKernelXdma6dArgs,
-    SnaxBingoKernelXdmaStreamReduceArgs,
-    SnaxBingoKernelXdmaStreamMapReduceArgs,
-    SnaxBingoKernelXdmaStreamElementwiseArgs,
-    HostBingoKernelAraNegF16Args,
-    HostBingoKernelAraReciprocalF16Args,
+    SnaxBingoKernelXdmaSoftmaxF16F16Args,
+    SnaxBingoKernelXdmaSoftmaxF16I8Args,
     HostBingoKernelIdmaArgs,
     HostBingoKernelCheckResultArgs,
 )
 
 DMA_CORE = 1
 HOST_CORE = 2
-# StreamMap func / StreamReduce op / StreamElementwise op encodings.
-F_EXP = 1
-R_MAX, R_ADD = 0, 1
-EW_MUL, EW_ADD = 0, 1
 CHECK_FP16_TOL = 2
-ONE_F32 = int(np.float32(1.0).view(np.uint32))
-INV_SCALE = int(np.float32(127.0).view(np.uint32))
-BEAT = 64          # xDMA bus beat in bytes
-BEAT_FP16 = 32     # fp16 lanes in a beat -> the host's per-row output width (one splatted beat)
+CHECK_INT8_TOL = 4      # int8 output: +-1 LSB tol (softmax exp is a HW LUT != np.exp, so a
+                        # quantized golden differs by 1 LSB at rounding boundaries -- byte-exact
+                        # would spuriously fail and abort the sweep; +-1 is the correct budget)
 
 
-def bcast(g, name, src_beat, dst, beats, rows, dst_row_stride, after):
-    """xDMA stride-0 BROADCAST: expand [rows] splatted scalar beats -> [rows, D].
-
-    The reader's inner temporal dim has stride 0, so the row's single scalar beat is RE-READ
-    `beats` times (the AGU's trip count comes from its own index counter, so a 0 step holds the
-    address while the loop still runs); the outer dim steps one scalar beat per row. The writer
-    lays the row down at dst_row_stride, which is how the same pass serves both a flat operand
-    (stride beats*64) and one that must line up with a TAP-padded tensor (stride (beats+1)*64).
-
-    This is a plain strided copy -- no extension -- so the generic xdma_6d kernel expresses it.
-    """
-    return g.node(name, DMA_CORE, "__snax_bingo_kernel_xdma_6d",
-                  SnaxBingoKernelXdma6dArgs(src_beat, dst, 8, 8,
-                      [0, BEAT], [beats, rows],                # reader: stride-0 inner
-                      [BEAT, dst_row_stride], [beats, rows]),  # writer: beats data beats/row
-                  after)
-
-
-def gather(g, name, src_view, dst, rows, src_row_stride, after):
-    """xDMA strided gather: pull the `rows` per-row scalar beats out of a TAP-padded tensor
-    (they sit src_row_stride bytes apart, one at the end of each padded row) into a CONTIGUOUS
-    [rows] beat array. That is what lets the generic host unary below walk them as a plain
-    fp16 array -- no strided-input support needed anywhere on the host.
-
-    Also a plain strided copy, so again the generic xdma_6d kernel expresses it.
-    """
-    return g.node(name, DMA_CORE, "__snax_bingo_kernel_xdma_6d",
-                  SnaxBingoKernelXdma6dArgs(src_view, dst, 8, 8,
-                      [src_row_stride], [rows],   # reader: one scalar beat per padded row
-                      [BEAT], [rows]),            # writer: pack them back-to-back
-                  after)
-
-# (rows, beats); D = beats*32 = per-row length, total elements = rows*D.
-CONFIGS = [{"rows": 1, "beats": 2}, {"rows": 1, "beats": 8},
-           {"rows": 4, "beats": 2}, {"rows": 8, "beats": 2}]
+# (rows, cols); each row is a length-cols tile (cols a multiple of 32). A rows x cols grid for the
+# fused-kernel cost LUT (bilinear fit): rows {1,2,4,8} x cols {64,128,256} -- cols varies at EVERY
+# row so the cols slope de-confounds from the rows==1 fast-path drop.
+_LUT_GRID = [(r, c) for r in (1, 2, 4, 8) for c in (64, 128, 256)]
+CONFIGS = [{"rows": r, "cols": c} for (r, c) in _LUT_GRID]
 
 
 # ----- deterministic peaky softmax reference (mirrors the HW fp16 datapath) -----
-def _softmax_ref(rows, beats, i):
-    D = beats * 32
+def _softmax_ref(rows, cols, i):
+    D = cols
     rng = np.random.RandomState(20240601 + i)
     x_rows, y_rows = [], []
     for r in range(rows):
@@ -161,7 +94,7 @@ def _softmax_ref(rows, beats, i):
     return np.concatenate(x_rows), np.concatenate(y_rows)
 
 
-# ----- tiny graph helpers (explicit graph; no xdma_ops_lib) -----
+# ----- tiny graph helpers -----
 class G:
     def __init__(self, dfg):
         self.dfg = dfg
@@ -179,88 +112,51 @@ class G:
 
 
 def gen_data(i):
-    x, y = _softmax_ref(CONFIGS[i]["rows"], CONFIGS[i]["beats"], i)
+    x, y = _softmax_ref(CONFIGS[i]["rows"], CONFIGS[i]["cols"], i)
+    # int8 golden = quantize(softmax) at the kernel's baked 127.0 scale (softmax out in [0,1]).
+    yq = np.clip(np.rint(y.astype(np.float32) * 127.0), -128, 127).astype(np.int8)
     return [format_vector_definition("uint16_t", f"in_{i}", x.view(np.uint16)),
-            format_vector_definition("uint16_t", f"golden_{i}", y.view(np.uint16))]
+            format_vector_definition("uint16_t", f"golden_{i}", y.view(np.uint16)),
+            format_vector_definition("int8_t", f"golden_i8_{i}", yq)]
 
 
 def build_config(g, i, prev):
     rows  = CONFIGS[i]["rows"]
-    beats = CONFIGS[i]["beats"]
-    D     = beats * 32                 # per-row length
+    D     = CONFIGS[i]["cols"]         # per-row length (cols)
     n     = rows * D                   # total elements
-    tot_b = rows * beats * 64          # [rows, D] fp16 bytes (packed)
-    row_b = beats * 64                 # flat row pitch
-    pad_row = (beats + 1) * 64         # TAP row: beats data beats + 1 trailing scalar beat
-    pad_b   = rows * pad_row           # [rows, beats+1] bytes
-    lanes = rows * BEAT_FP16           # fp16 elements in the `rows` splatted scalar beats
-    # Name prefixes order the allocator so each elementwise src_b operand (negbc, invbc)
-    # sits above its operand 0 (x, expb) -- the reader strides forward.
-    # expb and invbc are PADDED (pad_row pitch) so the T5/Tq interleave sees a constant
-    # operand delta; there is no separate sum[] buffer -- the merged map+reduce leaves each
-    # row's Sexp inline as expb's trailing beat, and G1 gathers those out.
-    # The *bt buffers are [rows] splatted 64-B scalar beats.
-    l1_x      = g.l1(f"smx0x_{i}", tot_b)
-    l1_maxbt  = g.l1(f"smx1maxbt_{i}", rows * BEAT)
-    l1_negbt  = g.l1(f"smx2negbt_{i}", rows * BEAT)
-    l1_negbc  = g.l1(f"smx3negbc_{i}", tot_b)
-    l1_xs     = g.l1(f"smx4xs_{i}", tot_b)
-    l1_expb   = g.l1(f"smx5expb_{i}", pad_b)
-    l1_sumbt  = g.l1(f"smx6sumbt_{i}", rows * BEAT)
-    l1_invbt  = g.l1(f"smx7invbt_{i}", rows * BEAT)
-    l1_invbc  = g.l1(f"smx8invbc_{i}", pad_b)
-    l1_out    = g.l1(f"smx9out_{i}", tot_b)
-    l1_i8     = g.l1(f"smxAi8_{i}", n)
+    tot_b = rows * D * 2               # [rows, D] fp16 bytes (packed)
+
+    # One fused kernel runs the whole softmax on the DM core; the host only loads the input,
+    # stores the output, and checks it. The precision is picked by KERNEL NAME (f16_f16 /
+    # f16_i8), not an arg; both take the same {input, output, rows, cols}. We exercise BOTH
+    # off the same loaded input.
+    l1_x   = g.l1(f"smx0x_{i}", tot_b)     # [rows,D] packed input
+    l1_f16 = g.l1(f"smx1f16_{i}", tot_b)   # [rows,D] packed fp16 softmax output
+    l1_i8  = g.l1(f"smx2i8_{i}", n)        # [rows,D] int8 softmax output
 
     load = g.node(f"Load_{i}", DMA_CORE, "__snax_bingo_kernel_idma_1d_copy",
                   SnaxBingoKernelIdma1dCopyArgs(BingoMemSymbol(f"in_{i}"), l1_x, tot_b), prev)
-    t1 = g.node(f"Max_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_stream_reduce",
-                SnaxBingoKernelXdmaStreamReduceArgs(l1_x, l1_maxbt, beats, op=R_MAX,
-                    rows=rows, csr_mode=0), load)
-    # The reduce splats each row's scalar across ALL 32 lanes of its beat, so a GENERIC
-    # elementwise unary over the rows*32 fp16 lanes negates every lane and the result stays
-    # splatted -- no scalar-broadcast kernel, just __host_bingo_kernel_neg at fp16.
-    h1 = g.node(f"Neg_{i}", HOST_CORE, "__host_bingo_kernel_neg",
-                HostBingoKernelAraNegF16Args(l1_maxbt, l1_negbt, lanes), t1)
-    b1 = bcast(g, f"BcastNeg_{i}", l1_negbt, l1_negbc, beats, rows, row_b, h1)
-    t2 = g.node(f"SubMax_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_stream_elementwise",
-                SnaxBingoKernelXdmaStreamElementwiseArgs(l1_x, l1_xs, beats, op=EW_ADD,
-                    operand_count=2, rows=rows, src_b_addr=l1_negbc, csr_mode=0,
-                    dst_bound0=rows * beats), b1)
-    # MERGED: exp(xs) and Sexp in ONE task -- StreamMap(EXP) -||> StreamReduce(ADD|TAP), so
-    # the sum is taken off the map's output stream and never re-reads the exp tensor. The
-    # subtract cannot fold into the map's `b` here: rows>1, and each row has its own max.
-    t34 = g.node(f"ExpSum_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_stream_map_reduce",
-                 SnaxBingoKernelXdmaStreamMapReduceArgs(l1_xs, l1_expb, beats, func=F_EXP,
-                     reduce_op=R_ADD, tap=True, a_f32bits=ONE_F32, b_f32bits=0,
-                     rows=rows, csr_mode=0), t2)
-    # Sexp is the trailing beat of each PADDED row -> gather the strided column into a
-    # contiguous [rows] beat array so the generic host unary can read it as a flat fp16 array.
-    g1 = gather(g, f"GatherSum_{i}", l1_expb.view(beats * BEAT), l1_sumbt, rows, pad_row, t34)
-    h2 = g.node(f"Recip_{i}", HOST_CORE, "__host_bingo_kernel_reciprocal",
-                HostBingoKernelAraReciprocalF16Args(l1_sumbt, l1_invbt, lanes), g1)
-    # The broadcast lays 1/Sexp down at expb's PADDED pitch, so T5's interleave delta is constant.
-    b2 = bcast(g, f"BcastRecip_{i}", l1_invbt, l1_invbc, beats, rows, pad_row, h2)
-    t5 = g.node(f"Norm_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_stream_elementwise",
-                SnaxBingoKernelXdmaStreamElementwiseArgs(l1_expb, l1_out, beats, op=EW_MUL,
-                    operand_count=2, rows=rows, src_b_addr=l1_invbc, csr_mode=0,
-                    dst_bound0=rows * beats, src_row_stride=pad_row), b2)
-    # Store + tolerant fp16 check of the softmax output.
-    l3_out = BingoMemAlloc(f"out_softmax_{i}", size=tot_b, mem_level="L3")
-    store = g.node(f"Store_{i}", HOST_CORE, "__host_bingo_kernel_idma",
-                   HostBingoKernelIdmaArgs(l1_out, l3_out, tot_b), t5)
-    chk = g.node(f"Check_softmax_cfg{i}", HOST_CORE, "__host_bingo_kernel_check_result",
-                 HostBingoKernelCheckResultArgs(BingoMemSymbol(f"golden_{i}"), l3_out,
-                     name=f"softmax_cfg{i}", check_type=CHECK_FP16_TOL,
-                     num_elements=n, tolerance=0.02), store)
-    # Tq fused FP16->INT8 quant — exercises the path (leaf, no numeric check). Same padded
-    # 3D read of expb as T5; only the writer differs (int8 packs 2 fp16 beats into 1).
-    g.node(f"Quant_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_stream_elementwise",
-           SnaxBingoKernelXdmaStreamElementwiseArgs(l1_expb, l1_i8, beats, op=EW_MUL,
-               operand_count=2, rows=rows, src_b_addr=l1_invbc, csr_mode=1,
-               dst_bound0=rows * beats // 2, out_dtype=1, inv_scale_f32bits=INV_SCALE,
-               src_row_stride=pad_row), chk)
-    return chk
+    # fp16 output: reduce-MAX, negate, sub-max, merged EXP+Sexp, integer reciprocal, normalize.
+    sm_f = g.node(f"SoftmaxF16_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_softmax_f16_f16",
+                  SnaxBingoKernelXdmaSoftmaxF16F16Args(l1_x, l1_f16, rows, D), load)
+    l3_f = BingoMemAlloc(f"out_softmax_f16_{i}", size=tot_b, mem_level="L3")
+    st_f = g.node(f"StoreF16_{i}", HOST_CORE, "__host_bingo_kernel_idma",
+                  HostBingoKernelIdmaArgs(l1_f16, l3_f, tot_b), sm_f)
+    ck_f = g.node(f"Check_softmax_cfg{i}", HOST_CORE, "__host_bingo_kernel_check_result",
+                  HostBingoKernelCheckResultArgs(BingoMemSymbol(f"golden_{i}"), l3_f,
+                      name=f"softmax_cfg{i}", check_type=CHECK_FP16_TOL,
+                      num_elements=n, tolerance=0.02), st_f)
+    # int8 output: same pipeline, final pass fuses Fp16ToInt8. +-1 LSB check vs the quantized golden.
+    sm_q = g.node(f"SoftmaxI8_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_softmax_f16_i8",
+                  SnaxBingoKernelXdmaSoftmaxF16I8Args(l1_x, l1_i8, rows, D), ck_f)
+    l3_q = BingoMemAlloc(f"out_softmax_i8_{i}", size=n, mem_level="L3")
+    st_q = g.node(f"StoreI8_{i}", HOST_CORE, "__host_bingo_kernel_idma",
+                  HostBingoKernelIdmaArgs(l1_i8, l3_q, n), sm_q)
+    ck_q = g.node(f"Check_softmax_i8_cfg{i}", HOST_CORE, "__host_bingo_kernel_check_result",
+                  HostBingoKernelCheckResultArgs(BingoMemSymbol(f"golden_i8_{i}"), l3_q,
+                      name=f"softmax_i8_cfg{i}", check_type=CHECK_INT8_TOL,
+                      num_elements=n, tolerance=1.0), st_q)
+    return ck_q
 
 
 def main():
@@ -302,7 +198,7 @@ def main():
         prev = build_config(g, i, prev)
 
     os.makedirs(args.output_dir, exist_ok=True)
-    dfg.bingo_compile_dfg("xDMA softmax (explicit + host scalars)", args.output_dir,
+    dfg.bingo_compile_dfg("xDMA softmax (fused)", args.output_dir,
                           args.output_offload_file_name,
                           extra_include_header_list=["softmax_data.h"])
     print(f"Generated softmax: {len(CONFIGS)} configs")
