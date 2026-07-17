@@ -137,6 +137,10 @@ endif
 # structures.  Dead-cell elimination is reserved for non-waveform batches so
 # a debug build keeps every otherwise-unused object available for inspection.
 ifeq ($(SIM_WITH_NETLIST), 1)
+	# Questa 2022.4 can optimize away packed-struct variables that remain
+	# referenced by the RTL memory-chip model.  Preserve variables only; full
+	# +acc is still reserved for waveform/debug builds.
+	VOPT_FLAGS += +acc=r
 	VOPT_FLAGS += +nospecify
 	VOPT_FLAGS += -nosdf
 ifeq ($(SIM_WITH_WAVEFORM), 0)

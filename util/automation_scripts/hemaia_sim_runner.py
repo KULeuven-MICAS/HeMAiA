@@ -927,7 +927,7 @@ class HeMAiASimRunner:
         return None
 
     def _make_compile_input_relocatable(self, engine: str) -> None:
-        """Replace Bender's absolute ROOT with a script-relative repo root."""
+        """Make a generated compiler script relocatable and netlist-safe."""
         path = self._compile_input_path(engine)
         if path is None:
             return
@@ -960,8 +960,67 @@ class HeMAiASimRunner:
         # prefixes (and any future repo-local appended arguments) through the
         # same script-local ROOT variable as the HDL list.
         contents = contents.replace(str(self.repo_root), "$ROOT")
+        if self._sim_cfg_flag("sim_with_netlist"):
+            contents = self._postprocess_netlist_compile_input(engine, path, contents)
         path.write_text(contents)
         self._validate_relocatable_compile_input(engine)
+
+    @staticmethod
+    def _postprocess_netlist_compile_input(
+        engine: str,
+        path: Path,
+        contents: str,
+    ) -> str:
+        """Keep the mapped chip and reject accidental compute-chip RTL.
+
+        Selecting Bender's ``hemaia`` target solely to obtain CVA6's HeMAiA
+        configuration also selects the synthesizable compute-chip hierarchy.
+        A gate-level build must instead retain the narrow ``hemaia_netlist``
+        source set and replace only CVA6's generic configuration package in
+        the generated compiler script.
+        """
+        generic_config = "/core/include/config_pkg.sv"
+        hemaia_config = "/core/include/config_hemaia_pkg.sv"
+        generic_count = contents.count(generic_config)
+        hemaia_count = contents.count(hemaia_config)
+        if generic_count == 1 and hemaia_count == 0:
+            contents = contents.replace(generic_config, hemaia_config, 1)
+        elif generic_count != 0 or hemaia_count != 1:
+            raise ValueError(
+                f"Prepared {engine} netlist input has an ambiguous CVA6 config "
+                f"selection in {path}: generic={generic_count}, hemaia={hemaia_count}"
+            )
+
+        required_sources = (
+            "/target/rtl/bootrom/bootrom_netlist_sim/bootrom.v",
+            "/target/tapeout/HeMAiAv2_tapeout/outputs/"
+            "hemaia_mapped_bootrom_commented.v",
+            "/hw/hemaia/hemaia_mem_system/hemaia_mem_chip.sv",
+            "/target/sim/testharness/testharness.sv",
+        )
+        missing = [source for source in required_sources if source not in contents]
+        if missing:
+            raise ValueError(
+                f"Prepared {engine} netlist input is missing required sources in "
+                f"{path}: {missing}"
+            )
+
+        compute_rtl_sources = (
+            "/target/rtl/bootrom/bootrom_chip/bootrom.sv",
+            "/target/rtl/bootrom/bootrom_sim/bootrom.sv",
+            "/hw/hemaia/hemaia_mem_system/hemaia_xdma.sv",
+            "/hw/hemaia/hemaia_mem_system/hemaia_xdma_wrapper.sv",
+            "/hw/hemaia/hemaia_mem_system/hemaia_mem_system.sv",
+            "/target/rtl/src/occamy_chip.sv",
+            "/target/rtl/src/hemaia.sv",
+        )
+        unexpected = [source for source in compute_rtl_sources if source in contents]
+        if unexpected:
+            raise ValueError(
+                f"Prepared {engine} netlist input also selects compute-chip RTL in "
+                f"{path}: {unexpected}"
+            )
+        return contents
 
     def _validate_relocatable_compile_input(self, engine: str) -> None:
         path = self._compile_input_path(engine)
