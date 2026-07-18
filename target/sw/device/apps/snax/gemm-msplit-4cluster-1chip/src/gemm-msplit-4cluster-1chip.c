@@ -28,8 +28,13 @@
 #include "snax_versacore_lib.h"
 
 // Compute/memory chip coordinates (see target/rtl/cfg/hemaia_mirror_tapeout_4cluster.hjson).
+// The memory chip is at [2,0] (hemaia_mem_chip in the tapeout cfg; the sim loads
+// mempool.bin into i_hemaia_mem_chip_2_0, and gemm_mem_chip / bingo / the sibling
+// gemm-msplit-1cluster-4chip all address it as (2,0)). X was 0x1 (compute chip
+// (1,0)), so A/B and the golden were fetched from the wrong chip -> the golden
+// check compared garbage-A/B output against garbage golden regardless of memchip.
 #define COMPUTE_CHIP_ID 0x00
-#define MEM_CHIP_LOC_X 0x1
+#define MEM_CHIP_LOC_X 0x2
 #define MEM_CHIP_LOC_Y 0x0
 
 #ifndef GEMM_MSPLIT_CHECK_RESULT
