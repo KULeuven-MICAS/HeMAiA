@@ -190,6 +190,13 @@ def main():
     l1_A = {}
     l1_B = {}
     l1_D = {}
+    # Only the first CHECK_BYTES of each result are verified (like
+    # gemm_double_buffer's "first 64 B" check). Staging the FULL D_bytes golden on
+    # chip 0x00 for every check needed five 4 KiB L3 buffers -- ~20 KiB -- which
+    # overflows the 128 KiB L3 heap once the 88 KiB device binary is included. The
+    # real-data buffers (D_partial, D_sum_final) stay full size; only the golden /
+    # check-scratch buffers shrink to CHECK_BYTES.
+    CHECK_BYTES = 64
     l3_D_local = {}
     l3_check_scratch = {}
     for i, chiplet in enumerate(active_chiplets):
@@ -203,7 +210,7 @@ def main():
         l3_D_local[i] = BingoMemAlloc(f"D_partial_k{i}_chip{h}_l3", size=D_bytes,
                                       mem_level="L3", chip_id=chiplet)
         l3_check_scratch[i] = BingoMemAlloc(f"check_scratch_k{i}_chip{h}_l3",
-                                            size=D_bytes, mem_level="L3",
+                                            size=CHECK_BYTES, mem_level="L3",
                                             chip_id=chiplet)
 
     l1_reduce_remote = BingoMemAlloc("l1_zz_reduce_remote_chip00", size=D_bytes,
@@ -217,9 +224,9 @@ def main():
                                        cluster_id=0)
     l3_reduce_sum_final = BingoMemAlloc("D_sum_final_chip00_l3", size=D_bytes,
                                         mem_level="L3", chip_id=reduction_chiplet)
-    l3_golden_sum_final = BingoMemAlloc("golden_sum_final_chip00_l3", size=D_bytes,
+    l3_golden_sum_final = BingoMemAlloc("golden_sum_final_chip00_l3", size=CHECK_BYTES,
                                         mem_level="L3", chip_id=reduction_chiplet)
-    l3_golden_fp32 = BingoMemAlloc("golden_fp32_D_chip00_l3", size=fp32_D_bytes,
+    l3_golden_fp32 = BingoMemAlloc("golden_fp32_D_chip00_l3", size=CHECK_BYTES,
                                    mem_level="L3", chip_id=reduction_chiplet)
     dfg = BingoDFG(
         num_chiplets=platform["num_chiplets"],
@@ -304,7 +311,7 @@ def main():
             kernel_args=HostBingoKernelIdmaArgs(
                 src_addr=mem_golden_D[i],
                 dst_addr=l3_check_scratch[i],
-                size=D_bytes,
+                size=CHECK_BYTES,
             ),
         )
         node_check_D[i] = BingoNode(
@@ -316,7 +323,7 @@ def main():
             kernel_args=HostBingoKernelCheckResultArgs(
                 golden_data_addr=l3_check_scratch[i],
                 output_data_addr=l3_D_local[i],
-                data_size=D_bytes,
+                data_size=CHECK_BYTES,
                 name=f"D_partial_k{i}_chip{h}",
             ),
         )
@@ -406,7 +413,7 @@ def main():
         kernel_args=HostBingoKernelIdmaArgs(
             src_addr=mem_golden_sum[k_split - 1],
             dst_addr=l3_golden_sum_final,
-            size=D_bytes,
+            size=CHECK_BYTES,
         ),
     )
     final_check = BingoNode(
@@ -418,7 +425,7 @@ def main():
         kernel_args=HostBingoKernelCheckResultArgs(
             golden_data_addr=l3_golden_sum_final,
             output_data_addr=l3_reduce_sum_final,
-            data_size=D_bytes,
+            data_size=CHECK_BYTES,
             name="sum_k0_to_k3",
         ),
     )
@@ -456,7 +463,7 @@ def main():
         kernel_args=HostBingoKernelIdmaArgs(
             src_addr=mem_golden_fp32,
             dst_addr=l3_golden_fp32,
-            size=fp32_D_bytes,
+            size=CHECK_BYTES,
         ),
     )
     node_check_fp32 = BingoNode(
@@ -468,7 +475,7 @@ def main():
         kernel_args=HostBingoKernelCheckResultArgs(
             golden_data_addr=l3_golden_fp32,
             output_data_addr=l3_reduce_sum_final,
-            data_size=fp32_D_bytes,
+            data_size=CHECK_BYTES,
             name="fp32_D",
         ),
     )
