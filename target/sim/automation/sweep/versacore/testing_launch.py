@@ -21,6 +21,9 @@ SIM_CFG_NAME = "sim_rtl.hjson"
 # The vendor PLL: gates the private clk/rst controller *and* ``use_vendor_pll``
 # in the RTL cfg. Keep it in step with SIM_CFG_NAME (sim_rtl_with_pll.hjson).
 WITH_PLL = False
+# Batch sweeps do not need debug visibility; pass this explicitly because the
+# simulation Makefile defaults to waveform-enabled builds.
+SIM_WITH_WAVEFORM = False
 
 HOST_APP_TYPE = "offload_bingo_hw"
 CHIP_TYPE = "single_chip"
@@ -108,6 +111,22 @@ def sim_cfg_path() -> Path:
     return REPO_ROOT / "target/sim/cfg" / SIM_CFG_NAME
 
 
+def sim_make_args() -> list[str]:
+    """Arguments shared by VCS preparation and compilation."""
+    return [
+        f"SIM_CFG={sim_cfg_path()}",
+        f"SIM_WITH_WAVEFORM={int(SIM_WITH_WAVEFORM)}",
+        f"SIM_WITH_PLL={int(WITH_PLL)}",
+    ]
+
+
+def vcs_run_args() -> list[str]:
+    """Use the canonical VCS runtime arguments from the shared runner."""
+    from hemaia_sim_runner import ENGINES
+
+    return list(ENGINES["vcs"].get("run_args", []))
+
+
 def first_run_setup() -> None:
     from hemaia_sim_runner import (
         DEFAULT_DOCKER_IMAGE,
@@ -157,12 +176,12 @@ def first_run_setup() -> None:
         REPO_ROOT,
         DEFAULT_DOCKER_IMAGE,
         REPO_ROOT,
-        ["make", "hemaia_system_vcs_preparation", f"SIM_CFG={sim_cfg_path()}"],
+        ["make", "hemaia_system_vcs_preparation", *sim_make_args()],
     )
 
     print("[Step 3] Rebuilding VCS binary")
     subprocess.run(
-        ["make", "hemaia_system_vcs", f"SIM_CFG={sim_cfg_path()}"],
+        ["make", "hemaia_system_vcs", *sim_make_args()],
         cwd=REPO_ROOT,
         check=True,
     )
@@ -234,7 +253,7 @@ def run_one_case(
 
             log_print("[Per-test] Making sure VCS simulation binary exists")
             subprocess.run(
-                ["make", "hemaia_system_vcs", f"SIM_CFG={sim_cfg_path()}"],
+                ["make", "hemaia_system_vcs", *sim_make_args()],
                 cwd=REPO_ROOT,
                 stdout=log,
                 stderr=subprocess.STDOUT,
@@ -243,7 +262,7 @@ def run_one_case(
 
             log_print("[Per-test] Running VCS simulation binary")
             sim = subprocess.run(
-                ["./occamy_chip.vcs"],
+                ["./occamy_chip.vcs", *vcs_run_args()],
                 cwd=REPO_ROOT / "target/sim/bin",
                 stdout=log,
                 stderr=subprocess.STDOUT,
