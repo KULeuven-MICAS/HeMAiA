@@ -44,10 +44,12 @@ from gemm_datagen import emit_header_file  # noqa E402
 from gemm_sim_utils import define_gemm_workload_params  # noqa E402
 
 from bingo_dfg import BingoDFG
+from bingo_helpers import chiplet_addr_transform_loc  # noqa E402
 from bingo_platform import guard_cluster_count, parse_platform_cfg  # noqa E402
 from bingo_node import BingoNode
-from bingo_mem_handle import BingoMemAlloc, BingoMemSymbol
+from bingo_mem_handle import BingoMemAlloc, BingoMemFixedAddr
 from bingo_kernel_args import SnaxBingoKernelIdma1dCopyArgs, SnaxBingoKernelGemmFullArgs, HostBingoKernelCheckResultArgs, HostBingoKernelIdmaArgs
+from gemm_sim_utils import _gemm_operand_widths, _bytes_for_elements  # noqa E402
 
 
 def get_args():
@@ -91,19 +93,35 @@ def get_args():
     )
     return parser.parse_args()
 
-define_workload_params = define_gemm_workload_params
+def define_workload_params(cfg_path, hwcfg_path):
+    """Derive the base GEMM params and add the memchip base addresses.
+
+    A, B and the golden D are staged on the memory chip (mempool.bin), not baked
+    into the host WIDE_SPM. Layout MUST match gemm_datagen.emit_matmul_data:
+    A_mp = base, B_mp = base + A_mem_size, D_mp = B_mp + B_size.
+    """
+    params, merged = define_gemm_workload_params(cfg_path, hwcfg_path)
+    a_len, _, _, _ = _gemm_operand_widths(merged)
+    a_elements = params["M"] * params["K"] * params["meshRow"] * params["tileSize"]
+    params["A_mem_size"] = _bytes_for_elements(a_elements + (-a_elements) % 64, a_len)
+    mempool_base = chiplet_addr_transform_loc(2, 0, 0x8000_0000)
+    params["A_mp_base_addr"] = mempool_base
+    params["B_mp_base_addr"] = mempool_base + params["A_mem_size"]
+    params["D_mp_base_addr"] = params["B_mp_base_addr"] + params["B_size"]
+    return params, merged
+
 
 def define_memory_handles(params):
     """Defines memory handles used in the DFG."""
-    # Here we only have A, B, D in L3
+    # A, B and golden D live on the memchip (mempool.bin) at fixed addresses.
     mem_handles = {}
 
-    mem_handles['A_L3'] = BingoMemSymbol('A')
-    mem_handles['B_L3'] = BingoMemSymbol('B')
-    mem_handles['D_L3'] = BingoMemSymbol('D')
+    mem_handles['A_L3'] = BingoMemFixedAddr(params['A_mp_base_addr'])
+    mem_handles['B_L3'] = BingoMemFixedAddr(params['B_mp_base_addr'])
+    mem_handles['D_L3'] = BingoMemFixedAddr(params['D_mp_base_addr'])
 
     # L1 buffers
-    mem_handles['l1_buf_A'] = BingoMemAlloc('l1_buf_A',size=params['A_size'], mem_level="L1", chip_id=cur_chiplet_id, cluster_id=cur_cluster_id)
+    mem_handles['l1_buf_A'] = BingoMemAlloc('l1_buf_A',size=params['A_mem_size'], mem_level="L1", chip_id=cur_chiplet_id, cluster_id=cur_cluster_id)
     mem_handles['l1_buf_B'] = BingoMemAlloc('l1_buf_B',size=params['B_size'], mem_level="L1", chip_id=cur_chiplet_id, cluster_id=cur_cluster_id)
     mem_handles['l1_buf_D'] = BingoMemAlloc('l1_buf_D',size=params['D_size'], mem_level="L1", chip_id=cur_chiplet_id, cluster_id=cur_cluster_id)
     return mem_handles
@@ -132,7 +150,7 @@ def create_dfg(params, mem_handles, platform):
         kernel_args=SnaxBingoKernelIdma1dCopyArgs(
             src_addr=mem_handles['A_L3'],
             dst_addr=mem_handles['l1_buf_A'],
-            size=params['A_size']
+            size=params['A_mem_size']
         )
     )
     # Host IDMA1D Copy B
@@ -206,9 +224,11 @@ def main():
     # Execute Pipeline
     params, merged_config = define_workload_params(args.cfg, args.hwcfg)
 
-    # Emit gemm_data.h (same as running gemm_datagen.py separately)
+    # Write A/B/D into build/mempool.bin (the memchip image) and emit a minimal
+    # gemm_data.h; the operands are NOT baked into the host WIDE_SPM.
     if args.data_h is not None:
-        data_h_content = emit_header_file(**merged_config)
+        data_h_content = emit_header_file(
+            **merged_config, out_dir=os.path.join(args.output_dir, "build"))
         with open(args.data_h, "w") as f:
             f.write(data_h_content)
         print(f"Written data header: {args.data_h}")

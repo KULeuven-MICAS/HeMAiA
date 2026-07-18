@@ -69,6 +69,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--macro", action=argparse.BooleanOptionalAction, default=True,
         help="init the tech_cells_tsmc16 private module (use --no-macro for the single-chip flow).")
+    parser.add_argument(
+        "--sw-only", action="store_true",
+        help="fast SW-only re-run: skip the repo reset, the bootrom/RTL build and the "
+             "simulation compile, rebuild ONLY the per-task app binaries, and re-run "
+             "against the already-compiled simulation. Requires a prior full run "
+             "(the compiled sim + generated platform header must already exist). "
+             "Handy when iterating on SW: it avoids the ~30-40 min RTL gen + sim compile.")
     args = parser.parse_args()
     if args.max_sim_jobs < 1:
         parser.error("--max-sim-jobs must be >= 1")
@@ -93,6 +100,11 @@ def main() -> None:
         with_d2d=args.d2d,
         with_pll=False,
         max_jobs=args.max_sim_jobs,
+        # --sw-only reuses the already-built RTL/bootrom + compiled simulation and
+        # only rebuilds the per-task app binaries before re-running.
+        skip_setup=args.sw_only,
+        skip_build=args.sw_only,
+        skip_compile=args.sw_only,
     )
     runner.run(parse_tasks(task_yaml))
 

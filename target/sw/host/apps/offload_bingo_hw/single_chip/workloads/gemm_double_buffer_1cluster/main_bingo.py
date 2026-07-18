@@ -57,10 +57,12 @@ from gemm_datagen import emit_header_file  # noqa E402
 from gemm_sim_utils import define_gemm_workload_params  # noqa E402
 
 from bingo_dfg import BingoDFG
+from bingo_helpers import chiplet_addr_transform_loc  # noqa E402
 from bingo_platform import guard_cluster_count, parse_platform_cfg  # noqa E402
 from bingo_node import BingoNode
-from bingo_mem_handle import BingoMemAlloc, BingoMemSymbol
+from bingo_mem_handle import BingoMemAlloc, BingoMemFixedAddr
 from bingo_kernel_args import SnaxBingoKernelIdma1dCopyArgs, SnaxBingoKernelGemmFullArgs, HostBingoKernelCheckResultArgs, HostBingoKernelIdmaArgs, SnaxBingoKernelGemmMinimalArgs
+from gemm_sim_utils import _gemm_operand_widths, _bytes_for_elements  # noqa E402
 
 
 def get_args():
@@ -110,10 +112,20 @@ def define_workload_params(cfg_path, hwcfg_path):
     num_double_buffers = merged["num_double_buffers"]
     print(f"M: {params['M']}, K: {params['K']}, N: {params['N']}, meshRow: {params['meshRow']}, tileSize: {params['tileSize']}, meshCol: {params['meshCol']}")
     print(f"Calculated A size: {params['A_size']//1024} kbytes, B size: {params['B_size']//1024} kbytes, C size: {params['C_size']//1024} kbytes, D size: {params['D_size']//1024} kbytes")
+    # A, B and golden D live on the memchip (mempool.bin), not baked into host
+    # WIDE_SPM. Layout MUST match gemm_datagen.emit_matmul_data:
+    #   A_mp = base, B_mp = base + A_mem_size, D_mp = B_mp + B_size.
+    a_len, _, _, _ = _gemm_operand_widths(merged)
+    a_elements = params["M"] * params["K"] * params["meshRow"] * params["tileSize"]
+    a_mem_size = _bytes_for_elements(a_elements + (-a_elements) % 64, a_len)
+    mempool_base = chiplet_addr_transform_loc(2, 0, 0x8000_0000)
     params.update(
         num_double_buffers=num_double_buffers,
         A_tile_size=params['A_size'] // num_double_buffers,
         D_tile_size=params['D_size'] // num_double_buffers,
+        A_mp_base_addr=mempool_base,
+        B_mp_base_addr=mempool_base + a_mem_size,
+        D_mp_base_addr=mempool_base + a_mem_size + params['B_size'],
     )
     return params, merged
 
@@ -125,16 +137,15 @@ def define_memory_handles(params):
     """Defines memory symbols and handles."""
     mem_handles = {}
 
-    # 1. Define Memory Symbols (Existing C variables)
-    # The MemSymbol are the variables defined in the data.h file which the memory location is already known at compile time
-    # The A tiles
+    # 1. Define fixed memchip addresses for A/B/golden-D (staged in mempool.bin).
+    # A tiles are offsets into A; golden D tiles are offsets into D.
     for i in range(params['num_double_buffers']):
-        mem_handles[f'A{i}_data_L3_symbol'] = BingoMemSymbol("A",offset=i*params['A_tile_size'])
-    # B is not tiled, only one symbol
-    mem_handles['B_data_L3_symbol'] = BingoMemSymbol("B")
-    # The D tiles
+        mem_handles[f'A{i}_data_L3_symbol'] = BingoMemFixedAddr(params['A_mp_base_addr'] + i * params['A_tile_size'])
+    # B is not tiled, only one address
+    mem_handles['B_data_L3_symbol'] = BingoMemFixedAddr(params['B_mp_base_addr'])
+    # The golden D tiles
     for i in range(params['num_double_buffers']):
-        mem_handles[f'D{i}_data_L3_symbol'] = BingoMemSymbol("D",offset=i*params['D_tile_size'])
+        mem_handles[f'D{i}_data_L3_symbol'] = BingoMemFixedAddr(params['D_mp_base_addr'] + i * params['D_tile_size'])
     # C is not used
 
     # 2. Define Memory Handles (Dynamic Allocations)
@@ -193,13 +204,15 @@ def create_dfg(params, mem_handles, platform):
     dma_core_id = 1  # Core 1 for Load
     host_core_id = 2  # Core 2 for Host DMA Store
 
-    # 1. Initialize DFG using HW params derived from occamy.h + RTL config
+    # 1. Initialize DFG for chip 0x00 only (single-chip workload). Building for all
+    # 4 platform chiplets would allocate empty-chip scheduler structures / global
+    # task-id maps (~7 KiB) that this 33-node DFG can't spare in the 128 KiB L3 heap.
     bingo_dfg = BingoDFG(
-        num_chiplets=platform["num_chiplets"],
+        num_chiplets=1,
         num_clusters_per_chiplet=platform["num_clusters_per_chiplet"],
         num_cores_per_cluster=platform["num_cores_per_cluster"],
         is_host_as_acc=True,
-        chiplet_ids=platform["chiplet_ids"],
+        chiplet_ids=[0x00],
     )
 
     # 2. Define Nodes
@@ -405,9 +418,11 @@ def main():
     # Execute Pipeline
     params, merged_config = define_workload_params(args.cfg, args.hwcfg)
 
-    # Emit gemm_data.h (same as running gemm_datagen.py separately)
+    # Write A/B/D into build/mempool.bin (the memchip image) and emit a minimal
+    # gemm_data.h; the operands are NOT baked into the host WIDE_SPM.
     if args.data_h is not None:
-        data_h_content = emit_header_file(**merged_config)
+        data_h_content = emit_header_file(
+            **merged_config, out_dir=os.path.join(args.output_dir, "build"))
         with open(args.data_h, "w") as f:
             f.write(data_h_content)
         print(f"Written data header: {args.data_h}")

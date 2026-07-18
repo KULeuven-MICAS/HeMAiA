@@ -44,15 +44,14 @@ for _p in [p for p in list(sys.path) if str(p).rstrip('/').endswith('util/sim')]
         if _sub not in sys.path:
             sys.path.append(_sub)
 
-from data_utils import format_vector_definition          # noqa: E402
 from bingo_dfg import BingoDFG                            # noqa: E402
+from bingo_helpers import chiplet_addr_transform_loc      # noqa: E402
 from bingo_platform import guard_cluster_count, parse_platform_cfg  # noqa: E402
 from bingo_node import BingoNode                          # noqa: E402
-from bingo_mem_handle import BingoMemAlloc, BingoMemSymbol  # noqa: E402
+from bingo_mem_handle import BingoMemAlloc, BingoMemFixedAddr  # noqa: E402
 from bingo_kernel_args import (                           # noqa: E402
     SnaxBingoKernelIdma1dCopyArgs,
     SnaxBingoKernelXdmaSoftmaxF16F16Args,
-    SnaxBingoKernelXdmaSoftmaxF16I8Args,
     HostBingoKernelIdmaArgs,
     HostBingoKernelCheckResultArgs,
 )
@@ -60,9 +59,15 @@ from bingo_kernel_args import (                           # noqa: E402
 DMA_CORE = 1
 HOST_CORE = 2
 CHECK_FP16_TOL = 2
-CHECK_INT8_TOL = 4      # int8 output: +-1 LSB tol (softmax exp is a HW LUT != np.exp, so a
-                        # quantized golden differs by 1 LSB at rounding boundaries -- byte-exact
-                        # would spuriously fail and abort the sweep; +-1 is the correct budget)
+# in/golden staged on the memchip (mempool.bin); see xdma_silu_1cluster.
+MEMPOOL_LOC = (2, 0)
+MEMPOOL_VADDR = 0x8000_0000
+# NOTE: the fused FP16->INT8 softmax variant (__snax_bingo_kernel_xdma_softmax_f16_i8)
+# is exercised by the standalone snax-xdma-softmax app. It is dropped from THIS CI
+# sweep: keeping both the f16 and i8 check chains for all 12 configs needs 48 host
+# nodes whose bingo scheduler metadata (~25 KiB) does not fit the 128 KiB L3 heap
+# alongside the 88 KiB device binary. The f16 chain preserves the full rows x cols
+# cost LUT.
 
 
 # (rows, cols); each row is a length-cols tile (cols a multiple of 32). A rows x cols grid for the
@@ -111,52 +116,48 @@ class G:
         return nd
 
 
-def gen_data(i):
-    x, y = _softmax_ref(CONFIGS[i]["rows"], CONFIGS[i]["cols"], i)
-    # int8 golden = quantize(softmax) at the kernel's baked 127.0 scale (softmax out in [0,1]).
-    yq = np.clip(np.rint(y.astype(np.float32) * 127.0), -128, 127).astype(np.int8)
-    return [format_vector_definition("uint16_t", f"in_{i}", x.view(np.uint16)),
-            format_vector_definition("uint16_t", f"golden_{i}", y.view(np.uint16)),
-            format_vector_definition("int8_t", f"golden_i8_{i}", yq)]
+def build_mempool():
+    """Concatenate every config's fp16 input + fp16 golden into the memchip image.
+
+    Returns (blob: bytes, meta: [(off_in, off_golden), ...]); each array 64-B aligned.
+    """
+    blob = bytearray()
+    meta = []
+
+    def _pad():
+        while len(blob) % 64:
+            blob.append(0)
+
+    for i in range(len(CONFIGS)):
+        x, y = _softmax_ref(CONFIGS[i]["rows"], CONFIGS[i]["cols"], i)
+        _pad(); oi = len(blob); blob += x.view(np.uint16).astype("<u2").tobytes()
+        _pad(); og = len(blob); blob += y.view(np.uint16).astype("<u2").tobytes()
+        meta.append((oi, og))
+    return bytes(blob), meta
 
 
-def build_config(g, i, prev):
+# One shared L1/L3 buffer set reused across all serialized configs (see xdma_silu_1cluster).
+def build_config(g, i, base, meta, l1_x, l1_f16, l3_f, prev):
     rows  = CONFIGS[i]["rows"]
     D     = CONFIGS[i]["cols"]         # per-row length (cols)
     n     = rows * D                   # total elements
     tot_b = rows * D * 2               # [rows, D] fp16 bytes (packed)
+    off_in, off_golden = meta[i]
 
-    # One fused kernel runs the whole softmax on the DM core; the host only loads the input,
-    # stores the output, and checks it. The precision is picked by KERNEL NAME (f16_f16 /
-    # f16_i8), not an arg; both take the same {input, output, rows, cols}. We exercise BOTH
-    # off the same loaded input.
-    l1_x   = g.l1(f"smx0x_{i}", tot_b)     # [rows,D] packed input
-    l1_f16 = g.l1(f"smx1f16_{i}", tot_b)   # [rows,D] packed fp16 softmax output
-    l1_i8  = g.l1(f"smx2i8_{i}", n)        # [rows,D] int8 softmax output
-
+    # One fused kernel runs the whole softmax on the DM core; the host only loads the
+    # input (from the memchip), stores the fp16 output, and checks it.
     load = g.node(f"Load_{i}", DMA_CORE, "__snax_bingo_kernel_idma_1d_copy",
-                  SnaxBingoKernelIdma1dCopyArgs(BingoMemSymbol(f"in_{i}"), l1_x, tot_b), prev)
+                  SnaxBingoKernelIdma1dCopyArgs(BingoMemFixedAddr(base + off_in), l1_x, tot_b), prev)
     # fp16 output: reduce-MAX, negate, sub-max, merged EXP+Sexp, integer reciprocal, normalize.
     sm_f = g.node(f"SoftmaxF16_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_softmax_f16_f16",
                   SnaxBingoKernelXdmaSoftmaxF16F16Args(l1_x, l1_f16, rows, D), load)
-    l3_f = BingoMemAlloc(f"out_softmax_f16_{i}", size=tot_b, mem_level="L3")
     st_f = g.node(f"StoreF16_{i}", HOST_CORE, "__host_bingo_kernel_idma",
                   HostBingoKernelIdmaArgs(l1_f16, l3_f, tot_b), sm_f)
     ck_f = g.node(f"Check_softmax_cfg{i}", HOST_CORE, "__host_bingo_kernel_check_result",
-                  HostBingoKernelCheckResultArgs(BingoMemSymbol(f"golden_{i}"), l3_f,
+                  HostBingoKernelCheckResultArgs(BingoMemFixedAddr(base + off_golden), l3_f,
                       name=f"softmax_cfg{i}", check_type=CHECK_FP16_TOL,
                       num_elements=n, tolerance=0.02), st_f)
-    # int8 output: same pipeline, final pass fuses Fp16ToInt8. +-1 LSB check vs the quantized golden.
-    sm_q = g.node(f"SoftmaxI8_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_softmax_f16_i8",
-                  SnaxBingoKernelXdmaSoftmaxF16I8Args(l1_x, l1_i8, rows, D), ck_f)
-    l3_q = BingoMemAlloc(f"out_softmax_i8_{i}", size=n, mem_level="L3")
-    st_q = g.node(f"StoreI8_{i}", HOST_CORE, "__host_bingo_kernel_idma",
-                  HostBingoKernelIdmaArgs(l1_i8, l3_q, n), sm_q)
-    ck_q = g.node(f"Check_softmax_i8_cfg{i}", HOST_CORE, "__host_bingo_kernel_check_result",
-                  HostBingoKernelCheckResultArgs(BingoMemSymbol(f"golden_i8_{i}"), l3_q,
-                      name=f"softmax_i8_cfg{i}", check_type=CHECK_INT8_TOL,
-                      num_elements=n, tolerance=1.0), st_q)
-    return ck_q
+    return ck_f
 
 
 def main():
@@ -173,12 +174,14 @@ def main():
     with open(args.cfg) as f:
         param = hjson.loads(f.read())
 
+    blob, meta = build_mempool()
     if args.data_h is not None:
-        defs = ["#include <stdint.h>"]
-        for i in range(len(CONFIGS)):
-            defs += gen_data(i)
         with open(args.data_h, "w") as f:
-            f.write("\n\n".join(defs))
+            f.write("#include <stdint.h>\n")
+        out_build = os.path.join(args.output_dir, "build")
+        os.makedirs(out_build, exist_ok=True)
+        with open(os.path.join(out_build, "mempool.bin"), "wb") as f:
+            f.write(blob)
         print(f"Written data header: {args.data_h}")
 
     if args.configs_out is not None:
@@ -188,14 +191,20 @@ def main():
     platform = parse_platform_cfg(args.platformcfg)
     if not guard_cluster_count(param, platform, args.output_dir, args.output_offload_file_name):
         return
-    dfg = BingoDFG(num_chiplets=platform["num_chiplets"],
+    # Single-chip workload: build the DFG for chip 0x00 only (see xdma_silu_1cluster).
+    dfg = BingoDFG(num_chiplets=1,
                    num_clusters_per_chiplet=platform["num_clusters_per_chiplet"],
                    num_cores_per_cluster=platform["num_cores_per_cluster"],
-                   is_host_as_acc=True, chiplet_ids=platform["chiplet_ids"])
+                   is_host_as_acc=True, chiplet_ids=[0x00])
     g = G(dfg)
+    base = chiplet_addr_transform_loc(*MEMPOOL_LOC, MEMPOOL_VADDR)
+    max_tot_b = max(r * c * 2 for (r, c) in _LUT_GRID)
+    l1_x = g.l1("smx_x", max_tot_b)
+    l1_f16 = g.l1("smx_f16", max_tot_b)
+    l3_f = BingoMemAlloc("out_softmax_f16", size=max_tot_b, mem_level="L3")
     prev = None
     for i in range(len(CONFIGS)):
-        prev = build_config(g, i, prev)
+        prev = build_config(g, i, base, meta, l1_x, l1_f16, l3_f, prev)
 
     os.makedirs(args.output_dir, exist_ok=True)
     dfg.bingo_compile_dfg("xDMA softmax (fused)", args.output_dir,

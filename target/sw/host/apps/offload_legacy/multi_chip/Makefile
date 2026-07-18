@@ -6,7 +6,7 @@
 HOST_APP_TYPE = offload_legacy
 CHIP_TYPE     = multi_chip
 
-DEVICE_APPS_WITH_MEMPOOL_IMAGE = gemm-msplit-1cluster-4chip
+DEVICE_APPS_WITH_MEMPOOL_IMAGE = gemm-msplit-1cluster-4chip gemm-msplit-4cluster-1chip
 
 SRCS = src/offload_legacy_multi_chip.c
 
