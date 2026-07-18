@@ -191,6 +191,12 @@ def main():
     l1_A = {}
     l1_B = {}
     l1_D = {}
+    # Only the first CHECK_BYTES of each result are verified (like
+    # gemm_double_buffer's "first 64 B" check). Staging a full D_bytes golden for
+    # every check needed a 4 KiB L3 scratch per chiplet, which -- with the 88 KiB
+    # device binary -- overflowed chip 0x00's 128 KiB L3 heap. The real-data
+    # buffers (D_partial) stay full size; only the check scratch shrinks.
+    CHECK_BYTES = 64
     l3_D_local = {}
     l3_check_scratch = {}
     l3_D_reduce = {}
@@ -205,7 +211,7 @@ def main():
         l3_D_local[i] = BingoMemAlloc(f"D_partial_k{i}_chip{h}_l3", size=D_bytes,
                                       mem_level="L3", chip_id=chiplet)
         l3_check_scratch[i] = BingoMemAlloc(f"check_scratch_k{i}_chip{h}_l3",
-                                            size=D_bytes, mem_level="L3",
+                                            size=CHECK_BYTES, mem_level="L3",
                                             chip_id=chiplet)
         if chiplet == reduction_chiplet:
             l3_D_reduce[i] = l3_D_local[i]
@@ -296,7 +302,7 @@ def main():
             kernel_args=HostBingoKernelIdmaArgs(
                 src_addr=mem_golden_D[i],
                 dst_addr=l3_check_scratch[i],
-                size=D_bytes,
+                size=CHECK_BYTES,
             ),
         )
         node_check_D[i] = BingoNode(
@@ -308,7 +314,7 @@ def main():
             kernel_args=HostBingoKernelCheckResultArgs(
                 golden_data_addr=l3_check_scratch[i],
                 output_data_addr=l3_D_local[i],
-                data_size=D_bytes,
+                data_size=CHECK_BYTES,
                 name=f"D_partial_k{i}_chip{h}",
             ),
         )
@@ -407,7 +413,7 @@ def main():
         kernel_args=HostBingoKernelIdmaArgs(
             src_addr=mem_golden_fp32,
             dst_addr=l3_check_scratch[0],
-            size=fp32_D_bytes,
+            size=CHECK_BYTES,
         ),
     )
     node_check_fp32 = BingoNode(
@@ -419,7 +425,7 @@ def main():
         kernel_args=HostBingoKernelCheckResultArgs(
             golden_data_addr=l3_check_scratch[0],
             output_data_addr=prev_sum,
-            data_size=fp32_D_bytes,
+            data_size=CHECK_BYTES,
             name="fp32_D",
         ),
     )
