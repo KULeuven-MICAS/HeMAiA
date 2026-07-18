@@ -12,11 +12,17 @@ JOBS ?= 16
 SUITE ?= tapeout_1c
 
 # Local CI: Questasim/VCS regression, run on a host with the EDA tools.
-# Source the EDA environment first, or VCS resolves to a version that cannot
-# start and every task reports FAIL (0s):
-#   source /users/micas/fkong/no_backup/src_hemaia_eda.sh
+# Source the EDA environment first, then run `make local-ci SUITE=...` to run the regression for a given tapeout RTL cfg.
+#
+# SW_ONLY=1 does a fast re-run that reuses the already-built RTL/bootrom and the
+# already-compiled simulation, rebuilding ONLY the per-task app binaries before
+# re-running. Handy when iterating on SW: it avoids the ~30-40 min RTL gen + sim
+# compile. Requires a prior full `make local-ci SUITE=...` (so the compiled sim
+# and generated platform header already exist).
+#   make local-ci SUITE=tapeout_1c_simd SW_ONLY=1
+SW_ONLY ?=
 local-ci:
-	cd ci/local_ci/$(SUITE) && python3 run_local_ci.py -j $(JOBS)
+	cd ci/local_ci/$(SUITE) && python3 run_local_ci.py -j $(JOBS) $(if $(SW_ONLY),--sw-only)
 
 # Git CI: Verilator regression. Normally run by GitHub Actions; run it manually
 # only from *inside* the hemaia container with the HW/sim already built.
