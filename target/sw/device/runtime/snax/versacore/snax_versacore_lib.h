@@ -224,8 +224,10 @@ void set_versacore_streamer_csr(
     csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE + 4, shift_i);
     // Select the extra-loop policy by array shape; loop factors are defined in
     // the scala extension params (kept in sync with snax main).
-    csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE + 5, array_shape);
-    csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE + 6, array_shape);
+    // In the current array shape implementation, no need to fold extra loop from input,
+    // use the default inputwidth/outputwidth is enough
+    csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE + 5, 0);
+    csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE + 6, 0);
 #endif
 
 }
