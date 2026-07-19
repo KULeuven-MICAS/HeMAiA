@@ -2,8 +2,9 @@
     num_chiplets: 4
     num_clusters: 2
 
-    // Eight 1 KiB byte-ramp chunks A1..A8 live in the memory chip.
-    // Each chiplet uses cluster0 and cluster1 for one chunk each.
+    // Eight 512-byte byte-ramp chunks A1..A8 live in the memory chip.
+    // Each chiplet uses cluster0 and cluster1 for one chunk each. Keeping the
+    // chunks below 1 KiB leaves enough L3 heap for the 74-node DFG metadata.
     num_data: 8
-    data_bytes: 1024
+    data_bytes: 512
 }
