@@ -940,6 +940,31 @@ class SnaxBingoKernelXdmaElementwiseAddAbArgs(BingoKernelArgs):
         return a
 
 
+# BINGO XDMA MomentMergeRt push (F3: the in-transit nonlinear collective, "the flag"). Pushes ONE
+# pre-packed 512-bit (64B) beat from src_addr to dst_addr with the writer-side StreamMomentMergeRt
+# extension armed. Beat layout: 16 FP32 lanes, m_k = lane k, l_k = lane (8+k), k in 0..nvalid-1;
+# unused lanes are don't-care. When dst_addr crosses a cluster boundary this is the cross-cluster
+# in-fabric fold (the paper's headline result); when dst_addr is local this is the same fold done
+# locally (the gather-then-local ablation's second step). See util/sim/xdma_moment_merge_golden.py
+# for the matching golden model and beat-packing helper.
+class SnaxBingoKernelXdmaMomentMergePushArgs(BingoKernelArgs):
+    def __init__(self, src_addr: Union[BingoMemAlloc, int], dst_addr: Union[BingoMemAlloc, int],
+                 nvalid: int):
+        self.src_addr = src_addr
+        self.dst_addr = dst_addr
+        self.nvalid = nvalid
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_xdma_moment_merge_push_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.src_addr, "src_addr", a, handle_name_map)
+        self._process_addr(self.dst_addr, "dst_addr", a, handle_name_map)
+        a["nvalid"] = str(self.nvalid)
+        return a
+
+
 # ══════════════════════════════════════════════════════════════════════
 # xDMA FP16 streaming-SIMD primitives (reader extensions)
 #

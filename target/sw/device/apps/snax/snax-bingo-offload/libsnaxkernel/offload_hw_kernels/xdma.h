@@ -387,6 +387,62 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_elementwise_add_ab(void *arg)
     }
 }
 
+// F3: the in-transit nonlinear online-softmax moment-merge collective. Pushes ONE pre-packed 512-bit
+// (64B) beat from src_addr to dst_addr with the writer-side StreamMomentMergeRt extension armed
+// (nvalid live (m,l) pairs; lanes >= nvalid are masked to the monoid identity by the RTL). When
+// dst_addr is a REMOTE cluster's address this is the cross-cluster in-fabric fold: the issuing
+// cluster's own writer-ext CSR state (armed here) is what XDMACtrl.scala's inter-cluster serdes
+// carries as `writerExtCfg` to the receiver -- the fold happens on the receiver's writer as the
+// beat lands, not as a separate pass. When dst_addr is local this is the same fold done in place
+// (the gather-then-local ablation's second step).
+static inline uint32_t xdma_moment_merge_push_run(uint64_t src_addr, uint64_t dst_addr, uint32_t nvalid)
+{
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
+#ifdef WRITER_EXT_STREAMMOMENTMERGERT
+    xdma_disable_all_extensions();
+    uint32_t csr[1] = { nvalid };
+    xdma_enable_dst_ext(WRITER_EXT_STREAMMOMENTMERGERT, csr);
+    BINGO_XDMA_TRY(xdma_memcpy_1d_full_addr(src_addr, dst_addr, XDMA_WIDTH), "xdma_moment_merge_push");
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
+    xdma_task_t task_id = xdma_start();
+    xdma_wait_task(task_id);
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
+    xdma_disable_dst_ext(WRITER_EXT_STREAMMOMENTMERGERT);
+    return BINGO_RET_SUCC;
+#else
+    printf_safe("[Cluster %d Core %d]: Error! xDMA moment_merge_push needs WRITER_EXT_STREAMMOMENTMERGERT "
+                "(cfg/snax_xdma_test.hjson) -- this cluster's writer_extensions doesn't have it.\r\n",
+                snrt_cluster_idx(), snrt_cluster_core_idx());
+    (void)src_addr; (void)dst_addr; (void)nvalid;
+    return BINGO_RET_FAIL;
+#endif
+}
+
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_moment_merge_push(void *arg)
+{
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_moment_merge_push_args_t);
+    //   [0] src_addr_hi [1] src_addr_lo [2] dst_addr_hi [3] dst_addr_lo [4] nvalid
+    if (snrt_is_dm_core()) {
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+        uint32_t *a = (uint32_t *)arg;
+        uint64_t src_addr = make_u64(a[0], a[1]);
+        uint64_t dst_addr = make_u64(a[2], a[3]);
+        uint32_t nvalid = a[4];
+        bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_moment_merge_push_args_t);
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+        if (xdma_moment_merge_push_run(src_addr, dst_addr, nvalid) != BINGO_RET_SUCC)
+            return BINGO_RET_FAIL;
+        sp->return_value = (uint32_t)dst_addr;
+        sp->num_return_values = 0;
+        return BINGO_RET_SUCC;
+    } else {
+        printf_safe("[Cluster %d Core %d]: Error! xDMA moment_merge_push should be called from a DM core!\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+}
+
 // ==========================================================================
 // xDMA FP16 streaming-SIMD primitives (reader extensions)
 //

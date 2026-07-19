@@ -14,6 +14,10 @@ APPS += gemm_stacked_1cluster
 APPS += gemm_sweep_1cluster
 APPS += xdma_ci_ops_1cluster
 APPS += xdma_1d_1cluster
+# F3: the cross-cluster in-fabric nonlinear collective (online-softmax moment-merge).
+APPS += xdma_moment_merge_p2_infabric
+APPS += xdma_moment_merge_p2_ablation
+APPS += xdma_moment_merge_p4_infabric
 # iDMA adjacent-pair swap (RoPE xswap enabler); shares the per-op sweep harness.
 APPS += idma_swap_1cluster
 # Per-op xDMA sweep workloads (one op per dir; functional check + cycle LUT).

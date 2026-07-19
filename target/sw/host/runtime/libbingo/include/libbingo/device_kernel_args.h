@@ -432,6 +432,20 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_elementwise_add_ab_args {
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_xdma_elementwise_add_ab_args_t;
 
+// BINGO XDMA MomentMergeRt push (F3: the in-transit nonlinear collective). Pushes ONE pre-packed
+// 512-bit (64B) beat from src_addr to dst_addr with the writer-side StreamMomentMergeRt extension
+// armed (nvalid = live (m,l) pair count, 0-8) -- when dst_addr crosses a cluster boundary this is
+// the cross-cluster in-fabric fold (writerExtCfg carries the armed extension to the receiver); when
+// dst_addr is local this is the same fold done locally (used for the gather-then-local baseline).
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_moment_merge_push_args {
+  uint32_t src_addr_hi;
+  uint32_t src_addr_lo;
+  uint32_t dst_addr_hi;
+  uint32_t dst_addr_lo;
+  uint32_t nvalid;        // live (m,l) pairs in the beat, 0-8
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_xdma_moment_merge_push_args_t;
+
 // ──────────────────────────────────────────────────────────────────────
 // xDMA FP16 streaming-SIMD primitives (reader extensions): the 3 generic ops
 // the LLM layers (softmax/rmsnorm/silu/swiglu/rope) decompose into. One row =

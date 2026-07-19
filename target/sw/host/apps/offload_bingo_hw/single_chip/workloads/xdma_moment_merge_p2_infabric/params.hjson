@@ -1,0 +1,9 @@
+// Copyright 2026 KU Leuven.
+// Licensed under the Apache License, Version 2.0, see LICENSE for details.
+// SPDX-License-Identifier: Apache-2.0
+{
+    // Must match the HW platform's N_CLUSTERS_PER_CHIPLET (hemaia_xdma_rr.hjson
+    // has 4 clusters in its single quadrant); this workload only USES clusters
+    // 0 and 1, the rest stay idle.
+    num_clusters: 4
+}

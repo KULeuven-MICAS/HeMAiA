@@ -355,8 +355,8 @@ inline int32_t xdma_multicast_1d(void* src, void** dst, uint32_t dst_num,
     case (k): snax_write_xdma_cfg_reg((base) + (k), val); break
 
 static inline void xdma_src_ext_csr_write(uint32_t slot, uint32_t val) {
-    _Static_assert(XDMA_SRC_EXT_CSR_NUM <= 16,
-        "src ext CSRs exceed the 16-slot dispatch cap; extend the case list below.");
+    _Static_assert(XDMA_SRC_EXT_CSR_NUM <= 18,
+        "src ext CSRs exceed the 18-slot dispatch cap; extend the case list below.");
     switch (slot) {
         BINGO_XDMA_EXT_CSR_CASE(XDMA_SRC_EXT_CSR_PTR, 0);  BINGO_XDMA_EXT_CSR_CASE(XDMA_SRC_EXT_CSR_PTR, 1);
         BINGO_XDMA_EXT_CSR_CASE(XDMA_SRC_EXT_CSR_PTR, 2);  BINGO_XDMA_EXT_CSR_CASE(XDMA_SRC_EXT_CSR_PTR, 3);
@@ -366,6 +366,7 @@ static inline void xdma_src_ext_csr_write(uint32_t slot, uint32_t val) {
         BINGO_XDMA_EXT_CSR_CASE(XDMA_SRC_EXT_CSR_PTR, 10); BINGO_XDMA_EXT_CSR_CASE(XDMA_SRC_EXT_CSR_PTR, 11);
         BINGO_XDMA_EXT_CSR_CASE(XDMA_SRC_EXT_CSR_PTR, 12); BINGO_XDMA_EXT_CSR_CASE(XDMA_SRC_EXT_CSR_PTR, 13);
         BINGO_XDMA_EXT_CSR_CASE(XDMA_SRC_EXT_CSR_PTR, 14); BINGO_XDMA_EXT_CSR_CASE(XDMA_SRC_EXT_CSR_PTR, 15);
+        BINGO_XDMA_EXT_CSR_CASE(XDMA_SRC_EXT_CSR_PTR, 16); BINGO_XDMA_EXT_CSR_CASE(XDMA_SRC_EXT_CSR_PTR, 17);
         default: break;
     }
 }
