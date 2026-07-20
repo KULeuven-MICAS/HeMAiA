@@ -15,8 +15,6 @@ int main() {
     initialize_comm_buffer((comm_buffer_t*)comm_buffer_ptr);
     // Initialize the UART
     init_uart(get_current_chip_baseaddress(), 32, 1);
-    // Enable vector extension
-    enable_vec();
     // Initialize the D2D link topology
     hemaia_d2d_link_initialize_4c1m(get_current_chip_id());
 

@@ -15,8 +15,6 @@
 int main() {
     uint32_t current_chip_id = get_current_chip_id();
     init_uart(get_current_chip_baseaddress(), 32, 1);
-    // Enable vector extension
-    enable_vec();
     printf("[HeMAiA] Multi-chip Offload Legacy Main (chip %x%x)\r\n",
            current_chip_id >> 4, current_chip_id & 0x0F);
 

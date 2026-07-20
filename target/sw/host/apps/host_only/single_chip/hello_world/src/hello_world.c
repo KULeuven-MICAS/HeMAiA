@@ -8,8 +8,6 @@
 int main() {
     uintptr_t address_prefix = (uintptr_t)get_current_chip_baseaddress();
     init_uart(address_prefix, 32, 1);
-    // Enable vector extension
-    enable_vec();
     asm volatile("fence" : : : "memory");
     printf("Hello world from HeMAiA! \r\n");
     return 0;

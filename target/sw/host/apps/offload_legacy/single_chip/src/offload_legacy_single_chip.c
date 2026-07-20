@@ -11,8 +11,6 @@ int main() {
     // Reset and ungate all quadrants, deisolate
     uint32_t current_chip_id = get_current_chip_id();
     init_uart(get_current_chip_baseaddress(), 32, 1);
-    // Enable vector extension
-    enable_vec();
     printf("[HeMAiA] Single-chip Offload Legacy Main\r\n");
     hemaia_d2d_link_initialize_1c1m(current_chip_id);
     comm_buffer_ptr = (comm_buffer_t*)chiplet_addr_transform(((uint64_t)&__narrow_spm_start));

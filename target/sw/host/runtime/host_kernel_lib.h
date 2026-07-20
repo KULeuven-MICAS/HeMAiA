@@ -342,7 +342,7 @@ static inline uint64_t __host_bingo_kernel_xdma_1d_copy(void *arg){
 // FP32 CVA6+Ara SIMD kernels — operations that VersaCore cannot handle
 // These run on the CVA6 host processor with Ara RVV acceleration.
 // Uses RISC-V Vector (RVV) intrinsics following the Ara softmax/exp patterns.
-// Requires: enable_vec() called once at startup.
+// The common host startup enables Ara and initializes its register file.
 // ============================================================
 
 #include "riscv_vector.h"
