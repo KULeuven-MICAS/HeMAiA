@@ -659,9 +659,9 @@ void delay_ns(uint64_t delay) {
 // ARA runtime
 //===============================================================
 
-inline void enable_vec() {
-   asm volatile("csrs mstatus, %[bits];" ::[bits] "r"(0x00000600 & (0x00000600 >> 1)));
-}
+// Enable Ara and clear all architectural vector registers.  The implementation
+// lives in start.S so every host program can call the same initialization code.
+void enable_vec(void);
 
 // Return the current value of the cycle counter
 static inline uint64_t ara_get_cycle_count() {

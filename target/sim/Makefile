@@ -133,16 +133,17 @@ ifeq ($(SIM_WITH_WAVEFORM), 1)
 endif
 
 # This flow does not annotate SDF: the gate-level netlist is a functional,
-# zero-delay simulation.  These switches let vopt discard the unused timing
-# structures.  Dead-cell elimination is reserved for non-waveform batches so
-# a debug build keeps every otherwise-unused object available for inspection.
+# zero-delay simulation.  Keep zero-delay specify paths so Questa can evaluate
+# optimized standard cells in the same delta with -cellimmeval.  Timing checks
+# remain disabled separately by +notimingchecks in sim.mk.  Dead-cell
+# elimination is reserved for non-waveform batches so a debug build keeps every
+# otherwise-unused object available for inspection.
 ifeq ($(SIM_WITH_NETLIST), 1)
 	# Questa 2022.4 can optimize away packed-struct variables that remain
 	# referenced by the RTL memory-chip model.  Preserve variables only; full
 	# +acc is still reserved for waveform/debug builds.
 	VOPT_FLAGS += +acc=r
-	VOPT_FLAGS += +nospecify
-	VOPT_FLAGS += -nosdf
+	VSIM_FLAGS += -cellimmeval
 ifeq ($(SIM_WITH_WAVEFORM), 0)
 	VOPT_FLAGS += -dce
 endif
@@ -162,7 +163,6 @@ VLOG_FLAGS += -suppress 13314
 VLOG_FLAGS += ${QUESTA_64BIT}
 
 
-VCS_FLAGS += +nospecify
 VCS_FLAGS += -Mdir=work-vcs
 VCS_FLAGS += -Mlib=work-vcs
 VCS_FLAGS += -full64
@@ -180,9 +180,15 @@ VCS_FLAGS += -assert disable_cover
 # them enables Fine-Grained Parallelism at simulation time.
 ifeq ($(SIM_WITH_NETLIST), 1)
 	VCS_FLAGS += +notimingcheck
+	# Preserve synchronous ordering in zero-delay functional GLS by adding a
+	# minimal clock-to-Q delay to delay-less sequential UDPs.  This is not SDF.
+	VCS_FLAGS += -add_seq_delay 1ps
 	VCS_FLAGS += -hsopt=gates
 	VCS_FLAGS += -Xkeyopt=rtopt
 	VCS_FLAGS += +rad
+else
+	# Preserve the historical non-netlist behavior.
+	VCS_FLAGS += +nospecify
 endif
 
 # Independent CI simulations provide the process-level parallelism.  Do not
