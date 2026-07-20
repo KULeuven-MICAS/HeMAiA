@@ -122,6 +122,13 @@ ENGINES: Dict[str, Dict] = {
         # This testbench never uses $save/$restart.  Disabling that facility
         # avoids VCS re-executing every simv under ASLR before time zero.
         "run_args": ["+vcs+lic+wait", "-no_save"],
+        # The matching compile-time option is enabled by target/sim/Makefile.
+        # VCS requires it again at runtime to choose random 0/1 initialization.
+        # Each task has a distinct bin/ working directory, so VCS writes one
+        # live transcript per simulation while stdout remains captured by CI.
+        "netlist_run_args": [
+            "+vcs+initreg+random", "-l", "transcript", "+vcs+flush+log",
+        ],
     },
     "vlt": {
         "tool": None,                    # Verilator builds in-container; no host tool
@@ -1390,6 +1397,9 @@ class HeMAiASimRunner:
         """
         results: Dict[str, Tuple[bool, float]] = {}
         binary_name = self.spec["binary"]
+        run_args = list(self.spec.get("run_args", []))
+        if self._sim_cfg_flag("sim_with_netlist"):
+            run_args.extend(self.spec.get("netlist_run_args", []))
 
         def _worker(task_dir: Path, ci_name: str):
             sim_binary = task_dir / "bin" / binary_name
@@ -1406,7 +1416,7 @@ class HeMAiASimRunner:
                 # start_new_session=True makes the child a session/group leader,
                 # so all descendants share that group and can be killed as a unit.
                 proc = subprocess.Popen(
-                    [str(sim_binary), *self.spec.get("run_args", [])],
+                    [str(sim_binary), *run_args],
                     cwd=task_dir / "bin",
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,

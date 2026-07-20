@@ -139,10 +139,18 @@ endif
 # elimination is reserved for non-waveform batches so a debug build keeps every
 # otherwise-unused object available for inspection.
 ifeq ($(SIM_WITH_NETLIST), 1)
+	# Match VCS +vcs+initreg+random: prepare both registers and memories for
+	# deterministic random 0/1 initialization, then select seed 1 at runtime.
+	# A minimal delay on undelayed sequential UDPs prevents zero-delay GLS races.
+	VOPT_FLAGS += +initreg
+	VOPT_FLAGS += +initmem
+	VOPT_FLAGS += -add_seq_delay 1ps
 	# Questa 2022.4 can optimize away packed-struct variables that remain
 	# referenced by the RTL memory-chip model.  Preserve variables only; full
 	# +acc is still reserved for waveform/debug builds.
 	VOPT_FLAGS += +acc=r
+	VSIM_FLAGS += +initreg+1
+	VSIM_FLAGS += +initmem+1
 	VSIM_FLAGS += -cellimmeval
 ifeq ($(SIM_WITH_WAVEFORM), 0)
 	VOPT_FLAGS += -dce
@@ -180,6 +188,13 @@ VCS_FLAGS += -assert disable_cover
 # them enables Fine-Grained Parallelism at simulation time.
 ifeq ($(SIM_WITH_NETLIST), 1)
 	VCS_FLAGS += +notimingcheck
+	# Enable time-zero random 0/1 initialization.  VCS also requires the same
+	# option when simv is launched; the CI runner supplies that runtime option.
+	VCS_FLAGS += +vcs+initreg+random
+	VCS_RUNTIME_FLAGS += +vcs+initreg+random
+	# Mirror Questa's per-run transcript for interactive VCS launches.
+	VCS_RUNTIME_FLAGS += -l transcript
+	VCS_RUNTIME_FLAGS += +vcs+flush+log
 	# Preserve synchronous ordering in zero-delay functional GLS by adding a
 	# minimal clock-to-Q delay to delay-less sequential UDPs.  This is not SDF.
 	VCS_FLAGS += -add_seq_delay 1ps
@@ -461,7 +476,7 @@ $(BIN_DIR)/occamy_chip.vcs: $(VCS_BUILDDIR)/compile.sh $(VCS_RUN_SCRIPT) $(VCS_S
 	@echo "#!/bin/bash" > $@.gui
 	@echo 'script_dir="$$( cd -- "$$( dirname -- "$${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"' >> $@.gui
 	@echo 'cd $$script_dir' >> $@.gui
-	@echo './occamy_chip.vcs -gui -ucli -i ../$(VCS_RUN_SCRIPT) "$$@"' >> $@.gui
+	@echo './occamy_chip.vcs $(VCS_RUNTIME_FLAGS) -gui -ucli -i ../$(VCS_RUN_SCRIPT) "$$@"' >> $@.gui
 	@chmod +x $@.gui
 
 ifeq ($(PREPARED_SIM_INPUTS), 1)
