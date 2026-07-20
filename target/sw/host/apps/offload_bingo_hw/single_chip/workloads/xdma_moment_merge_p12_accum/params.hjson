@@ -1,0 +1,6 @@
+// Copyright 2026 KU Leuven.
+// SPDX-License-Identifier: Apache-2.0
+{
+    // 12 shards accumulated on a 2-CLUSTER platform (the whole point: P>8 with only 2 clusters).
+    num_clusters: 2
+}
