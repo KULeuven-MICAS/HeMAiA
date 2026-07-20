@@ -395,12 +395,22 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_elementwise_add_ab(void *arg)
 // carries as `writerExtCfg` to the receiver -- the fold happens on the receiver's writer as the
 // beat lands, not as a separate pass. When dst_addr is local this is the same fold done in place
 // (the gather-then-local ablation's second step).
-static inline uint32_t xdma_moment_merge_push_run(uint64_t src_addr, uint64_t dst_addr, uint32_t nvalid)
+// `acc_en` selects accumulate-on-arrival (StreamMomentMergeRt, snax_cluster@5e17bd6f): the receiver keeps a
+// persistent (m,l) accumulator per slot and folds each arriving beat INTO it, so P producers can push straight
+// at the merger with no assemble phase and no P<=8 wall. acc_en=0 keeps the original stateless-per-beat fold.
+// CSR(0) layout: [7:0] nValid | [8] accEn | [9] accInit | [12:10] accSlot -- still ONE user CSR, so the
+// inter-cluster cfg serdes is unchanged and a remote push carries these bits in its writerExtCfg exactly as
+// it already carries nValid.
+static inline uint32_t xdma_moment_merge_push_run(uint64_t src_addr, uint64_t dst_addr, uint32_t nvalid,
+                                                  uint32_t acc_en, uint32_t acc_init, uint32_t acc_slot)
 {
     BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
 #ifdef WRITER_EXT_STREAMMOMENTMERGERT
     xdma_disable_all_extensions();
-    uint32_t csr[1] = { nvalid };
+    uint32_t csr[1] = { (nvalid & 0xFFu)
+                        | ((acc_en   & 0x1u) << 8)
+                        | ((acc_init & 0x1u) << 9)
+                        | ((acc_slot & 0x7u) << 10) };
     xdma_enable_dst_ext(WRITER_EXT_STREAMMOMENTMERGERT, csr);
     BINGO_XDMA_TRY(xdma_memcpy_1d_full_addr(src_addr, dst_addr, XDMA_WIDTH), "xdma_moment_merge_push");
     BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
@@ -423,15 +433,20 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_moment_merge_push(void *arg)
 {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_moment_merge_push_args_t);
     //   [0] src_addr_hi [1] src_addr_lo [2] dst_addr_hi [3] dst_addr_lo [4] nvalid
+    //   [5] acc_en      [6] acc_init    [7] acc_slot
     if (snrt_is_dm_core()) {
         BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
         uint32_t *a = (uint32_t *)arg;
         uint64_t src_addr = make_u64(a[0], a[1]);
         uint64_t dst_addr = make_u64(a[2], a[3]);
         uint32_t nvalid = a[4];
+        uint32_t acc_en = a[5];
+        uint32_t acc_init = a[6];
+        uint32_t acc_slot = a[7];
         bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_moment_merge_push_args_t);
         BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
-        if (xdma_moment_merge_push_run(src_addr, dst_addr, nvalid) != BINGO_RET_SUCC)
+        if (xdma_moment_merge_push_run(src_addr, dst_addr, nvalid, acc_en, acc_init, acc_slot)
+            != BINGO_RET_SUCC)
             return BINGO_RET_FAIL;
         sp->return_value = (uint32_t)dst_addr;
         sp->num_return_values = 0;

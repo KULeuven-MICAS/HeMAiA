@@ -2,5 +2,10 @@
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 {
-    num_clusters: 4
+    // Must match the HW platform's N_CLUSTERS_PER_CHIPLET EXACTLY -- the generator's platform
+    // guard silently SKIPS the workload otherwise (it does not warn).  P=2 only ever uses
+    // clusters 0 and 1, so 2 is its natural target and lets this ablation run on the same
+    // 2-cluster cfg as its in-fabric counterpart (hemaia_xdma_rr_2c), which is required for
+    // the two arms to be comparable.  Kept in step with the p2_infabric params.hjson.
+    num_clusters: 2
 }

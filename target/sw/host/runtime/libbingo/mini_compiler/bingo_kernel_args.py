@@ -948,11 +948,38 @@ class SnaxBingoKernelXdmaElementwiseAddAbArgs(BingoKernelArgs):
 # locally (the gather-then-local ablation's second step). See util/sim/xdma_moment_merge_golden.py
 # for the matching golden model and beat-packing helper.
 class SnaxBingoKernelXdmaMomentMergePushArgs(BingoKernelArgs):
+    """In-transit moment-merge push.
+
+    Two modes, chosen by `acc_en`:
+
+    * ``acc_en=0`` (default, unchanged): the receiver's fold is STATELESS PER BEAT, so the P
+      partials must already be co-resident as lanes of the ONE pushed beat (`nvalid` of them).
+      P independent pushes at the same destination would clobber, not compose, and the
+      collective is capped at P <= 8 (lanes per 512-bit beat).
+    * ``acc_en=1``: the receiver keeps a persistent (m,l) accumulator per `acc_slot` and folds
+      each arriving beat INTO it, so every producer pushes STRAIGHT at the merger -- no assemble
+      phase and no P<=8 wall. Exactly ONE producer must set ``acc_init=1`` to arm the slot; the
+      others use ``acc_init=0``. The monoid is associative and commutative, so arrival order is
+      irrelevant -- but the *arming* push must be ordered before the others (add Bingo edges),
+      since acc_init=1 overwrites rather than folds.
+    """
+
     def __init__(self, src_addr: Union[BingoMemAlloc, int], dst_addr: Union[BingoMemAlloc, int],
-                 nvalid: int):
+                 nvalid: int, acc_en: int = 0, acc_init: int = 0, acc_slot: int = 0):
         self.src_addr = src_addr
         self.dst_addr = dst_addr
         self.nvalid = nvalid
+        self.acc_en = acc_en
+        self.acc_init = acc_init
+        self.acc_slot = acc_slot
+        if acc_en not in (0, 1):
+            raise ValueError(f"acc_en must be 0 or 1, got {acc_en}")
+        if acc_init not in (0, 1):
+            raise ValueError(f"acc_init must be 0 or 1, got {acc_init}")
+        if not 0 <= acc_slot <= 7:
+            raise ValueError(f"acc_slot must be in 0..7 (csr(0)[12:10]), got {acc_slot}")
+        if acc_en == 0 and (acc_init or acc_slot):
+            raise ValueError("acc_init/acc_slot are meaningless with acc_en=0 -- set acc_en=1 or drop them")
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_xdma_moment_merge_push_args_t"
@@ -962,6 +989,9 @@ class SnaxBingoKernelXdmaMomentMergePushArgs(BingoKernelArgs):
         self._process_addr(self.src_addr, "src_addr", a, handle_name_map)
         self._process_addr(self.dst_addr, "dst_addr", a, handle_name_map)
         a["nvalid"] = str(self.nvalid)
+        a["acc_en"] = str(self.acc_en)
+        a["acc_init"] = str(self.acc_init)
+        a["acc_slot"] = str(self.acc_slot)
         return a
 
 

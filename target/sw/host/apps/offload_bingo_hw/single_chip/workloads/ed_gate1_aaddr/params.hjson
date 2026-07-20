@@ -1,0 +1,9 @@
+// Copyright 2026 KU Leuven.
+// Licensed under the Apache License, Version 2.0, see LICENSE for details.
+// SPDX-License-Identifier: Apache-2.0
+{
+    // Gate 1 uses only cluster 0, but num_clusters must match the platform EXACTLY
+    // or the generator silently skips the workload. Run on hemaia_xdma_rr_2c.
+    num_clusters: 2
+    g1_beats: 4
+}

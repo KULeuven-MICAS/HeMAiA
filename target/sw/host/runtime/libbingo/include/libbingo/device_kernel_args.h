@@ -443,6 +443,15 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_moment_merge_push_args {
   uint32_t dst_addr_hi;
   uint32_t dst_addr_lo;
   uint32_t nvalid;        // live (m,l) pairs in the beat, 0-8
+  // Accumulate-on-arrival (StreamMomentMergeRt `accEn`, snax_cluster@5e17bd6f). With acc_en=0 the fold is
+  // stateless per beat, so the P partials must be made CO-RESIDENT in one beat first (the assemble phase)
+  // and P independent pushes at one destination would clobber. With acc_en=1 the receiver keeps a persistent
+  // (m,l) accumulator per slot and folds each arriving beat INTO it, so every producer can push STRAIGHT at
+  // the merger -- no assemble, and no P<=8 wall. Exactly ONE producer sets acc_init=1 to arm the slot; the
+  // rest use acc_init=0. The monoid is associative and commutative, so arrival order does not matter.
+  uint32_t acc_en;        // 0 = stateless per beat (default, unchanged); 1 = accumulate into acc_slot
+  uint32_t acc_init;      // 1 = this push OVERWRITES (arms) the slot; 0 = folds into it
+  uint32_t acc_slot;      // which accumulator, 0-7
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_xdma_moment_merge_push_args_t;
 
