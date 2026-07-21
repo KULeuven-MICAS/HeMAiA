@@ -1016,6 +1016,16 @@ class SnaxBingoKernelXdmaTopKPushArgs(SnaxBingoKernelXdmaMomentMergePushArgs):
         return "__snax_bingo_kernel_xdma_topk_push"
 
 
+class SnaxBingoKernelXdmaAttnPushArgs(SnaxBingoKernelXdmaMomentMergePushArgs):
+    """The complete flash-attention (m, ell, O) triple push (StreamAttnMergeRt). Identical args to the
+    moment-merge push (same struct, same accEn semantics); only the target kernel + writer extension
+    differ. A beat carries one shard's partial (m at lane 0, ell at lane 1, O[dHead] at lanes 2..); the
+    writer folds them into the global (m*, ell*, O*) -- the whole distributed attention, in-fabric."""
+
+    def get_kernel_name(self) -> str:
+        return "__snax_bingo_kernel_xdma_attn_push"
+
+
 # ══════════════════════════════════════════════════════════════════════
 # xDMA FP16 streaming-SIMD primitives (reader extensions)
 #

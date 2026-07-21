@@ -494,6 +494,38 @@ static inline uint32_t xdma_topk_push_run(uint64_t src_addr, uint64_t dst_addr, 
 #endif
 }
 
+// The COMPLETE distributed flash-attention collective: the (m, ell, O) triple (StreamAttnMergeRt). Same push
+// mechanics + accEn semantics as the other monoids -- only the writer extension differs. A beat carries one
+// shard's partial (m at lane 0, ell at lane 1, O[dHead] at lanes 2..); the writer folds them into the global
+// (m*, ell*, O*) in-transit. The whole distributed attention (not just the softmax normalizer) in the fabric.
+static inline uint32_t xdma_attn_push_run(uint64_t src_addr, uint64_t dst_addr, uint32_t nvalid,
+                                          uint32_t acc_en, uint32_t acc_init, uint32_t acc_slot)
+{
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
+#ifdef WRITER_EXT_STREAMATTNMERGERT
+    xdma_disable_all_extensions();
+    uint32_t csr[1] = { (nvalid & 0xFFu)
+                        | ((acc_en   & 0x1u) << 8)
+                        | ((acc_init & 0x1u) << 9)
+                        | ((acc_slot & 0x7u) << 10) };
+    xdma_enable_dst_ext(WRITER_EXT_STREAMATTNMERGERT, csr);
+    BINGO_XDMA_TRY(xdma_memcpy_1d_full_addr(src_addr, dst_addr, XDMA_WIDTH), "xdma_attn_push");
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
+    xdma_task_t task_id = xdma_start();
+    xdma_wait_task(task_id);
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
+    xdma_disable_dst_ext(WRITER_EXT_STREAMATTNMERGERT);
+    return BINGO_RET_SUCC;
+#else
+    printf_safe("[Cluster %d Core %d]: Error! xdma_attn_push needs WRITER_EXT_STREAMATTNMERGERT "
+                "(cfg/snax_xdma_test.hjson) -- this cluster's writer_extensions doesn't have it.\r\n",
+                snrt_cluster_idx(), snrt_cluster_core_idx());
+    (void)src_addr; (void)dst_addr; (void)nvalid;
+    return BINGO_RET_FAIL;
+#endif
+}
+
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_moment_merge_push(void *arg)
 {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_moment_merge_push_args_t);
@@ -567,6 +599,30 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_topk_push(void *arg)
         return BINGO_RET_SUCC;
     } else {
         printf_safe("[Cluster %d Core %d]: Error! xdma_topk_push should be called from a DM core!\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+}
+
+// The flash-attention (m,ell,O) triple entry -- same arg layout as moment_merge_push (reuses its args struct).
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_attn_push(void *arg)
+{
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_moment_merge_push_args_t);
+    if (snrt_is_dm_core()) {
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+        uint32_t *a = (uint32_t *)arg;
+        uint64_t src_addr = make_u64(a[0], a[1]);
+        uint64_t dst_addr = make_u64(a[2], a[3]);
+        uint32_t nvalid = a[4], acc_en = a[5], acc_init = a[6], acc_slot = a[7];
+        bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_moment_merge_push_args_t);
+        BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+        if (xdma_attn_push_run(src_addr, dst_addr, nvalid, acc_en, acc_init, acc_slot) != BINGO_RET_SUCC)
+            return BINGO_RET_FAIL;
+        sp->return_value = (uint32_t)dst_addr;
+        sp->num_return_values = 0;
+        return BINGO_RET_SUCC;
+    } else {
+        printf_safe("[Cluster %d Core %d]: Error! xdma_attn_push should be called from a DM core!\r\n",
                     snrt_cluster_idx(), snrt_cluster_core_idx());
         return BINGO_RET_FAIL;
     }

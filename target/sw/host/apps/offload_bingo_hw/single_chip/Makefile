@@ -29,6 +29,10 @@ APPS += xdma_moment_merge_p12_accum
 APPS += xdma_normstat_p2
 # Collective algebra monoid 3: distributed MoE top-k routing (StreamTopKMergeRt, beyond-SHARP sort).
 APPS += xdma_topk_p2
+# Tier-jump: the in-fabric SAMPLER (distributed token sampling = a monoid fold; reuses StreamTopKMergeRt).
+APPS += xdma_sampler_p2
+# Collective monoid 4: the complete flash-attention (m,ell,O) triple (StreamAttnMergeRt).
+APPS += xdma_attn_p2
 # iDMA adjacent-pair swap (RoPE xswap enabler); shares the per-op sweep harness.
 APPS += idma_swap_1cluster
 # Per-op xDMA sweep workloads (one op per dir; functional check + cycle LUT).
