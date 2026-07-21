@@ -1004,6 +1004,18 @@ class SnaxBingoKernelXdmaNormStatPushArgs(SnaxBingoKernelXdmaMomentMergePushArgs
         return "__snax_bingo_kernel_xdma_normstat_push"
 
 
+class SnaxBingoKernelXdmaTopKPushArgs(SnaxBingoKernelXdmaMomentMergePushArgs):
+    """The top-k routing monoid push (distributed MoE expert selection). Identical args to the
+    moment-merge push (same struct, same accEn semantics); only the target kernel + writer extension
+    differ. A beat carries (logit, expert-id) candidate pairs (value_k = lane k, index_k = lane 8+k);
+    the writer sorts+merges them in-fabric into the running global top-8 table. GENUINELY beyond-SHARP:
+    a compare-exchange sort, not a linear reduce. In accEn mode each shard pushes its LOCAL top-8 list
+    and the slot accumulates the global top-8; the host reads the top-k prefix (k <= 8)."""
+
+    def get_kernel_name(self) -> str:
+        return "__snax_bingo_kernel_xdma_topk_push"
+
+
 # ══════════════════════════════════════════════════════════════════════
 # xDMA FP16 streaming-SIMD primitives (reader extensions)
 #

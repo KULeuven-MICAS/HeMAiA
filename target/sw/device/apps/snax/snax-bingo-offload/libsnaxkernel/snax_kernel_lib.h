@@ -83,6 +83,7 @@ SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
     // F3: the in-transit nonlinear online-softmax moment-merge collective.
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_moment_merge_push),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_normstat_push),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_topk_push),
     // FP16 streaming-SIMD primitives (LLM layers: softmax/rmsnorm/silu/swiglu/rope).
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_stream_reduce),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_stream_map),
