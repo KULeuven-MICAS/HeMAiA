@@ -165,6 +165,13 @@ def parse_args() -> argparse.Namespace:
         help=f"maximum parallel simulations (default: {DEFAULT_NETLIST_SIM_JOBS})",
     )
     parser.add_argument(
+        "--vcs-cores-per-job",
+        type=int,
+        default=1,
+        help="maximum total CPU cores for each VCS simulation via FGP "
+        "(default: %(default)s)",
+    )
+    parser.add_argument(
         "--timeout-hours",
         type=float,
         default=24.0,
@@ -173,6 +180,10 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     if args.max_sim_jobs < 1:
         parser.error("--max-sim-jobs must be >= 1")
+    if args.vcs_cores_per_job < 1:
+        parser.error("--vcs-cores-per-job must be >= 1")
+    if args.engine != "vcs" and args.vcs_cores_per_job != 1:
+        parser.error("--vcs-cores-per-job is only valid with --engine vcs")
     if args.timeout_hours <= 0:
         parser.error("--timeout-hours must be > 0")
     return args
@@ -203,6 +214,7 @@ def main() -> None:
         with_d2d=True,
         with_pll=True,
         max_jobs=args.max_sim_jobs,
+        vcs_sim_cores_per_job=args.vcs_cores_per_job,
         build_sw_fleet=False,
         task_yaml=task_yaml,
         fail_on_task_failure=True,

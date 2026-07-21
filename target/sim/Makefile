@@ -139,18 +139,16 @@ endif
 # elimination is reserved for non-waveform batches so a debug build keeps every
 # otherwise-unused object available for inspection.
 ifeq ($(SIM_WITH_NETLIST), 1)
-	# Match VCS +vcs+initreg+random: prepare both registers and memories for
-	# deterministic random 0/1 initialization, then select seed 1 at runtime.
+	# Match VCS +vcs+initreg+random for register initialization.  SRAM contents
+	# are initialized through the TSMC model's own tasks below, not +initmem.
 	# A minimal delay on undelayed sequential UDPs prevents zero-delay GLS races.
 	VOPT_FLAGS += +initreg
-	VOPT_FLAGS += +initmem
 	VOPT_FLAGS += -add_seq_delay 1ps
 	# Questa 2022.4 can optimize away packed-struct variables that remain
 	# referenced by the RTL memory-chip model.  Preserve variables only; full
 	# +acc is still reserved for waveform/debug builds.
 	VOPT_FLAGS += +acc=r
 	VSIM_FLAGS += +initreg+1
-	VSIM_FLAGS += +initmem+1
 	VSIM_FLAGS += -cellimmeval
 ifeq ($(SIM_WITH_WAVEFORM), 0)
 	VOPT_FLAGS += -dce
@@ -170,6 +168,17 @@ VLOG_FLAGS += -suppress 2583
 VLOG_FLAGS += -suppress 13314
 VLOG_FLAGS += ${QUESTA_64BIT}
 
+# Initialize SRAMs through the supported TSMC functional-model hooks.  These
+# defines must be present while the macro model is compiled, for both Questa's
+# vlog flow and VCS's vlogan flow.
+ifeq ($(SIM_WITH_NETLIST), 1)
+ifeq ($(SIM_WITH_MACRO), 1)
+	TSMC_MEMORY_INIT_DEFINES := +define+TSMC_INITIALIZE_MEM_USING_DEFAULT_TASKS +define+TSMC_MEM_LOAD_0
+	VLOG_FLAGS += $(TSMC_MEMORY_INIT_DEFINES)
+	VLOGAN_FLAGS += $(TSMC_MEMORY_INIT_DEFINES)
+endif
+endif
+
 
 VCS_FLAGS += -Mdir=work-vcs
 VCS_FLAGS += -Mlib=work-vcs
@@ -187,6 +196,10 @@ VCS_FLAGS += -assert disable_cover
 # specifically intended for functional and SDF gate-level designs.  None of
 # them enables Fine-Grained Parallelism at simulation time.
 ifeq ($(SIM_WITH_NETLIST), 1)
+	# Build every netlist simv with Fine-Grained Parallelism support.  Omitting a
+	# runtime -fgp option still runs on one core, so one binary supports every
+	# requested per-job core count without recompilation.
+	VCS_FLAGS += -fgp
 	VCS_FLAGS += +notimingcheck
 	# Enable time-zero random 0/1 initialization.  VCS also requires the same
 	# option when simv is launched; the CI runner supplies that runtime option.
@@ -201,14 +214,29 @@ ifeq ($(SIM_WITH_NETLIST), 1)
 	VCS_FLAGS += -hsopt=gates
 	VCS_FLAGS += -Xkeyopt=rtopt
 	VCS_FLAGS += +rad
+	# VCS defines num_threads as child workers, excluding the master.  Expose the
+	# friendlier total-core count to make callers and use it as a maximum when a
+	# busy host cannot satisfy the full request.
+	VCS_SIM_CORES_PER_JOB ?= 1
+	VCS_SIM_CORES_VALID := $(shell printf '%s\n' '$(VCS_SIM_CORES_PER_JOB)' | grep -Eq '^[1-9][0-9]*$$' && echo 1)
+ifneq ($(VCS_SIM_CORES_VALID), 1)
+$(error VCS_SIM_CORES_PER_JOB must be a positive integer)
+endif
+ifneq ($(VCS_SIM_CORES_PER_JOB), 1)
+	VCS_FGP_CHILD_THREADS := $(shell expr $(VCS_SIM_CORES_PER_JOB) - 1)
+	VCS_RUNTIME_FLAGS += -fgp=num_threads:$(VCS_FGP_CHILD_THREADS)
+	VCS_RUNTIME_FLAGS += -fgp=allow_less_cores
+ifeq ($(SIM_WITH_WAVEFORM), 1)
+	# FGP requires an explicit FSDB thread policy whenever dumping is enabled.
+	# Keep dumping on the master so the requested value remains the total cores.
+	VCS_RUNTIME_FLAGS += -fgp=num_fsdb_threads:0
+endif
+endif
 else
 	# Preserve the historical non-netlist behavior.
 	VCS_FLAGS += +nospecify
 endif
 
-# Independent CI simulations provide the process-level parallelism.  Do not
-# add VCS -fgp or Questa -mc2 here: each batch simulation should remain
-# single-core-friendly when many jobs are launched concurrently.
 # Waveform Visibility
 # for looking at the cells
 # for looking at the waveform
@@ -392,6 +420,11 @@ clean-vlt: clean-work
 $(VSIM_BUILDDIR):
 	mkdir -p $@
 
+# Backend-only split runs may use a derived copy of the immutable preparation
+# script to add technology-model compile defines without invalidating its handoff
+# manifest.  Normal builds keep using Bender's generated file directly.
+VSIM_COMPILE_INPUT ?= $(VSIM_BUILDDIR)/compile.vsim.tcl
+
 ifeq ($(PREPARED_SIM_INPUTS), 1)
 $(VSIM_BUILDDIR)/compile.vsim.tcl:
 	@echo "ERROR: PREPARED_SIM_INPUTS=1 requires transferred Questa input: $@" >&2
@@ -408,10 +441,10 @@ $(BIN_DIR):
 
 .PHONY: $(BIN_DIR)/occamy_chip.vsim clean-vsim
 
-$(BIN_DIR)/occamy_chip.vsim: $(VSIM_BUILDDIR)/compile.vsim.tcl |$(BIN_DIR)
+$(BIN_DIR)/occamy_chip.vsim: $(VSIM_COMPILE_INPUT) |$(BIN_DIR)
 	touch $@
-	vsim -c -do "source $<; quit" | tee $(dir $<)vlog.log
-	@! grep -P "Errors: [1-9]*," $(dir $<)vlog.log
+	vsim -c -do "source $(VSIM_COMPILE_INPUT); quit" | tee $(VSIM_BUILDDIR)/vlog.log
+	@! grep -P "Errors: [1-9]*," $(VSIM_BUILDDIR)/vlog.log
 	vopt $(VOPT_FLAGS) -work $(VSIM_BUILDDIR) testharness -o testharness_opt | tee $(dir $<)vopt.log
 	@! grep -P "Errors: [1-9]*," $(dir $<)vopt.log
 	@echo "#!/bin/bash" > $@
@@ -461,14 +494,18 @@ $(VCS_BUILDDIR)/compile.sh: $(BENDER_TARGETS_FILE) $(ROOT)/Bender.yml $(ROOT)/Be
 VCS_TESTHARNESS_PREREQUISITES := $(TESTHARNESS_OUTPUTS)
 endif
 
+# See VSIM_COMPILE_INPUT above.  The runner sets this only for a prepared
+# backend handoff; ordinary builds execute the generated script unchanged.
+VCS_COMPILE_INPUT ?= $(VCS_BUILDDIR)/compile.sh
+
 $(VCS_RUN_SCRIPT): | $(VCS_BUILDDIR)
 	echo 'run' > $@
 
 # $(VCS_SOURCES) is the RTL file list bender resolves for these targets. It is a
 # prerequisite so that editing any .sv -- or regenerating target/rtl/src -- rebuilds
 # the simulation binary.
-$(BIN_DIR)/occamy_chip.vcs: $(VCS_BUILDDIR)/compile.sh $(VCS_RUN_SCRIPT) $(VCS_SOURCES) $(VCS_TESTHARNESS_PREREQUISITES)
-	bash work-vcs/compile.sh | tee $(dir $<)vcs_compile.log
+$(BIN_DIR)/occamy_chip.vcs: $(VCS_COMPILE_INPUT) $(VCS_RUN_SCRIPT) $(VCS_SOURCES) $(VCS_TESTHARNESS_PREREQUISITES)
+	bash $(VCS_COMPILE_INPUT) | tee $(VCS_BUILDDIR)/vcs_compile.log
 	mkdir -p $(BIN_DIR)
 	$(VCS) $(VCS_FLAGS) -o $(BIN_DIR)/occamy_chip.vcs -cc $(CC) -cpp $(CXX) \
 		-override_timescale=1ns/1ps -full64 -ignore initializer_driver_checks testharness $(TB_CC_SOURCES) $(RTL_CC_SOURCES) \

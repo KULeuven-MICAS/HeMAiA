@@ -619,6 +619,7 @@ class HeMAiASimRunner:
         skip_build: bool = False,
         skip_compile: bool = False,
         compile_jobs: Optional[int] = None,
+        vcs_sim_cores_per_job: int = 1,
         build_jobs: Optional[int] = None,
         build_sw_fleet: bool = True,
         task_yaml: Optional[Path] = None,
@@ -657,6 +658,12 @@ class HeMAiASimRunner:
         # Parallelism for the sim compile (``make -j``); None = no -j flag. The
         # Verilator build in particular is far too slow serially on a CI runner.
         self.compile_jobs = compile_jobs
+        # VCS FGP counts its master separately from ``num_threads``.  Keep the
+        # public setting in total cores so multiplying it by ``max_jobs`` gives
+        # the intended upper bound on simulation CPU use.
+        if vcs_sim_cores_per_job < 1:
+            raise ValueError("vcs_sim_cores_per_job must be >= 1")
+        self.vcs_sim_cores_per_job = vcs_sim_cores_per_job
         # `make -jN` for the SW build. Only `sw` is parallel-safe (and it is the slow
         # one: ~96 host apps x ~20 device apps). `rtl` runs occamygen + bender script
         # generation and `bootrom` takes seconds -- both stay serial.
@@ -915,6 +922,7 @@ class HeMAiASimRunner:
             f"SIM_CFG={self._repo_path(self.sim_cfg)}",
             f"SIM_WITH_WAVEFORM={self.waveform}",
             f"SIM_WITH_PLL={1 if self.with_pll else 0}",
+            f"VCS_SIM_CORES_PER_JOB={self.vcs_sim_cores_per_job}",
         ]
 
     def _sim_cfg_flag(self, name: str) -> bool:
@@ -1039,6 +1047,70 @@ class HeMAiASimRunner:
             raise ValueError(f"Prepared {engine} compile input is not relocatable: {path}")
         if str(self.repo_root) in contents:
             raise ValueError(f"Prepared {engine} compile input embeds {self.repo_root}: {path}")
+
+    def _tsmc_initialized_compile_input(self, engine: str) -> Path:
+        """Derive a backend compiler script with the TSMC SRAM init hooks.
+
+        A split-flow preparation script is covered by the immutable handoff
+        manifest, so step 6.2 must not edit it in place.  Deriving a sibling
+        script after manifest validation also lets an existing preparation use
+        newly required technology defines without repeating the software build.
+        """
+        source = self._compile_input_path(engine)
+        if source is None or not source.is_file():
+            raise FileNotFoundError(f"Missing prepared {engine} compile input: {source}")
+
+        defines = (
+            "+define+TSMC_INITIALIZE_MEM_USING_DEFAULT_TASKS",
+            "+define+TSMC_MEM_LOAD_0",
+        )
+        contents = source.read_text()
+        present = [define in contents for define in defines]
+        if any(present) and not all(present):
+            raise ValueError(
+                f"Prepared {engine} input contains an incomplete TSMC memory-init "
+                f"define set: {source}"
+            )
+
+        if not all(present):
+            if engine == "vcs":
+                command = re.compile(r"^(\s*vlogan\b[^\n]*\\\n)", re.MULTILINE)
+                derived_name = "compile.tsmc_mem_init.sh"
+            elif engine == "vsim":
+                command = re.compile(
+                    r"^(\s*(?:if\s+\{\[catch\s+\{\s*)?vlog\b[^\n]*\\\n)",
+                    re.MULTILINE,
+                )
+                derived_name = "compile.tsmc_mem_init.vsim.tcl"
+            else:
+                raise ValueError(f"TSMC compiler input is unsupported for {engine!r}")
+
+            define_lines = "".join(f"    {define} \\\n" for define in defines)
+            contents, command_count = command.subn(
+                lambda match: match.group(1) + define_lines,
+                contents,
+            )
+            if command_count == 0:
+                raise ValueError(
+                    f"Cannot find an HDL compiler command in prepared {engine} input: "
+                    f"{source}"
+                )
+        else:
+            derived_name = (
+                "compile.tsmc_mem_init.sh"
+                if engine == "vcs"
+                else "compile.tsmc_mem_init.vsim.tcl"
+            )
+
+        for define in defines:
+            if define not in contents:
+                raise ValueError(f"Failed to add {define} to {source}")
+
+        derived = source.with_name(derived_name)
+        derived.write_text(contents)
+        if engine == "vcs":
+            derived.chmod(source.stat().st_mode)
+        return derived
 
     def _compile_dependency_state(
         self,
@@ -1333,6 +1405,11 @@ class HeMAiASimRunner:
         compile_cmd = ["make", self.spec["compile_target"], *self._sim_make_args()]
         if prepared_inputs:
             compile_cmd.append("PREPARED_SIM_INPUTS=1")
+            initialized_input = self._tsmc_initialized_compile_input(self.engine)
+            input_variable = (
+                "VCS_COMPILE_INPUT" if self.engine == "vcs" else "VSIM_COMPILE_INPUT"
+            )
+            compile_cmd.append(f"{input_variable}={initialized_input}")
         if self.compile_jobs:
             compile_cmd.append(f"-j{self.compile_jobs}")
         if self.spec["compile_in_container"]:
@@ -1400,6 +1477,21 @@ class HeMAiASimRunner:
         run_args = list(self.spec.get("run_args", []))
         if self._sim_cfg_flag("sim_with_netlist"):
             run_args.extend(self.spec.get("netlist_run_args", []))
+        if self.engine == "vcs" and self.vcs_sim_cores_per_job > 1:
+            # VCS's runtime value names only the child workers; one additional
+            # master core makes the user-facing total.  Treat the request as an
+            # upper bound on a busy shared backend rather than aborting when
+            # fewer idle cores are available.
+            run_args.extend(
+                [
+                    f"-fgp=num_threads:{self.vcs_sim_cores_per_job - 1}",
+                    "-fgp=allow_less_cores",
+                ]
+            )
+            if self.waveform == "1":
+                # FGP requires an explicit FSDB policy when waveform dumping is
+                # enabled.  Zero keeps dumping on the master core.
+                run_args.append("-fgp=num_fsdb_threads:0")
 
         def _worker(task_dir: Path, ci_name: str):
             sim_binary = task_dir / "bin" / binary_name
@@ -1454,7 +1546,9 @@ class HeMAiASimRunner:
 
         worker_count = min(self.max_jobs, len(tasks_info))
         print(f"Running {len(tasks_info)} {self.engine} simulation(s) with up to "
-              f"{worker_count} parallel job(s)")
+              f"{worker_count} parallel job(s) and "
+              f"{self.vcs_sim_cores_per_job if self.engine == 'vcs' else 1} "
+              f"core(s) per job")
 
         phase_start = time.monotonic()
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
