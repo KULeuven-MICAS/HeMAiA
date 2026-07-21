@@ -995,6 +995,15 @@ class SnaxBingoKernelXdmaMomentMergePushArgs(BingoKernelArgs):
         return a
 
 
+class SnaxBingoKernelXdmaNormStatPushArgs(SnaxBingoKernelXdmaMomentMergePushArgs):
+    """The norm-stat monoid push (distributed LayerNorm/RMSNorm statistics). Identical args to the
+    moment-merge push (same struct, same accEn semantics); only the target kernel + writer extension
+    differ. A beat carries (Sx, Sxx) pairs instead of (m, l); the fold is a linear pair-add."""
+
+    def get_kernel_name(self) -> str:
+        return "__snax_bingo_kernel_xdma_normstat_push"
+
+
 # ══════════════════════════════════════════════════════════════════════
 # xDMA FP16 streaming-SIMD primitives (reader extensions)
 #

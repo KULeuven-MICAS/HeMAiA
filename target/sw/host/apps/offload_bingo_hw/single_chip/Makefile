@@ -26,6 +26,7 @@ APPS += ed_decode_p2_baseline
 APPS += ed_decode_p4_infabric
 APPS += ed_decode_p4_baseline
 APPS += xdma_moment_merge_p12_accum
+APPS += xdma_normstat_p2
 # iDMA adjacent-pair swap (RoPE xswap enabler); shares the per-op sweep harness.
 APPS += idma_swap_1cluster
 # Per-op xDMA sweep workloads (one op per dir; functional check + cycle LUT).
