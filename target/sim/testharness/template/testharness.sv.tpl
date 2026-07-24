@@ -425,6 +425,10 @@ module testharness;
 % endif
     initial begin
         set_rst();
+        #(10ps);
+        release_rst();
+        #(10ps);
+        set_rst();
         init_pll_pins();
         // Wait some random time
         #(11ns); 

@@ -86,7 +86,6 @@ static void setup_unary_args(uint64_t *args, float *input, float *out, uint64_t 
 int main() {
     uintptr_t address_prefix = (uintptr_t)get_current_chip_baseaddress();
     init_uart(address_prefix, 32, 1);
-    enable_vec();
     asm volatile("fence" ::: "memory");
 
     printf("=== FP32 Operator Kernel Tests (ci_ara) ===\r\n");

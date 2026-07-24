@@ -31,8 +31,6 @@ int main() {
     hemaia_d2d_link_initialize_4c1m(current_chip_id);
     // Init the uart for printf
     init_uart(get_current_chip_baseaddress(), 32, 1);
-    // Enable vector extension
-    enable_vec();
     OFFLOAD_BINGO_HW_DEBUG_PRINT_SAFE("Multi-chip Offload HW Bingo Main\r\n");
     OFFLOAD_BINGO_HW_DEBUG_PRINT_SAFE("Chip(%x, %x): [Host] Start Offloading Program\r\n", get_current_chip_loc_x(), get_current_chip_loc_y());
 

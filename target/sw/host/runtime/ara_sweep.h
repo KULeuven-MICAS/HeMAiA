@@ -55,7 +55,6 @@ static inline const char *ara_prec_name(uint64_t p) {
 
 #define ARA_SWEEP_INIT(opname)                                                  \
     init_uart((uintptr_t)get_current_chip_baseaddress(), 32, 1);               \
-    enable_vec();                                                               \
     asm volatile("fence" ::: "memory");                                        \
     printf("=== ara sweep: " #opname " ===\r\n");                              \
     printf("CYCLES_HEADER,kernel,prec,N,rep,cycles\r\n")

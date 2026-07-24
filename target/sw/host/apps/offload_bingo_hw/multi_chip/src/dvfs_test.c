@@ -30,8 +30,6 @@ int main() {
     hemaia_d2d_link_initialize_4c1m(current_chip_id);
     // Init the uart for printf
     init_uart(get_current_chip_baseaddress(), 32, 1);
-    // Enable vector extension
-    enable_vec();
 
     ///////////////////////////////
     // 1. Init the Allocator

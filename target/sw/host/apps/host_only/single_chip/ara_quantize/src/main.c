@@ -71,7 +71,6 @@ static _Float16 timing_f16_src[OP_MAX_LEN] __attribute__((aligned(8)));
 int main() {
     uintptr_t address_prefix = (uintptr_t)get_current_chip_baseaddress();
     init_uart(address_prefix, 32, 1);
-    enable_vec();
     asm volatile("fence" ::: "memory");
 
     printf("=== ara sweep: quantize ===\r\n");

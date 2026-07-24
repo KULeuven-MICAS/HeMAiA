@@ -16,6 +16,7 @@ _start:
 #   call        initialize_wide_spm
 #   call        initialize_narrow_spm
     call        enable_fpu
+    call        enable_vec
     call        main
 
 _exit:
@@ -41,6 +42,21 @@ _exit:
     ld          s0, 0(sp)
     addi        sp, sp, 16
     ret
+
+# Enable the vector unit and initialize every architectural vector register.
+# Using LMUL=8 lets four writes cover v0-v31 without depending on VLEN.
+.globl enable_vec
+.type enable_vec, @function
+enable_vec:
+    li          t0, 0x200
+    csrs        mstatus, t0
+    vsetvli     t0, zero, e8, m8, ta, ma
+    vmv.v.i     v0, 0
+    vmv.v.i     v8, 0
+    vmv.v.i     v16, 0
+    vmv.v.i     v24, 0
+    ret
+.size enable_vec, .-enable_vec
 
 # void host_abort(uint64_t exit_code) -- C-callable fatal exit.
 # Mirrors _exit's termination stores (fesvr tohost + hemaia return pointer) but

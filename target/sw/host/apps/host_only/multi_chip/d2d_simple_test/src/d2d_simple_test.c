@@ -17,7 +17,6 @@ int main() {
     uint8_t current_chip_id = get_current_chip_id();
     hemaia_d2d_link_initialize_4c1m(current_chip_id);
     init_uart(get_current_chip_baseaddress(), 32, 1);
-    enable_vec();
     enable_sw_interrupts();
     if (bingo_hemaia_system_mmap_init() < 0) {
         printf("Chip(%x, %x): [Host] Error when initializing Allocator\r\n",

@@ -11,8 +11,6 @@ int main() {
     uint8_t current_chip_id = get_current_chip_id();
 
     init_uart(current_chip_address_prefix, 32, 1);
-    // Enable vector extension
-    enable_vec();
     OFFLOAD_BINGO_HW_DEBUG_PRINT_SAFE("Single-chip Offload HW Bingo Main\r\n");
     OFFLOAD_BINGO_HW_DEBUG_PRINT_SAFE(
         "Chip(%x, %x): [Host] Start Offloading Program\r\n",
