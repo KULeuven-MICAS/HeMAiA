@@ -745,7 +745,10 @@ class HeMAiASimRunner:
                 coordinates = [
                     (int(x), int(y))
                     for x, y in re.findall(
-                        r"coordinate\s*:\s*\[\s*(\d+)\s*,\s*(\d+)\s*\]",
+                        # HJSON accepts both JSON-style comma separators and
+                        # newline/whitespace-separated array elements.  The
+                        # deterministic generated cfg uses the latter form.
+                        r"coordinate\s*:\s*\[\s*(\d+)\s*,?\s*(\d+)\s*\]",
                         text[chip_start:mem_start],
                     )
                 ]
@@ -1430,7 +1433,10 @@ class HeMAiASimRunner:
     def stage_simulation_artifacts(self, tasks_info: List[Tuple[Path, str]]) -> None:
         """Copy the selected shared simulator artefacts to every prepared task."""
         sim_root = self.repo_root / "target/sim"
-        link_large_directories = self._sim_cfg_flag("sim_with_netlist")
+        link_large_directories = (
+            self._sim_cfg_flag("sim_with_netlist")
+            or self._sim_cfg_flag("sim_with_mem_macro")
+        )
         for rel in self.spec["stage"]:
             src = sim_root / rel
             if not src.exists():
@@ -1439,9 +1445,10 @@ class HeMAiASimRunner:
                 )
             for task_dir, _ in tasks_info:
                 dst = task_dir / rel
-                # Compiled libraries can be hundreds of gigabytes for a gate
-                # netlist.  Keep one backend copy and use relocatable links from
-                # each task rather than duplicating work-vsim/simv.daidir.
+                # Compiled libraries can be hundreds of megabytes for vendor
+                # macros and hundreds of gigabytes for a gate netlist. Keep one
+                # backend copy and use relocatable links from each task rather
+                # than duplicating work-vsim/simv.daidir.
                 if src.is_dir() and link_large_directories:
                     dst.parent.mkdir(parents=True, exist_ok=True)
                     if dst.is_symlink() or dst.is_file():

@@ -53,8 +53,6 @@ Task dependency graph:
     Reduce_Add_k0_to_k5 + Pull_D_k6_to_chip00_c0_tcdm -> Reduce_Add_k0_to_k6
     Reduce_Add_k0_to_k6 + Pull_D_k7_to_chip00_c0_tcdm -> Reduce_Add_k0_to_k7
     Reduce_Add_k0_to_k7 -> Check_Final_i32_D
-    Check_Final_i32_D -> Dequant_Final_i32_to_fp32
-    Dequant_Final_i32_to_fp32 -> Check_fp32_D
 """
 
 import argparse
@@ -75,7 +73,6 @@ from bingo_dfg import BingoDFG  # noqa E402
 from bingo_helpers import chiplet_addr_transform_loc  # noqa E402
 from bingo_kernel_args import (  # noqa E402
     HostBingoKernelAraAddI32Args,
-    HostBingoKernelAraDequantizeI32F32Args,
     HostBingoKernelCheckResultArgs,
     SnaxBingoKernelGemmFullArgs,
     SnaxBingoKernelIdma1dCopyArgs,
@@ -265,15 +262,14 @@ def define_memory_handles(params):
                 cluster_id=cluster_id,
             )
             if chiplet != 0x00:
-                l3_offset = cluster_id * params["D_bytes"]
                 mem["D_remote_l3"][key] = BingoMemSymbol(
                     "D_partial_local_l3",
-                    offset=l3_offset,
+                    offset=0,
                 )
                 mem["D_remote_l3_full"][key] = chiplet_symbol_expr(
                     chiplet,
                     "D_partial_local_l3",
-                    l3_offset,
+                    0,
                 )
 
     mem["D_reduce_l1"][0] = mem["D_l1"][(0x00, 0)]
@@ -291,15 +287,6 @@ def define_memory_handles(params):
         mem["D_reduce_l1"][idx] = reduce_partial_l1[(idx - 1) % len(reduce_partial_l1)]
 
     mem["golden_sum_final_mp"] = BingoMemFixedAddr(params["golden_sum_final_mp"])
-    mem["golden_fp32_mp"] = BingoMemFixedAddr(params["golden_fp32_mp"])
-    mem["combined_scale_mp"] = BingoMemFixedAddr(params["combined_scale_mp"])
-    mem["fp32_D_l3"] = BingoMemAlloc(
-        "fp32_D_l3",
-        size=params["fp32_D_bytes"],
-        mem_level="L3",
-        chip_id=0x00,
-    )
-
     return mem
 
 
@@ -486,6 +473,11 @@ def create_dfg(params, mem, platform):
                     cluster_id,
                     idx,
                 )
+                if cluster_id > 0:
+                    # Both clusters on a remote chiplet reuse one 4 KiB L3
+                    # staging slot. Do not overwrite cluster 0's partial until
+                    # chip00 has pulled it into its reduction scratchpad.
+                    dfg.bingo_add_edge(copy_nodes[idx - 1], store)
                 dfg.bingo_add_edge(gemm, store)
                 dfg.bingo_add_edge(store, copy_nodes[idx])
                 reduce_ready[idx] = copy_nodes[idx]
@@ -538,44 +530,9 @@ def create_dfg(params, mem, platform):
             ),
         ),
     )
-    dequant = add_node(
-        dfg,
-        BingoNode(
-            assigned_chiplet_id=0x00,
-            assigned_cluster_id=0,
-            assigned_core_id=host_core_id,
-            node_name="Dequant_Final_i32_to_fp32",
-            kernel_name="__host_bingo_kernel_dequantize_i32f32",
-            kernel_args=HostBingoKernelAraDequantizeI32F32Args(
-                input_addr=prev_sum,
-                output_addr=mem["fp32_D_l3"],
-                scale_addr=mem["combined_scale_mp"],
-                num_elements=params["D_num_elements"],
-            ),
-        ),
-    )
-    check_fp32 = add_node(
-        dfg,
-        BingoNode(
-            assigned_chiplet_id=0x00,
-            assigned_cluster_id=0,
-            assigned_core_id=host_core_id,
-            node_name="Check_fp32_D",
-            kernel_name="__host_bingo_kernel_check_result",
-            kernel_args=HostBingoKernelCheckResultArgs(
-                golden_data_addr=mem["golden_fp32_mp"],
-                output_data_addr=mem["fp32_D_l3"],
-                data_size=params["fp32_D_bytes"],
-                name="fp32_D",
-            ),
-        ),
-    )
-
     dfg.bingo_add_edge(prev_ready, check_final_i32)
-    dfg.bingo_add_edge(check_final_i32, dequant)
-    dfg.bingo_add_edge(dequant, check_fp32)
 
-    return dfg, check_fp32
+    return dfg, check_final_i32
 
 
 def main():
@@ -600,13 +557,13 @@ def main():
     validate_platform(platform)
 
     mem = define_memory_handles(params)
-    dfg, check_fp32 = create_dfg(params, mem, platform)
+    dfg, check_final_i32 = create_dfg(params, mem, platform)
 
     total_compute_nodes = params["k_split"] * 3
     total_remote_store_nodes = (len(EXPECTED_CHIPLETS) - 1) * len(CLUSTER_IDS)
     total_copy_nodes = params["k_split"] - 1
     total_reduce_nodes = params["k_split"] - 1
-    total_final_nodes = 3
+    total_final_nodes = 1
     total_nodes = (
         total_compute_nodes
         + total_remote_store_nodes
@@ -616,8 +573,7 @@ def main():
     )
     print(
         "Built DFG: A/B load + GEMM on 8 clusters, stage remote partials, "
-        "copy partials to chip00 C0 TCDM, reduce, final INT32 check, "
-        "dequantize, FP32 check"
+        "copy partials to chip00 C0 TCDM, reduce, final INT32 check"
     )
     print(f"  active_chiplets={[chip_hex(c) for c in EXPECTED_CHIPLETS]}")
     print(f"  active_clusters={CLUSTER_IDS}")
@@ -636,7 +592,7 @@ def main():
         extra_include_header_list=["ksplit_gemm_data.h"],
     )
 
-    return check_fp32
+    return check_final_i32
 
 
 if __name__ == "__main__":

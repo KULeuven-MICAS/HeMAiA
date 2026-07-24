@@ -34,7 +34,7 @@ def emit_header_file(**kwargs):
     local_l3_buffers = [
         "",
         "// Per-chiplet L3 staging slots for remote partial-D pulls.",
-        f"int32_t D_partial_local_l3[{CLUSTERS_PER_CHIPLET * d_num_elements}] "
+        f"int32_t D_partial_local_l3[{d_num_elements}] "
         "__attribute__ ((aligned (64)));",
     ]
 
