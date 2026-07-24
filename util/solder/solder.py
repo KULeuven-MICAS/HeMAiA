@@ -733,7 +733,7 @@ class AxiBus(Bus):
             name,
             inst_name=None,
             to=None,
-            log_depth=2):
+            log_depth=3):
         if self.clk == target_clk and self.rst == target_rst:
             if to is None:
                 return self
@@ -1135,7 +1135,7 @@ class AxiLiteBus(Bus):
             name,
             inst_name=None,
             to=None,
-            log_depth=2):
+            log_depth=3):
         if self.clk == target_clk and self.rst == target_rst:
             if to is None:
                 return self
