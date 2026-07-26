@@ -651,6 +651,7 @@ def am_connect_quad_wide_and_narrow_xbar(am, am_quad_wide_xbar, am_quad_narrow_x
     am_clusters = []
     am_clusters_periph = []
     am_clusters_leftover_spaces = []
+    am_clusters_xdma_ctrl_spaces = []
     addrs_clusters = []
     addrs_clusters_periph = []
     addrs_clusters_leftover_spaces = []
@@ -682,20 +683,41 @@ def am_connect_quad_wide_and_narrow_xbar(am, am_quad_wide_xbar, am_quad_narrow_x
         )
         # We do not have the cluster zero mem
         # Remaining space is reserved for XDMA
+        #
+        # The xDMA cross-cluster CONTROL MMIO (cfg/grant/finish) is the top 12 KiB of the
+        # cluster window (xdma_axi_adapter MMIO{Cfg,Grant,Finish}Offset = cluster_end -
+        # {12,8,4} KiB). It carries NARROW control writes. A cross-CHIP control write is
+        # upsized to WIDE to cross the D2D link (hemaia_multichip is on the wide xbar
+        # only); if the top region is also on the wide xbar the wide-arriving control
+        # lands on the cluster's WIDE slave -- which has no cfg demux (that lives on the
+        # narrow slave) -- so it is dropped, the remote writer is never configured, no
+        # grant returns, and the sender's remote write hangs. Keep the control region
+        # NARROW-only so it falls through to SOC_NARROW on the receiver and reaches the
+        # narrow cfg slave. The DATA slot (next 4 KiB down) stays wide.
+        xdma_ctrl_mmio_size = 0x3000  # cfg + grant + finish, 4 KiB each
+        cluster_window_end = cluster_base_addr + (i + 1) * clusters_base_offset
+        left_over_start = cluster_base_addr + i * clusters_base_offset + clusters_tcdm_size + clusters_periph_size + clusters_zero_mem_size
         cluster_left_over_space = am.new_leaf(
                 f"quad_wide_cluster_{i}_space_after_tcdm", # name
-                clusters_base_offset - clusters_tcdm_size - clusters_periph_size - clusters_zero_mem_size, # length
-                cluster_base_addr + i * clusters_base_offset + clusters_tcdm_size + clusters_periph_size + clusters_zero_mem_size # addr
+                (cluster_window_end - xdma_ctrl_mmio_size) - left_over_start, # length (data slot + unused, wide+narrow)
+                left_over_start # addr
             )
         cluster_left_over_space.attach_to(am_quad_wide_xbar)
         cluster_left_over_space.attach_to(am_quad_narrow_xbar)
         am_clusters_leftover_spaces.append(cluster_left_over_space)
         addrs_clusters_leftover_spaces.append(
-            (cluster_base_addr + i * clusters_base_offset + clusters_tcdm_size + clusters_periph_size + clusters_zero_mem_size,
-             cluster_base_addr + i * clusters_base_offset + clusters_base_offset)
-        )  
+            (left_over_start, cluster_window_end - xdma_ctrl_mmio_size)
+        )
+        # xDMA cross-cluster CONTROL MMIO (cfg/grant/finish): NARROW-only
+        cluster_xdma_ctrl_space = am.new_leaf(
+                f"quad_narrow_cluster_{i}_xdma_ctrl", # name
+                xdma_ctrl_mmio_size, # length
+                cluster_window_end - xdma_ctrl_mmio_size # addr
+            )
+        cluster_xdma_ctrl_space.attach_to(am_quad_narrow_xbar)
+        am_clusters_xdma_ctrl_spaces.append(cluster_xdma_ctrl_space)
         
-    return am_clusters, am_clusters_periph, am_clusters_leftover_spaces, addrs_clusters, addrs_clusters_periph, addrs_clusters_leftover_spaces
+    return am_clusters, am_clusters_periph, am_clusters_leftover_spaces, am_clusters_xdma_ctrl_spaces, addrs_clusters, addrs_clusters_periph, addrs_clusters_leftover_spaces
 
 # def am_connect_soc_wide_xbar_quad(am, am_soc_narrow_xbar, am_wide_xbar_quadrant_s1, am_narrow_xbar_quadrant_s1, occamy_cfg, cluster_generators):
 #     ##############################

@@ -328,7 +328,7 @@ def main():
     am_wide_hemaia_mem, am_wide_hemaia_xdma_data_io, am_wide_zero_mem = occamy.am_connect_soc_wide_xbar_mem(
         am, am_soc_wide_xbar, occamy_cfg)
     # Quad Wide and Narrow Xbar
-    am_clusters, am_clusters_periph, am_clusters_leftover_spaces, addrs_clusters, addrs_clusters_periph, addrs_clusters_leftover_spaces = occamy.am_connect_quad_wide_and_narrow_xbar(
+    am_clusters, am_clusters_periph, am_clusters_leftover_spaces, am_clusters_xdma_ctrl_spaces, addrs_clusters, addrs_clusters_periph, addrs_clusters_leftover_spaces = occamy.am_connect_quad_wide_and_narrow_xbar(
         am, am_quad_wide_xbar, am_quad_narrow_xbar, cluster_generators)
     ####################################################################
     # Then we connect between xbars
@@ -671,7 +671,7 @@ def main():
     quad_narrow_xbar.add_input("soc_to_quad")
     quad_narrow_xbar.add_output_entry("quad_to_soc", am_quad_to_soc_axi_xbar)
     for i in range(nr_s1_clusters):
-        quad_narrow_xbar.add_output_multi_entries("cluster_{}".format(i), [am_clusters[i], am_clusters_periph[i], am_clusters_leftover_spaces[i]])
+        quad_narrow_xbar.add_output_multi_entries("cluster_{}".format(i), [am_clusters[i], am_clusters_periph[i], am_clusters_leftover_spaces[i], am_clusters_xdma_ctrl_spaces[i]])
         quad_narrow_xbar.add_input("cluster_{}".format(i))
     
     # wide_xbar_quadrant_s1.add_output("top", [])
