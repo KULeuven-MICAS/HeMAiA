@@ -1,0 +1,9 @@
+// Copyright 2026 KU Leuven.
+// Licensed under the Apache License, Version 2.0, see LICENSE for details.
+// SPDX-License-Identifier: Apache-2.0
+{
+    // P=4 in-fabric moment-merge across the four compute chiplets 00, 01, 10, 11
+    // (one cluster per chiplet). The fold crosses the die-to-die link.
+    num_chiplets: 4
+    num_clusters: 1
+}

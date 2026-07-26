@@ -398,30 +398,49 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_elementwise_add_ab(void *arg)
 // `acc_en` selects accumulate-on-arrival (StreamMomentMergeRt, snax_cluster@5e17bd6f): the receiver keeps a
 // persistent (m,l) accumulator per slot and folds each arriving beat INTO it, so P producers can push straight
 // at the merger with no assemble phase and no P<=8 wall. acc_en=0 keeps the original stateless-per-beat fold.
-// CSR(0) layout: [7:0] nValid | [8] accEn | [9] accInit | [12:10] accSlot -- still ONE user CSR, so the
-// inter-cluster cfg serdes is unchanged and a remote push carries these bits in its writerExtCfg exactly as
-// it already carries nValid.
+// CSR(0) layout: [7:0] nValid | [8] accEn | [9] accInit | [12:10] accSlot | [15:13] combineMode -- still ONE
+// user CSR, so the inter-cluster / D2D cfg serdes is unchanged and a remote push carries these bits in its
+// writerExtCfg exactly as it already carries nValid. combineMode selects the monoid role on the UNIFIED cell
+// (UnifiedMonoidMergeRt) that superseded the separate StreamMomentMergeRt/NormStat/Attn modules -- MOMENT here.
+//
+// UnifiedMonoidMergeRt combineMode (csr(0)[15:13], see UnifiedMonoidMergeRt.scala): SUM=0 MOMENT=1 ATTN=2
+// MAXPOOL=3 MOMENT2=5. The separate-module cfg (WRITER_EXT_STREAMMOMENTMERGERT) has no combineMode field, so
+// keep both build worlds compiling: prefer the unified cell, fall back to the fixed module if that is present.
+#define XDMA_MONOID_COMBINE_SHIFT 13u
+#define XDMA_MONOID_MODE_SUM      0u
+#define XDMA_MONOID_MODE_MOMENT   1u
+#define XDMA_MONOID_MODE_ATTN     2u
+#define XDMA_MONOID_MODE_MAXPOOL  3u
 static inline uint32_t xdma_moment_merge_push_run(uint64_t src_addr, uint64_t dst_addr, uint32_t nvalid,
                                                   uint32_t acc_en, uint32_t acc_init, uint32_t acc_slot)
 {
     BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
-#ifdef WRITER_EXT_STREAMMOMENTMERGERT
+#if defined(WRITER_EXT_UNIFIEDMONOIDMERGERT) || defined(WRITER_EXT_STREAMMOMENTMERGERT)
     xdma_disable_all_extensions();
     uint32_t csr[1] = { (nvalid & 0xFFu)
                         | ((acc_en   & 0x1u) << 8)
                         | ((acc_init & 0x1u) << 9)
-                        | ((acc_slot & 0x7u) << 10) };
-    xdma_enable_dst_ext(WRITER_EXT_STREAMMOMENTMERGERT, csr);
+                        | ((acc_slot & 0x7u) << 10)
+#ifdef WRITER_EXT_UNIFIEDMONOIDMERGERT
+                        | (XDMA_MONOID_MODE_MOMENT << XDMA_MONOID_COMBINE_SHIFT)
+#endif
+                      };
+#ifdef WRITER_EXT_UNIFIEDMONOIDMERGERT
+    const uint8_t ext = WRITER_EXT_UNIFIEDMONOIDMERGERT;   // unified cell, MOMENT mode
+#else
+    const uint8_t ext = WRITER_EXT_STREAMMOMENTMERGERT;    // legacy fixed module
+#endif
+    xdma_enable_dst_ext(ext, csr);
     BINGO_XDMA_TRY(xdma_memcpy_1d_full_addr(src_addr, dst_addr, XDMA_WIDTH), "xdma_moment_merge_push");
     BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
     BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
     xdma_task_t task_id = xdma_start();
     xdma_wait_task(task_id);
     BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
-    xdma_disable_dst_ext(WRITER_EXT_STREAMMOMENTMERGERT);
+    xdma_disable_dst_ext(ext);
     return BINGO_RET_SUCC;
 #else
-    printf_safe("[Cluster %d Core %d]: Error! xDMA moment_merge_push needs WRITER_EXT_STREAMMOMENTMERGERT "
+    printf_safe("[Cluster %d Core %d]: Error! xDMA moment_merge_push needs WRITER_EXT_UNIFIEDMONOIDMERGERT "
                 "(cfg/snax_xdma_test.hjson) -- this cluster's writer_extensions doesn't have it.\r\n",
                 snrt_cluster_idx(), snrt_cluster_core_idx());
     (void)src_addr; (void)dst_addr; (void)nvalid;
