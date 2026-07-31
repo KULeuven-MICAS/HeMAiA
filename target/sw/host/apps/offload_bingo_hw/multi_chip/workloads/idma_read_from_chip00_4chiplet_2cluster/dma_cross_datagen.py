@@ -6,7 +6,7 @@
 #
 # Xiaoling Yi <xiaoling.yi@kuleuven.be>
 
-"""Data generator for dma_read_from_chip00_4chiplet_2cluster."""
+"""Data generator for idma_read_from_chip00_4chiplet_2cluster."""
 
 import argparse
 import os
@@ -35,7 +35,7 @@ def emit_header_file(**kwargs):
     data_bytes = int(kwargs.get("data_bytes", 1024))
     if num_data != 8:
         raise ValueError(
-            f"dma_read_from_chip00_4chiplet_2cluster expects num_data=8, got {num_data}"
+            f"idma_read_from_chip00_4chiplet_2cluster expects num_data=8, got {num_data}"
         )
     if data_bytes <= 0:
         raise ValueError(f"data_bytes must be positive, got {data_bytes}")
@@ -81,7 +81,9 @@ def emit_header_file(**kwargs):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Generating data for two-cluster DMA test")
+    parser = argparse.ArgumentParser(
+        description="Generating data for two-cluster system-iDMA test"
+    )
     parser.add_argument("-c", "--cfg", type=pathlib.Path, required=True)
     parser.add_argument("--hwcfg", type=pathlib.Path, required=True)
     args = parser.parse_args()

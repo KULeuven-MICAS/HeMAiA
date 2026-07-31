@@ -51,7 +51,7 @@ from bingo_platform import guard_chiplet_count, guard_cluster_count, parse_platf
 from dma_cross_datagen import emit_header_file  # noqa E402
 
 
-WORKLOAD_NAME = "dma_read_from_chip00_4chiplet_2cluster"
+WORKLOAD_NAME = "xdma_read_from_chip00_4chiplet_2cluster"
 EXPECTED_CHIPLETS = [0x00, 0x01, 0x10, 0x11]
 CLUSTER_IDS = [0, 1]
 

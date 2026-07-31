@@ -30,10 +30,10 @@ runs:
     CHIP_TYPE: multi_chip
     WORKLOAD: gemm_ksplit_4chiplet_2cluster
     DEV_APP: snax-bingo-offload
-  # dma_read_from_chip00_4chiplet_2cluster
+  # xdma_read_from_chip00_4chiplet_2cluster
   - HOST_APP_TYPE: offload_bingo_hw
     CHIP_TYPE: multi_chip
-    WORKLOAD: dma_read_from_chip00_4chiplet_2cluster
+    WORKLOAD: xdma_read_from_chip00_4chiplet_2cluster
     DEV_APP: snax-bingo-offload
   # ---- offload_legacy / single_chip ----
   # versacore-matmul-profile-2cluster-4chip

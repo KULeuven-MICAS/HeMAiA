@@ -316,6 +316,11 @@ static inline uint64_t __host_bingo_kernel_xdma_1d_copy(void *arg){
         return BINGO_RET_FAIL;
     }
 
+    printf_safe(
+        "Chip(%x, %x): [Host][xDMA] pull src=0x%lx dst=0x%lx size=%lu\r\n",
+        get_current_chip_loc_x(), get_current_chip_loc_y(), src_addr, dst_addr,
+        size);
+
     BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
     int32_t cfg_ret = hemaia_xdma_memcpy_1d((const void*)(uintptr_t)src_addr,
                                             (void*)(uintptr_t)dst_addr,
@@ -332,7 +337,38 @@ static inline uint64_t __host_bingo_kernel_xdma_1d_copy(void *arg){
     uint32_t task_id = hemaia_xdma_start();
     // !!! Note: only work when the src and dst memory is not the same!!!
     hemaia_xdma_remote_wait(task_id);
+    // Order the completion-register read before inspecting memory written by
+    // xDMA. The normal result-check kernel also fences before reading data.
+    asm volatile("fence" ::: "memory");
     BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
+
+    uint32_t commit_local =
+        hemaia_read_xdma_cfg_reg(XDMA_COMMIT_LOCAL_TASK_PTR);
+    uint32_t commit_remote =
+        hemaia_read_xdma_cfg_reg(XDMA_COMMIT_REMOTE_TASK_PTR);
+    uint32_t finish_local =
+        hemaia_read_xdma_cfg_reg(XDMA_FINISH_LOCAL_TASK_PTR);
+    uint32_t finish_remote =
+        hemaia_read_xdma_cfg_reg(XDMA_FINISH_REMOTE_TASK_PTR);
+
+    printf_safe(
+        "Chip(%x, %x): [Host][xDMA] done task=%u "
+        "commit(local=%u remote=%u) finish(local=%u remote=%u)\r\n",
+        get_current_chip_loc_x(), get_current_chip_loc_y(), task_id,
+        commit_local, commit_remote, finish_local, finish_remote);
+
+    if (size >= 8) {
+        volatile const uint8_t *dst_data =
+            (volatile const uint8_t *)(uintptr_t)dst_addr;
+        printf_safe(
+            "Chip(%x, %x): [Host][xDMA] dst[0..7]="
+            "%02x %02x %02x %02x %02x %02x %02x %02x\r\n",
+            get_current_chip_loc_x(), get_current_chip_loc_y(),
+            (uint32_t)dst_data[0], (uint32_t)dst_data[1],
+            (uint32_t)dst_data[2], (uint32_t)dst_data[3],
+            (uint32_t)dst_data[4], (uint32_t)dst_data[5],
+            (uint32_t)dst_data[6], (uint32_t)dst_data[7]);
+    }
     sp->return_value = (uint32_t)dst_addr;
     sp->num_return_values = 0;
     return BINGO_RET_SUCC;

@@ -17,7 +17,8 @@ APPS += dma_for_gemm_msplit_4chiplet_1cluster
 APPS += host_int32_add_4chiplet_1cluster
 APPS += xdma_int32_add_4chiplet_1cluster
 APPS += dma_read_from_chip00_4chiplet_1cluster
-APPS += dma_read_from_chip00_4chiplet_2cluster
+APPS += xdma_read_from_chip00_4chiplet_2cluster
+APPS += idma_read_from_chip00_4chiplet_2cluster
 APPS += dma_write_from_other_chip_4chiplet_1cluster
 APPS += dvfs_cross_trigger_4chiplet_1cluster
 
