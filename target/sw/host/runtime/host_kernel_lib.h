@@ -288,6 +288,21 @@ static inline uint64_t __host_bingo_kernel_idma(void *arg){
     bingo_kernel_scratchpad_t* sp = (bingo_kernel_scratchpad_t*)(uintptr_t)((uint64_t *)arg)[3];
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
+    printf_safe(
+        "Chip(%x, %x): [Host][iDMA] args: src_addr=0x%lx "
+        "dst_addr=0x%lx size=%lu scratchpad_ptr=0x%lx\r\n",
+        get_current_chip_loc_x(), get_current_chip_loc_y(), src_addr, dst_addr,
+        size, (uint64_t)(uintptr_t)sp);
+    if (size >= 2) {
+        volatile const uint8_t *src_data =
+            (volatile const uint8_t *)(uintptr_t)src_addr;
+        printf_safe(
+            "Chip(%x, %x): [Host][iDMA] before src=0x%lx "
+            "src[0..1]=%02x %02x\r\n",
+            get_current_chip_loc_x(), get_current_chip_loc_y(), src_addr,
+            (uint32_t)src_data[0], (uint32_t)src_data[1]);
+    }
+
     BINGO_TRACE_MARKER(BINGO_TRACE_HOST_IDMA_CFG_START);
     uint64_t tf_id = sys_dma_memcpy(get_current_chip_id(), dst_addr, src_addr, size);
     BINGO_TRACE_MARKER(BINGO_TRACE_HOST_IDMA_CFG_END);
@@ -296,7 +311,19 @@ static inline uint64_t __host_bingo_kernel_idma(void *arg){
     while (*(sys_dma_done_ptr(get_current_chip_id())) != tf_id) {
         asm volatile("nop");
     }
+    // Order the completion-register read before inspecting memory written by
+    // iDMA.
+    asm volatile("fence" ::: "memory");
     BINGO_TRACE_MARKER(BINGO_TRACE_HOST_IDMA_RUN_END);
+    if (size >= 2) {
+        volatile const uint8_t *dst_data =
+            (volatile const uint8_t *)(uintptr_t)dst_addr;
+        printf_safe(
+            "Chip(%x, %x): [Host][iDMA] after dst=0x%lx "
+            "dst[0..1]=%02x %02x\r\n",
+            get_current_chip_loc_x(), get_current_chip_loc_y(), dst_addr,
+            (uint32_t)dst_data[0], (uint32_t)dst_data[1]);
+    }
     return BINGO_RET_SUCC;
 }
 
@@ -320,6 +347,15 @@ static inline uint64_t __host_bingo_kernel_xdma_1d_copy(void *arg){
         "Chip(%x, %x): [Host][xDMA] pull src=0x%lx dst=0x%lx size=%lu\r\n",
         get_current_chip_loc_x(), get_current_chip_loc_y(), src_addr, dst_addr,
         size);
+    if (size >= 2) {
+        volatile const uint8_t *src_data =
+            (volatile const uint8_t *)(uintptr_t)src_addr;
+        printf_safe(
+            "Chip(%x, %x): [Host][xDMA] before src=0x%lx "
+            "src[0..1]=%02x %02x\r\n",
+            get_current_chip_loc_x(), get_current_chip_loc_y(), src_addr,
+            (uint32_t)src_data[0], (uint32_t)src_data[1]);
+    }
 
     BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
     int32_t cfg_ret = hemaia_xdma_memcpy_1d((const void*)(uintptr_t)src_addr,
@@ -357,17 +393,14 @@ static inline uint64_t __host_bingo_kernel_xdma_1d_copy(void *arg){
         get_current_chip_loc_x(), get_current_chip_loc_y(), task_id,
         commit_local, commit_remote, finish_local, finish_remote);
 
-    if (size >= 8) {
+    if (size >= 2) {
         volatile const uint8_t *dst_data =
             (volatile const uint8_t *)(uintptr_t)dst_addr;
         printf_safe(
-            "Chip(%x, %x): [Host][xDMA] dst[0..7]="
-            "%02x %02x %02x %02x %02x %02x %02x %02x\r\n",
-            get_current_chip_loc_x(), get_current_chip_loc_y(),
-            (uint32_t)dst_data[0], (uint32_t)dst_data[1],
-            (uint32_t)dst_data[2], (uint32_t)dst_data[3],
-            (uint32_t)dst_data[4], (uint32_t)dst_data[5],
-            (uint32_t)dst_data[6], (uint32_t)dst_data[7]);
+            "Chip(%x, %x): [Host][xDMA] after dst=0x%lx "
+            "dst[0..1]=%02x %02x\r\n",
+            get_current_chip_loc_x(), get_current_chip_loc_y(), dst_addr,
+            (uint32_t)dst_data[0], (uint32_t)dst_data[1]);
     }
     sp->return_value = (uint32_t)dst_addr;
     sp->num_return_values = 0;
