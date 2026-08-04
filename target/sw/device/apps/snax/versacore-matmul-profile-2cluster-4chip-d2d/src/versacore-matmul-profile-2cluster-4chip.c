@@ -14,10 +14,17 @@
 #include "snax_versacore_lib.h"
 
 // Memory-chip coordinate in the 4-compute-chip tapeout configurations.
+#define COMPUTE_CHIP_ID 0x10
 #define MEM_CHIP_LOC_X 0x2
 #define MEM_CHIP_LOC_Y 0x0
 
 int main() {
+    // The single-chip host configures only chip 0x10's direct east link to the
+    // memory chip. Let every core on the other compute chips exit cleanly.
+    if (get_current_chip_id() != COMPUTE_CHIP_ID) {
+        return 0;
+    }
+
     // Set err value for checking
     int err = 0;
 
