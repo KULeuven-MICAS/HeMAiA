@@ -3,9 +3,21 @@
 #
 # The SIMD clusters contain the base GEMM cores and all other 2C functionality,
 # so this suite runs every task from tapeout_2c first. The SIMD-specific dummy
-# task is appended after the six base tasks.
+# task is appended after the eight base tasks.
 
 runs:
+  # ---- host_only / multi_chip ----
+  # system_xdma_copy
+  - HOST_APP_TYPE: host_only
+    CHIP_TYPE: multi_chip
+    WORKLOAD: system_xdma_copy
+    DEV_APP: None
+  # system_idma_copy
+  - HOST_APP_TYPE: host_only
+    CHIP_TYPE: multi_chip
+    WORKLOAD: system_idma_copy
+    DEV_APP: None
+
   # ---- offload_bingo_hw / single_chip ----
   # dummy_2cluster
   - HOST_APP_TYPE: offload_bingo_hw
