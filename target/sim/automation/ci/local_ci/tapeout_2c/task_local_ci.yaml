@@ -1,13 +1,26 @@
 # Tasks for the HEMAIA TO 2C CFG only (hemaia_tapeout_2c.hjson).
 # 4 chiplets, 2x snax_versacore_to_256KB_cluster per chiplet.
 #
-# Only 2-cluster workloads belong in this list: guard_cluster_count() rejects a
-# workload whose params.hjson `num_clusters` differs from the cfg's cluster
-# count, and the app then fails to link.
+# Offload workloads in this list must target 2 clusters: guard_cluster_count()
+# rejects a workload whose params.hjson `num_clusters` differs from the cfg's
+# cluster count, and the app then fails to link. The host-only system DMA tests
+# do not access cluster TCDM and are independent of the cluster count.
 #
 # dummy_2cluster is a placeholder that exercises the boot + bingo DFG path.
 
 runs:
+  # ---- host_only / multi_chip ----
+  # system_xdma_copy
+  - HOST_APP_TYPE: host_only
+    CHIP_TYPE: multi_chip
+    WORKLOAD: system_xdma_copy
+    DEV_APP: None
+  # system_idma_copy
+  - HOST_APP_TYPE: host_only
+    CHIP_TYPE: multi_chip
+    WORKLOAD: system_idma_copy
+    DEV_APP: None
+
   # ---- offload_bingo_hw / single_chip ----
   # dummy_2cluster
   - HOST_APP_TYPE: offload_bingo_hw
