@@ -434,6 +434,84 @@ inline int32_t xdma_disable_dst_ext(uint8_t ext) {
     return 0;
 }
 
+// Junction (data-switch 2->1 fold) interface
+//
+// A writer-junction folds the arriving remote stream with this node's local read -- the collective
+// combine AT THE CROSSING (ElementwiseJunction = per-element ADD/MUL/MAX/MIN; MonoidJunction =
+// softmax/attn/norm merge). Arming a junction is ALSO what turns a chained write into a chain
+// GATHER: the frontend sets collectiveMode := junctionEnabled. The CSR bank mirrors the extension
+// bank exactly -- XDMA_DST_JCT_NUM junctions, per-junction param-CSR counts in
+// XDMA_DST_JCT_CUSTOM_CSR_NUM, an enable bitmask at XDMA_DST_JCT_ENABLE_PTR, and the param CSRs from
+// XDMA_DST_JCT_CSR_PTR. Guarded on the generated header so a cfg without junctions still compiles.
+#ifdef XDMA_DST_JCT_ENABLE_PTR
+#define BINGO_XDMA_JCT_CSR_CASE(base, k) \
+    case (k): snax_write_xdma_cfg_reg((base) + (k), val); break
+
+static inline void xdma_dst_jct_csr_write(uint32_t slot, uint32_t val) {
+    _Static_assert(XDMA_DST_JCT_CSR_NUM <= 8,
+        "dst junction CSRs exceed the 8-slot dispatch cap; extend the case list below.");
+    switch (slot) {
+        BINGO_XDMA_JCT_CSR_CASE(XDMA_DST_JCT_CSR_PTR, 0); BINGO_XDMA_JCT_CSR_CASE(XDMA_DST_JCT_CSR_PTR, 1);
+        BINGO_XDMA_JCT_CSR_CASE(XDMA_DST_JCT_CSR_PTR, 2); BINGO_XDMA_JCT_CSR_CASE(XDMA_DST_JCT_CSR_PTR, 3);
+        BINGO_XDMA_JCT_CSR_CASE(XDMA_DST_JCT_CSR_PTR, 4); BINGO_XDMA_JCT_CSR_CASE(XDMA_DST_JCT_CSR_PTR, 5);
+        BINGO_XDMA_JCT_CSR_CASE(XDMA_DST_JCT_CSR_PTR, 6); BINGO_XDMA_JCT_CSR_CASE(XDMA_DST_JCT_CSR_PTR, 7);
+        default: break;
+    }
+}
+#undef BINGO_XDMA_JCT_CSR_CASE
+
+inline int32_t xdma_enable_dst_junction(uint8_t jct, uint32_t* csr_value) {
+    if (jct >= XDMA_DST_JCT_NUM) {
+        return -1;
+    }
+    snax_write_xdma_cfg_reg(
+        XDMA_DST_JCT_ENABLE_PTR,
+        snax_read_xdma_cfg_reg(XDMA_DST_JCT_ENABLE_PTR) | (1 << jct));
+    const uint8_t counts[XDMA_DST_JCT_NUM] = XDMA_DST_JCT_CUSTOM_CSR_NUM;
+    uint32_t slot = 0;
+    for (uint8_t e = 0; e < jct; e++) slot += counts[e];
+    for (uint8_t i = 0; i < counts[jct]; i++) xdma_dst_jct_csr_write(slot + i, csr_value[i]);
+    return 0;
+}
+
+inline int32_t xdma_disable_dst_junction(uint8_t jct) {
+    if (jct >= XDMA_DST_JCT_NUM) {
+        return 0;
+    }
+    snax_write_xdma_cfg_reg(
+        XDMA_DST_JCT_ENABLE_PTR,
+        snax_read_xdma_cfg_reg(XDMA_DST_JCT_ENABLE_PTR) & ~(1 << jct));
+    return 0;
+}
+
+// ChainGather -- the mirror of multicast.
+//
+// A collector gathers `chain_num` remote partials, folding them along a chain (a writer-junction
+// combine at each crossing), and the folded answer lands in the collector's local buffer.
+//   local_src : the collector's OWN partial address (the reader ptr).
+//   chain[]   : the gather path in DATA order, ending at the collector's dst buffer --
+//               [S1, S2, ..., dst_local] -- programmed into the SAME zero-terminated
+//               XDMA_DST_ADDR_PTR array multicast uses. Each entry is that node's real partial
+//               address (the routers decode only the cluster tag).
+//   junction  : WRITER_JCT_ELEMENTWISEJUNCTION (per-element ADD/MUL/MAX/MIN) or
+//               WRITER_JCT_MONOIDJUNCTION (softmax/attn/norm merge).
+//   jct_csr0  : the junction's user CSR(0) -- Elementwise: [3:0]=op,[6:4]=fmt; Monoid:
+//               [7:0]=nValid,[15:13]=combineMode.
+// Arming the junction is what flips the transfer from a chained write to a gather; all addresses
+// are full (chip|cluster|offset) addresses.
+inline int32_t xdma_chain_gather_1d_full_address(uint64_t local_src, uint64_t* chain,
+                                                 uint32_t chain_num, uint32_t size,
+                                                 uint8_t junction, uint32_t jct_csr0) {
+    // Reader = collector's own partial; writerPtr[] = the chain. Same reg layout as multicast.
+    int32_t ret = xdma_multicast_1d_full_address(local_src, chain, chain_num, size);
+    if (ret != 0) {
+        return ret;
+    }
+    uint32_t csr[1] = {jct_csr0};
+    return xdma_enable_dst_junction(junction, csr);
+}
+#endif  // XDMA_DST_JCT_ENABLE_PTR
+
 // Handle for one issued xDMA transfer. `task_id` is the value the committed finish counter
 // must reach; `remote` records WHICH counter the HW bumped (0 = LOCAL, 1 = REMOTE). The xDMA
 // HW decides local vs remote from the transfer's writer/dst path; xdma_start() observes which

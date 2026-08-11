@@ -129,7 +129,11 @@ ifeq ($(SIM_WITH_WAVEFORM), 1)
 	# Preserve broad signal visibility only in the explicitly requested debug
 	# build.  Keeping +acc out of batch builds lets vopt optimize the design.
 	VOPT_FLAGS += +acc
-	VSIM_DO_CMD = log -r /*; run -a
+	# NOTE: `log -r /*` on the full 4-chiplet design OOM-kills vsim (millions of
+	# signals). +acc is still needed so multi-chip elaboration keeps otherwise-
+	# optimized signals (e.g. mem-chip axi_lite_demux slv_ar_chan). Keep the
+	# runtime dump OFF and log a scoped subtree by hand when a waveform is needed.
+	VSIM_DO_CMD = run -a
 endif
 
 # This flow does not annotate SDF: the gate-level netlist is a functional,

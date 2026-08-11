@@ -1,0 +1,5 @@
+{
+  // Single-chip 4-cluster ChainGather. One 64 B partial (16 fp32) per cluster.
+  num_clusters: 4
+  partial_elems: 16
+}

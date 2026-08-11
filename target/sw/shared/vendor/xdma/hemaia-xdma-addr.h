@@ -46,7 +46,17 @@
 #define XDMA_DST_EXT_CSR_NUM 0
 #define XDMA_DST_EXT_CUSTOM_CSR_NUM \
     {  }
-#define XDMA_START_PTR XDMA_DST_EXT_CSR_PTR + XDMA_DST_EXT_CSR_NUM
+
+// The junction region of the data switch (2->1 collective folds). Laid out exactly like the extension region --
+// one enable bitmask followed by the per-junction user CSRs -- immediately after the writer extensions, so with no
+// junction configured every pointer below collapses to the pre-junction layout.
+#define XDMA_DST_JCT_NUM 0
+#define XDMA_DST_JCT_ENABLE_PTR XDMA_DST_EXT_CSR_PTR + XDMA_DST_EXT_CSR_NUM
+#define XDMA_DST_JCT_CSR_PTR XDMA_DST_JCT_ENABLE_PTR + 0
+#define XDMA_DST_JCT_CSR_NUM 0
+#define XDMA_DST_JCT_CUSTOM_CSR_NUM \
+    {  }
+#define XDMA_START_PTR XDMA_DST_JCT_CSR_PTR + XDMA_DST_JCT_CSR_NUM
 #define XDMA_COMMIT_LOCAL_TASK_PTR XDMA_START_PTR + 1
 #define XDMA_COMMIT_REMOTE_TASK_PTR XDMA_COMMIT_LOCAL_TASK_PTR + 1
 #define XDMA_FINISH_LOCAL_TASK_PTR XDMA_COMMIT_REMOTE_TASK_PTR + 1
