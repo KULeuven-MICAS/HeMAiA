@@ -1,0 +1,7 @@
+{
+    num_chiplets: 4
+    num_clusters: 1
+    // One 1 KiB payload = 256 uint32 elements. Must be a multiple of
+    // XDMA_WIDTH (64 B) or xdma_memcpy_1d_full_addr refuses the transfer.
+    payload_bytes: 1024
+}
