@@ -1,0 +1,25 @@
+// Copyright 2026 KU Leuven.
+// Licensed under the Apache License, Version 2.0, see LICENSE for details.
+// SPDX-License-Identifier: Apache-2.0
+
+{
+  // Number of independent softmax vectors and elements in each vector.
+  softmax_rows: 64,
+  softmax_cols: 64,
+
+  // An input integer x represents the real value x / 2^input_frac_bits.
+  input_frac_bits: 4,
+
+  // exp() lookup-table precision and uint8 probability scale.
+  exp_frac_bits: 15,
+  output_scale: 255,
+
+  // Test generation and acceptance settings.
+  seed: 42,
+  input_min: -128,
+  input_max: 127,
+  reference_tolerance: 1,
+
+  // GEMM-X is on cluster 1 in the MHA test, so run softmax there as well.
+  target_cluster: 1,
+}
