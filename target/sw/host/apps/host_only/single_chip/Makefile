@@ -7,6 +7,7 @@
 # Single-chip host-only applications
 SUBDIRS = hello_world
 SUBDIRS += clk_rst_configurator
+SUBDIRS += io_drive_strength
 SUBDIRS += ci_ara
 # New decomposed Ara FP32 op-cost tests: one self-contained app per kernel
 # (ara_add, ara_exp, ...); each has its own src/main.c.
