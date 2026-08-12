@@ -80,6 +80,25 @@ module ${name}_top
   input  logic [3:0]  spis_sd_i,
 % endif
 
+  // Chip-level IO pad drive strength, from the SoC control register.
+  // Quasi-static: only written while the corresponding pins are idle.
+  (* false_path *) output logic [3:0] pad_drv_misc_o,
+% if occamy_cfg['hemaia_multichip']['single_chip'] is False:
+  (* false_path *) output logic [3:0] pad_drv_d2d_o,
+% endif
+  (* false_path *) output logic [3:0] pad_drv_uart_o,
+  (* false_path *) output logic [3:0] pad_drv_gpio_o,
+% if spi_master_present:
+  (* false_path *) output logic [3:0] pad_drv_spim_o,
+% endif
+% if spi_slave_present:
+  (* false_path *) output logic [3:0] pad_drv_spis_o,
+% endif
+% if i2c_present:
+  (* false_path *) output logic [3:0] pad_drv_i2c_o,
+% endif
+  (* false_path *) output logic [3:0] pad_drv_jtag_o,
+
   /// Boot ROM
   output ${soc_axi_lite_narrow_periph_xbar.out_bootrom.req_type()} bootrom_req_o,
   input  ${soc_axi_lite_narrow_periph_xbar.out_bootrom.rsp_type()} bootrom_rsp_i,
@@ -490,6 +509,26 @@ module ${name}_top
     .intr_ecc_wide_uncorrectable_o(irq.ecc_wide_uncorrectable),
     .intr_ecc_wide_correctable_o(irq.ecc_wide_correctable)
   );
+
+  // Chip-level IO pad drive strength. The pads have no clock of their own, so these are
+  // plain quasi-static register outputs; every DS code is a legal drive level, so a
+  // transient intermediate code during a write only briefly changes the drive strength.
+  assign pad_drv_misc_o = soc_ctrl_out.io_drive_strength.misc.q;
+% if occamy_cfg['hemaia_multichip']['single_chip'] is False:
+  assign pad_drv_d2d_o  = soc_ctrl_out.io_drive_strength.d2d.q;
+% endif
+  assign pad_drv_uart_o = soc_ctrl_out.io_drive_strength.uart.q;
+  assign pad_drv_gpio_o = soc_ctrl_out.io_drive_strength.gpio.q;
+% if spi_master_present:
+  assign pad_drv_spim_o = soc_ctrl_out.io_drive_strength.spim.q;
+% endif
+% if spi_slave_present:
+  assign pad_drv_spis_o = soc_ctrl_out.io_drive_strength.spis.q;
+% endif
+% if i2c_present:
+  assign pad_drv_i2c_o  = soc_ctrl_out.io_drive_strength.i2c.q;
+% endif
+  assign pad_drv_jtag_o = soc_ctrl_out.io_drive_strength.jtag.q;
 
   /////////////////////////////
   //   HEMAIA CLK RST CTRL   //
