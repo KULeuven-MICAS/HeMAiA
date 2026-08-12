@@ -142,7 +142,7 @@ clobber one another:
 | `tapeout_1c/`     | `hemaia_tapeout_1c.hjson`      | 1x `snax_versacore_to_cluster`         | the full 36-task suite |
 | `tapeout_1c_simd/`| `hemaia_tapeout_1c_simd.hjson` | 1x `snax_versacore_to_simd_cluster`    | 36 base tasks + 5 SIMD `xdma_*` tasks |
 | `tapeout_2c/`     | `hemaia_tapeout_2c.hjson`      | 2x `snax_versacore_to_256KB_cluster`   | the full 6-task 2-cluster suite |
-| `tapeout_2c_simd/`| `hemaia_tapeout_2c_simd.hjson` | 2x `..._256KB_simd_cluster`            | 6 base tasks + `dummy_simd_2cluster` |
+| `tapeout_2c_simd/`| `hemaia_tapeout_2c_simd.hjson` | 2x `..._256KB_simd_cluster`            | 6 base tasks + `xdma_softmax_simd_2cluster` |
 
     cd ci/local_ci/tapeout_2c && python3 run_local_ci.py -j 8
 

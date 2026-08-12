@@ -1,0 +1,10 @@
+{
+    num_chiplets: 4
+    // Must match hemaia_tapeout_2c_simd.hjson, or guard_cluster_count() skips
+    // the workload and it will not link.
+    num_clusters: 2
+    // One 1 KiB payload = 256 uint32 elements, sent twice (once per destination
+    // cluster). Must be a multiple of XDMA_WIDTH (64 B) or
+    // xdma_memcpy_1d_full_addr refuses the transfer.
+    payload_bytes: 1024
+}

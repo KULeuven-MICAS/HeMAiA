@@ -189,6 +189,11 @@ runs:
     CHIP_TYPE: multi_chip
     WORKLOAD: xdma_int32_add_4chiplet_1cluster
     DEV_APP: snax-bingo-offload
+  # xdma_remote_write_4chiplet_1cluster
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: multi_chip
+    WORKLOAD: xdma_remote_write_4chiplet_1cluster
+    DEV_APP: snax-bingo-offload
   # dma_read_from_chip00_4chiplet_1cluster
   - HOST_APP_TYPE: offload_bingo_hw
     CHIP_TYPE: multi_chip

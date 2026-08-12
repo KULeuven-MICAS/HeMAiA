@@ -2,8 +2,8 @@
 # 4 chiplets, 2x snax_versacore_to_256KB_simd_cluster per chiplet.
 #
 # The SIMD clusters contain the base GEMM cores and all other 2C functionality,
-# so this suite runs every task from tapeout_2c first. The SIMD-specific dummy
-# task is appended after the eight base tasks.
+# so this suite runs every task from tapeout_2c first. The SIMD-specific task
+# (the minimal 2-cluster xDMA softmax) is appended after the base tasks.
 
 runs:
   # ---- host_only / multi_chip ----
@@ -50,6 +50,11 @@ runs:
     CHIP_TYPE: multi_chip
     WORKLOAD: xdma_read_from_chip00_4chiplet_2cluster
     DEV_APP: snax-bingo-offload
+  # xdma_remote_write_4chiplet_2cluster
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: multi_chip
+    WORKLOAD: xdma_remote_write_4chiplet_2cluster
+    DEV_APP: snax-bingo-offload
   # ---- offload_legacy / single_chip ----
   # versacore-matmul-profile-2cluster-4chip
   - HOST_APP_TYPE: offload_legacy
@@ -63,8 +68,8 @@ runs:
     DEV_APP: versacore-matmul-profile-2cluster-4chip-d2d
 
   # ---- SIMD-only offload_bingo_hw / single_chip ----
-  # dummy_simd_2cluster
+  # xdma_softmax_simd_2cluster
   - HOST_APP_TYPE: offload_bingo_hw
     CHIP_TYPE: single_chip
-    WORKLOAD: dummy_simd_2cluster
+    WORKLOAD: xdma_softmax_simd_2cluster
     DEV_APP: snax-bingo-offload

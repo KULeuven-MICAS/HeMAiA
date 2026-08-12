@@ -26,6 +26,7 @@ dependency graph comment block.
 - **xdma_ci_ops_1cluster**: Runs all xDMA operator types in one workload.
 - **xdma_1d_1cluster**: Minimal single xDMA 1D-copy functional test (load → copy → store → check).
 - **xdma_softmax_1cluster**: Fused FP16 row-wise softmax — the whole reduce(MAX) → EXP → normalize pipeline in one on-device DM-core kernel (integer reciprocal, no host round-trip); fp16 and int8 outputs, both checked.
+- **xdma_softmax_simd_2cluster**: Minimal 2-cluster SIMD (`hemaia_tapeout_2c_simd`) version of the above — one small fused softmax per cluster (`[1,64]` and `[2,64]`), run concurrently against per-cluster L1/L3 buffers. Kept tiny on purpose: only ~18 KiB of wide-SPM L3 heap is left on this cfg, so the full rows × cols sweep does not fit; take the cycle LUT from the 1-cluster workload.
 - **xdma_rmsnorm_1cluster**: Fused FP16 RMSNorm in one on-device kernel (sum-of-squares reduce → integer 1/sqrt → normalize); fp16 and int8 outputs, both checked.
 - **xdma_rope_1cluster**: Fused FP16 rotary position embedding (RoPE) in one on-device kernel — on-device adjacent-pair swap of x plus three StreamElementwise passes (x·cos, xswap·sin, add).
 - **xdma_silu_1cluster**: FP16 SiLU activation as a single xDMA StreamMap pass, plus a fused int8-quant pass.
@@ -57,6 +58,8 @@ dependency graph comment block.
 - **xdma_int32_add_4chiplet_1cluster**: Four-chiplet int32 cross chip addition workload using xdma.
 - **dma_read_from_chip00_4chiplet_1cluster**: Cross-chiplet DMA read test. The workload first loads four input chunks from the memory chip into the local L3 memories of chiplets `00`, `01`, `10`, and `11`. After each chiplet verifies its local chunk, chiplet `00` issues xDMA reads that pull the chunks from chiplets `01`, `10`, and `11` into chiplet `00` L3, then checks the received data against the golden buffers.
 - **dma_write_from_other_chip_4chiplet_1cluster**: Cross-chiplet DMA write test. The workload first loads and verifies one local L3 input chunk on each chiplet from the memory chip. Then chiplets `01`, `10`, and `11` each issue xDMA writes that push their local chunks into receive buffers in chiplet `00` L3, where chiplet `00` validates the received data.
+- **xdma_remote_write_4chiplet_1cluster**: Smallest test of a cross-chiplet **cluster**-xDMA remote write — chiplet `00` cluster 0 pushes 1 KiB straight out of its own L1 into chiplet `01` cluster 0's L1, and chiplet `01` checks what landed. Unlike the `dma_*` tests above (host xDMA/iDMA on L3), this exercises the xDMA cross-cluster cfg/grant handshake across the D2D link; a hang means the handshake never closed. The receive buffer is pre-poisoned and the golden lives in the checker's own L3, so a pass cannot come from stale L1 or a confounding cross-chip read.
+- **xdma_remote_write_4chiplet_2cluster**: The same, into **both** clusters of the remote chiplet (chiplet `00` cluster 0 → chiplet `10` clusters 0 and 1). The destination cluster is implied by the destination address, so each write exercises a different cluster's control-MMIO window; both destinations are poisoned and checked, so an address that resolves onto the wrong cluster leaves the other poisoned and fails.
 
 ## Build Command
 ```bash
