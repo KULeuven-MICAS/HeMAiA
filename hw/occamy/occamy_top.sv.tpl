@@ -82,22 +82,22 @@ module ${name}_top
 
   // Chip-level IO pad drive strength, from the SoC control register.
   // Quasi-static: only written while the corresponding pins are idle.
-  (* false_path *) output logic [3:0] pad_drv_misc_o,
+  output logic [3:0] pad_drv_misc_o,
 % if occamy_cfg['hemaia_multichip']['single_chip'] is False:
-  (* false_path *) output logic [3:0] pad_drv_d2d_o,
+  output logic [3:0] pad_drv_d2d_o,
 % endif
-  (* false_path *) output logic [3:0] pad_drv_uart_o,
-  (* false_path *) output logic [3:0] pad_drv_gpio_o,
+  output logic [3:0] pad_drv_uart_o,
+  output logic [3:0] pad_drv_gpio_o,
 % if spi_master_present:
-  (* false_path *) output logic [3:0] pad_drv_spim_o,
+  output logic [3:0] pad_drv_spim_o,
 % endif
 % if spi_slave_present:
-  (* false_path *) output logic [3:0] pad_drv_spis_o,
+  output logic [3:0] pad_drv_spis_o,
 % endif
 % if i2c_present:
-  (* false_path *) output logic [3:0] pad_drv_i2c_o,
+  output logic [3:0] pad_drv_i2c_o,
 % endif
-  (* false_path *) output logic [3:0] pad_drv_jtag_o,
+  output logic [3:0] pad_drv_jtag_o,
 
   /// Boot ROM
   output ${soc_axi_lite_narrow_periph_xbar.out_bootrom.req_type()} bootrom_req_o,
