@@ -1,13 +1,17 @@
 /* Copyright 2024 KU Leuven. */
+/* Generated from bootrom.ld.tpl by util/gen_bootrom_ld.py -- do not edit. */
 
 
 ENTRY(_start)
 
+/* Regions come from the generated platform headers: BOOTROM_BASE_ADDR and
+   SPM_NARROW_BASE_ADDR in occamy_base_addr.h, BOOTROM_SIZE and NARROW_SPM_SIZE in
+   occamy_memory_map.h. Sizes are configuration dependent, so they must not be
+   hardcoded. */
 MEMORY
 {
-  bootrom (rx)        : ORIGIN = 0x01000000, LENGTH = 16K
-  narrow_spm (rwx)    : ORIGIN = 0x70000000, LENGTH = 32K
-  wide_spm (rwx)      : ORIGIN = 0x80000000, LENGTH = 512K
+  bootrom (rx)        : ORIGIN = ${f"0x{bootrom_base:08x}"}, LENGTH = ${bootrom_size}
+  narrow_spm (rwx)    : ORIGIN = ${f"0x{narrow_spm_base:08x}"}, LENGTH = ${narrow_spm_size}
 }
 
 SECTIONS
@@ -28,7 +32,12 @@ SECTIONS
   /* scratch0 -> snitch_main function ptr */
   /* scartch1 -> comm buffer ptr          */
   /* scartch2 -> snitch exit code val     */
-  __soc_ctrl_scratch0     = 0x02000014;
-  __soc_ctrl_scratch1     = 0x02000018;
-  __soc_ctrl_scratch2     = 0x0200001c;
+  /* Derived from SOC_CTRL_BASE_ADDR in occamy_base_addr.h and
+     OCCAMY_SOC_SCRATCH_n_REG_OFFSET in occamy_soc_ctrl.h, the same generated
+     headers the host software uses, so the two cannot drift apart. The boot ROM
+     reads the entry point from scratch0 in assembly, which is why these have to
+     be linker symbols rather than C macros. */
+% for i, addr in enumerate(soc_ctrl_scratch):
+  __soc_ctrl_scratch${i}     = ${f"0x{addr:08x}"};
+% endfor
 }
