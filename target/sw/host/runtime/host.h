@@ -234,6 +234,93 @@ void set_d_cache_enable(uint16_t ena) {
 }
 
 //===============================================================
+// IO pad drive strength
+//===============================================================
+
+/**
+ * @brief Drive-strength groups of the chip-level IO pads.
+ *
+ * @detail Each enum value is the LSB of that group's field inside the
+ *         IO_DRIVE_STRENGTH register, taken from the generated header so it
+ *         follows any change to the register layout. Groups whose peripheral
+ *         is absent from the current configuration (e.g. SPIS on a build
+ *         without the SPI slave) still have a register field; writing it is
+ *         harmless, it is simply not wired to any pad.
+ */
+typedef enum {
+    IO_DRV_MISC = OCCAMY_SOC_IO_DRIVE_STRENGTH_MISC_OFFSET,
+    IO_DRV_D2D = OCCAMY_SOC_IO_DRIVE_STRENGTH_D2D_OFFSET,
+    IO_DRV_UART = OCCAMY_SOC_IO_DRIVE_STRENGTH_UART_OFFSET,
+    IO_DRV_GPIO = OCCAMY_SOC_IO_DRIVE_STRENGTH_GPIO_OFFSET,
+    IO_DRV_SPIM = OCCAMY_SOC_IO_DRIVE_STRENGTH_SPIM_OFFSET,
+    IO_DRV_SPIS = OCCAMY_SOC_IO_DRIVE_STRENGTH_SPIS_OFFSET,
+    IO_DRV_I2C = OCCAMY_SOC_IO_DRIVE_STRENGTH_I2C_OFFSET,
+    IO_DRV_JTAG = OCCAMY_SOC_IO_DRIVE_STRENGTH_JTAG_OFFSET,
+} io_drv_group_t;
+
+// Width of one group's field, and the value every field resets to.
+#define IO_DRV_MASK 0xfu
+#define IO_DRV_RESET 0x3u
+
+static inline uintptr_t io_drive_strength_addr(uint8_t chip_id) {
+    return (uintptr_t)chiplet_addr_transform_full(
+        chip_id, (uint64_t)soc_ctrl_io_drive_strength_addr());
+}
+
+static inline uint32_t get_io_drive_strength_raw(uint8_t chip_id) {
+    return readw(io_drive_strength_addr(chip_id));
+}
+
+static inline void set_io_drive_strength_raw(uint8_t chip_id, uint32_t value) {
+    writew(value, io_drive_strength_addr(chip_id));
+}
+
+static inline uint8_t get_io_drive_strength(uint8_t chip_id,
+                                            io_drv_group_t group) {
+    return (uint8_t)((get_io_drive_strength_raw(chip_id) >> group) &
+                     IO_DRV_MASK);
+}
+
+/**
+ * @brief Sets the drive strength of one group of IO pads.
+ *
+ * @detail A higher value gives more drive current and a faster edge, at the
+ *         cost of simultaneous-switching noise on the IO supply and of
+ *         overshoot into an unterminated board trace. Every code 0..15 is a
+ *         legal drive level.
+ *
+ *         The pads take the new value asynchronously, so only retune a group
+ *         while its pins are idle. In particular do not retune IO_DRV_UART
+ *         from code that is printing, or IO_DRV_JTAG while being debugged.
+ *
+ *         This is a read-modify-write of a single register, so it is not
+ *         atomic against another core touching another group concurrently.
+ */
+static inline void set_io_drive_strength(uint8_t chip_id, io_drv_group_t group,
+                                         uint8_t drv) {
+    uint32_t value = get_io_drive_strength_raw(chip_id);
+    value &= ~(IO_DRV_MASK << group);
+    value |= ((uint32_t)(drv & IO_DRV_MASK)) << group;
+    set_io_drive_strength_raw(chip_id, value);
+}
+
+/**
+ * @brief Sets every group of IO pads to the same drive strength.
+ */
+static inline void set_io_drive_strength_all(uint8_t chip_id, uint8_t drv) {
+    static const io_drv_group_t all_groups[] = {
+        IO_DRV_MISC, IO_DRV_D2D,  IO_DRV_UART, IO_DRV_GPIO,
+        IO_DRV_SPIM, IO_DRV_SPIS, IO_DRV_I2C,  IO_DRV_JTAG};
+    uint32_t field = (uint32_t)(drv & IO_DRV_MASK);
+    uint32_t value = 0;
+
+    for (size_t i = 0; i < ARRAY_ELEM_COUNT(all_groups); i++)
+        value |= field << all_groups[i];
+
+    set_io_drive_strength_raw(chip_id, value);
+}
+
+//===============================================================
 // Synchronization and mutual exclusion
 //===============================================================
 
