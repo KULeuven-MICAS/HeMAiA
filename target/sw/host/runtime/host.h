@@ -260,7 +260,7 @@ typedef enum {
 
 // Width of one group's field, and the value every field resets to.
 #define IO_DRV_MASK 0xfu
-#define IO_DRV_RESET 0x3u
+#define IO_DRV_RESET 0x4u
 
 static inline uintptr_t io_drive_strength_addr(uint8_t chip_id) {
     return (uintptr_t)chiplet_addr_transform_full(
