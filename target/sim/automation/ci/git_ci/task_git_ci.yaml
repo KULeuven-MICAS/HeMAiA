@@ -9,6 +9,11 @@ runs:
     CHIP_TYPE: single_chip
     WORKLOAD: clk_rst_configurator
     DEV_APP: None
+  # host_only / single_chip: io_drive_strength
+  - HOST_APP_TYPE: host_only
+    CHIP_TYPE: single_chip
+    WORKLOAD: io_drive_strength
+    DEV_APP: None
   # offload_legacy / single_chip: snax-xdma-copy
   - HOST_APP_TYPE: offload_legacy
     CHIP_TYPE: single_chip
