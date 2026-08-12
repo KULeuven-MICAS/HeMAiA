@@ -49,6 +49,8 @@ APPS += device_host_idma_check_1cluster
 # Placeholders for the 2-cluster tapeout CI suites (hemaia_tapeout_2c[_simd]).
 APPS += dummy_2cluster
 APPS += dummy_simd_2cluster
+# 2-cluster SIMD variant of the xDMA softmax sweep (hemaia_tapeout_2c_simd).
+APPS += xdma_softmax_simd_2cluster
 SUBDIRS = $(addprefix workloads/,$(APPS))
 
 

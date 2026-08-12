@@ -26,6 +26,7 @@ dependency graph comment block.
 - **xdma_ci_ops_1cluster**: Runs all xDMA operator types in one workload.
 - **xdma_1d_1cluster**: Minimal single xDMA 1D-copy functional test (load → copy → store → check).
 - **xdma_softmax_1cluster**: Fused FP16 row-wise softmax — the whole reduce(MAX) → EXP → normalize pipeline in one on-device DM-core kernel (integer reciprocal, no host round-trip); fp16 and int8 outputs, both checked.
+- **xdma_softmax_simd_2cluster**: Minimal 2-cluster SIMD (`hemaia_tapeout_2c_simd`) version of the above — one small fused softmax per cluster (`[1,64]` and `[2,64]`), run concurrently against per-cluster L1/L3 buffers. Kept tiny on purpose: only ~18 KiB of wide-SPM L3 heap is left on this cfg, so the full rows × cols sweep does not fit; take the cycle LUT from the 1-cluster workload.
 - **xdma_rmsnorm_1cluster**: Fused FP16 RMSNorm in one on-device kernel (sum-of-squares reduce → integer 1/sqrt → normalize); fp16 and int8 outputs, both checked.
 - **xdma_rope_1cluster**: Fused FP16 rotary position embedding (RoPE) in one on-device kernel — on-device adjacent-pair swap of x plus three StreamElementwise passes (x·cos, xswap·sin, add).
 - **xdma_silu_1cluster**: FP16 SiLU activation as a single xDMA StreamMap pass, plus a fused int8-quant pass.
