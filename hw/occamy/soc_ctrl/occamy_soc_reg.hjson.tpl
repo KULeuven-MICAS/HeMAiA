@@ -30,16 +30,6 @@
   bus_interfaces: [
     { protocol: "reg_iface", direction: "device" }
   ],
-  interrupt_list: [
-    { name: "ecc_narrow_uncorrectable",
-      desc: "Detected an uncorrectable ECC error on system narrow SRAM."},
-    { name: "ecc_narrow_correctable",
-      desc: "Detected a correctable ECC error on system narrow SRAM."},
-    { name: "ecc_wide_uncorrectable",
-      desc: "Detected an uncorrectable ECC error on system wide SRAM."},
-    { name: "ecc_wide_correctable",
-      desc: "Detected a correctable ECC error on system wide SRAM."}
-  ],
   regwidth: 32,
   registers: [
     { name: "VERSION",

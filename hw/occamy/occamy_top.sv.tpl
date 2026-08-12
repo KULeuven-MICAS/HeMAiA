@@ -158,8 +158,6 @@ module ${name}_top
   ${name}_soc_reg_pkg::${name}_soc_hw2reg_t soc_ctrl_in;
   // System boot address 
   logic [${occamy_cfg["addr_width"]-1}:0] boot_addr;
-  logic [1:0] spm_narrow_rerror;
-  logic [1:0] spm_wide_rerror;
 
   always_comb begin
     soc_ctrl_in = '0;
@@ -225,8 +223,6 @@ module ${name}_top
     .router2soc_req_i,
     .router2soc_rsp_o,
 % endif
-    .spm_narrow_rerror_o (spm_narrow_rerror),
-    .spm_wide_rerror_o (spm_wide_rerror),
     .mtip_i ( mtip ),
     .msip_i ( msip ),
     .eip_i ( eip ),
@@ -501,13 +497,7 @@ module ${name}_top
     .reg_rsp_o ( ${regbus_soc_ctrl.rsp_name()} ),
     .reg2hw_o  ( soc_ctrl_out ),
     .hw2reg_i  ( soc_ctrl_in ),
-    .boot_addr_o (boot_addr),
-    .event_ecc_rerror_narrow_i(spm_narrow_rerror),
-    .event_ecc_rerror_wide_i(spm_wide_rerror),
-    .intr_ecc_narrow_uncorrectable_o(irq.ecc_narrow_uncorrectable),
-    .intr_ecc_narrow_correctable_o(irq.ecc_narrow_correctable),
-    .intr_ecc_wide_uncorrectable_o(irq.ecc_wide_uncorrectable),
-    .intr_ecc_wide_correctable_o(irq.ecc_wide_correctable)
+    .boot_addr_o (boot_addr)
   );
 
   // Chip-level IO pad drive strength. The pads have no clock of their own, so these are

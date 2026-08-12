@@ -88,10 +88,6 @@ module ${name}_soc
   output ${router2soc_bus.rsp_type()} router2soc_rsp_o,
 % endif
 
-  // SoC control register IO
-  output logic [1:0] spm_narrow_rerror_o,
-  output logic [1:0] spm_wide_rerror_o,
-
   // Interrupts and debug requests
   input  logic [${nr_ipi_targets-1}:0] mtip_i,
   input  logic [${nr_ipi_targets-1}:0] msip_i,
@@ -273,7 +269,7 @@ module ${name}_soc
     .be_i (spm_narrow_strb),
     .rdata_o (spm_narrow_rdata),
     .rvalid_o (spm_narrow_rvalid),
-    .rerror_o (spm_narrow_rerror_o),
+    .rerror_o (),
     .sram_cfg_i (sram_cfgs_i.spm_narrow)
   );
 
