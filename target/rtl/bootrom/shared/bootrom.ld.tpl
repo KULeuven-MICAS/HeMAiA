@@ -1,5 +1,5 @@
 /* Copyright 2024 KU Leuven. */
-/* Generated from bootrom.ld.tpl by util/gen_bootrom_ld.py -- do not edit. */
+/* Generated from bootrom.ld.tpl by gen_bootrom_ld.py -- do not edit. */
 
 
 ENTRY(_start)

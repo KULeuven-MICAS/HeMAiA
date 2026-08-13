@@ -32,7 +32,7 @@ BOOTROM_LD_TPL := $(MKFILE_DIR)bootrom.ld.tpl
 
 $(BOOTROM_LD): $(BOOTROM_LD_TPL) $(PLATFORM_GEN)/occamy_soc_ctrl.h $(PLATFORM_GEN)/occamy_base_addr.h $(PLATFORM_GEN)/occamy_memory_map.h
 	@echo "GEN   <= $(notdir $<)"
-	@python3 $(util)/gen_bootrom_ld.py --tpl $< --headers $(PLATFORM_GEN) --out $@
+	@python3 $(MKFILE_DIR)gen_bootrom_ld.py --tpl $< --headers $(PLATFORM_GEN) --out $@
 
 CFLAGS 	= -Os -g -Werror -ffreestanding -fno-strict-aliasing
 CFLAGS += -static -nostartfiles
