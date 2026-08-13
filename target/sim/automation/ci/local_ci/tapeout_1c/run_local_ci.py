@@ -16,15 +16,17 @@ run directories, so the suites do not clobber each other:
     tapeout_2c/       hemaia_tapeout_2c.hjson        2x versacore 256KB
     tapeout_2c_simd/  hemaia_tapeout_2c_simd.hjson   2x versacore 256KB+SIMD
 
-The runner sets ``use_vendor_pll: false`` in the cfg before building (see
-``resolve_rtl_cfg``); the patched copy lands in ``target/rtl/cfg/generated/``.
+By default the runner sets ``use_vendor_pll: false`` in the cfg before building
+(see ``resolve_rtl_cfg``); pass ``--with-pll`` to enable the vendor PLL model and
+use the private ``hemaia_clk_rst_controller`` checkout instead. Patched cfg copies
+land in ``target/rtl/cfg/generated/``.
 The suite builds against the cfg's own ``spm_wide`` (the tapeout's real 128 kiB).
 
 Defaults to the VCS engine with no waveform (fast batch runs); pass
 ``--engine vsim --waveform 1`` to reproduce a failing task under Questasim.
 
     python3 run_local_ci.py [-j JOBS] [-f task.yaml] [--cfg CFG] [--engine vcs|vsim]
-                            [--waveform 0|1] [--no-d2d] [--no-macro]
+                            [--waveform 0|1] [--no-d2d] [--no-macro] [--with-pll]
 """
 
 from __future__ import annotations
@@ -70,11 +72,15 @@ def parse_args() -> argparse.Namespace:
         "--macro", action=argparse.BooleanOptionalAction, default=True,
         help="init the tech_cells_tsmc16 private module (use --no-macro for the single-chip flow).")
     parser.add_argument(
+        "--with-pll", action="store_true",
+        help="enable the vendor PLL model and private hemaia_clk_rst_controller checkout.")
+    parser.add_argument(
         "--sw-only", action="store_true",
         help="fast SW-only re-run: skip the repo reset, the bootrom/RTL build and the "
              "simulation compile, rebuild ONLY the per-task app binaries, and re-run "
              "against the already-compiled simulation. Requires a prior full run "
              "(the compiled sim + generated platform header must already exist). "
+             "Repeat --with-pll if that simulation was compiled with PLL support. "
              "Handy when iterating on SW: it avoids the ~30-40 min RTL gen + sim compile.")
     args = parser.parse_args()
     if args.max_sim_jobs < 1:
@@ -98,7 +104,7 @@ def main() -> None:
         sim_cfg=SIM_CFG,
         with_macro=args.macro,
         with_d2d=args.d2d,
-        with_pll=False,
+        with_pll=args.with_pll,
         max_jobs=args.max_sim_jobs,
         # --sw-only reuses the already-built RTL/bootrom + compiled simulation and
         # only rebuilds the per-task app binaries before re-running.
