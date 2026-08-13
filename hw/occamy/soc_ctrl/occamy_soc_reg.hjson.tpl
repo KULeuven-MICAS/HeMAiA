@@ -30,16 +30,6 @@
   bus_interfaces: [
     { protocol: "reg_iface", direction: "device" }
   ],
-  interrupt_list: [
-    { name: "ecc_narrow_uncorrectable",
-      desc: "Detected an uncorrectable ECC error on system narrow SRAM."},
-    { name: "ecc_narrow_correctable",
-      desc: "Detected a correctable ECC error on system narrow SRAM."},
-    { name: "ecc_wide_uncorrectable",
-      desc: "Detected an uncorrectable ECC error on system wide SRAM."},
-    { name: "ecc_wide_correctable",
-      desc: "Detected a correctable ECC error on system wide SRAM."}
-  ],
   regwidth: 32,
   registers: [
     { name: "VERSION",
@@ -193,6 +183,83 @@
           }
         ]
       }
+    },
+
+    { name: "IO_DRIVE_STRENGTH",
+      desc: '''
+            Drive strength of the chip-level digital IO pads, grouped by peripheral domain.
+            Each field is wired to the DS pins of every output-capable pad in its group.
+            A higher value gives more drive current and a faster edge, at the cost of
+            simultaneous-switching noise on the IO supply and of overshoot/ringing into an
+            unterminated board trace.
+
+            The reset value sits inside the narrow band of settings that both meets the
+            edge-rate requirement of every boot-critical pin at the slow corner for the assumed
+            board load and stays within the simultaneous-switching budget of the IO power pairs.
+            It is taken at the upper end of that band, buying edge-rate margin at the cost of
+            switching-noise margin. Note the assumed board load is load-bearing: it moves the
+            slew floor and the noise ceiling in opposite directions, so a markedly lighter or
+            heavier board moves the band itself. The drive current, output impedance and
+            driving-factor tables behind this choice are in the IO library databook, which is
+            under NDA and is deliberately not reproduced here.
+
+            Software may retune any group once it is up; only change a group while its pins are
+            idle.
+
+            Input-only pads ignore DS and are not covered here, and the die-to-die PHY pads have
+            their own configuration inside the D2D link.
+            ''',
+      swaccess: "rw",
+      hwaccess: "hro",
+      fields: [
+        { bits: "3:0",
+          name: "MISC",
+          resval: "4",
+          desc: "PLL lock and observation clock outputs (pll_lock_o, clk_obs_o)."
+        },
+        { bits: "7:4",
+          name: "D2D",
+          resval: "4",
+          desc: '''
+                Die-to-die sideband outputs on all four sides: test_request_o,
+                flow_control_rts_o and flow_control_cts_o. Not the D2D PHY data pads.
+                '''
+        },
+        { bits: "11:8",
+          name: "UART",
+          resval: "4",
+          desc: "UART outputs (uart_tx_o, uart_rts_no)."
+        },
+        { bits: "15:12",
+          name: "GPIO",
+          resval: "4",
+          desc: "GPIO pads, when driven as outputs."
+        },
+        { bits: "19:16",
+          name: "SPIM",
+          resval: "4",
+          desc: "SPI master outputs (spim_sck_o, spim_csb_o, spim_sd)."
+        },
+        { bits: "23:20",
+          name: "SPIS",
+          resval: "4",
+          desc: "SPI slave data pads, when driven as outputs."
+        },
+        { bits: "27:24",
+          name: "I2C",
+          resval: "4",
+          desc: '''
+                I2C pads (i2c_sda, i2c_scl). These are open-drain with an external pull-up and
+                are the only pads with a real DC load; they generally want the weakest setting
+                that still meets the bus V_OL.
+                '''
+        },
+        { bits: "31:28",
+          name: "JTAG",
+          resval: "4",
+          desc: "JTAG data output (jtag_tdo_o)."
+        }
+      ]
     }
   ]
 }

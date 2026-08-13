@@ -11,6 +11,8 @@ MKFILE_DIR  := $(dir $(MKFILE_PATH))
 all:
 	$(MAKE) -C $(MKFILE_DIR)bootrom_chip TARGET=bootrom
 	$(MAKE) -C $(MKFILE_DIR)bootrom_sim TARGET=bootrom
+	$(MAKE) -C $(MKFILE_DIR)bootrom_netlist_sim bootrom
 clean:
 	$(MAKE) -C $(MKFILE_DIR)bootrom_chip clean
 	$(MAKE) -C $(MKFILE_DIR)bootrom_sim clean
+	$(MAKE) -C $(MKFILE_DIR)bootrom_netlist_sim clean

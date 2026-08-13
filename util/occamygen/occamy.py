@@ -1090,6 +1090,11 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
     cluster_tcdm_size =  cluster_generators[0].cfg["tcdm"]["size"]*1024
     wide_spm_size = occamy_cfg["spm_wide"]["length"]
     narrow_spm_size = occamy_cfg["spm_narrow"]["length"]
+    # Address space the boot ROM is given on the narrow lite periph xbar, the same
+    # value am_connect_soc_lite_narrow_periph_xbar() attaches its leaf with. Exposed
+    # so the boot ROM linker script can size its region from the hardware instead of
+    # hardcoding it.
+    rom_size = occamy_cfg["peripherals"]["rom"]["length"]
     # Memchip total size (chip(2,0) external SRAM); zero if cfg has no memchip.
     mem_chips = multichip_cfg["testbench_cfg"]["hemaia_mem_chip"]
     mempool_total_size = int(mem_chips[0]["mem_size"]) if mem_chips else 0
@@ -1117,6 +1122,7 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
         "cluster_addr_width": cluster_addr_width,
         "cluster_base_addr": hex(cluster_base_addr),
         "mempool_total_size": hex(mempool_total_size),
+        "rom_size": hex(rom_size),
         "same_memchip_speed": 1 if same_memchip_speed else 0,
     }
     return cheader_kwargs

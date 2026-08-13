@@ -17,6 +17,11 @@ runs:
     CHIP_TYPE: single_chip
     WORKLOAD: clk_rst_configurator
     DEV_APP: None
+  # io_drive_strength
+  - HOST_APP_TYPE: host_only
+    CHIP_TYPE: single_chip
+    WORKLOAD: io_drive_strength
+    DEV_APP: None
   # ci_ara
   - HOST_APP_TYPE: host_only
     CHIP_TYPE: single_chip

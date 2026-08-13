@@ -142,7 +142,24 @@ import ${name}_pkg::*;
   input  logic        jtag_tck_i,
   input  logic        jtag_tms_i,
   input  logic        jtag_tdi_i,
-  output logic        jtag_tdo_o
+  output logic        jtag_tdo_o,
+  // Drive strength of the chip-level IO pads, driven by the SoC control register.
+  output logic [3:0] pad_drv_misc_o,
+% if occamy_cfg['hemaia_multichip']['single_chip'] is False:
+  output logic [3:0] pad_drv_d2d_o,
+% endif
+  output logic [3:0] pad_drv_uart_o,
+  output logic [3:0] pad_drv_gpio_o,
+% if spi_master_present:
+  output logic [3:0] pad_drv_spim_o,
+% endif
+% if spi_slave_present:
+  output logic [3:0] pad_drv_spis_o,
+% endif
+% if i2c_present:
+  output logic [3:0] pad_drv_i2c_o,
+% endif
+  output logic [3:0] pad_drv_jtag_o
 );
 
   ///////////////////
@@ -408,7 +425,24 @@ import ${name}_pkg::*;
     .spis_sd_o          (spis_sd_o),
     .spis_sd_en_o       (spis_sd_en_o),
     .spis_sd_i          (spis_sd_i),
-% endif    
+% endif
+    // Chip-level IO pad drive strength
+    .pad_drv_misc_o     (pad_drv_misc_o),
+% if occamy_cfg['hemaia_multichip']['single_chip'] is False:
+    .pad_drv_d2d_o      (pad_drv_d2d_o),
+% endif
+    .pad_drv_uart_o     (pad_drv_uart_o),
+    .pad_drv_gpio_o     (pad_drv_gpio_o),
+% if spi_master_present:
+    .pad_drv_spim_o     (pad_drv_spim_o),
+% endif
+% if spi_slave_present:
+    .pad_drv_spis_o     (pad_drv_spis_o),
+% endif
+% if i2c_present:
+    .pad_drv_i2c_o      (pad_drv_i2c_o),
+% endif
+    .pad_drv_jtag_o     (pad_drv_jtag_o),
     .bootrom_req_o      (bootrom_axi_lite_req),
     .bootrom_rsp_i      (bootrom_axi_lite_rsp),
     // HeMAiA Mem system wide

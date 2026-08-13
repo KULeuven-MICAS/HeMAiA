@@ -103,6 +103,26 @@ module hemaia (
   localparam int D2DChannel = 3;
   localparam int D2DWidth = 20;
 
+  // Per-domain drive strength of the output-capable pads, sourced from the
+  // IO_DRIVE_STRENGTH register in the SoC controller and connected through the
+  // `.*` binding on i_occamy_chip below. Input-only pads ignore DS and stay tied off.
+  logic [3:0] pad_drv_misc_o;
+% if multichip_cfg["single_chip"] is False:
+  logic [3:0] pad_drv_d2d_o;
+% endif
+  logic [3:0] pad_drv_uart_o;
+  logic [3:0] pad_drv_gpio_o;
+% if spi_master_present:
+  logic [3:0] pad_drv_spim_o;
+% endif
+% if spi_slave_present:
+  logic [3:0] pad_drv_spis_o;
+% endif
+% if i2c_present:
+  logic [3:0] pad_drv_i2c_o;
+% endif
+  logic [3:0] pad_drv_jtag_o;
+
   logic clk_i;
   tc_digital_io clk_i_io (
       .data_i(1'b0),
@@ -183,7 +203,7 @@ module hemaia (
       .data_i(pll_lock_o),
       .data_o(),
       .io_direction_oe_ni(1'b0),
-      .io_driving_strength_i(4'hf),
+      .io_driving_strength_i(pad_drv_misc_o),
       .io_pullup_en_i(1'b0),
       .io_pulldown_en_i(1'b0),
       .io(io_pll_lock_o)
@@ -196,7 +216,7 @@ module hemaia (
       .data_i(clk_obs_o),
       .data_o(),
       .io_direction_oe_ni(1'b0),
-      .io_driving_strength_i(4'hf),
+      .io_driving_strength_i(pad_drv_misc_o),
       .io_pullup_en_i(1'b0),
       .io_pulldown_en_i(1'b0),
       .io(io_clk_obs_o)
@@ -367,7 +387,7 @@ module hemaia (
       .data_i(east_test_request_o),
       .data_o(),
       .io_direction_oe_ni(1'b0),
-      .io_driving_strength_i(4'hf),
+      .io_driving_strength_i(pad_drv_d2d_o),
       .io_pullup_en_i(1'b0),
       .io_pulldown_en_i(1'b0),
       .io(io_east_test_request_o)
@@ -376,7 +396,7 @@ module hemaia (
       .data_i(flow_control_east_rts_o),
       .data_o(),
       .io_direction_oe_ni(1'b0),
-      .io_driving_strength_i(4'hf),
+      .io_driving_strength_i(pad_drv_d2d_o),
       .io_pullup_en_i(1'b0),
       .io_pulldown_en_i(1'b0),
       .io(io_flow_control_east_rts_o)
@@ -403,7 +423,7 @@ module hemaia (
       .data_i(flow_control_east_cts_o),
       .data_o(),
       .io_direction_oe_ni(1'b0),
-      .io_driving_strength_i(4'hf),
+      .io_driving_strength_i(pad_drv_d2d_o),
       .io_pullup_en_i(1'b0),
       .io_pulldown_en_i(1'b0),
       .io(io_flow_control_east_cts_o)
@@ -429,7 +449,7 @@ module hemaia (
       .data_i(west_test_request_o),
       .data_o(),
       .io_direction_oe_ni(1'b0),
-      .io_driving_strength_i(4'hf),
+      .io_driving_strength_i(pad_drv_d2d_o),
       .io_pullup_en_i(1'b0),
       .io_pulldown_en_i(1'b0),
       .io(io_west_test_request_o)
@@ -440,7 +460,7 @@ module hemaia (
       .data_i(flow_control_west_rts_o),
       .data_o(),
       .io_direction_oe_ni(1'b0),
-      .io_driving_strength_i(4'hf),
+      .io_driving_strength_i(pad_drv_d2d_o),
       .io_pullup_en_i(1'b0),
       .io_pulldown_en_i(1'b0),
       .io(io_flow_control_west_rts_o)
@@ -469,7 +489,7 @@ module hemaia (
       .data_i(flow_control_west_cts_o),
       .data_o(),
       .io_direction_oe_ni(1'b0),
-      .io_driving_strength_i(4'hf),
+      .io_driving_strength_i(pad_drv_d2d_o),
       .io_pullup_en_i(1'b0),
       .io_pulldown_en_i(1'b0),
       .io(io_flow_control_west_cts_o)
@@ -499,7 +519,7 @@ module hemaia (
       .data_i(north_test_request_o),
       .data_o(),
       .io_direction_oe_ni(1'b0),
-      .io_driving_strength_i(4'hf),
+      .io_driving_strength_i(pad_drv_d2d_o),
       .io_pullup_en_i(1'b0),
       .io_pulldown_en_i(1'b0),
       .io(io_north_test_request_o)
@@ -510,7 +530,7 @@ module hemaia (
       .data_i(flow_control_north_rts_o),
       .data_o(),
       .io_direction_oe_ni(1'b0),
-      .io_driving_strength_i(4'hf),
+      .io_driving_strength_i(pad_drv_d2d_o),
       .io_pullup_en_i(1'b0),
       .io_pulldown_en_i(1'b0),
       .io(io_flow_control_north_rts_o)
@@ -543,7 +563,7 @@ module hemaia (
       .data_i(flow_control_north_cts_o),
       .data_o(),
       .io_direction_oe_ni(1'b0),
-      .io_driving_strength_i(4'hf),
+      .io_driving_strength_i(pad_drv_d2d_o),
       .io_pullup_en_i(1'b0),
       .io_pulldown_en_i(1'b0),
       .io(io_flow_control_north_cts_o)
@@ -573,7 +593,7 @@ module hemaia (
       .data_i(south_test_request_o),
       .data_o(),
       .io_direction_oe_ni(1'b0),
-      .io_driving_strength_i(4'hf),
+      .io_driving_strength_i(pad_drv_d2d_o),
       .io_pullup_en_i(1'b0),
       .io_pulldown_en_i(1'b0),
       .io(io_south_test_request_o)
@@ -584,7 +604,7 @@ module hemaia (
       .data_i(flow_control_south_rts_o),
       .data_o(),
       .io_direction_oe_ni(1'b0),
-      .io_driving_strength_i(4'hf),
+      .io_driving_strength_i(pad_drv_d2d_o),
       .io_pullup_en_i(1'b0),
       .io_pulldown_en_i(1'b0),
       .io(io_flow_control_south_rts_o)
@@ -615,7 +635,7 @@ module hemaia (
       .data_i(flow_control_south_cts_o),
       .data_o(),
       .io_direction_oe_ni(1'b0),
-      .io_driving_strength_i(4'hf),
+      .io_driving_strength_i(pad_drv_d2d_o),
       .io_pullup_en_i(1'b0),
       .io_pulldown_en_i(1'b0),
       .io(io_flow_control_south_cts_o)
@@ -631,7 +651,7 @@ module hemaia (
       .data_i(uart_tx_o),
       .data_o(),
       .io_direction_oe_ni(1'b0),
-      .io_driving_strength_i(4'hf),
+      .io_driving_strength_i(pad_drv_uart_o),
       .io_pullup_en_i(1'b0),
       .io_pulldown_en_i(1'b0),
       .io(io_uart_tx_o)
@@ -649,7 +669,7 @@ module hemaia (
       .data_i(uart_rts_no),
       .data_o(),
       .io_direction_oe_ni(1'b0),
-      .io_driving_strength_i(4'hf),
+      .io_driving_strength_i(pad_drv_uart_o),
       .io_pullup_en_i(1'b0),
       .io_pulldown_en_i(1'b0),
       .io(io_uart_rts_no)
@@ -673,7 +693,7 @@ module hemaia (
           .data_i(gpio_d_o[i]),
           .data_o(gpio_d_i[i]),
           .io_direction_oe_ni(~gpio_oe_o[i]),
-          .io_driving_strength_i(4'hf),
+          .io_driving_strength_i(pad_drv_gpio_o),
           .io_pullup_en_i(1'b0),
           .io_pulldown_en_i(1'b0),
           .io(io_gpio[i])
@@ -718,7 +738,7 @@ module hemaia (
       .data_i(spis_sd_o),
       .data_o(spis_sd_i),
       .io_direction_oe_ni(~(spis_sd_en_o)),
-      .io_driving_strength_i(4'hf),
+      .io_driving_strength_i(pad_drv_spis_o),
       .io_pullup_en_i(1'b0),
       .io_pulldown_en_i(1'b0),
       .io(io_spis_sd)
@@ -738,7 +758,7 @@ module hemaia (
       .data_i(spim_sck_o),
       .data_o(),
       .io_direction_oe_ni(~spim_sck_en_o),
-      .io_driving_strength_i(4'hf),
+      .io_driving_strength_i(pad_drv_spim_o),
       .io_pullup_en_i(1'b0),
       .io_pulldown_en_i(1'b0),
       .io(io_spim_sck_o)
@@ -749,7 +769,7 @@ module hemaia (
       .data_i(spim_csb_o[0]),
       .data_o(),
       .io_direction_oe_ni(~(spim_csb_en_o[0])),
-      .io_driving_strength_i(4'hf),
+      .io_driving_strength_i(pad_drv_spim_o),
       .io_pullup_en_i(1'b0),
       .io_pulldown_en_i(1'b0),
       .io(io_spim_csb_o)
@@ -760,7 +780,7 @@ module hemaia (
       .data_i(spim_sd_o),
       .data_o(spim_sd_i),
       .io_direction_oe_ni(~(spim_sd_en_o)),
-      .io_driving_strength_i(4'hf),
+      .io_driving_strength_i(pad_drv_spim_o),
       .io_pullup_en_i(1'b0),
       .io_pulldown_en_i(1'b0),
       .io(io_spim_sd)
@@ -811,7 +831,7 @@ module hemaia (
       .data_i(jtag_tdo_o),
       .data_o(),
       .io_direction_oe_ni(1'b0),
-      .io_driving_strength_i(4'hf),
+      .io_driving_strength_i(pad_drv_jtag_o),
       .io_pullup_en_i(1'b0),
       .io_pulldown_en_i(1'b0),
       .io(io_jtag_tdo_o)
@@ -828,7 +848,7 @@ module hemaia (
       .data_i(i2c_sda_o),
       .data_o(i2c_sda_i),
       .io_direction_oe_ni(~i2c_sda_en_o),
-      .io_driving_strength_i(4'hf),
+      .io_driving_strength_i(pad_drv_i2c_o),
       .io_pullup_en_i(1'b0),
       .io_pulldown_en_i(1'b0),
       .io(io_i2c_sda)
@@ -837,7 +857,7 @@ module hemaia (
       .data_i(i2c_scl_o),
       .data_o(i2c_scl_i),
       .io_direction_oe_ni(~i2c_scl_en_o),
-      .io_driving_strength_i(4'hf),
+      .io_driving_strength_i(pad_drv_i2c_o),
       .io_pullup_en_i(1'b0),
       .io_pulldown_en_i(1'b0),
       .io(io_i2c_scl)

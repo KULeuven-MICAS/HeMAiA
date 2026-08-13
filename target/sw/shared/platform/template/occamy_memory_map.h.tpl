@@ -23,6 +23,8 @@
 
 #define WIDE_SPM_SIZE ${wide_spm_size}
 #define NARROW_SPM_SIZE ${narrow_spm_size}
+// Address space given to the boot ROM on the narrow lite peripheral xbar.
+#define BOOTROM_SIZE ${rom_size}
 #define CLUSTER_TCDM_SIZE ${cluster_tcdm_size}
 // Memchip SRAM size from cfg (hemaia_mem_chip[0].mem_size); 0 if absent.
 #define MEMPOOL_TOTAL_SIZE ${mempool_total_size}
@@ -65,7 +67,10 @@
     (SOC_CTRL_BASE_ADDR + OCCAMY_SOC_MAILBOX_SCRATCH_0_REG_OFFSET)
 
 #define soc_ctrl_kernel_tab_scratch_base \
-    (SOC_CTRL_BASE_ADDR + OCCAMY_SOC_KERNEL_TAB_SCRATCH_0_REG_OFFSET)    
+    (SOC_CTRL_BASE_ADDR + OCCAMY_SOC_KERNEL_TAB_SCRATCH_0_REG_OFFSET)
+
+#define soc_ctrl_io_drive_strength_base \
+    (SOC_CTRL_BASE_ADDR + OCCAMY_SOC_IO_DRIVE_STRENGTH_REG_OFFSET)
 
 #define quad_ctrl_arg_ptr_list_base \
     (QUAD_AXI_LITE_NARROW_PERIPHERALS_BASE_ADDR + OCCAMY_QUAD_PERIPH_ARG_PTR_LIST_BASE_ADDR_0_REG_OFFSET)
@@ -157,6 +162,12 @@ inline uintptr_t soc_ctrl_mailbox_scratch_addr(uint32_t reg_idx) {
 inline uintptr_t soc_ctrl_kernel_tab_scratch_addr(uint32_t reg_idx) {
     return soc_ctrl_kernel_tab_scratch_base +
            (reg_idx / OCCAMY_SOC_SCRATCH_SCRATCH_FIELDS_PER_REG) * 4;
+}
+
+// Drive strength of the chip-level IO pads, one 4-bit field per peripheral
+// domain. Single register, so no index is needed.
+inline uintptr_t soc_ctrl_io_drive_strength_addr() {
+    return soc_ctrl_io_drive_strength_base;
 }
 
 inline uintptr_t quad_ctrl_arg_ptr_addr(uint32_t reg_idx){

@@ -28,3 +28,5 @@ target/tapeout/tcl/*
 
 .claude
 tmp/
+# Boot ROM linker script, generated from bootrom.ld.tpl by gen_bootrom_ld.py
+target/rtl/bootrom/shared/bootrom.ld

@@ -85,10 +85,6 @@ package ${name}_pkg;
     logic i2c_acq_overflow;
     logic i2c_ack_stop;
     logic i2c_host_timeout;
-    logic ecc_narrow_uncorrectable;
-    logic ecc_narrow_correctable;
-    logic ecc_wide_uncorrectable;
-    logic ecc_wide_correctable;
     // 4 programmable, 8 HBM (1x per channel)
     logic [12:0] ext_irq;
     logic zero;

@@ -6,6 +6,15 @@
 # (the minimal 2-cluster xDMA softmax) is appended after the base tasks.
 
 runs:
+  # ---- host_only / single_chip ----
+  # io_drive_strength. Cluster-count independent, but worth running here as well
+  # as on the 1C suites: NumMailboxRegs tracks the cluster count, so the SoC
+  # control registers after it sit at a different offset on a 2-cluster config.
+  - HOST_APP_TYPE: host_only
+    CHIP_TYPE: single_chip
+    WORKLOAD: io_drive_strength
+    DEV_APP: None
+
   # ---- host_only / multi_chip ----
   # system_xdma_copy
   - HOST_APP_TYPE: host_only
