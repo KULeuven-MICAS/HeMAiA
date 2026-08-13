@@ -4,15 +4,11 @@
 #
 # Luca Colagrande <colluca@iis.ee.ethz.ch>
 
-# Add user applications to APPS variable automatically. This is located in the apps directory with depth of 2.
-
-# Now we only compile the snax apps
-# APPDIR  = $(shell find apps/snax -mindepth 1 -maxdepth 1 -type d)
-APPDIR = apps/snax/snax-gemmx-matmul
-APPDIR = apps/snax/snax-gemmx-resnet8
-APPDIR = apps/snax/snax-cgra-cmatmul
-APPDIR = apps/snax/snax-hypercorex-bin-search
-APPDIR = apps/snax/snax-data-transfer
+# The host partial-build creates an origin.ld for every device application it
+# embeds. Build that exact set here so unregistered applications are skipped
+# and every host dependency receives a device binary.
+ORIGIN_LDS := $(wildcard apps/snax/*/build/origin.ld)
+APPDIR     := $(patsubst %/build/origin.ld,%,$(ORIGIN_LDS))
 TARGET ?= all
 
 
