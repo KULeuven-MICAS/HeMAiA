@@ -3,3 +3,7 @@
 */bootrom.dump
 */bootrom.elf
 */bootrom.sv
+# Netlist-sim stand-in, generated from bootrom_sim/bootrom.bin. The boot ROM image
+# depends on the platform config (bootrom.c loops over N_CLUSTERS_PER_CHIPLET), so a
+# committed copy is only ever right for one config.
+*/bootrom.v
