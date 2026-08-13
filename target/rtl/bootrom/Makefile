@@ -11,8 +11,6 @@ MKFILE_DIR  := $(dir $(MKFILE_PATH))
 all:
 	$(MAKE) -C $(MKFILE_DIR)bootrom_chip TARGET=bootrom
 	$(MAKE) -C $(MKFILE_DIR)bootrom_sim TARGET=bootrom
-# 3. The in-place replacement for the mapped bootrom in the synthesized netlist,
-#    generated from the simulation bootrom's binary so the two cannot drift.
 	$(MAKE) -C $(MKFILE_DIR)bootrom_netlist_sim bootrom
 clean:
 	$(MAKE) -C $(MKFILE_DIR)bootrom_chip clean
