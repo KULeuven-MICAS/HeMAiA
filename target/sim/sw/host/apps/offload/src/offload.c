@@ -36,5 +36,18 @@ int main() {
     // wakeup_cluster(2);
 
     // Wait for job done and return Snitch exit code
-    return wait_snitches_done();
+    int32_t exit_code = wait_snitches_done();
+
+    // reset_and_ungate_quadrants_all();
+    // deisolate_all();
+    // enable_sw_interrupts();
+    // program_snitches();
+    // asm volatile("" ::: "memory");
+    // wakeup_snitches_cl();
+    // exit_code = wait_snitches_done();
+    
+
+    print_uart("[Occamy] End! \r\n");
+
+    return exit_code;
 }

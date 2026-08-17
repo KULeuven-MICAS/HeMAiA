@@ -118,48 +118,8 @@ void set_d_cache_enable(uint16_t ena) {
 
 static inline void fence() { asm volatile("fence" : : : "memory"); }
 
-/**
- * @brief lock a mutex, blocking
- * @details test-and-set (tas) implementation of a lock.
- *          Declare mutex with `static volatile uint32_t mtx = 0;`
- */
-void mutex_tas_acquire(volatile uint32_t* pmtx) {
-    asm volatile(
-        "li            x5,1          # x5 = 1\n"
-        "1:\n"
-        "  amoswap.w.aq  x5,x5,(%0)   # x5 = oldlock & lock = 1\n"
-        "  bnez          x5,1b      # Retry if previously set)\n"
-        : "+r"(pmtx)
-        :
-        : "x5");
-}
-
-/**
- * @brief lock a mutex, blocking
- * @details test-and-test-and-set (ttas) implementation of a lock.
- *          Declare mutex with `static volatile uint32_t mtx = 0;`
- */
-static inline void mutex_ttas_acquire(volatile uint32_t* pmtx) {
-    asm volatile(
-        "1:\n"
-        "  lw x5, 0(%0)\n"
-        "  bnez x5, 1b\n"
-        "  li x5,1          # x5 = 1\n"
-        "2:\n"
-        "  amoswap.w.aq  x5,x5,(%0)   # x5 = oldlock & lock = 1\n"
-        "  bnez          x5,2b      # Retry if previously set)\n"
-        : "+r"(pmtx)
-        :
-        : "x5");
-}
-
-/**
- * @brief Release the mutex
- */
-static inline void mutex_release(volatile uint32_t* pmtx) {
-    asm volatile("amoswap.w.rl  x0,x0,(%0)   # Release lock by storing 0\n"
-                 : "+r"(pmtx));
-}
+// mutex_tas_acquire() / mutex_ttas_acquire() / mutex_release() now live in
+// heterogeneous_runtime.h (included above), shared with the device side.
 
 //===============================================================
 // Device programming

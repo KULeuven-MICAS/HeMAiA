@@ -19,6 +19,13 @@ inline comm_buffer_t* __attribute__((const)) get_communication_buffer() {
     return (comm_buffer_t*)(*soc_ctrl_scratch_ptr(2));
 }
 
+// Pointer to the mutex used by printf_safe() (mutex_tas_acquire /
+// mutex_ttas_acquire, declared in heterogeneous_runtime.h) to serialize
+// prints across cores. Reuses comm_buffer_t.lock, which is otherwise unused.
+inline volatile uint32_t* __attribute__((const)) get_shared_lock() {
+    return &(get_communication_buffer()->lock);
+}
+
 inline uint32_t elect_director(uint32_t num_participants) {
     uint32_t loser;
     uint32_t prev_val;

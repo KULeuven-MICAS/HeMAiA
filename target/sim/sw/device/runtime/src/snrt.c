@@ -14,6 +14,7 @@
 #include "occamy_memory.c"
 #include "occamy_start.c"
 #include "printf.c"
+#include "printf_safe.c"
 #ifdef UART_PRINTF
     #include "putchar_chip.c"
 #else
