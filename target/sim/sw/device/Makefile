@@ -12,12 +12,16 @@
 # APPDIR = apps/snax/snax-gemmx-resnet8
 # APPDIR = apps/snax/snax-cgra-cmatmul
 # APPDIR = apps/snax/snax-hypercorex-bin-search
-APPDIR += apps/snax/snax-data-transfer
-APPDIR += apps/snax/snax-sync-set-16
-APPDIR += apps/snax/snax-sync-set-8
-APPDIR += apps/snax/snax-sync-set-4
-APPDIR += apps/snax/snax-sync-set-2
-APPDIR += apps/snax/snax-sync-set-1
+APPDIR += apps/snax/snax-data-transfer-2
+APPDIR += apps/snax/snax-data-transfer-4
+APPDIR += apps/snax/snax-data-transfer-6
+APPDIR += apps/snax/snax-data-transfer-8
+APPDIR += apps/snax/snax-data-transfer-10
+# APPDIR += apps/snax/snax-sync-set-16
+# APPDIR += apps/snax/snax-sync-set-8
+# APPDIR += apps/snax/snax-sync-set-4
+# APPDIR += apps/snax/snax-sync-set-2
+# APPDIR += apps/snax/snax-sync-set-1
 # APPDIR = apps/snax/snax-snitch-softmax
 TARGET ?= all
 
