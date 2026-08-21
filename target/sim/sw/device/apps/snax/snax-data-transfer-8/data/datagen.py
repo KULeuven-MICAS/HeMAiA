@@ -22,7 +22,7 @@ from data_utils import format_scalar_definition, format_vector_definition  # noq
 def main():
 
     # Working parameters
-    num_32b = 12288
+    num_32b = 8192
     num_bytes = num_32b * 4
 
     # This is half of the super banks

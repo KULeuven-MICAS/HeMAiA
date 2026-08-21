@@ -20,8 +20,8 @@
 
 #define PRINT_ADDR 0
 
-uint32_t cycle_start[2];
-uint32_t cycle_end[2];
+uint32_t cycle_start[10];
+uint32_t cycle_end[10];
 
 int main() {
 
@@ -58,7 +58,7 @@ int main() {
     // Printing sessions
     //----------------------------
 
-    for (uint32_t i = 0; i < 2; i++) {
+    for (uint32_t i = 0; i < 10; i++) {
         if (snrt_cluster_idx() == i) {
             if(snrt_is_compute_core()){
                 printf_safe("C%d %d \n", i, cycle_end[i] - cycle_start[i]);

@@ -20,67 +20,17 @@
 
 #define PRINT_ADDR 0
 
+#define DMA_MCYCLE
+
 // Addresses
-uint32_t *tcdm_c0_in;
-uint32_t *tcdm_c0_out;
+uint32_t *tcdm_in[10];
+uint32_t *tcdm_out[11];
 
-uint32_t *tcdm_c1_in;
-uint32_t *tcdm_c1_out;
+#ifndef DMA_MCYCLE
+uint32_t dma_start[10];
+#endif
 
-uint32_t *tcdm_c2_in;
-uint32_t *tcdm_c2_out;
-
-uint32_t *tcdm_c3_in;
-uint32_t *tcdm_c3_out;
-
-uint32_t *tcdm_c4_in;
-uint32_t *tcdm_c4_out;
-
-uint32_t *tcdm_c5_in;
-uint32_t *tcdm_c5_out;
-
-uint32_t *tcdm_c6_in;
-uint32_t *tcdm_c6_out;
-
-uint32_t *tcdm_c7_in;
-uint32_t *tcdm_c7_out;
-
-uint32_t *tcdm_c8_in;
-uint32_t *tcdm_c8_out;
-
-uint32_t *tcdm_c9_in;
-uint32_t *tcdm_c9_out;
-
-uint32_t dma_start_c0;
-uint32_t dma_end_c0;
-
-uint32_t dma_start_c1;
-uint32_t dma_end_c1;
-
-uint32_t dma_start_c2;
-uint32_t dma_end_c2;
-
-uint32_t dma_start_c3;
-uint32_t dma_end_c3;
-
-uint32_t dma_start_c4;
-uint32_t dma_end_c4;
-
-uint32_t dma_start_c5;
-uint32_t dma_end_c5;
-
-uint32_t dma_start_c6;
-uint32_t dma_end_c6;
-
-uint32_t dma_start_c7;
-uint32_t dma_end_c7;
-
-uint32_t dma_start_c8;
-uint32_t dma_end_c8;
-
-uint32_t dma_start_c9;
-uint32_t dma_end_c9;
-
+uint32_t dma_end[10];
 
 int main() {
 
@@ -89,195 +39,30 @@ int main() {
 
     //----------------------------
     // Pre-load stages
-    // Needs to be done sequentially
+    // Runs in parallel across all clusters
     //----------------------------
+    if(snrt_is_dm_core()){
+        tcdm_in[snrt_cluster_idx()] = (uint32_t*)snrt_cluster_base_addrl();
+        tcdm_out[snrt_cluster_idx() + 1] = tcdm_in[snrt_cluster_idx()] + half_super_bank;
 
-    // Cluster 0
-    if (snrt_cluster_idx() == 0) {
-        if(snrt_is_dm_core()){
-            tcdm_c0_in = (uint32_t*)snrt_cluster_base_addrl();
-            tcdm_c0_out = tcdm_c0_in + half_super_bank;
+        // tcdm_out[0] is a sentinel: it stands in for the "previous cluster"
+        // of cluster 0, so the transfer stage can index tcdm_out uniformly.
+        if (snrt_cluster_idx() == 0) {
+            tcdm_out[0] = data_set;
+        }
 
-            snrt_dma_start_1d(tcdm_c0_in, data_set, num_bytes);
-            snrt_dma_wait_all();
+        snrt_dma_start_1d(tcdm_in[snrt_cluster_idx()], data_set, num_bytes);
+        snrt_dma_wait_all();
 
-            snrt_dma_start_1d(tcdm_c0_out, data_set, num_bytes);
-            snrt_dma_wait_all();
-        };
-
-        snrt_cluster_hw_barrier();
-    } 
-
-    snrt_global_barrier();
-
-    // Cluster 1
-    if (snrt_cluster_idx() == 1){
-
-       if(snrt_is_dm_core()){
-            tcdm_c1_in = (uint32_t*)snrt_cluster_base_addrl();
-            tcdm_c1_out = tcdm_c1_in + half_super_bank;
-
-            snrt_dma_start_1d(tcdm_c1_in, data_set, num_bytes);
-            snrt_dma_wait_all();
-
-            snrt_dma_start_1d(tcdm_c1_out, data_set, num_bytes);
-            snrt_dma_wait_all();
-        };
-
-        snrt_cluster_hw_barrier();
+        snrt_dma_start_1d(tcdm_out[snrt_cluster_idx() + 1], data_set, num_bytes);
+        snrt_dma_wait_all();
     };
 
+    snrt_cluster_hw_barrier();
+
+    // All clusters must finish pre-loading before the pipeline stage
+    // can safely read a previous cluster's output.
     snrt_global_barrier();
-
-    // Cluster 2
-    if (snrt_cluster_idx() == 2){
-
-       if(snrt_is_dm_core()){
-            tcdm_c2_in = (uint32_t*)snrt_cluster_base_addrl();
-            tcdm_c2_out = tcdm_c2_in + half_super_bank;
-
-            snrt_dma_start_1d(tcdm_c2_in, data_set, num_bytes);
-            snrt_dma_wait_all();
-
-            snrt_dma_start_1d(tcdm_c2_out, data_set, num_bytes);
-            snrt_dma_wait_all();
-        };
-
-        snrt_cluster_hw_barrier();
-    };
-
-    snrt_global_barrier();
-
-    // Cluster 3
-    if (snrt_cluster_idx() == 3){
-         if(snrt_is_dm_core()){
-            tcdm_c3_in = (uint32_t*)snrt_cluster_base_addrl();
-            tcdm_c3_out = tcdm_c3_in + half_super_bank;
-
-            snrt_dma_start_1d(tcdm_c3_in, data_set, num_bytes);
-            snrt_dma_wait_all();
-
-            snrt_dma_start_1d(tcdm_c3_out, data_set, num_bytes);
-            snrt_dma_wait_all();
-          };
-    
-          snrt_cluster_hw_barrier();
-     };
-
-    snrt_global_barrier();
-
-    // Cluster 4
-    if (snrt_cluster_idx() == 4){
-       if(snrt_is_dm_core()){
-            tcdm_c4_in = (uint32_t*)snrt_cluster_base_addrl();
-            tcdm_c4_out = tcdm_c4_in + half_super_bank;
-
-            snrt_dma_start_1d(tcdm_c4_in, data_set, num_bytes);
-            snrt_dma_wait_all();
-
-            snrt_dma_start_1d(tcdm_c4_out, data_set, num_bytes);
-            snrt_dma_wait_all();
-        };
-
-        snrt_cluster_hw_barrier();
-    };
-
-    snrt_global_barrier();
-
-    // Cluster 5
-    if (snrt_cluster_idx() == 5){
-       if(snrt_is_dm_core()){
-            tcdm_c5_in = (uint32_t*)snrt_cluster_base_addrl();
-            tcdm_c5_out = tcdm_c5_in + half_super_bank; 
-
-            snrt_dma_start_1d(tcdm_c5_in, data_set, num_bytes);
-            snrt_dma_wait_all();
-
-            snrt_dma_start_1d(tcdm_c5_out, data_set, num_bytes);
-            snrt_dma_wait_all();
-        };
-    
-        snrt_cluster_hw_barrier();
-    
-    };
-
-    snrt_global_barrier();
-
-    // Cluster 6
-    if (snrt_cluster_idx() == 6){
-       if(snrt_is_dm_core()){
-            tcdm_c6_in = (uint32_t*)snrt_cluster_base_addrl();
-            tcdm_c6_out = tcdm_c6_in + half_super_bank;
-
-            snrt_dma_start_1d(tcdm_c6_in, data_set, num_bytes);
-            snrt_dma_wait_all();
-
-            snrt_dma_start_1d(tcdm_c6_out, data_set, num_bytes);
-            snrt_dma_wait_all();
-        };
-
-        snrt_cluster_hw_barrier();
-    };
-
-    snrt_global_barrier();
-
-    // Cluster 7
-    if (snrt_cluster_idx() == 7){
-       if(snrt_is_dm_core()){
-            tcdm_c7_in = (uint32_t*)snrt_cluster_base_addrl();
-            tcdm_c7_out = tcdm_c7_in + half_super_bank; 
-
-            snrt_dma_start_1d(tcdm_c7_in, data_set, num_bytes);
-            snrt_dma_wait_all();
-
-            snrt_dma_start_1d(tcdm_c7_out, data_set, num_bytes);
-            snrt_dma_wait_all();
-        };
-    
-        snrt_cluster_hw_barrier();
-    
-    };
-
-    snrt_global_barrier();
-
-    // Cluster 8
-    if (snrt_cluster_idx() == 8){
-       if(snrt_is_dm_core()){
-            tcdm_c8_in = (uint32_t*)snrt_cluster_base_addrl();
-            tcdm_c8_out = tcdm_c8_in + half_super_bank;
-
-            snrt_dma_start_1d(tcdm_c8_in, data_set, num_bytes);
-            snrt_dma_wait_all();
-
-            snrt_dma_start_1d(tcdm_c8_out, data_set, num_bytes);
-            snrt_dma_wait_all();
-        };
-
-        snrt_cluster_hw_barrier();
-    };
-
-    snrt_global_barrier();
-
-    // Cluster 9
-    if (snrt_cluster_idx() == 9){
-       if(snrt_is_dm_core()){
-            tcdm_c9_in = (uint32_t*)snrt_cluster_base_addrl();
-            tcdm_c9_out = tcdm_c9_in + half_super_bank; 
-
-            snrt_dma_start_1d(tcdm_c9_in, data_set, num_bytes);
-            snrt_dma_wait_all();
-
-            snrt_dma_start_1d(tcdm_c9_out, data_set, num_bytes);
-            snrt_dma_wait_all();
-        };
-    
-        snrt_cluster_hw_barrier();
-    
-    };
-
-    snrt_global_barrier();
-
-
 
     //----------------------------
     // Parallel transfer stages
@@ -285,224 +70,81 @@ int main() {
     // First cluster pulls form L2 memory
     // Succeeding clusters pull continuously from the previous cluster's output
     //----------------------------
+    if(snrt_is_dm_core()){
+#ifdef DMA_MCYCLE
+        snrt_reset_perf_counter(SNRT_PERF_CNT0);
+        snrt_start_perf_counter(SNRT_PERF_CNT0, SNRT_PERF_CNT_DMA_BUSY, snrt_hartid());
+#else
+        dma_start[snrt_cluster_idx()] = snrt_mcycle();
+#endif
+        snrt_dma_start_1d(tcdm_in[snrt_cluster_idx()], tcdm_out[snrt_cluster_idx()], num_bytes);
+        snrt_dma_wait_all();
+#ifdef DMA_MCYCLE
+        dma_end[snrt_cluster_idx()] = snrt_get_perf_counter(SNRT_PERF_CNT0);
+#else
+        dma_end[snrt_cluster_idx()] = snrt_mcycle();
+#endif
+    };
 
-    // Cluster 0
-    if (snrt_cluster_idx() == 0) {
-        if(snrt_is_dm_core()){
+    snrt_cluster_hw_barrier();
+    snrt_global_barrier();
 
-            dma_start_c0 = snrt_mcycle();
-            snrt_dma_start_1d(tcdm_c0_in, data_set, num_bytes);
-            snrt_dma_wait_all();
-            dma_end_c0 = snrt_mcycle();
-        };
+    if(snrt_is_dm_core()){
+#ifdef DMA_MCYCLE
+        snrt_reset_perf_counter(SNRT_PERF_CNT0);
+        snrt_start_perf_counter(SNRT_PERF_CNT0, SNRT_PERF_CNT_DMA_BUSY, snrt_hartid());
+#else
+        dma_start[snrt_cluster_idx()] = snrt_mcycle();
+#endif
+        snrt_dma_start_1d(tcdm_in[snrt_cluster_idx()], tcdm_out[snrt_cluster_idx()], num_bytes);
+        snrt_dma_wait_all();
+#ifdef DMA_MCYCLE
+        dma_end[snrt_cluster_idx()] = snrt_get_perf_counter(SNRT_PERF_CNT0);
+#else
+        dma_end[snrt_cluster_idx()] = snrt_mcycle();
+#endif
+    };
 
-        snrt_cluster_hw_barrier();
-    } 
+    snrt_cluster_hw_barrier();
+    snrt_global_barrier();
 
-    // Cluster 1
-    if (snrt_cluster_idx() == 1) {
-        if(snrt_is_dm_core()){
+    if(snrt_is_dm_core()){
+#ifdef DMA_MCYCLE
+        snrt_reset_perf_counter(SNRT_PERF_CNT0);
+        snrt_start_perf_counter(SNRT_PERF_CNT0, SNRT_PERF_CNT_DMA_BUSY, snrt_hartid());
+#else
+        dma_start[snrt_cluster_idx()] = snrt_mcycle();
+#endif
+        snrt_dma_start_1d(tcdm_in[snrt_cluster_idx()], tcdm_out[snrt_cluster_idx()], num_bytes);
+        snrt_dma_wait_all();
+#ifdef DMA_MCYCLE
+        dma_end[snrt_cluster_idx()] = snrt_get_perf_counter(SNRT_PERF_CNT0);
+#else
+        dma_end[snrt_cluster_idx()] = snrt_mcycle();
+#endif
+    };
 
-            dma_start_c1 = snrt_mcycle();
-            snrt_dma_start_1d(tcdm_c1_in, tcdm_c0_out, num_bytes);
-            snrt_dma_wait_all();
-            dma_end_c1 = snrt_mcycle();
-        };
-
-        snrt_cluster_hw_barrier();
-    } 
-
-    // Cluster 2
-    if (snrt_cluster_idx() == 2) {
-        if(snrt_is_dm_core()){
-            
-            dma_start_c2 = snrt_mcycle();
-            snrt_dma_start_1d(tcdm_c2_in, tcdm_c1_out, num_bytes);
-            snrt_dma_wait_all();
-            dma_end_c2 = snrt_mcycle();
-        };
-        snrt_cluster_hw_barrier();
-    }
-
-    // Cluster 3
-    if (snrt_cluster_idx() == 3) {
-        if(snrt_is_dm_core()){
-            dma_start_c3 = snrt_mcycle();
-            snrt_dma_start_1d(tcdm_c3_in, tcdm_c2_out, num_bytes);
-            snrt_dma_wait_all();
-            dma_end_c3 = snrt_mcycle();
-        };
-        snrt_cluster_hw_barrier();
-    }
-
-    // Cluster 4
-    if (snrt_cluster_idx() == 4) {
-        if(snrt_is_dm_core()){
-            dma_start_c4 = snrt_mcycle();
-            snrt_dma_start_1d(tcdm_c4_in, tcdm_c3_out, num_bytes);
-            snrt_dma_wait_all();
-            dma_end_c4 = snrt_mcycle();
-        };
-        snrt_cluster_hw_barrier();
-    }
-
-    // Cluster 5
-    if (snrt_cluster_idx() == 5) {
-        if(snrt_is_dm_core()){
-            dma_start_c5 = snrt_mcycle();
-            snrt_dma_start_1d(tcdm_c5_in, tcdm_c4_out, num_bytes);
-            snrt_dma_wait_all();
-            dma_end_c5 = snrt_mcycle();
-        };
-        snrt_cluster_hw_barrier();
-    }
-
-    // Cluster 6
-    if (snrt_cluster_idx() == 6) {
-        if(snrt_is_dm_core()){
-            dma_start_c6 = snrt_mcycle();
-            snrt_dma_start_1d(tcdm_c6_in, tcdm_c5_out, num_bytes);
-            snrt_dma_wait_all();
-            dma_end_c6 = snrt_mcycle();
-        };
-        snrt_cluster_hw_barrier();
-    }
-
-    // Cluster 7
-    if (snrt_cluster_idx() == 7) {
-        if(snrt_is_dm_core()){
-            dma_start_c7 = snrt_mcycle();
-            snrt_dma_start_1d(tcdm_c7_in, tcdm_c6_out, num_bytes);
-            snrt_dma_wait_all();
-            dma_end_c7 = snrt_mcycle();
-        };
-        snrt_cluster_hw_barrier();
-    }
-
-    // Cluster 8
-    if (snrt_cluster_idx() == 8) {
-        if(snrt_is_dm_core()){
-            dma_start_c8 = snrt_mcycle();
-            snrt_dma_start_1d(tcdm_c8_in, tcdm_c7_out, num_bytes);
-            snrt_dma_wait_all();
-            dma_end_c8 = snrt_mcycle();
-        };
-        snrt_cluster_hw_barrier();
-    }
-
-    // Cluster 9
-    if (snrt_cluster_idx() == 9) {
-        if(snrt_is_dm_core()){
-            dma_start_c9 = snrt_mcycle();
-            snrt_dma_start_1d(tcdm_c9_in, tcdm_c8_out, num_bytes);
-            snrt_dma_wait_all();
-            dma_end_c9 = snrt_mcycle();
-        };
-        snrt_cluster_hw_barrier();
-    }
+    snrt_cluster_hw_barrier();
+    snrt_global_barrier();
 
     //----------------------------
     // Printing sessions
     //----------------------------
 
-    snrt_global_barrier();
-    
-    if (snrt_cluster_idx() == 0) {
-        if(snrt_is_dm_core()){
-            printf_safe("C0DM %d  \r\n", dma_end_c0 - dma_start_c0);
-        };
+    for (uint32_t i = 0; i < 10; i++) {
+        snrt_global_barrier();
 
-        snrt_cluster_hw_barrier();
-    } 
+        if (snrt_cluster_idx() == i) {
+            if(snrt_is_dm_core()){
+#ifdef DMA_MCYCLE
+                printf_safe("C%d %d  \r\n", i, dma_end[i]);
+#else
+                printf_safe("C%d %d  \r\n", i, dma_end[i] - dma_start[i]);
+#endif
+            };
 
-    snrt_global_barrier();
-
-    if (snrt_cluster_idx() == 1) {
-        if(snrt_is_dm_core()){
-            printf_safe("C1DM %d  \r\n", dma_end_c1 - dma_start_c1);
-        };
-
-        snrt_cluster_hw_barrier();
-    } 
-
-    snrt_global_barrier();
-
-    if (snrt_cluster_idx() == 2) {
-        if(snrt_is_dm_core()){
-            printf_safe("C2DM %d  \r\n", dma_end_c2 - dma_start_c2);
-        };
-
-        snrt_cluster_hw_barrier();
-    }
-
-    snrt_global_barrier();
-
-    if (snrt_cluster_idx() == 3) {
-        if(snrt_is_dm_core()){
-            printf_safe("C3DM %d  \r\n", dma_end_c3 - dma_start_c3);
-        };
-
-        snrt_cluster_hw_barrier();
-    }
-
-    snrt_global_barrier();
-
-    if (snrt_cluster_idx() == 4) {
-        if(snrt_is_dm_core()){
-            printf_safe("C4DM %d  \r\n", dma_end_c4 - dma_start_c4);
-        };
-
-        snrt_cluster_hw_barrier();
-    }
-
-    snrt_global_barrier();
-
-    if (snrt_cluster_idx() == 5) {
-        if(snrt_is_dm_core()){
-            printf_safe("C5DM %d  \r\n", dma_end_c5 - dma_start_c5);
-        };
-
-        snrt_cluster_hw_barrier();
-    }
-
-    snrt_global_barrier();
-
-    if (snrt_cluster_idx() == 6) {
-        if(snrt_is_dm_core()){
-            printf_safe("C6DM %d  \r\n", dma_end_c6 - dma_start_c6);
-        };
-
-        snrt_cluster_hw_barrier();
-    }
-
-    snrt_global_barrier();
-
-    if (snrt_cluster_idx() == 7) {
-        if(snrt_is_dm_core()){
-            printf_safe("C7DM %d  \r\n", dma_end_c7 - dma_start_c7);
-        };
-
-        snrt_cluster_hw_barrier();
-    }
-
-    snrt_global_barrier();
-
-    if (snrt_cluster_idx() == 8) {
-        if(snrt_is_dm_core()){
-            printf_safe("C8DM %d  \r\n", dma_end_c8 - dma_start_c8);
-        };
-
-        snrt_cluster_hw_barrier();
-    }
-
-    snrt_global_barrier();
-
-    if (snrt_cluster_idx() == 9) {
-        if(snrt_is_dm_core()){
-            printf_safe("C9DM %d  \r\n", dma_end_c9 - dma_start_c9);
-        };
-
-        snrt_cluster_hw_barrier();
+            snrt_cluster_hw_barrier();
+        }
     }
 
     snrt_global_barrier();
