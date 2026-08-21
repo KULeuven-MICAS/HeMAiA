@@ -32,13 +32,22 @@ RUNTIME_DIR = $(abspath $(HOST_DIR)/runtime)
 DEVICE_DIR  = $(abspath $(HOST_DIR)/../device)
 
 # now we only include the snax app
-DEVICE_APPS += snax/snax-data-transfer-2
-DEVICE_APPS += snax/snax-data-transfer-4
+# DEVICE_APPS += snax/snax-data-transfer-single-2
+# DEVICE_APPS += snax/snax-data-transfer-single-4
+DEVICE_APPS += snax/snax-data-transfer-single-6
+DEVICE_APPS += snax/snax-data-transfer-single-8
+# DEVICE_APPS += snax/snax-data-transfer-single-10
+DEVICE_APPS += snax/snax-data-transfer-single-16
+# DEVICE_APPS += snax/snax-data-transfer-2
+# DEVICE_APPS += snax/snax-data-transfer-4
 DEVICE_APPS += snax/snax-data-transfer-6
 DEVICE_APPS += snax/snax-data-transfer-8
-DEVICE_APPS += snax/snax-data-transfer-10
-# DEVICE_APPS += snax/snax-sync-set-16
+# DEVICE_APPS += snax/snax-data-transfer-10
+DEVICE_APPS += snax/snax-data-transfer-16
+DEVICE_APPS += snax/snax-sync-set-16
+# DEVICE_APPS += snax/snax-sync-set-10
 # DEVICE_APPS += snax/snax-sync-set-8
+# DEVICE_APPS += snax/snax-sync-set-6
 # DEVICE_APPS += snax/snax-sync-set-4
 # DEVICE_APPS += snax/snax-sync-set-2
 # DEVICE_APPS += snax/snax-sync-set-1
