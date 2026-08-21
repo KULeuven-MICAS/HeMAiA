@@ -1,0 +1,1 @@
+    return (snrt_cluster_base_addrl() - QUADRANT_0_CLUSTER_0_TCDM_BASE_ADDR) >> CLUSTER_ADDRWIDTH;
