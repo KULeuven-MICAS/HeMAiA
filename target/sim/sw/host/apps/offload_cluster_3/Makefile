@@ -14,8 +14,8 @@ DEBUG ?= OFF # ON to turn on debugging symbols
 # Build variables #
 ###################
 
-APP  = offload
-SRCS = src/offload.c
+APP  = offload_cluster_3
+SRCS = src/offload_cluster_3.c
 # DEVICE_APPS += $(shell cd ../../../device/apps/;find -mindepth 2 -maxdepth 2 -type d | sed 's|^\./||')
 
 # Compiler toolchain
@@ -32,35 +32,14 @@ RUNTIME_DIR = $(abspath $(HOST_DIR)/runtime)
 DEVICE_DIR  = $(abspath $(HOST_DIR)/../device)
 
 # now we only include the snax app
-# DEVICE_APPS += snax/snax-data-transfer-single-2
-# DEVICE_APPS += snax/snax-data-transfer-single-4
-# DEVICE_APPS += snax/snax-data-transfer-single-6
-# DEVICE_APPS += snax/snax-data-transfer-single-8
-# DEVICE_APPS += snax/snax-data-transfer-single-10
-# DEVICE_APPS += snax/snax-data-transfer-single-16
-# DEVICE_APPS += snax/snax-data-transfer-2
-# DEVICE_APPS += snax/snax-data-transfer-4
-# DEVICE_APPS += snax/snax-data-transfer-6
-# DEVICE_APPS += snax/snax-data-transfer-8
-# DEVICE_APPS += snax/snax-data-transfer-10
-# DEVICE_APPS += snax/snax-data-transfer-16
-# DEVICE_APPS += snax/snax-sync-set-16
-# DEVICE_APPS += snax/snax-sync-set-10
-# DEVICE_APPS += snax/snax-sync-set-8
-# DEVICE_APPS += snax/snax-sync-set-6
-# DEVICE_APPS += snax/snax-sync-set-4
-# DEVICE_APPS += snax/snax-sync-set-2
-# DEVICE_APPS += snax/snax-sync-set-1
-# DEVICE_APPS += snax/snax-snitch-softmax
-# DEVICE_APPS += snax/snax-gemmx-clean-test
-# DEVICE_APPS += snax/snax-gemmx-matmul
-# DEVICE_APPS += snax/snax-gemmx-mha
-# DEVICE_APPS += snax/snax-gemmx-matmul-tiling-no-overlap
-# DEVICE_APPS += snax/snax-gemmx-matmul-tiling-overlap
-# DEVICE_APPS += snax/snax-gemmx-conv
-# DEVICE_APPS += snax/snax-gemmx-stacked-matmul
-# DEVICE_APPS += snax/snax-test-integration
-# DEVICE_APPS += snax/snax-hypercorex-test-csr
+# DEVICE_APPS += snax/snax-dimc-mha
+DEVICE_APPS += snax/snax-dimc-mha-comp
+# DEVICE_APPS += snax/snax-hypercorex-test-csr-c2
+# DEVICE_APPS += snax/snax-hypercorex-digit-recog-c2
+# DEVICE_APPS += snax/snax-hypercorex-isolet-recog-c2
+# DEVICE_APPS += snax/snax-hypercorex-ucihar-recog-c2
+# DEVICE_APPS += snax/snax-hypercorex-dna-recog-c2
+# DEVICE_APPS += snax/snax-hypercorex-lang-recog-c2
 # DEVICE_APPS += snax/snax-hypercorex-char-recog
 # DEVICE_APPS += snax/snax-hypercorex-high-dim-bind
 # DEVICE_APPS += snax/snax-hypercorex-digit-recog
@@ -68,13 +47,7 @@ DEVICE_DIR  = $(abspath $(HOST_DIR)/../device)
 # DEVICE_APPS += snax/snax-hypercorex-isolet-recog
 # DEVICE_APPS += snax/snax-hypercorex-ucihar-recog
 # DEVICE_APPS += snax/snax-hypercorex-dna-recog
-# DEVICE_APPS += snax/snax-xdma-maxpool
-# DEVICE_APPS += snax/snax-xdma-memset
-# DEVICE_APPS += snax/snax-cgra-run
-# DEVICE_APPS += snax/snax-cgra-cmatmul
-DEVICE_APPS += snax/snax-dimc-mha
-# DEVICE_APPS += snax/snax-dimc-conv
-# DEVICE_APPS += snax/snax-gemmx-dimc-cosim
+# DEVICE_APPS += snax/snax-hypercorex-bin-search
 
 # Dependencies
 INCDIRS += $(RUNTIME_DIR)

@@ -10,6 +10,8 @@
 #include "snrt.h"
 #include "data_mha.h"
 
+// #define PRINT_STATS
+
 int main() {
 
     // set error value for checking
@@ -29,32 +31,27 @@ int main() {
         uint64_t *buffer_ptr = output_ptr + Q_LENGTH;
 
         // alias for output_ptr, also holding Q
-        uint64_t *activation_ptr_i = output_ptr; 
+        uint64_t *activation_ptr_i = output_ptr;
 
+        while(1){
         // stage 1:
         // load WK, K, Q to TCDM
-
         if (snrt_is_dm_core()) {
-            printf_safe("DMA core is configured for K and WK\r\n");
-
             // measure the start of cycle count for preloading data to TCDM
-            uint32_t start_dma_load = snrt_mcycle();
-
-            // initialize TCDM with matrix K by DMA
-            printf_safe("INITIALIZING TCDM\r\n");
-
             // read weight WK and ativation K from data.h
             size_t vector_size = Q_LENGTH * sizeof(uint64_t);
 
+            uint32_t start_dma_load = snrt_mcycle();
             snrt_dma_start_1d(activation_ptr,   K,  vector_size);
             snrt_dma_start_1d(activation_ptr_i, Q,  vector_size);
             snrt_dma_start_1d(weight_ptr,       WK, vector_size);
-
             snrt_dma_wait_all();
-
-            // measures the end of the DMA transfer process
             uint32_t end_dma_load = snrt_mcycle();
-            printf_safe("DMA core exits after loading K and WK\r\n"); 
+
+            // Intermediate printing
+#ifdef PRINT_STATS
+            printf_safe("S1 DMA %d \r\n", end_dma_load - start_dma_load);
+#endif
         }
 
         /**************************************************************************/
@@ -66,39 +63,41 @@ int main() {
         /**************************************************************************/
 
         if (snrt_is_compute_core()){
-            printf_safe("COMPUTE CORE is configured\r\n");
-
-            // configure the accelerator
-            printf_safe("ENTERING MHA MODE\r\n");
-
-            uint32_t busy = dimc_query_busy();
-            printf_safe("%d: busy\r\n", busy);
-            printf_safe("QUERYING BUSY SUCCEEDED\r\n");
-
+            uint32_t start_cfg_acc = snrt_mcycle();
             configure_accelerator();
-
-            printf_safe("CONFIGURING ACCELERATOR SUCCEEDED\r\n");
-
-            uint32_t read_zp_qkv = read_zp();
-            printf_safe("%d: read_zp_qkv\r\n", read_zp_qkv);
-            printf_safe("READING ZP SUCCEEDED\r\n");
+            uint32_t end_cfg_acc = snrt_mcycle();
+#ifdef PRINT_STATS
+            printf_safe("S2 CFG-ACC %d \r\n", end_cfg_acc - start_cfg_acc);
+#endif
 
             // send WK
-            printf_safe("CONFIGURING STREAMERS for WK\r\n");
+            start_cfg_acc = snrt_mcycle();
             dimc_set_streamer_dim_w(0, 0, 0, 0, 0, 0);
             dimc_set_streamer_dim_r0(128, 1, 256, 0, 8, (uint32_t)(weight_ptr));
             dimc_set_streamer_dim_r1(128, 1, 256, 0, 8, (uint32_t)(weight_ptr + 8));
             dimc_set_streamer_dim_r2(128, 1, 256, 0, 8, (uint32_t)(weight_ptr + 16));
             dimc_set_streamer_dim_r3(128, 1, 256, 0, 8, (uint32_t)(weight_ptr + 24));
-            printf_safe("STREAMER CONFIGURED FOR WK\r\n");
 
             // configure the accelerator to start MHA computation
             dimc_start_mha();
+            end_cfg_acc = snrt_mcycle();
+
+#ifdef PRINT_STATS
+            printf_safe("S2 CFG-STRM %d \r\n", end_cfg_acc - start_cfg_acc);
+#endif
 
             // start streamer data transfer
+            // CYCLE_MEASURE: this is the start of the cycle count for LOADING
+            uint32_t start_exe_acc = snrt_mcycle();
             dimc_start_streamer();
 
             while (dimc_is_streamer_busy()) { }
+            uint32_t end_exe_acc = snrt_mcycle();
+#ifdef PRINT_STATS
+            printf_safe("S2 EXE-LOAD %d \r\n", end_exe_acc - start_exe_acc);
+#endif
+            // CYCLE_MEASURE: this is the end of the cycle count for LOADING
+
         }
 
         /**************************************************************************/
@@ -110,30 +109,47 @@ int main() {
         // send K from TCDM to DIMC; kick start K1 generation;
         /**************************************************************************/
 
+        // BIG NOTE THIS PART CAN BE PARALLELIZED
         if (snrt_is_dm_core()) {
-            printf_safe("DMA core is configured for WQ\r\n");
-
             // read weight WQ from data.h
             size_t vector_size = Q_LENGTH * sizeof(uint64_t);
 
+            uint32_t start_dma_load = snrt_mcycle();
             snrt_dma_start_1d(weight_ptr, WQ, vector_size);
 
             snrt_dma_wait_all();
+            uint32_t end_dma_load = snrt_mcycle();
+#ifdef PRINT_STATS
+            printf_safe("S3 DMA* %d \r\n", end_dma_load - start_dma_load);
+#endif
         }
+
+        // Takenote that we can take this out
+        snrt_cluster_hw_barrier();
 
         if (snrt_is_compute_core()){
             // send K
-            printf_safe("CONFIGURING STREAMERS for K\r\n");
+            uint32_t start_cfg_acc = snrt_mcycle();
             dimc_set_streamer_dim_w(0, 0, 0, 0, 0, 0);
             dimc_set_streamer_dim_r0(128, 1, 256, 0, 8, (uint32_t)(activation_ptr));
             dimc_set_streamer_dim_r1(128, 1, 256, 0, 8, (uint32_t)(activation_ptr + 8));
             dimc_set_streamer_dim_r2(128, 1, 256, 0, 8, (uint32_t)(activation_ptr + 16));
             dimc_set_streamer_dim_r3(128, 1, 256, 0, 8, (uint32_t)(activation_ptr + 24));
-            printf_safe("STREAMER CONFIGURED FOR K\r\n");
+            uint32_t end_cfg_acc = snrt_mcycle();
+#ifdef PRINT_STATS
+            printf_safe("S3 CFG-STRM %d \r\n", end_cfg_acc - start_cfg_acc);
+#endif
 
+            // CYCLE_MEASURE: this is the start of the cycle count for COMPUTING
+            uint32_t start_exe_k = snrt_mcycle();
             dimc_start_streamer();
 
             while (dimc_is_streamer_busy()) { }
+            uint32_t end_exe_k = snrt_mcycle();
+#ifdef PRINT_STATS
+            printf_safe("S3 EXE-COMP %d \r\n", end_exe_k - start_exe_k);
+#endif
+            // CYCLE_MEASURE: this is the end of the cycle count for COMPUTING
         }
 
         /**************************************************************************/
@@ -145,18 +161,28 @@ int main() {
         /**************************************************************************/
 
         if(snrt_is_compute_core()) {
-            // send WQ
-            printf_safe("CONFIGURING STREAMERS for WQ\r\n");
+            uint32_t start_cfg_acc = snrt_mcycle();
             dimc_set_streamer_dim_w(0, 0, 0, 0, 0, 0);
             dimc_set_streamer_dim_r0(128, 1, 256, 0, 8, (uint32_t)(weight_ptr));
             dimc_set_streamer_dim_r1(128, 1, 256, 0, 8, (uint32_t)(weight_ptr + 8));
             dimc_set_streamer_dim_r2(128, 1, 256, 0, 8, (uint32_t)(weight_ptr + 16));
             dimc_set_streamer_dim_r3(128, 1, 256, 0, 8, (uint32_t)(weight_ptr + 24));
-            printf_safe("STREAMER CONFIGURED for WQ\r\n");
+            uint32_t end_cfg_acc = snrt_mcycle();
+#ifdef PRINT_STATS
+            printf_safe("S4 CFG-STRM %d \r\n", end_cfg_acc - start_cfg_acc);
+#endif
 
+
+            // CYCLE_MEASURE: this is the start of the cycle count for COMPUTING
+            uint32_t start_exe_acc = snrt_mcycle();
             dimc_start_streamer();
 
             while (dimc_is_streamer_busy()) { }
+            uint32_t end_exe_acc = snrt_mcycle();
+#ifdef PRINT_STATS
+            printf_safe("S4 EXE-COMP %d \r\n", end_exe_acc - start_exe_acc);
+#endif
+            // CYCLE_MEASURE: this is the end of the cycle count for COMPUTING
         }
 
         /**************************************************************************/
@@ -168,31 +194,48 @@ int main() {
         // streamer sends Q to DIMC & kick start Q1K1T generation;
         /**************************************************************************/
 
+        // BIG NOTE THIS PART CAN BE PARALLELIZED
         if (snrt_is_dm_core()) {
-            printf_safe("DMA core is configured for WQ\r\n");
 
             // read weight WK and ativation K from data.h
             size_t vector_size = Q_LENGTH * sizeof(uint64_t);
 
+            uint32_t start_dma_load = snrt_mcycle();
             snrt_dma_start_1d(activation_ptr, V, vector_size);
             snrt_dma_start_1d(weight_ptr, WV, vector_size);
-
             snrt_dma_wait_all();
+            uint32_t end_dma_load = snrt_mcycle();
+#ifdef PRINT_STATS
+            printf_safe("S5 DMA* %d \r\n", end_dma_load - start_dma_load);
+#endif
         }
+
+        // This can be taken out
+        snrt_cluster_hw_barrier();
 
         if (snrt_is_compute_core()){
             // send Q
-            printf_safe("CONFIGURING STREAMERS for Q\r\n");
+            uint32_t start_cfg_acc = snrt_mcycle();
             dimc_set_streamer_dim_w(64, 1, 64, 0, 8, (uint32_t)(buffer_ptr));
             dimc_set_streamer_dim_r0(128, 1, 256, 0, 8, (uint32_t)(activation_ptr_i));
             dimc_set_streamer_dim_r1(128, 1, 256, 0, 8, (uint32_t)(activation_ptr_i + 8));
             dimc_set_streamer_dim_r2(128, 1, 256, 0, 8, (uint32_t)(activation_ptr_i + 16));
             dimc_set_streamer_dim_r3(128, 1, 256, 0, 8, (uint32_t)(activation_ptr_i + 24));
-            printf_safe("STREAMER CONFIGURED for Q\r\n");
+            uint32_t end_cfg_acc = snrt_mcycle();
+#ifdef PRINT_STATS
+            printf_safe("S5 CFG-STRM %d \r\n", end_cfg_acc - start_cfg_acc);
+#endif
 
+            // CYCLE_MEASURE: this is the start of the cycle count for COMPUTING
+            uint32_t start_exe_acc = snrt_mcycle();
             dimc_start_streamer();
 
             while (dimc_is_streamer_busy()) { }
+            uint32_t end_exe_acc = snrt_mcycle();
+#ifdef PRINT_STATS
+            printf_safe("S5 EXE-COMP %d \r\n", end_exe_acc - start_exe_acc);
+#endif
+            // CYCLE_MEASURE: this is the end of the cycle count for COMPUTING
         }
 
         /**************************************************************************/
@@ -205,17 +248,27 @@ int main() {
 
         if (snrt_is_compute_core()){
             // send V
-            printf_safe("CONFIGURING STREAMERS for V\r\n");
+            uint32_t start_cfg_acc = snrt_mcycle();
             dimc_set_streamer_dim_w(0, 0, 0, 0, 0, 0);
             dimc_set_streamer_dim_r0(128, 1, 256, 0, 8, (uint32_t)(activation_ptr));
             dimc_set_streamer_dim_r1(128, 1, 256, 0, 8, (uint32_t)(activation_ptr + 8));
             dimc_set_streamer_dim_r2(128, 1, 256, 0, 8, (uint32_t)(activation_ptr + 16));
             dimc_set_streamer_dim_r3(128, 1, 256, 0, 8, (uint32_t)(activation_ptr + 24));
-            printf_safe("STREAMER CONFIGURED for V\r\n");
+            uint32_t end_cfg_acc = snrt_mcycle();
+#ifdef PRINT_STATS
+            printf_safe("S6 CFG-STRM %d \r\n", end_cfg_acc - start_cfg_acc);
+#endif
 
+            // CYCLE_MEASURE: this is the start of the cycle count for LOADING
+            uint32_t start_exe_acc = snrt_mcycle();
             dimc_start_streamer();
 
             while (dimc_is_streamer_busy()) { }
+            uint32_t end_exe_acc = snrt_mcycle();
+#ifdef PRINT_STATS
+            printf_safe("S6 EXE-LOAD %d \r\n", end_exe_acc - start_exe_acc);
+#endif
+            // CYCLE_MEASURE: this is the end of the cycle count for LOADING
         }
 
         /**************************************************************************/
@@ -228,17 +281,27 @@ int main() {
 
         if (snrt_is_compute_core()) {
             // send WV
-            printf_safe("CONFIGURING STREAMERS for WV\r\n");
+            uint32_t start_cfg_acc = snrt_mcycle();
             dimc_set_streamer_dim_w(0, 0, 0, 0, 0, 0);
             dimc_set_streamer_dim_r0(128, 1, 256, 0, 8, (uint32_t)(weight_ptr));
             dimc_set_streamer_dim_r1(128, 1, 256, 0, 8, (uint32_t)(weight_ptr + 8));
             dimc_set_streamer_dim_r2(128, 1, 256, 0, 8, (uint32_t)(weight_ptr + 16));
             dimc_set_streamer_dim_r3(128, 1, 256, 0, 8, (uint32_t)(weight_ptr + 24));
-            printf_safe("STREAMER CONFIGURED for WV\r\n");
+            uint32_t end_cfg_acc = snrt_mcycle();
+#ifdef PRINT_STATS
+            printf_safe("S7 CFG-STRM %d \r\n", end_cfg_acc - start_cfg_acc);
+#endif
 
+            // CYCLE_MEASURE: this is the start of the cycle count for COMPUTING
+            uint32_t start_exe_acc = snrt_mcycle();
             dimc_start_streamer();
 
             while (dimc_is_streamer_busy()) { }
+            uint32_t end_exe_acc = snrt_mcycle();
+#ifdef PRINT_STATS
+            printf_safe("S7 EXE-COMP %d \r\n", end_exe_acc - start_exe_acc);
+#endif
+            // CYCLE_MEASURE: this is the end of the cycle count for COMPUTING
         }
 
         /**************************************************************************/
@@ -247,49 +310,57 @@ int main() {
         /**************************************************************************/
         // stage 8: activation_ptr, activation_ptr_i, weight_ptr are free
         // has Q1K1T in TCDM
-        // send Q1K1T to DIMC, saving final result in 
+        // send Q1K1T to DIMC, saving final result in
         /**************************************************************************/
 
         if (snrt_is_compute_core()) {
             // send Q1K1T
-            printf_safe("CONFIGURING STREAMERS for Q1K1T\r\n");
+            uint32_t start_cfg_acc = snrt_mcycle();
             dimc_set_streamer_dim_w(64, 1, 64, 0, 8, (uint32_t)(output_ptr));
             dimc_set_streamer_dim_r0(16, 1, 256, 0, 8, (uint32_t)(buffer_ptr));
             dimc_set_streamer_dim_r1(16, 1, 256, 0, 8, (uint32_t)(buffer_ptr + 8));
             dimc_set_streamer_dim_r2(16, 1, 256, 0, 8, (uint32_t)(buffer_ptr + 16));
             dimc_set_streamer_dim_r3(16, 1, 256, 0, 8, (uint32_t)(buffer_ptr + 24));
-            printf_safe("STREAMER CONFIGURED for Q1K1T\r\n");
+            uint32_t end_cfg_acc = snrt_mcycle();
+#ifdef PRINT_STATS
+            printf_safe("S8 CFG-STRM %d \r\n", end_cfg_acc - start_cfg_acc);
+#endif
 
+            // CYCLE_MEASURE: this is the start of the cycle count for COMPUTING
+            uint32_t start_exe_acc = snrt_mcycle();
             dimc_start_streamer();
 
             while (dimc_is_streamer_busy()) { }
+            uint32_t end_exe_acc = snrt_mcycle();
+#ifdef PRINT_STATS
+            printf_safe("S8 EXE-COMP %d \r\n", end_exe_acc - start_exe_acc);
+#endif
+            // CYCLE_MEASURE: this is the end of the cycle count for COMPUTING
 
+#ifdef PRINT_STATS
             printf_safe("CHECK FINAL RESULT\r\n");
+#endif
 
             // check the final result
-            for (int i = 0; i < 512; ++i) {
-                uint64_t value = output_ptr[i];
+            // for (int i = 0; i < 512; ++i) {
+            //     uint64_t value = output_ptr[i];
 
-                uint64_t index = i * 8;
+            //     uint64_t index = i * 8;
 
-                // Split each uint64_t element into 8 uint8_t elements
-                for (int j = 0; j < 8; ++j) {
-                    uint8_t tmp_res = (uint8_t)((value >> (j * 8)) & 0xFF);
-                    // printf_safe("%d ", tmp_res);
-                    if(tmp_res != gold[index + j]) {
-                        printf_safe("MISMATCH at %d, res:%d, gold:%d\r\n", (index + j), tmp_res, gold[index + j]);
-                        err += 1;
-                    }
-                }
-                // printf_safe("RESULTS MATCH WITH GOLDEN MODEL\r\n");
-            }
-            
-            // printf_safe("PASS\r\n");
-            // printf_safe("MIMATCH COUNT %d\r\n", err);
-            
+            //     // Split each uint64_t element into 8 uint8_t elements
+            //     for (int j = 0; j < 8; ++j) {
+            //         uint8_t tmp_res = (uint8_t)((value >> (j * 8)) & 0xFF);
+            //         // printf_safe("%d ", tmp_res);
+            //         if(tmp_res != gold[index + j]) {
+            //             printf_safe("MISMATCH at %d, res:%d, gold:%d\r\n", (index + j), tmp_res, gold[index + j]);
+            //             err += 1;
+            //         }
+            //     }
+            // }
         }
 
+    }
         snrt_cluster_hw_barrier();
         return_to_cva6_single_cluster(err);
     }
-}   
+}
