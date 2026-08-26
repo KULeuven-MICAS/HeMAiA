@@ -113,7 +113,7 @@ SOURCE_PLIC_DIR       = $(ROOT)/hw/vendor/pulp_platform_opentitan_peripherals/sr
 PLICGEN               = $(SOURCE_PLIC_DIR)/util/reg_rv_plic.py
 $(TARGET_PLIC_DIR)/rv_plic.hjson: $(SOURCE_PLIC_DIR)/data/rv_plic.hjson.tpl $(CFG) | $(TARGET_PLIC_DIR)
 	@echo "[PLICGEN] Generate $@"
-	@$(PLICGEN) -s 73 -t 2 -p 6 $< > $@
+	@$(PLICGEN) -s 69 -t 2 -p 6 $< > $@
 
 # Currently there are no sw related to the the PLIC
 $(PLATFORM_HEADERS_DIR)/rv_plic.h: $(TARGET_PLIC_DIR)/rv_plic.hjson | $(PLATFORM_HEADERS_DIR)

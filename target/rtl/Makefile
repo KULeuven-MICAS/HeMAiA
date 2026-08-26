@@ -280,12 +280,12 @@ $(PLIC_REGGEN_TARGETS): .plic_reggen_targets_group
 # But if you generate the RTL first, we need to generate the hjson from the template
 $(PLIC_HJSON_DIR)/rv_plic.hjson: $(SOURCE_PLIC_DIR)/data/rv_plic.hjson.tpl $(CFG) | $(PLIC_HJSON_DIR)
 	@echo "[PLICGEN] Generate $@"
-	@$(PLICGEN) -s 73 -t 2 -p 6 $< > $@
+	@$(PLICGEN) -s 69 -t 2 -p 6 $< > $@
 
 # Generate the RTL file from the template
 $(PLIC_RTL_TARGET): $(SOURCE_PLIC_DIR)/data/rv_plic.sv.tpl | $(TARGET_PLIC_DIR)
 	@echo "[PLICGEN] Generate $@"
-	@$(PLICGEN) -s 73 -t 2 -p 6 $< > $@
+	@$(PLICGEN) -s 69 -t 2 -p 6 $< > $@
 
 plic: $(PLIC_RTL_TARGET) $(PLIC_REGGEN_TARGETS)
 clean-plic:

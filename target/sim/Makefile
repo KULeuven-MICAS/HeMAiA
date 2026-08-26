@@ -161,6 +161,9 @@ VSIM_FLAGS += -do "$(VSIM_DO_CMD)"
 # TODO: Workaround; revise
 VSIM_FLAGS += -warning 8386
 
+# Treat every module-port width mismatch found during elaboration as an error.
+VOPT_FLAGS += -error 2241
+
 VLOG_FLAGS += -svinputport=compat
 VLOG_FLAGS += -override_timescale 1ns/1ps
 VLOG_FLAGS += -timescale 1ns/1ps
@@ -183,7 +186,8 @@ endif
 VCS_FLAGS += -Mdir=work-vcs
 VCS_FLAGS += -Mlib=work-vcs
 VCS_FLAGS += -full64
-VCS_FLAGS += +lint=TFIPC-L
+VCS_FLAGS += +lint=PCWM-L,TFIPC-L
+VCS_FLAGS += -error=PCWM-L,TFIPC-L
 # Additional Optimizations
 VCS_FLAGS += -O4
 # Multi-threading compilation
