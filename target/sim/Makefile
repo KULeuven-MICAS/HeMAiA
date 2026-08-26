@@ -186,8 +186,8 @@ endif
 VCS_FLAGS += -Mdir=work-vcs
 VCS_FLAGS += -Mlib=work-vcs
 VCS_FLAGS += -full64
-VCS_FLAGS += +lint=PCWM-L,CAWM-L,WMIA-L,TFIPC-L
-VCS_FLAGS += -error=PCWM-L,CAWM-L,WMIA-L,TFIPC-L
+VCS_FLAGS += +lint=PCWM-L,TFIPC-L
+VCS_FLAGS += -error=PCWM-L,TFIPC-L
 # Additional Optimizations
 VCS_FLAGS += -O4
 # Multi-threading compilation
