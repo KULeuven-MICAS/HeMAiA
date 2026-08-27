@@ -1,0 +1,20 @@
+# M+N split over 4 chiplets, 1 cluster each. RTL cfg: hemaia_tapeout_1c.hjson
+#
+# grid_N > 1, so a worker's D sub-block is strided in golden D while packed in
+# its chip-local buffer. B is N-major, (N1, K1, meshCol, tileSize); the K-major
+# reading of the datagen buffer only happens to work at N1 = 1.
+{
+    num_chips: 4
+    clusters_per_chip: 1
+    grid_M: 2
+    grid_K: 1
+    grid_N: 2
+    array_shape: 1
+    M1: 2
+    K1: 4
+    N1: 2
+    transposed_A: 0
+    transposed_B: 0
+    accumPrevC: 0
+    check_bytes: 0
+}

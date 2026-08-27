@@ -1,0 +1,21 @@
+# M split over a row of 3 chiplets, x = 0..2.
+# RTL cfg: hemaia_scalability_exp_3chip_1c_row.hjson
+#
+# Covers a chiplet at coordinate 2, which needs hemaia_d2d_link_initialize();
+# the legacy 2x2 table leaves such a chiplet with no link configuration and it
+# stalls before its first printf.
+{
+    num_chips: 3
+    clusters_per_chip: 1
+    grid_M: 3
+    grid_K: 1
+    grid_N: 1
+    array_shape: 1
+    M1: 3
+    K1: 4
+    N1: 1
+    transposed_A: 0
+    transposed_B: 0
+    accumPrevC: 0
+    check_bytes: 0
+}

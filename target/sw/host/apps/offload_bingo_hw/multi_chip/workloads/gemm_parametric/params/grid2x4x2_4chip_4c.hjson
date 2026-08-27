@@ -1,0 +1,20 @@
+# 16 workers on 4 chiplets x 4 clusters, GEMM 64 x 2048 x 2048.
+# RTL cfg: hemaia_scalability_exp_4chip_4c.hjson
+#
+# grid_K = 4 gives a 4-deep reduction chain, 3 Add nodes per chiplet. The
+# checks read the k0 accumulator, so a missing reduction would mismatch.
+{
+    num_chips: 4
+    clusters_per_chip: 4
+    grid_M: 2
+    grid_K: 4
+    grid_N: 2
+    array_shape: 1
+    M1: 64
+    K1: 128
+    N1: 64
+    transposed_A: 0
+    transposed_B: 0
+    accumPrevC: 0
+    check_bytes: 4096
+}
