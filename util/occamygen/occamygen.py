@@ -936,6 +936,24 @@ def main():
         print("------------------------------------------------")
         print("    Generate HeMAiA Mem Chip XDMA")
         print("------------------------------------------------")
+        # hemaia_mem_chip_xdma_wrapper.sv is one module shared by every
+        # hemaia_mem_chip instance, and both its TCDM size and the Chisel
+        # --tcdmSize come from hemaia_mem_chip[0], while testharness.sv.tpl passes
+        # each instance its own WideSRAMSize. Unequal sizes therefore build
+        # hardware whose SRAM and XDMA address port disagree on every chip but the
+        # first, with no error. Reject it here instead.
+        _mem_chip_sizes = {
+            int(mc["mem_size"])
+            for mc in occamy_cfg["hemaia_multichip"]["testbench_cfg"]["hemaia_mem_chip"]
+        }
+        if len(_mem_chip_sizes) > 1:
+            raise ValueError(
+                "hemaia_multichip.testbench_cfg.hemaia_mem_chip lists mem chips of "
+                f"differing mem_size ({sorted(_mem_chip_sizes)}). The generated "
+                "hemaia_mem_chip_xdma_wrapper is a SINGLE module sized from entry "
+                "[0] and shared by every instance, so unequal sizes silently build "
+                "mismatched hardware. Give every mem chip the same mem_size."
+            )
         import importlib.util
         script_dir = pathlib.Path(__file__).parent.resolve()
         snaxgen_path = script_dir / ".." / ".." / "deps" / "snitch_cluster" /  "util" / "snaxgen" / "snaxgen.py"

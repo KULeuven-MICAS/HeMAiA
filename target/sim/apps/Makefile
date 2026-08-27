@@ -40,6 +40,10 @@ APP_ELF  = $(SW_HOST_APPS_DIR)$(APP_REL_PATH)/build/$(APP_NAME).elf
 APP_BIN  = $(SW_HOST_APPS_DIR)$(APP_REL_PATH)/build/$(APP_NAME).bin
 APP_DUMP = $(SW_HOST_APPS_DIR)$(APP_REL_PATH)/build/$(APP_NAME).dump
 APP_MEM  = $(SW_HOST_APPS_DIR)$(APP_REL_PATH)/build/mempool.bin
+# Per-mem-chip images (mempool_<x>_<y>.bin) when the workload partitions the
+# mempool across several mem chiplets. Absent for every single-mem-chip
+# workload, which keeps using APP_MEM alone.
+APP_MEM_DIR = $(SW_HOST_APPS_DIR)$(APP_REL_PATH)/build
 
 BINGO_TRACE_HEADER_DIR      = $(MKFILE_DIR)bingo_trace_headers
 BINGO_TRACE_HEADER_MANIFEST = $(MKFILE_DIR).bingo_trace_headers
@@ -76,6 +80,13 @@ apps: $(APP_ELF)
 		python3 bin2hex.py -i mempool.bin; \
 		cp -r -f $(MKFILE_DIR)/mempool $(BIN_DIR); \
 	fi
+	for mem in $(APP_MEM_DIR)/mempool_*.bin; do \
+		[ -e "$$mem" ] || continue; \
+		base=`basename $$mem .bin`; \
+		cp -f "$$mem" $(MKFILE_DIR); \
+		python3 bin2hex.py -i $$base.bin; \
+		cp -r -f $(MKFILE_DIR)/$$base $(BIN_DIR); \
+	done
 	rm -rf $(BINGO_TRACE_HEADER_DIR)
 	mkdir -p $(BINGO_TRACE_HEADER_DIR)
 	cp -f $(BINGO_SHARED_TRACE_HEADER) $(BINGO_TRACE_HEADER_DIR)/perf_tracing.h
