@@ -768,6 +768,113 @@ inline D2DPhyMode get_d2d_link_phy_mode(D2DDirection direction) {
     return (D2DPhyMode)((mode_value >> direction) & 0x1);
 }
 
+// ---------------------------------------------------------------------------
+// Topology initialisation
+//
+// hemaia_d2d_link_initialize_4c1m() below switches on chip ids 0x00/0x01/0x10/
+// 0x11 -- the 2x2 quadrant of the tapeout config -- and falls through default:
+// for anything else. Such a chiplet gets no link availability restriction and no
+// multicast fence, so it believes it has neighbours in all four directions,
+// including off the edge of the array. Traffic sent that way is never
+// clear-to-send, the D2D TX path fills, and the host stalls on its next access
+// to the chip-local manager window.
+//
+// The functions below derive the same settings from the topology in the
+// generated platform header, so they work for any grid. On the 2x2 topology with
+// a memory chiplet at (2,0) they reproduce the hardcoded table exactly.
+//
+// Directions match io_wrapper.sv.tpl: EAST = +x, WEST = -x, NORTH = -y,
+// SOUTH = +y.
+// ---------------------------------------------------------------------------
+
+// True if a chiplet -- compute or memory -- sits at grid coordinate (x, y).
+static inline bool hemaia_d2d_chiplet_exists_at(int x, int y) {
+    if (x < 0 || y < 0 || x > 0xF || y > 0xF) return false;
+    const uint8_t id = (uint8_t)((x << 4) | y);
+    static const uint8_t compute_ids[N_CHIPLETS] = {CHIPLET_ID_LIST};
+    for (unsigned i = 0; i < N_CHIPLETS; i++) {
+        if (compute_ids[i] == id) return true;
+    }
+#if N_MEM_CHIPLETS > 0
+    static const uint8_t mem_ids[N_MEM_CHIPLETS] = {MEM_CHIPLET_ID_LIST};
+    for (unsigned i = 0; i < N_MEM_CHIPLETS; i++) {
+        if (mem_ids[i] == id) return true;
+    }
+#endif
+    return false;
+}
+
+// True if the chiplet at (x, y) is a memory chiplet.
+static inline bool hemaia_d2d_is_mem_chiplet_at(int x, int y) {
+#if N_MEM_CHIPLETS > 0
+    if (x < 0 || y < 0 || x > 0xF || y > 0xF) return false;
+    const uint8_t id = (uint8_t)((x << 4) | y);
+    static const uint8_t mem_ids[N_MEM_CHIPLETS] = {MEM_CHIPLET_ID_LIST};
+    for (unsigned i = 0; i < N_MEM_CHIPLETS; i++) {
+        if (mem_ids[i] == id) return true;
+    }
+#else
+    (void)x;
+    (void)y;
+#endif
+    return false;
+}
+
+// Topology-independent replacement for hemaia_d2d_link_initialize_4c1m(): same
+// clock-domain preamble, per-direction settings computed from the grid.
+void hemaia_d2d_link_initialize(uint8_t chip_id) {
+    // Set the default clock division ratio for the Host and D2D link to avoid CDC issue
+    enable_clk_domain(0, 7);  // host CPU
+    for (uint8_t i = 0; i < N_CLUSTERS_PER_CHIPLET; i++) {
+        enable_clk_domain(1 + i, 7);  // cluster i
+    }
+    enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 1, 1);  // East  D2D PHY
+    enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 2, 1);  // West  D2D PHY
+    enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 3, 1);  // North D2D PHY
+    enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 4, 1);  // South D2D PHY
+    set_all_d2d_link_tx_turnaround_silence_period(0);
+
+    const int this_x = (chip_id >> 4) & 0xF;
+    const int this_y = chip_id & 0xF;
+
+    const D2DDirection dirs[4] = {D2D_DIRECTION_EAST, D2D_DIRECTION_WEST,
+                                  D2D_DIRECTION_NORTH, D2D_DIRECTION_SOUTH};
+    const int nbr_x[4] = {this_x + 1, this_x - 1, this_x, this_x};
+    const int nbr_y[4] = {this_y, this_y, this_y - 1, this_y + 1};
+#if !HEMAIA_SAME_MEMCHIP_SPEED
+    // Clock domain index of each direction's PHY, same order as dirs[]. Only
+    // needed when a memchip-facing PHY has to be slowed down.
+    const uint8_t phy_clk_domain[4] = {
+        (uint8_t)(N_CLUSTERS_PER_CHIPLET + 1), (uint8_t)(N_CLUSTERS_PER_CHIPLET + 2),
+        (uint8_t)(N_CLUSTERS_PER_CHIPLET + 3), (uint8_t)(N_CLUSTERS_PER_CHIPLET + 4)};
+#endif
+
+    for (unsigned i = 0; i < 4; i++) {
+        const bool exists = hemaia_d2d_chiplet_exists_at(nbr_x[i], nbr_y[i]);
+        // A link with no chiplet behind it must be marked unavailable, or the
+        // router will forward packets into a port that is never clear to send.
+        set_d2d_link_availability(dirs[i], exists);
+        if (!exists) continue;
+        if (hemaia_d2d_is_mem_chiplet_at(nbr_x[i], nbr_y[i])) {
+            // The memory chiplet sits outside the multicast domain.
+            set_d2d_link_multicast_fence(dirs[i], false);
+#if !HEMAIA_SAME_MEMCHIP_SPEED
+            // The memchip runs at 1/20 of the host clock in the testharness, so
+            // this PHY has to be slowed to match. DO NOT TOUCH without checking
+            // testharness.sv.tpl's memchip clock.
+            set_d2d_link_tx_yield_period(HEMAIA_D2D_LINK_FPGA_TX_YIELD_PERIOD, dirs[i]);
+            set_d2d_link_tx_turnaround_silence_period(
+                HEMAIA_D2D_LINK_FPGA_TX_TURNAROUND_SILENCE_PERIOD, dirs[i]);
+            enable_clk_domain(phy_clk_domain[i], 20);
+#endif
+        }
+    }
+}
+
+// !! LEGACY, 2x2 ONLY -- see the comment block above hemaia_d2d_link_initialize().
+// This function is correct ONLY for chip ids 0x00/0x01/0x10/0x11 with the memory
+// chiplet at (2,0). Any other chiplet hits `default:` and is left with all four
+// links marked available, which hangs it. Prefer the generic version.
 // Initialize the HeMAiA D2D Link for 4C + 1M topology, set the link topology, 
 // multicast domain, and clock division according to the chip ID.
 // We also need to configure the clk div ratio between the core and the D2D link to avoid the CDC issue
