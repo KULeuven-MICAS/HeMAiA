@@ -69,7 +69,26 @@ except Exception:
 # ---------------------------------------------------------------------------
 
 DEFAULT_DOCKER_IMAGE = "ghcr.io/kuleuven-micas/hemaia:main"
-SIM_TIMEOUT_SECONDS = 4 * 60 * 60  # 4 hours per simulation thread
+def _sim_timeout_seconds() -> int:
+    """Per-simulation wall-clock cap, overridable with ``HEMAIA_SIM_TIMEOUT_H``.
+
+    This cap is what really ends a long run, and it used to be a hardcoded 4 h
+    that nothing surfaced: a run sized for 8 h was killed at exactly 4h00m00s
+    with a bare ``FAIL`` and no indication that a timeout, rather than the
+    design, had ended it.  Any outer wall-clock cap must be set together with
+    this one, or it is a no-op past 4 h.
+    """
+    raw = os.environ.get("HEMAIA_SIM_TIMEOUT_H", "").strip()
+    if not raw:
+        return 4 * 60 * 60
+    try:
+        hours = float(raw)
+    except ValueError:
+        return 4 * 60 * 60
+    return max(60, int(hours * 3600))
+
+
+SIM_TIMEOUT_SECONDS = _sim_timeout_seconds()  # default 4 h per simulation thread
 DEFAULT_MAX_SIM_JOBS = 16
 PREPARATION_MANIFEST = "netlist_ci_preparation_manifest.json"
 PREPARATION_MANIFEST_VERSION = 6
@@ -91,6 +110,9 @@ class PlatformLayout(NamedTuple):
     compute_bank_depth: int
     mempool_bank_count: int
     mempool_bank_depth: Optional[int]
+    # Mem-chiplet coordinates, in cfg order.  Needed because the mempool image
+    # can be PARTITIONED per mem chip (mempool_<x>_<y>/) instead of replicated.
+    mem_coordinates: List[Tuple[int, int]] = []
 
 # Per-engine differences: the make targets to run, where the compile happens, the
 # produced binary, and the artefacts to stage into each task directory (paths are
@@ -273,6 +295,197 @@ def _terminate_all_sims() -> None:
         _kill_pgid(pgid)
 
 
+# ---------------------------------------------------------------------------
+# Hang watchdog -- catches a stuck cluster core long before SIM_TIMEOUT_SECONDS
+# ---------------------------------------------------------------------------
+#
+# Observed failure mode: a hung cluster core spins on a
+# CSR poll and its hart's instruction trace grows without bound while every
+# other hart's trace goes flat within minutes -- normal "done" traces are
+# ~75-90MB, a hang reaches multiple GB and fills the shared disk quota long
+# before the multi-hour ``timeout_seconds`` would ever fire. Poll trace sizes
+# and kill the process group early on that exact signature.
+
+_HANG_WATCHDOG_POLL_SECONDS = 60
+_HANG_WATCHDOG_WARMUP_SECONDS = 5 * 60
+_HANG_WATCHDOG_STABLE_POLLS = 3
+_HANG_WATCHDOG_TRACE_MAX_BYTES = 400 * 1024 * 1024
+
+
+# ---------------------------------------------------------------------------
+# Trace sink (HEMAIA_TRACE_SINK=null)
+# ---------------------------------------------------------------------------
+# ``snitch_cc.sv`` opens one ``.dasm`` per hart unconditionally: the
+# ``disable_tracing()`` guard around it exists only under ``ifdef VERILATOR``.
+# At 16 chiplets that is 128 harts
+# writing 6-9 MB/min, which is what actually caps long runs -- and because trace
+# bytes scale with instructions retired rather than wall-clock, a faster
+# simulator writes the SAME bytes sooner.
+#
+# Pre-creating every trace path as a symlink to /dev/null makes the simulator's
+# $fopen succeed and its $fwrite go nowhere.  It removes the disk cost without
+# touching the vendored RTL; the $sformat/DASM formatting cost remains, so the
+# two effects can be measured apart.
+_TRACE_SINK_MAX_CHIP_DIGIT = 8      # chip coords are printed as one hex digit
+_TRACE_SINK_MAX_HART = 16           # harts per chip (hart 0 is the CVA6 host)
+# Hart 0 is the host (CVA6).  Its trace is ONE file per chip -- 17 at 16
+# chiplets, against 128 for the Snitch harts -- and it is the diagnostic that
+# actually pays off: reading it is how the 2026-08-21 "throughput-bound, not
+# hung" verdict was reached (host in bingoHeapMalloc/get_device_function while
+# every worker spun).  Sinking it to save ~1% of the bytes would cost the only
+# view of what the host is doing, so it is deliberately kept on disk.
+_TRACE_SINK_KEEP_HOST = True
+# iDMA tracer file names are dma_trace_<hart_id>_<channel>.log.  Hart ids are
+# the cluster DMA cores' (2, 4, 6, 8 at 4 clusters/chip), so 64 covers far more
+# clusters than any cfg here has; NumChannels is 1 on this platform.
+_TRACE_SINK_MAX_DMA_HART = 64
+_TRACE_SINK_MAX_DMA_CHANNEL = 4
+# ...but sinking ALL of them leaves a long run with NO sim-clock probe at all.
+# Once the hosts have dispatched their work they park and retire nothing, so
+# every host trace freezes (that is the normal picture) and the Snitch traces
+# are sunk, so a 16-chiplet run can go hours without writing one byte anywhere
+# and "healthy but slow" cannot be told from "hung".  The iDMA trace is the
+# cheapest fix: each line carries a ``'time':`` stamp, which recovers the
+# simulated clock.  Keep ONE file -- cluster 0's DMA core, ~30 MB/h against
+# ~290 MB/2.5h for all four -- and let it be widened or switched off.
+_TRACE_SINK_DEFAULT_DMA_KEEP = "00002"
+
+
+def _install_trace_sink(task_dir: Path) -> int:
+    """Point every per-hart trace path at /dev/null.  Returns the link count.
+
+    Covers all three names the tracers emit: the Snitch ``.dasm``, and the
+    CVA6 ``.log`` / ``_commit.log`` pair.  The commit log is easy to miss --
+    it is a SEPARATE file from the ``.log`` and was found still growing at
+    ~6 MB/31 min per chip after the first version of this function sank
+    everything else.
+
+    ALSO covers the iDMA tracer's ``bin/dma_trace_<hart>_<chan>.log``.  Those
+    live in ``bin/``, not ``bin/logs/``, so the first version of this function
+    missed them entirely: a 2.5 h four-chiplet run wrote 4 x ~290 MB = 1.16 G
+    of them.  ``idma_inst64_top.sv`` gates the tracer on a ``DMATracing``
+    parameter that ``snitch_cc.sv`` hardcodes to 1, and that file is a bender
+    checkout re-fetched on every launch, so a symlink here is the only durable
+    switch.  The file name carries the hart
+    id but NOT the chip, so on a multi-chip run every chip writes the same
+    files anyway -- there is nothing to lose by sinking them.
+    """
+    log_dir = task_dir / "bin" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    devnull = Path("/dev/null")
+    made = 0
+    # HEMAIA_TRACE_KEEP="00,02,20": keep REAL Snitch traces for these chips and
+    # sink every other chip.  Sinking everything saves the quota but also hides
+    # the workers, which is useless when the question is "what are the workers
+    # on chip N doing?".  Keeping two or three chips costs a few hundred MB
+    # instead of ~3 GB at 128 harts and still gives a working-vs-silent
+    # comparison.  Coordinates are the "xy" hex pair as they appear in the file
+    # name (chip (0,2) -> "02").
+    keep = {
+        c.strip().lower()
+        for c in os.environ.get("HEMAIA_TRACE_KEEP", "").split(",")
+        if c.strip()
+    }
+    for x in range(_TRACE_SINK_MAX_CHIP_DIGIT):
+        for y in range(_TRACE_SINK_MAX_CHIP_DIGIT):
+            if f"{x:01x}{y:01x}" in keep:
+                continue
+            for hart in range(_TRACE_SINK_MAX_HART):
+                if hart == 0 and _TRACE_SINK_KEEP_HOST:
+                    continue
+                stem = f"trace_chip_{x:01x}{y:01x}_hart_{hart:05x}"
+                for name in (f"{stem}.dasm", f"{stem}.log", f"{stem}_commit.log"):
+                    path = log_dir / name
+                    try:
+                        if path.is_symlink() or path.exists():
+                            path.unlink()
+                        path.symlink_to(devnull)
+                        made += 1
+                    except OSError:
+                        pass
+    # iDMA tracer: bin/dma_trace_%05x_%05x.log (hart id, channel).
+    bin_dir = task_dir / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    # HEMAIA_DMA_TRACE_KEEP: comma-separated hart ids as they appear in the
+    # file name ("00002,00004"), or "none" to sink every one of them.
+    raw_keep = os.environ.get("HEMAIA_DMA_TRACE_KEEP", "").strip()
+    if not raw_keep:
+        raw_keep = _TRACE_SINK_DEFAULT_DMA_KEEP
+    dma_keep = set()
+    if raw_keep.lower() not in ("none", "0", "off"):
+        for tok in raw_keep.split(","):
+            tok = tok.strip().lower()
+            if tok:
+                try:
+                    dma_keep.add(int(tok, 16))
+                except ValueError:
+                    pass
+    for hart in range(_TRACE_SINK_MAX_DMA_HART):
+        if hart in dma_keep:
+            continue
+        for chan in range(_TRACE_SINK_MAX_DMA_CHANNEL):
+            path = bin_dir / f"dma_trace_{hart:05x}_{chan:05x}.log"
+            try:
+                if path.is_symlink() or path.exists():
+                    path.unlink()
+                path.symlink_to(devnull)
+                made += 1
+            except OSError:
+                pass
+    return made
+
+
+def _trace_sink_enabled() -> bool:
+    return os.environ.get("HEMAIA_TRACE_SINK", "").strip().lower() in ("null", "1", "true")
+
+
+def _hang_watchdog(
+    task_dir: Path, pgid: int, stop_event: threading.Event,
+) -> Optional[str]:
+    """Poll ``bin/logs/trace_chip_*_hart_*.dasm`` sizes; kill *pgid* early if
+    exactly one hart is still growing past the size cap while the rest have
+    gone idle (unchanged size for ``_HANG_WATCHDOG_STABLE_POLLS`` polls).
+
+    Returns a message describing the kill, or ``None`` if the watchdog never
+    fired (normal completion, or too few harts to judge "idle vs. growing").
+    """
+    log_dir = task_dir / "bin" / "logs"
+    history: Dict[Path, List[int]] = {}
+    if stop_event.wait(_HANG_WATCHDOG_WARMUP_SECONDS):
+        return None
+    while not stop_event.wait(_HANG_WATCHDOG_POLL_SECONDS):
+        try:
+            traces = sorted(log_dir.glob("trace_chip_*_hart_*.dasm"))
+        except OSError:
+            continue
+        if len(traces) < 2:
+            continue
+        for path in traces:
+            try:
+                size = path.stat().st_size
+            except OSError:
+                continue
+            hist = history.setdefault(path, [])
+            hist.append(size)
+            del hist[: -(_HANG_WATCHDOG_STABLE_POLLS + 1)]
+        ready = {p: h for p, h in history.items() if len(h) > _HANG_WATCHDOG_STABLE_POLLS}
+        if len(ready) < 2:
+            continue
+        growing = [p for p, h in ready.items() if h[-1] > _HANG_WATCHDOG_TRACE_MAX_BYTES]
+        idle = [p for p, h in ready.items() if h[-1] == h[0]]
+        if growing and len(idle) >= len(ready) - len(growing):
+            _kill_pgid(pgid)
+            cap_mib = _HANG_WATCHDOG_TRACE_MAX_BYTES // (1024 * 1024)
+            offenders = ", ".join(p.name for p in growing)
+            return (
+                f"HANG DETECTED: {offenders} exceeded {cap_mib}MiB while "
+                f"{len(idle)}/{len(ready)} other hart trace(s) went idle -- "
+                "killed early to protect the disk quota "
+                f"(see {log_dir})."
+            )
+    return None
+
+
 def _install_cleanup_handlers() -> None:
     """Ensure simulation process groups are reaped on exit or signal."""
     atexit.register(_terminate_all_sims)
@@ -444,13 +657,27 @@ def _simple_task_yaml_loader(task_yaml: Path) -> Dict:
     return {"runs": runs}
 
 
-def _derive_ci_name(host_app_type: str, chip_type: str, workload: str, dev_app: str) -> str:
-    """Derive a human-readable, unique task name from its attributes."""
+def _derive_ci_name(
+    host_app_type: str,
+    chip_type: str,
+    workload: str,
+    dev_app: str,
+    data_cfg: str = "",
+) -> str:
+    """Derive a human-readable, unique task name from its attributes.
+
+    ``data_cfg`` contributes its file stem, so a task list may run the SAME
+    workload several times with different data configurations and still get
+    distinct, readable run directories.  Without it two such tasks would differ
+    only by the numeric ``task_<idx>_`` prefix.
+    """
     parts = [host_app_type, chip_type]
     if workload and workload != "None":
         parts.append(workload)
     if dev_app and dev_app != "None":
         parts.append(dev_app)
+    if data_cfg and data_cfg != "None":
+        parts.append(Path(data_cfg).stem)
     return "_".join(p for p in parts if p)
 
 
@@ -488,14 +715,32 @@ def make_task(
     chip_type: str = "",
     workload: str = "",
     dev_app: str = "",
+    data_cfg: str = "",
 ) -> Dict[str, str]:
-    """Build a single task dict (used by the test drivers for a 1-element list)."""
+    """Build a single task dict (used by the test drivers for a 1-element list).
+
+    ``data_cfg`` is optional and repo-root-relative.  When set it is forwarded
+    to the software build as ``HOST_DATA_CFG=<abs path>``, and a host workload
+    Makefile that opts in generates its data header from that file instead of
+    its own default.  Omitted, nothing is passed and every workload keeps its
+    default, so existing task lists are unaffected.
+
+    The variable is deliberately NOT called ``DATA_CFG``.  That name is a
+    repo-wide convention: most host workloads AND the device applications'
+    ``data/Makefile`` all declare ``DATA_CFG ?= <their own params.hjson>``.  A
+    command-line ``DATA_CFG=`` propagates through every recursive make and would
+    override the DEVICE application's data configuration with the host's --
+    silently, because both are valid hjson.  ``HOST_DATA_CFG`` is read by
+    nothing else, so it cannot collide.
+    """
     return {
         "host_app_type": host_app_type,
         "chip_type": chip_type,
         "workload": workload,
         "dev_app": dev_app,
-        "ci_name": _derive_ci_name(host_app_type, chip_type, workload, dev_app),
+        "data_cfg": data_cfg,
+        "ci_name": _derive_ci_name(
+            host_app_type, chip_type, workload, dev_app, data_cfg),
     }
 
 
@@ -522,6 +767,12 @@ def parse_tasks(task_yaml: Path) -> List[Dict[str, str]]:
             WORKLOAD: gemm_tiled_1cluster
             DEV_APP: snax-bingo-offload
 
+    ``HOST_DATA_CFG`` is an optional fifth key holding a repo-root-relative path
+    to the host workload's data configuration.  It lets one task list run the
+    same parameterised workload at several problem sizes.  Omitted, the
+    workload's own default is used.  See :func:`make_task` for why the name is
+    not ``DATA_CFG``.
+
     Kept as a stable module-level function: the xDMA sweep post-processing
     (``gather_xdma_luts.py``) imports it to recover the task_<idx> -> workload
     order.
@@ -541,6 +792,7 @@ def parse_tasks(task_yaml: Path) -> List[Dict[str, str]]:
             chip_type=str(attr_dict.get("CHIP_TYPE", "")),
             workload=str(attr_dict.get("WORKLOAD", "")),
             dev_app=str(attr_dict.get("DEV_APP", "")),
+            data_cfg=str(attr_dict.get("HOST_DATA_CFG", "")),
         ))
     return tasks
 
@@ -723,6 +975,7 @@ class HeMAiASimRunner:
                 data = hjson.load(source)
             multichip = data["hemaia_multichip"]
             testbench_cfg = multichip.get("testbench_cfg")
+            mem_coordinates = []
             if testbench_cfg is None and bool(multichip.get("single_chip")):
                 coordinates = [(0, 0)]
             else:
@@ -736,6 +989,12 @@ class HeMAiASimRunner:
                 []
                 if testbench_cfg is None
                 else [int(chip["mem_size"]) for chip in testbench_cfg["hemaia_mem_chip"]]
+            )
+            mem_coordinates = (
+                []
+                if testbench_cfg is None
+                else [(int(c["coordinate"][0]), int(c["coordinate"][1]))
+                      for c in testbench_cfg["hemaia_mem_chip"]]
             )
         except (ImportError, KeyError, TypeError, ValueError):
             text = cfg_path.read_text()
@@ -796,6 +1055,13 @@ class HeMAiASimRunner:
                     text[mem_chip_start:mem_chip_end],
                 )
             ]
+            mem_coordinates = [
+                (int(x), int(y))
+                for x, y in re.findall(
+                    r"coordinate\s*:\s*\[\s*(\d+)\s*,?\s*(\d+)\s*\]",
+                    text[mem_chip_start:mem_chip_end],
+                )
+            ]
 
         if not coordinates:
             raise ValueError(f"No compute chips found in {cfg_path}")
@@ -836,6 +1102,7 @@ class HeMAiASimRunner:
             compute_bank_depth=compute_bank_depth,
             mempool_bank_count=MEMPOOL_BANK_COUNT,
             mempool_bank_depth=mempool_bank_depth,
+            mem_coordinates=mem_coordinates,
         )
 
     def _clear_generated_app_images(self) -> None:
@@ -850,6 +1117,16 @@ class HeMAiASimRunner:
         ):
             if generated.is_dir():
                 shutil.rmtree(generated)
+        # Per-mem-chip images too.  A stale mempool_<x>_<y>/ left by a PREVIOUS
+        # workload would otherwise be staged as if it belonged to this one --
+        # the exact shape of bug this cleanup exists to prevent, and worse here
+        # because the images differ per chip and a stale one still validates.
+        for root in (sim_bin, self.repo_root / "target/sim/apps"):
+            for generated in root.glob("mempool_*"):
+                if generated.is_dir():
+                    shutil.rmtree(generated)
+                elif generated.suffix == ".bin":
+                    generated.unlink()
         mempool_bin = self.repo_root / "target/sim/apps/mempool.bin"
         if mempool_bin.exists():
             mempool_bin.unlink()
@@ -1247,6 +1524,21 @@ class HeMAiASimRunner:
                 # legacy builds and compile an unrelated device application.
                 if val:
                     make_cmd.append(f"{var}={val}")
+            # A per-task host data configuration, if the task list names one.
+            # It is passed as an ABSOLUTE path: the workload Makefile resolves
+            # its own default against its own directory, not against the build
+            # cwd, so a relative value would be read relative to the repo root
+            # and silently miss. The repo is mounted at the same path inside the
+            # build container, so an absolute host path is valid there too.
+            data_cfg = task.get("data_cfg", "")
+            if data_cfg and data_cfg != "None":
+                data_cfg_path = self._repo_path(data_cfg)
+                if not data_cfg_path.is_file():
+                    raise FileNotFoundError(
+                        f"task {idx} ({task['ci_name']}): HOST_DATA_CFG does not "
+                        f"exist: {data_cfg_path}"
+                    )
+                make_cmd.append(f"HOST_DATA_CFG={data_cfg_path}")
             make_cmd.append(f"CFG_OVERRIDE={self.effective_cfg}")
             make_cmd.append("DEBUG_LEVEL=0")
             self._container(make_cmd)
@@ -1297,6 +1589,37 @@ class HeMAiASimRunner:
                     (mempool_dest / f"bank_{bank}.hex").write_text("0\n")
                 mempool_kind = "zero_fallback"
             (mempool_dest / ".image_kind").write_text(f"{mempool_kind}\n")
+
+            # PER-MEM-CHIP IMAGES.  ``load_binary.sv`` loads every mem chiplet
+            # from its OWN ``mempool_<x>_<y>/``, so one must exist for each.  A
+            # workload that partitions its mempool (B split across the chips, so
+            # each holds only the share its row of compute chiplets reads)
+            # generates them; every other workload generates only the shared
+            # ``mempool/``, and we REPLICATE that into each per-chip directory --
+            # which is exactly the old behaviour, just made explicit.
+            for mx, my in layout.mem_coordinates:
+                name = f"mempool_{mx}_{my}"
+                generated_chip = sim_bin / name
+                dest = bin_dest / name
+                if generated_chip.is_dir():
+                    self._validate_hex_dir(
+                        generated_chip,
+                        layout.mempool_bank_count,
+                        name,
+                        layout.mempool_bank_depth,
+                    )
+                    _copy_path(generated_chip, dest)
+                    kind = "generated_partitioned"
+                else:
+                    _copy_path(mempool_dest, dest)
+                    kind = f"replicated_from_shared({mempool_kind})"
+                (dest / ".image_kind").write_text(f"{kind}\n")
+                self._validate_hex_dir(
+                    dest,
+                    layout.mempool_bank_count,
+                    name,
+                    layout.mempool_bank_depth,
+                )
 
             for subdir in app_subdirs:
                 self._validate_hex_dir(
@@ -1508,9 +1831,15 @@ class HeMAiASimRunner:
             old_log = task_dir / "bin/sim_run.log"
             if old_log.exists():
                 old_log.unlink()
+            if _trace_sink_enabled():
+                n_links = _install_trace_sink(task_dir)
+                print(f"[trace-sink] {n_links} trace paths -> /dev/null in {task_dir}")
             proc = None
             pgid = None
             start = time.monotonic()
+            stop_watchdog = threading.Event()
+            watchdog_result: List[Optional[str]] = []
+            watchdog_thread: Optional[threading.Thread] = None
             try:
                 # start_new_session=True makes the child a session/group leader,
                 # so all descendants share that group and can be killed as a unit.
@@ -1523,10 +1852,21 @@ class HeMAiASimRunner:
                 )
                 pgid = proc.pid
                 _register_pgid(pgid)
+                watchdog_thread = threading.Thread(
+                    target=lambda: watchdog_result.append(
+                        _hang_watchdog(task_dir, pgid, stop_watchdog)
+                    ),
+                    daemon=True,
+                )
+                watchdog_thread.start()
                 try:
                     out_bytes, _ = proc.communicate(timeout=self.timeout_seconds)
                     elapsed = time.monotonic() - start
                     out = out_bytes.decode(errors="replace") if out_bytes else ""
+                    hang_note = watchdog_result[0] if watchdog_result else None
+                    if hang_note:
+                        out = hang_note + "\n" + out
+                        return str(task_dir), ci_name, False, elapsed, out
                     return str(task_dir), ci_name, _sim_passed(proc.returncode, out), elapsed, out
                 except subprocess.TimeoutExpired:
                     _kill_pgid(pgid)
@@ -1545,6 +1885,9 @@ class HeMAiASimRunner:
                     _kill_pgid(pgid)
                 return str(task_dir), ci_name, False, elapsed, traceback.format_exc()
             finally:
+                stop_watchdog.set()
+                if watchdog_thread is not None:
+                    watchdog_thread.join(timeout=5)
                 if pgid is not None:
                     _unregister_pgid(pgid)
 
@@ -1708,6 +2051,24 @@ class HeMAiASimRunner:
             mempool_kind = kind_path.read_text().strip()
             if mempool_kind not in ("generated", "zero_fallback"):
                 raise ValueError(f"Invalid mempool image marker in {kind_path}: {mempool_kind!r}")
+
+            # Per-mem-chip images: load_binary.sv reads one directory per mem
+            # chiplet, so every one of them must be complete and in bounds.
+            for mx, my in layout.mem_coordinates:
+                name = f"mempool_{mx}_{my}"
+                chip_dir = bin_dir / name
+                self._validate_hex_dir(
+                    chip_dir,
+                    layout.mempool_bank_count,
+                    name,
+                    layout.mempool_bank_depth,
+                )
+                for bank in range(layout.mempool_bank_count):
+                    path = chip_dir / f"bank_{bank}.hex"
+                    hex_files[str(path.relative_to(task_dir))] = _sha256(path)
+                chip_kind = chip_dir / ".image_kind"
+                if not chip_kind.is_file():
+                    raise FileNotFoundError(f"Missing mempool image marker: {chip_kind}")
 
             state.append({
                 "index": idx,
