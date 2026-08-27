@@ -65,6 +65,12 @@ runs:
     WORKLOAD: xdma_remote_write_4chiplet_2cluster
     DEV_APP: snax-bingo-offload
   # ---- offload_legacy / single_chip ----
+  # snax-xdma-hazard: simultaneous L3/TCDM traffic plus bidirectional
+  # nearest-neighbor reads and writes across every cluster boundary.
+  - HOST_APP_TYPE: offload_legacy
+    CHIP_TYPE: single_chip
+    WORKLOAD: None
+    DEV_APP: snax-xdma-hazard
   # versacore-matmul-profile-2cluster-4chip
   - HOST_APP_TYPE: offload_legacy
     CHIP_TYPE: single_chip
