@@ -222,10 +222,17 @@ PARTIAL_HOST_APP_LIST     = $(abspath $(DEVICE_DIR)/host_app_list.$(APP).tmp)
 PARTIAL_HOST_APP_ORIGIN   = $(abspath $(DEVICE_DIR)/host_app_origin.$(APP).tmp)
 PARTIAL_DEV_APP_LIST      = $(abspath $(DEVICE_DIR)/dev_app_list.$(APP).tmp)
 
-
+# The device-side kernel export list for this host app (see snax_kernel_lib.h).
+# Keyed by app name rather than joining the three positionally consumed
+# registration files above, and its suffix matches none of the globs the device
+# Makefile sweeps.
+PARTIAL_KERNEL_SUBSET     = $(abspath $(DEVICE_DIR)/kernel_subset.$(APP).h)
+# Only a bingo workload has an OFFLOAD_H, and only the bingo mini-compiler emits
+# a subset. Everything else leaves this empty and exports the full table.
+GENERATED_KERNEL_SUBSET   = $(if $(strip $(OFFLOAD_H)),$(dir $(OFFLOAD_H))snax_kernel_subset.h)
 
 PARTIAL_TMPS = $(PARTIAL_HOST_APP_LIST) $(PARTIAL_HOST_APP_ORIGIN) $(PARTIAL_DEV_APP_LIST)
-PARTIAL_OUTPUTS += $(PARTIAL_ELF) $(PARTIAL_DUMP) $(PARTIAL_TMPS)
+PARTIAL_OUTPUTS += $(PARTIAL_ELF) $(PARTIAL_DUMP) $(PARTIAL_TMPS) $(PARTIAL_KERNEL_SUBSET)
 ELFS             = $(addprefix $(BUILDDIR)/$(APP)_, $(addsuffix .elf, $(DEVICE_APPS)))
 DUMPS            = $(ELFS:.elf=.dump)
 DWARFS           = $(ELFS:.elf=.dwarf)
@@ -305,6 +312,21 @@ $(PARTIAL_HOST_APP_ORIGIN): $(PARTIAL_ELF) FORCE | $(DEVICE_BUILDDIR)
 $(PARTIAL_DEV_APP_LIST): $(PARTIAL_ELF) FORCE | $(DEVICE_BUILDDIR)
 	@echo "$(DEVICE_APPS)" > $@.new
 	$(commit_if_changed)
+
+# Published here rather than having the device build reach into the workload
+# directory, so the device build's inputs stay in one place.
+#
+# Absent means "export everything": a non-bingo app, a workload the platform
+# guard skipped, and any tree built before this all get the full table. So a
+# stale copy must be removed when the generator produced none, or an app
+# inherits whatever subset was built here before it.
+$(PARTIAL_KERNEL_SUBSET): $(PARTIAL_ELF) FORCE | $(DEVICE_BUILDDIR)
+	@if [ -f "$(GENERATED_KERNEL_SUBSET)" ]; then \
+	    cp -f "$(GENERATED_KERNEL_SUBSET)" $@.new; \
+	    if cmp -s $@.new $@; then rm -f $@.new; else mv -f $@.new $@; fi; \
+	 else \
+	    rm -f $@; \
+	 fi
 endif
 
 
