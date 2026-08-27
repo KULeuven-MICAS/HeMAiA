@@ -7,13 +7,17 @@
 
 // This SW is used to test the XDMA read and write between L3 and TCDM
 // and between TCDMs of different clusters.
-// The test includes 4 parts:
+// The test includes 6 parts:
 // 1. All clusters read data from L3 to their TCDM at the same time
-// 2. All clusters (except cluster 0) read data from previous cluster's TCDM
-// C1 read C0, C2 read C1, C3 read C2, ..., Cn read C(n-1)
-// 3. All clusters (except the last cluster) write data to next cluster's TCDM
-// C0 write C1, C1 write C2, C2 write C3, ..., C(n-1) write Cn
-// 4. All clusters write data back to L3 from their TCDM at the same time
+// 2. Every cluster except C0 reads from its previous cluster
+//    C1 reads C0, C2 reads C1, ..., Cn reads C(n-1)
+// 3. Every cluster except Cn reads from its next cluster
+//    C0 reads C1, C1 reads C2, ..., C(n-1) reads Cn
+// 4. Every cluster except Cn writes to its next cluster
+//    C0 writes C1, C1 writes C2, ..., C(n-1) writes Cn
+// 5. Every cluster except C0 writes to its previous cluster
+//    C1 writes C0, C2 writes C1, ..., Cn writes C(n-1)
+// 6. All clusters write data back to L3 from their TCDM at the same time
 // The data size is defined in data.h file, which is 8192B by default.
 
 #include "data.h"
@@ -38,67 +42,115 @@ static inline void xdma_copy_1d_checked(void *src, void *dst, uint32_t size) {
 }
 
 int main() {
-    // Set err value for checking
-    int err = 0;
-    // Obtain the start address of the TCDM memory
-    uint32_t dma_load_input_start;
-    uint32_t dma_load_input_end;
-    uint32_t tcdm_baseaddress = snrt_cluster_base_addrl() + TCDM_OFFSET;
+    const uint32_t cluster_idx = snrt_cluster_idx();
+    const uint32_t cluster_count = SNRT_CLUSTER_NUM;
+    const uint32_t transfer_size = data_size * sizeof(data[0]);
+    const uintptr_t tcdm_baseaddress =
+        snrt_cluster_base_addrl() + TCDM_OFFSET;
+
     if (snrt_global_core_idx() == 0) {
-        printf("Now start to let clusters to read %dB data from L3\r\n", data_size * sizeof(data[0]));
+        printf("Now start to let clusters read %uB from L3\r\n",
+               transfer_size);
     }
     if (snrt_is_dm_core()) {
-        xdma_copy_1d_checked(data, (void *)tcdm_baseaddress,
-                             data_size * sizeof(data[0]));
-        time[snrt_cluster_idx()] = xdma_last_task_cycle();
+        xdma_copy_1d_checked(data, (void *)tcdm_baseaddress, transfer_size);
+        time[cluster_idx] = xdma_last_task_cycle();
     }
 
     snrt_global_barrier();
     if (snrt_global_core_idx() == 0) {
-        for (int i = 0; i < SNRT_CLUSTER_NUM; i++) {
-            printf("XDMA remote read from L3 to TCDM C%d is done in %d cycles.\r\n", i,
-                   time[i]);
+        for (uint32_t i = 0; i < cluster_count; i++) {
+            printf(
+                "XDMA remote read from L3 to TCDM C%u is done in %u cycles.\r\n",
+                i, time[i]);
         }
     }
     snrt_global_barrier();
 
     if (snrt_global_core_idx() == 0) {
-        printf("Now start to read %dB data between Clusters\r\n", data_size * sizeof(data[0]));
+        printf(
+            "Now start lower-to-higher XDMA reads of %uB between clusters\r\n",
+            transfer_size);
     }
-    if ((snrt_cluster_idx() != 0) && snrt_is_dm_core()) {
-
-        xdma_copy_1d_checked((void *)tcdm_baseaddress - cluster_offset,
-                             (void *)tcdm_baseaddress,
-                             data_size * sizeof(data[0]));
-        time[snrt_cluster_idx()] = xdma_last_task_cycle();
+    if ((cluster_idx > 0) && snrt_is_dm_core()) {
+        const uintptr_t previous_tcdm = tcdm_baseaddress - cluster_offset;
+        xdma_copy_1d_checked((void *)previous_tcdm, (void *)tcdm_baseaddress,
+                             transfer_size);
+        time[cluster_idx] = xdma_last_task_cycle();
     }
 
     snrt_global_barrier();
     if (snrt_global_core_idx() == 0) {
-        for (int i = 1; i < SNRT_CLUSTER_NUM; i++) {
+        for (uint32_t i = 1; i < cluster_count; i++) {
             printf(
-                "XDMA remote read from TCDM C%d to TCDM C%d is done in %d cycles.\r\n",
+                "XDMA remote read from TCDM C%u to TCDM C%u is done in %u cycles.\r\n",
                 i - 1, i, time[i]);
         }
     }
     snrt_global_barrier();
 
     if (snrt_global_core_idx() == 0) {
-        printf("Now start to write %dB data between Clusters\r\n", data_size * sizeof(data[0]));
+        printf(
+            "Now start higher-to-lower XDMA reads of %uB between clusters\r\n",
+            transfer_size);
     }
-    if ((snrt_cluster_idx() != snrt_cluster_num() - 1) && snrt_is_dm_core()) {
-        xdma_copy_1d_checked((void *)tcdm_baseaddress,
-                             (void *)tcdm_baseaddress + cluster_offset,
-                             data_size * sizeof(data[0]));
-        time[snrt_cluster_idx()] = xdma_last_task_cycle();
+    if ((cluster_idx + 1 < cluster_count) && snrt_is_dm_core()) {
+        const uintptr_t next_tcdm = tcdm_baseaddress + cluster_offset;
+        xdma_copy_1d_checked((void *)next_tcdm, (void *)tcdm_baseaddress,
+                             transfer_size);
+        time[cluster_idx] = xdma_last_task_cycle();
     }
 
     snrt_global_barrier();
     if (snrt_global_core_idx() == 0) {
-        for (int i = 0; i < SNRT_CLUSTER_NUM - 1; i++) {
+        for (uint32_t i = 0; i + 1 < cluster_count; i++) {
             printf(
-                "XDMA remote write from TCDM C%d to TCDM C%d is done in %d cycles.\r\n",
+                "XDMA remote read from TCDM C%u to TCDM C%u is done in %u cycles.\r\n",
+                i + 1, i, time[i]);
+        }
+    }
+    snrt_global_barrier();
+
+    if (snrt_global_core_idx() == 0) {
+        printf(
+            "Now start lower-to-higher XDMA writes of %uB between clusters\r\n",
+            transfer_size);
+    }
+    if ((cluster_idx + 1 < cluster_count) && snrt_is_dm_core()) {
+        const uintptr_t next_tcdm = tcdm_baseaddress + cluster_offset;
+        xdma_copy_1d_checked((void *)tcdm_baseaddress, (void *)next_tcdm,
+                             transfer_size);
+        time[cluster_idx] = xdma_last_task_cycle();
+    }
+
+    snrt_global_barrier();
+    if (snrt_global_core_idx() == 0) {
+        for (uint32_t i = 0; i + 1 < cluster_count; i++) {
+            printf(
+                "XDMA remote write from TCDM C%u to TCDM C%u is done in %u cycles.\r\n",
                 i, i + 1, time[i]);
+        }
+    }
+    snrt_global_barrier();
+
+    if (snrt_global_core_idx() == 0) {
+        printf(
+            "Now start higher-to-lower XDMA writes of %uB between clusters\r\n",
+            transfer_size);
+    }
+    if ((cluster_idx > 0) && snrt_is_dm_core()) {
+        const uintptr_t previous_tcdm = tcdm_baseaddress - cluster_offset;
+        xdma_copy_1d_checked((void *)tcdm_baseaddress, (void *)previous_tcdm,
+                             transfer_size);
+        time[cluster_idx] = xdma_last_task_cycle();
+    }
+
+    snrt_global_barrier();
+    if (snrt_global_core_idx() == 0) {
+        for (uint32_t i = 1; i < cluster_count; i++) {
+            printf(
+                "XDMA remote write from TCDM C%u to TCDM C%u is done in %u cycles.\r\n",
+                i, i - 1, time[i]);
         }
     }
     snrt_global_barrier();
@@ -119,18 +171,19 @@ int main() {
     snrt_global_barrier();
 #endif
     if (snrt_global_core_idx() == 0) {
-        printf("Now start to let cluster to write back the %dB data to L3\r\n", data_size * sizeof(data[0]));
-    }    
+        printf("Now start to let clusters write %uB back to L3\r\n",
+               transfer_size);
+    }
     if (snrt_is_dm_core()) {
-        xdma_copy_1d_checked((void *)tcdm_baseaddress, data,
-                             data_size * sizeof(data[0]));
-        time[snrt_cluster_idx()] = xdma_last_task_cycle();
+        xdma_copy_1d_checked((void *)tcdm_baseaddress, data, transfer_size);
+        time[cluster_idx] = xdma_last_task_cycle();
     }
     snrt_global_barrier();
     if (snrt_global_core_idx() == 0) {
-        for (int i = 0; i < SNRT_CLUSTER_NUM; i++) {
-            printf("XDMA remote write from TCDM C%d to L3 is done in %d cycles.\r\n", i,
-                   time[i]);
+        for (uint32_t i = 0; i < cluster_count; i++) {
+            printf(
+                "XDMA remote write from TCDM C%u to L3 is done in %u cycles.\r\n",
+                i, time[i]);
         }
     }
     snrt_global_barrier();
