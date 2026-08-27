@@ -43,7 +43,7 @@ static inline void xdma_copy_1d_checked(void *src, void *dst, uint32_t size) {
 
 int main() {
     const uint32_t cluster_idx = snrt_cluster_idx();
-    const uint32_t cluster_count = snrt_cluster_num();
+    const uint32_t cluster_count = SNRT_CLUSTER_NUM;
     const uint32_t transfer_size = data_size * sizeof(data[0]);
     const uintptr_t tcdm_baseaddress =
         snrt_cluster_base_addrl() + TCDM_OFFSET;
