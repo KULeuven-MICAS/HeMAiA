@@ -315,7 +315,7 @@ def run_in_container(
     if shutil.which("podman") is not None:
         runner_cmd: List[str] = [
             "podman", "run", "--rm",
-            "-v", f"{repo_root}:{repo_root}",
+            "-v", f"{repo_root}:{repo_root}:z",
             "-w", str(working_dir),
             docker_image,
         ]
