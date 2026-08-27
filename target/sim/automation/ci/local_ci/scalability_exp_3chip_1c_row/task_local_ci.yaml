@@ -1,0 +1,19 @@
+# Tasks for hemaia_scalability_exp_3chip_1c_row.hjson only: 3 compute chiplets in
+# a row at x = 0..2, one cluster each, memory chiplet at [3,0].
+#
+# The suite exists for the chiplet at x = 2. Every other cfg keeps both
+# coordinates below 2, which is the only shape hemaia_d2d_link_initialize_4c1m()
+# covers; outside it a chiplet stalls on its first chip-local manager access,
+# before its first printf. This is the regression test for
+# hemaia_d2d_link_initialize(), and the cheapest end-to-end multi-chip test here.
+#
+# A pass is 3/3 chips: chip (2,0) reporting nothing is the failure.
+
+runs:
+  # ---- offload_bingo_hw / multi_chip ----
+  # gemm_parametric, 3-chiplet row, M-split. ~12 min.
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: multi_chip
+    WORKLOAD: gemm_parametric
+    DEV_APP: snax-bingo-offload
+    HOST_DATA_CFG: target/sw/host/apps/offload_bingo_hw/multi_chip/workloads/gemm_parametric/params/grid3x1x1_3chip_1c_row.hjson

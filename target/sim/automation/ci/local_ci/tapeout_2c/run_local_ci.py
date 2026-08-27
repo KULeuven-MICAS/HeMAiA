@@ -7,20 +7,33 @@ Builds and runs the ``task_local_ci.yaml`` next to this script through the share
 :class:`HeMAiASimRunner`, against ``target/rtl/cfg/hemaia_tapeout_2c.hjson``:
 4 chiplets, 2x ``snax_versacore_to_256KB_cluster`` per chiplet.
 
-One of four per-cfg suites under ``ci/local_ci/``. Each subdirectory pairs one
+One of seven per-cfg suites under ``ci/local_ci/``. Each subdirectory pairs one
 tapeout RTL cfg with the task list valid for it, and owns its own ``task_<idx>/``
 run directories, so the suites do not clobber each other:
 
-    tapeout_1c/       hemaia_tapeout_1c.hjson        1x versacore
-    tapeout_1c_simd/  hemaia_tapeout_1c_simd.hjson   1x versacore+SIMD
-    tapeout_2c/       hemaia_tapeout_2c.hjson        2x versacore 256KB
-    tapeout_2c_simd/  hemaia_tapeout_2c_simd.hjson   2x versacore 256KB+SIMD
+    tapeout_1c/         hemaia_tapeout_1c.hjson        4 chiplets x 1 cluster
+    tapeout_1c_simd/    hemaia_tapeout_1c_simd.hjson   ... +SIMD
+    tapeout_2c/         hemaia_tapeout_2c.hjson        4 chiplets x 2 clusters
+    tapeout_2c_simd/    hemaia_tapeout_2c_simd.hjson   ... +SIMD
+    tapeout_3x1/        hemaia_scalability_exp_3chip_1c_row.hjson       3 chiplets in a row
+    tapeout_2x2_4c/     hemaia_scalability_exp_4chip_4c.hjson    4 chiplets x 4 clusters
+    tapeout_16chiplet_4mem/                            16 chiplets x 4 clusters,
+        hemaia_scalability_exp_16chip_4c_4mem.hjson            over 4 memory chiplets
+
+A cluster or chiplet count that does not match the cfg is not an error: the
+workload's ``guard_cluster_count()`` / ``guard_chiplet_count()`` SKIP it and no
+application header is emitted, which shows up as a ``[skip] ...`` line in the
+build log and an otherwise inexplicable stale binary.  Each task list therefore
+belongs to exactly one cfg.
 
 By default the runner sets ``use_vendor_pll: false`` in the cfg before building
 (see ``resolve_rtl_cfg``); pass ``--with-pll`` to enable the vendor PLL model and
 use the private ``hemaia_clk_rst_controller`` checkout instead. Patched cfg copies
 land in ``target/rtl/cfg/generated/``.
-The suite builds against the cfg's own ``spm_wide`` (the tapeout's real 128 kiB).
+The suite builds against the cfg's own ``spm_wide``.  For the four ``tapeout_1c``
+/ ``tapeout_2c`` cfgs that is the real chip's 128 kiB; the 4-cluster and
+16-chiplet cfgs use a 16 MiB ``spm_wide``, which is a SIMULATION convenience
+and not silicon.
 
 Defaults to the VCS engine with no waveform (fast batch runs); pass
 ``--engine vsim --waveform 1`` to reproduce a failing task under Questasim.

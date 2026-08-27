@@ -208,3 +208,23 @@ runs:
     CHIP_TYPE: multi_chip
     WORKLOAD: dma_write_from_other_chip_4chiplet_1cluster
     DEV_APP: snax-bingo-offload
+
+  # ---- offload_bingo_hw / multi_chip : gemm_parametric ----
+  # The two lowest rungs of the M/K/N-split ladder: one parameterised workload
+  # entered twice at different shapes through HOST_DATA_CFG. The shapes live in
+  # params/ next to the workload.
+  #
+  # grid 4/1/1: the M axis alone, closest to gemm_msplit_4chiplet_1cluster.
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: multi_chip
+    WORKLOAD: gemm_parametric
+    DEV_APP: snax-bingo-offload
+    HOST_DATA_CFG: target/sw/host/apps/offload_bingo_hw/multi_chip/workloads/gemm_parametric/params/grid4x1x1_4chip_1c.hjson
+  # grid 2/1/2: adds grid_N > 1, so a worker's D sub-block is strided in golden D
+  # but packed chip-locally. Also the shape that exposed B's N-major layout,
+  # which nothing at N1 = 1 can.
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: multi_chip
+    WORKLOAD: gemm_parametric
+    DEV_APP: snax-bingo-offload
+    HOST_DATA_CFG: target/sw/host/apps/offload_bingo_hw/multi_chip/workloads/gemm_parametric/params/grid2x1x2_4chip_1c.hjson
