@@ -242,10 +242,9 @@ def create_dfg(params, platform, workers):
                     k_lo = w["w_k"] * params["K1_share"] + k_idx * params["inner_tile_K"]
                     itag = f"{tag}_m{m_idx}_n{n_idx}_k{k_idx}"
 
-                    # iDMA, not xDMA: an xDMA read issued from cluster 3 commits
-                    # on XDMA_COMMIT_REMOTE and then spins forever because
-                    # XDMA_FINISH_REMOTE never advances. Every CI-validated
-                    # multi-cluster workload uses idma_1d_copy only.
+                    # iDMA. The K-slab layout of the operand image makes an
+                    # inner tile one contiguous run per operand, so there is no
+                    # reshape for xDMA to do here.
                     #
                     # A is blocked (M1, K1) row-major, B is (K1, N1) row-major. A
                     # sub-block spanning a full row is one contiguous run,

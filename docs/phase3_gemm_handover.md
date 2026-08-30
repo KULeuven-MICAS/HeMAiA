@@ -187,14 +187,11 @@ something needed.
 4. **Move D onto the memory chiplet.** The last on-chip term that still grows with
    matrix size is `grid_K × d_slice_size`. Moving it off-chip unlocks the next
    size tier.
-5. **The xDMA hang on non-zero clusters.** Everything here uses iDMA because xDMA
-   hung on cluster 3's first transfer with a correct configuration: an L3 → L1
-   read on the same chip is classified REMOTE, and
-   `from_remote_data_accompany_cfg_i.ready_to_transfer` never rises, so
-   `FINISH_REMOTE` never advances. Worked around, not fixed. Probe, in order:
-   `xdma_to_remote_cfg_valid`/`_ready`, `xdma_from_remote_data_valid`, then
-   `ready_to_transfer`. One unconfirmed suspect: `ClusterAddressSpace` is 1 MiB in
-   `xdma_axi_adapter_top.sv` while the software map uses a 4 MiB cluster stride.
+5. **Revisit iDMA vs xDMA.** Everything here uses iDMA. The operand image is
+   pre-arranged into K slabs by the datagen so that an inner tile is one
+   contiguous run per operand, which is what makes that choice cheap. A layout
+   the datagen cannot pre-arrange -- a transpose, or reading a shared full-K
+   image -- would need xDMA's reshape instead.
 6. **Retire `hemaia_d2d_link_initialize_4c1m()`** in favour of
    `hemaia_d2d_link_initialize()`. It is still called by every other multi_chip
    application; I left it in place with a `LEGACY, 2x2 ONLY` warning because I
