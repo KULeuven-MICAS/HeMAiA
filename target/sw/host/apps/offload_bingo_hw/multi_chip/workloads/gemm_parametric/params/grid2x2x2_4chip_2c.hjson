@@ -1,0 +1,26 @@
+# Full M+K+N split, 8 workers on 4 chiplets x 2 clusters.
+# RTL cfg: hemaia_tapeout_2c.hjson
+#
+# grid_K = 2, so each output cell is the sum of two partials. Both land on the
+# same chiplet in different clusters and are reduced by a host-side add_i32.
+{0,1} nodes plus
+# 4 Add_chip*_k0_to_k1 nodes, checked against a golden D that contains the full
+# K contraction. Because w_k maps to the CLUSTER axis, both partials for an
+# (m,n) cell land on the same chiplet and the reduction is chip-local -- a host
+# add_i32 on that chip's own CVA6, never a sum over D2D.
+# ============================================================
+{
+    num_chips: 4
+    clusters_per_chip: 2
+    grid_M: 2
+    grid_K: 2
+    grid_N: 2
+    array_shape: 1
+    M1: 2
+    K1: 2
+    N1: 2
+    transposed_A: 0
+    transposed_B: 0
+    accumPrevC: 0
+    check_bytes: 0
+}

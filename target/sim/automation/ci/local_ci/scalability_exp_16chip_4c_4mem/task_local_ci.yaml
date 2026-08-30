@@ -1,0 +1,19 @@
+# Tasks for hemaia_scalability_exp_16chip_4c_4mem.hjson only: 16 compute
+# chiplets (4x4) x 4 clusters = 64 workers, over four 16 MiB memory chiplets at
+# [4,0..3].
+#
+# The matrix is deliberately minimal, so a failure points at the platform rather
+# than at the shape. A pass is 16/16 checks, 16/16 clean kernel exits and 128/128
+# core exits.
+#
+# The long run that makes the partitioned image required rather than merely
+# exercised is in task_long_thinM.yaml, selected with -f.
+
+runs:
+  # ---- offload_bingo_hw / multi_chip ----
+  # gemm_parametric, 64 workers, M+K+N split, 4/4/4. ~42 min.
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: multi_chip
+    WORKLOAD: gemm_parametric
+    DEV_APP: snax-bingo-offload
+    HOST_DATA_CFG: target/sw/host/apps/offload_bingo_hw/multi_chip/workloads/gemm_parametric/params/grid4x4x4_16chip_4c.hjson

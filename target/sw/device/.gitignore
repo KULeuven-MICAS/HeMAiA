@@ -1,2 +1,7 @@
 # Auto-generated files
 *.tmp
+
+# Per-host-app device kernel export lists, published by the host build
+# (host/apps/common.mk). Generated exactly like the *.tmp registration files
+# above -- they are build state, not source.
+kernel_subset.*.h

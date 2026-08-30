@@ -69,3 +69,33 @@ runs:
     CHIP_TYPE: single_chip
     WORKLOAD: None
     DEV_APP: versacore-matmul-profile-2cluster-4chip
+
+  # ---- offload_bingo_hw / multi_chip : gemm_parametric ----
+  # Three 8-worker rungs of the M/K/N-split ladder, one parameterised workload
+  # entered three times through HOST_DATA_CFG. The shapes live in params/.
+  #
+  # grid 2/2/2: the first K reduction. w_k maps to the cluster axis, so both
+  # partials of an (m,n) cell land on one chiplet and the reduction is a host
+  # add_i32 there rather than a sum over D2D.
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: multi_chip
+    WORKLOAD: gemm_parametric
+    DEV_APP: snax-bingo-offload
+    HOST_DATA_CFG: target/sw/host/apps/offload_bingo_hw/multi_chip/workloads/gemm_parametric/params/grid2x2x2_4chip_2c.hjson
+  # tilepack: the fast load/store path with a 2x2 tile grid, so the tile-pack
+  # offset formula runs with both indices nonzero. Checks cover all of D.
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: multi_chip
+    WORKLOAD: gemm_parametric
+    DEV_APP: snax-bingo-offload
+    HOST_DATA_CFG: target/sw/host/apps/offload_bingo_hw/multi_chip/workloads/gemm_parametric/params/grid2x2x2_4chip_2c_tilepack.hjson
+  # accumprevc: inner_tile_K below the K share, so every k_idx > 0 accumulates
+  # into the VersaCore register. That accumulator holds one tile, so the path is
+  # only correct at inner_tile_M == inner_tile_N == 1; with 2x2 it returns
+  # sign-flipped results and no error. If this ever mismatches, check the tile
+  # shape first.
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: multi_chip
+    WORKLOAD: gemm_parametric
+    DEV_APP: snax-bingo-offload
+    HOST_DATA_CFG: target/sw/host/apps/offload_bingo_hw/multi_chip/workloads/gemm_parametric/params/grid2x2x2_4chip_2c_accumprevc.hjson
