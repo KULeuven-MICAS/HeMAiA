@@ -3,6 +3,13 @@
 // SPDX-License-Identifier: SHL-0.51
 // Yunhao Deng <yunhao.deng@kuleuven.be>
 // Fanchen Kong <fanchen.kong@kuleuven.be>
+<%
+if sim_with_interposer:
+    raise RuntimeError(
+        "Full-duplex D2D requires 54 TX and 54 RX pins per compass side; "
+        "the legacy 60-pin bidirectional interposer mapping is unsupported."
+    )
+%>
 //
 // IO Wrapper: D2D interconnect routing fabric + IO pad simulation
 //
@@ -11,15 +18,13 @@
 //   - Boundary: connects boundary chiplets' outward D2D ports to off-chip ports
 //
 // sim_with_interposer = 0 (direct):
-//   Direct wire connections. Adjacent chiplets' D2D data buses are shorted
-//   using shared tri wires. Flow control and test signals use assign.
+//   Direct directional connections. Adjacent chiplets' TX buses drive the
+//   opposite chiplets' RX buses. Flow control and test signals use assign.
 //   This models an ideal interconnect with no physical effects.
 //
 // sim_with_interposer = 1 (interposer):
-//   Wraps hemaia RTL into hemaia_io_pad (IO pad model), then wraps all 4
-//   chiplets into four_chiplet_interposer_chippad_powerpad (interposer
-//   physical routing model). Currently supports 2x2 array only.
-//   Driving signals (clk, rst, peripherals) are routed from the DUT.
+//   Unsupported for full duplex until a 108-data-pin-per-side pad and
+//   interposer mapping is available.
 //
 // The mode is selected at Mako template rendering time, so the generated
 // SV file only contains the selected path (no SV generate blocks).
@@ -44,7 +49,8 @@ module io_wrapper (
         cy = compute_chip.coordinate[1]
     %>
     %for direction in ['east', 'west', 'north', 'south']:
-    inout tri [2:0][19:0] chip_${cx}_${cy}_${direction}_d2d,
+    input  wire [2:0][17:0] chip_${cx}_${cy}_${direction}_d2d_tx_o,
+    output wire [2:0][17:0] chip_${cx}_${cy}_${direction}_d2d_rx_i,
     inout wire             chip_${cx}_${cy}_${direction}_rts_o,
     inout wire             chip_${cx}_${cy}_${direction}_cts_i,
     inout wire             chip_${cx}_${cy}_${direction}_rts_i,
@@ -95,7 +101,8 @@ module io_wrapper (
     // Off-chip boundary D2D ports
     /////////////////////////////////////
     %for x in range(max_compute_chiplet_x):
-    inout tri [2:0][19:0] north_d2d_link_${x},
+    output wire [2:0][17:0] north_d2d_tx_o_${x},
+    input  wire [2:0][17:0] north_d2d_rx_i_${x},
     inout wire             north_flow_control_rts_o_${x},
     inout wire             north_flow_control_cts_i_${x},
     inout wire             north_flow_control_rts_i_${x},
@@ -104,7 +111,8 @@ module io_wrapper (
     inout wire             north_test_being_requested_i_${x},
     %endfor
     %for x in range(max_compute_chiplet_x):
-    inout tri [2:0][19:0] south_d2d_link_${x},
+    output wire [2:0][17:0] south_d2d_tx_o_${x},
+    input  wire [2:0][17:0] south_d2d_rx_i_${x},
     inout wire             south_flow_control_rts_o_${x},
     inout wire             south_flow_control_cts_i_${x},
     inout wire             south_flow_control_rts_i_${x},
@@ -113,7 +121,8 @@ module io_wrapper (
     inout wire             south_test_being_requested_i_${x},
     %endfor
     %for y in range(max_compute_chiplet_y):
-    inout tri [2:0][19:0] west_d2d_link_${y},
+    output wire [2:0][17:0] west_d2d_tx_o_${y},
+    input  wire [2:0][17:0] west_d2d_rx_i_${y},
     inout wire             west_flow_control_rts_o_${y},
     inout wire             west_flow_control_cts_i_${y},
     inout wire             west_flow_control_rts_i_${y},
@@ -122,7 +131,8 @@ module io_wrapper (
     inout wire             west_test_being_requested_i_${y},
     %endfor
     %for y in range(max_compute_chiplet_y):
-    inout tri [2:0][19:0] east_d2d_link_${y},
+    output wire [2:0][17:0] east_d2d_tx_o_${y},
+    input  wire [2:0][17:0] east_d2d_rx_i_${y},
     inout wire             east_flow_control_rts_o_${y},
     inout wire             east_flow_control_cts_i_${y},
     inout wire             east_flow_control_rts_i_${y},
@@ -150,8 +160,8 @@ assign const_one  = 1'b1;
     %for x in range(max_compute_chiplet_x - 1):
     %for y in range(max_compute_chiplet_y):
     // (${x}, ${y}) east <--> (${x + 1}, ${y}) west
-    tri [2:0][19:0] ew_d2d_link_${x}_${y};
-    alias ew_d2d_link_${x}_${y} = chip_${x}_${y}_east_d2d = chip_${x + 1}_${y}_west_d2d;
+    assign chip_${x}_${y}_east_d2d_rx_i                    = chip_${x + 1}_${y}_west_d2d_tx_o;
+    assign chip_${x + 1}_${y}_west_d2d_rx_i                = chip_${x}_${y}_east_d2d_tx_o;
     assign chip_${x + 1}_${y}_west_rts_i                  = chip_${x}_${y}_east_rts_o;
     assign chip_${x}_${y}_east_rts_i                      = chip_${x + 1}_${y}_west_rts_o;
     assign chip_${x}_${y}_east_cts_i                      = chip_${x + 1}_${y}_west_cts_o;
@@ -165,8 +175,8 @@ assign const_one  = 1'b1;
     %for x in range(max_compute_chiplet_x):
     %for y in range(max_compute_chiplet_y - 1):
     // (${x}, ${y}) south <--> (${x}, ${y + 1}) north
-    tri [2:0][19:0] ns_d2d_link_${x}_${y};
-    alias ns_d2d_link_${x}_${y} = chip_${x}_${y}_south_d2d = chip_${x}_${y + 1}_north_d2d;
+    assign chip_${x}_${y}_south_d2d_rx_i                   = chip_${x}_${y + 1}_north_d2d_tx_o;
+    assign chip_${x}_${y + 1}_north_d2d_rx_i               = chip_${x}_${y}_south_d2d_tx_o;
     assign chip_${x}_${y + 1}_north_rts_i                  = chip_${x}_${y}_south_rts_o;
     assign chip_${x}_${y}_south_rts_i                      = chip_${x}_${y + 1}_north_rts_o;
     assign chip_${x}_${y}_south_cts_i                      = chip_${x}_${y + 1}_north_cts_o;
@@ -178,8 +188,8 @@ assign const_one  = 1'b1;
 
     // ---- North boundary (y=0) ----
     %for x in range(max_compute_chiplet_x):
-    tri [2:0][19:0] nb_d2d_link_${x};
-    alias nb_d2d_link_${x} = chip_${x}_0_north_d2d = north_d2d_link_${x};
+    assign north_d2d_tx_o_${x}                     = chip_${x}_0_north_d2d_tx_o;
+    assign chip_${x}_0_north_d2d_rx_i              = north_d2d_rx_i_${x};
     assign north_flow_control_rts_o_${x}            = chip_${x}_0_north_rts_o;
     assign chip_${x}_0_north_cts_i                  = north_flow_control_cts_i_${x};
     assign chip_${x}_0_north_rts_i                  = north_flow_control_rts_i_${x};
@@ -191,8 +201,8 @@ assign const_one  = 1'b1;
     // ---- South boundary (y=${max_compute_chiplet_y - 1}) ----
     <% south_y = max_compute_chiplet_y - 1 %>
     %for x in range(max_compute_chiplet_x):
-    tri [2:0][19:0] sb_d2d_link_${x};
-    alias sb_d2d_link_${x} = chip_${x}_${south_y}_south_d2d = south_d2d_link_${x};
+    assign south_d2d_tx_o_${x}                             = chip_${x}_${south_y}_south_d2d_tx_o;
+    assign chip_${x}_${south_y}_south_d2d_rx_i              = south_d2d_rx_i_${x};
     assign south_flow_control_rts_o_${x}                     = chip_${x}_${south_y}_south_rts_o;
     assign chip_${x}_${south_y}_south_cts_i                  = south_flow_control_cts_i_${x};
     assign chip_${x}_${south_y}_south_rts_i                  = south_flow_control_rts_i_${x};
@@ -203,8 +213,8 @@ assign const_one  = 1'b1;
 
     // ---- West boundary (x=0) ----
     %for y in range(max_compute_chiplet_y):
-    tri [2:0][19:0] wb_d2d_link_${y};
-    alias wb_d2d_link_${y} = chip_0_${y}_west_d2d = west_d2d_link_${y};
+    assign west_d2d_tx_o_${y}                      = chip_0_${y}_west_d2d_tx_o;
+    assign chip_0_${y}_west_d2d_rx_i               = west_d2d_rx_i_${y};
     assign west_flow_control_rts_o_${y}             = chip_0_${y}_west_rts_o;
     assign chip_0_${y}_west_cts_i                   = west_flow_control_cts_i_${y};
     assign chip_0_${y}_west_rts_i                   = west_flow_control_rts_i_${y};
@@ -216,8 +226,8 @@ assign const_one  = 1'b1;
     // ---- East boundary (x=${max_compute_chiplet_x - 1}) ----
     <% east_x = max_compute_chiplet_x - 1 %>
     %for y in range(max_compute_chiplet_y):
-    tri [2:0][19:0] eb_d2d_link_${y};
-    alias eb_d2d_link_${y} = chip_${east_x}_${y}_east_d2d = east_d2d_link_${y};
+    assign east_d2d_tx_o_${y}                              = chip_${east_x}_${y}_east_d2d_tx_o;
+    assign chip_${east_x}_${y}_east_d2d_rx_i               = east_d2d_rx_i_${y};
     assign east_flow_control_rts_o_${y}                    = chip_${east_x}_${y}_east_rts_o;
     assign chip_${east_x}_${y}_east_cts_i                  = east_flow_control_cts_i_${y};
     assign chip_${east_x}_${y}_east_rts_i                  = east_flow_control_rts_i_${y};

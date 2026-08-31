@@ -16,12 +16,8 @@
 //    That mimic the real testing setup
 // 2. The Design Under Test (DUT)
 //    Which only exposed to the aformentioned CLK/PLL/Periph Pins
-//    Inside the DUT, there are two setups
-//    2.1 The Hemaia Chip Top
-//        Can be configured to multiple chiplets
-//    2.2 The Hemaia Chip Top with interposer (io pad + d2d link behavior model)
-//        Now the 2.2 only supports 4 chiplets
-//    The testharness will pass the SIM_WITH_INTERPOSER parameter to the DUT to select the two setups
+//    The full-duplex direct-RTL setup can be configured with multiple chiplets.
+//    The legacy half-duplex interposer pad mapping is intentionally unsupported.
 // 3. The memchip around the DUT
 //    This will be implemented with the FPGA in the real testing setup
 // By doing so, we can maintain a practical and clear testing setup.
@@ -485,7 +481,8 @@ module testharness;
     // Off-chip links to Mem Chip
     // North Links (#MAX_X links)
     %for x in range(max_compute_chiplet_x):
-    tri [2:0][19:0] north_offchip_d2d_link_${x};
+    wire [2:0][17:0] north_offchip_d2d_tx_o_${x};
+    wire [2:0][17:0] north_offchip_d2d_rx_i_${x};
     wire            north_memchip_to_dut_link_rts_${x};
     wire            north_memchip_to_dut_link_cts_${x};
     wire            north_dut_to_memchip_link_rts_${x};
@@ -496,7 +493,8 @@ module testharness;
 
     // South Links (#MAX_X links)
     %for x in range(max_compute_chiplet_x):
-    tri [2:0][19:0] south_offchip_d2d_link_${x};
+    wire [2:0][17:0] south_offchip_d2d_tx_o_${x};
+    wire [2:0][17:0] south_offchip_d2d_rx_i_${x};
     wire            south_memchip_to_dut_link_rts_${x};
     wire            south_memchip_to_dut_link_cts_${x};
     wire            south_dut_to_memchip_link_rts_${x};
@@ -507,7 +505,8 @@ module testharness;
 
     // West Links (#MAX_Y links)
     %for y in range(max_compute_chiplet_y):
-    tri [2:0][19:0] west_offchip_d2d_link_${y};
+    wire [2:0][17:0] west_offchip_d2d_tx_o_${y};
+    wire [2:0][17:0] west_offchip_d2d_rx_i_${y};
     wire            west_memchip_to_dut_link_rts_${y};
     wire            west_memchip_to_dut_link_cts_${y};
     wire            west_dut_to_memchip_link_rts_${y};
@@ -518,7 +517,8 @@ module testharness;
 
     // East Links (#MAX_Y links)
     %for y in range(max_compute_chiplet_y):
-    tri [2:0][19:0] east_offchip_d2d_link_${y};
+    wire [2:0][17:0] east_offchip_d2d_tx_o_${y};
+    wire [2:0][17:0] east_offchip_d2d_rx_i_${y};
     wire            east_memchip_to_dut_link_rts_${y};
     wire            east_memchip_to_dut_link_cts_${y};
     wire            east_dut_to_memchip_link_rts_${y};
@@ -549,6 +549,7 @@ module testharness;
     %for x in range(max_compute_chiplet_x):
     %if x not in occupied_north:
     // North link ${x} is not connected to any mem chip
+    assign north_offchip_d2d_rx_i_${x}             = '0;
     assign north_dut_to_memchip_link_cts_${x}      = const_zero;
     assign north_memchip_to_dut_link_rts_${x}       = const_zero;
     assign north_memchip_to_dut_link_test_request_${x} = const_zero;
@@ -557,6 +558,7 @@ module testharness;
     %for x in range(max_compute_chiplet_x):
     %if x not in occupied_south:
     // South link ${x} is not connected to any mem chip
+    assign south_offchip_d2d_rx_i_${x}             = '0;
     assign south_dut_to_memchip_link_cts_${x}      = const_zero;
     assign south_memchip_to_dut_link_rts_${x}       = const_zero;
     assign south_memchip_to_dut_link_test_request_${x} = const_zero;
@@ -565,6 +567,7 @@ module testharness;
     %for y in range(max_compute_chiplet_y):
     %if y not in occupied_west:
     // West link ${y} is not connected to any mem chip
+    assign west_offchip_d2d_rx_i_${y}              = '0;
     assign west_dut_to_memchip_link_cts_${y}      = const_zero;
     assign west_memchip_to_dut_link_rts_${y}       = const_zero;
     assign west_memchip_to_dut_link_test_request_${y} = const_zero;
@@ -573,6 +576,7 @@ module testharness;
     %for y in range(max_compute_chiplet_y):
     %if y not in occupied_east:
     // East link ${y} is not connected to any mem chip
+    assign east_offchip_d2d_rx_i_${y}              = '0;
     assign east_dut_to_memchip_link_cts_${y}      = const_zero;
     assign east_memchip_to_dut_link_rts_${y}       = const_zero;
     assign east_memchip_to_dut_link_test_request_${y} = const_zero;
@@ -587,7 +591,8 @@ module testharness;
         /////////////////////////////////////
         // North Links (#MAX_X links)
     %for x in range(max_compute_chiplet_x):
-        .north_d2d_link_${x}          (north_offchip_d2d_link_${x}),
+        .north_d2d_tx_o_${x}          (north_offchip_d2d_tx_o_${x}),
+        .north_d2d_rx_i_${x}          (north_offchip_d2d_rx_i_${x}),
         .north_flow_control_rts_o_${x}(north_dut_to_memchip_link_rts_${x}),
         .north_flow_control_cts_i_${x}(north_dut_to_memchip_link_cts_${x}),
         .north_flow_control_rts_i_${x}(north_memchip_to_dut_link_rts_${x}),
@@ -597,7 +602,8 @@ module testharness;
     %endfor
         // South Links (#MAX_X links)
     %for x in range(max_compute_chiplet_x):
-        .south_d2d_link_${x}          (south_offchip_d2d_link_${x}),
+        .south_d2d_tx_o_${x}          (south_offchip_d2d_tx_o_${x}),
+        .south_d2d_rx_i_${x}          (south_offchip_d2d_rx_i_${x}),
         .south_flow_control_rts_o_${x}(south_dut_to_memchip_link_rts_${x}),
         .south_flow_control_cts_i_${x}(south_dut_to_memchip_link_cts_${x}),
         .south_flow_control_rts_i_${x}(south_memchip_to_dut_link_rts_${x}),
@@ -607,7 +613,8 @@ module testharness;
     %endfor
         // West Links (#MAX_Y links)
     %for y in range(max_compute_chiplet_y):
-        .west_d2d_link_${y}          (west_offchip_d2d_link_${y}),
+        .west_d2d_tx_o_${y}          (west_offchip_d2d_tx_o_${y}),
+        .west_d2d_rx_i_${y}          (west_offchip_d2d_rx_i_${y}),
         .west_flow_control_rts_o_${y}(west_dut_to_memchip_link_rts_${y}),
         .west_flow_control_cts_i_${y}(west_dut_to_memchip_link_cts_${y}),
         .west_flow_control_rts_i_${y}(west_memchip_to_dut_link_rts_${y}),
@@ -617,7 +624,8 @@ module testharness;
     %endfor
         // East Links (#MAX_Y links)
     %for y in range(max_compute_chiplet_y):
-        .east_d2d_link_${y}          (east_offchip_d2d_link_${y}),
+        .east_d2d_tx_o_${y}          (east_offchip_d2d_tx_o_${y}),
+        .east_d2d_rx_i_${y}          (east_offchip_d2d_rx_i_${y}),
         .east_flow_control_rts_o_${y}(east_dut_to_memchip_link_rts_${y}),
         .east_flow_control_cts_i_${y}(east_dut_to_memchip_link_cts_${y}),
         .east_flow_control_rts_i_${y}(east_memchip_to_dut_link_rts_${y}),
@@ -714,7 +722,8 @@ module testharness;
         // Memchip East D2D Links
         // Should be connected to the Offchip West D2D Link of the asic
         %if enable_east:
-        .east_d2d_io                (west_offchip_d2d_link_${mem_chip_y}),
+        .east_d2d_tx_o              (west_offchip_d2d_rx_i_${mem_chip_y}),
+        .east_d2d_rx_i              (west_offchip_d2d_tx_o_${mem_chip_y}),
         .flow_control_east_rts_o    (west_memchip_to_dut_link_rts_${mem_chip_y}),
         .flow_control_east_cts_i    (west_memchip_to_dut_link_cts_${mem_chip_y}),
         .flow_control_east_rts_i    (west_dut_to_memchip_link_rts_${mem_chip_y}),
@@ -722,7 +731,8 @@ module testharness;
         .east_test_being_requested_i(west_dut_to_memchip_link_test_request_${mem_chip_y}),
         .east_test_request_o        (west_memchip_to_dut_link_test_request_${mem_chip_y}),
         %else:
-        .east_d2d_io(),
+        .east_d2d_tx_o(),
+        .east_d2d_rx_i('0),
         .flow_control_east_rts_o(),
         .flow_control_east_cts_i(const_zero),
         .flow_control_east_rts_i(const_zero),
@@ -733,7 +743,8 @@ module testharness;
         // Memchip West D2D Links
         // Should be connected to the Offchip East D2D Link of the asic
         %if enable_west:
-        .west_d2d_io                (east_offchip_d2d_link_${mem_chip_y}),
+        .west_d2d_tx_o              (east_offchip_d2d_rx_i_${mem_chip_y}),
+        .west_d2d_rx_i              (east_offchip_d2d_tx_o_${mem_chip_y}),
         .flow_control_west_rts_o    (east_memchip_to_dut_link_rts_${mem_chip_y}),
         .flow_control_west_cts_i    (east_memchip_to_dut_link_cts_${mem_chip_y}),
         .flow_control_west_rts_i    (east_dut_to_memchip_link_rts_${mem_chip_y}),
@@ -741,7 +752,8 @@ module testharness;
         .west_test_being_requested_i(east_dut_to_memchip_link_test_request_${mem_chip_y}),
         .west_test_request_o        (east_memchip_to_dut_link_test_request_${mem_chip_y}),
         %else:
-        .west_d2d_io(),
+        .west_d2d_tx_o(),
+        .west_d2d_rx_i('0),
         .flow_control_west_rts_o(),
         .flow_control_west_cts_i(const_zero),
         .flow_control_west_rts_i(const_zero),
@@ -752,7 +764,8 @@ module testharness;
         // Memchip North D2D Links
         // Should be connected to the Offchip South D2D Link of the asic
         %if enable_north:
-        .north_d2d_io                (south_offchip_d2d_link_${mem_chip_x}),
+        .north_d2d_tx_o              (south_offchip_d2d_rx_i_${mem_chip_x}),
+        .north_d2d_rx_i              (south_offchip_d2d_tx_o_${mem_chip_x}),
         .flow_control_north_rts_o    (south_memchip_to_dut_link_rts_${mem_chip_x}),
         .flow_control_north_cts_i    (south_memchip_to_dut_link_cts_${mem_chip_x}),
         .flow_control_north_rts_i    (south_dut_to_memchip_link_rts_${mem_chip_x}),
@@ -760,7 +773,8 @@ module testharness;
         .north_test_being_requested_i(south_dut_to_memchip_link_test_request_${mem_chip_x}),
         .north_test_request_o        (south_memchip_to_dut_link_test_request_${mem_chip_x}),
         %else:
-        .north_d2d_io(),
+        .north_d2d_tx_o(),
+        .north_d2d_rx_i('0),
         .flow_control_north_rts_o(),
         .flow_control_north_cts_i(const_zero),
         .flow_control_north_rts_i(const_zero),
@@ -771,7 +785,8 @@ module testharness;
         // Memchip South D2D Links
         // Should be connected to the Offchip North D2D Link of the asic
         %if enable_south:
-        .south_d2d_io                (north_offchip_d2d_link_${mem_chip_x}),
+        .south_d2d_tx_o              (north_offchip_d2d_rx_i_${mem_chip_x}),
+        .south_d2d_rx_i              (north_offchip_d2d_tx_o_${mem_chip_x}),
         .flow_control_south_rts_o    (north_memchip_to_dut_link_rts_${mem_chip_x}),
         .flow_control_south_cts_i    (north_memchip_to_dut_link_cts_${mem_chip_x}),
         .flow_control_south_rts_i    (north_dut_to_memchip_link_rts_${mem_chip_x}),
@@ -779,7 +794,8 @@ module testharness;
         .south_test_being_requested_i(north_dut_to_memchip_link_test_request_${mem_chip_x}),
         .south_test_request_o        (north_memchip_to_dut_link_test_request_${mem_chip_x})
         %else:
-        .south_d2d_io(),
+        .south_d2d_tx_o(),
+        .south_d2d_rx_i('0),
         .flow_control_south_rts_o(),
         .flow_control_south_cts_i(const_zero),
         .flow_control_south_rts_i(const_zero),

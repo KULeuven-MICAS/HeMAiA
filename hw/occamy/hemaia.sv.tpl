@@ -34,38 +34,42 @@ module hemaia (
     inout wire [ 7:0] io_chip_id_i,
     inout wire        io_boot_mode_i,
 % if multichip_cfg["single_chip"] is False:
-    // East side (66)
+    // East side (114)
     inout wire              io_east_test_being_requested_i,
     inout wire              io_east_test_request_o,
     inout wire              io_flow_control_east_rts_o,
     inout wire              io_flow_control_east_cts_i,
     inout wire              io_flow_control_east_rts_i,
     inout wire              io_flow_control_east_cts_o,
-    inout wire [2:0][19:0]  io_east_d2d,
-    // West side (66)
+    output wire [2:0][17:0] io_east_d2d_tx_o,
+    input  wire [2:0][17:0] io_east_d2d_rx_i,
+    // West side (114)
     inout wire              io_west_test_being_requested_i,
     inout wire              io_west_test_request_o,
     inout wire              io_flow_control_west_rts_o,
     inout wire              io_flow_control_west_cts_i,
     inout wire              io_flow_control_west_rts_i,
     inout wire              io_flow_control_west_cts_o,
-    inout wire [2:0][19:0]  io_west_d2d,
-    // North side (66)
+    output wire [2:0][17:0] io_west_d2d_tx_o,
+    input  wire [2:0][17:0] io_west_d2d_rx_i,
+    // North side (114)
     inout wire              io_north_test_being_requested_i,
     inout wire              io_north_test_request_o,
     inout wire              io_flow_control_north_rts_o,
     inout wire              io_flow_control_north_cts_i,
     inout wire              io_flow_control_north_rts_i,
     inout wire              io_flow_control_north_cts_o,
-    inout wire [2:0][19:0]  io_north_d2d,
-    // South side (66)
+    output wire [2:0][17:0] io_north_d2d_tx_o,
+    input  wire [2:0][17:0] io_north_d2d_rx_i,
+    // South side (114)
     inout wire              io_south_test_being_requested_i,
     inout wire              io_south_test_request_o,
     inout wire              io_flow_control_south_rts_o,
     inout wire              io_flow_control_south_cts_i,
     inout wire              io_flow_control_south_rts_i,
     inout wire              io_flow_control_south_cts_o,
-    inout wire [2:0][19:0]  io_south_d2d,
+    output wire [2:0][17:0] io_south_d2d_tx_o,
+    input  wire [2:0][17:0] io_south_d2d_rx_i,
 % endif
     // `uart` Interface (4)
     inout wire        io_uart_tx_o,
@@ -877,10 +881,14 @@ module hemaia (
 
   occamy_chip i_occamy_chip (
 % if multichip_cfg["single_chip"] is False:
-    .east_d2d_io         (io_east_d2d        ),
-    .west_d2d_io         (io_west_d2d        ),
-    .north_d2d_io        (io_north_d2d       ),
-    .south_d2d_io        (io_south_d2d       ),
+    .east_d2d_tx_o       (io_east_d2d_tx_o   ),
+    .east_d2d_rx_i       (io_east_d2d_rx_i   ),
+    .west_d2d_tx_o       (io_west_d2d_tx_o   ),
+    .west_d2d_rx_i       (io_west_d2d_rx_i   ),
+    .north_d2d_tx_o      (io_north_d2d_tx_o  ),
+    .north_d2d_rx_i      (io_north_d2d_rx_i  ),
+    .south_d2d_tx_o      (io_south_d2d_tx_o  ),
+    .south_d2d_rx_i      (io_south_d2d_rx_i  ),
 % endif
     .*
     );

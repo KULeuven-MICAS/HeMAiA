@@ -35,7 +35,8 @@ module hemaia_mem_chip #(
     input  logic                 flow_control_east_cts_i,
     input  logic                 flow_control_east_rts_i,
     output logic                 flow_control_east_cts_o,
-    inout  wire      [2:0][19:0] east_d2d_io,
+    output wire      [2:0][17:0] east_d2d_tx_o,
+    input  wire      [2:0][17:0] east_d2d_rx_i,
     // D2D Link - West side
     input  logic                 west_test_being_requested_i,
     output logic                 west_test_request_o,
@@ -43,7 +44,8 @@ module hemaia_mem_chip #(
     input  logic                 flow_control_west_cts_i,
     input  logic                 flow_control_west_rts_i,
     output logic                 flow_control_west_cts_o,
-    inout  wire      [2:0][19:0] west_d2d_io,
+    output wire      [2:0][17:0] west_d2d_tx_o,
+    input  wire      [2:0][17:0] west_d2d_rx_i,
     // D2D Link - North side
     input  logic                 north_test_being_requested_i,
     output logic                 north_test_request_o,
@@ -51,7 +53,8 @@ module hemaia_mem_chip #(
     input  logic                 flow_control_north_cts_i,
     input  logic                 flow_control_north_rts_i,
     output logic                 flow_control_north_cts_o,
-    inout  wire      [2:0][19:0] north_d2d_io,
+    output wire      [2:0][17:0] north_d2d_tx_o,
+    input  wire      [2:0][17:0] north_d2d_rx_i,
     // D2D Link - South side
     input  logic                 south_test_being_requested_i,
     output logic                 south_test_request_o,
@@ -59,7 +62,8 @@ module hemaia_mem_chip #(
     input  logic                 flow_control_south_cts_i,
     input  logic                 flow_control_south_rts_i,
     output logic                 flow_control_south_cts_o,
-    inout  wire      [2:0][19:0] south_d2d_io
+    output wire      [2:0][17:0] south_d2d_tx_o,
+    input  wire      [2:0][17:0] south_d2d_rx_i
 );
 
   ///////////////////
@@ -522,7 +526,8 @@ module hemaia_mem_chip #(
       .flow_control_east_cts_i,
       .flow_control_east_rts_i,
       .flow_control_east_cts_o,
-      .east_phy_io(east_d2d_io),
+      .east_phy_tx_o(east_d2d_tx_o),
+      .east_phy_rx_i(east_d2d_rx_i),
 
       .west_test_being_requested_i,
       .west_test_request_o,
@@ -530,7 +535,8 @@ module hemaia_mem_chip #(
       .flow_control_west_cts_i,
       .flow_control_west_rts_i,
       .flow_control_west_cts_o,
-      .west_phy_io(west_d2d_io),
+      .west_phy_tx_o(west_d2d_tx_o),
+      .west_phy_rx_i(west_d2d_rx_i),
 
       .north_test_being_requested_i,
       .north_test_request_o,
@@ -538,7 +544,8 @@ module hemaia_mem_chip #(
       .flow_control_north_cts_i,
       .flow_control_north_rts_i,
       .flow_control_north_cts_o,
-      .north_phy_io(north_d2d_io),
+      .north_phy_tx_o(north_d2d_tx_o),
+      .north_phy_rx_i(north_d2d_rx_i),
 
       .south_test_being_requested_i,
       .south_test_request_o,
@@ -546,7 +553,8 @@ module hemaia_mem_chip #(
       .flow_control_south_cts_i,
       .flow_control_south_rts_i,
       .flow_control_south_cts_o,
-      .south_phy_io(south_d2d_io)
+      .south_phy_tx_o(south_d2d_tx_o),
+      .south_phy_rx_i(south_d2d_rx_i)
   );
 
   axi_id_remap #(

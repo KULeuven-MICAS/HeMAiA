@@ -11,17 +11,15 @@
 //   2. Exposes EVERY chiplet D2D port (all 4 directions) as internal wires
 //   3. Delegates ALL D2D routing to the io_wrapper module
 //   4. Connects per-chiplet peripherals directly to module ports
-//   5. Passes peripheral/driving signals to io_wrapper (for interposer mode)
+//   5. Passes peripheral/driving signals through the wrapper interface
 //
-// This cleanly separates chip RTL (hemaia instances) from the interconnect
-// fabric (io_wrapper), allowing different physical routing models to be
-// selected via sim_with_interposer at template rendering time.
+// This cleanly separates chip RTL from the direct full-duplex interconnect.
+// The legacy interposer mapping is rejected at template rendering time.
 //
 // Hierarchy:
 //   dut
 //   +-- i_hemaia_X_Y          (compute chiplets)
-//   +-- i_io_wrapper           (interconnect routing)
-//       +-- gen_direct / gen_interposer  (routing mode)
+//   +-- i_io_wrapper           (direct full-duplex interconnect routing)
 //
 // Mesh layout (compute chiplets start at (0,0)):
 //                    north boundary (offchip)
@@ -44,7 +42,8 @@ module dut (
 
     // North boundary (one per column, chiplets at y=0)
     %for x in range(max_compute_chiplet_x):
-    inout tri [2:0][19:0] north_d2d_link_${x},
+    output wire [2:0][17:0] north_d2d_tx_o_${x},
+    input  wire [2:0][17:0] north_d2d_rx_i_${x},
     inout wire             north_flow_control_rts_o_${x},
     inout wire             north_flow_control_cts_i_${x},
     inout wire             north_flow_control_rts_i_${x},
@@ -55,7 +54,8 @@ module dut (
 
     // South boundary (one per column, chiplets at y=${max_compute_chiplet_y - 1})
     %for x in range(max_compute_chiplet_x):
-    inout tri [2:0][19:0] south_d2d_link_${x},
+    output wire [2:0][17:0] south_d2d_tx_o_${x},
+    input  wire [2:0][17:0] south_d2d_rx_i_${x},
     inout wire             south_flow_control_rts_o_${x},
     inout wire             south_flow_control_cts_i_${x},
     inout wire             south_flow_control_rts_i_${x},
@@ -66,7 +66,8 @@ module dut (
 
     // West boundary (one per row, chiplets at x=0)
     %for y in range(max_compute_chiplet_y):
-    inout tri [2:0][19:0] west_d2d_link_${y},
+    output wire [2:0][17:0] west_d2d_tx_o_${y},
+    input  wire [2:0][17:0] west_d2d_rx_i_${y},
     inout wire             west_flow_control_rts_o_${y},
     inout wire             west_flow_control_cts_i_${y},
     inout wire             west_flow_control_rts_i_${y},
@@ -77,7 +78,8 @@ module dut (
 
     // East boundary (one per row, chiplets at x=${max_compute_chiplet_x - 1})
     %for y in range(max_compute_chiplet_y):
-    inout tri [2:0][19:0] east_d2d_link_${y},
+    output wire [2:0][17:0] east_d2d_tx_o_${y},
+    input  wire [2:0][17:0] east_d2d_rx_i_${y},
     inout wire             east_flow_control_rts_o_${y},
     inout wire             east_flow_control_cts_i_${y},
     inout wire             east_flow_control_rts_i_${y},
@@ -140,7 +142,7 @@ module dut (
     // Per-chiplet D2D wires
     // Each chiplet's 4 D2D interfaces are exposed as separate wires.
     // These wires connect to both the hemaia instance and the io_wrapper.
-    // The io_wrapper decides how to route them (direct or interposer).
+    // The io_wrapper routes each TX bus to its facing RX bus.
     /////////////////////////////////////
     %for compute_chip in compute_chips:
     <%
@@ -149,7 +151,8 @@ module dut (
     %>
     // Chiplet (${cx}, ${cy}) D2D wires
     %for direction in ['east', 'west', 'north', 'south']:
-    tri  [2:0][19:0] chip_${cx}_${cy}_${direction}_d2d;
+    wire [2:0][17:0] chip_${cx}_${cy}_${direction}_d2d_tx_o;
+    wire [2:0][17:0] chip_${cx}_${cy}_${direction}_d2d_rx_i;
     wire             chip_${cx}_${cy}_${direction}_rts_o;
     wire             chip_${cx}_${cy}_${direction}_cts_i;
     wire             chip_${cx}_${cy}_${direction}_rts_i;
@@ -205,28 +208,32 @@ module dut (
 %if not sim_with_verilator and not multichip_cfg["single_chip"]:
         .io_jtag_tdo_o        (chip${cx}${cy}_jtag_tdo_o),
         // D2D — all 4 directions routed to io_wrapper
-        .io_east_d2d                    (chip_${cx}_${cy}_east_d2d),
+        .io_east_d2d_tx_o               (chip_${cx}_${cy}_east_d2d_tx_o),
+        .io_east_d2d_rx_i               (chip_${cx}_${cy}_east_d2d_rx_i),
         .io_flow_control_east_rts_o     (chip_${cx}_${cy}_east_rts_o),
         .io_flow_control_east_cts_i     (chip_${cx}_${cy}_east_cts_i),
         .io_flow_control_east_rts_i     (chip_${cx}_${cy}_east_rts_i),
         .io_flow_control_east_cts_o     (chip_${cx}_${cy}_east_cts_o),
         .io_east_test_request_o         (chip_${cx}_${cy}_east_test_request_o),
         .io_east_test_being_requested_i (chip_${cx}_${cy}_east_test_being_requested_i),
-        .io_west_d2d                    (chip_${cx}_${cy}_west_d2d),
+        .io_west_d2d_tx_o               (chip_${cx}_${cy}_west_d2d_tx_o),
+        .io_west_d2d_rx_i               (chip_${cx}_${cy}_west_d2d_rx_i),
         .io_flow_control_west_rts_o     (chip_${cx}_${cy}_west_rts_o),
         .io_flow_control_west_cts_i     (chip_${cx}_${cy}_west_cts_i),
         .io_flow_control_west_rts_i     (chip_${cx}_${cy}_west_rts_i),
         .io_flow_control_west_cts_o     (chip_${cx}_${cy}_west_cts_o),
         .io_west_test_request_o         (chip_${cx}_${cy}_west_test_request_o),
         .io_west_test_being_requested_i (chip_${cx}_${cy}_west_test_being_requested_i),
-        .io_north_d2d                    (chip_${cx}_${cy}_north_d2d),
+        .io_north_d2d_tx_o               (chip_${cx}_${cy}_north_d2d_tx_o),
+        .io_north_d2d_rx_i               (chip_${cx}_${cy}_north_d2d_rx_i),
         .io_flow_control_north_rts_o     (chip_${cx}_${cy}_north_rts_o),
         .io_flow_control_north_cts_i     (chip_${cx}_${cy}_north_cts_i),
         .io_flow_control_north_rts_i     (chip_${cx}_${cy}_north_rts_i),
         .io_flow_control_north_cts_o     (chip_${cx}_${cy}_north_cts_o),
         .io_north_test_request_o         (chip_${cx}_${cy}_north_test_request_o),
         .io_north_test_being_requested_i (chip_${cx}_${cy}_north_test_being_requested_i),
-        .io_south_d2d                    (chip_${cx}_${cy}_south_d2d),
+        .io_south_d2d_tx_o               (chip_${cx}_${cy}_south_d2d_tx_o),
+        .io_south_d2d_rx_i               (chip_${cx}_${cy}_south_d2d_rx_i),
         .io_flow_control_south_rts_o     (chip_${cx}_${cy}_south_rts_o),
         .io_flow_control_south_cts_i     (chip_${cx}_${cy}_south_cts_i),
         .io_flow_control_south_rts_i     (chip_${cx}_${cy}_south_rts_i),
@@ -243,8 +250,7 @@ module dut (
     /////////////////////////////////////
     // IO Wrapper instance
     // Handles ALL D2D routing between chiplets and to off-chip boundaries.
-    // Peripheral/driving signals are also passed for interposer mode
-    // (where the chippad_powerpad contains its own hemaia instances).
+    // Peripheral/driving signals retain the common wrapper interface.
     /////////////////////////////////////
     io_wrapper i_io_wrapper (
         // ---- Per-chiplet D2D ports ----
@@ -254,7 +260,8 @@ module dut (
             cy = compute_chip.coordinate[1]
         %>
         %for direction in ['east', 'west', 'north', 'south']:
-        .chip_${cx}_${cy}_${direction}_d2d                   (chip_${cx}_${cy}_${direction}_d2d),
+        .chip_${cx}_${cy}_${direction}_d2d_tx_o              (chip_${cx}_${cy}_${direction}_d2d_tx_o),
+        .chip_${cx}_${cy}_${direction}_d2d_rx_i              (chip_${cx}_${cy}_${direction}_d2d_rx_i),
         .chip_${cx}_${cy}_${direction}_rts_o                 (chip_${cx}_${cy}_${direction}_rts_o),
         .chip_${cx}_${cy}_${direction}_cts_i                 (chip_${cx}_${cy}_${direction}_cts_i),
         .chip_${cx}_${cy}_${direction}_rts_i                 (chip_${cx}_${cy}_${direction}_rts_i),
@@ -265,14 +272,16 @@ module dut (
         %endfor
         // ---- Off-chip boundary D2D ports ----
         %for x in range(max_compute_chiplet_x):
-        .north_d2d_link_${x}                  (north_d2d_link_${x}),
+        .north_d2d_tx_o_${x}                  (north_d2d_tx_o_${x}),
+        .north_d2d_rx_i_${x}                  (north_d2d_rx_i_${x}),
         .north_flow_control_rts_o_${x}        (north_flow_control_rts_o_${x}),
         .north_flow_control_cts_i_${x}        (north_flow_control_cts_i_${x}),
         .north_flow_control_rts_i_${x}        (north_flow_control_rts_i_${x}),
         .north_flow_control_cts_o_${x}        (north_flow_control_cts_o_${x}),
         .north_test_request_o_${x}            (north_test_request_o_${x}),
         .north_test_being_requested_i_${x}    (north_test_being_requested_i_${x}),
-        .south_d2d_link_${x}                  (south_d2d_link_${x}),
+        .south_d2d_tx_o_${x}                  (south_d2d_tx_o_${x}),
+        .south_d2d_rx_i_${x}                  (south_d2d_rx_i_${x}),
         .south_flow_control_rts_o_${x}        (south_flow_control_rts_o_${x}),
         .south_flow_control_cts_i_${x}        (south_flow_control_cts_i_${x}),
         .south_flow_control_rts_i_${x}        (south_flow_control_rts_i_${x}),
@@ -281,7 +290,8 @@ module dut (
         .south_test_being_requested_i_${x}    (south_test_being_requested_i_${x}),
         %endfor
         %for y in range(max_compute_chiplet_y):
-        .west_d2d_link_${y}                   (west_d2d_link_${y}),
+        .west_d2d_tx_o_${y}                   (west_d2d_tx_o_${y}),
+        .west_d2d_rx_i_${y}                   (west_d2d_rx_i_${y}),
         .west_flow_control_rts_o_${y}         (west_flow_control_rts_o_${y}),
         .west_flow_control_cts_i_${y}         (west_flow_control_cts_i_${y}),
         .west_flow_control_rts_i_${y}         (west_flow_control_rts_i_${y}),
@@ -290,7 +300,8 @@ module dut (
         .west_test_being_requested_i_${y}     (west_test_being_requested_i_${y}),
         %endfor
         %for y in range(max_compute_chiplet_y):
-        .east_d2d_link_${y}                   (east_d2d_link_${y}),
+        .east_d2d_tx_o_${y}                   (east_d2d_tx_o_${y}),
+        .east_d2d_rx_i_${y}                   (east_d2d_rx_i_${y}),
         .east_flow_control_rts_o_${y}         (east_flow_control_rts_o_${y}),
         .east_flow_control_cts_i_${y}         (east_flow_control_cts_i_${y}),
         .east_flow_control_rts_i_${y}         (east_flow_control_rts_i_${y}),

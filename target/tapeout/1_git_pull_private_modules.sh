@@ -12,6 +12,7 @@ script_dir="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 SIM_WITH_MACRO="${SIM_WITH_MACRO:-1}"
 SIM_WITH_D2D="${SIM_WITH_D2D:-1}"
 SIM_WITH_PLL="${SIM_WITH_PLL:-1}"
+HEMAIA_D2D_LINK_BRANCH="${HEMAIA_D2D_LINK_BRANCH:-full_duplex}"
 
 # Simple CLI parsing to override the same variables when calling the script.
 while [ $# -gt 0 ]; do
@@ -54,12 +55,23 @@ else
 fi
 
 if [ "$SIM_WITH_D2D" -eq 1 ]; then
-    if [ ! -d "$script_dir/../../hw/hemaia/hemaia_d2d_link" ]; then
-        git clone git@github.com:IveanEx/hemaia_d2d_link.git "$script_dir/../../hw/hemaia/hemaia_d2d_link"
+    d2d_repo="$script_dir/../../hw/hemaia/hemaia_d2d_link"
+    if [ ! -d "$d2d_repo/.git" ]; then
+        git clone --branch "$HEMAIA_D2D_LINK_BRANCH" --single-branch \
+            git@github.com:IveanEx/hemaia_d2d_link.git "$d2d_repo" || exit 1
     else
-        cd "$script_dir/../../hw/hemaia/hemaia_d2d_link" || exit
-        git pull
+        git -C "$d2d_repo" fetch origin \
+            "refs/heads/$HEMAIA_D2D_LINK_BRANCH:refs/remotes/origin/$HEMAIA_D2D_LINK_BRANCH" || exit 1
+        if git -C "$d2d_repo" show-ref --verify --quiet \
+            "refs/heads/$HEMAIA_D2D_LINK_BRANCH"; then
+            git -C "$d2d_repo" switch "$HEMAIA_D2D_LINK_BRANCH" || exit 1
+        else
+            git -C "$d2d_repo" switch --track -c "$HEMAIA_D2D_LINK_BRANCH" \
+                "origin/$HEMAIA_D2D_LINK_BRANCH" || exit 1
+        fi
+        git -C "$d2d_repo" pull --ff-only origin "$HEMAIA_D2D_LINK_BRANCH" || exit 1
     fi
+    echo "hemaia_d2d_link: branch $(git -C "$d2d_repo" branch --show-current), commit $(git -C "$d2d_repo" rev-parse --short HEAD)"
 else
     echo "SIM_WITH_D2D=0: skipping hemaia_d2d_link checkout/update"
 fi

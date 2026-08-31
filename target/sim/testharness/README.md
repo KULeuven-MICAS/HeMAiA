@@ -16,8 +16,7 @@ testharness  (top-level, drives CLK/RST/PLL/peripherals, loads binary, monitors 
   │     ├── hemaia instances  (one per compute chiplet position)
   │     │
   │     └── io_wrapper  (D2D interconnect routing between chiplets and off-chip)
-  │           ├── gen_direct       (SIM_WITH_INTERPOSER=0, ideal wire model)
-  │           └── gen_interposer   (SIM_WITH_INTERPOSER=1, IO-pad + interposer model, 2x2 only)
+  │           └── direct full-duplex TX/RX wiring (SIM_WITH_INTERPOSER=0)
   │
   └── mem_chip instances  (external memory pool, FPGA in real setup, simulated here)
 ```
@@ -49,12 +48,13 @@ physical routing models can be selected without changing chiplet instantiation.
 
 ### io_wrapper (interconnect routing)
 
-Handles all die-to-die (D2D) signal routing. Two modes selected by `SIM_WITH_INTERPOSER`:
+Handles all die-to-die (D2D) signal routing. Every channel has a dedicated
+18-bit TX bus and 18-bit RX bus; adjacent TX and RX buses are cross-connected.
 
 | Mode | `SIM_WITH_INTERPOSER` | Description |
 |------|-----------------------|-------------|
-| **Direct** | `0` | Ideal wire connections. Adjacent chiplets' D2D buses are shorted via `tran` gates; flow-control signals use `assign`. No physical effects. |
-| **Interposer** | `1` | Each chiplet is wrapped in `hemaia_io_pad` (IO pad model), then routed through `hemaia_chiplet_interconnect` instances modeling the silicon interposer. **Currently supports 2x2 arrays only.** |
+| **Direct** | `0` | Ideal directional connections. Adjacent chiplets' TX buses drive their peers' RX buses; flow-control signals use `assign`. |
+| **Interposer** | `1` | **Unsupported.** Full duplex needs 54 TX and 54 RX data pins per compass side, while the legacy pad/interposer model has 60 shared bidirectional pins. Generation fails with an explicit error. |
 
 Internally, the io_wrapper connects:
 - **Internal mesh** — adjacent chiplets' facing D2D ports (e.g., chip `(0,0)` east ↔ chip `(1,0)` west)
