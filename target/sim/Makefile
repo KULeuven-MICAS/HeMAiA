@@ -186,8 +186,17 @@ endif
 VCS_FLAGS += -Mdir=work-vcs
 VCS_FLAGS += -Mlib=work-vcs
 VCS_FLAGS += -full64
+
+# Synthesized gate netlists legitimately omit unused standard-cell outputs.
+# TFIPC-L is useful for catching incomplete RTL instantiations, but promoting it
+# in GLS turns every intentionally open output into a fatal elaboration error.
+ifeq ($(SIM_WITH_NETLIST), 1)
+VCS_FLAGS += +lint=PCWM-L
+VCS_FLAGS += -error=PCWM-L
+else
 VCS_FLAGS += +lint=PCWM-L,TFIPC-L
 VCS_FLAGS += -error=PCWM-L,TFIPC-L
+endif
 # Additional Optimizations
 VCS_FLAGS += -O4
 # Multi-threading compilation
