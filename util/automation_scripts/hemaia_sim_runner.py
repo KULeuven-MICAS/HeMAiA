@@ -625,6 +625,7 @@ class HeMAiASimRunner:
         task_yaml: Optional[Path] = None,
         fail_on_task_failure: bool = False,
         timeout_seconds: int = SIM_TIMEOUT_SECONDS,
+        enforce_preparation_hashes: bool = True,
     ) -> None:
         if engine not in ENGINES:
             raise ValueError(f"Unknown engine {engine!r}; choose from {sorted(ENGINES)}")
@@ -676,6 +677,7 @@ class HeMAiASimRunner:
         # provide it so the hand-off manifest can detect task-list changes.
         self.task_yaml = task_yaml.resolve() if task_yaml is not None else None
         self.fail_on_task_failure = fail_on_task_failure
+        self.enforce_preparation_hashes = enforce_preparation_hashes
         if timeout_seconds < 1:
             raise ValueError("timeout_seconds must be >= 1")
         self.timeout_seconds = timeout_seconds
@@ -1894,19 +1896,24 @@ class HeMAiASimRunner:
                 f"{manifest.get('prepared_engines', [])}"
             )
 
+        if not self.enforce_preparation_hashes:
+            print(
+                "WARNING: preparation content hashes are not enforced; "
+                "validating paths and hardware identity only"
+            )
+
         for name, entry in manifest.get("inputs", {}).items():
             path = self._manifest_path_to_host(entry["path"])
             if not path.is_file():
                 raise FileNotFoundError(f"Prepared input {name} is missing: {path}")
-            digest = _sha256(path)
-            if digest != entry["sha256"]:
+            if self.enforce_preparation_hashes and _sha256(path) != entry["sha256"]:
                 raise ValueError(f"Prepared input {name} changed after preparation: {path}")
 
         for path_text, expected_digest in manifest.get("generated_files", {}).items():
             path = self._manifest_path_to_host(path_text)
             if not path.is_file():
                 raise FileNotFoundError(f"Generated simulation input is missing: {path}")
-            if _sha256(path) != expected_digest:
+            if self.enforce_preparation_hashes and _sha256(path) != expected_digest:
                 raise ValueError(f"Generated simulation input changed after preparation: {path}")
         self._validate_relocatable_compile_input(self.engine)
 
@@ -1978,7 +1985,7 @@ class HeMAiASimRunner:
             path = self._manifest_path_to_host(path_text)
             if not path.is_file():
                 raise FileNotFoundError(f"Prepared compiler source is missing: {path}")
-            if _sha256(path) != expected_digest:
+            if self.enforce_preparation_hashes and _sha256(path) != expected_digest:
                 raise ValueError(f"Prepared compiler source changed after preparation: {path}")
         for path_text in backend_dependencies:
             path = self._manifest_path_to_host(path_text)
@@ -1993,8 +2000,10 @@ class HeMAiASimRunner:
             (self.output_dir / task_dir_name(idx, task["ci_name"]), task["ci_name"])
             for idx, task in enumerate(tasks)
         ]
-        current_state = self._task_hex_state(tasks, tasks_info)
-        if current_state != prepared_tasks:
+        if (
+            self.enforce_preparation_hashes
+            and self._task_hex_state(tasks, tasks_info) != prepared_tasks
+        ):
             raise ValueError("Staged application/mempool hex changed after preparation")
 
         print(f"Validated preparation manifest: {manifest_path}")

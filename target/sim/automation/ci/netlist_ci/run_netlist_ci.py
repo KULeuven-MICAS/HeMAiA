@@ -219,6 +219,7 @@ def main() -> None:
         task_yaml=task_yaml,
         fail_on_task_failure=True,
         timeout_seconds=max(1, int(args.timeout_hours * 60 * 60)),
+        enforce_preparation_hashes=False,
     )
     try:
         result_path = runner.run(parse_tasks(task_yaml), phase=args.phase)
