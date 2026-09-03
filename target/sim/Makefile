@@ -161,8 +161,12 @@ VSIM_FLAGS += -do "$(VSIM_DO_CMD)"
 # TODO: Workaround; revise
 VSIM_FLAGS += -warning 8386
 
-# Treat every module-port width mismatch found during elaboration as an error.
+# Treat every RTL module-port width mismatch found during elaboration as an
+# error.  Synthesized gate netlists routinely leave unused cell outputs open,
+# so netlist CI must retain Questa's default non-fatal severity.
+ifneq ($(SIM_WITH_NETLIST), 1)
 VOPT_FLAGS += -error 2241
+endif
 
 VLOG_FLAGS += -svinputport=compat
 VLOG_FLAGS += -override_timescale 1ns/1ps
