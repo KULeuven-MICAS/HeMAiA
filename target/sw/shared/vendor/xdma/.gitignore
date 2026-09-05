@@ -1,1 +1,6 @@
+# Emitted by the xDMA hardware generator on every RTL generation (see the
+# --sw-target-dir argument in util/occamygen/occamygen.py), so its contents track
+# whichever hemaia_xdma_cfg was last built. Both headers say so in their own banner:
+# "Do not modify or commit this file to the repository manually."
 /hemaia-mem-chip-xdma-addr.h
+/hemaia-xdma-addr.h
