@@ -220,9 +220,24 @@ SNAX_SW_GEN_MARKER = $(SW_DIR)/.snax_sw_gen_targets_group
 
 SNAX_XDMA_ADDR_H = $(SW_DIR)/device/runtime/snax/xdma/snax_xdma_addr.h
 
+# The marker must track the cfg's IDENTITY (which file, plus its contents), not merely
+# its mtime.  A bare `$(SNAX_SW_GEN_MARKER): $(CFG)` compares timestamps, so switching to
+# a DIFFERENT cfg file that happens to be OLDER than the marker leaves make believing
+# everything is up to date -- and the generated headers keep describing the PREVIOUS
+# cluster.  That silently shipped a wrong snax_xdma_addr.h (DST_EXT_NUM 2 vs 3,
+# WRITER_EXT_STREAMMOMENTMERGERT 1 vs 2), i.e. SW programming the wrong extension at
+# shifted CSR addresses, and cost a long debug.
+#
+# The stamp below is rewritten at parse time only when the cfg identity changes, so its
+# mtime moves exactly when regeneration is genuinely required.
+SNAX_SW_GEN_STAMP = $(SW_DIR)/.snax_sw_gen_cfg_stamp
+SNAX_CFG_ID := $(abspath $(CFG)):$(shell sha1sum $(CFG) 2>/dev/null | cut -d' ' -f1)
+$(shell [ "$$(cat $(SNAX_SW_GEN_STAMP) 2>/dev/null)" = '$(SNAX_CFG_ID)' ] || \
+        printf '%s' '$(SNAX_CFG_ID)' > $(SNAX_SW_GEN_STAMP))
+
 snax-sw-gen: $(SNAX_SW_GEN_MARKER) $(SNAX_XDMA_ADDR_H)
 
-$(SNAX_SW_GEN_MARKER): $(CFG)
+$(SNAX_SW_GEN_MARKER): $(CFG) $(SNAX_SW_GEN_STAMP)
 	@echo "[SNAX-SW-GEN] Generate SNAX SW headers"
 	@# Wipe every stale streamer_csr_addr_map.h from the snax SW tree first.
 	@# The device build's INCDIRS globs sw/snax/*/include alphabetically, and
@@ -246,7 +261,7 @@ $(SNAX_XDMA_ADDR_H): $(SNAX_SW_GEN_MARKER)
 	@cp $(SNITCH_ROOT)/target/snitch_cluster/sw/snax/xdma/include/snax-xdma-addr.h $@
 
 clean-snax-sw-gen:
-	rm -f $(SNAX_SW_GEN_MARKER) $(SNAX_XDMA_ADDR_H)
+	rm -f $(SNAX_SW_GEN_MARKER) $(SNAX_XDMA_ADDR_H) $(SNAX_SW_GEN_STAMP)
 
 # Structural sync check that every function defined in the upstream
 # snax-versacore-to-lib.c also exists in the local snax_versacore_lib.h and
