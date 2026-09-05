@@ -23,6 +23,7 @@ APPDIR += apps/snax/snax-xdma-multicast-chiplet
 APPDIR += apps/snax/snax-xdma-multicast-exploration
 APPDIR += apps/snax/snax-xdma-overhead
 APPDIR += apps/snax/snax-xdma-reshape-multicast
+APPDIR += apps/snax/snax-xdma-chain-gather-sweep
 APPDIR += apps/snax/versacore-matmul-profile-1cluster-4chip
 APPDIR += apps/snax/versacore-matmul-profile-2cluster-4chip
 APPDIR += apps/snax/versacore-matmul-profile-2cluster-4chip-d2d

@@ -1,0 +1,15 @@
+{
+  // Cross-die ChainGather scaling sweep on the 16-chiplet platform (hemaia_16chiplet:
+  // a 4x4 compute grid, 1 cluster per chiplet, memory chiplet at [4,0]).
+  //
+  // num_chiplets  the full grid; chiplet at snake index i owns partial i.
+  // sweep_p       the chain widths to measure. Every entry must divide into the
+  //               snake prefix (any prefix of the snake is itself an all-adjacent
+  //               chain) and must be <= num_chiplets. P == num_chiplets uses a
+  //               chain of exactly num_chiplets xDMA dst slots, which is the
+  //               hardware cap (XDMA_MAX_DST_COUNT).
+  // partial_elems 16 fp32 = one 64 B beat = the xDMA data width.
+  num_chiplets: 16
+  partial_elems: 16
+  sweep_p: [2, 4, 8, 16]
+}
