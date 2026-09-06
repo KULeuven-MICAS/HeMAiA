@@ -1,0 +1,24 @@
+# 64 workers, GEMM 4 x 8192 x 4096.
+# RTL cfg: hemaia_scalability_exp_16chip_4c_4mem.hjson
+#
+# The one configuration that NEEDS the partitioned memory-chiplet image:
+# replicated, the operands are 32 MiB against a 16 MiB chiplet. Thin M keeps
+# that true while costing far less simulation, because the image size is driven
+# by B = K1 * N1 * 512 and M1 barely enters it.
+#
+# ~7 h of simulation. Needs HEMAIA_SIM_TIMEOUT_H=8; the default cap is 4 h.
+{
+    num_chips: 16
+    clusters_per_chip: 4
+    grid_M: 4
+    grid_K: 4
+    grid_N: 4
+    array_shape: 1
+    M1: 4
+    K1: 512
+    N1: 128
+    transposed_A: 0
+    transposed_B: 0
+    accumPrevC: 0
+    check_bytes: 4096
+}

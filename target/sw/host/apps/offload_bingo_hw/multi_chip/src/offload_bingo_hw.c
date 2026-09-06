@@ -27,8 +27,9 @@ int main() {
     // Bear in mind that all the function calls here will be executed by all the chiplets
     // The chip id and chip address prefix is needed to differentiate the chiplets
     uint8_t current_chip_id = get_current_chip_id();
-    // Program the Chiplet Topology
-    hemaia_d2d_link_initialize_4c1m(current_chip_id);
+    // Program the chiplet topology. Not _4c1m(): that covers chip ids
+    // 0x00/0x01/0x10/0x11 only and hangs any other chiplet.
+    hemaia_d2d_link_initialize(current_chip_id);
     // Init the uart for printf
     init_uart(get_current_chip_baseaddress(), 32, 1);
     OFFLOAD_BINGO_HW_DEBUG_PRINT_SAFE("Multi-chip Offload HW Bingo Main\r\n");

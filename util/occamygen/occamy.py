@@ -1098,6 +1098,12 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
     # Memchip total size (chip(2,0) external SRAM); zero if cfg has no memchip.
     mem_chips = multichip_cfg["testbench_cfg"]["hemaia_mem_chip"]
     mempool_total_size = int(mem_chips[0]["mem_size"]) if mem_chips else 0
+    # Memory-chiplet coordinates, packed the same way as the compute chiplet ids
+    # ((x << 4) | y). SW needs these to work out, for each of its four D2D
+    # directions, whether a neighbour actually exists -- see
+    # hemaia_d2d_link_initialize() in target/sw/shared/runtime/hemaia_d2d_link.h.
+    mem_chiplet_ids = [((int(mc["coordinate"][0]) << 4) | int(mc["coordinate"][1]))
+                       for mc in mem_chips]
     # CLINT MSIP bit the bingo HW manager writes to ring the host DVFS doorbell: it is
     # appended right after this chiplet's harts, so its index == the hart count. Exposed
     # to SW so dvfs.h does not hardcode it (must match hw_manager_ipi_idx / occamy_soc.sv).
@@ -1106,6 +1112,8 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
         "name": name,
         "nr_chiplets": nr_chiplets,
         "chiplet_ids": chiplet_ids,
+        "nr_mem_chiplets": len(mem_chiplet_ids),
+        "mem_chiplet_ids": mem_chiplet_ids,
         "nr_clusters": nr_clusters,
         "nr_cores": nr_cores,
         "nr_clusters_per_chiplet": nr_clusters_per_chiplet,

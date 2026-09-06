@@ -1,0 +1,24 @@
+# K tiling through accumPrevC, 8 workers. RTL cfg: hemaia_tapeout_2c.hjson
+#
+# inner_tile_K < K1_share splits K, so every k_idx > 0 GEMM call sets
+# accumPrevC = 1. The accumulator is a single VersaCore register holding one
+# tile, so this is only correct at inner_tile_M == inner_tile_N == 1; with 2x2
+# it returns sign-flipped results and no error. gemm_check_plan enforces it.
+{
+    num_chips: 4
+    clusters_per_chip: 2
+    grid_M: 2
+    grid_K: 2
+    grid_N: 2
+    array_shape: 1
+    M1: 4
+    K1: 4
+    N1: 2
+    inner_tile_M: 1
+    inner_tile_K: 1
+    inner_tile_N: 1
+    transposed_A: 0
+    transposed_B: 0
+    accumPrevC: 0
+    check_bytes: 0
+}

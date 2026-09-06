@@ -1,0 +1,24 @@
+# Fast path and tile-packed partial D, 8 workers.
+# RTL cfg: hemaia_tapeout_2c.hjson
+#
+# inner_tile_K == K1_share, so a worker's A and B sub-blocks are each one
+# contiguous run and a tile costs 1 load per operand plus 1 store. partial_D is
+# tile-packed: tile (m,n) at (m * n_tile_n + n) * tm * tn * blockD.
+{
+    num_chips: 4
+    clusters_per_chip: 2
+    grid_M: 2
+    grid_K: 2
+    grid_N: 2
+    array_shape: 1
+    M1: 4
+    K1: 4
+    N1: 4
+    inner_tile_M: 1
+    inner_tile_K: 2
+    inner_tile_N: 1
+    transposed_A: 0
+    transposed_B: 0
+    accumPrevC: 0
+    check_bytes: 0
+}

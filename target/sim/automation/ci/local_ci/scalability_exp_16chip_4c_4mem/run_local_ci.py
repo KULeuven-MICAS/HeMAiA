@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-HeMAiA CI runner -- ``hemaia_tapeout_2c_simd`` suite
-====================================================
+HeMAiA CI runner -- ``hemaia_scalability_exp_16chip_4c_4mem`` suite
+===========================================================
 
 Builds and runs the ``task_local_ci.yaml`` next to this script through the shared
-:class:`HeMAiASimRunner`, against ``target/rtl/cfg/hemaia_tapeout_2c_simd.hjson``:
-4 chiplets, 2x ``snax_versacore_to_256KB_simd_cluster`` per chiplet.
+:class:`HeMAiASimRunner`, against ``target/rtl/cfg/hemaia_scalability_exp_16chip_4c_4mem.hjson``:
+16 chiplets (4x4), 4 clusters each = 64 workers, over 4x 16 MiB mem
+chiplets at [4,0..3] holding a PARTITIONED operand image.
 
 One of seven per-cfg suites under ``ci/local_ci/``. Each subdirectory pairs one
 tapeout RTL cfg with the task list valid for it, and owns its own ``task_<idx>/``
@@ -26,20 +27,17 @@ application header is emitted, which shows up as a ``[skip] ...`` line in the
 build log and an otherwise inexplicable stale binary.  Each task list therefore
 belongs to exactly one cfg.
 
-By default the runner sets ``use_vendor_pll: false`` in the cfg before building
-(see ``resolve_rtl_cfg``); pass ``--with-pll`` to enable the vendor PLL model and
-use the private ``hemaia_clk_rst_controller`` checkout instead. Patched cfg copies
-land in ``target/rtl/cfg/generated/``.
-The suite builds against the cfg's own ``spm_wide``.  For the four ``tapeout_1c``
-/ ``tapeout_2c`` cfgs that is the real chip's 128 kiB; the 4-cluster and
-16-chiplet cfgs use a 16 MiB ``spm_wide``, which is a SIMULATION convenience
-and not silicon.
+The runner sets ``use_vendor_pll: false`` in the cfg before building (see
+``resolve_rtl_cfg``); the patched copy lands in ``target/rtl/cfg/generated/``.
+The suite builds against the cfg's own ``spm_wide``. For the four ``tapeout*``
+cfgs that is the real chip's 128 kiB; the 4-cluster and 16-chiplet cfgs use a
+16 MiB ``spm_wide``, which is a SIMULATION convenience and not silicon.
 
 Defaults to the VCS engine with no waveform (fast batch runs); pass
 ``--engine vsim --waveform 1`` to reproduce a failing task under Questasim.
 
     python3 run_local_ci.py [-j JOBS] [-f task.yaml] [--cfg CFG] [--engine vcs|vsim]
-                            [--waveform 0|1] [--no-d2d] [--no-macro] [--with-pll]
+                            [--waveform 0|1] [--no-d2d] [--no-macro]
 """
 
 from __future__ import annotations
@@ -56,7 +54,7 @@ from hemaia_sim_runner import (  # noqa: E402
     DEFAULT_MAX_SIM_JOBS, ENGINES, HeMAiASimRunner, parse_tasks, resolve_task_yaml,
 )
 
-CI_CFG = "target/rtl/cfg/hemaia_tapeout_2c_simd.hjson"
+CI_CFG = "target/rtl/cfg/hemaia_scalability_exp_16chip_4c_4mem.hjson"
 SIM_CFG = "target/sim/cfg/sim_rtl.hjson"
 DEFAULT_TASK_YAML = "task_local_ci.yaml"
 
@@ -84,17 +82,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--macro", action=argparse.BooleanOptionalAction, default=True,
         help="init the tech_cells_tsmc16 private module (use --no-macro for the single-chip flow).")
-    parser.add_argument(
-        "--with-pll", action="store_true",
-        help="enable the vendor PLL model and private hemaia_clk_rst_controller checkout.")
-    parser.add_argument(
-        "--sw-only", action="store_true",
-        help="fast SW-only re-run: skip the repo reset, the bootrom/RTL build and the "
-             "simulation compile, rebuild ONLY the per-task app binaries, and re-run "
-             "against the already-compiled simulation. Requires a prior full run "
-             "(the compiled sim + generated platform header must already exist). "
-             "Repeat --with-pll if that simulation was compiled with PLL support. "
-             "Handy when iterating on SW: it avoids the ~30-40 min RTL gen + sim compile.")
     args = parser.parse_args()
     if args.max_sim_jobs < 1:
         parser.error("--max-sim-jobs must be >= 1")
@@ -117,13 +104,8 @@ def main() -> None:
         sim_cfg=SIM_CFG,
         with_macro=args.macro,
         with_d2d=args.d2d,
-        with_pll=args.with_pll,
+        with_pll=False,
         max_jobs=args.max_sim_jobs,
-        # --sw-only reuses the already-built RTL/bootrom + compiled simulation and
-        # only rebuilds the per-task app binaries before re-running.
-        skip_setup=args.sw_only,
-        skip_build=args.sw_only,
-        skip_compile=args.sw_only,
     )
     runner.run(parse_tasks(task_yaml))
 

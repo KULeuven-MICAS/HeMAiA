@@ -1,0 +1,23 @@
+# The long task list for hemaia_scalability_exp_16chip_4c_4mem.hjson, opt-in:
+#
+#     export HEMAIA_SIM_TIMEOUT_H=8
+#     python3 run_local_ci.py -f task_long_thinM.yaml
+#
+# The runner's simulation timeout defaults to 4 h and this run takes 7h14m;
+# without the override it is killed at exactly 4h00m00s and reports a bare FAIL
+# with a healthy simulation behind it.
+#
+# Worth the eight hours because it is the only run in which the partitioned
+# operand image is required: replicated, the operands need 32 MiB on a 16 MiB
+# memory chiplet, so a pass is only possible because the image is split. Every
+# other partitioned run merely exercises the split. It is also a real GEMM,
+# 4 x 8192 x 4096, checked at full coverage rather than through a window.
+
+runs:
+  # ---- offload_bingo_hw / multi_chip ----
+  # gemm_parametric, 64 workers, thin-M 4/512/128. 7h14m.
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: multi_chip
+    WORKLOAD: gemm_parametric
+    DEV_APP: snax-bingo-offload
+    HOST_DATA_CFG: target/sw/host/apps/offload_bingo_hw/multi_chip/workloads/gemm_parametric/params/grid4x4x4_16chip_4c_thinM.hjson

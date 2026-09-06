@@ -1,0 +1,20 @@
+# 64 workers: 16 chiplets x 4 clusters, split over M, K and N.
+# RTL cfg: hemaia_scalability_exp_16chip_4c_4mem.hjson
+#
+# Deliberately a small matrix: this configuration exercises the full worker
+# grid and nothing else, so a failure points at the grid rather than the shape.
+{
+    num_chips: 16
+    clusters_per_chip: 4
+    grid_M: 4
+    grid_K: 4
+    grid_N: 4
+    array_shape: 1
+    M1: 4
+    K1: 4
+    N1: 4
+    transposed_A: 0
+    transposed_B: 0
+    accumPrevC: 0
+    check_bytes: 0
+}

@@ -7,6 +7,16 @@
 % for idx, chiplet_id in enumerate(chiplet_ids):
 #define CHIPLET_ID_${idx} 0x${f"{chiplet_id:02x}"}
 % endfor
+// Compute chiplet ids as a braced-initialiser list, so SW can iterate the
+// topology instead of hardcoding it.
+#define CHIPLET_ID_LIST ${", ".join(f"0x{cid:02x}" for cid in chiplet_ids)}
+#define N_MEM_CHIPLETS ${nr_mem_chiplets}
+% for idx, mem_chiplet_id in enumerate(mem_chiplet_ids):
+#define MEM_CHIPLET_ID_${idx} 0x${f"{mem_chiplet_id:02x}"}
+% endfor
+% if mem_chiplet_ids:
+#define MEM_CHIPLET_ID_LIST ${", ".join(f"0x{mid:02x}" for mid in mem_chiplet_ids)}
+% endif
 #define N_CLUSTERS ${nr_clusters}
 #define N_SNITCHES ${nr_cores}
 

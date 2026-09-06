@@ -1,0 +1,28 @@
+// Single-chip, 4 clusters, M split 4 ways. The simplest entry point; the
+// multi-chip workload next to it is the one the scalability work uses.
+//
+// Inner tiles are not set by hand: the script splits a worker's share into
+// pieces that fit L1, shrinking M and N first and K last, because K tiling
+// needs accumPrevC.
+{
+    num_chips: 1
+    clusters_per_chip: 4
+    grid_M: 4
+    grid_K: 1
+    grid_N: 1
+
+    M1: 32
+    K1: 32
+    N1: 32
+
+    array_shape: 0
+    transposed_A: 0
+    transposed_B: 0
+    accumPrevC: 0
+
+    // Bytes verified per worker, 0 = all of D. check_result compares byte by
+    // byte on CVA6 at ~14.9 cycles/byte, so all of a 4 MiB D is about 32 h of
+    // simulation against ~31 min for the GEMM. Spent as a head and tail window
+    // per worker, rounded to the D block size.
+    check_bytes: 4096
+}

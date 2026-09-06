@@ -1,0 +1,18 @@
+# 64 workers, GEMM 1024 x 4096 x 4096. NEVER RUN: about 4400 tasks, which is
+# past what the statically unrolled host code fits, and days of simulation.
+# Kept as the size target the mini-compiler work is aimed at.
+{
+    num_chips: 16
+    clusters_per_chip: 4
+    grid_M: 4
+    grid_K: 4
+    grid_N: 4
+    array_shape: 1
+    M1: 1024
+    K1: 256
+    N1: 128
+    transposed_A: 0
+    transposed_B: 0
+    accumPrevC: 0
+    check_bytes: 4096
+}

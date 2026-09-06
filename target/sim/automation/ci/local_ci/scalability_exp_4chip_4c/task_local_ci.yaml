@@ -1,0 +1,18 @@
+# Tasks for hemaia_scalability_exp_4chip_4c.hjson only: 4 compute chiplets (2x2)
+# x 4 clusters = 16 workers, one 64 MiB memory chiplet at [2,0].
+#
+# Only 4-cluster workloads belong here; guard_cluster_count() skips a workload
+# whose cluster count differs from the cfg's.
+#
+# The middle rung between the 8-worker tapeout_2c suite and the 64-worker one,
+# and the only suite running a mid-size matrix. It covers grid_K = 4, a 4-deep
+# chip-local reduction chain; every cheaper suite has grid_K <= 2.
+
+runs:
+  # ---- offload_bingo_hw / multi_chip ----
+  # gemm_parametric, 16 workers, M+K+N split, 64 x 2048 x 2048. ~1h31m.
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: multi_chip
+    WORKLOAD: gemm_parametric
+    DEV_APP: snax-bingo-offload
+    HOST_DATA_CFG: target/sw/host/apps/offload_bingo_hw/multi_chip/workloads/gemm_parametric/params/grid2x4x2_4chip_4c.hjson

@@ -35,6 +35,13 @@
 // image must not inherit data from a previous reload.  RTL uses tc_sram.sram;
 // macro/netlist simulation selects TSMC tc_sram's gen_no_sram_matched.mem_array
 // because the 64 MiB memory-chip configuration does not match a physical macro.
+//
+// Load external memory chips (mempool banks).
+//
+// Each memory chiplet is loaded from its own directory, mempool_<x>_<y>/, so a
+// workload may partition the image instead of replicating it. hemaia_sim_runner
+// stages one such directory per memory chiplet either way: from the workload's
+// per-chip images when it emits them, otherwise by copying the shared mempool/.
 task automatic load_mem_chip;
     $display("-- Loading Bin to Mem Chip @%0g ns ---", $realtime);
     #10ns;
@@ -61,7 +68,8 @@ task automatic load_mem_chip;
         integer mempool_word;
         string  mempool_filename;
 
-        mempool_filename = "mempool/bank_${k}.hex";
+        mempool_filename =
+            "mempool_${mem_chip.coordinate[0]}_${mem_chip.coordinate[1]}/bank_${k}.hex";
         for (mempool_word = 0; mempool_word < ${mem_chip_depth}; mempool_word++) begin
             ${mem_chip_array % k}[mempool_word] = '0;
         end

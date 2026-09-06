@@ -1106,6 +1106,20 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         current_shift += 2
         
         # 2. task_id (12 bits)
+        # Python ints do not truncate, so a node_id that does not fit does NOT
+        # wrap -- it bleeds into assigned_chiplet_id above it and the task is
+        # dispatched to the wrong chiplet. Nothing downstream can detect that:
+        # it links, runs, and produces a wrong answer. Fail here instead.
+        if not 0 <= node.node_id < (1 << task_id_width):
+            raise ValueError(
+                f"task_id overflow: node '{node.node_name}' has node_id "
+                f"{node.node_id}, but the packed descriptor gives task_id only "
+                f"{task_id_width} bits (max {(1 << task_id_width) - 1}). This DFG "
+                f"has {len(self.node_list)} nodes. Reduce the task count -- larger "
+                f"inner tiles, fewer workers, or a smaller matrix -- or widen "
+                f"task_id in both bingo_pack_node and bingo_unpack_node AND in the "
+                f"hardware manager that decodes it."
+            )
         packed_val |= (node.node_id << current_shift)
         current_shift += task_id_width
         
@@ -1514,128 +1528,134 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
 
 
 
-    def bingo_emit_task_desc_list(self, target_chiplet_id: int = None) -> str:
-        """Emit the task description list in the DFG."""
-        task_description_list = ""
-        
-        # Use topological sort, but ensure Dummy Set nodes 
-        # appear immediately after their source node.
-        # 1. Get topological sort
+    def bingo_emit_static_tables(self) -> str:
+        """Emit the file-scope read-only tables behind the task descriptor list
+        and the global-task-id mappings.
+
+        These used to be materialised by straight-line stores inside
+        kernel_execution: one store per descriptor, and one store per
+        (task, chiplet) pair for each of the two mapping arrays.  The mapping
+        term is quadratic in the platform size -- 2312 tasks on 16 chiplets
+        emitted 73984 stores, about half of the entire host image -- so both
+        are constant data now, walked once at boot.
+        """
         topo_nodes = list(nx.topological_sort(self))
-        all_nodes = topo_nodes
-        # # 2. Apply grouping logic
-        # all_nodes = []
-        # visited = set()
-        
-        # for node in topo_nodes:
-        #     if node in visited:
-        #         continue
-                
-        #     all_nodes.append(node)
-        #     visited.add(node)
-            
-        #     # Find successors that are dummy set nodes
-        #     # These nodes must follow the current node immediately in the descriptor list
-        #     successors = list(self.successors(node))
-        #     dummy_set_succs = [
-        #         s for s in successors 
-        #         if s.node_type == "dummy" and s.dep_set_enable
-        #     ]
-            
-        #     # Sort by ID for determinism
-        #     dummy_set_succs.sort(key=lambda x: x.node_id)
-            
-        #     for dummy in dummy_set_succs:
-        #         if dummy not in visited:
-        #             all_nodes.append(dummy)
-        #             visited.add(dummy)
-        
-        chiplets_to_process = [target_chiplet_id] if target_chiplet_id is not None else self.chiplet_ids
+        by_node_id = sorted(self.node_list, key=lambda n: n.node_id)
 
-        for chiplet_id in chiplets_to_process:
-            local_nodes = [node for node in all_nodes if node.assigned_chiplet_id == chiplet_id]
-            num_local_nodes = len(local_nodes)
-            
-            # Emit num_tasks at the beginning
-            task_description_list += f"uint32_t bingo_hw_scheduler_num_task_desc_chip_{chiplet_id:02x} = {num_local_nodes};\n"
-
-            if num_local_nodes == 0:
-                 # Even if size is 0, we allocate 1 element to avoid issues with size 0 allocation if allocator doesn't support it, or just use 0.
-                 # Using 1 for safety, similar to original array [1]
-                 task_description_list += f"uint64_t* bingo_hw_scheduler_task_desc_list_chip_{chiplet_id:02x} = (uint64_t*)bingo_l3_alloc(0x{chiplet_id:02x}, 1 * sizeof(uint64_t));\n"
-                 task_description_list += f"bingo_hw_scheduler_task_desc_list_chip_{chiplet_id:02x}[0] = 0;\n"
+        out = "// Read-only task tables (see bingo_emit_static_tables)\n"
+        for chiplet_id in self.chiplet_ids:
+            # 1. Packed task descriptors, in the order the scheduler consumes them.
+            local_nodes = [n for n in topo_nodes if n.assigned_chiplet_id == chiplet_id]
+            out += f"static const uint64_t bingo_task_desc_chip_{chiplet_id:02x}[] = {{\n"
+            if local_nodes:
+                for node in local_nodes:
+                    out += f"    0x{self.bingo_pack_node(node):016X}, // Node ID {node.node_id} {node.node_name}\n"
             else:
-                task_description_list += f"uint64_t* bingo_hw_scheduler_task_desc_list_chip_{chiplet_id:02x} = (uint64_t*)bingo_l3_alloc(0x{chiplet_id:02x}, bingo_hw_scheduler_num_task_desc_chip_{chiplet_id:02x} * sizeof(uint64_t));\n"
-                for idx, node in enumerate(local_nodes):
-                    packed_val = self.bingo_pack_node(node)
-                    fields = self.bingo_unpack_node(packed_val)
-                    
-                    # Create a detailed comment
-                    comment = f"// Node ID {node.node_id}\n"
-                    comment += f"    // Fields: Type={fields['task_type']}, TaskID={fields['task_id']}\n"
-                    comment += f"    //         Assigned: Chiplet={fields['assigned_chiplet_id']:02x}, Cluster={fields['assigned_cluster_id']}, Core={fields['assigned_core_id']}\n"
-                    comment += f"    //         DepCheck: En={fields['dep_check_en']}, Code=0b{fields['dep_check_code']:0{self.num_cores_per_cluster}b}\n"
-                    comment += f"    //         DepSet:   En={fields['dep_set_en']}, All={fields['dep_set_all']}, Chiplet={fields['dep_set_chiplet_id']:02x}, Cluster={fields['dep_set_cluster_id']}, Code=0b{fields['dep_set_code']:0{self.num_cores_per_cluster}b}"
-                    
-                    task_description_list += f"bingo_hw_scheduler_task_desc_list_chip_{chiplet_id:02x}[{idx}] = 0x{packed_val:016X}; {comment}\n"
-            
-        return task_description_list
-    
-    def bingo_emit_task_id_mapping_lists(self, target_chiplet_id: int = None) -> str:
-        """Emit the mapping lists from global task id to dev/host task id."""
-        all_nodes = self.node_list
-        num_nodes = len(all_nodes)
-        # Sort the nodes by node id
-        all_nodes.sort(key=lambda x: x.node_id)
-        
-        mapping_str = ""
+                out += "    0,\n"
+            out += "};\n"
+
+            # 2. (global task id, is_device) for every task this chiplet owns,
+            #    in node-id order -- the order that defines the dev/host task
+            #    numbering.  Bit 15 carries the device flag.
+            entries = []
+            for node in by_node_id:
+                if node.assigned_chiplet_id != chiplet_id:
+                    continue
+                kernel_name = node.kernel_name
+                if not kernel_name:
+                    continue
+                if kernel_name.startswith("__snax"):
+                    is_dev = 1
+                elif kernel_name.startswith("__host"):
+                    is_dev = 0
+                else:
+                    continue
+                if node.node_id > 0x7FFF:
+                    raise ValueError(
+                        f"Node id {node.node_id} does not fit the 15-bit global "
+                        "task id field of the local task map table.")
+                entries.append((node.node_id, is_dev, node.node_name))
+            out += f"static const uint16_t bingo_local_task_map_chip_{chiplet_id:02x}[] = {{\n"
+            if entries:
+                for gid, is_dev, name in entries:
+                    kind = "dev" if is_dev else "host"
+                    out += f"    0x{(gid | (is_dev << 15)):04X}, // Node ID {gid} {kind} {name}\n"
+            else:
+                out += "    0,\n"
+            out += "};\n"
+            out += (f"static const uint32_t bingo_local_task_map_len_chip_{chiplet_id:02x}"
+                    f" = {len(entries)};\n")
+        out += "\n"
+        return out
+
+    def bingo_emit_task_desc_list(self, target_chiplet_id: int = None) -> str:
+        """Point the scheduler at this chiplet's read-only descriptor table.
+
+        The table is emitted at file scope by bingo_emit_static_tables().  It is
+        read-only to both the host and the dependency manager, so there is no
+        reason to copy it into an L3 allocation first.
+        """
+        topo_nodes = list(nx.topological_sort(self))
         chiplets_to_process = [target_chiplet_id] if target_chiplet_id is not None else self.chiplet_ids
-        
-        # 1. Emit global_task_id_to_dev_task_id for each chiplet
-        # Also need to emit num_dev_tasks for each chiplet
-        for chiplet_id in chiplets_to_process:
-            mapping_str += f"int32_t* global_task_id_to_dev_task_id_chip_{chiplet_id:02x} = (int32_t*)bingo_l3_alloc(0x{chiplet_id:02x}, {num_nodes} * sizeof(int32_t));\n"
-            dev_task_counter = 0
-            
-            for idx, node in enumerate(all_nodes):
-                kernel_name = node.kernel_name
-                # Check if the node is assigned to the current chiplet
-                val = "-1"
-                comment = ""
-                if node.assigned_chiplet_id == chiplet_id:
-                    if kernel_name and kernel_name.startswith("__snax"):
-                         # It is a device task
-                        val = str(dev_task_counter)
-                        comment = f" -> Dev Task {dev_task_counter} ({node.node_name})"
-                        dev_task_counter += 1
-                    else:
-                        comment = f" ({node.node_name})"
-                
-                mapping_str += f"global_task_id_to_dev_task_id_chip_{chiplet_id:02x}[{idx}] = {val}; // Node ID {node.node_id}{comment}\n"
-            
-            mapping_str += f"uint32_t num_dev_tasks_chip_{chiplet_id:02x} = {dev_task_counter};\n"
-            
-        # 2. Emit global_task_id_to_host_task_id
-        for chiplet_id in chiplets_to_process:
-            mapping_str += f"int32_t* global_task_id_to_host_task_id_chip_{chiplet_id:02x} = (int32_t*)bingo_l3_alloc(0x{chiplet_id:02x}, {num_nodes} * sizeof(int32_t));\n"
-            host_task_counter = 0
-            for idx, node in enumerate(all_nodes):
-                kernel_name = node.kernel_name
-                val = "-1"
-                comment = ""
-                if node.assigned_chiplet_id == chiplet_id:
-                    if kernel_name and kernel_name.startswith("__host"):
-                        val = str(host_task_counter)
-                        comment = f" -> Host Task {host_task_counter} ({node.node_name})"
-                        host_task_counter += 1
-                    else:
-                        comment = f" ({node.node_name})"
 
-                mapping_str += f"global_task_id_to_host_task_id_chip_{chiplet_id:02x}[{idx}] = {val}; // Node ID {node.node_id}{comment}\n"
-            
-            mapping_str += f"uint32_t num_host_tasks_chip_{chiplet_id:02x} = {host_task_counter};\n"
+        task_description_list = ""
+        for chiplet_id in chiplets_to_process:
+            num_local_nodes = len([n for n in topo_nodes if n.assigned_chiplet_id == chiplet_id])
+            task_description_list += (
+                f"uint32_t bingo_hw_scheduler_num_task_desc_chip_{chiplet_id:02x}"
+                f" = {num_local_nodes};\n")
+            task_description_list += (
+                f"const uint64_t* bingo_hw_scheduler_task_desc_list_chip_{chiplet_id:02x}"
+                f" = bingo_task_desc_chip_{chiplet_id:02x};\n")
+        return task_description_list
+
+    def bingo_emit_task_id_mapping_lists(self, target_chiplet_id: int = None) -> str:
+        """Build the global-task-id -> dev/host-task-id maps at run time.
+
+        Both maps are a pure function of the chiplet's own task list, so the
+        host fills them with a single pass over bingo_local_task_map_chip_XX
+        instead of executing one store per (task, chiplet) pair.  The task
+        counts stay compile-time constants because the list allocations need
+        them before the loop runs.
+        """
+        num_nodes = len(self.node_list)
+        chiplets_to_process = [target_chiplet_id] if target_chiplet_id is not None else self.chiplet_ids
+
+        mapping_str = ""
+        for chiplet_id in chiplets_to_process:
+            n_dev = n_host = 0
+            for node in self.node_list:
+                if node.assigned_chiplet_id != chiplet_id or not node.kernel_name:
+                    continue
+                if node.kernel_name.startswith("__snax"):
+                    n_dev += 1
+                elif node.kernel_name.startswith("__host"):
+                    n_host += 1
+
+            c = f"{chiplet_id:02x}"
+            mapping_str += (f"int32_t* global_task_id_to_dev_task_id_chip_{c} = "
+                            f"(int32_t*)bingo_l3_alloc(0x{c}, {num_nodes} * sizeof(int32_t));\n")
+            mapping_str += f"uint32_t num_dev_tasks_chip_{c} = {n_dev};\n"
+            mapping_str += (f"int32_t* global_task_id_to_host_task_id_chip_{c} = "
+                            f"(int32_t*)bingo_l3_alloc(0x{c}, {num_nodes} * sizeof(int32_t));\n")
+            mapping_str += f"uint32_t num_host_tasks_chip_{c} = {n_host};\n"
+            mapping_str += "{\n"
+            mapping_str += f"    for (uint32_t g = 0; g < {num_nodes}; g++) {{\n"
+            mapping_str += f"        global_task_id_to_dev_task_id_chip_{c}[g] = -1;\n"
+            mapping_str += f"        global_task_id_to_host_task_id_chip_{c}[g] = -1;\n"
+            mapping_str += "    }\n"
+            mapping_str += "    uint32_t dev_i = 0, host_i = 0;\n"
+            mapping_str += f"    for (uint32_t i = 0; i < bingo_local_task_map_len_chip_{c}; i++) {{\n"
+            mapping_str += f"        uint16_t e = bingo_local_task_map_chip_{c}[i];\n"
+            mapping_str += "        uint32_t g = (uint32_t)(e & 0x7FFF);\n"
+            mapping_str += "        if (e & 0x8000) {\n"
+            mapping_str += f"            global_task_id_to_dev_task_id_chip_{c}[g] = (int32_t)dev_i++;\n"
+            mapping_str += "        } else {\n"
+            mapping_str += f"            global_task_id_to_host_task_id_chip_{c}[g] = (int32_t)host_i++;\n"
+            mapping_str += "        }\n"
+            mapping_str += "    }\n"
+            mapping_str += "}\n"
         return mapping_str
-
 
     def _collect_memory_handles(self, sorted_nodes):
         """Collect and sort unique BingoMemAlloc from nodes."""
@@ -2004,6 +2024,48 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                     f"CERF-gated computations, use post_execute_code in "
                     f"bingo_compile_dfg() instead.")
 
+    # Kernels the device runtime may be asked to run even when no DFG node names
+    # them -- the scheduler's own dummy/exit paths. Always exported, so a subset
+    # can never be missing the machinery that runs it.
+    SNAX_KERNEL_ALWAYS = (
+        "__snax_bingo_kernel_dummy",
+        "__snax_bingo_kernel_exit",
+    )
+
+    def bingo_emit_snax_kernel_subset(self, output_path: str) -> list[str]:
+        """Write the device-side export list for exactly the kernels this DFG uses.
+
+        Every entry in the device symbol table is a live root the linker may not
+        drop (see snax_kernel_lib.h), so a device image exports all 93 kernels
+        however few a workload runs. This writes the list the device build reads
+        through SNAX_KERNEL_SUBSET_H instead.
+
+        Returns the kernel names written, sorted, so the caller can log them.
+        """
+        used = {
+            node.kernel_name
+            for node in self.node_list
+            if node.kernel_name and node.kernel_name.startswith("__snax")
+        }
+        used.update(self.SNAX_KERNEL_ALWAYS)
+        names = sorted(used)
+
+        lines = [
+            "// Auto-generated by bingo_dfg.bingo_emit_snax_kernel_subset -- do not edit.",
+            "//",
+            "// Included by snax_kernel_lib.h AS THE BODY of __snax_symtab[] when the",
+            "// device build defines SNAX_KERNEL_SUBSET_H, so this file must contain",
+            "// nothing but SNAX_EXPORT_FUNC lines. It exports the __snax kernels this",
+            "// workload's DFG actually names, plus the scheduler's own dummy/exit",
+            "// kernels, and nothing else.",
+            "//",
+            f"// {len(names)} kernels, from {len(self.node_list)} DFG nodes.",
+        ]
+        lines += [f"    SNAX_EXPORT_FUNC({name})," for name in names]
+        with open(output_path, "w") as f:
+            f.write("\n".join(lines) + "\n")
+        return names
+
     def bingo_emit_offload_c_code(self, extra_include_header_list: list[str], output_path: str, app_name: str, post_execute_code: list[str] | None = None) -> None:
         """Emit the offload_hw_bingo.h file with kernel_execution logic."""
         
@@ -2020,6 +2082,9 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
             
             # Step 2: Emit Debug Kernel List
             self._emit_debug_kernel_list(f)
+
+            # Step 2b: Emit read-only task tables (kept out of kernel_execution)
+            f.write(self.bingo_emit_static_tables())
 
             # Step 3: Emit kernel_execution function structure
             f.write("int kernel_execution(){\n")
@@ -2102,4 +2167,16 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
             output_path=os.path.join(output_dir, output_file_name),
             extra_include_header_list=extra_include_header_list,
             post_execute_code=post_execute_code,
+        )
+
+        # 3. Emit the device-side export list for just the kernels this DFG uses.
+        # Emitted LAST, so it exists only if the C code above was produced -- the
+        # device build treats a missing file as "export everything", which is the
+        # right fallback for a workload the platform guard declined to emit.
+        subset_names = self.bingo_emit_snax_kernel_subset(
+            os.path.join(output_dir, "snax_kernel_subset.h")
+        )
+        print(
+            f"[bingo] device kernel subset: {len(subset_names)} exported "
+            f"({', '.join(subset_names)})"
         )

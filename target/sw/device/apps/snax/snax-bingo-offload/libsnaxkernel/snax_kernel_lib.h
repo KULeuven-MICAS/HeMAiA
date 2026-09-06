@@ -39,8 +39,25 @@
 
 //////////////////////// SYMBOL TABLE ////////////////////////
 // The host offload runtime looks up kernels by name through this table.
-// Exports must be listed in both branches so the .snax_symtab section
-// contains every kernel the device may be asked to run.
+//
+// Every entry is __attribute__((used)) inside a KEEP()'d section, so it is a
+// live root that pins its kernel and everything the kernel calls: no linker may
+// drop one. On the 64-worker GEMM the image exported 93 kernels for a DFG that
+// names 3, and the device binary was 87392 B of a 128 KiB chip.
+//
+// A build may therefore supply its own list. SNAX_KERNEL_SUBSET_H, if defined,
+// names a generated header with one SNAX_EXPORT_FUNC line per kernel the
+// workload uses; the bingo mini-compiler emits it next to offload_bingo_hw.h.
+// Undefined, the full table below is used, unchanged.
+//
+// Safe because lookup is by name: a name the host requests and cannot find is a
+// loud startup failure, and a misspelled one fails earlier still, at link.
+#ifdef SNAX_KERNEL_SUBSET_H
+SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
+#include SNAX_KERNEL_SUBSET_H
+    SNAX_SYMTAB_END
+};
+#else
 SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
      /// Cluster-level Kernels ///
      /// Used for bingo sw     ///
@@ -156,6 +173,7 @@ SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_row_major_to_d_e4_M16N16),
     SNAX_SYMTAB_END
 };
+#endif  // SNAX_KERNEL_SUBSET_H
 
 // __snax_symtab_start / __snax_symtab_end are provided by the device linker
 // script (base.template.ld) as the boundaries of the .snax_symtab section;

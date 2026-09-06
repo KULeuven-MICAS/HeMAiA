@@ -71,6 +71,21 @@ RISCV_LDFLAGS += -L/tools/riscv-llvm/lib/clang/$(LLVM_VER)/lib/
 RISCV_LDFLAGS += -lc
 endif
 # Common flags
+# Let the linker drop what nothing reaches: 87 KB of device image down to 13 KB
+# on the 64-worker GEMM. Only worth it together with a per-workload kernel symbol
+# table (snax_kernel_lib.h) -- on its own it saves 2%, because every kernel in
+# that table is a live root.
+#
+# base.template.ld KEEPs the sections that are found by symbol or by the startup
+# code rather than by a visible reference (.cbss, .cdata, .tdata, .tbss, .dram).
+# Enabling gc-sections without them deletes cluster-local storage silently.
+#
+# These belong in the common flags, not in the SELECT_TOOLCHAIN branch above:
+# that branch is not the one this build takes, so flags put there are ignored and
+# the image comes out full size.
+RISCV_CFLAGS  += -ffunction-sections
+RISCV_CFLAGS  += -fdata-sections
+RISCV_LDFLAGS += -Wl,--gc-sections
 RISCV_LDFLAGS += -fuse-ld=$(RISCV_LD)
 RISCV_LDFLAGS += -nostdlib
 

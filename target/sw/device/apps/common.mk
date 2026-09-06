@@ -163,6 +163,15 @@ ALL_OUTPUTS += $$(ELF_$(1)) $$(BIN_$(1)) $$(DUMP_$(1)) $$(DWARF_$(1))
 
 RISCV_LDFLAGS_$(1) = $(RISCV_LDFLAGS) -T$$(BASE_LD_$(1))
 
+# Per-host-app device kernel export list, published by the host build (see
+# host/apps/common.mk). Present => export only the kernels that app's DFG names;
+# ABSENT => export the full table, which is what every non-bingo app gets and
+# what this build did unconditionally before. Resolved with $$(wildcard) so a
+# missing file is simply no -D, never a broken include path.
+KERNEL_SUBSET_$(1) = $(DEVICE_DIR)/kernel_subset.$(1).h
+RISCV_CFLAGS_$(1)  = $(RISCV_CFLAGS) $$(if $$(wildcard $$(KERNEL_SUBSET_$(1))),\
+                       -DSNAX_KERNEL_SUBSET_H='"$$(KERNEL_SUBSET_$(1))"')
+
 # Origin LD generation.
 #
 # Written ATOMICALLY: one redirection into a temp, then mv, so the file on disk is either
@@ -192,11 +201,16 @@ $$(BASE_LD_$(1)): $(BASE_TEMPLATE_LD) | $(BUILDDIR)
 # a HEADER rather than to $(SRCS) or $(DATA_H); otherwise a later edit to that header alone
 # would rebuild nothing and the device binary would go stale.
 $$(DEP_$(1)): $(SRCS) $(DATA_H) | $(BUILDDIR)
-	$(RISCV_CC) $(RISCV_CFLAGS) -MM -MT '$$(ELF_$(1)) $$(DEP_$(1))' $$< > $$@
+	$(RISCV_CC) $$(RISCV_CFLAGS_$(1)) -MM -MT '$$(ELF_$(1)) $$(DEP_$(1))' $$< > $$@
 
 # ELF generation
-$$(ELF_$(1)): $$(DEP_$(1)) $$(BASE_LD_$(1)) $$(ORIGIN_LD_$(1)) $(SNRT_LIB) | $(BUILDDIR)
-	$(RISCV_CC) $(RISCV_CFLAGS) $$(RISCV_LDFLAGS_$(1)) $(SRCS) -o $$@
+# The subset header is a wildcard prerequisite, so changing which kernels a
+# workload uses relinks its device binary. It cannot be a plain prerequisite:
+# for every app that has no subset the path does not exist and make would refuse
+# with "No rule to make target".
+$$(ELF_$(1)): $$(DEP_$(1)) $$(BASE_LD_$(1)) $$(ORIGIN_LD_$(1)) $(SNRT_LIB) \
+              $$(wildcard $$(KERNEL_SUBSET_$(1))) | $(BUILDDIR)
+	$(RISCV_CC) $$(RISCV_CFLAGS_$(1)) $$(RISCV_LDFLAGS_$(1)) $(SRCS) -o $$@
 
 # Other outputs
 $$(BIN_$(1)): $$(ELF_$(1)) | $(BUILDDIR)

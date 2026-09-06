@@ -1,0 +1,16 @@
+# M split over 4 chiplets, 1 cluster each. RTL cfg: hemaia_tapeout_1c.hjson
+{
+    num_chips: 4
+    clusters_per_chip: 1
+    grid_M: 4
+    grid_K: 1
+    grid_N: 1
+    array_shape: 1
+    M1: 4
+    K1: 4
+    N1: 1
+    transposed_A: 0
+    transposed_B: 0
+    accumPrevC: 0
+    check_bytes: 0
+}

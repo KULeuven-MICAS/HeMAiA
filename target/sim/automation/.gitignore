@@ -24,6 +24,20 @@
 /ci/local_ci/tapeout_2c_simd/*
 !/ci/local_ci/tapeout_2c_simd/run_local_ci.py
 !/ci/local_ci/tapeout_2c_simd/task_local_ci.yaml
+!/ci/local_ci/scalability_exp_3chip_1c_row/
+/ci/local_ci/scalability_exp_3chip_1c_row/*
+!/ci/local_ci/scalability_exp_3chip_1c_row/run_local_ci.py
+!/ci/local_ci/scalability_exp_3chip_1c_row/task_local_ci.yaml
+!/ci/local_ci/scalability_exp_4chip_4c/
+/ci/local_ci/scalability_exp_4chip_4c/*
+!/ci/local_ci/scalability_exp_4chip_4c/run_local_ci.py
+!/ci/local_ci/scalability_exp_4chip_4c/task_local_ci.yaml
+!/ci/local_ci/scalability_exp_16chip_4c_4mem/
+/ci/local_ci/scalability_exp_16chip_4c_4mem/*
+!/ci/local_ci/scalability_exp_16chip_4c_4mem/run_local_ci.py
+!/ci/local_ci/scalability_exp_16chip_4c_4mem/task_local_ci.yaml
+# The 7-hour thin-M list is opt-in (-f task_long_thinM.yaml), not the default.
+!/ci/local_ci/scalability_exp_16chip_4c_4mem/task_long_thinM.yaml
 !/ci/git_ci/
 /ci/git_ci/*
 !/ci/git_ci/run_git_ci.py

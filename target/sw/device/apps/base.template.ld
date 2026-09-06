@@ -43,14 +43,14 @@ SECTIONS
   .tdata    :
   {
     __tdata_start = .;
-    *(.tdata .tdata.* .gnu.linkonce.td.*)
+    KEEP(*(.tdata .tdata.* .gnu.linkonce.td.*))
     __tdata_end = .;
   } >L3
   .tbss :
   {
     __tbss_start = .;
-    *(.tbss .tbss.* .gnu.linkonce.tb.*)
-    *(.tcommon)
+    KEEP(*(.tbss .tbss.* .gnu.linkonce.tb.*))
+    KEEP(*(.tcommon))
     __tbss_end = .;
   } >L3
   /* add a section after .tbss to put the __tbss_end symbol into for
@@ -61,13 +61,16 @@ SECTIONS
   .cdata    :
   {
     __cdata_start = .;
-    *(.cdata .cdata.*)
+    KEEP(*(.cdata .cdata.*))
     __cdata_end = .;
   } >L3
   .cbss :
   {
+    /* KEEP: cluster-local storage is reached only through __cbss_start /
+       __cbss_end (snRuntime start.S and start.c), never by a reference to the
+       objects themselves, so --gc-sections collects the section outright. */
     __cbss_start = .;
-    *(.cbss .cbss.*)
+    KEEP(*(.cbss .cbss.*))
     __cbss_end = .;
   } >L3
 
@@ -123,7 +126,7 @@ SECTIONS
   /* Uninitialized data section in L3 */
   .dram :
   {
-    *(.dram)
+    KEEP(*(.dram))
     _edram = .;
   } >L3
 
