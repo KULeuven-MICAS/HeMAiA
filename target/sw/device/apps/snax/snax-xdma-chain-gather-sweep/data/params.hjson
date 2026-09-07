@@ -1,19 +1,20 @@
 {
-  // Cross-die ChainGather scaling sweep on the 16-chiplet platform (hemaia_16chiplet:
-  // a 4x4 compute grid, 1 cluster per chiplet, memory chiplet at [4,0]).
+  // In-fabric reduction sweep: CHAIN vs TREE, both junctions, per width.
   //
   // num_chiplets  the full grid; chiplet at snake index i owns partial i. MUST match the
   //               RTL cfg's compute-chiplet count (there is a _Static_assert).
-  // sweep_p       the chain widths to measure, in order. Repeating a width runs it again:
-  //               the second defect fixed on 2026-09-06 needs THREE rounds to surface at
-  //               P=2 and only TWO once the chain has a middle hop, so a width run once
-  //               proves nothing. Every entry must be <= num_chiplets and every prefix of
-  //               the snake is itself a valid all-adjacent chain, so any width works.
+  // sweep_p       the widths to measure, in order. A repeated width runs again -- worth
+  //               doing, since every ChainGather defect found so far surfaced only on a
+  //               SECOND round through the same shape, and the tree adds two pieces of
+  //               per-round state (the row slots and the s2done config-plane handshake)
+  //               that a single round would not exercise.
   // partial_elems 16 fp32 = one 64 B beat = the xDMA data width.
   //
-  // Full scaling sweep, two rounds of each width. P=2 already has three clean rounds from
-  // the 2x2 bring-up, and a width with a middle hop surfaces the defect on the second.
+  // Full 4x4 sweep. The tree needs >= 2 FULL rows, so on a 4-wide grid it is n/a at P=2 and
+  // P=4 and measured at P=8 (2 rows) and P=16 (4 rows). P=16 is the one that matters: its
+  // stage-2 chain has middle hops, so (0,1) and (0,2) are stage-1 collectors and then
+  // stage-2 middle hops -- a role change a flat chain never performs.
   num_chiplets: 16
   partial_elems: 16
-  sweep_p: [2, 2, 4, 4, 8, 8, 16, 16]
+  sweep_p: [2, 4, 8, 8, 16, 16]
 }
