@@ -65,3 +65,21 @@ extern void xdma_disable_all_extensions();
 extern uint32_t xdma_last_task_cycle();
 extern uint32_t xdma_last_read_cycle();
 extern uint32_t xdma_last_write_cycle();
+
+// ChainGather / writer-junction entry points. These live behind XDMA_DST_JCT_ENABLE_PTR in
+// snax_xdma_lib.h, so instantiate them only when the generated xDMA header actually
+// declares a junction region -- a configuration built without junctions has no definition
+// to emit and would fail to link here.
+//
+// Like every other entry point in this file, they are `inline` in the header, which in C99
+// emits NO out-of-line copy on its own. Whether that matters depends on whether the
+// compiler chooses to inline every call site, so omitting the extern works right up until
+// it silently does not: the device apps are built with clang/ld.lld, which left
+// xdma_chain_gather_1d_full_address undefined at link time.
+#ifdef XDMA_DST_JCT_ENABLE_PTR
+extern int32_t xdma_enable_dst_junction(uint8_t jct, uint32_t* csr_value);
+extern int32_t xdma_disable_dst_junction(uint8_t jct);
+extern int32_t xdma_chain_gather_1d_full_address(uint64_t local_src, uint64_t* chain,
+                                                 uint32_t chain_num, uint32_t size,
+                                                 uint8_t junction, uint32_t jct_csr0);
+#endif  // XDMA_DST_JCT_ENABLE_PTR

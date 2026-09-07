@@ -79,20 +79,48 @@
 // Bounded wait. A sweep is worth more when one hanging width still yields the others, so the
 // collector polls with a spin cap instead of spinning forever: a stuck round is reported as
 // TIMEOUT and the sweep carries on.
-#define WAIT_SPINS 1000000u
+// RTL-simulation budgets, calibrated against MEASURED sim speed, not against silicon.
+// A 16-chiplet VCS run advances a DM core at only a few hundred instructions per wall-clock
+// second, so a spin budget is a wall-clock budget: 300k spins cost well over an hour per
+// stuck round. The fold itself completes in a few hundred CYCLES and a 3-hop cross-chip
+// store in ~1k, so 15k spins (~60k+ cycles) is still orders of magnitude of headroom while
+// keeping a failing round to a couple of minutes.
+#define WAIT_SPINS 15000u
+// One budget for the WHOLE round's cross-chip flag wait, not per flag: on failure we want to
+// learn which sources are missing immediately, not to pay the timeout once per source. This
+// one stays short on purpose -- every partial is staged before the barrier in main(), so a
+// source the collector is waiting on should already be there.
+#define SYNC_SPINS 15000u
+// The FINAL release, on the other hand, has to cover the collector traversing the ENTIRE
+// sweep. A chiplet that takes part only in the widest rounds reaches the end of its own loop
+// while the collector is still working through the narrow rounds it sits out -- on a 4x4 grid
+// at P=2 that is fourteen chiplets idling through every narrow round. Budget per round.
+#define RELEASE_SPINS (50000u * (uint32_t)NUM_ROUNDS)
+// How long to wait for the folded beat to become visible after the finish counter bumps.
+// This is a data-visibility settle, not a completion wait, so it is deliberately short.
+#define SETTLE_SPINS 2000u
 
-// Boustrophedon Hamiltonian path over the 4x4 grid, starting at the collector. Every
-// consecutive pair differs in exactly one coordinate by one, and so does every prefix.
-//   0x00 -> 0x10 -> 0x20 -> 0x30   (down column y=0)
-//   0x31 <- 0x21 <- 0x11 <- 0x01   (back along y=1)
-//   0x02 -> 0x12 -> 0x22 -> 0x32   (down y=2)
-//   0x33 <- 0x23 <- 0x13 <- 0x03   (back along y=3)
-static const uint8_t SNAKE[NUM_CHIPLETS] = {
-    0x00, 0x10, 0x20, 0x30,
-    0x31, 0x21, 0x11, 0x01,
-    0x02, 0x12, 0x22, 0x32,
-    0x33, 0x23, 0x13, 0x03,
-};
+// Boustrophedon Hamiltonian path over the compute grid, BUILT AT RUNTIME from the generated
+// N_CHIPLETS_X / N_CHIPLETS_Y so the same binary is correct on any rectangular platform.
+// Row y is walked west-to-east when y is even and east-to-west when y is odd, so every
+// consecutive pair differs in exactly one coordinate by one -- and so does every PREFIX,
+// which is what lets one table serve every P in the sweep.
+//
+//   4x4: 0x00 0x10 0x20 0x30 | 0x31 0x21 0x11 0x01 | 0x02 0x12 0x22 0x32 | 0x33 0x23 0x13 0x03
+//   2x2: 0x00 0x10 0x11 0x01                (the chain the 4-chiplet bring-up used)
+//
+// Index 0 is the collector, so a width-P round folds the first P entries.
+static uint8_t SNAKE[NUM_CHIPLETS];
+
+static void build_snake(void) {
+    int i = 0;
+    for (int y = 0; y < N_CHIPLETS_Y; y++) {
+        for (int k = 0; k < N_CHIPLETS_X; k++) {
+            const int x = (y & 1) ? (N_CHIPLETS_X - 1 - k) : k;
+            if (i < NUM_CHIPLETS) SNAKE[i++] = (uint8_t)((x << 4) | y);
+        }
+    }
+}
 
 // Index of a chip within SNAKE[], or -1 if it is not on the grid.
 static int snake_index(uint8_t chip) {
@@ -124,6 +152,9 @@ static inline void xchip_store_u32(uint8_t target_chip, uint32_t local_addr, uin
 
 #ifdef XDMA_DST_JCT_ENABLE_PTR
 
+_Static_assert(NUM_CHIPLETS == N_CHIPLETS,
+    "the generated data set has NUM_CHIPLETS partials but the platform reports N_CHIPLETS "
+    "chiplets; set num_chiplets in the app's params.hjson to match the RTL cfg.");
 _Static_assert(NUM_CHIPLETS <= XDMA_MAX_DST_COUNT,
     "a width-NUM_CHIPLETS chain needs NUM_CHIPLETS xDMA dst slots (NUM_CHIPLETS-1 remote "
     "sources + the local dst); raise the xDMA multicast width or lower num_chiplets.");
@@ -136,6 +167,18 @@ static int xdma_wait_task_bounded(xdma_task_t task) {
                          ? snax_read_xdma_cfg_reg(XDMA_FINISH_REMOTE_TASK_PTR)
                          : snax_read_xdma_cfg_reg(XDMA_FINISH_LOCAL_TASK_PTR);
         if (f >= task.task_id) return 1;
+    }
+    return 0;
+}
+
+// Wait for a cross-chip sync flag, bounded. Returns 1 when the flag arrived, 0 on timeout.
+// Every wait in this app is bounded: check_finish requires ALL chiplets to report a status,
+// so one lost flag would otherwise turn into the runner's 4-hour wall-clock timeout with no
+// diagnostic. Timing out and reporting which chip/round/slot stalled is far more useful.
+static int wait_flag_bounded(volatile uint32_t *flag, uint32_t budget) {
+    for (uint32_t s = 0; s < budget; s++) {
+        if (*flag == FLAG_SET) return 1;
+        asm volatile("fence" ::: "memory");
     }
     return 0;
 }
@@ -178,9 +221,21 @@ static int run_round(int mode, int width, uint32_t tcdm_base, const float *golde
         junction = WRITER_JCT_ELEMENTWISEJUNCTION;
         jct_csr = (3u << 4) | 0u;
     } else {
-        // MonoidJunction CSR(0): [15:13] combineMode = MOMENT(1), [7:0] nValid = 1.
+        // MonoidJunction CSR(0) names a GEOMETRY, not an operator (MonoidJunction.scala):
+        //   [7:0] nValid | [11:8] n | [21:18] nExp | [25:22] nAdd | [27:26] sigma
+        //   [28] keyPol (0=max) | [29] keyMul (0 = the (R,max) key monoid)
+        // The online-softmax partial is (m, l): key m plus ONE value coordinate, so n = 1
+        // (F = n+1 = 2 fields) and l takes the exp twist, so nExp = 1, nAdd = 0. Lanes are
+        // field-major, lane = field*S + slot with S = 1 << sigma, so sigma = 3 (S = 8) puts
+        // m at lane 0 and l at lane 8 -- exactly MOMENT_M_LANE / MOMENT_L_LANE. nValid = 1
+        // leaves only slot 0 live; every other slot is fed its field's identity.
+        //
+        // NOT the old StreamMomentMergeRt encoding ((1<<13)|1, combineMode at [15:13]).
+        // Under this layout that word decodes to n = 0, sigma = 0 -- a key-only geometry
+        // with S = 1 -- so the l value at lane 8 was never read and the fold wrote nothing.
         junction = WRITER_JCT_MONOIDJUNCTION;
-        jct_csr = (1u << 13) | 1u;
+        jct_csr = (1u /*nValid*/) | (1u << 8 /*n*/) | (1u << 18 /*nExp*/) |
+                  (0u << 22 /*nAdd*/) | (3u << 26 /*sigma=3 -> S=8*/);
     }
 
     int32_t ret = xdma_chain_gather_1d_full_address(local_src, chain, (uint32_t)n,
@@ -192,8 +247,20 @@ static int run_round(int mode, int width, uint32_t tcdm_base, const float *golde
         return 1;
     }
 
+    // SPURIOUS-FINISH PROBE. If a leftover finish/grant from the PREVIOUS gather is still
+    // standing, the finish counter is already at or past the id this transfer is about to be
+    // given, so xdma_wait_task returns immediately and the round "completes" in ~26 cycles
+    // having moved nothing -- exactly the observed second-gather symptom. Sample the counters
+    // BEFORE the start so a stale one is visible.
+    uint32_t fl_before = snax_read_xdma_cfg_reg(XDMA_FINISH_LOCAL_TASK_PTR);
+    uint32_t fr_before = snax_read_xdma_cfg_reg(XDMA_FINISH_REMOTE_TASK_PTR);
+    uint32_t cl_before = snax_read_xdma_cfg_reg(XDMA_COMMIT_LOCAL_TASK_PTR);
+    uint32_t cr_before = snax_read_xdma_cfg_reg(XDMA_COMMIT_REMOTE_TASK_PTR);
+
     uint32_t t0 = snrt_mcycle();
     xdma_task_t task = xdma_start();
+    printf("[Sweep] P=%d %s: commit(l=%u r=%u) finish_before(l=%u r=%u) -> task id=%u remote=%d\r\n",
+           width, tag, cl_before, cr_before, fl_before, fr_before, task.task_id, task.remote);
     int done = xdma_wait_task_bounded(task);
     uint32_t t1 = snrt_mcycle();
 
@@ -207,6 +274,37 @@ static int run_round(int mode, int width, uint32_t tcdm_base, const float *golde
 
     *task_cycles = xdma_last_task_cycle();
     *wall_cycles = t1 - t0;
+
+    // SETTLE BARRIER -- do not delete.
+    // The finish counter is NOT a sufficient barrier for the folded beat being visible to
+    // this core: it can bump a few cycles before the writer's last store has landed in TCDM.
+    // Reading the result immediately then returns the pre-filled sentinel and the round is
+    // scored a false MISMATCH. The first gather of a program hides this (it is slow enough
+    // that the check loses the race anyway); a warm second gather completes in ~31 cycles and
+    // loses it every time -- which is exactly the "only the first gather works" symptom.
+    //
+    // The old 4-chiplet bring-up app never hit this only because it printf'd twice between
+    // the wait and the check, which incidentally gave the write time to land. Depending on a
+    // printf for correctness is not a barrier, so wait explicitly: poll until the destination
+    // stops reading as the sentinel, bounded so a genuinely dead transfer still reports.
+    {
+        volatile uint32_t *settle = (volatile uint32_t *)(uintptr_t)(tcdm_base + dst_off);
+        for (uint32_t s = 0; s < SETTLE_SPINS; s++) {
+            if (settle[0] != 0xDEADBEEFu) break;
+            asm volatile("fence" ::: "memory");
+        }
+        asm volatile("fence" ::: "memory");
+    }
+
+    // The junction's own verdict on THIS transfer (XDMA_JCT_STATUS is cleared on writerStart):
+    // [0] sticky cfg-error, [1] sticky starved (an operand never arrived), [2] live.
+#ifdef XDMA_JCT_STATUS
+    {
+        uint32_t st = snax_read_xdma_cfg_reg(XDMA_JCT_STATUS);
+        printf("[Sweep] P=%d %s: jct_status=%x (cfgerr=%d starved=%d live=%d)\r\n",
+               width, tag, st, (int)(st & 1u), (int)((st >> 1) & 1u), (int)((st >> 2) & 1u));
+    }
+#endif
 
     // Check. Compare raw fp32 BIT PATTERNS as integers: the DM core is rv32ima with NO FPU, so
     // a float compare would emit flw and trap as an illegal instruction.
@@ -247,6 +345,7 @@ static int run_round(int mode, int width, uint32_t tcdm_base, const float *golde
 #endif  // XDMA_DST_JCT_ENABLE_PTR
 
 int main() {
+    build_snake();
     uint8_t chip_id = get_current_chip_id();
     int me = snake_index(chip_id);
     uint32_t tcdm_base = snrt_cluster_base_addrl();
@@ -308,7 +407,11 @@ int main() {
         round_err[r] = 0;
     }
 
-    for (int mode = 0; mode < NUM_MODES; mode++) {
+    // EXPERIMENT: iterate modes in reverse (MOMENT first) to separate "the monoid junction is
+    // broken" from "any SECOND gather in a program fails" -- mom had only ever run 2nd.
+#define MODE_ORDER_REVERSED 0
+    for (int mi = 0; mi < NUM_MODES; mi++) {
+        const int mode = MODE_ORDER_REVERSED ? (NUM_MODES - 1 - mi) : mi;
         for (int pi = 0; pi < NUM_SWEEP_P; pi++) {
             const int width = SWEEP_P[pi];
             const int r = mode * NUM_SWEEP_P + pi;
@@ -317,21 +420,54 @@ int main() {
             if (!participating) continue;
 
             if (chip_id != COLLECTOR) {
-                // Announce readiness to the collector, then hold until it has read our partial.
-                // Holding matters: a source must not return from main() (and let its chiplet
-                // signal EOC) while the collector is still gathering from it.
+                // Announce readiness to the collector and move on. Every partial was staged
+                // before the barrier in main() and is never modified afterwards, so this is a
+                // liveness signal, not a data dependency -- what keeps this chiplet alive
+                // while the collector gathers is the SINGLE final release below.
+                //
+                // It used to hold here, per round, on `done[r]`. That deadlocks against the
+                // sweep's own shape: a source announces round r as soon as it reaches it, but
+                // the collector may still be several rounds behind, working through widths
+                // this source sits out. The wait then expires on the first wide round after a
+                // run of narrow ones and the chiplet reports a spurious error, even though
+                // every gather passed. Measured on the 2x2 bring-up: snake indices 2 and 3
+                // timed out three times each; index 1, which is in every round, never did.
                 xchip_store_u32(COLLECTOR,
                                 tcdm_base + READY_OFF + (uint32_t)(r * NUM_CHIPLETS + me) * 4u,
                                 FLAG_SET);
-                while (done[r] != FLAG_SET) asm volatile("fence" ::: "memory");
+                // One line per participating round. This is what separates "the source never
+                // got here" from "the source ran but its cross-chip store never landed" --
+                // the two have identical symptoms at the collector.
+                printf("[Sweep] chip %x: ready sent, round %d (P=%d %s)\r\n",
+                       chip_id, r, width, (mode == MODE_LIN) ? "lin" : "mom");
                 continue;
             }
 
-            // Collector: wait for every source of THIS round.
-            for (int s = 1; s < width; s++) {
-                while (ready[r * NUM_CHIPLETS + s] != FLAG_SET) {
-                    asm volatile("fence" ::: "memory");
+            // Collector: wait for every source of THIS round under ONE shared budget. A
+            // missing source means its partial was never staged, so the fold would read
+            // stale TCDM -- report exactly which chips are missing and skip the round
+            // rather than measure garbage.
+            int sources_ready = 0;
+            for (uint32_t spin = 0; spin < SYNC_SPINS; spin++) {
+                int missing = 0;
+                for (int s = 1; s < width; s++) {
+                    if (ready[r * NUM_CHIPLETS + s] != FLAG_SET) missing++;
                 }
+                if (missing == 0) { sources_ready = 1; break; }
+                asm volatile("fence" ::: "memory");
+            }
+            if (!sources_ready) {
+                for (int s = 1; s < width; s++) {
+                    if (ready[r * NUM_CHIPLETS + s] != FLAG_SET) {
+                        printf("[Sweep] P=%d %s: MISSING ready from chip %x (snake idx %d)\r\n",
+                               width, (mode == MODE_LIN) ? "lin" : "mom", SNAKE[s], s);
+                    }
+                }
+            }
+            if (!sources_ready) {
+                round_err[r] = 1;
+                err++;
+                continue;
             }
 
             const float *golden = (mode == MODE_LIN)
@@ -339,12 +475,20 @@ int main() {
                                       : &chain_gather_golden_mom[pi * PARTIAL_ELEMS];
             round_err[r] = run_round(mode, width, tcdm_base, golden, &task_cyc[r], &wall_cyc[r]);
             err += round_err[r];
-
-            // Release this round's sources.
-            for (int s = 1; s < width; s++) {
-                xchip_store_u32(SNAKE[s], tcdm_base + DONE_OFF + (uint32_t)r * 4u, FLAG_SET);
-            }
         }
+    }
+
+    // FINAL RELEASE. A source must not return from main() -- and let its chiplet signal EOC --
+    // while the collector is still gathering from it. One release at the end of the whole
+    // sweep is both sufficient (no source ever modifies its partial) and race-free, which a
+    // per-round release is not: see the source branch above.
+    if (chip_id == COLLECTOR) {
+        for (int s = 1; s < NUM_CHIPLETS; s++) {
+            xchip_store_u32(SNAKE[s], tcdm_base + DONE_OFF, FLAG_SET);
+        }
+    } else if (!wait_flag_bounded(&done[0], RELEASE_SPINS)) {
+        printf("[Sweep] chip %x: TIMEOUT waiting for the final release\r\n", chip_id);
+        err++;
     }
 
     if (chip_id == COLLECTOR) {
