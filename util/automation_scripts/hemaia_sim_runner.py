@@ -302,6 +302,36 @@ def run_host_script(script_path: Path, script_args: Optional[List[str]] = None) 
     )
 
 
+def external_bender_path_overrides(repo_root: Path) -> List[Path]:
+    """Absolute ``path:`` overrides in ``Bender.local`` that live outside *repo_root*.
+
+    Bender resolves a path override INSIDE the container, so a dependency pointed at a
+    directory that is not mounted simply is not there. Bender then emits only a warning --
+    ``Manifest not found for "<dep>"`` -- and the build carries on and fails much later, in
+    the generated-source step, with an error that never mentions the mount. Returning them
+    here lets the caller mount them explicitly.
+    """
+    local = repo_root / "Bender.local"
+    if not local.is_file():
+        return []
+    mounts: List[Path] = []
+    for line in local.read_text().splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        match = re.search(r"path\s*:\s*([^\s},]+)", line)
+        if match is None:
+            continue
+        candidate = Path(match.group(1))
+        if not candidate.is_absolute():
+            continue  # relative overrides are inside the repo, so already mounted
+        try:
+            candidate.relative_to(repo_root)
+        except ValueError:
+            if candidate.is_dir() and candidate not in mounts:
+                mounts.append(candidate)
+    return mounts
+
+
 def run_in_container(
     repo_root: Path,
     docker_image: str,
@@ -310,23 +340,28 @@ def run_in_container(
 ) -> None:
     """Run *command* inside *docker_image*, mounting *repo_root* at the same path.
 
+    Any absolute ``Bender.local`` path override pointing outside *repo_root* is mounted at
+    the same path too; see `external_bender_path_overrides`.
+
     Prefers ``podman`` when available; otherwise falls back to ``apptainer exec``.
     """
+    extra_mounts = external_bender_path_overrides(repo_root)
     if shutil.which("podman") is not None:
-        runner_cmd: List[str] = [
-            "podman", "run", "--rm",
-            "-v", f"{repo_root}:{repo_root}:z",
-            "-w", str(working_dir),
-            docker_image,
-        ]
+        runner_cmd: List[str] = ["podman", "run", "--rm",
+                                 "-v", f"{repo_root}:{repo_root}:z"]
+        for mount in extra_mounts:
+            runner_cmd += ["-v", f"{mount}:{mount}:z"]
+        runner_cmd += ["-w", str(working_dir), docker_image]
     elif shutil.which("apptainer") is not None:
         runner_cmd = [
             "apptainer", "exec",
             "--writable-tmpfs",
             "--pwd", str(working_dir),
             "-B", f"{repo_root}:{repo_root}",
-            f"docker://{docker_image}",
         ]
+        for mount in extra_mounts:
+            runner_cmd += ["-B", f"{mount}:{mount}"]
+        runner_cmd += [f"docker://{docker_image}"]
     else:
         raise RuntimeError(
             "Neither 'podman' nor 'apptainer' is available on PATH; "
@@ -557,6 +592,7 @@ def parse_workload_args(
     default_dev_app: str,
     default_engine: str = "vsim",
     default_waveform: int = 1,
+    default_cfg: Optional[str] = None,
     description: Optional[str] = None,
 ) -> argparse.Namespace:
     """Parse CLI overrides for the SW workload-selection knobs (test drivers).
@@ -566,6 +602,10 @@ def parse_workload_args(
     workload from the command line.  The ``--engine`` / ``--waveform`` knobs are
     also exposed so any flow can be flipped (e.g. debug a CI failure under
     vsim+waveform), defaulting to the test convention (vsim, waveform on).
+
+    ``--cfg`` is only added when the caller passes ``default_cfg``; drivers that
+    pin a single platform (the tapeout / single-chiplet flows) leave it out and
+    keep their hardcoded cfg.  The local-CI runners expose the same flag.
     """
     parser = argparse.ArgumentParser(
         description=description,
@@ -590,6 +630,11 @@ def parse_workload_args(
     parser.add_argument(
         "--waveform", type=int, choices=(0, 1), default=default_waveform,
         help="SIM_WITH_WAVEFORM: record a waveform/log (default: %(default)s)")
+    if default_cfg is not None:
+        parser.add_argument(
+            "--cfg", default=default_cfg,
+            help="RTL/SW config (CFG_OVERRIDE) for the whole flow "
+                 "(default: %(default)s)")
     return parser.parse_args()
 
 

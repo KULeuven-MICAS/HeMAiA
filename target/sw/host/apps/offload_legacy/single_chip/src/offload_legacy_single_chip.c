@@ -11,8 +11,6 @@ int main() {
     // Reset and ungate all quadrants, deisolate
     uint32_t current_chip_id = get_current_chip_id();
     init_uart(get_current_chip_baseaddress(), 32, 1);
-    // Enable vector extension
-    enable_vec();
     printf("[HeMAiA] Single-chip Offload Legacy Main\r\n");
 
     // Keep the host and cluster clock divisions the routine used to set, so this
