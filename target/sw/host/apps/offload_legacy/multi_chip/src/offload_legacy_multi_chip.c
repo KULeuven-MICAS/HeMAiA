@@ -19,7 +19,13 @@ int main() {
            current_chip_id >> 4, current_chip_id & 0x0F);
 
     // Bring up the D2D links so cross-chip transfers / barriers work.
-    hemaia_d2d_link_initialize_4c1m(current_chip_id);
+    // Grid-parametric: derives the array extents and the memchip edge from the generated
+    // platform header, so it is correct for any rectangular compute grid. The old
+    // _4c1m() routine was a switch over the four 2x2 chip ids and left every chip outside
+    // that set with all four links marked "available" -- which makes the router forward
+    // off-array packets into nothing -- while clearing EAST/SOUTH on 0x11, ports that are
+    // real neighbours on any grid wider than 2x2.
+    hemaia_d2d_link_initialize_grid(current_chip_id);
 
     // Communication buffer lives at the local narrow SPM, identical address on
     // every chip so the device chip_barrier broadcast lands at the same offset.

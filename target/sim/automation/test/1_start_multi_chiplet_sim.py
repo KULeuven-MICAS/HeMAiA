@@ -58,6 +58,9 @@ WORKLOAD = "gemm_stacked_1cluster"
 DEV_APP = "snax-bingo-offload"
 ENGINE = "vsim"
 SIM_WITH_WAVEFORM = 1
+# Default platform: 2x2 compute + 1 memory chiplet. Override with --cfg to drive the same
+# flow at a different grid (e.g. target/rtl/cfg/hemaia_16chiplet.hjson for 4x4).
+CFG = "target/rtl/cfg/hemaia_tapeout_1c.hjson"
 
 
 def main() -> None:
@@ -68,6 +71,7 @@ def main() -> None:
         default_dev_app=DEV_APP,
         default_engine=ENGINE,
         default_waveform=SIM_WITH_WAVEFORM,
+        default_cfg=CFG,
         description=__doc__,
     )
     runner = HeMAiASimRunner(
@@ -75,7 +79,7 @@ def main() -> None:
         output_dir=_SCRIPT.parent,
         engine=args.engine,
         with_waveform=bool(args.waveform),
-        cfg="target/rtl/cfg/hemaia_tapeout_1c.hjson",
+        cfg=args.cfg,
         sim_cfg="target/sim/cfg/sim_rtl.hjson",
         # Multi-chiplet uses macros + D2D, no vendor PLL.
         with_macro=True,

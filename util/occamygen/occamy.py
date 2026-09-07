@@ -1095,9 +1095,22 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
     # so the boot ROM linker script can size its region from the hardware instead of
     # hardcoding it.
     rom_size = occamy_cfg["peripherals"]["rom"]["length"]
-    # Memchip total size (chip(2,0) external SRAM); zero if cfg has no memchip.
+    # Memchip total size (external SRAM on the memory chiplet); zero if cfg has no memchip.
     mem_chips = multichip_cfg["testbench_cfg"]["hemaia_mem_chip"]
     mempool_total_size = int(mem_chips[0]["mem_size"]) if mem_chips else 0
+    # Compute-chiplet grid extents and memchip placement, exported so SW can program the
+    # D2D link availability from the cfg instead of a per-topology hardcoded switch. Same
+    # derivation the testharness uses (get_testharness_kwargs): max(coord) + 1 per axis.
+    if multichip_cfg["single_chip"]:
+        nr_chiplets_x = 1
+        nr_chiplets_y = 1
+    else:
+        compute_chips = multichip_cfg["testbench_cfg"]["hemaia_compute_chip"]
+        nr_chiplets_x = max(c["coordinate"][0] for c in compute_chips) + 1
+        nr_chiplets_y = max(c["coordinate"][1] for c in compute_chips) + 1
+    nr_mem_chips = len(mem_chips)
+    mem_chip_loc_x = int(mem_chips[0]["coordinate"][0]) if mem_chips else 0
+    mem_chip_loc_y = int(mem_chips[0]["coordinate"][1]) if mem_chips else 0
     # CLINT MSIP bit the bingo HW manager writes to ring the host DVFS doorbell: it is
     # appended right after this chiplet's harts, so its index == the hart count. Exposed
     # to SW so dvfs.h does not hardcode it (must match hw_manager_ipi_idx / occamy_soc.sv).
@@ -1123,6 +1136,11 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
         "cluster_base_addr": hex(cluster_base_addr),
         "mempool_total_size": hex(mempool_total_size),
         "rom_size": hex(rom_size),
+        "nr_chiplets_x": nr_chiplets_x,
+        "nr_chiplets_y": nr_chiplets_y,
+        "nr_mem_chips": nr_mem_chips,
+        "mem_chip_loc_x": mem_chip_loc_x,
+        "mem_chip_loc_y": mem_chip_loc_y,
         "same_memchip_speed": 1 if same_memchip_speed else 0,
     }
     return cheader_kwargs

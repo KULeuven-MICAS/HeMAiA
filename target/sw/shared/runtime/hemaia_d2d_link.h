@@ -824,7 +824,78 @@ void hemaia_d2d_link_initialize_4c1m(uint8_t chip_id) {
 }
 
 
-// Initialize the HeMAiA D2D Link for 1C + 1M topology, set the link topology, 
+// Initialize the HeMAiA D2D Link for ANY rectangular compute grid + at most one memory
+// chiplet on one edge, deriving the topology from the generated platform header instead of
+// hardcoding it per chip ID. This is the general form of hemaia_d2d_link_initialize_4c1m()
+// and reproduces it exactly on a 2x2 + memchip-at-(2,0) system.
+//
+// Why the availability bits matter. They are the router's HARD ARRAY BOUNDARY
+// (hemaia_d2d_link_router_rc.sv: "link_available_i: The hard boundary of the chip array.
+// Exceeding the boundary == No chip"), and their RESET VALUE IS AVAILABLE. The router is
+// X-first with a Y fallback: for a destination further east it takes EAST if east is
+// available, else falls back to SOUTH/NORTH toward the destination row. So a boundary link
+// left marked available makes the router forward packets off the array, where they are
+// dropped and never answered -- and the Y fallback that should have carried them never
+// triggers. Clearing the boundary bits is what makes routing work, not cosmetics.
+//
+// Grid convention (dut.sv.tpl): east = +x, west = -x, south = +y, north = -y, and
+// chip_id = (x << 4) | y. The memchip sits on exactly one edge (the testharness asserts
+// this), so a compute chip whose EAST port faces it must keep that port AVAILABLE while
+// every other chip on the same column edge clears it.
+static inline void hemaia_d2d_link_initialize_grid(uint8_t chip_id) {
+    const uint8_t x = (uint8_t)(chip_id >> 4);
+    const uint8_t y = (uint8_t)(chip_id & 0x0F);
+
+    // Same clock-domain setup as the fixed-topology routines: host and clusters at /7,
+    // all four D2D PHYs at /1, so the core:link ratio matches the RTL's 1/7.
+    enable_clk_domain(0, 7);  // host CPU
+    for (uint8_t i = 0; i < N_CLUSTERS_PER_CHIPLET; i++) {
+        enable_clk_domain(1 + i, 7);  // cluster i
+    }
+    enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 1, 1);  // East  D2D PHY
+    enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 2, 1);  // West  D2D PHY
+    enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 3, 1);  // North D2D PHY
+    enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 4, 1);  // South D2D PHY
+    set_all_d2d_link_tx_turnaround_silence_period(0);
+
+    // Does this chip's EAST port face the memory chiplet? True only when the memchip is
+    // placed just past the east edge (MEM_CHIP_LOC_X == N_CHIPLETS_X) on this chip's row.
+    const int east_faces_memchip =
+        (N_MEM_CHIPS > 0) && (MEM_CHIP_LOC_X == N_CHIPLETS_X) &&
+        (x == N_CHIPLETS_X - 1) && (y == MEM_CHIP_LOC_Y);
+
+    // Clear every port that faces off-array. A port facing the memchip is NOT off-array.
+    if (x == 0) {
+        set_d2d_link_availability(D2D_DIRECTION_WEST, false);
+    }
+    if (y == 0) {
+        set_d2d_link_availability(D2D_DIRECTION_NORTH, false);
+    }
+    if (y == N_CHIPLETS_Y - 1) {
+        set_d2d_link_availability(D2D_DIRECTION_SOUTH, false);
+    }
+    if ((x == N_CHIPLETS_X - 1) && !east_faces_memchip) {
+        set_d2d_link_availability(D2D_DIRECTION_EAST, false);
+    }
+
+    if (east_faces_memchip) {
+        // Keep broadcast/multicast out of the memchip: it is not a compute participant.
+        set_d2d_link_multicast_fence(D2D_DIRECTION_EAST, false);
+#if !HEMAIA_SAME_MEMCHIP_SPEED
+        // The memchip runs on a much slower clock, so this port has to yield and slow its
+        // PHY. DO NOT apply this to any other port -- on a grid larger than 2x2 the old
+        // fixed routine put it on chip 0x10, which is an INTERIOR hop, throttling a hot
+        // link 20x for no reason while the real memchip neighbour got nothing.
+        set_d2d_link_tx_yield_period(HEMAIA_D2D_LINK_FPGA_TX_YIELD_PERIOD,
+                                     D2D_DIRECTION_EAST);
+        set_d2d_link_tx_turnaround_silence_period(
+            HEMAIA_D2D_LINK_FPGA_TX_TURNAROUND_SILENCE_PERIOD, D2D_DIRECTION_EAST);
+        enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 1, 20);
+#endif
+    }
+}
+
+// Initialize the HeMAiA D2D Link for 1C + 1M topology, set the link topology,
 // multicast domain, and clock division according to the chip ID.
 // We also need to configure the clk div ratio between the core and the D2D link to avoid the CDC issue
 // Right now we set at the RTL that the host core is /14 and the D2D /2 to make sure it has a 1/7 ratio.

@@ -16,6 +16,22 @@
 #define N_CORES_PER_CLUSTER            ${nr_cores_per_cluster}
 #define N_CORES_PER_CLUSTER_WIDTH      ${clog2_nr_cores_per_cluster}
 
+// Compute-chiplet grid extents, derived from the cfg's hemaia_compute_chip coordinates
+// (max(coord) + 1 on each axis). chip_id = (x << 4) | y, so a chip's position on the
+// virtual interposer is (chip_id >> 4, chip_id & 0xF) and these say where the array ends.
+// The D2D link-availability programming needs them to know which of its four PHY ports
+// face a real neighbour and which face off-array.
+#define N_CHIPLETS_X                   ${nr_chiplets_x}
+#define N_CHIPLETS_Y                   ${nr_chiplets_y}
+
+// Memory chiplet placement. The testharness requires the memchip to sit on exactly one
+// edge of the compute array, so MEM_CHIP_LOC_X == N_CHIPLETS_X means it hangs off the
+// EAST port of compute chip (N_CHIPLETS_X - 1, MEM_CHIP_LOC_Y). N_MEM_CHIPS is 0 when the
+// cfg declares none, in which case the LOC values are meaningless.
+#define N_MEM_CHIPS                    ${nr_mem_chips}
+#define MEM_CHIP_LOC_X                 ${mem_chip_loc_x}
+#define MEM_CHIP_LOC_Y                 ${mem_chip_loc_y}
+
 // Whether the testharness memchip clock runs at the same speed as the host clock.
 #define HEMAIA_SAME_MEMCHIP_SPEED      ${same_memchip_speed}
 
