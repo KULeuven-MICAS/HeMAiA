@@ -13,8 +13,8 @@
 //     chip 0x01 -> A2/D2,  chip 0x11 -> A3/D3.
 //
 // Workflow (cross-chip sync via snrt_chip_global_barrier() between steps):
-//   1. hub loads B (memchip -> TCDM).                       | snrt_chip_global_barrier()
-//   2. workers pull B from hub; hub loads A0..A3 (memchip).  | snrt_chip_global_barrier()
+//   1. hub loads B (memchip -> TCDM).                       | chip barrier
+//   2. workers pull B from hub; hub loads A0..A3 (memchip).  | chip barrier
 //   3. workers pull their A-block from hub; every chip computes D-block = A x B,
 //      self-checks vs golden, and stores its D-block back to the memory chip.
 //
@@ -64,7 +64,7 @@ int main() {
     int is_hub = (chip_id == HUB_CHIP_ID);
 
     // Configure the cross-chip barrier once (rectangle + hidden checkpoint reset);
-    // every later snrt_chip_global_barrier() is argument-free. All cores call it.
+    // every later barrier names only its mechanism. All cores call it.
     // The comm buffer is fetched internally, so the app keeps no `cb` pointer.
     snrt_chip_barrier_init(BARRIER_TOP_LEFT, BARRIER_BOTTOM_RIGHT);
 
@@ -104,7 +104,7 @@ int main() {
             b_data_length);
         snrt_dma_wait_all();
     }
-    snrt_chip_global_barrier();  // cross-chip + intra-chip sync (checkpoint hidden)
+    snrt_chip_global_barrier(SNRT_CHIP_BARRIER_HW);  // cross-chip + intra-chip sync
 
 
     // ---- Step 2: workers pull B from hub; hub loads all A-blocks from memchip --
@@ -120,7 +120,7 @@ int main() {
         }
         snrt_dma_wait_all();
     }
-    snrt_chip_global_barrier();  // cross-chip + intra-chip sync (checkpoint hidden)
+    snrt_chip_global_barrier(SNRT_CHIP_BARRIER_HW);  // cross-chip + intra-chip sync
 
     // ---- Step 3a: workers pull their A-block from the hub staging area ----
     if (snrt_is_dm_core() && !is_hub) {
