@@ -9,6 +9,7 @@
 #include "global_interrupts.c"
 #include "occamy_device.c"
 #include "occamy_memory.c"
+#include "xchip_mem.c"
 //#include "occamy_start.c"
 #include "hemaia_start.c"
 #include "sync.c"

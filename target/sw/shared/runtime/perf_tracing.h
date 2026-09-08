@@ -37,6 +37,7 @@
 // 0x1XX: BINGO HW Manager Events
 // 0x2XX: Kernel Configuration Events
 // 0x3XX: Accelerator Execution Events
+// 0x4XX: Cross-chip synchronization events
 
 
 // // --- BINGO SW Manager Events ---
@@ -114,3 +115,36 @@
 // HOST IDMA
 #define BINGO_TRACE_HOST_IDMA_RUN_START   0x360
 #define BINGO_TRACE_HOST_IDMA_RUN_END     0x361
+
+// ============================================================================
+// --- Cross-chip synchronization (0x4XX) ---
+// ============================================================================
+// Emitted by the chip barriers in target/sw/device/runtime/src/chip_sync.h.
+//
+// The two mechanisms get DISTINCT ids on purpose: the unified
+// snrt_chip_global_barrier(use_sw) lets one application use both, and a trace that
+// conflated them could not say which one paid for a given interval.
+//
+// START/END bracket the whole barrier and are emitted by EVERY core, so the pair also
+// shows the intra-chip rendezvous. ANNOUNCE and WAIT are emitted only by the chip's
+// representative core and split the cross-chip cost into its network term and its skew
+// term -- the decomposition that says whether a barrier is slow because the fabric is
+// slow or because one chip arrived late.
+//
+// 0x400-0x40F are left free for the min-SFR benchmark's own kernel markers.
+
+// --- Broadcast (in-router) chip barrier ---
+#define BINGO_TRACE_HW_CHIP_BARRIER_START           0x410
+#define BINGO_TRACE_HW_CHIP_BARRIER_END             0x411
+#define BINGO_TRACE_HW_CHIP_BARRIER_ANNOUNCE_START  0x412
+#define BINGO_TRACE_HW_CHIP_BARRIER_ANNOUNCE_END    0x413
+#define BINGO_TRACE_HW_CHIP_BARRIER_WAIT_START      0x414
+#define BINGO_TRACE_HW_CHIP_BARRIER_WAIT_END        0x415
+
+// --- Pure-software chip barrier ---
+#define BINGO_TRACE_SW_CHIP_BARRIER_START           0x420
+#define BINGO_TRACE_SW_CHIP_BARRIER_END             0x421
+#define BINGO_TRACE_SW_CHIP_BARRIER_ANNOUNCE_START  0x422
+#define BINGO_TRACE_SW_CHIP_BARRIER_ANNOUNCE_END    0x423
+#define BINGO_TRACE_SW_CHIP_BARRIER_WAIT_START      0x424
+#define BINGO_TRACE_SW_CHIP_BARRIER_WAIT_END        0x425

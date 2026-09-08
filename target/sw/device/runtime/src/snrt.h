@@ -50,6 +50,8 @@
 #include "sync.h"
 #include "team.h"
 // Cross-chip barrier (snrt_chip_global_barrier) — needs sync.h/team.h/occamy_device.h above.
+// Cross-chiplet scalar access (Mseg CSR); needed by chip_sync.h below.
+#include "xchip_mem.h"
 #include "chip_sync.h"
 
 #include "csr.h"

@@ -8,6 +8,20 @@
 #include "occamy_memory_map.h"
 #include "io.h"
 
+//===============================================================
+// Pure-software cross-chip barrier: shared state
+//===============================================================
+// The barrier itself is device-only and lives in
+// target/sw/device/runtime/src/chip_sync.h; it is built on the cross-chiplet accessors
+// in .../xchip_mem.h, which have no meaning for the RV64 host. What has to stay here is
+// the STATE, because comm_buffer_t is the host/device contract and the host is what
+// zeroes it before the device runs.
+// One arrival slot per participating chip. The barrier rectangle can never be larger
+// than the compute grid, so size the array from the generated platform header.
+#ifndef SW_BARRIER_MAX_CHIPS
+#define SW_BARRIER_MAX_CHIPS (N_CHIPLETS_X * N_CHIPLETS_Y)
+#endif
+
 // *Note*: to ensure that the usr_data field is at the same offset
 // in the host and device (resp. 64b and 32b architectures)
 // usr_data is an explicitly-sized integer field instead of a pointer
@@ -26,6 +40,23 @@ typedef struct __attribute__((aligned(8))){
     volatile uint8_t chip_barrier_rsvd;        // pad (keeps the 8B-aligned layout)
     // Chip Level synchronization mechanism: 16x16 chip matrix
     volatile uint8_t chip_level_checkpoint[256];
+    // ---- Pure-software cross-chip barrier state ----
+    // Driven by snrt_sw_chip_global_barrier() (device/runtime/src/chip_sync.h). Distinct
+    // from the fields above: that barrier announces with a 0xFF BROADCAST store, i.e. it
+    // leans on the D2D router's multicast. These three use nothing but ordinary
+    // point-to-point stores.
+    //   sw_barrier_gen     : per-chip, LOCAL-ONLY. "Which barrier am I on?" Never
+    //                        written by another chip.
+    //   sw_barrier_arrive[]: owned by the MASTER chip (the rectangle's top-left).
+    //                        Slot p holds participant p's generation. Exactly ONE chip
+    //                        ever writes each slot, which is why no atomic is needed --
+    //                        cross-chiplet atomics do not work here, see xchip_mem.h.
+    //   sw_barrier_release : the generation the master has released. The master pushes
+    //                        this into EVERY participant's own copy, so a chip waiting
+    //                        on the barrier only ever reads its own memory.
+    volatile uint32_t sw_barrier_gen;
+    volatile uint32_t sw_barrier_release;
+    volatile uint32_t sw_barrier_arrive[SW_BARRIER_MAX_CHIPS];
 } comm_buffer_t;
 
 // ============================================================================
@@ -128,36 +159,6 @@ static inline void clear_host_sw_interrupt_unsafe(uint8_t chip_id) {
         : "memory");
 #endif
 }
-
-// Cross-chiplet byte read from a Snitch dev core (RV32). The chiplet prefix
-// goes into Mseg (CSR 0xbc0); the inner `lbu` carries the low 32 bits of the
-// remote address; Mseg is restored to the current chiplet immediately after.
-// On RV64 (host) Mseg is unused — the address can be dereferenced directly.
-#if __riscv_xlen == 32
-static inline uint8_t bingo_remote_readb(uint8_t chip_id, uint32_t addr_lo) {
-    uint32_t target_addrh  = get_chip_baseaddress_value(chip_id) >> 32;
-    uint32_t current_addrh = get_current_chip_baseaddress_value() >> 32;
-
-    register uint32_t reg_target_addrh  asm("t0") = target_addrh;
-    register uint32_t reg_value         asm("t1");
-    register uint32_t reg_addr          asm("t2") = addr_lo;
-    register uint32_t reg_current_addrh asm("t3") = current_addrh;
-
-    asm volatile(
-        "csrw 0xbc0, t0;"
-        "lbu  t1, 0(t2);"
-        "csrw 0xbc0, t3;"
-        : "=r"(reg_value)
-        : "r"(reg_target_addrh), "r"(reg_addr), "r"(reg_current_addrh)
-        : "memory");
-    return (uint8_t)reg_value;
-}
-#elif __riscv_xlen == 64
-static inline uint8_t bingo_remote_readb(uint8_t chip_id, uint32_t addr_lo) {
-    volatile uint8_t* p = (uint8_t*)(((uintptr_t)addr_lo) | (uintptr_t)get_chip_baseaddress(chip_id));
-    return *p;
-}
-#endif
 
 static inline void wait_host_sw_interrupt_clear(uint8_t chip_id) {
 #if __riscv_xlen == 64
