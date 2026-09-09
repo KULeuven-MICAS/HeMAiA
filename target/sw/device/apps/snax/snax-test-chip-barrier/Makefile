@@ -4,8 +4,8 @@
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 
-APP     = snax-test-sw-chip-barrier
+APP     = snax-test-chip-barrier
 
-SRCS    = src/snax-test-sw-chip-barrier.c
+SRCS    = src/snax-test-chip-barrier.c
 
 include ../../common.mk

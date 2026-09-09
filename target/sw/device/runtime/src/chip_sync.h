@@ -328,7 +328,7 @@ static inline void snrt_chip_barrier_init(uint8_t top_left_chip_id,
 // Cross-chip barrier through the mechanism named by `use_sw` (SNRT_CHIP_BARRIER_SW /
 // _HW). Call from all cores.
 //
-// ⚠️ Every participating chip must pass the same value at the same barrier. The two
+// Every participating chip must pass the same value at the same barrier. The two
 // mechanisms keep separate state and do not observe one another, so a chip taking the
 // software path while another takes the broadcast path will not rendezvous -- they will
 // both wait for a signal that is being written somewhere else entirely.
@@ -341,4 +341,51 @@ static inline void snrt_chip_global_barrier(bool use_sw) {
     } else {
         snrt_hw_chip_global_barrier();
     }
+}
+
+// Re-aim both barriers at a different rectangle WITHOUT touching either mechanism's
+// counter. Call from all cores, on every chip, between two barriers.
+//
+// This is what makes it possible to sweep the participant count inside a single binary:
+// pick a sub-rectangle of the compute grid, barrier only among those chips, then widen
+// again -- no RTL regeneration per P.
+//
+// Two rules, and breaking either one hangs rather than misbehaves visibly:
+//  1. Every chip must switch to the same rectangle at the same point in the sequence.
+//     Reaching a full-grid barrier first is the simple way to guarantee that.
+//  2. Chips OUTSIDE the new rectangle must not call the barrier at all -- and must then
+//     call snrt_chip_barrier_skip() so their counter keeps pace. A chip whose counter has
+//     drifted will announce a generation nobody is waiting for.
+static inline void snrt_chip_barrier_set_rect(uint8_t top_left_chip_id,
+                                              uint8_t bottom_right_chip_id) {
+    if (snrt_global_core_idx() == 0) {
+        volatile comm_buffer_t* cb = get_communication_buffer();
+        cb->chip_barrier_tl = top_left_chip_id;
+        cb->chip_barrier_br = bottom_right_chip_id;
+    }
+    snrt_global_barrier();
+}
+
+// Advance this chip's barrier counter by `n` without performing any barrier. For a chip
+// sitting out a round because it is outside the current rectangle: the participants will
+// perform `n` barriers, and this chip has to arrive at the next shared barrier holding
+// the same generation they do.
+//
+// Counters are only ever advanced, never reset, which is what keeps a stale arrival slot
+// from a previous rectangle harmless: it holds an older generation, so it reads as "not
+// arrived yet" rather than as a spurious arrival.
+//
+// `n` must exactly equal the number of barriers the participants performed.
+static inline void snrt_chip_barrier_skip(bool use_sw, uint32_t n) {
+    if (snrt_global_core_idx() == 0) {
+        volatile comm_buffer_t* cb = get_communication_buffer();
+        if (use_sw) {
+            cb->sw_barrier_gen += n;
+        } else {
+            // 8-bit and deliberately allowed to wrap exactly as the barrier's own
+            // increment does.
+            cb->chip_barrier_checkpoint = (uint8_t)(cb->chip_barrier_checkpoint + n);
+        }
+    }
+    snrt_global_barrier();
 }

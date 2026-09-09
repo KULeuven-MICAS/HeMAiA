@@ -16,7 +16,7 @@ INCL_DEVICE_BINARY ?= 1 # True to include the device binary
 # Include more dev apps here
 DEVICE_APPS = snax-xdma-multicast-chiplet
 DEVICE_APPS += gemm-msplit-1cluster-4chip
-DEVICE_APPS += snax-test-sw-chip-barrier
+DEVICE_APPS += snax-test-chip-barrier
 include ../../common.mk
 
 # The gemm-msplit device apps preload their input matrices into the
