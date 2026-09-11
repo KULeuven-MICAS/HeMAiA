@@ -7,6 +7,8 @@
 # Workloads to build separate ELFs for
 APPS =  gemm_broadcast_4chiplet_1cluster
 APPS += xdma_mempool_4chiplet_1cluster
+APPS += sync_latency_smoke_1cluster
+APPS += sync_latency_sweep_1cluster
 
 SUBDIRS = $(addprefix workloads/,$(APPS))
 

@@ -45,6 +45,7 @@ SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
      /// Cluster-level Kernels ///
      /// Used for bingo sw     ///
     SNAX_EXPORT_FUNC(__snax_kernel_dummy),
+    SNAX_EXPORT_FUNC(__snax_kernel_sync_probe),
     SNAX_EXPORT_FUNC(__snax_kernel_check_results),
     SNAX_EXPORT_FUNC(__snax_kernel_check_results_full),
     SNAX_EXPORT_FUNC(__snax_kernel_csr),
@@ -57,6 +58,7 @@ SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
     /// Core-level Kernels ///
     /// Used for bingo hw  ///
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_dummy),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_sync_probe),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_exit),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_idma_1d_copy),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_idma_broadcast),

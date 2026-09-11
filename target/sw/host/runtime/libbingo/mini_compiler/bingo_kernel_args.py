@@ -181,6 +181,59 @@ class SnaxBingoKernelDummyArgs(BingoKernelArgs):
         return {"dummy_input": str(self.dummy_input)}
 
 # BINGO IDMA 1D Copy
+class SnaxBingoKernelSyncProbeArgs(BingoKernelArgs):
+    """Args for __snax_bingo_kernel_sync_probe (cross-chip sync latency, arm D).
+
+    The probe does no work; it stamps mcycle into stamp_buf[slot]. Pass stamp_buf=0
+    for a task whose timing is not needed (the remote "mid" tasks).
+
+    WARNING: stamp_buf must be allocated on the SAME chiplet the task runs on. The
+    kernel writes it with a plain local store, and mcycle is not comparable across
+    chiplets anyway, so a cross-chiplet stamp would be meaningless even if it landed.
+    """
+
+    def __init__(self, stamp_buf: Union[BingoMemAlloc, int] = 0, slot: int = 0):
+        self.stamp_buf = stamp_buf
+        self.slot = int(slot)
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_sync_probe_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        assignments = {}
+        self._process_addr(self.stamp_buf, "stamp_buf", assignments, handle_name_map,
+                           split_64bit=False, as_64bit=False)
+        assignments["slot"] = str(self.slot)
+        return assignments
+
+
+class HostBingoKernelSyncReportArgs(BingoKernelArgs):
+    """Args for __host_bingo_kernel_sync_report (cross-chip sync latency, arm D).
+
+    Runs as a HOST node at the end of the DFG and prints one line per phase, keyed by
+    phase index. What each index means is written by the generator to sync_phases.csv:
+    a DFG memory handle only reserves storage, so a metadata table cannot be preloaded
+    into the device image.
+    """
+
+    def __init__(self, stamp_buf: Union[BingoMemAlloc, int],
+                 num_phases: int, local_phase: int):
+        self.stamp_buf = stamp_buf
+        self.num_phases = int(num_phases)
+        self.local_phase = int(local_phase)
+
+    def get_struct_name(self) -> str:
+        return "__host_bingo_kernel_sync_report_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        assignments = {}
+        self._process_addr(self.stamp_buf, "stamp_buf", assignments, handle_name_map,
+                           split_64bit=False, as_64bit=True)
+        assignments["num_phases"] = str(self.num_phases)
+        assignments["local_phase"] = str(self.local_phase)
+        return assignments
+
+
 class SnaxBingoKernelIdma1dCopyArgs(BingoKernelArgs):
     def __init__(self, src_addr: Union[BingoMemAlloc, int], dst_addr: Union[BingoMemAlloc, int], size: int):
         self.src_addr = src_addr

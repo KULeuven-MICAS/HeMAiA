@@ -1,0 +1,11 @@
+# Copyright 2026 KU Leuven.
+# Licensed under the Apache License, Version 2.0, see LICENSE for details.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Fanchen Kong <fanchen.kong@kuleuven.be>
+{
+    // Largest participant count to sweep. Rectangles above this are skipped, so the
+    // same source gives a small smoke build (4) or the full sweep (16).
+    max_p: 16
+    num_clusters: 1
+}

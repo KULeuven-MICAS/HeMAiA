@@ -24,6 +24,28 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_dummy(void *arg){
     return BINGO_RET_SUCC;
 }
 
+// Sync probe: the smallest possible task. No work, no printf -- its whole purpose is to
+// be the endpoint of a dependency edge, so the time between two probes measures the
+// scheduler and the fabric rather than a kernel.
+//
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_sync_probe(void *arg){
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+    uint32_t stamp_buf = ((uint32_t *)arg)[0];
+    uint32_t slot      = ((uint32_t *)arg)[1];
+    bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_sync_probe_args_t);
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+
+    BINGO_TRACE_MARKER(BINGO_TRACE_SYNC_PROBE_START);
+    if (stamp_buf) {
+        ((volatile uint32_t *)(uintptr_t)stamp_buf)[slot] = snrt_mcycle();
+    }
+    BINGO_TRACE_MARKER(BINGO_TRACE_SYNC_PROBE_END);
+
+    sp->return_value = 0;
+    sp->num_return_values = 0;
+    return BINGO_RET_SUCC;
+}
+
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_entry_point(void *arg){
     // This is a special kernel to indicate the bingo hw manager loop has started
     // In the future we can add some content here

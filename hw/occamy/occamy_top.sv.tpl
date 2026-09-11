@@ -399,7 +399,7 @@ module ${name}_top
   %>
   addr_t h2h_mailbox_base_addr = ${h2h_mailbox_base_addr};
   hemaia_hw_mailbox #(
-    .MailboxDepth(8),
+    .MailboxDepth(32),
     .IrqEdgeTrig (1'b0),
     .IrqActHigh  (1'b1),
     .AxiAddrWidth(${axi_lite_h2h_mailbox_slave.aw}),

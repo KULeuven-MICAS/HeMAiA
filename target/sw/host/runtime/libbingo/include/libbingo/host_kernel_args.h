@@ -54,6 +54,18 @@ __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_check_result_args {
     uint64_t scratchpad_ptr;
 } __host_bingo_kernel_check_result_args_t;
 
+// Sync-report kernel args (cross-chip synchronization latency, arm D).
+// Reads back the mcycle stamps the sync probes left and prints one line per phase.
+// Phase INDEX is the identifier; what each index means (P, hops, edges, mode) is fixed
+// by the generator and written alongside as sync_phases.csv, because a DFG memory handle
+// only reserves storage -- there is no mechanism to preload a metadata table into it.
+__HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_sync_report_args {
+    uint64_t stamp_buf;      // uint32_t[num_phases+1] of mcycle stamps, on this chiplet
+    uint64_t num_phases;
+    uint64_t local_phase;    // index of the local-control phase (its rt is the baseline)
+    uint64_t scratchpad_ptr;
+} __host_bingo_kernel_sync_report_args_t;
+
 __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_idma_args {
     uint64_t src_addr;
     uint64_t dst_addr;

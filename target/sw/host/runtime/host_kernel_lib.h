@@ -89,6 +89,36 @@ static inline float __bingo_fp16_to_fp32(uint16_t h) {
     return u.f;
 }
 
+// Report the synchronization-latency sweep. Runs as a HOST node at the very end
+// of the DFG, so it never sits on a measured path.
+//
+// Prints one line per phase, keyed by phase INDEX. The meaning of each index (P, hops,
+// edges, mode) is fixed by the generator and emitted alongside as sync_phases.csv -- a
+// DFG memory handle only reserves storage, so there is no way to preload a metadata
+// table into the device image.
+static inline uint64_t __host_bingo_kernel_sync_report(void *arg){
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+    volatile uint32_t* stamp = (volatile uint32_t*)(uintptr_t)(((uint64_t *)arg)[0]);
+    uint64_t num_phases      = ((uint64_t *)arg)[1];
+    uint64_t local_phase     = ((uint64_t *)arg)[2];
+    bingo_kernel_scratchpad_t* sp =
+        (bingo_kernel_scratchpad_t*)(uintptr_t)((uint64_t *)arg)[3];
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+
+    // The local control is the LAST phase, so its value has to be in hand before any
+    // "rt-local" can be printed.
+    uint32_t local_rt = (local_phase < num_phases)
+                            ? (stamp[local_phase + 1] - stamp[local_phase]) : 0u;
+    for (uint64_t ph = 0; ph < num_phases; ph++) {
+        uint32_t rt = stamp[ph + 1] - stamp[ph];
+        printf("SYNC[hw] phase=%2u | rt=%u cc | rt-local=%d cc\r\n",
+               (unsigned)ph, (unsigned)rt, (int)(rt - local_rt));
+    }
+    sp->return_value = 0;
+    sp->num_return_values = 0;
+    return BINGO_RET_SUCC;
+}
+
 static inline uint64_t __host_bingo_kernel_check_result(void *arg){
     // Arg0-5: golden, output, size, name, check_type, tolerance_bits; Arg6: scratchpad_ptr
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);

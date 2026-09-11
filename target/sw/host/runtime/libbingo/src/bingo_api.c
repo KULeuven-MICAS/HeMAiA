@@ -25,12 +25,22 @@ int bingo_hemaia_system_mmap_init(){
     // comm_buffer assignment: Begin from SPM_NARROW_BASE_ADDR and initialize to zero
     uint64_t comm_buffer = chiplet_addr_transform(SPM_NARROW_BASE_ADDR);
     // printf("Chip(%x, %x): [Host] Comm buffer addr: %lx\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), comm_buffer);
-    // L2 heap init
-    // Start addr is the spm narrow
-    // Size is half of the narrow spm
-    // The rest is leave to stack
+    // L2 heap init. Starts just above the comm buffer, in the narrow SPM.
+    //
+    // Sized at 3/4 of the narrow SPM rather than 1/2. The old comment said the remainder
+    // was "left to stack", but that is not so: host.ld places EVERY section -- including
+    // .narrow_spm -- in WIDE_SPM, and the stack pointer is at the top of WIDE_SPM
+    // (__return_pointer$). Nothing else lives in the narrow SPM above this heap, so the
+    // upper half was simply unused.
+    //
+    // This heap is where bingo_task_create() allocates from, so its size is the hard cap
+    // on how many tasks one DFG may contain -- at 1/2 that was roughly 35 tasks, which is
+    // less than a modest sweep needs. A quarter of the region is still left spare.
+    // Take the whole narrow SPM above the comm buffer, less a 1 KiB guard, rather than a
+    // fixed fraction: nothing else is placed here, so a fraction just wasted the rest.
     uint64_t l2_heap_start = ALIGN_UP(comm_buffer + sizeof(comm_buffer_t), BINGO_HEAP_ALIGNMENT);
-    uint64_t l2_heap_size = ALIGN_UP(NARROW_SPM_SIZE / 2, BINGO_HEAP_ALIGNMENT);
+    uint64_t l2_heap_used  = l2_heap_start - comm_buffer;
+    uint64_t l2_heap_size  = NARROW_SPM_SIZE - l2_heap_used - 1024u;
     uint64_t l2_heap_manager = bingoHeapInit(l2_heap_start, l2_heap_size);
     // printf("Chip(%x, %x): [Host] L2 heap start: %lx, size(kB): %d\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), l2_heap_manager, l2_heap_size>>10);
     // printf("Chip(%x, %x): [Host] L2 heap start: %lx, size: %lx, heap manager: 0x%lx\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), l2_heap_start, l2_heap_size, l2_heap_manager);
@@ -611,7 +621,13 @@ void bingo_runtime_schedule(bingo_task_t **task_list, uint32_t num_tasks) {
                             local_completed++;
                             // Broadcast remote completion once
                             if (!completed_task->completion_notified && completed_task->num_remote_successors > 0) {
-                                printf("Chip(%x, %x): [Host] Broadcasting completion of task %u to %u remote successors\r\n",
+                                // ⚠️ Guarded, and it must stay guarded: this fires on
+                                // EVERY remote edge. A dense graph makes that
+                                // L*P*(P-1) UART writes, which is far more expensive
+                                // than the scheduling being measured -- an unguarded
+                                // printf here measures the UART, not the manager.
+                                BINGO_PRINTF(2,
+                                       "Chip(%x, %x): [Host] Broadcasting completion of task %u to %u remote successors\r\n",
                                        get_current_chip_loc_x(), get_current_chip_loc_y(), completed_task->task_id, completed_task->num_remote_successors);
                                 bingo_broadcast_completion(completed_task, current_chip);
                                 completed_task->completion_notified = true;

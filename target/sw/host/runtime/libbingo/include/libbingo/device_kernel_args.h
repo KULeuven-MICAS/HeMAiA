@@ -75,6 +75,16 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_kernel_dummy_args {
   uint32_t dummy_input;    
 } __snax_kernel_dummy_args_t;
 
+// Sync-probe kernel args (cross-chip synchronization latency measurement).
+// The kernel does NO work: it exists only so a dependency edge has something to
+// terminate on. It stamps the DM core's mcycle into `stamp_addr` so the host can read
+// back when the task ran; pass 0 to skip stamping.
+// ⚠️ stamp_addr must live on the SAME chiplet the task is assigned to -- it is written
+// with a plain local store, and mcycle is not comparable across chiplets anyway.
+__SNAX_KERNEL_ARGS_DEFINE __snax_kernel_sync_probe_args {
+  uint32_t stamp_addr;
+} __snax_kernel_sync_probe_args_t;
+
 // CSR kernel args
 __SNAX_KERNEL_ARGS_DEFINE __snax_kernel_csr_args {
   uint32_t csr_addr;            
@@ -175,6 +185,18 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_kernel_minimal_cfg_start_gemm_and_wait_args{
 // Note: name start with __snax_bingo_kernel_
 
 // BINGO Dummy kernel args
+// Sync-probe kernel args (cross-chip synchronization latency, arm D).
+// Core-level twin of __snax_kernel_sync_probe_args. The kernel does NO work: it exists
+// only so a dependency edge has something to terminate on, and stamps mcycle into
+// stamp_buf[slot] so the latency between two probes can be read back afterwards.
+// ⚠️ stamp_buf must live on the SAME chiplet the task runs on -- it is written with a
+// plain local store, and mcycle is not comparable across chiplets anyway.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_sync_probe_args {
+  uint32_t stamp_buf;   // base of a uint32_t array, or 0 to skip stamping
+  uint32_t slot;        // index into that array
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_sync_probe_args_t;
+
 __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_dummy_args {
   uint32_t dummy_input;            
   BINGO_KERNEL_ARGS_TRAILER;

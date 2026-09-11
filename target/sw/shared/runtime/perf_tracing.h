@@ -148,3 +148,8 @@
 #define BINGO_TRACE_SW_CHIP_BARRIER_ANNOUNCE_END    0x423
 #define BINGO_TRACE_SW_CHIP_BARRIER_WAIT_START      0x424
 #define BINGO_TRACE_SW_CHIP_BARRIER_WAIT_END        0x425
+
+// --- Sync-probe kernel (cross-chip synchronization latency measurement) ---
+// The task body itself; the interval between two probes is the quantity of interest.
+#define BINGO_TRACE_SYNC_PROBE_START                0x430
+#define BINGO_TRACE_SYNC_PROBE_END                  0x431

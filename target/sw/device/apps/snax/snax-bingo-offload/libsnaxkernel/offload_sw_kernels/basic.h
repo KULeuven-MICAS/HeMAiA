@@ -30,6 +30,24 @@ SNAX_LIB_DEFINE void __snax_kernel_dummy(void *arg)
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
 }
 
+// Sync probe: the smallest possible task. It does no work and prints nothing -- its
+// whole purpose is to be the endpoint of a dependency edge, so that the time between two
+// probes measures the scheduler and the fabric rather than a kernel.
+//
+// Stamps mcycle into args->stamp_addr (0 = don't stamp). Only the DM core stamps, so the
+// value is from one well-defined core; both cores share a clock, but consistency matters.
+SNAX_LIB_DEFINE void __snax_kernel_sync_probe(void *arg)
+{
+    BINGO_TRACE_MARKER(BINGO_TRACE_SYNC_PROBE_START);
+    if (snrt_is_dm_core()) {
+        uint32_t stamp_addr = ((uint32_t *)arg)[0];
+        if (stamp_addr) {
+            *(volatile uint32_t *)(uintptr_t)stamp_addr = snrt_mcycle();
+        }
+    }
+    BINGO_TRACE_MARKER(BINGO_TRACE_SYNC_PROBE_END);
+}
+
 SNAX_LIB_DEFINE void __snax_kernel_csr(void *arg)
 {
     // Arg0: csr_addr

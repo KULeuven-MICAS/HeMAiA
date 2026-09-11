@@ -40,7 +40,8 @@
 
 #define HOST_SLEEP_CYCLES 100
 #define MAX_SUCCESSORS 8                 // Maximum number of (local) successor tasks tracked directly
-#define BINGO_MAX_REMOTE_SUCC 8          // Maximum number of remote successors (fan-out messages)
+// Maximum number of remote successors (fan-out messages) a single task may have.
+#define BINGO_MAX_REMOTE_SUCC 16
 
 // Device control commands
 #define MBOX_DEVICE_READY (0x01U)
