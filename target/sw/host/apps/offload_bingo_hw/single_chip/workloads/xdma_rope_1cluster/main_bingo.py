@@ -4,18 +4,18 @@
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 #
-# xDMA FP16 RoPE — single fused kernel (__snax_bingo_kernel_xdma_rope).
+# SIMD FP16 RoPE — single fused kernel (__snax_bingo_kernel_simd_rope).
 # RoPE is all DMA-engine ops, so the whole flow is ONE offload node:
 #   inputs x, cos_full, sin_signed (precomputed tables); xswap computed ON-DEVICE.
 #   xswap = adjacent fp16-pair swap of x          (iDMA, inside the kernel)
-#   P1 x*cos -> tmp1 ; P2 xswap*sin -> tmp2 ; P3 tmp1+tmp2 -> out  (xDMA, in-kernel)
+#   P1 x*cos -> tmp1 ; P2 xswap*sin -> tmp2 ; P3 tmp1+tmp2 -> out  (SIMD, in-kernel)
 #   Store(out) + Check(fp16 tol)
 # The kernel allocates its own xswap/tmp1/tmp2 scratch from L1, so the DFG only
 # loads x/cos/sin and provides out. xswap being derived inside the kernel rather
 # than supplied as an input is what lets rope_q/rope_k run in-layer, on an x that
 # only exists at run time.
 #
-# Measured cost LUT (single-chip RTL sweep, whole-kernel DM-core cycles)
+# Measured cost LUT (single-chip RTL sweep, whole-kernel SIMD-core cycles)
 #     rows\cols     64     128     256
 #        1           -     1227    1675
 #        2         1227    1674    2574
@@ -48,12 +48,19 @@ from bingo_node import BingoNode                          # noqa: E402
 from bingo_mem_handle import BingoMemAlloc, BingoMemFixedAddr  # noqa: E402
 from bingo_kernel_args import (                           # noqa: E402
     SnaxBingoKernelIdma1dCopyArgs,
-    SnaxBingoKernelXdmaRopeArgs,
+    SnaxBingoKernelSimdRopeArgs,
     HostBingoKernelIdmaArgs,
     HostBingoKernelCheckResultArgs,
 )
 
-DMA_CORE, HOST_CORE = 1, 2
+# Core roles on the four-engine cluster (see device/runtime/snax/snax_core_roles.h):
+#   0 GEMM   1 SIMD   2 xDMA   3 DM/iDMA   4 host
+# The SIMD kernels MUST sit on core 1 and the iDMA copies on core 3. Core 1 carried the
+# iDMA on the old two-core cluster, so a stale "DMA_CORE = 1" places a dm* instruction on
+# a hart that has no DMA ISA and traps.
+SIMD_CORE = 1
+DMA_CORE = 3
+HOST_CORE = 4
 CHECK_FP16_TOL = 2
 ROPE_BASE = 10000.0
 ROPE_POS = 1
@@ -159,8 +166,8 @@ def build_config(g, i, base, meta, l1_x, l1_cos, l1_sin, l1_out, l3_out, prev):
                 SnaxBingoKernelIdma1dCopyArgs(BingoMemFixedAddr(base + off_cos), l1_cos, tot_b), lx)
     ls = g.node(f"LoadSin_{i}", DMA_CORE, "__snax_bingo_kernel_idma_1d_copy",
                 SnaxBingoKernelIdma1dCopyArgs(BingoMemFixedAddr(base + off_sin), l1_sin, tot_b), lc)
-    rope = g.node(f"Rope_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_rope",
-                  SnaxBingoKernelXdmaRopeArgs(l1_x, l1_cos, l1_sin, l1_out, D, rows), ls)
+    rope = g.node(f"Rope_{i}", SIMD_CORE, "__snax_bingo_kernel_simd_rope",
+                  SnaxBingoKernelSimdRopeArgs(l1_x, l1_cos, l1_sin, l1_out, D, rows), ls)
     store = g.node(f"Store_{i}", HOST_CORE, "__host_bingo_kernel_idma",
                    HostBingoKernelIdmaArgs(l1_out, l3_out, tot_b), rope)
     chk = g.node(f"Check_rope_cfg{i}", HOST_CORE, "__host_bingo_kernel_check_result",

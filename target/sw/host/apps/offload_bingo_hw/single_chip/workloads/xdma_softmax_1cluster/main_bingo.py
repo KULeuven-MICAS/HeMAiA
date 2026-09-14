@@ -4,21 +4,21 @@
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 #
-# xDMA FP16 SOFTMAX — multi-row, ONE fused all-device kernel.
+# SIMD FP16 SOFTMAX — multi-row, ONE fused all-device kernel.
 # out[r,:] = softmax(x[r,:]) over [rows, D] tiles (D = cols). The whole pipeline runs in a
-# single DM-core kernel; the host only loads the input, stores the output, and checks it.
+# single SIMD-core kernel; the host only loads the input, stores the output, and checks it.
 #
 #   Load x[rows,D] (iDMA L3->L1)
-#   Softmax  __snax_bingo_kernel_xdma_softmax_f16_f16   x -> out[rows,D] fp16
+#   Softmax  __snax_bingo_kernel_simd_softmax_f16_f16   x -> out[rows,D] fp16
 #   Store(out) + Check(fp16 tol)
-#   (also) __snax_bingo_kernel_xdma_softmax_f16_i8      x -> out[rows,D] int8  + Check(int8 +-1)
+#   (also) __snax_bingo_kernel_simd_softmax_f16_i8      x -> out[rows,D] int8  + Check(int8 +-1)
 #
 # Precision is picked by KERNEL NAME (f16_f16 / f16_i8), not an arg -- the args are HW-free:
 # { input_addr, output_addr, rows, cols }. Inside the one kernel (offload_hw_kernels/xdma.h) all
-# on the DM core: reduce(MAX) -> negate -> sub-max -> merged EXP+Sexp -> integer reciprocal
+# on the SIMD core: reduce(MAX) -> negate -> sub-max -> merged EXP+Sexp -> integer reciprocal
 # (rv32iM divu, no FPU) -> normalize-MUL, and the fused Fp16ToInt8 quant for the i8 variant.
 #
-# Measured cost LUT (single-chip RTL sweep, whole-kernel DM-core cycles)
+# Measured cost LUT (single-chip RTL sweep, whole-kernel SIMD-core cycles)
 #     rows\cols     64     128     256
 #        1           -      834     926
 #        2         3993    2048    2501
@@ -51,18 +51,24 @@ from bingo_node import BingoNode                          # noqa: E402
 from bingo_mem_handle import BingoMemAlloc, BingoMemFixedAddr  # noqa: E402
 from bingo_kernel_args import (                           # noqa: E402
     SnaxBingoKernelIdma1dCopyArgs,
-    SnaxBingoKernelXdmaSoftmaxF16F16Args,
+    SnaxBingoKernelSimdSoftmaxF16F16Args,
     HostBingoKernelIdmaArgs,
     HostBingoKernelCheckResultArgs,
 )
 
-DMA_CORE = 1
-HOST_CORE = 2
+# Core roles on the four-engine cluster (see device/runtime/snax/snax_core_roles.h):
+#   0 GEMM   1 SIMD   2 xDMA   3 DM/iDMA   4 host
+# The SIMD kernels MUST sit on core 1 and the iDMA copies on core 3. Core 1 carried the
+# iDMA on the old two-core cluster, so a stale "DMA_CORE = 1" places a dm* instruction on
+# a hart that has no DMA ISA and traps.
+SIMD_CORE = 1
+DMA_CORE = 3
+HOST_CORE = 4
 CHECK_FP16_TOL = 2
 # in/golden staged on the memchip (mempool.bin); see xdma_silu_1cluster.
 MEMPOOL_LOC = (2, 0)
 MEMPOOL_VADDR = 0x8000_0000
-# NOTE: the fused FP16->INT8 softmax variant (__snax_bingo_kernel_xdma_softmax_f16_i8)
+# NOTE: the fused FP16->INT8 softmax variant (__snax_bingo_kernel_simd_softmax_f16_i8)
 # is exercised by the standalone snax-xdma-softmax app. It is dropped from THIS CI
 # sweep: keeping both the f16 and i8 check chains for all 12 configs needs 48 host
 # nodes whose bingo scheduler metadata (~25 KiB) does not fit the 128 KiB L3 heap
@@ -149,8 +155,8 @@ def build_config(g, i, base, meta, l1_x, l1_f16, l3_f, prev):
     load = g.node(f"Load_{i}", DMA_CORE, "__snax_bingo_kernel_idma_1d_copy",
                   SnaxBingoKernelIdma1dCopyArgs(BingoMemFixedAddr(base + off_in), l1_x, tot_b), prev)
     # fp16 output: reduce-MAX, negate, sub-max, merged EXP+Sexp, integer reciprocal, normalize.
-    sm_f = g.node(f"SoftmaxF16_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_softmax_f16_f16",
-                  SnaxBingoKernelXdmaSoftmaxF16F16Args(l1_x, l1_f16, rows, D), load)
+    sm_f = g.node(f"SoftmaxF16_{i}", SIMD_CORE, "__snax_bingo_kernel_simd_softmax_f16_f16",
+                  SnaxBingoKernelSimdSoftmaxF16F16Args(l1_x, l1_f16, rows, D), load)
     st_f = g.node(f"StoreF16_{i}", HOST_CORE, "__host_bingo_kernel_idma",
                   HostBingoKernelIdmaArgs(l1_f16, l3_f, tot_b), sm_f)
     ck_f = g.node(f"Check_softmax_cfg{i}", HOST_CORE, "__host_bingo_kernel_check_result",

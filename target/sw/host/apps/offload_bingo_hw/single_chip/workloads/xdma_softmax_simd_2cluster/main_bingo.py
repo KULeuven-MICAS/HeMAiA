@@ -4,7 +4,7 @@
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 #
-# MINIMAL 2-cluster SIMD xDMA softmax test (hemaia_tapeout_2c_simd).
+# MINIMAL 2-cluster SIMD softmax test (hemaia_tapeout_2c_simd).
 #
 # One small fused FP16 softmax per cluster, run concurrently:
 #
@@ -12,8 +12,8 @@
 #   cluster 1:  Load (memchip->L1) -> softmax [2, 64]  -> Store (L1->L3) -> Check
 #
 # Same fused all-device kernel as xdma_softmax_1cluster (whole reduce(MAX) -> EXP ->
-# integer-reciprocal -> normalize pipeline inside one DM-core kernel); the two chains are
-# independent and never synchronize, so this covers both SIMD clusters running xDMA softmax
+# integer-reciprocal -> normalize pipeline inside one SIMD-core kernel); the two chains are
+# independent and never synchronize, so this covers both SIMD clusters running SIMD softmax
 # at the same time against their own L1/L3 buffers. Host store/check nodes all sit on
 # cluster 0 core 2 -- there is one host core per chiplet, and the bingo mini-compiler
 # requires every host kernel to sit on it, even when the buffer it moves lives in another
@@ -50,13 +50,19 @@ from bingo_node import BingoNode                          # noqa: E402
 from bingo_mem_handle import BingoMemAlloc, BingoMemFixedAddr  # noqa: E402
 from bingo_kernel_args import (                           # noqa: E402
     SnaxBingoKernelIdma1dCopyArgs,
-    SnaxBingoKernelXdmaSoftmaxF16F16Args,
+    SnaxBingoKernelSimdSoftmaxF16F16Args,
     HostBingoKernelIdmaArgs,
     HostBingoKernelCheckResultArgs,
 )
 
-DMA_CORE = 1
-HOST_CORE = 2
+# Core roles on the four-engine cluster (see device/runtime/snax/snax_core_roles.h):
+#   0 GEMM   1 SIMD   2 xDMA   3 DM/iDMA   4 host
+# The SIMD kernels MUST sit on core 1 and the iDMA copies on core 3. Core 1 carried the
+# iDMA on the old two-core cluster, so a stale "DMA_CORE = 1" places a dm* instruction on
+# a hart that has no DMA ISA and traps.
+SIMD_CORE = 1
+DMA_CORE = 3
+HOST_CORE = 4
 HOST_CLUSTER = 0
 CHECK_FP16_TOL = 2
 # in/golden staged on the memchip (mempool.bin) so they cost no host .data; see
@@ -140,9 +146,9 @@ def build_chain(dfg, cluster, base, meta):
                 SnaxBingoKernelIdma1dCopyArgs(BingoMemFixedAddr(base + off_in), l1_x, tot_b),
                 None)
     # reduce-MAX, negate, sub-max, merged EXP+Sexp, integer reciprocal, normalize.
-    sm = node(f"Softmax_c{cluster}", cluster, DMA_CORE,
-              "__snax_bingo_kernel_xdma_softmax_f16_f16",
-              SnaxBingoKernelXdmaSoftmaxF16F16Args(l1_x, l1_y, rows, D), load)
+    sm = node(f"Softmax_c{cluster}", cluster, SIMD_CORE,
+              "__snax_bingo_kernel_simd_softmax_f16_f16",
+              SnaxBingoKernelSimdSoftmaxF16F16Args(l1_x, l1_y, rows, D), load)
     st = node(f"Store_c{cluster}", HOST_CLUSTER, HOST_CORE, "__host_bingo_kernel_idma",
               HostBingoKernelIdmaArgs(l1_y, l3_y, tot_b), sm)
     node(f"Check_softmax_c{cluster}", HOST_CLUSTER, HOST_CORE,

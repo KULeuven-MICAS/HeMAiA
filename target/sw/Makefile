@@ -246,6 +246,11 @@ $(SNAX_SW_GEN_MARKER): $(CFG) $(SNAX_SW_GEN_STAMP)
 	@# match. Deleting all of them before regeneration guarantees only the
 	@# maps occamygen writes for $(CFG) survive.
 	@find $(SNITCH_ROOT)/target/snitch_cluster/sw/snax -name streamer_csr_addr_map.h -delete
+	@# Same trap, different header: snax-simd-addr.h carries the SIMD block's operator
+	@# ids and CSR offsets, and a copy left over from another cluster would have the
+	@# kernels program the right bank at the wrong offsets -- which does not fault, it
+	@# just computes the wrong thing. Wipe it before regenerating.
+	@find $(SNITCH_ROOT)/target/snitch_cluster/sw/snax -name snax-simd-addr.h -delete
 	$(OCCAMYGEN) --cfg $(CFG) \
 		--snitch $(SNITCH_ROOT) \
 		--snitch-sw-only

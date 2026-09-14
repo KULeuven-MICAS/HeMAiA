@@ -4,12 +4,12 @@
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 #
-# xDMA FP16 SwiGLU — one fused all-device kernel (__snax_bingo_kernel_xdma_swiglu_f16_f16).
+# SIMD FP16 SwiGLU — one fused all-device kernel (__snax_bingo_kernel_simd_swiglu_f16_f16).
 # out[r,:] = silu(gate[r,:]) * up[r,:] over [rows, cols] tiles. The whole op runs in a single
-# DM-core kernel (StreamMap SiLU + StreamElementwise MUL, the kernel allocates the silu(gate)
+# SIMD-core kernel (StreamMap SiLU + StreamElementwise MUL, the kernel allocates the silu(gate)
 # scratch itself); the host only loads gate/up, stores the output, and checks it.
 #
-#   Load gate, up -> SwiGLU __snax_bingo_kernel_xdma_swiglu_f16_f16 -> Store + Check(fp16 tol)
+#   Load gate, up -> SwiGLU __snax_bingo_kernel_simd_swiglu_f16_f16 -> Store + Check(fp16 tol)
 #
 # Args are HW-free: { gate_addr, up_addr, output_addr, rows, cols }; the kernel derives the rest.
 
@@ -38,12 +38,19 @@ from bingo_node import BingoNode                          # noqa: E402
 from bingo_mem_handle import BingoMemAlloc, BingoMemFixedAddr  # noqa: E402
 from bingo_kernel_args import (                           # noqa: E402
     SnaxBingoKernelIdma1dCopyArgs,
-    SnaxBingoKernelXdmaSwigluF16F16Args,
+    SnaxBingoKernelSimdSwigluF16F16Args,
     HostBingoKernelIdmaArgs,
     HostBingoKernelCheckResultArgs,
 )
 
-DMA_CORE, HOST_CORE = 1, 2
+# Core roles on the four-engine cluster (see device/runtime/snax/snax_core_roles.h):
+#   0 GEMM   1 SIMD   2 xDMA   3 DM/iDMA   4 host
+# The SIMD kernels MUST sit on core 1 and the iDMA copies on core 3. Core 1 carried the
+# iDMA on the old two-core cluster, so a stale "DMA_CORE = 1" places a dm* instruction on
+# a hart that has no DMA ISA and traps.
+SIMD_CORE = 1
+DMA_CORE = 3
+HOST_CORE = 4
 CHECK_FP16_TOL = 2
 # gate/up/golden staged on the memchip (mempool.bin); see xdma_silu_1cluster.
 MEMPOOL_LOC = (2, 0)
@@ -119,8 +126,8 @@ def build_config(g, i, base, meta, l1_g, l1_up, l1_out, l3_out, prev):
                 SnaxBingoKernelIdma1dCopyArgs(BingoMemFixedAddr(base + off_gate), l1_g, tot_b), prev)
     lu = g.node(f"LoadUp_{i}", DMA_CORE, "__snax_bingo_kernel_idma_1d_copy",
                 SnaxBingoKernelIdma1dCopyArgs(BingoMemFixedAddr(base + off_up), l1_up, tot_b), lg)
-    swi = g.node(f"SwiGLU_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_swiglu_f16_f16",
-                 SnaxBingoKernelXdmaSwigluF16F16Args(l1_g, l1_up, l1_out, rows, cols), lu)
+    swi = g.node(f"SwiGLU_{i}", SIMD_CORE, "__snax_bingo_kernel_simd_swiglu_f16_f16",
+                 SnaxBingoKernelSimdSwigluF16F16Args(l1_g, l1_up, l1_out, rows, cols), lu)
     store = g.node(f"Store_{i}", HOST_CORE, "__host_bingo_kernel_idma",
                    HostBingoKernelIdmaArgs(l1_out, l3_out, tot_b), swi)
     chk = g.node(f"Check_swiglu_cfg{i}", HOST_CORE, "__host_bingo_kernel_check_result",

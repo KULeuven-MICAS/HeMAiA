@@ -4,11 +4,11 @@
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 #
-# xDMA FP16 SiLU — one fused all-device kernel (__snax_bingo_kernel_xdma_silu_f16_f16).
+# SIMD FP16 SiLU — one fused all-device kernel (__snax_bingo_kernel_simd_silu_f16_f16).
 # out[r,:] = silu(x[r,:]) = x*sigmoid(x) over [rows, cols] tiles. The whole op runs in a single
-# DM-core kernel (one StreamMap pass); the host only loads the input, stores the output, checks it.
+# SIMD-core kernel (one StreamMap pass); the host only loads the input, stores the output, checks it.
 #
-#   Load x[rows,cols] -> Silu __snax_bingo_kernel_xdma_silu_f16_f16 -> Store + Check(fp16 tol)
+#   Load x[rows,cols] -> Silu __snax_bingo_kernel_simd_silu_f16_f16 -> Store + Check(fp16 tol)
 #
 # Args are HW-free: { input_addr, output_addr, rows, cols }. The kernel derives everything else
 # (the StreamMap SILU func, the 64-B beat count = cols/32) internally.
@@ -38,12 +38,19 @@ from bingo_node import BingoNode                          # noqa: E402
 from bingo_mem_handle import BingoMemAlloc, BingoMemFixedAddr  # noqa: E402
 from bingo_kernel_args import (                           # noqa: E402
     SnaxBingoKernelIdma1dCopyArgs,
-    SnaxBingoKernelXdmaSiluF16F16Args,
+    SnaxBingoKernelSimdSiluF16F16Args,
     HostBingoKernelIdmaArgs,
     HostBingoKernelCheckResultArgs,
 )
 
-DMA_CORE, HOST_CORE = 1, 2
+# Core roles on the four-engine cluster (see device/runtime/snax/snax_core_roles.h):
+#   0 GEMM   1 SIMD   2 xDMA   3 DM/iDMA   4 host
+# The SIMD kernels MUST sit on core 1 and the iDMA copies on core 3. Core 1 carried the
+# iDMA on the old two-core cluster, so a stale "DMA_CORE = 1" places a dm* instruction on
+# a hart that has no DMA ISA and traps.
+SIMD_CORE = 1
+DMA_CORE = 3
+HOST_CORE = 4
 CHECK_FP16_TOL = 2
 # Inputs + golden are staged on the memchip (mempool.bin) instead of baked into
 # the host WIDE_SPM: 12 configs of fp16 in/golden (~26 KiB) would overflow the
@@ -117,8 +124,8 @@ def build_config(g, i, base, meta, l1_x, l1_out, l3_out, prev):
     off_in, off_golden = meta[i]
     load = g.node(f"Load_{i}", DMA_CORE, "__snax_bingo_kernel_idma_1d_copy",
                   SnaxBingoKernelIdma1dCopyArgs(BingoMemFixedAddr(base + off_in), l1_x, tot_b), prev)
-    silu = g.node(f"Silu_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_silu_f16_f16",
-                  SnaxBingoKernelXdmaSiluF16F16Args(l1_x, l1_out, rows, cols), load)
+    silu = g.node(f"Silu_{i}", SIMD_CORE, "__snax_bingo_kernel_simd_silu_f16_f16",
+                  SnaxBingoKernelSimdSiluF16F16Args(l1_x, l1_out, rows, cols), load)
     store = g.node(f"Store_{i}", HOST_CORE, "__host_bingo_kernel_idma",
                    HostBingoKernelIdmaArgs(l1_out, l3_out, tot_b), silu)
     chk = g.node(f"Check_silu_cfg{i}", HOST_CORE, "__host_bingo_kernel_check_result",

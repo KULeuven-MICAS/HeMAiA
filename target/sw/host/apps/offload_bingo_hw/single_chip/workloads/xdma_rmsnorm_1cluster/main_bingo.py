@@ -4,15 +4,15 @@
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 #
-# xDMA FP16 RMSNorm — multi-row, ONE fused all-device kernel.
+# SIMD FP16 RMSNorm — multi-row, ONE fused all-device kernel.
 # out[r,:] = x[r,:] / sqrt(mean_j x[r,j]^2) over [rows, D] tiles (D = cols). The whole pipeline
-# runs in a single DM-core kernel; the host only loads the input, stores the output, and checks it.
+# runs in a single SIMD-core kernel; the host only loads the input, stores the output, and checks it.
 #
-#   Load x[rows,D] -> RMSNorm __snax_bingo_kernel_xdma_rmsnorm_f16_f16 -> Store + Check(fp16 tol)
-#   (also) __snax_bingo_kernel_xdma_rmsnorm_f16_i8 -> int8 out + Check(int8 +-1)
+#   Load x[rows,D] -> RMSNorm __snax_bingo_kernel_simd_rmsnorm_f16_f16 -> Store + Check(fp16 tol)
+#   (also) __snax_bingo_kernel_simd_rmsnorm_f16_i8 -> int8 out + Check(int8 +-1)
 #
 # Args are HW-free: { input_addr, output_addr, rows, cols }; precision is in the kernel name.
-# Inside the one kernel, all on the DM core (rv32ima, no FPU): reduce(SUMSQ) -> inv_rms =
+# Inside the one kernel, all on the SIMD core (rv32ima, no FPU): reduce(SUMSQ) -> inv_rms =
 # 1/sqrt(Sxx/N) via INTEGER sqrt_f16 + recip_f16 -> normalize (x * inv_rms) -> fused Fp16ToInt8.
 #
 # Measured cost LUT
@@ -47,17 +47,24 @@ from bingo_node import BingoNode                          # noqa: E402
 from bingo_mem_handle import BingoMemAlloc, BingoMemFixedAddr  # noqa: E402
 from bingo_kernel_args import (                           # noqa: E402
     SnaxBingoKernelIdma1dCopyArgs,
-    SnaxBingoKernelXdmaRmsnormF16F16Args,
+    SnaxBingoKernelSimdRmsnormF16F16Args,
     HostBingoKernelIdmaArgs,
     HostBingoKernelCheckResultArgs,
 )
 
-DMA_CORE, HOST_CORE = 1, 2
+# Core roles on the four-engine cluster (see device/runtime/snax/snax_core_roles.h):
+#   0 GEMM   1 SIMD   2 xDMA   3 DM/iDMA   4 host
+# The SIMD kernels MUST sit on core 1 and the iDMA copies on core 3. Core 1 carried the
+# iDMA on the old two-core cluster, so a stale "DMA_CORE = 1" places a dm* instruction on
+# a hart that has no DMA ISA and traps.
+SIMD_CORE = 1
+DMA_CORE = 3
+HOST_CORE = 4
 CHECK_FP16_TOL = 2
 # in/golden staged on the memchip (mempool.bin); see xdma_silu_1cluster.
 MEMPOOL_LOC = (2, 0)
 MEMPOOL_VADDR = 0x8000_0000
-# NOTE: the fused FP16->INT8 rmsnorm variant (__snax_bingo_kernel_xdma_rmsnorm_f16_i8)
+# NOTE: the fused FP16->INT8 rmsnorm variant (__snax_bingo_kernel_simd_rmsnorm_f16_i8)
 # is dropped from THIS CI sweep for the same L3-heap reason as xdma_softmax_1cluster
 # (48 host nodes don't fit the 128 KiB heap next to the 88 KiB device binary). The
 # f16 chain preserves the full rows x cols cost LUT.
@@ -70,7 +77,7 @@ _LUT_GRID = [(r, c) for r in (1, 2, 4, 8) for c in (64, 128, 256)]
 CONFIGS = [{"rows": r, "cols": c} for (r, c) in _LUT_GRID]
 
 
-# Integer fp16 rsqrt mirroring the DEVICE (snax_fp16_math.h) bit-for-bit. The DM core is
+# Integer fp16 rsqrt mirroring the DEVICE (snax_fp16_math.h) bit-for-bit. The SIMD core is
 # rv32ima (no FPU), so inv_rms = recip_f16(sqrt_f16(mean)) is computed with integer ops, NOT
 # a float rsqrt. The float rsqrt differs by ~0.0012 rel (absorbed by the fp16 tol check) but
 # would flip +-1 int8 LSB at rounding boundaries -- so the int8 golden must use the SAME
@@ -169,8 +176,8 @@ def build_config(g, i, base, meta, l1_x, l1_f16, l3_f, prev):
     load = g.node(f"Load_{i}", DMA_CORE, "__snax_bingo_kernel_idma_1d_copy",
                   SnaxBingoKernelIdma1dCopyArgs(BingoMemFixedAddr(base + off_in), l1_x, tot_b), prev)
     # fp16 output: reduce-SUMSQ, integer 1/sqrt(Sxx/N), normalize.
-    rn_f = g.node(f"RMSNormF16_{i}", DMA_CORE, "__snax_bingo_kernel_xdma_rmsnorm_f16_f16",
-                  SnaxBingoKernelXdmaRmsnormF16F16Args(l1_x, l1_f16, rows, D), load)
+    rn_f = g.node(f"RMSNormF16_{i}", SIMD_CORE, "__snax_bingo_kernel_simd_rmsnorm_f16_f16",
+                  SnaxBingoKernelSimdRmsnormF16F16Args(l1_x, l1_f16, rows, D), load)
     st_f = g.node(f"StoreF16_{i}", HOST_CORE, "__host_bingo_kernel_idma",
                   HostBingoKernelIdmaArgs(l1_f16, l3_f, tot_b), rn_f)
     ck_f = g.node(f"Check_rmsnorm_cfg{i}", HOST_CORE, "__host_bingo_kernel_check_result",

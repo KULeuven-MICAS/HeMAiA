@@ -112,6 +112,8 @@ INCDIRS += $(RUNTIME_DIR)/snax/xdma
 # generated streamer_csr_addr_map.h always wins over any stale checked-in copy.
 INCDIRS += $(wildcard $(SNITCH_ROOT)/target/snitch_cluster/sw/snax/*/include)
 INCDIRS += $(RUNTIME_DIR)/snax/versacore
+INCDIRS += $(RUNTIME_DIR)/snax/simd
+INCDIRS += $(RUNTIME_DIR)/snax
 
 # libbingo headers — host/device share <libbingo/device_kernel_args.h> so
 # the device-side BINGO_GET_SP / BINGO_SW_GUARD_CHECK macros can derive the

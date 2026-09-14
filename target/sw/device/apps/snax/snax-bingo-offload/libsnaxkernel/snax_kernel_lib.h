@@ -20,7 +20,10 @@
 //   offload_sw_kernels/gemm.h            — cluster-level GEMM kernels (hand-maintained).
 //   offload_hw_kernels/basic.h           — core-level dummy/entry_point/exit.
 //   offload_hw_kernels/idma.h            — core-level iDMA copies.
-//   offload_hw_kernels/xdma.h            — core-level xDMA kernels.
+//   offload_hw_kernels/xdma.h            — core-level xDMA kernels (data movement).
+//   offload_hw_kernels/simd.h            — core-level SIMD kernels (hart 1): the FP16
+//                                          stream operators and the fused whole-ops
+//                                          (softmax/rmsnorm/silu/swiglu/rope).
 //   offload_hw_kernels/gemm.h            — core-level GEMM kernels (hand-maintained).
 //   validate_shapes.py                   — lives at runtime/snax/versacore/;
 //                                          cross-checks gemm_shapes.h vs hwcfg.
@@ -35,6 +38,7 @@
 #include "offload_hw_kernels/basic.h"
 #include "offload_hw_kernels/idma.h"
 #include "offload_hw_kernels/xdma.h"
+#include "offload_hw_kernels/simd.h"
 #include "offload_hw_kernels/gemm.h"
 
 //////////////////////// SYMBOL TABLE ////////////////////////
@@ -82,26 +86,30 @@ SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_gather_2d),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_elementwise_add),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_elementwise_add_ab),
-    // FP16 streaming-SIMD primitives (LLM layers: softmax/rmsnorm/silu/swiglu/rope).
-    SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_stream_reduce),
-    SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_stream_map),
-    // Merged map+reduce: both reader extensions in ONE task (softmax exp + Sexp).
-    SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_stream_map_reduce),
-    SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_stream_elementwise),
-    SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_rope),
-    // Whole FP16 softmax fused into one DM-core kernel (device negate + integer reciprocal).
-    // Precision picked by name: fp16 out, or int8 out (fused Fp16ToInt8, baked 127.0 scale).
-    SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_softmax_f16_f16),
-    SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_softmax_f16_i8),
-    // Whole FP16 rmsnorm fused into one DM-core kernel (integer sqrt + reciprocal).
-    SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_rmsnorm_f16_f16),
-    SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_rmsnorm_f16_i8),
-    // Whole FP16 silu / swiglu fused into one DM-core kernel (StreamMap / StreamMap+Elementwise).
-    // Precision picked by name: fp16 out, or int8 out (fused Fp16ToInt8, baked 16.0 scale).
-    SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_silu_f16_f16),
-    SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_silu_f16_i8),
-    SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_swiglu_f16_f16),
-    SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_swiglu_f16_i8),
+    /// Core-level SIMD Kernels  (offload_hw_kernels/simd.h)          ///
+    /// All of these run on the SIMD core, hart 1.                     ///
+    // The FP16 stream operators the LLM layers decompose into.
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_stream_reduce),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_stream_map),
+    // Merged map+reduce: both operators in ONE task (softmax exp + Sexp).
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_stream_map_reduce),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_stream_elementwise),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_fp16_to_int8),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_rope),
+    // Whole FP16 softmax in one kernel (device negate + integer reciprocal, and on the
+    // split cluster the sub-max/exp/rowsum fused into ONE pass by the pre-map EW0).
+    // Precision picked by name: fp16 out, or int8 out (fused Fp16ToInt8, baked 127.0).
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_softmax_f16_f16),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_softmax_f16_i8),
+    // Whole FP16 rmsnorm in one kernel (integer sqrt + reciprocal; baked 64.0 int8 scale).
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_rmsnorm_f16_f16),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_rmsnorm_f16_i8),
+    // Whole FP16 silu / swiglu in one kernel (StreamMap / StreamMap+Elementwise;
+    // baked 16.0 int8 scale).
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_silu_f16_f16),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_silu_f16_i8),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_swiglu_f16_f16),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_swiglu_f16_i8),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_d_to_row_major_e1_M32N32),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_d_to_row_major_e2_M32N32),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_d_to_row_major_e4_M32N32),
