@@ -66,42 +66,37 @@ _DEFAULT_ROLES_HEADER = (
 )
 
 
-def core_roles(platform, roles_header=None):
+def core_roles(platform=None, roles_header=None):
     """Which cluster core carries which engine, for the platform being built.
 
-    A workload that hardcodes these breaks the moment the cluster changes shape, and it
-    breaks QUIETLY on the device side: a kernel placed on the wrong hart programs THAT
-    hart's accelerator at the same CSR offsets and reports success. So nothing here is
-    assumed -- the per-engine roles are READ from the generated header and the two
-    snRuntime-structural ones are derived from the core count:
+    Everything here comes from the generated map -- SNAX_CORE_* in
+    device/runtime/snax/snax_core_roles_defs.h, which snaxgen derives from the cluster
+    hjson (snax_acc_cfg -> gemm, snax_simd_cfg -> simd, snax_xdma_cfg -> xdma, and the
+    `xdma:` DMA-ISA boolean -> idma) and `make snax-sw-gen` mirrors into the device tree.
+    Nothing is hardcoded, because a node placed on the wrong hart does not fault: it
+    programs THAT hart's accelerator at the same CSR offsets and reports success.
 
-        gemm  the core carrying snax_acc_cfg,  from SNAX_CORE_GEMM
-        simd  the core carrying snax_simd_cfg, from SNAX_CORE_SIMD
-        xdma  the core carrying snax_xdma_cfg, from SNAX_CORE_XDMA
-        dm    the last SNAX core. snRuntime's SNRT_CLUSTER_DM_CORE_NUM is 1, so
+        gemm  SNAX_CORE_GEMM
+        simd  SNAX_CORE_SIMD
+        xdma  SNAX_CORE_XDMA
+        dm    SNAX_CORE_IDMA -- snRuntime's SNRT_CLUSTER_DM_CORE_NUM is 1, so
               snrt_is_dm_core() selects exactly this hart, and it is the only one with the
-              DMA ISA -- a dm* instruction anywhere else traps.
-        host  N_CORES_PER_CLUSTER exactly -- i.e. one past the last SNAX core, since the
-              SNAX cores are 0 .. n-1. On snax_split_cluster (n = 4) that is core 4.
-              BingoDFG appends the chiplet-local host core as an extra accelerator when
-              is_host_as_acc, and its validator demands every __host_bingo_kernel_* node
-              sit there.
+              DMA ISA (a dm* instruction anywhere else traps). Upstream rejects any cfg
+              that puts the DMA ISA off the last core, so this is also n - 1.
+        host  SNAX_CLUSTER_NUM_CORES exactly -- the chiplet's CVA6, one past the last SNAX
+              core since those are 0 .. n-1. On snax_split_cluster (n = 4) that is core 4.
+              A cluster hjson cannot describe it, so it is the one role derived rather than
+              read. BingoDFG appends it as an extra accelerator when is_host_as_acc, and
+              its validator demands every __host_bingo_kernel_* node sit there.
 
-    `dm` and `host` stay derived rather than read: `host` because a cluster hjson cannot
-    describe the chiplet's CVA6 at all, `dm` because it is snRuntime's own structural
-    choice. Upstream ENFORCES the agreement -- it rejects any cfg that puts the DMA ISA
-    anywhere but the last core -- so SNAX_CORE_IDMA == n - 1 is guaranteed and is
-    cross-checked below rather than treated as a second source of truth.
+    `platform` is optional and is used ONLY to cross-check: two generators, two headers,
+    one truth. Pass it where a parsed occamy.h is at hand and a stale pair becomes a loud
+    failure instead of a silently wrong placement.
 
     A cluster that genuinely lacks an engine leaves SNAX_CORE_<ROLE> undefined (its
-    SNAX_HAS_<ROLE>_CORE is 0), and that RAISES here. Placing a SIMD node on hart 0
-    because no SIMD block exists is exactly the silent-wrong-accelerator failure this map
-    was introduced to remove.
+    SNAX_HAS_<ROLE>_CORE is 0), and that RAISES. Placing a SIMD node on hart 0 because no
+    SIMD block exists is exactly the failure this map was introduced to remove.
     """
-    n = int(platform["num_cores_per_cluster"])
-    if n < 2:
-        raise ValueError(f"a cluster needs at least two cores, got {n}")
-
     header = Path(roles_header) if roles_header is not None else _DEFAULT_ROLES_HEADER
     if not header.exists():
         raise FileNotFoundError(
@@ -110,17 +105,17 @@ def core_roles(platform, roles_header=None):
             f"first.")
     defines = _parse_defines(header)
 
-    # Two generators, two headers, one truth. occamy.h's N_CORES_PER_CLUSTER and
-    # snaxgen's SNAX_CLUSTER_NUM_CORES describe the same cluster; a mismatch means one
-    # of them is stale against $(CFG), which is the failure mode the cfg-identity stamp
-    # in target/sw/Makefile exists to prevent. Fail loudly rather than place nodes off
-    # a half-updated picture.
-    num_cores = _require_define(defines, "SNAX_CLUSTER_NUM_CORES", header)
-    if num_cores != n:
-        raise ValueError(
-            f"{header} says SNAX_CLUSTER_NUM_CORES={num_cores}, but occamy.h says "
-            f"N_CORES_PER_CLUSTER={n}. One of the two generated headers is stale "
-            f"against the active CFG -- rerun `make snax-sw-gen`.")
+    n = _require_define(defines, "SNAX_CLUSTER_NUM_CORES", header)
+    if n < 2:
+        raise ValueError(f"a cluster needs at least two cores, {header} says {n}")
+
+    if platform is not None:
+        expected = int(platform["num_cores_per_cluster"])
+        if expected != n:
+            raise ValueError(
+                f"{header} says SNAX_CLUSTER_NUM_CORES={n}, but occamy.h says "
+                f"N_CORES_PER_CLUSTER={expected}. One of the two generated headers is "
+                f"stale against the active CFG -- rerun `make snax-sw-gen`.")
 
     roles = {}
     for role in ("gemm", "simd", "xdma"):
@@ -131,16 +126,14 @@ def core_roles(platform, roles_header=None):
                 f"engine, so a {role} node cannot be placed on it.")
         roles[role] = defines[name]
 
-    roles["dm"] = n - 1
+    roles["dm"] = _require_define(defines, "SNAX_CORE_IDMA", header)
     roles["host"] = n
 
     # Cheap cross-check of the invariant upstream enforces.
-    idma = defines.get("SNAX_CORE_IDMA")
-    if idma is not None and idma != roles["dm"]:
+    if roles["dm"] != n - 1:
         raise ValueError(
-            f"{header} puts the DMA ISA on hart {idma}, but snRuntime's DM core is "
-            f"hart {roles['dm']} (the last of {n}). snrt_is_dm_core() and the cluster "
-            f"disagree.")
+            f"{header} puts the DMA ISA on hart {roles['dm']}, but snRuntime's DM core is "
+            f"the last of {n}. snrt_is_dm_core() and the cluster disagree.")
 
     return roles
 
