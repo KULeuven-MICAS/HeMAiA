@@ -35,7 +35,7 @@ import _usg_paths  # noqa: F401,E402  (registers util/sim/{common,gemm,xdma,ara}
 from data_utils import format_scalar_definition, format_vector_definition  # noqa E402
 from layout_convert import row_major_to_a, row_major_to_b, row_major_to_d  # noqa E402
 from bingo_dfg import BingoDFG  # noqa E402
-from bingo_platform import guard_cluster_count, parse_platform_cfg  # noqa E402
+from bingo_platform import core_roles, guard_cluster_count, parse_platform_cfg  # noqa E402
 from bingo_node import BingoNode  # noqa E402
 from bingo_mem_handle import BingoMemAlloc, BingoMemSymbol  # noqa E402
 from bingo_kernel_args import (  # noqa E402
@@ -50,16 +50,23 @@ from bingo_kernel_args import (  # noqa E402
     SnaxBingoKernelXdmaPad2dArgs,
     SnaxBingoKernelXdmaGather2dArgs,
     SnaxBingoKernelXdmaElementwiseAddArgs,
-    SnaxBingoKernelXdmaStreamReduceArgs,
-    SnaxBingoKernelXdmaStreamMapArgs,
-    SnaxBingoKernelXdmaStreamMapReduceArgs,
-    SnaxBingoKernelXdmaStreamElementwiseArgs,
     HostBingoKernelIdmaArgs,
     HostBingoKernelCheckResultArgs,
 )
 import bingo_kernel_args as _bka  # noqa E402  (layout classes are resolved by shape)
 
+# Placeholders. run_op_workload() overwrites all three from the platform header before
+# any node is built, because none of them is a constant of the software:
+#
+#   DMA_CORE   the iDMA, which snRuntime puts on the LAST cluster core
+#   XDMA_CORE  the transfer engine -- a SEPARATE hart on the split cluster, where it used
+#              to share one with the iDMA. An xDMA kernel placed on the DM core does not
+#              fault: it programs THAT hart's accelerator at the same CSR offsets.
+#   HOST_CORE  the chiplet-local host core, one past the last SNAX core
+#
+# They were 1, 1 and 2 on the two-core cluster and are 3, 2 and 4 on the four-engine one.
 DMA_CORE = 1
+XDMA_CORE = 1
 HOST_CORE = 2
 
 np.random.seed(42)
@@ -95,7 +102,7 @@ class Builder:
 
     def op(self, name, kernel_name, kernel_args, after):
         node = BingoNode(
-            assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=DMA_CORE,
+            assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=XDMA_CORE,
             node_name=name, kernel_name=kernel_name, kernel_args=kernel_args)
         self.dfg.bingo_add_node(node)
         if after is not None:
@@ -398,96 +405,6 @@ class ElementwiseAddOp:
 # snax-xdma-softmax app precomputes them in data.h. int8 numeric correctness is
 # covered by that standalone app (no int8-tolerance check here).
 
-def _f32bits(x):
-    return int(np.float32(x).view(np.uint32))
-
-
-def _softmax_ref(beats, i):
-    """Deterministic per-config softmax reference, mimicking the HW fp16 datapath.
-    Returns (x_fp16, y_fp16, yq_int8, neg_max_bits, inv_sum_bits, inv_scale_bits).
-
-    The input is PEAKY (a few large entries on a small-uniform background) so the
-    dominant probabilities stay O(0.1-0.7) regardless of N — otherwise large-N
-    softmax flattens to ~1/N and an absolute-tolerance check passes even garbage.
-    """
-    n = beats * 32  # 64 B beat = 32 fp16
-    rng = np.random.RandomState(20240601 + i)
-    x = rng.uniform(-2.0, 2.0, size=n).astype(np.float32)
-    for pos, val in ((0, 6.0), (n // 3, 5.0), (2 * n // 3, 4.5)):
-        x[pos] = val
-    x = x.astype(np.float16)
-    xf = x.astype(np.float32)
-    m = np.float16(xf.max())                                   # HW T1: fp16 row max
-    e16 = np.exp(xf - np.float32(m)).astype(np.float16)        # HW T2: fp16 exp
-    s = np.float32(e16.astype(np.float32).sum())               # HW T2 tap: Σ over fp16
-    inv_sum = np.float32(1.0) / s                              # host reciprocal
-    y = (e16.astype(np.float32) * inv_sum).astype(np.float16)  # HW T3: normalize
-    inv_scale = np.float32(127.0)                              # probs in [0,1] -> int8
-    yq = np.clip(np.rint(y.astype(np.float32) * inv_scale), -128, 127).astype(np.int8)
-    return x, y, yq, _f32bits(-np.float32(m)), _f32bits(inv_sum), _f32bits(inv_scale)
-
-
-class SoftmaxOp:
-    name = "softmax"
-
-    def gen_data(self, c, i, ctx):
-        x, y, _yq, _nm, _is, _isc = _softmax_ref(c["beats"], i)
-        return [format_vector_definition("uint16_t", f"in_{i}", x.view(np.uint16)),
-                format_vector_definition("uint16_t", f"golden_{i}", y.view(np.uint16))]
-
-    def _store_check_fp16(self, b, name, l1_dst, op_node, golden_sym, n_elems, tol):
-        out_bytes = n_elems * 2
-        l3 = BingoMemAlloc(f"out_{name}", size=out_bytes, mem_level="L3")
-        store = BingoNode(
-            assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=HOST_CORE,
-            node_name=f"Store_{name}", kernel_name="__host_bingo_kernel_idma",
-            kernel_args=HostBingoKernelIdmaArgs(l1_dst, l3, out_bytes))
-        check = BingoNode(
-            assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=HOST_CORE,
-            node_name=f"Check_{name}", kernel_name="__host_bingo_kernel_check_result",
-            kernel_args=HostBingoKernelCheckResultArgs(
-                b.sym(golden_sym), l3, name=name,
-                check_type=2, num_elements=n_elems, tolerance=tol))  # 2 = FP16_TOL
-        b.dfg.bingo_add_node(store)
-        b.dfg.bingo_add_node(check)
-        b.dfg.bingo_add_edge(op_node, store)
-        b.dfg.bingo_add_edge(store, check)
-        return check
-
-    def build(self, b, c, i, prev):
-        beats = c["beats"]
-        n = beats * 32
-        row_b = beats * 64
-        x, y, yq, neg_max_bits, inv_sum_bits, inv_scale_bits = _softmax_ref(beats, i)
-        l1_x   = b.l1(f"smx_x_{i}", row_b)
-        l1_max = b.l1(f"smx_max_{i}", 64)
-        l1_exp = b.l1(f"smx_exp_{i}", (beats + 1) * 64)
-        l1_out = b.l1(f"smx_out_{i}", row_b)
-        l1_i8  = b.l1(f"smx_i8_{i}", n)
-        load = b.idma_load(f"Load_{i}", b.sym(f"in_{i}"), l1_x, row_b, prev)
-        # T1 max — FULL config establishes the AGU shape the STICKY ops reuse.
-        t1 = b.op(f"Max_{i}", "__snax_bingo_kernel_xdma_stream_reduce",
-                  SnaxBingoKernelXdmaStreamReduceArgs(l1_x, l1_max, beats, op=0,
-                      csr_mode=0, dst_bound0=1), load)
-        # T2 exp(x-max) + Σexp fused in ONE task on the MERGED map+reduce kernel
-        # (StreamMap EXP -||> StreamReduce ADD|TAP), STICKY. The subtract folds into the
-        # map's `b` because this op is single-row (one shared -max); TAP appends Σexp as
-        # a trailing beat, so l1_exp is the PADDED [1, beats+1] layout.
-        t2 = b.op(f"ExpSum_{i}", "__snax_bingo_kernel_xdma_stream_map_reduce",
-                  SnaxBingoKernelXdmaStreamMapReduceArgs(l1_x, l1_exp, beats, func=1,
-                      reduce_op=1, b_f32bits=neg_max_bits, tap=True, csr_mode=1), t1)
-        # T3 out = inv_sum * exp (StreamMap LINEAR), STICKY.
-        t3 = b.op(f"Norm_{i}", "__snax_bingo_kernel_xdma_stream_map",
-                  SnaxBingoKernelXdmaStreamMapArgs(l1_exp, l1_out, beats, func=0,
-                      a_f32bits=inv_sum_bits, csr_mode=1, dst_bound0=beats), t2)
-        chk = self._store_check_fp16(b, f"softmax_cfg{i}", l1_out, t3, f"golden_{i}", n, 0.02)
-        # Tq fused FP16->INT8 quant — exercises the Fp16ToInt8 datapath (leaf, no check).
-        tq = b.op(f"Quant_{i}", "__snax_bingo_kernel_xdma_stream_map",
-                  SnaxBingoKernelXdmaStreamMapArgs(l1_exp, l1_i8, beats, func=0,
-                      a_f32bits=inv_sum_bits, csr_mode=1, dst_bound0=beats // 2,
-                      out_dtype=1, inv_scale_f32bits=inv_scale_bits), chk)
-        return tq
-
 
 # ── VersaCore layout conversions (need meshRow/tileSize/meshCol from hwcfg) ──
 def _mesh(ctx, c):
@@ -686,7 +603,6 @@ def _build_registry():
         "pad": PadOp(),
         "gather": GatherOp(),
         "elementwise_add": ElementwiseAddOp(),
-        "softmax": SoftmaxOp(),
     }
     layout_handlers, layout_reg = make_layout_handlers()
     _register_layouts(layout_handlers, layout_reg)
@@ -762,6 +678,10 @@ def run_op_workload(op, configs):
     if not guard_cluster_count(param, platform, args.output_dir,
                                args.output_offload_file_name):
         return
+    # Resolve the core roles before ANY node is built (see the note at the top).
+    global DMA_CORE, XDMA_CORE, HOST_CORE
+    _roles = core_roles(platform)
+    DMA_CORE, XDMA_CORE, HOST_CORE = _roles["dm"], _roles["xdma"], _roles["host"]
     dfg = BingoDFG(
         num_chiplets=platform["num_chiplets"],
         num_clusters_per_chiplet=platform["num_clusters_per_chiplet"],
