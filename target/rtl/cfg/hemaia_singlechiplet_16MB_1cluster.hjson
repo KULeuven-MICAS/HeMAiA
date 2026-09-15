@@ -99,7 +99,7 @@
       dep_tag_width: 4
     },
     clusters:[
-      "snax_versacore_to_simd_cluster",
+      "snax_split_cluster",
       ],
 
     hemaia_xdma_cfg: {
