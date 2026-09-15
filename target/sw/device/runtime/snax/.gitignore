@@ -1,0 +1,3 @@
+# Mirror of $(SNITCH_ROOT)/target/snitch_cluster/sw/runtime/common/snax-core-roles-defs.h,
+# refreshed on every `make snax-sw-gen` (see target/sw/Makefile). Don't commit.
+snax_core_roles_defs.h
