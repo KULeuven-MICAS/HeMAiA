@@ -670,6 +670,27 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_swiglu_args {
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_simd_swiglu_args_t;
 
+// FlashAttention online-softmax epilogue -- the whole per-tile SIMD half in one kernel.
+// See offload_hw_kernels/simd.h for the recurrence, the arena layout and why the
+// adjacencies in it are load-bearing.
+//   s16_src   the producing GEMM's D32 output for this tile, fp16 [bc, 32]
+//   p8_dst    int8 P^T for the consuming GEMM, bc/2 beats
+//   arena     contiguous state + scratch, SIMD_FA_ARENA_BYTES(bc, dhead)
+//   tile_idx  0 seeds m, l and O; later tiles carry them forward
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_fa_softmax {
+  uint32_t s16_src_addr_hi;
+  uint32_t s16_src_addr_lo;
+  uint32_t p8_dst_addr_hi;
+  uint32_t p8_dst_addr_lo;
+  uint32_t arena_addr_hi;
+  uint32_t arena_addr_lo;
+  uint32_t bc;
+  uint32_t dhead;
+  uint32_t tile_idx;
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_simd_fa_softmax_args_t;
+
+
 // ──────────────────────────────────────────────────────────────────────
 // VersaCore blocked-layout conversion kernels
 //
@@ -772,3 +793,24 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_gemm_minimal_args {
   uint32_t output_D_addr;            
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_gemm_minimal_args_t;
+
+// The two FlashAttention matmuls (offload_hw_kernels/gemm_fa.h). One struct, two
+// kernels: __snax_bingo_kernel_gemm_fa_qk emits the score tile as FP16 for the SIMD
+// block, __snax_bingo_kernel_gemm_fa_pv accumulates O += P.V in INT32 with C and D
+// pointing at the SAME buffer.
+//
+// There is no array_shape / transpose / quant field. The cluster has one array shape and
+// one data type; attention transposes ALGEBRAICALLY (S^T = K.Q^T is the same GEMM with
+// its operands swapped), so no transposer is involved; and neither matmul requantises.
+// What these kernels do carry that gemm_full cannot is the INTERLEAVED D layout the
+// LANEWISE softmax needs -- see the header comment in gemm_fa.h.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_gemm_fa_args {
+  uint32_t input_A_addr;
+  uint32_t input_B_addr;
+  uint32_t input_C_addr;
+  uint32_t output_D_addr;
+  uint32_t M;                 // qk: Bc/meshRow      pv: d/meshRow
+  uint32_t K;                 // qk: d/tileSize      pv: Bc/tileSize
+  uint32_t N;                 // Br/meshCol, the same for both
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_gemm_fa_args_t;
