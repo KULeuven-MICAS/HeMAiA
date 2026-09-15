@@ -40,6 +40,7 @@
 #include "offload_hw_kernels/xdma.h"
 #include "offload_hw_kernels/simd.h"
 #include "offload_hw_kernels/gemm.h"
+#include "offload_hw_kernels/gemm_fa.h"
 
 //////////////////////// SYMBOL TABLE ////////////////////////
 // The host offload runtime looks up kernels by name through this table.
@@ -76,6 +77,8 @@ SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_gemm_i8i4_f16),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_gemm_i8i8_f16),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_gemm_minimal),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_gemm_fa_qk),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_gemm_fa_pv),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_1d_copy),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_6d),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_transpose_2d),
@@ -110,6 +113,11 @@ SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_silu_f16_i8),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_swiglu_f16_f16),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_swiglu_f16_i8),
+    // FlashAttention online-softmax epilogue: the whole per-tile SIMD half (eleven
+    // engine tasks -- rowmax, the m/corr/l recurrence, the fused exp+rowsum, the
+    // quantise and the O rescale) in ONE kernel. The producing and consuming GEMM
+    // nodes hand off through BINGO edges, so it carries no sync counters.
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_fa_softmax),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_d_to_row_major_e1_M32N32),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_d_to_row_major_e2_M32N32),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_d_to_row_major_e4_M32N32),

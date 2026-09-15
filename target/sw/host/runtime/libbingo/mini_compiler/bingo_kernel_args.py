@@ -1445,6 +1445,154 @@ class SnaxBingoKernelSimdSwigluF16I8Args(_SnaxBingoKernelSimdSwigluArgs):
 # block spans -- M<meshRow>K<tileSize> for A, K<tileSize>N<meshCol> for B,
 # M<meshRow>N<meshCol> for D. Same (mu,ku,nu) order as the GEMM kernels.
 # -------------------------------------------------------------------------
+
+class SnaxBingoKernelSimdFaSoftmaxArgs(BingoKernelArgs):
+    """FlashAttention online-softmax epilogue: the whole per-tile SIMD half, one kernel.
+
+    The producing GEMM node writes `s16_src` (its D32 output, fp16 [bc, 32]); this node
+    writes `p8_dst` for the consuming GEMM. `arena` carries the persistent (m, l, O)
+    recurrence plus all scratch, so the SAME arena handle must be passed for every KV
+    tile of one query tile; tile_idx=0 seeds m, l and O.
+
+    Size the arena with arena_bytes(bc, dhead) -- it must match
+    SIMD_FA_ARENA_BYTES(bc, dhead) in offload_hw_kernels/simd.h, where the adjacencies
+    inside it are load-bearing.
+    """
+
+    KERNEL_NAME = "__snax_bingo_kernel_simd_fa_softmax"
+
+    BEAT_BYTES = 64
+    # The arena opens with a FIXED block reserved for the cached task geometries, which is
+    # NOT sizeof(snax_simd_shape_t) * 12: that struct's size follows the cluster's
+    # reader_agu_temporal_dimension, so deriving the reservation from it would make every
+    # data offset below depend on the hjson as well. Must equal SIMD_FA_SHAPES_BYTES in
+    # offload_hw_kernels/simd.h, where a _Static_assert checks the shapes still fit.
+    SHAPE_BYTES = 1024
+
+    @classmethod
+    def arena_bytes(cls, bc: int, dhead: int) -> int:
+        return cls.SHAPE_BYTES + (2 * bc + dhead + 11) * cls.BEAT_BYTES
+
+    @classmethod
+    def layout(cls, bc: int, dhead: int) -> Dict[str, int]:
+        """Byte offsets of every field inside the arena.
+
+        MIRRORS simd_fa_layout() in offload_hw_kernels/simd.h, field for field and in
+        order. It exists so a workload can read the recurrence back -- `arena.view(
+        layout(bc, d)["mrun"])` is the running row maximum -- without a second copy of the
+        arithmetic in the workload itself.
+
+        The order is load-bearing on the device side: adjacent pairs are how the SIMD
+        tasks find their two operands, since a task reads ONE flat stream and pairs
+        whatever is next to each other in it. Reordering anything here without doing the
+        same in simd.h feeds a task the beat next door, which does not fault.
+        """
+        b = cls.BEAT_BYTES
+        off = {}
+        t = cls.SHAPE_BYTES
+        for name, beats in (("negmS", 1), ("s16", bc), ("rmax", 1), ("mrun", 1),
+                            ("mnew", 1), ("delta", 1), ("corrL", 1), ("lrun", 1),
+                            ("lnew", 1), ("p16", bc), ("rsum", 1), ("lsc", 1),
+                            ("corrO", 1), ("oacc", dhead)):
+            off[name] = t
+            t += beats * b
+        assert t == cls.arena_bytes(bc, dhead), (
+            f"arena layout walks to {t} but arena_bytes says "
+            f"{cls.arena_bytes(bc, dhead)} -- the two have drifted apart")
+        return off
+
+    def __init__(self, s16_src: Union[BingoMemAlloc, int],
+                 p8_dst: Union[BingoMemAlloc, int],
+                 arena: Union[BingoMemAlloc, int],
+                 bc: int, dhead: int, tile_idx: int):
+        if bc % 2:
+            raise ValueError(f"bc must be even (the quantiser packs 2:1), got {bc}")
+        if bc <= 0 or dhead <= 0:
+            raise ValueError(f"bc and dhead must be positive, got {bc}, {dhead}")
+        self.s16_src = s16_src
+        self.p8_dst = p8_dst
+        self.arena = arena
+        self.bc = bc
+        self.dhead = dhead
+        self.tile_idx = tile_idx
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_simd_fa_softmax_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.s16_src, "s16_src_addr", a, handle_name_map)
+        self._process_addr(self.p8_dst, "p8_dst_addr", a, handle_name_map)
+        self._process_addr(self.arena, "arena_addr", a, handle_name_map)
+        a["bc"] = str(self.bc)
+        a["dhead"] = str(self.dhead)
+        a["tile_idx"] = str(self.tile_idx)
+        return a
+
+
+class _SnaxBingoKernelGemmFaArgs(BingoKernelArgs):
+    """One FlashAttention matmul on the GEMM core. Subclasses bind KERNEL_NAME.
+
+    Shapes are in ARRAY BLOCKS, as the streamer states them, not in elements:
+
+        qk:  S^T = K.Q^T    M = Bc/meshRow, K = d/tileSize,  N = Br/meshCol
+        pv:  O^T += V^T.P^T M = d/meshRow,  K = Bc/tileSize, N = Br/meshCol
+
+    For `pv`, pass the SAME handle as input_C_addr and output_D_addr: the matmul then
+    computes O += P.V in place, and the accumulation across KV tiles is the GEMM's own C
+    input rather than a separate pass.
+
+    These kernels emit the INTERLEAVED D layout the LANEWISE softmax depends on, which is
+    what separates them from SnaxBingoKernelGemmFullArgs; see offload_hw_kernels/gemm_fa.h.
+    """
+    KERNEL_NAME: str = None
+
+    def __init__(self,
+                 input_A_addr: Union[BingoMemAlloc, int],
+                 input_B_addr: Union[BingoMemAlloc, int],
+                 input_C_addr: Union[BingoMemAlloc, int],
+                 output_D_addr: Union[BingoMemAlloc, int],
+                 M: int, K: int, N: int):
+        if M <= 0 or K <= 0 or N <= 0:
+            raise ValueError(f"M, K, N must be positive block counts, got {M}, {K}, {N}")
+        self.input_A_addr = input_A_addr
+        self.input_B_addr = input_B_addr
+        self.input_C_addr = input_C_addr
+        self.output_D_addr = output_D_addr
+        self.M = M
+        self.K = K
+        self.N = N
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_gemm_fa_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.input_A_addr, "input_A_addr", a, handle_name_map,
+                           split_64bit=False)
+        self._process_addr(self.input_B_addr, "input_B_addr", a, handle_name_map,
+                           split_64bit=False)
+        self._process_addr(self.input_C_addr, "input_C_addr", a, handle_name_map,
+                           split_64bit=False)
+        self._process_addr(self.output_D_addr, "output_D_addr", a, handle_name_map,
+                           split_64bit=False)
+        a["M"] = str(self.M)
+        a["K"] = str(self.K)
+        a["N"] = str(self.N)
+        return a
+
+
+class SnaxBingoKernelGemmFaQkArgs(_SnaxBingoKernelGemmFaArgs):
+    """S^T = K.Q^T, emitted as FP16 (the Int32ToFp16Converter on the D port is armed, so
+    the score tile reaches TCDM in half the beats an INT32 tile would need)."""
+    KERNEL_NAME = "__snax_bingo_kernel_gemm_fa_qk"
+
+
+class SnaxBingoKernelGemmFaPvArgs(_SnaxBingoKernelGemmFaArgs):
+    """O^T += V^T.P^T, accumulated in place in INT32 (converter off, C == D)."""
+    KERNEL_NAME = "__snax_bingo_kernel_gemm_fa_pv"
+
+
 class _SnaxBingoKernelXdmaDToRowMajorBase(BingoKernelArgs):
     """D-layout -> row-major. D[m,n,r,c] -> R[m*meshRow+r, n*meshCol+c].
 
