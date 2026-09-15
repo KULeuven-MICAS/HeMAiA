@@ -211,28 +211,28 @@ runs:
     DEV_APP: snax-bingo-offload
 
   # ---- SIMD-only offload_bingo_hw / single_chip ----
-  # xdma_softmax_1cluster
+  # simd_softmax_1cluster
   - HOST_APP_TYPE: offload_bingo_hw
     CHIP_TYPE: single_chip
-    WORKLOAD: xdma_softmax_1cluster
+    WORKLOAD: simd_softmax_1cluster
     DEV_APP: snax-bingo-offload
-  # xdma_rmsnorm_1cluster
+  # simd_rmsnorm_1cluster
   - HOST_APP_TYPE: offload_bingo_hw
     CHIP_TYPE: single_chip
-    WORKLOAD: xdma_rmsnorm_1cluster
+    WORKLOAD: simd_rmsnorm_1cluster
     DEV_APP: snax-bingo-offload
-  # xdma_silu_1cluster
+  # simd_silu_1cluster
   - HOST_APP_TYPE: offload_bingo_hw
     CHIP_TYPE: single_chip
-    WORKLOAD: xdma_silu_1cluster
+    WORKLOAD: simd_silu_1cluster
     DEV_APP: snax-bingo-offload
-  # xdma_swiglu_1cluster
+  # simd_swiglu_1cluster
   - HOST_APP_TYPE: offload_bingo_hw
     CHIP_TYPE: single_chip
-    WORKLOAD: xdma_swiglu_1cluster
+    WORKLOAD: simd_swiglu_1cluster
     DEV_APP: snax-bingo-offload
-  # xdma_rope_1cluster
+  # simd_rope_1cluster
   - HOST_APP_TYPE: offload_bingo_hw
     CHIP_TYPE: single_chip
-    WORKLOAD: xdma_rope_1cluster
+    WORKLOAD: simd_rope_1cluster
     DEV_APP: snax-bingo-offload

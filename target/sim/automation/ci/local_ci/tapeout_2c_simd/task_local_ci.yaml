@@ -83,8 +83,8 @@ runs:
     DEV_APP: versacore-matmul-profile-2cluster-4chip-d2d
 
   # ---- SIMD-only offload_bingo_hw / single_chip ----
-  # xdma_softmax_simd_2cluster
+  # simd_softmax_2cluster
   - HOST_APP_TYPE: offload_bingo_hw
     CHIP_TYPE: single_chip
-    WORKLOAD: xdma_softmax_simd_2cluster
+    WORKLOAD: simd_softmax_2cluster
     DEV_APP: snax-bingo-offload
