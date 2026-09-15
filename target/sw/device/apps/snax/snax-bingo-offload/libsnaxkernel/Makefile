@@ -21,9 +21,12 @@ LIBSNAXKERNEL_CLEAN_GOAL := $(filter clean clean-%,$(MAKECMDGOALS))
 # the header) cross-checks it against the active hwcfg and fails the build
 # on any drift. No code is generated.
 #
-# GEMM_HWCFG is lazy (`=`) so it picks up $(SNITCH_ROOT) after the outer
-# apps/common.mk has defined it (this Makefile is included first).
-GEMM_HWCFG     = $(SNITCH_ROOT)/target/snitch_cluster/cfg/snax_versacore_to_cluster.hjson
+#
+# Both are lazy (`=`): $(SNITCH_ROOT) is defined by the outer apps/common.mk, which
+# is included AFTER this file.
+GEMM_RTL_CFG   = $(abspath $(LIBSNAXKERNEL_DIR)/../../../../../../rtl/cfg/lru.hjson)
+GEMM_CLUSTER   = $(shell python3 -c "import hjson,sys; print(hjson.load(open(sys.argv[1]))['clusters'][0])" $(GEMM_RTL_CFG) 2>/dev/null)
+GEMM_HWCFG     = $(SNITCH_ROOT)/target/snitch_cluster/cfg/$(GEMM_CLUSTER).hjson
 VERSACORE_DIR := $(abspath $(LIBSNAXKERNEL_DIR)/../../../../runtime/snax/versacore)
 VALIDATE_SCRIPT := $(VERSACORE_DIR)/validate_shapes.py
 GEMM_SHAPES     := $(VERSACORE_DIR)/gemm_shapes.h
