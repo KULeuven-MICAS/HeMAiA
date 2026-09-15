@@ -2,12 +2,13 @@
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Per-op xDMA sweep workload for "softmax". See util/sim/xdma/xdma_ops_lib.md.
+# Per-op SIMD sweep workload for "swiglu". One fused kernel on the cluster's SIMD core;
+# the sweep that collects its cost LUT lives in target/sim/automation/sweep/simd.
 
 MK_DIR   := $(dir $(realpath $(lastword $(MAKEFILE_LIST))))
 HOST_APP_TYPE = offload_bingo_hw
 CHIP_TYPE     = single_chip
-WORKLOAD      = xdma_swiglu_1cluster
+WORKLOAD      = simd_swiglu_1cluster
 DEV_APP       = snax-bingo-offload
 SRCS = ../../src/offload_bingo_hw.c
 BINGO_HOST ?= 1
@@ -26,7 +27,7 @@ $(DATA_H) $(OFFLOAD_H) $(CONFIGS_JSON): $(MK_DIR)/main_bingo.py $(DATA_CFG) $(PL
 		--output_dir $(MK_DIR) \
 		--data_h $(DATA_H) \
 		-c $(DATA_CFG) \
-		--hwcfg $(SNITCH_ROOT)/target/snitch_cluster/cfg/snax_versacore_to_simd_cluster.hjson \
+		--hwcfg $(SNITCH_ROOT)/target/snitch_cluster/cfg/snax_split_cluster.hjson \
 		--platformcfg $(PLATFORM_H) \
 		--configs_out $(CONFIGS_JSON)
 

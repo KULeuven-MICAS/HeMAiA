@@ -126,7 +126,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from nsplit_accumprevc_gemm_datagen import emit_header_file  # noqa E402
 from bingo_dfg import BingoDFG  # noqa E402
-from bingo_platform import guard_cluster_count, parse_platform_cfg  # noqa E402
+from bingo_platform import core_roles, guard_cluster_count, parse_platform_cfg  # noqa E402
 from bingo_node import BingoNode  # noqa E402
 from bingo_mem_handle import BingoMemAlloc, BingoMemSymbol  # noqa E402
 from bingo_kernel_args import (  # noqa E402
@@ -135,12 +135,13 @@ from bingo_kernel_args import (  # noqa E402
     HostBingoKernelCheckResultArgs,
 )
 
-DATA_HEADER = "nsplit_accumprevc_gemm_data.h"
+# Core placement, from the generated map (snax_core_roles_defs.h).
+_ROLES = core_roles()
+GEMM_CORE = _ROLES["gemm"]
+DMA_CORE = _ROLES["dm"]
+HOST_CORE = _ROLES["host"]
 
-# Core assignment within a cluster (matches the other offload_bingo_hw workloads)
-GEMM_CORE = 0
-DMA_CORE = 1
-HOST_CORE = 2
+DATA_HEADER = "nsplit_accumprevc_gemm_data.h"
 
 
 def get_args():

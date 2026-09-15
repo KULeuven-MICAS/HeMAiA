@@ -2,20 +2,20 @@
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Per-op SIMD sweep workload for "rope". One fused kernel on the cluster's SIMD core;
-# the sweep that collects its cost LUT lives in target/sim/automation/sweep/simd.
+# SIMD primitives workload: one armed operator per kernel on the cluster's SIMD core.
+# The sweep that collects the per-operator cost LUTs lives in target/sim/automation/sweep/simd.
 
 MK_DIR   := $(dir $(realpath $(lastword $(MAKEFILE_LIST))))
 HOST_APP_TYPE = offload_bingo_hw
 CHIP_TYPE     = single_chip
-WORKLOAD      = simd_rope_1cluster
+WORKLOAD      = simd_prims_1cluster
 DEV_APP       = snax-bingo-offload
 SRCS = ../../src/offload_bingo_hw.c
 BINGO_HOST ?= 1
 INCL_DEVICE_BINARY ?= 1
 
 DATA_CFG ?= $(MK_DIR)/params.hjson
-DATA_H = $(MK_DIR)/rope_data.h
+DATA_H = $(MK_DIR)/prims_data.h
 OFFLOAD_H = $(MK_DIR)/offload_bingo_hw.h
 CONFIGS_JSON = $(MK_DIR)/configs.json
 BENDER       = bender

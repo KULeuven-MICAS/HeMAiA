@@ -48,12 +48,15 @@ from bingo_kernel_args import (  # noqa E402
 )
 from bingo_mem_handle import BingoMemAlloc, BingoMemSymbol  # noqa E402
 from bingo_node import BingoNode  # noqa E402
-from bingo_platform import guard_cluster_count, parse_platform_cfg  # noqa E402
+from bingo_platform import core_roles, guard_cluster_count, parse_platform_cfg  # noqa E402
 from device_host_idma_check_datagen import emit_header_file  # noqa E402
 
+# Core placement, from the generated map (snax_core_roles_defs.h).
+_ROLES = core_roles()
+DMA_CORE = _ROLES["dm"]
+HOST_CORE = _ROLES["host"]
 
-DMA_CORE = 1
-HOST_CORE = 2
+
 APP_NAME = "device_host_idma_check_1cluster"
 
 

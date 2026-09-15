@@ -47,7 +47,7 @@ from bingo_kernel_args import (  # noqa E402
 )
 from bingo_mem_handle import BingoMemAlloc, BingoMemFixedAddr, BingoMemSymbol  # noqa E402
 from bingo_node import BingoNode  # noqa E402
-from bingo_platform import guard_chiplet_count, guard_cluster_count, parse_platform_cfg  # noqa E402
+from bingo_platform import core_roles, guard_chiplet_count, guard_cluster_count, parse_platform_cfg  # noqa E402
 from dma_cross_datagen import emit_header_file  # noqa E402
 
 
@@ -55,8 +55,11 @@ WORKLOAD_NAME = "xdma_read_from_chip00_4chiplet_2cluster"
 EXPECTED_CHIPLETS = [0x00, 0x01, 0x10, 0x11]
 CLUSTER_IDS = [0, 1]
 
-DMA_CORE = 1
-HOST_CORE = 2
+# Core placement, from the generated map (snax_core_roles_defs.h).
+_ROLES = core_roles()
+DMA_CORE = _ROLES["dm"]
+HOST_CORE = _ROLES["host"]
+
 LOW_40_BIT_ADDR_MASK = "0x000000ffffffffffULL"
 
 

@@ -33,7 +33,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from quantize_datagen import emit_header_file  # noqa E402
 from bingo_dfg import BingoDFG  # noqa E402
-from bingo_platform import guard_cluster_count, parse_platform_cfg  # noqa E402
+from bingo_platform import core_roles, guard_cluster_count, parse_platform_cfg  # noqa E402
 from bingo_node import BingoNode  # noqa E402
 from bingo_mem_handle import BingoMemAlloc, BingoMemSymbol  # noqa E402
 from bingo_kernel_args import (  # noqa E402
@@ -82,7 +82,10 @@ def main():
     num_elements = merged["num_elements"]
 
     # Core IDs
-    HOST_CORE = 2
+    # Derived, not hardcoded: the host core sits one past the last SNAX core, so it
+    # moves when the cluster gains engines (2 on the two-core cluster, 4 on the
+    # four-engine one). The DFG's own placement check rejects a stale value.
+    HOST_CORE = core_roles(platform)["host"]
 
     # -- Memory handles --
     # L3 symbols (golden data from quantize_data.h)

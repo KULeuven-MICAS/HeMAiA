@@ -58,7 +58,7 @@ from gemm_sim_utils import define_gemm_workload_params  # noqa E402
 
 from bingo_dfg import BingoDFG
 from bingo_helpers import chiplet_addr_transform_loc  # noqa E402
-from bingo_platform import guard_cluster_count, parse_platform_cfg  # noqa E402
+from bingo_platform import core_roles, guard_cluster_count, parse_platform_cfg  # noqa E402
 from bingo_node import BingoNode
 from bingo_mem_handle import BingoMemAlloc, BingoMemFixedAddr
 from bingo_kernel_args import SnaxBingoKernelIdma1dCopyArgs, SnaxBingoKernelGemmFullArgs, HostBingoKernelCheckResultArgs, HostBingoKernelIdmaArgs, SnaxBingoKernelGemmMinimalArgs
@@ -200,9 +200,14 @@ def create_dfg(params, mem_handles, platform):
     """Creates the Bingo Data Flow Graph with nodes and dependencies."""
 
     # id abstraction aligned with the cmd processor hw
-    gemm_core_id = 0  # Core 0 for Compute
-    dma_core_id = 1  # Core 1 for Load
-    host_core_id = 2  # Core 2 for Host DMA Store
+    # Derived, not hardcoded: the DM core is the last SNAX core and the host core is one
+    # past it, so both move when the cluster gains engines (1/2 on the two-core cluster,
+    # 3/4 on the four-engine one). A stale dma_core_id puts a dm* instruction on a hart
+    # with no DMA ISA; a stale host_core_id fails the DFG's own placement check.
+    roles = core_roles(platform)
+    gemm_core_id = roles["gemm"]
+    dma_core_id = roles["dm"]
+    host_core_id = roles["host"]
 
     # 1. Initialize DFG for chip 0x00 only (single-chip workload). Building for all
     # 4 platform chiplets would allocate empty-chip scheduler structures / global

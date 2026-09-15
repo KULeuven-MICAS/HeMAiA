@@ -34,7 +34,7 @@ from gemm_datagen import emit_header_file, infer_stacked_gemm2_dims  # noqa E402
 # 2. D2 =  D1 X B2 (D1 will be treated as int8 input, B2 is int8, D2 is int32)
 
 from bingo_dfg import BingoDFG
-from bingo_platform import guard_cluster_count, parse_platform_cfg  # noqa E402
+from bingo_platform import core_roles, guard_cluster_count, parse_platform_cfg  # noqa E402
 from bingo_node import BingoNode
 from bingo_mem_handle import BingoMemAlloc, BingoMemSymbol, BingoMemFixedAddr
 from bingo_kernel_args import (
@@ -178,9 +178,14 @@ def create_dfg(params, mem_handles, platform):
         is_host_as_acc=True,
         chiplet_ids=platform["chiplet_ids"],
     )
-    gemm_core_id = 0  # dev core for GEMM
-    dma_core_id = 1   # dev core for IDMA
-    host_core_id = 2  # host core
+    # Derived, not hardcoded: the DM core is the last SNAX core and the host core is one
+    # past it, so both move when the cluster gains engines (1/2 on the two-core cluster,
+    # 3/4 on the four-engine one). A stale dma_core_id puts a dm* instruction on a hart
+    # with no DMA ISA; a stale host_core_id fails the DFG's own placement check.
+    roles = core_roles(platform)
+    gemm_core_id = roles["gemm"]
+    dma_core_id = roles["dm"]
+    host_core_id = roles["host"]
     # 2. Define Nodes
     # Load A1 using host IDMA
     node_load_A1 = BingoNode(

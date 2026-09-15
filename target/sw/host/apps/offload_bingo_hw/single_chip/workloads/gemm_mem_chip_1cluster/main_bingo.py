@@ -46,7 +46,7 @@ from bingo_kernel_args import (  # noqa E402
 )
 from bingo_mem_handle import BingoMemAlloc, BingoMemFixedAddr  # noqa E402
 from bingo_node import BingoNode  # noqa E402
-from bingo_platform import guard_cluster_count, parse_platform_cfg  # noqa E402
+from bingo_platform import core_roles, guard_cluster_count, parse_platform_cfg  # noqa E402
 from gemm_mem_chip_datagen import emit_header_file  # noqa E402
 from gemm_sim_utils import (  # noqa E402
     _bytes_for_elements,
@@ -126,9 +126,14 @@ def create_dfg(params, mem_handles, platform):
         chiplet_ids=platform["chiplet_ids"],
     )
 
-    gemm_core_id = 0
-    dma_core_id = 1
-    host_core_id = 2
+    # Derived, not hardcoded: the DM core is the last SNAX core and the host core is one
+    # past it, so both move when the cluster gains engines (1/2 on the two-core cluster,
+    # 3/4 on the four-engine one). A stale dma_core_id puts a dm* instruction on a hart
+    # with no DMA ISA; a stale host_core_id fails the DFG's own placement check.
+    roles = core_roles(platform)
+    gemm_core_id = roles["gemm"]
+    dma_core_id = roles["dm"]
+    host_core_id = roles["host"]
 
     load_A = BingoNode(
         assigned_chiplet_id=cur_chiplet_id,

@@ -103,7 +103,7 @@ from bingo_kernel_args import (  # noqa E402
 )
 from bingo_mem_handle import BingoMemAlloc, BingoMemFixedAddr, BingoMemSymbol  # noqa E402
 from bingo_node import BingoNode  # noqa E402
-from bingo_platform import guard_chiplet_count, guard_cluster_count, parse_platform_cfg  # noqa E402
+from bingo_platform import core_roles, guard_chiplet_count, guard_cluster_count, parse_platform_cfg  # noqa E402
 from xdma_remote_write_datagen import emit_header_file  # noqa E402
 
 
@@ -114,7 +114,10 @@ SRC_CHIPLET = 0x00
 SRC_CLUSTER = 0
 DST_CHIPLET = 0x10
 DST_CLUSTERS = [0, 1]
-DMA_CORE = 1
+# Core placement, from the generated map (snax_core_roles_defs.h).
+_ROLES = core_roles()
+DMA_CORE = _ROLES["dm"]
+
 # Host kernels must sit on the chiplet-local host core, which the mini-compiler
 # fixes at cluster 0 -- even when the buffer they check lives in cluster 1's L1.
 HOST_CLUSTER = 0

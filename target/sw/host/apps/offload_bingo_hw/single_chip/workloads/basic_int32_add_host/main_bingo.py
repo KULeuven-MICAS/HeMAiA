@@ -30,7 +30,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from int32_add_datagen import emit_header_file  # noqa E402
 from bingo_dfg import BingoDFG  # noqa E402
-from bingo_platform import guard_cluster_count, parse_platform_cfg  # noqa E402
+from bingo_platform import core_roles, guard_cluster_count, parse_platform_cfg  # noqa E402
 from bingo_node import BingoNode  # noqa E402
 from bingo_mem_handle import BingoMemAlloc, BingoMemSymbol  # noqa E402
 from bingo_kernel_args import (  # noqa E402
@@ -38,7 +38,9 @@ from bingo_kernel_args import (  # noqa E402
     HostBingoKernelAraAddI32Args,
 )
 
-HOST_CORE = 2
+# Core placement, from the generated map (snax_core_roles_defs.h).
+_ROLES = core_roles()
+HOST_CORE = _ROLES["host"]
 
 
 def get_args():

@@ -24,7 +24,7 @@ sys.path.append(f"{ROOT_DIR}/util/sim")
 import _usg_paths  # noqa: F401,E402  (registers util/sim/{common,gemm,xdma,ara} on sys.path)
 
 from bingo_dfg import BingoDFG  # noqa: E402
-from bingo_platform import guard_cluster_count, parse_platform_cfg  # noqa: E402
+from bingo_platform import core_roles, guard_cluster_count, parse_platform_cfg  # noqa: E402
 from bingo_node import BingoNode  # noqa: E402
 from bingo_mem_handle import BingoMemAlloc, BingoMemSymbol  # noqa: E402
 from bingo_kernel_args import (  # noqa: E402
@@ -33,12 +33,15 @@ from bingo_kernel_args import (  # noqa: E402
 )
 from data_utils import format_scalar_definition, format_vector_definition  # noqa: E402
 
+# Core placement, from the generated map (snax_core_roles_defs.h).
+_ROLES = core_roles()
+DMA_CORE_ID = _ROLES["dm"]
+HOST_CORE_ID = _ROLES["host"]
+
 # Chip 0; the clusters are enumerated from params["num_clusters"].
 cur_chiplet_id = 0
 
 # id abstraction aligned with the cmd processor hw
-DMA_CORE_ID = 1
-HOST_CORE_ID = 2
 # There is one host core per chiplet, and the bingo mini-compiler requires every
 # host kernel to sit on it (cluster 0, core 2) -- even when the buffer it checks
 # lives in another cluster's L1.

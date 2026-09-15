@@ -3,12 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # 2-cluster SIMD variant of the per-op xDMA sweep workload for "softmax".
-# See util/sim/xdma/xdma_ops_lib.md and ../xdma_softmax_1cluster.
+# See util/sim/xdma/xdma_ops_lib.md and ../simd_softmax_1cluster.
 
 MK_DIR   := $(dir $(realpath $(lastword $(MAKEFILE_LIST))))
 HOST_APP_TYPE = offload_bingo_hw
 CHIP_TYPE     = single_chip
-WORKLOAD      = xdma_softmax_simd_2cluster
+WORKLOAD      = simd_softmax_2cluster
 DEV_APP       = snax-bingo-offload
 SRCS = ../../src/offload_bingo_hw.c
 BINGO_HOST ?= 1

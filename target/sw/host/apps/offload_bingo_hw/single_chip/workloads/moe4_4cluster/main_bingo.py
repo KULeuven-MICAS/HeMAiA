@@ -40,7 +40,7 @@ sys.path.append(current_dir)
 
 from moe_datagen import generate_moe_data, emit_header_file
 from bingo_dfg import BingoDFG
-from bingo_platform import guard_cluster_count, parse_platform_cfg  # noqa E402
+from bingo_platform import core_roles, guard_cluster_count, parse_platform_cfg  # noqa E402
 from bingo_node import BingoNode
 from bingo_mem_handle import BingoMemAlloc, BingoMemSymbol
 from bingo_kernel_args import (
@@ -49,10 +49,13 @@ from bingo_kernel_args import (
     HostBingoKernelAraSoftmaxF32Args,
 )
 
+# Core placement, from the generated map (snax_core_roles_defs.h).
+_ROLES = core_roles()
+GEMM_CORE = _ROLES["gemm"]
+DMA_CORE = _ROLES["dm"]
+HOST_CORE = _ROLES["host"]
+
 CHIPLET_ID = 0x00
-GEMM_CORE = 0
-DMA_CORE = 1
-HOST_CORE = 2
 NUM_CLUSTERS = 4
 
 

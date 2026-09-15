@@ -108,7 +108,7 @@ sys.path.append(current_dir)
 
 from attention_datagen import emit_header_file  # noqa E402
 from bingo_dfg import BingoDFG  # noqa E402
-from bingo_platform import guard_cluster_count, parse_platform_cfg  # noqa E402
+from bingo_platform import core_roles, guard_cluster_count, parse_platform_cfg  # noqa E402
 from bingo_node import BingoNode  # noqa E402
 from bingo_mem_handle import BingoMemAlloc, BingoMemSymbol  # noqa E402
 from bingo_kernel_args import (  # noqa E402
@@ -124,10 +124,12 @@ from bingo_kernel_args import (  # noqa E402
     BINGO_CHECK_TYPE_FP32_TOL,
 )
 
-# Core IDs within a cluster (fixed by the HeMAiA architecture).
-GEMM_CORE = 0  # VersaCore (int8 GEMM accelerator)
-DMA_CORE  = 1  # iDMA (L3 ↔ L1 transfers)
-HOST_CORE = 2  # CVA6 + Ara (fp32 ops, quantize/dequant/softmax, check, add)
+# Core placement, from the generated map (snax_core_roles_defs.h).
+_ROLES = core_roles()
+GEMM_CORE = _ROLES["gemm"]
+DMA_CORE = _ROLES["dm"]
+HOST_CORE = _ROLES["host"]
+
 
 # Cap the amount of data each check_result compares, for faster simulation.
 # The GEMMs still compute full-size buffers; only the HOST check_result loop

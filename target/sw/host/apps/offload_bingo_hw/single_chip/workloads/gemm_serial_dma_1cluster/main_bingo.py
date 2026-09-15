@@ -43,7 +43,7 @@ from gemm_sim_utils import define_gemm_workload_params  # noqa E402
 
 # This idea of this application is to compare with the serial version in bingo sw to show the improvement of the bingo hw manager
 from bingo_dfg import BingoDFG
-from bingo_platform import guard_cluster_count, parse_platform_cfg  # noqa E402
+from bingo_platform import core_roles, guard_cluster_count, parse_platform_cfg  # noqa E402
 from bingo_node import BingoNode
 from bingo_mem_handle import BingoMemAlloc, BingoMemSymbol
 from bingo_kernel_args import SnaxBingoKernelIdma1dCopyArgs, SnaxBingoKernelGemmFullArgs, HostBingoKernelCheckResultArgs
@@ -119,9 +119,14 @@ def create_dfg(params, mem_handles, platform):
         is_host_as_acc=True,
         chiplet_ids=[0x00],
     )
-    gemm_core_id = 0  # Core 0 for Compute
-    dma_core_id = 1  # Core 1 for Load
-    host_core_id = 2  # Core 2 for Host DMA Store
+    # Derived, not hardcoded: the DM core is the last SNAX core and the host core is one
+    # past it, so both move when the cluster gains engines (1/2 on the two-core cluster,
+    # 3/4 on the four-engine one). A stale dma_core_id puts a dm* instruction on a hart
+    # with no DMA ISA; a stale host_core_id fails the DFG's own placement check.
+    roles = core_roles(platform)
+    gemm_core_id = roles["gemm"]
+    dma_core_id = roles["dm"]
+    host_core_id = roles["host"]
     # 2. Define Nodes
     # Dev IDMA1D Copy A
     task_copy_A = BingoNode(

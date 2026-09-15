@@ -32,10 +32,10 @@ for _p in [p for p in list(sys.path) if str(p).rstrip('/').endswith('util/sim')]
             sys.path.append(_sub)
 
 from bingo_dfg import BingoDFG                            # noqa: E402
-from bingo_helpers import chiplet_addr_transform_loc      # noqa: E402
-from bingo_platform import guard_cluster_count, parse_platform_cfg  # noqa: E402
+from bingo_platform import core_roles, guard_cluster_count, parse_platform_cfg  # noqa: E402
 from bingo_node import BingoNode                          # noqa: E402
-from bingo_mem_handle import BingoMemAlloc, BingoMemFixedAddr  # noqa: E402
+from bingo_mem_handle import BingoMemAlloc                     # noqa: E402
+from bingo_data_staging import DataStaging                     # noqa: E402
 from bingo_kernel_args import (                           # noqa: E402
     SnaxBingoKernelIdma1dCopyArgs,
     SnaxBingoKernelSimdSiluF16F16Args,
@@ -43,21 +43,12 @@ from bingo_kernel_args import (                           # noqa: E402
     HostBingoKernelCheckResultArgs,
 )
 
-# Core roles on the four-engine cluster (see device/runtime/snax/snax_core_roles.h):
-#   0 GEMM   1 SIMD   2 xDMA   3 DM/iDMA   4 host
-# The SIMD kernels MUST sit on core 1 and the iDMA copies on core 3. Core 1 carried the
-# iDMA on the old two-core cluster, so a stale "DMA_CORE = 1" places a dm* instruction on
-# a hart that has no DMA ISA and traps.
-SIMD_CORE = 1
-DMA_CORE = 3
-HOST_CORE = 4
+# Core placement, from the generated map (snax_core_roles_defs.h).
+_ROLES = core_roles()
+SIMD_CORE = _ROLES["simd"]
+DMA_CORE = _ROLES["dm"]
+HOST_CORE = _ROLES["host"]
 CHECK_FP16_TOL = 2
-# Inputs + golden are staged on the memchip (mempool.bin) instead of baked into
-# the host WIDE_SPM: 12 configs of fp16 in/golden (~26 KiB) would overflow the
-# 128 KiB image once the 88 KiB device binary is included. The memchip base is
-# the same one gemm_mem_chip_1cluster uses.
-MEMPOOL_LOC = (2, 0)
-MEMPOOL_VADDR = 0x8000_0000
 
 # (rows, cols); each row is a length-cols tile (cols a multiple of 32). A rows x cols grid for the
 # fused-kernel cost LUT (bilinear fit): rows {1,2,4,8} x cols {64,128,256} -- cols varies at EVERY
@@ -91,45 +82,42 @@ class G:
         return nd
 
 
-def build_mempool():
-    """Concatenate every config's fp16 input + golden into the memchip image.
+def build_mempool(st):
+    """Hand every config's arrays to the staging helper; return the handles.
 
-    Returns (blob: bytes, meta: [(off_in, off_golden), ...]). Each array is 64-B
-    aligned so the iDMA / host loads land on aligned memchip words.
+    WHERE they land is the platform's business, not this workload's: a config with a
+    memory chiplet gets a mempool.bin, one without gets C arrays in the host image. See
+    util/sim/common/bingo_data_staging.py -- addressing a memory chiplet a config does
+    not have reads unmapped memory rather than faulting.
     """
-    blob = bytearray()
     meta = []
-
-    def _pad():
-        while len(blob) % 64:
-            blob.append(0)
 
     for i in range(len(CONFIGS)):
         x, y = _silu_ref(CONFIGS[i]["rows"], CONFIGS[i]["cols"], i)
-        _pad(); oi = len(blob); blob += x.view(np.uint16).astype("<u2").tobytes()
-        _pad(); og = len(blob); blob += y.view(np.uint16).astype("<u2").tobytes()
+        oi = st.put(f"silu_in_{i}", "uint16_t", x.view(np.uint16))
+        og = st.put(f"silu_golden_{i}", "uint16_t", y.view(np.uint16))
         meta.append((oi, og))
-    return bytes(blob), meta
+    return meta
 
 
 # One shared L1/L3 buffer set is reused across all 12 serialized configs (each
 # config's Check depends on the previous config's Check, so the buffers are dead
 # before reuse). Giving every config its OWN L3 out buffer emitted 12 separate
 # never-freed bingo_l3_alloc calls and OOM'd the small 128 KiB L3 heap.
-def build_config(g, i, base, meta, l1_x, l1_out, l3_out, prev):
+def build_config(g, i, meta, l1_x, l1_out, l3_out, prev):
     rows  = CONFIGS[i]["rows"]
     cols  = CONFIGS[i]["cols"]         # per-row length
     n     = rows * cols                # total elements
     tot_b = rows * cols * 2            # [rows, cols] fp16 bytes
     off_in, off_golden = meta[i]
     load = g.node(f"Load_{i}", DMA_CORE, "__snax_bingo_kernel_idma_1d_copy",
-                  SnaxBingoKernelIdma1dCopyArgs(BingoMemFixedAddr(base + off_in), l1_x, tot_b), prev)
+                  SnaxBingoKernelIdma1dCopyArgs(off_in, l1_x, tot_b), prev)
     silu = g.node(f"Silu_{i}", SIMD_CORE, "__snax_bingo_kernel_simd_silu_f16_f16",
                   SnaxBingoKernelSimdSiluF16F16Args(l1_x, l1_out, rows, cols), load)
     store = g.node(f"Store_{i}", HOST_CORE, "__host_bingo_kernel_idma",
                    HostBingoKernelIdmaArgs(l1_out, l3_out, tot_b), silu)
     chk = g.node(f"Check_silu_cfg{i}", HOST_CORE, "__host_bingo_kernel_check_result",
-                 HostBingoKernelCheckResultArgs(BingoMemFixedAddr(base + off_golden), l3_out,
+                 HostBingoKernelCheckResultArgs(off_golden, l3_out,
                      name=f"silu_cfg{i}", check_type=CHECK_FP16_TOL, num_elements=n,
                      tolerance=0.05), store)
     return chk
@@ -147,19 +135,18 @@ def main():
     args = p.parse_args()
     with open(args.cfg) as f:
         param = hjson.loads(f.read())
-    blob, meta = build_mempool()
+    # The platform decides WHERE the arrays go -- a memory chiplet if this config
+    # has one, the host image otherwise -- so it has to be parsed before staging.
+    platform = parse_platform_cfg(args.platformcfg)
+    st = DataStaging(platform)
+    meta = build_mempool(st)
     if args.data_h is not None:
-        # Inputs + golden live on the memchip; the host data header is empty.
-        with open(args.data_h, "w") as f:
-            f.write("#include <stdint.h>\n")
-        out_build = os.path.join(args.output_dir, "build")
-        os.makedirs(out_build, exist_ok=True)
-        with open(os.path.join(out_build, "mempool.bin"), "wb") as f:
-            f.write(blob)
+        n = st.emit(args.data_h, args.output_dir)
+        print(f"Staged {n} B of inputs and goldens "
+              f"{'on the memory chiplet' if st.on_memchip else 'in the host image'}")
     if args.configs_out is not None:
         with open(args.configs_out, "w") as f:
             json.dump({"op": "silu", "configs": [dict(c) for c in CONFIGS]}, f, indent=2)
-    platform = parse_platform_cfg(args.platformcfg)
     if not guard_cluster_count(param, platform, args.output_dir, args.output_offload_file_name):
         return
     # Single-chip workload: only chip 0x00 carries nodes. Building the DFG for
@@ -171,14 +158,13 @@ def main():
                    num_cores_per_cluster=platform["num_cores_per_cluster"],
                    is_host_as_acc=True, chiplet_ids=[0x00])
     g = G(dfg)
-    base = chiplet_addr_transform_loc(*MEMPOOL_LOC, MEMPOOL_VADDR)
     max_tot_b = max(r * c * 2 for (r, c) in _LUT_GRID)
     l1_x = g.l1("silu_x", max_tot_b)
     l1_out = g.l1("silu_out", max_tot_b)
     l3_out = BingoMemAlloc("out_silu", size=max_tot_b, mem_level="L3")
     prev = None
     for i in range(len(CONFIGS)):
-        prev = build_config(g, i, base, meta, l1_x, l1_out, l3_out, prev)
+        prev = build_config(g, i, meta, l1_x, l1_out, l3_out, prev)
     os.makedirs(args.output_dir, exist_ok=True)
     dfg.bingo_compile_dfg("xDMA silu (fused)", args.output_dir,
                           args.output_offload_file_name,

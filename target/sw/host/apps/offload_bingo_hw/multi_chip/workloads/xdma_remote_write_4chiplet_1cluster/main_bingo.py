@@ -90,7 +90,7 @@ from bingo_kernel_args import (  # noqa E402
 )
 from bingo_mem_handle import BingoMemAlloc, BingoMemFixedAddr, BingoMemSymbol  # noqa E402
 from bingo_node import BingoNode  # noqa E402
-from bingo_platform import guard_chiplet_count, guard_cluster_count, parse_platform_cfg  # noqa E402
+from bingo_platform import core_roles, guard_chiplet_count, guard_cluster_count, parse_platform_cfg  # noqa E402
 from xdma_remote_write_datagen import emit_header_file  # noqa E402
 
 
@@ -99,7 +99,10 @@ APP_NAME = "xdma_remote_write_4chiplet_1cluster"
 REQUIRED_CHIPLETS = [0x00, 0x01, 0x10, 0x11]
 SRC_CHIPLET = 0x00
 DST_CHIPLET = 0x01
-DMA_CORE = 1
+# Core placement, from the generated map (snax_core_roles_defs.h).
+_ROLES = core_roles()
+DMA_CORE = _ROLES["dm"]
+
 LOW_40_BIT_ADDR_MASK = "0x000000ffffffffffULL"
 
 
