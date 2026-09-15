@@ -262,6 +262,12 @@ def build(dfg, h, m, rowsum):
     # READ through this pointer -- the AGU walks addresses that are never dereferenced.
     # It exists only because the descriptor needs a base pointer. One block, not M*N.
     cz = g.l1("fa_cz", MESH_ROW * MESH_COL * 4)                 # C base ptr, never read
+    # TWO score buffers, and a third is WORSE -- measured, twice. A third lets QK run three
+    # deep instead of two, which does remove the WAR edge it targets: the GEMM's 4,587 cc
+    # idle after QK1 goes away and the SIMD stops waiting 1,837 and 1,535 cc for QK2 and
+    # QK3. It still loses, by 1,226 cc with three P buffers and 1,824 with two, because the
+    # extra QK then streams A, B and D through TCDM alongside the softmax -- and the softmax
+    # is the critical path. Slack bought for the GEMM is paid for in SIMD bandwidth.
     s16 = [g.l1(f"fa_s16_{i}", BC * BR * 2) for i in range(2)]  # score tile, fp16
     p8 = [g.l1(f"fa_p8_{i}", BC * BR) for i in range(2)]        # quantised P
     oacc = g.l1("fa_oacc32", BR * DHEAD * 4)                    # O, INT32, accumulated
@@ -287,14 +293,46 @@ def build(dfg, h, m, rowsum):
     # O starts at zero: the O matmul sets take_in_new_c, so every output block starts from
     # C, and C is oacc itself. A prefix of the same zero region does it.
     ld_v = load("V", "v", v8, S2_M * S2_K * MESH_ROW * TILE_SIZE, ld_q)
-    ld_o = load("Ozero", "zero", oacc, BR * DHEAD * 4, ld_v)
+
     # The softmax's OWN running O lives in the arena and is a different buffer from the
     # INT32 oacc32 above. simd_fa_init_state used to zero it with the SIMD core's stores:
     # dhead beats, ~8 KiB, and the single largest serial bubble in the run. The DM core is
     # idle here, so hand it the same zero region. The device side then only has to seed
     # mrun/lrun, which is two beats.
     _lay = SnaxBingoKernelSimdFaSoftmaxArgs.layout(BC, DHEAD)
-    ld_az = load("ArenaOzero", "zero", arena.view(_lay["oacc"]), DHEAD * 64, ld_o)
+    ld_az = load("ArenaOzero", "zero", arena.view(_lay["oacc"]), DHEAD * 64, ld_v)
+
+    # ---- warm the instruction cache, off the critical path ----------------------------
+    # Every core's FIRST dispatch is far more expensive than its next: measured from the
+    # trace, the GEMM core spends 3,888 cc between entering the kernel and reaching its
+    # config marker (69-372 thereafter), and the SIMD core's first config is 3,868 cc
+    # against 409/422/422. Those are COMPULSORY instruction-cache misses -- the four cores
+    # share one 8 KiB icache, but the later dispatches do not miss, so nothing is being
+    # evicted. They are simply the first fetch of that code.
+    #
+    # They are also entirely avoidable, because both cores are idle while the iDMA stages
+    # operands: the GEMM core has nothing legal to run until Q lands, and the SIMD core
+    # nothing until QK0 is done. A dispatch with NO dependencies runs there, pays the
+    # misses in that window and leaves the lines resident for the real work.
+    #
+    # The warm-up must go through the SAME kernel entry point, so this is a real (tiny)
+    # dispatch rather than a touch loop: an icache is filled by instruction fetch, and only
+    # executing the code fetches it. Shapes are the smallest the kernel accepts --
+    # simd_fa_softmax requires an even, non-zero bc.
+    #
+    # ONLY the SIMD core gets one, and that is the whole point of the trick: a warm-up pays
+    # for itself only where there is idle time to hide it in. The SIMD core has ~8,000 cc of
+    # it -- nothing it can run until QK0 retires -- so its cold miss disappears under QK0
+    # and QK1. The GEMM core has none: it is the first thing on the chain after the loads,
+    # so a warm-up there just moves the same misses a few hundred cycles earlier and adds
+    # its own dispatch on top. Measured, a GEMM warm-up cost 4,600 cc to save 4,249.
+    wsm  = g.l1("fa_warm_s16", 2 * 64)
+    wp8  = g.l1("fa_warm_p8", 64)
+    war  = g.l1("fa_warm_arena",
+                SnaxBingoKernelSimdFaSoftmaxArgs.arena_bytes(2, 2))
+    warm_sm = g.node("Warm_SIMD", SIMD_CORE, "__snax_bingo_kernel_simd_fa_softmax",
+                     SnaxBingoKernelSimdFaSoftmaxArgs(wsm, wp8, war, bc=2, dhead=2,
+                                                      tile_idx=0))
 
     qk, sm, pv = [], [], []
     for j in range(NKV):
@@ -313,7 +351,7 @@ def build(dfg, h, m, rowsum):
 
         # --- SM(j): the whole online softmax, one kernel, eleven SIMD tasks -------------
         # SM(0) also waits for the arena's O accumulator to be zeroed by the DM core.
-        deps = [qk[j], ld_az] if j == 0 else [qk[j]]
+        deps = [qk[j], ld_az, warm_sm] if j == 0 else [qk[j]]
         if j >= 1:
             # The online softmax is STRICTLY SEQUENTIAL in j: this tile reads the m and l
             # that the previous tile's commit task wrote, and rescales the O that it
@@ -336,9 +374,14 @@ def build(dfg, h, m, rowsum):
         # C and D are the SAME buffer, so the accumulation across KV tiles is the matmul's
         # own C input and costs nothing extra -- which also means the dispatches must not
         # overlap each other, hence the chain through pv[j-1].
-        deps = [sm[j], ld_o] if j == 0 else [sm[j], pv[j - 1]]
+        deps = [sm[j]] if j == 0 else [sm[j], pv[j - 1]]
         pv.append(g.node(f"PV_{j}", GEMM_CORE, "__snax_bingo_kernel_gemm_fa_pv",
-                         SnaxBingoKernelGemmFaPvArgs(v8, p8[j & 1], oacc, oacc,
+                         # C = 0 on the FIRST KV tile: O starts at zero, so there is
+                         # no bias to read and no zeros to stage. PV's D descriptor covers
+                         # oacc in full (16 blocks x 8 chunks x 128 B = BR*DHEAD*4), so the
+                         # buffer is written before anything reads it.
+                         SnaxBingoKernelGemmFaPvArgs(v8, p8[j & 1],
+                                                     oacc if j else 0, oacc,
                                                      S2_M, S2_K, S2_N),
                          deps))
 

@@ -1560,36 +1560,47 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_fa_softmax(void *arg) {
     // which is why they are fired back to back with no wait between them.
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
 
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_TASK_START);
     // 1  rowmax over the tile the GEMM has already written as fp16.
     snax_simd_use2(SIMD_EXT_STREAMREDUCE, SIMD_EXT_STREAMREDUCE_CSR, bc,
                    SIMD_RED_MAX | SIMD_RED_LANEWISE | SIMD_RED_TAP);
     snax_simd_program_1d(&sh[FA_SH_TAP_IN], &sh[FA_SH_TAP_OUT]);
     snax_simd_fire();
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_TASK_END);
 
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_TASK_START);
     // 2  m_new = max(m_old, rowmax)
     snax_simd_use2(SIMD_EXT_STREAMREDUCE, SIMD_EXT_STREAMREDUCE_CSR, 2,
                    SIMD_RED_MAX | SIMD_RED_LANEWISE);
     snax_simd_program_1d(&sh[FA_SH_MNEW_IN], &sh[FA_SH_MNEW_OUT]);
     snax_simd_fire();
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_TASK_END);
 
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_TASK_START);
     // 3+4  -m_new into both latches, one task
     snax_simd_use3(SIMD_EXT_STREAMMAP, SIMD_EXT_STREAMMAP_CSR, SIMD_F32_NEG_ONE, 0,
                    SIMD_FUNC_LINEAR);
     snax_simd_program_1d(&sh[FA_SH_NEGM_IN], &sh[FA_SH_NEGM_OUT]);
     snax_simd_fire();
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_TASK_END);
 
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_TASK_START);
     // 5  delta = m_old - m_new
     snax_simd_use2(SIMD_EXT_STREAMREDUCE, SIMD_EXT_STREAMREDUCE_CSR, 2,
                    SIMD_RED_ADD | SIMD_RED_LANEWISE);
     snax_simd_program_1d(&sh[FA_SH_DELTA_IN], &sh[FA_SH_DELTA_OUT]);
     snax_simd_fire();
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_TASK_END);
 
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_TASK_START);
     // 6+7  corr = exp(delta), to both places a latch is needed
     snax_simd_use3(SIMD_EXT_STREAMMAP, SIMD_EXT_STREAMMAP_CSR, SIMD_F32_ONE, 0,
                    SIMD_FUNC_EXP);
     snax_simd_program_1d(&sh[FA_SH_CORR_IN], &sh[FA_SH_CORR_OUT]);
     snax_simd_fire();
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_TASK_END);
 
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_TASK_START);
     // 8+9  P = exp(S - m_new) AND its rowsum, in ONE pass over the tile. EW0 is upstream
     //      of Map, so the per-lane subtract happens before the exponential and the tile
     //      is never written out in between. Sticky-B suppresses the seed beat, so EW0
@@ -1609,12 +1620,16 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_fa_softmax(void *arg) {
                             SIMD_RED_ADD | SIMD_RED_LANEWISE | SIMD_RED_TAP);
     snax_simd_program_1d(&sh[FA_SH_P_IN], &sh[FA_SH_P_OUT]);
     snax_simd_fire();
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_TASK_END);
 
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_TASK_START);
     // 10 quantise P into the operand the next GEMM reads as B.
     snax_simd_use1(SIMD_EXT_FP16TOINT8, SIMD_EXT_FP16TOINT8_CSR, SIMD_F32_ONE);
     snax_simd_program_1d(&sh[FA_SH_Q_IN], &sh[FA_SH_Q_OUT]);
     snax_simd_fire();
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_TASK_END);
 
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_TASK_START);
     // 14 O *= corr. HOISTED to here, directly after the quantise, because P8 and the
     //    rescaled O are the only two things the next GEMM consumes. It depends on corr
     //    and on nothing below, so nothing stops it running now -- and everything after
@@ -1623,29 +1638,38 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_fa_softmax(void *arg) {
                    SIMD_EW_MUL | SIMD_EW_STICKY_B);
     snax_simd_program_1d(&sh[FA_SH_ORS_IN], &sh[FA_SH_ORS_OUT]);
     snax_simd_fire();
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_TASK_END);
 
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_TASK_START);
     // 11 corr * l_old
     snax_simd_use2(SIMD_EXT_STREAMELEMENTWISE_1, SIMD_EXT_STREAMELEMENTWISE_1_CSR, 1,
                    SIMD_EW_MUL | SIMD_EW_STICKY_B);
     snax_simd_program_1d(&sh[FA_SH_LSC_IN], &sh[FA_SH_LSC_OUT]);
     snax_simd_fire();
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_TASK_END);
 
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_TASK_START);
     // 13 l_new = corr*l_old + rowsum
     snax_simd_use2(SIMD_EXT_STREAMREDUCE, SIMD_EXT_STREAMREDUCE_CSR, 2,
                    SIMD_RED_ADD | SIMD_RED_LANEWISE);
     snax_simd_program_1d(&sh[FA_SH_LNEW_IN], &sh[FA_SH_LNEW_OUT]);
     snax_simd_fire();
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_TASK_END);
 
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_TASK_START);
     // 15+16 commit the running state for the next KV tile.
     snax_simd_use3(SIMD_EXT_STREAMMAP, SIMD_EXT_STREAMMAP_CSR, SIMD_F32_ONE, 0,
                    SIMD_FUNC_LINEAR);
     snax_simd_program_1d(&sh[FA_SH_CMT_IN], &sh[FA_SH_CMT_OUT]);
     snax_simd_fire();
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_TASK_END);
 
     // ONE drain for all eleven. Bounded, so a wedged engine reports itself instead of
     // hanging the simulation, and the node fails instead of letting the next GEMM read a
     // half-written P8.
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_DRAIN_START);
     uint32_t rc = snax_simd_wait_all_bounded();
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_DRAIN_END);
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
     if (rc) {
         printf_safe("[Cluster %d Core %d]: simd_fa_softmax drain timeout tile %d "

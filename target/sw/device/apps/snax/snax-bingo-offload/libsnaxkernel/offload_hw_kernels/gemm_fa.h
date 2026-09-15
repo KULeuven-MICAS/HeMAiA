@@ -175,9 +175,14 @@ static uint32_t __bingo_gemm_fa_run(uint32_t A_addr, uint32_t B_addr, uint32_t C
     set_versacore_streamer_csr(
         A_addr, Asl, Atb, Ats, 0, 0, (uint32_t *)bingo_gemm_shape_params[0].channel_en_A,
         B_addr, Bsl, Btb, Bts, 0, 0, (uint32_t *)bingo_gemm_shape_params[0].channel_en_B,
-        C_addr, Csl, Ctb, Cts, 0,
-        emit_fp16 ? (uint32_t *)bingo_channel_en_C_null
-                  : (uint32_t *)bingo_gemm_shape_params[0].channel_en_C,
+        // A NULL C_addr is the caller saying "this dispatch has no bias" -- the same
+        // masking the score matmul gets, available to any dispatch whose C is known to be
+        // zero. With every channel masked no request is ever issued, so the pointer is
+        // never dereferenced; it is still pointed at something real rather than at 0.
+        C_addr ? C_addr : D_addr, Csl, Ctb, Cts, 0,
+        (emit_fp16 || C_addr == 0u)
+            ? (uint32_t *)bingo_channel_en_C_null
+            : (uint32_t *)bingo_gemm_shape_params[0].channel_en_C,
         D_addr, Dsl, Dtb, Dts, 0, chD,
         /*array_shape=*/0, /*quantization_enable=*/0,
         /*shift_i=*/0, /*multiplier_i=*/0, /*input_zp_i=*/0, /*output_zp_i=*/0,

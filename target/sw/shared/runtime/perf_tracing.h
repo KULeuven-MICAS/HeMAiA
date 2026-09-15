@@ -127,6 +127,15 @@
 // HOST SCALAR_BCAST (per-row sqrt/recip/neg special-functions the xDMA can't do)
 #define BINGO_TRACE_SCALAR_RUN_START      0x354
 #define BINGO_TRACE_SCALAR_RUN_END        0x355
+
+// Inside one SIMD kernel: each task's SW issue, then the single drain that waits for all
+// of them. ONE id pair is enough here and does not repeat the QK/PV mistake -- these spans
+// are strictly sequential within a kernel, so position identifies them, whereas QK and PV
+// interleave on a shared hart and position identifies nothing.
+#define BINGO_TRACE_SIMD_TASK_START       0x356
+#define BINGO_TRACE_SIMD_TASK_END         0x357
+#define BINGO_TRACE_SIMD_DRAIN_START      0x358
+#define BINGO_TRACE_SIMD_DRAIN_END        0x359
 // HOST IDMA
 #define BINGO_TRACE_HOST_IDMA_RUN_START   0x360
 #define BINGO_TRACE_HOST_IDMA_RUN_END     0x361
