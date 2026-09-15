@@ -1,15 +1,20 @@
 // Copyright 2026 KU Leuven.
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
+//
 // SPDX-License-Identifier: Apache-2.0
 //
 // Fanchen Kong <fanchen.kong@kuleuven.be>
 //
-// Which cluster core owns which engine.
+// Which cluster core owns which engine -- the HeMAiA-side predicates over the map that
+// snax_cluster now GENERATES.
 //
-//   hart 0  GEMM   the matmul accelerator and its streamer
-//   hart 1  SIMD   the stream-operator block: EW0, Map, Reduce, EW1, Fp16ToInt8
-//   hart 2  xDMA   transfer engine: Transposer, Memset, the writer junctions, AXI
-//   hart 3  DM     the classic iDMA, and the cluster's singleton-init core
+// The map itself lives in snax_core_roles_defs.h, mirrored from
+//   $(SNITCH_ROOT)/target/snitch_cluster/sw/runtime/common/snax-core-roles-defs.h
+// by `make snax-sw-gen` (target/sw/Makefile). Upstream derives it from the cluster
+// hjson: snax_acc_cfg -> gemm, snax_simd_cfg -> simd, snax_xdma_cfg -> xdma, and the
+// `xdma:` boolean (the Snitch DMA ISA, a different key) -> idma. So it tracks $(CFG)
+// automatically -- on snax_split_cluster it is GEMM 0 / SIMD 1 / xDMA 2 / iDMA 3, on the
+// two-core snax_versacore_to_cluster SIMD, xDMA and iDMA all resolve to hart 1.
 //
 // Each engine's CSR bank is reachable ONLY from its own hart: csrw_ss addresses the
 // accelerator attached to the core executing it, and there is no memory-mapped path to
@@ -19,39 +24,58 @@
 // BINGO_REQUIRE_CORE.
 //
 // snRuntime's own notion of roles is unchanged: SNRT_CLUSTER_DM_CORE_NUM stays 1, so
-// snrt_is_dm_core() still selects exactly hart 3. That matters because snrt uses it for
-// singleton work -- the L1/L3 allocator init in alloc.h, global-barrier participation in
-// sync.h -- which must happen on one core and only one. Harts 1 and 2 are ordinary
-// compute cores to snRuntime; these helpers are what distinguishes them.
+// snrt_is_dm_core() still selects exactly the last hart -- the one the generated map
+// calls SNAX_CORE_IDMA (upstream rejects any cfg that puts the DMA ISA elsewhere). That
+// matters because snrt uses it for singleton work -- the L1/L3 allocator init in
+// alloc.h, global-barrier participation in sync.h -- which must happen on one core and
+// only one. The remaining harts are ordinary compute cores to snRuntime; these helpers
+// are what distinguishes them.
 //
-// TODO: the layout below is HARDCODED to the four-engine cluster. It is a property of
-// the cluster hjson -- which core carries snax_acc_cfg, snax_simd_cfg, snax_xdma_cfg --
-// and the generator already knows it. The right fix is to emit the assignment into
-// occamy.h alongside N_CORES_PER_CLUSTER and have both this header and the bingo
-// mini-compiler read it from there, so a cluster with a different core order cannot
-// silently disagree with the kernels. Until that lands, a cfg change means editing this
-// file.
+// NOTE the spelling change against the old hand-written block: SNAX_CORE_DM is now
+// SNAX_CORE_IDMA, because upstream names the ENGINE (idma = the classic Snitch DMA,
+// xdma = the SNAX transfer engine) rather than snRuntime's scheduling term, so one core
+// can carry both.
 
 #pragma once
 
+#include "snax_core_roles_defs.h"  // generated; mirrored by `make snax-sw-gen`
 #include "snrt.h"
 
 // ------------------------------------------------------------------ role predicates
+//
+// Guarded on SNAX_HAS_<ROLE>_CORE: where the cluster genuinely lacks the engine,
+// SNAX_CORE_<ROLE> is not defined at all, so building a SIMD kernel against a cluster
+// with no SIMD block must FAIL rather than land the kernel on hart 0.
+//
+// The absent case expands to an undeclared identifier rather than merely leaving the
+// function undeclared. Dropping the declaration alone is only a -Wimplicit-function-
+// declaration WARNING on older toolchains, and the device build (toolchain.mk) carries
+// no -Werror -- so the kernel would still link and still run on the wrong hart. An
+// undeclared identifier is a hard error in every C compiler, and it names the reason.
 
-#define SNAX_CORE_GEMM 0
-#define SNAX_CORE_SIMD 1
-#define SNAX_CORE_XDMA 2
-#define SNAX_CORE_DM 3
-
+#if SNAX_HAS_GEMM_CORE
 static inline int snax_is_gemm_core(void) {
     return snrt_cluster_core_idx() == SNAX_CORE_GEMM;
 }
+#else
+#define snax_is_gemm_core() SNAX_THIS_CLUSTER_HAS_NO_GEMM_CORE
+#endif
+
+#if SNAX_HAS_SIMD_CORE
 static inline int snax_is_simd_core(void) {
     return snrt_cluster_core_idx() == SNAX_CORE_SIMD;
 }
+#else
+#define snax_is_simd_core() SNAX_THIS_CLUSTER_HAS_NO_SIMD_CORE
+#endif
+
+#if SNAX_HAS_XDMA_CORE
 static inline int snax_is_xdma_core(void) {
     return snrt_cluster_core_idx() == SNAX_CORE_XDMA;
 }
+#else
+#define snax_is_xdma_core() SNAX_THIS_CLUSTER_HAS_NO_XDMA_CORE
+#endif
 
 // ------------------------------------------------------------------ role assertion
 //

@@ -219,6 +219,7 @@ debug-platform-headers: $(PLATFORM_HEADERS)
 SNAX_SW_GEN_MARKER = $(SW_DIR)/.snax_sw_gen_targets_group
 
 SNAX_XDMA_ADDR_H = $(SW_DIR)/device/runtime/snax/xdma/snax_xdma_addr.h
+SNAX_CORE_ROLES_H = $(SW_DIR)/device/runtime/snax/snax_core_roles_defs.h
 
 # The marker must track the cfg's IDENTITY (which file, plus its contents), not merely
 # its mtime.  A bare `$(SNAX_SW_GEN_MARKER): $(CFG)` compares timestamps, so switching to
@@ -235,7 +236,7 @@ SNAX_CFG_ID := $(abspath $(CFG)):$(shell sha1sum $(CFG) 2>/dev/null | cut -d' ' 
 $(shell [ "$$(cat $(SNAX_SW_GEN_STAMP) 2>/dev/null)" = '$(SNAX_CFG_ID)' ] || \
         printf '%s' '$(SNAX_CFG_ID)' > $(SNAX_SW_GEN_STAMP))
 
-snax-sw-gen: $(SNAX_SW_GEN_MARKER) $(SNAX_XDMA_ADDR_H)
+snax-sw-gen: $(SNAX_SW_GEN_MARKER) $(SNAX_XDMA_ADDR_H) $(SNAX_CORE_ROLES_H)
 
 $(SNAX_SW_GEN_MARKER): $(CFG) $(SNAX_SW_GEN_STAMP)
 	@echo "[SNAX-SW-GEN] Generate SNAX SW headers"
@@ -265,8 +266,20 @@ $(SNAX_XDMA_ADDR_H): $(SNAX_SW_GEN_MARKER)
 	@echo "[SNAX-SW-GEN] Mirror snax-xdma-addr.h -> $@"
 	@cp $(SNITCH_ROOT)/target/snitch_cluster/sw/snax/xdma/include/snax-xdma-addr.h $@
 
+# Same mirror, for the generated core-role map: which hart carries GEMM / SIMD / xDMA /
+# iDMA, derived upstream from the cluster hjson by util/snaxgen/core_roles.py. This
+# REPLACES the constants snax_core_roles.h used to hardcode, which is the difference
+# between a cluster reshape being a compile error and it being a kernel that programs a
+# different accelerator at the same CSR offsets and reports success.
+#
+# Depends on $(SNAX_SW_GEN_MARKER), NOT on the upstream file's mtime: the marker is what
+# carries the cfg-identity stamp above, so switching to an older cfg still regenerates.
+$(SNAX_CORE_ROLES_H): $(SNAX_SW_GEN_MARKER)
+	@echo "[SNAX-SW-GEN] Mirror snax-core-roles-defs.h -> $@"
+	@cp $(SNITCH_ROOT)/target/snitch_cluster/sw/runtime/common/snax-core-roles-defs.h $@
+
 clean-snax-sw-gen:
-	rm -f $(SNAX_SW_GEN_MARKER) $(SNAX_XDMA_ADDR_H) $(SNAX_SW_GEN_STAMP)
+	rm -f $(SNAX_SW_GEN_MARKER) $(SNAX_XDMA_ADDR_H) $(SNAX_CORE_ROLES_H) $(SNAX_SW_GEN_STAMP)
 
 # Structural sync check that every function defined in the upstream
 # snax-versacore-to-lib.c also exists in the local snax_versacore_lib.h and
