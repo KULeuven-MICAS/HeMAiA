@@ -1482,7 +1482,12 @@ static void simd_fa_init_state(uint32_t arena, uint32_t bc, uint32_t dhead) {
     simd_fa_layout(&L, arena, bc, dhead);
     simd_fa_fill_u32((uint32_t *)L.mrun, 0xFBFFFBFFu, SIMD_BEAT_BYTES / 4u);  // -65504
     simd_fa_fill_u32((uint32_t *)L.lrun, 0u, SIMD_BEAT_BYTES / 4u);           // l = 0
-    simd_fa_fill_u32((uint32_t *)L.oacc, 0u, dhead * SIMD_BEAT_BYTES / 4u);   // O = 0
+    // O is NOT zeroed here any more. It is dhead beats -- 8 KiB at d=128 -- and zeroing it
+    // with this core's stores was ~4000 cycles on the critical path with both engines idle
+    // behind it. The workload now hands that to the DM core's iDMA (node ArenaOzero in
+    // fa_1cluster/main_bingo.py), which is idle at that point. A workload that calls this
+    // kernel WITHOUT arranging that zero will read a stale O on its first KV tile.
+    (void)dhead;
     // The stores must land before the first snax_simd_fire() reads the arena. This is
     // what volatile was standing in for, and it costs nothing.
     __asm__ volatile("" ::: "memory");

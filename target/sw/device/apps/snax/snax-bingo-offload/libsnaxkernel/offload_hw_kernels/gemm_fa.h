@@ -163,7 +163,10 @@ static uint32_t __bingo_gemm_fa_run(uint32_t A_addr, uint32_t B_addr, uint32_t C
 
     // ---- C: the READ half of the one bidirectional port -------------------------------
     //
-    // The 32 channels are grouped [4, 8]: channel i sits at sl0*(i%4) + sl1*((i/4)%8).
+    // The channels are a spatial NEST of BINGO_CD_SPATIAL_NUM dimensions, innermost bound
+    // BINGO_CD_SPATIAL_BOUND0: channel i sits at sl0*(i%B0) + sl1*((i/B0)%B1). Every number
+    // below is derived from the generated gemm_shapes.h, so the narrowing of this port from
+    // 32 channels x 2048 b to 16 x 1024 b needed no edit here -- only a regenerated header.
     // Four channels carry 32 B -- one key's meshCol scores -- and the eight groups step by
     // a WHOLE key row of Br = N*meshCol FP16, which is what interleaves the two N blocks
     // in memory at no cost. A beat is then exactly one key, all Br queries.
@@ -172,7 +175,7 @@ static uint32_t __bingo_gemm_fa_run(uint32_t A_addr, uint32_t B_addr, uint32_t C
     const uint32_t n_step   = meshCol * BINGO_FA_XPORT_BITS / 8u;      // other N block
     const uint32_t c_chunk  = serial * N / 8u;                         // serialised chunk
 #else
-    // The block-major layout gemm_full derives: the 32 channels lie end to end, the
+    // The block-major layout gemm_full derives: the channels lie end to end, the
     // chunks of one block are contiguous, and the N step is a WHOLE output block.
     const uint32_t key_row  = (bw / 8u) * BINGO_CD_SPATIAL_BOUND0;
     const uint32_t n_step   = BINGO_C_ELEM_LEN * meshRow * meshCol / 8u;
@@ -191,13 +194,28 @@ static uint32_t __bingo_gemm_fa_run(uint32_t A_addr, uint32_t B_addr, uint32_t C
 #ifdef ADDR_REMAP_INDEX_READER_WRITER_0
     csrw_ss(ADDR_REMAP_INDEX_READER_WRITER_0, 0);
 #endif
-    // C is read in FULL, never broadcast: the port is serialised 4:1 and a broadcast
-    // operand cannot be spread across a serialised input. Both matmuls need the full read
-    // anyway -- the second accumulates O += P.V through C in place.
+    // C is read in FULL, never broadcast: the port is serialised (meshRow*meshCol*
+    // BINGO_C_ELEM_LEN / BINGO_SERIAL_C_D_WIDTH beats per block) and a broadcast
+    // operand cannot be spread across a serialised input.
+    //
+    // ...EXCEPT for the score matmul, whose C is a bias of zeros. That one masks every C
+    // channel off instead of streaming the zeros. A disabled channel is not skipped: the
+    // requestor still pops the address but suppresses tcdmReq.valid, and the responser
+    // substitutes a zero beat (snax readerWriter/DataRequestor.scala, DataResponser.scala),
+    // so the array sees exactly the same C = 0 it saw before.
+    //
+    // What this buys is not the 64 KiB of zeros, though it frees those too. The C READ and
+    // the D WRITE are the two halves of ONE ReaderWriter unit sharing ONE set of 8 TCDM
+    // ports, with the writer taking absolute priority (ReaderWriter.scala's `sel`). Every
+    // C beat therefore costs a port cycle that a D beat could have used, and for the score
+    // matmul all of them carried zeros.
 #ifdef ENABLED_CHANNEL_READER_WRITER_0
-    for (uint32_t i = 0; i < ENABLED_CHANNEL_READER_WRITER_0_CSR_NUM; i++)
-        csrw_ss(ENABLED_CHANNEL_READER_WRITER_0 + i,
-                bingo_gemm_shape_params[0].channel_en_C[i]);
+    {
+        const uint32_t *c_mask = emit_fp16 ? bingo_channel_en_C_null
+                                           : bingo_gemm_shape_params[0].channel_en_C;
+        for (uint32_t i = 0; i < ENABLED_CHANNEL_READER_WRITER_0_CSR_NUM; i++)
+            csrw_ss(ENABLED_CHANNEL_READER_WRITER_0 + i, c_mask[i]);
+    }
 #endif
 
     // ---- D32: the WRITE half of that same port ----------------------------------------

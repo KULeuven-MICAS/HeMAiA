@@ -127,6 +127,23 @@ def _load_params(param):
     BR = N * MESH_COL          # query rows
     DHEAD = K * TILE_SIZE      # head dimension -- a model property, not a knob
     # Shape 2, O^T = V^T.P^T. Bc and d are independent, so the two matmuls differ in M, K.
+    # Br IS NOT A FREE KNOB. Every per-query-row vector in the softmax arena -- the running
+    # max, the running sum, every correction factor -- is ONE SIMD beat, and a score row is
+    # one beat too (simd_fa_layout() in offload_hw_kernels/simd.h walks `bc * B`, not
+    # `bc * ceil(Br/lanes) * B`). A beat is SIMD_WIDTH = 512 b from the cluster hjson, so it
+    # holds exactly 512/16 = 32 fp16 lanes and Br must be 32.
+    #
+    # Measured the hard way at N=4 (Br=64): the run does not fault. It writes the first 32
+    # rows scrambled and leaves rows 32-63 as zero, and only the host check catches it.
+    # Raising Br means giving every one of those vectors a second temporal dimension in all
+    # eleven SIMD task shapes AND in the arena layout on both sides -- a kernel change, not
+    # a parameter. Bc is the knob that is actually free; it is L1 that bounds it.
+    if BR != 32:
+        raise SystemExit(
+            f"fa_1cluster: Br={BR} (N={N}) but the softmax kernel packs one query-row "
+            f"vector per {MESH_COL * 2}-byte SIMD beat, so Br must be 32. "
+            f"Grow Bc (M) instead, or rework simd_fa_layout() and the SIMD task shapes.")
+
     S2_M = DHEAD // MESH_ROW
     S2_K = BC // TILE_SIZE
     S2_N = N                   # unchanged: N is Br/meshCol either way
@@ -241,7 +258,10 @@ def build(dfg, h, m, rowsum):
     k8 = g.l1("fa_k8", M * K * MESH_ROW * TILE_SIZE)            # A of the score matmul
     q8 = g.l1("fa_q8", N * K * MESH_COL * TILE_SIZE)            # B of the score matmul
     v8 = g.l1("fa_v8", S2_M * S2_K * MESH_ROW * TILE_SIZE)      # A of the O matmul
-    cz = g.l1("fa_cz", M * N * MESH_ROW * MESH_COL * 4)         # zero bias for the scores
+    # The score matmul masks every C channel off (see gemm_fa.h), so nothing is ever
+    # READ through this pointer -- the AGU walks addresses that are never dereferenced.
+    # It exists only because the descriptor needs a base pointer. One block, not M*N.
+    cz = g.l1("fa_cz", MESH_ROW * MESH_COL * 4)                 # C base ptr, never read
     s16 = [g.l1(f"fa_s16_{i}", BC * BR * 2) for i in range(2)]  # score tile, fp16
     p8 = [g.l1(f"fa_p8_{i}", BC * BR) for i in range(2)]        # quantised P
     oacc = g.l1("fa_oacc32", BR * DHEAD * 4)                    # O, INT32, accumulated
@@ -253,20 +273,35 @@ def build(dfg, h, m, rowsum):
 
     # The loads are chained: one iDMA engine, and serialising them here keeps the graph's
     # ready set small rather than handing the manager four nodes that must queue anyway.
+    # ORDER MATTERS, and it is not the order the buffers are declared in. There is one
+    # iDMA engine so these serialise regardless; what the chain decides is WHICH of them
+    # QK(0) has to wait behind. QK reads K, Q and the zero C bias. V and the O zero are
+    # PV's, and PV cannot run until SM(0) is done anyway -- so they belong AFTER the
+    # loads QK needs, where they stream underneath QK(0) and SM(0) instead of delaying
+    # the first matmul by their own duration.
     ld_k = load("K", "a", k8, M * K * MESH_ROW * TILE_SIZE)
     ld_q = load("Q", "b", q8, N * K * MESH_COL * TILE_SIZE, ld_k)
-    ld_v = load("V", "v", v8, S2_M * S2_K * MESH_ROW * TILE_SIZE, ld_q)
-    ld_cz = load("Czero", "zero", cz, M * N * MESH_ROW * MESH_COL * 4, ld_v)
+    # No Czero load: with the C channels masked the score matmul never reads this buffer.
+    # That removes the single largest load from the head of the chain -- 64 KiB of zeros
+    # that QK(0) used to wait behind.
     # O starts at zero: the O matmul sets take_in_new_c, so every output block starts from
     # C, and C is oacc itself. A prefix of the same zero region does it.
-    ld_o = load("Ozero", "zero", oacc, BR * DHEAD * 4, ld_cz)
+    ld_v = load("V", "v", v8, S2_M * S2_K * MESH_ROW * TILE_SIZE, ld_q)
+    ld_o = load("Ozero", "zero", oacc, BR * DHEAD * 4, ld_v)
+    # The softmax's OWN running O lives in the arena and is a different buffer from the
+    # INT32 oacc32 above. simd_fa_init_state used to zero it with the SIMD core's stores:
+    # dhead beats, ~8 KiB, and the single largest serial bubble in the run. The DM core is
+    # idle here, so hand it the same zero region. The device side then only has to seed
+    # mrun/lrun, which is two beats.
+    _lay = SnaxBingoKernelSimdFaSoftmaxArgs.layout(BC, DHEAD)
+    ld_az = load("ArenaOzero", "zero", arena.view(_lay["oacc"]), DHEAD * 64, ld_o)
 
     qk, sm, pv = [], [], []
     for j in range(NKV):
         # --- QK(j): the score tile, emitted as fp16 for the SIMD block ------------------
-        deps = [ld_cz] if j == 0 else []
+        deps = [ld_q] if j == 0 else []
         if j == 1:
-            deps.append(ld_cz)
+            deps.append(ld_q)
         if j >= 2:
             # S16[j&1] last held tile j-2, which is free once the softmax that read it is
             # done. THIS is the edge that keeps the two engines overlapped: QK(j) runs
@@ -277,7 +312,8 @@ def build(dfg, h, m, rowsum):
                          deps))
 
         # --- SM(j): the whole online softmax, one kernel, eleven SIMD tasks -------------
-        deps = [qk[j]]
+        # SM(0) also waits for the arena's O accumulator to be zeroed by the DM core.
+        deps = [qk[j], ld_az] if j == 0 else [qk[j]]
         if j >= 1:
             # The online softmax is STRICTLY SEQUENTIAL in j: this tile reads the m and l
             # that the previous tile's commit task wrote, and rescales the O that it
