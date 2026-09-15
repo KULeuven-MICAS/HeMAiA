@@ -52,6 +52,19 @@
 !/sweep/gemm/run_gemm_sweep.py
 !/sweep/gemm/gather_gemm_luts.py
 !/sweep/gemm/task_gemm.yaml
+!/sweep/simd/
+/sweep/simd/*
+!/sweep/simd/run_simd_sweep.py
+!/sweep/simd/gather_simd_luts.py
+!/sweep/simd/simd_lut_report.py
+!/sweep/simd/task_simd.yaml
+!/sweep/simd/task_simd_fused.yaml
+!/sweep/fa/
+/sweep/fa/*
+!/sweep/fa/run_fa_sweep.py
+!/sweep/fa/gather_fa_cycles.py
+!/sweep/fa/task_fa.yaml
+
 
 !/test/
 /test/*
