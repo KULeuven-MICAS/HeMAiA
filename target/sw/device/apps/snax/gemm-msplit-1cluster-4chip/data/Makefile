@@ -12,8 +12,8 @@ IS_CLEAN_GOAL := $(filter clean clean-%,$(MAKECMDGOALS))
 DATA_CFG ?= $(DATA_DIR)/params.hjson
 
 DATA_H = $(DATA_DIR)/data.h
-# The datagen writes the memory-chip image (mempool.bin) as a side effect of
-# producing data.h, so mempool.bin only needs an ordering dependency on data.h.
+# The generator produces both outputs together. Missing either one must
+# regenerate the header and its matching memory-chip image.
 MEMPOOL_BIN = $(DATA_DIR)/mempool.bin
 
 ifeq ($(IS_CLEAN_GOAL),)
@@ -22,10 +22,14 @@ else
 SNITCH_ROOT =
 endif
 
-$(DATA_H): $(DATA_DIR)/datagen.py $(DATA_CFG)
-	python3 $< --swcfg $(DATA_CFG) --hwcfg $(SNITCH_ROOT)/target/snitch_cluster/cfg/snax_versacore_to_cluster.hjson --out-dir $(DATA_DIR) > $@
+# Resolve hardware geometry from the active SoC configuration.
+CLUSTER_CFG_CONSUMER := $(abspath $(lastword $(MAKEFILE_LIST)))
+include $(abspath $(dir $(CLUSTER_CFG_CONSUMER))/../../../../../../../util/cluster_cfg.mk)
+.SECONDEXPANSION:
 
-$(MEMPOOL_BIN): $(DATA_H)
+$(DATA_H) $(MEMPOOL_BIN) &: $(DATA_DIR)/datagen.py $(DATA_CFG) $(CLUSTER_CFG_CONSUMER) $$(CLUSTER_CFG_DEPS)
+	python3 $< --swcfg $(DATA_CFG) --hwcfg $(GEMM_HWCFG) --out-dir $(DATA_DIR) > $(DATA_H)
+
 
 .PHONY: mempool-bin
 mempool-bin: $(MEMPOOL_BIN)
@@ -33,6 +37,6 @@ mempool-bin: $(MEMPOOL_BIN)
 .PHONY: clean-data clean
 
 clean-data:
-	rm -f $(DATA_H) $(MEMPOOL_BIN)
+	rm -f $(DATA_H) $(MEMPOOL_BIN) $(CLUSTER_CFG_STAMP)
 
 clean: clean-data

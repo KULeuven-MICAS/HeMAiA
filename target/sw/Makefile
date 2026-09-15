@@ -62,6 +62,10 @@ HEMAIA_CLK_RST_REG_HJSON    =
 IDMA_ROOT                   =
 IDMA_REG64_1D_HJSON         =
 endif
+
+include $(ROOT)/util/cluster_cfg.mk
+CLUSTER_CFG_STAMP_HWCFG :=
+.SECONDEXPANSION:
 ###################
 # Software Headers#
 ###################
@@ -185,27 +189,27 @@ $(PLATFORM_HEADERS_DIR)/idma_reg64_1d.h: $(IDMA_REG64_1D_HJSON) | $(PLATFORM_HEA
 	$(call reggen_generate_header,$@,$<)
 
 # OCCAMYGEN headers
-$(PLATFORM_HEADERS_DIR)/occamy_memory_map.h: $(PLATFORM_HEADERS_TEMPLATE_DIR)/occamy_memory_map.h.tpl $(CFG) | $(PLATFORM_HEADERS_DIR)
+$(PLATFORM_HEADERS_DIR)/occamy_memory_map.h: $(PLATFORM_HEADERS_TEMPLATE_DIR)/occamy_memory_map.h.tpl $$(CLUSTER_CFG_INPUTS) | $(PLATFORM_HEADERS_DIR)
 	@echo "[OCCAMYGEN] Generating $@"
 	@$(OCCAMYGEN) -c $(CFG) --outdir $(PLATFORM_HEADERS_DIR) --cheader $<
 
-$(PLATFORM_HEADERS_DIR)/occamy.h: $(PLATFORM_HEADERS_TEMPLATE_DIR)/occamy.h.tpl $(CFG) | $(PLATFORM_HEADERS_DIR)
+$(PLATFORM_HEADERS_DIR)/occamy.h: $(PLATFORM_HEADERS_TEMPLATE_DIR)/occamy.h.tpl $$(CLUSTER_CFG_INPUTS) | $(PLATFORM_HEADERS_DIR)
 	@echo "[OCCAMYGEN] Generating $@"
 	@$(OCCAMYGEN) -c $(CFG) --outdir $(PLATFORM_HEADERS_DIR) --cheader $<
 
-$(PLATFORM_HEADERS_DIR)/occamy_base_addr.h: $(CFG) | $(PLATFORM_HEADERS_DIR)
+$(PLATFORM_HEADERS_DIR)/occamy_base_addr.h: $$(CLUSTER_CFG_INPUTS) | $(PLATFORM_HEADERS_DIR)
 	@echo "[OCCAMYGEN] Generating $@"
 	@$(OCCAMYGEN) -c $(CFG) --outdir $(PLATFORM_HEADERS_DIR) -D $@
 	
 # OCCAMYGEN Device runtime
-$(SW_DEVICE_RT_DIR)/generated/occamy_defs.h: $(SW_DEVICE_RT_DIR)/template/occamy_defs.h.tpl $(CFG)
+$(SW_DEVICE_RT_DIR)/generated/occamy_defs.h: $(SW_DEVICE_RT_DIR)/template/occamy_defs.h.tpl $$(CLUSTER_CFG_INPUTS)
 	@echo "[OCCAMYGEN] Generating $@"
 	@$(OCCAMYGEN) -c $(CFG) --outdir $(SW_DEVICE_RT_DIR)/generated --cheader $<
 
 # host.ld encodes the memory map of the active $(CFG) -- it places __return_pointer$
 # inside that config's SPM -- so the config is a prerequisite: a cfg switch must
 # regenerate the script.
-host/runtime/host.ld: host/runtime/host.ld.tpl $(CFG)
+host/runtime/host.ld: host/runtime/host.ld.tpl $$(CLUSTER_CFG_INPUTS)
 	@echo "[OCCAMYGEN] Generating host.ld"
 	@$(OCCAMYGEN) -c $(CFG) --gen-host-ld --outdir host/runtime
 
@@ -222,7 +226,7 @@ SNAX_XDMA_ADDR_H = $(SW_DIR)/device/runtime/snax/xdma/snax_xdma_addr.h
 
 snax-sw-gen: $(SNAX_SW_GEN_MARKER) $(SNAX_XDMA_ADDR_H)
 
-$(SNAX_SW_GEN_MARKER): $(CFG)
+$(SNAX_SW_GEN_MARKER): $$(CLUSTER_CFG_INPUTS) $(abspath Makefile) $(OCCAMYGEN) $(ROOT)/util/occamygen/occamy.py
 	@echo "[SNAX-SW-GEN] Generate SNAX SW headers"
 	@# Wipe every stale streamer_csr_addr_map.h from the snax SW tree first.
 	@# The device build's INCDIRS globs sw/snax/*/include alphabetically, and

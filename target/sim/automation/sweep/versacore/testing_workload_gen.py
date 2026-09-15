@@ -11,7 +11,6 @@ import argparse
 import csv
 import random
 import sys
-import subprocess
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Optional, Sequence
 
@@ -26,12 +25,17 @@ from gemm_sim_utils import (  # noqa E402
     get_gemm_mesh_dims,
 )
 
-L1_MEMORY_LIMIT_BYTES = int(512 * 1024 * 0.4) # 60% of 512KB to leave some room for metadata, etc.
 L3_MEMORY_LIMIT_BYTES = int(40 * 1024) # 40KB heap
 DEFAULT_CSV = Path(__file__).with_name("testing_workload.csv")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from versacore_params import PARAM_FIELDS  # noqa: E402
+from sweep_config import (  # noqa: E402
+    DEFAULT_CFG,
+    default_l1_memory_limit,
+    resolve_sweep_config,
+    write_metadata,
+)
 
 CSV_FIELDS = ["test_name", "suite", "operand_bytes"] + PARAM_FIELDS
 
@@ -58,7 +62,7 @@ BASE_PARAMS = {
 # GEMM precision contract
 # ---------------------------------------------------------------------------
 # Single source of truth for "which precision" -> the VersaCore params flags that
-# select it on the Int8 (snax_versacore_to_cluster) build. The core precision is
+# select it on the chosen Int8 VersaCore build. The core precision is
 # passed as data_type (the DATA_TYPE_CFG CSR via set_versacore_csr) plus the SW
 # packing/output flags below; datagen.py + the kernel consume them. Each entry is
 # one test suite. `derive_from` reuses another suite's exact shapes (apples-to-
@@ -87,36 +91,8 @@ GEMM_PRECISIONS = {
 }
 
 
-def repo_root() -> Path:
-    return REPO_ROOT
-
-
 def find_default_hwcfg() -> Path:
-    root = repo_root()
-    candidates = sorted(
-        root.glob(
-            ".bender/git/checkouts/snitch_cluster-*/target/snitch_cluster/cfg/"
-            "snax_versacore_to_cluster.hjson"
-        )
-    )
-    if candidates:
-        return candidates[0]
-
-    try:
-        out = subprocess.check_output(
-            ["bender", "path", "snitch_cluster"],
-            cwd=root,
-            text=True,
-            stderr=subprocess.DEVNULL,
-        ).strip()
-    except (OSError, subprocess.CalledProcessError):
-        out = ""
-    if out:
-        return Path(out) / "target/snitch_cluster/cfg/snax_versacore_to_cluster.hjson"
-
-    raise FileNotFoundError(
-        "Could not locate snax_versacore_to_cluster.hjson. Pass --hwcfg."
-    )
+    return resolve_sweep_config().hwcfg_path
 
 
 def load_hwcfg(hwcfg_path: Path) -> dict:
@@ -157,9 +133,11 @@ def valid_shape_rows(
     overrides: Optional[Dict[str, int]] = None,
     m_values: Optional[Sequence[int]] = None,
     n_values: Optional[Sequence[int]] = None,
-    l1_memory_limit: int = L1_MEMORY_LIMIT_BYTES,
+    l1_memory_limit: Optional[int] = None,
     l3_memory_limit: int = L3_MEMORY_LIMIT_BYTES,
 ) -> Iterator[dict]:
+    if l1_memory_limit is None:
+        l1_memory_limit = default_l1_memory_limit(hwcfg)
     base = dict(BASE_PARAMS)
     if overrides:
         base.update(overrides)
@@ -221,9 +199,11 @@ def remap_suite_rows(
     *,
     suite: str,
     overrides: Dict[str, int],
-    l1_memory_limit: int = L1_MEMORY_LIMIT_BYTES,
+    l1_memory_limit: Optional[int] = None,
     l3_memory_limit: int = L3_MEMORY_LIMIT_BYTES,
 ) -> Iterable[dict]:
+    if l1_memory_limit is None:
+        l1_memory_limit = default_l1_memory_limit(hwcfg)
     for row in rows:
         params = {field: row[field] for field in PARAM_FIELDS}
         params.update(overrides)
@@ -282,14 +262,20 @@ def iter_workloads(
     hwcfg: dict,
     *,
     suites: Optional[Sequence[str]] = None,
-    l1_memory_limit: int = L1_MEMORY_LIMIT_BYTES,
+    l1_memory_limit: Optional[int] = None,
     l3_memory_limit: int = L3_MEMORY_LIMIT_BYTES,
+    num_clusters: int = 1,
 ) -> Iterator[dict]:
+    if l1_memory_limit is None:
+        l1_memory_limit = default_l1_memory_limit(hwcfg)
     seen = set()
     # Default: sweep every precision in the contract (co-design needs them all).
     suite_names = list(suites) if suites is not None else list(GEMM_PRECISIONS)
     for name in suite_names:
         for row in generate_precision_suite(hwcfg, name, l1_memory_limit, l3_memory_limit):
+            # This workload runs its GEMM on cluster 0. The platform and runtime
+            # still need the actual total cluster count, including idle peers.
+            row["num_clusters"] = num_clusters
             key = tuple(row[field] for field in PARAM_FIELDS)
             if key in seen:
                 continue
@@ -305,6 +291,7 @@ def sample_workloads(
     l3_memory_limit: int,
     max_cases: int,
     seed: int,
+    num_clusters: int = 1,
 ) -> tuple[List[dict], int]:
     rng = random.Random(seed)
     sample: List[dict] = []
@@ -315,6 +302,7 @@ def sample_workloads(
         suites=suites,
         l1_memory_limit=l1_memory_limit,
         l3_memory_limit=l3_memory_limit,
+        num_clusters=num_clusters,
     ):
         total += 1
         if len(sample) < max_cases:
@@ -344,12 +332,17 @@ def write_csv(rows: Iterable[dict], output: Path) -> int:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("-o", "--output", type=Path, default=DEFAULT_CSV)
-    parser.add_argument("--l1-memory-limit", type=int, default=L1_MEMORY_LIMIT_BYTES)
+    parser.add_argument("--cfg", type=Path, default=DEFAULT_CFG,
+                        help="SoC config (default: active target/rtl/cfg/lru.hjson)")
+    parser.add_argument("--hwcfg", type=Path,
+                        help="Explicit cluster config; must match the SoC selection")
+    parser.add_argument("--l1-memory-limit", type=int,
+                        help="Operand budget in bytes (default: 80%% of selected TCDM)")
     parser.add_argument("--l3-memory-limit", type=int, default=L3_MEMORY_LIMIT_BYTES)
     parser.add_argument(
         "--max-cases",
         type=int,
-        default=1,
+        default=16,
         help="Randomly sample at most this many rows. Zero means no cap.",
     )
     parser.add_argument("--seed", type=int, default=1)
@@ -365,16 +358,24 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    hwcfg_path = find_default_hwcfg()
-    hwcfg = load_hwcfg(hwcfg_path)
+    config = resolve_sweep_config(args.cfg, args.hwcfg)
+    hwcfg = config.hwcfg
+    l1_memory_limit = (args.l1_memory_limit if args.l1_memory_limit is not None
+                       else default_l1_memory_limit(hwcfg))
+    if l1_memory_limit <= 0 or args.l3_memory_limit <= 0 or args.max_cases < 0:
+        raise ValueError("Memory limits must be positive and --max-cases nonnegative")
+    print(f"SoC config: {config.cfg_path}")
+    print(f"Cluster config: {config.hwcfg_path}")
+    print(f"Clusters: {config.num_clusters}; L1 operand budget: {l1_memory_limit} bytes")
     if args.max_cases:
         rows, total = sample_workloads(
             hwcfg,
             suites=args.suites,
-            l1_memory_limit=args.l1_memory_limit,
+            l1_memory_limit=l1_memory_limit,
             l3_memory_limit=args.l3_memory_limit,
             max_cases=args.max_cases,
             seed=args.seed,
+            num_clusters=config.num_clusters,
         )
         count = write_csv(rows, args.output)
         print(f"Randomly sampled {count} of {total} test cases to {args.output}")
@@ -383,12 +384,14 @@ def main() -> None:
             iter_workloads(
                 hwcfg,
                 suites=args.suites,
-                l1_memory_limit=args.l1_memory_limit,
+                l1_memory_limit=l1_memory_limit,
                 l3_memory_limit=args.l3_memory_limit,
+                num_clusters=config.num_clusters,
             ),
             args.output,
         )
         print(f"Wrote {count} test cases to {args.output}")
+    write_metadata(args.output, config, l1_memory_limit, args.l3_memory_limit)
 
 
 if __name__ == "__main__":

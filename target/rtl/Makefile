@@ -63,6 +63,10 @@ endif
 #######################
 CFG		     ?= $(ROOT)/target/rtl/cfg/lru.hjson
 
+include $(ROOT)/util/cluster_cfg.mk
+CLUSTER_CFG_STAMP_HWCFG :=
+.SECONDEXPANSION:
+
 .PHONY: all clean
 all: rtl
 
@@ -93,7 +97,7 @@ clean-rtl-src:
 # Make the snax gen as a seperate target
 snax-cluster: .snax_cluster_occamygen_targets_group
 
-.snax_cluster_occamygen_targets_group: $(CFG)
+.snax_cluster_occamygen_targets_group: $$(CLUSTER_CFG_INPUTS) $(abspath Makefile) $(OCCAMYGEN) $(ROOT)/util/occamygen/occamy.py
 	@echo "[OCCAMYGEN] START Generate SNAX CLUSTERS"
 
 	$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_SRC_DIR)\
@@ -154,7 +158,7 @@ clean-soc:
 	rm -rf $(HEMAIA_MEM_SYS_DIR)/hemaia_mem_chip_xdma.sv
 
 $(MISC_OCCAMYGEN_TARGETS): .misc_occamygen_targets_group
-.misc_occamygen_targets_group: $(CFG) $(MISC_OCCAMYGEN_SV_TEMPLATES)
+.misc_occamygen_targets_group: $$(CLUSTER_CFG_INPUTS) $(MISC_OCCAMYGEN_SV_TEMPLATES)
 	@echo "[OCCAMYGEN] Generate $(MISC_OCCAMYGEN_TARGETS)"
 
 	$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_SRC_DIR)\
@@ -326,5 +330,5 @@ clean-clint:
 	@$(REGGEN) -r -t $(TARGET_CLINT_DIR) $<
 	@touch $@
 
-src/bender_targets.tmp: $(CFG) # Generate bender_targets.tmp file
-	echo $(shell $(HEMAIA_UTIL) --cfg_path $(CFG) --get_bender_targets) > src/bender_targets.tmp
+src/bender_targets.tmp: $$(CLUSTER_CFG_INPUTS) # Generate bender_targets.tmp file
+	$(HEMAIA_UTIL) --cfg_path $(CFG) --get_bender_targets > $@

@@ -16,7 +16,6 @@ from typing import Dict, Iterator, Optional
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parents[4]
 
-CFG_NAME = "hemaia_tapeout_1c.hjson"
 SIM_CFG_NAME = "sim_rtl.hjson"
 # The vendor PLL: gates the private clk/rst controller *and* ``use_vendor_pll``
 # in the RTL cfg. Keep it in step with SIM_CFG_NAME (sim_rtl_with_pll.hjson).
@@ -51,6 +50,9 @@ HOST_CHECK_PASS_RE = re.compile(r"\[Host\]\s+Check\s+\[[^\]]+\]:\s+PASS\s+\(\d+ 
 sys.path.insert(0, str(REPO_ROOT / "util" / "automation_scripts"))
 sys.path.insert(0, str(SCRIPT_DIR))
 from versacore_params import PARAM_FIELDS  # noqa: E402
+from sweep_config import (  # noqa: E402
+    SweepConfig, config_for_csv, fingerprint, resolve_sweep_config, snapshot_cfg,
+)
 
 RESULT_FIELDS = [
     "test_name",
@@ -96,7 +98,7 @@ def log_name(index: int, test_name: str) -> str:
     return f"{index:05d}_{safe_name or 'test'}.log"
 
 
-def cfg_override() -> str:
+def cfg_override(cfg_path: Path) -> str:
     """The RTL cfg to hand to ``CFG_OVERRIDE``, with the PLL flag reconciled.
 
     Resolved on every call rather than cached: ``first_run_setup()`` runs
@@ -104,7 +106,7 @@ def cfg_override() -> str:
     """
     from hemaia_sim_runner import resolve_rtl_cfg
 
-    return resolve_rtl_cfg(REPO_ROOT, f"target/rtl/cfg/{CFG_NAME}", with_pll=WITH_PLL)
+    return resolve_rtl_cfg(REPO_ROOT, str(cfg_path), with_pll=WITH_PLL)
 
 
 def sim_cfg_path() -> Path:
@@ -127,7 +129,7 @@ def vcs_run_args() -> list[str]:
     return list(ENGINES["vcs"].get("run_args", []))
 
 
-def first_run_setup() -> None:
+def first_run_setup(cfg_path: Path, expected_config: SweepConfig) -> None:
     from hemaia_sim_runner import (
         DEFAULT_DOCKER_IMAGE,
         run_host_script,
@@ -153,24 +155,39 @@ def first_run_setup() -> None:
         ["--macro=1", "--d2d=1", f"--pll={1 if WITH_PLL else 0}"],
     )
 
+    # Cleanup replaces dependency checkouts. Check their selected cluster again
+    # before a refreshed checkout can supply different geometry to the build.
+    # Resolve inside the build image as well: the EDA host may only have the
+    # deps symlink fallback, which the initial clean removed.
+    run_in_container(
+        REPO_ROOT, DEFAULT_DOCKER_IMAGE, REPO_ROOT,
+        ["bender", "path", "snitch_cluster"],
+    )
+    refreshed = resolve_sweep_config(cfg_path)
+    if fingerprint(refreshed.hwcfg) != fingerprint(expected_config.hwcfg):
+        raise ValueError(
+            "The selected cluster configuration changed during checkout setup. "
+            "Regenerate the workload CSV for the refreshed checkout."
+        )
+
     print("[Step 2] Rebuilding SW/bootrom/RTL and preparing VCS inputs")
     run_in_container(
         REPO_ROOT,
         DEFAULT_DOCKER_IMAGE,
         REPO_ROOT,
-        ["make", "sw", f"CFG_OVERRIDE={cfg_override()}"],
+        ["make", "sw", f"CFG_OVERRIDE={cfg_override(cfg_path)}"],
     )
     run_in_container(
         REPO_ROOT,
         DEFAULT_DOCKER_IMAGE,
         REPO_ROOT,
-        ["make", "bootrom", f"CFG_OVERRIDE={cfg_override()}"],
+        ["make", "bootrom", f"CFG_OVERRIDE={cfg_override(cfg_path)}"],
     )
     run_in_container(
         REPO_ROOT,
         DEFAULT_DOCKER_IMAGE,
         REPO_ROOT,
-        ["make", "rtl", f"CFG_OVERRIDE={cfg_override()}"],
+        ["make", "rtl", f"CFG_OVERRIDE={cfg_override(cfg_path)}"],
     )
     run_in_container(
         REPO_ROOT,
@@ -187,7 +204,7 @@ def first_run_setup() -> None:
     )
 
 
-def rebuild_sw() -> None:
+def rebuild_sw(cfg_path: Path) -> None:
     from hemaia_sim_runner import DEFAULT_DOCKER_IMAGE, run_in_container
 
     print("[Per-test] Rebuilding SW")
@@ -204,7 +221,7 @@ def rebuild_sw() -> None:
         [
             "make",
             "apps",
-            f"CFG_OVERRIDE={cfg_override()}",
+            f"CFG_OVERRIDE={cfg_override(cfg_path)}",
             f"HOST_APP_TYPE={HOST_APP_TYPE}",
             f"CHIP_TYPE={CHIP_TYPE}",
             f"WORKLOAD={WORKLOAD_NAME}",
@@ -231,6 +248,7 @@ def run_one_case(
     params: Dict[str, int],
     *,
     log_path: Path,
+    cfg_path: Path,
     timeout: Optional[float] = None,
 ) -> tuple[str, int, bool, float]:
     start = time.monotonic()
@@ -249,7 +267,7 @@ def run_one_case(
             write_params_hjson(params)
 
             log_print("[Per-test] Rebuilding SW")
-            rebuild_sw()
+            rebuild_sw(cfg_path)
 
             log_print("[Per-test] Making sure VCS simulation binary exists")
             subprocess.run(
@@ -323,12 +341,34 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--log-dir", type=Path, default=DEFAULT_LOG_DIR)
     parser.add_argument("--timeout", type=float, default=None)
     parser.add_argument("--stop-on-fail", action="store_true")
+    parser.add_argument("--cfg", type=Path,
+                        help="SoC config (default: the workload CSV's recorded config)")
+    parser.add_argument("--hwcfg", type=Path,
+                        help="Explicit cluster config; must match the SoC and CSV metadata")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Validate configuration and CSV rows without builds or simulation")
     return parser.parse_args()
 
 
-def main() -> None:
-    args = parse_args()
-    first_run_setup()
+def validate_workload_csv(path: Path, config: SweepConfig) -> int:
+    count = 0
+    for count, row in enumerate(iter_workload_csv(path), start=1):
+        params = row_to_params(row)
+        missing = set(PARAM_FIELDS) - params.keys()
+        if missing:
+            raise ValueError(f"{path}: row {count} is missing {sorted(missing)}")
+        if params["num_clusters"] != config.num_clusters:
+            raise ValueError(
+                f"{path}: row {count} has num_clusters={params['num_clusters']}, "
+                f"but {config.cfg_path} selects {config.num_clusters}. "
+                "Regenerate the CSV for the selected SoC config."
+            )
+    if not count:
+        raise ValueError(f"{path}: workload CSV has no cases")
+    return count
+
+
+def run_cases(args: argparse.Namespace, cfg_path: Path) -> None:
     args.results_csv.parent.mkdir(parents=True, exist_ok=True)
     failed = 0
     total = 0
@@ -347,6 +387,7 @@ def main() -> None:
             status, returncode, timed_out, elapsed_seconds = run_one_case(
                 params,
                 log_path=log_path,
+                cfg_path=cfg_path,
                 timeout=args.timeout,
             )
             if status != "PASS":
@@ -370,6 +411,23 @@ def main() -> None:
     print(f"Wrote {total} result rows to {args.results_csv} ({failed} failed)")
     if failed:
         sys.exit(1)
+
+
+def main() -> None:
+    args = parse_args()
+    config = config_for_csv(args.workload_csv, args.cfg, args.hwcfg)
+    count = validate_workload_csv(args.workload_csv, config)
+    print(f"SoC config: {config.cfg_path}")
+    print(f"Cluster config: {config.hwcfg_path}")
+    print(f"Validated {count} cases for {config.num_clusters} clusters "
+          "(GEMM executes on cluster 0)")
+    if args.dry_run:
+        return
+    # make clean removes lru.hjson. A snapshot in the cfg directory survives it
+    # and remains the source for every subsequent CFG_OVERRIDE in this run.
+    with snapshot_cfg(config) as cfg_path:
+        first_run_setup(cfg_path, config)
+        run_cases(args, cfg_path)
 
 
 if __name__ == "__main__":

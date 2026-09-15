@@ -21,12 +21,17 @@ BENDER       = bender
 SNITCH_ROOT  = $(shell $(BENDER) path snitch_cluster)
 PLATFORM_H = $(MK_DIR)/../../../../../../../../target/sw/shared/platform/generated/occamy.h
 
-$(DATA_H) $(OFFLOAD_H) $(CONFIGS_JSON): $(MK_DIR)/main_bingo.py $(DATA_CFG) $(PLATFORM_H)
+# Resolve hardware geometry from the active SoC configuration.
+CLUSTER_CFG_CONSUMER := $(abspath $(lastword $(MAKEFILE_LIST)))
+include $(abspath $(dir $(CLUSTER_CFG_CONSUMER))/../../../../../../../../util/cluster_cfg.mk)
+.SECONDEXPANSION:
+
+$(DATA_H) $(OFFLOAD_H) $(CONFIGS_JSON) &: $(MK_DIR)/main_bingo.py $(DATA_CFG) $(PLATFORM_H) $(CLUSTER_CFG_CONSUMER) $$(CLUSTER_CFG_DEPS)
 	python3 $(MK_DIR)/main_bingo.py \
 		--output_dir $(MK_DIR) \
 		--data_h $(DATA_H) \
 		-c $(DATA_CFG) \
-		--hwcfg $(SNITCH_ROOT)/target/snitch_cluster/cfg/snax_versacore_to_cluster.hjson \
+		--hwcfg $(GEMM_HWCFG) \
 		--platformcfg $(PLATFORM_H) \
 		--configs_out $(CONFIGS_JSON)
 
@@ -40,7 +45,7 @@ PARTIAL_OUTPUTS += $(OFFLOAD_H)
 .PHONY: clean-data clean-offload clean
 
 clean-data:
-	rm -f $(DATA_H) $(CONFIGS_JSON)
+	rm -f $(DATA_H) $(CONFIGS_JSON) $(CLUSTER_CFG_STAMP)
 
 clean-offload:
 	rm -rf $(OFFLOAD_H)

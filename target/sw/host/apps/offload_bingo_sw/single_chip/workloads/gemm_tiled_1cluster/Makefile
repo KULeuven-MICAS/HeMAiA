@@ -23,13 +23,18 @@ DATA_H = $(MK_DIR)/gemm_data.h
 BENDER   = bender
 SNITCH_ROOT = $(shell $(BENDER) path snitch_cluster)
 
-$(DATA_H): $(MK_DIR)/gemm_datagen.py $(DATA_CFG) 
-	$< -c $(DATA_CFG) --hwcfg $(SNITCH_ROOT)/target/snitch_cluster/cfg/snax_versacore_to_cluster.hjson > $@
+# Resolve hardware geometry from the active SoC configuration.
+CLUSTER_CFG_CONSUMER := $(abspath $(lastword $(MAKEFILE_LIST)))
+include $(abspath $(dir $(CLUSTER_CFG_CONSUMER))/../../../../../../../../util/cluster_cfg.mk)
+.SECONDEXPANSION:
+
+$(DATA_H): $(MK_DIR)/gemm_datagen.py $(DATA_CFG) $(CLUSTER_CFG_CONSUMER) $$(CLUSTER_CFG_DEPS)
+	$< -c $(DATA_CFG) --hwcfg $(GEMM_HWCFG) > $@
 
 # Offload
 GEN_WORKLOAD = $(MK_DIR)/offload_bingo_sw.h
-$(GEN_WORKLOAD): $(MK_DIR)/tiled_gemm_workload_gen.py $(DATA_CFG) 
-	$< -c $(DATA_CFG) --hwcfg $(SNITCH_ROOT)/target/snitch_cluster/cfg/snax_versacore_to_cluster.hjson > $@
+$(GEN_WORKLOAD): $(MK_DIR)/tiled_gemm_workload_gen.py $(DATA_CFG) $(CLUSTER_CFG_CONSUMER) $$(CLUSTER_CFG_DEPS)
+	$< -c $(DATA_CFG) --hwcfg $(GEMM_HWCFG) > $@
 	
 ###############
 # Build settings
@@ -43,7 +48,7 @@ PARTIAL_OUTPUTS += $(GEN_WORKLOAD)
 .PHONY: clean-data clean-offload clean
 
 clean-data:
-	rm -f $(DATA_H)
+	rm -f $(DATA_H) $(CLUSTER_CFG_STAMP)
 
 clean-offload:
 	rm -f $(GEN_WORKLOAD)

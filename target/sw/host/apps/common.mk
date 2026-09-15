@@ -19,7 +19,7 @@
 
 # Root directory (absolute path to the host directory)
 ifndef HOST_DIR
-HOST_DIR = $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
+HOST_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
 endif
 
 # There are three main stages of building a host application:
@@ -137,6 +137,11 @@ INCDIRS += $(SWDIR)/shared/vendor/bingo_alloc/bingo_alloc
 # that size GEMM buffers from bingo_gemm_shape_params[array_shape]. The
 # device-only snax_versacore_lib.h also lives here; host code should only
 # include <gemm_shapes.h>.
+ifneq ($(filter offload_bingo_hw offload_bingo_sw,$(HOST_APP_TYPE)),)
+include $(DEVICE_DIR)/runtime/snax/versacore/gemm_shapes.mk
+INCDIRS += $(abspath $(DEVICE_DIR)/runtime/generated)
+PARTIAL_OUTPUTS += $(GEMM_SHAPES) $(VALIDATE_STAMP)
+endif
 INCDIRS += $(abspath $(DEVICE_DIR)/runtime/snax/versacore)
 
 # Compiler flags
