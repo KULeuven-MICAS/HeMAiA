@@ -52,6 +52,14 @@
 !/sweep/gemm/run_gemm_sweep.py
 !/sweep/gemm/gather_gemm_luts.py
 !/sweep/gemm/task_gemm.yaml
+!/sweep/versacore/
+/sweep/versacore/*
+!/sweep/versacore/testing_workload_gen.py
+!/sweep/versacore/testing_launch.py
+!/sweep/versacore/versacore_params.py
+!/sweep/versacore/sweep_config.py
+!/sweep/versacore/test_sweep_config.py
+!/sweep/versacore/README.md
 
 !/test/
 /test/*

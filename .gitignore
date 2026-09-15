@@ -19,6 +19,9 @@ gmon.out
 build/
 .venv/
 **/*.tmp
+**/.cluster_cfg.stamp
+target/sw/device/runtime/generated/gemm_shapes.h
+target/sw/device/runtime/generated/.gemm_shapes.validate.stamp
 **/*.log
 **/*.jou
 **/*.zip

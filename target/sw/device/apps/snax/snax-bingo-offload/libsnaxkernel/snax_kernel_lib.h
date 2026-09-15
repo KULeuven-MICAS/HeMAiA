@@ -23,7 +23,8 @@
 //   offload_hw_kernels/xdma.h            — core-level xDMA kernels.
 //   offload_hw_kernels/gemm.h            — core-level GEMM kernels (hand-maintained).
 //   validate_shapes.py                   — lives at runtime/snax/versacore/;
-//                                          cross-checks gemm_shapes.h vs hwcfg.
+//                                          generates and validates the active
+//                                          runtime/generated/gemm_shapes.h.
 
 #pragma once
 
@@ -39,8 +40,7 @@
 
 //////////////////////// SYMBOL TABLE ////////////////////////
 // The host offload runtime looks up kernels by name through this table.
-// Exports must be listed in both branches so the .snax_symtab section
-// contains every kernel the device may be asked to run.
+// The .snax_symtab section contains every kernel the device may be asked to run.
 SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
      /// Cluster-level Kernels ///
      /// Used for bingo sw     ///

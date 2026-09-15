@@ -26,8 +26,13 @@ DATA_H = $(MK_DIR)/gemm_data.h
 BENDER   = bender
 SNITCH_ROOT = $(shell $(BENDER) path snitch_cluster)
 
-$(DATA_H): $(MK_DIR)/gemm_datagen.py $(DATA_CFG) 
-	$< -c $(DATA_CFG) --hwcfg $(SNITCH_ROOT)/target/snitch_cluster/cfg/snax_versacore_to_cluster.hjson > $@
+# Resolve hardware geometry from the active SoC configuration.
+CLUSTER_CFG_CONSUMER := $(abspath $(lastword $(MAKEFILE_LIST)))
+include $(abspath $(dir $(CLUSTER_CFG_CONSUMER))/../../../../../../../../util/cluster_cfg.mk)
+.SECONDEXPANSION:
+
+$(DATA_H): $(MK_DIR)/gemm_datagen.py $(DATA_CFG) $(CLUSTER_CFG_CONSUMER) $$(CLUSTER_CFG_DEPS)
+	$< -c $(DATA_CFG) --hwcfg $(GEMM_HWCFG) > $@
 
 ###############
 # Build settings
@@ -40,7 +45,7 @@ PARTIAL_OUTPUTS += $(DATA_H)
 .PHONY: clean-data clean
 
 clean-data:
-	rm -f $(DATA_H)
+	rm -f $(DATA_H) $(CLUSTER_CFG_STAMP)
 
 clean: clean-data
 

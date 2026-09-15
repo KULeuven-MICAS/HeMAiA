@@ -13,38 +13,23 @@ LIBSNAXKERNEL_DIR := $(dir $(realpath $(lastword $(MAKEFILE_LIST))))
 LIBSNAXKERNEL_CLEAN_GOAL := $(filter clean clean-%,$(MAKECMDGOALS))
 
 # ------------------------------------------------------------------------
-# GEMM shape-table validation
+# GEMM shape-table generation and validation
 # ------------------------------------------------------------------------
-# offload_hw_kernels/gemm.h and offload_sw_kernels/gemm.h are hand-maintained
-# plain C and both index bingo_gemm_shape_params[] from
-# runtime/snax/versacore/gemm_shapes.h. validate_shapes.py (lives next to
-# the header) cross-checks it against the active hwcfg and fails the build
-# on any drift. No code is generated.
-#
-# GEMM_HWCFG is lazy (`=`) so it picks up $(SNITCH_ROOT) after the outer
-# apps/common.mk has defined it (this Makefile is included first).
-GEMM_HWCFG     = $(SNITCH_ROOT)/target/snitch_cluster/cfg/snax_versacore_to_cluster.hjson
-VERSACORE_DIR := $(abspath $(LIBSNAXKERNEL_DIR)/../../../../runtime/snax/versacore)
-VALIDATE_SCRIPT := $(VERSACORE_DIR)/validate_shapes.py
-GEMM_SHAPES     := $(VERSACORE_DIR)/gemm_shapes.h
-VALIDATE_STAMP  := $(LIBSNAXKERNEL_DIR).validate.stamp
+# Both GEMM kernel families use the active table in runtime/generated. The
+# outer common.mk adds that directory before the checked-in fallback.
+include $(LIBSNAXKERNEL_DIR)/../../../../runtime/snax/versacore/gemm_shapes.mk
 
-# Use .SECONDEXPANSION so $(GEMM_HWCFG) in the prereq list is resolved in a
-# later pass — the outer apps/common.mk defines $(SNITCH_ROOT) only after
-# this Makefile is included, so the first prereq pass would see it empty.
-.SECONDEXPANSION:
-
-$(VALIDATE_STAMP): $$(GEMM_HWCFG) $(VALIDATE_SCRIPT) $(GEMM_SHAPES)
-	python3 $(VALIDATE_SCRIPT) --hwcfg $(GEMM_HWCFG) --header $(GEMM_SHAPES)
-	@touch $(VALIDATE_STAMP)
+# A build-rule edit must invalidate validation even if the selected hardware
+# file predates the existing stamp.
+$(VALIDATE_STAMP): $(LIBSNAXKERNEL_DIR)Makefile
 
 # The outer common.mk wires DATA_H as a prereq of every object file in this
 # device app. Exposing the validation stamp ensures every build first runs
 # the hwcfg vs. gemm_shapes.h cross-check before any kernel TU compiles.
-DATA_H = $(VALIDATE_STAMP)
+DATA_H = $(GEMM_SHAPES) $(VALIDATE_STAMP)
 
 .PHONY: clean-data clean
 clean-data:
-	rm -f $(VALIDATE_STAMP)
+	rm -f $(GEMM_SHAPES) $(VALIDATE_STAMP) $(LIBSNAXKERNEL_DIR).validate.stamp
 
 clean: clean-data
