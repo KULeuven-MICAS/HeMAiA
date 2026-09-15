@@ -88,14 +88,18 @@ def report(task_idx, ci_dir, cfg, verbose=True):
     ev = _events(bj)
 
     nkv = cfg["nkv"]
-    gemm_runs = _spans(ev, GEMM_TID, "GEMM_FULL_RUN")
+    qk_runs = _spans(ev, GEMM_TID, "GEMM_FA_QK_RUN")
+    pv_runs = _spans(ev, GEMM_TID, "GEMM_FA_PV_RUN")
+    gemm_runs = sorted(qk_runs + pv_runs, key=lambda e: e.get("ts", 0))
     simd_runs = _spans(ev, SIMD_TID, "SIMD_RUN")
     # Configuration is reported separately from the dispatch. The reference reads the
     # accelerator's OWN performance counter, which sees neither; the RUN span here is the
     # array time plus the few cycles of the busy handshake around it, and the CFG span is
     # the ~60 constant-address csrw that program the streamer. Quoting both is what makes
     # the RUN column comparable with the reference's gemm_cycles.
-    gemm_cfgs = _spans(ev, GEMM_TID, "GEMM_FULL_CFG")
+    gemm_cfgs = sorted(_spans(ev, GEMM_TID, "GEMM_FA_QK_CFG")
+                       + _spans(ev, GEMM_TID, "GEMM_FA_PV_CFG"),
+                       key=lambda e: e.get("ts", 0))
     simd_cfgs = _spans(ev, SIMD_TID, "SIMD_CFG")
 
     if len(gemm_runs) != 2 * nkv:
@@ -104,25 +108,16 @@ def report(task_idx, ci_dir, cfg, verbose=True):
     if len(simd_runs) != nkv:
         print(f"WARNING: {len(simd_runs)} SIMD spans, expected {nkv}.")
 
-    # QK and PV alternate on the GEMM core only after the pipeline fills; identify them by
-    # DURATION instead, which is unambiguous here -- the two dispatches retire the same
-    # number of array passes, so pairing by the node order in the graph is what the
-    # manager decides, not us. Pair by the kernel-span containment instead.
-    mgr = _spans(ev, GEMM_TID, "MGR_RUN_KERNEL")
-    qk_cc, pv_cc = [], []
-    for m in mgr:
-        t0, t1 = m.get("ts", 0), m.get("ts", 0) + m.get("dur", 0)
-        inner = [r for r in gemm_runs if t0 <= r.get("ts", 0) < t1]
-        if not inner:
-            continue
-        name = str(m.get("args", {}).get("node_name", "")) or str(m.get("name", ""))
-        (qk_cc if "QK" in name else pv_cc if "PV" in name else qk_cc).append(
-            sum(_cc(r) for r in inner))
-
-    # Fall back to strict alternation when the trace carries no node names.
-    if not pv_cc and len(gemm_runs) == 2 * nkv:
-        qk_cc = [_cc(g) for g in gemm_runs[0::2]]
-        pv_cc = [_cc(g) for g in gemm_runs[1::2]]
+    # The two matmuls carry their OWN marker ids, so this is read off the trace rather
+    # than inferred. It used to pair by alternation, which is WRONG: QK(0) and QK(1) depend
+    # only on loads and both run before the first softmax retires, so the GEMM core issues
+    # two QK back to back at the head and the sequence is not QK,PV,QK,PV. Refuse to guess
+    # if the ids are missing -- a silently mis-attributed split is worse than no split.
+    if not qk_runs or not pv_runs:
+        sys.exit("bingo_trace has no GEMM_FA_QK_RUN / GEMM_FA_PV_RUN spans: the device was "
+                 "built before the per-matmul markers existed. Rebuild the SW.")
+    qk_cc = [_cc(e) for e in qk_runs]
+    pv_cc = [_cc(e) for e in pv_runs]
 
     s1_passes = cfg["M"] * cfg["N"] * cfg["K"]
     s2_passes = cfg["S2_M"] * cfg["S2_N"] * cfg["S2_K"]

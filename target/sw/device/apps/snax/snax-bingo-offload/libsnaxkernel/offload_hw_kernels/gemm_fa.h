@@ -25,23 +25,15 @@
 // difference between a LANEWISE rowmax that means something and one that maximises over
 // a mixture of two keys and two queries.
 //
-// The second reason is the D write host. The generic path programs it through
-// set_versacore_streamer_csr(), which writes a fixed SEVEN user CSRs -- the layout of a
-// host carrying a rescale unit AND the FP16 converter. This cluster's host carries the
-// converter alone, so its window is TWO registers wide
-// (READER_WRITER_EXTENSION_1_CSR_NUM), and the five extra writes land on the streamer's
-// own registers: at base+2 that is STREAMER_START_CSR, which launches the streamer in
-// the middle of configuring it. The enable bitmask has one bit per extension in
-// declaration order, so with the converter alone it is bit 0, not bit 1. These kernels
-// therefore program the streamer directly, which is also what the reference
-// snax-flashattn.c does, and for the same reason.
+// The STREAMER is programmed through the ordinary set_versacore_streamer_csr(): what differs
+// from gemm_full is the descriptors handed to it, not the way they are written. Its
+// `csrw_ss(BASE + i, ...)` loops all have compile-time bounds, so the compiler unrolls them
+// and folds every address into an immediate -- the whole call is 47 `csrw` and no indirect
+// jump 
 //
-// COST. Every CSR address below is a compile-time constant, so each write folds through
-// the always_inline csrw_ss switch into a single `csrw <imm>`: the whole configuration is
-// ~60 cycles against a ~2048-cycle dispatch. Out of line, each access would instead pay a
-// jump-table load from L2 plus an indirect jump -- measured, on this core, to be the
-// dominant cost of accelerator configuration -- and that is why this file unrolls the
-// descriptor writes rather than looping over arrays as the generic kernel does.
+// What this file does NOT reuse is the library's wait: it polls busy immediately after START
+// and then waits for the fall unbounded. Both are wrong here, for the reasons given at the
+// launch site below.
 
 #pragma once
 
@@ -67,28 +59,21 @@
 // the port is emitting FP16 or INT32, so this does NOT follow the output width.
 #define BINGO_FA_XPORT_BITS 16u
 
+// Which of the two matmuls this dispatch is, in the trace.
+//
+// A marker's immediate has to be a compile-time constant -- it rides in an `xori x0, x0,
+// imm` -- so the identity cannot be a run-time field. Both arms below are literals and the
+// branch is on a parameter both call sites pass as a constant, so it folds away; what
+// reaches the trace is one id that says WHICH matmul ran.
+#define BINGO_FA_MARK(is_qk, id_qk, id_pv)      \
+    do {                                        \
+        if (is_qk) BINGO_TRACE_MARKER(id_qk);   \
+        else       BINGO_TRACE_MARKER(id_pv);   \
+    } while (0)
+
 // Bound on the busy poll. One dispatch here is ~2048 array cycles at Bc = 512; a limit
 // three orders of magnitude above that only fires when the engine is genuinely wedged.
 #define BINGO_GEMM_FA_SPIN_LIMIT 200000u
-
-// DEBUG KNOB. Set to 0 to make the score matmul emit INT32 instead of FP16, i.e. to run
-// the whole dispatch with the Int32ToFp16Converter DISARMED. The result is then wrong --
-// the SIMD block reads the tile as FP16 -- but it isolates one question: whether the
-// array stalls because the D writer's descriptor was halved for a converter that is not
-// actually enabled, in which case the writer expects half the beats the array produces
-// and backs up. Leave at 1.
-#define BINGO_FA_QK_EMIT_FP16 1
-
-// DEBUG KNOB. Set to 0 to drive the C/D ports with the BLOCK-MAJOR descriptors that
-// __snax_bingo_kernel_gemm_full computes -- the layout that is known to complete a
-// dispatch on this cluster -- instead of FlashAttention's interleaved one, and with the
-// converter forced off so the whole output stage matches a working configuration.
-//
-// The result is meaningless (the softmax reads a layout that is not there), but it
-// answers the one question the descriptor audit cannot: whether this kernel's MECHANICS
-// are sound and the interleaved layout is what the streamer will not do, or whether the
-// kernel differs from the working path in some other way. Leave at 1.
-#define BINGO_FA_CD_INTERLEAVED 1
 
 // ---------------------------------------------------------------------------
 // One dispatch.
@@ -116,146 +101,87 @@ static uint32_t __bingo_gemm_fa_run(uint32_t A_addr, uint32_t B_addr, uint32_t C
         return BINGO_RET_FAIL;
     }
 
-    BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_FULL_CFG_START);
+    BINGO_FA_MARK(emit_fp16, BINGO_TRACE_GEMM_FA_QK_CFG_START,
+                              BINGO_TRACE_GEMM_FA_PV_CFG_START);
 
-    // ---- A (reader 0): the LEFT operand, K tiles of meshRow x tileSize INT8 -----------
-    csrw_ss(BASE_PTR_READER_0_LOW, A_addr);
-    csrw_ss(S_STRIDE_READER_0_0, bw / 8u);
     const uint32_t a_tile = BINGO_A_ELEM_LEN * tileSize * meshRow / 8u;
-    csrw_ss(T_BOUND_READER_0_0, K);
-    csrw_ss(T_STRIDE_READER_0_0, a_tile);
-    csrw_ss(T_BOUND_READER_0_1, N);
-    csrw_ss(T_STRIDE_READER_0_1, 0);
-    csrw_ss(T_BOUND_READER_0_2, M);
-    csrw_ss(T_STRIDE_READER_0_2, K * a_tile);
-    // The reader declares six temporal dimensions; the descriptor uses three and the rest
+    const uint32_t b_tile = BINGO_B_ELEM_LEN * tileSize * meshCol / 8u;
+
+    // The C/D channels are a spatial NEST of BINGO_CD_SPATIAL_NUM dimensions, innermost
+    // bound BINGO_CD_SPATIAL_BOUND0: channel i sits at sl0*(i%B0) + sl1*((i/B0)%B1). Every
+    // number here comes from the generated gemm_shapes.h, so a reshape of the port needs no
+    // edit -- only a regenerated header. The innermost group carries one key's meshCol
+    // scores and the groups step by a WHOLE key row of Br = N*meshCol FP16, which is what
+    // interleaves the two N blocks in memory at no cost. A beat is then exactly one key,
+    // all Br queries.
+    const uint32_t key_row = N * meshCol * BINGO_FA_XPORT_BITS / 8u;   // Br FP16 = 64 B
+    const uint32_t n_step  = meshCol * BINGO_FA_XPORT_BITS / 8u;       // other N block
+    const uint32_t c_chunk = serial * N / 8u;                          // serialised chunk
+    const uint32_t blk_i32 = BINGO_C_ELEM_LEN * meshRow * meshCol / 8u;
+
+    // Arming the converter HALVES the beats the writer emits -- two INT32 beats merge into
+    // one FP16 beat -- so the D descriptor must halve with it, or the writer waits for beats
+    // that never arrive. Which parts halve is not uniform:
+    //
+    //   bound0   halves   a transaction still spans one serialised chunk, but covers twice
+    //                     the key rows
+    //   stride2  halves   an M block is meshRow key rows, and a key row is half the bytes
+    //   stride1  does NOT halve -- it is the interleave offset, laid out on the FP16 row, so
+    //                     it is the same in both modes. Halving it would drop the second N
+    //                     block on top of the first.
+    const uint32_t d_bound0 = BINGO_D32_ELEM_LEN * meshRow * meshCol / serial;
+    const uint32_t d_stride2 = N * BINGO_D32_ELEM_LEN * meshRow * meshCol / 8u;
+
+    // A's reader declares six temporal dimensions; the descriptor uses three and the rest
     // must be neutralised. A bound left at whatever the previous task wrote walks the AGU
     // over memory that is not the operand.
-    csrw_ss(T_BOUND_READER_0_3, 1);
-    csrw_ss(T_STRIDE_READER_0_3, 0);
-    csrw_ss(T_BOUND_READER_0_4, 1);
-    csrw_ss(T_STRIDE_READER_0_4, 0);
-    csrw_ss(T_BOUND_READER_0_5, 1);
-    csrw_ss(T_STRIDE_READER_0_5, 0);
-#ifdef ADDR_REMAP_INDEX_READER_0
-    csrw_ss(ADDR_REMAP_INDEX_READER_0, 0);
-#endif
-#ifdef ENABLED_CHANNEL_READER_0
-    csrw_ss(ENABLED_CHANNEL_READER_0, bingo_gemm_shape_params[0].channel_en_A[0]);
-#endif
+    uint32_t Asl[S_STRIDE_NUM_READER_0] = { bw / 8u };
+    uint32_t Atb[T_BOUND_NUM_READER_0]  = { K, N, M, 1u, 1u, 1u };
+    uint32_t Ats[T_STRIDE_NUM_READER_0] = { a_tile, 0u, K * a_tile, 0u, 0u, 0u };
+    uint32_t Bsl[S_STRIDE_NUM_READER_1] = { bw / 8u };
+    uint32_t Btb[T_BOUND_NUM_READER_1]  = { K, N, M };
+    uint32_t Bts[T_STRIDE_NUM_READER_1] = { b_tile, K * b_tile, 0u };
+    uint32_t Csl[S_STRIDE_NUM_READER_WRITER_0] = { bw / 8u, key_row };
+    uint32_t Ctb[T_BOUND_NUM_READER_WRITER_0]  = {
+        BINGO_C_ELEM_LEN * meshRow * meshCol / serial, N, M };
+    uint32_t Cts[T_STRIDE_NUM_READER_WRITER_0] = { c_chunk, n_step, N * blk_i32 };
+    uint32_t Dsl[S_STRIDE_NUM_READER_WRITER_1] = { bw / 8u, key_row };
+    uint32_t Dtb[T_BOUND_NUM_READER_WRITER_1]  = {
+        emit_fp16 ? d_bound0 / 2u : d_bound0, N, M };
+    uint32_t Dts[T_STRIDE_NUM_READER_WRITER_1] = {
+        c_chunk, n_step, emit_fp16 ? d_stride2 / 2u : d_stride2 };
+    // The D write host has no channel mask of its own -- the reader_writer declares
+    // configurable_channel [1, 0], so only the READ slot has one and the library's write of
+    // this array is compiled out.
+    uint32_t chD[1] = { 0xffffffffu };
 
-    // ---- B (reader 1): the RIGHT operand, K tiles of tileSize x meshCol INT8 ----------
-    csrw_ss(BASE_PTR_READER_1_LOW, B_addr);
-    csrw_ss(S_STRIDE_READER_1_0, bw / 8u);
-    const uint32_t b_tile = BINGO_B_ELEM_LEN * tileSize * meshCol / 8u;
-    csrw_ss(T_BOUND_READER_1_0, K);
-    csrw_ss(T_STRIDE_READER_1_0, b_tile);
-    csrw_ss(T_BOUND_READER_1_1, N);
-    csrw_ss(T_STRIDE_READER_1_1, K * b_tile);
-    csrw_ss(T_BOUND_READER_1_2, M);
-    csrw_ss(T_STRIDE_READER_1_2, 0);
-#ifdef ADDR_REMAP_INDEX_READER_1
-    csrw_ss(ADDR_REMAP_INDEX_READER_1, 0);
-#endif
-#ifdef ENABLED_CHANNEL_READER_1
-    csrw_ss(ENABLED_CHANNEL_READER_1, bingo_gemm_shape_params[0].channel_en_B[0]);
-#endif
-
-    // ---- C: the READ half of the one bidirectional port -------------------------------
-    //
-    // The channels are a spatial NEST of BINGO_CD_SPATIAL_NUM dimensions, innermost bound
-    // BINGO_CD_SPATIAL_BOUND0: channel i sits at sl0*(i%B0) + sl1*((i/B0)%B1). Every number
-    // below is derived from the generated gemm_shapes.h, so the narrowing of this port from
-    // 32 channels x 2048 b to 16 x 1024 b needed no edit here -- only a regenerated header.
-    // Four channels carry 32 B -- one key's meshCol scores -- and the eight groups step by
-    // a WHOLE key row of Br = N*meshCol FP16, which is what interleaves the two N blocks
-    // in memory at no cost. A beat is then exactly one key, all Br queries.
-#if BINGO_FA_CD_INTERLEAVED
-    const uint32_t key_row  = N * meshCol * BINGO_FA_XPORT_BITS / 8u;  // Br FP16 = 64 B
-    const uint32_t n_step   = meshCol * BINGO_FA_XPORT_BITS / 8u;      // other N block
-    const uint32_t c_chunk  = serial * N / 8u;                         // serialised chunk
-#else
-    // The block-major layout gemm_full derives: the channels lie end to end, the
-    // chunks of one block are contiguous, and the N step is a WHOLE output block.
-    const uint32_t key_row  = (bw / 8u) * BINGO_CD_SPATIAL_BOUND0;
-    const uint32_t n_step   = BINGO_C_ELEM_LEN * meshRow * meshCol / 8u;
-    const uint32_t c_chunk  = serial / 8u;
-#endif
-    const uint32_t blk_i32  = BINGO_C_ELEM_LEN * meshRow * meshCol / 8u;
-    csrw_ss(BASE_PTR_READER_WRITER_0_LOW, C_addr);
-    csrw_ss(S_STRIDE_READER_WRITER_0_0, bw / 8u);
-    csrw_ss(S_STRIDE_READER_WRITER_0_1, key_row);
-    csrw_ss(T_BOUND_READER_WRITER_0_0, BINGO_C_ELEM_LEN * meshRow * meshCol / serial);
-    csrw_ss(T_STRIDE_READER_WRITER_0_0, c_chunk);
-    csrw_ss(T_BOUND_READER_WRITER_0_1, N);
-    csrw_ss(T_STRIDE_READER_WRITER_0_1, n_step);
-    csrw_ss(T_BOUND_READER_WRITER_0_2, M);
-    csrw_ss(T_STRIDE_READER_WRITER_0_2, N * blk_i32);
-#ifdef ADDR_REMAP_INDEX_READER_WRITER_0
-    csrw_ss(ADDR_REMAP_INDEX_READER_WRITER_0, 0);
-#endif
     // C is read in FULL, never broadcast: the port is serialised (meshRow*meshCol*
-    // BINGO_C_ELEM_LEN / BINGO_SERIAL_C_D_WIDTH beats per block) and a broadcast
-    // operand cannot be spread across a serialised input.
+    // BINGO_C_ELEM_LEN / BINGO_SERIAL_C_D_WIDTH beats per block) and a broadcast operand
+    // cannot be spread across a serialised input.
     //
     // ...EXCEPT for the score matmul, whose C is a bias of zeros. That one masks every C
     // channel off instead of streaming the zeros. A disabled channel is not skipped: the
     // requestor still pops the address but suppresses tcdmReq.valid, and the responser
     // substitutes a zero beat (snax readerWriter/DataRequestor.scala, DataResponser.scala),
-    // so the array sees exactly the same C = 0 it saw before.
+    // so the array sees the same C = 0 a streamed buffer of zeros would have given it.
     //
-    // What this buys is not the 64 KiB of zeros, though it frees those too. The C READ and
-    // the D WRITE are the two halves of ONE ReaderWriter unit sharing ONE set of 8 TCDM
-    // ports, with the writer taking absolute priority (ReaderWriter.scala's `sel`). Every
-    // C beat therefore costs a port cycle that a D beat could have used, and for the score
-    // matmul all of them carried zeros.
-#ifdef ENABLED_CHANNEL_READER_WRITER_0
-    {
-        const uint32_t *c_mask = emit_fp16 ? bingo_channel_en_C_null
-                                           : bingo_gemm_shape_params[0].channel_en_C;
-        for (uint32_t i = 0; i < ENABLED_CHANNEL_READER_WRITER_0_CSR_NUM; i++)
-            csrw_ss(ENABLED_CHANNEL_READER_WRITER_0 + i, c_mask[i]);
-    }
-#endif
-
-    // ---- D32: the WRITE half of that same port ----------------------------------------
+    // What this buys is memory, not array time. A masked channel still pops its address and
+    // still emits its beat, so the serialised C port costs the same BEATS either way and the
+    // score matmul's own cycles do not move. What goes away is the 64 KiB buffer of zeros,
+    // the iDMA load that would otherwise stage it at the head of the task graph, and the
+    // TCDM bandwidth those reads took from everything else sharing the port.
     //
-    // Arming the converter HALVES the beats the writer emits -- two INT32 beats merge into
-    // one FP16 beat -- so the descriptor must halve with it, or the writer waits for beats
-    // that never arrive. Which parts halve is not uniform:
-    //
-    //   bound0   halves   a transaction still spans one serialised chunk, but covers
-    //                     twice the key rows
-    //   stride2  halves   an M block is meshRow key rows, and a key row is half the bytes
-    //   stride1  does NOT halve -- it is the interleave offset, laid out on the FP16 row,
-    //                     so it is the same in both modes. Halving it would drop the
-    //                     second N block on top of the first.
-    csrw_ss(BASE_PTR_READER_WRITER_1_LOW, D_addr);
-    csrw_ss(S_STRIDE_READER_WRITER_1_0, bw / 8u);
-    csrw_ss(S_STRIDE_READER_WRITER_1_1, key_row);
-    const uint32_t d_bound0 = BINGO_D32_ELEM_LEN * meshRow * meshCol / serial;
-    const uint32_t d_stride2 = N * BINGO_D32_ELEM_LEN * meshRow * meshCol / 8u;
-#if !BINGO_FA_CD_INTERLEAVED
-    emit_fp16 = 0u;   // block-major debug mode: match gemm_full's INT32 output stage
-#endif
-    csrw_ss(T_BOUND_READER_WRITER_1_0, emit_fp16 ? d_bound0 / 2u : d_bound0);
-    csrw_ss(T_STRIDE_READER_WRITER_1_0, c_chunk);
-    csrw_ss(T_BOUND_READER_WRITER_1_1, N);
-    csrw_ss(T_STRIDE_READER_WRITER_1_1, n_step);
-    csrw_ss(T_BOUND_READER_WRITER_1_2, M);
-    csrw_ss(T_STRIDE_READER_WRITER_1_2, emit_fp16 ? d_stride2 / 2u : d_stride2);
-#ifdef ADDR_REMAP_INDEX_READER_WRITER_1
-    csrw_ss(ADDR_REMAP_INDEX_READER_WRITER_1, 0);
-#endif
-    // The D write host has no channel mask: the reader_writer declares
-    // configurable_channel [1, 0], so only the READ slot has one.
-
-    // The converter, and ONLY the two registers this host owns. extra_loops index 0 is
-    // the 2:1 policy, which is what an INT32 -> FP16 narrow is.
-#ifdef READER_WRITER_EXTENSION_1_CSR_BASE
-    csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE, emit_fp16 ? 1u : 0u);
-    csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE + 1, 0u);
-#endif
+    // Quantisation has nowhere to go on a port carrying the converter alone, so it is off.
+    set_versacore_streamer_csr(
+        A_addr, Asl, Atb, Ats, 0, 0, (uint32_t *)bingo_gemm_shape_params[0].channel_en_A,
+        B_addr, Bsl, Btb, Bts, 0, 0, (uint32_t *)bingo_gemm_shape_params[0].channel_en_B,
+        C_addr, Csl, Ctb, Cts, 0,
+        emit_fp16 ? (uint32_t *)bingo_channel_en_C_null
+                  : (uint32_t *)bingo_gemm_shape_params[0].channel_en_C,
+        D_addr, Dsl, Dtb, Dts, 0, chD,
+        /*array_shape=*/0, /*quantization_enable=*/0,
+        /*shift_i=*/0, /*multiplier_i=*/0, /*input_zp_i=*/0, /*output_zp_i=*/0,
+        /*int32tofp16_enable=*/(int32_t)emit_fp16, /*int4_a=*/0, /*int4_b=*/0);
 
     // ---- the accelerator ---------------------------------------------------------------
     // take_in_new_c = 1: every output block starts from C, which is what makes the second
@@ -263,30 +189,30 @@ static uint32_t __bingo_gemm_fa_run(uint32_t A_addr, uint32_t B_addr, uint32_t C
     // OUTPUT_BOUND is the M*N output blocks one dispatch retires. One array shape and one
     // data type on this cluster, so both selector CSRs are 0.
     set_versacore_csr(1, K, M * N, 0, 0, 0);
-    BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_FULL_CFG_END);
+    BINGO_FA_MARK(emit_fp16, BINGO_TRACE_GEMM_FA_QK_CFG_END,
+                              BINGO_TRACE_GEMM_FA_PV_CFG_END);
 
-    BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_FULL_RUN_START);
+    BINGO_FA_MARK(emit_fp16, BINGO_TRACE_GEMM_FA_QK_RUN_START,
+                              BINGO_TRACE_GEMM_FA_PV_RUN_START);
     start_versacore_and_streamer();
 
     // CLEAR THE STREAMER'S START IMMEDIATELY, before anything else -- in particular before
-    // the rise-wait below. The reference does this in its first two instructions after
-    // launching and it is not incidental: leaving START asserted for the ~130 cycles that
-    // 64 busy reads take is long enough to matter, and an engine that re-triggers its
-    // descriptor walk under a held START desynchronises from the array, which then waits
-    // for operands that never arrive and sits BUSY for ever.
+    // the rise-wait below. An engine that re-triggers its descriptor walk under a held START
+    // desynchronises from the array, which then waits for operands that never arrive and
+    // sits BUSY for ever, and the ~130 cycles that 64 busy reads take is long enough for
+    // that to happen.
     csrw_ss(STREAMER_START_CSR, 0);
     csrw_ss(STREAMER_START_CSR, 0);
 
     // Wait for the engine to START before waiting for it to finish.
     //
-    // The library's wait polls busy immediately after the two START writes, which is safe
-    // only while those writes are SLOW: out of line each goes through the csrw_ss jump
-    // table and costs tens of cycles, just enough for busy to rise before the first poll.
-    // That is a property of how the caller was compiled, not of the hardware, and it fails
-    // silently in the direction that matters -- the wait returns at once, the caller reads
-    // a partial performance counter and then reconfigures the engine out from under a
-    // running matmul. It never shows up on short tasks; on a large tile it appears as a
-    // dispatch reporting FEWER cycles than its own arithmetic floor.
+    // Polling busy straight after the two START writes -- as the library's wait does -- is
+    // safe only while those writes are SLOW enough for busy to rise first, which is a
+    // property of how the caller was compiled, not of the hardware. With the writes folded
+    // to single instructions it fails silently in the direction that matters: the wait
+    // returns at once, the caller reads a partial performance counter and then reconfigures
+    // the engine out from under a running matmul, which shows up as a dispatch reporting
+    // FEWER cycles than its own arithmetic floor.
     //
     // Bounded, so a task that completes before we look cannot hang us: if busy never
     // rises, either it already finished (the fall-waits below exit at once, which is
@@ -298,13 +224,13 @@ static uint32_t __bingo_gemm_fa_run(uint32_t A_addr, uint32_t B_addr, uint32_t C
     // RTL simulation turns a wedged engine into a run that burns the whole wall-clock
     // budget with nothing to read afterwards; failing the node instead leaves a diagnosis.
     //
-    // The accelerator's own START is cleared AFTER the wait, not before it -- again as the
-    // reference does. Clearing it while the array is mid-dispatch is not obviously safe,
-    // and there is no reason to find out.
+    // The accelerator's own START is cleared AFTER the wait, not before it: clearing it
+    // while the array is mid-dispatch is not obviously safe.
     uint32_t spins = 0;
     while (csrr_ss(VERSACORE_BUSY) || csrr_ss(STREAMER_BUSY_CSR)) {
         if (++spins > BINGO_GEMM_FA_SPIN_LIMIT) {
-            BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_FULL_RUN_END);
+            BINGO_FA_MARK(emit_fp16, BINGO_TRACE_GEMM_FA_QK_RUN_END,
+                              BINGO_TRACE_GEMM_FA_PV_RUN_END);
             // The two busy bits say WHO is stuck; the two performance counters say
             // whether either engine ever ran at all. A streamer counter near zero means
             // the descriptors were never walked; a large one with the array still busy
@@ -322,7 +248,8 @@ static uint32_t __bingo_gemm_fa_run(uint32_t A_addr, uint32_t B_addr, uint32_t C
         }
     }
     csrw_ss(VERSACORE_START_CSR, 0);
-    BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_FULL_RUN_END);
+    BINGO_FA_MARK(emit_fp16, BINGO_TRACE_GEMM_FA_QK_RUN_END,
+                              BINGO_TRACE_GEMM_FA_PV_RUN_END);
 
     sp->return_value = D_addr;
     sp->num_return_values = M * N;
@@ -340,8 +267,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_fa_qk(void *arg) {
     bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_gemm_fa_args_t);
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
     return __bingo_gemm_fa_run(a->input_A_addr, a->input_B_addr, a->input_C_addr,
-                               a->output_D_addr, a->M, a->K, a->N,
-                               BINGO_FA_QK_EMIT_FP16, sp);
+                               a->output_D_addr, a->M, a->K, a->N, 1u, sp);
 }
 
 // O^T += V^T.P^T -- accumulated in place in INT32. The caller passes the SAME buffer as C

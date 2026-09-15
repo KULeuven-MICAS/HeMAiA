@@ -81,6 +81,16 @@
 #define BINGO_TRACE_GEMM_FULL_CFG_START    0x230
 #define BINGO_TRACE_GEMM_FULL_CFG_END      0x231
 // Minimal GEMM
+// The two FlashAttention matmuls get their OWN ids rather than sharing GEMM_FULL's. Both
+// run on the same hart and the trace records nothing but the marker id, so sharing an id
+// leaves a reader with no way to tell a score dispatch from an O dispatch except by
+// assuming they alternate -- which they do not: QK(0) and QK(1) depend only on loads and
+// both run before the first softmax retires.
+#define BINGO_TRACE_GEMM_FA_QK_CFG_START   0x232
+#define BINGO_TRACE_GEMM_FA_QK_CFG_END     0x233
+#define BINGO_TRACE_GEMM_FA_PV_CFG_START   0x234
+#define BINGO_TRACE_GEMM_FA_PV_CFG_END     0x235
+
 #define BINGO_TRACE_GEMM_MIN_CFG_START     0x240
 #define BINGO_TRACE_GEMM_MIN_CFG_END       0x241
 // SIMD
@@ -101,6 +111,11 @@
 #define BINGO_TRACE_GEMM_FULL_RUN_START   0x330
 #define BINGO_TRACE_GEMM_FULL_RUN_END     0x331
 // Minimal GEMM
+#define BINGO_TRACE_GEMM_FA_QK_RUN_START  0x332
+#define BINGO_TRACE_GEMM_FA_QK_RUN_END    0x333
+#define BINGO_TRACE_GEMM_FA_PV_RUN_START  0x334
+#define BINGO_TRACE_GEMM_FA_PV_RUN_END    0x335
+
 #define BINGO_TRACE_GEMM_MIN_RUN_START    0x340
 #define BINGO_TRACE_GEMM_MIN_RUN_END      0x341
 // SIMD (generic host RVV kernels: reduce/silu/softmax/rmsnorm/add)
