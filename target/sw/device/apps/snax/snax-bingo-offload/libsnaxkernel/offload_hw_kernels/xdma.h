@@ -26,6 +26,22 @@
 #pragma once
 
 #include "../macros.h"
+#include "snax_core_roles.h"  // snax_is_xdma_core()
+
+// WHICH HART. These kernels program the SNAX xDMA through `csrw_ss(XDMA_CFG_ADDR + n)`,
+// and XDMA_CFG_ADDR is 960 -- a CSR NUMBER, so the window is HART-LOCAL. The accelerator
+// therefore has to be driven from the hart it is attached to, which the generated role map
+// names SNAX_CORE_XDMA.
+//
+// The guards below used to say `snax_is_xdma_core()`, which was right only while one core
+// carried both. It is not the same hart on snax_split_cluster, and the two are easy to
+// confuse because the cluster hjson overloads the name: `xdma: true` on a core is the
+// DMA-ISA boolean (the classic Snitch iDMA, role "idma", hart 3), while `snax_xdma_cfg` is
+// the SNAX xDMA accelerator (role "xdma", hart 2). `snax_is_xdma_core()` finds the former.
+//
+// Hart 3 has no SNAX accelerator at all, so the CSR writes landed in a window with nothing
+// behind it -- no fault, no data moved, and a completion flag that reads back "done"
+// because it never read anything.
 
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_1d_copy(void *arg)
 {
@@ -37,7 +53,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_1d_copy(void *arg)
     // Arg3: uint32_t dst_addr_lo
     // Arg4: uint32_t size in Byte
 
-    if (snrt_is_dm_core())
+    if (snax_is_xdma_core())
     {
         BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
         uint64_t src_addr = make_u64(((uint32_t *)arg)[0], ((uint32_t *)arg)[1]);
@@ -60,7 +76,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_1d_copy(void *arg)
         sp->num_return_values = 0;
         return BINGO_RET_SUCC;
     } else{
-        printf_safe("[Cluster %d Core %d]: Error! XDMA copy should be called from a DM core!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
+        printf_safe("[Cluster %d Core %d]: Error! XDMA copy must run on the xDMA core!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
         return BINGO_RET_FAIL;
     }
 }
@@ -95,7 +111,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_6d(void *arg)
     //   [17..21] temporal_strides_dst[5]  (unused dims set to 0)
     //   [22..26] temporal_bounds_dst[5]   (unused dims set to 1)
 
-    if (snrt_is_dm_core())
+    if (snax_is_xdma_core())
     {
         BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
         uint32_t *a = (uint32_t *)arg;
@@ -277,7 +293,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_elementwise_add(void *arg)
     // The 2-operand _ab variant below is just this kernel specialized to
     // num_operands = 2 with operand_stride derived from the two addresses:
     //   add_ab(a, b, dst, n)  ==  add(a, dst, n, 2, b - a).
-    if (snrt_is_dm_core()) {
+    if (snax_is_xdma_core()) {
         BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
         uint32_t *a = (uint32_t *)arg;
         uint64_t src_base = make_u64(a[0], a[1]);
@@ -294,7 +310,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_elementwise_add(void *arg)
         sp->num_return_values = 0;
         return BINGO_RET_SUCC;
     } else {
-        printf_safe("[Cluster %d Core %d]: Error! xDMA elementwise_add should be called from a DM core!\r\n",
+        printf_safe("[Cluster %d Core %d]: Error! xDMA elementwise_add must run on the xDMA core!\r\n",
                     snrt_cluster_idx(), snrt_cluster_core_idx());
         return BINGO_RET_FAIL;
     }
@@ -315,7 +331,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_elementwise_add_ab(void *arg)
     // FORWARD, so the body bases at the LOWER address and strides up to the higher
     // (a swap; valid because add is commutative). See the StreamElementwise header
     // for the full layout contract + the HW sign-extend TODO that would drop the swap.
-    if (snrt_is_dm_core()) {
+    if (snax_is_xdma_core()) {
         BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
         uint32_t *a = (uint32_t *)arg;
         uint64_t src_a = make_u64(a[0], a[1]);
@@ -342,7 +358,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_elementwise_add_ab(void *arg)
         sp->num_return_values = 0;
         return BINGO_RET_SUCC;
     } else {
-        printf_safe("[Cluster %d Core %d]: Error! xDMA elementwise_add_ab should be called from a DM core!\r\n",
+        printf_safe("[Cluster %d Core %d]: Error! xDMA elementwise_add_ab must run on the xDMA core!\r\n",
                     snrt_cluster_idx(), snrt_cluster_core_idx());
         return BINGO_RET_FAIL;
     }
@@ -383,7 +399,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_transpose_2d(void *arg)
     //   [5]  N            (source cols)
     //   [6]  elem_bytes   (1=int8, 2=int16, 4=int32)
 
-    if (snrt_is_dm_core())
+    if (snax_is_xdma_core())
     {
         BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
         uint32_t *a = (uint32_t *)arg;
@@ -602,7 +618,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_submatrix_2d(void *arg)
     //   [9]  col_end       (exclusive)
     //   [10] elem_bytes
 
-    if (snrt_is_dm_core())
+    if (snax_is_xdma_core())
     {
         BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
         uint32_t *a = (uint32_t *)arg;
@@ -678,7 +694,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_expand_2d(void *arg)
     //   [5]  N            (row width, shared by src and dst)
     //   [6]  elem_bytes
 
-    if (snrt_is_dm_core())
+    if (snax_is_xdma_core())
     {
         BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
         uint32_t *a = (uint32_t *)arg;
@@ -743,7 +759,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_concat_2d(void *arg)
     //   [9] offset       (element offset along axis)
     //   [10] elem_bytes
 
-    if (snrt_is_dm_core())
+    if (snax_is_xdma_core())
     {
         BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
         uint32_t *a = (uint32_t *)arg;
@@ -822,7 +838,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_pad_2d(void *arg)
     //   [8] pad_left     [9] pad_right
     //   [10] elem_bytes
 
-    if (snrt_is_dm_core())
+    if (snax_is_xdma_core())
     {
         BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
         uint32_t *a = (uint32_t *)arg;
@@ -913,7 +929,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_gather_2d(void *arg)
     //   [8] index_stride  (stride between indices; 1=contiguous)
     //   [9] elem_bytes
 
-    if (snrt_is_dm_core())
+    if (snax_is_xdma_core())
     {
         BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
         uint32_t *a = (uint32_t *)arg;
@@ -1077,7 +1093,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_gather_2d(void *arg)
 static inline uint32_t __xdma_d_to_row_major_impl(void *arg, uint32_t meshRow, uint32_t meshCol, uint32_t elem_bytes)
 {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_d_to_row_major_args_t);
-    if (!snrt_is_dm_core()) {
+    if (!snax_is_xdma_core()) {
         printf_safe("[Cluster %d Core %d]: Error! d_to_row_major must be called from DM core!\r\n",
                     snrt_cluster_idx(), snrt_cluster_core_idx());
         return BINGO_RET_FAIL;
@@ -1229,7 +1245,7 @@ BINGO_DEF_XDMA_D_TO_ROW_MAJOR(e4_M16N16, 16, 16, 4)
 static inline uint32_t __xdma_row_major_to_a_impl(void *arg, uint32_t meshRow, uint32_t tileSize, uint32_t elem_bytes)
 {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_row_major_to_a_args_t);
-    if (!snrt_is_dm_core()) {
+    if (!snax_is_xdma_core()) {
         printf_safe("[Cluster %d Core %d]: Error! row_major_to_a must be called from DM core!\r\n",
                     snrt_cluster_idx(), snrt_cluster_core_idx());
         return BINGO_RET_FAIL;
@@ -1379,7 +1395,7 @@ BINGO_DEF_XDMA_ROW_MAJOR_TO_A(e4_M16K8, 16, 8, 4)
 static inline uint32_t __xdma_row_major_to_b_impl(void *arg, uint32_t tileSize, uint32_t meshCol, uint32_t elem_bytes)
 {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_row_major_to_b_args_t);
-    if (!snrt_is_dm_core()) {
+    if (!snax_is_xdma_core()) {
         printf_safe("[Cluster %d Core %d]: Error! row_major_to_b must be called from DM core!\r\n",
                     snrt_cluster_idx(), snrt_cluster_core_idx());
         return BINGO_RET_FAIL;
@@ -1517,7 +1533,7 @@ BINGO_DEF_XDMA_ROW_MAJOR_TO_B(e4_K8N16, 8, 16, 4)
 static inline uint32_t __xdma_a_to_row_major_impl(void *arg, uint32_t meshRow, uint32_t tileSize, uint32_t elem_bytes)
 {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_a_to_row_major_args_t);
-    if (!snrt_is_dm_core()) {
+    if (!snax_is_xdma_core()) {
         printf_safe("[Cluster %d Core %d]: Error! a_to_row_major must be called from DM core!\r\n",
                     snrt_cluster_idx(), snrt_cluster_core_idx());
         return BINGO_RET_FAIL;
@@ -1661,7 +1677,7 @@ BINGO_DEF_XDMA_A_TO_ROW_MAJOR(e4_M16K8, 16, 8, 4)
 static inline uint32_t __xdma_b_to_row_major_impl(void *arg, uint32_t tileSize, uint32_t meshCol, uint32_t elem_bytes)
 {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_b_to_row_major_args_t);
-    if (!snrt_is_dm_core()) {
+    if (!snax_is_xdma_core()) {
         printf_safe("[Cluster %d Core %d]: Error! b_to_row_major must be called from DM core!\r\n",
                     snrt_cluster_idx(), snrt_cluster_core_idx());
         return BINGO_RET_FAIL;
@@ -1799,7 +1815,7 @@ BINGO_DEF_XDMA_B_TO_ROW_MAJOR(e4_K8N16, 8, 16, 4)
 static inline uint32_t __xdma_row_major_to_d_impl(void *arg, uint32_t meshRow, uint32_t meshCol, uint32_t elem_bytes)
 {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_row_major_to_d_args_t);
-    if (!snrt_is_dm_core()) {
+    if (!snax_is_xdma_core()) {
         printf_safe("[Cluster %d Core %d]: Error! row_major_to_d must be called from DM core!\r\n",
                     snrt_cluster_idx(), snrt_cluster_core_idx());
         return BINGO_RET_FAIL;

@@ -255,9 +255,28 @@ def build(dfg, h, m, rowsum):
     g = G(dfg)
 
     # ---- L1 ---------------------------------------------------------------------------
-    k8 = g.l1("fa_k8", M * K * MESH_ROW * TILE_SIZE)            # A of the score matmul
+    # Allocated FIRST, before the score buffers, and that order is load-bearing: the negate
+    # task writes -m_new to rmax (here) and to the one-beat prefix of the live score buffer
+    # (below) as a single two-beat shape, and a shape stride is unsigned. Arena first keeps
+    # it positive.
+    arena = g.l1("fa_arena", SnaxBingoKernelSimdFaSoftmaxArgs.arena_bytes(BC, DHEAD))
+
+    # K and V are DOUBLE BUFFERED because they STREAM: one pair per KV tile, refilled from
+    # main memory while the previous tile computes. The workload used to load them once and
+    # replay the same bytes for every tile, which left the iDMA idle for ~28,000 of 34,579
+    # cycles and made the utilisation figure exclude memory traffic entirely. The bytes are
+    # still the same bytes -- the golden is unchanged, and m stops moving after tile 0 as
+    # before -- but the TRAFFIC is now what a real KV stream would cost.
+    # THREE K buffers, two V. Not for capacity -- for how far ahead the iDMA may run. The
+    # trace says all eight QK dispatches are gated by their own K load, arriving only
+    # 300-950 cc before the dispatch that needs it, and every SM is then gated by its QK.
+    # The iDMA is the LEAST loaded engine at 56%, but it cannot spend that idle: with two
+    # buffers `ld_k[j]` may not start until `qk[j-2]` retires, so it delivers just too late.
+    # A third buffer moves the edge to `qk[j-3]` and lets the load start a whole tile
+    # earlier. K gets it and V does not: K is what QK waits on, and L1 has room for one.
+    k8 = [g.l1(f"fa_k8_{i}", M * K * MESH_ROW * TILE_SIZE) for i in range(3)]
     q8 = g.l1("fa_q8", N * K * MESH_COL * TILE_SIZE)            # B of the score matmul
-    v8 = g.l1("fa_v8", S2_M * S2_K * MESH_ROW * TILE_SIZE)      # A of the O matmul
+    v8 = [g.l1(f"fa_v8_{i}", S2_M * S2_K * MESH_ROW * TILE_SIZE) for i in range(2)]
     # The score matmul masks every C channel off (see gemm_fa.h), so nothing is ever
     # READ through this pointer -- the AGU walks addresses that are never dereferenced.
     # It exists only because the descriptor needs a base pointer. One block, not M*N.
@@ -268,10 +287,16 @@ def build(dfg, h, m, rowsum):
     # QK3. It still loses, by 1,226 cc with three P buffers and 1,824 with two, because the
     # extra QK then streams A, B and D through TCDM alongside the softmax -- and the softmax
     # is the critical path. Slack bought for the GEMM is paid for in SIMD bandwidth.
-    s16 = [g.l1(f"fa_s16_{i}", BC * BR * 2) for i in range(2)]  # score tile, fp16
+    # ONE BEAT OF HEADROOM in front of each score buffer. The softmax's fused exp pass reads
+    # [-m_new][the tile] as a single contiguous stream; that is why task 1 used to copy the
+    # whole 512-beat tile into the arena, next to a -m_new slot. Reserving the beat here
+    # instead lets the pass read the GEMM's own output buffer and deletes the copy -- 65,536
+    # B per tile of TCDM traffic, against the 131,072 B the K/V stream genuinely needs. The
+    # GEMM writes its D at +64; the beat below it is the prefix.
+    s16 = [g.l1(f"fa_s16_{i}", 64 + BC * BR * 2) for i in range(2)]  # score tile, fp16
     p8 = [g.l1(f"fa_p8_{i}", BC * BR) for i in range(2)]        # quantised P
     oacc = g.l1("fa_oacc32", BR * DHEAD * 4)                    # O, INT32, accumulated
-    arena = g.l1("fa_arena", SnaxBingoKernelSimdFaSoftmaxArgs.arena_bytes(BC, DHEAD))
+
 
     def load(tag, key, dst, nbytes, after=None):
         return g.node(f"Load_{tag}", DMA_CORE, "__snax_bingo_kernel_idma_1d_copy",
@@ -285,14 +310,13 @@ def build(dfg, h, m, rowsum):
     # PV's, and PV cannot run until SM(0) is done anyway -- so they belong AFTER the
     # loads QK needs, where they stream underneath QK(0) and SM(0) instead of delaying
     # the first matmul by their own duration.
-    ld_k = load("K", "a", k8, M * K * MESH_ROW * TILE_SIZE)
-    ld_q = load("Q", "b", q8, N * K * MESH_COL * TILE_SIZE, ld_k)
+    # Q is the query tile: fixed for the whole run, loaded once.
+    ld_q = load("Q", "b", q8, N * K * MESH_COL * TILE_SIZE)
     # No Czero load: with the C channels masked the score matmul never reads this buffer.
     # That removes the single largest load from the head of the chain -- 64 KiB of zeros
     # that QK(0) used to wait behind.
     # O starts at zero: the O matmul sets take_in_new_c, so every output block starts from
     # C, and C is oacc itself. A prefix of the same zero region does it.
-    ld_v = load("V", "v", v8, S2_M * S2_K * MESH_ROW * TILE_SIZE, ld_q)
 
     # The softmax's OWN running O lives in the arena and is a different buffer from the
     # INT32 oacc32 above. simd_fa_init_state used to zero it with the SIMD core's stores:
@@ -300,7 +324,7 @@ def build(dfg, h, m, rowsum):
     # idle here, so hand it the same zero region. The device side then only has to seed
     # mrun/lrun, which is two beats.
     _lay = SnaxBingoKernelSimdFaSoftmaxArgs.layout(BC, DHEAD)
-    ld_az = load("ArenaOzero", "zero", arena.view(_lay["oacc"]), DHEAD * 64, ld_v)
+    ld_az = load("ArenaOzero", "zero", arena.view(_lay["oacc"]), DHEAD * 64, ld_q)
 
     # ---- warm the instruction cache, off the critical path ----------------------------
     # Every core's FIRST dispatch is far more expensive than its next: measured from the
@@ -334,19 +358,31 @@ def build(dfg, h, m, rowsum):
                      SnaxBingoKernelSimdFaSoftmaxArgs(wsm, wp8, war, bc=2, dhead=2,
                                                       tile_idx=0))
 
+    KBYTES = M * K * MESH_ROW * TILE_SIZE
+    VBYTES = S2_M * S2_K * MESH_ROW * TILE_SIZE
+
+    ld_k, ld_v = [], []
     qk, sm, pv = [], [], []
     for j in range(NKV):
+        # --- stream this tile's K and V ------------------------------------------------
+        # Into the buffer the dispatch TWO tiles back has finished with, so the load for
+        # tile j overlaps the compute of tile j-1. Before tile 2 there is nothing to wait
+        # for but Q.
+        ld_k.append(load(f"K{j}", "a", k8[j % 3], KBYTES,
+                         [ld_q] if j < 3 else [qk[j - 3]]))
+        ld_v.append(load(f"V{j}", "v", v8[j % 2], VBYTES,
+                         [ld_q] if j < 2 else [pv[j - 2]]))
+
         # --- QK(j): the score tile, emitted as fp16 for the SIMD block ------------------
-        deps = [ld_q] if j == 0 else []
-        if j == 1:
-            deps.append(ld_q)
+        deps = [ld_k[j]]
         if j >= 2:
             # S16[j&1] last held tile j-2, which is free once the softmax that read it is
             # done. THIS is the edge that keeps the two engines overlapped: QK(j) runs
             # while SM(j-1) is still going.
             deps.append(sm[j - 2])
         qk.append(g.node(f"QK_{j}", GEMM_CORE, "__snax_bingo_kernel_gemm_fa_qk",
-                         SnaxBingoKernelGemmFaQkArgs(k8, q8, cz, s16[j & 1], M, K, N),
+                         SnaxBingoKernelGemmFaQkArgs(k8[j % 3], q8, cz,
+                                                     s16[j & 1].view(64), M, K, N),
                          deps))
 
         # --- SM(j): the whole online softmax, one kernel, eleven SIMD tasks -------------
@@ -366,7 +402,8 @@ def build(dfg, h, m, rowsum):
             deps.append(pv[j - 2])
         sm.append(g.node(f"SM_{j}", SIMD_CORE, "__snax_bingo_kernel_simd_fa_softmax",
                          SnaxBingoKernelSimdFaSoftmaxArgs(
-                             s16[j & 1], p8[j & 1], arena, bc=BC, dhead=DHEAD,
+                             s16[j & 1].view(64), p8[j & 1], arena,
+                             bc=BC, dhead=DHEAD,
                              tile_idx=j),
                          deps))
 
@@ -374,13 +411,13 @@ def build(dfg, h, m, rowsum):
         # C and D are the SAME buffer, so the accumulation across KV tiles is the matmul's
         # own C input and costs nothing extra -- which also means the dispatches must not
         # overlap each other, hence the chain through pv[j-1].
-        deps = [sm[j]] if j == 0 else [sm[j], pv[j - 1]]
+        deps = [sm[j], ld_v[j]] if j == 0 else [sm[j], pv[j - 1], ld_v[j]]
         pv.append(g.node(f"PV_{j}", GEMM_CORE, "__snax_bingo_kernel_gemm_fa_pv",
                          # C = 0 on the FIRST KV tile: O starts at zero, so there is
                          # no bias to read and no zeros to stage. PV's D descriptor covers
                          # oacc in full (16 blocks x 8 chunks x 128 B = BR*DHEAD*4), so the
                          # buffer is written before anything reads it.
-                         SnaxBingoKernelGemmFaPvArgs(v8, p8[j & 1],
+                         SnaxBingoKernelGemmFaPvArgs(v8[j % 2], p8[j & 1],
                                                      oacc if j else 0, oacc,
                                                      S2_M, S2_K, S2_N),
                          deps))

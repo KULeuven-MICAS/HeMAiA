@@ -47,6 +47,7 @@ from gemm_multi_chiplet_datagen import emit_header_file  # noqa E402
 
 from bingo_dfg import BingoDFG
 from bingo_platform import (
+_ROLES = core_roles()
     parse_platform_cfg,
     guard_cluster_count,
     guard_chiplet_count,
@@ -242,7 +243,11 @@ def create_dfg(params, mem_handles, platform, eval_case):
         is_host_as_acc=True,
         chiplet_ids=platform["chiplet_ids"],
     )
-    dma_core_id = 1  # Core 1 for Load
+    # From the generated role map, not a constant. Core 1 was the DM core on the two-core
+    # cluster; on snax_split_cluster it is the SIMD core, and a node on the wrong hart does
+    # not fault -- it programs THAT hart's accelerator at the same CSR offsets.
+    dma_core_id = _ROLES["dm"]
+    xdma_core_id = _ROLES["xdma"]
     host_core_id = 2  # Core 2 for host-side checks
 
     chiplets = platform["chiplet_ids"]
@@ -604,7 +609,7 @@ def create_dfg(params, mem_handles, platform, eval_case):
         node_chiplet_00_load_A1 = BingoNode(
             assigned_chiplet_id=0x00,
             assigned_cluster_id=0,
-            assigned_core_id=dma_core_id,
+            assigned_core_id=xdma_core_id,
             node_name="Load_A1_Chip00",
             kernel_name="__snax_bingo_kernel_xdma_1d_copy",
             kernel_args=SnaxBingoKernelXdma1dCopyArgs(

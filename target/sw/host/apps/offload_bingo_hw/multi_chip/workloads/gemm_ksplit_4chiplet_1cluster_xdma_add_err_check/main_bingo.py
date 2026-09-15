@@ -76,6 +76,7 @@ from bingo_kernel_args import (  # noqa E402
 from bingo_mem_handle import BingoMemAlloc, BingoMemFixedAddr  # noqa E402
 from bingo_node import BingoNode  # noqa E402
 from bingo_platform import guard_chiplet_count, guard_cluster_count, parse_platform_cfg  # noqa E402
+_ROLES = core_roles()
 from ksplit_gemm_multi_chiplet_datagen import emit_header_file  # noqa E402
 
 
@@ -168,7 +169,8 @@ def main():
     combined_scale_mp_base = golden_fp32_mp_base + fp32_D_bytes
 
     GEMM_CORE = 0
-    DMA_CORE = 1
+    DMA_CORE = _ROLES["dm"]
+    XDMA_CORE = _ROLES["xdma"]
     HOST_CORE = 2
 
     active_chiplets = chiplets[:k_split]
@@ -363,7 +365,7 @@ def main():
         add = BingoNode(
             assigned_chiplet_id=reduction_chiplet,
             assigned_cluster_id=0,
-            assigned_core_id=DMA_CORE,
+            assigned_core_id=XDMA_CORE,
             node_name=f"XDMA_Add_k0_to_k{i}",
             kernel_name="__snax_bingo_kernel_xdma_elementwise_add_ab",
             kernel_args=SnaxBingoKernelXdmaElementwiseAddAbArgs(

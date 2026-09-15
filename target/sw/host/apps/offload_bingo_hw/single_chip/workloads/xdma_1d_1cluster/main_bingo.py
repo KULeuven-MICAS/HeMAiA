@@ -45,6 +45,7 @@ from bingo_kernel_args import (  # noqa E402
 # Core placement, from the generated map (snax_core_roles_defs.h).
 _ROLES = core_roles()
 DMA_CORE = _ROLES["dm"]
+XDMA_CORE = _ROLES["xdma"]
 HOST_CORE = _ROLES["host"]
 
 
@@ -92,7 +93,7 @@ def main():
         kernel_name="__snax_bingo_kernel_idma_1d_copy",
         kernel_args=SnaxBingoKernelIdma1dCopyArgs(BingoMemSymbol("input_data"), l1_src, size))
     xdma_copy = BingoNode(
-        assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=DMA_CORE,
+        assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=XDMA_CORE,
         node_name="XDMA_copy",
         kernel_name="__snax_bingo_kernel_xdma_1d_copy",
         kernel_args=SnaxBingoKernelXdma1dCopyArgs(l1_src, l1_dst, size))

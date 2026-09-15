@@ -117,6 +117,7 @@ DST_CLUSTERS = [0, 1]
 # Core placement, from the generated map (snax_core_roles_defs.h).
 _ROLES = core_roles()
 DMA_CORE = _ROLES["dm"]
+XDMA_CORE = _ROLES["xdma"]
 
 # Host kernels must sit on the chiplet-local host core, which the mini-compiler
 # fixes at cluster 0 -- even when the buffer they check lives in cluster 1's L1.
@@ -267,7 +268,7 @@ def main():
         remote_write = BingoNode(
             assigned_chiplet_id=SRC_CHIPLET,
             assigned_cluster_id=SRC_CLUSTER,
-            assigned_core_id=DMA_CORE,
+            assigned_core_id=XDMA_CORE,
             node_name=(
                 f"XDMA_Remote_Write_Chip{chip_hex(SRC_CHIPLET)}_C{SRC_CLUSTER}"
                 f"_to_Chip{h}_C{cluster}"

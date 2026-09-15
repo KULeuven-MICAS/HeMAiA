@@ -182,6 +182,7 @@ def create_dfg(params, mem_handles, platform):
     roles = core_roles(platform)
     gemm_core_id = roles["gemm"]
     dma_core_id = roles["dm"]
+xdma_core_id = roles["xdma"]
     host_core_id = roles["host"]
 
     # 1. Initialize DFG using HW params derived from occamy.h + RTL config
@@ -201,7 +202,7 @@ def create_dfg(params, mem_handles, platform):
     task_copy_A1_dev_xdma_test1 = BingoNode(
         assigned_chiplet_id=cur_chiplet_id,
         assigned_cluster_id=cur_cluster_id,
-        assigned_core_id=dma_core_id,
+        assigned_core_id=xdma_core_id,
         kernel_name="__snax_bingo_kernel_xdma_1d_copy",
         kernel_args=SnaxBingoKernelXdma1dCopyArgs(
             src_addr=mem_handles['A1_data_L3_symbol'],

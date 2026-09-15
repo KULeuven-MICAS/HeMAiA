@@ -102,6 +102,7 @@ DST_CHIPLET = 0x01
 # Core placement, from the generated map (snax_core_roles_defs.h).
 _ROLES = core_roles()
 DMA_CORE = _ROLES["dm"]
+XDMA_CORE = _ROLES["xdma"]
 
 LOW_40_BIT_ADDR_MASK = "0x000000ffffffffffULL"
 
@@ -237,7 +238,7 @@ def main():
     remote_write = BingoNode(
         assigned_chiplet_id=SRC_CHIPLET,
         assigned_cluster_id=0,
-        assigned_core_id=DMA_CORE,
+        assigned_core_id=XDMA_CORE,
         node_name=(
             f"XDMA_Remote_Write_Chip{chip_hex(SRC_CHIPLET)}"
             f"_to_Chip{chip_hex(DST_CHIPLET)}"

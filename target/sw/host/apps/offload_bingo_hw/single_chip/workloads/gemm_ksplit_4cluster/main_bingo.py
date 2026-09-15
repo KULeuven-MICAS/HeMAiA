@@ -65,6 +65,7 @@ from ksplit_gemm_datagen import emit_header_file  # noqa E402
 from bingo_dfg import BingoDFG  # noqa E402
 from bingo_helpers import chiplet_addr_transform_loc  # noqa E402
 from bingo_platform import guard_cluster_count, parse_platform_cfg  # noqa E402
+_ROLES = core_roles()
 from bingo_node import BingoNode  # noqa E402
 from bingo_mem_handle import BingoMemAlloc, BingoMemFixedAddr  # noqa E402
 from bingo_kernel_args import (  # noqa E402
@@ -166,9 +167,14 @@ def main():
     combined_scale_mp_base = golden_fp32_mp_base + fp32_D_bytes
 
     # Core IDs
-    GEMM_CORE = 0
-    DMA_CORE = 1
-    HOST_CORE = 2
+    # From the generated role map, not constants. These were right on the two-core cluster;
+    # on snax_split_cluster they name the wrong harts -- 1 is the SIMD core and 2 is the
+    # xDMA core, so DMA_CORE=1 put every load on the SIMD hart and HOST_CORE=2 put host
+    # work on the xDMA hart. Neither faults: a node on the wrong hart programs THAT hart's
+    # accelerator at the same CSR offsets and reports success.
+    GEMM_CORE = _ROLES["gemm"]
+    DMA_CORE = _ROLES["dm"]
+    HOST_CORE = _ROLES["host"]
 
     # ── Memory handles ──────────────────────────────────────────────
 

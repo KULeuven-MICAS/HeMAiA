@@ -93,6 +93,7 @@ CLUSTER_IDS = [0, 1]
 _ROLES = core_roles()
 GEMM_CORE = _ROLES["gemm"]
 DMA_CORE = _ROLES["dm"]
+XDMA_CORE = _ROLES["xdma"]
 
 XDMA_WIDTH_BYTES = 64
 MEMPOOL_LOC_X = 2
@@ -406,7 +407,7 @@ def make_remote_partial_copy_node(dfg, mem, params, chiplet, cluster_id, idx):
         BingoNode(
             assigned_chiplet_id=0x00,
             assigned_cluster_id=0,
-            assigned_core_id=DMA_CORE,
+            assigned_core_id=XDMA_CORE,
             node_name=f"Pull_D_k{idx}_Chip{h}_C{cluster_id}_to_Chip00_C0_TCDM",
             kernel_name="__snax_bingo_kernel_xdma_1d_copy",
             kernel_args=SnaxBingoKernelXdma1dCopyArgs(

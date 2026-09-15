@@ -97,6 +97,7 @@ from bingo_kernel_args import (  # noqa E402
 # Core placement, from the generated map (snax_core_roles_defs.h).
 _ROLES = core_roles()
 DMA_CORE = _ROLES["dm"]
+XDMA_CORE = _ROLES["xdma"]
 HOST_CORE = _ROLES["host"]
 
 
@@ -295,7 +296,7 @@ def main():
     # ── 1. COPY ──────────────────────────────────────────────────
     l1_copy_dst = BingoMemAlloc("l1_copy_dst", size=data_size, mem_level="L1", chip_id=0, cluster_id=0)
     xdma_copy = BingoNode(
-        assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=DMA_CORE,
+        assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=XDMA_CORE,
         node_name="XDMA_copy",
         kernel_name="__snax_bingo_kernel_xdma_1d_copy",
         kernel_args=SnaxBingoKernelXdma1dCopyArgs(l1_input, l1_copy_dst, data_size))
@@ -307,7 +308,7 @@ def main():
     # ── 2. GENERIC 6D ────────────────────────────────────────────
     l1_6d_dst = BingoMemAlloc("l1_6d_dst", size=data_size, mem_level="L1", chip_id=0, cluster_id=0)
     xdma_6d = BingoNode(
-        assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=DMA_CORE,
+        assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=XDMA_CORE,
         node_name="XDMA_6d",
         kernel_name="__snax_bingo_kernel_xdma_6d",
         kernel_args=SnaxBingoKernelXdma6dArgs(
@@ -327,7 +328,7 @@ def main():
     # HW path constraints: rows % 8 == 0, cols * elem_bytes % 8 == 0.
     l1_trans_dst = BingoMemAlloc("l1_trans_dst", size=data_size, mem_level="L1", chip_id=0, cluster_id=0)
     xdma_transpose = BingoNode(
-        assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=DMA_CORE,
+        assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=XDMA_CORE,
         node_name="XDMA_transpose",
         kernel_name="__snax_bingo_kernel_xdma_transpose_2d",
         kernel_args=SnaxBingoKernelXdmaTranspose2dArgs(l1_input, l1_trans_dst, rows, cols, elem_bytes))
@@ -345,7 +346,7 @@ def main():
     sub_out_size = sub_rows * sub_cols * elem_bytes
     l1_sub_dst = BingoMemAlloc("l1_sub_dst", size=sub_out_size, mem_level="L1", chip_id=0, cluster_id=0)
     xdma_submatrix = BingoNode(
-        assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=DMA_CORE,
+        assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=XDMA_CORE,
         node_name="XDMA_submatrix",
         kernel_name="__snax_bingo_kernel_xdma_submatrix_2d",
         kernel_args=SnaxBingoKernelXdmaSubmatrix2dArgs(
@@ -360,7 +361,7 @@ def main():
     # Expand kernel reads directly from l1_input (first row), no separate copy needed.
     l1_expand_dst = BingoMemAlloc("l1_expand_dst", size=data_size, mem_level="L1", chip_id=0, cluster_id=0)
     xdma_expand = BingoNode(
-        assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=DMA_CORE,
+        assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=XDMA_CORE,
         node_name="XDMA_expand",
         kernel_name="__snax_bingo_kernel_xdma_expand_2d",
         kernel_args=SnaxBingoKernelXdmaExpand2dArgs(l1_input, l1_expand_dst, rows, cols, elem_bytes))
@@ -376,7 +377,7 @@ def main():
 
     # Concat top half (offset=0)
     xdma_concat_top = BingoNode(
-        assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=DMA_CORE,
+        assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=XDMA_CORE,
         node_name="XDMA_concat_top",
         kernel_name="__snax_bingo_kernel_xdma_concat_2d",
         kernel_args=SnaxBingoKernelXdmaConcat2dArgs(
@@ -397,7 +398,7 @@ def main():
     dfg.bingo_add_edge(xdma_concat_top, load_bottom)
 
     xdma_concat_bottom = BingoNode(
-        assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=DMA_CORE,
+        assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=XDMA_CORE,
         node_name="XDMA_concat_bottom",
         kernel_name="__snax_bingo_kernel_xdma_concat_2d",
         kernel_args=SnaxBingoKernelXdmaConcat2dArgs(
@@ -415,7 +416,7 @@ def main():
     padded_size = padded_rows * padded_cols * elem_bytes
     l1_pad_dst = BingoMemAlloc("l1_pad_dst", size=padded_size, mem_level="L1", chip_id=0, cluster_id=0)
     xdma_pad = BingoNode(
-        assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=DMA_CORE,
+        assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=XDMA_CORE,
         node_name="XDMA_pad",
         kernel_name="__snax_bingo_kernel_xdma_pad_2d",
         kernel_args=SnaxBingoKernelXdmaPad2dArgs(l1_input, l1_pad_dst, rows, cols, pt, pb, pl, pr, elem_bytes))
@@ -430,7 +431,7 @@ def main():
     g_out_size = g_count * cols * elem_bytes
     l1_gather_dst = BingoMemAlloc("l1_gather_dst", size=g_out_size, mem_level="L1", chip_id=0, cluster_id=0)
     xdma_gather = BingoNode(
-        assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=DMA_CORE,
+        assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=XDMA_CORE,
         node_name="XDMA_gather",
         kernel_name="__snax_bingo_kernel_xdma_gather_2d",
         kernel_args=SnaxBingoKernelXdmaGather2dArgs(
@@ -461,7 +462,7 @@ def main():
 
     l1_ea_out = BingoMemAlloc("l1_ea_out", size=ea_out_bytes, mem_level="L1", chip_id=0, cluster_id=0)
     xdma_eltadd = BingoNode(
-        assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=DMA_CORE,
+        assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=XDMA_CORE,
         node_name="XDMA_eltadd",
         kernel_name="__snax_bingo_kernel_xdma_elementwise_add",
         kernel_args=SnaxBingoKernelXdmaElementwiseAddArgs(
@@ -497,7 +498,7 @@ def main():
 
     l1_ea_bin_out = BingoMemAlloc("l1_ea_bin_out", size=ea_out_bytes, mem_level="L1", chip_id=0, cluster_id=0)
     xdma_eltadd_bin = BingoNode(
-        assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=DMA_CORE,
+        assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=XDMA_CORE,
         node_name="XDMA_eltadd_binary",
         kernel_name="__snax_bingo_kernel_xdma_elementwise_add_ab",
         kernel_args=SnaxBingoKernelXdmaElementwiseAddAbArgs(

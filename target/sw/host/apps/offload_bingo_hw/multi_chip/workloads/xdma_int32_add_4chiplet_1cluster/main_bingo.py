@@ -80,6 +80,7 @@ REDUCTION_CHIPLET = 0x00
 # Core placement, from the generated map (snax_core_roles_defs.h).
 _ROLES = core_roles()
 DMA_CORE = _ROLES["dm"]
+XDMA_CORE = _ROLES["xdma"]
 HOST_CORE = _ROLES["host"]
 
 LOW_40_BIT_ADDR_MASK = "0x000000ffffffffffULL"
@@ -249,7 +250,7 @@ def main():
         add = BingoNode(
             assigned_chiplet_id=REDUCTION_CHIPLET,
             assigned_cluster_id=0,
-            assigned_core_id=DMA_CORE,
+            assigned_core_id=XDMA_CORE,
             node_name=f"XDMA_Add_A1_to_A{i + 1}",
             kernel_name="__snax_bingo_kernel_xdma_elementwise_add_ab",
             kernel_args=SnaxBingoKernelXdmaElementwiseAddAbArgs(
