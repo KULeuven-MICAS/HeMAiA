@@ -37,8 +37,17 @@ VALIDATE_STAMP  := $(LIBSNAXKERNEL_DIR).validate.stamp
 # this Makefile is included, so the first prereq pass would see it empty.
 .SECONDEXPANSION:
 
-$(VALIDATE_STAMP): $$(GEMM_HWCFG) $(VALIDATE_SCRIPT) $(GEMM_SHAPES)
-	python3 $(VALIDATE_SCRIPT) --hwcfg $(GEMM_HWCFG) --header $(GEMM_SHAPES)
+# gemm_shapes.h is GENERATED from the ACTIVE cluster cfg, not hand-maintained. The table
+# is a pure function of the hjson -- array shape, element widths, the serialised C/D width
+# and the C/D port's spatial nest -- so deriving it is the only way it cannot go stale.
+# It used to be written by hand and cross-checked, which turned every cfg change into a
+# failed build plus a manual re-derivation; the same derivation now just writes the answer.
+# --emit rewrites only when the content changes, so an unchanged cfg does not retouch the
+# header and force every dependent TU to recompile.
+$(GEMM_SHAPES): $$(GEMM_HWCFG) $(VALIDATE_SCRIPT)
+	python3 $(VALIDATE_SCRIPT) --hwcfg $(GEMM_HWCFG) --header $(GEMM_SHAPES) --emit
+
+$(VALIDATE_STAMP): $(GEMM_SHAPES)
 	@touch $(VALIDATE_STAMP)
 
 # The outer common.mk wires DATA_H as a prereq of every object file in this
@@ -48,6 +57,6 @@ DATA_H = $(VALIDATE_STAMP)
 
 .PHONY: clean-data clean
 clean-data:
-	rm -f $(VALIDATE_STAMP)
+	rm -f $(VALIDATE_STAMP) $(GEMM_SHAPES)
 
 clean: clean-data

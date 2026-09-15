@@ -220,6 +220,7 @@ SNAX_SW_GEN_MARKER = $(SW_DIR)/.snax_sw_gen_targets_group
 
 SNAX_XDMA_ADDR_H = $(SW_DIR)/device/runtime/snax/xdma/snax_xdma_addr.h
 SNAX_CORE_ROLES_H = $(SW_DIR)/device/runtime/snax/snax_core_roles_defs.h
+SNAX_GEMM_SHAPES_H = $(SW_DIR)/device/runtime/snax/versacore/gemm_shapes.h
 
 # The marker must track the cfg's IDENTITY (which file, plus its contents), not merely
 # its mtime.  A bare `$(SNAX_SW_GEN_MARKER): $(CFG)` compares timestamps, so switching to
@@ -236,7 +237,7 @@ SNAX_CFG_ID := $(abspath $(CFG)):$(shell sha1sum $(CFG) 2>/dev/null | cut -d' ' 
 $(shell [ "$$(cat $(SNAX_SW_GEN_STAMP) 2>/dev/null)" = '$(SNAX_CFG_ID)' ] || \
         printf '%s' '$(SNAX_CFG_ID)' > $(SNAX_SW_GEN_STAMP))
 
-snax-sw-gen: $(SNAX_SW_GEN_MARKER) $(SNAX_XDMA_ADDR_H) $(SNAX_CORE_ROLES_H)
+snax-sw-gen: $(SNAX_SW_GEN_MARKER) $(SNAX_XDMA_ADDR_H) $(SNAX_CORE_ROLES_H) $(SNAX_GEMM_SHAPES_H)
 
 $(SNAX_SW_GEN_MARKER): $(CFG) $(SNAX_SW_GEN_STAMP)
 	@echo "[SNAX-SW-GEN] Generate SNAX SW headers"
@@ -278,8 +279,28 @@ $(SNAX_CORE_ROLES_H): $(SNAX_SW_GEN_MARKER)
 	@echo "[SNAX-SW-GEN] Mirror snax-core-roles-defs.h -> $@"
 	@cp $(SNITCH_ROOT)/target/snitch_cluster/sw/runtime/common/snax-core-roles-defs.h $@
 
+# gemm_shapes.h is DERIVED from the active cluster hjson (array shape, element widths, the
+# serialised C/D width and the C/D port's spatial nest), not hand-maintained. It is emitted
+# here, in snax-sw-gen, rather than by the device app that owns the generator script,
+# because HOST apps include it too -- target/sw/host/apps/offload_bingo_sw/**'s
+# offload_bingo_sw.h does `#include <gemm_shapes.h>` -- and those compile long before any
+# device app runs. Generating it from the device app left the host fleet compiling against a
+# file that did not exist yet. snax-sw-gen is a prerequisite of `sw`/`single-sw`, so this
+# runs before ANY app, host or device.
+SNAX_GEMM_CLUSTER  := $(shell python3 -c "import hjson,sys; print(hjson.load(open(sys.argv[1]))['clusters'][0])" $(CFG) 2>/dev/null)
+SNAX_GEMM_HWCFG     = $(SNITCH_ROOT)/target/snitch_cluster/cfg/$(SNAX_GEMM_CLUSTER).hjson
+SNAX_VALIDATE_SHAPES = $(SW_DIR)/device/runtime/snax/versacore/validate_shapes.py
+
+# Depends on the cfg-identity stamp, not on the hwcfg's mtime, for the reason spelled out
+# above $(SNAX_SW_GEN_STAMP): switching to an OLDER cfg file must still regenerate.
+# --emit rewrites only when the content changes, so an unchanged cfg does not retouch the
+# header and force every dependent TU to recompile.
+$(SNAX_GEMM_SHAPES_H): $(SNAX_VALIDATE_SHAPES) $(SNAX_SW_GEN_STAMP)
+	@echo "[SNAX-SW-GEN] Emit gemm_shapes.h <- $(SNAX_GEMM_CLUSTER).hjson"
+	@python3 $(SNAX_VALIDATE_SHAPES) --hwcfg $(SNAX_GEMM_HWCFG) --header $@ --emit
+
 clean-snax-sw-gen:
-	rm -f $(SNAX_SW_GEN_MARKER) $(SNAX_XDMA_ADDR_H) $(SNAX_CORE_ROLES_H) $(SNAX_SW_GEN_STAMP)
+	rm -f $(SNAX_SW_GEN_MARKER) $(SNAX_XDMA_ADDR_H) $(SNAX_CORE_ROLES_H) $(SNAX_GEMM_SHAPES_H) $(SNAX_SW_GEN_STAMP)
 
 # Structural sync check that every function defined in the upstream
 # snax-versacore-to-lib.c also exists in the local snax_versacore_lib.h and
