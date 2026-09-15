@@ -26,11 +26,20 @@ APPS += xdma_concat_1cluster
 APPS += xdma_pad_1cluster
 APPS += xdma_gather_1cluster
 APPS += xdma_elementwise_add_1cluster
-APPS += xdma_softmax_1cluster
-APPS += xdma_rmsnorm_1cluster
-APPS += xdma_silu_1cluster
-APPS += xdma_swiglu_1cluster
-APPS += xdma_rope_1cluster
+# Per-op SIMD sweep workloads (the fused whole-op kernels, one dir each). These run on
+# the cluster's SIMD core; the sweep that collects their cost LUTs lives in
+# target/sim/automation/sweep/simd.
+APPS += simd_softmax_1cluster
+APPS += simd_rmsnorm_1cluster
+APPS += simd_silu_1cluster
+APPS += simd_swiglu_1cluster
+APPS += simd_rope_1cluster
+# The five chain stages armed one at a time, so the cost model has a per-operator
+# curve and not only whole-pipeline numbers.
+APPS += simd_prims_1cluster
+# FlashAttention: the two matmuls on the GEMM core, the whole online softmax as one
+# kernel on the SIMD core, overlapped through the task graph.
+APPS += fa_1cluster
 APPS += xdma_row_to_a_1cluster
 APPS += xdma_a_to_row_1cluster
 APPS += xdma_row_to_b_1cluster
@@ -50,7 +59,7 @@ APPS += device_host_idma_check_1cluster
 APPS += dummy_2cluster
 APPS += dummy_simd_2cluster
 # 2-cluster SIMD variant of the xDMA softmax sweep (hemaia_tapeout_2c_simd).
-APPS += xdma_softmax_simd_2cluster
+APPS += simd_softmax_2cluster
 SUBDIRS = $(addprefix workloads/,$(APPS))
 
 
