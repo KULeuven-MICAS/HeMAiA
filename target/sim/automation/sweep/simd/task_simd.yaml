@@ -1,0 +1,49 @@
+# SIMD op-cost LUT sweeps -- the task list for gathering per-op cycle LUTs off the
+# cluster's SIMD core (hart 1 of snax_split_cluster).
+#
+# Run with: python3 run_simd_sweep.py -j <N>   (then python3 gather_simd_luts.py)
+#
+# Each workload sweeps a shape grid (CONFIGS in its main_bingo.py) and emits
+# BINGO_TRACE_SIMD_RUN events inside one BINGO_TRACE_MGR_RUN_KERNEL span per
+# invocation; gather_simd_luts.py pairs those spans with the workload's
+# configs.json to build the cycle CSV.
+#
+# Two cost levels are measured from the same run:
+#   * whole fused kernel  -- the MGR_RUN_KERNEL span (what a Bingo node actually costs)
+#   * individual passes   -- the SIMD_RUN spans inside it (what one armed chain costs)
+#
+# All single_chip -> run on chip00.
+runs:
+  # ---- fused whole-op kernels: rows x cols (bilinear fit) ----
+  # Multi-pass ops (the pass count varies with rows) -> the op cost is the whole
+  # MGR_RUN_KERNEL span, not any single pass.
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: single_chip
+    WORKLOAD: simd_softmax_1cluster
+    DEV_APP: snax-bingo-offload
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: single_chip
+    WORKLOAD: simd_rmsnorm_1cluster
+    DEV_APP: snax-bingo-offload
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: single_chip
+    WORKLOAD: simd_rope_1cluster
+    DEV_APP: snax-bingo-offload
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: single_chip
+    WORKLOAD: simd_silu_1cluster
+    DEV_APP: snax-bingo-offload
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: single_chip
+    WORKLOAD: simd_swiglu_1cluster
+    DEV_APP: snax-bingo-offload
+
+  # ---- primitive single-pass operators: n-keyed (linear fit) ----
+  # One armed chain per kernel, so here the MGR span and the SIMD_RUN pass measure
+  # the same thing: the cost of arming and draining one operator over n elements.
+  # This is the workload that covers the chain stages the fused ops never exercise
+  # on their own (a bare Map, a bare Reduce, a bare elementwise, the quantiser).
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: single_chip
+    WORKLOAD: simd_prims_1cluster
+    DEV_APP: snax-bingo-offload

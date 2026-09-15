@@ -69,31 +69,8 @@ runs:
     WORKLOAD: xdma_elementwise_add_1cluster
     DEV_APP: snax-bingo-offload
 
-  # ---- fused SIMD kernels: whole-kernel cost, rows x cols (bilinear fit) ----
-  # Multi-pass fused ops (variable passes/config) -> cost = MGR_RUN_KERNEL span, not a pass.
-  # gather_xdma_luts.py handles these via SIMD_OP_SPEC (the f16 invocation of each config).
-  - HOST_APP_TYPE: offload_bingo_hw
-    CHIP_TYPE: single_chip
-    WORKLOAD: xdma_softmax_1cluster
-    DEV_APP: snax-bingo-offload
-  - HOST_APP_TYPE: offload_bingo_hw
-    CHIP_TYPE: single_chip
-    WORKLOAD: xdma_rmsnorm_1cluster
-    DEV_APP: snax-bingo-offload
-  # rope: whole fused kernel (__snax_bingo_kernel_xdma_rope), keyed rows x cols (bilinear).
-  - HOST_APP_TYPE: offload_bingo_hw
-    CHIP_TYPE: single_chip
-    WORKLOAD: xdma_rope_1cluster
-    DEV_APP: snax-bingo-offload
-
-  # ---- generic streaming passes: n-keyed linear fit ----
-  # silu measures xdma_streammap (its fp16 span is one StreamMap pass); swiglu's mul span measures
-  # xdma_streamelementwise. Both sweep a fixed-rows x cols grid so n moves cleanly.
-  - HOST_APP_TYPE: offload_bingo_hw
-    CHIP_TYPE: single_chip
-    WORKLOAD: xdma_silu_1cluster
-    DEV_APP: snax-bingo-offload
-  - HOST_APP_TYPE: offload_bingo_hw
-    CHIP_TYPE: single_chip
-    WORKLOAD: xdma_swiglu_1cluster
-    DEV_APP: snax-bingo-offload
+# The fused SIMD kernels (softmax / rmsnorm / rope / silu / swiglu) used to live here,
+# back when the operator chain hung off the xDMA's reader-extension socket. On
+# snax_split_cluster the SIMD block is its own hart with its own CSR bank and its own
+# BINGO_TRACE_SIMD_* markers, so those workloads moved to
+# target/sim/automation/sweep/simd/task_simd.yaml.

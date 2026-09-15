@@ -25,7 +25,9 @@ from hemaia_sim_runner import (  # noqa: E402
 )
 
 # Single-chip: host WIDE_SPM holds the baked per-config arrays; no D2D/macro/PLL.
-DEFAULT_CFG = "target/rtl/cfg/hemaia_singlechiplet_1cluster.hjson"
+# 16 MiB of wide SPM, so a sweep's golden arrays and its per-config task descriptors
+# both fit -- the 128 KiB tapeout L3 is what forces the CI suites to stage on a memchip.
+DEFAULT_CFG = "target/rtl/cfg/hemaia_singlechiplet_16MB_1cluster.hjson"
 DEFAULT_SIM_CFG = "target/sim/cfg/sim_rtl.hjson"
 
 
@@ -52,6 +54,20 @@ def run_sweep_cli(script_file, *, description, default_task_name,
     parser.add_argument(
         "--waveform", type=int, choices=(0, 1), default=0,
         help="SIM_WITH_WAVEFORM (default: %(default)s)")
+    parser.add_argument(
+        "--cfg", default=cfg,
+        help="RTL/SW config (CFG_OVERRIDE) for the whole flow (default: %(default)s).")
+    parser.add_argument(
+        "--sw-only", action="store_true",
+        help="fast SW-only re-run: reuse the already-built RTL and compiled simulation, "
+             "rebuild ONLY the per-task app binaries, and re-run. Requires a prior full "
+             "run of this sweep at the same --cfg.")
+    parser.add_argument(
+        "--reuse-build", action="store_true",
+        help="reuse the already-built SW/bootrom/RTL but still COMPILE the simulation. "
+             "What --sw-only cannot do: recover from a failed or absent EDA compile "
+             "without paying for the ~30-40 min RTL generation again. Also skips the "
+             "repo reset, so hand edits to generated RTL survive.")
     args = parser.parse_args()
     if args.max_sim_jobs < 1:
         parser.error("--max-sim-jobs must be >= 1")
@@ -66,7 +82,7 @@ def run_sweep_cli(script_file, *, description, default_task_name,
         output_dir=script.parent,
         engine=args.engine,
         with_waveform=bool(args.waveform),
-        cfg=cfg,
+        cfg=args.cfg,
         sim_cfg=sim_cfg,
         with_macro=False,
         with_d2d=False,
@@ -75,5 +91,8 @@ def run_sweep_cli(script_file, *, description, default_task_name,
         # `rtl`/`bootrom` are not, and stay serial.
         build_jobs=os.cpu_count(),
         max_jobs=args.max_sim_jobs,
+        skip_setup=args.sw_only or args.reuse_build,
+        skip_build=args.sw_only or args.reuse_build,
+        skip_compile=args.sw_only,
     )
     runner.run(parse_tasks(task_yaml))

@@ -17,7 +17,11 @@ import csv
 # Every column outside this set is parsed as a number, so a non-numeric column has to be
 # listed here. op_id/prec exist only in the precision-swept ara CSV (op_id = "<op>_<prec>",
 # the bingo LUT key); the xdma CSV has neither.
-_META = {"op_id", "op_name", "op_node", "prec", "cycles"}
+# `passes`/`pass_cycles` (simd CSV) are measurement metadata, not features: they record
+# how many armed chains one kernel ran and how many cycles were spent inside them. They
+# describe the same point `cycles` already keys, so fitting against them would be fitting
+# the answer against itself.
+_META = {"op_id", "op_name", "op_node", "prec", "cycles", "passes", "pass_cycles"}
 
 
 def _load_csv(path):
