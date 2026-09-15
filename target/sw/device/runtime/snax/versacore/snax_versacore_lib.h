@@ -216,18 +216,56 @@ void set_versacore_streamer_csr(
 #endif
 
 #ifdef READER_WRITER_EXTENSION_1_CSR_BASE
+    // The number of user CSRs on this port's DataPathExtensionHost is a property of the
+    // CLUSTER, not of this library: it is one enable word plus the sum of every armed
+    // extension's `userCsrNum`. Writing a fixed SEVEN (the count upstream's port happens
+    // to have) walks straight off the end of the streamer's CSR file whenever the cluster
+    // carries fewer extensions. On snax_split_cluster the port carries the INT32->FP16
+    // converter ALONE, so the window is TWO (enable + the converter's extra-loop index)
+    // and base+2..base+6 are STREAMER_START_CSR, STREAMER_BUSY_CSR (read-only),
+    // STREAMER_PERFORMANCE_COUNTER_CSR (read-only) and two VersaCore CSRs. That is not
+    // benign: base+2 LAUNCHES the streamer in the middle of its own configuration, and
+    // base+3 trips the ReqRspManager's write-address assertion and kills the simulation
+    //     "csr write address overflow! Address: 52, Max: 51"
+    // so every gemm_full() on this cluster died before the accelerator ever started.
+    //
+    // The guards below are compile-time constant, so each dead write is folded away and
+    // the emitted code is exactly the CSRs the port really has. They are written as `if`
+    // rather than `#if` on purpose: check_snax_versacore_lib_sync.py compares the ordered
+    // sequence of csrw_ss ADDRESS expressions against upstream, and keeping all seven
+    // textually present is what lets this port stay verifiably in step with it.
+    //
+    // The enable word moves with the extension list too. Upstream's port carries the
+    // rescale extension at bit 0 and the converter at bit 1; with the converter alone it
+    // IS bit 0 (DataPathExtensionHost assigns one bit per extension in declaration
+    // order). Quantisation has nowhere to go on such a port at all -- callers must not
+    // ask for it, and offload_hw_kernels/gemm.h refuses the combination outright.
+    //
+    // base+1 likewise means different things on the two ports. Upstream it is the
+    // rescale input zero point; with the converter alone it is the converter's ONLY user
+    // CSR, an index into its `extra_loops_choice` ROM Seq(1, 2, 1). Index 0 selects
+    // extra_loop = 1, which makes the converter merge TWO 2048-bit INT32 beats into one
+    // 2048-bit FP16 beat -- the 2:1 narrowing the D32 descriptor's halved bound0 assumes.
     csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE,
-            (int32tofp16_enable << 1) | quantization_enable);
-    csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE + 1, input_zp_i);
-    csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE + 2, multiplier_i);
-    csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE + 3, output_zp_i);
-    csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE + 4, shift_i);
+            (READER_WRITER_EXTENSION_1_CSR_NUM >= 7)
+                ? ((int32tofp16_enable << 1) | quantization_enable)
+                : (int32tofp16_enable & 0x1));
+    csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE + 1,
+            (READER_WRITER_EXTENSION_1_CSR_NUM >= 7) ? (uint32_t)input_zp_i : 0u);
+    if (READER_WRITER_EXTENSION_1_CSR_NUM > 2)
+        csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE + 2, multiplier_i);
+    if (READER_WRITER_EXTENSION_1_CSR_NUM > 3)
+        csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE + 3, output_zp_i);
+    if (READER_WRITER_EXTENSION_1_CSR_NUM > 4)
+        csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE + 4, shift_i);
     // Select the extra-loop policy by array shape; loop factors are defined in
     // the scala extension params (kept in sync with snax main).
     // In the current array shape implementation, no need to fold extra loop from input,
     // use the default inputwidth/outputwidth is enough
-    csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE + 5, 0);
-    csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE + 6, 0);
+    if (READER_WRITER_EXTENSION_1_CSR_NUM > 5)
+        csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE + 5, 0);
+    if (READER_WRITER_EXTENSION_1_CSR_NUM > 6)
+        csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE + 6, 0);
 #endif
 
 }

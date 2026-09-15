@@ -338,10 +338,14 @@ SNAX_LIB_DEFINE void __snax_kernel_versacore_load_compute_store(void *arg)
         get_cls_shared_ptrs()[5][9] = 0;
         // transpose_B
         get_cls_shared_ptrs()[5][10] = transpose_B;
-        // channel_en_B []
-        BINGO_L1_ALLOC_OR_RETURN(channel_en_B, sizeof(uint32_t) * 2, "channel_en_B");
-        channel_en_B[0] = shape->channel_en_B[0];
-        channel_en_B[1] = shape->channel_en_B[1];
+        // channel_en_B [] -- BINGO_B_CSR_NUM words, not a fixed two. The count follows
+        // the array's B operand width (ceil(array_input_b_width / bank / 32)), so it is 1
+        // on a cluster whose B operand is one 512-bit word and 2 on a wider one. Copying a
+        // fixed two read one word past the shape table on the narrow cluster.
+        BINGO_L1_ALLOC_OR_RETURN(channel_en_B,
+                                 sizeof(uint32_t) * BINGO_B_CSR_NUM, "channel_en_B");
+        for (uint32_t ce = 0; ce < BINGO_B_CSR_NUM; ce++)
+            channel_en_B[ce] = shape->channel_en_B[ce];
         get_cls_shared_ptrs()[5][11] = (uint32_t)(uintptr_t)channel_en_B;
         VERSACORE_DEBUG_PRINT(
             "GEMM Intra-Chiplet Kernel Compute Streamer Cfg B Done!\r\n");

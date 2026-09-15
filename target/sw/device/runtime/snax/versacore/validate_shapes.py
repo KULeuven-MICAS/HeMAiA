@@ -53,6 +53,18 @@ def expected_from_hwcfg(hwcfg: dict) -> tuple[dict, list[dict]]:
     serial_cd = acc["snax_versacore_serial_c_d_width"]
     bw = 64
 
+    # The C/D port declares its 32 channels as a spatial NEST, and the streamer writes one
+    # stride per declared dimension. The kernel has to size its stride array to match: a
+    # short array leaves the remaining dimensions reading whatever follows it on the stack,
+    # which addresses garbage rather than faulting. Check both the dimension count and the
+    # innermost bound, since the ordinary GEMM layout derives sl1 = sl0 * bound0 from it.
+    # snax_streamer_cfg is usually a `$ref` into a top-level template, and hjson does not
+    # resolve those -- follow it by hand, accepting an inline block too.
+    st = acc["snax_streamer_cfg"]
+    if "$ref" in st:
+        st = hwcfg[st["$ref"].lstrip("#/").split("/")[-1]]
+    rw = st["data_reader_writer_params"]["spatial_bounds"][0]
+
     globals_ = {
         "BINGO_BANK_WIDTH":       bw,
         "BINGO_A_ELEM_LEN":       a_len,
@@ -65,6 +77,8 @@ def expected_from_hwcfg(hwcfg: dict) -> tuple[dict, list[dict]]:
         "BINGO_C_CSR_NUM":        int(math.ceil(serial_cd / bw / 32)),
         "BINGO_D32_CSR_NUM":      int(math.ceil(serial_cd / bw / 32)),
         "BINGO_NUM_ARRAY_SHAPES": len(spatial),
+        "BINGO_CD_SPATIAL_NUM":    len(rw),
+        "BINGO_CD_SPATIAL_BOUND0": int(rw[0]),
     }
 
     shapes: list[dict] = []

@@ -72,6 +72,20 @@
 
 // -------------------------------------------------------------
 // The "+C" term and accumPrevC  (D = A*B + C)
+// How many output blocks did the writer actually land? The array retires blocks in
+// order, so comparing the LAST word of each block against a snapshot taken before the
+// dispatch gives the prefix it reached. Poison-filled L1 makes this reliable: an
+// unwritten block still holds whatever was there, and a written one almost never
+// reproduces it exactly.
+static inline uint32_t bingo_blocks_changed(volatile int32_t *d, const int32_t *before,
+                                            uint32_t blk_words, uint32_t nblk)
+{
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < nblk; i++)
+        if (d[i * blk_words + blk_words - 1] != before[i]) n = i + 1;
+    return n;
+}
+
 // -------------------------------------------------------------
 // Every GEMM here computes D = A*B + C. The accumPrevC flag selects WHERE the
 // "+C" addend comes from: a C operand in memory, or the value already sitting
@@ -164,6 +178,40 @@ static uint32_t __bingo_gemm_run(
                               snrt_cluster_idx(), snrt_cluster_core_idx());
         return BINGO_RET_FAIL;
     }
+    // WHICH OUTPUT-STAGE EXTENSIONS THIS CLUSTER ACTUALLY HAS.
+    //
+    // set_versacore_streamer_csr() writes a FIXED seven user CSRs at
+    // READER_WRITER_EXTENSION_1_CSR_BASE -- the layout of a D write host carrying a
+    // rescale unit AND the FP16 converter -- and puts the converter's enable in bit 1.
+    // A host that carries only the converter owns TWO registers and puts its enable in
+    // bit 0, so on such a cluster both facts are wrong: the five extra writes land on the
+    // streamer's own registers (base+2 is STREAMER_START_CSR, which launches the streamer
+    // mid-configuration) and the converter is never armed.
+    //
+    // Refuse rather than mis-program. A GEMM that silently writes INT32 where the caller
+    // asked for FP16 -- at twice the beats, into a buffer sized for half -- corrupts
+    // whatever follows it in L1 and reports success.
+    //
+    // FlashAttention needs the converter on exactly this cluster and gets it from
+    // offload_hw_kernels/gemm_fa.h, which programs the host directly. Extending the
+    // generic path means teaching the shared versacore library the window size, which is
+    // an upstream change (the same function has the same fixed seven writes there).
+#if defined(READER_WRITER_EXTENSION_1_CSR_BASE) && READER_WRITER_EXTENSION_1_CSR_NUM < 7
+    // UPDATE: the shared library no longer walks off the end of the window -- it now
+    // writes exactly READER_WRITER_EXTENSION_1_CSR_NUM user CSRs and places the converter
+    // enable at the bit its own extension list gives it. What a two-CSR port still cannot
+    // do is RESCALE: there is no quantisation extension on it to arm, and no zero
+    // point/multiplier/shift register to put the caller's values in. Refuse that alone.
+    if (quantization_enable)
+    {
+        printf_safe("[Cluster %d Core %d]: Error! gemm_full cannot quantise on this "
+                    "cluster: the D write host owns %d user CSRs and carries only the "
+                    "INT32->FP16 converter, with no rescale stage.\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx(),
+                    READER_WRITER_EXTENSION_1_CSR_NUM);
+        return BINGO_RET_FAIL;
+    }
+#endif
 
     const uint32_t a_elem_len = int4_a_enable ? 4u : BINGO_A_ELEM_LEN;
     const uint32_t b_elem_len = int4_b_enable ? 4u : BINGO_B_ELEM_LEN;
@@ -326,8 +374,23 @@ static uint32_t __bingo_gemm_run(
     //////////////////////////////////////////////////////////////
     // Streamer cfg for C
     //////////////////////////////////////////////////////////////
-    // Cslstride0
-    uint32_t Cslstride0 = BINGO_BANK_WIDTH / 8;
+    // C spatial strides -- ONE PER DECLARED SPATIAL DIMENSION.
+    //
+    // The streamer writes S_STRIDE_NUM_READER_WRITER_0 of these whatever the caller
+    // passed, so handing it a scalar leaves dimension 1 reading the next thing on this
+    // stack frame. The ordinary GEMM layout wants the channels laid end to end, which is
+    // the nest stride sl[i] = sl[i-1] * bound[i-1] -- for [4, 8] that is 8 B then 32 B,
+    // and the 32 channels cover one contiguous 256 B serialised beat exactly as the old
+    // single-dimension [[16]] port did. FlashAttention's interleaved layout needs a
+    // different sl1 and has its own kernels; see __snax_bingo_kernel_gemm_fa_*.
+#if BINGO_CD_SPATIAL_NUM > 2
+#error "extend the C/D spatial stride nest: only 1 or 2 dimensions are derived here"
+#endif
+    uint32_t Cslstride[BINGO_CD_SPATIAL_NUM];
+    Cslstride[0] = BINGO_BANK_WIDTH / 8;
+#if BINGO_CD_SPATIAL_NUM > 1
+    Cslstride[1] = (BINGO_BANK_WIDTH / 8) * BINGO_CD_SPATIAL_BOUND0;
+#endif
     // Ctlbound0~3
     uint32_t Ctlbound[4];
     Ctlbound[0] = (accumPrevC == 1) ? 0 : shape->Ctlbound0;
@@ -358,8 +421,12 @@ static uint32_t __bingo_gemm_run(
     //////////////////////////////////////////////////////////////
     // Streamer cfg for D
     //////////////////////////////////////////////////////////////
-    // D32slstride0
-    uint32_t D32slstride0 = BINGO_BANK_WIDTH / 8;
+    // D32 spatial strides -- same nest as C above (the two halves of one port).
+    uint32_t D32slstride[BINGO_CD_SPATIAL_NUM];
+    D32slstride[0] = BINGO_BANK_WIDTH / 8;
+#if BINGO_CD_SPATIAL_NUM > 1
+    D32slstride[1] = (BINGO_BANK_WIDTH / 8) * BINGO_CD_SPATIAL_BOUND0;
+#endif
     // D32tlbound0~3
     uint32_t D32tlbound[4];
     uint32_t D32tlstride[4];
@@ -470,13 +537,13 @@ static uint32_t __bingo_gemm_run(
         transpose_B,                    // transpose_B
         (uint32_t *)channel_en_B_ptr,   // channel_en_B []
         C_addr,                         // C_addr
-        &Cslstride0,                    // Cslstride[] base
+        Cslstride,                      // Cslstride[] base
         Ctlbound,                       // Ctlbound[] base
         Ctlstride,                      // Ctlstride[] base
         set_addr_remap_index_C,         // set_addr_remap_index_C
         (uint32_t *)channel_en_C_ptr,   // channel_en_C []
         D_addr,                         // D_addr
-        &D32slstride0,                  // D32slstride[] base
+        D32slstride,                    // D32slstride[] base
         D32tlbound,                     // D32tlbound[] base
         D32tlstride,                    // D32tlstride[] base
         set_addr_remap_index_D32,       // set_addr_remap_index_D32
@@ -501,12 +568,62 @@ static uint32_t __bingo_gemm_run(
         0);
     VERSACORE_DEBUG_PRINT(
         "Bingo GEMM Full Kernel Streamer Configuration Done!\r\n");
+    // Snapshot the last INT32 of every output block BEFORE anything starts, so the
+    // timeout diagnostic below can say how far the writer actually got.
+    const uint32_t blk_words = meshRow * meshCol;
+    const uint32_t nblk = (M * N < 8u) ? M * N : 8u;
+    int32_t d_before[8];
+    for (uint32_t i = 0; i < nblk; i++)
+        d_before[i] = ((volatile int32_t *)(uintptr_t)D_addr)[i * blk_words
+                                                              + blk_words - 1];
     // Set CSR to start Streamer
     start_versacore_and_streamer();
     BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_FULL_CFG_END);
-    // Poll until Streamer and GEMM accelerator finish
+    // Poll until Streamer and GEMM accelerator finish.
+    //
+    // DIAGNOSTIC (2026-09-15): wait_versacore_and_streamer() is an unbounded pair of
+    // spin loops, so a dispatch that never retires wedges the core with nothing printed.
+    // It also polls busy immediately after the START writes -- with csrw_ss folded to a
+    // single csrw those are ~6 cycles apart, the accelerator has not raised busy yet and
+    // the VersaCore loop falls straight through, leaving only the streamer loop to spin.
+    // Bound it, and on expiry report what each engine thinks it is doing AND whether the
+    // writer ever landed anything in D: an untouched D means the array never produced an
+    // output block (an A/B/C feed problem), a partly written D means it produced some and
+    // the writer's bounds ran out (a count problem). Those are different bugs.
     BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_FULL_RUN_START);
-    wait_versacore_and_streamer();
+    {
+        // Probe the LAST int32 of every output block. The array retires blocks in order,
+        // so the highest block that changed is how far it actually got -- which is the
+        // one thing the busy bits cannot tell us. A block is meshRow*meshCol INT32.
+        // The snapshot is taken by the caller BEFORE the START writes -- see the
+        // d_before[] above start_versacore_and_streamer(). Sampling it here would race
+        // the dispatch, which retires in tens of cycles, and six TCDM loads are not
+        // faster than that.
+        volatile int32_t *dprobe = (volatile int32_t *)(uintptr_t)D_addr;
+        csrw_ss(STREAMER_START_CSR, 0);
+        csrw_ss(STREAMER_START_CSR, 0);
+        for (uint32_t g = 0; g < 64u; g++) {
+            if (csrr_ss(VERSACORE_BUSY) || csrr_ss(STREAMER_BUSY_CSR)) break;
+        }
+        uint32_t spin = 0;
+        while (csrr_ss(VERSACORE_BUSY) || csrr_ss(STREAMER_BUSY_CSR)) {
+            if (++spin >= 200000u) {
+                printf_safe(
+                    "[Cluster %d Core %d]: Error! gemm_full timed out (M=%d K=%d N=%d "
+                    "accumPrevC=%d addNonZeroC=%d): versacore_busy=%d streamer_busy=%d "
+                    "versacore_cc=%d streamer_cc=%d blocks_written=%d/%d\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx(), (int)M, (int)K, (int)N,
+                    (int)accumPrevC, (int)addNonZeroC,
+                    (int)csrr_ss(VERSACORE_BUSY), (int)csrr_ss(STREAMER_BUSY_CSR),
+                    (int)csrr_ss(VERSACORE_PERFORMANCE_COUNTER),
+                    (int)csrr_ss(STREAMER_PERFORMANCE_COUNTER_CSR),
+                    (int)bingo_blocks_changed(dprobe, d_before, blk_words, nblk),
+                    (int)(M * N));
+                break;
+            }
+        }
+        csrw_ss(VERSACORE_START_CSR, 0);
+    }
     BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_FULL_RUN_END);
     VERSACORE_DEBUG_PRINT("Bingo GEMM Full Kernel Compute Done!\r\n");
     sp->return_value = D_addr;

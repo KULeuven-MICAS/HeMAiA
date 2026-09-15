@@ -7,8 +7,16 @@
 //
 // Hand-maintained per-shape parameter table for the core-level bingo-hw GEMM
 // kernel. This header pairs with offload_hw_kernels/gemm.h (also committed)
-// and is validated against the hwcfg at build time by
-// libsnaxkernel/validate_shapes.py — any mismatch fails `make sw`.
+// and is validated against the ACTIVE cluster cfg at build time by
+// validate_shapes.py — any mismatch fails `make sw`.
+//
+// TODO: this table is a pure function of the cluster hjson and should be
+// GENERATED from it, one table per cfg, the way the streamer CSR map already is.
+// While it is hand-written it can only describe ONE cluster at a time, so a build
+// against a different cfg fails the validation above rather than silently
+// mis-programming the streamer. That failure is the point: it used to be silent,
+// because the validator was pinned to a fixed cfg file rather than to the one
+// being built (see libsnaxkernel/Makefile).
 //
 // Derivation (bw := BINGO_BANK_WIDTH, ceil_8(x) := ((x + 7) / 8) * 8):
 //
@@ -40,32 +48,60 @@
 #include <stdint.h>
 
 // ----------------------------------------------------------------------
-// Shape-invariant widths — must match the active hwcfg
-// (snax_versacore_to_cluster.hjson). Checked by validate_shapes.py.
+// Shape-invariant widths — must match the active cluster cfg
+// (snax_split_cluster.hjson). Checked by validate_shapes.py.
 // ----------------------------------------------------------------------
 #define BINGO_BANK_WIDTH          64
 #define BINGO_A_ELEM_LEN          8
 #define BINGO_B_ELEM_LEN          8
 #define BINGO_C_ELEM_LEN          32
 #define BINGO_D32_ELEM_LEN        32
-#define BINGO_SERIAL_C_D_WIDTH    1024
+#define BINGO_SERIAL_C_D_WIDTH    2048
 
 // A-reader sparse-interconnect access granularity, in banks — must match the
-// hwcfg snax_acc_cfg `granularity_a` in snax_versacore_to_cluster.hjson. The A
-// reader's sparse TCDM crossbar wires read-port i only to banks of parity
-// (i % BINGO_GRANULARITY_A), so each A-reader K-tile stride must be a multiple
-// of this many banks (else a later K step walks port 0 onto an odd bank, which
-// is physically unroutable -> SparseInterconnect "Illegal bank access" fatal).
-#define BINGO_GRANULARITY_A       2
+// cluster cfg's snax_acc_cfg `granularity_a`. The A reader's sparse TCDM
+// crossbar wires read-port i only to banks of parity (i % BINGO_GRANULARITY_A),
+// so each A-reader K-tile stride must be a multiple of this many banks (else a
+// later K step walks port 0 onto an odd bank, which is physically unroutable ->
+// SparseInterconnect "Illegal bank access" fatal).
+//
+// The split cluster's TCDM is DENSE (tcdm.sparse_interconnect = false), so every
+// port reaches every bank and the granularity is 1: no stride needs rounding up.
+#define BINGO_GRANULARITY_A       1
 
 // Per-stream CSR counts (how many uint32 words each channel-enable mask
-// spans). Derived from the hwcfg's array-width fields.
+// spans). Derived from the cluster cfg's array-width fields.
 #define BINGO_A_CSR_NUM           1
-#define BINGO_B_CSR_NUM           2
+#define BINGO_B_CSR_NUM           1
 #define BINGO_C_CSR_NUM           1
 #define BINGO_D32_CSR_NUM         1
 
-#define BINGO_NUM_ARRAY_SHAPES 3
+// ----------------------------------------------------------------------
+// SPATIAL geometry of the C/D port.
+// ----------------------------------------------------------------------
+// The one bidirectional reader_writer declares its channels as a SPATIAL NEST,
+// and the streamer reads one stride per declared dimension:
+//
+//   channel i sits at  sl0 * (i % B0)  +  sl1 * ((i / B0) % B1)
+//
+// The split cluster groups its 32 channels [4, 8]: four channels carry one
+// bank-width chunk each and the eight groups step by whatever sl1 says. That is
+// what lets FlashAttention interleave two N blocks inside one key row (see the
+// fa kernels in offload_hw_kernels/gemm.h); for an ordinary GEMM the groups are
+// simply laid end to end, sl1 = sl0 * B0, which reproduces the contiguous
+// serialised beat a single-dimension port gives.
+//
+// These exist because a port with TWO dimensions needs TWO strides, and passing
+// one is not a smaller mistake than passing none: the streamer loop reads
+// S_STRIDE_NUM_READER_WRITER_* entries whatever the caller provided, so a
+// 1-element array feeds dimension 1 from the next thing on the stack and 24 of
+// the 32 channels address garbage. The previous cluster declared [[16]] — one
+// dimension — which is why a scalar worked there and silently stopped working
+// here.
+#define BINGO_CD_SPATIAL_NUM      2
+#define BINGO_CD_SPATIAL_BOUND0   4
+
+#define BINGO_NUM_ARRAY_SHAPES 1
 
 typedef struct {
     uint32_t meshRow;
@@ -83,42 +119,19 @@ typedef struct {
 
 static const bingo_gemm_shape_params_t
     bingo_gemm_shape_params[BINGO_NUM_ARRAY_SHAPES] = {
+    // VersaCore's single spatial unrolling on this cluster: (Mu, Ku, Nu) =
+    // (16, 4, 16) = 1024 INT8 MAC/cycle. One shape and one data type, so the
+    // array-shape and data-type CSRs are always 0.
     [0] = {
-        .meshRow      = 32u,
-        .tileSize     = 2u,
-        .meshCol      = 32u,
-        .Ctlbound0    = 32u,
-        .Ctlstride0   = 128u,
-        .D32tlbound0  = 32u,
-        .D32tlstride0 = 128u,
-        .channel_en_A   = { 0xffu },
-        .channel_en_B   = { 0x0u, 0xffu },
-        .channel_en_C   = { 0xffffffffu },
-        .channel_en_D32 = { 0xffffffffu },
-    },
-    [1] = {
-        .meshRow      = 1u,
-        .tileSize     = 16u,
-        .meshCol      = 32u,
-        .Ctlbound0    = 1u,
-        .Ctlstride0   = 128u,
-        .D32tlbound0  = 1u,
-        .D32tlstride0 = 128u,
-        .channel_en_A   = { 0xffu },
-        .channel_en_B   = { 0xffffffffu, 0xffffffffu },
-        .channel_en_C   = { 0xffffu },
-        .channel_en_D32 = { 0xffffu },
-    },
-    [2] = {
         .meshRow      = 16u,
-        .tileSize     = 8u,
+        .tileSize     = 4u,
         .meshCol      = 16u,
-        .Ctlbound0    = 8u,
-        .Ctlstride0   = 128u,
-        .D32tlbound0  = 8u,
-        .D32tlstride0 = 128u,
-        .channel_en_A   = { 0xffffu },
-        .channel_en_B   = { 0x0u, 0xffffu },
+        .Ctlbound0    = 4u,
+        .Ctlstride0   = 256u,
+        .D32tlbound0  = 4u,
+        .D32tlstride0 = 256u,
+        .channel_en_A   = { 0xffu },
+        .channel_en_B   = { 0xffu },
         .channel_en_C   = { 0xffffffffu },
         .channel_en_D32 = { 0xffffffffu },
     },
