@@ -21,6 +21,28 @@ _ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__))
 _GEN_TRACE = os.path.join(_ROOT, "util/trace/gen_trace.py")
 _BINGO_TRACE = os.path.join(_ROOT, "util/bingo_trace/bingo_trace.py")
 _PERF_HEADER = os.path.join(_ROOT, "target/sw/shared/runtime/perf_tracing.h")
+_PLATFORM_H = os.path.join(_ROOT, "target/sw/shared/platform/generated/occamy.h")
+
+
+def cores_per_cluster(default=2):
+    """N_CORES_PER_CLUSTER of the platform that was built.
+
+    bingo_trace.py turns a hart id into a "Cluster c Core k" label by dividing by this,
+    and its own default is 2 -- the old cluster. On the four-engine cluster that silently
+    relabels harts 3 and 4 as "Cluster 1 Core 0/1", i.e. a cluster that does not exist, so
+    every span on the xDMA and DM cores lands under a thread no gatherer looks at. Harts 1
+    and 2 happen to come out right either way, which is exactly why it goes unnoticed.
+    """
+    try:
+        with open(_PLATFORM_H) as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) >= 3 and parts[0] == "#define" \
+                        and parts[1] == "N_CORES_PER_CLUSTER":
+                    return int(parts[2], 0)
+    except OSError:
+        pass
+    return default
 
 
 def parse_task_order(task_yaml):
@@ -64,6 +86,7 @@ def run_bingo_trace(logs_dir):
     out = os.path.join(logs_dir, "bingo_trace.json")
     r = subprocess.run(
         ["python3", _BINGO_TRACE, "--trace-header", _PERF_HEADER,
+         "--cores-per-cluster", str(cores_per_cluster()),
          "--log-dir", logs_dir, "--output", out],
         capture_output=True, text=True)
     if r.returncode != 0:
