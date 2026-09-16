@@ -36,6 +36,120 @@ static inline bool xdma_addr_in_local_l1(uint64_t addr) {
     return (lo >= snrt_l1_start_addr()) && (lo < snrt_l1_end_addr());
 }
 
+// ---------------------------------------------------------------------------
+// Constant-address CSR programming
+//
+// csrw_ss folds to a single POSTED `csrw` only when the CSR number is a compile-time
+// constant. Handed a runtime index it degrades to a jump table -- and the table lives in
+// .rodata, i.e. in L3, on a core with no data cache -- so every such write paid a
+// BLOCKING fabric round trip, ~144 cc with the fabric idle and far worse under load.
+//
+// The AGU loops below were written that way: 30 destination-slot writes plus up to 20
+// temporal-dimension writes per arming, all with a runtime `i`. That is where the
+// measured 4,791 cc single-cluster arming cost came from -- against the iDMA's 11.
+//
+// Unrolled over the GENERATED counts, every CSR address is a literal and the runtime
+// dimension selects only the VALUE written. Same shape as snax_simd_program_fast, whose
+// comment records the same reasoning for the SIMD geometry.
+// ---------------------------------------------------------------------------
+_Static_assert(XDMA_MAX_DST_COUNT <= 16,
+               "destination slots are unrolled to 16; extend the lists below");
+_Static_assert(XDMA_SRC_TEMP_DIM <= 8 && XDMA_DST_TEMP_DIM <= 8,
+               "temporal dimensions are unrolled to 8; extend the lists below");
+
+// Slot k of the multicast destination list: the caller's address while k < n, and 0
+// beyond it -- a zero slot is how the hardware is told the chain stops.
+#define XDMA_SET_DST_SLOT(k, n, arr)                                                   \
+    do {                                                                               \
+        if ((k) < XDMA_MAX_DST_COUNT) {                                                \
+            snax_write_xdma_cfg_reg(XDMA_DST_ADDR_PTR_LSB + (k) * 2,                   \
+                                    (k) < (n) ? (uint32_t)((arr)[k]) : 0u);            \
+            snax_write_xdma_cfg_reg(XDMA_DST_ADDR_PTR_MSB + (k) * 2,                   \
+                                    (k) < (n) ? (uint32_t)((arr)[k] >> 32) : 0u);      \
+        }                                                                              \
+    } while (0)
+
+#define XDMA_SET_DST_SLOTS(n, arr)                                                     \
+    do {                                                                               \
+        XDMA_SET_DST_SLOT(0, n, arr);  XDMA_SET_DST_SLOT(1, n, arr);                   \
+        XDMA_SET_DST_SLOT(2, n, arr);  XDMA_SET_DST_SLOT(3, n, arr);                   \
+        XDMA_SET_DST_SLOT(4, n, arr);  XDMA_SET_DST_SLOT(5, n, arr);                   \
+        XDMA_SET_DST_SLOT(6, n, arr);  XDMA_SET_DST_SLOT(7, n, arr);                   \
+        XDMA_SET_DST_SLOT(8, n, arr);  XDMA_SET_DST_SLOT(9, n, arr);                   \
+        XDMA_SET_DST_SLOT(10, n, arr); XDMA_SET_DST_SLOT(11, n, arr);                  \
+        XDMA_SET_DST_SLOT(12, n, arr); XDMA_SET_DST_SLOT(13, n, arr);                  \
+        XDMA_SET_DST_SLOT(14, n, arr); XDMA_SET_DST_SLOT(15, n, arr);                  \
+    } while (0)
+
+// Slots 1..MAX-1 cleared, for the single-destination paths. Slot 0 is written by the
+// caller from its own `dst`.
+#define XDMA_ZERO_DST_SLOT(k)                                                          \
+    do {                                                                               \
+        if ((k) < XDMA_MAX_DST_COUNT) {                                                \
+            snax_write_xdma_cfg_reg(XDMA_DST_ADDR_PTR_LSB + (k) * 2, 0);               \
+            snax_write_xdma_cfg_reg(XDMA_DST_ADDR_PTR_MSB + (k) * 2, 0);               \
+        }                                                                              \
+    } while (0)
+
+#define XDMA_ZERO_DST_SLOTS_FROM_1()                                                   \
+    do {                                                                               \
+        XDMA_ZERO_DST_SLOT(1);  XDMA_ZERO_DST_SLOT(2);  XDMA_ZERO_DST_SLOT(3);         \
+        XDMA_ZERO_DST_SLOT(4);  XDMA_ZERO_DST_SLOT(5);  XDMA_ZERO_DST_SLOT(6);         \
+        XDMA_ZERO_DST_SLOT(7);  XDMA_ZERO_DST_SLOT(8);  XDMA_ZERO_DST_SLOT(9);         \
+        XDMA_ZERO_DST_SLOT(10); XDMA_ZERO_DST_SLOT(11); XDMA_ZERO_DST_SLOT(12);        \
+        XDMA_ZERO_DST_SLOT(13); XDMA_ZERO_DST_SLOT(14); XDMA_ZERO_DST_SLOT(15);        \
+    } while (0)
+
+// One temporal dimension. Dimensions at or above the caller's `nd` get the neutral
+// bound=1 / stride=0 the hardware needs, exactly as the old tail loop wrote them.
+#define XDMA_WR_DIM(k, MAXD, BP, SP, nd, bnd, str)                                     \
+    do {                                                                               \
+        if ((k) < (MAXD)) {                                                            \
+            snax_write_xdma_cfg_reg((BP) + (k), (k) < (nd) ? (bnd)[k] : 1u);           \
+            snax_write_xdma_cfg_reg((SP) + (k), (k) < (nd) ? (str)[k] : 0u);           \
+        }                                                                              \
+    } while (0)
+
+#define XDMA_WR_SRC_DIMS(nd, bnd, str)                                                 \
+    do {                                                                               \
+        XDMA_WR_DIM(0, XDMA_SRC_TEMP_DIM, XDMA_SRC_TEMP_BOUND_PTR,                     \
+                    XDMA_SRC_TEMP_STRIDE_PTR, nd, bnd, str);                           \
+        XDMA_WR_DIM(1, XDMA_SRC_TEMP_DIM, XDMA_SRC_TEMP_BOUND_PTR,                     \
+                    XDMA_SRC_TEMP_STRIDE_PTR, nd, bnd, str);                           \
+        XDMA_WR_DIM(2, XDMA_SRC_TEMP_DIM, XDMA_SRC_TEMP_BOUND_PTR,                     \
+                    XDMA_SRC_TEMP_STRIDE_PTR, nd, bnd, str);                           \
+        XDMA_WR_DIM(3, XDMA_SRC_TEMP_DIM, XDMA_SRC_TEMP_BOUND_PTR,                     \
+                    XDMA_SRC_TEMP_STRIDE_PTR, nd, bnd, str);                           \
+        XDMA_WR_DIM(4, XDMA_SRC_TEMP_DIM, XDMA_SRC_TEMP_BOUND_PTR,                     \
+                    XDMA_SRC_TEMP_STRIDE_PTR, nd, bnd, str);                           \
+        XDMA_WR_DIM(5, XDMA_SRC_TEMP_DIM, XDMA_SRC_TEMP_BOUND_PTR,                     \
+                    XDMA_SRC_TEMP_STRIDE_PTR, nd, bnd, str);                           \
+        XDMA_WR_DIM(6, XDMA_SRC_TEMP_DIM, XDMA_SRC_TEMP_BOUND_PTR,                     \
+                    XDMA_SRC_TEMP_STRIDE_PTR, nd, bnd, str);                           \
+        XDMA_WR_DIM(7, XDMA_SRC_TEMP_DIM, XDMA_SRC_TEMP_BOUND_PTR,                     \
+                    XDMA_SRC_TEMP_STRIDE_PTR, nd, bnd, str);                           \
+    } while (0)
+
+#define XDMA_WR_DST_DIMS(nd, bnd, str)                                                 \
+    do {                                                                               \
+        XDMA_WR_DIM(0, XDMA_DST_TEMP_DIM, XDMA_DST_TEMP_BOUND_PTR,                     \
+                    XDMA_DST_TEMP_STRIDE_PTR, nd, bnd, str);                           \
+        XDMA_WR_DIM(1, XDMA_DST_TEMP_DIM, XDMA_DST_TEMP_BOUND_PTR,                     \
+                    XDMA_DST_TEMP_STRIDE_PTR, nd, bnd, str);                           \
+        XDMA_WR_DIM(2, XDMA_DST_TEMP_DIM, XDMA_DST_TEMP_BOUND_PTR,                     \
+                    XDMA_DST_TEMP_STRIDE_PTR, nd, bnd, str);                           \
+        XDMA_WR_DIM(3, XDMA_DST_TEMP_DIM, XDMA_DST_TEMP_BOUND_PTR,                     \
+                    XDMA_DST_TEMP_STRIDE_PTR, nd, bnd, str);                           \
+        XDMA_WR_DIM(4, XDMA_DST_TEMP_DIM, XDMA_DST_TEMP_BOUND_PTR,                     \
+                    XDMA_DST_TEMP_STRIDE_PTR, nd, bnd, str);                           \
+        XDMA_WR_DIM(5, XDMA_DST_TEMP_DIM, XDMA_DST_TEMP_BOUND_PTR,                     \
+                    XDMA_DST_TEMP_STRIDE_PTR, nd, bnd, str);                           \
+        XDMA_WR_DIM(6, XDMA_DST_TEMP_DIM, XDMA_DST_TEMP_BOUND_PTR,                     \
+                    XDMA_DST_TEMP_STRIDE_PTR, nd, bnd, str);                           \
+        XDMA_WR_DIM(7, XDMA_DST_TEMP_DIM, XDMA_DST_TEMP_BOUND_PTR,                     \
+                    XDMA_DST_TEMP_STRIDE_PTR, nd, bnd, str);                           \
+    } while (0)
+
 // Data Copy Task
 inline int32_t xdma_memcpy_nd_full_addr(
     uint64_t src, uint64_t dst, uint32_t spatial_stride_src,
@@ -52,16 +166,23 @@ inline int32_t xdma_memcpy_nd_full_addr(
     if (!xdma_addr_in_local_l1(src) && !xdma_addr_in_local_l1(dst)) {
         return -2;  // no transfer endpoint in local L1
     }
+    // Hoisted out of the dimension loops below, which are now unrolled over the
+    // generated maximum and no longer have a per-iteration place to fail.
+    if (temp_dim_src > XDMA_SRC_TEMP_DIM) {
+        XDMA_DEBUG_PRINT("Source dimension is too high for xdma\n");
+        return -4;
+    }
+    if (temp_dim_dst > XDMA_DST_TEMP_DIM) {
+        XDMA_DEBUG_PRINT("Destination dimension is too high for xdma\n");
+        return -4;
+    }
     snax_write_xdma_cfg_reg(XDMA_SRC_ADDR_PTR_LSB, (uint32_t)src);
     snax_write_xdma_cfg_reg(XDMA_SRC_ADDR_PTR_MSB, (uint32_t)(src >> 32));
 
     snax_write_xdma_cfg_reg(XDMA_DST_ADDR_PTR_LSB, (uint32_t)dst);
     snax_write_xdma_cfg_reg(XDMA_DST_ADDR_PTR_MSB, (uint32_t)(dst >> 32));
 
-    for (uint32_t i = 1; i < XDMA_MAX_DST_COUNT; i++) {
-        snax_write_xdma_cfg_reg(XDMA_DST_ADDR_PTR_LSB + i * 2, 0);
-        snax_write_xdma_cfg_reg(XDMA_DST_ADDR_PTR_MSB + i * 2, 0);
-    }
+    XDMA_ZERO_DST_SLOTS_FROM_1();
 
     // Rule check
     // The enabled spatial bound for input should be equal to the enabled
@@ -88,36 +209,8 @@ inline int32_t xdma_memcpy_nd_full_addr(
     // Spatial Stride at dst
     snax_write_xdma_cfg_reg(XDMA_DST_SPATIAL_STRIDE_PTR, spatial_stride_dst);
 
-    // Temporal Dimension 0 to n at src
-    for (uint32_t i = 0; i < temp_dim_src; i++) {
-        if (i >= XDMA_SRC_TEMP_DIM) {
-            XDMA_DEBUG_PRINT("Source dimension is too high for xdma\n");
-            return -4;
-        }
-        snax_write_xdma_cfg_reg(XDMA_SRC_TEMP_BOUND_PTR + i, temp_bound_src[i]);
-        snax_write_xdma_cfg_reg(XDMA_SRC_TEMP_STRIDE_PTR + i,
-                                temp_stride_src[i]);
-    }
-    // Dimension n to MAX at src
-    for (uint32_t i = temp_dim_src; i < XDMA_SRC_TEMP_DIM; i++) {
-        snax_write_xdma_cfg_reg(XDMA_SRC_TEMP_BOUND_PTR + i, 1);
-        snax_write_xdma_cfg_reg(XDMA_SRC_TEMP_STRIDE_PTR + i, 0);
-    }
-    // Temporal Dimension 0 to n at dst
-    for (uint32_t i = 0; i < temp_dim_dst; i++) {
-        if (i >= XDMA_DST_TEMP_DIM) {
-            XDMA_DEBUG_PRINT("Destination dimension is too high for xdma\n");
-            return -4;
-        }
-        snax_write_xdma_cfg_reg(XDMA_DST_TEMP_BOUND_PTR + i, temp_bound_dst[i]);
-        snax_write_xdma_cfg_reg(XDMA_DST_TEMP_STRIDE_PTR + i,
-                                temp_stride_dst[i]);
-    }
-    // Dimension n to MAX at dst
-    for (uint32_t i = temp_dim_dst; i < XDMA_DST_TEMP_DIM; i++) {
-        snax_write_xdma_cfg_reg(XDMA_DST_TEMP_BOUND_PTR + i, 1);
-        snax_write_xdma_cfg_reg(XDMA_DST_TEMP_STRIDE_PTR + i, 0);
-    }
+    XDMA_WR_SRC_DIMS(temp_dim_src, temp_bound_src, temp_stride_src);
+    XDMA_WR_DST_DIMS(temp_dim_dst, temp_bound_dst, temp_stride_dst);
     // Enabled channel at src
     snax_write_xdma_cfg_reg(XDMA_SRC_ENABLED_CHAN_PTR, enabled_chan_src);
     // Enabled channel at dst
@@ -205,21 +298,19 @@ inline int32_t xdma_multicast_nd_full_address(
     if (dst_num > XDMA_MAX_DST_COUNT) {
         XDMA_DEBUG_PRINT("Number of destination exceeds the hardware limit\n");
     }
-
-    // Set the destination address for each destination
-    for (uint32_t i = 0; i < dst_num; i++) {
-        snax_write_xdma_cfg_reg(XDMA_DST_ADDR_PTR_LSB + i * 2,
-                                (uint32_t)dst[i]);
-        snax_write_xdma_cfg_reg(XDMA_DST_ADDR_PTR_MSB + i * 2,
-                                (uint32_t)(dst[i] >> 32));
+    if (temp_dim_src > XDMA_SRC_TEMP_DIM) {
+        XDMA_DEBUG_PRINT("Source dimension is too high for xdma\n");
+        return -4;
+    }
+    if (temp_dim_dst > XDMA_DST_TEMP_DIM) {
+        XDMA_DEBUG_PRINT("Destination dimension is too high for xdma\n");
+        return -4;
     }
 
-    // The remaining is set to 0, and XDMA will stop the chained copy to the
-    // next destination
-    for (uint32_t i = dst_num; i < XDMA_MAX_DST_COUNT; i++) {
-        snax_write_xdma_cfg_reg(XDMA_DST_ADDR_PTR_LSB + i * 2, 0);
-        snax_write_xdma_cfg_reg(XDMA_DST_ADDR_PTR_MSB + i * 2, 0);
-    }
+    // Every destination slot: the caller's address below dst_num, 0 above it (which is
+    // how the hardware is told the chain stops). One unrolled pass replaces the two
+    // runtime-indexed loops.
+    XDMA_SET_DST_SLOTS(dst_num, dst);
     // Rule check
     // The enabled spatial bound for input should be equal to the enabled
     // Src frame count and dst frame count should be equal
@@ -246,36 +337,8 @@ inline int32_t xdma_multicast_nd_full_address(
     // Spatial Stride at dst
     snax_write_xdma_cfg_reg(XDMA_DST_SPATIAL_STRIDE_PTR, spatial_stride_dst);
 
-    // Temporal Dimension 0 to n at src
-    for (uint32_t i = 0; i < temp_dim_src; i++) {
-        if (i >= XDMA_SRC_TEMP_DIM) {
-            XDMA_DEBUG_PRINT("Source dimension is too high for xdma\n");
-            return -4;
-        }
-        snax_write_xdma_cfg_reg(XDMA_SRC_TEMP_BOUND_PTR + i, temp_bound_src[i]);
-        snax_write_xdma_cfg_reg(XDMA_SRC_TEMP_STRIDE_PTR + i,
-                                temp_stride_src[i]);
-    }
-    // Dimension n to MAX at src
-    for (uint32_t i = temp_dim_src; i < XDMA_SRC_TEMP_DIM; i++) {
-        snax_write_xdma_cfg_reg(XDMA_SRC_TEMP_BOUND_PTR + i, 1);
-        snax_write_xdma_cfg_reg(XDMA_SRC_TEMP_STRIDE_PTR + i, 0);
-    }
-    // Temporal Dimension 0 to n at dst
-    for (uint32_t i = 0; i < temp_dim_dst; i++) {
-        if (i >= XDMA_DST_TEMP_DIM) {
-            XDMA_DEBUG_PRINT("Destination dimension is too high for xdma\n");
-            return -4;
-        }
-        snax_write_xdma_cfg_reg(XDMA_DST_TEMP_BOUND_PTR + i, temp_bound_dst[i]);
-        snax_write_xdma_cfg_reg(XDMA_DST_TEMP_STRIDE_PTR + i,
-                                temp_stride_dst[i]);
-    }
-    // Dimension n to MAX at dst
-    for (uint32_t i = temp_dim_dst; i < XDMA_DST_TEMP_DIM; i++) {
-        snax_write_xdma_cfg_reg(XDMA_DST_TEMP_BOUND_PTR + i, 1);
-        snax_write_xdma_cfg_reg(XDMA_DST_TEMP_STRIDE_PTR + i, 0);
-    }
+    XDMA_WR_SRC_DIMS(temp_dim_src, temp_bound_src, temp_stride_src);
+    XDMA_WR_DST_DIMS(temp_dim_dst, temp_bound_dst, temp_stride_dst);
     // Enabled channel at src
     snax_write_xdma_cfg_reg(XDMA_SRC_ENABLED_CHAN_PTR, enabled_chan_src);
     // Enabled channel at dst
@@ -495,8 +558,18 @@ inline int32_t xdma_disable_dst_junction(uint8_t jct) {
 //               address (the routers decode only the cluster tag).
 //   junction  : WRITER_JCT_ELEMENTWISEJUNCTION (per-element ADD/MUL/MAX/MIN) or
 //               WRITER_JCT_MONOIDJUNCTION (softmax/attn/norm merge).
-//   jct_csr0  : the junction's user CSR(0) -- Elementwise: [3:0]=op,[6:4]=fmt; Monoid:
-//               [7:0]=nValid,[15:13]=combineMode.
+//   jct_csr0  : the junction's user CSR(0).
+//               Elementwise: [3:0]=op (ADD=0), [6:4]=fmt (FP32=3).
+//               Monoid: a GEOMETRY word, not an operator id (MonoidJunction.scala) --
+//                 [7:0] nValid | [11:8] n | [21:18] nExp | [25:22] nAdd | [27:26] sigma
+//                 [28] keyPol (0=max) | [29] keyMul (0 = the (R,max) key monoid)
+//               Lanes are field-major, lane = field*S + slot with S = 1 << sigma. The
+//               online-softmax partial (m, l) is key + ONE exp-twisted value coordinate:
+//                 nValid=1, n=1, nExp=1, nAdd=0, sigma=3  ->  m at lane 0, l at lane 8.
+//               This is NOT the old StreamMomentMergeRt encoding ((1<<13)|1, combineMode
+//               at [15:13]); that word decodes here as n=0, sigma=0 -- a key-only
+//               geometry whose fold reads no value and writes nothing. See
+//               snax-xdma-chain-gather-sweep.c junction_for_mode() for the worked cases.
 // Arming the junction is what flips the transfer from a chained write to a gather; all addresses
 // are full (chip|cluster|offset) addresses.
 inline int32_t xdma_chain_gather_1d_full_address(uint64_t local_src, uint64_t* chain,
@@ -579,12 +652,12 @@ inline void xdma_wait_task(xdma_task_t task) {
 // Disable all xDMA datapath extensions (reader + writer).
 // Must be called before any xDMA transfer to ensure clean state.
 inline void xdma_disable_all_extensions() {
-    for (uint8_t i = 0; i < XDMA_SRC_EXT_NUM; i++) {
-        xdma_disable_src_ext(i);
-    }
-    for (uint8_t i = 0; i < XDMA_DST_EXT_NUM; i++) {
-        xdma_disable_dst_ext(i);
-    }
+    // Two posted writes, not a read-modify-write per extension. The enable registers hold
+    // one bit per extension and nothing else, so clearing every bit IS disabling all of
+    // them -- and a csrr stalls the core to writeback where a csrw is posted (5.1 cc
+    // against 1.0, measured). snax_simd_use0 makes the same trade for the SIMD block.
+    snax_write_xdma_cfg_reg(XDMA_SRC_ENABLE_PTR, 0);
+    snax_write_xdma_cfg_reg(XDMA_DST_ENABLE_PTR, 0);
 }
 
 inline uint32_t xdma_last_task_cycle() {
