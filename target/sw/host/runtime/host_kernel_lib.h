@@ -185,6 +185,48 @@ static inline uint64_t __host_bingo_kernel_check_result(void *arg){
             printf_safe("[Host] Check [%s]: FAIL (%d / %d int8, tol=%d)\r\n", name, err, data_size, tol);
             return BINGO_RET_FAIL;
         }
+    } else if (check_type == BINGO_CHECK_TYPE_INT32_RELTOL) {
+        // Signed-INT32, relative tolerance -- for an accumulator, not a single result.
+        //
+        // FlashAttention's O is sum over NKV tiles of V^T.P8, and P8 = quantize(exp(S-m)).
+        // Where the hardware's FP16 exp rounds the other way from the numpy golden a P8
+        // element moves one LSB, and the matmul then sums Bc of those, so an ABSOLUTE
+        // budget would have to be either useless or enormous. A relative one scales with
+        // the magnitude and still catches the failure this check exists for: a DROPPED
+        // TILE is a 1/NKV error -- 12.5% at NKV=8 -- orders of magnitude outside any rtol.
+        const int32_t* out_i = (const int32_t*)output_data_addr;
+        const int32_t* gol_i = (const int32_t*)golden_data_addr;
+        uint64_t num_elements = data_size / 4;
+        float max_ag = 0.0f;                    // pass 1: the tensor's scale
+        for (uint64_t i = 0; i < num_elements; i++) {
+            int32_t g = gol_i[i];
+            float ag = (float)(g < 0 ? -g : g);
+            if (ag > max_ag) max_ag = ag;
+        }
+        const float abs_floor = 0.001f * max_ag;
+        for (uint64_t i = 0; i < num_elements; i++) {
+            float o = (float)out_i[i], g = (float)gol_i[i];
+            float d = o - g;      if (d < 0.0f) d = -d;
+            float ag = g < 0.0f ? -g : g;
+            if (d > tolerance * ag + abs_floor) {
+                err++;
+                if (err <= 8)
+                    printf_safe("[%s] output[%d]=%d, golden[%d]=%d\n", name, (int)i,
+                                (int)out_i[i], (int)i, (int)gol_i[i]);
+            }
+        }
+        BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
+        sp->return_value = err;
+        sp->num_return_values = 0;
+        if (err == 0) {
+            printf_safe("[Host] Check [%s]: PASS (%d int32, rtol=%d/1e4)\r\n", name,
+                        (int)num_elements, (int)(tolerance * 10000.0f));
+            return BINGO_RET_SUCC;
+        } else {
+            printf_safe("[Host] Check [%s]: FAIL (%d / %d int32, rtol=%d/1e4)\r\n", name,
+                        err, (int)num_elements, (int)(tolerance * 10000.0f));
+            return BINGO_RET_FAIL;
+        }
     } else if (check_type == BINGO_CHECK_TYPE_FP32_TOL) {
         // FP32 absolute-tolerance mode
         const float* out_f    = (const float*)output_data_addr;

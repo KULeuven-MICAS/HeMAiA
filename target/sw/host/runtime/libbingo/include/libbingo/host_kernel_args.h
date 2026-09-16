@@ -35,6 +35,10 @@ __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_entry_args {
 // boundaries, so byte-exact is too strict for a quantized activation. tolerance (fp32) -> int LSB.
 #define BINGO_CHECK_TYPE_INT8_TOL 4
 
+// Signed-INT32 with a combined relative/absolute tolerance, for an ACCUMULATOR whose
+// golden inherits quantisation noise. |out-g| <= rtol*|g| + 0.001*max|g_tensor|.
+#define BINGO_CHECK_TYPE_INT32_RELTOL 5
+
 // Precision selector for the runtime-typed Ara kernels (__host_bingo_kernel_<op>
 // dispatchers in host_kernel_lib.h). Passed as a plain arg word; the typed
 // __host_bingo_kernel_<op>_f32 entry points are FP32-only and ignore precision.
