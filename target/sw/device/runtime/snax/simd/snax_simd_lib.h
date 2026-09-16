@@ -213,6 +213,15 @@ static inline uint32_t snax_simd_shape_beats(const snax_simd_shape_t *s) {
 #define SIMD_RED_LANEWISE 0x400u
 
 // StreamElementwise: combine `operand_beats` interleaved operands into one.
+// Fp16ToInt8 csr(1): pass the row's LAST beat through unquantised, so a TAP pass can
+// narrow its tile and keep its scalar. 0 disables it and is bit-identical to a build
+// without the feature. MUST be a multiple of 2 -- the pack ratio -- so the pack the tail
+// interrupts is always complete.
+//
+// STICKY: snax_simd_use1() writes csr(0) only. Any task that arms Fp16ToInt8 without
+// naming a tail inherits the previous task's. Use snax_simd_use2() and say 0.
+#define SIMD_QUANT_TAIL(beats) ((uint32_t)(beats))
+
 #define SIMD_EW_MUL 0u
 #define SIMD_EW_ADD 1u
 // Latch the FIRST beat of the task as operand B and combine every later beat against it,

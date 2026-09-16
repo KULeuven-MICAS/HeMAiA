@@ -222,7 +222,8 @@ static inline uint32_t simd_pass_map(void *src, void *dst, uint32_t flat,
     snax_simd_shape_flat(&out, dst, (out_dt == SIMD_OUT_I8) ? (flat / 2u) : flat);
     snax_simd_use3(SIMD_EXT_STREAMMAP, SIMD_EXT_STREAMMAP_CSR, a_bits, b_bits, func);
     if (out_dt == SIMD_OUT_I8)
-        snax_simd_arm1(SIMD_EXT_FP16TOINT8, SIMD_EXT_FP16TOINT8_CSR, inv_scale);
+        snax_simd_arm2(SIMD_EXT_FP16TOINT8, SIMD_EXT_FP16TOINT8_CSR, inv_scale,
+                       SIMD_QUANT_TAIL(0));
     return simd_run_shapes(&in, &out);
 }
 
@@ -277,7 +278,8 @@ static inline uint32_t simd_pass_ew2(void *src_a, void *src_b, void *dst,
     snax_simd_shape_flat(&out, dst, (out_dt == SIMD_OUT_I8) ? (flat / 2u) : flat);
     snax_simd_use2(ext, ext_csr, 2u, op);
     if (out_dt == SIMD_OUT_I8)
-        snax_simd_arm1(SIMD_EXT_FP16TOINT8, SIMD_EXT_FP16TOINT8_CSR, inv_scale);
+        snax_simd_arm2(SIMD_EXT_FP16TOINT8, SIMD_EXT_FP16TOINT8_CSR, inv_scale,
+                       SIMD_QUANT_TAIL(0));
     return simd_run_shapes(&in, &out);
 }
 
@@ -1316,6 +1318,10 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_rope(void *arg) {
 // is several hundred instructions, which against a ~2400-cycle tile is not noise; and
 // they live in the ARENA rather than in a static, so they are L1 by construction and
 // there is no question about where a .bss object lands.
+//
+// The MEMO THAT GUARDS THEM has to live there too, and for a while it did not -- see
+// SIMD_FA_MEMO_OFF below. Getting the data into L1 and leaving its key in .bss cost more
+// than rebuilding the shapes ever would have.
 #define SIMD_FA_NUM_SHAPES 12
 // A FIXED reservation, deliberately NOT sizeof(snax_simd_shape_t) * N.
 //
@@ -1329,6 +1335,26 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_rope(void *arg) {
 //
 // Keep this in step with SnaxBingoKernelSimdFaSoftmaxArgs.SHAPE_BYTES.
 #define SIMD_FA_SHAPES_BYTES 1024u
+
+// The geometry memo: "the shapes in THIS arena are already built, for this (bc, dhead)".
+//
+// It lives in the arena's shape reservation -- i.e. in L1 -- and deliberately NOT in a
+// function-scope static. The device image links entirely into L3 (ORIGIN 0x800010d0) and
+// this core has no data cache, so a `static` read here is a blocking fabric round trip:
+// measured at ~144 cc with the fabric idle and ~3,400 cc while the other three clusters
+// stream K/V. Three of them were 96% of BINGO_TRACE_SIMD_CFG -- 10,405 cc median against
+// a 433 cc floor -- for twelve bytes that never needed to leave the cluster.
+//
+// Keying it on the arena also fixes the half of the bug that was pure logic: with NQ
+// query tiles the arena ALTERNATES every invocation, so one shared static could never
+// hold the right answer and the memo missed 100% of the time from NQ=2 onwards. Per
+// arena, it hits every tile but the first.
+#define SIMD_FA_MEMO_OFF   (SIMD_FA_SHAPES_BYTES - 16u)
+#define SIMD_FA_MEMO_MAGIC 0x5AFA5117u
+
+typedef struct {
+    uint32_t magic, bc, dhead;
+} simd_fa_memo_t;
 
 // Total arena bytes for a (bc, dhead) tile. The host allocates exactly this.
 //   negmS 1 | s16 bc | rmax 1 | mrun 1 | mnew 1 | delta 1 | corrL 1 | lrun 1 | lnew 1 |
@@ -1345,7 +1371,6 @@ enum {
     FA_SH_DELTA_IN,   FA_SH_DELTA_OUT,    // 5     delta = m_old - m_new
     FA_SH_CORR_IN,    FA_SH_CORR_OUT,     // 6+7   corr = exp(delta), to both latches
     FA_SH_P_IN,       FA_SH_P_OUT,        // 8+9   P = exp(S - m_new) AND rowsum, fused
-    FA_SH_Q_IN,       FA_SH_Q_OUT,        // 10    P8 = int8(P)
     FA_SH_LSC_IN,     FA_SH_LSC_OUT,      // 11    corr * l_old
     FA_SH_LNEW_IN,    FA_SH_LNEW_OUT,     // 13    l_new = corr*l_old + rowsum
     FA_SH_ORS_IN,     FA_SH_ORS_OUT,      // 14    O *= corr
@@ -1360,21 +1385,23 @@ enum {
 // take their pointers from here, because two copies of this arithmetic is exactly how a
 // layout silently drifts -- and a drifted layout does not fault, it feeds a task the
 // beat next door.
-_Static_assert(SIMD_FA_NUM_SHAPES * sizeof(snax_simd_shape_t) <= SIMD_FA_SHAPES_BYTES,
+// FA_SH_COUNT, not SIMD_FA_NUM_SHAPES: the enum carries an IN and an OUT per task, so
+// the real occupancy is 20 shapes (880 B at SIMD_MAX_DIM=3), not 12. The old bound was
+// loose by 8 shapes and would not have caught an overrun into rmax. The limit is now the
+// memo rather than the reservation, since the memo sits at its tail.
+_Static_assert(FA_SH_COUNT * sizeof(snax_simd_shape_t) <= SIMD_FA_MEMO_OFF,
                "the FA shape cache outgrew its fixed reservation; raise "
                "SIMD_FA_SHAPES_BYTES here AND SHAPE_BYTES in bingo_kernel_args.py");
 
 typedef struct {
-    uint8_t *negmS, *s16, *rmax, *mrun, *mnew, *delta;
-    uint8_t *corrL, *lrun, *lnew, *p16, *rsum, *lsc, *corrO, *oacc;
+    uint8_t *rmax, *mrun, *mnew, *delta;
+    uint8_t *corrL, *lrun, *lnew, *rsum, *lsc, *corrO, *oacc;
 } simd_fa_layout_t;
 
 static void simd_fa_layout(simd_fa_layout_t *L, uint32_t arena, uint32_t bc,
                            uint32_t dhead) {
     const uint32_t B = SIMD_BEAT_BYTES;
     uint32_t t = arena + SIMD_FA_SHAPES_BYTES;
-    L->negmS = (uint8_t *)t;  t += B;
-    L->s16   = (uint8_t *)t;  t += bc * B;
     L->rmax  = (uint8_t *)t;  t += B;   // the tap lands the rowmax exactly here
     L->mrun  = (uint8_t *)t;  t += B;
     L->mnew  = (uint8_t *)t;  t += B;
@@ -1382,7 +1409,6 @@ static void simd_fa_layout(simd_fa_layout_t *L, uint32_t arena, uint32_t bc,
     L->corrL = (uint8_t *)t;  t += B;
     L->lrun  = (uint8_t *)t;  t += B;
     L->lnew  = (uint8_t *)t;  t += B;
-    L->p16   = (uint8_t *)t;  t += bc * B;
     L->rsum  = (uint8_t *)t;  t += B;   // and the rowsum exactly here
     L->lsc   = (uint8_t *)t;  t += B;
     L->corrO = (uint8_t *)t;  t += B;
@@ -1401,7 +1427,10 @@ static void simd_fa_build_shapes(uint32_t arena, uint32_t bc, uint32_t dhead) {
     //    The input base is re-pointed per tile; `s16` is the kernel's own copy, which the
     //    fused pass below then reads with negmS latched in front of it.
     snax_simd_shape_flat(&sh[FA_SH_TAP_IN],  (void *)0, bc);
-    snax_simd_shape_flat(&sh[FA_SH_TAP_OUT], L.s16, bc + 1u);
+    // ONE beat out, not bc+1. Without SIMD_RED_TAP the reduce emits only its result, so
+    // task 1 no longer copies the tile into the arena -- the fused exp pass reads the GEMM's
+    // own output buffer instead, so the arena no longer carries a copy of the tile at all.
+    snax_simd_shape_flat(&sh[FA_SH_TAP_OUT], L.rmax, 1);
     // 2  m_new = max(m_old, rowmax): LANEWISE over the adjacent pair [rmax][mrun].
     snax_simd_shape_flat(&sh[FA_SH_MNEW_IN],  L.rmax, 2);
     snax_simd_shape_flat(&sh[FA_SH_MNEW_OUT], L.mnew, 1);
@@ -1409,8 +1438,10 @@ static void simd_fa_build_shapes(uint32_t arena, uint32_t bc, uint32_t dhead) {
     //      negated value out, once before s16 and once into the rmax slot (task 2 has
     //      consumed it, so it now pairs with mrun). One fill+drain instead of two.
     snax_simd_shape_broadcast(&sh[FA_SH_NEGM_IN], L.mnew, 2);
-    snax_simd_shape_2d(&sh[FA_SH_NEGM_OUT], L.negmS, 2,
-                       (uint32_t)(L.rmax - L.negmS), 1, 0);
+    // -m_new goes to rmax (where task 5 reads it) and to the one-beat prefix in front of
+    // the live score buffer (where the fused pass latches it). The second address changes
+    // per tile, so stride[0] is patched at dispatch.
+    snax_simd_shape_2d(&sh[FA_SH_NEGM_OUT], L.rmax, 2, 0, 1, 0);
     // 5  delta = m_old - m_new: LANEWISE ADD over [-m_new][m_old].
     snax_simd_shape_flat(&sh[FA_SH_DELTA_IN],  L.rmax, 2);
     snax_simd_shape_flat(&sh[FA_SH_DELTA_OUT], L.delta, 1);
@@ -1422,16 +1453,18 @@ static void simd_fa_build_shapes(uint32_t arena, uint32_t bc, uint32_t dhead) {
     //      Map exponentiates, Reduce sums LANEWISE and TAPs the result:
     //        read [negmS][S^T x bc]  ->  write [P x bc][rowsum]
     //      S^T - m_new stays inside the chain and is never written out.
-    snax_simd_shape_flat(&sh[FA_SH_P_IN],  L.negmS, 1u + bc);
-    snax_simd_shape_flat(&sh[FA_SH_P_OUT], L.p16, bc + 1u);
-    // 10 quantise P for the second matmul. The output base is re-pointed per tile.
-    snax_simd_shape_flat(&sh[FA_SH_Q_IN],  L.p16, bc);
-    snax_simd_shape_flat(&sh[FA_SH_Q_OUT], (void *)0, bc / 2u);
+    // Base patched at dispatch to the live score buffer's prefix beat.
+    snax_simd_shape_flat(&sh[FA_SH_P_IN],  (void *)0, 1u + bc);
+    // base patched per dispatch to the live p8 buffer: bc/2 INT8 beats + 1 fp16 tail
+    snax_simd_shape_flat(&sh[FA_SH_P_OUT], (void *)0, bc / 2u + 1u);
     // 11 corr * l_old: sticky MUL over [corrL][lrun]; the seed emits nothing.
     snax_simd_shape_flat(&sh[FA_SH_LSC_IN],  L.corrL, 2);
     snax_simd_shape_flat(&sh[FA_SH_LSC_OUT], L.lsc, 1);
     // 13 l_new = corr*l_old + rowsum: LANEWISE ADD over the adjacent pair [rsum][lsc].
-    snax_simd_shape_flat(&sh[FA_SH_LNEW_IN],  L.rsum, 2);
+    // [lsc][rsum]: the row sum now lives in the p8 buffer's trailing beat, so this is
+    // a 2-beat STRIDED read, not an adjacent pair. ADD is commutative, so taking lsc
+    // first keeps the stride positive (the arena is allocated before the p8 buffers).
+    snax_simd_shape_2d(&sh[FA_SH_LNEW_IN], L.lsc, 2, 0, 1, 0);
     snax_simd_shape_flat(&sh[FA_SH_LNEW_OUT], L.lnew, 1);
     // 14 O *= corr: sticky MUL, latch corrO then the O tile, written back in place past
     //    the consumed latch.
@@ -1534,18 +1567,38 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_fa_softmax(void *arg) {
     snax_simd_shape_t *sh = (snax_simd_shape_t *)arena;
 
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_CFG_START);
-    // Geometry is fixed for a whole FA run, so build it once. Re-pointing the two bases
-    // that do change is two stores.
-    static uint32_t s_arena = 0u, s_bc = 0u, s_dhead = 0u;
-    if (arena != s_arena || bc != s_bc || dhead != s_dhead) {
+    // Geometry is fixed for a whole FA run of one query tile, so build it once per arena.
+    // Re-pointing the two bases that do change is two stores.
+    //
+    // tile_idx 0 is always the first invocation for a given arena -- the workload walks
+    // j (the KV tile) outermost -- so it rebuilds UNCONDITIONALLY. The memo is therefore
+    // only ever TRUSTED on a later tile, never required to be valid on a cold arena, and
+    // uninitialised L1 cannot be mistaken for a built geometry.
+    simd_fa_memo_t *memo = (simd_fa_memo_t *)(arena + SIMD_FA_MEMO_OFF);
+    if (tile_idx == 0u || memo->magic != SIMD_FA_MEMO_MAGIC ||
+        memo->bc != bc || memo->dhead != dhead) {
         simd_fa_build_shapes(arena, bc, dhead);
-        s_arena = arena;
-        s_bc = bc;
-        s_dhead = dhead;
+        memo->magic = SIMD_FA_MEMO_MAGIC;
+        memo->bc    = bc;
+        memo->dhead = dhead;
     }
     if (tile_idx == 0u) simd_fa_init_state(arena, bc, dhead);
     sh[FA_SH_TAP_IN].base = (void *)(uint32_t)s16_src;
-    sh[FA_SH_Q_OUT].base = (void *)(uint32_t)p8_dst;
+
+    // The caller hands us the GEMM's D buffer, which the workload allocated with ONE BEAT
+    // of headroom in front of it. That beat is where -m_new goes, so the fused exp pass can
+    // read [-m_new][the whole tile] as one contiguous stream straight out of the GEMM's
+    // output -- no copy. rmax's address comes from a shape that already points at it rather
+    // than from re-walking the layout.
+    {
+        const uint32_t negm = (uint32_t)s16_src - SIMD_BEAT_BYTES;
+        const uint32_t rmax = (uint32_t)sh[FA_SH_MNEW_IN].base;
+        sh[FA_SH_P_IN].base = (void *)negm;
+        const uint32_t rsum_p8 = (uint32_t)p8_dst + (bc / 2u) * SIMD_BEAT_BYTES;
+        sh[FA_SH_P_OUT].base = (void *)(uint32_t)p8_dst;
+        sh[FA_SH_LNEW_IN].stride[0] = rsum_p8 - (uint32_t)sh[FA_SH_LNEW_IN].base;
+        sh[FA_SH_NEGM_OUT].stride[0] = negm - rmax;   // arena is allocated first: positive
+    }
 
     // One full program establishes every CSR no task below varies -- address high word,
     // spatial stride, channel and byte masks, temporal dims 1 and 2. From here each task
@@ -1563,7 +1616,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_fa_softmax(void *arg) {
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_TASK_START);
     // 1  rowmax over the tile the GEMM has already written as fp16.
     snax_simd_use2(SIMD_EXT_STREAMREDUCE, SIMD_EXT_STREAMREDUCE_CSR, bc,
-                   SIMD_RED_MAX | SIMD_RED_LANEWISE | SIMD_RED_TAP);
+                   SIMD_RED_MAX | SIMD_RED_LANEWISE);
     snax_simd_program_1d(&sh[FA_SH_TAP_IN], &sh[FA_SH_TAP_OUT]);
     snax_simd_fire();
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_TASK_END);
@@ -1608,7 +1661,8 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_fa_softmax(void *arg) {
     snax_write_simd_cfg_reg(SIMD_EXT_ENABLE_PTR,
                             (1u << SIMD_EXT_STREAMELEMENTWISE_0) |
                                 (1u << SIMD_EXT_STREAMMAP) |
-                                (1u << SIMD_EXT_STREAMREDUCE));
+                                (1u << SIMD_EXT_STREAMREDUCE) |
+                                (1u << SIMD_EXT_FP16TOINT8));
     snax_write_simd_cfg_reg(SIMD_EXT_STREAMELEMENTWISE_0_CSR + 0, 1);
     snax_write_simd_cfg_reg(SIMD_EXT_STREAMELEMENTWISE_0_CSR + 1,
                             SIMD_EW_ADD | SIMD_EW_STICKY_B);
@@ -1618,16 +1672,28 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_fa_softmax(void *arg) {
     snax_write_simd_cfg_reg(SIMD_EXT_STREAMREDUCE_CSR + 0, bc);
     snax_write_simd_cfg_reg(SIMD_EXT_STREAMREDUCE_CSR + 1,
                             SIMD_RED_ADD | SIMD_RED_LANEWISE | SIMD_RED_TAP);
+    // The quantiser narrows the bc data beats 2:1 and lets the TAPPED row sum through
+    // unnarrowed, so this one pass emits both the operand the next GEMM reads and the
+    // fp16 statistic the recurrence needs. tailPeriod counts DATA beats before each tail,
+    // so bc (even) is right -- bc+1 would be the full period and is odd.
+    // The scale is 127.0, not 1.0. P = exp(S - m) lies in [0,1], so a scale of 1.0 rounds
+    // every element to 0 or 1 -- P degenerates to a BINARY MASK and the PV matmul that
+    // consumes it computes nothing meaningful. It sat at 1.0 for a long time and nothing
+    // caught it, because this workload's own comment says "O is a cycle measurement" and
+    // no check ever read O back; adding one found it on the first run. The general
+    // simd_softmax kernel has always used BINGO_SIMD_I8_SCALE_UNIT for the same [0,1]
+    // range, so this is now consistent with it.
+    //
+    // O comes out 127x larger as a result. Harmless here -- O is never normalised by l in
+    // this benchmark -- but a real FA epilogue dividing by l MUST account for it, because
+    // l is accumulated from the UNSCALED fp16 P.
+    snax_write_simd_cfg_reg(SIMD_EXT_FP16TOINT8_CSR + 0, BINGO_SIMD_I8_SCALE_UNIT);
+    snax_write_simd_cfg_reg(SIMD_EXT_FP16TOINT8_CSR + 1, SIMD_QUANT_TAIL(bc));
     snax_simd_program_1d(&sh[FA_SH_P_IN], &sh[FA_SH_P_OUT]);
     snax_simd_fire();
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_TASK_END);
 
-    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_TASK_START);
-    // 10 quantise P into the operand the next GEMM reads as B.
-    snax_simd_use1(SIMD_EXT_FP16TOINT8, SIMD_EXT_FP16TOINT8_CSR, SIMD_F32_ONE);
-    snax_simd_program_1d(&sh[FA_SH_Q_IN], &sh[FA_SH_Q_OUT]);
-    snax_simd_fire();
-    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_TASK_END);
+    // 10 quantise is GONE -- the fused pass above emits INT8 directly.
 
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_TASK_START);
     // 14 O *= corr. HOISTED to here, directly after the quantise, because P8 and the
