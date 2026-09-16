@@ -368,12 +368,13 @@ def main():
     for trace_file in trace_files:
         basename = os.path.basename(trace_file)
         # Parse filename: trace_chip_XX_hart_XXXXX.txt
-        match = re.search(r'trace_chip_(\d+)_hart_(\d+)\.(txt|log)', basename)
+        match = re.search(r'trace_chip_([0-9a-fA-F]+)_hart_([0-9a-fA-F]+)\.(txt|log)',
+                          basename)
         if not match:
             continue
-            
-        chip_id = int(match.group(1))
-        hart_id = int(match.group(2))
+
+        chip_id = int(match.group(1), 16)
+        hart_id = int(match.group(2), 16)
         
         # Determine PID/TID mappings
         # PID = Chip ID
