@@ -47,11 +47,12 @@ from gemm_multi_chiplet_datagen import emit_header_file  # noqa E402
 
 from bingo_dfg import BingoDFG
 from bingo_platform import (
-_ROLES = core_roles()
+    core_roles,
     parse_platform_cfg,
     guard_cluster_count,
     guard_chiplet_count,
 )
+_ROLES = core_roles()
 from bingo_node import BingoNode
 from bingo_mem_handle import BingoMemAlloc, BingoMemSymbol, BingoMemFixedAddr
 from bingo_kernel_args import (

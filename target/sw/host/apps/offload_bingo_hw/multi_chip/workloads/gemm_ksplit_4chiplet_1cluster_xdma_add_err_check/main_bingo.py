@@ -75,7 +75,7 @@ from bingo_kernel_args import (  # noqa E402
 )
 from bingo_mem_handle import BingoMemAlloc, BingoMemFixedAddr  # noqa E402
 from bingo_node import BingoNode  # noqa E402
-from bingo_platform import guard_chiplet_count, guard_cluster_count, parse_platform_cfg  # noqa E402
+from bingo_platform import core_roles, guard_chiplet_count, guard_cluster_count, parse_platform_cfg  # noqa E402
 _ROLES = core_roles()
 from ksplit_gemm_multi_chiplet_datagen import emit_header_file  # noqa E402
 

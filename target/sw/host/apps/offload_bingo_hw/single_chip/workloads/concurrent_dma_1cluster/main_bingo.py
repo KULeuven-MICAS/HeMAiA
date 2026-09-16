@@ -182,7 +182,7 @@ def create_dfg(params, mem_handles, platform):
     roles = core_roles(platform)
     gemm_core_id = roles["gemm"]
     dma_core_id = roles["dm"]
-xdma_core_id = roles["xdma"]
+    xdma_core_id = roles["xdma"]
     host_core_id = roles["host"]
 
     # 1. Initialize DFG using HW params derived from occamy.h + RTL config
