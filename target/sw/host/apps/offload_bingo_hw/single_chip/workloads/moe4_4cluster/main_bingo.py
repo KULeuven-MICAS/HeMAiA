@@ -117,8 +117,14 @@ def main():
         emit_header_file(str(args.data_h), params, data)
 
     # DFG
+    # Core count from the platform, not a constant. It was 2 -- the old cluster -- while
+    # HOST_CORE comes from the generated role map and is 4 on snax_split_cluster, so the
+    # DFG rejected every host node as "core 4, but valid cores are 0..2". The two numbers
+    # have to come from the same place or they drift apart on the next cluster change.
     dfg = BingoDFG(num_chiplets=1, num_clusters_per_chiplet=NUM_CLUSTERS,
-                   num_cores_per_cluster=2, is_host_as_acc=True, chiplet_ids=[CHIPLET_ID])
+                   num_cores_per_cluster=platform["num_cores_per_cluster"],
+                   is_host_as_acc=True, chiplet_ids=[CHIPLET_ID],
+                   dep_tag_width=platform["dep_tag_width"])
 
     logits = BingoMemAlloc("logits", num_experts * 4, "L3")
     router = BingoNode(CHIPLET_ID, 0, HOST_CORE, node_name="router",
