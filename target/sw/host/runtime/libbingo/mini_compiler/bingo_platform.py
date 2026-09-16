@@ -50,10 +50,40 @@ def parse_platform_cfg(occamy_h_path):
         # addresses are simply unmapped, so the loads return junk and the checks compare
         # junk against junk. Defaulted rather than required so an older generated header
         # still parses. See util/sim/common/bingo_data_staging.py.
+        # DepTagWidth as the RTL was generated with (cfg s1_quadrant.dep_tag_width).
+        # The packed task descriptor must fit one 64-bit word, and a 4-cluster config
+        # spends 2 more bits on cluster ids than a 1-cluster one, so this is NOT a
+        # constant across configs. A SW/RTL mismatch here does not fault: the tag is
+        # not the top field, so every bit above it -- both dep codes, the dep_set
+        # chiplet and cluster ids -- shifts, and tasks quietly dispatch to the wrong
+        # place. Defaulted so an older generated header still parses.
+        "dep_tag_width": defines.get("BINGO_DEP_TAG_WIDTH", 4),
         "num_mem_chips": defines.get("N_MEM_CHIPS", 0),
         "mem_chip_loc_x": defines.get("MEM_CHIP_LOC_X", 0),
         "mem_chip_loc_y": defines.get("MEM_CHIP_LOC_Y", 0),
     }
+
+
+# The generated platform header, resolved from THIS file's location the same way
+# _DEFAULT_ROLES_HEADER below is: bingo_platform.py sits at
+# target/sw/host/runtime/libbingo/mini_compiler/, so parents[4] is target/sw.
+_DEFAULT_PLATFORM_HEADER = (
+    Path(__file__).resolve().parents[4] / "shared" / "platform" / "generated" / "occamy.h"
+)
+
+
+def default_dep_tag_width():
+    """DepTagWidth from the generated header, for callers with no platform dict.
+
+    A workload that already parsed its own platform cfg should pass
+    platform["dep_tag_width"] instead -- that is the header the build actually used.
+    This is the fallback so a caller that passes nothing still tracks the RTL rather
+    than a constant. Returns the schema default when the header is not generated yet.
+    """
+    try:
+        return _parse_defines(_DEFAULT_PLATFORM_HEADER).get("BINGO_DEP_TAG_WIDTH", 4)
+    except OSError:
+        return 4
 
 
 # The generated role map, mirrored into the device tree by `make snax-sw-gen`

@@ -37,6 +37,31 @@ from bingo_kernel_args import (
 )
 
 
+
+# Which accelerator a BINGO device kernel drives, keyed on the token right after
+# "_kernel_". The name is the only thing the DFG and the device-side SNAX_EXPORT_FUNC
+# registry agree on, so it is what the placement is checked against.
+#
+# A kernel that touches no accelerator maps to None and is not placed: dummy, exit,
+# sync_probe, check_results, and the scalar helpers (pack_fa_partial) which run wherever
+# their consumer is. "idma" maps to the "dm" role because that is the role name for the
+# hart carrying the DMA ISA -- a dm* instruction on any other hart traps.
+_ENGINE_BY_KERNEL_TOKEN = {
+    "gemm": "gemm",
+    "simd": "simd",
+    "xdma": "xdma",
+    "idma": "dm",
+}
+
+
+def _engine_of_kernel(kernel_name):
+    """The engine a __snax_bingo_kernel_* name drives, or None if it drives none."""
+    if not kernel_name.startswith("__snax_bingo_kernel_"):
+        return None            # the older __snax_kernel_* family is not BINGO-dispatched
+    head = kernel_name[len("__snax_bingo_kernel_"):].split("_", 1)[0]
+    return _ENGINE_BY_KERNEL_TOKEN.get(head)
+
+
 class BingoDFG(DiGraphWrapper[BingoNode]):
     """Data Flow Graph (DFG) for Bingo."""
 
@@ -46,7 +71,7 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                  num_cores_per_cluster: int,
                  is_host_as_acc: bool,
                  chiplet_ids: list[int] = None,
-                 dep_tag_width: int = 4) -> None:
+                 dep_tag_width: int = None) -> None:
         super().__init__()
         # HW architecture parameters
         self.num_chiplets = num_chiplets
@@ -61,8 +86,14 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         # packed descriptor (= 0 when disabled), matching the RTL struct layout.
         self.enable_tagged_deps = True
         # Keep in sync with the RTL: cfg s1_quadrant.dep_tag_width -> DepTagWidth, exported
-        # to SW as BINGO_DEP_TAG_WIDTH (occamy.h) / DEP_TAG_WIDTH (bingo_utils.h). The
-        # default matches the schema default; pass dep_tag_width= when the cfg overrides it.
+        # to SW as BINGO_DEP_TAG_WIDTH (occamy.h) / DEP_TAG_WIDTH (bingo_utils.h). It is
+        # NOT a constant across configs -- a 4-cluster one must run it at 3 to keep the
+        # packed descriptor inside 64 bits -- so the default reads the generated header
+        # rather than assuming. Pass platform["dep_tag_width"] to pin it to the header
+        # this build actually used.
+        if dep_tag_width is None:
+            from bingo_platform import default_dep_tag_width
+            dep_tag_width = default_dep_tag_width()
         self.dep_tag_width = dep_tag_width
         # Node ID counter
         # Make sure the node id is starts from 0
@@ -692,10 +723,28 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
             chain_of = min_chain_cover(edges)
             n_chains = len(set(chain_of.values())) if chain_of else 0
             if n_chains > len(avail):
+                # A cell is (consumer chiplet, consumer cluster, consumer core,
+                # producer core) and a chain is a set of edges the happens-before
+                # order already serializes, so n_chains is the number of edges that
+                # really can be live at once here. Name one edge per chain: the fix
+                # is almost always to order those producers with respect to each
+                # other, not to widen the tag.
+                heads = {}
+                for i, (su, cv) in enumerate(edges):
+                    heads.setdefault(chain_of[i], []).append((su, cv))
+                detail = "\n".join(
+                    f"    chain {c}: " + ", ".join(
+                        f"{su.node_name}->{cv.node_name}" for su, cv in el[:3])
+                    + (f" (+{len(el) - 3} more)" if len(el) > 3 else "")
+                    for c, el in sorted(heads.items()))
                 raise ValueError(
                     f"dep-tag allocation: cell {key} needs {n_chains} local + "
-                    f"{len(skip)} reserved > {max_tags} tags (tag_width={tag_width}); "
-                    f"reduce this cell's concurrency in placement or widen DepTagWidth.")
+                    f"{len(skip)} reserved > {max_tags} tags (tag_width={tag_width}).\n"
+                    f"  cell = (chiplet, cluster, consumer core, producer core)\n"
+                    f"  concurrent edge chains:\n{detail}\n"
+                    f"  Fix by serializing these producers against each other (an "
+                    f"edge between them lets the chain cover merge them), or widen "
+                    f"DepTagWidth -- but check the descriptor still fits 64 bits.")
             for i, (su, cv) in enumerate(edges):
                 su.dep_set_tag = avail[chain_of[i]]
                 cv.dep_check_tag = avail[chain_of[i]]
@@ -1171,9 +1220,25 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         packed_val |= ((node.dep_set_tag or 0) << current_shift)
         current_shift += self.dep_tag_width
 
-        # Check if we exceeded 64 bits
+        # Check if we exceeded 64 bits. The descriptor travels as one host AXI-Lite
+        # data word, and the RTL builds the same struct from the same widths
+        # (bingo_hw_manager_task_desc_t), so an overflow here is an overflow there:
+        # ReservedBitsForTaskDesc goes negative and the RTL will not elaborate either.
+        # The width is not fixed -- it grows with the cluster and core counts -- so
+        # report the breakdown and name the one knob that is meant to absorb it.
         if current_shift > 64:
-            raise ValueError(f"Packed task descriptor exceeds 64 bits: {current_shift} bits used.")
+            raise ValueError(
+                f"Packed task descriptor exceeds 64 bits: {current_shift} bits used.\n"
+                f"  fixed fields                 40\n"
+                f"  assigned/dep_set cluster id  {2 * cluster_id_width}  "
+                f"(num_clusters={num_clusters})\n"
+                f"  assigned core id             {core_id_width}  (num_cores={num_cores})\n"
+                f"  dep_check + dep_set code     {2 * num_cores}\n"
+                f"  dep_check + dep_set tag      {2 * self.dep_tag_width}  "
+                f"(dep_tag_width={self.dep_tag_width})\n"
+                f"Lower s1_quadrant.dep_tag_width in the RTL cfg (each step down frees "
+                f"2 bits) and rebuild; SW picks the new value up from occamy.h's "
+                f"BINGO_DEP_TAG_WIDTH.")
             
         return packed_val
     def bingo_unpack_node(self, packed_val: int) -> dict:
@@ -1699,6 +1764,14 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         host_core_id = self.num_cores_per_cluster - 1 if self.is_host_as_acc else None
         num_snax_cores = host_core_id if self.is_host_as_acc else self.num_cores_per_cluster
         failures = []
+        # The generated engine->core map, if this build has one. core_roles() raises for a
+        # cluster that lacks an engine and for a map that has not been generated yet;
+        # neither is a placement error, so the per-node engine check is simply skipped.
+        try:
+            from bingo_platform import core_roles
+            roles = core_roles()
+        except Exception:
+            roles = None
 
         def node_label(node):
             return (
@@ -1749,6 +1822,23 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                         f"to a real cluster core in 0..{num_snax_cores - 1}; "
                         f"got core {node.assigned_core_id}."
                     )
+                # And on the RIGHT cluster core. Being in range is not enough: every hart
+                # exposes its accelerator CSRs at the same offsets, so a node on the wrong
+                # hart programs whatever is there -- or nothing -- and reports success.
+                # Only enforced when the generated role map is readable; a cluster that
+                # genuinely lacks an engine makes core_roles() raise, and a missing map is
+                # a build-order problem, not a placement error.
+                elif roles is not None:
+                    engine = _engine_of_kernel(kernel_name)
+                    want = roles.get(engine) if engine else None
+                    if want is not None and node.assigned_core_id != want:
+                        failures.append(
+                            f"{node_label(node)} drives the {engine.upper()} engine, which "
+                            f"the generated role map puts on core {want}, but it is "
+                            f"assigned core {node.assigned_core_id}. This does not fault "
+                            f"at run time -- that hart's CSR window answers at the same "
+                            f"offsets -- so it would silently do nothing."
+                        )
             else:
                 failures.append(
                     f"{node_label(node)} has an unknown kernel namespace. Kernel names "
