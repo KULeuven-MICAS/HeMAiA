@@ -277,6 +277,226 @@ static inline uint32_t xdma_elementwise_add_run(
     return BINGO_RET_SUCC;
 }
 
+// ==========================================================================
+// ChainGather -- the collective fold, in the fabric.
+//
+// Every other kernel in this file MOVES data. This one REDUCES it on the way: the
+// collector's xDMA walks a chain of remote partials and a writer junction folds each
+// arriving stream with that node's local read, so P partials cost one pass and the
+// collector's buffer receives the answer, not the operands.
+//
+// For FlashAttention this is the cross-cluster epilogue. Each cluster holds its own
+// (m, l) for the same query rows, and combining them is the online-softmax merge --
+// m* = max m_c, l* = sum exp(m_c - m*) l_c -- which is precisely what
+// WRITER_JCT_MONOIDJUNCTION computes. The O numerators then fold with the SAME chain
+// under WRITER_JCT_ELEMENTWISEJUNCTION (ADD, FP32), after each cluster has rescaled
+// its O by exp(m_c - m*). Two gathers and one rescale replace a gather-then-reduce
+// that would move every partial to one cluster first.
+//
+// Three things here are not optional, each learned from a failure that looked like
+// something else. They are cheap; keep them.
+// ==========================================================================
+// ==========================================================================
+// Pack a FlashAttention (m, l) partial into the monoid junction's lane geometry.
+//
+// Plain scalar work, deliberately: it runs on the xDMA core so that the gather that
+// consumes it is the very next thing that core does, with no cross-core handoff for 256
+// bytes. That core is rv32ima with NO FPU, so the FP16 -> FP32 widening is done on the
+// bit pattern. It is the whole reason this is a kernel and not two lines in the caller.
+// ==========================================================================
+static inline uint32_t bingo_f16_to_f32_bits(uint16_t h)
+{
+    uint32_t s = (uint32_t)(h >> 15) << 31;
+    uint32_t e = (uint32_t)((h >> 10) & 0x1Fu);
+    uint32_t m = (uint32_t)(h & 0x3FFu);
+    if (e == 0u) {
+        if (m == 0u) {
+            return s;                       // +-0
+        }
+        // Subnormal: value = m * 2^-24. Shift until bit 10 is set; after k shifts the
+        // value is (1+f) * 2^(-14-k), so the FP32 exponent field is 113 - k. `e`
+        // counts -k and wraps, which is fine -- the sum is a small positive number.
+        while ((m & 0x400u) == 0u) {
+            m <<= 1;
+            e--;
+        }
+        m &= 0x3FFu;
+        return s | ((e + 113u) << 23) | (m << 13);
+    }
+    if (e == 0x1Fu) {
+        return s | 0x7F800000u | (m << 13);  // inf / NaN, payload preserved
+    }
+    return s | ((e + 112u) << 23) | (m << 13);   // 127 - 15 = 112
+}
+
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_pack_fa_partial(void *arg)
+{
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_pack_fa_partial_args_t);
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+    __snax_bingo_kernel_pack_fa_partial_args_t *a =
+        (__snax_bingo_kernel_pack_fa_partial_args_t *)arg;
+    const uint16_t *src_m = (const uint16_t *)(uintptr_t)make_u64(a->src_m_addr_hi,
+                                                                 a->src_m_addr_lo);
+    const uint16_t *src_l = (const uint16_t *)(uintptr_t)make_u64(a->src_l_addr_hi,
+                                                                 a->src_l_addr_lo);
+    uint32_t *dst = (uint32_t *)(uintptr_t)make_u64(a->dst_addr_hi, a->dst_addr_lo);
+    uint32_t n_rows = a->n_rows, S = a->slots;
+    bingo_kernel_scratchpad_t *sp =
+        BINGO_GET_SP(arg, __snax_bingo_kernel_pack_fa_partial_args_t);
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+
+    // F = 2 fields, so the beat holds 2*S lanes and a 512b FP32 beat has 16 of them.
+    // A larger S would run one field's slots into the next field's lanes with no fault
+    // and no wrong-looking address -- just a fold of the wrong operands.
+    if (S == 0u || S > 8u || (S & (S - 1u)) != 0u || n_rows == 0u || (n_rows % S) != 0u) {
+        printf_safe("[Cluster %d Core %d]: Error! pack_fa_partial slots=%u must be a "
+                    "power of two in 1..8 and must divide n_rows=%u\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx(), S, n_rows);
+        return BINGO_RET_FAIL;
+    }
+
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
+    const uint32_t LANES = 16u;              // FP32 lanes in one 512b beat
+    for (uint32_t beat = 0; beat < n_rows / S; beat++) {
+        uint32_t *out = dst + beat * LANES;
+        for (uint32_t j = 0; j < S; j++) {
+            uint32_t row = beat * S + j;
+            out[j]     = bingo_f16_to_f32_bits(src_m[row]);   // field 0: the key
+            out[S + j] = bingo_f16_to_f32_bits(src_l[row]);   // field 1: the exp twist
+        }
+        // Lanes past 2*S are never read at this geometry, but a gather folds whatever
+        // is in the beat if someone later widens S. Zero is the additive identity and
+        // -inf would be the max identity, so leave no junk to inherit.
+        for (uint32_t k = 2u * S; k < LANES; k++) {
+            out[k] = 0u;
+        }
+    }
+    __asm__ volatile("" ::: "memory");
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
+    sp->return_value = (uint32_t)(uintptr_t)dst;
+    sp->num_return_values = 0;
+    return BINGO_RET_SUCC;
+}
+
+// Bound for the post-finish settle spin below. Large enough that a real transfer's
+// last store always lands inside it, small enough that a dead one reports in well
+// under a microsecond of simulated time instead of hanging the run.
+#define BINGO_XDMA_GATHER_SETTLE_SPINS 4096u
+
+#ifdef XDMA_DST_JCT_ENABLE_PTR
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_chain_gather(void *arg)
+{
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_chain_gather_args_t);
+    if (!snax_is_xdma_core()) {
+        printf_safe("[Cluster %d Core %d]: Error! xDMA chain_gather must run on the "
+                    "xDMA core!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+    __snax_bingo_kernel_xdma_chain_gather_args_t *a =
+        (__snax_bingo_kernel_xdma_chain_gather_args_t *)arg;
+    uint64_t local_src = make_u64(a->local_src_hi, a->local_src_lo);
+    uint32_t chain_num = a->chain_num;
+    bingo_kernel_scratchpad_t *sp =
+        BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_chain_gather_args_t);
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+
+    if (chain_num < 2 || chain_num > BINGO_XDMA_CHAIN_MAX ||
+        chain_num > XDMA_MAX_DST_COUNT) {
+        printf_safe("[Cluster %d Core %d]: Error! xDMA chain_gather chain_num=%u must be "
+                    "2..%u (arg struct) and <= %u (HW)\r\n", snrt_cluster_idx(),
+                    snrt_cluster_core_idx(), chain_num,
+                    (unsigned)BINGO_XDMA_CHAIN_MAX, (unsigned)XDMA_MAX_DST_COUNT);
+        return BINGO_RET_FAIL;
+    }
+
+    uint64_t chain[BINGO_XDMA_CHAIN_MAX];
+    for (uint32_t i = 0; i < chain_num; i++) {
+        chain[i] = make_u64(a->chain_hi[i], a->chain_lo[i]);
+    }
+    // The collector's own buffer is the last hop, and the settle spin below needs a
+    // value it can watch change.
+    uint32_t dst_addr = (uint32_t)chain[chain_num - 1];
+
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
+    // (1) A STALE JUNCTION IS NOT INERT. Junctions live in their own CSR bank and
+    // survive the previous task; one left armed re-folds this transfer with whatever
+    // it was pointed at. Clear extensions AND junctions before arming.
+    xdma_disable_all_extensions();
+    for (uint8_t j = 0; j < XDMA_DST_JCT_NUM; j++) xdma_disable_dst_junction(j);
+
+    // (2) SENTINEL, so "the writer never wrote" is distinguishable from "it wrote the
+    // wrong value", and so the settle spin below has something to observe.
+    *(volatile uint32_t *)(uintptr_t)dst_addr = 0xDEADBEEFu;
+    __asm__ volatile("fence" ::: "memory");
+
+    BINGO_XDMA_TRY(xdma_chain_gather_1d_full_address(local_src, chain, chain_num,
+                                                     a->size, (uint8_t)a->junction,
+                                                     a->jct_csr0),
+                   "xdma_chain_gather");
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
+
+    // (3) A SPURIOUS FINISH READS AS SUCCESS. If a finish left standing by the previous
+    // gather is already at or past the id this transfer is about to get, xdma_wait_task
+    // returns immediately, the task "completes" in ~26 cycles and nothing moved. The
+    // finish counter must lag the commit counter at arming time; check it before the
+    // transfer rather than debugging the silence afterwards.
+    uint32_t finish_before = snax_read_xdma_cfg_reg(XDMA_FINISH_REMOTE_TASK_PTR);
+    uint32_t commit_before = snax_read_xdma_cfg_reg(XDMA_COMMIT_REMOTE_TASK_PTR);
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
+    xdma_task_t task = xdma_start();
+    if (task.remote && finish_before > commit_before) {
+        printf_safe("[Cluster %d Core %d]: Error! xDMA chain_gather saw a standing "
+                    "finish (remote finish=%u > commit=%u) before task %u; the gather "
+                    "would return without moving data\r\n", snrt_cluster_idx(),
+                    snrt_cluster_core_idx(), finish_before, commit_before, task.task_id);
+        return BINGO_RET_FAIL;
+    }
+    xdma_wait_task(task);
+
+    // (4) THE FINISH COUNTER IS NOT A DATA BARRIER. It can bump a few cycles before the
+    // writer's last store lands in TCDM, so a consumer scheduled right behind this node
+    // reads the sentinel. A cold first gather hides this by being slow; a warm one
+    // completes in ~31 cycles and loses the race every time. Bounded, so a genuinely
+    // dead transfer still returns and reports rather than hanging the simulation.
+    {
+        volatile uint32_t *settle = (volatile uint32_t *)(uintptr_t)dst_addr;
+        uint32_t s = 0;
+        for (; s < BINGO_XDMA_GATHER_SETTLE_SPINS; s++) {
+            if (settle[0] != 0xDEADBEEFu) break;
+            __asm__ volatile("fence" ::: "memory");
+        }
+        __asm__ volatile("fence" ::: "memory");
+        if (s == BINGO_XDMA_GATHER_SETTLE_SPINS) {
+            printf_safe("[Cluster %d Core %d]: Error! xDMA chain_gather destination "
+                        "0x%x still holds the sentinel after the transfer finished; "
+                        "no folded beat arrived\r\n", snrt_cluster_idx(),
+                        snrt_cluster_core_idx(), dst_addr);
+            xdma_disable_dst_junction((uint8_t)a->junction);
+            return BINGO_RET_FAIL;
+        }
+    }
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
+
+    xdma_disable_dst_junction((uint8_t)a->junction);
+    sp->return_value = dst_addr;
+    sp->num_return_values = 0;
+    return BINGO_RET_SUCC;
+}
+#else
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_chain_gather(void *arg)
+{
+    // Refuse at CALL time, not compile time: the junctions are an optional part of the
+    // xDMA in the cluster cfg, and a #error here would stop every build on a cfg that
+    // simply does not have them.
+    (void)arg;
+    printf_safe("[Cluster %d Core %d]: Error! xDMA chain_gather needs a writer junction "
+                "(HasElementwiseJunction / HasMonoidJunction) and this cfg has none\r\n",
+                snrt_cluster_idx(), snrt_cluster_core_idx());
+    return BINGO_RET_FAIL;
+}
+#endif  // XDMA_DST_JCT_ENABLE_PTR
+
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_elementwise_add(void *arg)
 {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_elementwise_add_args_t);

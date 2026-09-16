@@ -442,6 +442,62 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_elementwise_add_args {
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_xdma_elementwise_add_args_t;
 
+// BINGO pack of a FlashAttention (m, l) partial into the monoid junction's lane
+// geometry, so a chain gather can fold it. See __snax_bingo_kernel_pack_fa_partial.
+//
+// The softmax arena keeps the running max and the running sum as two FP16 beats, one
+// lane per query row. The monoid wants them interleaved as FP32 in ONE stream, at
+// lane = field*S + slot: field 0 is the key m, field 1 is the exp-twisted value l, and
+// S = 1 << sigma is how many query rows share a beat. A 512b beat holds 16 FP32 lanes,
+// so S = 8 is the largest legal choice (F*S = 16) and Br = 32 rows pack into 4 beats.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_pack_fa_partial_args {
+  uint32_t src_m_addr_hi;
+  uint32_t src_m_addr_lo;
+  uint32_t src_l_addr_hi;
+  uint32_t src_l_addr_lo;
+  uint32_t dst_addr_hi;
+  uint32_t dst_addr_lo;
+  uint32_t n_rows;   // query rows (Br); must be a multiple of `slots`
+  uint32_t slots;    // S = 1 << sigma; rows per beat. S * 2 <= 16, so S <= 8.
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_pack_fa_partial_args_t;
+
+// BINGO XDMA ChainGather -- an in-fabric collective fold.
+//
+// The collector arms a writer JUNCTION and walks a chain of remote partials; each
+// crossing folds the arriving stream with that node's local read, so the answer is
+// reduced ON THE WAY and only the folded beat lands in the collector's buffer. Arming
+// the junction is what turns a chained write into a gather (the frontend sets
+// collectiveMode := junctionEnabled), which is why `junction` is not optional.
+//
+//   local_src : this collector's OWN partial (the reader pointer).
+//   chain[]   : the gather path in DATA order, ending at the collector's dst buffer --
+//               [S1, S2, ..., dst_local]. Every entry is that node's real partial
+//               address; the routers decode only the cluster tag. These are FULL
+//               (chip|cluster|offset) addresses, which is exactly what bingo_l1_alloc
+//               returns for a handle on another cluster -- no address arithmetic needed
+//               on the Python side.
+//   junction  : WRITER_JCT_ELEMENTWISEJUNCTION (per-element ADD/MUL/MAX/MIN) or
+//               WRITER_JCT_MONOIDJUNCTION (the softmax/attn/norm merge).
+//   jct_csr0  : the junction's CSR(0). See snax_xdma_lib.h for both encodings -- the
+//               monoid word is a GEOMETRY, not an operator id.
+//
+// BINGO_XDMA_CHAIN_MAX bounds the chain in the ARG STRUCT only. The hardware bound is
+// XDMA_MAX_DST_COUNT (a generated, cfg-dependent define, not visible in this shared
+// host/device header); the kernel checks against it at call time.
+#define BINGO_XDMA_CHAIN_MAX 8
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_chain_gather_args {
+  uint32_t local_src_hi;
+  uint32_t local_src_lo;
+  uint32_t chain_hi[BINGO_XDMA_CHAIN_MAX];
+  uint32_t chain_lo[BINGO_XDMA_CHAIN_MAX];
+  uint32_t chain_num;   // live entries in chain[], 2..BINGO_XDMA_CHAIN_MAX
+  uint32_t size;        // bytes per partial
+  uint32_t junction;    // WRITER_JCT_*
+  uint32_t jct_csr0;    // junction CSR(0)
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_xdma_chain_gather_args_t;
+
 // BINGO XDMA ElementwiseAdd AB (two-operand) (convenience: dst = a + b, int32).
 __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_elementwise_add_ab_args {
   uint32_t src_a_addr_hi;

@@ -972,6 +972,134 @@ class SnaxBingoKernelXdmaElementwiseAddArgs(BingoKernelArgs):
         return a
 
 
+# BINGO XDMA ChainGather -- an in-fabric collective fold (see xdma.h).
+#
+# `chain` is the gather path in DATA order, ENDING at the collector's own destination
+# buffer: [S1, S2, ..., dst_local]. Pass BingoMemAlloc handles; a handle allocated on
+# another cluster already resolves to a full (chip|cluster|offset) address, which is
+# what the hardware wants, so nothing here has to know the cluster map.
+#
+# The junction id is a GENERATED, cfg-dependent constant on the device side, so it is
+# named here by its C identifier and emitted verbatim rather than hardcoded to a number
+# that would silently shift if the cluster gained or lost a junction.
+XDMA_JCT_ELEMENTWISE = "WRITER_JCT_ELEMENTWISEJUNCTION"
+XDMA_JCT_MONOID = "WRITER_JCT_MONOIDJUNCTION"
+
+# ElementwiseJunction CSR(0): [3:0] op, [6:4] fmt.
+XDMA_EWJCT_OP_ADD = 0
+XDMA_EWJCT_FMT_FP32 = 3
+
+
+def xdma_ewjct_csr0(op=XDMA_EWJCT_OP_ADD, fmt=XDMA_EWJCT_FMT_FP32):
+    """CSR(0) for the elementwise junction -- a plain (op, format) pair."""
+    return (fmt << 4) | op
+
+
+def xdma_monoid_csr0(n_valid=8, n=1, n_exp=1, n_add=0, sigma=3, key_pol=0, key_mul=0):
+    """CSR(0) for the monoid junction -- a GEOMETRY word, not an operator id.
+
+        [7:0] nValid | [11:8] n | [21:18] nExp | [25:22] nAdd | [27:26] sigma
+        [28] keyPol (0=max) | [29] keyMul (0 = the (R,max) key monoid)
+
+    Lanes are field-major, lane = field*S + slot with S = 1 << sigma, and nValid is how
+    many of those S slots carry real data (the rest are fed their field's identity).
+
+    The defaults are the online-softmax partial (m, l): key m plus ONE exp-twisted value
+    coordinate, so n=1 (F = n+1 = 2 fields) and nExp=1, nAdd=0.
+
+    sigma picks how many INDEPENDENT (m, l) pairs share a beat -- one per query row. A
+    512b beat holds 16 FP32 lanes and the geometry uses F*S of them, so S=8 (sigma=3) is
+    the largest legal choice and packs 8 query rows per beat: m at lanes 0..7, l at lanes
+    8..15. Br=32 rows is then 4 beats. The sweep app uses nValid=1 because it folds a
+    single scalar pair; FA folds a whole query tile, so it wants the full slot count --
+    at nValid=1 only row 0 would be folded and the other seven silently keep the
+    collector's own value.
+
+    This is NOT the old StreamMomentMergeRt encoding ((1<<13)|1); under this layout that
+    word decodes to n=0, sigma=0 -- a key-only geometry whose fold reads no value.
+    """
+    return ((n_valid & 0xFF) | ((n & 0xF) << 8) | ((n_exp & 0xF) << 18) |
+            ((n_add & 0xF) << 22) | ((sigma & 0x3) << 26) |
+            ((key_pol & 0x1) << 28) | ((key_mul & 0x1) << 29))
+
+
+class SnaxBingoKernelPackFaPartialArgs(BingoKernelArgs):
+    """Pack the softmax arena's (m, l) FP16 beats into the monoid's FP32 lane geometry.
+
+    `slots` must equal the S the gather's monoid CSR(0) was built with, or the fold reads
+    lanes the pack never wrote. Keep them derived from one place -- see
+    xdma_monoid_csr0().
+    """
+
+    def __init__(self, src_m: Union[BingoMemAlloc, int], src_l: Union[BingoMemAlloc, int],
+                 dst: Union[BingoMemAlloc, int], n_rows: int, slots: int = 8):
+        if slots not in (1, 2, 4, 8):
+            raise ValueError(f"pack_fa_partial: slots={slots} must be 1, 2, 4 or 8 "
+                             "(two fields must fit the beat's 16 FP32 lanes).")
+        if n_rows % slots:
+            raise ValueError(f"pack_fa_partial: n_rows={n_rows} must be a multiple of "
+                             f"slots={slots}.")
+        self.src_m = src_m
+        self.src_l = src_l
+        self.dst = dst
+        self.n_rows = n_rows
+        self.slots = slots
+
+    @staticmethod
+    def packed_bytes(n_rows: int, slots: int = 8) -> int:
+        """Size of the packed partial -- what the gather transfers per cluster."""
+        return (n_rows // slots) * 64
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_pack_fa_partial_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.src_m, "src_m_addr", a, handle_name_map)
+        self._process_addr(self.src_l, "src_l_addr", a, handle_name_map)
+        self._process_addr(self.dst, "dst_addr", a, handle_name_map)
+        a["n_rows"] = str(self.n_rows)
+        a["slots"] = str(self.slots)
+        return a
+
+
+class SnaxBingoKernelXdmaChainGatherArgs(BingoKernelArgs):
+    # Must match BINGO_XDMA_CHAIN_MAX in device_kernel_args.h.
+    CHAIN_MAX = 8
+
+    def __init__(self, local_src: Union[BingoMemAlloc, int], chain: list,
+                 size: int, junction: str, jct_csr0: int):
+        if not 2 <= len(chain) <= self.CHAIN_MAX:
+            raise ValueError(
+                f"chain gather: chain has {len(chain)} entries; it must have 2.."
+                f"{self.CHAIN_MAX} -- the path in data order, ending at the "
+                "collector's own destination buffer.")
+        self.local_src = local_src
+        self.chain = list(chain)
+        self.size = size
+        self.junction = junction
+        self.jct_csr0 = jct_csr0
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_xdma_chain_gather_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.local_src, "local_src", a, handle_name_map)
+        for i, hop in enumerate(self.chain):
+            # _process_addr emits <base>_hi / <base>_lo; the base is a C lvalue, so an
+            # array element indexes cleanly.
+            tmp = {}
+            self._process_addr(hop, "chain", tmp, handle_name_map)
+            a[f"chain_hi[{i}]"] = tmp["chain_hi"]
+            a[f"chain_lo[{i}]"] = tmp["chain_lo"]
+        a["chain_num"] = str(len(self.chain))
+        a["size"] = str(self.size)
+        a["junction"] = self.junction
+        a["jct_csr0"] = f"0x{self.jct_csr0:08x}u"
+        return a
+
+
 # BINGO XDMA ElementwiseAdd AB (two-operand) (convenience: dst = a + b, int32).
 class SnaxBingoKernelXdmaElementwiseAddAbArgs(BingoKernelArgs):
     def __init__(self, src_a_addr: Union[BingoMemAlloc, int], src_b_addr: Union[BingoMemAlloc, int],
@@ -1471,7 +1599,7 @@ class SnaxBingoKernelSimdFaSoftmaxArgs(BingoKernelArgs):
 
     @classmethod
     def arena_bytes(cls, bc: int, dhead: int) -> int:
-        return cls.SHAPE_BYTES + (2 * bc + dhead + 11) * cls.BEAT_BYTES
+        return cls.SHAPE_BYTES + (dhead + 10) * cls.BEAT_BYTES
 
     @classmethod
     def layout(cls, bc: int, dhead: int) -> Dict[str, int]:
@@ -1490,9 +1618,12 @@ class SnaxBingoKernelSimdFaSoftmaxArgs(BingoKernelArgs):
         b = cls.BEAT_BYTES
         off = {}
         t = cls.SHAPE_BYTES
-        for name, beats in (("negmS", 1), ("s16", bc), ("rmax", 1), ("mrun", 1),
+        # negmS, s16 and p16 are GONE: the fused exp pass reads the GEMM's own score
+        # buffer through a one-beat prefix and emits INT8 directly, so neither the tile
+        # copy nor the FP16 P is ever materialised. Mirrors simd_fa_layout() exactly.
+        for name, beats in (("rmax", 1), ("mrun", 1),
                             ("mnew", 1), ("delta", 1), ("corrL", 1), ("lrun", 1),
-                            ("lnew", 1), ("p16", bc), ("rsum", 1), ("lsc", 1),
+                            ("lnew", 1), ("rsum", 1), ("lsc", 1),
                             ("corrO", 1), ("oacc", dhead)):
             off[name] = t
             t += beats * b
@@ -2272,6 +2403,7 @@ BINGO_CHECK_TYPE_FP32_TOL   = 1
 BINGO_CHECK_TYPE_FP16_TOL   = 2
 BINGO_CHECK_TYPE_FP16_RELTOL = 3  # fp16 relative tol: |out-g| <= rtol*|g| + 0.05 (magnitude-scaled)
 BINGO_CHECK_TYPE_INT8_TOL   = 4   # signed-int8 abs tol: |out-g| <= tol LSBs (quantized activation)
+BINGO_CHECK_TYPE_INT32_RELTOL = 5 # signed-int32 rel tol: |out-g| <= rtol*|g| + 0.001*max|g| (accumulator)
 
 
 # Bytes per element for each check mode — used for validation and
@@ -2282,6 +2414,7 @@ _CHECK_TYPE_ELEM_BYTES = {
     BINGO_CHECK_TYPE_FP16_TOL:   2,
     BINGO_CHECK_TYPE_FP16_RELTOL: 2,  # fp16 elements, relative-tolerance compare
     BINGO_CHECK_TYPE_INT8_TOL:   1,   # one signed int8 per element
+    BINGO_CHECK_TYPE_INT32_RELTOL: 4,  # one signed int32 per element
 }
 
 

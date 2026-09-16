@@ -87,6 +87,8 @@ SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_concat_2d),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_pad_2d),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_gather_2d),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_pack_fa_partial),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_chain_gather),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_elementwise_add),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_elementwise_add_ab),
     /// Core-level SIMD Kernels  (offload_hw_kernels/simd.h)          ///
