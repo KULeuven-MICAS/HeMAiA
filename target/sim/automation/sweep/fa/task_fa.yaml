@@ -1,9 +1,0 @@
-# FlashAttention on the four-engine cluster.
-#
-# One task: Br=32, Bc=512, d=128, NKV=4 -- the same tile as the reference
-# snax-flashattn app, so the per-engine cycle counts are comparable point for point.
-runs:
-  - HOST_APP_TYPE: offload_bingo_hw
-    CHIP_TYPE: single_chip
-    WORKLOAD: fa_1cluster
-    DEV_APP: snax-bingo-offload
