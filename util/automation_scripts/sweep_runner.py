@@ -68,18 +68,9 @@ def run_sweep_cli(script_file, *, description, default_task_name,
              "What --sw-only cannot do: recover from a failed or absent EDA compile "
              "without paying for the ~30-40 min RTL generation again. Also skips the "
              "repo reset, so hand edits to generated RTL survive.")
-    parser.add_argument(
-        "--sim-cores", type=int, default=1, metavar="N",
-        help="VCS cores per SIMULATION (fine-grained parallelism). 1 = single-core, the "
-             "default. >1 passes -fgp=num_threads:N-1 with -fgp=allow_less_cores, so a "
-             "busy backend degrades instead of aborting. FGP needs its own VCS license "
-             "feature and this flow already has seat pressure, so verify a known-good "
-             "workload before trusting a measurement taken with it.")
     args = parser.parse_args()
     if args.max_sim_jobs < 1:
         parser.error("--max-sim-jobs must be >= 1")
-    if args.sim_cores < 1:
-        parser.error("--sim-cores must be >= 1")
 
     task_yaml = resolve_task_yaml(args.task_yaml)
     if not task_yaml.exists():
@@ -100,7 +91,6 @@ def run_sweep_cli(script_file, *, description, default_task_name,
         # `rtl`/`bootrom` are not, and stay serial.
         build_jobs=os.cpu_count(),
         max_jobs=args.max_sim_jobs,
-        vcs_sim_cores_per_job=args.sim_cores,
         skip_setup=args.sw_only or args.reuse_build,
         skip_build=args.sw_only or args.reuse_build,
         skip_compile=args.sw_only,

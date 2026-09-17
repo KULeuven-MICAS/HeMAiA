@@ -231,24 +231,15 @@ ifeq ($(SIM_WITH_NETLIST), 1)
 	VCS_FLAGS += -hsopt=gates
 	VCS_FLAGS += -Xkeyopt=rtopt
 	VCS_FLAGS += +rad
-	# VCS defines num_threads as child workers, excluding the master.  Expose the
-	# friendlier total-core count to make callers and use it as a maximum when a
-	# busy host cannot satisfy the full request.
-	VCS_SIM_CORES_PER_JOB ?= 1
-	VCS_SIM_CORES_VALID := $(shell printf '%s\n' '$(VCS_SIM_CORES_PER_JOB)' | grep -Eq '^[1-9][0-9]*$$' && echo 1)
-ifneq ($(VCS_SIM_CORES_VALID), 1)
-$(error VCS_SIM_CORES_PER_JOB must be a positive integer)
-endif
-ifneq ($(VCS_SIM_CORES_PER_JOB), 1)
-	VCS_FGP_CHILD_THREADS := $(shell expr $(VCS_SIM_CORES_PER_JOB) - 1)
-	VCS_RUNTIME_FLAGS += -fgp=num_threads:$(VCS_FGP_CHILD_THREADS)
-	VCS_RUNTIME_FLAGS += -fgp=allow_less_cores
-ifeq ($(SIM_WITH_WAVEFORM), 1)
-	# FGP requires an explicit FSDB thread policy whenever dumping is enabled.
-	# Keep dumping on the master so the requested value remains the total cores.
-	VCS_RUNTIME_FLAGS += -fgp=num_fsdb_threads:0
-endif
-endif
+	# NO -fgp. VCS's fine-grained parallelism targets GATE-LEVEL simulation, where a
+	# flattened netlist has enough fine-grained events to thread. An RTL event graph is
+	# coarser and more serialised, so thread synchronisation cancels the gain: measured
+	# at 4 cores on this design, 4m52s and 4m54s against a 4m42s-6m04s single-core
+	# baseline, on sim_rtl (sim_with_netlist: false).
+	#
+	# Parallelism that DOES pay here is job-level -- independent simulations run
+	# concurrently, which took three ~5-minute runs to 4m55s of wall-clock. Raise the
+	# runner's -j for that; it is bounded by VCS runtime license seats, not by cores.
 else
 	# Preserve the historical non-netlist behavior.
 	VCS_FLAGS += +nospecify

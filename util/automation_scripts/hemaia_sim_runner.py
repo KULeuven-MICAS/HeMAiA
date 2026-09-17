@@ -664,7 +664,6 @@ class HeMAiASimRunner:
         skip_build: bool = False,
         skip_compile: bool = False,
         compile_jobs: Optional[int] = None,
-        vcs_sim_cores_per_job: int = 1,
         build_jobs: Optional[int] = None,
         build_sw_fleet: bool = True,
         task_yaml: Optional[Path] = None,
@@ -707,9 +706,6 @@ class HeMAiASimRunner:
         # VCS FGP counts its master separately from ``num_threads``.  Keep the
         # public setting in total cores so multiplying it by ``max_jobs`` gives
         # the intended upper bound on simulation CPU use.
-        if vcs_sim_cores_per_job < 1:
-            raise ValueError("vcs_sim_cores_per_job must be >= 1")
-        self.vcs_sim_cores_per_job = vcs_sim_cores_per_job
         # `make -jN` for the SW build. Only `sw` is parallel-safe (and it is the slow
         # one: ~96 host apps x ~20 device apps). `rtl` runs occamygen + bender script
         # generation and `bootrom` takes seconds -- both stay serial.
@@ -972,7 +968,6 @@ class HeMAiASimRunner:
             f"SIM_CFG={self._repo_path(self.sim_cfg)}",
             f"SIM_WITH_WAVEFORM={self.waveform}",
             f"SIM_WITH_PLL={1 if self.with_pll else 0}",
-            f"VCS_SIM_CORES_PER_JOB={self.vcs_sim_cores_per_job}",
         ]
 
     def _sim_cfg_flag(self, name: str) -> bool:
@@ -1531,21 +1526,15 @@ class HeMAiASimRunner:
         run_args = list(self.spec.get("run_args", []))
         if self._sim_cfg_flag("sim_with_netlist"):
             run_args.extend(self.spec.get("netlist_run_args", []))
-        if self.engine == "vcs" and self.vcs_sim_cores_per_job > 1:
-            # VCS's runtime value names only the child workers; one additional
-            # master core makes the user-facing total.  Treat the request as an
-            # upper bound on a busy shared backend rather than aborting when
-            # fewer idle cores are available.
-            run_args.extend(
-                [
-                    f"-fgp=num_threads:{self.vcs_sim_cores_per_job - 1}",
-                    "-fgp=allow_less_cores",
-                ]
-            )
-            if self.waveform == "1":
-                # FGP requires an explicit FSDB policy when waveform dumping is
-                # enabled.  Zero keeps dumping on the master core.
-                run_args.append("-fgp=num_fsdb_threads:0")
+        # NO -fgp. VCS's fine-grained parallelism is aimed at GATE-LEVEL simulation, where a
+        # flattened netlist exposes enough fine-grained events to thread; an RTL event graph
+        # is coarser and more serialised, and the synchronisation overhead cancels the gain.
+        # Measured on this design at 4 cores: 4m52s and 4m54s against a 4m42s-6m04s
+        # single-core baseline -- no gain, on sim_rtl (sim_with_netlist: false).
+        #
+        # The parallelism that DOES pay here is job-level: independent simulations run
+        # concurrently (see max_jobs), which took three ~5-minute runs to 4m55s wall-clock.
+        # That is bounded by VCS runtime license seats rather than by cores.
 
         def _worker(task_dir: Path, ci_name: str):
             sim_binary = task_dir / "bin" / binary_name
@@ -1601,8 +1590,7 @@ class HeMAiASimRunner:
         worker_count = min(self.max_jobs, len(tasks_info))
         print(f"Running {len(tasks_info)} {self.engine} simulation(s) with up to "
               f"{worker_count} parallel job(s) and "
-              f"{self.vcs_sim_cores_per_job if self.engine == 'vcs' else 1} "
-              f"core(s) per job")
+              f"1 core(s) per job")
 
         phase_start = time.monotonic()
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
