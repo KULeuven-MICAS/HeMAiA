@@ -162,7 +162,7 @@ def add_l1_layout_test(dfg, name, src_sym, src_size, kernel_name, kernel_args_cl
         kernel_name="__snax_bingo_kernel_idma_1d_copy",
         kernel_args=SnaxBingoKernelIdma1dCopyArgs(src_sym, l1_src, src_size))
     convert = BingoNode(
-        assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=DMA_CORE,
+        assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=XDMA_CORE,
         node_name=f"Conv_{name}",
         kernel_name=kernel_name,
         kernel_args=kernel_args_cls(src_addr=l1_src, dst_addr=l1_dst,
@@ -193,7 +193,7 @@ def add_l3_direct_layout_test(dfg, name, src_sym, kernel_name, kernel_args_cls,
                               prev_chk):
     l3_dst = BingoMemAlloc(f"l3_direct_{name}_dst", size=dst_size, mem_level="L3")
     convert = BingoNode(
-        assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=DMA_CORE,
+        assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=XDMA_CORE,
         node_name=f"ConvL3_{name}",
         kernel_name=kernel_name,
         kernel_args=kernel_args_cls(src_addr=src_sym, dst_addr=l3_dst,
