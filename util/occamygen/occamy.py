@@ -26,6 +26,117 @@ from cluster import Generator, PMA, PMACfg, SnitchCluster, clog2  # noqa: E402
 # appended after the harts in the MSIP / mtip / msip vectors and the CLINT NumCores.
 NR_HW_MANAGER_IPI = 1
 
+# Bingo HW manager task-descriptor bus width (bingo_hw_manager_top TaskDescBusWidth),
+# deliberately decoupled from the 64-bit host AXI-Lite data width: the task-queue master
+# fetches TaskDescBusWidth/HostAxiLiteDataWidth beats and commits them as one atomic push.
+# The task list itself stays a uint64_t array, so SW needs the width in 64-bit words too;
+# the RTL parameter and the C defines both come from one call to get_task_desc_width below
+# -- DERIVED from the config's own layout, or the s1_quadrant.task_desc_width override when
+# the config pins one -- so the two sides cannot be built against different layouts.
+TASK_DESC_WORD_BITS = 64
+# Field widths the descriptor layout takes from the RTL struct rather than computing them.
+# TaskIdWidth is bingo_hw_manager_top's parameter default (nothing overrides it).
+# ChipIdWidth IS overridden -- the quad_ctrl template passes hemaia_multichip.chip_id_width
+# -- so get_bingo_chip_id_width() refuses any config that moves that key away from this
+# constant, which would otherwise mis-size two descriptor fields without any error.
+TASK_DESC_CHIP_ID_WIDTH = 8
+TASK_DESC_TASK_ID_WIDTH = 12
+
+
+def _idx_width(n):
+    """cf_math_pkg::idx_width -- clog2 with a floor of 1, NOT bare clog2."""
+    return clog2(n) if n > 1 else 1
+
+
+def task_desc_layout_bits(nr_cores_per_cluster, nr_clusters_per_chiplet, dep_tag_width):
+    """Bits actually used by bingo_hw_manager_task_desc_t for this configuration.
+
+    Mirrors the RTL packed struct field for field. The host CVA6 counts as an extra core in
+    cluster 0 (occamy_quad_ctrl.sv.tpl does NrCoresPerCluster[0] + 1), which is why every
+    per-core term below uses ncores_hw and not the cfg's nr_cores.
+    """
+    ncores_hw = nr_cores_per_cluster + 1
+    cluster_w = _idx_width(nr_clusters_per_chiplet)
+    return (1 + 5 + 1                              # cond_exec_{invert,group_id,en}
+            + 2                                    # task_type
+            + TASK_DESC_TASK_ID_WIDTH
+            + TASK_DESC_CHIP_ID_WIDTH              # assigned_chiplet_id
+            + cluster_w                            # assigned_cluster_id
+            + _idx_width(ncores_hw)                # assigned_core_id
+            + 1 + ncores_hw + dep_tag_width        # dep_check_info
+            + 1 + 1 + TASK_DESC_CHIP_ID_WIDTH + cluster_w + ncores_hw + dep_tag_width)
+
+
+def get_task_desc_width(occamy_cfg, nr_cores_per_cluster=None, nr_clusters_per_chiplet=None):
+    """TaskDescBusWidth for this config: the smallest whole number of 64-bit words that
+    holds the layout, unless s1_quadrant.task_desc_width asks for more.
+
+    DERIVED, not a flat default. A flat 128 would be the obvious choice and it is wrong: 12
+    of the 14 in-tree configs have a 58-63 bit layout, so forcing 128 on them would make the
+    fetch master read TWO AXI-Lite beats per descriptor instead of one and double every task
+    list's L3 footprint, with the upper word guaranteed zero -- a silent behaviour and area
+    change to configs (including frozen tapeout ones) that asked for nothing. Deriving it
+    means a config only pays for the second beat once its descriptor genuinely needs it,
+    which is also the property that makes adding cores or clusters 'just work'.
+
+    Set s1_quadrant.task_desc_width explicitly to buy headroom ahead of need -- e.g. to keep
+    dep_tag_width at 4 on a 4-cluster part, or to freeze a container width across a family of
+    configs so one task-list image serves all of them.
+    """
+    explicit = occamy_cfg["s1_quadrant"].get("task_desc_width")
+    if explicit is None:
+        if nr_cores_per_cluster is None or nr_clusters_per_chiplet is None:
+            raise ValueError(
+                "get_task_desc_width: need the core/cluster counts to derive the descriptor "
+                "width, or an explicit s1_quadrant.task_desc_width")
+        bits = task_desc_layout_bits(nr_cores_per_cluster, nr_clusters_per_chiplet,
+                                     occamy_cfg["s1_quadrant"]["dep_tag_width"])
+        words = max(1, -(-bits // TASK_DESC_WORD_BITS))   # ceil
+        return words * TASK_DESC_WORD_BITS
+    task_desc_width = int(explicit)
+    if nr_cores_per_cluster is not None and nr_clusters_per_chiplet is not None:
+        bits = task_desc_layout_bits(nr_cores_per_cluster, nr_clusters_per_chiplet,
+                                     occamy_cfg["s1_quadrant"]["dep_tag_width"])
+        if bits > task_desc_width:
+            raise ValueError(
+                f"s1_quadrant.task_desc_width ({task_desc_width}) is smaller than the "
+                f"descriptor this config needs ({bits} bits, with "
+                f"nr_cores_per_cluster={nr_cores_per_cluster} (+1 host), "
+                f"nr_clusters_per_chiplet={nr_clusters_per_chiplet}, "
+                f"dep_tag_width={occamy_cfg['s1_quadrant']['dep_tag_width']}). "
+                f"Raise it to {max(1, -(-bits // TASK_DESC_WORD_BITS)) * TASK_DESC_WORD_BITS} "
+                f"or shrink a field.")
+    # Mirrors the gen_task_desc_beat_check elaboration assertion in bingo_hw_manager_top:
+    # a fractional beat count has no meaning for the fetch master, and a sub-word
+    # descriptor cannot be addressed in the uint64_t task list.
+    if task_desc_width < TASK_DESC_WORD_BITS or \
+            task_desc_width % TASK_DESC_WORD_BITS != 0:
+        raise ValueError(
+            f"s1_quadrant.task_desc_width ({task_desc_width}) must be a positive "
+            f"multiple of {TASK_DESC_WORD_BITS} (the host AXI-Lite / task-list word).")
+    return task_desc_width
+
+
+def get_bingo_chip_id_width(occamy_cfg):
+    """ChipIdWidth for bingo_hw_manager_top, from hemaia_multichip.chip_id_width.
+
+    Same key occamy_pkg's ChipIdWidth / chip_id_t come from, so the manager's chip_id_i
+    port matches the chiplet's. It is also the width of BOTH descriptor chiplet-id fields
+    (assigned_chiplet_id and dep_set_chiplet_id), which is why task_desc_layout_bits has
+    to price it -- and, because that layout math is written against the RTL struct's own
+    constant, why a config that moves this key away from TASK_DESC_CHIP_ID_WIDTH would
+    make the derived container width wrong by 2x the difference, silently. Every in-tree
+    config is at 8; refuse rather than mis-derive if one ever is not.
+    """
+    chip_id_width = int(occamy_cfg["hemaia_multichip"]["chip_id_width"])
+    if chip_id_width != TASK_DESC_CHIP_ID_WIDTH:
+        raise ValueError(
+            f"hemaia_multichip.chip_id_width is {chip_id_width}, but the task-descriptor "
+            f"layout is derived with TASK_DESC_CHIP_ID_WIDTH = {TASK_DESC_CHIP_ID_WIDTH} "
+            f"(two chiplet-id fields). Update TASK_DESC_CHIP_ID_WIDTH (and the RTL struct "
+            f"it mirrors) together with this key, or the descriptor container will be "
+            f"{2 * abs(chip_id_width - TASK_DESC_CHIP_ID_WIDTH)} bits off.")
+    return chip_id_width
 
 def nr_harts_per_chiplet(occamy_cfg, cluster_generators):
     """Number of RISC-V harts on one chiplet: host CVA6 (+1) plus the snitch cores.
@@ -953,7 +1064,9 @@ def get_quad_ctrl_kwargs(occamy_cfg, soc_wide_xbar, soc_narrow_xbar, quad_ctrl_s
 
     num_clusters = len(occamy_cfg["clusters"])
     nr_cores_per_cluster = cluster_generators[0].cfg["nr_cores"]
-    chip_id_width = occamy_cfg["hemaia_multichip"]["chip_id_width"]
+    # Validated here rather than read raw: the quad_ctrl template now hands this to
+    # bingo_hw_manager_top as ChipIdWidth, and the descriptor layout is derived against it.
+    chip_id_width = get_bingo_chip_id_width(occamy_cfg)
     quadrant_ctrl_kwargs = {
         "name": name,
         "occamy_cfg": occamy_cfg,
@@ -967,6 +1080,11 @@ def get_quad_ctrl_kwargs(occamy_cfg, soc_wide_xbar, soc_narrow_xbar, quad_ctrl_s
         # Per-edge dependency tag width of the bingo HW manager (DepTagWidth). Exported to
         # SW as BINGO_DEP_TAG_WIDTH so the task-descriptor packing tracks the RTL width.
         "dep_tag_width": occamy_cfg["s1_quadrant"]["dep_tag_width"],
+        # Task-descriptor bus width (TaskDescBusWidth). DERIVED from this config's layout
+        # unless s1_quadrant.task_desc_width pins it; get_cheader_kwargs runs the SAME
+        # derivation for BINGO_TASK_DESC_WIDTH, so the descriptor the SW packer emits is
+        # exactly the one this instance was elaborated for.
+        "task_desc_width": get_task_desc_width(occamy_cfg, nr_cores_per_cluster, num_clusters),
         "soc_wide_xbar": soc_wide_xbar,
         "soc_narrow_xbar": soc_narrow_xbar,
         "quad_ctrl_soc_to_quad_xbar": quad_ctrl_soc_to_quad_xbar,
@@ -1191,6 +1309,16 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
     # appended right after this chiplet's harts, so its index == the hart count. Exposed
     # to SW so dvfs.h does not hardcode it (must match hw_manager_ipi_idx / occamy_soc.sv).
     hw_manager_dvfs_msip_bit = nr_harts_per_chiplet(occamy_cfg, cluster_generators)
+    # Same derivation get_quad_ctrl_kwargs hands to bingo_hw_manager_top as
+    # TaskDescBusWidth (s1_quadrant.task_desc_width when the cfg pins it, otherwise the
+    # smallest 64-bit-word container this layout fits in), so the C packer and the RTL
+    # agree on descriptor size and stride.
+    task_desc_width = get_task_desc_width(occamy_cfg, nr_cores_per_cluster, nr_clusters_per_chiplet)
+    # ChipIdWidth of the same bingo_hw_manager_top instance. Exported so bingo_utils.h
+    # sizes assigned_chiplet_id / dep_set_chiplet_id from the cfg instead of its #ifndef
+    # fallback of 8 -- those two fields are 16 of the descriptor's 65 used bits, and every
+    # field above them shifts if SW guesses the width.
+    chip_id_width = get_bingo_chip_id_width(occamy_cfg)
     cheader_kwargs = {
         "name": name,
         "nr_chiplets": nr_chiplets,
@@ -1201,6 +1329,10 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
         "nr_cores_per_cluster": nr_cores_per_cluster,
         "hw_manager_dvfs_msip_bit": hw_manager_dvfs_msip_bit,
         "dep_tag_width": occamy_cfg["s1_quadrant"]["dep_tag_width"],
+        "task_desc_width": task_desc_width,
+        "task_desc_words": task_desc_width // TASK_DESC_WORD_BITS,
+        "bingo_ncores_hw": nr_cores_per_cluster + 1,
+        "chip_id_width": chip_id_width,
         "clog2_nr_chiplets": clog2(nr_chiplets),
         "clog2_nr_clusters_per_chiplet": clog2(nr_clusters_per_chiplet),
         "clog2_nr_cores_per_cluster": clog2(nr_cores_per_cluster),

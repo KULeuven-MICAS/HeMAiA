@@ -243,106 +243,188 @@ typedef struct {
 // BINGO HW Manager Task Descriptor //
 //////////////////////////////////////
 
+// The UNPACKED descriptor: what callers fill in before encode_bingo_hw_manager_task_desc
+// packs it into the bit layout in bingo_utils.h.
+//
+// SIZING RULE: every member here is a CARRIER for a field whose width scales with the
+// platform (BINGO_NCORES_HW, BINGO_CHIP_ID_WIDTH, DEP_TAG_WIDTH, ...). A carrier narrower
+// than its field truncates on the way INTO the encoder, which is invisible: the layout is
+// still right, nothing faults, the dropped bit is simply a dependency edge that never
+// happens. The dep codes are the live case - they are one bit per core INCLUDING the host
+// CVA6, so a uint8_t already overflows at 8 snitch cores per cluster (9 bits) - and more
+// cores per cluster is precisely the growth the widened descriptor exists to allow. So: pick
+// a carrier with headroom (uint32_t covers 32 cores) and let the BINGO_ASSERT_CARRIER_FITS
+// block below fail the build at the next growth step instead of dropping edges at runtime.
 typedef struct hw_manager_task {
-    uint8_t  task_type;            // 2-bit: 0=Normal, 1=Dummy, 2=Gating
-    uint16_t task_id;              // Task ID
-    uint8_t  assigned_chiplet_id;  // Target chiplet for execution
-    uint8_t  assigned_cluster_id;  // Target cluster for execution
-    uint8_t  assigned_core_id;     // Target core for execution
+    uint8_t  task_type;            // TASK_TYPE_WIDTH = 2: 0=Normal, 1=Dummy, 2=Gating
+    uint32_t task_id;              // TASK_ID_WIDTH (12 today; a 16-bit carrier dies at 17)
+    uint16_t assigned_chiplet_id;  // BINGO_CHIP_ID_WIDTH: D2D routing id (x << 4) | y
+    uint8_t  assigned_cluster_id;  // BINGO_IDX_WIDTH(N_CLUSTERS_PER_CHIPLET)
+    uint8_t  assigned_core_id;     // BINGO_IDX_WIDTH(BINGO_NCORES_HW), host core included
     bool     dep_check_enabled;    // Whether dependency checking is enabled
-    uint8_t  dep_check_code;       // Dependency check code
-    uint8_t  dep_check_tag;        // Per-edge identity tag this check expects (EnableTaggedDeps)
+    uint32_t dep_check_code;       // BINGO_NCORES_HW bits, one per core (host core included)
+    uint8_t  dep_check_tag;        // DEP_TAG_WIDTH: per-edge identity tag this check expects
     bool     dep_set_enabled;      // Whether dependency setting is enabled
     bool     dep_set_all_chiplet;  // Whether to set dependency on all chiplets
-    uint8_t  dep_set_code;         // Dependency set code
-    uint8_t  dep_set_tag;          // Per-edge identity tag this set carries (EnableTaggedDeps)
-    uint8_t  dep_set_chiplet_id;   // Chiplet ID to set dependency
-    uint8_t  dep_set_cluster_id;   // Cluster ID to set dependency
+    uint32_t dep_set_code;         // BINGO_NCORES_HW bits, one per core (host core included)
+    uint8_t  dep_set_tag;          // DEP_TAG_WIDTH: per-edge identity tag this set carries
+    uint16_t dep_set_chiplet_id;   // BINGO_CHIP_ID_WIDTH: routing id of the target chiplet
+    uint8_t  dep_set_cluster_id;   // BINGO_IDX_WIDTH(N_CLUSTERS_PER_CHIPLET)
     // DARTS Tier 1: Conditional Execution
     bool     cond_exec_en;         // Conditional execution enabled
-    uint8_t  cond_exec_group_id;   // CERF group (0-15)
+    uint8_t  cond_exec_group_id;   // COND_EXEC_GROUP_ID_WIDTH: CERF group (0-31)
     bool     cond_exec_invert;     // Skip when group ACTIVE (if true)
 } bingo_hw_manager_task_desc_t;
 
-static inline uint64_t encode_bingo_hw_manager_task_desc(bingo_hw_manager_task_desc_t desc) {
-    uint64_t encoded = 0;
+// One assert per field: the carrier must hold the field's OWN width, computed from the
+// platform header. These are what turn "the top core's dep bit silently vanished" into a
+// build failure. A 1-bit flag on a `bool` is asserted too, so no field is exempt by
+// accident when someone adds one.
+BINGO_ASSERT_CARRIER_FITS(bingo_hw_manager_task_desc_t, task_type,           TASK_TYPE_WIDTH);
+BINGO_ASSERT_CARRIER_FITS(bingo_hw_manager_task_desc_t, task_id,             TASK_ID_WIDTH);
+BINGO_ASSERT_CARRIER_FITS(bingo_hw_manager_task_desc_t, assigned_chiplet_id, ASSIGNED_CHIPLET_ID_WIDTH);
+BINGO_ASSERT_CARRIER_FITS(bingo_hw_manager_task_desc_t, assigned_cluster_id, ASSIGNED_CLUSTER_ID_WIDTH);
+BINGO_ASSERT_CARRIER_FITS(bingo_hw_manager_task_desc_t, assigned_core_id,    ASSIGNED_CORE_ID_WIDTH);
+BINGO_ASSERT_CARRIER_FITS(bingo_hw_manager_task_desc_t, dep_check_enabled,   DEP_CHECK_ENABLED_WIDTH);
+BINGO_ASSERT_CARRIER_FITS(bingo_hw_manager_task_desc_t, dep_check_code,      DEP_CHECK_CODE_WIDTH);
+BINGO_ASSERT_CARRIER_FITS(bingo_hw_manager_task_desc_t, dep_check_tag,       DEP_CHECK_TAG_WIDTH);
+BINGO_ASSERT_CARRIER_FITS(bingo_hw_manager_task_desc_t, dep_set_enabled,     DEP_SET_ENABLED_WIDTH);
+BINGO_ASSERT_CARRIER_FITS(bingo_hw_manager_task_desc_t, dep_set_all_chiplet, DEP_SET_ALL_CHIPLET_WIDTH);
+BINGO_ASSERT_CARRIER_FITS(bingo_hw_manager_task_desc_t, dep_set_chiplet_id,  DEP_SET_CHIPLET_ID_WIDTH);
+BINGO_ASSERT_CARRIER_FITS(bingo_hw_manager_task_desc_t, dep_set_cluster_id,  DEP_SET_CLUSTER_ID_WIDTH);
+BINGO_ASSERT_CARRIER_FITS(bingo_hw_manager_task_desc_t, dep_set_code,        DEP_SET_CODE_WIDTH);
+BINGO_ASSERT_CARRIER_FITS(bingo_hw_manager_task_desc_t, dep_set_tag,         DEP_SET_TAG_WIDTH);
+BINGO_ASSERT_CARRIER_FITS(bingo_hw_manager_task_desc_t, cond_exec_en,        COND_EXEC_EN_WIDTH);
+BINGO_ASSERT_CARRIER_FITS(bingo_hw_manager_task_desc_t, cond_exec_group_id,  COND_EXEC_GROUP_ID_WIDTH);
+BINGO_ASSERT_CARRIER_FITS(bingo_hw_manager_task_desc_t, cond_exec_invert,    COND_EXEC_INVERT_WIDTH);
+
+// The packed form the HW manager fetches. BINGO_TASK_DESC_WORDS 64-bit words, least
+// significant first; see bingo_utils.h for the container and the memory order.
+static inline bingo_task_desc_t encode_bingo_hw_manager_task_desc(bingo_hw_manager_task_desc_t desc) {
+    bingo_task_desc_t encoded = {{0}};
 
     // DARTS Tier 1: Conditional Execution fields (bits 0-5)
-    encoded |= ENCODE_BITFIELD(desc.cond_exec_invert, COND_EXEC_INVERT_WIDTH, COND_EXEC_INVERT_SHIFT);
-    encoded |= ENCODE_BITFIELD(desc.cond_exec_group_id, COND_EXEC_GROUP_ID_WIDTH, COND_EXEC_GROUP_ID_SHIFT);
-    encoded |= ENCODE_BITFIELD(desc.cond_exec_en, COND_EXEC_EN_WIDTH, COND_EXEC_EN_SHIFT);
+    ENCODE_BITFIELD(encoded, desc.cond_exec_invert, COND_EXEC_INVERT_WIDTH, COND_EXEC_INVERT_SHIFT);
+    ENCODE_BITFIELD(encoded, desc.cond_exec_group_id, COND_EXEC_GROUP_ID_WIDTH, COND_EXEC_GROUP_ID_SHIFT);
+    ENCODE_BITFIELD(encoded, desc.cond_exec_en, COND_EXEC_EN_WIDTH, COND_EXEC_EN_SHIFT);
 
     // Task type (2 bits): 0=Normal, 1=Dummy, 2=Gating
-    encoded |= ENCODE_BITFIELD(desc.task_type, TASK_TYPE_WIDTH, TASK_TYPE_SHIFT);
+    ENCODE_BITFIELD(encoded, desc.task_type, TASK_TYPE_WIDTH, TASK_TYPE_SHIFT);
 
-    // Task ID (12 bits)
-    encoded |= ENCODE_BITFIELD(desc.task_id, TASK_ID_WIDTH, TASK_ID_SHIFT);
+    // Task ID (TaskIdWidth bits)
+    ENCODE_BITFIELD(encoded, desc.task_id, TASK_ID_WIDTH, TASK_ID_SHIFT);
 
-    // Assigned chiplet ID (8 bits)
-    encoded |= ENCODE_BITFIELD(desc.assigned_chiplet_id, ASSIGNED_CHIPLET_ID_WIDTH, ASSIGNED_CHIPLET_ID_SHIFT);
+    // Assigned chiplet ID (ChipIdWidth bits, routing id (x << 4) | y)
+    ENCODE_BITFIELD(encoded, desc.assigned_chiplet_id, ASSIGNED_CHIPLET_ID_WIDTH, ASSIGNED_CHIPLET_ID_SHIFT);
 
-    // Assigned cluster ID (N_CLUSTERS_WIDTH bits)
-    encoded |= ENCODE_BITFIELD(desc.assigned_cluster_id, ASSIGNED_CLUSTER_ID_WIDTH, ASSIGNED_CLUSTER_ID_SHIFT);
+    // Assigned cluster ID (idx_width(N_CLUSTERS_PER_CHIPLET) bits)
+    ENCODE_BITFIELD(encoded, desc.assigned_cluster_id, ASSIGNED_CLUSTER_ID_WIDTH, ASSIGNED_CLUSTER_ID_SHIFT);
 
-    // Assigned core ID (N_CORES_WIDTH bits)
-    encoded |= ENCODE_BITFIELD(desc.assigned_core_id, ASSIGNED_CORE_ID_WIDTH, ASSIGNED_CORE_ID_SHIFT);
+    // Assigned core ID (idx_width(BINGO_NCORES_HW) bits -- host core included)
+    ENCODE_BITFIELD(encoded, desc.assigned_core_id, ASSIGNED_CORE_ID_WIDTH, ASSIGNED_CORE_ID_SHIFT);
 
     // Dep check enabled (1 bit)
-    encoded |= ENCODE_BITFIELD(desc.dep_check_enabled, DEP_CHECK_ENABLED_WIDTH, DEP_CHECK_ENABLED_SHIFT);
+    ENCODE_BITFIELD(encoded, desc.dep_check_enabled, DEP_CHECK_ENABLED_WIDTH, DEP_CHECK_ENABLED_SHIFT);
 
-    // Dep check code (N_CORES_PER_CLUSTER bits)
-    encoded |= ENCODE_BITFIELD(desc.dep_check_code, DEP_CHECK_CODE_WIDTH, DEP_CHECK_CODE_SHIFT);
+    // Dep check code (BINGO_NCORES_HW bits, one per core)
+    ENCODE_BITFIELD(encoded, desc.dep_check_code, DEP_CHECK_CODE_WIDTH, DEP_CHECK_CODE_SHIFT);
 
     // Dep check tag (DEP_TAG_WIDTH bits) -- MSB of dep_check_info
-    encoded |= ENCODE_BITFIELD(desc.dep_check_tag, DEP_CHECK_TAG_WIDTH, DEP_CHECK_TAG_SHIFT);
+    ENCODE_BITFIELD(encoded, desc.dep_check_tag, DEP_CHECK_TAG_WIDTH, DEP_CHECK_TAG_SHIFT);
 
     // Dep set enabled (1 bit)
-    encoded |= ENCODE_BITFIELD(desc.dep_set_enabled, DEP_SET_ENABLED_WIDTH, DEP_SET_ENABLED_SHIFT);
+    ENCODE_BITFIELD(encoded, desc.dep_set_enabled, DEP_SET_ENABLED_WIDTH, DEP_SET_ENABLED_SHIFT);
 
     // Dep set all chiplet (1 bit)
-    encoded |= ENCODE_BITFIELD(desc.dep_set_all_chiplet, DEP_SET_ALL_CHIPLET_WIDTH, DEP_SET_ALL_CHIPLET_SHIFT);
+    ENCODE_BITFIELD(encoded, desc.dep_set_all_chiplet, DEP_SET_ALL_CHIPLET_WIDTH, DEP_SET_ALL_CHIPLET_SHIFT);
 
-    // Dep set chiplet ID (N_CHIPLETS_WIDTH bits)
-    encoded |= ENCODE_BITFIELD(desc.dep_set_chiplet_id, DEP_SET_CHIPLET_ID_WIDTH, DEP_SET_CHIPLET_ID_SHIFT);
+    // Dep set chiplet ID (ChipIdWidth bits)
+    ENCODE_BITFIELD(encoded, desc.dep_set_chiplet_id, DEP_SET_CHIPLET_ID_WIDTH, DEP_SET_CHIPLET_ID_SHIFT);
 
-    // Dep set cluster ID (N_CLUSTERS_WIDTH bits)
-    encoded |= ENCODE_BITFIELD(desc.dep_set_cluster_id, DEP_SET_CLUSTER_ID_WIDTH, DEP_SET_CLUSTER_ID_SHIFT);
+    // Dep set cluster ID (idx_width(N_CLUSTERS_PER_CHIPLET) bits)
+    ENCODE_BITFIELD(encoded, desc.dep_set_cluster_id, DEP_SET_CLUSTER_ID_WIDTH, DEP_SET_CLUSTER_ID_SHIFT);
 
-    // Dep set code (N_CORES_PER_CLUSTER bits)
-    encoded |= ENCODE_BITFIELD(desc.dep_set_code, DEP_SET_CODE_WIDTH, DEP_SET_CODE_SHIFT);
+    // Dep set code (BINGO_NCORES_HW bits, one per core)
+    ENCODE_BITFIELD(encoded, desc.dep_set_code, DEP_SET_CODE_WIDTH, DEP_SET_CODE_SHIFT);
 
-    // Dep set tag (DEP_TAG_WIDTH bits) -- MSB of dep_set_info
-    encoded |= ENCODE_BITFIELD(desc.dep_set_tag, DEP_SET_TAG_WIDTH, DEP_SET_TAG_SHIFT);
+    // Dep set tag (DEP_TAG_WIDTH bits) -- MSB of dep_set_info, and the field that
+    // straddles the 64-bit word boundary at the current design point
+    ENCODE_BITFIELD(encoded, desc.dep_set_tag, DEP_SET_TAG_WIDTH, DEP_SET_TAG_SHIFT);
 
     return encoded;
 }
 
-static inline bingo_hw_manager_task_desc_t decode_bingo_hw_manager_task_desc(uint64_t encoded) {
+// Inverse of the above. The casts here MUST be the carrier types from the struct: a
+// narrower cast truncates on the way OUT, which is the same silent edge loss as a narrow
+// carrier and is not covered by the carrier asserts (a cast has no sizeof to check).
+static inline bingo_hw_manager_task_desc_t decode_bingo_hw_manager_task_desc(bingo_task_desc_t encoded) {
     bingo_hw_manager_task_desc_t desc = {0};
     // DARTS Tier 1: Conditional Execution fields
-    desc.cond_exec_invert   = BINGO_EXTRACT_BITS(encoded, COND_EXEC_INVERT_SHIFT + COND_EXEC_INVERT_WIDTH - 1, COND_EXEC_INVERT_SHIFT);
-    desc.cond_exec_group_id = BINGO_EXTRACT_BITS(encoded, COND_EXEC_GROUP_ID_SHIFT + COND_EXEC_GROUP_ID_WIDTH - 1, COND_EXEC_GROUP_ID_SHIFT);
-    desc.cond_exec_en       = BINGO_EXTRACT_BITS(encoded, COND_EXEC_EN_SHIFT + COND_EXEC_EN_WIDTH - 1, COND_EXEC_EN_SHIFT);
-    desc.task_type          = BINGO_EXTRACT_BITS(encoded, TASK_TYPE_SHIFT + TASK_TYPE_WIDTH - 1, TASK_TYPE_SHIFT);
-    desc.task_id            = BINGO_EXTRACT_BITS(encoded, TASK_ID_SHIFT + TASK_ID_WIDTH - 1, TASK_ID_SHIFT);
-    desc.assigned_chiplet_id = BINGO_EXTRACT_BITS(encoded, ASSIGNED_CHIPLET_ID_SHIFT + ASSIGNED_CHIPLET_ID_WIDTH - 1, ASSIGNED_CHIPLET_ID_SHIFT);
-    desc.assigned_cluster_id = BINGO_EXTRACT_BITS(encoded, ASSIGNED_CLUSTER_ID_SHIFT + ASSIGNED_CLUSTER_ID_WIDTH - 1, ASSIGNED_CLUSTER_ID_SHIFT);
-    desc.assigned_core_id    = BINGO_EXTRACT_BITS(encoded, ASSIGNED_CORE_ID_SHIFT + ASSIGNED_CORE_ID_WIDTH - 1, ASSIGNED_CORE_ID_SHIFT);
-    desc.dep_check_enabled   = BINGO_EXTRACT_BITS(encoded, DEP_CHECK_ENABLED_SHIFT + DEP_CHECK_ENABLED_WIDTH - 1, DEP_CHECK_ENABLED_SHIFT);
-    desc.dep_check_code      = BINGO_EXTRACT_BITS(encoded, DEP_CHECK_CODE_SHIFT + DEP_CHECK_CODE_WIDTH - 1, DEP_CHECK_CODE_SHIFT);
-    desc.dep_check_tag       = BINGO_EXTRACT_BITS(encoded, DEP_CHECK_TAG_SHIFT + DEP_CHECK_TAG_WIDTH - 1, DEP_CHECK_TAG_SHIFT);
-    desc.dep_set_enabled     = BINGO_EXTRACT_BITS(encoded, DEP_SET_ENABLED_SHIFT + DEP_SET_ENABLED_WIDTH - 1, DEP_SET_ENABLED_SHIFT);
-    desc.dep_set_all_chiplet = BINGO_EXTRACT_BITS(encoded, DEP_SET_ALL_CHIPLET_SHIFT + DEP_SET_ALL_CHIPLET_WIDTH - 1, DEP_SET_ALL_CHIPLET_SHIFT);
-    desc.dep_set_chiplet_id  = BINGO_EXTRACT_BITS(encoded, DEP_SET_CHIPLET_ID_SHIFT + DEP_SET_CHIPLET_ID_WIDTH - 1, DEP_SET_CHIPLET_ID_SHIFT);
-    desc.dep_set_cluster_id  = BINGO_EXTRACT_BITS(encoded, DEP_SET_CLUSTER_ID_SHIFT + DEP_SET_CLUSTER_ID_WIDTH - 1, DEP_SET_CLUSTER_ID_SHIFT);
-    desc.dep_set_code        = BINGO_EXTRACT_BITS(encoded, DEP_SET_CODE_SHIFT + DEP_SET_CODE_WIDTH - 1, DEP_SET_CODE_SHIFT);
-    desc.dep_set_tag         = BINGO_EXTRACT_BITS(encoded, DEP_SET_TAG_SHIFT + DEP_SET_TAG_WIDTH - 1, DEP_SET_TAG_SHIFT);
+    desc.cond_exec_invert   = (bool)     BINGO_EXTRACT_BITS(encoded, COND_EXEC_INVERT_SHIFT + COND_EXEC_INVERT_WIDTH - 1, COND_EXEC_INVERT_SHIFT);
+    desc.cond_exec_group_id = (uint8_t)  BINGO_EXTRACT_BITS(encoded, COND_EXEC_GROUP_ID_SHIFT + COND_EXEC_GROUP_ID_WIDTH - 1, COND_EXEC_GROUP_ID_SHIFT);
+    desc.cond_exec_en       = (bool)     BINGO_EXTRACT_BITS(encoded, COND_EXEC_EN_SHIFT + COND_EXEC_EN_WIDTH - 1, COND_EXEC_EN_SHIFT);
+    desc.task_type          = (uint8_t)  BINGO_EXTRACT_BITS(encoded, TASK_TYPE_SHIFT + TASK_TYPE_WIDTH - 1, TASK_TYPE_SHIFT);
+    desc.task_id            = (uint32_t) BINGO_EXTRACT_BITS(encoded, TASK_ID_SHIFT + TASK_ID_WIDTH - 1, TASK_ID_SHIFT);
+    desc.assigned_chiplet_id = (uint16_t)BINGO_EXTRACT_BITS(encoded, ASSIGNED_CHIPLET_ID_SHIFT + ASSIGNED_CHIPLET_ID_WIDTH - 1, ASSIGNED_CHIPLET_ID_SHIFT);
+    desc.assigned_cluster_id = (uint8_t) BINGO_EXTRACT_BITS(encoded, ASSIGNED_CLUSTER_ID_SHIFT + ASSIGNED_CLUSTER_ID_WIDTH - 1, ASSIGNED_CLUSTER_ID_SHIFT);
+    desc.assigned_core_id    = (uint8_t) BINGO_EXTRACT_BITS(encoded, ASSIGNED_CORE_ID_SHIFT + ASSIGNED_CORE_ID_WIDTH - 1, ASSIGNED_CORE_ID_SHIFT);
+    desc.dep_check_enabled   = (bool)    BINGO_EXTRACT_BITS(encoded, DEP_CHECK_ENABLED_SHIFT + DEP_CHECK_ENABLED_WIDTH - 1, DEP_CHECK_ENABLED_SHIFT);
+    desc.dep_check_code      = (uint32_t)BINGO_EXTRACT_BITS(encoded, DEP_CHECK_CODE_SHIFT + DEP_CHECK_CODE_WIDTH - 1, DEP_CHECK_CODE_SHIFT);
+    desc.dep_check_tag       = (uint8_t) BINGO_EXTRACT_BITS(encoded, DEP_CHECK_TAG_SHIFT + DEP_CHECK_TAG_WIDTH - 1, DEP_CHECK_TAG_SHIFT);
+    desc.dep_set_enabled     = (bool)    BINGO_EXTRACT_BITS(encoded, DEP_SET_ENABLED_SHIFT + DEP_SET_ENABLED_WIDTH - 1, DEP_SET_ENABLED_SHIFT);
+    desc.dep_set_all_chiplet = (bool)    BINGO_EXTRACT_BITS(encoded, DEP_SET_ALL_CHIPLET_SHIFT + DEP_SET_ALL_CHIPLET_WIDTH - 1, DEP_SET_ALL_CHIPLET_SHIFT);
+    desc.dep_set_chiplet_id  = (uint16_t)BINGO_EXTRACT_BITS(encoded, DEP_SET_CHIPLET_ID_SHIFT + DEP_SET_CHIPLET_ID_WIDTH - 1, DEP_SET_CHIPLET_ID_SHIFT);
+    desc.dep_set_cluster_id  = (uint8_t) BINGO_EXTRACT_BITS(encoded, DEP_SET_CLUSTER_ID_SHIFT + DEP_SET_CLUSTER_ID_WIDTH - 1, DEP_SET_CLUSTER_ID_SHIFT);
+    desc.dep_set_code        = (uint32_t)BINGO_EXTRACT_BITS(encoded, DEP_SET_CODE_SHIFT + DEP_SET_CODE_WIDTH - 1, DEP_SET_CODE_SHIFT);
+    desc.dep_set_tag         = (uint8_t) BINGO_EXTRACT_BITS(encoded, DEP_SET_TAG_SHIFT + DEP_SET_TAG_WIDTH - 1, DEP_SET_TAG_SHIFT);
     return desc;
 }
 
+// The task list the HW manager fetches from is a uint64_t array holding
+// BINGO_TASK_DESC_WORDS words per descriptor, least-significant word at the LOWER address
+// (the fetch master's beat 0 lands in the descriptor's low bits). These two keep that
+// ordering in one place: index by task slot, never by word.
+//
+// FOR THE MINI-COMPILER (bingo_dfg.py :: bingo_emit_task_desc_list) -- coordination note,
+// no Python is edited from here: the emitted task list currently spells the very same rule
+// out itself, one literal assignment per word:
+//     list[IDX * BINGO_TASK_DESC_WORDS + 0] = 0x<low>ULL;   // node comment
+//     list[IDX * BINGO_TASK_DESC_WORDS + 1] = 0x<high>ULL;
+// which means the word order and the stride are defined twice, in two languages, and the
+// Python copy is the one nobody compiles. Emitting
+//     bingo_task_desc_store(list, IDX, (bingo_task_desc_t){{ 0x<low>ULL, 0x<high>ULL }});
+//     // node comment
+// instead (a C99 compound literal, and the host runtime builds -std=gnu99) keeps the word
+// order in THIS file only, and makes a descriptor-width change a header change rather than
+// an emitter change. bingo_task_desc_load() is the readback half, for a host-side check or
+// a dump of what was actually written. Until that lands these two are the reference
+// definition of the format; do not delete them to silence an unused warning (they are
+// `static inline` in a header, so there is none).
+//
+// Allocation size for such a list is BINGO_TASK_DESC_LIST_BYTES(n) in bingo_utils.h -- the
+// emitter's `n * BINGO_TASK_DESC_WORDS * sizeof(uint64_t)` is the same number spelled the
+// long way, and it is the third copy of the stride rule.
+static inline void bingo_task_desc_store(uint64_t *task_list, uint32_t index,
+                                         bingo_task_desc_t encoded) {
+    for (uint32_t i = 0; i < BINGO_TASK_DESC_WORDS; ++i) {
+        task_list[(uint64_t)index * BINGO_TASK_DESC_WORDS + i] = encoded.w[i];
+    }
+}
+
+static inline bingo_task_desc_t bingo_task_desc_load(const uint64_t *task_list,
+                                                    uint32_t index) {
+    bingo_task_desc_t encoded = {{0}};
+    for (uint32_t i = 0; i < BINGO_TASK_DESC_WORDS; ++i) {
+        encoded.w[i] = task_list[(uint64_t)index * BINGO_TASK_DESC_WORDS + i];
+    }
+    return encoded;
+}
+
 // Builder helpers for conditional tasks
+// Parameter types mirror the struct carriers on purpose: a uint8_t chiplet_id here would
+// re-introduce the truncation one level up from the field it feeds.
 static inline bingo_hw_manager_task_desc_t bingo_hw_build_gating_task(
-    uint16_t task_id, uint8_t chiplet_id, uint8_t cluster_id, uint8_t core_id) {
+    uint32_t task_id, uint16_t chiplet_id, uint8_t cluster_id, uint8_t core_id) {
     bingo_hw_manager_task_desc_t desc = {0};
     desc.task_type = 2;  // gating
     desc.task_id = task_id;
@@ -353,7 +435,7 @@ static inline bingo_hw_manager_task_desc_t bingo_hw_build_gating_task(
 }
 
 static inline bingo_hw_manager_task_desc_t bingo_hw_build_conditional_task(
-    uint16_t task_id, uint8_t chiplet_id, uint8_t cluster_id, uint8_t core_id,
+    uint32_t task_id, uint16_t chiplet_id, uint8_t cluster_id, uint8_t core_id,
     uint8_t cerf_group_id, bool invert) {
     bingo_hw_manager_task_desc_t desc = {0};
     desc.task_type = 0;  // normal

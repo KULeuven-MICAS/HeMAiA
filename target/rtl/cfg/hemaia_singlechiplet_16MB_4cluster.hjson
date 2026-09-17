@@ -96,7 +96,22 @@
       quad_axi_lite_base_offset: 65536 // 0x10000
       // Bingo HW manager per-edge dependency tag width (DepTagWidth). Must match
       // the SW DEP_TAG_WIDTH; exported via occamy.h as BINGO_DEP_TAG_WIDTH.
+      //
+      // Back to the schema default of 4. It was forced down to 3 because the packed
+      // descriptor had to fit one 64-bit host AXI-Lite word, and this config spends 2
+      // bits more than a 1-/2-cluster one (assigned_cluster_id and dep_set_cluster_id
+      // both widen from 1 to 2), putting it at 65 bits -- one over. That ceiling is
+      // gone: the descriptor container is now separate from the bus width and is
+      // fetched as several beats, so the tag no longer has to pay for the fabric.
       dep_tag_width: 4
+      // Task-descriptor container width (TaskDescBusWidth), in bits; must be a whole
+      // number of 64-bit words. Left unset it is DERIVED as the smallest container the
+      // config's own layout fits in, which here would be 128 anyway (65 bits). It is
+      // pinned explicitly because this is the development config for growing the
+      // descriptor: headroom is the point, so a field added tomorrow must not silently
+      // change the container width -- and therefore the task-list stride -- underneath
+      // an image built today.
+      task_desc_width: 128
     },
     clusters:[
       "snax_split_cluster",

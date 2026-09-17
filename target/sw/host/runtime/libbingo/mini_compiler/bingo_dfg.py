@@ -1,5 +1,6 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 
+import math
 import os
 import subprocess
 import sys
@@ -62,8 +63,22 @@ def _engine_of_kernel(kernel_name):
     return _ENGINE_BY_KERNEL_TOKEN.get(head)
 
 
+# The task list the host hands the scheduler stays a uint64_t array however wide the
+# descriptor gets, so a descriptor always occupies a whole number of these words.
+BINGO_TASK_LIST_WORD_BITS = 64
+BINGO_TASK_LIST_WORD_MASK = (1 << BINGO_TASK_LIST_WORD_BITS) - 1
+
+
 class BingoDFG(DiGraphWrapper[BingoNode]):
     """Data Flow Graph (DFG) for Bingo."""
+
+    # TaskIdWidth, genuinely fixed by the RTL struct bingo_hw_manager_task_desc_t:
+    # occamy_quad_ctrl.sv.tpl does not pass a TaskIdWidth parameter, so every instance
+    # elaborates with bingo_hw_manager_top's default of 12. ChipIdWidth looks like a
+    # sibling constant but is NOT one -- the tpl does pass .ChipIdWidth(${chip_id_width})
+    # from cfg hemaia_multichip.chip_id_width -- so it is an instance attribute read from
+    # the platform header in __init__, not a class constant here.
+    task_id_width = 12
 
     def __init__(self,
                  num_chiplets: int,
@@ -71,7 +86,9 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                  num_cores_per_cluster: int,
                  is_host_as_acc: bool,
                  chiplet_ids: list[int] = None,
-                 dep_tag_width: int = None) -> None:
+                 dep_tag_width: int = None,
+                 task_desc_width: int = None,
+                 chip_id_width: int = None) -> None:
         super().__init__()
         # HW architecture parameters
         self.num_chiplets = num_chiplets
@@ -85,16 +102,40 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         # per-edge tag-allocation passes; the tag bits are always present in the
         # packed descriptor (= 0 when disabled), matching the RTL struct layout.
         self.enable_tagged_deps = True
-        # Keep in sync with the RTL: cfg s1_quadrant.dep_tag_width -> DepTagWidth, exported
-        # to SW as BINGO_DEP_TAG_WIDTH (occamy.h) / DEP_TAG_WIDTH (bingo_utils.h). It is
-        # NOT a constant across configs -- a 4-cluster one must run it at 3 to keep the
-        # packed descriptor inside 64 bits -- so the default reads the generated header
-        # rather than assuming. Pass platform["dep_tag_width"] to pin it to the header
-        # this build actually used.
-        if dep_tag_width is None:
-            from bingo_platform import default_dep_tag_width
-            dep_tag_width = default_dep_tag_width()
-        self.dep_tag_width = dep_tag_width
+        # ------------------------------------------------------------------
+        # Descriptor geometry: the three widths that decide where every field of the
+        # packed descriptor lands and how far apart two descriptors sit in the task list.
+        #
+        #   dep_tag_width    cfg s1_quadrant.dep_tag_width    -> BINGO_DEP_TAG_WIDTH
+        #   task_desc_width  cfg s1_quadrant.task_desc_width  -> BINGO_TASK_DESC_WIDTH
+        #                    (derived per config when the cfg does not pin it)
+        #   chip_id_width    cfg hemaia_multichip.chip_id_width -> BINGO_CHIP_ID_WIDTH
+        #
+        # None of them is a constant across the in-tree configs, and none of the ~50
+        # workload generators passes them, so the DEFAULT has to come from the generated
+        # occamy.h -- the header the RTL and the C runtime of this very build were made
+        # from. Hardcoding any of them is silent, not loud: a task list packed 64 bits
+        # wide against a 128-bit RTL descriptor strides the array by one word instead of
+        # two, so every descriptor after the first is fetched from the wrong address, and
+        # a wrong tag or chiplet width shifts fields inside each descriptor instead.
+        # Passing a value explicitly overrides the header, for a caller that is
+        # deliberately packing for a platform other than the one it parsed.
+        if dep_tag_width is None or task_desc_width is None or chip_id_width is None:
+            from bingo_platform import platform_descriptor_geometry
+            geometry, geometry_source = platform_descriptor_geometry()
+        else:
+            geometry, geometry_source = {}, "explicit BingoDFG arguments"
+        # Where each width came from, quoted in the emitted task list and in the
+        # overflow errors so a mismatch names the header instead of a bare number.
+        self.platform_geometry_source = geometry_source
+        self.dep_tag_width = (geometry["dep_tag_width"]
+                              if dep_tag_width is None else dep_tag_width)
+        self.chip_id_width = (geometry["chip_id_width"]
+                              if chip_id_width is None else chip_id_width)
+        self.task_desc_width = (geometry["task_desc_width"]
+                                if task_desc_width is None else task_desc_width)
+        self.task_desc_words = (self.task_desc_width + BINGO_TASK_LIST_WORD_BITS - 1) \
+            // BINGO_TASK_LIST_WORD_BITS
         # Node ID counter
         # Make sure the node id is starts from 0
         self.id = -1
@@ -815,8 +856,12 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                     f"  cell = (chiplet, cluster, consumer core, producer core)\n"
                     f"  concurrent edge chains:\n{detail}\n"
                     f"  Fix by serializing these producers against each other (an "
-                    f"edge between them lets the chain cover merge them), or widen "
-                    f"DepTagWidth -- but check the descriptor still fits 64 bits.")
+                    f"edge between them lets the chain cover merge them), or raise cfg "
+                    f"s1_quadrant.dep_tag_width -- but the descriptor carries TWO tags, "
+                    f"so each step up costs 2 bits and it must still fit "
+                    f"task_desc_width ({self.task_desc_width} bits here, from "
+                    f"{self.platform_geometry_source}'s BINGO_TASK_DESC_WIDTH); "
+                    f"bingo_pack_node refuses with the full breakdown when it does not.")
             for i, (su, cv) in enumerate(edges):
                 su.dep_set_tag = avail[chain_of[i]]
                 cv.dep_check_tag = avail[chain_of[i]]
@@ -1186,214 +1231,175 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
     # ----------------------------------------------------------------
     # Node Packing / Unpacking
     # ----------------------------------------------------------------
-    def bingo_pack_node(self, node: BingoNode) -> int:
-        """Pack the normal node into a 64-bit integer."""
-        import math
-        
-        def get_idx_width(n):
-            return math.ceil(math.log2(n)) if n > 1 else 1
+    @staticmethod
+    def _idx_width(n: int) -> int:
+        """cf_math_pkg::idx_width -- 1 bit even for a one-element index space.
 
-        # Parameters
-        chip_id_width = 8
-        task_id_width = 12
-        # Use the class members for dimensions
+        clog2(1) is 0, and a zero-width field would pull every field above it down
+        by one bit. The RTL indexes both cluster ids with idx_width, so SW must too.
+        """
+        return math.ceil(math.log2(n)) if n > 1 else 1
+
+    @property
+    def ncores_hw(self) -> int:
+        """Core count the RTL descriptor is sized for, which is NOT the SNAX core count.
+
+        occamy_quad_ctrl instantiates NUM_CORES_PER_CLUSTER = NrCoresPerCluster[0] + 1:
+        the chiplet's CVA6 is wired in as one extra core so it can be a dep-set/dep-check
+        participant. The core-id and both dep-code fields are therefore one bit / one
+        core wider than the cluster's SNAX core count, whether or not this DFG places
+        host nodes. self.num_cores_per_cluster already folds the +1 in when
+        is_host_as_acc; add it back otherwise so the layout tracks the RTL either way.
+        """
+        return self.num_cores_per_cluster if self.is_host_as_acc \
+            else self.num_cores_per_cluster + 1
+
+    def bingo_task_desc_layout(self) -> list:
+        """THE packed-descriptor field table, LSB -> MSB, mirroring the RTL struct
+        bingo_hw_manager_task_desc_t (a packed struct's last-declared member is the LSB).
+
+        Pack and unpack both walk this one list. They used to re-derive every width
+        independently from the same inputs, which is exactly how the C header's copy
+        rotted into a 50-bit layout against a real 65-bit one -- two derivations of the
+        same table drift the moment one of them is edited.
+
+        Returns [(name, width), ...]; the running sum of the widths is the bit offset of
+        each field, so there are no shift constants to keep in sync either.
+        """
         num_clusters = self.num_clusters_per_chiplet
-        num_cores = self.num_cores_per_cluster
-        
-        cluster_id_width = get_idx_width(num_clusters)
-        core_id_width = get_idx_width(num_cores)
-        
-        # Initialize the packed value
-        packed_val = 0
-        current_shift = 0
+        num_cores = self.ncores_hw
+        cluster_id_width = self._idx_width(num_clusters)
+        core_id_width = self._idx_width(num_cores)
 
-        # 1. cond_exec_invert (1 bit) — DARTS Tier 1
-        packed_val |= (int(node.cond_exec_invert) << current_shift)
-        current_shift += 1
+        return [
+            # DARTS Tier 1 conditional execution
+            ("cond_exec_invert", 1),
+            ("cond_exec_group_id", 5),
+            ("cond_exec_en", 1),
+            # 00 = normal, 01 = dummy, 10 = gating
+            ("task_type", 2),
+            ("task_id", self.task_id_width),
+            # Routing encoding chip_id = (x << 4) | y, so 8 bits for a 4x4 array.
+            ("assigned_chiplet_id", self.chip_id_width),
+            ("assigned_cluster_id", cluster_id_width),
+            ("assigned_core_id", core_id_width),
+            # dep_check_info
+            ("dep_check_en", 1),
+            ("dep_check_code", num_cores),
+            # Tag bits are always present to match the RTL struct; they are 0 when
+            # identity-aware deps are disabled.
+            ("dep_check_tag", self.dep_tag_width),
+            # dep_set_info
+            ("dep_set_en", 1),
+            # RTL name is dep_set_all_chiplet; the short key is what callers already use.
+            ("dep_set_all", 1),
+            ("dep_set_chiplet_id", self.chip_id_width),
+            ("dep_set_cluster_id", cluster_id_width),
+            ("dep_set_code", num_cores),
+            ("dep_set_tag", self.dep_tag_width),
+        ]
 
-        # 2. cond_exec_group_id (5 bits) — DARTS Tier 1
-        packed_val |= (node.cond_exec_group_id << current_shift)
-        current_shift += 5
+    def bingo_task_desc_bits(self) -> int:
+        """Bits the layout actually occupies, below the zero padding to task_desc_width."""
+        return sum(width for _, width in self.bingo_task_desc_layout())
 
-        # 3. cond_exec_en (1 bit) — DARTS Tier 1
-        packed_val |= (int(node.cond_exec_en) << current_shift)
-        current_shift += 1
-
-        # 4. task_type (2 bits) — expanded from 1 bit
-        # 00: Normal, 01: Dummy, 10: Gating
+    def bingo_pack_node(self, node: BingoNode) -> int:
+        """Pack a node into the task descriptor, as a task_desc_width-bit integer."""
         task_type_map = {"normal": 0, "dummy": 1, "gating": 2}
-        task_type_val = task_type_map.get(node.node_type, 0)
-        packed_val |= (task_type_val << current_shift)
-        current_shift += 2
-        
-        # 2. task_id (12 bits)
-        packed_val |= (node.node_id << current_shift)
-        current_shift += task_id_width
-        
-        # 3. assigned_chiplet_id (8 bits)
-        packed_val |= (node.assigned_chiplet_id << current_shift)
-        current_shift += chip_id_width
-        
-        # 4. assigned_cluster_id (cluster_id_width bits)
-        packed_val |= (node.assigned_cluster_id << current_shift)
-        current_shift += cluster_id_width
-        
-        # 5. assigned_core_id (core_id_width bits)
-        packed_val |= (node.assigned_core_id << current_shift)
-        current_shift += core_id_width
-        
-        # 6. dep_check_info
-        
-        # dep_check_en (1 bit)
-        dep_check_en_val = 1 if node.dep_check_enable else 0
-        packed_val |= (dep_check_en_val << current_shift)
-        current_shift += 1
-        
-        # dep_check_code (num_cores bits)
+
         dep_check_code_val = 0
         for core_id in node.dep_check_list:
             dep_check_code_val |= (1 << core_id)
-        packed_val |= (dep_check_code_val << current_shift)
-        current_shift += num_cores
-
-        # dep_check_tag (dep_tag_width bits) — MSB of dep_check_info; always present
-        # to match the RTL struct (0 when identity-aware deps are disabled).
-        packed_val |= ((node.dep_check_tag or 0) << current_shift)
-        current_shift += self.dep_tag_width
-
-        # 7. dep_set_info
-        
-        # dep_set_en (1 bit)
-        dep_set_en_val = 1 if node.dep_set_enable else 0
-        packed_val |= (dep_set_en_val << current_shift)
-        current_shift += 1
-        
-        # dep_set_all_chiplet (1 bit)
-        dep_set_all_val = 1 if node.remote_dep_set_all else 0
-        packed_val |= (dep_set_all_val << current_shift)
-        current_shift += 1
-        
-        # dep_set_chiplet_id (8 bits)
-        packed_val |= (node.dep_set_chiplet_id << current_shift)
-        current_shift += chip_id_width
-        
-        # dep_set_cluster_id (cluster_id_width bits)
-        packed_val |= (node.dep_set_cluster_id << current_shift)
-        current_shift += cluster_id_width
-        
-        # dep_set_code (num_cores bits)
         dep_set_code_val = 0
         for core_id in node.dep_set_list:
             dep_set_code_val |= (1 << core_id)
-        packed_val |= (dep_set_code_val << current_shift)
-        current_shift += num_cores
 
-        # dep_set_tag (dep_tag_width bits) — MSB of dep_set_info; always present.
-        packed_val |= ((node.dep_set_tag or 0) << current_shift)
-        current_shift += self.dep_tag_width
+        values = {
+            "cond_exec_invert": int(node.cond_exec_invert),
+            "cond_exec_group_id": int(node.cond_exec_group_id),
+            "cond_exec_en": int(node.cond_exec_en),
+            "task_type": task_type_map.get(node.node_type, 0),
+            "task_id": int(node.node_id),
+            "assigned_chiplet_id": int(node.assigned_chiplet_id),
+            "assigned_cluster_id": int(node.assigned_cluster_id),
+            "assigned_core_id": int(node.assigned_core_id),
+            "dep_check_en": 1 if node.dep_check_enable else 0,
+            "dep_check_code": dep_check_code_val,
+            "dep_check_tag": int(node.dep_check_tag or 0),
+            "dep_set_en": 1 if node.dep_set_enable else 0,
+            "dep_set_all": 1 if node.remote_dep_set_all else 0,
+            "dep_set_chiplet_id": int(node.dep_set_chiplet_id),
+            "dep_set_cluster_id": int(node.dep_set_cluster_id),
+            "dep_set_code": dep_set_code_val,
+            "dep_set_tag": int(node.dep_set_tag or 0),
+        }
 
-        # Check if we exceeded 64 bits. The descriptor travels as one host AXI-Lite
-        # data word, and the RTL builds the same struct from the same widths
-        # (bingo_hw_manager_task_desc_t), so an overflow here is an overflow there:
-        # ReservedBitsForTaskDesc goes negative and the RTL will not elaborate either.
-        # The width is not fixed -- it grows with the cluster and core counts -- so
-        # report the breakdown and name the one knob that is meant to absorb it.
-        if current_shift > 64:
+        packed_val = 0
+        current_shift = 0
+        for name, width in self.bingo_task_desc_layout():
+            value = values[name]
+            # An out-of-range value does not truncate, it ORs into the NEXT field, so a
+            # single bad core id silently rewrites the dep tag above it. Refuse instead.
+            if value < 0 or value >= (1 << width):
+                raise ValueError(
+                    f"Node {node.node_id} ({getattr(node, 'node_name', '?')}): "
+                    f"{name}={value} does not fit its {width}-bit descriptor field "
+                    f"(max {(1 << width) - 1}).")
+            packed_val |= (value << current_shift)
+            current_shift += width
+
+        # The descriptor no longer has to fit one host AXI-Lite beat -- the RTL fetch
+        # master reads task_desc_words beats and commits them as one atomic push -- but
+        # it must still fit TaskDescBusWidth, because the RTL builds the same struct
+        # from the same widths and ReservedBitsForTaskDesc goes negative on overflow:
+        # it will not elaborate either. The occupancy is not fixed, it grows with the
+        # cluster and core counts, so report the breakdown and name the knobs.
+        if current_shift > self.task_desc_width:
+            num_clusters = self.num_clusters_per_chiplet
+            num_cores = self.ncores_hw
+            cluster_id_width = self._idx_width(num_clusters)
+            core_id_width = self._idx_width(num_cores)
+            # Subtracted, not re-listed, so adding a field to the table cannot leave this
+            # breakdown claiming numbers that no longer add up to the total.
+            fixed = current_shift - (2 * cluster_id_width + core_id_width
+                                     + 2 * num_cores + 2 * self.dep_tag_width)
             raise ValueError(
-                f"Packed task descriptor exceeds 64 bits: {current_shift} bits used.\n"
-                f"  fixed fields                 40\n"
+                f"Packed task descriptor exceeds {self.task_desc_width} bits: "
+                f"{current_shift} bits used.\n"
+                f"  fixed fields                 {fixed}\n"
                 f"  assigned/dep_set cluster id  {2 * cluster_id_width}  "
                 f"(num_clusters={num_clusters})\n"
                 f"  assigned core id             {core_id_width}  (num_cores={num_cores})\n"
                 f"  dep_check + dep_set code     {2 * num_cores}\n"
                 f"  dep_check + dep_set tag      {2 * self.dep_tag_width}  "
                 f"(dep_tag_width={self.dep_tag_width})\n"
-                f"Lower s1_quadrant.dep_tag_width in the RTL cfg (each step down frees "
-                f"2 bits) and rebuild; SW picks the new value up from occamy.h's "
-                f"BINGO_DEP_TAG_WIDTH.")
-            
+                f"Widen s1_quadrant.task_desc_width in the RTL cfg (SW picks the new "
+                f"value up from occamy.h's BINGO_TASK_DESC_WIDTH, and each extra 64 bits "
+                f"costs one more fetch beat), or lower s1_quadrant.dep_tag_width (each "
+                f"step down frees 2 bits, from occamy.h's BINGO_DEP_TAG_WIDTH).")
+
         return packed_val
+
     def bingo_unpack_node(self, packed_val: int) -> dict:
-        """Unpack the 64-bit integer into node fields."""
-        import math
-        
-        def get_idx_width(n):
-            return math.ceil(math.log2(n)) if n > 1 else 1
-
-        # Parameters
-        chip_id_width = 8
-        task_id_width = 12
-        num_clusters = self.num_clusters_per_chiplet
-        num_cores = self.num_cores_per_cluster
-        
-        cluster_id_width = get_idx_width(num_clusters)
-        core_id_width = get_idx_width(num_cores)
-        
-        current_shift = 0
+        """Unpack a task descriptor back into node fields, using the same one table."""
         fields = {}
-
-        # 1. cond_exec_invert (1 bit) — DARTS Tier 1
-        fields['cond_exec_invert'] = (packed_val >> current_shift) & 0x1
-        current_shift += 1
-
-        # 2. cond_exec_group_id (5 bits) — DARTS Tier 1
-        fields['cond_exec_group_id'] = (packed_val >> current_shift) & 0x1F
-        current_shift += 5
-
-        # 3. cond_exec_en (1 bit) — DARTS Tier 1
-        fields['cond_exec_en'] = (packed_val >> current_shift) & 0x1
-        current_shift += 1
-
-        # 4. task_type (2 bits) — 00=normal, 01=dummy, 10=gating
-        fields['task_type'] = (packed_val >> current_shift) & 0x3
-        current_shift += 2
-        
-        # 2. task_id (12 bits)
-        fields['task_id'] = (packed_val >> current_shift) & ((1 << task_id_width) - 1)
-        current_shift += task_id_width
-        
-        # 3. assigned_chiplet_id (8 bits)
-        fields['assigned_chiplet_id'] = (packed_val >> current_shift) & ((1 << chip_id_width) - 1)
-        current_shift += chip_id_width
-        
-        # 4. assigned_cluster_id
-        fields['assigned_cluster_id'] = (packed_val >> current_shift) & ((1 << cluster_id_width) - 1)
-        current_shift += cluster_id_width
-        
-        # 5. assigned_core_id
-        fields['assigned_core_id'] = (packed_val >> current_shift) & ((1 << core_id_width) - 1)
-        current_shift += core_id_width
-        
-        # 6. dep_check_info
-        fields['dep_check_en'] = (packed_val >> current_shift) & 0x1
-        current_shift += 1
-        
-        fields['dep_check_code'] = (packed_val >> current_shift) & ((1 << num_cores) - 1)
-        current_shift += num_cores
-
-        fields['dep_check_tag'] = (packed_val >> current_shift) & ((1 << self.dep_tag_width) - 1)
-        current_shift += self.dep_tag_width
-
-        # 7. dep_set_info
-        fields['dep_set_en'] = (packed_val >> current_shift) & 0x1
-        current_shift += 1
-        
-        fields['dep_set_all'] = (packed_val >> current_shift) & 0x1
-        current_shift += 1
-        
-        fields['dep_set_chiplet_id'] = (packed_val >> current_shift) & ((1 << chip_id_width) - 1)
-        current_shift += chip_id_width
-        
-        fields['dep_set_cluster_id'] = (packed_val >> current_shift) & ((1 << cluster_id_width) - 1)
-        current_shift += cluster_id_width
-        
-        fields['dep_set_code'] = (packed_val >> current_shift) & ((1 << num_cores) - 1)
-        current_shift += num_cores
-
-        fields['dep_set_tag'] = (packed_val >> current_shift) & ((1 << self.dep_tag_width) - 1)
-        current_shift += self.dep_tag_width
-
+        current_shift = 0
+        for name, width in self.bingo_task_desc_layout():
+            fields[name] = (packed_val >> current_shift) & ((1 << width) - 1)
+            current_shift += width
         return fields
+
+    def bingo_task_desc_words(self, packed_val: int) -> list:
+        """Split a descriptor into task-list words, LEAST-SIGNIFICANT WORD FIRST.
+
+        The RTL fetch master reads beat 0 from the lower address into the low bits of
+        the descriptor, so ascending address == ascending significance. Emitting these
+        the other way round swaps the halves of every descriptor, which does not fault:
+        the scheduler just dispatches garbage.
+        """
+        return [(packed_val >> (i * BINGO_TASK_LIST_WORD_BITS)) & BINGO_TASK_LIST_WORD_MASK
+                for i in range(self.task_desc_words)]
+
     def bingo_visualize_dfg(self, filename: str = "dfg_visualization", figsize: tuple = (20, 16)) -> None:
         """Visualize the DFG with different shapes for task types and colors for chiplets."""
         try:
@@ -1657,8 +1663,48 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
 
 
     def bingo_emit_task_desc_list(self, target_chiplet_id: int = None) -> str:
-        """Emit the task description list in the DFG."""
-        task_description_list = ""
+        """Emit the task description list in the DFG.
+
+        The list stays a uint64_t array, but a descriptor is task_desc_words of them:
+        word 0 at the lower address holds the LOW bits, because the RTL fetch master
+        reads beat 0 from the lower address into the low bits of the descriptor. Both
+        the stride and that order are load-bearing -- get either wrong and the scheduler
+        still runs, it just dispatches shuffled descriptors.
+        """
+        words = self.task_desc_words
+
+        # The indices below stride by BINGO_TASK_DESC_WORDS and the constants are packed
+        # to the field offsets `words` and the widths above imply. This file includes
+        # libbingo/bingo_api.h -> bingo_utils.h -> occamy.h, so BOTH macros are already
+        # defined by the time these lines are compiled: a #define here can never take
+        # effect and a #ifndef around it can never fire. What IS worth emitting is the
+        # agreement check, because a disagreement is otherwise completely silent -- the
+        # C runtime walks the array with its stride, the packer wrote it with a different
+        # one, and the scheduler simply fetches and dispatches garbage. That happens
+        # whenever the generated header is regenerated for another CFG without rerunning
+        # main_bingo.py, which is exactly the build state `make sw` leaves behind when a
+        # workload's generator inputs have not changed.
+        checks = [
+            ("BINGO_TASK_DESC_WIDTH", self.task_desc_width),
+            ("BINGO_TASK_DESC_WORDS", words),
+            ("BINGO_DEP_TAG_WIDTH", self.dep_tag_width),
+            ("BINGO_CHIP_ID_WIDTH", self.chip_id_width),
+            ("BINGO_NCORES_HW", self.ncores_hw),
+            # The one check that covers the whole field table rather than a single knob:
+            # bingo_utils.h builds the layout from the same platform defines with its own
+            # arithmetic, so equal totals means both derivations agree end to end.
+            ("BINGO_TASK_DESC_LAYOUT_BITS", self.bingo_task_desc_bits()),
+        ]
+        task_description_list = (
+            f"// Packed by the mini-compiler against {self.platform_geometry_source}.\n"
+            f"// These must match the headers this file is compiled with; see\n"
+            f"// libbingo/bingo_utils.h. Regenerate with `make sw` for the active CFG.\n"
+        )
+        for macro, value in checks:
+            task_description_list += (
+                f"BINGO_STATIC_ASSERT({macro} == {value},\n"
+                f"                    \"bingo task list was packed for a different "
+                f"{macro}\");\n")
 
         # One shared order for the tag allocator and this list -- see bingo_stream_order().
         all_nodes = self.bingo_stream_order()
@@ -1668,30 +1714,49 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         for chiplet_id in chiplets_to_process:
             local_nodes = [node for node in all_nodes if node.assigned_chiplet_id == chiplet_id]
             num_local_nodes = len(local_nodes)
-            
-            # Emit num_tasks at the beginning
-            task_description_list += f"uint32_t bingo_hw_scheduler_num_task_desc_chip_{chiplet_id:02x} = {num_local_nodes};\n"
+            list_name = f"bingo_hw_scheduler_task_desc_list_chip_{chiplet_id:02x}"
+            count_name = f"bingo_hw_scheduler_num_task_desc_chip_{chiplet_id:02x}"
+
+            # Emit num_tasks at the beginning. This counts DESCRIPTORS, not words -- it is
+            # what the runtime programs into the scheduler's task count.
+            task_description_list += f"uint32_t {count_name} = {num_local_nodes};\n"
 
             if num_local_nodes == 0:
                  # Even if size is 0, we allocate 1 element to avoid issues with size 0 allocation if allocator doesn't support it, or just use 0.
                  # Using 1 for safety, similar to original array [1]
-                 task_description_list += f"uint64_t* bingo_hw_scheduler_task_desc_list_chip_{chiplet_id:02x} = (uint64_t*)bingo_l3_alloc(0x{chiplet_id:02x}, 1 * sizeof(uint64_t));\n"
-                 task_description_list += f"bingo_hw_scheduler_task_desc_list_chip_{chiplet_id:02x}[0] = 0;\n"
+                 task_description_list += (
+                     f"uint64_t* {list_name} = (uint64_t*)bingo_l3_alloc(0x{chiplet_id:02x}, "
+                     f"1 * BINGO_TASK_DESC_WORDS * sizeof(uint64_t));\n")
+                 for w in range(words):
+                     task_description_list += f"{list_name}[0 * BINGO_TASK_DESC_WORDS + {w}] = 0x0000000000000000ULL;\n"
             else:
-                task_description_list += f"uint64_t* bingo_hw_scheduler_task_desc_list_chip_{chiplet_id:02x} = (uint64_t*)bingo_l3_alloc(0x{chiplet_id:02x}, bingo_hw_scheduler_num_task_desc_chip_{chiplet_id:02x} * sizeof(uint64_t));\n"
+                task_description_list += (
+                    f"uint64_t* {list_name} = (uint64_t*)bingo_l3_alloc(0x{chiplet_id:02x}, "
+                    f"{count_name} * BINGO_TASK_DESC_WORDS * sizeof(uint64_t));\n")
                 for idx, node in enumerate(local_nodes):
                     packed_val = self.bingo_pack_node(node)
                     fields = self.bingo_unpack_node(packed_val)
-                    
+                    desc_words = self.bingo_task_desc_words(packed_val)
+
                     # Create a detailed comment
                     comment = f"// Node ID {node.node_id}\n"
                     comment += f"    // Fields: Type={fields['task_type']}, TaskID={fields['task_id']}\n"
                     comment += f"    //         Assigned: Chiplet={fields['assigned_chiplet_id']:02x}, Cluster={fields['assigned_cluster_id']}, Core={fields['assigned_core_id']}\n"
-                    comment += f"    //         DepCheck: En={fields['dep_check_en']}, Code=0b{fields['dep_check_code']:0{self.num_cores_per_cluster}b}\n"
-                    comment += f"    //         DepSet:   En={fields['dep_set_en']}, All={fields['dep_set_all']}, Chiplet={fields['dep_set_chiplet_id']:02x}, Cluster={fields['dep_set_cluster_id']}, Code=0b{fields['dep_set_code']:0{self.num_cores_per_cluster}b}"
-                    
-                    task_description_list += f"bingo_hw_scheduler_task_desc_list_chip_{chiplet_id:02x}[{idx}] = 0x{packed_val:016X}; {comment}\n"
-            
+                    comment += f"    //         DepCheck: En={fields['dep_check_en']}, Code=0b{fields['dep_check_code']:0{self.ncores_hw}b}\n"
+                    comment += f"    //         DepSet:   En={fields['dep_set_en']}, All={fields['dep_set_all']}, Chiplet={fields['dep_set_chiplet_id']:02x}, Cluster={fields['dep_set_cluster_id']}, Code=0b{fields['dep_set_code']:0{self.ncores_hw}b}"
+
+                    # Word 0 (the low half) carries the comment; the rest follow in
+                    # ascending significance. Each word is masked to 64 bits -- formatting
+                    # the whole descriptor as one %016X emitted a 32-digit constant that no
+                    # C integer type can hold.
+                    task_description_list += (
+                        f"{list_name}[{idx} * BINGO_TASK_DESC_WORDS + 0] = "
+                        f"0x{desc_words[0]:016X}ULL; {comment}\n")
+                    for w in range(1, words):
+                        task_description_list += (
+                            f"{list_name}[{idx} * BINGO_TASK_DESC_WORDS + {w}] = "
+                            f"0x{desc_words[w]:016X}ULL;\n")
+
         return task_description_list
     
     def bingo_emit_task_id_mapping_lists(self, target_chiplet_id: int = None) -> str:

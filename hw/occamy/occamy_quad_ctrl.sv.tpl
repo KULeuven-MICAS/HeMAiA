@@ -219,9 +219,24 @@ module ${name}_quad_ctrl
     .TASK_QUEUE_TYPE                    (1), // 1: AXI Lite Master 0: Default AXI Lite Slave 
     .NUM_CORES_PER_CLUSTER    (BINGO_HW_MANAGER_NR_CORE_PER_CLUSTER    ),
     .NUM_CLUSTERS_PER_CHIPLET (NrClustersPerQuad       ),
+    // D2D routing-id width (hemaia_multichip.chip_id_width), the same key occamy_pkg's
+    // ChipIdWidth / chip_id_t come from. It must be passed explicitly: chip_id_i below is
+    // a pkg chip_id_t, and the descriptor's assigned_chiplet_id / dep_set_chiplet_id are
+    // both this wide, so leaving the module on its own default silently builds a manager
+    // whose chip-id port and descriptor fields are a different width from the rest of the
+    // chiplet. Exported to SW as BINGO_CHIP_ID_WIDTH (occamy.h) for the same reason.
+    .ChipIdWidth              (${chip_id_width}                          ),
     // Per-edge dependency tag width (s1_quadrant.dep_tag_width). Must match the SW
     // descriptor packing: BINGO_DEP_TAG_WIDTH (occamy.h) / DEP_TAG_WIDTH (bingo_utils.h).
     .DepTagWidth              (${dep_tag_width}                          ),
+    // Packed task-descriptor bus width. DERIVED by occamygen (get_task_desc_width) as the
+    // smallest whole number of 64-bit words that holds this config's descriptor layout,
+    // unless s1_quadrant.task_desc_width pins it wider. Kept separate from
+    // HostAxiLiteDataWidth: the task-queue master fetches TaskDescBusWidth/
+    // HostAxiLiteDataWidth beats and pushes them as one atomic FIFO entry, so widening
+    // the descriptor costs fetch beats, not fabric width. Must match the SW packing width
+    // BINGO_TASK_DESC_WIDTH (occamy.h), which is the same derivation on the same cfg.
+    .TaskDescBusWidth         (${task_desc_width}                        ),
     // DVFS doorbell MSIP bit: injected here so the PM is not hardcoded (see occamy.py
     // hw_manager_ipi_idx; must match HW_MANAGER_DVFS_MSIP_BIT / occamy_soc.sv ipi_i).
     .HOST_DVFS_MSIP_BIT       (${hw_manager_ipi_idx}                     ),

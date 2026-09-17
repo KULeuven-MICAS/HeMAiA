@@ -97,6 +97,14 @@
       // Bingo HW manager per-edge dependency tag width (DepTagWidth). Must match
       // the SW DEP_TAG_WIDTH; exported via occamy.h as BINGO_DEP_TAG_WIDTH.
       dep_tag_width: 4
+      // Task-descriptor container width (TaskDescBusWidth), in bits. Left unset this
+      // config would DERIVE 64, because its layout is 63 bits and fits one host
+      // AXI-Lite beat. Pinned to 128 deliberately: this is the config the FA sweep
+      // runs, so it is where the two-beat descriptor fetch gets exercised end to end
+      // on real workloads rather than only in the unit testbench. It also matches the
+      // 4-cluster development config, so a task-list image and a kernel built for one
+      // have the same descriptor stride on the other.
+      task_desc_width: 128
     },
     clusters:[
       "snax_split_cluster",

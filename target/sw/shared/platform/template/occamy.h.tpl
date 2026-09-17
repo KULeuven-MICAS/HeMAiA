@@ -45,3 +45,32 @@
 // each dep_*_info field, so SW must use the same width as the RTL: bingo_utils.h derives
 // DEP_TAG_WIDTH from this, and the mini-compiler passes it to BingoDFG(dep_tag_width=).
 #define BINGO_DEP_TAG_WIDTH            ${dep_tag_width}
+
+// Packed task-descriptor width of the bingo HW manager (bingo_hw_manager_top
+// TaskDescBusWidth). DERIVED per config by occamygen -- the smallest whole number of
+// 64-bit words that holds this config's descriptor layout -- unless the cfg pins it wider
+// with s1_quadrant.task_desc_width. The descriptor no longer has to fit one 64-bit
+// host AXI-Lite beat: the task-queue master fetches BINGO_TASK_DESC_WORDS beats and
+// commits them as one atomic push. The task list stays a uint64_t array with WORDS
+// entries per descriptor, least-significant word FIRST (beat 0 is read from the lower
+// address into the low bits), so the descriptor stride is BINGO_TASK_DESC_WIDTH / 8
+// bytes. Both the C packer and the mini-compiler must read these, never a literal 64.
+#define BINGO_TASK_DESC_WIDTH          ${task_desc_width}
+#define BINGO_TASK_DESC_WORDS          ${task_desc_words}
+
+// Number of cores the bingo HW manager sees per cluster: N_CORES_PER_CLUSTER counts only
+// the snitch cores, but the host CVA6 is wired in as one extra core of cluster 0, so the
+// RTL elaborates NUM_CORES_PER_CLUSTER = N_CORES_PER_CLUSTER + 1 (occamy_quad_ctrl.sv).
+// The descriptor's dep_check_code / dep_set_code bitmaps and the assigned_core_id field
+// are sized from THIS number. Software used to re-derive the +1 by hand (or forget it,
+// which silently shifted every field above assigned_core_id) -- use this define instead.
+#define BINGO_NCORES_HW                ${bingo_ncores_hw}
+
+// D2D routing-id width of the bingo HW manager (hemaia_multichip.chip_id_width ->
+// bingo_hw_manager_top ChipIdWidth, occamy_pkg ChipIdWidth / chip_id_t). BOTH descriptor
+// chiplet-id fields -- assigned_chiplet_id and dep_set_chiplet_id -- are this wide,
+// because they carry the D2D routing id ((x << 4) | y) and NOT an index into N_CHIPLETS:
+// sizing them from N_CHIPLETS_WIDTH is the bug this define exists to prevent, and it also
+// shifts every descriptor field above them. bingo_utils.h picks this up instead of its
+// #ifndef fallback of 8.
+#define BINGO_CHIP_ID_WIDTH            ${chip_id_width}

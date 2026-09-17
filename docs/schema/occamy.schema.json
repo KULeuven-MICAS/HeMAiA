@@ -287,6 +287,12 @@
                     "description": "Width of the bingo HW manager per-edge dependency tag (DepTagWidth). Bounds the number of concurrently live producers a dependency cell can distinguish; exported to SW as BINGO_DEP_TAG_WIDTH so the task-descriptor packing matches the RTL.",
                     "minimum": 1,
                     "default": 4
+                },
+                "task_desc_width": {
+                    "type": "integer",
+                    "description": "Optional override for the bingo HW manager task-descriptor container width in bits (TaskDescBusWidth), exported to SW as BINGO_TASK_DESC_WIDTH. INTENTIONALLY has no default: when the key is absent occamygen DERIVES the width (get_task_desc_width) as the smallest whole number of 64-bit host AXI-Lite words that holds this config's descriptor layout, so most configs keep a single-beat 64-bit descriptor and only a config whose layout genuinely overflows pays for a second fetch beat. A schema default would defeat that by making the key always present. Set it only to buy headroom ahead of need - e.g. to keep dep_tag_width at 4 on a 4-cluster part, or to freeze one container width across a family of configs so a single task-list image serves all of them. Must be a multiple of 64 and at least as wide as the derived layout; occamygen errors out otherwise.",
+                    "minimum": 64,
+                    "multipleOf": 64
                 }
 
             }
