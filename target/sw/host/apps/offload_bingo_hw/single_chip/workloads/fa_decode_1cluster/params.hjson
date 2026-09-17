@@ -1,0 +1,46 @@
+// Copyright 2026 KU Leuven.
+// Licensed under the Apache License, Version 2.0, see LICENSE for details.
+// SPDX-License-Identifier: Apache-2.0
+
+// FlashAttention tile shape. The defaults match the reference app's own
+// data/params.hjson exactly, so the cycle counts are comparable point for point.
+//
+// The geometry the kernels see FOLLOWS from these and the array in the cluster hjson:
+//
+//   Bc = M*meshRow    key columns    -- the tiling knob, grow it until TCDM is full
+//   Br = N*meshCol    query rows
+//   d  = K*tileSize   head dimension -- a property of the MODEL, not a knob
+//
+// At M=32, N=2, K=32 on a 16x4x16 array that is Bc=512, Br=32, d=128.
+//
+// SHRINK M FOR DEBUGGING. An RTL simulation of the full tile is minutes per KV tile;
+// M=2 (Bc=32) runs the same task graph, the same eleven SIMD tasks and both matmul
+// shapes in a fraction of the time, which is the loop you want when something hangs.
+{
+    // Must match the cluster count of the RTL cfg, or guard_cluster_count() skips the
+    // workload and it will not link.
+    num_clusters: 1
+    // One spatial unrolling on this cluster, so the array-shape selector is always 0.
+    array_shape: 0
+
+    M: 32
+    K: 32
+    N: 2
+    // KV tiles the software pipeline streams. Keep it >= 4 so the pipeline has enough
+    // tiles to hide its fill and drain.
+    NKV: 8
+
+    // K and V both stream on the iDMA; moving V to the xDMA hart wedges the run
+    // mid-pipeline (see main_bingo.py).
+    // DECODE. One query position per token, the whole KV cache read for it.
+    //
+    // Intensity is NQ*Br = 32 MAC/byte. This machine does 1024 MAC/cycle against a port
+    // sustaining ~60 B/cycle, so it is compute-bound only above ~17 MAC/byte -- decode at
+    // 32 clears that, but only just, and it is the mode where the K/V stream is closest to
+    // binding. The snax measurement of this shape is 72.4% of peak.
+    NQ: 1,
+
+    // Validate the O accumulator against a golden. OFF by default: it costs ~13% of the
+    // compute window (see main_bingo.py), so it is a correctness switch, not a default.
+    CHECK_O: 0
+}
