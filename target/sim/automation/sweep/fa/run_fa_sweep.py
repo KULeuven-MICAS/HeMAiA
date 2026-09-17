@@ -16,7 +16,7 @@ live next to the runner and a second task list in the same place would delete th
 first one's results.
 
     python3 run_fa_sweep.py [-j JOBS] [--engine vcs|vsim] [--waveform 0|1]
-                            [--cfg CFG] [--sw-only]
+                            [--cfg CFG] [--sw-only] [-f TASK_YAML]
 
 ``--sw-only`` reuses the RTL and the compiled simulation from a previous run at the
 same ``--cfg`` and rebuilds only the app binaries -- which is what you want while
@@ -39,5 +39,5 @@ if __name__ == "__main__":
     run_sweep_cli(
         __file__,
         description="Build and run HeMAiA FlashAttention.",
-        default_task_name="task_fa.yaml",
+        default_task_name="task_fa_both.yaml",
     )
