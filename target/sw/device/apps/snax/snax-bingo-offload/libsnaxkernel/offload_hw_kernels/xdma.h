@@ -33,14 +33,14 @@
 // therefore has to be driven from the hart it is attached to, which the generated role map
 // names SNAX_CORE_XDMA.
 //
-// The guards below used to say `snax_is_xdma_core()`, which was right only while one core
-// carried both. It is not the same hart on snax_split_cluster, and the two are easy to
+// The guards below must NOT use `snax_is_xdma_core()`. That is right only where one core
+// carries both roles, which is not the case on snax_split_cluster, and the two are easy to
 // confuse because the cluster hjson overloads the name: `xdma: true` on a core is the
-// DMA-ISA boolean (the classic Snitch iDMA, role "idma", hart 3), while `snax_xdma_cfg` is
-// the SNAX xDMA accelerator (role "xdma", hart 2). `snax_is_xdma_core()` finds the former.
+// DMA-ISA boolean (the classic Snitch iDMA, role "idma"), while `snax_xdma_cfg` is the
+// SNAX xDMA accelerator (role "xdma"). `snax_is_xdma_core()` finds the former.
 //
-// Hart 3 has no SNAX accelerator at all, so the CSR writes landed in a window with nothing
-// behind it -- no fault, no data moved, and a completion flag that reads back "done"
+// The iDMA hart has no SNAX accelerator, so CSR writes aimed at it land in a window with
+// nothing behind it: no fault, no data moved, and a completion flag that reads back "done"
 // because it never read anything.
 
 // Fill a local L1 region with a repeating 32-bit pattern, on the xDMA's writer path.
@@ -518,9 +518,9 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_chain_gather(void *arg)
 
     // (3) A SPURIOUS FINISH READS AS SUCCESS. If a finish left standing by the previous
     // gather is already at or past the id this transfer is about to get, xdma_wait_task
-    // returns immediately, the task "completes" in ~26 cycles and nothing moved. The
-    // finish counter must lag the commit counter at arming time; check it before the
-    // transfer rather than debugging the silence afterwards.
+    // returns immediately: the task "completes" in a few tens of cycles and nothing moved.
+    // The finish counter must lag the commit counter at arming time, so check it here
+    // rather than debugging the silence afterwards.
     uint32_t finish_before = snax_read_xdma_cfg_reg(XDMA_FINISH_REMOTE_TASK_PTR);
     uint32_t commit_before = snax_read_xdma_cfg_reg(XDMA_COMMIT_REMOTE_TASK_PTR);
     BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
@@ -536,9 +536,9 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_chain_gather(void *arg)
 
     // (4) THE FINISH COUNTER IS NOT A DATA BARRIER. It can bump a few cycles before the
     // writer's last store lands in TCDM, so a consumer scheduled right behind this node
-    // reads the sentinel. A cold first gather hides this by being slow; a warm one
-    // completes in ~31 cycles and loses the race every time. Bounded, so a genuinely
-    // dead transfer still returns and reports rather than hanging the simulation.
+    // reads the sentinel. A cold gather is slow enough to hide it; a warm one loses the
+    // race every time. Bounded, so a genuinely dead transfer still returns and reports
+    // rather than hanging the simulation.
     {
         volatile uint32_t *settle = (volatile uint32_t *)(uintptr_t)dst_addr;
         uint32_t s = 0;

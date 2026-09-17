@@ -34,6 +34,21 @@
 // VERSACORE read-only CSR
 #define VERSACORE_BUSY (VERSACORE_START_CSR + 1)
 #define VERSACORE_PERFORMANCE_COUNTER (VERSACORE_BUSY + 1)
+// Stall census: every busy cycle is either a pass entering the array or exactly one of
+// these three, so stall_a + stall_b + stall_d + passes == performance_counter.
+#define VERSACORE_STALL_A (VERSACORE_PERFORMANCE_COUNTER + 1)
+#define VERSACORE_STALL_B (VERSACORE_STALL_A + 1)
+#define VERSACORE_STALL_D (VERSACORE_STALL_B + 1)
+// Matmuls this ARRAY has retired, free-running and monotone across dispatches (snax
+// ab1f76ce, GEMMX_FINISHED_TASK upstream). This is the completion signal to wait on.
+//
+// It is NOT interchangeable with the streamer's finished-task counter, which is what this
+// kernel used to poll: that one marks the streamer's DATA MOVERS done, and the writer
+// draining lands BEFORE the array has retired the matmul. Waiting on it returns early, and
+// the caller then reads a partial performance counter or reconfigures the engine out from
+// under a running dispatch. VERSACORE_BUSY is not usable per-dispatch either -- it does not
+// fall between back-to-back dispatches -- so it is drained once at the end instead.
+#define VERSACORE_FINISHED_TASK (VERSACORE_STALL_D + 1)
 
 uint32_t gen_subtraction_config(int8_t subtraction_a, int8_t subtraction_b) {
     return (uint32_t)(((uint8_t)subtraction_b << 8) | (uint8_t)subtraction_a);

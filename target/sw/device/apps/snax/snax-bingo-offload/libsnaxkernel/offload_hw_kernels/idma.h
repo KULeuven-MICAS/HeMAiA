@@ -12,6 +12,20 @@
 
 #include "../macros.h"
 
+// How many concurrent iDMA descriptors one logical 1-D copy is issued as.
+//
+// Splitting speeds the transfer itself up, and the array's operand stall falls with it, but
+// arming N descriptors costs N times as much configuration -- and that configuration lands
+// on the load chain that gates the next dispatch. End to end a split pipeline is slower
+// than an unsplit one, so this is left at 1.
+//
+// The transfer rate that motivates splitting is real, and it is well under what the
+// reference sustains for the same bytes. Outstanding-descriptor depth is not what limits
+// it, so look elsewhere before raising this.
+#ifndef BINGO_IDMA_SPLIT
+#define BINGO_IDMA_SPLIT 1
+#endif
+
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_1d_copy(void *arg)
 {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_idma_1d_copy_args_t);
@@ -23,7 +37,33 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_1d_copy(void *arg)
         bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_idma_1d_copy_args_t);
         BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
         BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_START);
-        snrt_dma_start_1d_wideptr(dst_addr, src_addr, data_size);
+        // ISSUE THE COPY AS BINGO_IDMA_SPLIT CONCURRENT TRANSFERS, NOT ONE.
+        //
+        // A single large L3->L1 load runs at a fixed rate well under what the port can
+        // carry, and that rate barely moves whether the array is idle or fully busy. It is
+        // therefore not losing to TCDM contention; it is one transfer limited by round-trip
+        // latency rather than by bandwidth.
+        //
+        // Several transfers in flight cover that latency for each other. Bytes moved, burst
+        // shape and destination layout are all unchanged -- only the number of outstanding
+        // descriptors differs -- so this is free if the limit is elsewhere and roughly
+        // linear if it is depth.
+        {
+            const uint32_t n = (uint32_t)BINGO_IDMA_SPLIT;
+            // Split on a 64 B beat so no chunk straddles one; fall back to a single
+            // transfer when the size does not divide cleanly.
+            const uint32_t chunk = (data_size / n) & ~63u;
+            if (n > 1u && chunk != 0u) {
+                for (uint32_t i = 0; i < n - 1u; i++)
+                    snrt_dma_start_1d_wideptr(dst_addr + i * chunk,
+                                              src_addr + i * chunk, chunk);
+                const uint32_t done = (n - 1u) * chunk;
+                snrt_dma_start_1d_wideptr(dst_addr + done, src_addr + done,
+                                          data_size - done);
+            } else {
+                snrt_dma_start_1d_wideptr(dst_addr, src_addr, data_size);
+            }
+        }
         BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_END);
         BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_START);
         snrt_dma_wait_all();

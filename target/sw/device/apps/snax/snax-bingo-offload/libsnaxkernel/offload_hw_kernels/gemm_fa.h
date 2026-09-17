@@ -28,12 +28,11 @@
 // The STREAMER is programmed through the ordinary set_versacore_streamer_csr(): what differs
 // from gemm_full is the descriptors handed to it, not the way they are written. Its
 // `csrw_ss(BASE + i, ...)` loops all have compile-time bounds, so the compiler unrolls them
-// and folds every address into an immediate -- the whole call is 47 `csrw` and no indirect
-// jump 
+// and folds every address into an immediate, leaving no indirect jump.
 //
-// What this file does NOT reuse is the library's wait: it polls busy immediately after START
-// and then waits for the fall unbounded. Both are wrong here, for the reasons given at the
-// launch site below.
+// The library's wait is not reused. It polls busy immediately after START and then waits
+// for the fall unbounded; this file waits by retired-task counter and bounds both spins.
+// See the launch site below.
 
 #pragma once
 
@@ -167,9 +166,9 @@ static uint32_t __bingo_gemm_fa_run(uint32_t A_addr, uint32_t B_addr, uint32_t C
     //
     // What this buys is memory, not array time. A masked channel still pops its address and
     // still emits its beat, so the serialised C port costs the same BEATS either way and the
-    // score matmul's own cycles do not move. What goes away is the 64 KiB buffer of zeros,
-    // the iDMA load that would otherwise stage it at the head of the task graph, and the
-    // TCDM bandwidth those reads took from everything else sharing the port.
+    // score matmul's own cycles do not move. What goes away is the buffer of zeros itself,
+    // the iDMA load that would stage it at the head of the task graph, and the TCDM
+    // bandwidth those reads would take from everything else sharing the port.
     //
     // Quantisation has nowhere to go on a port carrying the converter alone, so it is off.
     set_versacore_streamer_csr(
@@ -199,35 +198,48 @@ static uint32_t __bingo_gemm_fa_run(uint32_t A_addr, uint32_t B_addr, uint32_t C
 
     BINGO_FA_MARK(emit_fp16, BINGO_TRACE_GEMM_FA_QK_RUN_START,
                               BINGO_TRACE_GEMM_FA_PV_RUN_START);
+    // Name THIS dispatch BEFORE launching it. A BINGO node owns exactly one dispatch and
+    // cannot carry a sequence number between invocations -- a `static` would live in L3 and
+    // cost a fabric round trip to read. Sampling the free-running array counter first and
+    // waiting for it to advance by one gives the same contract without the state.
+    const uint32_t retired_before = csrr_ss(VERSACORE_FINISHED_TASK);
     start_versacore_and_streamer();
 
-    // CLEAR THE STREAMER'S START IMMEDIATELY, before anything else -- in particular before
-    // the rise-wait below. An engine that re-triggers its descriptor walk under a held START
-    // desynchronises from the array, which then waits for operands that never arrive and
-    // sits BUSY for ever, and the ~130 cycles that 64 busy reads take is long enough for
-    // that to happen.
+    // CLEAR THE STREAMER'S START IMMEDIATELY, before anything else. An engine that
+    // re-triggers its descriptor walk under a held START desynchronises from the array,
+    // which then waits for operands that never arrive and sits BUSY for ever. Any delay
+    // here -- even a short poll loop -- is long enough for that to happen.
     csrw_ss(STREAMER_START_CSR, 0);
     csrw_ss(STREAMER_START_CSR, 0);
 
-    // Wait for the engine to START before waiting for it to finish.
+    // Wait for the dispatch by COUNTER, not by polling busy.
     //
-    // Polling busy straight after the two START writes -- as the library's wait does -- is
-    // safe only while those writes are SLOW enough for busy to rise first, which is a
-    // property of how the caller was compiled, not of the hardware. With the writes folded
-    // to single instructions it fails silently in the direction that matters: the wait
-    // returns at once, the caller reads a partial performance counter and then reconfigures
-    // the engine out from under a running matmul, which shows up as a dispatch reporting
-    // FEWER cycles than its own arithmetic floor.
+    // Polling busy straight after the START writes is only safe while those writes are slow
+    // enough for busy to rise first, which is a property of how the caller was compiled
+    // rather than of the hardware. When it is not, the wait returns immediately and the
+    // caller reads a partial performance counter and reconfigures the engine out from under
+    // a running matmul.
     //
-    // Bounded, so a task that completes before we look cannot hang us: if busy never
-    // rises, either it already finished (the fall-waits below exit at once, which is
-    // correct) or it was never started, which the drain timeout catches.
-    for (uint32_t g = 0; g < 64u; g++)
-        if (csrr_ss(VERSACORE_BUSY) || csrr_ss(STREAMER_BUSY_CSR)) break;
+    // The ARRAY's retired-task counter is free-running and monotone, so "this dispatch is
+    // done" is exactly "it has advanced past the value sampled above". Subtracting before
+    // the compare keeps that correct across a counter wrap.
+    //
+    // WHICH COUNTER MATTERS. It has to be the array's, not the STREAMER's: the streamer
+    // counts its data movers done and its writer drains BEFORE the array retires the
+    // matmul, so the streamer counter returns early. VERSACORE_BUSY cannot substitute
+    // either -- with anything queued behind it the busy flag does not fall between
+    // back-to-back dispatches -- so busy is drained once, below, where the result is about
+    // to be published, rather than once per dispatch.
+    {
+        uint32_t rs = 0;
+        while ((int32_t)(csrr_ss(VERSACORE_FINISHED_TASK) - retired_before) < 1) {
+            if (++rs > BINGO_GEMM_FA_SPIN_LIMIT) break;   // the fall-wait below diagnoses
+        }
+    }
 
-    // The fall-wait is bounded too. The library's is an unbounded `while (busy)`, which in
-    // RTL simulation turns a wedged engine into a run that burns the whole wall-clock
-    // budget with nothing to read afterwards; failing the node instead leaves a diagnosis.
+    // The fall-wait is bounded. An unbounded `while (busy)` turns a wedged engine into a
+    // run that burns the whole wall-clock budget with nothing to read afterwards; failing
+    // the node instead leaves a diagnosis.
     //
     // The accelerator's own START is cleared AFTER the wait, not before it: clearing it
     // while the array is mid-dispatch is not obviously safe.

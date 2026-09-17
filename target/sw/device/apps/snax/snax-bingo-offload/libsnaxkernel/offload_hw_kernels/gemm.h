@@ -197,11 +197,11 @@ static uint32_t __bingo_gemm_run(
     // generic path means teaching the shared versacore library the window size, which is
     // an upstream change (the same function has the same fixed seven writes there).
 #if defined(READER_WRITER_EXTENSION_1_CSR_BASE) && READER_WRITER_EXTENSION_1_CSR_NUM < 7
-    // UPDATE: the shared library no longer walks off the end of the window -- it now
-    // writes exactly READER_WRITER_EXTENSION_1_CSR_NUM user CSRs and places the converter
-    // enable at the bit its own extension list gives it. What a two-CSR port still cannot
-    // do is RESCALE: there is no quantisation extension on it to arm, and no zero
-    // point/multiplier/shift register to put the caller's values in. Refuse that alone.
+    // The shared library writes exactly READER_WRITER_EXTENSION_1_CSR_NUM user CSRs and
+    // places the converter enable at the bit its own extension list gives it, so a narrow
+    // window is not itself a problem. What a two-CSR port cannot do is RESCALE: there is no
+    // quantisation extension on it to arm, and no zero point/multiplier/shift register to
+    // put the caller's values in. Refuse that alone.
     if (quantization_enable)
     {
         printf_safe("[Cluster %d Core %d]: Error! gemm_full cannot quantise on this "
@@ -472,7 +472,7 @@ static uint32_t __bingo_gemm_run(
             // serializer would stall waiting for tiles that never come (sim hang).
             // Bail cleanly; the sweep workload drops these unsupported configs up
             // front (util/sim/gemm/gemm_psweep_lib.py) so this guard is never hit
-            // there. (Padding M/N to fill a beat would change the measured GEMM.)
+            // there. (Padding M/N to fill a beat would change the GEMM being measured.)
             if (((M * N * one_output_tile_bits) % BINGO_SERIAL_C_D_WIDTH) != 0)
             {
                 VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! D extension output does not fill streamer stores cleanly\r\n",
@@ -581,15 +581,16 @@ static uint32_t __bingo_gemm_run(
     BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_FULL_CFG_END);
     // Poll until Streamer and GEMM accelerator finish.
     //
-    // DIAGNOSTIC (2026-09-15): wait_versacore_and_streamer() is an unbounded pair of
-    // spin loops, so a dispatch that never retires wedges the core with nothing printed.
-    // It also polls busy immediately after the START writes -- with csrw_ss folded to a
-    // single csrw those are ~6 cycles apart, the accelerator has not raised busy yet and
-    // the VersaCore loop falls straight through, leaving only the streamer loop to spin.
-    // Bound it, and on expiry report what each engine thinks it is doing AND whether the
-    // writer ever landed anything in D: an untouched D means the array never produced an
-    // output block (an A/B/C feed problem), a partly written D means it produced some and
-    // the writer's bounds ran out (a count problem). Those are different bugs.
+    // NOT wait_versacore_and_streamer(): that is an unbounded pair of spin loops, so a
+    // dispatch that never retires wedges the core with nothing printed. It also polls busy
+    // immediately after the START writes -- with csrw_ss folded to a single csrw the
+    // accelerator has not raised busy yet, so the VersaCore loop falls straight through and
+    // only the streamer loop spins.
+    //
+    // This is bounded, and on expiry reports what each engine thinks it is doing AND
+    // whether the writer ever landed anything in D: an untouched D means the array never
+    // produced an output block (an A/B/C feed problem), a partly written D means it
+    // produced some and the writer's bounds ran out (a count problem).
     BINGO_TRACE_MARKER(BINGO_TRACE_GEMM_FULL_RUN_START);
     {
         // Probe the LAST int32 of every output block. The array retires blocks in order,

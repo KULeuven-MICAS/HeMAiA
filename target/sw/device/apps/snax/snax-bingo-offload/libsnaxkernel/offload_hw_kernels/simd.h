@@ -370,11 +370,9 @@ static inline uint32_t simd_pass_map_reduce(void *src, void *dst, uint32_t rows,
 //
 //     rows*64  +  2 * rows*(beats+1)*64  +  64
 //
-// which at the sweep's largest point (rows = 8, cols = 256, so beats = 8) is 9792 B. At
-// 8192 that one point fell out of the pool onto a per-call snrt_l1_malloc/free, and the
-// measured cost shows it plainly: 11443 cycles against 3373 inside the operator chain,
-// where every other point in the grid spends a few hundred cycles outside it. rope at the
-// same shape was worse, 20811 against 1973.
+// which at the sweep's largest point (rows = 8, cols = 256, so beats = 8) is 9792 B. A
+// tile that does not fit falls out of the pool onto a per-call snrt_l1_malloc/free, and
+// that allocator costs several times the operator chain it wraps.
 //
 // This is a POOL, not a bound: a tile larger than it still works, it just pays the
 // allocator. Raising it further is cheap L1 but not free, so it tracks the sweep grid
@@ -1319,9 +1317,8 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_rope(void *arg) {
 // they live in the ARENA rather than in a static, so they are L1 by construction and
 // there is no question about where a .bss object lands.
 //
-// The MEMO THAT GUARDS THEM has to live there too, and for a while it did not -- see
-// SIMD_FA_MEMO_OFF below. Getting the data into L1 and leaving its key in .bss cost more
-// than rebuilding the shapes ever would have.
+// The MEMO THAT GUARDS THEM has to live there too -- see SIMD_FA_MEMO_OFF below. Putting
+// the data in L1 while leaving its key in .bss costs more than rebuilding the shapes.
 #define SIMD_FA_NUM_SHAPES 12
 // A FIXED reservation, deliberately NOT sizeof(snax_simd_shape_t) * N.
 //
@@ -1339,18 +1336,26 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_rope(void *arg) {
 // The geometry memo: "the shapes in THIS arena are already built, for this (bc, dhead)".
 //
 // It lives in the arena's shape reservation -- i.e. in L1 -- and deliberately NOT in a
-// function-scope static. The device image links entirely into L3 (ORIGIN 0x800010d0) and
-// this core has no data cache, so a `static` read here is a blocking fabric round trip:
-// measured at ~144 cc with the fabric idle and ~3,400 cc while the other three clusters
-// stream K/V. Three of them were 96% of BINGO_TRACE_SIMD_CFG -- 10,405 cc median against
-// a 433 cc floor -- for twelve bytes that never needed to leave the cluster.
+// function-scope static. The device image links entirely into L3 and this core has no data
+// cache, so a `static` read here is a blocking fabric round trip, an order of magnitude
+// worse again while the other clusters stream K/V. That is a large share of
+// BINGO_TRACE_SIMD_CFG for twelve bytes that never need to leave the cluster.
 //
-// Keying it on the arena also fixes the half of the bug that was pure logic: with NQ
-// query tiles the arena ALTERNATES every invocation, so one shared static could never
-// hold the right answer and the memo missed 100% of the time from NQ=2 onwards. Per
+// Keying it on the arena is also required for correctness: with NQ query tiles the arena
+// ALTERNATES every invocation, so one shared static could never hold the right answer and
+// the memo would miss every time from NQ=2 onwards. Per
 // arena, it hits every tile but the first.
 #define SIMD_FA_MEMO_OFF   (SIMD_FA_SHAPES_BYTES - 16u)
 #define SIMD_FA_MEMO_MAGIC 0x5AFA5117u
+
+// a[10], the geometry mode. SELF is the default and the only value a workload that has no
+// prologue node may use: it rebuilds at tile 0 unconditionally, so uninitialised L1 can
+// never be mistaken for a built geometry. PROLOGUE builds and returns. PRIMED says "a
+// PROLOGUE node for THIS arena is an ancestor of this node in the graph", which is what
+// makes it safe to trust the memo on the very first tile.
+#define SIMD_FA_GEOM_SELF     0u
+#define SIMD_FA_GEOM_PROLOGUE 1u
+#define SIMD_FA_GEOM_PRIMED   2u
 
 typedef struct {
     uint32_t magic, bc, dhead;
@@ -1385,10 +1390,10 @@ enum {
 // take their pointers from here, because two copies of this arithmetic is exactly how a
 // layout silently drifts -- and a drifted layout does not fault, it feeds a task the
 // beat next door.
-// FA_SH_COUNT, not SIMD_FA_NUM_SHAPES: the enum carries an IN and an OUT per task, so
-// the real occupancy is 20 shapes (880 B at SIMD_MAX_DIM=3), not 12. The old bound was
-// loose by 8 shapes and would not have caught an overrun into rmax. The limit is now the
-// memo rather than the reservation, since the memo sits at its tail.
+// FA_SH_COUNT, not SIMD_FA_NUM_SHAPES: the enum carries an IN and an OUT per task, so the
+// real occupancy is 20 shapes (880 B at SIMD_MAX_DIM=3), not 12. The bound is the MEMO
+// offset rather than the whole reservation, because the memo sits at its tail and an
+// overrun into it would be silent.
 _Static_assert(FA_SH_COUNT * sizeof(snax_simd_shape_t) <= SIMD_FA_MEMO_OFF,
                "the FA shape cache outgrew its fixed reservation; raise "
                "SIMD_FA_SHAPES_BYTES here AND SHAPE_BYTES in bingo_kernel_args.py");
@@ -1428,8 +1433,8 @@ static void simd_fa_build_shapes(uint32_t arena, uint32_t bc, uint32_t dhead) {
     //    fused pass below then reads with negmS latched in front of it.
     snax_simd_shape_flat(&sh[FA_SH_TAP_IN],  (void *)0, bc);
     // ONE beat out, not bc+1. Without SIMD_RED_TAP the reduce emits only its result, so
-    // task 1 no longer copies the tile into the arena -- the fused exp pass reads the GEMM's
-    // own output buffer instead, so the arena no longer carries a copy of the tile at all.
+    // task 1 does not copy the tile into the arena: the fused exp pass reads the GEMM's own
+    // output buffer, and the arena never carries a copy of the tile.
     snax_simd_shape_flat(&sh[FA_SH_TAP_OUT], L.rmax, 1);
     // 2  m_new = max(m_old, rowmax): LANEWISE over the adjacent pair [rmax][mrun].
     snax_simd_shape_flat(&sh[FA_SH_MNEW_IN],  L.rmax, 2);
@@ -1461,8 +1466,8 @@ static void simd_fa_build_shapes(uint32_t arena, uint32_t bc, uint32_t dhead) {
     snax_simd_shape_flat(&sh[FA_SH_LSC_IN],  L.corrL, 2);
     snax_simd_shape_flat(&sh[FA_SH_LSC_OUT], L.lsc, 1);
     // 13 l_new = corr*l_old + rowsum: LANEWISE ADD over the adjacent pair [rsum][lsc].
-    // [lsc][rsum]: the row sum now lives in the p8 buffer's trailing beat, so this is
-    // a 2-beat STRIDED read, not an adjacent pair. ADD is commutative, so taking lsc
+    // [lsc][rsum]: the row sum lives in the p8 buffer's trailing beat, so this is a 2-beat
+    // STRIDED read, not an adjacent pair. ADD is commutative, so taking lsc
     // first keeps the stride positive (the arena is allocated before the p8 buffers).
     snax_simd_shape_2d(&sh[FA_SH_LNEW_IN], L.lsc, 2, 0, 1, 0);
     snax_simd_shape_flat(&sh[FA_SH_LNEW_OUT], L.lnew, 1);
@@ -1490,13 +1495,11 @@ static void simd_fa_build_shapes(uint32_t arena, uint32_t bc, uint32_t dhead) {
 // memset instead -- the cfg has HasVerilogMemset.
 // Word fill, unrolled eight wide.
 //
-// NOT `volatile`. The previous version declared the destination volatile, which forbids
-// the compiler from unrolling or reordering anything: it emitted store/increment/compare/
-// branch per word, ~4 instructions for every 4 bytes. At dhead * SIMD_BEAT_BYTES / 4 =
-// 2048 words that measured **8234 instructions and 8658 cycles** on the SIMD core -- 21%
-// of the entire FlashAttention pipeline, and twenty times every SIMD CSR write in the run
-// put together (422 cycles). volatile was never what made these stores visible to the
-// accelerator; the compiler barrier in the caller is.
+// NOT `volatile`. A volatile destination forbids the compiler from unrolling or reordering
+// anything: it emits store/increment/compare/branch per word, roughly four instructions for
+// every four bytes, which over a whole O accumulator dominates everything else the kernel
+// does. volatile is not what makes these stores visible to the accelerator either; the
+// compiler barrier in the caller is.
 //
 // The tail loop is not dead code by accident: every count used here is a multiple of
 // SIMD_BEAT_BYTES / 4, which is 16 on this cluster, so the unrolled body covers it
@@ -1515,11 +1518,11 @@ static void simd_fa_init_state(uint32_t arena, uint32_t bc, uint32_t dhead) {
     simd_fa_layout(&L, arena, bc, dhead);
     simd_fa_fill_u32((uint32_t *)L.mrun, 0xFBFFFBFFu, SIMD_BEAT_BYTES / 4u);  // -65504
     simd_fa_fill_u32((uint32_t *)L.lrun, 0u, SIMD_BEAT_BYTES / 4u);           // l = 0
-    // O is NOT zeroed here any more. It is dhead beats -- 8 KiB at d=128 -- and zeroing it
-    // with this core's stores was ~4000 cycles on the critical path with both engines idle
-    // behind it. The workload now hands that to the DM core's iDMA (node ArenaOzero in
-    // fa_1cluster/main_bingo.py), which is idle at that point. A workload that calls this
-    // kernel WITHOUT arranging that zero will read a stale O on its first KV tile.
+    // O is NOT zeroed here any more. It is dhead beats, and zeroing it with this core's
+    // stores sat on the critical path with both engines idle behind it. The workload is
+    // expected to hand that to an engine that is idle at the time -- the ArenaOzero node
+    // in the FA graphs does it on the xDMA. A workload that calls this kernel WITHOUT
+    // arranging that zero will read a stale O on its first KV tile.
     (void)dhead;
     // The stores must land before the first snax_simd_fire() reads the arena. This is
     // what volatile was standing in for, and it costs nothing.
@@ -1545,6 +1548,8 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_fa_softmax(void *arg) {
     uint32_t bc = a[6];
     uint32_t dhead = a[7];
     uint32_t tile_idx = a[8];
+    uint32_t seed_state = a[9];
+    uint32_t geom_mode = a[10];
     bingo_kernel_scratchpad_t *sp =
         BINGO_GET_SP(arg, __snax_bingo_kernel_simd_fa_softmax_args_t);
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
@@ -1570,19 +1575,63 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_fa_softmax(void *arg) {
     // Geometry is fixed for a whole FA run of one query tile, so build it once per arena.
     // Re-pointing the two bases that do change is two stores.
     //
-    // tile_idx 0 is always the first invocation for a given arena -- the workload walks
-    // j (the KV tile) outermost -- so it rebuilds UNCONDITIONALLY. The memo is therefore
-    // only ever TRUSTED on a later tile, never required to be valid on a cold arena, and
-    // uninitialised L1 cannot be mistaken for a built geometry.
+    // tile_idx 0 is the first invocation for a given arena -- the workload walks j (the KV
+    // tile) outermost -- so it rebuilds UNCONDITIONALLY unless a SHAPES_ONLY prologue has
+    // already primed this arena. The memo is therefore only ever TRUSTED after a write this
+    // run made itself, never required to be valid on a cold arena, and uninitialised L1
+    // cannot be mistaken for a built geometry.
+    //
+    // WHY A PROLOGUE EXISTS AT ALL. The build is a few hundred scalar stores into TCDM,
+    // and their cost is set by what else is using the TCDM ports: with the iDMA streaming a
+    // K/V tile through the same ports each store costs several times what it does on an
+    // idle cluster. It is neither icache nor the CSR writes, it is port contention, so the
+    // cure is to not do it on the critical path. A prologue node does the build before the
+    // load chain has spun up, and every real tile after it takes the memo path instead.
+    //
+    // THE COLD TEST MUST COME FIRST, AND || MUST SHORT-CIRCUIT IT.
+    //
+    // TCDM is `tc_sram` with SimInit = "none" (snitch_data_mem.sv passes no SimInit and
+    // the default is "none"), and +vcs+initreg is applied only to netlist builds, not to
+    // sim_rtl. A word this run has not written therefore reads back X. Comparing the memo
+    // of a COLD arena puts that X into a branch condition, the PC goes X with it, and the
+    // hart is gone: no fault, no exception, no timeout, just a core that never retires
+    // again.
+    //
+    // So the cold test has to be the LEFT operand, where C's || never evaluates the memo
+    // on an arena nobody has written. The boolean value of the condition is the same
+    // either way; only the evaluation order is. The memo is then read only when a write
+    // is guaranteed to have happened already: by an earlier tile (tile_idx > 0) or by a
+    // PROLOGUE ancestor (PRIMED).
+    //
+    // The reference has the same hazard and solves it the same way round: it clears its
+    // shape table up front (snax-flashattn-decode.c, snax_simd_shapes_clear) precisely
+    // because .l1 is NOLOAD and "a shape that is declared but never filled programs the
+    // AGU from whatever was in TCDM".
     simd_fa_memo_t *memo = (simd_fa_memo_t *)(arena + SIMD_FA_MEMO_OFF);
-    if (tile_idx == 0u || memo->magic != SIMD_FA_MEMO_MAGIC ||
+    const uint32_t cold = (tile_idx == 0u && geom_mode != SIMD_FA_GEOM_PRIMED);
+    if (cold || memo->magic != SIMD_FA_MEMO_MAGIC ||
         memo->bc != bc || memo->dhead != dhead) {
         simd_fa_build_shapes(arena, bc, dhead);
         memo->magic = SIMD_FA_MEMO_MAGIC;
         memo->bc    = bc;
         memo->dhead = dhead;
     }
-    if (tile_idx == 0u) simd_fa_init_state(arena, bc, dhead);
+    // The PROLOGUE does NOT return here. It used to, and that left the expensive half of
+    // the config cold.
+    //
+    // WHAT THAT COST IS. The span is only a few dozen instructions, and nearly all of its
+    // cycles are a handful of stalls at PCs exactly one instruction-cache line apart: they
+    // are line refills. A refill costs tens of cycles on an idle fabric but well over a
+    // thousand while the iDMA streams a tile through the same path, and the first real tile
+    // runs precisely under that traffic.
+    //
+    // The lines it misses are this function's base-re-pointing block and
+    // snax_simd_program_fast(). Running them in the PROLOGUE instead moves the refills
+    // into a quiet window, and every later tile then hits in the icache. Nothing else
+    // changes: no beat is moved, no accelerator task is queued, and the running state is
+    // still left alone -- seed_state is 0 for a prologue node, so init_state below does
+    // not run and the xDMA memsets remain the only writer of m and l.
+    if (tile_idx == 0u && seed_state) simd_fa_init_state(arena, bc, dhead);
     sh[FA_SH_TAP_IN].base = (void *)(uint32_t)s16_src;
 
     // The caller hands us the GEMM's D buffer, which the workload allocated with ONE BEAT
@@ -1606,6 +1655,12 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_fa_softmax(void *arg) {
     // another node may have used the block since.
     snax_simd_program_fast(&sh[FA_SH_TAP_IN], &sh[FA_SH_TAP_OUT]);
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_CFG_END);
+
+    // A PROLOGUE stops HERE -- after the whole config, before the first task is fired.
+    // The CSRs it has just written are shared state that the next invocation rewrites
+    // unconditionally (snax_simd_program_fast is "done per invocation, not once ever"),
+    // so leaving them programmed is not a handover, only a warm cache.
+    if (geom_mode == SIMD_FA_GEOM_PROLOGUE) return BINGO_RET_SUCC;
 
     // ---- the online softmax, in full ------------------------------------------------
     // Every task below is one or two beats except 1, 8+9, 10 and 14. That ratio is the
@@ -1678,11 +1733,10 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_fa_softmax(void *arg) {
     // so bc (even) is right -- bc+1 would be the full period and is odd.
     // The scale is 127.0, not 1.0. P = exp(S - m) lies in [0,1], so a scale of 1.0 rounds
     // every element to 0 or 1 -- P degenerates to a BINARY MASK and the PV matmul that
-    // consumes it computes nothing meaningful. It sat at 1.0 for a long time and nothing
-    // caught it, because this workload's own comment says "O is a cycle measurement" and
-    // no check ever read O back; adding one found it on the first run. The general
-    // simd_softmax kernel has always used BINGO_SIMD_I8_SCALE_UNIT for the same [0,1]
-    // range, so this is now consistent with it.
+    // consumes it computes nothing meaningful. Nothing upstream of O catches this, since m
+    // and the row sum are both correct either way; only a check that reads O back does.
+    // BINGO_SIMD_I8_SCALE_UNIT is what the general simd_softmax kernel uses for the same
+    // [0,1] range.
     //
     // O comes out 127x larger as a result. Harmless here -- O is never normalised by l in
     // this benchmark -- but a real FA epilogue dividing by l MUST account for it, because
