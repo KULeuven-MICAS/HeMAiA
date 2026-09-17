@@ -82,6 +82,53 @@ def check_occamy_cfg(occamy_cfg):
 
 
 
+def _find_key(obj, key, path=""):
+    """Every ``(json_path, value)`` for ``key`` anywhere in ``obj``.
+
+    Deliberately independent of _find_snax_xdma_cfgs so the post-condition in
+    unify_xdma_max_mem_size cannot be fooled by the same layout assumption the
+    rewrite makes.
+    """
+    out = []
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if k == key and not isinstance(v, (dict, list)):
+                out.append((f"{path}/{k}", v))
+            else:
+                out.extend(_find_key(v, key, f"{path}/{k}"))
+    elif isinstance(obj, list):
+        for n, v in enumerate(obj):
+            out.extend(_find_key(v, key, f"{path}[{n}]"))
+    return out
+
+
+def _find_snax_xdma_cfgs(obj):
+    """Every ``snax_xdma_cfg`` dict anywhere inside a cluster hjson.
+
+    The key's depth is NOT stable across cluster layouts. ``snax_split_cluster``
+    puts it at ``cluster/hives[0]/cores[2]/snax_xdma_cfg``; other cfgs use
+    ``dma_core_template/snax_xdma_cfg``. The previous code only looked at the
+    latter, so for a hives/cores layout it silently found nothing -- which made
+    BOTH halves of unify_xdma_max_mem_size dead code: the cluster's own
+    max_mem_size_kiB never entered the candidate set, and the rewrite loop
+    skipped the file. The two ends of the system then compiled with different
+    cross-cluster cfg field widths and every remote transfer's AGU config was
+    deserialised at the wrong bit offsets. Walking for the key removes the
+    dependency on layout entirely.
+    """
+    found = []
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if k == "snax_xdma_cfg" and isinstance(v, dict):
+                found.append(v)
+            else:
+                found.extend(_find_snax_xdma_cfgs(v))
+    elif isinstance(obj, list):
+        for v in obj:
+            found.extend(_find_snax_xdma_cfgs(v))
+    return found
+
+
 def unify_xdma_max_mem_size(occamy_cfg, cluster_cfg_paths):
     """Compute the unified ``max_mem_size_kiB`` across every XDMA in the
     system, rewrite each cluster hjson on disk where the unified value
@@ -129,16 +176,15 @@ def unify_xdma_max_mem_size(occamy_cfg, cluster_cfg_paths):
     if spm_wide is not None and "length" in spm_wide:
         candidates.append(int(spm_wide["length"]) // 1024)
 
-    # 4. Per-cluster snax_xdma_cfg.max_mem_size_kiB.
+    # 4. Per-cluster snax_xdma_cfg.max_mem_size_kiB, wherever it sits.
     cluster_objs = []
     for cfg_path in cluster_cfg_paths:
         with open(cfg_path, "r") as f:
             cluster_obj = read_json_file(f)
         cluster_objs.append((cfg_path, cluster_obj))
-        dma_tpl = cluster_obj.get("dma_core_template") or {}
-        snax_xdma_cfg = dma_tpl.get("snax_xdma_cfg")
-        if snax_xdma_cfg is not None and "max_mem_size_kiB" in snax_xdma_cfg:
-            candidates.append(int(snax_xdma_cfg["max_mem_size_kiB"]))
+        for snax_xdma_cfg in _find_snax_xdma_cfgs(cluster_obj):
+            if "max_mem_size_kiB" in snax_xdma_cfg:
+                candidates.append(int(snax_xdma_cfg["max_mem_size_kiB"]))
 
     if not candidates:
         raise RuntimeError(
@@ -167,13 +213,14 @@ def unify_xdma_max_mem_size(occamy_cfg, cluster_cfg_paths):
     # -identical content, and a reader always sees either the whole old file or the whole
     # new one. The temp lives in the same directory so the replace stays on one filesystem.
     for cfg_path, cluster_obj in cluster_objs:
-        dma_tpl = cluster_obj.get("dma_core_template") or {}
-        snax_xdma_cfg = dma_tpl.get("snax_xdma_cfg")
-        if snax_xdma_cfg is None:
+        snax_xdma_cfgs = _find_snax_xdma_cfgs(cluster_obj)
+        if not snax_xdma_cfgs:
             continue
-        old_mm = int(snax_xdma_cfg.get("max_mem_size_kiB", -1))
-        if old_mm != max_mem_size_kiB:
-            snax_xdma_cfg["max_mem_size_kiB"] = max_mem_size_kiB
+        old_mms = [int(c.get("max_mem_size_kiB", -1)) for c in snax_xdma_cfgs]
+        if any(mm != max_mem_size_kiB for mm in old_mms):
+            for c in snax_xdma_cfgs:
+                c["max_mem_size_kiB"] = max_mem_size_kiB
+            old_mm = old_mms[0] if len(set(old_mms)) == 1 else old_mms
             cfg_path = Path(cfg_path)
             with tempfile.NamedTemporaryFile(
                     "w", dir=cfg_path.parent, prefix=f".{cfg_path.name}.",
@@ -185,6 +232,35 @@ def unify_xdma_max_mem_size(occamy_cfg, cluster_cfg_paths):
                 f"[unify_xdma_max_mem_size] rewrote {cfg_path}: "
                 f"max_mem_size_kiB {old_mm} -> {max_mem_size_kiB}"
             )
+
+    # Post-condition. Every XDMA in the system MUST now agree, because
+    # max_mem_size_kiB sizes the cross-cluster cfg wire format
+    # (XDMAInterClusterCfgIO: axiTransferBeatSize, spatialStride, temporalBounds,
+    # temporalStrides are all crossClusterParam.tcdmAddressWidth wide). Two nodes
+    # built with different values serialise and deserialise the SAME cfg frame at
+    # different bit offsets. Nothing faults: the receiving node simply programs its
+    # AGU from garbage, and a remote transfer runs with bounds that were never
+    # requested. Fail here instead -- a build error costs minutes, this class of
+    # silent corruption cost days.
+    # Scan for the KEY, not for snax_xdma_cfg dicts. Using the same finder here
+    # would make this check tautological -- the rewrite above sets exactly what
+    # the finder returns, so it would pass vacuously on the one failure that
+    # actually happened: a layout the finder does not understand, where the
+    # cluster's value is neither read nor rewritten and the build silently
+    # proceeds with two different wire formats. A key scan sees the value
+    # wherever it hides.
+    disagreeing = {}
+    for cfg_path, cluster_obj in cluster_objs:
+        for where, mm in _find_key(cluster_obj, "max_mem_size_kiB"):
+            if int(mm) != max_mem_size_kiB:
+                disagreeing[f"{cfg_path}{where}"] = int(mm)
+    if disagreeing:
+        raise RuntimeError(
+            "unify_xdma_max_mem_size: post-condition failed -- these clusters "
+            f"still disagree with the unified value {max_mem_size_kiB}: "
+            f"{disagreeing}. Every XDMA must share max_mem_size_kiB or the "
+            "cross-cluster cfg wire format differs between sender and receiver."
+        )
 
     return max_mem_size_kiB
 
