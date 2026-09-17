@@ -558,6 +558,78 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
     # ----------------------------------------------------------------
     # Identity-aware dependencies (EnableTaggedDeps): per-edge tags
     # ----------------------------------------------------------------
+    def bingo_stream_order(self) -> list:
+        """The ONE per-core order the manager will actually see, used by everything.
+
+        The manager fetches the descriptor list in order and demuxes each entry into its
+        assigned core's FIFO waiting queue, so this list IS the per-core execution order.
+        Two things must agree on it:
+
+          * the dep-tag allocator, whose min chain-cover decides which edges may SHARE a
+            tag from a happens-before order that includes same-core sequencing;
+          * this emitter.
+
+        They are not independent. Emitting an order the allocator did not assume can leave
+        two simultaneously-live edges holding one tag, and the run deadlocks. The converse
+        holds as well: strip the tags and even the plain topological order deadlocks. The
+        tags are what make a particular order safe, so the order and the tags have to be
+        derived from the same sequence -- which is why this is computed once, here.
+
+        The order is a PRIORITY topological sort: always a valid topological order, but
+        among the currently-ready nodes it prefers the one anchored earliest, so a dummy
+        lands next to the real task it serves. That placement matters because a dummy
+        occupies a slot in the CONSUMER's waiting queue: a plain topological sort can put
+        one belonging to a later task ahead of an earlier one, and the FIFO then makes the
+        earlier task inherit a wait it has no dependency on.
+        """
+        if getattr(self, "_stream_order_cache", None) is not None:
+            return self._stream_order_cache
+
+        import heapq
+        topo_nodes = list(nx.topological_sort(self))
+        pos = {n: i for i, n in enumerate(topo_nodes)}
+
+        def _anchor(node):
+            seen, cur, side = set(), node, 1
+            while cur.node_type == "dummy" and cur.node_id not in seen:
+                seen.add(cur.node_id)
+                if cur.dep_check_enable:
+                    nxt, side = list(self.successors(cur)), 0    # a check gates its consumer
+                elif cur.dep_set_enable:
+                    nxt, side = list(self.predecessors(cur)), 2  # a set follows its producer
+                else:
+                    break
+                if not nxt:
+                    break
+                cur = min(nxt, key=lambda x: pos[x])
+            return pos.get(cur, pos[node]), side
+
+        def _key(node):
+            if node.node_type == "dummy":
+                a, side = _anchor(node)
+                return (a, side, pos[node])
+            return (pos[node], 1, 0)
+
+        indeg = {n: self.in_degree(n) for n in self.nodes()}
+        ready = [(_key(n), i, n) for i, n in enumerate(topo_nodes) if indeg[n] == 0]
+        heapq.heapify(ready)
+        seq, tie = [], len(topo_nodes)
+        while ready:
+            _, _, n = heapq.heappop(ready)
+            seq.append(n)
+            for succ in self.successors(n):
+                indeg[succ] -= 1
+                if indeg[succ] == 0:
+                    heapq.heappush(ready, (_key(succ), tie, succ)); tie += 1
+        assert len(seq) == len(topo_nodes), "priority topological sort dropped nodes"
+
+        # BINGO_STREAM_ORDER=topo restores the raw topological sort, so a stream can be
+        # A/B'd against the manager's Python model without rebuilding anything.
+        if os.environ.get("BINGO_STREAM_ORDER") == "topo":
+            seq = topo_nodes
+        self._stream_order_cache = seq
+        return seq
+
     def bingo_transform_dfg_allocate_dep_tags(self, tag_width: int = 3) -> None:
         """Assign per-edge identity tags so a consumer drains only ITS producer's
         increment, never a stray that happens to share the same dep-matrix cell.
@@ -595,7 +667,7 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         concurrency in placement, or widen DepTagWidth).
         """
         max_tags = 1 << tag_width
-        topo = list(nx.topological_sort(self))
+        topo = self.bingo_stream_order()
         pos = {n: i for i, n in enumerate(topo)}
 
         cells: dict = {}                      # (chip, cl, R, C) -> [(set_node, check_node), ...]
@@ -1536,7 +1608,11 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         """Export the DFG node details to a CSV file."""
         import csv
         
-        col_labels = ["ID", "Chiplet", "Cluster", "Core", "Type", "Kernel"]
+        # Name is exported because the runtime trace does NOT carry it: bingo_trace.json
+        # records span TYPES, not which node produced them, so attributing a span to a
+        # node otherwise means guessing from durations. The task id IS observable -- it is
+        # the value a core reads from CSR 0x5fe -- so ID -> Name makes that join exact.
+        col_labels = ["ID", "Chiplet", "Cluster", "Core", "Type", "Kernel", "Name"]
         table_data = []
         sorted_nodes = sorted(self.nodes, key=lambda n: n.node_id)
         for node in sorted_nodes:
@@ -1553,7 +1629,8 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                 f"{node.assigned_cluster_id}",
                 f"{node.assigned_core_id}",
                 t_type,
-                node.kernel_name
+                node.kernel_name,
+                node.node_name
             ]
             table_data.append(row)
 
@@ -1582,39 +1659,10 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
     def bingo_emit_task_desc_list(self, target_chiplet_id: int = None) -> str:
         """Emit the task description list in the DFG."""
         task_description_list = ""
-        
-        # Use topological sort, but ensure Dummy Set nodes 
-        # appear immediately after their source node.
-        # 1. Get topological sort
-        topo_nodes = list(nx.topological_sort(self))
-        all_nodes = topo_nodes
-        # # 2. Apply grouping logic
-        # all_nodes = []
-        # visited = set()
-        
-        # for node in topo_nodes:
-        #     if node in visited:
-        #         continue
-                
-        #     all_nodes.append(node)
-        #     visited.add(node)
-            
-        #     # Find successors that are dummy set nodes
-        #     # These nodes must follow the current node immediately in the descriptor list
-        #     successors = list(self.successors(node))
-        #     dummy_set_succs = [
-        #         s for s in successors 
-        #         if s.node_type == "dummy" and s.dep_set_enable
-        #     ]
-            
-        #     # Sort by ID for determinism
-        #     dummy_set_succs.sort(key=lambda x: x.node_id)
-            
-        #     for dummy in dummy_set_succs:
-        #         if dummy not in visited:
-        #             all_nodes.append(dummy)
-        #             visited.add(dummy)
-        
+
+        # One shared order for the tag allocator and this list -- see bingo_stream_order().
+        all_nodes = self.bingo_stream_order()
+
         chiplets_to_process = [target_chiplet_id] if target_chiplet_id is not None else self.chiplet_ids
 
         for chiplet_id in chiplets_to_process:
