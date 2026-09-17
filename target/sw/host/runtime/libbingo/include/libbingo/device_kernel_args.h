@@ -324,6 +324,28 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_1d_copy_args {
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_xdma_1d_copy_args_t;
 
+// Fill a local L1 region with a repeating 32-bit PATTERN, using the xDMA's writer-side
+// Memset extension.
+//
+// Why this exists rather than a zero-load over the iDMA: FlashAttention seeds m to -inf
+// and l to 0, which is 128 bytes of CONSTANTS. Fetching constants from main memory wastes
+// the load engine's critical head -- and on a KV-sharded run that is NQ separate loads
+// standing in front of K(0). The xDMA core is otherwise idle (on HeMAiA it owns nothing
+// but its exit node), so it generates them in place instead: no main-memory read at all.
+//
+// A 32-bit pattern, not a byte, because FP16 -inf is 0xFBFF and no single byte repeats
+// into it. One mechanism then covers INT8, FP16, BF16, FP32 and INT32 constants.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_memset_args {
+  // Field ORDER matches every other kernel here: hi before lo. The Python side emits
+  // both through _process_addr, which writes <name>_hi and <name>_lo, so a struct that
+  // declares them the other way round silently swaps the halves of the address.
+  uint32_t dst_addr_hi;
+  uint32_t dst_addr_lo;
+  uint32_t size;          // bytes, a multiple of the 64-byte beat
+  uint32_t pattern;       // the 32-bit word tiled across every beat
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_xdma_memset_args_t;
+
 // BINGO XDMA 6D kernel args (fixed-size, max 5 temporal dims = 6 total dims)
 // Exposes full AGU strides/bounds to the user. Unused dims: stride=0, bound=1.
 __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_6d_args {
@@ -743,6 +765,24 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_fa_softmax {
   uint32_t bc;
   uint32_t dhead;
   uint32_t tile_idx;
+  // 1: this kernel seeds m = -inf and l = 0 itself on tile 0 (the historical behaviour).
+  // 0: the WORKLOAD has already seeded them -- e.g. with an xDMA memset on the otherwise
+  // idle xDMA core, which keeps a pair of constants off the SIMD's critical path in the
+  // same way O's zero already is. A workload that passes 0 without arranging the fill
+  // reads a stale m and l on its first KV tile, exactly as the O note above warns.
+  uint32_t seed_state;
+  // Geometry mode; must match SIMD_FA_GEOM_* in offload_hw_kernels/simd.h.
+  //   0 SELF      rebuild the task geometry at tile 0 unconditionally. The only safe value
+  //               for a graph with no prologue node, because a cold arena's memo word is
+  //               whatever L1 happened to hold.
+  //   1 PROLOGUE  build the geometry into `arena` and return. Moves no data, queues no
+  //               accelerator task and does not touch m, l or O, so the node is pure setup.
+  //   2 PRIMED    trust the memo even on tile 0. Legal only when a PROLOGUE node for THIS
+  //               arena is an ancestor in the graph.
+  // The build is 222 scalar TCDM stores that cost 9-14 cc each once the iDMA is streaming
+  // through the same ports -- 4,470 cc measured on decode's first tile. PROLOGUE+PRIMED
+  // moves that off the critical path; tile 0 then costs ~150 cc like every other tile.
+  uint32_t geom_mode;
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_simd_fa_softmax_args_t;
 

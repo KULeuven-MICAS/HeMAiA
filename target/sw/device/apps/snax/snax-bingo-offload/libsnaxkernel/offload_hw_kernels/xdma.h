@@ -43,6 +43,86 @@
 // behind it -- no fault, no data moved, and a completion flag that reads back "done"
 // because it never read anything.
 
+// Fill a local L1 region with a repeating 32-bit pattern, on the xDMA's writer path.
+//
+// The CSR addresses here are all COMPILE-TIME CONSTANTS, written out longhand rather than
+// through snax_xdma_memcpy_nd(). That is not style: csrw_ss is a switch over every CSR
+// address, so a constant folds to a one-cycle `csrw imm` while a COMPUTED one degrades to
+// a jump-table load out of .rodata -- which this target maps to main memory -- plus an
+// indirect jump, on every write. The general path also writes far more than a fill needs:
+// 30 of its writes zero multicast slots this never uses.
+//
+// The reader channels are disabled deliberately. A disabled channel issues NO TCDM request
+// at all, so the beat the writer sees comes entirely from the Memset extension -- no read,
+// and no fetch of a constant from main memory, which is the whole point.
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_memset(void *arg)
+{
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_memset_args_t);
+    BINGO_REQUIRE_CORE(snax_is_xdma_core(), "xdma_memset", "XDMA");
+#ifndef WRITER_EXT_VERILOGMEMSET
+    // The Memset extension is optional RTL. Refuse at call time rather than #error, so a
+    // config without it still builds every other kernel in this file.
+    printf_safe("[Cluster %d Core %d]: Error! xdma_memset needs WRITER_EXT_VERILOGMEMSET, "
+                "which this cfg does not instantiate\r\n",
+                snrt_cluster_idx(), snrt_cluster_core_idx());
+    (void)arg;
+    return BINGO_RET_FAIL;
+#else
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+    __snax_bingo_kernel_xdma_memset_args_t *a =
+        (__snax_bingo_kernel_xdma_memset_args_t *)arg;
+    bingo_kernel_scratchpad_t *sp =
+        BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_memset_args_t);
+    const uint32_t dst = a->dst_addr_lo;
+    const uint32_t bytes = a->size;
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+
+    if (bytes == 0u || (bytes & 63u)) {
+        printf_safe("[Cluster %d Core %d]: Error! xdma_memset size=%d must be a non-zero "
+                    "multiple of 64\r\n", snrt_cluster_idx(), snrt_cluster_core_idx(),
+                    (int)bytes);
+        return BINGO_RET_FAIL;
+    }
+    if (!xdma_addr_in_local_l1(((uint64_t)a->dst_addr_hi << 32) | dst)) {
+        printf_safe("[Cluster %d Core %d]: Error! xdma_memset dst is not in local L1\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
+    xdma_disable_all_extensions();
+    // src == dst: the reader is off, so its address only has to be legal, never read.
+    snax_write_xdma_cfg_reg(XDMA_SRC_ADDR_PTR_LSB, dst);
+    snax_write_xdma_cfg_reg(XDMA_SRC_ADDR_PTR_MSB, 0);
+    snax_write_xdma_cfg_reg(XDMA_DST_ADDR_PTR_LSB, dst);
+    snax_write_xdma_cfg_reg(XDMA_DST_ADDR_PTR_MSB, 0);
+    snax_write_xdma_cfg_reg(XDMA_SRC_SPATIAL_STRIDE_PTR, 8);
+    snax_write_xdma_cfg_reg(XDMA_DST_SPATIAL_STRIDE_PTR, 8);
+    // One temporal dimension: `beats` beats of 64 B. XDMA_WR_*_DIMS writes EVERY generated
+    // dimension at a literal CSR address and gives the unused ones the neutral
+    // bound=1/stride=0 -- so the runtime dim picks values, never addresses.
+    uint32_t fill_bnd[1] = { bytes / 64u };
+    uint32_t fill_str[1] = { 64u };
+    XDMA_WR_SRC_DIMS(1u, fill_bnd, fill_str);
+    XDMA_WR_DST_DIMS(1u, fill_bnd, fill_str);
+    snax_write_xdma_cfg_reg(XDMA_SRC_ENABLED_CHAN_PTR, 0);
+    snax_write_xdma_cfg_reg(XDMA_DST_ENABLED_CHAN_PTR, 0xFFFFFFFFu);
+    snax_write_xdma_cfg_reg(XDMA_DST_ENABLED_BYTE_PTR, 0xFFFFFFFFu);
+    snax_write_xdma_cfg_reg(XDMA_DST_ENABLE_PTR, 1u << WRITER_EXT_VERILOGMEMSET);
+    snax_write_xdma_cfg_reg(XDMA_DST_EXT_CSR_PTR, a->pattern);
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
+
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
+    xdma_task_t task_id = xdma_start();
+    xdma_wait_task(task_id);
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
+
+    sp->return_value = dst;
+    sp->num_return_values = 0;
+    return BINGO_RET_SUCC;
+#endif
+}
+
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_1d_copy(void *arg)
 {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_1d_copy_args_t);

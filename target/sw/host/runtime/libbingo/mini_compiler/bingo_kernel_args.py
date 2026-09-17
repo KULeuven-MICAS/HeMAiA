@@ -732,6 +732,44 @@ class SnaxBingoKernelXdma1dCopyArgs(BingoKernelArgs):
         assignments["size"] = str(self.size)
         return assignments
 
+# BINGO XDMA memset: fill local L1 with a repeating 32-bit pattern, on the writer path.
+class SnaxBingoKernelXdmaMemsetArgs(BingoKernelArgs):
+    """Args for __snax_bingo_kernel_xdma_memset.
+
+    Generates a constant into L1 instead of loading it from main memory. FlashAttention
+    seeds m to -inf and l to 0 and zeroes the O accumulator; those are CONSTANTS, and
+    fetching them over the iDMA puts NQ separate transfers in front of K(0) on the load
+    engine's critical head. The xDMA core is otherwise idle -- on HeMAiA it owns nothing
+    but its exit node -- so it generates them in place.
+
+    The pattern is 32 bits, not a byte, because FP16 -inf is 0xFBFF and no single byte
+    repeats into it. One mechanism then covers INT8, FP16, BF16, FP32 and INT32.
+    """
+
+    # Handy patterns. FP16 is packed twice into the 32-bit word, so a beat of FP16 lanes
+    # all take the value.
+    PATTERN_ZERO = 0x00000000
+    PATTERN_FP16_NEG_INF = 0xFBFFFBFF    # two FP16 -inf lanes per 32-bit word
+
+    def __init__(self, dst_addr: Union[BingoMemAlloc, int], size: int, pattern: int):
+        _check_xdma_size_aligned(size, "SnaxBingoKernelXdmaMemsetArgs")
+        if not 0 <= int(pattern) <= 0xFFFFFFFF:
+            raise ValueError(f"xdma memset: pattern {pattern:#x} is not a 32-bit value")
+        self.dst_addr = dst_addr
+        self.size = size
+        self.pattern = int(pattern)
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_xdma_memset_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        assignments = {}
+        self._process_addr(self.dst_addr, "dst_addr", assignments, handle_name_map)
+        assignments["size"] = str(self.size)
+        assignments["pattern"] = f"{self.pattern:#010x}u"
+        return assignments
+
+
 # BINGO XDMA 6D (fixed-size, exposes full AGU strides/bounds, max 6 dims)
 class SnaxBingoKernelXdma6dArgs(BingoKernelArgs):
     """
@@ -1589,6 +1627,11 @@ class SnaxBingoKernelSimdFaSoftmaxArgs(BingoKernelArgs):
 
     KERNEL_NAME = "__snax_bingo_kernel_simd_fa_softmax"
 
+    # Geometry modes; must match SIMD_FA_GEOM_* in offload_hw_kernels/simd.h.
+    GEOM_SELF = 0
+    GEOM_PROLOGUE = 1
+    GEOM_PRIMED = 2
+
     BEAT_BYTES = 64
     # The arena opens with a FIXED block reserved for the cached task geometries, which is
     # NOT sizeof(snax_simd_shape_t) * 12: that struct's size follows the cluster's
@@ -1635,7 +1678,8 @@ class SnaxBingoKernelSimdFaSoftmaxArgs(BingoKernelArgs):
     def __init__(self, s16_src: Union[BingoMemAlloc, int],
                  p8_dst: Union[BingoMemAlloc, int],
                  arena: Union[BingoMemAlloc, int],
-                 bc: int, dhead: int, tile_idx: int):
+                 bc: int, dhead: int, tile_idx: int, seed_state: int = 1,
+                 geom_mode: int = 0):
         if bc % 2:
             raise ValueError(f"bc must be even (the quantiser packs 2:1), got {bc}")
         if bc <= 0 or dhead <= 0:
@@ -1646,6 +1690,16 @@ class SnaxBingoKernelSimdFaSoftmaxArgs(BingoKernelArgs):
         self.bc = bc
         self.dhead = dhead
         self.tile_idx = tile_idx
+        # 1 keeps the kernel seeding m and l itself, which is what every existing workload
+        # expects. 0 says the workload has already filled them -- see the xDMA memset.
+        self.seed_state = int(seed_state)
+        # SELF / PROLOGUE / PRIMED; see the geom_mode comment on the C struct. PRIMED is a
+        # PROMISE about the GRAPH -- that a PROLOGUE node for this same arena is an ancestor
+        # of this node -- and nothing on the device can check it, so it is opt-in per node.
+        if geom_mode not in (self.GEOM_SELF, self.GEOM_PROLOGUE, self.GEOM_PRIMED):
+            raise ValueError(f"geom_mode must be 0 (SELF), 1 (PROLOGUE) or 2 (PRIMED), "
+                             f"got {geom_mode}")
+        self.geom_mode = int(geom_mode)
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_simd_fa_softmax_args_t"
@@ -1658,6 +1712,8 @@ class SnaxBingoKernelSimdFaSoftmaxArgs(BingoKernelArgs):
         a["bc"] = str(self.bc)
         a["dhead"] = str(self.dhead)
         a["tile_idx"] = str(self.tile_idx)
+        a["seed_state"] = str(self.seed_state)
+        a["geom_mode"] = str(self.geom_mode)
         return a
 
 
