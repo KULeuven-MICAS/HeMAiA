@@ -22,7 +22,15 @@ OFFLOAD_H = $(MK_DIR)/offload_bingo_hw.h
 # after a cfg switch generates the DFG against a stale occamy.h.
 PLATFORM_H = $(MK_DIR)/../../../../../../../../target/sw/shared/platform/generated/occamy.h
 
-$(OFFLOAD_H): $(MK_DIR)/main_bingo.py $(DATA_CFG) $(PLATFORM_H)
+# The generated header is EMITTED BY the mini_compiler and must match the kernel ABI in
+# device_kernel_args.h. Neither used to be a prerequisite here, so an ABI change silently
+# left every workload whose main_bingo.py had not changed building against a STALE header:
+# the struct gained a field, the generated init code did not set it, and the run wedged
+# mid-pipeline with no build error anywhere. Listing them is what makes that impossible.
+BINGO_GEN_DEPS = $(wildcard $(MK_DIR)/../../../../../../../../target/sw/host/runtime/libbingo/mini_compiler/*.py) \
+                 $(MK_DIR)/../../../../../../../../target/sw/host/runtime/libbingo/include/libbingo/device_kernel_args.h
+
+$(OFFLOAD_H): $(MK_DIR)/main_bingo.py $(DATA_CFG) $(PLATFORM_H) $(BINGO_GEN_DEPS)
 	python3 $(MK_DIR)/main_bingo.py \
 		--output_dir $(MK_DIR) \
 		-c $(DATA_CFG) \

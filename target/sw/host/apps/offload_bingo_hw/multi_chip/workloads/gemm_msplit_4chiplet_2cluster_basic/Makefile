@@ -22,7 +22,15 @@ PYTHON ?= python3
 SNITCH_ROOT = $(shell $(BENDER) path snitch_cluster)
 PLATFORM_H = $(MK_DIR)/../../../../../../../../target/sw/shared/platform/generated/occamy.h
 
-$(DATA_H) $(OFFLOAD_H): $(MK_DIR)/main_bingo.py $(MK_DIR)/gemm_multi_chiplet_datagen.py $(MK_DIR)/../../../../../../../../util/sim/gemm/gemm_sim_utils.py $(MK_DIR)/../../../../../../../../util/sim/common/sim_golden_models.py $(DATA_CFG)
+# The generated header is EMITTED BY the mini_compiler and must match the kernel ABI in
+# device_kernel_args.h. Neither used to be a prerequisite here, so an ABI change silently
+# left every workload whose main_bingo.py had not changed building against a STALE header:
+# the struct gained a field, the generated init code did not set it, and the run wedged
+# mid-pipeline with no build error anywhere. Listing them is what makes that impossible.
+BINGO_GEN_DEPS = $(wildcard $(MK_DIR)/../../../../../../../../target/sw/host/runtime/libbingo/mini_compiler/*.py) \
+                 $(MK_DIR)/../../../../../../../../target/sw/host/runtime/libbingo/include/libbingo/device_kernel_args.h
+
+$(DATA_H) $(OFFLOAD_H): $(MK_DIR)/main_bingo.py $(MK_DIR)/gemm_multi_chiplet_datagen.py $(MK_DIR)/../../../../../../../../util/sim/gemm/gemm_sim_utils.py $(MK_DIR)/../../../../../../../../util/sim/common/sim_golden_models.py $(DATA_CFG) $(BINGO_GEN_DEPS)
 	$(PYTHON) $(MK_DIR)/main_bingo.py \
 		--output_dir $(MK_DIR) \
 		--data_h $(DATA_H) \
