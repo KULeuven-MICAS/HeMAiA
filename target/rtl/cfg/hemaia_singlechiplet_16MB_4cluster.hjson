@@ -97,12 +97,20 @@
       // Bingo HW manager per-edge dependency tag width (DepTagWidth). Must match
       // the SW DEP_TAG_WIDTH; exported via occamy.h as BINGO_DEP_TAG_WIDTH.
       //
-      // Back to the schema default of 4. It was forced down to 3 because the packed
-      // descriptor had to fit one 64-bit host AXI-Lite word, and this config spends 2
-      // bits more than a 1-/2-cluster one (assigned_cluster_id and dep_set_cluster_id
-      // both widen from 1 to 2), putting it at 65 bits -- one over. That ceiling is
-      // gone: the descriptor container is now separate from the bus width and is
-      // fetched as several beats, so the tag no longer has to pay for the fabric.
+      // Tried at 3 (63-bit layout, one AXI-Lite beat instead of two) to halve the
+      // manager's descriptor fetch. MEASURED: it did halve the fetch -- waveform shows the
+      // task queue going from 99.4% empty during a grant stall to 32.7% -- and the window
+      // got WORSE, 44,057 -> 46,846 cc. The fetch was never what dispatch waited on.
+      //
+      // Reverted to 4 for two reasons: the regression, and the fact that narrowing the tag
+      // perturbs the allocator's assignment, which changes the schedule and makes every A/B
+      // on this workload unattributable (the K-tile median moved 2,926 -> 3,731 cc, pure DMA,
+      // nothing to do with descriptors).
+      //
+      // The real bottleneck is upstream of the fetch: waiting_dep_check_queue is indexed
+      // [core] while ready_queue is [core][cluster], so all four clusters' tasks for a given
+      // core share ONE in-order dep-check stream. Measured on 133 dispatches: zero grants out
+      // of task-list order across clusters.
       dep_tag_width: 4
       // Task-descriptor container width (TaskDescBusWidth), in bits; must be a whole
       // number of 64-bit words. Left unset it is DERIVED as the smallest container the

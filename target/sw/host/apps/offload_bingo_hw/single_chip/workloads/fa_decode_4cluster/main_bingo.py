@@ -133,6 +133,10 @@ BC = BR = DHEAD = S2_M = S2_K = S2_N = QSHIFT = None
 # KV gives each cluster an independent recurrence and leaves exactly ONE cross-cluster
 # fold at the end -- which is the whole point of this workload. Splitting the GEMM
 # contraction instead would make every cluster need every KV tile.
+# ACTIVE_CLUSTERS in params.hjson overrides it, which is what makes a scaling sweep
+# possible on ONE binary: the shards are independent, so running 1 or 2 of them measures
+# the same per-cluster pipeline with less of the fabric and the task manager contended
+# for. The default is the full count, so an unchanged params.hjson behaves exactly as before.
 NCL = 4
 NKV_PER = None           # KV tiles per cluster; set by _load_params()
 
@@ -142,6 +146,20 @@ NKV_PER = None           # KV tiles per cluster; set by _load_params()
 # and Br must be a multiple of it.
 MONOID_SLOTS = 8
 
+# Score/probability buffers in the QK -> softmax -> PV rotation. Two is the minimum that
+# lets QK(i+1) run while the softmax reads QK(i)'s tile; a third breaks the WAR edge that
+# otherwise stalls the array for the whole of the first softmax.
+#
+# MEASURED AT ONE CLUSTER: three LOST. The extra QK streams A, B and D through TCDM
+# alongside the softmax, and there the softmax was the critical path, so slack bought for
+# the array was paid for in SIMD bandwidth.
+#
+# That balance does not hold at four clusters. The array idles ~8,300 cc per shard waiting
+# out the first softmax and is busy only ~51% of its pipeline, while the SIMD is busy 48% --
+# both engines idle in lockstep, so neither is the critical path and the TCDM argument has
+# nothing to trade against. Costs one s16 (32,832 B) and one p8 (16,448 B) per cluster.
+NSCORE = 2
+
 
 def _load_params(param):
     """Derive the whole geometry from params.hjson and the array, in ONE place.
@@ -150,7 +168,7 @@ def _load_params(param):
     golden -- is a function of (M, K, N) and the mesh. Deriving it here is what stops the
     kernel's idea of the tile and the descriptors' idea of it from drifting apart.
     """
-    global M, K, N, NKV, CHECK_O, NQ, BC, BR, DHEAD, S2_M, S2_K, S2_N, QSHIFT, NKV_PER
+    global M, K, N, NKV, CHECK_O, NQ, BC, BR, DHEAD, S2_M, S2_K, S2_N, QSHIFT, NKV_PER, NCL
     M, K, N = int(param["M"]), int(param["K"]), int(param["N"])
     NKV = int(param["NKV"])
     # Optional, so an older params.hjson still loads.
@@ -166,6 +184,12 @@ def _load_params(param):
     # narrows the score spread until the softmax is genuinely soft and l carries a real
     # distribution, which is what makes the merged l* evidence of anything.
     NQ = int(param.get("NQ", 1))
+    # Shards actually built. Fewer than num_clusters leaves the rest idle, which is the
+    # control arm for any contention measurement; below 2 there is nothing to fold and the
+    # gather is skipped. NKV must still divide by it, so a 1-cluster arm wants NKV = NKV_PER.
+    NCL = int(param.get("ACTIVE_CLUSTERS", NCL))
+    if not 1 <= NCL <= int(param.get("num_clusters", NCL)):
+        raise ValueError(f"ACTIVE_CLUSTERS={NCL} must be between 1 and num_clusters")
     BC = M * MESH_ROW          # key columns per tile -- the tiling knob
     BR = N * MESH_COL          # query rows
     DHEAD = K * TILE_SIZE      # head dimension -- a model property, not a knob
@@ -584,11 +608,11 @@ def _build_cluster(dfg, c, h_all, m_all, rowsum_all):
     # pass read the GEMM's own output buffer directly, instead of copying the whole tile
     # into the arena beside a -m_new slot -- a copy comparable in size to the K/V stream
     # itself. The GEMM writes its D at +64; the beat below it is the prefix.
-    s16 = [g.l1(f"fa_s16_{i}", 64 + BC * BR * 2) for i in range(2)]  # score tile, fp16
+    s16 = [g.l1(f"fa_s16_{i}", 64 + BC * BR * 2) for i in range(NSCORE)]  # score tile, fp16
     # ONE TRAILING BEAT past the quantised P. The fused exp pass emits bc/2 INT8 beats and
     # then the tapped row sum, unnarrowed, as ONE contiguous stream -- and no shape can span
     # two allocations, so the row sum lives here rather than in the arena.
-    p8 = [g.l1(f"fa_p8_{i}", BC * BR + 64) for i in range(2)]   # quantised P + row sum
+    p8 = [g.l1(f"fa_p8_{i}", BC * BR + 64) for i in range(NSCORE)]   # quantised P + row sum
     # One arena, one Q buffer and one O accumulator PER QUERY TILE -- that is the
     # entire cost of the reuse. K, V, the score tile and P stay single sets: they are
     # exactly what we are trying not to re-read.
@@ -813,12 +837,13 @@ def _build_cluster(dfg, c, h_all, m_all, rowsum_all):
             # CONSUMER's waiting queue. The fix for that is stream ORDER, not edge removal
             # -- see bingo_dfg.bingo_stream_order().
             deps = [ld_k[j]] if q == 0 else [qk[i - 1]]
-            if i >= 2:
-                deps.append(sm[i - 2])
+            # WAR on the score buffer: QK(i) overwrites the tile SM(i-NSCORE) read.
+            if i >= NSCORE:
+                deps.append(sm[i - NSCORE])
             qk.append(g.node(f"QK_{j}_{q}", GEMM_CORE,
                              "__snax_bingo_kernel_gemm_fa_qk",
                              SnaxBingoKernelGemmFaQkArgs(k8[j % 2], q8[q], cz,
-                                                         s16[i & 1].view(64), M, K, N),
+                                                         s16[i % NSCORE].view(64), M, K, N),
                              deps))
 
             deps = [qk[i]]
@@ -827,12 +852,13 @@ def _build_cluster(dfg, c, h_all, m_all, rowsum_all):
                 deps.append(warm[q])
             if i >= 1:
                 deps.append(sm[i - 1])
-            if i >= 2:
-                deps.append(pv[i - 2])
+            # WAR on the probability buffer: SM(i) overwrites what PV(i-NSCORE) read.
+            if i >= NSCORE:
+                deps.append(pv[i - NSCORE])
             sm.append(g.node(f"SM_{j}_{q}", SIMD_CORE,
                              "__snax_bingo_kernel_simd_fa_softmax",
                              SnaxBingoKernelSimdFaSoftmaxArgs(
-                                 s16[i & 1].view(64), p8[i & 1], arena[q],
+                                 s16[i % NSCORE].view(64), p8[i % NSCORE], arena[q],
                                  bc=BC, dhead=DHEAD, tile_idx=j,
                                  seed_state=0,
                                  geom_mode=SnaxBingoKernelSimdFaSoftmaxArgs.GEOM_PRIMED),
@@ -847,7 +873,7 @@ def _build_cluster(dfg, c, h_all, m_all, rowsum_all):
                 deps.append(ld_v[pj])
             pv.append(g.node(f"PV_{pj}_{pq}", GEMM_CORE,
                              "__snax_bingo_kernel_gemm_fa_pv",
-                             SnaxBingoKernelGemmFaPvArgs(v8[pj % 2], p8[p & 1],
+                             SnaxBingoKernelGemmFaPvArgs(v8[pj % 2], p8[p % NSCORE],
                                                          oacc[pq] if pj else 0, oacc[pq],
                                                          S2_M, S2_K, S2_N),
                              deps))
@@ -885,7 +911,7 @@ def _build_cluster(dfg, c, h_all, m_all, rowsum_all):
     # where the fused pass's contiguous output stream puts it -- not in the arena.
     l3_rs = BingoMemAlloc(f"out_fa_rowsum_c{c}", size=64, mem_level="L3")
     st_rs = host(f"Store_rowsum_c{c}", "__host_bingo_kernel_idma",
-                 HostBingoKernelIdmaArgs(p8[(NKV_PER * NQ - 1) & 1].view((BC // 2) * 64),
+                 HostBingoKernelIdmaArgs(p8[(NKV_PER * NQ - 1) % NSCORE].view((BC // 2) * 64),
                                          l3_rs, 64), [last, ck_m])
     ck_rs = host(f"Check_rowsum_c{c}", "__host_bingo_kernel_check_result",
                  HostBingoKernelCheckResultArgs(h["rowsum"], l3_rs,
@@ -900,7 +926,7 @@ def _build_cluster(dfg, c, h_all, m_all, rowsum_all):
     return {
         "last_sm": last,
         "arena": arena[NQ - 1],
-        "p8_last": p8[(NKV_PER * NQ - 1) & 1],
+        "p8_last": p8[(NKV_PER * NQ - 1) % NSCORE],
         "checks": ck_rs,
     }
 
@@ -921,6 +947,12 @@ def build(dfg, h, m_all, rowsum_all, merged_h, jct_monoid):
     """
     shards = [_build_cluster(dfg, c, h, m_all, rowsum_all) for c in range(NCL)]
     g = G(dfg, 0)
+
+    # One shard is the control arm, not a degenerate merge: with nothing to fold, m* = m_0
+    # and l* = l_0, so a gather would only copy. The per-shard checks still run, and the
+    # pipeline it measures is the same one each shard runs in the four-cluster case.
+    if NCL < 2:
+        return
 
     # ---- pack each shard's (m, l) into the junction's lanes -----------------------------
     # On each cluster's own xDMA core, so the gather that consumes it is the very next
@@ -951,7 +983,7 @@ def build(dfg, h, m_all, rowsum_all, merged_h, jct_monoid):
     gather = g.node(
         "GatherML", XDMA_CORE, "__snax_bingo_kernel_xdma_chain_gather",
         SnaxBingoKernelXdmaChainGatherArgs(
-            local_src=parts[0], chain=[parts[1], parts[2], parts[3], merged],
+            local_src=parts[0], chain=parts[1:] + [merged],
             size=part_bytes,
             # The identifier WRITER_JCT_MONOIDJUNCTION is device-side only; see
             # writer_junction_index() for why the host emits the derived number instead.
@@ -1040,12 +1072,23 @@ def main():
     dfg.bingo_compile_dfg("FlashAttention, KV-sharded over 4 clusters with an in-fabric merge",
                           args.output_dir, args.output_offload_file_name,
                           extra_include_header_list=["fa_data.h"])
-    l1 = (M * K * MESH_ROW * TILE_SIZE + N * K * MESH_COL * TILE_SIZE
-          + S2_M * S2_K * MESH_ROW * TILE_SIZE + M * N * MESH_ROW * MESH_COL * 4
-          + 2 * BC * BR * 2 + 2 * BC * BR + BR * DHEAD * 4
-          + SnaxBingoKernelSimdFaSoftmaxArgs.arena_bytes(BC, DHEAD))
+    # Every buffer _build_cluster allocates, with its real multiplicity. The previous
+    # version of this line counted ONE K buffer, ONE V buffer and a hardcoded two score
+    # buffers, and did not scale with NQ -- so it under-reported by ~70 kB and would not
+    # have moved at all when a buffer was added. A budget line that cannot go up is worse
+    # than none, because the L1 heap is the thing that silently bounds this workload.
+    l1 = (2 * (M * K * MESH_ROW * TILE_SIZE)              # k8, double buffered
+          + 2 * (S2_M * S2_K * MESH_ROW * TILE_SIZE)      # v8, double buffered
+          + NQ * (N * K * MESH_COL * TILE_SIZE)           # q8, one per query tile
+          + MESH_ROW * MESH_COL * 4                       # cz, never read
+          + NSCORE * (64 + BC * BR * 2)                   # s16
+          + NSCORE * (BC * BR + 64)                       # p8
+          + NQ * (BR * DHEAD * 4)                         # oacc
+          + NQ * SnaxBingoKernelSimdFaSoftmaxArgs.arena_bytes(BC, DHEAD)
+          + SnaxBingoKernelPackFaPartialArgs.packed_bytes(BR, MONOID_SLOTS))
     print(f"Generated FlashAttention: Br={BR} Bc={BC} d={DHEAD} NKV={NKV}, "
-          f"qshift={QSHIFT}, L1 buffers {l1} B of {512 * 1024} B")
+          f"qshift={QSHIFT}, NSCORE={NSCORE}, L1 buffers {l1:,} B of 514,816 B "
+          f"({100 * l1 / 514816:.0f}%)")
 
 
 if __name__ == "__main__":

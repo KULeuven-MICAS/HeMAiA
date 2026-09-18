@@ -17,6 +17,18 @@
 # (Proper fix: grouped targets `&:`, GNU make >= 4.3.)
 .NOTPARALLEL:
 
+# The BINGO tag allocator walks string-keyed containers, so Python's per-process hash
+# randomisation makes the tag assignment -- and therefore the emitted task descriptors --
+# DIFFERENT ON EVERY BUILD of unchanged source. It is not a relabelling: the number of nodes
+# sharing each tag moves, and tags are what encode false dependencies, so the schedule and
+# the cycle count move with it. Two runs of one workload measured 288 differing lines in
+# offload_bingo_hw.h and a different tag histogram.
+#
+# Pinning the seed makes generation reproducible, which is the floor any performance
+# comparison stands on. The real fix belongs in the allocator (sort before iterating);
+# this makes the symptom go away everywhere in one line until then.
+export PYTHONHASHSEED := 0
+
 # Root directory (absolute path to the host directory)
 ifndef HOST_DIR
 HOST_DIR = $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
