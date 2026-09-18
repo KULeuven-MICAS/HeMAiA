@@ -45,6 +45,10 @@ typedef struct __attribute__((packed)){
     uint32_t addr;                         // function addr
 } snax_symbol_t;
 #define SNAX_SYMTAB_END_FN_NAME "SYMTAB_END"
+// Upper bound on names resolved in a single get_device_functions() call. The generator emits one
+// entry per DISTINCT device kernel in a chiplet's graph; 64 is far above any real graph and keeps
+// the signature array on the stack.
+#define SNAX_MAX_FN_LOOKUP 64
 #define SNAX_SYMTAB_END_FN_ADDR (uint32_t)(0xBAADF00D)
 
 // Busy wait the ready signal
@@ -55,7 +59,131 @@ void check_kernel_tab_ready(){
     while(readw(local_symtab_ready_addr)!=1){
 
     }
+    // The device wrote the symbol table through the global map before raising this flag.
+    // CVA6's D-cache is write-through, so the risk is a STALE line on our side, not a lost
+    // write. One fence here is what lets get_device_function() scan the table with ordinary
+    // cached loads instead of volatile ones -- see the note there.
+    asm volatile("fence" ::: "memory");
 }
+// Scalar, fixed-width name compare for the device symbol table.
+//
+// NOT strcmp. At -O2 with -march=rv64gcv, GCC expands strcmp inline into an RVV loop
+// (vsetvli / vle8ff.v / vmsne.vv / vmseq.vi / vmor.mm / vfirst.m). The vector unit here is Ara,
+// and its MASK operations are what cost -- by a wide margin over the surrounding scalar code --
+// while the vector LOADS are close to free. So the expense is the vector unit, not the memory
+// the table lives in: moving the table somewhere cacheable would optimise the part that already
+// costs nothing.
+//
+// Bounded byte compare with an early out. Wider loads are not available: snax_symbol_t is packed
+// with a 68-byte stride, so the entry side has no alignment to exploit. The point is only that
+// this stays in the integer pipe and is bounded by the field width -- the signature filter below
+// is what keeps it from running on most entries in the first place.
+static inline int snax_symbol_name_eq(const char *sym_name, const char *want) {
+    // Reading want[i] is safe at every index reached: the loop stops at the first differing byte,
+    // and on equality it stops at the shared terminator, so it never runs past the end of a
+    // literal shorter than the field.
+    for (int i = 0; i < SNAX_LIB_NAME_MAX_LEN; i++) {
+        char a = sym_name[i];
+        char b = want[i];
+        if (a != b) return 0;
+        if (a == '\0') return 1;   // both hit the terminator at the same index
+    }
+    return 1;
+}
+
+// Byte offset inside a symbol name at which the cheap discriminator is taken.
+//
+// Every device kernel is called "__snax_bingo_kernel_<something>", so the first 20 characters
+// are identical across the whole table and comparing from the front throws away most of its
+// information. Offset 20 is exactly where the interesting part starts ("xdma", "gemm", "simd",
+// "idma"...), so one 4-byte read there separates almost every pair of entries. A collision is
+// harmless -- it just costs the full compare that would have happened anyway.
+#define SNAX_SYM_SIG_OFF 20u
+
+// The 4 signature bytes of a NUL-terminated name, matching how the table stores it: the field is
+// a fixed 64-byte zero-padded array, so a name shorter than the offset reads as zero on both
+// sides and simply falls through to the full compare.
+// EIGHT bytes, not four. Four filtered almost nothing in practice: a device symbol table is
+// dominated by __snax_bingo_kernel_{xdma,gemm,simd,idma}_* entries which all share bytes
+// [20..24), so the full name compare still ran on nearly every entry. Eight reaches into the
+// part that actually differs ("xdma_mem" vs "xdma_1d_"). Choose the discriminator against the
+// TABLE, not against the handful of names a given graph happens to want.
+#define SNAX_SYM_SIG_LEN 8u
+
+static inline uint64_t snax_symbol_sig_of_cstr(const char *name) {
+    // Walk from index 0, not from the offset: `name` is a C string literal, so indexing straight
+    // to [20..28) would read past the terminator for any name shorter than that. Costs ~28 byte
+    // reads, but this runs once per WANTED name (a handful), never per table entry.
+    uint64_t sig = 0;
+    for (uint32_t i = 0; i < SNAX_SYM_SIG_OFF + SNAX_SYM_SIG_LEN; i++) {
+        char c = name[i];
+        if (c == '\0') break;
+        if (i >= SNAX_SYM_SIG_OFF) {
+            sig |= ((uint64_t)(unsigned char)c) << (8u * (i - SNAX_SYM_SIG_OFF));
+        }
+    }
+    return sig;
+}
+
+// The same bytes out of a table entry, assembled from explicit byte reads.
+//
+// NOT __builtin_memcpy. At -O2 with -march=rv64gcv GCC implements even a 4-byte memcpy as a
+// vle8.v / vse8.v pair bounced through the stack -- one Ara round trip per entry, costing more
+// than the string compare it was meant to avoid. Byte loads stay in the integer pipe. They are
+// also the only portable option here: snax_symbol_t is packed with a 68-byte stride, so nothing
+// may assume an aligned word load.
+static inline uint64_t snax_symbol_sig_of_field(const char *field) {
+    const unsigned char *b = (const unsigned char *)field + SNAX_SYM_SIG_OFF;
+    return ((uint64_t)b[0])       | ((uint64_t)b[1] << 8)  |
+           ((uint64_t)b[2] << 16) | ((uint64_t)b[3] << 24) |
+           ((uint64_t)b[4] << 32) | ((uint64_t)b[5] << 40) |
+           ((uint64_t)b[6] << 48) | ((uint64_t)b[7] << 56);
+}
+
+/// Resolve `n` device functions in ONE pass over the symbol table.
+///
+/// The table is a linear array of every device kernel in the image, while a caller wants only a
+/// handful of names, so the natural shape is one walk testing each entry against every wanted
+/// name -- not one walk per name. Two things keep the inner N-loop cheap: entries are filtered
+/// by the signature above before any string compare, and the walk stops as soon as every name
+/// has been found.
+///
+/// Unresolved names are left as SNAX_SYMTAB_END_FN_ADDR (0xBAADF00D), the same sentinel the
+/// single-name lookup returns, so callers see no behavioural difference.
+void get_device_functions(const char *const *names, uint32_t *addrs, int n) {
+    uint64_t symtab_start_addr_ptr = (uint64_t)soc_ctrl_kernel_tab_scratch_addr(1);
+    uint64_t symtab_end_addr_ptr   = (uint64_t)soc_ctrl_kernel_tab_scratch_addr(2);
+    uint64_t snax_symtab_start = (uint64_t)readw(chiplet_addr_transform(symtab_start_addr_ptr));
+    uint64_t snax_symtab_end   = (uint64_t)readw(chiplet_addr_transform(symtab_end_addr_ptr));
+    const snax_symbol_t *sym = (const snax_symbol_t *)(uintptr_t)chiplet_addr_transform(snax_symtab_start);
+    const snax_symbol_t *end = (const snax_symbol_t *)(uintptr_t)chiplet_addr_transform(snax_symtab_end);
+
+    uint64_t want_sig[SNAX_MAX_FN_LOOKUP];
+    int remaining = 0;
+    for (int k = 0; k < n; k++) {
+        addrs[k]    = (uint32_t)SNAX_SYMTAB_END_FN_ADDR;
+        want_sig[k] = snax_symbol_sig_of_cstr(names[k]);
+        remaining++;
+    }
+
+    for (; sym < end && remaining > 0; sym++) {
+        if (sym->addr == SNAX_SYMTAB_END_FN_ADDR &&
+            snax_symbol_name_eq((const char *)sym->name, SNAX_SYMTAB_END_FN_NAME)) {
+            break;
+        }
+        uint64_t sig = snax_symbol_sig_of_field((const char *)sym->name);
+        for (int k = 0; k < n; k++) {
+            if (sig == want_sig[k] &&
+                addrs[k] == (uint32_t)SNAX_SYMTAB_END_FN_ADDR &&
+                snax_symbol_name_eq((const char *)sym->name, names[k])) {
+                addrs[k] = sym->addr;
+                remaining--;
+                break;
+            }
+        }
+    }
+}
+
 // Get the device function
 uint32_t get_device_function(const char *name) {
     uint64_t symtab_start_addr_ptr = (uint64_t)soc_ctrl_kernel_tab_scratch_addr(1);
@@ -67,20 +195,30 @@ uint32_t get_device_function(const char *name) {
     uint64_t snax_symtab_start_local = chiplet_addr_transform(snax_symtab_start);
     uint64_t snax_symtab_end_local   = chiplet_addr_transform(snax_symtab_end);
     // printf("Chip(%x, %x): [Host] Device symbol table range: 0x%lx - 0x%lx\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), snax_symtab_start, snax_symtab_end);
-    snax_symbol_t *symtab_start = (snax_symbol_t *)(uintptr_t)snax_symtab_start_local;
-    snax_symbol_t *symtab_end   = (snax_symbol_t *)(uintptr_t)snax_symtab_end_local;
-    // printf("Scanning device symbol table...\n");
-    for (volatile snax_symbol_t *sym = symtab_start; sym < symtab_end; sym++) {
+    const snax_symbol_t *symtab_start = (const snax_symbol_t *)(uintptr_t)snax_symtab_start_local;
+    const snax_symbol_t *symtab_end   = (const snax_symbol_t *)(uintptr_t)snax_symtab_end_local;
+    // The scan pointer is deliberately NOT volatile: the device writes the table once and then
+    // raises the ready flag check_kernel_tab_ready() spins on, so after that fence the contents
+    // are stable and there is no second writer to observe.
+    //
+    // Recorded because it is counter-intuitive: dropping the qualifier bought NOTHING
+    // measurable. The table is in L3 and the cost was never the loads -- see the note on
+    // snax_symbol_name_eq above. Keep it non-volatile because it is semantically right, not
+    // because it is faster.
+    for (const snax_symbol_t *sym = symtab_start; sym < symtab_end; sym++) {
         // printf("Symbol raw name: %s\n", (const char *)sym->name);
         // printf("Symbol addr     : 0x%x\n", (uint32_t)sym->addr);
-        if (strcmp((const char *)sym->name, SNAX_SYMTAB_END_FN_NAME) == 0 &&
-            sym->addr == SNAX_SYMTAB_END_FN_ADDR) {
+        // Check the cheap discriminator first: the end marker is the only entry whose addr is
+        // SNAX_SYMTAB_END_FN_ADDR, so a single word compare replaces a whole name compare on
+        // every entry of the table.
+        if (sym->addr == SNAX_SYMTAB_END_FN_ADDR &&
+            snax_symbol_name_eq((const char *)sym->name, SNAX_SYMTAB_END_FN_NAME)) {
             break;
         }
 
         // printf("Checking symbol: %s at 0x%x\n", sym->name, (unsigned)(uintptr_t)sym->addr);
 
-        if (strcmp((const char *)sym->name, name) == 0) {
+        if (snax_symbol_name_eq((const char *)sym->name, name)) {
             return sym->addr;
         }
     }

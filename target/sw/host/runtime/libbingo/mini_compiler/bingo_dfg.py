@@ -2045,7 +2045,60 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
 
         # Pass 0: Pre-allocate ALL scratchpads so gating node scratchpad C vars
         # are available when expert nodes reference them via SW guard.
-        f.write("        // 3a. Pre-allocate scratchpads for all tasks\n")
+        # ---- ARENAS for scratchpads and device args -------------------------------------
+        #
+        # These were one bingoHeapMalloc per node, so allocation cost scaled with graph size and
+        # dominated start-up on any non-trivial DFG. None of it is needed: per-node scratchpads
+        # and arg blocks live for the whole run and are never freed individually, so a free-list
+        # allocator buys nothing and charges a bin search plus heap-metadata traffic -- the
+        # latter crossing the fabric -- on every single one.
+        #
+        # Instead take ONE block per memory and slice it with a bump pointer. Sizes of the arg
+        # structs are only known to the C compiler (sizeof), so the total is emitted as a
+        # constant expression and the bump happens at runtime -- a couple of integer ops per
+        # node instead of an allocator call.
+        #
+        # Placement is unchanged: device scratchpads and device args stay in their own cluster's
+        # L1, host scratchpads stay in L3. Moving device scratchpads to L3 would turn every
+        # device-side access into a fabric round trip.
+        #
+        # The named workload buffers are allocated BEFORE this point, so collapsing these
+        # allocations cannot disturb the cross-chip name/offset agreement they rely on.
+        sp_align = "ALIGN_UP(sizeof(bingo_kernel_scratchpad_t), 64)"
+        l1_terms = {}   # cluster -> list of C size expressions
+        l3_terms = []
+        for node in local_nodes:
+            kn = node.kernel_name
+            if kn and kn.startswith("__snax"):
+                l1_terms.setdefault(node.assigned_cluster_id, []).append(sp_align)
+            elif kn and kn.startswith("__host"):
+                l3_terms.append(sp_align)
+        # device arg blocks share the cluster's L1 arena
+        for node in local_nodes:
+            kn = node.kernel_name
+            if not (kn and kn.startswith("__snax")):
+                continue
+            if node.kernel_args:
+                t = node.kernel_args.get_struct_name()
+            elif "exit" in kn:
+                t = "__snax_bingo_kernel_exit_args_t"
+            else:
+                continue
+            l1_terms.setdefault(node.assigned_cluster_id, []).append(f"ALIGN_UP(sizeof({t}), 64)")
+
+        f.write("        // 3a. One arena per memory for scratchpads and device args (bump-sliced)\n")
+        for cl in sorted(l1_terms):
+            base = f"__bingo_l1_arena_chip{chiplet_id:02x}_cl{cl}"
+            f.write(f"        uint64_t {base} = bingo_l1_alloc(0x{chiplet_id:02x}, {cl},\n"
+                    f"            {' + '.join(l1_terms[cl])});\n")
+            f.write(f"        uint64_t {base}_off = 0;\n")
+        if l3_terms:
+            f.write(f"        uint64_t __bingo_l3_arena_chip{chiplet_id:02x} = bingo_l3_alloc(0x{chiplet_id:02x},\n"
+                    f"            {' + '.join(l3_terms)});\n")
+            f.write(f"        uint64_t __bingo_l3_arena_chip{chiplet_id:02x}_off = 0;\n")
+        f.write("\n")
+
+        f.write("        // 3b. Pre-allocate scratchpads for all tasks\n")
         for node in local_nodes:
             kernel_name = node.kernel_name
             is_device = kernel_name and kernel_name.startswith("__snax")
@@ -2054,10 +2107,13 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                 continue
             if is_device:
                 sp_var = f"sp_dev_{node.node_id}"
-                f.write(f"        bingo_kernel_scratchpad_t* {sp_var} = (bingo_kernel_scratchpad_t*)bingo_l1_alloc(0x{chiplet_id:02x}, {node.assigned_cluster_id}, BINGO_KERNEL_SCRATCHPAD_SIZE);\n")
+                base = f"__bingo_l1_arena_chip{chiplet_id:02x}_cl{node.assigned_cluster_id}"
             else:
                 sp_var = f"sp_host_{node.node_id}"
-                f.write(f"        bingo_kernel_scratchpad_t* {sp_var} = (bingo_kernel_scratchpad_t*)bingo_l3_alloc(0x{chiplet_id:02x}, BINGO_KERNEL_SCRATCHPAD_SIZE);\n")
+                base = f"__bingo_l3_arena_chip{chiplet_id:02x}"
+            f.write(f"        bingo_kernel_scratchpad_t* {sp_var} = "
+                    f"(bingo_kernel_scratchpad_t*)({base} + {base}_off);\n")
+            f.write(f"        {base}_off += {sp_align};\n")
             node._scratchpad_c_var = sp_var
         f.write("\n")
 
@@ -2071,6 +2127,35 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                     node.kernel_args._gating_sp_c_expr = f"{cast}(uintptr_t){gating_sp_var}"
                 if node._cond_node_index is not None:
                     node.kernel_args._cond_node_index = node._cond_node_index
+
+        # Resolve each DISTINCT device kernel name exactly once.
+        #
+        # get_device_function() linearly scans the device symbol table, so emitting one call per
+        # TASK made the host rescan the whole table once per task, while only a handful of names
+        # are ever distinct -- most calls re-derive an answer already sitting in a register.
+        # Hoisting costs one local per distinct name.
+        dev_kernel_names = []
+        for node in local_nodes:
+            kn = node.kernel_name
+            if kn and kn.startswith("__snax") and kn not in dev_kernel_names:
+                dev_kernel_names.append(kn)
+        if dev_kernel_names:
+            n_fn = len(dev_kernel_names)
+            f.write("        // Resolve every distinct device kernel in ONE pass over the device\n")
+            f.write("        // symbol table (~110 entries). One call per name would walk it once per\n")
+            f.write("        // name; get_device_functions tests each entry against all wanted names,\n")
+            f.write("        // filtered by a 4-byte signature, and stops once all are found.\n")
+            f.write(f"        static const char *const __bingo_fn_names_chip{chiplet_id:02x}[] = {{\n")
+            for kn in dev_kernel_names:
+                f.write(f"            \"{kn}\",\n")
+            f.write("        };\n")
+            f.write(f"        uint32_t __bingo_fn_addrs_chip{chiplet_id:02x}[{n_fn}];\n")
+            f.write(f"        get_device_functions(__bingo_fn_names_chip{chiplet_id:02x}, "
+                    f"__bingo_fn_addrs_chip{chiplet_id:02x}, {n_fn});\n")
+            for i, kn in enumerate(dev_kernel_names):
+                f.write(f"        const uint32_t __bingo_fn_{kn}_chip{chiplet_id:02x} = "
+                        f"__bingo_fn_addrs_chip{chiplet_id:02x}[{i}];\n")
+            f.write("\n")
 
         dev_task_idx = 0
         host_task_idx = 0
@@ -2099,7 +2184,9 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                 args_var = f"args_dev_chip{chiplet_id:02x}_{node.node_id}"
 
                 if node.kernel_args:
-                    f.write(f"        {args_struct_type}* {args_var} = ({args_struct_type}*)bingo_l1_alloc(0x{chiplet_id:02x}, {node.assigned_cluster_id}, sizeof({args_struct_type}));\n")
+                    _ab = f"__bingo_l1_arena_chip{chiplet_id:02x}_cl{node.assigned_cluster_id}"
+                    f.write(f"        {args_struct_type}* {args_var} = ({args_struct_type}*)({_ab} + {_ab}_off);\n")
+                    f.write(f"        {_ab}_off += ALIGN_UP(sizeof({args_struct_type}), 64);\n")
                     field_assignments = node.kernel_args.get_c_field_assignments_with_scratchpad(handle_name_map)
                     for field, value in field_assignments.items():
                             f.write(f"        {args_var}->{field} = {value};\n")
@@ -2110,14 +2197,17 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                     f.write(f"        device_arg_list_chip_{chiplet_id:02x}[{dev_task_idx}] = (uint32_t)(uintptr_t){args_var};\n")
                 else:
                     if "exit" in kernel_name:
-                        f.write(f"        __snax_bingo_kernel_exit_args_t* {args_var} = (__snax_bingo_kernel_exit_args_t*)bingo_l1_alloc(0x{chiplet_id:02x}, {node.assigned_cluster_id}, sizeof(__snax_bingo_kernel_exit_args_t));\n")
+                        _ab = f"__bingo_l1_arena_chip{chiplet_id:02x}_cl{node.assigned_cluster_id}"
+                        f.write(f"        __snax_bingo_kernel_exit_args_t* {args_var} = (__snax_bingo_kernel_exit_args_t*)({_ab} + {_ab}_off);\n")
+                        f.write(f"        {_ab}_off += ALIGN_UP(sizeof(__snax_bingo_kernel_exit_args_t), 64);\n")
                         f.write(f"        {args_var}->exit_code = 0;\n")
                         f.write(f"        {args_var}->scratchpad_ptr = {sp_cast};\n")
                         f.write(f"        device_arg_list_chip_{chiplet_id:02x}[{dev_task_idx}] = (uint32_t)(uintptr_t){args_var};\n")
                     else:
                         f.write(f"        device_arg_list_chip_{chiplet_id:02x}[{dev_task_idx}] = 0;\n")
 
-                f.write(f"        device_kernel_list_chip_{chiplet_id:02x}[{dev_task_idx}] = (uint32_t)(uintptr_t)get_device_function(\"{kernel_name}\");\n")
+                f.write(f"        device_kernel_list_chip_{chiplet_id:02x}[{dev_task_idx}] = "
+                        f"__bingo_fn_{kernel_name}_chip{chiplet_id:02x};\n")
                 dev_task_idx += 1
 
             elif is_host:

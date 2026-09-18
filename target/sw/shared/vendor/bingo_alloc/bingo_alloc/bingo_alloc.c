@@ -38,14 +38,29 @@
 
 // ---- Bit-manipulation helpers (software CLZ for portability) ----
 
+// Callers guarantee x != 0.
+//
+// Branchless binary search: six compares instead of the one-bit-at-a-time loop this replaced,
+// which ran up to 63 iterations and, for the small fragment sizes that dominate, most of them.
+// log2Floor calls this and the malloc path calls log2Floor three times, so every allocation paid
+// for three near-full sweeps of a 3-instruction loop -- enough to make a nominally O(1) binned
+// allocator the dominant cost of any allocation-heavy start-up.
+//
+// NOT __builtin_clzll. Without Zbb (the host builds -march=rv64gcv_zvfh) GCC lowers it to a
+// libgcc call to __clzdi2, which indexes a __clz_tab lookup table in .rodata; under this host's
+// -mcmodel=medany layout that relocation does not fit and the link fails with
+// "R_RISCV_HI20 against symbol `__clz_tab'". Open-coding it keeps the win and stays
+// self-contained. If Zbb is ever enabled, revisit -- it becomes one instruction.
 static inline uint8_t bingo_clz64(const uint64_t x) {
-    uint64_t t = ((uint64_t)1U) << 63U;
-    uint8_t r = 0;
-    while ((x & t) == 0) {
-        t >>= 1U;
-        r++;
-    }
-    return r;
+    uint64_t v = x;
+    uint8_t  n = 0;
+    if ((v & 0xFFFFFFFF00000000ULL) == 0U) { n += 32U; v <<= 32U; }
+    if ((v & 0xFFFF000000000000ULL) == 0U) { n += 16U; v <<= 16U; }
+    if ((v & 0xFF00000000000000ULL) == 0U) { n +=  8U; v <<=  8U; }
+    if ((v & 0xF000000000000000ULL) == 0U) { n +=  4U; v <<=  4U; }
+    if ((v & 0xC000000000000000ULL) == 0U) { n +=  2U; v <<=  2U; }
+    if ((v & 0x8000000000000000ULL) == 0U) { n +=  1U; }
+    return n;
 }
 
 static inline uint8_t log2Floor(const uint64_t x) {
