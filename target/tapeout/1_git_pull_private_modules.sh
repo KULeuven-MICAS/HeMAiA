@@ -33,12 +33,14 @@ for _var in SIM_WITH_D2D SIM_WITH_MACRO SIM_WITH_PLL; do
     fi
 done
 
-# DC Scripts
-if [ ! -d "$script_dir/HeMAiAv2_tapeout" ]; then
-    git clone git@github.com:IveanEx/HeMAiAv2_tapeout.git "$script_dir/HeMAiAv2_tapeout"
+# DC scripts default to the two-cluster tapeout branch.
+tapeout_dir="$script_dir/HeMAiAv2_tapeout"
+if [ ! -d "$tapeout_dir" ]; then
+    git clone --branch two_clusters git@github.com:IveanEx/HeMAiAv2_tapeout.git "$tapeout_dir" || exit 1
 else
-    cd $script_dir/HeMAiAv2_tapeout || exit
-    git pull
+    git -C "$tapeout_dir" fetch origin || exit 1
+    git -C "$tapeout_dir" switch two_clusters || exit 1
+    git -C "$tapeout_dir" pull --ff-only origin two_clusters || exit 1
 fi
 
 # Initialize submodules
