@@ -17,6 +17,17 @@ int main() {
         get_current_chip_loc_x(), get_current_chip_loc_y());
 
     ///////////////////////////////
+    // 1. Match the clock domains
+    ///////////////////////////////
+    // See init_clk_domains() in host.h. Done before the clusters are woken so none is
+    // running across the change.
+    init_clk_domains();
+    OFFLOAD_BINGO_HW_DEBUG_PRINT_SAFE(
+        "Chip(%x, %x): [Host] Host and cluster clocks set to divisor %d\r\n",
+        get_current_chip_loc_x(), get_current_chip_loc_y(),
+        HEMAIA_MATCHED_CLK_DIV);
+
+    ///////////////////////////////
     // 2. Init the Allocator
     ///////////////////////////////
     if(bingo_hemaia_system_mmap_init() < 0){

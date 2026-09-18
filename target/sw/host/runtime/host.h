@@ -341,6 +341,35 @@ void initialize_comm_buffer(comm_buffer_t* comm_buffer_ptr) {
     asm volatile("fence" ::: "memory");
 }
 
+// Divisor of the master clock applied to the host and to every cluster by
+// init_clk_domains(). BINGO_PM_NORMAL_POWER_LEVEL is the divisor the hardware power
+// manager gives an ACTIVE cluster, so using it here puts the host on the same rate a
+// working cluster runs at. Override at build time if a platform needs a different one.
+#ifndef HEMAIA_MATCHED_CLK_DIV
+#define HEMAIA_MATCHED_CLK_DIV BINGO_PM_NORMAL_POWER_LEVEL
+#endif
+
+// Put the host and every cluster on one clock rate.
+//
+// clk_vec[0] clocks the CVA6 *and* the whole SoC fabric -- the wide crossbar, L3 and the
+// task manager -- while clk_vec[1 + i] clocks cluster i. The power manager only ever
+// raises the CLUSTER domains, so unless domain 0 is raised to match, every access that
+// leaves a cluster is paced by the slower of the two and costs proportionally more
+// cluster cycles than it does bus cycles. Leaving them mismatched inflates every
+// off-cluster cost in any measurement taken in cluster cycles.
+//
+// Call this before waking the clusters, so none is running across the change. The UART is
+// clocked from clk_periph_i and is unaffected.
+//
+// The power manager still drops an IDLE cluster to BINGO_PM_IDLE_POWER_LEVEL, so the
+// domains are matched while a cluster has work, not at every instant.
+static inline void init_clk_domains(void) {
+    enable_clk_domain(0, HEMAIA_MATCHED_CLK_DIV);  // host CPU + SoC fabric
+    for (uint32_t i = 0; i < N_CLUSTERS_PER_CHIPLET; i++) {
+        enable_clk_domain(1 + i, HEMAIA_MATCHED_CLK_DIV);
+    }
+}
+
 void initialize_cluster(uint32_t cluster_idx) {
     // Initialize the cluster tcdm
     sys_dma_blk_memcpy(
