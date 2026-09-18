@@ -39,7 +39,16 @@ APPS += simd_rope_1cluster
 APPS += simd_prims_1cluster
 # FlashAttention: the two matmuls on the GEMM core, the whole online softmax as one
 # kernel on the SIMD core, overlapped through the task graph.
-APPS += fa_1cluster
+# The snax port: one kernel, NQ the only difference. NQ=1 is decode (one query
+# position per token, the whole KV cache read for it); NQ>1 is prefill, where many
+# query tiles attend the same resident K/V. Intensity = NQ*Br exactly.
+APPS += fa_decode_1cluster
+APPS += fa_prefill_1cluster
+# KV-sharded across four clusters, with the cross-cluster online-softmax merge done
+# IN THE FABRIC by a ChainGather over the monoid junction -- not gathered to one
+# cluster and reduced there.
+APPS += fa_decode_4cluster
+APPS += fa_prefill_4cluster
 APPS += xdma_row_to_a_1cluster
 APPS += xdma_a_to_row_1cluster
 APPS += xdma_row_to_b_1cluster

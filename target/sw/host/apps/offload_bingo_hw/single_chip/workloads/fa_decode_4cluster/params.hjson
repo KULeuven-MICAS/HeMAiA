@@ -1,0 +1,45 @@
+// Copyright 2026 KU Leuven.
+// Licensed under the Apache License, Version 2.0, see LICENSE for details.
+// SPDX-License-Identifier: Apache-2.0
+
+// FlashAttention tile shape. The defaults match the reference app's own
+// data/params.hjson exactly, so the cycle counts are comparable point for point.
+//
+// The geometry the kernels see FOLLOWS from these and the array in the cluster hjson:
+//
+//   Bc = M*meshRow    key columns    -- the tiling knob, grow it until TCDM is full
+//   Br = N*meshCol    query rows
+//   d  = K*tileSize   head dimension -- a property of the MODEL, not a knob
+//
+// At M=32, N=2, K=32 on a 16x4x16 array that is Bc=512, Br=32, d=128.
+//
+// SHRINK M FOR DEBUGGING. An RTL simulation of the full tile is minutes per KV tile;
+// M=2 (Bc=32) runs the same task graph, the same eleven SIMD tasks and both matmul
+// shapes in a fraction of the time, which is the loop you want when something hangs.
+{
+    // Must match the cluster count of the RTL cfg, or guard_cluster_count() skips the
+    // workload and it will not link.
+    num_clusters: 4
+    // One spatial unrolling on this cluster, so the array-shape selector is always 0.
+    array_shape: 0
+
+    M: 32
+    K: 32
+    N: 2
+    // KV tiles the software pipeline streams. Keep it >= 4 so the pipeline has enough
+    // tiles to hide its fill and drain.
+    // Split 16//4 = 4 KV tiles per cluster; the shards are disjoint and each
+    // runs its own softmax recurrence, leaving exactly one cross-cluster fold.
+    NKV: 16
+    // Soften the softmax so the monoid's value field folds a real distribution
+    // rather than a column of 1.0 -- see SCORE_SHIFT_EXTRA in main_bingo.py.
+    SCORE_SHIFT_EXTRA: 4
+    // DECODE. One query position per token, the whole KV cache read for it.
+    NQ: 1,
+
+    // Validate the O accumulator against a golden. OFF by default: it costs ~13% of the
+    // compute window (see main_bingo.py), so it is a correctness switch, not a default.
+    // O is the second gather (elementwise-add of the rescaled numerators) and is not
+    // wired yet; the per-shard O golden would not match a merged O anyway.
+    CHECK_O: 0
+}
