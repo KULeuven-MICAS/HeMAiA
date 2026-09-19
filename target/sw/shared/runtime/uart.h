@@ -103,3 +103,21 @@ inline static uint8_t scan_char(uintptr_t address_prefix) {
 int printf(const char *fmt, ...);
 int scanf(const char *fmt, ...);
 int printf_safe(const char *fmt, ...);
+
+// Debug-only printing, compiled out by default.
+//
+// On an RTL simulation the UART is not the cost -- printf FORMATTING is. Measured on a
+// 52-minute 4-cluster FA run: 2.82 ms of 9.4 ms simulated (30%), and 68,722 of the host's
+// 128,435 retired instructions (53%), for 3,477 bytes of text. Every debug line is
+// therefore worth roughly its own length in seconds of wall clock.
+//
+// A line that carries a RESULT -- a golden check, an error, an exit status the runner
+// reads -- must use printf_safe directly and stay unconditional.
+#ifndef BINGO_DEBUG_PRINT
+#define BINGO_DEBUG_PRINT 0
+#endif
+#if BINGO_DEBUG_PRINT
+#define printf_debug(...) printf_safe(__VA_ARGS__)
+#else
+#define printf_debug(...) ((void)0)
+#endif

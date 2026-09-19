@@ -351,6 +351,39 @@ static inline uint64_t __host_bingo_kernel_check_result(void *arg){
     }
 }
 
+// Batched host iDMA: issue up to four transfers, wait once. See the struct comment in
+// host_kernel_args.h for the measured reason this exists.
+static inline uint64_t __host_bingo_kernel_idma_multi(void *arg){
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+    const __host_bingo_kernel_idma_multi_args_t *a =
+        (const __host_bingo_kernel_idma_multi_args_t *)arg;
+    const uint64_t n    = a->n;
+    const uint64_t size = a->size;
+    const uint64_t src[4] = {a->src_addr0, a->src_addr1, a->src_addr2, a->src_addr3};
+    const uint64_t dst[4] = {a->dst_addr0, a->dst_addr1, a->dst_addr2, a->dst_addr3};
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+
+    BINGO_TRACE_MARKER(BINGO_TRACE_HOST_IDMA_CFG_START);
+    // ISSUE ALL, WAIT ONCE. sys_dma_memcpy only programs the registers and returns the
+    // transfer id, so the engine has the next descriptor while the previous one is still
+    // moving beats. Waiting per transfer instead would serialise them at the ISSUER and
+    // throw away exactly the overlap this kernel exists to get.
+    uint64_t last = 0;
+    for (uint64_t i = 0; i < n; i++)
+        last = sys_dma_memcpy(get_current_chip_id(), dst[i], src[i], size);
+    BINGO_TRACE_MARKER(BINGO_TRACE_HOST_IDMA_CFG_END);
+
+    BINGO_TRACE_MARKER(BINGO_TRACE_HOST_IDMA_RUN_START);
+    // The ids are monotone and the engine retires in order, so the last one covers all of
+    // them. Compare with >= rather than != : a wait for an id already passed would hang.
+    while ((int64_t)(*(sys_dma_done_ptr(get_current_chip_id())) - last) < 0) {
+        asm volatile("nop");
+    }
+    asm volatile("fence" ::: "memory");
+    BINGO_TRACE_MARKER(BINGO_TRACE_HOST_IDMA_RUN_END);
+    return BINGO_RET_SUCC;
+}
+
 static inline uint64_t __host_bingo_kernel_idma(void *arg){
     // Arg0-2: src, dst, size; Arg3: scratchpad_ptr
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
@@ -360,7 +393,7 @@ static inline uint64_t __host_bingo_kernel_idma(void *arg){
     bingo_kernel_scratchpad_t* sp = (bingo_kernel_scratchpad_t*)(uintptr_t)((uint64_t *)arg)[3];
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
-    printf_safe(
+    printf_debug(
         "Chip(%x, %x): [Host][iDMA] args: src_addr=0x%lx "
         "dst_addr=0x%lx size=%lu scratchpad_ptr=0x%lx\r\n",
         get_current_chip_loc_x(), get_current_chip_loc_y(), src_addr, dst_addr,
@@ -368,7 +401,7 @@ static inline uint64_t __host_bingo_kernel_idma(void *arg){
     if (size >= 2) {
         volatile const uint8_t *src_data =
             (volatile const uint8_t *)(uintptr_t)src_addr;
-        printf_safe(
+        printf_debug(
             "Chip(%x, %x): [Host][iDMA] before src=0x%lx "
             "src[0..1]=%02x %02x\r\n",
             get_current_chip_loc_x(), get_current_chip_loc_y(), src_addr,
@@ -390,7 +423,7 @@ static inline uint64_t __host_bingo_kernel_idma(void *arg){
     if (size >= 2) {
         volatile const uint8_t *dst_data =
             (volatile const uint8_t *)(uintptr_t)dst_addr;
-        printf_safe(
+        printf_debug(
             "Chip(%x, %x): [Host][iDMA] after dst=0x%lx "
             "dst[0..1]=%02x %02x\r\n",
             get_current_chip_loc_x(), get_current_chip_loc_y(), dst_addr,

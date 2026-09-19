@@ -86,7 +86,7 @@
 // ---------------------------------------------------------------------------
 static uint32_t __bingo_gemm_fa_run(uint32_t A_addr, uint32_t B_addr, uint32_t C_addr,
                                     uint32_t D_addr, uint32_t M, uint32_t K, uint32_t N,
-                                    uint32_t emit_fp16,
+                                    uint32_t emit_fp16, uint32_t perf_addr,
                                     bingo_kernel_scratchpad_t *sp) {
     const uint32_t meshRow  = bingo_gemm_shape_params[0].meshRow;
     const uint32_t tileSize = bingo_gemm_shape_params[0].tileSize;
@@ -264,6 +264,28 @@ static uint32_t __bingo_gemm_fa_run(uint32_t A_addr, uint32_t B_addr, uint32_t C
             return BINGO_RET_FAIL;
         }
     }
+    // ---- the array's own account of this dispatch --------------------------------------
+    // Read BEFORE the START clear and before any reconfiguration: all four counters reset
+    // on config_fire, so a read after the next dispatch's CSR writes returns that
+    // dispatch's partial state, not this one's total.
+    //
+    // This is the number the snax reference reports as `GEMM core busy %`, and reading it
+    // is the only way to be comparable to it. A trace SPAN from RUN_START to RUN_END is
+    // not the same quantity: it also contains the START writes and the retire poll, so it
+    // reports the array as busier than it was, by more on a machine whose dispatch path is
+    // slower -- which would flatter exactly the configurations this is meant to measure.
+    //
+    // perf_addr is L1 and this core is its only writer, so the read-modify-write needs no
+    // lock. Cost is five RO CSR reads per dispatch against a dispatch of ~4,000 cycles.
+    if (perf_addr) {
+        volatile uint32_t *pf = (volatile uint32_t *)(uintptr_t)perf_addr;
+        pf[0] += csrr_ss(VERSACORE_PERFORMANCE_COUNTER);
+        pf[1] += csrr_ss(VERSACORE_STALL_A);
+        pf[2] += csrr_ss(VERSACORE_STALL_B);
+        pf[3] += csrr_ss(VERSACORE_STALL_D);
+        pf[4] += 1u;
+    }
+
     csrw_ss(VERSACORE_START_CSR, 0);
     BINGO_FA_MARK(emit_fp16, BINGO_TRACE_GEMM_FA_QK_RUN_END,
                               BINGO_TRACE_GEMM_FA_PV_RUN_END);
@@ -275,6 +297,39 @@ static uint32_t __bingo_gemm_fa_run(uint32_t A_addr, uint32_t B_addr, uint32_t C
 
 // S^T = K.Q^T -- the score tile, emitted as FP16 for the SIMD block to consume.
 // M*meshRow = Bc, N*meshCol = Br, K*tileSize = d.
+// ---------------------------------------------------------------------------
+// Report this cluster's accumulated array counters.
+//
+// WHY A SEPARATE NODE. The counters have to be read per dispatch (they reset on config
+// write) but printed once. Printing from inside the matmul would put a UART write on the
+// critical path of the thing being measured; a trailing node runs after the last matmul
+// has retired, so the cost lands outside the window every utilisation figure is divided by.
+//
+// The array's own invariant is
+//     stall_a + stall_b + stall_d + passes == performance_counter
+// so `passes` is derived rather than measured, and a negative value would mean the counters
+// were read across a config write. It is printed as a signed int for exactly that reason.
+// ---------------------------------------------------------------------------
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_perf_report(void *arg) {
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_gemm_perf_report_args_t);
+    BINGO_REQUIRE_CORE(snax_is_gemm_core(), "gemm_perf_report", "GEMM");
+    const __snax_bingo_kernel_gemm_perf_report_args_t *a =
+        (const __snax_bingo_kernel_gemm_perf_report_args_t *)arg;
+    bingo_kernel_scratchpad_t *sp =
+        BINGO_GET_SP(arg, __snax_bingo_kernel_gemm_perf_report_args_t);
+    volatile uint32_t *pf = (volatile uint32_t *)(uintptr_t)a->perf_addr;
+    const uint32_t busy = pf[0], sa = pf[1], sb = pf[2], sd = pf[3], nd = pf[4];
+    const int32_t passes = (int32_t)busy - (int32_t)sa - (int32_t)sb - (int32_t)sd;
+    printf_safe("[Cluster %d] GEMM-ARRAY busy=%d passes=%d stall_a=%d stall_b=%d "
+                "stall_d=%d dispatches=%d ideal=%d\r\n",
+                snrt_cluster_idx(), (int)busy, (int)passes, (int)sa, (int)sb, (int)sd,
+                (int)nd, (int)a->ideal_cc);
+    pf[0] = 0; pf[1] = 0; pf[2] = 0; pf[3] = 0; pf[4] = 0;
+    sp->return_value = 0;
+    sp->num_return_values = 0;
+    return BINGO_RET_SUCC;
+}
+
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_fa_qk(void *arg) {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_gemm_fa_args_t);
     BINGO_REQUIRE_CORE(snax_is_gemm_core(), "gemm_fa_qk", "GEMM");
@@ -284,7 +339,8 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_fa_qk(void *arg) {
     bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_gemm_fa_args_t);
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
     return __bingo_gemm_fa_run(a->input_A_addr, a->input_B_addr, a->input_C_addr,
-                               a->output_D_addr, a->M, a->K, a->N, 1u, sp);
+                               a->output_D_addr, a->M, a->K, a->N, 1u,
+                               a->perf_addr, sp);
 }
 
 // O^T += V^T.P^T -- accumulated in place in INT32. The caller passes the SAME buffer as C
@@ -300,5 +356,6 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_fa_pv(void *arg) {
     bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_gemm_fa_args_t);
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
     return __bingo_gemm_fa_run(a->input_A_addr, a->input_B_addr, a->input_C_addr,
-                               a->output_D_addr, a->M, a->K, a->N, 0u, sp);
+                               a->output_D_addr, a->M, a->K, a->N, 0u,
+                               a->perf_addr, sp);
 }

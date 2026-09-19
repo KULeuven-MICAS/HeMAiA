@@ -93,7 +93,9 @@ from bingo_kernel_args import (                           # noqa: E402
     SnaxBingoKernelSimdFaSoftmaxArgs,
     SnaxBingoKernelGemmFaQkArgs,
     SnaxBingoKernelGemmFaPvArgs,
+    SnaxBingoKernelGemmPerfReportArgs,
     HostBingoKernelIdmaArgs,
+    HostBingoKernelIdmaMultiArgs,
     HostBingoKernelCheckResultArgs,
     SnaxBingoKernelPackFaPartialArgs,
     SnaxBingoKernelXdmaChainGatherArgs,
@@ -159,6 +161,147 @@ MONOID_SLOTS = 8
 # both engines idle in lockstep, so neither is the critical path and the TCDM argument has
 # nothing to trade against. Costs one s16 (32,832 B) and one p8 (16,448 B) per cluster.
 NSCORE = 2
+
+# Read VersaCore's own busy/stall counters and print them per cluster. The paper metric is
+# array utilisation, and a timed trace span is not the same quantity as the array's busy
+# counter -- a span also contains the START writes and the retire poll. See the perf_addr
+# comment in device_kernel_args.h for the full argument.
+MEASURE_ARRAY = False
+
+# STREAM V ON THE SYSTEM iDMA (a PUSH) INSTEAD OF THE CLUSTER xDMA (a PULL).
+#
+# WHY. Measured on the 4-cluster decode: the fabric delivers 62.7 B/cc AGGREGATE against a
+# 512-bit = 64 B/cc port -- 98% of its width -- and 57% of the array's idle time is spent
+# waiting on the xDMA carrying V. That is not an xDMA defect: with 2.96 engines overlapping
+# they jointly saturate the port, so each engine's apparent rate is only its SHARE of a full
+# pipe. Making the xDMA faster cannot help; the port is the wall.
+#
+# The wall is specific and it is not the only pipe. The quadrant has THREE independent
+# 512-bit wide paths, and this workload puts all 2,048 KiB of K+V on one of them:
+#
+#   occamy_quad.sv:32-35   quadrant_wide_out_req_o  (d512) -- clusters PULL   <- all traffic
+#                          quadrant_wide_in_req_i   (d512) -- anything PUSHES <- ~unused
+#   occamy_soc.sv:106      Connectivity 16'b0111110111111110 decodes to
+#                            IN_QUAD         -> HEMAIA_MEM      (the pull, used today)
+#                            IN_SYS_IDMA_MST -> QUAD            (a push, unused for bulk)
+#                            IN_HEMAIA_MEM   -> QUAD            (a push, unused)
+#   occamy_quad.sv:275     Connectivity 25'b0111110111110111110111110 decodes to
+#                            IN_SOC_WIDE -> CLUSTER_0..3        (a push reaches every L1)
+#
+# So a system-iDMA push into cluster L1 travels a DISJOINT set of wires from a
+# cluster-initiated pull, end to end. Splitting K (pull) from V (push) uses two 512-bit
+# pipes concurrently instead of queueing both on one.
+#
+# ARITHMETIC. FA decode's intensity is 4.19 M MAC / 128 KiB = 32 MAC/byte. One array against
+# one 64 B/cc port balances at 16 MAC/byte, so a single cluster is compute-bound with 2x
+# margin -- which is why 1-cluster reaches 86.1%. FOUR arrays against the SAME port balance
+# at 64 MAC/byte, so the 4-cluster case is memory-bound by exactly 2x, and that factor of two
+# IS the drop to 65%. Two pipes put the balance back at 32 = the workload's own intensity.
+#
+# COST: all host kernels run on cluster 0's host core, so the 16 V pushes serialise there.
+# That is the correct shape anyway -- there is one system iDMA -- and 1,024 KiB at 64 B/cc is
+# ~16,400 cc against a ~29,000 cc pipeline, so it fits alongside the K pulls rather than
+# extending them.
+# WHICH V TILES RIDE THE PUSH. Measured, both extremes:
+#
+#   all 16 on the cluster xDMAs (pull):  4 engines concurrent, 18.9 B/cc EACH but
+#                                        3.03x overlap -> 47.7 B/cc effective, 21,983 cc
+#   all 16 on the host (push):           56.4 B/cc PER TRANSFER -- 3x better, the two-pipe
+#                                        model was right about bandwidth -- but ONE issuer,
+#                                        so 16 x (1,161 + 433 cc manager round trip)
+#                                        -> 41.1 B/cc effective, 35,721 cc. WORSE, and
+#                                        busy/pipeline fell 65.0% -> 50.5%.
+#
+# One serial issuer loses to four concurrent ones even on a faster pipe; 16 x 433 = 6,928 cc
+# is pure BINGO dispatch overhead. The answer is not to pick a pipe but to USE BOTH: split so
+# each finishes at the same time. Balancing 2,048 KiB across 62.7 B/cc (pull, aggregate) and
+# 41.1 B/cc (push, effective) puts ~1,237 KiB on the pull and ~811 KiB on the push, and both
+# land at ~20,200 cc against the baseline's 33,447 -- 40% less fabric time.
+#
+# V(0) deliberately stays on the PULL: it is the tile PV(0) needs first, and the pull path is
+# the concurrent one, so it arrives soonest there. Tiles 1..3 go on the push.
+# MEASURED, three arms, and the trend is monotonic -- every tile moved to the push COSTS:
+#
+#   V on push   busy/pipeline   pipeline    array busy
+#        0         65.0%         29,291       19,029     <- BEST: all V on the cluster xDMAs
+#       12         55.2%         34,412       19,008
+#       16         50.5%         37,219       18,785
+#
+# Array busy never moved (19,029 / 19,008 / 18,785). The entire effect is pipeline stretch,
+# i.e. the array waiting longer for V. The push pipe is REAL -- 56.4 B/cc per transfer against
+# a contended pull share of 18.9 -- but there is exactly ONE issuer, and each BINGO task on it
+# costs a 433 cc manager round trip (MGR_WRITE_DONE -> MGR_GET_READY -> MGR_PREP). At 16 tasks
+# that is 6,928 cc of pure dispatch, dragging the effective rate to 41.1 B/cc, below the four
+# cluster xDMAs' 47.7 B/cc aggregate.
+#
+# The lesson is not "the second pipe does not exist" -- it does, and the RTL analysis of it was
+# right. It is that ONE SERIAL ISSUER LOSES TO FOUR CONCURRENT ONES, even on a faster pipe.
+# Making the push pay off needs the per-task dispatch overhead removed, not more tiles moved.
+#
+# Empty = all V on the cluster xDMAs, which is the best measured configuration.
+V_PUSH_TILES = set()
+
+# HOW MANY V BUFFERS. This is the prefetch depth, and the prefetch depth is what decides how
+# much of the K/V stream lands in the FILL rather than inside the pipeline.
+#
+# The milestone is array busy / pipeline with pipeline = first full-size QK to last PV end,
+# so a tile fetched before the first QK does not count against it -- and it is not merely a
+# bookkeeping trick, it is the same overlap the snax reference gets by staging its next
+# dispatch while the array runs. Measured: total load-engine busy is 37,644 cc against a
+# 29,291 cc pipeline, so 8,353 cc of loading ALREADY hides in the fill. Each extra buffer
+# moves one more tile per cluster out.
+#
+# V(j) reuses v8[j % NVBUF], which PV(j - NVBUF) was the last to read, so the WAR edge walks
+# back with the depth. L1 is the cap: 392,320 B of 514,816 B at NVBUF=2, and a V tile is
+# 65,536 B, so exactly one more buffer fits (89%). A second would need 131,072 B and overflow.
+# MEASURED: 3 is WORSE than 2 (63.2% vs 65.0%). The extra buffer did exactly what it was
+# supposed to -- the array's wait on V fell 5,801 -> 4,204 cc -- but the pipeline did not
+# shrink, because the port is already saturated at 98% of its width. Prefetching earlier
+# does not create bandwidth; it only moves which engine is waiting. SIMD and dispatch
+# absorbed the whole gain (2,281 -> 3,540 and 1,629 -> 2,570).
+#
+# This is the same wall the V-push arms hit. When the bottleneck is aggregate bandwidth,
+# RESCHEDULING CANNOT HELP -- only less traffic or more bandwidth can.
+NVBUF = 2
+
+# PUSH V IN PAIRS ON THE SYSTEM iDMA, one BINGO task per PAIR.
+#
+# Two measured facts make this the shape to try:
+#
+#  1. A host iDMA transfer moves 64 KiB at 56.4 B/cc -- three times a contended pull share,
+#     because it rides quadrant_wide_in, a pipe disjoint from the clusters' pull. But each
+#     BINGO task on the host costs ~433 cc of dispatch, so ONE tile per task yields 41.1
+#     B/cc effective and the push loses. Two tiles per task gives 47.6, four gives 51.6.
+#
+#  2. The all-push arm was worse than the model predicted (35,721 cc of V delivery against
+#     a predicted 25,504) because V(j) waits on PV(j-NVBUF): the V chain serialises THROUGH
+#     THE COMPUTE, not just through the issuer. Pairing attacks that too -- {V2,V3} issue
+#     together after PV(1) instead of V(3) waiting behind PV(2).
+#
+# PAIRS, NOT QUADS, DELIBERATELY. V(j) and V(j+1) live in DIFFERENT buffers (NVBUF=2), so a
+# pair is expressible inside one cluster. Batching four would have to cross clusters, which
+# couples their dependencies -- every cluster's batch would wait on the slowest -- and that
+# is exactly the coupling that made the 12-push split arm imbalanced (cluster 0 at 60.2%,
+# cluster 3 at 49.2%). Worth 47.6 over 51.6 B/cc to keep the shards independent.
+# MEASURED 54.6% -- better than one tile per task (50.5%) and still far below leaving V on
+# the cluster xDMAs (65.0%). Batching did exactly what it was designed to do:
+#
+#                    delivered   while running   ISSUER IDLE
+#   1 tile/task      29.4 B/cc     56.4 B/cc        39%
+#   2 tiles/task     37.0 B/cc     96.9 B/cc        54%      <- 96.9 > the 64 B/cc port
+#                                                               because the engine pipelines
+#                                                               the second transfer under the
+#                                                               first; the pair is genuinely
+#                                                               overlapped, not serialised
+#
+# and it was not enough, because the push tasks are NOT issue-bound. The issuer sits idle for
+# MORE than half the window, waiting on the WAR edge: V(j) cannot start until PV(j-NVBUF)
+# has freed its buffer. Deeper buffering is the only thing that relaxes that, and L1 caps
+# NVBUF at 3 -- which measured WORSE on its own (63.2%).
+#
+# FIVE ARMS, one conclusion: 4 concurrent cluster xDMAs beat one host issuer every time.
+# Leave V on the pull.
+V_PUSH_PAIRS = False
 
 
 def _load_params(param):
@@ -594,7 +737,7 @@ def _build_cluster(dfg, c, h_all, m_all, rowsum_all):
     k8 = [g.l1(f"fa_k8_{i}", M * K * MESH_ROW * TILE_SIZE) for i in range(2)]
     q8 = [g.l1(f"fa_q8_{q}", N * K * MESH_COL * TILE_SIZE)      # B of the score matmul
           for q in range(NQ)]
-    v8 = [g.l1(f"fa_v8_{i}", S2_M * S2_K * MESH_ROW * TILE_SIZE) for i in range(2)]
+    v8 = [g.l1(f"fa_v8_{i}", S2_M * S2_K * MESH_ROW * TILE_SIZE) for i in range(NVBUF)]
     # The score matmul masks every C channel off (see gemm_fa.h), so nothing is ever
     # READ through this pointer -- the AGU walks addresses that are never dereferenced.
     # It exists only because the descriptor needs a base pointer. One block, not M*N.
@@ -650,6 +793,18 @@ def _build_cluster(dfg, c, h_all, m_all, rowsum_all):
     # the refills happen on an idle fabric and every real dispatch afterwards hits in the
     # icache. The cost is that the first load starts a little later; the gain is that the
     # first QK, the first softmax and the first arena fill all configure at warm speed.
+    # ---- the array's own hardware counters ---------------------------------------------
+    # Five words the two FA matmuls accumulate into (busy, stall_a, stall_b, stall_d,
+    # dispatches), read straight out of VersaCore's read-only CSRs. This is what makes the
+    # utilisation figure comparable to the snax reference's `GEMM core busy %`, which is
+    # also a counter read and not a timed span -- see device_kernel_args.h.
+    #
+    # It is a knob because it is not free: five RO CSR reads per dispatch, and one more L1
+    # allocation per cluster. Both are small (~25 cc against a ~4,000 cc dispatch) but the
+    # point of the measurement is the dispatch cost, so it should be possible to take the
+    # instrument out and confirm the number did not move.
+    perf = g.l1(f"gemm_perf_c{c}", 64) if MEASURE_ARRAY else 0
+
     warm_buf = g.l1("fa_warm_buf", 1024)
     warm_a = g.l1("fa_warm_a", MESH_ROW * TILE_SIZE)
     warm_b = g.l1("fa_warm_b", MESH_COL * TILE_SIZE)
@@ -657,9 +812,23 @@ def _build_cluster(dfg, c, h_all, m_all, rowsum_all):
     # these, and TCDM that nothing has written reads back X -- harmless in the array's
     # datapath, but there is no reason to feed it X when the same node also warms the
     # xdma_memset path that the arena fills use.
+    # ZERO THE COUNTER ACCUMULATOR BEFORE ANY MATMUL TOUCHES IT.
+    #
+    # The matmuls do `pf[i] += csrr(...)`, a read-modify-write. TCDM is tc_sram with
+    # SimInit="none", so a word this run has not written reads back X -- and X in an
+    # accumulator reaches printf, where it trips the RegWriteKnown assertion and the hart
+    # dies. That is not a hang: the sim runs to its wall-clock budget with the UART frozen
+    # mid-line ("[Cluster 0] GEMM-ARRAY busy="), which reads exactly like a fabric deadlock.
+    # Cost is one 64-B fill on the otherwise idle xDMA core, ahead of everything.
+    perf_z = ([g.node(f"PerfZero_c{c}", XDMA_CORE, "__snax_bingo_kernel_xdma_memset",
+                      SnaxBingoKernelXdmaMemsetArgs(
+                          perf, 64, SnaxBingoKernelXdmaMemsetArgs.PATTERN_ZERO))]
+              if MEASURE_ARRAY else [])
+
     warm_z = g.node("WarmZero", XDMA_CORE, "__snax_bingo_kernel_xdma_memset",
                     SnaxBingoKernelXdmaMemsetArgs(
-                        warm_buf, 1024, SnaxBingoKernelXdmaMemsetArgs.PATTERN_ZERO))
+                        warm_buf, 1024, SnaxBingoKernelXdmaMemsetArgs.PATTERN_ZERO),
+                    perf_z)
     warm_ab = g.node("WarmZeroAB", XDMA_CORE, "__snax_bingo_kernel_xdma_memset",
                      SnaxBingoKernelXdmaMemsetArgs(
                          warm_a, MESH_ROW * TILE_SIZE,
@@ -815,11 +984,37 @@ def _build_cluster(dfg, c, h_all, m_all, rowsum_all):
                 # gets in front of them and the first softmax waits out two whole V
                 # transfers. The fills are a few tens of cycles, so stating the order
                 # costs nothing.
-                v_after = list(ld_az) if j < 2 else [pv[(j - 1) * NQ - 1]]
+                v_after = list(ld_az) if j < NVBUF else [pv[(j - NVBUF + 1) * NQ - 1]]
                 # V streams on the xDMA, K on the iDMA. The two engines then move their
                 # tiles CONCURRENTLY instead of queueing on one, which takes the K/V pair
                 # off the critical path whenever the array is the longer of the two.
-                ld_v.append(xload(f"V{j}", "v", v8[j % 2], VBYTES, v_after))
+                if V_PUSH_PAIRS:
+                    # PUSH, PAIRED. The system iDMA (SOC_WIDE_XBAR_IN_SYS_IDMA_MST) writes
+                    # into this cluster's L1 over quadrant_wide_in while the cluster's own
+                    # iDMA pulls K over quadrant_wide_out -- two disjoint 512-bit pipes.
+                    # One task carries V(j) and V(j+1); the ODD tile reuses the node the
+                    # even one created, so the pair costs one dispatch instead of two.
+                    # Pinned to cluster 0 because every host kernel is; the DESTINATIONS are
+                    # still this cluster's L1, reached by absolute address.
+                    if j % 2 == 0:
+                        nxt = j + 1
+                        pairs = [(h["v"], v8[j % NVBUF])]
+                        if nxt < NKV_PER:
+                            pairs.append((h["v"], v8[nxt % NVBUF]))
+                        ld_v.append(g.node(f"LoadV{j}_{nxt}_c{c}", HOST_CORE,
+                                           "__host_bingo_kernel_idma_multi",
+                                           HostBingoKernelIdmaMultiArgs(pairs, VBYTES),
+                                           v_after, cluster=0))
+                    else:
+                        # the pair's partner: same node, already issued
+                        ld_v.append(ld_v[-1])
+                elif j in V_PUSH_TILES:
+                    ld_v.append(g.node(f"LoadV{j}_c{c}", HOST_CORE,
+                                       "__host_bingo_kernel_idma",
+                                       HostBingoKernelIdmaArgs(h["v"], v8[j % NVBUF], VBYTES),
+                                       v_after, cluster=0))
+                else:
+                    ld_v.append(xload(f"V{j}", "v", v8[j % NVBUF], VBYTES, v_after))
 
             # SAME-CORE EDGES ARE NOT REDUNDANT -- do not "optimise" them away.
             #
@@ -843,7 +1038,8 @@ def _build_cluster(dfg, c, h_all, m_all, rowsum_all):
             qk.append(g.node(f"QK_{j}_{q}", GEMM_CORE,
                              "__snax_bingo_kernel_gemm_fa_qk",
                              SnaxBingoKernelGemmFaQkArgs(k8[j % 2], q8[q], cz,
-                                                         s16[i % NSCORE].view(64), M, K, N),
+                                                         s16[i % NSCORE].view(64), M, K, N,
+                                                         perf_addr=perf),
                              deps))
 
             deps = [qk[i]]
@@ -873,10 +1069,23 @@ def _build_cluster(dfg, c, h_all, m_all, rowsum_all):
                 deps.append(ld_v[pj])
             pv.append(g.node(f"PV_{pj}_{pq}", GEMM_CORE,
                              "__snax_bingo_kernel_gemm_fa_pv",
-                             SnaxBingoKernelGemmFaPvArgs(v8[pj % 2], p8[p % NSCORE],
+                             SnaxBingoKernelGemmFaPvArgs(v8[pj % NVBUF], p8[p % NSCORE],
                                                          oacc[pq] if pj else 0, oacc[pq],
-                                                         S2_M, S2_K, S2_N),
+                                                         S2_M, S2_K, S2_N,
+                                                         perf_addr=perf),
                              deps))
+
+    # The array counters, printed once per cluster. Anchored on the last PV so it cannot
+    # run until every matmul this cluster owns has retired, and placed on the GEMM core
+    # because the counters are that core's accelerator CSRs -- no other core can read them.
+    if MEASURE_ARRAY:
+        # One KV tile is QK (Bc x Br x d MAC) + PV (Br x d x Bc MAC) = 4.19 M MAC, which is
+        # 4096 cycles at meshRow*meshCol*tileSize = 1024 MAC/cc. The reference states the
+        # same figure (snax-flashattn-decode.c: "4.19 M MAC and 4096 GEMM cycles").
+        ideal_cc = (2 * (BC * BR * DHEAD)) // (MESH_ROW * MESH_COL * TILE_SIZE) \
+                   * (NKV_PER * NQ)
+        g.node(f"ArrayPerf_c{c}", GEMM_CORE, "__snax_bingo_kernel_gemm_perf_report",
+               SnaxBingoKernelGemmPerfReportArgs(perf, ideal_cc), pv[-1])
 
     # ---- this shard's own statistics ---------------------------------------------------
     # Checked per shard, not only after the merge. A cluster whose recurrence quietly did

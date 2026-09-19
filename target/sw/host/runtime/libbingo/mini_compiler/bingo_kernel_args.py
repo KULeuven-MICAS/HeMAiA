@@ -1739,7 +1739,8 @@ class _SnaxBingoKernelGemmFaArgs(BingoKernelArgs):
                  input_B_addr: Union[BingoMemAlloc, int],
                  input_C_addr: Union[BingoMemAlloc, int],
                  output_D_addr: Union[BingoMemAlloc, int],
-                 M: int, K: int, N: int):
+                 M: int, K: int, N: int,
+                 perf_addr: Union[BingoMemAlloc, int] = 0):
         if M <= 0 or K <= 0 or N <= 0:
             raise ValueError(f"M, K, N must be positive block counts, got {M}, {K}, {N}")
         self.input_A_addr = input_A_addr
@@ -1749,6 +1750,10 @@ class _SnaxBingoKernelGemmFaArgs(BingoKernelArgs):
         self.M = M
         self.K = K
         self.N = N
+        # Optional five-word L1 accumulator for the array's own hardware counters. 0 (the
+        # default) compiles to a kernel that does not even read the CSRs, so leaving it
+        # unset costs nothing; see the struct comment in device_kernel_args.h.
+        self.perf_addr = perf_addr
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_gemm_fa_args_t"
@@ -1766,6 +1771,31 @@ class _SnaxBingoKernelGemmFaArgs(BingoKernelArgs):
         a["M"] = str(self.M)
         a["K"] = str(self.K)
         a["N"] = str(self.N)
+        self._process_addr(self.perf_addr, "perf_addr", a, handle_name_map,
+                           split_64bit=False)
+        return a
+
+
+class SnaxBingoKernelGemmPerfReportArgs(BingoKernelArgs):
+    """Print one cluster's accumulated VersaCore counters, then clear them.
+
+    Place it on the GEMM core after the last matmul: the counters reset on every config
+    write, so they must be read per dispatch, but printing belongs outside the window the
+    utilisation figure is divided by."""
+    KERNEL_NAME = "__snax_bingo_kernel_gemm_perf_report"
+
+    def __init__(self, perf_addr: Union[BingoMemAlloc, int], ideal_cc: int = 0):
+        self.perf_addr = perf_addr
+        self.ideal_cc = ideal_cc
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_gemm_perf_report_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.perf_addr, "perf_addr", a, handle_name_map,
+                           split_64bit=False)
+        a["ideal_cc"] = str(self.ideal_cc)
         return a
 
 
@@ -2592,6 +2622,45 @@ class HostBingoKernelXdma1dCopyArgs(BingoKernelArgs):
 HostBingoKernelXdmaArgs = HostBingoKernelXdma1dCopyArgs
 
 # HOST BINGO IDMA
+class HostBingoKernelIdmaMultiArgs(BingoKernelArgs):
+    """Up to four host iDMA transfers in ONE BINGO task, all the same size.
+
+    The system iDMA is a second 512-bit path into the quadrant, disjoint from the clusters'
+    own pull, and one transfer on it measures 56.4 B/cc. The catch is that a BINGO task on
+    the host costs ~433 cc of dispatch, so one tile per task yields only 41.1 B/cc effective
+    -- less than four concurrent cluster xDMAs already deliver. Batching four amortises that
+    to 51.6 B/cc, which is what makes the second pipe worth using.
+
+    Every transfer in a batch shares the task's dependencies, so batching across clusters
+    couples them: the batch cannot start until every source dependency is met. That is the
+    price, and it is only worth paying while the clusters run in step."""
+    KERNEL_NAME = "__host_bingo_kernel_idma_multi"
+    MAX_N = 4
+
+    def __init__(self, pairs, size: int):
+        pairs = list(pairs)
+        if not 1 <= len(pairs) <= self.MAX_N:
+            raise ValueError(f"batch of {len(pairs)} transfers; the struct holds "
+                             f"1..{self.MAX_N}")
+        self.pairs = pairs
+        self.size = size
+
+    def get_struct_name(self) -> str:
+        return "__host_bingo_kernel_idma_multi_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {"n": str(len(self.pairs)), "size": str(self.size)}
+        for i in range(self.MAX_N):
+            # Unused slots are pinned to 0. The kernel reads all four into locals before
+            # looking at n, so they must be well-defined even when never used.
+            src, dst = self.pairs[i] if i < len(self.pairs) else (0, 0)
+            self._process_addr(src, f"src_addr{i}", a, handle_name_map,
+                               split_64bit=False, as_64bit=True)
+            self._process_addr(dst, f"dst_addr{i}", a, handle_name_map,
+                               split_64bit=False, as_64bit=True)
+        return a
+
+
 class HostBingoKernelIdmaArgs(BingoKernelArgs):
     def __init__(self,
                  src_addr: Union[BingoMemAlloc, int],

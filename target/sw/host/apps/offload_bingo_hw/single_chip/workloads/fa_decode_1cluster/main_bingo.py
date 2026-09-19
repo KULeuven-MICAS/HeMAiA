@@ -93,6 +93,7 @@ from bingo_kernel_args import (                           # noqa: E402
     SnaxBingoKernelSimdFaSoftmaxArgs,
     SnaxBingoKernelGemmFaQkArgs,
     SnaxBingoKernelGemmFaPvArgs,
+    SnaxBingoKernelGemmPerfReportArgs,
     HostBingoKernelIdmaArgs,
     HostBingoKernelCheckResultArgs,
 )
@@ -113,6 +114,11 @@ BEAT_F16 = 32   # fp16 elements per 64-B beat
 # VersaCore's single spatial unrolling on this cluster; the same numbers the device reads
 # out of gemm_shapes.h. Shapes below are in ARRAY BLOCKS, as the streamer states them.
 MESH_ROW, TILE_SIZE, MESH_COL = 16, 4, 16
+
+# Read VersaCore's own busy/stall counters and print them. Must stay in step with the
+# 4-cluster workload's flag of the same name, or the two rungs of the scaling ladder stop
+# being the same measurement.
+MEASURE_ARRAY = True
 
 # Shape 1, S^T = K.Q^T. From params.hjson, whose defaults match the reference's own
 # data/params.hjson exactly, so the cycle counts are comparable point for point. Shrink M
@@ -443,6 +449,11 @@ def build(dfg, h, m, rowsum):
     # the refills happen on an idle fabric and every real dispatch afterwards hits in the
     # icache. The cost is that the first load starts a little later; the gain is that the
     # first QK, the first softmax and the first arena fill all configure at warm speed.
+    # The array's own hardware counters -- the same instrument the 4-cluster workload
+    # carries, so the two rungs of the scaling ladder are the SAME measurement. See the
+    # perf_addr comment in device_kernel_args.h.
+    perf = g.l1("gemm_perf", 64) if MEASURE_ARRAY else 0
+
     warm_buf = g.l1("fa_warm_buf", 1024)
     warm_a = g.l1("fa_warm_a", MESH_ROW * TILE_SIZE)
     warm_b = g.l1("fa_warm_b", MESH_COL * TILE_SIZE)
@@ -635,7 +646,8 @@ def build(dfg, h, m, rowsum):
             qk.append(g.node(f"QK_{j}_{q}", GEMM_CORE,
                              "__snax_bingo_kernel_gemm_fa_qk",
                              SnaxBingoKernelGemmFaQkArgs(k8[j % 2], q8[q], cz,
-                                                         s16[i & 1].view(64), M, K, N),
+                                                         s16[i & 1].view(64), M, K, N,
+                                                         perf_addr=perf),
                              deps))
 
             deps = [qk[i]]
@@ -666,8 +678,15 @@ def build(dfg, h, m, rowsum):
                              "__snax_bingo_kernel_gemm_fa_pv",
                              SnaxBingoKernelGemmFaPvArgs(v8[pj % 2], p8[p & 1],
                                                          oacc[pq] if pj else 0, oacc[pq],
-                                                         S2_M, S2_K, S2_N),
+                                                         S2_M, S2_K, S2_N,
+                                                         perf_addr=perf),
                              deps))
+
+    # The array counters, printed once. Anchored on the last PV so every matmul has retired.
+    if MEASURE_ARRAY:
+        ideal_cc = (2 * (BC * BR * DHEAD)) // (MESH_ROW * MESH_COL * TILE_SIZE) * (NKV * NQ)
+        g.node("ArrayPerf", GEMM_CORE, "__snax_bingo_kernel_gemm_perf_report",
+               SnaxBingoKernelGemmPerfReportArgs(perf, ideal_cc), pv[-1])
 
     # ---- check the two statistics the recurrence carries -------------------------------
     # Read straight out of the arena: layout() mirrors the device's own simd_fa_layout(),

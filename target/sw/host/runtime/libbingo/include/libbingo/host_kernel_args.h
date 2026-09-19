@@ -77,6 +77,29 @@ __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_idma_args {
     uint64_t scratchpad_ptr;
 } __host_bingo_kernel_idma_args_t;
 
+// Up to four iDMA transfers issued from ONE BINGO task.
+//
+// WHY. The system iDMA is a second 512-bit path into the quadrant (a PUSH over
+// quadrant_wide_in, disjoint from the clusters' PULL over quadrant_wide_out), and a single
+// 64 KiB transfer on it measures 56.4 B/cc -- three times a contended pull share. But every
+// BINGO task on the host costs ~433 cc of dispatch (MGR_WRITE_DONE -> MGR_GET_READY ->
+// MGR_PREP plus the kernel wrapper), so at ONE tile per task the effective rate collapses to
+// 41.1 B/cc and the push loses to four concurrent cluster xDMAs. Batching amortises it:
+//
+//     1 tile/task  41.1 B/cc      2 tiles  47.6 B/cc      4 tiles  51.6 B/cc
+//
+// The transfers are ISSUED back to back and waited on ONCE, at the last id -- the engine
+// queues them in order, so the intermediate completions need no poll of their own.
+__HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_idma_multi_args {
+    uint64_t n;            // transfers actually used, 1..4
+    uint64_t src_addr0; uint64_t dst_addr0;
+    uint64_t src_addr1; uint64_t dst_addr1;
+    uint64_t src_addr2; uint64_t dst_addr2;
+    uint64_t src_addr3; uint64_t dst_addr3;
+    uint64_t size;         // bytes, the same for every transfer
+    uint64_t scratchpad_ptr;
+} __host_bingo_kernel_idma_multi_args_t;
+
 __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_xdma_1d_copy_args {
     uint64_t src_addr;
     uint64_t dst_addr;

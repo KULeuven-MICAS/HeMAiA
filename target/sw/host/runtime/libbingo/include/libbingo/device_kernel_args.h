@@ -881,6 +881,15 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_row_major_to_d_args {
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_xdma_row_major_to_d_args_t;
 
+// Reports the accumulated VersaCore hardware counters for one cluster and clears them.
+// Runs on the GEMM core AFTER the last matmul, so its printf is outside the measured
+// window and cannot perturb what it is reporting.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_gemm_perf_report_args {
+  uint32_t perf_addr;         // the five-word L1 accumulator the FA matmuls wrote
+  uint32_t ideal_cc;          // cycles this cluster's matmuls would take at 1 pass/cycle
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_gemm_perf_report_args_t;
+
 // BINGO GEMM Minimal kernel args
 __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_gemm_minimal_args {
   uint32_t input_A_addr;            
@@ -908,5 +917,26 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_gemm_fa_args {
   uint32_t M;                 // qk: Bc/meshRow      pv: d/meshRow
   uint32_t K;                 // qk: d/tileSize      pv: Bc/tileSize
   uint32_t N;                 // Br/meshCol, the same for both
+  // Optional L1 accumulator for the array's OWN hardware counters; 0 disables it and the
+  // kernel does not even read the CSRs. Five words:
+  //
+  //   [0] VERSACORE_PERFORMANCE_COUNTER   cycles the array was in sBUSY
+  //   [1] VERSACORE_STALL_A               operand A not delivered
+  //   [2] VERSACORE_STALL_B               operand B not delivered
+  //   [3] VERSACORE_STALL_D               D drain / accumulator backpressure
+  //   [4] dispatches accumulated
+  //
+  // All four counters RESET ON CONFIG WRITE (VersaCore.scala: `.elsewhen(config_fire)`),
+  // so they are per-dispatch and software must accumulate them -- which is also what the
+  // snax reference does (snax-flashattn-decode.c, `gemm_cycles += c`). Reading them here
+  // rather than timing spans in the trace is what makes this number comparable to the
+  // reference's `GEMM core busy %`: a dispatch-to-retire SPAN also contains the CSR
+  // writes and the retire poll, and so overstates how busy the array actually was.
+  //
+  // The array's invariant is stall_a + stall_b + stall_d + passes == performance_counter,
+  // so the accumulated set decomposes array time into useful passes and the three reasons
+  // it was not making one. A and B stalls are the MEMORY SYSTEM's tax measured inside the
+  // array, which is exactly what changes as the machine scales out.
+  uint32_t perf_addr;
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_gemm_fa_args_t;
