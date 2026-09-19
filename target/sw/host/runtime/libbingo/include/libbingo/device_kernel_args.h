@@ -324,6 +324,42 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_1d_copy_args {
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_xdma_1d_copy_args_t;
 
+// BINGO XDMA MULTICAST: one read from main memory, N writes into N different clusters' L1.
+//
+// WHY THIS EXISTS. A quadrant's four clusters mux onto ONE 512-bit path to the SoC, so
+// four clusters each pulling the same bytes costs four times the port time for one byte of
+// information. FlashAttention parallelised over the query heads of a GQA group is exactly
+// that case: the group shares one KV head, so K and V are IDENTICAL on every cluster and
+// only Q differs. Reading each KV tile once and fanning it out in the writer takes the
+// workload's arithmetic intensity from Br to Br * NCL, which is what puts a 4-cluster
+// quadrant back on the compute-bound side of its balance point. See
+// docs/fa_decomposition_hierarchy.md.
+//
+// The fan-out is HARDWARE: the xDMA writer holds XDMA_MAX_DST_COUNT destination address
+// slots and commits one transfer to all of them, so this is one task and one finish, not N
+// sequential copies. That distinction is the whole point -- a software loop over N unicast
+// copies was measured (as the V-push arm) and lost, because its single issuer serialises.
+//
+//   src      : the source, a FULL 64-bit address -- typically L3 or the memory chiplet.
+//   dst[]    : dst_num destinations, each a full (chip|cluster|offset) address, which is
+//              what bingo_l1_alloc returns for a handle on ANY cluster. No arithmetic on
+//              the Python side and no assumption that the four heaps agree on offsets.
+//   size     : bytes, the same to every destination; must be a multiple of the datapath.
+//
+// BINGO_XDMA_MCAST_MAX bounds the list in the ARG STRUCT only; the hardware bound is
+// XDMA_MAX_DST_COUNT (generated and cfg-dependent, not visible in this shared header), so
+// the kernel checks against it at call time rather than failing to compile.
+#define BINGO_XDMA_MCAST_MAX 8
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_multicast_args {
+  uint32_t src_addr_hi;
+  uint32_t src_addr_lo;
+  uint32_t dst_hi[BINGO_XDMA_MCAST_MAX];
+  uint32_t dst_lo[BINGO_XDMA_MCAST_MAX];
+  uint32_t dst_num;     // live entries in dst[], 1..BINGO_XDMA_MCAST_MAX
+  uint32_t size;        // in Bytes
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_xdma_multicast_args_t;
+
 // Fill a local L1 region with a repeating 32-bit PATTERN, using the xDMA's writer-side
 // Memset extension.
 //

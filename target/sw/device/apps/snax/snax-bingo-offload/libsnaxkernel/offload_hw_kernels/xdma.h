@@ -43,6 +43,22 @@
 // nothing behind it: no fault, no data moved, and a completion flag that reads back "done"
 // because it never read anything.
 
+// PUT THE MULTICAST DESTINATION SLOTS BACK TO ZERO.
+//
+// Slots 1..15 of XDMA_DST_ADDR_PTR live in the CSR bank and SURVIVE the task that set
+// them, exactly like the writer junctions the chain gather clears on entry. Every kernel
+// that programs its CSRs longhand -- __snax_bingo_kernel_xdma_memset below is the one that
+// matters -- writes only slot 0 and relies on the rest being zero.
+
+// Callers invoke it AFTER their wait, so it costs nothing the transfer was not paying.
+static inline void bingo_xdma_disarm_multicast_slots(void)
+{
+    for (uint32_t i = 1; i < XDMA_MAX_DST_COUNT; i++) {
+        snax_write_xdma_cfg_reg(XDMA_DST_ADDR_PTR_LSB + i * 2, 0);
+        snax_write_xdma_cfg_reg(XDMA_DST_ADDR_PTR_MSB + i * 2, 0);
+    }
+}
+
 // Fill a local L1 region with a repeating 32-bit pattern, on the xDMA's writer path.
 //
 // The CSR addresses here are all COMPILE-TIME CONSTANTS, written out longhand rather than
@@ -51,6 +67,11 @@
 // a jump-table load out of .rodata -- which this target maps to main memory -- plus an
 // indirect jump, on every write. The general path also writes far more than a fill needs:
 // 30 of its writes zero multicast slots this never uses.
+//
+// THAT LAST SENTENCE IS AN INVARIANT THIS KERNEL DEPENDS ON, not just an observation:
+// skipping those 30 writes is only safe while slots 1..15 are zero on entry. Anything that
+// arms them must call bingo_xdma_disarm_multicast_slots() before it yields the core --
+// see that function for what happens when it does not.
 //
 // The reader channels are disabled deliberately. A disabled channel issues NO TCDM request
 // at all, so the beat the writer sees comes entirely from the Memset extension -- no read,
@@ -159,6 +180,73 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_1d_copy(void *arg)
         printf_safe("[Cluster %d Core %d]: Error! XDMA copy must run on the xDMA core!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
         return BINGO_RET_FAIL;
     }
+}
+
+// ONE READ FROM MAIN MEMORY, N WRITES INTO N CLUSTERS' L1.
+//
+// The fan-out is in the writer's destination-address slots, so this is ONE transfer with
+// ONE finish, not N copies. That is what separates it from a software loop over
+// __snax_bingo_kernel_xdma_1d_copy: the loop's single issuer serialises and idles on the
+// WAR edge (measured as the V-push arm), while the hardware commits every destination from
+// the same read stream.
+//
+// Used by FlashAttention when the four clusters hold four query heads of ONE GQA group:
+// they share K and V byte for byte, so pulling those bytes four times over the quadrant's
+// single 512-bit path is four times the port time for one byte of information. See
+// docs/fa_decomposition_hierarchy.md for the balance-point argument.
+//
+// No extension is armed. Multicast is base streamer behaviour -- the destination slots are
+// always there, and the unicast path spends 15 of its config writes ZEROING them -- so
+// this needs no #ifdef on an optional RTL block. It does disable any extension a previous
+// task left armed, for the same reason the gather does: extensions and junctions live in
+// their own CSR banks and survive the task that set them.
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_multicast(void *arg)
+{
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_multicast_args_t);
+    BINGO_REQUIRE_CORE(snax_is_xdma_core(), "xdma_multicast", "XDMA");
+
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+    __snax_bingo_kernel_xdma_multicast_args_t *a =
+        (__snax_bingo_kernel_xdma_multicast_args_t *)arg;
+    uint64_t src = make_u64(a->src_addr_hi, a->src_addr_lo);
+    uint32_t dst_num = a->dst_num;
+    uint32_t size = a->size;
+    bingo_kernel_scratchpad_t *sp =
+        BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_multicast_args_t);
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+
+    // The HW bound is a generated define, so it can only be checked here. A dst_num past
+    // it would have its extra slots silently dropped by xdma_multicast_nd_full_address,
+    // which is a wrong-data bug rather than a failure.
+    if (dst_num < 1 || dst_num > BINGO_XDMA_MCAST_MAX || dst_num > XDMA_MAX_DST_COUNT) {
+        printf_safe("[Cluster %d Core %d]: Error! xDMA multicast dst_num=%u must be "
+                    "1..%u (arg struct) and <= %u (HW)\r\n", snrt_cluster_idx(),
+                    snrt_cluster_core_idx(), dst_num,
+                    (unsigned)BINGO_XDMA_MCAST_MAX, (unsigned)XDMA_MAX_DST_COUNT);
+        return BINGO_RET_FAIL;
+    }
+
+    uint64_t dst[BINGO_XDMA_MCAST_MAX];
+    for (uint32_t i = 0; i < dst_num; i++) {
+        dst[i] = make_u64(a->dst_hi[i], a->dst_lo[i]);
+    }
+
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
+    xdma_disable_all_extensions();
+    BINGO_XDMA_TRY(xdma_multicast_1d_full_address(src, dst, dst_num, size),
+                   "xdma_multicast");
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
+
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
+    xdma_task_t task = xdma_start();
+    xdma_wait_task(task);
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
+
+    bingo_xdma_disarm_multicast_slots();
+
+    sp->return_value = (uint32_t)dst[0];
+    sp->num_return_values = 0;
+    return BINGO_RET_SUCC;
 }
 
 // ==========================================================================
@@ -553,12 +641,18 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_chain_gather(void *arg)
                         "no folded beat arrived\r\n", snrt_cluster_idx(),
                         snrt_cluster_core_idx(), dst_addr);
             xdma_disable_dst_junction((uint8_t)a->junction);
+            bingo_xdma_disarm_multicast_slots();
             return BINGO_RET_FAIL;
         }
     }
     BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
 
     xdma_disable_dst_junction((uint8_t)a->junction);
+    // The gather arms the SAME destination slots the multicast does (the library calls it
+    // "the mirror of multicast" and routes it through xdma_multicast_1d_full_address), so
+    // it owes the same disarm. It has never been caught by this only because it is the
+    // last xDMA task in its workload -- an accident of scheduling, not a property.
+    bingo_xdma_disarm_multicast_slots();
     sp->return_value = dst_addr;
     sp->num_return_values = 0;
     return BINGO_RET_SUCC;

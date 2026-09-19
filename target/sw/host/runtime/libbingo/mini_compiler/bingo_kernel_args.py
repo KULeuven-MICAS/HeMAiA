@@ -732,6 +732,46 @@ class SnaxBingoKernelXdma1dCopyArgs(BingoKernelArgs):
         assignments["size"] = str(self.size)
         return assignments
 
+
+class SnaxBingoKernelXdmaMulticastArgs(BingoKernelArgs):
+    """Args for __snax_bingo_kernel_xdma_multicast: one read, N destination clusters.
+
+    The destinations are ordinary handles. A handle allocated on another cluster already
+    resolves to a full (chip | cluster | offset) address, so nothing here has to know the
+    cluster map or assume that the four heaps lay out the same -- the same property the
+    chain gather relies on.
+    """
+    # Must match BINGO_XDMA_MCAST_MAX in device_kernel_args.h.
+    DST_MAX = 8
+
+    def __init__(self, src_addr: Union[BingoMemAlloc, int], dst_list: list, size: int):
+        if not 1 <= len(dst_list) <= self.DST_MAX:
+            raise ValueError(
+                f"xdma multicast: {len(dst_list)} destinations; it must be 1.."
+                f"{self.DST_MAX}. The hardware bound XDMA_MAX_DST_COUNT is generated "
+                "per cfg and is checked on the device at call time.")
+        _check_xdma_size_aligned(size, "SnaxBingoKernelXdmaMulticastArgs")
+        self.src_addr = src_addr
+        self.dst_list = list(dst_list)
+        self.size = size
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_xdma_multicast_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.src_addr, "src_addr", a, handle_name_map)
+        for i, dst in enumerate(self.dst_list):
+            # _process_addr emits <base>_hi / <base>_lo and the base is a C lvalue, so an
+            # array element indexes cleanly -- same trick the chain gather uses.
+            tmp = {}
+            self._process_addr(dst, "dst", tmp, handle_name_map)
+            a[f"dst_hi[{i}]"] = tmp["dst_hi"]
+            a[f"dst_lo[{i}]"] = tmp["dst_lo"]
+        a["dst_num"] = str(len(self.dst_list))
+        a["size"] = str(self.size)
+        return a
+
 # BINGO XDMA memset: fill local L1 with a repeating 32-bit pattern, on the writer path.
 class SnaxBingoKernelXdmaMemsetArgs(BingoKernelArgs):
     """Args for __snax_bingo_kernel_xdma_memset.

@@ -81,6 +81,7 @@ SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_gemm_fa_pv),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_gemm_perf_report),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_1d_copy),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_multicast),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_memset),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_6d),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_transpose_2d),
