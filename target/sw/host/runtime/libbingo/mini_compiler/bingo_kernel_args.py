@@ -1073,11 +1073,29 @@ def xdma_ewjct_csr0(op=XDMA_EWJCT_OP_ADD, fmt=XDMA_EWJCT_FMT_FP32):
     return (fmt << 4) | op
 
 
-def xdma_monoid_csr0(n_valid=8, n=1, n_exp=1, n_add=0, sigma=3, key_pol=0, key_mul=0):
+# MonoidJunction CSR(0)[14:12] transport format, from MonoidJunction.scala (FpHelpers.FMT_*).
+XDMA_MONOID_FMT_FP16 = 0
+XDMA_MONOID_FMT_BF16 = 1
+XDMA_MONOID_FMT_FP8  = 2
+XDMA_MONOID_FMT_FP32 = 3
+
+
+def xdma_monoid_csr0(n_valid=8, n=1, n_exp=1, n_add=0, sigma=3, key_pol=0, key_mul=0,
+                     fmt=XDMA_MONOID_FMT_FP32):
     """CSR(0) for the monoid junction -- a GEOMETRY word, not an operator id.
 
-        [7:0] nValid | [11:8] n | [21:18] nExp | [25:22] nAdd | [27:26] sigma
-        [28] keyPol (0=max) | [29] keyMul (0 = the (R,max) key monoid)
+        [7:0] nValid | [11:8] n | [14:12] fmt | [21:18] nExp | [25:22] nAdd
+        [27:26] sigma | [28] keyPol (0=max) | [29] keyMul (0 = the (R,max) key monoid)
+
+    `fmt` IS NOT OPTIONAL and its zero value is a trap. It is the TRANSPORT format the
+    junction slices a beat into -- 0 = FP16, 1 = BF16, 2 = FP8, 3 = FP32 -- and it was
+    added to the junction after this encoder was written. A word built before the field
+    existed has those bits zero, which names FP16: on the split cluster (elemWidth 16, so
+    32 lanes per beat) the fold then reads the FP32 partial as 32 FP16 lanes, folds the
+    wrong halves, and leaves the rest untouched.
+    MEASURED when that happened: every per-shard check PASSED and fa_ml_merged FAILED with
+    exactly 32 of 64 lanes reading 0x00000000, no watchdog. The default is FP32 because
+    that is what pack_fa_partial produces and what the cluster cfg says the gather carries.
 
     Lanes are field-major, lane = field*S + slot with S = 1 << sigma, and nValid is how
     many of those S slots carry real data (the rest are fed their field's identity).
@@ -1096,8 +1114,8 @@ def xdma_monoid_csr0(n_valid=8, n=1, n_exp=1, n_add=0, sigma=3, key_pol=0, key_m
     This is NOT the old StreamMomentMergeRt encoding ((1<<13)|1); under this layout that
     word decodes to n=0, sigma=0 -- a key-only geometry whose fold reads no value.
     """
-    return ((n_valid & 0xFF) | ((n & 0xF) << 8) | ((n_exp & 0xF) << 18) |
-            ((n_add & 0xF) << 22) | ((sigma & 0x3) << 26) |
+    return ((n_valid & 0xFF) | ((n & 0xF) << 8) | ((fmt & 0x7) << 12) |
+            ((n_exp & 0xF) << 18) | ((n_add & 0xF) << 22) | ((sigma & 0x3) << 26) |
             ((key_pol & 0x1) << 28) | ((key_mul & 0x1) << 29))
 
 
