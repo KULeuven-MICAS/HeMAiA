@@ -887,11 +887,29 @@ def main():
 
         tpl_rtl_wrapper = get_template(tpl_rtl_wrapper_file)
 
+        # The mem-side xDMA wrappers below take their wide width from cluster 0. That is
+        # only meaningful if every cluster agrees, and there is ONE wide fabric, so a
+        # disagreement is a bug rather than a configuration. Say so here instead of
+        # silently generating a wrapper that matches one cluster and not the others.
+        _wide_widths = {g.cfg["dma_data_width"] for g in cluster_generators}
+        if len(_wide_widths) != 1:
+            raise ValueError(
+                f"clusters disagree on dma_data_width ({sorted(_wide_widths)}); the "
+                f"mem-side xDMA wrappers and the SoC wide xbar are single-width, so "
+                f"every cluster on one chiplet must match")
+
         gen_file(
             cfg={
                 "name": "hemaia",
                 "xdma_cfg_io_width": occamy_cfg["hemaia_xdma_cfg"]["cfg_io_width"],
-                "dma_data_width": 512,
+                # DERIVED, not 512. The SoC's wide path takes its width from the cluster
+                # (occamy.py: `wide_data_width = cluster_cfg["dma_data_width"]`), so a
+                # literal here is a SECOND definition of the same wire. Change
+                # dma_data_width and the cluster would compile 1024 while this mem-side
+                # xDMA stayed at 512 -- the two ends of one link at different widths, with
+                # nothing to error on. That exact class of mismatch (cluster 23-bit vs
+                # mem-side 21-bit xDMA cfg words) has already cost one long debug here.
+                "dma_data_width": cluster_generators[0].cfg["dma_data_width"],
                 "data_width": occamy_cfg["data_width"],
                 "addr_width": occamy_cfg["addr_width"],
                 "tcdm": {
@@ -954,7 +972,9 @@ def main():
             cfg={
                 "name": "hemaia_mem_chip",
                 "xdma_cfg_io_width": occamy_cfg["hemaia_xdma_cfg"]["cfg_io_width"],
-                "dma_data_width": 512,
+                # Derived for the same reason as the "hemaia" wrapper above: one definition
+                # of the wide width, not three.
+                "dma_data_width": cluster_generators[0].cfg["dma_data_width"],
                 "data_width": occamy_cfg["data_width"],
                 "addr_width": occamy_cfg["addr_width"],
                 "tcdm": {
