@@ -794,7 +794,7 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
             reach = [nx.descendants(hb, cv) for (_su, cv) in edges]
             B = nx.Graph()
             for a in range(n):
-                B.add_node(("L", a)); B.add_node(("R", a))
+                B.add_node(a); B.add_node(n + a)
             for a in range(n):
                 for b in range(n):
                     if a == b:
@@ -804,14 +804,14 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                     # b's producer), or b's producer is reachable from a's consumer
                     # in the happens-before (incl. same-core HOL) order.
                     if edges[b][0] is edges[a][1] or edges[b][0] in reach[a]:
-                        B.add_edge(("L", a), ("R", b))
+                        B.add_edge(a, n + b)
             match = (nx.algorithms.bipartite.hopcroft_karp_matching(
-                         B, top_nodes=[("L", a) for a in range(n)])
+                         B, top_nodes=list(range(n)))
                      if B.number_of_edges() else {})
             succ, has_pred = {}, set()
-            for node, m in match.items():
-                if node[0] == "L":
-                    succ[node[1]] = m[1]; has_pred.add(m[1])
+            for node in sorted(match):
+                if node < n:                      # a left node: a -> (n + b)
+                    succ[node] = match[node] - n; has_pred.add(match[node] - n)
             chain_of, n_chains = {}, 0
             for a in range(n):
                 if a in has_pred:
@@ -1818,15 +1818,28 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
     def _collect_memory_handles(self, sorted_nodes):
         """Collect and sort unique BingoMemAlloc from nodes."""
         unique_handles = set()
+
+        def collect(value):
+            if isinstance(value, BingoMemAlloc):
+                unique_handles.add(value)
+            # A view is not its own allocation -- collect the buffer it points into, so a
+            # base only ever referenced through a view is still allocated.
+            elif isinstance(value, BingoMemAllocView):
+                unique_handles.add(value.base)
+            # A LIST of handles is still a reference to every one of them. Multi-destination
+            # kernels (xdma_multicast, xdma_chain_gather) hold their operands this way, and
+            # walking only scalar attributes left those buffers unallocated unless some
+            # OTHER node happened to name the same handle -- which is how both kernels got
+            # away with it so far. That is an accident, not an invariant: a destination no
+            # local node reads would silently get no allocation at all.
+            elif isinstance(value, (list, tuple)):
+                for item in value:
+                    collect(item)
+
         for node in sorted_nodes:
             if node.kernel_args:
                 for attr, value in node.kernel_args.__dict__.items():
-                     if isinstance(value, BingoMemAlloc):
-                         unique_handles.add(value)
-                     # A view is not its own allocation -- collect the buffer it points into, so a
-                     # base only ever referenced through a view is still allocated.
-                     elif isinstance(value, BingoMemAllocView):
-                         unique_handles.add(value.base)
+                    collect(value)
         
         sorted_handles = sorted(list(unique_handles), key=lambda h: h.name)
         handle_name_map = {h: h.get_c_var_name() for h in sorted_handles}
