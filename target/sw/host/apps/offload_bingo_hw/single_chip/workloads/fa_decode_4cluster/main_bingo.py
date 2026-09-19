@@ -264,6 +264,37 @@ V_PUSH_TILES = set()
 # RESCHEDULING CANNOT HELP -- only less traffic or more bandwidth can.
 NVBUF = 2
 
+# STAGGER THE FIRST REAL V TILE ACROSS CLUSTERS.
+#
+# The Gantt of the 4-cluster run shows all four clusters entering one long XDMA_CFG at the
+# same moment -- 11,249..18,536, costing 2,856 / 5,780 / 6,803 / 6,863 cc -- and the same
+# configuration on a single cluster costs 938. Nothing is transferring during it (measured:
+# zero overlap with any XDMA_RUN), and the span retires 139 instructions in 6,803 cc, which
+# is cold instruction fetch, not engine backpressure.
+#
+# It is the FIRST REAL V TILE's config: the xDMA's memset path is warmed by the arena fills,
+# its 1d_copy path is not (see the WarmGemm comment -- a warm-up COPY hangs, undiagnosed).
+# So four cold fetches of the same code land on the fabric together.
+#
+# Chaining the first V load c0 -> c1 -> c2 -> c3 serialises those four cold fetches instead.
+# If the model is right, each costs ~938 cc uncontended, so ~3,750 cc in sequence against a
+# 7,287 cc band. The cost is that cluster 3 starts its V stream later; whether that trade is
+# positive is exactly what the measurement decides.
+# MEASURED AND DISPROVEN: 61.2% against the baseline's 68.3%. The mechanism failed too, not
+# just the outcome -- the SUM of the four stalls barely moved (22,302 -> 21,045 cc, -6%) while
+# the band they occupy GREW (7,287 -> 11,574 cc), and cluster 3's own stall got worse
+# (2,856 -> 8,155). Serialising the four cold fetches did not make any of them cheaper.
+#
+# So the stall is NOT the four clusters colliding with each other. Their total cost is
+# invariant to when they run, which points at contention with the K/V TRANSFERS that stream
+# throughout -- the config code is fetched from L3 while the fabric is busy carrying tiles,
+# and that traffic is identical in both arms.
+#
+# That relocates the fix: warm the xdma_1d_copy path or make its config resident, rather than
+# rescheduling clusters. The source already notes a warm-up COPY hangs, undiagnosed -- that
+# is the thing to diagnose.
+STAGGER_FIRST_V = False
+
 # PUSH V IN PAIRS ON THE SYSTEM iDMA, one BINGO task per PAIR.
 #
 # Two measured facts make this the shape to try:
@@ -1133,6 +1164,9 @@ def _build_cluster(dfg, c, h_all, m_all, rowsum_all):
     # the per-edge dep tags affordable -- four shards of unordered store->check pairs all
     # land in the same (cluster 0, host, host) cell and each would otherwise need its own.
     return {
+        # the first REAL V tile (index 0 of ld_v), so build() can serialise the cold
+        # xdma_1d_copy config across clusters
+        "first_v": ld_v[0] if ld_v else None,
         "last_sm": last,
         "arena": arena[NQ - 1],
         "p8_last": p8[(NKV_PER * NQ - 1) % NSCORE],
@@ -1156,6 +1190,18 @@ def build(dfg, h, m_all, rowsum_all, merged_h, jct_monoid):
     """
     shards = [_build_cluster(dfg, c, h, m_all, rowsum_all) for c in range(NCL)]
     g = G(dfg, 0)
+
+    # De-synchronise the cold xdma_1d_copy config (see STAGGER_FIRST_V). One edge per
+    # consecutive pair; the transfers still overlap, only the cold CONFIGS are serialised.
+    if STAGGER_FIRST_V:
+        prev = None
+        for sh in shards:
+            fv = sh.get("first_v")
+            if fv is None:
+                continue
+            if prev is not None:
+                dfg.bingo_add_edge(prev, fv)
+            prev = fv
 
     # One shard is the control arm, not a degenerate merge: with nothing to fold, m* = m_0
     # and l* = l_0, so a gather would only copy. The per-shard checks still run, and the
