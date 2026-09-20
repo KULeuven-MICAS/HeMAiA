@@ -1,6 +1,6 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 from abc import ABC, abstractmethod
-from typing import Union, Dict, Optional
+from typing import Union, Dict, Optional, List, Tuple
 from bingo_mem_handle import BingoMemAlloc, BingoMemAllocView, BingoMemSymbol, BingoMemFixedAddr
 from bingo_helpers import _check_xdma_size_aligned
 
@@ -9,6 +9,13 @@ class BingoKernelArgs(ABC):
     Abstract base class for Kernel Arguments.
     Subclasses define the specific arguments for each kernel type and how they map to C structs.
     """
+
+    # Ordering constraints between this kernel's OWN buffer arguments, as (earlier, later)
+    # attribute-name pairs. Empty for almost every kernel: it is only needed when a kernel
+    # computes an address in one buffer as an offset from another, which makes their relative
+    # placement part of its ABI. See SnaxBingoKernelSimdFaSoftmaxArgs for the one case.
+    PLACEMENT_ORDER: List[Tuple[str, str]] = []
+
 
     # Optional: the C dispatcher this args struct pairs with. When set on a
     # subclass, BingoNode infers `kernel_name` from the args if none is given.
@@ -1681,7 +1688,29 @@ class SnaxBingoKernelSimdFaSoftmaxArgs(BingoKernelArgs):
     Size the arena with arena_bytes(bc, dhead) -- it must match
     SIMD_FA_ARENA_BYTES(bc, dhead) in offload_hw_kernels/simd.h, where the adjacencies
     inside it are load-bearing.
+
+    THE ADJACENCIES ARE NOT ALL INSIDE THE ARENA. Two of this kernel's SIMD tasks pair
+    operands that live in DIFFERENT buffers, by reaching out of the arena with a stride:
+
+        FA_SH_NEGM_OUT   writes -m_new to [rmax][negm]   negm = the one-beat prefix of s16_src
+        FA_SH_LNEW_IN    reads  [lsc][rsum]              rsum = the trailing beat of p8_dst
+
+    `snax_simd_shape_t.stride` is a uint32_t, and simd.h computes these as `negm - rmax` and
+    `rsum_p8 - lsc` with the comment "arena is allocated first: positive". So the arena has to
+    sit at a LOWER address than both s16_src and p8_dst. That was true for free while addresses
+    came from bingo_l1_alloc in alphabetical order -- "fa_arena" sorts before "fa_p8" and
+    "fa_s16" -- and it stopped being free the moment a compiler took over placement.
+
+    Declaring it here is what makes it checkable: PLACEMENT_ORDER is read by
+    bingo_plan_static_l1, honoured by the packer and verified against the emitted layout, so a
+    packing order that breaks it fails the build instead of the simulation. Measured on RTL,
+    breaking it does not corrupt the row maximum -- rmax/mnew/mrun are entirely arena-internal
+    and survive -- it corrupts P and the row sum, and the run hangs before those checks report.
     """
+
+    # (earlier_attr, later_attr): the buffer in earlier_attr must be placed at a lower
+    # address than the one in later_attr.
+    PLACEMENT_ORDER = [("arena", "s16_src"), ("arena", "p8_dst")]
 
     KERNEL_NAME = "__snax_bingo_kernel_simd_fa_softmax"
 

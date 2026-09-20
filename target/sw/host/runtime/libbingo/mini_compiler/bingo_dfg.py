@@ -2025,12 +2025,42 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         f.write(f"{indented_mapping}\n")
 
     def _emit_memory_allocations(self, f, chiplet_id, sorted_handles, handle_name_map):
-        """Emit memory allocation calls for handles on this chiplet."""
+        """Emit memory allocation calls for handles on this chiplet.
+
+        With static L1 allocation enabled, L1 buffers stop being individual allocations. The
+        compiler has already decided every offset, so the runtime takes ONE allocation per
+        cluster -- the packed arena -- and each buffer is a constant displacement into it.
+
+        Taking the arena from bingo_l1_alloc rather than addressing TCDM directly is
+        deliberate for this milestone: the heap keeps owning the base address and the
+        capacity check, so nothing downstream has to learn a new address map, and a workload
+        can be switched back with static_l1=False and no other change.
+        """
+        placement = getattr(self, "static_l1_placement", None)
+        stats = getattr(self, "static_l1_stats", None)
         local_handles = [h for h in sorted_handles if h.chip_id == chiplet_id]
+
+        if placement and stats:
+            arenas = sorted(k for k in stats if k[0] == chiplet_id)
+            if arenas:
+                f.write("        // 1. Static L1 arenas (compiler-packed; one per cluster)\n")
+                for (chip, cl) in arenas:
+                    st = stats[(chip, cl)]
+                    f.write(f"        uint64_t __bingo_l1_static_chip{chip:02x}_cl{cl} = "
+                            f"bingo_l1_alloc(0x{chip:02x}, {cl}, {st['peak']});"
+                            f"  // {st['count']} buffers packed from {st['sum']} B\n")
+                f.write("\n")
+
         if local_handles:
-            f.write("        // 1. Memory Allocations\n")
+            f.write("        // 1b. Memory Allocations\n")
             for h in local_handles:
                 c_var = handle_name_map[h]
+                if placement and h.mem_level == "L1" and id(h) in placement:
+                    off = placement[id(h)][1]
+                    f.write(f"        uint64_t {c_var} = "
+                            f"__bingo_l1_static_chip{h.chip_id:02x}_cl{h.cluster_id} + {off};"
+                            f"  // {h.size} B\n")
+                    continue
                 alloc_call = ""
                 if h.mem_level == "L1":
                     alloc_call = f"bingo_l1_alloc(0x{h.chip_id:02x}, {h.cluster_id}, {h.size})"
@@ -2080,11 +2110,17 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         sp_align = "ALIGN_UP(sizeof(bingo_kernel_scratchpad_t), 64)"
         l1_terms = {}   # cluster -> list of C size expressions
         l3_terms = []
+        # With slot packing the DEVICE scratchpad term is (slots x sp_align), added below --
+        # one term per cluster, not one per node. Emitting both would make the packed arena
+        # LARGER than the unpacked one, which is what the first version of this did.
+        sp_packed = bool(getattr(self, "static_l1_sp_slots", None))
         for node in local_nodes:
             kn = node.kernel_name
             if kn and kn.startswith("__snax"):
-                l1_terms.setdefault(node.assigned_cluster_id, []).append(sp_align)
+                if not sp_packed:
+                    l1_terms.setdefault(node.assigned_cluster_id, []).append(sp_align)
             elif kn and kn.startswith("__host"):
+                # host scratchpads live in L3 and are not packed
                 l3_terms.append(sp_align)
         # device arg blocks share the cluster's L1 arena
         for node in local_nodes:
@@ -2099,12 +2135,34 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                 continue
             l1_terms.setdefault(node.assigned_cluster_id, []).append(f"ALIGN_UP(sizeof({t}), 64)")
 
+        # With slot packing the scratchpad half of the arena is (slots x sp_align) rather than
+        # (nodes x sp_align). The ARG half is unchanged and must stay unchanged: arg structs
+        # are all written by the host before the scheduler starts, so they are all live at once.
+        sp_slots_map = getattr(self, "static_l1_sp_slots", None)
+        slots_per_cl = {}
+        if sp_slots_map:
+            for nd, sl in sp_slots_map.items():
+                if nd.assigned_chiplet_id == chiplet_id:
+                    slots_per_cl.setdefault(nd.assigned_cluster_id, set()).add(sl)
+            for cl, sl in slots_per_cl.items():
+                l1_terms.setdefault(cl, []).append(f"{max(sl) + 1} * {sp_align}")
+
         f.write("        // 3a. One arena per memory for scratchpads and device args (bump-sliced)\n")
         for cl in sorted(l1_terms):
             base = f"__bingo_l1_arena_chip{chiplet_id:02x}_cl{cl}"
             f.write(f"        uint64_t {base} = bingo_l1_alloc(0x{chiplet_id:02x}, {cl},\n"
                     f"            {' + '.join(l1_terms[cl])});\n")
-            f.write(f"        uint64_t {base}_off = 0;\n")
+            # THE SLOT BLOCK SITS AT THE FRONT OF THIS ARENA, so the arg bump pointer has to
+            # start ABOVE it. Leaving the bump at 0 makes args_dev_*[0] alias slot 0: both
+            # regions live in this one arena and both would begin at offset 0. Nothing
+            # downstream catches that -- the arena size still adds up, the build is clean, and
+            # the only symptom is a task reading its arguments out of another node's
+            # scratchpad at run time.
+            if cl in slots_per_cl:
+                f.write(f"        uint64_t {base}_off = "
+                        f"{max(slots_per_cl[cl]) + 1} * {sp_align};\n")
+            else:
+                f.write(f"        uint64_t {base}_off = 0;\n")
         if l3_terms:
             f.write(f"        uint64_t __bingo_l3_arena_chip{chiplet_id:02x} = bingo_l3_alloc(0x{chiplet_id:02x},\n"
                     f"            {' + '.join(l3_terms)});\n")
@@ -2124,9 +2182,18 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
             else:
                 sp_var = f"sp_host_{node.node_id}"
                 base = f"__bingo_l3_arena_chip{chiplet_id:02x}"
-            f.write(f"        bingo_kernel_scratchpad_t* {sp_var} = "
-                    f"(bingo_kernel_scratchpad_t*)({base} + {base}_off);\n")
-            f.write(f"        {base}_off += {sp_align};\n")
+            slot = None
+            if is_device and getattr(self, "static_l1_sp_slots", None):
+                slot = self.static_l1_sp_slots.get(node)
+            if slot is not None:
+                # Packed: a slot index the compiler proved is free while this node runs.
+                f.write(f"        bingo_kernel_scratchpad_t* {sp_var} = "
+                        f"(bingo_kernel_scratchpad_t*)({base} + {slot} * {sp_align});"
+                        f"  // slot {slot}\n")
+            else:
+                f.write(f"        bingo_kernel_scratchpad_t* {sp_var} = "
+                        f"(bingo_kernel_scratchpad_t*)({base} + {base}_off);\n")
+                f.write(f"        {base}_off += {sp_align};\n")
             node._scratchpad_c_var = sp_var
         f.write("\n")
 
@@ -2363,8 +2430,238 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
             
             f.write("    return 0;\n")
             f.write("}\n")
-    def bingo_compile_dfg(self, app_name: str, output_dir: str, output_file_name: str, extra_include_header_list: list[str] | None, post_execute_code: list[str] | None = None) -> None:
-        """Compile the DFG by assigning dep info and emitting C code."""
+
+        # AUDIT WHAT WAS ACTUALLY WRITTEN. The one failure this catches -- the device-argument
+        # bump pointer starting inside the scratchpad slot block -- builds cleanly, passes
+        # every upstream check, and corrupts arguments at run time. Checking the artefact is
+        # the only place the three tenants of the arena (buffers, slots, args) are visible at
+        # once. Refusing to build is deliberate: a wrong layout must never reach a simulation.
+        from bingo_l1_packer import check_emitted_arena_text
+        with open(output_path) as _f:
+            _problems = check_emitted_arena_text(_f.read())
+        if _problems:
+            for _p in _problems:
+                print(f"[static-l1] EMITTED-CODE ERROR: {_p}")
+            raise RuntimeError("static L1: emitted arena layout is unsafe, refusing to build")
+
+    def bingo_plan_static_l1(self, opts=None, output_dir: str = None) -> None:
+        """Liveness + static placement for L1 buffers.
+
+        `opts` is a StaticL1Options, or a bool for the two common cases:
+
+          static_l1=False (default) : report only. Nothing about the generated code changes.
+          static_l1=True            : place buffers statically, emit constant offsets.
+          StaticL1Options(...)      : the same, with the tuning and bisect knobs.
+
+        Report-only is the default on purpose: this pass can be merged, run over every
+        workload in the tree and its numbers inspected before a single address moves. It is
+        an ARGUMENT rather than an environment variable because it changes generated code,
+        and an ambient switch that changes generated code can be set in one process and
+        silently missing in the one that runs the compiler -- which is exactly how two RTL
+        validation rounds were lost to a container that forwarded no environment.
+        """
+        from bingo_liveness import (collect_handle_users, check_handle_identity,
+                                    reachability, liveness_report,
+                                    extend_users_for_engine_drain)
+        from bingo_l1_packer import StaticL1Options
+        from bingo_l1_packer import (pack, verify, report, collect_placement_order,
+                                     check_placement_order, write_layout_csv,
+                                     write_layout_plot)
+
+        opts = opts if isinstance(opts, StaticL1Options) else StaticL1Options(enable=bool(opts))
+        want_pack = opts.enable
+
+        # BISECT KNOBS. Static allocation is three independent changes stacked on one another:
+        #   (1) addresses become compile-time constants instead of heap pointers,
+        #   (2) scratchpads are coloured into slots instead of one per node,
+        #   (3) buffers whose live ranges are disjoint are given the same bytes.
+        # When a packed run fails on RTL, "packing is broken" is not a diagnosis -- these have
+        # nothing to do with each other and only (3) depends on the liveness argument being
+        # right. These two knobs peel (3) and then (2) off, leaving (1) alone, so a failure can
+        # be attributed to a layer rather than to the feature.
+        no_sp_pack = not opts.pack_scratchpads
+
+        nodes = sorted(self.node_list, key=lambda n: n.node_id)
+        handle_users = collect_handle_users(nodes)
+        if not handle_users:
+            return
+
+        problems = check_handle_identity(handle_users)
+        if problems:
+            for pb in problems:
+                print(f"[static-l1] ERROR {pb}")
+            raise ValueError("static L1 allocation: handle identity is not well formed")
+
+        desc = reachability(self, nodes)
+
+        # See RULE 4 in bingo_liveness: an accelerator's last write can drain when the engine
+        # is next configured, not when its node retires. Off by default until an RTL arm shows
+        # it is what the hardware needs; it can only lengthen live ranges, never shorten them.
+        if opts.drain_guard:
+            handle_users = extend_users_for_engine_drain(handle_users, self)
+            print("[static-l1] DRAIN_GUARD: same-core successors counted as users")
+
+        print("[static-l1] " + liveness_report(handle_users, desc, "L1").lstrip())
+
+        # Collected BEFORE packing now: the declared order is an input to placement, not
+        # only something checked afterwards. The check still runs -- the packer honouring a
+        # rule and an independent oracle confirming it would both have to be wrong to get
+        # through, which is the same split as the liveness packer and its verifier.
+        order_constraints = collect_placement_order(nodes)
+        placement, stats = pack(handle_users, desc, "L1",
+                                constraints=order_constraints, opts=opts)
+        cap = getattr(self, "l1_capacity_bytes", None)
+        print("[static-l1] placement if enabled:")
+        print(report(stats, cap))
+
+        # A kernel that derives one buffer's address from another's makes their relative
+        # placement part of its ABI. Those constraints are declared on the args class
+        # (PLACEMENT_ORDER) precisely so that they can be checked here instead of being
+        # remembered -- violating FA's pair does not fail a check, it hangs the run.
+        order_problems = check_placement_order(placement, order_constraints)
+        if order_constraints:
+            print(f"[static-l1] {len(order_constraints)} declared placement-order "
+                  f"constraint(s): {'satisfied' if not order_problems else 'VIOLATED'}")
+        if order_problems:
+            for pb in order_problems:
+                print(f"[static-l1] {pb}")
+            if want_pack:
+                raise ValueError(
+                    "static L1 allocation refused: the emitted layout violates a "
+                    "placement-order constraint that the packer was given as an input. That "
+                    "is a packer bug, not a workload one -- the constraint was honoured "
+                    "during placement and must hold.")
+
+        # The checker runs in BOTH modes. A failure in report-only mode means the graph has a
+        # missing dependence edge that packing WOULD have turned into silent corruption --
+        # worth knowing even while the layout is untouched.
+        if opts.debug:
+            # Dump every pair the packer decided may share bytes, with the users that
+            # justified it. A sharing decision that looks wrong is either a liveness bug or a
+            # missing edge, and both are invisible in the emitted header.
+            from bingo_liveness import can_share as _cs
+            from bingo_l1_packer import _align_up as _al
+            byoff = {}
+            for hid, (h, off) in placement.items():
+                byoff.setdefault((h.chip_id, h.cluster_id), []).append((off, h, handle_users[hid][1]))
+            for key in sorted(byoff):
+                lst = sorted(byoff[key], key=lambda x: x[0])
+                for a in range(len(lst)):
+                    oa, ha, ua = lst[a]
+                    ea = oa + (_al(ha.size))
+                    for b in range(a+1, len(lst)):
+                        ob, hb, ub = lst[b]
+                        eb = ob + (_al(hb.size))
+                        if oa < eb and ob < ea:
+                            def _ab(x, y):
+                                for m in x:
+                                    for n2 in y:
+                                        if m is n2 or n2 not in desc.get(m, ()):
+                                            return False, (m.node_name, n2.node_name)
+                                return True, None
+                            f1, w1 = _ab(ua, ub)
+                            f2, w2 = _ab(ub, ua)
+                            print(f"[static-l1 dbg] cl{key[1]} SHARE {ha.name}[{oa},{ea}) "
+                                  f"/ {hb.name}[{ob},{eb}) A->B={f1} B->A={f2} "
+                                  f"blockAB={w1} blockBA={w2}")
+                            print(f"[static-l1 dbg]    {ha.name} users: "
+                                  + ", ".join(sorted(n.node_name for n in ua))[:220])
+                            print(f"[static-l1 dbg]    {hb.name} users: "
+                                  + ", ".join(sorted(n.node_name for n in ub))[:220])
+
+        issues = verify(placement, handle_users, desc, cap, "L1")
+        if issues:
+            print(f"[static-l1] CHECKER FOUND {len(issues)} PROBLEM(S):")
+            for i in issues[:20]:
+                print(f"[static-l1]   {i}")
+            if want_pack:
+                raise ValueError(
+                    "static L1 allocation refused: the placement is not provably safe. "
+                    "Pass static_l1=False to fall back to runtime allocation.")
+        else:
+            print("[static-l1] checker: placement is provably safe")
+
+        # Scratchpad slots. Same oracle, different granularity: every scratchpad is the same
+        # size, so this is graph colouring and the generated C multiplies slot by sizeof.
+        from bingo_l1_packer import pack_scratchpad_slots, verify_scratchpad_slots
+        dev_nodes = [n for n in nodes
+                     if n.kernel_name and n.kernel_name.startswith("__snax")]
+        sp_slots, sp_users = ({}, {})
+        if dev_nodes:
+            sp_slots, sp_users = pack_scratchpad_slots(dev_nodes, desc)
+            sp_issues = verify_scratchpad_slots(sp_slots, sp_users, desc)
+            per_cl = {}
+            for n, sl in sp_slots.items():
+                per_cl.setdefault(n.assigned_cluster_id, set()).add(sl)
+            # the arena is sized by max(slot)+1, so report that -- not the set size, which
+            # would hide a sparse numbering bug
+            print(f"[static-l1] scratchpads: {len(sp_slots)} nodes -> slots per cluster: "
+                  + ", ".join(f"cl{c}={max(v)+1}" for c, v in sorted(per_cl.items())))
+            if sp_issues:
+                print(f"[static-l1] CHECKER FOUND {len(sp_issues)} SCRATCHPAD PROBLEM(S):")
+                for i in sp_issues[:10]:
+                    print(f"[static-l1]   {i}")
+                if want_pack:
+                    raise ValueError("static L1 allocation refused: unsafe scratchpad slots")
+
+        self.static_l1_placement = placement if want_pack else None
+        self.static_l1_stats = stats if want_pack else None
+        self.static_l1_sp_slots = sp_slots if (want_pack and not no_sp_pack) else None
+        # A LAYOUT REPORT THAT DOES NOT MATCH THE HEADER IS WORSE THAN NO REPORT. Build once
+        # with static placement and once without, and the file from the first build would sit
+        # in the app directory describing addresses the second build does not use. Remove it.
+        if not want_pack and output_dir is not None:
+            import os as _os_rm
+            stale = _os_rm.path.join(output_dir, "static_l1_layout.csv")
+            if _os_rm.path.exists(stale):
+                _os_rm.remove(stale)
+                print(f"[static-l1] removed stale layout report {stale} "
+                      f"(this build does not place buffers)")
+
+        if want_pack:
+            # Print the WHOLE mode, not just that packing happened: a marker saying "packing
+            # happened" does not say WHICH packing happened, and that is how two bisect arms
+            # once ran as silent duplicates of the arm before them.
+            mode = [f"order={opts.order}"]
+            if not opts.share:
+                mode.append("no-share")
+            if no_sp_pack:
+                mode.append("no-scratchpad-slots")
+            if opts.guard_bytes:
+                mode.append(f"guard={opts.guard_bytes}B")
+            if opts.alignment != 256:
+                mode.append(f"align={opts.alignment}")
+            if opts.drain_guard:
+                mode.append("drain-guard")
+            if opts.pin_first:
+                mode.append(f"pin_first={','.join(opts.pin_first)}")
+            if opts.pin_last:
+                mode.append(f"pin_last={','.join(opts.pin_last)}")
+            print("[static-l1] ENABLED: emitting constant offsets [" + " ".join(mode) + "]")
+
+            # THE LAYOUT REPORT. Only when placement is actually owned by the compiler --
+            # in report-only mode the addresses in it would be ones nothing uses, which is
+            # worse than no file. See write_layout_csv for what the columns are for.
+            if output_dir is not None:
+                import os as _os_csv
+                rank = {n: i for i, n in enumerate(nx.topological_sort(self))}
+                csv_path = _os_csv.path.join(output_dir, "static_l1_layout.csv")
+                n_rows = write_layout_csv(csv_path, placement, handle_users, desc, rank, opts)
+                print(f"[static-l1] layout report: {csv_path} ({n_rows} buffers)")
+                png = write_layout_plot(
+                    _os_csv.path.join(output_dir, "static_l1_layout.png"),
+                    placement, handle_users, desc, rank, opts, capacity=cap)
+                if png:
+                    print(f"[static-l1] layout plot:   {png}")
+
+    def bingo_compile_dfg(self, app_name: str, output_dir: str, output_file_name: str, extra_include_header_list: list[str] | None, post_execute_code: list[str] | None = None, static_l1=False) -> None:
+        """Compile the DFG by assigning dep info and emitting C code.
+
+        `static_l1` is False by default: buffers keep their runtime `bingo_l1_alloc` handles
+        and nothing about the emitted addresses changes. Pass True to let the compiler place
+        them, or a StaticL1Options for the tuning knobs. A workload opts in explicitly --
+        see bingo_plan_static_l1 for why this is an argument and not an environment variable.
+        """
         # 1. Transformations
         # Add Entry Node
         self.bingo_transform_dfg_add_entry_node()
@@ -2401,6 +2698,13 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         # op (incl. dummies) is final. Packed into the descriptor by bingo_pack_node.
         if self.enable_tagged_deps:
             self.bingo_transform_dfg_allocate_dep_tags(tag_width=self.dep_tag_width)
+
+        # 1b. STATIC L1 ALLOCATION -- analysis and, when enabled, placement.
+        #
+        # Runs AFTER every transform, because the dummy set/check nodes those passes
+        # insert are real nodes with real ordering, and liveness computed before them
+        # would see a sparser graph than the hardware actually executes.
+        self.bingo_plan_static_l1(static_l1, output_dir=output_dir)
 
         # 2. Emit C Code
         self.bingo_emit_offload_c_code(
