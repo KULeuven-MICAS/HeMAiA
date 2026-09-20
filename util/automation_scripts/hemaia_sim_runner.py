@@ -1420,6 +1420,62 @@ class HeMAiASimRunner:
             self._container(["make", prep_target, *self._sim_make_args()])
             self._make_compile_input_relocatable(engine)
 
+    def _simv_stamp_path(self) -> Path:
+        """Where the record of HOW the standing simulation was built lives."""
+        return self.repo_root / "target/sim" / "bin" / f".{self.spec['binary']}.buildinfo"
+
+    def _write_simv_stamp(self) -> None:
+        """Record the build-affecting settings next to the simulation binary.
+
+        Only settings that change the COMPILED MODEL belong here -- not per-run flags.
+        """
+        stamp = {"waveform": self.waveform == "1", "engine": self.engine,
+                 "cfg": str(getattr(self, "cfg", ""))}
+        try:
+            self._simv_stamp_path().write_text(json.dumps(stamp, indent=2) + "\n")
+        except OSError as exc:                     # a stamp is a convenience, never fatal
+            print(f"[warn] could not write the simv build stamp: {exc}")
+
+    def _check_reused_simv(self) -> None:
+        """Refuse to reuse a simulation that was built differently from what was asked.
+
+        ``--sw-only`` skips the compile and inherits whatever ``simv`` is standing, and the
+        waveform setting is compiled in. Without this check a waveform build silently makes
+        every later iteration run at debug speed, and the converse -- ``--sw-only
+        --waveform 1`` -- produces no waveform at all rather than an error.
+
+        The stamp is written only by an actual compile, so a missing one means the simv
+        predates this check: warn and continue rather than blocking work on an old tree.
+        """
+        stamp_path = self._simv_stamp_path()
+        binary = self.repo_root / "target/sim" / "bin" / self.spec["binary"]
+        if not binary.exists():
+            return                                  # the existing "no simv" error is clearer
+        if not stamp_path.exists():
+            print(f"[warn] {binary.name} has no build stamp, so its waveform setting is "
+                  f"unknown -- it predates this check. Re-run without --sw-only to stamp it.")
+            return
+        try:
+            stamp = json.loads(stamp_path.read_text())
+        except (OSError, ValueError):
+            return
+        built = bool(stamp.get("waveform"))
+        want = self.waveform == "1"
+        if built == want:
+            return
+        want_s, have = ("with", "without") if want else ("without", "with")
+        raise RuntimeError(
+            f"--sw-only cannot give you this run.\n"
+            f"  asked for: a simulation {want_s} a waveform (--waveform "
+            f"{1 if want else 0})\n"
+            f"  standing:  {binary.name}, compiled {have} one\n"
+            f"--sw-only reuses the compiled model and only rebuilds the app binaries, so the "
+            f"waveform setting is baked in and cannot change here.\n"
+            f"  either way: re-run without --sw-only, or with --reuse-build, which "
+            f"recompiles the simulation but keeps the RTL.\n"
+            f"Delete {stamp_path} to override this check."
+        )
+
     def compile_simulation(self, *, prepared_inputs: bool = False) -> None:
         """Compile only the selected engine's shared simulation model.
 
@@ -1471,6 +1527,7 @@ class HeMAiASimRunner:
                 f"target/sim/work-{self.engine}/ for the real error "
                 f"(e.g. {self.spec['tool'] or self.engine} failing to start)."
             )
+        self._write_simv_stamp()
 
     def stage_simulation_artifacts(self, tasks_info: List[Tuple[Path, str]]) -> None:
         """Copy the selected shared simulator artefacts to every prepared task."""
@@ -2228,6 +2285,9 @@ class HeMAiASimRunner:
             return self.write_preparation_manifest(tasks, tasks_info, engines)
 
         if self.skip_compile:
+            # Refuse a reuse whose waveform setting differs from what was asked: the
+            # setting is compiled in, so --sw-only cannot honour a change to it.
+            self._check_reused_simv()
             print("[Step 4] Staging the pre-built simulation (skip_compile)")
         else:
             print("[Step 4] Preparing and compiling the simulation")
