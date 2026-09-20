@@ -279,15 +279,21 @@ static inline uint64_t __host_bingo_kernel_check_result(void *arg){
     }
 }
 
+// Define HOST_IDMA_DEBUG to enable per-transfer UART diagnostics and memory
+// probes. Keep them off by default to avoid slowing gate-level simulations;
+// __host_bingo_kernel_check_result still reports all result checks.
 static inline uint64_t __host_bingo_kernel_idma(void *arg){
     // Arg0-2: src, dst, size; Arg3: scratchpad_ptr
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
     uint64_t src_addr = ((uint64_t *)arg)[0];
     uint64_t dst_addr = ((uint64_t *)arg)[1];
     uint64_t size = ((uint64_t *)arg)[2];
+#ifdef HOST_IDMA_DEBUG
     bingo_kernel_scratchpad_t* sp = (bingo_kernel_scratchpad_t*)(uintptr_t)((uint64_t *)arg)[3];
+#endif
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
+#ifdef HOST_IDMA_DEBUG
     printf_safe(
         "Chip(%x, %x): [Host][iDMA] args: src_addr=0x%lx "
         "dst_addr=0x%lx size=%lu scratchpad_ptr=0x%lx\r\n",
@@ -302,6 +308,7 @@ static inline uint64_t __host_bingo_kernel_idma(void *arg){
             get_current_chip_loc_x(), get_current_chip_loc_y(), src_addr,
             (uint32_t)src_data[0], (uint32_t)src_data[1]);
     }
+#endif
 
     BINGO_TRACE_MARKER(BINGO_TRACE_HOST_IDMA_CFG_START);
     uint64_t tf_id = sys_dma_memcpy(get_current_chip_id(), dst_addr, src_addr, size);
@@ -315,6 +322,7 @@ static inline uint64_t __host_bingo_kernel_idma(void *arg){
     // iDMA.
     asm volatile("fence" ::: "memory");
     BINGO_TRACE_MARKER(BINGO_TRACE_HOST_IDMA_RUN_END);
+#ifdef HOST_IDMA_DEBUG
     if (size >= 2) {
         volatile const uint8_t *dst_data =
             (volatile const uint8_t *)(uintptr_t)dst_addr;
@@ -324,6 +332,7 @@ static inline uint64_t __host_bingo_kernel_idma(void *arg){
             get_current_chip_loc_x(), get_current_chip_loc_y(), dst_addr,
             (uint32_t)dst_data[0], (uint32_t)dst_data[1]);
     }
+#endif
     return BINGO_RET_SUCC;
 }
 
