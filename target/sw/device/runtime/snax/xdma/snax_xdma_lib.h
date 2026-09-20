@@ -42,11 +42,11 @@ static inline bool xdma_addr_in_local_l1(uint64_t addr) {
 // csrw_ss folds to a single POSTED `csrw` only when the CSR number is a compile-time
 // constant. Handed a runtime index it degrades to a jump table -- and the table lives in
 // .rodata, i.e. in L3, on a core with no data cache -- so every such write paid a
-// BLOCKING fabric round trip, ~144 cc with the fabric idle and far worse under load.
+// BLOCKING fabric round trip, and far worse under load.
 //
-// The AGU loops below were written that way: 30 destination-slot writes plus up to 20
-// temporal-dimension writes per arming, all with a runtime `i`. That is where the
-// measured 4,791 cc single-cluster arming cost came from -- against the iDMA's 11.
+// The AGU loops below were written that way: dozens of destination-slot and
+// temporal-dimension writes per arming, all with a runtime `i`. That is what made arming
+// cost orders of magnitude more than the iDMA's.
 //
 // Unrolled over the GENERATED counts, every CSR address is a literal and the runtime
 // dimension selects only the VALUE written. Same shape as snax_simd_program_fast, whose
@@ -654,8 +654,8 @@ inline void xdma_wait_task(xdma_task_t task) {
 inline void xdma_disable_all_extensions() {
     // Two posted writes, not a read-modify-write per extension. The enable registers hold
     // one bit per extension and nothing else, so clearing every bit IS disabling all of
-    // them -- and a csrr stalls the core to writeback where a csrw is posted (5.1 cc
-    // against 1.0, measured). snax_simd_use0 makes the same trade for the SIMD block.
+    // them -- and a csrr stalls the core to writeback where a csrw is posted.
+    // snax_simd_use0 makes the same trade for the SIMD block.
     snax_write_xdma_cfg_reg(XDMA_SRC_ENABLE_PTR, 0);
     snax_write_xdma_cfg_reg(XDMA_DST_ENABLE_PTR, 0);
 }

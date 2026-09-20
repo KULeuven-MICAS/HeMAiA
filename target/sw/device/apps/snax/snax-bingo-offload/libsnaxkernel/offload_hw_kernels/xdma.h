@@ -10,18 +10,11 @@
 // helpers (transpose, submatrix, expand, concat, pad, gather), and the writer
 // junction ops (elementwise_add). No versacore streamer CSR writes here.
 //
-// WHAT USED TO BE HERE AND IS NOT ANY MORE. The FP16 stream operators
-// (StreamMap / StreamReduce / StreamElementwise / Fp16ToInt8) and the fused
-// whole-ops built on them -- softmax, rmsnorm, silu, swiglu, rope -- lived in
-// this file because on the two-core cluster those extensions were attached to
-// the xDMA's READER port. The four-engine split cluster gives them a block of
-// their own on hart 1, so they moved to offload_hw_kernels/simd.h along with
-// the READER_EXT_* / BINGO_HAS_* availability gates that only they used.
-//
-// What stayed is what is genuinely the xDMA's: the AGU, the Transposer (a wire
+// The FP16 stream operators and the fused whole-ops built on them live in
+// simd.h, not here: on the split cluster the SIMD block is a separate engine.
+// This file is what is genuinely the xDMA's -- the AGU, the Transposer (a wire
 // permutation, not compute), Memset, the writer junctions, and the AXI path
-// that makes cross-cluster and cross-chiplet transfers possible at all. The
-// SIMD block has none of that -- it is local-TCDM only.
+// that makes cross-cluster and cross-chiplet transfers possible at all.
 
 #pragma once
 
@@ -189,8 +182,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_1d_copy(void *arg)
 // The fan-out is in the writer's destination-address slots, so this is ONE transfer with
 // ONE finish, not N copies. That is what separates it from a software loop over
 // __snax_bingo_kernel_xdma_1d_copy: the loop's single issuer serialises and idles on the
-// WAR edge (measured as the V-push arm), while the hardware commits every destination from
-// the same read stream.
+// WAR edge, while the hardware commits every destination from the same read stream.
 //
 // Used by FlashAttention when the four clusters hold four query heads of ONE GQA group:
 // they share K and V byte for byte, so pulling those bytes four times over the quadrant's

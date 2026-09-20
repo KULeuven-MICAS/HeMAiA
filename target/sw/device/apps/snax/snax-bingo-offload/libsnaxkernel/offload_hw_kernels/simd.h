@@ -1616,20 +1616,15 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_fa_softmax(void *arg) {
         memo->bc    = bc;
         memo->dhead = dhead;
     }
-    // The PROLOGUE does NOT return here. It used to, and that left the expensive half of
-    // the config cold.
+    // The PROLOGUE does NOT return here, because the rest of the config is where the cost
+    // is: a handful of instruction-cache line refills in this function's base-re-pointing
+    // block and snax_simd_program_fast(). A refill is cheap on an idle fabric and expensive
+    // while the iDMA streams a tile through the same path, which is exactly when the first
+    // real tile runs. Doing them in the prologue moves the refills into a quiet window and
+    // every later tile hits in the icache.
     //
-    // WHAT THAT COST IS. The span is only a few dozen instructions, and nearly all of its
-    // cycles are a handful of stalls at PCs exactly one instruction-cache line apart: they
-    // are line refills. A refill costs tens of cycles on an idle fabric but well over a
-    // thousand while the iDMA streams a tile through the same path, and the first real tile
-    // runs precisely under that traffic.
-    //
-    // The lines it misses are this function's base-re-pointing block and
-    // snax_simd_program_fast(). Running them in the PROLOGUE instead moves the refills
-    // into a quiet window, and every later tile then hits in the icache. Nothing else
-    // changes: no beat is moved, no accelerator task is queued, and the running state is
-    // still left alone -- seed_state is 0 for a prologue node, so init_state below does
+    // Nothing else changes: no beat is moved, no accelerator task is queued, and the running
+    // state is left alone -- seed_state is 0 for a prologue node, so init_state below does
     // not run and the xDMA memsets remain the only writer of m and l.
     if (tile_idx == 0u && seed_state) simd_fa_init_state(arena, bc, dhead);
     sh[FA_SH_TAP_IN].base = (void *)(uint32_t)s16_src;

@@ -1738,7 +1738,7 @@ static inline float __bingo_reduce_max_f16(const _Float16* in, uint64_t n){
 // Same Ara constraint as __bingo_reduce_sum_f16: the reduction source must be LMUL=1, so
 // the i32 accumulator has to land in i32m1, which drags the i8 load down to i8mf4 --
 // VLEN/32 elements, no better than int32 itself. That is why reduce_sum is the one op
-// where the NARROWEST type is the SLOWEST (int8 77900 cc vs int32 58458 cc): int8 pays
+// where the NARROWEST type is the SLOWEST: int8 pays
 // two widening converts and retires no extra elements for them. Loading i8m1 and widening
 // up to i32m4 (4x the elements) is not available: Ara silently hangs on vredsum.vs with
 // an m4 source.

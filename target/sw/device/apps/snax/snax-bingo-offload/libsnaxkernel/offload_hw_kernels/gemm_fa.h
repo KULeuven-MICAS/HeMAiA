@@ -276,7 +276,7 @@ static uint32_t __bingo_gemm_fa_run(uint32_t A_addr, uint32_t B_addr, uint32_t C
     // slower -- which would flatter exactly the configurations this is meant to measure.
     //
     // perf_addr is L1 and this core is its only writer, so the read-modify-write needs no
-    // lock. Cost is five RO CSR reads per dispatch against a dispatch of ~4,000 cycles.
+    // lock. Cost is five RO CSR reads against a dispatch three orders of magnitude longer.
     if (perf_addr) {
         volatile uint32_t *pf = (volatile uint32_t *)(uintptr_t)perf_addr;
         pf[0] += csrr_ss(VERSACORE_PERFORMANCE_COUNTER);

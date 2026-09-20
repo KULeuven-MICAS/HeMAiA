@@ -337,8 +337,8 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_1d_copy_args {
 //
 // The fan-out is HARDWARE: the xDMA writer holds XDMA_MAX_DST_COUNT destination address
 // slots and commits one transfer to all of them, so this is one task and one finish, not N
-// sequential copies. That distinction is the whole point -- a software loop over N unicast
-// copies was measured (as the V-push arm) and lost, because its single issuer serialises.
+// sequential copies. That distinction is the whole point: a software loop over N unicast
+// copies loses, because its single issuer serialises.
 //
 //   src      : the source, a FULL 64-bit address -- typically L3 or the memory chiplet.
 //   dst[]    : dst_num destinations, each a full (chip|cluster|offset) address, which is
@@ -815,9 +815,9 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_fa_softmax {
   //               accelerator task and does not touch m, l or O, so the node is pure setup.
   //   2 PRIMED    trust the memo even on tile 0. Legal only when a PROLOGUE node for THIS
   //               arena is an ancestor in the graph.
-  // The build is 222 scalar TCDM stores that cost 9-14 cc each once the iDMA is streaming
-  // through the same ports -- 4,470 cc measured on decode's first tile. PROLOGUE+PRIMED
-  // moves that off the critical path; tile 0 then costs ~150 cc like every other tile.
+  // The build is a few hundred scalar TCDM stores, and each costs several times more once
+  // the iDMA is streaming through the same ports -- which is exactly when the first tile
+  // runs. PROLOGUE+PRIMED moves it off the critical path, so tile 0 costs what the rest do.
   uint32_t geom_mode;
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_simd_fa_softmax_args_t;

@@ -166,10 +166,9 @@
 // s2done[round]: written cross-chip by chip 0x00 into every row collector once stage 2 has
 // retired. A row collector must not reprogram its xDMA for the next round while stage 2 of
 // this one is still FORWARDING through it -- it is a middle hop for stage 2 immediately after
-// having been the collector of stage 1, which is exactly the role change that a stranded AW
-// descriptor in the adapter used to break. Unlike the per-round release the chain sources used
-// to hold on, this one cannot deadlock against the sweep's shape: 0x00 waits for every row's
-// submission each round, so a row collector is never more than about one round ahead of it.
+// having been the collector of stage 1, which is the role change a stranded AW descriptor in
+// the adapter breaks. This wait cannot deadlock against the sweep's shape: 0x00 waits for
+// every row's submission each round, so a row collector is never far ahead of it.
 #define S2DONE_OFF (SUBMIT_OFF + (uint32_t)SUBMIT_WORDS * 4u)
 #define S2DONE_WORDS NUM_ROUNDS
 // One final release, broadcast by the collector when the whole sweep is done.
@@ -362,10 +361,9 @@ static void sentinel_fill(uint32_t addr) {
 // the race anyway); a warm second gather completes in ~31 cycles and loses it every time --
 // which is exactly the "only the first gather works" symptom.
 //
-// The old 4-chiplet bring-up app never hit this only because it printf'd twice between the
-// wait and the check, which incidentally gave the write time to land. Depending on a printf
-// for correctness is not a barrier, so wait explicitly: poll until the destination stops
-// reading as the sentinel, bounded so a genuinely dead transfer still reports.
+// A printf between the wait and the check happens to give the write time to land, which is
+// not a barrier. Wait explicitly: poll until the destination stops reading as the sentinel,
+// bounded so a genuinely dead transfer still reports.
 static void settle_dst(uint32_t addr) {
     volatile uint32_t *settle = (volatile uint32_t *)(uintptr_t)addr;
     for (uint32_t s = 0; s < SETTLE_SPINS; s++) {
@@ -677,14 +675,12 @@ int main() {
                         // chiplet alive while the collector gathers is the SINGLE final
                         // release at the end.
                         //
-                        // It used to hold here, per round, on a per-round release flag. That
-                        // deadlocks against the sweep's own shape: a source announces round r
-                        // as soon as it reaches it, but the collector may still be several
-                        // rounds behind, working through widths this source sits out. The wait
-                        // then expires on the first wide round after a run of narrow ones and
-                        // the chiplet reports a spurious error even though every gather passed.
-                        // Measured on the 2x2 bring-up: snake indices 2 and 3 timed out three
-                        // times each; index 1, which is in every round, never did.
+                        // NOT a per-round release flag here. That deadlocks against the
+                        // sweep's own shape: a source announces round r as soon as it reaches
+                        // it, but the collector may be several rounds behind, working through
+                        // widths this source sits out. The wait then expires on the first wide
+                        // round after a run of narrow ones and the chiplet reports a spurious
+                        // error even though every gather passed.
                         xchip_store_u32(
                             COLLECTOR,
                             tcdm_base + READY_OFF + (uint32_t)(r * NUM_CHIPLETS + me) * 4u,

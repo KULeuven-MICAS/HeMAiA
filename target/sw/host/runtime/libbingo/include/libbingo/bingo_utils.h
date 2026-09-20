@@ -277,9 +277,9 @@ BINGO_STATIC_ASSERT(BINGO_CHIP_ID_WIDTH >= BINGO_CLOG2(BINGO_MAX_CHIP_ROUTING_ID
 #define DEP_SET_ALL_CHIPLET_WIDTH  1
 #define DEP_SET_ALL_CHIPLET_SHIFT  NEXT_SHIFT(DEP_SET_ENABLED_SHIFT, DEP_SET_ENABLED_WIDTH)
 
-// BUG FIX (2): this used to be N_CHIPLETS_WIDTH (clog2 of the chiplet COUNT, 0 on a
-// single-chiplet cfg). The field carries the same routing id as assigned_chiplet_id and
-// the RTL types both as chip_id_t, so it is ChipIdWidth wide.
+// ChipIdWidth, not clog2 of the chiplet COUNT: the field carries the same routing id as
+// assigned_chiplet_id and the RTL types both as chip_id_t. (clog2 of the count is 0 on a
+// single-chiplet cfg, which silently narrows the field to nothing.)
 #define DEP_SET_CHIPLET_ID_WIDTH   BINGO_CHIP_ID_WIDTH
 #define DEP_SET_CHIPLET_ID_SHIFT   NEXT_SHIFT(DEP_SET_ALL_CHIPLET_SHIFT, DEP_SET_ALL_CHIPLET_WIDTH)
 
@@ -297,8 +297,7 @@ BINGO_STATIC_ASSERT(BINGO_CHIP_ID_WIDTH >= BINGO_CLOG2(BINGO_MAX_CHIP_ROUTING_ID
 /// ReservedBitsForTaskDesc, and SW leaves it zero.
 #define BINGO_TASK_DESC_LAYOUT_BITS NEXT_SHIFT(DEP_SET_TAG_SHIFT, DEP_SET_TAG_WIDTH)
 
-// The descriptor used to be a bare uint64_t with no size check at all, which is how the C
-// side came to compute a 50-bit layout against a 65-bit RTL struct without anyone noticing.
+// Without these the C layout and the RTL struct can disagree on width silently.
 BINGO_STATIC_ASSERT(BINGO_TASK_DESC_WIDTH % 64 == 0,
                     "BINGO_TASK_DESC_WIDTH must be a whole number of 64-bit words");
 BINGO_STATIC_ASSERT(BINGO_TASK_DESC_LAYOUT_BITS <= BINGO_TASK_DESC_WIDTH,
