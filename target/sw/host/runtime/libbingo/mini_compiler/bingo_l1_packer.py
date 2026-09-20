@@ -2,29 +2,22 @@
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 #
-# STATIC PLACEMENT of L1 buffers, and the checker that makes it safe to switch on.
+# Static placement of L1 buffers, and the checker that makes it safe to switch on.
 #
-# Placement is first-fit-decreasing over the interference graph from bingo_liveness: take
-# buffers largest first, put each at the lowest offset where it does not overlap any buffer it
-# interferes with. Correct by construction, no dependency, and for the buffer populations this
-# compiler produces -- a handful of large long-lived streams plus a long tail of single-node
-# scratchpads -- it is close to optimal, because the tail packs into the gaps the head leaves.
+# Placement is first-fit over the interference graph from bingo_liveness: each buffer goes at
+# the lowest offset where it does not overlap anything it interferes with. The ORDER buffers
+# are considered in is a correctness property, not just a quality one -- see pack().
 #
-# MiniMalloc solves the same formulation exactly and would slot in here; it consumes precisely
-# the (size, interference) data built above. Worth adopting when `verify` reports a real gap
-# between the achieved peak and the interference lower bound, and not before.
+# The checker ships alongside because packing changes what a missing dependence edge costs.
+# Without it such a bug corrupts one buffer and that buffer's checks fail. With it the packer
+# concludes a buffer died early, puts another on top, and the corruption surfaces in something
+# unrelated. So `verify` re-derives safety from the placement alone, asking the liveness oracle
+# again rather than trusting the packer's bookkeeping: a packer bug and a checker bug would
+# both have to be wrong to get through.
 #
-# ---------------------------------------------------------------------------------------
-# WHY THE CHECKER SHIPS IN THE SAME FILE
-#
-# Today a missing dependence edge costs correctness on ONE buffer, and the checks that fail
-# are that buffer's. Under packing it costs correctness on TWO UNRELATED buffers: the packer
-# concludes a buffer died early, puts something else at that offset, and the corruption
-# surfaces in whatever the other buffer feeds. The failure is no longer local to the mistake.
-#
-# So `verify` re-derives, from the placement alone, that no two buffers sharing bytes can ever
-# be live together -- and it does so by asking the liveness oracle again rather than trusting
-# the packer's bookkeeping. A packer bug and a checker bug would have to agree to get through.
+# MiniMalloc solves the same formulation exactly and consumes the same (size, interference)
+# data. Worth adopting when `verify` reports a real gap between the achieved peak and the
+# interference lower bound.
 
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
@@ -32,38 +25,23 @@ from typing import Dict, List, Optional, Tuple
 from bingo_liveness import build_interference, can_share
 from bingo_mem_handle import BingoMemAlloc, BingoMemAllocView
 
-# ALIGNMENT MUST REPRODUCE THE PHASE THE RUNTIME ALLOCATOR ALWAYS PRODUCED, NOT MERELY THE
-# ALIGNMENT IT PROMISED.
-#
-# bingoHeapMalloc rounds every fragment to ALIGN_UP(size + 128, 256) and hands back frag + 128.
-# The promised alignment is 128, but because every fragment is a multiple of 256, EVERY buffer
-# it ever returned sits at the same offset modulo 256. No workload has ever run with a buffer
-# on the other phase.
-#
-# Packing at 128 does not violate any stated contract and still breaks FA: five of fifteen
-# buffers -- including Q -- land 128 B out of that phase, and the first packed RTL run failed
-# its first check with the softmax row max about 4x too large on every row. A TCDM bank row is
-# 256 B wide, so a buffer on the wrong phase is spread across the banks differently than the
-# streamers have ever seen.
-#
-# So the rule is: a compiler that takes over placement inherits the properties of what it
-# replaces, including the accidental ones. Reproduce the phase.
+# Alignment reproduces the PHASE the runtime allocator always delivered, not merely the
+# alignment it promised. bingoHeapMalloc rounds each fragment to ALIGN_UP(size + 128, 256) and
+# returns frag + 128: it promises 128, but every buffer it ever returned shares one offset
+# mod 256, and a TCDM bank row is 256 B. Packing at 128 respects the contract and still puts
+# buffers on a phase no streamer has seen.
 L1_ALIGNMENT = 256
 
 
 @dataclass(frozen=True)
 class StaticL1Options:
-    """How to place L1 buffers. Passed in as an argument; nothing here reads the environment.
+    """How to place L1 buffers.
 
-    An earlier version of this pass was driven by BINGO_L1_* environment variables. That was
-    convenient for a bisect and wrong as an interface: a switch that changes generated code was
-    ambient, so it could be set in one process and silently absent in the one that mattered.
-    Two RTL validation rounds were lost to exactly that -- the SW build runs inside a container
-    that forwarded no environment, so a "packed" arm quietly built unpacked, passed, and read
-    as evidence that packing was harmless.
+    Passed in as an argument and never read from the environment: this changes generated code,
+    and the SW build runs inside a container, so an ambient switch can be set where a build is
+    launched and absent where the compiler runs -- silently.
 
-    `enable` defaults to False: a workload opts in, and every other field only means anything
-    once it has.
+    `enable` defaults to False; every other field only means anything once it is set.
     """
 
     enable: bool = False
@@ -91,17 +69,11 @@ class StaticL1Options:
 #: What a workload gets when it passes `static_l1=True`.
 STATIC_L1_ON = StaticL1Options(enable=True)
 
-# A SECOND PROPERTY THE OLD ALLOCATOR ALWAYS DELIVERED: A GAP BETWEEN NEIGHBOURS.
-#
-# Because bingoHeapMalloc returns frag + 128 out of a fragment rounded to 256, consecutive
-# buffers were always separated by at least the next fragment's 128-byte header. Nothing
-# documents that as usable slack, but a kernel or streamer that writes one row past the end of
-# its buffer would have landed in that header and corrupted nothing anyone checks.
-#
-# A packed layout puts the neighbour there instead. StaticL1Options.guard_bytes restores the
-# gap, so that "does some kernel overrun its buffer?" can be answered with one run instead of
-# an audit of every streamer's addressing. It is a diagnostic, not a fix: if it turns a failing
-# arm green, the overrunning kernel still has to be found.
+# The old allocator also always left a gap: consecutive buffers were separated by the next
+# fragment's 128-byte header, so a kernel writing one row past its buffer corrupted nothing
+# anyone checks. StaticL1Options.guard_bytes restores that slack, to answer "does some kernel
+# overrun?" in one run. A diagnostic, not a fix -- if it turns a failing arm green, the
+# overrunning kernel still has to be found.
 
 
 def _align_up(x: int, a: int = L1_ALIGNMENT) -> int:
@@ -218,31 +190,19 @@ def pack(handle_users, desc, level: str = "L1", constraints=None,
             rest = [i for i in idxs if i not in set(pinned)]
             order = pinned + sorted(rest, key=lambda i: (-items[i][0].size, items[i][0].name))
         elif opts.order == "name":
-            # ALLOCATION ORDER -- THE DEFAULT, AND DELIBERATELY NOT THE BEST-PACKING ONE.
+            # ALLOCATION ORDER, THE DEFAULT, AND DELIBERATELY NOT THE BEST-PACKING ONE.
             #
-            # The emitter allocates handles alphabetically, so this is the order the runtime
-            # allocator would have used. With BINGO_L1_GUARD=128 and BINGO_L1_NO_SHARE=1 it
-            # reproduces that layout byte for byte, which is how the mechanism was validated
-            # on RTL (8/8 on fa_decode_4cluster).
-            #
-            # WHY IT IS THE DEFAULT. First-fit-DECREASING packs the small-buffer tail into the
-            # gaps the big ones leave and is worth a few percent. It is not worth what it
-            # costs. A kernel that writes past the end of one buffer, or that computes an
-            # address as `other_buffer - my_buffer`, depends on the RELATIVE ORDER of two
-            # allocations -- and nothing declares that dependency. On fa_decode_4cluster,
-            # largest-first put fa_s16_0 immediately after fa_v8_1 and every softmax row
-            # maximum came out wrong; moving fa_v8_1 elsewhere fixes it with no other change.
-            # Allocation order preserves every "X before Y" relationship by construction while
-            # still reclaiming whatever the liveness analysis finds.
-            #
-            # order="size" restores first-fit-decreasing for experiments.
+            # The emitter allocates handles alphabetically, so this reproduces the order the
+            # runtime allocator used. Largest-first packs the small-buffer tail into the gaps
+            # the big ones leave and is worth a few percent, but a kernel that writes past the
+            # end of one buffer, or computes an address as `other_buffer - my_buffer`, depends
+            # on the RELATIVE ORDER of two allocations and nothing declares that. Allocation
+            # order preserves every "X before Y" relationship by construction while still
+            # reclaiming what the liveness analysis finds. order="size" for experiments.
             order = sorted(idxs, key=lambda i: items[i][0].name)
         elif opts.order == "reverse":
-            # Reverse alphabetical: every buffer moves, and in particular fa_arena_0 goes from
-            # first to last. Distinguishes "any reordering breaks FA" from "something about the
-            # largest-first layout specifically breaks it", and tests the arena's position,
-            # which is the one buffer whose contents the SIMD reads as structures rather than
-            # as data (simd_fa_build_shapes writes its task geometries at arena + 0).
+            # Every buffer moves. A bisect instrument: separates "any reordering breaks
+            # this" from "this particular layout does".
             order = sorted(idxs, key=lambda i: items[i][0].name, reverse=True)
         else:
             # largest first: the big streams claim low offsets, the scratchpad tail fills gaps
@@ -461,19 +421,12 @@ def verify_scratchpad_slots(slots, users, desc):
     return problems
 
 
-# ---------------------------------------------------------------------------------------
-# POST-EMISSION AUDIT OF THE GENERATED C
-#
-# The packer and the liveness oracle reason about buffers and about scratchpad slots. Neither
-# of them can see the third tenant of the same arena: the device ARGUMENT structs, which are
-# bump-allocated from `<arena>_off`. When slot packing is on, the slot block sits at the front
-# of the arena at offsets 0, 1*sp, 2*sp ... and the arg bump must therefore START above it.
-#
-# If it starts at 0 instead, args_dev_*[0] and slot 0 are the same bytes. Nothing upstream
-# notices: the arena size still adds up (both terms are in it), the build is clean, every
-# static check passes, and the only symptom is a task at run time reading its own arguments
-# out of some other node's scratchpad. That is why this is checked on the emitted artefact
-# rather than argued about at the point of emission -- the artefact is the thing that ships.
+# Post-emission audit of the generated C. The packer reasons about buffers and the slot
+# colouring about scratchpads; neither can see the third tenant of the same arena, the device
+# argument structs bump-allocated from `<arena>_off`. With slot packing on, the slot block
+# sits at the front, so the arg bump must start above it -- otherwise args_dev_*[0] and slot 0
+# are the same bytes, every static check still passes, and a task reads its arguments out of
+# another node's scratchpad at run time. Checked on the artefact, because that is what ships.
 
 _SP_ALIGN_RE = r"ALIGN_UP\(sizeof\(bingo_kernel_scratchpad_t\), 64\)"
 
@@ -515,14 +468,9 @@ def check_emitted_arena_text(text: str) -> List[str]:
 # DECLARED PLACEMENT ORDER
 #
 # A kernel that computes an address in one buffer as an offset from another makes the two
-# buffers' RELATIVE placement part of its ABI. FA's SIMD softmax does exactly that twice (see
-# SnaxBingoKernelSimdFaSoftmaxArgs.PLACEMENT_ORDER), and it held for free only because
-# bingo_l1_alloc emitted handles alphabetically and "fa_arena" sorts before "fa_p8"/"fa_s16".
-#
-# Measured on RTL: violate it and the row maximum still comes out right -- that chain is
-# arena-internal -- while P and the row sum are wrong and the run hangs before reporting them.
-# A constraint whose violation looks like a hang is exactly the kind that must be checked by a
-# tool rather than remembered.
+# buffers' RELATIVE placement part of its ABI. Declared on the args class (PLACEMENT_ORDER),
+# honoured by pack() and re-checked against the emitted layout: a constraint whose violation
+# shows up as a hang rather than a failed check must be enforced by a tool, not remembered.
 
 def collect_placement_order(nodes):
     """[(earlier_handle, later_handle, why)] declared by the kernels on these nodes."""
@@ -556,19 +504,12 @@ def check_placement_order(placement, constraints):
     return sorted(set(problems))
 
 
-# ---------------------------------------------------------------------------------------
-# THE LAYOUT REPORT
+# The layout report. One row per buffer: its bytes, the nodes that touch it, the buffers it
+# shares those bytes with, and the node whose first touch of the next occupant ends its life.
 #
-# When the compiler owns placement, the one question worth answering quickly is "which node
-# wrote over this buffer, and was it allowed to?". The emitted header gives offsets and the
-# console gives totals, but neither says WHY a buffer sits where it does or WHO the reuse was
-# justified by -- and that is exactly what a corruption bug needs.
-#
-# Every row is one buffer, with its bytes, the nodes that touch it, the buffers it shares those
-# bytes with, and the node whose first touch of the next occupant ends its life. The
-# `overwritten_by` column is the one to read first when data goes wrong: it names the node that
-# is allowed to clobber this buffer, so a value that changes before that node has run is a
-# liveness bug, and one that changes after it is working as designed.
+# `overwritten_by` is the column to read when data goes wrong: it names the node allowed to
+# clobber this buffer, so a value that changes before that node ran is a liveness bug, and one
+# that changes after it is working as designed.
 
 def write_layout_csv(path, placement, handle_users, desc, topo_rank, opts, level="L1"):
     """One row per placed buffer. Returns the number of rows written."""
@@ -638,14 +579,12 @@ def write_layout_plot(path, placement, handle_users, desc, topo_rank, opts,
                       level="L1", capacity=None):
     """Address against time: one rectangle per buffer, one panel per cluster.
 
-    This is the picture the CSV's numbers describe. The x extent of a rectangle is the
-    buffer's live range -- first node that touches it to last -- and the y extent is the bytes
-    it occupies. Two rectangles at the same height with no horizontal overlap are the two
-    buffers sharing those bytes, which is the whole mechanism in one glance; two that DO
-    overlap in both axes would be the bug the checker exists to prevent.
+    x is the buffer's live range, y the bytes it occupies. Two rectangles at the same height
+    with no horizontal overlap are two buffers sharing those bytes; two overlapping in both
+    axes would be the bug the checker prevents.
 
-    Returns the path written, or None if matplotlib is unavailable (it is a debugging aid, so
-    it must never be the reason a build fails).
+    Returns the path written, or None if matplotlib is unavailable -- a debugging aid must
+    never be the reason a build fails.
     """
     try:
         import matplotlib
@@ -674,8 +613,7 @@ def write_layout_plot(path, placement, handle_users, desc, topo_rank, opts,
         rows = sorted(groups[key], key=lambda hu: placement[id(hu[0])][1])
         peak = max(placement[id(h)][1] + _footprint(h.size, al, gu) for h, _ in rows)
 
-        # which buffers actually share bytes with something: those are the ones the whole
-        # mechanism is about, so they get a hatch rather than being left to be spotted
+        # buffers that actually share bytes get a hatch: that is what the plot is for
         boxes = {}
         for h, users in rows:
             o = placement[id(h)][1]
@@ -704,9 +642,8 @@ def write_layout_plot(path, placement, handle_users, desc, topo_rank, opts,
             else:
                 thin_labels.append((off + hgt / 2, x1, label))
 
-        # A thin buffer cannot hold its name, and several of them land within a few hundred
-        # bytes of each other, so the names collided into an unreadable smear. Stack them on
-        # a ladder to the right of the panel with a leader line back to the box.
+        # Thin buffers cannot hold their names and land close together, so stack the labels
+        # on a ladder to the right with a leader line back to each box.
         thin_labels.sort()
         ladder_x = span * 1.02
         step = peak * 0.035

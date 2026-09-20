@@ -663,11 +663,6 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                 if indeg[succ] == 0:
                     heapq.heappush(ready, (_key(succ), tie, succ)); tie += 1
         assert len(seq) == len(topo_nodes), "priority topological sort dropped nodes"
-
-        # BINGO_STREAM_ORDER=topo restores the raw topological sort, so a stream can be
-        # A/B'd against the manager's Python model without rebuilding anything.
-        if os.environ.get("BINGO_STREAM_ORDER") == "topo":
-            seq = topo_nodes
         self._stream_order_cache = seq
         return seq
 
@@ -2447,18 +2442,14 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
     def bingo_plan_static_l1(self, opts=None, output_dir: str = None) -> None:
         """Liveness + static placement for L1 buffers.
 
-        `opts` is a StaticL1Options, or a bool for the two common cases:
+        `opts` is a StaticL1Options, or a bool:
 
-          static_l1=False (default) : report only. Nothing about the generated code changes.
-          static_l1=True            : place buffers statically, emit constant offsets.
-          StaticL1Options(...)      : the same, with the tuning and bisect knobs.
+          False (default) : report only, no address changes
+          True            : place buffers statically, emit constant offsets
+          StaticL1Options : the same, with the tuning and bisect knobs
 
-        Report-only is the default on purpose: this pass can be merged, run over every
-        workload in the tree and its numbers inspected before a single address moves. It is
-        an ARGUMENT rather than an environment variable because it changes generated code,
-        and an ambient switch that changes generated code can be set in one process and
-        silently missing in the one that runs the compiler -- which is exactly how two RTL
-        validation rounds were lost to a container that forwarded no environment.
+        Report-only by default so the pass can run over every workload and have its numbers
+        inspected before an address moves.
         """
         from bingo_liveness import (collect_handle_users, check_handle_identity,
                                     reachability, liveness_report,
@@ -2471,14 +2462,9 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         opts = opts if isinstance(opts, StaticL1Options) else StaticL1Options(enable=bool(opts))
         want_pack = opts.enable
 
-        # BISECT KNOBS. Static allocation is three independent changes stacked on one another:
-        #   (1) addresses become compile-time constants instead of heap pointers,
-        #   (2) scratchpads are coloured into slots instead of one per node,
-        #   (3) buffers whose live ranges are disjoint are given the same bytes.
-        # When a packed run fails on RTL, "packing is broken" is not a diagnosis -- these have
-        # nothing to do with each other and only (3) depends on the liveness argument being
-        # right. These two knobs peel (3) and then (2) off, leaving (1) alone, so a failure can
-        # be attributed to a layer rather than to the feature.
+        # Static allocation is three independent changes: constant addresses, scratchpad slot
+        # colouring, and buffer sharing. Only sharing depends on the liveness argument, so the
+        # options peel them apart and a failure lands on a layer rather than on the feature.
         no_sp_pack = not opts.pack_scratchpads
 
         nodes = sorted(self.node_list, key=lambda n: n.node_id)
@@ -2494,19 +2480,15 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
 
         desc = reachability(self, nodes)
 
-        # See RULE 4 in bingo_liveness: an accelerator's last write can drain when the engine
-        # is next configured, not when its node retires. Off by default until an RTL arm shows
-        # it is what the hardware needs; it can only lengthen live ranges, never shorten them.
+        # bingo_liveness RULE 4. Off by default; can only lengthen live ranges.
         if opts.drain_guard:
             handle_users = extend_users_for_engine_drain(handle_users, self)
             print("[static-l1] DRAIN_GUARD: same-core successors counted as users")
 
         print("[static-l1] " + liveness_report(handle_users, desc, "L1").lstrip())
 
-        # Collected BEFORE packing now: the declared order is an input to placement, not
-        # only something checked afterwards. The check still runs -- the packer honouring a
-        # rule and an independent oracle confirming it would both have to be wrong to get
-        # through, which is the same split as the liveness packer and its verifier.
+        # An input to placement, not only a check afterwards. The check still runs: packer
+        # and oracle would both have to be wrong to let a bad layout through.
         order_constraints = collect_placement_order(nodes)
         placement, stats = pack(handle_users, desc, "L1",
                                 constraints=order_constraints, opts=opts)
@@ -2514,10 +2496,8 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         print("[static-l1] placement if enabled:")
         print(report(stats, cap))
 
-        # A kernel that derives one buffer's address from another's makes their relative
-        # placement part of its ABI. Those constraints are declared on the args class
-        # (PLACEMENT_ORDER) precisely so that they can be checked here instead of being
-        # remembered -- violating FA's pair does not fail a check, it hangs the run.
+        # Declared on the args class (PLACEMENT_ORDER) so it can be checked rather than
+        # remembered: violating one hangs the run instead of failing a check.
         order_problems = check_placement_order(placement, order_constraints)
         if order_constraints:
             print(f"[static-l1] {len(order_constraints)} declared placement-order "
@@ -2607,9 +2587,7 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
         self.static_l1_placement = placement if want_pack else None
         self.static_l1_stats = stats if want_pack else None
         self.static_l1_sp_slots = sp_slots if (want_pack and not no_sp_pack) else None
-        # A LAYOUT REPORT THAT DOES NOT MATCH THE HEADER IS WORSE THAN NO REPORT. Build once
-        # with static placement and once without, and the file from the first build would sit
-        # in the app directory describing addresses the second build does not use. Remove it.
+        # A report that disagrees with the header beside it is worse than none.
         if not want_pack and output_dir is not None:
             import os as _os_rm
             stale = _os_rm.path.join(output_dir, "static_l1_layout.csv")
@@ -2619,9 +2597,8 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                       f"(this build does not place buffers)")
 
         if want_pack:
-            # Print the WHOLE mode, not just that packing happened: a marker saying "packing
-            # happened" does not say WHICH packing happened, and that is how two bisect arms
-            # once ran as silent duplicates of the arm before them.
+            # The whole mode, not just that packing happened: "packing happened" does not
+            # say WHICH packing, which is how two bisect arms became silent duplicates.
             mode = [f"order={opts.order}"]
             if not opts.share:
                 mode.append("no-share")
@@ -2639,9 +2616,8 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                 mode.append(f"pin_last={','.join(opts.pin_last)}")
             print("[static-l1] ENABLED: emitting constant offsets [" + " ".join(mode) + "]")
 
-            # THE LAYOUT REPORT. Only when placement is actually owned by the compiler --
-            # in report-only mode the addresses in it would be ones nothing uses, which is
-            # worse than no file. See write_layout_csv for what the columns are for.
+            # Only when the compiler owns placement: in report-only mode the addresses
+            # would be ones nothing uses, which is worse than no file.
             if output_dir is not None:
                 import os as _os_csv
                 rank = {n: i for i, n in enumerate(nx.topological_sort(self))}
