@@ -1710,6 +1710,12 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
             local_nodes = [node for node in all_nodes if node.assigned_chiplet_id == chiplet_id]
             num_local_nodes = len(local_nodes)
             list_name = f"bingo_hw_scheduler_task_desc_list_chip_{chiplet_id:02x}"
+            # The narrow SPM by default: the manager fetches the list over a 64-bit AXI-Lite
+            # master, so a read of the WIDE spm is upsized through two crossbars and costs
+            # wide-path bandwidth out of proportion to the descriptor it wants. Capacity is
+            # why it stays a knob -- see bingo_compile_dfg.
+            desc_alloc = ("bingo_l2_alloc" if getattr(self, "desc_list_in_narrow_spm", True)
+                          else "bingo_l3_alloc")
             count_name = f"bingo_hw_scheduler_num_task_desc_chip_{chiplet_id:02x}"
 
             # Emit num_tasks at the beginning. This counts DESCRIPTORS, not words -- it is
@@ -1720,13 +1726,13 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                  # Even if size is 0, we allocate 1 element to avoid issues with size 0 allocation if allocator doesn't support it, or just use 0.
                  # Using 1 for safety, similar to original array [1]
                  task_description_list += (
-                     f"uint64_t* {list_name} = (uint64_t*)bingo_l3_alloc(0x{chiplet_id:02x}, "
+                     f"uint64_t* {list_name} = (uint64_t*){desc_alloc}(0x{chiplet_id:02x}, "
                      f"1 * BINGO_TASK_DESC_WORDS * sizeof(uint64_t));\n")
                  for w in range(words):
                      task_description_list += f"{list_name}[0 * BINGO_TASK_DESC_WORDS + {w}] = 0x0000000000000000ULL;\n"
             else:
                 task_description_list += (
-                    f"uint64_t* {list_name} = (uint64_t*)bingo_l3_alloc(0x{chiplet_id:02x}, "
+                    f"uint64_t* {list_name} = (uint64_t*){desc_alloc}(0x{chiplet_id:02x}, "
                     f"{count_name} * BINGO_TASK_DESC_WORDS * sizeof(uint64_t));\n")
                 for idx, node in enumerate(local_nodes):
                     packed_val = self.bingo_pack_node(node)
@@ -2630,14 +2636,20 @@ class BingoDFG(DiGraphWrapper[BingoNode]):
                 if png:
                     print(f"[static-l1] layout plot:   {png}")
 
-    def bingo_compile_dfg(self, app_name: str, output_dir: str, output_file_name: str, extra_include_header_list: list[str] | None, post_execute_code: list[str] | None = None, static_l1=False) -> None:
+    def bingo_compile_dfg(self, app_name: str, output_dir: str, output_file_name: str, extra_include_header_list: list[str] | None, post_execute_code: list[str] | None = None, static_l1=False, desc_list_in_narrow_spm: bool = True) -> None:
         """Compile the DFG by assigning dep info and emitting C code.
 
         `static_l1` is False by default: buffers keep their runtime `bingo_l1_alloc` handles
         and nothing about the emitted addresses changes. Pass True to let the compiler place
         them, or a StaticL1Options for the tuning knobs. A workload opts in explicitly --
         see bingo_plan_static_l1 for why this is an argument and not an environment variable.
+
+        `desc_list_in_narrow_spm` defaults to True: the task-descriptor list goes in the
+        narrow SPM, which keeps descriptor fetches off the wide path. Pass False for the
+        wide SPM. It stays a knob because the narrow SPM is small and shared with the host
+        stack, so a DFG large enough to overflow it must be able to opt out.
         """
+        self.desc_list_in_narrow_spm = desc_list_in_narrow_spm
         # 1. Transformations
         # Add Entry Node
         self.bingo_transform_dfg_add_entry_node()
