@@ -48,6 +48,9 @@ class BingoNode(metaclass=ABCMeta):
         self._cond_exec_invert: bool = False
         # CERF groups this gating node writes on completion
         self._cerf_write_groups: list[int] = []
+        # Set by the dummy-set pass on whichever task SENDS the cross-die
+        # message for a gating region. See bingo_hw_manager_top.cerf_carry.
+        self._cerf_carry: bool = False
         # Set by compiler for auto-inserted gating nodes: points to predecessor
         self._pred_source_node = None
         # Set by compiler for guarded expert nodes: points to gating node (for SW guard)
@@ -231,6 +234,14 @@ class BingoNode(metaclass=ABCMeta):
     @cerf_write_groups.setter
     def cerf_write_groups(self, value: list[int]) -> None:
         self._cerf_write_groups = value
+
+    @property
+    def cerf_carry(self) -> bool:
+        return self._cerf_carry
+
+    @cerf_carry.setter
+    def cerf_carry(self, value: bool) -> None:
+        self._cerf_carry = value
 
     def __str__(self):
         return f"Node_ID{self._node_id}_Chiplet{self._assigned_chiplet_id}_Cluster{self._assigned_cluster_id}_Core{self._assigned_core_id}_Kernel{self._kernel_name}"
