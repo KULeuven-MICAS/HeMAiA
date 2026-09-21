@@ -89,6 +89,7 @@ from sim_golden_models import block_gemm_golden_model     # noqa: E402
 from bingo_kernel_args import (                           # noqa: E402
     SnaxBingoKernelIdma1dCopyArgs,
     SnaxBingoKernelXdma1dCopyArgs,
+    SnaxBingoKernelXdmaMulticastArgs,
     SnaxBingoKernelXdmaMemsetArgs,
     SnaxBingoKernelSimdFaSoftmaxArgs,
     SnaxBingoKernelGemmFaQkArgs,
@@ -109,6 +110,7 @@ SIMD_CORE = _ROLES["simd"]
 DMA_CORE = _ROLES["dm"]
 XDMA_CORE = _ROLES["xdma"]
 HOST_CORE = _ROLES["host"]
+CHECK_BYTE_EXACT = 0        # data_size IS the byte count for this mode
 CHECK_FP16_TOL = 2
 # Signed-int32, relative tolerance -- for an ACCUMULATOR (see host_kernel_args.h).
 CHECK_INT32_RELTOL = 5
@@ -142,6 +144,405 @@ BC = BR = DHEAD = S2_M = S2_K = S2_N = QSHIFT = None
 NCL = 4
 NKV_PER = None           # KV tiles per cluster; set by _load_params()
 
+# HOW THE WORK IS SPLIT ACROSS THE CLUSTERS OF ONE QUADRANT. See
+# docs/fa_decomposition_hierarchy.md for the full argument; the short version:
+#
+#   "kvsplit"  Each cluster owns a disjoint run of KV tiles and its own K. The softmax
+#              recurrence runs ALONG KV, so every cluster carries an independent (m, l)
+#              and ONE cross-cluster fold closes the run -- which is what exercises the
+#              ChainGather over the MonoidJunction.
+#
+#   "headpar"  Each cluster owns one QUERY HEAD of a GQA group. The group shares its KV
+#              head by definition, so K and V are byte-identical on all four clusters and
+#              only Q differs. They are read from main memory ONCE and multicast into the
+#              four L1s. No fold: each cluster's output is already a complete attention
+#              result for its own head.
+#
+# WHY THE DEFAULT IS headpar. FA decode's arithmetic intensity is Br exactly -- each KV
+# byte feeds Br query rows -- and Br is pinned to 32 by the SIMD beat. The four clusters
+# mux onto ONE 512-bit path, so machine balance is 4 x 1024 MAC/cc / 64 B/cc = 64 MAC/byte
+# against an intensity of 32: memory-bound by 2x, MEASURED as 68.3% array utilisation
+# versus 83.6% on one cluster, where the same intensity sits against a balance of 16.
+#
+# kvsplit cannot fix that from software. It divides the compute four ways and multiplies
+# the KV traffic four ways, so the ratio is a property of the decomposition, not of the
+# schedule -- which is why five arms that REORDERED traffic (V-push 50.5%, V-split 55.2%,
+# NVBUF=3 63.2%, pair-batch 54.6%, stagger 61.2%) were all reabsorbed. headpar amortises
+# one KV read over NCL x Br = 128 query rows, so the effective intensity is Br * NCL and
+# the balance point flips back to the compute-bound side. Main-memory traffic for the same
+# total work: 2.11 MiB -> 528 KiB.
+#
+# MEASURED, SIX ARMS, ONE BUILD FAMILY. ideal-array-cycles / pipeline, NQ=1, on the fixed
+# xDMA adapter (xdma_axi_adapter 0b96648, snitch_cluster 669ad0d2):
+#
+#   headpar, K broadcast + V per-cluster iDMA   62.6%   <-- the default here
+#   kvsplit                                     55.6%
+#   headpar, NO broadcast, K iDMA + V xDMA      51.2%
+#   headpar, K and V both broadcast             47.7%
+#   headpar, K+V broadcast + multicast warm-up  47.0%
+#   headpar, NO broadcast, both on the iDMA     38.6%
+#   headpar, broadcasts spread over 2 or 4 xDMAs  --    HANGS; see BCAST_SPREAD
+#
+# THE RESULT IS NOT "head-parallelism wins". Read the third row: head-parallelism with no
+# broadcast is WORSE than kvsplit (51.2% vs 55.6%) at identical traffic volume and with the
+# identical engine pairing. Four clusters reading the SAME bytes concurrently is worse than
+# four reading disjoint bytes. Every bit of headpar's advantage comes from the broadcast.
+#
+# But broadcasting BOTH operands is worse again (47.7%), because one issuer then serialises
+# two streams into a single 12,400 cc window during which all four arrays idle -- that gap
+# alone was 80% of the array idle, and 77% of it had nothing on the waiting clusters busy.
+#
+# SO THE OPTIMUM IS EXACTLY ONE BROADCAST OPERAND. Zero throws away the read sharing; two
+# serialises the only engine allowed to issue. That is a direct consequence of the adapter
+# holding ONE remote-write context -- the same constraint that makes BCAST_SPREAD hang --
+# and it is the whole design rule this file encodes.
+#
+# WHAT BINDS NOW IS THE SIMD SOFTMAX, not memory. Two independent checks agree: the
+# remaining array idle is 37-61% covered by SIMD and 0% by the xDMA on clusters 1-3; and
+# NQ=2, which doubles array work on the same delivered bytes and is worth +8.6 pp on
+# (memory-bound) kvsplit, is worth only +0.6 pp here because it doubles softmax work too.
+#
+# THE READ-INTENSITY ARGUMENT ABOVE IS THEREFORE RIGHT, with one correction it did not
+# make: cutting reads only helps once the writes are not funnelled through one issuer.
+# An earlier revision of this comment concluded the opposite -- "the broadcast cuts bytes
+# READ, not bytes WRITTEN, so it cannot help" -- which the 62.6% row refutes. What that
+# revision actually measured was the two-operand broadcast, and generalised from it.
+#
+# The cross-chiplet half of the idea is UNTOUCHED and still right -- chiplets do not share
+# a port, so KV-split + the in-fabric fold belongs there.
+#
+# NOTE ON THE 57.4% IN THE GIT HISTORY: that is this same kvsplit built WITHOUT the
+# multicast kernel in the device library. Adding one SNAX_EXPORT_FUNC entry shifts every
+# kernel address and the .rodata dispatch table, and .rodata reads from a cluster kernel
+# are blocking fabric round trips -- worth 3.7 pp. Carrying the capability costs that even
+# when it is unused; #ifdef the kernel out if the last point matters.
+DECOMP = "headpar"
+
+# WHICH operand rides the broadcast, under headpar. EXACTLY ONE SHOULD.
+#
+# See the six-arm table above: K only = 62.6%, K and V = 47.7%, neither = 51.2%. Both ends
+# of the range are worse than the middle, so this is a genuine optimum and not a monotone
+# knob.
+#
+# WHY K AND NOT V. Either single choice moves one stream off the broadcaster, but K is the
+# one QK(0) waits for, so broadcasting K puts the shared read on the critical path's own
+# operand while V -- needed later, by PV -- streams underneath on an engine that head-
+# parallelism otherwise leaves completely idle. MEASURED: with V on the iDMAs those engines
+# go from 230 cc of work in a 34,000 cc pipeline to 5,051-11,820 cc, and cluster 0's xDMA
+# drops 19,239 -> 10,457 cc. The 12,400 cc head stall disappears entirely; the largest
+# remaining gap is 2,051-2,909 cc.
+#
+# THE COST IS AN ASYMMETRY. Cluster 0 is the only cluster issuing a broadcast, so it is the
+# only one whose xDMA is loaded, and it is the slowest of the four (60.9% against
+# 61.8-64.0%). Without that asymmetry the mean would be ~64%. Under one remote-write
+# context there is no way to spread it -- see BCAST_SPREAD.
+#
+# BOTH ARE NOW FALSE: the multicast is no longer used. It does not survive a long KV axis --
+# at 16 tiles per cluster the broadcast arm stalls mid-stream around tile 11 while the
+# all-pull arm completes, and a stream that does not finish is not a faster stream. Every
+# operand now moves as an ordinary DMA: one cluster reads main memory, the other three read
+# that cluster's L1. See K_PULL_FROM_CL0 and V_PULL_FROM_CL0.
+BCAST_K = False
+BCAST_V = False
+
+# WHO ISSUES THE BROADCASTS. LEAVE THIS FALSE -- IT HANGS.
+#
+# True spreads tile j's broadcast onto cluster (j % NCL), so every engine both sends its own
+# tiles and receives the others'. `02-hemaia-integration-summary.md` names this as the
+# configuration its defects 1-3 make legal and asks for it to be re-run. It was, on a build
+# carrying those fixes (xdma_axi_adapter 0b96648, full RTL regen). IT STILL HANGS.
+#
+#   4 issuers:  cluster 2 xdma_grant_manager stalls at 3,714,373 ns, then cluster 0's grant
+#               manager + finish_manager.middle_last_write + wide_send together at 4,335,902
+#   2 issuers:  cluster 3 grant manager at 3,714,913 ns, cluster 0's three at 4,336,696
+#
+# The two diverge by 540 ns and 794 ns -- the same mechanism at the same point in the
+# program -- so neither the issuer count beyond two nor the fan-out width matters. And with
+# two issuers (clusters 0 and 2) the FIRST casualty is cluster 3, which issues nothing: the
+# grant manager that wedges first belongs to a pure RECEIVER. No i_read_stall_watchdog fires
+# anywhere, so this is not the finish-manager read path.
+#
+# Symptom if you trip it anyway: two xDMA harts spinning forever on `csrr 0x409` in
+# xdma_wait_task, and one .dasm growing past a gigabyte. Full write-up with timings in
+# docs/xdma_multi_issuer_multicast_hang.md.
+BCAST_SPREAD = False
+
+
+# WHICH ENGINE GETS TILE j's V, RELATIVE TO ITS K.
+#
+# BCAST_SPREAD alone does not help the FIRST tile, and the first tile is where headpar
+# loses. MEASURED on the single-issuer arm: the cold K0 broadcast costs 2,117 cc of config
+# plus 4,888 cc of run, the cold V0 another 1,075 + 4,650, and because owner(0) is cluster 0
+# for both they are SERIAL -- ~12,730 cc before the first PV can start, in a 34,314 cc
+# pipeline. Warm broadcasts are only ~1,700 cc each, so steady state was never the problem.
+#
+# A non-zero skew puts tile j's V on a different engine from its K, so the two cold
+# transfers overlap instead of queueing. NCL // 2 is the maximum separation on a quadrant.
+BCAST_V_SKEW = 0
+
+# WARM THE MULTICAST PATH BEFORE THE FIRST REAL TILE. MEASURED AND REFUTED -- leave False.
+#
+# The idea: the cold K0 broadcast runs 4,888 cc where warm ones run 1,237-1,908, and the
+# three head warm-ups exist because a core's first dispatch of a kernel is dominated by
+# icache refills. So warm the multicast too, with 64 B into a scratch buffer.
+#
+# It does not work, in BOTH configurations, and it costs:
+#
+#   K+V broadcast:      47.7% -> 47.0%   cluster 0's xDMA busy went UP, 19,239 -> 19,547 cc
+#   K only, V on iDMA:  62.6% -> 62.4%   cluster 0 alone 60.9% -> 55.7%, others +0.2..+3.7
+#
+# The per-cluster split is the tell: it hurts exactly the cluster that runs it and nobody
+# else. It is pure added work on the issuing engine with no compensating saving.
+#
+# TWO REASONS IT FAILED, and the second is a flaw in the experiment rather than the idea.
+# (a) 64 B is a completely different descriptor shape from a 65,536 B tile, so it would not
+#     warm the path that actually costs anything even if first-dispatch cost were the issue.
+# (b) more likely it is not first-dispatch cost at all: the cold broadcast runs while the
+#     whole quadrant is starting up. Contention, not refills.
+# If anyone retries this, warm it with a FULL-SIZE transfer and check whether the first
+# real broadcast's XDMA_RUN span actually shrinks -- that is the measurement that decides
+# it, not the end-to-end number.
+BCAST_WARMUP = False
+
+# Let head-parallel put V on the cluster's OWN xDMA, the way kvsplit does.
+#
+# The `bcast is not None` branch below forces V onto the iDMA under head-parallel, because a
+# cluster cannot absorb an incoming broadcast while its own xDMA is running a transfer. That
+# rule is right WHILE ANYTHING IS BEING BROADCAST, but with BCAST_K and BCAST_V both off
+# there is no incoming remote write at all, and leaving four xDMAs idle would make the
+# no-broadcast control unfair to itself.
+#
+# EXISTS FOR THAT CONTROL, which is the one that justifies the whole broadcast:
+#
+#   V_ON_XDMA=True,  no broadcast   51.2%   K on 4 iDMAs, V on 4 xDMAs -- kvsplit's pairing
+#   V_ON_XDMA=False, no broadcast   38.6%   both on one iDMA per cluster; that engine binds
+#   K broadcast, V on iDMA          62.6%
+#
+# 51.2% is the honest floor for head-parallelism without a broadcast, and it is BELOW
+# kvsplit's 55.6% at identical traffic and identical engine use -- four clusters reading the
+# same bytes at the same time is worse than four reading disjoint bytes. Do not set this
+# True together with a broadcast: that is the arm whose receiving xDMAs all wedged.
+V_ON_XDMA = False
+
+# DO NOT BROADCAST THE FIRST TILE -- pull it per-cluster like KV-split does.
+# MEASURED AND REFUTED. Leave this False.
+#
+# The premise was sound and the first half of it held. The cold first multicast costs
+# 12,762 cc against ~2,500 for a warm one, every phase ~3x its warm value (kernel entry
+# 2,817 vs 23, slot config 2,042 vs ~350, the transfer itself 5,021 vs ~1,700), and it sits
+# on the startup critical path. Loading tile 0 per-cluster instead DID shrink the head, as
+# predicted: 16,332 -> 12,430 cc.
+#
+# It lost anyway, because the pipeline got 8,431 cc WORSE:
+#
+#   broadcast every tile   pipeline 25,103   idle  4,233- 8,927   biggest gap 2,356- 4,205
+#   tile 0 per-cluster     pipeline 33,534   idle  9,604-21,096   biggest gap 6,531-11,105
+#
+# end to end 46.6% -> 42.0%. And it is not bandwidth: the iDMAs took only ~2,400 cc more
+# work, the one extra tile. It is SERIALISATION. Tile 0 lands at the head of the same iDMA
+# chain that feeds V(0); with NVBUF = 2 the V chain is gated by PV completion, so a delay
+# at its head propagates down the whole chain. The cross-cluster WAR edges on BcastK2/K3
+# then make every cluster wait for the slowest of the four, which per-cluster loading has
+# just de-synchronised.
+#
+# The lesson, for anything else that tries to move work off the broadcaster: the iDMA is not
+# spare capacity here. It is already the critical engine for V, and the WAR chain amplifies
+# whatever is put in front of it.
+#
+# RE-MEASURED WITH THE ROTATED PULL AND IT STILL LOSES, but the shape of the loss changed:
+# the head win has nearly vanished while the pipeline cost has not. ROTATION ALREADY TOOK MOST
+# OF WHAT THIS WAS REACHING FOR -- with tile j fetched by cluster j % NCL the head's memory
+# traffic is already spread over four clusters -- and it still pays the full WAR-chain price.
+# Two knobs that each look like a head optimisation are not additive: they attack the same
+# serialisation, and rotation is the better of the two.
+BCAST_SKIP_FIRST = False
+
+# PULL V FROM CLUSTER 0's L1 INSTEAD OF FROM MAIN MEMORY.
+#
+# Under headpar every cluster's V is the same bytes, and today all four read them
+# independently from main memory -- 16 tile-reads, 79% of all main-memory read traffic.
+# The alternative: cluster 0 reads a tile once, the other three copy it out of cluster 0's
+# L1 with their OWN iDMAs. Same number of transfers per engine, a quarter of the
+# main-memory traffic, and the inter-cluster links carry the rest.
+#
+# bingo_l1_alloc(chip, cluster, size) returns a full SoC address, so naming another
+# cluster's buffer needs no address arithmetic.
+#
+# NOT the same as a broadcast: this is a PULL, so the three copies proceed in parallel on
+# three engines rather than being issued serially by one.
+#
+# MEASURED, and it wins on the metric that counts data movement:
+#
+#                        pipeline   head    window   ideal/pipe   busy/window
+#   V from main mem x4     25,103  16,332   41,435       65.7%        46.6%
+#   V pulled from cl0 L1   26,978  11,263   38,241       60.8%        50.8%
+#
+# WHY, and it is not the reason predicted. Main-memory read traffic does fall 1,327,104 ->
+# 540,672 B, but the shared port was only half used (32 B/cc of 64), so bandwidth was not
+# the constraint. What it relieves is STARTUP CONTENTION: in the baseline cluster 0's K
+# broadcast and all four V(0) fetches hit main memory at once. Moving three of those four
+# onto the inter-cluster links cuts the head by 5,069 cc -- the cold-start cost nothing
+# else has touched.
+#
+# The cost is real and visible: one extra dependency per tile (clusters 1..3 wait for
+# cluster 0's copy) makes the pipeline 1,875 cc longer and streaming efficiency worse.
+# It is outweighed about 2.7 : 1 here.
+#
+# THE TWO EFFECTS SCALE OPPOSITELY, so this is not unconditionally right. The head saving
+# is FIXED at ~5,069 cc; the pipeline penalty is PER TILE at ~469 cc. They cross near 11
+# KV tiles per cluster. Below that, pull; above it, read main memory four times and let
+# the four engines run free.
+V_PULL_FROM_CL0 = True
+
+# PULL K CROSS-CLUSTER TOO, ON THE OTHERWISE IDLE xDMAs -- no multicast at all.
+#
+# The V pull showed the head is a CONTENTION problem: routing traffic off main memory and onto
+# the inter-cluster links cut it by 5,069 cc even though the memory port was only half used.
+# This applies the same move to K, and removes the last multicast in the process.
+#
+# The multicast is worth removing on its own terms. Its first invocation costs 9,004 cc on
+# cluster 0 against ~2,500 for a warm one, and every phase of it is ~3x -- it is the single
+# largest item left in the head. It also makes cluster 0 asymmetric: the only cluster whose
+# xDMA has work, and the slowest of the four.
+#
+# The arrangement, with both engine types busy on every cluster:
+#   cluster 0     xDMA: K(j) from main memory      iDMA: V(j) from main memory
+#   clusters 1-3  xDMA: K(j) from cluster 0's L1   iDMA: V(j) from cluster 0's L1
+#
+# Every cluster then issues 4 K-sized transfers and 4 V-sized ones on separate engines, and
+# main-memory traffic is unchanged at 4 K + 4 V tiles. Note this is only legal because nothing
+# is being broadcast any more: the rule that a receiving cluster's xDMA must stay idle exists
+# to keep it free to absorb an incoming multicast, and there is no longer one to absorb.
+#
+# AT FOUR TILES PER CLUSTER IT LOSES, and that is where the rule "head-parallel wants exactly
+# one broadcast operand" was measured: zero broadcasts (this knob) and two were both worse
+# than one.
+#
+# AT SIXTEEN TILES PER CLUSTER IT IS THE ONLY ARM THAT FINISHES. The broadcast arm stalls
+# mid-stream around tile 11; this one passes every check. The rule above was a statement
+# about the head, and the head is a fixed cost that amortises -- measured, the same 9,459 cc
+# at 16 tiles as at 4 -- while the multicast's per-tile risk does not. Long KV wins the
+# argument, so K is pulled.
+K_PULL_FROM_CL0 = True
+
+# ROTATE WHICH CLUSTER IS THE SOURCE, per tile.
+#
+# With the pulls as first written, cluster 0 is the source for EVERY tile of both operands: its
+# TCDM serves three remote readers on top of its own array, and it is the only cluster reading
+# main memory. That is the same asymmetry the broadcast had, just moved from the write path to
+# the read path -- and cluster 0 is measurably the slowest of the four.
+#
+# With rotation, tile j is fetched from main memory by cluster j % NCL and pulled by the other
+# three. Every cluster then reads a quarter of the tiles from memory and sources a quarter for
+# its neighbours. Main-memory traffic is unchanged; what changes is that no single TCDM is the
+# hotspot and no single cluster carries the fetch latency for the whole stream.
+#
+# SAFE AGAINST THE MULTI-ISSUER DEADLOCK, unlike spreading the broadcast. That hang is in the
+# remote-WRITE path -- a receiver's grant manager wedges when two sources write into it. A pull
+# is a READ issued by the consumer's own engine, so rotating the source adds no concurrent
+# remote writers.
+#
+# MEASURED AND IT IS THE BEST CONFIGURATION FOUND. Serving every pulled tile from one
+# cluster costs about as much as taking K off the multicast does; rotating the server gives it
+# back. Combined with the multicast it is the only arm that improves every metric at once, and
+# head-parallel then passes KV-split end to end while keeping the streaming lead it had.
+PULL_ROTATE = True
+
+
+# HOW MANY LEADING TILES EVERY CLUSTER READS FROM MAIN MEMORY ITSELF, instead of pulling.
+#
+# THE PROBLEM IT SOLVES. A pulled tile is a TWO-HOP dependency: main memory -> the owner's L1
+# -> the other three L1s. That is fine in steady state, where the second hop overlaps the
+# previous tile's compute. It is not fine for the FIRST tile, because nothing overlaps it:
+# three clusters sit idle for the whole of the owner's read before their own pull can even
+# start. Measured after the PM fix, the first GEMM gap is 3,832 cc on the owner against 6,283
+# and 7,269 cc on two of the pullers, with their own xDMA only 23-34% busy inside it -- they
+# are not moving data, they are waiting for somebody else's.
+#
+# WHAT IT COSTS. Tile j < this is read from main memory NCL times instead of once. That is
+# only affordable because main memory has the headroom: the quadrant's single wide exit is
+# 8.0% busy across the pipeline, so three extra 64 KiB reads land in slack.
+#
+# MEASURED AND IT LOSES, by 5.0 points. The head did shrink as predicted (5,091 -> 4,734 cc)
+# and the PIPELINE grew by 3,730, for a net +3,373 cc of window.
+#
+# The reasoning that justified it was wrong in a specific, reusable way. "Main memory has the
+# headroom, the quadrant's wide exit is 8.0% busy" is an AVERAGE over the pipeline. At the
+# fill all four clusters read at the same instant, so the instantaneous demand is 4x and they
+# serialise on the single 512-bit quadrant exit. The two-hop pull is slower per tile but it
+# STAGGERS; four direct reads are faster per tile and arrive together.
+#
+# An average occupancy never justifies adding a burst. Leave this at 0.
+PULL_SKIP_FIRST = 0
+
+
+# HOW MANY OF O'S ELEMENTS THE HOST CHECKS, as a fraction of the BR x DHEAD accumulator.
+#
+# WHY IT IS WORTH A KNOB. The four O checks are the single most expensive thing in the
+# simulation: 209,000 cc EACH, ~840,000 cc together, which is 73% of the whole run. They cost
+# that because the host walks 4,096 int32 of L3 with no D-cache, so every element is a
+# blocking fabric round trip. Shrinking them is the cheapest way to make an iteration faster,
+# and iteration speed is what a sweep is limited by.
+#
+# WHY NOT ZERO. O is the only check that covers ACCUMULATION. m and rowsum are per-tile and
+# come out identical on every tile, so both pass even when the recurrence across tiles is
+# wrong -- adding the O check is what found two such bugs. Never turn it off; shrink it.
+#
+# WHAT A PREFIX COVERS. The accumulator is [BR][DHEAD] row-major, so a prefix of N elements is
+# the first N/DHEAD query rows in full. Every KV tile contributes to every row, so one whole
+# row already exercises the full accumulation chain; more rows buy independent samples of it,
+# not extra depth. 512 = 4 of the 32 rows.
+O_CHECK_ELEMS = 512
+
+# DEBUG ONLY -- see the tol_m/tol_s override. Set False to restore real tolerances.
+DEBUG_LOOSE_ML = False
+
+# DIAGNOSTIC for bug A (NSCORE=3 gives m values above the arithmetic maximum once
+# TOTAL >= 8). m is a running max and every KV tile is fed IDENTICAL bytes, so m must
+# reach its final value at tile 0 and never move again -- which means the same golden is
+# valid after EVERY tile. Storing and checking m per tile therefore names the exact tile
+# at which it first goes wrong, and with it the s16/p8 buffer (i % NSCORE) responsible.
+#
+# Safe to use precisely because bug A is DETERMINISTIC: war2 reproduced it bit-identically
+# with a different dependency depth, so adding host round-trips between tiles cannot hide
+# it the way it would hide a race.
+DEBUG_PER_TILE_M = False
+
+# DIAGNOSTIC for bug A, the decisive one. Every KV tile is fed IDENTICAL K and Q bytes, so
+# QK(i) and QK(i + NSCORE) -- which write the SAME s16 buffer -- must produce BYTE-IDENTICAL
+# score tiles. Storing one beat of s16 after each and comparing them needs no golden at all:
+# the first store IS the golden for the second.
+#
+#   they match    -> the score tile is fine and m goes wrong later, in the SIMD recurrence
+#   they differ   -> QK is not overwriting s16, which is what a device m of 386 (= 3 x the
+#                    128 arithmetic maximum for one tile) has been pointing at all along
+#
+# Only valid because bug A is DETERMINISTIC (war2 reproduced it bit-identically at a
+# different WAR depth), so the extra host round-trips cannot hide it.
+DEBUG_S16_COMPARE = False
+# Which tile's score buffer to compare against its NEXT use of the same buffer. Bug A first
+# shows at TILE 5, which uses s16[2] -- so 2, not 0. The first run of this diagnostic compared
+# s16[0] (tiles 0 vs 3), and BOTH of those tiles pass their m check, so it proved nothing
+# about the buffer that actually fails. Corrected.
+S16_CMP_BUF = 2
+
+
+def _pull_owner(j):
+    """Which cluster fetches tile j from main memory; the rest pull it from that cluster."""
+    return (j % NCL) if PULL_ROTATE else 0
+
+
+def _bcast_owner(j, skew=0):
+    """Which cluster's xDMA issues the broadcast of KV tile j.
+
+    With BCAST_SPREAD the skew rotates tile ownership; without it the skew still selects a
+    FIXED engine, which is how K and V get one issuer each. That two-issuer split is the
+    useful middle point: it halves the head serialisation without asking four clusters to
+    issue at once, and it is also the bisect the adapter hang wants -- if TWO concurrent
+    issuers already hang, the star multicast is irrelevant and any pair reproduces it.
+    """
+    return ((j + skew) % NCL) if BCAST_SPREAD else (skew % NCL)
+
 # Slots per beat in the monoid's lane geometry. F = 2 fields (m, l) and a 512-bit beat
 # holds 16 FP32 lanes, so 8 is the largest legal value and packs 8 query rows per beat.
 # It is NOT free to change: it must equal the `sigma` the gather's CSR(0) was built with,
@@ -156,11 +557,73 @@ MONOID_SLOTS = 8
 # alongside the softmax, and there the softmax was the critical path, so slack bought for
 # the array was paid for in SIMD bandwidth.
 #
-# That balance does not hold at four clusters. The array idles ~8,300 cc per shard waiting
-# out the first softmax and is busy only ~51% of its pipeline, while the SIMD is busy 48% --
-# both engines idle in lockstep, so neither is the critical path and the TCDM argument has
-# nothing to trade against. Costs one s16 (32,832 B) and one p8 (16,448 B) per cluster.
+# TESTED AT FOUR CLUSTERS AND IT STILL LOSES, on both the pipeline and the head, so unlike
+# NVBUF=3 this is not a transfer between them but a straight loss. The flaw in the argument
+# above is that TCDM BANDWIDTH is what is being traded, and it is shared whether or not either
+# engine is "the critical path": a third score buffer means a third QK streaming A, B and D
+# through the same ports the cross-cluster V pull already uses. Two engines idling in lockstep
+# is evidence that something they SHARE is the constraint, not that nothing is.
+#
+# It does fit in L1 (441,344 B of 514,816, 86%). It WEDGES, twice, reproducibly -- whether it
+# would pay is still unknown, because no run has ever reached the end.
+#
+# THE EVIDENCE, on the second run, after a first diagnosis that was right by luck and a
+# retraction that was wrong:
+#   - all 16 Snitch traces frozen, AND the host trace (hart 0, trace_chip_00_hart_00000.LOG,
+#     not .dasm) frozen in both size and simulated timestamp across 50 s
+#   - VCS still burning CPU throughout, so the simulator is alive and the design is not
+#   - the host's last retired instruction is `c.lw a5, 0(a4)` at 0x80000cb2, a5=0x...fc94,
+#     a4=0x8000e978 -- a load from L3 that never returns
+#   - every cluster core reached MGR_WRITE_DONE first: the compute finished, all 12 checks
+#     up to the O checks PASS, and it dies in the first O check's tolerance scan
+#
+# A load that never returns is not an unmapped address (that returns 0xBADCAB1E) and not a
+# slow check (the check is bounded, and shrinking it 8x changed nothing). Something in the
+# fabric never answers, with every cluster engine already retired -- the teardown-wedge family
+# this platform has seen before. Diagnose that, not the score buffer.
+#
+# WHY IT IS STILL WORTH FIXING: the SIMD is the largest component of the array's idle, and a
+# third buffer lets two QKs cover one softmax (~4,200 cc of cover for a 2,772 cc softmax)
+# where two give only one (~2,100, which the softmax overruns by ~670).
 NSCORE = 2
+
+# DIAGNOSTIC. The WAR depth, normally == NSCORE. Setting it BELOW NSCORE keeps the extra
+# score/probability buffers but restores the tighter dependency of a smaller NSCORE, which
+# separates two explanations of the NKV=64 failure that are otherwise confounded:
+#   passes with NSCORE_WAR < NSCORE -> the buffer INDEXING is fine and the failure is a race
+#                                      opened by the extra scheduling freedom
+#   fails   with NSCORE_WAR < NSCORE -> the failure is in the 3-buffer indexing itself
+# It is never correct to set it ABOVE NSCORE.
+NSCORE_WAR = NSCORE
+
+
+# FP16's most negative finite value, packed twice into 32 bits (no single BYTE repeats into
+# 0xFBFF). It is the neutral element for a max and the value the arena seeds `m` with. Module
+# scope because two separate blocks in _build_head need it: the m seed and the s16 prefix fill.
+NEG_INF16 = 0xFBFFFBFF
+
+
+
+
+
+# K buffers in the load->QK rotation. TWO is not a tuning choice -- it is what L1 fits.
+#
+# MEASURED on the NQ=1 trace, the case FOR a third: the 2-deep WAR edge idles the iDMA
+# 2,310-3,438 cc on EVERY cluster before K3 (16,358 cc total) with the engine free and only
+# the buffer missing, and K traffic overlapping the GEMM core's argument reads is worth
+# another 22,065 cc (that core stalls ~81 cc PER INSTRUCTION while the iDMA streams; 74% of
+# every prologue >1000 cc overlaps the iDMA against 19% for the xDMA).
+#
+# MEASURED, the case AGAINST: NKBUF=3 FAILS. Named L1 goes 393,728 -> 459,264 B per cluster
+# against a 514,816 B heap, and on top of that the runtime places the per-task
+# scratchpad+args arena AND a per-cluster copy of the SoC-wide task list (~22 KB, invisible
+# to the budget line below) -- about 96% in total. Allocation is name-sorted so the ARENA
+# lands last and runs off the end: the xDMA core then reads its own args as X and trips
+# RegWriteKnown, with fa_m failing 29/32 lanes. The prologue term did improve as predicted
+# (22,065 -> 15,757 cc), so the idea is right and the capacity is not there.
+#
+# To revisit: free ~70 KB elsewhere first (NSCORE, or Bc), then NKBUF=3 is worth ~38 kcc.
+NKBUF = 2
 
 # Read VersaCore's own busy/stall counters and print them per cluster. The paper metric is
 # array utilisation, and a timed trace span is not the same quantity as the array's busy
@@ -262,6 +725,17 @@ V_PUSH_TILES = set()
 #
 # This is the same wall the V-push arms hit. When the bottleneck is aggregate bandwidth,
 # RESCHEDULING CANNOT HELP -- only less traffic or more bandwidth can.
+# NVBUF = 3 IS A WASH, measured twice. A third V buffer is a real streaming win -- it is the
+# best ideal/pipeline any arm has produced -- and the end-to-end window does not move, because
+# the head grows by what the pipeline saves: one more V tile is loaded before the pipeline
+# starts. Buffering depth at this working point transfers work between head and pipeline
+# rather than removing any. Keep 2; it also costs 64 KB of L1.
+#
+# Retry only if the head is ever shortened enough that its V loads stop being critical.
+#
+# Two lessons, each of which cost a run: an attribution is not a cause (the iDMA being busy
+# across the array's idle does not mean the array waits for it), and "X did not help" is not
+# the same finding as "X did nothing".
 NVBUF = 2
 
 # STAGGER THE FIRST REAL V TILE ACROSS CLUSTERS.
@@ -334,6 +808,74 @@ STAGGER_FIRST_V = False
 # Leave V on the pull.
 V_PUSH_PAIRS = False
 
+# PUSH K TO ALL FOUR CLUSTERS ON THE SYSTEM iDMA -- the second wide pipe, used for the one
+# operand that is identical on every cluster.
+#
+# WHY THIS AND NOT THE FIVE V-PUSH ARMS ABOVE. Those all moved V, and V is the operand whose
+# WAR edge is tightest: V(j) cannot start until PV(j-NVBUF) has freed its buffer, so the
+# single host issuer sat idle more than half the window waiting on compute. Batching helped
+# the issue rate and changed nothing about the wait.
+#
+# K under head-parallelism is a different shape. The four clusters want the SAME BYTES, so
+# one task with four destinations delivers a whole tile-step -- the batch of four that
+# measures 51.6 B/cc -- and it is the batch size the struct already caps at. And because the
+# push writes every cluster's k8 directly, the cross-cluster RAW edge that the pull needs
+# (three clusters waiting on the owner's copy) disappears: K stops being a two-hop operand.
+#
+# WHAT IT COSTS. The same coupling the broadcast had: one producer feeding four consumers
+# must wait for every cluster's WAR edge, so the slowest cluster gates the refill. The
+# existing broadcast WAR machinery states those edges, and this reuses it unchanged.
+#
+# WHAT IT BUYS ON THE FABRIC. K then rides quadrant_wide_in (a PUSH from the system iDMA)
+# while V rides quadrant_wide_out (the clusters' own PULL). Those are disjoint 512-bit pipes;
+# today the push pipe is idle and every byte of both operands queues on the pull.
+#
+# MEASURED, AND IT DOES EXACTLY WHAT IT WAS DESIGNED TO DO AND STILL LOSES. The cluster DMA
+# engines' busy time roughly HALVES -- the push really is carrying the traffic -- and the run
+# gets 3% longer anyway, because QK and softmax both wait longer. The delivery moved off the
+# engines and onto the critical path. Keep it False.
+K_PUSH_ALL = False
+
+# PUT ONLY THE MAIN-MEMORY FETCH ON THE SYSTEM iDMA, and leave the cross-cluster pulls where
+# they are.
+#
+# K_PUSH_ALL above delivers a tile to all four clusters from one host task, which is one
+# producer feeding four consumers: the task waits for every cluster's WAR edge and every
+# cluster then waits for it. MEASURED, that halves the cluster DMA engines' busy time and
+# still loses, because the coupling puts the delivery back on the critical path -- QK and
+# softmax both wait longer than they did on the pull.
+#
+# These knobs make the SAME move without the coupling. Under rotation exactly one cluster
+# reads main memory for each tile; that one transfer becomes a host push with a SINGLE
+# destination, so it takes only the owner's own WAR edge, exactly as the owner's own load
+# did. The other three clusters keep pulling from the owner's L1 on their own engines.
+#
+# What it buys is a clean split of the two wide pipes: every byte that touches main memory
+# then rides quadrant_wide_in (the system iDMA's PUSH) and every byte that does not rides
+# quadrant_wide_out (the clusters' PULL). Today both queue on the pull pipe while the push
+# pipe sits idle.
+#
+# Only meaningful with the matching *_PULL_FROM_CL0 knob on -- they replace the owner's
+# load inside the pull scheme.
+#
+# MEASURED AND IT ALSO LOSES, by about two points. Removing the coupling was not enough: the
+# owner's fetch is the HEAD of every tile's chain, so putting it behind ~433 cc of host
+# dispatch delays all three pullers as well as the owner. The cluster engines barely got any
+# freer, because only one transfer in four moved.
+#
+# K_PUSH_OWNER WITHOUT V_PUSH_OWNER HANGS. With K pushed and V left on the cluster iDMA, a
+# puller's xDMA spins forever on its completion CSR while every other hart is frozen; both
+# on or both off is fine. Not diagnosed -- the arm loses on time regardless -- but do not
+# enable one alone.
+#
+# TAKEN WITH THE FIVE V-PUSH ARMS ABOVE AND K_PUSH_ALL, that is seven measurements of one
+# rule: four concurrent cluster engines beat one host issuer, and the reason is never
+# bandwidth. The system iDMA is genuinely the faster pipe per transfer; what it cannot do is
+# sit on a chain that four clusters wait on, behind a per-task dispatch cost. Work would have
+# to be prefetched far enough ahead to hide that, and NKBUF/NVBUF are capped by L1.
+K_PUSH_OWNER = False
+V_PUSH_OWNER = False
+
 
 def _load_params(param):
     """Derive the whole geometry from params.hjson and the array, in ONE place.
@@ -343,6 +885,10 @@ def _load_params(param):
     kernel's idea of the tile and the descriptors' idea of it from drifting apart.
     """
     global M, K, N, NKV, CHECK_O, NQ, BC, BR, DHEAD, S2_M, S2_K, S2_N, QSHIFT, NKV_PER, NCL
+    global DECOMP
+    DECOMP = str(param.get("DECOMP", DECOMP))
+    if DECOMP not in ("headpar", "kvsplit"):
+        raise ValueError(f"DECOMP={DECOMP!r} must be 'headpar' or 'kvsplit'")
     M, K, N = int(param["M"]), int(param["K"]), int(param["N"])
     NKV = int(param["NKV"])
     # Optional, so an older params.hjson still loads.
@@ -586,6 +1132,32 @@ def build_shards():
     v = rng.randint(-128, 127,
                     size=S2_M * S2_K * MESH_ROW * TILE_SIZE).astype(np.int8) >> QSHIFT
 
+    if DECOMP == "headpar":
+        # ONE K and ONE V for the whole group -- that IS the GQA relation, not a
+        # simplification: the group's query heads share a KV head by construction. What
+        # varies per cluster is Q, so every cluster still gets its own (m_c, l_c) and the
+        # per-shard checks stay evidence that the shard ran. There is nothing to fold.
+        #
+        # The distinct-shard argument the kvsplit docstring makes does not apply here for
+        # the opposite reason: no fold is being tested, so identical partials would prove
+        # nothing either way. Distinct Q is what keeps the four checks independent.
+        a_shared = (rng.randint(-128, 127, size=M * K * MESH_ROW * TILE_SIZE)
+                       .astype(np.int8) >> QSHIFT)
+        shards, b_list = [], []
+        for c in range(NCL):
+            b_c = (rng.randint(-128, 127, size=N * K * MESH_COL * TILE_SIZE)
+                      .astype(np.int8) >> QSHIFT)
+            b_list.append(b_c)
+            shards.append(build_data(a=a_shared, b=b_c, v=v))
+        m_c = np.stack([np.asarray(sh[3], dtype=np.float16) for sh in shards])
+        l_c = np.stack([np.asarray(sh[4], dtype=np.float16) for sh in shards])
+        # a_list holds the SAME array object NCL times so stage() can see, by identity,
+        # that one staged copy serves every cluster.
+        # O PER CLUSTER, not shards[0]'s. Under headpar every cluster gets its own b_c
+        # (its own query head), so every cluster's O is different and one golden would
+        # only ever have validated cluster 0.
+        return [a_shared] * NCL, b_list, v, m_c, l_c, None, [sh[5] for sh in shards]
+
     shards = []
     for c in range(NCL):
         a_c = (rng.randint(-128, 127, size=M * K * MESH_ROW * TILE_SIZE)
@@ -611,7 +1183,8 @@ def build_shards():
             merged[beat * 16 + 1 * MONOID_SLOTS + slot] = l_star[row]
 
     a_list = [sh[0] for sh in shards]
-    return a_list, b, v, m_c, l_c, merged, shards[0][5]
+    # b is shared under kvsplit; the caller indexes per cluster either way.
+    return a_list, [b] * NCL, v, m_c, l_c, merged, [sh[5] for sh in shards]
 
 
 def stage(st, a, b, v, m, rowsum, o):
@@ -623,12 +1196,32 @@ def stage(st, a, b, v, m, rowsum, o):
     does not have reads unmapped memory rather than faulting, which surfaces as an
     arithmetic bug a long way from the cause.
     """
+    # STAGE EACH DISTINCT ARRAY ONCE. Under headpar every cluster's K is the same object,
+    # and staging it four times would put four copies in the image (or on the memory chip)
+    # AND give the broadcast four different source addresses to read -- which is exactly
+    # the redundancy the decomposition exists to remove. Keyed by object identity, so
+    # "shared" is decided by build_shards() rather than restated here.
+    def put_per_cluster(tag, arrays, ctype, conv):
+        # An array every cluster shares keeps the BARE name; only a genuinely per-cluster
+        # one takes the _c<n> suffix. That is not cosmetic: the staged names reach the
+        # generated header, and keeping them stable is what makes a kvsplit build after
+        # this change byte-identical to one before it.
+        shared = len({id(x) for x in arrays}) == 1
+        handles, by_id = [], {}
+        for c in range(NCL):
+            key = id(arrays[c])
+            if key not in by_id:
+                by_id[key] = st.put(tag if shared else f"{tag}_c{c}",
+                                    ctype, conv(arrays[c]))
+            handles.append(by_id[key])
+        return handles
+
     return {
-        # One K per shard. The handles are per-cluster only in WHICH cluster loads them;
-        # they are staged once, in L3 or the memory chip as the platform dictates.
-        "a": [st.put(f"fa_k8_c{c}", "int8_t", np.asarray(a[c]).astype(np.int8))
-              for c in range(NCL)],
-        "b": st.put("fa_q8", "int8_t", b.astype(np.int8)),
+        "a": put_per_cluster("fa_k8", a, "int8_t",
+                             lambda x: np.asarray(x).astype(np.int8)),
+        # Q is shared under kvsplit and per-head under headpar, by the same rule.
+        "b": put_per_cluster("fa_q8", b, "int8_t",
+                             lambda x: np.asarray(x).astype(np.int8)),
         "v": st.put("fa_v8", "int8_t", v.astype(np.int8)),
         # The score matmul's C is a zero BIAS and the O accumulator starts at zero. The
         # larger of the two is C, so one region serves both -- and on the host path it
@@ -644,7 +1237,8 @@ def stage(st, a, b, v, m, rowsum, o):
         "rowsum": [st.put(f"fa_rowsum_golden_c{c}", "uint16_t",
                           np.asarray(rowsum[c]).astype(np.float16).view(np.uint16))
                    for c in range(NCL)],
-        "o": st.put("fa_o_golden", "int32_t", o.astype(np.int32)),
+        "o": [st.put(f"fa_o_golden_c{c}", "int32_t", np.asarray(o[c]).astype(np.int32))
+              for c in range(NCL)],
     }
 
 
@@ -731,20 +1325,17 @@ def writer_junction_index(hw, name):
     return names.index(name)
 
 
-def _build_cluster(dfg, c, h_all, m_all, rowsum_all):
-    """The whole single-cluster FA pipeline, placed on cluster `c` over its own KV shard.
+def _alloc_cluster(dfg, c):
+    """Every L1 buffer one cluster's pipeline owns, and nothing else -- no nodes.
 
-    Byte-for-byte the tuned one-cluster graph -- same warm-ups, same double buffering, same
-    load-chain order -- with three differences and no others: it runs NKV_PER tiles instead
-    of NKV, it reads this shard's K, and it ends at the partial rather than at a check.
+    Split out of _build_cluster because a BROADCAST load has to name its destinations in
+    all four clusters, so every cluster's buffers must exist before the first load node is
+    created. This moves no address: the compiler sorts handles by NAME when it lays out a
+    heap (bingo_dfg._collect_memory_handles), so creation order across clusters -- and
+    within one -- does not decide the layout. The ordering comment below is about which
+    NAME sorts first, and that is unchanged.
     """
     g = G(dfg, c)
-    # Resolve the per-shard staged arrays so the body below can keep saying h["a"].
-    h = dict(h_all)
-    for key in ("a", "m", "rowsum"):
-        h[key] = h_all[key][c]
-    m, rowsum = m_all[c], rowsum_all[c]
-
     # ---- L1 ---------------------------------------------------------------------------
     # Allocated FIRST, before the score buffers, and that order is load-bearing: the negate
     # task writes -m_new to rmax (here) and to the one-beat prefix of the live score buffer
@@ -765,14 +1356,18 @@ def _build_cluster(dfg, c, h_all, m_all, rowsum_all):
     # right diagnosis -- every QK is gated by its own K load -- but it also raises the
     # number of simultaneously-ready DMA nodes past what the manager's ready set tolerates,
     # and the run wedges in teardown. Revisit only alongside that limit.
-    k8 = [g.l1(f"fa_k8_{i}", M * K * MESH_ROW * TILE_SIZE) for i in range(2)]
+    k8 = [g.l1(f"fa_k8_{i}", M * K * MESH_ROW * TILE_SIZE) for i in range(NKBUF)]
     q8 = [g.l1(f"fa_q8_{q}", N * K * MESH_COL * TILE_SIZE)      # B of the score matmul
           for q in range(NQ)]
     v8 = [g.l1(f"fa_v8_{i}", S2_M * S2_K * MESH_ROW * TILE_SIZE) for i in range(NVBUF)]
     # The score matmul masks every C channel off (see gemm_fa.h), so nothing is ever
     # READ through this pointer -- the AGU walks addresses that are never dereferenced.
     # It exists only because the descriptor needs a base pointer. One block, not M*N.
-    cz = g.l1("fa_cz", MESH_ROW * MESH_COL * 4)                 # C base ptr, never read
+    # fa_cz REMOVED. Every C channel of the score matmul is masked, so the AGU walks
+    # addresses that are never dereferenced -- and the kernel already substitutes D_addr
+    # when C_addr is 0 (the same path PV's first tile takes). A whole 1,024 B allocation
+    # existed only to give that never-read pointer somewhere to point.
+    cz = 0
     # TWO score buffers. A third lets QK run three deep and does remove the WAR edge it
     # targets, but it loses overall: the extra QK streams A, B and D through TCDM alongside
     # the softmax, and the softmax is the critical path. Slack bought for the GEMM is paid
@@ -791,8 +1386,41 @@ def _build_cluster(dfg, c, h_all, m_all, rowsum_all):
     # entire cost of the reuse. K, V, the score tile and P stay single sets: they are
     # exactly what we are trying not to re-read.
     oacc = [g.l1(f"fa_oacc32_{q}", BR * DHEAD * 4) for q in range(NQ)]
+    # Destination of the BCAST_WARMUP multicast. Its own allocation rather than a corner of
+    # fa_warm_buf: that one is the SIMD warm-up's, and a broadcast landing in it while the
+    # SIMD warm-up reads it would be a data race for no reason. 64 B x 4 clusters.
+    bwarm = g.l1("fa_bcast_warm", 64)
+    return dict(arena=arena, k8=k8, q8=q8, v8=v8, cz=cz, s16=s16, p8=p8, oacc=oacc,
+                bwarm=bwarm)
 
 
+def _shard_handles(h_all, c):
+    """The staged handles this cluster reads, with the per-cluster lists resolved.
+
+    Which of these are genuinely per-cluster depends on DECOMP: kvsplit gives every cluster
+    its own K, headpar its own Q. stage() already collapsed whatever is shared onto one
+    handle, so indexing is uniform here either way.
+    """
+    h = dict(h_all)
+    for key in ("a", "b", "m", "rowsum", "o"):
+        h[key] = h_all[key][c]
+    return h
+
+
+def _build_head(dfg, c, h_all, buf):
+    """Everything a cluster does BEFORE its first KV tile: warm-ups, Q, the arena fills.
+
+    Split from the body so that under headpar EVERY cluster's head nodes are created before
+    ANY broadcast node is. That ordering is what makes it safe to spread the broadcasts
+    over all four xDMAs: a core dispatches in creation order, so a broadcast placed on
+    cluster c's xDMA sits BEHIND c's own fills rather than in front of them. In front, a
+    later broadcast would wait on a PV that waits on a softmax that waits on the very fills
+    queued behind it -- a genuine cycle, not a slowdown.
+    """
+    g = G(dfg, c)
+    h = _shard_handles(h_all, c)
+    arena, k8, q8, v8 = buf["arena"], buf["k8"], buf["q8"], buf["v8"]
+    cz, s16, p8, oacc = buf["cz"], buf["s16"], buf["p8"], buf["oacc"]
     def load(tag, key, dst, nbytes, after=None):
         return g.node(f"Load_{tag}", DMA_CORE, "__snax_bingo_kernel_idma_1d_copy",
                       SnaxBingoKernelIdma1dCopyArgs(h[key], dst, nbytes), after)
@@ -860,10 +1488,18 @@ def _build_cluster(dfg, c, h_all, m_all, rowsum_all):
                     SnaxBingoKernelXdmaMemsetArgs(
                         warm_buf, 1024, SnaxBingoKernelXdmaMemsetArgs.PATTERN_ZERO),
                     perf_z)
-    warm_ab = g.node("WarmZeroAB", XDMA_CORE, "__snax_bingo_kernel_xdma_memset",
+    warm_a_z = g.node("WarmZeroA", XDMA_CORE, "__snax_bingo_kernel_xdma_memset",
+                      SnaxBingoKernelXdmaMemsetArgs(
+                          warm_a, MESH_ROW * TILE_SIZE,
+                          SnaxBingoKernelXdmaMemsetArgs.PATTERN_ZERO), warm_z)
+    # warm_b needs the same fill as warm_a: WarmGemm below takes it as BOTH its B and its C
+    # operand, and TCDM that nothing has written reads back X. A node, not a knob -- feeding
+    # the array X is never correct, and the pair is what the name WarmZeroAB always implied.
+    warm_ab = g.node("WarmZeroB", XDMA_CORE, "__snax_bingo_kernel_xdma_memset",
                      SnaxBingoKernelXdmaMemsetArgs(
-                         warm_a, MESH_ROW * TILE_SIZE,
-                         SnaxBingoKernelXdmaMemsetArgs.PATTERN_ZERO), warm_z)
+                         warm_b, MESH_COL * TILE_SIZE,
+                         SnaxBingoKernelXdmaMemsetArgs.PATTERN_ZERO), warm_a_z)
+
     # One array block: the smallest dispatch gemm_fa_qk accepts, purely to fetch its
     # config path. C is masked off for the score matmul, so warm_b doubles as its base.
     # Only the xDMA's MEMSET path is warmed, not its 1d_copy path, even though the V
@@ -944,7 +1580,6 @@ def _build_cluster(dfg, c, h_all, m_all, rowsum_all):
     # -inf would make the first exp(S - m) NaN rather than 0. The pattern is 32 bits
     # because no single BYTE repeats into 0xFBFF.
 
-    NEG_INF16 = 0xFBFFFBFF
     ld_az = []
     for q in range(NQ):
         # ANCHORED BEHIND Q, deliberately.
@@ -975,8 +1610,52 @@ def _build_cluster(dfg, c, h_all, m_all, rowsum_all):
                            SnaxBingoKernelXdmaMemsetArgs.PATTERN_ZERO), mfill)
         ld_az.append(lfill)
 
+    return dict(warm_gemm=warm_gemm, warm=warm, ld_q=ld_q, ld_az=ld_az,
+                perf=perf, load=load, xload=xload)
+
+
+def _build_cluster(dfg, c, h_all, m_all, rowsum_all, buf, bcast=None, all_bufs=None):
+    """The KV-tile pipeline and this cluster's own checks, on top of _build_head.
+
+    Byte-for-byte the tuned one-cluster graph -- same double buffering, same load-chain
+    order -- with three differences and no others: it runs NKV_PER tiles instead of NKV, it
+    reads this cluster's operands, and it ends at the partial rather than at a check.
+
+    `bcast` is None under kvsplit, where this cluster loads its own K and V. Under headpar
+    it is {"k": [...], "v": [...]}: the MULTICAST nodes, already created by build(), that
+    fill every cluster's k8/v8 from one read. This cluster then only depends on them.
+    """
+    g = G(dfg, c)
+    h = _shard_handles(h_all, c)
+    m, rowsum = m_all[c], rowsum_all[c]
+    arena, k8, q8, v8 = buf["arena"], buf["k8"], buf["q8"], buf["v8"]
+    cz, s16, p8, oacc = buf["cz"], buf["s16"], buf["p8"], buf["oacc"]
+
+    # HEAD FIRST, IN THIS CLUSTER'S OWN PASS -- do not hoist it into build().
+    #
+    # MEASURED: building every cluster's head before any body changes the GLOBAL node
+    # creation order, and that order IS the task-descriptor list the BINGO manager streams.
+    # It cost 7.6 pp of array utilisation (57.4% -> 49.8% equivalent) on a graph that was
+    # otherwise identical -- same per-core kernel sequences in all 17 cells, same
+    # allocations. Dispatch is order-sensitive; the list order is not cosmetic.
+    head = _build_head(dfg, c, h_all, buf)
+    warm_gemm, warm = head["warm_gemm"], head["warm"]
+    ld_q, ld_az, perf = head["ld_q"], head["ld_az"], head["perf"]
+    load, xload = head["load"], head["xload"]
+
     KBYTES = M * K * MESH_ROW * TILE_SIZE
     VBYTES = S2_M * S2_K * MESH_ROW * TILE_SIZE
+
+    # One tiny multicast, on the engine that owns tile 0, behind this cluster's own head
+    # chain so it runs on a quiet fabric. Tile 0's broadcast then waits on it instead of on
+    # ld_q, which both orders the two and gives the real transfer a warm config path.
+    bwarm_node = None
+    if bcast is not None and BCAST_WARMUP and c == _bcast_owner(0):
+        bwarm_node = g.node(
+            f"BcastWarm_c{c}", XDMA_CORE, "__snax_bingo_kernel_xdma_multicast",
+            SnaxBingoKernelXdmaMulticastArgs(
+                h_all["a"][0], [bf["bwarm"] for bf in all_bufs], 64),
+            ld_q)
 
     # SOFTWARE-PIPELINED EMISSION: QK(i+1) is created BEFORE PV(i).
     #
@@ -995,16 +1674,112 @@ def _build_cluster(dfg, c, h_all, m_all, rowsum_all):
     # i-1) and PV(i-1) to sm[i-1] (created at step i-1).
     ld_k, ld_v = [], []
     qk, sm, pv = [], [], []
+    # (index into qk/pv, tile) for consumers whose broadcast producer is owned by a
+    # cluster that has not been built yet. Closed in build().
+    pending_k, pending_v = [], []
     TOTAL = NKV_PER * NQ          # this cluster's shard, not the whole KV axis
     for i in range(TOTAL + 1):
         if i < TOTAL:
             j, q = divmod(i, NQ)
-            if q == 0:
+            bcast_this_k = (bcast is not None and BCAST_K and not K_PULL_FROM_CL0
+                            and not (BCAST_SKIP_FIRST and j == 0))
+            if q == 0 and bcast is not None and K_PUSH_ALL:
+                # One host task delivers this tile's K into all four clusters' k8. Built on
+                # cluster 0's pass only -- like the broadcast, and for the same reason: the
+                # node order is load-bearing, so the producer must appear where the operand
+                # is first consumed rather than hoisted into a prologue.
+                if c == 0:
+                    k_after = ld_q if j < NKBUF else [qk[(j - NKBUF + 1) * NQ - 1]]
+                    bcast["k"][j] = g.node(
+                        f"PushK{j}", HOST_CORE, "__host_bingo_kernel_idma_multi",
+                        HostBingoKernelIdmaMultiArgs(
+                            [(h_all["a"][0], bf["k8"][j % NKBUF]) for bf in all_bufs],
+                            KBYTES),
+                        k_after, cluster=0)
+                ld_k.append(bcast["k"].get(j))
+            elif q == 0 and bcast is not None and K_PULL_FROM_CL0:
+                # K on the xDMA: cluster 0 reads main memory, the rest read cluster 0's L1.
+                k_after = ld_q if j < NKBUF else [qk[(j - NKBUF + 1) * NQ - 1]]
+                own = _pull_owner(j)
+                if j < PULL_SKIP_FIRST:
+                    # Every cluster reads this tile itself. xload, not load: K lives on the
+                    # xDMA in the steady state and moving it to the iDMA would put it behind V.
+                    n = xload(f"K{j}", "a", k8[j % NKBUF], KBYTES, k_after)
+                    if c == own:
+                        bcast["ksrc"][j] = n
+                elif c == own:
+                    if K_PUSH_OWNER:
+                        n = g.node(f"PushK{j}_c{c}", HOST_CORE,
+                                   "__host_bingo_kernel_idma",
+                                   HostBingoKernelIdmaArgs(h["a"], k8[j % NKBUF], KBYTES),
+                                   k_after, cluster=0)
+                    else:
+                        n = xload(f"K{j}", "a", k8[j % NKBUF], KBYTES, k_after)
+                    bcast["ksrc"][j] = n
+                else:
+                    # Under rotation the owner may be a cluster built LATER, so its node can be
+                    # missing here. Create the pull without that edge and record the hole;
+                    # build() closes it once every pass has run.
+                    src = bcast["ksrc"].get(j)
+                    after = list(k_after) + ([src] if src is not None else [])
+                    n = g.node(f"PullK{j}", XDMA_CORE,
+                               "__snax_bingo_kernel_xdma_1d_copy",
+                               SnaxBingoKernelXdma1dCopyArgs(
+                                   all_bufs[own]["k8"][j % NKBUF], k8[j % NKBUF], KBYTES),
+                               after)
+                    bcast["kpull"].append((j, n))
+                    if src is None:
+                        bcast.setdefault("kpend", []).append((j, n))
+                ld_k.append(n)
+            elif q == 0 and bcast_this_k:
+                # --- headpar: K arrives by broadcast, from ONE read ----------------------
+                # The GQA group shares its KV head, so this tile's K is the same bytes on
+                # every cluster. Cluster 0 issues the multicast HERE, inside the tile loop
+                # and with the SAME predecessors the unicast load would have had; the other
+                # three clusters only take the dependency.
+                #
+                # THOSE PREDECESSORS ARE LOAD-BEARING. Created dependency-free -- so K0, K1,
+                # V0 and V1 are all ready at once on this single xDMA -- the run WEDGES IN
+                # TEARDOWN: the whole pipeline completes and the host epilogue never runs.
+                # That is exactly the failure the k8 double-buffer comment above predicts
+                # for "more simultaneously-ready DMA nodes than the manager's ready set
+                # tolerates". Measured twice, from two different directions.
+                if c == _bcast_owner(j):
+                    k_after = ld_q if j < NKBUF else [qk[(j - NKBUF + 1) * NQ - 1]]
+                    if j == 0 and bwarm_node is not None:
+                        k_after = [bwarm_node]
+                    bcast["k"][j] = g.node(
+                        f"BcastK{j}", XDMA_CORE, "__snax_bingo_kernel_xdma_multicast",
+                        SnaxBingoKernelXdmaMulticastArgs(
+                            h_all["a"][0], [bf["k8"][j % NKBUF] for bf in all_bufs],
+                            KBYTES),
+                        k_after)
+                # Under BCAST_SPREAD a cluster built LATER owns some tiles, so the node
+                # can be missing here. Leave a hole and let build() close it once every
+                # pass has run -- the same deferral the cross-cluster WAR edges already
+                # need, and for the same reason.
+                ld_k.append(bcast["k"].get(j))
+            elif q == 0:
+                # Tile 0 under BCAST_SKIP_FIRST lands here too, and wants exactly what this
+                # branch already does: this cluster's own iDMA pulling the shared K into its
+                # own k8. stage() collapsed headpar's K onto one handle, so h["a"] is that
+                # shared array for every cluster -- four reads of the same bytes, in parallel.
                 # --- stream this KV tile's K and V --------------------------------------
                 # Into the buffer every query tile of step j-2 has finished with, so it
                 # waits for the LAST of them. Before tile 2 there is nothing but Q.
-                k_after = ld_q if j < 2 else [qk[(j - 1) * NQ - 1]]
-                ld_k.append(load(f"K{j}", "a", k8[j % 2], KBYTES, k_after))
+                k_after = ld_q if j < NKBUF else [qk[(j - NKBUF + 1) * NQ - 1]]
+                ld_k.append(load(f"K{j}", "a", k8[j % NKBUF], KBYTES, k_after))
+            if q == 0 and bcast is not None and BCAST_V:
+                if c == _bcast_owner(j, BCAST_V_SKEW):
+                    v_after = list(ld_az) if j < NVBUF \
+                        else [pv[(j - NVBUF + 1) * NQ - 1]]
+                    bcast["v"][j] = g.node(
+                        f"BcastV{j}", XDMA_CORE, "__snax_bingo_kernel_xdma_multicast",
+                        SnaxBingoKernelXdmaMulticastArgs(
+                            h_all["v"], [bf["v8"][j % NVBUF] for bf in all_bufs], VBYTES),
+                        v_after)
+                ld_v.append(bcast["v"].get(j))
+            elif q == 0:
                 # Behind the arena fills, not just behind Q. Issuing V(0) BEFORE the
                 # fills instead does clear the first softmax of V traffic -- its config and
                 # run drop to their warm values -- but it pushes the fills far enough back
@@ -1044,6 +1819,56 @@ def _build_cluster(dfg, c, h_all, m_all, rowsum_all):
                                        "__host_bingo_kernel_idma",
                                        HostBingoKernelIdmaArgs(h["v"], v8[j % NVBUF], VBYTES),
                                        v_after, cluster=0))
+                elif bcast is not None and V_PULL_FROM_CL0:
+                    # HEADPAR, V PULLED: cluster 0 reads main memory, the rest read
+                    # cluster 0's L1. Every cluster still issues exactly one transfer per
+                    # tile on its own iDMA, so no engine gains work -- only the SOURCE
+                    # changes, and with it three quarters of the main-memory traffic.
+                    own = _pull_owner(j)
+                    if j < PULL_SKIP_FIRST:
+                        # Same as K: the leading tiles have nothing to overlap their second
+                        # hop, so every cluster reads them itself. V stays on the iDMA.
+                        n = load(f"V{j}", "v", v8[j % NVBUF], VBYTES, v_after)
+                        if c == own:
+                            bcast["vsrc"][j] = n
+                    elif c == own:
+                        if V_PUSH_OWNER:
+                            n = g.node(f"PushV{j}_c{c}", HOST_CORE,
+                                       "__host_bingo_kernel_idma",
+                                       HostBingoKernelIdmaArgs(h["v"], v8[j % NVBUF], VBYTES),
+                                       v_after, cluster=0)
+                        else:
+                            n = load(f"V{j}", "v", v8[j % NVBUF], VBYTES, v_after)
+                        bcast["vsrc"][j] = n
+                    else:
+                        # wait for cluster 0's copy of THIS tile as well as our own WAR edge
+                        src = bcast["vsrc"].get(j)
+                        after = list(v_after) + ([src] if src is not None else [])
+                        n = g.node(f"PullV{j}", DMA_CORE,
+                                   "__snax_bingo_kernel_idma_1d_copy",
+                                   SnaxBingoKernelIdma1dCopyArgs(
+                                       all_bufs[own]["v8"][j % NVBUF], v8[j % NVBUF], VBYTES),
+                                   after)
+                        bcast["vpull"].append((j, n))
+                        if src is None:
+                            bcast.setdefault("vpend", []).append((j, n))
+                    ld_v.append(n)
+                elif bcast is not None and not V_ON_XDMA:
+                    # HEADPAR, V NOT BROADCAST: pull it on the iDMA, never the xDMA.
+                    #
+                    # A RECEIVING CLUSTER'S xDMA MUST BE IDLE. An incoming multicast write
+                    # is handled by the destination cluster's own xDMA finish manager -- the
+                    # same block whose i_read_stall_watchdog fires in the 4-issuer deadlock
+                    # -- so a cluster cannot be running its own transfer and absorbing a
+                    # broadcast at the same time.
+                    #
+                    # MEASURED. With V on the cluster xDMAs and K broadcast into them, ALL
+                    # FOUR xDMA harts wedged in their wait loops (three at 1.8 GB of trace).
+                    # The arm where every cluster xDMA did nothing but five tiny memsets
+                    # while the broadcasts landed is the one that PASSED. Under headpar the
+                    # iDMA is free anyway -- K no longer rides it, it carries only Q -- so
+                    # this costs nothing and keeps the receiving xDMAs clear.
+                    ld_v.append(load(f"V{j}", "v", v8[j % NVBUF], VBYTES, v_after))
                 else:
                     ld_v.append(xload(f"V{j}", "v", v8[j % NVBUF], VBYTES, v_after))
 
@@ -1062,13 +1887,26 @@ def _build_cluster(dfg, c, h_all, m_all, rowsum_all):
             # (bingo_transform_dfg_add_dummy_check_nodes), which occupies a slot in the
             # CONSUMER's waiting queue. The fix for that is stream ORDER, not edge removal
             # -- see bingo_dfg.bingo_stream_order().
-            deps = [ld_k[j]] if q == 0 else [qk[i - 1]]
+            if q != 0:
+                deps = [qk[i - 1]]
+            elif ld_k[j] is not None:
+                deps = [ld_k[j]]
+            else:
+                deps = []
+                pending_k.append((len(qk), j))
+            # UNDER headpar THIS EDGE IS NOT REDUNDANT. In the unicast case Q and K share
+            # the iDMA and the load chain puts K(0) behind Q, so QK inherits the wait. The
+            # broadcast moves K to the xDMA, which breaks that chain -- without this edge
+            # QK(0) would be free to read a q8 the iDMA has not filled yet, and TCDM reads
+            # X rather than faulting (SimInit="none"), which kills the hart silently.
+            if bcast is not None and j == 0:
+                deps.append(ld_q[q])
             # WAR on the score buffer: QK(i) overwrites the tile SM(i-NSCORE) read.
-            if i >= NSCORE:
-                deps.append(sm[i - NSCORE])
+            if i >= NSCORE_WAR:
+                deps.append(sm[i - NSCORE_WAR])
             qk.append(g.node(f"QK_{j}_{q}", GEMM_CORE,
                              "__snax_bingo_kernel_gemm_fa_qk",
-                             SnaxBingoKernelGemmFaQkArgs(k8[j % 2], q8[q], cz,
+                             SnaxBingoKernelGemmFaQkArgs(k8[j % NKBUF], q8[q], cz,
                                                          s16[i % NSCORE].view(64), M, K, N,
                                                          perf_addr=perf),
                              deps))
@@ -1080,15 +1918,25 @@ def _build_cluster(dfg, c, h_all, m_all, rowsum_all):
             if i >= 1:
                 deps.append(sm[i - 1])
             # WAR on the probability buffer: SM(i) overwrites what PV(i-NSCORE) read.
-            if i >= NSCORE:
-                deps.append(pv[i - NSCORE])
+            if i >= NSCORE_WAR:
+                deps.append(pv[i - NSCORE_WAR])
             sm.append(g.node(f"SM_{j}_{q}", SIMD_CORE,
                              "__snax_bingo_kernel_simd_fa_softmax",
                              SnaxBingoKernelSimdFaSoftmaxArgs(
                                  s16[i % NSCORE].view(64), p8[i % NSCORE], arena[q],
                                  bc=BC, dhead=DHEAD, tile_idx=j,
                                  seed_state=0,
-                                 geom_mode=SnaxBingoKernelSimdFaSoftmaxArgs.GEOM_PRIMED),
+                                 # THE FULL CSR PROGRAM RUNS ONCE PER CORE, NOT PER TILE.
+                                 # snax_simd_program_fast writes 21 CSRs that depend only
+                                 # on (bc, dhead), so every softmax after the first on this
+                                 # core re-writes the same values. CSR_PRIMED says 'the
+                                 # block still holds a same-geometry program, write only the
+                                 # six per-task CSRs'. Only the host may assert it: this
+                                 # cluster's SIMD core runs nothing but these softmaxes and
+                                 # the prologue that programmed the CSRs in the first place.
+                                 geom_mode=(SnaxBingoKernelSimdFaSoftmaxArgs.GEOM_PRIMED
+                                            if i == 0 else
+                                            SnaxBingoKernelSimdFaSoftmaxArgs.GEOM_CSR_PRIMED)),
                              deps))
 
         if i >= 1:
@@ -1097,7 +1945,10 @@ def _build_cluster(dfg, c, h_all, m_all, rowsum_all):
             pj, pq = divmod(p, NQ)
             deps = [sm[p]] if p == 0 else [sm[p], pv[p - 1]]
             if pq == 0:
-                deps.append(ld_v[pj])
+                if ld_v[pj] is not None:
+                    deps.append(ld_v[pj])
+                else:
+                    pending_v.append((len(pv), pj))
             pv.append(g.node(f"PV_{pj}_{pq}", GEMM_CORE,
                              "__snax_bingo_kernel_gemm_fa_pv",
                              SnaxBingoKernelGemmFaPvArgs(v8[pj % NVBUF], p8[p % NSCORE],
@@ -1138,6 +1989,47 @@ def _build_cluster(dfg, c, h_all, m_all, rowsum_all):
     # and narrows once, so it gets four.
     tol_m = float(2 * np.max(np.spacing(m.astype(np.float16))))
     tol_s = float(4 * np.max(np.spacing(rowsum.astype(np.float16))))
+    if DEBUG_LOOSE_ML:
+        # DEBUG ONLY. m and rowsum are the FIRST checks dispatched, and a failing host
+        # kernel breaks the scheduler loop (bingo_api.c:906), so one bad m costs the other
+        # eleven results. Widening these two lets the run reach the O check, which is the
+        # one that says whether the COMPUTATION is wrong or only the m/rowsum readback.
+        tol_m = tol_s = 1.0e4
+
+    if DEBUG_PER_TILE_M and c == 2:
+        # One store+check per tile on the failing cluster only. Ordered sm[i] -> store ->
+        # sm[i+1] so the read happens after THIS tile's commit and before the next tile
+        # overwrites mrun. The run aborts at the first failing check, so the UART names the
+        # tile directly.
+        for _i, _smn in enumerate(sm):
+            _l3 = BingoMemAlloc(f"dbg_m_c{c}_t{_i}", size=64, mem_level="L3")
+            _st = host(f"DbgStoreM_c{c}_t{_i}", "__host_bingo_kernel_idma",
+                       HostBingoKernelIdmaArgs(arena[_i % NQ].view(lay["mrun"]), _l3, 64),
+                       _smn)
+            host(f"DbgCheckM_c{c}_t{_i}", "__host_bingo_kernel_check_result",
+                 HostBingoKernelCheckResultArgs(h["m"], _l3, name=f"dbg_m_c{c}_t{_i}",
+                                                check_type=CHECK_FP16_TOL,
+                                                num_elements=BR, tolerance=tol_m), _st)
+            if _i + 1 < len(sm):
+                g.dfg.bingo_add_edge(_st, sm[_i + 1])
+
+    if DEBUG_S16_COMPARE and c == 2 and len(qk) > S16_CMP_BUF + NSCORE:
+        # THE WHOLE score tile, not one beat. Comparing 64 B of 32,832 B says nothing about
+        # the 511 beats the rowmax also reads, and the rowmax is what feeds m.
+        _n = 64 + BC * BR * 2
+        _a = BingoMemAlloc(f"dbg_s16_first_c{c}", size=_n, mem_level="L3")
+        _b = BingoMemAlloc(f"dbg_s16_again_c{c}", size=_n, mem_level="L3")
+        _i0, _i1 = S16_CMP_BUF, S16_CMP_BUF + NSCORE
+        _sa = host(f"DbgS16First_c{c}", "__host_bingo_kernel_idma",
+                   HostBingoKernelIdmaArgs(s16[_i0 % NSCORE], _a, _n), qk[_i0])
+        _sb = host(f"DbgS16Again_c{c}", "__host_bingo_kernel_idma",
+                   HostBingoKernelIdmaArgs(s16[_i1 % NSCORE], _b, _n), qk[_i1])
+        # the first store must complete before QK(_i1) overwrites the buffer
+        g.dfg.bingo_add_edge(_sa, qk[_i1])
+        host(f"DbgS16Cmp_c{c}", "__host_bingo_kernel_check_result",
+             HostBingoKernelCheckResultArgs(_a, _b, name=f"dbg_s16_c{c}",
+                                            check_type=CHECK_BYTE_EXACT,
+                                            data_size=_n), _sb)
 
     l3_m = BingoMemAlloc(f"out_fa_m_c{c}", size=64, mem_level="L3")
     st_m = host(f"Store_m_c{c}", "__host_bingo_kernel_idma",
@@ -1159,6 +2051,43 @@ def _build_cluster(dfg, c, h_all, m_all, rowsum_all):
                                                 check_type=CHECK_FP16_TOL,
                                                 num_elements=BR, tolerance=tol_s), st_rs)
 
+    # CHECK O. Without this the suite validates m and rowsum only, and both are per-tile
+    # quantities that this workload makes IDENTICAL on every tile -- so neither covers the
+    # accumulation across KV tiles, which is the entire point of FlashAttention. O is the
+    # only checked value that depends on every tile having been folded in correctly.
+    #
+    # It is also what makes a layout experiment trustworthy. The static-L1 work found a
+    # write that lands past the end of fa_v8_1, and which buffer it damages depends on what
+    # the packer put next: with fa_s16_0 there, every softmax row maximum is wrong and the
+    # suite says so; with fa_oacc32_0 there, nothing looked at the damage. A green run whose
+    # checks cannot see the failure mode under test is not evidence, and adding this check
+    # is cheaper than reasoning about which layouts happen to be observable.
+    o_bytes = BR * DHEAD * 4
+    l3_o = BingoMemAlloc(f"out_fa_o_c{c}", size=o_bytes, mem_level="L3")
+    # WAITS ON THE LAST PV, NOT ON `last`. `last` is the last SOFTMAX, and every other store
+    # here reads something a softmax wrote (m lives in the arena, rowsum in p8) -- but O is
+    # written by the last PV, which is a SIBLING of this node, not an ancestor: PV(TOTAL-1) is
+    # emitted in the loop's +1 iteration and depends on sm[TOTAL-1] exactly as this store did.
+    # So with `last` the host iDMA was free to read fa_oacc32_0 while the VersaCore was still
+    # accumulating into it.
+    #
+    # It is a RAW hazard, so the visible failure is not a wrong number -- the run HANGS, with
+    # the host parked and the UART stopping after the eighth check (all four m, all four
+    # rowsum) because the first Store_o/Check_o pair is where the host iDMA first overlaps a
+    # live VersaCore write to the same TCDM.
+    #
+    # It was latent at NSCORE=2: SM(i) takes a WAR edge on PV(i-NSCORE), so a smaller NSCORE
+    # drains the PV chain further before `last` retires. At NSCORE=2 only PV(TOTAL-1) can
+    # still be outstanding at that point; at NSCORE=3 three PVs can be, and the window is
+    # wide enough to hit every time.
+    st_o = host(f"Store_o_c{c}", "__host_bingo_kernel_idma",
+                HostBingoKernelIdmaArgs(buf["oacc"][NQ - 1], l3_o, o_bytes), [pv[-1], ck_rs])
+    ck_o = host(f"Check_o_c{c}", "__host_bingo_kernel_check_result",
+                HostBingoKernelCheckResultArgs(h["o"], l3_o, name=f"fa_o_c{c}",
+                                               check_type=CHECK_INT32_RELTOL,
+                                               num_elements=min(O_CHECK_ELEMS, BR * DHEAD),
+                                               tolerance=0.02), st_o)
+
     # The shard checks are chained rather than left as unordered peers. There is one host
     # core, so they run serially regardless; saying so costs nothing at run time and keeps
     # the per-edge dep tags affordable -- four shards of unordered store->check pairs all
@@ -1170,12 +2099,34 @@ def _build_cluster(dfg, c, h_all, m_all, rowsum_all):
         "last_sm": last,
         "arena": arena[NQ - 1],
         "p8_last": p8[(NKV_PER * NQ - 1) % NSCORE],
-        "checks": ck_rs,
+        "checks": ck_o,   # the tail of this shard's store->check chain
+        "first_store": st_m,  # the head of it -- build() gates this on EVERY cluster
+        # The consumers of the broadcast buffers. build() reaches back through these to
+        # close the cross-cluster WAR edges, which cannot be stated while this cluster is
+        # being built because three quarters of the consumers do not exist yet.
+        "qk": qk,
+        "pv": pv,
+        # The per-tile K/V FILL nodes, indexed by tile. Whatever kind of node filled the
+        # slot -- an owner's load or a pull from another cluster -- ld_k[t] is what wrote
+        # THIS cluster's k8[t % NKBUF]. The cross-cluster WAR closure needs exactly that,
+        # and it cannot be reconstructed from bcast["ksrc"], which holds owner loads only.
+        "ld_k": ld_k,
+        "ld_v": ld_v,
+        "pending_k": pending_k,
+        "pending_v": pending_v,
     }
 
 
 def build(dfg, h, m_all, rowsum_all, merged_h, jct_monoid):
-    """Four KV shards, then ONE cross-cluster fold done in the fabric.
+    """Four cluster pipelines, split either over KV or over the GQA group's query heads.
+
+    Under DECOMP = "headpar" (the default) the four clusters hold four query heads of one
+    GQA group. They share a KV head by construction, so each KV tile is read from main
+    memory ONCE and multicast into all four L1s, and each cluster's (m, l, O) is already a
+    complete result -- there is nothing to fold. That is the configuration that keeps the
+    quadrant compute-bound; see the DECOMP comment at the top of this file.
+
+    Under DECOMP = "kvsplit" the rest of this docstring applies.
 
     The shards are independent: each is the tuned single-cluster pipeline over its own KV
     tiles, producing its own (m_c, l_c). What makes this workload different from four
@@ -1188,7 +2139,118 @@ def build(dfg, h, m_all, rowsum_all, merged_h, jct_monoid):
     ChainGather walks the four of them, folding at each hop, so the collector's buffer
     receives the answer rather than the operands.
     """
-    shards = [_build_cluster(dfg, c, h, m_all, rowsum_all) for c in range(NCL)]
+    # Every cluster's L1 first, with no nodes: a broadcast names destinations in all four,
+    # so the handles have to exist before the first load node does.
+    bufs = [_alloc_cluster(dfg, c) for c in range(NCL)]
+
+    if DECOMP == "headpar":
+        # ---- one read per tile, fanned out in the writer --------------------------------
+        # ALL BROADCASTS ON ONE ENGINE (cluster 0). Spreading them over the four clusters'
+        # xDMAs DEADLOCKS the fabric -- measured, and root-caused on a waveform to the
+        # adapter's single from_remote context: all four clusters' receive windows open
+        # inside 1.3 us and none ever closes, so every finish manager sticks in ReadBusy.
+        # See docs/xdma_per_source_remote_contexts.md. BCAST_SPREAD reproduces it on
+        # purpose; never enable it for a measurement.
+        #
+        # The nodes themselves are created inside cluster 0's own _build_cluster pass, so
+        # the global node order stays what it was -- see the note there for the 7.6 pp that
+        # hoisting them cost.
+        # "vsrc" carries cluster 0's V load nodes so the other three can depend on them,
+        # the same deferral the broadcast nodes already use.
+        bcast = {"k": {}, "v": {}, "vsrc": {}, "vpull": [],
+                 "ksrc": {}, "kpull": []}
+        shards = [_build_cluster(dfg, c, h, m_all, rowsum_all, bufs[c], bcast, bufs)
+                  for c in range(NCL)]
+
+        # ---- close the forward references ----------------------------------------------
+        # Under BCAST_SPREAD cluster c consumes tiles issued by clusters built after it, so
+        # those RAW edges could not be stated inline. They are ordinary edges; only their
+        # statement is deferred.
+        for sh in shards:
+            for idx, j in sh["pending_k"]:
+                dfg.bingo_add_edge(bcast["k"][j], sh["qk"][idx])
+            for idx, j in sh["pending_v"]:
+                dfg.bingo_add_edge(bcast["v"][j], sh["pv"][idx])
+
+        # ---- close the cross-cluster WAR edges ------------------------------------------
+        # A broadcast buffer is free only when EVERY cluster's consumer of the tile 2 (resp.
+        # NVBUF) steps back has retired. Those consumers do not exist while the broadcast
+        # node is being created, so the edges are added here. One producer, four consumers:
+        # this is the coupling that head-parallelism buys its bandwidth with.
+        # Only the BROADCAST needs this: one producer writes every cluster's k8, so it must
+        # wait for every cluster's consumer. Under K_PULL each cluster fills its own buffer
+        # and its own k_after already covers its own consumer -- the only extra edge needed is
+        # puller -> cluster 0's refill, added below.
+        # The K push has exactly the broadcast's shape -- one producer writing every
+        # cluster's k8 -- so it needs exactly the broadcast's WAR edges.
+        if (BCAST_K or K_PUSH_ALL) and not K_PULL_FROM_CL0:
+            for j in range(2, NKV_PER):
+                for sh in shards:
+                    dfg.bingo_add_edge(sh["qk"][(j - 1) * NQ - 1], bcast["k"][j])
+        if BCAST_V:
+            for j in range(NVBUF, NKV_PER):
+                for sh in shards:
+                    dfg.bingo_add_edge(sh["pv"][(j - NVBUF + 1) * NQ - 1], bcast["v"][j])
+        # A pull whose source cluster is built later than the puller could not name its
+        # producer inline. These are ordinary RAW edges; only their statement is deferred.
+        for key, srcmap in (("kpend", "ksrc"), ("vpend", "vsrc")):
+            for j, n in bcast.get(key, []):
+                dfg.bingo_add_edge(bcast[srcmap][j], n)
+
+        # WAR ACROSS CLUSTERS. A puller of tile j reads the OWNER's buffer,
+        # all_bufs[own(j)][slot j % NBUF]. That buffer is next overwritten by the owner's
+        # OWN fill of the same slot, which is its ld_k/ld_v[j + NBUF] -- so the edge must
+        # be stated against that node, on that cluster.
+        #
+        # It used to be stated as `bcast["ksrc"][j + NBUF]`, and that is wrong twice over
+        # once PULL_ROTATE is on. `ksrc[t]` is the node on cluster t % NCL, so with NCL=4
+        # and NKBUF=2 it names cluster (j+2) % 4 -- a DIFFERENT cluster, whose k8 is a
+        # different physical buffer. And the node that really overwrites own(j)'s slot is
+        # frequently a PULL (own(j+2) != own(j)), which is recorded in bcast["kpull"] and
+        # never appears in ksrc at all, so the loop could not have found it either way.
+        #
+        # The effect is a source buffer overwritten mid-pull: the puller gets a later
+        # tile's K, its scores are wrong, and the running max m comes out far too large.
+        # It is latent at NSCORE=2 and at four tiles per cluster -- the schedule has no
+        # slack to open the window -- and fires every time at NSCORE=3 with sixteen.
+        def _close_pull_war(pulls, key, nbuf):
+            for j, n in pulls:
+                own = _pull_owner(j)
+                fills = shards[own].get(key) or []
+                t = j + nbuf
+                nxt = fills[t] if t < len(fills) else None
+                if nxt is not None and nxt is not n:
+                    dfg.bingo_add_edge(n, nxt)
+
+        if K_PULL_FROM_CL0:
+            _close_pull_war(bcast["kpull"], "ld_k", NKBUF)
+        if V_PULL_FROM_CL0:
+            _close_pull_war(bcast["vpull"], "ld_v", NVBUF)
+        # THE HOST EPILOGUE WAITS FOR EVERY CLUSTER, NOT JUST ITS OWN.
+        #
+        # Each shard's stores only needed its OWN cluster's compute, so with four clusters
+        # skewed -- which they are, increasingly so with more tiles -- Store_o_c2 would issue
+        # a 16 KB host iDMA read out of cluster 2's L1 while clusters 0/1/3 were still
+        # streaming K and V through the same fabric. That combination wedges the machine:
+        # host and all sixteen snitch traces freeze together and VCS keeps burning CPU. It is
+        # the RTL fragility in docs/soc_bottlenecks.md section 9, and this is the SW way
+        # around it.
+        #
+        # It costs nothing measurable. Every utilisation figure here ends its window at the
+        # LAST PV, so the host tail sits outside the measurement; all this does is stop the
+        # tail from overlapping live traffic.
+        last_pvs = [sh["pv"][-1] for sh in shards if sh["pv"]]
+        for sh in shards:
+            for lp in last_pvs:
+                if lp is not sh["pv"][-1]:
+                    dfg.bingo_add_edge(lp, sh["first_store"])
+
+        # No fold: under head-parallelism each cluster's (m, l, O) is already the complete
+        # answer for its own query head. The per-shard checks are the whole verification.
+        return
+
+    shards = [_build_cluster(dfg, c, h, m_all, rowsum_all, bufs[c])
+              for c in range(NCL)]
     g = G(dfg, 0)
 
     # De-synchronise the cold xdma_1d_copy config (see STAGGER_FIRST_V). One edge per
@@ -1273,6 +2335,18 @@ def main():
     p.add_argument("--platformcfg", type=pathlib.Path, required=True)
     p.add_argument("--data_h", type=pathlib.Path, default=None)
     p.add_argument("--configs_out", type=pathlib.Path, default=None)
+    # OFF BY DEFAULT. With this flag the mini-compiler places every L1 buffer itself and the
+    # kernels get constant offsets instead of runtime bingo_l1_alloc handles; without it,
+    # nothing about the emitted addresses changes. It is a flag rather than an environment
+    # variable on purpose -- it changes generated code, and the SW build runs inside a
+    # container, so an ambient switch can be set where the build is launched and absent where
+    # the compiler actually runs. That failure is silent: the build succeeds and the run
+    # passes, having quietly ignored it.
+    p.add_argument("--static-l1", action="store_true",
+                   help="let the compiler place L1 buffers statically (default: off)")
+    p.add_argument("--desc-list-in-wide-spm", action="store_true",
+                   help="put the BINGO task-descriptor list in the wide SPM "
+                        "(default: narrow SPM)")
     args = p.parse_args()
 
     with open(args.cfg) as f:
@@ -1296,7 +2370,8 @@ def main():
     a, b, v, m, rowsum, merged, o = build_shards()
     st = DataStaging(platform)
     h = stage(st, a, b, v, m, rowsum, o)
-    merged_h = stage_merged(st, merged)
+    # headpar has nothing to fold, so there is no merged golden to stage.
+    merged_h = stage_merged(st, merged) if merged is not None else None
     if args.data_h is not None:
         n = st.emit(args.data_h, args.output_dir)
         print(f"Staged {n} B of operands and goldens "
@@ -1320,30 +2395,62 @@ def main():
                    num_cores_per_cluster=platform["num_cores_per_cluster"],
                    is_host_as_acc=True, chiplet_ids=[0x00],
                    dep_tag_width=platform["dep_tag_width"])
-    build(dfg, h, m, rowsum, merged_h,
-          writer_junction_index(hw, "HasMonoidJunction"))
+    # The junction index is only meaningful for the fold. headpar has no fold, so it must
+    # not demand a cfg feature it never uses -- a head-parallel quadrant is a legitimate
+    # target on hardware built without the monoid junction.
+    jct = writer_junction_index(hw, "HasMonoidJunction") if DECOMP == "kvsplit" else None
+    build(dfg, h, m, rowsum, merged_h, jct)
 
     os.makedirs(args.output_dir, exist_ok=True)
-    dfg.bingo_compile_dfg("FlashAttention, KV-sharded over 4 clusters with an in-fabric merge",
-                          args.output_dir, args.output_offload_file_name,
-                          extra_include_header_list=["fa_data.h"])
+    dfg.bingo_compile_dfg(
+        "FlashAttention, GQA head-parallel over 4 clusters with a broadcast KV stream"
+        if DECOMP == "headpar" else
+        "FlashAttention, KV-sharded over 4 clusters with an in-fabric merge",
+        args.output_dir, args.output_offload_file_name,
+        extra_include_header_list=["fa_data.h"],
+        static_l1=args.static_l1,
+        desc_list_in_narrow_spm=not args.desc_list_in_wide_spm)
     # Every buffer _build_cluster allocates, with its real multiplicity. The previous
     # version of this line counted ONE K buffer, ONE V buffer and a hardcoded two score
     # buffers, and did not scale with NQ -- so it under-reported by ~70 kB and would not
     # have moved at all when a buffer was added. A budget line that cannot go up is worse
     # than none, because the L1 heap is the thing that silently bounds this workload.
-    l1 = (2 * (M * K * MESH_ROW * TILE_SIZE)              # k8, double buffered
-          + 2 * (S2_M * S2_K * MESH_ROW * TILE_SIZE)      # v8, double buffered
+    l1 = (NKBUF * (M * K * MESH_ROW * TILE_SIZE)          # k8, NKBUF-deep
+          + NVBUF * (S2_M * S2_K * MESH_ROW * TILE_SIZE)  # v8, NVBUF-deep
           + NQ * (N * K * MESH_COL * TILE_SIZE)           # q8, one per query tile
-          + MESH_ROW * MESH_COL * 4                       # cz, never read
+          + 0                                             # cz removed
           + NSCORE * (64 + BC * BR * 2)                   # s16
           + NSCORE * (BC * BR + 64)                       # p8
           + NQ * (BR * DHEAD * 4)                         # oacc
           + NQ * SnaxBingoKernelSimdFaSoftmaxArgs.arena_bytes(BC, DHEAD)
-          + SnaxBingoKernelPackFaPartialArgs.packed_bytes(BR, MONOID_SLOTS))
-    print(f"Generated FlashAttention: Br={BR} Bc={BC} d={DHEAD} NKV={NKV}, "
+          # headpar folds nothing, so it allocates no partial.
+          + (0 if DECOMP == "headpar"
+             else SnaxBingoKernelPackFaPartialArgs.packed_bytes(BR, MONOID_SLOTS)))
+    # Main-memory reads for the whole run, which is the quantity the decomposition
+    # changes: kvsplit pays NCL x per-cluster, headpar pays it once.
+    kb, vb = M * K * MESH_ROW * TILE_SIZE, S2_M * S2_K * MESH_ROW * TILE_SIZE
+    qb = N * K * MESH_COL * TILE_SIZE
+    if DECOMP == "headpar":
+        # A broadcast tile is read once; a per-cluster tile is read NCL times. Under
+        # BCAST_SKIP_FIRST tile 0 is the latter and the rest the former, so K costs
+        # NCL + (NKV_PER - 1) reads rather than NKV_PER.
+        k_reads = (NKV_PER if not BCAST_K
+                   else (NCL + NKV_PER - 1) if BCAST_SKIP_FIRST else NKV_PER)
+        k_reads = NCL * NKV_PER if not BCAST_K else k_reads
+        # V_PULL_FROM_CL0 reads each V tile from main memory ONCE; the other three copies
+        # come out of cluster 0's L1 and never touch the main-memory port.
+        v_reads = NKV_PER if (BCAST_V or V_PULL_FROM_CL0) else NCL * NKV_PER
+        traffic = (k_reads * kb + v_reads * vb
+                   + NCL * qb)
+    else:
+        traffic = NCL * (NKV_PER * (kb + vb) + qb)
+    mac = 2 * BC * BR * DHEAD * NKV_PER * NQ * NCL
+    print(f"Generated FlashAttention ({DECOMP}): Br={BR} Bc={BC} d={DHEAD} NKV={NKV}, "
           f"qshift={QSHIFT}, NSCORE={NSCORE}, L1 buffers {l1:,} B of 514,816 B "
           f"({100 * l1 / 514816:.0f}%)")
+    print(f"  main-memory reads {traffic:,} B for {mac:,} MAC "
+          f"= {mac / traffic:.0f} MAC/byte (one 512-bit port balances at "
+          f"{NCL * MESH_ROW * MESH_COL * TILE_SIZE // 64} MAC/byte)")
 
 
 if __name__ == "__main__":

@@ -28,7 +28,7 @@
     N: 2
     // KV tiles the software pipeline streams. Keep it >= 4 so the pipeline has enough
     // tiles to hide its fill and drain.
-    NKV: 8
+    NKV: 4
 
     // K and V both stream on the iDMA; moving V to the xDMA hart wedges the run
     // mid-pipeline (see main_bingo.py).
@@ -42,5 +42,5 @@
 
     // Validate the O accumulator against a golden. OFF by default: it costs ~13% of the
     // compute window (see main_bingo.py), so it is a correctness switch, not a default.
-    CHECK_O: 0
+    CHECK_O: 1
 }

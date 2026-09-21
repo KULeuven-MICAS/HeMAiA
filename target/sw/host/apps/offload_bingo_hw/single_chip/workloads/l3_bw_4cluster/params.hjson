@@ -1,0 +1,12 @@
+// Copyright 2025 KU Leuven.
+// Licensed under the Apache License, Version 2.0, see LICENSE for details.
+// SPDX-License-Identifier: Apache-2.0
+
+{
+    num_clusters: 4
+    // Bytes per transfer. Large enough that the per-task BINGO dispatch is ~10% of the
+    // transfer, so the number being measured is the port and not the manager.
+    xfer_bytes: 64 * 1024
+    // Transfers per cluster per phase.
+    reps: 3
+}

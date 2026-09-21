@@ -30,6 +30,16 @@ PLATFORM_H = $(MK_DIR)/../../../../../../../../target/sw/shared/platform/generat
 BINGO_GEN_DEPS = $(wildcard $(MK_DIR)/../../../../../../../../target/sw/host/runtime/libbingo/mini_compiler/*.py) \
                  $(MK_DIR)/../../../../../../../../target/sw/host/runtime/libbingo/include/libbingo/device_kernel_args.h
 
+# Static L1 placement, off by default. With BINGO_STATIC_L1=1 the mini-compiler places every
+# L1 buffer and the kernels get constant offsets instead of runtime bingo_l1_alloc handles; it
+# also writes static_l1_layout.{csv,png} here showing where each buffer sits and which node
+# may write over it. A make variable, not an environment one: it changes generated code and
+# the build runs in a container, where ambient settings silently do not arrive.
+BINGO_STATIC_L1 ?= 0
+ifeq ($(BINGO_STATIC_L1),1)
+BINGO_STATIC_L1_FLAG = --static-l1
+endif
+
 $(DATA_H) $(OFFLOAD_H) $(CONFIGS_JSON): $(MK_DIR)/main_bingo.py $(DATA_CFG) $(PLATFORM_H) $(BINGO_GEN_DEPS)
 	python3 $(MK_DIR)/main_bingo.py \
 		--output_dir $(MK_DIR) \
@@ -37,7 +47,7 @@ $(DATA_H) $(OFFLOAD_H) $(CONFIGS_JSON): $(MK_DIR)/main_bingo.py $(DATA_CFG) $(PL
 		-c $(DATA_CFG) \
 		--hwcfg $(SNITCH_ROOT)/target/snitch_cluster/cfg/snax_split_cluster.hjson \
 		--platformcfg $(PLATFORM_H) \
-		--configs_out $(CONFIGS_JSON)
+		--configs_out $(CONFIGS_JSON) $(BINGO_STATIC_L1_FLAG)
 
 ###############
 # Build settings
