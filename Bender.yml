@@ -172,5 +172,10 @@ sources:
   - target: simulation_hemaia
     files:
       - target/sim/testharness/uartdpi/uartdpi.sv
+      # Bound SoC observers. Simulation only, monitors only -- nothing they touch is in the
+      # DUT's cone. They flatten struct-typed AXI handshakes into scalars, which is what makes
+      # those handshakes visible to the waveform auto-dump at all, and they print a census so
+      # a question can be answered without post-processing one.
+      - target/sim/testharness/soc_probes.sv
       - target/sim/testharness/dut.sv
       - target/sim/testharness/testharness.sv
