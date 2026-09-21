@@ -239,6 +239,8 @@ clean-socctrl:
 QUADPERIPH_HJSON_DIR	    = $(SW_HJSON_DIR)/quad_periph
 $(TARGET_QUADPERIPH_DIR):
 	@mkdir -p $@
+$(QUADPERIPH_HJSON_DIR):
+	@mkdir -p $@
 
 QUADPERIPH_REGGEN_TARGETS = $(TARGET_QUADPERIPH_DIR)/occamy_quad_periph_reg_pkg.sv
 QUADPERIPH_REGGEN_TARGETS += $(TARGET_QUADPERIPH_DIR)/occamy_quad_periph_reg_top.sv
@@ -248,6 +250,12 @@ $(QUADPERIPH_REGGEN_TARGETS): .quadperiph_reggen_targets_group
 quadperiph: $(QUADPERIPH_REGGEN_TARGETS)
 clean-quadperiph:
 	rm -rf $(QUADPERIPH_REGGEN_TARGETS) .quadperiph_reggen_targets_group
+# QUADPERIPH RTL needs the hjson file
+# Normally if you generate the SW first, the hjson file is already generated
+# But if you generate the RTL first, we need to generate the hjson from the template
+$(QUADPERIPH_HJSON_DIR)/occamy_quad_periph_reg.hjson: $(SOURCE_QUADPERIPH_DIR)/occamy_quad_periph_reg.hjson.tpl $(CFG) | $(QUADPERIPH_HJSON_DIR)
+	@echo "[OCCAMYGEN] Generate $@"
+	@$(OCCAMYGEN) --cfg $(CFG) --outdir $(QUADPERIPH_HJSON_DIR) --ctrl $<
 # Generate the reggen targets from the hjson file
 .quadperiph_reggen_targets_group: $(QUADPERIPH_HJSON_DIR)/occamy_quad_periph_reg.hjson | $(TARGET_QUADPERIPH_DIR)
 	@$(REGGEN) -r -t $(TARGET_QUADPERIPH_DIR) $<
