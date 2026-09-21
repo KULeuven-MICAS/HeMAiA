@@ -27,20 +27,27 @@ int bingo_hemaia_system_mmap_init(){
     // printf("Chip(%x, %x): [Host] Comm buffer addr: %lx\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), comm_buffer);
     // L2 heap init. Starts just above the comm buffer, in the narrow SPM.
     //
-    // Sized at 3/4 of the narrow SPM rather than 1/2. The old comment said the remainder
-    // was "left to stack", but that is not so: host.ld places EVERY section -- including
-    // .narrow_spm -- in WIDE_SPM, and the stack pointer is at the top of WIDE_SPM
-    // (__return_pointer$). Nothing else lives in the narrow SPM above this heap, so the
-    // upper half was simply unused.
+    // Take the whole narrow SPM above the comm buffer, less a guard at the top for the
+    // HOST STACK.
     //
-    // This heap is where bingo_task_create() allocates from, so its size is the hard cap
-    // on how many tasks one DFG may contain -- at 1/2 that was roughly 35 tasks, which is
-    // less than a modest sweep needs. A quarter of the region is still left spare.
-    // Take the whole narrow SPM above the comm buffer, less a 1 KiB guard, rather than a
-    // fixed fraction: nothing else is placed here, so a fraction just wasted the rest.
+    // THE STACK IS IN THE NARROW SPM, not in WIDE_SPM. An older comment here claimed the
+    // opposite on the strength of host.ld's __return_pointer$, but host.ld never loads sp:
+    // its `la sp, __stack_pointer$` is commented out, so the host runs on whatever the boot
+    // ROM left, and bootrom.ld sets __stack_pointer$ to the TOP OF THE NARROW SPM. The
+    // stack therefore grows down into the top of this heap, and the guard below is the only
+    // thing keeping the two apart.
+    //
+    // SIZE THE GUARD FOR THE DEEPEST CALL PATH, not for a round number -- an earlier 1 KiB
+    // was measured overrun. Nothing detects the collision: the allocator hands out space it
+    // believes is free, the caller writes its data, and only later -- once the host has
+    // called deep enough -- does the stack overwrite the tail of it. The failure therefore
+    // surfaces far from its cause, as a consumer reading a structure whose end is corrupt.
+    //
+    // This heap is where bingo_task_create() and the task-descriptor list allocate from, so
+    // its size is the hard cap on how large one data-flow graph may be.
     uint64_t l2_heap_start = ALIGN_UP(comm_buffer + sizeof(comm_buffer_t), BINGO_HEAP_ALIGNMENT);
     uint64_t l2_heap_used  = l2_heap_start - comm_buffer;
-    uint64_t l2_heap_size  = NARROW_SPM_SIZE - l2_heap_used - 1024u;
+    uint64_t l2_heap_size  = NARROW_SPM_SIZE - l2_heap_used - 4096u;
     uint64_t l2_heap_manager = bingoHeapInit(l2_heap_start, l2_heap_size);
     // printf("Chip(%x, %x): [Host] L2 heap start: %lx, size(kB): %d\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), l2_heap_manager, l2_heap_size>>10);
     // printf("Chip(%x, %x): [Host] L2 heap start: %lx, size: %lx, heap manager: 0x%lx\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), l2_heap_start, l2_heap_size, l2_heap_manager);
