@@ -108,7 +108,6 @@ HOST_CORE = _ROLES["host"]
 CHECK_FP16_TOL = 2
 # Signed-int32, relative tolerance -- for an ACCUMULATOR (see host_kernel_args.h).
 CHECK_INT32_RELTOL = 5
-BEAT_F16 = 32   # fp16 elements per 64-B beat
 
 # ---- the tile ------------------------------------------------------------------------
 # VersaCore's single spatial unrolling on this cluster; the same numbers the device reads

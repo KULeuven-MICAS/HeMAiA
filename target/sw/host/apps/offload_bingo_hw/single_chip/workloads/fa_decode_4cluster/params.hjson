@@ -36,10 +36,4 @@
     SCORE_SHIFT_EXTRA: 4
     // DECODE. One query position per token, the whole KV cache read for it.
     NQ: 1,
-
-    // Validate the O accumulator against a golden. OFF by default: it costs ~13% of the
-    // compute window (see main_bingo.py), so it is a correctness switch, not a default.
-    // O is the second gather (elementwise-add of the rescaled numerators) and is not
-    // wired yet; the per-shard O golden would not match a merged O anyway.
-    CHECK_O: 0
 }

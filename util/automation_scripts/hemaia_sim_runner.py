@@ -1581,6 +1581,12 @@ class HeMAiASimRunner:
         results: Dict[str, Tuple[bool, float]] = {}
         binary_name = self.spec["binary"]
         run_args = list(self.spec.get("run_args", []))
+        # Extra runtime plusargs from the environment, space separated. The one that matters
+        # for turnaround is `SIM_PLUSARGS=+notrace`: every hart otherwise writes a per-cycle
+        # instruction trace, which is the single largest per-cycle cost in the simulation and
+        # is pure waste on any run whose traces nothing will read. Leave it unset whenever the
+        # run is being measured -- the performance tooling is built on those traces.
+        run_args += os.environ.get("SIM_PLUSARGS", "").split()
         if self._sim_cfg_flag("sim_with_netlist"):
             run_args.extend(self.spec.get("netlist_run_args", []))
         # NO -fgp. VCS's fine-grained parallelism is aimed at GATE-LEVEL simulation, where a

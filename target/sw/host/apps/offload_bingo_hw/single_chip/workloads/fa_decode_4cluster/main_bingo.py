@@ -54,7 +54,7 @@
 #
 #   m        the running row maximum over all Bc keys
 #   rowsum   the sum of exp(S - m) over every key
-#   O        the INT32 PV accumulator, under CHECK_O
+#   O        the INT32 PV accumulator
 #
 # m and rowsum cover the reduce, the subtract, the exponential, the tap and the l
 # recurrence, but both are per-tile values that are identical on every tile here, so
@@ -115,7 +115,6 @@ CHECK_FP16_TOL = 2
 # Signed-int32, relative tolerance -- for an ACCUMULATOR (see host_kernel_args.h).
 CHECK_INT32_RELTOL = 5
 CHECK_FP32_TOL = 1
-BEAT_F16 = 32   # fp16 elements per 64-B beat
 
 # ---- the tile ------------------------------------------------------------------------
 # VersaCore's single spatial unrolling on this cluster; the same numbers the device reads
@@ -128,7 +127,6 @@ MESH_ROW, TILE_SIZE, MESH_COL = 16, 4, 16
 M = K = N = NKV = None   # filled by _load_params() before anything derived is computed
 # K and V both stream on the iDMA. Moving V to the xDMA hart wedges the run mid-pipeline,
 # with the GEMM core short of its task count and the SIMD core stuck in its drain.
-CHECK_O = 0              # params.hjson: validate the O accumulator (perturbs timing)
 NQ = 1                   # params.hjson: query tiles sharing one K/V pass
 
 BC = BR = DHEAD = S2_M = S2_K = S2_N = QSHIFT = None
@@ -820,15 +818,13 @@ def _load_params(param):
     golden -- is a function of (M, K, N) and the mesh. Deriving it here is what stops the
     kernel's idea of the tile and the descriptors' idea of it from drifting apart.
     """
-    global M, K, N, NKV, CHECK_O, NQ, BC, BR, DHEAD, S2_M, S2_K, S2_N, QSHIFT, NKV_PER, NCL
+    global M, K, N, NKV, NQ, BC, BR, DHEAD, S2_M, S2_K, S2_N, QSHIFT, NKV_PER, NCL
     global DECOMP
     DECOMP = str(param.get("DECOMP", DECOMP))
     if DECOMP not in ("headpar", "kvsplit"):
         raise ValueError(f"DECOMP={DECOMP!r} must be 'headpar' or 'kvsplit'")
     M, K, N = int(param["M"]), int(param["K"]), int(param["N"])
     NKV = int(param["NKV"])
-    # Optional, so an older params.hjson still loads.
-    CHECK_O = int(param.get("CHECK_O", 0))
     # Extra right-shift on the INT8 operands, BEYOND the minimum that keeps a score inside
     # FP16. It exists for the cross-cluster fold, not for the arithmetic.
     #
