@@ -77,6 +77,22 @@
 // ==========================================================================
 #include <snax_simd_lib.h>
 
+// Drain the SIMD block before the fused exp pass reads the -m_new prefix.
+//
+// DEFAULT 0: this was TRIED AND IT DOES NOT WORK. Blocking the SIMD core mid-softmax
+// perturbs timing into the known 4-issuer xDMA deadlock -- at NSCORE=3 the read-stall and
+// wide-send watchdogs fire on clusters 3 and 1 (xdma_stall_watchdog.sv:75, ~4.16-4.18 ms),
+// and at the shipping NSCORE=2 the run produces no checks at all. Kept behind the flag as a
+// record of a negative result, not as a fix.
+//
+// A correct fix has to establish the prefix WITHOUT stalling the SIMD core -- e.g. seed each
+// s16 prefix from the idle xDMA with a dependency edge into the FIRST softmax that uses that
+// buffer. That is not the same as the setup-time pre-fill, which has no such edge and is
+// simply overwritten (and, filled with 0 or NEG_INF16, corrupts the result: 33x and 0.750x).
+#ifndef BINGO_FA_DRAIN_BEFORE_FUSED
+#define BINGO_FA_DRAIN_BEFORE_FUSED 0
+#endif
+
 #ifdef SIMD_EXT_STREAMMAP
 #define BINGO_HAS_STREAMMAP 1
 #else
@@ -1356,6 +1372,11 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_rope(void *arg) {
 #define SIMD_FA_GEOM_SELF     0u
 #define SIMD_FA_GEOM_PROLOGUE 1u
 #define SIMD_FA_GEOM_PRIMED   2u
+// Like PRIMED, and ALSO: the block's shared CSRs still hold a same-geometry softmax
+// program, so snax_simd_program_fast() can be skipped and only the six per-task CSRs
+// written. Only the host may assert this -- it is the one that knows what else ran on
+// this core. See the geom_mode comment in main_bingo.py.
+#define SIMD_FA_GEOM_CSR_PRIMED 3u
 
 typedef struct {
     uint32_t magic, bc, dhead;
@@ -1608,7 +1629,9 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_fa_softmax(void *arg) {
     // because .l1 is NOLOAD and "a shape that is declared but never filled programs the
     // AGU from whatever was in TCDM".
     simd_fa_memo_t *memo = (simd_fa_memo_t *)(arena + SIMD_FA_MEMO_OFF);
-    const uint32_t cold = (tile_idx == 0u && geom_mode != SIMD_FA_GEOM_PRIMED);
+    const uint32_t shapes_ready = (geom_mode == SIMD_FA_GEOM_PRIMED ||
+                                   geom_mode == SIMD_FA_GEOM_CSR_PRIMED);
+    const uint32_t cold = (tile_idx == 0u && !shapes_ready);
     if (cold || memo->magic != SIMD_FA_MEMO_MAGIC ||
         memo->bc != bc || memo->dhead != dhead) {
         simd_fa_build_shapes(arena, bc, dhead);
@@ -1648,7 +1671,8 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_fa_softmax(void *arg) {
     // spatial stride, channel and byte masks, temporal dims 1 and 2. From here each task
     // writes only its six 1-D CSRs. It is done per invocation, not once ever, because
     // another node may have used the block since.
-    snax_simd_program_fast(&sh[FA_SH_TAP_IN], &sh[FA_SH_TAP_OUT]);
+    if (geom_mode != SIMD_FA_GEOM_CSR_PRIMED)
+        snax_simd_program_fast(&sh[FA_SH_TAP_IN], &sh[FA_SH_TAP_OUT]);
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_CFG_END);
 
     // A PROLOGUE stops HERE -- after the whole config, before the first task is fired.
@@ -1738,6 +1762,27 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_fa_softmax(void *arg) {
     // l is accumulated from the UNSCALED fp16 P.
     snax_write_simd_cfg_reg(SIMD_EXT_FP16TOINT8_CSR + 0, BINGO_SIMD_I8_SCALE_UNIT);
     snax_write_simd_cfg_reg(SIMD_EXT_FP16TOINT8_CSR + 1, SIMD_QUANT_TAIL(bc));
+#if BINGO_FA_DRAIN_BEFORE_FUSED
+    // DRAIN BEFORE THE FUSED PASS READS THE -m_new PREFIX.
+    //
+    // This is the one producer/consumer pair in the softmax that is not a plain arena slot:
+    // tasks 3+4 write -m_new into the beat immediately BELOW the score tile
+    // (`negm = s16_src - SIMD_BEAT_BYTES`), and the fused pass below streams
+    // [negmS][S^T x bc] starting AT that beat, sticky-latching it as the value subtracted
+    // from every score. Every other task reads state written a task or more earlier; this
+    // one reads the immediately preceding task's output.
+    //
+    // Tasks are deliberately fired back to back with no wait, so the ordering rests on the
+    // block retiring task N before task N+1's first beat enters the chain. MEASURED: at
+    // NSCORE=3 the fused pass reads X out of `fa_s16_2`'s prefix (0x44300 -- the buffer used
+    // exactly once under the 0,1,2,0 rotation, so nothing rewrote it first), 516 ns before
+    // the SIMD writes X into `fa_p8_2`. One bounded drain per softmax closes it.
+    if (snax_simd_wait_all_bounded()) {
+        printf_safe("[Cluster %d Core %d]: SIMD drain timeout before fused pass\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+#endif
     snax_simd_program_1d(&sh[FA_SH_P_IN], &sh[FA_SH_P_OUT]);
     snax_simd_fire();
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_TASK_END);
@@ -1749,6 +1794,23 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_fa_softmax(void *arg) {
     //    rescaled O are the only two things the next GEMM consumes. It depends on corr
     //    and on nothing below, so nothing stops it running now -- and everything after
     //    this point only prepares the NEXT tile.
+    //
+    // NOTE (2026-09-21): this task writes `L.oacc`, the arena's own O region, which nothing
+    // reads -- Store_o reads fa_oacc32_{q}, a separate allocation PV accumulates into. So it
+    // is DEAD: removing it (and the 8,192 B region, and the 1,024 B fa_cz alongside) passed
+    // 12/12.
+    //
+    // It is restored, and the reason is a measurement one. Deleting it edits the device
+    // library, which shifts every kernel address and the .rodata dispatch table -- an effect
+    // measured at 3.7 pp ON ITS OWN, because .rodata reads from a cluster kernel are
+    // blocking fabric round trips. The removal arm came out 62.1% -> 59.5%, which is inside
+    // that noise band and therefore says nothing either way. (An earlier -140 cc reading
+    // quoted here was worse than useless: it was taken from a bingo_trace.json that was
+    // still being written, when the UART showed 8 of 12 checks.)
+    //
+    // To actually price it, build a matched baseline with the SAME device library and
+    // compare against that. The REAL bug here is separate and still open: PV applies no corr
+    // at all, so fa_oacc32's recurrence is incomplete whether or not this task exists.
     snax_simd_use2(SIMD_EXT_STREAMELEMENTWISE_1, SIMD_EXT_STREAMELEMENTWISE_1_CSR, 1,
                    SIMD_EW_MUL | SIMD_EW_STICKY_B);
     snax_simd_program_1d(&sh[FA_SH_ORS_IN], &sh[FA_SH_ORS_OUT]);
