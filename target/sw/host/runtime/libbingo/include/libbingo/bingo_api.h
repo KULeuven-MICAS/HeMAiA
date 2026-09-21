@@ -567,7 +567,8 @@ void bingo_close_all_clusters(bingo_task_t **task_list, uint32_t num_tasks);
 // Idle / normal clock-division power levels programmed by bingo_hw_scheduler_init_pm().
 // Exposed so DVFS can seed its ack with the correct boot (= normal) level instead of a
 // stale 0 (which would otherwise cause a spurious initial RAISE doorbell).
-#define BINGO_PM_IDLE_POWER_LEVEL   25
+
+#define BINGO_PM_IDLE_POWER_LEVEL   6
 #define BINGO_PM_NORMAL_POWER_LEVEL 6
 
 // Configure the power-management registers (idle/normal power levels, per-core
