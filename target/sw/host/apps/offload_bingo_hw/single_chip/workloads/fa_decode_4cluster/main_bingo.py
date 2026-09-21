@@ -158,84 +158,64 @@ NKV_PER = None           # KV tiles per cluster; set by _load_params()
 #              four L1s. No fold: each cluster's output is already a complete attention
 #              result for its own head.
 #
-# WHY THE DEFAULT IS headpar. FA decode's arithmetic intensity is Br exactly -- each KV
-# byte feeds Br query rows -- and Br is pinned to 32 by the SIMD beat. The four clusters
-# mux onto ONE 512-bit path, so machine balance is 4 x 1024 MAC/cc / 64 B/cc = 64 MAC/byte
-# against an intensity of 32: memory-bound by 2x, MEASURED as 68.3% array utilisation
-# versus 83.6% on one cluster, where the same intensity sits against a balance of 16.
+# WHY THE DEFAULT IS headpar. FA decode's arithmetic intensity is Br exactly -- each KV byte
+# feeds Br query rows -- and Br is pinned by the SIMD beat. All clusters mux onto ONE wide
+# path, so the machine's balance point is well above that intensity and the kernel is
+# memory-bound by construction. One cluster on its own is not, because the same intensity
+# then sits against a much lower balance point.
 #
-# kvsplit cannot fix that from software. It divides the compute four ways and multiplies
-# the KV traffic four ways, so the ratio is a property of the decomposition, not of the
-# schedule -- which is why five arms that REORDERED traffic (V-push 50.5%, V-split 55.2%,
-# NVBUF=3 63.2%, pair-batch 54.6%, stagger 61.2%) were all reabsorbed. headpar amortises
-# one KV read over NCL x Br = 128 query rows, so the effective intensity is Br * NCL and
-# the balance point flips back to the compute-bound side. Main-memory traffic for the same
-# total work: 2.11 MiB -> 528 KiB.
+# kvsplit cannot fix that from software. It divides the compute by the cluster count and
+# multiplies the KV traffic by it, so the ratio is a property of the DECOMPOSITION, not of
+# the schedule -- which is why every arm that merely REORDERED traffic was reabsorbed.
+# headpar instead amortises one KV read over every cluster's query rows, so the effective
+# intensity rises by the cluster count and the balance point flips back to the compute-bound
+# side. Same total work, a fraction of the main-memory traffic.
 #
-# MEASURED, SIX ARMS, ONE BUILD FAMILY. ideal-array-cycles / pipeline, NQ=1, on the fixed
-# xDMA adapter (xdma_axi_adapter 0b96648, snitch_cluster 669ad0d2):
+# THE RESULT IS NOT "head-parallelism wins". Head-parallelism WITHOUT a broadcast is worse
+# than kvsplit at identical traffic volume and identical engine pairing: several clusters
+# reading the SAME bytes concurrently is worse than the same number reading disjoint bytes.
+# Every bit of headpar's advantage comes from the broadcast, not from the decomposition.
 #
-#   headpar, K broadcast + V per-cluster iDMA   62.6%   <-- the default here
-#   kvsplit                                     55.6%
-#   headpar, NO broadcast, K iDMA + V xDMA      51.2%
-#   headpar, K and V both broadcast             47.7%
-#   headpar, K+V broadcast + multicast warm-up  47.0%
-#   headpar, NO broadcast, both on the iDMA     38.6%
-#   headpar, broadcasts spread over 2 or 4 xDMAs  --    HANGS; see BCAST_SPREAD
-#
-# THE RESULT IS NOT "head-parallelism wins". Read the third row: head-parallelism with no
-# broadcast is WORSE than kvsplit (51.2% vs 55.6%) at identical traffic volume and with the
-# identical engine pairing. Four clusters reading the SAME bytes concurrently is worse than
-# four reading disjoint bytes. Every bit of headpar's advantage comes from the broadcast.
-#
-# But broadcasting BOTH operands is worse again (47.7%), because one issuer then serialises
-# two streams into a single 12,400 cc window during which all four arrays idle -- that gap
-# alone was 80% of the array idle, and 77% of it had nothing on the waiting clusters busy.
+# But broadcasting BOTH operands is worse again, because one issuer then serialises two
+# streams into a single window during which every array idles, and that one gap dominates
+# the array idle for the run.
 #
 # SO THE OPTIMUM IS EXACTLY ONE BROADCAST OPERAND. Zero throws away the read sharing; two
 # serialises the only engine allowed to issue. That is a direct consequence of the adapter
 # holding ONE remote-write context -- the same constraint that makes BCAST_SPREAD hang --
 # and it is the whole design rule this file encodes.
 #
-# WHAT BINDS NOW IS THE SIMD SOFTMAX, not memory. Two independent checks agree: the
-# remaining array idle is 37-61% covered by SIMD and 0% by the xDMA on clusters 1-3; and
-# NQ=2, which doubles array work on the same delivered bytes and is worth +8.6 pp on
-# (memory-bound) kvsplit, is worth only +0.6 pp here because it doubles softmax work too.
+# WHAT BINDS AFTERWARDS IS THE SIMD SOFTMAX, not memory -- but only for as long as the
+# softmax is EXPOSED. Whether raising NQ pays therefore depends on the cluster hardware and
+# not on this file: it doubles array work on the same delivered bytes, which is a large win
+# when the array is the constraint and close to nothing when the softmax it also doubles is
+# already the constraint. Re-measure it against the current build rather than trusting a
+# figure recorded here.
 #
-# THE READ-INTENSITY ARGUMENT ABOVE IS THEREFORE RIGHT, with one correction it did not
-# make: cutting reads only helps once the writes are not funnelled through one issuer.
-# An earlier revision of this comment concluded the opposite -- "the broadcast cuts bytes
-# READ, not bytes WRITTEN, so it cannot help" -- which the 62.6% row refutes. What that
-# revision actually measured was the two-operand broadcast, and generalised from it.
+# The cross-chiplet half of the idea is UNTOUCHED and still right -- chiplets do not share a
+# port, so KV-split + the in-fabric fold belongs there.
 #
-# The cross-chiplet half of the idea is UNTOUCHED and still right -- chiplets do not share
-# a port, so KV-split + the in-fabric fold belongs there.
-#
-# NOTE ON THE 57.4% IN THE GIT HISTORY: that is this same kvsplit built WITHOUT the
-# multicast kernel in the device library. Adding one SNAX_EXPORT_FUNC entry shifts every
-# kernel address and the .rodata dispatch table, and .rodata reads from a cluster kernel
-# are blocking fabric round trips -- worth 3.7 pp. Carrying the capability costs that even
-# when it is unused; #ifdef the kernel out if the last point matters.
+# CARRYING AN UNUSED KERNEL IS NOT FREE. Adding one SNAX_EXPORT_FUNC entry shifts every
+# kernel address and the .rodata dispatch table, and .rodata reads from a cluster kernel are
+# blocking fabric round trips. A device library entry costs something even on the arms that
+# never call it; #ifdef it out if that matters.
 DECOMP = "headpar"
 
 # WHICH operand rides the broadcast, under headpar. EXACTLY ONE SHOULD.
 #
-# See the six-arm table above: K only = 62.6%, K and V = 47.7%, neither = 51.2%. Both ends
-# of the range are worse than the middle, so this is a genuine optimum and not a monotone
-# knob.
+# Both ends of the range are worse than the middle -- neither operand broadcast, and both
+# operands broadcast, each lose to exactly one. This is a genuine optimum, not a monotone
+# knob, so do not "improve" it by moving further in either direction.
 #
-# WHY K AND NOT V. Either single choice moves one stream off the broadcaster, but K is the
-# one QK(0) waits for, so broadcasting K puts the shared read on the critical path's own
-# operand while V -- needed later, by PV -- streams underneath on an engine that head-
-# parallelism otherwise leaves completely idle. MEASURED: with V on the iDMAs those engines
-# go from 230 cc of work in a 34,000 cc pipeline to 5,051-11,820 cc, and cluster 0's xDMA
-# drops 19,239 -> 10,457 cc. The 12,400 cc head stall disappears entirely; the largest
-# remaining gap is 2,051-2,909 cc.
+# WHY K AND NOT V, WHEN THE BROADCAST WAS USED. Either single choice moves one stream off
+# the broadcaster, but K is the one the first QK waits for, so broadcasting K puts the shared
+# read on the critical path's own operand while V -- needed later, by PV -- streams underneath
+# on an engine that head-parallelism otherwise leaves idle. That pairing removed the head
+# stall entirely.
 #
-# THE COST IS AN ASYMMETRY. Cluster 0 is the only cluster issuing a broadcast, so it is the
-# only one whose xDMA is loaded, and it is the slowest of the four (60.9% against
-# 61.8-64.0%). Without that asymmetry the mean would be ~64%. Under one remote-write
-# context there is no way to spread it -- see BCAST_SPREAD.
+# THE COST WAS AN ASYMMETRY. Only the issuing cluster's xDMA is loaded, so it becomes the
+# slowest of the group and drags the mean below what the other clusters reach on their own.
+# Under one remote-write context there is no way to spread it -- see BCAST_SPREAD.
 #
 # BOTH ARE NOW FALSE: the multicast is no longer used. It does not survive a long KV axis --
 # at 16 tiles per cluster the broadcast arm stalls mid-stream around tile 11 while the
@@ -252,15 +232,11 @@ BCAST_V = False
 # configuration its defects 1-3 make legal and asks for it to be re-run. It was, on a build
 # carrying those fixes (xdma_axi_adapter 0b96648, full RTL regen). IT STILL HANGS.
 #
-#   4 issuers:  cluster 2 xdma_grant_manager stalls at 3,714,373 ns, then cluster 0's grant
-#               manager + finish_manager.middle_last_write + wide_send together at 4,335,902
-#   2 issuers:  cluster 3 grant manager at 3,714,913 ns, cluster 0's three at 4,336,696
-#
-# The two diverge by 540 ns and 794 ns -- the same mechanism at the same point in the
-# program -- so neither the issuer count beyond two nor the fan-out width matters. And with
-# two issuers (clusters 0 and 2) the FIRST casualty is cluster 3, which issues nothing: the
-# grant manager that wedges first belongs to a pure RECEIVER. No i_read_stall_watchdog fires
-# anywhere, so this is not the finish-manager read path.
+# Both a full fan-out and a two-issuer fan-out wedge at the SAME point in the program and
+# within a few hundred nanoseconds of each other, so neither the issuer count beyond two nor
+# the fan-out width matters. And with two issuers the FIRST casualty is a cluster that issues
+# nothing: the grant manager that wedges first belongs to a pure RECEIVER. No read-stall
+# watchdog fires anywhere, so this is not the finish-manager read path.
 #
 # Symptom if you trip it anyway: two xDMA harts spinning forever on `csrr 0x409` in
 # xdma_wait_task, and one .dasm growing past a gigabyte. Full write-up with timings in
@@ -271,10 +247,9 @@ BCAST_SPREAD = False
 # WHICH ENGINE GETS TILE j's V, RELATIVE TO ITS K.
 #
 # BCAST_SPREAD alone does not help the FIRST tile, and the first tile is where headpar
-# loses. MEASURED on the single-issuer arm: the cold K0 broadcast costs 2,117 cc of config
-# plus 4,888 cc of run, the cold V0 another 1,075 + 4,650, and because owner(0) is cluster 0
-# for both they are SERIAL -- ~12,730 cc before the first PV can start, in a 34,314 cc
-# pipeline. Warm broadcasts are only ~1,700 cc each, so steady state was never the problem.
+# loses. A COLD transfer costs several times what the same transfer costs warm, and when the
+# same cluster owns both operands of tile 0 the two cold transfers are SERIAL -- so the head
+# is two cold transfers long before any compute starts. Steady state was never the problem.
 #
 # A non-zero skew puts tile j's V on a different engine from its K, so the two cold
 # transfers overlap instead of queueing. NCL // 2 is the maximum separation on a quadrant.
@@ -282,26 +257,23 @@ BCAST_V_SKEW = 0
 
 # WARM THE MULTICAST PATH BEFORE THE FIRST REAL TILE. MEASURED AND REFUTED -- leave False.
 #
-# The idea: the cold K0 broadcast runs 4,888 cc where warm ones run 1,237-1,908, and the
-# three head warm-ups exist because a core's first dispatch of a kernel is dominated by
-# icache refills. So warm the multicast too, with 64 B into a scratch buffer.
+# The idea: a cold broadcast runs several times longer than a warm one, and the head
+# warm-ups elsewhere in this file exist because a core's first dispatch of a kernel is
+# dominated by icache refills. So warm the multicast too, with a small transfer into scratch.
 #
-# It does not work, in BOTH configurations, and it costs:
-#
-#   K+V broadcast:      47.7% -> 47.0%   cluster 0's xDMA busy went UP, 19,239 -> 19,547 cc
-#   K only, V on iDMA:  62.6% -> 62.4%   cluster 0 alone 60.9% -> 55.7%, others +0.2..+3.7
-#
-# The per-cluster split is the tell: it hurts exactly the cluster that runs it and nobody
-# else. It is pure added work on the issuing engine with no compensating saving.
+# It does not work, in BOTH configurations, and it costs. The per-cluster split is the tell:
+# it hurts exactly the cluster that runs it and nobody else, so it is pure added work on the
+# issuing engine with no compensating saving.
 #
 # TWO REASONS IT FAILED, and the second is a flaw in the experiment rather than the idea.
-# (a) 64 B is a completely different descriptor shape from a 65,536 B tile, so it would not
-#     warm the path that actually costs anything even if first-dispatch cost were the issue.
+# (a) a small transfer is a completely different descriptor shape from a full tile, so it
+#     would not warm the path that actually costs anything even if first-dispatch cost were
+#     the issue.
 # (b) more likely it is not first-dispatch cost at all: the cold broadcast runs while the
 #     whole quadrant is starting up. Contention, not refills.
-# If anyone retries this, warm it with a FULL-SIZE transfer and check whether the first
-# real broadcast's XDMA_RUN span actually shrinks -- that is the measurement that decides
-# it, not the end-to-end number.
+# If anyone retries this, warm it with a FULL-SIZE transfer and check whether the first real
+# broadcast's run span actually shrinks -- that is the measurement that decides it, not the
+# end-to-end number.
 BCAST_WARMUP = False
 
 # Let head-parallel put V on the cluster's OWN xDMA, the way kvsplit does.
@@ -312,38 +284,29 @@ BCAST_WARMUP = False
 # there is no incoming remote write at all, and leaving four xDMAs idle would make the
 # no-broadcast control unfair to itself.
 #
-# EXISTS FOR THAT CONTROL, which is the one that justifies the whole broadcast:
-#
-#   V_ON_XDMA=True,  no broadcast   51.2%   K on 4 iDMAs, V on 4 xDMAs -- kvsplit's pairing
-#   V_ON_XDMA=False, no broadcast   38.6%   both on one iDMA per cluster; that engine binds
-#   K broadcast, V on iDMA          62.6%
-#
-# 51.2% is the honest floor for head-parallelism without a broadcast, and it is BELOW
-# kvsplit's 55.6% at identical traffic and identical engine use -- four clusters reading the
-# same bytes at the same time is worse than four reading disjoint bytes. Do not set this
-# True together with a broadcast: that is the arm whose receiving xDMAs all wedged.
+# EXISTS FOR THAT CONTROL, which is the one that justifies the whole broadcast. Pairing K
+# and V on separate engines is the honest floor for head-parallelism without a broadcast --
+# putting both on one engine is far worse, because that engine then binds. And that floor is
+# BELOW what kvsplit reaches at identical traffic and identical engine use: several clusters
+# reading the same bytes at the same time is worse than the same number reading disjoint
+# bytes. Do not set this True together with a broadcast: that is the arm whose receiving
+# xDMAs all wedged.
 V_ON_XDMA = False
 
 # DO NOT BROADCAST THE FIRST TILE -- pull it per-cluster like KV-split does.
 # MEASURED AND REFUTED. Leave this False.
 #
-# The premise was sound and the first half of it held. The cold first multicast costs
-# 12,762 cc against ~2,500 for a warm one, every phase ~3x its warm value (kernel entry
-# 2,817 vs 23, slot config 2,042 vs ~350, the transfer itself 5,021 vs ~1,700), and it sits
-# on the startup critical path. Loading tile 0 per-cluster instead DID shrink the head, as
-# predicted: 16,332 -> 12,430 cc.
+# The premise was sound and the first half of it held. A cold first multicast costs several
+# times what a warm one does, in every phase -- kernel entry, slot config and the transfer
+# itself -- and it sits on the startup critical path. Loading tile 0 per-cluster instead DID
+# shrink the head, as predicted.
 #
-# It lost anyway, because the pipeline got 8,431 cc WORSE:
-#
-#   broadcast every tile   pipeline 25,103   idle  4,233- 8,927   biggest gap 2,356- 4,205
-#   tile 0 per-cluster     pipeline 33,534   idle  9,604-21,096   biggest gap 6,531-11,105
-#
-# end to end 46.6% -> 42.0%. And it is not bandwidth: the iDMAs took only ~2,400 cc more
-# work, the one extra tile. It is SERIALISATION. Tile 0 lands at the head of the same iDMA
-# chain that feeds V(0); with NVBUF = 2 the V chain is gated by PV completion, so a delay
-# at its head propagates down the whole chain. The cross-cluster WAR edges on BcastK2/K3
-# then make every cluster wait for the slowest of the four, which per-cluster loading has
-# just de-synchronised.
+# It lost anyway, because the pipeline got worse by more than the head gained. And it is not
+# bandwidth: the iDMAs took on only the one extra tile's worth of work. It is SERIALISATION.
+# Tile 0 lands at the head of the same iDMA chain that feeds V(0); with a two-deep V buffer
+# that chain is gated by PV completion, so a delay at its head propagates down the whole
+# chain. The cross-cluster WAR edges then make every cluster wait for the slowest of the
+# group, which per-cluster loading has just de-synchronised.
 #
 # The lesson, for anything else that tries to move work off the broadcaster: the iDMA is not
 # spare capacity here. It is already the critical engine for V, and the WAR chain amplifies
@@ -371,39 +334,33 @@ BCAST_SKIP_FIRST = False
 # NOT the same as a broadcast: this is a PULL, so the three copies proceed in parallel on
 # three engines rather than being issued serially by one.
 #
-# MEASURED, and it wins on the metric that counts data movement:
+# MEASURED, and it wins on the metric that counts data movement, for a reason that is NOT
+# the one predicted. Main-memory read traffic does fall sharply, but the shared port was only
+# half used, so bandwidth was never the constraint. What the pull relieves is STARTUP
+# CONTENTION: in the baseline every cluster's first fetch hits main memory at the same
+# instant. Moving most of them onto the inter-cluster links cuts the head -- the cold-start
+# cost nothing else has touched.
 #
-#                        pipeline   head    window   ideal/pipe   busy/window
-#   V from main mem x4     25,103  16,332   41,435       65.7%        46.6%
-#   V pulled from cl0 L1   26,978  11,263   38,241       60.8%        50.8%
+# The cost is real and visible: one extra dependency per tile, since the other clusters wait
+# for the owner's copy, which lengthens the pipeline and costs streaming efficiency. It is
+# outweighed comfortably here.
 #
-# WHY, and it is not the reason predicted. Main-memory read traffic does fall 1,327,104 ->
-# 540,672 B, but the shared port was only half used (32 B/cc of 64), so bandwidth was not
-# the constraint. What it relieves is STARTUP CONTENTION: in the baseline cluster 0's K
-# broadcast and all four V(0) fetches hit main memory at once. Moving three of those four
-# onto the inter-cluster links cuts the head by 5,069 cc -- the cold-start cost nothing
-# else has touched.
-#
-# The cost is real and visible: one extra dependency per tile (clusters 1..3 wait for
-# cluster 0's copy) makes the pipeline 1,875 cc longer and streaming efficiency worse.
-# It is outweighed about 2.7 : 1 here.
-#
-# THE TWO EFFECTS SCALE OPPOSITELY, so this is not unconditionally right. The head saving
-# is FIXED at ~5,069 cc; the pipeline penalty is PER TILE at ~469 cc. They cross near 11
-# KV tiles per cluster. Below that, pull; above it, read main memory four times and let
-# the four engines run free.
+# THE TWO EFFECTS SCALE OPPOSITELY, so this is not unconditionally right. The head saving is
+# FIXED; the pipeline penalty is PER TILE. There is therefore a sequence length beyond which
+# reading main memory per-cluster should win, and the only way to know where it sits on a
+# given machine is to measure both arms there.
 V_PULL_FROM_CL0 = True
 
 # PULL K CROSS-CLUSTER TOO, ON THE OTHERWISE IDLE xDMAs -- no multicast at all.
 #
 # The V pull showed the head is a CONTENTION problem: routing traffic off main memory and onto
-# the inter-cluster links cut it by 5,069 cc even though the memory port was only half used.
+# the inter-cluster links cut it even though the memory port was only half used.
 # This applies the same move to K, and removes the last multicast in the process.
 #
-# The multicast is worth removing on its own terms. Its first invocation costs 9,004 cc on
-# cluster 0 against ~2,500 for a warm one, and every phase of it is ~3x -- it is the single
-# largest item left in the head. It also makes cluster 0 asymmetric: the only cluster whose
-# xDMA has work, and the slowest of the four.
+# The multicast is worth removing on its own terms. Its FIRST invocation costs several times
+# what a warm one does, in every phase -- it is the single largest item left in the head. It
+# also makes the issuing cluster asymmetric: the only one whose xDMA has work, and the
+# slowest of the group.
 #
 # The arrangement, with both engine types busy on every cluster:
 #   cluster 0     xDMA: K(j) from main memory      iDMA: V(j) from main memory
@@ -418,11 +375,11 @@ V_PULL_FROM_CL0 = True
 # one broadcast operand" was measured: zero broadcasts (this knob) and two were both worse
 # than one.
 #
-# AT SIXTEEN TILES PER CLUSTER IT IS THE ONLY ARM THAT FINISHES. The broadcast arm stalls
-# mid-stream around tile 11; this one passes every check. The rule above was a statement
-# about the head, and the head is a fixed cost that amortises -- measured, the same 9,459 cc
-# at 16 tiles as at 4 -- while the multicast's per-tile risk does not. Long KV wins the
-# argument, so K is pulled.
+# AT A LONG KV AXIS IT IS THE ONLY ARM THAT FINISHES. The broadcast arm stalls mid-stream;
+# this one passes every check. The rule above was a statement about the HEAD, and the head is
+# a fixed cost that amortises -- measured as the same absolute number at four times the
+# sequence length -- while the multicast's per-tile risk does not. Long KV wins the argument,
+# so K is pulled.
 K_PULL_FROM_CL0 = True
 
 # ROTATE WHICH CLUSTER IS THE SOURCE, per tile.
@@ -454,22 +411,23 @@ PULL_ROTATE = True
 # THE PROBLEM IT SOLVES. A pulled tile is a TWO-HOP dependency: main memory -> the owner's L1
 # -> the other three L1s. That is fine in steady state, where the second hop overlaps the
 # previous tile's compute. It is not fine for the FIRST tile, because nothing overlaps it:
-# three clusters sit idle for the whole of the owner's read before their own pull can even
-# start. Measured after the PM fix, the first GEMM gap is 3,832 cc on the owner against 6,283
-# and 7,269 cc on two of the pullers, with their own xDMA only 23-34% busy inside it -- they
-# are not moving data, they are waiting for somebody else's.
+# the other clusters sit idle for the whole of the owner's read before their own pull can even
+# start. Measured, the first GEMM gap is far larger on the pullers than on the owner, and
+# their own xDMA is only a fraction busy inside it -- they are not moving data, they are
+# waiting for somebody else's.
 #
 # WHAT IT COSTS. Tile j < this is read from main memory NCL times instead of once. That is
-# only affordable because main memory has the headroom: the quadrant's single wide exit is
-# 8.0% busy across the pipeline, so three extra 64 KiB reads land in slack.
+# only affordable if main memory has the headroom, and on average it appears to: the
+# quadrant's single wide exit measures a small fraction busy across the pipeline, so the
+# extra reads look like they should land in slack.
 #
-# MEASURED AND IT LOSES, by 5.0 points. The head did shrink as predicted (5,091 -> 4,734 cc)
-# and the PIPELINE grew by 3,730, for a net +3,373 cc of window.
+# MEASURED AND IT LOSES. The head did shrink as predicted,
+# and the PIPELINE grew by more, for a net loss of window.
 #
 # The reasoning that justified it was wrong in a specific, reusable way. "Main memory has the
-# headroom, the quadrant's wide exit is 8.0% busy" is an AVERAGE over the pipeline. At the
-# fill all four clusters read at the same instant, so the instantaneous demand is 4x and they
-# serialise on the single 512-bit quadrant exit. The two-hop pull is slower per tile but it
+# headroom, its wide exit is barely busy" is an AVERAGE over the pipeline. At the fill every
+# cluster reads at the same instant, so the instantaneous demand is the cluster count over and
+# they serialise on the single quadrant exit. The two-hop pull is slower per tile but it
 # STAGGERS; four direct reads are faster per tile and arrive together.
 #
 # An average occupancy never justifies adding a burst. Leave this at 0.
@@ -478,10 +436,9 @@ PULL_SKIP_FIRST = 0
 
 # HOW MANY OF O'S ELEMENTS THE HOST CHECKS, as a fraction of the BR x DHEAD accumulator.
 #
-# WHY IT IS WORTH A KNOB. The four O checks are the single most expensive thing in the
-# simulation: 209,000 cc EACH, ~840,000 cc together, which is 73% of the whole run. They cost
-# that because the host walks 4,096 int32 of L3 with no D-cache, so every element is a
-# blocking fabric round trip. Shrinking them is the cheapest way to make an iteration faster,
+# WHY IT IS WORTH A KNOB. The O checks are the single most expensive thing in the simulation
+# -- together they can dominate the whole run. They cost that because the host walks the
+# accumulator out of L3 with no D-cache, so every element is a blocking fabric round trip. Shrinking them is the cheapest way to make an iteration faster,
 # and iteration speed is what a sweep is limited by.
 #
 # WHY NOT ZERO. O is the only check that covers ACCUMULATION. m and rowsum are per-tile and
@@ -564,8 +521,8 @@ MONOID_SLOTS = 8
 # through the same ports the cross-cluster V pull already uses. Two engines idling in lockstep
 # is evidence that something they SHARE is the constraint, not that nothing is.
 #
-# It does fit in L1 (441,344 B of 514,816, 86%). It WEDGES, twice, reproducibly -- whether it
-# would pay is still unknown, because no run has ever reached the end.
+# It does fit in L1, with little to spare. It WEDGES, twice, reproducibly -- whether it would
+# pay is still unknown, because no run has ever reached the end.
 #
 # THE EVIDENCE, on the second run, after a first diagnosis that was right by luck and a
 # retraction that was wrong:
@@ -582,9 +539,10 @@ MONOID_SLOTS = 8
 # fabric never answers, with every cluster engine already retired -- the teardown-wedge family
 # this platform has seen before. Diagnose that, not the score buffer.
 #
-# WHY IT IS STILL WORTH FIXING: the SIMD is the largest component of the array's idle, and a
-# third buffer lets two QKs cover one softmax (~4,200 cc of cover for a 2,772 cc softmax)
-# where two give only one (~2,100, which the softmax overruns by ~670).
+# WHY IT IS STILL WORTH FIXING: the SIMD is a large component of the array's idle, and a third
+# buffer lets two QKs cover one softmax where two buffers give only one -- which the softmax
+# overruns. Whether that still holds depends on the cluster hardware; re-measure before
+# spending a run on it.
 NSCORE = 2
 
 # DIAGNOSTIC. The WAR depth, normally == NSCORE. Setting it BELOW NSCORE keeps the extra
@@ -608,21 +566,19 @@ NEG_INF16 = 0xFBFFFBFF
 
 # K buffers in the load->QK rotation. TWO is not a tuning choice -- it is what L1 fits.
 #
-# MEASURED on the NQ=1 trace, the case FOR a third: the 2-deep WAR edge idles the iDMA
-# 2,310-3,438 cc on EVERY cluster before K3 (16,358 cc total) with the engine free and only
-# the buffer missing, and K traffic overlapping the GEMM core's argument reads is worth
-# another 22,065 cc (that core stalls ~81 cc PER INSTRUCTION while the iDMA streams; 74% of
-# every prologue >1000 cc overlaps the iDMA against 19% for the xDMA).
+# MEASURED, the case FOR a third: the 2-deep WAR edge idles the iDMA on EVERY cluster before
+# the last K tile, with the engine free and only the buffer missing. K traffic overlapping the
+# GEMM core's argument reads costs more again -- that core stalls heavily per instruction while
+# the iDMA streams, and most long prologues overlap the iDMA rather than the xDMA.
 #
-# MEASURED, the case AGAINST: NKBUF=3 FAILS. Named L1 goes 393,728 -> 459,264 B per cluster
-# against a 514,816 B heap, and on top of that the runtime places the per-task
-# scratchpad+args arena AND a per-cluster copy of the SoC-wide task list (~22 KB, invisible
-# to the budget line below) -- about 96% in total. Allocation is name-sorted so the ARENA
-# lands last and runs off the end: the xDMA core then reads its own args as X and trips
-# RegWriteKnown, with fa_m failing 29/32 lanes. The prologue term did improve as predicted
-# (22,065 -> 15,757 cc), so the idea is right and the capacity is not there.
+# MEASURED, the case AGAINST: a third buffer FAILS on capacity. Named L1 grows past what the
+# heap has once the runtime's per-task scratchpad/args arena and a per-cluster copy of the
+# SoC-wide task list are counted -- neither of which appears in the budget line below.
+# Allocation is name-sorted, so the arena lands last and runs off the end: a core then reads
+# its own args as X and trips RegWriteKnown. The prologue term DID improve as predicted, so
+# the idea is right and the capacity is not there.
 #
-# To revisit: free ~70 KB elsewhere first (NSCORE, or Bc), then NKBUF=3 is worth ~38 kcc.
+# To revisit: free L1 elsewhere first (NSCORE, or Bc), then a third K buffer is worth having.
 NKBUF = 2
 
 # Read VersaCore's own busy/stall counters and print them per cluster. The paper metric is
@@ -639,8 +595,8 @@ MEASURE_ARRAY = False
 # they jointly saturate the port, so each engine's apparent rate is only its SHARE of a full
 # pipe. Making the xDMA faster cannot help; the port is the wall.
 #
-# The wall is specific and it is not the only pipe. The quadrant has THREE independent
-# 512-bit wide paths, and this workload puts all 2,048 KiB of K+V on one of them:
+# The wall is specific and it is not the only pipe. The quadrant has THREE independent wide
+# paths, and this workload puts all of K+V on one of them:
 #
 #   occamy_quad.sv:32-35   quadrant_wide_out_req_o  (d512) -- clusters PULL   <- all traffic
 #                          quadrant_wide_in_req_i   (d512) -- anything PUSHES <- ~unused
@@ -655,47 +611,34 @@ MEASURE_ARRAY = False
 # cluster-initiated pull, end to end. Splitting K (pull) from V (push) uses two 512-bit
 # pipes concurrently instead of queueing both on one.
 #
-# ARITHMETIC. FA decode's intensity is 4.19 M MAC / 128 KiB = 32 MAC/byte. One array against
-# one 64 B/cc port balances at 16 MAC/byte, so a single cluster is compute-bound with 2x
-# margin -- which is why 1-cluster reaches 86.1%. FOUR arrays against the SAME port balance
-# at 64 MAC/byte, so the 4-cluster case is memory-bound by exactly 2x, and that factor of two
-# IS the drop to 65%. Two pipes put the balance back at 32 = the workload's own intensity.
+# ARITHMETIC. This kernel's intensity is fixed by the tile shape. ONE array against one wide
+# port balances below it, so a single cluster is compute-bound with margin -- which is why the
+# one-cluster case runs so much closer to peak. FOUR arrays against the SAME port balance
+# above it, so the multi-cluster case is memory-bound by exactly the cluster-count factor, and
+# that factor IS the drop. Two pipes put the balance back at the workload's own intensity.
 #
-# COST: all host kernels run on cluster 0's host core, so the 16 V pushes serialise there.
-# That is the correct shape anyway -- there is one system iDMA -- and 1,024 KiB at 64 B/cc is
-# ~16,400 cc against a ~29,000 cc pipeline, so it fits alongside the K pulls rather than
-# extending them.
-# WHICH V TILES RIDE THE PUSH. Measured, both extremes:
+# COST: all host kernels run on one cluster's host core, so the V pushes serialise there. That
+# is the correct shape anyway -- there is one system iDMA -- and the push fits alongside the
+# pulls rather than extending them.
+# WHICH V TILES RIDE THE PUSH. Measured, both extremes. Put every tile on the cluster xDMAs
+# and four engines run concurrently at a modest rate each, but they overlap, so the effective
+# aggregate is good. Put every tile on the host push and each transfer is several times
+# faster -- the two-pipe model was right about bandwidth -- but there is ONE issuer, so every
+# transfer also pays a manager round trip in series, and the effective aggregate is WORSE.
 #
-#   all 16 on the cluster xDMAs (pull):  4 engines concurrent, 18.9 B/cc EACH but
-#                                        3.03x overlap -> 47.7 B/cc effective, 21,983 cc
-#   all 16 on the host (push):           56.4 B/cc PER TRANSFER -- 3x better, the two-pipe
-#                                        model was right about bandwidth -- but ONE issuer,
-#                                        so 16 x (1,161 + 433 cc manager round trip)
-#                                        -> 41.1 B/cc effective, 35,721 cc. WORSE, and
-#                                        busy/pipeline fell 65.0% -> 50.5%.
-#
-# One serial issuer loses to four concurrent ones even on a faster pipe; 16 x 433 = 6,928 cc
-# is pure BINGO dispatch overhead. The answer is not to pick a pipe but to USE BOTH: split so
-# each finishes at the same time. Balancing 2,048 KiB across 62.7 B/cc (pull, aggregate) and
-# 41.1 B/cc (push, effective) puts ~1,237 KiB on the pull and ~811 KiB on the push, and both
-# land at ~20,200 cc against the baseline's 33,447 -- 40% less fabric time.
+# One serial issuer loses to four concurrent ones even on a faster pipe, because the
+# per-transfer dispatch overhead is paid in series. The answer is not to pick a pipe but to
+# USE BOTH: split the traffic in proportion to each path's EFFECTIVE rate so the two finish at
+# the same time, which is worth a large fraction of the fabric time either alone costs.
 #
 # V(0) deliberately stays on the PULL: it is the tile PV(0) needs first, and the pull path is
 # the concurrent one, so it arrives soonest there. Tiles 1..3 go on the push.
-# MEASURED, three arms, and the trend is monotonic -- every tile moved to the push COSTS:
-#
-#   V on push   busy/pipeline   pipeline    array busy
-#        0         65.0%         29,291       19,029     <- BEST: all V on the cluster xDMAs
-#       12         55.2%         34,412       19,008
-#       16         50.5%         37,219       18,785
-#
-# Array busy never moved (19,029 / 19,008 / 18,785). The entire effect is pipeline stretch,
-# i.e. the array waiting longer for V. The push pipe is REAL -- 56.4 B/cc per transfer against
-# a contended pull share of 18.9 -- but there is exactly ONE issuer, and each BINGO task on it
-# costs a 433 cc manager round trip (MGR_WRITE_DONE -> MGR_GET_READY -> MGR_PREP). At 16 tasks
-# that is 6,928 cc of pure dispatch, dragging the effective rate to 41.1 B/cc, below the four
-# cluster xDMAs' 47.7 B/cc aggregate.
+# MEASURED, three arms, and the trend is monotonic -- every tile moved to the push COSTS, and
+# ARRAY BUSY NEVER MOVED across them. The entire effect is pipeline stretch, i.e. the array
+# waiting longer for V. The push pipe is REAL -- per transfer it is several times a contended
+# pull share -- but there is exactly ONE issuer, and each task on it pays a manager round trip
+# in series. Across a whole KV axis that dispatch cost alone drags the push's effective rate
+# below the cluster xDMAs' aggregate.
 #
 # The lesson is not "the second pipe does not exist" -- it does, and the RTL analysis of it was
 # right. It is that ONE SERIAL ISSUER LOSES TO FOUR CONCURRENT ONES, even on a faster pipe.
@@ -710,18 +653,19 @@ V_PUSH_TILES = set()
 # The milestone is array busy / pipeline with pipeline = first full-size QK to last PV end,
 # so a tile fetched before the first QK does not count against it -- and it is not merely a
 # bookkeeping trick, it is the same overlap the snax reference gets by staging its next
-# dispatch while the array runs. Measured: total load-engine busy is 37,644 cc against a
-# 29,291 cc pipeline, so 8,353 cc of loading ALREADY hides in the fill. Each extra buffer
-# moves one more tile per cluster out.
+# dispatch while the array runs. Measured, total load-engine busy EXCEEDS the pipeline, so a
+# substantial part of the loading already hides in the fill. Each extra buffer moves one more
+# tile per cluster out of the pipeline and into it.
 #
 # V(j) reuses v8[j % NVBUF], which PV(j - NVBUF) was the last to read, so the WAR edge walks
-# back with the depth. L1 is the cap: 392,320 B of 514,816 B at NVBUF=2, and a V tile is
-# 65,536 B, so exactly one more buffer fits (89%). A second would need 131,072 B and overflow.
-# MEASURED: 3 is WORSE than 2 (63.2% vs 65.0%). The extra buffer did exactly what it was
-# supposed to -- the array's wait on V fell 5,801 -> 4,204 cc -- but the pipeline did not
-# shrink, because the port is already saturated at 98% of its width. Prefetching earlier
-# does not create bandwidth; it only moves which engine is waiting. SIMD and dispatch
-# absorbed the whole gain (2,281 -> 3,540 and 1,629 -> 2,570).
+# back with the depth. L1 is the cap: at the shipped depth the named allocations already use
+# most of the heap, and a V tile is large enough that exactly one more buffer fits. Two more
+# would overflow.
+#
+# MEASURED: 3 is WORSE than 2. The extra buffer did exactly what it was supposed to -- the
+# array's wait on V fell -- but the pipeline did not shrink, because the port is already
+# saturated at close to its full width. Prefetching earlier does not create bandwidth; it
+# only moves which engine is waiting, and here the SIMD and dispatch absorbed the whole gain.
 #
 # This is the same wall the V-push arms hit. When the bottleneck is aggregate bandwidth,
 # RESCHEDULING CANNOT HELP -- only less traffic or more bandwidth can.
@@ -740,24 +684,23 @@ NVBUF = 2
 
 # STAGGER THE FIRST REAL V TILE ACROSS CLUSTERS.
 #
-# The Gantt of the 4-cluster run shows all four clusters entering one long XDMA_CFG at the
-# same moment -- 11,249..18,536, costing 2,856 / 5,780 / 6,803 / 6,863 cc -- and the same
-# configuration on a single cluster costs 938. Nothing is transferring during it (measured:
-# zero overlap with any XDMA_RUN), and the span retires 139 instructions in 6,803 cc, which
-# is cold instruction fetch, not engine backpressure.
+# The Gantt shows every cluster entering one long engine-config span at the SAME moment, each
+# costing several times what the same configuration costs on a single cluster. Nothing is
+# transferring during it (measured: zero overlap with any transfer), and the span retires very
+# few instructions for its length -- that is cold instruction fetch, not engine backpressure.
 #
 # It is the FIRST REAL V TILE's config: the xDMA's memset path is warmed by the arena fills,
 # its 1d_copy path is not (see the WarmGemm comment -- a warm-up COPY hangs, undiagnosed).
 # So four cold fetches of the same code land on the fabric together.
 #
-# Chaining the first V load c0 -> c1 -> c2 -> c3 serialises those four cold fetches instead.
-# If the model is right, each costs ~938 cc uncontended, so ~3,750 cc in sequence against a
-# 7,287 cc band. The cost is that cluster 3 starts its V stream later; whether that trade is
-# positive is exactly what the measurement decides.
-# MEASURED AND DISPROVEN: 61.2% against the baseline's 68.3%. The mechanism failed too, not
-# just the outcome -- the SUM of the four stalls barely moved (22,302 -> 21,045 cc, -6%) while
-# the band they occupy GREW (7,287 -> 11,574 cc), and cluster 3's own stall got worse
-# (2,856 -> 8,155). Serialising the four cold fetches did not make any of them cheaper.
+# Chaining the first V load from one cluster to the next serialises those cold fetches instead.
+# If the model is right, each then costs what it costs uncontended and the band shrinks. The
+# price is that the last cluster starts its V stream later; whether that trade is positive is
+# exactly what the measurement decides.
+#
+# MEASURED AND DISPROVEN. The mechanism failed too, not just the outcome -- the SUM of the
+# stalls barely moved while the band they occupy GREW, and the last cluster's own stall got
+# worse. Serialising the cold fetches did not make any of them cheaper.
 #
 # So the stall is NOT the four clusters colliding with each other. Their total cost is
 # invariant to when they run, which points at contention with the K/V TRANSFERS that stream
@@ -775,34 +718,27 @@ STAGGER_FIRST_V = False
 #
 #  1. A host iDMA transfer moves 64 KiB at 56.4 B/cc -- three times a contended pull share,
 #     because it rides quadrant_wide_in, a pipe disjoint from the clusters' pull. But each
-#     BINGO task on the host costs ~433 cc of dispatch, so ONE tile per task yields 41.1
-#     B/cc effective and the push loses. Two tiles per task gives 47.6, four gives 51.6.
+#     task on the host costs a manager round trip, so ONE tile per task leaves the push
+#     losing on effective rate. Batching more tiles into a task raises it.
 #
-#  2. The all-push arm was worse than the model predicted (35,721 cc of V delivery against
-#     a predicted 25,504) because V(j) waits on PV(j-NVBUF): the V chain serialises THROUGH
+#  2. The all-push arm was worse than the model predicted, because V(j) waits on
+#     PV(j-NVBUF): the V chain serialises THROUGH
 #     THE COMPUTE, not just through the issuer. Pairing attacks that too -- {V2,V3} issue
 #     together after PV(1) instead of V(3) waiting behind PV(2).
 #
 # PAIRS, NOT QUADS, DELIBERATELY. V(j) and V(j+1) live in DIFFERENT buffers (NVBUF=2), so a
 # pair is expressible inside one cluster. Batching four would have to cross clusters, which
 # couples their dependencies -- every cluster's batch would wait on the slowest -- and that
-# is exactly the coupling that made the 12-push split arm imbalanced (cluster 0 at 60.2%,
-# cluster 3 at 49.2%). Worth 47.6 over 51.6 B/cc to keep the shards independent.
-# MEASURED 54.6% -- better than one tile per task (50.5%) and still far below leaving V on
-# the cluster xDMAs (65.0%). Batching did exactly what it was designed to do:
+# is exactly the coupling that made a wider split arm imbalanced across clusters. Giving up
+# some effective rate to keep the shards independent is the right trade.
 #
-#                    delivered   while running   ISSUER IDLE
-#   1 tile/task      29.4 B/cc     56.4 B/cc        39%
-#   2 tiles/task     37.0 B/cc     96.9 B/cc        54%      <- 96.9 > the 64 B/cc port
-#                                                               because the engine pipelines
-#                                                               the second transfer under the
-#                                                               first; the pair is genuinely
-#                                                               overlapped, not serialised
-#
-# and it was not enough, because the push tasks are NOT issue-bound. The issuer sits idle for
-# MORE than half the window, waiting on the WAR edge: V(j) cannot start until PV(j-NVBUF)
-# has freed its buffer. Deeper buffering is the only thing that relaxes that, and L1 caps
-# NVBUF at 3 -- which measured WORSE on its own (63.2%).
+# MEASURED: batching beats one tile per task and is still far below leaving V on the cluster
+# xDMAs. It did exactly what it was designed to do -- the pair is genuinely overlapped rather
+# than serialised, so the rate WHILE RUNNING exceeds the port width -- and it was not enough,
+# because the push tasks are NOT issue-bound. The issuer sits idle for more than half the
+# window, waiting on the WAR edge: V(j) cannot start until PV(j-NVBUF) has freed its buffer.
+# Deeper buffering is the only thing that relaxes that, and L1 caps it at a depth that
+# measured worse on its own.
 #
 # FIVE ARMS, one conclusion: 4 concurrent cluster xDMAs beat one host issuer every time.
 # Leave V on the pull.
@@ -1459,9 +1395,9 @@ def _build_head(dfg, c, h_all, buf):
     # also a counter read and not a timed span -- see device_kernel_args.h.
     #
     # It is a knob because it is not free: five RO CSR reads per dispatch, and one more L1
-    # allocation per cluster. Both are small (~25 cc against a ~4,000 cc dispatch) but the
-    # point of the measurement is the dispatch cost, so it should be possible to take the
-    # instrument out and confirm the number did not move.
+    # allocation per cluster. Both are small against a dispatch, but the point of the
+    # measurement IS the dispatch cost, so it should be possible to take the instrument out
+    # and confirm the number did not move.
     perf = g.l1(f"gemm_perf_c{c}", 64) if MEASURE_ARRAY else 0
 
     warm_buf = g.l1("fa_warm_buf", 1024)
@@ -1635,9 +1571,9 @@ def _build_cluster(dfg, c, h_all, m_all, rowsum_all, buf, bcast=None, all_bufs=N
     #
     # MEASURED: building every cluster's head before any body changes the GLOBAL node
     # creation order, and that order IS the task-descriptor list the BINGO manager streams.
-    # It cost 7.6 pp of array utilisation (57.4% -> 49.8% equivalent) on a graph that was
-    # otherwise identical -- same per-core kernel sequences in all 17 cells, same
-    # allocations. Dispatch is order-sensitive; the list order is not cosmetic.
+    # It cost several points of array utilisation on a graph that was otherwise identical --
+    # same per-core kernel sequences in every cell, same allocations. Dispatch is
+    # order-sensitive; the list order is not cosmetic.
     head = _build_head(dfg, c, h_all, buf)
     warm_gemm, warm = head["warm_gemm"], head["warm"]
     ld_q, ld_az, perf = head["ld_q"], head["ld_az"], head["perf"]
@@ -2153,8 +2089,8 @@ def build(dfg, h, m_all, rowsum_all, merged_h, jct_monoid):
         # purpose; never enable it for a measurement.
         #
         # The nodes themselves are created inside cluster 0's own _build_cluster pass, so
-        # the global node order stays what it was -- see the note there for the 7.6 pp that
-        # hoisting them cost.
+        # the global node order stays what it was -- see the note there for what hoisting
+        # them cost.
         # "vsrc" carries cluster 0's V load nodes so the other three can depend on them,
         # the same deferral the broadcast nodes already use.
         bcast = {"k": {}, "v": {}, "vsrc": {}, "vpull": [],
