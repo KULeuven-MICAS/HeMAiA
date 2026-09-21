@@ -1,0 +1,11 @@
+# Build outputs, ignored for every workload below this directory.
+#
+# configs.json is emitted by main_bingo.py (--configs_out) as one of the three products of a
+# single make rule, alongside the two generated headers; `make clean-data` deletes it. The
+# per-workload .gitignore files already cover the headers with `*.h`, but nothing covered the
+# JSON, so four of the thirty-seven workloads that emit one had it committed by accident.
+#
+# Tracking a generated file here is not cosmetic. A build rewrites it whenever params.hjson
+# changes, so a sweep leaves the tree dirty and the committed copy silently disagrees with the
+# params it was generated from; a `make clean-data` shows up as deleted tracked files.
+configs.json
