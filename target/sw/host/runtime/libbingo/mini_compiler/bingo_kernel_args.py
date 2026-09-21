@@ -1710,6 +1710,7 @@ class SnaxBingoKernelSimdFaSoftmaxArgs(BingoKernelArgs):
     GEOM_SELF = 0
     GEOM_PROLOGUE = 1
     GEOM_PRIMED = 2
+    GEOM_CSR_PRIMED = 3
 
     BEAT_BYTES = 64
     # The arena opens with a FIXED block reserved for the cached task geometries, which is
@@ -1775,8 +1776,10 @@ class SnaxBingoKernelSimdFaSoftmaxArgs(BingoKernelArgs):
         # SELF / PROLOGUE / PRIMED; see the geom_mode comment on the C struct. PRIMED is a
         # PROMISE about the GRAPH -- that a PROLOGUE node for this same arena is an ancestor
         # of this node -- and nothing on the device can check it, so it is opt-in per node.
-        if geom_mode not in (self.GEOM_SELF, self.GEOM_PROLOGUE, self.GEOM_PRIMED):
-            raise ValueError(f"geom_mode must be 0 (SELF), 1 (PROLOGUE) or 2 (PRIMED), "
+        if geom_mode not in (self.GEOM_SELF, self.GEOM_PROLOGUE, self.GEOM_PRIMED,
+                             self.GEOM_CSR_PRIMED):
+            raise ValueError(f"geom_mode must be 0 (SELF), 1 (PROLOGUE), 2 (PRIMED) "
+                             f"or 3 (CSR_PRIMED), "
                              f"got {geom_mode}")
         self.geom_mode = int(geom_mode)
 
