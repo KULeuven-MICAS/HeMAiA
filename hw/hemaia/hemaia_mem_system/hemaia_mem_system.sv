@@ -330,8 +330,14 @@ module hemaia_mem_system #(
       .mem_rdata_o(mem_rdata)
   );
 
-  wide_tcdm_req_t [0:0] wide_mem_req;
-  wide_tcdm_rsp_t [0:0] wide_mem_rsp;
+  // The AXI read and write channels reach the bank array as two independent
+  // requesters, the way the cluster TCDM is built: arbitration happens per
+  // superbank rather than on one shared port, so a read and a write to
+  // different superbanks retire in the same cycle.
+  localparam int unsigned WideMemPorts = 2;
+
+  wide_tcdm_req_t [WideMemPorts-1:0] wide_mem_req;
+  wide_tcdm_rsp_t [WideMemPorts-1:0] wide_mem_rsp;
 
   tcdm_req_t [BanksPerSuperBank*2-1:0] xdma_req;
   tcdm_rsp_t [BanksPerSuperBank*2-1:0] xdma_rsp;
@@ -344,7 +350,7 @@ module hemaia_mem_system #(
 
   // The inteconnect to connect TCDM to Wide AXI
   snitch_tcdm_interconnect #(
-      .NumInp(1),
+      .NumInp(WideMemPorts),
       .NumOut(MemSuperBankNum),
       .tcdm_req_t(wide_tcdm_req_t),
       .tcdm_rsp_t(wide_tcdm_rsp_t),
@@ -418,16 +424,40 @@ module hemaia_mem_system #(
     );
   end
 
-  // The axi to mem interface to connect the wide axi port to the memory
-  logic [AxiWideMasterAddrWidth-1:0] wide_mem_req_addr_nontrunc;
-  assign wide_mem_req[0].q.addr = tcdm_addr_t'(wide_mem_req_addr_nontrunc);
-  axi_to_mem_interleaved #(
+  // The axi to mem interface to connect the wide axi port to the memory.
+  // `axi_to_mem_split` keeps the read and write channels on separate memory ports
+  // instead of arbitrating them onto one; the interconnect above allows that
+  // because every superbank is reachable from either port.
+  logic [WideMemPorts-1:0] wide_mem_q_valid;
+  logic [WideMemPorts-1:0] wide_mem_q_ready;
+  logic [WideMemPorts-1:0][AxiWideMasterAddrWidth-1:0] wide_mem_addr_nontrunc;
+  wide_mem_data_t [WideMemPorts-1:0] wide_mem_wdata;
+  wide_mem_strb_t [WideMemPorts-1:0] wide_mem_strb;
+  logic [WideMemPorts-1:0] wide_mem_we;
+  logic [WideMemPorts-1:0] wide_mem_p_valid;
+  wide_mem_data_t [WideMemPorts-1:0] wide_mem_rdata;
+
+  for (genvar i = 0; i < WideMemPorts; i++) begin : gen_wide_mem_port
+    assign wide_mem_req[i].q_valid = wide_mem_q_valid[i];
+    assign wide_mem_req[i].q.addr = tcdm_addr_t'(wide_mem_addr_nontrunc[i]);
+    assign wide_mem_req[i].q.data = wide_mem_wdata[i];
+    assign wide_mem_req[i].q.strb = wide_mem_strb[i];
+    assign wide_mem_req[i].q.write = wide_mem_we[i];
+    // The main memory supports neither atomics nor the TCDM user bits.
+    assign wide_mem_req[i].q.amo = reqrsp_pkg::AMONone;
+    assign wide_mem_req[i].q.user = '0;
+    assign wide_mem_q_ready[i] = wide_mem_rsp[i].q_ready;
+    assign wide_mem_p_valid[i] = wide_mem_rsp[i].p_valid;
+    assign wide_mem_rdata[i] = wide_mem_rsp[i].p.data;
+  end
+
+  axi_to_mem_split #(
       .axi_req_t(axi_wide_in_post_xbar_req_t),
       .axi_resp_t(axi_wide_in_post_xbar_resp_t),
       .AddrWidth(AxiWideMasterAddrWidth),
-      .DataWidth(AxiWideMasterDataWidth),
+      .AxiDataWidth(AxiWideMasterDataWidth),
       .IdWidth(AxiWideMasterIdWidth + $clog2(HeMAiAMemWideXbarCfg.NoSlvPorts)),
-      .NumBanks(1),
+      .MemDataWidth(AxiWideMasterDataWidth),
       .BufDepth(2)
   ) i_axi_to_mem_hemaia (
       .clk_i,
@@ -436,15 +466,15 @@ module hemaia_mem_system #(
       .test_i(1'b0),
       .axi_req_i(axi_wide_post_xbar_req[1]),
       .axi_resp_o(axi_wide_post_xbar_rsp[1]),
-      .mem_req_o(wide_mem_req[0].q_valid),
-      .mem_gnt_i(wide_mem_rsp[0].q_ready),
-      .mem_addr_o(wide_mem_req_addr_nontrunc),
-      .mem_wdata_o(wide_mem_req[0].q.data),
-      .mem_strb_o(wide_mem_req[0].q.strb),
+      .mem_req_o(wide_mem_q_valid),
+      .mem_gnt_i(wide_mem_q_ready),
+      .mem_addr_o(wide_mem_addr_nontrunc),
+      .mem_wdata_o(wide_mem_wdata),
+      .mem_strb_o(wide_mem_strb),
       .mem_atop_o(  /* The main memory does not support ATOP */),
-      .mem_we_o(wide_mem_req[0].q.write),
-      .mem_rvalid_i(wide_mem_rsp[0].p_valid),
-      .mem_rdata_i(wide_mem_rsp[0].p.data)
+      .mem_we_o(wide_mem_we),
+      .mem_rvalid_i(wide_mem_p_valid),
+      .mem_rdata_i(wide_mem_rdata)
   );
 
   // The axi to reg interface to connect the narrow axi port to the xdma reqrsp manager
