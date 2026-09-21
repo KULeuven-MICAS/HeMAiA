@@ -239,11 +239,8 @@ module ${name}_quad_ctrl
     .TaskDescBusWidth         (${task_desc_width}                        ),
     // AXI-Lite reads the task-queue master keeps in flight. The manager walks the
     // descriptor list IN ORDER and a core cannot be granted a task that has not been
-    // fetched, so the fetch rate is a floor on dispatch. Measured on fa_decode_4cluster
-    // (waveform): one round trip per beat, ~31 cc to L3 through this very crossbar, task
-    // queue empty 99.4% of a 9,917 cc stall. 1 = the old serial behaviour; 4 covers the
-    // round trip without letting more descriptors be in flight than the FIFO can absorb.
-    .MaxOutstanding           (4                                          ),
+    // fetched, so the fetch rate is a floor on dispatch.
+    .TaskQueueMaxOutstanding  (4                                          ),
     // DVFS doorbell MSIP bit: injected here so the PM is not hardcoded (see occamy.py
     // hw_manager_ipi_idx; must match HW_MANAGER_DVFS_MSIP_BIT / occamy_soc.sv ipi_i).
     .HOST_DVFS_MSIP_BIT       (${hw_manager_ipi_idx}                     ),
