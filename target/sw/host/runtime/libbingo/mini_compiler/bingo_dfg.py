@@ -64,14 +64,6 @@ class BingoDFG(
 ):
     """Data Flow Graph (DFG) for Bingo."""
 
-    # TaskIdWidth, genuinely fixed by the RTL struct bingo_hw_manager_task_desc_t:
-    # occamy_quad_ctrl.sv.tpl does not pass a TaskIdWidth parameter, so every instance
-    # elaborates with bingo_hw_manager_top's default of 12. ChipIdWidth looks like a
-    # sibling constant but is NOT one -- the tpl does pass .ChipIdWidth(${chip_id_width})
-    # from cfg hemaia_multichip.chip_id_width -- so it is an instance attribute read from
-    # the platform header in __init__, not a class constant here.
-    task_id_width = 12
-
     def __init__(self,
                  num_chiplets: int,
                  num_clusters_per_chiplet: int,
@@ -80,7 +72,8 @@ class BingoDFG(
                  chiplet_ids: list[int] = None,
                  dep_tag_width: int = None,
                  task_desc_width: int = None,
-                 chip_id_width: int = None) -> None:
+                 chip_id_width: int = None,
+                 task_id_width: int = None) -> None:
         super().__init__()
         # HW architecture parameters
         self.num_chiplets = num_chiplets
@@ -118,7 +111,8 @@ class BingoDFG(
         # a wrong tag or chiplet width shifts fields inside each descriptor instead.
         # Passing a value explicitly overrides the header, for a caller that is
         # deliberately packing for a platform other than the one it parsed.
-        if dep_tag_width is None or task_desc_width is None or chip_id_width is None:
+        if (dep_tag_width is None or task_desc_width is None or chip_id_width is None
+                or task_id_width is None):
             from bingo_platform import platform_descriptor_geometry
             geometry, geometry_source = platform_descriptor_geometry()
         else:
@@ -130,6 +124,11 @@ class BingoDFG(
                               if dep_tag_width is None else dep_tag_width)
         self.chip_id_width = (geometry["chip_id_width"]
                               if chip_id_width is None else chip_id_width)
+        # TaskIdWidth, from the same header. The id space is 2**width and bingo_add_node
+        # hands out one id per node, so this caps the graph size; it is also a descriptor
+        # field, so a disagreement with the RTL shifts every field above it.
+        self.task_id_width = (geometry["task_id_width"]
+                              if task_id_width is None else task_id_width)
         self.task_desc_width = (geometry["task_desc_width"]
                                 if task_desc_width is None else task_desc_width)
         self.task_desc_words = (self.task_desc_width + BINGO_TASK_LIST_WORD_BITS - 1) \

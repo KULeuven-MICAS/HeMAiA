@@ -94,32 +94,11 @@
       quad_axi_lite_narrow_base_offset: 65536 // 0x10000
       quad_axi_lite_base_addr: 167772160, // 0x0a000000
       quad_axi_lite_base_offset: 65536 // 0x10000
-      // Bingo HW manager per-edge dependency tag width (DepTagWidth). Must match
-      // the SW DEP_TAG_WIDTH; exported via occamy.h as BINGO_DEP_TAG_WIDTH.
-      //
-      // Tried at 3 (63-bit layout, one AXI-Lite beat instead of two) to halve the
-      // manager's descriptor fetch. MEASURED: it did halve the fetch -- waveform shows the
-      // task queue going from 99.4% empty during a grant stall to 32.7% -- and the window
-      // got WORSE, 44,057 -> 46,846 cc. The fetch was never what dispatch waited on.
-      //
-      // Reverted to 4 for two reasons: the regression, and the fact that narrowing the tag
-      // perturbs the allocator's assignment, which changes the schedule and makes every A/B
-      // on this workload unattributable (the K-tile median moved 2,926 -> 3,731 cc, pure DMA,
-      // nothing to do with descriptors).
-      //
-      // The real bottleneck is upstream of the fetch: waiting_dep_check_queue is indexed
-      // [core] while ready_queue is [core][cluster], so all four clusters' tasks for a given
-      // core share ONE in-order dep-check stream. Measured on 133 dispatches: zero grants out
-      // of task-list order across clusters.
-      dep_tag_width: 4
-      // Task-descriptor container width (TaskDescBusWidth), in bits; must be a whole
-      // number of 64-bit words. Left unset it is DERIVED as the smallest container the
-      // config's own layout fits in, which here would be 128 anyway (65 bits). It is
-      // pinned explicitly because this is the development config for growing the
-      // descriptor: headroom is the point, so a field added tomorrow must not silently
-      // change the container width -- and therefore the task-list stride -- underneath
-      // an image built today.
-      task_desc_width: 128
+      bingo_cfg: {
+        dep_tag_width: 5
+        task_id_width: 16
+        task_desc_width: 128
+      },
     },
     clusters:[
       "snax_split_cluster",

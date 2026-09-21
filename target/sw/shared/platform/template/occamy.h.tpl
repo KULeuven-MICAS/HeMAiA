@@ -46,6 +46,12 @@
 // DEP_TAG_WIDTH from this, and the mini-compiler passes it to BingoDFG(dep_tag_width=).
 #define BINGO_DEP_TAG_WIDTH            ${dep_tag_width}
 
+// Task-id width of the bingo HW manager (s1_quadrant.task_id_width -> TaskIdWidth). The id
+// space is 2**width and the mini-compiler hands out one id per task, so a graph with more
+// tasks than this has nowhere to put them. It is also a descriptor field, so SW and RTL must
+// agree or every field above task_id shifts.
+#define BINGO_TASK_ID_WIDTH            ${task_id_width}
+
 // Packed task-descriptor width of the bingo HW manager (bingo_hw_manager_top
 // TaskDescBusWidth). DERIVED per config by occamygen -- the smallest whole number of
 // 64-bit words that holds this config's descriptor layout -- unless the cfg pins it wider

@@ -94,17 +94,16 @@
       quad_axi_lite_narrow_base_offset: 65536 // 0x10000
       quad_axi_lite_base_addr: 167772160, // 0x0a000000
       quad_axi_lite_base_offset: 65536 // 0x10000
-      // Bingo HW manager per-edge dependency tag width (DepTagWidth). Must match
-      // the SW DEP_TAG_WIDTH; exported via occamy.h as BINGO_DEP_TAG_WIDTH.
-      dep_tag_width: 4
-      // Task-descriptor container width (TaskDescBusWidth), in bits. Left unset this
-      // config would DERIVE 64, because its layout is 63 bits and fits one host
-      // AXI-Lite beat. Pinned to 128 deliberately: this is the config the FA sweep
-      // runs, so it is where the two-beat descriptor fetch gets exercised end to end
-      // on real workloads rather than only in the unit testbench. It also matches the
-      // 4-cluster development config, so a task-list image and a kernel built for one
-      // have the same descriptor stride on the other.
-      task_desc_width: 128
+      // Bingo HW-manager geometry, grouped because these three are ONE contract: they are the
+      // widths the RTL struct bingo_hw_manager_task_desc_t is built from, and occamygen exports
+      // every one of them to SW (BINGO_*_WIDTH in occamy.h) so the packer and the manager cannot
+      // be built against different layouts. Changing any of them changes the descriptor.
+      bingo_cfg: {
+        // Bingo HW manager per-edge dependency tag width (DepTagWidth). Must match
+        // the SW DEP_TAG_WIDTH; exported via occamy.h as BINGO_DEP_TAG_WIDTH.
+        dep_tag_width: 4
+        task_desc_width: 128
+      },
     },
     clusters:[
       "snax_split_cluster",

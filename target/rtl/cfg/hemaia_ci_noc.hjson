@@ -97,9 +97,15 @@
       quad_axi_lite_narrow_base_offset: 65536 // 0x10000
       quad_axi_lite_base_addr: 167772160, // 0x0a000000
       quad_axi_lite_base_offset: 65536 // 0x10000
-      // Bingo HW manager per-edge dependency tag width (DepTagWidth). Must match
-      // the SW DEP_TAG_WIDTH; exported via occamy.h as BINGO_DEP_TAG_WIDTH.
-      dep_tag_width: 4
+      // Bingo HW-manager geometry, grouped because these three are ONE contract: they are the
+      // widths the RTL struct bingo_hw_manager_task_desc_t is built from, and occamygen exports
+      // every one of them to SW (BINGO_*_WIDTH in occamy.h) so the packer and the manager cannot
+      // be built against different layouts. Changing any of them changes the descriptor.
+      bingo_cfg: {
+        // Bingo HW manager per-edge dependency tag width (DepTagWidth). Must match
+        // the SW DEP_TAG_WIDTH; exported via occamy.h as BINGO_DEP_TAG_WIDTH.
+        dep_tag_width: 4
+      },
     },
     clusters:[
       "snax_versacore_to_cluster",

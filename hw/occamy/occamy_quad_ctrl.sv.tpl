@@ -240,6 +240,10 @@ module ${name}_quad_ctrl
     // AXI-Lite reads the task-queue master keeps in flight. The manager walks the
     // descriptor list IN ORDER and a core cannot be granted a task that has not been
     // fetched, so the fetch rate is a floor on dispatch.
+    // Task-id width. The manager's id space is 2**TaskIdWidth and the compiler assigns
+    // one id per task, so this is the hard cap on how many tasks a graph may contain.
+    // Until this was passed, every instance took bingo_hw_manager_top's default of 12.
+    .TaskIdWidth              (${task_id_width}                           ),
     .TaskQueueMaxOutstanding  (4                                          ),
     // DVFS doorbell MSIP bit: injected here so the PM is not hardcoded (see occamy.py
     // hw_manager_ipi_idx; must match HW_MANAGER_DVFS_MSIP_BIT / occamy_soc.sv ipi_i).

@@ -24,6 +24,10 @@ DEFAULT_TASK_DESC_WIDTH = 128
 # chiplet-id fields, so guessing this wrong moves every field above
 # assigned_chiplet_id -- which is all of them but the first five.
 DEFAULT_CHIP_ID_WIDTH = 8
+# TaskIdWidth default, matching bingo_hw_manager_top's parameter default. A header from
+# before s1_quadrant.task_id_width existed carries no define, and 12 is what those builds
+# elaborated with.
+DEFAULT_TASK_ID_WIDTH = 12
 
 
 def _task_desc_words(width):
@@ -66,6 +70,10 @@ def _descriptor_geometry(defines, source):
         "dep_tag_width": defines.get("BINGO_DEP_TAG_WIDTH", DEFAULT_DEP_TAG_WIDTH),
         # ChipIdWidth as the RTL was generated with (cfg hemaia_multichip.chip_id_width).
         "chip_id_width": defines.get("BINGO_CHIP_ID_WIDTH", DEFAULT_CHIP_ID_WIDTH),
+        # TaskIdWidth as the RTL was generated with (cfg s1_quadrant.task_id_width). The id
+        # space is 2**width and the compiler assigns one id per task, so it caps the graph
+        # size; it is also a descriptor field, so a mismatch shifts every field above it.
+        "task_id_width": defines.get("BINGO_TASK_ID_WIDTH", DEFAULT_TASK_ID_WIDTH),
         # TaskDescBusWidth as the RTL was generated with (cfg s1_quadrant.task_desc_width,
         # otherwise derived: the smallest whole number of 64-bit words the layout fits).
         # NOT the host AXI-Lite data width: the fetch master reads task_desc_words beats
@@ -180,7 +188,7 @@ def platform_descriptor_geometry():
     """
     if _LAST_PARSED_PLATFORM is not None:
         geometry = {key: _LAST_PARSED_PLATFORM[key]
-                    for key in ("dep_tag_width", "chip_id_width",
+                    for key in ("dep_tag_width", "chip_id_width", "task_id_width",
                                 "task_desc_width", "task_desc_words")}
         return geometry, _LAST_PARSED_PLATFORM.get("platform_header", "parsed platform")
     try:
@@ -188,6 +196,7 @@ def platform_descriptor_geometry():
     except OSError:
         return ({"dep_tag_width": DEFAULT_DEP_TAG_WIDTH,
                  "chip_id_width": DEFAULT_CHIP_ID_WIDTH,
+                 "task_id_width": DEFAULT_TASK_ID_WIDTH,
                  "task_desc_width": DEFAULT_TASK_DESC_WIDTH,
                  "task_desc_words": _task_desc_words(DEFAULT_TASK_DESC_WIDTH)},
                 f"bingo_platform.py schema defaults ({_DEFAULT_PLATFORM_HEADER} is not "

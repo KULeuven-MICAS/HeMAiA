@@ -35,12 +35,15 @@ NR_HW_MANAGER_IPI = 1
 # the config pins one -- so the two sides cannot be built against different layouts.
 TASK_DESC_WORD_BITS = 64
 # Field widths the descriptor layout takes from the RTL struct rather than computing them.
-# TaskIdWidth is bingo_hw_manager_top's parameter default (nothing overrides it).
 # ChipIdWidth IS overridden -- the quad_ctrl template passes hemaia_multichip.chip_id_width
 # -- so get_bingo_chip_id_width() refuses any config that moves that key away from this
 # constant, which would otherwise mis-size two descriptor fields without any error.
 TASK_DESC_CHIP_ID_WIDTH = 8
-TASK_DESC_TASK_ID_WIDTH = 12
+# TaskIdWidth default, matching bingo_hw_manager_top's own parameter default. A config that
+# wants more task ids sets s1_quadrant.task_id_width; the id space is 2**width, and a graph
+# with more tasks than that has nowhere to put the extras. Costs one descriptor field's
+# worth of bits, which the derived container absorbs until it crosses a 64-bit boundary.
+DEFAULT_TASK_ID_WIDTH = 12
 
 
 def _idx_width(n):
@@ -48,7 +51,33 @@ def _idx_width(n):
     return clog2(n) if n > 1 else 1
 
 
-def task_desc_layout_bits(nr_cores_per_cluster, nr_clusters_per_chiplet, dep_tag_width):
+def bingo_cfg(occamy_cfg):
+    """The HW-manager geometry block, s1_quadrant.bingo_cfg.
+
+    The three widths in it are one contract -- they are what bingo_hw_manager_task_desc_t is
+    built from, and all three are exported to SW -- so they are read through one accessor
+    rather than reached into individually from six places.
+    """
+    return occamy_cfg["s1_quadrant"]["bingo_cfg"]
+
+
+def get_bingo_dep_tag_width(occamy_cfg):
+    """DepTagWidth for bingo_hw_manager_top, from s1_quadrant.bingo_cfg.dep_tag_width."""
+    return int(bingo_cfg(occamy_cfg)["dep_tag_width"])
+
+
+def get_bingo_task_id_width(occamy_cfg):
+    """TaskIdWidth for bingo_hw_manager_top, from s1_quadrant.task_id_width.
+
+    Optional, defaulting to the RTL parameter's own default so the configs that do not set
+    it are bit-for-bit unchanged. The id space is 2**width and the compiler assigns one id
+    per task, so this is the hard cap on how many tasks one graph may contain.
+    """
+    return int(bingo_cfg(occamy_cfg).get("task_id_width", DEFAULT_TASK_ID_WIDTH))
+
+
+def task_desc_layout_bits(nr_cores_per_cluster, nr_clusters_per_chiplet, dep_tag_width,
+                          task_id_width=DEFAULT_TASK_ID_WIDTH):
     """Bits actually used by bingo_hw_manager_task_desc_t for this configuration.
 
     Mirrors the RTL packed struct field for field. The host CVA6 counts as an extra core in
@@ -59,7 +88,7 @@ def task_desc_layout_bits(nr_cores_per_cluster, nr_clusters_per_chiplet, dep_tag
     cluster_w = _idx_width(nr_clusters_per_chiplet)
     return (1 + 5 + 1                              # cond_exec_{invert,group_id,en}
             + 2                                    # task_type
-            + TASK_DESC_TASK_ID_WIDTH
+            + task_id_width
             + TASK_DESC_CHIP_ID_WIDTH              # assigned_chiplet_id
             + cluster_w                            # assigned_cluster_id
             + _idx_width(ncores_hw)                # assigned_core_id
@@ -83,27 +112,29 @@ def get_task_desc_width(occamy_cfg, nr_cores_per_cluster=None, nr_clusters_per_c
     dep_tag_width at 4 on a 4-cluster part, or to freeze a container width across a family of
     configs so one task-list image serves all of them.
     """
-    explicit = occamy_cfg["s1_quadrant"].get("task_desc_width")
+    explicit = bingo_cfg(occamy_cfg).get("task_desc_width")
     if explicit is None:
         if nr_cores_per_cluster is None or nr_clusters_per_chiplet is None:
             raise ValueError(
                 "get_task_desc_width: need the core/cluster counts to derive the descriptor "
                 "width, or an explicit s1_quadrant.task_desc_width")
         bits = task_desc_layout_bits(nr_cores_per_cluster, nr_clusters_per_chiplet,
-                                     occamy_cfg["s1_quadrant"]["dep_tag_width"])
+                                     get_bingo_dep_tag_width(occamy_cfg),
+                                     get_bingo_task_id_width(occamy_cfg))
         words = max(1, -(-bits // TASK_DESC_WORD_BITS))   # ceil
         return words * TASK_DESC_WORD_BITS
     task_desc_width = int(explicit)
     if nr_cores_per_cluster is not None and nr_clusters_per_chiplet is not None:
         bits = task_desc_layout_bits(nr_cores_per_cluster, nr_clusters_per_chiplet,
-                                     occamy_cfg["s1_quadrant"]["dep_tag_width"])
+                                     get_bingo_dep_tag_width(occamy_cfg),
+                                     get_bingo_task_id_width(occamy_cfg))
         if bits > task_desc_width:
             raise ValueError(
                 f"s1_quadrant.task_desc_width ({task_desc_width}) is smaller than the "
                 f"descriptor this config needs ({bits} bits, with "
                 f"nr_cores_per_cluster={nr_cores_per_cluster} (+1 host), "
                 f"nr_clusters_per_chiplet={nr_clusters_per_chiplet}, "
-                f"dep_tag_width={occamy_cfg['s1_quadrant']['dep_tag_width']}). "
+                f"dep_tag_width={get_bingo_dep_tag_width(occamy_cfg)}). "
                 f"Raise it to {max(1, -(-bits // TASK_DESC_WORD_BITS)) * TASK_DESC_WORD_BITS} "
                 f"or shrink a field.")
     # Mirrors the gen_task_desc_beat_check elaboration assertion in bingo_hw_manager_top:
@@ -1079,7 +1110,10 @@ def get_quad_ctrl_kwargs(occamy_cfg, soc_wide_xbar, soc_narrow_xbar, quad_ctrl_s
         "hw_manager_ipi_idx": nr_harts_per_chiplet(occamy_cfg, cluster_generators),
         # Per-edge dependency tag width of the bingo HW manager (DepTagWidth). Exported to
         # SW as BINGO_DEP_TAG_WIDTH so the task-descriptor packing tracks the RTL width.
-        "dep_tag_width": occamy_cfg["s1_quadrant"]["dep_tag_width"],
+        "dep_tag_width": get_bingo_dep_tag_width(occamy_cfg),
+        # Task-id width (TaskIdWidth). The id space is 2**width and the compiler hands out
+        # one id per task, so this caps the graph size; exported to SW as BINGO_TASK_ID_WIDTH.
+        "task_id_width": get_bingo_task_id_width(occamy_cfg),
         # Task-descriptor bus width (TaskDescBusWidth). DERIVED from this config's layout
         # unless s1_quadrant.task_desc_width pins it; get_cheader_kwargs runs the SAME
         # derivation for BINGO_TASK_DESC_WIDTH, so the descriptor the SW packer emits is
@@ -1328,7 +1362,8 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
         "nr_clusters_per_chiplet": nr_clusters_per_chiplet,
         "nr_cores_per_cluster": nr_cores_per_cluster,
         "hw_manager_dvfs_msip_bit": hw_manager_dvfs_msip_bit,
-        "dep_tag_width": occamy_cfg["s1_quadrant"]["dep_tag_width"],
+        "dep_tag_width": get_bingo_dep_tag_width(occamy_cfg),
+        "task_id_width": get_bingo_task_id_width(occamy_cfg),
         "task_desc_width": task_desc_width,
         "task_desc_words": task_desc_width // TASK_DESC_WORD_BITS,
         "bingo_ncores_hw": nr_cores_per_cluster + 1,
