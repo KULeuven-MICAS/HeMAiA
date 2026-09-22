@@ -50,9 +50,7 @@ from bingo_kernel_args import HostBingoKernelIdmaArgs
 from .ports import Port, PortSpec
 from .nest import convert_args
 
-# How far a cluster can reach. A block's own loads close L3 -> L1; this module closes
-# everything above that, and L2 is the descriptor list's home rather than an operand's.
-SPACES = ("L1", "L2", "L3", "L4")
+# The level names live in ports.py, next to the PortSpec field that holds one.
 
 
 # ======================================================================================
@@ -86,15 +84,27 @@ def plan(have: PortSpec, want: PortSpec, *, mesh=None, elem_bytes=None) -> list:
         raise ValueError(
             f"shape {tuple(have.shape)} cannot satisfy {tuple(want.shape)}: this module "
             f"moves and permutes, it does not tile or pad. Reshape upstream.")
-    if have.space != want.space:
-        if have.space == "L4":
+    if have.mem_level is None:
+        # `have` is a BOUND port -- a real buffer, which is somewhere. None is only
+        # meaningful on the declaration side, where it means "wherever you have it".
+        raise ValueError(
+            "the bound operand declares no mem_level. None is a DECLARATION saying the "
+            "consuming block will fetch it from wherever it is; a buffer that actually "
+            "exists has a level. Bind a Port whose spec says where the buffer lives.")
+    if want.mem_level is None:
+        # The consumer declared no level: it fetches the operand itself, from wherever the
+        # caller keeps it. Nothing to plan here -- the block calls this again with the
+        # level it actually needs, and THAT call plans the hoist.
+        pass
+    elif have.mem_level != want.mem_level:
+        if have.mem_level == "L4":
             steps.append(Step("hoist", "the memory-chiplet pool is off-die; hoist it to "
                                        "main memory once instead of per tile",
                               engine="host iDMA"))
-        elif (have.space, want.space) != ("L3", "L1"):
+        elif (have.mem_level, want.mem_level) != ("L3", "L1"):
             raise ValueError(
-                f"cannot bring an operand from {have.space} to {want.space}. The closures "
-                f"are L4->L3 (host iDMA) and L3->L1 (the block's own loads).")
+                f"cannot bring an operand from {have.mem_level} to {want.mem_level}. The "
+                f"closures are L4->L3 (host iDMA) and L3->L1 (the block's own loads).")
     if have.layout != want.layout:
         if mesh is not None and elem_bytes is not None:
             # Derive it now and throw it away: the derivation is the feasibility test, and
@@ -143,7 +153,8 @@ def bring_in(ctx, name, have: Port, want: PortSpec, *, mesh, elem_bytes, after=(
             nbytes = int(np.prod(spec.shape)) * elem_bytes
             handle, nd = hoist(ctx, name, handle, nbytes=nbytes, after=after)
             nodes.append(nd)
-            spec = PortSpec(spec.layout, spec.dtype, spec.shape, space="L3", doc=spec.doc)
+            spec = PortSpec(spec.layout, spec.dtype, spec.shape, mem_level="L3",
+                            doc=spec.doc)
         elif st.kind == "relayout":
             rows, cols = spec.shape
             dst = ctx.l1(f"{name}_{want.layout.lower()}", rows * cols * elem_bytes)
@@ -152,6 +163,6 @@ def bring_in(ctx, name, have: Port, want: PortSpec, *, mesh, elem_bytes, after=(
                                        elem_bytes, handle, dst),
                           nodes[-1] if nodes else after)
             nodes.append(nd)
-            handle, spec = dst, PortSpec(want.layout, spec.dtype, spec.shape, space="L1",
-                                         doc=spec.doc)
+            handle, spec = dst, PortSpec(want.layout, spec.dtype, spec.shape,
+                                         mem_level="L1", doc=spec.doc)
     return Port(spec, handle, (nodes[-1],), cluster=ctx.cluster, name=name), nodes

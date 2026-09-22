@@ -18,7 +18,7 @@ import argparse
 import pathlib
 import hjson
 import numpy as np
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, replace
 
 from ..comm.paths import add_sim_paths          # noqa: E402
 
@@ -40,8 +40,8 @@ from bingo_kernel_args import (                           # noqa: E402
 from bingo_mem_handle import BingoMemAlloc                 # noqa: E402
 from sim_golden_models import block_gemm_golden_model      # noqa: E402
 
-from ..comm import (Block, BlockResult, Ctx, Port, PortSpec, at_offset,
-                    transfer)
+from ..comm import (Block, BlockResult, Ctx, DType, Layout, MemLevel, Port,
+                    PortSpec, at_offset, transfer)
 from ..verify import checks
 
 # Core placement, from the generated map (snax_core_roles_defs.h).
@@ -75,21 +75,19 @@ def _bcast_owner(cfg, j, skew=0):
 class FaCfg:
     """The single source of truth for an attention instance.
 
-    Three kinds of value used to be forty-odd module globals with nothing telling them
-    apart. They are separated here:
+    Four kinds of value, kept apart because they answer to different questions:
 
       HARDWARE   mesh, monoid_slots -- properties of the silicon, not choices. `mesh` is
                  checked against the cluster cfg by configure(); the default is the array
                  the kernels were written for.
       ARGUMENTS  nkv, nq, clusters, decomp, score_shift_extra -- the actual parameters.
+      TUNING     pipeline depths and where operands come from. None of them changes the
+                 ANSWER, and every default is the measured best on this quadrant, so a
+                 caller who just wants attention never names one. validate() refuses a
+                 knob the chosen decomposition does not read.
       DERIVED    everything else, below, as properties. bc/br/dhead and the second
-                 matmul's shape are arithmetic over the two groups above, so they cannot
-                 drift from them.
-
-    The transport knobs and pipeline depths are deliberately NOT here: they remain module
-    globals because the builders read them in ~700 places, and a wide mechanical edit
-    through that code risks the node creation order, which is dispatch order on this
-    machine. They are one-shape-per-process either way.
+                 matmul's shape are arithmetic over the groups above, so they cannot drift
+                 from them.
     """
     m: int
     k: int
@@ -106,11 +104,10 @@ class FaCfg:
 
     # ---- internal performance tuning ----------------------------------------------------
     # NONE OF THE BELOW CHANGES THE ANSWER. They change where operands come from and how
-    # deep the pipeline runs; every default is the measured best on this quadrant. A caller
-    # who just wants attention never has to name one. They are grouped by which
-    # decomposition READS them, because that is not a detail: a knob the chosen decomp
-    # never looks at is silently inert, and validate() refuses it rather than let a sweep
-    # report "no effect" for a knob that was never consulted.
+    # deep the pipeline runs; every default is the measured best on this quadrant. They are
+    # grouped by which decomposition READS them, because a knob the chosen decomp never
+    # looks at is silently inert -- validate() refuses one rather than let a sweep report
+    # "no effect" for a knob that was never consulted.
 
     # Read by BOTH decompositions -- pipeline depth, which is a property of the per-cluster
     # loop and so exists however the work was split.
@@ -234,12 +231,11 @@ class FaCfg:
                 raise ValueError(
                     f"{name}={v}: a single buffer makes the producer wait on the consumer "
                     f"of the same buffer, which is a cycle, not a schedule. Use 2 or more.")
-        # A KNOB THE CHOSEN DECOMPOSITION NEVER READS IS A LIE, NOT A DEFAULT. Every one
-        # below was swept and confirmed to change the emitted graph under the decomp it is
-        # listed with, and to change nothing under the other. Left unchecked, setting one
-        # on the wrong decomp builds, runs, and gives the same cycle count as not setting
-        # it -- which reads as "the optimisation does not help" rather than "it was never
-        # applied". Refusing costs one line and removes a whole class of wrong conclusion.
+        # A KNOB THE CHOSEN DECOMPOSITION NEVER READS IS A LIE, NOT A DEFAULT. Each one
+        # below changes the emitted graph under the decomp it is listed with and changes
+        # nothing under the other. Unchecked, setting one on the wrong decomp builds, runs,
+        # and gives the same cycle count as not setting it -- which reads as "the
+        # optimisation does not help" rather than "it was never applied".
         _ONLY = {"headpar": ("v_pull_from_cl0", "k_pull_from_cl0", "pull_rotate",
                              "pull_skip_first", "bcast_k", "bcast_v", "bcast_spread",
                              "bcast_v_skew", "bcast_skip_first", "bcast_warmup",
@@ -264,7 +260,7 @@ class FaCfg:
     # ---- constructors ------------------------------------------------------------------
     @classmethod
     def from_params(cls, param: dict, mesh=(16, 4, 16), **kw) -> "FaCfg":
-        """From a params dict, the historical spelling."""
+        """From a params dict (M/K/N/NKV/ACTIVE_CLUSTERS/DECOMP)."""
         ncl = int(param.get("ACTIVE_CLUSTERS", param.get("num_clusters", 4)))
         if not 1 <= ncl <= int(param.get("num_clusters", ncl)):
             raise ValueError(f"ACTIVE_CLUSTERS={ncl} must be between 1 and num_clusters")
@@ -539,20 +535,11 @@ def build_shards(cfg):
     m_c = np.stack([np.asarray(sh[3], dtype=np.float16) for sh in shards])     # [NCL, BR]
     l_c = np.stack([np.asarray(sh[4], dtype=np.float16) for sh in shards])
 
-    m_star = m_c.astype(np.float32).max(axis=0)
-    l_star = (np.exp(m_c.astype(np.float32) - m_star) *
-              l_c.astype(np.float32)).sum(axis=0)
-
-    # Pack (m*, l*) into the junction's lane geometry so the check compares what the
-    # collector's buffer actually holds: lane = field*S + slot, field 0 = m, field 1 = l,
-    # S = MONOID_SLOTS rows per beat, 16 FP32 lanes per 512-bit beat.
-    beats = cfg.br // cfg.monoid_slots
-    merged = np.zeros(beats * 16, dtype=np.float32)
-    for beat in range(beats):
-        for slot in range(cfg.monoid_slots):
-            row = beat * cfg.monoid_slots + slot
-            merged[beat * 16 + 0 * cfg.monoid_slots + slot] = m_star[row]
-            merged[beat * 16 + 1 * cfg.monoid_slots + slot] = l_star[row]
+    # The merged golden belongs to the FOLD, not to the shards, so it is built by the
+    # module that folds. Its lane packing is the junction's, and nothing here should have
+    # to know that geometry.
+    from .gather import merged_golden
+    merged = merged_golden(cfg, m_c, l_c)
 
     a_list = [sh[0] for sh in shards]
     # b is shared under kvsplit; the caller indexes per cluster either way.
@@ -839,17 +826,15 @@ def _build_head(ctx, cfg, c, h_all, buf):
     # Q is the query tile: fixed for the whole run, loaded once.
     ld_q = [load(f"Q{q}", "b", q8[q], cfg.n * cfg.k * cfg.mesh_col * cfg.tile_size, [warm_gemm])
             for q in range(cfg.nq)]
-    # No Czero load: with the C channels masked the score matmul never reads this buffer.
-    # That removes the single largest load from the head of the chain -- 64 KiB of zeros
-    # that QK(0) used to wait behind.
+    # No Czero load: with the C channels masked the score matmul never reads this buffer,
+    # which keeps 64 KiB of zeros off the head of the chain, in front of QK(0).
     # O starts at zero: the O matmul sets take_in_new_c, so every output block starts from
     # C, and C is oacc itself. A prefix of the same zero region does it.
 
     # The softmax's OWN running O lives in the arena and is a different buffer from the
-    # INT32 oacc32 above. simd_fa_init_state used to zero it with the SIMD core's stores:
-    # dhead beats, ~8 KiB, and the single largest serial bubble in the run. The DM core is
-    # idle here, so hand it the same zero region. The device side then only has to seed
-    # mrun/lrun, which is two beats.
+    # INT32 oacc32 above. Zeroing it from the SIMD core costs dhead beats -- ~8 KiB, and
+    # the single largest serial bubble in the run -- so the idle DM core takes the same
+    # zero region instead. The device side then only seeds mrun/lrun, which is two beats.
     _lay = SnaxBingoKernelSimdFaSoftmaxArgs.layout(cfg.bc, cfg.dhead)
     # ZERO THE O ACCUMULATOR ON THE xDMA, not the iDMA.
     #
@@ -859,15 +844,15 @@ def _build_head(ctx, cfg, c, h_all, buf):
     # is otherwise idle -- it owns nothing but its exit node -- so it generates the zeros in
     # place, with the reader channels disabled so no TCDM read is issued either.
     #
-    # It no longer waits on ld_q: generating a constant needs no operand, so this runs from
+    # It does not wait on ld_q: generating a constant needs no operand, so this runs from
     # cycle zero and overlaps the Q load rather than queueing behind it.
     # THE WHOLE RECURRENCE STATE IS GENERATED, NOT LOADED.
     #
-    # m = -inf, l = 0 and O = 0 are constants. The SIMD kernel used to seed m and l itself
-    # on tile 0 and the iDMA carried O's zeros; both sat on the critical head, and at NQ
-    # query tiles that is NQ transfers standing in front of K(0) plus NQ scalar fills in
-    # front of the first softmax. None of it needs an operand, so the idle xDMA core
-    # generates all three in place -- reader channels disabled, so not even a TCDM read.
+    # m = -inf, l = 0 and O = 0 are constants. Seeding m and l from the SIMD kernel and
+    # carrying O's zeros on the iDMA both sit on the critical head: at NQ query tiles that
+    # is NQ transfers in front of K(0) plus NQ scalar fills in front of the first softmax.
+    # None of it needs an operand, so the idle xDMA core generates all three in place --
+    # reader channels disabled, so not even a TCDM read.
     #
     # -65504 is FP16's most negative finite value, which is what the kernel used; a true
     # -inf would make the first exp(S - m) NaN rather than 0. The pattern is 32 bits
@@ -1162,8 +1147,8 @@ def _build_cluster(ctx, cfg, c, h_all, m_all, rowsum_all, buf, bcast=None,
                     # FOUR xDMA harts wedged in their wait loops (three at 1.8 GB of trace).
                     # The arm where every cluster xDMA did nothing but five tiny memsets
                     # while the broadcasts landed is the one that PASSED. Under headpar the
-                    # iDMA is free anyway -- K no longer rides it, it carries only Q -- so
-                    # this costs nothing and keeps the receiving xDMAs clear.
+                    # iDMA is free anyway -- it carries only Q, not K -- so this costs
+                    # nothing and keeps the receiving xDMAs clear.
                     ld_v.append(load(f"V{j}", "v", v8[j % cfg.nvbuf], VBYTES, v_after))
                 else:
                     ld_v.append(xload(f"V{j}", "v", v8[j % cfg.nvbuf], VBYTES, v_after))
@@ -1304,7 +1289,7 @@ def _build_cluster(ctx, cfg, c, h_all, m_all, rowsum_all, buf, bcast=None,
             # overwrites mrun. The run aborts at the first failing check, so the UART names the
             # tile directly.
             for _i, _smn in enumerate(sm):
-                _l3 = BingoMemAlloc(f"dbg_m_c{c}_t{_i}", size=64, mem_level="L3")
+                _l3 = BingoMemAlloc(f"dbg_m_c{c}_t{_i}", size=64, mem_level=MemLevel.L3)
                 _st = host(f"DbgStoreM_c{c}_t{_i}", "__host_bingo_kernel_idma",
                            HostBingoKernelIdmaArgs(arena[_i % cfg.nq].view(lay["mrun"]), _l3, 64),
                            _smn)
@@ -1318,8 +1303,8 @@ def _build_cluster(ctx, cfg, c, h_all, m_all, rowsum_all, buf, bcast=None,
             # THE WHOLE score tile, not one beat. Comparing 64 B of 32,832 B says nothing about
             # the 511 beats the rowmax also reads, and the rowmax is what feeds m.
             _n = 64 + cfg.bc * cfg.br * 2
-            _a = BingoMemAlloc(f"dbg_s16_first_c{c}", size=_n, mem_level="L3")
-            _b = BingoMemAlloc(f"dbg_s16_again_c{c}", size=_n, mem_level="L3")
+            _a = BingoMemAlloc(f"dbg_s16_first_c{c}", size=_n, mem_level=MemLevel.L3)
+            _b = BingoMemAlloc(f"dbg_s16_again_c{c}", size=_n, mem_level=MemLevel.L3)
             _i0, _i1 = cfg.s16_cmp_buf, cfg.s16_cmp_buf + cfg.nscore
             _sa = host(f"DbgS16First_c{c}", "__host_bingo_kernel_idma",
                        HostBingoKernelIdmaArgs(s16[_i0 % cfg.nscore], _a, _n), qk[_i0])
@@ -1330,7 +1315,7 @@ def _build_cluster(ctx, cfg, c, h_all, m_all, rowsum_all, buf, bcast=None,
             checks.check_bytes(ctx, f"DbgS16Cmp_c{c}", golden=_a, got=_b, nbytes=_n,
                                after=_sb, label=f"dbg_s16_c{c}")
 
-        l3_m = BingoMemAlloc(f"out_fa_m_c{c}", size=64, mem_level="L3")
+        l3_m = BingoMemAlloc(f"out_fa_m_c{c}", size=64, mem_level=MemLevel.L3)
         st_m = host(f"Store_m_c{c}", "__host_bingo_kernel_idma",
                     HostBingoKernelIdmaArgs(arena[cfg.nq - 1].view(lay["mrun"]), l3_m, 64), last)
         ck_m = checks.check_fp16(ctx, f"Check_m_c{c}", golden=h["m"], got=l3_m,
@@ -1338,7 +1323,7 @@ def _build_cluster(ctx, cfg, c, h_all, m_all, rowsum_all, buf, bcast=None,
 
         # rsum lives in the LAST tile's p8 buffer, straight after its P beats, because that is
         # where the fused pass's contiguous output stream puts it -- not in the arena.
-        l3_rs = BingoMemAlloc(f"out_fa_rowsum_c{c}", size=64, mem_level="L3")
+        l3_rs = BingoMemAlloc(f"out_fa_rowsum_c{c}", size=64, mem_level=MemLevel.L3)
         st_rs = host(f"Store_rowsum_c{c}", "__host_bingo_kernel_idma",
                      HostBingoKernelIdmaArgs(p8[(cfg.nkv_per * cfg.nq - 1) % cfg.nscore].view((cfg.bc // 2) * 64),
                                              l3_rs, 64), [last, ck_m])
@@ -1358,7 +1343,7 @@ def _build_cluster(ctx, cfg, c, h_all, m_all, rowsum_all, buf, bcast=None,
         # checks cannot see the failure mode under test is not evidence, and adding this check
         # is cheaper than reasoning about which layouts happen to be observable.
         o_bytes = cfg.br * cfg.dhead * 4
-        l3_o = BingoMemAlloc(f"out_fa_o_c{c}", size=o_bytes, mem_level="L3")
+        l3_o = BingoMemAlloc(f"out_fa_o_c{c}", size=o_bytes, mem_level=MemLevel.L3)
         # WAITS ON THE LAST PV, NOT ON `last`. `last` is the last SOFTMAX, and every other store
         # here reads something a softmax wrote (m lives in the arena, rowsum in p8) -- but O is
         # written by the last PV, which is a SIBLING of this node, not an ancestor: PV(TOTAL-1) is
@@ -1618,7 +1603,7 @@ def fa_alloc(ctx: Ctx, cfg, clusters=None) -> list:
     return [_alloc_cluster(ctx, cfg, c) for c in cls]
 
 
-class Attention(Block):
+class FlashAttention(Block):
     """FlashAttention over one or more clusters, as one block.
 
     PORTS -- three, whatever the decomposition. The caller hands over Q, K and V; how they
@@ -1633,16 +1618,38 @@ class Attention(Block):
 
       out  o_c{c}    cluster c's accumulator, INT32, in the D port's SCATTER layout
                      ("d32"), living in that cluster's L1.
-           ml_c{c}   cluster c's partial (m, l) -- kvsplit with >1 cluster only, in the
-                     junction's lane geometry ("monoid"), FP32, in L1.
+           m_c{c}    cluster c's running max   -- kvsplit with >1 cluster only.
+           l_c{c}    cluster c's running sum   -- likewise.
 
     WHY THE OUTPUT STAYS WHERE IT IS. There is no gather here. Under headpar there is
     nothing to fold: each cluster owns a different query head and its O is final. Under
     kvsplit each cluster holds a partial over its own slice of the KV axis, and O_c is
     NOT the answer -- it is one term of an online-softmax combine that has to happen
     somewhere. Saying so in the port list is the point: `o_c{c}` is explicitly per-cluster
-    and explicitly in L1, so a consumer cannot mistake a partial for a result. Call
-    `fa_gather` when you want them folded, or consume the four where they lie.
+    and explicitly in L1, so a consumer cannot mistake a partial for a result.
+
+    THE PARTIAL IS THE TRIPLE (m, l, O), and it is three ports because that is three
+    buffers: the running max lives in the softmax arena, the running sum in the last score
+    buffer, the accumulator in its own region. `fa_gather` folds the first two in the
+    fabric; scaling and summing the O_c is the caller's, and it needs the m* the fold
+    returns.
+
+    TODO: CAUSAL MASKING. There is none, here or anywhere else in this tree. Every query
+    tile attends to every key tile, which is CORRECT for a decode step -- the new token
+    legitimately sees the whole cache -- and WRONG for a real prefill, where query i must
+    not see key j > i. Without a mask, prefill is right only for the last query row of the
+    last tile and quietly wrong for every other, by an amount that shrinks as the sequence
+    does; a toy sequence makes it look nearly right.
+
+    Note that `nq` alone does not make this block a prefill. It sets how many query tiles
+    the pipeline runs, and that is what fa_prefill_4cluster varies (NQ=2 against decode's
+    NQ=1) -- the two workloads differ in nothing else. So "prefill" in this tree means
+    multiple query tiles over FULL attention, and this block expresses exactly that.
+
+    Adding the mask is a SIMD-kernel change, not a parameter: the score tile is masked
+    between the QK matmul and the softmax, and at Br = Bc = 32 the mask is diagonal only
+    on the tile where the query and key ranges overlap -- tiles strictly below it need no
+    mask, tiles strictly above are skipped entirely, which is also where the saving is.
 
     THE THREE THINGS EVERY PORT CARRIES. Layout, precision and location are all in the
     signature, because none of the three faults when it is wrong -- a mismatched layout is
@@ -1655,14 +1662,13 @@ class Attention(Block):
     The GOLDENS (m, rowsum, o) are constructor arguments, not ports: they are verification
     data and never flow between blocks.
     """
-    name = "attention"
-    closes_gaps = True          # build() runs transfer.bring_in over q, k and v
+    name = "flash_attention"
 
     def __init__(self, cfg: FaCfg = None, *, goldens=None,
                  hwcfg=None, mesh=None, verify=None, **params):
         """Either pass a FaCfg, or the parameters directly:
 
-            Attention(bc=32, br=32, dhead=128, nkv=8, clusters=2, decomp="kvsplit")
+            FlashAttention(bc=32, br=32, dhead=128, nkv=8, clusters=2, decomp="kvsplit")
 
         `clusters` and `decomp` are ordinary parameters, and the block generates a
         DIFFERENT graph for each: kvsplit gives every cluster a disjoint KV shard, headpar
@@ -1673,7 +1679,7 @@ class Attention(Block):
         than from a datagen, so there is nothing to compare against.
         """
         if isinstance(cfg, dict):
-            # A params dict in the historical spelling (M/K/N/NKV/ACTIVE_CLUSTERS/DECOMP).
+            # A params dict: M/K/N/NKV/ACTIVE_CLUSTERS/DECOMP.
             cfg = FaCfg.from_params(cfg, mesh=mesh or _MESH_DEFAULT)
         elif cfg is None:
             cfg = FaCfg.from_shape(mesh=mesh or _MESH_DEFAULT, **params)
@@ -1682,7 +1688,7 @@ class Attention(Block):
         self.goldens = goldens
         self.verify = (goldens is not None) if verify is None else verify
         if self.verify and goldens is None:
-            raise ValueError("Attention(verify=True) needs goldens: the check tolerances "
+            raise ValueError("FlashAttention(verify=True) needs goldens: the check tolerances "
                              "are derived from them, not fixed.")
 
     # ---- which operand is per-cluster, and which is shared ------------------------------
@@ -1699,21 +1705,44 @@ class Attention(Block):
     @property
     def inputs(self) -> dict:
         cfg, sp = self.cfg, self._split
+        # NO MEMORY LEVEL ON THE INPUTS. Where the caller keeps Q, K and V is the
+        # caller's business -- main memory on one platform, the memory-chiplet pool on
+        # another, or an L1 buffer a previous block just wrote. What this block knows is
+        # where its OWN engines need them, and that is `_reads_from` below.
         return {
-            "q": PortSpec("B", "i8", (cfg.br * sp["q"], cfg.dhead), space="L3",
+            "q": PortSpec(Layout.B, DType.I8, (cfg.br * sp["q"], cfg.dhead),
                           doc=("one query head per cluster, stacked"
                                if sp["q"] > 1 else "one query head, shared")),
-            "k": PortSpec("A", "i8", (cfg.bc * sp["k"], cfg.dhead), space="L3",
+            "k": PortSpec(Layout.A, DType.I8, (cfg.bc * sp["k"], cfg.dhead),
                           doc=("one disjoint KV shard per cluster, stacked"
                                if sp["k"] > 1 else "one KV head, shared")),
-            "v": PortSpec("A", "i8", (cfg.bc, cfg.dhead), space="L3",
+            "v": PortSpec(Layout.A, DType.I8, (cfg.bc, cfg.dhead),
                           doc="values, shared by every cluster"),
         }
+
+    # The level this block's own transfers read from. The per-tile loads are cluster iDMA
+    # and xDMA reads of main memory, so an operand has to have reached L3 by the time they
+    # run; anything further out is hoisted once in the prologue rather than fetched per
+    # tile across the D2D link.
+    _reads_from = "L3"
+
+    @property
+    def needs(self) -> dict:
+        """`inputs`, with the memory level this block's transfers actually require.
+
+        Kept separate from `inputs` on purpose. `inputs` is the CONTRACT -- what a caller
+        must supply and in what layout -- and it says nothing about where. This is the
+        INTERNAL requirement, what build() hands to transfer.bring_in, and declaring it is
+        also how the contract check knows this block fetches its own operands.
+        """
+        return {nm: replace(spec, mem_level=self._reads_from)
+                for nm, spec in self.inputs.items()}
 
     @property
     def outputs(self) -> dict:
         cfg = self.cfg
-        outs = {f"o_c{c}": PortSpec("d32", "i32", (cfg.br, cfg.dhead), space="L1",
+        outs = {f"o_c{c}": PortSpec(Layout.D32, DType.I32, (cfg.br, cfg.dhead),
+                                    mem_level=MemLevel.L1,
                                     doc=f"cluster {c} accumulator, D-port scatter, NOT "
                                         f"un-permuted and NOT gathered")
                 for c in range(cfg.clusters)}
@@ -1722,14 +1751,15 @@ class Attention(Block):
             # they are TWO ports rather than one because that is what they physically are:
             # the running max lives in the softmax arena and the running sum in the last
             # score buffer, written by different kernels into different allocations. The
-            # single contiguous FP32 (m, l) that the junction folds does not exist until
-            # the gather's pack builds it, so promising it here as one port would name a
-            # buffer nothing has written.
+            # single contiguous FP32 (m, l) the junction folds does not exist until the
+            # gather's pack builds it, so one port here would name a buffer nothing wrote.
             for c in range(cfg.clusters):
-                outs[f"m_c{c}"] = PortSpec("packed", "f16", (1, cfg.br), space="L1",
+                outs[f"m_c{c}"] = PortSpec(Layout.PACKED, DType.F16, (1, cfg.br),
+                                           mem_level=MemLevel.L1,
                                            doc=f"cluster {c} running max over its KV "
                                                f"shard, in the softmax arena")
-                outs[f"l_c{c}"] = PortSpec("packed", "f16", (1, cfg.br), space="L1",
+                outs[f"l_c{c}"] = PortSpec(Layout.PACKED, DType.F16, (1, cfg.br),
+                                           mem_level=MemLevel.L1,
                                            doc=f"cluster {c} running sum over its KV "
                                                f"shard, in the last score buffer")
         return outs
@@ -1777,7 +1807,7 @@ class Attention(Block):
         # would not also pay. When it does not, the prologue appears here, ahead of every
         # load, rather than as a surprise in the middle of the pipeline.
         pre, bound = [], dict(bound)
-        for nm, want in self.inputs.items():
+        for nm, want in self.needs.items():
             port, nodes = transfer.bring_in(ctx, f"{self.name}_{nm}", bound[nm], want,
                                            mesh=cfg.mesh, elem_bytes=1)
             bound[nm], pre = port, pre + nodes

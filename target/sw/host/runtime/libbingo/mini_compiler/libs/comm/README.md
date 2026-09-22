@@ -6,10 +6,25 @@ Everything a block is built out of, and nothing specific to one. Two halves:
 
 | file | |
 |---|---|
-| `ports.py` | `PortSpec` (layout, precision, shape, space), `Port` (a bound spec plus the nodes at the block's edge), `Block`, `BlockResult`, and `at_offset`. **The layout names are worked through there with real index maps** — what `packed`, `A`, `B`, `D`, `d32` and `monoid` each do to element `[row][col]`, and why `d32` is not `D` — which offsets any of the four handle types, because a staged array is a *symbol* on the host path and a *fixed address* on the memchip path, and only `BingoMemAlloc` has `.view()`. |
+| `ports.py` | `PortSpec` (layout, precision, shape, mem_level), `Port` (a bound spec plus the nodes at the block's edge), `Block`, `BlockResult`, and `at_offset`. **The layout names are worked through there with real index maps** — what `packed`, `A`, `B`, `D`, `d32` and `monoid` each do to element `[row][col]`, and why `d32` is not `D` — which offsets any of the four handle types, because a staged array is a *symbol* on the host path and a *fixed address* on the memchip path, and only `BingoMemAlloc` has `.view()`. |
 | `ctx.py` | The node and handle factory, bound to one cluster and one name prefix. The prefix is what lets one block be instantiated twice: handle names must be unique per chip, because the emitter dedups by identity and two same-named handles emit two C declarations that do not compile. |
 | `link.py` | `Pipeline`, `link`, and `check_contract` — which asks `transfer.plan` whether a mismatch is closable rather than deciding for itself, so the two cannot drift. |
 | `paths.py` | Reaching `util/sim`. Delegates to `_bingo_paths.repo_root()`; there is deliberately one implementation of that search. |
+
+**The vocabulary is a closed set.** `Layout`, `DType` and `MemLevel` were tuples of bare
+strings checked with `in`. They are now StrEnums, so a member *is* its string — it compares
+equal, hashes and formats as one, and every call site that passes `"A"` or `"L3"` keeps
+working — but `Layout.` lists the options, each carries a `doc`, and a typo is refused at
+construction with the valid values named rather than reaching a kernel as a layout nobody
+implements. `PortSpec` coerces, so a spec always holds the member however it was written.
+
+**An input port usually names no memory level.** `mem_level=None` means *"wherever you
+have it — I will fetch it"*, which is the honest declaration: a block knows which level its
+own engines need (L1, always — the GEMM and SIMD have no AXI port) but has no business
+dictating where the caller keeps the tensor. The block states the level its transfers read
+from in `needs`, and the hoist happens inside its own build. A bound `Port` reads the level
+off the handle, so binding a block's level-less spec directly just works. An **output** is
+never None: a produced buffer is somewhere definite.
 
 `Port.ends` is what makes the join mechanical: for an output it is the nodes that finish
 writing the buffer, for an input the nodes that first read it. The linker joins one to the

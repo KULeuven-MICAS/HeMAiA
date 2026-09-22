@@ -120,7 +120,7 @@ def check_int32_rel(ctx, name, *, golden, got, elems, rtol, after=(), label=None
 # Choosing by the port's dtype
 # ======================================================================================
 # A block does not hardcode which of the six it wants; it asks for the one that matches the
-# precision it declared. Adding a dtype to DTYPES without adding it here is then a build
+# precision it declared. Adding a member to DType without adding it here is then a build
 # error at the first check rather than a wrong comparison.
 
 _ABSOLUTE = {"i8": check_int8, "f16": check_fp16, "f32": check_fp32}

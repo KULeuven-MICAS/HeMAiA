@@ -3,26 +3,45 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
-"""Folding per-cluster attention partials into one (m*, l*), in the fabric.
+"""Folding the per-cluster attention partials, in the fabric.
+
+WHAT IT FOLDS, AND WHAT IT DOES NOT. A kvsplit shard's partial state is the TRIPLE
+(m, l, O): the running max, the running sum, and the accumulator. The complete combine is
+
+    m* = max_c m_c
+    l* = sum_c exp(m_c - m*) * l_c
+    O* = sum_c exp(m_c - m*) * O_c
+
+and this folds the FIRST TWO. O is left where each cluster computed it, as `o_c{c}`, still
+scaled by that cluster's own m_c. A caller that wants one attention output has to apply the
+third line itself, using the m* this returns.
+
+That is a real limit, not an oversight of documentation: the monoid junction folds the two
+scalars per query row as the partials cross the fabric, and O is Br x d of INT32 in the D
+port's scatter layout, which is a different transfer entirely. Treating `ml` as "the merged
+result" and reading O_c as final gives an answer that is wrong by a per-cluster exponential
+-- and on data where the four maxima are close, wrong by little enough to look plausible.
 
 A SEPARATE STAGE, AND NOT A BLOCK. Two reasons, and the second is why it is not just a
-method on Attention.
+method on FlashAttention.
 
 First, the fold is a CHOICE, not a consequence. Under kvsplit each cluster holds a partial
 over its own slice of the KV axis and the answer is the online-softmax combine of the four;
 but where that combine happens is open -- in the fabric as the partials cross the monoid
 junction, on the host, or nowhere at all, because a next stage sharded the same way would
-pay for a gather and then re-split what it gathered. Building it into Attention would make
+pay for a gather and then re-split what it gathered. Building it into FlashAttention would make
 that choice for every caller and hide the one case where it is wrong.
 
 Second, it cannot be expressed as a Block. A Block owns its operands through ports, and a
 port names a buffer with a layout and a producer. What this fold reads is each cluster's
-softmax ARENA -- a buffer the previous stage has been updating in place, whose contents are
-a running state rather than a produced tensor. Declaring it as a port would promise
-something the port model cannot honour, so this takes the shards directly and says so.
+softmax ARENA -- a buffer the previous block is still updating in place, a running state
+rather than a produced tensor. A port would promise something the model cannot honour, so
+this takes the shards directly.
 
 Under headpar, or with a single cluster, there is nothing to fold and this is a no-op.
 """
+
+import numpy as np
 
 from bingo_kernel_args import (
     HostBingoKernelIdmaArgs,
@@ -36,6 +55,35 @@ from bingo_mem_handle import BingoMemAlloc
 from ..verify import checks
 
 
+def merged_golden(cfg, m_c, l_c):
+    """The (m*, l*) the junction should produce, in the lane geometry it writes.
+
+        m* = max_c m_c            l* = sum_c exp(m_c - m*) * l_c
+
+    Computed in FP32 on FP16 inputs, mirroring the device: the arena holds m and l in
+    FP16, pack_fa_partial widens the bit pattern to FP32, and the junction folds in FP32.
+
+    The packing matters as much as the arithmetic. The collector's buffer is laid out
+    lane = field*S + slot -- field 0 is m, field 1 is l, S = monoid_slots rows per beat,
+    16 FP32 lanes per 512-bit beat -- so a golden in row order would disagree with a
+    correct fold everywhere.
+    """
+    m_c = np.asarray(m_c, dtype=np.float16)
+    l_c = np.asarray(l_c, dtype=np.float16)
+    m_star = m_c.astype(np.float32).max(axis=0)
+    l_star = (np.exp(m_c.astype(np.float32) - m_star) *
+              l_c.astype(np.float32)).sum(axis=0)
+
+    beats = cfg.br // cfg.monoid_slots
+    merged = np.zeros(beats * 16, dtype=np.float32)
+    for beat in range(beats):
+        for slot in range(cfg.monoid_slots):
+            row = beat * cfg.monoid_slots + slot
+            merged[beat * 16 + 0 * cfg.monoid_slots + slot] = m_star[row]
+            merged[beat * 16 + 1 * cfg.monoid_slots + slot] = l_star[row]
+    return merged
+
+
 def fa_gather(ctx, cfg, shards, merged_h=None, jct_monoid=None, verify=True):
     """Fold the per-cluster partials into one (m*, l*) in the fabric. SEPARATE ON PURPOSE.
 
@@ -47,14 +95,14 @@ def fa_gather(ctx, cfg, shards, merged_h=None, jct_monoid=None, verify=True):
     computed by the monoid junction as the partials cross the fabric. Under headpar there
     is nothing to fold: each cluster owns a different query head and its O is already final.
 
-    WHY IT IS NOT PART OF Attention. The fold is a CHOICE about how the shards are
+    WHY IT IS NOT PART OF FlashAttention. The fold is a CHOICE about how the shards are
     recombined, and there is more than one: fold in the fabric here, fold on the host, or
     do not fold at all and let the next block consume the four partials where they lie.
     Building it into the block would make that choice for every caller and hide the one
     case that matters -- a decode step whose next stage is already sharded the same way
     pays for a gather and then re-splits what it gathered.
 
-    So Attention exposes the partials and the caller composes this when it wants them
+    So FlashAttention exposes the partials and the caller composes this when it wants them
     merged. Calling it with clusters < 2, or under headpar, is a no-op that returns the
     shards untouched.
     """

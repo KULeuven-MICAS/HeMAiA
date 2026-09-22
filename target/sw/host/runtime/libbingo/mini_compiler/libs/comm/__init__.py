@@ -22,11 +22,11 @@ from .ctx import Ctx
 from .link import Pipeline, check_contract, link
 from .nest import convert_args, index_map
 from .paths import add_sim_paths, repo_root
-from .ports import (Block, BlockResult, DTYPES, LAYOUTS, Port, PortSpec, SPACES,
-                    at_offset)
+from .ports import (Block, BlockResult, DType, Layout, MemLevel, Port, PortSpec,
+                    at_offset, level_of)
 from .transfer import Step, bring_in, hoist, plan
 
 __all__ = ["Block", "BlockResult", "Ctx", "Pipeline", "Port", "PortSpec",
-           "at_offset", "check_contract", "link", "DTYPES", "LAYOUTS", "SPACES",
+           "at_offset", "check_contract", "level_of", "link", "DType", "Layout", "MemLevel",
            "bring_in", "hoist", "plan", "Step", "convert_args", "index_map",
            "add_sim_paths", "repo_root"]

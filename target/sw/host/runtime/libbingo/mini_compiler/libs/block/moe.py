@@ -21,7 +21,8 @@ from bingo_kernel_args import (
     SnaxBingoKernelSimdSwigluF16F16Args,
 )
 
-from ..comm import Block, BlockResult, Ctx, Port, PortSpec
+from ..comm import (Block, BlockResult, Ctx, DType, Layout, MemLevel, Port,
+                    PortSpec)
 from ..comm.nest import d_to_a_args
 
 
@@ -192,13 +193,17 @@ class MoeFFN(Block):
     @property
     def inputs(self) -> dict:
         c = self.cfg
-        return {"x": PortSpec("A", "i8", (c.tokens, c.d_model), space="L3",
+        # This block does not override `needs`, so it fetches nothing: whatever is bound
+        # has to be what its loads read, which is main memory.
+        return {"x": PortSpec(Layout.A, DType.I8, (c.tokens, c.d_model),
+                              mem_level=MemLevel.L3,
                               doc="activation, broadcast to every expert lane")}
 
     @property
     def outputs(self) -> dict:
         c = self.cfg
-        return {"y": PortSpec("D", "f16", (c.tokens, c.d_model), space="L1",
+        return {"y": PortSpec(Layout.D, DType.F16, (c.tokens, c.d_model),
+                              mem_level=MemLevel.L1,
                               doc="weighted sum over the selected experts")}
 
     def build(self, ctx: Ctx, bound: dict) -> BlockResult:

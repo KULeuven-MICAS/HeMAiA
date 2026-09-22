@@ -359,8 +359,8 @@ def d_to_a_args(mesh, M_T, N_up, K_down, src, dst) -> SnaxBingoKernelXdma6dArgs:
     # block on the source and a whole (k, r, s) block on the destination. Leaving it out
     # transfers only the FIRST m tile: at M_T=2 exactly half of `act_a` is never written,
     # stays uninitialised TCDM (= X), and the X reaches the host through quant -> down
-    # GEMM -> push. It cost a full build+sim cycle to find, because at M_T=1 the bounds
-    # are identical either way and everything passes.
+    # GEMM -> push. At M_T=1 the bounds are identical either way and everything passes,
+    # so the mistake is invisible until the shape grows.
     src_m = N_up * mr * mc * eb
     dst_m = K_down * mr * ts * eb
 

@@ -167,10 +167,9 @@ def parse_platform_cfg(occamy_h_path):
 
 # The generated platform header, resolved from THIS file's location the same way
 # _DEFAULT_ROLES_HEADER below is: bingo_platform.py sits at
-# FOUND BY MARKER, NOT BY COUNTING `..`. This was parents[4], which was right while this
-# file sat directly in mini_compiler/ and silently wrong the moment it moved into
-# platform/: the path just does not exist, and the failure appears much later as a missing
-# generated header from a module that never mentions paths.
+# FOUND BY MARKER, NOT BY COUNTING `..`. A fixed number of parent steps is right for one
+# directory depth only, and wrong silently: the path simply does not exist, and the failure
+# appears much later as a missing generated header from a module that never mentions paths.
 _DEFAULT_PLATFORM_HEADER = (
     Path(_bingo_paths.target_sw()) / "shared" / "platform" / "generated" / "occamy.h"
 )

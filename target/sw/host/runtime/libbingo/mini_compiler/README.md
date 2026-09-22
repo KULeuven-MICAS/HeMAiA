@@ -12,7 +12,7 @@ cores, edges between them, buffers they read and write -- and `bingo_compile_dfg
 | [`kernels/`](kernels/) | The kernel ABI. One args class per device/host kernel, matching the C structs in `libbingo/include`, one file per engine. |
 | [`passes/`](passes/) | What runs OVER an assembled graph, in `bingo_compile_dfg` order, plus the analyses those passes use. |
 | [`platform/`](platform/) | The machine: which core carries which engine, how many clusters, what transfer sizes the datapath accepts. |
-| [`libs/`](libs/) | Reusable blocks -- attention, its fold, the MoE FFN -- and the linker that assembles several into one graph. |
+| [`libs/`](libs/) | Reusable blocks -- FlashAttention, its fold, the MoE FFN -- and the linker that assembles several into one graph. |
 | [`tests/`](tests/) | Runnable checks. No framework: `pixi run python3 tests/test_libs.py`. |
 
 Each directory has its own README describing what is in it and why.
@@ -56,12 +56,11 @@ bootstraps itself, so `import libs` needs no preamble.
 ## Two things to know before changing anything here
 
 **Never locate a file by counting `..`.** A fixed number of parent steps is right for
-exactly one directory depth and SILENT when it is wrong -- the computed path is simply a
-directory that does not exist, so the failure surfaces much later and somewhere else. When
-these files were grouped into subdirectories, two such counts in `bingo_platform.py` broke,
-and 29 workloads reported *"generated core-role map is missing -- run `make snax-sw-gen`"*.
-The file was there the whole time. Use `_bingo_paths.repo_root()`, which searches for a
-marker.
+exactly one directory depth and SILENT when it is wrong: the computed path is simply a
+directory that does not exist, so the failure surfaces much later and somewhere else -- as
+a missing generated header, reported by a module that never mentions paths, sending you to
+the build system for a problem three layers away. Use `_bingo_paths.repo_root()`, which
+searches for a marker.
 
 **Node creation order is dispatch order.** The manager issues tasks in the order they were
 added, so reordering node construction silently reschedules the graph. This is why the

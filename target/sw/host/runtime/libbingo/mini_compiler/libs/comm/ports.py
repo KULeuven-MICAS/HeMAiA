@@ -12,13 +12,16 @@ computes a scrambled answer; a mismatched precision reads two elements as one; a
 in a memory pool the platform does not have is simply unmapped.
 
 This module has no knowledge of HOW a gap gets closed -- that is comm.transfer and
-comm.nest. What it does own is the VOCABULARY: the layout, precision and space names a
-port is written in. The layouts are worked through with real index maps below LAYOUTS,
+comm.nest. What it does own is the VOCABULARY: the layout, precision and memory-level
+names a
+port is written in -- Layout, DType and MemLevel. The layouts are worked through with
+real index maps just below,
 because "D-layout" is not self-explanatory and reading a buffer in the wrong one is the
 failure this whole module exists to make impossible.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from enum import StrEnum
 from typing import Optional
 
 from bingo_mem_handle import (BingoMemAlloc, BingoMemAllocView,
@@ -95,17 +98,69 @@ from bingo_mem_handle import (BingoMemAlloc, BingoMemAllocView,
 # "monoid"  The monoid junction's lane geometry: lane = field*S + slot within a 16-lane
 #           FP32 beat, field 0 = m and field 1 = l. It is what a partial (m, l) physically
 #           is, and calling it "packed" would invite a consumer to read it as rows.
-LAYOUTS = ("A", "B", "D", "packed", "d32", "monoid")
-DTYPES = ("i8", "f16", "i32", "f32")
-# Where a buffer lives, and it is part of the signature for the same reason the layout is:
-# addressing the wrong one does not fault. A memory-chiplet address on a config with no
-# memory chiplet is simply unmapped -- the loads return whatever the fabric gives back and
-# the checks compare one piece of garbage against another.
-#   L1  cluster TCDM. What the GEMM and SIMD can actually read.
-#   L2  the narrow SPM, where the descriptor list lives. Not an operand's home.
-#   L3  main memory (the host's wide SPM). Where a block's loads read from.
-#   L4  the memory-chiplet pool, off-die over the D2D link. Reachable by the host iDMA.
-SPACES = ("L1", "L2", "L3", "L4")
+class _Vocab(StrEnum):
+    """A closed set of names, where a typo is a build error rather than a wrong answer.
+
+    A member IS its string: it compares equal to it, hashes with it and formats as it, so
+    "A" and Layout.A are interchangeable at any call site. What the enum adds is that the
+    options are listable, each carries its own one-line `doc`, and an unknown value is
+    refused with the valid ones named.
+    """
+
+    def __new__(cls, value, doc=""):
+        obj = str.__new__(cls, value)
+        obj._value_ = value
+        obj.doc = doc
+        return obj
+
+    @classmethod
+    def _missing_(cls, value):
+        raise ValueError(
+            f"{value!r} is not a valid {cls.__name__}. Valid values are "
+            f"{', '.join(repr(str(m)) for m in cls)}.")
+
+
+class Layout(_Vocab):
+    """How a matrix is ordered in memory. See the reference above for the index maps."""
+
+    A = "A", "operand A of the GEMM: (m, k, r, s)"
+    B = "B", "operand B of the GEMM: (n, k, c, s) -- runs down COLUMNS, so converting is a transpose"
+    D = "D", "the GEMM output: (m, n, r, c)"
+    PACKED = "packed", "plain row-major, what everything outside the array uses"
+    D32 = "d32", "the D port's INT32 scatter -- a DIFFERENT bijection from D"
+    MONOID = "monoid", "the junction's lane geometry: lane = field*S + slot, field 0 = m, 1 = l"
+
+
+class DType(_Vocab):
+    """The precision of an element. Changing it needs a scale, so it is never automatic."""
+
+    I8 = "i8", "signed 8-bit, the GEMM's operand precision"
+    F16 = "f16", "half precision, what the SIMD computes in"
+    I32 = "i32", "signed 32-bit, the GEMM's accumulator"
+    F32 = "f32", "single precision, what the fabric junctions fold in"
+
+
+class MemLevel(_Vocab):
+    """Where a buffer lives. Spelled the way BingoMemAlloc spells it, because they are the
+    same question and two vocabularies for one thing is how they drift.
+
+    Part of the signature for the same reason the layout is: addressing the wrong one does
+    not fault. A memory-chiplet address on a config with no memory chiplet is simply
+    unmapped -- the loads return whatever the fabric gives back and the checks compare one
+    piece of garbage against another.
+
+    An INPUT port may leave it None, meaning "wherever you have it -- I will fetch it".
+    That is the honest declaration for most operands: a block knows which level its ENGINES
+    need (L1, always, since the GEMM and SIMD have no AXI port) but has no business
+    dictating where its caller keeps the tensor. The block states the level it actually
+    needs when it calls transfer.bring_in, and the hoist happens inside its own build. An
+    OUTPUT is never None -- a produced buffer is somewhere definite.
+    """
+
+    L1 = "L1", "cluster TCDM. What the GEMM and SIMD can actually read"
+    L2 = "L2", "the narrow SPM, where the descriptor list lives. Not an operand's home"
+    L3 = "L3", "main memory (the host's wide SPM). Where a block's loads read from"
+    L4 = "L4", "the memory-chiplet pool, off-die over the D2D link. Host iDMA reaches it"
 
 
 # ======================================================================================
@@ -120,22 +175,25 @@ class PortSpec:
     block is INVOKED with the precision and layout it should consume and produce, the same
     way a function is invoked with argument types.
     """
-    layout: str
-    dtype: str
+    layout: Layout
+    dtype: DType
     shape: tuple
-    space: str = "L1"                 # one of SPACES
+    mem_level: Optional[MemLevel] = None    # None means "wherever you have it"
     doc: str = ""
 
     def __post_init__(self):
-        if self.layout not in LAYOUTS:
-            raise ValueError(f"PortSpec layout {self.layout!r} not in {LAYOUTS}.")
-        if self.dtype not in DTYPES:
-            raise ValueError(f"PortSpec dtype {self.dtype!r} not in {DTYPES}.")
-        if self.space not in SPACES:
-            raise ValueError(f"PortSpec space {self.space!r} not in {SPACES}.")
+        # COERCE, do not merely check: a plain "A" surviving as a str would make
+        # spec.layout.doc an AttributeError on one path and not another, depending on how
+        # the spec happened to be built. Every spec holds the enum member however it was
+        # written, and an unknown value is refused with the valid ones named.
+        object.__setattr__(self, "layout", Layout(self.layout))
+        object.__setattr__(self, "dtype", DType(self.dtype))
+        if self.mem_level is not None:
+            object.__setattr__(self, "mem_level", MemLevel(self.mem_level))
 
     def describe(self) -> str:
-        return f"{self.layout}/{self.dtype} {tuple(self.shape)} in {self.space}"
+        where = f"in {self.mem_level}" if self.mem_level else "anywhere"
+        return f"{self.layout}/{self.dtype} {tuple(self.shape)} {where}"
 
 
 @dataclass(frozen=True)
@@ -153,6 +211,15 @@ class Port:
     cluster: Optional[int] = None
     name: str = ""
 
+    def __post_init__(self):
+        # THE HANDLE ALREADY KNOWS WHERE IT IS, so a caller binding one does not restate
+        # it. A block's `inputs` leave mem_level None -- "wherever you have it" -- and
+        # binding is the moment that becomes a real place, so the level is read off the
+        # handle rather than defaulted or guessed.
+        if self.spec.mem_level is None:
+            object.__setattr__(self, "spec",
+                               replace(self.spec, mem_level=level_of(self.handle)))
+
     @property
     def layout(self): return self.spec.layout
     @property
@@ -166,6 +233,29 @@ class Port:
         if isinstance(h, BingoMemAllocView):
             return h.base.name
         return getattr(h, "name", getattr(h, "symbol_name", "?"))
+
+
+def level_of(handle) -> str:
+    """Which memory level a handle addresses. Derived, never guessed.
+
+    An allocation carries its level; a view carries its base's. A SYMBOL is a C array in
+    the workload image, which is main memory by construction. A FIXED ADDRESS cannot be
+    derived -- it is a number, and nothing in the handle records which pool it points at --
+    so it is refused rather than guessed: assuming would put a hoist in front of an operand
+    that may already be in main memory.
+    """
+    if isinstance(handle, BingoMemAllocView):
+        return handle.base.mem_level
+    if isinstance(handle, BingoMemAlloc):
+        return handle.mem_level
+    if isinstance(handle, BingoMemSymbol):
+        return "L3"
+    raise ValueError(
+        f"cannot tell which memory level a {type(handle).__name__} addresses, so the "
+        f"PortSpec has to say. A fixed address is just a number: the staging helper emits "
+        f"one for the memory-chiplet pool, but the handle does not record that, and "
+        f"assuming it would put a hoist in front of an operand that may already be in "
+        f"main memory.")
 
 
 def at_offset(handle, nbytes: int):
@@ -212,19 +302,32 @@ class Block:
     appends nodes into the caller's DFG and returns a BlockResult. A block is built exactly
     once, in pipeline order, because node creation order is dispatch order.
 
-    `closes_gaps` says whether build() runs `transfer.bring_in` over its own inputs. It has
-    to be declared rather than assumed: the LINKER never inserts a node (see the module
-    docstring), so a mismatch is only closable if the CONSUMING BLOCK closes it, in its own
-    build, where the nodes land in its own dispatch order. A block that leaves this False
-    and is handed a D-layout operand would read it as A-layout and compute a scrambled
-    answer that no check catches -- so the contract refuses that binding outright.
+    `inputs` is the CONTRACT -- what a caller must supply. `needs` is what this block's own
+    transfers read from, and defaults to `inputs`. Overriding it is how a block says it
+    FETCHES: the contract is then checked against `needs`, so any gap between what was
+    bound and what the engines want is the block's to close in its own build().
+
+    That the two are separate is what makes the linker's rule enforceable. The LINKER never
+    inserts a node -- node creation order is dispatch order -- so a mismatch is only
+    closable by the consuming block, where the nodes land in its own order. A block that
+    does not override `needs` and is handed a D-layout operand would read it as A-layout
+    and compute a scrambled answer that no check catches, so the contract refuses that
+    binding outright.
     """
     name = "block"
-    closes_gaps = False
 
     @property
     def inputs(self) -> dict:
         raise NotImplementedError
+
+    @property
+    def needs(self) -> dict:
+        """The layout, precision and level this block's own transfers read from.
+
+        Same as `inputs` unless the block fetches its operands, in which case it overrides
+        this with the concrete requirement and hands it to transfer.bring_in.
+        """
+        return self.inputs
 
     @property
     def outputs(self) -> dict:

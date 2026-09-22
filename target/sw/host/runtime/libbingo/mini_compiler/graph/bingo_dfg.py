@@ -34,11 +34,9 @@ from bingo_node import BingoNode
 from bingo_mem_handle import BingoMemAlloc, BingoMemAllocView
 from bingo_kernel_args import BingoKernelArgs
 
-# Re-exported: these were defined in this module once, so they stay importable from here.
-# Their homes are now where each is actually USED -- the kernel/engine map beside the
-# core-role map it is checked against, the task-list word size beside the descriptor that
-# is measured in those words. bingo_dfg_common.py held them only to break an import cycle
-# with the mixins, and it no longer needs to: neither of those modules imports bingo_dfg.
+# Re-exported so they stay importable from here. Each lives where it is USED: the
+# kernel/engine map beside the core-role map it is checked against, the task-list word
+# size beside the descriptor measured in those words.
 from bingo_platform import _ENGINE_BY_KERNEL_TOKEN, _engine_of_kernel   # noqa: F401
 from bingo_dfg_descriptor import (                                      # noqa: F401
     BINGO_TASK_LIST_WORD_BITS,

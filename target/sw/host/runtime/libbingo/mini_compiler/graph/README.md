@@ -21,8 +21,7 @@ tile on the other — see `at_offset` in `libs/comm/ports.py`.
 
 `BingoDFG` is built by inheriting `BingoDFGTransformsMixin`, `…ConditionalMixin`,
 `…DescriptorMixin`, `…ValidateMixin` and `…EmitMixin`. The mixins may not import
-`bingo_dfg` — it imports them — so anything they share has to live somewhere neither
-imports. There used to be a `bingo_dfg_common.py` holding exactly that; its contents moved
-to where they are actually used (the kernel→engine map beside the core-role map it is
-checked against, the task-list word size beside the descriptor measured in those words),
-and `bingo_dfg` re-exports them so old import sites keep working.
+`bingo_dfg` — it imports them — so anything they share lives where it is used: the
+kernel→engine map in `platform/`, beside the core-role map it is checked against, and the
+task-list word size in `passes/`, beside the descriptor measured in those words.
+`bingo_dfg` re-exports both.

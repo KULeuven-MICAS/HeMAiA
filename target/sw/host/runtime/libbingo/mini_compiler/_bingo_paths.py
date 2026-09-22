@@ -5,8 +5,7 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 """Make the grouped mini_compiler subdirs importable with flat module names.
 
-The compiler used to be twenty files in one directory, which gave no hint about what runs
-when. They are now grouped by ROLE:
+The compiler's files are grouped by ROLE:
 
     graph/      the DFG data model -- nodes, handles, the graph itself
     kernels/    the kernel ABI: one args class per kernel, matching the C structs
@@ -45,9 +44,8 @@ def repo_root():
 
     A fixed number of parent steps is correct for exactly one directory depth and silent
     when it is wrong: the computed path simply does not exist, and the failure surfaces
-    much later as a missing generated header, from a module that never mentions paths.
-    Grouping these files into subdirs moved two such counts by one level, which is how
-    this function came to exist. bingo_sim_check._hemaia_root() already did it this way.
+    much later as a missing generated header, from a module that never mentions paths. So
+    nothing here locates a file by counting `..`.
     """
     d = _THIS
     for _ in range(12):

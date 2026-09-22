@@ -23,7 +23,8 @@ import _bingo_paths  # noqa: F401,E402  (groups the compiler's subdirs onto sys.
 from bingo_dfg import BingoDFG
 from bingo_mem_handle import BingoMemAlloc
 from bingo_liveness import collect_handle_users, reachability, can_share
-from libs import Block, BlockResult, Ctx, Pipeline, Port, PortSpec, check_contract
+from libs import (Block, BlockResult, Ctx, DType, Layout, MemLevel, Pipeline, Port,
+                  PortSpec, check_contract)
 
 FAILED = []
 
@@ -67,7 +68,7 @@ class Producer(Block):
 
     @property
     def outputs(self):
-        return {"o": PortSpec("A", "i8", (32, 128))}
+        return {"o": PortSpec("A", "i8", (32, 128), mem_level="L1")}
 
     def build(self, ctx, bound):
         t = ctx.l1("temp", 64 * 1024)
@@ -82,14 +83,21 @@ class Consumer(Block):
     """Reads `x`, plus a weight it loads from a node with NO predecessor."""
     name = "consumer"
 
-    def __init__(self, layout="A", dtype="i8"):
-        self._spec = PortSpec(layout, dtype, (32, 128))
+    def __init__(self, layout="A", dtype="i8", mem_level="L1", needs=None):
+        # A block that fetches nothing has to name the level it reads from: the contract
+        # has nothing else to check the binding against. `needs` is how a block that DOES
+        # fetch says so -- see the `fetching` consumer below.
+        self._spec = PortSpec(layout, dtype, (32, 128), mem_level=mem_level)
+        self._needs = needs
 
     @property
     def inputs(self): return {"x": self._spec}
 
     @property
-    def outputs(self): return {"y": PortSpec("D", "f16", (32, 128))}
+    def needs(self): return self._needs or self.inputs
+
+    @property
+    def outputs(self): return {"y": PortSpec("D", "f16", (32, 128), mem_level="L1")}
 
     def build(self, ctx, bound):
         w = ctx.l1("wgt", 64 * 1024)
@@ -130,10 +138,13 @@ refuses("a dtype mismatch is refused, not converted",
 # "insert a reshape" refusal was wrong in both directions -- it refused the conversion the
 # xDMA does in one pass, and it promised one for the transpose, which needs another kernel.
 refuses("a layout mismatch a block will not close is refused",
-        lambda: assemble(consumer=Consumer(layout="D")), "does not close gaps")
+        lambda: assemble(consumer=Consumer(layout="D")), "1 B/element")
 
-closing = Consumer(layout="D")
-closing.closes_gaps = True
+# A block declares that it FETCHES by overriding `needs`; there is no separate flag. The
+# contract is then checked against `needs`, so the gap is the block's to close -- and a
+# conversion the hardware cannot do is still refused, with the hardware's reason.
+closing = Consumer(layout="D", mem_level=None,
+                   needs={"x": PortSpec("D", "i8", (32, 128), mem_level="L1")})
 refuses("an int8 reshape is refused for the RIGHT reason: the run is too narrow",
         lambda: assemble(consumer=closing), "8 B per lane")
 
@@ -142,15 +153,48 @@ refuses("an int8 reshape is refused for the RIGHT reason: the run is too narrow"
 # conversion -- so the assertion would pass for the wrong reason.
 from libs.comm import transfer as _staging                                     # noqa: E402
 refuses("a transpose is refused as a transpose, not as a precision problem",
-        lambda: _staging.plan(PortSpec("packed", "f16", (32, 128)),
-                              PortSpec("B", "f16", (32, 128)),
+        lambda: _staging.plan(PortSpec("packed", "f16", (32, 128), mem_level="L1"),
+                              PortSpec("B", "f16", (32, 128), mem_level="L1"),
                               mesh=(16, 4, 16), elem_bytes=2), "TRANSPOSE")
 check("a reshape the xDMA can do is planned, not refused",
-   _staging.plan(PortSpec("D", "f16", (32, 128)), PortSpec("A", "f16", (32, 128)),
+   _staging.plan(PortSpec("D", "f16", (32, 128), mem_level="L1"),
+                 PortSpec("A", "f16", (32, 128), mem_level="L1"),
                  mesh=(16, 4, 16), elem_bytes=2) != [])
 
+refuses("a port with no mem_level, on a block that fetches nothing",
+        lambda: assemble(consumer=Consumer(mem_level=None)), "neither the port nor")
+
+# A bound port reads its level off the handle, so a caller may bind a block's own
+# level-less input spec directly -- which is what makes "anywhere" usable.
+from bingo_mem_handle import BingoMemSymbol as _Sym                           # noqa: E402
+_p = Port(PortSpec("A", "i8", (32, 128)), BingoMemAlloc("h", 4096, "L1"), ())
+# The vocabulary is a closed set: a typo is refused at construction, naming the valid
+# values, rather than reaching a kernel as a layout nobody implements.
+for _bad, _kind in ((("packd", "i8", None), "Layout"),
+                    (("A", "fp16", None), "DType"),
+                    (("A", "i8", "L5"), "MemLevel")):
+    refuses(f"a typo'd {_kind} is refused with the valid values named",
+            lambda b=_bad: PortSpec(b[0], b[1], (32, 128), mem_level=b[2]),
+            "is not a valid")
+_s = PortSpec("A", "i8", (32, 128), mem_level="L1")
+check("a plain string is coerced to the enum member",
+      (_s.layout is Layout.A and _s.dtype is DType.I8 and _s.mem_level is MemLevel.L1),
+      f"got {_s.layout!r} {_s.dtype!r} {_s.mem_level!r}")
+check("the two spellings make equal specs",
+      _s == PortSpec(Layout.A, DType.I8, (32, 128), mem_level=MemLevel.L1))
+check("a member still behaves as its string", f"{Layout.D32}" == "d32" and Layout.D32 == "d32")
+
+check("a bound port takes its level from the handle", _p.spec.mem_level == "L1",
+      f"got {_p.spec.mem_level!r}")
+_p = Port(PortSpec("A", "i8", (32, 128)), _Sym("staged"), ())
+check("a staged symbol resolves to L3", _p.spec.mem_level == "L3",
+      f"got {_p.spec.mem_level!r}")
+_p = Port(PortSpec("A", "i8", (32, 128), mem_level="L4"), _Sym("staged"), ())
+check("an explicit level is not overwritten", _p.spec.mem_level == "L4",
+      f"got {_p.spec.mem_level!r}")
+
 bad_shape = Consumer()
-bad_shape._spec = PortSpec("A", "i8", (64, 128))
+bad_shape._spec = PortSpec("A", "i8", (64, 128), mem_level="L1")
 refuses("a shape mismatch is refused", lambda: assemble(consumer=bad_shape), "shape")
 
 refuses("an unbound input is refused",
@@ -165,8 +209,8 @@ def _unknown():
     p.add(Consumer(), name="b", bind={"x": a.out("o"), "z": a.out("o")})
 refuses("binding an input the block does not have", _unknown, "inputs are")
 
-ok = check_contract(Port(PortSpec("A", "i8", (32, 128)), None, ()),
-                    PortSpec("A", "i8", (32, 128)), where="t")
+ok = check_contract(Port(PortSpec("A", "i8", (32, 128), mem_level="L1"), None, ()),
+                    PortSpec("A", "i8", (32, 128), mem_level="L1"), where="t")
 check("a matching contract passes", ok is None, str(ok))
 
 # ---------------------------------------------------------------- the join

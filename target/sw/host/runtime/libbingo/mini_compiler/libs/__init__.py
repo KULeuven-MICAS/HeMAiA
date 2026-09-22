@@ -4,7 +4,7 @@
     comm/     COMMON machinery: what a block declares (ports), what it builds through
               (ctx), how two are joined (link), and how an operand that does not match
               gets moved or reshaped (transfer, nest).
-    block/    the blocks: attention, its fold, the MoE FFN.
+    block/    the blocks: FlashAttention, its fold, the MoE FFN.
     verify/   host-side readbacks and comparisons, named by precision.
 
 A block declares its ports and parameters; Pipeline binds them and adds the edges. The
@@ -30,10 +30,11 @@ if _MC not in _sys.path:
 import _bingo_paths  # noqa: F401,E402
 
 from . import block, comm, verify  # noqa: E402
-from .comm import (Block, BlockResult, Ctx, DTYPES, LAYOUTS, Pipeline, Port,  # noqa: E402
-                   PortSpec, SPACES, at_offset, bring_in, check_contract, link, plan)
+from .comm import (Block, BlockResult, Ctx, DType, Layout, MemLevel,  # noqa: E402
+                   Pipeline, Port, PortSpec, at_offset, bring_in, check_contract,
+                   level_of, link, plan)
 from .verify import checks  # noqa: E402
 
 __all__ = ["Block", "BlockResult", "Ctx", "Pipeline", "Port", "PortSpec",
-           "at_offset", "check_contract", "link", "DTYPES", "LAYOUTS", "SPACES",
+           "at_offset", "check_contract", "level_of", "link", "DType", "Layout", "MemLevel",
            "bring_in", "plan", "checks", "block", "comm", "verify"]

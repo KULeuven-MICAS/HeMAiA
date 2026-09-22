@@ -14,7 +14,7 @@ needs them in its own cluster's L1 -- the GEMM and SIMD have no AXI port. So the
 block already builds ARE the transport, and the linker only ever adds edges. That matters
 more than it looks: node CREATION order is dispatch order on this machine, so a linker that
 injected nodes would silently move the schedule. It is also why a block that closes its own
-layout or location gaps has to say so (Block.closes_gaps) -- the conversion happens in the
+layout or location gaps says so by declaring `needs` -- the conversion happens in the
 BLOCK's build, in the block's own dispatch order, never here.
 """
 
@@ -39,44 +39,40 @@ def _as_tuple(x):
     return tuple(x) if isinstance(x, (list, tuple, set)) else (x,)
 
 
-def check_contract(src: Port, dst_spec: PortSpec, *, where: str,
-                   mesh=None, elem_bytes=None, closes_gaps=False) -> Optional[str]:
-    """Is `src` usable where `dst_spec` is required? Returns None, or the reason.
+def check_contract(src: Port, need: PortSpec, *, where: str,
+                   mesh=None, elem_bytes=None) -> Optional[str]:
+    """Is `src` usable where `need` is required? Returns None, or the reason.
+
+    `need` is the consumer's INTERNAL requirement -- `Block.needs[name]` -- not its
+    declared input. For a block that fetches nothing the two are the same object, so the
+    binding must match exactly; for one that fetches, `needs` names the layout and level
+    its own transfers read from, and any gap between `src` and that is the block's to
+    close. Whether a block fetches is therefore READ OFF ITS DECLARATION rather than
+    asserted by a flag that could disagree with its build().
 
     LOSSLESS IS AUTOMATIC, LOSSY IS EXPLICIT. A layout difference is a permutation with
-    exactly one right answer, and a buffer in the wrong memory only has to be moved, so a
-    block can close either on its own. A precision difference needs a SCALE, and there is
-    no correct default -- so it is refused by name and the caller inserts the quantiser.
+    exactly one right answer, and a buffer in the wrong memory only has to be moved. A
+    precision difference needs a SCALE, and there is no correct default -- so it is refused
+    by name and the caller inserts the quantiser.
 
-    WHAT "CLOSABLE" MEANS IS STAGING'S ANSWER, NOT THIS FUNCTION'S. Asking `transfer.plan`
-    is what keeps the two from drifting: this check used to refuse every layout mismatch
-    outright, which made a block's own conversion unreachable -- the linker rejected the
-    binding before the block could look at it. It also means a conversion the hardware
-    cannot do (a transpose, or a run too narrow at this precision) is refused HERE, with
-    transfer's reason, instead of being promised and then failing at build.
+    WHAT "CLOSABLE" MEANS IS TRANSFER'S ANSWER, NOT THIS FUNCTION'S. Asking `transfer.plan`
+    keeps the two from drifting, and it means a conversion the hardware cannot do -- a
+    transpose, or a run too narrow at this precision -- is refused HERE, with transfer's
+    reason, rather than promised and then failing at build.
     """
-    if tuple(src.shape) != tuple(dst_spec.shape):
-        return f"{where}: shape {tuple(src.shape)} cannot feed {tuple(dst_spec.shape)}."
+    if tuple(src.shape) != tuple(need.shape):
+        return f"{where}: shape {tuple(src.shape)} cannot feed {tuple(need.shape)}."
+    if need.mem_level is None:
+        # Nothing ever resolves where this operand is read from: the port names no level
+        # and the block adds none in `needs`. The binding would hand its engines an
+        # address they cannot read, which on this machine returns whatever the fabric
+        # gives back rather than faulting.
+        return (f"{where}: neither the port nor the block's `needs` says which memory "
+                f"level this operand is read from. Give the port a mem_level, or override "
+                f"`needs` on a block whose build() calls transfer.bring_in.")
     from . import transfer
-    # WHAT is needed first, and only then WHETHER it is possible. A consumer that closes
-    # no gaps has to be handed the right thing whatever the hardware could have done, so
-    # reporting the feasibility of a conversion it was never going to perform sends the
-    # reader after the wrong problem.
     try:
-        steps = transfer.plan(src.spec, dst_spec)
-    except ValueError as e:
-        return f"{where}: '{src.handle_name}' {e}"
-    if not steps:
-        return None
-    if not closes_gaps:
-        what = ", ".join(st.kind for st in steps)
-        return (f"{where}: '{src.handle_name}' is {src.spec.describe()} but "
-                f"{dst_spec.describe()} is required, and the consuming block does not "
-                f"close gaps itself ({what} would be needed). Put an explicit conversion "
-                f"block in the pipeline, or set closes_gaps on the consumer if its "
-                f"build() calls transfer.bring_in.")
-    try:
-        transfer.plan(src.spec, dst_spec, mesh=mesh, elem_bytes=elem_bytes)
+        transfer.plan(src.spec, need, mesh=mesh, elem_bytes=elem_bytes)
     except ValueError as e:
         return f"{where}: '{src.handle_name}' {e}"
     return None
@@ -163,10 +159,10 @@ class Pipeline:
         # Contract first: a mismatch should be a message about layouts, not a crash deep
         # inside a kernel-args constructor.
         for k, port in bind.items():
-            why = check_contract(port, want[k], where=f"{name}.{k}",
+            need = getattr(block, "needs", want).get(k, want[k])
+            why = check_contract(port, need, where=f"{name}.{k}",
                                  mesh=self.ctx.mesh,
-                                 elem_bytes=_ELEM_BYTES.get(want[k].dtype),
-                                 closes_gaps=getattr(block, "closes_gaps", False))
+                                 elem_bytes=_ELEM_BYTES.get(need.dtype))
             if why:
                 raise ValueError(why)
 
