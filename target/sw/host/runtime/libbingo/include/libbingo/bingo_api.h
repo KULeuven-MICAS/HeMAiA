@@ -300,6 +300,21 @@ BINGO_ASSERT_CARRIER_FITS(bingo_hw_manager_task_desc_t, cond_exec_invert,    CON
 
 // The packed form the HW manager fetches. BINGO_TASK_DESC_WORDS 64-bit words, least
 // significant first; see bingo_utils.h for the container and the memory order.
+//
+// THE DESCRIPTOR FIELD TABLE LIVES IN THREE PLACES AND ALL THREE MUST AGREE:
+//   1. the RTL packed struct  bingo_hw_manager_top.sv (first-declared member is the MSB),
+//   2. the mini-compiler      bingo_dfg_descriptor.py::bingo_task_desc_layout (LSB -> MSB),
+//   3. the shift chain        bingo_utils.h, which BINGO_TASK_DESC_LAYOUT_BITS totals.
+// The generated task list asserts (3) against (2) at compile time, so a field added to
+// (1) and (2) but not (3) makes every affected workload fail to build -- which is exactly
+// what happened to `cerf_carry`, and it went unnoticed because the assert only fires for
+// a workload someone actually compiles.
+//
+// This encoder/decoder pair is a FOURTH copy and nothing checks it. It currently omits
+// `cerf_carry`, which is harmless only because it is unreferenced outside this header and
+// cerf_carry is always 0 on a single chiplet. If you add a field, add it here too -- or
+// delete this pair, since the descriptor list the hardware actually fetches is packed by
+// the mini-compiler, not by this code.
 static inline bingo_task_desc_t encode_bingo_hw_manager_task_desc(bingo_hw_manager_task_desc_t desc) {
     bingo_task_desc_t encoded = {{0}};
 

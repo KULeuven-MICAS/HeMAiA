@@ -784,6 +784,40 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_swiglu_args {
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_simd_swiglu_args_t;
 
+// MoE combine: out = SUM over the SELECTED experts of weight[e] * y[e], elementwise
+// over [rows, cols] in fp16. The reconvergence of a conditional fork -- see
+// docs/conditional_dfg_api.md and fork.combine(kind='weighted_sum').
+//
+// The experts that lost are NOT read, so their landing slots may hold anything; the
+// activation array is the only thing that says which are live. That array and the
+// weights are two views of one L3 record the gating kernel writes, so this kernel
+// reads the same decision the hardware skipped on rather than re-deriving top-k.
+//
+// NO FLOAT ARITHMETIC HAPPENS HERE. The weights arrive as FP32 BIT PATTERNS and go
+// straight into the StreamMap scale CSR; the core only loads and stores words, which
+// is what makes this runnable on the rv32ima SIMD hart. The renormalisation over the
+// winners is a divide, and it happens once, on the host, inside the gating kernel.
+//
+// Operand slots are base + e * stride rather than E separate pointers: it keeps the
+// descriptor a fixed size whatever E is (the same trade as
+// __snax_bingo_kernel_xdma_elementwise_add_args_t) and it makes each expert's push
+// destination a plain view into one allocation.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_moe_combine_args {
+  uint32_t output_addr_hi;       // fp16 [rows, cols], packed, LOCAL L1
+  uint32_t output_addr_lo;
+  uint32_t src_base_addr_hi;     // expert 0's slot; expert e at + e * src_stride
+  uint32_t src_base_addr_lo;     //   fp16 [rows, cols], packed, LOCAL L1
+  uint32_t src_stride;           // bytes between consecutive expert slots
+  uint32_t num_inputs;           // E: branches on the fork, = length of both arrays
+  uint32_t rows;                 // independent combine rows
+  uint32_t cols;                 // per-row fp16 length D (a multiple of 32)
+  uint32_t activation_addr_hi;   // uint8_t[E], 1 = this expert ran. Scalar loads, so
+  uint32_t activation_addr_lo;   //   it may live in L3 with the rest of the record.
+  uint32_t weight_addr_hi;       // float[E] FP32 BITS, renormalised over the winners
+  uint32_t weight_addr_lo;
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_simd_moe_combine_args_t;
+
 // FlashAttention online-softmax epilogue -- the whole per-tile SIMD half in one kernel.
 // See offload_hw_kernels/simd.h for the recurrence, the arena layout and why the
 // adjacencies in it are load-bearing.

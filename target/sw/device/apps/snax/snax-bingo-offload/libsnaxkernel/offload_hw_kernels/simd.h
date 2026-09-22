@@ -395,6 +395,11 @@ static inline uint32_t simd_pass_map_reduce(void *src, void *dst, uint32_t rows,
 // rather than the largest tile imaginable.
 #define BINGO_SIMD_SCRATCH_POOL 16384u
 
+// How many experts one MoE combine can index. Bounds a stack array, so it is a cap on
+// the kernel, not on the graph: a fork with more branches than this still compiles and
+// still skips correctly in hardware -- the combine just refuses to fold them.
+#define BINGO_MOE_MAX_EXPERTS 32u
+
 // ==========================================================================
 // PRIMITIVES -- one operator (or one fused chain) per kernel, shapes from the args.
 // These are the building blocks a host DFG composes; the fused whole-ops below are what
@@ -1148,6 +1153,148 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_swiglu_f16_f16(void *arg) {
 }
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_swiglu_f16_i8(void *arg) {
     return __snax_bingo_kernel_simd_swiglu(arg, SIMD_OUT_I8);
+}
+
+// ==========================================================================
+// MoE combine: out = SUM over selected e of weight[e] * y[e], elementwise.
+//
+//   acc = w[a0] * y[a0]                 StreamMap LINEAR
+//   acc = acc + w[aj] * y[aj]           StreamMap LINEAR, then StreamElementwise ADD
+//
+// The weights are FP32 BIT PATTERNS, loaded and handed to the map's scale CSR
+// without being interpreted. That is the whole reason this runs on a hart with no
+// FPU: the renormalising divide already happened on the host, in the gating kernel,
+// and what arrives here is the answer.
+//
+// Only the experts the gate selected are read. A loser's landing slot is never
+// written by anyone -- its whole branch was skipped -- so touching it would fold in
+// whatever the last dispatch left there.
+//
+// The accumulator PING-PONGS between two scratch buffers instead of accumulating in
+// place: simd_pass_ew2 reads a 3-D interleave of its two operands and writes a packed
+// 1-D stream, so dst == src_b is not a safe aliasing. Alternating also lets the LAST
+// add write straight to out_addr, so the caller never has to ask where the answer is.
+// k selected experts cost 2k - 1 passes.
+// ==========================================================================
+static inline uint32_t __snax_bingo_kernel_simd_moe_combine(void *arg,
+                                                            uint32_t out_prec) {
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_simd_moe_combine_args_t);
+    BINGO_REQUIRE_CORE(snax_is_simd_core(), "simd_moe_combine", "SIMD");
+#if !BINGO_HAS_STREAMMAP || !BINGO_HAS_STREAMELEMENTWISE
+    (void)out_prec;
+    BINGO_SIMD_EXT_UNSUPPORTED("simd_moe_combine", "StreamMap+StreamElementwise");
+#else
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+    uint32_t *a = (uint32_t *)arg;
+    uint64_t out_addr = make_u64(a[0], a[1]);
+    uint64_t src_base = make_u64(a[2], a[3]);
+    uint32_t src_stride = a[4];
+    uint32_t num_inputs = a[5];
+    uint32_t rows = a[6];
+    uint32_t cols = a[7];
+    uint64_t act_addr = make_u64(a[8], a[9]);
+    uint64_t weight_addr = make_u64(a[10], a[11]);
+    bingo_kernel_scratchpad_t *sp =
+        BINGO_GET_SP(arg, __snax_bingo_kernel_simd_moe_combine_args_t);
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+    (void)out_prec;
+    BINGO_SIMD_REQUIRE_LOCAL(out_addr, "simd_moe_combine", "output");
+    BINGO_SIMD_REQUIRE_LOCAL(src_base, "simd_moe_combine", "operand base");
+    if (num_inputs)
+        BINGO_SIMD_REQUIRE_LOCAL(src_base + (uint64_t)(num_inputs - 1u) * src_stride,
+                                 "simd_moe_combine", "last operand slot");
+
+    uint32_t beats = cols >> 5u;
+    uint32_t row_b = beats * SIMD_BEAT_BYTES;
+    uint32_t tot_b = rows * row_b;
+
+    // Which experts ran. Scalar byte loads, so the array may sit in L3 next to the
+    // weights; this is the only place the routing decision is read.
+    const uint8_t *act = (const uint8_t *)(uint32_t)act_addr;
+    const uint32_t *wbits = (const uint32_t *)(uint32_t)weight_addr;
+    uint32_t sel[BINGO_MOE_MAX_EXPERTS];
+    uint32_t n_act = 0u;
+    for (uint32_t e = 0; e < num_inputs && n_act < BINGO_MOE_MAX_EXPERTS; e++)
+        if (act[e]) sel[n_act++] = e;
+
+    if (n_act == 0u) {
+        // top_k >= 1 makes this impossible, so it means the gating kernel never
+        // ran or wrote somewhere else. Silence here would look like a zero output.
+        printf_safe("[Cluster %d Core %d]: moe_combine got NO active expert of "
+                    "%d -- gating never published its decision\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx(), num_inputs);
+        return BINGO_RET_FAIL;
+    }
+
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_CFG_START);
+    // Two accumulators plus one staging buffer for the operand being scaled.
+    uint32_t scratch_bytes = 3u * (tot_b + 64u);
+    static uint32_t s_pool = 0u;
+    uint32_t scratch_lo, from_pool = 0u;
+    if (scratch_bytes <= BINGO_SIMD_SCRATCH_POOL) {
+        if (!s_pool) s_pool = snrt_l1_malloc(BINGO_SIMD_SCRATCH_POOL);
+        scratch_lo = s_pool;
+        from_pool = 1u;
+    } else {
+        scratch_lo = snrt_l1_malloc(scratch_bytes);
+    }
+    if (!scratch_lo) {
+        printf_safe("[Cluster %d Core %d]: moe_combine L1 scratch alloc failed!\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+    uint32_t base = (scratch_lo + 63u) & ~63u;
+    uint32_t pad = (tot_b + 63u) & ~63u;
+    void *acc_buf[2] = {(void *)base, (void *)(base + pad)};
+    void *stage = (void *)(base + 2u * pad);
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_CFG_END);
+
+    void *out = (void *)(uint32_t)out_addr;
+    #define MOE_SRC(e) ((void *)((uint32_t)src_base + (e) * src_stride))
+
+    // First winner: scale it into the accumulator, or straight out when it is alone.
+    void *acc = (n_act == 1u) ? out : acc_buf[0];
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
+    uint32_t rc = simd_pass_map(MOE_SRC(sel[0]), acc, rows * beats,
+                                wbits[sel[0]], 0u, SIMD_FUNC_LINEAR,
+                                SIMD_OUT_F16, 0u);
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
+
+    for (uint32_t j = 1u; j < n_act && rc == BINGO_RET_SUCC; j++) {
+        BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
+        rc = simd_pass_map(MOE_SRC(sel[j]), stage, rows * beats,
+                           wbits[sel[j]], 0u, SIMD_FUNC_LINEAR, SIMD_OUT_F16, 0u);
+        BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
+        if (rc != BINGO_RET_SUCC) break;
+        // The last add lands in out_addr; the others alternate accumulators so the
+        // destination is never also an operand.
+        void *dst = (j == n_act - 1u)
+                        ? out
+                        : ((acc == acc_buf[0]) ? acc_buf[1] : acc_buf[0]);
+        BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
+        rc = simd_pass_ew2(acc, stage, dst, rows, beats, row_b,
+                           SIMD_EXT_STREAMELEMENTWISE_1,
+                           SIMD_EXT_STREAMELEMENTWISE_1_CSR, SIMD_EW_ADD,
+                           SIMD_OUT_F16, 0u);
+        BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
+        acc = dst;
+    }
+    #undef MOE_SRC
+
+    if (!from_pool) snrt_l1_free(scratch_lo);
+    if (rc != BINGO_RET_SUCC) {
+        printf_safe("[Cluster %d Core %d]: moe_combine pass failed!\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+    sp->return_value = (uint32_t)out_addr;
+    sp->num_return_values = 0;
+    return BINGO_RET_SUCC;
+#endif
+}
+
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_moe_combine_f16(void *arg) {
+    return __snax_bingo_kernel_simd_moe_combine(arg, SIMD_OUT_F16);
 }
 
 // ==========================================================================

@@ -292,10 +292,22 @@ BINGO_STATIC_ASSERT(BINGO_CHIP_ID_WIDTH >= BINGO_CLOG2(BINGO_MAX_CHIP_ROUTING_ID
 #define DEP_SET_TAG_WIDTH          DEP_TAG_WIDTH
 #define DEP_SET_TAG_SHIFT          NEXT_SHIFT(DEP_SET_CODE_SHIFT, DEP_SET_CODE_WIDTH)
 
+// Cross-die CERF carry: set by the compiler on whichever task SENDS the chiplet message
+// for a gating region, so the receiving die learns the predicate. It is the MSB of the
+// descriptor -- first-declared member of the RTL packed struct
+// (bingo_hw_manager_top.sv:220, above dep_set_info), which is the top of the word.
+//
+// This field existed in the RTL and in the mini-compiler's packer but NOT here, so the
+// C layout stopped one bit short (71 against the packer's 72). Nothing caught it because
+// the generated BINGO_TASK_DESC_LAYOUT_BITS assert only fires for a workload that is
+// actually compiled, and the only conditional workload had never been built.
+#define CERF_CARRY_WIDTH           1
+#define CERF_CARRY_SHIFT           NEXT_SHIFT(DEP_SET_TAG_SHIFT, DEP_SET_TAG_WIDTH)
+
 /// Total bits the layout occupies == $bits(bingo_hw_manager_task_desc_t) in the RTL.
 /// Everything above it up to BINGO_TASK_DESC_WIDTH is the reserved padding the RTL calls
 /// ReservedBitsForTaskDesc, and SW leaves it zero.
-#define BINGO_TASK_DESC_LAYOUT_BITS NEXT_SHIFT(DEP_SET_TAG_SHIFT, DEP_SET_TAG_WIDTH)
+#define BINGO_TASK_DESC_LAYOUT_BITS NEXT_SHIFT(CERF_CARRY_SHIFT, CERF_CARRY_WIDTH)
 
 // Without these the C layout and the RTL struct can disagree on width silently.
 BINGO_STATIC_ASSERT(BINGO_TASK_DESC_WIDTH % 64 == 0,

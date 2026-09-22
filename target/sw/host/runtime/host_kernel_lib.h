@@ -1238,7 +1238,8 @@ static inline uint64_t __host_bingo_kernel_cerf_gating(void *arg){
     uint64_t top_k_or_threshold = args[3];
     uint64_t cerf_group_ids_addr = args[4];
     uint8_t *cond_activation = (uint8_t *)(uintptr_t)args[5];
-    bingo_kernel_scratchpad_t* sp = (bingo_kernel_scratchpad_t*)(uintptr_t)args[6];
+    float *cond_weight = (float *)(uintptr_t)args[6];
+    bingo_kernel_scratchpad_t* sp = (bingo_kernel_scratchpad_t*)(uintptr_t)args[7];
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
@@ -1257,9 +1258,14 @@ static inline uint64_t __host_bingo_kernel_cerf_gating(void *arg){
             for (uint32_t e = 0; e < num_experts; e++)
                 cond_activation[e] = 0;
         }
+        if (cond_weight) {
+            for (uint32_t e = 0; e < num_experts; e++)
+                cond_weight[e] = 0.0f;
+        }
 
         // Top-k selection: find k experts with highest logit values
         bool used[256] = {false};
+        float weight_sum = 0.0f;
         for (uint32_t k = 0; k < top_k; k++) {
             float best = -1e30f;
             uint32_t best_idx = 0;
@@ -1274,7 +1280,26 @@ static inline uint64_t __host_bingo_kernel_cerf_gating(void *arg){
             // Level 2: Mark this specific expert as active (SW guard)
             if (cond_activation)
                 cond_activation[best_idx] = 1;
+            // Level 3: the combine's weight for this expert, renormalised below.
+            if (cond_weight) {
+                cond_weight[best_idx] = best;
+                weight_sum += best;
+            }
             used[best_idx] = true;
+        }
+
+        // RENORMALISE over the winners. The router's softmax sums to 1 over ALL
+        // experts, so using it unscaled shrinks the layer's output by the mass of
+        // the experts that did not run -- a silently wrong answer, which is the
+        // worst kind. This division is the reason the weights are computed here:
+        // it is the only float divide in the path, and no device core has an FPU
+        // (every hart on snax_split_cluster is rv32ima), so it cannot move to the
+        // combine. The combine consumes these as raw FP32 BITS, as a SIMD
+        // StreamMap immediate, and never does float arithmetic itself.
+        if (cond_weight && weight_sum > 0.0f) {
+            float inv = 1.0f / weight_sum;
+            for (uint32_t e = 0; e < num_experts; e++)
+                if (used[e]) cond_weight[e] *= inv;
         }
         BINGO_PRINTF(1, "Chip(%x, %x): [Host] CERF Gating top_k: n=%d, k=%d, ctrl=0x%04x, write=0x%04x\r\n",
                get_current_chip_loc_x(), get_current_chip_loc_y(),

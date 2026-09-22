@@ -215,5 +215,13 @@ __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_cerf_gating_args {
                                       // Gating kernel writes 1 for selected experts, 0 for others.
                                       // Expert kernels read their slot before computing.
                                       // 0 = no activation array (all experts in active groups run).
+    uint64_t cond_weight_addr;        // Per-expert combine weight (float[num_experts]), RENORMALISED
+                                      // over the winners so the selected weights sum to 1; 0.0f for
+                                      // the experts that lost. 0 = do not write weights.
+                                      //
+                                      // The device consumes the FP32 BITS, not the value: the combine
+                                      // loads a word and writes it to the SIMD StreamMap scale CSR. No
+                                      // device core has an FPU, so the renormalising divide has to
+                                      // happen here, on the CVA6, where the winner loop already is.
     uint64_t scratchpad_ptr;
 } __host_bingo_kernel_cerf_gating_args_t;
