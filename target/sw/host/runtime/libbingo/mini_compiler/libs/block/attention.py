@@ -1658,7 +1658,7 @@ class Attention(Block):
     name = "attention"
     closes_gaps = True          # build() runs transfer.bring_in over q, k and v
 
-    def __init__(self, cfg: FaCfg = None, *, goldens=None, merged_h=None, jct=None,
+    def __init__(self, cfg: FaCfg = None, *, goldens=None,
                  hwcfg=None, mesh=None, verify=None, **params):
         """Either pass a FaCfg, or the parameters directly:
 
@@ -1684,7 +1684,6 @@ class Attention(Block):
         if self.verify and goldens is None:
             raise ValueError("Attention(verify=True) needs goldens: the check tolerances "
                              "are derived from them, not fixed.")
-        self.merged_h, self.jct = merged_h, jct
 
     # ---- which operand is per-cluster, and which is shared ------------------------------
     # One rule, stated once, so the ports, the slicing and the transfers cannot disagree.
