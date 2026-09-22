@@ -1,12 +1,33 @@
-# MoE4: 4 experts, top-2 — normal CERF (1 group per expert, no sharing)
+// MoE4: one mixture-of-experts FFN layer. 4 experts, top-2, one expert per cluster.
+//
+// The shapes below are in ELEMENTS, not mesh-tile counts: main_bingo.py divides them by
+// the array's (Mu, Ku, Nu) to get the M/K/N each GEMM descriptor wants. Writing them this
+// way is what keeps the workload readable as a layer -- "64-wide model, 32-wide hidden" --
+// and it is also what makes the tile counts follow the array instead of being pinned to
+// one mesh. Every one of them must divide the array exactly; main_bingo.py checks.
 {
     num_clusters: 4
-    array_shape: 1
+    // snax_split_cluster has exactly ONE array shape, (16, 4, 16). Index 1 selected
+    // (1, 16, 32) out of the WRONG cluster cfg and every descriptor was built for it.
+    array_shape: 0
+
     num_experts: 4
     top_k: 2
-    M: 1
-    K: 2
-    N: 1
+
+    // Sized so the layer is COMPUTE-shaped rather than dispatch-shaped. The original
+    // 16/64/32 is a mechanism test: per expert it is ~96 array steps of real MAC, against
+    // which the measured per-task fixed cost dominates -- SIMD_CFG 22,412 ns vs SIMD_RUN
+    // 27,232 ns, GEMM_FULL_CFG 10,248 ns vs GEMM_FULL_RUN 4,108 ns. Configuration cost
+    // more than compute, so no engine exceeded ~14% of the layer window and there was
+    // nothing there worth optimising.
+    //
+    // 32/256/128 is 3,072 array steps per expert, 32x more MAC against roughly constant
+    // per-node overhead. L1 stays comfortable: 241,664 B on cluster 0 (which also carries
+    // the combine's landing area and scratch) against a 514,816 B heap.
+    tokens: 32        // rows of x; M_up = M_down = tokens / meshRow
+    d_model: 256      // K_up = d_model / tileSize,  N_down = d_model / meshCol
+    d_hidden: 128     // N_up = d_hidden / meshCol,  K_down = d_hidden / tileSize
+
     transposed_A: 0
     transposed_B: 0
     accumPrevC: 0

@@ -21,14 +21,15 @@ PLATFORM_H = $(MK_DIR)/../../../../../../../../target/sw/shared/platform/generat
 # the struct gained a field, the generated init code did not set it, and the run wedged
 # mid-pipeline with no build error anywhere. Listing them is what makes that impossible.
 BINGO_GEN_DEPS = $(wildcard $(MK_DIR)/../../../../../../../../target/sw/host/runtime/libbingo/mini_compiler/*.py) \
-                 $(MK_DIR)/../../../../../../../../target/sw/host/runtime/libbingo/include/libbingo/device_kernel_args.h
+                 $(MK_DIR)/../../../../../../../../target/sw/host/runtime/libbingo/include/libbingo/device_kernel_args.h \
+                 $(MK_DIR)/../../../../../../../../target/sw/host/runtime/libbingo/include/libbingo/host_kernel_args.h
 
 $(DATA_H) $(OFFLOAD_H): $(MK_DIR)/main_bingo.py $(MK_DIR)/moe_datagen.py $(DATA_CFG) $(PLATFORM_H) $(BINGO_GEN_DEPS)
 	python3 $(MK_DIR)/main_bingo.py \
 		--output_dir $(MK_DIR) \
 		--data_h $(DATA_H) \
 		-c $(DATA_CFG) \
-		--hwcfg $(SNITCH_ROOT)/target/snitch_cluster/cfg/snax_versacore_to_cluster.hjson \
+		--hwcfg $(SNITCH_ROOT)/target/snitch_cluster/cfg/snax_split_cluster.hjson \
 		--platformcfg $(PLATFORM_H)
 
 INCDIRS += $(MK_DIR)
