@@ -420,7 +420,27 @@ static inline uint32_t xdma_elementwise_add_run(
     BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
     xdma_disable_dst_ext(WRITER_EXT_ELEMENTWISEADDBIT32);
 #else
-    // CPU fallback: dst[e] = sum_o src[o][e] over int32 elements.
+    // NO HasElementwiseAdd IN THIS CFG -- this is the CPU fallback, and it is CORRECT but
+    // it is a scalar loop over every int32 element on the xDMA hart, where the extension
+    // would have folded 16 lanes per 512-bit beat in the writer datapath. On a GEMM D
+    // tile that is thousands of iterations against one transfer.
+    //
+    // SAY SO, ONCE PER CLUSTER. A fallback that is silently taken is how a kernel comes to
+    // dominate a profile with nothing in the graph to explain it: the node looks like an
+    // ordinary xDMA task and the cost model prices it as one. Warning per call would
+    // itself cost more than the add on a chained reduction, so the flag is static.
+    {
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            printf_safe("[Cluster %d Core %d]: WARNING! xDMA elementwise_add is running "
+                        "its CPU fallback -- this cfg has no HasElementwiseAdd writer "
+                        "extension, so %u int32 elements are summed in scalar code. "
+                        "Correct, but not the cost the graph implies.\r\n",
+                        snrt_cluster_idx(), snrt_cluster_core_idx(),
+                        num_int32_elem_per_operand);
+        }
+    }
     BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
     BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
     volatile int32_t *dst = (volatile int32_t *)(uint32_t)dst_addr;

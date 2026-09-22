@@ -97,10 +97,11 @@ class SnaxBingoKernelSimdAddF16Args(BingoKernelArgs):
     """out = a + b, elementwise over [rows, cols] fp16, on the SIMD core.
 
     WHY THIS AND NOT THE xDMA ADD. `__snax_bingo_kernel_xdma_elementwise_add_ab` drives the
-    HasElementwiseAdd WRITER extension, and snax_split_cluster does not have it. Nothing
-    guards that: the kernel would program an extension that is not in the datapath, which
-    on this machine is a wrong answer or a wedge rather than a fault. This one drives
-    HasStreamElementwise, a READER extension the cluster does have, with op = ADD.
+    HasElementwiseAdd WRITER extension, which snax_split_cluster does not have. It stays
+    CORRECT there -- the kernel has a CPU fallback -- but the fallback is a scalar loop
+    over every int32 element on the xDMA hart, where the extension folds 16 lanes per
+    512-bit beat. This drives HasStreamElementwise, a READER extension the cluster does
+    have, so the residual is a vector op rather than a scalar one.
 
     It is a whole operator, not a primitive: the op, the operand count and the output
     precision are fixed here rather than being arguments, so a caller cannot ask for a

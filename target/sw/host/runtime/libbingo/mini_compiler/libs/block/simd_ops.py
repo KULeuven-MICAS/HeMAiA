@@ -219,9 +219,10 @@ class Residual(Block):
     """a + b, elementwise, on the SIMD core. The skip connection.
 
     NOT THE xDMA ADD. `__snax_bingo_kernel_xdma_elementwise_add_ab` drives the
-    HasElementwiseAdd WRITER extension, which snax_split_cluster does not have -- and
-    nothing guards that, so it would program an extension that is not in the datapath.
-    This drives HasStreamElementwise, a reader extension the cluster does have.
+    HasElementwiseAdd WRITER extension, which snax_split_cluster does not have. That path
+    still gives the right answer -- it falls back to scalar C -- but it sums every int32
+    element one at a time on the xDMA hart. This drives HasStreamElementwise, a reader
+    extension the cluster does have, so the residual stays a vector op.
 
     Elementwise, so the layout passes through; both operands must already agree on one,
     which the contract checks.
