@@ -1646,6 +1646,68 @@ class SnaxBingoKernelSimdSwigluF16I8Args(_SnaxBingoKernelSimdSwigluArgs):
     KERNEL_NAME = "__snax_bingo_kernel_simd_swiglu_f16_i8"
 
 
+class SnaxBingoKernelSimdMoeCombineF16Args(BingoKernelArgs):
+    """The reconvergence of a conditional fork: out = SUM over the SELECTED experts of
+    weight[e] * y[e], elementwise over [rows, cols] in fp16.
+
+    Expert e's operand is src_base + e * src_stride, so the E landing slots are one
+    allocation and each expert's push destination is a plain view into it.
+
+    activation_addr and weight_addr are the gating node's decision. Leave them unset and
+    fork.combine() fills them in through bind_combine() -- which is the point: the combine
+    reads the SAME decision the hardware skipped on rather than re-deriving top-k, and
+    nothing in the compiler has to know what this kernel's fields are called."""
+    KERNEL_NAME = "__snax_bingo_kernel_simd_moe_combine_f16"
+    STRUCT_NAME = "__snax_bingo_kernel_simd_moe_combine_args_t"
+
+    def __init__(self, output_addr: Union[BingoMemAlloc, int],
+                 src_base_addr: Union[BingoMemAlloc, int], src_stride: int,
+                 rows: int, cols: int, num_inputs: int = 0,
+                 activation_addr=None, weight_addr=None):
+        self.output_addr = output_addr
+        self.src_base_addr = src_base_addr
+        self.src_stride = src_stride
+        self.num_inputs = num_inputs
+        self.rows = rows
+        self.cols = cols
+        self.activation_addr = activation_addr
+        self.weight_addr = weight_addr
+
+    def bind_combine(self, activation, weights, num_inputs):
+        """Called by fork.combine() lowering. Anything set explicitly wins, so a
+        workload can still point the kernel at its own arrays."""
+        if self.activation_addr is None:
+            self.activation_addr = activation
+        if self.weight_addr is None:
+            self.weight_addr = weights
+        if not self.num_inputs:
+            self.num_inputs = num_inputs
+
+    def get_struct_name(self) -> str:
+        return self.STRUCT_NAME
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        if self.activation_addr is None or self.weight_addr is None:
+            raise ValueError(
+                f"{type(self).__name__}: activation_addr/weight_addr are unset. Declare "
+                f"the reconvergence with fork.combine(node, inputs, kind='weighted_sum', "
+                f"weights=fork.weights) so the compiler binds them, or pass them here.")
+        if not self.num_inputs:
+            raise ValueError(
+                f"{type(self).__name__}: num_inputs is 0, so the combine would read no "
+                f"expert at all.")
+        a = {}
+        self._process_addr(self.output_addr, "output_addr", a, handle_name_map)
+        self._process_addr(self.src_base_addr, "src_base_addr", a, handle_name_map)
+        a["src_stride"] = str(self.src_stride)
+        a["num_inputs"] = str(self.num_inputs)
+        a["rows"] = str(self.rows)
+        a["cols"] = str(self.cols)
+        self._process_addr(self.activation_addr, "activation_addr", a, handle_name_map)
+        self._process_addr(self.weight_addr, "weight_addr", a, handle_name_map)
+        return a
+
+
 # ══════════════════════════════════════════════════════════════════════
 # VersaCore blocked-layout conversion kernels (tile-shape-parameterized)
 #
@@ -3117,6 +3179,10 @@ class HostBingoKernelCerfGatingArgs(BingoKernelArgs):
     For top_k with >32 experts (CERF group sharing), cond_activation_addr
     points to a uint8_t[num_experts] array that the gating kernel writes
     (1=selected, 0=skip). Expert kernels read their slot via SW guard.
+
+    cond_weight_addr is the combine's half of the same decision: float[num_experts],
+    renormalised over the winners. Both are views into one allocation, so a gate
+    costs one L3 record rather than two.
     """
     def __init__(self,
                  mode: int = BINGO_GATING_MODE_STATIC,
@@ -3124,13 +3190,15 @@ class HostBingoKernelCerfGatingArgs(BingoKernelArgs):
                  cerf_controlled_mask: int = 0,
                  top_k_or_threshold: Union[int, float] = 0,
                  cerf_group_ids_addr=None,
-                 cond_activation_addr=None):
+                 cond_activation_addr=None,
+                 cond_weight_addr=None):
         self.mode = mode
         self.pred_scratchpad_addr = pred_scratchpad_addr
         self.cerf_controlled_mask = cerf_controlled_mask
         self.top_k_or_threshold = top_k_or_threshold
         self.cerf_group_ids_addr = cerf_group_ids_addr
         self.cond_activation_addr = cond_activation_addr
+        self.cond_weight_addr = cond_weight_addr
 
     def get_struct_name(self) -> str:
         return "__host_bingo_kernel_cerf_gating_args_t"
@@ -3168,6 +3236,14 @@ class HostBingoKernelCerfGatingArgs(BingoKernelArgs):
                               assignments, handle_name_map, split_64bit=False, as_64bit=True)
         else:
             assignments["cond_activation_addr"] = "0"
+
+        # Renormalised per-expert combine weight (float[num_experts]). The combine
+        # reads these as raw FP32 bits; see host_kernel_args.h.
+        if self.cond_weight_addr is not None:
+            self._process_addr(self.cond_weight_addr, "cond_weight_addr",
+                              assignments, handle_name_map, split_64bit=False, as_64bit=True)
+        else:
+            assignments["cond_weight_addr"] = "0"
 
         return assignments
 

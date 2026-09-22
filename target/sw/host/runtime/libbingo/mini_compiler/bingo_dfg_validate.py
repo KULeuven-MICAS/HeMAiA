@@ -41,6 +41,16 @@ class BingoDFGValidateMixin:
            tags exist to remove, so checking it here is the real oracle.
         4. CAPACITY -- a cell needs more distinct tags than the descriptor can
            encode.
+
+        KNOWN GAP: this reasons about the GRAPH, so it assumes every task runs.
+        A CERF-skipped task fires its dep_set immediately out of the checkout
+        queue, while a task that really runs fires only once its done arrives --
+        so skipping lets a producer's set overtake the drain of an earlier
+        consumer that shares the same reused tag, and case 3 above becomes
+        reachable on a graph this pass has already cleared. Observed on a core
+        carrying both gated and ungated tasks. What catches it is the routing
+        sweep in bingo_sim_check.simulate_for_hangs, which replays the descriptor
+        list once per plausible gate outcome.
         """
         if tag_width is None:
             tag_width = self.dep_tag_width
@@ -300,33 +310,127 @@ class BingoDFGValidateMixin:
                 + "\n".join(f"- {failure}" for failure in failures)
             )
 
+    def _validate_cerf_core_sharing(self):
+        """Refuse two CERF groups sharing one core's in-order queue.
+
+        A core's waiting queue is strictly in order, and so is its checkout queue, so
+        the tag allocator is allowed to reuse one (cell, tag) across edges it can prove
+        are ordered. Skipping breaks the assumption that ordering was built on. A task
+        that RUNS fires its dep_set only after a done-queue match; a task that is SKIPPED
+        fires it straight from the checkout queue. Interleave two groups on one core and
+        one group's sets race ahead of the other group's drains, so a presence bit is
+        consumed by the wrong consumer and somebody waits forever.
+
+        Measured, on a 4-expert graph whose per-expert store+check sat on the shared host
+        core: the static tag check passes (peak 9 tags on that one cell), the 'all'
+        routing runs clean, and every routing that actually skips something deadlocks.
+        Moving the same two tasks onto the expert's own cluster drops the cell to 4 tags
+        and all four routings pass.
+
+        So the rule is per core, not per graph: every CERF-gated task on one core must
+        carry the SAME group. Ungated tasks are free -- they run in every routing, so
+        they cannot be the ones racing.
+        """
+        node_to_group = getattr(self, "_node_to_cerf_group", {})
+        if not node_to_group:
+            return
+        by_core: dict = {}
+        for n, gid in node_to_group.items():
+            by_core.setdefault(
+                (n.assigned_chiplet_id, n.assigned_cluster_id, n.assigned_core_id),
+                {}).setdefault(gid, []).append(n)
+
+        for (chip, cl, core), groups in sorted(by_core.items()):
+            if len(groups) < 2:
+                continue
+            detail = "; ".join(
+                f"group {gid}: " + ", ".join(sorted(x.node_name for x in ns)[:3])
+                for gid, ns in sorted(groups.items()))
+            raise ValueError(
+                f"hang check: chiplet 0x{chip:02x} cluster {cl} core {core} carries "
+                f"{len(groups)} different CERF groups ({detail}). That core dispatches "
+                f"in order, and a SKIPPED task fires its dep_set from the checkout queue "
+                f"instead of waiting for a done match, so one group's sets overtake "
+                f"another group's drains and a presence bit goes to the wrong consumer. "
+                f"The graph runs when every branch is taken and deadlocks as soon as one "
+                f"is not. Put each branch's tasks on that branch's own cluster, or take "
+                f"them out of the branch and guard the read another way.")
+
     def _validate_cerf_cross_group_edges(self):
-        """Detect unconditional edges from CERF-gated nodes to nodes outside
-        their CERF group.  Such edges produce bridge tasks that deadlock when
-        the source's CERF group is skipped (the source never signals)."""
+        """Refuse an unconditional edge out of a CERF-gated task that nothing guards.
+
+        This used to say the hazard was a deadlock, on the grounds that a skipped
+        task never signals. It does signal: the manager pushes the skipped
+        descriptor into the CHECKOUT queue retagged as a dummy
+        (bingo_hw_manager_top.sv:1149-1155) and only drops it from the READY queue
+        (:1052-1057), so its dep_set fires either way. That is what makes an
+        ordinary fan-in combine legal here at all.
+
+        The real hazard is the opposite one, and it is silent rather than loud: a
+        consumer outside the group runs whether or not the producer did, and reads
+        whatever the producer last left in its output buffer. Stale data, no
+        fault, plausible-looking numbers.
+
+        So the edge is allowed exactly when something guards the read:
+
+          (a) the consumer is a DECLARED COMBINE of the fork that gates the
+              producer, and every branch of that fork reaches it -- a combine that
+              misses a branch drops it silently, which is its own refusal;
+          (b) the consumer carries the SW guard for the same gate, so its kernel
+              early-returns (BINGO_SW_GUARD_CHECK, libsnaxkernel/macros.h);
+          (c) the consumer is a compiler-inserted entry/exit/gating node.
+        """
         node_to_group = getattr(self, '_node_to_cerf_group', {})
         if not node_to_group:
             return
+        declared = getattr(self, '_declared_combines', {})
+
         for u, v, data in self.edges(data=True):
             if data.get('cond', False):
                 continue
             if u not in node_to_group:
                 continue
+            # (c) compiler-inserted plumbing, which has its own guard
             if getattr(v, 'node_type', 'normal') in ('entry', 'exit', 'gating'):
                 continue
-            # Exit/entry nodes added by the compiler have SW guard support
             if v.kernel_name and ('exit' in v.kernel_name or 'entry' in v.kernel_name):
                 continue
+
             src_grp = node_to_group[u]
+            if node_to_group.get(v) == src_grp:
+                continue
+
+            # (a) a declared reconvergence of the fork that gates the producer
+            fork = declared.get(v)
+            if fork is not None:
+                owns = any(u in br.nodes for br in fork.branches)
+                if owns:
+                    missing = [br.index for br in fork.branches
+                               if not any(n is v or nx.has_path(self, n, v)
+                                          for n in br.nodes)]
+                    if missing:
+                        raise ValueError(
+                            f"Combine '{v.node_name}' does not close branches "
+                            f"{missing} of the fork on "
+                            f"'{fork.source.node_name}'. Those branches would "
+                            f"run and their results be dropped without a word.")
+                    continue
+
+            # (b) the consumer guards itself against the same gate
+            if (getattr(v, '_gating_node', None) is not None
+                    and v._gating_node is getattr(u, '_gating_node', None)
+                    and getattr(v, '_cond_node_index', None) is not None):
+                continue
+
             dst_grp = node_to_group.get(v)
-            if dst_grp != src_grp:
-                dst_info = (f"CERF group {dst_grp}" if dst_grp is not None
-                            else "not CERF-gated")
-                raise ValueError(
-                    f"Unconditional edge '{u.node_name}' (CERF group "
-                    f"{src_grp}) -> '{v.node_name}' ({dst_info}) crosses a "
-                    f"CERF boundary. When group {src_grp} is skipped, "
-                    f"'{u.node_name}' will not signal completion, "
-                    f"deadlocking '{v.node_name}'. To verify results of "
-                    f"CERF-gated computations, use post_execute_code in "
-                    f"bingo_compile_dfg() instead.")
+            dst_info = (f"CERF group {dst_grp}" if dst_grp is not None
+                        else "not CERF-gated")
+            raise ValueError(
+                f"Unconditional edge '{u.node_name}' (CERF group {src_grp}) -> "
+                f"'{v.node_name}' ({dst_info}) leaves the group unguarded. "
+                f"'{u.node_name}' may be skipped, in which case '{v.node_name}' "
+                f"still runs and reads whatever '{u.node_name}' last left in its "
+                f"output buffer -- stale data, no fault, no message. Close the "
+                f"branch with fork.combine(...), put '{v.node_name}' inside the "
+                f"branch with fork.branch(...), give it the SW guard, or check "
+                f"the result in post_execute_code instead.")

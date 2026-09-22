@@ -111,19 +111,56 @@ def _geometry(dfg):
     }
 
 
-def _descriptors(dfg, TaskDescriptor, geo, delay_of):
-    """The compiled DFG as per-chiplet model descriptor lists, in stream order."""
+def _gate_k(dfg, gating_node) -> int:
+    """How many branches this gate lets through, as declared. 1 when unstated."""
+    src = getattr(gating_node, "_pred_source_node", None) or gating_node
+    for f in getattr(dfg, "_cond_forks", []):
+        if f.source is src or getattr(f, "_gating_node", None) is gating_node:
+            return int(f.select.get("k", 1))
+    for _, _, d in dfg.out_edges(src, data=True):
+        if d.get("cond") and d.get("cond_dic"):
+            return int(d["cond_dic"].get("k", 1))
+    return 1
+
+
+def _cerf_scenarios(dfg):
+    """The routing outcomes the graph must survive, not just the static one.
+
+    A conditional graph deadlocks for a SUBSET of predicates or for none at all,
+    so activating every group -- which is all this used to do -- is the one case
+    that is guaranteed not to exercise skipping. These four bracket it: nothing
+    runs, everything runs, and the lowest and highest k groups run, which are the
+    two orderings a real router can produce.
+    """
+    if not getattr(dfg, "_gating_to_targets", {}):
+        return ["all"]
+    return ["all", "none", "low_k", "high_k"]
+
+
+def _descriptors(dfg, TaskDescriptor, geo, delay_of, scenario="all"):
+    """The compiled DFG as per-chiplet model descriptor lists, in stream order.
+
+    `scenario` picks which of each gate's CERF groups are activated; see
+    _cerf_scenarios.
+    """
     node_to_group = getattr(dfg, "_node_to_cerf_group", {})
     gating_targets = getattr(dfg, "_gating_to_targets", {})
     type_map = {"dummy": 1, "gating": 2}
     per = {i: [] for i in range(geo["n_chiplets"])}
     for n in dfg.bingo_stream_order():
-        # Gating tasks activate every conditional target -- the static case, which
-        # is the one that must never hang whatever the router later decides.
         controlled = set(getattr(n, "cerf_write_groups", ()) or ())
         if controlled:
-            activated = {node_to_group[t] for t in gating_targets.get(n, set())
-                         if t in node_to_group}
+            groups = sorted({node_to_group[t] for t in gating_targets.get(n, set())
+                             if t in node_to_group})
+            k = max(0, min(_gate_k(dfg, n), len(groups)))
+            if scenario == "none":
+                activated = set()
+            elif scenario == "low_k":
+                activated = set(groups[:k])
+            elif scenario == "high_k":
+                activated = set(groups[len(groups) - k:])
+            else:
+                activated = set(groups)
             cerf_w = sum(1 << g for g in activated)
             cerf_c = sum(1 << g for g in controlled)
         else:
@@ -194,7 +231,8 @@ def simulate_for_hangs(dfg, seeds=3, work_delay_range=(20, 200),
     order = dfg.bingo_stream_order()
     n_real = sum(1 for n in order if n.node_type != "dummy")
 
-    for seed in range(seeds):
+    scenarios = _cerf_scenarios(dfg)
+    for scenario, seed in [(sc, sd) for sc in scenarios for sd in range(seeds)]:
         rng = random.Random(1000 + seed)
         fixed = {n.node_id: (rng.randint(*work_delay_range)
                              if n.node_type != "dummy" else 0) for n in order}
@@ -218,7 +256,7 @@ def simulate_for_hangs(dfg, seeds=3, work_delay_range=(20, 200),
         supported = {f.name for f in dataclasses.fields(SimConfig)}
         dropped = sorted(set(want) - supported)
         cfg = SimConfig(**{k: v for k, v in want.items() if k in supported})
-        if dropped and seed == 0 and verbose:
+        if dropped and seed == 0 and scenario == scenarios[0] and verbose:
             print(f"  NOTE: this model predates {', '.join(dropped)}; "
                   f"those aspects are NOT checked.")
             if "cerf_scope" in dropped:
@@ -228,7 +266,8 @@ def simulate_for_hangs(dfg, seeds=3, work_delay_range=(20, 200),
         sim = BingoSimulator(cfg)
         with contextlib.redirect_stdout(io.StringIO()):
             sim.load_tasks(_descriptors(dfg, TaskDescriptor, geo,
-                                        lambda n: fixed[n.node_id]))
+                                        lambda n: fixed[n.node_id],
+                                        scenario=scenario))
             res = sim.run(max_cycles=max_cycles)
 
         if res.deadlock_detected:
@@ -236,15 +275,15 @@ def simulate_for_hangs(dfg, seeds=3, work_delay_range=(20, 200),
             names = {n.node_id: n.node_name for n in order}
             raise ValueError(
                 f"sim hang check: the compiled graph DEADLOCKED on the cycle "
-                f"model (seed {seed}). {len(missing)} task(s) never completed, "
-                f"first few: "
+                f"model (seed {seed}, routing scenario '{scenario}'). "
+                f"{len(missing)} task(s) never completed, first few: "
                 + ", ".join(f"{i}:{names.get(i, '?')}" for i in missing[:6]))
         missing = sim._all_task_ids - res.completed_task_ids
         if missing:
             names = {n.node_id: n.node_name for n in order}
             raise ValueError(
                 f"sim hang check: {len(missing)} task(s) never completed "
-                f"(seed {seed}): "
+                f"(seed {seed}, routing scenario '{scenario}'): "
                 + ", ".join(f"{i}:{names.get(i, '?')}" for i in sorted(missing)[:6]))
 
         disp, done = {}, {}
@@ -269,4 +308,5 @@ def simulate_for_hangs(dfg, seeds=3, work_delay_range=(20, 200),
                   f"{len(res.completed_task_ids)}/{n_real} tasks, deps OK")
 
     return {"model": root, "seeds": seeds, "descriptors": len(order),
-            "real_tasks": n_real, "dep_edges": sum(len(v) for v in preds.values())}
+            "real_tasks": n_real, "dep_edges": sum(len(v) for v in preds.values()),
+            "scenarios": scenarios}

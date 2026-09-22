@@ -223,7 +223,9 @@ class BingoDFGEmitMixin:
         f.write("#pragma once\n")
         f.write('#include "libbingo/bingo_api.h"\n')
         f.write('#include "host.h"\n')
-        for include in extra_include_header_list:
+        # bingo_compile_dfg types this `list[str] | None`, and a workload with no data
+        # header passes None -- which used to raise here instead of emitting nothing.
+        for include in (extra_include_header_list or ()):
             f.write(f'#include "{include}"\n')
         f.write("\n")
 

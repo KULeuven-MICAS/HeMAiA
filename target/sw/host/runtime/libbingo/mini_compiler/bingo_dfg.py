@@ -138,6 +138,9 @@ class BingoDFG(
         self.id = -1
         self._next_cerf_group = 0
         self._gating_cerf_mappings: dict = {}  # gating_node → {expert_idx: cerf_group_id}
+        self._cond_forks: list = []            # declared BingoConditionalFork objects
+        self._declared_combines: dict = {}     # combine node → the fork it closes
+        self._gating_to_targets: dict = {}     # gating node → its conditional targets
 
     def bingo_add_node(self, node_obj: BingoNode) -> None:
         """Add a node to the DFG."""
@@ -227,6 +230,7 @@ class BingoDFG(
         # No-op for non-conditional DFGs (returns empty dict).
         self.bingo_compile_conditional_regions()
         self._validate_cerf_cross_group_edges()
+        self._validate_cerf_core_sharing()
         # Identity-aware deps: per-edge tags are allocated LAST (after dep-info
         # assignment). The allocator's min-chain-cover reuses a tag across edges
         # that can never be live together (happens-before / same-core order), so
@@ -294,10 +298,12 @@ class BingoDFG(
                     # version skew. Report it; do not break firmware generation.
                     print(f"Sim hang check SKIPPED ({type(_exc).__name__}): {_exc}")
                 else:
+                    _sc = _sim.get('scenarios', ['all'])
                     print(f"Sim hang check passed: {_sim['descriptors']} descriptors, "
                           f"{_sim['real_tasks']} dispatching tasks, "
                           f"{_sim['dep_edges']} dependency edges verified over "
-                          f"{_sim['seeds']} seeds (model: {_sim['model']})")
+                          f"{_sim['seeds']} seeds x {len(_sc)} routing "
+                          f"scenario(s) {_sc} (model: {_sim['model']})")
 
         # 1b. STATIC L1 ALLOCATION -- analysis and, when enabled, placement.
         #
