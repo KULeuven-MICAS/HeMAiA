@@ -69,6 +69,15 @@ APPS += dummy_2cluster
 APPS += dummy_simd_2cluster
 # 2-cluster SIMD variant of the xDMA softmax sweep (hemaia_tapeout_2c_simd).
 APPS += simd_softmax_2cluster
+# The LLM-layer bring-up ladder. The order is the ladder: each rung adds one stage
+# to the one above it. See util/sim/common/llm_layer_stages.py.
+APPS += llm_kernels_4cluster
+APPS += llm_s1_norm_4cluster
+APPS += llm_s2_proj_4cluster
+APPS += llm_s3_attn_4cluster
+APPS += llm_s4_resid_4cluster
+APPS += llm_s5_ffn_4cluster
+APPS += llm_layer_4cluster
 SUBDIRS = $(addprefix workloads/,$(APPS))
 
 

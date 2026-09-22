@@ -51,6 +51,7 @@ from bingo_kernel_args import (
     xdma_monoid_csr0,
 )
 from bingo_mem_handle import BingoMemAlloc
+from bingo_platform import writer_junction_index
 
 from ..verify import checks
 
@@ -108,6 +109,20 @@ def fa_gather(ctx, cfg, shards, merged_h=None, jct_monoid=None, verify=True):
     """
     if cfg.clusters < 2 or cfg.decomp == "headpar":
         return shards
+    if jct_monoid is None:
+        # DERIVED, not defaulted. The junction id is the extension's POSITION in the
+        # cluster cfg's writer_junctions list, so there is no literal that is right on
+        # every cluster -- and a caller that forgets to pass one must not silently emit
+        # whatever it had. Reading it from the cfg the RTL was elaborated from is the only
+        # source that stays in step with the hardware.
+        if getattr(ctx, "hw", None) is None:
+            raise ValueError(
+                "fa_gather needs the monoid junction's index: pass jct_monoid=, or build "
+                "the Ctx with hw=<parsed cluster cfg> so it can be derived. It is a "
+                "position in that cfg's writer_junctions list, not a constant.")
+        # The cfg key carries the `Has` prefix; the device macro does not
+        # (WRITER_JCT_MONOIDJUNCTION). The cfg spelling is the one that indexes.
+        jct_monoid = writer_junction_index(ctx.hw, "HasMonoidJunction")
     g = ctx.at(0)
     # ---- pack each shard's (m, l) into the junction's lanes -----------------------------
     # On each cluster's own xDMA core, so the gather that consumes it is the very next

@@ -204,16 +204,7 @@
     // non-peripheral IPs
     spm_narrow: {
       address: 1879048192, // 0x7000_0000
-      // Sized for the BINGO task-descriptor list, which lives in this region so the task
-      // manager can fetch it over its narrow master instead of across the wide path. The
-      // list scales with the size of the data-flow graph, so this is the cap on how large a
-      // graph may be, and the cap is not a soft one: the host stack also lives at the top of
-      // this region, so a list that fills the heap is overwritten rather than rejected.
-      //
-      // Nothing else is mapped between here and spm_wide, so the region grows in place. Every
-      // consumer derives from this one number -- the SRAM depth, the PMA cacheable region and
-      // both linker scripts -- so this is the only place it is written.
-      length: 65536, // 64 kiB 0x1_0000
+      length: 131072, // 128 kiB 0x2_0000
     },
     spm_wide: {
       address: 2147483648, // 0x8000_0000

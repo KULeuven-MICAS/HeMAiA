@@ -40,6 +40,7 @@ from bingo_kernel_args import (
     SnaxBingoKernelSimdRmsnormF16F16Args,
     SnaxBingoKernelSimdRopeArgs,
     SnaxBingoKernelSimdAddF16Args,
+    SnaxBingoKernelSimdScaleF16Args,
 )
 
 from ..comm import (Block, BlockResult, Ctx, DType, Layout, MemLevel, Port,
@@ -264,4 +265,67 @@ class Residual(Block):
             outputs={"y": Port(self.outputs["y"], out, (nd,), cluster=c.cluster, name="y")},
             inputs={n: Port(self.inputs[n], bound[n].handle, (nd,), name=n)
                     for n in ("a", "b")},
+            nodes=[nd])
+
+
+class Dequantize(Block):
+    """out = x * scale. The step back from GEMM output to activation range.
+
+    WHY A LAYER NEEDS THIS, stated in the two hard limits that bracket the GEMM -- both
+    fp16, both silent when exceeded:
+
+      THE D PORT narrows the array's int32 accumulator to fp16, so `x_q @ w_q` must stay
+      under 65504. That is what keeps the operands small: at d=128 with int8 activations
+      an |w| of more than about 2 already saturates.
+
+      RMSNorm reduces SUM(x^2) into an fp16 SCALAR and takes an integer sqrt of it, so its
+      input needs sum_j x[j]^2 < 65504 -- about |x| < 22 at d=128. Past that the reduce
+      saturates and the integer reciprocal returns a power-of-two-wrong answer rather than
+      an error: the output looks like a well-formed tensor scaled by 2^16.
+
+    Between the two sits a factor of roughly a thousand, which is exactly the product of
+    the operands' quantisation scales, and nothing else in the chain is free to absorb it.
+    So the scale is applied here, on the SIMD core, in one pass.
+
+    Elementwise, so the layout passes straight through.
+    """
+
+    name = "dequantize"
+
+    def __init__(self, cfg: RowCfg = None, *, scale_f32bits: int = None,
+                 layout: Layout = Layout.PACKED, **params):
+        if scale_f32bits is None:
+            raise ValueError(
+                "Dequantize needs scale_f32bits: it is 1/(scale_x * scale_w) for the GEMM "
+                "that produced this tensor, and no default can be right for every stage.")
+        self.cfg = cfg if cfg is not None else RowCfg(**params)
+        self.scale_f32bits = int(scale_f32bits)
+        self.layout = Layout(layout)
+        _check_row(self.cfg.cols, "Dequantize")
+
+    @property
+    def inputs(self) -> dict:
+        c = self.cfg
+        return {"x": PortSpec(self.layout, DType.F16, (c.rows, c.cols),
+                              mem_level=MemLevel.L1,
+                              doc="fp16 straight off the GEMM's D port")}
+
+    @property
+    def outputs(self) -> dict:
+        c = self.cfg
+        return {"y": PortSpec(self.layout, DType.F16, (c.rows, c.cols),
+                              mem_level=MemLevel.L1,
+                              doc="fp16 back in activation range, same layout")}
+
+    def build(self, ctx: Ctx, bound: dict) -> BlockResult:
+        c = self.cfg
+        g = ctx.at(c.cluster)
+        out = g.l1(f"{self.name}_y", c.rows * c.cols * 2)
+        nd = g.node("Dequant", ctx.simd, "__snax_bingo_kernel_simd_stream_map",
+                    SnaxBingoKernelSimdScaleF16Args(
+                        bound["x"].handle, out, scale_f32bits=self.scale_f32bits,
+                        rows=c.rows, cols=c.cols))
+        return BlockResult(
+            outputs={"y": Port(self.outputs["y"], out, (nd,), cluster=c.cluster, name="y")},
+            inputs={"x": Port(self.inputs["x"], bound["x"].handle, (nd,), name="x")},
             nodes=[nd])

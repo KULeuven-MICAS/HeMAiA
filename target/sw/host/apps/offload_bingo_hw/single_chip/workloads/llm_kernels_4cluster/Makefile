@@ -1,15 +1,15 @@
-# One toy transformer layer, assembled from libs/block.
+# Unit tests for every kernel the LLM layer dispatches.
 MK_DIR   := $(dir $(realpath $(lastword $(MAKEFILE_LIST))))
 HOST_APP_TYPE = offload_bingo_hw
 CHIP_TYPE     = single_chip
-WORKLOAD      = llm_layer_4cluster
+WORKLOAD      = llm_kernels_4cluster
 DEV_APP       = snax-bingo-offload
 SRCS = ../../src/offload_bingo_hw.c
 BINGO_HOST ?= 1
 INCL_DEVICE_BINARY ?= 1
 
 DATA_CFG ?= $(MK_DIR)/params.hjson
-DATA_H = $(MK_DIR)/layer_data.h
+DATA_H = $(MK_DIR)/kernels_data.h
 OFFLOAD_H = $(MK_DIR)/offload_bingo_hw.h
 BENDER   = bender
 SNITCH_ROOT = $(shell $(BENDER) path snitch_cluster)
@@ -24,7 +24,7 @@ BINGO_GEN_DEPS = $(wildcard $(MK_DIR)/../../../../../../../../target/sw/host/run
                  $(MK_DIR)/../../../../../../../../target/sw/host/runtime/libbingo/include/libbingo/device_kernel_args.h \
                  $(MK_DIR)/../../../../../../../../target/sw/host/runtime/libbingo/include/libbingo/host_kernel_args.h
 
-$(DATA_H) $(OFFLOAD_H): $(MK_DIR)/main_bingo.py $(MK_DIR)/../../../../../../../../util/sim/common/llm_layer_data.py $(MK_DIR)/../../../../../../../../util/sim/common/llm_layer_stages.py $(MK_DIR)/../../../../../../../../util/sim/common/llm_layer_app.py $(DATA_CFG) $(PLATFORM_H) $(BINGO_GEN_DEPS)
+$(DATA_H) $(OFFLOAD_H): $(MK_DIR)/main_bingo.py $(MK_DIR)/kernels_datagen.py $(DATA_CFG) $(PLATFORM_H) $(BINGO_GEN_DEPS)
 	python3 $(MK_DIR)/main_bingo.py \
 		--output_dir $(MK_DIR) \
 		--data_h $(DATA_H) \

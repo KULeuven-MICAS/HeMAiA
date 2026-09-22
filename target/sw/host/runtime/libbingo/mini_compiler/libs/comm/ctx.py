@@ -11,12 +11,29 @@ clusters and levels, because the emitter dedups by object identity and two same-
 handles emit two C declarations that do not compile.
 """
 
+import re
 from dataclasses import dataclass, replace
 
 from bingo_mem_handle import BingoMemAlloc
 from bingo_node import BingoNode
 
 # ======================================================================================
+
+# A handle or node name is emitted into C as part of an identifier (`ptr_<name>`), so the
+# names this module builds must be valid C identifiers. Checking here rather than in the
+# emitter is what keeps the error next to the `scope("...")` that caused it.
+_C_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _scoped(parent: str, prefix: str) -> str:
+    """`parent` extended by `prefix`, as a valid C identifier fragment."""
+    if not _C_IDENT.match(prefix):
+        raise ValueError(
+            f"scope({prefix!r}): a scope name becomes part of a C identifier "
+            f"(uint64_t ptr_<prefix>_<handle>_cl0 = ...), so it must match "
+            f"[A-Za-z_][A-Za-z0-9_]*. Got {prefix!r}.")
+    return f"{parent}{prefix}_"
+
 
 @dataclass
 class Ctx:
@@ -31,6 +48,12 @@ class Ctx:
     roles: dict                       # {"gemm","simd","xdma","dm","host"} -> core id
     cluster: int = 0
     chiplet: int = 0
+    # The parsed cluster hjson the RTL was elaborated from. Blocks read platform facts
+    # from it rather than from literals -- an extension's id is its POSITION in a cfg
+    # list, so a literal is silently wrong on a cluster with a different extension set.
+    # Optional: a graph that needs no cfg-derived constant never has to supply it, and
+    # the block that does raises by name when it is missing.
+    hw: dict = None
     prefix: str = ""
 
     @property
@@ -56,13 +79,18 @@ class Ctx:
         The prefix is COMMON to every handle a block makes, which matters more than it
         looks: the heap is laid out in name-sorted order, so a shared prefix preserves the
         relative order a block may depend on, while a per-handle prefix would not.
+
+        THE SEPARATOR IS `_`, AND IT HAS TO BE. A handle name reaches C verbatim as
+        `ptr_<name>`, so any character that is not valid in an identifier emits a header
+        that does not compile -- and it does so a long way from here, at the C compiler,
+        naming a symbol nobody wrote. `_scoped()` enforces the whole rule.
         """
         if not prefix:
             # An empty namespace is no namespace. A single-block graph wants the names it
             # would have had without the library, which is also what makes a refactor
             # verifiable by diffing the generated header.
             return self
-        return replace(self, prefix=f"{self.prefix}{prefix}.")
+        return replace(self, prefix=_scoped(self.prefix, prefix))
 
     def l1(self, name: str, size: int, cluster: int = None) -> BingoMemAlloc:
         cl = self.cluster if cluster is None else cluster

@@ -62,6 +62,68 @@ class SnaxBingoKernelSimdFp16ToInt8Args(BingoKernelArgs):
         return a
 
 
+class SnaxBingoKernelSimdScaleF16Args(BingoKernelArgs):
+    """out = x * scale, elementwise over [rows, cols] fp16, on the SIMD core.
+
+    THIS IS THE DEQUANTISE AFTER AN INT8 GEMM, and a layer does not work without one.
+    The array accumulates int8 x int8 in int32 and the D port narrows that to fp16, so a
+    projection's output carries the product of both operands' quantisation scales -- with
+    d=128 it lands in the thousands while the activations it has to rejoin are O(1).
+    Multiplying by 1/(scale_x * scale_w) puts it back.
+
+    WHY IT CANNOT JUST BE ABSORBED SOMEWHERE ELSE. The two consumers both have hard fp16
+    limits and they bracket the GEMM:
+      - the D port narrows to fp16, so the int32 accumulation must stay under 65504;
+      - RMSNorm reduces SUM(x^2) into an fp16 scalar and takes an integer sqrt of it, so
+        its input must satisfy sum_j x[j]^2 < 65504 -- about |x| < 22 at d=128.
+    Nothing between them is free to absorb a factor of a thousand, which is why this is
+    its own pass.
+
+    It drives StreamMap in LINEAR mode (out = func(a*x + b) with func=LINEAR, b=0), the
+    same datapath the GEMM->swiglu dequant uses.
+    """
+
+    KERNEL_NAME = "__snax_bingo_kernel_simd_stream_map"
+
+    _FUNC_LINEAR = 0
+    _OUT_FP16 = 0
+
+    def __init__(self, src_addr: Union[BingoMemAlloc, int], dst_addr: Union[BingoMemAlloc, int],
+                 scale_f32bits: int, rows: int, cols: int):
+        if cols % 32:
+            raise ValueError(f"cols={cols} must be a multiple of 32 -- one SIMD beat is "
+                             f"64 B = 32 fp16 lanes and a partial beat is not handled.")
+        self.src_addr = src_addr
+        self.dst_addr = dst_addr
+        self.scale_f32bits = int(scale_f32bits)
+        self.rows = rows
+        self.cols = cols
+        self.beats = cols // 32
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_simd_stream_map_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.src_addr, "src_addr", a, handle_name_map)
+        self._process_addr(self.dst_addr, "dst_addr", a, handle_name_map)
+        a["beats"] = str(self.beats)
+        a["a_f32bits"] = str(self.scale_f32bits)   # the multiplier
+        a["b_f32bits"] = "0"                       # no offset
+        a["func"] = str(self._FUNC_LINEAR)
+        a["rows"] = str(self.rows)
+        a["csr_mode"] = "0"
+        a["dst_bound0"] = str(self.rows * self.beats)
+        a["out_dtype"] = str(self._OUT_FP16)
+        a["inv_scale_f32bits"] = "0"               # read only when out_dtype == INT8
+        # 0 = use the compile-time a_f32bits above rather than reading a runtime FP32
+        # word from L1. Assigned explicitly: the struct lives in the never-cleared L1
+        # arena, so an unset field is stale TCDM, not zero.
+        a["a_addr_lo"] = "0"
+        a["a_addr_hi"] = "0"
+        return a
+
+
 class SnaxBingoKernelSimdRopeArgs(BingoKernelArgs):
     """Fused FP16 RoPE: iDMA adjacent-pair swap of x + 3 StreamElementwise passes
     (x*cos_full, xswap*sin_signed, +) -> out. cos_full/sin_signed are precomputed
@@ -132,11 +194,11 @@ class SnaxBingoKernelSimdAddF16Args(BingoKernelArgs):
         a = {}
         self._process_addr(self.a_addr, "src_addr", a, handle_name_map)
         self._process_addr(self.out_addr, "dst_addr", a, handle_name_map)
-        # A NON-ZERO src_b makes the kernel derive operand_stride as (src_b - src_addr) at
-        # run time, which is what lets the two operands be separate allocations. The
-        # reader AGU strides FORWARD only, so b must sit at the HIGHER address; the
-        # residual's two buffers come from one allocator in creation order, and the block
-        # passes them in that order.
+        # A NON-ZERO src_b makes the kernel derive operand_stride at run time, which is
+        # what lets the two operands be separate allocations. THE TWO MAY BE PLACED IN
+        # EITHER ORDER: the reader AGU strides forward only, so the kernel bases the
+        # interleave at the LOWER operand and swaps if needed (snax_simd_ew2_base), which
+        # is sound because ADD commutes. No PLACEMENT_ORDER constraint is needed here.
         self._process_addr(self.b_addr, "src_b_addr", a, handle_name_map)
         a["beats"] = str(self.beats)
         a["operand_stride"] = "0"          # derived from src_b at run time
@@ -147,6 +209,14 @@ class SnaxBingoKernelSimdAddF16Args(BingoKernelArgs):
         a["dst_bound0"] = str(self.rows * self.beats)
         a["out_dtype"] = str(self._OUT_FP16)
         a["inv_scale_f32bits"] = "0"
+        # EVERY FIELD MUST BE ASSIGNED, INCLUDING THE ONES WHOSE "DEFAULT" IS ZERO. The
+        # args struct is carved out of the BINGO L1 arena, which is never cleared, so a
+        # field this method skips is read as whatever that TCDM word last held. For this
+        # one the consequence is a HANG, not a wrong answer: a non-zero src_row_stride
+        # makes the reader AGU stride by that many bytes per row, walk off the end of
+        # TCDM and stall the task forever with no error (see snax_simd_lib.h). 0 selects
+        # the flat/packed layout, which is what both operands have here.
+        a["src_row_stride"] = "0"
         return a
 
 

@@ -22,6 +22,11 @@
 #    - Used for memory-mapped peripherals or fixed memory regions (like MemPool).
 #    - The compiler emits the raw integer literal (e.g., `0x80001000`).
 
+import re
+
+_C_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
 class BingoMemAlloc:
     """
     Represents a memory allocation request (handle) that will be resolved to a runtime address in C.
@@ -35,6 +40,15 @@ class BingoMemAlloc:
         :param cluster_id: Required for L1.
         :param offset: Byte offset to add to the allocated address.
         """
+        # The name reaches the generated C verbatim as `ptr_<name>`, so anything that is
+        # not valid in an identifier produces a header that does not compile -- and it
+        # fails at the C compiler, naming a symbol nobody wrote, a long way from the code
+        # that chose the name. Refusing it here points at the allocation instead.
+        if not _C_IDENT.match(name):
+            raise ValueError(
+                f"BingoMemAlloc name {name!r} is not a valid C identifier: it is emitted "
+                f"as `uint64_t ptr_{name} = ...`, so it must match "
+                f"[A-Za-z_][A-Za-z0-9_]*.")
         self.name = name
         self.size = size
         self.mem_level = mem_level

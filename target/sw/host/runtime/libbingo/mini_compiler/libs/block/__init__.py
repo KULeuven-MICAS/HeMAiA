@@ -15,9 +15,10 @@ from .linear import Linear, LinearCfg
 from .gather import fa_gather
 from .moe import MoeCfg, MoeFFN
 from .reshape import Reshape, ReshapeCfg
-from .simd_ops import Quantize, Residual, RMSNorm, RoPE, RowCfg
+from .simd_ops import (Dequantize, Quantize, Residual, RMSNorm, RoPE,
+                        RowCfg)
 
 __all__ = ["FaCfg", "FlashAttention", "fa_gather", "Linear", "LinearCfg",
-           "MoeCfg", "MoeFFN", "Quantize", "RMSNorm", "Reshape", "ReshapeCfg",
+           "MoeCfg", "MoeFFN", "Dequantize", "Quantize", "RMSNorm", "Reshape", "ReshapeCfg",
            "Residual", "RoPE",
            "RowCfg"]

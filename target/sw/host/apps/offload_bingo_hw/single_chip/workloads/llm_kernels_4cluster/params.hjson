@@ -1,0 +1,9 @@
+// Unit tests for every kernel the LLM layer dispatches, at the layer's own toy shape.
+// num_clusters must match the platform or guard_cluster_count refuses to emit.
+{
+    num_clusters: 4
+    array_shape: 0
+    tokens: 32
+    d_model: 128
+    d_hidden: 128
+}

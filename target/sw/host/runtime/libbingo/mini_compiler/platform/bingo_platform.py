@@ -383,3 +383,59 @@ def _engine_of_kernel(kernel_name):
         return None            # the older __snax_kernel_* family is not BINGO-dispatched
     head = kernel_name[len("__snax_bingo_kernel_"):].split("_", 1)[0]
     return _ENGINE_BY_KERNEL_TOKEN.get(head)
+
+
+# ======================================================================================
+# CFG-DERIVED DEVICE CONSTANTS
+#
+# Some kernel arguments are an index into a list the RTL was elaborated from, not a fixed
+# number. Reading them out of the same hjson keeps the value and the hardware in step; a
+# literal goes stale the moment a cluster gains or loses an extension, and it goes stale
+# silently, because a wrong index is a valid index.
+
+
+def load_cluster_cfg(hwcfg_path):
+    """The cluster hjson, parsed. The single place blocks read platform facts from."""
+    import hjson
+    with open(hwcfg_path) as f:
+        return hjson.loads(f.read())
+
+
+def writer_junction_index(hw, name):
+    """The value WRITER_JCT_<name> has for this cluster, derived from the cluster cfg.
+
+    NOT taken from the cluster's generated snax-xdma-addr.h, where that macro actually
+    lives: all of its XDMA_* address macros collide with the chip-level hemaia-xdma-addr.h
+    the host already includes, so that header cannot go on the host include path. And not
+    a literal either -- the id is the junction's POSITION in the cfg's writer_junctions
+    list, so it shifts the moment a cluster gains or loses one.
+
+    Searched by key rather than by path so a reorganisation of the cfg tree does not
+    silently return the wrong index.
+    """
+    def find(node):
+        if isinstance(node, dict):
+            if "writer_junctions" in node:
+                return node["writer_junctions"]
+            for v in node.values():
+                r = find(v)
+                if r is not None:
+                    return r
+        elif isinstance(node, list):
+            for v in node:
+                r = find(v)
+                if r is not None:
+                    return r
+        return None
+
+    jcts = find(hw)
+    if jcts is None:
+        raise ValueError(
+            "cluster cfg declares no writer_junctions, so this cluster cannot fold in the "
+            "fabric. A block that needs WRITER_JCT_%s has to be given a cfg that has it, "
+            "or fold on a core instead." % name)
+    names = list(jcts.keys())
+    if name not in names:
+        raise ValueError(
+            f"cluster cfg has writer junctions {names} but this block needs {name}.")
+    return names.index(name)

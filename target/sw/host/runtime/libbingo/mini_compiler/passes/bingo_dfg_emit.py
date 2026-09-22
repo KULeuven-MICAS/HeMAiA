@@ -4,6 +4,102 @@ from bingo_mem_handle import BingoMemAlloc
 from bingo_mem_handle import BingoMemAllocView
 
 
+
+# ======================================================================================
+# ARGS-STRUCT COMPLETENESS
+#
+# Every args struct is carved out of the BINGO L1 arena, which is NEVER CLEARED. A field
+# the args class forgets to assign is therefore read as whatever that TCDM word last held
+# -- and depending on the field that is a wrong answer, a dead hart, or a task that stalls
+# forever with no error (anything feeding an AGU stride: see src_row_stride in
+# __snax_bingo_kernel_simd_stream_elementwise_args_t, which hung four workloads before
+# this check existed).
+#
+# So the field list is checked against the C header the device compiles against, at emit
+# time, where the fix is one line in the args class. The alternative is finding it as a
+# silent hang in RTL.
+
+_ARGS_TRAILER_FIELDS = frozenset(
+    {"gating_sp_addr", "cond_node_index", "scratchpad_ptr", "pred_scratchpad_addr"})
+_struct_fields_cache = None
+
+
+def _args_struct_fields():
+    """{struct_name: [field, ...]} parsed from the kernel-args C headers."""
+    global _struct_fields_cache
+    if _struct_fields_cache is not None:
+        return _struct_fields_cache
+    import os
+    import re
+    from _bingo_paths import repo_root
+    inc = os.path.join(str(repo_root()),
+                       "target/sw/host/runtime/libbingo/include/libbingo")
+    out = {}
+    for name in ("device_kernel_args.h", "host_kernel_args.h"):
+        try:
+            with open(os.path.join(inc, name)) as fh:
+                src = fh.read()
+        except OSError:
+            continue                  # header absent: skip rather than block a build
+        src = re.sub(r"/\*.*?\*/", "", src, flags=re.S)
+        src = re.sub(r"//[^\n]*", "", src)
+        for body, struct in re.findall(
+                r"(?:__SNAX_KERNEL_ARGS_DEFINE|__HOST_KERNEL_ARGS_DEFINE)\s*\w*\s*"
+                r"\{([^{}]*)\}\s*(\w+_args_t)\s*;", src, re.S):
+            out[struct] = re.findall(r"\b(?:uint|int)(?:8|16|32|64)_t\s+(\w+)\s*;", body)
+    _struct_fields_cache = out
+    return out
+
+
+def _validate_args_structs(nodes):
+    """Every node's args struct must assign every field its C struct declares."""
+    problems = []
+    for n in nodes:
+        args = getattr(n, "kernel_args", None)
+        if args is None:
+            continue
+        try:
+            fields = set(args.get_c_field_assignments({}))
+        except Exception:
+            continue          # needs the real handle map; the emit path will surface it
+        problems.extend(_args_complete_problems(args.get_struct_name(), fields, n))
+    if problems:
+        raise ValueError("Kernel args struct check failed before C generation:\n  "
+                         + "\n  ".join(problems))
+
+
+def _args_complete_problems(struct_name, assignments, node):
+    """[] when every declared field is assigned, else one message per struct."""
+    declared = _args_struct_fields().get(struct_name)
+    if not declared:
+        return []
+    missing = [f for f in declared
+               if f not in assignments and f not in _ARGS_TRAILER_FIELDS]
+    if not missing:
+        return []
+    return [f"{struct_name} (node {getattr(node, 'node_name', '?')}): "
+            f"get_c_field_assignments() does not set {', '.join(missing)}. Every field "
+            f"must be assigned -- the struct lives in the BINGO L1 arena, which is never "
+            f"cleared, so an unassigned field reads stale TCDM. Set it explicitly, even "
+            f"when the value is 0."]
+
+
+def _check_args_complete(struct_name, assignments, node):
+    """Refuse an args struct with a field nobody assigned."""
+    declared = _args_struct_fields().get(struct_name)
+    if not declared:
+        return                        # struct not found in the headers: nothing to check
+    missing = [f for f in declared
+               if f not in assignments and f not in _ARGS_TRAILER_FIELDS]
+    if missing:
+        raise ValueError(
+            f"{struct_name} (node {getattr(node, 'node_name', '?')}): "
+            f"get_c_field_assignments() does not set {', '.join(missing)}. Every field "
+            f"must be assigned -- the struct lives in the BINGO L1 arena, which is never "
+            f"cleared, so an unassigned field reads stale TCDM. Set it explicitly, even "
+            f"when the value is 0.")
+
+
 class BingoDFGEmitMixin:
     """Emission of the generated C header the host compiles against.
 
@@ -582,6 +678,10 @@ class BingoDFGEmitMixin:
         sorted_handles, handle_name_map = self._collect_memory_handles(sorted_nodes)
         self._validate_kernel_core_assignments(sorted_nodes)
         self._validate_memory_handles(sorted_handles)
+        # Before the file is opened: a check that raises mid-write leaves a truncated
+        # header behind, and the next build reports a C syntax error instead of the
+        # actual problem.
+        _validate_args_structs(sorted_nodes)
 
         # 2. Start emitting C code
         with open(output_path, "w") as f:
