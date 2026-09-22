@@ -64,6 +64,11 @@
 !/sweep/fa/run_fa_sweep.py
 !/sweep/fa/gather_fa_cycles.py
 !/sweep/fa/task_fa.yaml
+!/sweep/moe/
+/sweep/moe/*
+!/sweep/moe/run_moe_sweep.py
+!/sweep/moe/moe_report.py
+!/sweep/moe/task_moe.yaml
 
 
 !/test/

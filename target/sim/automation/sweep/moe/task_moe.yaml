@@ -1,0 +1,18 @@
+# One mixture-of-experts FFN layer across four clusters, top-2 routed.
+#
+# The point of this workload is the CERF conditional-execution path end to end: the router
+# decides at run time which experts may run, the hardware SKIPS the losers' whole lanes
+# (no dispatch, no weight traffic), and one ungated combine folds the winners back together
+# weighted by the renormalised router probabilities.
+#
+# What the UART must show for a pass, in this order:
+#   Check [moe_softmax]: PASS   the router's probabilities
+#   Check [moe_w]:       PASS   the weights renormalised over the WINNERS (sum 1 over them)
+#   Check [moe_ybuf]:    PASS   a winner's landing slot holds its y, a loser's is still zero
+#                               -- this is the one that actually verifies the SKIP
+#   Check [moe_out]:     PASS   the combined layer output
+runs:
+  - HOST_APP_TYPE: offload_bingo_hw
+    CHIP_TYPE: single_chip
+    WORKLOAD: moe4_4cluster
+    DEV_APP: snax-bingo-offload
