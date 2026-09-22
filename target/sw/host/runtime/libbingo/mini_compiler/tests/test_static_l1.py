@@ -17,6 +17,10 @@ import sys
 
 import networkx as nx
 
+import os as _os
+import sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+import _bingo_paths  # noqa: F401,E402  (groups the compiler's subdirs onto sys.path)
 from bingo_mem_handle import BingoMemAlloc, BingoMemAllocView
 from bingo_liveness import (collect_handle_users, check_handle_identity, reachability,
                             can_share, build_interference, extend_users_for_engine_drain)

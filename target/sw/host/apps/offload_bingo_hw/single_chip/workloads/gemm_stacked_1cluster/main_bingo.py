@@ -33,6 +33,7 @@ from gemm_datagen import emit_header_file, infer_stacked_gemm2_dims  # noqa E402
 # 1. D1 =  A1 X B1 (A1 B1 are int8, D1 is int32)
 # 2. D2 =  D1 X B2 (D1 will be treated as int8 input, B2 is int8, D2 is int32)
 
+import _bingo_paths  # noqa: F401,E402  (puts mini_compiler's grouped subdirs on sys.path)
 from bingo_dfg import BingoDFG
 from bingo_platform import core_roles, guard_cluster_count, parse_platform_cfg  # noqa E402
 from bingo_node import BingoNode

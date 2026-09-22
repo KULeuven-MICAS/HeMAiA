@@ -39,6 +39,7 @@ sys.path.append(os.path.join(ROOT, "target/sw/host/runtime/libbingo/mini_compile
 sys.path.append(os.path.join(ROOT, "util/sim/common"))     # data_utils
 sys.path.append(_THIS)  # util/sim/gemm — gemm_sim_utils (sibling)
 
+import _bingo_paths  # noqa: F401,E402  (puts mini_compiler's grouped subdirs on sys.path)
 from bingo_dfg import BingoDFG                                       # noqa: E402
 from bingo_node import BingoNode                                     # noqa: E402
 from bingo_mem_handle import BingoMemAlloc, BingoMemSymbol           # noqa: E402

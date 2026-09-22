@@ -2,8 +2,10 @@
 
 import math
 
-from bingo_dfg_common import BINGO_TASK_LIST_WORD_BITS
-from bingo_dfg_common import BINGO_TASK_LIST_WORD_MASK
+# The task list the host hands the scheduler stays a uint64_t array however wide the
+# descriptor gets, so a descriptor always occupies a whole number of these words.
+BINGO_TASK_LIST_WORD_BITS = 64
+BINGO_TASK_LIST_WORD_MASK = (1 << BINGO_TASK_LIST_WORD_BITS) - 1
 from bingo_node import BingoNode
 
 

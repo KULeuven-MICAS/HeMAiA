@@ -1,0 +1,45 @@
+# comm/ — common machinery
+
+Everything a block is built out of, and nothing specific to one. Two halves:
+
+## What a block declares, and how two are joined
+
+| file | |
+|---|---|
+| `ports.py` | `PortSpec` (layout, precision, shape, space), `Port` (a bound spec plus the nodes at the block's edge), `Block`, `BlockResult`, and `at_offset` — which offsets any of the four handle types, because a staged array is a *symbol* on the host path and a *fixed address* on the memchip path, and only `BingoMemAlloc` has `.view()`. |
+| `ctx.py` | The node and handle factory, bound to one cluster and one name prefix. The prefix is what lets one block be instantiated twice: handle names must be unique per chip, because the emitter dedups by identity and two same-named handles emit two C declarations that do not compile. |
+| `link.py` | `Pipeline`, `link`, and `check_contract` — which asks `transfer.plan` whether a mismatch is closable rather than deciding for itself, so the two cannot drift. |
+| `paths.py` | Reaching `util/sim`. Delegates to `_bingo_paths.repo_root()`; there is deliberately one implementation of that search. |
+
+`Port.ends` is what makes the join mechanical: for an output it is the nodes that finish
+writing the buffer, for an input the nodes that first read it. The linker joins one to the
+other with a real RAW dependency, and nothing else.
+
+## How a mismatch gets closed
+
+| file | |
+|---|---|
+| `transfer.py` | Decides what a mismatch costs and emits the nodes. `plan()` builds nothing and can be inspected; `bring_in()` emits — and emits **nothing** when the bound port already matches, which is what lets a composed graph be identical to a hand-written one. |
+| `nest.py` | Derives the strided xDMA transfer that performs a layout change, and the hand-written D→A nest it is checked against. |
+
+**The closures, and why each is the engine it is.** `L4 → L3` is the host iDMA: the
+memory-chiplet pool is off-die, so it is hoisted once instead of fetched per tile. A
+**layout** change is one xDMA pass fused into the load — the AGU takes independent strides
+on each side, so it converts while it transports, costing nothing beyond the load that had
+to happen anyway. **Precision** is not done here at all.
+
+## Nothing in nest.py is trusted
+
+`convert_args` derives the strides and then walks them in numpy against ground-truth index
+maps of **both** layouts, at graph-build time, on the real bounds. A nest that is wrong by
+one dimension moves the right *number* of bytes to the wrong *offsets* — which no byte
+count catches and which passes on random data. The generic derivation reproduces
+`d_to_a_args`, the RTL-validated hand-written nest, byte-pair for byte-pair.
+
+Two hardware limits it enforces rather than discovers at runtime:
+
+- **The run must be 8 bytes, contiguous on both sides.** At fp16 an A-layout `tileSize` run
+  is 4×2 = 8 B and works; at int8 it is 4 B and falls onto the CPU fallback. So **a reshape
+  into or out of A-layout is an fp16 operation** — quantise *after* it.
+- **Anything involving B-layout is a transpose**, not a reshape, and needs the transposer
+  kernel (which is correct only at `elem_bytes=1`).

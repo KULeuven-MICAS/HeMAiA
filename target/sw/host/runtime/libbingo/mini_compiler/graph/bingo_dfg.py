@@ -25,7 +25,7 @@ try:
     import networkx as nx
 except ImportError:
     print("networkx not found. Installing...")
-    from bingo_dfg_common import install_package
+    from bingo_utils import install_package
     install_package("networkx")
     import networkx as nx
 
@@ -34,14 +34,17 @@ from bingo_node import BingoNode
 from bingo_mem_handle import BingoMemAlloc, BingoMemAllocView
 from bingo_kernel_args import BingoKernelArgs
 
-# Re-exported: these were defined here before the split, so they stay importable from here.
-from bingo_dfg_common import (            # noqa: F401
-    install_package,
-    _ENGINE_BY_KERNEL_TOKEN,
-    _engine_of_kernel,
+# Re-exported: these were defined in this module once, so they stay importable from here.
+# Their homes are now where each is actually USED -- the kernel/engine map beside the
+# core-role map it is checked against, the task-list word size beside the descriptor that
+# is measured in those words. bingo_dfg_common.py held them only to break an import cycle
+# with the mixins, and it no longer needs to: neither of those modules imports bingo_dfg.
+from bingo_platform import _ENGINE_BY_KERNEL_TOKEN, _engine_of_kernel   # noqa: F401
+from bingo_dfg_descriptor import (                                      # noqa: F401
     BINGO_TASK_LIST_WORD_BITS,
     BINGO_TASK_LIST_WORD_MASK,
 )
+from bingo_utils import install_package                                 # noqa: F401
 
 from bingo_dfg_transforms import BingoDFGTransformsMixin
 from bingo_dfg_conditional import BingoDFGConditionalMixin

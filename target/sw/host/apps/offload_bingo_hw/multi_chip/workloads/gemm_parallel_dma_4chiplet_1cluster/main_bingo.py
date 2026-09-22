@@ -40,6 +40,7 @@ sys.path.append(f"{ROOT_DIR}/target/sw/host/runtime/libbingo/mini_compiler")
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from gemm_multi_chiplet_datagen import emit_header_file  # noqa E402
 
+import _bingo_paths  # noqa: F401,E402  (puts mini_compiler's grouped subdirs on sys.path)
 from bingo_dfg import BingoDFG
 from bingo_platform import (
     parse_platform_cfg,

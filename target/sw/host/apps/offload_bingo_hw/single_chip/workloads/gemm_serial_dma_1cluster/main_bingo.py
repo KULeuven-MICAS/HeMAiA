@@ -42,6 +42,7 @@ from gemm_datagen import emit_header_file  # noqa E402
 from gemm_sim_utils import define_gemm_workload_params  # noqa E402
 
 # This idea of this application is to compare with the serial version in bingo sw to show the improvement of the bingo hw manager
+import _bingo_paths  # noqa: F401,E402  (puts mini_compiler's grouped subdirs on sys.path)
 from bingo_dfg import BingoDFG
 from bingo_platform import core_roles, guard_cluster_count, parse_platform_cfg  # noqa E402
 from bingo_node import BingoNode

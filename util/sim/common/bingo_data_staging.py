@@ -50,6 +50,7 @@ _LIBBINGO = os.path.normpath(os.path.join(
 if _LIBBINGO not in sys.path:
     sys.path.append(_LIBBINGO)
 
+import _bingo_paths  # noqa: F401,E402  (puts mini_compiler's grouped subdirs on sys.path)
 from bingo_helpers import chiplet_addr_transform_loc      # noqa: E402
 from bingo_mem_handle import BingoMemFixedAddr, BingoMemSymbol  # noqa: E402
 

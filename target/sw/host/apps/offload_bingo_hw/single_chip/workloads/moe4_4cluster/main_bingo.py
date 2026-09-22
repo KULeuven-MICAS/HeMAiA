@@ -335,6 +335,7 @@ sys.path.append(f"{ROOT_DIR}/util/sim/common")
 sys.path.append(current_dir)
 
 from moe_datagen import generate_moe_data, stage                      # noqa: E402
+import _bingo_paths  # noqa: F401,E402  (puts mini_compiler's grouped subdirs on sys.path)
 from bingo_dfg import BingoDFG                                          # noqa: E402
 from bingo_platform import core_roles, guard_cluster_count, parse_platform_cfg  # noqa: E402
 from bingo_node import BingoNode                                        # noqa: E402

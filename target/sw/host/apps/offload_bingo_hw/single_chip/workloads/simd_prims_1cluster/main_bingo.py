@@ -55,6 +55,7 @@ for _p in [p for p in list(sys.path) if str(p).rstrip('/').endswith('util/sim')]
         if _sub not in sys.path:
             sys.path.append(_sub)
 
+import _bingo_paths  # noqa: F401,E402  (puts mini_compiler's grouped subdirs on sys.path)
 from bingo_dfg import BingoDFG                            # noqa: E402
 from bingo_platform import core_roles, guard_cluster_count, parse_platform_cfg  # noqa: E402
 from bingo_node import BingoNode                          # noqa: E402

@@ -16,6 +16,10 @@
 
 import sys
 
+import os as _os
+import sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+import _bingo_paths  # noqa: F401,E402  (groups the compiler's subdirs onto sys.path)
 from bingo_dfg import BingoDFG
 from bingo_node import BingoNode
 

@@ -36,6 +36,7 @@ sys.path.append(f"{ROOT_DIR}/util/sim")
 import _usg_paths  # noqa: F401,E402  (registers util/sim/{common,gemm,xdma,ara} on sys.path)
 sys.path.append(current_dir)
 
+import _bingo_paths  # noqa: F401,E402  (puts mini_compiler's grouped subdirs on sys.path)
 from bingo_dfg import BingoDFG  # noqa E402
 from bingo_helpers import chiplet_addr_transform_loc  # noqa E402
 from bingo_kernel_args import (  # noqa E402

@@ -2,7 +2,7 @@
 
 import networkx as nx
 
-from bingo_dfg_common import install_package
+from bingo_utils import install_package
 
 
 class BingoDFGReportMixin:

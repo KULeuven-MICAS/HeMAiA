@@ -94,6 +94,7 @@ sys.path.append(current_dir)
 # two cannot drift apart. The Makefile depends on that file too.
 sys.path.append(os.path.join(current_dir, "..", "xdma_remote_write_4chiplet_1cluster"))
 
+import _bingo_paths  # noqa: F401,E402  (puts mini_compiler's grouped subdirs on sys.path)
 from bingo_dfg import BingoDFG  # noqa E402
 from bingo_helpers import chiplet_addr_transform_loc  # noqa E402
 from bingo_kernel_args import (  # noqa E402

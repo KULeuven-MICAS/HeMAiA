@@ -1,4 +1,8 @@
 import os
+import sys as _sys
+
+_sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import _bingo_paths  # noqa: E402
 import re
 import sys
 from pathlib import Path
@@ -163,9 +167,12 @@ def parse_platform_cfg(occamy_h_path):
 
 # The generated platform header, resolved from THIS file's location the same way
 # _DEFAULT_ROLES_HEADER below is: bingo_platform.py sits at
-# target/sw/host/runtime/libbingo/mini_compiler/, so parents[4] is target/sw.
+# FOUND BY MARKER, NOT BY COUNTING `..`. This was parents[4], which was right while this
+# file sat directly in mini_compiler/ and silently wrong the moment it moved into
+# platform/: the path just does not exist, and the failure appears much later as a missing
+# generated header from a module that never mentions paths.
 _DEFAULT_PLATFORM_HEADER = (
-    Path(__file__).resolve().parents[4] / "shared" / "platform" / "generated" / "occamy.h"
+    Path(_bingo_paths.target_sw()) / "shared" / "platform" / "generated" / "occamy.h"
 )
 
 
@@ -228,9 +235,9 @@ def default_task_desc_words():
 # The generated role map, mirrored into the device tree by `make snax-sw-gen`
 # (target/sw/Makefile). Resolved from THIS file's location so every workload's
 # core_roles(platform) keeps working unchanged: bingo_platform.py sits at
-# target/sw/host/runtime/libbingo/mini_compiler/, so parents[4] is target/sw.
+# Same marker search as the platform header above, and for the same reason.
 _DEFAULT_ROLES_HEADER = (
-    Path(__file__).resolve().parents[4] / "device" / "runtime" / "snax" /
+    Path(_bingo_paths.target_sw()) / "device" / "runtime" / "snax" /
     "snax_core_roles_defs.h"
 )
 
@@ -349,3 +356,31 @@ def guard_chiplet_count(param, platform, output_dir, output_offload_file_name):
         file=sys.stderr,
     )
     return False
+
+
+# ======================================================================================
+# Which engine a kernel drives
+# ======================================================================================
+# The pair to core_roles() above: that maps a ROLE to a core, this maps a KERNEL to a role.
+# Together they are what the validator checks a node's placement against. Keyed on the
+# token right after "_kernel_", because the name is the only thing the DFG and the
+# device-side SNAX_EXPORT_FUNC registry agree on.
+#
+# A kernel that touches no accelerator maps to None and is not placed: dummy, exit,
+# sync_probe, check_results, and the scalar helpers (pack_fa_partial), which run wherever
+# their consumer is. "idma" maps to the "dm" role because that is the role name for the
+# hart carrying the DMA ISA -- a dm* instruction on any other hart traps.
+_ENGINE_BY_KERNEL_TOKEN = {
+    "gemm": "gemm",
+    "simd": "simd",
+    "xdma": "xdma",
+    "idma": "dm",
+}
+
+
+def _engine_of_kernel(kernel_name):
+    """The engine a __snax_bingo_kernel_* name drives, or None if it drives none."""
+    if not kernel_name.startswith("__snax_bingo_kernel_"):
+        return None            # the older __snax_kernel_* family is not BINGO-dispatched
+    head = kernel_name[len("__snax_bingo_kernel_"):].split("_", 1)[0]
+    return _ENGINE_BY_KERNEL_TOKEN.get(head)

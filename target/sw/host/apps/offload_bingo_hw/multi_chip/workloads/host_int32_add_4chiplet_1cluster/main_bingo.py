@@ -59,6 +59,7 @@ ROOT_DIR = os.path.normpath(ROOT_DIR)
 sys.path.append(f"{ROOT_DIR}/target/sw/host/runtime/libbingo/mini_compiler")
 sys.path.append(current_dir)
 
+import _bingo_paths  # noqa: F401,E402  (puts mini_compiler's grouped subdirs on sys.path)
 from bingo_dfg import BingoDFG  # noqa E402
 from bingo_helpers import chiplet_addr_transform_loc  # noqa E402
 from bingo_kernel_args import (  # noqa E402

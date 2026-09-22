@@ -34,6 +34,7 @@ sys.path.append(f"{_ROOT}/util/sim")
 import _usg_paths  # noqa: F401,E402  (registers util/sim/{common,gemm,xdma,ara} on sys.path)
 from data_utils import format_scalar_definition, format_vector_definition  # noqa E402
 from layout_convert import row_major_to_a, row_major_to_b, row_major_to_d  # noqa E402
+import _bingo_paths  # noqa: F401,E402  (puts mini_compiler's grouped subdirs on sys.path)
 from bingo_dfg import BingoDFG  # noqa E402
 from bingo_platform import core_roles, guard_cluster_count, parse_platform_cfg  # noqa E402
 from bingo_node import BingoNode  # noqa E402

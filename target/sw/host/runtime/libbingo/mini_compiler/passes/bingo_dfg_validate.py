@@ -2,7 +2,7 @@
 
 import networkx as nx
 
-from bingo_dfg_common import _engine_of_kernel
+from bingo_platform import _engine_of_kernel
 
 
 class BingoDFGValidateMixin:
