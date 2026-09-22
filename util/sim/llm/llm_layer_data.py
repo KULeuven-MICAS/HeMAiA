@@ -121,6 +121,11 @@ def generate_layer_data(p):
     T, d, h = p["tokens"], p["d_model"], p["d_hidden"]
     E, k = p["num_experts"], p["top_k"]
     mr, ts, mc = p["meshRow"], p["tileSize"], p["meshCol"]
+    # FLASHATTENTION'S QUERY TILE IS NOT THE LAYER'S TOKEN COUNT. Br is pinned to the SIMD
+    # beat -- dataWidth/elemWidth = 32 -- and FlashAttention.validate() refuses anything
+    # else, so raising `tokens` to give the layer four whole A-layout tiles must not drag
+    # Br with it. FA's operands are staged at this size and the rest of the layer at T.
+    fa = int(p.get("fa_tile", 32))
     rng = np.random.default_rng(seed=7)
     out = {}
 
@@ -174,8 +179,9 @@ def generate_layer_data(p):
                               float(np.abs(proj["v"].astype(np.float32)).max())))
     out["scale_qkv"], out["scale_qkv_bits"] = s_qk, f32bits(s_qk)
     qi, ki, vi = (_quant(t, s_qk) for t in (q_r, k_r, proj["v"]))
-    out["fa_q_b"] = row_major_to_b(qi, T // ts, d // mc, ts, mc)
-    out["fa_v_a"] = row_major_to_a(vi, T // mr, d // ts, mr, ts)
+    # sliced to FA's tile: the block reads exactly br (and bc) rows per operand
+    out["fa_q_b"] = row_major_to_b(qi[:fa], fa // ts, d // mc, ts, mc)
+    out["fa_v_a"] = row_major_to_a(vi[:fa], fa // mr, d // ts, mr, ts)
 
     # K IS THE FULL KV CACHE, NOT THE 32 CURRENT TOKENS. Under kvsplit FlashAttention
     # declares k as (bc * clusters, dhead) -- one disjoint shard per cluster, stacked --
@@ -185,7 +191,7 @@ def generate_layer_data(p):
     # So the cache is built at its declared length: ncl*bc past positions, projected and
     # rotated exactly like the current tokens, with their own position indices.
     ncl = int(p["num_clusters"])
-    kv_len = ncl * T
+    kv_len = ncl * fa
     x_kv = (rng.integers(-4, 4, size=(kv_len, d)).astype(np.float32) / 4.0).astype(np.float16)
     kv_pos = np.arange(kv_len)[:, None]
     kv_ang = kv_pos * inv

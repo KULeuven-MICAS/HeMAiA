@@ -23,7 +23,7 @@ from libs import Ctx
 from libs.block.flash_attention import mesh_from_hwcfg
 
 from llm_layer_data import generate_layer_data, stage
-from llm_layer_stages import MAX_STAGE, STAGE_NAMES, build
+from llm_layer_stages import MAX_STAGE, STAGE_NAMES, build, token_parallel
 
 CHIPLET_ID = 0x00
 # The heap the static-L1 pass must fit inside. SET IT: left unset the pass computes a peak,
@@ -32,7 +32,7 @@ CHIPLET_ID = 0x00
 L1_CAPACITY = 514816
 
 
-def run(stages: int = MAX_STAGE):
+def run(stages=MAX_STAGE, verify="all", shard="none", decomp="single"):
     ap = argparse.ArgumentParser()
     ap.add_argument("--output_dir", required=True)
     ap.add_argument("--data_h", default=None)
@@ -65,14 +65,17 @@ def run(stages: int = MAX_STAGE):
     # position in that cfg's list, so a literal is silently wrong elsewhere.
     ctx = Ctx(dfg=dfg, mesh=mesh, roles=core_roles(), chiplet=CHIPLET_ID, hw=hw)
 
-    build(ctx, p, data, hs, stages=stages)
+    if decomp == "tokens":
+        token_parallel(ctx, p, data, hs, verify=verify)
+    else:
+        build(ctx, p, data, hs, stages=stages, verify=verify, shard=shard)
 
     if args.data_h:
         st.emit(args.data_h, args.output_dir)
     extra = [os.path.basename(str(args.data_h))] if args.data_h else None
-    name = STAGE_NAMES[stages]
+    name = "token-parallel" if decomp == "tokens" else STAGE_NAMES[stages]
     dfg.bingo_compile_dfg(
-        app_name=(f"LLM ladder rung {stages}/{MAX_STAGE} ({name}) "
+        app_name=(f"LLM layer ({name}) "
                   f"T={p['tokens']} d={p['d_model']} h={p['d_hidden']}"),
         output_dir=args.output_dir,
         output_file_name=args.output_offload_file_name,
