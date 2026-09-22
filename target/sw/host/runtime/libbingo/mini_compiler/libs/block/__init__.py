@@ -11,7 +11,13 @@ so declaring it as a port would promise something the port model cannot honour.
 """
 
 from .flash_attention import FaCfg, FlashAttention
+from .linear import Linear, LinearCfg
 from .gather import fa_gather
 from .moe import MoeCfg, MoeFFN
+from .reshape import Reshape, ReshapeCfg
+from .simd_ops import Quantize, Residual, RMSNorm, RoPE, RowCfg
 
-__all__ = ["FaCfg", "FlashAttention", "fa_gather", "MoeCfg", "MoeFFN"]
+__all__ = ["FaCfg", "FlashAttention", "fa_gather", "Linear", "LinearCfg",
+           "MoeCfg", "MoeFFN", "Quantize", "RMSNorm", "Reshape", "ReshapeCfg",
+           "Residual", "RoPE",
+           "RowCfg"]

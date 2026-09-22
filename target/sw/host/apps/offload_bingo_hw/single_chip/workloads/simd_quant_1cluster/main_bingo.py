@@ -16,11 +16,7 @@
 #
 # Per config, in this dispatch order (gather_simd_luts.py's OP_SPEC depends on it):
 #
-#   1 stream_map          out = 2*x                       StreamMap alone
-#   2 stream_reduce       out = rowmax(x), splatted       StreamReduce alone
-#   3 stream_elementwise  out = ea * eb                   EW1 alone
-#   4 stream_map_reduce   out = rowmax(2*x), splatted     Map -||> Reduce, one task
-#   5 fp16_to_int8        out = sat127(rne(q))            the quantiser alone
+#   1 fp16_to_int8        out = sat127(rne(q))            the quantiser alone
 #
 # Between them these cover every stage of the chain except EW0, the PRE-map elementwise,
 # which by construction cannot be armed on its own: its whole purpose is to combine
@@ -63,10 +59,6 @@ from bingo_mem_handle import BingoMemAlloc                     # noqa: E402
 from bingo_data_staging import DataStaging                     # noqa: E402
 from bingo_kernel_args import (                           # noqa: E402
     SnaxBingoKernelIdma1dCopyArgs,
-    SnaxBingoKernelSimdStreamMapArgs,
-    SnaxBingoKernelSimdStreamReduceArgs,
-    SnaxBingoKernelSimdStreamElementwiseArgs,
-    SnaxBingoKernelSimdStreamMapReduceArgs,
     SnaxBingoKernelSimdFp16ToInt8Args,
     HostBingoKernelIdmaArgs,
     HostBingoKernelCheckResultArgs,
@@ -108,30 +100,11 @@ def _ref(rows, cols, i):
     x2[:, 1] = np.float16(-300.0)    # -> -128 pre-clip, saturated to -127
     x = x2.reshape(-1)
 
-    # ea/eb: a product that is exactly representable -- both operands are integers
-    # small enough that ea*eb is an integer below 2048, where fp16 is exact.
-    ea = rng.randint(-40, 41, size=n).astype(np.float16)
-    eb = rng.randint(-40, 41, size=n).astype(np.float16)
-
-    xf = x.astype(np.float32).reshape(rows, cols)
-
-    # 1 map: LINEAR a=2, b=0
-    g_map = (np.float32(2.0) * xf).astype(np.float16).reshape(-1)
-    # 2 reduce: per-row MAX, emitted as one splatted 64-B beat per row
-    g_red = np.repeat(xf.max(axis=1).astype(np.float16), BEAT_F16)
-    # 3 elementwise: MUL
-    g_ew = (ea.astype(np.float32) * eb.astype(np.float32)).astype(np.float16)
-    # 4 map |> reduce: MAX over the mapped row. a=2 > 0 is monotonic, so this is
-    #   exactly 2*rowmax and shares the reduce's order-independence.
-    g_mr = np.repeat((np.float32(2.0) * xf).astype(np.float16).max(axis=1), BEAT_F16)
-    # 5 quantise: the HW PE's model -- fp32 product, clamp to +/-128, RNE, symmetric
-    #   saturate. With inv_scale = 1 and integer inputs the round is a no-op, so this
-    #   check is byte-exact rather than tolerant.
     prod = np.clip(x.astype(np.float32) * np.float32(1.0),
                    np.float32(-128.0), np.float32(128.0))
     g_i8 = np.clip(np.rint(prod.astype(np.float64)), -127, 127).astype(np.int8)
 
-    return x, ea, eb, g_map, g_red, g_ew, g_mr, g_i8
+    return x, g_i8
 
 
 def build_mempool(st):
@@ -144,15 +117,9 @@ def build_mempool(st):
     """
     meta = []
     for i, c in enumerate(CONFIGS):
-        x, ea, eb, g_map, g_red, g_ew, g_mr, g_i8 = _ref(c["rows"], c["cols"], i)
+        x, g_i8 = _ref(c["rows"], c["cols"], i)
         meta.append({
             "x":     st.put(f"prims_x_{i}", "uint16_t", x.view(np.uint16)),
-            "ea":    st.put(f"prims_ea_{i}", "uint16_t", ea.view(np.uint16)),
-            "eb":    st.put(f"prims_eb_{i}", "uint16_t", eb.view(np.uint16)),
-            "g_map": st.put(f"prims_g_map_{i}", "uint16_t", g_map.view(np.uint16)),
-            "g_red": st.put(f"prims_g_red_{i}", "uint16_t", g_red.view(np.uint16)),
-            "g_ew":  st.put(f"prims_g_ew_{i}", "uint16_t", g_ew.view(np.uint16)),
-            "g_mr":  st.put(f"prims_g_mr_{i}", "uint16_t", g_mr.view(np.uint16)),
             "g_i8":  st.put(f"prims_g_i8_{i}", "int8_t", g_i8.astype(np.int8)),
         })
     return meta
@@ -204,46 +171,12 @@ def build_config(g, i, meta, buf, prev):
                           num_elements=num_el, tolerance=tol), st)
 
     ld_x = load("x", m["x"], buf["x"], nb, prev)
-    ld_a = load("ea", m["ea"], buf["ea"], nb, ld_x)
-    ld_b = load("eb", m["eb"], buf["eb"], nb, ld_a)
-
-    # 1 -- StreamMap alone: out = LINEAR(2*x + 0)
-    k1 = g.node(f"Map_{i}", SIMD_CORE, "__snax_bingo_kernel_simd_stream_map",
-                SnaxBingoKernelSimdStreamMapArgs(
-                    buf["x"], buf["o16"], beats=beats, func=FUNC_LINEAR,
-                    a_f32bits=F32_TWO, b_f32bits=0, rows=rows), ld_b)
-    c1 = check("map", k1, buf["o16"], buf["l3_16"], nb, m["g_map"], n, CHECK_FP16_TOL, 0.0)
-
-    # 2 -- StreamReduce alone: one splatted MAX beat per row
-    k2 = g.node(f"Reduce_{i}", SIMD_CORE, "__snax_bingo_kernel_simd_stream_reduce",
-                SnaxBingoKernelSimdStreamReduceArgs(
-                    buf["x"], buf["os"], beats=beats, op=RED_MAX, rows=rows), c1)
-    c2 = check("reduce", k2, buf["os"], buf["l3_s"], sb, m["g_red"],
-               rows * BEAT_F16, CHECK_FP16_TOL, 0.0)
-
-    # 3 -- StreamElementwise (EW1) alone: out = ea * eb. Passing src_b_addr lets the two
-    #      operands be separate allocations; the kernel derives the interleave stride.
-    k3 = g.node(f"Elemwise_{i}", SIMD_CORE, "__snax_bingo_kernel_simd_stream_elementwise",
-                SnaxBingoKernelSimdStreamElementwiseArgs(
-                    buf["ea"], buf["o16"], beats=beats, op=EW_MUL, operand_count=2,
-                    rows=rows, src_b_addr=buf["eb"]), c2)
-    c3 = check("elemwise", k3, buf["o16"], buf["l3_16"], nb, m["g_ew"], n,
-               CHECK_FP16_TOL, 0.0)
-
-    # 4 -- Map -||> Reduce in ONE task, tap off: only the per-row scalars come out.
-    k4 = g.node(f"MapReduce_{i}", SIMD_CORE, "__snax_bingo_kernel_simd_stream_map_reduce",
-                SnaxBingoKernelSimdStreamMapReduceArgs(
-                    buf["x"], buf["os"], beats=beats, func=FUNC_LINEAR,
-                    reduce_op=RED_MAX, a_f32bits=F32_TWO, b_f32bits=0,
-                    tap=False, rows=rows), c3)
-    c4 = check("mapreduce", k4, buf["os"], buf["l3_s"], sb, m["g_mr"],
-               rows * BEAT_F16, CHECK_FP16_TOL, 0.0)
 
     # 5 -- the quantiser alone, inv_scale = 1.0 (see the EXACTNESS note: byte-exact).
     k5 = g.node(f"Quant_{i}", SIMD_CORE, "__snax_bingo_kernel_simd_fp16_to_int8",
                 SnaxBingoKernelSimdFp16ToInt8Args(
                     buf["x"], buf["o8"], beats=beats, rows=rows,
-                    inv_scale_f32bits=F32_ONE), c4)
+                    inv_scale_f32bits=F32_ONE), ld_x)
     c5 = check("quant", k5, buf["o8"], buf["l3_8"], n, m["g_i8"], n,
                CHECK_BYTE_EXACT, 0.0)
     return c5

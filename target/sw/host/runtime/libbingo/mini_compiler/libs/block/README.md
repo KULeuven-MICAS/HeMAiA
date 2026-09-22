@@ -7,6 +7,33 @@ Each is a sub-DFG with a declared interface, built once, in pipeline order.
 | `flash_attention.py` | `FlashAttention` over one or more clusters, and `FaCfg`, which holds every parameter it has. |
 | `gather.py` | `fa_gather`, the in-fabric fold of attention's per-cluster partials. A function, not a block. |
 | `moe.py` | `MoeFFN` — a mixture-of-experts feed-forward layer with CERF-skipped losers — and `MoeCfg`. |
+| `linear.py` | `Linear` — one INT8 GEMM with its operand loads. Every weight matrix in a layer is this block with different shapes. |
+| `simd_ops.py` | `RMSNorm`, `RoPE`, `Quantize`, `Residual` — the per-row and per-element operators a layer is glued together with. |
+| `reshape.py` | `Reshape` — an explicit layout change as a stage, for the gap between two blocks that both live in L1. |
+
+`workloads/llm_layer_4cluster` assembles them into one transformer layer.
+
+## Which ops care about layout
+
+**Elementwise** — `Quantize`, `Residual` — touch each value independently, so any layout
+works: a permutation of the inputs is the same permutation of the output.
+
+**Per-row** — `RMSNorm`, `RoPE` — reduce or rotate *along* a row, so the row must be
+contiguous. In D-layout `(m, n, r, c)` a matrix row is **not** contiguous, so handing
+D-layout to `RMSNorm` normalises groups that are not rows. It does not fault and it does
+not go out of range; the answer is a well-formed tensor of wrong numbers. Their ports say
+`packed` and mean it.
+
+That forces the order a layer has to use, and it is hardware, not taste:
+
+```
+GEMM (D/f16) -> Reshape to packed (f16) -> RMSNorm -> Reshape to A (f16) -> Quantize -> GEMM
+```
+
+Both reshapes are **FP16** and the quantise comes **after**, because a conversion into or
+out of A-layout needs an 8-byte run contiguous on both sides — at int8 an A-layout
+`tileSize` run is 4 bytes and falls off the hardware path. Quantising first would make the
+reshape impossible; `comm/nest.py` refuses it by name.
 
 ## FlashAttention takes three ports, whatever the cluster count
 

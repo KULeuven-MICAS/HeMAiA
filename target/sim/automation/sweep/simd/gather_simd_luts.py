@@ -116,14 +116,10 @@ OP_SPEC = {
     "simd_swiglu_1cluster": [
         ("simd_swiglu",      "__snax_bingo_kernel_simd_swiglu_f16_f16",  0, "n"),
     ],
-    # The primitives: one armed chain each, element-count keyed. The op order here is
-    # the order simd_prims_1cluster dispatches them for every config.
-    "simd_prims_1cluster": [
-        ("simd_stream_map",         "__snax_bingo_kernel_simd_stream_map",         0, "n"),
-        ("simd_stream_reduce",      "__snax_bingo_kernel_simd_stream_reduce",      1, "n"),
-        ("simd_stream_elementwise", "__snax_bingo_kernel_simd_stream_elementwise", 2, "n"),
-        ("simd_stream_map_reduce",  "__snax_bingo_kernel_simd_stream_map_reduce",  3, "n"),
-        ("simd_fp16_to_int8",       "__snax_bingo_kernel_simd_fp16_to_int8",       4, "n"),
+    # The quantiser, element-count keyed. It is its own workload because every layer
+    # that narrows to int8 dispatches it, so its cost is wanted on its own terms.
+    "simd_quant_1cluster": [
+        ("simd_fp16_to_int8",       "__snax_bingo_kernel_simd_fp16_to_int8",       0, "n"),
     ],
 }
 

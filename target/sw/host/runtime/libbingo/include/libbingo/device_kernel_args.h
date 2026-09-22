@@ -886,8 +886,14 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_d_to_row_major_args {
   uint32_t dst_addr_lo;
   uint32_t M_T;           // VersaCore M-tile count
   uint32_t N_T;           // VersaCore N-tile count
-  // NOTE: meshRow/meshCol/elem_bytes are NOT fields. They are part of the KERNEL:
-  // __snax_bingo_kernel_xdma_d_to_row_major_e<elem_bytes>_<mesh> binds them as constants.
+  // THE ARRAY SHAPE IS AN ARGUMENT, not part of the kernel's identity. One kernel
+  // serves every (meshRow, meshCol, elem_bytes) the DSE picks; the impl's path
+  // selection already reads them, so nothing about the transfer changes. Binding
+  // them per kernel meant a new array shape needed a new device symbol, and a
+  // shape nobody had pre-declared -- (16, 4, 16) wants M16K4 -- simply had none.
+  uint32_t meshRow;
+  uint32_t meshCol;
+  uint32_t elem_bytes;
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_xdma_d_to_row_major_args_t;
 
@@ -898,8 +904,14 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_row_major_to_a_args {
   uint32_t dst_addr_lo;
   uint32_t M_T;
   uint32_t K_T;
-  // NOTE: meshRow/tileSize/elem_bytes are NOT fields. They are part of the KERNEL:
-  // __snax_bingo_kernel_xdma_row_major_to_a_e<elem_bytes>_<mesh> binds them as constants.
+  // THE ARRAY SHAPE IS AN ARGUMENT, not part of the kernel's identity. One kernel
+  // serves every (meshRow, tileSize, elem_bytes) the DSE picks; the impl's path
+  // selection already reads them, so nothing about the transfer changes. Binding
+  // them per kernel meant a new array shape needed a new device symbol, and a
+  // shape nobody had pre-declared -- (16, 4, 16) wants M16K4 -- simply had none.
+  uint32_t meshRow;
+  uint32_t tileSize;
+  uint32_t elem_bytes;
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_xdma_row_major_to_a_args_t;
 
@@ -910,8 +922,14 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_row_major_to_b_args {
   uint32_t dst_addr_lo;
   uint32_t K_T;
   uint32_t N_T;
-  // NOTE: tileSize/meshCol/elem_bytes are NOT fields. They are part of the KERNEL:
-  // __snax_bingo_kernel_xdma_row_major_to_b_e<elem_bytes>_<mesh> binds them as constants.
+  // THE ARRAY SHAPE IS AN ARGUMENT, not part of the kernel's identity. One kernel
+  // serves every (tileSize, meshCol, elem_bytes) the DSE picks; the impl's path
+  // selection already reads them, so nothing about the transfer changes. Binding
+  // them per kernel meant a new array shape needed a new device symbol, and a
+  // shape nobody had pre-declared -- (16, 4, 16) wants M16K4 -- simply had none.
+  uint32_t tileSize;
+  uint32_t meshCol;
+  uint32_t elem_bytes;
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_xdma_row_major_to_b_args_t;
 
@@ -922,8 +940,14 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_a_to_row_major_args {
   uint32_t dst_addr_lo;
   uint32_t M_T;
   uint32_t K_T;
-  // NOTE: meshRow/tileSize/elem_bytes are NOT fields. They are part of the KERNEL:
-  // __snax_bingo_kernel_xdma_a_to_row_major_e<elem_bytes>_<mesh> binds them as constants.
+  // THE ARRAY SHAPE IS AN ARGUMENT, not part of the kernel's identity. One kernel
+  // serves every (meshRow, tileSize, elem_bytes) the DSE picks; the impl's path
+  // selection already reads them, so nothing about the transfer changes. Binding
+  // them per kernel meant a new array shape needed a new device symbol, and a
+  // shape nobody had pre-declared -- (16, 4, 16) wants M16K4 -- simply had none.
+  uint32_t meshRow;
+  uint32_t tileSize;
+  uint32_t elem_bytes;
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_xdma_a_to_row_major_args_t;
 
@@ -934,8 +958,14 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_b_to_row_major_args {
   uint32_t dst_addr_lo;
   uint32_t K_T;
   uint32_t N_T;
-  // NOTE: tileSize/meshCol/elem_bytes are NOT fields. They are part of the KERNEL:
-  // __snax_bingo_kernel_xdma_b_to_row_major_e<elem_bytes>_<mesh> binds them as constants.
+  // THE ARRAY SHAPE IS AN ARGUMENT, not part of the kernel's identity. One kernel
+  // serves every (tileSize, meshCol, elem_bytes) the DSE picks; the impl's path
+  // selection already reads them, so nothing about the transfer changes. Binding
+  // them per kernel meant a new array shape needed a new device symbol, and a
+  // shape nobody had pre-declared -- (16, 4, 16) wants M16K4 -- simply had none.
+  uint32_t tileSize;
+  uint32_t meshCol;
+  uint32_t elem_bytes;
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_xdma_b_to_row_major_args_t;
 
@@ -946,8 +976,14 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_row_major_to_d_args {
   uint32_t dst_addr_lo;
   uint32_t M_T;
   uint32_t N_T;
-  // NOTE: meshRow/meshCol/elem_bytes are NOT fields. They are part of the KERNEL:
-  // __snax_bingo_kernel_xdma_row_major_to_d_e<elem_bytes>_<mesh> binds them as constants.
+  // THE ARRAY SHAPE IS AN ARGUMENT, not part of the kernel's identity. One kernel
+  // serves every (meshRow, meshCol, elem_bytes) the DSE picks; the impl's path
+  // selection already reads them, so nothing about the transfer changes. Binding
+  // them per kernel meant a new array shape needed a new device symbol, and a
+  // shape nobody had pre-declared -- (16, 4, 16) wants M16K4 -- simply had none.
+  uint32_t meshRow;
+  uint32_t meshCol;
+  uint32_t elem_bytes;
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_xdma_row_major_to_d_args_t;
 

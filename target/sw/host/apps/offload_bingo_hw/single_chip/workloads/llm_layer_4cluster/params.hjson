@@ -1,0 +1,22 @@
+// One toy transformer layer, assembled from libs/block. Shapes are in ELEMENTS; the
+// mesh-tile counts every descriptor wants are derived, so this file states the LAYER and
+// never the tiling. Every width has to divide the array exactly -- main_bingo.py checks,
+// because a partial tile is not an error the array reports.
+{
+    num_clusters: 4
+    // snax_split_cluster has exactly ONE array shape, (16, 4, 16). Index 1 selects
+    // (1, 16, 32) out of a different cluster cfg, and every descriptor would be built
+    // for an array that is not there.
+    array_shape: 0
+
+    // Deliberately small. This layer narrows to fp16 four times and to int8 three times;
+    // two int8 GEMMs back to back over d reach ~1e6 with full-range operands, past fp16's
+    // 65504, where the golden and the device would agree only on inf.
+    tokens: 32        // T -- one query tile: Br is pinned to 32 by the SIMD beat
+    d_model: 128      // one head, so Q/K/V are square and d_head == d_model
+    d_hidden: 128     // the FFN's inner width
+
+    // The MoE half. 4 experts on 4 clusters, top-2, so two lanes are skipped by CERF.
+    num_experts: 4
+    top_k: 2
+}

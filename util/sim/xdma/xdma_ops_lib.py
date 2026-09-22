@@ -430,27 +430,39 @@ def _layout_dtype(elem_bytes):
 
 
 def _layout_cls(family, mesh, elem_bytes):
-    """Resolve the concrete layout-conversion args class for (mesh, elem_bytes).
+    """The layout-conversion args class for `family`.
 
-    There is one class per RUNNABLE kernel = (array shape, elem width): the mesh and the
-    width are baked into the class (MESH_1/MESH_2/ELEM_BYTES) and select the C symbol it
-    dispatches to (KERNEL_NAME), exactly as the GEMM classes bake ARRAY_SHAPE_IDX. The
-    caller therefore does not pass meshRow/tileSize/elem_bytes as kernel args; it picks
-    the class that already carries them, which is what makes "the operands were blocked
-    for this mesh" structural rather than a value the caller could get wrong.
+    There is ONE class, and one device symbol, per family: the mesh dims and the element
+    width are ARGUMENTS of the kernel, so any tiling the DSE picks is callable. `mesh` and
+    `elem_bytes` are still taken here because the caller has them and _layout_kwargs()
+    needs them, and because a family that did not exist should still fail loudly.
 
-    *mesh* is the (MESH_1, MESH_2) pair the family is indexed by:
+    *mesh* is the (dim_1, dim_2) pair the family is indexed by:
       A (row_to_a / a_to_row): (meshRow, tileSize)
       B (row_to_b / b_to_row): (tileSize, meshCol)
       D (row_to_d / d_to_row): (meshRow, meshCol)
     """
-    base = getattr(_bka, f"_SnaxBingoKernelXdma{family}Base")
-    for cls in base.__subclasses__():
-        if (cls.MESH_1, cls.MESH_2, cls.ELEM_BYTES) == (mesh[0], mesh[1], elem_bytes):
-            return cls
-    have = sorted((c.MESH_1, c.MESH_2, c.ELEM_BYTES) for c in base.__subclasses__())
-    raise ValueError(f"no {family} kernel for mesh={mesh} elem_bytes={elem_bytes}; "
-                     f"generated (mesh_1, mesh_2, elem_bytes): {have}")
+    fam = {
+        "RowMajorToA": "xdma_row_major_to_a", "AToRowMajor": "xdma_a_to_row_major",
+        "RowMajorToB": "xdma_row_major_to_b", "BToRowMajor": "xdma_b_to_row_major",
+        "RowMajorToD": "xdma_row_major_to_d", "DToRowMajor": "xdma_d_to_row_major",
+    }.get(family)
+    if fam is None:
+        raise ValueError(f"unknown layout family {family!r}")
+    if elem_bytes not in (1, 2, 4):
+        raise ValueError(f"layout conversion elem_bytes={elem_bytes} unsupported")
+    return _bka.xdma_conv_args(fam)
+
+
+def _layout_mesh_kwargs(family, mesh, elem_bytes):
+    """The mesh/width keywords that family's args class expects, by its own names."""
+    d1, d2 = mesh
+    names = {
+        "RowMajorToA": ("meshRow", "tileSize"), "AToRowMajor": ("meshRow", "tileSize"),
+        "RowMajorToB": ("tileSize", "meshCol"), "BToRowMajor": ("tileSize", "meshCol"),
+        "RowMajorToD": ("meshRow", "meshCol"),  "DToRowMajor": ("meshRow", "meshCol"),
+    }[family]
+    return {names[0]: d1, names[1]: d2, "elem_bytes": elem_bytes}
 
 
 # tag -> (l1s, l1d) shared BingoMemAlloc handles, sized at the max over all configs.
@@ -488,9 +500,11 @@ def make_layout_handlers():
             #    overwrites the buffer. Only one config's data is ever live.
             l1s, l1d = _SHARED_L1[_tag]
             load = b.idma_load(f"Load_{i}", b.sym(f"in_{i}"), l1s, n_src, prev)
-            # The class names the C kernel: one runnable symbol per (shape, elem width).
+            # One symbol per family; the mesh and width ride in with the args.
             op = b.op(f"Op_{i}", cls.KERNEL_NAME,
-                      cls(src_addr=l1s, dst_addr=l1d, **kwargs), load)
+                      cls(src_addr=l1s, dst_addr=l1d, **kwargs,
+                          **_layout_mesh_kwargs(_fam, mesh, c["elem_bytes"])),
+                      load)
             return b.store_check(f"{_tag}_cfg{i}", l1d, op, f"golden_{i}", n_dst)
 
         h.gen_data = gen_data
@@ -661,12 +675,23 @@ def run_op_workload(op, configs):
     if args.configs_out is not None:
         payload = {"op": handler.name, "configs": [dict(c) for c in configs]}
         if getattr(handler, "is_layout", False):
-            # sizes(b, c) ignores b; [3] is the family's (MESH_1, MESH_2) pair.
-            payload["op_ids"] = [
-                _layout_cls(handler.family, handler.sizes(None, c)[3], c["elem_bytes"])
-                .KERNEL_NAME[len("__snax_bingo_kernel_"):]
-                for c in configs
-            ]
+            # THE LUT KEY STILL CARRIES THE SHAPE, even though the device symbol no
+            # longer does. One kernel now serves every (mesh, elem_bytes), so keying the
+            # cost model by symbol name would collapse nine measurements -- e1 at M32K2
+            # and e4 at M16K8 among them -- into one bucket and average transfers that
+            # differ by 4x in bytes moved. The key is synthesised here to the same
+            # <family>_e<width>_<mesh token> it has always been.
+            # sizes(b, c) ignores b; [3] is the family's (dim_1, dim_2) pair.
+            def _lut_key(c):
+                d1, d2 = handler.sizes(None, c)[3]
+                tok = {"RowMajorToA": f"M{d1}K{d2}", "AToRowMajor": f"M{d1}K{d2}",
+                       "RowMajorToB": f"K{d1}N{d2}", "BToRowMajor": f"K{d1}N{d2}",
+                       "RowMajorToD": f"M{d1}N{d2}", "DToRowMajor": f"M{d1}N{d2}"}[
+                           handler.family]
+                sym = _layout_cls(handler.family, (d1, d2), c["elem_bytes"]).KERNEL_NAME
+                return f"{sym[len('__snax_bingo_kernel_'):]}_e{c['elem_bytes']}_{tok}"
+
+            payload["op_ids"] = [_lut_key(c) for c in configs]
             payload["meshes"] = {
                 str(c.get("array_shape", ctx["array_shape"])): list(_mesh(ctx, c))
                 for c in configs

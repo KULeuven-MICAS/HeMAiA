@@ -19,28 +19,33 @@ from bingo_mem_handle import BingoMemAlloc
 from kernel_base import BingoKernelArgs
 
 
-class _SnaxBingoKernelXdmaDToRowMajorBase(BingoKernelArgs):
+class SnaxBingoKernelXdmaDToRowMajorArgs(BingoKernelArgs):
     """D-layout -> row-major. D[m,n,r,c] -> R[m*meshRow+r, n*meshCol+c].
 
-    Subclasses bind MESH_1 / MESH_2 (the two mesh dims their block spans) and ELEM_BYTES."""
-    KERNEL_NAME: str = None
-    MESH_1: int = None
-    MESH_2: int = None
-    ELEM_BYTES: int = None
+    ONE CLASS, ANY ARRAY. `meshRow`, `meshCol` and `elem_bytes` are ARGUMENTS, not part of the
+    kernel's identity: the device impl already selects its AGU path from them at run time,
+    and binding them per kernel meant a tiling nobody had pre-declared had no symbol to
+    call -- a (16, 4, 16) array wants M16K4, and no wrapper ever defined one.
+    """
+
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_d_to_row_major"
 
     def __init__(self, src_addr: Union[BingoMemAlloc, int],
                  dst_addr: Union[BingoMemAlloc, int],
-                 M_T: int, N_T: int):
-        if type(self).KERNEL_NAME is None:
-            raise TypeError(f"{type(self).__name__} binds no mesh; instantiate a per-(shape, "
-                            f"elem_bytes) subclass, not the base")
+                 M_T: int, N_T: int, meshRow: int, meshCol: int, elem_bytes: int):
+        if elem_bytes not in (1, 2, 4):
+            raise ValueError(f"elem_bytes={elem_bytes} must be 1, 2 or 4.")
+        for nm, v in (("meshRow", meshRow), ("meshCol", meshCol), ("M_T", M_T), ("N_T", N_T)):
+            if v <= 0:
+                raise ValueError(f"XdmaDToRowMajor: {nm}={v} must be positive.")
         self.src_addr = src_addr
         self.dst_addr = dst_addr
         self.M_T = M_T
         self.N_T = N_T
-        # exposed for cost/debug tooling; NOT emitted -- they are part of the kernel, not the args
-        self.mesh = (type(self).MESH_1, type(self).MESH_2)
-        self.elem_bytes = type(self).ELEM_BYTES
+        self.meshRow = meshRow
+        self.meshCol = meshCol
+        self.elem_bytes = elem_bytes
+        self.mesh = (meshRow, meshCol)
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_xdma_d_to_row_major_args_t"
@@ -51,103 +56,39 @@ class _SnaxBingoKernelXdmaDToRowMajorBase(BingoKernelArgs):
         self._process_addr(self.dst_addr, "dst_addr", a, handle_name_map)
         a["M_T"] = str(self.M_T)
         a["N_T"] = str(self.N_T)
+        a["meshRow"] = str(self.meshRow)
+        a["meshCol"] = str(self.meshCol)
+        a["elem_bytes"] = str(self.elem_bytes)
         return a
 
 
-# meshRow=32, meshCol=32, elem_bytes=1
-class SnaxBingoKernelXdmaDToRowMajorE1M32N32Args(_SnaxBingoKernelXdmaDToRowMajorBase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_d_to_row_major_e1_M32N32"
-    MESH_1 = 32
-    MESH_2 = 32
-    ELEM_BYTES = 1
-
-
-# meshRow=32, meshCol=32, elem_bytes=2
-class SnaxBingoKernelXdmaDToRowMajorE2M32N32Args(_SnaxBingoKernelXdmaDToRowMajorBase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_d_to_row_major_e2_M32N32"
-    MESH_1 = 32
-    MESH_2 = 32
-    ELEM_BYTES = 2
-
-
-# meshRow=32, meshCol=32, elem_bytes=4
-class SnaxBingoKernelXdmaDToRowMajorE4M32N32Args(_SnaxBingoKernelXdmaDToRowMajorBase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_d_to_row_major_e4_M32N32"
-    MESH_1 = 32
-    MESH_2 = 32
-    ELEM_BYTES = 4
-
-
-# meshRow=1, meshCol=32, elem_bytes=1
-class SnaxBingoKernelXdmaDToRowMajorE1M1N32Args(_SnaxBingoKernelXdmaDToRowMajorBase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_d_to_row_major_e1_M1N32"
-    MESH_1 = 1
-    MESH_2 = 32
-    ELEM_BYTES = 1
-
-
-# meshRow=1, meshCol=32, elem_bytes=2
-class SnaxBingoKernelXdmaDToRowMajorE2M1N32Args(_SnaxBingoKernelXdmaDToRowMajorBase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_d_to_row_major_e2_M1N32"
-    MESH_1 = 1
-    MESH_2 = 32
-    ELEM_BYTES = 2
-
-
-# meshRow=1, meshCol=32, elem_bytes=4
-class SnaxBingoKernelXdmaDToRowMajorE4M1N32Args(_SnaxBingoKernelXdmaDToRowMajorBase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_d_to_row_major_e4_M1N32"
-    MESH_1 = 1
-    MESH_2 = 32
-    ELEM_BYTES = 4
-
-
-# meshRow=16, meshCol=16, elem_bytes=1
-class SnaxBingoKernelXdmaDToRowMajorE1M16N16Args(_SnaxBingoKernelXdmaDToRowMajorBase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_d_to_row_major_e1_M16N16"
-    MESH_1 = 16
-    MESH_2 = 16
-    ELEM_BYTES = 1
-
-
-# meshRow=16, meshCol=16, elem_bytes=2
-class SnaxBingoKernelXdmaDToRowMajorE2M16N16Args(_SnaxBingoKernelXdmaDToRowMajorBase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_d_to_row_major_e2_M16N16"
-    MESH_1 = 16
-    MESH_2 = 16
-    ELEM_BYTES = 2
-
-
-# meshRow=16, meshCol=16, elem_bytes=4
-class SnaxBingoKernelXdmaDToRowMajorE4M16N16Args(_SnaxBingoKernelXdmaDToRowMajorBase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_d_to_row_major_e4_M16N16"
-    MESH_1 = 16
-    MESH_2 = 16
-    ELEM_BYTES = 4
-
-
-class _SnaxBingoKernelXdmaRowMajorToABase(BingoKernelArgs):
+class SnaxBingoKernelXdmaRowMajorToAArgs(BingoKernelArgs):
     """row-major -> A-layout. R[i,j] -> A[i/meshRow, j/tileSize, i%meshRow, j%tileSize].
 
-    Subclasses bind MESH_1 / MESH_2 (the two mesh dims their block spans) and ELEM_BYTES."""
-    KERNEL_NAME: str = None
-    MESH_1: int = None
-    MESH_2: int = None
-    ELEM_BYTES: int = None
+    ONE CLASS, ANY ARRAY. `meshRow`, `tileSize` and `elem_bytes` are ARGUMENTS, not part of the
+    kernel's identity: the device impl already selects its AGU path from them at run time,
+    and binding them per kernel meant a tiling nobody had pre-declared had no symbol to
+    call -- a (16, 4, 16) array wants M16K4, and no wrapper ever defined one.
+    """
+
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_a"
 
     def __init__(self, src_addr: Union[BingoMemAlloc, int],
                  dst_addr: Union[BingoMemAlloc, int],
-                 M_T: int, K_T: int):
-        if type(self).KERNEL_NAME is None:
-            raise TypeError(f"{type(self).__name__} binds no mesh; instantiate a per-(shape, "
-                            f"elem_bytes) subclass, not the base")
+                 M_T: int, K_T: int, meshRow: int, tileSize: int, elem_bytes: int):
+        if elem_bytes not in (1, 2, 4):
+            raise ValueError(f"elem_bytes={elem_bytes} must be 1, 2 or 4.")
+        for nm, v in (("meshRow", meshRow), ("tileSize", tileSize), ("M_T", M_T), ("K_T", K_T)):
+            if v <= 0:
+                raise ValueError(f"XdmaRowMajorToA: {nm}={v} must be positive.")
         self.src_addr = src_addr
         self.dst_addr = dst_addr
         self.M_T = M_T
         self.K_T = K_T
-        # exposed for cost/debug tooling; NOT emitted -- they are part of the kernel, not the args
-        self.mesh = (type(self).MESH_1, type(self).MESH_2)
-        self.elem_bytes = type(self).ELEM_BYTES
+        self.meshRow = meshRow
+        self.tileSize = tileSize
+        self.elem_bytes = elem_bytes
+        self.mesh = (meshRow, tileSize)
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_xdma_row_major_to_a_args_t"
@@ -158,103 +99,39 @@ class _SnaxBingoKernelXdmaRowMajorToABase(BingoKernelArgs):
         self._process_addr(self.dst_addr, "dst_addr", a, handle_name_map)
         a["M_T"] = str(self.M_T)
         a["K_T"] = str(self.K_T)
+        a["meshRow"] = str(self.meshRow)
+        a["tileSize"] = str(self.tileSize)
+        a["elem_bytes"] = str(self.elem_bytes)
         return a
 
 
-# meshRow=32, tileSize=2, elem_bytes=1
-class SnaxBingoKernelXdmaRowMajorToAE1M32K2Args(_SnaxBingoKernelXdmaRowMajorToABase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_a_e1_M32K2"
-    MESH_1 = 32
-    MESH_2 = 2
-    ELEM_BYTES = 1
+class SnaxBingoKernelXdmaRowMajorToBArgs(BingoKernelArgs):
+    """row-major -> B-layout. Drives the HW TRANSPOSER: correct only at elem_bytes=1.
 
+    ONE CLASS, ANY ARRAY. `tileSize`, `meshCol` and `elem_bytes` are ARGUMENTS, not part of the
+    kernel's identity: the device impl already selects its AGU path from them at run time,
+    and binding them per kernel meant a tiling nobody had pre-declared had no symbol to
+    call -- a (16, 4, 16) array wants M16K4, and no wrapper ever defined one.
+    """
 
-# meshRow=32, tileSize=2, elem_bytes=2
-class SnaxBingoKernelXdmaRowMajorToAE2M32K2Args(_SnaxBingoKernelXdmaRowMajorToABase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_a_e2_M32K2"
-    MESH_1 = 32
-    MESH_2 = 2
-    ELEM_BYTES = 2
-
-
-# meshRow=32, tileSize=2, elem_bytes=4
-class SnaxBingoKernelXdmaRowMajorToAE4M32K2Args(_SnaxBingoKernelXdmaRowMajorToABase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_a_e4_M32K2"
-    MESH_1 = 32
-    MESH_2 = 2
-    ELEM_BYTES = 4
-
-
-# meshRow=1, tileSize=16, elem_bytes=1
-class SnaxBingoKernelXdmaRowMajorToAE1M1K16Args(_SnaxBingoKernelXdmaRowMajorToABase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_a_e1_M1K16"
-    MESH_1 = 1
-    MESH_2 = 16
-    ELEM_BYTES = 1
-
-
-# meshRow=1, tileSize=16, elem_bytes=2
-class SnaxBingoKernelXdmaRowMajorToAE2M1K16Args(_SnaxBingoKernelXdmaRowMajorToABase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_a_e2_M1K16"
-    MESH_1 = 1
-    MESH_2 = 16
-    ELEM_BYTES = 2
-
-
-# meshRow=1, tileSize=16, elem_bytes=4
-class SnaxBingoKernelXdmaRowMajorToAE4M1K16Args(_SnaxBingoKernelXdmaRowMajorToABase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_a_e4_M1K16"
-    MESH_1 = 1
-    MESH_2 = 16
-    ELEM_BYTES = 4
-
-
-# meshRow=16, tileSize=8, elem_bytes=1
-class SnaxBingoKernelXdmaRowMajorToAE1M16K8Args(_SnaxBingoKernelXdmaRowMajorToABase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_a_e1_M16K8"
-    MESH_1 = 16
-    MESH_2 = 8
-    ELEM_BYTES = 1
-
-
-# meshRow=16, tileSize=8, elem_bytes=2
-class SnaxBingoKernelXdmaRowMajorToAE2M16K8Args(_SnaxBingoKernelXdmaRowMajorToABase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_a_e2_M16K8"
-    MESH_1 = 16
-    MESH_2 = 8
-    ELEM_BYTES = 2
-
-
-# meshRow=16, tileSize=8, elem_bytes=4
-class SnaxBingoKernelXdmaRowMajorToAE4M16K8Args(_SnaxBingoKernelXdmaRowMajorToABase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_a_e4_M16K8"
-    MESH_1 = 16
-    MESH_2 = 8
-    ELEM_BYTES = 4
-
-
-class _SnaxBingoKernelXdmaRowMajorToBBase(BingoKernelArgs):
-    """row-major -> B-layout. R[i,j] -> B[j/meshCol, i/tileSize, j%meshCol, i%tileSize].
-
-    Subclasses bind MESH_1 / MESH_2 (the two mesh dims their block spans) and ELEM_BYTES."""
-    KERNEL_NAME: str = None
-    MESH_1: int = None
-    MESH_2: int = None
-    ELEM_BYTES: int = None
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_b"
 
     def __init__(self, src_addr: Union[BingoMemAlloc, int],
                  dst_addr: Union[BingoMemAlloc, int],
-                 K_T: int, N_T: int):
-        if type(self).KERNEL_NAME is None:
-            raise TypeError(f"{type(self).__name__} binds no mesh; instantiate a per-(shape, "
-                            f"elem_bytes) subclass, not the base")
+                 K_T: int, N_T: int, tileSize: int, meshCol: int, elem_bytes: int):
+        if elem_bytes not in (1, 2, 4):
+            raise ValueError(f"elem_bytes={elem_bytes} must be 1, 2 or 4.")
+        for nm, v in (("tileSize", tileSize), ("meshCol", meshCol), ("K_T", K_T), ("N_T", N_T)):
+            if v <= 0:
+                raise ValueError(f"XdmaRowMajorToB: {nm}={v} must be positive.")
         self.src_addr = src_addr
         self.dst_addr = dst_addr
         self.K_T = K_T
         self.N_T = N_T
-        # exposed for cost/debug tooling; NOT emitted -- they are part of the kernel, not the args
-        self.mesh = (type(self).MESH_1, type(self).MESH_2)
-        self.elem_bytes = type(self).ELEM_BYTES
+        self.tileSize = tileSize
+        self.meshCol = meshCol
+        self.elem_bytes = elem_bytes
+        self.mesh = (tileSize, meshCol)
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_xdma_row_major_to_b_args_t"
@@ -265,103 +142,39 @@ class _SnaxBingoKernelXdmaRowMajorToBBase(BingoKernelArgs):
         self._process_addr(self.dst_addr, "dst_addr", a, handle_name_map)
         a["K_T"] = str(self.K_T)
         a["N_T"] = str(self.N_T)
+        a["tileSize"] = str(self.tileSize)
+        a["meshCol"] = str(self.meshCol)
+        a["elem_bytes"] = str(self.elem_bytes)
         return a
 
 
-# tileSize=2, meshCol=32, elem_bytes=1
-class SnaxBingoKernelXdmaRowMajorToBE1K2N32Args(_SnaxBingoKernelXdmaRowMajorToBBase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_b_e1_K2N32"
-    MESH_1 = 2
-    MESH_2 = 32
-    ELEM_BYTES = 1
+class SnaxBingoKernelXdmaAToRowMajorArgs(BingoKernelArgs):
+    """A-layout -> row-major. The inverse of row_major_to_a.
 
+    ONE CLASS, ANY ARRAY. `meshRow`, `tileSize` and `elem_bytes` are ARGUMENTS, not part of the
+    kernel's identity: the device impl already selects its AGU path from them at run time,
+    and binding them per kernel meant a tiling nobody had pre-declared had no symbol to
+    call -- a (16, 4, 16) array wants M16K4, and no wrapper ever defined one.
+    """
 
-# tileSize=2, meshCol=32, elem_bytes=2
-class SnaxBingoKernelXdmaRowMajorToBE2K2N32Args(_SnaxBingoKernelXdmaRowMajorToBBase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_b_e2_K2N32"
-    MESH_1 = 2
-    MESH_2 = 32
-    ELEM_BYTES = 2
-
-
-# tileSize=2, meshCol=32, elem_bytes=4
-class SnaxBingoKernelXdmaRowMajorToBE4K2N32Args(_SnaxBingoKernelXdmaRowMajorToBBase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_b_e4_K2N32"
-    MESH_1 = 2
-    MESH_2 = 32
-    ELEM_BYTES = 4
-
-
-# tileSize=16, meshCol=32, elem_bytes=1
-class SnaxBingoKernelXdmaRowMajorToBE1K16N32Args(_SnaxBingoKernelXdmaRowMajorToBBase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_b_e1_K16N32"
-    MESH_1 = 16
-    MESH_2 = 32
-    ELEM_BYTES = 1
-
-
-# tileSize=16, meshCol=32, elem_bytes=2
-class SnaxBingoKernelXdmaRowMajorToBE2K16N32Args(_SnaxBingoKernelXdmaRowMajorToBBase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_b_e2_K16N32"
-    MESH_1 = 16
-    MESH_2 = 32
-    ELEM_BYTES = 2
-
-
-# tileSize=16, meshCol=32, elem_bytes=4
-class SnaxBingoKernelXdmaRowMajorToBE4K16N32Args(_SnaxBingoKernelXdmaRowMajorToBBase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_b_e4_K16N32"
-    MESH_1 = 16
-    MESH_2 = 32
-    ELEM_BYTES = 4
-
-
-# tileSize=8, meshCol=16, elem_bytes=1
-class SnaxBingoKernelXdmaRowMajorToBE1K8N16Args(_SnaxBingoKernelXdmaRowMajorToBBase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_b_e1_K8N16"
-    MESH_1 = 8
-    MESH_2 = 16
-    ELEM_BYTES = 1
-
-
-# tileSize=8, meshCol=16, elem_bytes=2
-class SnaxBingoKernelXdmaRowMajorToBE2K8N16Args(_SnaxBingoKernelXdmaRowMajorToBBase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_b_e2_K8N16"
-    MESH_1 = 8
-    MESH_2 = 16
-    ELEM_BYTES = 2
-
-
-# tileSize=8, meshCol=16, elem_bytes=4
-class SnaxBingoKernelXdmaRowMajorToBE4K8N16Args(_SnaxBingoKernelXdmaRowMajorToBBase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_b_e4_K8N16"
-    MESH_1 = 8
-    MESH_2 = 16
-    ELEM_BYTES = 4
-
-
-class _SnaxBingoKernelXdmaAToRowMajorBase(BingoKernelArgs):
-    """A-layout -> row-major (the inverse of row_major_to_a).
-
-    Subclasses bind MESH_1 / MESH_2 (the two mesh dims their block spans) and ELEM_BYTES."""
-    KERNEL_NAME: str = None
-    MESH_1: int = None
-    MESH_2: int = None
-    ELEM_BYTES: int = None
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_a_to_row_major"
 
     def __init__(self, src_addr: Union[BingoMemAlloc, int],
                  dst_addr: Union[BingoMemAlloc, int],
-                 M_T: int, K_T: int):
-        if type(self).KERNEL_NAME is None:
-            raise TypeError(f"{type(self).__name__} binds no mesh; instantiate a per-(shape, "
-                            f"elem_bytes) subclass, not the base")
+                 M_T: int, K_T: int, meshRow: int, tileSize: int, elem_bytes: int):
+        if elem_bytes not in (1, 2, 4):
+            raise ValueError(f"elem_bytes={elem_bytes} must be 1, 2 or 4.")
+        for nm, v in (("meshRow", meshRow), ("tileSize", tileSize), ("M_T", M_T), ("K_T", K_T)):
+            if v <= 0:
+                raise ValueError(f"XdmaAToRowMajor: {nm}={v} must be positive.")
         self.src_addr = src_addr
         self.dst_addr = dst_addr
         self.M_T = M_T
         self.K_T = K_T
-        # exposed for cost/debug tooling; NOT emitted -- they are part of the kernel, not the args
-        self.mesh = (type(self).MESH_1, type(self).MESH_2)
-        self.elem_bytes = type(self).ELEM_BYTES
+        self.meshRow = meshRow
+        self.tileSize = tileSize
+        self.elem_bytes = elem_bytes
+        self.mesh = (meshRow, tileSize)
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_xdma_a_to_row_major_args_t"
@@ -372,103 +185,39 @@ class _SnaxBingoKernelXdmaAToRowMajorBase(BingoKernelArgs):
         self._process_addr(self.dst_addr, "dst_addr", a, handle_name_map)
         a["M_T"] = str(self.M_T)
         a["K_T"] = str(self.K_T)
+        a["meshRow"] = str(self.meshRow)
+        a["tileSize"] = str(self.tileSize)
+        a["elem_bytes"] = str(self.elem_bytes)
         return a
 
 
-# meshRow=32, tileSize=2, elem_bytes=1
-class SnaxBingoKernelXdmaAToRowMajorE1M32K2Args(_SnaxBingoKernelXdmaAToRowMajorBase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_a_to_row_major_e1_M32K2"
-    MESH_1 = 32
-    MESH_2 = 2
-    ELEM_BYTES = 1
+class SnaxBingoKernelXdmaBToRowMajorArgs(BingoKernelArgs):
+    """B-layout -> row-major. Drives the HW TRANSPOSER: correct only at elem_bytes=1.
 
+    ONE CLASS, ANY ARRAY. `tileSize`, `meshCol` and `elem_bytes` are ARGUMENTS, not part of the
+    kernel's identity: the device impl already selects its AGU path from them at run time,
+    and binding them per kernel meant a tiling nobody had pre-declared had no symbol to
+    call -- a (16, 4, 16) array wants M16K4, and no wrapper ever defined one.
+    """
 
-# meshRow=32, tileSize=2, elem_bytes=2
-class SnaxBingoKernelXdmaAToRowMajorE2M32K2Args(_SnaxBingoKernelXdmaAToRowMajorBase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_a_to_row_major_e2_M32K2"
-    MESH_1 = 32
-    MESH_2 = 2
-    ELEM_BYTES = 2
-
-
-# meshRow=32, tileSize=2, elem_bytes=4
-class SnaxBingoKernelXdmaAToRowMajorE4M32K2Args(_SnaxBingoKernelXdmaAToRowMajorBase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_a_to_row_major_e4_M32K2"
-    MESH_1 = 32
-    MESH_2 = 2
-    ELEM_BYTES = 4
-
-
-# meshRow=1, tileSize=16, elem_bytes=1
-class SnaxBingoKernelXdmaAToRowMajorE1M1K16Args(_SnaxBingoKernelXdmaAToRowMajorBase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_a_to_row_major_e1_M1K16"
-    MESH_1 = 1
-    MESH_2 = 16
-    ELEM_BYTES = 1
-
-
-# meshRow=1, tileSize=16, elem_bytes=2
-class SnaxBingoKernelXdmaAToRowMajorE2M1K16Args(_SnaxBingoKernelXdmaAToRowMajorBase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_a_to_row_major_e2_M1K16"
-    MESH_1 = 1
-    MESH_2 = 16
-    ELEM_BYTES = 2
-
-
-# meshRow=1, tileSize=16, elem_bytes=4
-class SnaxBingoKernelXdmaAToRowMajorE4M1K16Args(_SnaxBingoKernelXdmaAToRowMajorBase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_a_to_row_major_e4_M1K16"
-    MESH_1 = 1
-    MESH_2 = 16
-    ELEM_BYTES = 4
-
-
-# meshRow=16, tileSize=8, elem_bytes=1
-class SnaxBingoKernelXdmaAToRowMajorE1M16K8Args(_SnaxBingoKernelXdmaAToRowMajorBase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_a_to_row_major_e1_M16K8"
-    MESH_1 = 16
-    MESH_2 = 8
-    ELEM_BYTES = 1
-
-
-# meshRow=16, tileSize=8, elem_bytes=2
-class SnaxBingoKernelXdmaAToRowMajorE2M16K8Args(_SnaxBingoKernelXdmaAToRowMajorBase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_a_to_row_major_e2_M16K8"
-    MESH_1 = 16
-    MESH_2 = 8
-    ELEM_BYTES = 2
-
-
-# meshRow=16, tileSize=8, elem_bytes=4
-class SnaxBingoKernelXdmaAToRowMajorE4M16K8Args(_SnaxBingoKernelXdmaAToRowMajorBase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_a_to_row_major_e4_M16K8"
-    MESH_1 = 16
-    MESH_2 = 8
-    ELEM_BYTES = 4
-
-
-class _SnaxBingoKernelXdmaBToRowMajorBase(BingoKernelArgs):
-    """B-layout -> row-major (the inverse of row_major_to_b).
-
-    Subclasses bind MESH_1 / MESH_2 (the two mesh dims their block spans) and ELEM_BYTES."""
-    KERNEL_NAME: str = None
-    MESH_1: int = None
-    MESH_2: int = None
-    ELEM_BYTES: int = None
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_b_to_row_major"
 
     def __init__(self, src_addr: Union[BingoMemAlloc, int],
                  dst_addr: Union[BingoMemAlloc, int],
-                 K_T: int, N_T: int):
-        if type(self).KERNEL_NAME is None:
-            raise TypeError(f"{type(self).__name__} binds no mesh; instantiate a per-(shape, "
-                            f"elem_bytes) subclass, not the base")
+                 K_T: int, N_T: int, tileSize: int, meshCol: int, elem_bytes: int):
+        if elem_bytes not in (1, 2, 4):
+            raise ValueError(f"elem_bytes={elem_bytes} must be 1, 2 or 4.")
+        for nm, v in (("tileSize", tileSize), ("meshCol", meshCol), ("K_T", K_T), ("N_T", N_T)):
+            if v <= 0:
+                raise ValueError(f"XdmaBToRowMajor: {nm}={v} must be positive.")
         self.src_addr = src_addr
         self.dst_addr = dst_addr
         self.K_T = K_T
         self.N_T = N_T
-        # exposed for cost/debug tooling; NOT emitted -- they are part of the kernel, not the args
-        self.mesh = (type(self).MESH_1, type(self).MESH_2)
-        self.elem_bytes = type(self).ELEM_BYTES
+        self.tileSize = tileSize
+        self.meshCol = meshCol
+        self.elem_bytes = elem_bytes
+        self.mesh = (tileSize, meshCol)
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_xdma_b_to_row_major_args_t"
@@ -479,103 +228,39 @@ class _SnaxBingoKernelXdmaBToRowMajorBase(BingoKernelArgs):
         self._process_addr(self.dst_addr, "dst_addr", a, handle_name_map)
         a["K_T"] = str(self.K_T)
         a["N_T"] = str(self.N_T)
+        a["tileSize"] = str(self.tileSize)
+        a["meshCol"] = str(self.meshCol)
+        a["elem_bytes"] = str(self.elem_bytes)
         return a
 
 
-# tileSize=2, meshCol=32, elem_bytes=1
-class SnaxBingoKernelXdmaBToRowMajorE1K2N32Args(_SnaxBingoKernelXdmaBToRowMajorBase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_b_to_row_major_e1_K2N32"
-    MESH_1 = 2
-    MESH_2 = 32
-    ELEM_BYTES = 1
+class SnaxBingoKernelXdmaRowMajorToDArgs(BingoKernelArgs):
+    """row-major -> D-layout. The inverse of d_to_row_major.
 
+    ONE CLASS, ANY ARRAY. `meshRow`, `meshCol` and `elem_bytes` are ARGUMENTS, not part of the
+    kernel's identity: the device impl already selects its AGU path from them at run time,
+    and binding them per kernel meant a tiling nobody had pre-declared had no symbol to
+    call -- a (16, 4, 16) array wants M16K4, and no wrapper ever defined one.
+    """
 
-# tileSize=2, meshCol=32, elem_bytes=2
-class SnaxBingoKernelXdmaBToRowMajorE2K2N32Args(_SnaxBingoKernelXdmaBToRowMajorBase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_b_to_row_major_e2_K2N32"
-    MESH_1 = 2
-    MESH_2 = 32
-    ELEM_BYTES = 2
-
-
-# tileSize=2, meshCol=32, elem_bytes=4
-class SnaxBingoKernelXdmaBToRowMajorE4K2N32Args(_SnaxBingoKernelXdmaBToRowMajorBase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_b_to_row_major_e4_K2N32"
-    MESH_1 = 2
-    MESH_2 = 32
-    ELEM_BYTES = 4
-
-
-# tileSize=16, meshCol=32, elem_bytes=1
-class SnaxBingoKernelXdmaBToRowMajorE1K16N32Args(_SnaxBingoKernelXdmaBToRowMajorBase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_b_to_row_major_e1_K16N32"
-    MESH_1 = 16
-    MESH_2 = 32
-    ELEM_BYTES = 1
-
-
-# tileSize=16, meshCol=32, elem_bytes=2
-class SnaxBingoKernelXdmaBToRowMajorE2K16N32Args(_SnaxBingoKernelXdmaBToRowMajorBase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_b_to_row_major_e2_K16N32"
-    MESH_1 = 16
-    MESH_2 = 32
-    ELEM_BYTES = 2
-
-
-# tileSize=16, meshCol=32, elem_bytes=4
-class SnaxBingoKernelXdmaBToRowMajorE4K16N32Args(_SnaxBingoKernelXdmaBToRowMajorBase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_b_to_row_major_e4_K16N32"
-    MESH_1 = 16
-    MESH_2 = 32
-    ELEM_BYTES = 4
-
-
-# tileSize=8, meshCol=16, elem_bytes=1
-class SnaxBingoKernelXdmaBToRowMajorE1K8N16Args(_SnaxBingoKernelXdmaBToRowMajorBase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_b_to_row_major_e1_K8N16"
-    MESH_1 = 8
-    MESH_2 = 16
-    ELEM_BYTES = 1
-
-
-# tileSize=8, meshCol=16, elem_bytes=2
-class SnaxBingoKernelXdmaBToRowMajorE2K8N16Args(_SnaxBingoKernelXdmaBToRowMajorBase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_b_to_row_major_e2_K8N16"
-    MESH_1 = 8
-    MESH_2 = 16
-    ELEM_BYTES = 2
-
-
-# tileSize=8, meshCol=16, elem_bytes=4
-class SnaxBingoKernelXdmaBToRowMajorE4K8N16Args(_SnaxBingoKernelXdmaBToRowMajorBase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_b_to_row_major_e4_K8N16"
-    MESH_1 = 8
-    MESH_2 = 16
-    ELEM_BYTES = 4
-
-
-class _SnaxBingoKernelXdmaRowMajorToDBase(BingoKernelArgs):
-    """row-major -> D-layout (the inverse of d_to_row_major).
-
-    Subclasses bind MESH_1 / MESH_2 (the two mesh dims their block spans) and ELEM_BYTES."""
-    KERNEL_NAME: str = None
-    MESH_1: int = None
-    MESH_2: int = None
-    ELEM_BYTES: int = None
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_d"
 
     def __init__(self, src_addr: Union[BingoMemAlloc, int],
                  dst_addr: Union[BingoMemAlloc, int],
-                 M_T: int, N_T: int):
-        if type(self).KERNEL_NAME is None:
-            raise TypeError(f"{type(self).__name__} binds no mesh; instantiate a per-(shape, "
-                            f"elem_bytes) subclass, not the base")
+                 M_T: int, N_T: int, meshRow: int, meshCol: int, elem_bytes: int):
+        if elem_bytes not in (1, 2, 4):
+            raise ValueError(f"elem_bytes={elem_bytes} must be 1, 2 or 4.")
+        for nm, v in (("meshRow", meshRow), ("meshCol", meshCol), ("M_T", M_T), ("N_T", N_T)):
+            if v <= 0:
+                raise ValueError(f"XdmaRowMajorToD: {nm}={v} must be positive.")
         self.src_addr = src_addr
         self.dst_addr = dst_addr
         self.M_T = M_T
         self.N_T = N_T
-        # exposed for cost/debug tooling; NOT emitted -- they are part of the kernel, not the args
-        self.mesh = (type(self).MESH_1, type(self).MESH_2)
-        self.elem_bytes = type(self).ELEM_BYTES
+        self.meshRow = meshRow
+        self.meshCol = meshCol
+        self.elem_bytes = elem_bytes
+        self.mesh = (meshRow, meshCol)
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_xdma_row_major_to_d_args_t"
@@ -586,98 +271,33 @@ class _SnaxBingoKernelXdmaRowMajorToDBase(BingoKernelArgs):
         self._process_addr(self.dst_addr, "dst_addr", a, handle_name_map)
         a["M_T"] = str(self.M_T)
         a["N_T"] = str(self.N_T)
+        a["meshRow"] = str(self.meshRow)
+        a["meshCol"] = str(self.meshCol)
+        a["elem_bytes"] = str(self.elem_bytes)
         return a
 
 
-# meshRow=32, meshCol=32, elem_bytes=1
-class SnaxBingoKernelXdmaRowMajorToDE1M32N32Args(_SnaxBingoKernelXdmaRowMajorToDBase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_d_e1_M32N32"
-    MESH_1 = 32
-    MESH_2 = 32
-    ELEM_BYTES = 1
+_CONV_FAMILIES = {
+    "xdma_d_to_row_major":  SnaxBingoKernelXdmaDToRowMajorArgs,
+    "xdma_row_major_to_a":  SnaxBingoKernelXdmaRowMajorToAArgs,
+    "xdma_row_major_to_b":  SnaxBingoKernelXdmaRowMajorToBArgs,
+    "xdma_a_to_row_major":  SnaxBingoKernelXdmaAToRowMajorArgs,
+    "xdma_b_to_row_major":  SnaxBingoKernelXdmaBToRowMajorArgs,
+    "xdma_row_major_to_d":  SnaxBingoKernelXdmaRowMajorToDArgs,
+}
 
 
-# meshRow=32, meshCol=32, elem_bytes=2
-class SnaxBingoKernelXdmaRowMajorToDE2M32N32Args(_SnaxBingoKernelXdmaRowMajorToDBase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_d_e2_M32N32"
-    MESH_1 = 32
-    MESH_2 = 32
-    ELEM_BYTES = 2
+def xdma_conv_args(family: str):
+    """The args class for a converter family.
 
-
-# meshRow=32, meshCol=32, elem_bytes=4
-class SnaxBingoKernelXdmaRowMajorToDE4M32N32Args(_SnaxBingoKernelXdmaRowMajorToDBase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_d_e4_M32N32"
-    MESH_1 = 32
-    MESH_2 = 32
-    ELEM_BYTES = 4
-
-
-# meshRow=1, meshCol=32, elem_bytes=1
-class SnaxBingoKernelXdmaRowMajorToDE1M1N32Args(_SnaxBingoKernelXdmaRowMajorToDBase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_d_e1_M1N32"
-    MESH_1 = 1
-    MESH_2 = 32
-    ELEM_BYTES = 1
-
-
-# meshRow=1, meshCol=32, elem_bytes=2
-class SnaxBingoKernelXdmaRowMajorToDE2M1N32Args(_SnaxBingoKernelXdmaRowMajorToDBase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_d_e2_M1N32"
-    MESH_1 = 1
-    MESH_2 = 32
-    ELEM_BYTES = 2
-
-
-# meshRow=1, meshCol=32, elem_bytes=4
-class SnaxBingoKernelXdmaRowMajorToDE4M1N32Args(_SnaxBingoKernelXdmaRowMajorToDBase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_d_e4_M1N32"
-    MESH_1 = 1
-    MESH_2 = 32
-    ELEM_BYTES = 4
-
-
-# meshRow=16, meshCol=16, elem_bytes=1
-class SnaxBingoKernelXdmaRowMajorToDE1M16N16Args(_SnaxBingoKernelXdmaRowMajorToDBase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_d_e1_M16N16"
-    MESH_1 = 16
-    MESH_2 = 16
-    ELEM_BYTES = 1
-
-
-# meshRow=16, meshCol=16, elem_bytes=2
-class SnaxBingoKernelXdmaRowMajorToDE2M16N16Args(_SnaxBingoKernelXdmaRowMajorToDBase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_d_e2_M16N16"
-    MESH_1 = 16
-    MESH_2 = 16
-    ELEM_BYTES = 2
-
-
-# meshRow=16, meshCol=16, elem_bytes=4
-class SnaxBingoKernelXdmaRowMajorToDE4M16N16Args(_SnaxBingoKernelXdmaRowMajorToDBase):
-    KERNEL_NAME = "__snax_bingo_kernel_xdma_row_major_to_d_e4_M16N16"
-    MESH_1 = 16
-    MESH_2 = 16
-    ELEM_BYTES = 4
-
-# -------------------------------------------------------------------------
-# Resolve a converter args class from (family, mesh, elem_bytes). Hand-written
-# workloads parameterize their mesh at runtime; this is how they pick the kernel.
-# -------------------------------------------------------------------------
-def xdma_conv_args(family: str, mesh_1: int, mesh_2: int, elem_bytes: int):
-    """The args class for `family` bound to that mesh and element width, e.g.
-    xdma_conv_args("xdma_row_major_to_a", 32, 2, 1) -> SnaxBingoKernelXdmaRowMajorToAE1M32K2Args.
-
-    Raises LookupError if the RTL build has no such kernel -- the mesh must be one of the array
-    shapes and elem_bytes one of the widths the device wrappers were generated for."""
-    prefix = f"__snax_bingo_kernel_{family}_e{elem_bytes}_"
-    for name, obj in globals().items():
-        if not (isinstance(obj, type) and name.startswith("SnaxBingoKernelXdma") and name.endswith("Args")):
-            continue
-        kn = getattr(obj, "KERNEL_NAME", None)
-        if kn and kn.startswith(prefix) and (obj.MESH_1, obj.MESH_2) == (mesh_1, mesh_2):
-            return obj
-    raise LookupError(f"no device kernel for {family} at mesh ({mesh_1}, {mesh_2}) with "
-                      f"{elem_bytes}-byte elements")
-
-
+    It no longer takes a mesh or an element width. Those are CONSTRUCTOR ARGUMENTS of the
+    class it returns, because the device kernel takes them too -- one symbol serves every
+    tiling. The old form raised LookupError for any array shape nobody had generated a
+    wrapper for, which on a (16, 4, 16) array was every one of them.
+    """
+    try:
+        return _CONV_FAMILIES[family]
+    except KeyError:
+        raise LookupError(
+            f"no converter family {family!r}; the six are "
+            f"{sorted(_CONV_FAMILIES)}.") from None

@@ -45,5 +45,5 @@ runs:
   # on their own (a bare Map, a bare Reduce, a bare elementwise, the quantiser).
   - HOST_APP_TYPE: offload_bingo_hw
     CHIP_TYPE: single_chip
-    WORKLOAD: simd_prims_1cluster
+    WORKLOAD: simd_quant_1cluster
     DEV_APP: snax-bingo-offload

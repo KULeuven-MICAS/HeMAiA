@@ -3,170 +3,20 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
-"""SIMD streaming kernels: map, reduce, map-reduce, and the fused whole-operators.
+"""The fused SIMD whole-operators.
 
-The whole-operator kernels (softmax, rmsnorm, silu, swiglu, rope, the FA softmax) exist
-because the per-task fixed cost is ~190 cycles on this machine, so a chain of primitives
-spends more on dispatch than on arithmetic. Each comes in an F16F16 and an F16I8 form: the
-second folds the quantisation into the same pass."""
+Softmax, rmsnorm, silu, swiglu, rope, the quantiser, the MoE combine and FlashAttention's
+softmax epilogue -- each ONE kernel rather than a chain of primitives, because the per-task
+fixed cost is ~190 cycles on this machine and a decomposed chain spends more on dispatch
+than on arithmetic.
+
+The row operators come in an F16F16 and an F16I8 form; the second folds the quantisation
+into the same pass, so a layer that narrows to int8 pays for one task, not two."""
 
 from typing import Union, Dict, Optional
 from bingo_mem_handle import BingoMemAlloc
 
 from kernel_base import BingoKernelArgs
-
-
-class SnaxBingoKernelSimdStreamReduceArgs(BingoKernelArgs):
-    """StreamReduce: per-row reduction (row -> scalar). op: 0=MAX 1=ADD 2=SUMSQ.
-    Runs `rows` independent reductions in one dispatch (rows=1 = single row),
-    emitting one splatted scalar beat per row (dst_bound0 defaults to rows).
-    out_fp32=True ORs REDUCE_OUT_FP32 into op so the scalar reaches the host in FP32
-    (the host reader then uses in_fp32=1); use it when the reduction can overflow fp16."""
-    KERNEL_NAME = "__snax_bingo_kernel_simd_stream_reduce"
-
-    def __init__(self, src_addr: Union[BingoMemAlloc, int], dst_addr: Union[BingoMemAlloc, int],
-                 beats: int, op: int, rows: int = 1, csr_mode: int = 0,
-                 dst_bound0: Optional[int] = None, out_fp32: bool = False):
-        self.src_addr = src_addr
-        self.dst_addr = dst_addr
-        self.beats = beats
-        self.op = (op | REDUCE_OUT_FP32) if out_fp32 else op
-        self.rows = rows
-        self.csr_mode = csr_mode
-        self.dst_bound0 = rows if dst_bound0 is None else dst_bound0
-
-    def get_struct_name(self) -> str:
-        return "__snax_bingo_kernel_simd_stream_reduce_args_t"
-
-    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
-        a = {}
-        self._process_addr(self.src_addr, "src_addr", a, handle_name_map)
-        self._process_addr(self.dst_addr, "dst_addr", a, handle_name_map)
-        a["beats"] = str(self.beats)
-        a["op"] = str(self.op)
-        a["rows"] = str(self.rows)
-        a["csr_mode"] = str(self.csr_mode)
-        a["dst_bound0"] = str(self.dst_bound0)
-        return a
-
-
-class SnaxBingoKernelSimdStreamMapArgs(BingoKernelArgs):
-    """StreamMap: out = func(a*x + b) per element, over `rows*beats` flat beats.
-    a_f32bits/b_f32bits are FP32 bit patterns (a defaults to 1.0f). out_dtype=1
-    fuses FP16->INT8 quant with inv_scale_f32bits (pass dst_bound0 = rows*beats//2)."""
-    KERNEL_NAME = "__snax_bingo_kernel_simd_stream_map"
-
-    def __init__(self, src_addr: Union[BingoMemAlloc, int], dst_addr: Union[BingoMemAlloc, int],
-                 beats: int, func: int, a_f32bits: int = 0x3F800000, b_f32bits: int = 0,
-                 rows: int = 1, csr_mode: int = 0, dst_bound0: Optional[int] = None,
-                 out_dtype: int = 0, inv_scale_f32bits: int = 0,
-                 a_addr: Union[BingoMemAlloc, int, None] = None):
-        self.src_addr = src_addr
-        self.dst_addr = dst_addr
-        self.beats = beats
-        self.func = func
-        self.a_f32bits = a_f32bits
-        self.b_f32bits = b_f32bits
-        self.rows = rows
-        self.csr_mode = csr_mode
-        self.dst_bound0 = rows * beats if dst_bound0 is None else dst_bound0
-        self.out_dtype = out_dtype
-        self.inv_scale_f32bits = inv_scale_f32bits
-        # 0 = use a_f32bits; a handle = read the runtime 'a' (dequant qsc) from L1 at run time.
-        self.a_addr = 0 if a_addr is None else a_addr
-
-    def get_struct_name(self) -> str:
-        return "__snax_bingo_kernel_simd_stream_map_args_t"
-
-    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
-        a = {}
-        self._process_addr(self.src_addr, "src_addr", a, handle_name_map)
-        self._process_addr(self.dst_addr, "dst_addr", a, handle_name_map)
-        a["beats"] = str(self.beats)
-        a["a_f32bits"] = str(self.a_f32bits)
-        a["b_f32bits"] = str(self.b_f32bits)
-        a["func"] = str(self.func)
-        a["rows"] = str(self.rows)
-        a["csr_mode"] = str(self.csr_mode)
-        a["dst_bound0"] = str(self.dst_bound0)
-        a["out_dtype"] = str(self.out_dtype)
-        a["inv_scale_f32bits"] = str(self.inv_scale_f32bits)
-        if isinstance(self.a_addr, int):
-            a["a_addr_lo"] = str(self.a_addr & 0xFFFFFFFF)
-            a["a_addr_hi"] = str((self.a_addr >> 32) & 0xFFFFFFFF)
-        else:
-            self._process_addr(self.a_addr, "a_addr", a, handle_name_map)
-        return a
-
-
-class SnaxBingoKernelSimdStreamMapReduceArgs(BingoKernelArgs):
-    """MERGED StreamMap -||> StreamReduce: the map AND the reduce in ONE xDMA task,
-    i.e. per row out = reduce(reduce_op, map(func, a*x + b)). Both reader extensions are
-    enabled for a single task, so the map feeds the reduce inside the datapath and the
-    mapped row is never written out and re-read -- this is the softmax exp+Sexp fusion,
-    replacing a map task plus a reduce task that re-reads the whole mapped tensor.
-
-    reduce_op: 0=MAX 1=ADD 2=SUMSQ. tap/out_fp32 OR the flag bits in for you.
-
-    Output layout (and the dst_bound0 default) depends on `tap`:
-      tap=True  -> the mapped row passes through 1:1 AND the row scalar is appended as a
-                   trailing beat: a PADDED [rows, beats+1] beat tensor. Allocate
-                   rows*(beats+1)*64 bytes, and mind the padded row stride downstream --
-                   a consumer of the mapped data must either be single-row (rows=1: a
-                   flat `beats`-beat read stops short of the scalar) or address rows at
-                   the (beats+1)*64-byte stride.       dst_bound0 = rows*(beats+1)
-      tap=False -> only the per-row scalar beats are written (a stream_reduce over the
-                   MAPPED values, no passthrough).     dst_bound0 = rows
-    """
-    KERNEL_NAME = "__snax_bingo_kernel_simd_stream_map_reduce"
-
-    def __init__(self, src_addr: Union[BingoMemAlloc, int], dst_addr: Union[BingoMemAlloc, int],
-                 beats: int, func: int, reduce_op: int, a_f32bits: int = 0x3F800000,
-                 b_f32bits: int = 0, tap: bool = True, out_fp32: bool = False,
-                 rows: int = 1, csr_mode: int = 0, dst_bound0: Optional[int] = None,
-                 a_addr: Union[BingoMemAlloc, int, None] = None):
-        self.src_addr = src_addr
-        self.dst_addr = dst_addr
-        self.beats = beats
-        self.func = func
-        self.a_f32bits = a_f32bits
-        self.b_f32bits = b_f32bits
-        op = reduce_op
-        if tap:
-            op |= REDUCE_OP_TAP
-        if out_fp32:
-            op |= REDUCE_OUT_FP32
-        self.reduce_op = op
-        self.rows = rows
-        self.csr_mode = csr_mode
-        if dst_bound0 is None:
-            # TAP writes beats mapped beats + 1 scalar beat per row; otherwise 1 beat/row.
-            dst_bound0 = rows * (beats + 1) if tap else rows
-        self.dst_bound0 = dst_bound0
-        # 0 = use a_f32bits; a handle = read the runtime 'a' (dequant qsc) from L1 at run time.
-        self.a_addr = 0 if a_addr is None else a_addr
-
-    def get_struct_name(self) -> str:
-        return "__snax_bingo_kernel_simd_stream_map_reduce_args_t"
-
-    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
-        a = {}
-        self._process_addr(self.src_addr, "src_addr", a, handle_name_map)
-        self._process_addr(self.dst_addr, "dst_addr", a, handle_name_map)
-        a["beats"] = str(self.beats)
-        a["a_f32bits"] = str(self.a_f32bits)
-        a["b_f32bits"] = str(self.b_f32bits)
-        a["func"] = str(self.func)
-        a["reduce_op"] = str(self.reduce_op)
-        a["rows"] = str(self.rows)
-        a["csr_mode"] = str(self.csr_mode)
-        a["dst_bound0"] = str(self.dst_bound0)
-        if isinstance(self.a_addr, int):
-            a["a_addr_lo"] = str(self.a_addr & 0xFFFFFFFF)
-            a["a_addr_hi"] = str((self.a_addr >> 32) & 0xFFFFFFFF)
-        else:
-            self._process_addr(self.a_addr, "a_addr", a, handle_name_map)
-        return a
 
 
 class SnaxBingoKernelSimdFp16ToInt8Args(BingoKernelArgs):
@@ -212,64 +62,6 @@ class SnaxBingoKernelSimdFp16ToInt8Args(BingoKernelArgs):
         return a
 
 
-class SnaxBingoKernelSimdStreamElementwiseArgs(BingoKernelArgs):
-    """StreamElementwise: out = op(operand_0, operand_1, ...) over `operand_count`
-    interleaved streams operand_stride bytes apart, across `rows*beats` flat beats.
-    op: 0=MUL 1=ADD. out_dtype=1 fuses FP16->INT8 quant with inv_scale_f32bits
-    (pass dst_bound0 = rows*beats//2)."""
-    KERNEL_NAME = "__snax_bingo_kernel_simd_stream_elementwise"
-
-    def __init__(self, src_addr: Union[BingoMemAlloc, int], dst_addr: Union[BingoMemAlloc, int],
-                 beats: int, op: int, operand_stride: int = 0, operand_count: int = 2,
-                 rows: int = 1, csr_mode: int = 0, dst_bound0: Optional[int] = None,
-                 out_dtype: int = 0, inv_scale_f32bits: int = 0,
-                 src_b_addr: Union[BingoMemAlloc, int, None] = None,
-                 src_row_stride: int = 0):
-        self.src_addr = src_addr
-        self.dst_addr = dst_addr
-        self.beats = beats
-        self.operand_stride = operand_stride
-        self.operand_count = operand_count
-        self.op = op
-        self.rows = rows
-        self.csr_mode = csr_mode
-        self.dst_bound0 = rows * beats if dst_bound0 is None else dst_bound0
-        self.out_dtype = out_dtype
-        self.inv_scale_f32bits = inv_scale_f32bits
-        # 0 = use operand_stride; a handle = derive stride from src_b - src_addr at run time.
-        self.src_b_addr = 0 if src_b_addr is None else src_b_addr
-        # 0 = flat/packed operands (2D reader). Nonzero = PADDED rows this many bytes apart,
-        # of which only the first `beats` beats are data -> 3D {operand, beat, row} reader that
-        # skips the slack. Use it to consume a TAP-padded map+reduce output (stride
-        # (beats+1)*64); BOTH operands must share the stride, so the broadcast operand is built
-        # at the same pitch by the xDMA stride-0 broadcast pass that produces it.
-        self.src_row_stride = src_row_stride
-
-    def get_struct_name(self) -> str:
-        return "__snax_bingo_kernel_simd_stream_elementwise_args_t"
-
-    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
-        a = {}
-        self._process_addr(self.src_addr, "src_addr", a, handle_name_map)
-        self._process_addr(self.dst_addr, "dst_addr", a, handle_name_map)
-        a["beats"] = str(self.beats)
-        a["operand_stride"] = str(self.operand_stride)
-        a["operand_count"] = str(self.operand_count)
-        a["op"] = str(self.op)
-        a["rows"] = str(self.rows)
-        a["csr_mode"] = str(self.csr_mode)
-        a["dst_bound0"] = str(self.dst_bound0)
-        a["out_dtype"] = str(self.out_dtype)
-        a["inv_scale_f32bits"] = str(self.inv_scale_f32bits)
-        if isinstance(self.src_b_addr, int):
-            a["src_b_addr_lo"] = str(self.src_b_addr & 0xFFFFFFFF)
-            a["src_b_addr_hi"] = str((self.src_b_addr >> 32) & 0xFFFFFFFF)
-        else:
-            self._process_addr(self.src_b_addr, "src_b_addr", a, handle_name_map)
-        a["src_row_stride"] = str(self.src_row_stride)
-        return a
-
-
 class SnaxBingoKernelSimdRopeArgs(BingoKernelArgs):
     """Fused FP16 RoPE: iDMA adjacent-pair swap of x + 3 StreamElementwise passes
     (x*cos_full, xswap*sin_signed, +) -> out. cos_full/sin_signed are precomputed
@@ -301,9 +93,65 @@ class SnaxBingoKernelSimdRopeArgs(BingoKernelArgs):
         return a
 
 
-class _SnaxBingoKernelXdmaSimdArgs(BingoKernelArgs):
-    """Shared base for the fused fp16 SIMD kernels (softmax, rmsnorm) that write a single
-    output tensor. The user's args are HW-free: `input_addr` / `output_addr` are the
+class SnaxBingoKernelSimdAddF16Args(BingoKernelArgs):
+    """out = a + b, elementwise over [rows, cols] fp16, on the SIMD core.
+
+    WHY THIS AND NOT THE xDMA ADD. `__snax_bingo_kernel_xdma_elementwise_add_ab` drives the
+    HasElementwiseAdd WRITER extension, and snax_split_cluster does not have it. Nothing
+    guards that: the kernel would program an extension that is not in the datapath, which
+    on this machine is a wrong answer or a wedge rather than a fault. This one drives
+    HasStreamElementwise, a READER extension the cluster does have, with op = ADD.
+
+    It is a whole operator, not a primitive: the op, the operand count and the output
+    precision are fixed here rather than being arguments, so a caller cannot ask for a
+    combination the residual path does not mean.
+    """
+
+    KERNEL_NAME = "__snax_bingo_kernel_simd_stream_elementwise"
+
+    _OP_ADD_FP16 = 1
+    _OUT_FP16 = 0
+
+    def __init__(self, a_addr: Union[BingoMemAlloc, int], b_addr: Union[BingoMemAlloc, int],
+                 out_addr: Union[BingoMemAlloc, int], rows: int, cols: int):
+        if cols % 32:
+            raise ValueError(f"cols={cols} must be a multiple of 32 -- one SIMD beat is "
+                             f"64 B = 32 fp16 lanes and a partial beat is not handled.")
+        self.a_addr = a_addr
+        self.b_addr = b_addr
+        self.out_addr = out_addr
+        self.rows = rows
+        self.cols = cols
+        self.beats = cols // 32
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_simd_stream_elementwise_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.a_addr, "src_addr", a, handle_name_map)
+        self._process_addr(self.out_addr, "dst_addr", a, handle_name_map)
+        # A NON-ZERO src_b makes the kernel derive operand_stride as (src_b - src_addr) at
+        # run time, which is what lets the two operands be separate allocations. The
+        # reader AGU strides FORWARD only, so b must sit at the HIGHER address; the
+        # residual's two buffers come from one allocator in creation order, and the block
+        # passes them in that order.
+        self._process_addr(self.b_addr, "src_b_addr", a, handle_name_map)
+        a["beats"] = str(self.beats)
+        a["operand_stride"] = "0"          # derived from src_b at run time
+        a["operand_count"] = "2"
+        a["op"] = str(self._OP_ADD_FP16)
+        a["rows"] = str(self.rows)
+        a["csr_mode"] = "0"
+        a["dst_bound0"] = str(self.rows * self.beats)
+        a["out_dtype"] = str(self._OUT_FP16)
+        a["inv_scale_f32bits"] = "0"
+        return a
+
+
+class _SimdRowOpArgs(BingoKernelArgs):
+    """Shared base for the fused fp16 SIMD kernels that reduce ALONG a row and write one
+    output tensor -- softmax, rmsnorm, silu. The user's args are HW-free: `input_addr` / `output_addr` are the
     [rows, cols] tensors (cols = per-row length D, a multiple of 32). The OUTPUT PRECISION is
     chosen by which subclass (kernel) you pick, not an arg:
       *F16F16Args -> fp16 output; output_addr is the fp16 buffer.
@@ -331,7 +179,7 @@ class _SnaxBingoKernelXdmaSimdArgs(BingoKernelArgs):
         return a
 
 
-class SnaxBingoKernelSimdSoftmaxF16F16Args(_SnaxBingoKernelXdmaSimdArgs):
+class SnaxBingoKernelSimdSoftmaxF16F16Args(_SimdRowOpArgs):
     """Whole FP16 softmax in ONE DM-core kernel -> fp16 output. reduce-MAX, device negate,
     sub-max, merged EXP+Sexp, integer reciprocal (rv32iM divu), normalize. Host does only
     Load / Store / Check."""
@@ -339,14 +187,14 @@ class SnaxBingoKernelSimdSoftmaxF16F16Args(_SnaxBingoKernelXdmaSimdArgs):
     STRUCT_NAME = "__snax_bingo_kernel_simd_softmax_args_t"
 
 
-class SnaxBingoKernelSimdSoftmaxF16I8Args(_SnaxBingoKernelXdmaSimdArgs):
+class SnaxBingoKernelSimdSoftmaxF16I8Args(_SimdRowOpArgs):
     """Same fused softmax pipeline -> int8 output (fused Fp16ToInt8, baked 127.0 scale since
     softmax output is in [0,1]). output_addr is the int8 [rows, cols] buffer."""
     KERNEL_NAME = "__snax_bingo_kernel_simd_softmax_f16_i8"
     STRUCT_NAME = "__snax_bingo_kernel_simd_softmax_args_t"
 
 
-class SnaxBingoKernelSimdRmsnormF16F16Args(_SnaxBingoKernelXdmaSimdArgs):
+class SnaxBingoKernelSimdRmsnormF16F16Args(_SimdRowOpArgs):
     """Whole FP16 rmsnorm in ONE DM-core kernel -> fp16 output. reduce-SUMSQ, integer
     1/sqrt(Sxx/N) (device sqrt + reciprocal, no FPU), normalize. cols is a power-of-two
     multiple of 32. Host does only Load / Store / Check."""
@@ -354,21 +202,21 @@ class SnaxBingoKernelSimdRmsnormF16F16Args(_SnaxBingoKernelXdmaSimdArgs):
     STRUCT_NAME = "__snax_bingo_kernel_simd_rmsnorm_args_t"
 
 
-class SnaxBingoKernelSimdRmsnormF16I8Args(_SnaxBingoKernelXdmaSimdArgs):
+class SnaxBingoKernelSimdRmsnormF16I8Args(_SimdRowOpArgs):
     """Same fused rmsnorm pipeline -> int8 output (fused Fp16ToInt8, baked 64.0 scale).
     output_addr is the int8 [rows, cols] buffer."""
     KERNEL_NAME = "__snax_bingo_kernel_simd_rmsnorm_f16_i8"
     STRUCT_NAME = "__snax_bingo_kernel_simd_rmsnorm_args_t"
 
 
-class SnaxBingoKernelSimdSiluF16F16Args(_SnaxBingoKernelXdmaSimdArgs):
+class SnaxBingoKernelSimdSiluF16F16Args(_SimdRowOpArgs):
     """Whole FP16 SiLU (x*sigmoid(x)) in ONE DM-core kernel -> fp16 output (one StreamMap pass).
     Host does only Load / Store / Check."""
     KERNEL_NAME = "__snax_bingo_kernel_simd_silu_f16_f16"
     STRUCT_NAME = "__snax_bingo_kernel_simd_silu_args_t"
 
 
-class SnaxBingoKernelSimdSiluF16I8Args(_SnaxBingoKernelXdmaSimdArgs):
+class SnaxBingoKernelSimdSiluF16I8Args(_SimdRowOpArgs):
     """Same fused silu -> int8 output (fused Fp16ToInt8, baked 16.0 scale). output_addr is the
     int8 [rows, cols] buffer."""
     KERNEL_NAME = "__snax_bingo_kernel_simd_silu_f16_i8"
@@ -476,36 +324,6 @@ class SnaxBingoKernelSimdMoeCombineF16Args(BingoKernelArgs):
         self._process_addr(self.weight_addr, "weight_addr", a, handle_name_map)
         return a
 
-
-# ══════════════════════════════════════════════════════════════════════
-# VersaCore blocked-layout conversion kernels (tile-shape-parameterized)
-#
-# Six primitive conversions between row-major and the three VersaCore
-# blocked layouts {A, B, D}. All kernels take tile dimensions (M_T, K_T,
-# N_T) and array-shape dims (meshRow, tileSize, meshCol) so they work
-# for any DSE-chosen tiling. See HeMAiA/util/sim/xdma/layout_convert.py for
-# the Python reference.
-# ══════════════════════════════════════════════════════════════════════
-
-
-# -------------------------------------------------------------------------
-# xDMA blocked-layout converters: ONE class per runnable kernel =
-# (converter, array shape, elem_bytes).
-#
-# meshRow / tileSize / meshCol and elem_bytes used to be struct fields the caller
-# filled in. They are not arguments -- they decide which AGU path the kernel takes,
-# and they must match the mesh the operands were actually blocked for. So each is a
-# COMPILE-TIME constant of a device wrapper (`..._e1_M32K2`), and here a class
-# constant. What is left in the struct is genuinely per-call: the addresses and the
-# two tile counts.
-#
-# The 9 wrappers of a converter share one C struct, so the struct-name -> C-fn
-# convention cannot name the dispatcher; each class names it via KERNEL_NAME.
-#
-# Naming: e<elem_bytes>_<mesh token>, where the mesh token names the two axes the
-# block spans -- M<meshRow>K<tileSize> for A, K<tileSize>N<meshCol> for B,
-# M<meshRow>N<meshCol> for D. Same (mu,ku,nu) order as the GEMM kernels.
-# -------------------------------------------------------------------------
 
 class SnaxBingoKernelSimdFaSoftmaxArgs(BingoKernelArgs):
     """FlashAttention online-softmax epilogue: the whole per-tile SIMD half, one kernel.

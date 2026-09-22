@@ -519,27 +519,5 @@ class SnaxBingoKernelXdmaElementwiseAddAbArgs(BingoKernelArgs):
         return a
 
 
-# ══════════════════════════════════════════════════════════════════════
-# xDMA FP16 streaming-SIMD primitives (reader extensions)
-#
-# The 3 generic ops the LLM layers (softmax/rmsnorm/silu/swiglu/rope) decompose
-# into. The named sub-ops (reduce_max, map_exp, map_norm, ew_mul, ...) are these
-# 3 classes constructed with preset op/func + FP32-bit operands. One row =
-# `beats` x 64-byte beats (64 B = 32 FP16). csr_mode picks FULL (0, completely
-# configure the AGU — the default) vs STICKY (1, retask-only, reuse the persisted
-# same-shape config — the opt-in). dst_bound0 is the WRITER beat count.
-#
-# CSR encodings: StreamMap func 0=LINEAR(a*x+b) 1=EXP 2=SILU; StreamReduce op
-# 0=MAX 1=ADD 2=SUMSQ, |0x100 = TAP, |0x200 = OUT_FP32; StreamElementwise op
-# 0=MUL 1=ADD.
-# ══════════════════════════════════════════════════════════════════════
-
-# StreamReduce op-CSR flag bits (OR'd into `op`). REDUCE_OUT_FP32 keeps the per-row
-# scalar in FP32 instead of narrowing it to the FP16 transport -- use it whenever the
-# reduction can exceed fp16 range (e.g. SUMSQ of unscaled activations), since the FP16
-# narrow wraps to garbage (NOT inf) on overflow. The host consumer must then read the
-# scalar as fp32 (stride 16) instead of u16 (stride 32).
-REDUCE_OP_TAP   = 1 << 8   # 0x100: pass the row through, then emit the scalar beat
-REDUCE_OUT_FP32 = 1 << 9   # 0x200: emit the per-row scalar in FP32 (no FP16 narrow)
 
 

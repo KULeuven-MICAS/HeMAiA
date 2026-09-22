@@ -207,10 +207,15 @@ def convert_args(src_layout, dst_layout, rows, cols, mesh, elem_bytes, src, dst)
             raise ValueError(
                 f"{src_layout}->{dst_layout} is a TRANSPOSE, not a reshape: {src_layout} "
                 f"runs contiguously along {src_dir}s and {dst_layout} along {dst_dir}s, so "
-                f"no pair of strides makes a common run. Use the xDMA transposer kernels "
-                f"(__snax_bingo_kernel_xdma_row_major_to_b and friends) -- and note their "
-                f"HW transposer is correct only at elem_bytes=1; at 2 and 4 it returns "
-                f"wrong data without failing.")
+                f"no pair of strides makes a common run.\n"
+                f"There are dedicated transposer kernels "
+                f"(__snax_bingo_kernel_xdma_row_major_to_b and friends), but check they "
+                f"cover YOUR array before reaching for them: they ship shapes K2N32, "
+                f"K16N32 and K8N16, so a (16, 4, 16) array -- which wants K4N16 -- has "
+                f"none. And the HW transposer is correct only at elem_bytes=1; at 2 and 4 "
+                f"it returns wrong data without failing. On this cluster a B conversion "
+                f"has no hardware route at all; keep the operand in B-layout from the "
+                f"point it is generated.")
         raise ValueError(
             f"{src_layout}->{dst_layout} at {eb} B/element: the innermost run common to "
             f"both layouts is {atom} B, but the xDMA moves {_ATOM} B per lane. A shorter "

@@ -36,7 +36,7 @@ APPS += simd_swiglu_1cluster
 APPS += simd_rope_1cluster
 # The five chain stages armed one at a time, so the cost model has a per-operator
 # curve and not only whole-pipeline numbers.
-APPS += simd_prims_1cluster
+APPS += simd_quant_1cluster
 # FlashAttention: the two matmuls on the GEMM core, the whole online softmax as one
 # kernel on the SIMD core, overlapped through the task graph.
 # The snax port: one kernel, NQ the only difference. NQ=1 is decode (one query
