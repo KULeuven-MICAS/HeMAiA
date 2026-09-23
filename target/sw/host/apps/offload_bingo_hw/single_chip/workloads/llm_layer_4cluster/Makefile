@@ -20,11 +20,18 @@ PLATFORM_H = $(MK_DIR)/../../../../../../../../target/sw/shared/platform/generat
 # left every workload whose main_bingo.py had not changed building against a STALE header:
 # the struct gained a field, the generated init code did not set it, and the run wedged
 # mid-pipeline with no build error anywhere. Listing them is what makes that impossible.
-BINGO_GEN_DEPS = $(wildcard $(MK_DIR)/../../../../../../../../target/sw/host/runtime/libbingo/mini_compiler/*.py) \
+# RECURSIVELY, which it was not: the mini_compiler is a package tree (graph/ kernels/ libs/
+# passes/ platform/) and a flat $(wildcard .../*.py) matches only the one module left at the
+# top level. This tracked 1 file out of 52 -- it had stopped being a guard at all.
+# RECURSIVE, not $(shell find .../mini_compiler -name '*.py'). The graph-building code now lives in
+# the libs/ SUBPACKAGE, and a flat wildcard cannot see it -- which reopened the very hole
+# this block exists to close: editing libs/comm/transfer.py rebuilt nothing at all, and the
+# workload went on compiling against the header generated before the change.
+BINGO_GEN_DEPS = $(shell find $(MK_DIR)/../../../../../../../../target/sw/host/runtime/libbingo/mini_compiler -name '*.py') \
                  $(MK_DIR)/../../../../../../../../target/sw/host/runtime/libbingo/include/libbingo/device_kernel_args.h \
                  $(MK_DIR)/../../../../../../../../target/sw/host/runtime/libbingo/include/libbingo/host_kernel_args.h
 
-$(DATA_H) $(OFFLOAD_H): $(MK_DIR)/main_bingo.py $(MK_DIR)/../../../../../../../../util/sim/common/llm_layer_data.py $(MK_DIR)/../../../../../../../../util/sim/common/llm_layer_stages.py $(MK_DIR)/../../../../../../../../util/sim/common/llm_layer_app.py $(DATA_CFG) $(PLATFORM_H) $(BINGO_GEN_DEPS)
+$(DATA_H) $(OFFLOAD_H): $(MK_DIR)/main_bingo.py $(MK_DIR)/../../../../../../../../util/sim/llm/llm_layer_data.py $(DATA_CFG) $(PLATFORM_H) $(BINGO_GEN_DEPS)
 	python3 $(MK_DIR)/main_bingo.py \
 		--output_dir $(MK_DIR) \
 		--data_h $(DATA_H) \

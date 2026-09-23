@@ -9,3 +9,25 @@
 # changes, so a sweep leaves the tree dirty and the committed copy silently disagrees with the
 # params it was generated from; a `make clean-data` shows up as deleted tracked files.
 configs.json
+
+# THE BRING-UP LADDER'S RUNGS ARE LOCAL SCAFFOLDING, not deliverables.
+#
+# llm_s1_norm .. llm_s5_ffn are prefixes of the same builder (util/sim/llm/
+# llm_layer_stages.py): each emits the first N stages of the layer and checks each one, so
+# the first rung that fails on hardware names the stage rather than the layer. They exist
+# to bisect a bring-up, and they are regenerated from the builder whenever it changes --
+# tracking them means every change to the builder shows up as five workloads' worth of
+# churn in the diff, and a stale committed rung silently disagrees with the builder it
+# came from.
+#
+# The same goes for the decomposition experiments (_shard, _tp, _t64, _perf): they are
+# A/B arms for one question each, not apps anyone ships.
+#
+# WHAT STAYS TRACKED: llm_layer_4cluster, which is the layer as a standalone app and does
+# not go through the ladder at all, and llm_kernels_4cluster, which checks each fused
+# kernel against its own golden.
+llm_s[0-9]*_*/
+llm_layer_shard_4cluster/
+llm_layer_tp_4cluster/
+llm_layer_t64_4cluster/
+llm_layer_perf_4cluster/

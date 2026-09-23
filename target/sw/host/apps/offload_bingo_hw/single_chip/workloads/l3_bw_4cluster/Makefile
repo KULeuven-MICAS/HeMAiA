@@ -24,7 +24,7 @@ PLATFORM_H = $(MK_DIR)/../../../../../../../../target/sw/shared/platform/generat
 # device_kernel_args.h, so both are prerequisites: without them an ABI change leaves a
 # workload whose main_bingo.py has not moved building against a stale header, and the run
 # wedges mid-pipeline with no build error anywhere.
-BINGO_GEN_DEPS = $(wildcard $(MK_DIR)/../../../../../../../../target/sw/host/runtime/libbingo/mini_compiler/*.py) \
+BINGO_GEN_DEPS = $(shell find $(MK_DIR)/../../../../../../../../target/sw/host/runtime/libbingo/mini_compiler -name '*.py') \
                  $(MK_DIR)/../../../../../../../../target/sw/host/runtime/libbingo/include/libbingo/device_kernel_args.h
 
 BINGO_STATIC_L1 ?= 0
