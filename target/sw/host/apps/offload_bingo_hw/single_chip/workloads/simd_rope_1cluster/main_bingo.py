@@ -4,24 +4,34 @@
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 #
-# SIMD FP16 RoPE — single fused kernel (__snax_bingo_kernel_simd_rope).
-# RoPE is all DMA-engine ops, so the whole flow is ONE offload node:
-#   inputs x, cos_full, sin_signed (precomputed tables); xswap computed ON-DEVICE.
-#   xswap = adjacent fp16-pair swap of x          (iDMA, inside the kernel)
-#   P1 x*cos -> tmp1 ; P2 xswap*sin -> tmp2 ; P3 tmp1+tmp2 -> out  (SIMD, in-kernel)
-#   Store(out) + Check(fp16 tol)
-# The kernel allocates its own xswap/tmp1/tmp2 scratch from L1, so the DFG only
-# loads x/cos/sin and provides out. xswap being derived inside the kernel rather
-# than supplied as an input is what lets rope_q/rope_k run in-layer, on an x that
-# only exists at run time.
+# SIMD FP16 RoPE — TWO nodes, on the two engines that can each do their half.
 #
-# Measured cost LUT (single-chip RTL sweep, whole-kernel SIMD-core cycles)
+#   Load x, cos_full, sin_signed into slots 0, 1, 3 of one 4-row operand block
+#   Swap    slot 0 -> slot 2     (DM core, __snax_bingo_kernel_idma_pairwise_swap)
+#   Rope    the whole rotation   (SIMD core, __snax_bingo_kernel_simd_rope, ONE task)
+#   Store(out) + Check(fp16 tol)
+#
+# WHY TWO AND NOT ONE. The rotation is out = x*cos_full + xswap*sin_signed: two products
+# and a sum, which is a combine on each side of the Map, so the arithmetic is one task over
+# a four-deep operand axis. What cannot join it is xswap -- an adjacent fp16-pair
+# permutation is a 2-byte reorder INSIDE one 8-byte TCDM word, and the reader's AGU places
+# whole words. `lane_stride` moves channels, not halfwords.
+#
+# There used to be a self-contained kernel that did the swap with a word-rotate loop on the
+# SIMD core. It was deleted, not kept as a fallback: the swap is rows*cols/2 element moves
+# against a few hundred cycles for all the arithmetic it feeds, so it dominated, and doing
+# it on the DM core's real byte-addressed DMA is strictly better. The LUT below was measured
+# on that kernel and every entry should fall.
+#
+# Measured cost LUT -- PRE-SPLIT, re-measure (single-chip RTL sweep, SIMD-core cycles)
 #     rows\cols     64     128     256
 #        1           -     1227    1675
 #        2         1227    1674    2574
 #        4         1674    2573    4367
 #        8         2573    4366      -     ((1,64) is the warm-up config; (8,256) dropped: the
-#                                           xswap/tmp1/tmp2 scratch overflows the L1 pool -> spike)
+#                                           xswap/tmp1/tmp2 scratch overflowed the L1 pool.
+#                                           This kernel allocates NO scratch at all, so
+#                                           that exclusion may no longer be needed.)
 
 import os
 import sys
@@ -45,11 +55,12 @@ import _bingo_paths  # noqa: F401,E402  (puts mini_compiler's grouped subdirs on
 from bingo_dfg import BingoDFG                            # noqa: E402
 from bingo_platform import core_roles, guard_cluster_count, parse_platform_cfg  # noqa: E402
 from bingo_node import BingoNode                          # noqa: E402
-from bingo_mem_handle import BingoMemAlloc                     # noqa: E402
+from bingo_mem_handle import BingoMemAlloc, BingoMemAllocView                     # noqa: E402
 from bingo_data_staging import DataStaging                     # noqa: E402
 from bingo_kernel_args import (                           # noqa: E402
     SnaxBingoKernelIdma1dCopyArgs,
     SnaxBingoKernelSimdRopeArgs,
+    SnaxBingoKernelIdmaPairwiseSwapArgs,
     HostBingoKernelIdmaArgs,
     HostBingoKernelCheckResultArgs,
 )
@@ -64,7 +75,7 @@ ROPE_BASE = 10000.0
 ROPE_POS = 1
 
 # (rows, cols); D = cols. Each row is a distinct token position (ROPE_POS + r), so cos/sin/xswap
-# are per-row [rows, D] tables. A rows x cols grid for the fused-kernel cost LUT (bilinear, keyed
+# are per-row [rows, D] tables. A rows x cols grid for the cost LUT (bilinear, keyed
 # [rows, cols]): rows {1,2,4,8} x cols {64,128,256}, so the bilinear cols slope de-confounds from
 # the rows==1 fast-path drop.
 # cols {64,256} (not {64,128,256}): rope loads 3 inputs/config, so its generated
@@ -145,20 +156,32 @@ def build_mempool(st):
 
 
 # Shared L1/L3 buffers reused across all serialized configs (see simd_silu_1cluster).
-def build_config(g, i, meta, l1_x, l1_cos, l1_sin, l1_out, l3_out, prev):
+def build_config(g, i, meta, l1_ops, l1_out, l3_out, prev):
     rows  = CONFIGS[i]["rows"]
     D     = CONFIGS[i]["cols"]         # per-row fp16 length (cols)
     n     = rows * D                   # total fp16 elements
     tot_b = rows * D * 2               # [rows, D] fp16 bytes
     off_x, off_cos, off_sin, off_golden = meta[i]
+
+    # THE FOUR OPERANDS ARE ONE BLOCK, slot k at k*tot_b -- the reader adds a single stride
+    # per axis, so they have to be equally spaced, and the spacing is THIS config's row
+    # size, not the shared allocation's. The block is sized for the largest config and each
+    # config uses the first 4*tot_b of it.
+    slot = lambda k: l1_ops if k == 0 else BingoMemAllocView(l1_ops, k * tot_b)
+
     lx = g.node(f"LoadX_{i}", DMA_CORE, "__snax_bingo_kernel_idma_1d_copy",
-                SnaxBingoKernelIdma1dCopyArgs(off_x, l1_x, tot_b), prev)
+                SnaxBingoKernelIdma1dCopyArgs(off_x, slot(0), tot_b), prev)
     lc = g.node(f"LoadCos_{i}", DMA_CORE, "__snax_bingo_kernel_idma_1d_copy",
-                SnaxBingoKernelIdma1dCopyArgs(off_cos, l1_cos, tot_b), lx)
+                SnaxBingoKernelIdma1dCopyArgs(off_cos, slot(1), tot_b), lx)
     ls = g.node(f"LoadSin_{i}", DMA_CORE, "__snax_bingo_kernel_idma_1d_copy",
-                SnaxBingoKernelIdma1dCopyArgs(off_sin, l1_sin, tot_b), lc)
+                SnaxBingoKernelIdma1dCopyArgs(off_sin, slot(3), tot_b), lc)
+    # The adjacent fp16-pair swap, on the DM core: it is a 2-byte reorder inside an 8-byte
+    # TCDM word, which the SIMD reader's AGU cannot address at all. src and dst are 2*tot_b
+    # apart and tot_b long, so the two strided copies cannot overlap.
+    sw = g.node(f"Swap_{i}", DMA_CORE, "__snax_bingo_kernel_idma_pairwise_swap",
+                SnaxBingoKernelIdmaPairwiseSwapArgs(slot(0), slot(2), n, 2), ls)
     rope = g.node(f"Rope_{i}", SIMD_CORE, "__snax_bingo_kernel_simd_rope",
-                  SnaxBingoKernelSimdRopeArgs(l1_x, l1_cos, l1_sin, l1_out, D, rows), ls)
+                  SnaxBingoKernelSimdRopeArgs(l1_ops, l1_out, D, rows), sw)
     store = g.node(f"Store_{i}", HOST_CORE, "__host_bingo_kernel_idma",
                    HostBingoKernelIdmaArgs(l1_out, l3_out, tot_b), rope)
     chk = g.node(f"Check_rope_cfg{i}", HOST_CORE, "__host_bingo_kernel_check_result",
@@ -201,14 +224,15 @@ def main():
                    is_host_as_acc=True, chiplet_ids=[0x00])
     g = G(dfg)
     max_tot_b = max(r * c * 2 for (r, c) in _LUT_GRID)
-    l1_x = g.l1("rp_x", max_tot_b)
-    l1_cos = g.l1("rp_cos", max_tot_b)
-    l1_sin = g.l1("rp_sin", max_tot_b)
+    # ONE allocation for all four operands, sized for the largest config. Each config lays
+    # its four rows out at its OWN tot_b spacing inside it, which is what the kernel
+    # derives its operand stride from.
+    l1_ops = g.l1("rp_ops", 4 * max_tot_b)
     l1_out = g.l1("rp_out", max_tot_b)
     l3_out = BingoMemAlloc("out_rope", size=max_tot_b, mem_level="L3")
     prev = None
     for i in range(len(CONFIGS)):
-        prev = build_config(g, i, meta, l1_x, l1_cos, l1_sin, l1_out, l3_out, prev)
+        prev = build_config(g, i, meta, l1_ops, l1_out, l3_out, prev)
     os.makedirs(args.output_dir, exist_ok=True)
     dfg.bingo_compile_dfg("xDMA rope (explicit)", args.output_dir,
                           args.output_offload_file_name,

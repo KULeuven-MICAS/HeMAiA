@@ -2,7 +2,7 @@
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 #
-# The transposed-vs-row-major rmsnorm A/B. Two kernels, one tile, five checks; see
+# The transposed-vs-row-major rmsnorm A/B. Two kernels, one tile, four checks; see
 # main_bingo.py for what each check isolates.
 
 MK_DIR   := $(dir $(realpath $(lastword $(MAKEFILE_LIST))))

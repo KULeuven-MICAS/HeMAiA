@@ -14,11 +14,25 @@
 #   (also) __snax_bingo_kernel_simd_softmax_f16_i8      x -> out[rows,D] int8  + Check(int8 +-1)
 #
 # Precision is picked by KERNEL NAME (f16_f16 / f16_i8), not an arg -- the args are HW-free:
-# { input_addr, output_addr, rows, cols }. Inside the one kernel (offload_hw_kernels/xdma.h) all
-# on the SIMD core: reduce(MAX) -> negate -> sub-max -> merged EXP+Sexp -> integer reciprocal
-# (rv32iM divu, no FPU) -> normalize-MUL, and the fused Fp16ToInt8 quant for the i8 variant.
+# { input_addr, output_addr, rows, cols }. Inside the one kernel (offload_hw_kernels/simd.h)
+# all on the SIMD core: reduce(MAX) -> negate fused into the broadcast -> sub-max + EXP +
+# row-sum as ONE pass -> the reciprocal -> normalize-MUL, and the fused Fp16ToInt8 quant for
+# the i8 variant.
 #
-# Measured cost LUT (single-chip RTL sweep, whole-kernel SIMD-core cycles)
+# THE RECIPROCAL MOVED ONTO THE DATAPATH for rows > 1. This core cannot divide, so it used to
+# be an integer `divu` per row plus 16 volatile stores to splat the result across each row's
+# beat; rsqrt(s*s) = 1/s exactly, so the square is now one narrow elementwise pass and the
+# inversion rides the broadcast that had to replicate the scalar anyway. The core's integer
+# reciprocal survives at rows == 1 (one scalar folds into a StreamMap immediate, which is both
+# faster and ~0.5 ULP better) and past cols == 255 (where the FP16 square of Sexp overflows).
+#
+# The golden below needs no change for any of that: it already uses the TRUE reciprocal rather
+# than a bit-exact model of the integer one, and the 2% tolerance covers both routes.
+#
+# THE LUT BELOW IS STALE -- it predates the change and every rows > 1 entry should fall. The
+# reference app measures the whole row-major path at 5,665 cc for [32, 128].
+#
+# Measured cost LUT -- PRE-RSQRT, re-measure (single-chip RTL sweep, SIMD-core cycles)
 #     rows\cols     64     128     256
 #        1           -      834     926
 #        2         3993    2048    2501
@@ -147,7 +161,7 @@ def build_config(g, i, meta, l1_x, l1_f16, l3_f, prev):
     # input (from the memchip), stores the fp16 output, and checks it.
     load = g.node(f"Load_{i}", DMA_CORE, "__snax_bingo_kernel_idma_1d_copy",
                   SnaxBingoKernelIdma1dCopyArgs(off_in, l1_x, tot_b), prev)
-    # fp16 output: reduce-MAX, negate, sub-max, merged EXP+Sexp, integer reciprocal, normalize.
+    # fp16 output: reduce-MAX, negate+broadcast, fused sub-max+EXP+sum, reciprocal, normalize.
     sm_f = g.node(f"SoftmaxF16_{i}", SIMD_CORE, "__snax_bingo_kernel_simd_softmax_f16_f16",
                   SnaxBingoKernelSimdSoftmaxF16F16Args(l1_x, l1_f16, rows, D), load)
     st_f = g.node(f"StoreF16_{i}", HOST_CORE, "__host_bingo_kernel_idma",

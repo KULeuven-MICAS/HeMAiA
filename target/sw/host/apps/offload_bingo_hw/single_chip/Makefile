@@ -30,6 +30,7 @@ APPS += xdma_elementwise_add_1cluster
 # the cluster's SIMD core; the sweep that collects their cost LUTs lives in
 # target/sim/automation/sweep/simd.
 APPS += simd_softmax_1cluster
+APPS += simd_softmax_t_1cluster
 APPS += simd_rmsnorm_1cluster
 APPS += simd_rmsnorm_t_1cluster
 APPS += simd_silu_1cluster

@@ -29,7 +29,7 @@
 # HeMAiA reproduces that.
 #
 # ======================================================================================
-# WHAT EACH CHECK ISOLATES — the reason there are five and not one
+# WHAT EACH CHECK ISOLATES — the reason there are four and not one
 # ======================================================================================
 #
 # The transposed path is three new things at once (a new kernel entry point, a new
@@ -46,8 +46,12 @@
 #   norm_t       y^T           against the transposed golden. Isolates the kernel itself:
 #                              the LANEWISE reduce, the one-beat RSQRT map, and the
 #                              sticky-B multiply.
-#   xpose_out    y^T -> y      BIT-EXACT, the same argument as xpose_in.
-#   norm_t_e2e   y             the whole transposed chain, in the layer's own layout.
+#   norm_t_e2e   y             the whole transposed chain, in the layer's own layout. This
+#                              is also the OUTPUT TRANSPOSE's check and there is no
+#                              separate one: y^T has already been scored by norm_t, so the
+#                              only thing left that can move y is y^T -> y. It cannot be
+#                              bit-exact against a golden the way xpose_in is, because the
+#                              value it carries came through the kernel.
 #   norm_rm      y             the row-major kernel over the same x. The reference arm:
 #                              if this fails too, the fault is in RSQRT or the data, not
 #                              in the transposition.
@@ -116,14 +120,16 @@ BEAT = 64
 ROWS = 32
 COLS = 128
 
-# The hardware rsqrt lands within ~1 FP16 ULP of the true 1/sqrt, so 3% relative is a wide
-# margin -- wide enough that a wrong LAYOUT still misses by far more. Deliberately the SAME
+# BINGO_CHECK_TYPE_FP16_TOL is an ABSOLUTE tolerance, not a relative one. RMSNorm's output
+# has unit RMS and this input reaches about |1.7|, so 0.03 is roughly 2% of full scale --
+# a wide margin against the hardware rsqrt's ~1 FP16 ULP, and still far tighter than any
+# layout error, which scrambles values across the whole range. Deliberately the SAME
 # tolerance both arms are scored at, because the point is that they agree.
 TOL = 0.03
 
 
 def _rmsnorm_ref(rows, cols, seed=0x12345):
-    """x, and the four goldens the five checks score against.
+    """x, and the four goldens the checks score against.
 
     The reduce accumulates in FP32 and narrows the scalar to FP16 before the rsqrt sees
     it, so the reference narrows too -- that step is in the datapath and is not an
@@ -263,7 +269,7 @@ def main():
     dfg.bingo_compile_dfg("SIMD rmsnorm, transposed vs row-major", args.output_dir,
                           args.output_offload_file_name,
                           extra_include_header_list=["rmsnorm_t_data.h"])
-    print(f"Generated rmsnorm_t: [{ROWS}, {COLS}], both arms, 5 checks")
+    print(f"Generated rmsnorm_t: [{ROWS}, {COLS}], both arms, 4 checks")
 
 
 if __name__ == "__main__":
