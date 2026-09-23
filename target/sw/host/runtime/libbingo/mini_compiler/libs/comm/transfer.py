@@ -116,32 +116,51 @@ def plan(have: PortSpec, want: PortSpec, *, mesh=None, elem_bytes=None) -> list:
             raise ValueError(
                 f"cannot bring an operand from {have.mem_level} to {want.mem_level}. The "
                 f"closures are L4->L3 (host iDMA) and L3->L1 (the block's own loads).")
+    xpose = have.transposed != want.transposed
+    # WHERE THE TRANSPOSE SITS IN THE SEQUENCE, and it is NOT always last.
+    #
+    # The transposer permutes 8x8 blocks of a plain [r, c] array: it reads packed bytes and
+    # writes packed bytes. So it has to run while the operand IS packed, and the relayout
+    # has to be derived in the dimensions the BLOCKED side actually has. That fixes the
+    # order, and the two orders are not interchangeable:
+    #
+    #   have packed   transpose FIRST, then relayout, derived in want.stored_shape
+    #   want packed   relayout FIRST, derived in have.stored_shape, then transpose
+    #
+    # y^T -> A is the live case (an RMSNorm on the transposed path feeding a GEMM) and it
+    # is the first one. Doing it the other way round would derive an A-nest for the [128,
+    # 32] buffer and then permute the blocked bytes, which is not A-layout of the [32, 128]
+    # tensor -- it is not any tensor's layout.
+    xpose_first = xpose and have.layout == Layout.PACKED
+
+    relayout_step = None
     if have.layout != want.layout:
         if mesh is not None and elem_bytes is not None:
             # Derive it now and throw it away: the derivation is the feasibility test, and
-            # it is cheap next to being wrong about it.
-            # STORED shape, not logical: a nest is written in the dimensions the bytes
-            # actually have, and for a both-transposed pair those are the swapped ones.
-            # They coincide whenever nothing is transposed, which is every caller today.
-            sr, sc = have.stored_shape
+            # it is cheap next to being wrong about it. STORED shape, not logical -- a nest
+            # is written in the dimensions the bytes actually have, which are `want`'s once
+            # the transpose has already run and `have`'s otherwise. The two coincide
+            # whenever nothing is transposed, which is every caller today.
+            sr, sc = want.stored_shape if xpose_first else have.stored_shape
             convert_args(have.layout, want.layout, sr, sc, mesh, elem_bytes, 0, 0)
-        steps.append(Step("relayout", f"{have.layout} -> {want.layout}, fused into the "
-                                      f"load so it costs no extra traversal",
-                          engine="xDMA 6d"))
-    if have.transposed != want.transposed:
-        # ORDER MATTERS AND IT IS THIS WAY ROUND ON PURPOSE. The relayout above is a stride
-        # nest over a [rows, cols] buffer; running it on transposed bytes would derive the
-        # nest for the wrong dimensions. So the transposition is undone (or applied) LAST,
-        # once the operand is in the layout both sides agree on. The one pairing that would
-        # break that -- a transpose between two different non-packed layouts -- is refused
-        # here rather than emitted, because neither order is right for it.
-        if have.layout != want.layout and Layout.PACKED not in (have.layout, want.layout):
+        relayout_step = Step("relayout", f"{have.layout} -> {want.layout}, fused into the "
+                                         f"load so it costs no extra traversal",
+                             engine="xDMA 6d")
+
+    xpose_step = None
+    if xpose:
+        # A TRANSPOSE NEEDS A PACKED SIDE. Blocked bytes have no meaningful transpose: the
+        # permutation the transposer performs is defined on the plain array, so applying it
+        # to an A- or B-blocked buffer yields neither the source tensor's layout nor the
+        # destination's. Refused rather than emitted, including for the A^T -> A pairing
+        # where the two LAYOUTS agree and only the orientation differs.
+        if Layout.PACKED not in (have.layout, want.layout):
             raise ValueError(
                 f"{have.layout}{'^T' if have.transposed else ''} -> "
-                f"{want.layout}{'^T' if want.transposed else ''} asks for a transpose AND "
-                f"a blocked-layout change in one hop, and the two do not commute: the "
-                f"stride nest is derived for one set of dimensions and the transposer "
-                f"reorders the other. Go through packed with an explicit Reshape.")
+                f"{want.layout}{'^T' if want.transposed else ''} asks for a transpose with "
+                f"no packed side. The transposer permutes 8x8 blocks of a plain array, so "
+                f"transposing already-blocked bytes gives neither layout's tensor. Go "
+                f"through packed with an explicit Reshape.")
         if elem_bytes is not None and elem_bytes not in (1, 2):
             raise ValueError(
                 f"a transpose at {elem_bytes}-byte elements has no hardware path: the "
@@ -149,10 +168,13 @@ def plan(have: PortSpec, want: PortSpec, *, mesh=None, elem_bytes=None) -> list:
                 f"nothing composes a wider element on the writer side. int32 falls back to "
                 f"a DM-core loop, which is not a transfer this plans. Transpose at fp16 "
                 f"and convert after.")
-        steps.append(Step("transpose",
+        xpose_step = Step("transpose",
                           f"{tuple(have.stored_shape)} -> {tuple(want.stored_shape)}; an "
                           f"8x8 block transposer, not a stride nest",
-                          engine="xDMA transposer"))
+                          engine="xDMA transposer")
+
+    ordered = (xpose_step, relayout_step) if xpose_first else (relayout_step, xpose_step)
+    steps.extend(s for s in ordered if s is not None)
     if have.dtype != want.dtype:
         raise ValueError(
             f"precision {have.dtype} -> {want.dtype} is not inserted automatically: it "
@@ -231,10 +253,12 @@ def bring_in(ctx, name, have: Port, want: PortSpec, *, mesh, elem_bytes, after=(
                                          mem_level="L1", doc=spec.doc,
                                          transposed=spec.transposed)
         elif st.kind == "transpose":
-            # The transposer is a WRITER extension, so it scatters into the writer's own
-            # local TCDM: the move must END in L1. It does not have to START there -- the
-            # kernel stages a non-local source itself -- but a block calling this already
-            # wants its operand in L1, so the destination below always is.
+            # The transposer is a datapath extension on whichever side the cfg declares
+            # it (reader on snax_split_cluster, writer elsewhere -- BINGO_TRANSPOSER_ARM
+            # hides which), and either way it is a LOCAL-LOOPBACK transform: the move ends
+            # in the cluster's own TCDM. It does not have to START there -- the kernel
+            # stages a non-local source itself -- but a block calling this already wants
+            # its operand in L1, so the destination below always is.
             rows, cols = spec.stored_shape
             nbytes = rows * cols * elem_bytes
             prev = nodes[-1] if nodes else after
