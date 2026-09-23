@@ -44,8 +44,16 @@ def index_map(layout: str, rows: int, cols: int, mesh: tuple) -> np.ndarray:
     mr, ts, mc = mesh
     r_i = np.arange(rows)[:, None]
     c_i = np.arange(cols)[None, :]
-    if layout == "packed":
+    if layout == "row_major":
         return np.broadcast_to(r_i * cols + c_i, (rows, cols)).copy()
+    if layout == "col_major":
+        # THE TRANSPOSE, AS AN INDEX MAP LIKE EVERY OTHER LAYOUT. This is the whole of the
+        # orientation axis: a [rows, cols] tensor whose bytes are laid out [cols, rows].
+        # It used to be a boolean beside the enum, which meant byte order was described in
+        # two languages -- a verified permutation for the blocking and an ad-hoc flag for
+        # the orientation -- and every place they met needed hand-written reconciliation.
+        # One map removes all of it.
+        return np.broadcast_to(c_i * rows + r_i, (rows, cols)).copy()
     if layout == "A":
         # (m, k, r, s): row = m*meshRow + r, col = k*tileSize + s
         m, r = divmod(r_i, mr)
@@ -90,7 +98,8 @@ def _divides(layout: str, rows: int, cols: int, mesh: tuple) -> None:
     """Refuse a tensor the layout cannot tile. A partial tile is not a layout error the
     hardware reports; it writes a short buffer and leaves the tail uninitialised."""
     mr, ts, mc = mesh
-    need = {"A": (mr, ts), "B": (ts, mc), "D": (mr, mc), "packed": (1, 1)}[layout]
+    need = {"A": (mr, ts), "B": (ts, mc), "D": (mr, mc),
+            "row_major": (1, 1), "col_major": (1, 1)}[layout]
     if rows % need[0] or cols % need[1]:
         raise ValueError(
             f"a {rows}x{cols} tensor does not tile layout {layout!r} on a {mesh} array: "
@@ -208,10 +217,13 @@ def convert_args(src_layout, dst_layout, rows, cols, mesh, elem_bytes, src, dst)
                 f"{src_layout}->{dst_layout} is a TRANSPOSE, not a reshape: {src_layout} "
                 f"runs contiguously along {src_dir}s and {dst_layout} along {dst_dir}s, so "
                 f"no pair of strides makes a common run.\n"
-                f"NOTE this is a BLOCKED-layout transpose, not the plain axis exchange "
-                f"PortSpec.transposed describes. That one -- packed [r, c] stored as "
-                f"[c, r], which is what a per-row reduction wants -- is a separate field "
-                f"on the spec and comm.transfer closes it with the 8x8 block transposer.\n"
+                f"A TRANSPOSE IS A KERNEL, NOT A NEST, and which kernel depends on the "
+                f"pair. row_major <-> col_major is the plain axis exchange a per-row "
+                f"reduction wants, and comm.transfer routes it to the 8x8 block "
+                f"transposer automatically -- so a conversion BETWEEN a blocked layout "
+                f"and col_major is planned as two steps through row_major and needs "
+                f"nothing from you. This message is the other case: a transpose between "
+                f"two BLOCKED layouts.\n"
                 f"Use a dedicated transposer kernel instead -- "
                 f"__snax_bingo_kernel_xdma_row_major_to_b and friends, via "
                 f"kernels/kernel_layout.py. They take the array shape as RUNTIME ARGS, so "

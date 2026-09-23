@@ -1754,11 +1754,11 @@ class FlashAttention(Block):
             # single contiguous FP32 (m, l) the junction folds does not exist until the
             # gather's pack builds it, so one port here would name a buffer nothing wrote.
             for c in range(cfg.clusters):
-                outs[f"m_c{c}"] = PortSpec(Layout.PACKED, DType.F16, (1, cfg.br),
+                outs[f"m_c{c}"] = PortSpec(Layout.ROW_MAJOR, DType.F16, (1, cfg.br),
                                            mem_level=MemLevel.L1,
                                            doc=f"cluster {c} running max over its KV "
                                                f"shard, in the softmax arena")
-                outs[f"l_c{c}"] = PortSpec(Layout.PACKED, DType.F16, (1, cfg.br),
+                outs[f"l_c{c}"] = PortSpec(Layout.ROW_MAJOR, DType.F16, (1, cfg.br),
                                            mem_level=MemLevel.L1,
                                            doc=f"cluster {c} running sum over its KV "
                                                f"shard, in the last score buffer")

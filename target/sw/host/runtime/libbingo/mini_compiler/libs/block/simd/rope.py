@@ -159,11 +159,11 @@ class RoPE(Block):
         c = self.cfg
         row = (c.rows, c.cols)
         ports = {
-            "x": PortSpec(Layout.PACKED, DType.F16, row, mem_level=MemLevel.L1,
+            "x": PortSpec(Layout.ROW_MAJOR, DType.F16, row, mem_level=MemLevel.L1,
                           doc="row-major fp16, one row per token position (slot 0)"),
-            "cos": PortSpec(Layout.PACKED, DType.F16, row, mem_level=MemLevel.L1,
+            "cos": PortSpec(Layout.ROW_MAJOR, DType.F16, row, mem_level=MemLevel.L1,
                             doc="precomputed cos table, duplicated per pair (slot 1)"),
-            "sin": PortSpec(Layout.PACKED, DType.F16, row, mem_level=MemLevel.L1,
+            "sin": PortSpec(Layout.ROW_MAJOR, DType.F16, row, mem_level=MemLevel.L1,
                             doc="precomputed sin table, sign already applied (slot 3)"),
         }
         if self.x_partner_ready:
@@ -173,14 +173,14 @@ class RoPE(Block):
             # x's partners" is not something a PortSpec can express -- see the note on
             # _PAIRING. Binding it is the caller asserting it.
             ports["xswap"] = PortSpec(
-                Layout.PACKED, DType.F16, row, mem_level=MemLevel.L1,
+                Layout.ROW_MAJOR, DType.F16, row, mem_level=MemLevel.L1,
                 doc="x with each element replaced by its partner (slot 2), caller-built")
         return ports
 
     @property
     def outputs(self) -> dict:
         c = self.cfg
-        return {"y": PortSpec(Layout.PACKED, DType.F16, (c.rows, c.cols),
+        return {"y": PortSpec(Layout.ROW_MAJOR, DType.F16, (c.rows, c.cols),
                               mem_level=MemLevel.L1, doc="row-major fp16, rotated")}
 
     def build(self, ctx: Ctx, bound: dict) -> BlockResult:

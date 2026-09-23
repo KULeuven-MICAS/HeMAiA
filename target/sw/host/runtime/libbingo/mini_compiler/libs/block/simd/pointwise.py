@@ -10,7 +10,7 @@ WHY THAT IS THE AXIS THIS FILE IS CUT ON. A permutation of the inputs of an elem
 is the same permutation of its output, so quantise, dequantise and the residual add are
 correct in ANY layout and in either orientation -- MoE runs its SwiGLU straight over a
 D-layout block for exactly this reason. Their ports carry a `layout` so the contract can
-still state what they were handed, and a `transposed` flag they pass through, but neither
+still state what they were handed -- layout included, orientation with it -- but neither
 changes what they compute.
 
 The per-row operators are the ones where layout is load-bearing (norm.py, rope.py). The
@@ -43,7 +43,7 @@ class Quantize(Block):
     name = "quantize"
 
     def __init__(self, cfg: RowCfg = None, *, inv_scale_f32bits: int = None,
-                 layout: Layout = Layout.PACKED, transposed: bool = False, **params):
+                 layout: Layout = Layout.ROW_MAJOR, **params):
         if inv_scale_f32bits is None:
             raise ValueError(
                 "Quantize needs inv_scale_f32bits: the right scale depends on the range "
@@ -51,21 +51,20 @@ class Quantize(Block):
         self.cfg = cfg if cfg is not None else RowCfg(**params)
         self.inv_scale_f32bits = int(inv_scale_f32bits)
         self.layout = Layout(layout)
-        self.transposed = bool(transposed)
         check_row(self.cfg.cols, "Quantize")
 
     @property
     def inputs(self) -> dict:
         c = self.cfg
         return {"x": PortSpec(self.layout, DType.F16, (c.rows, c.cols),
-                              mem_level=MemLevel.L1, transposed=self.transposed,
+                              mem_level=MemLevel.L1,
                               doc="fp16 in this block's layout")}
 
     @property
     def outputs(self) -> dict:
         c = self.cfg
         return {"y": PortSpec(self.layout, DType.I8, (c.rows, c.cols),
-                              mem_level=MemLevel.L1, transposed=self.transposed,
+                              mem_level=MemLevel.L1,
                               doc="int8, same layout -- quantising is elementwise")}
 
     def build(self, ctx: Ctx, bound: dict) -> BlockResult:
@@ -98,17 +97,15 @@ class Residual(Block):
 
     name = "residual"
 
-    def __init__(self, cfg: RowCfg = None, *, layout: Layout = Layout.PACKED,
-                 dtype: DType = DType.F16, transposed: bool = False, **params):
+    def __init__(self, cfg: RowCfg = None, *, layout: Layout = Layout.ROW_MAJOR,
+                 dtype: DType = DType.F16, **params):
         self.cfg = cfg if cfg is not None else RowCfg(**params)
         self.layout, self.dtype = Layout(layout), DType(dtype)
-        self.transposed = bool(transposed)
 
     @property
     def inputs(self) -> dict:
         c = self.cfg
-        spec = PortSpec(self.layout, self.dtype, (c.rows, c.cols), mem_level=MemLevel.L1,
-                        transposed=self.transposed)
+        spec = PortSpec(self.layout, self.dtype, (c.rows, c.cols), mem_level=MemLevel.L1)
         return {"a": replace(spec, doc="the branch output"),
                 "b": replace(spec, doc="the skip")}
 
@@ -116,7 +113,7 @@ class Residual(Block):
     def outputs(self) -> dict:
         c = self.cfg
         return {"y": PortSpec(self.layout, self.dtype, (c.rows, c.cols),
-                              mem_level=MemLevel.L1, transposed=self.transposed,
+                              mem_level=MemLevel.L1,
                               doc="a + b")}
 
     def build(self, ctx: Ctx, bound: dict) -> BlockResult:
@@ -165,7 +162,7 @@ class Dequantize(Block):
     name = "dequantize"
 
     def __init__(self, cfg: RowCfg = None, *, scale_f32bits: int = None,
-                 layout: Layout = Layout.PACKED, transposed: bool = False, **params):
+                 layout: Layout = Layout.ROW_MAJOR, **params):
         if scale_f32bits is None:
             raise ValueError(
                 "Dequantize needs scale_f32bits: it is 1/(scale_x * scale_w) for the GEMM "
@@ -173,21 +170,20 @@ class Dequantize(Block):
         self.cfg = cfg if cfg is not None else RowCfg(**params)
         self.scale_f32bits = int(scale_f32bits)
         self.layout = Layout(layout)
-        self.transposed = bool(transposed)
         check_row(self.cfg.cols, "Dequantize")
 
     @property
     def inputs(self) -> dict:
         c = self.cfg
         return {"x": PortSpec(self.layout, DType.F16, (c.rows, c.cols),
-                              mem_level=MemLevel.L1, transposed=self.transposed,
+                              mem_level=MemLevel.L1,
                               doc="fp16 straight off the GEMM's D port")}
 
     @property
     def outputs(self) -> dict:
         c = self.cfg
         return {"y": PortSpec(self.layout, DType.F16, (c.rows, c.cols),
-                              mem_level=MemLevel.L1, transposed=self.transposed,
+                              mem_level=MemLevel.L1,
                               doc="fp16 back in activation range, same layout")}
 
     def build(self, ctx: Ctx, bound: dict) -> BlockResult:

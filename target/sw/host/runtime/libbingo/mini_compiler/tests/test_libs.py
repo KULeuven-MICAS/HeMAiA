@@ -153,7 +153,7 @@ refuses("an int8 reshape is refused for the RIGHT reason: the run is too narrow"
 # conversion -- so the assertion would pass for the wrong reason.
 from libs.comm import transfer as _staging                                     # noqa: E402
 refuses("a transpose is refused as a transpose, not as a precision problem",
-        lambda: _staging.plan(PortSpec("packed", "f16", (32, 128), mem_level="L1"),
+        lambda: _staging.plan(PortSpec("row_major", "f16", (32, 128), mem_level="L1"),
                               PortSpec("B", "f16", (32, 128), mem_level="L1"),
                               mesh=(16, 4, 16), elem_bytes=2), "TRANSPOSE")
 check("a reshape the xDMA can do is planned, not refused",

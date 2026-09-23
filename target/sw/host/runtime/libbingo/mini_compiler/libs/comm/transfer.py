@@ -116,65 +116,61 @@ def plan(have: PortSpec, want: PortSpec, *, mesh=None, elem_bytes=None) -> list:
             raise ValueError(
                 f"cannot bring an operand from {have.mem_level} to {want.mem_level}. The "
                 f"closures are L4->L3 (host iDMA) and L3->L1 (the block's own loads).")
-    xpose = have.transposed != want.transposed
-    # WHERE THE TRANSPOSE SITS IN THE SEQUENCE, and it is NOT always last.
+    # ONE RULE FOR BOTH HALVES. Layouts that disagree on their contiguous axis differ by
+    # a transpose, which no stride nest expresses -- nest.py refuses exactly that pair. So
+    # the plan is: put the operand in the orientation the destination blocks in, with the
+    # 8x8 block transposer, and let convert_args do the rest.
     #
-    # The transposer permutes 8x8 blocks of a plain [r, c] array: it reads packed bytes and
-    # writes packed bytes. So it has to run while the operand IS packed, and the relayout
-    # has to be derived in the dimensions the BLOCKED side actually has. That fixes the
-    # order, and the two orders are not interchangeable:
+    #   row_major <-> col_major        the transposer alone
+    #   col_major  -> A/B/D            transpose to row_major FIRST, then the nest
+    #   A/B/D      -> col_major        the nest FIRST, then transpose
+    #   row_major <-> A/B/D            the nest alone, as before
     #
-    #   have packed   transpose FIRST, then relayout, derived in want.stored_shape
-    #   want packed   relayout FIRST, derived in have.stored_shape, then transpose
-    #
-    # y^T -> A is the live case (an RMSNorm on the transposed path feeding a GEMM) and it
-    # is the first one. Doing it the other way round would derive an A-nest for the [128,
-    # 32] buffer and then permute the blocked bytes, which is not A-layout of the [32, 128]
-    # tensor -- it is not any tensor's layout.
-    xpose_first = xpose and have.layout == Layout.PACKED
+    # ORDER IS FORCED, not chosen: the transposer permutes a PLAIN array, so it runs while
+    # the operand is unblocked, and the nest is derived in the blocked side's own
+    # dimensions. There is no flag to reconcile any more -- `xpose_first` and the
+    # "needs a packed side" refusal both came from having orientation live outside the
+    # layout, and both are gone with it. A transpose between two BLOCKED layouts is still
+    # refused, by convert_args, where it belongs.
+    UNBLOCKED = (Layout.ROW_MAJOR, Layout.COL_MAJOR)
+    xpose = ((have.layout in UNBLOCKED) != (want.layout in UNBLOCKED)
+             and Layout.COL_MAJOR in (have.layout, want.layout)) \
+        or {have.layout, want.layout} == set(UNBLOCKED)
+    xpose_first = xpose and have.layout == Layout.COL_MAJOR
 
     relayout_step = None
-    if have.layout != want.layout:
+    if have.layout != want.layout and not {have.layout, want.layout} == set(UNBLOCKED):
+        # The nest runs between row_major and the blocked layout, whichever side that is;
+        # the transpose above or below it closes the orientation.
+        src_lay = Layout.ROW_MAJOR if xpose_first else have.layout
+        dst_lay = want.layout if want.layout not in UNBLOCKED else Layout.ROW_MAJOR
         if mesh is not None and elem_bytes is not None:
             # Derive it now and throw it away: the derivation is the feasibility test, and
-            # it is cheap next to being wrong about it. STORED shape, not logical -- a nest
-            # is written in the dimensions the bytes actually have, which are `want`'s once
-            # the transpose has already run and `have`'s otherwise. The two coincide
-            # whenever nothing is transposed, which is every caller today.
-            sr, sc = want.stored_shape if xpose_first else have.stored_shape
-            convert_args(have.layout, want.layout, sr, sc, mesh, elem_bytes, 0, 0)
-        relayout_step = Step("relayout", f"{have.layout} -> {want.layout}, fused into the "
-                                         f"load so it costs no extra traversal",
-                             engine="xDMA 6d")
+            # it is cheap next to being wrong about it. In the tensor's own dimensions --
+            # the blocked layouts are defined on (rows, cols) and the transpose, where
+            # there is one, has already put the bytes that way round.
+            r, c = want.shape
+            convert_args(src_lay, dst_lay, r, c, mesh, elem_bytes, 0, 0)
+        relayout_step = Step("relayout", f"{src_lay} -> {dst_lay}, fused into the load so "
+                                         f"it costs no extra traversal", engine="xDMA 6d")
 
     xpose_step = None
     if xpose:
-        # A TRANSPOSE NEEDS A PACKED SIDE. Blocked bytes have no meaningful transpose: the
-        # permutation the transposer performs is defined on the plain array, so applying it
-        # to an A- or B-blocked buffer yields neither the source tensor's layout nor the
-        # destination's. Refused rather than emitted, including for the A^T -> A pairing
-        # where the two LAYOUTS agree and only the orientation differs.
-        if Layout.PACKED not in (have.layout, want.layout):
-            raise ValueError(
-                f"{have.layout}{'^T' if have.transposed else ''} -> "
-                f"{want.layout}{'^T' if want.transposed else ''} asks for a transpose with "
-                f"no packed side. The transposer permutes 8x8 blocks of a plain array, so "
-                f"transposing already-blocked bytes gives neither layout's tensor. Go "
-                f"through packed with an explicit Reshape.")
         if elem_bytes is not None and elem_bytes not in (1, 2):
             raise ValueError(
                 f"a transpose at {elem_bytes}-byte elements has no hardware path: the "
                 f"xDMA transposer's native modes are the cfg's elementWidth [8, 16], and "
-                f"nothing composes a wider element on the writer side. int32 falls back to "
-                f"a DM-core loop, which is not a transfer this plans. Transpose at fp16 "
-                f"and convert after.")
+                f"nothing composes a wider element. int32 falls back to a DM-core loop, "
+                f"which is not a transfer this plans. Transpose at fp16 and convert after.")
+        src_shape = have.stored_shape if xpose_first else want.stored_shape
+        dst_shape = (src_shape[1], src_shape[0])
         xpose_step = Step("transpose",
-                          f"{tuple(have.stored_shape)} -> {tuple(want.stored_shape)}; an "
-                          f"8x8 block transposer, not a stride nest",
+                          f"{tuple(src_shape)} -> {tuple(dst_shape)}; an 8x8 block "
+                          f"transposer, not a stride nest",
                           engine="xDMA transposer")
 
     ordered = (xpose_step, relayout_step) if xpose_first else (relayout_step, xpose_step)
-    steps.extend(s for s in ordered if s is not None)
+    steps.extend(x for x in ordered if x is not None)
     if have.dtype != want.dtype:
         raise ValueError(
             f"precision {have.dtype} -> {want.dtype} is not inserted automatically: it "
@@ -229,7 +225,7 @@ def bring_in(ctx, name, have: Port, want: PortSpec, *, mesh, elem_bytes, after=(
             handle, nd = hoist(ctx, name, handle, nbytes=nbytes, after=after)
             nodes.append(nd)
             spec = PortSpec(spec.layout, spec.dtype, spec.shape, mem_level="L3",
-                            doc=spec.doc, transposed=spec.transposed)
+                            doc=spec.doc)
         elif st.kind == "relayout":
             rows, cols = spec.stored_shape
             nbytes = rows * cols * elem_bytes
@@ -244,14 +240,17 @@ def bring_in(ctx, name, have: Port, want: PortSpec, *, mesh, elem_bytes, after=(
                               SnaxBingoKernelXdma1dCopyArgs(handle, staged, nbytes), prev)
                 nodes.append(ld)
                 handle, prev = staged, ld
-            dst = ctx.l1(f"{name}_{want.layout.lower()}", nbytes)
+            # WHERE THIS NEST LANDS. When the destination is col_major the transpose
+            # still has to run after it, so the nest targets row_major and the transpose
+            # step below finishes the job; otherwise it goes straight to what was asked.
+            to = Layout.ROW_MAJOR if want.layout == Layout.COL_MAJOR else want.layout
+            dst = ctx.l1(f"{name}_{to.lower()}", nbytes)
             nd = ctx.node(f"Relayout_{name}", ctx.xdma, "__snax_bingo_kernel_xdma_6d",
-                          convert_args(spec.layout, want.layout, rows, cols, mesh,
+                          convert_args(spec.layout, to, rows, cols, mesh,
                                        elem_bytes, handle, dst), prev)
             nodes.append(nd)
-            handle, spec = dst, PortSpec(want.layout, spec.dtype, spec.shape,
-                                         mem_level="L1", doc=spec.doc,
-                                         transposed=spec.transposed)
+            handle, spec = dst, PortSpec(to, spec.dtype, spec.shape,
+                                         mem_level="L1", doc=spec.doc)
         elif st.kind == "transpose":
             # The transposer is a datapath extension on whichever side the cfg declares
             # it (reader on snax_split_cluster, writer elsewhere -- BINGO_TRANSPOSER_ARM
@@ -268,7 +267,8 @@ def bring_in(ctx, name, have: Port, want: PortSpec, *, mesh, elem_bytes, after=(
                           SnaxBingoKernelXdmaTranspose2dArgs(handle, dst, rows, cols,
                                                              elem_bytes), prev)
             nodes.append(nd)
-            handle, spec = dst, PortSpec(spec.layout, spec.dtype, spec.shape,
-                                         mem_level="L1", doc=spec.doc,
-                                         transposed=not spec.transposed)
+            flipped = (Layout.COL_MAJOR if spec.layout == Layout.ROW_MAJOR
+                       else Layout.ROW_MAJOR)
+            handle, spec = dst, PortSpec(flipped, spec.dtype, spec.shape,
+                                         mem_level="L1", doc=spec.doc)
     return Port(spec, handle, (nodes[-1],), cluster=ctx.cluster, name=name), nodes
