@@ -376,8 +376,12 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_6d(void *arg)
 //     StreamElementwise w/ src_b_addr) hide this by swapping to the lower base for
 //     commutative ops; the GENERAL N-operand form (explicit operand_stride) still
 //     requires operands laid out at a constant ascending stride.
-//   - Falls back to a plain CPU int32 accumulate when the writer extension is
-//     not present in the generated HW (WRITER_EXT_ELEMENTWISEADDBIT32 undefined).
+//   - Falls back to a plain CPU int32 accumulate only when the extension is on NEITHER
+//     side (BINGO_HAS_ELTADD == 0). Which side a cfg puts it on differs -- the versacore
+//     and split clusters declare it under writer_extensions, snax_xdma_cluster under
+//     reader_extensions -- and either folds the same stream for a local transfer, so the
+//     macro picks whichever was built. Gating on the writer macro alone used to drop
+//     snax_xdma_cluster to the scalar loop silently.
 // ==========================================================================
 static inline uint32_t xdma_elementwise_add_run(
     uint64_t src_base, uint64_t dst_addr,
@@ -397,10 +401,10 @@ static inline uint32_t xdma_elementwise_add_run(
     }
     uint32_t tiles = num_int32_elem_per_operand / (XDMA_WIDTH / 4);  // 16 int32/vector
     BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
-#ifdef WRITER_EXT_ELEMENTWISEADDBIT32
+#if BINGO_HAS_ELTADD
     xdma_disable_all_extensions();
     uint32_t csr[1] = { num_operands };
-    xdma_enable_dst_ext(WRITER_EXT_ELEMENTWISEADDBIT32, csr);
+    BINGO_ELTADD_ARM(csr);
 
     // Reader: dim0 = operand index (inner), dim1 = output tiles.
     uint32_t ts_src[2] = { operand_stride, XDMA_WIDTH };
@@ -418,7 +422,7 @@ static inline uint32_t xdma_elementwise_add_run(
     xdma_task_t task_id = xdma_start();
     xdma_wait_task(task_id);
     BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
-    xdma_disable_dst_ext(WRITER_EXT_ELEMENTWISEADDBIT32);
+    BINGO_ELTADD_DISARM();
 #else
     // NO HasElementwiseAdd IN THIS CFG -- this is the CPU fallback, and it is CORRECT but
     // it is a scalar loop over every int32 element on the xDMA hart, where the extension
@@ -434,9 +438,10 @@ static inline uint32_t xdma_elementwise_add_run(
         if (!warned) {
             warned = true;
             printf_safe("[Cluster %d Core %d]: WARNING! xDMA elementwise_add is running "
-                        "its CPU fallback -- this cfg has no HasElementwiseAdd writer "
-                        "extension, so %u int32 elements are summed in scalar code. "
-                        "Correct, but not the cost the graph implies.\r\n",
+                        "its CPU fallback -- this cfg declares HasElementwiseAdd on "
+                        "NEITHER the reader nor the writer list, so %u int32 elements are "
+                        "summed in scalar code. Correct, but not the cost the graph "
+                        "implies.\r\n",
                         snrt_cluster_idx(), snrt_cluster_core_idx(),
                         num_int32_elem_per_operand);
         }

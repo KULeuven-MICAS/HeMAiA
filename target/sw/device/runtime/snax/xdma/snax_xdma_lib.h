@@ -556,6 +556,29 @@ inline int32_t xdma_disable_dst_ext(uint8_t ext) {
 #define BINGO_TRANSPOSER_DISARM() ((void)0)
 #endif
 
+// SAME QUESTION, SAME ANSWER, FOR THE N-OPERAND INT32 FOLD.
+//
+// HasElementwiseAdd folds `operandCount` consecutive beats into one, 16 INT32 lanes of a
+// 512-bit beat per cycle. Like the transposer it is an ordinary DataPathExtension and the
+// cfg decides which side it sits on -- and the cfgs in this tree genuinely disagree
+
+#if defined(WRITER_EXT_ELEMENTWISEADDBIT32)
+#define BINGO_HAS_ELTADD 1
+#define BINGO_ELTADD_SIDE "writer"
+#define BINGO_ELTADD_ARM(csr) xdma_enable_dst_ext(WRITER_EXT_ELEMENTWISEADDBIT32, (csr))
+#define BINGO_ELTADD_DISARM() xdma_disable_dst_ext(WRITER_EXT_ELEMENTWISEADDBIT32)
+#elif defined(READER_EXT_ELEMENTWISEADDBIT32)
+#define BINGO_HAS_ELTADD 1
+#define BINGO_ELTADD_SIDE "reader"
+#define BINGO_ELTADD_ARM(csr) xdma_enable_src_ext(READER_EXT_ELEMENTWISEADDBIT32, (csr))
+#define BINGO_ELTADD_DISARM() xdma_disable_src_ext(READER_EXT_ELEMENTWISEADDBIT32)
+#else
+#define BINGO_HAS_ELTADD 0
+#define BINGO_ELTADD_SIDE "none"
+#define BINGO_ELTADD_ARM(csr) ((void)(csr), -1)
+#define BINGO_ELTADD_DISARM() ((void)0)
+#endif
+
 // Junction (data-switch 2->1 fold) interface
 //
 // A writer-junction folds the arriving remote stream with this node's local read -- the collective
