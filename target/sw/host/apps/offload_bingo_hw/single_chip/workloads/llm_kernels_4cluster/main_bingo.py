@@ -54,7 +54,8 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.dirname(current_dir))
 ROOT_DIR = os.path.normpath(os.path.join(current_dir, "../../../../../../../../"))
 sys.path.append(f"{ROOT_DIR}/target/sw/host/runtime/libbingo/mini_compiler")
-sys.path.append(f"{ROOT_DIR}/util/sim/common")
+sys.path.append(f"{ROOT_DIR}/util/sim/common")   # bingo_data_staging, goldens
+sys.path.append(f"{ROOT_DIR}/util/sim/llm")      # the layer builder and its datagen
 sys.path.append(current_dir)
 
 from kernels_datagen import generate, stage                            # noqa: E402
@@ -62,7 +63,7 @@ import _bingo_paths  # noqa: F401,E402
 from bingo_dfg import BingoDFG                                         # noqa: E402
 from bingo_data_staging import DataStaging                             # noqa: E402
 from bingo_node import BingoNode                                       # noqa: E402
-from bingo_mem_handle import BingoMemAlloc                             # noqa: E402
+from bingo_mem_handle import BingoMemAlloc, BingoMemAllocView                             # noqa: E402
 from bingo_platform import (core_roles, guard_cluster_count,           # noqa: E402
                             parse_platform_cfg)
 from bingo_kernel_args import (                                        # noqa: E402
@@ -75,6 +76,7 @@ from bingo_kernel_args import (                                        # noqa: E
     SnaxBingoKernelSimdFp16ToInt8Args,
     SnaxBingoKernelSimdRmsnormF16F16Args,
     SnaxBingoKernelSimdRopeArgs,
+    SnaxBingoKernelIdmaPairwiseSwapArgs,
 )
 from libs.block.flash_attention import mesh_from_hwcfg                 # noqa: E402
 from libs.comm.nest import convert_args                                # noqa: E402
@@ -165,13 +167,23 @@ def main():
                        exact=False, elems=T * d, tol=0.05)
 
     # ---- 2. rope ----------------------------------------------------------------------
-    r_x, r_c, r_s, r_o = (l1("rope_x", n_f16), l1("rope_cos", n_f16),
-                          l1("rope_sin", n_f16), l1("rope_out", n_f16))
-    l1n = load("rope_x", hs["rope_x"], r_x, n_f16, prev)
-    l2n = load("rope_cos", hs["rope_cos"], r_c, n_f16, l1n)
-    l3n = load("rope_sin", hs["rope_sin"], r_s, n_f16, l2n)
+    # THE FOUR OPERANDS ARE ONE BLOCK: [ x | cos_full | xswap | sin_signed ], because the
+    # reader adds a single stride per axis and the fused kernel derives that stride from
+    # the shape. The order IS the pairing -- EW0 multiplies slot 0 by 1 and 2 by 3, EW1
+    # adds the two -- so permuting it computes x*xswap + cos*sin, not a rotation.
+    r_ops = l1("rope_ops", 4 * n_f16)
+    r_o = l1("rope_out", n_f16)
+    slot = lambda k: r_ops if k == 0 else BingoMemAllocView(r_ops, k * n_f16)
+    l1n = load("rope_x", hs["rope_x"], slot(0), n_f16, prev)
+    l2n = load("rope_cos", hs["rope_cos"], slot(1), n_f16, l1n)
+    l3n = load("rope_sin", hs["rope_sin"], slot(3), n_f16, l2n)
+    # The adjacent fp16-pair swap, on the DM core. It is a 2-byte reorder inside an 8-byte
+    # TCDM word, which is below the granularity the SIMD reader's AGU can address, so it
+    # has to be a real byte-addressed DMA rather than a stride.
+    sw = node("Rope_swap", R["dm"], "__snax_bingo_kernel_idma_pairwise_swap",
+              SnaxBingoKernelIdmaPairwiseSwapArgs(slot(0), slot(2), T * d, 2), l3n)
     k = node("Rope", R["simd"], "__snax_bingo_kernel_simd_rope",
-             SnaxBingoKernelSimdRopeArgs(r_x, r_c, r_s, r_o, cols=d, rows=T), l3n)
+             SnaxBingoKernelSimdRopeArgs(r_ops, r_o, cols=d, rows=T), sw)
     prev = store_check("rope", r_o, n_f16, hs["rope_golden"], k,
                        exact=False, elems=T * d, tol=0.05)
 
@@ -212,8 +224,8 @@ def main():
 
     # ---- 6. the two reshapes -----------------------------------------------------------
     for tag, src_lay, dst_lay, src_h, gold_h in (
-            ("rs_d2p", "D", "packed", "rs_d_src", "rs_d2p_golden"),
-            ("rs_p2a", "packed", "A", "rs_p_src", "rs_p2a_golden")):
+            ("rs_d2p", "D", "row_major", "rs_d_src", "rs_d2p_golden"),
+            ("rs_p2a", "row_major", "A", "rs_p_src", "rs_p2a_golden")):
         s_b, d_b = l1(f"{tag}_in", n_f16), l1(f"{tag}_out", n_f16)
         ld = load(tag, hs[src_h], s_b, n_f16, prev)
         k = node(f"Reshape_{tag}", R["xdma"], "__snax_bingo_kernel_xdma_6d",

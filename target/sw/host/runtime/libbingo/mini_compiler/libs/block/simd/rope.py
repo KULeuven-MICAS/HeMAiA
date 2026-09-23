@@ -6,7 +6,7 @@
 """Rotary position embedding: the other per-row operator, and the one that needs two cores.
 
 Like RMSNorm, RoPE works ALONG a row -- it pairs feature j with feature j+1 and rotates
-them together -- so it needs the row contiguous and says `packed` and means it. Unlike
+them together -- so it needs the row contiguous and says `row_major` and means it. Unlike
 RMSNorm it does not REDUCE along the row, and that is why there is no transposed variant:
 transposing buys a reduction that falls out of the per-lane accumulators, and a rotation
 has no reduction to buy.
@@ -90,7 +90,7 @@ _SLOT = {"x": 0, "cos": 1, "xswap": 2, "sin": 3}
 #                  elements for identical traffic.
 #
 # NOT DETECTABLE FROM A PORT, and that is the point of putting it here. Both conventions
-# consume an ordinary packed [rows, cols] FP16 x -- same layout, same dtype, same shape,
+# consume an ordinary row_major [rows, cols] FP16 x -- same layout, same dtype, same shape,
 # same orientation. The difference is in the OPERATOR, not in the tensor, so no amount of
 # PortSpec vocabulary can tell them apart and the caller has to say.
 _PAIRING = ("interleaved", "half")

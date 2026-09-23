@@ -46,7 +46,7 @@ class Reshape(Block):
       in   x  `src` layout, in L1
       out  y  `dst` layout, in L1
 
-    At FP16 this covers packed<->A, packed<->D and A<->D. It does NOT cover anything
+    At FP16 this covers row_major<->A, row_major<->D and A<->D. It does NOT cover anything
     involving B-layout, which is a transpose and needs the xDMA transposer kernels, and it
     does not cover int8 for A-layout, whose tileSize run is 4 bytes against the xDMA's
     8-byte lane. Both are refused by name rather than emitted and left to fail.

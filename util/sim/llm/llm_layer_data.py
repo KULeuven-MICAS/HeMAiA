@@ -134,7 +134,7 @@ def generate_layer_data(p):
     # times, and two int8 GEMMs back to back over d reach ~1e6 with full-range operands --
     # past fp16's 65504, where the golden and the device agree only on inf.
     x = (rng.integers(-4, 4, size=(T, d)).astype(np.float32) / 4.0).astype(np.float16)
-    out["x_packed"] = x
+    out["x_row_major"] = x
 
     # ================= attention =========================================================
     n1 = _rmsnorm(x)
@@ -323,7 +323,7 @@ def stage(st, data, p):
     E = p["num_experts"]
     u16 = lambda a: np.ascontiguousarray(a).astype(np.float16).view(np.uint16)  # noqa: E731
     h = {
-        "x": st.put("llm_x", "uint16_t", u16(data["x_packed"])),
+        "x": st.put("llm_x", "uint16_t", u16(data["x_row_major"])),
         "rope_cos": st.put("llm_rope_cos", "uint16_t", u16(data["rope_cos"])),
         "rope_sin": st.put("llm_rope_sin", "uint16_t", u16(data["rope_sin"])),
         "norm1_a": st.put("llm_norm1_a", "int8_t", data["norm1_a"]),

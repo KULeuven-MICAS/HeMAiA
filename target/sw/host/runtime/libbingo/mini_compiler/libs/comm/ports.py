@@ -38,12 +38,24 @@ from bingo_mem_handle import (BingoMemAlloc, BingoMemAllocView,
 # (meshRow, tileSize, meshCol) = (4, 2, 4). The production array is (16, 4, 16); the shape
 # of the permutation is the same, the numbers are just bigger.
 #
-#   packed                          A
+#   row_major                       A
 #         c0 c1 c2 c3 c4 c5 c6 c7         c0 c1 c2 c3 c4 c5 c6 c7
 #     r0   0  1  2  3  4  5  6  7     r0   0  1  8  9 16 17 24 25
 #     r1   8  9 10 11 12 13 14 15     r1   2  3 10 11 18 19 26 27
 #     r2  16 17 18 19 20 21 22 23     r2   4  5 12 13 20 21 28 29
 #     r3  24 25 26 27 28 29 30 31     r3   6  7 14 15 22 23 30 31
+#
+#   col_major                       (row_major again, for the eye)
+#         c0 c1 c2 c3 c4 c5 c6 c7         c0 c1 c2 c3 c4 c5 c6 c7
+#     r0   0  8 16 24 32 40 48 56     r0   0  1  2  3  4  5  6  7
+#     r1   1  9 17 25 33 41 49 57     r1   8  9 10 11 12 13 14 15
+#     r2   2 10 18 26 34 42 50 58     r2  16 17 18 19 20 21 22 23
+#     r3   3 11 19 27 35 43 51 59     r3  24 25 26 27 28 29 30 31
+#
+#           col_major IS a bijection on the SAME shape -- 8x8 in, 8x8 out, [r][c] simply
+#           lands at c*rows + r. That is the whole content of the orientation axis, and
+#           seeing it beside row_major is the quickest way to believe it belongs in this
+#           enum rather than in a boolean next to it.
 #
 #   D                               B
 #         c0 c1 c2 c3 c4 c5 c6 c7         c0 c1 c2 c3 c4 c5 c6 c7
@@ -72,8 +84,9 @@ from bingo_mem_handle import (BingoMemAlloc, BingoMemAllocView,
 #           of the matrix so the array can stream it a tile at a time.
 #
 #           NOTE WHAT B DOES. In the table above, +1 along a row moves +2, but +1 DOWN A
-#           COLUMN moves +1: B runs contiguously down columns while packed, A and D run
-#           along rows. So every conversion into or out of B is a TRANSPOSE, not a reshape,
+#           COLUMN moves +1: B runs contiguously down columns while row_major, A and D
+#           run along rows. So every conversion into or out of B is a TRANSPOSE, not a
+#           reshape,
 #           and no pair of strides expresses it -- it needs the xDMA transposer kernels,
 #           which are correct only at elem_bytes=1. comm/nest.py refuses it by name.
 #

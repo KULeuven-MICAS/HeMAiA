@@ -22,7 +22,7 @@ works: a permutation of the inputs is the same permutation of the output.
 contiguous. In D-layout `(m, n, r, c)` a matrix row is **not** contiguous, so handing
 D-layout to `RMSNorm` normalises groups that are not rows. It does not fault and it does
 not go out of range; the answer is a well-formed tensor of wrong numbers. Their ports say
-`packed` and mean it.
+`row_major` and mean it.
 
 **And among the per-row ops, only the REDUCING one cares about orientation.** The SIMD
 block reduces along beats for free (one FP32 accumulator per lane) and across the lanes of
@@ -36,7 +36,7 @@ conversion is paid at most once; `PortSpec.transposed` is what lets the linker s
 That forces the order a layer has to use, and it is hardware, not taste:
 
 ```
-GEMM (D/f16) -> Reshape to packed (f16) -> RMSNorm -> Reshape to A (f16) -> Quantize -> GEMM
+GEMM (D/f16) -> Reshape to row_major (f16) -> RMSNorm -> Reshape to A (f16) -> Quantize -> GEMM
 ```
 
 Both reshapes are **FP16** and the quantise comes **after**, because a conversion into or

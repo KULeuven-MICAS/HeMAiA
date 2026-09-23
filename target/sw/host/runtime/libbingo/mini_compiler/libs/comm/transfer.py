@@ -128,10 +128,11 @@ def plan(have: PortSpec, want: PortSpec, *, mesh=None, elem_bytes=None) -> list:
     #
     # ORDER IS FORCED, not chosen: the transposer permutes a PLAIN array, so it runs while
     # the operand is unblocked, and the nest is derived in the blocked side's own
-    # dimensions. There is no flag to reconcile any more -- `xpose_first` and the
-    # "needs a packed side" refusal both came from having orientation live outside the
-    # layout, and both are gone with it. A transpose between two BLOCKED layouts is still
-    # refused, by convert_args, where it belongs.
+    # dimensions. There is no flag to reconcile any more: the old `xpose_first` juggling,
+    # and the refusal that used to guard the meaningless `A^T` states, both came from
+    # orientation living OUTSIDE the layout, and both went with it -- those states are not
+    # spellable now. A transpose between two BLOCKED layouts is still refused, by
+    # convert_args, where it belongs.
     UNBLOCKED = (Layout.ROW_MAJOR, Layout.COL_MAJOR)
     xpose = ((have.layout in UNBLOCKED) != (want.layout in UNBLOCKED)
              and Layout.COL_MAJOR in (have.layout, want.layout)) \

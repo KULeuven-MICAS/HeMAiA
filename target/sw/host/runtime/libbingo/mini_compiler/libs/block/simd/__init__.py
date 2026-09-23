@@ -29,11 +29,11 @@ WHY THE DISTINCTION IS NOT A DETAIL. In D-layout (m, n, r, c) a matrix row is NO
 contiguous: consecutive columns of one row are `meshCol` apart across n-blocks. Handing
 D-layout to a per-row operator normalises or rotates groups that are not rows. It does not
 fault, it does not go out of range, and the answer is a well-formed tensor of wrong
-numbers. So their ports say `packed` and mean it.
+numbers. So their ports say `row_major` and mean it.
 
 THE ORDER A LAYER HAS TO USE, and it is forced by hardware rather than taste:
 
-    GEMM (D/f16) -> reshape to packed (f16) -> RMSNorm (packed/f16) -> reshape to A (f16)
+    GEMM (D/f16) -> reshape to row_major -> RMSNorm (row_major/f16) -> reshape to A (f16)
                  -> quantise (A/i8) -> GEMM
 
 The two reshapes are FP16 because a conversion into or out of A-layout needs an 8-byte run

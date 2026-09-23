@@ -90,7 +90,7 @@ conversion into A-layout needs an 8-byte run contiguous on BOTH sides -- four co
 FEATURES of one token, exactly 8 B at fp16, which is also why the quantise has to come
 after the reshape. In y those four are adjacent; in y^T what is contiguous is four
 consecutive TOKENS, and no pair of strides makes a common run. comm/nest.py refuses
-packed[D,T] -> B by name for the same reason. So y^T has to become y again before the
+row_major[D,T] -> B by name for the same reason. So y^T has to become y again before the
 layer's reshape, whoever pays for it.
 
 ORIENTATION IS A LAYOUT HERE, NOT A FLAG BESIDE ONE. x and x^T are `Layout.ROW_MAJOR` and
@@ -116,8 +116,8 @@ and it keeps looking removable:
 
   LET THE GEMM EAT y^T AS ITS B OPERAND. (A.B)^T = B^T.A^T would make the consumer read
   y^T directly, and the weight it pairs with is staged from L3 so transposing IT is free.
-  But comm/nest.py refuses packed -> B at EVERY shape, [D, T] included -- B runs
-  contiguously along columns and packed along rows, so no pair of strides gives a common
+  But comm/nest.py refuses row_major -> B at EVERY shape, [D, T] included -- B runs
+  contiguously along columns and row_major along rows, so no pair of strides gives a common
   8-byte run. The refusal is by name and shape-independent; it is not a near miss.
 
 WHAT IS STILL ON THE TABLE is the bank conflict. The writer scatters 8 spatial channels

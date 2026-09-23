@@ -3,27 +3,92 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
-"""The transformer layer, built one stage at a time.
+"""The transformer layer as a BRING-UP LADDER -- a debugging instrument, not the app.
 
-THE BRING-UP LADDER. `build(..., stages=N)` emits the first N stages and checks each
-one's output against its own golden. Six workloads call it with N = 1..6, so the first
-rung that fails on hardware names the stage that broke rather than the layer.
+`build(..., stages=N)` emits the first N stages and checks each one against its own
+golden, so the first rung that fails on hardware names the stage that broke rather than
+the layer. `token_parallel(...)` is the other decomposition experiment: the same layer
+with the TOKENS split four ways.
+
+THIS IS NOT WHERE THE DELIVERABLE LAYER LIVES. That is
+workloads/llm_layer_4cluster/main_bingo.py, which builds its own graph in one pass and
+does not import this module. The two were verified byte-identical at the port -- same
+generated header, same data header -- so this file is free to grow rungs and arms without
+touching the app. The rung workloads (llm_s1_norm .. llm_s5_ffn) and the decomposition
+arms (_shard, _tp, _t64, _perf) are gitignored for the same reason: they are regenerated
+from here whenever this changes, so tracking them is pure churn.
 
 ONE BUILDER, NOT SIX. Every rung is literally a prefix of the same code, so a rung cannot
-disagree with the full layer about how a stage is built -- which is the failure mode a
-ladder of copy-pasted apps has, and the one that wastes the most time: rung 3 passes,
-rung 6 fails, and the difference turns out to be in the apps rather than in the hardware.
+disagree with the full layer about how a stage is built -- the failure mode a ladder of
+copy-pasted apps has, and the one that wastes the most time: rung 3 passes, rung 6 fails,
+and the difference turns out to be in the apps rather than in the hardware.
 
 CHECKS ARE PER-STAGE AND ORDERED BEFORE THE NEXT STAGE'S WORK. Checking only the layer
 output would say "wrong" without saying where, and every stage here narrows precision, so
 the margin that matters differs per stage.
 
-    1 norm    RMSNorm(x)
-    2 proj    + reshape -> quantise -> Wq, Wk, Wv
-    3 attn    + FlashAttention over 4 clusters, and its fold
-    4 resid   + Wo, reshape back, residual add
-    5 ffn     + RMSNorm, reshape, quantise, the up-projection
-    6 layer   + reshape back and the second residual: the layer output
+======================================================================================
+THE DATAFLOW, AND WHAT EACH RUNG ADDS TO IT
+======================================================================================
+
+Layouts on every arrow, because none of them faults when wrong -- a mismatched one is a
+permutation that computes a well-formed scrambled answer, and on random test data the
+golden is scrambled identically and it PASSES.
+
+  rung                                                            layout / precision
+  ----  ------------------------------------------------  ----------------------------
+   1    x -> Ld_layer_x -> RMSNorm norm1                   row_major/f16 throughout
+   2       -> Reshape n1_to_a -> Quantize n1_q             row_major/f16 -> A/f16 -> A/i8
+           -> Linear proj_q|k|v -> Dequantize              A/i8 x B/i8 -> D/f16
+   3    FlashAttention, 4 clusters, KV-split + in-fabric   B/i8, A/i8, A/i8 -> d32/i32
+         fold. Operands STAGED, not taken from rung 2.
+   4    Linear proj_o -> Dequant -> Reshape o_to_row_major A/i8 -> D/f16 -> row_major/f16
+         -> Residual resid1 (+ x, the skip)
+   5    RMSNorm norm2 -> Reshape n2_to_a -> Quantize n2_q  row_major -> A/f16 -> A/i8
+         -> Linear ffn_up -> Dequantize
+   6    Reshape ffn_to_row_major -> Residual resid2        D/f16 -> row_major/f16
+
+THE THREE THINGS THAT SHAPE IT, stated once here and argued in full in the app:
+
+  RESHAPES ARE FP16 AND THEY ARE STAGES. Into or out of A-layout needs an 8-byte run
+  contiguous on both sides -- four features at fp16, two bytes at int8 -- so `quantise`
+  comes AFTER the reshape and never before. And the linker may not insert one: node
+  creation order is dispatch order here, so an injected node would move the schedule.
+
+  EVERY GEMM IS FOLLOWED BY A DEQUANTISE, because the D port narrows int32 to fp16 while
+  the output still carries both operands' quantisation scales. Two fp16 limits bracket
+  the GEMM -- the D-port narrow at 65504, and RMSNorm's SUM(x^2) which is itself narrowed
+  to fp16 before the rsqrt sees it -- and a factor of a thousand sits between them.
+
+  RUNG 2 IS A DEAD END BY CONSTRUCTION. FA wants Q in B-layout, and row_major -> B is a
+  TRANSPOSE that no pair of strides expresses (B runs down columns; row_major, A and D run
+  along rows); K/V want int8 A-layout, whose atom is 4 bytes against the xDMA's 8-byte
+  lane. nest.py refuses both by name, so attention's operands are staged and rung 2 is
+  checked rather than forwarded.
+
+======================================================================================
+WHAT CHANGED UNDER THIS LADDER, AND WHAT IT MEANS FOR THE RUNGS
+======================================================================================
+
+RMSNORM (rungs 1 and 5) lost its core round trip. StreamMap grew an RSQRT func, so the
+per-row 1/sqrt(mean) rides the broadcast pass that had to replicate the scalar anyway --
+7,717 -> 3,135 cc at [32, 128], and more accurate than the integer sqrt+reciprocal it
+replaced. A transposed variant removes the cross-lane fold as well (1,073 cc), at the
+cost of two xDMA block transposes; NORM_PATH below selects between them.
+
+ROPE IS STILL NOT IN THE CHAIN, and that is a layout fact rather than an omission. Its
+partner permutation is x[i] <-> x[i^1] -- a 2-BYTE reorder inside one 8-byte TCDM word,
+which is below the granularity the reader AGU can address at all. Only a real
+byte-addressed DMA does it, so RoPE is two nodes (a DM-core swap, then one fused SIMD
+task). The goldens are staged; wiring it in would hang a checked branch off rung 2's
+dead end rather than complete anything.
+
+THE WORD "TRANSPOSE" MEANS THREE DIFFERENT THINGS HERE. An AXIS EXCHANGE (the same
+[r, c] tensor stored [c, r]) is what RMSNorm wants and is an ordinary Layout,
+`Layout.COL_MAJOR`, closed by the xDMA block transposer. A BLOCKED-LAYOUT transpose
+(row_major -> B) is what blocks rung 2. An
+ADJACENT-PAIR SWAP is RoPE's and is below AGU granularity. And transposing only pays
+where a cross-lane REDUCTION exists to convert -- RoPE has none, so it gains nothing.
 """
 
 import sys
@@ -50,28 +115,28 @@ MAX_STAGE = 6
 # WHICH RMSNORM KERNEL THE LADDER RUNS. One word, because this is an A/B and the two arms
 # have to be swappable over an otherwise identical graph.
 #
-#   "rowmajor"  reduce(SUMSQ) -> bcast carrying StreamMap(1/D, RSQRT) -> ew2(MUL). One
+#   "row_major"  reduce(SUMSQ) -> bcast carrying StreamMap(1/D, RSQRT) -> ew2(MUL). One
 #               node, no layout change. The RSQRT func already took this path from
 #               7,717 cc to 3,135 at [32, 128] by deleting the core's scalar epilogue.
 #   "auto"      transposed wherever rows == 32: LANEWISE reduce, sticky scale, no
 #               cross-lane fold and no broadcast plane -- 1,073 cc, a further 2.9x on the
 #               SIMD -- at the cost of two xDMA block transposes around it.
 #
-# IT IS PINNED TO "rowmajor" ON PURPOSE. The transposed arm is three things at once that
+# IT IS PINNED TO "row_major" ON PURPOSE. The transposed arm is three things at once that
 # have never run on this machine: a new kernel entry point
 # (__snax_bingo_kernel_simd_rmsnorm_t_f16_f16), a new seed-adjacency contract, and two new
 # xDMA transposer nodes per norm. Turning it on here would change a graph that PASSES
 # today, while the token-parallel arm is still being debugged, and any new failure would
 # then have two candidate causes.
 #
-# WHAT HAS TO HAPPEN BEFORE FLIPPING IT to "auto". The transposed kernel has no test
-# vehicle yet: simd_rmsnorm_1cluster sweeps rows {1, 2, 4, 8} and the transposed path needs
-# rows == 32 exactly, so that workload cannot reach it at any of its twelve configs. It
-# needs a rows == 32 arm -- checking the xDMA transpose against a reference, the norm
-# against the exact 1/sqrt golden, and the round trip back to row-major -- which is what
-# the snax reference app does and what proves the adjacency contract holds on silicon.
-# After that this is a clean single-variable A/B over an otherwise identical graph.
-NORM_PATH = "rowmajor"
+# WHAT HAS TO HAPPEN BEFORE FLIPPING IT to "auto". simd_rmsnorm_t_1cluster is the test
+# vehicle and it now exists: [32, 128], both kernels over one tile, four checks -- the
+# input transpose bit-exact, the norm against the exact 1/sqrt golden, the round trip back
+# to row-major, and the row-major arm over the same x. It has NOT been run on RTL yet.
+# Once it is green, flipping this word is a clean single-variable A/B over an otherwise
+# identical graph. (simd_rmsnorm_1cluster cannot reach the transposed path at all: it
+# sweeps rows {1, 2, 4, 8} and the LANEWISE reduce needs rows == 32 exactly.)
+NORM_PATH = "row_major"
 
 # Per-stage absolute tolerance on the fp16 compare. THESE TRACK THE DEQUANTISE: every
 # projection is now scaled back to the activation domain, so the tensors are O(1)-O(11)
@@ -154,7 +219,7 @@ def build(ctx: Ctx, p: dict, data: dict, hs: dict, *, stages: int = MAX_STAGE,
     # other operand, and `ends` carries that load so the residual orders against it too.
     ld_x = ctx.at(0).node("Ld_layer_x", ctx.dm, "__snax_bingo_kernel_idma_1d_copy",
                           SnaxBingoKernelIdma1dCopyArgs(hs["x"], x_l1, T * d * 2))
-    x_port = Port(PortSpec(Layout.PACKED, DType.F16, (T, d), mem_level=MemLevel.L1),
+    x_port = Port(PortSpec(Layout.ROW_MAJOR, DType.F16, (T, d), mem_level=MemLevel.L1),
                   x_l1, (ld_x,))
 
     def rmsnorm(name, src, *, on_l1, after=()):
@@ -181,7 +246,7 @@ def build(ctx: Ctx, p: dict, data: dict, hs: dict, *, stages: int = MAX_STAGE,
         out, ends = shard_rows(ctx, src=src.handle if on_l1 else hs[src], rows=T, cols=d,
                                clusters=list(range(ncl)), make=make, root=0,
                                name=name, after=after, src_on_l1=on_l1)
-        return Port(PortSpec(Layout.PACKED, DType.F16, (T, d), mem_level=MemLevel.L1),
+        return Port(PortSpec(Layout.ROW_MAJOR, DType.F16, (T, d), mem_level=MemLevel.L1),
                     out, tuple(ends), cluster=0, name="y")
 
     # ---- 1. the first normalisation ----------------------------------------------------
@@ -197,7 +262,7 @@ def build(ctx: Ctx, p: dict, data: dict, hs: dict, *, stages: int = MAX_STAGE,
     # Reshape is a STAGE the layer names: between two blocks that both live in L1 there is
     # no load for the conversion to fold into, and the linker may not insert a node --
     # node creation order is dispatch order on this machine.
-    rs1 = pipe.add(Reshape(rows=T, cols=d, src=Layout.PACKED, dst=Layout.A, mesh=mesh,
+    rs1 = pipe.add(Reshape(rows=T, cols=d, src=Layout.ROW_MAJOR, dst=Layout.A, mesh=mesh,
                            dtype=DType.F16, cluster=0),
                    name="n1_to_a", bind={"x": n1_y})
     q1 = pipe.add(Quantize(rows=T, cols=d, inv_scale_f32bits=data["scale_n1_bits"],
@@ -265,9 +330,9 @@ def build(ctx: Ctx, p: dict, data: dict, hs: dict, *, stages: int = MAX_STAGE,
                                layout=Layout.D, cluster=0),
                     name="proj_o_dq", bind={"x": o_proj.result.outputs["y"]})
     check("proj_o", o_dq.result.outputs["y"], "proj_o_golden", T * d)
-    rs_o = pipe.add(Reshape(rows=T, cols=d, src=Layout.D, dst=Layout.PACKED, mesh=mesh,
+    rs_o = pipe.add(Reshape(rows=T, cols=d, src=Layout.D, dst=Layout.ROW_MAJOR, mesh=mesh,
                             dtype=DType.F16, cluster=0),
-                    name="o_to_packed", bind={"x": o_dq.result.outputs["y"]})
+                    name="o_to_row_major", bind={"x": o_dq.result.outputs["y"]})
     res1 = pipe.add(Residual(rows=T, cols=d, cluster=0), name="resid1",
                     bind={"a": rs_o.result.outputs["y"], "b": x_port})
     out[4] = res1
@@ -284,7 +349,7 @@ def build(ctx: Ctx, p: dict, data: dict, hs: dict, *, stages: int = MAX_STAGE,
     n2_y = rmsnorm("norm2", res1.result.outputs["y"], on_l1=True,
                    after=tuple(res1.result.outputs["y"].ends))
     check("norm2", n2_y, "norm2_golden", T * d)
-    rs2 = pipe.add(Reshape(rows=T, cols=d, src=Layout.PACKED, dst=Layout.A, mesh=mesh,
+    rs2 = pipe.add(Reshape(rows=T, cols=d, src=Layout.ROW_MAJOR, dst=Layout.A, mesh=mesh,
                            dtype=DType.F16, cluster=0),
                    name="n2_to_a", bind={"x": n2_y})
     q2 = pipe.add(Quantize(rows=T, cols=d, inv_scale_f32bits=data["scale_n2_bits"],
@@ -306,9 +371,9 @@ def build(ctx: Ctx, p: dict, data: dict, hs: dict, *, stages: int = MAX_STAGE,
         return out
 
     # ---- 6. the second residual, and the layer output ----------------------------------
-    rs_f = pipe.add(Reshape(rows=T, cols=h, src=Layout.D, dst=Layout.PACKED, mesh=mesh,
+    rs_f = pipe.add(Reshape(rows=T, cols=h, src=Layout.D, dst=Layout.ROW_MAJOR, mesh=mesh,
                             dtype=DType.F16, cluster=0),
-                    name="ffn_to_packed", bind={"x": ffn_dq.result.outputs["y"]})
+                    name="ffn_to_row_major", bind={"x": ffn_dq.result.outputs["y"]})
     res2 = pipe.add(Residual(rows=T, cols=h, cluster=0), name="resid2",
                     bind={"a": rs_f.result.outputs["y"],
                           "b": res1.result.outputs["y"]})
@@ -404,13 +469,13 @@ def token_parallel(ctx: Ctx, p: dict, data: dict, hs: dict, *, verify: str = "fi
         ld_x = g.node(f"Ld_x_{sfx}", ctx.dm, "__snax_bingo_kernel_idma_1d_copy",
                       SnaxBingoKernelIdma1dCopyArgs(
                           at_offset(hs["x"], r0 * d * 2), x_l1, NR * d * 2))
-        x_port = Port(PortSpec(Layout.PACKED, DType.F16, (NR, d), mem_level=MemLevel.L1),
+        x_port = Port(PortSpec(Layout.ROW_MAJOR, DType.F16, (NR, d), mem_level=MemLevel.L1),
                       x_l1, (ld_x,))
 
         # --- norm -> reshape -> quantise -> the three projections ---
         n1 = pipe.add(RMSNorm(rows=NR, cols=d, cluster=c, path=NORM_PATH), name=f"norm1_{sfx}",
                       bind={"x": x_port})
-        a1 = pipe.add(Reshape(rows=NR, cols=d, src=Layout.PACKED, dst=Layout.A, mesh=mesh,
+        a1 = pipe.add(Reshape(rows=NR, cols=d, src=Layout.ROW_MAJOR, dst=Layout.A, mesh=mesh,
                               dtype=DType.F16, cluster=c),
                       name=f"n1_to_a_{sfx}", bind={"x": n1.result.outputs["y"]})
         q1 = pipe.add(Quantize(rows=NR, cols=d, inv_scale_f32bits=data["scale_n1_bits"],
@@ -434,16 +499,16 @@ def token_parallel(ctx: Ctx, p: dict, data: dict, hs: dict, *, verify: str = "fi
         odq = pipe.add(Dequantize(rows=NR, cols=d, scale_f32bits=data["dq_proj_o_bits"],
                                   layout=Layout.D, cluster=c),
                        name=f"proj_o_dq_{sfx}", bind={"x": op.result.outputs["y"]})
-        orp = pipe.add(Reshape(rows=NR, cols=d, src=Layout.D, dst=Layout.PACKED, mesh=mesh,
+        orp = pipe.add(Reshape(rows=NR, cols=d, src=Layout.D, dst=Layout.ROW_MAJOR, mesh=mesh,
                                dtype=DType.F16, cluster=c),
-                       name=f"o_to_packed_{sfx}", bind={"x": odq.result.outputs["y"]})
+                       name=f"o_to_row_major_{sfx}", bind={"x": odq.result.outputs["y"]})
         r1 = pipe.add(Residual(rows=NR, cols=d, cluster=c), name=f"resid1_{sfx}",
                       bind={"a": orp.result.outputs["y"], "b": x_port})
 
         # --- the feed-forward half ---
         n2 = pipe.add(RMSNorm(rows=NR, cols=d, cluster=c, path=NORM_PATH), name=f"norm2_{sfx}",
                       bind={"x": r1.result.outputs["y"]})
-        a2 = pipe.add(Reshape(rows=NR, cols=d, src=Layout.PACKED, dst=Layout.A, mesh=mesh,
+        a2 = pipe.add(Reshape(rows=NR, cols=d, src=Layout.ROW_MAJOR, dst=Layout.A, mesh=mesh,
                               dtype=DType.F16, cluster=c),
                       name=f"n2_to_a_{sfx}", bind={"x": n2.result.outputs["y"]})
         q2 = pipe.add(Quantize(rows=NR, cols=d, inv_scale_f32bits=data["scale_n2_bits"],
@@ -456,9 +521,9 @@ def token_parallel(ctx: Ctx, p: dict, data: dict, hs: dict, *, verify: str = "fi
         udq = pipe.add(Dequantize(rows=NR, cols=h, scale_f32bits=data["dq_ffn_bits"],
                                   layout=Layout.D, cluster=c),
                        name=f"ffn_up_dq_{sfx}", bind={"x": up.result.outputs["y"]})
-        urp = pipe.add(Reshape(rows=NR, cols=h, src=Layout.D, dst=Layout.PACKED, mesh=mesh,
+        urp = pipe.add(Reshape(rows=NR, cols=h, src=Layout.D, dst=Layout.ROW_MAJOR, mesh=mesh,
                                dtype=DType.F16, cluster=c),
-                       name=f"ffn_to_packed_{sfx}", bind={"x": udq.result.outputs["y"]})
+                       name=f"ffn_to_row_major_{sfx}", bind={"x": udq.result.outputs["y"]})
         r2 = pipe.add(Residual(rows=NR, cols=h, cluster=c), name=f"resid2_{sfx}",
                       bind={"a": urp.result.outputs["y"], "b": r1.result.outputs["y"]})
 

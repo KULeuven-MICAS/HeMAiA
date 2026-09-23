@@ -17,7 +17,7 @@ double both the beats it reads and the L1 the tile occupies.
 WHAT IT DOES NOT DO. It does not normalise, quantise or reshape its input. A projection
 consumes A-layout int8 and that is what its port says; getting there from whatever the
 previous stage emitted is the caller's composition, and the order is forced by hardware:
-reshape at FP16, THEN quantise, because a packed->A conversion needs an 8-byte run that
+reshape at FP16, THEN quantise, because a row_major->A conversion needs an 8-byte run that
 int8 does not have. See comm/nest.py.
 """
 

@@ -141,7 +141,7 @@ def expert_lane(ctx: Ctx, cfg: MoeCfg, e: int, x_src, w, ybuf, after=None):
     gemm_gate = proj(f"GemmGate_e{e}", l1_x, l1_gate, d_gate, cfg.K_up, cfg.N_up,
                      [ld_x, ld_gate])
 
-    # Elementwise over the packed D-block buffer: no reshape needed in front of it.
+    # Elementwise over the contiguous D-block buffer: no reshape needed in front of it.
     cols = cfg.sizes["d_hidden"] // 2
     swiglu = ctx.node(f"Swiglu_e{e}", ctx.simd,
                       "__snax_bingo_kernel_simd_swiglu_f16_f16",

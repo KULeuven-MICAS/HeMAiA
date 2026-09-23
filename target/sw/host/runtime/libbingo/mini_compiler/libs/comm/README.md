@@ -6,7 +6,7 @@ Everything a block is built out of, and nothing specific to one. Two halves:
 
 | file | |
 |---|---|
-| `ports.py` | `PortSpec` (layout, precision, shape, mem_level), `Port` (a bound spec plus the nodes at the block's edge), `Block`, `BlockResult`, and `at_offset`. **The layout names are worked through there with real index maps** — what `packed`, `A`, `B`, `D`, `d32` and `monoid` each do to element `[row][col]`, and why `d32` is not `D` — which offsets any of the four handle types, because a staged array is a *symbol* on the host path and a *fixed address* on the memchip path, and only `BingoMemAlloc` has `.view()`. |
+| `ports.py` | `PortSpec` (layout, precision, shape, mem_level), `Port` (a bound spec plus the nodes at the block's edge), `Block`, `BlockResult`, and `at_offset`. **The layout names are worked through there with real index maps** — what `row_major`, `col_major`, `A`, `B`, `D`, `d32` and `monoid` each do to element `[row][col]`, and why `d32` is not `D` — which offsets any of the four handle types, because a staged array is a *symbol* on the host path and a *fixed address* on the memchip path, and only `BingoMemAlloc` has `.view()`. |
 | `ctx.py` | The node and handle factory, bound to one cluster and one name prefix. The prefix is what lets one block be instantiated twice: handle names must be unique per chip, because the emitter dedups by identity and two same-named handles emit two C declarations that do not compile. |
 | `link.py` | `Pipeline`, `link`, and `check_contract` — which asks `transfer.plan` whether a mismatch is closable rather than deciding for itself, so the two cannot drift. |
 | `paths.py` | Reaching `util/sim`. Delegates to `_bingo_paths.repo_root()`; there is deliberately one implementation of that search. |

@@ -96,7 +96,7 @@ def generate(p):
     o["gemm_golden"] = row_major_to_d(gd, T // mr, d // mc, mr, mc)
 
     # ---- 6. The two reshapes the layer needs -------------------------------------------
-    # D -> packed and packed -> A, both at FP16. They are separate tests because they are
+    # D -> row_major and row_major -> A, both at FP16. They are separate tests because they are
     # separate derived nests, and a nest that is wrong moves the right NUMBER of bytes to
     # the wrong offsets -- which a byte count would not catch, but a byte-exact compare
     # against a permuted golden does.

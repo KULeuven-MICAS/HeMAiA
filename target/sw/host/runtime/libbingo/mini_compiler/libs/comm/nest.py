@@ -115,7 +115,8 @@ def _axes(rows: int, cols: int, mesh: tuple):
     """The finest factorisation of (row, col) that EVERY block layout is affine in.
 
     Row splits by meshRow then tileSize, column by meshCol then tileSize. That refines all
-    of A, B, D and packed at once: A blocks the column by tileSize and D by meshCol, and
+    of A, B, D and the unblocked pair at once: A blocks the column by tileSize and D by
+    meshCol, and
     meshCol is a multiple of tileSize, so a three-way column split serves both. Bounds of
     1 collapse away afterwards.
     """
