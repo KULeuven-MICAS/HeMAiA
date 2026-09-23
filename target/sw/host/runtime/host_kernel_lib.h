@@ -141,6 +141,20 @@ static inline uint64_t __host_bingo_kernel_check_result(void *arg){
     // add a fence here before check to get the latest data in the main mem
     asm volatile("fence" ::: "memory");
     uint32_t err = 0;
+    // A FAILING CHECK MUST NOT OUTLIVE THE SIMULATION. Every mismatch used to print, and
+    // a check over 8,192 elements that is wrong everywhere emits 8,192 UART lines -- the
+    // token-parallel layer's first run spent its whole time budget inside this loop and
+    // ended at element 169, so the verdict line never appeared and the other checks never
+    // ran. The count in the PASS/FAIL line below is still exact; only the per-element
+    // printing stops, and the first few elements are what localises a fault anyway.
+    const uint32_t ERR_PRINT_MAX = 8u;
+    // WHERE the mismatches are, in 16 equal buckets over the buffer. Eight printed
+    // elements say a check failed; they cannot distinguish "the first half is wrong" from
+    // "every other row is wrong" from "one column is wrong", and those point at different
+    // bugs. Sixteen counters are shape-agnostic -- the check does not know rows from cols
+    // -- and cost one add per mismatch, so the distribution survives the print cap.
+    uint32_t bucket[16] = {0};
+    uint32_t bucket_n = 0;  // elements per bucket, set once the element count is known
 
     if (check_type == BINGO_CHECK_TYPE_BYTE_EXACT) {
         // Byte-exact comparison over the whole buffer.
@@ -242,8 +256,9 @@ static inline uint64_t __host_bingo_kernel_check_result(void *arg){
                 // Hex-bits printing to avoid reliance on libc %f support
                 __bingo_f32_u32_t uo, ug, ud;
                 uo.f = o; ug.f = g; ud.f = diff;
-                printf_safe("[%s] idx=%d out=0x%08x golden=0x%08x diff=0x%08x tol=0x%08x\n",
-                       name, i, uo.u, ug.u, ud.u, tolerance_bits);
+                if (err <= ERR_PRINT_MAX)
+                    printf_safe("[%s] idx=%d out=0x%08x golden=0x%08x diff=0x%08x tol=0x%08x\n",
+                           name, i, uo.u, ug.u, ud.u, tolerance_bits);
             }
         }
         BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
@@ -263,6 +278,7 @@ static inline uint64_t __host_bingo_kernel_check_result(void *arg){
         const uint16_t* out_h    = (const uint16_t*)output_data_addr;
         const uint16_t* golden_h = (const uint16_t*)golden_data_addr;
         uint64_t num_elements = data_size / 2;
+        bucket_n = (uint32_t)((num_elements + 15u) / 16u);
         for (uint64_t i = 0; i < num_elements; i++) {
             uint16_t oh = out_h[i];
             uint16_t gh = golden_h[i];
@@ -272,10 +288,12 @@ static inline uint64_t __host_bingo_kernel_check_result(void *arg){
             if (diff < 0.0f) diff = -diff;
             if (diff > tolerance) {
                 err++;
+                if (bucket_n) bucket[(uint32_t)(i / bucket_n) & 15u]++;
                 __bingo_f32_u32_t uo, ug, ud;
                 uo.f = o; ug.f = g; ud.f = diff;
-                printf_safe("[%s] idx=%d out_h=0x%04x golden_h=0x%04x out_f=0x%08x golden_f=0x%08x diff=0x%08x tol=0x%08x\n",
-                       name, i, oh, gh, uo.u, ug.u, ud.u, tolerance_bits);
+                if (err <= ERR_PRINT_MAX)
+                    printf_safe("[%s] idx=%d out_h=0x%04x golden_h=0x%04x out_f=0x%08x golden_f=0x%08x diff=0x%08x tol=0x%08x\n",
+                           name, i, oh, gh, uo.u, ug.u, ud.u, tolerance_bits);
             }
         }
         BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
@@ -288,6 +306,13 @@ static inline uint64_t __host_bingo_kernel_check_result(void *arg){
         } else {
             printf_safe("[Host] Check [%s]: FAIL (%d / %d fp16 elems, tol_bits=0x%08x)\r\n",
                    name, err, num_elements, tolerance_bits);
+            printf_safe("[Host] Check [%s]: bad per 1/16 (%d elems each): "
+                   "%d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d\r\n",
+                   name, bucket_n,
+                   bucket[0], bucket[1], bucket[2], bucket[3],
+                   bucket[4], bucket[5], bucket[6], bucket[7],
+                   bucket[8], bucket[9], bucket[10], bucket[11],
+                   bucket[12], bucket[13], bucket[14], bucket[15]);
             return BINGO_RET_FAIL;
         }
     } else if (check_type == BINGO_CHECK_TYPE_FP16_RELTOL) {
@@ -322,8 +347,9 @@ static inline uint64_t __host_bingo_kernel_check_result(void *arg){
                 err++;
                 __bingo_f32_u32_t uo, ug, ud, ut;
                 uo.f = o; ug.f = g; ud.f = diff; ut.f = thresh;
-                printf_safe("[%s] idx=%d out_h=0x%04x golden_h=0x%04x out_f=0x%08x golden_f=0x%08x diff=0x%08x thresh=0x%08x\n",
-                       name, i, oh, gh, uo.u, ug.u, ud.u, ut.u);
+                if (err <= ERR_PRINT_MAX)
+                    printf_safe("[%s] idx=%d out_h=0x%04x golden_h=0x%04x out_f=0x%08x golden_f=0x%08x diff=0x%08x thresh=0x%08x\n",
+                           name, i, oh, gh, uo.u, ug.u, ud.u, ut.u);
             }
         }
         BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);

@@ -190,6 +190,21 @@ static inline uint32_t snax_simd_shape_beats(const snax_simd_shape_t *s) {
 #define SIMD_FUNC_LINEAR 0u
 #define SIMD_FUNC_EXP 1u
 #define SIMD_FUNC_SILU 2u
+// out = 1/sqrt(a*x + b), for the per-row normalisations. `a` is where the division by the
+// row length goes: a reduce emits SUM(x^2) and rmsnorm wants 1/sqrt(SUM/D), so a = 1/D and
+// b = 0 -- and rather than costing a pass, this REPLACES the identity multiply on the
+// broadcast pass a per-row scalar already needs. A non-positive or non-finite input gives
+// 0, so an all-zero row normalises to zero instead of poisoning itself with +Inf. Accurate
+// to 1 FP16 ULP, which is better than the core's integer sqrt+reciprocal.
+//
+// UNLIKE EVERY OTHER CONSTANT HERE, THIS ONE IS NOT ALWAYS BUILT. The generated
+// snax-simd-addr.h names each EXTENSION (SIMD_EXT_STREAMMAP) but nothing about which
+// `func` values that extension elaborated -- SimdTopGen emits one macro per extension and
+// none per func. So a cfg whose HasStreamMap.func list omits RSQRT_FP16 still defines
+// SIMD_EXT_STREAMMAP, still accepts func = 3, and silently computes the LINEAR result.
+// Kernels gate on BINGO_SIMD_HAS_RSQRT (offload_hw_kernels/simd.h) rather than on the
+// presence of this define.
+#define SIMD_FUNC_RSQRT 3u
 
 // StreamReduce: fold a row of `operand_beats` down to one scalar beat.
 #define SIMD_RED_MAX 0u

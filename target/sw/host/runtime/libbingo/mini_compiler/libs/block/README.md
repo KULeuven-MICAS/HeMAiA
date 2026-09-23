@@ -8,7 +8,7 @@ Each is a sub-DFG with a declared interface, built once, in pipeline order.
 | `gather.py` | `fa_gather`, the in-fabric fold of attention's per-cluster partials. A function, not a block. |
 | `moe.py` | `MoeFFN` — a mixture-of-experts feed-forward layer with CERF-skipped losers — and `MoeCfg`. |
 | `linear.py` | `Linear` — one INT8 GEMM with its operand loads. Every weight matrix in a layer is this block with different shapes. |
-| `simd_ops.py` | `RMSNorm`, `RoPE`, `Quantize`, `Residual` — the per-row and per-element operators a layer is glued together with. |
+| `simd/` | The per-row and per-element operators a layer is glued together with, split on whether layout is load-bearing: `simd/pointwise.py` (`Quantize`, `Dequantize`, `Residual` — elementwise, any layout), `simd/norm.py` (`RMSNorm` — reduces along a row, so orientation is worth 3x), `simd/rope.py` (`RoPE` — rotates along a row), `simd/common.py` (the tile and the beat). |
 | `reshape.py` | `Reshape` — an explicit layout change as a stage, for the gap between two blocks that both live in L1. |
 
 `workloads/llm_layer_4cluster` assembles them into one transformer layer.
@@ -23,6 +23,15 @@ contiguous. In D-layout `(m, n, r, c)` a matrix row is **not** contiguous, so ha
 D-layout to `RMSNorm` normalises groups that are not rows. It does not fault and it does
 not go out of range; the answer is a well-formed tensor of wrong numbers. Their ports say
 `packed` and mean it.
+
+**And among the per-row ops, only the REDUCING one cares about orientation.** The SIMD
+block reduces along beats for free (one FP32 accumulator per lane) and across the lanes of
+a beat only through a serialised fold that stalls the reader once per row. Store the tile
+transposed and one lane *is* one token, so the fold disappears and the scale rides back in
+as a sticky operand instead of a replicated plane: `RMSNorm` measures 3,135 → 1,073 cc at
+[32, 128]. `RoPE` has no reduction, so there is nothing for it to win. `NormCfg` carries
+`in_transposed` / `out_transposed` so the orientation propagates along a chain and each
+conversion is paid at most once; `PortSpec.transposed` is what lets the linker see it.
 
 That forces the order a layer has to use, and it is hardware, not taste:
 

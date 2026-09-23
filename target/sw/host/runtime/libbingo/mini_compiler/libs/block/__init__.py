@@ -10,15 +10,16 @@ the previous block is still updating in place -- a running state, not a produced
 so declaring it as a port would promise something the port model cannot honour.
 """
 
+from .collective import broadcast, shard_rows
 from .flash_attention import FaCfg, FlashAttention
 from .linear import Linear, LinearCfg
 from .gather import fa_gather
 from .moe import MoeCfg, MoeFFN
 from .reshape import Reshape, ReshapeCfg
-from .simd_ops import (Dequantize, Quantize, Residual, RMSNorm, RoPE,
-                        RowCfg)
+from .simd import (Dequantize, NormCfg, Quantize, Residual, RMSNorm, RoPE,
+                   RowCfg)
 
-__all__ = ["FaCfg", "FlashAttention", "fa_gather", "Linear", "LinearCfg",
-           "MoeCfg", "MoeFFN", "Dequantize", "Quantize", "RMSNorm", "Reshape", "ReshapeCfg",
-           "Residual", "RoPE",
+__all__ = ["broadcast", "shard_rows", "FaCfg", "FlashAttention", "fa_gather", "Linear", "LinearCfg",
+           "MoeCfg", "MoeFFN", "Dequantize", "NormCfg", "Quantize", "RMSNorm", "Reshape",
+           "ReshapeCfg", "Residual", "RoPE",
            "RowCfg"]

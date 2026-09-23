@@ -31,6 +31,7 @@ APPS += xdma_elementwise_add_1cluster
 # target/sim/automation/sweep/simd.
 APPS += simd_softmax_1cluster
 APPS += simd_rmsnorm_1cluster
+APPS += simd_rmsnorm_t_1cluster
 APPS += simd_silu_1cluster
 APPS += simd_swiglu_1cluster
 APPS += simd_rope_1cluster
@@ -70,14 +71,29 @@ APPS += dummy_simd_2cluster
 # 2-cluster SIMD variant of the xDMA softmax sweep (hemaia_tapeout_2c_simd).
 APPS += simd_softmax_2cluster
 # The LLM-layer bring-up ladder. The order is the ladder: each rung adds one stage
-# to the one above it. See util/sim/common/llm_layer_stages.py.
+# to the one above it. See util/sim/llm/llm_layer_stages.py.
 APPS += llm_kernels_4cluster
 APPS += llm_s1_norm_4cluster
+# Rung 1 with the RMSNorm row-sharded: isolates the shard behind a DIRECT norm1 check.
+APPS += llm_s1_norm_shard_4cluster
 APPS += llm_s2_proj_4cluster
 APPS += llm_s3_attn_4cluster
 APPS += llm_s4_resid_4cluster
 APPS += llm_s5_ffn_4cluster
+# Rung 5 sharded: checks llm_norm2 directly, isolating the L1-source pull path.
+APPS += llm_s5_ffn_shard_4cluster
 APPS += llm_layer_4cluster
+# Same graph, verify="final": a timing build whose trace measures the layer
+# rather than the host compares.
+APPS += llm_layer_perf_4cluster
+# Same again with the RMSNorms row-sharded over 4 clusters: the A/B partner.
+APPS += llm_layer_shard_4cluster
+# The whole layer TOKEN-PARALLEL over 4 clusters at T=64 (one A-layout tile each).
+APPS += llm_layer_tp_4cluster
+# The control arm for llm_layer_tp_4cluster: same tokens=64 and the same goldens,
+# built as ONE chain on cluster 0. It isolates "the chain is wrong at 64 tokens"
+# from "the four-way split is wrong". Not a performance arm.
+APPS += llm_layer_t64_4cluster
 SUBDIRS = $(addprefix workloads/,$(APPS))
 
 

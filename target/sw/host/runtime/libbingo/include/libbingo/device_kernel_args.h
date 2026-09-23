@@ -756,6 +756,29 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_rmsnorm_args {
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_simd_rmsnorm_args_t;
 
+// Transposed FP16 rmsnorm: the same normalisation over x^T, ~3x cheaper on the SIMD core
+// because one lane is one token, so the per-row sum of squares falls out of the per-lane
+// accumulators with no cross-lane fold and no broadcast. reduce(SUMSQ|LANEWISE) ->
+// map(1/D, RSQRT) on one beat -> elementwise(MUL|STICKY_B). FP16 out only.
+//
+// THE TWO ADDRESSES ARE ONE ALLOCATION. seed_addr is a 64 B scratch beat the kernel writes
+// and then reads as the sticky operand, and it must sit DIRECTLY below the tile:
+// input_addr == seed_addr + 64. Allocate (1 + cols) beats and point seed at the base, the
+// tile one beat in. The kernel checks this rather than trusting it -- a violation would
+// otherwise overwrite feature row 0 and read the tile one beat out of phase, with nothing
+// reported.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_rmsnorm_t_args {
+  uint32_t seed_addr_hi;         // 64 B scratch beat, == input_addr - 64
+  uint32_t seed_addr_lo;
+  uint32_t input_addr_hi;        // input x^T, fp16 [cols, rows] row-major (one token/lane)
+  uint32_t input_addr_lo;
+  uint32_t output_addr_hi;       // fp16 rmsnorm(x)^T, [cols, rows], same orientation
+  uint32_t output_addr_lo;
+  uint32_t rows;                 // tokens; MUST be 32, the FP16 lanes in one beat
+  uint32_t cols;                 // features D (a power-of-two multiple of 32)
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_simd_rmsnorm_t_args_t;
+
 // Whole FP16 SiLU (x*sigmoid(x)) in one DM-core kernel: a single StreamMap pass, plus an optional
 // fused FP16->INT8 quant leaf. Elementwise; the kernel derives beats = cols/32 and the int8 scale
 // (a fixed 16.0). The user gives just the tensors and shape -- no StreamMap / beat / quant detail.

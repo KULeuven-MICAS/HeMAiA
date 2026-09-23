@@ -226,25 +226,25 @@ check("the consumer's whole graph descends from it",
 
 # the payoff: does static-L1 now see the stages as shareable?
 check("producer's temp is reusable by the consumer's activation",
-      shareable(ctx, "a.temp_cl0", "b.y_cl0"))
+      shareable(ctx, "a_temp_cl0", "b_y_cl0"))
 check("producer's temp is reusable by the consumer's WEIGHT (sources gated)",
-      shareable(ctx, "a.temp_cl0", "b.wgt_cl0"))
+      shareable(ctx, "a_temp_cl0", "b_wgt_cl0"))
 
 ctx2, _, _, _ = assemble(gate_sources=False)
 check("...and is NOT, when sources are left ungated",
-      not shareable(ctx2, "a.temp_cl0", "b.wgt_cl0"))
+      not shareable(ctx2, "a_temp_cl0", "b_wgt_cl0"))
 check("the RAW path still shares without gating",
-      shareable(ctx2, "a.temp_cl0", "b.y_cl0"))
+      shareable(ctx2, "a_temp_cl0", "b_y_cl0"))
 
 # ---------------------------------------------------------------- namespacing
 print("\nnamespacing")
 
 names = {n.node_name for n in ctx.dfg.node_list}
-check("each block's nodes carry its pipeline name", "a.wr_cl0" in names and "b.rd_cl0" in names,
+check("each block's nodes carry its pipeline name", "a_wr_cl0" in names and "b_rd_cl0" in names,
       sorted(names))
 handles = {v[0].name for v in collect_handle_users(
     sorted(ctx.dfg.node_list, key=lambda n: n.node_id)).values()}
-check("and so do its handles", {"a.temp_cl0", "b.wgt_cl0"} <= handles, sorted(handles))
+check("and so do its handles", {"a_temp_cl0", "b_wgt_cl0"} <= handles, sorted(handles))
 check("an empty scope is no scope", new_ctx().scope("") is not None
       and new_ctx().scope("").prefix == "")
 
@@ -257,7 +257,7 @@ h3 = {v[0].name for v in collect_handle_users(
     sorted(ctx3.node_list if hasattr(ctx3, "node_list") else ctx3.dfg.node_list,
            key=lambda n: n.node_id)).values()}
 check("two instances of one block get distinct handles",
-      {"first.temp_cl0", "second.temp_cl0"} <= h3, sorted(h3))
+      {"first_temp_cl0", "second_temp_cl0"} <= h3, sorted(h3))
 
 # ---------------------------------------------------------------- the report
 print("\nthe cut report")

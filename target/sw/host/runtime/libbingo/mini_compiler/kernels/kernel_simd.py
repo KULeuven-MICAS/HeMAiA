@@ -280,6 +280,46 @@ class SnaxBingoKernelSimdRmsnormF16I8Args(_SimdRowOpArgs):
     STRUCT_NAME = "__snax_bingo_kernel_simd_rmsnorm_args_t"
 
 
+class SnaxBingoKernelSimdRmsnormTF16F16Args(BingoKernelArgs):
+    """The same rmsnorm over x^T -- one token per FP16 LANE, which is ~3x cheaper on the
+    SIMD core: the per-token sum of squares falls straight out of the per-lane
+    accumulators (SIMD_RED_LANEWISE), so there is no cross-lane fold and no broadcast
+    plane, and the scale rides back in as a sticky operand.
+
+    `rows` MUST BE 32 -- the FP16 lanes in one 512-bit beat. It is structural, not a
+    tunable: at any other value a lane stops being one token and the reduce emits sums
+    that are not per-token, silently. Wider tiles are several calls on [32, D] slices.
+
+    seed_addr AND input_addr ARE ONE ALLOCATION. The sticky elementwise reads a flat sweep
+    of 1 + cols beats whose first beat is the scale, so the scratch beat has to sit
+    directly below the tile: allocate (1 + cols) * 64 bytes, pass the base as `seed_addr`
+    and base + 64 as `input_addr`. The kernel checks the adjacency and refuses otherwise
+    rather than writing the seed over feature row 0."""
+
+    KERNEL_NAME = "__snax_bingo_kernel_simd_rmsnorm_t_f16_f16"
+
+    def __init__(self, seed_addr: Union[BingoMemAlloc, int],
+                 input_addr: Union[BingoMemAlloc, int],
+                 output_addr: Union[BingoMemAlloc, int], rows: int, cols: int):
+        self.seed_addr = seed_addr
+        self.input_addr = input_addr
+        self.output_addr = output_addr
+        self.rows = rows
+        self.cols = cols
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_simd_rmsnorm_t_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.seed_addr, "seed_addr", a, handle_name_map)
+        self._process_addr(self.input_addr, "input_addr", a, handle_name_map)
+        self._process_addr(self.output_addr, "output_addr", a, handle_name_map)
+        a["rows"] = str(self.rows)
+        a["cols"] = str(self.cols)
+        return a
+
+
 class SnaxBingoKernelSimdSiluF16F16Args(_SimdRowOpArgs):
     """Whole FP16 SiLU (x*sigmoid(x)) in ONE DM-core kernel -> fp16 output (one StreamMap pass).
     Host does only Load / Store / Check."""

@@ -47,6 +47,32 @@ FINAL_CHECK = {1: "norm1", 2: "proj_q", 3: "proj_q",
 VERIFY_MODES = ("all", "final", "slices", "none")
 MAX_STAGE = 6
 
+# WHICH RMSNORM KERNEL THE LADDER RUNS. One word, because this is an A/B and the two arms
+# have to be swappable over an otherwise identical graph.
+#
+#   "rowmajor"  reduce(SUMSQ) -> bcast carrying StreamMap(1/D, RSQRT) -> ew2(MUL). One
+#               node, no layout change. The RSQRT func already took this path from
+#               7,717 cc to 3,135 at [32, 128] by deleting the core's scalar epilogue.
+#   "auto"      transposed wherever rows == 32: LANEWISE reduce, sticky scale, no
+#               cross-lane fold and no broadcast plane -- 1,073 cc, a further 2.9x on the
+#               SIMD -- at the cost of two xDMA block transposes around it.
+#
+# IT IS PINNED TO "rowmajor" ON PURPOSE. The transposed arm is three things at once that
+# have never run on this machine: a new kernel entry point
+# (__snax_bingo_kernel_simd_rmsnorm_t_f16_f16), a new seed-adjacency contract, and two new
+# xDMA transposer nodes per norm. Turning it on here would change a graph that PASSES
+# today, while the token-parallel arm is still being debugged, and any new failure would
+# then have two candidate causes.
+#
+# WHAT HAS TO HAPPEN BEFORE FLIPPING IT to "auto". The transposed kernel has no test
+# vehicle yet: simd_rmsnorm_1cluster sweeps rows {1, 2, 4, 8} and the transposed path needs
+# rows == 32 exactly, so that workload cannot reach it at any of its twelve configs. It
+# needs a rows == 32 arm -- checking the xDMA transpose against a reference, the norm
+# against the exact 1/sqrt golden, and the round trip back to row-major -- which is what
+# the snax reference app does and what proves the adjacency contract holds on silicon.
+# After that this is a clean single-variable A/B over an otherwise identical graph.
+NORM_PATH = "rowmajor"
+
 # Per-stage absolute tolerance on the fp16 compare. THESE TRACK THE DEQUANTISE: every
 # projection is now scaled back to the activation domain, so the tensors are O(1)-O(11)
 # rather than O(1000), and a tolerance sized for the old scale would accept anything.
@@ -142,7 +168,7 @@ def build(ctx: Ctx, p: dict, data: dict, hs: dict, *, stages: int = MAX_STAGE,
         rows on a core with no FPU. Rows are independent, so that loop divides.
         """
         if shard == "none":
-            return pipe.add(RMSNorm(rows=T, cols=d, cluster=0), name=name,
+            return pipe.add(RMSNorm(rows=T, cols=d, cluster=0, path=NORM_PATH), name=name,
                             bind={"x": src}).result.outputs["y"]
 
         def make(g, in_h, nrows, dep, out_h):
@@ -382,7 +408,7 @@ def token_parallel(ctx: Ctx, p: dict, data: dict, hs: dict, *, verify: str = "fi
                       x_l1, (ld_x,))
 
         # --- norm -> reshape -> quantise -> the three projections ---
-        n1 = pipe.add(RMSNorm(rows=NR, cols=d, cluster=c), name=f"norm1_{sfx}",
+        n1 = pipe.add(RMSNorm(rows=NR, cols=d, cluster=c, path=NORM_PATH), name=f"norm1_{sfx}",
                       bind={"x": x_port})
         a1 = pipe.add(Reshape(rows=NR, cols=d, src=Layout.PACKED, dst=Layout.A, mesh=mesh,
                               dtype=DType.F16, cluster=c),
@@ -415,7 +441,7 @@ def token_parallel(ctx: Ctx, p: dict, data: dict, hs: dict, *, verify: str = "fi
                       bind={"a": orp.result.outputs["y"], "b": x_port})
 
         # --- the feed-forward half ---
-        n2 = pipe.add(RMSNorm(rows=NR, cols=d, cluster=c), name=f"norm2_{sfx}",
+        n2 = pipe.add(RMSNorm(rows=NR, cols=d, cluster=c, path=NORM_PATH), name=f"norm2_{sfx}",
                       bind={"x": r1.result.outputs["y"]})
         a2 = pipe.add(Reshape(rows=NR, cols=d, src=Layout.PACKED, dst=Layout.A, mesh=mesh,
                               dtype=DType.F16, cluster=c),

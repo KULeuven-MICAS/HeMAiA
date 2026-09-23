@@ -497,6 +497,65 @@ inline int32_t xdma_disable_dst_ext(uint8_t ext) {
     return 0;
 }
 
+// ==========================================================================
+// WHICH SIDE THE TRANSPOSER IS ON, and why it is not the writer's by definition
+// ==========================================================================
+//
+// The 8x8 block transposer is an ordinary DataPathExtension. NOTHING about it is
+// side-specific: `HasTransposer` can appear in a cfg's `reader_extensions` or its
+// `writer_extensions`, and which one is a cfg author's choice. 
+//
+// WHAT THE TWO SIDES ACTUALLY MEAN, from XDMADataPath.scala:
+//
+//     reader -> readerExtensions -> dataSwitch -+-> writerExtensions -> writer  (local)
+//                                               +-> toRemote                    (push out)
+//     fromRemote --------------------> dataSwitch -^                            (push in)
+//
+//   READER extensions sit BEFORE the switch, so they transform a stream on its way OUT of
+//   local TCDM -- serving a local loopback AND a push to another cluster.
+//   WRITER extensions sit AFTER it, so they transform on the way IN to local TCDM --
+//   serving a loopback AND data arriving from another cluster.
+//
+// So neither side is "the local one". What IS local-only is the completion of a transpose:
+// the extension reorders bytes within each 8x8 block, and the WRITER's 8 spatial channels
+// scatter those blocks to their transposed positions -- and that per-channel scatter is
+// issued as 8 independently-addressed requests only when the writer targets its OWN TCDM
+// ("only local write", XDMACtrl). A write that leaves the cluster is drained as one
+// contiguous AXI burst, so the scatter is lost whichever side did the reorder. Hence:
+//
+//     local  -> local    either side works; the descriptor is IDENTICAL, only the enable
+//                        CSR differs
+//     remote -> local    only a WRITER-side transposer can reach it
+//     local  -> remote   neither completes; transpose into local L1 first, then move it
+//                        (this is the staged bypass the kernels below already implement)
+//
+// The macros below pick whichever side this cfg built and arm it there. Reader first: when a cfg has
+// both, doing the reorder before the switch keeps the writer free for a junction.
+//
+// They live HERE, in the runtime lib, rather than in the bingo kernel layer, because both layers have
+// transposer call sites -- xdma_layout_run() right below is one -- and a second copy of the rule is a
+// second thing to get wrong.
+#if defined(READER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16)
+#define BINGO_HAS_TRANSPOSER 1
+#define BINGO_TRANSPOSER_SIDE "reader"
+#define BINGO_TRANSPOSER_ARM(csr) \
+    xdma_enable_src_ext(READER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16, (csr))
+#define BINGO_TRANSPOSER_DISARM() \
+    xdma_disable_src_ext(READER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16)
+#elif defined(WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16)
+#define BINGO_HAS_TRANSPOSER 1
+#define BINGO_TRANSPOSER_SIDE "writer"
+#define BINGO_TRANSPOSER_ARM(csr) \
+    xdma_enable_dst_ext(WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16, (csr))
+#define BINGO_TRANSPOSER_DISARM() \
+    xdma_disable_dst_ext(WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16)
+#else
+#define BINGO_HAS_TRANSPOSER 0
+#define BINGO_TRANSPOSER_SIDE "none"
+#define BINGO_TRANSPOSER_ARM(csr) ((void)(csr), -1)
+#define BINGO_TRANSPOSER_DISARM() ((void)0)
+#endif
+
 // Junction (data-switch 2->1 fold) interface
 //
 // A writer-junction folds the arriving remote stream with this node's local read -- the collective
@@ -862,10 +921,9 @@ static inline void xdma_layout_run(
 {
     BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
     xdma_disable_all_extensions();
-#ifdef WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16
+#if BINGO_HAS_TRANSPOSER
     uint32_t tp_csr[1] = {0};  // 8x8-byte (8-bit) transpose mode
-    if (use_transposer)
-        xdma_enable_dst_ext(WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16, tp_csr);
+    if (use_transposer) BINGO_TRANSPOSER_ARM(tp_csr);
 #else
     (void)use_transposer;
 #endif
@@ -882,7 +940,7 @@ static inline void xdma_layout_run(
     xdma_wait_task(task_id);
     BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
 
-#ifdef WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16
-    if (use_transposer) xdma_disable_dst_ext(WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16);
+#if BINGO_HAS_TRANSPOSER
+    if (use_transposer) BINGO_TRANSPOSER_DISARM();
 #endif
 }

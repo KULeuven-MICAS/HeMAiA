@@ -12,15 +12,26 @@
 #   (also) __snax_bingo_kernel_simd_rmsnorm_f16_i8 -> int8 out + Check(int8 +-1)
 #
 # Args are HW-free: { input_addr, output_addr, rows, cols }; precision is in the kernel name.
-# Inside the one kernel, all on the SIMD core (rv32ima, no FPU): reduce(SUMSQ) -> inv_rms =
-# 1/sqrt(Sxx/N) via INTEGER sqrt_f16 + recip_f16 -> normalize (x * inv_rms) -> fused Fp16ToInt8.
+# Inside the one kernel, all on the SIMD core: reduce(SUMSQ) -> broadcast carrying
+# StreamMap(a=1/D, RSQRT) -> normalize (x * inv_rms) -> fused Fp16ToInt8.
 #
-# Measured cost LUT
+# THE LUT BELOW IS STALE, and deliberately left in place to be re-measured. It was taken
+# when inv_rms was computed ON THE CORE -- six serial `divu` through the integer
+# sqrt_f16 + recip_f16 plus sixteen volatile stores a row, which at [32, 128] was 59% of
+# the kernel. StreamMap's RSQRT func now does it in the datapath, on the broadcast pass
+# that a per-row scalar needs anyway, so every entry here should fall and the rows slope
+# should flatten. The snax reference app measures 7,717 -> 3,135 cc at [32, 128].
+#
+# Measured cost LUT -- PRE-RSQRT, re-measure
 #     rows\cols     64     128     256
 #        1           -      901     964
 #        2         3207    1399    1599
 #        4         1755    1961    2361
 #        8         2676    3085    3886      ((1,64) is the warm-up config)
+#
+# NOTE the rows == 1 entries are no longer a distinct fast path: it existed only because a
+# single row's scalar could be folded into a StreamMap immediate once the core had it in a
+# register, and RSQRT keeps the scalar in the datapath where a CSR cannot reach it.
 
 import os
 import sys
@@ -67,45 +78,23 @@ CHECK_FP16_TOL = 2
 
 # (rows, cols); each row is a length-cols tile (cols a power of two). A rows x cols grid for the
 # fused-kernel cost LUT (bilinear fit): rows {1,2,4,8} x cols {64,128,256} -- cols varies at EVERY
-# row so the cols slope de-confounds from the rows==1 fast-path drop.
+# row so the cols slope de-confounds from the rows slope. (The rows==1 fast path this grid
+# was designed to separate is gone; see the header.)
 _LUT_GRID = [(r, c) for r in (1, 2, 4, 8) for c in (64, 128, 256)]
 CONFIGS = [{"rows": r, "cols": c} for (r, c) in _LUT_GRID]
 
 
-# Integer fp16 rsqrt mirroring the DEVICE (snax_fp16_math.h) bit-for-bit. The SIMD core is
-# rv32ima (no FPU), so inv_rms = recip_f16(sqrt_f16(mean)) is computed with integer ops, NOT
-# a float rsqrt. The float rsqrt differs by ~0.0012 rel (absorbed by the fp16 tol check) but
-# would flip +-1 int8 LSB at rounding boundaries -- so the int8 golden must use the SAME
-# integer path the HW does.
-def _sqrt_f16(v):
-    E = (v >> 10) & 0x1F
-    if E == 0:
-        return 0
-    M = 1024 + (v & 0x3FF)
-    e = E - 15
-    if e & 1:
-        sig = 2 * M; oe = (e - 1) >> 1
-    else:
-        sig = M;     oe = e >> 1
-    n = sig << 10
-    x = 1448
-    for _ in range(5):
-        x = (x + n // x) >> 1
-    return (((oe + 15) << 10) | ((x - 1024) & 0x3FF)) & 0xFFFF
-
-
-def _recip_f16(s):
-    E = (s >> 10) & 0x1F
-    M = 1024 + (s & 0x3FF)
-    q = ((1 << 21) + (M >> 1)) // M
-    if q >= 2048:
-        return ((30 - E) << 10) & 0xFFFF
-    return (((29 - E) << 10) | ((q - 1024) & 0x3FF)) & 0xFFFF
-
-
 def _rmsnorm_ref(rows, cols, i):
+    """x and its golden. The golden is the TRUE 1/sqrt, which is what the device computes.
+
+    The reduce accumulates in FP32 and narrows the scalar to FP16 before the rsqrt sees it,
+    so this narrows too -- that step is in the datapath and is not an approximation the
+    reference gets to skip. What follows it, though, is now a hardware table accurate to
+    ~1 FP16 ULP, so the reference is the real 1/sqrt rather than a bit-exact model of the
+    core's integer sqrt+reciprocal. Modelling the old path here would score the device
+    against the 2-ULP error the RSQRT func was added to remove.
+    """
     D = cols
-    log2D = D.bit_length() - 1                              # D is a power of two
     rng = np.random.RandomState(3300 + i)
     x_rows, y_rows = [], []
     for r in range(rows):
@@ -113,10 +102,9 @@ def _rmsnorm_ref(rows, cols, i):
         xf = x.astype(np.float32)
         ssq = np.float16(np.float32((xf ** 2).sum()))      # HW: fp32 accumulate -> fp16 scalar
         ssq_bits = int(np.float16(ssq).view(np.uint16))
-        Es = (ssq_bits >> 10) & 0x1F
-        mean_bits = (((Es - log2D) << 10) | (ssq_bits & 0x3FF)) & 0xFFFF  # ssq / D (D pow2, exact)
-        inv16 = np.uint16(_recip_f16(_sqrt_f16(mean_bits))).view(np.float16)  # integer 1/sqrt
-        y = (xf * np.float32(inv16)).astype(np.float16)    # fp16 elementwise MUL (map a*x)
+        mean = np.float32(ssq) / np.float32(D)             # D is 2^k, so this is exact
+        inv16 = np.float16(np.float32(1.0) / np.sqrt(mean))
+        y = (xf * np.float32(inv16)).astype(np.float16)    # fp16 elementwise MUL
         x_rows.append(x)
         y_rows.append(y)
     return np.concatenate(x_rows), np.concatenate(y_rows)
@@ -168,7 +156,7 @@ def build_config(g, i, meta, l1_x, l1_f16, l3_f, prev):
     # (from the memchip), stores the fp16 output, and checks it.
     load = g.node(f"Load_{i}", DMA_CORE, "__snax_bingo_kernel_idma_1d_copy",
                   SnaxBingoKernelIdma1dCopyArgs(off_in, l1_x, tot_b), prev)
-    # fp16 output: reduce-SUMSQ, integer 1/sqrt(Sxx/N), normalize.
+    # fp16 output: reduce-SUMSQ, broadcast carrying StreamMap(1/D, RSQRT), normalize.
     rn_f = g.node(f"RMSNormF16_{i}", SIMD_CORE, "__snax_bingo_kernel_simd_rmsnorm_f16_f16",
                   SnaxBingoKernelSimdRmsnormF16F16Args(l1_x, l1_f16, rows, D), load)
     st_f = g.node(f"StoreF16_{i}", HOST_CORE, "__host_bingo_kernel_idma",

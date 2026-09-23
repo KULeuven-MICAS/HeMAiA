@@ -17,11 +17,13 @@ fp16 where this one wants int8. Three kinds of mismatch, and NONE of them faults
              written, the arithmetic runs -- and the answer is a scrambled tensor. On
              random test data the golden is scrambled identically and it PASSES.
   PRECISION  fp16 bits read as int8 are two elements, not one. Nothing is out of range.
+  AXES       a tensor stored [cols, rows] read as [rows, cols] is again a permutation with
+             the same flat length, and again it computes cleanly and answers wrongly.
 
 So this module's job is to see the mismatch and either close it or refuse. What it must
 never do is proceed.
 
-THE THREE CLOSURES, and why each is the engine it is:
+THE FOUR CLOSURES, and why each is the engine it is:
 
   L4 -> L3   host iDMA. The memory-chiplet pool is reachable over the D2D link by the host
              iDMA; a cluster's GEMM and SIMD have no port at all and the cluster iDMA
@@ -33,6 +35,12 @@ THE THREE CLOSURES, and why each is the engine it is:
              source layout's strides directly; the device kernel takes full addresses the
              same way the 1-D copy does, so it is supported by construction, but nothing
              in this tree does it. bring_in(fuse_relayout=True) opts in.
+  transpose  the xDMA's 8x8 BLOCK TRANSPOSER, a real unit in the writer datapath and not a
+             pair of strides -- no stride nest expresses an axis exchange, which is why
+             nest.py refuses one by name and points here. Being a WRITER extension it
+             scatters into the writer's OWN local TCDM, so the transposed result always
+             lands in L1; a non-local source is staged by the kernel. Native at 1- and
+             2-byte elements only, so this runs at fp16 and a quantiser comes after it.
   precision  NOT DONE HERE. A precision change needs a scale, and there is no correct
              default -- the right one depends on the range of the data, which this module
              cannot see. Choosing one silently is how a tensor ends up 83% saturated and
@@ -47,9 +55,10 @@ conversion nobody wanted, a wrong nest silently scrambles the tensor.
 import numpy as np
 
 from bingo_kernel_args import (HostBingoKernelIdmaArgs,
-                               SnaxBingoKernelXdma1dCopyArgs)
+                               SnaxBingoKernelXdma1dCopyArgs,
+                               SnaxBingoKernelXdmaTranspose2dArgs)
 
-from .ports import Port, PortSpec
+from .ports import Layout, Port, PortSpec
 from .nest import convert_args
 
 # The level names live in ports.py, next to the PortSpec field that holds one.
@@ -111,11 +120,39 @@ def plan(have: PortSpec, want: PortSpec, *, mesh=None, elem_bytes=None) -> list:
         if mesh is not None and elem_bytes is not None:
             # Derive it now and throw it away: the derivation is the feasibility test, and
             # it is cheap next to being wrong about it.
-            convert_args(have.layout, want.layout, have.shape[0], have.shape[1],
-                         mesh, elem_bytes, 0, 0)
+            # STORED shape, not logical: a nest is written in the dimensions the bytes
+            # actually have, and for a both-transposed pair those are the swapped ones.
+            # They coincide whenever nothing is transposed, which is every caller today.
+            sr, sc = have.stored_shape
+            convert_args(have.layout, want.layout, sr, sc, mesh, elem_bytes, 0, 0)
         steps.append(Step("relayout", f"{have.layout} -> {want.layout}, fused into the "
                                       f"load so it costs no extra traversal",
                           engine="xDMA 6d"))
+    if have.transposed != want.transposed:
+        # ORDER MATTERS AND IT IS THIS WAY ROUND ON PURPOSE. The relayout above is a stride
+        # nest over a [rows, cols] buffer; running it on transposed bytes would derive the
+        # nest for the wrong dimensions. So the transposition is undone (or applied) LAST,
+        # once the operand is in the layout both sides agree on. The one pairing that would
+        # break that -- a transpose between two different non-packed layouts -- is refused
+        # here rather than emitted, because neither order is right for it.
+        if have.layout != want.layout and Layout.PACKED not in (have.layout, want.layout):
+            raise ValueError(
+                f"{have.layout}{'^T' if have.transposed else ''} -> "
+                f"{want.layout}{'^T' if want.transposed else ''} asks for a transpose AND "
+                f"a blocked-layout change in one hop, and the two do not commute: the "
+                f"stride nest is derived for one set of dimensions and the transposer "
+                f"reorders the other. Go through packed with an explicit Reshape.")
+        if elem_bytes is not None and elem_bytes not in (1, 2):
+            raise ValueError(
+                f"a transpose at {elem_bytes}-byte elements has no hardware path: the "
+                f"xDMA transposer's native modes are the cfg's elementWidth [8, 16], and "
+                f"nothing composes a wider element on the writer side. int32 falls back to "
+                f"a DM-core loop, which is not a transfer this plans. Transpose at fp16 "
+                f"and convert after.")
+        steps.append(Step("transpose",
+                          f"{tuple(have.stored_shape)} -> {tuple(want.stored_shape)}; an "
+                          f"8x8 block transposer, not a stride nest",
+                          engine="xDMA transposer"))
     if have.dtype != want.dtype:
         raise ValueError(
             f"precision {have.dtype} -> {want.dtype} is not inserted automatically: it "
@@ -170,9 +207,9 @@ def bring_in(ctx, name, have: Port, want: PortSpec, *, mesh, elem_bytes, after=(
             handle, nd = hoist(ctx, name, handle, nbytes=nbytes, after=after)
             nodes.append(nd)
             spec = PortSpec(spec.layout, spec.dtype, spec.shape, mem_level="L3",
-                            doc=spec.doc)
+                            doc=spec.doc, transposed=spec.transposed)
         elif st.kind == "relayout":
-            rows, cols = spec.shape
+            rows, cols = spec.stored_shape
             nbytes = rows * cols * elem_bytes
             prev = nodes[-1] if nodes else after
             if not fuse_relayout and spec.mem_level != "L1":
@@ -191,5 +228,23 @@ def bring_in(ctx, name, have: Port, want: PortSpec, *, mesh, elem_bytes, after=(
                                        elem_bytes, handle, dst), prev)
             nodes.append(nd)
             handle, spec = dst, PortSpec(want.layout, spec.dtype, spec.shape,
-                                         mem_level="L1", doc=spec.doc)
+                                         mem_level="L1", doc=spec.doc,
+                                         transposed=spec.transposed)
+        elif st.kind == "transpose":
+            # The transposer is a WRITER extension, so it scatters into the writer's own
+            # local TCDM: the move must END in L1. It does not have to START there -- the
+            # kernel stages a non-local source itself -- but a block calling this already
+            # wants its operand in L1, so the destination below always is.
+            rows, cols = spec.stored_shape
+            nbytes = rows * cols * elem_bytes
+            prev = nodes[-1] if nodes else after
+            dst = ctx.l1(f"{name}_t", nbytes)
+            nd = ctx.node(f"Transpose_{name}", ctx.xdma,
+                          "__snax_bingo_kernel_xdma_transpose_2d",
+                          SnaxBingoKernelXdmaTranspose2dArgs(handle, dst, rows, cols,
+                                                             elem_bytes), prev)
+            nodes.append(nd)
+            handle, spec = dst, PortSpec(spec.layout, spec.dtype, spec.shape,
+                                         mem_level="L1", doc=spec.doc,
+                                         transposed=not spec.transposed)
     return Port(spec, handle, (nodes[-1],), cluster=ctx.cluster, name=name), nodes

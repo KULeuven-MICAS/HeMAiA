@@ -137,6 +137,39 @@
 #define SIMD_EXT_FP16TOINT8_CSR 0u
 #endif
 
+// RSQRT is a StreamMap FUNC, not an extension of its own, and the distinction is the
+// difference between a refusal and a wrong answer. SIMD_EXT_STREAMMAP says a StreamMap
+// exists; it cannot say whether func = 3 was elaborated. A cfg whose HasStreamMap.func
+// list omits RSQRT_FP16 ACCEPTS the CSR write, selects no activation, and returns the
+// LINEAR result -- a well-formed tensor of wrong numbers with nothing reported.
+//
+// SimdTopGen now answers the question directly: each extension emits one
+// `SIMD_EXT_<NAME>_HAS_<CAP>` per op or func it built, and SIMD_EXT_CAPS marks a header
+// that carries them at all. That marker is what lets an ABSENT capability be told apart
+// from a header generated before capabilities existed -- both are an undefined macro, and
+// the safe default is opposite in the two cases.
+//
+// Note the generator publishes the RUNTIME opcode set, not the cfg's op list: a fused
+// "FMA" build op answers to two opcodes and names neither, so e.g.
+// SIMD_EXT_STREAMREDUCE_HAS_SUMSQ appears on snax_split_cluster although its cfg lists
+// only FMA_FP16 and MAX_FP16.
+//
+// Overridable, because an old generated header is still a legitimate thing to build
+// against. With 0, rmsnorm falls back to the core's integer sqrt+reciprocal -- the path
+// this kernel shipped before, ~2 FP16 ULP worse on inv_rms and ~5,000 cc slower over a
+// [32, 128] tile. The better fix is RSQRT_FP16 in the cfg's func list and a re-elaborate.
+#if !defined(BINGO_SIMD_HAS_RSQRT)
+#if !defined(SIMD_EXT_CAPS)
+// Pre-capabilities header: it cannot tell us, so keep the behaviour this kernel had when
+// that was the only option rather than silently dropping to the slow path.
+#define BINGO_SIMD_HAS_RSQRT 1
+#elif defined(SIMD_EXT_STREAMMAP_HAS_RSQRT)
+#define BINGO_SIMD_HAS_RSQRT 1
+#else
+#define BINGO_SIMD_HAS_RSQRT 0
+#endif
+#endif
+
 // Refuse a kernel whose operator this cfg did not generate.
 #define BINGO_SIMD_EXT_UNSUPPORTED(kname, exts)                              \
     do {                                                                     \
@@ -243,20 +276,57 @@ static inline uint32_t simd_pass_map(void *src, void *dst, uint32_t flat,
     return simd_run_shapes(&in, &out);
 }
 
-// Broadcast one beat per row to `beats` beats per row, with a fused StreamMap LINEAR
-// (out = a*x) applied on the fly -- a = -1.0 does the negate INSIDE the broadcast, which
-// is why softmax needs no DM-core negate loop. `dst_row_stride` lets the destination be
-// TAP-padded so a later 2-operand pass keeps a constant interleave delta across rows.
+// Broadcast one beat per row to `beats` beats per row, with a fused StreamMap
+// out = func(a*x) applied on the fly.
+//
+// THE FUNC IS FREE, AND THAT IS THE POINT. This pass exists to replicate a per-row scalar,
+// which a 2-operand elementwise cannot avoid -- its reader is one 3-D affine stream
+// {operand, beat, row} and the three loops share one stride set, so `b` cannot be zeroed
+// for the scalar operand alone. The replication therefore happens either way, and whatever
+// StreamMap is armed rides along on it at no extra cost:
+//
+//     LINEAR a = -1.0   the negate INSIDE the broadcast, which is why softmax needs no
+//                       DM-core negate loop
+//     RSQRT  a = 1/D    the whole rmsnorm scalar epilogue -- mean, sqrt and reciprocal --
+//                       done in the datapath, so the scalar never leaves it
+//
+// `dst_row_stride` lets the destination be TAP-padded so a later 2-operand pass keeps a
+// constant interleave delta across rows.
 static inline uint32_t simd_pass_bcast_map(void *src_beats, void *dst,
                                            uint32_t rows, uint32_t beats,
                                            uint32_t dst_row_stride,
-                                           uint32_t a_bits) {
+                                           uint32_t a_bits, uint32_t func) {
     snax_simd_shape_t in, out;
     // Reader: {beat (stride 0 -> repeat), row}. One beat per row, presented `beats` times.
     snax_simd_shape_2d(&in, src_beats, beats, 0u, rows, SIMD_BEAT_BYTES);
     snax_simd_shape_rows(&out, dst, rows, beats, dst_row_stride);
-    snax_simd_use3(SIMD_EXT_STREAMMAP, SIMD_EXT_STREAMMAP_CSR, a_bits, 0u,
-                   SIMD_FUNC_LINEAR);
+    snax_simd_use3(SIMD_EXT_STREAMMAP, SIMD_EXT_STREAMMAP_CSR, a_bits, 0u, func);
+    return simd_run_shapes(&in, &out);
+}
+
+// One-operand elementwise with STICKY-B: the task's FIRST beat is latched as operand B and
+// emits nothing; beats 1..N emit op(B, beat). N+1 beats in, N out.
+//
+// THE SEED MUST SIT IMMEDIATELY BELOW THE DATA. The reader is one flat sweep of 1 + N
+// beats and the seed is simply its first, so there is no argument that separates them --
+// `seed_then_data` points at the seed and the data is at seed + SIMD_BEAT_BYTES. The
+// writer covers exactly the N data beats, NOT one beat early.
+//
+// This is the broadcast a per-row scalar cannot use and a per-LANE one does not need: it
+// serves one beat for the whole task, so it pays off exactly when the tensor is oriented
+// with one row per lane. See the transposed rmsnorm below.
+static inline uint32_t simd_pass_ew_sticky(void *seed_then_data, void *dst,
+                                           uint32_t data_beats, uint32_t ext,
+                                           uint32_t ext_csr, uint32_t op,
+                                           uint32_t out_dt, uint32_t inv_scale) {
+    snax_simd_shape_t in, out;
+    snax_simd_shape_flat(&in, seed_then_data, data_beats + 1u);
+    snax_simd_shape_flat(&out, dst,
+                         (out_dt == SIMD_OUT_I8) ? (data_beats / 2u) : data_beats);
+    snax_simd_use2(ext, ext_csr, 1u, op | SIMD_EW_STICKY_B);
+    if (out_dt == SIMD_OUT_I8)
+        snax_simd_arm2(SIMD_EXT_FP16TOINT8, SIMD_EXT_FP16TOINT8_CSR, inv_scale,
+                       SIMD_QUANT_TAIL(0));
     return simd_run_shapes(&in, &out);
 }
 
@@ -808,7 +878,8 @@ static inline uint32_t __snax_bingo_kernel_simd_softmax(void *arg, uint32_t out_
         // which reads that output -- uses pad_row.)
         BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
         if (rc == BINGO_RET_SUCC)
-            rc = simd_pass_bcast_map(bt, bc, rows, beats, row_b, SIMD_F32_NEG_ONE);
+            rc = simd_pass_bcast_map(bt, bc, rows, beats, row_b, SIMD_F32_NEG_ONE,
+                                     SIMD_FUNC_LINEAR);
         BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
         // THE FUSED PASS: EW0(ADD) -> Map(EXP) -> Reduce(ADD|TAP). x + (-max), then exp,
         // then the row sum, in ONE sweep over the tile. This is the three old passes
@@ -838,7 +909,8 @@ static inline uint32_t __snax_bingo_kernel_simd_softmax(void *arg, uint32_t out_
         // bcast bt(1/Sexp) -> bc, padded (identity map, a = 1).
         BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
         if (rc == BINGO_RET_SUCC)
-            rc = simd_pass_bcast_map(bt, bc, rows, beats, pad_row, SIMD_F32_ONE);
+            rc = simd_pass_bcast_map(bt, bc, rows, beats, pad_row, SIMD_F32_ONE,
+                                     SIMD_FUNC_LINEAR);
         BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
         // EW1(MUL) [+ quant]: out = exp * (1/Sexp). Both operands padded, packed write.
         BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
@@ -873,16 +945,40 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_softmax_f16_i8(void *arg) {
 // Fused FP16 RMSNorm -- the WHOLE pipeline in ONE kernel.
 //
 // out[r, :] = x[r, :] / sqrt(mean_j x[r,j]^2). Same shape and args as softmax; the
-// differences are the reduction (SUMSQ, not MAX), the scalar (inv_rms = 1/sqrt(Sxx/N)
-// via the integer sqrt_f16 + recip_f16 -- no FPU on this core), and that the normalize
-// reads x DIRECTLY: no exp, no sub-max, no TAP padding anywhere. N = cols is taken to be
-// a power of two, so the mean is an exponent subtract.
+// differences are the reduction (SUMSQ, not MAX) and that the normalize reads x DIRECTLY:
+// no exp, no sub-max, no TAP padding anywhere. N = cols is taken to be a power of two, so
+// the mean is an exponent subtract -- exactly representable, and it is what lets 1/N ride
+// in a CSR immediate.
 //
-//   rows == 1 : reduce(SUMSQ) -> [core] inv_rms -> map(LINEAR, a=inv_rms) [+ quant]
-//   rows >  1 : reduce(SUMSQ) -> [core] per-row inv_rms -> bcast -> EW1(MUL) [+ quant]
+//     1  reduce(SUMSQ)            x  -> bt   per-row SUM(x^2), splatted across the beat
+//     2  bcast_map(a=1/D, RSQRT)  bt -> bc   the replication AND the normalisation
+//     3  ew2(MUL)             (x, bc) -> y   [+ fused quant]
+//
+// THE ONE SCALAR PER ROW IS THE WHOLE COST OF THIS KERNEL, and pass 2 is where it used to
+// escape. The arithmetic is one multiply per element -- the same as a residual add, which
+// measures 4x cheaper over the same tile. What made rmsnorm expensive was that inv_rms had
+// to be computed on a core with no FPU (six serial `divu` through sqrt_f16 + recip_f16,
+// ~122 cc a row) and then written back into the datapath by hand (sixteen volatile word
+// stores per row, because the broadcast consumes a whole 64 B beat). At [32, 128] that
+// epilogue measured 4,584 cc of a 7,719 cc kernel -- 59%.
+//
+// StreamMap's RSQRT deletes all of it for free. Pass 2 was ALREADY a StreamMap: the
+// replication, carrying an identity multiply a = 1.0. Giving that same pass a = 1/D and
+// func = RSQRT makes it emit 1/sqrt(SUM/D) instead of SUM, so the scalar never leaves the
+// datapath. It costs the same 296 cc of datapath as the identity multiply it replaces.
+// Measured on snax_split_cluster at [32, 128]: 7,717 cc -> 3,135 cc, and the result is
+// CLOSER to the true 1/sqrt than the integer path it replaces (1 ULP against 2-3).
 //
 // Unlike softmax, rmsnorm has nothing for EW0 to do: its only combine is the final
 // multiply, and nothing precedes it.
+//
+// WHY THERE IS NO rows == 1 FAST PATH ANY MORE. There used to be one, and it existed only
+// because the scalar was on the core: with inv_rms in a register, a single row could fold
+// it into a StreamMap immediate and skip the broadcast entirely. RSQRT puts the scalar
+// back in the datapath, where it cannot be read out into a CSR, so the one-row case runs
+// the same three passes as every other -- one pass more than before, against an epilogue
+// it no longer pays. The transposed kernel below is the version that IS cheaper, and it is
+// cheaper for a different reason.
 // ==========================================================================
 static inline uint32_t __snax_bingo_kernel_simd_rmsnorm(void *arg, uint32_t out_prec) {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_simd_rmsnorm_args_t);
@@ -946,50 +1042,46 @@ static inline uint32_t __snax_bingo_kernel_simd_rmsnorm(void *arg, uint32_t out_
                           rows);
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
 
-    if (rows == 1u) {
-        // [core] inv_rms = 1/sqrt(ssq/N). The mean is an exponent subtract because N is a
-        // power of two; then the integer sqrt and reciprocal, widened to fp32 bits.
-        BINGO_TRACE_MARKER(BINGO_TRACE_SCALAR_RUN_START);
-        uint32_t a_bits = 0u;
-        if (rc == BINGO_RET_SUCC) {
-            uint16_t ssq = bt_l[0];
+    // What pass 2 carries: the normalisation itself where the hardware has it, the bare
+    // identity multiply where it does not and the core has already done the arithmetic.
+#if BINGO_SIMD_HAS_RSQRT
+    // 1/D as FP32 bits. D is a power of two, so this is an exponent subtract and exact --
+    // the same identity the scalar epilogue used, moved into a CSR immediate.
+    uint32_t bcast_a = 0x3F800000u - (log2D << 23);
+    uint32_t bcast_f = SIMD_FUNC_RSQRT;
+    (void)bt_l;
+#else
+    // [core] per-row inv_rms = 1/sqrt(ssq/N), splatted over the row's whole 64 B beat --
+    // the broadcast below consumes all 32 lanes, so writing lane 0 alone is not enough.
+    // Six serial `divu` and sixteen volatile stores a row; see the note above.
+    uint32_t bcast_a = SIMD_F32_ONE;
+    uint32_t bcast_f = SIMD_FUNC_LINEAR;
+    BINGO_TRACE_MARKER(BINGO_TRACE_SCALAR_RUN_START);
+    if (rc == BINGO_RET_SUCC) {
+        for (uint32_t r = 0u; r < rows; r++) {
+            uint16_t ssq = bt_l[r * 32u];
             uint32_t Es = (ssq >> 10) & 0x1Fu;
             uint16_t mean = (uint16_t)(((Es - log2D) << 10) | (ssq & 0x3FFu));
-            a_bits = f16_to_f32bits(recip_f16(sqrt_f16(mean)));
+            uint16_t inv = recip_f16(sqrt_f16(mean));
+            uint32_t inv2 = ((uint32_t)inv << 16) | inv;
+            volatile uint32_t *row32 = (volatile uint32_t *)(bt_l + r * 32u);
+            for (uint32_t l = 0u; l < 16u; l++) row32[l] = inv2;
         }
-        BINGO_TRACE_MARKER(BINGO_TRACE_SCALAR_RUN_END);
-        BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
-        if (rc == BINGO_RET_SUCC)
-            rc = simd_pass_map((void *)(uint32_t)in_addr, (void *)(uint32_t)out_addr,
-                               rows * beats, a_bits, 0u, SIMD_FUNC_LINEAR, out_dt,
-                               inv_scale);
-        BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
-    } else {
-        BINGO_TRACE_MARKER(BINGO_TRACE_SCALAR_RUN_START);
-        if (rc == BINGO_RET_SUCC) {
-            for (uint32_t r = 0u; r < rows; r++) {
-                uint16_t ssq = bt_l[r * 32u];
-                uint32_t Es = (ssq >> 10) & 0x1Fu;
-                uint16_t mean = (uint16_t)(((Es - log2D) << 10) | (ssq & 0x3FFu));
-                uint16_t inv = recip_f16(sqrt_f16(mean));
-                uint32_t inv2 = ((uint32_t)inv << 16) | inv;
-                volatile uint32_t *row32 = (volatile uint32_t *)(bt_l + r * 32u);
-                for (uint32_t l = 0u; l < 16u; l++) row32[l] = inv2;
-            }
-        }
-        BINGO_TRACE_MARKER(BINGO_TRACE_SCALAR_RUN_END);
-        BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
-        if (rc == BINGO_RET_SUCC)
-            rc = simd_pass_bcast_map(bt, bc, rows, beats, row_b, SIMD_F32_ONE);
-        BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
-        BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
-        if (rc == BINGO_RET_SUCC)
-            rc = simd_pass_ew2((void *)(uint32_t)in_addr, bc, (void *)(uint32_t)out_addr,
-                               rows, beats, row_b, SIMD_EXT_STREAMELEMENTWISE_1,
-                               SIMD_EXT_STREAMELEMENTWISE_1_CSR, SIMD_EW_MUL, out_dt,
-                               inv_scale);
-        BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
     }
+    BINGO_TRACE_MARKER(BINGO_TRACE_SCALAR_RUN_END);
+#endif
+
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
+    if (rc == BINGO_RET_SUCC)
+        rc = simd_pass_bcast_map(bt, bc, rows, beats, row_b, bcast_a, bcast_f);
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
+    if (rc == BINGO_RET_SUCC)
+        rc = simd_pass_ew2((void *)(uint32_t)in_addr, bc, (void *)(uint32_t)out_addr,
+                           rows, beats, row_b, SIMD_EXT_STREAMELEMENTWISE_1,
+                           SIMD_EXT_STREAMELEMENTWISE_1_CSR, SIMD_EW_MUL, out_dt,
+                           inv_scale);
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
 
     if (!from_pool) snrt_l1_free(scratch_lo);
     if (rc != BINGO_RET_SUCC) {
@@ -1008,6 +1100,145 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_rmsnorm_f16_f16(void *arg) {
 }
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_rmsnorm_f16_i8(void *arg) {
     return __snax_bingo_kernel_simd_rmsnorm(arg, SIMD_OUT_I8);
+}
+
+// ==========================================================================
+// TRANSPOSED FP16 RMSNorm -- the same normalisation over x^T, and 3x cheaper.
+//
+// THE WHOLE DIFFERENCE IS WHERE A ROW'S TERMS LAND. StreamReduce carries one FP32
+// accumulator per lane, acc[0..31], persisting from beat to beat; every beat, lane k folds
+// into acc[k], and nothing ever moves sideways. So a reduction ALONG BEATS is free -- it
+// is the accumulators doing what they already do -- while a reduction ACROSS the lanes of
+// a beat is a different machine entirely: a log-depth fold through treeBuf, serialised
+// over `treeLanes` ALUs, holding the reader's input port low for ~35 cc PER ROW.
+//
+// Row-major x[T, D], a beat is 32 consecutive FEATURES of one token, so lane k collects
+// every 32nd feature of the row and the row's D terms end up spread over all 32 lanes.
+// Collapsing them is the fold, once per row -- 32 rows x ~35 cc is what turns a 256 cc
+// reduce into a 1,387 cc one.
+//
+// Transposed x^T[D, T], a beat is one FEATURE across all 32 tokens, and lane t is token t
+// in EVERY beat. So acc[t] collects token t's WHOLE row, and when the stream ends the
+// answer is already sitting in the accumulators. SIMD_RED_LANEWISE just says "emit them":
+// ONE beat holding all 32 tokens' sums of squares, no fold, no splat.
+//
+//     1  reduce(SUMSQ|LANEWISE)   x^T -> ssq    all T tokens in one beat, D beats read
+//     2  map(a=1/D, RSQRT)        ssq -> seed   ONE beat, ~21 cc of datapath
+//     3  ew(MUL|STICKY_B)    seed + x^T -> y^T  each lane by its own token's scalar
+//
+// Pass 3 needs no broadcast plane at all: STICKY_B latches the seed beat once for the
+// whole task and multiplies every data beat against it, which is exactly right here
+// because lane t never stops being token t. The read stream is D+1 beats, not 2*D, and
+// nothing is replicated. Measured on snax_split_cluster at T=32 D=128: 1,073 cc against
+// the row-major kernel's 3,135.
+//
+// TWO CONSTRAINTS, BOTH STRUCTURAL, BOTH CHECKED BELOW.
+//
+//   rows MUST BE EXACTLY 32, the FP16 lanes in a beat. It is not a tunable: at rows < 32 a
+//   beat holds several features and acc[k] mixes tokens; at rows > 32 a feature spans
+//   several beats and acc[k] mixes them the other way. Either way LANEWISE emits sums that
+//   are not per-token, and nothing faults. A wider tile is several calls on [32, D]
+//   slices, which is the caller's decomposition to make.
+//
+//   THE SEED BEAT MUST SIT IMMEDIATELY BELOW x^T. Pass 3's reader is one flat sweep of
+//   1 + D beats, so `seed_addr` and the tile are one allocation with a beat of headroom,
+//   not two buffers. The caller states both addresses and this kernel checks they are
+//   adjacent -- pass the data pointer for both and it refuses, rather than writing the
+//   seed over feature row 0 and reading the tile one beat out of phase.
+//
+// FP16 OUT ONLY, DELIBERATELY. y^T is not a layer's final form: A-layout needs four
+// consecutive FEATURES in one 8 B run and y^T has four consecutive TOKENS, so a transpose
+// back has to happen either way -- and the transposer's native modes are 8- and 16-bit, so
+// quantising here would only move the int8 conversion in front of a reshape that requires
+// fp16. Normalise, transpose back, reshape, THEN quantise.
+// ==========================================================================
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_rmsnorm_t_f16_f16(void *arg) {
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_simd_rmsnorm_t_args_t);
+    BINGO_REQUIRE_CORE(snax_is_simd_core(), "simd_rmsnorm_t", "SIMD");
+#if !BINGO_HAS_STREAMMAP || !BINGO_HAS_STREAMREDUCE || !BINGO_HAS_STREAMELEMENTWISE || \
+    !BINGO_SIMD_HAS_RSQRT
+    BINGO_SIMD_EXT_UNSUPPORTED(
+        "simd_rmsnorm_t",
+        "StreamMap(RSQRT)+StreamReduce(LANEWISE)+StreamElementwise(STICKY_B)");
+#else
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+    uint32_t *a = (uint32_t *)arg;
+    uint64_t seed_addr = make_u64(a[0], a[1]);
+    uint64_t in_addr = make_u64(a[2], a[3]);
+    uint64_t out_addr = make_u64(a[4], a[5]);
+    uint32_t rows = a[6];
+    uint32_t cols = a[7];
+    bingo_kernel_scratchpad_t *sp =
+        BINGO_GET_SP(arg, __snax_bingo_kernel_simd_rmsnorm_t_args_t);
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+
+    BINGO_SIMD_REQUIRE_LOCAL(seed_addr, "simd_rmsnorm_t", "seed");
+    BINGO_SIMD_REQUIRE_LOCAL(in_addr, "simd_rmsnorm_t", "input");
+    BINGO_SIMD_REQUIRE_LOCAL(out_addr, "simd_rmsnorm_t", "output");
+
+    if (rows != SIMD_BEAT_BYTES / 2u) {
+        printf_safe("[Cluster %d Core %d]: simd_rmsnorm_t needs rows == %d (one FP16 lane "
+                    "per token); got %d. Split the tile.\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx(),
+                    (int)(SIMD_BEAT_BYTES / 2u), (int)rows);
+        return BINGO_RET_FAIL;
+    }
+    if ((uint32_t)seed_addr + SIMD_BEAT_BYTES != (uint32_t)in_addr) {
+        printf_safe("[Cluster %d Core %d]: simd_rmsnorm_t needs the seed beat directly "
+                    "below x^T (seed %08x + %d != x %08x). Allocate ONE buffer of "
+                    "(1 + cols) beats.\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx(), (uint32_t)seed_addr,
+                    (int)SIMD_BEAT_BYTES, (uint32_t)in_addr);
+        return BINGO_RET_FAIL;
+    }
+
+    uint32_t log2D = 0u;
+    for (uint32_t t = cols; t > 1u; t >>= 1u) log2D++;
+    uint32_t inv_d_bits = 0x3F800000u - (log2D << 23);
+
+    // ONE BEAT OF SCRATCH, for the raw sum of squares. It could go straight into the seed
+    // slot and be rewritten in place by pass 2, which would save this allocation -- but
+    // that makes a single task read and write one address, and nothing in the block's
+    // contract says the writer cannot reach the port before the reader has drained it.
+    // The reference app keeps the two apart for the same reason. 64 B, once per image.
+    static uint32_t s_ssq = 0u;
+    if (!s_ssq) s_ssq = snrt_l1_malloc(SIMD_BEAT_BYTES + 63u);
+    if (!s_ssq) {
+        printf_safe("[Cluster %d Core %d]: rmsnorm_t L1 scratch alloc failed!\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+    void *ssq = (void *)((s_ssq + 63u) & ~63u);
+    void *seed = (void *)(uint32_t)seed_addr;
+
+    // rows = 1, beats = cols: the whole tile is ONE "row" and the per-lane accumulators
+    // ARE the per-token sums. One beat out.
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
+    uint32_t rc = simd_pass_reduce((void *)(uint32_t)in_addr, ssq, 1u, cols,
+                                   SIMD_RED_SUMSQ | SIMD_RED_LANEWISE, 1u);
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
+    if (rc == BINGO_RET_SUCC)
+        rc = simd_pass_map(ssq, seed, 1u, inv_d_bits, 0u, SIMD_FUNC_RSQRT, SIMD_OUT_F16,
+                           0u);
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
+    if (rc == BINGO_RET_SUCC)
+        rc = simd_pass_ew_sticky(seed, (void *)(uint32_t)out_addr, cols,
+                                 SIMD_EXT_STREAMELEMENTWISE_1,
+                                 SIMD_EXT_STREAMELEMENTWISE_1_CSR, SIMD_EW_MUL,
+                                 SIMD_OUT_F16, 0u);
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
+
+    if (rc != BINGO_RET_SUCC) {
+        printf_safe("[Cluster %d Core %d]: rmsnorm_t pass failed!\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+    sp->return_value = (uint32_t)out_addr;
+    sp->num_return_values = 0;
+    return BINGO_RET_SUCC;
+#endif
 }
 
 // ==========================================================================

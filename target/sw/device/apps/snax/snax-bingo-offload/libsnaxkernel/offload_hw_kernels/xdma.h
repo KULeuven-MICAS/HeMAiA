@@ -799,8 +799,8 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_transpose_2d(void *arg)
     //   - int8  (elem_bytes=1): HW transposer, 8-bit mode  (CSR0=0)
     //   - int16 (elem_bytes=2): HW transposer, 16-bit mode (CSR0=1)
     //   - int32 (elem_bytes=4): SW transpose (no native 32-bit HW mode)
-    // When the Transposer extension is absent (WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16
-    // undefined), all widths use the SW transpose.
+    // When the Transposer extension is absent on BOTH sides (BINGO_HAS_TRANSPOSER == 0,
+    // see snax_xdma_lib.h), all widths use the SW transpose.
     //
     // HW path constraints: M % 8 == 0, N * elem_bytes % 8 == 0.
     //
@@ -825,7 +825,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_transpose_2d(void *arg)
         bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_transpose_2d_args_t);
         BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
-#ifdef WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16
+#if BINGO_HAS_TRANSPOSER
         // ── HW Transposer path (8-bit / 16-bit native modes) ──
         // The 8x8 Transposer in the writer datapath has two native element-width
         // modes, selected by CSR0 (0 = 8-bit, 1 = 16-bit; from the cfg's
@@ -924,13 +924,17 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_transpose_2d(void *arg)
                                  (unsigned long long)dst_addr);
             }
 
-            // Disable all, then enable the transposer on the writer side.
+            // Disable all, then arm the transposer on WHICHEVER SIDE this cfg built it
+            // (BINGO_TRANSPOSER_ARM, snax_xdma_lib.h). The descriptor below is the same
+            // either way -- only the enable CSR differs -- because a reader-side reorder
+            // and a writer-side one both rely on the local writer's 8-channel scatter to
+            // place the blocks.
             // CSR0 selects the element width the transposer transposes at:
             // 0 = 8-bit (int8), 1 = 16-bit (int16).
             BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
             xdma_disable_all_extensions();
             uint32_t tp_csr[1] = { (elem_bytes == 2) ? 1u : 0u };
-            xdma_enable_dst_ext(WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16, tp_csr);
+            BINGO_TRANSPOSER_ARM(tp_csr);
 
             uint32_t spatial_stride_src = N * elem_bytes;
             uint32_t spatial_stride_dst = M * elem_bytes;
@@ -977,7 +981,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_transpose_2d(void *arg)
             BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
 
             // Disable transposer after use
-            xdma_disable_dst_ext(WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16);
+            BINGO_TRANSPOSER_DISARM();
             if (dst_local) {
                 xdma_layout_stage_free(&st);              // src staging only
             } else {
@@ -1421,7 +1425,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_gather_2d(void *arg)
 //   XDMA_{SRC,DST}_TEMP_DIM = 5 each (≤ 5 temporal dims per side)
 //   spatial_stride may be 0 (broadcast, e.g. xdma_expand_2d) or any value
 //     ≥ 8 bytes; consecutive channels' 8-byte beats must not overlap.
-//   HW Transposer extension (defined(WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16)) is
+//   HW Transposer extension (BINGO_HAS_TRANSPOSER, either side) is
 //     fixed at an 8x8-byte block; element-aware widths (uint16/uint32) are
 //     handled by issuing tpt = (8·8·elem_bits)/512 beats per logical block,
 //     mirroring __snax_bingo_kernel_xdma_transpose_2d.
@@ -1452,7 +1456,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_gather_2d(void *arg)
 //   else  : CPU fallback
 //
 // B↔R kernels — axes (n, k, c, s); HW Transposer + AGU sub-block iteration:
-//   HW path: defined(WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16) && tileSize %8==0
+//   HW path: BINGO_HAS_TRANSPOSER && tileSize %8==0
 //            && meshCol %8==0 && elem_bytes == 1
 //     For each (n,k) tile, decompose into (meshCol/8) x (tileSize/8) element
 //     sub-blocks; each sub-block goes through one HW Transposer block. The
@@ -1790,7 +1794,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_row_major_to_a(void *arg)
 // The Transposer is fixed at 8x8-byte blocks, so the (n,k) B-tile is
 // decomposed into (meshCol/8) c-sub x (tileSize/8) s-sub element sub-blocks
 // and the AGU iterates them in addition to (n, k).
-//   Coverage: HW path when defined(WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16) && tileSize%8==0
+//   Coverage: HW path when BINGO_HAS_TRANSPOSER && tileSize%8==0
 //             && meshCol%8==0 && elem_bytes==1 (see the gate below); CPU otherwise.
 //   The CPU path stages non-local (L3) operands through L1 (xdma_cpu_stage_*).
 //   Arg layout: src_hi/lo, dst_hi/lo, K_T, N_T, tileSize, meshCol, elem_bytes.
@@ -1817,10 +1821,10 @@ static inline uint32_t __xdma_row_major_to_b_impl(void *arg)
     uint32_t bytes  = K_T * tileSize * N_T * meshCol * elem_bytes;
     bool hw_done = false;
 
-#ifdef WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16
+#if BINGO_HAS_TRANSPOSER
     // The HW transposer path requires elem_bytes == 1.
     //
-    // WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16 is an 8x8 BYTE-granular block transposer, so
+    // The Transposer (whichever side this cfg put it on) is an 8x8 BYTE-granular block transposer, so
     // one 8x8 byte block is one 8x8 ELEMENT block only when an element is a single byte. The
     // stride scheme below is built on that identity; at 2- or 4-byte elements it does not
     // compose and the transposed tile is wrong. Wider elements therefore take the CPU loop,
@@ -2087,10 +2091,10 @@ static inline uint32_t __xdma_b_to_row_major_impl(void *arg)
     uint32_t bytes  = K_T * tileSize * N_T * meshCol * elem_bytes;
     bool hw_done = false;
 
-#ifdef WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16
+#if BINGO_HAS_TRANSPOSER
     // The HW transposer path requires elem_bytes == 1.
     //
-    // WRITER_EXT_TRANSPOSERROW8_8COL8_8BIT8_16 is an 8x8 BYTE-granular block transposer, so
+    // The Transposer (whichever side this cfg put it on) is an 8x8 BYTE-granular block transposer, so
     // one 8x8 byte block is one 8x8 ELEMENT block only when an element is a single byte. The
     // stride scheme below is built on that identity; at 2- or 4-byte elements it does not
     // compose and the transposed tile is wrong. Wider elements therefore take the CPU loop,

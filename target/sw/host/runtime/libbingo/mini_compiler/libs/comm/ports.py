@@ -98,6 +98,45 @@ from bingo_mem_handle import (BingoMemAlloc, BingoMemAllocView,
 # "monoid"  The monoid junction's lane geometry: lane = field*S + slot within a 16-lane
 #           FP32 beat, field 0 = m and field 1 = l. It is what a partial (m, l) physically
 #           is, and calling it "packed" would invite a consumer to read it as rows.
+#
+# ======================================================================================
+# TRANSPOSITION IS A SEPARATE AXIS, AND THAT IS A DESIGN DECISION WORTH THE PARAGRAPH
+# ======================================================================================
+#
+# A `PortSpec` also carries `transposed`, and it is NOT a seventh Layout. The two describe
+# different things and collapsing them costs more than it saves:
+#
+#   A LAYOUT IS A BIJECTION ON A FIXED SHAPE. Every name above answers "given [rows, cols],
+#   where does element [r][c] sit?" -- same shape in, same shape out, same byte count.
+#
+#   TRANSPOSITION EXCHANGES THE AXES. x^T of a [32, 128] tensor is 128 rows of 32. It is
+#   not a different address map for the same indices, it is different indices.
+#
+# So a Layout member for it would have to be a member PER LAYOUT -- packed_T, A_T, D_T --
+# because "transposed" is a question you can ask of any of them. Six names become twelve,
+# every conversion table in nest.py squares, and the one real relationship (x and x^T hold
+# the same values) is expressible only as a table entry rather than as a flag.
+#
+# As its own boolean it composes with all six, `transposed=False` reproduces every existing
+# spec unchanged, and a consumer that wants the other orientation says so in one field.
+#
+# THE SHAPE STAYS LOGICAL. A transposed port still declares shape = (rows, cols) -- the
+# tensor's own dimensions, what the layer reasons about (32 tokens of 128 features) -- and
+# `transposed` says the bytes are stored [cols, rows]. That is what lets the linker compare
+# a producer's output to a consumer's requirement at all: two specs whose shapes are
+# (32, 128) and (128, 32) are, as far as check_contract can tell, different tensors.
+#
+# WHO CLOSES IT: comm.transfer, with the xDMA's 8x8 block transposer, which is a REAL
+# hardware unit and not a stride nest -- see the refusal in nest.py, which points here.
+# It is correct at 1- and 2-byte elements only (the cfg's elementWidth: [8, 16]).
+#
+# WHY ANYTHING WANTS THIS. The SIMD block reduces ALONG BEATS for free -- one FP32
+# accumulator per lane, lane k folding into acc[k] every beat -- and ACROSS the lanes of a
+# beat only through a serialised log-depth fold that stalls the reader once per row. Which
+# one a per-row operator gets is decided entirely by orientation: at [T, D] a row's terms
+# scatter across all 32 lanes and must be folded, at [D, T] one lane IS one token and the
+# answer is already in the accumulator. RMSNorm measures 3x cheaper transposed for exactly
+# that reason, and softmax's rowmax is the same argument.
 class _Vocab(StrEnum):
     """A closed set of names, where a typo is a build error rather than a wrong answer.
 
@@ -180,6 +219,10 @@ class PortSpec:
     shape: tuple
     mem_level: Optional[MemLevel] = None    # None means "wherever you have it"
     doc: str = ""
+    # The axes are stored swapped: `shape` stays the tensor's own (rows, cols), the bytes
+    # are laid out [cols, rows]. A separate axis from `layout`, for the reasons worked
+    # through above the vocabulary. Closed by the xDMA block transposer, not by strides.
+    transposed: bool = False
 
     def __post_init__(self):
         # COERCE, do not merely check: a plain "A" surviving as a str would make
@@ -188,12 +231,25 @@ class PortSpec:
         # written, and an unknown value is refused with the valid ones named.
         object.__setattr__(self, "layout", Layout(self.layout))
         object.__setattr__(self, "dtype", DType(self.dtype))
+        object.__setattr__(self, "transposed", bool(self.transposed))
         if self.mem_level is not None:
             object.__setattr__(self, "mem_level", MemLevel(self.mem_level))
 
+    @property
+    def stored_shape(self) -> tuple:
+        """The dimensions the BYTES have, which is what an address nest is written in.
+
+        `shape` is the tensor's; this is its storage. Every kernel argument, byte count and
+        stride derivation takes this one -- reading `shape` for a transposed buffer is the
+        bug this property exists to make hard to write.
+        """
+        r, c = self.shape
+        return (c, r) if self.transposed else (r, c)
+
     def describe(self) -> str:
         where = f"in {self.mem_level}" if self.mem_level else "anywhere"
-        return f"{self.layout}/{self.dtype} {tuple(self.shape)} {where}"
+        t = "^T " if self.transposed else ""
+        return f"{t}{self.layout}/{self.dtype} {tuple(self.shape)} {where}"
 
 
 @dataclass(frozen=True)
@@ -226,6 +282,10 @@ class Port:
     def dtype(self): return self.spec.dtype
     @property
     def shape(self): return self.spec.shape
+    @property
+    def transposed(self): return self.spec.transposed
+    @property
+    def stored_shape(self): return self.spec.stored_shape
 
     @property
     def handle_name(self) -> str:
