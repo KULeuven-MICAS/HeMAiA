@@ -78,6 +78,23 @@ from .common import RowCfg, check_row
 # elementwise slots perform, so renaming or reordering changes what the kernel computes.
 _SLOT = {"x": 0, "cos": 1, "xswap": 2, "sin": 3}
 
+# WHICH ELEMENT IS THE PARTNER OF ELEMENT i. Two conventions are in the wild and they cost
+# wildly different amounts, so the block states which one it implements rather than
+# assuming:
+#
+#   "interleaved"  pair k is x[2k], x[2k+1] -- partner = i XOR 1. A 2-BYTE permutation, so
+#                  the iDMA moves it as rows*cols/2 two-byte elements.
+#   "half"         pair k is x[k], x[k+D/2] -- partner = (i + D/2) mod D within a row. The
+#                  same bytes as TWO CONTIGUOUS block copies per row: at [32, 128] that is
+#                  64 copies of 128 B against 4,096 copies of 2 B. Roughly 64x fewer
+#                  elements for identical traffic.
+#
+# NOT DETECTABLE FROM A PORT, and that is the point of putting it here. Both conventions
+# consume an ordinary packed [rows, cols] FP16 x -- same layout, same dtype, same shape,
+# same orientation. The difference is in the OPERATOR, not in the tensor, so no amount of
+# PortSpec vocabulary can tell them apart and the caller has to say.
+_PAIRING = ("interleaved", "half")
+
 
 class RoPE(Block):
     """Rotary position embedding over each row. FP16, row-major, tables supplied.
@@ -95,10 +112,25 @@ class RoPE(Block):
 
     name = "rope"
 
-    def __init__(self, cfg: RowCfg = None, **params):
+    def __init__(self, cfg: RowCfg = None, *, pairing: str = "interleaved",
+                 x_partner_ready: bool = False, **params):
         self.cfg = cfg if cfg is not None else RowCfg(**params)
         check_row(self.cfg.cols, "RoPE")
         self._ops = None
+        self.x_partner_ready = bool(x_partner_ready)
+        if pairing not in _PAIRING:
+            raise ValueError(f"RoPE: pairing={pairing!r} is not one of {_PAIRING}.")
+        self.pairing = pairing
+        if pairing == "half" and not self.x_partner_ready:
+            raise ValueError(
+                "RoPE(pairing='half') has no builder yet. The rotation itself is "
+                "unchanged -- out = x*cos_full + xpartner*sin_signed either way, and the "
+                "fused kernel does not care which element the partner was -- but the "
+                "PARTNER BUFFER is built differently: `half` is a cyclic rotation by D/2 "
+                "within each row, which is two CONTIGUOUS block copies per row, not the "
+                "2-byte strided gather __snax_bingo_kernel_idma_pairwise_swap performs. "
+                "Build slot 2 yourself (two idma_1d_copy nodes per half) and pass "
+                "x_partner_ready=True, or use pairing='interleaved'.")
 
     def alloc(self, ctx: Ctx):
         """Allocate the 4-row operand block and return {name: handle} for its slots.
@@ -126,7 +158,7 @@ class RoPE(Block):
     def inputs(self) -> dict:
         c = self.cfg
         row = (c.rows, c.cols)
-        return {
+        ports = {
             "x": PortSpec(Layout.PACKED, DType.F16, row, mem_level=MemLevel.L1,
                           doc="row-major fp16, one row per token position (slot 0)"),
             "cos": PortSpec(Layout.PACKED, DType.F16, row, mem_level=MemLevel.L1,
@@ -134,6 +166,16 @@ class RoPE(Block):
             "sin": PortSpec(Layout.PACKED, DType.F16, row, mem_level=MemLevel.L1,
                             doc="precomputed sin table, sign already applied (slot 3)"),
         }
+        if self.x_partner_ready:
+            # SLOT 2 BECOMES A PORT, and that is the whole detection mechanism: the block
+            # emits its swap node exactly when nobody else has promised to fill slot 2.
+            # It is a binding, not an inferred layout property, because "these values are
+            # x's partners" is not something a PortSpec can express -- see the note on
+            # _PAIRING. Binding it is the caller asserting it.
+            ports["xswap"] = PortSpec(
+                Layout.PACKED, DType.F16, row, mem_level=MemLevel.L1,
+                doc="x with each element replaced by its partner (slot 2), caller-built")
+        return ports
 
     @property
     def outputs(self) -> dict:
@@ -152,7 +194,7 @@ class RoPE(Block):
         # operand stride from the shape, so an operand living anywhere else is read at the
         # wrong address -- and reads a well-formed tensor of the wrong numbers rather than
         # faulting. Checked by identity of the underlying allocation plus its offset.
-        for name in ("x", "cos", "sin"):
+        for name in self.inputs:
             want, got = slots[name], bound[name].handle
             if _base_and_offset(got) != _base_and_offset(want):
                 raise ValueError(
@@ -163,21 +205,30 @@ class RoPE(Block):
                     f"alloc(ctx) and aim the producer at the slot it returns.")
 
         out = g.l1(f"{self.name}_y", row_b)
-        # The swap, on the engine that can address bytes. Reads slot 0, writes slot 2 --
-        # they are 2*row_b apart and row_b long, so the two strided copies cannot overlap.
-        sw = g.node("Rope_swap", ctx.dm, "__snax_bingo_kernel_idma_pairwise_swap",
-                    SnaxBingoKernelIdmaPairwiseSwapArgs(
-                        slots["x"], slots["xswap"], c.rows * c.cols, 2))
-        nd = g.node("Rope", ctx.simd, "__snax_bingo_kernel_simd_rope",
-                    SnaxBingoKernelSimdRopeArgs(self._ops, out, c.cols, c.rows), sw)
+        nodes = []
+        if not self.x_partner_ready:
+            # The swap, on the engine that can address bytes. Reads slot 0, writes slot 2 --
+            # they are 2*row_b apart and row_b long, so the two strided copies cannot
+            # overlap. Emitted exactly when slot 2 is NOT an input port, which is the whole
+            # of the block's "does this need the reshuffle" decision.
+            nodes.append(g.node(
+                "Rope_swap", ctx.dm, "__snax_bingo_kernel_idma_pairwise_swap",
+                SnaxBingoKernelIdmaPairwiseSwapArgs(
+                    slots["x"], slots["xswap"], c.rows * c.cols, 2)))
+        nodes.append(g.node("Rope", ctx.simd, "__snax_bingo_kernel_simd_rope",
+                            SnaxBingoKernelSimdRopeArgs(self._ops, out, c.cols, c.rows),
+                            nodes[-1] if nodes else ()))
+        nd = nodes[-1]
+        # WHO READS EACH OPERAND FIRST, which is what lets the linker order a producer
+        # correctly. x is read by the SWAP when there is one and by the rotation when there
+        # is not; the tables and a caller-built slot 2 are always read by the rotation.
+        first_x = nodes[0]
         return BlockResult(
             outputs={"y": Port(self.outputs["y"], out, (nd,), cluster=c.cluster, name="y")},
-            # x is read by the SWAP first, the tables by the rotation. Naming the real
-            # first reader per operand is what lets the linker order a producer correctly.
-            inputs={"x": Port(self.inputs["x"], slots["x"], (sw,), name="x"),
-                    "cos": Port(self.inputs["cos"], slots["cos"], (nd,), name="cos"),
-                    "sin": Port(self.inputs["sin"], slots["sin"], (nd,), name="sin")},
-            nodes=[sw, nd])
+            inputs={name: Port(self.inputs[name], slots[name],
+                               (first_x if name == "x" else nd,), name=name)
+                    for name in self.inputs},
+            nodes=nodes)
 
 
 def _base_and_offset(handle):
