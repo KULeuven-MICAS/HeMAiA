@@ -437,10 +437,10 @@ def _layout_cls(family, mesh, elem_bytes):
     `elem_bytes` are still taken here because the caller has them and _layout_kwargs()
     needs them, and because a family that did not exist should still fail loudly.
 
-    *mesh* is the (dim_1, dim_2) pair the family is indexed by:
-      A (row_to_a / a_to_row): (meshRow, tileSize)
-      B (row_to_b / b_to_row): (tileSize, meshCol)
-      D (row_to_d / d_to_row): (meshRow, meshCol)
+    *mesh* is the FULL (meshRow, tileSize, meshCol). Each family only reads two of the
+    three -- A ignores meshCol, B ignores meshRow, D ignores tileSize -- but the kernel
+    takes the whole triple, so the sweep carries the whole triple rather than inventing a
+    value for the one its family does not use.
     """
     fam = {
         "RowMajorToA": "xdma_row_major_to_a", "AToRowMajor": "xdma_a_to_row_major",
@@ -452,17 +452,6 @@ def _layout_cls(family, mesh, elem_bytes):
     if elem_bytes not in (1, 2, 4):
         raise ValueError(f"layout conversion elem_bytes={elem_bytes} unsupported")
     return _bka.xdma_conv_args(fam)
-
-
-def _layout_mesh_kwargs(family, mesh, elem_bytes):
-    """The mesh/width keywords that family's args class expects, by its own names."""
-    d1, d2 = mesh
-    names = {
-        "RowMajorToA": ("meshRow", "tileSize"), "AToRowMajor": ("meshRow", "tileSize"),
-        "RowMajorToB": ("tileSize", "meshCol"), "BToRowMajor": ("tileSize", "meshCol"),
-        "RowMajorToD": ("meshRow", "meshCol"),  "DToRowMajor": ("meshRow", "meshCol"),
-    }[family]
-    return {names[0]: d1, names[1]: d2, "elem_bytes": elem_bytes}
 
 
 # tag -> (l1s, l1d) shared BingoMemAlloc handles, sized at the max over all configs.
@@ -501,10 +490,9 @@ def make_layout_handlers():
             l1s, l1d = _SHARED_L1[_tag]
             load = b.idma_load(f"Load_{i}", b.sym(f"in_{i}"), l1s, n_src, prev)
             # One symbol per family; the mesh and width ride in with the args.
-            op = b.op(f"Op_{i}", cls.KERNEL_NAME,
-                      cls(src_addr=l1s, dst_addr=l1d, **kwargs,
-                          **_layout_mesh_kwargs(_fam, mesh, c["elem_bytes"])),
-                      load)
+            args = cls(l1s, l1d, kwargs["rows"], kwargs["cols"], mesh,
+                       c["elem_bytes"])
+            op = b.op(f"Op_{i}", args.KERNEL_NAME, args, load)
             return b.store_check(f"{_tag}_cfg{i}", l1d, op, f"golden_{i}", n_dst)
 
         h.gen_data = gen_data
@@ -532,7 +520,8 @@ def _register_layouts(handlers, reg):
     def sz_row_to_a(b, c):
         mR, tS, mC = _mesh(_MESH_HOLDER["ctx"], c)
         nbytes = c["M_T"] * mR * c["K_T"] * tS * c["elem_bytes"]
-        return nbytes, nbytes, dict(M_T=c["M_T"], K_T=c["K_T"]), (mR, tS)
+        return (nbytes, nbytes,
+                dict(rows=c["M_T"] * mR, cols=c["K_T"] * tS), (mR, tS, mC))
     reg("row_to_a", "xdma_row_major_to_a", "RowMajorToA", gen_row_to_a, sz_row_to_a)
 
     # A_to_row
@@ -545,7 +534,8 @@ def _register_layouts(handlers, reg):
     def sz_a_to_row(b, c):
         mR, tS, mC = _mesh(_MESH_HOLDER["ctx"], c)
         nbytes = c["M_T"] * mR * c["K_T"] * tS * c["elem_bytes"]
-        return nbytes, nbytes, dict(M_T=c["M_T"], K_T=c["K_T"]), (mR, tS)
+        return (nbytes, nbytes,
+                dict(rows=c["M_T"] * mR, cols=c["K_T"] * tS), (mR, tS, mC))
     reg("a_to_row", "xdma_a_to_row_major", "AToRowMajor", gen_a_to_row, sz_a_to_row)
 
     # row_to_B
@@ -558,7 +548,8 @@ def _register_layouts(handlers, reg):
     def sz_row_to_b(b, c):
         mR, tS, mC = _mesh(_MESH_HOLDER["ctx"], c)
         nbytes = c["K_T"] * tS * c["N_T"] * mC * c["elem_bytes"]
-        return nbytes, nbytes, dict(K_T=c["K_T"], N_T=c["N_T"]), (tS, mC)
+        return (nbytes, nbytes,
+                dict(rows=c["K_T"] * tS, cols=c["N_T"] * mC), (mR, tS, mC))
     reg("row_to_b", "xdma_row_major_to_b", "RowMajorToB", gen_row_to_b, sz_row_to_b)
 
     # B_to_row
@@ -571,7 +562,8 @@ def _register_layouts(handlers, reg):
     def sz_b_to_row(b, c):
         mR, tS, mC = _mesh(_MESH_HOLDER["ctx"], c)
         nbytes = c["K_T"] * tS * c["N_T"] * mC * c["elem_bytes"]
-        return nbytes, nbytes, dict(K_T=c["K_T"], N_T=c["N_T"]), (tS, mC)
+        return (nbytes, nbytes,
+                dict(rows=c["K_T"] * tS, cols=c["N_T"] * mC), (mR, tS, mC))
     reg("b_to_row", "xdma_b_to_row_major", "BToRowMajor", gen_b_to_row, sz_b_to_row)
 
     # row_to_D
@@ -584,7 +576,8 @@ def _register_layouts(handlers, reg):
     def sz_row_to_d(b, c):
         mR, tS, mC = _mesh(_MESH_HOLDER["ctx"], c)
         nbytes = c["M_T"] * mR * c["N_T"] * mC * c["elem_bytes"]
-        return nbytes, nbytes, dict(M_T=c["M_T"], N_T=c["N_T"]), (mR, mC)
+        return (nbytes, nbytes,
+                dict(rows=c["M_T"] * mR, cols=c["N_T"] * mC), (mR, tS, mC))
     reg("row_to_d", "xdma_row_major_to_d", "RowMajorToD", gen_row_to_d, sz_row_to_d)
 
     # D_to_row
@@ -597,7 +590,8 @@ def _register_layouts(handlers, reg):
     def sz_d_to_row(b, c):
         mR, tS, mC = _mesh(_MESH_HOLDER["ctx"], c)
         nbytes = c["M_T"] * mR * c["N_T"] * mC * c["elem_bytes"]
-        return nbytes, nbytes, dict(M_T=c["M_T"], N_T=c["N_T"]), (mR, mC)
+        return (nbytes, nbytes,
+                dict(rows=c["M_T"] * mR, cols=c["N_T"] * mC), (mR, tS, mC))
     reg("d_to_row", "xdma_d_to_row_major", "DToRowMajor", gen_d_to_row, sz_d_to_row)
 
 
@@ -682,14 +676,18 @@ def run_op_workload(op, configs):
             # differ by 4x in bytes moved. The key is synthesised here to the same
             # <family>_e<width>_<mesh token> it has always been.
             # sizes(b, c) ignores b; [3] is the family's (dim_1, dim_2) pair.
+            # THE LUT KEY STILL NAMES THE DIRECTION, not the symbol. There is one device
+            # symbol now, so keying on it would collapse all six families into one bucket
+            # and the sweep would report six different transfers under one name. The
+            # family name is what distinguishes them, and the mesh token still names the
+            # two dims that family actually reads.
             def _lut_key(c):
-                d1, d2 = handler.sizes(None, c)[3]
-                tok = {"RowMajorToA": f"M{d1}K{d2}", "AToRowMajor": f"M{d1}K{d2}",
-                       "RowMajorToB": f"K{d1}N{d2}", "BToRowMajor": f"K{d1}N{d2}",
-                       "RowMajorToD": f"M{d1}N{d2}", "DToRowMajor": f"M{d1}N{d2}"}[
+                mR, tS, mC = handler.sizes(None, c)[3]
+                tok = {"RowMajorToA": f"M{mR}K{tS}", "AToRowMajor": f"M{mR}K{tS}",
+                       "RowMajorToB": f"K{tS}N{mC}", "BToRowMajor": f"K{tS}N{mC}",
+                       "RowMajorToD": f"M{mR}N{mC}", "DToRowMajor": f"M{mR}N{mC}"}[
                            handler.family]
-                sym = _layout_cls(handler.family, (d1, d2), c["elem_bytes"]).KERNEL_NAME
-                return f"{sym[len('__snax_bingo_kernel_'):]}_e{c['elem_bytes']}_{tok}"
+                return f"{handler.name}_e{c['elem_bytes']}_{tok}"
 
             payload["op_ids"] = [_lut_key(c) for c in configs]
             payload["meshes"] = {

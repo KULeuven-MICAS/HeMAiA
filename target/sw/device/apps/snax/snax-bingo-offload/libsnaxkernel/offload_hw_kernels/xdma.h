@@ -796,6 +796,44 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_elementwise_add_ab(void *arg)
 // lib's native int32_t 0/-1. Callers here test only `!= BINGO_RET_SUCC` (== 0), so the
 // -1 error code is transparent.
 
+// The 8x8 block transposer, as a descriptor and nothing else: [M, N] -> [N, M] between
+// two addresses the caller has already made local. Both the transpose kernel and the
+// row_major <-> B fast path program exactly this, and they must program it identically --
+// a second copy of these strides is a second thing to get wrong.
+//
+// THE CALLER OWNS LOCALITY AND STAGING. The writer scatters 8 spatial channels into its
+// own TCDM, so `dst` must be local; `src` may be anywhere the reader reaches. Everything
+// about arming, running and disarming is here, so a caller adds only its own buffers.
+static inline void _bingo_xpose_descriptor(uint64_t src, uint64_t dst,
+                                           uint32_t M, uint32_t N, uint32_t elem_bytes)
+{
+    const uint32_t tile_w = 8;
+    uint32_t tpt = (tile_w * tile_w * (elem_bytes * 8) + 511) / 512;
+
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
+    xdma_disable_all_extensions();
+    uint32_t tp_csr[1] = { (elem_bytes == 2) ? 1u : 0u };
+    BINGO_TRANSPOSER_ARM(tp_csr);
+
+    uint32_t t_strides_src[3] = { 8, tile_w * elem_bytes, N * tile_w * elem_bytes };
+    uint32_t t_bounds_src[3]  = { tpt, N / tile_w, M / tile_w };
+    uint32_t t_strides_dst[3] = { 8, M * tile_w * elem_bytes, tile_w * elem_bytes };
+    uint32_t t_bounds_dst[3]  = { tpt, N / tile_w, M / tile_w };
+
+    xdma_memcpy_nd_full_addr(src, dst,
+                             N * elem_bytes, M * elem_bytes,
+                             3, t_strides_src, t_bounds_src,
+                             3, t_strides_dst, t_bounds_dst,
+                             0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF);
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
+
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
+    xdma_task_t task_id = xdma_start();
+    xdma_wait_task(task_id);
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
+    BINGO_TRANSPOSER_DISARM();
+}
+
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_transpose_2d(void *arg)
 {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_transpose_2d_args_t);
@@ -894,9 +932,6 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_transpose_2d(void *arg)
         //      real w_strb instead of a contiguous burst (changes the
         //      cross-cluster write protocol).
         if (elem_bytes == 1 || elem_bytes == 2) {
-            uint32_t tile_w = 8;
-            uint32_t tpt = (tile_w * tile_w * (elem_bytes * 8) + 511) / 512; // transfers per transpose (8x8 tile of elem_bytes*8-bit elems / 512b bus)
-
             // The xDMA reader is tied to local L1, so stage src into local L1 if
             // it isn't already there (zero-copy fast path when src is already
             // local).
@@ -936,57 +971,8 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_transpose_2d(void *arg)
             // place the blocks.
             // CSR0 selects the element width the transposer transposes at:
             // 0 = 8-bit (int8), 1 = 16-bit (int16).
-            BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
-            xdma_disable_all_extensions();
-            uint32_t tp_csr[1] = { (elem_bytes == 2) ? 1u : 0u };
-            BINGO_TRANSPOSER_ARM(tp_csr);
-
-            uint32_t spatial_stride_src = N * elem_bytes;
-            uint32_t spatial_stride_dst = M * elem_bytes;
-
-            uint32_t t_strides_src[3] = {
-                8,                          // dim0: within one transfer
-                tile_w * elem_bytes,              // dim1: next tile horizontally
-                N * tile_w * elem_bytes           // dim2: next tile-row
-            };
-            uint32_t t_bounds_src[3] = {
-                tpt,                        // transfers per 8x8 tile
-                N / tile_w,                 // tiles across columns
-                M / tile_w                  // tiles across rows
-            };
-
-            // Writer: transposed tile placement
-            // After transpose, each 8x8 block's rows/cols are swapped.
-            // dim1 stride = M*tile_w*elem_bytes (stride to next column-block in transposed output)
-            // dim2 stride = tile_w*elem_bytes   (stride to next row-block in transposed output)
-            uint32_t t_strides_dst[3] = {
-                8,                          // dim0: within one transfer
-                M * tile_w * elem_bytes,          // dim1: next column-block in output
-                tile_w * elem_bytes               // dim2: next row-block in output
-            };
-            uint32_t t_bounds_dst[3] = {
-                tpt,
-                N / tile_w,
-                M / tile_w
-            };
-
             // Transpose into xpose_dst (the local scratch when bypassing, else dst).
-            xdma_memcpy_nd_full_addr(
-                st.xdma_src, xpose_dst,
-                spatial_stride_src, spatial_stride_dst,
-                3, t_strides_src, t_bounds_src,
-                3, t_strides_dst, t_bounds_dst,
-                0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF
-            );
-            BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
-
-            BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
-            xdma_task_t task_id = xdma_start();
-            xdma_wait_task(task_id);
-            BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
-
-            // Disable transposer after use
-            BINGO_TRANSPOSER_DISARM();
+            _bingo_xpose_descriptor(st.xdma_src, xpose_dst, M, N, elem_bytes);
             if (dst_local) {
                 xdma_layout_stage_free(&st);              // src staging only
             } else {
@@ -1515,7 +1501,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_gather_2d(void *arg)
 //     row_bytes_src       = meshCol * elem_bytes         (one row inside a D-tile)
 static inline uint32_t __xdma_d_to_row_major_impl(void *arg)
 {
-    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_d_to_row_major_args_t);
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_layout_convert_args_t);
     if (!snax_is_xdma_core()) {
         printf_safe("[Cluster %d Core %d]: Error! d_to_row_major must be called from DM core!\r\n",
                     snrt_cluster_idx(), snrt_cluster_core_idx());
@@ -1525,93 +1511,19 @@ static inline uint32_t __xdma_d_to_row_major_impl(void *arg)
     uint32_t *a = (uint32_t *)arg;
     uint64_t src_addr = make_u64(a[0], a[1]);
     uint64_t dst_addr = make_u64(a[2], a[3]);
-    uint32_t M_T = a[4], N_T = a[5];
     // The array shape travels WITH the operands, so one kernel serves every
     // tiling. The path selection below already reads these; they were wrapper
     // constants only so the tree would fold.
-    uint32_t meshRow = a[6], meshCol = a[7], elem_bytes = a[8];
-    bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_d_to_row_major_args_t);
+    uint32_t meshRow = a[8], meshCol = a[10], elem_bytes = a[11];
+    uint32_t M_T = a[4] / meshRow, N_T = a[5] / meshCol;
+    bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_layout_convert_args_t);
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
     uint32_t bytes     = M_T * N_T * meshRow * meshCol * elem_bytes;
-    uint32_t row_b_src = meshCol * elem_bytes;          // 1 row of a D-tile
-    uint32_t row_b_dst = N_T * meshCol * elem_bytes;    // 1 row of row-major R
-    uint32_t tile_b    = meshRow * meshCol * elem_bytes;
-    bool hw_done = false;
 
     // Decide which HW path applies before staging, so we don't allocate L1
     // for a transfer that ends up on the CPU loop.
-    int path = 0;
-    if ((row_b_src % 8) == 0) {
-        if (meshRow == 8)                                                       path = 1;
-        else if (meshRow > 8 && (meshRow % 8) == 0)                             path = 2;
-        else if ((meshRow == 1 || meshRow == 2 || meshRow == 4)
-                 && (row_b_src % 64) == 0)                                      path = 3;
-        else if ((N_T % 8) == 0)                                                path = 4;
-        else if ((M_T % 8) == 0)                                                path = 5;
-    }
-
-    if (path != 0) {
-        xdma_layout_stage_t st;
-        if (xdma_layout_stage_in(&st, src_addr, bytes) != 0) {
-            printf_safe("[Cluster %d Core %d]: d_to_row_major L1 alloc failed!\r\n",
-                        snrt_cluster_idx(), snrt_cluster_core_idx());
-            return BINGO_RET_FAIL;
-        }
-        uint32_t inner_beats = row_b_src / 8;       // 8-byte chunks per tile-row
-
-        if (path == 1) {
-            // Path 1: spatial = r (8 rows of one D-tile).
-            uint32_t ts_src[3] = { 8,           tile_b,             N_T * tile_b        };
-            uint32_t tb_src[3] = { inner_beats, N_T,                M_T                 };
-            uint32_t ts_dst[3] = { 8,           row_b_src,          meshRow * row_b_dst };
-            uint32_t tb_dst[3] = { inner_beats, N_T,                M_T                 };
-            xdma_layout_run(st.xdma_src, dst_addr, row_b_src, row_b_dst,
-                            3, ts_src, tb_src, ts_dst, tb_dst, false);
-        } else if (path == 2) {
-            // Path 2: spatial = r_inner; r_outer is a new temporal dim.
-            uint32_t r_outer = meshRow / 8;
-            uint32_t ts_src[4] = { 8,           8 * row_b_src,      tile_b,             N_T * tile_b };
-            uint32_t tb_src[4] = { inner_beats, r_outer,            N_T,                M_T          };
-            uint32_t ts_dst[4] = { 8,           8 * row_b_dst,      row_b_src,          meshRow * row_b_dst };
-            uint32_t tb_dst[4] = { inner_beats, r_outer,            N_T,                M_T          };
-            xdma_layout_run(st.xdma_src, dst_addr, row_b_src, row_b_dst,
-                            4, ts_src, tb_src, ts_dst, tb_dst, false);
-        } else if (path == 3) {
-            // Path 3: spatial = c_chunk_inner (8 chunks x 8 bytes covering a
-            // 64-byte slice of one D-tile row in one xDMA spatial sweep).
-            uint32_t c_outer = row_b_src / 64;
-            uint32_t ts_src[4] = { 64,      row_b_src,  tile_b,    N_T * tile_b };
-            uint32_t tb_src[4] = { c_outer, meshRow,    N_T,       M_T          };
-            uint32_t ts_dst[4] = { 64,      row_b_dst,  row_b_src, meshRow * row_b_dst };
-            uint32_t tb_dst[4] = { c_outer, meshRow,    N_T,       M_T          };
-            xdma_layout_run(st.xdma_src, dst_addr, 8, 8,
-                            4, ts_src, tb_src, ts_dst, tb_dst, false);
-        } else if (path == 4) {
-            // Path 4: spatial = n_inner (8 D-tiles in n direction in parallel).
-            uint32_t n_outer = N_T / 8;
-            uint32_t ts_src[4] = { 8,           row_b_src,  8 * tile_b,    N_T * tile_b };
-            uint32_t tb_src[4] = { inner_beats, meshRow,    n_outer,       M_T          };
-            uint32_t ts_dst[4] = { 8,           row_b_dst,  8 * row_b_src, meshRow * row_b_dst };
-            uint32_t tb_dst[4] = { inner_beats, meshRow,    n_outer,       M_T          };
-            xdma_layout_run(st.xdma_src, dst_addr, tile_b, row_b_src,
-                            4, ts_src, tb_src, ts_dst, tb_dst, false);
-        } else /* path == 5 */ {
-            // Path 5: spatial = m_inner (8 different m row-blocks in parallel).
-            uint32_t m_outer = M_T / 8;
-            uint32_t ts_src[4] = { 8,           row_b_src,  tile_b,     8 * N_T * tile_b };
-            uint32_t tb_src[4] = { inner_beats, meshRow,    N_T,        m_outer          };
-            uint32_t ts_dst[4] = { 8,           row_b_dst,  row_b_src,  8 * meshRow * row_b_dst };
-            uint32_t tb_dst[4] = { inner_beats, meshRow,    N_T,        m_outer          };
-            xdma_layout_run(st.xdma_src, dst_addr,
-                            N_T * tile_b, meshRow * row_b_dst,
-                            4, ts_src, tb_src, ts_dst, tb_dst, false);
-        }
-        xdma_layout_stage_free(&st);
-        hw_done = true;
-    }
-
-    if (!hw_done) {
+    {
         // CPU fallback (no HW path matched the shape). Stage non-local (L3)
         // operands through L1: the DM core is not coherent with L3.
         uint32_t N_cols = N_T * meshCol;
@@ -1651,7 +1563,7 @@ static inline uint32_t __xdma_d_to_row_major_impl(void *arg)
 // the args struct, so a tiling nobody pre-declared -- (16, 4, 16) wants M16K4,
 // which no wrapper ever defined -- needs no new device symbol. The path selection
 // above is unchanged; it simply runs instead of folding.
-SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_d_to_row_major(void *arg)
+static inline uint32_t _bingo_layout_d_to_row_major(void *arg)
 { return __xdma_d_to_row_major_impl(arg); }
 
 // row-major → A-layout. See section banner for the path table.
@@ -1661,7 +1573,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_d_to_row_major(void *arg)
 //   Arg layout: src_hi/lo, dst_hi/lo, M_T, K_T, meshRow, tileSize, elem_bytes.
 static inline uint32_t __xdma_row_major_to_a_impl(void *arg)
 {
-    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_row_major_to_a_args_t);
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_layout_convert_args_t);
     if (!snax_is_xdma_core()) {
         printf_safe("[Cluster %d Core %d]: Error! row_major_to_a must be called from DM core!\r\n",
                     snrt_cluster_idx(), snrt_cluster_core_idx());
@@ -1671,88 +1583,17 @@ static inline uint32_t __xdma_row_major_to_a_impl(void *arg)
     uint32_t *a = (uint32_t *)arg;
     uint64_t src_addr = make_u64(a[0], a[1]);
     uint64_t dst_addr = make_u64(a[2], a[3]);
-    uint32_t M_T = a[4], K_T = a[5];
     // The array shape travels WITH the operands, so one kernel serves every
     // tiling. The path selection below already reads these; they were wrapper
     // constants only so the tree would fold.
-    uint32_t meshRow = a[6], tileSize = a[7], elem_bytes = a[8];
-    bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_row_major_to_a_args_t);
+    uint32_t meshRow = a[8], tileSize = a[9], elem_bytes = a[11];
+    uint32_t M_T = a[4] / meshRow, K_T = a[5] / tileSize;
+    bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_layout_convert_args_t);
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
     uint32_t bytes     = M_T * K_T * meshRow * tileSize * elem_bytes;
-    uint32_t row_b_blk = tileSize * elem_bytes;          // 1 row inside one A-tile (dst-packed)
-    uint32_t row_b_rm  = K_T * tileSize * elem_bytes;    // 1 row of row-major R (src-side)
-    uint32_t tile_b    = meshRow * tileSize * elem_bytes;
-    bool hw_done = false;
 
-    int path = 0;
-    if ((row_b_blk % 8) == 0) {
-        if (meshRow == 8)                                                       path = 1;
-        else if (meshRow > 8 && (meshRow % 8) == 0)                             path = 2;
-        else if ((meshRow == 1 || meshRow == 2 || meshRow == 4)
-                 && (row_b_blk % 64) == 0)                                      path = 3;
-        else if ((K_T % 8) == 0)                                                path = 4;
-        else if ((M_T % 8) == 0)                                                path = 5;
-    }
-
-    if (path != 0) {
-        xdma_layout_stage_t st;
-        if (xdma_layout_stage_in(&st, src_addr, bytes) != 0) {
-            printf_safe("[Cluster %d Core %d]: row_major_to_a L1 alloc failed!\r\n",
-                        snrt_cluster_idx(), snrt_cluster_core_idx());
-            return BINGO_RET_FAIL;
-        }
-        uint32_t inner_beats = row_b_blk / 8;
-
-        if (path == 1) {
-            // Path 1: spatial = r (8 channels = 8 rows of an A-tile).
-            uint32_t ts_src[3] = { 8,           row_b_blk,  meshRow * row_b_rm };
-            uint32_t tb_src[3] = { inner_beats, K_T,        M_T                };
-            uint32_t ts_dst[3] = { 8,           tile_b,     K_T * tile_b       };
-            uint32_t tb_dst[3] = { inner_beats, K_T,        M_T                };
-            xdma_layout_run(st.xdma_src, dst_addr, row_b_rm, row_b_blk,
-                            3, ts_src, tb_src, ts_dst, tb_dst, false);
-        } else if (path == 2) {
-            uint32_t r_outer = meshRow / 8;
-            uint32_t ts_src[4] = { 8,           8 * row_b_rm,  row_b_blk,  meshRow * row_b_rm };
-            uint32_t tb_src[4] = { inner_beats, r_outer,       K_T,        M_T                };
-            uint32_t ts_dst[4] = { 8,           8 * row_b_blk, tile_b,     K_T * tile_b       };
-            uint32_t tb_dst[4] = { inner_beats, r_outer,       K_T,        M_T                };
-            xdma_layout_run(st.xdma_src, dst_addr, row_b_rm, row_b_blk,
-                            4, ts_src, tb_src, ts_dst, tb_dst, false);
-        } else if (path == 3) {
-            uint32_t s_outer = row_b_blk / 64;
-            uint32_t ts_src[4] = { 64,      row_b_rm,  row_b_blk,  meshRow * row_b_rm };
-            uint32_t tb_src[4] = { s_outer, meshRow,   K_T,        M_T                };
-            uint32_t ts_dst[4] = { 64,      row_b_blk, tile_b,     K_T * tile_b       };
-            uint32_t tb_dst[4] = { s_outer, meshRow,   K_T,        M_T                };
-            xdma_layout_run(st.xdma_src, dst_addr, 8, 8,
-                            4, ts_src, tb_src, ts_dst, tb_dst, false);
-        } else if (path == 4) {
-            // Path 4: spatial = k_inner (8 different k-tiles in parallel,
-            // each at the same r within its tile).
-            uint32_t k_outer = K_T / 8;
-            uint32_t ts_src[4] = { 8,           row_b_rm,  8 * row_b_blk, meshRow * row_b_rm };
-            uint32_t tb_src[4] = { inner_beats, meshRow,   k_outer,       M_T                };
-            uint32_t ts_dst[4] = { 8,           row_b_blk, 8 * tile_b,    K_T * tile_b       };
-            uint32_t tb_dst[4] = { inner_beats, meshRow,   k_outer,       M_T                };
-            xdma_layout_run(st.xdma_src, dst_addr, row_b_blk, tile_b,
-                            4, ts_src, tb_src, ts_dst, tb_dst, false);
-        } else /* path == 5 */ {
-            uint32_t m_outer = M_T / 8;
-            uint32_t ts_src[4] = { 8,           row_b_rm,  row_b_blk,  8 * meshRow * row_b_rm };
-            uint32_t tb_src[4] = { inner_beats, meshRow,   K_T,        m_outer                };
-            uint32_t ts_dst[4] = { 8,           row_b_blk, tile_b,     8 * K_T * tile_b       };
-            uint32_t tb_dst[4] = { inner_beats, meshRow,   K_T,        m_outer                };
-            xdma_layout_run(st.xdma_src, dst_addr,
-                            meshRow * row_b_rm, K_T * tile_b,
-                            4, ts_src, tb_src, ts_dst, tb_dst, false);
-        }
-        xdma_layout_stage_free(&st);
-        hw_done = true;
-    }
-
-    if (!hw_done) {
+    {
         uint32_t K_cols = K_T * tileSize;
         // CPU fallback: stage non-local (L3) operands through L1.
         xdma_layout_stage_t si;
@@ -1791,7 +1632,7 @@ static inline uint32_t __xdma_row_major_to_a_impl(void *arg)
 // the args struct, so a tiling nobody pre-declared -- (16, 4, 16) wants M16K4,
 // which no wrapper ever defined -- needs no new device symbol. The path selection
 // above is unchanged; it simply runs instead of folding.
-SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_row_major_to_a(void *arg)
+static inline uint32_t _bingo_layout_row_major_to_a(void *arg)
 { return __xdma_row_major_to_a_impl(arg); }
 
 // row-major → B-layout. B↔R is per-(n,k)-tile transpose-then-tile, so we
@@ -1805,7 +1646,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_row_major_to_a(void *arg)
 //   Arg layout: src_hi/lo, dst_hi/lo, K_T, N_T, tileSize, meshCol, elem_bytes.
 static inline uint32_t __xdma_row_major_to_b_impl(void *arg)
 {
-    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_row_major_to_b_args_t);
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_layout_convert_args_t);
     if (!snax_is_xdma_core()) {
         printf_safe("[Cluster %d Core %d]: Error! row_major_to_b must be called from DM core!\r\n",
                     snrt_cluster_idx(), snrt_cluster_core_idx());
@@ -1815,12 +1656,12 @@ static inline uint32_t __xdma_row_major_to_b_impl(void *arg)
     uint32_t *a = (uint32_t *)arg;
     uint64_t src_addr = make_u64(a[0], a[1]);
     uint64_t dst_addr = make_u64(a[2], a[3]);
-    uint32_t K_T = a[4], N_T = a[5];
     // The array shape travels WITH the operands, so one kernel serves every
     // tiling. The path selection below already reads these; they were wrapper
     // constants only so the tree would fold.
-    uint32_t tileSize = a[6], meshCol = a[7], elem_bytes = a[8];
-    bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_row_major_to_b_args_t);
+    uint32_t tileSize = a[9], meshCol = a[10], elem_bytes = a[11];
+    uint32_t K_T = a[4] / tileSize, N_T = a[5] / meshCol;
+    bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_layout_convert_args_t);
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
     uint32_t bytes  = K_T * tileSize * N_T * meshCol * elem_bytes;
@@ -1928,7 +1769,7 @@ static inline uint32_t __xdma_row_major_to_b_impl(void *arg)
 // the args struct, so a tiling nobody pre-declared -- (16, 4, 16) wants M16K4,
 // which no wrapper ever defined -- needs no new device symbol. The path selection
 // above is unchanged; it simply runs instead of folding.
-SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_row_major_to_b(void *arg)
+static inline uint32_t _bingo_layout_row_major_to_b(void *arg)
 { return __xdma_row_major_to_b_impl(arg); }
 
 // A-layout → row-major. Inverse of row_major_to_a: src/dst stride arrays
@@ -1937,7 +1778,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_row_major_to_b(void *arg)
 //   Arg layout: src_hi/lo, dst_hi/lo, M_T, K_T, meshRow, tileSize, elem_bytes.
 static inline uint32_t __xdma_a_to_row_major_impl(void *arg)
 {
-    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_a_to_row_major_args_t);
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_layout_convert_args_t);
     if (!snax_is_xdma_core()) {
         printf_safe("[Cluster %d Core %d]: Error! a_to_row_major must be called from DM core!\r\n",
                     snrt_cluster_idx(), snrt_cluster_core_idx());
@@ -1947,85 +1788,17 @@ static inline uint32_t __xdma_a_to_row_major_impl(void *arg)
     uint32_t *a = (uint32_t *)arg;
     uint64_t src_addr = make_u64(a[0], a[1]);
     uint64_t dst_addr = make_u64(a[2], a[3]);
-    uint32_t M_T = a[4], K_T = a[5];
     // The array shape travels WITH the operands, so one kernel serves every
     // tiling. The path selection below already reads these; they were wrapper
     // constants only so the tree would fold.
-    uint32_t meshRow = a[6], tileSize = a[7], elem_bytes = a[8];
-    bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_a_to_row_major_args_t);
+    uint32_t meshRow = a[8], tileSize = a[9], elem_bytes = a[11];
+    uint32_t M_T = a[4] / meshRow, K_T = a[5] / tileSize;
+    bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_layout_convert_args_t);
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
     uint32_t bytes     = M_T * K_T * meshRow * tileSize * elem_bytes;
-    uint32_t row_b_blk = tileSize * elem_bytes;          // 1 row inside one A-tile (src-packed)
-    uint32_t row_b_rm  = K_T * tileSize * elem_bytes;    // 1 row of row-major R (dst-side)
-    uint32_t tile_b    = meshRow * tileSize * elem_bytes;
-    bool hw_done = false;
 
-    int path = 0;
-    if ((row_b_blk % 8) == 0) {
-        if (meshRow == 8)                                                       path = 1;
-        else if (meshRow > 8 && (meshRow % 8) == 0)                             path = 2;
-        else if ((meshRow == 1 || meshRow == 2 || meshRow == 4)
-                 && (row_b_blk % 64) == 0)                                      path = 3;
-        else if ((K_T % 8) == 0)                                                path = 4;
-        else if ((M_T % 8) == 0)                                                path = 5;
-    }
-
-    if (path != 0) {
-        xdma_layout_stage_t st;
-        if (xdma_layout_stage_in(&st, src_addr, bytes) != 0) {
-            printf_safe("[Cluster %d Core %d]: a_to_row_major L1 alloc failed!\r\n",
-                        snrt_cluster_idx(), snrt_cluster_core_idx());
-            return BINGO_RET_FAIL;
-        }
-        uint32_t inner_beats = row_b_blk / 8;
-
-        if (path == 1) {
-            uint32_t ts_src[3] = { 8,           tile_b,    K_T * tile_b       };
-            uint32_t tb_src[3] = { inner_beats, K_T,       M_T                };
-            uint32_t ts_dst[3] = { 8,           row_b_blk, meshRow * row_b_rm };
-            uint32_t tb_dst[3] = { inner_beats, K_T,       M_T                };
-            xdma_layout_run(st.xdma_src, dst_addr, row_b_blk, row_b_rm,
-                            3, ts_src, tb_src, ts_dst, tb_dst, false);
-        } else if (path == 2) {
-            uint32_t r_outer = meshRow / 8;
-            uint32_t ts_src[4] = { 8,           8 * row_b_blk, tile_b,    K_T * tile_b       };
-            uint32_t tb_src[4] = { inner_beats, r_outer,       K_T,       M_T                };
-            uint32_t ts_dst[4] = { 8,           8 * row_b_rm,  row_b_blk, meshRow * row_b_rm };
-            uint32_t tb_dst[4] = { inner_beats, r_outer,       K_T,       M_T                };
-            xdma_layout_run(st.xdma_src, dst_addr, row_b_blk, row_b_rm,
-                            4, ts_src, tb_src, ts_dst, tb_dst, false);
-        } else if (path == 3) {
-            uint32_t s_outer = row_b_blk / 64;
-            uint32_t ts_src[4] = { 64,      row_b_blk, tile_b,    K_T * tile_b       };
-            uint32_t tb_src[4] = { s_outer, meshRow,   K_T,       M_T                };
-            uint32_t ts_dst[4] = { 64,      row_b_rm,  row_b_blk, meshRow * row_b_rm };
-            uint32_t tb_dst[4] = { s_outer, meshRow,   K_T,       M_T                };
-            xdma_layout_run(st.xdma_src, dst_addr, 8, 8,
-                            4, ts_src, tb_src, ts_dst, tb_dst, false);
-        } else if (path == 4) {
-            uint32_t k_outer = K_T / 8;
-            uint32_t ts_src[4] = { 8,           row_b_blk, 8 * tile_b,    K_T * tile_b       };
-            uint32_t tb_src[4] = { inner_beats, meshRow,   k_outer,       M_T                };
-            uint32_t ts_dst[4] = { 8,           row_b_rm,  8 * row_b_blk, meshRow * row_b_rm };
-            uint32_t tb_dst[4] = { inner_beats, meshRow,   k_outer,       M_T                };
-            xdma_layout_run(st.xdma_src, dst_addr, tile_b, row_b_blk,
-                            4, ts_src, tb_src, ts_dst, tb_dst, false);
-        } else /* path == 5 */ {
-            uint32_t m_outer = M_T / 8;
-            uint32_t ts_src[4] = { 8,           row_b_blk, tile_b,    8 * K_T * tile_b       };
-            uint32_t tb_src[4] = { inner_beats, meshRow,   K_T,       m_outer                };
-            uint32_t ts_dst[4] = { 8,           row_b_rm,  row_b_blk, 8 * meshRow * row_b_rm };
-            uint32_t tb_dst[4] = { inner_beats, meshRow,   K_T,       m_outer                };
-            xdma_layout_run(st.xdma_src, dst_addr,
-                            K_T * tile_b, meshRow * row_b_rm,
-                            4, ts_src, tb_src, ts_dst, tb_dst, false);
-        }
-        xdma_layout_stage_free(&st);
-        hw_done = true;
-    }
-
-    if (!hw_done) {
+    {
         uint32_t K_cols = K_T * tileSize;
         // CPU fallback: stage non-local (L3) operands through L1.
         xdma_layout_stage_t si;
@@ -2064,7 +1837,7 @@ static inline uint32_t __xdma_a_to_row_major_impl(void *arg)
 // the args struct, so a tiling nobody pre-declared -- (16, 4, 16) wants M16K4,
 // which no wrapper ever defined -- needs no new device symbol. The path selection
 // above is unchanged; it simply runs instead of folding.
-SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_a_to_row_major(void *arg)
+static inline uint32_t _bingo_layout_a_to_row_major(void *arg)
 { return __xdma_a_to_row_major_impl(arg); }
 
 // B-layout → row-major. Inverse of row_major_to_b: same per-(n,k)-tile
@@ -2075,7 +1848,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_a_to_row_major(void *arg)
 //   Arg layout: src_hi/lo, dst_hi/lo, K_T, N_T, tileSize, meshCol, elem_bytes.
 static inline uint32_t __xdma_b_to_row_major_impl(void *arg)
 {
-    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_b_to_row_major_args_t);
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_layout_convert_args_t);
     if (!snax_is_xdma_core()) {
         printf_safe("[Cluster %d Core %d]: Error! b_to_row_major must be called from DM core!\r\n",
                     snrt_cluster_idx(), snrt_cluster_core_idx());
@@ -2085,12 +1858,12 @@ static inline uint32_t __xdma_b_to_row_major_impl(void *arg)
     uint32_t *a = (uint32_t *)arg;
     uint64_t src_addr = make_u64(a[0], a[1]);
     uint64_t dst_addr = make_u64(a[2], a[3]);
-    uint32_t K_T = a[4], N_T = a[5];
     // The array shape travels WITH the operands, so one kernel serves every
     // tiling. The path selection below already reads these; they were wrapper
     // constants only so the tree would fold.
-    uint32_t tileSize = a[6], meshCol = a[7], elem_bytes = a[8];
-    bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_b_to_row_major_args_t);
+    uint32_t tileSize = a[9], meshCol = a[10], elem_bytes = a[11];
+    uint32_t K_T = a[4] / tileSize, N_T = a[5] / meshCol;
+    bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_layout_convert_args_t);
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
     uint32_t bytes  = K_T * tileSize * N_T * meshCol * elem_bytes;
@@ -2198,7 +1971,7 @@ static inline uint32_t __xdma_b_to_row_major_impl(void *arg)
 // the args struct, so a tiling nobody pre-declared -- (16, 4, 16) wants M16K4,
 // which no wrapper ever defined -- needs no new device symbol. The path selection
 // above is unchanged; it simply runs instead of folding.
-SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_b_to_row_major(void *arg)
+static inline uint32_t _bingo_layout_b_to_row_major(void *arg)
 { return __xdma_b_to_row_major_impl(arg); }
 
 // row-major → D-layout. Inverse of d_to_row_major: src/dst stride arrays
@@ -2207,7 +1980,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_b_to_row_major(void *arg)
 //   Arg layout: src_hi/lo, dst_hi/lo, M_T, N_T, meshRow, meshCol, elem_bytes.
 static inline uint32_t __xdma_row_major_to_d_impl(void *arg)
 {
-    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_row_major_to_d_args_t);
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_layout_convert_args_t);
     if (!snax_is_xdma_core()) {
         printf_safe("[Cluster %d Core %d]: Error! row_major_to_d must be called from DM core!\r\n",
                     snrt_cluster_idx(), snrt_cluster_core_idx());
@@ -2217,88 +1990,17 @@ static inline uint32_t __xdma_row_major_to_d_impl(void *arg)
     uint32_t *a = (uint32_t *)arg;
     uint64_t src_addr = make_u64(a[0], a[1]);
     uint64_t dst_addr = make_u64(a[2], a[3]);
-    uint32_t M_T = a[4], N_T = a[5];
     // The array shape travels WITH the operands, so one kernel serves every
     // tiling. The path selection below already reads these; they were wrapper
     // constants only so the tree would fold.
-    uint32_t meshRow = a[6], meshCol = a[7], elem_bytes = a[8];
-    bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_row_major_to_d_args_t);
+    uint32_t meshRow = a[8], meshCol = a[10], elem_bytes = a[11];
+    uint32_t M_T = a[4] / meshRow, N_T = a[5] / meshCol;
+    bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_layout_convert_args_t);
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
     uint32_t bytes     = M_T * N_T * meshRow * meshCol * elem_bytes;
-    uint32_t row_b_blk = meshCol * elem_bytes;          // 1 row of a D-tile (dst-side packing)
-    uint32_t row_b_rm  = N_T * meshCol * elem_bytes;    // 1 row of row-major R (src-side)
-    uint32_t tile_b    = meshRow * meshCol * elem_bytes;
-    bool hw_done = false;
 
-    int path = 0;
-    if ((row_b_blk % 8) == 0) {
-        if (meshRow == 8)                                                       path = 1;
-        else if (meshRow > 8 && (meshRow % 8) == 0)                             path = 2;
-        else if ((meshRow == 1 || meshRow == 2 || meshRow == 4)
-                 && (row_b_blk % 64) == 0)                                      path = 3;
-        else if ((N_T % 8) == 0)                                                path = 4;
-        else if ((M_T % 8) == 0)                                                path = 5;
-    }
-
-    if (path != 0) {
-        xdma_layout_stage_t st;
-        if (xdma_layout_stage_in(&st, src_addr, bytes) != 0) {
-            printf_safe("[Cluster %d Core %d]: row_major_to_d L1 alloc failed!\r\n",
-                        snrt_cluster_idx(), snrt_cluster_core_idx());
-            return BINGO_RET_FAIL;
-        }
-        uint32_t inner_beats = row_b_blk / 8;
-
-        if (path == 1) {
-            // Path 1: spatial = r (8 channels = 8 rows of a D-tile).
-            uint32_t ts_src[3] = { 8,           row_b_blk,  meshRow * row_b_rm };
-            uint32_t tb_src[3] = { inner_beats, N_T,        M_T                };
-            uint32_t ts_dst[3] = { 8,           tile_b,     N_T * tile_b       };
-            uint32_t tb_dst[3] = { inner_beats, N_T,        M_T                };
-            xdma_layout_run(st.xdma_src, dst_addr, row_b_rm, row_b_blk,
-                            3, ts_src, tb_src, ts_dst, tb_dst, false);
-        } else if (path == 2) {
-            uint32_t r_outer = meshRow / 8;
-            uint32_t ts_src[4] = { 8,           8 * row_b_rm,  row_b_blk,  meshRow * row_b_rm };
-            uint32_t tb_src[4] = { inner_beats, r_outer,       N_T,        M_T                };
-            uint32_t ts_dst[4] = { 8,           8 * row_b_blk, tile_b,     N_T * tile_b       };
-            uint32_t tb_dst[4] = { inner_beats, r_outer,       N_T,        M_T                };
-            xdma_layout_run(st.xdma_src, dst_addr, row_b_rm, row_b_blk,
-                            4, ts_src, tb_src, ts_dst, tb_dst, false);
-        } else if (path == 3) {
-            // Path 3: spatial = c_chunk_inner; one xDMA spatial sweep covers
-            // a 64-byte slice of a D-tile row.
-            uint32_t c_outer = row_b_blk / 64;
-            uint32_t ts_src[4] = { 64,      row_b_rm,  row_b_blk,  meshRow * row_b_rm };
-            uint32_t tb_src[4] = { c_outer, meshRow,   N_T,        M_T                };
-            uint32_t ts_dst[4] = { 64,      row_b_blk, tile_b,     N_T * tile_b       };
-            uint32_t tb_dst[4] = { c_outer, meshRow,   N_T,        M_T                };
-            xdma_layout_run(st.xdma_src, dst_addr, 8, 8,
-                            4, ts_src, tb_src, ts_dst, tb_dst, false);
-        } else if (path == 4) {
-            uint32_t n_outer = N_T / 8;
-            uint32_t ts_src[4] = { 8,           row_b_rm,  8 * row_b_blk, meshRow * row_b_rm };
-            uint32_t tb_src[4] = { inner_beats, meshRow,   n_outer,       M_T                };
-            uint32_t ts_dst[4] = { 8,           row_b_blk, 8 * tile_b,    N_T * tile_b       };
-            uint32_t tb_dst[4] = { inner_beats, meshRow,   n_outer,       M_T                };
-            xdma_layout_run(st.xdma_src, dst_addr, row_b_blk, tile_b,
-                            4, ts_src, tb_src, ts_dst, tb_dst, false);
-        } else /* path == 5 */ {
-            uint32_t m_outer = M_T / 8;
-            uint32_t ts_src[4] = { 8,           row_b_rm,  row_b_blk,  8 * meshRow * row_b_rm };
-            uint32_t tb_src[4] = { inner_beats, meshRow,   N_T,        m_outer                };
-            uint32_t ts_dst[4] = { 8,           row_b_blk, tile_b,     8 * N_T * tile_b       };
-            uint32_t tb_dst[4] = { inner_beats, meshRow,   N_T,        m_outer                };
-            xdma_layout_run(st.xdma_src, dst_addr,
-                            meshRow * row_b_rm, N_T * tile_b,
-                            4, ts_src, tb_src, ts_dst, tb_dst, false);
-        }
-        xdma_layout_stage_free(&st);
-        hw_done = true;
-    }
-
-    if (!hw_done) {
+    {
         uint32_t N_cols = N_T * meshCol;
         // CPU fallback: stage non-local (L3) operands through L1.
         xdma_layout_stage_t si;
@@ -2337,5 +2039,53 @@ static inline uint32_t __xdma_row_major_to_d_impl(void *arg)
 // the args struct, so a tiling nobody pre-declared -- (16, 4, 16) wants M16K4,
 // which no wrapper ever defined -- needs no new device symbol. The path selection
 // above is unchanged; it simply runs instead of folding.
-SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_row_major_to_d(void *arg)
+static inline uint32_t _bingo_layout_row_major_to_d(void *arg)
 { return __xdma_row_major_to_d_impl(arg); }
+
+// ==========================================================================
+// THE ONE REGISTERED LAYOUT CONVERTER. Everything above is an implementation;
+// this is the only symbol the kernel table carries for a layout change.
+//
+// The caller states a PAIR of layouts and the array shape, and the dispatch
+// picks the implementation. Naming the symbol after the direction made a new
+// direction a new symbol, and binding the shape to it made a new array shape
+// one as well -- neither is a property of the transfer, which is the same AGU
+// pass however it was reached.
+// ==========================================================================
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_layout_convert(void *arg)
+{
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_layout_convert_args_t);
+    const __snax_bingo_kernel_xdma_layout_convert_args_t *c =
+        (const __snax_bingo_kernel_xdma_layout_convert_args_t *)arg;
+    uint32_t sl = c->src_layout, dl = c->dst_layout;
+
+    if (sl == dl) {
+        printf_safe("[Cluster %d Core %d]: xdma_layout_convert: src_layout == "
+                    "dst_layout (%u). A conversion to itself moves the right "
+                    "bytes to the same offsets and still costs a dispatch and a "
+                    "dependency edge; drop the node.\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx(), (unsigned)sl);
+        return BINGO_RET_FAIL;
+    }
+    if (sl == BINGO_LAYOUT_ROW_MAJOR) {
+        if (dl == BINGO_LAYOUT_A) return _bingo_layout_row_major_to_a(arg);
+        if (dl == BINGO_LAYOUT_B) return _bingo_layout_row_major_to_b(arg);
+        if (dl == BINGO_LAYOUT_D) return _bingo_layout_row_major_to_d(arg);
+    } else if (dl == BINGO_LAYOUT_ROW_MAJOR) {
+        if (sl == BINGO_LAYOUT_A) return _bingo_layout_a_to_row_major(arg);
+        if (sl == BINGO_LAYOUT_B) return _bingo_layout_b_to_row_major(arg);
+        if (sl == BINGO_LAYOUT_D) return _bingo_layout_d_to_row_major(arg);
+    }
+    // A PAIR WITH NO ROW-MAJOR SIDE, or one involving col_major. Both are real
+    // conversions and both are reachable, but not as ONE pass of this kernel:
+    // the host planner (libs/comm/transfer.py) decomposes them through
+    // row_major and emits the halves, each of which lands back here. Refused
+    // rather than silently routed, because a kernel that quietly did two passes
+    // would be invisible to the cost the planner is ranking.
+    printf_safe("[Cluster %d Core %d]: xdma_layout_convert: %u -> %u is not one "
+                "pass. Pairs with no row_major side go through it in two; the "
+                "host planner emits them.\r\n",
+                snrt_cluster_idx(), snrt_cluster_core_idx(),
+                (unsigned)sl, (unsigned)dl);
+    return BINGO_RET_FAIL;
+}

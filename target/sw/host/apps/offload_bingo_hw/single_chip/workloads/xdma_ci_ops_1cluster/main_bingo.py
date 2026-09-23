@@ -166,8 +166,7 @@ def add_l1_layout_test(dfg, name, src_sym, src_size, kernel_name, kernel_args_cl
         assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=XDMA_CORE,
         node_name=f"Conv_{name}",
         kernel_name=kernel_name,
-        kernel_args=kernel_args_cls(src_addr=l1_src, dst_addr=l1_dst,
-                                    **kernel_arg_kwargs_no_addrs))
+        kernel_args=kernel_args_cls(l1_src, l1_dst, **kernel_arg_kwargs_no_addrs))
     store = BingoNode(
         assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=HOST_CORE,
         node_name=f"Store_{name}",
@@ -197,8 +196,7 @@ def add_l3_direct_layout_test(dfg, name, src_sym, kernel_name, kernel_args_cls,
         assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=XDMA_CORE,
         node_name=f"ConvL3_{name}",
         kernel_name=kernel_name,
-        kernel_args=kernel_args_cls(src_addr=src_sym, dst_addr=l3_dst,
-                                    **kernel_arg_kwargs_no_addrs))
+        kernel_args=kernel_args_cls(src_sym, l3_dst, **kernel_arg_kwargs_no_addrs))
     check = BingoNode(
         assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=HOST_CORE,
         node_name=f"CheckL3_{name}",
@@ -216,21 +214,20 @@ def add_l3_direct_layout_test(dfg, name, src_sym, kernel_name, kernel_args_cls,
 def layout_conversions(M_T, K_T, N_T, meshRow, tileSize, meshCol, elem_bytes):
     """The 6 layout converters at this (mesh, elem_bytes).
 
-    The mesh dims and the element width are ARGUMENTS of the kernel, so there is one device
-    symbol per family and any tiling works. `xdma_conv_args` resolves the family to its args
-    class, which names that symbol in KERNEL_NAME; the mesh goes in with the addresses and
-    the tile counts.
+    The mesh, the element width AND the pair of layouts are all ARGUMENTS of the kernel, so
+    ONE device symbol serves every direction and every tiling. `xdma_conv_args` resolves a
+    direction to a constructor for that symbol; what varies per family is only the
+    ROW-MAJOR tensor's shape, because the device derives the tile counts from it.
     """
-    A_kw = dict(M_T=M_T, K_T=K_T)
-    B_kw = dict(K_T=K_T, N_T=N_T)
-    D_kw = dict(M_T=M_T, N_T=N_T)
+    mesh = (meshRow, tileSize, meshCol)
+    # The row-major side's dimensions, per family: A reads [M, K], B reads [K, N] and D
+    # reads [M, N]. The tile counts the kernel needs follow from these and the mesh.
+    A_kw = dict(rows=M_T * meshRow, cols=K_T * tileSize, mesh=mesh, elem_bytes=elem_bytes)
+    B_kw = dict(rows=K_T * tileSize, cols=N_T * meshCol, mesh=mesh, elem_bytes=elem_bytes)
+    D_kw = dict(rows=M_T * meshRow, cols=N_T * meshCol, mesh=mesh, elem_bytes=elem_bytes)
     A_bytes = M_T * meshRow * K_T * tileSize * elem_bytes
     B_bytes = K_T * tileSize * N_T * meshCol * elem_bytes
     D_bytes = M_T * meshRow * N_T * meshCol * elem_bytes
-    # (family, the two mesh dims its block spans)
-    A_kw.update(meshRow=meshRow, tileSize=tileSize, elem_bytes=elem_bytes)
-    B_kw.update(tileSize=tileSize, meshCol=meshCol, elem_bytes=elem_bytes)
-    D_kw.update(meshRow=meshRow, meshCol=meshCol, elem_bytes=elem_bytes)
     rm2a, a2rm = (xdma_conv_args("xdma_row_major_to_a"),
                   xdma_conv_args("xdma_a_to_row_major"))
     rm2b, b2rm = (xdma_conv_args("xdma_row_major_to_b"),

@@ -16,7 +16,7 @@ into the same pass, so a layer that narrows to int8 pays for one task, not two."
 from typing import Union, Dict, Optional
 from bingo_mem_handle import BingoMemAlloc
 
-from kernel_base import BingoKernelArgs
+from kernel_base import LAYOUT_CODE, BingoKernelArgs
 
 
 class SnaxBingoKernelSimdFp16ToInt8Args(BingoKernelArgs):
@@ -361,8 +361,6 @@ class SnaxBingoKernelSimdRmsnormArgs(BingoKernelArgs):
 
     KERNEL_NAME = "__snax_bingo_kernel_simd_rmsnorm"
 
-    _LAYOUT = {"row_major": 0, "col_major": 1}
-
     def __init__(self, input_addr: Union[BingoMemAlloc, int],
                  output_addr: Union[BingoMemAlloc, int], rows: int, cols: int,
                  input_layout: str = "row_major", output_layout: str = "row_major",
@@ -378,13 +376,17 @@ class SnaxBingoKernelSimdRmsnormArgs(BingoKernelArgs):
         # REFUSE HERE, not on the device. The device check is the backstop for a caller
         # that bypasses this class; this one names the mistake while the graph is being
         # written, which is the only point at which it is cheap to fix.
+        # ORIENTATIONS ONLY. LAYOUT_CODE is shared with the xDMA converter and carries
+        # A, B and D as well, so the accepted set is narrowed here rather than taken from
+        # it: the SIMD reads a plain tile and a blocked layout is not an orientation.
+        orientations = ("row_major", "col_major")
         for who, lay in (("input_layout", self.input_layout),
                          ("output_layout", self.output_layout)):
-            if lay not in self._LAYOUT:
+            if lay not in orientations:
                 raise ValueError(
-                    f"simd_rmsnorm: {who}={lay!r} is not one of "
-                    f"{sorted(self._LAYOUT)}. The blocked layouts (A, B, D) are not "
-                    f"orientations the SIMD reads; reshape before normalising.")
+                    f"simd_rmsnorm: {who}={lay!r} is not one of {list(orientations)}. "
+                    f"The blocked layouts (A, B, D) are not orientations the SIMD reads; "
+                    f"reshape before normalising.")
         if self.input_layout != self.output_layout:
             raise ValueError(
                 f"simd_rmsnorm: input_layout={self.input_layout} but "
@@ -414,8 +416,8 @@ class SnaxBingoKernelSimdRmsnormArgs(BingoKernelArgs):
         self._process_addr(self.output_addr, "output_addr", a, handle_name_map)
         a["rows"] = str(self.rows)
         a["cols"] = str(self.cols)
-        a["input_layout"] = str(self._LAYOUT[self.input_layout])
-        a["output_layout"] = str(self._LAYOUT[self.output_layout])
+        a["input_layout"] = str(LAYOUT_CODE[self.input_layout])
+        a["output_layout"] = str(LAYOUT_CODE[self.output_layout])
         a["out_prec"] = "1" if self.out_i8 else "0"
         return a
 

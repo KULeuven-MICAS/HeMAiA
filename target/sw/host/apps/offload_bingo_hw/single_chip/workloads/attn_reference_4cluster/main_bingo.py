@@ -563,10 +563,12 @@ def emit_ksplit_gemm_pattern(dfg: BingoDFG, mem: dict, hw: HwParams,
         assigned_chiplet_id=0, assigned_cluster_id=0, assigned_core_id=DMA_CORE,
         node_name=f"Reshape_{name}_d2rm",
         kernel_name=d2rm_cls.KERNEL_NAME,
+        # D reads [M, N], so the row-major side is (M_T*meshRow, N_T*meshCol); the device
+        # derives the tile counts from that and the mesh.
         kernel_args=d2rm_cls(
-            src_addr=fp32_dblk_buf, dst_addr=fp32_rm_buf,
-            M_T=M_T, N_T=N_T,
-            meshRow=hw.meshRow, meshCol=hw.meshCol, elem_bytes=4,
+            fp32_dblk_buf, fp32_rm_buf,
+            M_T * hw.meshRow, N_T * hw.meshCol,
+            (hw.meshRow, hw.tileSize, hw.meshCol), 4,
         ),
     )
     dfg.bingo_add_node(reshape)

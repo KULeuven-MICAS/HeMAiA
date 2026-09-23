@@ -151,9 +151,13 @@ refuses("an int8 reshape is refused for the RIGHT reason: the run is too narrow"
 # The transpose is checked on the plan directly: routed through assemble() it would hit
 # the PRECISION refusal first, because this producer emits int8 and B-layout is an fp16
 # conversion -- so the assertion would pass for the wrong reason.
+#
+# A -> B IS THE PAIR THAT STAYS REFUSED. A row_major side can pivot through the A/B
+# identity and is planned as two steps; two BLOCKED layouts have nothing to pivot through,
+# so the message must still name the transpose rather than a precision problem.
 from libs.comm import transfer as _staging                                     # noqa: E402
 refuses("a transpose is refused as a transpose, not as a precision problem",
-        lambda: _staging.plan(PortSpec("row_major", "f16", (32, 128), mem_level="L1"),
+        lambda: _staging.plan(PortSpec("A", "f16", (32, 128), mem_level="L1"),
                               PortSpec("B", "f16", (32, 128), mem_level="L1"),
                               mesh=(16, 4, 16), elem_bytes=2), "TRANSPOSE")
 check("a reshape the xDMA can do is planned, not refused",
@@ -431,6 +435,91 @@ try:
     check("an L4 operand is refused", False, "it built")
 except ValueError:
     check("an L4 operand is refused", True)
+
+# ------------------------------------------------ the A/B transpose identity
+print("\nthe A/B identity, and the mesh it rests on")
+import numpy as _np                                                      # noqa: E402
+from libs.comm.nest import index_map as _imap                            # noqa: E402
+
+_SQ, _NSQ = (16, 4, 16), (16, 4, 8)
+
+
+def _lay(layout, X, mesh):
+    r, c = X.shape
+    m = _imap(layout, r, c, mesh)
+    b = _np.empty(r * c, dtype=X.dtype)
+    b[m.reshape(-1)] = X.reshape(-1)
+    return b
+
+
+# A(X) == B(X^T) IS THE WHOLE BASIS for planning a B pair. It is a property of the mesh,
+# so it is checked on both a square array and a non-square one.
+for _mesh, _want in ((_SQ, True), (_NSQ, False)):
+    _X = _np.arange(32 * 128, dtype=_np.int32).reshape(32, 128)
+    _got = _np.array_equal(_lay("A", _X, _mesh), _lay("B", _X.T.copy(), _mesh))
+    check(f"A(X) == B(X^T) is {_want} on mesh {_mesh}", _got == _want, (_mesh, _got))
+
+# ON A SQUARE ARRAY plan decomposes a B pair; on a non-square one it must refuse, because
+# the identity it would rest on is false there.
+_rm = PortSpec(Layout.ROW_MAJOR, DType.F16, (32, 128), mem_level=MemLevel.L1)
+_b = PortSpec(Layout.B, DType.F16, (32, 128), mem_level=MemLevel.L1)
+check("row_major -> B decomposes on a square array",
+      [x.kind for x in _staging.plan(_rm, _b, mesh=_SQ, elem_bytes=2)]
+      == ["transpose", "relayout"])
+check("B -> row_major decomposes the other way round",
+      [x.kind for x in _staging.plan(_b, _rm, mesh=_SQ, elem_bytes=2)]
+      == ["relayout", "transpose"])
+try:
+    _staging.plan(_rm, _b, mesh=_NSQ, elem_bytes=2)
+    check("row_major -> B is refused on a non-square array", False, "it planned")
+except ValueError:
+    check("row_major -> B is refused on a non-square array", True)
+
+# THE DECOMPOSITION IS BYTE-EXACT, which no step count would show: transposing and then
+# running the A nest on the swapped shape has to land on B's own index map.
+for _R, _C in ((32, 128), (64, 64), (16, 64)):
+    _X = _np.arange(_R * _C, dtype=_np.int32).reshape(_R, _C)
+    check(f"[{_R},{_C}] A(X^T) is byte-exact B(X)",
+          _np.array_equal(_lay("A", _X.T.copy(), _SQ), _lay("B", _X, _SQ)))
+
+# A BLOCKED-TO-BLOCKED PAIR stays refused: it has no row_major side to pivot through.
+_a = PortSpec(Layout.A, DType.F16, (32, 128), mem_level=MemLevel.L1)
+try:
+    _staging.plan(_a, _b, mesh=_SQ, elem_bytes=2)
+    check("A -> B is still refused", False, "it planned")
+except ValueError:
+    check("A -> B is still refused", True)
+
+# ONE CONVERTER KERNEL, dispatching on the pair.
+from bingo_kernel_args import (SnaxBingoKernelXdmaLayoutConvertArgs as _LC,  # noqa: E402
+                               xdma_conv_args as _fam)
+check("every direction is the same symbol",
+      len({_fam(f)(0, 0x100, 32, 128, _SQ, 2).KERNEL_NAME
+           for f in ("xdma_row_major_to_a", "xdma_d_to_row_major")}) == 1)
+# THE NEST IS DERIVED ON THE HOST, so an expressible conversion becomes an xdma_6d with
+# strides that _verify_nest has already walked against both index maps -- and one that is
+# not expressible falls back to the element loop, by name rather than silently.
+check("an expressible conversion becomes a derived nest",
+      _LC(0, 0x100, 32, 128, "row_major", "A", _SQ, 2).KERNEL_NAME
+      == "__snax_bingo_kernel_xdma_6d")
+check("...carrying strides, not a shape",
+      "temporal_strides_src[0]" in
+      _LC(0, 0x100, 32, 128, "row_major", "A", _SQ, 2).get_c_field_assignments({}))
+check("an int8 A conversion has no nest and says so",
+      _LC(0, 0x100, 32, 128, "row_major", "A", _SQ, 1).KERNEL_NAME
+      == "__snax_bingo_kernel_xdma_layout_convert")
+for _why, _kw in (("a pair with no row_major side", ("A", "B")),
+                  ("a col_major pair", ("row_major", "col_major"))):
+    try:
+        _LC(0, 0x100, 32, 128, _kw[0], _kw[1], _SQ, 2)
+        check(f"the converter refuses {_why}", False, "it constructed")
+    except ValueError:
+        check(f"the converter refuses {_why}", True)
+try:
+    _LC(0, 0x100, 30, 128, "row_major", "A", _SQ, 2)
+    check("the converter refuses a shape that does not tile", False, "it constructed")
+except ValueError:
+    check("the converter refuses a shape that does not tile", True)
 
 if FAILED:
     print(f"\n{len(FAILED)} FAILED: {', '.join(FAILED)}")

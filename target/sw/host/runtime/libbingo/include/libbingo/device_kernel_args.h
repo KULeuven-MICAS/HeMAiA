@@ -812,8 +812,18 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_softmax_t_args {
 // seed at the base and the tile one beat in. The kernel checks this rather than trusting
 // it -- a violation would otherwise overwrite feature row 0 and read the tile one beat out
 // of phase, with nothing reported.
+// THE LAYOUT CODES, shared by every kernel that takes a layout as an argument. They must
+// match kernels/kernel_base.py's LAYOUT_CODE, which is the only other place they appear.
+//
+//   row_major  [r][c] at r*cols + c. What everything outside the array uses.
+//   col_major  the same values at c*rows + r. One FP16 lane per token, for a per-row
+//              SIMD reduction.
+//   A, B, D    the array's blocked operand layouts, (m,k,r,s) / (n,k,c,s) / (m,n,r,c).
 #define BINGO_LAYOUT_ROW_MAJOR 0u
 #define BINGO_LAYOUT_COL_MAJOR 1u
+#define BINGO_LAYOUT_A         2u
+#define BINGO_LAYOUT_B         3u
+#define BINGO_LAYOUT_D         4u
 #define BINGO_PREC_F16         0u
 #define BINGO_PREC_I8          1u
 
@@ -932,6 +942,39 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_fa_softmax {
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_simd_fa_softmax_args_t;
 
+
+// ONE LAYOUT CONVERTER, dispatching on the pair it is given.
+//
+// THE ARRAY SHAPE IS AN ARGUMENT, not part of the kernel's identity, and so is the pair of
+// layouts. One symbol serves every (meshRow, tileSize, meshCol, elem_bytes) the DSE picks
+// and every direction between row_major and a blocked layout. Binding either to the symbol
+// meant a new array shape or a new direction needed a new device symbol, and a shape nobody
+// had pre-declared simply had none.
+//
+// `rows` and `cols` are the ROW-MAJOR tensor's dimensions, whichever side of the
+// conversion that tensor is on. The tile counts the old per-direction kernels took (M_T,
+// K_T, N_T) are derived here from those and the mesh, so a caller cannot pair a tile count
+// with the wrong mesh.
+//
+// WHICH PAIRS ARE A PLAIN NEST, and which are not: a conversion is a strided nest when
+// both layouts run contiguously along the SAME axis. row_major, A and D all run along
+// rows; B runs down columns. So anything touching B is a transpose, and the kernel takes
+// one of three paths for it -- see the dispatcher. Everything else is one AGU pass.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_layout_convert_args {
+  uint32_t src_addr_hi;
+  uint32_t src_addr_lo;
+  uint32_t dst_addr_hi;
+  uint32_t dst_addr_lo;
+  uint32_t rows;          // the ROW-MAJOR tensor's rows
+  uint32_t cols;          // the ROW-MAJOR tensor's cols
+  uint32_t src_layout;    // BINGO_LAYOUT_*
+  uint32_t dst_layout;    // BINGO_LAYOUT_*
+  uint32_t meshRow;
+  uint32_t tileSize;
+  uint32_t meshCol;
+  uint32_t elem_bytes;
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_xdma_layout_convert_args_t;
 
 // ──────────────────────────────────────────────────────────────────────
 // VersaCore blocked-layout conversion kernels

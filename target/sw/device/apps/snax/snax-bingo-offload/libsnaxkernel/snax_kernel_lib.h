@@ -139,12 +139,7 @@ SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
     // quantise and the O rescale) in ONE kernel. The producing and consuming GEMM
     // nodes hand off through BINGO edges, so it carries no sync counters.
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_fa_softmax),
-    SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_d_to_row_major),
-    SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_row_major_to_a),
-    SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_row_major_to_b),
-    SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_a_to_row_major),
-    SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_b_to_row_major),
-    SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_row_major_to_d),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_layout_convert),
     SNAX_SYMTAB_END
 };
 

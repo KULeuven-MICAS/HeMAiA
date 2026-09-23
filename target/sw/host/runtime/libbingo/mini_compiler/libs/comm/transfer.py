@@ -132,10 +132,34 @@ def plan(have: PortSpec, want: PortSpec, *, mesh=None, elem_bytes=None) -> list:
     # to reconcile and no meaningless `A^T` state to guard against -- it is not spellable.
     # A transpose between two BLOCKED layouts is refused by convert_args, where it belongs.
     UNBLOCKED = (Layout.ROW_MAJOR, Layout.COL_MAJOR)
+
+    # B IS A's TRANSPOSE, WHEN THE ARRAY IS SQUARE, and that is what makes a B pair
+    # reachable at all. Write the two index maps out:
+    #
+    #     A of X [M, K]:  X[m*mr + r, k*ts + s]  at ((m*K_T + k)*mr + r)*ts + s
+    #     B of Y [K, N]:  Y[k*ts + s, n*mc + c]  at ((n*K_T + k)*mc + c)*ts + s
+    #
+    # Put Y = X^T and the two are the same expression whenever mr == mc, so A(X) and
+    # B(X^T) are the SAME BYTES. A pair involving B therefore needs no new machinery: get
+    # the operand into the other orientation, which the 8x8 transposer does, and the
+    # ordinary row_major <-> A nest finishes it.
+    #
+    # THE GUARD IS NOT DECORATION. On a non-square array the two expressions differ and
+    # the identity is simply false, so it is checked rather than assumed -- VersaCore's
+    # shape is runtime-selectable and a second one is a DSE away.
+    ab_swap = (mesh is not None and mesh[0] == mesh[2]
+               and Layout.B in (have.layout, want.layout)
+               and Layout.ROW_MAJOR in (have.layout, want.layout))
+
     xpose = ((have.layout in UNBLOCKED) != (want.layout in UNBLOCKED)
              and Layout.COL_MAJOR in (have.layout, want.layout)) \
-        or {have.layout, want.layout} == set(UNBLOCKED)
-    xpose_first = xpose and have.layout == Layout.COL_MAJOR
+        or {have.layout, want.layout} == set(UNBLOCKED) \
+        or ab_swap
+    # Which end is already in the orientation the nest wants: for row_major -> B the
+    # transpose comes first and the nest lands in A; for B -> row_major the nest runs
+    # first, out of A, and the transpose puts the axes back.
+    xpose_first = (have.layout == Layout.COL_MAJOR
+                   or (ab_swap and have.layout == Layout.ROW_MAJOR))
 
     relayout_step = None
     if have.layout != want.layout and not {have.layout, want.layout} == set(UNBLOCKED):
@@ -143,12 +167,19 @@ def plan(have: PortSpec, want: PortSpec, *, mesh=None, elem_bytes=None) -> list:
         # the transpose above or below it closes the orientation.
         src_lay = Layout.ROW_MAJOR if xpose_first else have.layout
         dst_lay = want.layout if want.layout not in UNBLOCKED else Layout.ROW_MAJOR
+        # A B PAIR RUNS AS AN A NEST ON THE SWAPPED SHAPE, by the identity above: the
+        # transposer has already put (or will put) the bytes the other way round, so what
+        # the nest sees is the [cols, rows] tensor and the layout it converts is A.
+        r, c = want.shape
+        if ab_swap:
+            src_lay = Layout.A if src_lay == Layout.B else src_lay
+            dst_lay = Layout.A if dst_lay == Layout.B else dst_lay
+            r, c = c, r
         if mesh is not None and elem_bytes is not None:
             # Derive it now and throw it away: the derivation is the feasibility test, and
             # it is cheap next to being wrong about it. In the tensor's own dimensions --
             # the blocked layouts are defined on (rows, cols) and the transpose, where
             # there is one, has already put the bytes that way round.
-            r, c = want.shape
             convert_args(src_lay, dst_lay, r, c, mesh, elem_bytes, 0, 0)
         relayout_step = Step("relayout", f"{src_lay} -> {dst_lay}, fused into the load so "
                                          f"it costs no extra traversal", engine="xDMA 6d")

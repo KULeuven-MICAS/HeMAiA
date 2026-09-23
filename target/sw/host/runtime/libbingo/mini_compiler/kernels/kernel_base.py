@@ -3,6 +3,19 @@ from abc import ABC, abstractmethod
 from typing import Union, Dict, Optional, List, Tuple
 from bingo_mem_handle import BingoMemAlloc, BingoMemAllocView, BingoMemSymbol, BingoMemFixedAddr
 
+# THE LAYOUT CODES a kernel argument carries. The only other place they appear is
+# device_kernel_args.h's BINGO_LAYOUT_*, and the two must agree: a mismatch would hand a
+# kernel a layout it did not mean and the transfer would move the right byte count to the
+# wrong offsets, which no byte count and no golden on random data would catch.
+LAYOUT_CODE = {
+    "row_major": 0,
+    "col_major": 1,
+    "A": 2,
+    "B": 3,
+    "D": 4,
+}
+
+
 class BingoKernelArgs(ABC):
     """
     Abstract base class for Kernel Arguments.

@@ -100,24 +100,26 @@ OP_SPEC = {
         "xdma_elementwise_add", "__snax_bingo_kernel_xdma_elementwise_add",
         "linear", ["n"], 1,
         lambda c, m: {"n": c["per_op"]}),
-    # layout conversions
+    # layout conversions. ONE DEVICE SYMBOL for all six directions -- the pair of layouts
+    # is an argument now -- so the symbol no longer separates them. It does not have to:
+    # each direction has its OWN WORKLOAD, and a workload's trace carries only its own.
     "xdma_row_to_a_1cluster": (
-        "xdma_row_major_to_a", "__snax_bingo_kernel_xdma_row_major_to_a",
+        "xdma_row_major_to_a", "__snax_bingo_kernel_xdma_layout_convert",
         "bilinear", ["rows", "cols"], 1, _layout_a),
     "xdma_a_to_row_1cluster": (
-        "xdma_a_to_row_major", "__snax_bingo_kernel_xdma_a_to_row_major",
+        "xdma_a_to_row_major", "__snax_bingo_kernel_xdma_layout_convert",
         "bilinear", ["rows", "cols"], 1, _layout_a),
     "xdma_row_to_b_1cluster": (
-        "xdma_row_major_to_b", "__snax_bingo_kernel_xdma_row_major_to_b",
+        "xdma_row_major_to_b", "__snax_bingo_kernel_xdma_layout_convert",
         "bilinear", ["rows", "cols"], 1, _layout_b),
     "xdma_b_to_row_1cluster": (
-        "xdma_b_to_row_major", "__snax_bingo_kernel_xdma_b_to_row_major",
+        "xdma_b_to_row_major", "__snax_bingo_kernel_xdma_layout_convert",
         "bilinear", ["rows", "cols"], 1, _layout_b),
     "xdma_row_to_d_1cluster": (
-        "xdma_row_major_to_d", "__snax_bingo_kernel_xdma_row_major_to_d",
+        "xdma_row_major_to_d", "__snax_bingo_kernel_xdma_layout_convert",
         "bilinear", ["rows", "cols"], 1, _layout_d),
     "xdma_d_to_row_1cluster": (
-        "xdma_d_to_row_major", "__snax_bingo_kernel_xdma_d_to_row_major",
+        "xdma_d_to_row_major", "__snax_bingo_kernel_xdma_layout_convert",
         "bilinear", ["rows", "cols"], 1, _layout_d),
 }
 
