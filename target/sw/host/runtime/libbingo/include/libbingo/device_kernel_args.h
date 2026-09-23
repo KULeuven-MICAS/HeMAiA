@@ -709,17 +709,26 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_stream_elementwise_args {
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_simd_stream_elementwise_args_t;
 
-// Fused FP16 RoPE: iDMA adjacent-pair swap of x + 3 StreamElementwise passes
-// (x*cos, xswap*sin, +) -> out. cos_full/sin_signed are precomputed tables; the
-// kernel allocates its xswap/tmp1/tmp2 scratch from L1. D = beats*32 fp16 per row.
+
+// RoPE as ONE SIMD task: out = x (.) cos_full + xswap (.) sin_signed, with the two
+// products on the pre-map elementwise and their sum on the post-map one. Four operand
+// beats per output beat instead of six, and no intermediate tile at all.
+//
+// ONE BLOCK, FOUR ROWS, IN THIS ORDER -- the reader adds a single stride per axis, so the
+// operands have to be equally spaced, and the order IS the pairing (EW0 multiplies 0 by 1
+// and 2 by 3, EW1 adds the two):
+//
+//     ops_addr -> [ x | cos_full | xswap | sin_signed ]   each rows*cols*2 bytes
+//
+// THE KERNEL DOES NOT FILL SLOT 2. xswap is an adjacent fp16-pair permutation, which is a
+// 2-byte reorder inside one 8-byte TCDM word -- below the granularity the reader's AGU can
+// address, so no stride expresses it. Produce it with
+// __snax_bingo_kernel_idma_pairwise_swap on the DM core (a real byte-addressed DMA, two
+// strided 2-byte copies) and make this node depend on it.
 __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_rope_args {
-  uint32_t x_addr_hi;        // input x (runtime Q/K), fp16 [rows, D]
-  uint32_t x_addr_lo;
-  uint32_t cos_addr_hi;      // cos_full table, same shape
-  uint32_t cos_addr_lo;
-  uint32_t sin_addr_hi;      // sin_signed table, same shape
-  uint32_t sin_addr_lo;
-  uint32_t out_addr_hi;      // output, same shape
+  uint32_t ops_addr_hi;      // 4-row operand block: x, cos_full, xswap, sin_signed
+  uint32_t ops_addr_lo;
+  uint32_t out_addr_hi;      // output, fp16 [rows, cols]
   uint32_t out_addr_lo;
   uint32_t cols;             // per-row fp16 length D (a multiple of 32)
   uint32_t rows;             // rows / token positions
@@ -741,6 +750,32 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_softmax_args {
   uint32_t cols;                 // per-row fp16 length D (a multiple of 32)
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_simd_softmax_args_t;
+
+// Transposed FP16 softmax: the same distribution over x^T, ~3x cheaper on the SIMD core.
+// One lane is one token, so BOTH per-row scalars fall out of the per-lane accumulators
+// with no cross-lane fold, and both ride back in as sticky seed beats instead of
+// replicated [T, D] planes. reduce(MAX|LANEWISE) -> map(-1) -> EW0(ADD|STICKY) | Map(EXP)
+// | Reduce(ADD|TAP|LANEWISE) -> EW0(MUL|STICKY) | Map(RSQRT) -> ew(MUL|STICKY). FP16 out.
+//
+// THE TWO ADDRESSES ARE ONE ALLOCATION, exactly as for the transposed rmsnorm: seed_addr
+// is a 64 B scratch beat the kernel writes (the negated row maxima) and then reads as the
+// sticky operand, and it must sit DIRECTLY below the tile -- input_addr == seed_addr + 64.
+// Allocate (1 + cols) beats, point seed at the base and the tile one beat in; the kernel
+// checks it. The second such buffer, for 1/Sexp below the exp tile, is the kernel's own
+// scratch and needs nothing from the caller.
+//
+// cols <= 255: the reciprocal is rsqrt(Sexp*Sexp), the square is FP16, and Sexp <= cols.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_softmax_t_args {
+  uint32_t seed_addr_hi;         // 64 B scratch beat, == input_addr - 64
+  uint32_t seed_addr_lo;
+  uint32_t input_addr_hi;        // input x^T, fp16 [cols, rows] row-major (one token/lane)
+  uint32_t input_addr_lo;
+  uint32_t output_addr_hi;       // fp16 softmax(x)^T, [cols, rows], same orientation
+  uint32_t output_addr_lo;
+  uint32_t rows;                 // tokens; MUST be 32, the FP16 lanes in one beat
+  uint32_t cols;                 // scores D (a multiple of 32, and <= 255)
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_simd_softmax_t_args_t;
 
 // Whole FP16 rmsnorm in one DM-core kernel: reduce-SUMSQ, integer 1/sqrt(Sxx/N) (no FPU),
 // broadcast, normalize-MUL, and an optional fused FP16->INT8 quant leaf. Same shape/args as

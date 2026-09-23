@@ -170,6 +170,24 @@
 #endif
 #endif
 
+// MUL ON THE PRE-MAP ELEMENTWISE, which is newly load-bearing. Every softmax before the
+// reciprocal moved onto the datapath used EW0 for ADD only (subtract the row max) and did
+// its multiplying on EW1. The square in rsqrt(s*s) = 1/s has to happen UPSTREAM of the
+// map that inverts it, so it is EW0's, and a cfg whose pre-map instance was built for ADD
+// alone has no op-select CSR to point at MUL -- it would silently add instead.
+//
+// The capability is a RUNTIME opcode, so a fused "FMA" build op satisfies it and the
+// generator says so (snax_split_cluster lists only FMA_FP16 and gets _HAS_MUL/_HAS_ADD).
+#if !defined(BINGO_SIMD_EW0_HAS_MUL)
+#if !defined(SIMD_EXT_CAPS)
+#define BINGO_SIMD_EW0_HAS_MUL 1
+#elif defined(SIMD_EXT_STREAMELEMENTWISE_0_HAS_MUL)
+#define BINGO_SIMD_EW0_HAS_MUL 1
+#else
+#define BINGO_SIMD_EW0_HAS_MUL 0
+#endif
+#endif
+
 // Refuse a kernel whose operator this cfg did not generate.
 #define BINGO_SIMD_EXT_UNSUPPORTED(kname, exts)                              \
     do {                                                                     \
@@ -366,6 +384,88 @@ static inline uint32_t simd_pass_ew2(void *src_a, void *src_b, void *dst,
     if (out_dt == SIMD_OUT_I8)
         snax_simd_arm2(SIMD_EXT_FP16TOINT8, SIMD_EXT_FP16TOINT8_CSR, inv_scale,
                        SIMD_QUANT_TAIL(0));
+    return simd_run_shapes(&in, &out);
+}
+
+// SQUARE ONE BEAT PER ROW, on the PRE-map elementwise. Half of a reciprocal.
+//
+// StreamMap has no reciprocal, but it has RSQRT -- and rsqrt(s*s) = 1/s exactly, for any
+// positive s. The square needs no operand but the number itself: present the beat TWICE
+// at stride 0 and let a 2-operand elementwise multiply the pair.
+//
+//     read [s, s]        bound0 = 2, stride0 = 0 -- the same beat, re-presented
+//     EW0(MUL)           s * s
+//     write [s*s]        one beat per row
+//
+// `rows` beats each way, which is why it is worth doing HERE rather than after the
+// broadcast: squaring the replicated plane would cost the plane's whole width.
+//
+// THE RANGE THIS RUNS ON. The transport between two chained operators is FP16, so it is
+// s*s that must fit, not s. The caller owns that bound and is the only one that knows it
+// -- see the softmax kernel, which is bounded by Sexp <= cols.
+static inline uint32_t simd_pass_sq_beats(void *src_beats, void *dst, uint32_t rows,
+                                          uint32_t src_row_stride) {
+    snax_simd_shape_t in, out;
+    snax_simd_shape_2d(&in, src_beats, 2u, 0u, rows, src_row_stride);
+    snax_simd_shape_flat(&out, dst, rows);
+    snax_simd_use2(SIMD_EXT_STREAMELEMENTWISE_0, SIMD_EXT_STREAMELEMENTWISE_0_CSR, 2u,
+                   SIMD_EW_MUL);
+    return simd_run_shapes(&in, &out);
+}
+
+// THE WHOLE RECIPROCAL, FROM ONE BEAT, IN ONE PASS: out = 1/s, lane by lane.
+//
+// The square above and the RSQRT that inverts it are adjacent operators in the chain, so
+// when there is only ONE scalar beat to invert they fuse: the beat is read twice at
+// stride 0, EW0's sticky latch squares it, and Map turns s*s into 1/s. Two beats in, one
+// out.
+//
+// This is the TRANSPOSED form -- it inverts every token's scalar at once, because all T of
+// them live in the lanes of a single beat. Row-major has T separate beats and the sticky
+// latch holds only one, so that path squares with simd_pass_sq_beats() and lets the RSQRT
+// ride the broadcast pass it has to run anyway.
+static inline uint32_t simd_pass_recip_beat(void *sum_beat, void *dst) {
+    snax_simd_shape_t in, out;
+    snax_simd_shape_2d(&in, sum_beat, 2u, 0u, 1u, 0u);
+    snax_simd_shape_flat(&out, dst, 1u);
+    snax_write_simd_cfg_reg(SIMD_EXT_ENABLE_PTR,
+                            (1u << SIMD_EXT_STREAMELEMENTWISE_0) |
+                                (1u << SIMD_EXT_STREAMMAP));
+    snax_write_simd_cfg_reg(SIMD_EXT_STREAMELEMENTWISE_0_CSR + 0, 1u);
+    snax_write_simd_cfg_reg(SIMD_EXT_STREAMELEMENTWISE_0_CSR + 1,
+                            SIMD_EW_MUL | SIMD_EW_STICKY_B);
+    snax_write_simd_cfg_reg(SIMD_EXT_STREAMMAP_CSR + 0, SIMD_F32_ONE);
+    snax_write_simd_cfg_reg(SIMD_EXT_STREAMMAP_CSR + 1, 0u);
+    snax_write_simd_cfg_reg(SIMD_EXT_STREAMMAP_CSR + 2, SIMD_FUNC_RSQRT);
+    return simd_run_shapes(&in, &out);
+}
+
+// THE TRANSPOSED FUSED PASS: subtract, exponentiate and sum, with no plane and no fold.
+//
+//     read (seed + D beats) -> EW0(ADD|STICKY_B) -> Map(EXP) -> Reduce(ADD|TAP|LANEWISE)
+//
+// Same three operators as simd_pass_ew_map_reduce below, and every one of its costs
+// removed by the orientation: the per-token offset arrives as ONE sticky seed beat rather
+// than a replicated [T, D] plane, and the reduce is LANEWISE so the per-lane accumulators
+// ARE the per-token sums -- no cross-lane fold, no splat. D+1 beats in (seed then tile),
+// D+1 out (tile then the single sum beat).
+static inline uint32_t simd_pass_t_exp_sum(void *seed_then_xt, void *dst, uint32_t d) {
+    snax_simd_shape_t in, out;
+    snax_simd_shape_flat(&in, seed_then_xt, d + 1u);
+    snax_simd_shape_flat(&out, dst, d + 1u);
+    snax_write_simd_cfg_reg(SIMD_EXT_ENABLE_PTR,
+                            (1u << SIMD_EXT_STREAMELEMENTWISE_0) |
+                                (1u << SIMD_EXT_STREAMMAP) |
+                                (1u << SIMD_EXT_STREAMREDUCE));
+    snax_write_simd_cfg_reg(SIMD_EXT_STREAMELEMENTWISE_0_CSR + 0, 1u);
+    snax_write_simd_cfg_reg(SIMD_EXT_STREAMELEMENTWISE_0_CSR + 1,
+                            SIMD_EW_ADD | SIMD_EW_STICKY_B);
+    snax_write_simd_cfg_reg(SIMD_EXT_STREAMMAP_CSR + 0, SIMD_F32_ONE);
+    snax_write_simd_cfg_reg(SIMD_EXT_STREAMMAP_CSR + 1, 0u);
+    snax_write_simd_cfg_reg(SIMD_EXT_STREAMMAP_CSR + 2, SIMD_FUNC_EXP);
+    snax_write_simd_cfg_reg(SIMD_EXT_STREAMREDUCE_CSR + 0, d);
+    snax_write_simd_cfg_reg(SIMD_EXT_STREAMREDUCE_CSR + 1,
+                            SIMD_RED_ADD | SIMD_RED_TAP | SIMD_RED_LANEWISE);
     return simd_run_shapes(&in, &out);
 }
 
@@ -763,10 +863,24 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_stream_elementwise(void *arg) 
 //       reduce(MAX)                                  x      -> bt
 //       bcast_map(a=-1)                              bt     -> bc     (negate fused in)
 //       EW0(ADD) |> map(EXP) |> reduce(ADD,TAP)      x,bc   -> expb   <-- 3 passes in 1
-//       [core] per-row 1/Sexp, splatted
-//       bcast                                        bt     -> bc
+//       EW0(MUL) over the tap beats                  expb   -> bt     (Sexp*Sexp)
+//       bcast_map(RSQRT)                             bt     -> bc     (the reciprocal,
+//                                                                      riding the bcast)
 //       EW1(MUL) [+ quant]                           expb,bc-> out
-//   5 SIMD tasks, and no `x - max` intermediate: the fused pass never writes one.
+//   6 SIMD tasks, NO core loop, and no `x - max` intermediate: the fused pass never
+//   writes one. The reciprocal used to be an integer divide plus 16 volatile stores per
+//   row -- 512 at [32, 128] -- and rsqrt(s*s) = 1/s removes both, with the square costing
+//   `rows` beats and the inversion costing nothing at all (the broadcast it rides was
+//   already carrying an identity multiply). Bounded by cols <= 255; see `wide` below.
+//
+// WHY rows == 1 KEEPS ITS INTEGER RECIPROCAL, when RMSNorm's went away. Two reasons, and
+// neither holds for the general path. It is FASTER: one row means one scalar, which folds
+// into a StreamMap immediate, so the core pays one `divu` (~20 cc) where the datapath
+// route would pay a whole extra task (~190 cc) for the square-and-invert plus a sticky
+// multiply instead of a plain map. And it is not LESS ACCURATE: the integer reciprocal is
+// ~1 FP16 ULP against rsqrt(s*s)'s ~1.5, because the square rounds on the way up. RMSNorm
+// was the opposite case -- there the core did an integer sqrt AND a reciprocal, 2-3 ULP,
+// and the hardware rsqrt was both faster and better.
 //
 // Arg layout (__snax_bingo_kernel_simd_softmax_args_t): input[2], output[2], rows, cols.
 // ==========================================================================
@@ -833,6 +947,16 @@ static inline uint32_t __snax_bingo_kernel_simd_softmax(void *arg, uint32_t out_
     volatile uint16_t *expb_l = (volatile uint16_t *)expb;
     uint32_t sum_h = beats * 32u;  // lane offset of the TAP trailing scalar beat
 
+    // Which reciprocal the rows > 1 path uses. See the long note at the call site: the
+    // datapath route squares Sexp in FP16, so it needs cols*cols to fit, and anything
+    // wider stays on the core's integer divide. `wide` is also how a build without the
+    // RSQRT func keeps working -- there the core path is the only one there is.
+#if BINGO_SIMD_HAS_RSQRT && BINGO_HAS_PREMAP_ELEMENTWISE && BINGO_SIMD_EW0_HAS_MUL
+    uint32_t wide = (cols > 255u);
+#else
+    uint32_t wide = 1u;
+#endif
+
     uint32_t rc;
 
     // reduce(MAX): x -> bt, one splatted scalar beat per row.
@@ -894,23 +1018,58 @@ static inline uint32_t __snax_bingo_kernel_simd_softmax(void *arg, uint32_t out_
                                          row_b, SIMD_EW_ADD, SIMD_FUNC_EXP,
                                          SIMD_RED_ADD | SIMD_RED_TAP);
         BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
-        // [core] per-row 1/Sexp, splatted across bt's row beat (two lanes per store).
-        BINGO_TRACE_MARKER(BINGO_TRACE_SCALAR_RUN_START);
-        if (rc == BINGO_RET_SUCC) {
-            uint32_t pad_row_h = (beats + 1u) * 32u;
-            for (uint32_t r = 0u; r < rows; r++) {
-                uint16_t inv = recip_f16(expb_l[r * pad_row_h + sum_h]);
-                uint32_t inv2 = ((uint32_t)inv << 16) | inv;
-                volatile uint32_t *row32 = (volatile uint32_t *)(bt_l + r * 32u);
-                for (uint32_t l = 0u; l < 16u; l++) row32[l] = inv2;
+        // THE RECIPROCAL, AND WHERE IT HAPPENS.
+        //
+        // The division by Sexp is one reciprocal per row, and this core cannot divide --
+        // rv32ima, no FPU -- so it used to be an integer `divu` per row plus a splat of
+        // the result across each row's whole 64 B beat: 16 volatile word stores a row,
+        // 512 of them at [32, 128]. On the reference app that broadcast loop and its twin
+        // were 85% of the whole kernel.
+        //
+        // StreamMap has no reciprocal either, but rsqrt(s*s) = 1/s exactly, and both
+        // halves are operators already in this chain. The square is one narrow pass over
+        // the tap beats; the RSQRT then rides the broadcast that had to replicate the
+        // scalar anyway -- that pass was carrying an identity multiply, so giving it
+        // func = RSQRT costs the same datapath it already spent. The scalar never leaves
+        // the block.
+        //
+        // WHY THIS IS BOUNDED, and why the core path stays for the shapes it is not. The
+        // transport between two chained operators is FP16, so it is s*s that has to fit,
+        // not s. Every term of Sexp is exp(x - max) <= 1, so s <= cols and the bound is
+        // cols*cols <= 65504, i.e. cols <= 255. Past that a pathological all-equal row
+        // overflows to inf and the answer becomes zeros -- so `wide` keeps those shapes on
+        // the integer reciprocal, which has no such bound. (The reference app's other way
+        // out is to swap the two operators -- RSQRT first, then square 1/sqrt(s) <= 1 --
+        // at the cost of rounding twice on the way down instead of once on the way up.)
+        if (!wide) {
+            // Square each row's tap beat: 2-D reader {the beat twice at stride 0, row}.
+            // `rows` beats in and out, against the plane's rows*beats.
+            BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
+            if (rc == BINGO_RET_SUCC)
+                rc = simd_pass_sq_beats((void *)((uint32_t)expb + beats * SIMD_BEAT_BYTES),
+                                        bt, rows, pad_row);
+            BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
+        } else {
+            // [core] per-row 1/Sexp, splatted across bt's row beat (two lanes per store).
+            BINGO_TRACE_MARKER(BINGO_TRACE_SCALAR_RUN_START);
+            if (rc == BINGO_RET_SUCC) {
+                uint32_t pad_row_h = (beats + 1u) * 32u;
+                for (uint32_t r = 0u; r < rows; r++) {
+                    uint16_t inv = recip_f16(expb_l[r * pad_row_h + sum_h]);
+                    uint32_t inv2 = ((uint32_t)inv << 16) | inv;
+                    volatile uint32_t *row32 = (volatile uint32_t *)(bt_l + r * 32u);
+                    for (uint32_t l = 0u; l < 16u; l++) row32[l] = inv2;
+                }
             }
+            BINGO_TRACE_MARKER(BINGO_TRACE_SCALAR_RUN_END);
         }
-        BINGO_TRACE_MARKER(BINGO_TRACE_SCALAR_RUN_END);
-        // bcast bt(1/Sexp) -> bc, padded (identity map, a = 1).
+        // Broadcast bt -> bc, padded so it shares a row stride with expb. `wide` decides
+        // what bt holds and therefore what this pass has to do to it: Sexp*Sexp needing
+        // the RSQRT, or a 1/Sexp the core already computed needing only the identity.
         BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
         if (rc == BINGO_RET_SUCC)
             rc = simd_pass_bcast_map(bt, bc, rows, beats, pad_row, SIMD_F32_ONE,
-                                     SIMD_FUNC_LINEAR);
+                                     wide ? SIMD_FUNC_LINEAR : SIMD_FUNC_RSQRT);
         BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
         // EW1(MUL) [+ quant]: out = exp * (1/Sexp). Both operands padded, packed write.
         BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
@@ -939,6 +1098,180 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_softmax_f16_f16(void *arg) {
 }
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_softmax_f16_i8(void *arg) {
     return __snax_bingo_kernel_simd_softmax(arg, SIMD_OUT_I8);
+}
+
+// ==========================================================================
+// TRANSPOSED FP16 softmax -- the same distribution over x^T, and 3x cheaper.
+//
+// Softmax has TWO per-row scalars where RMSNorm has one, and both sit in the middle of
+// the dependence chain: nothing can be exponentiated until the row max is known, and
+// nothing can be divided until every exponential has been summed. So everything the
+// transposed RMSNorm wins, this wins twice.
+//
+// One lane is one token, in every beat, forever. So acc[t] collects token t's WHOLE row
+// and SIMD_RED_LANEWISE just emits the accumulators -- no cross-lane fold for the max, no
+// fold for the sum, and no splat after either. The scalars then ride back in as STICKY
+// seed beats instead of replicated [T, D] planes:
+//
+//     1  reduce(MAX|LANEWISE)            x^T -> mx     one beat, all T tokens, NO FOLD
+//     2  map(a=-1, LINEAR) ONE BEAT      mx  -> seed   the negate, 21 cc of datapath
+//     3  EW0(ADD|STICKY) | Map(EXP) | Reduce(ADD|TAP|LANEWISE)
+//                                   seed+x^T -> ex + Sexp    three passes in one, and
+//                                                            TAP keeps the tile AND its
+//                                                            sums from a single sweep
+//     4  EW0(MUL|STICKY) | Map(RSQRT) ONE BEAT   Sexp -> 1/Sexp
+//     5  ew(MUL|STICKY)             1/Sexp+ex -> y^T   no plane, D+1 beats read
+//
+// Pass 4 is the whole reciprocal in one pass, and it is worth naming why it exists at
+// all: this core cannot divide, so every softmax on this block used to end with a number
+// that had to leave the datapath. StreamMap has no reciprocal either -- but
+// rsqrt(s*s) = 1/s exactly, and the square needs no operand but the number itself. Read
+// the sum beat twice at stride 0, let the sticky elementwise square it, let RSQRT invert
+// it. All T tokens at once, because all T sums live in the lanes of that one beat.
+//
+// Measured on snax_split_cluster at T=32 D=128: 1,748 cc against the row-major kernel's
+// 5,665, plus 236 + 385 cc of xDMA for the two block transposes.
+//
+// THE SAME TWO STRUCTURAL CONSTRAINTS AS THE TRANSPOSED RMSNORM, and one more.
+//
+//   rows MUST BE EXACTLY 32, the FP16 lanes in a beat -- at any other value a lane stops
+//   being one token and LANEWISE emits scalars that are not per-token, silently.
+//
+//   THE SEED BEAT MUST SIT DIRECTLY BELOW x^T, because pass 3's reader is one flat sweep
+//   of 1 + D beats. The caller states both addresses and this kernel checks they are
+//   adjacent.
+//
+//   AND THE SAME AGAIN INSIDE: pass 5 needs 1/Sexp directly below the exp tile. That
+//   buffer is this kernel's own scratch, so it allocates the beat of headroom itself and
+//   pass 4 writes into it -- no extra contract on the caller.
+//
+// cols is bounded by cols <= 255, for the reason spelled out in the row-major kernel: the
+// square is FP16 and Sexp <= cols. Refused rather than fudged, because the transposed
+// path has no core fallback to drop to.
+//
+// FP16 OUT ONLY, for the same reason as the transposed RMSNorm: y^T is not a layer's
+// final form, a transpose back has to happen either way, and the transposer's native
+// modes are 8- and 16-bit. Normalise, transpose back, reshape, THEN quantise.
+// ==========================================================================
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_softmax_t_f16_f16(void *arg) {
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_simd_softmax_t_args_t);
+    BINGO_REQUIRE_CORE(snax_is_simd_core(), "simd_softmax_t", "SIMD");
+#if !BINGO_HAS_STREAMMAP || !BINGO_HAS_STREAMREDUCE || !BINGO_HAS_STREAMELEMENTWISE || \
+    !BINGO_HAS_PREMAP_ELEMENTWISE || !BINGO_SIMD_HAS_RSQRT || !BINGO_SIMD_EW0_HAS_MUL
+    BINGO_SIMD_EXT_UNSUPPORTED(
+        "simd_softmax_t",
+        "StreamMap(EXP+RSQRT)+StreamReduce(MAX+ADD, LANEWISE)+a PRE-map "
+        "StreamElementwise(ADD+MUL, STICKY_B)");
+#else
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+    uint32_t *a = (uint32_t *)arg;
+    uint64_t seed_addr = make_u64(a[0], a[1]);
+    uint64_t in_addr = make_u64(a[2], a[3]);
+    uint64_t out_addr = make_u64(a[4], a[5]);
+    uint32_t rows = a[6];
+    uint32_t cols = a[7];
+    bingo_kernel_scratchpad_t *sp =
+        BINGO_GET_SP(arg, __snax_bingo_kernel_simd_softmax_t_args_t);
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+
+    BINGO_SIMD_REQUIRE_LOCAL(seed_addr, "simd_softmax_t", "seed");
+    BINGO_SIMD_REQUIRE_LOCAL(in_addr, "simd_softmax_t", "input");
+    BINGO_SIMD_REQUIRE_LOCAL(out_addr, "simd_softmax_t", "output");
+
+    if (rows != SIMD_BEAT_BYTES / 2u) {
+        printf_safe("[Cluster %d Core %d]: simd_softmax_t needs rows == %d (one FP16 lane "
+                    "per token); got %d. Split the tile.\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx(),
+                    (int)(SIMD_BEAT_BYTES / 2u), (int)rows);
+        return BINGO_RET_FAIL;
+    }
+    if ((uint32_t)seed_addr + SIMD_BEAT_BYTES != (uint32_t)in_addr) {
+        printf_safe("[Cluster %d Core %d]: simd_softmax_t needs the seed beat directly "
+                    "below x^T (seed %08x + %d != x %08x). Allocate ONE buffer of "
+                    "(1 + cols) beats.\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx(), (uint32_t)seed_addr,
+                    (int)SIMD_BEAT_BYTES, (uint32_t)in_addr);
+        return BINGO_RET_FAIL;
+    }
+    if (cols > 255u) {
+        printf_safe("[Cluster %d Core %d]: simd_softmax_t needs cols <= 255; got %d. The "
+                    "reciprocal squares Sexp in FP16 and Sexp <= cols, so cols*cols must "
+                    "stay under 65504.\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx(), (int)cols);
+        return BINGO_RET_FAIL;
+    }
+
+    // Scratch: [ mx | 1/Sexp seed | exp tile (cols beats) | its Sexp beat ].
+    //
+    // The middle two are ONE allocation on purpose: pass 5 sweeps the seed and the tile as
+    // a single flat stream, so the seed has to be the beat immediately below `ex`, and
+    // pass 4 writes it there. `mx` gets a slot of its own rather than borrowing the Sexp
+    // beat -- the two are live at different times and sharing would work, but it makes one
+    // pointer mean two things and costs 64 B to avoid. cols + 3 beats.
+    uint32_t need = (cols + 3u) * SIMD_BEAT_BYTES + 64u;
+    static uint32_t s_pool = 0u;
+    uint32_t scratch_lo, from_pool = 0u;
+    if (need <= BINGO_SIMD_SCRATCH_POOL) {
+        if (!s_pool) s_pool = snrt_l1_malloc(BINGO_SIMD_SCRATCH_POOL);
+        scratch_lo = s_pool;
+        from_pool = 1u;
+    } else {
+        scratch_lo = snrt_l1_malloc(need);
+    }
+    if (!scratch_lo) {
+        printf_safe("[Cluster %d Core %d]: softmax_t L1 scratch alloc failed!\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+    uint32_t base_lo = (scratch_lo + 63u) & ~63u;
+    void *mx = (void *)base_lo;                                // the LANEWISE max
+    void *ex_seed = (void *)(base_lo + SIMD_BEAT_BYTES);       // 1/Sexp, pass 5's seed
+    void *ex = (void *)(base_lo + 2u * SIMD_BEAT_BYTES);       // exp^T, then its sum beat
+    void *sum_beat = (void *)(base_lo + (cols + 2u) * SIMD_BEAT_BYTES);
+    void *seed = (void *)(uint32_t)seed_addr;
+    void *xt = (void *)(uint32_t)in_addr;
+
+    // 1. rows = 1, beats = cols: the whole tile is ONE "row", and the per-lane
+    //    accumulators ARE the per-token maxima. One beat out, no fold.
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
+    uint32_t rc = simd_pass_reduce(xt, mx, 1u, cols, SIMD_RED_MAX | SIMD_RED_LANEWISE,
+                                   1u);
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
+    // 2. Negate it into the CALLER's seed slot: out = -1 * mx, one beat. The subtract in
+    //    pass 3 is an ADD, so the sign has to flip somewhere, and a StreamMap immediate is
+    //    the cheapest place -- 21 cc of datapath, no core involvement.
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
+    if (rc == BINGO_RET_SUCC)
+        rc = simd_pass_map(mx, seed, 1u, SIMD_F32_NEG_ONE, 0u, SIMD_FUNC_LINEAR,
+                           SIMD_OUT_F16, 0u);
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
+    // 3. subtract, exponentiate, sum -- one sweep, TAP appending the sum beat.
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
+    if (rc == BINGO_RET_SUCC) rc = simd_pass_t_exp_sum(seed, ex, cols);
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
+    // 4. 1/Sexp for every token, from that one beat, into the slot below the tile.
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
+    if (rc == BINGO_RET_SUCC) rc = simd_pass_recip_beat(sum_beat, ex_seed);
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
+    // 5. Scale: each lane by its own token's reciprocal, latched once for the task.
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
+    if (rc == BINGO_RET_SUCC)
+        rc = simd_pass_ew_sticky(ex_seed, (void *)(uint32_t)out_addr, cols,
+                                 SIMD_EXT_STREAMELEMENTWISE_0,
+                                 SIMD_EXT_STREAMELEMENTWISE_0_CSR, SIMD_EW_MUL,
+                                 SIMD_OUT_F16, 0u);
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
+
+    if (!from_pool) snrt_l1_free(scratch_lo);
+    if (rc != BINGO_RET_SUCC) {
+        printf_safe("[Cluster %d Core %d]: softmax_t pass failed!\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+    sp->return_value = (uint32_t)out_addr;
+    sp->num_return_values = 0;
+    return BINGO_RET_SUCC;
+#endif
 }
 
 // ==========================================================================
@@ -1529,115 +1862,133 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_moe_combine_f16(void *arg) {
 }
 
 // ==========================================================================
-// Fused FP16 RoPE (interleaved / complex-rotation convention):
-//   xswap = adjacent fp16-pair swap of x
-//   out   = x (.) cos_full  +  xswap (.) sin_signed
+// RoPE AS ONE TASK -- the whole rotation, no scratch, no core work.
 //
-// cos_full (cos duplicated per pair) and sin_signed (sin with alternating sign) are
-// PRECOMPUTED tables -- the sign flip is not a datapath op. x is the runtime Q/K, so the
-// swap has to be computed on device, which is what makes in-layer rope_q / rope_k
-// possible at all.
+//     out = x (.) cos_full  +  xswap (.) sin_signed
 //
-// THE SWAP RUNS ON THE CORE, not on a DMA. Only hart 3 has the DMA ISA -- the cluster
-// asserts that at most one core carries it -- so a dm* instruction here traps with an
-// illegal instruction. The swap is therefore plain loads and stores: a [rows*cols/2]
-// halfword shuffle, which is real work on a scalar core. If RoPE ever lands on the
-// critical path, split it into an xDMA-core node that produces xswap and a SIMD-core
-// node that does the two multiplies and the add.
+// Two products and their sum is a combine, then a combine, and this block has an
+// elementwise slot on EACH side of the Map. So the whole rotation is one pass:
+//
+//     read   [ x_b , cos_b , xswap_b , sin_b ]      operand axis, FOUR deep
+//     EW0    MUL, operandCount 2  ->  [ x*cos , xswap*sin ]   pairs consecutive beats
+//     EW1    ADD, operandCount 2  ->  [ x*cos + xswap*sin ]   pairs those
+//     write  one beat
+//
+// Four operand beats per output beat instead of six, and the two intermediate tiles never
+// exist. Measured on the reference app at N=256: 207 cc of datapath over three passes
+// against 131 fused, and 1,184 cc of wall against 304 -- the second number also folds in
+// three arm/disarm round trips the fused form does not pay.
+//
+// THE FOUR OPERANDS MUST BE EQUALLY SPACED, because the reader adds ONE stride per axis:
+// addr = base + o*operand_stride + b*BEAT. So `ops_addr` is a single 4-row block
+//
+//     [ x | cos_full | xswap | sin_signed ]      each rows*cols*2 bytes, in THIS order
+//
+// and the order is the pairing, not a convention: EW0 multiplies operand 0 by operand 1
+// and operand 2 by operand 3, EW1 adds those two. Permute the block and the kernel
+// computes x*xswap + cos*sin, which is a well-formed tensor of nonsense.
+//
+// THIS KERNEL DOES NOT PRODUCE xswap. That is the whole point of the split, and the
+// reason is worth stating because it is the one part of RoPE still asking for hardware:
+//
+//   WHY THE SWAP CANNOT BE FOLDED INTO THE READER. The reader is affine over WHOLE TCDM
+//   WORDS. AddressGenUnit emits one address per spatial channel -- ptr + spatialOffset +
+//   temporalOffset -- and each channel fetches exactly one 64-bit TCDM word, SIMD_WIDTH /
+//   SIMD_SPATIAL_CHAN = 8 bytes, delivered in memory order. The adjacent-pair swap is a
+//   2-byte permutation INSIDE one of those words. It is not an awkward stride; it is below
+//   the granularity the AGU can name, and nothing between the channel and the operator
+//   lanes reorders bytes. `lane_stride` moves whole channels, not halfwords.
+//
+//   The same argument covers the xDMA, which is built from the same ReaderWriter: its one
+//   byte-permuting unit is the 8x8 block Transposer, and a block transpose is not an
+//   adjacent-pair swap.
+//
+//   TRANSPOSING DOES NOT HELP EITHER, and this is where RoPE differs from RMSNorm and
+//   softmax. There the problem was a REDUCTION across lanes, and transposing turned it
+//   into a reduction along beats that the accumulators do for free. RoPE has no reduction.
+//   Its coupling is between the two halves of a pair; transposing moves that from adjacent
+//   lanes to adjacent BEATS, which the operand axis CAN address -- but the two outputs of
+//   a pair then need cos and sin exchanged between them, and that exchange rides the same
+//   axis as the operand selection. One materialisation is traded for another.
+//
+//   WHAT DOES WORK TODAY is the iDMA, which is a real byte-addressed DMA and does the swap
+//   as two strided 2-byte copies: __snax_bingo_kernel_idma_pairwise_swap, on the DM core.
+//   So RoPE is TWO nodes -- a DM-core swap into slot 2, then this on the SIMD core -- and
+//   that is not a worse decomposition than one node, it is a much better one.
+//
+//   THERE USED TO BE A SELF-CONTAINED simd_rope that did the swap with a word-rotate loop
+//   on the SIMD core, and it was deleted rather than kept beside this one. It was not a
+//   fallback, it was the same kernel paying rows*cols/2 loads and stores on the busiest
+//   engine -- several thousand cycles at [32, 128] against a few hundred for all the
+//   arithmetic it fed. Two kernels for one job is how they drift; the split is strictly
+//   better and every caller can produce the block.
+//
+//   A StreamRoPE extension that rotated adjacent lanes inside the beat would remove the
+//   swap entirely, and it is now the ONLY part of RoPE asking for RTL. It did not use to
+//   be: this kernel was three separate elementwise passes until both slots were used at
+//   once, and two of those three were asking as well.
 // ==========================================================================
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_rope(void *arg) {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_simd_rope_args_t);
     BINGO_REQUIRE_CORE(snax_is_simd_core(), "simd_rope", "SIMD");
-#if !BINGO_HAS_STREAMELEMENTWISE
-    BINGO_SIMD_EXT_UNSUPPORTED("simd_rope", "StreamElementwise");
+#if !BINGO_HAS_STREAMELEMENTWISE || !BINGO_HAS_PREMAP_ELEMENTWISE || \
+    !BINGO_SIMD_EW0_HAS_MUL
+    BINGO_SIMD_EXT_UNSUPPORTED(
+        "simd_rope",
+        "a PRE-map StreamElementwise with MUL and a post-map one with ADD");
 #else
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
     uint32_t *a = (uint32_t *)arg;
-    uint64_t x_addr = make_u64(a[0], a[1]);
-    uint64_t cos_addr = make_u64(a[2], a[3]);
-    uint64_t sin_addr = make_u64(a[4], a[5]);
-    uint64_t out_addr = make_u64(a[6], a[7]);
-    uint32_t cols = a[8];
-    uint32_t rows = a[9];
+    uint64_t ops_addr = make_u64(a[0], a[1]);
+    uint64_t out_addr = make_u64(a[2], a[3]);
+    uint32_t cols = a[4];
+    uint32_t rows = a[5];
     bingo_kernel_scratchpad_t *sp =
         BINGO_GET_SP(arg, __snax_bingo_kernel_simd_rope_args_t);
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
-    BINGO_SIMD_REQUIRE_LOCAL(x_addr, "simd_rope", "x");
-    BINGO_SIMD_REQUIRE_LOCAL(cos_addr, "simd_rope", "cos");
-    BINGO_SIMD_REQUIRE_LOCAL(sin_addr, "simd_rope", "sin");
+    BINGO_SIMD_REQUIRE_LOCAL(ops_addr, "simd_rope", "operands");
     BINGO_SIMD_REQUIRE_LOCAL(out_addr, "simd_rope", "out");
 
-    uint32_t beats = cols >> 5u;
-    uint32_t row_beats = rows * beats;
-    uint32_t tot_b = row_beats * SIMD_BEAT_BYTES;
-    uint32_t num_elems = row_beats * 32u;
-    uint32_t row_b = beats * SIMD_BEAT_BYTES;
-
-    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_CFG_START);
-    // Scratch [ xswap | tmp1 | tmp2 ], 64-byte aligned for the beat reads.
-    uint32_t scratch_bytes = 3u * tot_b + 64u;
-    static uint32_t s_pool = 0u;
-    uint32_t scratch_lo, from_pool = 0u;
-    if (scratch_bytes <= BINGO_SIMD_SCRATCH_POOL) {
-        if (!s_pool) s_pool = snrt_l1_malloc(BINGO_SIMD_SCRATCH_POOL);
-        scratch_lo = s_pool;
-        from_pool = 1u;
-    } else {
-        scratch_lo = snrt_l1_malloc(scratch_bytes);
-    }
-    if (!scratch_lo) {
-        printf_safe("[Cluster %d Core %d]: rope L1 scratch alloc failed!\r\n",
-                    snrt_cluster_idx(), snrt_cluster_core_idx());
+    if (cols & 31u) {
+        printf_safe("[Cluster %d Core %d]: simd_rope needs cols %% 32 == 0 (one "
+                    "beat is 32 fp16 lanes); got %d.\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx(), (int)cols);
         return BINGO_RET_FAIL;
     }
-    uint32_t base_lo = (scratch_lo + 63u) & ~63u;
-    void *xswap = (void *)base_lo;
-    void *tmp1 = (void *)(base_lo + tot_b);
-    void *tmp2 = (void *)(base_lo + 2u * tot_b);
-    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_CFG_END);
 
-    // xswap: exchange each adjacent fp16 pair. Word-at-a-time, which is exactly one
-    // halfword rotate per 32-bit word -- the pairs are aligned, so no cross-word case.
-    BINGO_TRACE_MARKER(BINGO_TRACE_SCALAR_RUN_START);
-    {
-        const volatile uint32_t *src = (const volatile uint32_t *)(uint32_t)x_addr;
-        volatile uint32_t *dst = (volatile uint32_t *)xswap;
-        uint32_t words = num_elems >> 1u;
-        for (uint32_t i = 0u; i < words; i++) {
-            uint32_t w = src[i];
-            dst[i] = (w >> 16) | (w << 16);
-        }
-    }
-    BINGO_TRACE_MARKER(BINGO_TRACE_SCALAR_RUN_END);
+    uint32_t beats = (rows * cols) >> 5u;             // the whole tile, flat
+    uint32_t operand_stride = rows * cols * 2u;       // one row of the 4-row block
 
-    // tmp1 = x (.) cos_full
+    // The reader: {operand (4, operand_stride), beat (beats, 64 B)}. No row axis -- the
+    // rotation is elementwise, so the tile is one flat sweep and `rows` only sizes the
+    // block. The writer drains one beat per output.
+    snax_simd_shape_t in, out;
+    snax_simd_shape_2d(&in, (void *)(uint32_t)ops_addr, 4u, operand_stride, beats,
+                       SIMD_BEAT_BYTES);
+    snax_simd_shape_flat(&out, (void *)(uint32_t)out_addr, beats);
+    snax_write_simd_cfg_reg(SIMD_EXT_ENABLE_PTR,
+                            (1u << SIMD_EXT_STREAMELEMENTWISE_0) |
+                                (1u << SIMD_EXT_STREAMELEMENTWISE_1));
+    snax_write_simd_cfg_reg(SIMD_EXT_STREAMELEMENTWISE_0_CSR + 0, 2u);
+    snax_write_simd_cfg_reg(SIMD_EXT_STREAMELEMENTWISE_0_CSR + 1, SIMD_EW_MUL);
+    snax_write_simd_cfg_reg(SIMD_EXT_STREAMELEMENTWISE_1_CSR + 0, 2u);
+    snax_write_simd_cfg_reg(SIMD_EXT_STREAMELEMENTWISE_1_CSR + 1, SIMD_EW_ADD);
+
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
-    uint32_t rc = simd_pass_ew2((void *)(uint32_t)x_addr, (void *)(uint32_t)cos_addr,
-                                tmp1, rows, beats, row_b, SIMD_EXT_STREAMELEMENTWISE_1,
-                                SIMD_EXT_STREAMELEMENTWISE_1_CSR, SIMD_EW_MUL,
-                                SIMD_OUT_F16, 0u);
-    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
-    // tmp2 = xswap (.) sin_signed
-    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
-    if (rc == BINGO_RET_SUCC)
-        rc = simd_pass_ew2(xswap, (void *)(uint32_t)sin_addr, tmp2, rows, beats, row_b,
-                           SIMD_EXT_STREAMELEMENTWISE_1,
-                           SIMD_EXT_STREAMELEMENTWISE_1_CSR, SIMD_EW_MUL, SIMD_OUT_F16,
-                           0u);
-    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
-    // out = tmp1 (+) tmp2
-    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
-    if (rc == BINGO_RET_SUCC)
-        rc = simd_pass_ew2(tmp1, tmp2, (void *)(uint32_t)out_addr, rows, beats, row_b,
-                           SIMD_EXT_STREAMELEMENTWISE_1,
-                           SIMD_EXT_STREAMELEMENTWISE_1_CSR, SIMD_EW_ADD, SIMD_OUT_F16,
-                           0u);
+    uint32_t rc = simd_run_shapes(&in, &out);
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
 
-    if (!from_pool) snrt_l1_free(scratch_lo);
+    // DISARM, ABSOLUTELY. This kernel writes the enable mask directly while the pass
+    // helpers use snax_simd_use*(), which also write it whole -- but leaving EW0 armed
+    // would turn the NEXT 2-operand task into an unintended two-stage chain: EW0 folds its
+    // 2 beats into 1, EW1 waits for a partner beat that no longer exists, and the writer
+    // waits forever. The reference app hit exactly that, and it reported against the
+    // innocent pass that ran afterwards.
+    snax_write_simd_cfg_reg(SIMD_EXT_ENABLE_PTR, 0u);
+
     if (rc != BINGO_RET_SUCC) {
-        printf_safe("[Cluster %d Core %d]: rope pass failed!\r\n", snrt_cluster_idx(),
-                    snrt_cluster_core_idx());
+        printf_safe("[Cluster %d Core %d]: rope pass failed!\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx());
         return BINGO_RET_FAIL;
     }
     sp->return_value = (uint32_t)out_addr;

@@ -108,7 +108,11 @@ OP_SPEC = {
         ("simd_rmsnorm",     "__snax_bingo_kernel_simd_rmsnorm_f16_f16", 0, "rows_cols"),
     ],
     "simd_rope_1cluster": [
-        ("simd_rope",        "__snax_bingo_kernel_simd_rope",            0, "rows_cols"),
+        # The SIMD half only. RoPE is two nodes: the adjacent-pair swap runs on the DM
+        # core (an 8-byte-word AGU cannot express a 2-byte reorder) and the rotation is
+        # one fused task here. Measuring the SIMD node alone is what a SIMD cost model
+        # wants -- the swap is iDMA time on another engine.
+        ("simd_rope",        "__snax_bingo_kernel_simd_rope",      0, "rows_cols"),
     ],
     "simd_silu_1cluster": [
         ("simd_silu",        "__snax_bingo_kernel_simd_silu_f16_f16",    0, "n"),

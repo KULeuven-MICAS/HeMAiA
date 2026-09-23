@@ -125,20 +125,37 @@ class SnaxBingoKernelSimdScaleF16Args(BingoKernelArgs):
 
 
 class SnaxBingoKernelSimdRopeArgs(BingoKernelArgs):
-    """Fused FP16 RoPE: iDMA adjacent-pair swap of x + 3 StreamElementwise passes
-    (x*cos_full, xswap*sin_signed, +) -> out. cos_full/sin_signed are precomputed
-    tables; the kernel allocates xswap/tmp1/tmp2 scratch from L1. D = beats*32 fp16
-    elements per row, rows independent token positions."""
+    """RoPE as ONE SIMD task: out = x (.) cos_full + xswap (.) sin_signed, with the two
+    products on the PRE-map elementwise and their sum on the post-map one. Four operand
+    beats per output beat instead of six, and neither intermediate tile is ever written.
+    The reference app measures 207 -> 131 cc of datapath and 1,184 -> 304 cc of wall.
+
+    ONE BLOCK, FOUR ROWS, IN THIS ORDER. The reader adds a single stride per axis, so the
+    operands must be equally spaced -- and the order IS the pairing, because EW0 multiplies
+    operand 0 by operand 1 and operand 2 by operand 3 and EW1 adds those two:
+
+        ops_addr -> [ x | cos_full | xswap | sin_signed ]   each rows*cols*2 bytes
+
+    Permute the block and the kernel computes x*xswap + cos*sin, which is a well-formed
+    tensor of nonsense. The natural way to build it is one allocation with four views: the
+    producer of Q/K writes slot 0, the table loads write slots 1 and 3.
+
+    THIS KERNEL DOES NOT FILL SLOT 2, and that is the whole point of the split. xswap is an
+    adjacent fp16-pair permutation -- a 2-byte reorder inside one 8-byte TCDM word, which
+    is below the granularity the reader's AGU can address, so no stride expresses it.
+    Produce it with SnaxBingoKernelIdmaPairwiseSwapArgs on the DM core and make this node
+    depend on that one."""
+
     KERNEL_NAME = "__snax_bingo_kernel_simd_rope"
 
-    def __init__(self, x_addr: Union[BingoMemAlloc, int], cos_addr: Union[BingoMemAlloc, int],
-                 sin_addr: Union[BingoMemAlloc, int], out_addr: Union[BingoMemAlloc, int],
-                 cols: int, rows: int = 1):
-        self.x_addr = x_addr
-        self.cos_addr = cos_addr
-        self.sin_addr = sin_addr
+    def __init__(self, ops_addr: Union[BingoMemAlloc, int],
+                 out_addr: Union[BingoMemAlloc, int], cols: int, rows: int = 1):
+        if cols % 32:
+            raise ValueError(f"cols={cols} must be a multiple of 32 -- one SIMD beat is "
+                             f"64 B = 32 fp16 lanes and a partial beat is not handled.")
+        self.ops_addr = ops_addr
         self.out_addr = out_addr
-        self.cols = cols        # per-row fp16 length D (a multiple of 32)
+        self.cols = cols
         self.rows = rows
 
     def get_struct_name(self) -> str:
@@ -146,9 +163,7 @@ class SnaxBingoKernelSimdRopeArgs(BingoKernelArgs):
 
     def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
         a = {}
-        self._process_addr(self.x_addr, "x_addr", a, handle_name_map)
-        self._process_addr(self.cos_addr, "cos_addr", a, handle_name_map)
-        self._process_addr(self.sin_addr, "sin_addr", a, handle_name_map)
+        self._process_addr(self.ops_addr, "ops_addr", a, handle_name_map)
         self._process_addr(self.out_addr, "out_addr", a, handle_name_map)
         a["cols"] = str(self.cols)
         a["rows"] = str(self.rows)
@@ -251,9 +266,18 @@ class _SimdRowOpArgs(BingoKernelArgs):
 
 
 class SnaxBingoKernelSimdSoftmaxF16F16Args(_SimdRowOpArgs):
-    """Whole FP16 softmax in ONE DM-core kernel -> fp16 output. reduce-MAX, device negate,
-    sub-max, merged EXP+Sexp, integer reciprocal (rv32iM divu), normalize. Host does only
-    Load / Store / Check."""
+    """Whole FP16 softmax in ONE SIMD-core kernel -> fp16 output. reduce-MAX, negate fused
+    into the broadcast, then sub-max + EXP + row-sum as a SINGLE pass (the pre-map
+    elementwise is what makes that possible), then the reciprocal and the scale.
+
+    THE RECIPROCAL IS ON THE DATAPATH NOW, for rows > 1: this core cannot divide, but
+    rsqrt(s*s) = 1/s exactly, so the square rides one narrow elementwise pass over the
+    tap beats and the inversion rides the broadcast that had to replicate the scalar
+    anyway. That removed an integer `divu` and 16 volatile stores PER ROW. The core's
+    integer reciprocal survives in exactly two places, both deliberate: at rows == 1,
+    where one scalar folds into a StreamMap immediate and the core route is both faster
+    and slightly more accurate; and past cols == 255, where the FP16 square of Sexp would
+    overflow. Host does only Load / Store / Check."""
     KERNEL_NAME = "__snax_bingo_kernel_simd_softmax_f16_f16"
     STRUCT_NAME = "__snax_bingo_kernel_simd_softmax_args_t"
 
@@ -263,6 +287,52 @@ class SnaxBingoKernelSimdSoftmaxF16I8Args(_SimdRowOpArgs):
     softmax output is in [0,1]). output_addr is the int8 [rows, cols] buffer."""
     KERNEL_NAME = "__snax_bingo_kernel_simd_softmax_f16_i8"
     STRUCT_NAME = "__snax_bingo_kernel_simd_softmax_args_t"
+
+
+class SnaxBingoKernelSimdSoftmaxTF16F16Args(BingoKernelArgs):
+    """The same softmax over x^T -- one token per FP16 LANE, which is ~3x cheaper on the
+    SIMD core. Softmax has TWO per-row scalars, and transposing removes the cost of both:
+    the row max and the row sum fall out of the per-lane accumulators (SIMD_RED_LANEWISE)
+    with no cross-lane fold, and each rides back in as a sticky seed beat rather than a
+    replicated [T, D] plane.
+
+    It also removes the last thing that had to leave the datapath. This core cannot
+    divide, so the normalisation used to end in an integer reciprocal per row; StreamMap
+    has no reciprocal either, but rsqrt(s*s) = 1/s exactly and the square needs no operand
+    but the number itself. All T tokens are inverted in ONE pass, because all T sums live
+    in the lanes of one beat.
+
+    `rows` MUST BE 32 -- the FP16 lanes in one 512-bit beat -- and `cols` <= 255, because
+    the square is FP16 and Sexp <= cols. Both are checked by the kernel.
+
+    seed_addr AND input_addr ARE ONE ALLOCATION: allocate (1 + cols) * 64 bytes, pass the
+    base as `seed_addr` and base + 64 as `input_addr`. The kernel writes the negated row
+    maxima into the seed beat and then sweeps seed-then-tile as one flat stream, so the
+    two must be adjacent; it checks rather than trusts. (The second such buffer, 1/Sexp
+    below the exp tile, is the kernel's own scratch.)"""
+
+    KERNEL_NAME = "__snax_bingo_kernel_simd_softmax_t_f16_f16"
+
+    def __init__(self, seed_addr: Union[BingoMemAlloc, int],
+                 input_addr: Union[BingoMemAlloc, int],
+                 output_addr: Union[BingoMemAlloc, int], rows: int, cols: int):
+        self.seed_addr = seed_addr
+        self.input_addr = input_addr
+        self.output_addr = output_addr
+        self.rows = rows
+        self.cols = cols
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_simd_softmax_t_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.seed_addr, "seed_addr", a, handle_name_map)
+        self._process_addr(self.input_addr, "input_addr", a, handle_name_map)
+        self._process_addr(self.output_addr, "output_addr", a, handle_name_map)
+        a["rows"] = str(self.rows)
+        a["cols"] = str(self.cols)
+        return a
 
 
 class SnaxBingoKernelSimdRmsnormF16F16Args(_SimdRowOpArgs):
