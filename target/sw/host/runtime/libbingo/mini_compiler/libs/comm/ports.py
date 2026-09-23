@@ -420,6 +420,38 @@ class Block:
     def build(self, ctx: "Ctx", bound: dict) -> BlockResult:
         raise NotImplementedError
 
+    # ---- the family this block belongs to, for the resolver in link.py -----------------
+
+    def variants(self) -> list:
+        """The parameter dicts this block could equally well be realised with.
+
+        DEFAULT: just as constructed. A block with a pinned signature has nothing to
+        choose between, so it offers one variant and the resolver has no decision to make
+        -- which is exactly right, and is why no existing block needs changing.
+
+        A block that owns knobs -- a layout the caller left unset, a kernel it may pick
+        between -- overrides this and returns one dict per realisation. It does NOT have
+        to filter them: an illegal one raises in __init__ and the resolver drops it, so
+        the rules live in the constructor and nowhere else.
+        """
+        return [{}]
+
+    def respec(self, **params) -> "Block":
+        """A sibling of this block with some configuration fields changed.
+
+        Defaults to rebuilding from this block's own cfg, which every block in the library
+        carries as a frozen dataclass. A block whose configuration is not one dataclass
+        overrides this; nothing else about it has to change.
+        """
+        if not params:
+            return self
+        cfg = getattr(self, "cfg", None)
+        if cfg is None:
+            raise NotImplementedError(
+                f"{type(self).__name__}.variants() offers {sorted(params)} but the block "
+                f"has no `cfg` to respec from. Give it one, or override respec().")
+        return type(self)(cfg=replace(cfg, **params))
+
 
 # ======================================================================================
 # The factory a block builds through

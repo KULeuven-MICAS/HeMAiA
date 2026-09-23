@@ -90,21 +90,27 @@ The caller states `in_layout` (what the producer hands over), `out_layout` and `
   route or of an Xpose_in; a col_major x feeding the col_major kernel is copied into this
   block's headroom buffer (Stage_xt) unless the producer already wrote there -- see 5.
 
-THE BLOCK DOES NOT OVERRULE THE CALLER. row_major on both ends stays on the row_major
-kernel although Xpose_in . col_major . Xpose_out would be cheaper on the SIMD: whether that
-trade is worth making depends on the neighbours, which a block cannot see. That choice is
-comm/layout_pass.py's (section 4).
+THE BLOCK DOES NOT OVERRULE THE CALLER. `in_layout` and `out_layout` PINNED to row_major
+stay on the row_major kernel although Xpose_in . col_major . Xpose_out would be cheaper on
+the SIMD: a pinned field is a boundary the layer said it wanted, and a block that quietly
+picked something else would make the layer's own source a lie. Leaving them unset is how a
+layer says it does not mind -- see section 4.
 
 TWO MORE REFUSALS, both about the transposer: a route that needs an Xpose on a shape off
 its fast path (rows % 8 or cols % 4) is refused, because the fallback is a DM-core element
 loop two orders of magnitude slower.
 
 ======================================================================================
-4. CHOOSING BETWEEN ROUTES: comm/layout_pass.py
+4. WHICH ROUTE, AND WHO DECIDES
 ======================================================================================
 
-The block reports what a configuration costs, exactly, from the same decision build()
-makes -- nothing is measured, so nothing rots:
+`in_layout`, `out_layout` and `out_dtype` may be left UNSET. Then they are knobs this
+block owns: `variants()` offers every combination, each one realised through the
+constructor above -- so the refusals in section 3 are what prunes the list -- and the
+pipeline picks the realisation whose boundary matches the neighbours at the least cost.
+
+The block prices itself from the same decision build() makes, so nothing is measured and
+nothing rots:
 
     simd_folds()    cross-lane folds: `rows` on the row_major kernel, 0 on col_major
     simd_passes()   SIMD tasks: 3 for the plain routes, 3 or 4 plus any repeat the
@@ -112,10 +118,16 @@ makes -- nothing is measured, so nothing rots:
     xdma_passes()   Xpose_in + Xpose_out
     idma_passes()   Load_x / Stage_xt
 
-The planner ranks folds, then SIMD passes, then xDMA, then iDMA. `RMSNorm.options()` lists
-every configuration for it to try, blocked outputs included. Make the Reshape and the
-Quantize after the norm OPTIONAL steps and the planner weighs the fused route (norm writes
-A/int8, both steps skipped) against the unfused ones on that same objective.
+Ranked folds first, then SIMD passes, then xDMA, then iDMA (comm/variant.py). That order
+is why a pinned row_major/row_major pair is NOT what an open one resolves to: given the
+choice, the block would rather pay two transposes on an idle engine than 32 serialised
+folds on the busy one.
+
+THE CHOICE IS INSIDE THE BOUNDARY, NOT ACROSS IT. Whatever the norm picks, it still
+presents exactly the ports it declared, so a Reshape or a Quantize the layer wrote after
+it is still built, still in the layer's own order. Writing A/int8 straight out of the
+kernel is something a layer asks for by connecting the norm to the GEMM directly -- not
+something that happens to stages it wrote down.
 
 ======================================================================================
 5. BUFFERS AND ENGINES
@@ -143,6 +155,7 @@ transpose kernel, a device ABI change. Routes with a blocked output never pay it
 write the operand directly.
 """
 
+import itertools
 from dataclasses import dataclass
 from typing import NamedTuple, Optional
 
@@ -153,6 +166,7 @@ from bingo_kernel_args import (SnaxBingoKernelIdma1dCopyArgs,
 from ...comm import (Block, BlockResult, Ctx, DType, Layout, MemLevel, Port,
                      PortSpec)
 from ...comm.ports import at_offset
+from ...comm.variant import free_fields
 from .common import BEAT_BYTES, LANES_PER_BEAT, check_pow2, check_row
 
 _ORIENTATIONS = (Layout.ROW_MAJOR, Layout.COL_MAJOR)
@@ -215,12 +229,15 @@ class NormCfg:
     rows: int
     cols: int
     cluster: int = 0
-    # What the producer hands over: ROW_MAJOR, or COL_MAJOR (the bytes stored [cols, rows]).
-    in_layout: Layout = Layout.ROW_MAJOR
-    # What the consumer wants: an orientation, or a GEMM operand layout, A or B.
-    out_layout: Layout = Layout.ROW_MAJOR
-    # F16, or I8 -- quantised inside the kernel. Not on a col_major output.
-    out_dtype: DType = DType.F16
+    # THE THREE BOUNDARY FIELDS. Left None, each is a knob this block owns and the
+    # pipeline resolves from the neighbours; pinned, it is a constraint every realisation
+    # has to meet. A layer pins the ones it cares about and leaves the rest open.
+    #   in_layout   what the producer hands over: ROW_MAJOR, or COL_MAJOR ([cols, rows])
+    #   out_layout  an orientation, or a GEMM operand layout, A or B
+    #   out_dtype   F16, or I8 quantised inside the kernel. Not on a col_major output.
+    in_layout: Optional[Layout] = None
+    out_layout: Optional[Layout] = None
+    out_dtype: Optional[DType] = None
     # The Fp16ToInt8 scale, FP32 bits. 0 keeps the kernel's baked 64.0 (a normalised row
     # sits in ~[-2, 2]); a layer with a data-derived scale passes it here.
     inv_scale_f32bits: int = 0
@@ -243,6 +260,14 @@ class RMSNorm(Block):
         c = self.cfg
         check_row(c.cols, "RMSNorm")
         check_pow2(c.cols, "RMSNorm")          # 1/D is an exponent subtract on every route
+        # A TEMPLATE: a boundary field is still open, so there is no route to pick yet.
+        # The shape checks above still run, because they hold for every realisation and
+        # failing them early names the real problem instead of burying it in a list of
+        # refused variants.
+        self.free = free_fields(c, ("in_layout", "out_layout", "out_dtype"))
+        if self.free:
+            self.route, self._probe, self._buf = None, None, None
+            return
         if c.in_layout not in _ORIENTATIONS:
             raise ValueError(
                 f"RMSNorm: in_layout={c.in_layout} is a blocked layout. The kernel reads a "
@@ -266,7 +291,7 @@ class RMSNorm(Block):
                 f"{self.route.kernel}, or ask for an output that needs no transpose.")
 
         # A blocked output: derive (and verify) the kernel's read order NOW, so a mesh no
-        # order fits is refused at construction -- which is also where layout_pass drops it.
+        # order fits is refused at construction, which is also where the resolver drops it.
         self._probe = None
         if c.out_layout in _BLOCKED:
             if c.mesh is None:
@@ -277,22 +302,30 @@ class RMSNorm(Block):
             self._probe = self._kernel_args(0, 0, 64)
         self._buf = None
 
-    @classmethod
-    def options(cls, in_layouts=_ORIENTATIONS, out_layouts=_ORIENTATIONS + _BLOCKED,
-                out_dtypes=(DType.F16, DType.I8), in_place=True) -> list:
-        """Every configuration, as parameter dicts for comm.layout_pass. Illegal ones are
-        fine to include: the constructor refuses them and the planner drops them."""
-        out = []
-        for i in in_layouts:
-            for o in out_layouts:
-                for dt in out_dtypes:
-                    for ip in ((False, True) if (in_place and i == Layout.COL_MAJOR)
-                               else (False,)):
-                        out.append({"in_layout": i, "out_layout": o, "out_dtype": dt,
-                                    "x_in_place": ip})
-        return out
+    def variants(self) -> list:
+        """Every boundary this norm could present, over the fields left open.
 
-    # ---- what it costs, for comm.layout_pass (section 4) -------------------------------
+        `x_in_place` is deliberately NOT among them. It is a promise about what some other
+        block will do -- that the producer wrote x^T into alloc()'s slot -- and a resolver
+        choosing it would be choosing on another block's behalf. It stays the caller's,
+        checked against the binding in build().
+        """
+        if not self.free:
+            return [{}]
+        choices = {"in_layout": _ORIENTATIONS,
+                   "out_layout": _ORIENTATIONS + _BLOCKED,
+                   "out_dtype": (DType.F16, DType.I8)}
+        return [dict(zip(self.free, combo))
+                for combo in itertools.product(*(choices[n] for n in self.free))]
+
+    def _check_realised(self) -> None:
+        if self.free:
+            raise ValueError(
+                f"RMSNorm is a template: {', '.join(self.free)} not decided. Either pin "
+                f"them, or add it to a Pipeline -- run() resolves them from the "
+                f"neighbours and builds the realisation it picked.")
+
+    # ---- what it costs, for the pipeline resolver (section 4) --------------------------
 
     @property
     def col_major(self) -> bool:
@@ -347,6 +380,7 @@ class RMSNorm(Block):
     def alloc(self, ctx: Ctx):
         """Allocate the seed + tile buffer and return the TILE handle, for a producer to
         fill. Only the col_major kernel has one; aiming a producer at it removes Stage_xt."""
+        self._check_realised()
         if not self.col_major:
             raise ValueError(
                 "RMSNorm.alloc() on a row_major-kernel route: there is no headroom buffer. "
@@ -369,6 +403,7 @@ class RMSNorm(Block):
 
     @property
     def inputs(self) -> dict:
+        self._check_realised()
         c = self.cfg
         return {"x": PortSpec(c.in_layout, DType.F16, (c.rows, c.cols), mem_level=None,
                               doc="fp16. col_major means the same tensor stored [cols, "
@@ -382,6 +417,7 @@ class RMSNorm(Block):
 
     @property
     def outputs(self) -> dict:
+        self._check_realised()
         c = self.cfg
         return {"y": PortSpec(c.out_layout, c.out_dtype, (c.rows, c.cols),
                               mem_level=MemLevel.L1,
@@ -390,6 +426,7 @@ class RMSNorm(Block):
     # ---- building: the route, node by node ---------------------------------------------
 
     def build(self, ctx: Ctx, bound: dict) -> BlockResult:
+        self._check_realised()
         c, r = self.cfg, self.route
         g = ctx.at(c.cluster)
         src = bound["x"].handle

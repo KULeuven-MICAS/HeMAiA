@@ -30,12 +30,13 @@ if _MC not in _sys.path:
 import _bingo_paths  # noqa: F401,E402
 
 from . import block, comm, verify  # noqa: E402
-from .comm import (Block, BlockResult, Ctx, DType, Layout, LayoutPlan,  # noqa: E402
-                   LayoutStep, MemLevel, Pipeline, Port, PortSpec, assign_layouts,
-                   at_offset, bring_in, check_contract, level_of, link, plan)
+from .comm import (Block, BlockResult, Cost, Ctx, DType, Layout,  # noqa: E402
+                   MemLevel, Pipeline, Port, PortSpec, Ref, Stage, Variant,
+                   at_offset, bring_in, check_contract, level_of, link, plan,
+                   variants_of)
 from .verify import checks  # noqa: E402
 
-__all__ = ["Block", "BlockResult", "Ctx", "Pipeline", "Port", "PortSpec",
-           "LayoutPlan", "LayoutStep", "assign_layouts",
+__all__ = ["Block", "BlockResult", "Ctx", "Pipeline", "Port", "PortSpec", "Ref", "Stage",
+           "Cost", "Variant", "variants_of",
            "at_offset", "check_contract", "level_of", "link", "DType", "Layout", "MemLevel",
            "bring_in", "plan", "checks", "block", "comm", "verify"]

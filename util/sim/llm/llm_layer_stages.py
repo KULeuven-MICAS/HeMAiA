@@ -95,11 +95,74 @@ import sys
 
 from bingo_kernel_args import (SnaxBingoKernelIdma1dCopyArgs,
                               SnaxBingoKernelSimdRmsnormArgs)
-from libs import (Ctx, DType, Layout, MemLevel, Pipeline, Port, PortSpec,
-                  at_offset)
+from libs import (Block, BlockResult, Ctx, DType, Layout, MemLevel, Pipeline,
+                  Port, PortSpec, at_offset)
 from libs.block import (Dequantize, FlashAttention, Linear, Quantize, RMSNorm,
                         Reshape, Residual, fa_gather, shard_rows)
 from libs.verify import checks
+
+class _ShardedNorm(Block):
+    """RMSNorm with its `rows` split across the clusters, one slice each.
+
+    A BLOCK, so that it is emitted in the order it was added like every other stage. The
+    pipeline resolves every boundary before it emits anything, so work built outside it
+    lands wherever the application happened to call it -- and node creation order is
+    dispatch order on this machine.
+
+    Measured on RTL, the two RMSNorms cost 110 us each -- 40% of cluster 0's busy time and
+    26% of every engine's, more than the GEMMs and the reshapes together. The reason is in
+    the kernel: the multi-row path takes an integer sqrt and reciprocal PER ROW and then
+    splats the result across a 64-byte beat with 16 volatile stores, so ~60 us of each
+    call is a scalar loop over 32 rows on a core with no FPU. Rows are independent, so
+    that loop divides.
+    """
+
+    name = "rmsnorm_sharded"
+
+    def __init__(self, ctx, rows, cols, clusters, node_name, hs, *, on_l1, l3_key):
+        self.ctx, self.rows, self.cols = ctx, rows, cols
+        self.clusters, self.node_name, self.hs = clusters, node_name, hs
+        self.on_l1, self.l3_key = on_l1, l3_key
+
+    @property
+    def _spec(self) -> PortSpec:
+        return PortSpec(Layout.ROW_MAJOR, DType.F16, (self.rows, self.cols),
+                        mem_level=MemLevel.L1)
+
+    @property
+    def inputs(self) -> dict:
+        return {"x": self._spec} if self.on_l1 else {}
+
+    @property
+    def outputs(self) -> dict:
+        return {"y": self._spec}
+
+    def build(self, ctx: Ctx, bound: dict) -> BlockResult:
+        d, name = self.cols, self.node_name
+
+        def make(g, in_h, nrows, dep, out_h):
+            return g.node(f"Rmsnorm_{name}", self.ctx.simd,
+                          "__snax_bingo_kernel_simd_rmsnorm",
+                          SnaxBingoKernelSimdRmsnormArgs(
+                              input_addr=in_h, output_addr=out_h,
+                              rows=nrows, cols=d), dep)
+
+        src = bound["x"] if self.on_l1 else None
+        # THE ORDERING GOES IN THROUGH `after`, not through the linker. shard_rows hangs
+        # every cluster's load (or the root's scatter) off it, so the producer is already
+        # an ancestor of each slice by the time the linker sees this block -- which is why
+        # the input port below reports no ends: there is nothing left for it to join.
+        out, ends = shard_rows(
+            self.ctx, src=src.handle if self.on_l1 else self.hs[self.l3_key],
+            rows=self.rows, cols=d, clusters=list(range(self.clusters)), make=make,
+            root=0, name=name, after=tuple(src.ends) if self.on_l1 else (),
+            src_on_l1=self.on_l1)
+        port = Port(self._spec, out, tuple(ends), cluster=0, name="y")
+        return BlockResult(
+            outputs={"y": port},
+            inputs={"x": Port(self._spec, src.handle, (), name="x")} if self.on_l1 else {},
+            nodes=list(ends))
+
 
 STAGE_NAMES = {1: "norm", 2: "proj", 3: "attn", 4: "resid", 5: "ffn", 6: "layer"}
 # The LAST check each rung emits. Rung 3 adds no check of its own -- FlashAttention's
@@ -112,35 +175,33 @@ FINAL_CHECK = {1: "norm1", 2: "proj_q", 3: "proj_q",
 VERIFY_MODES = ("all", "final", "slices", "none")
 MAX_STAGE = 6
 
-# WHICH RMSNORM KERNEL THE LADDER RUNS. One word, because this is an A/B and the two arms
-# have to be swappable over an otherwise identical graph.
+# WHICH RMSNORM KERNEL THE LADDER RUNS. Stating a layout PINS the boundary, so this one
+# word decides the kernel over an otherwise identical graph -- which is what makes it an
+# A/B. Leaving the norm's layouts unset instead lets libs/block/simd/norm.py pick.
 #
-#   "row_major"  reduce(SUMSQ) -> bcast carrying StreamMap(1/D, RSQRT) -> ew2(MUL). One
-#               node, no layout change. The RSQRT func already took this path from
-#               7,717 cc to 3,135 at [32, 128] by deleting the core's scalar epilogue.
-#   "auto"      transposed wherever rows == 32: LANEWISE reduce, sticky scale, no
-#               cross-lane fold and no broadcast plane -- 1,073 cc, a further 2.9x on the
-#               SIMD -- at the cost of two xDMA block transposes around it.
+#   row_major   reduce(SUMSQ) -> bcast carrying StreamMap(1/D, RSQRT) -> ew2(MUL). One
+#               node, no layout change, 3,135 cc at [32, 128].
+#   unpinned    the col_major kernel wherever rows == 32: LANEWISE reduce, sticky scale,
+#               no cross-lane fold and no broadcast plane -- 1,073 cc, 2.9x on the SIMD --
+#               at the cost of two xDMA block transposes around it.
 #
-# IT IS PINNED TO "row_major" ON PURPOSE. The transposed arm is three things at once that
-# have never run on this machine: a new kernel entry point
-# (the col_major arm of __snax_bingo_kernel_simd_rmsnorm), a seed-adjacency contract, and two new
-# xDMA transposer nodes per norm. Turning it on here would change a graph that PASSES
-# today, while the token-parallel arm is still being debugged, and any new failure would
-# then have two candidate causes.
+# IT IS PINNED ON PURPOSE. The col_major arm is three things at once that have not run on
+# this machine: a second kernel entry point (the col_major arm of
+# __snax_bingo_kernel_simd_rmsnorm), a seed-adjacency contract, and two xDMA transposer
+# nodes per norm. Unpinning would change a graph that PASSES while the token-parallel arm
+# is still being debugged, and any new failure would then have two candidate causes.
 #
-# WHAT HAS TO HAPPEN BEFORE FLIPPING IT to "auto". simd_rmsnorm_t_1cluster is the test
-# vehicle and it now exists: [32, 128], both kernels over one tile, four checks -- the
-# input transpose bit-exact, the norm against the exact 1/sqrt golden, the round trip back
-# to row-major, and the row-major arm over the same x. It has NOT been run on RTL yet.
-# Once it is green, flipping this word is a clean single-variable A/B over an otherwise
-# identical graph. (simd_rmsnorm_1cluster cannot reach the transposed path at all: it
-# sweeps rows {1, 2, 4, 8} and the LANEWISE reduce needs rows == 32 exactly.)
+# WHAT HAS TO HAPPEN BEFORE UNPINNING. simd_rmsnorm_t_1cluster is the test vehicle:
+# [32, 128], both kernels over one tile, four checks -- the input transpose bit-exact, the
+# norm against the exact 1/sqrt golden, the round trip back to row-major, and the
+# row-major arm over the same x. It has NOT been run on RTL. Once it is green, dropping
+# these two arguments is a clean single-variable A/B. (simd_rmsnorm_1cluster cannot reach
+# the col_major path at all: it sweeps rows {1, 2, 4, 8} and LANEWISE needs rows == 32.)
 NORM_LAYOUT = Layout.ROW_MAJOR
 
 # Per-stage absolute tolerance on the fp16 compare. THESE TRACK THE DEQUANTISE: every
-# projection is now scaled back to the activation domain, so the tensors are O(1)-O(11)
-# rather than O(1000), and a tolerance sized for the old scale would accept anything.
+# projection is scaled back to the activation domain, so the tensors are O(1)-O(11), and a
+# tolerance sized for an unscaled O(1000) tensor would accept anything.
 # Re-measured on the current chain over 300 per-row perturbations at the device's 0.12%
 # rsqrt error (see simd_rmsnorm_1cluster):
 #
@@ -202,13 +263,21 @@ def build(ctx: Ctx, p: dict, data: dict, hs: dict, *, stages: int = MAX_STAGE,
         """Bind a staged array as a port; the level is read off the handle."""
         return Port(PortSpec(layout, dtype, shape), handle, ())
 
-    def check(tag, port, golden_key, elems):
-        """Read a stage's output back and compare. Ordered on the port's own producer."""
+    def check(tag, ref, golden_key, elems):
+        """Read a stage's output back and compare. Ordered on the port's own producer.
+
+        REGISTERED, NOT BUILT: the pipeline resolves the whole chain before it emits any
+        of it, so `ref` has no buffer while the chain is still being written. raw() keeps
+        this at the point it appears here, so the dispatch order is the order on the page.
+        """
         if verify == "none" or (verify == "final" and tag != FINAL_CHECK[stages]):
             return
-        checks.readback_and_check(
-            ctx.at(0), f"llm_{tag}", src=port.handle, golden=hs[golden_key],
-            dtype=DType.F16, elems=elems, tol=_TOL[tag], after=port.ends[-1])
+        def go():
+            port = ref.port if hasattr(ref, "port") else ref
+            checks.readback_and_check(
+                ctx.at(0), f"llm_{tag}", src=port.handle, golden=hs[golden_key],
+                dtype=DType.F16, elems=elems, tol=_TOL[tag], after=port.ends[-1])
+        pipe.raw(go, f"check_{tag}")
 
     # ALLOCATED ONCE. Two BingoMemAlloc objects with the same name are one buffer to the
     # emitter and two live ranges to the L1 packer, which would split the tensor in half.
@@ -222,7 +291,7 @@ def build(ctx: Ctx, p: dict, data: dict, hs: dict, *, stages: int = MAX_STAGE,
     x_port = Port(PortSpec(Layout.ROW_MAJOR, DType.F16, (T, d), mem_level=MemLevel.L1),
                   x_l1, (ld_x,))
 
-    def rmsnorm(name, src, *, on_l1, after=()):
+    def rmsnorm(name, src, *, on_l1):
         """RMSNorm over `T` rows, on one cluster or split across all of them.
 
         WHY THIS ONE. Measured on RTL, the two RMSNorms cost 110 us each -- 40% of
@@ -233,23 +302,18 @@ def build(ctx: Ctx, p: dict, data: dict, hs: dict, *, stages: int = MAX_STAGE,
         rows on a core with no FPU. Rows are independent, so that loop divides.
         """
         if shard == "none":
-            return pipe.add(RMSNorm(rows=T, cols=d, cluster=0,
-                                    in_layout=NORM_LAYOUT, out_layout=NORM_LAYOUT),
-                            name=name,
-                            bind={"x": src}).result.outputs["y"]
-
-        def make(g, in_h, nrows, dep, out_h):
-            return g.node(f"Rmsnorm_{name}", ctx.simd,
-                          "__snax_bingo_kernel_simd_rmsnorm",
-                          SnaxBingoKernelSimdRmsnormArgs(
-                              input_addr=in_h, output_addr=out_h,
-                              rows=nrows, cols=d), dep)
-
-        out, ends = shard_rows(ctx, src=src.handle if on_l1 else hs[src], rows=T, cols=d,
-                               clusters=list(range(ncl)), make=make, root=0,
-                               name=name, after=after, src_on_l1=on_l1)
-        return Port(PortSpec(Layout.ROW_MAJOR, DType.F16, (T, d), mem_level=MemLevel.L1),
-                    out, tuple(ends), cluster=0, name="y")
+            return pipe.add(RMSNorm(rows=T, cols=d, cluster=0, in_layout=NORM_LAYOUT,
+                                    out_layout=NORM_LAYOUT, out_dtype=DType.F16),
+                            name=name, bind={"x": src}).out("y")
+        blk = _ShardedNorm(ctx, T, d, ncl, name, hs, on_l1=on_l1,
+                           l3_key=None if on_l1 else src)
+        if on_l1:
+            return pipe.add(blk, name=name, bind={"x": src}).out("y")
+        # Reading its slices straight from L3, it has no predecessor in the chain -- so it
+        # is a SOURCE of the pipeline rather than a stage with an input, and registering
+        # it as one is what keeps its nodes in the order they are written here.
+        return pipe.source(name, blk.outputs["y"],
+                           lambda: blk.build(ctx.scope(name), {}).outputs["y"]).out("y")
 
     # ---- 1. the first normalisation ----------------------------------------------------
     # sharded, norm1 reads its slices straight from L3 -- no broadcast on the way in
@@ -258,6 +322,7 @@ def build(ctx: Ctx, p: dict, data: dict, hs: dict, *, stages: int = MAX_STAGE,
     out[1] = n1_y
     check("norm1", n1_y, "norm1_golden", T * d)
     if stages == 1:
+        pipe.run()
         return out
 
     # ---- 2. the Q/K/V projections -------------------------------------------------------
@@ -269,7 +334,7 @@ def build(ctx: Ctx, p: dict, data: dict, hs: dict, *, stages: int = MAX_STAGE,
                    name="n1_to_a", bind={"x": n1_y})
     q1 = pipe.add(Quantize(rows=T, cols=d, inv_scale_f32bits=data["scale_n1_bits"],
                            layout=Layout.A, cluster=0),
-                  name="n1_q", bind={"x": rs1.result.outputs["y"]})
+                  name="n1_q", bind={"x": rs1.out("y")})
     # EVERY GEMM IS FOLLOWED BY A DEQUANTISE. The array accumulates int8 x int8 in int32
     # and the D port narrows that to fp16, so the output still carries both operands'
     # quantisation scales -- at d=128 it lands in the thousands while everything it has to
@@ -279,17 +344,18 @@ def build(ctx: Ctx, p: dict, data: dict, hs: dict, *, stages: int = MAX_STAGE,
     for nm in ("q", "k", "v"):
         proj[nm] = pipe.add(Linear(tokens=T, d_in=d, d_out=d, mesh=mesh, cluster=0),
                             name=f"proj_{nm}",
-                            bind={"x": q1.result.outputs["y"],
+                            bind={"x": q1.out("y"),
                                   "w": L3(Layout.B, DType.I8, (d, d), hs[f"w_{nm}"])})
         proj_dq[nm] = pipe.add(
             Dequantize(rows=T, cols=d, scale_f32bits=data["dq_proj_bits"],
                        layout=Layout.D, cluster=0),
-            name=f"proj_{nm}_dq", bind={"x": proj[nm].result.outputs["y"]})
+            name=f"proj_{nm}_dq", bind={"x": proj[nm].out("y")})
     out[2] = proj_dq
     # One projection is checked, not three: they are the same block on the same input with
     # different weights, so a second failing check would say nothing the first did not.
-    check("proj_q", proj_dq["q"].result.outputs["y"], "proj_q_golden", T * d)
+    check("proj_q", proj_dq["q"].out("y"), "proj_q_golden", T * d)
     if stages == 2:
+        pipe.run()
         return out
 
     # ---- 3. attention -------------------------------------------------------------------
@@ -307,13 +373,15 @@ def build(ctx: Ctx, p: dict, data: dict, hs: dict, *, stages: int = MAX_STAGE,
                   bind={"q": L3(Layout.B, DType.I8, (fat, d), hs["fa_q"]),
                         "k": L3(Layout.A, DType.I8, (fat * ncl, d), hs["fa_k"]),
                         "v": L3(Layout.A, DType.I8, (fat, d), hs["fa_v"])})
-    fa_gather(ctx.scope("attn"), fa.block.cfg, fa.result.extra["shards"], verify=False)
+    pipe.raw(lambda: fa_gather(ctx.scope("attn"), fa.block.cfg,
+                               fa.result.extra["shards"], verify=False), "fa_gather")
     out[3] = fa
     # FA's own output is d32/int32 per cluster and its partials are un-folded, so there is
     # no fp16 tensor here to compare. The rung still proves attention BUILDS, DISPATCHES
     # and TERMINATES on four clusters, which is what the stage is being brought up for;
     # the arithmetic is covered by fa_decode_4cluster's own checks.
     if stages == 3:
+        pipe.run()
         return out
 
     # ---- 4. the output projection and the first residual --------------------------------
@@ -330,16 +398,17 @@ def build(ctx: Ctx, p: dict, data: dict, hs: dict, *, stages: int = MAX_STAGE,
                             "w": L3(Layout.B, DType.I8, (d, d), hs["w_o"])})
     o_dq = pipe.add(Dequantize(rows=T, cols=d, scale_f32bits=data["dq_proj_o_bits"],
                                layout=Layout.D, cluster=0),
-                    name="proj_o_dq", bind={"x": o_proj.result.outputs["y"]})
-    check("proj_o", o_dq.result.outputs["y"], "proj_o_golden", T * d)
+                    name="proj_o_dq", bind={"x": o_proj.out("y")})
+    check("proj_o", o_dq.out("y"), "proj_o_golden", T * d)
     rs_o = pipe.add(Reshape(rows=T, cols=d, src=Layout.D, dst=Layout.ROW_MAJOR, mesh=mesh,
                             dtype=DType.F16, cluster=0),
-                    name="o_to_row_major", bind={"x": o_dq.result.outputs["y"]})
-    res1 = pipe.add(Residual(rows=T, cols=d, cluster=0), name="resid1",
-                    bind={"a": rs_o.result.outputs["y"], "b": x_port})
+                    name="o_to_row_major", bind={"x": o_dq.out("y")})
+    res1 = pipe.add(Residual(rows=T, cols=d, cluster=0, layout=Layout.ROW_MAJOR), name="resid1",
+                    bind={"a": rs_o.out("y"), "b": x_port})
     out[4] = res1
-    check("resid1", res1.result.outputs["y"], "resid1_golden", T * d)
+    check("resid1", res1.out("y"), "resid1_golden", T * d)
     if stages == 4:
+        pipe.run()
         return out
 
     # ---- 5. the feed-forward half -------------------------------------------------------
@@ -348,39 +417,40 @@ def build(ctx: Ctx, p: dict, data: dict, hs: dict, *, stages: int = MAX_STAGE,
     # THE PULLS MUST WAIT FOR THE RESIDUAL. Each cluster reads its slice out of cluster
     # 0's L1, and nothing in the fabric would tell it the buffer is still being written.
     # Without this edge the sharded build races and the race is silent.
-    n2_y = rmsnorm("norm2", res1.result.outputs["y"], on_l1=True,
-                   after=tuple(res1.result.outputs["y"].ends))
+    n2_y = rmsnorm("norm2", res1.out("y"), on_l1=True)
     check("norm2", n2_y, "norm2_golden", T * d)
     rs2 = pipe.add(Reshape(rows=T, cols=d, src=Layout.ROW_MAJOR, dst=Layout.A, mesh=mesh,
                            dtype=DType.F16, cluster=0),
                    name="n2_to_a", bind={"x": n2_y})
     q2 = pipe.add(Quantize(rows=T, cols=d, inv_scale_f32bits=data["scale_n2_bits"],
                            layout=Layout.A, cluster=0),
-                  name="n2_q", bind={"x": rs2.result.outputs["y"]})
+                  name="n2_q", bind={"x": rs2.out("y")})
     # A dense up-projection, not MoeFFN: MoeFFN owns all four clusters for its expert
     # lanes and FlashAttention above already has them. Two blocks that both want every
     # cluster need a placement plan, which is the framework's job above this layer.
     ffn = pipe.add(Linear(tokens=T, d_in=d, d_out=h, mesh=mesh, cluster=0),
                    name="ffn_up",
-                   bind={"x": q2.result.outputs["y"],
+                   bind={"x": q2.out("y"),
                          "w": L3(Layout.B, DType.I8, (d, h), hs["w_up_0"])})
     ffn_dq = pipe.add(Dequantize(rows=T, cols=h, scale_f32bits=data["dq_ffn_bits"],
                                  layout=Layout.D, cluster=0),
-                      name="ffn_up_dq", bind={"x": ffn.result.outputs["y"]})
+                      name="ffn_up_dq", bind={"x": ffn.out("y")})
     out[5] = ffn_dq
-    check("ffn_up", ffn_dq.result.outputs["y"], "ffn_up_golden", T * h)
+    check("ffn_up", ffn_dq.out("y"), "ffn_up_golden", T * h)
     if stages == 5:
+        pipe.run()
         return out
 
     # ---- 6. the second residual, and the layer output ----------------------------------
     rs_f = pipe.add(Reshape(rows=T, cols=h, src=Layout.D, dst=Layout.ROW_MAJOR, mesh=mesh,
                             dtype=DType.F16, cluster=0),
-                    name="ffn_to_row_major", bind={"x": ffn_dq.result.outputs["y"]})
-    res2 = pipe.add(Residual(rows=T, cols=h, cluster=0), name="resid2",
-                    bind={"a": rs_f.result.outputs["y"],
-                          "b": res1.result.outputs["y"]})
+                    name="ffn_to_row_major", bind={"x": ffn_dq.out("y")})
+    res2 = pipe.add(Residual(rows=T, cols=h, cluster=0, layout=Layout.ROW_MAJOR), name="resid2",
+                    bind={"a": rs_f.out("y"),
+                          "b": res1.out("y")})
     out[6] = res2
-    check("layer_out", res2.result.outputs["y"], "ladder_out_golden", T * h)
+    check("layer_out", res2.out("y"), "ladder_out_golden", T * h)
+    pipe.run()                    # resolve every boundary, then build in the order above
     return out
 
 
@@ -442,7 +512,8 @@ def token_parallel(ctx: Ctx, p: dict, data: dict, hs: dict, *, verify: str = "fi
                   bind={"q": L3(Layout.B, DType.I8, (fat, d), hs["fa_q"]),
                         "k": L3(Layout.A, DType.I8, (fat * ncl, d), hs["fa_k"]),
                         "v": L3(Layout.A, DType.I8, (fat, d), hs["fa_v"])})
-    fa_gather(ctx.scope("attn"), fa.block.cfg, fa.result.extra["shards"], verify=False)
+    pipe.raw(lambda: fa_gather(ctx.scope("attn"), fa.block.cfg,
+                               fa.result.extra["shards"], verify=False), "fa_gather")
 
     # THE GATHER GOES TO L3, NOT TO THE ROOT'S L1, and each cluster uses its OWN iDMA.
     #
@@ -467,32 +538,39 @@ def token_parallel(ctx: Ctx, p: dict, data: dict, hs: dict, *, verify: str = "fi
         r0 = c * NR
         sfx = f"c{c}"
         # --- this cluster's slice of the layer input, straight from L3 ---
-        x_l1 = g.l1(f"layer_x_{sfx}", NR * d * 2)
-        ld_x = g.node(f"Ld_x_{sfx}", ctx.dm, "__snax_bingo_kernel_idma_1d_copy",
-                      SnaxBingoKernelIdma1dCopyArgs(
-                          at_offset(hs["x"], r0 * d * 2), x_l1, NR * d * 2))
-        x_port = Port(PortSpec(Layout.ROW_MAJOR, DType.F16, (NR, d), mem_level=MemLevel.L1),
-                      x_l1, (ld_x,))
+        # A SOURCE OF THE PIPELINE, not a node built beside it. It sits between two
+        # clusters' worth of stages, and node creation order is dispatch order, so
+        # building it outside would put all four loads ahead of all four slices.
+        def _load_x(g=g, sfx=sfx, r0=r0):
+            x_l1 = g.l1(f"layer_x_{sfx}", NR * d * 2)
+            ld_x = g.node(f"Ld_x_{sfx}", ctx.dm, "__snax_bingo_kernel_idma_1d_copy",
+                          SnaxBingoKernelIdma1dCopyArgs(
+                              at_offset(hs["x"], r0 * d * 2), x_l1, NR * d * 2))
+            return Port(PortSpec(Layout.ROW_MAJOR, DType.F16, (NR, d),
+                                 mem_level=MemLevel.L1), x_l1, (ld_x,))
+        x_port = pipe.source(f"layer_x_{sfx}",
+                             PortSpec(Layout.ROW_MAJOR, DType.F16, (NR, d),
+                                      mem_level=MemLevel.L1), _load_x).out("y")
 
         # --- norm -> reshape -> quantise -> the three projections ---
-        n1 = pipe.add(RMSNorm(rows=NR, cols=d, cluster=c,
-                              in_layout=NORM_LAYOUT, out_layout=NORM_LAYOUT),
+        n1 = pipe.add(RMSNorm(rows=NR, cols=d, cluster=c, in_layout=NORM_LAYOUT,
+                              out_layout=NORM_LAYOUT, out_dtype=DType.F16),
                       name=f"norm1_{sfx}",
                       bind={"x": x_port})
         a1 = pipe.add(Reshape(rows=NR, cols=d, src=Layout.ROW_MAJOR, dst=Layout.A, mesh=mesh,
                               dtype=DType.F16, cluster=c),
-                      name=f"n1_to_a_{sfx}", bind={"x": n1.result.outputs["y"]})
+                      name=f"n1_to_a_{sfx}", bind={"x": n1.out("y")})
         q1 = pipe.add(Quantize(rows=NR, cols=d, inv_scale_f32bits=data["scale_n1_bits"],
                                layout=Layout.A, cluster=c),
-                      name=f"n1_q_{sfx}", bind={"x": a1.result.outputs["y"]})
+                      name=f"n1_q_{sfx}", bind={"x": a1.out("y")})
         for nm in ("q", "k", "v"):
             pr = pipe.add(Linear(tokens=NR, d_in=d, d_out=d, mesh=mesh, cluster=c),
                           name=f"proj_{nm}_{sfx}",
-                          bind={"x": q1.result.outputs["y"],
+                          bind={"x": q1.out("y"),
                                 "w": L3(Layout.B, DType.I8, (d, d), hs[f"w_{nm}"])})
             pipe.add(Dequantize(rows=NR, cols=d, scale_f32bits=data["dq_proj_bits"],
                                 layout=Layout.D, cluster=c),
-                     name=f"proj_{nm}_dq_{sfx}", bind={"x": pr.result.outputs["y"]})
+                     name=f"proj_{nm}_dq_{sfx}", bind={"x": pr.out("y")})
 
         # --- output projection, from the staged context, and the first residual ---
         op = pipe.add(Linear(tokens=NR, d_in=d, d_out=d, mesh=mesh, cluster=c),
@@ -502,45 +580,48 @@ def token_parallel(ctx: Ctx, p: dict, data: dict, hs: dict, *, verify: str = "fi
                             "w": L3(Layout.B, DType.I8, (d, d), hs["w_o"])})
         odq = pipe.add(Dequantize(rows=NR, cols=d, scale_f32bits=data["dq_proj_o_bits"],
                                   layout=Layout.D, cluster=c),
-                       name=f"proj_o_dq_{sfx}", bind={"x": op.result.outputs["y"]})
+                       name=f"proj_o_dq_{sfx}", bind={"x": op.out("y")})
         orp = pipe.add(Reshape(rows=NR, cols=d, src=Layout.D, dst=Layout.ROW_MAJOR, mesh=mesh,
                                dtype=DType.F16, cluster=c),
-                       name=f"o_to_row_major_{sfx}", bind={"x": odq.result.outputs["y"]})
-        r1 = pipe.add(Residual(rows=NR, cols=d, cluster=c), name=f"resid1_{sfx}",
-                      bind={"a": orp.result.outputs["y"], "b": x_port})
+                       name=f"o_to_row_major_{sfx}", bind={"x": odq.out("y")})
+        r1 = pipe.add(Residual(rows=NR, cols=d, cluster=c, layout=Layout.ROW_MAJOR), name=f"resid1_{sfx}",
+                      bind={"a": orp.out("y"), "b": x_port})
 
         # --- the feed-forward half ---
-        n2 = pipe.add(RMSNorm(rows=NR, cols=d, cluster=c,
-                              in_layout=NORM_LAYOUT, out_layout=NORM_LAYOUT),
+        n2 = pipe.add(RMSNorm(rows=NR, cols=d, cluster=c, in_layout=NORM_LAYOUT,
+                              out_layout=NORM_LAYOUT, out_dtype=DType.F16),
                       name=f"norm2_{sfx}",
-                      bind={"x": r1.result.outputs["y"]})
+                      bind={"x": r1.out("y")})
         a2 = pipe.add(Reshape(rows=NR, cols=d, src=Layout.ROW_MAJOR, dst=Layout.A, mesh=mesh,
                               dtype=DType.F16, cluster=c),
-                      name=f"n2_to_a_{sfx}", bind={"x": n2.result.outputs["y"]})
+                      name=f"n2_to_a_{sfx}", bind={"x": n2.out("y")})
         q2 = pipe.add(Quantize(rows=NR, cols=d, inv_scale_f32bits=data["scale_n2_bits"],
                                layout=Layout.A, cluster=c),
-                      name=f"n2_q_{sfx}", bind={"x": a2.result.outputs["y"]})
+                      name=f"n2_q_{sfx}", bind={"x": a2.out("y")})
         up = pipe.add(Linear(tokens=NR, d_in=d, d_out=h, mesh=mesh, cluster=c),
                       name=f"ffn_up_{sfx}",
-                      bind={"x": q2.result.outputs["y"],
+                      bind={"x": q2.out("y"),
                             "w": L3(Layout.B, DType.I8, (d, h), hs["w_up_0"])})
         udq = pipe.add(Dequantize(rows=NR, cols=h, scale_f32bits=data["dq_ffn_bits"],
                                   layout=Layout.D, cluster=c),
-                       name=f"ffn_up_dq_{sfx}", bind={"x": up.result.outputs["y"]})
+                       name=f"ffn_up_dq_{sfx}", bind={"x": up.out("y")})
         urp = pipe.add(Reshape(rows=NR, cols=h, src=Layout.D, dst=Layout.ROW_MAJOR, mesh=mesh,
                                dtype=DType.F16, cluster=c),
-                       name=f"ffn_to_row_major_{sfx}", bind={"x": udq.result.outputs["y"]})
-        r2 = pipe.add(Residual(rows=NR, cols=h, cluster=c), name=f"resid2_{sfx}",
-                      bind={"a": urp.result.outputs["y"], "b": r1.result.outputs["y"]})
+                       name=f"ffn_to_row_major_{sfx}", bind={"x": udq.out("y")})
+        r2 = pipe.add(Residual(rows=NR, cols=h, cluster=c, layout=Layout.ROW_MAJOR), name=f"resid2_{sfx}",
+                      bind={"a": urp.out("y"), "b": r1.out("y")})
 
         # --- this slice out to its place in the L3 result, on this cluster's own DM core ---
         slice_b = NR * h * 2
-        last = r2.result.outputs["y"].ends[-1]
-        st = g.node(f"St_out_{sfx}", ctx.dm, "__snax_bingo_kernel_idma_1d_copy",
-                    SnaxBingoKernelIdma1dCopyArgs(
-                        r2.result.outputs["y"].handle,
-                        at_offset(gathered, c * slice_b), slice_b), last)
-        ends.append(st)
+
+        def _store(g=g, sfx=sfx, c=c, r2=r2, slice_b=slice_b):
+            port = r2.out("y").port
+            st = g.node(f"St_out_{sfx}", ctx.dm, "__snax_bingo_kernel_idma_1d_copy",
+                        SnaxBingoKernelIdma1dCopyArgs(
+                            port.handle, at_offset(gathered, c * slice_b), slice_b),
+                        port.ends[-1])
+            ends.append(st)
+        pipe.raw(_store, f"store_{sfx}")
 
         if verify == "slices":
             # THE SLICE ON ITS OWN, which separates the two things a wrong layer output
@@ -548,19 +629,24 @@ def token_parallel(ctx: Ctx, p: dict, data: dict, hs: dict, *, verify: str = "fi
             # that reported success without moving anything. It costs no extra transfer --
             # the slice is already in L3 at a known offset, so this is a compare node and
             # nothing else.
-            checks.check_out(
-                ctx.at(0), f"Check_slice_{sfx}",
-                golden=at_offset(hs["ladder_out_golden"], c * slice_b),
-                got=at_offset(gathered, c * slice_b),
-                dtype=DType.F16, elems=NR * h, tol=_TOL["layer_out"],
-                after=st, label=f"slice_{sfx}")
+            def _slice_check(sfx=sfx, c=c, slice_b=slice_b):
+                checks.check_out(
+                    ctx.at(0), f"Check_slice_{sfx}",
+                    golden=at_offset(hs["ladder_out_golden"], c * slice_b),
+                    got=at_offset(gathered, c * slice_b),
+                    dtype=DType.F16, elems=NR * h, tol=_TOL["layer_out"],
+                    after=ends[-1], label=f"slice_{sfx}")
+            pipe.raw(_slice_check, f"check_slice_{sfx}")
 
     if verify != "none":
         # ORDERED ON EVERY SLICE, not just the last one. This reads the whole gathered
         # buffer, so it has to wait for all four writers; depending on one of them leaves
-        # the other three racing and the check reads whatever was there.
-        checks.check_out(
+        # the other three racing and the check reads whatever was there. `ends` is filled
+        # by the per-slice stores, which are raw steps, so this one is too -- and being
+        # registered last is what makes it depend on all of them.
+        pipe.raw(lambda: checks.check_out(
             ctx.at(0), "Check_llm_layer_out", golden=hs["ladder_out_golden"],
             got=gathered, dtype=DType.F16, elems=T * h, tol=_TOL["layer_out"],
-            after=tuple(ends), label="llm_layer_out")
+            after=tuple(ends), label="llm_layer_out"), "check_layer_out")
+    pipe.run()                    # resolve every boundary, then build in the order above
     return {"slices": ncl, "rows_each": NR, "out": gathered}

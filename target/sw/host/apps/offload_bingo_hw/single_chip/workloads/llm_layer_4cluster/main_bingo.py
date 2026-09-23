@@ -198,12 +198,11 @@ CHIPLET_ID = 0x00
 # buffer quietly overlapping another's bytes.
 L1_CAPACITY = 514816
 
-# Which ORIENTATION the norm works in. See the long note in the header. There is no
-# kernel switch any more -- libs/block/simd/norm.py infers the implementation from
-# these layouts, because which one runs is a hardware fact and not a preference:
-# RSQRT path (one node, no layout change), "auto" adds the transposed path wherever
-# rows == 32 (LANEWISE reduce + sticky scale, 2.9x on the SIMD, two xDMA transposes).
-# Pinned until simd_rmsnorm_t_1cluster has run the transposed kernel green on RTL.
+# Which ORIENTATION the norm works in. See the long note in the header. Stating it PINS
+# the boundary: libs/block/simd/norm.py picks its kernel from the layouts it is given, and
+# leaving these unset would let it take the transposed path wherever rows == 32 (LANEWISE
+# reduce + sticky scale, 2.9x on the SIMD, two xDMA transposes). Pinned until
+# simd_rmsnorm_t_1cluster has run that kernel green on RTL.
 NORM_LAYOUT = Layout.ROW_MAJOR
 
 # RoPE on Q and K. Off because it would change a graph that passes, and because the
@@ -211,8 +210,8 @@ NORM_LAYOUT = Layout.ROW_MAJOR
 WITH_ROPE = False
 
 # Per-stage absolute tolerance on the fp16 compare. THESE TRACK THE DEQUANTISE: every
-# projection is scaled back to the activation domain, so the tensors are O(1)-O(11) rather
-# than O(1000), and a tolerance sized for the old scale would accept anything.
+# projection is scaled back to the activation domain, so the tensors are O(1)-O(11), and a
+# tolerance sized for an unscaled O(1000) tensor would accept anything.
 #
 #   norm1 / norm2          worst delta 0.002 on |values| <= 2.0   -> 0.05, 25x margin
 #   proj_q / ffn_up /      worst delta 0.043 on |values| <= 3.9   -> 0.25, ~6x margin.
@@ -255,11 +254,20 @@ def build_layer(ctx, p, data, hs, *, verbose=True):
         """Bind a staged array as a port; the level is read off the handle."""
         return Port(PortSpec(layout, dtype, shape), handle, ())
 
-    def check(tag, port, golden_key, elems):
-        """Read a stage's output back and compare. Ordered on the port's own producer."""
-        checks.readback_and_check(
-            ctx.at(0), f"llm_{tag}", src=port.handle, golden=hs[golden_key],
-            dtype=DType.F16, elems=elems, tol=_TOL[tag], after=port.ends[-1])
+    def check(tag, ref, golden_key, elems):
+        """Read a stage's output back and compare. Ordered on the port's own producer.
+
+        REGISTERED, NOT BUILT. The pipeline resolves every boundary before it builds
+        anything, so a readback cannot be emitted while the chain is still being written:
+        `ref` has no buffer yet. raw() keeps this at the point it appears here, and run()
+        calls it once the stage before it has been built.
+        """
+        def go():
+            port = ref.port if hasattr(ref, "port") else ref
+            checks.readback_and_check(
+                ctx.at(0), f"llm_{tag}", src=port.handle, golden=hs[golden_key],
+                dtype=DType.F16, elems=elems, tol=_TOL[tag], after=port.ends[-1])
+        pipe.raw(go, f"check_{tag}")
 
     # ALLOCATED ONCE. Two BingoMemAlloc objects with the same name are one buffer to the
     # emitter and two live ranges to the L1 packer, which would split the tensor in half.
@@ -274,10 +282,9 @@ def build_layer(ctx, p, data, hs, *, verbose=True):
                   x_l1, (ld_x,))
 
     # ---- 1. the first normalisation ----------------------------------------------------
-    n1_y = pipe.add(RMSNorm(rows=T, cols=d, cluster=0,
-                          in_layout=NORM_LAYOUT, out_layout=NORM_LAYOUT),
-                    name="norm1",
-                    bind={"x": x_port}).result.outputs["y"]
+    n1_y = pipe.add(RMSNorm(rows=T, cols=d, cluster=0, in_layout=NORM_LAYOUT,
+                            out_layout=NORM_LAYOUT, out_dtype=DType.F16),
+                    name="norm1", bind={"x": x_port}).out("y")
     check("norm1", n1_y, "norm1_golden", T * d)
 
     # ---- 2. the Q/K/V projections -------------------------------------------------------
@@ -286,20 +293,20 @@ def build_layer(ctx, p, data, hs, *, verbose=True):
                    name="n1_to_a", bind={"x": n1_y})
     q1 = pipe.add(Quantize(rows=T, cols=d, inv_scale_f32bits=data["scale_n1_bits"],
                            layout=Layout.A, cluster=0),
-                  name="n1_q", bind={"x": rs1.result.outputs["y"]})
+                  name="n1_q", bind={"x": rs1.out("y")})
     proj_dq = {}
     for nm in ("q", "k", "v"):
         pr = pipe.add(Linear(tokens=T, d_in=d, d_out=d, mesh=mesh, cluster=0),
                       name=f"proj_{nm}",
-                      bind={"x": q1.result.outputs["y"],
+                      bind={"x": q1.out("y"),
                             "w": L3(Layout.B, DType.I8, (d, d), hs[f"w_{nm}"])})
         proj_dq[nm] = pipe.add(
             Dequantize(rows=T, cols=d, scale_f32bits=data["dq_proj_bits"],
                        layout=Layout.D, cluster=0),
-            name=f"proj_{nm}_dq", bind={"x": pr.result.outputs["y"]})
+            name=f"proj_{nm}_dq", bind={"x": pr.out("y")})
     # One projection is checked, not three: they are the same block on the same input with
     # different weights, so a second failing check would say nothing the first did not.
-    check("proj_q", proj_dq["q"].result.outputs["y"], "proj_q_golden", T * d)
+    check("proj_q", proj_dq["q"].out("y"), "proj_q_golden", T * d)
 
     # ---- 3. attention -------------------------------------------------------------------
     # Br is pinned to the SIMD beat at 32, so FA's tile does NOT follow `tokens`; the
@@ -311,7 +318,8 @@ def build_layer(ctx, p, data, hs, *, verbose=True):
                   bind={"q": L3(Layout.B, DType.I8, (fat, d), hs["fa_q"]),
                         "k": L3(Layout.A, DType.I8, (fat * ncl, d), hs["fa_k"]),
                         "v": L3(Layout.A, DType.I8, (fat, d), hs["fa_v"])})
-    fa_gather(ctx.scope("attn"), fa.block.cfg, fa.result.extra["shards"], verify=False)
+    pipe.raw(lambda: fa_gather(ctx.scope("attn"), fa.block.cfg,
+                               fa.result.extra["shards"], verify=False), "fa_gather")
     # FA's own output is d32/int32 per cluster and its partials are un-folded, so there is
     # no fp16 tensor here to compare. This stage proves attention BUILDS, DISPATCHES and
     # TERMINATES on four clusters; the arithmetic is covered by fa_decode_4cluster.
@@ -328,45 +336,47 @@ def build_layer(ctx, p, data, hs, *, verbose=True):
                             "w": L3(Layout.B, DType.I8, (d, d), hs["w_o"])})
     o_dq = pipe.add(Dequantize(rows=T, cols=d, scale_f32bits=data["dq_proj_o_bits"],
                                layout=Layout.D, cluster=0),
-                    name="proj_o_dq", bind={"x": o_proj.result.outputs["y"]})
-    check("proj_o", o_dq.result.outputs["y"], "proj_o_golden", T * d)
+                    name="proj_o_dq", bind={"x": o_proj.out("y")})
+    check("proj_o", o_dq.out("y"), "proj_o_golden", T * d)
     rs_o = pipe.add(Reshape(rows=T, cols=d, src=Layout.D, dst=Layout.ROW_MAJOR, mesh=mesh,
                             dtype=DType.F16, cluster=0),
-                    name="o_to_row_major", bind={"x": o_dq.result.outputs["y"]})
-    res1 = pipe.add(Residual(rows=T, cols=d, cluster=0), name="resid1",
-                    bind={"a": rs_o.result.outputs["y"], "b": x_port})
-    check("resid1", res1.result.outputs["y"], "resid1_golden", T * d)
+                    name="o_to_row_major", bind={"x": o_dq.out("y")})
+    res1 = pipe.add(Residual(rows=T, cols=d, cluster=0, layout=Layout.ROW_MAJOR),
+                    name="resid1",
+                    bind={"a": rs_o.out("y"), "b": x_port})
+    check("resid1", res1.out("y"), "resid1_golden", T * d)
 
     # ---- 5. the feed-forward half -------------------------------------------------------
-    n2_y = pipe.add(RMSNorm(rows=T, cols=d, cluster=0,
-                          in_layout=NORM_LAYOUT, out_layout=NORM_LAYOUT),
-                    name="norm2",
-                    bind={"x": res1.result.outputs["y"]}).result.outputs["y"]
+    n2_y = pipe.add(RMSNorm(rows=T, cols=d, cluster=0, in_layout=NORM_LAYOUT,
+                            out_layout=NORM_LAYOUT, out_dtype=DType.F16),
+                    name="norm2", bind={"x": res1.out("y")}).out("y")
     check("norm2", n2_y, "norm2_golden", T * d)
     rs2 = pipe.add(Reshape(rows=T, cols=d, src=Layout.ROW_MAJOR, dst=Layout.A, mesh=mesh,
                            dtype=DType.F16, cluster=0),
                    name="n2_to_a", bind={"x": n2_y})
     q2 = pipe.add(Quantize(rows=T, cols=d, inv_scale_f32bits=data["scale_n2_bits"],
                            layout=Layout.A, cluster=0),
-                  name="n2_q", bind={"x": rs2.result.outputs["y"]})
+                  name="n2_q", bind={"x": rs2.out("y")})
     ffn = pipe.add(Linear(tokens=T, d_in=d, d_out=h, mesh=mesh, cluster=0),
                    name="ffn_up",
-                   bind={"x": q2.result.outputs["y"],
+                   bind={"x": q2.out("y"),
                          "w": L3(Layout.B, DType.I8, (d, h), hs["w_up_0"])})
     ffn_dq = pipe.add(Dequantize(rows=T, cols=h, scale_f32bits=data["dq_ffn_bits"],
                                  layout=Layout.D, cluster=0),
-                      name="ffn_up_dq", bind={"x": ffn.result.outputs["y"]})
-    check("ffn_up", ffn_dq.result.outputs["y"], "ffn_up_golden", T * h)
+                      name="ffn_up_dq", bind={"x": ffn.out("y")})
+    check("ffn_up", ffn_dq.out("y"), "ffn_up_golden", T * h)
 
     # ---- 6. the second residual, and the layer output ----------------------------------
     rs_f = pipe.add(Reshape(rows=T, cols=h, src=Layout.D, dst=Layout.ROW_MAJOR, mesh=mesh,
                             dtype=DType.F16, cluster=0),
-                    name="ffn_to_row_major", bind={"x": ffn_dq.result.outputs["y"]})
-    res2 = pipe.add(Residual(rows=T, cols=h, cluster=0), name="resid2",
-                    bind={"a": rs_f.result.outputs["y"],
-                          "b": res1.result.outputs["y"]})
-    check("layer_out", res2.result.outputs["y"], "ladder_out_golden", T * h)
-    return res2.result.outputs["y"]
+                    name="ffn_to_row_major", bind={"x": ffn_dq.out("y")})
+    res2 = pipe.add(Residual(rows=T, cols=h, cluster=0, layout=Layout.ROW_MAJOR),
+                    name="resid2",
+                    bind={"a": rs_f.out("y"),
+                          "b": res1.out("y")})
+    check("layer_out", res2.out("y"), "ladder_out_golden", T * h)
+    pipe.run()                    # resolve every boundary, then build in the order above
+    return res2.out("y").port
 
 
 def main():
@@ -408,9 +418,6 @@ def main():
         st.emit(args.data_h, args.output_dir)
     extra = [os.path.basename(str(args.data_h))] if args.data_h else None
     dfg.bingo_compile_dfg(
-        # "(layer)" used to be the ladder's stage NAME here. Kept the string identical
-        # while porting so the generated header could be diffed byte for byte against the
-        # ladder-built one; renamed once that passed.
         app_name=(f"LLM layer, 4 clusters -- "
                   f"T={p['tokens']} d={p['d_model']} h={p['d_hidden']}"),
         output_dir=args.output_dir,

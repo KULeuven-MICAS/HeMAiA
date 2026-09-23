@@ -116,6 +116,7 @@ def assemble(gate_sources=True, consumer=None):
     pipe = Pipeline(ctx, gate_sources=gate_sources, verbose=False)
     a = pipe.add(Producer(), name="a")
     b = pipe.add(consumer or Consumer(), name="b", bind={"x": a.out("o")})
+    pipe.run()                 # connect, resolve, build -- see libs/comm/link.py
     return ctx, pipe, a, b
 
 
@@ -130,23 +131,25 @@ def shareable(ctx, x, y):
 # ---------------------------------------------------------------- the contract
 print("the contract")
 
+from libs.block import Reshape as _Reshape_ctor                          # noqa: E402
+
 refuses("a dtype mismatch is refused, not converted",
         lambda: assemble(consumer=Consumer(dtype="f16")), "scale")
-# A LAYOUT MISMATCH IS NOT ONE CASE, IT IS THREE, and the contract has to tell them apart:
-# a conversion the hardware performs, one it cannot (too narrow a run at this precision),
-# and one no pair of strides expresses at all (a transpose). Collapsing them into a single
-# "insert a reshape" refusal was wrong in both directions -- it refused the conversion the
-# xDMA does in one pass, and it promised one for the transpose, which needs another kernel.
-refuses("a layout mismatch a block will not close is refused",
-        lambda: assemble(consumer=Consumer(layout="D")), "1 B/element")
+# A LAYOUT GAP IS REFUSED BY NAME: no realisation of the consumer accepts what the
+# producer emits. Matching asks the block, not whether the hardware COULD convert -- those
+# are different questions, and a block reading A-layout bytes that arrived row-major
+# computes a scrambled answer nothing catches. A block that converts says so with a
+# variant.
+refuses("a layout gap no realisation accepts is refused",
+        lambda: assemble(consumer=Consumer(layout="D")), "but this port reads")
 
-# A block declares that it FETCHES by overriding `needs`; there is no separate flag. The
-# contract is then checked against `needs`, so the gap is the block's to close -- and a
-# conversion the hardware cannot do is still refused, with the hardware's reason.
-closing = Consumer(layout="D", mem_level=None,
-                   needs={"x": PortSpec("D", "i8", (32, 128), mem_level="L1")})
+# THE HARDWARE'S REASONS LIVE IN THE BLOCK that owns the conversion, which is where the
+# resolver reads them from when it prunes. A reshape asked for an int8 A-layout run is
+# refused by the Reshape, naming the lane width.
 refuses("an int8 reshape is refused for the RIGHT reason: the run is too narrow",
-        lambda: assemble(consumer=closing), "8 B per lane")
+        lambda: _Reshape_ctor(rows=32, cols=128, mesh=(16, 4, 16), cluster=0,
+                              src=Layout.ROW_MAJOR, dst=Layout.A, dtype=DType.I8),
+        "8 B per lane")
 
 # The transpose is checked on the plan directly: routed through assemble() it would hit
 # the PRECISION refusal first, because this producer emits int8 and B-layout is an fp16
@@ -201,9 +204,11 @@ bad_shape = Consumer()
 bad_shape._spec = PortSpec("A", "i8", (64, 128), mem_level="L1")
 refuses("a shape mismatch is refused", lambda: assemble(consumer=bad_shape), "shape")
 
-refuses("an unbound input is refused",
-        lambda: Pipeline(new_ctx(), verbose=False).add(Consumer(), name="b"),
-        "not bound")
+def _unbound():
+    p = Pipeline(new_ctx(), verbose=False)
+    p.add(Consumer(), name="b")
+    p.run()
+refuses("an unbound input is refused", _unbound, "not bound")
 
 
 def _unknown():
@@ -211,6 +216,7 @@ def _unknown():
     p = Pipeline(ctx, verbose=False)
     a = p.add(Producer(), name="a")
     p.add(Consumer(), name="b", bind={"x": a.out("o"), "z": a.out("o")})
+    p.run()
 refuses("binding an input the block does not have", _unknown, "inputs are")
 
 ok = check_contract(Port(PortSpec("A", "i8", (32, 128), mem_level="L1"), None, ()),
@@ -257,6 +263,7 @@ ctx3 = new_ctx()
 p3 = Pipeline(ctx3, verbose=False)
 a3 = p3.add(Producer(), name="first")
 b3 = p3.add(Producer(), name="second")
+p3.run()
 h3 = {v[0].name for v in collect_handle_users(
     sorted(ctx3.node_list if hasattr(ctx3, "node_list") else ctx3.dfg.node_list,
            key=lambda n: n.node_id)).values()}
@@ -269,82 +276,90 @@ blocked = pipe.report()
 check("a clean pipeline reports no blocking node", blocked[("a", "b")] == [],
       [n.node_name for n in blocked[("a", "b")]])
 
-# ------------------------------------------------------- the layout pass
-print("\nthe layout pass")
-from libs import LayoutStep, assign_layouts                              # noqa: E402
+# ------------------------------------------------------- the resolver
+print("\nthe resolver: boundaries from the neighbours")
 from libs.block import Reshape as _Reshape                               # noqa: E402
 from libs.block.simd.norm import RMSNorm as _RMSNorm                     # noqa: E402
+
+from libs.comm import variants_of                                        # noqa: E402
 
 _T, _D, _M = 32, 128, (16, 4, 16)
 
 
-def _chain(rows=_T):
-    orient = []
-    for i in (Layout.ROW_MAJOR, Layout.COL_MAJOR):
-        for o in (Layout.ROW_MAJOR, Layout.COL_MAJOR):
-            for ip in ((False, True) if i == Layout.COL_MAJOR else (False,)):
-                orient.append({"in_layout": i, "out_layout": o, "x_in_place": ip})
-    return [
-        LayoutStep("norm", lambda **k: _RMSNorm(rows=rows, cols=_D, cluster=0, **k),
-                   orient),
-        LayoutStep("to_a", lambda **k: _Reshape(rows=rows, cols=_D, mesh=_M,
-                                                dtype=DType.F16, cluster=0, **k),
-                   [{"src": s, "dst": Layout.A}
-                    for s in (Layout.ROW_MAJOR, Layout.COL_MAJOR)]),
-    ]
+def _chain(rows, pin=None, demand=None):
+    """norm -> Reshape, the two-stage chain, with only what `pin` says decided."""
+    c = new_ctx()
+    g = c.at(0)
+    x = Port(PortSpec(Layout.ROW_MAJOR, DType.F16, (rows, _D), mem_level=MemLevel.L1),
+             g.l1("x", rows * _D * 2), ())
+    p = Pipeline(c, verbose=False)
+    n = p.add(_RMSNorm(rows=rows, cols=_D, cluster=0, **(pin or {})), "norm", x=x)
+    r = p.add(_Reshape(rows=rows, cols=_D, mesh=_M, cluster=0), "to_a", x=n.out())
+    p.demand(r.out(), PortSpec(demand or Layout.A, DType.F16, (rows, _D),
+                               mem_level=MemLevel.L1))
+    p.run()
+    return p, n, r
 
 
-def _run(start, rows=_T):
-    return assign_layouts(_chain(rows), mesh=_M, elem_bytes=2, shape=(rows, _D),
-                          start=start, end=Layout.A, verbose=False)
+# LEGALITY IS BY CONSTRUCTION: a template offers every combination and the block's own
+# constructor is what prunes it. At rows != 32 the col_major kernel does not exist, so
+# four more realisations refuse -- and the refusals carry the block's own message.
+_v32 = variants_of(_RMSNorm(rows=32, cols=_D, cluster=0, mesh=_M))
+_v64 = variants_of(_RMSNorm(rows=64, cols=_D, cluster=0, mesh=_M))
+check("a template enumerates its realisations", len(_v32) > 1, len(_v32))
+check("...and fewer of them are legal off the col_major kernel's shape",
+      len(_v64) < len(_v32), (len(_v32), len(_v64)))
+check("a pinned block offers exactly one",
+      len(variants_of(_RMSNorm(rows=32, cols=_D, cluster=0, in_layout=Layout.ROW_MAJOR,
+                               out_layout=Layout.ROW_MAJOR, out_dtype=DType.F16))) == 1)
 
-
-# THE BLOCK INFERS THE KERNEL FROM THE ENDS, so a row_major/row_major candidate really is
-# the fold-paying one -- and the pass, ranking folds first, must reject it even though it
-# is the candidate with the fewest passes.
-_folds = {(c.src, c.dst): c.simd_folds for c in _run(Layout.ROW_MAJOR).candidates[0]}
-check("row_major on both ends pays a fold per row",
-      _folds[(Layout.ROW_MAJOR, Layout.ROW_MAJOR)] == _T, _folds)
-check("any col_major end pays none",
-      all(v == 0 for k, v in _folds.items() if Layout.COL_MAJOR in k), _folds)
-
-r1 = _run(Layout.ROW_MAJOR)
-check("the pass takes a fold-free arm", r1.simd_folds == 0, r1.simd_folds)
+# FOLDS RANK FIRST, so the resolver takes the col_major kernel even though it costs the
+# chain more passes than the row_major arm -- 2,062 cycles off the busy engine for one
+# extra transfer on an idle one.
+_p, _n, _r = _chain(32)
+check("rows=32: the chain comes out fold-free", _p.cost.folds == 0, str(_p.cost))
+check("...on the col_major kernel", _n.block.col_major, _n.chosen.describe())
 check("...even though it is NOT the fewest passes",
-      r1.passes > min(c.xdma_passes for c in r1.candidates[0]), r1.passes)
-check("the norm it picks runs the col_major kernel",
-      _RMSNorm(rows=_T, cols=_D, cluster=0, **r1.chosen[0]).col_major, r1.chosen[0])
+      _p.cost.xdma > min(v.cost.xdma for v in _n.variants), str(_p.cost))
 
-# A TRANSPOSED SOURCE IS STRICTLY BETTER, and only by one pass -- the SIMD is unchanged.
-r2 = _run(Layout.COL_MAJOR)
-check("staging x^T saves a pass", r2.passes == r1.passes - 1, (r1.passes, r2.passes))
-check("...and does not change the SIMD work", r2.simd_folds == r1.simd_folds,
-      (r1.simd_folds, r2.simd_folds))
-check("...by consuming col_major directly, in place",
-      r2.chosen[0]["in_layout"] == Layout.COL_MAJOR and r2.chosen[0]["x_in_place"],
-      r2.chosen[0])
+# THE NEIGHBOUR FOLLOWS. Nothing told the Reshape what its source would be.
+check("the Reshape took the layout the norm chose",
+      _r.chosen.inputs["x"].layout == _n.chosen.outputs["y"].layout,
+      (_n.chosen.describe(), _r.chosen.describe()))
 
-# LEGALITY COMES FROM THE BLOCKS. At rows != 32 every col_major candidate refuses, so the
-# pass is left with the row_major arm rather than proposing something unbuildable.
-r3 = _run(Layout.ROW_MAJOR, rows=64)
-_n3 = _RMSNorm(rows=64, cols=_D, cluster=0, **r3.chosen[0])
-check("an illegal shape falls back to the row_major kernel", not _n3.col_major,
-      r3.chosen[0])
-check("...and then it DOES pay a fold per row", _n3.simd_folds() == 64, _n3.simd_folds())
+# LEGALITY AGAIN, now through the chain: at rows=64 every col_major realisation refuses,
+# so the resolver is left with the folding arm rather than proposing something unbuildable.
+_p64, _n64, _ = _chain(64)
+check("rows=64 falls back to the row_major kernel", not _n64.block.col_major,
+      _n64.chosen.describe())
+check("...and then it DOES pay a fold per row", _p64.cost.folds == 64, str(_p64.cost))
 
-# WHAT IT PICKS MUST BUILD. The whole point of a planner is that its answer is realisable.
-_c = new_ctx()
-_blk = _RMSNorm(rows=_T, cols=_D, cluster=0, **r2.chosen[0])
-_g = _c.at(0)
-_slot = _blk.alloc(_g)
-_res = _blk.build(_g, {"x": Port(PortSpec(Layout.COL_MAJOR, DType.F16, (_T, _D),
-                                          mem_level=MemLevel.L1),
-                                 _slot, (), cluster=0, name="x")})
-check("the chosen norm builds, with no staging copy",
-      not any("Stage_xt" in n.node_name for n in _res.nodes),
-      [n.node_name for n in _res.nodes])
-_rs = _Reshape(rows=_T, cols=_D, mesh=_M, dtype=DType.F16, cluster=0, **r2.chosen[1])
-check("the chosen reshape builds", _rs.xdma_passes() >= 1, _rs.xdma_passes())
+# A PINNED FIELD IS A CONSTRAINT, not a hint. The block does not overrule the layer.
+_pp, _pn, _ = _chain(32, pin=dict(in_layout=Layout.ROW_MAJOR,
+                                  out_layout=Layout.ROW_MAJOR, out_dtype=DType.F16))
+check("a pinned boundary is honoured even when it costs folds",
+      _pn.chosen.outputs["y"].layout == Layout.ROW_MAJOR and _pp.cost.folds == _T,
+      (_pn.chosen.describe(), str(_pp.cost)))
+
+# WHAT IT PICKS MUST BUILD. The whole point of a resolver is that its answer is realisable.
+check("every stage of the resolved chain built", all(s.result is not None
+                                                     for s in _p.stages))
+check("...and the join is a real edge",
+      _p.ctx.dfg.has_edge(_p.stages[0].result.outputs["y"].ends[-1],
+                          _p.stages[1].result.inputs["x"].ends[0]))
+
+# THE FAR END IS THE APPLICATION'S TO PIN. Without a demand the chain would stop wherever
+# was cheapest, which is right for the graph and wrong for whatever reads the buffer.
+_pd, _, _rd = _chain(32, demand=Layout.D)
+check("demand() pins the chain's last layout",
+      _rd.chosen.outputs["y"].layout == Layout.D, _rd.chosen.describe())
+refuses("a demand nothing can produce is refused",
+        lambda: _chain(32, demand=Layout.MONOID), "no set of realisations")
+
+# x_in_place IS A PROMISE ABOUT ANOTHER BLOCK, so it is never a knob the resolver turns.
+check("x_in_place is not among the realisations",
+      not any("x_in_place" in v.params for v in _v32),
+      [v.params for v in _v32])
 
 # ONE REGISTERED KERNEL, dispatching on the layout arguments.
 from bingo_kernel_args import SnaxBingoKernelSimdRmsnormArgs as _RNA   # noqa: E402
@@ -367,8 +382,8 @@ for _why, _kw in (("a transposing pair", dict(input_layout="col_major")),
         check(f"the args refuse {_why}", True)
 
 # x_in_place IS A PROMISE, and breaking it is refused rather than silently corrected.
-_bad = _RMSNorm(rows=_T, cols=_D, cluster=0,
-                in_layout=Layout.COL_MAJOR, out_layout=Layout.ROW_MAJOR, x_in_place=True)
+_bad = _RMSNorm(rows=_T, cols=_D, cluster=0, in_layout=Layout.COL_MAJOR,
+                out_layout=Layout.ROW_MAJOR, out_dtype=DType.F16, x_in_place=True)
 _g2 = new_ctx().at(0)
 _bad.alloc(_g2)
 try:
@@ -389,7 +404,8 @@ _XDMA, _IDMA, _SIMD = _ctx_roles = 2, 3, 1
 def _engines(in_lay, out_lay, level):
     c = new_ctx()
     g = c.at(0)
-    b = _RMSNorm(rows=_T, cols=_D, cluster=0, in_layout=in_lay, out_layout=out_lay)
+    b = _RMSNorm(rows=_T, cols=_D, cluster=0, in_layout=in_lay, out_layout=out_lay,
+                 out_dtype=DType.F16)
     h = g.l1("x", _T * _D * 2) if level == _ML.L1 else g.l3("x_l3", _T * _D * 2)
     r = b.build(g, {"x": Port(PortSpec(in_lay, DType.F16, (_T, _D), mem_level=level),
                               h, (), cluster=0, name="x")})
@@ -427,7 +443,8 @@ check("...while idma_passes(in_l3=True) reports it", _b.idma_passes(in_l3=True) 
 # L4 IS REFUSED, because the hoist is one move for the whole layer, not one per operator.
 try:
     _c4 = new_ctx()
-    _b4 = _RMSNorm(rows=_T, cols=_D, cluster=0)
+    _b4 = _RMSNorm(rows=_T, cols=_D, cluster=0, in_layout=Layout.ROW_MAJOR,
+                   out_layout=Layout.ROW_MAJOR, out_dtype=DType.F16)
     _b4.build(_c4.at(0), {"x": Port(PortSpec(Layout.ROW_MAJOR, DType.F16, (_T, _D),
                                              mem_level=_ML.L4),
                                     _c4.at(0).l1("x", _T * _D * 2), (),
@@ -508,65 +525,67 @@ for _pair in (("row_major", "B"), ("col_major", "A")):
 
 # A blocked output without the consuming GEMM's mesh cannot derive its read order.
 try:
-    _RMSNorm(rows=_T, cols=_D, cluster=0, out_layout=Layout.A)
+    _RMSNorm(rows=_T, cols=_D, cluster=0, in_layout=Layout.ROW_MAJOR,
+             out_layout=Layout.A, out_dtype=DType.F16)
     check("out_layout A without a mesh is refused", False, "built")
 except ValueError:
     check("out_layout A without a mesh is refused", True)
 
-# ------------------------------------------------ the planner sees fusion
-print("\nthe layout pass, choosing between fused and unfused routes")
+# ------------------------------------------------ connecting the norm straight to a GEMM
+print("\nno glue in between: the norm has to produce the operand itself")
+from libs.block import Linear as _Linear                                 # noqa: E402
 from libs.block import Quantize as _Quantize                             # noqa: E402
 
 
-def _fuse_chain(rows, consumer):
-    return [
-        LayoutStep("norm", lambda **k: _RMSNorm(rows=rows, cols=_D, cluster=0, mesh=_M,
-                                                 inv_scale_f32bits=0x42800000, **k),
-                   _RMSNorm.options()),
-        LayoutStep("to_op", lambda **k: _Reshape(rows=rows, cols=_D, mesh=_M,
-                                                 dtype=DType.F16, cluster=0, **k),
-                   [{"src": s, "dst": consumer} for s in (Layout.ROW_MAJOR, Layout.COL_MAJOR)],
-                   optional=True),
-        LayoutStep("quant", lambda **k: _Quantize(rows=rows, cols=_D, cluster=0,
-                                                  inv_scale_f32bits=0x42800000, **k),
-                   [{"layout": consumer}], optional=True),
-    ]
+def _direct(rows, in_lay=Layout.ROW_MAJOR, glue=False):
+    """norm -> [Reshape -> Quantize ->] Linear, with nothing pinned but the ends."""
+    c = new_ctx()
+    g = c.at(0)
+    x = Port(PortSpec(in_lay, DType.F16, (rows, _D), mem_level=MemLevel.L1),
+             g.l1("x", rows * _D * 2), ())
+    w = Port(PortSpec(Layout.B, DType.I8, (_D, _D), mem_level=MemLevel.L1),
+             g.l1("w", _D * _D), ())
+    p = Pipeline(c, verbose=False)
+    h = p.add(_RMSNorm(rows=rows, cols=_D, cluster=0, mesh=_M,
+                       inv_scale_f32bits=0x42800000), "norm1", x=x).out()
+    if glue:
+        h = p.add(_Reshape(rows=rows, cols=_D, mesh=_M, cluster=0), "to_a", x=h).out()
+        h = p.add(_Quantize(rows=rows, cols=_D, cluster=0,
+                            inv_scale_f32bits=0x42800000), "q", x=h).out()
+    p.add(_Linear(tokens=rows, d_in=_D, d_out=_D, mesh=_M, cluster=0), "qkv", x=h, w=w)
+    p.run()
+    return p
 
 
-def _fuse_run(rows, start, consumer):
-    return assign_layouts(_fuse_chain(rows, consumer), mesh=_M, elem_bytes=2,
-                          shape=(rows, _D), start=start, end=consumer,
-                          end_dtype=DType.I8, verbose=False)
+# WITH NOTHING BETWEEN THEM the norm is the only stage that can reach A/int8, so it must
+# write the operand out of its own kernel -- which is the fused route, and the only legal
+# one here. That is the block making a choice INSIDE its boundary, not the chain losing a
+# stage: no Reshape and no Quantize were ever added.
+_p = _direct(64)
+_n = _p.stages[0].chosen
+check("norm -> GEMM with no glue: the norm writes A/int8 itself",
+      (_n.outputs["y"].layout, _n.outputs["y"].dtype) == (Layout.A, DType.I8),
+      _n.describe())
+check("...and that is the whole chain, two stages", len(_p.stages) == 2, len(_p.stages))
 
+# THE SAME CHAIN WITH THE GLUE THE LAYER ASKED FOR still has it. A resolver that deleted
+# stages it thought redundant would be overruling the layer's composition; the cost may be
+# higher and that is the layer's business.
+_p = _direct(64, glue=True)
+check("the Reshape and Quantize the layer wrote are still built",
+      [s.name for s in _p.stages] == ["norm1", "to_a", "q", "qkv"],
+      [s.name for s in _p.stages])
+check("...and the norm then stops at fp16, leaving them the work",
+      _p.stages[0].chosen.outputs["y"].dtype == DType.F16,
+      _p.stages[0].chosen.describe())
 
-# rows = 64: no col_major kernel, so every route folds. The fused one (norm writes A/int8)
-# saves the Reshape and the Quantize, and the planner must see that.
-_f = _fuse_run(64, Layout.ROW_MAJOR, Layout.A)
-check("rows=64 -> int8 A: the norm writes A/int8 itself",
-      _f.chosen[0]["out_layout"] == Layout.A and _f.chosen[0]["out_dtype"] == DType.I8,
-      _f.chosen[0])
-check("...and the Reshape and Quantize are skipped", _f.chosen[1:] == [None, None],
-      _f.chosen)
-check("...costing 3 SIMD passes and no xDMA", (_f.simd_passes, _f.passes) == (3, 0),
-      (_f.simd_passes, _f.passes))
-
-# rows = 32, row_major in, A wanted: folds come FIRST, so the fold-free col_major kernel
-# wins even though it costs a separate quantise and three transposes -- the measured trade
-# (SIMD ~1,400 cc against the fused route's ~2,960).
-_f = _fuse_run(32, Layout.ROW_MAJOR, Layout.A)
-check("rows=32 -> int8 A: the fold-free chain wins", _f.simd_folds == 0, _f.simd_folds)
-check("...with the quantise as its own step", _f.chosen[2] is not None, _f.chosen)
-
-# col_major in, B wanted: col_major -> B is fold-free AND fused, so nothing else competes.
-_f = _fuse_run(32, Layout.COL_MAJOR, Layout.B)
-check("col_major -> int8 B: one kernel, no transposes, nothing after it",
-      _f.chosen[0]["out_layout"] == Layout.B and _f.chosen[1:] == [None, None]
-      and (_f.simd_folds, _f.passes) == (0, 0), (_f.chosen, _f.simd_folds, _f.passes))
-
-# A link never changes precision: an int8 norm output cannot feed an fp16 Reshape.
-_f = _fuse_run(64, Layout.ROW_MAJOR, Layout.A)
-check("no chosen route links int8 into an fp16 step",
-      not (_f.chosen[0]["out_dtype"] == DType.I8 and _f.chosen[1] is not None), _f.chosen)
+# AT rows == 32 the fold-free kernel exists, so the glued chain is fold-free too: the norm
+# emits col_major and the Reshape adapts to a col_major source it was never told about.
+_p = _direct(32, glue=True)
+check("rows=32: the chain comes out fold-free", _p.cost.folds == 0, str(_p.cost))
+check("...because the Reshape took whatever the norm chose",
+      _p.stages[1].chosen.inputs["x"].layout == _p.stages[0].chosen.outputs["y"].layout,
+      (_p.stages[0].chosen.describe(), _p.stages[1].chosen.describe()))
 
 # ------------------------------------------------ the blocked nest, for any mesh
 print("\nthe blocked nest: RMSNorm into the operand of ANY mesh")

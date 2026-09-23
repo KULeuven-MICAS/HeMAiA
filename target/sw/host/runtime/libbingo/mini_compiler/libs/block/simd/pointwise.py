@@ -28,6 +28,13 @@ from ...comm import (Block, BlockResult, Ctx, DType, Layout, MemLevel, Port,
                      PortSpec)
 from .common import RowCfg, check_row
 
+# An elementwise operator is correct in ANY of these, because a permutation of its inputs
+# is the same permutation of its output. So `layout` is a field these blocks leave open by
+# default and the resolver fills from the neighbours; pinning it is how a caller states a
+# boundary it wants to hold fixed.
+_ELEMENTWISE = (Layout.ROW_MAJOR, Layout.COL_MAJOR, Layout.A, Layout.B, Layout.D,
+                Layout.D32)
+
 
 class Quantize(Block):
     """FP16 -> INT8 with an explicit scale. Elementwise, so the layout passes straight
@@ -43,18 +50,26 @@ class Quantize(Block):
     name = "quantize"
 
     def __init__(self, cfg: RowCfg = None, *, inv_scale_f32bits: int = None,
-                 layout: Layout = Layout.ROW_MAJOR, **params):
+                 layout: Layout = None, **params):
         if inv_scale_f32bits is None:
             raise ValueError(
                 "Quantize needs inv_scale_f32bits: the right scale depends on the range "
                 "of the data, and a wrong one saturates the tensor rather than failing.")
         self.cfg = cfg if cfg is not None else RowCfg(**params)
         self.inv_scale_f32bits = int(inv_scale_f32bits)
-        self.layout = Layout(layout)
+        self.layout = Layout(layout) if layout is not None else None
         check_row(self.cfg.cols, "Quantize")
 
+    def variants(self) -> list:
+        """Any layout: quantising is elementwise, so it passes whatever it is handed."""
+        return [{}] if self.layout is not None else [{"layout": l} for l in _ELEMENTWISE]
+
+    def respec(self, **p) -> "Quantize":
+        return Quantize(cfg=self.cfg, inv_scale_f32bits=self.inv_scale_f32bits,
+                        layout=p.get("layout", self.layout))
+
     def simd_passes(self) -> int:
-        """ONE SIMD task, for comm.layout_pass: what fusing this step into its producer saves."""
+        """ONE SIMD task. What this step costs the engine the resolver ranks first."""
         return 1
 
     @property
@@ -101,13 +116,23 @@ class Residual(Block):
 
     name = "residual"
 
-    def __init__(self, cfg: RowCfg = None, *, layout: Layout = Layout.ROW_MAJOR,
+    def __init__(self, cfg: RowCfg = None, *, layout: Layout = None,
                  dtype: DType = DType.F16, **params):
         self.cfg = cfg if cfg is not None else RowCfg(**params)
-        self.layout, self.dtype = Layout(layout), DType(dtype)
+        self.layout = Layout(layout) if layout is not None else None
+        self.dtype = DType(dtype)
+
+    def variants(self) -> list:
+        """Any layout, as long as BOTH operands arrive in it -- which the resolver
+        enforces, because one realisation declares both ports at once."""
+        return [{}] if self.layout is not None else [{"layout": l} for l in _ELEMENTWISE]
+
+    def respec(self, **p) -> "Residual":
+        return Residual(cfg=self.cfg, layout=p.get("layout", self.layout),
+                        dtype=self.dtype)
 
     def simd_passes(self) -> int:
-        """ONE SIMD task, for comm.layout_pass: what fusing this step into its producer saves."""
+        """ONE SIMD task. What this step costs the engine the resolver ranks first."""
         return 1
 
     @property
@@ -170,18 +195,26 @@ class Dequantize(Block):
     name = "dequantize"
 
     def __init__(self, cfg: RowCfg = None, *, scale_f32bits: int = None,
-                 layout: Layout = Layout.ROW_MAJOR, **params):
+                 layout: Layout = None, **params):
         if scale_f32bits is None:
             raise ValueError(
                 "Dequantize needs scale_f32bits: it is 1/(scale_x * scale_w) for the GEMM "
                 "that produced this tensor, and no default can be right for every stage.")
         self.cfg = cfg if cfg is not None else RowCfg(**params)
         self.scale_f32bits = int(scale_f32bits)
-        self.layout = Layout(layout)
+        self.layout = Layout(layout) if layout is not None else None
         check_row(self.cfg.cols, "Dequantize")
 
+    def variants(self) -> list:
+        """Any layout: scaling is elementwise, so it passes whatever it is handed."""
+        return [{}] if self.layout is not None else [{"layout": l} for l in _ELEMENTWISE]
+
+    def respec(self, **p) -> "Dequantize":
+        return Dequantize(cfg=self.cfg, scale_f32bits=self.scale_f32bits,
+                          layout=p.get("layout", self.layout))
+
     def simd_passes(self) -> int:
-        """ONE SIMD task, for comm.layout_pass: what fusing this step into its producer saves."""
+        """ONE SIMD task. What this step costs the engine the resolver ranks first."""
         return 1
 
     @property
