@@ -436,6 +436,196 @@ try:
 except ValueError:
     check("an L4 operand is refused", True)
 
+# ------------------------------------------------ RMSNorm straight into a GEMM operand
+print("\nRMSNorm writing a GEMM operand (out_layout A / B)")
+
+
+def _norm_out(in_lay, out_lay, dtype=DType.I8, rows=_T):
+    c = new_ctx()
+    g = c.at(0)
+    b = _RMSNorm(rows=rows, cols=_D, cluster=0, in_layout=in_lay, out_layout=out_lay,
+                 out_dtype=dtype, inv_scale_f32bits=0x42800000, mesh=_M)
+    h = g.l1("x", rows * _D * 2)
+    r = b.build(g, {"x": Port(PortSpec(in_lay, DType.F16, (rows, _D), mem_level=_ML.L1),
+                              h, (), cluster=0, name="x")})
+    names = [(n.node_name.split("_cl")[0], n._assigned_core_id) for n in r.nodes]
+    simd = [n._kernel_args for n in r.nodes if n._assigned_core_id == _SIMD]
+    return names, b, r, simd
+
+
+# THE OUTPUT LAYOUT PICKS THE KERNEL: A is a row_major run, B a col_major one.
+_ns, _b, _r, _k = _norm_out(Layout.ROW_MAJOR, Layout.A)
+check("row_major -> A is ONE SIMD node, no transpose", _ns == [("Rmsnorm", _SIMD)], _ns)
+check("...on the row_major kernel", not _b.col_major and _b.xdma_passes() == 0,
+      (_b.col_major, _b.xdma_passes()))
+check("...asking the kernel for A, int8, with the mesh and the scale",
+      (_k[0].output_layout, _k[0].out_i8, _k[0].mesh, _k[0].inv_scale_f32bits)
+      == ("A", True, (16, 4, 16), 0x42800000), vars(_k[0]))
+check("...and its port says A/int8",
+      (_r.outputs["y"].spec.layout, _r.outputs["y"].spec.dtype) == (Layout.A, DType.I8),
+      _r.outputs["y"].spec)
+
+_ns, _b, _r, _k = _norm_out(Layout.COL_MAJOR, Layout.B)
+check("col_major -> B runs the col_major kernel with no output transpose",
+      _b.col_major and _b.xdma_passes() == 0 and _ns[-1] == ("Rmsnorm_t", _SIMD), _ns)
+check("...asking the kernel for B", _k[0].output_layout == "B", vars(_k[0]))
+
+# THE CROSSED PAIRS COST EXACTLY ONE xDMA TRANSPOSE, IN FRONT -- never one behind.
+_ns, _b, _, _k = _norm_out(Layout.COL_MAJOR, Layout.A)
+check("col_major -> A: Xpose_in, then the row_major kernel writes A",
+      [n for n, _ in _ns] == ["Xpose_in", "Rmsnorm"] and _k[0].output_layout == "A", _ns)
+_ns, _b, _, _k = _norm_out(Layout.ROW_MAJOR, Layout.B)
+check("row_major -> B: Xpose_in, then the col_major kernel writes B",
+      [n for n, _ in _ns] == ["Xpose_in", "Rmsnorm_t"] and _k[0].output_layout == "B", _ns)
+
+# fp16 blocked output is a kernel too, and an int8 row_major one stays on the row kernel.
+_ns, _, _r, _k = _norm_out(Layout.ROW_MAJOR, Layout.A, dtype=DType.F16)
+check("row_major -> A at fp16", _k[0].out_i8 is False
+      and _r.outputs["y"].spec.dtype == DType.F16, vars(_k[0]))
+_ns, _b, _, _k = _norm_out(Layout.COL_MAJOR, Layout.ROW_MAJOR)
+check("int8 row_major out from a col_major input runs the ROW kernel (Xpose_in, Rmsnorm)",
+      not _b.col_major and [n for n, _ in _ns] == ["Xpose_in", "Rmsnorm"], _ns)
+
+for _why, _kw in (("B needs rows == 32", dict(in_lay=Layout.COL_MAJOR, out_lay=Layout.B,
+                                                rows=64)),
+                  ("an int8 col_major output is refused",
+                   dict(in_lay=Layout.COL_MAJOR, out_lay=Layout.COL_MAJOR)),
+                  ("D is not an operand", dict(in_lay=Layout.ROW_MAJOR, out_lay=Layout.D))):
+    try:
+        _norm_out(**_kw)
+        check(_why, False, "it built")
+    except ValueError:
+        check(_why, True)
+
+# THE ARGS CLASS REFUSES THE CROSSED PAIRS the block never emits, by name.
+for _pair in (("row_major", "B"), ("col_major", "A")):
+    try:
+        _RNA(0, 0, _T, _D, input_layout=_pair[0], output_layout=_pair[1], seed_addr=64,
+             mesh=(16, 4, 16))
+        check(f"args refuse {_pair[0]} -> {_pair[1]}", False, "accepted")
+    except ValueError:
+        check(f"args refuse {_pair[0]} -> {_pair[1]}", True)
+
+# A blocked output without the consuming GEMM's mesh cannot derive its read order.
+try:
+    _RMSNorm(rows=_T, cols=_D, cluster=0, out_layout=Layout.A)
+    check("out_layout A without a mesh is refused", False, "built")
+except ValueError:
+    check("out_layout A without a mesh is refused", True)
+
+# ------------------------------------------------ the planner sees fusion
+print("\nthe layout pass, choosing between fused and unfused routes")
+from libs.block import Quantize as _Quantize                             # noqa: E402
+
+
+def _fuse_chain(rows, consumer):
+    return [
+        LayoutStep("norm", lambda **k: _RMSNorm(rows=rows, cols=_D, cluster=0, mesh=_M,
+                                                 inv_scale_f32bits=0x42800000, **k),
+                   _RMSNorm.options()),
+        LayoutStep("to_op", lambda **k: _Reshape(rows=rows, cols=_D, mesh=_M,
+                                                 dtype=DType.F16, cluster=0, **k),
+                   [{"src": s, "dst": consumer} for s in (Layout.ROW_MAJOR, Layout.COL_MAJOR)],
+                   optional=True),
+        LayoutStep("quant", lambda **k: _Quantize(rows=rows, cols=_D, cluster=0,
+                                                  inv_scale_f32bits=0x42800000, **k),
+                   [{"layout": consumer}], optional=True),
+    ]
+
+
+def _fuse_run(rows, start, consumer):
+    return assign_layouts(_fuse_chain(rows, consumer), mesh=_M, elem_bytes=2,
+                          shape=(rows, _D), start=start, end=consumer,
+                          end_dtype=DType.I8, verbose=False)
+
+
+# rows = 64: no col_major kernel, so every route folds. The fused one (norm writes A/int8)
+# saves the Reshape and the Quantize, and the planner must see that.
+_f = _fuse_run(64, Layout.ROW_MAJOR, Layout.A)
+check("rows=64 -> int8 A: the norm writes A/int8 itself",
+      _f.chosen[0]["out_layout"] == Layout.A and _f.chosen[0]["out_dtype"] == DType.I8,
+      _f.chosen[0])
+check("...and the Reshape and Quantize are skipped", _f.chosen[1:] == [None, None],
+      _f.chosen)
+check("...costing 3 SIMD passes and no xDMA", (_f.simd_passes, _f.passes) == (3, 0),
+      (_f.simd_passes, _f.passes))
+
+# rows = 32, row_major in, A wanted: folds come FIRST, so the fold-free col_major kernel
+# wins even though it costs a separate quantise and three transposes -- the measured trade
+# (SIMD ~1,400 cc against the fused route's ~2,960).
+_f = _fuse_run(32, Layout.ROW_MAJOR, Layout.A)
+check("rows=32 -> int8 A: the fold-free chain wins", _f.simd_folds == 0, _f.simd_folds)
+check("...with the quantise as its own step", _f.chosen[2] is not None, _f.chosen)
+
+# col_major in, B wanted: col_major -> B is fold-free AND fused, so nothing else competes.
+_f = _fuse_run(32, Layout.COL_MAJOR, Layout.B)
+check("col_major -> int8 B: one kernel, no transposes, nothing after it",
+      _f.chosen[0]["out_layout"] == Layout.B and _f.chosen[1:] == [None, None]
+      and (_f.simd_folds, _f.passes) == (0, 0), (_f.chosen, _f.simd_folds, _f.passes))
+
+# A link never changes precision: an int8 norm output cannot feed an fp16 Reshape.
+_f = _fuse_run(64, Layout.ROW_MAJOR, Layout.A)
+check("no chosen route links int8 into an fp16 step",
+      not (_f.chosen[0]["out_dtype"] == DType.I8 and _f.chosen[1] is not None), _f.chosen)
+
+# ------------------------------------------------ the blocked nest, for any mesh
+print("\nthe blocked nest: RMSNorm into the operand of ANY mesh")
+from blocked_nest import blocked_nest as _bn, verify as _bn_verify   # noqa: E402
+
+# EVERY SHAPE THE CLUSTER CFGS DECLARE, both outputs, both precisions: derived AND walked
+# against the index map (blocked_nest verifies before it returns; the walk is repeated here
+# so a derivation change cannot silently skip it).
+_PR, _PC = (_D // 32 + 1) * 64 + 8, 2 * _T + 8
+for _mesh, _want in (((16, 4, 16), "AAAA"), ((16, 8, 8), "AAAA"), ((16, 8, 16), "AAAA"),
+                     ((1, 32, 32), "AAAA"), ((1, 16, 32), "AAA-"), ((32, 2, 32), "----")):
+    _mu, _ku, _nu = _mesh
+    _got = ""
+    for _ob in (2, 1):
+        for _args in ((_T, _D, _PR, _mu, _ku, _ob, True), (_D, _T, _PC, _nu, _ku, _ob, False)):
+            try:
+                _n = _bn(*_args)
+                _bn_verify(_n, _args[0], _args[1], _args[3], _args[4], _ob)
+                _got += "A" if _n.tasks <= 2 else "?"
+            except ValueError:
+                _got += "-"
+    check(f"mesh {_mesh}: A f16, B f16, A i8, B i8 = {_want}", _got == _want, _got)
+
+# (16, 4, 16) STILL DERIVES TO THE HAND-WRITTEN NEST that ran bit-exact on RTL.
+_n = _bn(_T, _D, _PR, 16, 4, 1, True)
+check("(16,4,16) int8 A is the RTL-validated nest",
+      (_n.rd_lane, _n.rd, _n.wr_lane, _n.wr, _n.tasks)
+      == (_PR, ((4, 8 * _PR), (32, 8)), 8, ((2, 2048), (32, 64)), 1), _n)
+
+# THE REFUSALS SAY WHY, and they are hardware facts, not search limits.
+for _why, _args, _needle in (
+        ("tileSize 2 is below the 8 B lane", (_T, _D, _PR, 32, 2, 2, True), "tileSize 2"),
+        ("an int8 atom a block apart needs a 2-D lane grid", (_D, _T, _PC, 32, 16, 1, False),
+         "2-D lane grid"),
+        ("a partial block is refused", (_T, _D, _PR, 64, 4, 2, True), "partial block")):
+    try:
+        _bn(*_args)
+        check(_why, False, "derived")
+    except ValueError as _e:
+        check(_why, _needle in str(_e), str(_e))
+
+# A REAL d_model DERIVES FAST: the search is vectorised, not a per-element Python walk.
+import time as _time                                                   # noqa: E402
+_t0 = _time.time()
+_bn(32, 4096, (4096 // 32 + 1) * 64 + 8, 16, 8, 1, True)
+check("[32, 4096] on (16, 8, 16) derives in under 10 s", _time.time() - _t0 < 10.0,
+      _time.time() - _t0)
+
+# THE ARGS CARRY IT: a non-(16,4,16) mesh now builds, and the refusals surface there too.
+_a = _RNA(0, 0, _T, _D, output_layout="A", out_i8=True, mesh=(16, 8, 16))
+_f = _a.get_c_field_assignments({})
+check("args on (16,8,16) emit a descriptor", int(_f["blk_rd_lane"]) > 0
+      and int(_f["blk_reps"]) >= 1 and int(_f["blk_pitch"]) == _PR, _f)
+try:
+    _RNA(0, 0, _T, _D, output_layout="A", mesh=(32, 2, 32))
+    check("args refuse (32,2,32)", False, "accepted")
+except ValueError:
+    check("args refuse (32,2,32)", True)
+
 # ------------------------------------------------ the A/B transpose identity
 print("\nthe A/B identity, and the mesh it rests on")
 import numpy as _np                                                      # noqa: E402

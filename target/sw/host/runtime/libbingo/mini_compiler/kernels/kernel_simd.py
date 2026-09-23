@@ -17,6 +17,7 @@ from typing import Union, Dict, Optional
 from bingo_mem_handle import BingoMemAlloc
 
 from kernel_base import LAYOUT_CODE, BingoKernelArgs
+from blocked_nest import blocked_nest
 
 
 class SnaxBingoKernelSimdFp16ToInt8Args(BingoKernelArgs):
@@ -336,35 +337,53 @@ class SnaxBingoKernelSimdSoftmaxTF16F16Args(BingoKernelArgs):
 
 
 class SnaxBingoKernelSimdRmsnormArgs(BingoKernelArgs):
-    """The ONE rmsnorm kernel. The LAYOUT chooses the implementation, not the symbol.
+    """The ONE rmsnorm kernel. The LAYOUT PAIR chooses the implementation, not the symbol.
 
       out[r, :] = x[r, :] / sqrt( mean_j x[r, j]^2 )
 
-    `input_layout` and `output_layout` are Layout values (or their strings) and MUST BE
-    EQUAL -- the SIMD core reads and writes one orientation and has no transposer. Both are
-    carried anyway so that a caller who meant to put an xDMA transpose in front and forgot
-    gets a refusal from the device instead of a correct normalisation of the wrong tensor.
+    `input_layout` / `output_layout` are Layout values (or their strings), and only four
+    pairs exist:
 
-      row_major   x[rows, cols]. A row's terms scatter across all 32 lanes, so each row
-                  costs a serialised cross-lane fold and the scale has to be splatted back.
-                  `seed_addr` is unused; leave it at 0.
-      col_major   x^T, stored [cols, rows]. One lane is one token, so the sums fall out of
-                  the per-lane accumulators: no fold, no splat, ~3x cheaper. Needs
-                  rows == 32 and FP16 output, and `seed_addr` is REQUIRED -- a 64 B scratch
-                  beat directly below the tile (input_addr == seed_addr + 64), allocated as
-                  one (1 + cols)-beat buffer. The kernel checks the adjacency rather than
-                  trusting it.
+      row_major -> row_major   x[rows, cols]. A row's terms scatter across all 32 lanes, so
+                               each row costs a serialised cross-lane fold and the scale is
+                               splatted back. `seed_addr` unused.
+      col_major -> col_major   x^T, stored [cols, rows]. One lane is one token, so the sums
+                               fall out of the per-lane accumulators: no fold, no splat,
+                               ~3x cheaper. rows == 32, FP16 out, and `seed_addr` REQUIRED --
+                               a 64 B beat directly below the tile (input_addr ==
+                               seed_addr + 64), allocated as one (1 + cols)-beat buffer.
+      row_major -> A           the row_major kernel, written straight into the GEMM's A
+                               operand of y [rows, cols] -- (m, k, r, s), K = cols. Replaces
+                               the row_major -> A reshape and the quantise that followed.
+      col_major -> B           the col_major kernel, written straight into the GEMM's B
+                               operand of y -- (n, k, c, s), K = rows (tokens). Same seed
+                               rules as col_major.
 
-    `out_i8` folds the quantisation into the same pass; row_major only, for the same reason
-    the col_major path has no broadcast plane to hang the Fp16ToInt8 leaf on.
+    The other pairs are transposes and are refused: A's atom is four features of one token,
+    which only a row_major tile holds contiguously, and B's is four tokens of one feature,
+    which only a col_major one does. Emit an xDMA transpose in front instead.
+
+    `out_i8` quantises in the same kernel, on every pair but col_major -> col_major.
+    `inv_scale_f32bits` is its scale (FP32 bits); 0 keeps the baked 64.0.
+
+    ANY MESH. The A and B outputs need `mesh` = (meshRow, tileSize, meshCol), and the order
+    the kernel reads its tile in to write that mesh's blocks is DERIVED here -- see
+    kernels/blocked_nest.py -- verified against the operand's index map, and passed down as
+    a descriptor the device executes without interpreting. A mesh no order fits is refused
+    here with the reason: tileSize < 4 at fp16, or an int8 atom whose runs land a block
+    apart at uneven addresses (e.g. (1, 16, 32) as a B operand).
     """
 
     KERNEL_NAME = "__snax_bingo_kernel_simd_rmsnorm"
 
+    PAIRS = {("row_major", "row_major"), ("col_major", "col_major"),
+             ("row_major", "A"), ("col_major", "B")}
+
     def __init__(self, input_addr: Union[BingoMemAlloc, int],
                  output_addr: Union[BingoMemAlloc, int], rows: int, cols: int,
                  input_layout: str = "row_major", output_layout: str = "row_major",
-                 seed_addr: Union[BingoMemAlloc, int] = 0, out_i8: bool = False):
+                 seed_addr: Union[BingoMemAlloc, int] = 0, out_i8: bool = False,
+                 inv_scale_f32bits: int = 0, mesh: Optional[tuple] = None):
         self.seed_addr = seed_addr
         self.input_addr = input_addr
         self.output_addr = output_addr
@@ -373,38 +392,56 @@ class SnaxBingoKernelSimdRmsnormArgs(BingoKernelArgs):
         self.input_layout = str(input_layout)
         self.output_layout = str(output_layout)
         self.out_i8 = bool(out_i8)
+        self.inv_scale_f32bits = int(inv_scale_f32bits)
+        self.mesh = tuple(mesh) if mesh is not None else (0, 0, 0)
         # REFUSE HERE, not on the device. The device check is the backstop for a caller
         # that bypasses this class; this one names the mistake while the graph is being
         # written, which is the only point at which it is cheap to fix.
-        # ORIENTATIONS ONLY. LAYOUT_CODE is shared with the xDMA converter and carries
-        # A, B and D as well, so the accepted set is narrowed here rather than taken from
-        # it: the SIMD reads a plain tile and a blocked layout is not an orientation.
-        orientations = ("row_major", "col_major")
-        for who, lay in (("input_layout", self.input_layout),
-                         ("output_layout", self.output_layout)):
-            if lay not in orientations:
+        pair = (self.input_layout, self.output_layout)
+        if pair not in self.PAIRS:
+            if self.input_layout not in ("row_major", "col_major"):
                 raise ValueError(
-                    f"simd_rmsnorm: {who}={lay!r} is not one of {list(orientations)}. "
-                    f"The blocked layouts (A, B, D) are not orientations the SIMD reads; "
-                    f"reshape before normalising.")
-        if self.input_layout != self.output_layout:
+                    f"simd_rmsnorm: input_layout={self.input_layout!r} is not an "
+                    f"orientation. The SIMD reads a plain tile, row_major or col_major; "
+                    f"reshape out of a blocked layout before normalising.")
             raise ValueError(
-                f"simd_rmsnorm: input_layout={self.input_layout} but "
-                f"output_layout={self.output_layout}. The SIMD core cannot transpose -- it "
-                f"reads and writes the same orientation. Emit an xDMA transpose on the side "
-                f"that differs; libs/block/simd/norm.py does this for you.")
-        if self.input_layout == "col_major":
-            if self.out_i8:
-                raise ValueError(
-                    "simd_rmsnorm: col_major is FP16 out only. The fused Fp16ToInt8 leaf "
-                    "sits after a broadcast this path does not have. Normalise in "
-                    "col_major, then quantise as its own step.")
-            if not seed_addr:
-                raise ValueError(
-                    "simd_rmsnorm: col_major needs seed_addr -- a 64 B scratch beat "
-                    "directly below the tile, because the sticky elementwise reads one "
-                    "flat sweep of 1 + cols beats whose first beat is the scale. Allocate "
-                    "(1 + cols) beats and pass the base.")
+                f"simd_rmsnorm: {self.input_layout} -> {self.output_layout} is a transpose. "
+                f"The kernel runs {sorted(self.PAIRS)}: A takes a row_major input (its atom "
+                f"is four features of one token), B a col_major one (four tokens of one "
+                f"feature). Emit an xDMA transpose on the side that differs; "
+                f"libs/block/simd/norm.py does this for you.")
+        if pair == ("col_major", "col_major") and self.out_i8:
+            raise ValueError(
+                "simd_rmsnorm: col_major -> col_major is FP16 out only. For an int8 GEMM "
+                "operand ask for output_layout B, which quantises in the same kernel.")
+        if self.input_layout == "col_major" and not seed_addr:
+            raise ValueError(
+                "simd_rmsnorm: a col_major input needs seed_addr -- a 64 B scratch beat "
+                "directly below the tile, because the sticky elementwise reads one flat "
+                "sweep of 1 + cols beats whose first beat is the scale. Allocate "
+                "(1 + cols) beats and pass the base.")
+        self.nest = None
+        if self.output_layout in ("A", "B"):
+            if 0 in self.mesh:
+                raise ValueError(f"simd_rmsnorm: output_layout {self.output_layout} needs "
+                                 f"mesh = (meshRow, tileSize, meshCol); got {self.mesh}.")
+            mu, ku, nu = self.mesh
+            ob = 1 if self.out_i8 else 2
+            try:
+                if self.output_layout == "A":
+                    # x re-laid by the TAP reduce: a row, its scalar beat, and 8 B so the
+                    # row-apart lanes spread over the banks (pitch/8 odd).
+                    pitch = (self.cols // 32 + 1) * 64 + 8
+                    self.nest = blocked_nest(self.rows, self.cols, pitch, mu, ku, ob,
+                                             fused_mul=True)
+                else:
+                    # y^T [cols, rows] from the sticky multiply, at 2*rows + 8 B a row.
+                    pitch = 2 * self.rows + 8
+                    self.nest = blocked_nest(self.cols, self.rows, pitch, nu, ku, ob,
+                                             fused_mul=False)
+            except ValueError as e:
+                raise ValueError(f"simd_rmsnorm: {self.input_layout} -> "
+                                 f"{self.output_layout} on mesh {self.mesh}: {e}") from None
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_simd_rmsnorm_args_t"
@@ -419,8 +456,26 @@ class SnaxBingoKernelSimdRmsnormArgs(BingoKernelArgs):
         a["input_layout"] = str(LAYOUT_CODE[self.input_layout])
         a["output_layout"] = str(LAYOUT_CODE[self.output_layout])
         a["out_prec"] = "1" if self.out_i8 else "0"
+        # EVERY field, including the ones this pair ignores: the struct lives in the
+        # never-cleared L1 arena, so an unset field is stale TCDM, not zero.
+        a["inv_scale_f32bits"] = f"0x{self.inv_scale_f32bits & 0xFFFFFFFF:08X}u"
+        n = self.nest
+        rd = list(n.rd) if n else []
+        wr = list(n.wr) if n else []
+        rd += [(1, 0)] * (3 - len(rd))
+        wr += [(1, 0)] * (3 - len(wr))
+        a["blk_pitch"] = str(n.pitch if n else 0)
+        a["blk_rd_lane"] = str(n.rd_lane if n else 0)
+        a["blk_wr_lane"] = str(n.wr_lane if n else 0)
+        for k in range(3):
+            a[f"blk_rd_bound{k}"] = str(rd[k][0] if n else 0)
+            a[f"blk_rd_stride{k}"] = str(rd[k][1] if n else 0)
+            a[f"blk_wr_bound{k}"] = str(wr[k][0] if n else 0)
+            a[f"blk_wr_stride{k}"] = str(wr[k][1] if n else 0)
+        a["blk_reps"] = str(n.reps if n else 0)
+        a["blk_rep_rd"] = str(n.rep_rd if n else 0)
+        a["blk_rep_wr"] = str(n.rep_wr if n else 0)
         return a
-
 
 class SnaxBingoKernelSimdSiluF16F16Args(_SimdRowOpArgs):
     """Whole FP16 SiLU (x*sigmoid(x)) in ONE DM-core kernel -> fp16 output (one StreamMap pass).

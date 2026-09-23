@@ -53,6 +53,10 @@ class Quantize(Block):
         self.layout = Layout(layout)
         check_row(self.cfg.cols, "Quantize")
 
+    def simd_passes(self) -> int:
+        """ONE SIMD task, for comm.layout_pass: what fusing this step into its producer saves."""
+        return 1
+
     @property
     def inputs(self) -> dict:
         c = self.cfg
@@ -101,6 +105,10 @@ class Residual(Block):
                  dtype: DType = DType.F16, **params):
         self.cfg = cfg if cfg is not None else RowCfg(**params)
         self.layout, self.dtype = Layout(layout), DType(dtype)
+
+    def simd_passes(self) -> int:
+        """ONE SIMD task, for comm.layout_pass: what fusing this step into its producer saves."""
+        return 1
 
     @property
     def inputs(self) -> dict:
@@ -171,6 +179,10 @@ class Dequantize(Block):
         self.scale_f32bits = int(scale_f32bits)
         self.layout = Layout(layout)
         check_row(self.cfg.cols, "Dequantize")
+
+    def simd_passes(self) -> int:
+        """ONE SIMD task, for comm.layout_pass: what fusing this step into its producer saves."""
+        return 1
 
     @property
     def inputs(self) -> dict:

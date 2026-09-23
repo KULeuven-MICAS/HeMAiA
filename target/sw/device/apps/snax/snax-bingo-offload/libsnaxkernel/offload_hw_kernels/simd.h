@@ -1273,6 +1273,140 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_softmax_t_f16_f16(void *arg) {
 }
 
 // ==========================================================================
+// The RMSNorm family's shared pieces: one scratch pool, the int8 scale, and the
+// BLOCKED pass that writes a GEMM operand layout straight from a plain tile.
+// ==========================================================================
+
+// ONE pool for every rmsnorm route, sized for the largest of them at the layer's
+// [32, 128] tile:
+//
+//     row_major          rows*64 + rows*cols*2 + 64                      10,304 B
+//     row_major -> A     2 * rows*((cols/32 + 1)*64 + 8) + 64            21,056 B
+//     col_major -> B     64 + cols*(2*rows + 8) + 64                      9,344 B
+//
+// Allocated once, lazily, on the first call that fits. A larger tile still works: it
+// falls off the pool onto a per-call snrt_l1_malloc, which costs several times the
+// operator chain it wraps.
+#define BINGO_SIMD_NORM_POOL 24576u
+
+static inline uint32_t _bingo_rmsnorm_scratch(uint32_t bytes, uint32_t *from_pool) {
+    static uint32_t s_pool = 0u;
+    if (bytes <= BINGO_SIMD_NORM_POOL) {
+        if (!s_pool) s_pool = snrt_l1_malloc(BINGO_SIMD_NORM_POOL);
+        *from_pool = 1u;
+        return s_pool;
+    }
+    *from_pool = 0u;
+    return snrt_l1_malloc(bytes);
+}
+
+// The Fp16ToInt8 scale of an int8 rmsnorm: the caller's, or the baked 64.0 when it
+// passes 0 (a normalised row sits in ~[-2, 2]). A layer that derives its scale from the
+// data -- llm_layer_data's scale_n1 -- passes it here.
+static inline uint32_t _bingo_rmsnorm_inv_scale(const void *arg) {
+    uint32_t s = ((const __snax_bingo_kernel_simd_rmsnorm_args_t *)arg)->inv_scale_f32bits;
+    return s ? s : BINGO_SIMD_I8_SCALE_NORM;
+}
+
+// THE BLOCKED PASS: write a GEMM operand layout from a plain tile by READING the tile in
+// the operand's own order.
+//
+// The reader's 8 lanes are 8 B each and the distance between them is a CSR, and so is the
+// writer's. Point the reader's lanes at 8 evenly spaced 4-element runs of the tile -- 8
+// rows at one column, or 8 consecutive runs of one row -- and walk the tile in whatever
+// order makes the writer's lanes land as 8 evenly spaced runs of the operand. Fp16ToInt8
+// then packs two such beats into one int8 beat, lanes 2c and 2c+1 becoming output lane c,
+// so for int8 the order must also pair runs that are adjacent in the operand.
+//
+// WHICH ORDER THAT IS DEPENDS ON THE MESH, and it is not worked out here. The host derives
+// it per (tile, mesh, precision) in kernels/blocked_nest.py, walks the result against the
+// operand's index map, and passes it in the args as a descriptor: lane stride and up to
+// three loops per side, plus one optional repeat. For the (16, 4, 16) array it is
+//
+//     reader  lanes 8 rows apart;  {operand}, {rows / 8, 8 rows}, {cols / 4, 8 B}
+//     writer  lanes 8 B apart;     {row blocks, one k-row of blocks}, {k, 64 B}
+//
+// and a mesh with a wider tileSize walks runs along a row instead. Nothing here assumes
+// either. Which meshes have an order at all is a hardware fact the host reports: one lane
+// stride per side cannot split a lane's run across two blocks at uneven addresses.
+//
+// `mul_by`, when non-NULL, is multiplied in on EW1 ahead of the quantiser, read through
+// the SAME address stream with an operand loop innermost -- so it is a whole tile at the
+// same pitch, only its base differs. The AGU stride is unsigned, so the lower address goes
+// first; MUL commutes. The host budgets one reader loop for it.
+//
+// The pass drains the whole queue before returning.
+static inline uint32_t simd_pass_blocked(void *src, void *mul_by, void *dst,
+                                         const __snax_bingo_kernel_simd_rmsnorm_args_t *a,
+                                         uint32_t out_i8, uint32_t inv_scale) {
+#if !BINGO_HAS_STREAMELEMENTWISE || !BINGO_HAS_FP16TOINT8
+    (void)src; (void)mul_by; (void)dst; (void)a; (void)out_i8; (void)inv_scale;
+    return BINGO_RET_FAIL;
+#else
+    const uint32_t rd_b[3] = {a->blk_rd_bound0, a->blk_rd_bound1, a->blk_rd_bound2};
+    const uint32_t rd_s[3] = {a->blk_rd_stride0, a->blk_rd_stride1, a->blk_rd_stride2};
+    uint32_t reps = a->blk_reps ? a->blk_reps : 1u;
+    if (mul_by && rd_b[2] > 1u) return BINGO_RET_FAIL;  // no loop left for the operand
+    uint32_t operand_stride = 0u;
+    uint8_t *rbase = (uint8_t *)src;
+    if (mul_by) rbase = (uint8_t *)snax_simd_ew2_base(src, mul_by, &operand_stride);
+
+    uint32_t mask = (out_i8 ? (1u << SIMD_EXT_FP16TOINT8) : 0u) |
+                    (mul_by ? (1u << SIMD_EXT_STREAMELEMENTWISE_1) : 0u);
+    uint32_t rc = BINGO_RET_SUCC;
+    for (uint32_t r = 0u; r < reps && rc == BINGO_RET_SUCC; r++) {
+        snax_simd_shape_t in, out;
+        snax_simd_shape_clear(&in);
+        in.base = rbase + r * a->blk_rep_rd;
+        in.lane_stride = a->blk_rd_lane;
+        in.lane_mask = 0xFFFFFFFFu;
+        in.byte_mask = 0xFFFFFFFFu;
+        in.dim = 3;
+        uint32_t d = 0u;
+        if (mul_by) {
+            in.bound[0] = 2u;
+            in.stride[0] = operand_stride;
+            d = 1u;
+        }
+        for (uint32_t k = 0u; d < 3u; k++, d++) {
+            in.bound[d] = rd_b[k];
+            in.stride[d] = rd_s[k];
+        }
+        snax_simd_shape_clear(&out);
+        out.base = (uint8_t *)dst + r * a->blk_rep_wr;
+        out.lane_stride = a->blk_wr_lane;
+        out.lane_mask = 0xFFFFFFFFu;
+        out.byte_mask = 0xFFFFFFFFu;
+        out.dim = 3;
+        out.bound[0] = a->blk_wr_bound0;
+        out.stride[0] = a->blk_wr_stride0;
+        out.bound[1] = a->blk_wr_bound1;
+        out.stride[1] = a->blk_wr_stride1;
+        out.bound[2] = a->blk_wr_bound2;
+        out.stride[2] = a->blk_wr_stride2;
+
+        // An empty mask is a plain copy: the fp16, no-multiply case only reorders.
+        snax_write_simd_cfg_reg(SIMD_EXT_ENABLE_PTR, mask);
+        if (mul_by) {
+            snax_simd_set_op_csr(SIMD_EXT_STREAMELEMENTWISE_1_CSR, 0, 2u);
+            snax_simd_set_op_csr(SIMD_EXT_STREAMELEMENTWISE_1_CSR, 1, SIMD_EW_MUL);
+        }
+        if (out_i8) {
+            snax_simd_set_op_csr(SIMD_EXT_FP16TOINT8_CSR, 0, inv_scale);
+            snax_simd_set_op_csr(SIMD_EXT_FP16TOINT8_CSR, 1, SIMD_QUANT_TAIL(0));
+        }
+        if (r + 1u == reps) {
+            rc = simd_run_shapes(&in, &out);    // drains everything queued before it too
+        } else {
+            snax_simd_program_fast(&in, &out);
+            snax_simd_fire();
+        }
+    }
+    return rc;
+#endif
+}
+
+// ==========================================================================
 // Fused FP16 RMSNorm -- the WHOLE pipeline in ONE kernel.
 //
 // out[r, :] = x[r, :] / sqrt(mean_j x[r,j]^2). Same shape and args as softmax; the
@@ -1338,24 +1472,17 @@ static inline uint32_t _bingo_rmsnorm_row_major(void *arg, uint32_t out_prec) {
 
     uint32_t out_dt = out_i8 ? SIMD_OUT_I8 : SIMD_OUT_F16;
     uint32_t beats = cols >> 5u;
-    uint32_t inv_scale = out_i8 ? BINGO_SIMD_I8_SCALE_NORM : 0u;  // out ~[-2,2]
+    uint32_t inv_scale = out_i8 ? _bingo_rmsnorm_inv_scale(arg) : 0u;
     uint32_t row_b = beats * SIMD_BEAT_BYTES;
     uint32_t tot_b = rows * row_b;
     uint32_t log2D = 0u;
     for (uint32_t t = cols; t > 1u; t >>= 1u) log2D++;
 
-    // Scratch: [ bt (rows scalar beats) | bc (broadcast, packed) ].
+    // Scratch: [ bt (rows scalar beats) | bc (the broadcast plane, row_major) ].
     uint32_t bt_off = 0u, bc_off = rows * SIMD_BEAT_BYTES;
     uint32_t scratch_bytes = bc_off + tot_b + 64u;
-    static uint32_t s_pool = 0u;
-    uint32_t scratch_lo, from_pool = 0u;
-    if (scratch_bytes <= BINGO_SIMD_SCRATCH_POOL) {
-        if (!s_pool) s_pool = snrt_l1_malloc(BINGO_SIMD_SCRATCH_POOL);
-        scratch_lo = s_pool;
-        from_pool = 1u;
-    } else {
-        scratch_lo = snrt_l1_malloc(scratch_bytes);
-    }
+    uint32_t from_pool;
+    uint32_t scratch_lo = _bingo_rmsnorm_scratch(scratch_bytes, &from_pool);
     if (!scratch_lo) {
         printf_safe("[Cluster %d Core %d]: rmsnorm L1 scratch alloc failed!\r\n",
                     snrt_cluster_idx(), snrt_cluster_core_idx());
@@ -1427,50 +1554,6 @@ static inline uint32_t _bingo_rmsnorm_row_major(void *arg, uint32_t out_prec) {
 #endif
 }
 
-static inline uint32_t _bingo_rmsnorm_col_major(void *arg);
-
-// ==========================================================================
-// THE ONE REGISTERED RMSNorm. Everything above and below this line is an
-// implementation; this is the only symbol the kernel table carries.
-//
-// The caller does not choose an algorithm, it states a LAYOUT, and the layout
-// is what decides which machine the reduction runs on -- a cross-lane fold per
-// row for row_major, the per-lane accumulators for col_major. As an argument
-// rather than part of the symbol, it is checkable against the tensor actually
-// passed, and it is checked here, once, for every caller.
-// ==========================================================================
-SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_rmsnorm(void *arg) {
-    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_simd_rmsnorm_args_t);
-    const __snax_bingo_kernel_simd_rmsnorm_args_t *a =
-        (const __snax_bingo_kernel_simd_rmsnorm_args_t *)arg;
-
-    // THE SIMD CORE DOES NOT TRANSPOSE. It reads and writes in one orientation,
-    // so a differing pair is a caller that meant to put an xDMA transpose in
-    // front and did not. Refused rather than normalised, because normalising
-    // the wrong tensor produces plausible numbers and no error anywhere.
-    if (a->input_layout != a->output_layout) {
-        printf_safe("[Cluster %d Core %d]: simd_rmsnorm: input_layout %u != "
-                    "output_layout %u. The SIMD core cannot transpose; put an "
-                    "xDMA transpose on the side that differs.\r\n",
-                    snrt_cluster_idx(), snrt_cluster_core_idx(),
-                    (unsigned)a->input_layout, (unsigned)a->output_layout);
-        return BINGO_RET_FAIL;
-    }
-    if (a->input_layout == BINGO_LAYOUT_COL_MAJOR) {
-        if (a->out_prec != BINGO_PREC_F16) {
-            printf_safe("[Cluster %d Core %d]: simd_rmsnorm: col_major is FP16 "
-                        "out only -- the fused Fp16ToInt8 leaf sits after a "
-                        "broadcast this path does not have. Normalise in "
-                        "col_major, then quantise.\r\n",
-                        snrt_cluster_idx(), snrt_cluster_core_idx());
-            return BINGO_RET_FAIL;
-        }
-        return _bingo_rmsnorm_col_major(arg);
-    }
-    return _bingo_rmsnorm_row_major(
-        arg, a->out_prec == BINGO_PREC_I8 ? SIMD_OUT_I8 : SIMD_OUT_F16);
-}
-
 // ==========================================================================
 // TRANSPOSED FP16 RMSNorm -- the same normalisation over x^T, and 3x cheaper.
 //
@@ -1515,11 +1598,13 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_rmsnorm(void *arg) {
 //   adjacent -- pass the data pointer for both and it refuses, rather than writing the
 //   seed over feature row 0 and reading the tile one beat out of phase.
 //
-// FP16 OUT ONLY, DELIBERATELY. y^T is not a layer's final form: A-layout needs four
-// consecutive FEATURES in one 8 B run and y^T has four consecutive TOKENS, so a transpose
-// back has to happen either way -- and the transposer's native modes are 8- and 16-bit, so
-// quantising here would only move the int8 conversion in front of a reshape that requires
-// fp16. Normalise, transpose back, reshape, THEN quantise.
+// FP16 OUT ONLY, DELIBERATELY, for the col_major output. As an A operand y^T needs a
+// transpose back either way -- A-layout needs four consecutive FEATURES in one 8 B run and
+// y^T has four consecutive TOKENS -- and the transposer's native modes are 8- and 16-bit,
+// so quantising here would only move the int8 conversion in front of a reshape that
+// requires fp16. What y^T's runs DO fit is a B operand's atom: output_layout B takes this
+// kernel's passes, adds one reordering read, and quantises in the same kernel (see
+// col_major -> B below).
 // ==========================================================================
 static inline uint32_t _bingo_rmsnorm_col_major(void *arg) {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_simd_rmsnorm_args_t);
@@ -1608,6 +1693,344 @@ static inline uint32_t _bingo_rmsnorm_col_major(void *arg) {
     sp->num_return_values = 0;
     return BINGO_RET_SUCC;
 #endif
+}
+
+// ==========================================================================
+// row_major -> A: RMSNorm straight into a GEMM's A operand, FP16 or INT8.
+//
+// In front of a projection the layer used to run three nodes on two engines,
+//
+//     simd_rmsnorm        row_major f16 -> row_major f16     SIMD
+//     xdma reshape        row_major f16 -> A f16             xDMA
+//     simd_fp16_to_int8   A f16         -> A i8              SIMD
+//
+// in that order because the int8 A atom is 4 B and every engine's lane is 8 B, so the
+// reshape has to happen while the tile is still fp16. This route keeps the order and drops
+// both extra nodes: the multiply that finishes the norm is the blocked pass above, so it
+// READS in A order, and the quantiser that follows it writes int8 blocks.
+//
+//     1  reduce(SUMSQ | TAP)       x  -> xs    each row passed through at a bank-safe
+//                                              pitch, its SUM(x^2) appended after it
+//     2  bcast_map(1/D, RSQRT)     xs -> bc    the 1/rms plane, at the SAME pitch
+//     3  blocked(xs * bc)          -> A        [+ Fp16ToInt8]
+//
+// All three are queued and drained once.
+//
+// THE TAP IS THE RELAYOUT. Pass 3 reads x with its lanes one row apart, and a 256 B row
+// -- 128 fp16 -- puts all eight lanes in one TCDM bank. The reduce has to read x anyway,
+// and in TAP mode it also writes each row back out followed by its scalar beat, so pointing
+// that writer at a padded pitch re-lays the tile for free: (beats + 1) * 64 + 8 B a row,
+// which keeps pitch/8 odd. The scalar then sits right after its row, which is where pass 2
+// reads it. The caller hands over a plain row_major tile and never sees the padding.
+//
+// MEASURED, with these exact passes ported into snax_cluster's snax-llm-qkv-to-fa
+// (snax_split_cluster, Verilator, [32, 128], warm): 2,961 cc to int8 A, 2,919 cc to fp16
+// A, bit-exact against rmsnorm + xDMA reshape + fp16_to_int8, which cost ~3,350 cc across
+// two engines. The TAP relayout itself costs ~180 cc against a caller-padded x.
+// ==========================================================================
+static inline uint32_t _bingo_rmsnorm_row_to_a(void *arg, uint32_t out_i8) {
+    BINGO_REQUIRE_CORE(snax_is_simd_core(), "simd_rmsnorm(row_major->A)", "SIMD");
+#if !BINGO_HAS_STREAMMAP || !BINGO_HAS_STREAMREDUCE || !BINGO_HAS_STREAMELEMENTWISE || \
+    !BINGO_HAS_FP16TOINT8 || !BINGO_SIMD_HAS_RSQRT
+    (void)out_i8;
+    BINGO_SIMD_EXT_UNSUPPORTED(
+        "simd_rmsnorm(row_major->A)",
+        "StreamMap(RSQRT)+StreamReduce(TAP)+StreamElementwise+Fp16ToInt8");
+#else
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+    const __snax_bingo_kernel_simd_rmsnorm_args_t *a =
+        (const __snax_bingo_kernel_simd_rmsnorm_args_t *)arg;
+    uint64_t in_addr = make_u64(a->input_addr_hi, a->input_addr_lo);
+    uint64_t out_addr = make_u64(a->output_addr_hi, a->output_addr_lo);
+    uint32_t rows = a->rows;
+    uint32_t cols = a->cols;
+    bingo_kernel_scratchpad_t *sp =
+        BINGO_GET_SP(arg, __snax_bingo_kernel_simd_rmsnorm_args_t);
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+    BINGO_SIMD_REQUIRE_LOCAL(in_addr, "simd_rmsnorm(row_major->A)", "input");
+    BINGO_SIMD_REQUIRE_LOCAL(out_addr, "simd_rmsnorm(row_major->A)", "output");
+    uint32_t beats = cols >> 5u;
+    // The host chose the pitch with the nest: at least a row plus its scalar beat, and
+    // pitch/8 odd so row-apart lanes spread over the banks. It is checked, not trusted --
+    // a shorter pitch would make the TAP writer overwrite the next row.
+    uint32_t pitch = a->blk_pitch;
+    if (pitch < (beats + 1u) * SIMD_BEAT_BYTES || pitch % SIMD_LANE_BYTES) {
+        printf_safe("[Cluster %d Core %d]: simd_rmsnorm(row_major->A) blk_pitch %d cannot "
+                    "hold a row and its scalar beat (%d B). Rebuild the args on the host.\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx(), (int)pitch,
+                    (int)((beats + 1u) * SIMD_BEAT_BYTES));
+        return BINGO_RET_FAIL;
+    }
+    uint32_t log2D = 0u;
+    for (uint32_t t = cols; t > 1u; t >>= 1u) log2D++;
+
+    // Scratch: [ xs (x re-laid, scalar beat after each row) | bc (the 1/rms plane) ], both
+    // at `pitch`. bc starts on a beat boundary.
+    uint32_t xs_bytes = (rows * pitch + 63u) & ~63u;
+    uint32_t from_pool;
+    uint32_t scratch_lo = _bingo_rmsnorm_scratch(2u * xs_bytes + 64u, &from_pool);
+    if (!scratch_lo) {
+        printf_safe("[Cluster %d Core %d]: simd_rmsnorm(row_major->A) L1 scratch alloc "
+                    "failed!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+    uint8_t *xs = (uint8_t *)((scratch_lo + 63u) & ~63u);
+    uint8_t *bc = xs + xs_bytes;
+    snax_simd_shape_t in, out;
+
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
+    // 1  reduce(SUMSQ | TAP): `beats` in per row, `beats + 1` out, rows `pitch` apart.
+    snax_simd_shape_rows(&in, (void *)(uint32_t)in_addr, rows, beats,
+                         beats * SIMD_BEAT_BYTES);
+    snax_simd_shape_rows(&out, xs, rows, beats + 1u, pitch);
+    snax_simd_use2(SIMD_EXT_STREAMREDUCE, SIMD_EXT_STREAMREDUCE_CSR, beats,
+                   SIMD_RED_SUMSQ | SIMD_RED_TAP);
+    snax_simd_program_fast(&in, &out);
+    snax_simd_fire();
+
+    // 2  bcast_map(1/D, RSQRT): each row's trailing scalar beat, re-presented `beats`
+    //    times (inner stride 0), into the plane. 1/D is exact: D is a power of two.
+    snax_simd_shape_2d(&in, xs + beats * SIMD_BEAT_BYTES, beats, 0u, rows, pitch);
+    snax_simd_shape_rows(&out, bc, rows, beats, pitch);
+    snax_simd_use3(SIMD_EXT_STREAMMAP, SIMD_EXT_STREAMMAP_CSR, 0x3F800000u - (log2D << 23),
+                   0u, SIMD_FUNC_RSQRT);
+    snax_simd_program_fast(&in, &out);
+    snax_simd_fire();
+
+    // 3  xs * plane, read in the operand's order -> A, fp16 or int8. Drains all of it.
+    uint32_t rc = simd_pass_blocked(xs, bc, (void *)(uint32_t)out_addr, a, out_i8,
+                                    out_i8 ? _bingo_rmsnorm_inv_scale(arg) : 0u);
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
+
+    if (!from_pool) snrt_l1_free(scratch_lo);
+    if (rc != BINGO_RET_SUCC) {
+        printf_safe("[Cluster %d Core %d]: simd_rmsnorm(row_major->A) pass failed!\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+    sp->return_value = (uint32_t)out_addr;
+    sp->num_return_values = 0;
+    return BINGO_RET_SUCC;
+#endif
+}
+
+// ==========================================================================
+// col_major -> B: the transposed RMSNorm, straight into a GEMM's B operand.
+//
+// The col_major kernel above normalises y^T[d, T] about 3x cheaper than the row_major one,
+// but its lanes carry four consecutive TOKENS, so its output can never be an A operand
+// without a transpose. It is exactly a B operand's atom, though: B of y [T, d] is
+// (n, k, c, s) with the contraction over tokens, so a GEMM that contracts over the
+// sequence -- attention's P.V, whose V is [keys, d] -- reads this tile directly.
+//
+//     1  reduce(SUMSQ | LANEWISE)   x^T  -> ssq    one beat, lane t = token t
+//     2  map(1/D, RSQRT), 1 beat    ssq  -> seed
+//     3  ew(MUL | STICKY_B)   seed + x^T -> yt     y^T, rows at a bank-safe pitch
+//     4  blocked(yt)                     -> B      [+ Fp16ToInt8]
+//
+// Queued; one wait.
+//
+// WHY PASS 3 CANNOT ALSO BE THE BLOCKED READ, which would save a pass. The sticky operand
+// is ONE latched beat whose lane t is token t's scale. Whatever order the blocked read
+// takes, each of its lanes carries four consecutive TOKENS, and which four changes as it
+// walks -- no single latched beat lines up with that. So pass 3 multiplies in plain order
+// and writes y^T at the host's pitch (72 B at rows = 32, pitch/8 = 9, odd), and pass 4
+// reorders it.
+//
+// MEASURED the same way as row_major -> A: 1,152 cc to int8 B, 1,022 cc to fp16 B at
+// [32, 128], bit-exact against the row_major result read through the B index map.
+// ==========================================================================
+static inline uint32_t _bingo_rmsnorm_col_to_b(void *arg, uint32_t out_i8) {
+    BINGO_REQUIRE_CORE(snax_is_simd_core(), "simd_rmsnorm(col_major->B)", "SIMD");
+#if !BINGO_HAS_STREAMMAP || !BINGO_HAS_STREAMREDUCE || !BINGO_HAS_STREAMELEMENTWISE || \
+    !BINGO_HAS_FP16TOINT8 || !BINGO_SIMD_HAS_RSQRT
+    (void)out_i8;
+    BINGO_SIMD_EXT_UNSUPPORTED(
+        "simd_rmsnorm(col_major->B)",
+        "StreamMap(RSQRT)+StreamReduce(LANEWISE)+StreamElementwise(STICKY_B)+Fp16ToInt8");
+#else
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+    const __snax_bingo_kernel_simd_rmsnorm_args_t *a =
+        (const __snax_bingo_kernel_simd_rmsnorm_args_t *)arg;
+    uint64_t seed_addr = make_u64(a->seed_addr_hi, a->seed_addr_lo);
+    uint64_t in_addr = make_u64(a->input_addr_hi, a->input_addr_lo);
+    uint64_t out_addr = make_u64(a->output_addr_hi, a->output_addr_lo);
+    uint32_t rows = a->rows;
+    uint32_t cols = a->cols;
+    bingo_kernel_scratchpad_t *sp =
+        BINGO_GET_SP(arg, __snax_bingo_kernel_simd_rmsnorm_args_t);
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+    BINGO_SIMD_REQUIRE_LOCAL(seed_addr, "simd_rmsnorm(col_major->B)", "seed");
+    BINGO_SIMD_REQUIRE_LOCAL(in_addr, "simd_rmsnorm(col_major->B)", "input");
+    BINGO_SIMD_REQUIRE_LOCAL(out_addr, "simd_rmsnorm(col_major->B)", "output");
+
+    // The col_major kernel's two structural constraints, unchanged.
+    if (rows != SIMD_BEAT_BYTES / 2u) {
+        printf_safe("[Cluster %d Core %d]: simd_rmsnorm(col_major->B) needs rows == %d "
+                    "(one FP16 lane per token); got %d. Split the tile.\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx(),
+                    (int)(SIMD_BEAT_BYTES / 2u), (int)rows);
+        return BINGO_RET_FAIL;
+    }
+    if ((uint32_t)seed_addr + SIMD_BEAT_BYTES != (uint32_t)in_addr) {
+        printf_safe("[Cluster %d Core %d]: simd_rmsnorm(col_major->B) needs the seed beat "
+                    "directly below x^T (seed %08x + %d != x %08x). Allocate ONE buffer "
+                    "of (1 + cols) beats.\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx(), (uint32_t)seed_addr,
+                    (int)SIMD_BEAT_BYTES, (uint32_t)in_addr);
+        return BINGO_RET_FAIL;
+    }
+
+    // The host's choice, as for row_major -> A: at least one y^T row (2*rows B), and pitch/8
+    // odd (72 B at rows = 32).
+    uint32_t pitch = a->blk_pitch;
+    if (pitch < 2u * rows || pitch % SIMD_LANE_BYTES) {
+        printf_safe("[Cluster %d Core %d]: simd_rmsnorm(col_major->B) blk_pitch %d is shorter "
+                    "than a y^T row (%d B). Rebuild the args on the host.\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx(), (int)pitch, (int)(2u * rows));
+        return BINGO_RET_FAIL;
+    }
+    uint32_t log2D = 0u;
+    for (uint32_t t = cols; t > 1u; t >>= 1u) log2D++;
+
+    // Scratch: [ ssq (one beat) | yt (y^T, cols rows at `pitch`) ]. ssq is kept apart from
+    // the seed slot for the col_major kernel's reason: a task that reads and writes one
+    // address relies on an ordering the block does not promise.
+    uint32_t from_pool;
+    uint32_t scratch_lo =
+        _bingo_rmsnorm_scratch(SIMD_BEAT_BYTES + cols * pitch + 64u, &from_pool);
+    if (!scratch_lo) {
+        printf_safe("[Cluster %d Core %d]: simd_rmsnorm(col_major->B) L1 scratch alloc "
+                    "failed!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+    uint8_t *ssq = (uint8_t *)((scratch_lo + 63u) & ~63u);
+    uint8_t *yt = ssq + SIMD_BEAT_BYTES;
+    void *seed = (void *)(uint32_t)seed_addr;
+    snax_simd_shape_t in, out;
+
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
+    // 1  SUMSQ | LANEWISE over the whole tile as ONE "row": the per-lane accumulators ARE
+    //    the per-token sums.
+    snax_simd_shape_rows(&in, (void *)(uint32_t)in_addr, 1u, cols, cols * SIMD_BEAT_BYTES);
+    snax_simd_shape_flat(&out, ssq, 1u);
+    snax_simd_use2(SIMD_EXT_STREAMREDUCE, SIMD_EXT_STREAMREDUCE_CSR, cols,
+                   SIMD_RED_SUMSQ | SIMD_RED_LANEWISE);
+    snax_simd_program_fast(&in, &out);
+    snax_simd_fire();
+
+    // 2  map(1/D, RSQRT) over that one beat, into the seed slot below x^T.
+    snax_simd_shape_flat(&in, ssq, 1u);
+    snax_simd_shape_flat(&out, seed, 1u);
+    snax_simd_use3(SIMD_EXT_STREAMMAP, SIMD_EXT_STREAMMAP_CSR, 0x3F800000u - (log2D << 23),
+                   0u, SIMD_FUNC_RSQRT);
+    snax_simd_program_fast(&in, &out);
+    snax_simd_fire();
+
+    // 3  ew(MUL | STICKY_B): 1 + cols beats in, cols out, one beat per feature row, rows
+    //    `pitch` apart.
+    snax_simd_shape_flat(&in, seed, cols + 1u);
+    snax_simd_shape_rows(&out, yt, cols, 1u, pitch);
+    snax_simd_use2(SIMD_EXT_STREAMELEMENTWISE_1, SIMD_EXT_STREAMELEMENTWISE_1_CSR, 1u,
+                   SIMD_EW_MUL | SIMD_EW_STICKY_B);
+    snax_simd_program_fast(&in, &out);
+    snax_simd_fire();
+
+    // 4  y^T read in the B operand's order. Drains all of it.
+    uint32_t rc = simd_pass_blocked(yt, (void *)0, (void *)(uint32_t)out_addr, a, out_i8,
+                                    out_i8 ? _bingo_rmsnorm_inv_scale(arg) : 0u);
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
+
+    if (!from_pool) snrt_l1_free(scratch_lo);
+    if (rc != BINGO_RET_SUCC) {
+        printf_safe("[Cluster %d Core %d]: simd_rmsnorm(col_major->B) pass failed!\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+    sp->return_value = (uint32_t)out_addr;
+    sp->num_return_values = 0;
+    return BINGO_RET_SUCC;
+#endif
+}
+
+// ==========================================================================
+// THE ONE REGISTERED RMSNorm. Everything above is an implementation; this is the only
+// symbol the kernel table carries.
+//
+// The caller does not choose an algorithm, it states the two LAYOUTS -- what the producer
+// hands over and what the consumer wants -- and those decide which machine runs:
+//
+//     input \ output   row_major        col_major        A               B
+//     row_major        fold + splat     --               row_major->A    --
+//     col_major        --               lanewise         --              col_major->B
+//
+// out_prec picks FP16 or INT8 on every route except col_major -> col_major.
+//
+// THE FOUR EMPTY CELLS ARE TRANSPOSES, and a transpose is the xDMA's job: the SIMD core
+// reads and writes one orientation, and a lane can only carry a run that is contiguous in
+// memory. A's atom is four consecutive features of one token, which only a row_major tile
+// holds contiguously; B's is four consecutive tokens of one feature, which only a
+// col_major one does. So the block level routes: a consumer that wants A gets the
+// row_major kernel, one that wants B the col_major kernel, and any transpose is an xDMA
+// node in front.
+//
+// A and B take ANY mesh the host can derive a blocked nest for; the kernel executes the
+// descriptor in the args and never looks at the mesh itself.
+// ==========================================================================
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_rmsnorm(void *arg) {
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_simd_rmsnorm_args_t);
+    const __snax_bingo_kernel_simd_rmsnorm_args_t *a =
+        (const __snax_bingo_kernel_simd_rmsnorm_args_t *)arg;
+    uint32_t in = a->input_layout, out = a->output_layout;
+    uint32_t i8 = (a->out_prec == BINGO_PREC_I8);
+
+    if (out == BINGO_LAYOUT_A || out == BINGO_LAYOUT_B) {
+        // The nest comes from the host. An all-zero descriptor is a caller that built the
+        // struct without deriving one -- refused, because a zero bound would drop the task
+        // and a zero lane stride would write every lane to one address.
+        if (!a->blk_pitch || !a->blk_rd_lane || !a->blk_wr_lane || !a->blk_rd_bound0 ||
+            !a->blk_wr_bound0) {
+            printf_safe("[Cluster %d Core %d]: simd_rmsnorm: output_layout %u with no "
+                        "blocked nest in the args. Derive it on the host "
+                        "(kernels/blocked_nest.py) for this mesh.\r\n",
+                        snrt_cluster_idx(), snrt_cluster_core_idx(), (unsigned)out);
+            return BINGO_RET_FAIL;
+        }
+        if (in == BINGO_LAYOUT_ROW_MAJOR && out == BINGO_LAYOUT_A)
+            return _bingo_rmsnorm_row_to_a(arg, i8);
+        if (in == BINGO_LAYOUT_COL_MAJOR && out == BINGO_LAYOUT_B)
+            return _bingo_rmsnorm_col_to_b(arg, i8);
+        printf_safe("[Cluster %d Core %d]: simd_rmsnorm: input_layout %u -> output_layout "
+                    "%u is a transpose. A takes a row_major input (its atom is four "
+                    "features of one token), B a col_major one (four tokens of one "
+                    "feature). Put an xDMA transpose in front.\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx(), (unsigned)in,
+                    (unsigned)out);
+        return BINGO_RET_FAIL;
+    }
+
+    // THE SIMD CORE DOES NOT TRANSPOSE. A differing pair is a caller that meant to put an
+    // xDMA transpose in front and did not. Refused rather than normalised, because
+    // normalising the wrong tensor produces plausible numbers and no error anywhere.
+    if (in != out) {
+        printf_safe("[Cluster %d Core %d]: simd_rmsnorm: input_layout %u != "
+                    "output_layout %u. The SIMD core cannot transpose; put an "
+                    "xDMA transpose on the side that differs.\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx(), (unsigned)in,
+                    (unsigned)out);
+        return BINGO_RET_FAIL;
+    }
+    if (in == BINGO_LAYOUT_COL_MAJOR) {
+        if (i8) {
+            printf_safe("[Cluster %d Core %d]: simd_rmsnorm: col_major -> col_major is "
+                        "FP16 out only. For an int8 GEMM operand ask for output_layout B, "
+                        "which quantises in the same kernel.\r\n",
+                        snrt_cluster_idx(), snrt_cluster_core_idx());
+            return BINGO_RET_FAIL;
+        }
+        return _bingo_rmsnorm_col_major(arg);
+    }
+    return _bingo_rmsnorm_row_major(arg, i8 ? SIMD_OUT_I8 : SIMD_OUT_F16);
 }
 
 // ==========================================================================

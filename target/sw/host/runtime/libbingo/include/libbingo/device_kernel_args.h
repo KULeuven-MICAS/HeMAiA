@@ -800,11 +800,18 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_softmax_t_args {
 //                           512-bit beat) and FP16 output. seed_addr is REQUIRED -- see
 //                           below.
 //
-// input_layout AND output_layout MUST MATCH. The SIMD core reads and writes in the same
-// orientation; it has no transposer. They are both carried so that a mismatch -- a caller
-// that meant to put an xDMA transpose in front and forgot -- is a refusal here rather than
-// a correct normalisation of the wrong tensor. The block in libs/block/simd/norm.py emits
-// the transposes and guarantees they agree.
+// THE LAYOUT PAIRS THE KERNEL RUNS, and nothing else:
+//
+//     row_major -> row_major     row_major -> A       (A: the GEMM's A operand of y)
+//     col_major -> col_major     col_major -> B       (B: its B operand, K = tokens)
+//
+// The SIMD core reads and writes in one orientation and has no transposer, and a lane can
+// only carry a run that is contiguous in memory: A's atom is four features of one token
+// (a row_major run), B's four tokens of one feature (a col_major run). Every other pair is
+// a transpose, and it is refused here rather than normalising the wrong tensor. The block
+// in libs/block/simd/norm.py emits the xDMA transposes and guarantees the pair is legal.
+// A and B work for any mesh whose operand block a blocked nest can write; which meshes
+// those are is decided on the host (kernels/blocked_nest.py), not here.
 //
 // FOR COL_MAJOR, seed_addr AND input_addr ARE ONE ALLOCATION. seed_addr is a 64 B scratch
 // beat the kernel writes and then reads back as the sticky operand, and it must sit
@@ -838,9 +845,28 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_rmsnorm_args {
   uint32_t cols;                 // per-row fp16 length D (a power-of-two multiple of 32)
   uint32_t input_layout;         // BINGO_LAYOUT_*
   uint32_t output_layout;        // BINGO_LAYOUT_*, must equal input_layout
-  uint32_t out_prec;             // BINGO_PREC_*; col_major supports F16 only
+  uint32_t out_prec;             // BINGO_PREC_*; col_major -> col_major supports F16 only
+  uint32_t inv_scale_f32bits;    // int8 out: Fp16ToInt8 scale, FP32 bits; 0 = baked 64.0
+  // THE BLOCKED OUTPUTS (output_layout A or B), for ANY mesh. The host derives the
+  // reorder for the mesh and output precision -- kernels/blocked_nest.py, verified there
+  // against the layout's index map -- and the device executes it without interpreting:
+  // the source is the kernel's own re-laid tile, `blk_pitch` bytes a row. Loops are
+  // innermost first, unused ones bound 1 / stride 0. `rd` excludes the operand interleave,
+  // which the device adds innermost when the pass multiplies. The whole task repeats
+  // `blk_reps` times with both bases advanced by the rep strides. All zero when the output
+  // is not blocked.
+  uint32_t blk_pitch;
+  uint32_t blk_rd_lane;
+  uint32_t blk_rd_bound0, blk_rd_bound1, blk_rd_bound2;
+  uint32_t blk_rd_stride0, blk_rd_stride1, blk_rd_stride2;
+  uint32_t blk_wr_lane;
+  uint32_t blk_wr_bound0, blk_wr_bound1, blk_wr_bound2;
+  uint32_t blk_wr_stride0, blk_wr_stride1, blk_wr_stride2;
+  uint32_t blk_reps;
+  uint32_t blk_rep_rd, blk_rep_wr;
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_simd_rmsnorm_args_t;
+
 
 // Whole FP16 SiLU (x*sigmoid(x)) in one DM-core kernel: a single StreamMap pass, plus an optional
 // fused FP16->INT8 quant leaf. Elementwise; the kernel derives beats = cols/32 and the int8 scale

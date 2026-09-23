@@ -120,7 +120,9 @@ SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
     // out of the accumulators with no fold and ride back as sticky seeds -- and the
     // reciprocal becomes rsqrt(s*s), so nothing leaves the datapath.
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_softmax_t_f16_f16),
-    // Whole FP16 rmsnorm in one kernel (StreamMap RSQRT; baked 64.0 int8 scale).
+    // Whole FP16 rmsnorm in one kernel (StreamMap RSQRT), routed by the layout pair:
+    // row_major -> row_major | A, col_major -> col_major | B. A and B are the GEMM's
+    // operand layouts, fp16 or int8 (caller's scale, or a baked 64.0).
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_rmsnorm),
     // The same normalisation over x^T: one token per lane, so the reduce is LANEWISE and
     // the scale is sticky -- no cross-lane fold, no broadcast plane, ~3x cheaper.
