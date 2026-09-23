@@ -160,10 +160,13 @@ class RoPE(Block):
         row = (c.rows, c.cols)
         ports = {
             "x": PortSpec(Layout.ROW_MAJOR, DType.F16, row, mem_level=MemLevel.L1,
+                          cluster=c.cluster,
                           doc="row-major fp16, one row per token position (slot 0)"),
             "cos": PortSpec(Layout.ROW_MAJOR, DType.F16, row, mem_level=MemLevel.L1,
+                            cluster=c.cluster,
                             doc="precomputed cos table, duplicated per pair (slot 1)"),
             "sin": PortSpec(Layout.ROW_MAJOR, DType.F16, row, mem_level=MemLevel.L1,
+                            cluster=c.cluster,
                             doc="precomputed sin table, sign already applied (slot 3)"),
         }
         if self.x_partner_ready:
@@ -174,6 +177,7 @@ class RoPE(Block):
             # _PAIRING. Binding it is the caller asserting it.
             ports["xswap"] = PortSpec(
                 Layout.ROW_MAJOR, DType.F16, row, mem_level=MemLevel.L1,
+                cluster=c.cluster,
                 doc="x with each element replaced by its partner (slot 2), caller-built")
         return ports
 
@@ -181,7 +185,8 @@ class RoPE(Block):
     def outputs(self) -> dict:
         c = self.cfg
         return {"y": PortSpec(Layout.ROW_MAJOR, DType.F16, (c.rows, c.cols),
-                              mem_level=MemLevel.L1, doc="row-major fp16, rotated")}
+                              mem_level=MemLevel.L1, cluster=c.cluster,
+                              doc="row-major fp16, rotated")}
 
     def build(self, ctx: Ctx, bound: dict) -> BlockResult:
         c = self.cfg
@@ -224,7 +229,7 @@ class RoPE(Block):
         # is not; the tables and a caller-built slot 2 are always read by the rotation.
         first_x = nodes[0]
         return BlockResult(
-            outputs={"y": Port(self.outputs["y"], out, (nd,), cluster=c.cluster, name="y")},
+            outputs={"y": Port(self.outputs["y"], out, (nd,), name="y")},
             inputs={name: Port(self.inputs[name], slots[name],
                                (first_x if name == "x" else nd,), name=name)
                     for name in self.inputs},

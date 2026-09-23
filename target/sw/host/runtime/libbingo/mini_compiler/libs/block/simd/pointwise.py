@@ -18,7 +18,7 @@ split is not tidiness: it is the difference between an operand a block may accep
 finds it and one it has to convert first.
 """
 
-from dataclasses import dataclass, replace
+from dataclasses import replace
 
 from bingo_kernel_args import (SnaxBingoKernelSimdAddF16Args,
                                SnaxBingoKernelSimdFp16ToInt8Args,
@@ -76,14 +76,14 @@ class Quantize(Block):
     def inputs(self) -> dict:
         c = self.cfg
         return {"x": PortSpec(self.layout, DType.F16, (c.rows, c.cols),
-                              mem_level=MemLevel.L1,
+                              mem_level=MemLevel.L1, cluster=c.cluster,
                               doc="fp16 in this block's layout")}
 
     @property
     def outputs(self) -> dict:
         c = self.cfg
         return {"y": PortSpec(self.layout, DType.I8, (c.rows, c.cols),
-                              mem_level=MemLevel.L1,
+                              mem_level=MemLevel.L1, cluster=c.cluster,
                               doc="int8, same layout -- quantising is elementwise")}
 
     def build(self, ctx: Ctx, bound: dict) -> BlockResult:
@@ -96,7 +96,7 @@ class Quantize(Block):
                         beats=(c.rows * c.cols * 2) // 64, rows=1,
                         inv_scale_f32bits=self.inv_scale_f32bits))
         return BlockResult(
-            outputs={"y": Port(self.outputs["y"], out, (nd,), cluster=c.cluster, name="y")},
+            outputs={"y": Port(self.outputs["y"], out, (nd,), name="y")},
             inputs={"x": Port(self.inputs["x"], bound["x"].handle, (nd,), name="x")},
             nodes=[nd])
 
@@ -138,7 +138,8 @@ class Residual(Block):
     @property
     def inputs(self) -> dict:
         c = self.cfg
-        spec = PortSpec(self.layout, self.dtype, (c.rows, c.cols), mem_level=MemLevel.L1)
+        spec = PortSpec(self.layout, self.dtype, (c.rows, c.cols),
+                        mem_level=MemLevel.L1, cluster=c.cluster)
         return {"a": replace(spec, doc="the branch output"),
                 "b": replace(spec, doc="the skip")}
 
@@ -146,7 +147,7 @@ class Residual(Block):
     def outputs(self) -> dict:
         c = self.cfg
         return {"y": PortSpec(self.layout, self.dtype, (c.rows, c.cols),
-                              mem_level=MemLevel.L1,
+                              mem_level=MemLevel.L1, cluster=c.cluster,
                               doc="a + b")}
 
     def build(self, ctx: Ctx, bound: dict) -> BlockResult:
@@ -162,7 +163,7 @@ class Residual(Block):
                         bound["a"].handle, bound["b"].handle, out,
                         rows=c.rows, cols=c.cols))
         return BlockResult(
-            outputs={"y": Port(self.outputs["y"], out, (nd,), cluster=c.cluster, name="y")},
+            outputs={"y": Port(self.outputs["y"], out, (nd,), name="y")},
             inputs={n: Port(self.inputs[n], bound[n].handle, (nd,), name=n)
                     for n in ("a", "b")},
             nodes=[nd])
@@ -221,14 +222,14 @@ class Dequantize(Block):
     def inputs(self) -> dict:
         c = self.cfg
         return {"x": PortSpec(self.layout, DType.F16, (c.rows, c.cols),
-                              mem_level=MemLevel.L1,
+                              mem_level=MemLevel.L1, cluster=c.cluster,
                               doc="fp16 straight off the GEMM's D port")}
 
     @property
     def outputs(self) -> dict:
         c = self.cfg
         return {"y": PortSpec(self.layout, DType.F16, (c.rows, c.cols),
-                              mem_level=MemLevel.L1,
+                              mem_level=MemLevel.L1, cluster=c.cluster,
                               doc="fp16 back in activation range, same layout")}
 
     def build(self, ctx: Ctx, bound: dict) -> BlockResult:
@@ -240,6 +241,6 @@ class Dequantize(Block):
                         bound["x"].handle, out, scale_f32bits=self.scale_f32bits,
                         rows=c.rows, cols=c.cols))
         return BlockResult(
-            outputs={"y": Port(self.outputs["y"], out, (nd,), cluster=c.cluster, name="y")},
+            outputs={"y": Port(self.outputs["y"], out, (nd,), name="y")},
             inputs={"x": Port(self.inputs["x"], bound["x"].handle, (nd,), name="x")},
             nodes=[nd])

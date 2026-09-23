@@ -10,8 +10,27 @@ Each is a sub-DFG with a declared interface, built once, in pipeline order.
 | `linear.py` | `Linear` — one INT8 GEMM with its operand loads. Every weight matrix in a layer is this block with different shapes. |
 | `simd/` | The per-row and per-element operators a layer is glued together with, split on whether layout is load-bearing: `simd/pointwise.py` (`Quantize`, `Dequantize`, `Residual` — elementwise, any layout), `simd/norm.py` (`RMSNorm` — reduces along a row, so orientation is worth 3x), `simd/rope.py` (`RoPE` — rotates along a row), `simd/common.py` (the tile and the beat). |
 | `reshape.py` | `Reshape` — an explicit layout change as a stage, for the gap between two blocks that both live in L1. |
+| `shard.py` | `Scatter` and `Gather` — the two ends of a row split, so a layer can run a row-independent operator on every cluster. |
 
 `workloads/llm_layer_4cluster` assembles them into one transformer layer.
+
+## One block, one cluster
+
+Every block here runs where its cfg says, and its ports declare it, so the pipeline refuses
+a binding that would have a kernel read another cluster's TCDM. Spreading an operator over
+the machine is therefore something the **layer writes** — `Scatter`, one block per cluster,
+`Gather` — which keeps the decomposition visible in the layer's own source and every node's
+placement on a port that is checked.
+
+Two blocks do span clusters, and each states why it is one construct rather than several:
+`FlashAttention` interleaves its per-cluster pipelines (node creation order is dispatch
+order, so emitting them back to back would be a different schedule), and `MoeFFN`'s expert
+lanes are branches of one conditional fork. Both declare **per-cluster ports**, so what
+crosses their boundary is still explicit.
+
+A `Gather` costs one local copy on the root that a hand-written split would not: a block
+allocates its own output and cannot be handed someone else's buffer to write into. It is
+one iDMA move on the otherwise idle DM core.
 
 ## Which ops care about layout
 
@@ -29,9 +48,9 @@ block reduces along beats for free (one FP32 accumulator per lane) and across th
 a beat only through a serialised fold that stalls the reader once per row. Store the tile
 transposed and one lane *is* one token, so the fold disappears and the scale rides back in
 as a sticky operand instead of a replicated plane: `RMSNorm` measures 3,135 → 1,073 cc at
-[32, 128]. `RoPE` has no reduction, so there is nothing for it to win. `NormCfg` carries
-`in_transposed` / `out_transposed` so the orientation propagates along a chain and each
-conversion is paid at most once; `PortSpec.transposed` is what lets the linker see it.
+[32, 128]. `RoPE` has no reduction, so there is nothing for it to win. `NormCfg` carries `in_layout`
+/ `out_layout`; left unset each is a knob the block owns and the resolver fills from the
+neighbours, and pinned it is a boundary the layer asked for.
 
 That forces the order a layer has to use, and it is hardware, not taste:
 
@@ -44,17 +63,19 @@ out of A-layout needs an 8-byte run contiguous on both sides — at int8 an A-la
 `tileSize` run is 4 bytes and falls off the hardware path. Quantising first would make the
 reshape impossible; `comm/nest.py` refuses it by name.
 
-## FlashAttention takes three ports, whatever the cluster count
+## FlashAttention takes three ports, whatever the placement
 
-`q`, `k`, `v`. How they are split across clusters is the block's business:
+`q`, `k`, `v`. `FaCfg.clusters` names the clusters it runs on; how the operands are
+split across them is the block's business:
 
 | decomposition | `q` | `k` | `v` |
 |---|---|---|---|
 | `headpar` | `[clusters·Br, d]`, one query head per cluster, stacked | `[Bc, d]`, shared (that IS the GQA relation) | `[Bc, d]`, shared |
 | `kvsplit` | `[Br, d]`, shared | `[clusters·Bc, d]`, disjoint KV shards, stacked | `[Bc, d]`, shared |
 
-The block slices them with byte offsets. Declaring nine ports instead made the caller know
-about clusters for no reason.
+The block slices them with byte offsets. Its per-cluster tables are indexed by position,
+so `validate()` refuses a placement that is not contiguous from 0 — lifting that is an
+audit of every such index, not a parameter change.
 
 It also names **no memory level** on those ports. Where the caller keeps Q, K and V is the
 caller's business — main memory, the memory-chiplet pool, or an L1 buffer a previous block

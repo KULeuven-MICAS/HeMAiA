@@ -104,10 +104,12 @@ loop two orders of magnitude slower.
 4. WHICH ROUTE, AND WHO DECIDES
 ======================================================================================
 
-`in_layout`, `out_layout` and `out_dtype` may be left UNSET. Then they are knobs this
-block owns: `variants()` offers every combination, each one realised through the
-constructor above -- so the refusals in section 3 are what prunes the list -- and the
+`in_layout`, `out_layout`, `out_dtype` and `in_level` may be left UNSET. Then they are
+knobs this block owns: `variants()` offers every combination, each one realised through
+the constructor above -- so the refusals in section 3 are what prunes the list -- and the
 pipeline picks the realisation whose boundary matches the neighbours at the least cost.
+`in_level` is the one that is purely about WHERE: L1 uses x where it lies, L3 puts this
+block's own Load_x in front, and which one applies follows from the producer.
 
 The block prices itself from the same decision build() makes, so nothing is measured and
 nothing rots:
@@ -130,7 +132,28 @@ kernel is something a layer asks for by connecting the norm to the GEMM directly
 something that happens to stages it wrote down.
 
 ======================================================================================
-5. BUFFERS AND ENGINES
+5. ONE CLUSTER, AND WHAT SPLITTING THE ROWS COSTS
+======================================================================================
+
+`cfg.cluster` is where this block's kernels run, and its ports declare it -- so binding it
+to a buffer in another cluster's TCDM is refused rather than discovered as a transfer that
+moved nothing. Which cluster is a statement, never a knob: the cost order below ranks
+engines, not clusters, so it cannot compare two placements, and what else the machine is
+running is not something this block can see.
+
+RUNNING ONE NORM PER CLUSTER IS THEREFORE THE LAYER'S TO WRITE -- `Scatter`, one of these
+per cluster over `rows / N`, `Gather` (libs/block/shard.py). Rows are independent, so the
+split is legal; the per-row scalar epilogue is what it buys, since that loop divides.
+
+AND IT TRADES AGAINST THE col_major KERNEL, visibly. That kernel needs `rows == 32`, one
+FP16 lane per token, so splitting a 32-row tile four ways leaves 8 rows per cluster and
+only the row_major route exists -- with its fold per row, and with `out_layout` B refused,
+since B's atom is four tokens of one feature. The two are alternatives at T = 32, not
+things to combine, and writing `rows=T//N` at the call site is what makes that visible
+where the choice is made.
+
+======================================================================================
+6. BUFFERS AND ENGINES
 ======================================================================================
 
 THE ONE-BEAT HEADROOM. The sticky multiply reads one flat sweep of 1 + D beats whose FIRST
@@ -145,8 +168,10 @@ PLAIN COPIES GO ON THE iDMA, TRANSPOSES ON THE xDMA. Only the xDMA has the 8x8 t
 every other move is a contiguous copy the idle DM core does, instead of queueing behind
 the transposes on the xDMA.
 
-WHERE x LIVES IS READ OFF THE BINDING. `inputs` says mem_level=None -- wherever you have it
--- and build() reads the real level off the bound port.
+WHERE x LIVES IS READ OFF THE BINDING. `inputs` says mem_level=None -- wherever you have
+it -- and build() reads the real level off the bound port. It still names this block's
+cluster, so an x already in L1 has to be in the right one: `_land` only loads from main
+memory, and a plain copy cannot reach another cluster's TCDM.
 
 STILL OPEN: Xpose_out's bank conflict. The transposer's writer spaces its 8 channels
 M * 2 bytes apart; at M = D = 128 that is 256 B, one TCDM sweep, so all eight hit bank 0 --
@@ -228,16 +253,21 @@ class NormCfg:
 
     rows: int
     cols: int
+    # WHERE THE KERNELS RUN. One cluster; the ports declare it and the pipeline checks it.
+    # A layer that wants the rows split runs one of these per cluster -- see section 5.
     cluster: int = 0
-    # THE THREE BOUNDARY FIELDS. Left None, each is a knob this block owns and the
-    # pipeline resolves from the neighbours; pinned, it is a constraint every realisation
-    # has to meet. A layer pins the ones it cares about and leaves the rest open.
+    # THE BOUNDARY FIELDS. Left None, each is a knob this block owns and the pipeline
+    # resolves from the neighbours; pinned, it is a constraint every realisation has to
+    # meet. A layer pins the ones it cares about and leaves the rest open.
     #   in_layout   what the producer hands over: ROW_MAJOR, or COL_MAJOR ([cols, rows])
     #   out_layout  an orientation, or a GEMM operand layout, A or B
     #   out_dtype   F16, or I8 quantised inside the kernel. Not on a col_major output.
     in_layout: Optional[Layout] = None
     out_layout: Optional[Layout] = None
     out_dtype: Optional[DType] = None
+    # WHERE x IS HANDED OVER, the fourth boundary field. L1 uses it where it lies; L3 adds
+    # this block's own Load_x. Left None it is resolved from the producer like the others.
+    in_level: Optional[MemLevel] = None
     # The Fp16ToInt8 scale, FP32 bits. 0 keeps the kernel's baked 64.0 (a normalised row
     # sits in ~[-2, 2]); a layer with a data-derived scale passes it here.
     inv_scale_f32bits: int = 0
@@ -264,7 +294,7 @@ class RMSNorm(Block):
         # The shape checks above still run, because they hold for every realisation and
         # failing them early names the real problem instead of burying it in a list of
         # refused variants.
-        self.free = free_fields(c, ("in_layout", "out_layout", "out_dtype"))
+        self.free = free_fields(c, ("in_layout", "out_layout", "out_dtype", "in_level"))
         if self.free:
             self.route, self._probe, self._buf = None, None, None
             return
@@ -279,6 +309,11 @@ class RMSNorm(Block):
                 f"not an operand.")
         if c.out_dtype not in (DType.F16, DType.I8):
             raise ValueError(f"RMSNorm: out_dtype={c.out_dtype}; fp16 or int8.")
+        if c.in_level not in (MemLevel.L1, MemLevel.L3):
+            raise ValueError(
+                f"RMSNorm: in_level={c.in_level}. This block uses L1 in place or loads "
+                f"from L3 on its own DM core; the memory-chiplet pool is one host hoist "
+                f"for the whole layer, not one per operator.")
 
         self.route = route(c.rows, c.in_layout, c.out_layout, c.out_dtype)
         if (self.route.xpose_in or self.route.xpose_out) and not _transposer_ok(c.rows,
@@ -314,7 +349,8 @@ class RMSNorm(Block):
             return [{}]
         choices = {"in_layout": _ORIENTATIONS,
                    "out_layout": _ORIENTATIONS + _BLOCKED,
-                   "out_dtype": (DType.F16, DType.I8)}
+                   "out_dtype": (DType.F16, DType.I8),
+                   "in_level": (MemLevel.L1, MemLevel.L3)}
         return [dict(zip(self.free, combo))
                 for combo in itertools.product(*(choices[n] for n in self.free))]
 
@@ -350,10 +386,11 @@ class RMSNorm(Block):
         """Transposes this block emits, Xpose_in plus Xpose_out."""
         return int(self.route.xpose_in) + int(self.route.xpose_out)
 
-    def idma_passes(self, in_l3: bool = False) -> int:
-        """Plain copies on the DM core. `in_l3` is a property of the BINDING, which build()
-        reads off the bound port; pass it when pricing a chain whose x stays in main memory."""
+    def idma_passes(self) -> int:
+        """Plain copies on the DM core: Load_x out of main memory, Stage_xt into the
+        headroom buffer."""
         c = self.cfg
+        in_l3 = c.in_level == MemLevel.L3
         if self.route.xpose_in or not self.col_major:
             return 1 if in_l3 else 0                              # Load_x
         return 0 if (c.x_in_place and not in_l3) else 1           # Stage_xt
@@ -405,22 +442,25 @@ class RMSNorm(Block):
     def inputs(self) -> dict:
         self._check_realised()
         c = self.cfg
-        return {"x": PortSpec(c.in_layout, DType.F16, (c.rows, c.cols), mem_level=None,
-                              doc="fp16. col_major means the same tensor stored [cols, "
-                                  "rows]. L1 or L3; the block fetches")}
+        return {"x": PortSpec(c.in_layout, DType.F16, (c.rows, c.cols),
+                              mem_level=c.in_level,
+                              cluster=c.cluster if c.in_level == MemLevel.L1 else None,
+                              doc="fp16. col_major means the same tensor stored "
+                                  "[cols, rows]")}
 
     @property
     def needs(self) -> dict:
         """What this block's OWN transfers read; the linker checks against this."""
         return {"x": PortSpec(self.cfg.in_layout, DType.F16,
-                              (self.cfg.rows, self.cfg.cols), mem_level=MemLevel.L1)}
+                              (self.cfg.rows, self.cfg.cols), mem_level=MemLevel.L1,
+                              cluster=self.cfg.cluster)}
 
     @property
     def outputs(self) -> dict:
         self._check_realised()
         c = self.cfg
         return {"y": PortSpec(c.out_layout, c.out_dtype, (c.rows, c.cols),
-                              mem_level=MemLevel.L1,
+                              mem_level=MemLevel.L1, cluster=c.cluster,
                               doc="normalised, in the layout and precision asked for")}
 
     # ---- building: the route, node by node ---------------------------------------------
@@ -430,11 +470,7 @@ class RMSNorm(Block):
         c, r = self.cfg, self.route
         g = ctx.at(c.cluster)
         src = bound["x"].handle
-        level = bound["x"].spec.mem_level      # the real level, read off the binding
-        if level not in (MemLevel.L1, MemLevel.L3):
-            raise ValueError(
-                f"RMSNorm: x is in {level}. This block loads from L3 or uses L1 in place; "
-                f"the memory-chiplet pool wants a host hoist first, one move per layer.")
+        level = c.in_level
         nodes = []
         nbytes = c.rows * c.cols * 2
 
@@ -479,7 +515,7 @@ class RMSNorm(Block):
             y = out
 
         return BlockResult(
-            outputs={"y": Port(self.outputs["y"], y, (nodes[-1],), cluster=c.cluster,
+            outputs={"y": Port(self.outputs["y"], y, (nodes[-1],),
                                name="y")},
             inputs={"x": Port(self.inputs["x"], bound["x"].handle, (nodes[0],), name="x")},
             nodes=nodes)

@@ -107,7 +107,7 @@ def fa_gather(ctx, cfg, shards, merged_h=None, jct_monoid=None, verify=True):
     merged. Calling it with clusters < 2, or under headpar, is a no-op that returns the
     shards untouched.
     """
-    if cfg.clusters < 2 or cfg.decomp == "headpar":
+    if cfg.ncl < 2 or cfg.decomp == "headpar":
         return shards
     if jct_monoid is None:
         # DERIVED, not defaulted. The junction id is the extension's POSITION in the

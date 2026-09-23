@@ -280,7 +280,8 @@ def bring_in(ctx, name, have: Port, want: PortSpec, *, mesh, elem_bytes, after=(
                                        elem_bytes, handle, dst), prev)
             nodes.append(nd)
             handle, spec = dst, PortSpec(to, spec.dtype, spec.shape,
-                                         mem_level="L1", doc=spec.doc)
+                                         mem_level="L1", cluster=ctx.cluster,
+                                         doc=spec.doc)
         elif st.kind == "transpose":
             # The transposer is a datapath extension on whichever side the cfg declares
             # it (reader on snax_split_cluster, writer elsewhere -- BINGO_TRANSPOSER_ARM
@@ -300,5 +301,6 @@ def bring_in(ctx, name, have: Port, want: PortSpec, *, mesh, elem_bytes, after=(
             flipped = (Layout.COL_MAJOR if spec.layout == Layout.ROW_MAJOR
                        else Layout.ROW_MAJOR)
             handle, spec = dst, PortSpec(flipped, spec.dtype, spec.shape,
-                                         mem_level="L1", doc=spec.doc)
-    return Port(spec, handle, (nodes[-1],), cluster=ctx.cluster, name=name), nodes
+                                         mem_level="L1", cluster=ctx.cluster,
+                                         doc=spec.doc)
+    return Port(spec, handle, (nodes[-1],), name=name), nodes

@@ -312,7 +312,7 @@ def build_layer(ctx, p, data, hs, *, verbose=True):
     # Br is pinned to the SIMD beat at 32, so FA's tile does NOT follow `tokens`; the
     # datagen stages its operands at fa_tile for the same reason.
     fat = int(p.get("fa_tile", 32))
-    fa = pipe.add(FlashAttention(bc=fat, br=fat, dhead=d, nkv=ncl, clusters=ncl,
+    fa = pipe.add(FlashAttention(bc=fat, br=fat, dhead=d, nkv=ncl, clusters=tuple(range(ncl)),
                                  decomp="kvsplit"),
                   name="attn",
                   bind={"q": L3(Layout.B, DType.I8, (fat, d), hs["fa_q"]),

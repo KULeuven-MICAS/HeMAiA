@@ -5,8 +5,10 @@ Router -> top-k gate -> E expert lanes, each its own CERF group -> weighted comb
 losing lanes are skipped by hardware: no dispatch, no weight traffic, no compute.
 
 The block is compute only. Verification stays with the caller, because the goldens and the
-tolerances are workload data -- but a caller that wants cross-stage L1 reuse must order its
-checks BEFORE the stage terminal, which is what Stage.extend is for.
+tolerances are workload data. A caller that wants cross-stage L1 reuse hangs its readback
+off the block's own last node, so the check sits inside this stage rather than between it
+and the next one: liveness needs every user of one buffer to be an ancestor of every user
+of the next, and a check ordered after the stage breaks that.
 """
 
 from dataclasses import dataclass
@@ -40,10 +42,21 @@ class MoeCfg:
     transpose_a: int = 0
     transpose_b: int = 0
     int8_scale_bits: int = 0
-    expert_clusters: Optional[tuple] = None
+    # WHERE THE LANES RUN, one cluster per expert, defaulting to one each in order.
+    # `combine_cluster` is where the weighted sum lands and is a separate choice: the
+    # combine reads every lane's pushed result, so it does not have to sit on any of them.
+    clusters: Optional[tuple] = None
     combine_cluster: int = 0
 
     def __post_init__(self):
+        object.__setattr__(self, "clusters",
+                           tuple(range(self.num_experts)) if self.clusters is None
+                           else tuple(self.clusters))
+        if len(self.clusters) != self.num_experts:
+            raise ValueError(
+                f"MoeCfg: clusters={self.clusters} places {len(self.clusters)} lanes but "
+                f"there are {self.num_experts} experts. Each expert is its own CERF "
+                f"group and runs on its own cluster.")
         mr, ts, mc = self.mesh
         for nm, val, unit in (("tokens", self.tokens, mr),
                               ("d_model", self.d_model, ts), ("d_model", self.d_model, mc),
@@ -53,11 +66,6 @@ class MoeCfg:
                                  f"layer's widths have to tile the array exactly.")
         if self.top_k > self.num_experts:
             raise ValueError(f"MoeCfg: top_k={self.top_k} > num_experts={self.num_experts}.")
-
-    @property
-    def clusters(self):
-        return tuple(range(self.num_experts)) if self.expert_clusters is None \
-            else tuple(self.expert_clusters)
 
     # mesh-TILE counts, which is what a GEMM descriptor's M/K/N mean
     @property
@@ -179,6 +187,13 @@ class MoeFFN(Block):
       in   x        the activation, A-layout int8, read by every expert lane
       out  y        the combined result, D-layout fp16, on the combine cluster
 
+    WHY THIS ONE SPANS CLUSTERS when every other block runs on one. The lanes are not
+    independent sub-graphs placed side by side: they are BRANCHES OF ONE CONDITIONAL FORK,
+    each its own CERF group, recombined by that fork's weighted sum. The fork is a
+    whole-graph construct, so the several clusters here are one thing and there is nothing
+    to assemble them out of. `cfg.clusters` says where the lanes go and
+    `cfg.combine_cluster` where the sum lands.
+
     `weights`, `logits` and `zero_src` are staged data, not ports: they come from the
     workload's own datagen and do not flow between blocks.
     """
@@ -203,7 +218,7 @@ class MoeFFN(Block):
     def outputs(self) -> dict:
         c = self.cfg
         return {"y": PortSpec(Layout.D, DType.F16, (c.tokens, c.d_model),
-                              mem_level=MemLevel.L1,
+                              mem_level=MemLevel.L1, cluster=c.combine_cluster,
                               doc="weighted sum over the selected experts")}
 
     def build(self, ctx: Ctx, bound: dict) -> BlockResult:
@@ -258,7 +273,7 @@ class MoeFFN(Block):
 
         return BlockResult(
             inputs={"x": Port(self.inputs["x"], x_src, tuple(x_readers), name="x")},
-            outputs={"y": Port(self.outputs["y"], out, (combine,), cluster=cc, name="y")},
+            outputs={"y": Port(self.outputs["y"], out, (combine,), name="y")},
             nodes=nodes, sources=sources,
             extra={"fork": fork, "ybuf": ybuf, "probs": probs, "pushes": pushes,
                    "lanes": lanes, "zero": zero, "combine": combine, "router": router})

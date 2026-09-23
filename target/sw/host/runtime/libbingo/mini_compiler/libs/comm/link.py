@@ -36,6 +36,15 @@ order to write the right thing around it. A field it DOES pin is a constraint ev
 realisation has to meet: that is how it keeps hold of a boundary it cares about, and
 `demand()` is the same thing for the far end.
 
+PLACEMENT IS THE APPLICATION'S TOO, AND IS NEVER RESOLVED. Which cluster a block runs on
+is stated on its cfg and declared on its ports, and this file only CHECKS it. It is not a
+knob the resolver turns, because `Cost` has one column per engine and no notion of which
+cluster that engine is in: a fold on cluster 1 and a fold on cluster 0 are different
+resources, so an objective built out of these counts cannot compare two placements. How
+the work spreads over the machine also depends on what else is running there, which no
+block can see. Spreading an operator is therefore something the layer writes -- `Scatter`,
+one block per cluster, `Gather` -- and every node's placement stays visible in its source.
+
 The blocks get a second freedom out of this, and it is the real prize: inside its own
 boundary a block may choose between sub-DFGs that are not equivalent in cost. The RMSNorm
 picks between two kernels whose per-row reduction lands along the beats or across the
@@ -49,9 +58,9 @@ WHY THE LINKER STILL INSERTS NOTHING
 Node CREATION order is dispatch order on this machine. A linker that injected a node
 between two blocks would put it at a point in the order neither block chose, and the
 schedule would move without anything in the source saying so. So the rule is unchanged:
-this file adds EDGES, never nodes. What changed is who owns the conversion -- the
-consuming or producing block, inside its own build, in its own order -- and that is why a
-block has to be able to say which conversions it is willing to own. That is `variants()`.
+this file adds EDGES, never nodes. A conversion is owned by the consuming or producing
+block, inside its own build and in its own order, which is why a block has to be able to
+say which conversions it is willing to own. That is `variants()`.
 
 DEFERRING THE BUILD DOES NOT REORDER IT. Stages build in the order they were added, and
 `raw()` puts non-block work -- an input load, a readback, a check -- into that same order.
@@ -89,9 +98,15 @@ from .variant import Cost, Variant, variants_of
 def check_contract(src, need: PortSpec, *, where: str) -> Optional[str]:
     """Is `src` usable where `need` is required? Returns None, or the reason.
 
-    `src` is a bound Port or a bare PortSpec. The rule is equality on shape, layout and
-    precision, and satisfaction on level: `need.mem_level is None` means the consuming
-    block fetches the operand itself and does not care where it starts.
+    `src` is a bound Port or a bare PortSpec. The rule is EQUALITY, on all five things a
+    port states: shape, layout, precision, memory level and cluster. There is no
+    satisfaction relation and no ordering over the memory hierarchy, because a port never
+    says "anywhere" -- a block that would accept an operand from more than one level or in
+    more than one layout offers a realisation for each, and the resolver picks the one
+    that matches. So a mismatch here is always a real gap.
+
+    Cluster equality falls out rather than being a case: only L1 ports carry a cluster, so
+    two ports that agree on the level either both name one or neither does.
 
     NO GAP IS CLOSED HERE, and none is assumed to be closed elsewhere. A block that will
     convert says so by offering a variant that accepts the other layout; a gap nobody
@@ -109,10 +124,18 @@ def check_contract(src, need: PortSpec, *, where: str) -> Optional[str]:
         return (f"{where}: '{who}' is {spec.dtype} but this port reads {need.dtype}. A "
                 f"precision change needs a SCALE and there is no right default, so it is "
                 f"a step of its own or a block that takes the scale as a parameter.")
-    if need.mem_level is not None and spec.mem_level != need.mem_level:
+    if spec.mem_level != need.mem_level:
         return (f"{where}: '{who}' is in {spec.mem_level} but this port reads "
-                f"{need.mem_level}, and the block does not fetch. Leave the port's "
-                f"mem_level None if it should load the operand itself.")
+                f"{need.mem_level}. No realisation of the consuming block is handed an "
+                f"operand from {spec.mem_level}; give it one, or move the operand with a "
+                f"block that does.")
+    if spec.cluster != need.cluster:
+        return (f"{where}: '{who}' is in cluster {spec.cluster}'s L1 but this port reads "
+                f"cluster {need.cluster}'s. A GEMM or SIMD kernel addresses only its own "
+                f"TCDM, and a remote handle does not fault -- the transfer completes "
+                f"without writing and the destination keeps what it held. Move the "
+                f"operand with an explicit block, or place the consumer on cluster "
+                f"{spec.cluster}.")
     return None
 
 
@@ -343,21 +366,6 @@ class Pipeline:
                 raise ValueError(
                     f"'{st.name}': no realisation of {type(st.template).__name__} is "
                     f"legal at this shape. The block's own reasons:\n{lines}")
-            # NOTHING SAYS WHERE THIS OPERAND IS READ FROM. `mem_level=None` on an input
-            # means "wherever you have it -- I will fetch it", and the fetching is what
-            # `needs` describes. A realisation that says None on BOTH has no level
-            # anywhere, so the binding would hand its engines an address they cannot read
-            # -- which on this machine returns whatever the fabric gives back rather than
-            # faulting. A declaration bug, so it is raised and not merely pruned.
-            for v in st.variants:
-                needs = v.needs
-                for port, spec in v.inputs.items():
-                    if spec.mem_level is None and needs.get(port, spec).mem_level is None:
-                        raise ValueError(
-                            f"'{st.name}.{port}': neither the port nor the block's "
-                            f"`needs` says which memory level this operand is read from. "
-                            f"Give the port a mem_level, or override `needs` on a block "
-                            f"whose build() fetches it.")
             if self.verbose and len(st.variants) > 1:
                 print(f"[pipeline] {st.name}: {len(st.variants)} realisation(s)"
                       + (f", {len(refused)} refused" if refused else ""))

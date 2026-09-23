@@ -12,10 +12,18 @@ mini-compiler still sees ONE assembled DFG and runs every pass on it exactly as 
 this layer only does assembly, and it never inserts a node, because node creation order is
 dispatch order on this machine.
 
-Every port carries four things: SHAPE, LAYOUT, PRECISION and LOCATION. All four are in the
-signature rather than assumed, because none of them faults when it is wrong -- a mismatched
-layout computes a scrambled answer, a mismatched precision reads two elements as one, and
-an address in a memory pool the platform does not have is simply unmapped.
+Every port carries SHAPE, LAYOUT, PRECISION and PLACEMENT -- the memory level and, for
+L1, which cluster's. All of it is in the signature rather than assumed, because none of it
+faults when it is wrong: a mismatched layout computes a scrambled answer, a mismatched
+precision reads two elements as one, an address in a memory pool the platform does not
+have is simply unmapped, and a remote TCDM handle is written by a transfer that completes
+without moving anything.
+
+ONE BLOCK, ONE CLUSTER. A block's kernels run where its cfg says and its ports declare it,
+so spreading an operator over the machine is something a layer assembles -- `Scatter`, one
+block per cluster, `Gather` -- and the pipeline checks every placement on the way. The two
+blocks that do span clusters, FlashAttention and MoeFFN, declare per-cluster ports and say
+in their own docstrings why they are one construct rather than several.
 """
 
 # libs reaches the compiler by FLAT module name (bingo_kernel_args, bingo_node, ...), so
@@ -32,11 +40,11 @@ import _bingo_paths  # noqa: F401,E402
 from . import block, comm, verify  # noqa: E402
 from .comm import (Block, BlockResult, Cost, Ctx, DType, Layout,  # noqa: E402
                    MemLevel, Pipeline, Port, PortSpec, Ref, Stage, Variant,
-                   at_offset, bring_in, check_contract, level_of, link, plan,
-                   variants_of)
+                   at_offset, bring_in, check_contract, cluster_of, level_of,
+                   link, plan, variants_of)
 from .verify import checks  # noqa: E402
 
 __all__ = ["Block", "BlockResult", "Ctx", "Pipeline", "Port", "PortSpec", "Ref", "Stage",
-           "Cost", "Variant", "variants_of",
-           "at_offset", "check_contract", "level_of", "link", "DType", "Layout", "MemLevel",
-           "bring_in", "plan", "checks", "block", "comm", "verify"]
+           "Cost", "Variant", "variants_of", "at_offset", "check_contract", "cluster_of",
+           "level_of", "link", "DType", "Layout", "MemLevel", "bring_in", "plan",
+           "checks", "block", "comm", "verify"]

@@ -47,8 +47,7 @@ A fold count derived from the shape cannot rot. It does not predict a runtime; i
 the arms, and ordering is all a resolver needs.
 """
 
-from dataclasses import dataclass, replace
-from typing import Optional
+from dataclasses import dataclass
 
 _HOOKS = (("folds", "simd_folds"), ("simd", "simd_passes"),
           ("xdma", "xdma_passes"), ("idma", "idma_passes"))
@@ -160,12 +159,3 @@ def free_fields(cfg, names) -> list:
     return [n for n in names if getattr(cfg, n) is None]
 
 
-def fill(cfg, **params):
-    """`dataclasses.replace`, refusing to overwrite a field the caller pinned."""
-    for k, v in params.items():
-        cur = getattr(cfg, k)
-        if cur is not None and cur != v:
-            raise ValueError(
-                f"{type(cfg).__name__}.{k} is pinned to {cur}; a variant may not respec "
-                f"it to {v}. Leave it unset to make it a knob the block owns.")
-    return replace(cfg, **params)

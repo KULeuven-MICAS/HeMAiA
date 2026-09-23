@@ -56,7 +56,7 @@ _NEG_INF16 = 0xFBFFFBFF
 
 def _pull_owner(cfg, j):
     """Which cluster fetches tile j from main memory; the rest pull it from that cluster."""
-    return (j % cfg.clusters) if cfg.pull_rotate else 0
+    return cfg.clusters[j % cfg.ncl] if cfg.pull_rotate else cfg.clusters[0]
 
 
 def _bcast_owner(cfg, j, skew=0):
@@ -68,7 +68,8 @@ def _bcast_owner(cfg, j, skew=0):
     issue at once, and it is also the bisect the adapter hang wants -- if TWO concurrent
     issuers already hang, the star multicast is irrelevant and any pair reproduces it.
     """
-    return ((j + skew) % cfg.clusters) if cfg.bcast_spread else (skew % cfg.clusters)
+    return (cfg.clusters[(j + skew) % cfg.ncl] if cfg.bcast_spread
+            else cfg.clusters[skew % cfg.ncl])
 
 
 @dataclass(frozen=True)
@@ -94,8 +95,15 @@ class FaCfg:
     n: int
     nkv: int
     nq: int = 1
-    clusters: int = 4
+    # WHICH CLUSTERS THE PIPELINES RUN ON. A tuple, like every other block's placement,
+    # so the layer states where attention goes rather than only how wide it is.
+    clusters: tuple = (0, 1, 2, 3)
     decomp: str = "headpar"
+    # WHERE Q, K AND V ARE HANDED OVER. The per-tile loads are cluster iDMA and xDMA reads
+    # of main memory, so L3 is where they have to be by the time those run; an operand in
+    # the memory-chiplet pool is hoisted once in the prologue instead of fetched per tile
+    # across the D2D link. One field for all three: they come from one staging pass.
+    operand_level: MemLevel = MemLevel.L3
     score_shift_extra: int = 0
 
     # ---- hardware: checked, not chosen --------------------------------------------------
@@ -175,7 +183,9 @@ class FaCfg:
     @property
     def qshift(self): return qshift(self.dhead) + self.score_shift_extra
     @property
-    def nkv_per(self): return self.nkv // self.clusters
+    def ncl(self): return len(self.clusters)
+    @property
+    def nkv_per(self): return self.nkv // self.ncl
 
     # ---- the constraints the kernels impose ------------------------------------------
     def validate(self) -> "FaCfg":
@@ -192,6 +202,17 @@ class FaCfg:
                 f"neither would fault.")
         if self.decomp not in ("headpar", "kvsplit"):
             raise ValueError(f"decomp={self.decomp!r} must be 'headpar' or 'kvsplit'")
+        # THE PER-CLUSTER LISTS ARE POSITIONAL. Every buffer table, shard list and operand
+        # slice in this file is built in cluster order and then read back by cluster id,
+        # so a placement whose position is not its id would index one cluster's buffers
+        # with another's number and compute a wrong answer nothing faults on. Lifting this
+        # is an audit of every such index, not a parameter change, so it is refused here
+        # rather than half-supported.
+        if tuple(self.clusters) != tuple(range(self.ncl)):
+            raise ValueError(
+                f"clusters={tuple(self.clusters)}: this attention places its pipelines on "
+                f"clusters 0..n-1 and indexes its per-cluster tables by position. Pass a "
+                f"contiguous tuple starting at 0.")
         # Br IS NOT A FREE KNOB. Every per-query-row vector in the softmax arena -- the
         # running max, the running sum, every correction factor -- is ONE SIMD beat, and a
         # score row is one beat too. A beat is SIMD_WIDTH = 512 b, so it holds exactly
@@ -210,9 +231,9 @@ class FaCfg:
         if self.bc % 2:
             raise ValueError(f"Bc={self.bc} must be even: the quantiser packs two beats "
                              f"into one")
-        if self.nkv % self.clusters:
+        if self.nkv % self.ncl:
             raise ValueError(
-                f"nkv={self.nkv} must divide across {self.clusters} clusters: each cluster "
+                f"nkv={self.nkv} must divide across {self.ncl} clusters: each cluster "
                 f"owns a disjoint run of KV tiles and the merge assumes every shard covers "
                 f"the same count.")
         if self.br % self.monoid_slots:
@@ -266,7 +287,8 @@ class FaCfg:
             raise ValueError(f"ACTIVE_CLUSTERS={ncl} must be between 1 and num_clusters")
         return cls(m=int(param["M"]), k=int(param["K"]), n=int(param["N"]),
                    nkv=int(param["NKV"]), nq=int(param.get("NQ", 1)),
-                   clusters=ncl, decomp=str(param.get("DECOMP", "headpar")),
+                   clusters=tuple(range(ncl)),
+                   decomp=str(param.get("DECOMP", "headpar")),
                    score_shift_extra=int(param.get("SCORE_SHIFT_EXTRA", 0)),
                    mesh=tuple(mesh), **kw).validate()
 
@@ -512,7 +534,7 @@ def build_shards(cfg):
         a_shared = (rng.randint(-128, 127, size=cfg.m * cfg.k * cfg.mesh_row * cfg.tile_size)
                        .astype(np.int8) >> cfg.qshift)
         shards, b_list = [], []
-        for c in range(cfg.clusters):
+        for c in cfg.clusters:
             b_c = (rng.randint(-128, 127, size=cfg.n * cfg.k * cfg.mesh_col * cfg.tile_size)
                       .astype(np.int8) >> cfg.qshift)
             b_list.append(b_c)
@@ -524,10 +546,10 @@ def build_shards(cfg):
         # O PER CLUSTER, not shards[0]'s. Under headpar every cluster gets its own b_c
         # (its own query head), so every cluster's O is different and one golden would
         # only ever have validated cluster 0.
-        return [a_shared] * cfg.clusters, b_list, v, m_c, l_c, None, [sh[5] for sh in shards]
+        return [a_shared] * cfg.ncl, b_list, v, m_c, l_c, None, [sh[5] for sh in shards]
 
     shards = []
-    for c in range(cfg.clusters):
+    for c in cfg.clusters:
         a_c = (rng.randint(-128, 127, size=cfg.m * cfg.k * cfg.mesh_row * cfg.tile_size)
                   .astype(np.int8) >> cfg.qshift)
         shards.append(build_data(cfg, a=a_c, b=b, v=v))
@@ -543,7 +565,7 @@ def build_shards(cfg):
 
     a_list = [sh[0] for sh in shards]
     # b is shared under kvsplit; the caller indexes per cluster either way.
-    return a_list, [b] * cfg.clusters, v, m_c, l_c, merged, [sh[5] for sh in shards]
+    return a_list, [b] * cfg.ncl, v, m_c, l_c, merged, [sh[5] for sh in shards]
 
 
 def stage(cfg, st, a, b, v, m, rowsum, o):
@@ -589,12 +611,12 @@ def stage(cfg, st, a, b, v, m, rowsum, o):
         # which of the four it came from.
         "m": [st.put(f"fa_m_golden_c{c}", "uint16_t",
                      np.asarray(m[c]).astype(np.float16).view(np.uint16))
-              for c in range(cfg.clusters)],
+              for c in cfg.clusters],
         "rowsum": [st.put(f"fa_rowsum_golden_c{c}", "uint16_t",
                           np.asarray(rowsum[c]).astype(np.float16).view(np.uint16))
-                   for c in range(cfg.clusters)],
+                   for c in cfg.clusters],
         "o": [st.put(f"fa_o_golden_c{c}", "int32_t", np.asarray(o[c]).astype(np.int32))
-              for c in range(cfg.clusters)],
+              for c in cfg.clusters],
     }
 
 
@@ -1421,7 +1443,7 @@ def fa_attention(ctx, cfg, h, m_all, rowsum_all, verify=True):
     """
     # Every cluster's L1 first, with no nodes: a broadcast names destinations in all four,
     # so the handles have to exist before the first load node does.
-    bufs = [_alloc_cluster(ctx, cfg, c) for c in range(cfg.clusters)]
+    bufs = [_alloc_cluster(ctx, cfg, c) for c in cfg.clusters]
 
     if cfg.decomp == "headpar":
         # ---- one read per tile, fanned out in the writer --------------------------------
@@ -1441,7 +1463,7 @@ def fa_attention(ctx, cfg, h, m_all, rowsum_all, verify=True):
                  "ksrc": {}, "kpull": []}
         shards = [_build_cluster(ctx, cfg, c, h, m_all, rowsum_all, bufs[c], bcast, bufs,
                                  verify=verify)
-                  for c in range(cfg.clusters)]
+                  for c in cfg.clusters]
 
         # ---- close the forward references ----------------------------------------------
         # Under BCAST_SPREAD cluster c consumes tiles issued by clusters built after it, so
@@ -1529,7 +1551,7 @@ def fa_attention(ctx, cfg, h, m_all, rowsum_all, verify=True):
         return shards
 
     shards = [_build_cluster(ctx, cfg, c, h, m_all, rowsum_all, bufs[c], verify=verify)
-              for c in range(cfg.clusters)]
+              for c in cfg.clusters]
     g = ctx.at(0)
 
     # De-synchronise the cold xdma_1d_copy config (see STAGGER_FIRST_V). One edge per
@@ -1586,7 +1608,7 @@ def configure_cfg(cfg: FaCfg) -> FaCfg:
 def geometry(cfg) -> dict:
     """The derived shape as a plain dict, for a caller sizing its own buffers."""
     return {"M": cfg.m, "K": cfg.k, "N": cfg.n, "NKV": cfg.nkv, "NQ": cfg.nq,
-            "NCL": cfg.clusters, "BC": cfg.bc, "BR": cfg.br, "DHEAD": cfg.dhead,
+            "NCL": cfg.ncl, "BC": cfg.bc, "BR": cfg.br, "DHEAD": cfg.dhead,
             "NKV_PER": cfg.nkv_per, "S2_M": cfg.s2_m, "S2_K": cfg.s2_k, "S2_N": cfg.s2_n,
             "QSHIFT": cfg.qshift, "DECOMP": cfg.decomp, "NSCORE": cfg.nscore,
             "NKBUF": cfg.nkbuf, "NVBUF": cfg.nvbuf,
@@ -1599,15 +1621,23 @@ def fa_alloc(ctx: Ctx, cfg, clusters=None) -> list:
     Allocated before the first node on purpose: a broadcast names destinations in all four
     clusters, so the handles have to exist before the load node that references them does.
     """
-    cls = range(cfg.clusters) if clusters is None else clusters
+    cls = cfg.clusters if clusters is None else clusters
     return [_alloc_cluster(ctx, cfg, c) for c in cls]
 
 
 class FlashAttention(Block):
     """FlashAttention over one or more clusters, as one block.
 
-    PORTS -- three, whatever the decomposition. The caller hands over Q, K and V; how they
-    are split across clusters is this block's business, not the caller's.
+    PORTS -- three, whatever the decomposition. The caller hands over Q, K and V and says
+    in `cfg.clusters` which clusters to run on; how the operands are split across them is
+    this block's business.
+
+    WHY THIS ONE SPANS CLUSTERS when every other block runs on one. The four pipelines are
+    INTERLEAVED, not merely concurrent: QK(i+1) is emitted before PV(i), the head builder
+    runs inside the per-cluster pass, and the broadcast nodes are created inside cluster
+    0's pass rather than in front. Node creation order is dispatch order here, so emitting
+    four independent per-cluster blocks back to back would be a different schedule. What
+    crosses the boundary is still explicit: the outputs below are per-cluster ports.
 
       in   q   queries, B-layout int8. [clusters*Br, d] under headpar (one query head per
                cluster, stacked), [Br, d] under kvsplit (one head, shared).
@@ -1655,9 +1685,9 @@ class FlashAttention(Block):
     signature, because none of the three faults when it is wrong -- a mismatched layout is
     a permutation that computes a scrambled answer, a mismatched precision reads two
     elements as one, and an address in a memory pool the platform does not have is simply
-    unmapped. Whatever is bound is checked against the declaration, and `comm.transfer` closes
-    the gap where it can (hoisting from the memory chiplet, converting the layout in one
-    xDMA pass) or refuses with the reason.
+    unmapped. Whatever is bound is checked against the declaration, and this block's own
+    build calls `comm.transfer` to close the gap where it can (hoisting from the memory
+    chiplet, converting the layout in one xDMA pass) or refuses with the reason.
 
     The GOLDENS (m, rowsum, o) are constructor arguments, not ports: they are verification
     data and never flow between blocks.
@@ -1668,11 +1698,13 @@ class FlashAttention(Block):
                  hwcfg=None, mesh=None, verify=None, **params):
         """Either pass a FaCfg, or the parameters directly:
 
-            FlashAttention(bc=32, br=32, dhead=128, nkv=8, clusters=2, decomp="kvsplit")
+            FlashAttention(bc=32, br=32, dhead=128, nkv=8, clusters=(0, 1),
+                           decomp="kvsplit")
 
-        `clusters` and `decomp` are ordinary parameters, and the block generates a
-        DIFFERENT graph for each: kvsplit gives every cluster a disjoint KV shard, headpar
-        gives every cluster a query head. One cluster is legal in either.
+        `clusters` names where the pipelines run and `decomp` how the work is split, and
+        the block generates a DIFFERENT graph for each: kvsplit gives every cluster a
+        disjoint KV shard, headpar gives every cluster a query head. One cluster is legal
+        in either.
 
         `goldens` is optional. Without it the block builds compute only (verify=False),
         which is what a composed graph wants -- its operands came from a projection rather
@@ -1697,7 +1729,7 @@ class FlashAttention(Block):
     @property
     def _split(self) -> dict:
         """How many cluster-sized tiles each input holds. 1 means every cluster reads it."""
-        ncl = self.cfg.clusters
+        ncl = self.cfg.ncl
         if self.cfg.decomp == "headpar":
             return {"q": ncl, "k": 1, "v": 1}
         return {"q": 1, "k": ncl, "v": 1}
@@ -1705,20 +1737,25 @@ class FlashAttention(Block):
     @property
     def inputs(self) -> dict:
         cfg, sp = self.cfg, self._split
-        # NO MEMORY LEVEL ON THE INPUTS. Where the caller keeps Q, K and V is the
-        # caller's business -- main memory on one platform, the memory-chiplet pool on
-        # another, or an L1 buffer a previous block just wrote. What this block knows is
-        # where its OWN engines need them, and that is `_reads_from` below.
+        # `operand_level` IS WHERE THE CALLER KEEPS Q, K AND V -- main memory on one
+        # platform, the memory-chiplet pool on another. It is stated rather than resolved
+        # because it is a property of how the workload staged its data, which no
+        # neighbouring block can tell it. Where this block's own engines read is
+        # `_reads_from` below, and the gap between the two is what build() hoists.
         return {
             "q": PortSpec(Layout.B, DType.I8, (cfg.br * sp["q"], cfg.dhead),
+                          mem_level=cfg.operand_level,
                           doc=("one query head per cluster, stacked"
                                if sp["q"] > 1 else "one query head, shared")),
             "k": PortSpec(Layout.A, DType.I8, (cfg.bc * sp["k"], cfg.dhead),
+                          mem_level=cfg.operand_level,
                           doc=("one disjoint KV shard per cluster, stacked"
                                if sp["k"] > 1 else "one KV head, shared")),
             "v": PortSpec(Layout.A, DType.I8, (cfg.bc, cfg.dhead),
+                          mem_level=cfg.operand_level,
                           doc="values, shared by every cluster"),
         }
+
 
     # The level this block's own transfers read from. The per-tile loads are cluster iDMA
     # and xDMA reads of main memory, so an operand has to have reached L3 by the time they
@@ -1730,10 +1767,10 @@ class FlashAttention(Block):
     def needs(self) -> dict:
         """`inputs`, with the memory level this block's transfers actually require.
 
-        Kept separate from `inputs` on purpose. `inputs` is the CONTRACT -- what a caller
-        must supply and in what layout -- and it says nothing about where. This is the
-        INTERNAL requirement, what build() hands to transfer.bring_in, and declaring it is
-        also how the contract check knows this block fetches its own operands.
+        Kept separate from `inputs` on purpose. `inputs` is the CONTRACT -- where the
+        caller hands the operand over. This is the INTERNAL requirement, what build()
+        hands to transfer.bring_in, and the difference between the two is exactly the
+        hoist this block emits for itself.
         """
         return {nm: replace(spec, mem_level=self._reads_from)
                 for nm, spec in self.inputs.items()}
@@ -1742,24 +1779,24 @@ class FlashAttention(Block):
     def outputs(self) -> dict:
         cfg = self.cfg
         outs = {f"o_c{c}": PortSpec(Layout.D32, DType.I32, (cfg.br, cfg.dhead),
-                                    mem_level=MemLevel.L1,
+                                    mem_level=MemLevel.L1, cluster=c,
                                     doc=f"cluster {c} accumulator, D-port scatter, NOT "
                                         f"un-permuted and NOT gathered")
-                for c in range(cfg.clusters)}
-        if cfg.decomp == "kvsplit" and cfg.clusters > 1:
+                for c in cfg.clusters}
+        if cfg.decomp == "kvsplit" and cfg.ncl > 1:
             # THE PARTIALS ARE OUTPUTS BECAUSE THE FOLD IS NOT PART OF THIS BLOCK, and
             # they are TWO ports rather than one because that is what they physically are:
             # the running max lives in the softmax arena and the running sum in the last
             # score buffer, written by different kernels into different allocations. The
             # single contiguous FP32 (m, l) the junction folds does not exist until the
             # gather's pack builds it, so one port here would name a buffer nothing wrote.
-            for c in range(cfg.clusters):
+            for c in cfg.clusters:
                 outs[f"m_c{c}"] = PortSpec(Layout.ROW_MAJOR, DType.F16, (1, cfg.br),
-                                           mem_level=MemLevel.L1,
+                                           mem_level=MemLevel.L1, cluster=c,
                                            doc=f"cluster {c} running max over its KV "
                                                f"shard, in the softmax arena")
                 outs[f"l_c{c}"] = PortSpec(Layout.ROW_MAJOR, DType.F16, (1, cfg.br),
-                                           mem_level=MemLevel.L1,
+                                           mem_level=MemLevel.L1, cluster=c,
                                            doc=f"cluster {c} running sum over its KV "
                                                f"shard, in the last score buffer")
         return outs
@@ -1776,10 +1813,10 @@ class FlashAttention(Block):
         for nm, tile_rows in (("q", cfg.br), ("k", cfg.bc), ("v", cfg.bc)):
             h = bound[nm].handle
             if sp[nm] == 1:
-                out[nm] = [h] * cfg.clusters
+                out[nm] = [h] * cfg.ncl
             else:
                 step = tile_rows * cfg.dhead * eb
-                out[nm] = [at_offset(h, c * step) for c in range(cfg.clusters)]
+                out[nm] = [at_offset(h, c * step) for c in cfg.clusters]
         return out
 
     def build(self, ctx: Ctx, bound: dict) -> BlockResult:
@@ -1832,16 +1869,16 @@ class FlashAttention(Block):
         lay = SnaxBingoKernelSimdFaSoftmaxArgs.layout(cfg.bc, cfg.dhead)
         for c, shd in enumerate(shards or []):
             outs[f"o_c{c}"] = Port(want[f"o_c{c}"], shd["arena"],
-                                   (shd["pv"][-1],), cluster=c, name=f"o_c{c}")
+                                   (shd["pv"][-1],), name=f"o_c{c}")
             if f"m_c{c}" in want:
                 # Named at the OFFSETS the stores already use, so the ports and the checks
                 # cannot point at different bytes.
                 outs[f"m_c{c}"] = Port(want[f"m_c{c}"], shd["arena"].view(lay["mrun"]),
                                        (shd["sm"][-1],) if shd.get("sm") else
-                                       (shd["pv"][-1],), cluster=c, name=f"m_c{c}")
+                                       (shd["pv"][-1],), name=f"m_c{c}")
                 outs[f"l_c{c}"] = Port(want[f"l_c{c}"],
                                        shd["p8_last"].view((cfg.bc // 2) * 64),
-                                       (shd["pv"][-1],), cluster=c, name=f"l_c{c}")
+                                       (shd["pv"][-1],), name=f"l_c{c}")
             for nm, key in (("q", "ld_q"), ("k", "ld_k"), ("v", "ld_v")):
                 ld[nm] += [n for n in shd[key] if n is not None]
         for nm in ("q", "k", "v"):

@@ -6,18 +6,18 @@ Everything a block is built out of, and nothing specific to one. Two halves:
 
 | file | |
 |---|---|
-| `ports.py` | `PortSpec` (layout, precision, shape, mem_level), `Port` (a bound spec plus the nodes at the block's edge), `Block`, `BlockResult`, and `at_offset`. **The layout names are worked through there with real index maps** — what `row_major`, `col_major`, `A`, `B`, `D`, `d32` and `monoid` each do to element `[row][col]`, and why `d32` is not `D` — which offsets any of the four handle types, because a staged array is a *symbol* on the host path and a *fixed address* on the memchip path, and only `BingoMemAlloc` has `.view()`. |
+| `ports.py` | `PortSpec` (layout, precision, shape, and placement as `mem_level` + `cluster`), `Port` (a bound spec plus the nodes at the block's edge), `Block`, `BlockResult`, `at_offset`, and the two derivations `level_of` / `cluster_of`. **The layout names are worked through there with real index maps** — what `row_major`, `col_major`, `A`, `B`, `D`, `d32` and `monoid` each do to element `[row][col]`, and why `d32` is not `D` — which offsets any of the four handle types, because a staged array is a *symbol* on the host path and a *fixed address* on the memchip path, and only `BingoMemAlloc` has `.view()`. |
 | `ctx.py` | The node and handle factory, bound to one cluster and one name prefix. The prefix is what lets one block be instantiated twice: handle names must be unique per chip, because the emitter dedups by identity and two same-named handles emit two C declarations that do not compile. |
 | `link.py` | `Pipeline`, `link`, and `check_contract`. The pipeline runs in three phases — **connect** (`add` records, builds nothing), **resolve** (`run` picks one realisation per block so every boundary agrees), **build** (each block emits its own sub-DFG, in add order). `raw()` and `source()` put the application's own work into that same order, because node creation order is dispatch order. `check_contract` matches EXACTLY: a block that converts says so with a variant, which is a promise its `build()` has to keep. |
 | `variant.py` | `Cost` and `Variant` — what a block could equally well have been. A layout a block does not pin is a knob it owns; `variants()` lists the realisations and `respec()` builds one. Legality is by construction: a variant is realised in order to be priced, so an illegal one raises in the block's own constructor and drops out of the search — one copy of the rules, in the constructor. `Cost` compares lexicographically in engine order (cross-lane folds, SIMD passes, xDMA, iDMA) — counts derived from the shape, never measured cycles, so it cannot rot. |
 | `paths.py` | Reaching `util/sim`. Delegates to `_bingo_paths.repo_root()`; there is deliberately one implementation of that search. |
 
-**The vocabulary is a closed set.** `Layout`, `DType` and `MemLevel` were tuples of bare
-strings checked with `in`. They are now StrEnums, so a member *is* its string — it compares
-equal, hashes and formats as one, and every call site that passes `"A"` or `"L3"` keeps
-working — but `Layout.` lists the options, each carries a `doc`, and a typo is refused at
-construction with the valid values named rather than reaching a kernel as a layout nobody
-implements. `PortSpec` coerces, so a spec always holds the member however it was written.
+**The vocabulary is a closed set.** `Layout`, `DType` and `MemLevel` are StrEnums, so a
+member *is* its string — it compares equal, hashes and formats as one, and a call site may
+pass `"A"` or `"L3"` — while `Layout.` lists the options, each carries a `doc`, and a typo
+is refused at construction with the valid values named rather than reaching a kernel as a
+layout nobody implements. `PortSpec` coerces, so a spec always holds the member however it
+was written.
 
 **An input port usually names no memory level.** `mem_level=None` means *"wherever you
 have it — I will fetch it"*, which is the honest declaration: a block knows which level its
@@ -26,6 +26,14 @@ dictating where the caller keeps the tensor. The block states the level its tran
 from in `needs`, and the hoist happens inside its own build. A bound `Port` reads the level
 off the handle, so binding a block's level-less spec directly just works. An **output** is
 never None: a produced buffer is somewhere definite.
+
+**Placement is the same statement about *which cluster*.** Only L1 is per-cluster, so
+`cluster_of` answers `None` for anything else and `check_contract` checks the field only
+when the source has one: a tensor in main memory may be loaded by any block, a tensor
+already in some cluster's TCDM may only be read by kernels on that cluster. A block that
+fetches therefore says `mem_level=None, cluster=<its own>` and gets both. The check is
+worth having because a remote handle does not fault — the transfer completes without
+writing and the destination keeps whatever it held.
 
 `Port.ends` is what makes the join mechanical: for an output it is the nodes that finish
 writing the buffer, for an input the nodes that first read it. The linker joins one to the

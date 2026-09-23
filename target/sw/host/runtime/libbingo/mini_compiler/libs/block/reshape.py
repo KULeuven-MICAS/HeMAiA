@@ -132,14 +132,14 @@ class Reshape(Block):
         self._check_realised()
         c = self.cfg
         return {"x": PortSpec(c.src, c.dtype, (c.rows, c.cols), mem_level=MemLevel.L1,
-                              doc=f"{c.src} layout")}
+                              cluster=c.cluster, doc=f"{c.src} layout")}
 
     @property
     def outputs(self) -> dict:
         self._check_realised()
         c = self.cfg
         return {"y": PortSpec(c.dst, c.dtype, (c.rows, c.cols), mem_level=MemLevel.L1,
-                              doc=f"{c.dst} layout")}
+                              cluster=c.cluster, doc=f"{c.dst} layout")}
 
     def build(self, ctx: Ctx, bound: dict) -> BlockResult:
         self._check_realised()
@@ -172,7 +172,7 @@ class Reshape(Block):
                 lay = to
             src = dst
         return BlockResult(
-            outputs={"y": Port(self.outputs["y"], src, (nodes[-1],), cluster=c.cluster,
+            outputs={"y": Port(self.outputs["y"], src, (nodes[-1],),
                                name="y")},
             inputs={"x": Port(self.inputs["x"], bound["x"].handle, (nodes[0],), name="x")},
             nodes=nodes)

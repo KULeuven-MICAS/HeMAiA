@@ -91,78 +91,12 @@ ADJACENT-PAIR SWAP is RoPE's and is below AGU granularity. And transposing only 
 where a cross-lane REDUCTION exists to convert -- RoPE has none, so it gains nothing.
 """
 
-import sys
-
-from bingo_kernel_args import (SnaxBingoKernelIdma1dCopyArgs,
-                              SnaxBingoKernelSimdRmsnormArgs)
-from libs import (Block, BlockResult, Ctx, DType, Layout, MemLevel, Pipeline,
-                  Port, PortSpec, at_offset)
-from libs.block import (Dequantize, FlashAttention, Linear, Quantize, RMSNorm,
-                        Reshape, Residual, fa_gather, shard_rows)
+from bingo_kernel_args import SnaxBingoKernelIdma1dCopyArgs
+from libs import (Ctx, DType, Layout, MemLevel, Pipeline, Port, PortSpec,
+                  at_offset)
+from libs.block import (Dequantize, FlashAttention, Gather, Linear, Quantize,
+                        RMSNorm, Reshape, Residual, Scatter, fa_gather)
 from libs.verify import checks
-
-class _ShardedNorm(Block):
-    """RMSNorm with its `rows` split across the clusters, one slice each.
-
-    A BLOCK, so that it is emitted in the order it was added like every other stage. The
-    pipeline resolves every boundary before it emits anything, so work built outside it
-    lands wherever the application happened to call it -- and node creation order is
-    dispatch order on this machine.
-
-    Measured on RTL, the two RMSNorms cost 110 us each -- 40% of cluster 0's busy time and
-    26% of every engine's, more than the GEMMs and the reshapes together. The reason is in
-    the kernel: the multi-row path takes an integer sqrt and reciprocal PER ROW and then
-    splats the result across a 64-byte beat with 16 volatile stores, so ~60 us of each
-    call is a scalar loop over 32 rows on a core with no FPU. Rows are independent, so
-    that loop divides.
-    """
-
-    name = "rmsnorm_sharded"
-
-    def __init__(self, ctx, rows, cols, clusters, node_name, hs, *, on_l1, l3_key):
-        self.ctx, self.rows, self.cols = ctx, rows, cols
-        self.clusters, self.node_name, self.hs = clusters, node_name, hs
-        self.on_l1, self.l3_key = on_l1, l3_key
-
-    @property
-    def _spec(self) -> PortSpec:
-        return PortSpec(Layout.ROW_MAJOR, DType.F16, (self.rows, self.cols),
-                        mem_level=MemLevel.L1)
-
-    @property
-    def inputs(self) -> dict:
-        return {"x": self._spec} if self.on_l1 else {}
-
-    @property
-    def outputs(self) -> dict:
-        return {"y": self._spec}
-
-    def build(self, ctx: Ctx, bound: dict) -> BlockResult:
-        d, name = self.cols, self.node_name
-
-        def make(g, in_h, nrows, dep, out_h):
-            return g.node(f"Rmsnorm_{name}", self.ctx.simd,
-                          "__snax_bingo_kernel_simd_rmsnorm",
-                          SnaxBingoKernelSimdRmsnormArgs(
-                              input_addr=in_h, output_addr=out_h,
-                              rows=nrows, cols=d), dep)
-
-        src = bound["x"] if self.on_l1 else None
-        # THE ORDERING GOES IN THROUGH `after`, not through the linker. shard_rows hangs
-        # every cluster's load (or the root's scatter) off it, so the producer is already
-        # an ancestor of each slice by the time the linker sees this block -- which is why
-        # the input port below reports no ends: there is nothing left for it to join.
-        out, ends = shard_rows(
-            self.ctx, src=src.handle if self.on_l1 else self.hs[self.l3_key],
-            rows=self.rows, cols=d, clusters=list(range(self.clusters)), make=make,
-            root=0, name=name, after=tuple(src.ends) if self.on_l1 else (),
-            src_on_l1=self.on_l1)
-        port = Port(self._spec, out, tuple(ends), cluster=0, name="y")
-        return BlockResult(
-            outputs={"y": port},
-            inputs={"x": Port(self._spec, src.handle, (), name="x")} if self.on_l1 else {},
-            nodes=list(ends))
-
 
 STAGE_NAMES = {1: "norm", 2: "proj", 3: "attn", 4: "resid", 5: "ffn", 6: "layer"}
 # The LAST check each rung emits. Rung 3 adds no check of its own -- FlashAttention's
@@ -260,8 +194,9 @@ def build(ctx: Ctx, p: dict, data: dict, hs: dict, *, stages: int = MAX_STAGE,
     out = {}
 
     def L3(layout, dtype, shape, handle):
-        """Bind a staged array as a port; the level is read off the handle."""
-        return Port(PortSpec(layout, dtype, shape), handle, ())
+        """Bind a staged array as a port. A staged array is main memory by construction,
+        which is also what the handle says, so the two are checked against each other."""
+        return Port(PortSpec(layout, dtype, shape, mem_level=MemLevel.L3), handle, ())
 
     def check(tag, ref, golden_key, elems):
         """Read a stage's output back and compare. Ordered on the port's own producer.
@@ -288,37 +223,47 @@ def build(ctx: Ctx, p: dict, data: dict, hs: dict, *, stages: int = MAX_STAGE,
     # other operand, and `ends` carries that load so the residual orders against it too.
     ld_x = ctx.at(0).node("Ld_layer_x", ctx.dm, "__snax_bingo_kernel_idma_1d_copy",
                           SnaxBingoKernelIdma1dCopyArgs(hs["x"], x_l1, T * d * 2))
-    x_port = Port(PortSpec(Layout.ROW_MAJOR, DType.F16, (T, d), mem_level=MemLevel.L1),
+    x_port = Port(PortSpec(Layout.ROW_MAJOR, DType.F16, (T, d), mem_level=MemLevel.L1, cluster=0),
                   x_l1, (ld_x,))
 
-    def rmsnorm(name, src, *, on_l1):
-        """RMSNorm over `T` rows, on one cluster or split across all of them.
+    def norm_block(cluster, rows):
+        """One RMSNorm, on one cluster. The ladder pins both layouts -- see NORM_LAYOUT."""
+        return RMSNorm(rows=rows, cols=d, cluster=cluster, in_layout=NORM_LAYOUT,
+                       out_layout=NORM_LAYOUT, out_dtype=DType.F16)
 
-        WHY THIS ONE. Measured on RTL, the two RMSNorms cost 110 us each -- 40% of
+    def rmsnorm(name, src):
+        """RMSNorm over `T` rows: one block on cluster 0, or one per cluster.
+
+        WHY SPLIT IT. Measured on RTL, the two RMSNorms cost 110 us each -- 40% of
         cluster 0's busy time and 26% of every engine's, more than the GEMMs and the
         reshapes together. The reason is in the kernel: the multi-row path takes an
         integer sqrt and reciprocal PER ROW and then splats the result across a 64-byte
         beat with 16 volatile stores, so ~60 us of each call is a scalar loop over 32
         rows on a core with no FPU. Rows are independent, so that loop divides.
+
+        THE SPLIT IS WRITTEN HERE, not inside the block. Each RMSNorm is an ordinary
+        one-cluster block and `Scatter`/`Gather` are the two ends, so the placement of
+        every node is on a port the pipeline checks, and the whole decomposition is four
+        statements the layer owns.
         """
         if shard == "none":
-            return pipe.add(RMSNorm(rows=T, cols=d, cluster=0, in_layout=NORM_LAYOUT,
-                                    out_layout=NORM_LAYOUT, out_dtype=DType.F16),
-                            name=name, bind={"x": src}).out("y")
-        blk = _ShardedNorm(ctx, T, d, ncl, name, hs, on_l1=on_l1,
-                           l3_key=None if on_l1 else src)
-        if on_l1:
-            return pipe.add(blk, name=name, bind={"x": src}).out("y")
-        # Reading its slices straight from L3, it has no predecessor in the chain -- so it
-        # is a SOURCE of the pipeline rather than a stage with an input, and registering
-        # it as one is what keeps its nodes in the order they are written here.
-        return pipe.source(name, blk.outputs["y"],
-                           lambda: blk.build(ctx.scope(name), {}).outputs["y"]).out("y")
+            return pipe.add(norm_block(0, T), name=name,
+                            bind={"x": src}).out("y")
+        cl = tuple(range(ncl))
+        sc = pipe.add(Scatter(rows=T, cols=d, clusters=cl),
+                      name=f"{name}_in", bind={"x": src})
+        parts = [pipe.add(norm_block(c, T // ncl), name=f"{name}_c{c}",
+                          bind={"x": sc.out(f"y_c{c}")}) for c in cl]
+        return pipe.add(Gather(rows=T, cols=d, clusters=cl), name=f"{name}_out",
+                        bind={f"x_c{c}": parts[i].out("y")
+                              for i, c in enumerate(cl)}).out("y")
 
     # ---- 1. the first normalisation ----------------------------------------------------
-    # sharded, norm1 reads its slices straight from L3 -- no broadcast on the way in
-    n1_y = rmsnorm("norm1", "x" if shard == "rows" else x_port,
-                   on_l1=(shard != "rows"))
+    # SPLIT, norm1 scatters from L3: each cluster's own iDMA fetches its own rows, so
+    # there is no cross-cluster traffic at all on the way in.
+    n1_y = rmsnorm("norm1",
+                   L3(Layout.ROW_MAJOR, DType.F16, (T, d), hs["x"])
+                   if shard == "rows" else x_port)
     out[1] = n1_y
     check("norm1", n1_y, "norm1_golden", T * d)
     if stages == 1:
@@ -367,8 +312,8 @@ def build(ctx: Ctx, p: dict, data: dict, hs: dict, *, stages: int = MAX_STAGE,
     # Br is pinned to the SIMD beat at 32, so FA's tile does NOT follow `tokens`; the
     # datagen stages its operands at fa_tile for the same reason.
     fat = int(p.get("fa_tile", 32))
-    fa = pipe.add(FlashAttention(bc=fat, br=fat, dhead=d, nkv=ncl, clusters=ncl,
-                                 decomp="kvsplit"),
+    fa = pipe.add(FlashAttention(bc=fat, br=fat, dhead=d, nkv=ncl,
+                                 clusters=tuple(range(ncl)), decomp="kvsplit"),
                   name="attn",
                   bind={"q": L3(Layout.B, DType.I8, (fat, d), hs["fa_q"]),
                         "k": L3(Layout.A, DType.I8, (fat * ncl, d), hs["fa_k"]),
@@ -412,12 +357,12 @@ def build(ctx: Ctx, p: dict, data: dict, hs: dict, *, stages: int = MAX_STAGE,
         return out
 
     # ---- 5. the feed-forward half -------------------------------------------------------
-    # norm2's input is an intermediate in cluster 0's L1, so a sharded build pulls the
-    # slices across the fabric with each cluster's own xDMA rather than from L3
-    # THE PULLS MUST WAIT FOR THE RESIDUAL. Each cluster reads its slice out of cluster
-    # 0's L1, and nothing in the fabric would tell it the buffer is still being written.
-    # Without this edge the sharded build races and the race is silent.
-    n2_y = rmsnorm("norm2", res1.out("y"), on_l1=True)
+    # norm2's input is an intermediate in cluster 0's L1, not a staged array, so a split
+    # build takes the Scatter's L1 route: the root multicasts each slice out, because a
+    # cluster cannot reach another cluster's TCDM with a plain copy. The ordering against
+    # the residual comes from the binding -- the Scatter is a stage like any other, so the
+    # linker puts its sends behind whatever finishes writing res1.
+    n2_y = rmsnorm("norm2", res1.out("y"))
     check("norm2", n2_y, "norm2_golden", T * d)
     rs2 = pipe.add(Reshape(rows=T, cols=d, src=Layout.ROW_MAJOR, dst=Layout.A, mesh=mesh,
                            dtype=DType.F16, cluster=0),
@@ -425,9 +370,10 @@ def build(ctx: Ctx, p: dict, data: dict, hs: dict, *, stages: int = MAX_STAGE,
     q2 = pipe.add(Quantize(rows=T, cols=d, inv_scale_f32bits=data["scale_n2_bits"],
                            layout=Layout.A, cluster=0),
                   name="n2_q", bind={"x": rs2.out("y")})
-    # A dense up-projection, not MoeFFN: MoeFFN owns all four clusters for its expert
-    # lanes and FlashAttention above already has them. Two blocks that both want every
-    # cluster need a placement plan, which is the framework's job above this layer.
+    # A dense up-projection, not MoeFFN: MoeFFN places one expert lane per cluster and
+    # FlashAttention above already occupies all four. Two multi-cluster blocks in one
+    # chain have to be given disjoint placements, and deciding that is this layer's, not
+    # something either block can work out for itself.
     ffn = pipe.add(Linear(tokens=T, d_in=d, d_out=h, mesh=mesh, cluster=0),
                    name="ffn_up",
                    bind={"x": q2.out("y"),
@@ -499,15 +445,15 @@ def token_parallel(ctx: Ctx, p: dict, data: dict, hs: dict, *, verify: str = "fi
     pipe = Pipeline(ctx, verbose=verbose)
 
     def L3(layout, dtype, shape, handle):
-        return Port(PortSpec(layout, dtype, shape), handle, ())
+        return Port(PortSpec(layout, dtype, shape, mem_level=MemLevel.L3), handle, ())
 
     # ATTENTION IS BUILT ONCE, NOT PER SLICE. It is already four-way over the KV axis and
     # its Br is pinned, so token-splitting it would mean four attentions each using four
     # clusters. It is here so this build is the same layer as the single-cluster one and
     # the two are comparable; its operands are staged, exactly as they are there.
     fat = int(p.get("fa_tile", 32))
-    fa = pipe.add(FlashAttention(bc=fat, br=fat, dhead=d, nkv=ncl, clusters=ncl,
-                                 decomp="kvsplit"),
+    fa = pipe.add(FlashAttention(bc=fat, br=fat, dhead=d, nkv=ncl,
+                                 clusters=tuple(range(ncl)), decomp="kvsplit"),
                   name="attn",
                   bind={"q": L3(Layout.B, DType.I8, (fat, d), hs["fa_q"]),
                         "k": L3(Layout.A, DType.I8, (fat * ncl, d), hs["fa_k"]),
@@ -547,10 +493,10 @@ def token_parallel(ctx: Ctx, p: dict, data: dict, hs: dict, *, verify: str = "fi
                           SnaxBingoKernelIdma1dCopyArgs(
                               at_offset(hs["x"], r0 * d * 2), x_l1, NR * d * 2))
             return Port(PortSpec(Layout.ROW_MAJOR, DType.F16, (NR, d),
-                                 mem_level=MemLevel.L1), x_l1, (ld_x,))
+                                 mem_level=MemLevel.L1, cluster=0), x_l1, (ld_x,))
         x_port = pipe.source(f"layer_x_{sfx}",
                              PortSpec(Layout.ROW_MAJOR, DType.F16, (NR, d),
-                                      mem_level=MemLevel.L1), _load_x).out("y")
+                                      mem_level=MemLevel.L1, cluster=0), _load_x).out("y")
 
         # --- norm -> reshape -> quantise -> the three projections ---
         n1 = pipe.add(RMSNorm(rows=NR, cols=d, cluster=c, in_layout=NORM_LAYOUT,

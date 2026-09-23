@@ -5,19 +5,26 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 """What a block DECLARES: its ports, and the vocabulary they are written in.
 
-A port says four things about an operand -- its layout, its precision, its shape and the
-memory it lives in -- and all four are part of the signature rather than an assumption,
-because none of them faults when it is wrong. A mismatched layout is a permutation that
-computes a scrambled answer; a mismatched precision reads two elements as one; an address
-in a memory pool the platform does not have is simply unmapped.
+A port states five things about an operand -- its layout, its precision, its shape, the
+memory it lives in and, when that memory is a cluster's TCDM, whose -- and every one of
+them is part of the signature rather than an assumption, because none of them faults when
+it is wrong. A mismatched layout is a permutation that computes a scrambled answer; a
+mismatched precision reads two elements as one; an address in a memory pool the platform
+does not have is simply unmapped; and a handle in another cluster's TCDM is written by a
+transfer that completes without moving anything.
+
+NONE OF THE FIVE MAY BE LEFT OPEN. A port that declined to say where its tensor is would
+be declaring less than it knows, and the hole would be filled by whatever happened to be
+bound to it. A block that can genuinely take an operand from more than one place is a
+FAMILY -- one realisation per place, each pricing its own transfers -- and the resolver
+picks the one its producer matches. That is comm.variant; this module only makes the
+incomplete declaration impossible to write.
 
 This module has no knowledge of HOW a gap gets closed -- that is comm.transfer and
-comm.nest. What it does own is the VOCABULARY: the layout, precision and memory-level
-names a
-port is written in -- Layout, DType and MemLevel. The layouts are worked through with
-real index maps just below,
-because "D-layout" is not self-explanatory and reading a buffer in the wrong one is the
-failure this whole module exists to make impossible.
+comm.nest. What it does own is the VOCABULARY the ports are written in: Layout, DType and
+MemLevel. The layouts are worked through with real index maps just below, because
+"D-layout" is not self-explanatory and reading a buffer in the wrong one is the failure
+this whole module exists to make impossible.
 """
 
 from dataclasses import dataclass, field, replace
@@ -215,12 +222,12 @@ class MemLevel(_Vocab):
     unmapped -- the loads return whatever the fabric gives back and the checks compare one
     piece of garbage against another.
 
-    An INPUT port may leave it None, meaning "wherever you have it -- I will fetch it".
-    That is the honest declaration for most operands: a block knows which level its ENGINES
-    need (L1, always, since the GEMM and SIMD have no AXI port) but has no business
-    dictating where its caller keeps the tensor. The block states the level it actually
-    needs when it calls transfer.bring_in, and the hoist happens inside its own build. An
-    OUTPUT is never None -- a produced buffer is somewhere definite.
+    EVERY PORT NAMES ONE. A block whose engines read L1 -- which is all of them, since the
+    GEMM and SIMD have no AXI port -- but which will fetch an operand from further out
+    declares the level it is willing to be HANDED, and emits the load in its own build.
+    Where it is willing to be handed more than one, it offers a realisation per level
+    rather than a port that declines to say; `needs` is then the separate statement of
+    what its engines read once the load has run.
     """
 
     L1 = "L1", "cluster TCDM. What the GEMM and SIMD can actually read"
@@ -240,11 +247,32 @@ class PortSpec:
     `layout` and `dtype` are part of the signature, not something fixed up afterwards: a
     block is INVOKED with the precision and layout it should consume and produce, the same
     way a function is invoked with argument types.
+
+    `mem_level` and `cluster` say WHERE, and there is no "anywhere". Every tensor is in
+    some memory at every point in the graph, so a port that declined to say which would be
+    declaring less than it knows, and the gap would be filled by whatever happened to be
+    bound. `mem_level` is therefore REQUIRED -- omitting it is a TypeError at graph-build
+    time, before any node exists. A block that can genuinely read an operand from more
+    than one level is a FAMILY, not a port with a hole: it offers one realisation per
+    level (comm/variant.py), each stating a concrete level and pricing its own transfers,
+    and the resolver picks the one the producer matches.
+
+    `cluster` is the same statement one level down, and it has an answer for exactly one
+    memory: L1 is per-cluster TCDM, everything else is reachable from every cluster. So an
+    L1 port MUST name its cluster and a port anywhere else must NOT -- both halves are
+    enforced below, because a missing cluster on an L1 port is a placement nobody decided
+    and a cluster on an L3 port is a claim that means nothing and that the contract would
+    then go on to compare.
+
+    Naming it matters because a remote handle does not fault: a GEMM or SIMD kernel can
+    address only its own cluster's TCDM, and pointed anywhere else the transfer completes
+    without writing and the buffer keeps whatever it held.
     """
     layout: Layout
     dtype: DType
     shape: tuple
-    mem_level: Optional[MemLevel] = None    # None means "wherever you have it"
+    mem_level: MemLevel                     # required: every tensor is somewhere
+    cluster: Optional[int] = None           # required for L1, refused for anything else
     doc: str = ""
 
     def __post_init__(self):
@@ -254,8 +282,24 @@ class PortSpec:
         # written, and an unknown value is refused with the valid ones named.
         object.__setattr__(self, "layout", Layout(self.layout))
         object.__setattr__(self, "dtype", DType(self.dtype))
-        if self.mem_level is not None:
-            object.__setattr__(self, "mem_level", MemLevel(self.mem_level))
+        if self.mem_level is None:
+            raise ValueError(
+                f"PortSpec({self.layout}/{self.dtype} {tuple(self.shape)}): mem_level is "
+                f"required. A tensor is in some memory at every point in the graph; a "
+                f"block that reads an operand from more than one level offers one "
+                f"realisation per level instead of leaving the port open.")
+        object.__setattr__(self, "mem_level", MemLevel(self.mem_level))
+        if self.mem_level == MemLevel.L1 and self.cluster is None:
+            raise ValueError(
+                f"PortSpec({self.layout}/{self.dtype} {tuple(self.shape)} in L1): L1 is "
+                f"per-cluster TCDM, so this port has to name the cluster it is in. Pass "
+                f"cluster=<the block's own>.")
+        if self.mem_level != MemLevel.L1 and self.cluster is not None:
+            raise ValueError(
+                f"PortSpec(... in {self.mem_level}, cluster={self.cluster}): only L1 is "
+                f"per-cluster. {self.mem_level} is reachable from every cluster, so "
+                f"naming one here states something that is not true of the buffer and "
+                f"that check_contract would then compare against.")
 
     @property
     def stored_shape(self) -> tuple:
@@ -274,7 +318,9 @@ class PortSpec:
         return (c, r) if self.layout == Layout.COL_MAJOR else (r, c)
 
     def describe(self) -> str:
-        where = f"in {self.mem_level}" if self.mem_level else "anywhere"
+        where = f"in {self.mem_level}"
+        if self.cluster is not None:
+            where += f" on cl{self.cluster}"
         return f"{self.layout}/{self.dtype} {tuple(self.shape)} {where}"
 
 
@@ -290,17 +336,30 @@ class Port:
     spec: PortSpec
     handle: object                     # BingoMemAlloc | BingoMemAllocView | BingoMemSymbol
     ends: tuple
-    cluster: Optional[int] = None
     name: str = ""
 
     def __post_init__(self):
-        # THE HANDLE ALREADY KNOWS WHERE IT IS, so a caller binding one does not restate
-        # it. A block's `inputs` leave mem_level None -- "wherever you have it" -- and
-        # binding is the moment that becomes a real place, so the level is read off the
-        # handle rather than defaulted or guessed.
-        if self.spec.mem_level is None:
-            object.__setattr__(self, "spec",
-                               replace(self.spec, mem_level=level_of(self.handle)))
+        # THE SPEC ALREADY STATES WHERE, so binding is a CHECK and never a fill: whatever
+        # the handle knows about itself has to agree with what the port claims. A spec
+        # that says L1 on cluster 0 while holding a cluster-1 allocation is the exact lie
+        # the contract exists to catch, and letting the claim stand would carry it to
+        # every consumer downstream as fact.
+        #
+        # A FIXED ADDRESS knows neither -- it is a number -- so there the spec is the only
+        # statement there is and nothing is checked against it.
+        lvl, cl = _derive(self.handle)
+        if lvl is not None and MemLevel(lvl) != self.spec.mem_level:
+            raise ValueError(
+                f"port {self.name or '?'}: the spec says {self.spec.mem_level} but "
+                f"'{self.handle_name}' is in {lvl}. The handle is what the kernels "
+                f"address, so restating the level differently would be believed by every "
+                f"consumer of this port.")
+        if lvl == MemLevel.L1 and cl != self.spec.cluster:
+            raise ValueError(
+                f"port {self.name or '?'}: the spec says cluster {self.spec.cluster} but "
+                f"'{self.handle_name}' is allocated on cluster {cl}. A kernel addresses "
+                f"only its own TCDM, and a remote handle does not fault -- it is written "
+                f"by a transfer that moves nothing.")
 
     @property
     def layout(self): return self.spec.layout
@@ -310,6 +369,8 @@ class Port:
     def shape(self): return self.spec.shape
     @property
     def stored_shape(self): return self.spec.stored_shape
+    @property
+    def cluster(self): return self.spec.cluster
 
     @property
     def handle_name(self) -> str:
@@ -340,6 +401,38 @@ def level_of(handle) -> str:
         f"one for the memory-chiplet pool, but the handle does not record that, and "
         f"assuming it would put a hoist in front of an operand that may already be in "
         f"main memory.")
+
+
+def _derive(handle):
+    """(level, cluster) off a handle, or None for whichever cannot be told.
+
+    A FIXED ADDRESS is just a number and records neither, which is why `level_of` refuses
+    it; here that refusal means "nothing to check against", not an error, because a spec
+    stating the level is the only way such a handle can be used at all.
+    """
+    try:
+        lvl = level_of(handle)
+    except ValueError:
+        lvl = None
+    return lvl, cluster_of(handle)
+
+
+def cluster_of(handle) -> Optional[int]:
+    """Which cluster's TCDM a handle addresses, or None if the question does not apply.
+
+    ONLY L1 IS PER-CLUSTER. Main memory and the narrow SPM are reachable from every
+    cluster, so "which cluster" has no answer there and None is the answer, not a guess.
+    BingoMemAlloc carries a cluster_id whatever its level, so reading that field alone
+    would report cluster 0 for every L3 buffer in the tree.
+
+    A SYMBOL or a FIXED ADDRESS is not TCDM: a symbol is a C array in the workload image
+    and a fixed address is a number. Both return None.
+    """
+    if isinstance(handle, BingoMemAllocView):
+        return cluster_of(handle.base)
+    if isinstance(handle, BingoMemAlloc):
+        return handle.cluster_id if handle.mem_level == "L1" else None
+    return None
 
 
 def at_offset(handle, nbytes: int):

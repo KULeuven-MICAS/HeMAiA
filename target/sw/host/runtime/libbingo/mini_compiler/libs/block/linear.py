@@ -21,7 +21,9 @@ reshape at FP16, THEN quantise, because a row_major->A conversion needs an 8-byt
 int8 does not have. See comm/nest.py.
 """
 
+import itertools
 from dataclasses import dataclass
+from typing import Optional
 
 from bingo_kernel_args import (
     SnaxBingoKernelGemmFullArgs,
@@ -30,6 +32,7 @@ from bingo_kernel_args import (
 
 from ..comm import (Block, BlockResult, Ctx, DType, Layout, MemLevel, Port,
                     PortSpec)
+from ..comm.variant import free_fields
 
 
 @dataclass(frozen=True)
@@ -41,6 +44,10 @@ class LinearCfg:
     d_out: int
     mesh: tuple                       # (meshRow, tileSize, meshCol)
     cluster: int = 0
+    # WHERE EACH OPERAND IS HANDED OVER. One in L1 is used where it lies; one further out
+    # gets this block's own load. Left None, each is resolved from whatever produces it.
+    x_level: Optional[MemLevel] = None
+    w_level: Optional[MemLevel] = None
     array_shape_idx: int = 0
     transpose_a: int = 0
     transpose_b: int = 0
@@ -93,16 +100,38 @@ class Linear(Block):
 
     def __init__(self, cfg: LinearCfg = None, **params):
         self.cfg = cfg if cfg is not None else LinearCfg(**params)
+        self.free = free_fields(self.cfg, ("x_level", "w_level"))
 
     @property
     def inputs(self) -> dict:
+        """Where each operand is handed over is a boundary this block resolves; what its
+        ARRAY reads is always L1, and that is `needs`."""
         c = self.cfg
-        # No mem_level: this block fetches its own operands, so where the caller keeps them
-        # is the caller's business. `needs` says what its loads read from.
+        self._check_realised()
         return {
-            "x": PortSpec(Layout.A, DType.I8, (c.tokens, c.d_in), doc="activation"),
-            "w": PortSpec(Layout.B, DType.I8, (c.d_in, c.d_out), doc="weight"),
+            "x": self._port(Layout.A, (c.tokens, c.d_in), c.x_level, "activation"),
+            "w": self._port(Layout.B, (c.d_in, c.d_out), c.w_level, "weight"),
         }
+
+    def _port(self, layout, shape, level, doc) -> PortSpec:
+        return PortSpec(layout, DType.I8, shape, mem_level=level,
+                        cluster=self.cfg.cluster if level == MemLevel.L1 else None,
+                        doc=doc)
+
+    def _check_realised(self) -> None:
+        if self.free:
+            raise ValueError(
+                f"Linear is a template: {', '.join(self.free)} not decided. Either pin "
+                f"them, or add it to a Pipeline -- run() resolves them from whatever "
+                f"produces each operand.")
+
+    def variants(self) -> list:
+        """One realisation per place an operand can arrive from."""
+        if not self.free:
+            return [{}]
+        levels = (MemLevel.L1, MemLevel.L3)
+        return [dict(zip(self.free, combo))
+                for combo in itertools.product(*([levels] * len(self.free)))]
 
     @property
     def needs(self) -> dict:
@@ -121,10 +150,11 @@ class Linear(Block):
     def outputs(self) -> dict:
         c = self.cfg
         return {"y": PortSpec(Layout.D, DType.F16, (c.tokens, c.d_out),
-                              mem_level=MemLevel.L1,
+                              mem_level=MemLevel.L1, cluster=c.cluster,
                               doc="projection output, D-layout fp16, in L1")}
 
     def build(self, ctx: Ctx, bound: dict) -> BlockResult:
+        self._check_realised()
         c, sz = self.cfg, self.cfg.sizes
         g = ctx.at(c.cluster)
 
@@ -167,7 +197,7 @@ class Linear(Block):
 
         nodes = [n for n in (ld_x, ld_w) if n is not None] + [gemm]
         return BlockResult(
-            outputs={"y": Port(self.outputs["y"], l1_y, (gemm,), cluster=c.cluster,
+            outputs={"y": Port(self.outputs["y"], l1_y, (gemm,),
                                name="y")},
             inputs={"x": Port(self.inputs["x"], bound["x"].handle,
                               (ld_x,) if ld_x else (gemm,), name="x"),

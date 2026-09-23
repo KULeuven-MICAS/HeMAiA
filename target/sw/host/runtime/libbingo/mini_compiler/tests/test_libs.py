@@ -14,6 +14,8 @@
 
 import sys
 
+from dataclasses import replace
+
 import networkx as nx
 
 import os as _os
@@ -68,14 +70,14 @@ class Producer(Block):
 
     @property
     def outputs(self):
-        return {"o": PortSpec("A", "i8", (32, 128), mem_level="L1")}
+        return {"o": PortSpec("A", "i8", (32, 128), mem_level="L1", cluster=0)}
 
     def build(self, ctx, bound):
         t = ctx.l1("temp", 64 * 1024)
         o = ctx.l1("out", 64 * 1024)
         ld = ctx.node("ld", ctx.dm, "__snax_k", Args(dst=t))
         wr = ctx.node("wr", ctx.gemm, "__snax_k", Args(src=t, dst=o), ld)
-        return BlockResult(outputs={"o": Port(self.outputs["o"], o, (wr,), cluster=0)},
+        return BlockResult(outputs={"o": Port(self.outputs["o"], o, (wr,))},
                            nodes=[ld, wr], sources=[ld], extra={"temp": t})
 
 
@@ -83,11 +85,12 @@ class Consumer(Block):
     """Reads `x`, plus a weight it loads from a node with NO predecessor."""
     name = "consumer"
 
-    def __init__(self, layout="A", dtype="i8", mem_level="L1", needs=None):
-        # A block that fetches nothing has to name the level it reads from: the contract
-        # has nothing else to check the binding against. `needs` is how a block that DOES
-        # fetch says so -- see the `fetching` consumer below.
-        self._spec = PortSpec(layout, dtype, (32, 128), mem_level=mem_level)
+    def __init__(self, layout="A", dtype="i8", mem_level="L1", needs=None, cluster=0):
+        # Every port names the level it is handed at, and an L1 one names its cluster.
+        # `needs` is how a block that FETCHES says what its own engines then read -- see
+        # the `fetching` consumer below.
+        self._spec = PortSpec(layout, dtype, (32, 128), mem_level=mem_level,
+                              cluster=cluster if mem_level == "L1" else None)
         self._needs = needs
 
     @property
@@ -97,7 +100,7 @@ class Consumer(Block):
     def needs(self): return self._needs or self.inputs
 
     @property
-    def outputs(self): return {"y": PortSpec("D", "f16", (32, 128), mem_level="L1")}
+    def outputs(self): return {"y": PortSpec("D", "f16", (32, 128), mem_level="L1", cluster=0)}
 
     def build(self, ctx, bound):
         w = ctx.l1("wgt", 64 * 1024)
@@ -107,7 +110,7 @@ class Consumer(Block):
         cmp_ = ctx.node("cmp", ctx.gemm, "__snax_k", Args(a=y, b=w, dst=y), [rd, wld])
         return BlockResult(
             inputs={"x": Port(self._spec, bound["x"].handle, (rd,))},
-            outputs={"y": Port(self.outputs["y"], y, (cmp_,), cluster=0)},
+            outputs={"y": Port(self.outputs["y"], y, (cmp_,))},
             nodes=[wld, rd, cmp_], sources=[wld], extra={"wgt": w})
 
 
@@ -160,21 +163,31 @@ refuses("an int8 reshape is refused for the RIGHT reason: the run is too narrow"
 # so the message must still name the transpose rather than a precision problem.
 from libs.comm import transfer as _staging                                     # noqa: E402
 refuses("a transpose is refused as a transpose, not as a precision problem",
-        lambda: _staging.plan(PortSpec("A", "f16", (32, 128), mem_level="L1"),
-                              PortSpec("B", "f16", (32, 128), mem_level="L1"),
+        lambda: _staging.plan(PortSpec("A", "f16", (32, 128), mem_level="L1", cluster=0),
+                              PortSpec("B", "f16", (32, 128), mem_level="L1", cluster=0),
                               mesh=(16, 4, 16), elem_bytes=2), "TRANSPOSE")
 check("a reshape the xDMA can do is planned, not refused",
-   _staging.plan(PortSpec("D", "f16", (32, 128), mem_level="L1"),
-                 PortSpec("A", "f16", (32, 128), mem_level="L1"),
+   _staging.plan(PortSpec("D", "f16", (32, 128), mem_level="L1", cluster=0),
+                 PortSpec("A", "f16", (32, 128), mem_level="L1", cluster=0),
                  mesh=(16, 4, 16), elem_bytes=2) != [])
 
-refuses("a port with no mem_level, on a block that fetches nothing",
-        lambda: assemble(consumer=Consumer(mem_level=None)), "neither the port nor")
-
-# A bound port reads its level off the handle, so a caller may bind a block's own
-# level-less input spec directly -- which is what makes "anywhere" usable.
+# EVERY PORT SAYS WHERE. A tensor is in some memory at every point in the graph, so a
+# spec that declines to say is a hole the binding would silently fill.
 from bingo_mem_handle import BingoMemSymbol as _Sym                           # noqa: E402
-_p = Port(PortSpec("A", "i8", (32, 128)), BingoMemAlloc("h", 4096, "L1"), ())
+try:
+    PortSpec("A", "i8", (32, 128))
+    check("a port with no mem_level cannot be built", False, "it constructed")
+except TypeError as _e:
+    check("a port with no mem_level cannot be built", "mem_level" in str(_e), str(_e))
+refuses("...and passing None says what to do instead",
+        lambda: PortSpec("A", "i8", (32, 128), mem_level=None), "realisation per level")
+# ...and L1 is the one memory where "which cluster" has an answer, so it is required
+# there and refused everywhere else.
+refuses("an L1 port must name its cluster",
+        lambda: PortSpec("A", "i8", (32, 128), mem_level="L1"), "name the cluster")
+refuses("a main-memory port must not",
+        lambda: PortSpec("A", "i8", (32, 128), mem_level="L3", cluster=0),
+        "only L1 is per-cluster")
 # The vocabulary is a closed set: a typo is refused at construction, naming the valid
 # values, rather than reaching a kernel as a layout nobody implements.
 for _bad, _kind in ((("packd", "i8", None), "Layout"),
@@ -183,25 +196,34 @@ for _bad, _kind in ((("packd", "i8", None), "Layout"),
     refuses(f"a typo'd {_kind} is refused with the valid values named",
             lambda b=_bad: PortSpec(b[0], b[1], (32, 128), mem_level=b[2]),
             "is not a valid")
-_s = PortSpec("A", "i8", (32, 128), mem_level="L1")
+_s = PortSpec("A", "i8", (32, 128), mem_level="L1", cluster=0)
 check("a plain string is coerced to the enum member",
       (_s.layout is Layout.A and _s.dtype is DType.I8 and _s.mem_level is MemLevel.L1),
       f"got {_s.layout!r} {_s.dtype!r} {_s.mem_level!r}")
 check("the two spellings make equal specs",
-      _s == PortSpec(Layout.A, DType.I8, (32, 128), mem_level=MemLevel.L1))
+      _s == PortSpec(Layout.A, DType.I8, (32, 128), mem_level=MemLevel.L1, cluster=0))
 check("a member still behaves as its string", f"{Layout.D32}" == "d32" and Layout.D32 == "d32")
 
-check("a bound port takes its level from the handle", _p.spec.mem_level == "L1",
+check("a bound port agrees with its handle",
+      Port(PortSpec("A", "i8", (32, 128), mem_level="L1", cluster=0),
+           BingoMemAlloc("h", 4096, "L1"), ()).spec.mem_level == "L1")
+check("...and a staged symbol is main memory",
+      Port(PortSpec("A", "i8", (32, 128), mem_level="L3"), _Sym("staged"),
+           ()).spec.mem_level == "L3")
+# A FIXED ADDRESS records neither level nor cluster, so the spec is the only statement
+# there is and it stands. Anything the handle DOES know is checked against instead: a
+# staged symbol is main memory by construction, so calling it L4 is refused rather than
+# carried downstream as fact.
+from bingo_mem_handle import BingoMemFixedAddr as _Fixed                 # noqa: E402
+_p = Port(PortSpec("A", "i8", (32, 128), mem_level="L4"), _Fixed(0x8000_0000), ())
+check("a fixed address takes the level the spec states", _p.spec.mem_level == "L4",
       f"got {_p.spec.mem_level!r}")
-_p = Port(PortSpec("A", "i8", (32, 128)), _Sym("staged"), ())
-check("a staged symbol resolves to L3", _p.spec.mem_level == "L3",
-      f"got {_p.spec.mem_level!r}")
-_p = Port(PortSpec("A", "i8", (32, 128), mem_level="L4"), _Sym("staged"), ())
-check("an explicit level is not overwritten", _p.spec.mem_level == "L4",
-      f"got {_p.spec.mem_level!r}")
+refuses("a handle that contradicts its spec is refused",
+        lambda: Port(PortSpec("A", "i8", (32, 128), mem_level="L4"), _Sym("staged"), ()),
+        "is in L3")
 
 bad_shape = Consumer()
-bad_shape._spec = PortSpec("A", "i8", (64, 128), mem_level="L1")
+bad_shape._spec = PortSpec("A", "i8", (64, 128), mem_level="L1", cluster=0)
 refuses("a shape mismatch is refused", lambda: assemble(consumer=bad_shape), "shape")
 
 def _unbound():
@@ -219,8 +241,8 @@ def _unknown():
     p.run()
 refuses("binding an input the block does not have", _unknown, "inputs are")
 
-ok = check_contract(Port(PortSpec("A", "i8", (32, 128), mem_level="L1"), None, ()),
-                    PortSpec("A", "i8", (32, 128), mem_level="L1"), where="t")
+ok = check_contract(Port(PortSpec("A", "i8", (32, 128), mem_level="L1", cluster=0), None, ()),
+                    PortSpec("A", "i8", (32, 128), mem_level="L1", cluster=0), where="t")
 check("a matching contract passes", ok is None, str(ok))
 
 # ---------------------------------------------------------------- the join
@@ -290,13 +312,13 @@ def _chain(rows, pin=None, demand=None):
     """norm -> Reshape, the two-stage chain, with only what `pin` says decided."""
     c = new_ctx()
     g = c.at(0)
-    x = Port(PortSpec(Layout.ROW_MAJOR, DType.F16, (rows, _D), mem_level=MemLevel.L1),
+    x = Port(PortSpec(Layout.ROW_MAJOR, DType.F16, (rows, _D), mem_level=MemLevel.L1, cluster=0),
              g.l1("x", rows * _D * 2), ())
     p = Pipeline(c, verbose=False)
     n = p.add(_RMSNorm(rows=rows, cols=_D, cluster=0, **(pin or {})), "norm", x=x)
     r = p.add(_Reshape(rows=rows, cols=_D, mesh=_M, cluster=0), "to_a", x=n.out())
     p.demand(r.out(), PortSpec(demand or Layout.A, DType.F16, (rows, _D),
-                               mem_level=MemLevel.L1))
+                               mem_level=MemLevel.L1, cluster=0))
     p.run()
     return p, n, r
 
@@ -311,7 +333,12 @@ check("...and fewer of them are legal off the col_major kernel's shape",
       len(_v64) < len(_v32), (len(_v32), len(_v64)))
 check("a pinned block offers exactly one",
       len(variants_of(_RMSNorm(rows=32, cols=_D, cluster=0, in_layout=Layout.ROW_MAJOR,
-                               out_layout=Layout.ROW_MAJOR, out_dtype=DType.F16))) == 1)
+                               out_layout=Layout.ROW_MAJOR, out_dtype=DType.F16,
+                               in_level=MemLevel.L1))) == 1)
+check("...and leaving only WHERE x arrives open offers one per level",
+      len(variants_of(_RMSNorm(rows=32, cols=_D, cluster=0, in_layout=Layout.ROW_MAJOR,
+                               out_layout=Layout.ROW_MAJOR,
+                               out_dtype=DType.F16))) == 2)
 
 # FOLDS RANK FIRST, so the resolver takes the col_major kernel even though it costs the
 # chain more passes than the row_major arm -- 2,062 cycles off the busy engine for one
@@ -383,13 +410,14 @@ for _why, _kw in (("a transposing pair", dict(input_layout="col_major")),
 
 # x_in_place IS A PROMISE, and breaking it is refused rather than silently corrected.
 _bad = _RMSNorm(rows=_T, cols=_D, cluster=0, in_layout=Layout.COL_MAJOR,
-                out_layout=Layout.ROW_MAJOR, out_dtype=DType.F16, x_in_place=True)
+                out_layout=Layout.ROW_MAJOR, out_dtype=DType.F16, x_in_place=True,
+                in_level=MemLevel.L1)
 _g2 = new_ctx().at(0)
 _bad.alloc(_g2)
 try:
     _bad.build(_g2, {"x": Port(PortSpec(Layout.COL_MAJOR, DType.F16, (_T, _D),
-                                        mem_level=MemLevel.L1),
-                               _g2.l1("elsewhere", _T * _D * 2), (), cluster=0, name="x")})
+                                        mem_level=MemLevel.L1, cluster=0),
+                               _g2.l1("elsewhere", _T * _D * 2), (), name="x")})
     check("x_in_place=True on a foreign buffer is refused", False, "it built")
 except ValueError:
     check("x_in_place=True on a foreign buffer is refused", True)
@@ -405,10 +433,11 @@ def _engines(in_lay, out_lay, level):
     c = new_ctx()
     g = c.at(0)
     b = _RMSNorm(rows=_T, cols=_D, cluster=0, in_layout=in_lay, out_layout=out_lay,
-                 out_dtype=DType.F16)
+                 out_dtype=DType.F16, in_level=level)
     h = g.l1("x", _T * _D * 2) if level == _ML.L1 else g.l3("x_l3", _T * _D * 2)
-    r = b.build(g, {"x": Port(PortSpec(in_lay, DType.F16, (_T, _D), mem_level=level),
-                              h, (), cluster=0, name="x")})
+    r = b.build(g, {"x": Port(PortSpec(in_lay, DType.F16, (_T, _D), mem_level=level,
+                                       cluster=0 if level == _ML.L1 else None),
+                              h, (), name="x")})
     return [(n.node_name.split("_cl")[0], n._assigned_core_id) for n in r.nodes], b
 
 
@@ -437,21 +466,14 @@ check("an L3 row_major input costs exactly one iDMA load",
       len(_l3r) == len(_l1r) + 1 and _l3r[0] == ("Load_x", _IDMA), _l3r)
 check("...and does not change the xDMA count",
       _b.xdma_passes() == 0, _b.xdma_passes())
-check("...while idma_passes(in_l3=True) reports it", _b.idma_passes(in_l3=True) == 1,
-      _b.idma_passes(in_l3=True))
+check("...while the L3 realisation prices it", _b.idma_passes() == 1, _b.idma_passes())
 
 # L4 IS REFUSED, because the hoist is one move for the whole layer, not one per operator.
-try:
-    _c4 = new_ctx()
-    _b4 = _RMSNorm(rows=_T, cols=_D, cluster=0, in_layout=Layout.ROW_MAJOR,
-                   out_layout=Layout.ROW_MAJOR, out_dtype=DType.F16)
-    _b4.build(_c4.at(0), {"x": Port(PortSpec(Layout.ROW_MAJOR, DType.F16, (_T, _D),
-                                             mem_level=_ML.L4),
-                                    _c4.at(0).l1("x", _T * _D * 2), (),
-                                    cluster=0, name="x")})
-    check("an L4 operand is refused", False, "it built")
-except ValueError:
-    check("an L4 operand is refused", True)
+# In the CONSTRUCTOR, like every other refusal, so the realisation never enters the search.
+refuses("an L4 operand is refused",
+        lambda: _RMSNorm(rows=_T, cols=_D, cluster=0, in_layout=Layout.ROW_MAJOR,
+                         out_layout=Layout.ROW_MAJOR, out_dtype=DType.F16,
+                         in_level=_ML.L4), "in_level")
 
 # ------------------------------------------------ RMSNorm straight into a GEMM operand
 print("\nRMSNorm writing a GEMM operand (out_layout A / B)")
@@ -461,10 +483,11 @@ def _norm_out(in_lay, out_lay, dtype=DType.I8, rows=_T):
     c = new_ctx()
     g = c.at(0)
     b = _RMSNorm(rows=rows, cols=_D, cluster=0, in_layout=in_lay, out_layout=out_lay,
-                 out_dtype=dtype, inv_scale_f32bits=0x42800000, mesh=_M)
+                 out_dtype=dtype, inv_scale_f32bits=0x42800000, mesh=_M,
+                 in_level=_ML.L1)
     h = g.l1("x", rows * _D * 2)
-    r = b.build(g, {"x": Port(PortSpec(in_lay, DType.F16, (rows, _D), mem_level=_ML.L1),
-                              h, (), cluster=0, name="x")})
+    r = b.build(g, {"x": Port(PortSpec(in_lay, DType.F16, (rows, _D), mem_level=_ML.L1, cluster=0),
+                              h, (), name="x")})
     names = [(n.node_name.split("_cl")[0], n._assigned_core_id) for n in r.nodes]
     simd = [n._kernel_args for n in r.nodes if n._assigned_core_id == _SIMD]
     return names, b, r, simd
@@ -526,7 +549,7 @@ for _pair in (("row_major", "B"), ("col_major", "A")):
 # A blocked output without the consuming GEMM's mesh cannot derive its read order.
 try:
     _RMSNorm(rows=_T, cols=_D, cluster=0, in_layout=Layout.ROW_MAJOR,
-             out_layout=Layout.A, out_dtype=DType.F16)
+             out_layout=Layout.A, out_dtype=DType.F16, in_level=_ML.L1)
     check("out_layout A without a mesh is refused", False, "built")
 except ValueError:
     check("out_layout A without a mesh is refused", True)
@@ -541,9 +564,9 @@ def _direct(rows, in_lay=Layout.ROW_MAJOR, glue=False):
     """norm -> [Reshape -> Quantize ->] Linear, with nothing pinned but the ends."""
     c = new_ctx()
     g = c.at(0)
-    x = Port(PortSpec(in_lay, DType.F16, (rows, _D), mem_level=MemLevel.L1),
+    x = Port(PortSpec(in_lay, DType.F16, (rows, _D), mem_level=MemLevel.L1, cluster=0),
              g.l1("x", rows * _D * 2), ())
-    w = Port(PortSpec(Layout.B, DType.I8, (_D, _D), mem_level=MemLevel.L1),
+    w = Port(PortSpec(Layout.B, DType.I8, (_D, _D), mem_level=MemLevel.L1, cluster=0),
              g.l1("w", _D * _D), ())
     p = Pipeline(c, verbose=False)
     h = p.add(_RMSNorm(rows=rows, cols=_D, cluster=0, mesh=_M,
@@ -670,8 +693,8 @@ for _mesh, _want in ((_SQ, True), (_NSQ, False)):
 
 # ON A SQUARE ARRAY plan decomposes a B pair; on a non-square one it must refuse, because
 # the identity it would rest on is false there.
-_rm = PortSpec(Layout.ROW_MAJOR, DType.F16, (32, 128), mem_level=MemLevel.L1)
-_b = PortSpec(Layout.B, DType.F16, (32, 128), mem_level=MemLevel.L1)
+_rm = PortSpec(Layout.ROW_MAJOR, DType.F16, (32, 128), mem_level=MemLevel.L1, cluster=0)
+_b = PortSpec(Layout.B, DType.F16, (32, 128), mem_level=MemLevel.L1, cluster=0)
 check("row_major -> B decomposes on a square array",
       [x.kind for x in _staging.plan(_rm, _b, mesh=_SQ, elem_bytes=2)]
       == ["transpose", "relayout"])
@@ -692,7 +715,7 @@ for _R, _C in ((32, 128), (64, 64), (16, 64)):
           _np.array_equal(_lay("A", _X.T.copy(), _SQ), _lay("B", _X, _SQ)))
 
 # A BLOCKED-TO-BLOCKED PAIR stays refused: it has no row_major side to pivot through.
-_a = PortSpec(Layout.A, DType.F16, (32, 128), mem_level=MemLevel.L1)
+_a = PortSpec(Layout.A, DType.F16, (32, 128), mem_level=MemLevel.L1, cluster=0)
 try:
     _staging.plan(_a, _b, mesh=_SQ, elem_bytes=2)
     check("A -> B is still refused", False, "it planned")
@@ -729,6 +752,126 @@ try:
     check("the converter refuses a shape that does not tile", False, "it constructed")
 except ValueError:
     check("the converter refuses a shape that does not tile", True)
+
+# ======================================================================================
+# PLACEMENT: a kernel reads its own TCDM and nothing else
+# ======================================================================================
+# A remote handle is the dangerous case, because it does not fault. The transfer completes
+# without writing and the destination keeps whatever it held -- X, on a buffer nothing else
+# touched -- so it surfaces as a wrong answer or an assertion somewhere unrelated.
+
+from libs.block import Gather, Quantize, RMSNorm, Scatter                # noqa: E402
+
+_pc = new_ctx()
+_l1_cl0 = _pc.at(0).l1("on_cl0", 32 * 128 * 2)
+_l1_cl1 = _pc.at(1).l1("on_cl1", 32 * 128 * 2)
+_l3_any = _pc.l3("in_l3", 32 * 128 * 2)
+_want_cl0 = PortSpec(Layout.ROW_MAJOR, DType.F16, (32, 128), mem_level=MemLevel.L1,
+                     cluster=0)
+
+_want_cl1 = replace(_want_cl0, cluster=1)
+_in_l3 = PortSpec(Layout.ROW_MAJOR, DType.F16, (32, 128), mem_level=MemLevel.L3)
+check("an L1 port states the cluster it is in", Port(_want_cl1, _l1_cl1, ()).cluster == 1)
+check("...and a main-memory one has none to state",
+      Port(_in_l3, _l3_any, ()).cluster is None)
+refuses("a spec that names the wrong cluster is refused at binding",
+        lambda: Port(_want_cl0, _l1_cl1, ()), "allocated on cluster 1")
+check("a producer on another cluster cannot feed this port",
+      "cluster 1" in (check_contract(Port(_want_cl1, _l1_cl1, ()), _want_cl0,
+                                     where="t") or ""))
+check("...and the local one can",
+      check_contract(Port(_want_cl0, _l1_cl0, ()), _want_cl0, where="t") is None)
+# A BLOCK THAT READS FROM MORE THAN ONE LEVEL IS A FAMILY, not a port with a hole: each
+# realisation states one level, and only the one the producer matches survives.
+_norm_l1, _norm_l3 = [RMSNorm(rows=32, cols=128, cluster=0, in_layout=Layout.ROW_MAJOR,
+                              out_layout=Layout.ROW_MAJOR, out_dtype=DType.F16,
+                              in_level=lv).inputs["x"]
+                      for lv in (MemLevel.L1, MemLevel.L3)]
+check("the L3 realisation takes main memory",
+      check_contract(Port(_in_l3, _l3_any, ()), _norm_l3, where="t") is None)
+check("...and the L1 one does not",
+      check_contract(Port(_in_l3, _l3_any, ()), _norm_l1, where="t") is not None)
+check("...nor does the L1 one take a neighbour's TCDM",
+      check_contract(Port(_want_cl1, _l1_cl1, ()), _norm_l1, where="t") is not None)
+check("RMSNorm declares the cluster it reads on",
+      RMSNorm(rows=32, cols=128, cluster=2, in_layout=Layout.ROW_MAJOR,
+              out_layout=Layout.ROW_MAJOR, out_dtype=DType.F16,
+              in_level=MemLevel.L1).inputs["x"].cluster == 2)
+check("Quantize's output names its cluster too",
+      Quantize(rows=32, cols=128, inv_scale_f32bits=0, layout=Layout.ROW_MAJOR,
+               cluster=3).outputs["y"].cluster == 3)
+
+# ======================================================================================
+# SCATTER / GATHER: the two ends of a row split
+# ======================================================================================
+
+_CL = (0, 1, 2, 3)
+_sc = Scatter(rows=32, cols=128, clusters=_CL, src_level=MemLevel.L3)
+_ga = Gather(rows=32, cols=128, clusters=_CL)
+check("Scatter names one output per cluster",
+      sorted(_sc.outputs) == ["y_c0", "y_c1", "y_c2", "y_c3"])
+check("...each an 8-row slice in that cluster's L1",
+      all(_sc.outputs[f"y_c{c}"].shape == (8, 128)
+          and _sc.outputs[f"y_c{c}"].cluster == c for c in _CL))
+check("Gather names one input per cluster, and one output on the root",
+      sorted(_ga.inputs) == ["x_c0", "x_c1", "x_c2", "x_c3"]
+      and _ga.outputs["y"].shape == (32, 128) and _ga.outputs["y"].cluster == 0)
+check("a Gather onto cluster 2 says so",
+      Gather(rows=32, cols=128, clusters=_CL, root=2).outputs["y"].cluster == 2)
+
+# WHERE THE TENSOR STARTS IS THE KNOB: two routes in, and they are different graphs.
+_open = Scatter(rows=32, cols=128, clusters=_CL)
+check("an unpinned Scatter offers both routes in", len(_open.variants()) == 2)
+check("...the L3 one loads per cluster, the L1 one multicasts",
+      _open.respec(src_level=MemLevel.L3).idma_passes() == 4
+      and _open.respec(src_level=MemLevel.L1).xdma_passes() == 3)
+check("a pinned Scatter offers exactly one", len(_sc.variants()) == 1)
+refuses("a template Scatter refuses to build",
+        lambda: _open.build(new_ctx(), {}), "template")
+
+refuses("a ragged split is refused",
+        lambda: Scatter(rows=30, cols=128, clusters=_CL), "does not divide")
+refuses("...and so is a repeated cluster",
+        lambda: Gather(rows=32, cols=128, clusters=(0, 1, 1)), "repeats")
+refuses("a blocked layout cannot be row-sliced",
+        lambda: Scatter(rows=32, cols=128, clusters=_CL, layout=Layout.A), "row_major")
+refuses("the root has to be one of the clusters",
+        lambda: Gather(rows=32, cols=128, clusters=(0, 1), root=3), "not among")
+
+# The whole split, assembled: scatter -> one norm per cluster -> gather.
+_sp = Pipeline(new_ctx(), verbose=False)
+_src = Port(PortSpec(Layout.ROW_MAJOR, DType.F16, (32, 128),
+                          mem_level=MemLevel.L3),
+            _sp.ctx.l3("split_x", 32 * 128 * 2), ())
+_st_sc = _sp.add(Scatter(rows=32, cols=128, clusters=_CL), name="sc", bind={"x": _src})
+_st_n = [_sp.add(RMSNorm(rows=8, cols=128, cluster=c, in_layout=Layout.ROW_MAJOR,
+                         out_layout=Layout.ROW_MAJOR, out_dtype=DType.F16),
+                 name=f"n{c}", bind={"x": _st_sc.out(f"y_c{c}")}) for c in _CL]
+_st_ga = _sp.add(Gather(rows=32, cols=128, clusters=_CL), name="ga",
+                 bind={f"x_c{c}": _st_n[c].out("y") for c in _CL})
+_sp.run()
+_g = _sp.ctx.dfg
+check("a row split builds", _st_ga.out("y").port.handle is not None)
+check("...with the L3 route chosen, so every cluster loads its own slice",
+      _st_sc.chosen.block.src_level == MemLevel.L3)
+check("...one norm on each cluster",
+      sorted(nd.assigned_cluster_id for nd in _sp.ctx.dfg.nodes
+             if "Rmsnorm" in nd.node_name) == [0, 1, 2, 3])
+check("...and every slice is ordered between its load and its push",
+      all(nx.has_path(_g, _st_sc.result.outputs[f"y_c{c}"].ends[-1],
+                      _st_ga.result.inputs[f"x_c{c}"].ends[-1]) for c in _CL))
+
+# A norm placed on the wrong cluster is a refusal, not a wrong answer.
+_bad = Pipeline(new_ctx(), verbose=False)
+_bsc = _bad.add(Scatter(rows=32, cols=128, clusters=(0, 1), src_level=MemLevel.L3),
+                name="sc", bind={"x": Port(PortSpec(Layout.ROW_MAJOR, DType.F16, (32, 128),
+                          mem_level=MemLevel.L3),
+                                           _bad.ctx.l3("bad_x", 32 * 128 * 2), ())})
+_bad.add(RMSNorm(rows=16, cols=128, cluster=0, in_layout=Layout.ROW_MAJOR,
+                 out_layout=Layout.ROW_MAJOR, out_dtype=DType.F16),
+         name="n", bind={"x": _bsc.out("y_c1")})
+refuses("a block bound to another cluster's slice is refused", _bad.run, "cluster")
+
 
 if FAILED:
     print(f"\n{len(FAILED)} FAILED: {', '.join(FAILED)}")
