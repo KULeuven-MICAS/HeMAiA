@@ -49,10 +49,9 @@ def index_map(layout: str, rows: int, cols: int, mesh: tuple) -> np.ndarray:
     if layout == "col_major":
         # THE TRANSPOSE, AS AN INDEX MAP LIKE EVERY OTHER LAYOUT. This is the whole of the
         # orientation axis: a [rows, cols] tensor whose bytes are laid out [cols, rows].
-        # It used to be a boolean beside the enum, which meant byte order was described in
-        # two languages -- a verified permutation for the blocking and an ad-hoc flag for
-        # the orientation -- and every place they met needed hand-written reconciliation.
-        # One map removes all of it.
+        # Being a layout rather than a flag beside one is what keeps byte order in a single
+        # language -- one verified permutation per name, which convert_args derives from
+        # and _verify_nest checks, with nothing to reconcile by hand.
         return np.broadcast_to(c_i * rows + r_i, (rows, cols)).copy()
     if layout == "A":
         # (m, k, r, s): row = m*meshRow + r, col = k*tileSize + s

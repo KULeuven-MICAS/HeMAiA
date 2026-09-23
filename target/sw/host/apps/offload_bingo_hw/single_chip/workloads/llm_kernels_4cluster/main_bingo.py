@@ -74,7 +74,7 @@ from bingo_kernel_args import (                                        # noqa: E
     SnaxBingoKernelIdma1dCopyArgs,
     SnaxBingoKernelSimdAddF16Args,
     SnaxBingoKernelSimdFp16ToInt8Args,
-    SnaxBingoKernelSimdRmsnormF16F16Args,
+    SnaxBingoKernelSimdRmsnormArgs,
     SnaxBingoKernelSimdRopeArgs,
     SnaxBingoKernelIdmaPairwiseSwapArgs,
 )
@@ -161,8 +161,8 @@ def main():
     # ---- 1. rmsnorm -------------------------------------------------------------------
     b_in, b_out = l1("rms_in", n_f16), l1("rms_out", n_f16)
     ld = load("rms", hs["rms_x"], b_in, n_f16, prev)
-    k = node("Rmsnorm", R["simd"], "__snax_bingo_kernel_simd_rmsnorm_f16_f16",
-             SnaxBingoKernelSimdRmsnormF16F16Args(b_in, b_out, rows=T, cols=d), ld)
+    k = node("Rmsnorm", R["simd"], "__snax_bingo_kernel_simd_rmsnorm",
+             SnaxBingoKernelSimdRmsnormArgs(b_in, b_out, rows=T, cols=d), ld)
     prev = store_check("rmsnorm", b_out, n_f16, hs["rms_golden"], k,
                        exact=False, elems=T * d, tol=0.05)
 

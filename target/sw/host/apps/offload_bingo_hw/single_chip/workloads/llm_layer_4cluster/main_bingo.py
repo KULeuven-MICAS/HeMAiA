@@ -121,7 +121,7 @@
 #      1,073 cc against 3,135 -- a further 2.9x on the SIMD, paid for with two xDMA block
 #      transposes on the other engine.
 #
-# NORM_PATH below picks between them. It is pinned to "row_major" because the transposed
+# NORM_LAYOUT below picks between them. It is pinned to row_major because the transposed
 # arm is three new things at once -- a new kernel entry point, a seed-adjacency contract,
 # and two xDMA transposer nodes per norm. simd_rmsnorm_t_1cluster is the workload that has
 # to go green first: it runs both kernels over one [32, 128] tile with four checks, and it
@@ -198,11 +198,13 @@ CHIPLET_ID = 0x00
 # buffer quietly overlapping another's bytes.
 L1_CAPACITY = 514816
 
-# Which RMSNorm kernel, in one word. See the long note in the header: "row_major" is the
+# Which ORIENTATION the norm works in. See the long note in the header. There is no
+# kernel switch any more -- libs/block/simd/norm.py infers the implementation from
+# these layouts, because which one runs is a hardware fact and not a preference:
 # RSQRT path (one node, no layout change), "auto" adds the transposed path wherever
 # rows == 32 (LANEWISE reduce + sticky scale, 2.9x on the SIMD, two xDMA transposes).
 # Pinned until simd_rmsnorm_t_1cluster has run the transposed kernel green on RTL.
-NORM_PATH = "row_major"
+NORM_LAYOUT = Layout.ROW_MAJOR
 
 # RoPE on Q and K. Off because it would change a graph that passes, and because the
 # projections it hangs off are a checked dead end either way -- see the header.
@@ -272,7 +274,9 @@ def build_layer(ctx, p, data, hs, *, verbose=True):
                   x_l1, (ld_x,))
 
     # ---- 1. the first normalisation ----------------------------------------------------
-    n1_y = pipe.add(RMSNorm(rows=T, cols=d, cluster=0, path=NORM_PATH), name="norm1",
+    n1_y = pipe.add(RMSNorm(rows=T, cols=d, cluster=0,
+                          in_layout=NORM_LAYOUT, out_layout=NORM_LAYOUT),
+                    name="norm1",
                     bind={"x": x_port}).result.outputs["y"]
     check("norm1", n1_y, "norm1_golden", T * d)
 
@@ -334,7 +338,9 @@ def build_layer(ctx, p, data, hs, *, verbose=True):
     check("resid1", res1.result.outputs["y"], "resid1_golden", T * d)
 
     # ---- 5. the feed-forward half -------------------------------------------------------
-    n2_y = pipe.add(RMSNorm(rows=T, cols=d, cluster=0, path=NORM_PATH), name="norm2",
+    n2_y = pipe.add(RMSNorm(rows=T, cols=d, cluster=0,
+                          in_layout=NORM_LAYOUT, out_layout=NORM_LAYOUT),
+                    name="norm2",
                     bind={"x": res1.result.outputs["y"]}).result.outputs["y"]
     check("norm2", n2_y, "norm2_golden", T * d)
     rs2 = pipe.add(Reshape(rows=T, cols=d, src=Layout.ROW_MAJOR, dst=Layout.A, mesh=mesh,

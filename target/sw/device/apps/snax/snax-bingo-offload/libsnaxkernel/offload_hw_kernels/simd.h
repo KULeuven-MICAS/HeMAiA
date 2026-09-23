@@ -154,14 +154,14 @@
 // SIMD_EXT_STREAMREDUCE_HAS_SUMSQ appears on snax_split_cluster although its cfg lists
 // only FMA_FP16 and MAX_FP16.
 //
-// Overridable, because an old generated header is still a legitimate thing to build
-// against. With 0, rmsnorm falls back to the core's integer sqrt+reciprocal -- the path
-// this kernel shipped before, ~2 FP16 ULP worse on inv_rms and ~5,000 cc slower over a
-// [32, 128] tile. The better fix is RSQRT_FP16 in the cfg's func list and a re-elaborate.
+// Overridable, because a generated header without capability markers is still a
+// legitimate thing to build against. With 0, rmsnorm falls back to the core's integer
+// sqrt+reciprocal: ~2 FP16 ULP worse on inv_rms and ~5,000 cc slower over a [32, 128]
+// tile. The better fix is RSQRT_FP16 in the cfg's func list and a re-elaborate.
 #if !defined(BINGO_SIMD_HAS_RSQRT)
 #if !defined(SIMD_EXT_CAPS)
-// Pre-capabilities header: it cannot tell us, so keep the behaviour this kernel had when
-// that was the only option rather than silently dropping to the slow path.
+// Pre-capabilities header: it cannot tell us either way, so assume the extension is
+// present rather than silently dropping every build onto the slow path.
 #define BINGO_SIMD_HAS_RSQRT 1
 #elif defined(SIMD_EXT_STREAMMAP_HAS_RSQRT)
 #define BINGO_SIMD_HAS_RSQRT 1
@@ -868,13 +868,12 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_stream_elementwise(void *arg) 
 //                                                                      riding the bcast)
 //       EW1(MUL) [+ quant]                           expb,bc-> out
 //   6 SIMD tasks, NO core loop, and no `x - max` intermediate: the fused pass never
-//   writes one. The reciprocal used to be an integer divide plus 16 volatile stores per
-//   row -- 512 at [32, 128] -- and rsqrt(s*s) = 1/s removes both, with the square costing
-//   `rows` beats and the inversion costing nothing at all (the broadcast it rides was
-//   already carrying an identity multiply). Bounded by cols <= 255; see `wide` below.
+//   writes one. The reciprocal is rsqrt(s*s) = 1/s, which costs `rows` beats for the
+//   square and nothing at all for the inversion -- the broadcast it rides was already
+//   carrying an identity multiply. Bounded by cols <= 255; see `wide` below.
 //
-// WHY rows == 1 KEEPS ITS INTEGER RECIPROCAL, when RMSNorm's went away. Two reasons, and
-// neither holds for the general path. It is FASTER: one row means one scalar, which folds
+// WHY rows == 1 KEEPS AN INTEGER RECIPROCAL INSTEAD. Two reasons, and neither holds for
+// the general path. It is FASTER: one row means one scalar, which folds
 // into a StreamMap immediate, so the core pays one `divu` (~20 cc) where the datapath
 // route would pay a whole extra task (~190 cc) for the square-and-invert plus a sticky
 // multiply instead of a plain map. And it is not LESS ACCURATE: the integer reciprocal is
@@ -1021,10 +1020,9 @@ static inline uint32_t __snax_bingo_kernel_simd_softmax(void *arg, uint32_t out_
         // THE RECIPROCAL, AND WHERE IT HAPPENS.
         //
         // The division by Sexp is one reciprocal per row, and this core cannot divide --
-        // rv32ima, no FPU -- so it used to be an integer `divu` per row plus a splat of
-        // the result across each row's whole 64 B beat: 16 volatile word stores a row,
-        // 512 of them at [32, 128]. On the reference app that broadcast loop and its twin
-        // were 85% of the whole kernel.
+        // rv32ima, no FPU. Doing it on the core costs an integer `divu` per row plus a
+        // splat of the result across each row's whole 64 B beat: 16 volatile word stores
+        // a row, 512 of them at [32, 128], which measures as 85% of the whole kernel.
         //
         // StreamMap has no reciprocal either, but rsqrt(s*s) = 1/s exactly, and both
         // halves are operators already in this chain. The square is one narrow pass over
@@ -1123,9 +1121,9 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_softmax_f16_i8(void *arg) {
 //     5  ew(MUL|STICKY)             1/Sexp+ex -> y^T   no plane, D+1 beats read
 //
 // Pass 4 is the whole reciprocal in one pass, and it is worth naming why it exists at
-// all: this core cannot divide, so every softmax on this block used to end with a number
-// that had to leave the datapath. StreamMap has no reciprocal either -- but
-// rsqrt(s*s) = 1/s exactly, and the square needs no operand but the number itself. Read
+// all: this core cannot divide, so a division would force the number out of the datapath
+// and onto the core. StreamMap has no reciprocal either -- but rsqrt(s*s) = 1/s exactly,
+// and the square needs no operand but the number itself. Read
 // the sum beat twice at stride 0, let the sticky elementwise square it, let RSQRT invert
 // it. All T tokens at once, because all T sums live in the lanes of that one beat.
 //
@@ -1287,33 +1285,32 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_softmax_t_f16_f16(void *arg) {
 //     2  bcast_map(a=1/D, RSQRT)  bt -> bc   the replication AND the normalisation
 //     3  ew2(MUL)             (x, bc) -> y   [+ fused quant]
 //
-// THE ONE SCALAR PER ROW IS THE WHOLE COST OF THIS KERNEL, and pass 2 is where it used to
-// escape. The arithmetic is one multiply per element -- the same as a residual add, which
-// measures 4x cheaper over the same tile. What made rmsnorm expensive was that inv_rms had
-// to be computed on a core with no FPU (six serial `divu` through sqrt_f16 + recip_f16,
-// ~122 cc a row) and then written back into the datapath by hand (sixteen volatile word
-// stores per row, because the broadcast consumes a whole 64 B beat). At [32, 128] that
-// epilogue measured 4,584 cc of a 7,719 cc kernel -- 59%.
+// THE ONE SCALAR PER ROW IS THE WHOLE COST OF THIS KERNEL, and pass 2 is what keeps it
+// inside the datapath. The arithmetic is one multiply per element -- the same as a
+// residual add, which measures 4x cheaper over the same tile. The difference is inv_rms:
+// computing it on a core with no FPU costs six serial `divu` through sqrt_f16 +
+// recip_f16, ~122 cc a row, and writing it back into the datapath by hand costs sixteen
+// volatile word stores a row, because the broadcast consumes a whole 64 B beat. At
+// [32, 128] that epilogue measures 4,584 cc of a 7,719 cc kernel -- 59%.
 //
-// StreamMap's RSQRT deletes all of it for free. Pass 2 was ALREADY a StreamMap: the
-// replication, carrying an identity multiply a = 1.0. Giving that same pass a = 1/D and
-// func = RSQRT makes it emit 1/sqrt(SUM/D) instead of SUM, so the scalar never leaves the
-// datapath. It costs the same 296 cc of datapath as the identity multiply it replaces.
-// Measured on snax_split_cluster at [32, 128]: 7,717 cc -> 3,135 cc, and the result is
-// CLOSER to the true 1/sqrt than the integer path it replaces (1 ULP against 2-3).
+// StreamMap's RSQRT avoids all of it for free, because pass 2 is a StreamMap anyway: the
+// replication carries a multiply, and giving it a = 1/D and func = RSQRT makes it emit
+// 1/sqrt(SUM/D) instead of SUM. The scalar never leaves the datapath, and the pass costs
+// the same 296 cc as the identity multiply it would otherwise carry. Measured on
+// snax_split_cluster at [32, 128]: 3,135 cc, and 1 ULP from the true 1/sqrt where the
+// integer route is 2-3.
 //
 // Unlike softmax, rmsnorm has nothing for EW0 to do: its only combine is the final
 // multiply, and nothing precedes it.
 //
-// WHY THERE IS NO rows == 1 FAST PATH ANY MORE. There used to be one, and it existed only
-// because the scalar was on the core: with inv_rms in a register, a single row could fold
-// it into a StreamMap immediate and skip the broadcast entirely. RSQRT puts the scalar
-// back in the datapath, where it cannot be read out into a CSR, so the one-row case runs
-// the same three passes as every other -- one pass more than before, against an epilogue
-// it no longer pays. The transposed kernel below is the version that IS cheaper, and it is
-// cheaper for a different reason.
+// WHY rows == 1 GETS NO FAST PATH HERE, when softmax's does. A one-row fast path is only
+// worth having when the scalar is in a core register, where it can fold into a StreamMap
+// immediate and skip the broadcast. RSQRT keeps the scalar in the datapath, where it
+// cannot be read out into a CSR, so one row runs the same three passes as any other --
+// and pays no epilogue for it. The col_major kernel below is the one that IS cheaper, for
+// a different reason.
 // ==========================================================================
-static inline uint32_t __snax_bingo_kernel_simd_rmsnorm(void *arg, uint32_t out_prec) {
+static inline uint32_t _bingo_rmsnorm_row_major(void *arg, uint32_t out_prec) {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_simd_rmsnorm_args_t);
     BINGO_REQUIRE_CORE(snax_is_simd_core(), "simd_rmsnorm", "SIMD");
 #if !BINGO_HAS_STREAMMAP || !BINGO_HAS_STREAMREDUCE || !BINGO_HAS_STREAMELEMENTWISE
@@ -1322,18 +1319,20 @@ static inline uint32_t __snax_bingo_kernel_simd_rmsnorm(void *arg, uint32_t out_
                                "StreamMap+StreamReduce+StreamElementwise");
 #else
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+    // a[0..1] is seed_addr, which only the col_major path uses. The two
+    // implementations share ONE struct, so both index past it identically.
     uint32_t *a = (uint32_t *)arg;
-    uint64_t in_addr = make_u64(a[0], a[1]);
-    uint64_t out_addr = make_u64(a[2], a[3]);
-    uint32_t rows = a[4];
-    uint32_t cols = a[5];
+    uint64_t in_addr = make_u64(a[2], a[3]);
+    uint64_t out_addr = make_u64(a[4], a[5]);
+    uint32_t rows = a[6];
+    uint32_t cols = a[7];
     bingo_kernel_scratchpad_t *sp =
         BINGO_GET_SP(arg, __snax_bingo_kernel_simd_rmsnorm_args_t);
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
     uint32_t out_i8 = (out_prec == SIMD_OUT_I8);
     if (out_i8 && !BINGO_HAS_FP16TOINT8)
-        BINGO_SIMD_EXT_UNSUPPORTED("simd_rmsnorm_f16_i8", "Fp16ToInt8");
+        BINGO_SIMD_EXT_UNSUPPORTED("simd_rmsnorm (int8 out)", "Fp16ToInt8");
     BINGO_SIMD_REQUIRE_LOCAL(in_addr, "simd_rmsnorm", "input");
     BINGO_SIMD_REQUIRE_LOCAL(out_addr, "simd_rmsnorm", "output");
 
@@ -1428,11 +1427,48 @@ static inline uint32_t __snax_bingo_kernel_simd_rmsnorm(void *arg, uint32_t out_
 #endif
 }
 
-SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_rmsnorm_f16_f16(void *arg) {
-    return __snax_bingo_kernel_simd_rmsnorm(arg, SIMD_OUT_F16);
-}
-SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_rmsnorm_f16_i8(void *arg) {
-    return __snax_bingo_kernel_simd_rmsnorm(arg, SIMD_OUT_I8);
+static inline uint32_t _bingo_rmsnorm_col_major(void *arg);
+
+// ==========================================================================
+// THE ONE REGISTERED RMSNorm. Everything above and below this line is an
+// implementation; this is the only symbol the kernel table carries.
+//
+// The caller does not choose an algorithm, it states a LAYOUT, and the layout
+// is what decides which machine the reduction runs on -- a cross-lane fold per
+// row for row_major, the per-lane accumulators for col_major. As an argument
+// rather than part of the symbol, it is checkable against the tensor actually
+// passed, and it is checked here, once, for every caller.
+// ==========================================================================
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_rmsnorm(void *arg) {
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_simd_rmsnorm_args_t);
+    const __snax_bingo_kernel_simd_rmsnorm_args_t *a =
+        (const __snax_bingo_kernel_simd_rmsnorm_args_t *)arg;
+
+    // THE SIMD CORE DOES NOT TRANSPOSE. It reads and writes in one orientation,
+    // so a differing pair is a caller that meant to put an xDMA transpose in
+    // front and did not. Refused rather than normalised, because normalising
+    // the wrong tensor produces plausible numbers and no error anywhere.
+    if (a->input_layout != a->output_layout) {
+        printf_safe("[Cluster %d Core %d]: simd_rmsnorm: input_layout %u != "
+                    "output_layout %u. The SIMD core cannot transpose; put an "
+                    "xDMA transpose on the side that differs.\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx(),
+                    (unsigned)a->input_layout, (unsigned)a->output_layout);
+        return BINGO_RET_FAIL;
+    }
+    if (a->input_layout == BINGO_LAYOUT_COL_MAJOR) {
+        if (a->out_prec != BINGO_PREC_F16) {
+            printf_safe("[Cluster %d Core %d]: simd_rmsnorm: col_major is FP16 "
+                        "out only -- the fused Fp16ToInt8 leaf sits after a "
+                        "broadcast this path does not have. Normalise in "
+                        "col_major, then quantise.\r\n",
+                        snrt_cluster_idx(), snrt_cluster_core_idx());
+            return BINGO_RET_FAIL;
+        }
+        return _bingo_rmsnorm_col_major(arg);
+    }
+    return _bingo_rmsnorm_row_major(
+        arg, a->out_prec == BINGO_PREC_I8 ? SIMD_OUT_I8 : SIMD_OUT_F16);
 }
 
 // ==========================================================================
@@ -1485,13 +1521,13 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_rmsnorm_f16_i8(void *arg) {
 // quantising here would only move the int8 conversion in front of a reshape that requires
 // fp16. Normalise, transpose back, reshape, THEN quantise.
 // ==========================================================================
-SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_rmsnorm_t_f16_f16(void *arg) {
-    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_simd_rmsnorm_t_args_t);
-    BINGO_REQUIRE_CORE(snax_is_simd_core(), "simd_rmsnorm_t", "SIMD");
+static inline uint32_t _bingo_rmsnorm_col_major(void *arg) {
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_simd_rmsnorm_args_t);
+    BINGO_REQUIRE_CORE(snax_is_simd_core(), "simd_rmsnorm(col_major)", "SIMD");
 #if !BINGO_HAS_STREAMMAP || !BINGO_HAS_STREAMREDUCE || !BINGO_HAS_STREAMELEMENTWISE || \
     !BINGO_SIMD_HAS_RSQRT
     BINGO_SIMD_EXT_UNSUPPORTED(
-        "simd_rmsnorm_t",
+        "simd_rmsnorm(col_major)",
         "StreamMap(RSQRT)+StreamReduce(LANEWISE)+StreamElementwise(STICKY_B)");
 #else
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
@@ -1502,22 +1538,22 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_rmsnorm_t_f16_f16(void *arg) {
     uint32_t rows = a[6];
     uint32_t cols = a[7];
     bingo_kernel_scratchpad_t *sp =
-        BINGO_GET_SP(arg, __snax_bingo_kernel_simd_rmsnorm_t_args_t);
+        BINGO_GET_SP(arg, __snax_bingo_kernel_simd_rmsnorm_args_t);
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
 
-    BINGO_SIMD_REQUIRE_LOCAL(seed_addr, "simd_rmsnorm_t", "seed");
-    BINGO_SIMD_REQUIRE_LOCAL(in_addr, "simd_rmsnorm_t", "input");
-    BINGO_SIMD_REQUIRE_LOCAL(out_addr, "simd_rmsnorm_t", "output");
+    BINGO_SIMD_REQUIRE_LOCAL(seed_addr, "simd_rmsnorm(col_major)", "seed");
+    BINGO_SIMD_REQUIRE_LOCAL(in_addr, "simd_rmsnorm(col_major)", "input");
+    BINGO_SIMD_REQUIRE_LOCAL(out_addr, "simd_rmsnorm(col_major)", "output");
 
     if (rows != SIMD_BEAT_BYTES / 2u) {
-        printf_safe("[Cluster %d Core %d]: simd_rmsnorm_t needs rows == %d (one FP16 lane "
-                    "per token); got %d. Split the tile.\r\n",
+        printf_safe("[Cluster %d Core %d]: simd_rmsnorm(col_major) needs rows == %d "
+                    "(one FP16 lane per token); got %d. Split the tile.\r\n",
                     snrt_cluster_idx(), snrt_cluster_core_idx(),
                     (int)(SIMD_BEAT_BYTES / 2u), (int)rows);
         return BINGO_RET_FAIL;
     }
     if ((uint32_t)seed_addr + SIMD_BEAT_BYTES != (uint32_t)in_addr) {
-        printf_safe("[Cluster %d Core %d]: simd_rmsnorm_t needs the seed beat directly "
+        printf_safe("[Cluster %d Core %d]: simd_rmsnorm(col_major) needs the seed beat directly "
                     "below x^T (seed %08x + %d != x %08x). Allocate ONE buffer of "
                     "(1 + cols) beats.\r\n",
                     snrt_cluster_idx(), snrt_cluster_core_idx(), (uint32_t)seed_addr,
@@ -1537,7 +1573,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_rmsnorm_t_f16_f16(void *arg) {
     static uint32_t s_ssq = 0u;
     if (!s_ssq) s_ssq = snrt_l1_malloc(SIMD_BEAT_BYTES + 63u);
     if (!s_ssq) {
-        printf_safe("[Cluster %d Core %d]: rmsnorm_t L1 scratch alloc failed!\r\n",
+        printf_safe("[Cluster %d Core %d]: simd_rmsnorm(col_major) L1 scratch alloc failed!\r\n",
                     snrt_cluster_idx(), snrt_cluster_core_idx());
         return BINGO_RET_FAIL;
     }
@@ -1564,7 +1600,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_rmsnorm_t_f16_f16(void *arg) {
     BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
 
     if (rc != BINGO_RET_SUCC) {
-        printf_safe("[Cluster %d Core %d]: rmsnorm_t pass failed!\r\n",
+        printf_safe("[Cluster %d Core %d]: simd_rmsnorm(col_major) pass failed!\r\n",
                     snrt_cluster_idx(), snrt_cluster_core_idx());
         return BINGO_RET_FAIL;
     }
@@ -1916,17 +1952,13 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_moe_combine_f16(void *arg) {
 //   So RoPE is TWO nodes -- a DM-core swap into slot 2, then this on the SIMD core -- and
 //   that is not a worse decomposition than one node, it is a much better one.
 //
-//   THERE USED TO BE A SELF-CONTAINED simd_rope that did the swap with a word-rotate loop
-//   on the SIMD core, and it was deleted rather than kept beside this one. It was not a
-//   fallback, it was the same kernel paying rows*cols/2 loads and stores on the busiest
+//   DOING THE SWAP ON THE SIMD CORE INSTEAD, with a word-rotate loop, would keep RoPE to
+//   one node and is not worth it: that is rows*cols/2 loads and stores on the busiest
 //   engine -- several thousand cycles at [32, 128] against a few hundred for all the
-//   arithmetic it fed. Two kernels for one job is how they drift; the split is strictly
-//   better and every caller can produce the block.
+//   arithmetic it feeds. The two-node split puts the swap on the engine built for it.
 //
 //   A StreamRoPE extension that rotated adjacent lanes inside the beat would remove the
-//   swap entirely, and it is now the ONLY part of RoPE asking for RTL. It did not use to
-//   be: this kernel was three separate elementwise passes until both slots were used at
-//   once, and two of those three were asking as well.
+//   swap entirely, and it is the ONLY part of RoPE still asking for RTL.
 // ==========================================================================
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_rope(void *arg) {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_simd_rope_args_t);
@@ -1981,9 +2013,9 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_rope(void *arg) {
     // DISARM, ABSOLUTELY. This kernel writes the enable mask directly while the pass
     // helpers use snax_simd_use*(), which also write it whole -- but leaving EW0 armed
     // would turn the NEXT 2-operand task into an unintended two-stage chain: EW0 folds its
-    // 2 beats into 1, EW1 waits for a partner beat that no longer exists, and the writer
-    // waits forever. The reference app hit exactly that, and it reported against the
-    // innocent pass that ran afterwards.
+    // 2 beats into 1, EW1 waits for a partner beat that is not coming, and the writer
+    // waits forever. The hang then reports against the innocent pass that runs afterwards,
+    // not against this one.
     snax_write_simd_cfg_reg(SIMD_EXT_ENABLE_PTR, 0u);
 
     if (rc != BINGO_RET_SUCC) {
@@ -2268,10 +2300,10 @@ static void simd_fa_init_state(uint32_t arena, uint32_t bc, uint32_t dhead) {
     simd_fa_layout(&L, arena, bc, dhead);
     simd_fa_fill_u32((uint32_t *)L.mrun, 0xFBFFFBFFu, SIMD_BEAT_BYTES / 4u);  // -65504
     simd_fa_fill_u32((uint32_t *)L.lrun, 0u, SIMD_BEAT_BYTES / 4u);           // l = 0
-    // O is NOT zeroed here any more. It is dhead beats, and zeroing it with this core's
-    // stores sat on the critical path with both engines idle behind it. The workload is
-    // expected to hand that to an engine that is idle at the time -- the ArenaOzero node
-    // in the FA graphs does it on the xDMA. A workload that calls this kernel WITHOUT
+    // O is NOT zeroed here, deliberately. It is dhead beats, and zeroing it with this
+    // core's stores would sit on the critical path with both engines idle behind it. The
+    // workload hands that to an engine that is idle at the time -- the ArenaOzero node in
+    // the FA graphs does it on the xDMA. A workload that calls this kernel WITHOUT
     // arranging that zero will read a stale O on its first KV tile.
     (void)dhead;
     // The stores must land before the first snax_simd_fire() reads the arena. This is

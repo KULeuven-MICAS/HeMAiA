@@ -777,42 +777,60 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_softmax_t_args {
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_simd_softmax_t_args_t;
 
-// Whole FP16 rmsnorm in one DM-core kernel: reduce-SUMSQ, integer 1/sqrt(Sxx/N) (no FPU),
-// broadcast, normalize-MUL, and an optional fused FP16->INT8 quant leaf. Same shape/args as
-// softmax; the kernel derives beats = cols/32 and the int8 scale (a fixed 64.0). N = cols is
-// taken to be a power of two.
+// ONE RMSNorm KERNEL, TWO IMPLEMENTATIONS BEHIND IT.
+//
+//   out[r, :] = x[r, :] / sqrt( mean_j x[r, j]^2 )
+//
+// The arithmetic is identical either way; what changes is where a row's terms land, and
+// that is decided by the LAYOUT of the tile, so the layout is an argument and the kernel
+// dispatches on it instead of the caller picking a symbol.
+//
+//   BINGO_LAYOUT_ROW_MAJOR  x[rows, cols]. A beat is 32 consecutive FEATURES of one token,
+//                           so lane k collects every 32nd feature and a row's terms end up
+//                           spread across all 32 lanes. Collapsing them is a log-depth fold
+//                           through treeBuf, serialised over treeLanes ALUs, holding the
+//                           reader's input port low ONCE PER ROW. The scale then has to be
+//                           splatted back across a beat and replicated for every beat of
+//                           the row. seed_addr is unused; pass 0.
+//
+//   BINGO_LAYOUT_COL_MAJOR  x^T, stored [cols, rows]. One lane IS one token in every beat,
+//                           so acc[t] collects token t's whole row and SIMD_RED_LANEWISE
+//                           just emits the accumulators: no fold, no splat. ~3x cheaper on
+//                           the SIMD core. Requires rows == 32 (the FP16 lanes in one
+//                           512-bit beat) and FP16 output. seed_addr is REQUIRED -- see
+//                           below.
+//
+// input_layout AND output_layout MUST MATCH. The SIMD core reads and writes in the same
+// orientation; it has no transposer. They are both carried so that a mismatch -- a caller
+// that meant to put an xDMA transpose in front and forgot -- is a refusal here rather than
+// a correct normalisation of the wrong tensor. The block in libs/block/simd/norm.py emits
+// the transposes and guarantees they agree.
+//
+// FOR COL_MAJOR, seed_addr AND input_addr ARE ONE ALLOCATION. seed_addr is a 64 B scratch
+// beat the kernel writes and then reads back as the sticky operand, and it must sit
+// DIRECTLY below the tile: input_addr == seed_addr + 64. Allocate (1 + cols) beats, point
+// seed at the base and the tile one beat in. The kernel checks this rather than trusting
+// it -- a violation would otherwise overwrite feature row 0 and read the tile one beat out
+// of phase, with nothing reported.
+#define BINGO_LAYOUT_ROW_MAJOR 0u
+#define BINGO_LAYOUT_COL_MAJOR 1u
+#define BINGO_PREC_F16         0u
+#define BINGO_PREC_I8          1u
+
 __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_rmsnorm_args {
-  uint32_t input_addr_hi;        // input x, fp16 [rows, cols], packed
+  uint32_t seed_addr_hi;         // col_major: 64 B scratch, == input_addr - 64. row_major: 0
+  uint32_t seed_addr_lo;
+  uint32_t input_addr_hi;        // fp16 x; [rows, cols] row_major, [cols, rows] col_major
   uint32_t input_addr_lo;
-  uint32_t output_addr_hi;       // fp16 rmsnorm(x), [rows, cols], packed
+  uint32_t output_addr_hi;       // rmsnorm(x), same orientation as the input
   uint32_t output_addr_lo;
-  uint32_t rows;                 // independent rmsnorm rows
+  uint32_t rows;                 // independent rmsnorm rows; MUST be 32 for col_major
   uint32_t cols;                 // per-row fp16 length D (a power-of-two multiple of 32)
+  uint32_t input_layout;         // BINGO_LAYOUT_*
+  uint32_t output_layout;        // BINGO_LAYOUT_*, must equal input_layout
+  uint32_t out_prec;             // BINGO_PREC_*; col_major supports F16 only
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_simd_rmsnorm_args_t;
-
-// Transposed FP16 rmsnorm: the same normalisation over x^T, ~3x cheaper on the SIMD core
-// because one lane is one token, so the per-row sum of squares falls out of the per-lane
-// accumulators with no cross-lane fold and no broadcast. reduce(SUMSQ|LANEWISE) ->
-// map(1/D, RSQRT) on one beat -> elementwise(MUL|STICKY_B). FP16 out only.
-//
-// THE TWO ADDRESSES ARE ONE ALLOCATION. seed_addr is a 64 B scratch beat the kernel writes
-// and then reads as the sticky operand, and it must sit DIRECTLY below the tile:
-// input_addr == seed_addr + 64. Allocate (1 + cols) beats and point seed at the base, the
-// tile one beat in. The kernel checks this rather than trusting it -- a violation would
-// otherwise overwrite feature row 0 and read the tile one beat out of phase, with nothing
-// reported.
-__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_rmsnorm_t_args {
-  uint32_t seed_addr_hi;         // 64 B scratch beat, == input_addr - 64
-  uint32_t seed_addr_lo;
-  uint32_t input_addr_hi;        // input x^T, fp16 [cols, rows] row-major (one token/lane)
-  uint32_t input_addr_lo;
-  uint32_t output_addr_hi;       // fp16 rmsnorm(x)^T, [cols, rows], same orientation
-  uint32_t output_addr_lo;
-  uint32_t rows;                 // tokens; MUST be 32, the FP16 lanes in one beat
-  uint32_t cols;                 // features D (a power-of-two multiple of 32)
-  BINGO_KERNEL_ARGS_TRAILER;
-} __snax_bingo_kernel_simd_rmsnorm_t_args_t;
 
 // Whole FP16 SiLU (x*sigmoid(x)) in one DM-core kernel: a single StreamMap pass, plus an optional
 // fused FP16->INT8 quant leaf. Elementwise; the kernel derives beats = cols/32 and the int8 scale

@@ -265,6 +265,116 @@ blocked = pipe.report()
 check("a clean pipeline reports no blocking node", blocked[("a", "b")] == [],
       [n.node_name for n in blocked[("a", "b")]])
 
+# ------------------------------------------------------- the layout pass
+print("\nthe layout pass")
+from libs import LayoutStep, assign_layouts                              # noqa: E402
+from libs.block import Reshape as _Reshape                               # noqa: E402
+from libs.block.simd.norm import RMSNorm as _RMSNorm                     # noqa: E402
+
+_T, _D, _M = 32, 128, (16, 4, 16)
+
+
+def _chain(rows=_T):
+    orient = []
+    for i in (Layout.ROW_MAJOR, Layout.COL_MAJOR):
+        for o in (Layout.ROW_MAJOR, Layout.COL_MAJOR):
+            for ip in ((False, True) if i == Layout.COL_MAJOR else (False,)):
+                orient.append({"in_layout": i, "out_layout": o, "x_in_place": ip})
+    return [
+        LayoutStep("norm", lambda **k: _RMSNorm(rows=rows, cols=_D, cluster=0, **k),
+                   orient),
+        LayoutStep("to_a", lambda **k: _Reshape(rows=rows, cols=_D, mesh=_M,
+                                                dtype=DType.F16, cluster=0, **k),
+                   [{"src": s, "dst": Layout.A}
+                    for s in (Layout.ROW_MAJOR, Layout.COL_MAJOR)]),
+    ]
+
+
+def _run(start, rows=_T):
+    return assign_layouts(_chain(rows), mesh=_M, elem_bytes=2, shape=(rows, _D),
+                          start=start, end=Layout.A, verbose=False)
+
+
+# THE BLOCK INFERS THE KERNEL FROM THE ENDS, so a row_major/row_major candidate really is
+# the fold-paying one -- and the pass, ranking folds first, must reject it even though it
+# is the candidate with the fewest passes.
+_folds = {(c.src, c.dst): c.simd_folds for c in _run(Layout.ROW_MAJOR).candidates[0]}
+check("row_major on both ends pays a fold per row",
+      _folds[(Layout.ROW_MAJOR, Layout.ROW_MAJOR)] == _T, _folds)
+check("any col_major end pays none",
+      all(v == 0 for k, v in _folds.items() if Layout.COL_MAJOR in k), _folds)
+
+r1 = _run(Layout.ROW_MAJOR)
+check("the pass takes a fold-free arm", r1.simd_folds == 0, r1.simd_folds)
+check("...even though it is NOT the fewest passes",
+      r1.passes > min(c.xdma_passes for c in r1.candidates[0]), r1.passes)
+check("the norm it picks runs the col_major kernel",
+      _RMSNorm(rows=_T, cols=_D, cluster=0, **r1.chosen[0]).col_major, r1.chosen[0])
+
+# A TRANSPOSED SOURCE IS STRICTLY BETTER, and only by one pass -- the SIMD is unchanged.
+r2 = _run(Layout.COL_MAJOR)
+check("staging x^T saves a pass", r2.passes == r1.passes - 1, (r1.passes, r2.passes))
+check("...and does not change the SIMD work", r2.simd_folds == r1.simd_folds,
+      (r1.simd_folds, r2.simd_folds))
+check("...by consuming col_major directly, in place",
+      r2.chosen[0]["in_layout"] == Layout.COL_MAJOR and r2.chosen[0]["x_in_place"],
+      r2.chosen[0])
+
+# LEGALITY COMES FROM THE BLOCKS. At rows != 32 every col_major candidate refuses, so the
+# pass is left with the row_major arm rather than proposing something unbuildable.
+r3 = _run(Layout.ROW_MAJOR, rows=64)
+_n3 = _RMSNorm(rows=64, cols=_D, cluster=0, **r3.chosen[0])
+check("an illegal shape falls back to the row_major kernel", not _n3.col_major,
+      r3.chosen[0])
+check("...and then it DOES pay a fold per row", _n3.simd_folds() == 64, _n3.simd_folds())
+
+# WHAT IT PICKS MUST BUILD. The whole point of a planner is that its answer is realisable.
+_c = new_ctx()
+_blk = _RMSNorm(rows=_T, cols=_D, cluster=0, **r2.chosen[0])
+_g = _c.at(0)
+_slot = _blk.alloc(_g)
+_res = _blk.build(_g, {"x": Port(PortSpec(Layout.COL_MAJOR, DType.F16, (_T, _D),
+                                          mem_level=MemLevel.L1),
+                                 _slot, (), cluster=0, name="x")})
+check("the chosen norm builds, with no staging copy",
+      not any("Stage_xt" in n.node_name for n in _res.nodes),
+      [n.node_name for n in _res.nodes])
+_rs = _Reshape(rows=_T, cols=_D, mesh=_M, dtype=DType.F16, cluster=0, **r2.chosen[1])
+check("the chosen reshape builds", _rs.xdma_passes() >= 1, _rs.xdma_passes())
+
+# ONE REGISTERED KERNEL, dispatching on the layout arguments.
+from bingo_kernel_args import SnaxBingoKernelSimdRmsnormArgs as _RNA   # noqa: E402
+check("both arms emit the same kernel symbol",
+      _RNA(0x100, 0x200, 32, 128).KERNEL_NAME
+      == _RNA(0x140, 0x200, 32, 128, input_layout="col_major",
+              output_layout="col_major", seed_addr=0x100).KERNEL_NAME
+      == "__snax_bingo_kernel_simd_rmsnorm")
+for _why, _kw in (("a transposing pair", dict(input_layout="col_major")),
+                  ("col_major without a seed beat",
+                   dict(input_layout="col_major", output_layout="col_major")),
+                  ("col_major with int8 out",
+                   dict(input_layout="col_major", output_layout="col_major",
+                        seed_addr=0x100, out_i8=True)),
+                  ("a blocked layout", dict(input_layout="A", output_layout="A"))):
+    try:
+        _RNA(0x140, 0x200, 32, 128, **_kw)
+        check(f"the args refuse {_why}", False, "it constructed")
+    except ValueError:
+        check(f"the args refuse {_why}", True)
+
+# x_in_place IS A PROMISE, and breaking it is refused rather than silently corrected.
+_bad = _RMSNorm(rows=_T, cols=_D, cluster=0,
+                in_layout=Layout.COL_MAJOR, out_layout=Layout.ROW_MAJOR, x_in_place=True)
+_g2 = new_ctx().at(0)
+_bad.alloc(_g2)
+try:
+    _bad.build(_g2, {"x": Port(PortSpec(Layout.COL_MAJOR, DType.F16, (_T, _D),
+                                        mem_level=MemLevel.L1),
+                               _g2.l1("elsewhere", _T * _D * 2), (), cluster=0, name="x")})
+    check("x_in_place=True on a foreign buffer is refused", False, "it built")
+except ValueError:
+    check("x_in_place=True on a foreign buffer is refused", True)
+
 if FAILED:
     print(f"\n{len(FAILED)} FAILED: {', '.join(FAILED)}")
     sys.exit(1)

@@ -74,7 +74,7 @@ RMSNORM (rungs 1 and 5) lost its core round trip. StreamMap grew an RSQRT func, 
 per-row 1/sqrt(mean) rides the broadcast pass that had to replicate the scalar anyway --
 7,717 -> 3,135 cc at [32, 128], and more accurate than the integer sqrt+reciprocal it
 replaced. A transposed variant removes the cross-lane fold as well (1,073 cc), at the
-cost of two xDMA block transposes; NORM_PATH below selects between them.
+cost of two xDMA block transposes; NORM_LAYOUT below selects between them.
 
 ROPE IS STILL NOT IN THE CHAIN, and that is a layout fact rather than an omission. Its
 partner permutation is x[i] <-> x[i^1] -- a 2-BYTE reorder inside one 8-byte TCDM word,
@@ -94,7 +94,7 @@ where a cross-lane REDUCTION exists to convert -- RoPE has none, so it gains not
 import sys
 
 from bingo_kernel_args import (SnaxBingoKernelIdma1dCopyArgs,
-                              SnaxBingoKernelSimdRmsnormF16F16Args)
+                              SnaxBingoKernelSimdRmsnormArgs)
 from libs import (Ctx, DType, Layout, MemLevel, Pipeline, Port, PortSpec,
                   at_offset)
 from libs.block import (Dequantize, FlashAttention, Linear, Quantize, RMSNorm,
@@ -124,7 +124,7 @@ MAX_STAGE = 6
 #
 # IT IS PINNED TO "row_major" ON PURPOSE. The transposed arm is three things at once that
 # have never run on this machine: a new kernel entry point
-# (__snax_bingo_kernel_simd_rmsnorm_t_f16_f16), a new seed-adjacency contract, and two new
+# (the col_major arm of __snax_bingo_kernel_simd_rmsnorm), a seed-adjacency contract, and two new
 # xDMA transposer nodes per norm. Turning it on here would change a graph that PASSES
 # today, while the token-parallel arm is still being debugged, and any new failure would
 # then have two candidate causes.
@@ -136,7 +136,7 @@ MAX_STAGE = 6
 # Once it is green, flipping this word is a clean single-variable A/B over an otherwise
 # identical graph. (simd_rmsnorm_1cluster cannot reach the transposed path at all: it
 # sweeps rows {1, 2, 4, 8} and the LANEWISE reduce needs rows == 32 exactly.)
-NORM_PATH = "row_major"
+NORM_LAYOUT = Layout.ROW_MAJOR
 
 # Per-stage absolute tolerance on the fp16 compare. THESE TRACK THE DEQUANTISE: every
 # projection is now scaled back to the activation domain, so the tensors are O(1)-O(11)
@@ -233,13 +233,15 @@ def build(ctx: Ctx, p: dict, data: dict, hs: dict, *, stages: int = MAX_STAGE,
         rows on a core with no FPU. Rows are independent, so that loop divides.
         """
         if shard == "none":
-            return pipe.add(RMSNorm(rows=T, cols=d, cluster=0, path=NORM_PATH), name=name,
+            return pipe.add(RMSNorm(rows=T, cols=d, cluster=0,
+                                    in_layout=NORM_LAYOUT, out_layout=NORM_LAYOUT),
+                            name=name,
                             bind={"x": src}).result.outputs["y"]
 
         def make(g, in_h, nrows, dep, out_h):
             return g.node(f"Rmsnorm_{name}", ctx.simd,
-                          "__snax_bingo_kernel_simd_rmsnorm_f16_f16",
-                          SnaxBingoKernelSimdRmsnormF16F16Args(
+                          "__snax_bingo_kernel_simd_rmsnorm",
+                          SnaxBingoKernelSimdRmsnormArgs(
                               input_addr=in_h, output_addr=out_h,
                               rows=nrows, cols=d), dep)
 
@@ -473,7 +475,9 @@ def token_parallel(ctx: Ctx, p: dict, data: dict, hs: dict, *, verify: str = "fi
                       x_l1, (ld_x,))
 
         # --- norm -> reshape -> quantise -> the three projections ---
-        n1 = pipe.add(RMSNorm(rows=NR, cols=d, cluster=c, path=NORM_PATH), name=f"norm1_{sfx}",
+        n1 = pipe.add(RMSNorm(rows=NR, cols=d, cluster=c,
+                              in_layout=NORM_LAYOUT, out_layout=NORM_LAYOUT),
+                      name=f"norm1_{sfx}",
                       bind={"x": x_port})
         a1 = pipe.add(Reshape(rows=NR, cols=d, src=Layout.ROW_MAJOR, dst=Layout.A, mesh=mesh,
                               dtype=DType.F16, cluster=c),
@@ -506,7 +510,9 @@ def token_parallel(ctx: Ctx, p: dict, data: dict, hs: dict, *, verify: str = "fi
                       bind={"a": orp.result.outputs["y"], "b": x_port})
 
         # --- the feed-forward half ---
-        n2 = pipe.add(RMSNorm(rows=NR, cols=d, cluster=c, path=NORM_PATH), name=f"norm2_{sfx}",
+        n2 = pipe.add(RMSNorm(rows=NR, cols=d, cluster=c,
+                              in_layout=NORM_LAYOUT, out_layout=NORM_LAYOUT),
+                      name=f"norm2_{sfx}",
                       bind={"x": r1.result.outputs["y"]})
         a2 = pipe.add(Reshape(rows=NR, cols=d, src=Layout.ROW_MAJOR, dst=Layout.A, mesh=mesh,
                               dtype=DType.F16, cluster=c),

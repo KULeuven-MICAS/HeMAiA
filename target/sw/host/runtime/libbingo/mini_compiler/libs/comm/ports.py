@@ -125,40 +125,29 @@ from bingo_mem_handle import (BingoMemAlloc, BingoMemAllocView,
 # ORIENTATION IS A LAYOUT, NOT A FLAG BESIDE ONE
 # ======================================================================================
 #
-# `row_major` and `col_major` are two members of the SAME enum, and `PortSpec` carries no
-# `transposed` field. This reverses an earlier decision, and the argument that decision
-# rested on was simply wrong, so it is worth writing down which half broke:
+# `row_major` and `col_major` are two members of the SAME enum. Orientation is not a flag
+# beside a layout, because it is a layout by the same definition every other name here
+# satisfies: a BIJECTION ON A FIXED SHAPE. index_map("col_major", r, c) = c*rows + r --
+# one line, same signature, same shape in and out. A [32, 128] tensor stored column-major
+# still holds 32*128 elements indexed [r][c]; what changes is where element [r][c] sits,
+# which is exactly what an index map says.
 #
-#   THE CLAIM WAS "transposition exchanges the axes -- it is not a different address map
-#   for the same indices, it is different indices." That conflates the LOGICAL shape with
-#   the STORAGE shape. A [32, 128] tensor stored column-major still has 32*128 elements
-#   indexed [r][c]; what changes is where element [r][c] sits, which is precisely what an
-#   index map is. index_map("col_major", r, c) = c*rows + r, one line, same signature and
-#   same shape in and out as every other layout. It was a bijection on a fixed shape all
-#   along -- the same definition the essay used to argue it could not be one.
+# IT COSTS ONE NAME, NOT SIX. Orientation is only free on the UNBLOCKED layout: A, B and D
+# already fix theirs -- B is defined as the one that runs down columns -- so there is no
+# A_T or D_T to name. Seven members, not twelve.
 #
-#   THE CLAIM WAS "a Layout member would have to be a member PER LAYOUT -- A_T, D_T -- so
-#   six names become twelve." They do not, because A, B and D ALREADY FIX THEIR
-#   ORIENTATION. B is defined as the one that runs down columns; A_T is not a layout the
-#   hardware has, and the old code duly refused every one of those states at run time. Six
-#   names become seven, not twelve.
+# KEEPING IT IN THE ENUM KEEPS BYTE ORDER IN ONE LANGUAGE: a verified permutation per
+# name, which convert_args derives strides from and _verify_nest checks element by
+# element. A boolean beside the layout would be a second, unverified description that
+# every seam then has to reconcile -- which order a transpose and a relayout compose in, a
+# `stored_shape` to translate between the two, a runtime refusal for `A^T` states that
+# should not be spellable at all.
 #
-# WHAT THE FLAG COST WHILE IT LASTED. Byte order ended up described in two languages that
-# did not compose: a verified permutation (Layout -> index_map -> strides, checked element
-# by element by _verify_nest) for the blocking, and a boolean reconciled by hand in
-# transfer.plan for the orientation. Every seam between them needed bespoke code --
-# `stored_shape` existed only to translate; plan() had to decide whether the transpose ran
-# before or after the relayout and got it backwards for a year; `A^T -> A` needed a runtime
-# refusal for a state that should never have been spellable. nest.py even carried a
-# paragraph inside an error message explaining that the system had two different kinds of
-# transpose living in different places. One index map deletes all of it.
-#
-# THE SHAPE STAYS LOGICAL, which is the one thing the old design got right and is kept. A
-# col_major port still declares shape = (rows, cols) -- the tensor's own dimensions, what
-# the layer reasons about (32 tokens of 128 features) -- and the LAYOUT says the bytes are
-# laid out [cols, rows]. That is what lets the linker compare a producer's output to a
-# consumer's requirement at all: two specs whose shapes are (32, 128) and (128, 32) are, as
-# far as check_contract can tell, different tensors.
+# THE SHAPE STAYS LOGICAL. A col_major port still declares shape = (rows, cols) -- the
+# tensor's own dimensions, what the layer reasons about (32 tokens of 128 features) -- and
+# the LAYOUT says the bytes are laid out [cols, rows]. That is what lets the linker compare
+# a producer's output to a consumer's requirement at all: two specs whose shapes are
+# (32, 128) and (128, 32) are, as far as check_contract can tell, different tensors.
 #
 # WHO CLOSES THE GAP: comm.transfer. A pair whose contiguous axes disagree is not a stride
 # nest and nest.py refuses it; transfer.plan catches that and routes row_major <-> col_major
@@ -203,7 +192,7 @@ class Layout(_Vocab):
     B = "B", "operand B of the GEMM: (n, k, c, s) -- runs down COLUMNS, so converting is a transpose"
     D = "D", "the GEMM output: (m, n, r, c)"
     ROW_MAJOR = "row_major", "plain row-major, what everything outside the array uses"
-    COL_MAJOR = "col_major", "the same values stored [cols, rows]: what a per-row SIMD reduction wants"
+    COL_MAJOR = "col_major", "the same values stored [cols, rows]: what a per-row reduction wants"
     D32 = "d32", "the D port's INT32 scatter -- a DIFFERENT bijection from D"
     MONOID = "monoid", "the junction's lane geometry: lane = field*S + slot, field 0 = m, 1 = l"
 

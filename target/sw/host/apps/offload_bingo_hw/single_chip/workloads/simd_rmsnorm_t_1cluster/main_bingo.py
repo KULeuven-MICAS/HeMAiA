@@ -99,8 +99,7 @@ from bingo_mem_handle import BingoMemAlloc, BingoMemAllocView    # noqa: E402
 from bingo_data_staging import DataStaging                       # noqa: E402
 from bingo_kernel_args import (                                  # noqa: E402
     SnaxBingoKernelIdma1dCopyArgs,
-    SnaxBingoKernelSimdRmsnormF16F16Args,
-    SnaxBingoKernelSimdRmsnormTF16F16Args,
+    SnaxBingoKernelSimdRmsnormArgs,
     SnaxBingoKernelXdmaTranspose2dArgs,
     HostBingoKernelIdmaArgs,
     HostBingoKernelCheckResultArgs,
@@ -244,8 +243,11 @@ def main():
     ck_xt = check("rmsnorm_t_xpose_in", off["xt"], l3_xt, st_xt, 0.0)
 
     # The kernel writes the seed into l1_xt[0] and reads 1 + cols beats from there.
-    rn_t = g.node("RMSNormT", SIMD_CORE, "__snax_bingo_kernel_simd_rmsnorm_t_f16_f16",
-                  SnaxBingoKernelSimdRmsnormTF16F16Args(l1_xt, xt_tile, l1_yt, ROWS, COLS),
+    rn_t = g.node("RMSNormT", SIMD_CORE, "__snax_bingo_kernel_simd_rmsnorm",
+                  SnaxBingoKernelSimdRmsnormArgs(xt_tile, l1_yt, ROWS, COLS,
+                                                 input_layout='col_major',
+                                                 output_layout='col_major',
+                                                 seed_addr=l1_xt),
                   ck_xt)
     st_yt = g.node("Store_yt", HOST_CORE, "__host_bingo_kernel_idma",
                    HostBingoKernelIdmaArgs(l1_yt, l3_yt, tot_b), rn_t)
@@ -259,8 +261,8 @@ def main():
     ck_y = check("rmsnorm_t_e2e", off["y"], l3_y, st_y, TOL)
 
     # ---- the row-major reference arm, over the SAME x ---------------------------------
-    rn_rm = g.node("RMSNormRM", SIMD_CORE, "__snax_bingo_kernel_simd_rmsnorm_f16_f16",
-                   SnaxBingoKernelSimdRmsnormF16F16Args(l1_x, l1_yrm, ROWS, COLS), ck_y)
+    rn_rm = g.node("RMSNormRM", SIMD_CORE, "__snax_bingo_kernel_simd_rmsnorm",
+                   SnaxBingoKernelSimdRmsnormArgs(l1_x, l1_yrm, ROWS, COLS), ck_y)
     st_rm = g.node("Store_yrm", HOST_CORE, "__host_bingo_kernel_idma",
                    HostBingoKernelIdmaArgs(l1_yrm, l3_yrm, tot_b), rn_rm)
     check("rmsnorm_rowmajor", off["y"], l3_yrm, st_rm, TOL)
