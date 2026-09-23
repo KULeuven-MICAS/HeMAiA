@@ -1,9 +1,4 @@
-# Copyright 2026 KU Leuven.
-# Licensed under the Apache License, Version 2.0, see LICENSE for details.
-# SPDX-License-Identifier: Apache-2.0
-#
-# Fanchen Kong <fanchen.kong@kuleuven.be>
-"""RMSNorm, and the layout pass that makes it cheap.
+"""RMSNorm over each row, and the orientation that decides what it costs.
 
     out[t, f] = x[t, f] / sqrt( (1/D) * SUM_f x[t, f]^2 )
 
@@ -27,7 +22,7 @@ beat; every beat, lane k folds into acc[k], and nothing ever moves sideways. So:
 
 Which one RMSNorm gets is decided entirely by how x is stored:
 
-  ROW-MAJOR x[T, D]   a beat is 32 consecutive FEATURES of one token, so lane k collects
+  row_major x[T, D]   a beat is 32 consecutive FEATURES of one token, so lane k collects
                       every 32nd feature and a row's D terms scatter across all 32 lanes.
                       They have to be folded, once per row. Then the single scalar has to
                       be SPLATTED back across a beat and REPLICATED for every beat of the
@@ -37,7 +32,7 @@ Which one RMSNorm gets is decided entirely by how x is stored:
                       Measured: 1,387 cc of reduce for 128 beats, of which ~256 is the
                       arithmetic and ~1,130 is 32 rows x ~35 cc of fold.
 
-  TRANSPOSED x^T[D,T] a beat is one FEATURE across all 32 tokens, and lane t is token t in
+  col_major x^T[D,T]  a beat is one FEATURE across all 32 tokens, and lane t is token t in
                       EVERY beat. acc[t] therefore collects token t's WHOLE row, and
                       SIMD_RED_LANEWISE just says "emit the accumulators": one beat holding
                       every token's sum of squares, no fold, no splat. The scale then rides
@@ -53,39 +48,30 @@ target/snitch_cluster/sw/apps/snax-simd-rmsnorm):
       row_major   3,135 cc        x   -> x^T   244 cc
       col_major   1,073 cc        y^T -> y     385 cc
 
-Two engines, so two honest bounds: on the SIMD alone the col_major path is 65% cheaper;
-fully serialised, with both conversions charged to it, still 42%. It always wins on hart 1,
-which is the busier engine, and moving work off the SIMD and onto the xDMA is the direction
-a layer wants.
+Two engines, so two honest bounds: on the SIMD alone col_major is 65% cheaper; fully
+serialised, with both transposes charged to it, still 42%. It always wins on hart 1, the
+busier engine, and moving work off the SIMD is the direction a layer wants.
 
 ======================================================================================
-SO THE BLOCK CONVERTS, AND SAYS SO
+THE KERNEL IS INFERRED FROM THE TWO ENDS
 ======================================================================================
 
-`in_layout` / `out_layout` are what the PRODUCER hands over and what the CONSUMER wants --
-ordinary `Layout` values, ROW_MAJOR or COL_MAJOR, not a flag beside a layout. They are the
-ONLY knobs: the implementation follows from them. The block emits exactly the conversions
-the gap requires and no more, which is what
-lets the orientation propagate along a chain instead of being paid twice:
-
-======================================================================================
-THE KERNEL IS INFERRED, AND THERE IS NO KNOB
-======================================================================================
-
-The two implementations are not interchangeable options to pick between on taste; they
-are what the hardware does to a row-major tile and to a column-major one. The input is
-therefore WHICH TILE YOU HAVE, and the kernel follows:
+`in_layout` and `out_layout` are the only knobs: what the producer hands over and what
+the consumer wants. The two implementations are not interchangeable options to pick
+between on taste, they are what the hardware does to a row-major tile and to a
+column-major one, so the input is WHICH TILE YOU HAVE and the kernel follows:
 
     col_major kernel  <=  an end asks for col_major, and rows == 32.
     row_major kernel  <=  otherwise -- both ends row_major, or a shape where a lane is not
                           one token and the cheap reduction does not exist at all.
 
-THE KERNEL FOLLOWS THE ENDS; IT DOES NOT OVERRULE THEM. col_major is always cheaper on
-the SIMD when it runs, but taking it unasked would be an optimality assumption rather
-than a derivation: it would turn a caller who wants row_major on both ends into two
-transposes and a different kernel. Whether col_major is worth PAYING for is a question
-about the whole chain, not about this operator, so it belongs to the pass. Saying
-row_major on both ends here means row_major, and costs nothing.
+THE ENDS DECIDE; THE BLOCK DOES NOT OVERRULE THEM. col_major is always cheaper on the
+SIMD when it runs, but taking it unasked would be an optimality assumption rather than a
+derivation: it would turn a caller who wants row_major on both ends into two transposes
+and a different kernel. Whether col_major is worth PAYING for is a question about the
+whole chain, not about this operator, so it belongs to comm/layout_pass.py, which asks by
+varying these layouts. Saying row_major on both ends here means row_major, and costs
+nothing.
 
 TWO CASES ARE REFUSALS RATHER THAN FALLBACKS, because a fallback would be a lie:
 
@@ -95,107 +81,105 @@ TWO CASES ARE REFUSALS RATHER THAN FALLBACKS, because a fallback would be a lie:
   - an end asks for col_major, rows != 32 so the cheap kernel cannot run, and the
     row_major fallback would need a transpose this shape cannot do quickly either.
 
-WHAT DECIDES THE LAYOUTS THEMSELVES is comm/layout_pass.py, one level up, where both
-neighbours are visible. This block answers "given these ends, what runs"; the pass answers
-"which ends should we ask for". Keeping the two apart is why neither needs a cost model:
-the block's answer is a hardware fact, and the pass is left ranking xDMA passes.
-
-    in    out    what gets built (at rows == 32)
-    ----  -----  --------------------------------------------------------------
-    F     F      Transpose(x -> x^T) . rmsnorm_t . Transpose(y^T -> y)
-    T     F      [Copy(x^T -> headroom)] . rmsnorm_t . Transpose(y^T -> y)
-    F     T      Transpose(x -> x^T) . rmsnorm_t
-    T     T      [Copy(x^T -> headroom)] . rmsnorm_t
-
-The bracketed copy is emitted ONLY when the producer did not already write into this
-block's own headroom buffer. Call alloc(ctx) first and aim the producer at the handle it
-returns and it disappears entirely, which is what makes `in_layout=COL_MAJOR` cost
-NOTHING rather than one pass -- see THE ONE-BEAT HEADROOM below.
-
-THE INPUT-SIDE TRANSPOSE NEED NOT BE PAID AT ALL. Transposing both sides of the PRODUCER's
-matmul rewrites it with its axes exchanged -- (A.B)^T = B^T.A^T is the same GEMM with its
-operands swapped, which is M and N exchanged in the config and nothing at run time. The
-FlashAttention kernels already do this, which is why their softmax gets a LANEWISE rowmax
-for free. Run the projection that way and its D-layout output relayouts straight to x^T,
-so `in_layout=COL_MAJOR` costs the one-beat copy below and nothing else.
-
-The OUTPUT side is not symmetric, and this is a hardware fact rather than an oversight. A
-conversion into A-layout needs an 8-byte run contiguous on BOTH sides -- four consecutive
-FEATURES of one token, exactly 8 B at fp16, which is also why the quantise has to come
-after the reshape. In y those four are adjacent; in y^T what is contiguous is four
-consecutive TOKENS, and no pair of strides makes a common run. comm/nest.py refuses
-row_major[D,T] -> B by name for the same reason. So y^T has to become y again before the
-layer's reshape, whoever pays for it.
-
-ORIENTATION IS A LAYOUT HERE, NOT A FLAG BESIDE ONE. x and x^T are `Layout.ROW_MAJOR` and
-`Layout.COL_MAJOR` -- two members of the same enum, each with its own index map -- and the
-TENSOR SHAPE IS THE SAME for both: (rows, cols) either way, because what changes is where
-element [r][c] sits, not how many there are. Blocking (none, vs the mesh-blocked A/B/D
-VersaCore reads) and orientation are both carried by that one field, so there is one
-language for byte order and comm/transfer.py plans any pair of layouts in it.
+Keeping the block and the pass apart is why neither needs a cost model: the block's
+answer is a hardware fact, and the pass is left counting passes per engine.
 
 ======================================================================================
-TWO ROUTES THAT LOOK LIKE THEY WOULD REMOVE Xpose_out, AND DO NOT
+WHICH ENGINE MOVES IT, AND WHERE IT IS MOVED FROM
 ======================================================================================
 
-Both were tested rather than argued, because the output transpose is the expensive half
-and it keeps looking removable:
+THE iDMA UNLESS THE MOVE TRANSPOSES. Only the xDMA can transpose -- the 8x8 block
+transposer is a datapath extension it has and the iDMA does not -- but everything else
+this block moves is a plain contiguous copy, and the iDMA does those on the DM core, idle
+while the SIMD normalises and the xDMA transposes. A load put on the xDMA would queue
+behind the very transpose its operand is waiting for, and the rest of the chain's
+relayouts are queueing there too.
 
-  FUSE IT INTO THE CONSUMER'S RELAYOUT. __snax_bingo_kernel_xdma_transpose_2d takes only
-  (src, dst, M, N, elem_bytes) and DERIVES its own 3-deep reader and writer nests from the
-  8x8 tiling. Both nests are fully spent on the tiling, so there is no room left to also
-  apply an A-layout nest on the writer. y^T -> A is two passes in the hardware, not just
-  in the planner.
+WHERE x LIVES IS READ OFF THE BINDING, not declared. `inputs` says mem_level=None --
+wherever you have it -- and `needs` says L1, so the linker treats the gap as this block's
+to close and build() reads the real level off the bound port. An operand left in main
+memory therefore costs no ceremony at the call site, and when the tile is wanted
+col_major the load IS the staging copy, so L3 costs no extra node at all.
 
-  LET THE GEMM EAT y^T AS ITS B OPERAND. (A.B)^T = B^T.A^T would make the consumer read
-  y^T directly, and the weight it pairs with is staged from L3 so transposing IT is free.
-  But comm/nest.py refuses row_major -> B at EVERY shape, [D, T] included -- B runs
-  contiguously along columns and row_major along rows, so no pair of strides gives a common
-  8-byte run. The refusal is by name and shape-independent; it is not a near miss.
+    x in   in_layout   out_layout   what gets built (at rows == 32)
+    -----  ----------  -----------  -------------------------------------------------
+    L1     row_major   row_major    Rmsnorm
+    L1     row_major   col_major    Xpose_in(x) . Rmsnorm_t
+    L1     col_major   row_major    [Stage_xt(i)] . Rmsnorm_t . Xpose_out(x)
+    L1     col_major   col_major    [Stage_xt(i)] . Rmsnorm_t
+    L3     row_major   row_major    Load_x(i) . Rmsnorm
+    L3     row_major   col_major    Load_x(i) . Xpose_in(x) . Rmsnorm_t
+    L3     col_major   row_major    Stage_xt(i) . Rmsnorm_t . Xpose_out(x)
+    L3     col_major   col_major    Stage_xt(i) . Rmsnorm_t
 
-WHAT IS STILL ON THE TABLE is the bank conflict. The writer scatters 8 spatial channels
-spaced `spatial_stride_dst = M * elem_bytes` apart, and the TCDM is 32 banks x 8 B = one
-256 B sweep. Xpose_in has M = rows = 32, so 64 B spacing and 4 distinct banks; Xpose_out
-has M = cols = D = 128, so 256 B spacing and ALL EIGHT CHANNELS ON BANK 0. That is the
-385 cc against 244 cc for identical volume and an identical 128-transfer count. The
-condition is `cols * elem_bytes % 256 == 0` -- every d_model that is a multiple of 128, so
-every real one. Fixing it needs a destination ROW PITCH on the transpose kernel, which is
-a device ABI change and is not done here.
+    (i) = iDMA, DM core.  (x) = xDMA.  The SIMD kernel is the only other node.
+
+The bracketed copy is emitted only when x is in L1 and NOT already in this block's own
+headroom buffer -- see THE ONE-BEAT HEADROOM below.
 
 ======================================================================================
 THE ONE-BEAT HEADROOM, WHICH IS WHY THIS BLOCK OWNS THE BUFFER
 ======================================================================================
 
 The sticky elementwise reads ONE FLAT SWEEP of 1 + D beats whose first beat is the scale.
-There is no argument that separates the two: the seed must physically precede the tile. So
-the block allocates a single (1 + D)-beat buffer, hands the kernel its base as `seed_addr`
-and base + 64 as `input_addr`, and the kernel checks the adjacency rather than trusting it.
+No argument separates the two: the seed must physically precede the tile. So the block
+allocates a single (1 + D)-beat buffer, hands the kernel its base as `seed_addr` and
+base + 64 as `input_addr`, and the kernel checks the adjacency rather than trusting it.
 
-That is also why an already-col_major input is COPIED when it arrives in a buffer this
-block does not own: it cannot prepend a beat to someone else's allocation. The copy is one
-xDMA pass over D beats, cheaper than the transpose it stands in for.
+That is also why an already-col_major x is COPIED when it arrives somewhere else: this
+block cannot prepend a beat to an allocation it does not own. `alloc(ctx)` removes even
+that. It hands out the tile handle before build(), so a producer can write there directly
+and no staging node is emitted. The case that makes it worth having is the ordinary one:
+a layer input arrives by a plain L3 -> L1 copy, so staging x TRANSPOSED in L3 costs the
+host nothing, lands x^T in the headroom buffer, and leaves only the output transpose.
 
-IT IS AVOIDABLE ENTIRELY. `alloc(ctx)` hands out the tile handle before build(), so a
-producer can write there directly and the block emits no staging node at all. The case
-that makes this worth having is the ordinary one: a layer input arrives by a plain
-L3 -> L1 copy, so staging x TRANSPOSED in L3 costs the host nothing and lands x^T in the
-headroom buffer for free. Xpose_in and the staging copy both disappear and only the output
-transpose is left.
-Orientation also propagates through elementwise operators for nothing -- a residual add on
-two col_major operands emits a col_major result -- so a chain can stay col_major and pay a
-conversion only where a GEMM demands a blocked layout.
+Orientation also propagates through elementwise operators for nothing -- a residual add
+on two col_major operands emits a col_major result -- so a chain can stay col_major and
+convert only where a GEMM demands a blocked layout.
+
+======================================================================================
+THE OUTPUT TRANSPOSE IS NOT REMOVABLE, AND IS THE EXPENSIVE HALF
+======================================================================================
+
+A conversion into A-layout needs an 8-byte run contiguous on BOTH sides -- four
+consecutive FEATURES of one token, exactly 8 B at fp16, which is also why a quantise has
+to come after a reshape rather than before. In y those four are adjacent; in y^T what is
+contiguous is four consecutive TOKENS. So y^T has to become y again before the layer's
+reshape, whoever pays for it. Two ways out of that look open and are not:
+
+  FUSE IT INTO THE CONSUMER'S RELAYOUT. __snax_bingo_kernel_xdma_transpose_2d takes only
+  (src, dst, M, N, elem_bytes) and derives its own 3-deep reader and writer nests from the
+  8x8 tiling. Both nests are fully spent on the tiling, leaving no room to also apply an
+  A-layout nest on the writer. y^T -> A is two passes in the hardware, not just in the
+  planner.
+
+  LET THE GEMM EAT y^T AS ITS B OPERAND. (A.B)^T = B^T.A^T would make the consumer read
+  y^T directly, and the weight it pairs with is staged from L3 so transposing IT is free.
+  But comm/nest.py refuses row_major -> B at EVERY shape, [D, T] included: B runs
+  contiguously along columns and row_major along rows, so no pair of strides gives a
+  common 8-byte run. The refusal is by name and shape-independent, not a near miss.
+
+WHAT IS STILL OPEN is the bank conflict. The writer scatters 8 spatial channels spaced
+`spatial_stride_dst = M * elem_bytes` apart, and the TCDM is 32 banks x 8 B = one 256 B
+sweep. Xpose_in has M = rows = 32, so 64 B spacing across 4 distinct banks; Xpose_out has
+M = cols = D = 128, so 256 B spacing and ALL EIGHT CHANNELS ON BANK 0. That is the 385 cc
+against 244 cc for identical volume and an identical 128-transfer count. The condition is
+`cols * elem_bytes % 256 == 0` -- every d_model that is a multiple of 128, so every real
+one. Fixing it needs a destination ROW PITCH on the transpose kernel, which is a device
+ABI change and is not done here.
 """
 
 from dataclasses import dataclass
 
-from bingo_kernel_args import (SnaxBingoKernelSimdRmsnormArgs,
-                               SnaxBingoKernelXdma1dCopyArgs,
+from bingo_kernel_args import (SnaxBingoKernelIdma1dCopyArgs,
+                               SnaxBingoKernelSimdRmsnormArgs,
                                SnaxBingoKernelXdmaTranspose2dArgs)
 
 from ...comm import (Block, BlockResult, Ctx, DType, Layout, MemLevel, Port,
                      PortSpec)
 from ...comm.ports import at_offset
 from .common import BEAT_BYTES, LANES_PER_BEAT, check_pow2, check_row
+
 
 def _transposer_ok(rows: int, cols: int) -> bool:
     """Can the xDMA transposer do BOTH directions of the round trip on its fast path?
@@ -205,9 +189,9 @@ def _transposer_ok(rows: int, cols: int) -> bool:
     N * elem_bytes % 8 == 0. Off that path the kernel is still correct but falls back to a
     DM-core element loop, two orders of magnitude slower.
 
-    A PREDICATE, NOT A REFUSAL, because this block now INFERS its kernel: a shape the
-    transposer cannot serve is a reason to keep the operand where it is, not a reason to
-    fail. It becomes a refusal only when the caller's own layouts demand a transpose.
+    A PREDICATE, NOT A REFUSAL, because the kernel is inferred: a shape the transposer
+    cannot serve is a reason to keep the operand where it is, not a reason to fail. It
+    becomes a refusal only when the caller's own layouts demand a transpose.
     """
     return all(m % 8 == 0 and (n * 2) % 8 == 0
                for m, n in ((rows, cols), (cols, rows)))
@@ -259,24 +243,17 @@ class RMSNorm(Block):
                     f"plain tile -- a row has to be contiguous in one orientation or the "
                     f"other -- so reshape out of {lay} before normalising.")
 
-        # ---- INFERENCE. See THE KERNEL IS INFERRED in the module docstring. -----------
-        # The col_major implementation is the one worth having whenever it runs, so the
-        # question is only whether it CAN run and whether asking for it would cost a
-        # transpose the stated layouts did not already imply.
+        # ---- INFERENCE. See THE KERNEL IS INFERRED FROM THE TWO ENDS, above. ---------
+        # An end asking for col_major is what selects the col_major kernel; the shape is
+        # what allows it. Neither overrules the caller, so row_major on both ends stays on
+        # the row_major kernel even where the cheap one would be legal.
         wants_col = Layout.COL_MAJOR in (c.in_layout, c.out_layout)
         kernel_ok = (c.rows == LANES_PER_BEAT)
-        # THE KERNEL FOLLOWS THE STATED LAYOUTS, and does not overrule them. Taking
-        # col_major whenever it is legal would be an optimality assumption rather than a
-        # derivation, and it would turn a caller who asked for row_major on both ends into
-        # two transposes and a different kernel. Whether to PAY for col_major is a question
-        # about the chain, so it belongs to comm/layout_pass.py, which asks by varying these
-        # layouts. Here, the ends decide.
         self.col_major = kernel_ok and wants_col
 
-        # THE ONE CASE THAT IS A REFUSAL RATHER THAN A FALLBACK: the caller's layouts
-        # demand a transpose that the hardware would do with a DM-core element loop. The
-        # fallback kernel cannot help, because the transpose is between the caller's two
-        # ends, not something this block chose.
+        # THE TWO REFUSALS. A transpose the hardware would run as a DM-core element loop
+        # is two orders of magnitude off the point of transposing, and neither kernel
+        # choice can avoid it -- the transpose is between the caller's own ends.
         if c.in_layout != c.out_layout and not _transposer_ok(c.rows, c.cols):
             raise ValueError(
                 f"RMSNorm: in_layout={c.in_layout} and out_layout={c.out_layout} differ, "
@@ -317,18 +294,33 @@ class RMSNorm(Block):
     def xdma_passes(self) -> int:
         """How many xDMA transfers build() will emit, for comm.layout_pass to count.
 
-        Exact, not an estimate -- it is the same three-way decision build() makes, read
-        off the cfg: the input transpose, the staging copy, and the output transpose.
+        ONLY THE TRANSPOSES; every other move is iDMA work and is counted by
+        idma_passes(). Whether x arrives in L1 or L3 therefore does not change this number.
+
+        Exact, not an estimate: it is the same decision build() makes, read off the cfg.
         """
         c = self.cfg
-        if not self.col_major:
-            n = 1 if c.in_layout == Layout.COL_MAJOR else 0        # transpose x^T -> x
-            return n + (1 if c.out_layout == Layout.COL_MAJOR else 0)
-        if c.in_layout == Layout.COL_MAJOR:
-            n = 0 if c.x_in_place else 1                           # Stage_xt
-        else:
-            n = 1                                                  # Xpose_in
-        return n + (0 if c.out_layout == Layout.COL_MAJOR else 1)  # Xpose_out
+        n = 1 if c.in_layout != self._kernel_layout else 0         # Xpose_in
+        return n + (1 if c.out_layout != self._kernel_layout else 0)   # Xpose_out
+
+    def idma_passes(self, in_l3: bool = False) -> int:
+        """Plain contiguous copies build() will emit, on the DM core.
+
+        `in_l3` is not in the cfg because it is a property of the BINDING, not of the
+        block -- build() reads it off the bound port. Pass it when costing a chain whose
+        producer leaves x in main memory.
+        """
+        c = self.cfg
+        if c.in_layout != self._kernel_layout:
+            return 1 if in_l3 else 0                # Load_x, then the transpose
+        if self.col_major:
+            return 0 if (c.x_in_place and not in_l3) else 1     # Stage_xt
+        return 1 if in_l3 else 0                    # Load_x
+
+    @property
+    def _kernel_layout(self) -> Layout:
+        """The orientation the chosen kernel reads and writes."""
+        return Layout.COL_MAJOR if self.col_major else Layout.ROW_MAJOR
 
     # ---- the headroom buffer, handed out before build() --------------------------------
 
@@ -337,8 +329,8 @@ class RMSNorm(Block):
 
         Only the col_major path has one. Aiming an already-col_major producer at this
         handle is what removes the staging copy: build() compares what it was bound to
-        against this exact slot and emits nothing when they match. build() allocates the
-        buffer itself if nobody called this, so every existing caller is unaffected.
+        against this exact slot and emits nothing when they match. Calling it is optional
+        -- build() allocates the buffer itself otherwise.
         """
         if not self.col_major:
             raise ValueError(
@@ -365,11 +357,22 @@ class RMSNorm(Block):
     @property
     def inputs(self) -> dict:
         c = self.cfg
+        # mem_level=None: WHEREVER YOU HAVE IT. This block loads its own operand, so a
+        # producer that left x in main memory binds it here directly and build() emits the
+        # load. `needs` below is what the block's own transfers read from once it has.
         return {"x": PortSpec(c.in_layout, DType.F16, (c.rows, c.cols),
-                              mem_level=MemLevel.L1,
+                              mem_level=None,
                               doc="fp16, rows normalised independently. col_major means "
                                   "the same tensor with its bytes laid out [cols, rows] "
-                                  "-- the shape is unchanged either way")}
+                                  "-- the shape is unchanged either way. L1 or L3; the "
+                                  "block fetches")}
+
+    @property
+    def needs(self) -> dict:
+        """What this block's OWN transfers read. The linker checks against this, not the
+        declaration, so the L3 -> L1 gap is mine to close rather than a contract error."""
+        return {"x": PortSpec(self.cfg.in_layout, DType.F16,
+                              (self.cfg.rows, self.cfg.cols), mem_level=MemLevel.L1)}
 
     @property
     def outputs(self) -> dict:
@@ -385,13 +388,36 @@ class RMSNorm(Block):
         c = self.cfg
         g = ctx.at(c.cluster)
         src = bound["x"].handle
+        # WHERE x ACTUALLY IS, read off the bound port rather than assumed. Port fills this
+        # in from the handle at bind time, so it is the real level and not the declaration.
+        level = bound["x"].spec.mem_level
+        if level not in (MemLevel.L1, MemLevel.L3):
+            raise ValueError(
+                f"RMSNorm: x is in {level}. This block loads from L3 or uses L1 in place; "
+                f"the memory-chiplet pool is off-die and wants a host hoist first, which "
+                f"is the caller's to emit because it is one move for the whole layer, not "
+                f"one per operator.")
         nodes = []
-        out = (self._col_major if self.col_major else self._row_major)(g, ctx, src, nodes)
+        out = (self._col_major if self.col_major else self._row_major)(
+            g, ctx, src, level, nodes)
         return BlockResult(
             outputs={"y": Port(self.outputs["y"], out, (nodes[-1],), cluster=c.cluster,
                                name="y")},
             inputs={"x": Port(self.inputs["x"], src, (nodes[0],), name="x")},
             nodes=nodes)
+
+    def _land(self, g, ctx, nodes, src, level, nbytes):
+        """Get the operand into L1 if it is not already, on the iDMA. Returns the handle.
+
+        On the iDMA because it transposes nothing -- see WHICH ENGINE MOVES IT, above.
+        """
+        if level == MemLevel.L1:
+            return src
+        dst = g.l1(f"{self.name}_x_l1", nbytes)
+        nodes.append(g.node("Load_x", ctx.dm, "__snax_bingo_kernel_idma_1d_copy",
+                            SnaxBingoKernelIdma1dCopyArgs(src, dst, nbytes),
+                            nodes[-1] if nodes else ()))
+        return dst
 
     def _xpose(self, g, ctx, nodes, name, src, dst, rows, cols):
         """One xDMA block transpose, [rows, cols] -> [cols, rows], fp16."""
@@ -400,7 +426,7 @@ class RMSNorm(Block):
                             nodes[-1] if nodes else ()))
         return nodes[-1]
 
-    def _col_major(self, g, ctx, src, nodes):
+    def _col_major(self, g, ctx, src, level, nodes):
         """LANEWISE reduce + sticky scale, with the orientation closed at both ends."""
         c = self.cfg
         nbytes = c.rows * c.cols * 2
@@ -410,7 +436,7 @@ class RMSNorm(Block):
         buf, tile = self._buf, self.tile
 
         if c.in_layout == Layout.COL_MAJOR:
-            in_place = _same_slot(src, tile)
+            in_place = _same_slot(src, tile) and level == MemLevel.L1
             if c.x_in_place and not in_place:
                 raise ValueError(
                     f"RMSNorm: x_in_place=True promises the producer wrote into this "
@@ -424,12 +450,15 @@ class RMSNorm(Block):
                 # satisfied and the block emits no node at all.
                 pass
             else:
-                # Right orientation, a buffer this block does not own -- and it cannot
-                # prepend a beat to someone else's allocation, so the tile is copied down.
+                # Right orientation, wrong buffer -- this block cannot prepend a beat to
+                # an allocation it does not own, so the tile is copied down. The iDMA
+                # reaches main memory as readily as L1, so this one node also serves as
+                # the load when x was never in L1 to begin with.
                 nodes.append(g.node(
-                    "Stage_xt", ctx.xdma, "__snax_bingo_kernel_xdma_1d_copy",
-                    SnaxBingoKernelXdma1dCopyArgs(src, tile, nbytes), ()))
+                    "Stage_xt", ctx.dm, "__snax_bingo_kernel_idma_1d_copy",
+                    SnaxBingoKernelIdma1dCopyArgs(src, tile, nbytes), ()))
         else:
+            src = self._land(g, ctx, nodes, src, level, nbytes)
             self._xpose(g, ctx, nodes, "Xpose_in", src, tile, c.rows, c.cols)
 
         yt = g.l1(f"{self.name}_yt", nbytes)
@@ -447,19 +476,19 @@ class RMSNorm(Block):
         self._xpose(g, ctx, nodes, "Xpose_out", yt, y, c.cols, c.rows)
         return y
 
-    def _row_major(self, g, ctx, src, nodes):
-        """The reference arm: fold across lanes, broadcast the scale, multiply.
+    def _row_major(self, g, ctx, src, level, nodes):
+        """Fold across lanes, broadcast the scale, multiply. Three passes, one kernel.
 
-        Still one kernel and still three passes -- StreamMap's RSQRT func removed the core
-        round trip from this path too -- it just pays the cross-lane fold and the [T, D]
-        replication that the orientation above avoids entirely.
+        The scalar stays in the datapath here too -- StreamMap's RSQRT computes it in the
+        broadcast pass -- so what this pays over the col_major kernel is exactly the
+        cross-lane fold and the [T, D] replication, once per row.
         """
         c = self.cfg
         nbytes = c.rows * c.cols * 2
-        x = src
+        x = self._land(g, ctx, nodes, src, level, nbytes)
         if c.in_layout == Layout.COL_MAJOR:
-            x = g.l1(f"{self.name}_x", nbytes)
-            self._xpose(g, ctx, nodes, "Xpose_in", src, x, c.cols, c.rows)
+            xt, x = x, g.l1(f"{self.name}_x", nbytes)
+            self._xpose(g, ctx, nodes, "Xpose_in", xt, x, c.cols, c.rows)
 
         out = g.l1(f"{self.name}_y", nbytes)
         nodes.append(g.node(

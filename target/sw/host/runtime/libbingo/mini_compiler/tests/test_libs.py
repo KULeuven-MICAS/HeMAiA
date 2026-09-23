@@ -375,6 +375,63 @@ try:
 except ValueError:
     check("x_in_place=True on a foreign buffer is refused", True)
 
+# ------------------------------------------------- the engine deduction
+print("\nwhich engine moves the operand")
+from libs.comm.ports import MemLevel as _ML                              # noqa: E402
+
+_XDMA, _IDMA, _SIMD = _ctx_roles = 2, 3, 1
+
+
+def _engines(in_lay, out_lay, level):
+    c = new_ctx()
+    g = c.at(0)
+    b = _RMSNorm(rows=_T, cols=_D, cluster=0, in_layout=in_lay, out_layout=out_lay)
+    h = g.l1("x", _T * _D * 2) if level == _ML.L1 else g.l3("x_l3", _T * _D * 2)
+    r = b.build(g, {"x": Port(PortSpec(in_lay, DType.F16, (_T, _D), mem_level=level),
+                              h, (), cluster=0, name="x")})
+    return [(n.node_name.split("_cl")[0], n._assigned_core_id) for n in r.nodes], b
+
+
+# EVERY NON-TRANSPOSING MOVE IS ON THE iDMA, and only transposes are on the xDMA.
+for _in, _out, _lvl in ((Layout.ROW_MAJOR, Layout.ROW_MAJOR, _ML.L3),
+                        (Layout.COL_MAJOR, Layout.COL_MAJOR, _ML.L1),
+                        (Layout.COL_MAJOR, Layout.COL_MAJOR, _ML.L3),
+                        (Layout.ROW_MAJOR, Layout.COL_MAJOR, _ML.L3)):
+    _ns, _ = _engines(_in, _out, _lvl)
+    _moves = [(n, core) for n, core in _ns if core != _SIMD]
+    check(f"{_in}->{_out} from {_lvl}: no plain copy on the xDMA",
+          all(core == _IDMA for n, core in _moves if not n.startswith("Xpose")), _ns)
+    check(f"{_in}->{_out} from {_lvl}: every transpose IS on the xDMA",
+          all(core == _XDMA for n, core in _moves if n.startswith("Xpose")), _ns)
+
+# AN L3 OPERAND COSTS NO EXTRA NODE when the tile is wanted col_major: the load IS the
+# staging copy, because the iDMA reaches main memory just as readily as L1.
+_l1, _ = _engines(Layout.COL_MAJOR, Layout.COL_MAJOR, _ML.L1)
+_l3, _ = _engines(Layout.COL_MAJOR, Layout.COL_MAJOR, _ML.L3)
+check("an L3 col_major input costs no extra node", len(_l1) == len(_l3), (_l1, _l3))
+
+# A ROW-MAJOR L3 OPERAND DOES cost one, and it lands on the iDMA, not the xDMA.
+_l1r, _ = _engines(Layout.ROW_MAJOR, Layout.ROW_MAJOR, _ML.L1)
+_l3r, _b = _engines(Layout.ROW_MAJOR, Layout.ROW_MAJOR, _ML.L3)
+check("an L3 row_major input costs exactly one iDMA load",
+      len(_l3r) == len(_l1r) + 1 and _l3r[0] == ("Load_x", _IDMA), _l3r)
+check("...and does not change the xDMA count",
+      _b.xdma_passes() == 0, _b.xdma_passes())
+check("...while idma_passes(in_l3=True) reports it", _b.idma_passes(in_l3=True) == 1,
+      _b.idma_passes(in_l3=True))
+
+# L4 IS REFUSED, because the hoist is one move for the whole layer, not one per operator.
+try:
+    _c4 = new_ctx()
+    _b4 = _RMSNorm(rows=_T, cols=_D, cluster=0)
+    _b4.build(_c4.at(0), {"x": Port(PortSpec(Layout.ROW_MAJOR, DType.F16, (_T, _D),
+                                             mem_level=_ML.L4),
+                                    _c4.at(0).l1("x", _T * _D * 2), (),
+                                    cluster=0, name="x")})
+    check("an L4 operand is refused", False, "it built")
+except ValueError:
+    check("an L4 operand is refused", True)
+
 if FAILED:
     print(f"\n{len(FAILED)} FAILED: {', '.join(FAILED)}")
     sys.exit(1)

@@ -30,9 +30,12 @@ simply drops it from the search. There is no second copy of the rules here to dr
 THE OBJECTIVE IS THE SIMD, AND THAT IS A CHOICE
 ======================================================================================
 
-Cost is compared LEXICOGRAPHICALLY: serialised SIMD work first, xDMA passes only to break
-a tie. That ordering is the premise -- the SIMD core is this machine's constraint -- and
-it is the whole reason the pass exists.
+Cost is compared LEXICOGRAPHICALLY, in engine order: serialised SIMD work, then xDMA
+passes, then iDMA passes. That ordering is the premise. The SIMD core is this machine's
+constraint and the whole reason the pass exists; the xDMA is next because the relayouts
+of the surrounding chain queue on it; the iDMA is last because the DM core is idle while
+the other two work, so a plain copy put there is very nearly free -- which is exactly why
+blocks are expected to put every non-transposing move on it.
 
 Minimising total passes instead would be wrong, and the layer's first RMSNorm is the
 counter-example: the row-major arm is ONE pass and the col-major arm is TWO, and the
@@ -100,6 +103,7 @@ class Candidate:
     dst: Layout
     simd_folds: int = 0
     xdma_passes: int = 0
+    idma_passes: int = 0
 
 
 @dataclass
@@ -111,6 +115,7 @@ class LayoutPlan:
     links: list = field(default_factory=list)           # conversion steps per boundary
     simd_folds: int = 0
     passes: int = 0
+    idma_passes: int = 0
 
     def params(self, name_or_index):
         """The chosen parameters for a step, by name or position."""
@@ -155,7 +160,8 @@ def assign_layouts(steps, *, mesh, elem_bytes, shape, start: Optional[Layout] = 
             # neither, which is the entire decision this pass exists to make.
             legal.append(Candidate(params, src, dst,
                                    int(getattr(blk, "simd_folds", int)() or 0),
-                                   int(getattr(blk, "xdma_passes", int)() or 0)))
+                                   int(getattr(blk, "xdma_passes", int)() or 0),
+                                   int(getattr(blk, "idma_passes", int)() or 0)))
         if not legal:
             raise ValueError(
                 f"[layout] {st.name}: not one of its {len(st.options)} candidate "
@@ -183,26 +189,26 @@ def assign_layouts(steps, *, mesh, elem_bytes, shape, start: Optional[Layout] = 
         n, kinds = gap(start, c.src)
         if n is None:
             continue
-        best.append((c.simd_folds, n + c.xdma_passes, j, -1, kinds))
+        best.append(((c.simd_folds, n + c.xdma_passes, c.idma_passes), j, -1, kinds))
     if not best:
         raise ValueError(
             f"[layout] nothing can consume the chain's input layout {start}. Every "
             f"candidate for {steps[0].name} needs a conversion that is not expressible.")
-    frontier = {b[2]: b for b in best}
+    frontier = {b[1]: b for b in best}
     trail = [dict(frontier)]
 
     for i in range(1, len(cands)):
         nxt = {}
         for j, c in enumerate(cands[i]):
-            for pj, (pcc, pn, _, _, _) in frontier.items():
+            for pj, (pk, _, _, _) in frontier.items():
                 n, kinds = gap(cands[i - 1][pj].dst, c.src)
                 if n is None:
                     continue
-                cc = pcc + c.simd_folds
-                tot = pn + n + c.xdma_passes
+                key = (pk[0] + c.simd_folds, pk[1] + n + c.xdma_passes,
+                       pk[2] + c.idma_passes)
                 cur = nxt.get(j)
-                if cur is None or (cc, tot) < (cur[0], cur[1]):
-                    nxt[j] = (cc, tot, j, pj, kinds)
+                if cur is None or key < cur[0]:
+                    nxt[j] = (key, j, pj, kinds)
         if not nxt:
             raise ValueError(
                 f"[layout] the chain cannot reach {steps[i].name}: no legal configuration "
@@ -212,29 +218,30 @@ def assign_layouts(steps, *, mesh, elem_bytes, shape, start: Optional[Layout] = 
 
     # ---- close the far end and pick the winner ---------------------------------------
     finals = []
-    for j, (cc, n, _, pj, kinds) in frontier.items():
+    for j, (pk, _, pj, kinds) in frontier.items():
         m, mk = gap(cands[-1][j].dst, end)
         if m is None:
             continue
-        finals.append((cc, n + m, j, mk))
+        finals.append(((pk[0], pk[1] + m, pk[2]), j, mk))
     if not finals:
         raise ValueError(
             f"[layout] no configuration of {steps[-1].name} can reach the chain's "
             f"required output layout {end}.")
-    cc, passes, j, tail_kinds = min(finals, key=lambda t: (t[0], t[1]))
+    key, j, tail_kinds = min(finals, key=lambda t: t[0])
 
     # walk the backpointers
     order, links = [], [tail_kinds]
     for i in range(len(cands) - 1, -1, -1):
         order.append(j)
-        _, _, _, pj, kinds = trail[i][j]
+        _, _, pj, kinds = trail[i][j]
         links.append(kinds)
         j = pj
     order.reverse()
     links.reverse()
 
     out = LayoutPlan(chosen=[cands[i][k].params for i, k in enumerate(order)],
-                     candidates=cands, links=links, simd_folds=cc, passes=passes)
+                     candidates=cands, links=links, simd_folds=key[0], passes=key[1],
+                     idma_passes=key[2])
     out._names = [s.name for s in steps]
     if verbose:
         _report(steps, cands, order, links, out)
@@ -243,7 +250,8 @@ def assign_layouts(steps, *, mesh, elem_bytes, shape, start: Optional[Layout] = 
 
 def _report(steps, cands, order, links, res):
     w = max(len(s.name) for s in steps)
-    print("[layout] objective: fewest serialised cross-lane folds, then fewest passes")
+    print("[layout] objective: fewest cross-lane folds, then xDMA passes, then iDMA"
+          "  (shown as <x>x/<i>i)")
     for i, st in enumerate(steps):
         inc = links[i]
         if inc:
@@ -252,13 +260,13 @@ def _report(steps, cands, order, links, res):
             mark = "->" if k == order[i] else "  "
             cost = (f"{c.simd_folds:>5,} folds" if c.simd_folds
                     else f"{'no folds':>11}")
-            own = f"{c.xdma_passes} pass" + ("" if c.xdma_passes == 1 else "es")
+            own = f"{c.xdma_passes}x/{c.idma_passes}i"
             print(f"[layout] {mark} {st.name:{w}}  {str(c.src):>9} -> {str(c.dst):<9} "
                   f"{cost}  {own:>8}   {_brief(c.params)}")
     if links[-1]:
         print(f"[layout] {'':{w}}   ..link.. {' -> '.join(links[-1])}")
-    print(f"[layout] total: {res.simd_folds:,} cross-lane fold(s), "
-          f"{res.passes} xDMA pass(es) -- blocks' own plus the links between them")
+    print(f"[layout] total: {res.simd_folds:,} cross-lane fold(s), {res.passes} xDMA "
+          f"pass(es), {res.idma_passes} iDMA -- blocks' own plus the links between them")
 
 
 def _brief(params: dict) -> str:
