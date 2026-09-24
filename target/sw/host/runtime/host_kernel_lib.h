@@ -89,6 +89,8 @@ static inline float __bingo_fp16_to_fp32(uint16_t h) {
     return u.f;
 }
 
+// Define HOST_CHECK_RESULT_DEBUG to print successful checks. Data validation and
+// failure diagnostics remain enabled regardless of this flag.
 static inline uint64_t __host_bingo_kernel_check_result(void *arg){
     // Arg0-5: golden, output, size, name, check_type, tolerance_bits; Arg6: scratchpad_ptr
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
@@ -125,7 +127,9 @@ static inline uint64_t __host_bingo_kernel_check_result(void *arg){
         sp->return_value = err;
         sp->num_return_values = 0;
         if (err == 0) {
+#ifdef HOST_CHECK_RESULT_DEBUG
             printf_safe("[Host] Check [%s]: PASS (%d bytes)\r\n", name, data_size);
+#endif
             return BINGO_RET_SUCC;
         } else {
             printf_safe("[Host] Check [%s]: FAIL (%d / %d bytes)\r\n", name, err, data_size);
@@ -149,7 +153,9 @@ static inline uint64_t __host_bingo_kernel_check_result(void *arg){
         sp->return_value = err;
         sp->num_return_values = 0;
         if (err == 0) {
+#ifdef HOST_CHECK_RESULT_DEBUG
             printf_safe("[Host] Check [%s]: PASS (%d int8, tol=%d)\r\n", name, data_size, tol);
+#endif
             return BINGO_RET_SUCC;
         } else {
             printf_safe("[Host] Check [%s]: FAIL (%d / %d int8, tol=%d)\r\n", name, err, data_size, tol);
@@ -178,8 +184,10 @@ static inline uint64_t __host_bingo_kernel_check_result(void *arg){
         sp->return_value = err;
         sp->num_return_values = 0;
         if (err == 0) {
+#ifdef HOST_CHECK_RESULT_DEBUG
             printf_safe("[Host] Check [%s]: PASS (%d fp32 elems, tol_bits=0x%08x)\r\n",
                    name, num_elements, tolerance_bits);
+#endif
             return BINGO_RET_SUCC;
         } else {
             printf_safe("[Host] Check [%s]: FAIL (%d / %d fp32 elems, tol_bits=0x%08x)\r\n",
@@ -210,8 +218,10 @@ static inline uint64_t __host_bingo_kernel_check_result(void *arg){
         sp->return_value = err;
         sp->num_return_values = 0;
         if (err == 0) {
+#ifdef HOST_CHECK_RESULT_DEBUG
             printf_safe("[Host] Check [%s]: PASS (%d fp16 elems, tol_bits=0x%08x)\r\n",
                    name, num_elements, tolerance_bits);
+#endif
             return BINGO_RET_SUCC;
         } else {
             printf_safe("[Host] Check [%s]: FAIL (%d / %d fp16 elems, tol_bits=0x%08x)\r\n",
@@ -258,8 +268,10 @@ static inline uint64_t __host_bingo_kernel_check_result(void *arg){
         sp->return_value = err;
         sp->num_return_values = 0;
         if (err == 0) {
+#ifdef HOST_CHECK_RESULT_DEBUG
             printf_safe("[Host] Check [%s]: PASS (%d fp16 elems, rtol_bits=0x%08x)\r\n",
                    name, num_elements, tolerance_bits);
+#endif
             return BINGO_RET_SUCC;
         } else {
             printf_safe("[Host] Check [%s]: FAIL (%d / %d fp16 elems, rtol_bits=0x%08x)\r\n",
@@ -281,7 +293,7 @@ static inline uint64_t __host_bingo_kernel_check_result(void *arg){
 
 // Define HOST_IDMA_DEBUG to enable per-transfer UART diagnostics and memory
 // probes. Keep them off by default to avoid slowing gate-level simulations;
-// __host_bingo_kernel_check_result still reports all result checks.
+// result checking remains active regardless of verbosity.
 static inline uint64_t __host_bingo_kernel_idma(void *arg){
     // Arg0-2: src, dst, size; Arg3: scratchpad_ptr
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
@@ -336,6 +348,8 @@ static inline uint64_t __host_bingo_kernel_idma(void *arg){
     return BINGO_RET_SUCC;
 }
 
+// Define HOST_XDMA_DEBUG to enable per-transfer UART diagnostics, memory probes,
+// and diagnostic register reads. Keep them off by default for gate-level runs.
 static inline uint64_t __host_bingo_kernel_xdma_1d_copy(void *arg){
     // Arg0-2: src, dst, size; Arg3: scratchpad_ptr
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
@@ -352,6 +366,7 @@ static inline uint64_t __host_bingo_kernel_xdma_1d_copy(void *arg){
         return BINGO_RET_FAIL;
     }
 
+#ifdef HOST_XDMA_DEBUG
     printf_safe(
         "Chip(%x, %x): [Host][xDMA] pull src=0x%lx dst=0x%lx size=%lu\r\n",
         get_current_chip_loc_x(), get_current_chip_loc_y(), src_addr, dst_addr,
@@ -365,6 +380,7 @@ static inline uint64_t __host_bingo_kernel_xdma_1d_copy(void *arg){
             get_current_chip_loc_x(), get_current_chip_loc_y(), src_addr,
             (uint32_t)src_data[0], (uint32_t)src_data[1]);
     }
+#endif
 
     BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
     int32_t cfg_ret = hemaia_xdma_memcpy_1d((const void*)(uintptr_t)src_addr,
@@ -387,6 +403,7 @@ static inline uint64_t __host_bingo_kernel_xdma_1d_copy(void *arg){
     asm volatile("fence" ::: "memory");
     BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
 
+#ifdef HOST_XDMA_DEBUG
     uint32_t commit_local =
         hemaia_read_xdma_cfg_reg(XDMA_COMMIT_LOCAL_TASK_PTR);
     uint32_t commit_remote =
@@ -411,6 +428,7 @@ static inline uint64_t __host_bingo_kernel_xdma_1d_copy(void *arg){
             get_current_chip_loc_x(), get_current_chip_loc_y(), dst_addr,
             (uint32_t)dst_data[0], (uint32_t)dst_data[1]);
     }
+#endif
     sp->return_value = (uint32_t)dst_addr;
     sp->num_return_values = 0;
     return BINGO_RET_SUCC;
