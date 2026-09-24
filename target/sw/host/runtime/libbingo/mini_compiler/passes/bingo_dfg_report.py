@@ -1,5 +1,7 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 
+import os
+
 import networkx as nx
 
 from bingo_utils import install_package
@@ -224,6 +226,26 @@ class BingoDFGReportMixin:
         # Save the visualization to a file
         plt.tight_layout()
         plt.savefig(f"{filename}.png")
+
+    def bingo_visualize_blocks(self, output_dir: str, app_name: str = None) -> None:
+        """One picture per libs block, under `output_dir`/block_dfg (see bingo_block_viz).
+
+        Only a graph a libs Pipeline built has them: the Pipeline is what records which node
+        belongs to which block. BINGO_BLOCK_DFG=0 skips them.
+        """
+        if not getattr(self, "block_records", None):
+            return
+        if os.environ.get("BINGO_BLOCK_DFG", "1") == "0":
+            print("[block_dfg] skipped (BINGO_BLOCK_DFG=0)")
+            return
+        try:
+            from bingo_block_viz import render_blocks
+            res = render_blocks(self, output_dir, app_name)
+            print(f"[block_dfg] {res['pictures']} block picture(s) of {res['blocks']} "
+                  f"stage(s) -> {res['dir']}")
+        except Exception as e:  # never on the build path
+            print(f"[block_dfg] WARNING: block pictures not written: "
+                  f"{type(e).__name__}: {e}")
 
     def bingo_export_dfg_to_csv(self, filename: str = "dfg_table") -> None:
         """Export the DFG node details to a CSV file."""

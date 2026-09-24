@@ -88,6 +88,8 @@ from typing import Callable, Optional, Sequence
 
 import networkx as nx
 
+from bingo_block_viz import BlockRecord, PortRecord
+
 from .ctx import Ctx
 from .ports import Block, BlockResult, Port, PortSpec
 from .variant import Cost, Variant, variants_of
@@ -557,12 +559,59 @@ class Pipeline:
         if self.verbose:
             self._plan_report()
         self.ran = True
+        g = self.ctx.dfg
         for item in self.items:
+            before = set(g.nodes)
             if isinstance(item, Stage):
                 self._build(item)
             else:
                 item.fn()
+            self._record(item, [n for n in g.nodes if n not in before])
         return self
+
+    def _record(self, item, nodes: list) -> None:
+        """Remember what `item` built, for the per-block pictures (passes/bingo_block_viz).
+
+        The nodes are taken as the DIFFERENCE of the graph's node set around the build, not
+        from BlockResult.nodes: a block reports the nodes it chooses to, and a picture that
+        is used to find a missing edge has to show every node the block created -- the
+        loads bring_in emits on its behalf included. The records ride on the DFG, because
+        the pictures are drawn by bingo_compile_dfg, which is the one place that knows the
+        app's output directory.
+        """
+        g = self.ctx.dfg
+        if getattr(g, "block_records", None) is None:
+            g.block_records = []
+            g.block_roles = dict(self.ctx.roles)
+        rec = BlockRecord(index=len(g.block_records), name=item.name, kind="raw",
+                          nodes=nodes, doc="application work registered with Pipeline.raw()")
+        if isinstance(item, Stage):
+            blk, v, res = item.chosen.block, item.chosen, item.result
+            source = isinstance(blk, _SourceBlock)
+            rec.kind = "source" if source else type(blk).__name__
+            rec.doc = ("a port the application builds itself (Pipeline.source)" if source
+                       else _first_sentence(type(blk).__doc__))
+            rec.params = _brief(v.params) if v.params else ""
+            c = v.cost
+            rec.cost = f"folds {c.folds} · SIMD {c.simd} · xDMA {c.xdma} · iDMA {c.idma}"
+            for port, val in item.bind.items():
+                src = val.port if isinstance(val, Ref) else val
+                if isinstance(val, Ref):
+                    peer = f"{val.stage.name}.{val.port_name or next(iter(val.stage.result.outputs))}"
+                elif src.ends:
+                    peer = "built by the application"
+                else:
+                    peer = f"staged in {src.spec.mem_level}"
+                dst = res.inputs.get(port)
+                rec.inputs.append(PortRecord(port, src.spec.describe(), src.handle_name,
+                                             list(dst.ends) if dst is not None else [],
+                                             peer, list(src.ends), src.spec.cluster))
+            for port, p in res.outputs.items():
+                rec.outputs.append(PortRecord(port, p.spec.describe(), p.handle_name,
+                                              list(p.ends), cluster=p.spec.cluster))
+            # link() gates these behind each producer; the pictures tell those edges apart
+            rec.sources = list(res.sources)
+        g.block_records.append(rec)
 
     # ---- diagnostics -------------------------------------------------------------------
 
@@ -614,3 +663,10 @@ def _brief(params: dict) -> str:
 
 def _one_line(e) -> str:
     return " ".join(str(e).split())[:120]
+
+
+def _first_sentence(doc) -> str:
+    """The first sentence of a docstring, on one line -- a block's own summary of itself."""
+    text = " ".join((doc or "").strip().split("\n\n")[0].split())
+    cut = text.find(". ")
+    return (text if cut < 0 else text[:cut + 1])[:170]

@@ -59,3 +59,15 @@ blk = FlashAttention(bc=32, br=32, dhead=128, nkv=8, clusters=4, decomp="kvsplit
 r = Pipeline(ctx).add(blk, name="attn", bind={"q": ..., "k": ..., "v": ...}).result
 fa_gather(ctx.scope("attn"), blk.cfg, r.extra["shards"])   # the fold is a choice
 ```
+
+## Seeing what a block built
+
+Every app whose graph a `Pipeline` built gets `block_dfg/` beside its `final_dfg.png`:
+one picture per stage, in build order, plus a `README.md` index and a `.txt` listing per
+picture with every argument and every edge. A picture shows the nodes that stage
+created and nothing else: one lane per (cluster, core), columns by dependency depth
+inside the stage, the ports as cards on the left and right naming the stage on the other
+side, and every other edge that crosses the boundary as a dashed ghost box. Task ids are
+the final ones, so a node there is the same row of `final_dfg.csv` and the same id in a
+trace. Drawing and layout are in `passes/bingo_block_viz.py`; `BINGO_BLOCK_DFG=0` skips
+them.

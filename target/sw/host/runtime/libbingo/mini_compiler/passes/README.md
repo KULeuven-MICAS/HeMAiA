@@ -13,7 +13,7 @@ because each depends on the last. The analyses the passes use live here too.
 | `bingo_dfg_validate.py` | `bingo_validate_no_hang` after the tags are allocated; placement and handle validation from inside the emit pass. | A GEMM node on the wrong hart programs *that* hart's accelerator at the same CSR offsets and reports success. Nothing faults. |
 | `bingo_dfg_staticl1.py` | Places cluster buffers, reusing memory between buffers whose lifetimes cannot overlap. | Overflowing the 514,816 B heap — now a build error, since `l1_capacity_bytes` is set. |
 | `bingo_dfg_emit.py` | Writes the C, validating placement and handles first. | Two same-named handles emitting two declarations that do not compile. |
-| `bingo_dfg_report.py` | The CSV, the graph PNGs, the L1 occupancy plot. | — |
+| `bingo_dfg_report.py` | The CSV, the graph PNGs, the L1 occupancy plot, and the per-block pictures (below). | — |
 
 ## The analyses
 
@@ -22,6 +22,7 @@ because each depends on the last. The analyses the passes use live here too.
 | `bingo_liveness.py` | Who uses which buffer, reachability between nodes, and `can_share` — the rule static-L1 rests on: every user of A must be a graph ancestor of every user of B. One incomparable pair vetoes the whole buffer pair. |
 | `bingo_l1_packer.py` | The placement search itself, and the proof that the placement is safe. |
 | `bingo_sim_check.py` | Replays the graph against a model of the hardware task manager. It is a **deadlock oracle**, not a performance model — trust it for "this wedges", not for cycle counts. |
+| `bingo_block_viz.py` | One picture and one text listing per libs block, under `<output_dir>/block_dfg/`, drawn from the records `Pipeline.run()` leaves on the DFG. It runs first in `bingo_compile_dfg`, so it shows the dependencies the blocks stated rather than the dummy nodes they are lowered to, and it never fails a build. `BINGO_BLOCK_DFG=0` skips it. |
 
 ## Why the order is fixed
 

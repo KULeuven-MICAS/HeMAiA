@@ -218,6 +218,9 @@ class BingoDFG(
         stack, so a DFG large enough to overflow it must be able to opt out.
         """
         self.desc_list_in_narrow_spm = desc_list_in_narrow_spm
+        # 0. The per-block pictures, of the graph exactly as the application built it:
+        #    every pass below adds entry, exit or dummy nodes a block never stated.
+        self.bingo_visualize_blocks(output_dir, app_name)
         # 1. Transformations
         # Add Entry Node
         self.bingo_transform_dfg_add_entry_node()

@@ -873,6 +873,74 @@ _bad.add(RMSNorm(rows=16, cols=128, cluster=0, in_layout=Layout.ROW_MAJOR,
 refuses("a block bound to another cluster's slice is refused", _bad.run, "cluster")
 
 
+# ======================================================================================
+print("\nblock pictures: what the Pipeline records, and how a boundary edge is classed")
+# The records are what every picture is drawn from, so they are what is checked. A node
+# credited to the wrong block, or a gating edge counted as data, draws a confident picture
+# of the wrong graph -- which is worse than no picture for someone hunting a missing edge.
+from bingo_block_viz import _Scene, _World, render_blocks  # noqa: E402
+
+_vctx = new_ctx()
+_vp = Pipeline(_vctx, verbose=False)
+_va = _vp.add(Producer(), name="a")
+_vb = _vp.add(Consumer(), name="b", bind={"x": _va.out("o")})
+_vp.raw(lambda: _vctx.node("peek", _vctx.dm, "__snax_k", Args(src=_vb.out("y").port.handle),
+                           list(_vb.out("y").port.ends)), "peek")
+_vp.run()
+_recs = _vctx.dfg.block_records
+_names = [[n.node_name for n in r.nodes] for r in _recs]
+check("one record per stage and raw thunk, in build order",
+      [(r.name, r.kind) for r in _recs] == [("a", "Producer"), ("b", "Consumer"),
+                                            ("peek", "raw")])
+check("...each holding exactly the nodes its build created, in creation order",
+      _names == [["a_ld_cl0", "a_wr_cl0"], ["b_wld_cl0", "b_rd_cl0", "b_cmp_cl0"],
+                 ["peek_cl0"]], str(_names))
+check("...and every node of the graph is credited to exactly one of them",
+      sorted(n for ns in _names for n in ns) == sorted(n.node_name for n in _vctx.dfg.nodes))
+_pin = _recs[1].inputs[0]
+check("an input names its producing port and that port's end nodes",
+      _pin.peer == "a.o" and _pin.peer_ends == list(_va.out("o").port.ends)
+      and _pin.cluster == 0)
+_by = {n.node_name: n for n in _vctx.dfg.nodes}
+_sc = _Scene(_recs[1], _World(_vctx.dfg, _recs))
+check("link()'s gate on the weight load is COUNTED, not drawn as data",
+      _sc.gated[_by["b_wld_cl0"]] == 1 and _sc.n_gate == 1
+      and _sc.edge_class[(_by["a_wr_cl0"], _by["b_wld_cl0"])] == "gate x")
+check("...while the RAW edge belongs to the input's card, as a declared reader",
+      _sc.in_cards[0]["to"] == [_by["b_rd_cl0"]] and _sc.in_cards[0]["also"] == []
+      and _sc.edge_class[(_by["a_wr_cl0"], _by["b_rd_cl0"])] == "port x")
+check("...and the raw thunk that reads the output is a ghost, not a consumer",
+      [xs for _l, xs, _i in _sc.ghost_out] == [[_by["peek_cl0"]]]
+      and _sc.out_cards[0]["users"] == [])
+check("depth inside the block is the longest path, not creation order",
+      [_sc.depth[_by[n]] for n in ("b_wld_cl0", "b_rd_cl0", "b_cmp_cl0")] == [0, 0, 1])
+
+try:
+    import matplotlib  # noqa: F401
+    _have_mpl = True
+except ImportError:
+    _have_mpl = False
+if _have_mpl:
+    import tempfile
+    with tempfile.TemporaryDirectory() as _td:
+        _bd = _os.path.join(_td, "block_dfg")
+        _os.makedirs(_bd)
+        open(_os.path.join(_bd, "99_renamed__Old.png"), "w").close()
+        _before = (_vctx.dfg.number_of_nodes(), _vctx.dfg.number_of_edges())
+        _res = render_blocks(_vctx.dfg, _td, "test")
+        check("render writes a picture and a listing per stage, plus an index",
+              sorted(_os.listdir(_bd)) == ["00_a__Producer.png", "00_a__Producer.txt",
+                                           "01_b__Consumer.png", "01_b__Consumer.txt",
+                                           "02_peek__raw.png", "02_peek__raw.txt",
+                                           "README.md"], str(sorted(_os.listdir(_bd))))
+        check("...clears a picture left behind by a stage that no longer exists",
+              not _os.path.exists(_os.path.join(_bd, "99_renamed__Old.png")))
+        check("...and leaves the graph it drew untouched",
+              (_vctx.dfg.number_of_nodes(), _vctx.dfg.number_of_edges()) == _before)
+else:
+    print("  SKIP  rendering (no matplotlib)")
+
+
 if FAILED:
     print(f"\n{len(FAILED)} FAILED: {', '.join(FAILED)}")
     sys.exit(1)
