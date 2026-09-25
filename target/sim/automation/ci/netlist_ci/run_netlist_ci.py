@@ -158,6 +158,12 @@ def parse_args() -> argparse.Namespace:
         help="record a simulator waveform (default: %(default)s)",
     )
     parser.add_argument(
+        "--use-original-bootrom",
+        action="store_true",
+        help="keep the synthesized boot ROM in the mapped netlist instead of "
+        "the RTL replacement (use the same flag for prepare and simulate)",
+    )
+    parser.add_argument(
         "-j",
         "--max-sim-jobs",
         type=int,
@@ -201,7 +207,8 @@ def main() -> None:
     print(
         f"Netlist hardware {args.hardware}: cfg={profile.cfg}, "
         f"clusters={len(profile.clusters)}, tasks={profile.task_yaml}, "
-        "main_memory=128KiB/16x1024x64"
+        "main_memory=128KiB/16x1024x64, "
+        f"bootrom={'original' if args.use_original_bootrom else 'rtl'}"
     )
     runner = HeMAiASimRunner(
         repo_root=_REPO_ROOT,
@@ -220,6 +227,7 @@ def main() -> None:
         fail_on_task_failure=True,
         timeout_seconds=max(1, int(args.timeout_hours * 60 * 60)),
         enforce_preparation_hashes=False,
+        use_original_bootrom=args.use_original_bootrom,
     )
     try:
         result_path = runner.run(parse_tasks(task_yaml), phase=args.phase)

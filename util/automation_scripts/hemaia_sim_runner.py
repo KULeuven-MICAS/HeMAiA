@@ -626,6 +626,7 @@ class HeMAiASimRunner:
         fail_on_task_failure: bool = False,
         timeout_seconds: int = SIM_TIMEOUT_SECONDS,
         enforce_preparation_hashes: bool = True,
+        use_original_bootrom: bool = False,
     ) -> None:
         if engine not in ENGINES:
             raise ValueError(f"Unknown engine {engine!r}; choose from {sorted(ENGINES)}")
@@ -678,6 +679,7 @@ class HeMAiASimRunner:
         self.task_yaml = task_yaml.resolve() if task_yaml is not None else None
         self.fail_on_task_failure = fail_on_task_failure
         self.enforce_preparation_hashes = enforce_preparation_hashes
+        self.use_original_bootrom = use_original_bootrom
         if timeout_seconds < 1:
             raise ValueError("timeout_seconds must be >= 1")
         self.timeout_seconds = timeout_seconds
@@ -981,7 +983,10 @@ class HeMAiASimRunner:
         # same script-local ROOT variable as the HDL list.
         contents = contents.replace(str(self.repo_root), "$ROOT")
         if self._sim_cfg_flag("sim_with_netlist"):
-            contents = self._postprocess_netlist_compile_input(engine, path, contents)
+            contents = self._postprocess_netlist_compile_input(
+                engine, path, contents,
+                use_original_bootrom=self.use_original_bootrom,
+            )
         path.write_text(contents)
         self._validate_relocatable_compile_input(engine)
 
@@ -990,14 +995,17 @@ class HeMAiASimRunner:
         engine: str,
         path: Path,
         contents: str,
+        *,
+        use_original_bootrom: bool = False,
     ) -> str:
         """Keep the mapped chip and reject accidental compute-chip RTL.
 
         Selecting Bender's ``hemaia`` target solely to obtain CVA6's HeMAiA
         configuration also selects the synthesizable compute-chip hierarchy.
         A gate-level build must instead retain the narrow ``hemaia_netlist``
-        source set and replace only CVA6's generic configuration package in
-        the generated compiler script.
+        source set and select CVA6's HeMAiA configuration package in the
+        generated compiler script. Original-boot-ROM mode also removes the
+        replacement ROM source and selects the untouched backend netlist copy.
         """
         generic_config = "/core/include/config_pkg.sv"
         hemaia_config = "/core/include/config_hemaia_pkg.sv"
@@ -1011,10 +1019,42 @@ class HeMAiASimRunner:
                 f"selection in {path}: generic={generic_count}, hemaia={hemaia_count}"
             )
 
-        required_sources = (
-            "/target/rtl/bootrom/bootrom_netlist_sim/bootrom.v",
+        rtl_bootrom = "/target/rtl/bootrom/bootrom_netlist_sim/bootrom.v"
+        replaced_netlist = (
             "/target/tapeout/HeMAiAv2_tapeout/outputs/"
-            "hemaia_mapped_bootrom_commented.v",
+            "hemaia_mapped_bootrom_commented.v"
+        )
+        original_netlist = (
+            "/target/tapeout/HeMAiAv2_tapeout/outputs/"
+            "hemaia_mapped_original_bootrom.v"
+        )
+        if use_original_bootrom and replaced_netlist in contents:
+            # Bender emits one quoted source per line for both VCS and Questa.
+            # Remove the whole argument, including its continuation, so the
+            # original mapped module is the only bootrom definition compiled.
+            contents, removed = re.subn(
+                r'^[ \t]*"\$(?:ROOT|\{ROOT\})' + re.escape(rtl_bootrom)
+                + r'"[ \t]*(?:\\[ \t]*)?\r?\n',
+                "",
+                contents,
+                flags=re.MULTILINE,
+            )
+            if (
+                removed != 1
+                or contents.count(replaced_netlist) != 1
+                or original_netlist in contents
+            ):
+                raise ValueError(
+                    f"Cannot select the original bootrom in {path}: expected "
+                    "one RTL bootrom source and one replacement netlist"
+                )
+            contents = contents.replace(replaced_netlist, original_netlist)
+
+        bootrom_sources = (
+            (original_netlist,) if use_original_bootrom
+            else (rtl_bootrom, replaced_netlist)
+        )
+        required_sources = bootrom_sources + (
             "/hw/hemaia/hemaia_mem_system/hemaia_mem_chip.sv",
             "/target/sim/testharness/testharness.sv",
         )
@@ -1034,10 +1074,17 @@ class HeMAiASimRunner:
             "/target/rtl/src/occamy_chip.sv",
             "/target/rtl/src/hemaia.sv",
         )
-        unexpected = [source for source in compute_rtl_sources if source in contents]
+        excluded_bootrom_sources = (
+            (rtl_bootrom, replaced_netlist) if use_original_bootrom
+            else (original_netlist,)
+        )
+        unexpected = [
+            source for source in compute_rtl_sources + excluded_bootrom_sources
+            if source in contents
+        ]
         if unexpected:
             raise ValueError(
-                f"Prepared {engine} netlist input also selects compute-chip RTL in "
+                f"Prepared {engine} netlist input selects conflicting sources in "
                 f"{path}: {unexpected}"
             )
         return contents
@@ -1732,6 +1779,7 @@ class HeMAiASimRunner:
             "with_d2d": self.with_d2d,
             "with_pll": self.with_pll,
             "build_sw_fleet": self.build_sw_fleet,
+            "use_original_bootrom": self.use_original_bootrom,
             "platform": {
                 "compute_coordinates": [list(coordinate) for coordinate in layout.coordinates],
                 "compute_bank_count": layout.compute_bank_count,
@@ -1836,6 +1884,8 @@ class HeMAiASimRunner:
         prepared_settings = manifest.get("settings")
         if not isinstance(prepared_settings, dict):
             raise ValueError("Preparation manifest has invalid settings")
+        # Existing handoffs always used the RTL replacement.
+        prepared_settings.setdefault("use_original_bootrom", False)
 
         requested_settings = {
             "cfg": self._portable_path(self._repo_path(self.cfg)),
@@ -1845,6 +1895,7 @@ class HeMAiASimRunner:
             "with_d2d": self.with_d2d,
             "with_pll": self.with_pll,
             "build_sw_fleet": self.build_sw_fleet,
+            "use_original_bootrom": self.use_original_bootrom,
         }
         prepared_request = {
             name: prepared_settings.get(name) for name in requested_settings

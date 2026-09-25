@@ -22,6 +22,28 @@ target/tapeout/HeMAiAv2_tapeout/helper_shell_script/6.2_compile_run_netlist_ci.s
   --hardware 1c --engine vcs
 ```
 
+By default, simulation replaces the synthesized boot ROM with the generated
+RTL boot ROM. To use the original boot ROM embedded in the mapped netlist, add
+`--use-original-bootrom` to both preparation and backend simulation:
+
+```sh
+python3 -u target/sim/automation/ci/netlist_ci/run_netlist_ci.py \
+  --hardware 2c --phase prepare --waveform 0 --use-original-bootrom
+
+target/tapeout/HeMAiAv2_tapeout/helper_shell_script/6.2_compile_run_netlist_ci.sh \
+  --hardware 2c --engine vcs --use-original-bootrom \
+  --netlist /path/to/hemaia_mapped.v
+```
+
+The `6.1_prepare_netlist_ci.sh` helper also accepts this flag. Preparation omits
+the RTL boot ROM from both simulator file lists; step 6.2 copies the raw netlist
+unchanged to `outputs/hemaia_mapped_original_bootrom.v`. This uses the ROM
+contents fixed at synthesis. The preparation manifest records the selection
+and rejects a simulation request with a different selection. Existing handoffs
+without a boot ROM setting retain the default RTL replacement behavior.
+The original ROM also retains its synthesized boot behavior: the checked-in
+`bootrom_chip` firmware waits for a UART menu selection (`7` to continue booting).
+
 The supported profiles reuse main's categorized local-CI task lists directly:
 
 | `--hardware` | Tapeout cfg | Categorized suite | Tasks |
