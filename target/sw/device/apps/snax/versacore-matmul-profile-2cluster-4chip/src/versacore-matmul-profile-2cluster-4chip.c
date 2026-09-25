@@ -105,42 +105,48 @@ int main() {
                 // Poll until Streamer and GEMM accelerator finish
                 wait_versacore_and_streamer();
 
-        printf(
-            "Array shape: %d, meshRow %d, tileSize %d, meshCol %d, stationary: "
-            "%d, SNAX GEMM Matmul: %s.\n",
-            array_shape, meshRow, tileSize, meshCol, stationary);
+                // printf(
+                //     "Array shape: %d, meshRow %d, tileSize %d, meshCol %d, stationary: "
+                //     "%d.\n",
+                //     array_shape, meshRow, tileSize, meshCol, stationary);
 
-        // Result check
-        if (quantization_enable == 0 && int32tofp16_enable == 0)
-            err += check_versacore_result_D32((int32_t *)local_d, (int32_t *)D,
-                                              d_data_length, false);
-        else if (quantization_enable == 1 && int32tofp16_enable == 0) {
-            err += check_versacore_result_D32(
-                (int8_t *)local_d, (int8_t *)D_quantized, d_data_length, false);
-        } else if (int32tofp16_enable == 1) {
-            err += check_versacore_result_D32((int8_t *)local_d,
-                                              (int8_t *)D_int32tofp16,
-                                              d_data_length, false);
-        }
+                // Result check
+                if (quantization_enable == 0 && int32tofp16_enable == 0)
+                    err += check_versacore_result_D32((int32_t *)local_d, (int32_t *)D,
+                                                    d_data_length, false);
+                else if (quantization_enable == 1 && int32tofp16_enable == 0) {
+                    err += check_versacore_result_D32(
+                        (int8_t *)local_d, (int8_t *)D_quantized, d_data_length, false);
+                } else if (int32tofp16_enable == 1) {
+                    err += check_versacore_result_D32((int8_t *)local_d,
+                                                    (int8_t *)D_int32tofp16,
+                                                    d_data_length, false);
+                }
+
+                // printf(
+                //     "Cluster %d Array shape: %d, meshRow %d, tileSize %d, "
+                //     "meshCol %d, stationary: %d, SNAX GEMM Matmul: %s, "
+                //     "Error: %d.\n",
+                //     snrt_cluster_idx(), array_shape, meshRow, tileSize,
+                //     meshCol, stationary, err ? "FAIL" : "PASS", err);
 
                 printf(
-                    "Cluster %d Array shape: %d, meshRow %d, tileSize %d, "
-                    "meshCol %d, stationary: %d, SNAX GEMM Matmul: %s, "
+                    "Cluster %d Array shape: %d, "
                     "Error: %d.\n",
-                    snrt_cluster_idx(), array_shape, meshRow, tileSize,
-                    meshCol, stationary, err ? "FAIL" : "PASS", err);
+                    snrt_cluster_idx(), array_shape, err);
 
                 int32_t gemmx_cycles = read_versacore_perf_counter();
                 int32_t gemmx_streamer_cycles =
                     read_versacore_streamer_perf_counter();
-                printf("Cluster %d Workload size: M = %d, N = %d, K = %d\n",
-                       snrt_cluster_idx(), M, N, K);
-                printf("Cluster %d SNAX GEMM Ideal cycles: %d\n",
-                       snrt_cluster_idx(), M * K * N);
-                printf("Cluster %d SNAX GEMM cycles: %d\n",
-                       snrt_cluster_idx(), gemmx_cycles);
-                printf("Cluster %d SNAX GEMM Streamer cycles: %d\n",
-                       snrt_cluster_idx(), gemmx_streamer_cycles);
+                // printf("Cluster %d Workload size: M = %d, N = %d, K = %d\n",
+                //        snrt_cluster_idx(), M, N, K);
+                // printf("Cluster %d SNAX GEMM Ideal cycles: %d\n",
+                //        snrt_cluster_idx(), M * K * N);
+                // printf("Cluster %d SNAX GEMM cycles: %d\n",
+                //        snrt_cluster_idx(), gemmx_cycles);
+                // printf("Cluster %d SNAX GEMM Streamer cycles: %d\n",
+                //        snrt_cluster_idx(), gemmx_streamer_cycles);
+
             }
         }
 
