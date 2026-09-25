@@ -545,6 +545,41 @@ def parse_tasks(task_yaml: Path) -> List[Dict[str, str]]:
     return tasks
 
 
+def select_prepared_task_indices(
+    prepared_parameters: List[Dict[str, str]],
+    requested_tasks: List[Dict[str, str]],
+    *,
+    allow_subset: bool = False,
+) -> List[int]:
+    """Match tasks to their original handoff positions without reindexing."""
+    if not allow_subset:
+        if prepared_parameters != requested_tasks:
+            raise ValueError(
+                "Task selection differs from preparation; use --task to select "
+                "one prepared task, or rerun preparation for the requested suite"
+            )
+        return list(range(len(prepared_parameters)))
+
+    indices: List[int] = []
+    for task in requested_tasks:
+        matches = [
+            idx for idx, prepared in enumerate(prepared_parameters)
+            if prepared == task
+        ]
+        name = task.get("ci_name", "<unnamed>")
+        if not matches:
+            raise ValueError(
+                f"Task {name!r} was not prepared with these parameters; "
+                "rerun preparation to include it"
+            )
+        if len(matches) != 1:
+            raise ValueError(f"Task {name!r} is ambiguous in the preparation manifest")
+        if matches[0] in indices:
+            raise ValueError(f"Task {name!r} was requested more than once")
+        indices.append(matches[0])
+    return indices
+
+
 # ---------------------------------------------------------------------------
 # Shared CLI argument parsers
 # ---------------------------------------------------------------------------
@@ -1867,6 +1902,8 @@ class HeMAiASimRunner:
     def validate_preparation_manifest(
         self,
         tasks: List[Dict[str, str]],
+        *,
+        allow_task_subset: bool = False,
     ) -> Tuple[Path, List[Tuple[Path, str]]]:
         """Validate a preparation hand-off and reconstruct existing task dirs."""
         manifest_path = self.output_dir / PREPARATION_MANIFEST
@@ -1880,6 +1917,19 @@ class HeMAiASimRunner:
                 f"Unsupported preparation manifest version in {manifest_path}: "
                 f"{manifest.get('schema_version')!r}"
             )
+
+        prepared_tasks = manifest.get("tasks", [])
+        if not isinstance(prepared_tasks, list) or not all(
+            isinstance(entry, dict)
+            and isinstance(entry.get("parameters"), dict)
+            and isinstance(entry["parameters"].get("ci_name"), str)
+            for entry in prepared_tasks
+        ):
+            raise ValueError("Preparation manifest has invalid task metadata")
+        prepared_parameters = [entry["parameters"] for entry in prepared_tasks]
+        selected_indices = select_prepared_task_indices(
+            prepared_parameters, tasks, allow_subset=allow_task_subset,
+        )
 
         prepared_settings = manifest.get("settings")
         if not isinstance(prepared_settings, dict):
@@ -2043,21 +2093,22 @@ class HeMAiASimRunner:
             if not path.is_file():
                 raise FileNotFoundError(f"Backend compiler source is unavailable: {path}")
 
-        prepared_tasks = manifest.get("tasks", [])
-        prepared_parameters = [entry.get("parameters") for entry in prepared_tasks]
-        if prepared_parameters != tasks:
-            raise ValueError("Task list changed after preparation")
-        tasks_info = [
+        # Task-directory indices belong to preparation, so selecting one task
+        # from a full suite must retain its original index (for example 3).
+        # Keep validating the complete handoff even when only one task runs.
+        prepared_tasks_info = [
             (self.output_dir / task_dir_name(idx, task["ci_name"]), task["ci_name"])
-            for idx, task in enumerate(tasks)
+            for idx, task in enumerate(prepared_parameters)
         ]
         if (
             self.enforce_preparation_hashes
-            and self._task_hex_state(tasks, tasks_info) != prepared_tasks
+            and self._task_hex_state(prepared_parameters, prepared_tasks_info)
+            != prepared_tasks
         ):
             raise ValueError("Staged application/mempool hex changed after preparation")
 
         print(f"Validated preparation manifest: {manifest_path}")
+        tasks_info = [prepared_tasks_info[idx] for idx in selected_indices]
         return manifest_path, tasks_info
 
     def _backend_dependency_hashes(self, manifest_path: Path) -> Dict[str, str]:
@@ -2153,6 +2204,7 @@ class HeMAiASimRunner:
         *,
         phase: str = "all",
         prepare_engines: Sequence[str] = ("vcs", "vsim"),
+        allow_task_subset: bool = False,
     ) -> Path:
         """Run ``all``, preparation-only, or backend simulation-only.
 
@@ -2161,6 +2213,8 @@ class HeMAiASimRunner:
         reset/clean step.  It generates all software, hex, testbench, and
         compiler inputs without accessing the mapped netlist or technology
         source files; those are supplied and validated by step 6.2.
+        ``allow_task_subset`` lets simulation select existing prepared tasks
+        while retaining their original directories and full handoff validation.
         """
         if phase not in ("all", "prepare", "simulate"):
             raise ValueError(f"Unknown phase {phase!r}; choose all, prepare, or simulate")
@@ -2177,14 +2231,18 @@ class HeMAiASimRunner:
         )
 
         if phase == "simulate":
-            manifest_path, tasks_info = self.validate_preparation_manifest(tasks)
+            manifest_path, tasks_info = self.validate_preparation_manifest(
+                tasks, allow_task_subset=allow_task_subset,
+            )
             backend_dependency_state = self.snapshot_backend_dependencies(manifest_path)
             self._ensure_engine_available()
             _install_cleanup_handlers()
             print("[Backend 1/5] Compiling the prepared simulation model")
             self.compile_simulation(prepared_inputs=True)
             print("[Backend 2/5] Revalidating immutable preparation inputs")
-            _, tasks_info = self.validate_preparation_manifest(tasks)
+            _, tasks_info = self.validate_preparation_manifest(
+                tasks, allow_task_subset=allow_task_subset,
+            )
             self.validate_backend_dependencies_unchanged(
                 manifest_path, backend_dependency_state
             )
