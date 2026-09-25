@@ -44,21 +44,24 @@ without a boot ROM setting retain the default RTL replacement behavior.
 The original ROM also retains its synthesized boot behavior: the checked-in
 `bootrom_chip` firmware waits for a UART menu selection (`7` to continue booting).
 
-To prepare and launch just one workload, pass `--task NAME` to both phases.
-For example, `io_drive_strength` is a small host-only register test that can
+To launch just one workload from an existing full-suite preparation, add
+`--task NAME` only to step 6.2; no new preparation is needed. For example,
+`io_drive_strength` is a small host-only register test that can
 provide the application image while you interact with the original boot ROM:
 
 ```sh
 python3 -u target/sim/automation/ci/netlist_ci/run_netlist_ci.py \
   --hardware 2c --phase prepare --waveform 0 \
-  --use-original-bootrom --task io_drive_strength
+  --use-original-bootrom
 
 target/tapeout/HeMAiAv2_tapeout/helper_shell_script/6.2_compile_run_netlist_ci.sh \
   --hardware 2c --engine vcs --netlist /path/to/hemaia_mapped.v \
   --use-original-bootrom --task io_drive_strength --max-sim-jobs 1
 ```
 
-The `6.1_prepare_netlist_ci.sh` helper also accepts `--task NAME`. Names can be
+To build only one workload in a new preparation, pass the same `--task NAME`
+to preparation and simulation. The `6.1_prepare_netlist_ci.sh` helper also
+accepts `--task NAME`. Names can be
 the full CI task name, or a workload/device application name that matches
 exactly one task in the selected hardware profile. List the full names without
 building or launching anything:
@@ -69,10 +72,15 @@ python3 target/sim/automation/ci/netlist_ci/run_netlist_ci.py \
 ```
 
 Omitting `--task` retains the full suite. `--max-sim-jobs 1` only sets concurrency;
-it does not limit the total number of tasks. Re-run preparation with `--task`
-before simulating a single task: an existing full-suite handoff cannot be used
-with a different selection. Preparation replaces the active handoff and its
-task directories. The selected task is stored as `task_0_<full_task_name>`.
+it does not limit the total number of tasks. Simulation can select any task
+already present in the preparation manifest, and keeps that task's existing
+directory and index. For `2c`, `io_drive_strength` uses
+`task_3_host_only_single_chip_io_drive_strength` after full-suite preparation,
+or `task_0_host_only_single_chip_io_drive_strength` after preparation with that
+task alone. To run tasks that were not prepared, re-run preparation with the
+desired selection (omit `--task` for the full suite). Preparation replaces the
+active handoff and its task directories. Keep the same hardware and boot ROM
+settings between preparation and simulation.
 
 One task launches one simulator containing all compute chips in the hardware
 profile. Each chip's original ROM still waits for UART input; task selection

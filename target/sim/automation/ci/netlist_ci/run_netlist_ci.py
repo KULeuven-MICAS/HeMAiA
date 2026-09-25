@@ -189,7 +189,7 @@ def parse_args() -> argparse.Namespace:
         "--task",
         metavar="NAME",
         help="prepare/run only this task: full name or unique workload/device "
-        "app name (use the same selection for prepare and simulate)",
+        "app name (simulate can select one task from a full-suite preparation)",
     )
     parser.add_argument(
         "--list-tasks",
@@ -277,7 +277,10 @@ def main() -> None:
         use_original_bootrom=args.use_original_bootrom,
     )
     try:
-        result_path = runner.run(tasks, phase=args.phase)
+        run_options = {}
+        if args.phase == "simulate" and args.task is not None:
+            run_options["allow_task_subset"] = True
+        result_path = runner.run(tasks, phase=args.phase, **run_options)
     except SimulationSuiteFailed as error:
         print(f"ERROR: {error}", file=sys.stderr)
         raise SystemExit(1) from None
