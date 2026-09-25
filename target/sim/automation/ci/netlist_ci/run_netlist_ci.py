@@ -127,6 +127,28 @@ def validate_hardware_profile(cfg_path: Path, profile: HardwareProfile) -> None:
         )
 
 
+def select_tasks(
+    tasks: list[dict[str, str]], selector: str | None,
+) -> list[dict[str, str]]:
+    """Select exactly one supported task by its full name or a unique alias."""
+    if selector is None:
+        return tasks
+    matches = [task for task in tasks if task["ci_name"] == selector]
+    if not matches and selector not in ("", "None"):
+        matches = [
+            task for task in tasks
+            if selector in (task.get("workload"), task.get("dev_app"))
+        ]
+    if len(matches) == 1:
+        return matches
+    if not matches:
+        raise ValueError(
+            f"Unknown task {selector!r}; use --list-tasks to see the supported names"
+        )
+    names = ", ".join(task["ci_name"] for task in matches)
+    raise ValueError(f"Ambiguous task {selector!r}; use one full task name: {names}")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Prepare or run a fixed HeMAiA gate-level CI profile."
@@ -162,6 +184,17 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="keep the synthesized boot ROM in the mapped netlist instead of "
         "the RTL replacement (use the same flag for prepare and simulate)",
+    )
+    parser.add_argument(
+        "--task",
+        metavar="NAME",
+        help="prepare/run only this task: full name or unique workload/device "
+        "app name (use the same selection for prepare and simulate)",
+    )
+    parser.add_argument(
+        "--list-tasks",
+        action="store_true",
+        help="list supported task names for --hardware and exit without building",
     )
     parser.add_argument(
         "-j",
@@ -204,12 +237,26 @@ def main() -> None:
     if not task_yaml.is_file():
         raise FileNotFoundError(f"Netlist task profile does not exist: {task_yaml}")
 
+    available_tasks = parse_tasks(task_yaml)
+    try:
+        tasks = select_tasks(available_tasks, args.task)
+    except ValueError as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        raise SystemExit(2) from None
+    if args.list_tasks:
+        for task in tasks:
+            print(task["ci_name"])
+        return
+
     print(
         f"Netlist hardware {args.hardware}: cfg={profile.cfg}, "
         f"clusters={len(profile.clusters)}, tasks={profile.task_yaml}, "
         "main_memory=128KiB/16x1024x64, "
-        f"bootrom={'original' if args.use_original_bootrom else 'rtl'}"
+        f"bootrom={'original' if args.use_original_bootrom else 'rtl'}, "
+        f"selected_tasks={len(tasks)}/{len(available_tasks)}"
     )
+    if args.task is not None:
+        print(f"Selected task: {tasks[0]['ci_name']}")
     runner = HeMAiASimRunner(
         repo_root=_REPO_ROOT,
         output_dir=_SCRIPT.parent,
@@ -230,7 +277,7 @@ def main() -> None:
         use_original_bootrom=args.use_original_bootrom,
     )
     try:
-        result_path = runner.run(parse_tasks(task_yaml), phase=args.phase)
+        result_path = runner.run(tasks, phase=args.phase)
     except SimulationSuiteFailed as error:
         print(f"ERROR: {error}", file=sys.stderr)
         raise SystemExit(1) from None

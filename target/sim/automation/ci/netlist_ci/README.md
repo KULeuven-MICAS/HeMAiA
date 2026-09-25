@@ -44,14 +44,50 @@ without a boot ROM setting retain the default RTL replacement behavior.
 The original ROM also retains its synthesized boot behavior: the checked-in
 `bootrom_chip` firmware waits for a UART menu selection (`7` to continue booting).
 
+To prepare and launch just one workload, pass `--task NAME` to both phases.
+For example, `io_drive_strength` is a small host-only register test that can
+provide the application image while you interact with the original boot ROM:
+
+```sh
+python3 -u target/sim/automation/ci/netlist_ci/run_netlist_ci.py \
+  --hardware 2c --phase prepare --waveform 0 \
+  --use-original-bootrom --task io_drive_strength
+
+target/tapeout/HeMAiAv2_tapeout/helper_shell_script/6.2_compile_run_netlist_ci.sh \
+  --hardware 2c --engine vcs --netlist /path/to/hemaia_mapped.v \
+  --use-original-bootrom --task io_drive_strength --max-sim-jobs 1
+```
+
+The `6.1_prepare_netlist_ci.sh` helper also accepts `--task NAME`. Names can be
+the full CI task name, or a workload/device application name that matches
+exactly one task in the selected hardware profile. List the full names without
+building or launching anything:
+
+```sh
+python3 target/sim/automation/ci/netlist_ci/run_netlist_ci.py \
+  --hardware 2c --list-tasks
+```
+
+Omitting `--task` retains the full suite. `--max-sim-jobs 1` only sets concurrency;
+it does not limit the total number of tasks. Re-run preparation with `--task`
+before simulating a single task: an existing full-suite handoff cannot be used
+with a different selection. Preparation replaces the active handoff and its
+task directories. The selected task is stored as `task_0_<full_task_name>`.
+
+One task launches one simulator containing all compute chips in the hardware
+profile. Each chip's original ROM still waits for UART input; task selection
+does not automatically send `3` or `7`. If you send `7`, the preloaded workload
+starts. For VCS, each task's `bin/transcript` is the live simulator log, and
+`bin/uart_chip_X_Y.log` records the corresponding chip's UART output.
+
 The supported profiles reuse main's categorized local-CI task lists directly:
 
 | `--hardware` | Tapeout cfg | Categorized suite | Tasks |
 | --- | --- | --- | ---: |
 | `1c` | `hemaia_tapeout_1c.hjson` | `local_ci/tapeout_1c` | 36 |
 | `1c_simd` | `hemaia_tapeout_1c_simd.hjson` | `local_ci/tapeout_1c_simd` | 41 |
-| `2c` | `hemaia_tapeout_2c.hjson` | `local_ci/tapeout_2c` | 6 |
-| `2c_simd` | `hemaia_tapeout_2c_simd.hjson` | `local_ci/tapeout_2c_simd` | 7 |
+| `2c` | `hemaia_tapeout_2c.hjson` | `local_ci/tapeout_2c` | 14 |
+| `2c_simd` | `hemaia_tapeout_2c_simd.hjson` | `local_ci/tapeout_2c_simd` | 15 |
 
 Each cfg has an explicitly named local-CI suite. Netlist CI does not maintain
 separate task YAML copies, so changes to main's categorized suites automatically
