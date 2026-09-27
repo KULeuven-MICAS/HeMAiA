@@ -17,6 +17,10 @@ module hemaia_mem_chip #(
     parameter int unsigned WideSRAMSize = 32'h100000,
     parameter int unsigned NarrowSRAMBaseAddr = 32'h70000000,
     parameter int unsigned NarrowSRAMSize = 32'h8000,
+    // Simulated HBM on the DRAM port (chip-local 0x1_0000_0000 and up), standing in
+    // for the FPGA's HBM. Simulation only: see hbm/README.md.
+    parameter bit EnableHbm = 1'b1,
+    parameter hemaia_hbm_pkg::hbm_cfg_t HbmCfg = hemaia_hbm_pkg::DefaultHbmCfg,
     // Chip ID Type
     parameter type chip_id_t = logic [7:0],
     // D2D Link Phy Enables
@@ -200,13 +204,38 @@ module hemaia_mem_chip #(
       .axi_narrow_slave_rsp_i (axi_narrow_mem_sys_to_xbar_rsp)
   );
 
-  //////////////////////////////////////////////////////////////////////////////
-  //  HeMAiA Mem Chip DRAM Controller: Reserved for future connection to FPGA //
-  //////////////////////////////////////////////////////////////////////////////
-  // Assign 0 Now for the future usage
+  ////////////////////////////////////////////////////////////////
+  //  HeMAiA Mem Chip DRAM: the FPGA's HBM, simulated for now  //
+  ////////////////////////////////////////////////////////////////
+  // The wide xbar sends everything from chip-local 0x1_0000_0000 up here. On the FPGA
+  // this port goes to the HBM controller; in simulation to hemaia_hbm_model, which
+  // answers SLVERR above HbmCfg.base + HbmCfg.size.
   axi_a48_d512_i6_u1_req_t  axi_wide_xbar_to_dram_req;
   axi_a48_d512_i6_u1_resp_t axi_wide_xbar_to_dram_rsp;
-  assign axi_wide_xbar_to_dram_rsp = '0;
+
+  if (EnableHbm) begin : gen_hbm
+    // The xbar rule below starts the DRAM port at 0x1_0000_0000: an HBM based lower
+    // would never see the addresses under that.
+    if (HbmCfg.base < 40'h1_0000_0000) begin : gen_bad_base
+      $fatal(1, "HbmCfg.base must be at least 0x1_0000_0000, the start of the DRAM port");
+    end
+    hemaia_hbm_model #(
+        .Cfg           (HbmCfg),
+        .AddrWidth     (48),
+        .DataWidth     (512),
+        .IdWidth       (6),
+        .LocalAddrWidth(40),
+        .axi_req_t     (axi_a48_d512_i6_u1_req_t),
+        .axi_rsp_t     (axi_a48_d512_i6_u1_resp_t)
+    ) i_hbm (
+        .clk_i    (clk_host),
+        .rst_ni   (rst_host_n),
+        .axi_req_i(axi_wide_xbar_to_dram_req),
+        .axi_rsp_o(axi_wide_xbar_to_dram_rsp)
+    );
+  end else begin : gen_no_hbm
+    assign axi_wide_xbar_to_dram_rsp = '0;
+  end
 
   ///////////////////////////////////////////////
   //  IDMA at Mem Chip for the Broadcast Usage //

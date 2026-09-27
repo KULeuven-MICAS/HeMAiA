@@ -66,6 +66,10 @@ Memory chiplets (`hemaia_mem_chip`) sit around the compute chiplet array and
 communicate via the off-chip D2D links. In the real setup, these will be
 implemented on an FPGA; in simulation, they are behavioral models.
 
+Each memory chip has its SRAM (`mem_size`) at chip-local `0x8000_0000` and a simulated
+HBM (16 GiB by default) from `0x1_0000_0000`, loaded from a workload's
+`build/hbm/manifest.txt`. See [hw/hemaia/hemaia_mem_system/hbm/README.md](../../../hw/hemaia/hemaia_mem_system/hbm/README.md).
+
 ```
               north boundary (off-chip mem slots)
           +--------+--------+--------+
@@ -83,7 +87,7 @@ implemented on an FPGA; in simulation, they are behavioral models.
 | `testharness.sv` | `template/testharness.sv.tpl` | Top-level testharness |
 | `dut.sv` | `template/dut.sv.tpl` | DUT: chiplet instances + io_wrapper |
 | `io_wrapper.sv` | `template/io_wrapper.sv.tpl` | D2D routing (direct / interposer) |
-| `util/load_binary.sv` | `template/load_binary.sv.tpl` | Backdoor binary loading tasks |
+| `util/load_binary.sv` | `template/load_binary.sv.tpl` | Backdoor binary loading tasks (SPM, memchip SRAM, memchip HBM) |
 | `util/check_finish.sv` | `template/check_finish.sv.tpl` | Simulation finish monitor |
 
 ## Regenerating

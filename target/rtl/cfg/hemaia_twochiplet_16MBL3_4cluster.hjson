@@ -1,17 +1,47 @@
 {
-    cfg_name: "hemaia_singlechiplet_4cluster",
+    cfg_name: "hemaia_twochiplet_16MBL3_4cluster",
     bender_target: ["cv64a6_imafdc_sv39", "occamy"],
-    // Multi-chip configuration
+    // Two chiplets: one compute chip (4 clusters, 16 MiB L3) and, east of it, the
+    // memory chip with its HBM.
     hemaia_multichip: {
       chip_id_width: 8,             // Not verified, should never be changed
       router_to_soc_iw: 4,          // soc_to_router_iw + clog2(chips)
       soc_to_router_iw: 4,          // Not beneficial for iw > 6
-      single_chip: true,
+      single_chip: false,
+      // Run the memory chip at the host clock, as the tapeout cfgs do. Without this it runs
+      // at 1/20 of the main clock and the SW takes the slow-FPGA D2D path.
+      same_memchip_speed: true,
       testbench_cfg: {
         hemaia_compute_chip: [
           {coordinate: [0,0]}
         ],
-        hemaia_mem_chip: []
+        hemaia_mem_chip: [
+          {
+            coordinate: [1,0],
+            mem_size: 67108864,         // 64 MiB SRAM at chip-local 0x8000_0000
+            // Simulated HBM (hw/hemaia/hemaia_mem_system/hbm); fields and defaults in
+            // docs/schema/hemaia_hbm.schema.json. HBM2e as an AMD FPGA exposes it.
+            hbm: {
+              base: 4294967296,           // 0x1_0000_0000, chip-local
+              size: 17179869184,          // 16 GiB
+              num_channels: 32,           // pseudo-channels (2 stacks x 16)
+              num_banks: 16,              // per pseudo-channel
+              row_bytes: 1024,
+              interleave_bytes: 4096,     // 0: one contiguous range per channel
+              channel_mbps: 25600,        // 64 bit x 3.2 Gb/s per pseudo-channel
+              t_ctrl_ps: 90000,           // controller + PHY + fabric, both ways
+              t_cl_ps: 14000,
+              t_cwl_ps: 7000,
+              t_rcd_ps: 14000,
+              t_rp_ps: 14000,
+              t_refi_ps: 3900000,         // 0: no refresh
+              t_rfc_ps: 350000,
+              max_reads: 64,
+              max_writes: 64
+            }
+          },
+        ],
+        bender_target: ["hemaia_mem_chip"]
       }
     }
     addr_width: 48,

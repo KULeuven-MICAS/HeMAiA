@@ -81,6 +81,23 @@ task automatic load_mem_chip;
     #10ns;
 endtask
 
+// The memory chips' simulated HBM
+// (hw/hemaia/hemaia_mem_system/hbm). Cleared like the SRAM,
+// then filled from the manifest the workload build staged in hbm/ -- or the one
+// +hbm_manifest=<path> names. The files are mapped, not copied, so GiB images load
+// instantly. No manifest: the HBM starts zeroed.
+task automatic load_hbm;
+    string manifest;
+    if (!$value$plusargs("hbm_manifest=%s", manifest)) manifest = "hbm/manifest.txt";
+    $display("-- Loading HBM from %s @%0g ns ---", manifest, $realtime);
+% for mem_chip in mem_chips:
+%   if mem_chip.hbm:
+    i_hemaia_mem_chip_${mem_chip.coordinate[0]}_${mem_chip.coordinate[1]}.gen_hbm.i_hbm.clear();
+    i_hemaia_mem_chip_${mem_chip.coordinate[0]}_${mem_chip.coordinate[1]}.gen_hbm.i_hbm.load_manifest(manifest, ${mem_chip.chip_id});
+%   endif
+% endfor
+endtask
+
 // Load compute-chip on-chip SPM banks.
 task automatic load_main_mem;
     $display("-- Loading Bin to Main Mem @%0g ns ---", $realtime);
@@ -146,6 +163,7 @@ endtask
 task automatic load_binary;
 % if len(mem_chips) > 0:
     load_mem_chip;
+    load_hbm;
 % endif
     load_main_mem;
 endtask

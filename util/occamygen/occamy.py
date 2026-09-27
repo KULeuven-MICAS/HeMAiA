@@ -4,6 +4,7 @@
 
 import subprocess
 import os
+import json
 import sys
 import math
 import tempfile
@@ -11,13 +12,57 @@ import importlib.util
 from pathlib import Path
 import hjson
 from enum import Enum
-from typing import Tuple
+from typing import Optional, Tuple
 from dataclasses import dataclass
 from jsonref import JsonRef
 
 sys.path.append(str(Path(__file__).parent /
                 '../../deps/snitch_cluster/util/clustergen'))
 from cluster import Generator, PMA, PMACfg, SnitchCluster, clog2  # noqa: E402
+
+
+# The simulated HBM of a memory chip (hw/hemaia/hemaia_mem_system/hbm) is the `hbm`
+# object of its hemaia_mem_chip entry in the platform cfg; a chip without one has no
+# HBM. HBM_SCHEMA documents the fields and holds the defaults for the ones an entry
+# leaves out. HBM_SV_FIELDS is their order in hemaia_hbm_pkg::hbm_cfg_t, the struct
+# the testharness passes to hemaia_mem_chip.
+HBM_SCHEMA = Path(__file__).parent / "../../docs/schema/hemaia_hbm.schema.json"
+HBM_SV_FIELDS = (
+    "base", "size", "num_channels", "num_banks", "row_bytes", "interleave_bytes",
+    "channel_mbps", "t_ctrl_ps", "t_cl_ps", "t_cwl_ps", "t_rcd_ps", "t_rp_ps",
+    "t_refi_ps", "t_rfc_ps", "max_reads", "max_writes",
+)
+HBM_WIDE_FIELDS = ("base", "size")  # longint unsigned; the rest are int unsigned
+
+
+def get_mem_chip_hbm_cfg(mem_chip) -> Optional[dict]:
+    """The `hbm` object of one hemaia_mem_chip entry, completed with the schema's
+    defaults; None when the entry has none.
+
+    check_occamy_cfg has validated the object, but it cannot fill the defaults: the
+    schema is reached through a $ref, and jsonschema (4.18+) validates a $ref'd schema
+    that names its own $schema with the plain draft-7 validator, not the
+    default-filling one. So they are taken from the schema file here."""
+    hbm = mem_chip.get("hbm")
+    if hbm is None:
+        return None
+    props = json.loads(HBM_SCHEMA.read_text())["properties"]
+    if set(props) != set(HBM_SV_FIELDS):
+        raise ValueError(f"{HBM_SCHEMA.name} and HBM_SV_FIELDS list different fields: "
+                         f"{sorted(set(props) ^ set(HBM_SV_FIELDS))}")
+    cfg = {k: int(hbm.get(k, props[k]["default"])) for k in HBM_SV_FIELDS}
+    # The one limit the schema cannot state: the chip-local space is 40 bits.
+    if cfg["base"] + cfg["size"] > 1 << 40:
+        raise ValueError(f"HBM [{cfg['base']:#x}, {cfg['base'] + cfg['size']:#x}) of memory "
+                         f"chip {mem_chip['coordinate']} exceeds the 1 TiB chip-local space")
+    return cfg
+
+
+def hbm_cfg_sv(cfg: dict) -> str:
+    """hemaia_hbm_pkg::hbm_cfg_t assignment pattern for `cfg`."""
+    return "'{" + ", ".join(
+        f"{k}: 64'h{v:x}" if k in HBM_WIDE_FIELDS else f"{k}: 32'd{v}"
+        for k, v in cfg.items()) + "}"
 
 
 # Extra CLINT MSIP (software-interrupt) targets beyond the real harts. The bingo HW
@@ -218,6 +263,7 @@ def check_occamy_cfg(occamy_cfg):
                       occamy_root / "docs/schema/axi_tlb.schema.json",
                       occamy_root / "docs/schema/address_range.schema.json",
                       occamy_root / "docs/schema/peripherals.schema.json",
+                      occamy_root / "docs/schema/hemaia_hbm.schema.json",
                       snitch_root / "docs/schema/snitch_cluster.schema.json"]
     generator_obj = Generator(schema, remote_schemas)
     generator_obj.validate(occamy_cfg)
@@ -1326,6 +1372,10 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
     # Memchip total size (external SRAM on the memory chiplet); zero if cfg has no memchip.
     mem_chips = multichip_cfg["testbench_cfg"]["hemaia_mem_chip"]
     mempool_total_size = int(mem_chips[0]["mem_size"]) if mem_chips else 0
+    # The first memchip's simulated HBM; zero size when there is none.
+    hbm_cfg = get_mem_chip_hbm_cfg(mem_chips[0]) if mem_chips else None
+    hbm_base = hbm_cfg["base"] if hbm_cfg else 0
+    hbm_size = hbm_cfg["size"] if hbm_cfg else 0
     # Compute-chiplet grid extents and memchip placement, exported so SW can program the
     # D2D link availability from the cfg instead of a per-topology hardcoded switch. Same
     # derivation the testharness uses (get_testharness_kwargs): max(coord) + 1 per axis.
@@ -1378,6 +1428,8 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
         "cluster_addr_width": cluster_addr_width,
         "cluster_base_addr": hex(cluster_base_addr),
         "mempool_total_size": hex(mempool_total_size),
+        "hbm_base": hex(hbm_base),
+        "hbm_size": hex(hbm_size),
         "rom_size": hex(rom_size),
         "nr_chiplets_x": nr_chiplets_x,
         "nr_chiplets_y": nr_chiplets_y,
@@ -1435,6 +1487,15 @@ def get_testharness_kwargs(occamy_cfg, sim_with_mem_macro, sim_with_interposer, 
         coordinate: Tuple[int, int]  # (x, y)
         type: ChipletType
         size: int = 0  # Only for memory chiplets
+        hbm: Optional[dict] = None  # Memory chiplets: the simulated HBM, None if absent
+
+        @property
+        def chip_id(self) -> int:
+            return (self.coordinate[0] << 4) | self.coordinate[1]
+
+        @property
+        def hbm_sv(self) -> str:
+            return hbm_cfg_sv(self.hbm)
 
     compute_chips = []
     mem_chips = []
@@ -1444,7 +1505,8 @@ def get_testharness_kwargs(occamy_cfg, sim_with_mem_macro, sim_with_interposer, 
         for compute_chip in multichip_cfg["testbench_cfg"]["hemaia_compute_chip"]:
             compute_chips.append(Chiplet(coordinate=(compute_chip["coordinate"][0], compute_chip["coordinate"][1]), type=ChipletType.COMPUTE))
         for mem_chip in multichip_cfg["testbench_cfg"]["hemaia_mem_chip"]:
-            mem_chips.append(Chiplet(coordinate=(mem_chip["coordinate"][0], mem_chip["coordinate"][1]), type=ChipletType.MEMORY, size=mem_chip["mem_size"]))
+            mem_chips.append(Chiplet(coordinate=(mem_chip["coordinate"][0], mem_chip["coordinate"][1]), type=ChipletType.MEMORY, size=mem_chip["mem_size"],
+                                     hbm=get_mem_chip_hbm_cfg(mem_chip)))
     
     # Derive chiplet grid dimensions from compute chip coordinates
     if compute_chips:

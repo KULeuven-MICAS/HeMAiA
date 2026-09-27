@@ -151,6 +151,9 @@ sources:
   # HeMAiA Mem Chip
   - target: hemaia_mem_chip
     files:
+      # Simulated HBM behind the memchip (simulation only, like the memchip itself)
+      - hw/hemaia/hemaia_mem_system/hbm/hemaia_hbm_pkg.sv
+      - hw/hemaia/hemaia_mem_system/hbm/hemaia_hbm_model.sv
       - hw/hemaia/hemaia_mem_system/hemaia_mem_chip_xdma.sv
       - hw/hemaia/hemaia_mem_system/hemaia_mem_chip_xdma_wrapper.sv
       - hw/hemaia/hemaia_mem_system/hemaia_mem_system_for_mem_chip.sv

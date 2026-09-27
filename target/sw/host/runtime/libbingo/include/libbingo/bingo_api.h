@@ -501,6 +501,10 @@ uint64_t bingo_get_mempool_data_base(uint8_t mempool_loc_x, uint8_t mempool_loc_
 uint64_t bingo_get_mempool_heap_manager(uint8_t mempool_loc_x, uint8_t mempool_loc_y);
 uint64_t bingo_mempool_alloc(uint8_t mempool_loc_x, uint8_t mempool_loc_y, uint64_t size);
 void bingo_mempool_free(uint8_t mempool_loc_x, uint8_t mempool_loc_y, uint64_t ptr);
+// The mempool chip's HBM (HBM_SIZE bytes; 0 when the cfg gives it none), as a
+// D2D-transformed address usable from any compute chiplet. Not heap-managed:
+// workloads place their data at fixed offsets, as their HBM manifest loads it.
+uint64_t bingo_get_hbm_base(uint8_t mempool_loc_x, uint8_t mempool_loc_y);
 
 
 // Mailbox read/write functions

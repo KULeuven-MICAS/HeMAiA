@@ -67,6 +67,7 @@ include $(SIM_MKFILE_DIR)/sim.mk
 
 BIN_DIR              ?= bin
 UART_DPI_DIR         ?= $(SIM_MKFILE_DIR)testharness/uartdpi
+HBM_DPI_DIR          ?= $(ROOT)/hw/hemaia/hemaia_mem_system/hbm
 
 #####################
 # Simulator options #
@@ -269,6 +270,8 @@ VLT_FLAGS += -Itestharness  # Include path for testharness utility files
 ###############
 
 TB_CC_SOURCES += $(UART_DPI_DIR)/uartdpi.c
+# Storage of the memchip's simulated HBM (hemaia_hbm_model.sv)
+TB_CC_SOURCES += $(HBM_DPI_DIR)/hemaia_hbm_dpi.cc
 
 TB_CC_FLAGS  = -std=c++17
 TB_CC_FLAGS +=-I$(UART_DPI_DIR)

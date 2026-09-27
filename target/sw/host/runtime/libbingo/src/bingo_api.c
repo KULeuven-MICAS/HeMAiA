@@ -114,6 +114,10 @@ uint64_t bingo_get_mempool_data_base(uint8_t mempool_loc_x, uint8_t mempool_loc_
                                       SPM_WIDE_BASE_ADDR + MEMPOOL_DATA_BASE_OFFSET);
 }
 
+uint64_t bingo_get_hbm_base(uint8_t mempool_loc_x, uint8_t mempool_loc_y){
+    return chiplet_addr_transform_loc(mempool_loc_x, mempool_loc_y, HBM_BASE_ADDR);
+}
+
 uint64_t bingo_get_mempool_heap_manager(uint8_t mempool_loc_x, uint8_t mempool_loc_y){
     return chiplet_addr_transform_loc(mempool_loc_x, mempool_loc_y,
                                       ALIGN_UP(SPM_WIDE_BASE_ADDR, SPM_WIDE_ALIGNMENT) + MEMPOOL_HEAP_BASE_OFFSET);

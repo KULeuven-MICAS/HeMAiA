@@ -1,0 +1,107 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "http://pulp-platform.org/occamy/hemaia_hbm.schema.json",
+  "title": "HeMAiA Memory-Chip HBM",
+  "description": "The simulated HBM of one memory chip (hw/hemaia/hemaia_mem_system/hbm), declared as the `hbm` object of a hemaia_mem_chip entry; a memory chip without one has no HBM. occamygen renders the object into the testharness as hemaia_hbm_pkg::hbm_cfg_t and exports base and size of the first memory chip's HBM to SW as HBM_BASE_ADDR / HBM_SIZE. The defaults are HBM2e as an AMD FPGA exposes it (two stacks of 16 pseudo-channels at 25.6 GB/s, 16 GiB), with latency calibrated to a measured FPGA HBM (Shuhai, FCCM 2020: 106.7 / 122.2 / 137.8 ns row hit / closed / conflict; the model gives 106.5 / 120.5 / 134.5 ns). All times are picoseconds of simulated time, independent of the memory-chip clock.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "base": {
+      "type": "integer",
+      "description": "Chip-local base address. The memory chip's wide xbar sends 0x1_0000_0000 and up to the DRAM port, so the HBM cannot start lower; base + size must not exceed the 40-bit chip-local space (1 TiB). Defaults to 0x1_0000_0000.",
+      "minimum": 4294967296,
+      "default": 4294967296
+    },
+    "size": {
+      "type": "integer",
+      "description": "Capacity in bytes; a multiple of the 64-byte bus width. Defaults to 16 GiB.",
+      "minimum": 64,
+      "multipleOf": 64,
+      "default": 17179869184
+    },
+    "num_channels": {
+      "type": "integer",
+      "description": "Pseudo-channels: independent command and data buses that serve accesses in parallel.",
+      "minimum": 1,
+      "default": 32
+    },
+    "num_banks": {
+      "type": "integer",
+      "description": "Banks per pseudo-channel, each with its own open row.",
+      "minimum": 1,
+      "default": 16
+    },
+    "row_bytes": {
+      "type": "integer",
+      "description": "Row (page) size of one pseudo-channel in bytes.",
+      "minimum": 1,
+      "default": 1024
+    },
+    "interleave_bytes": {
+      "type": "integer",
+      "description": "Consecutive bytes mapped to one pseudo-channel before the next. 4096 keeps every AXI burst (which never crosses 4 KiB) on one channel. 0 gives each channel one contiguous size / num_channels range.",
+      "minimum": 0,
+      "default": 4096
+    },
+    "channel_mbps": {
+      "type": "integer",
+      "description": "Peak data rate of one pseudo-channel in MB/s; sets how long one bus beat occupies its channel.",
+      "minimum": 1,
+      "default": 25600
+    },
+    "t_ctrl_ps": {
+      "type": "integer",
+      "description": "Controller + PHY + fabric latency, request and response path together: the part of every access that is not DRAM. Half is charged before the command, half after the data.",
+      "minimum": 0,
+      "default": 90000
+    },
+    "t_cl_ps": {
+      "type": "integer",
+      "description": "Column read to data (CAS latency).",
+      "minimum": 0,
+      "default": 14000
+    },
+    "t_cwl_ps": {
+      "type": "integer",
+      "description": "Column write to data (CAS write latency).",
+      "minimum": 0,
+      "default": 7000
+    },
+    "t_rcd_ps": {
+      "type": "integer",
+      "description": "Activate to column command: paid by an access to a closed row.",
+      "minimum": 0,
+      "default": 14000
+    },
+    "t_rp_ps": {
+      "type": "integer",
+      "description": "Precharge: paid, on top of t_rcd_ps, by an access to a bank holding another row open.",
+      "minimum": 0,
+      "default": 14000
+    },
+    "t_refi_ps": {
+      "type": "integer",
+      "description": "Refresh interval per pseudo-channel, staggered across channels. 0 disables refresh.",
+      "minimum": 0,
+      "default": 3900000
+    },
+    "t_rfc_ps": {
+      "type": "integer",
+      "description": "Refresh duration: the channel is blocked and its rows are closed afterwards.",
+      "minimum": 0,
+      "default": 350000
+    },
+    "max_reads": {
+      "type": "integer",
+      "description": "Read bursts in flight before the model back-pressures AR.",
+      "minimum": 1,
+      "default": 64
+    },
+    "max_writes": {
+      "type": "integer",
+      "description": "Write bursts in flight before the model back-pressures AW.",
+      "minimum": 1,
+      "default": 64
+    }
+  }
+}

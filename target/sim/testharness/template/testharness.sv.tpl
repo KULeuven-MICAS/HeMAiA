@@ -703,6 +703,11 @@ module testharness;
     hemaia_mem_chip #(
         .WideSRAMBankNum(16),
         .WideSRAMSize(${mem_chip.size}),
+        // Simulated HBM, loaded by load_hbm (util/load_binary_*.sv)
+        .EnableHbm(${1 if mem_chip.hbm else 0}),
+        %if mem_chip.hbm:
+        .HbmCfg(${mem_chip.hbm_sv}),
+        %endif
         .EnableEastPhy(${enable_east}),
         .EnableWestPhy(${enable_west}),
         .EnableNorthPhy(${enable_north}),

@@ -28,6 +28,10 @@
 #define CLUSTER_TCDM_SIZE ${cluster_tcdm_size}
 // Memchip SRAM size from cfg (hemaia_mem_chip[0].mem_size); 0 if absent.
 #define MEMPOOL_TOTAL_SIZE ${mempool_total_size}
+// Memchip HBM (hemaia_mem_chip[0].hbm): chip-local base and size; size 0 if absent.
+// Reach it with chiplet_addr_transform_loc(memchip_x, memchip_y, HBM_BASE_ADDR + off).
+#define HBM_BASE_ADDR ${hbm_base}
+#define HBM_SIZE ${hbm_size}
 
 //===============================================================
 // Mailbox

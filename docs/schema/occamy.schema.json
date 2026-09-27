@@ -338,6 +338,48 @@
       "type": "boolean",
       "description": "Whether to use the vendor PLL or bypass it and use the input clock directly",
       "default": false
+    },
+    "hemaia_multichip": {
+      "title": "HeMAiA Multi-Chip System",
+      "type": "object",
+      "properties": {
+        "testbench_cfg": {
+          "title": "Chiplets on the virtual interposer",
+          "type": "object",
+          "properties": {
+            "hemaia_mem_chip": {
+              "type": "array",
+              "description": "Memory chips (the FPGA memory pool in the real setup) around the compute-chip array.",
+              "items": {
+                "type": "object",
+                "required": [
+                  "coordinate",
+                  "mem_size"
+                ],
+                "properties": {
+                  "coordinate": {
+                    "type": "array",
+                    "description": "Grid position [x, y]; the chip id is (x << 4) | y.",
+                    "items": {
+                      "type": "integer"
+                    },
+                    "minItems": 2,
+                    "maxItems": 2
+                  },
+                  "mem_size": {
+                    "type": "integer",
+                    "description": "Bytes of SRAM at chip-local 0x8000_0000.",
+                    "minimum": 128
+                  },
+                  "hbm": {
+                    "$ref": "http://pulp-platform.org/occamy/hemaia_hbm.schema.json"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   }
 }

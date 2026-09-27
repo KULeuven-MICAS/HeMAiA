@@ -889,6 +889,7 @@ class HeMAiASimRunner:
                 shutil.rmtree(generated)
         for generated in (
             sim_bin / "mempool",
+            sim_bin / "hbm",
             self.repo_root / "target/sim/apps/mempool",
         ):
             if generated.is_dir():
@@ -1339,6 +1340,12 @@ class HeMAiASimRunner:
                     (mempool_dest / f"bank_{bank}.hex").write_text("0\n")
                 mempool_kind = "zero_fallback"
             (mempool_dest / ".image_kind").write_text(f"{mempool_kind}\n")
+
+            # The HBM image is a tree of symlinks into the workload build (it can be
+            # GiBs); keep them links. No image: the testharness leaves the HBM zeroed.
+            generated_hbm = sim_bin / "hbm"
+            if generated_hbm.is_dir():
+                shutil.copytree(generated_hbm, bin_dest / "hbm", symlinks=True)
 
             for subdir in app_subdirs:
                 self._validate_hex_dir(
