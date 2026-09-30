@@ -100,6 +100,42 @@ __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_idma_multi_args {
     uint64_t scratchpad_ptr;
 } __host_bingo_kernel_idma_multi_args_t;
 
+// The weight prefetcher (host_kernel_lib.h): drives the MEMORY chiplet's system iDMA to
+// PUSH every streamed weight chunk into per-cluster rings in this chiplet's L3, each chunk
+// followed by a 64-B flag holding its sequence number, as fast as the clusters release
+// ring slots. Over the half-duplex D2D link a push flows one way; the clusters' own
+// pulls turned the link around for every read request.
+//
+// sched (uint64 words, in L3):
+//   [0..3]   chunks per ring                [4..7]  first entry of each ring
+//   [8 + 4e .. 8 + 4e + 3]  entry e: {src, kind, offset, size}
+//     kind 0: src is the chunk's global address (HBM or the memchip SRAM)
+//     kind 1: a routed expert: src = slot << 8 | field, the address read at run time
+//             from the router's record (rec, in L3) once its last slot has landed
+//
+// BATCHING. The memchip iDMA queues ONE transfer behind the running one, and queuing it
+// takes a register read over the link, which cannot cross while a push streams the other
+// way: every transfer leaves a bubble of a link turnaround plus a round trip (~0.6-0.8 us,
+// measured). With `batch` > 1 the prefetcher waits until up to `batch` consecutive chunks
+// of a ring are free and contiguous (in the source and in the ring: every one but the last
+// fills its slot, no wrap) and pushes them as ONE transfer, then their flags as one more.
+__HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_weight_prefetch_args {
+    uint64_t sched_addr;
+    uint64_t ring_addr;     // ring r slot s at ring_addr + (r * n_slots + s) * slot_bytes
+    uint64_t flag_addr;     // 64 B per (ring, slot)
+    uint64_t release_addr;  // 64 B per (ring, slot), written by the cluster that read it
+    uint64_t seq_addr;      // memchip SRAM: entry k (64 B) holds k
+    uint64_t rec_addr;      // the router's record in L3, 0 when no chunk is routed
+    uint64_t rec_slots;     // slots in the record (the last one's down address is the "ready")
+    uint64_t n_rings;       // <= 4
+    uint64_t n_slots;
+    uint64_t slot_bytes;
+    uint64_t memchip_id;
+    uint64_t batch;         // chunks per push transfer, >= 1 (see BATCHING)
+    uint64_t policy;        // which ring goes next: 0 in turn, 1 the one holding fewest chunks
+    uint64_t scratchpad_ptr;
+} __host_bingo_kernel_weight_prefetch_args_t;
+
 __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_xdma_1d_copy_args {
     uint64_t src_addr;
     uint64_t dst_addr;
