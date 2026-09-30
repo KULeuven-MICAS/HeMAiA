@@ -358,6 +358,7 @@ module hemaia_mem_system_for_mem_chip #(
       .clk_i,
       .rst_ni,
       .req_i(wide_mem_req),
+      .level_i('0),
       .rsp_o(wide_mem_rsp),
       .mem_req_o(sb_req),
       .mem_rsp_i(sb_rsp)
@@ -379,6 +380,10 @@ module hemaia_mem_system_for_mem_chip #(
       .clk_i,
       .rst_ni,
       .req_i(xdma_req),
+      // Every requester at one arbitration level: a plain round robin per bank. The
+      // port arrived with snitch_cluster's graded TCDM arbitration (snax 2239f794), and
+      // these banks have no requester to prioritise.
+      .level_i('0),
       .rsp_o(xdma_rsp),
       .mem_req_o(b_req),
       .mem_rsp_i(b_rsp)

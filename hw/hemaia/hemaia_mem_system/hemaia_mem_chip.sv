@@ -27,7 +27,11 @@ module hemaia_mem_chip #(
     parameter bit EnableEastPhy = 0,
     parameter bit EnableWestPhy = 0,
     parameter bit EnableNorthPhy = 0,
-    parameter bit EnableSouthPhy = 0
+    parameter bit EnableSouthPhy = 0,
+    // The digital (host / memory / link) clock divider of the master clock clk_i; the D2D
+    // PHYs run at clk_i itself. 6 is the long-standing simulation setup (500 MHz master ->
+    // 83 MHz); a 4 GHz master with 8 gives the 500 MHz / 4 GHz of the real system.
+    parameter int unsigned HostClkDiv = 6
 ) (
     input  logic                 clk_i,
     input  logic                 rst_ni,
@@ -85,13 +89,13 @@ module hemaia_mem_chip #(
 
 
   // Master Clock / clk_i: testharness memchip clock
-  // Clock Channel 0 / clk_o[0]: Mem/control clock = clk_i / 6
+  // Clock Channel 0 / clk_o[0]: Mem/control clock = clk_i / HostClkDiv (6 by default)
   // Clock Channels 1..4 / clk_o[1..4]: D2D TX clocks = clk_i
 
   `AXI_LITE_TYPEDEF_ALL_CT(axi_lite_a48_d32, axi_lite_a48_d32_req_t, axi_lite_a48_d32_rsp_t,
                            logic [47:0], logic [32:0], logic [3:0])
 
-  localparam int HeMAiAMemChipDivision[5] = '{6, 1, 1, 1, 1};
+  localparam int HeMAiAMemChipDivision[5] = '{HostClkDiv, 1, 1, 1, 1};
   localparam int HeMAiAResetDelays[5] = '{default: 3};
 
   logic [4:0] clk_vec, rst_n_vec;
