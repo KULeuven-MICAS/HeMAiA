@@ -233,7 +233,9 @@ SNAX_GEMM_SHAPES_H = $(SW_DIR)/device/runtime/snax/versacore/gemm_shapes.h
 # The stamp below is rewritten at parse time only when the cfg identity changes, so its
 # mtime moves exactly when regeneration is genuinely required.
 SNAX_SW_GEN_STAMP = $(SW_DIR)/.snax_sw_gen_cfg_stamp
-SNAX_CFG_ID := $(abspath $(CFG)):$(shell sha1sum $(CFG) 2>/dev/null | cut -d' ' -f1)
+SNAX_GEMM_CLUSTER  := $(shell python3 -c "import hjson,sys; print(hjson.load(open(sys.argv[1]))['clusters'][0])" $(CFG) 2>/dev/null)
+SNAX_GEMM_HWCFG     = $(SNITCH_ROOT)/target/snitch_cluster/cfg/$(SNAX_GEMM_CLUSTER).hjson
+SNAX_CFG_ID := $(abspath $(CFG)):$(shell sha1sum $(CFG) 2>/dev/null | cut -d' ' -f1):$(shell sha1sum $(SNAX_GEMM_HWCFG) 2>/dev/null | cut -d' ' -f1)
 $(shell [ "$$(cat $(SNAX_SW_GEN_STAMP) 2>/dev/null)" = '$(SNAX_CFG_ID)' ] || \
         printf '%s' '$(SNAX_CFG_ID)' > $(SNAX_SW_GEN_STAMP))
 
@@ -287,8 +289,7 @@ $(SNAX_CORE_ROLES_H): $(SNAX_SW_GEN_MARKER)
 # device app runs. Generating it from the device app left the host fleet compiling against a
 # file that did not exist yet. snax-sw-gen is a prerequisite of `sw`/`single-sw`, so this
 # runs before ANY app, host or device.
-SNAX_GEMM_CLUSTER  := $(shell python3 -c "import hjson,sys; print(hjson.load(open(sys.argv[1]))['clusters'][0])" $(CFG) 2>/dev/null)
-SNAX_GEMM_HWCFG     = $(SNITCH_ROOT)/target/snitch_cluster/cfg/$(SNAX_GEMM_CLUSTER).hjson
+# SNAX_GEMM_CLUSTER / SNAX_GEMM_HWCFG are defined above, with the stamp that covers them.
 SNAX_VALIDATE_SHAPES = $(SW_DIR)/device/runtime/snax/versacore/validate_shapes.py
 
 # Depends on the cfg-identity stamp, not on the hwcfg's mtime, for the reason spelled out
@@ -376,7 +377,8 @@ SINGLE_HOST_APP = $(WORKLOAD)
 else ifeq ($(HOST_APP_TYPE),offload_legacy)
 SINGLE_HOST_APP = offload_legacy_$(CHIP_TYPE)
 else
-SINGLE_HOST_APP = $(HOST_APP_TYPE)_$(CHIP_TYPE)_$(WORKLOAD)
+# a nested WORKLOAD (dsv2/two_chiplet/stage1_rmsnorm) names a flat app, as host/apps/common.mk does
+SINGLE_HOST_APP = $(HOST_APP_TYPE)_$(CHIP_TYPE)_$(subst /,_,$(WORKLOAD))
 endif
 
 single-sw: snax-sw-gen $(PLATFORM_HEADERS) host/runtime/host.ld check-snax-versacore-sync
