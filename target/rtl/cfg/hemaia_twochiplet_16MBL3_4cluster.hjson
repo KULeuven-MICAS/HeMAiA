@@ -11,12 +11,12 @@
       // Run the memory chip at the host clock, as the tapeout cfgs do. Without this it runs
       // at 1/20 of the main clock and the SW takes the slow-FPGA D2D path.
       same_memchip_speed: true,
-      // The real system's clocks: a 4 GHz master (the chip PLL's), the compute chips' host
-      // and clusters and the memory chip's logic at /8 = 500 MHz, every D2D PHY at 4 GHz.
+      // The clocks the dsv2 layer was measured at: a 3.5 GHz master, the compute chips' host
+      // and clusters and the memory chip's logic at /7 = 500 MHz, every D2D PHY at 3.5 GHz.
       sim_clock: {
-        master_mhz: 4000,
-        core_clk_div: 8,
-        memchip_clk_div: 8
+        master_mhz: 3500,
+        core_clk_div: 7,
+        memchip_clk_div: 7
       },
       testbench_cfg: {
         hemaia_compute_chip: [
@@ -247,7 +247,7 @@
     spm_wide: {
       address: 2147483648, // 0x8000_0000
       length: 16777216,    // 16 MiB 0x100_0000
-      banks: 16,
+      banks: 32,
     },
     wide_zero_mem: {
       address: 68719476736, // 0x10_0000_0000
