@@ -9,6 +9,7 @@
 #include "chip_id.h"
 #include "hemaia_clk_rst_controller.h"
 #include "hemaia_d2d_link_peripheral.h"
+#include "occamy.h"  // HEMAIA_SAME_MEMCHIP_SPEED, HEMAIA_CORE_CLK_DIV
 #include "occamy_memory_map.h"
 
 #define CHANNELS_PER_DIRECTION 3
@@ -29,6 +30,15 @@
 
 #ifndef HEMAIA_SAME_MEMCHIP_SPEED
 #define HEMAIA_SAME_MEMCHIP_SPEED 0
+#endif
+
+// The host / cluster divider the link bring-up programs. The link wants the core no faster
+// than 1/7 of the PHY; a platform whose cfg sets sim_clock.core_clk_div (occamy.h) uses that
+// ratio instead -- 8 on a 4 GHz master is the real chip's 500 MHz core and 4 GHz link.
+#if defined(HEMAIA_CORE_CLK_DIV) && HEMAIA_CORE_CLK_DIV > 0
+#define HEMAIA_D2D_INIT_CORE_DIV HEMAIA_CORE_CLK_DIV
+#else
+#define HEMAIA_D2D_INIT_CORE_DIV 7
 #endif
 
 typedef enum {
@@ -778,9 +788,9 @@ inline D2DPhyMode get_d2d_link_phy_mode(D2DDirection direction) {
 // => Host is running at 570MHz and the D2D is running at 4GHz, which is the same as the chip setting
 void hemaia_d2d_link_initialize_4c1m(uint8_t chip_id) {
         // Set the default clock division ratio for the Host and D2D link to avoid CDC issue
-        enable_clk_domain(0, 7);   // host CPU
+        enable_clk_domain(0, HEMAIA_D2D_INIT_CORE_DIV);   // host CPU
         for (uint8_t i = 0; i < N_CLUSTERS_PER_CHIPLET; i++) {
-            enable_clk_domain(1 + i, 7); // cluster i
+            enable_clk_domain(1 + i, HEMAIA_D2D_INIT_CORE_DIV); // cluster i
         }
         enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 1, 1);  // East  D2D PHY 
         enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 2, 1);  // West  D2D PHY
@@ -848,9 +858,9 @@ static inline void hemaia_d2d_link_initialize_grid(uint8_t chip_id) {
 
     // Same clock-domain setup as the fixed-topology routines: host and clusters at /7,
     // all four D2D PHYs at /1, so the core:link ratio matches the RTL's 1/7.
-    enable_clk_domain(0, 7);  // host CPU
+    enable_clk_domain(0, HEMAIA_D2D_INIT_CORE_DIV);  // host CPU
     for (uint8_t i = 0; i < N_CLUSTERS_PER_CHIPLET; i++) {
-        enable_clk_domain(1 + i, 7);  // cluster i
+        enable_clk_domain(1 + i, HEMAIA_D2D_INIT_CORE_DIV);  // cluster i
     }
     enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 1, 1);  // East  D2D PHY
     enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 2, 1);  // West  D2D PHY
@@ -895,6 +905,48 @@ static inline void hemaia_d2d_link_initialize_grid(uint8_t chip_id) {
     }
 }
 
+// Switch this chip's links to DDR: both PHY clock edges carry data, so a 597-bit flit
+// takes 7 PHY cycles instead of 14 -- twice the link bandwidth at the same PHY clock
+// (at 4 GHz: 36.6 GB/s per link instead of 18.3; a 500 MHz digital side caps the flits it
+// can feed at 32 GB/s). BOTH ends of a link must agree, and nothing may cross a link
+// while its two ends disagree, so call this before any D2D traffic.
+//
+// Compute chips switch their own ports (every one runs this). The memory chiplet has no
+// core, so the chip whose EAST port faces it switches the memchip's ports FIRST, over the
+// link: that write leaves in SDR, and the delay lets it land before this chip flips its
+// own side. Its B response is generated when the write leaves this chip, so it proves
+// nothing; the read-back after the local switch, now in DDR both ways, is the proof.
+// Returns 0 on success, -1 if the memchip's register does not read back as written.
+static inline int hemaia_d2d_link_ddr_on_grid(uint8_t chip_id) {
+    const uint8_t x = (uint8_t)(chip_id >> 4);
+    const uint8_t y = (uint8_t)(chip_id & 0x0F);
+    const int east_faces_memchip =
+        (N_MEM_CHIPS > 0) && (MEM_CHIP_LOC_X == N_CHIPLETS_X) &&
+        (x == N_CHIPLETS_X - 1) && (y == MEM_CHIP_LOC_Y);
+    volatile uint32_t* mem_ddr = 0;
+    if (east_faces_memchip) {
+        const uint8_t mem_id = (uint8_t)((MEM_CHIP_LOC_X << 4) | MEM_CHIP_LOC_Y);
+        mem_ddr = (volatile uint32_t*)(uintptr_t)chiplet_addr_transform_full(
+            mem_id, HEMAIA_D2D_LINK_BASE_ADDR +
+                        HEMAIA_D2D_LINK_PHY_DDR_MODE_REGISTER_REG_OFFSET);
+        *mem_ddr = 0x0F;  // all four memchip ports; only the one facing us is connected
+        asm volatile("fence" ::: "memory");
+        delay_cycles(4000);
+    } else {
+        // Every other chip flips its ports at the same moment as the one above: on a grid,
+        // a link between two compute chips must not carry traffic while one end is DDR and
+        // the other still SDR, and the chips leave this function into D2D traffic.
+        delay_cycles(4000);
+    }
+    set_all_d2d_link_phy_mode(D2D_PHY_MODE_DDR);
+    asm volatile("fence" ::: "memory");
+    delay_cycles(1000);
+    if (mem_ddr && ((*mem_ddr & 0x0F) != 0x0F)) {
+        return -1;
+    }
+    return 0;
+}
+
 // Initialize the HeMAiA D2D Link for 1C + 1M topology, set the link topology,
 // multicast domain, and clock division according to the chip ID.
 // We also need to configure the clk div ratio between the core and the D2D link to avoid the CDC issue
@@ -905,9 +957,9 @@ static inline void hemaia_d2d_link_initialize_grid(uint8_t chip_id) {
 // => Host is running at 570MHz and the D2D is running at 4GHz, which is the same as the chip setting
 void hemaia_d2d_link_initialize_1c1m(uint8_t chip_id) {
         // Set the default clock division ratio for the Host and D2D link to avoid CDC issue
-        enable_clk_domain(0, 7);   // host CPU
+        enable_clk_domain(0, HEMAIA_D2D_INIT_CORE_DIV);   // host CPU
         for (uint8_t i = 0; i < N_CLUSTERS_PER_CHIPLET; i++) {
-            enable_clk_domain(1 + i, 7); // cluster i
+            enable_clk_domain(1 + i, HEMAIA_D2D_INIT_CORE_DIV); // cluster i
         }
         enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 2, 0);  // West  D2D PHY
         enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 3, 0);  // North D2D PHY
