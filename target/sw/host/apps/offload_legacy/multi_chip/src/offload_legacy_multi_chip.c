@@ -19,8 +19,8 @@ int main() {
            current_chip_id >> 4, current_chip_id & 0x0F);
 
     // Bring up the D2D links so cross-chip transfers / barriers work.
-    // Grid-parametric: derives the array extents and the memchip edge from the generated
-    // platform header, so it is correct for any rectangular compute grid. The old
+    // Grid-parametric: programs each port from the generated platform header's
+    // HEMAIA_D2D_PORT_TABLE, so it is correct for any grid of compute and memory chips. The old
     // _4c1m() routine was a switch over the four 2x2 chip ids and left every chip outside
     // that set with all four links marked "available" -- which makes the router forward
     // off-array packets into nothing -- while clearing EAST/SOUTH on 0x11, ports that are
