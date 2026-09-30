@@ -30,6 +30,9 @@ inline bingo_sw_offload_unit_t *get_bingo_sw_offload_unit() {
     return (bingo_sw_offload_unit_t *)&(cls()->bingo_sw_offload_unit);
 }
 
+// First word of a compact task table (host bingo_api.h defines the same value).
+#define BINGO_G2L16_MAGIC 0xB16D0016u
+
 inline bingo_hw_offload_unit_t *get_bingo_hw_offload_unit() {
     return (bingo_hw_offload_unit_t *)&(cls()->bingo_hw_offload_unit);
 }
@@ -269,7 +272,18 @@ inline void bingo_hw_offload_init() {
         // Now we can read the ptrs
         get_bingo_hw_offload_unit()->dev_arg_list_ptr = readw(quad_ctrl_arg_ptr_addr(snrt_cluster_idx()));
         get_bingo_hw_offload_unit()->dev_kernel_list_ptr = readw(quad_ctrl_kernel_ptr_addr(snrt_cluster_idx()));
-        get_bingo_hw_offload_unit()->gid_to_dev_tid_list_ptr = readw(quad_ctrl_global_id_to_dev_id_addr(snrt_cluster_idx()));
+        // Two table formats. The original: one int32 a task, an index into SoC-wide arg and
+        // kernel lists that every cluster holds whole. The compact one
+        // (bingo_hw_scheduler_init_compact) starts with BINGO_G2L16_MAGIC, then one int16 a
+        // task -- its index among THIS cluster's device tasks, whose arg and kernel lists are all
+        // this cluster holds. A 9,104-task graph's tables go from 64.8 KiB of every cluster's L1
+        // to ~25 KiB. The first word of an original table is a task index or -1, never the magic.
+        {
+            const uint32_t g = readw(quad_ctrl_global_id_to_dev_id_addr(snrt_cluster_idx()));
+            const uint32_t fmt16 = readw((uintptr_t)g) == BINGO_G2L16_MAGIC;
+            get_bingo_hw_offload_unit()->gid_to_dev_tid_list_ptr = fmt16 ? g + 4u : g;
+            get_bingo_hw_offload_unit()->gid_table_fmt16 = fmt16;
+        }
         BINGO_PRINTF(1, "[Cluster %d Core %d]: HW offload unit initialized with arg ptr=0x%x, kernel ptr=0x%x, gid to dev tid ptr=0x%x\r\n",
                snrt_cluster_idx(), snrt_cluster_core_idx(),
                get_bingo_hw_offload_unit()->dev_arg_list_ptr,
@@ -283,7 +297,11 @@ inline void bingo_hw_offload_init() {
 
 inline int32_t bingo_hw_offload_get_dev_task_id(uint32_t global_task_id){
     // Get the dev task id from the global task id
-    return (int32_t)readw((uintptr_t)(get_bingo_hw_offload_unit()->gid_to_dev_tid_list_ptr + global_task_id * sizeof(uint32_t)));
+    const bingo_hw_offload_unit_t *u = get_bingo_hw_offload_unit();
+    if (u->gid_table_fmt16)
+        return (int32_t)*(volatile const int16_t *)(uintptr_t)(u->gid_to_dev_tid_list_ptr +
+                                                               global_task_id * sizeof(int16_t));
+    return (int32_t)readw((uintptr_t)(u->gid_to_dev_tid_list_ptr + global_task_id * sizeof(uint32_t)));
 }
 
 inline uint32_t bingo_hw_offload_get_kernel_ptr(uint32_t dev_task_id){
@@ -393,9 +411,13 @@ inline int32_t bingo_hw_offload_manager(){
 }
 
 inline int32_t bingo_offload_manager(){
-    // First wait for the host to finish init
-    while(readw(quad_ctrl_host_init_done_addr()) == 0){
-            // wait for the host to finish init
+    // Wait for the host to finish its init on a word in the L2 comm buffer. Clusters that
+    // stalled forever at this poll (HW-15) had a read in flight when the idle power manager
+    // rewrote their clock divider at start-up; the host now enables the PM only when it has
+    // something to do (bingo_hw_scheduler_init_pm). Polling L2 instead of the quadrant's
+    // AXI-lite host_init_done register keeps the 16 spinning cores off the quadrant bus.
+    volatile comm_buffer_t *cb = get_communication_buffer();
+    while (cb->host_init_done == 0) {
     }
     // Determine whether to use SW offload or HW offload
     // we use the 4th scratch register to indicate the offload type
