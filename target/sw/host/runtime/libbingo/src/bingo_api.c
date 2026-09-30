@@ -45,6 +45,8 @@ int bingo_hemaia_system_mmap_init(){
     //
     // This heap is where bingo_task_create() and the task-descriptor list allocate from, so
     // its size is the hard cap on how large one data-flow graph may be.
+    // The clusters wait on this word (device bingo.h); cleared before they are woken.
+    ((volatile comm_buffer_t *)(uintptr_t)comm_buffer)->host_init_done = 0;
     uint64_t l2_heap_start = ALIGN_UP(comm_buffer + sizeof(comm_buffer_t), BINGO_HEAP_ALIGNMENT);
     uint64_t l2_heap_used  = l2_heap_start - comm_buffer;
     uint64_t l2_heap_size  = NARROW_SPM_SIZE - l2_heap_used - 4096u;
@@ -544,8 +546,15 @@ void bingo_runtime_schedule(bingo_task_t **task_list, uint32_t num_tasks) {
     // We need to set the soc_ctrl_kernel_tab_scratch_addr(3) to 1 to indicate we are using the SW scheduler
     // See target/sw/device/runtime/src/bingo.h for details
     writew(1,      (uintptr_t)chiplet_addr_transform((uint64_t)soc_ctrl_kernel_tab_scratch_addr(3)));
-    // Tell the device that the host init is done
+    // Tell the device that the host init is done and make sure the write has landed.
     writew(1,      (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_host_init_done_addr()));
+    asm volatile("fence" ::: "memory");
+    while (readw((uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_host_init_done_addr())) == 0) {
+    }
+    // The read-back above proves the quadrant is programmed; now release the clusters,
+    // which poll this word in the L2 comm buffer (HW-15, device bingo.h).
+    ((volatile comm_buffer_t *)(uintptr_t)bingo_get_l2_comm_buffer(get_current_chip_id()))
+        ->host_init_done = 1;
     asm volatile("fence" ::: "memory");
     uint8_t current_chip = get_current_chip_id();
     // Count local tasks
@@ -796,8 +805,15 @@ void bingo_hw_scheduler_init_pm(){
             writew(core_power_domain, (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_core_power_domain_addr(idx)));
         }
     }
-    // 6. quad_ctrl_enable_idle_pm_addr: set to 1 to enable idle power management
-    writew(1,                             (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_enable_idle_pm_addr()));
+    // 6. quad_ctrl_enable_idle_pm_addr: enable idle power management ONLY when the idle
+    // and normal levels differ. Enabled, the PM rewrites every cluster domain's clock divider
+    // once as soon as it starts (bingo_hw_manager_pm.sv tracks each domain's level from a
+    // reset value of 0, so every domain looks out of date), and a cluster transaction in
+    // flight across that rewrite is lost: the clusters that were reading at that moment
+    // stalled for good and the layer never started (HW-15: 4 of 7 builds). With
+    // equal levels the PM has nothing to do but that rewrite.
+    writew(BINGO_PM_IDLE_POWER_LEVEL != BINGO_PM_NORMAL_POWER_LEVEL,
+           (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_enable_idle_pm_addr()));
     asm volatile("fence" ::: "memory");
 }
 
@@ -808,6 +824,8 @@ void bingo_hw_scheduler_init_pm(){
 // Then the HW scheduler will read the task list from the memory and schedule the tasks
 // The Host core will also hooked with th ARA core for the simd
 // So its work is just to read the ready queue and write to the done queue when the simd is done
+static void bingo_hw_scheduler_start(uint64_t bingo_hw_scheduler_task_desc_list_base, uint32_t bingo_hw_scheduler_num_task_desc);
+
 void bingo_hw_scheduler_init(uint64_t dev_arg_base_addr, uint64_t dev_kernel_base_addr, uint32_t num_dev_tasks, uint64_t global_task_id_to_dev_task_id_base_addr, uint32_t num_total_tasks, uint64_t bingo_hw_scheduler_task_desc_list_base, uint32_t bingo_hw_scheduler_num_task_desc){
     // We need to set the soc_ctrl_kernel_tab_scratch_addr(3) to 2 to indicate we are using the HW scheduler
     // See target/sw/device/runtime/src/bingo.h for details
@@ -845,6 +863,12 @@ void bingo_hw_scheduler_init(uint64_t dev_arg_base_addr, uint64_t dev_kernel_bas
         writew(ptr_dev_kernel_base,              (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_kernel_ptr_addr(i)));
         writew(ptr_global_id_to_dev_id_base, (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_global_id_to_dev_id_addr(i)));
     }
+    bingo_hw_scheduler_start(bingo_hw_scheduler_task_desc_list_base, bingo_hw_scheduler_num_task_desc);
+}
+
+// The tail both inits share: the power manager, the descriptor list, start, and the release of
+// the clusters.
+static void bingo_hw_scheduler_start(uint64_t bingo_hw_scheduler_task_desc_list_base, uint32_t bingo_hw_scheduler_num_task_desc){
     // Init the power manager
     bingo_hw_scheduler_init_pm();
     // Init the task desc list base and num tasks
@@ -853,9 +877,50 @@ void bingo_hw_scheduler_init(uint64_t dev_arg_base_addr, uint64_t dev_kernel_bas
     writew(bingo_hw_scheduler_num_task_desc,                     (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_num_task_addr()));
     // Start the HW scheduler to load the task list
     writew(1,                             (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_start_bingo_hw_manager_addr()));
-    // Tell the device that the host init is done
+    // Tell the device that the host init is done and make sure the write has landed.
     writew(1,                             (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_host_init_done_addr()));
     asm volatile("fence" ::: "memory");
+    while (readw((uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_host_init_done_addr())) == 0) {
+    }
+    // The read-back above proves the quadrant is programmed; now release the clusters,
+    // which poll this word in the L2 comm buffer (HW-15, device bingo.h).
+    ((volatile comm_buffer_t *)(uintptr_t)bingo_get_l2_comm_buffer(get_current_chip_id()))
+        ->host_init_done = 1;
+    asm volatile("fence" ::: "memory");
+}
+
+void bingo_hw_scheduler_init_compact(uint64_t dev_arg_base_addr, uint64_t dev_kernel_base_addr,
+                                     const uint32_t *cluster_dev_base,
+                                     uint64_t global_task_id_to_local_dev_id_base_addr,
+                                     uint32_t num_total_tasks,
+                                     uint64_t bingo_hw_scheduler_task_desc_list_base,
+                                     uint32_t bingo_hw_scheduler_num_task_desc){
+    writew(2, (uintptr_t)chiplet_addr_transform((uint64_t)soc_ctrl_kernel_tab_scratch_addr(3)));
+    // The magic word, then one int16 a task; whole words, so the DMA copies whole beats' worth.
+    const uint32_t g2l_bytes = ALIGN_UP(4u + num_total_tasks * (uint32_t)sizeof(int16_t), 8u);
+    for (uint32_t i = 0; i < N_CLUSTERS_PER_CHIPLET; i++)
+    {
+        const uint32_t lo = cluster_dev_base[i], n = cluster_dev_base[i + 1] - lo;
+        const uint32_t list_bytes = ALIGN_UP((n ? n : 1u) * (uint32_t)sizeof(uint32_t), 8u);
+        uint64_t ptr_dev_arg_base = bingo_l1_alloc(get_current_chip_id(), i, list_bytes);
+        uint64_t ptr_dev_kernel_base = bingo_l1_alloc(get_current_chip_id(), i, list_bytes);
+        uint64_t ptr_g2l_base = bingo_l1_alloc(get_current_chip_id(), i, g2l_bytes);
+        if (n) {
+            sys_dma_blk_memcpy(get_current_chip_id(), ptr_dev_arg_base,
+                               (uint64_t)chiplet_addr_transform_full(get_current_chip_id(), dev_arg_base_addr) + lo * sizeof(uint32_t),
+                               n * sizeof(uint32_t));
+            sys_dma_blk_memcpy(get_current_chip_id(), ptr_dev_kernel_base,
+                               (uint64_t)chiplet_addr_transform_full(get_current_chip_id(), dev_kernel_base_addr) + lo * sizeof(uint32_t),
+                               n * sizeof(uint32_t));
+        }
+        sys_dma_blk_memcpy(get_current_chip_id(), ptr_g2l_base,
+                           (uint64_t)chiplet_addr_transform_full(get_current_chip_id(), global_task_id_to_local_dev_id_base_addr),
+                           g2l_bytes);
+        writew(ptr_dev_arg_base,    (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_arg_ptr_addr(i)));
+        writew(ptr_dev_kernel_base, (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_kernel_ptr_addr(i)));
+        writew(ptr_g2l_base,        (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_global_id_to_dev_id_addr(i)));
+    }
+    bingo_hw_scheduler_start(bingo_hw_scheduler_task_desc_list_base, bingo_hw_scheduler_num_task_desc);
 }
 
 uint32_t bingo_hw_scheduler(uint64_t* host_arg_list, uint64_t* host_kernel_list, int32_t* global_task_id_to_host_task_id){

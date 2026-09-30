@@ -57,6 +57,13 @@ typedef struct __attribute__((aligned(8))){
     volatile uint32_t sw_barrier_gen;
     volatile uint32_t sw_barrier_release;
     volatile uint32_t sw_barrier_arrive[SW_BARRIER_MAX_CHIPS];
+    // "The host has programmed the quadrant; start offloading." The clusters poll THIS
+    // word, in the narrow SPM, instead of the quadrant's AXI-lite host_init_done register:
+    // a cluster read of that register that collided with the host's write of it was never
+    // answered (HW-15). A memory handles the collision; the AXI-lite peripheral did not.
+    // Zeroed by bingo_hemaia_system_mmap_init() before the clusters are woken, set last by
+    // bingo_hw_scheduler_init() / bingo_runtime_schedule().
+    volatile uint32_t host_init_done;
 } comm_buffer_t;
 
 // ============================================================================
