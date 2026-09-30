@@ -89,6 +89,7 @@ TASK_DESC_CHIP_ID_WIDTH = 8
 # with more tasks than that has nowhere to put the extras. Costs one descriptor field's
 # worth of bits, which the derived container absorbs until it crosses a 64-bit boundary.
 DEFAULT_TASK_ID_WIDTH = 12
+DEFAULT_WAITING_QUEUE_DEPTH = 8
 
 
 def _idx_width(n):
@@ -109,6 +110,13 @@ def bingo_cfg(occamy_cfg):
 def get_bingo_dep_tag_width(occamy_cfg):
     """DepTagWidth for bingo_hw_manager_top, from s1_quadrant.bingo_cfg.dep_tag_width."""
     return int(bingo_cfg(occamy_cfg)["dep_tag_width"])
+
+
+def get_bingo_waiting_queue_depth(occamy_cfg):
+    """WaitingDepCheckQueueDepth for bingo_hw_manager_top, from
+    s1_quadrant.bingo_cfg.waiting_queue_depth. Optional, defaulting to the RTL parameter's own
+    8 so the configs that do not set it are bit-for-bit unchanged."""
+    return int(bingo_cfg(occamy_cfg).get("waiting_queue_depth", DEFAULT_WAITING_QUEUE_DEPTH))
 
 
 def get_bingo_task_id_width(occamy_cfg):
@@ -1157,6 +1165,9 @@ def get_quad_ctrl_kwargs(occamy_cfg, soc_wide_xbar, soc_narrow_xbar, quad_ctrl_s
         # Per-edge dependency tag width of the bingo HW manager (DepTagWidth). Exported to
         # SW as BINGO_DEP_TAG_WIDTH so the task-descriptor packing tracks the RTL width.
         "dep_tag_width": get_bingo_dep_tag_width(occamy_cfg),
+        # The per-(core, cluster) waiting queue the in-order descriptor stream feeds
+        # (WaitingDepCheckQueueDepth); exported to SW as BINGO_WAITING_QUEUE_DEPTH.
+        "waiting_queue_depth": get_bingo_waiting_queue_depth(occamy_cfg),
         # Task-id width (TaskIdWidth). The id space is 2**width and the compiler hands out
         # one id per task, so this caps the graph size; exported to SW as BINGO_TASK_ID_WIDTH.
         "task_id_width": get_bingo_task_id_width(occamy_cfg),
@@ -1337,6 +1348,18 @@ def get_compute_chiplet_ids(occamy_cfg):
     return chiplet_ids
 
 
+def get_sim_clock_cfg(multichip_cfg):
+    """The simulated clocks (hemaia_multichip.sim_clock): the testbench master clock in MHz
+    that the compute chips and the memory chip divide down, the divider software gives the
+    compute chips' host and clusters, and the memory chip's digital divider. Their D2D PHYs
+    run at the master clock. Absent: 500 MHz, the runtime's own dividers (0), memchip /6 --
+    the long-standing simulation setup."""
+    c = multichip_cfg.get("sim_clock", {}) or {}
+    return {"sim_clk_mhz": float(c.get("master_mhz", 500.0)),
+            "core_clk_div": int(c.get("core_clk_div", 0)),
+            "memchip_clk_div": int(c.get("memchip_clk_div", 6))}
+
+
 def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
     multichip_cfg = occamy_cfg["hemaia_multichip"]
     same_memchip_speed = bool(multichip_cfg.get("same_memchip_speed", False))
@@ -1414,6 +1437,7 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
         "hw_manager_dvfs_msip_bit": hw_manager_dvfs_msip_bit,
         "dep_tag_width": get_bingo_dep_tag_width(occamy_cfg),
         "task_id_width": get_bingo_task_id_width(occamy_cfg),
+        "waiting_queue_depth": get_bingo_waiting_queue_depth(occamy_cfg),
         "task_desc_width": task_desc_width,
         "task_desc_words": task_desc_width // TASK_DESC_WORD_BITS,
         "bingo_ncores_hw": nr_cores_per_cluster + 1,
@@ -1437,6 +1461,8 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
         "mem_chip_loc_x": mem_chip_loc_x,
         "mem_chip_loc_y": mem_chip_loc_y,
         "same_memchip_speed": 1 if same_memchip_speed else 0,
+        "core_clk_div": get_sim_clock_cfg(multichip_cfg)["core_clk_div"],
+        "sim_clk_mhz": int(get_sim_clock_cfg(multichip_cfg)["sim_clk_mhz"]),
     }
     return cheader_kwargs
 
@@ -1530,6 +1556,8 @@ def get_testharness_kwargs(occamy_cfg, sim_with_mem_macro, sim_with_interposer, 
         "sim_with_jtag_check": 1 if sim_with_jtag_check else 0,
         "pll_present": pll_present,
         "same_memchip_speed": same_memchip_speed,
+        "sim_clk_mhz": get_sim_clock_cfg(multichip_cfg)["sim_clk_mhz"],
+        "memchip_clk_div": get_sim_clock_cfg(multichip_cfg)["memchip_clk_div"],
         "compute_chips": compute_chips,
         "mem_chips": mem_chips,
         "num_compute_chiplet": num_compute_chiplet,
