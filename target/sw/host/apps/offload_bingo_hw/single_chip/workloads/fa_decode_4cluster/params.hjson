@@ -31,9 +31,23 @@
     // Split 16//4 = 4 KV tiles per cluster; the shards are disjoint and each
     // runs its own softmax recurrence, leaving exactly one cross-cluster fold.
     NKV: 16
-    // Soften the softmax so the monoid's value field folds a real distribution
-    // rather than a column of 1.0 -- see SCORE_SHIFT_EXTRA in main_bingo.py.
-    SCORE_SHIFT_EXTRA: 4
+    // FULL-RANGE INT8 operands and a real softmax TEMPERATURE: P = exp(a * (S - m)).
+    // A full-range score over d = 128 reaches 127^2 * 128 = 2,064,512, 31x past FP16, so the
+    // QK D port converts it as RNE(S * 2^-SCORE_SHIFT) and the softmax takes a' = a * 2^k.
+    // The shift keeps every significant bit (only the exponent moves); before it existed
+    // the operands had to be shrunk to 5 bits. As in the snax reference: the scores have a
+    // standard deviation near 61,000, a = 2^-15 puts a*S at ~1.9 sigma -- soft enough that
+    // l carries a real distribution for the monoid fold, peaked enough that a moving row
+    // maximum gives corr well below 1 and O cannot match unless PV really rescales it --
+    // and k = 14 makes a' exactly 0.5.
+    SCORE_SHIFT: 14
+    SCORE_SHIFT_EXTRA: 0
+    SCORE_SCALE: 0.000030517578125
+    // P8's 64 B blocks 160 B apart, the ping-pong pair nested in one region: PV's two
+    // operand streams then step round TCDM's banks at the same rate (see "THE B PITCH" in
+    // offload_hw_kernels/gemm_fa.h). 0 / 0 is the dense layout.
+    P8_PITCH: 160
+    P8_NEST: 1
     // DECODE. One query position per token, the whole KV cache read for it.
     NQ: 1,
 }

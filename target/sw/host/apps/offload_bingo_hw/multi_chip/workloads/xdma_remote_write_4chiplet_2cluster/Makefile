@@ -1,37 +1,45 @@
 # Cross-chiplet cluster-xDMA remote write into BOTH clusters of a remote chiplet
 # (chip00 cluster0 L1 -> chip10 cluster0 L1 and chip10 cluster1 L1).
-MK_DIR   := $(realpath $(dir $(realpath $(lastword $(MAKEFILE_LIST)))))
+MK_DIR   := $(dir $(realpath $(lastword $(MAKEFILE_LIST))))
 HOST_APP_TYPE = offload_bingo_hw
 CHIP_TYPE     = multi_chip
 WORKLOAD      = xdma_remote_write_4chiplet_2cluster
 DEV_APP       = snax-bingo-offload
-SRCS = ../../src/offload_bingo_hw.c
+# WORKLOAD is this directory's path under workloads/, so the app and repo roots follow from it
+# rather than from a count of "../" levels, which is right for one depth only. The same lines
+# serve a nested workload (WORKLOAD = dsv2/two_chiplet/stage1_rmsnorm, three levels down).
+APP_ROOT  := $(patsubst %/workloads/$(WORKLOAD)/,%,$(MK_DIR))
+ifeq ($(APP_ROOT),$(MK_DIR))
+    $(error WORKLOAD=$(WORKLOAD) is not the path of $(MK_DIR) under workloads/)
+endif
+REPO_ROOT := $(abspath $(APP_ROOT)/../../../../../..)
+SRCS = $(APP_ROOT)/src/offload_bingo_hw.c
 BINGO_HOST ?= 1
 INCL_DEVICE_BINARY ?= 1
 
-DATA_CFG ?= $(MK_DIR)/params.hjson
-DATA_H = $(MK_DIR)/xdma_remote_write_data.h
-OFFLOAD_H = $(MK_DIR)/offload_bingo_hw.h
+DATA_CFG ?= $(MK_DIR)params.hjson
+DATA_H = $(MK_DIR)xdma_remote_write_data.h
+OFFLOAD_H = $(MK_DIR)offload_bingo_hw.h
 BENDER = bender
 SNITCH_ROOT = $(shell $(BENDER) path snitch_cluster)
-PLATFORM_H = $(MK_DIR)/../../../../../../../../target/sw/shared/platform/generated/occamy.h
+PLATFORM_H = $(REPO_ROOT)/target/sw/shared/platform/generated/occamy.h
 # The payload/poison/golden generator is shared with the 1-cluster workload, so
 # the two stay byte-identical; depend on it so an edit there rebuilds this too.
-DATAGEN = $(MK_DIR)/../xdma_remote_write_4chiplet_1cluster/xdma_remote_write_datagen.py
+DATAGEN = $(APP_ROOT)/workloads/xdma_remote_write_4chiplet_1cluster/xdma_remote_write_datagen.py
 
 # The generated header is EMITTED BY the mini_compiler and must match the kernel ABI in
 # device_kernel_args.h. Neither used to be a prerequisite here, so an ABI change silently
 # left every workload whose main_bingo.py had not changed building against a STALE header:
 # the struct gained a field, the generated init code did not set it, and the run wedged
 # mid-pipeline with no build error anywhere. Listing them is what makes that impossible.
-# RECURSIVELY, which it was not: the mini_compiler is a package tree (graph/ kernels/ libs/
+# RECURSIVELY, which it was not: the mini_compiler is a package tree (graph/ mem/ libs/
 # passes/ platform/) and a flat $(wildcard .../*.py) matches only the one module left at the
 # top level. This tracked 1 file out of 52 -- it had stopped being a guard at all.
-BINGO_GEN_DEPS = $(shell find $(MK_DIR)/../../../../../../../../target/sw/host/runtime/libbingo/mini_compiler -name '*.py') \
-                 $(MK_DIR)/../../../../../../../../target/sw/host/runtime/libbingo/include/libbingo/device_kernel_args.h
+BINGO_GEN_DEPS = $(shell find $(REPO_ROOT)/target/sw/host/runtime/libbingo/mini_compiler -name '*.py') \
+                 $(REPO_ROOT)/target/sw/host/runtime/libbingo/include/libbingo/device_kernel_args.h
 
-$(DATA_H) $(OFFLOAD_H): $(MK_DIR)/main_bingo.py $(DATAGEN) $(DATA_CFG) $(PLATFORM_H) $(BINGO_GEN_DEPS)
-	python3 $(MK_DIR)/main_bingo.py \
+$(DATA_H) $(OFFLOAD_H): $(MK_DIR)main_bingo.py $(DATAGEN) $(DATA_CFG) $(PLATFORM_H) $(BINGO_GEN_DEPS)
+	python3 $(MK_DIR)main_bingo.py \
 		--output_dir $(MK_DIR) \
 		--data_h $(DATA_H) \
 		-c $(DATA_CFG) \
@@ -56,4 +64,4 @@ clean: clean-data clean-offload
 gen-data: $(DATA_H)
 gen-offload: $(OFFLOAD_H)
 
-include ../../../../common.mk
+include $(APP_ROOT)/../../common.mk

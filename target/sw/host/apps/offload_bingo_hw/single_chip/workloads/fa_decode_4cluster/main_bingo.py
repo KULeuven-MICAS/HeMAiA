@@ -84,7 +84,8 @@ import _bingo_paths  # noqa: F401,E402  (puts mini_compiler's grouped subdirs on
 from bingo_dfg import BingoDFG                            # noqa: E402
 from bingo_platform import core_roles, guard_cluster_count, parse_platform_cfg  # noqa: E402
 from bingo_node import BingoNode                          # noqa: E402
-from bingo_mem_handle import BingoMemAlloc                     # noqa: E402
+from bingo_mem_handle import (BingoMemAlloc, BingoMemAllocView,   # noqa: E402
+                              BingoMemFixedAddr, BingoMemSymbol)
 from bingo_data_staging import DataStaging                     # noqa: E402
 from sim_golden_models import block_gemm_golden_model     # noqa: E402
 from bingo_kernel_args import (                           # noqa: E402
@@ -93,6 +94,7 @@ from bingo_kernel_args import (                           # noqa: E402
     SnaxBingoKernelXdmaMulticastArgs,
     SnaxBingoKernelXdmaMemsetArgs,
     SnaxBingoKernelSimdFaSoftmaxArgs,
+    SnaxBingoKernelSimdScaleF16Args,
     SnaxBingoKernelGemmFaQkArgs,
     SnaxBingoKernelGemmFaPvArgs,
     SnaxBingoKernelGemmPerfReportArgs,
@@ -559,6 +561,40 @@ NSCORE_WAR = NSCORE
 # scope because two separate blocks in _build_head need it: the m seed and the s16 prefix fill.
 NEG_INF16 = 0xFBFFFBFF
 
+# THE SOFTMAX TEMPERATURE, as a multiplier on the raw INT32 score: P = exp(a*(S - m)) and
+# corr = exp(a*(m_old - m_new)), both on the SIMD's own map at no extra task. params.hjson
+# SCORE_SCALE; a real layer passes 1/(s_q*s_k*sqrt(d)). 1.0 treats the integer score as
+# the logit, which on full-range INT8 operands is a one-hot softmax.
+SCORE_SCALE = 1.0
+
+# THE SCORE'S RANGE, k (params.hjson SCORE_SHIFT): the D port writes the score tile as
+# RNE(S * 2^-k) (Int32ToFp16Converter built with shift: 1, k in 0..14). A full-range INT8
+# score over d = 128 reaches 127^2 * 128 = 2,064,512, 31x past FP16's 65,504, and the
+# converter writes +-Inf past that; with the shift the operands need not be shrunk. A power
+# of two only moves the exponent, so no precision is lost, and the softmax takes the factor
+# back: EXP_SCALE = a * 2^k is what it multiplies the converted scores by. m (and the
+# per-shard m the gather folds) is then in the shifted domain; a*m is the same either way.
+SCORE_SHIFT = 0
+EXP_SCALE = 1.0
+
+# WHERE P8 LANDS (params.hjson P8_PITCH, P8_NEST). The softmax writes P8 as a flat stream
+# and can only choose the stride between its 64 B blocks. Dense (64), PV's k-major B walk
+# steps round the 256 B bank rotation twice as fast as its A walk and the two streams keep
+# colliding; 160 matches their rates. P8_NEST puts the second P buffer of the ping-pong
+# pair P8_NEST_OFF bytes into the first one's region, its blocks in the first one's gaps.
+# See "THE B PITCH" in offload_hw_kernels/gemm_fa.h.
+P8_PITCH = 0
+P8_NEST = False
+P8_NEST_OFF = 96
+
+# THE P HANDOFF AND THE O RESCALE (see simd.h "THE P HANDOFF" / "THE O RESCALE"). Not
+# knobs: without either O is not attention. The softmax writes P already in PV's B layout
+# and exports corr next to it; PV walks P k-major and, from the second KV tile on, scales
+# the O it reads back by that corr on the C read path.
+P_MODE = SnaxBingoKernelSimdFaSoftmaxArgs.EXACT
+PV_KMAJOR = SnaxBingoKernelGemmFaPvArgs.B_KMAJOR
+PV_RESCALE = SnaxBingoKernelGemmFaPvArgs.B_KMAJOR | SnaxBingoKernelGemmFaPvArgs.C_COLSCALE
+
 
 
 
@@ -820,7 +856,8 @@ def _load_params(param):
     kernel's idea of the tile and the descriptors' idea of it from drifting apart.
     """
     global M, K, N, NKV, NQ, BC, BR, DHEAD, S2_M, S2_K, S2_N, QSHIFT, NKV_PER, NCL
-    global DECOMP
+    global DECOMP, SCORE_SCALE, SCORE_SHIFT, EXP_SCALE, P8_PITCH, P8_NEST, MEASURE_ARRAY
+    MEASURE_ARRAY = bool(param.get("MEASURE_ARRAY", MEASURE_ARRAY))
     DECOMP = str(param.get("DECOMP", DECOMP))
     if DECOMP not in ("headpar", "kvsplit"):
         raise ValueError(f"DECOMP={DECOMP!r} must be 'headpar' or 'kvsplit'")
@@ -867,11 +904,27 @@ def _load_params(param):
     S2_M = DHEAD // MESH_ROW
     S2_K = BC // TILE_SIZE
     S2_N = N                   # unchanged: N is Br/meshCol either way
-    QSHIFT = qshift(DHEAD) + int(param.get("SCORE_SHIFT_EXTRA", 0))
+    SCORE_SHIFT = int(param.get("SCORE_SHIFT", 0))
+    if not 0 <= SCORE_SHIFT <= SnaxBingoKernelGemmFaQkArgs.DSHIFT_MAX:
+        raise ValueError(f"SCORE_SHIFT={SCORE_SHIFT}: the D-port converter scales by 2^-k "
+                         f"for k in 0..{SnaxBingoKernelGemmFaQkArgs.DSHIFT_MAX}")
+    QSHIFT = qshift(DHEAD, SCORE_SHIFT) + int(param.get("SCORE_SHIFT_EXTRA", 0))
+    SCORE_SCALE = float(param.get("SCORE_SCALE", 1.0))
+    if not (np.isfinite(SCORE_SCALE) and SCORE_SCALE > 0):
+        raise ValueError(f"SCORE_SCALE={SCORE_SCALE} must be positive and finite")
+    EXP_SCALE = float(np.float32(SCORE_SCALE) * np.float32(2.0 ** SCORE_SHIFT))
+    P8_PITCH = int(param.get("P8_PITCH", 0))
+    P8_NEST = bool(param.get("P8_NEST", 0))
+    pitch = SnaxBingoKernelSimdFaSoftmaxArgs.pitch(P8_PITCH)
+    if P8_NEST and pitch - 64 < P8_NEST_OFF:
+        raise ValueError(f"P8_NEST needs P8_PITCH >= {P8_NEST_OFF + 64} so the other "
+                         f"buffer's blocks fit in the gaps, got {pitch}")
     # Bc IS the beat count of the score tile -- the transposed layout puts one key, all
-    # Br queries, in each 64-B beat -- and the quantiser packs 2:1, so it must be even.
-    if BC % 2:
-        raise ValueError(f"Bc={BC} must be even: the quantiser packs two beats into one")
+    # Br queries, in each 64-B beat -- and the quantiser writes P in PV's B layout by
+    # interleaving FOUR key beats per 32-bit atom, so it must be a multiple of 4.
+    if BC % 4:
+        raise ValueError(f"Bc={BC} must be a multiple of 4: the quantiser interleaves four "
+                         f"key beats into PV's B layout")
     if NKV % NCL:
         raise ValueError(
             f"NKV={NKV} must divide across {NCL} clusters: each cluster owns a disjoint "
@@ -884,113 +937,74 @@ def _load_params(param):
             f"never wrote.")
 
 
-def qshift(d):
+def qshift(d, k=0):
     """How far to bound the INT8 operands so a score cannot leave FP16.
 
-    A score is a sum of d products of two shifted INT8s, so |S| <= (128>>q)^2 * d.
-    Int32ToFp16 SATURATES past 65504 and exp(inf - inf) is NaN, so an overflowing row
-    fails the softmax rather than degrading. Real attention divides by sqrt(d) for the
-    same reason; bounding the operands is cheaper here and needs no extra pass.
+    A score is a sum of d products of two shifted INT8s, so |S| <= (128>>q)^2 * d, and
+    the D port writes S * 2^-k. Int32ToFp16 writes Inf past 65504 and exp(inf - inf) is
+    NaN, so an overflowing row fails the softmax rather than degrading. With the
+    converter's shift (k >= 6 at d = 128) this is 0: full-range operands.
     """
     for q in range(8):
-        if (128 >> q) ** 2 * d <= 65504:
+        if (128 >> q) ** 2 * d <= 65504 * 2 ** k:
             return q
     raise ValueError(f"no INT8 shift keeps d={d} scores inside FP16")
 
 
 
-def build_data(a=None, b=None, v=None, seed=42):
-    """Operands plus the float model of the softmax over ONE shard's tile.
+def _at(handle, nbytes):
+    """The same buffer, `nbytes` further in -- whatever kind of handle it is.
 
-    Follows the hardware's own sequence at the precision each stage works in:
-
-        S       exact INT32 out of the mesh, converted to FP16 on the D32 port
-        m       max over KEYS, per query row
-        P       exp(S16 - m), FP32 internally, stored FP16
-        rowsum  summed over KEYS in the FP32 accumulator, narrowed once to FP16
-
-    Every KV tile inside a shard is fed the SAME K, so the running maximum stops moving
-    after tile 0 and the shard's final m is this tile's m; rowsum likewise.
-
-    The operands are arguments rather than locals so build_shards() can give every cluster
-    a DIFFERENT K while they share one Q and one V -- see the note there on why identical
-    shards would make the cross-cluster fold untestable.
+    A staged array arrives as a SYMBOL on the host path and as a FIXED ADDRESS on the
+    memory-chiplet path, and an L1 buffer as an allocation; all of them have to offset the
+    same way, or the per-tile slicing works on one platform and silently reads tile 0 on
+    the other.
     """
-    rng = np.random.RandomState(seed)
-    # Block operand layouts, as block_gemm_golden_model reads them and as the streamer
-    # descriptors walk them: A is [M][K][meshRow][tileSize], B is [N][K][meshCol][tileSize].
-    if a is None:
-        a = rng.randint(-128, 127, size=M * K * MESH_ROW * TILE_SIZE).astype(np.int8) >> QSHIFT
-    if b is None:
-        b = rng.randint(-128, 127, size=N * K * MESH_COL * TILE_SIZE).astype(np.int8) >> QSHIFT
-    # V for the second matmul: [S2_M][S2_K][meshRow][tileSize]. Its value never reaches a
-    # check (O is a cycle measurement), but it must be a real operand so the matmul does
-    # the work -- a zero V would still take the same cycles, but a denormal-free operand
-    # keeps the array off any slow path.
-    if v is None:
-        v = rng.randint(-128, 127,
-                        size=S2_M * S2_K * MESH_ROW * TILE_SIZE).astype(np.int8) >> QSHIFT
+    if not nbytes:
+        return handle
+    if isinstance(handle, BingoMemAlloc):
+        return handle.view(nbytes)
+    if isinstance(handle, BingoMemAllocView):
+        return BingoMemAllocView(handle.base, handle.offset + nbytes)
+    if isinstance(handle, BingoMemSymbol):
+        return BingoMemSymbol(handle.symbol_name, handle.offset + nbytes)
+    if isinstance(handle, BingoMemFixedAddr):
+        return BingoMemFixedAddr(handle.address + nbytes)
+    raise TypeError(f"cannot offset a {type(handle).__name__}")
 
-    d32 = block_gemm_golden_model(
-        M, K, N, MESH_ROW, TILE_SIZE, MESH_COL, a, b, 0, 0,
-        np.zeros(M * N * MESH_ROW * MESH_COL, dtype=np.int64))
-    # Block order [M][N][meshRow][meshCol] -> [key][query], which is how the D port lays
-    # the tile down (its [4, 8] channel grouping interleaves the two N blocks inside one
-    # key row) and how the SIMD core reads it back.
-    s = np.asarray(d32).reshape(M, N, MESH_ROW, MESH_COL)
-    s = s.transpose(0, 2, 1, 3).reshape(BC, BR)
 
-    s16 = s.astype(np.float16)
-    m = s16.max(axis=0)
-    p = np.exp(s16.astype(np.float32) - m.astype(np.float32)).astype(np.float16)
-    rowsum = p.astype(np.float32).sum(axis=0).astype(np.float16)
+def _f16(x):
+    """Round ONCE to FP16 from whatever wider value it was computed in (numpy rounds a
+    float64 straight to half with round-to-nearest-even, so there is no double rounding)."""
+    with np.errstate(over="ignore", invalid="ignore"):
+        return np.asarray(x, dtype=np.float64).astype(np.float16)
 
-    # O, the accumulated PV output. This is the ONLY quantity that exercises the GEMM's
-    # accumulation: m and rowsum are per-tile values that are IDENTICAL on every tile here,
-    # so a run that drops tiles still passes both of them.
-    #
-    # P leaves the softmax quantised to INT8 -- exp(S-m) is in [0,1], so the baked scale is
-    # 127.0 (BINGO_SIMD_I8_SCALE_UNIT) -- and PV contracts over KEYS: O^T = V^T . P^T.
-    # P goes in with NO permutation, and that is the whole subtlety.
-    #
-    # `s` above is ALREADY the score buffer's memory order. The QK GEMM's D port writes with
-    # a spatial stride of one key row (Dsl = {bw/8, key_row}), which interleaves the two N
-    # blocks as it writes -- "a beat is exactly one key, all Br queries" in gemm_fa.h. So
-    # memory holds [key][query], and the transpose in build_data() is how the golden model's
-    # [M][N][meshRow][meshCol] output is brought INTO that order, not out of it.
-    #
-    # PV then reads that same flat buffer as B = [N][K][meshCol][tileSize]
-    # (Btb = {K, N, M}, Bts = {b_tile, K*b_tile, 0} -- broadcast over M, b_tile = 64 B).
-    # block_gemm_golden_model takes B as a flat array in exactly that convention, so the
-    # quantised [key][query] array IS the operand. Permuting it first yields the right
-    # VALUES in the wrong PLACES.
-    p_b = np.clip(np.rint(p.astype(np.float32) * 127.0),
-                  -128, 127).astype(np.int8).reshape(-1)
-    o_tile = block_gemm_golden_model(
-        S2_M, S2_K, S2_N, MESH_ROW, TILE_SIZE, MESH_COL, v, p_b, 0, 0,
-        np.zeros(S2_M * S2_N * MESH_ROW * MESH_COL, dtype=np.int64))
-    # Every KV tile is fed the same bytes, so m never moves and every correction factor is
-    # exactly 1 -- the accumulator is NKV copies of one tile's contribution.
-    o = np.asarray(o_tile, dtype=np.int64) * NKV_PER
 
-    # ---- and now put O where the D32 port ACTUALLY writes it ---------------------------
-    #
-    # This block is the difference between an O check that passes and one that reports
-    # 3338 of 4096 elements wrong while the hardware is perfectly correct.
-    #
-    # The C/D spatial map is chosen so the FP16 score tile lands row-major -- one key per
-    # 64 B beat, which is what the LANEWISE reduce needs. C and D share those strides and
-    # the INT32 side is twice as wide, so at INT32 the SAME strides do NOT come out
-    # row-major: O lands PERMUTED. That is deliberate and harmless to the arithmetic (C and
-    # D permute identically, so O += P.V still accumulates against itself -- the cluster
-    # cfg says exactly this), but it means a golden in canonical block order is not
-    # comparable with what the host reads back.
-    #
-    # The map is DERIVED from the descriptors, not assumed: the array serialises a
-    # meshRow x meshCol block into chunks of serial_c_d_width, each chunk into channels of
-    # bankWidth, and the AGU places channel i at sl0*(i%4) + sl1*((i/4)%4). Ported from the
-    # reference's data/datagen.py, which is the model that makes the cluster app's own
-    # exact-equality O check pass.
+def _colscale(o, corr):
+    """Int32ColumnScale: y = rne(x * corr[col]), saturated to INT32. Exact in float64: an
+    INT32 times an 11-bit FP16 significand needs 42 bits, and np.rint rounds half to even."""
+    y = np.rint(np.asarray(o, dtype=np.float64) *
+                np.asarray(corr, dtype=np.float16).astype(np.float64)[None, :])
+    return np.clip(y, -2**31, 2**31 - 1).astype(np.int64)
+
+
+def d32_order(o_t):
+    """Canonical O^T [d, Br] -> the INT32 words in the order the D32 port writes them.
+
+    The C/D spatial map is chosen so the FP16 score tile lands row-major -- one key per
+    64 B beat, which is what the LANEWISE reduce needs. C and D share those strides and the
+    INT32 side is twice as wide, so at INT32 the SAME strides do NOT come out row-major: O
+    lands PERMUTED. That is deliberate and harmless to the arithmetic (C and D permute
+    identically, so O += P.V still accumulates against itself -- the cluster cfg says
+    exactly this), but it means a golden in canonical block order is not comparable with
+    what the host reads back.
+
+    The map is DERIVED from the descriptors, not assumed: the array serialises a
+    meshRow x meshCol block into chunks of serial_c_d_width, each chunk into channels of
+    bankWidth, and the AGU places channel i at sl0*(i%4) + sl1*((i/4)%4). Ported from the
+    reference's data/datagen.py, which is the model that makes the cluster app's own
+    exact-equality O check pass.
+    """
     BANK_W, OUT_W, SERIAL_CD = 64, 32, 1024   # bits; snax_versacore_serial_c_d_width
     SBOUNDS = [4, 4]                          # data_reader_writer_params.spatial_bounds[0]
     slstride = [BANK_W // 8, S2_N * MESH_COL * 16 // 8]
@@ -1020,163 +1034,202 @@ def build_data(a=None, b=None, v=None, seed=42):
         return out
 
     # SELF-TEST, and it is the load-bearing part: run the same model at FP16 and it must
-    # reproduce the plain [key][query] row-major layout that `s` above already assumes. If
-    # the serialisation model were wrong this assert fires instead of the golden silently
-    # disagreeing with the hardware.
+    # reproduce the plain [key][query] row-major layout the score tile is known to have.
+    # If the serialisation model were wrong this assert fires instead of the golden
+    # silently disagreeing with the hardware.
     for (mm, nn, r, c), byte in scatter(16, 1, S2_N * 16 * MESH_ROW * MESH_COL // 8, 2).items():
         want = ((mm * MESH_ROW + r) * (S2_N * MESH_COL) + nn * MESH_COL + c) * 2
         assert byte == want, "D32 address model disagrees with the FP16 row-major layout"
 
     ts2 = S2_N * OUT_W * MESH_ROW * MESH_COL // 8
-    o_can = o.reshape(S2_M, S2_N, MESH_ROW, MESH_COL)
-    o_mem = np.zeros(o.size, dtype=np.int64)
-    seen = np.zeros(o.size, dtype=bool)
+    o_t = np.asarray(o_t, dtype=np.int64).reshape(DHEAD, BR)
+    o_mem = np.zeros(o_t.size, dtype=np.int64)
+    seen = np.zeros(o_t.size, dtype=bool)
     for (mm, nn, r, c), byte in scatter(OUT_W, S2_M, ts2, 4).items():
         w = byte // 4
         assert byte % 4 == 0 and not seen[w], "D32 INT32 address map is not a bijection"
         seen[w] = True
-        o_mem[w] = o_can[mm, nn, r, c]
+        o_mem[w] = o_t[mm * MESH_ROW + r, nn * MESH_COL + c]
     assert seen.all(), "D32 INT32 address map does not cover the output"
-    return a, b, v, m, rowsum, o_mem.astype(np.int32)
+    return o_mem.astype(np.int32)
+
+
+def shard_golden(q8, k8_tiles, v8_tiles):
+    """One query tile's (m, l, O) over a run of KV tiles, as the hardware computes it.
+
+    q8        A-layout bytes of Q [Br, d]  (== B layout of Q^T, the score matmul's B)
+    k8_tiles  per KV tile, A-layout bytes of K_t [Bc, d]
+    v8_tiles  per KV tile, A-layout bytes of V_t^T [d, Bc] (PV's A operand)
+
+    Follows the device's own sequence at the precision each stage works in:
+
+        S       exact INT32 out of the mesh, converted to FP16 on the D32 port as
+                RNE(S * 2^-k); every step below works on that, with a' = a * 2^k
+        m_new   max(m_old, max over this tile's KEYS), per query -- exact
+        corr    exp(a * (m_old - m_new)): the difference in FP16, the exponential in FP32
+        P       exp(a * (S - m_new)): EW0 subtracts in FP16, the map exponentiates in FP32
+        rowsum  over KEYS in the FP32 accumulator, narrowed once to FP16
+        P8      sat(rne(P * 127)), written in PV's B layout by the INTERLEAVE quantiser
+        l_new   corr * l_old + rowsum, each step rounded to FP16
+        O       colscale(O, corr) + V^T . P8^T in INT32 -- the C-path scaler, then the MAC
+
+    m is seeded at -65504, l at 0, and PV's first tile reads no C, so tile 0 needs no
+    special case: corr = exp(-inf) = 0 and 0 * l = 0.
+
+    Mirrored from libs/blocks/flash_attention.py:shard_golden, where it is checked against
+    an independent row-major model (unpacked matrices, plain matmuls).
+    """
+    a32 = np.float32(EXP_SCALE)
+    m = np.full(BR, -65504.0, dtype=np.float16)
+    l = np.zeros(BR, dtype=np.float16)
+    o = np.zeros((DHEAD, BR), dtype=np.int64)
+    for k8, v8 in zip(k8_tiles, v8_tiles):
+        d32 = block_gemm_golden_model(
+            M, K, N, MESH_ROW, TILE_SIZE, MESH_COL, np.asarray(k8), np.asarray(q8), 0, 0,
+            np.zeros(M * N * MESH_ROW * MESH_COL, dtype=np.int64))
+        # Block order [M][N][meshRow][meshCol] -> [key][query]: how the D port lays the
+        # tile down (its [4, 4] channel grouping interleaves the two N blocks in one key row).
+        s = np.asarray(d32).reshape(M, N, MESH_ROW, MESH_COL).transpose(0, 2, 1, 3)
+        # Exact: a power of two only moves the exponent, so float64 holds S * 2^-k and
+        # numpy's one rounding to half is the converter's RNE (Inf past 65504, as the RTL).
+        s16 = _f16(s.reshape(BC, BR).astype(np.float64) * 2.0 ** -SCORE_SHIFT)
+        m_new = np.maximum(m, s16.max(axis=0))
+        with np.errstate(over="ignore", invalid="ignore"):
+            delta = _f16(m.astype(np.float64) - m_new.astype(np.float64))
+            corr = _f16(np.exp(a32 * delta.astype(np.float32)))
+            d16 = _f16(s16.astype(np.float64) - m_new.astype(np.float64)[None, :])
+            p16 = _f16(np.exp(a32 * d16.astype(np.float32)))
+        rowsum = _f16(p16.astype(np.float32).sum(axis=0, dtype=np.float32))
+        p8 = np.clip(np.rint(p16.astype(np.float32) * np.float32(127.0)),
+                     -127, 127).astype(np.int8)                          # [key][query]
+        l = _f16(_f16(corr.astype(np.float32) * l.astype(np.float32)).astype(np.float32)
+                 + rowsum.astype(np.float32))
+        # B = P^T [Bc, Br] in B layout: block (n, k) holds P[key = 4k + s][query = 16n + c].
+        p_b = p8.reshape(BC // TILE_SIZE, TILE_SIZE, BR // MESH_COL, MESH_COL) \
+                .transpose(2, 0, 3, 1).reshape(-1)
+        pv = np.asarray(block_gemm_golden_model(
+            S2_M, S2_K, S2_N, MESH_ROW, TILE_SIZE, MESH_COL, np.asarray(v8), p_b, 0, 0,
+            np.zeros(S2_M * S2_N * MESH_ROW * MESH_COL, dtype=np.int64)), dtype=np.int64)
+        pv = pv.reshape(S2_M, S2_N, MESH_ROW, MESH_COL).transpose(0, 2, 1, 3).reshape(DHEAD, BR)
+        o = _colscale(o, corr) + pv
+        m = m_new
+    return m, l, o
+
+
+def scaled_m(m):
+    """What the fold is handed as m: a*m, rounded to FP16 by the SIMD map computing it.
+
+    The monoid junction folds l* = sum exp(m_c - m*) l_c with NO scale, while the softmax
+    computed P = exp(a*(S - m)); so with a temperature the combine must see a*m, or it
+    weights the shards by the wrong power of e. m* then comes back as a*m*. m is the max
+    of the converted scores, S * 2^-k, so the factor is EXP_SCALE = a * 2^k.
+    """
+    return (np.float32(EXP_SCALE) *
+            np.asarray(m, dtype=np.float16).astype(np.float32)).astype(np.float16)
 
 
 def build_shards():
-    """NCL shards with DIFFERENT K, plus the global merge the fabric is supposed to compute.
+    """Random Q, K and V for the whole attention, and every shard's golden (m, l, O).
 
-    Every shard gets its own K and therefore its own (m_c, l_c). That is not incidental:
-    with one shared K -- which is what the single-cluster workload uses, since there the
-    recurrence just repeats one tile -- all four partials are identical, and a fold that
-    silently dropped three of them, or returned the collector's own operand untouched,
-    would produce exactly the right answer. Distinct shards are what make the gather's
-    result evidence that the gather happened.
+    EVERY KV TILE IS DIFFERENT. This workload used to feed every tile the SAME K and V, so
+    the running maximum stopped moving after tile 0, every correction factor was exactly 1,
+    and the O golden could be "one tile times NKV_PER". That same data hid two real bugs:
+    PV read P in the wrong layout (a golden built the same wrong way agreed with it) and O
+    was never rescaled across tiles (with corr = 1 there was nothing to rescale). Distinct
+    tiles make the maximum move, so corr < 1 on a real fraction of the queries and O can
+    only match if the recurrence is actually carried out.
 
-    Q and V are shared, as they are in the real decomposition: splitting KV leaves the
-    query tile common to every cluster.
+    Every cluster still gets its own (m_c, l_c): under kvsplit its own KV shard, under
+    headpar its own query head over the group's shared KV head (the GQA relation). Distinct
+    partials are what make the gather's result evidence that the gather happened.
 
-    The merge itself is the online-softmax combine the monoid junction implements:
-
-        m* = max_c m_c              l* = sum_c exp(m_c - m*) * l_c
-
-    computed here in FP32 on FP16 inputs, mirroring the device: the arena holds m and l in
-    FP16, pack_fa_partial widens the bit pattern to FP32, and the junction folds in FP32.
+    Layouts, one tile after another, each tile contiguous:
+        q   A(Q)       per query tile [Br, d]  -- heads stacked under headpar
+        k   A(K_t)     per KV tile [Bc, d]     -- shards stacked under kvsplit
+        v   A(V_t^T)   per KV tile [d, Bc]     -- PV's A operand, split like k
     """
     rng = np.random.RandomState(1234)
-    b = rng.randint(-128, 127, size=N * K * MESH_COL * TILE_SIZE).astype(np.int8) >> QSHIFT
-    v = rng.randint(-128, 127,
-                    size=S2_M * S2_K * MESH_ROW * TILE_SIZE).astype(np.int8) >> QSHIFT
+    T = NKV_PER
+    n_heads = NCL if DECOMP == "headpar" else 1
+    n_kv = T * (NCL if DECOMP == "kvsplit" else 1)
+    qb, kb = BR * DHEAD, BC * DHEAD
 
-    if DECOMP == "headpar":
-        # ONE K and ONE V for the whole group -- that IS the GQA relation, not a
-        # simplification: the group's query heads share a KV head by construction. What
-        # varies per cluster is Q, so every cluster still gets its own (m_c, l_c) and the
-        # per-shard checks stay evidence that the shard ran. There is nothing to fold.
-        #
-        # The distinct-shard argument the kvsplit docstring makes does not apply here for
-        # the opposite reason: no fold is being tested, so identical partials would prove
-        # nothing either way. Distinct Q is what keeps the four checks independent.
-        a_shared = (rng.randint(-128, 127, size=M * K * MESH_ROW * TILE_SIZE)
-                       .astype(np.int8) >> QSHIFT)
-        shards, b_list = [], []
-        for c in range(NCL):
-            b_c = (rng.randint(-128, 127, size=N * K * MESH_COL * TILE_SIZE)
-                      .astype(np.int8) >> QSHIFT)
-            b_list.append(b_c)
-            shards.append(build_data(a=a_shared, b=b_c, v=v))
-        m_c = np.stack([np.asarray(sh[3], dtype=np.float16) for sh in shards])
-        l_c = np.stack([np.asarray(sh[4], dtype=np.float16) for sh in shards])
-        # a_list holds the SAME array object NCL times so stage() can see, by identity,
-        # that one staged copy serves every cluster.
-        # O PER CLUSTER, not shards[0]'s. Under headpar every cluster gets its own b_c
-        # (its own query head), so every cluster's O is different and one golden would
-        # only ever have validated cluster 0.
-        return [a_shared] * NCL, b_list, v, m_c, l_c, None, [sh[5] for sh in shards]
+    def rnd(n):
+        return rng.randint(-128, 128, size=n).astype(np.int8) >> QSHIFT
 
-    shards = []
+    q8, k8, v8 = rnd(n_heads * NQ * qb), rnd(n_kv * kb), rnd(n_kv * kb)
+    m_c, l_c, o_c = [], [], []
     for c in range(NCL):
-        a_c = (rng.randint(-128, 127, size=M * K * MESH_ROW * TILE_SIZE)
-                  .astype(np.int8) >> QSHIFT)
-        shards.append(build_data(a=a_c, b=b, v=v))
+        head = c if DECOMP == "headpar" else 0
+        t0 = c * T if DECOMP == "kvsplit" else 0
+        # The CHECKED query tile is the last one; query tiles never interact.
+        qt = head * NQ + NQ - 1
+        m, l, o = shard_golden(q8[qt * qb:(qt + 1) * qb],
+                               [k8[t * kb:(t + 1) * kb] for t in range(t0, t0 + T)],
+                               [v8[t * kb:(t + 1) * kb] for t in range(t0, t0 + T)])
+        m_c.append(m)
+        l_c.append(l)
+        o_c.append(d32_order(o))
+    m_c, l_c = np.stack(m_c), np.stack(l_c)
 
-    m_c = np.stack([np.asarray(sh[3], dtype=np.float16) for sh in shards])     # [NCL, BR]
-    l_c = np.stack([np.asarray(sh[4], dtype=np.float16) for sh in shards])
-
-    m_star = m_c.astype(np.float32).max(axis=0)
-    l_star = (np.exp(m_c.astype(np.float32) - m_star) *
-              l_c.astype(np.float32)).sum(axis=0)
-
-    # Pack (m*, l*) into the junction's lane geometry so the check compares what the
-    # collector's buffer actually holds: lane = field*S + slot, field 0 = m, field 1 = l,
-    # S = MONOID_SLOTS rows per beat, 16 FP32 lanes per 512-bit beat.
-    beats = BR // MONOID_SLOTS
-    merged = np.zeros(beats * 16, dtype=np.float32)
-    for beat in range(beats):
-        for slot in range(MONOID_SLOTS):
-            row = beat * MONOID_SLOTS + slot
-            merged[beat * 16 + 0 * MONOID_SLOTS + slot] = m_star[row]
-            merged[beat * 16 + 1 * MONOID_SLOTS + slot] = l_star[row]
-
-    a_list = [sh[0] for sh in shards]
-    # b is shared under kvsplit; the caller indexes per cluster either way.
-    return a_list, [b] * NCL, v, m_c, l_c, merged, [sh[5] for sh in shards]
+    merged = None
+    if DECOMP == "kvsplit":
+        # The online-softmax combine the monoid junction implements, on what the pack hands
+        # it -- a*m, see scaled_m() -- computed in FP32 on FP16 inputs like the device:
+        #     m* = max_c a*m_c              l* = sum_c exp(a*m_c - m*) * l_c
+        # packed into the junction's lanes: lane = field*S + slot, field 0 = m, 1 = l.
+        ms = np.stack([scaled_m(m) for m in m_c]).astype(np.float32)
+        m_star = ms.max(axis=0)
+        l_star = (np.exp(ms - m_star) * l_c.astype(np.float32)).sum(axis=0)
+        beats = BR // MONOID_SLOTS
+        merged = np.zeros(beats * 16, dtype=np.float32)
+        for beat in range(beats):
+            for slot in range(MONOID_SLOTS):
+                row = beat * MONOID_SLOTS + slot
+                merged[beat * 16 + 0 * MONOID_SLOTS + slot] = m_star[row]
+                merged[beat * 16 + 1 * MONOID_SLOTS + slot] = l_star[row]
+    return {"q8": q8, "k8": k8, "v8": v8, "m": m_c, "l": l_c, "o": o_c, "merged": merged}
 
 
-def stage(st, a, b, v, m, rowsum, o):
+def stage(st, data):
     """Hand every array to the staging helper and return the handles.
 
     WHERE these land is the platform's business, not this workload's: a config with a
     memory chiplet gets a mempool.bin, one without gets C arrays in the host image. See
-    util/sim/common/bingo_data_staging.py -- addressing a memory chiplet that a config
+    mini_compiler/mem/bingo_data_staging.py -- addressing a memory chiplet that a config
     does not have reads unmapped memory rather than faulting, which surfaces as an
     arithmetic bug a long way from the cause.
-    """
-    # STAGE EACH DISTINCT ARRAY ONCE. Under headpar every cluster's K is the same object,
-    # and staging it four times would put four copies in the image (or on the memory chip)
-    # AND give the broadcast four different source addresses to read -- which is exactly
-    # the redundancy the decomposition exists to remove. Keyed by object identity, so
-    # "shared" is decided by build_shards() rather than restated here.
-    def put_per_cluster(tag, arrays, ctype, conv):
-        # An array every cluster shares keeps the BARE name; only a genuinely per-cluster
-        # one takes the _c<n> suffix. That is not cosmetic: the staged names reach the
-        # generated header, and keeping them stable is what makes a kvsplit build after
-        # this change byte-identical to one before it.
-        shared = len({id(x) for x in arrays}) == 1
-        handles, by_id = [], {}
-        for c in range(NCL):
-            key = id(arrays[c])
-            if key not in by_id:
-                by_id[key] = st.put(tag if shared else f"{tag}_c{c}",
-                                    ctype, conv(arrays[c]))
-            handles.append(by_id[key])
-        return handles
 
+    ONE ARRAY PER TENSOR, sliced per cluster by offset: a shared operand is the SAME handle
+    for every cluster (that is what the broadcast and pull paths key on), a per-cluster one
+    is that cluster's run of tiles.
+    """
+    T, qb, kb = NKV_PER, BR * DHEAD, BC * DHEAD
+    q = st.put("fa_q8", "int8_t", data["q8"].astype(np.int8))
+    k = st.put("fa_k8", "int8_t", data["k8"].astype(np.int8))
+    v = st.put("fa_v8", "int8_t", data["v8"].astype(np.int8))
+    headpar = DECOMP == "headpar"
     return {
-        "a": put_per_cluster("fa_k8", a, "int8_t",
-                             lambda x: np.asarray(x).astype(np.int8)),
-        # Q is shared under kvsplit and per-head under headpar, by the same rule.
-        "b": put_per_cluster("fa_q8", b, "int8_t",
-                             lambda x: np.asarray(x).astype(np.int8)),
-        "v": st.put("fa_v8", "int8_t", v.astype(np.int8)),
-        # The score matmul's C is a zero BIAS and the O accumulator starts at zero. The
-        # larger of the two is C, so one region serves both -- and on the host path it
-        # costs no image bytes at all, because an uninitialised array lands in .bss.
-        "zero": st.put_zeros("fa_zero", "int32_t", M * N * MESH_ROW * MESH_COL),
+        "a": [k if headpar else _at(k, c * T * kb) for c in range(NCL)],
+        "b": [_at(q, c * NQ * qb) if headpar else q for c in range(NCL)],
+        "v": [v if headpar else _at(v, c * T * kb) for c in range(NCL)],
         # Per-shard goldens, one per cluster. Keeping them is what separates "the fold is
         # wrong" from "a shard is wrong": a cluster whose recurrence quietly did nothing
         # still produces a well-formed partial, and the merged result alone cannot say
         # which of the four it came from.
         "m": [st.put(f"fa_m_golden_c{c}", "uint16_t",
-                     np.asarray(m[c]).astype(np.float16).view(np.uint16))
+                     np.asarray(data["m"][c]).astype(np.float16).view(np.uint16))
               for c in range(NCL)],
-        "rowsum": [st.put(f"fa_rowsum_golden_c{c}", "uint16_t",
-                          np.asarray(rowsum[c]).astype(np.float16).view(np.uint16))
-                   for c in range(NCL)],
-        "o": [st.put(f"fa_o_golden_c{c}", "int32_t", np.asarray(o[c]).astype(np.int32))
+        "l": [st.put(f"fa_l_golden_c{c}", "uint16_t",
+                     np.asarray(data["l"][c]).astype(np.float16).view(np.uint16))
+              for c in range(NCL)],
+        "o": [st.put(f"fa_o_golden_c{c}", "int32_t", np.asarray(data["o"][c]).astype(np.int32))
               for c in range(NCL)],
     }
 
 
 def stage_merged(st, merged):
-    """The gathered (m*, l*), in the junction's own lane order, as FP32."""
+    """The gathered (a*m*, l*), in the junction's own lane order, as FP32."""
     return st.put("fa_ml_merged_golden", "float", np.asarray(merged, dtype=np.float32))
 
 
@@ -1314,7 +1367,22 @@ def _alloc_cluster(dfg, c):
     # ONE TRAILING BEAT past the quantised P. The fused exp pass emits bc/2 INT8 beats and
     # then the tapped row sum, unnarrowed, as ONE contiguous stream -- and no shape can span
     # two allocations, so the row sum lives here rather than in the arena.
-    p8 = [g.l1(f"fa_p8_{i}", BC * BR + 64) for i in range(NSCORE)]   # quantised P + row sum
+    # + the row-sum beat + this tile's corr, which PV loads into its C-path scaler: living in
+    # the SAME buffer as P, it is protected by exactly the edges that protect P.
+    # At P8_PITCH the beats (and the row sum and corr) sit one pitch apart; with P8_NEST
+    # consecutive buffers pair up in one region, the second at +P8_NEST_OFF in the first
+    # one's gaps. Each buffer is still its own handle to every node that touches it.
+    p8_len = SnaxBingoKernelSimdFaSoftmaxArgs.p8_bytes(BC, BR, P_MODE, P8_PITCH)
+    if P8_NEST:
+        p8 = []
+        for i in range(0, NSCORE, 2):
+            if i + 1 < NSCORE:
+                pair = g.l1(f"fa_p8_{i}{i + 1}", P8_NEST_OFF + p8_len)
+                p8 += [pair.view(0), pair.view(P8_NEST_OFF)]
+            else:
+                p8.append(g.l1(f"fa_p8_{i}", p8_len))
+    else:
+        p8 = [g.l1(f"fa_p8_{i}", p8_len) for i in range(NSCORE)]
     # One arena, one Q buffer and one O accumulator PER QUERY TILE -- that is the
     # entire cost of the reuse. K, V, the score tile and P stay single sets: they are
     # exactly what we are trying not to re-read.
@@ -1335,7 +1403,7 @@ def _shard_handles(h_all, c):
     handle, so indexing is uniform here either way.
     """
     h = dict(h_all)
-    for key in ("a", "b", "m", "rowsum", "o"):
+    for key in ("a", "b", "v", "m", "l", "o"):
         h[key] = h_all[key][c]
     return h
 
@@ -1354,14 +1422,16 @@ def _build_head(dfg, c, h_all, buf):
     h = _shard_handles(h_all, c)
     arena, k8, q8, v8 = buf["arena"], buf["k8"], buf["q8"], buf["v8"]
     cz, s16, p8, oacc = buf["cz"], buf["s16"], buf["p8"], buf["oacc"]
-    def load(tag, key, dst, nbytes, after=None):
+    # `off` is the tile's byte offset inside this cluster's operand: every KV tile and every
+    # query tile is a different slice, so the tile index has to reach the source address.
+    def load(tag, key, dst, nbytes, after=None, off=0):
         return g.node(f"Load_{tag}", DMA_CORE, "__snax_bingo_kernel_idma_1d_copy",
-                      SnaxBingoKernelIdma1dCopyArgs(h[key], dst, nbytes), after)
+                      SnaxBingoKernelIdma1dCopyArgs(_at(h[key], off), dst, nbytes), after)
 
-    def xload(tag, key, dst, nbytes, after=None):
+    def xload(tag, key, dst, nbytes, after=None, off=0):
         """Same transfer on the xDMA hart instead of the DM core's iDMA."""
         return g.node(f"Load_{tag}", XDMA_CORE, "__snax_bingo_kernel_xdma_1d_copy",
-                      SnaxBingoKernelXdma1dCopyArgs(h[key], dst, nbytes), after)
+                      SnaxBingoKernelXdma1dCopyArgs(_at(h[key], off), dst, nbytes), after)
 
 
     # The loads are chained: one iDMA engine, and serialising them here keeps the graph's
@@ -1473,11 +1543,14 @@ def _build_head(dfg, c, h_all, buf):
                    SnaxBingoKernelSimdFaSoftmaxArgs(
                        s16[0].view(64), p8[0], arena[q],
                        bc=BC, dhead=DHEAD, tile_idx=0, seed_state=0,
-                       geom_mode=SnaxBingoKernelSimdFaSoftmaxArgs.GEOM_PROLOGUE))
+                       geom_mode=SnaxBingoKernelSimdFaSoftmaxArgs.GEOM_PROLOGUE,
+                       score_scale=EXP_SCALE, p_mode=P_MODE, p8_pitch=P8_PITCH))
             for q in range(NQ)]
 
-    # Q is the query tile: fixed for the whole run, loaded once.
-    ld_q = [load(f"Q{q}", "b", q8[q], N * K * MESH_COL * TILE_SIZE, [warm_gemm])
+    # Q is the query tile: fixed for the whole run, loaded once. Query tile q is its own
+    # slice of this cluster's Q -- NQ tiles of one head, not NQ copies of one tile.
+    QBYTES = N * K * MESH_COL * TILE_SIZE
+    ld_q = [load(f"Q{q}", "b", q8[q], QBYTES, [warm_gemm], off=q * QBYTES)
             for q in range(NQ)]
     # No Czero load: with the C channels masked the score matmul never reads this buffer.
     # That removes the single largest load from the head of the chain -- 64 KiB of zeros
@@ -1547,7 +1620,7 @@ def _build_head(dfg, c, h_all, buf):
                 perf=perf, load=load, xload=xload)
 
 
-def _build_cluster(dfg, c, h_all, m_all, rowsum_all, buf, bcast=None, all_bufs=None):
+def _build_cluster(dfg, c, h_all, m_all, l_all, buf, bcast=None, all_bufs=None):
     """The KV-tile pipeline and this cluster's own checks, on top of _build_head.
 
     Byte-for-byte the tuned one-cluster graph -- same double buffering, same load-chain
@@ -1560,7 +1633,7 @@ def _build_cluster(dfg, c, h_all, m_all, rowsum_all, buf, bcast=None, all_bufs=N
     """
     g = G(dfg, c)
     h = _shard_handles(h_all, c)
-    m, rowsum = m_all[c], rowsum_all[c]
+    m, l_gold = m_all[c], l_all[c]
     arena, k8, q8, v8 = buf["arena"], buf["k8"], buf["q8"], buf["v8"]
     cz, s16, p8, oacc = buf["cz"], buf["s16"], buf["p8"], buf["oacc"]
 
@@ -1626,7 +1699,8 @@ def _build_cluster(dfg, c, h_all, m_all, rowsum_all, buf, bcast=None, all_bufs=N
                     bcast["k"][j] = g.node(
                         f"PushK{j}", HOST_CORE, "__host_bingo_kernel_idma_multi",
                         HostBingoKernelIdmaMultiArgs(
-                            [(h_all["a"][0], bf["k8"][j % NKBUF]) for bf in all_bufs],
+                            [(_at(h_all["a"][0], j * KBYTES), bf["k8"][j % NKBUF])
+                             for bf in all_bufs],
                             KBYTES),
                         k_after, cluster=0)
                 ld_k.append(bcast["k"].get(j))
@@ -1637,17 +1711,19 @@ def _build_cluster(dfg, c, h_all, m_all, rowsum_all, buf, bcast=None, all_bufs=N
                 if j < PULL_SKIP_FIRST:
                     # Every cluster reads this tile itself. xload, not load: K lives on the
                     # xDMA in the steady state and moving it to the iDMA would put it behind V.
-                    n = xload(f"K{j}", "a", k8[j % NKBUF], KBYTES, k_after)
+                    n = xload(f"K{j}", "a", k8[j % NKBUF], KBYTES, k_after, off=j * KBYTES)
                     if c == own:
                         bcast["ksrc"][j] = n
                 elif c == own:
                     if K_PUSH_OWNER:
                         n = g.node(f"PushK{j}_c{c}", HOST_CORE,
                                    "__host_bingo_kernel_idma",
-                                   HostBingoKernelIdmaArgs(h["a"], k8[j % NKBUF], KBYTES),
+                                   HostBingoKernelIdmaArgs(_at(h["a"], j * KBYTES),
+                                                           k8[j % NKBUF], KBYTES),
                                    k_after, cluster=0)
                     else:
-                        n = xload(f"K{j}", "a", k8[j % NKBUF], KBYTES, k_after)
+                        n = xload(f"K{j}", "a", k8[j % NKBUF], KBYTES, k_after,
+                                  off=j * KBYTES)
                     bcast["ksrc"][j] = n
                 else:
                     # Under rotation the owner may be a cluster built LATER, so its node can be
@@ -1684,7 +1760,8 @@ def _build_cluster(dfg, c, h_all, m_all, rowsum_all, buf, bcast=None, all_bufs=N
                     bcast["k"][j] = g.node(
                         f"BcastK{j}", XDMA_CORE, "__snax_bingo_kernel_xdma_multicast",
                         SnaxBingoKernelXdmaMulticastArgs(
-                            h_all["a"][0], [bf["k8"][j % NKBUF] for bf in all_bufs],
+                            _at(h_all["a"][0], j * KBYTES),
+                            [bf["k8"][j % NKBUF] for bf in all_bufs],
                             KBYTES),
                         k_after)
                 # Under BCAST_SPREAD a cluster built LATER owns some tiles, so the node
@@ -1701,7 +1778,8 @@ def _build_cluster(dfg, c, h_all, m_all, rowsum_all, buf, bcast=None, all_bufs=N
                 # Into the buffer every query tile of step j-2 has finished with, so it
                 # waits for the LAST of them. Before tile 2 there is nothing but Q.
                 k_after = ld_q if j < NKBUF else [qk[(j - NKBUF + 1) * NQ - 1]]
-                ld_k.append(load(f"K{j}", "a", k8[j % NKBUF], KBYTES, k_after))
+                ld_k.append(load(f"K{j}", "a", k8[j % NKBUF], KBYTES, k_after,
+                                 off=j * KBYTES))
             if q == 0 and bcast is not None and BCAST_V:
                 if c == _bcast_owner(j, BCAST_V_SKEW):
                     v_after = list(ld_az) if j < NVBUF \
@@ -1709,7 +1787,8 @@ def _build_cluster(dfg, c, h_all, m_all, rowsum_all, buf, bcast=None, all_bufs=N
                     bcast["v"][j] = g.node(
                         f"BcastV{j}", XDMA_CORE, "__snax_bingo_kernel_xdma_multicast",
                         SnaxBingoKernelXdmaMulticastArgs(
-                            h_all["v"], [bf["v8"][j % NVBUF] for bf in all_bufs], VBYTES),
+                            _at(h_all["v"][0], j * VBYTES),
+                            [bf["v8"][j % NVBUF] for bf in all_bufs], VBYTES),
                         v_after)
                 ld_v.append(bcast["v"].get(j))
             elif q == 0:
@@ -1737,9 +1816,9 @@ def _build_cluster(dfg, c, h_all, m_all, rowsum_all, buf, bcast=None, all_bufs=N
                     # still this cluster's L1, reached by absolute address.
                     if j % 2 == 0:
                         nxt = j + 1
-                        pairs = [(h["v"], v8[j % NVBUF])]
+                        pairs = [(_at(h["v"], j * VBYTES), v8[j % NVBUF])]
                         if nxt < NKV_PER:
-                            pairs.append((h["v"], v8[nxt % NVBUF]))
+                            pairs.append((_at(h["v"], nxt * VBYTES), v8[nxt % NVBUF]))
                         ld_v.append(g.node(f"LoadV{j}_{nxt}_c{c}", HOST_CORE,
                                            "__host_bingo_kernel_idma_multi",
                                            HostBingoKernelIdmaMultiArgs(pairs, VBYTES),
@@ -1761,7 +1840,8 @@ def _build_cluster(dfg, c, h_all, m_all, rowsum_all, buf, bcast=None, all_bufs=N
                     if j < PULL_SKIP_FIRST:
                         # Same as K: the leading tiles have nothing to overlap their second
                         # hop, so every cluster reads them itself. V stays on the iDMA.
-                        n = load(f"V{j}", "v", v8[j % NVBUF], VBYTES, v_after)
+                        n = load(f"V{j}", "v", v8[j % NVBUF], VBYTES, v_after,
+                                 off=j * VBYTES)
                         if c == own:
                             bcast["vsrc"][j] = n
                     elif c == own:
@@ -1771,7 +1851,8 @@ def _build_cluster(dfg, c, h_all, m_all, rowsum_all, buf, bcast=None, all_bufs=N
                                        HostBingoKernelIdmaArgs(h["v"], v8[j % NVBUF], VBYTES),
                                        v_after, cluster=0)
                         else:
-                            n = load(f"V{j}", "v", v8[j % NVBUF], VBYTES, v_after)
+                            n = load(f"V{j}", "v", v8[j % NVBUF], VBYTES, v_after,
+                                     off=j * VBYTES)
                         bcast["vsrc"][j] = n
                     else:
                         # wait for cluster 0's copy of THIS tile as well as our own WAR edge
@@ -1801,9 +1882,11 @@ def _build_cluster(dfg, c, h_all, m_all, rowsum_all, buf, bcast=None, all_bufs=N
                     # while the broadcasts landed is the one that PASSED. Under headpar the
                     # iDMA is free anyway -- K no longer rides it, it carries only Q -- so
                     # this costs nothing and keeps the receiving xDMAs clear.
-                    ld_v.append(load(f"V{j}", "v", v8[j % NVBUF], VBYTES, v_after))
+                    ld_v.append(load(f"V{j}", "v", v8[j % NVBUF], VBYTES, v_after,
+                                     off=j * VBYTES))
                 else:
-                    ld_v.append(xload(f"V{j}", "v", v8[j % NVBUF], VBYTES, v_after))
+                    ld_v.append(xload(f"V{j}", "v", v8[j % NVBUF], VBYTES, v_after,
+                                      off=j * VBYTES))
 
             # SAME-CORE EDGES ARE NOT REDUNDANT -- do not "optimise" them away.
             #
@@ -1841,7 +1924,7 @@ def _build_cluster(dfg, c, h_all, m_all, rowsum_all, buf, bcast=None, all_bufs=N
                              "__snax_bingo_kernel_gemm_fa_qk",
                              SnaxBingoKernelGemmFaQkArgs(k8[j % NKBUF], q8[q], cz,
                                                          s16[i % NSCORE].view(64), M, K, N,
-                                                         perf_addr=perf),
+                                                         perf_addr=perf, d_shift=SCORE_SHIFT),
                              deps))
 
             deps = [qk[i]]
@@ -1869,7 +1952,8 @@ def _build_cluster(dfg, c, h_all, m_all, rowsum_all, buf, bcast=None, all_bufs=N
                                  # the prologue that programmed the CSRs in the first place.
                                  geom_mode=(SnaxBingoKernelSimdFaSoftmaxArgs.GEOM_PRIMED
                                             if i == 0 else
-                                            SnaxBingoKernelSimdFaSoftmaxArgs.GEOM_CSR_PRIMED)),
+                                            SnaxBingoKernelSimdFaSoftmaxArgs.GEOM_CSR_PRIMED),
+                                 score_scale=EXP_SCALE, p_mode=P_MODE, p8_pitch=P8_PITCH),
                              deps))
 
         if i >= 1:
@@ -1882,12 +1966,19 @@ def _build_cluster(dfg, c, h_all, m_all, rowsum_all, buf, bcast=None, all_bufs=N
                     deps.append(ld_v[pj])
                 else:
                     pending_v.append((len(pv), pj))
+            # Tile 0 starts O from nothing (C masked off, no read); every later tile reads
+            # O back through the C-path scaler with THIS tile's corr, which the softmax left
+            # in the beat after its row sum.
+            pbuf = p8[p % NSCORE]
             pv.append(g.node(f"PV_{pj}_{pq}", GEMM_CORE,
                              "__snax_bingo_kernel_gemm_fa_pv",
-                             SnaxBingoKernelGemmFaPvArgs(v8[pj % NVBUF], p8[p % NSCORE],
-                                                         oacc[pq] if pj else 0, oacc[pq],
-                                                         S2_M, S2_K, S2_N,
-                                                         perf_addr=perf),
+                             SnaxBingoKernelGemmFaPvArgs(
+                                 v8[pj % NVBUF], pbuf, oacc[pq] if pj else 0, oacc[pq],
+                                 S2_M, S2_K, S2_N, perf_addr=perf,
+                                 flags=PV_RESCALE if pj else PV_KMAJOR,
+                                 corr_addr=(pbuf.view(SnaxBingoKernelSimdFaSoftmaxArgs.corr_offset(
+                                     BC, BR, P8_PITCH)) if pj else 0),
+                                 b_pitch=P8_PITCH),
                              deps))
 
     # The array counters, printed once per cluster. Anchored on the last PV so it cannot
@@ -1918,10 +2009,11 @@ def _build_cluster(dfg, c, h_all, m_all, rowsum_all, buf, bcast=None, all_bufs=N
     # The tolerances are derived from the goldens themselves rather than fixed, because an
     # absolute tolerance means nothing without a magnitude: one FP16 step at a score of
     # 1000 is 1.0, and at 0.5 it is 0.0005. m is a max of converted integers and is
-    # expected exact, so two steps is already slack; rowsum accumulates Bc terms in FP32
-    # and narrows once, so it gets four.
+    # expected exact, so two steps is already slack. l is the RUNNING sum: every tile adds
+    # a row sum narrowed from FP32 and rescales the old value by an FP16 corr from the
+    # hardware exponential, so it gets eight steps.
     tol_m = float(2 * np.max(np.spacing(m.astype(np.float16))))
-    tol_s = float(4 * np.max(np.spacing(rowsum.astype(np.float16))))
+    tol_s = float(8 * np.max(np.spacing(np.abs(l_gold).astype(np.float16))))
     if DEBUG_LOOSE_ML:
         # DEBUG ONLY. m and rowsum are the FIRST checks dispatched, and a failing host
         # kernel breaks the scheduler loop (bingo_api.c:906), so one bad m costs the other
@@ -1972,22 +2064,24 @@ def _build_cluster(dfg, c, h_all, m_all, rowsum_all, buf, bcast=None, all_bufs=N
                                                check_type=CHECK_FP16_TOL,
                                                num_elements=BR, tolerance=tol_m), st_m)
 
-    # rsum lives in the LAST tile's p8 buffer, straight after its P beats, because that is
-    # where the fused pass's contiguous output stream puts it -- not in the arena.
-    l3_rs = BingoMemAlloc(f"out_fa_rowsum_c{c}", size=64, mem_level="L3")
-    st_rs = host(f"Store_rowsum_c{c}", "__host_bingo_kernel_idma",
-                 HostBingoKernelIdmaArgs(p8[(NKV_PER * NQ - 1) % NSCORE].view((BC // 2) * 64),
-                                         l3_rs, 64), [last, ck_m])
-    ck_rs = host(f"Check_rowsum_c{c}", "__host_bingo_kernel_check_result",
-                 HostBingoKernelCheckResultArgs(h["rowsum"], l3_rs,
-                                                name=f"fa_rowsum_c{c}",
+    # l is the arena's RUNNING sum, committed by the last softmax -- NOT the row sum in the
+    # last tile's p8 buffer, which is one tile's contribution. The two agreed only while
+    # every tile was the same one.
+    l3_rs = BingoMemAlloc(f"out_fa_l_c{c}", size=64, mem_level="L3")
+    st_rs = host(f"Store_l_c{c}", "__host_bingo_kernel_idma",
+                 HostBingoKernelIdmaArgs(arena[NQ - 1].view(lay["lrun"]), l3_rs, 64),
+                 [last, ck_m])
+    ck_rs = host(f"Check_l_c{c}", "__host_bingo_kernel_check_result",
+                 HostBingoKernelCheckResultArgs(h["l"], l3_rs,
+                                                name=f"fa_l_c{c}",
                                                 check_type=CHECK_FP16_TOL,
                                                 num_elements=BR, tolerance=tol_s), st_rs)
 
-    # CHECK O. Without this the suite validates m and rowsum only, and both are per-tile
-    # quantities that this workload makes IDENTICAL on every tile -- so neither covers the
-    # accumulation across KV tiles, which is the entire point of FlashAttention. O is the
-    # only checked value that depends on every tile having been folded in correctly.
+    # CHECK O. m and l cover the softmax statistics, but only O depends on P reaching PV in
+    # the right layout and on every tile's corr having rescaled the accumulator -- the two
+    # things this pipeline got wrong for as long as its tiles were identical and its
+    # maximum never moved. O is the only checked value that depends on every tile having
+    # been folded in correctly.
     #
     # It is also what makes a layout experiment trustworthy. The static-L1 work found a
     # write that lands past the end of fa_v8_1, and which buffer it damages depends on what
@@ -2050,7 +2144,7 @@ def _build_cluster(dfg, c, h_all, m_all, rowsum_all, buf, bcast=None, all_bufs=N
     }
 
 
-def build(dfg, h, m_all, rowsum_all, merged_h, jct_monoid):
+def build(dfg, h, m_all, l_all, merged_h, jct_monoid, tol_ml=0.02):
     """Four cluster pipelines, split either over KV or over the GQA group's query heads.
 
     Under DECOMP = "headpar" (the default) the four clusters hold four query heads of one
@@ -2092,7 +2186,7 @@ def build(dfg, h, m_all, rowsum_all, merged_h, jct_monoid):
         # the same deferral the broadcast nodes already use.
         bcast = {"k": {}, "v": {}, "vsrc": {}, "vpull": [],
                  "ksrc": {}, "kpull": []}
-        shards = [_build_cluster(dfg, c, h, m_all, rowsum_all, bufs[c], bcast, bufs)
+        shards = [_build_cluster(dfg, c, h, m_all, l_all, bufs[c], bcast, bufs)
                   for c in range(NCL)]
 
         # ---- close the forward references ----------------------------------------------
@@ -2182,7 +2276,7 @@ def build(dfg, h, m_all, rowsum_all, merged_h, jct_monoid):
         # answer for its own query head. The per-shard checks are the whole verification.
         return
 
-    shards = [_build_cluster(dfg, c, h, m_all, rowsum_all, bufs[c])
+    shards = [_build_cluster(dfg, c, h, m_all, l_all, bufs[c])
               for c in range(NCL)]
     g = G(dfg, 0)
 
@@ -2208,19 +2302,31 @@ def build(dfg, h, m_all, rowsum_all, merged_h, jct_monoid):
     # On each cluster's own xDMA core, so the gather that consumes it is the very next
     # thing that core does. The pack is scalar FP16->FP32 bit work; that core has no FPU,
     # which is the whole reason it is a kernel and not two lines in the caller.
+    #
+    # l is the arena's RUNNING sum (lrun); m is the running max scaled by the temperature
+    # first -- the junction's exponential has no scale of its own, see scaled_m() -- on the
+    # SIMD core that owns the arena, since the pack's core has no FPU.
     part_bytes = SnaxBingoKernelPackFaPartialArgs.packed_bytes(BR, MONOID_SLOTS)
+    lay = SnaxBingoKernelSimdFaSoftmaxArgs.layout(BC, DHEAD)
+    a_bits = int(np.array(EXP_SCALE, dtype=np.float32).view(np.uint32))
     parts, packs = [], []
     for c, sh in enumerate(shards):
         gc = g.at(c)
         part = gc.l1("fa_ml_partial", part_bytes)
         parts.append(part)
+        src_m, after = sh["arena"].view(lay["mrun"]), [sh["last_sm"]]
+        if EXP_SCALE != 1.0:
+            src_m = gc.l1("fa_m_scaled", 64)
+            after = [gc.node(f"ScaleM_c{c}", SIMD_CORE, "__snax_bingo_kernel_simd_stream_map",
+                             SnaxBingoKernelSimdScaleF16Args(sh["arena"].view(lay["mrun"]),
+                                                             src_m, a_bits, rows=1, cols=BR),
+                             sh["last_sm"])]
         packs.append(gc.node(
             f"PackPartial_c{c}", XDMA_CORE, "__snax_bingo_kernel_pack_fa_partial",
             SnaxBingoKernelPackFaPartialArgs(
-                src_m=sh["arena"].view(SnaxBingoKernelSimdFaSoftmaxArgs.layout(BC, DHEAD)["mrun"]),
-                src_l=sh["p8_last"].view((BC // 2) * 64),
+                src_m=src_m, src_l=sh["arena"].view(lay["lrun"]),
                 dst=part, n_rows=BR, slots=MONOID_SLOTS),
-            sh["last_sm"]))
+            after))
 
     # ---- the fold itself ----------------------------------------------------------------
     # chain is the path in DATA order, ENDING at the collector's own destination, and
@@ -2256,7 +2362,7 @@ def build(dfg, h, m_all, rowsum_all, merged_h, jct_monoid):
            HostBingoKernelCheckResultArgs(merged_h, l3_ml, name="fa_ml_merged",
                                           check_type=CHECK_FP32_TOL,
                                           num_elements=part_bytes // 4,
-                                          tolerance=0.02), st_ml, cluster=0)
+                                          tolerance=tol_ml), st_ml, cluster=0)
 
 
 def main():
@@ -2300,11 +2406,16 @@ def main():
 
     # The platform decides where the arrays go, so it has to be parsed before staging.
     platform = parse_platform_cfg(args.platformcfg)
-    a, b, v, m, rowsum, merged, o = build_shards()
+    data = build_shards()
+    m, l, merged = data["m"], data["l"], data["merged"]
     st = DataStaging(platform)
-    h = stage(st, a, b, v, m, rowsum, o)
+    h = stage(st, data)
     # headpar has nothing to fold, so there is no merged golden to stage.
     merged_h = stage_merged(st, merged) if merged is not None else None
+    # The merged l* folds NCL running sums, each a few FP16 steps from the golden (the
+    # device exponential is not libm's), so its tolerance scales with them; m* = a*m* is
+    # exact given exact per-shard maxima.
+    tol_ml = max(0.02, float(4 * NCL * np.max(np.spacing(np.abs(l).astype(np.float16)))))
     if args.data_h is not None:
         n = st.emit(args.data_h, args.output_dir)
         print(f"Staged {n} B of operands and goldens "
@@ -2316,7 +2427,8 @@ def main():
                        "configs": [{"Br": BR, "Bc": BC, "d": DHEAD, "nkv": NKV,
                                     "M": M, "K": K, "N": N,
                                     "S2_M": S2_M, "S2_K": S2_K, "S2_N": S2_N,
-                                    "qshift": QSHIFT,
+                                    "qshift": QSHIFT, "score_scale": SCORE_SCALE,
+                                    "score_shift": SCORE_SHIFT, "p8_pitch": P8_PITCH,
                                     "mesh": [MESH_ROW, TILE_SIZE, MESH_COL]}]},
                       f, indent=2)
 
@@ -2332,7 +2444,7 @@ def main():
     # not demand a cfg feature it never uses -- a head-parallel quadrant is a legitimate
     # target on hardware built without the monoid junction.
     jct = writer_junction_index(hw, "HasMonoidJunction") if DECOMP == "kvsplit" else None
-    build(dfg, h, m, rowsum, merged_h, jct)
+    build(dfg, h, m, l, merged_h, jct, tol_ml)
 
     os.makedirs(args.output_dir, exist_ok=True)
     dfg.bingo_compile_dfg(
@@ -2348,12 +2460,14 @@ def main():
     # buffers, and did not scale with NQ -- so it under-reported by ~70 kB and would not
     # have moved at all when a buffer was added. A budget line that cannot go up is worse
     # than none, because the L1 heap is the thing that silently bounds this workload.
+    p8_len = SnaxBingoKernelSimdFaSoftmaxArgs.p8_bytes(BC, BR, P_MODE, P8_PITCH)
     l1 = (NKBUF * (M * K * MESH_ROW * TILE_SIZE)          # k8, NKBUF-deep
           + NVBUF * (S2_M * S2_K * MESH_ROW * TILE_SIZE)  # v8, NVBUF-deep
           + NQ * (N * K * MESH_COL * TILE_SIZE)           # q8, one per query tile
           + 0                                             # cz removed
           + NSCORE * (64 + BC * BR * 2)                   # s16
-          + NSCORE * (BC * BR + 64)                       # p8
+          + (NSCORE // 2 * (P8_NEST_OFF + p8_len) + NSCORE % 2 * p8_len
+             if P8_NEST else NSCORE * p8_len)            # p8
           + NQ * (BR * DHEAD * 4)                         # oacc
           + NQ * SnaxBingoKernelSimdFaSoftmaxArgs.arena_bytes(BC, DHEAD)
           # headpar folds nothing, so it allocates no partial.
@@ -2379,7 +2493,9 @@ def main():
         traffic = NCL * (NKV_PER * (kb + vb) + qb)
     mac = 2 * BC * BR * DHEAD * NKV_PER * NQ * NCL
     print(f"Generated FlashAttention ({DECOMP}): Br={BR} Bc={BC} d={DHEAD} NKV={NKV}, "
-          f"qshift={QSHIFT}, NSCORE={NSCORE}, L1 buffers {l1:,} B of 514,816 B "
+          f"qshift={QSHIFT}, a={SCORE_SCALE}, k={SCORE_SHIFT} (a'={EXP_SCALE:g}), "
+          f"P8 pitch {SnaxBingoKernelSimdFaSoftmaxArgs.pitch(P8_PITCH)}{' nested' if P8_NEST else ''}, "
+          f"NSCORE={NSCORE}, L1 buffers {l1:,} B of 514,816 B "
           f"({100 * l1 / 514816:.0f}%)")
     print(f"  main-memory reads {traffic:,} B for {mac:,} MAC "
           f"= {mac / traffic:.0f} MAC/byte (one 512-bit port balances at "

@@ -88,7 +88,7 @@ def build_mempool(st):
 
     WHERE they land is the platform's business, not this workload's: a config with a
     memory chiplet gets a mempool.bin, one without gets C arrays in the host image. See
-    util/sim/common/bingo_data_staging.py -- addressing a memory chiplet a config does
+    mini_compiler/mem/bingo_data_staging.py -- addressing a memory chiplet a config does
     not have reads unmapped memory rather than faulting.
     """
     meta = []

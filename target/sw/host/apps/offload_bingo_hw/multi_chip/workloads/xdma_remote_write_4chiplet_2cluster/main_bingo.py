@@ -86,13 +86,20 @@ import sys
 import hjson
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
-ROOT_DIR = os.path.normpath(os.path.join(current_dir, "../../../../../../../../"))
+# The repo root is found by what it holds, not by counting "../" levels, which is right for
+# one depth only: a workload may sit deeper under workloads/ (dsv2/two_chiplet/<stage>).
+ROOT_DIR = current_dir
+while not os.path.isdir(os.path.join(ROOT_DIR, "target/sw/host/runtime/libbingo/mini_compiler")):
+    if os.path.dirname(ROOT_DIR) == ROOT_DIR:
+        raise RuntimeError(f"{__file__} is not inside a HeMAiA checkout")
+    ROOT_DIR = os.path.dirname(ROOT_DIR)
+WORKLOADS_DIR = os.path.join(ROOT_DIR, "target/sw/host/apps/offload_bingo_hw/multi_chip/workloads")
 
 sys.path.append(f"{ROOT_DIR}/target/sw/host/runtime/libbingo/mini_compiler")
 sys.path.append(current_dir)
 # Share the payload/poison/golden generator with the 1-cluster workload so the
 # two cannot drift apart. The Makefile depends on that file too.
-sys.path.append(os.path.join(current_dir, "..", "xdma_remote_write_4chiplet_1cluster"))
+sys.path.append(os.path.join(WORKLOADS_DIR, "xdma_remote_write_4chiplet_1cluster"))
 
 import _bingo_paths  # noqa: F401,E402  (puts mini_compiler's grouped subdirs on sys.path)
 from bingo_dfg import BingoDFG  # noqa E402
