@@ -32,12 +32,21 @@ testharness maps into the HBM at time zero (hw/hemaia/hemaia_mem_system/hbm/READ
 On a platform without an HBM it refuses, for the same reason as above: the address would
 simply be unmapped.
 
+A platform may have several memory chiplets (occamy.h MEM_CHIP_ID_<k>), each holding
+different data -- say, the weights of the layers its neighbours run. Every put* takes
+`mem_chip=(x, y)` to pick one; without it the array goes to the HOME memory chiplet, the
+first one or `mempool_loc`. `emit` writes the home chip's SRAM to build/mempool.bin (the
+shared image every memory chip loads unless it has its own) and each other chip's to
+build/mempool_chip_<x>_<y>.bin; with more than one memory chip, the HBM manifest tags every
+image chip=<id> so it loads into that chip only.
+
 Usage:
 
     st = DataStaging(platform)
     h_in     = st.put("in_0",     "uint16_t", x.view(np.uint16))
     h_golden = st.put("golden_0", "uint16_t", y.view(np.uint16))
     h_w      = st.put_hbm("w_q", w.view(np.int8))      # a weight, in the HBM
+    h_w2     = st.put_hbm("w_k", w2, mem_chip=(3, 0))  # ...in another memory chip's HBM
     ...                                   # h_* are BINGO memory handles, use them directly
     st.emit(args.data_h, args.output_dir)  # data.h and, if needed, mempool.bin / build/hbm
 """
@@ -80,6 +89,36 @@ def _c_array(ctype, name, n, alignment, values=None):
     return head + " = {\n" + "".join(f"\t{v},\n" for v in values) + "};"
 
 
+class _MemChip:
+    """One memory chiplet's share of the staged data: its SRAM ("L4") image and its HBM
+    image, and where both sit in the global address space."""
+
+    def __init__(self, x, y, mempool_vaddr, hbm_base, hbm_size):
+        self.loc = (x, y)
+        self.chip_id = (x << 4) | y
+        self.base = chiplet_addr_transform_loc(x, y, mempool_vaddr)
+        self.hbm_size = int(hbm_size)
+        self.hbm_base = (chiplet_addr_transform_loc(x, y, int(hbm_base))
+                         if self.hbm_size else None)
+        self.blob = bytearray()
+        self.hbm = bytearray()
+        self.hbm_items = []       # (name, offset, nbytes)
+        self.l4_items = []        # (name, offset, nbytes): put_l4, in blob whatever on_host
+
+
+def _platform_mem_chips(platform):
+    """[(x, y, hbm_base, hbm_size)] of every memory chiplet. A platform dict from before
+    `mem_chips` existed describes one, at mem_chip_loc_x/y."""
+    chips = platform.get("mem_chips")
+    if chips is not None:
+        return [(c["id"] >> 4, c["id"] & 0xF, c.get("hbm_base", 0), c.get("hbm_size", 0))
+                for c in chips]
+    if not int(platform.get("num_mem_chips", 0)):
+        return []
+    return [(int(platform.get("mem_chip_loc_x", 0)), int(platform.get("mem_chip_loc_y", 0)),
+             int(platform.get("hbm_base", 0)), int(platform.get("hbm_size", 0)))]
+
+
 class DataStaging:
     """Collects arrays, then emits them where the platform can actually reach them."""
 
@@ -88,26 +127,43 @@ class DataStaging:
         """`on_host` overrides the platform's choice for put()/put_zeros(): True keeps the
         arrays in the host image even when a memory chiplet exists. That is only right on
         a config whose spm_wide can hold them -- the 16 MiB ones -- and it keeps every
-        check a local read instead of a D2D round trip per word."""
-        self.n_mem_chips = int(platform.get("num_mem_chips", 0))
+        check a local read instead of a D2D round trip per word.
+
+        `mempool_loc` picks the home memory chiplet (default: the first); it need not be
+        one the platform lists, for a header that predates `mem_chips`."""
+        chips = _platform_mem_chips(platform)
+        self.n_mem_chips = int(platform.get("num_mem_chips", len(chips)))
+        self._chips = {(x, y): _MemChip(x, y, mempool_vaddr, hb, hs) for x, y, hb, hs in chips}
         if mempool_loc is None:
-            mempool_loc = (int(platform.get("mem_chip_loc_x", 0)),
-                           int(platform.get("mem_chip_loc_y", 0)))
+            mempool_loc = chips[0][:2] if chips else (int(platform.get("mem_chip_loc_x", 0)),
+                                                     int(platform.get("mem_chip_loc_y", 0)))
+        mempool_loc = tuple(mempool_loc)
+        if mempool_loc not in self._chips:
+            hbm = (int(platform.get("hbm_base", 0)), int(platform.get("hbm_size", 0))
+                   if self.n_mem_chips else 0)
+            self._chips[mempool_loc] = _MemChip(*mempool_loc, mempool_vaddr, *hbm)
         self.mempool_loc = mempool_loc
-        self.base = chiplet_addr_transform_loc(*mempool_loc, mempool_vaddr)
+        self._home = self._chips[mempool_loc]
+        self.base = self._home.base
+        self.hbm_size = self._home.hbm_size
+        self.hbm_base = self._home.hbm_base
         self._on_host = on_host
-        self._items = []          # (name, ctype, memchip offset or None, array)
+        self._items = []          # (name, ctype, memchip offset or None, array) -- home chip
         self._zeros = []          # (name, ctype, count) -- host path only
-        self._blob = bytearray()
         self._names = set()
-        # The HBM: chip-local base and size from the platform; 0 size = none.
-        self.hbm_size = int(platform.get("hbm_size", 0)) if self.n_mem_chips else 0
-        self.hbm_base = (chiplet_addr_transform_loc(*mempool_loc,
-                                                    int(platform.get("hbm_base", 0)))
-                         if self.hbm_size else None)
-        self._hbm = bytearray()
-        self._hbm_items = []      # (name, offset, nbytes)
-        self._l4_items = []       # (name, offset, nbytes): put_l4, in _blob whatever on_host
+
+    def _chip(self, mem_chip, what):
+        """The _MemChip `mem_chip` names: (x, y), a chip id, or None for the home one."""
+        if mem_chip is None:
+            return self._home
+        if isinstance(mem_chip, int):
+            mem_chip = (mem_chip >> 4, mem_chip & 0xF)
+        chip = self._chips.get(tuple(mem_chip))
+        if chip is None:
+            raise ValueError(
+                f"{what}: no memory chiplet at {tuple(mem_chip)}; this platform has "
+                f"{sorted(self._chips)}")
+        return chip
 
     def _claim(self, name):
         """Reject a repeated name here rather than in the C compiler.
@@ -133,65 +189,75 @@ class DataStaging:
     def has_hbm(self):
         return self.hbm_size > 0
 
-    def put_hbm(self, name, arr):
-        """Place *arr* in the memory chiplet's HBM and return its handle.
+    def put_hbm(self, name, arr, mem_chip=None):
+        """Place *arr* in a memory chiplet's HBM (the home one unless `mem_chip`) and
+        return its handle.
 
         The handle is a fixed global address that records its pool (mem_level "HBM"), so
-        a port bound to it knows where it is. Arrays are packed into one image in call
-        order, each on a HBM_ALIGN boundary.
+        a port bound to it knows where it is. Arrays are packed into one image per chip in
+        call order, each on a HBM_ALIGN boundary.
         """
-        if not self.has_hbm:
+        chip = self._chip(mem_chip, f"put_hbm({name!r})")
+        if not self.n_mem_chips or not chip.hbm_size:
             raise ValueError(
-                f"put_hbm({name!r}): this platform has no HBM (HBM_SIZE is 0 or there is "
-                f"no memory chiplet). Only a cfg whose hemaia_mem_chip entry has an `hbm` "
-                f"object has one -- hemaia_twochiplet_16MBL3_4cluster.hjson -- and an HBM "
-                f"address on any other is unmapped.")
+                f"put_hbm({name!r}): this platform has no HBM on memory chiplet "
+                f"{chip.loc} (HBM_SIZE is 0 or there is no memory chiplet). Only a cfg whose "
+                f"hemaia_mem_chip entry has an `hbm` object has one -- "
+                f"hemaia_twochiplet_16MBL3_4cluster.hjson -- and an HBM address on any other "
+                f"is unmapped.")
         self._claim(name)
         arr = np.ascontiguousarray(arr)
-        while len(self._hbm) % HBM_ALIGN:
-            self._hbm.append(0)
-        off = len(self._hbm)
-        self._hbm.extend(arr.tobytes())
-        if len(self._hbm) > self.hbm_size:
+        while len(chip.hbm) % HBM_ALIGN:
+            chip.hbm.append(0)
+        off = len(chip.hbm)
+        chip.hbm.extend(arr.tobytes())
+        if len(chip.hbm) > chip.hbm_size:
             raise ValueError(
-                f"put_hbm({name!r}): the image is {len(self._hbm):,} B, past the HBM's "
-                f"{self.hbm_size:,} B.")
-        self._hbm_items.append((name, off, arr.nbytes))
-        return BingoMemFixedAddr(self.hbm_base + off, mem_level="HBM")
+                f"put_hbm({name!r}): the image of memory chiplet {chip.loc} is "
+                f"{len(chip.hbm):,} B, past its HBM's {chip.hbm_size:,} B.")
+        chip.hbm_items.append((name, off, arr.nbytes))
+        return BingoMemFixedAddr(chip.hbm_base + off, mem_level="HBM")
 
     @property
     def hbm_bytes(self):
-        return len(self._hbm)
+        return sum(len(c.hbm) for c in self._chips.values())
 
-    def put_l4(self, name, arr):
+    def put_l4(self, name, arr, mem_chip=None):
         """Place *arr* in the memory chiplet's SRAM -- the "L4", build/mempool.bin, loaded
         at time zero -- whatever put() does, and return its fixed address.
 
         This is the steady state of a memchip-side prefetch: what a host iDMA on the
         memory chiplet would have copied HBM -> L4 ahead of use. The address is returned
         WITHOUT a level: no block has an L4 weight level, and a weight streams from any
-        address the same way (an iDMA read over the D2D link).
+        address the same way (an iDMA read over the D2D link). `mem_chip` picks the
+        memory chiplet (default: the home one).
         """
         if not self.n_mem_chips:
             raise ValueError(f"put_l4({name!r}): this platform has no memory chiplet.")
+        chip = self._chip(mem_chip, f"put_l4({name!r})")
         self._claim(name)
         arr = np.ascontiguousarray(arr)
-        while len(self._blob) % HBM_ALIGN:
-            self._blob.append(0)
-        off = len(self._blob)
-        self._blob.extend(arr.tobytes())
-        self._l4_items.append((name, off, arr.nbytes))
-        return BingoMemFixedAddr(self.base + off)
+        while len(chip.blob) % HBM_ALIGN:
+            chip.blob.append(0)
+        off = len(chip.blob)
+        chip.blob.extend(arr.tobytes())
+        chip.l4_items.append((name, off, arr.nbytes))
+        return BingoMemFixedAddr(chip.base + off)
 
     @property
     def l4_bytes(self):
-        return sum(n for _name, _off, n in self._l4_items)
+        return sum(n for c in self._chips.values() for _name, _off, n in c.l4_items)
 
-    def put(self, name, ctype, arr):
+    def put(self, name, ctype, arr, mem_chip=None):
         """Record *arr* and return the BINGO handle that addresses it.
 
-        `ctype` may be None to infer it from the array's dtype.
+        `ctype` may be None to infer it from the array's dtype. `mem_chip` puts it on that
+        memory chiplet instead of the home one; the host path has no such choice.
         """
+        chip = self._chip(mem_chip, f"put({name!r})")
+        if mem_chip is not None and not self.on_memchip:
+            raise ValueError(f"put({name!r}, mem_chip={mem_chip}): the arrays stay in the "
+                             f"host image here (on_host, or no memory chiplet)")
         self._claim(name)
         arr = np.ascontiguousarray(arr)
         if ctype is None:
@@ -201,16 +267,16 @@ class DataStaging:
         if self.on_memchip:
             # 64-B align every array: the iDMA and the host loads both want aligned
             # memchip words, and an unaligned golden silently shifts the comparison.
-            while len(self._blob) % 64:
-                self._blob.append(0)
-            off = len(self._blob)
-            self._blob.extend(arr.tobytes())
+            while len(chip.blob) % 64:
+                chip.blob.append(0)
+            off = len(chip.blob)
+            chip.blob.extend(arr.tobytes())
             self._items.append((name, ctype, off, arr))
-            return BingoMemFixedAddr(self.base + off)
+            return BingoMemFixedAddr(chip.base + off)
         self._items.append((name, ctype, None, arr))
         return BingoMemSymbol(name)
 
-    def put_zeros(self, name, ctype, count):
+    def put_zeros(self, name, ctype, count, mem_chip=None):
         """Record a zero-filled array and return its handle, WITHOUT spelling out zeros.
 
         On the host path the array is DECLARED and not defined, so it lands in .bss, which
@@ -219,27 +285,34 @@ class DataStaging:
         source for no information. On the memchip path there is no such trick: the pool is
         a flat binary, so the zeros are real bytes there.
         """
+        chip = self._chip(mem_chip, f"put_zeros({name!r})")
+        if mem_chip is not None and not self.on_memchip:
+            raise ValueError(f"put_zeros({name!r}, mem_chip={mem_chip}): the arrays stay "
+                             f"in the host image here (on_host, or no memory chiplet)")
         self._claim(name)
         width = {"uint8_t": 1, "int8_t": 1, "uint16_t": 2, "int16_t": 2,
                  "uint32_t": 4, "int32_t": 4}[ctype]
         if self.on_memchip:
-            while len(self._blob) % 64:
-                self._blob.append(0)
-            off = len(self._blob)
-            self._blob.extend(bytes(count * width))
+            while len(chip.blob) % 64:
+                chip.blob.append(0)
+            off = len(chip.blob)
+            chip.blob.extend(bytes(count * width))
             self._items.append((name, ctype, off, np.zeros(count, dtype=f"u{width}")))
-            return BingoMemFixedAddr(self.base + off)
+            return BingoMemFixedAddr(chip.base + off)
         self._zeros.append((name, ctype, count))
         return BingoMemSymbol(name)
 
     def emit(self, data_h_path, output_dir):
-        """Write data.h, and mempool.bin when the arrays live on the memory chiplet."""
+        """Write data.h, and the memory chiplets' images: build/mempool.bin (the home chip)
+        and build/mempool_chip_<x>_<y>.bin (each other chip given data), build/hbm."""
+        home_bytes = len(self._home.blob)
         lines = ["#include <stdint.h>", ""]
         if self.on_memchip:
             lines += [
                 "// Inputs and goldens live on the MEMORY CHIPLET (build/mempool.bin), not",
                 "// here: this platform's spm_wide is too small to also hold them.",
-                f"// {len(self._items)} array(s), {len(self._blob)} bytes.",
+                f"// {len(self._items)} array(s), "
+                f"{sum(len(c.blob) for c in self._chips.values())} bytes.",
             ]
         else:
             lines += [
@@ -259,33 +332,50 @@ class DataStaging:
             with open(data_h_path, "w") as f:
                 f.write("\n".join(lines) + "\n")
 
-        if self.on_memchip or self._l4_items:
-            out_build = os.path.join(output_dir, "build")
+        out_build = os.path.join(output_dir, "build")
+        # A chip's own image from an earlier build would be loaded instead of the shared
+        # one: remove every one this build does not write.
+        if os.path.isdir(out_build):
+            for f in os.listdir(out_build):
+                if f.startswith("mempool_chip_") and f.endswith(".bin"):
+                    os.remove(os.path.join(out_build, f))
+        if self.on_memchip or self._home.l4_items:
             os.makedirs(out_build, exist_ok=True)
             with open(os.path.join(out_build, "mempool.bin"), "wb") as f:
-                f.write(bytes(self._blob))
+                f.write(bytes(self._home.blob))
+        for chip in self._chips.values():
+            if chip is not self._home and chip.blob:
+                os.makedirs(out_build, exist_ok=True)
+                with open(os.path.join(out_build, "mempool_chip_%d_%d.bin" % chip.loc),
+                          "wb") as f:
+                    f.write(bytes(chip.blob))
         self._emit_hbm(output_dir)
-        return len(self._blob) if self.on_memchip else sum(
+        return home_bytes if self.on_memchip else sum(
             a.nbytes for _n, _c, _o, a in self._items)
 
     def _emit_hbm(self, output_dir):
-        """build/hbm/manifest.txt and the one image it lists; nothing if put_hbm was never
+        """build/hbm/manifest.txt and the images it lists; nothing if put_hbm was never
         called. A stale manifest from an earlier build is removed either way: the
-        testharness loads whatever build/hbm/ holds."""
+        testharness loads whatever build/hbm/ holds. With one memory chiplet the image is
+        untagged, as it always was; with more, each is tagged chip=<id>."""
         hbm_dir = os.path.join(output_dir, "build", "hbm")
         manifest = os.path.join(hbm_dir, "manifest.txt")
-        if not self._hbm_items:
+        chips = [c for c in self._chips.values() if c.hbm_items]
+        if not chips:
             if os.path.exists(manifest):
                 os.remove(manifest)
             return
         os.makedirs(hbm_dir, exist_ok=True)
-        with open(os.path.join(hbm_dir, HBM_IMAGE), "wb") as f:
-            f.write(bytes(self._hbm))
-        lines = ["# Generated by bingo_data_staging.py -- the workload's HBM image.",
-                 "# offset (above the HBM base)  file",
-                 f"0x0  {HBM_IMAGE}",
-                 "#",
-                 "# what the image holds (offset above the HBM base, bytes):"]
-        lines += [f"#   0x{off:08x}  {n:>10}  {name}" for name, off, n in self._hbm_items]
+        tagged = len(self._chips) > 1
+        lines = ["# Generated by bingo_data_staging.py -- the workload's HBM image(s).",
+                 "# offset (above the HBM base)  file  [chip=<id>: that memory chiplet only]"]
+        notes = []
+        for chip in chips:
+            image = HBM_IMAGE if chip is self._home else "hbm_image_chip_%d_%d.bin" % chip.loc
+            with open(os.path.join(hbm_dir, image), "wb") as f:
+                f.write(bytes(chip.hbm))
+            lines.append(f"0x0  {image}" + (f"  chip=0x{chip.chip_id:02x}" if tagged else ""))
+            notes += ["#", f"# what {image} holds (offset above the HBM base, bytes):"]
+            notes += [f"#   0x{off:08x}  {n:>10}  {name}" for name, off, n in chip.hbm_items]
         with open(manifest, "w") as f:
-            f.write("\n".join(lines) + "\n")
+            f.write("\n".join(lines + notes) + "\n")

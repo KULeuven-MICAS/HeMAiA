@@ -166,11 +166,34 @@ def parse_platform_cfg(occamy_h_path):
         # The memory chiplet's HBM, chip-local base and size (0 when the cfg gives it
         # none). Generated into occamy_memory_map.h beside occamy.h, not into occamy.h.
         **_hbm_geometry(occamy_h_path),
+        # Every memory chiplet: [{id, mem_size, hbm_base, hbm_size, num_sys_idma}], cfg
+        # order. Empty for a header from before they were listed (then only
+        # mem_chip_loc_x/y and the HBM above describe the one there is).
+        "mem_chips": _mem_chips(defines, occamy_h_path),
         # dep_tag_width / chip_id_width / task_desc_width / task_desc_words. Each is
         # defaulted inside _descriptor_geometry so an older generated header still parses.
         **_descriptor_geometry(defines, occamy_h_path),
     }
     return _remember_platform(platform)
+
+
+def _mem_chips(defines, occamy_h_path):
+    """MEM_CHIP_ID_<k> / MEM_CHIP_NUM_SYS_IDMA_<k> (occamy.h) and MEM_CHIP_<k>_* (the
+    occamy_memory_map.h beside it), for k < N_MEM_CHIPS; [] when the header lists none."""
+    mm = Path(occamy_h_path).with_name("occamy_memory_map.h")
+    mdefs = _parse_defines(mm) if mm.exists() else {}
+    chips = []
+    for k in range(defines.get("N_MEM_CHIPS", 0)):
+        if f"MEM_CHIP_ID_{k}" not in defines:
+            return []
+        chips.append({
+            "id": defines[f"MEM_CHIP_ID_{k}"],
+            "num_sys_idma": defines.get(f"MEM_CHIP_NUM_SYS_IDMA_{k}", 1),
+            "mem_size": mdefs.get(f"MEM_CHIP_{k}_MEM_SIZE", 0),
+            "hbm_base": mdefs.get(f"MEM_CHIP_{k}_HBM_BASE_ADDR", 0),
+            "hbm_size": mdefs.get(f"MEM_CHIP_{k}_HBM_SIZE", 0),
+        })
+    return chips
 
 
 def _hbm_geometry(occamy_h_path):

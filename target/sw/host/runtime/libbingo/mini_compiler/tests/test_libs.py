@@ -273,6 +273,39 @@ with _tempfile.TemporaryDirectory() as _td:
     check("...and the image holds each array at its offset",
           _img[:100] == bytes(range(100)) and _img[0x1000:0x1040] == b"\x01" * 64)
 
+# Two memory chiplets, (1,0) and (3,0): each holds its own arrays.
+_plat2 = dict(_plat, num_mem_chips=2, mem_chips=[
+    {"id": 0x10, "hbm_base": 0x1_0000_0000, "hbm_size": 0x4_0000_0000},
+    {"id": 0x30, "hbm_base": 0x1_0000_0000, "hbm_size": 0x4_0000_0000}])
+_st2 = _DS(_plat2)
+_a = _st2.put("a", "int8_t", _np.full(64, 7, _np.int8))
+_b = _st2.put("b", "int8_t", _np.full(64, 9, _np.int8), mem_chip=(3, 0))
+_w = _st2.put_hbm("w_far", _np.full(32, 5, _np.int8), mem_chip=0x30)
+_v = _st2.put_hbm("w_home", _np.full(32, 6, _np.int8))
+check("put(mem_chip=) addresses that memory chiplet, the rest the home one",
+      _a.address == 0x1000_8000_0000 and _b.address == 0x3000_8000_0000,
+      (hex(_a.address), hex(_b.address)))
+check("...and so does put_hbm, by (x, y) or chip id",
+      _w.address == 0x3001_0000_0000 and _v.address == 0x1001_0000_0000,
+      (hex(_w.address), hex(_v.address)))
+refuses("a memory chiplet the platform lacks is refused",
+        lambda: _st2.put("c", "int8_t", _np.zeros(8, _np.int8), mem_chip=(2, 0)),
+        "no memory chiplet at (2, 0)")
+with _tempfile.TemporaryDirectory() as _td:
+    _os.makedirs(_os.path.join(_td, "build"))
+    open(_os.path.join(_td, "build", "mempool_chip_5_0.bin"), "wb").close()
+    _st2.emit(_os.path.join(_td, "d.h"), _td)
+    _bd = _os.path.join(_td, "build")
+    _man = open(_os.path.join(_bd, "hbm", "manifest.txt")).read()
+    check("each chip gets its own SRAM image; a stale one is removed",
+          open(_os.path.join(_bd, "mempool.bin"), "rb").read() == b"\x07" * 64
+          and open(_os.path.join(_bd, "mempool_chip_3_0.bin"), "rb").read() == b"\x09" * 64
+          and not _os.path.exists(_os.path.join(_bd, "mempool_chip_5_0.bin")),
+          sorted(_os.listdir(_bd)))
+    check("with two chips every HBM image is tagged chip=<id>",
+          "0x0  hbm_image.bin  chip=0x10" in _man
+          and "0x0  hbm_image_chip_3_0.bin  chip=0x30" in _man, _man)
+
 bad_shape = Consumer()
 bad_shape._spec = PortSpec("A", "i8", (64, 128), mem_level="L1", cluster=0)
 refuses("a shape mismatch is refused", lambda: assemble(consumer=bad_shape), "shape")
