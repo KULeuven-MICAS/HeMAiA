@@ -245,6 +245,11 @@ module ${name}_quad_ctrl
     // Until this was passed, every instance took bingo_hw_manager_top's default of 12.
     .TaskIdWidth              (${task_id_width}                           ),
     .TaskQueueMaxOutstanding  (4                                          ),
+    // The per-(core, cluster) waiting queue the in-order descriptor stream feeds
+    // (s1_quadrant.bingo_cfg.waiting_queue_depth). One full queue stops the whole stream,
+    // so a cluster waiting on weights holds back the others' next tasks (HW-19). Exported to
+    // SW as BINGO_WAITING_QUEUE_DEPTH, which the mini-compiler's hang check models.
+    .WaitingDepCheckQueueDepth(${waiting_queue_depth}                     ),
     // DVFS doorbell MSIP bit: injected here so the PM is not hardcoded (see occamy.py
     // hw_manager_ipi_idx; must match HW_MANAGER_DVFS_MSIP_BIT / occamy_soc.sv ipi_i).
     .HOST_DVFS_MSIP_BIT       (${hw_manager_ipi_idx}                     ),

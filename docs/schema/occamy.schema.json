@@ -303,6 +303,12 @@
               "minimum": 1,
               "default": 12
             },
+            "waiting_queue_depth": {
+              "type": "integer",
+              "description": "Depth of the bingo HW manager's per-(core, cluster) waiting-dep-check queue (WaitingDepCheckQueueDepth), exported to SW as BINGO_WAITING_QUEUE_DEPTH. The manager hands the one in-order descriptor stream to these queues, and a single full queue stops the whole stream: a cluster whose queue holds tasks still waiting for their weights holds back every other cluster's next task (HW-19). Deeper queues let the stream run further ahead of a lagging cluster. Costs depth x descriptor width flops per queue. Defaults to the RTL parameter's own 8.",
+              "minimum": 1,
+              "default": 8
+            },
             "task_desc_width": {
               "type": "integer",
               "description": "Optional override for the bingo HW manager task-descriptor container width in bits (TaskDescBusWidth), exported to SW as BINGO_TASK_DESC_WIDTH. INTENTIONALLY has no default: when the key is absent occamygen DERIVES the width (get_task_desc_width) as the smallest whole number of 64-bit host AXI-Lite words that holds this config's descriptor layout, so most configs keep a single-beat 64-bit descriptor and only a config whose layout genuinely overflows pays for a second fetch beat. A schema default would defeat that by making the key always present. Set it only to buy headroom ahead of need - e.g. to keep dep_tag_width at 4 on a 4-cluster part, or to freeze one container width across a family of configs so a single task-list image serves all of them. Must be a multiple of 64 and at least as wide as the derived layout; occamygen errors out otherwise.",
@@ -343,6 +349,17 @@
       "title": "HeMAiA Multi-Chip System",
       "type": "object",
       "properties": {
+        "sim_clock": {
+          "title": "Simulated clocks",
+          "description": "The testbench master clock the compute chips and the memory chip divide down, and the dividers of their digital logic; the D2D PHYs run at the master clock. Absent: a 500 MHz master, the runtime's own core dividers and memchip /6.",
+          "type": "object",
+          "properties": {
+            "master_mhz": {"type": "number", "default": 500, "description": "Testbench master clock, MHz (non-PLL simulation)."},
+            "core_clk_div": {"type": "integer", "default": 0, "description": "Divider the runtime gives the compute chips' host and clusters (0: the runtime's own, /7 then /6)."},
+            "memchip_clk_div": {"type": "integer", "default": 6, "description": "The memory chip's digital clock divider (its PHYs run at the master clock)."}
+          },
+          "additionalProperties": false
+        },
         "testbench_cfg": {
           "title": "Chiplets on the virtual interposer",
           "type": "object",
