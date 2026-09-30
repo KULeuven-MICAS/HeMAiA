@@ -32,11 +32,17 @@ DEFAULT_SIM_CFG = "target/sim/cfg/sim_rtl.hjson"
 
 
 def run_sweep_cli(script_file, *, description, default_task_name,
-                  cfg=DEFAULT_CFG, sim_cfg=DEFAULT_SIM_CFG):
+                  cfg=DEFAULT_CFG, sim_cfg=DEFAULT_SIM_CFG, with_macro=False,
+                  with_d2d=False, build_sw_fleet=True):
     """Parse args and run the sweep described by *script_file*'s task YAML.
 
     *script_file* is the caller's ``__file__``; its directory is the run output
     dir and the home of the default ``default_task_name`` task list.
+
+    ``with_macro`` / ``with_d2d`` pull the private vendor modules, which a cfg whose
+    compute chip reaches a memory chiplet over the D2D link validates with.
+    ``build_sw_fleet=False`` skips the ~96-app ``make sw`` and builds only the task
+    list's own apps (strictly, through ``make apps``).
     """
     script = Path(script_file).resolve()
     repo_root = Path(__file__).resolve().parents[2]  # util/automation_scripts -> repo root
@@ -84,8 +90,8 @@ def run_sweep_cli(script_file, *, description, default_task_name,
         with_waveform=bool(args.waveform),
         cfg=args.cfg,
         sim_cfg=sim_cfg,
-        with_macro=False,
-        with_d2d=False,
+        with_macro=with_macro,
+        with_d2d=with_d2d,
         with_pll=False,
         # The SW fleet build (~96 host apps) dominates a sweep's setup and is -j-safe;
         # `rtl`/`bootrom` are not, and stay serial.
@@ -94,5 +100,6 @@ def run_sweep_cli(script_file, *, description, default_task_name,
         skip_setup=args.sw_only or args.reuse_build,
         skip_build=args.sw_only or args.reuse_build,
         skip_compile=args.sw_only,
+        build_sw_fleet=build_sw_fleet,
     )
     runner.run(parse_tasks(task_yaml))
