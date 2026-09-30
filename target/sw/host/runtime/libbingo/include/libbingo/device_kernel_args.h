@@ -232,6 +232,81 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_idma_broadcast_args {
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_idma_broadcast_args_t;
 
+// BINGO IDMA strided copy, up to three dimensions: `outer` repetitions (src_outer /
+// dst_outer bytes apart) of `reps` runs of `size` bytes (src_stride / dst_stride apart).
+// Any memory the iDMA reaches on either side. What a gather of rows into one buffer, a
+// cache append (runs of 4 or 1 bytes into the A layouts) or a tile of a [512, cap] operand
+// needs, none of which is one contiguous run.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_idma_2d_copy_args {
+  uint32_t src_addr_hi;
+  uint32_t src_addr_lo;
+  uint32_t dst_addr_hi;
+  uint32_t dst_addr_lo;
+  uint32_t size;          // bytes per run
+  uint32_t src_stride;    // bytes between runs
+  uint32_t dst_stride;
+  uint32_t reps;          // runs per repetition
+  uint32_t outer;         // repetitions, >= 1
+  uint32_t src_outer;     // bytes between repetitions
+  uint32_t dst_outer;
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_idma_2d_copy_args_t;
+
+// BINGO IDMA copy from an address chosen AT RUN TIME: slot `slot` of an expert-slot record
+// in this cluster's L1 (offload_hw_kernels/moe_route.h) names the expert the router picked,
+// and word pair `field` of it the tensor (0 gate|up weights, 1 their dequant factors, 2
+// down weights, 3 theirs). Copies [base + offset, base + offset + size) to dst. A zero base
+// -- an expert whose weights were never staged -- fails the node rather than reading
+// whatever sits at address `offset`.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_idma_copy_slot_args {
+  uint32_t record_addr;   // the slot record, this cluster's L1 (32-bit)
+  uint32_t slot;
+  uint32_t field;         // 0 gu, 1 gu_s, 2 dn, 3 dn_s
+  uint32_t offset;        // bytes into the tensor
+  uint32_t dst_addr_hi;
+  uint32_t dst_addr_lo;
+  uint32_t size;
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_idma_copy_slot_args_t;
+
+// One chunk of an L3 weight ring into L1 (offload_hw_kernels/idma.h): wait until the
+// slot's flag holds `seq`, copy the slot, write `seq` into its release word. flag_addr
+// and release_addr are this chiplet's local 32-bit L3 addresses.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_idma_ring_load_args {
+  uint32_t flag_addr;
+  uint32_t seq;           // the chunk's sequence number in its ring, from 1
+  uint32_t src_addr_hi;   // the ring slot
+  uint32_t src_addr_lo;
+  uint32_t dst_addr_hi;   // the L1 slab
+  uint32_t dst_addr_lo;
+  uint32_t size;
+  uint32_t release_addr;
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_idma_ring_load_args_t;
+
+// BINGO MoE route: the top k of n FP16 probabilities (largest first, ties to the lower
+// index), and per chosen expert its record slot: its id, its weight (FP16 and as FP32
+// bits, for the combine), and its 64-byte entry of the expert table copied from L3/HBM
+// (gate|up, gu factors, down, down factors as 64-bit addresses, then the SwiGLU output's
+// FP32 inv scale). See offload_hw_kernels/moe_route.h for the record layout.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_moe_route_args {
+  uint32_t p_addr;        // n FP16 probabilities, this cluster's L1
+  uint32_t n;             // <= 64
+  uint32_t k;             // <= 8
+  uint32_t table_addr_hi; // n entries of 64 B, any memory the iDMA reaches
+  uint32_t table_addr_lo;
+  uint32_t record_addr;   // k slots of 128 B, this cluster's L1
+  // A PASS of `tokens` > 1: token t's probabilities at p_addr + t * p_pitch; the slots are
+  // the UNION of the tokens' top k (token 0's in its order, then each later token's new
+  // ones), exactly `union_n` of them, and token t's record -- union_n slots, the same ids
+  // and table entries, its own weights (0 for an expert it did not pick) -- at
+  // record_addr + t * union_n * 128. tokens 0 or 1: one token, k slots.
+  uint32_t tokens;
+  uint32_t p_pitch;
+  uint32_t union_n;
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_moe_route_args_t;
+
 // BINGO IDMA Pairwise Swap (flat adjacent-element-pair swap: dst[i] = src[i^1]).
 // The data half of RoPE rotate_half; produced on-device via two strided iDMA copies.
 __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_idma_pairwise_swap_args {
@@ -265,8 +340,37 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_gemm_full_args {
   int32_t int32tofp16_enable;
   int32_t int4_a_enable;
   int32_t int4_b_enable;
+  // The D-port converter's power-of-two output scale k (0..14): FP16 out is
+  // RNE(acc * 2^-k). Written on every dispatch -- the register is sticky. Needs the
+  // converter built with `shift: 1`; a non-zero k on a build without it is refused.
+  uint32_t d_shift;
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_gemm_full_args_t;
+
+// The one-token GEMV on VersaCore's (1, 4, 32) shape (offload_hw_kernels/gemv.h). One task
+// runs `groups` GEMVs of depth K = 4 kt and width N = 16 nb:
+//   A  x_g in ROW 0 of a 16-row A-layout operand ((16, 4, 16) A layout), at A + g * a_step
+//   B  W_g in the (16, 4, 16) B layout, at B + g * K * N; with w4, INT4 in the paired
+//      nibble-packed layout (snax util/layout.py to_b_pairs + pack_int4), at B + g * K * N / 2
+//   D  y_g = RNE(x_g . W_g * 2^-d_shift), FP16, contiguous, at D + g * 2 N
+// b_step / d_step move group g's W and y instead: b_step 0 makes the groups TOKENS that share
+// one W (a speculative pass's tokens, one pass each), d_step their rows' pitch.
+// All three are 32-bit cluster-local (L1) addresses.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_gemv_args {
+  uint32_t input_A_addr;
+  uint32_t input_B_addr;
+  uint32_t output_D_addr;
+  uint32_t kt;        // K / 4: array passes per output block
+  uint32_t nb;        // N / 16 per group; an odd nb runs at half width
+  uint32_t groups;    // GEMVs in this task
+  uint32_t a_step;    // bytes between the groups' A operands (0: they share one x)
+  uint32_t d_shift;   // k, 0..14
+  uint32_t a_blk;     // bytes between A blocks along K: 64 in the A layout, 8 in a_row
+  uint32_t w4;        // 1: INT4 weights through B's converter (nb even); 0: INT8
+  uint32_t b_step;    // bytes between the groups' W: K N (INT4 K N / 2), or 0 (shared W)
+  uint32_t d_step;    // bytes between the groups' y: 2 N, or the pitch of y's rows
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_gemv_args_t;
 
 // ---------------------------------------------------------
 // Clean per-precision GEMM wrappers (over __snax_bingo_kernel_gemm_full)
@@ -809,9 +913,9 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_softmax_t_args {
 // only carry a run that is contiguous in memory: A's atom is four features of one token
 // (a row_major run), B's four tokens of one feature (a col_major run). Every other pair is
 // a transpose, and it is refused here rather than normalising the wrong tensor. The block
-// in libs/block/simd/norm.py emits the xDMA transposes and guarantees the pair is legal.
+// in libs/blocks/simd/norm.py emits the xDMA transposes and guarantees the pair is legal.
 // A and B work for any mesh whose operand block a blocked nest can write; which meshes
-// those are is decided on the host (kernels/blocked_nest.py), not here.
+// those are is decided on the host (libs/kernels/blocked_nest.py), not here.
 //
 // FOR COL_MAJOR, seed_addr AND input_addr ARE ONE ALLOCATION. seed_addr is a 64 B scratch
 // beat the kernel writes and then reads back as the sticky operand, and it must sit
@@ -820,7 +924,7 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_softmax_t_args {
 // it -- a violation would otherwise overwrite feature row 0 and read the tile one beat out
 // of phase, with nothing reported.
 // THE LAYOUT CODES, shared by every kernel that takes a layout as an argument. They must
-// match kernels/kernel_base.py's LAYOUT_CODE, which is the only other place they appear.
+// match libs/kernels/kernel_base.py's LAYOUT_CODE, which is the only other place they appear.
 //
 //   row_major  [r][c] at r*cols + c. What everything outside the array uses.
 //   col_major  the same values at c*rows + r. One FP16 lane per token, for a per-row
@@ -848,7 +952,7 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_rmsnorm_args {
   uint32_t out_prec;             // BINGO_PREC_*; col_major -> col_major supports F16 only
   uint32_t inv_scale_f32bits;    // int8 out: Fp16ToInt8 scale, FP32 bits; 0 = baked 64.0
   // THE BLOCKED OUTPUTS (output_layout A or B), for ANY mesh. The host derives the
-  // reorder for the mesh and output precision -- kernels/blocked_nest.py, verified there
+  // reorder for the mesh and output precision -- libs/kernels/blocked_nest.py, verified there
   // against the layout's index map -- and the device executes it without interpreting:
   // the source is the kernel's own re-laid tile, `blk_pitch` bytes a row. Loops are
   // innermost first, unused ones bound 1 / stride 0. `rd` excludes the operand interleave,
@@ -864,8 +968,120 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_rmsnorm_args {
   uint32_t blk_wr_stride0, blk_wr_stride1, blk_wr_stride2;
   uint32_t blk_reps;
   uint32_t blk_rep_rd, blk_rep_wr;
+  // L1 scratch the HOST allocated for this call (SnaxBingoKernelSimdRmsnormArgs
+  // .scratch_bytes() for the route), or 0 to use the kernel's own pool -- which a tile
+  // larger than [32, 128] falls off onto a per-call snrt_l1_malloc + free. A graph with a
+  // static L1 layout passes its own: the bytes are reused after this node, and the kernel
+  // neither allocates nor frees. scratch_bytes is checked against what the route needs.
+  uint32_t scratch_addr_hi;
+  uint32_t scratch_addr_lo;
+  uint32_t scratch_bytes;
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_simd_rmsnorm_args_t;
+
+// One-token SIMD kernels (offload_hw_kernels/simd_row.h). The SIMD block reads and writes
+// only its own TCDM, so every address is the 32-bit cluster-local one.
+//
+// RMSNorm of ONE row of `cols` FP16 (a power of two), no gain: reduce SUMSQ -> ssq,
+// RSQRT(ssq / cols) -> seed, then MUL|STICKY_B over [seed | x] -> y. seed_addr must be
+// input_addr - 64 (the sticky multiply reads the two as one stream); ssq is one beat.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_rmsnorm_row_args {
+  uint32_t seed_addr;
+  uint32_t input_addr;
+  uint32_t ssq_addr;
+  uint32_t output_addr;
+  uint32_t cols;
+  uint32_t inv_scale_f32bits;   // 0: y is FP16; else y = Fp16ToInt8(norm(x), inv), cols INT8
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_simd_rmsnorm_row_args_t;
+
+// `cols` FP16 -> INT8 into ROW `row` of a GEMV's 16-row A operand (16 * cols bytes, the
+// (16, 4, 16) A layout): value i lands at output + (i/4)*64 + 4*row + i%4. Nothing else of
+// the operand is written.
+//
+// SEGMENTS. With segs > 1 the input is `segs` runs of `cols` values, seg_pitch bytes apart,
+// and the output the row of all segs * cols values: segment g then lands at output + 16 *
+// cols * g, which is by construction the A operand of its own [16, cols] GEMV. That is how
+// one task writes every head's operand of an absorbed per-head GEMV (a_step = 16 * cols)
+// from the heads' slices of q, which sit a head apart in memory.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_quant_a_row_args {
+  uint32_t input_addr;
+  uint32_t output_addr;
+  uint32_t cols;               // values per segment, a multiple of 32
+  uint32_t row;
+  uint32_t inv_scale_f32bits;  // Fp16ToInt8: sat127(rne(x * inv_scale)), FP32 bits
+  uint32_t segs;               // segments, >= 1
+  uint32_t seg_pitch;          // bytes between two segments' first values (segs > 1)
+  // the output's A-block stride: 64 (0 means 64) the 16-row A layout, 8 a_row -- 4 values
+  // and 4 untouched bytes a block, 2 bytes a value, the segments back to back (row 0 only)
+  uint32_t a_blk;
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_simd_quant_a_row_args_t;
+
+// 16 FP16 rows `pitch` bytes apart -> INT8 A blocks: `kt` blocks of 16 rows x 4 values, block
+// k at output + 64 k, from values [4k, 4k + 4) of every row. The query operand of MLA's
+// score matmul is two such segments (q~ and q_pe, each with its own scale) of one
+// [16, 576] A operand. A beat reads 8 rows x 4 values (lane stride = pitch), two beats
+// (rows 0-7, 8-15) pack into one block.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_quant_a_rows_args {
+  uint32_t input_addr;
+  uint32_t pitch;              // bytes between two rows, a multiple of 8
+  uint32_t output_addr;
+  uint32_t kt;                 // A blocks, 4 values of every row each
+  uint32_t inv_scale_f32bits;
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_simd_quant_a_rows_args_t;
+
+// The end of an online softmax, per query lane: o~ = O16 (.) c / l. One task makes the
+// factor c / l = RSQRT(a_n * l)^2 (l read twice, both mapped, then multiplied: the square
+// of sqrt(c / l) cannot overflow the way l^2 would) into the latch beat directly below O16;
+// a second multiplies every beat of O16 by it (STICKY_B). a_n = 1 / c, FP32 bits.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_mla_normalise_args {
+  uint32_t l_addr;             // the running sum, one FP16 beat (a lane per query)
+  uint32_t latch_addr;         // one beat, == input_addr - 64
+  uint32_t input_addr;         // O16, `beats` beats (a latent per beat)
+  uint32_t output_addr;        // o~, `beats` beats
+  uint32_t beats;
+  uint32_t a_n_f32bits;
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_simd_mla_normalise_args_t;
+
+// Softmax over ONE row of `beats` FP16 beats (the router's 64 logits = 2 beats): the row's
+// max and sum fold across lanes, so each comes out splatted. Five tasks:
+//   Reduce MAX -> tmp; Map a=-1 -> x's latch; EW0 ADD|STICKY_B [-m][x] -> Map EXP ->
+//   Reduce ADD|TAP -> [e][s]; [s][s] EW0 MUL -> Map RSQRT -> 1/s in e's latch;
+//   EW1 MUL|STICKY_B [1/s][e] -> p.
+// x_addr - 64 and e_addr - 64 are the latch beats, e_addr + 64 * beats the sum beat.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_softmax_row_args {
+  uint32_t x_addr;
+  uint32_t tmp_addr;           // one beat
+  uint32_t e_addr;             // beats + 1 beats, a latch beat below
+  uint32_t p_addr;             // beats beats
+  uint32_t beats;
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_simd_softmax_row_args_t;
+
+// SwiGLU of one token into ROW 0 of the down GEMV's A operand: sg = SILU(gate), then
+// sat127(rne((sg * up) * inv)) written as simd_quant_a_row writes (16 * inter bytes, row 0
+// only). g_addr holds [gate | up], inter FP16 each; sg_addr is inter FP16 of scratch. The
+// scale is inv_scale_f32bits, or the FP32 word at inv_addr when that is non-zero (an
+// expert slot's, chosen at run time).
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_swiglu_a_row_args {
+  uint32_t g_addr;
+  uint32_t sg_addr;
+  uint32_t output_addr;
+  uint32_t inter;
+  uint32_t inv_scale_f32bits;
+  uint32_t inv_addr;
+  // rows > 1: that many tokens, g rows g_pitch apart, output rows a_pitch apart. a_blk: the
+  // output's A-block stride, 64 (the 16-row A layout, row 0) or 8 (a_row: 4 values and 4
+  // zero bytes a block, the layout a multi-token GEMV reads); 0 means 64.
+  uint32_t rows;
+  uint32_t g_pitch;
+  uint32_t a_pitch;
+  uint32_t a_blk;
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_simd_swiglu_a_row_args_t;
 
 
 // Whole FP16 SiLU (x*sigmoid(x)) in one DM-core kernel: a single StreamMap pass, plus an optional
@@ -965,6 +1181,25 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_fa_softmax {
   // the iDMA is streaming through the same ports -- which is exactly when the first tile
   // runs. PROLOGUE+PRIMED moves it off the critical path, so tile 0 costs what the rest do.
   uint32_t geom_mode;
+  // The softmax temperature, as FP32 BITS: P = exp(a * (S - m)) and corr = exp(a * delta).
+  // Real attention is a = 1 / (s_q * s_k * sqrt(d)) -- the two INT8 quantisation scales
+  // and the head-dimension scale. 0x3F800000 (1.0) is the old kernel exactly.
+  uint32_t score_scale;
+  // SIMD_FA_P_* bits (offload_hw_kernels/simd.h):
+  //   1 INTERLEAVE   write P already in the consuming PV's B layout (k-major 16x4 blocks),
+  //                  so O^T = V^T.P^T contracts over the right keys. Needs Bc % 4 == 0 and
+  //                  the quantiser's INTERLEAVE4 mode; PV must then pass GEMM_FA_B_KMAJOR.
+  //   2 CORR_EXPORT  write corr = exp(a * (m_old - m_new)) to the beat AFTER the row sum in
+  //                  p8_dst (one p8_pitch after the row sum; see p8_pitch), where PV reads it for
+  //                  GEMM_FA_C_COLSCALE, and skip the arena's dead O *= corr task.
+  // 0 is the historical kernel.
+  uint32_t p_mode;
+  // Bytes between two consecutive 64-byte P8 beats in p8_dst; 0 is dense (64). The fused
+  // pass writes P8 as a flat 1-D stream at this pitch, the row sum one pitch after the last
+  // P8 beat, and (CORR_EXPORT) corr one pitch after the row sum -- so p8_dst spans
+  // (bc/2 + 1) * pitch + 64 bytes, and a second buffer can nest in the gaps. PV's b_pitch
+  // must match. See "THE B PITCH" in offload_hw_kernels/gemm_fa.h.
+  uint32_t p8_pitch;
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_simd_fa_softmax_args_t;
 
@@ -1189,5 +1424,30 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_gemm_fa_args {
   // it was not making one. A and B stalls are the MEMORY SYSTEM's tax measured inside the
   // array, which is exactly what changes as the machine scales out.
   uint32_t perf_addr;
+  // GEMM_FA_* bits (offload_hw_kernels/gemm_fa.h), PV only:
+  //   1 B_KMAJOR    B's 64-byte blocks are stored k-major -- block (k, n) at (k*N + n)*64 --
+  //                 which is how the softmax's INTERLEAVE mode writes P. 0 is n-major.
+  //   2 C_COLSCALE  multiply C by one FP16 factor per output COLUMN on its way into the
+  //                 array (the Int32ColumnScale extension on the C read path), so this
+  //                 dispatch computes O = corr (.) O + V^T.P^T: the online-softmax rescale
+  //                 at no extra pass. The 32 factors are the FP16 beat at corr_addr.
+  //   4 D_FP16      the LAST tile of an online softmax: O leaves through the D port as FP16,
+  //                 RNE(O * 2^-d_shift), into D -- a buffer of its own, half the INT32 bytes
+  //                 -- while C is still read as the INT32 accumulator (and scaled, with
+  //                 C_COLSCALE). QK's score path and this one share the converter; only the
+  //                 C side differs.
+  uint32_t flags;
+  uint32_t corr_addr;
+  // QK, and PV with D_FP16: the D-port converter's power-of-two output scale k (0..14). The
+  // score tile is RNE(S * 2^-k), which keeps full-range INT8 scores (up to 127^2 * d) inside
+  // FP16 at no loss of precision; the softmax then takes a' = a * 2^k as its temperature.
+  // Needs the converter built with `shift: 1` (READER_WRITER_EXTENSION_1_CSR_NUM == 3); a
+  // non-zero k on a build without it, or on an INT32 PV, is refused. 0 is the plain
+  // conversion.
+  uint32_t d_shift;
+  // PV only: bytes between two consecutive 64-byte B blocks as stored; 0 is dense (64).
+  // The softmax's p8_pitch must match. 160 keeps PV's A and B streams off each other's
+  // TCDM banks -- see "THE B PITCH" in offload_hw_kernels/gemm_fa.h.
+  uint32_t b_pitch;
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_gemm_fa_args_t;
