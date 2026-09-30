@@ -1,0 +1,51 @@
+// DeepSeek-V2-Lite layer 1, stages 1-8, a pass of 4 tokens, INT4: the settings of run t4s8w,
+// the whole pass in one graph, which fits L1 with compact_tables. Measured on RTL: 5,750.9 us
+// for the pass (1,437.7 us a token), 5/5 checks byte-exact. What each field does is in this
+// stage's main_bingo.py and ../../common/dsv2_staged.py.
+{
+    // Must match the RTL cfg (hemaia_twochiplet_16MBL3_4cluster).
+    num_chiplets: 1
+    num_clusters: 4
+
+    // The golden pack (snax_cluster sw/apps/dsv2/util): seeded weights at DeepSeek-V2-Lite's
+    // shapes, the token at position L (a pass: positions L .. L + tokens - 1; stages 5-8 want
+    // L + tokens keys in whole tiles of 64).
+    seed: 1
+    L: 508
+
+    // tokens per pass; wbits: 4 (INT4, the router INT8) or 8
+    tokens: 4
+    wbits: 4
+
+    // the front end: the norm's cluster, W_DKV's columns per cluster (stages 4+ read the
+    // latent on cluster 0), W_Q's loads fenced behind kv16, the first weight loads held
+    // until x8 is loaded
+    norm_cluster: 0
+    dkv_cols: [576, 0, 0, 0]
+    fence_kv: true
+    hold_weights: true
+
+    // weight streaming: chunks through L1 slabs per cluster, pushed by the memory chiplet
+    // into per-cluster L3 rings (slots, chunks a push, which ring first); the weights every
+    // token uses in the memory chiplet's SRAM
+    w_chunk_bytes: 98304
+    w_buffers: 2
+    weight_ring: { slots: 20, batch: 8, policy: 1 }
+    l4_weights: ["wdkv", "wq", "wuk", "wuv", "wo", "wr", "sh_gu", "sh_dn"]
+    shared_cluster: 0
+
+    // this run's tuning
+    shared_spread: true
+    att_stream: false
+    prune_fanout: true
+    att_clusters: [1, 2]
+    checks_from: 8
+    compact_tables: true
+    factor_ring: true
+    desc_in_l3: true
+    slot_clusters: [1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 3, 0]
+    fence_route: true
+
+    static_l1: true
+    d2d_ddr: true
+}

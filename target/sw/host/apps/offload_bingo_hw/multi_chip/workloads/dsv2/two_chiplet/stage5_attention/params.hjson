@@ -1,0 +1,43 @@
+// DeepSeek-V2-Lite layer 1, stages 1-5, one token, INT4: the tuned settings of run s5d
+// (measured on RTL: 274.7 us for stages 1-5). What each field does is in this stage's main_bingo.py and
+// ../../common/dsv2_staged.py.
+{
+    // Must match the RTL cfg (hemaia_twochiplet_16MBL3_4cluster).
+    num_chiplets: 1
+    num_clusters: 4
+
+    // The golden pack (snax_cluster sw/apps/dsv2/util): seeded weights at DeepSeek-V2-Lite's
+    // shapes, the token at position L (a pass: positions L .. L + tokens - 1; stages 5-8 want
+    // L + tokens keys in whole tiles of 64).
+    seed: 1
+    L: 511
+
+    // tokens per pass; wbits: 4 (INT4, the router INT8) or 8
+    tokens: 1
+    wbits: 4
+
+    // the front end: the norm's cluster, W_DKV's columns per cluster (stages 4+ read the
+    // latent on cluster 0), W_Q's loads fenced behind kv16, the first weight loads held
+    // until x8 is loaded
+    norm_cluster: 0
+    dkv_cols: [192, 128, 128, 128]
+    fence_kv: true
+    hold_weights: true
+
+    // weight streaming: chunks through L1 slabs per cluster, pushed by the memory chiplet
+    // into per-cluster L3 rings (slots, chunks a push, which ring first); the weights every
+    // token uses in the memory chiplet's SRAM
+    w_chunk_bytes: 131072
+    w_buffers: [3, 2, 3, 3]
+    weight_ring: { slots: 20, batch: 4, policy: 1 }
+    l4_weights: ["wdkv", "wq", "wuk", "wuv", "wo", "wr", "sh_gu", "sh_dn"]
+    shared_cluster: 0
+
+    // this run's tuning
+    att_stream: true
+    prune_fanout: true
+    fence_s4: true
+
+    static_l1: true
+    d2d_ddr: true
+}
