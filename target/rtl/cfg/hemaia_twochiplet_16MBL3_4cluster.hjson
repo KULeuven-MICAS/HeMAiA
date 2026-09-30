@@ -11,6 +11,13 @@
       // Run the memory chip at the host clock, as the tapeout cfgs do. Without this it runs
       // at 1/20 of the main clock and the SW takes the slow-FPGA D2D path.
       same_memchip_speed: true,
+      // The real system's clocks: a 4 GHz master (the chip PLL's), the compute chips' host
+      // and clusters and the memory chip's logic at /8 = 500 MHz, every D2D PHY at 4 GHz.
+      sim_clock: {
+        master_mhz: 4000,
+        core_clk_div: 8,
+        memchip_clk_div: 8
+      },
       testbench_cfg: {
         hemaia_compute_chip: [
           {coordinate: [0,0]}
@@ -128,6 +135,10 @@
         dep_tag_width: 5
         task_id_width: 16
         task_desc_width: 128
+        // 32, not the RTL default 8: one full waiting queue stops the whole in-order task
+        // stream, so a cluster waiting on its weights held ready GEMVs on the others for up
+        // to 66 us (HW-19, stage 3 of the layer bring-up).
+        waiting_queue_depth: 32
       },
     },
     clusters:[
