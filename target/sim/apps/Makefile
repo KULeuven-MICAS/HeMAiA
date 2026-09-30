@@ -32,7 +32,9 @@ else ifeq ($(HOST_APP_TYPE), offload_legacy)
     APP_REL_PATH = offload_legacy/$(CHIP_TYPE)
 else
     # E.g., target/sw/host/apps/offload_bingo_sw/single_chip/workloads/gemm_tiled/build/offload_bingo_sw_single_chip_gemm_tiled_snax-bingo-offload.elf
-    APP_NAME = $(HOST_APP_TYPE)_$(CHIP_TYPE)_$(WORKLOAD)_$(DEV_APP)
+    # WORKLOAD may be nested (dsv2/two_chiplet/stage1_rmsnorm): the path keeps its '/', the
+    # binary's name turns them into '_', as target/sw/host/apps/common.mk names the app
+    APP_NAME = $(HOST_APP_TYPE)_$(CHIP_TYPE)_$(subst /,_,$(WORKLOAD))_$(DEV_APP)
     APP_REL_PATH = $(HOST_APP_TYPE)/$(CHIP_TYPE)/workloads/$(WORKLOAD)
 endif
 
