@@ -52,10 +52,13 @@ module testharness;
     `define MEMPOOL_FREQ_MHZ   200.0  // 200 MHz, 1/20 of the main clock
     %endif
     %else:
-    `define CLK_FREF_FREQ_MHZ  500.0 // 500 MHz
+    // The master clock the compute chips divide down (cfg hemaia_multichip.sim_clock;
+    // 500 MHz by default). At 4 GHz the chips run their logic at /8 = 500 MHz and their D2D
+    // PHYs at the master itself, as the real chip's PLL does.
+    `define CLK_FREF_FREQ_MHZ  ${"%.1f" % sim_clk_mhz}
     `define PRI_FREQ_MHZ       500.0 // 500 MHz
     %if same_memchip_speed:
-    `define MEMPOOL_FREQ_MHZ   500.0 // 500 MHz, same as the host clock
+    `define MEMPOOL_FREQ_MHZ   ${"%.1f" % sim_clk_mhz} // the memory chip's master: the same clock
     %else:
     `define MEMPOOL_FREQ_MHZ   25.0  //  25 MHz, 1/20 of the main clock
     %endif
@@ -711,7 +714,8 @@ module testharness;
         .EnableEastPhy(${enable_east}),
         .EnableWestPhy(${enable_west}),
         .EnableNorthPhy(${enable_north}),
-        .EnableSouthPhy(${enable_south})
+        .EnableSouthPhy(${enable_south}),
+        .HostClkDiv(${memchip_clk_div})
     ) i_hemaia_mem_chip_${mem_chip_x}_${mem_chip_y} (
         .clk_i    (mempool_clk_drv),
         .rst_ni   (rst_ni   ),
