@@ -10,8 +10,8 @@
 #include "occamy_memory_map.h"
 #include "chip_id.h"
 
-// The system iDMA exposes a single stream (NumStreams = 1), so software always
-// uses register index 0 for status / next_id / done_id.
+// A system iDMA exposes a single stream (NumStreams = 1), so software always uses
+// register index 0 for status / next_id / done_id.
 
 #define IDMA_CONF_ADDR \
     (SYS_IDMA_CFG_BASE_ADDR + IDMA_REG64_1D_CONF_REG_OFFSET)
@@ -70,25 +70,55 @@ inline volatile uint32_t *sys_dma_done_ptr(uint8_t chip_id) {
     return (volatile uint32_t *)(chiplet_addr_transform_full(chip_id, IDMA_DONE_ADDR));
 }
 
-static inline uint64_t sys_dma_memcpy(uint8_t chip_id, uint64_t dst, uint64_t src, uint64_t size) {
-    volatile uint32_t *dst_ptr = sys_dma_dst_ptr(chip_id);
-    volatile uint32_t *src_ptr = sys_dma_src_ptr(chip_id);
-    volatile uint32_t *len_ptr = sys_dma_length_ptr(chip_id);
+// A memory chip has several engines (MEM_CHIP_NUM_SYS_IDMA_<k> in occamy.h, up to four),
+// each with its own registers SYS_IDMA_CFG_STRIDE apart, its own port into the HBM and its
+// own local port on the D2D link: engines pushing to different neighbours run in parallel.
+// Engine 0 is at SYS_IDMA_CFG_BASE_ADDR, where a compute chip's one engine is, so the
+// functions without an engine argument drive engine 0. Transfer ids count per engine.
+#ifndef SYS_IDMA_CFG_STRIDE
+#define SYS_IDMA_CFG_STRIDE 0x1000
+#endif
+
+static inline volatile uint32_t *sys_dma_engine_reg(uint8_t chip_id, uint32_t engine,
+                                                    uint32_t addr) {
+    return (volatile uint32_t *)(chiplet_addr_transform_full(
+        chip_id, addr + (uint64_t)engine * SYS_IDMA_CFG_STRIDE));
+}
+
+// Launch a copy on engine `engine` of chip `chip_id` and return its transfer id.
+static inline uint32_t sys_dma_engine_memcpy(uint8_t chip_id, uint32_t engine, uint64_t dst,
+                                             uint64_t src, uint64_t size) {
+    volatile uint32_t *dst_ptr = sys_dma_engine_reg(chip_id, engine, IDMA_DST_ADDR);
+    volatile uint32_t *src_ptr = sys_dma_engine_reg(chip_id, engine, IDMA_SRC_ADDR);
+    volatile uint32_t *len_ptr = sys_dma_engine_reg(chip_id, engine, IDMA_LENGTH_ADDR);
     dst_ptr[0] = (uint32_t)dst;
     dst_ptr[1] = (uint32_t)(dst >> 32);
     src_ptr[0] = (uint32_t)src;
     src_ptr[1] = (uint32_t)(src >> 32);
     len_ptr[0] = (uint32_t)size;
     len_ptr[1] = (uint32_t)(size >> 32);
-    *(sys_dma_conf_ptr(chip_id)) = IDMA_CONF_AXI_MEMCPY;
+    *sys_dma_engine_reg(chip_id, engine, IDMA_CONF_ADDR) = IDMA_CONF_AXI_MEMCPY;
     // Reading next_id launches the transfer and returns its id.
-    return (uint64_t)(*(sys_dma_nextid_ptr(chip_id)));
+    return *sys_dma_engine_reg(chip_id, engine, IDMA_NEXTID_ADDR);
+}
+
+// The id of the last transfer engine `engine` of chip `chip_id` completed. On a memory
+// chip, done means the last write LEFT it (the link answers writes at the sender), not
+// that it arrived.
+static inline uint32_t sys_dma_engine_done_id(uint8_t chip_id, uint32_t engine) {
+    return *sys_dma_engine_reg(chip_id, engine, IDMA_DONE_ADDR);
+}
+
+static inline void sys_dma_engine_wait(uint8_t chip_id, uint32_t engine, uint32_t tf_id) {
+    while (sys_dma_engine_done_id(chip_id, engine) != tf_id) {
+        asm volatile("nop");
+    }
+}
+
+static inline uint64_t sys_dma_memcpy(uint8_t chip_id, uint64_t dst, uint64_t src, uint64_t size) {
+    return sys_dma_engine_memcpy(chip_id, 0, dst, src, size);
 }
 
 static inline void sys_dma_blk_memcpy(uint8_t chip_id, uint64_t dst, uint64_t src, uint64_t size) {
-    uint32_t tf_id = (uint32_t)sys_dma_memcpy(chip_id, dst, src, size);
-
-    while (*(sys_dma_done_ptr(chip_id)) != tf_id) {
-        asm volatile("nop");
-    }
+    sys_dma_engine_wait(chip_id, 0, sys_dma_engine_memcpy(chip_id, 0, dst, src, size));
 }

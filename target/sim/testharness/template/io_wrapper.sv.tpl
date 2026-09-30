@@ -7,8 +7,9 @@
 // IO Wrapper: D2D interconnect routing fabric + IO pad simulation
 //
 // This module receives ALL chiplet D2D ports from the DUT and handles routing:
-//   - Internal mesh: connects adjacent chiplets' facing D2D ports
-//   - Boundary: connects boundary chiplets' outward D2D ports to off-chip ports
+//   - Between compute chips side by side: connects their facing D2D ports
+//   - Off-array: every other compute-chip port goes out as a dut port (the testharness
+//     joins it to a memory chip or ties it off)
 //
 // sim_with_interposer = 0 (direct):
 //   Direct wire connections. Adjacent chiplets' D2D data buses are shorted
@@ -55,6 +56,19 @@ module io_wrapper (
     %endfor
 
     /////////////////////////////////////
+    // Off-array D2D ports: every side of a compute chip with no compute chip beside it
+    /////////////////////////////////////
+    %for (c, d) in dut_ports:
+    inout tri [2:0][19:0] ${d}_d2d_link_${c[0]}_${c[1]},
+    inout wire             ${d}_flow_control_rts_o_${c[0]}_${c[1]},
+    inout wire             ${d}_flow_control_cts_i_${c[0]}_${c[1]},
+    inout wire             ${d}_flow_control_rts_i_${c[0]}_${c[1]},
+    inout wire             ${d}_flow_control_cts_o_${c[0]}_${c[1]},
+    inout wire             ${d}_test_request_o_${c[0]}_${c[1]},
+    inout wire             ${d}_test_being_requested_i_${c[0]}_${c[1]},
+    %endfor
+
+    /////////////////////////////////////
     // Per-chiplet driving / peripheral signals
     /////////////////////////////////////
     %for compute_chip in compute_chips:
@@ -89,51 +103,7 @@ module io_wrapper (
     inout wire            mst_clk_i,
     inout wire            rst_ni,
     inout wire            periph_clk_i,
-    inout wire            rst_periph_ni,
-
-    /////////////////////////////////////
-    // Off-chip boundary D2D ports
-    /////////////////////////////////////
-    %for x in range(max_compute_chiplet_x):
-    inout tri [2:0][19:0] north_d2d_link_${x},
-    inout wire             north_flow_control_rts_o_${x},
-    inout wire             north_flow_control_cts_i_${x},
-    inout wire             north_flow_control_rts_i_${x},
-    inout wire             north_flow_control_cts_o_${x},
-    inout wire             north_test_request_o_${x},
-    inout wire             north_test_being_requested_i_${x},
-    %endfor
-    %for x in range(max_compute_chiplet_x):
-    inout tri [2:0][19:0] south_d2d_link_${x},
-    inout wire             south_flow_control_rts_o_${x},
-    inout wire             south_flow_control_cts_i_${x},
-    inout wire             south_flow_control_rts_i_${x},
-    inout wire             south_flow_control_cts_o_${x},
-    inout wire             south_test_request_o_${x},
-    inout wire             south_test_being_requested_i_${x},
-    %endfor
-    %for y in range(max_compute_chiplet_y):
-    inout tri [2:0][19:0] west_d2d_link_${y},
-    inout wire             west_flow_control_rts_o_${y},
-    inout wire             west_flow_control_cts_i_${y},
-    inout wire             west_flow_control_rts_i_${y},
-    inout wire             west_flow_control_cts_o_${y},
-    inout wire             west_test_request_o_${y},
-    inout wire             west_test_being_requested_i_${y},
-    %endfor
-    %for y in range(max_compute_chiplet_y):
-    inout tri [2:0][19:0] east_d2d_link_${y},
-    inout wire             east_flow_control_rts_o_${y},
-    inout wire             east_flow_control_cts_i_${y},
-    inout wire             east_flow_control_rts_i_${y},
-    inout wire             east_flow_control_cts_o_${y},
-    inout wire             east_test_request_o_${y},
-    %if y < max_compute_chiplet_y - 1:
-    inout wire             east_test_being_requested_i_${y},
-    %else:
-    inout wire             east_test_being_requested_i_${y}
-    %endif
-    %endfor
+    inout wire            rst_periph_ni
 );
 
 wire const_zero;
@@ -146,84 +116,37 @@ assign const_one  = 1'b1;
     // Mode 0: Direct wire connections (ideal interconnect)
     // ==========================================================
 
-    // ---- Internal mesh: East-West links ----
-    %for x in range(max_compute_chiplet_x - 1):
-    %for y in range(max_compute_chiplet_y):
-    // (${x}, ${y}) east <--> (${x + 1}, ${y}) west
-    tri [2:0][19:0] ew_d2d_link_${x}_${y};
-    alias ew_d2d_link_${x}_${y} = chip_${x}_${y}_east_d2d = chip_${x + 1}_${y}_west_d2d;
-    assign chip_${x + 1}_${y}_west_rts_i                  = chip_${x}_${y}_east_rts_o;
-    assign chip_${x}_${y}_east_rts_i                      = chip_${x + 1}_${y}_west_rts_o;
-    assign chip_${x}_${y}_east_cts_i                      = chip_${x + 1}_${y}_west_cts_o;
-    assign chip_${x + 1}_${y}_west_cts_i                  = chip_${x}_${y}_east_cts_o;
-    assign chip_${x + 1}_${y}_west_test_being_requested_i = chip_${x}_${y}_east_test_request_o;
-    assign chip_${x}_${y}_east_test_being_requested_i     = chip_${x + 1}_${y}_west_test_request_o;
-    %endfor
-    %endfor
-
-    // ---- Internal mesh: North-South links ----
-    %for x in range(max_compute_chiplet_x):
-    %for y in range(max_compute_chiplet_y - 1):
-    // (${x}, ${y}) south <--> (${x}, ${y + 1}) north
-    tri [2:0][19:0] ns_d2d_link_${x}_${y};
-    alias ns_d2d_link_${x}_${y} = chip_${x}_${y}_south_d2d = chip_${x}_${y + 1}_north_d2d;
-    assign chip_${x}_${y + 1}_north_rts_i                  = chip_${x}_${y}_south_rts_o;
-    assign chip_${x}_${y}_south_rts_i                      = chip_${x}_${y + 1}_north_rts_o;
-    assign chip_${x}_${y}_south_cts_i                      = chip_${x}_${y + 1}_north_cts_o;
-    assign chip_${x}_${y + 1}_north_cts_i                  = chip_${x}_${y}_south_cts_o;
-    assign chip_${x}_${y + 1}_north_test_being_requested_i = chip_${x}_${y}_south_test_request_o;
-    assign chip_${x}_${y}_south_test_being_requested_i     = chip_${x}_${y + 1}_north_test_request_o;
-    %endfor
+    // ---- Links between compute chips side by side ----
+    %for (a, da, b, db) in compute_links:
+<%
+    A = "chip_%d_%d_%s" % (a[0], a[1], da)
+    B = "chip_%d_%d_%s" % (b[0], b[1], db)
+%>\
+    // (${a[0]}, ${a[1]}) ${da} <--> (${b[0]}, ${b[1]}) ${db}
+    tri [2:0][19:0] d2d_link_${a[0]}_${a[1]}_${da};
+    alias d2d_link_${a[0]}_${a[1]}_${da} = ${A}_d2d = ${B}_d2d;
+    assign ${B}_rts_i                  = ${A}_rts_o;
+    assign ${A}_rts_i                  = ${B}_rts_o;
+    assign ${A}_cts_i                  = ${B}_cts_o;
+    assign ${B}_cts_i                  = ${A}_cts_o;
+    assign ${B}_test_being_requested_i = ${A}_test_request_o;
+    assign ${A}_test_being_requested_i = ${B}_test_request_o;
     %endfor
 
-    // ---- North boundary (y=0) ----
-    %for x in range(max_compute_chiplet_x):
-    tri [2:0][19:0] nb_d2d_link_${x};
-    alias nb_d2d_link_${x} = chip_${x}_0_north_d2d = north_d2d_link_${x};
-    assign north_flow_control_rts_o_${x}            = chip_${x}_0_north_rts_o;
-    assign chip_${x}_0_north_cts_i                  = north_flow_control_cts_i_${x};
-    assign chip_${x}_0_north_rts_i                  = north_flow_control_rts_i_${x};
-    assign north_flow_control_cts_o_${x}            = chip_${x}_0_north_cts_o;
-    assign north_test_request_o_${x}                = chip_${x}_0_north_test_request_o;
-    assign chip_${x}_0_north_test_being_requested_i = north_test_being_requested_i_${x};
-    %endfor
-
-    // ---- South boundary (y=${max_compute_chiplet_y - 1}) ----
-    <% south_y = max_compute_chiplet_y - 1 %>
-    %for x in range(max_compute_chiplet_x):
-    tri [2:0][19:0] sb_d2d_link_${x};
-    alias sb_d2d_link_${x} = chip_${x}_${south_y}_south_d2d = south_d2d_link_${x};
-    assign south_flow_control_rts_o_${x}                     = chip_${x}_${south_y}_south_rts_o;
-    assign chip_${x}_${south_y}_south_cts_i                  = south_flow_control_cts_i_${x};
-    assign chip_${x}_${south_y}_south_rts_i                  = south_flow_control_rts_i_${x};
-    assign south_flow_control_cts_o_${x}                     = chip_${x}_${south_y}_south_cts_o;
-    assign south_test_request_o_${x}                         = chip_${x}_${south_y}_south_test_request_o;
-    assign chip_${x}_${south_y}_south_test_being_requested_i = south_test_being_requested_i_${x};
-    %endfor
-
-    // ---- West boundary (x=0) ----
-    %for y in range(max_compute_chiplet_y):
-    tri [2:0][19:0] wb_d2d_link_${y};
-    alias wb_d2d_link_${y} = chip_0_${y}_west_d2d = west_d2d_link_${y};
-    assign west_flow_control_rts_o_${y}             = chip_0_${y}_west_rts_o;
-    assign chip_0_${y}_west_cts_i                   = west_flow_control_cts_i_${y};
-    assign chip_0_${y}_west_rts_i                   = west_flow_control_rts_i_${y};
-    assign west_flow_control_cts_o_${y}             = chip_0_${y}_west_cts_o;
-    assign west_test_request_o_${y}                 = chip_0_${y}_west_test_request_o;
-    assign chip_0_${y}_west_test_being_requested_i  = west_test_being_requested_i_${y};
-    %endfor
-
-    // ---- East boundary (x=${max_compute_chiplet_x - 1}) ----
-    <% east_x = max_compute_chiplet_x - 1 %>
-    %for y in range(max_compute_chiplet_y):
-    tri [2:0][19:0] eb_d2d_link_${y};
-    alias eb_d2d_link_${y} = chip_${east_x}_${y}_east_d2d = east_d2d_link_${y};
-    assign east_flow_control_rts_o_${y}                    = chip_${east_x}_${y}_east_rts_o;
-    assign chip_${east_x}_${y}_east_cts_i                  = east_flow_control_cts_i_${y};
-    assign chip_${east_x}_${y}_east_rts_i                  = east_flow_control_rts_i_${y};
-    assign east_flow_control_cts_o_${y}                    = chip_${east_x}_${y}_east_cts_o;
-    assign east_test_request_o_${y}                        = chip_${east_x}_${y}_east_test_request_o;
-    assign chip_${east_x}_${y}_east_test_being_requested_i = east_test_being_requested_i_${y};
+    // ---- Off-array ports: straight through to the dut ports ----
+    %for (c, d) in dut_ports:
+<%
+    C = "chip_%d_%d_%s" % (c[0], c[1], d)
+    P = "%d_%d" % (c[0], c[1])
+%>\
+    tri [2:0][19:0] off_d2d_link_${P}_${d};
+    alias off_d2d_link_${P}_${d} = ${C}_d2d = ${d}_d2d_link_${P};
+    assign ${d}_flow_control_rts_o_${P}     = ${C}_rts_o;
+    assign ${C}_cts_i                       = ${d}_flow_control_cts_i_${P};
+    assign ${C}_rts_i                       = ${d}_flow_control_rts_i_${P};
+    assign ${d}_flow_control_cts_o_${P}     = ${C}_cts_o;
+    assign ${d}_test_request_o_${P}         = ${C}_test_request_o;
+    assign ${C}_test_being_requested_i      = ${d}_test_being_requested_i_${P};
     %endfor
 
 %else:
@@ -418,9 +341,9 @@ def rev_conn_wire(cx, cy, d, signal):
     nx, ny, nd = internal_links[(cx,cy,d)]
     return "conn_%d_%d_%s_%s_to_%d_%d_%s" % (nx, ny, nd, signal, cx, cy, d)
 
-def boundary_idx(cx, cy, d):
-    """North/south boundaries are indexed by column (cx), east/west by row (cy)."""
-    return cx if d in ('north', 'south') else cy
+def boundary_port(cx, cy, d):
+    """Suffix of the off-array dut port on side d of chip (cx, cy)."""
+    return '%d_%d' % (cx, cy)
 
 ## Map flow control type to conn_ wire signal name
 fc_wire_map = {
@@ -534,14 +457,14 @@ def get_pad_wire(sig_name, s, cx, cy):
             wire_sig, is_rev = fc_wire_map[fc_type]
             return rev_conn_wire(cx, cy, _d, wire_sig) if is_rev else conn_wire(cx, cy, _d, wire_sig)
         elif ct == 'offchip':
-            bi = boundary_idx(cx, cy, _d)
+            bi = boundary_port(cx, cy, _d)
             offchip = {
-                'rts_o': '%s_flow_control_rts_o_%d' % (_d, bi),
-                'cts_i': '%s_flow_control_cts_i_%d' % (_d, bi),
-                'rts_i': '%s_flow_control_rts_i_%d' % (_d, bi),
-                'cts_o': '%s_flow_control_cts_o_%d' % (_d, bi),
-                'req_o': '%s_test_request_o_%d' % (_d, bi),
-                'req_i': '%s_test_being_requested_i_%d' % (_d, bi),
+                'rts_o': '%s_flow_control_rts_o_%s' % (_d, bi),
+                'cts_i': '%s_flow_control_cts_i_%s' % (_d, bi),
+                'rts_i': '%s_flow_control_rts_i_%s' % (_d, bi),
+                'cts_o': '%s_flow_control_cts_o_%s' % (_d, bi),
+                'req_o': '%s_test_request_o_%s' % (_d, bi),
+                'req_i': '%s_test_being_requested_i_%s' % (_d, bi),
             }
             return offchip.get(fc_type)
         else:  # tieoff
@@ -717,10 +640,10 @@ def classify_remaining_pad(pad_name, cx, cy):
         lane = idx // 20
         bit = idx % 20
         if ct == 'offchip':
-            bi = boundary_idx(cx, cy, d_long)
-            wire = '%s_d2d_link_%d[%d][%d]' % (d_long, bi, lane, bit)
+            bi = boundary_port(cx, cy, d_long)
+            wire = '%s_d2d_link_%s[%d][%d]' % (d_long, bi, lane, bit)
             return ('d2d_boundary', wire,
-                    'D2D%s_%d -> %s_d2d_link_%d[%d][%d]' % (d_short, idx, d_long, bi, lane, bit))
+                    'D2D%s_%d -> %s_d2d_link_%s[%d][%d]' % (d_short, idx, d_long, bi, lane, bit))
         else:
             return ('d2d_internal', None,
                     'D2D%s_%d (internal — routed by interposer)' % (d_short, idx))
@@ -824,9 +747,9 @@ def classify_remaining_pad(pad_name, cx, cy):
         .chip${c}_io_${d}_test_being_requested_i (chip_${cx}_${cy}_${d}_test_being_requested_i),
         %elif ct == 'offchip':
         <%
-            bi = boundary_idx(cx, cy, d)
+            bi = boundary_port(cx, cy, d)
         %>
-        // ${d}: offchip ${d} boundary [${bi}]
+        // ${d}: offchip ${d} port ${d}_d2d_link_${bi}
         // IO signal ports connect to DUT chip ports; pad ports (via get_pad_wire)
         // route to boundary ports through cds_thru.
         .chip${c}_io_flow_control_${d}_rts_o     (chip_${cx}_${cy}_${d}_rts_o),

@@ -18,19 +18,34 @@
 
 // Compute-chiplet grid extents, derived from the cfg's hemaia_compute_chip coordinates
 // (max(coord) + 1 on each axis). chip_id = (x << 4) | y, so a chip's position on the
-// virtual interposer is (chip_id >> 4, chip_id & 0xF) and these say where the array ends.
-// The D2D link-availability programming needs them to know which of its four PHY ports
-// face a real neighbour and which face off-array.
+// virtual interposer is (chip_id >> 4, chip_id & 0xF). The compute chips need not fill this
+// rectangle: a memory chip may sit inside it (a row C M C). Which ports face a chip is
+// HEMAIA_D2D_PORT_TABLE below, not these.
 #define N_CHIPLETS_X                   ${nr_chiplets_x}
 #define N_CHIPLETS_Y                   ${nr_chiplets_y}
 
-// Memory chiplet placement. The testharness requires the memchip to sit on exactly one
-// edge of the compute array, so MEM_CHIP_LOC_X == N_CHIPLETS_X means it hangs off the
-// EAST port of compute chip (N_CHIPLETS_X - 1, MEM_CHIP_LOC_Y). N_MEM_CHIPS is 0 when the
-// cfg declares none, in which case the LOC values are meaningless.
+// Memory chiplets, in cfg order: MEM_CHIP_ID_<k> = (x << 4) | y. One may sit anywhere a
+// D2D link reaches it -- beside the compute array, between compute chips (feeding all of
+// them), beside another memory chip. MEM_CHIP_LOC_X/Y is the first one, for code that knows
+// only one. N_MEM_CHIPS is 0 when the cfg declares none (the LOC values are then
+// meaningless). MEM_CHIP_NUM_SYS_IDMA_<k>: its push engines (sys_dma.h, engine argument).
 #define N_MEM_CHIPS                    ${nr_mem_chips}
 #define MEM_CHIP_LOC_X                 ${mem_chip_loc_x}
 #define MEM_CHIP_LOC_Y                 ${mem_chip_loc_y}
+% for k, m in enumerate(mem_chips):
+#define MEM_CHIP_ID_${k}                   0x${"%02x" % m["id"]}
+#define MEM_CHIP_NUM_SYS_IDMA_${k}         ${m["num_sys_idma"]}
+% endfor
+% if mem_chips:
+#define MEM_CHIP_IDS                   {${", ".join("0x%02x" % m["id"] for m in mem_chips)}}
+% endif
+
+// The D2D ports of every chip on the grid, compute and memory: {chip id, ports that face a
+// chip, ports that face a memory chip}, a port being bit d for D2DDirection d (east 0,
+// west 1, north 2, south 3). hemaia_d2d_link_initialize_grid() programs the links from it.
+// Empty on a single-chip cfg.
+#define HEMAIA_D2D_PORT_TABLE_LEN      ${len(d2d_ports)}
+#define HEMAIA_D2D_PORT_TABLE          {${", ".join("{0x%02x, 0x%x, 0x%x}" % (p["id"], p["links"], p["mem_links"]) for p in d2d_ports)}}
 
 // Whether the testharness memchip clock runs at the same speed as the host clock.
 #define HEMAIA_SAME_MEMCHIP_SPEED      ${same_memchip_speed}

@@ -31,7 +31,12 @@ module hemaia_mem_chip #(
     // The digital (host / memory / link) clock divider of the master clock clk_i; the D2D
     // PHYs run at clk_i itself. 6 is the long-standing simulation setup (500 MHz master ->
     // 83 MHz); a 4 GHz master with 8 gives the 500 MHz / 4 GHz of the real system.
-    parameter int unsigned HostClkDiv = 6
+    parameter int unsigned HostClkDiv = 6,
+    // Push engines (system iDMAs), 1 to 4, each with its own registers, its own port into
+    // the HBM and its own local port on the D2D link, so the memory chip can stream to that
+    // many neighbours at once. Engine k's registers are at SYS_IDMA_CFG_BASE_ADDR +
+    // k * SysIdmaCfgStride (engine 0 where the one engine always was).
+    parameter int unsigned NumSysIdma = 4
 ) (
     input  logic                 clk_i,
     input  logic                 rst_ni,
@@ -160,6 +165,8 @@ module hemaia_mem_chip #(
 
   `AXI_TYPEDEF_ALL_CT(axi_a48_d512_i4_u1, axi_a48_d512_i4_u1_req_t, axi_a48_d512_i4_u1_resp_t,
                       logic [47:0], logic [3:0], logic [511:0], logic [63:0], logic [0:0])
+  `AXI_TYPEDEF_ALL_CT(axi_a48_d512_i5_u1, axi_a48_d512_i5_u1_req_t, axi_a48_d512_i5_u1_resp_t,
+                      logic [47:0], logic [4:0], logic [511:0], logic [63:0], logic [0:0])
   `AXI_TYPEDEF_ALL_CT(axi_a48_d512_i6_u1, axi_a48_d512_i6_u1_req_t, axi_a48_d512_i6_u1_resp_t,
                       logic [47:0], logic [5:0], logic [511:0], logic [63:0], logic [0:0])
 
@@ -216,6 +223,11 @@ module hemaia_mem_chip #(
   // answers SLVERR above HbmCfg.base + HbmCfg.size.
   axi_a48_d512_i6_u1_req_t  axi_wide_xbar_to_dram_req;
   axi_a48_d512_i6_u1_resp_t axi_wide_xbar_to_dram_rsp;
+  // HBM port 0 is the wide xbar's; port 1 + k is push engine k's own (see below).
+  axi_a48_d512_i6_u1_req_t  [NumSysIdma:0] hbm_req;
+  axi_a48_d512_i6_u1_resp_t [NumSysIdma:0] hbm_rsp;
+  assign hbm_req[0] = axi_wide_xbar_to_dram_req;
+  assign axi_wide_xbar_to_dram_rsp = hbm_rsp[0];
 
   if (EnableHbm) begin : gen_hbm
     // The xbar rule below starts the DRAM port at 0x1_0000_0000: an HBM based lower
@@ -229,21 +241,38 @@ module hemaia_mem_chip #(
         .DataWidth     (512),
         .IdWidth       (6),
         .LocalAddrWidth(40),
+        .NumPorts      (NumSysIdma + 1),
         .axi_req_t     (axi_a48_d512_i6_u1_req_t),
         .axi_rsp_t     (axi_a48_d512_i6_u1_resp_t)
     ) i_hbm (
         .clk_i    (clk_host),
         .rst_ni   (rst_host_n),
-        .axi_req_i(axi_wide_xbar_to_dram_req),
-        .axi_rsp_o(axi_wide_xbar_to_dram_rsp)
+        .axi_req_i(hbm_req),
+        .axi_rsp_o(hbm_rsp)
     );
   end else begin : gen_no_hbm
-    assign axi_wide_xbar_to_dram_rsp = '0;
+    assign hbm_rsp = '0;
   end
 
-  ///////////////////////////////////////////////
-  //  IDMA at Mem Chip for the Broadcast Usage //
-  ///////////////////////////////////////////////
+  //////////////////////////////////////////////
+  //  Push engines: NumSysIdma system iDMAs   //
+  //////////////////////////////////////////////
+  // Each engine is a full iDMA (register frontend, transfer-id tracking, backend), and its
+  // AXI master goes three ways by address:
+  //   * another chip's address -> the D2D link's local port k (engine 0 shares port 0 with
+  //     the wide xbar's own route to other chips);
+  //   * this chip's HBM        -> HBM port 1 + k, its own;
+  //   * anything else here     -> the wide xbar (all engines share one xbar port).
+  // So engine k streams HBM -> link k without touching the xbar, and NumSysIdma engines can
+  // push to NumSysIdma neighbours at once. The frontends only ever issue AXI ID 0, which
+  // the link's local ports need (NumLocalPorts > 1 leaves them 2 or 3 ID bits).
+
+  localparam int unsigned SysIdmaCfgStride = 32'h1000;
+  localparam int unsigned SysIdmaSelWidth = (NumSysIdma > 1) ? $clog2(NumSysIdma) : 1;
+
+  if (NumSysIdma < 1 || NumSysIdma > 4) begin : gen_bad_num_sys_idma
+    $fatal(1, "hemaia_mem_chip: NumSysIdma must be 1 to 4, got %0d", NumSysIdma);
+  end
 
   // local regbus definition
   `REG_BUS_TYPEDEF_ALL(idma_cfg_reg_a48_d32, logic [47:0], logic [31:0], logic [3:0])
@@ -267,26 +296,8 @@ module hemaia_mem_chip #(
   typedef struct packed { axi_a48_d512_i4_u1_aw_chan_t aw_chan; } sys_idma_axi_write_meta_t;
   typedef struct packed { sys_idma_axi_write_meta_t axi;        } sys_idma_write_meta_channel_t;
 
-  // 1-element regbus arrays for the NumRegs=1 frontend port
-  idma_cfg_reg_a48_d32_req_t [0:0] idma_cfg_reg_req;
-  idma_cfg_reg_a48_d32_rsp_t [0:0] idma_cfg_reg_rsp;
   axi_a48_d64_i4_u1_req_t  axi_narrow_xbar_to_idma_cfg_req;
   axi_a48_d64_i4_u1_resp_t axi_narrow_xbar_to_idma_cfg_rsp;
-
-  // frontend <-> backend datapath
-  sys_idma_req_t        sys_idma_req;
-  logic                 sys_idma_req_valid, sys_idma_req_ready;
-  sys_idma_rsp_t        sys_idma_rsp;
-  logic                 sys_idma_rsp_valid;
-  idma_pkg::idma_busy_t sys_idma_busy;
-
-  // transfer-id tracking
-  logic [31:0] sys_idma_next_id, sys_idma_done_id;
-  logic        sys_idma_issue, sys_idma_retire;
-
-  // backend split AXI ports (joined below)
-  axi_a48_d512_i4_u1_req_t  sys_idma_axi_read_req,  sys_idma_axi_write_req;
-  axi_a48_d512_i4_u1_resp_t sys_idma_axi_read_rsp,  sys_idma_axi_write_rsp;
 
   // idma_reg64_1d's reg_top is 32-bit (DW=32). Feeding it a 64-bit reg bus
   // leaves next_id/done_id (@0x44/0x84) and the _HIGH addr words in the upper,
@@ -321,6 +332,9 @@ module hemaia_mem_chip #(
       .mst_resp_i(axi_idma_cfg_dwc_rsp)
   );
 
+  idma_cfg_reg_a48_d32_req_t idma_cfg_reg_req;
+  idma_cfg_reg_a48_d32_rsp_t idma_cfg_reg_rsp;
+
   axi_to_reg #(
       .ADDR_WIDTH(48),
       .DATA_WIDTH(32),
@@ -336,103 +350,262 @@ module hemaia_mem_chip #(
       .testmode_i(1'b0),
       .axi_req_i(axi_idma_cfg_dwc_req),
       .axi_rsp_o(axi_idma_cfg_dwc_rsp),
-      .reg_req_o(idma_cfg_reg_req[0]),
-      .reg_rsp_i(idma_cfg_reg_rsp[0])
+      .reg_req_o(idma_cfg_reg_req),
+      .reg_rsp_i(idma_cfg_reg_rsp)
   );
 
-  idma_reg64_1d #(
-      .NumRegs   (32'd1),
-      .NumStreams(32'd1),
-      .reg_req_t (idma_cfg_reg_a48_d32_req_t),
-      .reg_rsp_t (idma_cfg_reg_a48_d32_rsp_t),
-      .dma_req_t (sys_idma_req_t)
-  ) i_idma_reg64_1d_sys_idma (
-      .clk_i         (clk_host),
-      .rst_ni        (rst_host_n),
-      .dma_ctrl_req_i(idma_cfg_reg_req),
-      .dma_ctrl_rsp_o(idma_cfg_reg_rsp),
-      .dma_req_o     (sys_idma_req),
-      .req_valid_o   (sys_idma_req_valid),
-      .req_ready_i   (sys_idma_req_ready),
-      .next_id_i     (sys_idma_next_id),
-      .stream_idx_o  (/* NC */),
-      .done_id_i     (sys_idma_done_id),
-      .busy_i        (sys_idma_busy),
-      .midend_busy_i (1'b0)
-  );
+  // One register window per engine, SysIdmaCfgStride apart.
+  idma_cfg_reg_a48_d32_req_t [NumSysIdma-1:0] engine_cfg_req;
+  idma_cfg_reg_a48_d32_rsp_t [NumSysIdma-1:0] engine_cfg_rsp;
+  logic [SysIdmaSelWidth-1:0] engine_cfg_sel;
+  always_comb begin
+    automatic int unsigned sel = (idma_cfg_reg_req.addr / SysIdmaCfgStride) % 16;
+    engine_cfg_sel = (sel < NumSysIdma) ? SysIdmaSelWidth'(sel) : '0;
+  end
 
-  assign sys_idma_issue  = sys_idma_req_valid & sys_idma_req_ready;
-  assign sys_idma_retire = sys_idma_rsp_valid; // backend rsp_ready tied to 1
-
-  idma_transfer_id_gen #(
-      .IdWidth(32'd32)
-  ) i_sys_idma_transfer_id_gen (
+  reg_demux #(
+      .NoPorts(NumSysIdma),
+      .req_t  (idma_cfg_reg_a48_d32_req_t),
+      .rsp_t  (idma_cfg_reg_a48_d32_rsp_t)
+  ) i_sys_idma_cfg_demux (
       .clk_i      (clk_host),
       .rst_ni     (rst_host_n),
-      .issue_i    (sys_idma_issue),
-      .retire_i   (sys_idma_retire),
-      .next_o     (sys_idma_next_id),
-      .completed_o(sys_idma_done_id)
+      .in_select_i(engine_cfg_sel),
+      .in_req_i   (idma_cfg_reg_req),
+      .in_rsp_o   (idma_cfg_reg_rsp),
+      .out_req_o  (engine_cfg_req),
+      .out_rsp_i  (engine_cfg_rsp)
   );
 
+  // Where each engine request goes (see above).
+  localparam logic [1:0] EngineToXbar = 2'd0, EngineToHbm = 2'd1, EngineToLink = 2'd2;
+  function automatic logic [1:0] engine_target(input logic [47:0] addr, input chip_id_t id);
+    if (addr[47:40] != id) return EngineToLink;
+    if (EnableHbm && addr[39:0] >= 40'h1_0000_0000) return EngineToHbm;
+    return EngineToXbar;
+  endfunction
+
+  // Per engine, toward the xbar (merged below) and toward the link.
+  axi_a48_d512_i4_u1_req_t  [3:0] engine_to_xbar_req;
+  axi_a48_d512_i4_u1_resp_t [3:0] engine_to_xbar_rsp;
+  axi_a48_d512_i4_u1_req_t  [NumSysIdma-1:0] engine_to_link_req;
+  axi_a48_d512_i4_u1_resp_t [NumSysIdma-1:0] engine_to_link_rsp;
+
+  for (genvar k = 0; k < NumSysIdma; k++) begin : gen_sys_idma
+    // frontend <-> backend datapath
+    sys_idma_req_t        idma_req;
+    logic                 idma_req_valid, idma_req_ready;
+    sys_idma_rsp_t        idma_rsp;
+    logic                 idma_rsp_valid;
+    idma_pkg::idma_busy_t idma_busy;
+    // transfer-id tracking
+    logic [31:0]          next_id, done_id;
+    // backend split AXI ports (joined below)
+    axi_a48_d512_i4_u1_req_t  axi_read_req, axi_write_req, axi_req;
+    axi_a48_d512_i4_u1_resp_t axi_read_rsp, axi_write_rsp, axi_rsp;
+
+    idma_reg64_1d #(
+        .NumRegs   (32'd1),
+        .NumStreams(32'd1),
+        .reg_req_t (idma_cfg_reg_a48_d32_req_t),
+        .reg_rsp_t (idma_cfg_reg_a48_d32_rsp_t),
+        .dma_req_t (sys_idma_req_t)
+    ) i_idma_reg64_1d (
+        .clk_i         (clk_host),
+        .rst_ni        (rst_host_n),
+        .dma_ctrl_req_i(engine_cfg_req[k]),
+        .dma_ctrl_rsp_o(engine_cfg_rsp[k]),
+        .dma_req_o     (idma_req),
+        .req_valid_o   (idma_req_valid),
+        .req_ready_i   (idma_req_ready),
+        .next_id_i     (next_id),
+        .stream_idx_o  (/* NC */),
+        .done_id_i     (done_id),
+        .busy_i        (idma_busy),
+        .midend_busy_i (1'b0)
+    );
+
+    idma_transfer_id_gen #(
+        .IdWidth(32'd32)
+    ) i_transfer_id_gen (
+        .clk_i      (clk_host),
+        .rst_ni     (rst_host_n),
+        .issue_i    (idma_req_valid & idma_req_ready),
+        .retire_i   (idma_rsp_valid),  // backend rsp_ready tied to 1
+        .next_o     (next_id),
+        .completed_o(done_id)
+    );
+
+    idma_backend_rw_axi #(
+        .DataWidth           (512),
+        .AddrWidth           (48),
+        .UserWidth           (1),
+        .AxiIdWidth          (4),
+        .NumAxInFlight       (32'd64),
+        .BufferDepth         (32'd3),
+        .TFLenWidth          (SysIdmaTFLenWidth),
+        .MemSysDepth         (32'd16),
+        .CombinedShifter     (1'b1),
+        .RAWCouplingAvail    (1'b1),
+        .MaskInvalidData     (1'b1),
+        .HardwareLegalizer   (1'b1),
+        .RejectZeroTransfers (1'b1),
+        .ErrorCap            (idma_pkg::NO_ERROR_HANDLING),
+        .idma_req_t          (sys_idma_req_t),
+        .idma_rsp_t          (sys_idma_rsp_t),
+        .idma_eh_req_t       (idma_pkg::idma_eh_req_t),
+        .idma_busy_t         (idma_pkg::idma_busy_t),
+        .axi_req_t           (axi_a48_d512_i4_u1_req_t),
+        .axi_rsp_t           (axi_a48_d512_i4_u1_resp_t),
+        .read_meta_channel_t (sys_idma_read_meta_channel_t),
+        .write_meta_channel_t(sys_idma_write_meta_channel_t)
+    ) i_idma_backend_rw_axi (
+        .clk_i          (clk_host),
+        .rst_ni         (rst_host_n),
+        .testmode_i     (1'b0),
+        .idma_req_i     (idma_req),
+        .req_valid_i    (idma_req_valid),
+        .req_ready_o    (idma_req_ready),
+        .idma_rsp_o     (idma_rsp),
+        .rsp_valid_o    (idma_rsp_valid),
+        .rsp_ready_i    (1'b1),
+        .idma_eh_req_i  ('0),
+        .eh_req_valid_i (1'b0),
+        .eh_req_ready_o (/* NC */),
+        .axi_read_req_o (axi_read_req),
+        .axi_read_rsp_i (axi_read_rsp),
+        .axi_write_req_o(axi_write_req),
+        .axi_write_rsp_i(axi_write_rsp),
+        .busy_o         (idma_busy)
+    );
+
+    axi_rw_join #(
+        .axi_req_t (axi_a48_d512_i4_u1_req_t),
+        .axi_resp_t(axi_a48_d512_i4_u1_resp_t)
+    ) i_axi_rw_join (
+        .clk_i           (clk_host),
+        .rst_ni          (rst_host_n),
+        .slv_read_req_i  (axi_read_req),
+        .slv_read_resp_o (axi_read_rsp),
+        .slv_write_req_i (axi_write_req),
+        .slv_write_resp_o(axi_write_rsp),
+        .mst_req_o       (axi_req),
+        .mst_resp_i      (axi_rsp)
+    );
+
+    // Xbar 0, HBM 1, link 2.
+    axi_a48_d512_i4_u1_req_t  [2:0] target_req;
+    axi_a48_d512_i4_u1_resp_t [2:0] target_rsp;
+
+    axi_demux #(
+        .AxiIdWidth (4),
+        .AtopSupport(1'b0),
+        .aw_chan_t  (axi_a48_d512_i4_u1_aw_chan_t),
+        .w_chan_t   (axi_a48_d512_i4_u1_w_chan_t),
+        .b_chan_t   (axi_a48_d512_i4_u1_b_chan_t),
+        .ar_chan_t  (axi_a48_d512_i4_u1_ar_chan_t),
+        .r_chan_t   (axi_a48_d512_i4_u1_r_chan_t),
+        .axi_req_t  (axi_a48_d512_i4_u1_req_t),
+        .axi_resp_t (axi_a48_d512_i4_u1_resp_t),
+        .NoMstPorts (3),
+        .MaxTrans   (32),
+        .AxiLookBits(4)
+    ) i_target_demux (
+        .clk_i          (clk_host),
+        .rst_ni         (rst_host_n),
+        .test_i         (1'b0),
+        .slv_req_i      (axi_req),
+        .slv_aw_select_i(engine_target(axi_req.aw.addr, chip_id)),
+        .slv_ar_select_i(engine_target(axi_req.ar.addr, chip_id)),
+        .slv_resp_o     (axi_rsp),
+        .mst_reqs_o     (target_req),
+        .mst_resps_i    (target_rsp)
+    );
+
+    assign engine_to_xbar_req[k] = target_req[EngineToXbar];
+    assign target_rsp[EngineToXbar] = engine_to_xbar_rsp[k];
+    assign engine_to_link_req[k] = target_req[EngineToLink];
+    assign target_rsp[EngineToLink] = engine_to_link_rsp[k];
+
+    // Its own HBM port, IDs widened to the HBM's 6 bits.
+    axi_iw_converter #(
+        .AxiSlvPortIdWidth     (4),
+        .AxiMstPortIdWidth     (6),
+        .AxiSlvPortMaxUniqIds  (16),
+        .AxiSlvPortMaxTxnsPerId(32),
+        .AxiSlvPortMaxTxns     (64),
+        .AxiMstPortMaxUniqIds  (64),
+        .AxiMstPortMaxTxnsPerId(32),
+        .AxiAddrWidth          (48),
+        .AxiDataWidth          (512),
+        .AxiUserWidth          (1),
+        .slv_req_t             (axi_a48_d512_i4_u1_req_t),
+        .slv_resp_t            (axi_a48_d512_i4_u1_resp_t),
+        .mst_req_t             (axi_a48_d512_i6_u1_req_t),
+        .mst_resp_t            (axi_a48_d512_i6_u1_resp_t)
+    ) i_hbm_iw (
+        .clk_i     (clk_host),
+        .rst_ni    (rst_host_n),
+        .slv_req_i (target_req[EngineToHbm]),
+        .slv_resp_o(target_rsp[EngineToHbm]),
+        .mst_req_o (hbm_req[1+k]),
+        .mst_resp_i(hbm_rsp[1+k])
+    );
+  end
+
+  // The engines' local traffic (neither HBM nor another chip) shares one xbar port.
+  for (genvar k = NumSysIdma; k < 4; k++) begin : gen_no_engine_to_xbar
+    assign engine_to_xbar_req[k] = '0;
+  end
+
+  axi_a48_d512_i6_u1_req_t  engines_to_xbar_muxed_req;
+  axi_a48_d512_i6_u1_resp_t engines_to_xbar_muxed_rsp;
   axi_a48_d512_i4_u1_req_t  axi_idma_to_soc_xbar_req;
   axi_a48_d512_i4_u1_resp_t axi_idma_to_soc_xbar_rsp;
 
-  idma_backend_rw_axi #(
-      .DataWidth           (512),
-      .AddrWidth           (48),
-      .UserWidth           (1),
-      .AxiIdWidth          (4),
-      .NumAxInFlight       (32'd64),
-      .BufferDepth         (32'd3),
-      .TFLenWidth          (SysIdmaTFLenWidth),
-      .MemSysDepth         (32'd16),
-      .CombinedShifter     (1'b1),
-      .RAWCouplingAvail    (1'b1),
-      .MaskInvalidData     (1'b1),
-      .HardwareLegalizer   (1'b1),
-      .RejectZeroTransfers (1'b1),
-      .ErrorCap            (idma_pkg::NO_ERROR_HANDLING),
-      .idma_req_t          (sys_idma_req_t),
-      .idma_rsp_t          (sys_idma_rsp_t),
-      .idma_eh_req_t       (idma_pkg::idma_eh_req_t),
-      .idma_busy_t         (idma_pkg::idma_busy_t),
-      .axi_req_t           (axi_a48_d512_i4_u1_req_t),
-      .axi_rsp_t           (axi_a48_d512_i4_u1_resp_t),
-      .read_meta_channel_t (sys_idma_read_meta_channel_t),
-      .write_meta_channel_t(sys_idma_write_meta_channel_t)
-  ) i_idma_backend_rw_axi_sys_idma (
-      .clk_i          (clk_host),
-      .rst_ni         (rst_host_n),
-      .testmode_i     (1'b0),
-      .idma_req_i     (sys_idma_req),
-      .req_valid_i    (sys_idma_req_valid),
-      .req_ready_o    (sys_idma_req_ready),
-      .idma_rsp_o     (sys_idma_rsp),
-      .rsp_valid_o    (sys_idma_rsp_valid),
-      .rsp_ready_i    (1'b1),
-      .idma_eh_req_i  ('0),
-      .eh_req_valid_i (1'b0),
-      .eh_req_ready_o (/* NC */),
-      .axi_read_req_o (sys_idma_axi_read_req),
-      .axi_read_rsp_i (sys_idma_axi_read_rsp),
-      .axi_write_req_o(sys_idma_axi_write_req),
-      .axi_write_rsp_i(sys_idma_axi_write_rsp),
-      .busy_o         (sys_idma_busy)
+  axi_mux #(
+      .SlvAxiIDWidth(4),
+      .slv_aw_chan_t(axi_a48_d512_i4_u1_aw_chan_t),
+      .mst_aw_chan_t(axi_a48_d512_i6_u1_aw_chan_t),
+      .w_chan_t     (axi_a48_d512_i4_u1_w_chan_t),
+      .slv_b_chan_t (axi_a48_d512_i4_u1_b_chan_t),
+      .mst_b_chan_t (axi_a48_d512_i6_u1_b_chan_t),
+      .slv_ar_chan_t(axi_a48_d512_i4_u1_ar_chan_t),
+      .mst_ar_chan_t(axi_a48_d512_i6_u1_ar_chan_t),
+      .slv_r_chan_t (axi_a48_d512_i4_u1_r_chan_t),
+      .mst_r_chan_t (axi_a48_d512_i6_u1_r_chan_t),
+      .slv_req_t    (axi_a48_d512_i4_u1_req_t),
+      .slv_resp_t   (axi_a48_d512_i4_u1_resp_t),
+      .mst_req_t    (axi_a48_d512_i6_u1_req_t),
+      .mst_resp_t   (axi_a48_d512_i6_u1_resp_t),
+      .NoSlvPorts   (4),
+      .MaxWTrans    (16)
+  ) i_engines_to_xbar_mux (
+      .clk_i      (clk_host),
+      .rst_ni     (rst_host_n),
+      .test_i     (1'b0),
+      .slv_reqs_i (engine_to_xbar_req),
+      .slv_resps_o(engine_to_xbar_rsp),
+      .mst_req_o  (engines_to_xbar_muxed_req),
+      .mst_resp_i (engines_to_xbar_muxed_rsp)
   );
 
-  axi_rw_join #(
-      .axi_req_t (axi_a48_d512_i4_u1_req_t),
-      .axi_resp_t(axi_a48_d512_i4_u1_resp_t)
-  ) i_sys_idma_axi_rw_join (
-      .clk_i           (clk_host),
-      .rst_ni          (rst_host_n),
-      .slv_read_req_i  (sys_idma_axi_read_req),
-      .slv_read_resp_o (sys_idma_axi_read_rsp),
-      .slv_write_req_i (sys_idma_axi_write_req),
-      .slv_write_resp_o(sys_idma_axi_write_rsp),
-      .mst_req_o       (axi_idma_to_soc_xbar_req),
-      .mst_resp_i      (axi_idma_to_soc_xbar_rsp)
+  axi_id_remap #(
+      .AxiSlvPortIdWidth(6),
+      .AxiSlvPortMaxUniqIds(16),
+      .AxiMaxTxnsPerId(16),
+      .AxiMstPortIdWidth(4),
+      .slv_req_t(axi_a48_d512_i6_u1_req_t),
+      .slv_resp_t(axi_a48_d512_i6_u1_resp_t),
+      .mst_req_t(axi_a48_d512_i4_u1_req_t),
+      .mst_resp_t(axi_a48_d512_i4_u1_resp_t)
+  ) i_engines_to_xbar_iwc (
+      .clk_i(clk_host),
+      .rst_ni(rst_host_n),
+      .slv_req_i(engines_to_xbar_muxed_req),
+      .slv_resp_o(engines_to_xbar_muxed_rsp),
+      .mst_req_o(axi_idma_to_soc_xbar_req),
+      .mst_resp_i(axi_idma_to_soc_xbar_rsp)
   );
 
   /////////////////
@@ -512,6 +685,139 @@ module hemaia_mem_chip #(
   axi_a48_d512_i4_u1_req_t axi_d2d_link_to_soc_xbar_req;
   axi_a48_d512_i4_u1_resp_t axi_d2d_link_to_soc_xbar_rsp;
 
+  // The link has one local port per engine: engine k sends on port k; the wide xbar's own
+  // route to other chips shares port 0 with engine 0. Requests from other chips arrive on
+  // all of them (by the link they came in on) and merge into the xbar's one D2D input.
+  localparam int unsigned LinkPortIdxBits = (NumSysIdma > 1) ? $clog2(NumSysIdma) : 0;
+  localparam int unsigned LinkLocalIdWidth = 4 - LinkPortIdxBits;
+
+  axi_a48_d512_i4_u1_req_t  [NumSysIdma-1:0] link_to_remote_req, link_from_remote_req;
+  axi_a48_d512_i4_u1_resp_t [NumSysIdma-1:0] link_to_remote_rsp, link_from_remote_rsp;
+
+  for (genvar k = 1; k < NumSysIdma; k++) begin : gen_link_port
+    assign link_to_remote_req[k] = engine_to_link_req[k];
+    assign engine_to_link_rsp[k] = link_to_remote_rsp[k];
+  end
+
+  // Port 0: the xbar's route and engine 0, merged, IDs back into the port's LinkLocalIdWidth.
+  axi_a48_d512_i4_u1_req_t  [1:0] link_port0_src_req;
+  axi_a48_d512_i4_u1_resp_t [1:0] link_port0_src_rsp;
+  axi_a48_d512_i5_u1_req_t  link_port0_muxed_req;
+  axi_a48_d512_i5_u1_resp_t link_port0_muxed_rsp;
+  assign link_port0_src_req[0] = axi_soc_xbar_to_d2d_link_post_id_conv_req;
+  assign axi_soc_xbar_to_d2d_link_post_id_conv_rsp = link_port0_src_rsp[0];
+  assign link_port0_src_req[1] = engine_to_link_req[0];
+  assign engine_to_link_rsp[0] = link_port0_src_rsp[1];
+
+  axi_mux #(
+      .SlvAxiIDWidth(4),
+      .slv_aw_chan_t(axi_a48_d512_i4_u1_aw_chan_t),
+      .mst_aw_chan_t(axi_a48_d512_i5_u1_aw_chan_t),
+      .w_chan_t     (axi_a48_d512_i4_u1_w_chan_t),
+      .slv_b_chan_t (axi_a48_d512_i4_u1_b_chan_t),
+      .mst_b_chan_t (axi_a48_d512_i5_u1_b_chan_t),
+      .slv_ar_chan_t(axi_a48_d512_i4_u1_ar_chan_t),
+      .mst_ar_chan_t(axi_a48_d512_i5_u1_ar_chan_t),
+      .slv_r_chan_t (axi_a48_d512_i4_u1_r_chan_t),
+      .mst_r_chan_t (axi_a48_d512_i5_u1_r_chan_t),
+      .slv_req_t    (axi_a48_d512_i4_u1_req_t),
+      .slv_resp_t   (axi_a48_d512_i4_u1_resp_t),
+      .mst_req_t    (axi_a48_d512_i5_u1_req_t),
+      .mst_resp_t   (axi_a48_d512_i5_u1_resp_t),
+      .NoSlvPorts   (2),
+      .MaxWTrans    (16)
+  ) i_link_port0_mux (
+      .clk_i      (clk_host),
+      .rst_ni     (rst_host_n),
+      .test_i     (1'b0),
+      .slv_reqs_i (link_port0_src_req),
+      .slv_resps_o(link_port0_src_rsp),
+      .mst_req_o  (link_port0_muxed_req),
+      .mst_resp_i (link_port0_muxed_rsp)
+  );
+
+  axi_id_remap #(
+      .AxiSlvPortIdWidth(5),
+      .AxiSlvPortMaxUniqIds(1 << LinkLocalIdWidth),
+      .AxiMaxTxnsPerId(8),
+      .AxiMstPortIdWidth(4),
+      .slv_req_t(axi_a48_d512_i5_u1_req_t),
+      .slv_resp_t(axi_a48_d512_i5_u1_resp_t),
+      .mst_req_t(axi_a48_d512_i4_u1_req_t),
+      .mst_resp_t(axi_a48_d512_i4_u1_resp_t)
+  ) i_link_port0_iwc (
+      .clk_i(clk_host),
+      .rst_ni(rst_host_n),
+      .slv_req_i(link_port0_muxed_req),
+      .slv_resp_o(link_port0_muxed_rsp),
+      .mst_req_o(link_to_remote_req[0]),
+      .mst_resp_i(link_to_remote_rsp[0])
+  );
+
+  // Requests from other chips: every local port, into the xbar's one D2D input.
+  if (NumSysIdma == 1) begin : gen_one_link_input
+    assign axi_d2d_link_to_soc_xbar_req = link_from_remote_req[0];
+    assign link_from_remote_rsp[0] = axi_d2d_link_to_soc_xbar_rsp;
+  end else begin : gen_link_inputs_merged
+    axi_a48_d512_i4_u1_req_t  [3:0] from_remote_req;
+    axi_a48_d512_i4_u1_resp_t [3:0] from_remote_rsp;
+    axi_a48_d512_i6_u1_req_t  from_remote_muxed_req;
+    axi_a48_d512_i6_u1_resp_t from_remote_muxed_rsp;
+    for (genvar k = 0; k < 4; k++) begin : gen_from_remote
+      if (k < NumSysIdma) begin : gen_port
+        assign from_remote_req[k] = link_from_remote_req[k];
+        assign link_from_remote_rsp[k] = from_remote_rsp[k];
+      end else begin : gen_none
+        assign from_remote_req[k] = '0;
+      end
+    end
+
+    axi_mux #(
+        .SlvAxiIDWidth(4),
+        .slv_aw_chan_t(axi_a48_d512_i4_u1_aw_chan_t),
+        .mst_aw_chan_t(axi_a48_d512_i6_u1_aw_chan_t),
+        .w_chan_t     (axi_a48_d512_i4_u1_w_chan_t),
+        .slv_b_chan_t (axi_a48_d512_i4_u1_b_chan_t),
+        .mst_b_chan_t (axi_a48_d512_i6_u1_b_chan_t),
+        .slv_ar_chan_t(axi_a48_d512_i4_u1_ar_chan_t),
+        .mst_ar_chan_t(axi_a48_d512_i6_u1_ar_chan_t),
+        .slv_r_chan_t (axi_a48_d512_i4_u1_r_chan_t),
+        .mst_r_chan_t (axi_a48_d512_i6_u1_r_chan_t),
+        .slv_req_t    (axi_a48_d512_i4_u1_req_t),
+        .slv_resp_t   (axi_a48_d512_i4_u1_resp_t),
+        .mst_req_t    (axi_a48_d512_i6_u1_req_t),
+        .mst_resp_t   (axi_a48_d512_i6_u1_resp_t),
+        .NoSlvPorts   (4),
+        .MaxWTrans    (16)
+    ) i_from_remote_mux (
+        .clk_i      (clk_host),
+        .rst_ni     (rst_host_n),
+        .test_i     (1'b0),
+        .slv_reqs_i (from_remote_req),
+        .slv_resps_o(from_remote_rsp),
+        .mst_req_o  (from_remote_muxed_req),
+        .mst_resp_i (from_remote_muxed_rsp)
+    );
+
+    axi_id_remap #(
+        .AxiSlvPortIdWidth(6),
+        .AxiSlvPortMaxUniqIds(16),
+        .AxiMaxTxnsPerId(8),
+        .AxiMstPortIdWidth(4),
+        .slv_req_t(axi_a48_d512_i6_u1_req_t),
+        .slv_resp_t(axi_a48_d512_i6_u1_resp_t),
+        .mst_req_t(axi_a48_d512_i4_u1_req_t),
+        .mst_resp_t(axi_a48_d512_i4_u1_resp_t)
+    ) i_from_remote_iwc (
+        .clk_i(clk_host),
+        .rst_ni(rst_host_n),
+        .slv_req_i(from_remote_muxed_req),
+        .slv_resp_o(from_remote_muxed_rsp),
+        .mst_req_o(axi_d2d_link_to_soc_xbar_req),
+        .mst_resp_i(axi_d2d_link_to_soc_xbar_rsp)
+    );
+  end
+
   hemaia_d2d_link #(
       .EnableEastPhy(EnableEastPhy),
       .EnableWestPhy(EnableWestPhy),
@@ -519,6 +825,7 @@ module hemaia_mem_chip #(
       .EnableSouthPhy(EnableSouthPhy),
       .SendFifoDepth(4),
       .RecvFifoDepth(8),
+      .NumLocalPorts(NumSysIdma),
       .chip_id_t(chip_id_t),
       .axi_req_t(axi_a48_d512_i4_u1_req_t),
       .axi_rsp_t(axi_a48_d512_i4_u1_resp_t),
@@ -544,10 +851,11 @@ module hemaia_mem_chip #(
       .axi_lite_req_i(axi_lite_d2d_link_ctrl_req),
       .axi_lite_rsp_o(axi_lite_d2d_link_ctrl_rsp),
 
-      .axi_in_req_i (axi_soc_xbar_to_d2d_link_post_id_conv_req),
-      .axi_in_rsp_o (axi_soc_xbar_to_d2d_link_post_id_conv_rsp),
-      .axi_out_req_o(axi_d2d_link_to_soc_xbar_req),
-      .axi_out_rsp_i(axi_d2d_link_to_soc_xbar_rsp),
+      // one local port per push engine (see above)
+      .to_remote_req_i  (link_to_remote_req),
+      .to_remote_rsp_o  (link_to_remote_rsp),
+      .from_remote_req_o(link_from_remote_req),
+      .from_remote_rsp_i(link_from_remote_rsp),
 
       .east_test_being_requested_i,
       .east_test_request_o,

@@ -1348,6 +1348,104 @@ def get_compute_chiplet_ids(occamy_cfg):
     return chiplet_ids
 
 
+# The four D2D ports in the order of the link's registers (D2DDirection in
+# target/sw/shared/runtime/hemaia_d2d_link.h), and where each leads on the grid:
+# east = +x, west = -x, north = -y, south = +y.
+D2D_DIRECTIONS = ("east", "west", "north", "south")
+D2D_STEP = {"east": (1, 0), "west": (-1, 0), "north": (0, -1), "south": (0, 1)}
+D2D_OPPOSITE = {"east": "west", "west": "east", "north": "south", "south": "north"}
+# A chip id is (x << 4) | y, and 0xF in either nibble is the link's multicast wildcard, so
+# a coordinate is 0..14.
+MAX_CHIP_COORD = 14
+# Push engines (system iDMAs) on a memory chip when its cfg entry does not say
+# (hemaia_mem_chip NumSysIdma; one per local port of its D2D link, at most 4).
+DEFAULT_MEM_CHIP_SYS_IDMA = 4
+
+
+@dataclass(frozen=True)
+class ChipletGrid:
+    """Every chip on the virtual interposer, and which chip each D2D port faces.
+
+    Compute and memory chips share one grid, and a link joins every two chips that sit
+    side by side whatever their kind. So a memory chip can sit on the edge of the compute
+    array, between compute chips (and feed all of them), or next to another memory chip.
+    Coordinates are in cfg order."""
+    compute: Tuple[Tuple[int, int], ...]
+    memory: Tuple[Tuple[int, int], ...]
+
+    def is_memory(self, c):
+        return tuple(c) in self.memory
+
+    def neighbour(self, c, d):
+        """The chip on port `d` of chip `c`, or None."""
+        n = (c[0] + D2D_STEP[d][0], c[1] + D2D_STEP[d][1])
+        return n if n in self.compute or n in self.memory else None
+
+    def links(self):
+        """Every link once, as ((a, port of a), (b, port of b)) with b east or south of a."""
+        out = []
+        for a in self.compute + self.memory:
+            for d in ("east", "south"):
+                b = self.neighbour(a, d)
+                if b is not None:
+                    out.append(((a, d), (b, D2D_OPPOSITE[d])))
+        return out
+
+    def port_mask(self, c, memory_only=False):
+        """Bit i set when port D2D_DIRECTIONS[i] of `c` faces a chip (a memory chip)."""
+        mask = 0
+        for i, d in enumerate(D2D_DIRECTIONS):
+            n = self.neighbour(c, d)
+            if n is not None and (not memory_only or self.is_memory(n)):
+                mask |= 1 << i
+        return mask
+
+
+def get_chiplet_grid(multichip_cfg) -> ChipletGrid:
+    """The chips of `hemaia_multichip`, checked: coordinates 0..14, one chip per slot, every
+    chip reachable over the links from every other."""
+    if multichip_cfg["single_chip"]:
+        return ChipletGrid(compute=((0, 0),), memory=())
+    tb = multichip_cfg["testbench_cfg"]
+    compute = tuple(tuple(c["coordinate"]) for c in tb["hemaia_compute_chip"])
+    memory = tuple(tuple(m["coordinate"]) for m in tb.get("hemaia_mem_chip", []) or [])
+    chips = compute + memory
+    for c in chips:
+        if not all(0 <= v <= MAX_CHIP_COORD for v in c):
+            raise ValueError(
+                f"chip at {list(c)}: coordinates must be 0..{MAX_CHIP_COORD}. The chip id is "
+                f"(x << 4) | y and 0xF in either nibble is the D2D multicast wildcard.")
+    dup = sorted({c for c in chips if chips.count(c) > 1})
+    if dup:
+        raise ValueError(f"two chips at {[list(c) for c in dup]}")
+    # The testharness names a compute chip's pins chip<x><y>: (1,12) and (11,2) would clash.
+    names = [f"{x}{y}" for x, y in compute]
+    if len(set(names)) != len(names):
+        raise ValueError(f"compute chips {[list(c) for c in compute]} give two the same "
+                         f"testharness name chip<x><y>")
+    grid = ChipletGrid(compute=compute, memory=memory)
+    seen, todo = {chips[0]}, [chips[0]]
+    while todo:
+        c = todo.pop()
+        for d in D2D_DIRECTIONS:
+            n = grid.neighbour(c, d)
+            if n is not None and n not in seen:
+                seen.add(n)
+                todo.append(n)
+    cut = [list(c) for c in chips if c not in seen]
+    if cut:
+        raise ValueError(f"chips {cut} share no D2D link with the rest of the grid "
+                         f"(a link joins chips that sit side by side)")
+    return grid
+
+
+def get_mem_chip_num_sys_idma(mem_chip) -> int:
+    n = int(mem_chip.get("num_sys_idma", DEFAULT_MEM_CHIP_SYS_IDMA))
+    if not 1 <= n <= 4:
+        raise ValueError(f"memory chip {mem_chip['coordinate']}: num_sys_idma {n} is not 1..4")
+    return n
+
+
 def get_sim_clock_cfg(multichip_cfg):
     """The simulated clocks (hemaia_multichip.sim_clock): the testbench master clock in MHz
     that the compute chips and the memory chip divide down, the divider software gives the
@@ -1412,6 +1510,24 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
     nr_mem_chips = len(mem_chips)
     mem_chip_loc_x = int(mem_chips[0]["coordinate"][0]) if mem_chips else 0
     mem_chip_loc_y = int(mem_chips[0]["coordinate"][1]) if mem_chips else 0
+    # Every memory chip, and the ports of every chip that face another (D2D init reads
+    # these). A single-chip cfg has no D2D ports.
+    grid = get_chiplet_grid(multichip_cfg)
+    mem_chip_list = []
+    for m in mem_chips:
+        hbm = get_mem_chip_hbm_cfg(m)
+        x, y = m["coordinate"]
+        mem_chip_list.append({
+            "id": (x << 4) | y,
+            "mem_size": int(m["mem_size"]),
+            "hbm_base": hbm["base"] if hbm else 0,
+            "hbm_size": hbm["size"] if hbm else 0,
+            "num_sys_idma": get_mem_chip_num_sys_idma(m),
+        })
+    d2d_ports = [] if multichip_cfg["single_chip"] else [
+        {"id": (c[0] << 4) | c[1], "links": grid.port_mask(c),
+         "mem_links": grid.port_mask(c, memory_only=True)}
+        for c in grid.compute + grid.memory]
     # CLINT MSIP bit the bingo HW manager writes to ring the host DVFS doorbell: it is
     # appended right after this chiplet's harts, so its index == the hart count. Exposed
     # to SW so dvfs.h does not hardcode it (must match hw_manager_ipi_idx / occamy_soc.sv).
@@ -1460,6 +1576,8 @@ def get_cheader_kwargs(occamy_cfg, cluster_generators, name):
         "nr_mem_chips": nr_mem_chips,
         "mem_chip_loc_x": mem_chip_loc_x,
         "mem_chip_loc_y": mem_chip_loc_y,
+        "mem_chips": mem_chip_list,
+        "d2d_ports": d2d_ports,
         "same_memchip_speed": 1 if same_memchip_speed else 0,
         "core_clk_div": get_sim_clock_cfg(multichip_cfg)["core_clk_div"],
         "sim_clk_mhz": int(get_sim_clock_cfg(multichip_cfg)["sim_clk_mhz"]),
@@ -1514,6 +1632,7 @@ def get_testharness_kwargs(occamy_cfg, sim_with_mem_macro, sim_with_interposer, 
         type: ChipletType
         size: int = 0  # Only for memory chiplets
         hbm: Optional[dict] = None  # Memory chiplets: the simulated HBM, None if absent
+        num_sys_idma: int = 0  # Memory chiplets: push engines (hemaia_mem_chip NumSysIdma)
 
         @property
         def chip_id(self) -> int:
@@ -1532,8 +1651,55 @@ def get_testharness_kwargs(occamy_cfg, sim_with_mem_macro, sim_with_interposer, 
             compute_chips.append(Chiplet(coordinate=(compute_chip["coordinate"][0], compute_chip["coordinate"][1]), type=ChipletType.COMPUTE))
         for mem_chip in multichip_cfg["testbench_cfg"]["hemaia_mem_chip"]:
             mem_chips.append(Chiplet(coordinate=(mem_chip["coordinate"][0], mem_chip["coordinate"][1]), type=ChipletType.MEMORY, size=mem_chip["mem_size"],
-                                     hbm=get_mem_chip_hbm_cfg(mem_chip)))
-    
+                                     hbm=get_mem_chip_hbm_cfg(mem_chip),
+                                     num_sys_idma=get_mem_chip_num_sys_idma(mem_chip)))
+
+    # The D2D wiring, from the grid (get_chiplet_grid checks it):
+    #   compute_links  compute chips side by side: the dut's io_wrapper wires them.
+    #   dut_ports      every compute-chip port with no compute chip beside it: a dut port,
+    #                  which the testharness joins to the memory chip there, or ties off.
+    #   d2d_side_nets  for each dut port and each memory-chip port that faces a chip, the
+    #                  testharness nets it connects to: 'bus' (the tri data), and rts/cts/req
+    #                  in and out. Both ends of a link get the same nets, crossed.
+    #   d2d_net_decls  those nets: (name, is_bus, tie to zero).
+    grid = get_chiplet_grid(multichip_cfg)
+    if sim_with_interposer and set(grid.compute) != {(0, 0), (0, 1), (1, 0), (1, 1)}:
+        raise ValueError("SIM_WITH_INTERPOSER=1 models a 2x2 compute array only, got "
+                         f"compute chips {[list(c) for c in grid.compute]}")
+    compute_links = [(a, da, b, db) for (a, da), (b, db) in grid.links()
+                     if not grid.is_memory(a) and not grid.is_memory(b)]
+    dut_ports = [(c, d) for c in grid.compute for d in D2D_DIRECTIONS
+                 if grid.neighbour(c, d) is None or grid.is_memory(grid.neighbour(c, d))]
+    d2d_side_nets = {}
+    d2d_net_decls = []
+    for (a, da), (b, db) in grid.links():
+        if not (grid.is_memory(a) or grid.is_memory(b)):
+            continue
+        base = f"d2d_{a[0]}_{a[1]}_{da}"
+        d2d_net_decls.append((f"{base}_bus", True, False))
+        for sig in ("rts", "cts", "req"):
+            d2d_net_decls += [(f"{base}_{sig}_{da}", False, False),
+                              (f"{base}_{sig}_{db}", False, False)]
+        # A signal named after a port's direction is the one that port drives.
+        for (c, d, o) in ((a, da, db), (b, db, da)):
+            d2d_side_nets[(c[0], c[1], d)] = {
+                "bus": f"{base}_bus",
+                **{f"{sig}_o": f"{base}_{sig}_{d}" for sig in ("rts", "cts", "req")},
+                **{f"{sig}_i": f"{base}_{sig}_{o}" for sig in ("rts", "cts", "req")},
+            }
+    for c, d in dut_ports:
+        if grid.neighbour(c, d) is not None:
+            continue
+        base = f"d2d_{c[0]}_{c[1]}_{d}_open"
+        d2d_net_decls.append((f"{base}_bus", True, False))
+        for sig in ("rts", "cts", "req"):
+            d2d_net_decls += [(f"{base}_{sig}_o", False, False), (f"{base}_{sig}_i", False, True)]
+        d2d_side_nets[(c[0], c[1], d)] = {
+            "bus": f"{base}_bus",
+            **{f"{sig}_{io}": f"{base}_{sig}_{io}" for sig in ("rts", "cts", "req")
+               for io in ("o", "i")},
+        }
+
     # Derive chiplet grid dimensions from compute chip coordinates
     if compute_chips:
         max_compute_chiplet_x = max(c.coordinate[0] for c in compute_chips) + 1
@@ -1560,6 +1726,12 @@ def get_testharness_kwargs(occamy_cfg, sim_with_mem_macro, sim_with_interposer, 
         "memchip_clk_div": get_sim_clock_cfg(multichip_cfg)["memchip_clk_div"],
         "compute_chips": compute_chips,
         "mem_chips": mem_chips,
+        "d2d_directions": D2D_DIRECTIONS,
+        "chiplet_grid": grid,
+        "compute_links": compute_links,
+        "dut_ports": dut_ports,
+        "d2d_side_nets": d2d_side_nets,
+        "d2d_net_decls": d2d_net_decls,
         "num_compute_chiplet": num_compute_chiplet,
         "max_compute_chiplet_x": max_compute_chiplet_x,
         "max_compute_chiplet_y": max_compute_chiplet_y,

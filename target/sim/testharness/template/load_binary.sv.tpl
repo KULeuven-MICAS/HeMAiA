@@ -32,7 +32,10 @@
 
 // The memory chip remains a behavioral testbench component in every compute-chip
 // simulation mode.  Always clear every bank first: workloads without a mempool
-// image must not inherit data from a previous reload.  RTL uses tc_sram.sram;
+// image must not inherit data from a previous reload.  Each memory chip loads its own
+// image, mempool_chip_<x>_<y>/, when the workload staged one for it, and the shared
+// mempool/ otherwise -- so a workload that knows one memory chip loads the same data into
+// all of them, as it always has.  RTL uses tc_sram.sram;
 // macro/netlist simulation selects TSMC tc_sram's gen_no_sram_matched.mem_array
 // because the 64 MiB memory-chip configuration does not match a physical macro.
 task automatic load_mem_chip;
@@ -61,19 +64,23 @@ task automatic load_mem_chip;
         integer mempool_word;
         string  mempool_filename;
 
-        mempool_filename = "mempool/bank_${k}.hex";
+        mempool_filename = "mempool_chip_${mem_chip.coordinate[0]}_${mem_chip.coordinate[1]}/bank_${k}.hex";
         for (mempool_word = 0; mempool_word < ${mem_chip_depth}; mempool_word++) begin
             ${mem_chip_array % k}[mempool_word] = '0;
         end
 
         mempool_fd = $fopen(mempool_filename, "r");
+        if (mempool_fd == 0) begin
+            mempool_filename = "mempool/bank_${k}.hex";
+            mempool_fd = $fopen(mempool_filename, "r");
+        end
         if (mempool_fd != 0) begin
             $fclose(mempool_fd);
             $readmemh(mempool_filename,
                 ${mem_chip_array % k});
-            $display("Loaded data from %s into memory-chip bank ${k}", mempool_filename);
+            $display("Loaded data from %s into memory-chip (${mem_chip.coordinate[0]}, ${mem_chip.coordinate[1]}) bank ${k}", mempool_filename);
         end else begin
-            $display("No %s; memory-chip bank ${k} remains zero initialized", mempool_filename);
+            $display("No %s; memory-chip (${mem_chip.coordinate[0]}, ${mem_chip.coordinate[1]}) bank ${k} remains zero initialized", mempool_filename);
         end
     end
 %   endfor
@@ -85,7 +92,8 @@ endtask
 // (hw/hemaia/hemaia_mem_system/hbm). Cleared like the SRAM,
 // then filled from the manifest the workload build staged in hbm/ -- or the one
 // +hbm_manifest=<path> names. The files are mapped, not copied, so GiB images load
-// instantly. No manifest: the HBM starts zeroed.
+// instantly. No manifest: the HBM starts zeroed. One manifest serves every memory chip:
+// an entry tagged chip=<id> loads into that chip only, an untagged one into all.
 task automatic load_hbm;
     string manifest;
     if (!$value$plusargs("hbm_manifest=%s", manifest)) manifest = "hbm/manifest.txt";

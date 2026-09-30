@@ -834,28 +834,81 @@ void hemaia_d2d_link_initialize_4c1m(uint8_t chip_id) {
 }
 
 
-// Initialize the HeMAiA D2D Link for ANY rectangular compute grid + at most one memory
-// chiplet on one edge, deriving the topology from the generated platform header instead of
-// hardcoding it per chip ID. This is the general form of hemaia_d2d_link_initialize_4c1m()
-// and reproduces it exactly on a 2x2 + memchip-at-(2,0) system.
+// The chip that programs the memory chips' link registers: they have no core. The first
+// compute chip of the cfg.
+#define HEMAIA_D2D_MEMCHIP_CONFIGURER CHIPLET_ID_0
+
+// This chip's entry of HEMAIA_D2D_PORT_TABLE (occamy.h): *links = the ports that face a
+// chip, *mem = those that face a memory chip, bit d for D2DDirection d. A chip the table
+// does not list (a single-chip cfg) has no links.
+static inline void hemaia_d2d_ports(uint8_t chip_id, uint8_t* links, uint8_t* mem) {
+    *links = 0;
+    *mem = 0;
+#if HEMAIA_D2D_PORT_TABLE_LEN > 0
+    static const uint8_t table[HEMAIA_D2D_PORT_TABLE_LEN][3] = HEMAIA_D2D_PORT_TABLE;
+    for (int i = 0; i < HEMAIA_D2D_PORT_TABLE_LEN; i++) {
+        if (table[i][0] == chip_id) {
+            *links = table[i][1];
+            *mem = table[i][2];
+        }
+    }
+#endif
+}
+
+// A register of chip `chip_id`'s D2D link, this chip's or another's (over the link).
+static inline volatile uint32_t* hemaia_d2d_link_reg(uint8_t chip_id, uint32_t offset) {
+    return (volatile uint32_t*)(uintptr_t)chiplet_addr_transform_full(
+        chip_id, HEMAIA_D2D_LINK_BASE_ADDR + offset);
+}
+
+// The memory chips, farthest from this chip first (Manhattan distance): a write to one
+// behind another must cross the nearer one's link before that link changes mode.
+static inline int hemaia_d2d_memchips_far_first(uint8_t chip_id, uint8_t* out) {
+    int n = 0;
+#if N_MEM_CHIPS > 0
+    static const uint8_t ids[N_MEM_CHIPS] = MEM_CHIP_IDS;
+    for (int i = 0; i < N_MEM_CHIPS; i++) out[n++] = ids[i];
+    for (int i = 1; i < n; i++) {
+        for (int j = i; j > 0; j--) {
+            int dj = __builtin_abs((out[j] >> 4) - (chip_id >> 4)) +
+                     __builtin_abs((out[j] & 0xF) - (chip_id & 0xF));
+            int dk = __builtin_abs((out[j - 1] >> 4) - (chip_id >> 4)) +
+                     __builtin_abs((out[j - 1] & 0xF) - (chip_id & 0xF));
+            if (dj <= dk) break;
+            uint8_t s = out[j];
+            out[j] = out[j - 1];
+            out[j - 1] = s;
+        }
+    }
+#else
+    (void)chip_id;
+    (void)out;
+#endif
+    return n;
+}
+
+// Initialize the HeMAiA D2D Link for ANY grid of compute and memory chips, from the
+// generated platform header instead of a per-topology hardcoded switch. This is the general
+// form of hemaia_d2d_link_initialize_4c1m() and reproduces it exactly on a 2x2 +
+// memchip-at-(2,0) system.
 //
 // Why the availability bits matter. They are the router's HARD ARRAY BOUNDARY
 // (hemaia_d2d_link_router_rc.sv: "link_available_i: The hard boundary of the chip array.
 // Exceeding the boundary == No chip"), and their RESET VALUE IS AVAILABLE. The router is
 // X-first with a Y fallback: for a destination further east it takes EAST if east is
-// available, else falls back to SOUTH/NORTH toward the destination row. So a boundary link
-// left marked available makes the router forward packets off the array, where they are
-// dropped and never answered -- and the Y fallback that should have carried them never
-// triggers. Clearing the boundary bits is what makes routing work, not cosmetics.
+// available, else falls back to SOUTH/NORTH toward the destination row. So a port left
+// marked available with no chip behind it makes the router forward packets off the grid,
+// where they are dropped and never answered -- and the Y fallback that should have carried
+// them never triggers. Clearing those bits is what makes routing work, not cosmetics.
 //
-// Grid convention (dut.sv.tpl): east = +x, west = -x, south = +y, north = -y, and
-// chip_id = (x << 4) | y. The memchip sits on exactly one edge (the testharness asserts
-// this), so a compute chip whose EAST port faces it must keep that port AVAILABLE while
-// every other chip on the same column edge clears it.
+// Every chip, compute or memory, keeps exactly the ports that face a chip
+// (HEMAIA_D2D_PORT_TABLE). Memory chips are routers like any other: traffic between the
+// two compute chips of a row C M C crosses the memory chip. They have no core, so
+// HEMAIA_D2D_MEMCHIP_CONFIGURER programs theirs over the link. Ports that face a memory
+// chip are multicast-fenced: a broadcast is for the compute chips, and a multicast write
+// must not land in a memory chip at the same address -- so a broadcast does not cross a
+// memory chip either.
 static inline void hemaia_d2d_link_initialize_grid(uint8_t chip_id) {
-    const uint8_t x = (uint8_t)(chip_id >> 4);
-    const uint8_t y = (uint8_t)(chip_id & 0x0F);
-
     // Same clock-domain setup as the fixed-topology routines: host and clusters at /7,
     // all four D2D PHYs at /1, so the core:link ratio matches the RTL's 1/7.
     enable_clk_domain(0, HEMAIA_D2D_INIT_CORE_DIV);  // host CPU
@@ -868,81 +921,80 @@ static inline void hemaia_d2d_link_initialize_grid(uint8_t chip_id) {
     enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 4, 1);  // South D2D PHY
     set_all_d2d_link_tx_turnaround_silence_period(0);
 
-    // Does this chip's EAST port face the memory chiplet? True only when the memchip is
-    // placed just past the east edge (MEM_CHIP_LOC_X == N_CHIPLETS_X) on this chip's row.
-    const int east_faces_memchip =
-        (N_MEM_CHIPS > 0) && (MEM_CHIP_LOC_X == N_CHIPLETS_X) &&
-        (x == N_CHIPLETS_X - 1) && (y == MEM_CHIP_LOC_Y);
-
-    // Clear every port that faces off-array. A port facing the memchip is NOT off-array.
-    if (x == 0) {
-        set_d2d_link_availability(D2D_DIRECTION_WEST, false);
-    }
-    if (y == 0) {
-        set_d2d_link_availability(D2D_DIRECTION_NORTH, false);
-    }
-    if (y == N_CHIPLETS_Y - 1) {
-        set_d2d_link_availability(D2D_DIRECTION_SOUTH, false);
-    }
-    if ((x == N_CHIPLETS_X - 1) && !east_faces_memchip) {
-        set_d2d_link_availability(D2D_DIRECTION_EAST, false);
-    }
-
-    if (east_faces_memchip) {
-        // Keep broadcast/multicast out of the memchip: it is not a compute participant.
-        set_d2d_link_multicast_fence(D2D_DIRECTION_EAST, false);
+    uint8_t links, mem;
+    hemaia_d2d_ports(chip_id, &links, &mem);
+    for (int d = 0; d < 4; d++) {
+        const D2DDirection dir = (D2DDirection)d;
+        if (!((links >> d) & 1)) {
+            set_d2d_link_availability(dir, false);
+        }
+        if ((mem >> d) & 1) {
+            set_d2d_link_multicast_fence(dir, false);
 #if !HEMAIA_SAME_MEMCHIP_SPEED
-        // The memchip runs on a much slower clock, so this port has to yield and slow its
-        // PHY. DO NOT apply this to any other port -- on a grid larger than 2x2 the old
-        // fixed routine put it on chip 0x10, which is an INTERIOR hop, throttling a hot
-        // link 20x for no reason while the real memchip neighbour got nothing.
-        set_d2d_link_tx_yield_period(HEMAIA_D2D_LINK_FPGA_TX_YIELD_PERIOD,
-                                     D2D_DIRECTION_EAST);
-        set_d2d_link_tx_turnaround_silence_period(
-            HEMAIA_D2D_LINK_FPGA_TX_TURNAROUND_SILENCE_PERIOD, D2D_DIRECTION_EAST);
-        enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 1, 20);
+            // The memchip runs on a much slower clock, so a port facing one has to yield
+            // and slow its PHY. Only such a port: throttling a link between compute chips
+            // costs 20x for nothing.
+            set_d2d_link_tx_yield_period(HEMAIA_D2D_LINK_FPGA_TX_YIELD_PERIOD, dir);
+            set_d2d_link_tx_turnaround_silence_period(
+                HEMAIA_D2D_LINK_FPGA_TX_TURNAROUND_SILENCE_PERIOD, dir);
+            enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 1 + d, 20);
 #endif
+        }
+    }
+
+    // The memory chips' availability: the ports that face a chip, as for us.
+    if (chip_id == HEMAIA_D2D_MEMCHIP_CONFIGURER) {
+        uint8_t order[16];
+        const int n = hemaia_d2d_memchips_far_first(chip_id, order);
+        for (int i = 0; i < n; i++) {
+            uint8_t m_links, m_mem;
+            hemaia_d2d_ports(order[i], &m_links, &m_mem);
+            *hemaia_d2d_link_reg(order[i],
+                                 HEMAIA_D2D_LINK_AVAILABILITY_REGISTER_REG_OFFSET) = m_links;
+        }
+        asm volatile("fence" ::: "memory");
     }
 }
 
-// Switch this chip's links to DDR: both PHY clock edges carry data, so a 597-bit flit
-// takes 7 PHY cycles instead of 14 -- twice the link bandwidth at the same PHY clock
-// (at 4 GHz: 36.6 GB/s per link instead of 18.3; a 500 MHz digital side caps the flits it
-// can feed at 32 GB/s). BOTH ends of a link must agree, and nothing may cross a link
-// while its two ends disagree, so call this before any D2D traffic.
+// Switch the links to DDR: both PHY clock edges carry data, so a 597-bit flit takes 7 PHY
+// cycles instead of 14 -- twice the link bandwidth at the same PHY clock (at 4 GHz: 36.6
+// GB/s per link instead of 18.3; a 500 MHz digital side caps the flits it can feed at 32
+// GB/s). BOTH ends of a link must agree, and nothing may cross a link while its two ends
+// disagree, so call this before any D2D traffic, on every compute chip.
 //
-// Compute chips switch their own ports (every one runs this). The memory chiplet has no
-// core, so the chip whose EAST port faces it switches the memchip's ports FIRST, over the
-// link: that write leaves in SDR, and the delay lets it land before this chip flips its
-// own side. Its B response is generated when the write leaves this chip, so it proves
-// nothing; the read-back after the local switch, now in DDR both ways, is the proof.
-// Returns 0 on success, -1 if the memchip's register does not read back as written.
+// Compute chips switch their own ports. The memory chips have no core, so
+// HEMAIA_D2D_MEMCHIP_CONFIGURER switches theirs FIRST, over the links, farthest first
+// (each write leaves while every link on its way is still SDR), and the delay lets them
+// land before any chip flips its own side. A write's B response is generated when it
+// leaves this chip, so it proves nothing; the read-backs after the local switch, now in
+// DDR both ways, are the proof. Returns 0 on success, -1 if a memory chip's register does
+// not read back as written.
 static inline int hemaia_d2d_link_ddr_on_grid(uint8_t chip_id) {
-    const uint8_t x = (uint8_t)(chip_id >> 4);
-    const uint8_t y = (uint8_t)(chip_id & 0x0F);
-    const int east_faces_memchip =
-        (N_MEM_CHIPS > 0) && (MEM_CHIP_LOC_X == N_CHIPLETS_X) &&
-        (x == N_CHIPLETS_X - 1) && (y == MEM_CHIP_LOC_Y);
-    volatile uint32_t* mem_ddr = 0;
-    if (east_faces_memchip) {
-        const uint8_t mem_id = (uint8_t)((MEM_CHIP_LOC_X << 4) | MEM_CHIP_LOC_Y);
-        mem_ddr = (volatile uint32_t*)(uintptr_t)chiplet_addr_transform_full(
-            mem_id, HEMAIA_D2D_LINK_BASE_ADDR +
-                        HEMAIA_D2D_LINK_PHY_DDR_MODE_REGISTER_REG_OFFSET);
-        *mem_ddr = 0x0F;  // all four memchip ports; only the one facing us is connected
-        asm volatile("fence" ::: "memory");
-        delay_cycles(4000);
-    } else {
-        // Every other chip flips its ports at the same moment as the one above: on a grid,
-        // a link between two compute chips must not carry traffic while one end is DDR and
-        // the other still SDR, and the chips leave this function into D2D traffic.
-        delay_cycles(4000);
+    uint8_t order[16];
+    const int configurer = chip_id == HEMAIA_D2D_MEMCHIP_CONFIGURER;
+    const int n = hemaia_d2d_memchips_far_first(chip_id, order);
+    for (int i = 0; i < n; i++) {
+        if (configurer) {
+            // All four ports; those facing nothing have no PHY.
+            *hemaia_d2d_link_reg(order[i],
+                                 HEMAIA_D2D_LINK_PHY_DDR_MODE_REGISTER_REG_OFFSET) = 0x0F;
+            asm volatile("fence" ::: "memory");
+        }
+        delay_cycles(1000);
     }
+    // Every chip flips its ports at the same moment (each waits the same time above): on a
+    // grid, a link between two compute chips must not carry traffic while one end is DDR
+    // and the other still SDR, and the chips leave this function into D2D traffic.
+    delay_cycles(4000);
     set_all_d2d_link_phy_mode(D2D_PHY_MODE_DDR);
     asm volatile("fence" ::: "memory");
     delay_cycles(1000);
-    if (mem_ddr && ((*mem_ddr & 0x0F) != 0x0F)) {
-        return -1;
+    for (int i = 0; configurer && i < n; i++) {
+        if ((*hemaia_d2d_link_reg(order[i],
+                                  HEMAIA_D2D_LINK_PHY_DDR_MODE_REGISTER_REG_OFFSET) &
+             0x0F) != 0x0F) {
+            return -1;
+        }
     }
     return 0;
 }

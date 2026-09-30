@@ -32,6 +32,15 @@
 // Reach it with chiplet_addr_transform_loc(memchip_x, memchip_y, HBM_BASE_ADDR + off).
 #define HBM_BASE_ADDR ${hbm_base}
 #define HBM_SIZE ${hbm_size}
+// The same per memory chip k (MEM_CHIP_ID_<k> in occamy.h): SRAM size, HBM base and size.
+% for k, m in enumerate(mem_chips):
+#define MEM_CHIP_${k}_MEM_SIZE ${hex(m["mem_size"])}
+#define MEM_CHIP_${k}_HBM_BASE_ADDR ${hex(m["hbm_base"])}
+#define MEM_CHIP_${k}_HBM_SIZE ${hex(m["hbm_size"])}
+% endfor
+// A memory chip's push engine k has its registers at SYS_IDMA_CFG_BASE_ADDR +
+// k * SYS_IDMA_CFG_STRIDE (hemaia_mem_chip SysIdmaCfgStride).
+#define SYS_IDMA_CFG_STRIDE 0x1000
 
 //===============================================================
 // Mailbox

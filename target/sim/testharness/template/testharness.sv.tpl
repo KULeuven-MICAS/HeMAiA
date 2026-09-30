@@ -466,119 +466,34 @@ module testharness;
         reload_bin = '0;
     end
 
-    // The compute chiplet - DUT(The main ASIC)
-    // The memory chiplet - External Memory Pool(Will be implemented on a FPGA)
-    // And talk to the ASIC also via the D2D Link
-    // The possible locations of the mem chip is around the ASIC
-    // For example a 3x2 chiplet
-    // The compute chip always starts from (x=0,y=0)
-    //+------+------------------------+------------------------+------------------------+------------------------+------------------------+
-    //|      | x=-1                   | x=0                    | x=1                    | x=2                    | x=3                    |
-    //+------+------------------------+------------------------+------------------------+------------------------+------------------------+
-    //| y=-1 | illegal                | possible mem_chip slot | possible mem_chip slot | possible mem_chip slot | illegal                |
-    //+------+------------------------+------------------------+------------------------+------------------------+------------------------+
-    //| y=0  | possible mem_chip slot | comp_chip_00           | comp_chip_10           | comp_chip_20           | possible mem_chip slot |
-    //+------+------------------------+------------------------+------------------------+------------------------+------------------------+
-    //| y=1  | possible mem_chip slot | comp_chip_01           | comp_chip_11           | comp_chip_21           | possible mem_chip slot |
-    //+------+------------------------+------------------------+------------------------+------------------------+------------------------+
-    //| y=2  | illegal                | possible mem_chip slot | possible mem_chip slot | possible mem_chip slot | illegal                |
-    //+------+------------------------+------------------------+------------------------+------------------------+------------------------+
+    // The compute chiplets - the DUT (the ASICs) - and the memory chiplets - external memory
+    // pools, an FPGA in the real setup - sit on one grid and talk over D2D links: a link
+    // joins every two chips side by side (x to the east, y to the south, chip id
+    // (x << 4) | y, coordinates 0..14). A memory chip may sit on the edge of the compute
+    // array, between compute chips (a row C M C: it feeds both), or next to another memory
+    // chip. For example:
+    //+------+-------------+-------------+-------------+-------------+
+    //|      | x=0         | x=1         | x=2         | x=3         |
+    //+------+-------------+-------------+-------------+-------------+
+    //| y=0  | comp_chip_00| mem_chip_10 | comp_chip_20| mem_chip_30 |
+    //+------+-------------+-------------+-------------+-------------+
+    //| y=1  | comp_chip_01| comp_chip_11| comp_chip_21|             |
+    //+------+-------------+-------------+-------------+-------------+
+    // The dut has a port on every compute-chip side with no compute chip beside it; the
+    // links between compute chips are inside it (io_wrapper).
 
 %if not sim_with_verilator:
-    // Off-chip links to Mem Chip
-    // North Links (#MAX_X links)
-    %for x in range(max_compute_chiplet_x):
-    tri [2:0][19:0] north_offchip_d2d_link_${x};
-    wire            north_memchip_to_dut_link_rts_${x};
-    wire            north_memchip_to_dut_link_cts_${x};
-    wire            north_dut_to_memchip_link_rts_${x};
-    wire            north_dut_to_memchip_link_cts_${x};
-    wire            north_dut_to_memchip_link_test_request_${x};
-    wire            north_memchip_to_dut_link_test_request_${x};
-    %endfor
-
-    // South Links (#MAX_X links)
-    %for x in range(max_compute_chiplet_x):
-    tri [2:0][19:0] south_offchip_d2d_link_${x};
-    wire            south_memchip_to_dut_link_rts_${x};
-    wire            south_memchip_to_dut_link_cts_${x};
-    wire            south_dut_to_memchip_link_rts_${x};
-    wire            south_dut_to_memchip_link_cts_${x};
-    wire            south_dut_to_memchip_link_test_request_${x};
-    wire            south_memchip_to_dut_link_test_request_${x};
-    %endfor
-
-    // West Links (#MAX_Y links)
-    %for y in range(max_compute_chiplet_y):
-    tri [2:0][19:0] west_offchip_d2d_link_${y};
-    wire            west_memchip_to_dut_link_rts_${y};
-    wire            west_memchip_to_dut_link_cts_${y};
-    wire            west_dut_to_memchip_link_rts_${y};
-    wire            west_dut_to_memchip_link_cts_${y};
-    wire            west_dut_to_memchip_link_test_request_${y};
-    wire            west_memchip_to_dut_link_test_request_${y};
-    %endfor
-
-    // East Links (#MAX_Y links)
-    %for y in range(max_compute_chiplet_y):
-    tri [2:0][19:0] east_offchip_d2d_link_${y};
-    wire            east_memchip_to_dut_link_rts_${y};
-    wire            east_memchip_to_dut_link_cts_${y};
-    wire            east_dut_to_memchip_link_rts_${y};
-    wire            east_dut_to_memchip_link_cts_${y};
-    wire            east_dut_to_memchip_link_test_request_${y};
-    wire            east_memchip_to_dut_link_test_request_${y};
-    %endfor
-
-    // Tie unconnected offchip D2D link input pins to const_zero
-    // to avoid floating inputs on the DUT
-    <%
-        occupied_north = set()
-        occupied_south = set()
-        occupied_west  = set()
-        occupied_east  = set()
-        for mem_chip in mem_chips:
-            mx = mem_chip.coordinate[0]
-            my = mem_chip.coordinate[1]
-            if my == -1:
-                occupied_north.add(mx)
-            if my == max_compute_chiplet_y:
-                occupied_south.add(mx)
-            if mx == -1:
-                occupied_west.add(my)
-            if mx == max_compute_chiplet_x:
-                occupied_east.add(my)
-    %>
-    %for x in range(max_compute_chiplet_x):
-    %if x not in occupied_north:
-    // North link ${x} is not connected to any mem chip
-    assign north_dut_to_memchip_link_cts_${x}      = const_zero;
-    assign north_memchip_to_dut_link_rts_${x}       = const_zero;
-    assign north_memchip_to_dut_link_test_request_${x} = const_zero;
+    // The D2D links that leave the dut or join memory chips: per link a tri data bus and,
+    // per end, the rts / cts / test-request that end drives. Dut ports with nothing beside
+    // them get inputs tied to zero.
+    %for (net, is_bus, tie_zero) in d2d_net_decls:
+    %if is_bus:
+    tri [2:0][19:0] ${net};
+    %else:
+    wire            ${net};
     %endif
-    %endfor
-    %for x in range(max_compute_chiplet_x):
-    %if x not in occupied_south:
-    // South link ${x} is not connected to any mem chip
-    assign south_dut_to_memchip_link_cts_${x}      = const_zero;
-    assign south_memchip_to_dut_link_rts_${x}       = const_zero;
-    assign south_memchip_to_dut_link_test_request_${x} = const_zero;
-    %endif
-    %endfor
-    %for y in range(max_compute_chiplet_y):
-    %if y not in occupied_west:
-    // West link ${y} is not connected to any mem chip
-    assign west_dut_to_memchip_link_cts_${y}      = const_zero;
-    assign west_memchip_to_dut_link_rts_${y}       = const_zero;
-    assign west_memchip_to_dut_link_test_request_${y} = const_zero;
-    %endif
-    %endfor
-    %for y in range(max_compute_chiplet_y):
-    %if y not in occupied_east:
-    // East link ${y} is not connected to any mem chip
-    assign east_dut_to_memchip_link_cts_${y}      = const_zero;
-    assign east_memchip_to_dut_link_rts_${y}       = const_zero;
-    assign east_memchip_to_dut_link_test_request_${y} = const_zero;
+    %if tie_zero:
+    assign ${net} = const_zero;
     %endif
     %endfor
 %endif
@@ -586,47 +501,20 @@ module testharness;
     dut i_dut (
 %if not sim_with_verilator:
         /////////////////////////////////////
-        // Offchip D2D Links to Memchips
+        // Off-array D2D ports
         /////////////////////////////////////
-        // North Links (#MAX_X links)
-    %for x in range(max_compute_chiplet_x):
-        .north_d2d_link_${x}          (north_offchip_d2d_link_${x}),
-        .north_flow_control_rts_o_${x}(north_dut_to_memchip_link_rts_${x}),
-        .north_flow_control_cts_i_${x}(north_dut_to_memchip_link_cts_${x}),
-        .north_flow_control_rts_i_${x}(north_memchip_to_dut_link_rts_${x}),
-        .north_flow_control_cts_o_${x}(north_memchip_to_dut_link_cts_${x}),
-        .north_test_request_o_${x}           (north_dut_to_memchip_link_test_request_${x}),
-        .north_test_being_requested_i_${x}   (north_memchip_to_dut_link_test_request_${x}),
-    %endfor
-        // South Links (#MAX_X links)
-    %for x in range(max_compute_chiplet_x):
-        .south_d2d_link_${x}          (south_offchip_d2d_link_${x}),
-        .south_flow_control_rts_o_${x}(south_dut_to_memchip_link_rts_${x}),
-        .south_flow_control_cts_i_${x}(south_dut_to_memchip_link_cts_${x}),
-        .south_flow_control_rts_i_${x}(south_memchip_to_dut_link_rts_${x}),
-        .south_flow_control_cts_o_${x}(south_memchip_to_dut_link_cts_${x}),
-        .south_test_request_o_${x}           (south_dut_to_memchip_link_test_request_${x}),
-        .south_test_being_requested_i_${x}   (south_memchip_to_dut_link_test_request_${x}),
-    %endfor
-        // West Links (#MAX_Y links)
-    %for y in range(max_compute_chiplet_y):
-        .west_d2d_link_${y}          (west_offchip_d2d_link_${y}),
-        .west_flow_control_rts_o_${y}(west_dut_to_memchip_link_rts_${y}),
-        .west_flow_control_cts_i_${y}(west_dut_to_memchip_link_cts_${y}),
-        .west_flow_control_rts_i_${y}(west_memchip_to_dut_link_rts_${y}),
-        .west_flow_control_cts_o_${y}(west_memchip_to_dut_link_cts_${y}),
-        .west_test_request_o_${y}           (west_dut_to_memchip_link_test_request_${y}),
-        .west_test_being_requested_i_${y}   (west_memchip_to_dut_link_test_request_${y}),
-    %endfor
-        // East Links (#MAX_Y links)
-    %for y in range(max_compute_chiplet_y):
-        .east_d2d_link_${y}          (east_offchip_d2d_link_${y}),
-        .east_flow_control_rts_o_${y}(east_dut_to_memchip_link_rts_${y}),
-        .east_flow_control_cts_i_${y}(east_dut_to_memchip_link_cts_${y}),
-        .east_flow_control_rts_i_${y}(east_memchip_to_dut_link_rts_${y}),
-        .east_flow_control_cts_o_${y}(east_memchip_to_dut_link_cts_${y}),
-        .east_test_request_o_${y}           (east_dut_to_memchip_link_test_request_${y}),
-        .east_test_being_requested_i_${y}   (east_memchip_to_dut_link_test_request_${y}),
+    %for (c, d) in dut_ports:
+<%
+    n = d2d_side_nets[(c[0], c[1], d)]
+    P = "%d_%d" % (c[0], c[1])
+%>\
+        .${d}_d2d_link_${P}               (${n["bus"]}),
+        .${d}_flow_control_rts_o_${P}     (${n["rts_o"]}),
+        .${d}_flow_control_cts_i_${P}     (${n["cts_i"]}),
+        .${d}_flow_control_rts_i_${P}     (${n["rts_i"]}),
+        .${d}_flow_control_cts_o_${P}     (${n["cts_o"]}),
+        .${d}_test_request_o_${P}         (${n["req_o"]}),
+        .${d}_test_being_requested_i_${P} (${n["req_i"]}),
     %endfor
 %endif
         /////////////////////////////////////
@@ -675,33 +563,14 @@ module testharness;
     );
 
 %if not sim_with_verilator:
-    // The mem chips
+    // The memory chips: a PHY on every side that faces a chip, NumSysIdma push engines
+    // (one per local port of its D2D link, so it can stream to that many neighbours at once).
     %for mem_chip in mem_chips:
-    <%
-        mem_chip_x = mem_chip.coordinate[0]
-        mem_chip_y = mem_chip.coordinate[1]
-        enable_north = 0
-        enable_south = 0
-        enable_west  = 0
-        enable_east  = 0
-        #// Check the mem chip location
-        #// if mem chip on the west side of the asic
-        if mem_chip_x == -1:
-            enable_east = 1
-        #// if mem chip on the east side of the asic
-        if mem_chip_x == max_compute_chiplet_x:
-            enable_west = 1
-        #// if mem chip on the north side of the asic
-        if mem_chip_y == -1:
-            enable_south = 1
-        #// if mem chip on the south side of the asic
-        if mem_chip_y == max_compute_chiplet_y:
-            enable_north = 1
-        #// Sanity Check
-        #// Can only be 1
-        enable_sum = enable_north+enable_south+enable_west+enable_east
-        assert enable_sum == 1, "Illegal Memchip location!"
-    %>
+<%
+    mx, my = mem_chip.coordinate
+    faces = {d: (mx, my, d) in d2d_side_nets for d in d2d_directions}
+    ports = list(d2d_directions)
+%>\
 
     hemaia_mem_chip #(
         .WideSRAMBankNum(16),
@@ -711,91 +580,42 @@ module testharness;
         %if mem_chip.hbm:
         .HbmCfg(${mem_chip.hbm_sv}),
         %endif
-        .EnableEastPhy(${enable_east}),
-        .EnableWestPhy(${enable_west}),
-        .EnableNorthPhy(${enable_north}),
-        .EnableSouthPhy(${enable_south}),
+        .EnableEastPhy(${int(faces["east"])}),
+        .EnableWestPhy(${int(faces["west"])}),
+        .EnableNorthPhy(${int(faces["north"])}),
+        .EnableSouthPhy(${int(faces["south"])}),
+        .NumSysIdma(${mem_chip.num_sys_idma}),
         .HostClkDiv(${memchip_clk_div})
-    ) i_hemaia_mem_chip_${mem_chip_x}_${mem_chip_y} (
+    ) i_hemaia_mem_chip_${mx}_${my} (
         .clk_i    (mempool_clk_drv),
         .rst_ni   (rst_ni   ),
-        .chip_id_i(mem_chip${mem_chip_x}${mem_chip_y}_id_i),
-        // Memchip East D2D Links
-        // Should be connected to the Offchip West D2D Link of the asic
-        %if enable_east:
-        .east_d2d_io                (west_offchip_d2d_link_${mem_chip_y}),
-        .flow_control_east_rts_o    (west_memchip_to_dut_link_rts_${mem_chip_y}),
-        .flow_control_east_cts_i    (west_memchip_to_dut_link_cts_${mem_chip_y}),
-        .flow_control_east_rts_i    (west_dut_to_memchip_link_rts_${mem_chip_y}),
-        .flow_control_east_cts_o    (west_dut_to_memchip_link_cts_${mem_chip_y}),
-        .east_test_being_requested_i(west_dut_to_memchip_link_test_request_${mem_chip_y}),
-        .east_test_request_o        (west_memchip_to_dut_link_test_request_${mem_chip_y}),
+        .chip_id_i(mem_chip${mx}${my}_id_i),
+        %for d in ports:
+<%
+    last = d == ports[-1]
+    n = d2d_side_nets.get((mx, my, d))
+    nb = chiplet_grid.neighbour((mx, my), d)
+%>\
+        %if n:
+        // ${d}: to the ${"memory" if chiplet_grid.is_memory(nb) else "compute"} chip at (${nb[0]}, ${nb[1]})
+        .${d}_d2d_io                (${n["bus"]}),
+        .flow_control_${d}_rts_o    (${n["rts_o"]}),
+        .flow_control_${d}_cts_i    (${n["cts_i"]}),
+        .flow_control_${d}_rts_i    (${n["rts_i"]}),
+        .flow_control_${d}_cts_o    (${n["cts_o"]}),
+        .${d}_test_being_requested_i(${n["req_i"]}),
+        .${d}_test_request_o        (${n["req_o"]})${"" if last else ","}
         %else:
-        .east_d2d_io(),
-        .flow_control_east_rts_o(),
-        .flow_control_east_cts_i(const_zero),
-        .flow_control_east_rts_i(const_zero),
-        .flow_control_east_cts_o(),
-        .east_test_being_requested_i(const_zero),
-        .east_test_request_o(),        
+        // ${d}: nothing there
+        .${d}_d2d_io(),
+        .flow_control_${d}_rts_o(),
+        .flow_control_${d}_cts_i(const_zero),
+        .flow_control_${d}_rts_i(const_zero),
+        .flow_control_${d}_cts_o(),
+        .${d}_test_being_requested_i(const_zero),
+        .${d}_test_request_o()${"" if last else ","}
         %endif
-        // Memchip West D2D Links
-        // Should be connected to the Offchip East D2D Link of the asic
-        %if enable_west:
-        .west_d2d_io                (east_offchip_d2d_link_${mem_chip_y}),
-        .flow_control_west_rts_o    (east_memchip_to_dut_link_rts_${mem_chip_y}),
-        .flow_control_west_cts_i    (east_memchip_to_dut_link_cts_${mem_chip_y}),
-        .flow_control_west_rts_i    (east_dut_to_memchip_link_rts_${mem_chip_y}),
-        .flow_control_west_cts_o    (east_dut_to_memchip_link_cts_${mem_chip_y}),
-        .west_test_being_requested_i(east_dut_to_memchip_link_test_request_${mem_chip_y}),
-        .west_test_request_o        (east_memchip_to_dut_link_test_request_${mem_chip_y}),
-        %else:
-        .west_d2d_io(),
-        .flow_control_west_rts_o(),
-        .flow_control_west_cts_i(const_zero),
-        .flow_control_west_rts_i(const_zero),
-        .flow_control_west_cts_o(),
-        .west_test_being_requested_i(const_zero),
-        .west_test_request_o(),        
-        %endif
-        // Memchip North D2D Links
-        // Should be connected to the Offchip South D2D Link of the asic
-        %if enable_north:
-        .north_d2d_io                (south_offchip_d2d_link_${mem_chip_x}),
-        .flow_control_north_rts_o    (south_memchip_to_dut_link_rts_${mem_chip_x}),
-        .flow_control_north_cts_i    (south_memchip_to_dut_link_cts_${mem_chip_x}),
-        .flow_control_north_rts_i    (south_dut_to_memchip_link_rts_${mem_chip_x}),
-        .flow_control_north_cts_o    (south_dut_to_memchip_link_cts_${mem_chip_x}),
-        .north_test_being_requested_i(south_dut_to_memchip_link_test_request_${mem_chip_x}),
-        .north_test_request_o        (south_memchip_to_dut_link_test_request_${mem_chip_x}),
-        %else:
-        .north_d2d_io(),
-        .flow_control_north_rts_o(),
-        .flow_control_north_cts_i(const_zero),
-        .flow_control_north_rts_i(const_zero),
-        .flow_control_north_cts_o(),
-        .north_test_being_requested_i(const_zero),
-        .north_test_request_o(),        
-        %endif
-        // Memchip South D2D Links
-        // Should be connected to the Offchip North D2D Link of the asic
-        %if enable_south:
-        .south_d2d_io                (north_offchip_d2d_link_${mem_chip_x}),
-        .flow_control_south_rts_o    (north_memchip_to_dut_link_rts_${mem_chip_x}),
-        .flow_control_south_cts_i    (north_memchip_to_dut_link_cts_${mem_chip_x}),
-        .flow_control_south_rts_i    (north_dut_to_memchip_link_rts_${mem_chip_x}),
-        .flow_control_south_cts_o    (north_dut_to_memchip_link_cts_${mem_chip_x}),
-        .south_test_being_requested_i(north_dut_to_memchip_link_test_request_${mem_chip_x}),
-        .south_test_request_o        (north_memchip_to_dut_link_test_request_${mem_chip_x})
-        %else:
-        .south_d2d_io(),
-        .flow_control_south_rts_o(),
-        .flow_control_south_cts_i(const_zero),
-        .flow_control_south_rts_i(const_zero),
-        .flow_control_south_cts_o(),
-        .south_test_being_requested_i(const_zero),
-        .south_test_request_o()
-        %endif
+        %endfor
     );
     %endfor
 %endif

@@ -6,6 +6,12 @@ the memchip's DRAM port (wide xbar port 3, which was tied off) now leads to
 `hemaia_hbm_model`: an AXI4 slave holding GiBs, with the latency and channel
 parallelism of an FPGA HBM controller. Simulation only, like the memchip itself.
 
+The model has `NumPorts` AXI slave ports: port 0 is the memchip's wide xbar, port
+`1 + k` belongs to push engine `k` (`NumSysIdma` of them, see
+`hemaia_mem_chip.sv`), so each engine streams HBM -> its own D2D link port without
+sharing the xbar. The ports share the storage and the channel timing: two ports
+hitting one channel still wait for each other.
+
 | File | What |
 |---|---|
 | `hemaia_hbm_pkg.sv` | `hbm_cfg_t` and the default configuration |
@@ -71,13 +77,30 @@ never reach the file on disk.
 `hbm_simple_test` (`target/sw/host/apps/host_only/multi_chip/`) is a worked
 example: its `data/datagen.py` writes the manifest and the header from one list.
 
+**Several memory chips, different data.** One manifest serves them all: tag each
+entry with the chip it is for. `memchip_multi_engine` (same directory) gives the two
+memory chips of `hemaia_cmc_16MBL3_1cluster.hjson` one image each:
+
+```
+0x0  image_a.bin  chip=0x10
+0x0  image_b.bin  chip=0x11
+```
+
+A bingo workload gets this from `DataStaging.put_hbm(name, arr, mem_chip=(x, y))`
+(`mini_compiler/mem/bingo_data_staging.py`), which tags every image whenever the
+platform has more than one memory chip. The memory chips' SRAM works the same way:
+each loads `mempool_chip_<x>_<y>/` when the workload built
+`build/mempool_chip_<x>_<y>.bin` for it (`put(..., mem_chip=)`), and the shared
+`mempool/` otherwise.
+
 ## Configuration
 
 A memory chip has an HBM when its entry in the platform cfg
 (`target/rtl/cfg/*.hjson`, `hemaia_multichip.testbench_cfg.hemaia_mem_chip`) has an
-`hbm` object; without one, the DRAM port stays tied off. Today only
-`hemaia_twochiplet_16MBL3_4cluster.hjson` (one compute chip, the memory chip east of it
-at [1,0]) has one, spelling the full default configuration out; change a field there:
+`hbm` object; without one, the DRAM port stays tied off. `hemaia_twochiplet_16MBL3_4cluster.hjson`
+(one compute chip, the memory chip east of it at [1,0]) has one, spelling the full default
+configuration out, and so do the two memory chips of `hemaia_cmc_16MBL3_1cluster.hjson`;
+change a field there:
 
 ```hjson
 hemaia_mem_chip: [

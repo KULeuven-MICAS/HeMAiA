@@ -869,8 +869,9 @@ class HeMAiASimRunner:
                     f"Memory-chip size(s) {invalid_sizes} in {cfg_path} are not positive "
                     f"multiples of {MEMPOOL_BANK_COUNT} 64-bit banks"
                 )
-            # The same mempool image is loaded into every memory chip.  Its safe
-            # upper bound is therefore the smallest configured chip.
+            # The shared mempool image is loaded into every memory chip without its own
+            # (mempool_chip_<x>_<y>).  Its safe upper bound is therefore the smallest
+            # configured chip; a chip's own image is held to the same bound.
             mempool_bank_depth = min(mem_sizes) // mempool_bank_bytes
 
         return PlatformLayout(
@@ -891,9 +892,14 @@ class HeMAiASimRunner:
             sim_bin / "mempool",
             sim_bin / "hbm",
             self.repo_root / "target/sim/apps/mempool",
+            # A memory chip's own image (load_binary.sv.tpl loads it instead of mempool/).
+            *sim_bin.glob("mempool_chip_*"),
+            *(self.repo_root / "target/sim/apps").glob("mempool_chip_*"),
         ):
             if generated.is_dir():
                 shutil.rmtree(generated)
+            elif generated.is_file():
+                generated.unlink()
         mempool_bin = self.repo_root / "target/sim/apps/mempool.bin"
         if mempool_bin.exists():
             mempool_bin.unlink()
@@ -1340,6 +1346,17 @@ class HeMAiASimRunner:
                     (mempool_dest / f"bank_{bank}.hex").write_text("0\n")
                 mempool_kind = "zero_fallback"
             (mempool_dest / ".image_kind").write_text(f"{mempool_kind}\n")
+
+            # Memory chips given their own image load it instead of mempool/.
+            for chip_mempool in sorted(sim_bin.glob("mempool_chip_*")):
+                if chip_mempool.is_dir():
+                    self._validate_hex_dir(
+                        chip_mempool,
+                        layout.mempool_bank_count,
+                        chip_mempool.name,
+                        layout.mempool_bank_depth,
+                    )
+                    _copy_path(chip_mempool, bin_dest / chip_mempool.name)
 
             # The HBM image is a tree of symlinks into the workload build (it can be
             # GiBs); keep them links. No image: the testharness leaves the HBM zeroed.
@@ -1806,6 +1823,10 @@ class HeMAiASimRunner:
             for bank in range(layout.mempool_bank_count):
                 path = mempool_dir / f"bank_{bank}.hex"
                 hex_files[str(path.relative_to(task_dir))] = _sha256(path)
+            for chip_mempool in sorted(bin_dir.glob("mempool_chip_*")):
+                for bank in range(layout.mempool_bank_count):
+                    path = chip_mempool / f"bank_{bank}.hex"
+                    hex_files[str(path.relative_to(task_dir))] = _sha256(path)
 
             kind_path = bin_dir / "mempool/.image_kind"
             if not kind_path.is_file():

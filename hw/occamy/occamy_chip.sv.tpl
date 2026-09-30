@@ -500,10 +500,12 @@ import ${name}_pkg::*;
     .axi_lite_req_i(hemaia_d2d_link_ctrl_req),
     .axi_lite_rsp_o(hemaia_d2d_link_ctrl_rsp),
 
-    .axi_in_req_i(soc2router_req),
-    .axi_in_rsp_o(soc2router_rsp),
-    .axi_out_req_o(router2soc_req),
-    .axi_out_rsp_i(router2soc_rsp),
+    // one local port (NumLocalPorts defaults to 1): the SoC's requests to other chips,
+    // and other chips' requests into the SoC
+    .to_remote_req_i(soc2router_req),
+    .to_remote_rsp_o(soc2router_rsp),
+    .from_remote_req_o(router2soc_req),
+    .from_remote_rsp_i(router2soc_rsp),
 
     .east_test_being_requested_i,
     .east_test_request_o,

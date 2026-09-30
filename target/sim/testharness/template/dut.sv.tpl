@@ -23,14 +23,15 @@
 //   +-- i_io_wrapper           (interconnect routing)
 //       +-- gen_direct / gen_interposer  (routing mode)
 //
-// Mesh layout (compute chiplets start at (0,0)):
-//                    north boundary (offchip)
+// Grid (x to the east, y to the south; chip id = (x << 4) | y). Compute chips need not
+// fill a rectangle: a memory chip may sit between them, e.g. a row C M C, or in the middle
+// of a plus. Every side of a compute chip with no compute chip beside it is a dut port.
+//
 //              +--------+--------+--------+
-//   west       | (0,0)  | (1,0)  | (2,0)  |  east
-//   boundary   +--------+--------+--------+  boundary
-//   (offchip)  | (0,1)  | (1,1)  | (2,1)  |  (offchip)
+//              | (0,0)  | (1,0)  | (2,0)  |
 //              +--------+--------+--------+
-//                    south boundary (offchip)
+//              | (0,1)  | (1,1)  | (2,1)  |
+//              +--------+--------+--------+
 //
 // Directions: east = +x, west = -x, south = +y, north = -y
 // This module contains ONLY wires and connections (no behavioral code).
@@ -38,52 +39,18 @@
 module dut (
 %if not sim_with_verilator:
     /////////////////////////////////////
-    // Off-chip D2D links to memory chips
-    // (routed through io_wrapper to boundary chiplets)
+    // Off-array D2D ports: one per side of a compute chip with no compute chip beside it
+    // (routed through io_wrapper). The testharness joins each to the memory chip on that
+    // side, or ties it off.
     /////////////////////////////////////
-
-    // North boundary (one per column, chiplets at y=0)
-    %for x in range(max_compute_chiplet_x):
-    inout tri [2:0][19:0] north_d2d_link_${x},
-    inout wire             north_flow_control_rts_o_${x},
-    inout wire             north_flow_control_cts_i_${x},
-    inout wire             north_flow_control_rts_i_${x},
-    inout wire             north_flow_control_cts_o_${x},
-    inout wire             north_test_request_o_${x},
-    inout wire             north_test_being_requested_i_${x},
-    %endfor
-
-    // South boundary (one per column, chiplets at y=${max_compute_chiplet_y - 1})
-    %for x in range(max_compute_chiplet_x):
-    inout tri [2:0][19:0] south_d2d_link_${x},
-    inout wire             south_flow_control_rts_o_${x},
-    inout wire             south_flow_control_cts_i_${x},
-    inout wire             south_flow_control_rts_i_${x},
-    inout wire             south_flow_control_cts_o_${x},
-    inout wire             south_test_request_o_${x},
-    inout wire             south_test_being_requested_i_${x},
-    %endfor
-
-    // West boundary (one per row, chiplets at x=0)
-    %for y in range(max_compute_chiplet_y):
-    inout tri [2:0][19:0] west_d2d_link_${y},
-    inout wire             west_flow_control_rts_o_${y},
-    inout wire             west_flow_control_cts_i_${y},
-    inout wire             west_flow_control_rts_i_${y},
-    inout wire             west_flow_control_cts_o_${y},
-    inout wire             west_test_request_o_${y},
-    inout wire             west_test_being_requested_i_${y},
-    %endfor
-
-    // East boundary (one per row, chiplets at x=${max_compute_chiplet_x - 1})
-    %for y in range(max_compute_chiplet_y):
-    inout tri [2:0][19:0] east_d2d_link_${y},
-    inout wire             east_flow_control_rts_o_${y},
-    inout wire             east_flow_control_cts_i_${y},
-    inout wire             east_flow_control_rts_i_${y},
-    inout wire             east_flow_control_cts_o_${y},
-    inout wire             east_test_request_o_${y},
-    inout wire             east_test_being_requested_i_${y},
+    %for (c, d) in dut_ports:
+    inout tri [2:0][19:0] ${d}_d2d_link_${c[0]}_${c[1]},
+    inout wire             ${d}_flow_control_rts_o_${c[0]}_${c[1]},
+    inout wire             ${d}_flow_control_cts_i_${c[0]}_${c[1]},
+    inout wire             ${d}_flow_control_rts_i_${c[0]}_${c[1]},
+    inout wire             ${d}_flow_control_cts_o_${c[0]}_${c[1]},
+    inout wire             ${d}_test_request_o_${c[0]}_${c[1]},
+    inout wire             ${d}_test_being_requested_i_${c[0]}_${c[1]},
     %endfor
 %endif
 
@@ -263,40 +230,15 @@ module dut (
         .chip_${cx}_${cy}_${direction}_test_being_requested_i(chip_${cx}_${cy}_${direction}_test_being_requested_i),
         %endfor
         %endfor
-        // ---- Off-chip boundary D2D ports ----
-        %for x in range(max_compute_chiplet_x):
-        .north_d2d_link_${x}                  (north_d2d_link_${x}),
-        .north_flow_control_rts_o_${x}        (north_flow_control_rts_o_${x}),
-        .north_flow_control_cts_i_${x}        (north_flow_control_cts_i_${x}),
-        .north_flow_control_rts_i_${x}        (north_flow_control_rts_i_${x}),
-        .north_flow_control_cts_o_${x}        (north_flow_control_cts_o_${x}),
-        .north_test_request_o_${x}            (north_test_request_o_${x}),
-        .north_test_being_requested_i_${x}    (north_test_being_requested_i_${x}),
-        .south_d2d_link_${x}                  (south_d2d_link_${x}),
-        .south_flow_control_rts_o_${x}        (south_flow_control_rts_o_${x}),
-        .south_flow_control_cts_i_${x}        (south_flow_control_cts_i_${x}),
-        .south_flow_control_rts_i_${x}        (south_flow_control_rts_i_${x}),
-        .south_flow_control_cts_o_${x}        (south_flow_control_cts_o_${x}),
-        .south_test_request_o_${x}            (south_test_request_o_${x}),
-        .south_test_being_requested_i_${x}    (south_test_being_requested_i_${x}),
-        %endfor
-        %for y in range(max_compute_chiplet_y):
-        .west_d2d_link_${y}                   (west_d2d_link_${y}),
-        .west_flow_control_rts_o_${y}         (west_flow_control_rts_o_${y}),
-        .west_flow_control_cts_i_${y}         (west_flow_control_cts_i_${y}),
-        .west_flow_control_rts_i_${y}         (west_flow_control_rts_i_${y}),
-        .west_flow_control_cts_o_${y}         (west_flow_control_cts_o_${y}),
-        .west_test_request_o_${y}             (west_test_request_o_${y}),
-        .west_test_being_requested_i_${y}     (west_test_being_requested_i_${y}),
-        %endfor
-        %for y in range(max_compute_chiplet_y):
-        .east_d2d_link_${y}                   (east_d2d_link_${y}),
-        .east_flow_control_rts_o_${y}         (east_flow_control_rts_o_${y}),
-        .east_flow_control_cts_i_${y}         (east_flow_control_cts_i_${y}),
-        .east_flow_control_rts_i_${y}         (east_flow_control_rts_i_${y}),
-        .east_flow_control_cts_o_${y}         (east_flow_control_cts_o_${y}),
-        .east_test_request_o_${y}             (east_test_request_o_${y}),
-        .east_test_being_requested_i_${y}     (east_test_being_requested_i_${y}),
+        // ---- Off-array D2D ports ----
+        %for (c, d) in dut_ports:
+        .${d}_d2d_link_${c[0]}_${c[1]}               (${d}_d2d_link_${c[0]}_${c[1]}),
+        .${d}_flow_control_rts_o_${c[0]}_${c[1]}     (${d}_flow_control_rts_o_${c[0]}_${c[1]}),
+        .${d}_flow_control_cts_i_${c[0]}_${c[1]}     (${d}_flow_control_cts_i_${c[0]}_${c[1]}),
+        .${d}_flow_control_rts_i_${c[0]}_${c[1]}     (${d}_flow_control_rts_i_${c[0]}_${c[1]}),
+        .${d}_flow_control_cts_o_${c[0]}_${c[1]}     (${d}_flow_control_cts_o_${c[0]}_${c[1]}),
+        .${d}_test_request_o_${c[0]}_${c[1]}         (${d}_test_request_o_${c[0]}_${c[1]}),
+        .${d}_test_being_requested_i_${c[0]}_${c[1]} (${d}_test_being_requested_i_${c[0]}_${c[1]}),
         %endfor
         // ---- Driving signals (for interposer mode) ----
         .mst_clk_i    (mst_clk_i),

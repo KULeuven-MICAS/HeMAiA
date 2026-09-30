@@ -366,7 +366,7 @@
           "properties": {
             "hemaia_mem_chip": {
               "type": "array",
-              "description": "Memory chips (the FPGA memory pool in the real setup) around the compute-chip array.",
+              "description": "Memory chips (the FPGA memory pool in the real setup) on the grid with the compute chips; a D2D link joins every two chips side by side.",
               "items": {
                 "type": "object",
                 "required": [
@@ -376,9 +376,11 @@
                 "properties": {
                   "coordinate": {
                     "type": "array",
-                    "description": "Grid position [x, y]; the chip id is (x << 4) | y.",
+                    "description": "Grid position [x, y]; the chip id is (x << 4) | y. Any free slot a D2D link reaches: beside the compute array, between compute chips, or beside another memory chip.",
                     "items": {
-                      "type": "integer"
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 14
                     },
                     "minItems": 2,
                     "maxItems": 2
@@ -387,6 +389,13 @@
                     "type": "integer",
                     "description": "Bytes of SRAM at chip-local 0x8000_0000.",
                     "minimum": 128
+                  },
+                  "num_sys_idma": {
+                    "type": "integer",
+                    "description": "Push engines (system iDMAs): each has its own registers (SYS_IDMA_CFG_BASE_ADDR + k * 0x1000), its own HBM port and its own local port on the D2D link, so the chip streams to that many neighbours at once.",
+                    "minimum": 1,
+                    "maximum": 4,
+                    "default": 4
                   },
                   "hbm": {
                     "$ref": "http://pulp-platform.org/occamy/hemaia_hbm.schema.json"
