@@ -34,6 +34,10 @@
 
 // Whether the testharness memchip clock runs at the same speed as the host clock.
 #define HEMAIA_SAME_MEMCHIP_SPEED      ${same_memchip_speed}
+// The simulated clocks (cfg hemaia_multichip.sim_clock): the testbench master clock and the
+// divider the runtime gives the host and the clusters. 0 = the runtime's own defaults.
+#define HEMAIA_SIM_CLK_MHZ             ${sim_clk_mhz}
+#define HEMAIA_CORE_CLK_DIV            ${core_clk_div}
 
 // CLINT MSIP bit the bingo HW manager writes to ring the host DVFS doorbell (a
 // dedicated interrupt target appended after this chiplet's harts). Keep in sync with
@@ -51,6 +55,11 @@
 // tasks than this has nowhere to put them. It is also a descriptor field, so SW and RTL must
 // agree or every field above task_id shifts.
 #define BINGO_TASK_ID_WIDTH            ${task_id_width}
+
+// Depth of the bingo HW manager's per-(core, cluster) waiting queue
+// (s1_quadrant.bingo_cfg.waiting_queue_depth -> WaitingDepCheckQueueDepth). The in-order
+// descriptor stream stops when one of them is full; the mini-compiler's hang check models it.
+#define BINGO_WAITING_QUEUE_DEPTH      ${waiting_queue_depth}
 
 // Packed task-descriptor width of the bingo HW manager (bingo_hw_manager_top
 // TaskDescBusWidth). DERIVED per config by occamygen -- the smallest whole number of
