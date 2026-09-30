@@ -32,6 +32,7 @@ DEFAULT_CHIP_ID_WIDTH = 8
 # before s1_quadrant.task_id_width existed carries no define, and 12 is what those builds
 # elaborated with.
 DEFAULT_TASK_ID_WIDTH = 12
+DEFAULT_WAITING_QUEUE_DEPTH = 8
 
 
 def _task_desc_words(width):
@@ -78,6 +79,10 @@ def _descriptor_geometry(defines, source):
         # space is 2**width and the compiler assigns one id per task, so it caps the graph
         # size; it is also a descriptor field, so a mismatch shifts every field above it.
         "task_id_width": defines.get("BINGO_TASK_ID_WIDTH", DEFAULT_TASK_ID_WIDTH),
+        # WaitingDepCheckQueueDepth (cfg s1_quadrant.bingo_cfg.waiting_queue_depth): not a
+        # descriptor field, but the hang check models the queues the stream fills.
+        "waiting_queue_depth": defines.get("BINGO_WAITING_QUEUE_DEPTH",
+                                           DEFAULT_WAITING_QUEUE_DEPTH),
         # TaskDescBusWidth as the RTL was generated with (cfg s1_quadrant.task_desc_width,
         # otherwise derived: the smallest whole number of 64-bit words the layout fits).
         # NOT the host AXI-Lite data width: the fetch master reads task_desc_words beats
@@ -154,15 +159,32 @@ def parse_platform_cfg(occamy_h_path):
         # its inputs and goldens there on a config with none does not fault -- the
         # addresses are simply unmapped, so the loads return junk and the checks compare
         # junk against junk. Defaulted rather than required so an older generated header
-        # still parses. See util/sim/common/bingo_data_staging.py.
+        # still parses. See mini_compiler/mem/bingo_data_staging.py.
         "num_mem_chips": defines.get("N_MEM_CHIPS", 0),
         "mem_chip_loc_x": defines.get("MEM_CHIP_LOC_X", 0),
         "mem_chip_loc_y": defines.get("MEM_CHIP_LOC_Y", 0),
+        # The memory chiplet's HBM, chip-local base and size (0 when the cfg gives it
+        # none). Generated into occamy_memory_map.h beside occamy.h, not into occamy.h.
+        **_hbm_geometry(occamy_h_path),
         # dep_tag_width / chip_id_width / task_desc_width / task_desc_words. Each is
         # defaulted inside _descriptor_geometry so an older generated header still parses.
         **_descriptor_geometry(defines, occamy_h_path),
     }
     return _remember_platform(platform)
+
+
+def _hbm_geometry(occamy_h_path):
+    """{hbm_base, hbm_size} from the occamy_memory_map.h next to `occamy_h_path`.
+
+    A header generated before the HBM existed has neither define, and a stub occamy.h has
+    no sibling at all: both read as "no HBM" (size 0), which is what they describe. A
+    workload that stages into the HBM then refuses by name instead of emitting addresses
+    into a pool the platform does not have.
+    """
+    mm = Path(occamy_h_path).with_name("occamy_memory_map.h")
+    defines = _parse_defines(mm) if mm.exists() else {}
+    return {"hbm_base": defines.get("HBM_BASE_ADDR", 0),
+            "hbm_size": defines.get("HBM_SIZE", 0)}
 
 
 # The generated platform header, resolved from THIS file's location the same way

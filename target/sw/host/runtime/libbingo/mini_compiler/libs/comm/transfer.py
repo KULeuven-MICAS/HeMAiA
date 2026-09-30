@@ -23,12 +23,16 @@ fp16 where this one wants int8. Three kinds of mismatch, and NONE of them faults
 So this module's job is to see the mismatch and either close it or refuse. What it must
 never do is proceed.
 
-THE FOUR CLOSURES, and why each is the engine it is:
+THE CLOSURES, and why each is the engine it is:
 
   L4 -> L3   host iDMA. The memory-chiplet pool is reachable over the D2D link by the host
              iDMA; a cluster's GEMM and SIMD have no port at all and the cluster iDMA
              would be fetching across the die for every tile. So the pool is hoisted to
              main memory ONCE, and the per-tile traffic then runs entirely on-die.
+  HBM -> L1  the block's own loads, on the cluster iDMA, straight across the D2D link.
+             The opposite call from L4, for the opposite reason: an HBM operand is a
+             weight streamed once per pass, so a hoist would read it twice and park it
+             in an L3 it may not even fit.
   layout     an xDMA pass with independent strides on each side. By default it is staged
              -- 1-D copy into L1, then permute in place -- because both halves are
              exercised on RTL today. The fused single-pass form reads main memory with the
@@ -55,6 +59,7 @@ conversion nobody wanted, a wrong nest silently scrambles the tensor.
 import numpy as np
 
 from bingo_kernel_args import (HostBingoKernelIdmaArgs,
+                               SnaxBingoKernelIdma1dCopyArgs,
                                SnaxBingoKernelXdma1dCopyArgs,
                                SnaxBingoKernelXdmaTranspose2dArgs)
 
@@ -112,10 +117,12 @@ def plan(have: PortSpec, want: PortSpec, *, mesh=None, elem_bytes=None) -> list:
             steps.append(Step("hoist", "the memory-chiplet pool is off-die; hoist it to "
                                        "main memory once instead of per tile",
                               engine="host iDMA"))
-        elif (have.mem_level, want.mem_level) != ("L3", "L1"):
+        elif (have.mem_level, want.mem_level) not in (("L3", "L1"), ("HBM", "L1")):
             raise ValueError(
                 f"cannot bring an operand from {have.mem_level} to {want.mem_level}. The "
-                f"closures are L4->L3 (host iDMA) and L3->L1 (the block's own loads).")
+                f"closures are L4->L3 (host iDMA), and L3->L1 and HBM->L1 (the block's own "
+                f"loads; an HBM operand is streamed once, so hoisting it would only double "
+                f"its traffic).")
     # ONE RULE FOR BOTH HALVES. Layouts that disagree on their contiguous axis differ by
     # a transpose, which no stride nest expresses -- nest.py refuses exactly that pair. So
     # the plan is: put the operand in the orientation the destination blocks in, with the
@@ -260,14 +267,23 @@ def bring_in(ctx, name, have: Port, want: PortSpec, *, mesh, elem_bytes, after=(
             rows, cols = spec.stored_shape
             nbytes = rows * cols * elem_bytes
             prev = nodes[-1] if nodes else after
-            if not fuse_relayout and spec.mem_level != "L1":
+            if (not fuse_relayout or spec.mem_level == "HBM") and spec.mem_level != "L1":
                 # Stage it into L1 first, with the 1-D copy that every workload already
                 # runs, and permute from there. The extra buffer is the price of using
-                # only transfers this machine has been shown to perform.
+                # only transfers this machine has been shown to perform. An HBM source is
+                # always staged, and on the iDMA: the memory chiplet has no xDMA to push
+                # it, while the cluster iDMA reaches it with plain AXI reads.
                 staged = ctx.l1(f"{name}_staged", nbytes)
-                ld = ctx.node(f"Load_{name}", ctx.xdma,
-                              "__snax_bingo_kernel_xdma_1d_copy",
-                              SnaxBingoKernelXdma1dCopyArgs(handle, staged, nbytes), prev)
+                if spec.mem_level == "HBM":
+                    ld = ctx.node(f"Load_{name}", ctx.dm,
+                                  "__snax_bingo_kernel_idma_1d_copy",
+                                  SnaxBingoKernelIdma1dCopyArgs(handle, staged, nbytes),
+                                  prev)
+                else:
+                    ld = ctx.node(f"Load_{name}", ctx.xdma,
+                                  "__snax_bingo_kernel_xdma_1d_copy",
+                                  SnaxBingoKernelXdma1dCopyArgs(handle, staged, nbytes),
+                                  prev)
                 nodes.append(ld)
                 handle, prev = staged, ld
             # WHERE THIS NEST LANDS. When the destination is col_major the transpose

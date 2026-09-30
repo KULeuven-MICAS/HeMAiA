@@ -55,7 +55,7 @@ other two pairings are a transpose, which only the xDMA does; this block puts it
 GEMM contracting over the sequence reads (attention's P.V).
 
 ANY MESH. The order the kernel reads its tile in to write a given mesh's blocks is derived
-on the host (kernels/blocked_nest.py), verified against the operand's index map, and passed
+on the host (libs/kernels/blocked_nest.py), verified against the operand's index map, and passed
 down as a descriptor; `mesh` in the cfg is what it is derived for. A mesh no order fits is
 refused at construction with the reason -- tileSize < 4 at fp16, or an int8 atom whose runs
 land a block apart at uneven addresses (e.g. B on (1, 16, 32)).
@@ -142,7 +142,7 @@ engines, not clusters, so it cannot compare two placements, and what else the ma
 running is not something this block can see.
 
 RUNNING ONE NORM PER CLUSTER IS THEREFORE THE LAYER'S TO WRITE -- `Scatter`, one of these
-per cluster over `rows / N`, `Gather` (libs/block/shard.py). Rows are independent, so the
+per cluster over `rows / N`, `Gather` (libs/blocks/shard.py). Rows are independent, so the
 split is legal; the per-row scalar epilogue is what it buys, since that loop divides.
 
 AND IT TRADES AGAINST THE col_major KERNEL, visibly. That kernel needs `rows == 32`, one

@@ -4,7 +4,10 @@
     comm/     COMMON machinery: what a block declares (ports), what it builds through
               (ctx), how two are joined (link), and how an operand that does not match
               gets moved or reshaped (transfer, nest).
-    block/    the blocks: FlashAttention, its fold, the MoE FFN.
+    blocks/   the blocks: FlashAttention, its fold, the MoE FFN.
+    kernels/  the kernel ABI the blocks build nodes from: one args class per kernel,
+              matching the C structs. Imported FLAT (bingo_kernel_args, kernel_simd, ...),
+              not as libs.kernels -- _bingo_paths puts it on sys.path.
     verify/   host-side readbacks and comparisons, named by precision.
 
 A block declares its ports and parameters; Pipeline binds them and adds the edges. The
@@ -37,7 +40,7 @@ if _MC not in _sys.path:
     _sys.path.insert(0, _MC)
 import _bingo_paths  # noqa: F401,E402
 
-from . import block, comm, verify  # noqa: E402
+from . import blocks, comm, verify  # noqa: E402
 from .comm import (Block, BlockResult, Cost, Ctx, DType, Layout,  # noqa: E402
                    MemLevel, Pipeline, Port, PortSpec, Ref, Stage, Variant,
                    at_offset, bring_in, check_contract, cluster_of, level_of,
@@ -47,4 +50,4 @@ from .verify import checks  # noqa: E402
 __all__ = ["Block", "BlockResult", "Ctx", "Pipeline", "Port", "PortSpec", "Ref", "Stage",
            "Cost", "Variant", "variants_of", "at_offset", "check_contract", "cluster_of",
            "level_of", "link", "DType", "Layout", "MemLevel", "bring_in", "plan",
-           "checks", "block", "comm", "verify"]
+           "checks", "blocks", "comm", "verify"]

@@ -155,6 +155,10 @@ class BingoKernelArgs(ABC):
             # 2. Apply transformation (chiplet_addr_transform)
             # Wrap with transformation function, casting input to uint64_t as commonly required
             final_expr = f"chiplet_addr_transform((uint64_t)({base_expr}))"
+            if getattr(val, "chip_id", None) is not None:
+                # Another chip's copy: its chip id over the symbol's local 40-bit address.
+                final_expr = (f"chiplet_addr_transform_full(0x{val.chip_id:02x}, "
+                              f"((uint64_t)({base_expr})) & 0x000000ffffffffffULL)")
 
             # 3. Cast to final destination type/width
             if split_64bit:
@@ -164,11 +168,15 @@ class BingoKernelArgs(ABC):
                 assignments[base_name] = f"(uint64_t)({final_expr})"
             else:
                 assignments[base_name] = f"(uint32_t)({final_expr})"
+        # A LITERAL IS WIDENED BEFORE IT IS SHIFTED. `0` or `0x1000` is a 32-bit int in C,
+        # so `(0 >> 32)` is undefined behaviour and -Werror=shift-count-overflow rejects the
+        # whole host build -- which it did for every row_major rmsnorm node, whose unused
+        # seed_addr is the int 0. The handle branches above are uint64_t already.
         elif isinstance(val, BingoMemFixedAddr):
             addr = val.address
             if split_64bit:
                 assignments[f"{base_name}_lo"] = f"(uint32_t)0x{addr:x}"
-                assignments[f"{base_name}_hi"] = f"(uint32_t)(0x{addr:x} >> 32)"
+                assignments[f"{base_name}_hi"] = f"(uint32_t)((uint64_t)0x{addr:x} >> 32)"
             elif as_64bit:
                 assignments[base_name] = f"(uint64_t)0x{addr:x}"
             else:
@@ -176,7 +184,7 @@ class BingoKernelArgs(ABC):
         else:
             if split_64bit:
                 assignments[f"{base_name}_lo"] = f"(uint32_t){val}"
-                assignments[f"{base_name}_hi"] = f"(uint32_t)({val} >> 32)"
+                assignments[f"{base_name}_hi"] = f"(uint32_t)((uint64_t){val} >> 32)"
             elif as_64bit:
                 assignments[base_name] = f"(uint64_t){val}"
             else:

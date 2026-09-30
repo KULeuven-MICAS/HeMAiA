@@ -47,6 +47,7 @@ from bingo_kernel_args import (
     HostBingoKernelIdmaArgs,
     SnaxBingoKernelPackFaPartialArgs,
     SnaxBingoKernelSimdFaSoftmaxArgs,
+    SnaxBingoKernelSimdScaleF16Args,
     SnaxBingoKernelXdmaChainGatherArgs,
     xdma_monoid_csr0,
 )
@@ -56,10 +57,32 @@ from bingo_platform import writer_junction_index
 from ..verify import checks
 
 
+def f32bits(x) -> int:
+    return int(np.array(x, dtype=np.float32).view(np.uint32))
+
+
+def scaled_m(cfg, m):
+    """What the fold is handed as m: a*m, rounded to FP16 by the SIMD map that computes it.
+
+    THE JUNCTION'S EXPONENTIAL HAS NO SCALE. It folds l* = sum exp(m_c - m*) l_c, while the
+    softmax computed P = exp(a*(S - m)) -- so with any temperature a != 1 the combine must
+    see a*m, or it weights the shards by the wrong power of e. Scaling m once per shard,
+    before the pack, is the whole fix; m* then comes back as a*m*.
+
+    The m the softmax leaves is the max of the CONVERTED scores, S * 2^-k when the D port
+    shifts, so the factor is the softmax's own exp_scale = a * 2^k: a*m of the raw score.
+    """
+    return (np.float32(cfg.exp_scale) *
+            np.asarray(m, dtype=np.float16).astype(np.float32)).astype(np.float16)
+
+
 def merged_golden(cfg, m_c, l_c):
     """The (m*, l*) the junction should produce, in the lane geometry it writes.
 
         m* = max_c m_c            l* = sum_c exp(m_c - m*) * l_c
+
+    `m_c` is what the pack reads -- scaled_m() of each shard's running max when the
+    softmax has a temperature -- and `l_c` each shard's running sum.
 
     Computed in FP32 on FP16 inputs, mirroring the device: the arena holds m and l in
     FP16, pack_fa_partial widens the bit pattern to FP32, and the junction folds in FP32.
@@ -85,7 +108,8 @@ def merged_golden(cfg, m_c, l_c):
     return merged
 
 
-def fa_gather(ctx, cfg, shards, merged_h=None, jct_monoid=None, verify=True):
+def fa_gather(ctx, cfg, shards, merged_h=None, jct_monoid=None, verify=True, tol=0.02,
+              out=None):
     """Fold the per-cluster partials into one (m*, l*) in the fabric. SEPARATE ON PURPOSE.
 
     Under kvsplit each cluster holds a partial over its own slice of the KV axis, and the
@@ -106,6 +130,10 @@ def fa_gather(ctx, cfg, shards, merged_h=None, jct_monoid=None, verify=True):
     So FlashAttention exposes the partials and the caller composes this when it wants them
     merged. Calling it with clusters < 2, or under headpar, is a no-op that returns the
     shards untouched.
+
+    `out`, a dict, receives the nodes a caller orders against: "gather" (the fold),
+    "merged" (the collector's buffer) and "check" (the merged check, or the gather when
+    there is none).
     """
     if cfg.ncl < 2 or cfg.decomp == "headpar":
         return shards
@@ -129,18 +157,31 @@ def fa_gather(ctx, cfg, shards, merged_h=None, jct_monoid=None, verify=True):
     # thing that core does. The pack is scalar FP16->FP32 bit work; that core has no FPU,
     # which is the whole reason it is a kernel and not two lines in the caller.
     part_bytes = SnaxBingoKernelPackFaPartialArgs.packed_bytes(cfg.br, cfg.monoid_slots)
+    #
+    # l is the arena's RUNNING sum (lrun), committed by the last softmax; the row sum in
+    # the last P buffer is only the last tile's contribution. m is the running max, scaled
+    # by the temperature first -- see scaled_m() -- on the SIMD core that owns the arena,
+    # since the pack's core has no FPU.
+    lay = SnaxBingoKernelSimdFaSoftmaxArgs.layout(cfg.bc, cfg.dhead)
     parts, packs = [], []
     for c, sh in enumerate(shards):
         gc = g.at(c)
         part = gc.l1("fa_ml_partial", part_bytes)
         parts.append(part)
+        src_m, after = sh["arena"].view(lay["mrun"]), [sh["last_sm"]]
+        if cfg.exp_scale != 1.0:
+            src_m = gc.l1("fa_m_scaled", 64)
+            after = [gc.node(f"ScaleM_c{c}", ctx.simd, "__snax_bingo_kernel_simd_stream_map",
+                             SnaxBingoKernelSimdScaleF16Args(
+                                 sh["arena"].view(lay["mrun"]), src_m,
+                                 f32bits(cfg.exp_scale), rows=1, cols=cfg.br),
+                             sh["last_sm"])]
         packs.append(gc.node(
             f"PackPartial_c{c}", ctx.xdma, "__snax_bingo_kernel_pack_fa_partial",
             SnaxBingoKernelPackFaPartialArgs(
-                src_m=sh["arena"].view(SnaxBingoKernelSimdFaSoftmaxArgs.layout(cfg.bc, cfg.dhead)["mrun"]),
-                src_l=sh["p8_last"].view((cfg.bc // 2) * 64),
+                src_m=src_m, src_l=sh["arena"].view(lay["lrun"]),
                 dst=part, n_rows=cfg.br, slots=cfg.monoid_slots),
-            sh["last_sm"]))
+            after))
 
     # ---- the fold itself ----------------------------------------------------------------
     # chain is the path in DATA order, ENDING at the collector's own destination, and
@@ -168,6 +209,8 @@ def fa_gather(ctx, cfg, shards, merged_h=None, jct_monoid=None, verify=True):
     # ---- check the merged result --------------------------------------------------------
     # Compared in the junction's own lane order as FP32, which is what the collector's
     # buffer holds -- m in lanes 0..S-1 of each beat, l in lanes S..2S-1.
+    if out is not None:
+        out.update(gather=gather, merged=merged, check=gather)
     if not verify or merged_h is None:
         return shards
     l3_ml = BingoMemAlloc("out_fa_ml_merged", size=part_bytes, mem_level="L3")
@@ -175,6 +218,8 @@ def fa_gather(ctx, cfg, shards, merged_h=None, jct_monoid=None, verify=True):
                    HostBingoKernelIdmaArgs(merged, l3_ml, part_bytes),
                    [gather] + [sh["checks"] for sh in shards if sh["checks"]],
                    cluster=0)
-    checks.check_fp32(ctx, "Check_ml", golden=merged_h, got=l3_ml,
-                      elems=part_bytes // 4, tol=0.02, after=st_ml, label="fa_ml_merged")
+    ck = checks.check_fp32(ctx, "Check_ml", golden=merged_h, got=l3_ml,
+                           elems=part_bytes // 4, tol=tol, after=st_ml, label="fa_ml_merged")
+    if out is not None:
+        out["check"] = ck
     return shards

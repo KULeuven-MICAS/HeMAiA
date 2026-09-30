@@ -19,6 +19,7 @@ import pathlib
 import hjson
 import numpy as np
 from dataclasses import dataclass, fields, replace
+from typing import Optional
 
 from ..comm.paths import add_sim_paths          # noqa: E402
 
@@ -54,6 +55,40 @@ _MESH_DEFAULT = (16, 4, 16)
 # parameter lives on FaCfg, and the comparison kinds live in checks.py under names.
 _NEG_INF16 = 0xFBFFFBFF
 
+# THE P HANDOFF AND THE O RESCALE, as the kernels are told them. Not knobs: without either,
+# O is not attention (see simd.h "THE P HANDOFF" / "THE O RESCALE").
+#   _P_MODE      the softmax writes P already in PV's B layout (k-major blocks) and exports
+#                corr into the beat after the row sum of the same P buffer.
+#   PV flags     B_KMAJOR always; C_COLSCALE from the second KV tile on, when there is an O
+#                to rescale -- tile 0 reads no C at all.
+_P_MODE = SnaxBingoKernelSimdFaSoftmaxArgs.EXACT
+# Where the second P buffer of a nested ping-pong pair starts inside the pair's region: its
+# 64 B blocks then sit in the first buffer's gaps, [P8_NEST, P8_NEST + 64) of every pitch.
+# Any value in [64, pitch - 64] works; 96 is the snax reference's, where it tied 64 on
+# decode and won on prefill.
+P8_NEST = 96
+_PV_KMAJOR = SnaxBingoKernelGemmFaPvArgs.B_KMAJOR
+_PV_RESCALE = SnaxBingoKernelGemmFaPvArgs.B_KMAJOR | SnaxBingoKernelGemmFaPvArgs.C_COLSCALE
+
+def _flat(*xs):
+    """Nodes from any mix of None, single nodes and lists of nodes (port ends are tuples)."""
+    out = []
+    for x in xs:
+        if x is None:
+            continue
+        if isinstance(x, (list, tuple)):
+            out += [n for n in x if n is not None]
+        else:
+            out.append(x)
+    return out
+
+
+def _resident(cfg) -> bool:
+    """Q, K and V already sit in each cluster's L1 -- put there by the producer stage --
+    so the pipeline reads them in place: no per-tile loads, no double buffers."""
+    return cfg.operand_level == MemLevel.L1
+
+
 def _pull_owner(cfg, j):
     """Which cluster fetches tile j from main memory; the rest pull it from that cluster."""
     return cfg.clusters[j % cfg.ncl] if cfg.pull_rotate else cfg.clusters[0]
@@ -81,7 +116,8 @@ class FaCfg:
       HARDWARE   mesh, monoid_slots -- properties of the silicon, not choices. `mesh` is
                  checked against the cluster cfg by configure(); the default is the array
                  the kernels were written for.
-      ARGUMENTS  nkv, nq, clusters, decomp, score_shift_extra -- the actual parameters.
+      ARGUMENTS  nkv, nq, clusters, decomp, score_scale, score_shift -- the actual
+                 parameters.
       TUNING     pipeline depths and where operands come from. None of them changes the
                  ANSWER, and every default is the measured best on this quadrant, so a
                  caller who just wants attention never names one. validate() refuses a
@@ -105,6 +141,23 @@ class FaCfg:
     # across the D2D link. One field for all three: they come from one staging pass.
     operand_level: MemLevel = MemLevel.L3
     score_shift_extra: int = 0
+    # THE SOFTMAX TEMPERATURE, as a multiplier on the raw INT32 score: P = exp(a * (S - m))
+    # and corr = exp(a * (m_old - m_new)), both on the SIMD's own map at no extra task. A
+    # real layer passes a = 1 / (s_q * s_k * sqrt(d)): the two INT8 quantisation scales and
+    # the usual 1/sqrt(d). 1.0 treats the integer score as the logit, which on INT8 data is
+    # a one-hot softmax -- the regime every earlier benchmark ran in without saying so.
+    score_scale: float = 1.0
+    # THE SCORE'S RANGE, k: the D-port converter writes the score tile as RNE(S * 2^-k)
+    # (Int32ToFp16Converter built with shift: 1; k in 0..14). A full-range INT8 score over
+    # d = 128 reaches 127^2 * 128 = 2,064,512, 31x past FP16's 65,504, and the converter
+    # writes +-Inf past that -- the row max goes Inf and the row's P, l and O go NaN. A
+    # power of two only moves the exponent, so the shift keeps every significant bit, and
+    # the softmax takes it back in its temperature: exp_scale = a * 2^k. It does NOT change
+    # the answer, only which scores are representable, so the default is the smallest k
+    # that keeps every INT8 score finite at this d -- see min_score_shift().
+    # m and the row sums the kernels leave behind are in the shifted domain (m is the max
+    # of S * 2^-k); a*m is the same either way.
+    score_shift: Optional[int] = None
 
     # ---- hardware: checked, not chosen --------------------------------------------------
     mesh: tuple = (16, 4, 16)
@@ -146,6 +199,16 @@ class FaCfg:
     k_push_owner: bool = False     # only consulted while k_pull_from_cl0 is on
     v_push_owner: bool = False     # only consulted while v_pull_from_cl0 is on
 
+    # Read by BOTH decompositions -- where P8 lands for PV. The softmax writes P8 as a flat
+    # stream, so it can only choose the STRIDE between its 64 B blocks; at 64 (dense) PV's
+    # k-major B walk steps round TCDM's 256 B bank rotation twice as fast as its A walk and
+    # the two keep colliding (1.44 cycles a pass on the snax reference). 160 matches the
+    # rates (1.15). p8_nest puts the two P buffers of a ping-pong pair into one region,
+    # the second offset by P8_NEST so its blocks fill the first one's gaps: 8 KiB extra at
+    # Bc = 512 instead of 48. See "THE B PITCH" in offload_hw_kernels/gemm_fa.h.
+    p8_pitch: int = SnaxBingoKernelSimdFaSoftmaxArgs.PITCH_SPACED
+    p8_nest: bool = True
+
     # Read ONLY under decomp="kvsplit", where all four clusters issue their first V at the
     # same instant and queue on one cold config.
     stagger_first_v: bool = False
@@ -181,7 +244,15 @@ class FaCfg:
     @property
     def s2_n(self): return self.n                       # N is Br/meshCol either way
     @property
-    def qshift(self): return qshift(self.dhead) + self.score_shift_extra
+    def dshift(self):
+        """The converter's k: score_shift, or the smallest one keeping INT8 scores finite."""
+        return min_score_shift(self.dhead) if self.score_shift is None else self.score_shift
+    @property
+    def exp_scale(self):
+        """The temperature the softmax applies to the CONVERTED scores: a * 2^k, in FP32."""
+        return float(np.float32(self.score_scale) * np.float32(2.0 ** self.dshift))
+    @property
+    def qshift(self): return qshift(self.dhead, self.dshift) + self.score_shift_extra
     @property
     def ncl(self): return len(self.clusters)
     @property
@@ -227,10 +298,28 @@ class FaCfg:
                 f"vector per {self.mesh[2] * 2}-byte SIMD beat, so Br must be 32. Grow Bc "
                 f"(m) instead, or rework simd_fa_layout() and the SIMD task shapes.")
         # Bc IS the beat count of the score tile -- the transposed layout puts one key, all
-        # Br queries, in each 64-B beat -- and the quantiser packs 2:1, so it must be even.
-        if self.bc % 2:
-            raise ValueError(f"Bc={self.bc} must be even: the quantiser packs two beats "
-                             f"into one")
+        # Br queries, in each 64-B beat -- and the quantiser writes P in PV's B layout by
+        # interleaving FOUR key beats into one 32-bit atom per query, so it must be a
+        # multiple of 4 (which also makes PV's contraction a whole number of Ku blocks).
+        if self.bc % 4:
+            raise ValueError(f"Bc={self.bc} must be a multiple of 4: the quantiser "
+                             f"interleaves four key beats into PV's B layout")
+        if not (np.isfinite(self.score_scale) and self.score_scale > 0):
+            raise ValueError(f"score_scale={self.score_scale} must be positive and finite: "
+                             f"a negative one flips which key is the maximum")
+        if not 0 <= self.dshift <= SnaxBingoKernelGemmFaQkArgs.DSHIFT_MAX:
+            raise ValueError(f"score_shift={self.dshift}: the D-port converter scales by "
+                             f"2^-k for k in 0..{SnaxBingoKernelGemmFaQkArgs.DSHIFT_MAX}")
+        if not (np.isfinite(self.exp_scale) and self.exp_scale > 0):
+            raise ValueError(f"score_scale * 2^score_shift = {self.exp_scale} is not a finite "
+                             f"FP32: lower score_shift")
+        _pitch = SnaxBingoKernelSimdFaSoftmaxArgs.pitch(self.p8_pitch)
+        if _pitch < 64 or _pitch % 8:
+            raise ValueError(f"p8_pitch={self.p8_pitch} must be 0 (dense) or at least 64 and "
+                             f"a multiple of 8")
+        if self.p8_nest and _pitch - 64 < P8_NEST:
+            raise ValueError(f"p8_nest needs a pitch of at least {P8_NEST + 64} B so the "
+                             f"other buffer's 64 B blocks fit in the gaps; p8_pitch={_pitch}")
         if self.nkv % self.ncl:
             raise ValueError(
                 f"nkv={self.nkv} must divide across {self.ncl} clusters: each cluster "
@@ -272,6 +361,10 @@ class FaCfg:
                 f"{self.decomp!r} the builder never consults "
                 f"{'it' if len(stuck) == 1 else 'them'}, so the setting would change "
                 f"nothing and the arm would look like a measurement of a no-op.")
+        if self.operand_level == MemLevel.L1 and self.stagger_first_v:
+            raise ValueError(
+                "stagger_first_v with resident operands: there is no V load to stagger -- "
+                "the operand is already in L1.")
         if self.v_on_xdma and (self.bcast_k or self.bcast_v):
             raise ValueError(
                 "v_on_xdma with a broadcast: a cluster cannot absorb an incoming remote "
@@ -290,6 +383,9 @@ class FaCfg:
                    clusters=tuple(range(ncl)),
                    decomp=str(param.get("DECOMP", "headpar")),
                    score_shift_extra=int(param.get("SCORE_SHIFT_EXTRA", 0)),
+                   score_scale=float(param.get("SCORE_SCALE", 1.0)),
+                   score_shift=(None if param.get("SCORE_SHIFT") is None
+                                else int(param["SCORE_SHIFT"])),
                    mesh=tuple(mesh), **kw).validate()
 
     @classmethod
@@ -340,114 +436,116 @@ def mesh_from_hwcfg(hwcfg_path, array_shape: int = 0) -> tuple:
     return tuple(int(x) for x in unroll)
 
 
-def qshift(d):
-    """How far to bound the INT8 operands so a score cannot leave FP16.
+def qshift(d, k=0):
+    """How far to bound synthetic INT8 operands so a score cannot leave FP16.
 
-    A score is a sum of d products of two shifted INT8s, so |S| <= (128>>q)^2 * d.
-    Int32ToFp16 SATURATES past 65504 and exp(inf - inf) is NaN, so an overflowing row
-    fails the softmax rather than degrading. Real attention divides by sqrt(d) for the
-    same reason; bounding the operands is cheaper here and needs no extra pass.
+    A score is a sum of d products of two shifted INT8s, so |S| <= (128>>q)^2 * d, and the
+    D port writes S * 2^-k. Int32ToFp16 writes Inf past 65504 and exp(inf - inf) is NaN,
+    so an overflowing row fails the softmax rather than degrading. With the converter's
+    shift (k >= min_score_shift(d)) this is 0: full-range operands.
     """
     for q in range(8):
-        if (128 >> q) ** 2 * d <= 65504:
+        if (128 >> q) ** 2 * d <= 65504 * 2 ** k:
             return q
     raise ValueError(f"no INT8 shift keeps d={d} scores inside FP16")
 
 
+def converted_score_finite(s_max, k):
+    """Whether the D port's RNE(|S| * 2^-k) stays finite for |S| <= s_max."""
+    return bool(np.isfinite(_f16(np.float64(s_max) * 2.0 ** -k)))
 
 
-def build_data(cfg, a=None, b=None, v=None, seed=42):
-    """Operands plus the float model of the softmax over ONE shard's tile.
+def min_score_shift(d, s_max=None):
+    """The smallest converter shift k that keeps every score finite in FP16.
 
-    Follows the hardware's own sequence at the precision each stage works in:
-
-        S       exact INT32 out of the mesh, converted to FP16 on the D32 port
-        m       max over KEYS, per query row
-        P       exp(S16 - m), FP32 internally, stored FP16
-        rowsum  summed over KEYS in the FP32 accumulator, narrowed once to FP16
-
-    Every KV tile inside a shard is fed the SAME K, so the running maximum stops moving
-    after tile 0 and the shard's final m is this tile's m; rowsum likewise.
-
-    The operands are arguments rather than locals so build_shards() can give every cluster
-    a DIFFERENT K while they share one Q and one V -- see the note there on why identical
-    shards would make the cross-cluster fold untestable.
+    s_max is the largest |S| the data can produce; by default the worst case of two
+    full-range INT8s, 128^2 * d (6 at d = 128).
     """
-    rng = np.random.RandomState(seed)
-    # Block operand layouts, as block_gemm_golden_model reads them and as the streamer
-    # descriptors walk them: A is [M][K][meshRow][tileSize], B is [N][K][meshCol][tileSize].
-    if a is None:
-        a = rng.randint(-128, 127, size=cfg.m * cfg.k * cfg.mesh_row * cfg.tile_size).astype(np.int8) >> cfg.qshift
-    if b is None:
-        b = rng.randint(-128, 127, size=cfg.n * cfg.k * cfg.mesh_col * cfg.tile_size).astype(np.int8) >> cfg.qshift
-    # V for the second matmul: [S2_M][S2_K][meshRow][tileSize]. Its value never reaches a
-    # check (O is a cycle measurement), but it must be a real operand so the matmul does
-    # the work -- a zero V would still take the same cycles, but a denormal-free operand
-    # keeps the array off any slow path.
-    if v is None:
-        v = rng.randint(-128, 127,
-                        size=cfg.s2_m * cfg.s2_k * cfg.mesh_row * cfg.tile_size).astype(np.int8) >> cfg.qshift
+    s_max = 128 * 128 * d if s_max is None else s_max
+    for k in range(SnaxBingoKernelGemmFaQkArgs.DSHIFT_MAX + 1):
+        if converted_score_finite(s_max, k):
+            return k
+    raise ValueError(f"|S| up to {s_max} does not fit FP16 even at 2^-"
+                     f"{SnaxBingoKernelGemmFaQkArgs.DSHIFT_MAX}")
 
-    d32 = block_gemm_golden_model(
-        cfg.m, cfg.k, cfg.n, cfg.mesh_row, cfg.tile_size, cfg.mesh_col, a, b, 0, 0,
-        np.zeros(cfg.m * cfg.n * cfg.mesh_row * cfg.mesh_col, dtype=np.int64))
-    # Block order [M][N][meshRow][meshCol] -> [key][query], which is how the D port lays
-    # the tile down (its [4, 8] channel grouping interleaves the two N blocks inside one
-    # key row) and how the SIMD core reads it back.
-    s = np.asarray(d32).reshape(cfg.m, cfg.n, cfg.mesh_row, cfg.mesh_col)
-    s = s.transpose(0, 2, 1, 3).reshape(cfg.bc, cfg.br)
 
-    s16 = s.astype(np.float16)
-    m = s16.max(axis=0)
-    p = np.exp(s16.astype(np.float32) - m.astype(np.float32)).astype(np.float16)
-    rowsum = p.astype(np.float32).sum(axis=0).astype(np.float16)
+def d_port_f16(s, k=0):
+    """The D port's Int32ToFp16Converter with its power-of-two scale: RNE(S * 2^-k).
 
-    # O, the accumulated PV output. This is the ONLY quantity that exercises the GEMM's
-    # accumulation: m and rowsum are per-tile values that are IDENTICAL on every tile here,
-    # so a run that drops tiles still passes both of them.
-    #
-    # P leaves the softmax quantised to INT8 -- exp(S-m) is in [0,1], so the baked scale is
-    # 127.0 (BINGO_SIMD_I8_SCALE_UNIT) -- and PV contracts over KEYS: O^T = V^T . P^T.
-    # P goes in with NO permutation, and that is the whole subtlety.
-    #
-    # `s` above is ALREADY the score buffer's memory order. The QK GEMM's D port writes with
-    # a spatial stride of one key row (Dsl = {bw/8, key_row}), which interleaves the two N
-    # blocks as it writes -- "a beat is exactly one key, all Br queries" in gemm_fa.h. So
-    # memory holds [key][query], and the transpose in build_data(cfg) is how the golden model's
-    # [M][N][meshRow][meshCol] output is brought INTO that order, not out of it.
-    #
-    # PV then reads that same flat buffer as B = [N][K][meshCol][tileSize]
-    # (Btb = {K, N, M}, Bts = {b_tile, K*b_tile, 0} -- broadcast over M, b_tile = 64 B).
-    # block_gemm_golden_model takes B as a flat array in exactly that convention, so the
-    # quantised [key][query] array IS the operand. Permuting it first yields the right
-    # VALUES in the wrong PLACES.
-    p_b = np.clip(np.rint(p.astype(np.float32) * 127.0),
-                  -128, 127).astype(np.int8).reshape(-1)
-    o_tile = block_gemm_golden_model(
-        cfg.s2_m, cfg.s2_k, cfg.s2_n, cfg.mesh_row, cfg.tile_size, cfg.mesh_col, v, p_b, 0, 0,
-        np.zeros(cfg.s2_m * cfg.s2_n * cfg.mesh_row * cfg.mesh_col, dtype=np.int64))
-    # Every KV tile is fed the same bytes, so m never moves and every correction factor is
-    # exactly 1 -- the accumulator is NKV copies of one tile's contribution.
-    o = np.asarray(o_tile, dtype=np.int64) * cfg.nkv_per
+    Exact: |S| < 2^31 and a power of two only moves the exponent, so the float64 product
+    is exact and numpy's single rounding to half is the RTL's RNE. k <= 14 and |S| >= 1
+    keep every non-zero result normal, as in the RTL, and past 65504 it is +-Inf.
+    """
+    return _f16(np.asarray(s, dtype=np.float64) * 2.0 ** -k)
 
-    # ---- and now put O where the D32 port ACTUALLY writes it ---------------------------
-    #
-    # This block is the difference between an O check that passes and one that reports
-    # 3338 of 4096 elements wrong while the hardware is perfectly correct.
-    #
-    # The C/D spatial map is chosen so the FP16 score tile lands row-major -- one key per
-    # 64 B beat, which is what the LANEWISE reduce needs. C and D share those strides and
-    # the INT32 side is twice as wide, so at INT32 the SAME strides do NOT come out
-    # row-major: O lands PERMUTED. That is deliberate and harmless to the arithmetic (C and
-    # D permute identically, so O += P.V still accumulates against itself -- the cluster
-    # cfg says exactly this), but it means a golden in canonical block order is not
-    # comparable with what the host reads back.
-    #
-    # The map is DERIVED from the descriptors, not assumed: the array serialises a
-    # meshRow x meshCol block into chunks of serial_c_d_width, each chunk into channels of
-    # bankWidth, and the AGU places channel i at sl0*(i%4) + sl1*((i/4)%4). Ported from the
-    # reference's data/datagen.py, which is the model that makes the cluster app's own
-    # exact-equality O check pass.
+
+
+
+# ======================================================================================
+# Layout helpers and the golden model
+# ======================================================================================
+#
+# Every operand crosses into the array in one of VersaCore's two block layouts, and the
+# goldens below are computed on the SAME bytes the hardware reads -- so a layout mistake
+# shows up as a wrong golden rather than hiding behind a matching one.
+#
+#   A layout of an [M, K] matrix:  [M/Mu][K/Ku][Mu][Ku]   (block (m, k), row-major inside)
+#   B layout of a  [K, N] matrix:  [N/Nu][K/Ku][Nu][Ku]   (block (n, k), one n per 4 bytes)
+#
+# With Mu == Nu the A layout of X is byte-identical to the B layout of X^T, which is how
+# Q in A layout IS the score matmul's B operand Q^T.
+
+def a_layout(x, mesh=_MESH_DEFAULT):
+    """Row-major [M, K] int8 -> A-layout bytes."""
+    mu, ku, _ = mesh
+    x = np.asarray(x)
+    rows, cols = x.shape
+    return (x.reshape(rows // mu, mu, cols // ku, ku).transpose(0, 2, 1, 3)
+             .reshape(-1).astype(np.int8))
+
+
+def from_a_layout(buf, rows, cols, mesh=_MESH_DEFAULT):
+    """A-layout bytes -> row-major [rows, cols]."""
+    mu, ku, _ = mesh
+    return (np.asarray(buf).reshape(rows // mu, cols // ku, mu, ku).transpose(0, 2, 1, 3)
+             .reshape(rows, cols))
+
+
+def _f16(x):
+    """Round ONCE to FP16 from whatever wider value it was computed in (numpy rounds a
+    float64 straight to half with round-to-nearest-even, so there is no double rounding)."""
+    with np.errstate(over="ignore", invalid="ignore"):
+        return np.asarray(x, dtype=np.float64).astype(np.float16)
+
+
+def colscale_golden(o, corr):
+    """Int32ColumnScale: y = rne(x * corr[col]), saturated to INT32.
+
+    Exact: |x| < 2^31 and an FP16 significand has 11 bits, so the float64 product is exact
+    and np.rint rounds half to even -- the extension's own rule.
+    """
+    y = np.rint(np.asarray(o, dtype=np.float64) *
+                np.asarray(corr, dtype=np.float16).astype(np.float64)[None, :])
+    return np.clip(y, -2**31, 2**31 - 1).astype(np.int64)
+
+
+def d32_order(cfg, o_t):
+    """Canonical O^T [d, Br] -> the INT32 words in the order the D32 port writes them.
+
+    The C/D spatial map is chosen so the FP16 score tile lands row-major -- one key per
+    64 B beat, which is what the LANEWISE reduce needs. C and D share those strides and the
+    INT32 side is twice as wide, so at INT32 the SAME strides do NOT come out row-major: O
+    lands PERMUTED. That is deliberate and harmless to the arithmetic (C and D permute
+    identically, so O += P.V still accumulates against itself, and the C-path column
+    scaler sees C in the array's own (m, n) block order, not in memory order), but a golden
+    in canonical order is not comparable with what the host reads back.
+
+    The map is DERIVED from the descriptors, not assumed: the array serialises a
+    meshRow x meshCol block into chunks of serial_c_d_width, each chunk into channels of
+    bankWidth, and the AGU places channel i at sl0*(i%4) + sl1*((i/4)%4). Ported from the
+    reference's data/datagen.py, which is the model that makes the cluster app's own
+    exact-equality O check pass.
+    """
     BANK_W, OUT_W, SERIAL_CD = 64, 32, 1024   # bits; snax_versacore_serial_c_d_width
     SBOUNDS = [4, 4]                          # data_reader_writer_params.spatial_bounds[0]
     slstride = [BANK_W // 8, cfg.s2_n * cfg.mesh_col * 16 // 8]
@@ -477,151 +575,176 @@ def build_data(cfg, a=None, b=None, v=None, seed=42):
         return out
 
     # SELF-TEST, and it is the load-bearing part: run the same model at FP16 and it must
-    # reproduce the plain [key][query] row-major layout that `s` above already assumes. If
-    # the serialisation model were wrong this assert fires instead of the golden silently
-    # disagreeing with the hardware.
+    # reproduce the plain [key][query] row-major layout the score tile is known to have.
+    # If the serialisation model were wrong this assert fires instead of the golden
+    # silently disagreeing with the hardware.
     for (mm, nn, r, c), byte in scatter(16, 1, cfg.s2_n * 16 * cfg.mesh_row * cfg.mesh_col // 8, 2).items():
         want = ((mm * cfg.mesh_row + r) * (cfg.s2_n * cfg.mesh_col) + nn * cfg.mesh_col + c) * 2
         assert byte == want, "D32 address model disagrees with the FP16 row-major layout"
 
     ts2 = cfg.s2_n * OUT_W * cfg.mesh_row * cfg.mesh_col // 8
-    o_can = o.reshape(cfg.s2_m, cfg.s2_n, cfg.mesh_row, cfg.mesh_col)
-    o_mem = np.zeros(o.size, dtype=np.int64)
-    seen = np.zeros(o.size, dtype=bool)
+    o_t = np.asarray(o_t, dtype=np.int64).reshape(cfg.dhead, cfg.br)
+    o_mem = np.zeros(o_t.size, dtype=np.int64)
+    seen = np.zeros(o_t.size, dtype=bool)
     for (mm, nn, r, c), byte in scatter(OUT_W, cfg.s2_m, ts2, 4).items():
         w = byte // 4
         assert byte % 4 == 0 and not seen[w], "D32 INT32 address map is not a bijection"
         seen[w] = True
-        o_mem[w] = o_can[mm, nn, r, c]
+        o_mem[w] = o_t[mm * cfg.mesh_row + r, nn * cfg.mesh_col + c]
     assert seen.all(), "D32 INT32 address map does not cover the output"
-    return a, b, v, m, rowsum, o_mem.astype(np.int32)
+    return o_mem.astype(np.int32)
 
 
-def build_shards(cfg):
-    """NCL shards with DIFFERENT K, plus the global merge the fabric is supposed to compute.
+def shard_golden(cfg, q8, k8_tiles, v8_tiles):
+    """One query tile's (m, l, O) over a run of KV tiles, as the hardware computes it.
 
-    Every shard gets its own K and therefore its own (m_c, l_c). That is not incidental:
-    with one shared K -- which is what the single-cluster workload uses, since there the
-    recurrence just repeats one tile -- all four partials are identical, and a fold that
-    silently dropped three of them, or returned the collector's own operand untouched,
-    would produce exactly the right answer. Distinct shards are what make the gather's
-    result evidence that the gather happened.
+    q8        A-layout bytes of Q [Br, d]  (== B layout of Q^T, the score matmul's B)
+    k8_tiles  per KV tile, A-layout bytes of K_t [Bc, d]
+    v8_tiles  per KV tile, A-layout bytes of V_t^T [d, Bc]
 
-    Q and V are shared, as they are in the real decomposition: splitting KV leaves the
-    query tile common to every cluster.
+    Follows the device's own sequence at the precision each stage works in:
 
-    The merge itself is the online-softmax combine the monoid junction implements:
+        S       exact INT32 out of the mesh, converted to FP16 on the D32 port as
+                RNE(S * 2^-k); every step below then works on the converted score, with
+                the temperature a' = a * 2^k
+        m_new   max(m_old, max over this tile's KEYS), per query -- exact
+        corr    exp(a * (m_old - m_new)): the difference in FP16, the exponential in FP32
+        P       exp(a * (S - m_new)): EW0 subtracts in FP16, the map exponentiates in FP32
+        rowsum  over KEYS in the FP32 accumulator, narrowed once to FP16
+        P8      sat(rne(P * 127)), written in PV's B layout (the INTERLEAVE quantiser)
+        l_new   corr * l_old + rowsum, each step rounded to FP16
+        O       colscale(O, corr) + V^T . P8^T in INT32 -- the C-path scaler, then the MAC
 
-        m* = max_c m_c              l* = sum_c exp(m_c - m*) * l_c
+    m is seeded at -65504, l at 0, and O's first tile reads no C at all, so tile 0 needs no
+    special case: corr = exp(-inf) = 0 and 0 * l = 0.
 
-    computed here in FP32 on FP16 inputs, mirroring the device: the arena holds m and l in
-    FP16, pack_fa_partial widens the bit pattern to FP32, and the junction folds in FP32.
+    Returns (m fp16 [Br], l fp16 [Br], O^T int64 [d, Br] canonical).
     """
-    rng = np.random.RandomState(1234)
-    b = rng.randint(-128, 127, size=cfg.n * cfg.k * cfg.mesh_col * cfg.tile_size).astype(np.int8) >> cfg.qshift
-    v = rng.randint(-128, 127,
-                    size=cfg.s2_m * cfg.s2_k * cfg.mesh_row * cfg.tile_size).astype(np.int8) >> cfg.qshift
+    mr, ts, mc = cfg.mesh
+    a32 = np.float32(cfg.exp_scale)
+    m = np.full(cfg.br, -65504.0, dtype=np.float16)
+    l = np.zeros(cfg.br, dtype=np.float16)
+    o = np.zeros((cfg.dhead, cfg.br), dtype=np.int64)
+    for k8, v8 in zip(k8_tiles, v8_tiles):
+        d32 = block_gemm_golden_model(
+            cfg.m, cfg.k, cfg.n, mr, ts, mc, np.asarray(k8), np.asarray(q8), 0, 0,
+            np.zeros(cfg.m * cfg.n * mr * mc, dtype=np.int64))
+        # Block order [M][N][meshRow][meshCol] -> [key][query]: how the D port lays the tile
+        # down (its [4, 4] channel grouping interleaves the two N blocks inside one key row).
+        s = np.asarray(d32).reshape(cfg.m, cfg.n, mr, mc).transpose(0, 2, 1, 3)
+        s16 = d_port_f16(s.reshape(cfg.bc, cfg.br), cfg.dshift)
+        m_new = np.maximum(m, s16.max(axis=0))
+        with np.errstate(over="ignore", invalid="ignore"):
+            delta = _f16(m.astype(np.float64) - m_new.astype(np.float64))
+            corr = _f16(np.exp(a32 * delta.astype(np.float32)))
+            d16 = _f16(s16.astype(np.float64) - m_new.astype(np.float64)[None, :])
+            p16 = _f16(np.exp(a32 * d16.astype(np.float32)))
+        rowsum = _f16(p16.astype(np.float32).sum(axis=0, dtype=np.float32))
+        p8 = np.clip(np.rint(p16.astype(np.float32) * np.float32(127.0)),
+                     -127, 127).astype(np.int8)                          # [key][query]
+        l = _f16(_f16(corr.astype(np.float32) * l.astype(np.float32)).astype(np.float32)
+                 + rowsum.astype(np.float32))
+        # B = P^T [Bc, Br] in B layout: block (n, k) holds P[key = 4k + s][query = 16n + c].
+        p_b = p8.reshape(cfg.bc // ts, ts, cfg.br // mc, mc).transpose(2, 0, 3, 1).reshape(-1)
+        pv = np.asarray(block_gemm_golden_model(
+            cfg.s2_m, cfg.s2_k, cfg.s2_n, mr, ts, mc, np.asarray(v8), p_b, 0, 0,
+            np.zeros(cfg.s2_m * cfg.s2_n * mr * mc, dtype=np.int64)), dtype=np.int64)
+        pv = pv.reshape(cfg.s2_m, cfg.s2_n, mr, mc).transpose(0, 2, 1, 3).reshape(cfg.dhead, cfg.br)
+        o = colscale_golden(o, corr) + pv
+        m = m_new
+    return m, l, o
 
-    if cfg.decomp == "headpar":
-        # ONE K and ONE V for the whole group -- that IS the GQA relation, not a
-        # simplification: the group's query heads share a KV head by construction. What
-        # varies per cluster is Q, so every cluster still gets its own (m_c, l_c) and the
-        # per-shard checks stay evidence that the shard ran. There is nothing to fold.
-        #
-        # The distinct-shard argument the kvsplit docstring makes does not apply here for
-        # the opposite reason: no fold is being tested, so identical partials would prove
-        # nothing either way. Distinct Q is what keeps the four checks independent.
-        a_shared = (rng.randint(-128, 127, size=cfg.m * cfg.k * cfg.mesh_row * cfg.tile_size)
-                       .astype(np.int8) >> cfg.qshift)
-        shards, b_list = [], []
-        for c in cfg.clusters:
-            b_c = (rng.randint(-128, 127, size=cfg.n * cfg.k * cfg.mesh_col * cfg.tile_size)
-                      .astype(np.int8) >> cfg.qshift)
-            b_list.append(b_c)
-            shards.append(build_data(cfg, a=a_shared, b=b_c, v=v))
-        m_c = np.stack([np.asarray(sh[3], dtype=np.float16) for sh in shards])
-        l_c = np.stack([np.asarray(sh[4], dtype=np.float16) for sh in shards])
-        # a_list holds the SAME array object NCL times so stage() can see, by identity,
-        # that one staged copy serves every cluster.
-        # O PER CLUSTER, not shards[0]'s. Under headpar every cluster gets its own b_c
-        # (its own query head), so every cluster's O is different and one golden would
-        # only ever have validated cluster 0.
-        return [a_shared] * cfg.ncl, b_list, v, m_c, l_c, None, [sh[5] for sh in shards]
 
-    shards = []
+def build_shards(cfg, seed=1234):
+    """Random Q, K and V for the whole attention, and every shard's golden (m, l, O).
+
+    EVERY KV TILE IS DIFFERENT, and that is the point. With one tile repeated, the running
+    maximum stops moving after tile 0, every correction factor is exactly 1, and a PV that
+    never rescales O -- or reads P in the wrong layout, provided the same wrong layout on
+    every tile -- still matches a golden built the same way. Distinct tiles make the
+    maximum move, so corr < 1 on a real fraction of the queries and O can only match if the
+    recurrence is actually carried out.
+
+    The layouts are the ports' (see FlashAttention): q is A(Q) per query tile, stacked; k
+    is A(K) over the whole key sequence; v is A(V_t^T) per KV tile, stacked. Under kvsplit
+    cluster c owns key tiles [c*T, (c+1)*T); under headpar every cluster sees the same T
+    tiles and owns a query head instead.
+
+    The operands are full-range INT8 when the converter's shift keeps every score finite
+    (cfg.dshift >= min_score_shift), and bounded by qshift otherwise; cfg.score_scale sets
+    the temperature -- see FaCfg.
+    """
+    rng = np.random.RandomState(seed)
+    T = cfg.nkv_per
+    n_heads = cfg.ncl if cfg.decomp == "headpar" else 1
+    n_kv = T * (cfg.ncl if cfg.decomp == "kvsplit" else 1)
+    qb = cfg.br * cfg.dhead
+    kb = cfg.bc * cfg.dhead
+
+    def rnd(n):
+        return rng.randint(-128, 128, size=n).astype(np.int8) >> cfg.qshift
+
+    q8 = rnd(n_heads * cfg.nq * qb)
+    k8 = rnd(n_kv * kb)
+    v8 = rnd(n_kv * kb)
+
+    gold = {"m": [], "l": [], "o": [], "m_np": [], "l_np": []}
     for c in cfg.clusters:
-        a_c = (rng.randint(-128, 127, size=cfg.m * cfg.k * cfg.mesh_row * cfg.tile_size)
-                  .astype(np.int8) >> cfg.qshift)
-        shards.append(build_data(cfg, a=a_c, b=b, v=v))
+        head = c if cfg.decomp == "headpar" else 0
+        t0 = c * T if cfg.decomp == "kvsplit" else 0
+        # The CHECKED query tile is the last one; every query tile runs its own recurrence
+        # and they never interact, so one is as good a witness as another.
+        qt = head * cfg.nq + cfg.nq - 1
+        m, l, o = shard_golden(cfg, q8[qt * qb:(qt + 1) * qb],
+                               [k8[t * kb:(t + 1) * kb] for t in range(t0, t0 + T)],
+                               [v8[t * kb:(t + 1) * kb] for t in range(t0, t0 + T)])
+        gold["m_np"].append(m)
+        gold["l_np"].append(l)
+        gold["o"].append(d32_order(cfg, o))
+    merged = None
+    if cfg.decomp == "kvsplit" and cfg.ncl > 1:
+        from .gather import merged_golden, scaled_m
+        merged = merged_golden(cfg, np.stack([scaled_m(cfg, m) for m in gold["m_np"]]),
+                               np.stack(gold["l_np"]))
+    return {"q8": q8, "k8": k8, "v8": v8, "m": np.stack(gold["m_np"]),
+            "l": np.stack(gold["l_np"]), "o": gold["o"], "merged": merged}
 
-    m_c = np.stack([np.asarray(sh[3], dtype=np.float16) for sh in shards])     # [NCL, BR]
-    l_c = np.stack([np.asarray(sh[4], dtype=np.float16) for sh in shards])
 
-    # The merged golden belongs to the FOLD, not to the shards, so it is built by the
-    # module that folds. Its lane packing is the junction's, and nothing here should have
-    # to know that geometry.
-    from .gather import merged_golden
-    merged = merged_golden(cfg, m_c, l_c)
-
-    a_list = [sh[0] for sh in shards]
-    # b is shared under kvsplit; the caller indexes per cluster either way.
-    return a_list, [b] * cfg.ncl, v, m_c, l_c, merged, [sh[5] for sh in shards]
-
-
-def stage(cfg, st, a, b, v, m, rowsum, o):
+def stage(cfg, st, data):
     """Hand every array to the staging helper and return the handles.
 
     WHERE these land is the platform's business, not the caller's: a config with a
     memory chiplet gets a mempool.bin, one without gets C arrays in the host image. See
-    util/sim/common/bingo_data_staging.py -- addressing a memory chiplet that a config
+    mini_compiler/mem/bingo_data_staging.py -- addressing a memory chiplet that a config
     does not have reads unmapped memory rather than faulting, which surfaces as an
     arithmetic bug a long way from the cause.
+
+    ONE ARRAY PER TENSOR, NOT ONE PER CLUSTER. The block takes q, k and v as whole tensors
+    and slices them itself, so a cluster's tile is a byte offset rather than a separate
+    symbol -- which is also what a real layer hands over: a projection writes one K, not
+    four.
     """
-    # ONE ARRAY PER TENSOR, NOT ONE PER CLUSTER. The block takes q, k and v as whole
-    # tensors and slices them itself, so what it needs here is a single contiguous buffer
-    # per tensor -- cluster c's tile is then a byte offset into it rather than a separate
-    # symbol. That is also what a real layer hands over: a projection writes one Q, not
-    # four.
-    #
-    # An operand every cluster SHARES is staged once and stays one tile; only a genuinely
-    # per-cluster one is concatenated. Sharing is decided by object identity, which
-    # build_shards() already expresses by handing back the same array object N times, so
-    # it is not restated here.
-    def put_stacked(tag, arrays, ctype, conv):
-        shared = len({id(x) for x in arrays}) == 1
-        if shared:
-            return st.put(tag, ctype, conv(arrays[0])), 1
-        flat = np.concatenate([np.asarray(conv(a)).reshape(-1) for a in arrays])
-        return st.put(tag, ctype, flat), len(arrays)
-
-    a_h, _ = put_stacked("fa_k8", a, "int8_t", lambda x: np.asarray(x).astype(np.int8))
-    b_h, _ = put_stacked("fa_q8", b, "int8_t", lambda x: np.asarray(x).astype(np.int8))
-
     return {
-        "a": a_h,
-        "b": b_h,
-        "v": st.put("fa_v8", "int8_t", v.astype(np.int8)),
-        # The score matmul's C is a zero BIAS and the O accumulator starts at zero. The
-        # larger of the two is C, so one region serves both -- and on the host path it
-        # costs no image bytes at all, because an uninitialised array lands in .bss.
-        "zero": st.put_zeros("fa_zero", "int32_t", cfg.m * cfg.n * cfg.mesh_row * cfg.mesh_col),
+        "q": st.put("fa_q8", "int8_t", data["q8"].astype(np.int8)),
+        "k": st.put("fa_k8", "int8_t", data["k8"].astype(np.int8)),
+        "v": st.put("fa_v8", "int8_t", data["v8"].astype(np.int8)),
         # Per-shard goldens, one per cluster. Keeping them is what separates "the fold is
         # wrong" from "a shard is wrong": a cluster whose recurrence quietly did nothing
         # still produces a well-formed partial, and the merged result alone cannot say
         # which of the four it came from.
         "m": [st.put(f"fa_m_golden_c{c}", "uint16_t",
-                     np.asarray(m[c]).astype(np.float16).view(np.uint16))
+                     np.asarray(data["m"][c]).astype(np.float16).view(np.uint16))
               for c in cfg.clusters],
-        "rowsum": [st.put(f"fa_rowsum_golden_c{c}", "uint16_t",
-                          np.asarray(rowsum[c]).astype(np.float16).view(np.uint16))
-                   for c in cfg.clusters],
-        "o": [st.put(f"fa_o_golden_c{c}", "int32_t", np.asarray(o[c]).astype(np.int32))
+        "l": [st.put(f"fa_l_golden_c{c}", "uint16_t",
+                     np.asarray(data["l"][c]).astype(np.float16).view(np.uint16))
+              for c in cfg.clusters],
+        "o": [st.put(f"fa_o_golden_c{c}", "int32_t", np.asarray(data["o"][c]).astype(np.int32))
               for c in cfg.clusters],
     }
 
 
 def stage_merged(st, merged):
-    """The gathered (m*, l*), in the junction's own lane order, as FP32."""
+    """The gathered (a*m*, l*), in the junction's own lane order, as FP32."""
     return st.put("fa_ml_merged_golden", "float", np.asarray(merged, dtype=np.float32))
 
 def _alloc_cluster(ctx, cfg, c):
@@ -655,10 +778,16 @@ def _alloc_cluster(ctx, cfg, c):
     # right diagnosis -- every QK is gated by its own K load -- but it also raises the
     # number of simultaneously-ready DMA nodes past what the manager's ready set tolerates,
     # and the run wedges in teardown. Revisit only alongside that limit.
-    k8 = [g.l1(f"fa_k8_{i}", cfg.m * cfg.k * cfg.mesh_row * cfg.tile_size) for i in range(cfg.nkbuf)]
-    q8 = [g.l1(f"fa_q8_{q}", cfg.n * cfg.k * cfg.mesh_col * cfg.tile_size)      # B of the score matmul
-          for q in range(cfg.nq)]
-    v8 = [g.l1(f"fa_v8_{i}", cfg.s2_m * cfg.s2_k * cfg.mesh_row * cfg.tile_size) for i in range(cfg.nvbuf)]
+    # RESIDENT operands (operand_level L1) are read where the producer left them, so none
+    # of the three streaming sets exists; the lists stay empty and _build_head fills q8 with
+    # views into the bound port.
+    res = _resident(cfg)
+    k8 = [] if res else [g.l1(f"fa_k8_{i}", cfg.m * cfg.k * cfg.mesh_row * cfg.tile_size)
+                         for i in range(cfg.nkbuf)]
+    q8 = [] if res else [g.l1(f"fa_q8_{q}", cfg.n * cfg.k * cfg.mesh_col * cfg.tile_size)
+                         for q in range(cfg.nq)]                         # B of the score matmul
+    v8 = [] if res else [g.l1(f"fa_v8_{i}", cfg.s2_m * cfg.s2_k * cfg.mesh_row * cfg.tile_size)
+                         for i in range(cfg.nvbuf)]
     # The score matmul masks every C channel off (see gemm_fa.h), so nothing is ever
     # READ through this pointer -- the AGU walks addresses that are never dereferenced.
     # It exists only because the descriptor needs a base pointer. One block, not M*N.
@@ -677,10 +806,29 @@ def _alloc_cluster(ctx, cfg, c):
     # into the arena beside a -m_new slot -- a copy comparable in size to the K/V stream
     # itself. The GEMM writes its D at +64; the beat below it is the prefix.
     s16 = [g.l1(f"fa_s16_{i}", 64 + cfg.bc * cfg.br * 2) for i in range(cfg.nscore)]  # score tile, fp16
-    # ONE TRAILING BEAT past the quantised P. The fused exp pass emits bc/2 INT8 beats and
+    # TWO TRAILING BEATS past the quantised P. The fused exp pass emits bc/2 INT8 beats and
     # then the tapped row sum, unnarrowed, as ONE contiguous stream -- and no shape can span
-    # two allocations, so the row sum lives here rather than in the arena.
-    p8 = [g.l1(f"fa_p8_{i}", cfg.bc * cfg.br + 64) for i in range(cfg.nscore)]   # quantised P + row sum
+    # two allocations, so the row sum lives here rather than in the arena. The second beat
+    # is this tile's corr, which PV loads into its C-path scaler: living in the SAME
+    # buffer as P, it is protected by exactly the edges that already protect P (SM(i)
+    # writes it, PV(i) reads it, SM(i + NSCORE) waits for PV(i) before overwriting).
+    #
+    # AT THE P8 PITCH, P8's 64 B beats sit p8_pitch apart (row sum and corr on the same
+    # grid), and with p8_nest two consecutive buffers share one region: buffer 2i at +0,
+    # buffer 2i+1 at +P8_NEST, whose beats fall in the first one's gaps. They never share a
+    # byte, and the edges that protect each buffer are unchanged -- it is still one handle
+    # per buffer as far as every node is concerned, a view instead of an allocation.
+    p8_len = SnaxBingoKernelSimdFaSoftmaxArgs.p8_bytes(cfg.bc, cfg.br, _P_MODE, cfg.p8_pitch)
+    if cfg.p8_nest:
+        p8 = []
+        for i in range(0, cfg.nscore, 2):
+            if i + 1 < cfg.nscore:
+                pair = g.l1(f"fa_p8_{i}{i + 1}", P8_NEST + p8_len)
+                p8 += [pair.view(0), pair.view(P8_NEST)]
+            else:
+                p8.append(g.l1(f"fa_p8_{i}", p8_len))
+    else:
+        p8 = [g.l1(f"fa_p8_{i}", p8_len) for i in range(cfg.nscore)]  # P8 + row sum + corr
     # One arena, one Q buffer and one O accumulator PER QUERY TILE -- that is the
     # entire cost of the reuse. K, V, the score tile and P stay single sets: they are
     # exactly what we are trying not to re-read.
@@ -701,9 +849,9 @@ def _shard_handles(h_all, c):
     handle, so indexing is uniform here either way.
     """
     h = dict(h_all)
-    for key in ("a", "b", "m", "rowsum", "o"):
-        # m/rowsum/o are GOLDENS and are absent when the block builds compute only, which
-        # is the composed case: the operands came from a projection, so there is nothing to
+    for key in ("a", "b", "v", "m", "l", "o", "q_ends", "k_ends", "v_ends"):
+        # m/l/o are GOLDENS and are absent when the block builds compute only, which is the
+        # composed case: the operands came from a projection, so there is nothing to
         # compare against here and the next block is the consumer, not a host check.
         h[key] = h_all[key][c] if h_all.get(key) is not None else None
     return h
@@ -723,14 +871,16 @@ def _build_head(ctx, cfg, c, h_all, buf):
     h = _shard_handles(h_all, c)
     arena, k8, q8, v8 = buf["arena"], buf["k8"], buf["q8"], buf["v8"]
     cz, s16, p8, oacc = buf["cz"], buf["s16"], buf["p8"], buf["oacc"]
-    def load(tag, key, dst, nbytes, after=None):
+    # `off` is the tile's byte offset inside this cluster's operand: every KV tile and every
+    # query tile is a different slice, so the tile index has to reach the source address.
+    def load(tag, key, dst, nbytes, after=None, off=0):
         return g.node(f"Load_{tag}", ctx.dm, "__snax_bingo_kernel_idma_1d_copy",
-                      SnaxBingoKernelIdma1dCopyArgs(h[key], dst, nbytes), after)
+                      SnaxBingoKernelIdma1dCopyArgs(at_offset(h[key], off), dst, nbytes), after)
 
-    def xload(tag, key, dst, nbytes, after=None):
+    def xload(tag, key, dst, nbytes, after=None, off=0):
         """Same transfer on the xDMA hart instead of the DM core's iDMA."""
         return g.node(f"Load_{tag}", ctx.xdma, "__snax_bingo_kernel_xdma_1d_copy",
-                      SnaxBingoKernelXdma1dCopyArgs(h[key], dst, nbytes), after)
+                      SnaxBingoKernelXdma1dCopyArgs(at_offset(h[key], off), dst, nbytes), after)
 
 
     # The loads are chained: one iDMA engine, and serialising them here keeps the graph's
@@ -842,12 +992,21 @@ def _build_head(ctx, cfg, c, h_all, buf):
                    SnaxBingoKernelSimdFaSoftmaxArgs(
                        s16[0].view(64), p8[0], arena[q],
                        bc=cfg.bc, dhead=cfg.dhead, tile_idx=0, seed_state=0,
-                       geom_mode=SnaxBingoKernelSimdFaSoftmaxArgs.GEOM_PROLOGUE))
+                       geom_mode=SnaxBingoKernelSimdFaSoftmaxArgs.GEOM_PROLOGUE,
+                       score_scale=cfg.exp_scale, p_mode=_P_MODE,
+                       p8_pitch=cfg.p8_pitch))
             for q in range(cfg.nq)]
 
-    # Q is the query tile: fixed for the whole run, loaded once.
-    ld_q = [load(f"Q{q}", "b", q8[q], cfg.n * cfg.k * cfg.mesh_col * cfg.tile_size, [warm_gemm])
-            for q in range(cfg.nq)]
+    # Q is the query tile: fixed for the whole run, loaded once. Query tile q is its own
+    # slice of this cluster's Q -- NQ tiles of one head, not NQ copies of one tile.
+    QBYTES = cfg.n * cfg.k * cfg.mesh_col * cfg.tile_size
+    if _resident(cfg):
+        # Already here: the "load" of each query tile is whatever produced the port.
+        q8[:] = [at_offset(h["b"], q * QBYTES) for q in range(cfg.nq)]
+        ld_q = [tuple(_flat(h["q_ends"]))] * cfg.nq
+    else:
+        ld_q = [load(f"Q{q}", "b", q8[q], QBYTES, [warm_gemm], off=q * QBYTES)
+                for q in range(cfg.nq)]
     # No Czero load: with the C channels masked the score matmul never reads this buffer,
     # which keeps 64 KiB of zeros off the head of the chain, in front of QK(0).
     # O starts at zero: the O matmul sets take_in_new_c, so every output block starts from
@@ -914,7 +1073,7 @@ def _build_head(ctx, cfg, c, h_all, buf):
                 perf=perf, load=load, xload=xload)
 
 
-def _build_cluster(ctx, cfg, c, h_all, m_all, rowsum_all, buf, bcast=None,
+def _build_cluster(ctx, cfg, c, h_all, m_all, l_all, buf, bcast=None,
                    all_bufs=None, verify=True):
     """The KV-tile pipeline and this cluster's own checks, on top of _build_head.
 
@@ -930,7 +1089,7 @@ def _build_cluster(ctx, cfg, c, h_all, m_all, rowsum_all, buf, bcast=None,
     h = _shard_handles(h_all, c)
     # numpy goldens, for the check tolerances only; absent when verify is off.
     m = m_all[c] if m_all is not None else None
-    rowsum = rowsum_all[c] if rowsum_all is not None else None
+    l_gold = l_all[c] if l_all is not None else None
     arena, k8, q8, v8 = buf["arena"], buf["k8"], buf["q8"], buf["v8"]
     cz, s16, p8, oacc = buf["cz"], buf["s16"], buf["p8"], buf["oacc"]
 
@@ -981,12 +1140,25 @@ def _build_cluster(ctx, cfg, c, h_all, m_all, rowsum_all, buf, bcast=None,
     # cluster that has not been built yet. Closed in build().
     pending_k, pending_v = [], []
     TOTAL = cfg.nkv_per * cfg.nq          # this cluster's shard, not the whole KV axis
+    res = _resident(cfg)
+
+    # Where tile j's K and V are read from: the streaming double buffer, or -- resident --
+    # the tile's own slice of the bound operand.
+    def kbuf(j):
+        return at_offset(h["a"], j * KBYTES) if res else k8[j % cfg.nkbuf]
+
+    def vbuf(j):
+        return at_offset(h["v"], j * VBYTES) if res else v8[j % cfg.nvbuf]
+
     for i in range(TOTAL + 1):
         if i < TOTAL:
             j, q = divmod(i, cfg.nq)
             bcast_this_k = (bcast is not None and cfg.bcast_k and not cfg.k_pull_from_cl0
                             and not (cfg.bcast_skip_first and j == 0))
-            if q == 0 and bcast is not None and cfg.k_push_all:
+            if q == 0 and res:
+                # RESIDENT: tile j is a slice of the bound K; its "load" is the producer.
+                ld_k.append(tuple(_flat(h["k_ends"])))
+            elif q == 0 and bcast is not None and cfg.k_push_all:
                 # One host task delivers this tile's K into all four clusters' k8. Built on
                 # cluster 0's pass only -- like the broadcast, and for the same reason: the
                 # node order is load-bearing, so the producer must appear where the operand
@@ -996,7 +1168,8 @@ def _build_cluster(ctx, cfg, c, h_all, m_all, rowsum_all, buf, bcast=None,
                     bcast["k"][j] = g.node(
                         f"PushK{j}", ctx.host, "__host_bingo_kernel_idma_multi",
                         HostBingoKernelIdmaMultiArgs(
-                            [(h_all["a"][0], bf["k8"][j % cfg.nkbuf]) for bf in all_bufs],
+                            [(at_offset(h_all["a"][0], j * KBYTES), bf["k8"][j % cfg.nkbuf])
+                             for bf in all_bufs],
                             KBYTES),
                         k_after, cluster=0)
                 ld_k.append(bcast["k"].get(j))
@@ -1007,17 +1180,19 @@ def _build_cluster(ctx, cfg, c, h_all, m_all, rowsum_all, buf, bcast=None,
                 if j < cfg.pull_skip_first:
                     # Every cluster reads this tile itself. xload, not load: K lives on the
                     # xDMA in the steady state and moving it to the iDMA would put it behind V.
-                    n = xload(f"K{j}", "a", k8[j % cfg.nkbuf], KBYTES, k_after)
+                    n = xload(f"K{j}", "a", k8[j % cfg.nkbuf], KBYTES, k_after, off=j * KBYTES)
                     if c == own:
                         bcast["ksrc"][j] = n
                 elif c == own:
                     if cfg.k_push_owner:
                         n = g.node(f"PushK{j}_c{c}", ctx.host,
                                    "__host_bingo_kernel_idma",
-                                   HostBingoKernelIdmaArgs(h["a"], k8[j % cfg.nkbuf], KBYTES),
+                                   HostBingoKernelIdmaArgs(at_offset(h["a"], j * KBYTES),
+                                                           k8[j % cfg.nkbuf], KBYTES),
                                    k_after, cluster=0)
                     else:
-                        n = xload(f"K{j}", "a", k8[j % cfg.nkbuf], KBYTES, k_after)
+                        n = xload(f"K{j}", "a", k8[j % cfg.nkbuf], KBYTES, k_after,
+                                  off=j * KBYTES)
                     bcast["ksrc"][j] = n
                 else:
                     # Under rotation the owner may be a cluster built LATER, so its node can be
@@ -1054,8 +1229,8 @@ def _build_cluster(ctx, cfg, c, h_all, m_all, rowsum_all, buf, bcast=None,
                     bcast["k"][j] = g.node(
                         f"BcastK{j}", ctx.xdma, "__snax_bingo_kernel_xdma_multicast",
                         SnaxBingoKernelXdmaMulticastArgs(
-                            h_all["a"][0], [bf["k8"][j % cfg.nkbuf] for bf in all_bufs],
-                            KBYTES),
+                            at_offset(h_all["a"][0], j * KBYTES),
+                            [bf["k8"][j % cfg.nkbuf] for bf in all_bufs], KBYTES),
                         k_after)
                 # Under BCAST_SPREAD a cluster built LATER owns some tiles, so the node
                 # can be missing here. Leave a hole and let build() close it once every
@@ -1071,15 +1246,19 @@ def _build_cluster(ctx, cfg, c, h_all, m_all, rowsum_all, buf, bcast=None,
                 # Into the buffer every query tile of step j-2 has finished with, so it
                 # waits for the LAST of them. Before tile 2 there is nothing but Q.
                 k_after = ld_q if j < cfg.nkbuf else [qk[(j - cfg.nkbuf + 1) * cfg.nq - 1]]
-                ld_k.append(load(f"K{j}", "a", k8[j % cfg.nkbuf], KBYTES, k_after))
-            if q == 0 and bcast is not None and cfg.bcast_v:
+                ld_k.append(load(f"K{j}", "a", k8[j % cfg.nkbuf], KBYTES, k_after,
+                                 off=j * KBYTES))
+            if q == 0 and res:
+                ld_v.append(tuple(_flat(h["v_ends"])))
+            elif q == 0 and bcast is not None and cfg.bcast_v:
                 if c == _bcast_owner(cfg, j, cfg.bcast_v_skew):
                     v_after = list(ld_az) if j < cfg.nvbuf \
                         else [pv[(j - cfg.nvbuf + 1) * cfg.nq - 1]]
                     bcast["v"][j] = g.node(
                         f"BcastV{j}", ctx.xdma, "__snax_bingo_kernel_xdma_multicast",
                         SnaxBingoKernelXdmaMulticastArgs(
-                            h_all["v"], [bf["v8"][j % cfg.nvbuf] for bf in all_bufs], VBYTES),
+                            at_offset(h_all["v"][0], j * VBYTES),
+                            [bf["v8"][j % cfg.nvbuf] for bf in all_bufs], VBYTES),
                         v_after)
                 ld_v.append(bcast["v"].get(j))
             elif q == 0:
@@ -1107,9 +1286,9 @@ def _build_cluster(ctx, cfg, c, h_all, m_all, rowsum_all, buf, bcast=None,
                     # still this cluster's L1, reached by absolute address.
                     if j % 2 == 0:
                         nxt = j + 1
-                        pairs = [(h["v"], v8[j % cfg.nvbuf])]
+                        pairs = [(at_offset(h["v"], j * VBYTES), v8[j % cfg.nvbuf])]
                         if nxt < cfg.nkv_per:
-                            pairs.append((h["v"], v8[nxt % cfg.nvbuf]))
+                            pairs.append((at_offset(h["v"], nxt * VBYTES), v8[nxt % cfg.nvbuf]))
                         ld_v.append(g.node(f"LoadV{j}_{nxt}_c{c}", ctx.host,
                                            "__host_bingo_kernel_idma_multi",
                                            HostBingoKernelIdmaMultiArgs(pairs, VBYTES),
@@ -1120,7 +1299,8 @@ def _build_cluster(ctx, cfg, c, h_all, m_all, rowsum_all, buf, bcast=None,
                 elif j in cfg.v_push_tiles:
                     ld_v.append(g.node(f"LoadV{j}_c{c}", ctx.host,
                                        "__host_bingo_kernel_idma",
-                                       HostBingoKernelIdmaArgs(h["v"], v8[j % cfg.nvbuf], VBYTES),
+                                       HostBingoKernelIdmaArgs(at_offset(h["v"], j * VBYTES),
+                                                               v8[j % cfg.nvbuf], VBYTES),
                                        v_after, cluster=0))
                 elif bcast is not None and cfg.v_pull_from_cl0:
                     # HEADPAR, V PULLED: cluster 0 reads main memory, the rest read
@@ -1131,17 +1311,20 @@ def _build_cluster(ctx, cfg, c, h_all, m_all, rowsum_all, buf, bcast=None,
                     if j < cfg.pull_skip_first:
                         # Same as K: the leading tiles have nothing to overlap their second
                         # hop, so every cluster reads them itself. V stays on the iDMA.
-                        n = load(f"V{j}", "v", v8[j % cfg.nvbuf], VBYTES, v_after)
+                        n = load(f"V{j}", "v", v8[j % cfg.nvbuf], VBYTES, v_after,
+                                 off=j * VBYTES)
                         if c == own:
                             bcast["vsrc"][j] = n
                     elif c == own:
                         if cfg.v_push_owner:
                             n = g.node(f"PushV{j}_c{c}", ctx.host,
                                        "__host_bingo_kernel_idma",
-                                       HostBingoKernelIdmaArgs(h["v"], v8[j % cfg.nvbuf], VBYTES),
+                                       HostBingoKernelIdmaArgs(at_offset(h["v"], j * VBYTES),
+                                                               v8[j % cfg.nvbuf], VBYTES),
                                        v_after, cluster=0)
                         else:
-                            n = load(f"V{j}", "v", v8[j % cfg.nvbuf], VBYTES, v_after)
+                            n = load(f"V{j}", "v", v8[j % cfg.nvbuf], VBYTES, v_after,
+                                     off=j * VBYTES)
                         bcast["vsrc"][j] = n
                     else:
                         # wait for cluster 0's copy of THIS tile as well as our own WAR edge
@@ -1171,9 +1354,11 @@ def _build_cluster(ctx, cfg, c, h_all, m_all, rowsum_all, buf, bcast=None,
                     # while the broadcasts landed is the one that PASSED. Under headpar the
                     # iDMA is free anyway -- it carries only Q, not K -- so this costs
                     # nothing and keeps the receiving xDMAs clear.
-                    ld_v.append(load(f"V{j}", "v", v8[j % cfg.nvbuf], VBYTES, v_after))
+                    ld_v.append(load(f"V{j}", "v", v8[j % cfg.nvbuf], VBYTES, v_after,
+                                     off=j * VBYTES))
                 else:
-                    ld_v.append(xload(f"V{j}", "v", v8[j % cfg.nvbuf], VBYTES, v_after))
+                    ld_v.append(xload(f"V{j}", "v", v8[j % cfg.nvbuf], VBYTES, v_after,
+                                      off=j * VBYTES))
 
             # SAME-CORE EDGES ARE NOT REDUNDANT -- do not "optimise" them away.
             #
@@ -1193,7 +1378,7 @@ def _build_cluster(ctx, cfg, c, h_all, m_all, rowsum_all, buf, bcast=None,
             if q != 0:
                 deps = [qk[i - 1]]
             elif ld_k[j] is not None:
-                deps = [ld_k[j]]
+                deps = _flat(ld_k[j])
             else:
                 deps = []
                 pending_k.append((len(qk), j))
@@ -1202,16 +1387,23 @@ def _build_cluster(ctx, cfg, c, h_all, m_all, rowsum_all, buf, bcast=None,
             # broadcast moves K to the xDMA, which breaks that chain -- without this edge
             # QK(0) would be free to read a q8 the iDMA has not filled yet, and TCDM reads
             # X rather than faulting (SimInit="none"), which kills the hart silently.
-            if bcast is not None and j == 0:
-                deps.append(ld_q[q])
+            #
+            # RESIDENT operands need it on EVERY tile, not just the first. With streamed K
+            # the load chain puts every K(j) behind Q, so QK(j) inherits the wait; a
+            # resident K is ready the moment its producer finishes, and QK(1) -- whose
+            # only other edge is that producer -- was dispatched ahead of QK(0) and read
+            # a Q the pull had not written yet (MEASURED: llm_chain_4cluster cluster 2,
+            # where K lives in place, X in the running max two nodes later).
+            if (bcast is not None and j == 0) or res:
+                deps += _flat(ld_q[q])
             # WAR on the score buffer: QK(i) overwrites the tile SM(i-NSCORE) read.
             if i >= cfg.nscore_war:
                 deps.append(sm[i - cfg.nscore_war])
             qk.append(g.node(f"QK_{j}_{q}", ctx.gemm,
                              "__snax_bingo_kernel_gemm_fa_qk",
-                             SnaxBingoKernelGemmFaQkArgs(k8[j % cfg.nkbuf], q8[q], cz,
+                             SnaxBingoKernelGemmFaQkArgs(kbuf(j), q8[q], cz,
                                                          s16[i % cfg.nscore].view(64), cfg.m, cfg.k, cfg.n,
-                                                         perf_addr=perf),
+                                                         perf_addr=perf, d_shift=cfg.dshift),
                              deps))
 
             deps = [qk[i]]
@@ -1239,7 +1431,9 @@ def _build_cluster(ctx, cfg, c, h_all, m_all, rowsum_all, buf, bcast=None,
                                  # the prologue that programmed the CSRs in the first place.
                                  geom_mode=(SnaxBingoKernelSimdFaSoftmaxArgs.GEOM_PRIMED
                                             if i == 0 else
-                                            SnaxBingoKernelSimdFaSoftmaxArgs.GEOM_CSR_PRIMED)),
+                                            SnaxBingoKernelSimdFaSoftmaxArgs.GEOM_CSR_PRIMED),
+                                 score_scale=cfg.exp_scale, p_mode=_P_MODE,
+                                 p8_pitch=cfg.p8_pitch),
                              deps))
 
         if i >= 1:
@@ -1249,15 +1443,22 @@ def _build_cluster(ctx, cfg, c, h_all, m_all, rowsum_all, buf, bcast=None,
             deps = [sm[p]] if p == 0 else [sm[p], pv[p - 1]]
             if pq == 0:
                 if ld_v[pj] is not None:
-                    deps.append(ld_v[pj])
+                    deps += _flat(ld_v[pj])
                 else:
                     pending_v.append((len(pv), pj))
+            # Tile 0 starts O from nothing (C masked off, no read); every later tile reads
+            # O back through the C-path scaler with THIS tile's corr, which the softmax left
+            # in the beat after its row sum.
+            pbuf = p8[p % cfg.nscore]
             pv.append(g.node(f"PV_{pj}_{pq}", ctx.gemm,
                              "__snax_bingo_kernel_gemm_fa_pv",
-                             SnaxBingoKernelGemmFaPvArgs(v8[pj % cfg.nvbuf], p8[p % cfg.nscore],
-                                                         oacc[pq] if pj else 0, oacc[pq],
-                                                         cfg.s2_m, cfg.s2_k, cfg.s2_n,
-                                                         perf_addr=perf),
+                             SnaxBingoKernelGemmFaPvArgs(
+                                 vbuf(pj), pbuf, oacc[pq] if pj else 0, oacc[pq],
+                                 cfg.s2_m, cfg.s2_k, cfg.s2_n, perf_addr=perf,
+                                 flags=_PV_RESCALE if pj else _PV_KMAJOR,
+                                 corr_addr=(pbuf.view(SnaxBingoKernelSimdFaSoftmaxArgs.corr_offset(
+                                     cfg.bc, cfg.br, cfg.p8_pitch)) if pj else 0),
+                                 b_pitch=cfg.p8_pitch),
                              deps))
 
     # The array counters, printed once per cluster. Anchored on the last PV so it cannot
@@ -1294,10 +1495,11 @@ def _build_cluster(ctx, cfg, c, h_all, m_all, rowsum_all, buf, bcast=None,
         # The tolerances are derived from the goldens themselves rather than fixed, because an
         # absolute tolerance means nothing without a magnitude: one FP16 step at a score of
         # 1000 is 1.0, and at 0.5 it is 0.0005. m is a max of converted integers and is
-        # expected exact, so two steps is already slack; rowsum accumulates Bc terms in FP32
-        # and narrows once, so it gets four.
+        # expected exact, so two steps is already slack. l is the RUNNING sum: every tile
+        # adds a row sum narrowed from FP32 and rescales the old value by an FP16 corr from
+        # the hardware exponential, so it gets eight steps.
         tol_m = float(2 * np.max(np.spacing(m.astype(np.float16))))
-        tol_s = float(4 * np.max(np.spacing(rowsum.astype(np.float16))))
+        tol_s = float(8 * np.max(np.spacing(np.abs(l_gold).astype(np.float16))))
         if cfg.debug_loose_ml:
             # DEBUG ONLY. m and rowsum are the FIRST checks dispatched, and a failing host
             # kernel breaks the scheduler loop (bingo_api.c:906), so one bad m costs the other
@@ -1343,20 +1545,22 @@ def _build_cluster(ctx, cfg, c, h_all, m_all, rowsum_all, buf, bcast=None,
         ck_m = checks.check_fp16(ctx, f"Check_m_c{c}", golden=h["m"], got=l3_m,
                                  elems=cfg.br, tol=tol_m, after=st_m, label=f"fa_m_c{c}")
 
-        # rsum lives in the LAST tile's p8 buffer, straight after its P beats, because that is
-        # where the fused pass's contiguous output stream puts it -- not in the arena.
-        l3_rs = BingoMemAlloc(f"out_fa_rowsum_c{c}", size=64, mem_level=MemLevel.L3)
-        st_rs = host(f"Store_rowsum_c{c}", "__host_bingo_kernel_idma",
-                     HostBingoKernelIdmaArgs(p8[(cfg.nkv_per * cfg.nq - 1) % cfg.nscore].view((cfg.bc // 2) * 64),
-                                             l3_rs, 64), [last, ck_m])
-        ck_rs = checks.check_fp16(ctx, f"Check_rowsum_c{c}", golden=h["rowsum"], got=l3_rs,
+        # l is the arena's RUNNING sum, committed by the last softmax -- NOT the row sum in the
+        # last tile's p8 buffer, which is one tile's contribution. The two agree only when a
+        # shard has one tile, or when every tile is the same one.
+        l3_rs = BingoMemAlloc(f"out_fa_l_c{c}", size=64, mem_level=MemLevel.L3)
+        st_rs = host(f"Store_l_c{c}", "__host_bingo_kernel_idma",
+                     HostBingoKernelIdmaArgs(arena[cfg.nq - 1].view(lay["lrun"]), l3_rs, 64),
+                     [last, ck_m])
+        ck_rs = checks.check_fp16(ctx, f"Check_l_c{c}", golden=h["l"], got=l3_rs,
                                   elems=cfg.br, tol=tol_s, after=st_rs,
-                                  label=f"fa_rowsum_c{c}")
+                                  label=f"fa_l_c{c}")
 
-        # CHECK O. Without this the suite validates m and rowsum only, and both are per-tile
-        # quantities that are IDENTICAL on every tile here -- so neither covers the
-        # accumulation across KV tiles, which is the entire point of FlashAttention. O is the
-        # only checked value that depends on every tile having been folded in correctly.
+        # CHECK O. m and l cover the softmax statistics, but only O depends on P reaching PV
+        # in the right layout and on every tile's corr having rescaled the accumulator: the
+        # two things this pipeline got wrong for as long as its tiles were all identical and
+        # its maximum never moved. O is the only checked value that depends on every tile
+        # having been folded in correctly.
         #
         # It is also what makes a layout experiment trustworthy. The static-L1 work found a
         # write that lands past the end of fa_v8_1, and which buffer it damages depends on what
@@ -1398,7 +1602,10 @@ def _build_cluster(ctx, cfg, c, h_all, m_all, rowsum_all, buf, bcast=None,
         # xdma_1d_copy config across clusters
         "first_v": ld_v[0] if ld_v else None,
         "last_sm": last,
+        "sm": sm,
         "arena": arena[cfg.nq - 1],
+        # O per query tile; the checked one, like the checked arena, is the last.
+        "oacc": list(oacc),
         "p8_last": p8[(cfg.nkv_per * cfg.nq - 1) % cfg.nscore],
         "checks": ck_o,   # the tail of this shard's store->check chain
         "first_store": st_m,  # the head of it -- build() gates this on EVERY cluster
@@ -1419,7 +1626,7 @@ def _build_cluster(ctx, cfg, c, h_all, m_all, rowsum_all, buf, bcast=None,
         "pending_v": pending_v,
     }
 
-def fa_attention(ctx, cfg, h, m_all, rowsum_all, verify=True):
+def fa_attention(ctx, cfg, h, m_all, l_all, verify=True):
     """Four cluster pipelines, split either over KV or over the GQA group's query heads.
 
     Under DECOMP = "headpar" (the default) the four clusters hold four query heads of one
@@ -1461,7 +1668,7 @@ def fa_attention(ctx, cfg, h, m_all, rowsum_all, verify=True):
         # the same deferral the broadcast nodes already use.
         bcast = {"k": {}, "v": {}, "vsrc": {}, "vpull": [],
                  "ksrc": {}, "kpull": []}
-        shards = [_build_cluster(ctx, cfg, c, h, m_all, rowsum_all, bufs[c], bcast, bufs,
+        shards = [_build_cluster(ctx, cfg, c, h, m_all, l_all, bufs[c], bcast, bufs,
                                  verify=verify)
                   for c in cfg.clusters]
 
@@ -1550,7 +1757,7 @@ def fa_attention(ctx, cfg, h, m_all, rowsum_all, verify=True):
         # answer for its own query head. The per-shard checks are the whole verification.
         return shards
 
-    shards = [_build_cluster(ctx, cfg, c, h, m_all, rowsum_all, bufs[c], verify=verify)
+    shards = [_build_cluster(ctx, cfg, c, h, m_all, l_all, bufs[c], verify=verify)
               for c in cfg.clusters]
     g = ctx.at(0)
 
@@ -1639,17 +1846,28 @@ class FlashAttention(Block):
     four independent per-cluster blocks back to back would be a different schedule. What
     crosses the boundary is still explicit: the outputs below are per-cluster ports.
 
-      in   q   queries, B-layout int8. [clusters*Br, d] under headpar (one query head per
-               cluster, stacked), [Br, d] under kvsplit (one head, shared).
-           k   keys,    A-layout int8. [clusters*Bc, d] under kvsplit (disjoint KV shards,
-               stacked), [Bc, d] under headpar (one KV head, shared -- that IS the GQA
-               relation, not a simplification).
-           v   values,  A-layout int8. [Bc, d], shared either way.
+      in   q   queries, A(Q) int8 -- byte-identical to B(Q^T), which is what the score
+               matmul reads. NQ query tiles per head: [NQ*Br, d] per head, heads stacked
+               under headpar (one per cluster), one head shared under kvsplit.
+           k   keys, A(K) int8, T = nkv_per KV tiles per shard: [T*Bc, d] per shard,
+               shards stacked under kvsplit (disjoint), shared under headpar (one KV head
+               for the group -- that IS the GQA relation, not a simplification).
+           v   values, the PV matmul's A operand V_t^T per KV tile, stacked vertically:
+               A([T*d, Bc]) per shard, split exactly like k.
 
-      out  o_c{c}    cluster c's accumulator, INT32, in the D port's SCATTER layout
-                     ("d32"), living in that cluster's L1.
+           With cfg.operand_level = L1 the three become RESIDENT per-cluster ports
+           q_c{c} / k_c{c} / v_c{c}, each that cluster's slice already in its own L1 --
+           placed there by whatever produced it -- and the pipeline reads them in place.
+
+      out  o_c{c}    cluster c's accumulator O^T [d, Br], INT32, in the D port's SCATTER
+                     layout ("d32"), living in that cluster's L1 (o_c{c}_q{q} for NQ > 1).
            m_c{c}    cluster c's running max   -- kvsplit with >1 cluster only.
            l_c{c}    cluster c's running sum   -- likewise.
+
+    THE ANSWER IS ATTENTION, EXACTLY THE ONLINE-SOFTMAX RECURRENCE. P reaches PV in its B
+    layout (the softmax's INTERLEAVE quantiser), and every tile after the first rescales O
+    by its corr on the C read path (Int32ColumnScale) before adding P.V -- so O is
+    sum_t exp(a*(m_t - m)) * V_t^T.P_t^T in INT32, with P scaled by 127. See shard_golden.
 
     WHY THE OUTPUT STAYS WHERE IT IS. There is no gather here. Under headpar there is
     nothing to fold: each cluster owns a different query head and its O is final. Under
@@ -1659,8 +1877,8 @@ class FlashAttention(Block):
     and explicitly in L1, so a consumer cannot mistake a partial for a result.
 
     THE PARTIAL IS THE TRIPLE (m, l, O), and it is three ports because that is three
-    buffers: the running max lives in the softmax arena, the running sum in the last score
-    buffer, the accumulator in its own region. `fa_gather` folds the first two in the
+    buffers: the running max and the running sum in the softmax arena, the accumulator in
+    its own region. `fa_gather` folds the first two in the
     fabric; scaling and summing the O_c is the caller's, and it needs the m* the fold
     returns.
 
@@ -1689,8 +1907,9 @@ class FlashAttention(Block):
     build calls `comm.transfer` to close the gap where it can (hoisting from the memory
     chiplet, converting the layout in one xDMA pass) or refuses with the reason.
 
-    The GOLDENS (m, rowsum, o) are constructor arguments, not ports: they are verification
-    data and never flow between blocks.
+    The GOLDENS (m, l, o and the numpy m_np / l_np the tolerances are derived from) are
+    constructor arguments, not ports: they are verification data and never flow between
+    blocks.
     """
     name = "flash_attention"
 
@@ -1728,39 +1947,59 @@ class FlashAttention(Block):
 
     @property
     def _split(self) -> dict:
-        """How many cluster-sized tiles each input holds. 1 means every cluster reads it."""
+        """How many cluster-sized slices each input holds. 1 means every cluster reads it."""
         ncl = self.cfg.ncl
         if self.cfg.decomp == "headpar":
             return {"q": ncl, "k": 1, "v": 1}
-        return {"q": 1, "k": ncl, "v": 1}
+        return {"q": 1, "k": ncl, "v": ncl}
+
+    def _tile_shapes(self) -> dict:
+        """One CLUSTER's slice of each operand, as a matrix in its declared layout.
+
+            q   A(Q)            [NQ*Br, d]    query tile q = rows [q*Br, (q+1)*Br)
+            k   A(K)            [T*Bc, d]     KV tile t    = rows [t*Bc, (t+1)*Bc)
+            v   A(V_t^T) stack  [T*d, Bc]     KV tile t    = rows [t*d, (t+1)*d) = V_t^T
+
+        Every tile is CONTIGUOUS in all three, which is what lets a per-tile load be one
+        1-D copy and a resident operand be read in place: an A layout keeps a run of
+        whole row-blocks together. V is the one that needs a word. The PV matmul consumes
+        V_t^T as its A operand, and A(V^T) of the whole sequence would scatter a tile across
+        every row-block -- so the port stacks the per-tile transposes vertically instead,
+        which is an ordinary A layout of an ordinary [T*d, Bc] matrix.
+        """
+        c = self.cfg
+        return {"q": (c.nq * c.br, c.dhead),
+                "k": (c.nkv_per * c.bc, c.dhead),
+                "v": (c.nkv_per * c.dhead, c.bc)}
 
     @property
     def inputs(self) -> dict:
-        cfg, sp = self.cfg, self._split
+        cfg, sp, sh = self.cfg, self._split, self._tile_shapes()
+        docs = {"q": "queries, A(Q) == B(Q^T), the score matmul's B",
+                "k": "keys, A(K), KV tile t = rows [t*Bc, (t+1)*Bc)",
+                "v": "values, A(V_t^T) per KV tile, stacked"}
+        if _resident(cfg):
+            # RESIDENT: one port per cluster, in that cluster's L1 -- exactly the slice
+            # its pipeline reads, placed there by whatever produced it.
+            return {f"{nm}_c{c}": PortSpec(Layout.A, DType.I8, sh[nm],
+                                           mem_level=MemLevel.L1, cluster=c,
+                                           doc=f"{docs[nm]}, cluster {c}'s slice")
+                    for c in cfg.clusters for nm in ("q", "k", "v")}
         # `operand_level` IS WHERE THE CALLER KEEPS Q, K AND V -- main memory on one
         # platform, the memory-chiplet pool on another. It is stated rather than resolved
         # because it is a property of how the workload staged its data, which no
         # neighbouring block can tell it. Where this block's own engines read is
         # `_reads_from` below, and the gap between the two is what build() hoists.
-        return {
-            "q": PortSpec(Layout.B, DType.I8, (cfg.br * sp["q"], cfg.dhead),
-                          mem_level=cfg.operand_level,
-                          doc=("one query head per cluster, stacked"
-                               if sp["q"] > 1 else "one query head, shared")),
-            "k": PortSpec(Layout.A, DType.I8, (cfg.bc * sp["k"], cfg.dhead),
-                          mem_level=cfg.operand_level,
-                          doc=("one disjoint KV shard per cluster, stacked"
-                               if sp["k"] > 1 else "one KV head, shared")),
-            "v": PortSpec(Layout.A, DType.I8, (cfg.bc, cfg.dhead),
-                          mem_level=cfg.operand_level,
-                          doc="values, shared by every cluster"),
-        }
-
+        return {nm: PortSpec(Layout.A, DType.I8, (sh[nm][0] * sp[nm], sh[nm][1]),
+                             mem_level=cfg.operand_level,
+                             doc=docs[nm] + (", one slice per cluster, stacked"
+                                             if sp[nm] > 1 else ", shared"))
+                for nm in ("q", "k", "v")}
 
     # The level this block's own transfers read from. The per-tile loads are cluster iDMA
     # and xDMA reads of main memory, so an operand has to have reached L3 by the time they
     # run; anything further out is hoisted once in the prologue rather than fetched per
-    # tile across the D2D link.
+    # tile across the D2D link. A RESIDENT operand is read where it lies.
     _reads_from = "L3"
 
     @property
@@ -1772,24 +2011,27 @@ class FlashAttention(Block):
         hands to transfer.bring_in, and the difference between the two is exactly the
         hoist this block emits for itself.
         """
+        if _resident(self.cfg):
+            return self.inputs
         return {nm: replace(spec, mem_level=self._reads_from)
                 for nm, spec in self.inputs.items()}
 
     @property
     def outputs(self) -> dict:
         cfg = self.cfg
-        outs = {f"o_c{c}": PortSpec(Layout.D32, DType.I32, (cfg.br, cfg.dhead),
+        outs = {}
+        for c in cfg.clusters:
+            for q in range(cfg.nq):
+                nm = f"o_c{c}" if cfg.nq == 1 else f"o_c{c}_q{q}"
+                outs[nm] = PortSpec(Layout.D32, DType.I32, (cfg.br, cfg.dhead),
                                     mem_level=MemLevel.L1, cluster=c,
-                                    doc=f"cluster {c} accumulator, D-port scatter, NOT "
-                                        f"un-permuted and NOT gathered")
-                for c in cfg.clusters}
+                                    doc=f"cluster {c} accumulator O^T [d, Br], D-port "
+                                        f"scatter, NOT un-permuted and NOT gathered")
         if cfg.decomp == "kvsplit" and cfg.ncl > 1:
-            # THE PARTIALS ARE OUTPUTS BECAUSE THE FOLD IS NOT PART OF THIS BLOCK, and
-            # they are TWO ports rather than one because that is what they physically are:
-            # the running max lives in the softmax arena and the running sum in the last
-            # score buffer, written by different kernels into different allocations. The
-            # single contiguous FP32 (m, l) the junction folds does not exist until the
-            # gather's pack builds it, so one port here would name a buffer nothing wrote.
+            # THE PARTIALS ARE OUTPUTS BECAUSE THE FOLD IS NOT PART OF THIS BLOCK. Both
+            # live in the softmax arena of the last query tile: the running max and the
+            # running sum the softmax commits after every tile. The single contiguous FP32
+            # (m, l) the junction folds does not exist until the gather's pack builds it.
             for c in cfg.clusters:
                 outs[f"m_c{c}"] = PortSpec(Layout.ROW_MAJOR, DType.F16, (1, cfg.br),
                                            mem_level=MemLevel.L1, cluster=c,
@@ -1798,45 +2040,44 @@ class FlashAttention(Block):
                 outs[f"l_c{c}"] = PortSpec(Layout.ROW_MAJOR, DType.F16, (1, cfg.br),
                                            mem_level=MemLevel.L1, cluster=c,
                                            doc=f"cluster {c} running sum over its KV "
-                                               f"shard, in the last score buffer")
+                                               f"shard, in the softmax arena")
         return outs
 
-    def _shard_handles(self, ctx, bound):
+    def _shard_handles(self, bound):
         """Slice each bound operand into the per-cluster handles the builders want.
 
         A shared operand is the SAME handle for every cluster, by identity -- which is
         what the loads already use to decide that one transfer serves all four, so
         sharing stays a property of the binding rather than a flag.
         """
-        cfg, sp, eb = self.cfg, self._split, 1          # int8 operands
+        cfg, sp, sh = self.cfg, self._split, self._tile_shapes()
         out = {}
-        for nm, tile_rows in (("q", cfg.br), ("k", cfg.bc), ("v", cfg.bc)):
+        for nm in ("q", "k", "v"):
+            if _resident(cfg):
+                ports = [bound[f"{nm}_c{c}"] for c in cfg.clusters]
+                out[nm] = [p.handle for p in ports]
+                out[f"{nm}_ends"] = [tuple(p.ends) for p in ports]
+                continue
             h = bound[nm].handle
             if sp[nm] == 1:
                 out[nm] = [h] * cfg.ncl
             else:
-                step = tile_rows * cfg.dhead * eb
+                step = sh[nm][0] * sh[nm][1]           # int8: one cluster's slice, in bytes
                 out[nm] = [at_offset(h, c * step) for c in cfg.clusters]
         return out
 
     def build(self, ctx: Ctx, bound: dict) -> BlockResult:
-        cfg, sp = self.cfg, self._split
+        cfg, sp, sh = self.cfg, self._split, self._tile_shapes()
 
         # THE SHAPE IS STATED TWICE -- once by the cfg, once by whatever got bound -- so
         # check the two agree rather than trusting either. Composition is exactly where
-        # they drift, because the block upstream decides what it emits. The bound q and k
-        # are the WHOLE tensors now, so divide out the split before comparing tiles.
-        derived = FaCfg.from_ports(
-            q=(bound["q"].shape[0] // sp["q"], bound["q"].shape[1]),
-            k=(bound["k"].shape[0] // sp["k"], bound["k"].shape[1]),
-            mesh=cfg.mesh, nkv=cfg.nkv, nq=cfg.nq, clusters=cfg.clusters,
-            decomp=cfg.decomp, score_shift_extra=cfg.score_shift_extra)
-        if (derived.m, derived.n, derived.k) != (cfg.m, cfg.n, cfg.k):
-            raise ValueError(
-                f"the bound ports say (Bc, Br, d) = ({derived.bc}, {derived.br}, "
-                f"{derived.dhead}) but this block was configured for ({cfg.bc}, "
-                f"{cfg.br}, {cfg.dhead}). Configure it from the producer's output shape, "
-                f"or bind an operand that matches.")
+        # they drift, because the block upstream decides what it emits.
+        for nm, spec in self.inputs.items():
+            if tuple(bound[nm].shape) != tuple(spec.shape):
+                raise ValueError(
+                    f"flash_attention.{nm}: bound {tuple(bound[nm].shape)} but this block "
+                    f"was configured for {tuple(spec.shape)} ({spec.doc}). Configure it "
+                    f"from the producer's output shape, or bind an operand that matches.")
 
         # CLOSE THE LAYOUT / PRECISION / LOCATION GAPS BEFORE BUILDING ANYTHING. When the
         # producer already emits what this block declared, `bring_in` returns the port
@@ -1850,39 +2091,50 @@ class FlashAttention(Block):
             bound[nm], pre = port, pre + nodes
 
         g = self.goldens or {}
-        sh_h = self._shard_handles(ctx, bound)
-        h_all = {"a": sh_h["k"], "b": sh_h["q"], "v": sh_h["v"][0],
-                 "zero": g.get("zero"), "m": g.get("m"),
-                 "rowsum": g.get("rowsum"), "o": g.get("o")}
+        sh_h = self._shard_handles(bound)
+        h_all = {"a": sh_h["k"], "b": sh_h["q"], "v": sh_h["v"],
+                 "q_ends": sh_h.get("q_ends"), "k_ends": sh_h.get("k_ends"),
+                 "v_ends": sh_h.get("v_ends"),
+                 "m": g.get("m"), "l": g.get("l"), "o": g.get("o")}
 
         before = set(ctx.dfg.nodes())
-        shards = fa_attention(ctx, cfg, h_all, g.get("m_np"), g.get("rowsum_np"),
+        shards = fa_attention(ctx, cfg, h_all, g.get("m_np"), g.get("l_np"),
                               verify=self.verify)
         mine = [n for n in ctx.dfg.nodes() if n not in before]
 
-        # The ENDS of an input port are the nodes that first read it. With q and k now one
-        # tensor each, a per-cluster operand's ends are every cluster's first read of its
-        # own slice -- the same set of nodes as before, differently grouped.
+        # The ENDS of an input port are the nodes that first read it: a load when the
+        # block fetches, the first matmul when the operand is resident.
         outs, ins = {}, {}
-        ld = {"q": [], "k": [], "v": []}
+        ld = {"q": {}, "k": {}, "v": {}}
         want = self.outputs
         lay = SnaxBingoKernelSimdFaSoftmaxArgs.layout(cfg.bc, cfg.dhead)
         for c, shd in enumerate(shards or []):
-            outs[f"o_c{c}"] = Port(want[f"o_c{c}"], shd["arena"],
-                                   (shd["pv"][-1],), name=f"o_c{c}")
+            # O is the accumulator PV writes -- fa_oacc32 -- and it is complete when the
+            # last PV has retired, not when the last softmax has.
+            for q in range(cfg.nq):
+                nm = f"o_c{c}" if cfg.nq == 1 else f"o_c{c}_q{q}"
+                outs[nm] = Port(want[nm], shd["oacc"][q], (shd["pv"][-1],), name=nm)
             if f"m_c{c}" in want:
                 # Named at the OFFSETS the stores already use, so the ports and the checks
                 # cannot point at different bytes.
                 outs[f"m_c{c}"] = Port(want[f"m_c{c}"], shd["arena"].view(lay["mrun"]),
-                                       (shd["sm"][-1],) if shd.get("sm") else
-                                       (shd["pv"][-1],), name=f"m_c{c}")
-                outs[f"l_c{c}"] = Port(want[f"l_c{c}"],
-                                       shd["p8_last"].view((cfg.bc // 2) * 64),
-                                       (shd["pv"][-1],), name=f"l_c{c}")
-            for nm, key in (("q", "ld_q"), ("k", "ld_k"), ("v", "ld_v")):
-                ld[nm] += [n for n in shd[key] if n is not None]
+                                       (shd["last_sm"],), name=f"m_c{c}")
+                outs[f"l_c{c}"] = Port(want[f"l_c{c}"], shd["arena"].view(lay["lrun"]),
+                                       (shd["last_sm"],), name=f"l_c{c}")
+            first = {"q": shd["ld_q"], "k": shd["ld_k"], "v": shd["ld_v"]}
+            if _resident(cfg):
+                first = {"q": [shd["qk"][0]], "k": [shd["qk"][0]], "v": [shd["pv"][0]]}
+            for nm in ("q", "k", "v"):
+                ld[nm][c] = _flat(*first[nm])
         for nm in ("q", "k", "v"):
-            ins[nm] = Port(self.inputs[nm], bound[nm].handle, tuple(ld[nm]), name=nm)
+            if _resident(cfg):
+                for c in cfg.clusters:
+                    key = f"{nm}_c{c}"
+                    ins[key] = Port(self.inputs[key], bound[key].handle, tuple(ld[nm][c]),
+                                    name=key)
+            else:
+                ins[nm] = Port(self.inputs[nm], bound[nm].handle,
+                               tuple(n for c in cfg.clusters for n in ld[nm][c]), name=nm)
 
         srcs = [n for n in mine if ctx.dfg.in_degree(n) == 0]
         return BlockResult(outputs=outs, inputs=ins, nodes=pre + mine, sources=srcs,

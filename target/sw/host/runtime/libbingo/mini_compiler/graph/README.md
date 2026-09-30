@@ -7,15 +7,10 @@ from [`../passes/`](../passes/), which is why this directory can be read on its 
 |---|---|
 | `bingo_dfg.py` | `BingoDFG` itself: nodes, edges, handles, and `bingo_compile_dfg`, which runs the passes in order. The class is assembled from mixins, so this file is mostly the graph API and the compile driver. |
 | `bingo_node.py` | `BingoNode`: a kernel, its args, and the (chiplet, cluster, core) it is placed on. Also the dependency-tag fields the descriptor pass fills in. |
-| `bingo_mem_handle.py` | How a node names memory: `BingoMemAlloc` (an allocation), `BingoMemAllocView` (a byte offset into one), `BingoMemSymbol` (a C variable), `BingoMemFixedAddr` (an absolute address). |
+| `bingo_utils.py` | `DiGraphWrapper`, the typed networkx graph `BingoDFG` derives from, and `install_package`. |
 
-## Why there are four handle types
-
-Because where a buffer lives is decided by the *platform*, not the workload. A config with
-a memory chiplet stages its arrays into `mempool.bin` and addresses them absolutely; a
-config without one emits them as C arrays and addresses them by symbol. Code that offsets
-a handle has to handle all four or it works on one platform and silently reads the wrong
-tile on the other — see `at_offset` in `libs/comm/ports.py`.
+How a node names memory -- the handle types -- and where a workload's arrays are placed live in
+[`../mem/`](../mem/).
 
 ## The mixin split
 

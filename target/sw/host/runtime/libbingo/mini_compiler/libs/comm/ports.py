@@ -97,6 +97,25 @@ from bingo_mem_handle import (BingoMemAlloc, BingoMemAllocView,
 #           and no pair of strides expresses it -- it needs the xDMA transposer kernels,
 #           which are correct only at elem_bytes=1. comm/nest.py refuses it by name.
 #
+# "a_row"   ONE token's GEMV operand, the A layout cut to what the GEMV reads. The one-row
+#           GEMV walks an A operand one 8-byte word per 4-value block -- rows 0 and 1 of the
+#           block, of which the array takes row 0 -- so the other 56 bytes of every block are
+#           never read. a_row keeps that word only: value c at (c // 4) * 8 + c % 4, the
+#           upper 4 bytes of each word zero. A [1, K] row is 2 K bytes instead of the A
+#           layout's 16 K, still read as one aligned word per block (the GEMV's A stride is
+#           8 instead of 64). A producer packs it once with a 2-D copy (4-byte runs, 8 bytes
+#           apart), and every consumer loads it with a plain 1-D copy. Several tokens are
+#           rows 2 K bytes apart, one GEMV group each.
+#
+# "b_w4"    INT4 WEIGHTS for the one-row GEMV (dtype i4, two to a byte). B's converter widens
+#           the LOW half of a B beat, nibble i to byte i, and a (1, 4, 32) pass takes two
+#           16-column blocks at one k -- so those two blocks must sit together in the low
+#           half. b_w4 is the B layout in blocks of 32 columns, nibble-packed (snax
+#           util/layout.py to_b_pairs + pack_int4): per pair of 16-column blocks, per k, the
+#           first block's 32 bytes then the second's, one 64-byte run a pass. Still n-major,
+#           so any run of whole 32-column pairs is a byte slice of it, K * n / 2 bytes; a
+#           nibble has no byte address, so there is no index map and no layout conversion.
+#
 # "d32"     The D port's INT32 SCATTER, and a DIFFERENT bijection from "D" -- which is the
 #           whole reason it has its own name rather than being "D with wider elements".
 #
@@ -196,7 +215,9 @@ class Layout(_Vocab):
     """How a matrix is ordered in memory. See the reference above for the index maps."""
 
     A = "A", "operand A of the GEMM: (m, k, r, s)"
+    A_ROW = "a_row", "one token's GEMV operand: of each A block only the 8-byte word the GEMV reads"
     B = "B", "operand B of the GEMM: (n, k, c, s) -- runs down COLUMNS, so converting is a transpose"
+    B_W4 = "b_w4", "INT4 GEMV weights: the B layout in 32-column pairs, nibble-packed"
     D = "D", "the GEMM output: (m, n, r, c)"
     ROW_MAJOR = "row_major", "plain row-major, what everything outside the array uses"
     COL_MAJOR = "col_major", "the same values stored [cols, rows]: what a per-row reduction wants"
@@ -208,6 +229,7 @@ class DType(_Vocab):
     """The precision of an element. Changing it needs a scale, so it is never automatic."""
 
     I8 = "i8", "signed 8-bit, the GEMM's operand precision"
+    I4 = "i4", "signed 4-bit, two to a byte: GEMV weights through B's INT4 converter"
     F16 = "f16", "half precision, what the SIMD computes in"
     I32 = "i32", "signed 32-bit, the GEMM's accumulator"
     F32 = "f32", "single precision, what the fabric junctions fold in"
@@ -234,6 +256,8 @@ class MemLevel(_Vocab):
     L2 = "L2", "the narrow SPM, where the descriptor list lives. Not an operand's home"
     L3 = "L3", "main memory (the host's wide SPM). Where a block's loads read from"
     L4 = "L4", "the memory-chiplet pool, off-die over the D2D link. Host iDMA reaches it"
+    HBM = "HBM", ("the memory chiplet's HBM, off-die over the D2D link. Weights live here; "
+                  "a block streams them straight into L1 on the cluster iDMA")
 
 
 # ======================================================================================
@@ -384,10 +408,10 @@ def level_of(handle) -> str:
     """Which memory level a handle addresses. Derived, never guessed.
 
     An allocation carries its level; a view carries its base's. A SYMBOL is a C array in
-    the workload image, which is main memory by construction. A FIXED ADDRESS cannot be
-    derived -- it is a number, and nothing in the handle records which pool it points at --
-    so it is refused rather than guessed: assuming would put a hoist in front of an operand
-    that may already be in main memory.
+    the workload image, which is main memory by construction. A FIXED ADDRESS is derived
+    only when whoever placed the data recorded the pool on it (the staging helper does, for
+    the memory chiplet and its HBM); a bare number is refused rather than guessed:
+    assuming would put a hoist in front of an operand that may already be in main memory.
     """
     if isinstance(handle, BingoMemAllocView):
         return handle.base.mem_level
@@ -395,18 +419,19 @@ def level_of(handle) -> str:
         return handle.mem_level
     if isinstance(handle, BingoMemSymbol):
         return "L3"
+    if isinstance(handle, BingoMemFixedAddr) and handle.mem_level is not None:
+        return handle.mem_level
     raise ValueError(
         f"cannot tell which memory level a {type(handle).__name__} addresses, so the "
-        f"PortSpec has to say. A fixed address is just a number: the staging helper emits "
-        f"one for the memory-chiplet pool, but the handle does not record that, and "
-        f"assuming it would put a hoist in front of an operand that may already be in "
-        f"main memory.")
+        f"PortSpec has to say. A fixed address built without a mem_level is just a "
+        f"number, and assuming one would put a hoist in front of an operand that may "
+        f"already be in main memory.")
 
 
 def _derive(handle):
     """(level, cluster) off a handle, or None for whichever cannot be told.
 
-    A FIXED ADDRESS is just a number and records neither, which is why `level_of` refuses
+    A FIXED ADDRESS built without a level records neither, which is why `level_of` refuses
     it; here that refusal means "nothing to check against", not an error, because a spec
     stating the level is the only way such a handle can be used at all.
     """
@@ -450,9 +475,10 @@ def at_offset(handle, nbytes: int):
     if isinstance(handle, BingoMemAllocView):
         return BingoMemAllocView(handle.base, handle.offset + nbytes)
     if isinstance(handle, BingoMemSymbol):
-        return BingoMemSymbol(handle.symbol_name, handle.offset + nbytes)
+        return BingoMemSymbol(handle.symbol_name, handle.offset + nbytes,
+                              chip_id=getattr(handle, "chip_id", None))
     if isinstance(handle, BingoMemFixedAddr):
-        return BingoMemFixedAddr(handle.address + nbytes)
+        return BingoMemFixedAddr(handle.address + nbytes, mem_level=handle.mem_level)
     raise TypeError(f"cannot offset a {type(handle).__name__}; add it to at_offset().")
 
 

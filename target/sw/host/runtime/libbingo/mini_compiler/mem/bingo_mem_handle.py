@@ -86,6 +86,12 @@ class BingoMemAllocView:
         self.base = base
         self.offset = offset
 
+    def view(self, offset: int):
+        """A view of this view: the same allocation, the offsets added. Lets a buffer that
+        is itself a sub-region (two P buffers nested in one allocation) be addressed the
+        way a whole allocation is."""
+        return BingoMemAllocView(self.base, self.offset + offset)
+
     def __repr__(self):
         return f"BingoMemAllocView(base='{self.base.name}', offset={self.offset})"
 
@@ -93,26 +99,41 @@ class BingoMemSymbol:
     """
     Represents an existing C variable (symbol) that provides the address.
     """
-    def __init__(self, symbol_name: str, offset: int = 0):
+    def __init__(self, symbol_name: str, offset: int = 0, chip_id: int = None):
         """
         :param symbol_name: Name of the C variable/symbol.
         :param offset: Byte offset to add to the symbol address.
+        :param chip_id: None (the default): the symbol on the chip that RUNS the kernel,
+            `chiplet_addr_transform(&sym)`. A chip id: that chip's copy of the symbol,
+            `chiplet_addr_transform_full(chip, &sym)` -- every chip runs the same image, so
+            a static array sits at the same local address on each, and this is how one
+            chip reads what another staged in its own L3.
         """
         self.symbol_name = symbol_name
         self.offset = offset
+        self.chip_id = chip_id
 
     def __repr__(self):
         parts = [f"name='{self.symbol_name}'"]
         if self.offset != 0:
             parts.append(f"offset={self.offset}")
+        if self.chip_id is not None:
+            parts.append(f"chip=0x{self.chip_id:02x}")
         return f"BingoMemSymbol({', '.join(parts)})"
 
 class BingoMemFixedAddr:
     """
     Represents an absolute memory address provided as a hex/int value.
+
+    `mem_level` optionally records which pool the address is in ("L4" for the memory
+    chiplet's SRAM, "HBM" for its HBM). A bare number cannot say, so the creator that
+    placed the data -- the staging helper -- states it, and a port bound to the address
+    can then check its spec against it instead of taking the spec on trust.
     """
-    def __init__(self, address: int):
+    def __init__(self, address: int, mem_level: str = None):
         self.address = address
+        self.mem_level = mem_level
 
     def __repr__(self):
-        return f"BingoMemFixedAddr(addr=0x{self.address:x})"
+        lvl = f", level='{self.mem_level}'" if self.mem_level else ""
+        return f"BingoMemFixedAddr(addr=0x{self.address:x}{lvl})"

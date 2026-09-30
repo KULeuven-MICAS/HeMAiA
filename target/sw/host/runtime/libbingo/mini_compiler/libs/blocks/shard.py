@@ -5,7 +5,7 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 """Splitting a tensor across clusters and putting the pieces back, as two blocks.
 
-WHY THESE ARE BLOCKS. Every other block in libs/block runs on ONE cluster: its kernels
+WHY THESE ARE BLOCKS. Every other block in libs/blocks runs on ONE cluster: its kernels
 address its own TCDM and its ports say so. A layer that wants a row-independent operator
 on four clusters therefore writes four of them, and these two blocks are the ends that
 make that a graph -- one fans the rows out, one brings them back. They are ordinary

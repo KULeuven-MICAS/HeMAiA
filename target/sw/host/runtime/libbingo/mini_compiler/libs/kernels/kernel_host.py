@@ -307,6 +307,40 @@ class HostBingoKernelIdmaMultiArgs(BingoKernelArgs):
         return a
 
 
+class HostBingoKernelWeightPrefetchArgs(BingoKernelArgs):
+    """The weight prefetcher (host_kernel_lib.h): the memory chiplet's iDMA PUSHES every
+    streamed weight chunk into per-cluster L3 rings, then a flag per chunk, as fast as the
+    clusters release slots. Built by libs/blocks/linear.py WeightRings; see there."""
+    KERNEL_NAME = "__host_bingo_kernel_weight_prefetch"
+
+    def __init__(self, sched_addr, ring_addr, flag_addr, release_addr, seq_addr, rec_addr,
+                 rec_slots: int, n_rings: int, n_slots: int, slot_bytes: int, memchip_id: int,
+                 batch: int = 1, policy: int = 0):
+        if not 1 <= n_rings <= 4:
+            raise ValueError(f"n_rings={n_rings}: 1..4")
+        if not 1 <= batch <= n_slots:
+            raise ValueError(f"batch={batch}: 1..n_slots ({n_slots})")
+        if policy not in (0, 1):
+            raise ValueError(f"policy={policy}: 0 (rings in turn) or 1 (fewest chunks first)")
+        self.sched_addr, self.ring_addr, self.flag_addr = sched_addr, ring_addr, flag_addr
+        self.release_addr, self.seq_addr, self.rec_addr = release_addr, seq_addr, rec_addr
+        self.rec_slots, self.n_rings, self.n_slots = int(rec_slots), int(n_rings), int(n_slots)
+        self.slot_bytes, self.memchip_id, self.batch = int(slot_bytes), int(memchip_id), int(batch)
+        self.policy = int(policy)
+
+    def get_struct_name(self) -> str:
+        return "__host_bingo_kernel_weight_prefetch_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        for f in ("sched_addr", "ring_addr", "flag_addr", "release_addr", "seq_addr", "rec_addr"):
+            self._process_addr(getattr(self, f), f, a, handle_name_map, split_64bit=False,
+                               as_64bit=True)
+        for f in ("rec_slots", "n_rings", "n_slots", "slot_bytes", "memchip_id", "batch", "policy"):
+            a[f] = str(getattr(self, f))
+        return a
+
+
 class HostBingoKernelIdmaArgs(BingoKernelArgs):
     def __init__(self,
                  src_addr: Union[BingoMemAlloc, int],

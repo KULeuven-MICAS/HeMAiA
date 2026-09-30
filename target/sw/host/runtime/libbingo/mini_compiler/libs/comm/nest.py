@@ -58,6 +58,11 @@ def index_map(layout: str, rows: int, cols: int, mesh: tuple) -> np.ndarray:
         m, r = divmod(r_i, mr)
         k, s = divmod(c_i, ts)
         return ((m * (cols // ts) + k) * mr + r) * ts + s
+    if layout == "a_row":
+        # a row per token: value c of row r at r * 2 cols + (c // tileSize) * 8 + c % tileSize,
+        # each word's upper half zero
+        k, s = divmod(c_i, ts)
+        return r_i * 2 * cols + k * 8 + s
     if layout == "B":
         # (n, k, c, s): col = n*meshCol + c, row = k*tileSize + s
         k, s = divmod(r_i, ts)
@@ -226,7 +231,7 @@ def convert_args(src_layout, dst_layout, rows, cols, mesh, elem_bytes, src, dst)
                 f"two BLOCKED layouts.\n"
                 f"Use a dedicated transposer kernel instead -- "
                 f"__snax_bingo_kernel_xdma_row_major_to_b and friends, via "
-                f"kernels/kernel_layout.py. They take the array shape as RUNTIME ARGS, so "
+                f"libs/kernels/kernel_layout.py. They take the array shape as RUNTIME ARGS, so "
                 f"one kernel covers every tiling including this one; the old per-shape "
                 f"wrappers (K2N32, K16N32, K8N16) are gone.\n"
                 f"What to expect on a (16, 4, 16) array: the transposer's FAST path needs "

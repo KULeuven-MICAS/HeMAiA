@@ -243,6 +243,8 @@ class BingoDFG(
         # tags supersede it. (Untagged mode has no counter-sharing mitigation.)
         # Add Dummy Set/Check Nodes
         self.bingo_transform_add_core_sequencing_edges()
+        if getattr(self, "prune_fanout", False):
+            self.bingo_transform_prune_redundant_fanout()
         self.bingo_transform_dfg_add_dummy_set_nodes()
         self.bingo_transform_dfg_add_dummy_check_nodes()
         self.bingo_visualize_dfg(

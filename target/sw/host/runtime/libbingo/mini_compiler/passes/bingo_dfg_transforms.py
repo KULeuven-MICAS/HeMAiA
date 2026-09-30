@@ -372,6 +372,67 @@ class BingoDFGTransformsMixin:
                   f"{len(core_groups)} core groups")
         return edges_added
 
+    def bingo_transform_prune_redundant_fanout(self) -> int:
+        """Drop the cross-core edges a core's own order already implies.
+
+        After bingo_transform_add_core_sequencing_edges every core's tasks are one chain.
+        So when a producer P feeds B1, B2, ... Bn on ANOTHER core of its chiplet, B2 .. Bn
+        are reachable from B1 through that chain, and P -> B2 .. P -> Bn say nothing
+        P -> B1 does not. Each of them would still cost a dummy set task on P's core and a
+        dependency tag live in the (P core, B core) cell until its drain; a pass of four
+        tokens fans each projection's last dequantisation out to 10-18 tasks of one DM core
+        and runs that cell past the 32 tags of a 5-bit DepTagWidth. Only P -> B1, the first
+        of them in the core's order, is kept.
+
+        The mirror case too: a consumer B waiting on A1 .. An of ONE core (a gather's
+        copies, one per source, all on the DM core) needs only the last of them, An; the
+        core finishes its tasks in order, so An done means every Ai done. Both apply on the
+        producer's own core as well, where the chain itself is the only edge kept.
+
+        Opt-in (dfg.prune_fanout): it changes every graph's task list.
+        Returns the number of edges removed."""
+        topo = {n: i for i, n in enumerate(nx.topological_sort(self))}
+        removed = 0
+        for b_ in list(self.nodes()):
+            groups: dict = {}
+            for a in self.predecessors(b_):
+                key = (a.assigned_chiplet_id, a.assigned_cluster_id, a.assigned_core_id)
+                if a.assigned_chiplet_id != b_.assigned_chiplet_id:
+                    continue
+                groups.setdefault(key, []).append(a)
+            for as_ in groups.values():
+                if len(as_) < 2:
+                    continue
+                as_.sort(key=lambda n: topo[n])
+                last = as_[-1]
+                for a in as_[:-1]:
+                    self.remove_edge(a, b_)
+                    if not nx.has_path(self, a, last):      # the chain must still hold
+                        self.add_edge(a, b_)
+                        continue
+                    removed += 1
+        for p_ in list(self.nodes()):
+            groups: dict = {}
+            for b in self.successors(p_):
+                key = (b.assigned_chiplet_id, b.assigned_cluster_id, b.assigned_core_id)
+                if b.assigned_chiplet_id != p_.assigned_chiplet_id:
+                    continue
+                groups.setdefault(key, []).append(b)
+            for bs in groups.values():
+                if len(bs) < 2:
+                    continue
+                bs.sort(key=lambda n: topo[n])
+                first = bs[0]
+                for b in bs[1:]:
+                    self.remove_edge(p_, b)
+                    if not nx.has_path(self, first, b):     # the chain must still hold
+                        self.add_edge(p_, b)
+                        continue
+                    removed += 1
+        if removed:
+            print(f"Fan-out pruning: removed {removed} cross-core edges the core order implies")
+        return removed
+
     def bingo_assign_normal_node_dep_check_info(self) -> None:
         """Assign the dep check info for normal and gating nodes."""
         # Iterate over all nodes in the graph
@@ -663,6 +724,12 @@ class BingoDFGTransformsMixin:
                             break
                     n_chains += 1
                 if n_chains > max_tags:
+                    import os as _os
+                    if _os.environ.get("BINGO_TAG_DEBUG"):
+                        heads = [a for a in range(n) if a not in has_pred]
+                        for a in heads:
+                            print(f"[tag-debug] chain head {edges[a][0].node_name} -> "
+                                  f"{edges[a][1].node_name}")
                     raise ValueError(
                         f"dep-tag allocation: cell {key} needs {n_chains} > {max_tags} "
                         f"concurrent tags (tag_width={tag_width}); reduce this cell's "

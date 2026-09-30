@@ -83,7 +83,7 @@ whether this block will run it. So the only way a block accepts another layout i
 OFFERING a variant that does, which is a promise its build() has to keep.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import replace, dataclass, field
 from typing import Callable, Optional, Sequence
 
 import networkx as nx
@@ -221,6 +221,7 @@ class Stage:
     variants: list = field(default_factory=list)
     chosen: Optional[Variant] = None
     result: Optional[BlockResult] = None
+    chiplet: Optional[int] = None                # None: the pipeline's own chip
 
     @property
     def block(self) -> Block:
@@ -298,13 +299,20 @@ class Pipeline:
 
     # ---- phase 1: connect --------------------------------------------------------------
 
-    def add(self, block: Block, name: str, bind: dict = None, **binds) -> Stage:
+    def add(self, block: Block, name: str, bind: dict = None, *, chiplet: int = None,
+            **binds) -> Stage:
         """Record a block and what feeds each of its inputs. Builds nothing.
 
         Inputs are bound by keyword -- `x=ref` -- or as a `bind` dict; both forms are the
         same thing, and the keyword form is there because a chain reads better without it.
         A bind value is a Ref from an earlier `add`, or a real Port for something the
         application built itself.
+
+        `chiplet` builds the block on another chip of a multi-chip graph (default: the
+        pipeline's ctx.chiplet). A PortSpec names a cluster, not a chip, so the contract
+        check cannot tell cluster 0 of two chips apart: binding an L1 port across chips is
+        the caller's error to avoid -- cross the chip boundary through L3 (a Stash into a
+        symbol on the producer's chip, a Fetch of that chip's symbol on the consumer's).
         """
         if self.ran:
             raise ValueError(
@@ -313,7 +321,7 @@ class Pipeline:
                 f"layouts that were chosen without it.")
         bind = dict(bind or {})
         bind.update(binds)
-        st = Stage(name=name, template=block, bind=bind)
+        st = Stage(name=name, template=block, bind=bind, chiplet=chiplet)
         self.stages.append(st)
         self.items.append(st)
         return st
@@ -534,7 +542,8 @@ class Pipeline:
                     f"{why}\n    The resolver chose this realisation, so a mismatch here "
                     f"means the block's declared ports and what it actually built "
                     f"disagree.")
-        ctx = self.ctx.scope(st.name)
+        ctx = self.ctx if st.chiplet is None else replace(self.ctx, chiplet=st.chiplet)
+        ctx = ctx.scope(st.name)
         res = blk.build(ctx, bound)
         for port, p in bound.items():
             dst = res.inputs.get(port)

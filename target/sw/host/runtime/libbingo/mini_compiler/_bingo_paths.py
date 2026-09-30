@@ -7,13 +7,16 @@
 
 The compiler's files are grouped by ROLE:
 
-    graph/      the DFG data model -- nodes, handles, the graph itself
-    kernels/    the kernel ABI: one args class per kernel, matching the C structs
+    graph/      the DFG data model -- nodes, the graph itself, its networkx base
+    mem/        where data lives: the memory handles a node's operands are, and the staging
+                that places a workload's arrays (host image, memory chiplet, HBM) and hands
+                back the handle for each
     passes/     what runs OVER an assembled graph: validate, transform, allocate dep tags,
                 place L1, emit C, report. Plus the analyses they use (liveness, the
                 packer, the hardware-manager model).
     platform/   the machine: core roles, cluster counts, transfer-size rules
-    libs/       reusable blocks built on top of all of it, and their linker
+    libs/       reusable blocks built on top of all of it, and their linker; and
+      kernels/  the kernel ABI: one args class per kernel, matching the C structs
     tests/
 
 Consumers still import them FLAT (``from bingo_dfg import BingoDFG``), because sixty-odd
@@ -29,7 +32,7 @@ import sys
 
 _THIS = os.path.dirname(os.path.abspath(__file__))
 
-for _s in ("graph", "kernels", "passes", "platform"):
+for _s in ("graph", "mem", os.path.join("libs", "kernels"), "passes", "platform"):
     _sub = os.path.join(_THIS, _s)
     if _sub not in sys.path:
         sys.path.append(_sub)

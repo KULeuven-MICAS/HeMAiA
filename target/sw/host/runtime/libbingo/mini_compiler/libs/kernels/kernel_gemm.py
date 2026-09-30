@@ -36,7 +36,17 @@ class SnaxBingoKernelGemmFullArgs(BingoKernelArgs):
                  output_zp_i: int = 0,
                  int32tofp16_enable: int = 0,
                  int4_a_enable: int = 0,
-                 int4_b_enable: int = 0):
+                 int4_b_enable: int = 0,
+                 d_shift: int = 0):
+        # d_shift is the D port's power-of-two output scale k: FP16 out = RNE(acc * 2^-k).
+        # An INT8 dot product of depth K reaches 127^2 * K and overflows FP16 -- to Inf,
+        # silently -- unless 127^2 * K <= 65,504 * 2^k.
+        if not 0 <= int(d_shift) <= 14:
+            raise ValueError(f"d_shift={d_shift}: the converter's k is 0..14")
+        if d_shift and not int32tofp16_enable:
+            raise ValueError("d_shift scales the INT32 -> FP16 conversion; it means nothing "
+                             "without int32tofp16_enable")
+        self.d_shift = int(d_shift)
         self.input_A_addr = input_A_addr
         self.input_B_addr = input_B_addr
         self.input_C_addr = input_C_addr
@@ -81,7 +91,98 @@ class SnaxBingoKernelGemmFullArgs(BingoKernelArgs):
         assignments["int32tofp16_enable"] = str(self.int32tofp16_enable)
         assignments["int4_a_enable"] = str(self.int4_a_enable)
         assignments["int4_b_enable"] = str(self.int4_b_enable)
+        assignments["d_shift"] = str(self.d_shift)
         return assignments
+
+
+class SnaxBingoKernelGemvArgs(BingoKernelArgs):
+    """The one-token GEMV on VersaCore's (1, 4, 32) shape (offload_hw_kernels/gemv.h).
+
+    One task runs `groups` GEMVs of depth K = 4 kt and width N = 16 nb:
+
+        y_g (1 x N, FP16) = RNE(x_g . W_g * 2^-d_shift)
+
+      A  x_g in ROW 0 of a 16-row A-layout operand -- the (16, 4, 16) A layout of a [16, K]
+         tensor, 16 K bytes -- at A + g * a_step (a_step 0: the groups share one x)
+      B  W_g in the (16, 4, 16) B layout, K * N bytes, the groups' blocks consecutive; with
+         w4, INT4 weights in the paired nibble-packed layout (Layout.B_W4), K * N / 2 bytes
+      D  y_g, FP16, a CONTIGUOUS row at D + g * 2 N -- not the D layout
+
+    The layouts are the GEMM shape's, so the weights are packed once for both shapes; the
+    GEMV reads B two 16-column blocks a pass (128 bytes, twice the GEMM shape's rate), or
+    one at half width when nb is odd. INT4 runs the same passes through B's converter, the
+    pair of blocks one 64-byte run of nibbles; nb must be even.
+    """
+
+    KERNEL_NAME = "__snax_bingo_kernel_gemv"
+    MESH = (16, 4, 16)          # the layouts A, B are in
+    DSHIFT_MAX = 14
+
+    def __init__(self, input_A_addr, input_B_addr, output_D_addr, K: int, N: int,
+                 d_shift: int, groups: int = 1, a_step: int = 0, a_blk: int = 64,
+                 w4: bool = False, b_step: int = None, d_step: int = None):
+        """a_blk: bytes between x's 4-value blocks -- 64 in the A layout, 8 in a_row.
+        w4: the weights are INT4 (Layout.B_W4). b_step, d_step: bytes between the groups' W
+        and y -- by default each group its own K x N weight and a 2 N-byte output; b_step 0
+        makes the groups tokens that share one W, d_step then the pitch of their rows."""
+        mr, ts, mc = self.MESH
+        if K % ts or N % mc or K <= 0 or N <= 0:
+            raise ValueError(f"gemv K={K}, N={N}: K must be a multiple of {ts} and N of "
+                             f"{mc}, the B layout's block.")
+        if not 0 <= int(d_shift) <= self.DSHIFT_MAX:
+            raise ValueError(f"d_shift={d_shift}: the converter's k is 0..14")
+        if int(a_blk) not in (8, 64):
+            raise ValueError(f"gemv a_blk={a_blk}: 64 (A layout) or 8 (a_row)")
+        if w4 and (N // mc) % 2:
+            raise ValueError(f"gemv w4 N={N}: INT4 weights come in pairs of {mc}-column "
+                             f"blocks, so N must be a multiple of {2 * mc}")
+        if groups < 1 or a_step < 0 or a_step % 64:
+            raise ValueError(f"gemv groups={groups}, a_step={a_step}: at least one group, "
+                             f"and the groups' A operands 64-B aligned apart")
+        self.input_A_addr, self.input_B_addr = input_A_addr, input_B_addr
+        self.output_D_addr = output_D_addr
+        self.K, self.N, self.d_shift = int(K), int(N), int(d_shift)
+        self.kt, self.nb = self.K // ts, self.N // mc
+        self.groups, self.a_step = int(groups), int(a_step)
+        self.a_blk = int(a_blk)
+        self.w4 = bool(w4)
+        own_w = self.K * self.N // (2 if self.w4 else 1)
+        self.b_step = own_w if b_step is None else int(b_step)
+        self.d_step = 2 * self.N if d_step is None else int(d_step)
+        if self.groups > 1 and self.d_step < 2 * self.N:
+            raise ValueError(f"gemv d_step={self.d_step}: the groups' outputs of {2 * self.N} "
+                             f"bytes would overlap")
+
+    @staticmethod
+    def shift_for_depth(K: int) -> int:
+        """The smallest k with 127^2 * K <= 65,504 * 2^k: the widest INT8 dot product of
+        depth K stays finite in FP16. 9 at K = 2,048 and 1,408, 10 at 2,816."""
+        k = 0
+        while 127 * 127 * K > 65504 * (1 << k):
+            k += 1
+        return k
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_gemv_args_t"
+
+    def get_c_field_assignments(self, handle_name_map):
+        a = {}
+        self._process_addr(self.input_A_addr, "input_A_addr", a, handle_name_map,
+                           split_64bit=False)
+        self._process_addr(self.input_B_addr, "input_B_addr", a, handle_name_map,
+                           split_64bit=False)
+        self._process_addr(self.output_D_addr, "output_D_addr", a, handle_name_map,
+                           split_64bit=False)
+        a["kt"] = str(self.kt)
+        a["nb"] = str(self.nb)
+        a["groups"] = str(self.groups)
+        a["a_step"] = str(self.a_step)
+        a["d_shift"] = str(self.d_shift)
+        a["a_blk"] = str(self.a_blk)
+        a["w4"] = "1" if self.w4 else "0"
+        a["b_step"] = str(self.b_step)
+        a["d_step"] = str(self.d_step)
+        return a
 
 # BINGO GEMM MINIMAL
 class SnaxBingoKernelGemmMinimalArgs(BingoKernelArgs):

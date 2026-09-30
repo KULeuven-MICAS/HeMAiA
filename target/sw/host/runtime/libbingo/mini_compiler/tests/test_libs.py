@@ -27,6 +27,7 @@ from bingo_mem_handle import BingoMemAlloc
 from bingo_liveness import collect_handle_users, reachability, can_share
 from libs import (Block, BlockResult, Ctx, DType, Layout, MemLevel, Pipeline, Port,
                   PortSpec, check_contract)
+from libs.blocks import record_spec
 
 FAILED = []
 
@@ -134,7 +135,7 @@ def shareable(ctx, x, y):
 # ---------------------------------------------------------------- the contract
 print("the contract")
 
-from libs.block import Reshape as _Reshape_ctor                          # noqa: E402
+from libs.blocks import Reshape as _Reshape_ctor                          # noqa: E402
 
 refuses("a dtype mismatch is refused, not converted",
         lambda: assemble(consumer=Consumer(dtype="f16")), "scale")
@@ -222,6 +223,56 @@ refuses("a handle that contradicts its spec is refused",
         lambda: Port(PortSpec("A", "i8", (32, 128), mem_level="L4"), _Sym("staged"), ()),
         "is in L3")
 
+# ------------------------------------------------ the memory chiplet's HBM
+# A fixed address the staging helper placed in the HBM RECORDS that, so it is checked
+# like an allocation: a spec calling it main memory is refused, and every offset into it
+# stays in the HBM.
+from libs.comm.ports import at_offset as _at, level_of as _level_of      # noqa: E402
+from libs.comm.transfer import plan as _plan                              # noqa: E402
+_hbm = _Fixed(0x1001_0000_0000, mem_level="HBM")
+check("an HBM address carries its level", _level_of(_hbm) == "HBM", _level_of(_hbm))
+check("...and a spec saying HBM binds to it",
+      Port(PortSpec("B", "i8", (2048, 64), mem_level="HBM"), _hbm, ()).spec.mem_level
+      == MemLevel.HBM)
+refuses("...while a spec saying L3 is refused",
+        lambda: Port(PortSpec("B", "i8", (2048, 64), mem_level="L3"), _hbm, ()), "is in HBM")
+_hbm2 = _at(_hbm, 128 * 1024)
+check("an offset into the HBM stays in the HBM",
+      _hbm2.address == 0x1001_0002_0000 and _level_of(_hbm2) == "HBM", repr(_hbm2))
+_lvl = PortSpec("B", "i8", (2048, 64), mem_level="HBM")
+check("HBM -> L1 is a block's own load: nothing to hoist",
+      _plan(_lvl, PortSpec("B", "i8", (2048, 64), mem_level="L1", cluster=0)) == [])
+refuses("HBM -> L3 is refused: a streamed weight is never hoisted",
+        lambda: _plan(_lvl, PortSpec("B", "i8", (2048, 64), mem_level="L3")), "HBM->L1")
+
+from libs.comm import add_sim_paths as _add_sim_paths                     # noqa: E402
+_add_sim_paths("common")
+import tempfile as _tempfile                                              # noqa: E402
+import numpy as _np                                                       # noqa: E402
+from bingo_data_staging import DataStaging as _DS                         # noqa: E402
+_plat = {"num_mem_chips": 1, "mem_chip_loc_x": 1, "mem_chip_loc_y": 0,
+         "hbm_base": 0x1_0000_0000, "hbm_size": 0x4_0000_0000}
+refuses("put_hbm on a platform without an HBM is refused",
+        lambda: _DS(dict(_plat, hbm_size=0)).put_hbm("w", _np.zeros(64, _np.int8)),
+        "no HBM")
+_st = _DS(_plat, on_host=True)
+_h0 = _st.put_hbm("w0", _np.arange(100, dtype=_np.int8))
+_h1 = _st.put_hbm("w1", _np.ones(64, dtype=_np.int8))
+check("the HBM base is the memory chiplet's, (1,0) -> chip 0x10",
+      _h0.address == 0x1001_0000_0000 and _h0.mem_level == "HBM", repr(_h0))
+check("...and every array starts on the 4 KiB interleave",
+      _h1.address == 0x1001_0000_1000, repr(_h1))
+check("on_host keeps put() in the host image, memory chiplet or not",
+      type(_st.put("x", "int8_t", _np.zeros(64, _np.int8))).__name__ == "BingoMemSymbol")
+with _tempfile.TemporaryDirectory() as _td:
+    _st.emit(_os.path.join(_td, "d.h"), _td)
+    _man = open(_os.path.join(_td, "build", "hbm", "manifest.txt")).read()
+    _img = open(_os.path.join(_td, "build", "hbm", "hbm_image.bin"), "rb").read()
+    check("emit writes the manifest the testharness loads",
+          "0x0  hbm_image.bin" in _man, _man)
+    check("...and the image holds each array at its offset",
+          _img[:100] == bytes(range(100)) and _img[0x1000:0x1040] == b"\x01" * 64)
+
 bad_shape = Consumer()
 bad_shape._spec = PortSpec("A", "i8", (64, 128), mem_level="L1", cluster=0)
 refuses("a shape mismatch is refused", lambda: assemble(consumer=bad_shape), "shape")
@@ -300,8 +351,8 @@ check("a clean pipeline reports no blocking node", blocked[("a", "b")] == [],
 
 # ------------------------------------------------------- the resolver
 print("\nthe resolver: boundaries from the neighbours")
-from libs.block import Reshape as _Reshape                               # noqa: E402
-from libs.block.simd.norm import RMSNorm as _RMSNorm                     # noqa: E402
+from libs.blocks import Reshape as _Reshape                               # noqa: E402
+from libs.blocks.simd.norm import RMSNorm as _RMSNorm                     # noqa: E402
 
 from libs.comm import variants_of                                        # noqa: E402
 
@@ -556,8 +607,8 @@ except ValueError:
 
 # ------------------------------------------------ connecting the norm straight to a GEMM
 print("\nno glue in between: the norm has to produce the operand itself")
-from libs.block import Linear as _Linear                                 # noqa: E402
-from libs.block import Quantize as _Quantize                             # noqa: E402
+from libs.blocks import Linear as _Linear                                 # noqa: E402
+from libs.blocks import Quantize as _Quantize                             # noqa: E402
 
 
 def _direct(rows, in_lay=Layout.ROW_MAJOR, glue=False):
@@ -760,7 +811,7 @@ except ValueError:
 # without writing and the destination keeps whatever it held -- X, on a buffer nothing else
 # touched -- so it surfaces as a wrong answer or an assertion somewhere unrelated.
 
-from libs.block import Gather, Quantize, RMSNorm, Scatter                # noqa: E402
+from libs.blocks import Gather, Quantize, RMSNorm, Scatter                # noqa: E402
 
 _pc = new_ctx()
 _l1_cl0 = _pc.at(0).l1("on_cl0", 32 * 128 * 2)
@@ -939,6 +990,410 @@ if _have_mpl:
               (_vctx.dfg.number_of_nodes(), _vctx.dfg.number_of_edges()) == _before)
 else:
     print("  SKIP  rendering (no matplotlib)")
+
+
+print("\nFlashAttention: the D-port shift and the P8 pitch")
+import numpy as _np                                                         # noqa: E402
+from libs.blocks import flash_attention as _fa                               # noqa: E402
+from sim_golden_models import int32_to_fp16_golden as _i2h                  # noqa: E402
+from bingo_kernel_args import (SnaxBingoKernelGemmFaQkArgs as _Qk,          # noqa: E402
+                               SnaxBingoKernelGemmFaPvArgs as _Pv,
+                               SnaxBingoKernelSimdFaSoftmaxArgs as _Sm)
+
+_rs = _np.random.RandomState(7)
+_xs = _np.concatenate([_rs.randint(-2**31 + 1, 2**31 - 1, 400, dtype=_np.int64),
+                       _rs.randint(-3_000_000, 3_000_000, 400, dtype=_np.int64),
+                       [0, 1, -1, 2047, 2049, 3001, 65504, 65519, 65520, 2_064_512]])
+check("the block's converter model is the RTL's RNE(S * 2^-k), bit for bit, k = 0..14",
+      all(int(_fa.d_port_f16(_xs, k).view(_np.uint16)[i]) == _i2h(int(x), k)
+          for k in range(15) for i, x in enumerate(_xs)))
+check("full-range INT8 at d = 128 needs k = 6: 128^2 * 128 is Inf at 5 and finite at 6",
+      _fa.min_score_shift(128) == 6
+      and not _fa.converted_score_finite(128 * 128 * 128, 5)
+      and _fa.converted_score_finite(128 * 128 * 128, 6))
+_cfg = _fa.FaCfg.from_shape(bc=64, br=32, dhead=128, nkv=4, clusters=(0,), decomp="kvsplit",
+                            score_scale=0.003)
+check("unset, the shift is the smallest safe one, and the softmax gets a' = a * 2^k",
+      _cfg.dshift == 6 and _cfg.exp_scale == float(_np.float32(0.003) * _np.float32(64.0)))
+check("...and synthetic operands go full range, where k = 0 had to shrink them to 5 bits",
+      _cfg.qshift == 0 and replace(_cfg, score_shift=0).qshift == 3)
+refuses("a shift past the converter's 14 is refused",
+        lambda: replace(_cfg, score_shift=15).validate(), "0..14")
+
+# THE SHIFT MOVES NO RESULT. On data that fits FP16 unshifted, k = 6 must give the same P
+# (hence l and O) and m exactly 2^-6 times the unshifted one: a power of two only moves the
+# exponent, and nothing the softmax does to the converted score is subnormal.
+_c0 = replace(_cfg, score_shift=0, nkv=2)
+_c6 = replace(_cfg, score_shift=6, nkv=2)
+_q = (_rs.randint(-128, 128, 32 * 128) >> 3).astype(_np.int8)
+_ks = [(_rs.randint(-128, 128, 64 * 128) >> 3).astype(_np.int8) for _ in range(2)]
+_vs = [(_rs.randint(-128, 128, 64 * 128) >> 3).astype(_np.int8) for _ in range(2)]
+_m0, _l0, _o0 = _fa.shard_golden(_c0, _q, _ks, _vs)
+_m6, _l6, _o6 = _fa.shard_golden(_c6, _q, _ks, _vs)
+check("the shift moves no result: m scales by exactly 2^-6, l and O are bit-identical",
+      _np.array_equal(_m6.astype(_np.float64), _m0.astype(_np.float64) / 64.0)
+      and _np.array_equal(_l6.view(_np.uint16), _l0.view(_np.uint16))
+      and _np.array_equal(_o6, _o0))
+
+# The P buffer on the pitch grid: P8 beats, then the row sum, then corr, one pitch apart.
+_bc, _br = 512, 32
+check("dense P8 is the old buffer: bc*br + row sum + corr",
+      _Sm.p8_bytes(_bc, _br, _Sm.EXACT) == _bc * _br + 128
+      and _Sm.corr_offset(_bc, _br) == _bc * _br + 64)
+check("at 160 B the row sum is one pitch after the last P8 beat, corr one after that",
+      _Sm.rowsum_offset(_bc, _br, 160) == 256 * 160
+      and _Sm.corr_offset(_bc, _br, 160) == 257 * 160
+      and _Sm.p8_bytes(_bc, _br, _Sm.EXACT, 160) == 257 * 160 + 64)
+_len = _Sm.p8_bytes(_bc, _br, _Sm.EXACT, 160)
+_b0 = {o + i for o in range(0, _len, 160) for i in range(64)}
+_b1 = {_fa.P8_NEST + b for b in _b0}
+check("two nested P buffers share no byte and fit the pair's region",
+      not (_b0 & _b1) and max(_b1) < _fa.P8_NEST + _len)
+refuses("nesting needs a pitch with room for the other buffer's block",
+        lambda: replace(_cfg, p8_pitch=128).validate(), "p8_nest")
+
+refuses("QK takes no B pitch (its B, Q^T, is dense)",
+        lambda: _Qk(0, 0, 0, 0, 1, 1, 1, b_pitch=160), "dense")
+refuses("PV takes no shift (it writes INT32)",
+        lambda: _Pv(0, 0, 0, 0, 1, 1, 1, d_shift=6), "int32")
+refuses("a QK shift past 14 is refused", lambda: _Qk(0, 0, 0, 0, 1, 1, 1, d_shift=15), "0..14")
+refuses("a P8 pitch below one beat is refused",
+        lambda: _Sm(0, 0, 0, bc=64, dhead=128, tile_idx=0, p8_pitch=32), "p8_pitch")
+
+
+print("\nRMSNorm: the scratch the host passes in instead of the kernel allocating it")
+from bingo_kernel_args import SnaxBingoKernelSimdRmsnormArgs as _Rn   # noqa: E402
+_ra = _Rn(0x1000, 0x2000, rows=32, cols=128, input_layout="row_major", output_layout="A",
+          out_i8=True, mesh=(16, 4, 16))
+check("row_major -> A at [32, 128]: the 21,056 B simd.h's pool is sized for",
+      _ra.scratch_bytes() == 21056)
+check("...and 4x the rows need 4x the bytes, past the pool: why [128, 128] malloc'd",
+      _Rn(0x1000, 0x2000, rows=128, cols=128, input_layout="row_major", output_layout="A",
+          out_i8=True, mesh=(16, 4, 16)).scratch_bytes() > 24576)
+_rc = _Rn(0x1040, 0x3000, rows=32, cols=128, input_layout="col_major",
+          output_layout="col_major", seed_addr=0x1000)
+check("col_major: one beat, with the slack to align it", _rc.scratch_bytes() == 127)
+check("no scratch passed: scratch_bytes 0, so the device keeps its own pool",
+      _rc.get_c_field_assignments({})["scratch_bytes"] == "0")
+_rc.scratch_addr = 0x4000
+check("a scratch passed: its size goes with it, for the device to check",
+      _rc.get_c_field_assignments({})["scratch_bytes"] == "127")
+
+
+print("\nLinear: the one-token GEMV, and weights streamed through double buffers")
+from bingo_kernel_args import SnaxBingoKernelGemvArgs as _Gv               # noqa: E402
+from libs.blocks import (Linear as _Lin, QuantizeARow as _QAR,                # noqa: E402
+                        RMSNormRow as _RNR, ScaleCols as _SC)
+from libs.blocks.linear import DEFAULT_W_CHUNK_BYTES as _WCB                  # noqa: E402
+
+check("the D-port shift for each of the layer's depths",
+      [_Gv.shift_for_depth(k) for k in (128, 512, 576, 1408, 2048, 2816)]
+      == [5, 7, 8, 9, 9, 10])
+
+
+def _gemv_chain(d_in=2048, d_out=768, w_level=MemLevel.HBM, **lin):
+    """RMSNormRow -> QuantizeARow -> Linear(gemv) -> ScaleCols, the decode projection."""
+    c = new_ctx()
+    x = Port(PortSpec(Layout.ROW_MAJOR, DType.F16, (1, d_in), mem_level=MemLevel.L3),
+             _Sym("x"), ())
+    w4 = lin.get("w_bits", 8) == 4
+    w = Port(PortSpec(Layout.B_W4 if w4 else Layout.B, DType.I4 if w4 else DType.I8,
+                      (d_in, d_out), mem_level=w_level),
+             _Fixed(0x1001_0000_0000, mem_level="HBM") if w_level == MemLevel.HBM
+             else _Sym("w"), ())
+    s = Port(PortSpec(Layout.ROW_MAJOR, DType.F16, (1, d_out), mem_level=MemLevel.L3),
+             _Sym("s"), ())
+    p = Pipeline(c, verbose=False, gate_sources=False)
+    n = p.add(_RNR(cols=d_in, cluster=1), "norm", x=x)
+    q = p.add(_QAR(cols=d_in, cluster=1, inv_scale_f32bits=0x42000000), "xa", x=n.out())
+    y = p.add(_Lin(tokens=1, d_in=d_in, d_out=d_out, mesh=(16, 4, 16), cluster=1,
+                   gemv=True, d_shift=9, **lin), "wq", x=q.out(), w=w)
+    p.add(_SC(cols=d_out, cluster=1), "deq", x=y.out(), s=s)
+    p.run()
+    return c.dfg, p
+
+
+_g, _p = _gemv_chain()
+_lin = _p.stages[2].result
+_ld, _ts = _lin.extra["loads"], _lin.extra["tasks"]
+check("768 columns at K = 2,048 stream as twelve 64-column chunks",
+      _lin.extra["chunks"] == [(64 * i, 64) for i in range(12)], _lin.extra["chunks"])
+check("...through two buffers, one load and one GEMV per chunk",
+      len(_lin.extra["w_bufs"]) == 2 and len(_ld) == 12 and len(_ts) == 12
+      and all(t.kernel_name == "__snax_bingo_kernel_gemv" for t in _ts))
+check("each GEMV waits for its own chunk's load (RAW)",
+      all(_g.has_edge(_ld[i], _ts[i]) for i in range(12)))
+check("...and for the GEMV before it: the last one implies them all",
+      all(_g.has_edge(_ts[i - 1], _ts[i]) for i in range(1, 12)))
+check("a load waits for the GEMV that last read its buffer (WAR)",
+      all(_g.has_edge(_ts[i - 2], _ld[i]) for i in range(2, 12))
+      and not any(_g.in_degree(_ld[i]) for i in range(2)))
+check("the buffers alternate",
+      [_ld[i].kernel_args.dst_addr is _lin.extra["w_bufs"][i % 2] for i in range(12)]
+      == [True] * 12)
+check("chunk i reads the weight 64 * 2,048 * i bytes in, still in the HBM",
+      all(_ld[i].kernel_args.src_addr.address == 0x1001_0000_0000 + i * 64 * 2048
+          and _ld[i].kernel_args.src_addr.mem_level == "HBM" for i in range(12)))
+check("...and writes its 64 fp16 outputs 128 * i bytes into the row",
+      all(_ts[i].kernel_args.output_D_addr.offset == 128 * i for i in range(12)))
+check("each GEMV is K = 2,048 x N = 64 at the asked shift",
+      all((t.kernel_args.kt, t.kernel_args.nb, t.kernel_args.d_shift) == (512, 4, 9)
+          for t in _ts))
+check("the quantised row feeds the FIRST GEMV",
+      _g.has_edge(_p.stages[1].result.outputs["y"].ends[0], _ts[0]))
+check("the dequantisation waits for the LAST GEMV",
+      _g.has_edge(_ts[-1], _p.stages[3].result.nodes[-1]))
+check("with the sources ungated the first two loads prefetch under the norm",
+      all(_g.in_degree(_ld[i]) == 0 for i in range(2)))
+_rn = _p.stages[0].result.nodes[-1].kernel_args
+check("the norm's seed beat sits directly below its x",
+      _rn.seed_addr is _rn.input_addr.base and _rn.input_addr.offset == 64)
+_qa = _p.stages[1].result
+check("the quantiser zeroes its 16-row operand on the xDMA first",
+      _qa.nodes[0].kernel_name == "__snax_bingo_kernel_xdma_memset"
+      and _qa.nodes[0].kernel_args.size == 16 * 2048
+      and _g.has_edge(_qa.nodes[0], _qa.nodes[1]))
+_mul = _p.stages[3].result.nodes[-1].kernel_args.get_c_field_assignments({})
+check("the dequantisation is the elementwise kernel with op MUL", _mul["op"] == "0", _mul)
+check("GEMV emits every field of its struct",
+      set(_ts[0].kernel_args.get_c_field_assignments({})) ==
+      {"input_A_addr", "input_B_addr", "output_D_addr", "kt", "nb", "groups", "a_step",
+       "d_shift", "a_blk", "w4", "b_step", "d_step"})
+
+_g3, _p3 = _gemv_chain(w_buffers=3)
+_l3 = _p3.stages[2].result.extra
+check("three buffers: a load waits for the GEMV three chunks back",
+      len(_l3["w_bufs"]) == 3 and all(_g3.has_edge(_l3["tasks"][i - 3], _l3["loads"][i])
+                                      for i in range(3, 12)))
+_gs, _ps = _gemv_chain(d_out=64)
+check("a weight that fits one chunk is loaded whole, one GEMV",
+      [n.node_name for n in _ps.stages[2].result.nodes] ==
+      ["wq_Ld_linear_w_cl1", "wq_Gemm_linear_cl1"], [n.node_name for n in
+                                                     _ps.stages[2].result.nodes])
+_gr, _pr = _gemv_chain(d_out=96, w_chunk_bytes=64 * 2048)
+check("a width that does not divide the chunk ends in a narrower chunk",
+      _pr.stages[2].result.extra["chunks"] == [(0, 64), (64, 32)])
+
+# INT4 weights (w_bits=4): half the bytes, the same passes, the GEMV told so.
+_g4, _p4 = _gemv_chain(w_bits=4)
+_l4 = _p4.stages[2].result.extra
+check("INT4: a 128 KiB chunk holds 128 columns at K = 2,048, so 768 stream as six",
+      _l4["chunks"] == [(128 * i, 128) for i in range(6)], _l4["chunks"])
+check("...chunk i reads 128 * 2,048 / 2 * i bytes in, 128 KiB each",
+      all(_l4["loads"][i].kernel_args.src_addr.address == 0x1001_0000_0000 + i * 128 * 1024
+          and _l4["loads"][i].kernel_args.size == 128 * 1024 for i in range(6)),
+      [(l.kernel_args.src_addr.address, l.kernel_args.size) for l in _l4["loads"]])
+check("...and every GEMV runs with w4 set, 128 columns (nb 8) at the same shift",
+      all((t.kernel_args.w4, t.kernel_args.nb, t.kernel_args.d_shift) == (True, 8, 9)
+          for t in _l4["tasks"]))
+check("...while an INT8 GEMV leaves it clear", not _ts[0].kernel_args.w4)
+check("...its weight port is b_w4 int4", _p4.stages[2].block.inputs["w"].layout == Layout.B_W4
+      and _p4.stages[2].block.inputs["w"].dtype == DType.I4)
+refuses("INT4 is the GEMV's: a GEMM with w_bits=4 is refused",
+        lambda: _Lin(tokens=16, d_in=64, d_out=64, mesh=(16, 4, 16), w_bits=4), "w_bits=4")
+refuses("INT4 comes in 32-column pairs: d_out = 48 is refused",
+        lambda: _Lin(tokens=1, d_in=64, d_out=48, mesh=(16, 4, 16), gemv=True, w_bits=4),
+        "pairs")
+refuses("the weights are 8 or 4 bits", lambda: _Lin(tokens=1, d_in=64, d_out=64,
+                                                    mesh=(16, 4, 16), gemv=True, w_bits=2),
+        "w_bits")
+
+# Several tokens on the one-row GEMV: one group per token over each shared chunk.
+def _gemv_tokens(T=4, d_in=2048, d_out=768, w_bits=4):
+    c = new_ctx()
+    x = Port(PortSpec(Layout.A_ROW, DType.I8, (T, d_in), mem_level=MemLevel.L3), _Sym("x8"), ())
+    w4 = w_bits == 4
+    w = Port(PortSpec(Layout.B_W4 if w4 else Layout.B, DType.I4 if w4 else DType.I8,
+                      (d_in, d_out), mem_level=MemLevel.HBM),
+             _Fixed(0x1001_0000_0000, mem_level="HBM"), ())
+    s = Port(PortSpec(Layout.ROW_MAJOR, DType.F16, (1, d_out), mem_level=MemLevel.L3),
+             _Sym("s"), ())
+    p = Pipeline(c, verbose=False, gate_sources=False)
+    y = p.add(_Lin(tokens=T, d_in=d_in, d_out=d_out, mesh=(16, 4, 16), cluster=1, gemv=True,
+                   d_shift=9, x_layout=Layout.A_ROW, w_bits=w_bits), "wq", x=x, w=w)
+    p.add(_SC(cols=d_out, cluster=1, rows=T), "deq", x=y.out(), s=s)
+    p.run()
+    return c.dfg, p
+
+
+_gt, _pt = _gemv_tokens()
+_lt = _pt.stages[0].result.extra
+_ts4 = _lt["tasks"]
+check("4 tokens: x is loaded whole, 4 a_rows of 4 KiB",
+      _pt.stages[0].result.nodes[0].kernel_args.size == 4 * 2 * 2048)
+check("...each chunk's GEMV runs 4 groups, a_row 4 KiB apart, the chunk shared (b_step 0)",
+      all((t.kernel_args.groups, t.kernel_args.a_step, t.kernel_args.b_step, t.kernel_args.a_blk)
+          == (4, 4096, 0, 8) for t in _ts4))
+check("...and writes chunk i's 128 columns into each token's row: 256 i bytes in, rows 1,536 apart",
+      all(t.kernel_args.output_D_addr.offset == 256 * i and t.kernel_args.d_step == 1536
+          for i, t in enumerate(_ts4)))
+_deq = [n for n in _pt.stages[1].result.nodes if n.kernel_name.endswith("stream_elementwise")]
+check("the dequantisation is one task per token row, chained, against one factor load",
+      len(_deq) == 4 and all(_gt.has_edge(_deq[i - 1], _deq[i]) for i in range(1, 4))
+      and sum(1 for n in _pt.stages[1].result.nodes if "idma" in n.kernel_name) == 1)
+refuses("several tokens need a_row (one aligned row each)",
+        lambda: _Lin(tokens=4, d_in=64, d_out=64, mesh=(16, 4, 16), gemv=True), "a_row")
+refuses("the GEMV's shape has one row: 16 tokens in the A layout",
+        lambda: _Lin(tokens=16, d_in=128, d_out=64, mesh=(16, 4, 16), gemv=True), "one row")
+refuses("the GEMV reads the (16, 4, 16) layouts",
+        lambda: _Lin(tokens=1, d_in=128, d_out=64, mesh=(1, 4, 32), gemv=True), "layouts")
+check("a weight may be handed over from the HBM",
+      MemLevel.HBM in {v["w_level"] for v in _Lin(tokens=1, d_in=128, d_out=64,
+                                                  mesh=(16, 4, 16), gemv=True).variants()})
+
+# A multi-row GEMM streamed in chunks: the chunk's columns of every m-block are a separate
+# D run, so each chunk is one task per m-block, chained.
+_cg = new_ctx()
+_xg = Port(PortSpec("A", "i8", (32, 2048), mem_level="L1", cluster=0),
+           _cg.at(0).l1("xg", 32 * 2048), ())
+_wg = Port(PortSpec("B", "i8", (2048, 256), mem_level="L3"), _Sym("wg"), ())
+_rg = _Lin(tokens=32, d_in=2048, d_out=256, mesh=(16, 4, 16), cluster=0,
+           x_level=MemLevel.L1, w_level=MemLevel.L3, d_shift=9).build(_cg, {"x": _xg, "w": _wg})
+_tg = _rg.extra["tasks"]
+check("a 2-m-block GEMM over 4 chunks is 8 gemm_full tasks, chained",
+      len(_tg) == 8 and all(_cg.dfg.has_edge(_tg[i - 1], _tg[i]) for i in range(1, 8)))
+check("...each one m-block of one chunk, at its D offset",
+      [(t.kernel_args.M, t.kernel_args.N, t.kernel_args.output_D_addr.offset)
+       for t in _tg[:2]] == [(1, 4, 0), (1, 4, 16 * 256 * 2)]
+      and _tg[2].kernel_args.output_D_addr.offset == 4 * 512)
+check("...and the shift rides every task", all(t.kernel_args.d_shift == 9 for t in _tg))
+
+# NOT streamed, nothing changes: the graph an existing layer builds is the one it built.
+_cn = new_ctx()
+_xn = Port(PortSpec("A", "i8", (32, 128), mem_level="L1", cluster=0),
+           _cn.at(0).l1("xn", 32 * 128), ())
+_wn = Port(PortSpec("B", "i8", (128, 128), mem_level="L3"), _Sym("wn"), ())
+_rn2 = _Lin(tokens=32, d_in=128, d_out=128, mesh=(16, 4, 16), cluster=0,
+            x_level=MemLevel.L1, w_level=MemLevel.L3).build(_cn, {"x": _xn, "w": _wn})
+check("a small weight: one load, one gemm_full over the whole matrix, the old names",
+      [(n.node_name, getattr(n.kernel_args, "M", None)) for n in _rn2.nodes] ==
+      [("Ld_linear_w_cl0", None), ("Gemm_linear_cl0", 2)],
+      [(n.node_name, getattr(n.kernel_args, "M", None)) for n in _rn2.nodes])
+check("...with k = 0 unless asked", _rn2.nodes[-1].kernel_args.d_shift == 0)
+
+
+# ======================================================================================
+# The whole-layer pieces: one stream per cluster, per-head groups, weights the router
+# picks, MLA attention, the route record.
+# ======================================================================================
+from libs.blocks import (CacheAppend as _CA, LoadStream as _LS, MlaAttention as _MA,       # noqa: E402
+                        MoeRoute as _MR, Pull as _Pull, QAssemble as _QA, SlotLoad as _SL,
+                        expert_table as _etab, record_bytes as _rbytes)
+import numpy as _np                                                                     # noqa: E402
+
+_cs = new_ctx()
+_ls = _LS(_cs, 0, nbytes=128 * 1024, nbuf=2)
+_ps = Pipeline(_cs, verbose=False, gate_sources=True)
+_xs = Port(PortSpec(Layout.A, DType.I8, (1, 2048), mem_level=MemLevel.L1, cluster=0),
+           _cs.at(0).l1("xs", 16 * 2048), ())
+_w1 = Port(PortSpec(Layout.B, DType.I8, (2048, 192), mem_level=MemLevel.HBM),
+           _Fixed(0x1001_0000_0000, mem_level="HBM"), ())
+_w2 = Port(PortSpec(Layout.B, DType.I8, (2048, 128), mem_level=MemLevel.HBM),
+           _Fixed(0x1001_1000_0000, mem_level="HBM"), ())
+_l1 = _ps.add(_Lin(tokens=1, d_in=2048, d_out=192, mesh=(16, 4, 16), cluster=0, gemv=True,
+                   stream=_ls), "p1", x=_xs, w=_w1)
+_l2 = _ps.add(_Lin(tokens=1, d_in=2048, d_out=128, mesh=(16, 4, 16), cluster=0, gemv=True,
+                   stream=_ls), "p2", x=_xs, w=_w2)
+_ps.run()
+_e1, _e2 = _l1.result.extra, _l2.result.extra
+check("a stream: two projections, 3 + 2 chunks, all through the stream's two slabs",
+      len(_e1["loads"]) == 3 and len(_e2["loads"]) == 2 and
+      [ld.kernel_args.dst_addr for ld in _e1["loads"] + _e2["loads"]] ==
+      [_ls.slabs[i % 2] for i in range(5)])
+check("...the next projection's first load waits for the task that last read ITS slab",
+      _cs.dfg.has_edge(_e1["tasks"][1], _e2["loads"][0])
+      and _cs.dfg.has_edge(_e1["tasks"][2], _e2["loads"][1]))
+check("...and a stream reports no sources, so gating never holds it behind a producer",
+      _l1.result.sources == [] and _l2.result.sources == []
+      and _cs.dfg.in_degree(_e1["loads"][0]) == 0)
+refuses("a chunk larger than the stream's slab is refused",
+        lambda: _LS(_cs, 1, nbytes=64 * 1024).take(65 * 1024), "slab")
+
+# groups: W_UK for 4 heads, 128 x 512 each, two heads a chunk
+_cg2 = new_ctx()
+_lsg = _LS(_cg2, 0)
+_xg2 = Port(PortSpec(Layout.A, DType.I8, (1, 4 * 128), mem_level=MemLevel.L1, cluster=0),
+            _cg2.at(0).l1("qn", 4 * 16 * 128), ())
+_wg2 = Port(PortSpec(Layout.B, DType.I8, (128, 4 * 512), mem_level=MemLevel.HBM),
+            _Fixed(0x1001_0000_0000, mem_level="HBM"), ())
+_rg2 = _Lin(tokens=1, d_in=128, d_out=512, mesh=(16, 4, 16), cluster=0, gemv=True, groups=4,
+            stream=_lsg, x_level=MemLevel.L1, w_level=MemLevel.HBM, d_shift=5).build(
+                _cg2, {"x": _xg2, "w": _wg2})
+_tk = [t.kernel_args for t in _rg2.extra["tasks"]]
+check("groups: 4 heads of 64 KiB stream as 2 chunks of 2 heads",
+      _rg2.extra["chunks"] == [(0, 1024), (1024, 1024)])
+check("...each GEMV 2 groups, a_step one 16-row operand, A and D advanced by 2 heads",
+      [(k.groups, k.a_step, k.nb, getattr(k.input_A_addr, "offset", 0), k.output_D_addr.offset)
+       for k in _tk] == [(2, 2048, 32, 0, 0), (2, 2048, 32, 4096, 2048)])
+
+# a slot's weights: the loads read the record, as a CHAIN after it
+_cr = new_ctx()
+_lsr = _LS(_cr, 1)
+_rec = Port(record_spec(6, 1), _cr.at(1).l1("rec", 768), ())
+_rp = _cr.node("RecPull", _cr.dm, "__snax_k", Args(dst=_rec.handle), cluster=1)
+_rec = Port(record_spec(6, 1), _rec.handle, (_rp,))
+_xr = Port(PortSpec(Layout.A, DType.I8, (1, 2048), mem_level=MemLevel.L1, cluster=1),
+           _cr.at(1).l1("ha", 16 * 2048), ())
+_rs = _Lin(tokens=1, d_in=2048, d_out=256, mesh=(16, 4, 16), cluster=1, gemv=True,
+           stream=_lsr, w_slot=(3, "gu"), x_level=MemLevel.L1).build(_cr, {"x": _xr, "rec": _rec})
+_lr = _rs.extra["loads"]
+check("w_slot: every load is idma_copy_slot from slot 3's gate|up, at its chunk's offset",
+      all(ld.kernel_name == "__snax_bingo_kernel_idma_copy_slot" for ld in _lr)
+      and [(ld.kernel_args.slot, ld.kernel_args.field, ld.kernel_args.offset) for ld in _lr]
+      == [(3, 0, 0), (3, 0, 64 * 2048), (3, 0, 128 * 2048), (3, 0, 192 * 2048)])
+check("...the first waits for the record, the rest in a chain (no fan-out from it)",
+      _cr.dfg.has_edge(_rp, _lr[0]) and not any(_cr.dfg.has_edge(_rp, ld) for ld in _lr[1:])
+      and all(_cr.dfg.has_edge(_lr[i - 1], _lr[i]) for i in range(1, 4)))
+
+# MLA attention on one cluster, 4 tiles of 64 keys
+_ca = new_ctx()
+_lsa = _LS(_ca, 1)
+_pa = Pipeline(_ca, verbose=False, gate_sources=True)
+_qt = Port(PortSpec(Layout.ROW_MAJOR, DType.F16, (16, 512), mem_level=MemLevel.L1, cluster=1),
+           _ca.at(1).l1("qt", 16 * 1024), ())
+_qp = Port(PortSpec(Layout.ROW_MAJOR, DType.F16, (16, 64), mem_level=MemLevel.L1, cluster=1),
+           _ca.at(1).l1("qp", 16 * 128), ())
+_c8 = Port(PortSpec(Layout.ROW_MAJOR, DType.I8, (1, 512), mem_level=MemLevel.L1, cluster=0),
+           _ca.at(0).l1("c8", 512), ())
+_kp = Port(PortSpec(Layout.ROW_MAJOR, DType.I8, (1, 64), mem_level=MemLevel.L1, cluster=0),
+           _ca.at(0).l1("kp", 64), ())
+_key = Port(PortSpec(Layout.A, DType.I8, (256, 576), mem_level=MemLevel.L3), _Sym("key"), ())
+_val = Port(PortSpec(Layout.A, DType.I8, (512, 256), mem_level=MemLevel.L3), _Sym("val"), ())
+_q8 = _pa.add(_QA(inv_qt_f32bits=0x3f800000, inv_qpe_f32bits=0x3f800000, cluster=1), "q8",
+              qt=_qt, qpe=_qp)
+_ap = _pa.add(_CA(pos=255, cap=256, cluster=0), "app", c8=_c8, kpe8=_kp, key=_key, val=_val)
+_at = _pa.add(_MA(keys=256, cap=256, k_s=8, k_o=7, a_exp=0.03, a_n_f32bits=0x3f800000,
+                  cluster=1, stream=_lsa), "att", q8=_q8.out(), key=_ap.out("key"),
+              val=_ap.out("val"))
+_pa.run()
+_ax = _at.result.extra
+_av = _ap.result.outputs["val"].ends[0]
+check("attention: one QK, softmax and PV per tile",
+      len(_ax["qk"]) == len(_ax["softmax"]) == len(_ax["pv"]) == 4)
+_pvk = [_ax["pv"][j].kernel_args for j in range(4)]
+check("PV: tile 0 reads no C; later tiles scale C by corr; the last leaves as FP16 at k_o",
+      _pvk[0].input_C_addr == 0 and _pvk[0].flags == 1
+      and all(k.flags == 3 for k in _pvk[1:3]) and _pvk[3].flags == 7
+      and _pvk[3].d_shift == 7 and _pvk[3].output_D_addr is not _pvk[3].input_C_addr)
+check("QK 0 and 1 wait for Q8 by an edge; the rest through the softmax two tiles back",
+      all(_ca.dfg.has_edge(_q8.result.outputs["q8"].ends[0], _ax["qk"][j]) for j in (0, 1))
+      and all(_ca.dfg.has_edge(_ax["softmax"][j - 2], _ax["qk"][j]) for j in (2, 3)))
+_lds = [n for n in _at.result.nodes if n.node_name.startswith("att_Ld_")]
+check("the append ends in ONE node, and the last tile's loads wait for it",
+      _ap.result.outputs["key"].ends == (_av,) and
+      all(_ca.dfg.has_edge(_av, n) for n in _lds if n.node_name[-5] == "3"))
+check("a V tile is 32 runs of 16 Bc bytes, 16 cap apart",
+      [(n.kernel_args.size, n.kernel_args.src_stride, n.kernel_args.reps) for n in _lds
+       if "Ld_V" in n.node_name][:1] == [(1024, 16 * 256, 32)])
+
+# the route record: the golden bytes the device's record is checked against
+_tb = _etab(64, {5: (0x1001_0000_0000, 0x1001_0000_1000, 0x1001_0000_2000,
+                     0x1001_0000_3000, 0x3f800000)})
+_rb = _rbytes([5], [0x3555], _tb).view(_np.uint32)
+check("record: id, the weight as FP32 and FP16 bits, then the expert's table entry",
+      list(_rb[:3]) == [5, int(_np.array(0x3555, _np.uint16).view(_np.float16)
+                                .astype(_np.float32).view(_np.uint32)), 0x3555]
+      and list(_rb[16:18]) == [0x0000_0000, 0x1001] and _rb[24] == 0x3f800000)
 
 
 if FAILED:

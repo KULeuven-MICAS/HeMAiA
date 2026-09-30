@@ -245,7 +245,10 @@ def simulate_for_hangs(dfg, seeds=3, work_delay_range=(20, 200),
             num_chiplets=geo["n_chiplets"],
             num_clusters_per_chiplet=geo["n_clusters"],
             num_cores_per_cluster=geo["n_cores"],
-            queue_depths=QueueDepths(waiting=8, ready=8, checkout=8, done=32),
+            # The RTL's waiting depth when the workload set it (dfg.waiting_queue_depth, from
+            # BINGO_WAITING_QUEUE_DEPTH); 8, the RTL default, otherwise.
+            queue_depths=QueueDepths(waiting=int(getattr(dfg, "waiting_queue_depth", 8)),
+                                     ready=8, checkout=8, done=32),
             work_delay_range=work_delay_range,
             h2h_latency=h2h_latency,
             h2h_latency_jitter=h2h_latency_jitter,

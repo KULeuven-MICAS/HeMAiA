@@ -1,4 +1,4 @@
-# kernels/ — the kernel ABI
+# libs/kernels/ — the kernel ABI
 
 One args class per device or host kernel, mirroring the C structs in
 `libbingo/include/libbingo/*_kernel_args.h`. An args class validates its arguments in
@@ -17,6 +17,7 @@ initialises cleanly and a kernel that does the wrong thing without failing.
 | `kernel_xdma.py` | xDMA transfers, the 6-D AGU, 2-D shape ops, and the in-fabric junction CSR builders. |
 | `kernel_layout.py` | The dedicated layout converters: D↔row-major, row-major↔A, row-major↔B. |
 | `kernel_simd.py` | SIMD streaming primitives and the fused whole-operators. |
+| `blocked_nest.py` | Not an args class: the loop nest `simd_rmsnorm` needs to write A/B blocks for a given mesh, derived per (tile, mesh, precision) and checked against the layout's index map. `kernel_simd.py` calls it while building the args, and the result goes into the struct's `blk_*` fields. |
 | `kernel_host.py` | Host transfers and the per-precision result checks. |
 | `kernel_ara.py` | Ara (RVV) host kernels, typed by precision. |
 

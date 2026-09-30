@@ -10,7 +10,8 @@ It is a function call whose body happens to be a graph.
 | | |
 |---|---|
 | [`comm/`](comm/) | **Common** machinery: ports, ctx, the linker, and how an operand that does not match gets moved or reshaped. |
-| [`block/`](block/) | The blocks: FlashAttention, its fold, the MoE FFN. |
+| [`blocks/`](blocks/) | The blocks: FlashAttention, its fold, the MoE FFN. |
+| [`kernels/`](kernels/) | The kernel ABI the blocks build nodes from: one args class per kernel, matching the C structs. Imported flat (`from bingo_kernel_args import …`), not as `libs.kernels`. |
 | [`verify/`](verify/) | Host-side readbacks and comparisons, named by precision. |
 
 ## Every port carries four things
@@ -53,7 +54,7 @@ anyway. It is refused, by name.
 
 ```python
 from libs import Ctx, Pipeline, Port
-from libs.block import FlashAttention, fa_gather
+from libs.blocks import FlashAttention, fa_gather
 
 blk = FlashAttention(bc=32, br=32, dhead=128, nkv=8, clusters=4, decomp="kvsplit")
 r = Pipeline(ctx).add(blk, name="attn", bind={"q": ..., "k": ..., "v": ...}).result

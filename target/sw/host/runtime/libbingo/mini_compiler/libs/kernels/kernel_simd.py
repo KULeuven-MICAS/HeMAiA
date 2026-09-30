@@ -14,6 +14,8 @@ The row operators come in an F16F16 and an F16I8 form; the second folds the quan
 into the same pass, so a layer that narrows to int8 pays for one task, not two."""
 
 from typing import Union, Dict, Optional
+
+import numpy as np
 from bingo_mem_handle import BingoMemAlloc
 
 from kernel_base import LAYOUT_CODE, BingoKernelArgs
@@ -90,13 +92,16 @@ class SnaxBingoKernelSimdScaleF16Args(BingoKernelArgs):
     _OUT_FP16 = 0
 
     def __init__(self, src_addr: Union[BingoMemAlloc, int], dst_addr: Union[BingoMemAlloc, int],
-                 scale_f32bits: int, rows: int, cols: int):
+                 scale_f32bits: int, rows: int, cols: int, scale_addr=0):
         if cols % 32:
             raise ValueError(f"cols={cols} must be a multiple of 32 -- one SIMD beat is "
                              f"64 B = 32 fp16 lanes and a partial beat is not handled.")
         self.src_addr = src_addr
         self.dst_addr = dst_addr
         self.scale_f32bits = int(scale_f32bits)
+        # A scale decided at RUN TIME: the FP32 word at scale_addr (this cluster's L1),
+        # read by the kernel in place of scale_f32bits -- a routed expert's weight, say.
+        self.scale_addr = scale_addr
         self.rows = rows
         self.cols = cols
         self.beats = cols // 32
@@ -120,8 +125,11 @@ class SnaxBingoKernelSimdScaleF16Args(BingoKernelArgs):
         # 0 = use the compile-time a_f32bits above rather than reading a runtime FP32
         # word from L1. Assigned explicitly: the struct lives in the never-cleared L1
         # arena, so an unset field is stale TCDM, not zero.
-        a["a_addr_lo"] = "0"
-        a["a_addr_hi"] = "0"
+        if self.scale_addr:
+            self._process_addr(self.scale_addr, "a_addr", a, handle_name_map)
+        else:
+            a["a_addr_lo"] = "0"
+            a["a_addr_hi"] = "0"
         return a
 
 
@@ -190,6 +198,7 @@ class SnaxBingoKernelSimdAddF16Args(BingoKernelArgs):
 
     _OP_ADD_FP16 = 1
     _OUT_FP16 = 0
+    _OP = _OP_ADD_FP16
 
     def __init__(self, a_addr: Union[BingoMemAlloc, int], b_addr: Union[BingoMemAlloc, int],
                  out_addr: Union[BingoMemAlloc, int], rows: int, cols: int):
@@ -219,7 +228,7 @@ class SnaxBingoKernelSimdAddF16Args(BingoKernelArgs):
         a["beats"] = str(self.beats)
         a["operand_stride"] = "0"          # derived from src_b at run time
         a["operand_count"] = "2"
-        a["op"] = str(self._OP_ADD_FP16)
+        a["op"] = str(self._OP)
         a["rows"] = str(self.rows)
         a["csr_mode"] = "0"
         a["dst_bound0"] = str(self.rows * self.beats)
@@ -234,6 +243,20 @@ class SnaxBingoKernelSimdAddF16Args(BingoKernelArgs):
         # the flat/packed layout, which is what both operands have here.
         a["src_row_stride"] = "0"
         return a
+
+
+class SnaxBingoKernelSimdMulF16Args(SnaxBingoKernelSimdAddF16Args):
+    """out = a (.) b, elementwise FP16, on the SIMD core: the ADD's kernel with op MUL.
+
+    The per-column dequantisation of a GEMV is this, with b the FP16 factor vector
+    s[n] = s_x * s_w[n] * 2^k: RNE(fp32(y) * fp32(s)), one rounding. The post-map
+    elementwise (EW1) runs it; a lone multiply narrows once whichever instance runs it, so
+    this is bit-identical to the snax reference's pre-map (EW0) form. MUL commutes, so the
+    two operands may be placed in either order, as for the ADD.
+    """
+
+    _OP_MUL_FP16 = 0
+    _OP = _OP_MUL_FP16
 
 
 class _SimdRowOpArgs(BingoKernelArgs):
@@ -368,7 +391,7 @@ class SnaxBingoKernelSimdRmsnormArgs(BingoKernelArgs):
 
     ANY MESH. The A and B outputs need `mesh` = (meshRow, tileSize, meshCol), and the order
     the kernel reads its tile in to write that mesh's blocks is DERIVED here -- see
-    kernels/blocked_nest.py -- verified against the operand's index map, and passed down as
+    libs/kernels/blocked_nest.py -- verified against the operand's index map, and passed down as
     a descriptor the device executes without interpreting. A mesh no order fits is refused
     here with the reason: tileSize < 4 at fp16, or an int8 atom whose runs land a block
     apart at uneven addresses (e.g. (1, 16, 32) as a B operand).
@@ -383,8 +406,11 @@ class SnaxBingoKernelSimdRmsnormArgs(BingoKernelArgs):
                  output_addr: Union[BingoMemAlloc, int], rows: int, cols: int,
                  input_layout: str = "row_major", output_layout: str = "row_major",
                  seed_addr: Union[BingoMemAlloc, int] = 0, out_i8: bool = False,
-                 inv_scale_f32bits: int = 0, mesh: Optional[tuple] = None):
+                 inv_scale_f32bits: int = 0, mesh: Optional[tuple] = None,
+                 scratch_addr: Union[BingoMemAlloc, int] = 0):
         self.seed_addr = seed_addr
+        # Host-allocated L1 scratch of scratch_bytes() -- or 0 for the kernel's own pool.
+        self.scratch_addr = scratch_addr
         self.input_addr = input_addr
         self.output_addr = output_addr
         self.rows = rows
@@ -409,7 +435,7 @@ class SnaxBingoKernelSimdRmsnormArgs(BingoKernelArgs):
                 f"The kernel runs {sorted(self.PAIRS)}: A takes a row_major input (its atom "
                 f"is four features of one token), B a col_major one (four tokens of one "
                 f"feature). Emit an xDMA transpose on the side that differs; "
-                f"libs/block/simd/norm.py does this for you.")
+                f"libs/blocks/simd/norm.py does this for you.")
         if pair == ("col_major", "col_major") and self.out_i8:
             raise ValueError(
                 "simd_rmsnorm: col_major -> col_major is FP16 out only. For an int8 GEMM "
@@ -443,6 +469,22 @@ class SnaxBingoKernelSimdRmsnormArgs(BingoKernelArgs):
                 raise ValueError(f"simd_rmsnorm: {self.input_layout} -> "
                                  f"{self.output_layout} on mesh {self.mesh}: {e}") from None
 
+    def scratch_bytes(self) -> int:
+        """The L1 scratch this call's route uses, which the host may allocate and pass as
+        scratch_addr instead of letting the kernel allocate it. MIRRORS the sizes in
+        offload_hw_kernels/simd.h, route for route (each includes the slack the kernel
+        spends aligning its base to a beat)."""
+        rows, cols = self.rows, self.cols
+        pair = (self.input_layout, self.output_layout)
+        if pair == ("row_major", "row_major"):
+            return rows * 64 + rows * cols * 2 + 64
+        if pair == ("row_major", "A"):
+            xs = (rows * self.nest.pitch + 63) & ~63
+            return 2 * xs + 64
+        if pair == ("col_major", "B"):
+            return 64 + cols * self.nest.pitch + 64
+        return 64 + 63                               # col_major: one beat, aligned
+
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_simd_rmsnorm_args_t"
 
@@ -475,6 +517,8 @@ class SnaxBingoKernelSimdRmsnormArgs(BingoKernelArgs):
         a["blk_reps"] = str(n.reps if n else 0)
         a["blk_rep_rd"] = str(n.rep_rd if n else 0)
         a["blk_rep_wr"] = str(n.rep_wr if n else 0)
+        self._process_addr(self.scratch_addr, "scratch_addr", a, handle_name_map)
+        a["scratch_bytes"] = str(self.scratch_bytes() if self.scratch_addr else 0)
         return a
 
 class SnaxBingoKernelSimdSiluF16F16Args(_SimdRowOpArgs):
@@ -629,7 +673,22 @@ class SnaxBingoKernelSimdFaSoftmaxArgs(BingoKernelArgs):
     GEOM_PRIMED = 2
     GEOM_CSR_PRIMED = 3
 
+    # p_mode bits; must match SIMD_FA_P_* in offload_hw_kernels/simd.h.
+    #   P_INTERLEAVE  P leaves the quantiser in PV's B layout (k-major blocks); the PV node
+    #                 must then pass SnaxBingoKernelGemmFaPvArgs.B_KMAJOR.
+    #   CORR_EXPORT   corr lands one p8_pitch after the row sum in p8_dst, for PV's
+    #                 C_COLSCALE; p8_dst must be p8_bytes(bc, br, p_mode, p8_pitch) long.
+    # EXACT is both: the only mode in which O is the attention the goldens describe.
+    P_INTERLEAVE = 1
+    CORR_EXPORT = 2
+    EXACT = P_INTERLEAVE | CORR_EXPORT
+
     BEAT_BYTES = 64
+    # THE P8 PITCH that keeps PV's operand streams off each other's banks: the smallest
+    # pitch >= 64 whose double is 64 mod 256, so PV's k-major B walk (two blocks per pass)
+    # steps round TCDM's 256 B bank rotation at the rate its A walk does. See "THE B
+    # PITCH" in offload_hw_kernels/gemm_fa.h. 0 (or BEAT_BYTES) is the dense layout.
+    PITCH_SPACED = 160
     # The arena opens with a FIXED block reserved for the cached task geometries, which is
     # NOT sizeof(snax_simd_shape_t) * 12: that struct's size follows the cluster's
     # reader_agu_temporal_dimension, so deriving the reservation from it would make every
@@ -640,6 +699,29 @@ class SnaxBingoKernelSimdFaSoftmaxArgs(BingoKernelArgs):
     @classmethod
     def arena_bytes(cls, bc: int, dhead: int) -> int:
         return cls.SHAPE_BYTES + (dhead + 10) * cls.BEAT_BYTES
+
+    @classmethod
+    def pitch(cls, p8_pitch: int = 0) -> int:
+        """The byte distance between two P8 beats that p8_pitch means (0 is dense)."""
+        return int(p8_pitch) or cls.BEAT_BYTES
+
+    @classmethod
+    def p8_bytes(cls, bc: int, br: int, p_mode: int = 0, p8_pitch: int = 0) -> int:
+        """The P buffer: bc*br INT8 as 64-byte beats one pitch apart, the row-sum beat one
+        pitch after them, and under CORR_EXPORT the corr beat one pitch after that."""
+        last = (cls.corr_offset(bc, br, p8_pitch) if p_mode & cls.CORR_EXPORT
+                else cls.rowsum_offset(bc, br, p8_pitch))
+        return last + cls.BEAT_BYTES
+
+    @classmethod
+    def rowsum_offset(cls, bc: int, br: int, p8_pitch: int = 0) -> int:
+        """Where the fused pass's tapped row sum lands inside p8_dst."""
+        return (bc * br // cls.BEAT_BYTES) * cls.pitch(p8_pitch)
+
+    @classmethod
+    def corr_offset(cls, bc: int, br: int, p8_pitch: int = 0) -> int:
+        """Where CORR_EXPORT puts this tile's corr beat inside p8_dst."""
+        return cls.rowsum_offset(bc, br, p8_pitch) + cls.pitch(p8_pitch)
 
     @classmethod
     def layout(cls, bc: int, dhead: int) -> Dict[str, int]:
@@ -676,11 +758,24 @@ class SnaxBingoKernelSimdFaSoftmaxArgs(BingoKernelArgs):
                  p8_dst: Union[BingoMemAlloc, int],
                  arena: Union[BingoMemAlloc, int],
                  bc: int, dhead: int, tile_idx: int, seed_state: int = 1,
-                 geom_mode: int = 0):
+                 geom_mode: int = 0, score_scale: float = 1.0, p_mode: int = 0,
+                 p8_pitch: int = 0):
         if bc % 2:
             raise ValueError(f"bc must be even (the quantiser packs 2:1), got {bc}")
+        if p_mode & ~self.EXACT:
+            raise ValueError(f"p_mode={p_mode:#x} has bits outside SIMD_FA_P_* ({self.EXACT:#x})")
+        if (p_mode & self.P_INTERLEAVE) and bc % 4:
+            raise ValueError(f"P_INTERLEAVE packs FOUR key beats per 32-bit atom, so bc must "
+                             f"be a multiple of 4, got {bc}")
+        if not (np.isfinite(score_scale) and score_scale > 0):
+            raise ValueError(f"score_scale must be a positive finite number, got {score_scale}: "
+                             f"a negative one flips which key is the maximum")
         if bc <= 0 or dhead <= 0:
             raise ValueError(f"bc and dhead must be positive, got {bc}, {dhead}")
+        if p8_pitch and (p8_pitch < self.BEAT_BYTES or p8_pitch % 8):
+            raise ValueError(f"p8_pitch={p8_pitch} must be 0 (dense) or at least "
+                             f"{self.BEAT_BYTES} and a multiple of 8")
+        self.p8_pitch = int(p8_pitch)
         self.s16_src = s16_src
         self.p8_dst = p8_dst
         self.arena = arena
@@ -699,6 +794,8 @@ class SnaxBingoKernelSimdFaSoftmaxArgs(BingoKernelArgs):
                              f"or 3 (CSR_PRIMED), "
                              f"got {geom_mode}")
         self.geom_mode = int(geom_mode)
+        self.score_scale = float(score_scale)
+        self.p_mode = int(p_mode)
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_simd_fa_softmax_args_t"
@@ -713,6 +810,255 @@ class SnaxBingoKernelSimdFaSoftmaxArgs(BingoKernelArgs):
         a["tile_idx"] = str(self.tile_idx)
         a["seed_state"] = str(self.seed_state)
         a["geom_mode"] = str(self.geom_mode)
+        bits = int(np.array(self.score_scale, dtype=np.float32).view(np.uint32))
+        a["score_scale"] = f"0x{bits:08X}u /* {self.score_scale!r}f */"
+        a["p_mode"] = str(self.p_mode)
+        a["p8_pitch"] = str(self.p8_pitch)
         return a
 
 
+# ======================================================================================
+# One token's row: the decode path's RMSNorm and the quantiser into a GEMV's A operand
+# (device: offload_hw_kernels/simd_row.h). Every address is the SIMD's own L1, so the
+# fields are 32-bit.
+# ======================================================================================
+
+def _pow2(n):
+    return n > 0 and not (n & (n - 1))
+
+
+class SnaxBingoKernelSimdRmsnormRowArgs(BingoKernelArgs):
+    """y = x / sqrt(mean(x^2)) over ONE row of `cols` FP16, no gain.
+
+    Three SIMD tasks queued in one kernel: reduce SUMSQ -> `ssq` (one beat), RSQRT of it
+    over `cols` -> the seed beat, and MUL|STICKY_B over [seed | x] -> `y`. THE SEED BEAT
+    SITS DIRECTLY BELOW x: the sticky multiply reads the two as one flat stream, so `seed`
+    is x's own allocation minus 64 bytes and the kernel refuses anything else. Allocate
+    x with a beat of headroom (RMSNormRow does).
+    """
+
+    KERNEL_NAME = "__snax_bingo_kernel_simd_rmsnorm_row"
+
+    def __init__(self, seed_addr, input_addr, ssq_addr, output_addr, cols: int,
+                 inv_scale_f32bits: int = 0):
+        """inv_scale_f32bits: 0 writes y as FP16; otherwise the multiply's output goes on
+        through Fp16ToInt8 in the same pass, sat127(rne(y * inv)) with inv this FP32 bit
+        pattern, and y is `cols` INT8, a plain row."""
+        if cols % 32 or not _pow2(cols):
+            raise ValueError(
+                f"cols={cols}: the one-row RMSNorm divides by the row length as an "
+                f"exponent subtract, exact at a power of two only, and works whole "
+                f"32-lane beats -- cols must be a power of two >= 32.")
+        if not 0 <= int(inv_scale_f32bits) < 2 ** 32:
+            raise ValueError(f"inv_scale_f32bits={inv_scale_f32bits}: an FP32 bit pattern.")
+        self.seed_addr, self.input_addr = seed_addr, input_addr
+        self.ssq_addr, self.output_addr = ssq_addr, output_addr
+        self.cols = int(cols)
+        self.inv_scale_f32bits = int(inv_scale_f32bits)
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_simd_rmsnorm_row_args_t"
+
+    def get_c_field_assignments(self, handle_name_map):
+        a = {}
+        for nm in ("seed_addr", "input_addr", "ssq_addr", "output_addr"):
+            self._process_addr(getattr(self, nm), nm, a, handle_name_map, split_64bit=False)
+        a["cols"] = str(self.cols)
+        a["inv_scale_f32bits"] = f"0x{self.inv_scale_f32bits:08X}u"
+        return a
+
+
+class SnaxBingoKernelSimdQuantARowArgs(BingoKernelArgs):
+    """`cols` FP16 -> INT8 into ROW `row` of a GEMV's 16-row A operand.
+
+    The operand is the (16, 4, 16) A layout of a [16, cols] tensor (16 * cols bytes); value
+    i lands at (i // 4) * 64 + 4 * row + i % 4, and NOTHING ELSE of the operand is
+    written. The one-token GEMV reads rows 0 and 1 of every block (one 8-byte channel), so
+    the caller zeroes the operand once before the first quantise: TCDM that was never
+    written reads X on RTL.
+    """
+
+    KERNEL_NAME = "__snax_bingo_kernel_simd_quant_a_row"
+    A_ROWS = 16
+
+    def __init__(self, input_addr, output_addr, cols: int, row: int = 0,
+                 inv_scale_f32bits: int = None, segs: int = 1, seg_pitch: int = 0,
+                 a_blk: int = 64):
+        if a_blk not in (8, 64) or (a_blk == 8 and row):
+            raise ValueError(f"a_blk={a_blk}: 64 (A layout) or 8 (a_row, row 0).")
+        self.a_blk = int(a_blk)
+        if cols % 32:
+            raise ValueError(f"cols={cols} must be a multiple of 32: two input beats of 16 "
+                             f"values make one output beat of 32.")
+        # SEGMENTS: segs runs of `cols` values, seg_pitch bytes apart, into one row of
+        # segs * cols values -- segment g is then the A operand of its own GEMV, at
+        # a_bytes(cols) * g. One task for every head of an absorbed per-head GEMV.
+        if segs < 1:
+            raise ValueError(f"segs={segs}: at least one segment.")
+        if segs > 1 and (seg_pitch % 64 or seg_pitch < 2 * cols):
+            raise ValueError(f"seg_pitch={seg_pitch}: {segs} segments of {cols} FP16 need a "
+                             f"64-B aligned pitch of at least one segment ({2 * cols} B).")
+        self.segs, self.seg_pitch = int(segs), int(seg_pitch) if segs > 1 else 0
+        if not 0 <= row < self.A_ROWS:
+            raise ValueError(f"row={row}: the A operand has {self.A_ROWS} rows.")
+        if inv_scale_f32bits is None:
+            raise ValueError("inv_scale_f32bits is required: the quantiser's static scale "
+                             "comes from the activation's calibrated range, and no default "
+                             "is right for every tensor.")
+        self.input_addr, self.output_addr = input_addr, output_addr
+        self.cols, self.row = int(cols), int(row)
+        self.inv_scale_f32bits = int(inv_scale_f32bits)
+
+    @classmethod
+    def a_bytes(cls, cols: int) -> int:
+        """Bytes of the GEMV A operand of a `cols`-long row: 16 rows, padded."""
+        return cls.A_ROWS * int(cols)
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_simd_quant_a_row_args_t"
+
+    def get_c_field_assignments(self, handle_name_map):
+        a = {}
+        self._process_addr(self.input_addr, "input_addr", a, handle_name_map,
+                           split_64bit=False)
+        self._process_addr(self.output_addr, "output_addr", a, handle_name_map,
+                           split_64bit=False)
+        a["cols"] = str(self.cols)
+        a["row"] = str(self.row)
+        a["inv_scale_f32bits"] = f"0x{self.inv_scale_f32bits & 0xFFFFFFFF:08x}u"
+        a["segs"] = str(self.segs)
+        a["seg_pitch"] = str(self.seg_pitch)
+        a["a_blk"] = str(self.a_blk)
+        return a
+
+
+def _f32bits_field(v: int) -> str:
+    return f"0x{int(v) & 0xFFFFFFFF:08x}u"
+
+
+class SnaxBingoKernelSimdQuantARowsArgs(BingoKernelArgs):
+    """16 FP16 rows, `pitch` bytes apart -> `kt` INT8 A blocks at output (block k = values
+    [4k, 4k+4) of every row, 64 B). A segment of MLA's query operand: q~ (kt = 128) and the
+    rotated q_pe (kt = 16) are two such tasks into one [16, 576] A operand, each with its own
+    scale (offload_hw_kernels/simd_row.h)."""
+
+    KERNEL_NAME = "__snax_bingo_kernel_simd_quant_a_rows"
+    ROWS = 16
+
+    def __init__(self, input_addr, pitch: int, output_addr, kt: int, inv_scale_f32bits: int):
+        if pitch % 8 or pitch < 8 * kt:
+            raise ValueError(f"pitch={pitch}: rows are read 8 B at a time, so the pitch is a "
+                             f"multiple of 8 and at least a row ({8 * kt} B).")
+        if kt <= 0:
+            raise ValueError(f"kt={kt}: at least one A block.")
+        self.input_addr, self.output_addr = input_addr, output_addr
+        self.pitch, self.kt = int(pitch), int(kt)
+        self.inv_scale_f32bits = int(inv_scale_f32bits)
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_simd_quant_a_rows_args_t"
+
+    def get_c_field_assignments(self, handle_name_map):
+        a = {}
+        self._process_addr(self.input_addr, "input_addr", a, handle_name_map,
+                           split_64bit=False)
+        a["pitch"] = str(self.pitch)
+        self._process_addr(self.output_addr, "output_addr", a, handle_name_map,
+                           split_64bit=False)
+        a["kt"] = str(self.kt)
+        a["inv_scale_f32bits"] = _f32bits_field(self.inv_scale_f32bits)
+        return a
+
+
+class SnaxBingoKernelSimdMlaNormaliseArgs(BingoKernelArgs):
+    """o~ = O16 (.) c / l per query lane, c / l = RSQRT(a_n * l)^2 into the latch beat that
+    sits DIRECTLY BELOW O16 (latch_addr == input_addr - 64), then a sticky MUL over
+    [latch][O16]. a_n = 1 / c, FP32 bits."""
+
+    KERNEL_NAME = "__snax_bingo_kernel_simd_mla_normalise"
+
+    def __init__(self, l_addr, latch_addr, input_addr, output_addr, beats: int,
+                 a_n_f32bits: int):
+        if beats <= 0:
+            raise ValueError(f"beats={beats}: at least one.")
+        self.l_addr, self.latch_addr = l_addr, latch_addr
+        self.input_addr, self.output_addr = input_addr, output_addr
+        self.beats, self.a_n_f32bits = int(beats), int(a_n_f32bits)
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_simd_mla_normalise_args_t"
+
+    def get_c_field_assignments(self, handle_name_map):
+        a = {}
+        for nm in ("l_addr", "latch_addr", "input_addr", "output_addr"):
+            self._process_addr(getattr(self, nm), nm, a, handle_name_map, split_64bit=False)
+        a["beats"] = str(self.beats)
+        a["a_n_f32bits"] = _f32bits_field(self.a_n_f32bits)
+        return a
+
+
+class SnaxBingoKernelSimdSoftmaxRowArgs(BingoKernelArgs):
+    """Softmax over ONE row of `beats` FP16 beats (five SIMD tasks). x and e each need a
+    free latch beat directly below them, e one more beat after its `beats` (the sum); tmp
+    is one beat."""
+
+    KERNEL_NAME = "__snax_bingo_kernel_simd_softmax_row"
+
+    def __init__(self, x_addr, tmp_addr, e_addr, p_addr, beats: int):
+        if beats <= 0:
+            raise ValueError(f"beats={beats}: at least one.")
+        self.x_addr, self.tmp_addr, self.e_addr, self.p_addr = x_addr, tmp_addr, e_addr, p_addr
+        self.beats = int(beats)
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_simd_softmax_row_args_t"
+
+    def get_c_field_assignments(self, handle_name_map):
+        a = {}
+        for nm in ("x_addr", "tmp_addr", "e_addr", "p_addr"):
+            self._process_addr(getattr(self, nm), nm, a, handle_name_map, split_64bit=False)
+        a["beats"] = str(self.beats)
+        return a
+
+
+class SnaxBingoKernelSimdSwigluARowArgs(BingoKernelArgs):
+    """SwiGLU of one token into ROW 0 of the down GEMV's A operand: sg = SILU(gate) into
+    `sg_addr` (inter FP16 of scratch), then sat127(rne((sg * up) * inv)) with the row write
+    of the quantiser. g_addr holds [gate | up], inter FP16 each. The scale is
+    inv_scale_f32bits, or the FP32 word at inv_addr (an expert slot's) when that is given."""
+
+    KERNEL_NAME = "__snax_bingo_kernel_simd_swiglu_a_row"
+
+    def __init__(self, g_addr, sg_addr, output_addr, inter: int,
+                 inv_scale_f32bits: int = 0, inv_addr=0, rows: int = 1, g_pitch: int = 0,
+                 a_pitch: int = 0, a_blk: int = 64):
+        if inter % 32:
+            raise ValueError(f"inter={inter} must be a multiple of 32.")
+        if a_blk not in (8, 64) or rows < 1 or (rows > 1 and (g_pitch % 64 or a_pitch % 64
+                                                               or not g_pitch or not a_pitch)):
+            raise ValueError(f"a_blk={a_blk} (8 or 64), rows={rows} with 64-B pitches "
+                             f"(g {g_pitch}, a {a_pitch}).")
+        self.rows, self.g_pitch, self.a_pitch, self.a_blk = int(rows), int(g_pitch), \
+            int(a_pitch), int(a_blk)
+        if not inv_addr and not inv_scale_f32bits:
+            raise ValueError("a SwiGLU output scale is required: inv_scale_f32bits, or "
+                             "inv_addr naming the word that will hold it.")
+        self.g_addr, self.sg_addr, self.output_addr = g_addr, sg_addr, output_addr
+        self.inter = int(inter)
+        self.inv_scale_f32bits, self.inv_addr = int(inv_scale_f32bits), inv_addr
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_simd_swiglu_a_row_args_t"
+
+    def get_c_field_assignments(self, handle_name_map):
+        a = {}
+        for nm in ("g_addr", "sg_addr", "output_addr"):
+            self._process_addr(getattr(self, nm), nm, a, handle_name_map, split_64bit=False)
+        a["inter"] = str(self.inter)
+        a["inv_scale_f32bits"] = _f32bits_field(self.inv_scale_f32bits)
+        self._process_addr(self.inv_addr, "inv_addr", a, handle_name_map, split_64bit=False)
+        a["rows"] = str(self.rows)
+        a["g_pitch"] = str(self.g_pitch)
+        a["a_pitch"] = str(self.a_pitch)
+        a["a_blk"] = str(self.a_blk)
+        return a

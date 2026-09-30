@@ -23,6 +23,10 @@ what the files are cut on:
   rope.py       PER-ROW, NOT REDUCING -- RoPE. It rotates along a row, so it needs the row
                 contiguous but has no reduction for a transposed layout to make cheap.
 
+  row.py        ONE TOKEN'S ROW -- the decode path around a one-token GEMV: its RMSNorm with
+                a sticky scale, the quantiser into row 0 of the GEMV's A operand, and the
+                per-column dequantisation of the GEMV's output.
+
   common.py     the tile description and the beat it has to tile to.
 
 WHY THE DISTINCTION IS NOT A DETAIL. In D-layout (m, n, r, c) a matrix row is NOT
@@ -49,6 +53,12 @@ from .common import BEAT_BYTES, LANES_PER_BEAT, RowCfg, check_pow2, check_row
 from .norm import NormCfg, RMSNorm
 from .pointwise import Dequantize, Quantize, Residual
 from .rope import RoPE
+from .row import (AddRow, AddRowCfg, ARowLoad, ARowLoadCfg, ARowPack, ARowPackCfg, NormRowCfg, QuantARowCfg, QuantizeARow, RMSNormRow,
+                  ScaleCols, ScaleColsCfg, ScaleRowBySlot, ScaleRowCfg, SoftmaxRow,
+                  SoftmaxRowCfg, SwigluARow, SwigluARowCfg)
 
 __all__ = ["BEAT_BYTES", "LANES_PER_BEAT", "RowCfg", "check_pow2", "check_row",
-           "NormCfg", "RMSNorm", "Dequantize", "Quantize", "Residual", "RoPE"]
+           "NormCfg", "RMSNorm", "Dequantize", "Quantize", "Residual", "RoPE",
+           "ARowLoad", "ARowLoadCfg", "ARowPack", "ARowPackCfg", "NormRowCfg", "QuantARowCfg", "QuantizeARow", "RMSNormRow", "ScaleCols",
+           "ScaleColsCfg", "AddRow", "AddRowCfg", "ScaleRowBySlot", "ScaleRowCfg",
+           "SoftmaxRow", "SoftmaxRowCfg", "SwigluARow", "SwigluARowCfg"]

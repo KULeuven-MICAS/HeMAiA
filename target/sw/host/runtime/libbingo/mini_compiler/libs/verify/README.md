@@ -5,7 +5,7 @@
 | `checks.py` | Builds the check NODE: places the kernel on the host core, orders it, and pairs it with the readback that must precede it. |
 
 The comparison itself is a property of the kernel ABI, so the args classes live in
-[`../../kernels/kernel_host.py`](../../kernels/kernel_host.py) — one per precision. This
+[`../kernels/kernel_host.py`](../kernels/kernel_host.py) — one per precision. This
 file has no ABI knowledge, which is what keeps it from drifting, and a workload that does
 not use `libs` still gets the named args.
 
