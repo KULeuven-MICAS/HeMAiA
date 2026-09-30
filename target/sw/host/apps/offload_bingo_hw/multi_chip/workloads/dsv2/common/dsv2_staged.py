@@ -212,8 +212,9 @@ class Build:
         dfg.l1_capacity_bytes = int(p.get("l1_capacity", L1_CAPACITY))   # a dry run may look past it
         dfg.waiting_queue_depth = plat.get("waiting_queue_depth", 8)     # the hang check's model
         # params prune_fanout: drop the cross-core edges a core's own order implies (fewer dummy
-        # tasks and dependency tags; a pass of several tokens needs it at DepTagWidth 5)
-        dfg.prune_fanout = bool(p.get("prune_fanout", False))
+        # tasks and dependency tags). The compiler does it by default; false opts out.
+        if "prune_fanout" in p:
+            dfg.prune_fanout = bool(p["prune_fanout"])
         # params compact_tables: each cluster's L1 holds only its own tasks' arg and kernel
         # pointers and an int16 id table (bingo_hw_scheduler_init_compact) instead of the three
         # SoC-wide tables -- 64.8 -> ~25 KiB a cluster at the 4-token layer's 9,091 tasks
