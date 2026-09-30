@@ -49,7 +49,9 @@ ifndef APP
     else ifeq ($(HOST_APP_TYPE), offload_legacy)
         APP = offload_legacy_$(CHIP_TYPE)
     else ifneq ($(HOST_APP_TYPE),)
-        APP = $(HOST_APP_TYPE)_$(CHIP_TYPE)_$(WORKLOAD)
+        # WORKLOAD is a path under workloads/ and may be nested (dsv2/two_chiplet/stage1_rmsnorm);
+        # the app name is flat, its '/' turned into '_' (target/sim/apps/Makefile does the same)
+        APP = $(HOST_APP_TYPE)_$(CHIP_TYPE)_$(subst /,_,$(WORKLOAD))
     endif
 endif
 
