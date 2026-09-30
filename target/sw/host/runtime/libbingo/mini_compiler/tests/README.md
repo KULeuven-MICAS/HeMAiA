@@ -14,6 +14,7 @@ pixi run python3 tests/test_libs.py
 | `test_libs.py` | The block/port contract: what a mismatch is refused for, what the linker joins, whether a producer's buffer becomes reusable by the consumer, and the namespacing that lets one block be instantiated twice. |
 | `test_static_l1.py` | The liveness rule and the packer: which buffers may share, and that the placement the packer returns is provably safe. |
 | `test_conditional_fork.py` | CERF: the gating masks, and that every routing scenario terminates. |
+| `test_tag_budget.py` | The dependency-tag budget: a gather that needs 16 tags lowers and tags at 4 once the pass has added ordering edges, a graph that fits is left alone, and a fan-in no ordering can fit is refused. |
 
 ## What these do not cover
 

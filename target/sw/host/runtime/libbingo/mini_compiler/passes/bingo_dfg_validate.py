@@ -388,6 +388,10 @@ class BingoDFGValidateMixin:
         for u, v, data in self.edges(data=True):
             if data.get('cond', False):
                 continue
+            # an ordering edge from the tag-budget pass: no data flows on it, so there is
+            # nothing to read stale
+            if data.get('order_only', False):
+                continue
             if u not in node_to_group:
                 continue
             # (c) compiler-inserted plumbing, which has its own guard

@@ -387,10 +387,7 @@ class BingoDFGTransformsMixin:
         The mirror case too: a consumer B waiting on A1 .. An of ONE core (a gather's
         copies, one per source, all on the DM core) needs only the last of them, An; the
         core finishes its tasks in order, so An done means every Ai done. Both apply on the
-        producer's own core as well, where the chain itself is the only edge kept.
-
-        Opt-in (dfg.prune_fanout): it changes every graph's task list.
-        Returns the number of edges removed."""
+        producer's own core as well, where the chain itself is the only edge kept."""
         topo = {n: i for i, n in enumerate(nx.topological_sort(self))}
         removed = 0
         for b_ in list(self.nodes()):
@@ -432,6 +429,140 @@ class BingoDFGTransformsMixin:
         if removed:
             print(f"Fan-out pruning: removed {removed} cross-core edges the core order implies")
         return removed
+
+    def bingo_transform_fit_dep_tag_budget(self, tag_width: int = None) -> int:
+        """Make every dep-matrix cell fit in 2**tag_width tags, adding ordering edges where
+        the graph would need more.
+
+        The allocator (bingo_transform_dfg_allocate_dep_tags) already uses the fewest tags
+        a graph allows: two edges of a cell share a tag when one's check happens-before the
+        other's set, so a cell needs as many tags as its largest set of edges that can all
+        be live at once. That number is a property of the GRAPH, and when it is more than
+        the hardware has, the graph has to change. The change that always exists is more
+        order: an edge from the consumer of one live edge to the producer of another makes
+        the second's set wait for the first's check, and the two can then share a tag. The
+        producer may run later -- at most 2**tag_width of the cell's edges are in flight at
+        once -- which is the trade a register allocator makes when it runs out of registers.
+
+        Runs on the real tasks, after core sequencing and fan-out pruning and before the
+        dummy passes, so an edge added here is lowered like any other. A cell is what it
+        will be after lowering: (consumer chiplet, consumer cluster, consumer core,
+        producer core). The order here is weaker than after lowering -- a dummy check runs
+        before its task, a dummy set after its producer -- so a cell that fits here fits in
+        the allocator, which stays the final check.
+
+        Per over-budget cell, edges in the consumer core's order, greedily: an edge joins a
+        chain whose last consumer already happens-before its producer; else opens a chain
+        while there are fewer than 2**tag_width; else waits on the EARLIEST chain end it can
+        without a cycle, through a new edge. Added edges carry order_only=True: no data
+        flows on them. An added edge is itself a dependency in another cell, so this repeats
+        until nothing is over budget.
+
+        Returns the number of edges added. Raises when a cell cannot be fitted."""
+        if tag_width is None:
+            tag_width = self.dep_tag_width
+        budget = 1 << tag_width
+        added_total, widest = 0, 0
+
+        def cells_of_graph():
+            cells: dict = {}
+            for u, v in self.edges():
+                key = (v.assigned_chiplet_id, v.assigned_cluster_id,
+                       v.assigned_core_id, u.assigned_core_id)
+                cells.setdefault(key, []).append((u, v))
+            return cells
+
+        for _round in range(16):
+            cells = cells_of_graph()
+            over = {k: es for k, es in cells.items() if len(es) > budget}
+            if not over:
+                break
+            # Reachability as bitsets over a topological order: bit pos[b] of reach[a] is
+            # set when a reaches b. NOT bingo_stream_order(): that one is cached, and a
+            # cache taken before the dummy passes would hand the allocator and the emitter
+            # an order without the dummies. Any topological order will do here -- each
+            # core's tasks are already one chain, so every such order agrees on them.
+            topo = list(nx.topological_sort(self))
+            pos = {n: i for i, n in enumerate(topo)}
+            reach: dict = {}
+            for n in reversed(topo):
+                r = 0
+                for s in self.successors(n):
+                    r |= reach[s] | (1 << pos[s])
+                reach[n] = r
+
+            def before(a, b):
+                """a is b, or a happens-before b."""
+                return a is b or bool((reach[a] >> pos[b]) & 1)
+
+            def add_order(a, b):
+                self.add_edge(a, b, order_only=True)
+                gained = reach[b] | (1 << pos[b])
+                for x in topo:
+                    if x is a or (reach[x] >> pos[a]) & 1:
+                        reach[x] |= gained
+
+            def chain_cover(es):
+                """The fewest chains (= tags) the cell needs as it stands."""
+                n = len(es)
+                g = nx.Graph()
+                g.add_nodes_from(range(2 * n))
+                for a in range(n):
+                    for b in range(n):
+                        if a != b and before(es[a][1], es[b][0]):
+                            g.add_edge(a, n + b)
+                m = nx.algorithms.bipartite.hopcroft_karp_matching(g, top_nodes=list(range(n)))
+                return n - sum(1 for k in m if k < n)
+
+            added = 0
+            for key in sorted(over):
+                es = sorted(over[key], key=lambda e: (pos[e[1]], pos[e[0]]))
+                # A greedy cover is an upper bound; the exact one only when it is not enough.
+                ends = []
+                for p, c in es:
+                    ok = [i for i, last in enumerate(ends) if before(last, p)]
+                    if ok:
+                        ends[max(ok, key=lambda i: pos[ends[i]])] = c
+                    else:
+                        ends.append(c)
+                if len(ends) <= budget:
+                    continue
+                need = chain_cover(es)
+                widest = max(widest, need)
+                if need <= budget:
+                    continue
+                ends = []
+                for p, c in es:
+                    ok = [i for i, last in enumerate(ends) if before(last, p)]
+                    if ok:
+                        i = max(ok, key=lambda i: pos[ends[i]])
+                    elif len(ends) < budget:
+                        ends.append(c)
+                        continue
+                    else:
+                        legal = [i for i, last in enumerate(ends) if not before(p, last)]
+                        if not legal:
+                            raise ValueError(
+                                f"dep-tag budget: cell {key} (chiplet, cluster, consumer core, "
+                                f"producer core) needs {need} tags and cannot be ordered into "
+                                f"{budget}: {p.node_name} -> {c.node_name} precedes every chain "
+                                f"end it would have to wait for. Widen DepTagWidth or split "
+                                f"the fan-in in the workload.")
+                        i = min(legal, key=lambda i: pos[ends[i]])
+                        add_order(ends[i], p)
+                        added += 1
+                    ends[i] = c
+            if not added:
+                break
+            added_total += added
+        else:
+            raise ValueError(f"dep-tag budget: cells still over {budget} tags after 16 rounds "
+                             f"of added ordering edges.")
+        if added_total:
+            print(f"Tag budget: added {added_total} ordering edges so every dep-matrix cell "
+                  f"fits {budget} tags (the widest needed {widest})")
+        self.tag_budget_edges_added = added_total
+        return added_total
 
     def bingo_assign_normal_node_dep_check_info(self) -> None:
         """Assign the dep check info for normal and gating nodes."""

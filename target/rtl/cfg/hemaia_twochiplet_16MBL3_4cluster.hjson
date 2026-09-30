@@ -132,12 +132,9 @@
       quad_axi_lite_base_addr: 167772160, // 0x0a000000
       quad_axi_lite_base_offset: 65536 // 0x10000
       bingo_cfg: {
-        dep_tag_width: 5
+        dep_tag_width: 4
         task_id_width: 16
         task_desc_width: 128
-        // 32, not the RTL default 8: one full waiting queue stops the whole in-order task
-        // stream, so a cluster waiting on its weights held ready GEMVs on the others for up
-        // to 66 us (HW-19, stage 3 of the layer bring-up).
         waiting_queue_depth: 32
       },
     },

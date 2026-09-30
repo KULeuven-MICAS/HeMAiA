@@ -7,7 +7,7 @@ because each depends on the last. The analyses the passes use live here too.
 
 | file | what it does | what it catches |
 |---|---|---|
-| `bingo_dfg_transforms.py` | Entry node, per-core exit chain, core-sequencing edges, dummy set/check nodes. Runs in two halves, with the conditional pass between them. | — |
+| `bingo_dfg_transforms.py` | Entry node, per-core exit chain, core-sequencing edges, fan-out pruning (on by default), the tag budget, dummy set/check nodes. Runs in two halves, with the conditional pass between them. | A cell that needs more tags than `2**dep_tag_width` is fitted by added ordering edges, not refused; only a cell no ordering can fit raises. |
 | `bingo_dfg_conditional.py` | Wires the CERF conditional-execution registers: which node gates which, and what a skipped task still signals. | A skipped task IS pushed to the checkout queue retagged, so it still fires `dep_set` — a consumer that assumed otherwise waits forever. |
 | `bingo_dfg_descriptor.py` | Assigns dep set/check info, allocates tags by a minimum chain cover, packs each node into a task descriptor. | Tag exhaustion, and descriptor-width overflow. |
 | `bingo_dfg_validate.py` | `bingo_validate_no_hang` after the tags are allocated; placement and handle validation from inside the emit pass. | A GEMM node on the wrong hart programs *that* hart's accelerator at the same CSR offsets and reports success. Nothing faults. |
@@ -28,7 +28,10 @@ because each depends on the last. The analyses the passes use live here too.
 
 Dependency tags are allocated over the graph *after* the exit chain, the conditional
 regions and the sequencing edges exist, so running the descriptor pass earlier would cover
-a different graph. Static L1 runs after that because liveness is computed over the final
+a different graph. The tag budget runs between: after pruning, so it does not order edges
+the pruning would have dropped, and before the dummy passes, so the edges it adds are
+lowered like the rest. It sees each cell as it will be after lowering, with an order no
+stronger than the allocator's, so a cell it fits is one the allocator can tag. Static L1 runs after that because liveness is computed over the final
 edge set. Emission is last because it reads the results of all of them — which is also why
 the placement check lives there rather than up front: it runs at the point where a wrong
 answer would actually be written out.

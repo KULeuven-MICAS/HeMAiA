@@ -237,14 +237,22 @@ class BingoDFG(
         self._validate_cerf_core_sharing()
         # Identity-aware deps: per-edge tags are allocated LAST (after dep-info
         # assignment). The allocator's min-chain-cover reuses a tag across edges
-        # that can never be live together (happens-before / same-core order), so
-        # no separate concurrency-bounding pass is needed. The legacy
-        # serialize_shared_counter_consumers mitigation was removed -- per-edge
-        # tags supersede it. (Untagged mode has no counter-sharing mitigation.)
+        # that can never be live together (happens-before / same-core order), which
+        # is the fewest tags THIS graph allows. When that is still more than the
+        # hardware has, bingo_transform_fit_dep_tag_budget (below) changes the graph
+        # so it fits. The legacy serialize_shared_counter_consumers mitigation was
+        # removed -- per-edge tags supersede it. (Untagged mode has no counter-sharing
+        # mitigation.)
         # Add Dummy Set/Check Nodes
         self.bingo_transform_add_core_sequencing_edges()
-        if getattr(self, "prune_fanout", False):
+        # On by default; a workload opts out with dfg.prune_fanout = False.
+        if getattr(self, "prune_fanout", True):
             self.bingo_transform_prune_redundant_fanout()
+        # Fit every dep-matrix cell into 2**dep_tag_width tags by adding ordering edges
+        # where the graph would need more. Runs on the real tasks, before the dummy passes
+        # lower each edge, so an edge it adds is lowered like any other.
+        if self.enable_tagged_deps:
+            self.bingo_transform_fit_dep_tag_budget(tag_width=self.dep_tag_width)
         self.bingo_transform_dfg_add_dummy_set_nodes()
         self.bingo_transform_dfg_add_dummy_check_nodes()
         self.bingo_visualize_dfg(
