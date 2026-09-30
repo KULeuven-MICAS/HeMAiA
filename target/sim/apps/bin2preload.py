@@ -1,9 +1,24 @@
 #!/usr/bin/env python3
 import os
 
+def l3_banks(default=16):
+    """spm_wide.banks of the cfg being built (target/rtl/cfg/lru.hjson, the copy the build
+    writes): the testharness loads one bank_N.hex per L3 bank (load_binary.sv.tpl, mem_bank)."""
+    import re
+    cfg = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "rtl", "cfg",
+                       "lru.hjson")
+    try:
+        text = open(cfg).read()
+    except OSError:
+        return default
+    m = re.search(r"spm_wide\s*:\s*\{[^}]*?\bbanks\s*:\s*(\d+)", text, re.S)
+    return int(m.group(1)) if m else default
+
+
 def bin2preload(input_file, output_dir):
     # Constants
-    NUM_BANKS = 16
+    # the memory chiplet's image keeps its 16 banks (load_binary.sv.tpl mem_chip_bank_count)
+    NUM_BANKS = 16 if os.path.basename(input_file).startswith("mempool") else l3_banks()
     BANK_WIDTH = 64  # 64 bits = 8 bytes
     TOTAL_WIDTH = NUM_BANKS * BANK_WIDTH  # 1024 bits = 128 bytes
 
