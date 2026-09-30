@@ -587,8 +587,15 @@ void bingo_close_all_clusters(bingo_task_t **task_list, uint32_t num_tasks);
 // Exposed so DVFS can seed its ack with the correct boot (= normal) level instead of a
 // stale 0 (which would otherwise cause a spurious initial RAISE doorbell).
 
+// A platform with a simulated-clock cfg (occamy.h HEMAIA_CORE_CLK_DIV) runs its cores at that
+// one divider, busy or idle: 8 on a 4 GHz master is the real chip's 500 MHz.
+#if defined(HEMAIA_CORE_CLK_DIV) && HEMAIA_CORE_CLK_DIV > 0
+#define BINGO_PM_IDLE_POWER_LEVEL   HEMAIA_CORE_CLK_DIV
+#define BINGO_PM_NORMAL_POWER_LEVEL HEMAIA_CORE_CLK_DIV
+#else
 #define BINGO_PM_IDLE_POWER_LEVEL   6
 #define BINGO_PM_NORMAL_POWER_LEVEL 6
+#endif
 
 // Configure the power-management registers (idle/normal power levels, per-core
 // power domains, EN_IDLE_PM) without starting a task offload. Exposed so a test
@@ -596,6 +603,18 @@ void bingo_close_all_clusters(bingo_task_t **task_list, uint32_t num_tasks);
 void bingo_hw_scheduler_init_pm(void);
 
 void bingo_hw_scheduler_init(uint64_t dev_arg_base_addr, uint64_t dev_kernel_base_addr, uint32_t num_dev_tasks, uint64_t global_task_id_to_dev_task_id_base_addr, uint32_t num_total_tasks, uint64_t bingo_hw_scheduler_task_desc_list_base, uint32_t bingo_hw_scheduler_num_task_desc);
+// The compact task tables (mini compiler compact_task_tables). The device task ids are numbered
+// cluster by cluster, so cluster c's tasks are [cluster_dev_base[c], cluster_dev_base[c + 1]) of
+// the arg and kernel lists, and each cluster's L1 gets only its own slice. The global id -> task
+// table is int16: the task's index among its own cluster's device tasks (-1: not a device task),
+// after one BINGO_G2L16_MAGIC word that tells the device (bingo.h) which format it holds.
+#define BINGO_G2L16_MAGIC 0xB16D0016u
+void bingo_hw_scheduler_init_compact(uint64_t dev_arg_base_addr, uint64_t dev_kernel_base_addr,
+                                     const uint32_t *cluster_dev_base,
+                                     uint64_t global_task_id_to_local_dev_id_base_addr,
+                                     uint32_t num_total_tasks,
+                                     uint64_t bingo_hw_scheduler_task_desc_list_base,
+                                     uint32_t bingo_hw_scheduler_num_task_desc);
 
 uint32_t bingo_hw_scheduler(uint64_t *host_arg_list, uint64_t *host_kernel_list, int32_t *global_task_id_to_host_task_id);
 
