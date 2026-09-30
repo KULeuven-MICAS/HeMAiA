@@ -151,7 +151,7 @@ static uint32_t __bingo_gemm_run(
     uint32_t transpose_A, uint32_t transpose_B, uint32_t accumPrevC,
     uint32_t quantization_enable, uint32_t shift_i, uint32_t multiplier_i,
     int32_t input_zp_i, int32_t output_zp_i, int32_t int32tofp16_enable,
-    int32_t int4_a_enable, int32_t int4_b_enable,
+    int32_t int4_a_enable, int32_t int4_b_enable, uint32_t d_shift,
     bingo_kernel_scratchpad_t *sp)
 {
     VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Bingo GEMM run A=0x%08x B=0x%08x C=0x%08x D=0x%08x\r\n",
@@ -172,6 +172,13 @@ static uint32_t __bingo_gemm_run(
     const uint32_t tileSize = shape->tileSize;
     const uint32_t meshCol = shape->meshCol;
 
+    if (d_shift > 14u)
+    {
+        printf_safe("[Cluster %d Core %d]: Error! gemm_full d_shift=%d, the converter's k "
+                    "is 0..14\r\n", snrt_cluster_idx(), snrt_cluster_core_idx(),
+                    (int)d_shift);
+        return BINGO_RET_FAIL;
+    }
     if (quantization_enable && int32tofp16_enable)
     {
         VERSACORE_DEBUG_PRINT("[Cluster %d Core %d]: Error! quantization and int32tofp16 cannot both be enabled\r\n",
@@ -197,6 +204,10 @@ static uint32_t __bingo_gemm_run(
     // generic path means teaching the shared versacore library the window size, which is
     // an upstream change (the same function has the same fixed seven writes there).
 #if defined(READER_WRITER_EXTENSION_1_CSR_BASE) && READER_WRITER_EXTENSION_1_CSR_NUM < 7
+    // (Since the converter gained its power-of-two output scale the window is THREE and
+    // base+2 is that shift k. The library leaves it alone -- it is sticky -- and this
+    // kernel writes it from its d_shift argument on every dispatch, below.)
+    //
     // The shared library writes exactly READER_WRITER_EXTENSION_1_CSR_NUM user CSRs and
     // places the converter enable at the bit its own extension list gives it, so a narrow
     // window is not itself a problem. What a two-CSR port cannot do is RESCALE: there is no
@@ -353,8 +364,21 @@ static uint32_t __bingo_gemm_run(
     //////////////////////////////////////////////////////////////
     // Streamer cfg for B
     //////////////////////////////////////////////////////////////
-    // Bslstride0
-    uint32_t Bslstride0 = BINGO_BANK_WIDTH / 8;
+    // B spatial strides -- ONE PER DECLARED SPATIAL DIMENSION, for the reason spelled
+    // out at C below: the streamer writes S_STRIDE_NUM_READER_1 of them whatever the
+    // caller passed. snax_split_cluster's B reader is two groups of eight 8-B channels
+    // (spatial nest [8, 2]) since it gained the (1, 4, 32) shape; laid end to end they
+    // read one contiguous B tile, which is the dense packing this table assumes. The
+    // second group is masked off for (16, 4, 16) and reads the tile's upper 64 B for
+    // (1, 4, 32). A scalar here used to feed the second stride from the stack.
+#if S_STRIDE_NUM_READER_1 > 2
+#error "extend the B spatial stride nest: only 1 or 2 dimensions are derived here"
+#endif
+    uint32_t Bslstride[S_STRIDE_NUM_READER_1];
+    Bslstride[0] = BINGO_BANK_WIDTH / 8;
+#if S_STRIDE_NUM_READER_1 > 1
+    Bslstride[1] = (BINGO_BANK_WIDTH / 8) * 8u;
+#endif
     // Btlbound0~2
     uint32_t Btlbound[3];
     // Btlbound0
@@ -530,7 +554,7 @@ static uint32_t __bingo_gemm_run(
         transpose_A,                    // transpose_A
         (uint32_t *)channel_en_A_ptr,   // channel_en_A []
         B_addr,                         // B_addr
-        &Bslstride0,                    // Bslstride[] base
+        Bslstride,                      // Bslstride[] base
         Btlbound,                       // Btlbound[] base
         Btlstride,                      // Btlstride[] base
         set_addr_remap_index_B,         // set_addr_remap_index_B
@@ -557,6 +581,16 @@ static uint32_t __bingo_gemm_run(
         int32tofp16_enable,
         int4_a_enable,
         int4_b_enable);
+    // The D port's power-of-two output scale: RNE(acc * 2^-d_shift) when the converter is
+    // armed. Written on EVERY dispatch -- it is sticky, and a k left behind by another
+    // kernel (FlashAttention's score matmul, the GEMV) would silently rescale this one.
+    if (set_versacore_d_shift(int32tofp16_enable ? d_shift : 0u))
+    {
+        printf_safe("[Cluster %d Core %d]: Error! gemm_full d_shift=%d needs the D-port "
+                    "converter built with `shift: 1`, which this RTL cfg lacks.\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx(), (int)d_shift);
+        return BINGO_RET_FAIL;
+    }
 
     set_versacore_csr(
         // accPrevC means takes new C
@@ -655,7 +689,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
         a->transpose_A, a->transpose_B, a->accumPrevC,
         a->quantization_enable, a->shift_i, a->multiplier_i,
         a->input_zp_i, a->output_zp_i, a->int32tofp16_enable,
-        a->int4_a_enable, a->int4_b_enable, sp);
+        a->int4_a_enable, a->int4_b_enable, a->d_shift, sp);
 }
 
 // -------------------------------------------------------------
@@ -688,7 +722,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_full(void *arg)
     __bingo_gemm_run(a->input_A_addr, a->input_B_addr, a->input_C_addr, a->output_D_addr,       \
                      a->M, a->K, a->N, a->array_shape_idx,                                      \
                      a->transpose_A, a->transpose_B, a->accumPrevC,                             \
-                     0, 0, 0, 0, 0, (int32tofp16), (int4_a), (int4_b), sp)
+                     0, 0, 0, 0, 0, (int32tofp16), (int4_a), (int4_b), 0u, sp)
 
 // int8 x int8 -> int32 (baseline).
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_i8i8_i32(void *arg)
@@ -746,7 +780,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_i8i8_i8(void *arg)
         a->M, a->K, a->N, a->array_shape_idx,
         a->transpose_A, a->transpose_B, a->accumPrevC,
         /*quant*/ 1, a->shift_i, a->multiplier_i, a->input_zp_i, a->output_zp_i,
-        /*int32tofp16*/ 0, /*int4_a*/ 0, /*int4_b*/ 0, sp);
+        /*int32tofp16*/ 0, /*int4_a*/ 0, /*int4_b*/ 0, /*d_shift*/ 0u, sp);
 }
 
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_minimal(void *arg)

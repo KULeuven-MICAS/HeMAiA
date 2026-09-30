@@ -236,6 +236,13 @@ static inline uint32_t snax_simd_shape_beats(const snax_simd_shape_t *s) {
 // STICKY: snax_simd_use1() writes csr(0) only. Any task that arms Fp16ToInt8 without
 // naming a tail inherits the previous task's. Use snax_simd_use2() and say 0.
 #define SIMD_QUANT_TAIL(beats) ((uint32_t)(beats))
+// Fp16ToInt8 csr(1) bit 16 (capability INTERLEAVE4): pack FOUR input beats into two output
+// beats as out[q/16][4*(q%16) + b] = quant(beat_b[q]) instead of concatenating two. Each
+// 32-bit atom then holds four consecutive BEATS of one lane -- a 16x4 B-operand block of
+// VersaCore -- which no DMA can build from int8. OR it into the tail word; the tail period
+// must then be a multiple of 4. Every task that arms the quantiser rewrites csr(1), so
+// the bit never outlives the task that set it.
+#define SIMD_QUANT_ILV4 (1u << 16)
 
 #define SIMD_EW_MUL 0u
 #define SIMD_EW_ADD 1u
@@ -446,6 +453,79 @@ static inline void snax_simd_program_fast(const snax_simd_shape_t *in,
 #endif
     snax_write_simd_cfg_reg(SIMD_DST_ENABLED_CHAN_PTR, out->lane_mask);
     snax_write_simd_cfg_reg(SIMD_DST_ENABLED_BYTE_PTR, out->byte_mask);
+}
+
+// The full program of a 1-D task -- `in_beats` consecutive beats in, `out_beats` out, every
+// lane and byte, the other loops neutral -- without a shape struct, and forced inline.
+// For a kernel whose first pass sits on its critical path: snax_simd_program_fast is
+// compiled out of line, so its first call is a jump to a cold instruction-cache line
+// (~60 cc idle, thousands under DMA traffic), and the structs it reads are built on the
+// stack first. Here every value is a constant or an argument.
+static inline __attribute__((always_inline)) void snax_simd_program_flat(
+    uint32_t in_base, uint32_t in_beats, uint32_t out_base, uint32_t out_beats) {
+    snax_write_simd_cfg_reg(SIMD_SRC_ADDR_PTR_LSB, in_base);
+    snax_write_simd_cfg_reg(SIMD_SRC_ADDR_PTR_MSB, 0);
+    snax_write_simd_cfg_reg(SIMD_SRC_SPATIAL_STRIDE_PTR, SIMD_LANE_BYTES);
+    snax_write_simd_cfg_reg(SIMD_SRC_TEMP_BOUND_PTR + 0, in_beats);
+    snax_write_simd_cfg_reg(SIMD_SRC_TEMP_STRIDE_PTR + 0, SIMD_BEAT_BYTES);
+#if SIMD_SRC_TEMP_DIM > 1
+    snax_write_simd_cfg_reg(SIMD_SRC_TEMP_BOUND_PTR + 1, 1);
+    snax_write_simd_cfg_reg(SIMD_SRC_TEMP_STRIDE_PTR + 1, 0);
+#endif
+#if SIMD_SRC_TEMP_DIM > 2
+    snax_write_simd_cfg_reg(SIMD_SRC_TEMP_BOUND_PTR + 2, 1);
+    snax_write_simd_cfg_reg(SIMD_SRC_TEMP_STRIDE_PTR + 2, 0);
+#endif
+#if SIMD_SRC_TEMP_DIM > 3
+    snax_write_simd_cfg_reg(SIMD_SRC_TEMP_BOUND_PTR + 3, 1);
+    snax_write_simd_cfg_reg(SIMD_SRC_TEMP_STRIDE_PTR + 3, 0);
+#endif
+#if SIMD_SRC_TEMP_DIM > 4
+    snax_write_simd_cfg_reg(SIMD_SRC_TEMP_BOUND_PTR + 4, 1);
+    snax_write_simd_cfg_reg(SIMD_SRC_TEMP_STRIDE_PTR + 4, 0);
+#endif
+#if SIMD_SRC_TEMP_DIM > 5
+    snax_write_simd_cfg_reg(SIMD_SRC_TEMP_BOUND_PTR + 5, 1);
+    snax_write_simd_cfg_reg(SIMD_SRC_TEMP_STRIDE_PTR + 5, 0);
+#endif
+    snax_write_simd_cfg_reg(SIMD_SRC_ENABLED_CHAN_PTR, 0xFFFFFFFFu);
+    snax_write_simd_cfg_reg(SIMD_DST_ADDR_PTR_LSB, out_base);
+    snax_write_simd_cfg_reg(SIMD_DST_ADDR_PTR_MSB, 0);
+    snax_write_simd_cfg_reg(SIMD_DST_SPATIAL_STRIDE_PTR, SIMD_LANE_BYTES);
+    snax_write_simd_cfg_reg(SIMD_DST_TEMP_BOUND_PTR + 0, out_beats);
+    snax_write_simd_cfg_reg(SIMD_DST_TEMP_STRIDE_PTR + 0, SIMD_BEAT_BYTES);
+#if SIMD_DST_TEMP_DIM > 1
+    snax_write_simd_cfg_reg(SIMD_DST_TEMP_BOUND_PTR + 1, 1);
+    snax_write_simd_cfg_reg(SIMD_DST_TEMP_STRIDE_PTR + 1, 0);
+#endif
+#if SIMD_DST_TEMP_DIM > 2
+    snax_write_simd_cfg_reg(SIMD_DST_TEMP_BOUND_PTR + 2, 1);
+    snax_write_simd_cfg_reg(SIMD_DST_TEMP_STRIDE_PTR + 2, 0);
+#endif
+#if SIMD_DST_TEMP_DIM > 3
+    snax_write_simd_cfg_reg(SIMD_DST_TEMP_BOUND_PTR + 3, 1);
+    snax_write_simd_cfg_reg(SIMD_DST_TEMP_STRIDE_PTR + 3, 0);
+#endif
+#if SIMD_DST_TEMP_DIM > 4
+    snax_write_simd_cfg_reg(SIMD_DST_TEMP_BOUND_PTR + 4, 1);
+    snax_write_simd_cfg_reg(SIMD_DST_TEMP_STRIDE_PTR + 4, 0);
+#endif
+#if SIMD_DST_TEMP_DIM > 5
+    snax_write_simd_cfg_reg(SIMD_DST_TEMP_BOUND_PTR + 5, 1);
+    snax_write_simd_cfg_reg(SIMD_DST_TEMP_STRIDE_PTR + 5, 0);
+#endif
+    snax_write_simd_cfg_reg(SIMD_DST_ENABLED_CHAN_PTR, 0xFFFFFFFFu);
+    snax_write_simd_cfg_reg(SIMD_DST_ENABLED_BYTE_PTR, 0xFFFFFFFFu);
+}
+
+// The 1-D steady state after snax_simd_program_flat, by value: the four CSRs a flat 1-D
+// task varies (both strides stay one beat).
+static inline __attribute__((always_inline)) void snax_simd_program_flat_next(
+    uint32_t in_base, uint32_t in_beats, uint32_t out_base, uint32_t out_beats) {
+    snax_write_simd_cfg_reg(SIMD_SRC_ADDR_PTR_LSB, in_base);
+    snax_write_simd_cfg_reg(SIMD_SRC_TEMP_BOUND_PTR + 0, in_beats);
+    snax_write_simd_cfg_reg(SIMD_DST_ADDR_PTR_LSB, out_base);
+    snax_write_simd_cfg_reg(SIMD_DST_TEMP_BOUND_PTR + 0, out_beats);
 }
 
 // The 1-D steady state: only the six CSRs a 1-D task actually varies. Address high word,

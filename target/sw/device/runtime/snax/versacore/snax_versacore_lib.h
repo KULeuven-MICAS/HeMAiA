@@ -214,12 +214,21 @@ void set_versacore_streamer_csr(
     // ------------------------- datapath extension ----------------------------
 
     // set the transpose
+    //
+    // A reader's window is a cluster property too (see READER_WRITER_EXTENSION_1 below):
+    // upstream's ports carry a transposer, whose array-shape index is base+1. On
+    // snax_split_cluster B's host holds the INT4 converter ALONE -- one enable register, bit
+    // 0 the converter -- and base+1 is the NEXT host's enable (the C reader's), so the
+    // shape write is guarded by the generated count, as upstream (snax 33c3bfd0) does. With
+    // the converter in the cfg this block is live: int4_b_enable = 0 is what turns it off
+    // again after an INT4 GEMV on the same core.
 #ifdef READER_EXTENSION_0_CSR_BASE
     uint32_t cfgA = ((transpose_A & 0x1) << 1) |  // bit 1
                     (int4_a_enable & 0x1);        // bit 0
 
     csrw_ss(READER_EXTENSION_0_CSR_BASE, cfgA);
-    csrw_ss(READER_EXTENSION_0_CSR_BASE + 1, array_shape);
+    if (READER_EXTENSION_0_CSR_NUM > 1)
+        csrw_ss(READER_EXTENSION_0_CSR_BASE + 1, array_shape);
 #endif
 
 #ifdef READER_EXTENSION_1_CSR_BASE
@@ -227,7 +236,8 @@ void set_versacore_streamer_csr(
                     (int4_b_enable & 0x1);        // bit 0
 
     csrw_ss(READER_EXTENSION_1_CSR_BASE, cfgB);
-    csrw_ss(READER_EXTENSION_1_CSR_BASE + 1, array_shape);
+    if (READER_EXTENSION_1_CSR_NUM > 1)
+        csrw_ss(READER_EXTENSION_1_CSR_BASE + 1, array_shape);
 #endif
 
 #ifdef READER_WRITER_EXTENSION_1_CSR_BASE
@@ -236,8 +246,9 @@ void set_versacore_streamer_csr(
     // extension's `userCsrNum`. Writing a fixed SEVEN (the count upstream's port happens
     // to have) walks straight off the end of the streamer's CSR file whenever the cluster
     // carries fewer extensions. On snax_split_cluster the port carries the INT32->FP16
-    // converter ALONE, so the window is TWO (enable + the converter's extra-loop index)
-    // and base+2..base+6 are STREAMER_START_CSR, STREAMER_BUSY_CSR (read-only),
+    // converter ALONE, so the window was TWO (enable + the converter's extra-loop index;
+    // THREE since the converter gained its output shift, see base+2 below), and
+    // base+2..base+6 were STREAMER_START_CSR, STREAMER_BUSY_CSR (read-only),
     // STREAMER_PERFORMANCE_COUNTER_CSR (read-only) and two VersaCore CSRs. That is not
     // benign: base+2 LAUNCHES the streamer in the middle of its own configuration, and
     // base+3 trips the ReqRspManager's write-address assertion and kills the simulation
@@ -261,28 +272,70 @@ void set_versacore_streamer_csr(
     // CSR, an index into its `extra_loops_choice` ROM Seq(1, 2, 1). Index 0 selects
     // extra_loop = 1, which makes the converter merge TWO 2048-bit INT32 beats into one
     // 2048-bit FP16 beat -- the 2:1 narrowing the D32 descriptor's halved bound0 assumes.
+    //
+    // base+2 is the one register both port shapes have in common by ADDRESS and not by
+    // meaning. Upstream it is the rescale multiplier. On a converter-only port built with
+    // the power-of-two output scale (Int32ToFp16Converter shift: 1, a window of THREE) it
+    // is the converter's k: the port writes RNE(x * 2^-k). Handing it multiplier_i there
+    // scales every FP16 result by 2^-(multiplier_i & 15) and reports success. So this
+    // path, like upstream since snax 33c3bfd0, never writes base+2 on such a port: k is
+    // sticky, latched at each START, and set_versacore_d_shift() below owns it. A kernel
+    // that calls this function must therefore also set k, or inherit the last one --
+    // __bingo_gemm_run (gemm.h) does, from its args.
+    //
+    // The two branches follow upstream's #if/#else textually, which is what
+    // check_snax_versacore_lib_sync.py compares.
+#if READER_WRITER_EXTENSION_1_CSR_NUM >= 7
     csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE,
-            (READER_WRITER_EXTENSION_1_CSR_NUM >= 7)
-                ? ((int32tofp16_enable << 1) | quantization_enable)
-                : (int32tofp16_enable & 0x1));
-    csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE + 1,
-            (READER_WRITER_EXTENSION_1_CSR_NUM >= 7) ? (uint32_t)input_zp_i : 0u);
-    if (READER_WRITER_EXTENSION_1_CSR_NUM > 2)
-        csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE + 2, multiplier_i);
-    if (READER_WRITER_EXTENSION_1_CSR_NUM > 3)
-        csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE + 3, output_zp_i);
-    if (READER_WRITER_EXTENSION_1_CSR_NUM > 4)
-        csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE + 4, shift_i);
+            (int32tofp16_enable << 1) | quantization_enable);
+    csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE + 1, (uint32_t)input_zp_i);
+    csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE + 2, multiplier_i);
+    csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE + 3, output_zp_i);
+    csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE + 4, shift_i);
     // Select the extra-loop policy by array shape; loop factors are defined in
     // the scala extension params (kept in sync with snax main).
     // In the current array shape implementation, no need to fold extra loop from input,
     // use the default inputwidth/outputwidth is enough
-    if (READER_WRITER_EXTENSION_1_CSR_NUM > 5)
-        csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE + 5, 0);
-    if (READER_WRITER_EXTENSION_1_CSR_NUM > 6)
-        csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE + 6, 0);
+    csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE + 5, 0);
+    csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE + 6, 0);
+#else
+    csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE, int32tofp16_enable & 0x1);
+    // The converter's extra-loop index: entry 0 of its extra_loops_choice is the
+    // 2:1 INT32->FP16 narrowing.
+    if (READER_WRITER_EXTENSION_1_CSR_NUM > 1)
+        csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE + 1, 0u);
+#endif
 #endif
 
+}
+
+// ---- the D port's power-of-two output scale (snax 33c3bfd0) -------------------------
+//
+// Built with `shift: 1`, the INT32 -> FP16 converter on the D write path emits
+// RNE(acc * 2^-k), k in 0..14 (the RTL clamps larger values to 14). Its window is then
+// [enable][extra-loop index][k]. A power of two moves only the exponent, so k costs no
+// precision; what it buys is range. An INT8 dot product of depth K reaches 127^2 * K,
+// past FP16's 65,504 from K = 5 on, and overflows to +-Inf -- silently -- unless k
+// satisfies 127^2 * K <= 65,504 * 2^k.
+//
+// k is a streamer CSR like any other: latched at each start, and held between
+// dispatches. set_versacore_streamer_csr() never writes it, so one call here holds for
+// every later dispatch until the next call. Returns 0 on success, or 1 when this build
+// has no shift register and a non-zero k was asked for.
+#if defined(READER_WRITER_EXTENSION_1_CSR_NUM) && READER_WRITER_EXTENSION_1_CSR_NUM == 3
+#define VERSACORE_HAS_D_SHIFT 1
+#define VERSACORE_D_SHIFT_CSR (READER_WRITER_EXTENSION_1_CSR_BASE + 2)
+#else
+#define VERSACORE_HAS_D_SHIFT 0
+#endif
+
+__attribute__((always_inline)) static inline int set_versacore_d_shift(uint32_t k) {
+#if VERSACORE_HAS_D_SHIFT
+    csrw_ss(VERSACORE_D_SHIFT_CSR, k);
+    return 0;
+#else
+    return k != 0u;
+#endif
 }
 
 void set_minimal_streamer_cfg(uint32_t A_addr, uint32_t B_addr, uint32_t C_addr,

@@ -25,6 +25,12 @@
 //                                          stream operators and the fused whole-ops
 //                                          (softmax/rmsnorm/silu/swiglu/rope).
 //   offload_hw_kernels/gemm.h            — core-level GEMM kernels (hand-maintained).
+//   offload_hw_kernels/gemm_fa.h         — the FlashAttention matmuls (hart 0).
+//   offload_hw_kernels/gemv.h            — the one-token GEMV, VersaCore's (1, 4, 32).
+//   offload_hw_kernels/simd_row.h        — one token's row: RMSNorm, quantise into A row 0,
+//                                          the query segments of MLA's score operand, the
+//                                          attention's c / l, the router softmax, SwiGLU.
+//   offload_hw_kernels/moe_route.h       — the router's top k as an expert-slot record.
 //   validate_shapes.py                   — lives at runtime/snax/versacore/;
 //                                          cross-checks gemm_shapes.h vs hwcfg.
 
@@ -41,6 +47,9 @@
 #include "offload_hw_kernels/simd.h"
 #include "offload_hw_kernels/gemm.h"
 #include "offload_hw_kernels/gemm_fa.h"
+#include "offload_hw_kernels/gemv.h"
+#include "offload_hw_kernels/simd_row.h"
+#include "offload_hw_kernels/moe_route.h"
 
 //////////////////////// SYMBOL TABLE ////////////////////////
 // The host offload runtime looks up kernels by name through this table.
@@ -68,6 +77,12 @@ SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_idma_1d_copy),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_idma_broadcast),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_idma_pairwise_swap),
+    // Strided runs (a row gather, a cache append into an A layout, a [512, cap] tile) and
+    // a copy whose source an expert-slot record names at run time.
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_idma_2d_copy),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_idma_copy_slot),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_idma_ring_load),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_moe_route),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_gemm_full),
     // Clean per-precision GEMM wrappers (over gemm_full) — see offload_hw_kernels/gemm.h.
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_gemm_i8i8_i32),
@@ -80,6 +95,9 @@ SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_gemm_fa_qk),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_gemm_fa_pv),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_gemm_perf_report),
+    // The one-token GEMV on the (1, 4, 32) shape: x in row 0 of a 16-row A operand, W in
+    // the ordinary B layout read two column blocks a pass, y a plain FP16 row.
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_gemv),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_1d_copy),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_multicast),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_memset),
@@ -141,6 +159,14 @@ SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
     // quantise and the O rescale) in ONE kernel. The producing and consuming GEMM
     // nodes hand off through BINGO edges, so it carries no sync counters.
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_fa_softmax),
+    // One token's row (offload_hw_kernels/simd_row.h): its RMSNorm with a sticky scale,
+    // and the quantiser writing row 0 of the GEMV's A operand and nothing else.
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_rmsnorm_row),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_quant_a_row),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_quant_a_rows),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_mla_normalise),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_softmax_row),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_swiglu_a_row),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_layout_convert),
     SNAX_SYMTAB_END
 };

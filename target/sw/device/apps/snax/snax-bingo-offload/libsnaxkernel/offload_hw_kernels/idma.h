@@ -166,3 +166,127 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_pairwise_swap(void *arg)
     }
 }
 
+
+// Up to three dimensions of runs in one node: `outer` repetitions of `reps` runs of `size`
+// bytes. Each repetition is one 2-D iDMA transfer; all of them are issued before one wait,
+// so they overlap. The shapes it exists for are not one contiguous run:
+//   a gather     the q_pe of several heads (a head apart) into one RoPE operand
+//   an append    a cache row into an A layout: 4-byte runs 64 B apart (the key copy), or
+//                1-byte runs 4 B apart, 32 times over (the value copy)
+//   a tile       Bc tokens of a [512, cap] A-layout operand: 32 runs of 16 Bc bytes
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_2d_copy(void *arg)
+{
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_idma_2d_copy_args_t);
+    if (!snrt_is_dm_core()) {
+        printf_safe("[Cluster %d Core %d]: Error! IDMA 2D copy should be called from a DM core!\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+    const __snax_bingo_kernel_idma_2d_copy_args_t *a =
+        (const __snax_bingo_kernel_idma_2d_copy_args_t *)arg;
+    const uint64_t src = make_u64(a->src_addr_hi, a->src_addr_lo);
+    const uint64_t dst = make_u64(a->dst_addr_hi, a->dst_addr_lo);
+    const uint32_t outer = a->outer ? a->outer : 1u;
+    bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_idma_2d_copy_args_t);
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+    if (a->size == 0u || a->reps == 0u) {
+        printf_safe("[Cluster %d Core %d]: Error! IDMA 2D copy: size=%d reps=%d must be "
+                    "non-zero\r\n", snrt_cluster_idx(), snrt_cluster_core_idx(),
+                    (int)a->size, (int)a->reps);
+        return BINGO_RET_FAIL;
+    }
+    BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_START);
+    for (uint32_t o = 0; o < outer; o++)
+        snrt_dma_start_2d_wideptr(dst + (uint64_t)o * a->dst_outer,
+                                  src + (uint64_t)o * a->src_outer, a->size,
+                                  a->dst_stride, a->src_stride, a->reps);
+    BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_START);
+    snrt_dma_wait_all();
+    BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_END);
+    sp->return_value = (uint32_t)dst;
+    sp->num_return_values = 0;
+    return BINGO_RET_SUCC;
+}
+
+// The expert-slot record (moe_route.h) one copy reads its source from: slot `slot`, word
+// pair 16 + 2 field. The address was decided by the router at run time, so it is looked up
+// here, on the DM core, the one engine that reaches every memory.
+// One chunk of a weight RING in this chiplet's L3 into an L1 slab. The memory chiplet's
+// iDMA PUSHES the weights into the ring (the host's prefetcher schedules it: over the
+// half-duplex D2D link a push flows one way, a pull turns the link around per request),
+// and after each chunk pushes a 64-B flag holding the chunk's sequence number. Same
+// iDMA queue, one AXI ID, one link: the flag lands after the chunk. So: wait for the flag,
+// copy the slot (a local L3 read), then hand the slot back by writing the same number
+// into its release word, which the prefetcher polls before it reuses the slot.
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_ring_load(void *arg)
+{
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_idma_ring_load_args_t);
+    if (!snrt_is_dm_core()) {
+        printf_safe("[Cluster %d Core %d]: Error! IDMA ring_load should be called from a DM core!\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+    const __snax_bingo_kernel_idma_ring_load_args_t *a =
+        (const __snax_bingo_kernel_idma_ring_load_args_t *)arg;
+    volatile uint32_t *flag = (volatile uint32_t *)a->flag_addr;
+    volatile uint32_t *release = (volatile uint32_t *)a->release_addr;
+    const uint64_t src = make_u64(a->src_addr_hi, a->src_addr_lo);
+    const uint64_t dst = make_u64(a->dst_addr_hi, a->dst_addr_lo);
+    bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_idma_ring_load_args_t);
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_START);
+    while (*flag != a->seq) {
+    }
+    snrt_dma_start_1d_wideptr(dst, src, a->size);
+    BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_START);
+    snrt_dma_wait_all();
+    BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_END);
+    *release = a->seq;
+    sp->return_value = (uint32_t)dst;
+    sp->num_return_values = 0;
+    return BINGO_RET_SUCC;
+}
+
+#define BINGO_MOE_REC_SLOT_WORDS 32u   // 128 B per slot
+#define BINGO_MOE_REC_ENTRY_WORD 16u   // the copied 64-B table entry starts here
+
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_copy_slot(void *arg)
+{
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_idma_copy_slot_args_t);
+    if (!snrt_is_dm_core()) {
+        printf_safe("[Cluster %d Core %d]: Error! IDMA copy_slot should be called from a DM core!\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+    const __snax_bingo_kernel_idma_copy_slot_args_t *a =
+        (const __snax_bingo_kernel_idma_copy_slot_args_t *)arg;
+    const volatile uint32_t *w = (const volatile uint32_t *)a->record_addr +
+                                 a->slot * BINGO_MOE_REC_SLOT_WORDS +
+                                 BINGO_MOE_REC_ENTRY_WORD + 2u * a->field;
+    const uint64_t base = make_u64(w[1], w[0]);
+    const uint64_t dst = make_u64(a->dst_addr_hi, a->dst_addr_lo);
+    bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_idma_copy_slot_args_t);
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+    if (a->field > 3u || base == 0u) {
+        printf_safe("[Cluster %d Core %d]: Error! IDMA copy_slot: slot %d field %d has no "
+                    "source (expert %d not staged?)\r\n", snrt_cluster_idx(),
+                    snrt_cluster_core_idx(), (int)a->slot, (int)a->field,
+                    (int)((const volatile uint32_t *)a->record_addr)
+                        [a->slot * BINGO_MOE_REC_SLOT_WORDS]);
+        return BINGO_RET_FAIL;
+    }
+    BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_START);
+    snrt_dma_start_1d_wideptr(dst, base + a->offset, a->size);
+    BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_START);
+    snrt_dma_wait_all();
+    BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_END);
+    sp->return_value = (uint32_t)dst;
+    sp->num_return_values = 0;
+    return BINGO_RET_SUCC;
+}

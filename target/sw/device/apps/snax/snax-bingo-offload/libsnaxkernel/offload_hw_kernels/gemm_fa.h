@@ -41,16 +41,74 @@
 #include <snax_versacore_lib.h>
 #include <gemm_shapes.h>
 
-#if BINGO_NUM_ARRAY_SHAPES != 1
-#error "gemm_fa assumes the single-shape split cluster; index the shape table if that changes"
+// Both matmuls run SHAPE 0, the (16, 4, 16) GEMM shape: every descriptor below reads
+// bingo_gemm_shape_params[0] and writes ARRAY_SHAPE_CFG = 0. A cluster may declare more
+// shapes -- snax_split_cluster adds (1, 4, 32) for the one-token GEMV (gemv.h) -- and they
+// do not concern these kernels. What shape 0 IS is checked at run time, where the table is.
+#if BINGO_NUM_ARRAY_SHAPES < 1
+#error "gemm_fa needs the (16, 4, 16) GEMM shape as shape 0 of gemm_shapes.h"
 #endif
 
-// The D write host's user-CSR window. Two registers means the Int32ToFp16Converter is
-// alone on the port, which is the cluster these kernels are written for; anything else
-// changes both the window and the bit position of the converter's enable.
-#if defined(READER_WRITER_EXTENSION_1_CSR_BASE) && \
-    READER_WRITER_EXTENSION_1_CSR_NUM != 2
+// The D write host's user-CSR window. The Int32ToFp16Converter is alone on the port on the
+// cluster these kernels are written for, and its window is one enable word plus its own
+// user CSRs:
+//
+//   2   enable, extra-loop policy                    the plain converter
+//   3   enable, extra-loop policy, k (bits [3:0])    built with `shift: 1`: the port writes
+//                                                    RNE(x * 2^-k), k clamped to 0..14
+//
+// Anything else stacks another extension on the port, which moves both the window and the
+// bit position of the converter's enable.
+//
+// WHY THE SHIFT EXISTS. An INT8 x INT8 score over d = 128 reaches 127^2 * 128 = 2,064,512,
+// 31x past FP16's 65,504. The converter does not clamp: past that edge it writes +-Inf, the
+// row's max becomes Inf, S - m becomes Inf - Inf = NaN, and the whole query row of P, l and
+// O is NaN. A power of two only moves the exponent, so RNE(S * 2^-k) keeps the same 11
+// significant bits -- no precision is lost -- and the softmax takes the factor back in its
+// temperature, a' = a * 2^k. Without it the only way to keep S finite is to shrink the INT8
+// operands, which does give up precision.
+#if defined(READER_WRITER_EXTENSION_1_CSR_BASE) && READER_WRITER_EXTENSION_1_CSR_NUM == 3
+#define BINGO_GEMM_FA_HAS_DSHIFT 1
+#elif defined(READER_WRITER_EXTENSION_1_CSR_BASE) && READER_WRITER_EXTENSION_1_CSR_NUM == 2
+#define BINGO_GEMM_FA_HAS_DSHIFT 0
+#elif defined(READER_WRITER_EXTENSION_1_CSR_BASE)
 #error "the D write host is not converter-only; re-derive the enable bitmask bit position"
+#else
+#define BINGO_GEMM_FA_HAS_DSHIFT 0
+#endif
+// k is clamped to 14 by the RTL: 2^-14 is FP16's smallest normal, so no integer lands in
+// the subnormals. A larger request is refused rather than silently clamped.
+#define BINGO_GEMM_FA_DSHIFT_MAX 14u
+
+// PV's two opt-in fixes (the flags word of __snax_bingo_kernel_gemm_fa_args_t).
+//
+//   B_KMAJOR    B = P^T's 64-byte blocks sit k-major, block (k, n) at (k*N + n)*pitch.
+//               That is the order the softmax's INTERLEAVE quantiser writes them in -- four
+//               key beats become the two query blocks of one k -- so P needs no copy.
+//               The pitch is b_tile (64 B, dense) unless b_pitch says otherwise; see
+//               "THE B PITCH" at the launch site.
+//   C_COLSCALE  O^T's column q is query q, and the online softmax must scale it by
+//               corr[q] before this tile's P.V is added. Int32ColumnScale on the C READ path
+//               (READER_WRITER_EXTENSION_0) does exactly that as C streams into the array,
+//               so the matmul computes O = corr (.) O + V^T.P^T with no extra pass.
+//   D_FP16      the LAST tile of an online softmax. O leaves through the D port as FP16,
+//               RNE(O * 2^-d_shift), into a D buffer of its own, while C is still read as
+//               the INT32 accumulator -- and scaled, with C_COLSCALE. Without it the last
+//               tile writes INT32 and a separate pass would have to narrow 64 KiB of O
+//               (d = 512, Br = 32) before anything could normalise it. The score matmul's
+//               FP16 path is the same D walk and the same converter; only C differs: QK
+//               masks it, this reads it.
+#define GEMM_FA_B_KMAJOR   1u
+#define GEMM_FA_C_COLSCALE 2u
+#define GEMM_FA_D_FP16     4u
+
+// The scaler's window: one enable word, then N (its csr 0), then 32 FP16 factors packed two
+// per CSR -- which is byte for byte a 64-byte FP16 beat, so the softmax's corr beat is copied
+// word for word. Any other count is a different extension and a different map.
+#if defined(READER_WRITER_EXTENSION_0_CSR_BASE) && READER_WRITER_EXTENSION_0_CSR_NUM == 18
+#define BINGO_GEMM_FA_HAS_COLSCALE 1
+#else
+#define BINGO_GEMM_FA_HAS_COLSCALE 0
 #endif
 
 // FP16 is the transport grid of the score tile, and the N-block interleave is laid out on
@@ -79,14 +137,20 @@
 //
 //   emit_fp16 = 1   S^T = K.Q^T. The result is consumed as FP16 by the SIMD block, so
 //                   the converter is armed and the tile reaches TCDM in HALF the beats an
-//                   INT32 tile would need. C is a zero bias.
+//                   INT32 tile would need. C is a zero bias. d_shift is the converter's
+//                   power-of-two scale: the tile is RNE(S * 2^-d_shift).
 //   emit_fp16 = 0   O^T += V^T.P^T. The result accumulates IN PLACE: C and D are the same
 //                   buffer, so the matmul's own C input carries the running O across KV
 //                   tiles and the accumulation costs nothing extra. INT32, converter off.
+//
+// b_pitch is the distance between two consecutive 64-byte B blocks in the order they are
+// stored; 0 means dense (b_tile).
 // ---------------------------------------------------------------------------
 static uint32_t __bingo_gemm_fa_run(uint32_t A_addr, uint32_t B_addr, uint32_t C_addr,
                                     uint32_t D_addr, uint32_t M, uint32_t K, uint32_t N,
                                     uint32_t emit_fp16, uint32_t perf_addr,
+                                    uint32_t flags, uint32_t corr_addr,
+                                    uint32_t d_shift, uint32_t b_pitch,
                                     bingo_kernel_scratchpad_t *sp) {
     const uint32_t meshRow  = bingo_gemm_shape_params[0].meshRow;
     const uint32_t tileSize = bingo_gemm_shape_params[0].tileSize;
@@ -99,12 +163,69 @@ static uint32_t __bingo_gemm_fa_run(uint32_t A_addr, uint32_t B_addr, uint32_t C
                     snrt_cluster_idx(), snrt_cluster_core_idx(), M, K, N);
         return BINGO_RET_FAIL;
     }
+    if (meshRow != 16u || tileSize != 4u || meshCol != 16u) {
+        printf_safe("[Cluster %d Core %d]: Error! gemm_fa is written for the (16, 4, 16) "
+                    "array; shape 0 of this cluster is (%d, %d, %d)\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx(), (int)meshRow,
+                    (int)tileSize, (int)meshCol);
+        return BINGO_RET_FAIL;
+    }
+    // The column scaler rides the C READ path, so it needs a real C (a NULL C masks every
+    // channel and the array sees zeros), an INT32 accumulation (the QK score matmul never
+    // takes it), no more column blocks than it holds factors for, and the extension itself.
+    const uint32_t colscale = (flags & GEMM_FA_C_COLSCALE) != 0u;
+    // The D side's width: FP16 for the score matmul and for a PV that ends the recurrence
+    // (GEMM_FA_D_FP16), INT32 for a PV that accumulates in place. C's side is separate: the
+    // score matmul masks it (its C is a zero bias), every PV reads it unless C_addr is 0.
+    const uint32_t d_fp16 = emit_fp16 || (flags & GEMM_FA_D_FP16) != 0u;
+    if (colscale && (emit_fp16 || C_addr == 0u || corr_addr == 0u || N > 2u ||
+                     !BINGO_GEMM_FA_HAS_COLSCALE)) {
+        printf_safe("[Cluster %d Core %d]: Error! gemm_fa C_COLSCALE unusable: fp16=%d "
+                    "C=%x corr=%x N=%d built=%d\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx(), emit_fp16, C_addr,
+                    corr_addr, N, BINGO_GEMM_FA_HAS_COLSCALE);
+        return BINGO_RET_FAIL;
+    }
+    // The shift acts on the converter's output, so it means something on the score matmul
+    // only. A request the build cannot honour is refused: the plain converter would write
+    // +-Inf for every score past 65,504, and the softmax would turn those rows into NaN.
+    if (d_shift && (!d_fp16 || !BINGO_GEMM_FA_HAS_DSHIFT ||
+                    d_shift > BINGO_GEMM_FA_DSHIFT_MAX)) {
+        printf_safe("[Cluster %d Core %d]: Error! gemm_fa d_shift=%d unusable: fp16=%d "
+                    "built=%d max=%d\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx(), d_shift, d_fp16,
+                    BINGO_GEMM_FA_HAS_DSHIFT, BINGO_GEMM_FA_DSHIFT_MAX);
+        return BINGO_RET_FAIL;
+    }
+    // An FP16 PV writes a different buffer from the INT32 one it reads: the two walks
+    // differ in bytes per block, so C == D would read half-overwritten accumulators.
+    if ((flags & GEMM_FA_D_FP16) && (emit_fp16 || C_addr == D_addr)) {
+        printf_safe("[Cluster %d Core %d]: Error! gemm_fa D_FP16 is PV's last tile: it "
+                    "needs its own D buffer (C=%x D=%x)\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx(), C_addr, D_addr);
+        return BINGO_RET_FAIL;
+    }
 
     BINGO_FA_MARK(emit_fp16, BINGO_TRACE_GEMM_FA_QK_CFG_START,
                               BINGO_TRACE_GEMM_FA_PV_CFG_START);
 
     const uint32_t a_tile = BINGO_A_ELEM_LEN * tileSize * meshRow / 8u;
     const uint32_t b_tile = BINGO_B_ELEM_LEN * tileSize * meshCol / 8u;
+    // THE B PITCH. PV's B stream walks P^T k-major, so with dense 64 B blocks it steps
+    // N*64 = 128 B per pass while its A stream (V^T) steps 64 B. TCDM repeats its banks
+    // every 256 B, four 64 B groups: B then moves round the groups twice as fast as A, the
+    // distance between the two streams keeps turning, and every few passes they want the
+    // same banks. Measured on the snax reference: PV at 1.44 cycles per pass. Placing the
+    // blocks 160 B apart makes B step 320 B = one rotation + 64 B, A's rate, and once two
+    // streams move at the same rate one collision separates them for good: 1.15 cycles per
+    // pass. The softmax writes P8 at the same pitch (its p8_pitch); the two must agree.
+    const uint32_t b_blk = b_pitch ? b_pitch : b_tile;
+    if (b_blk < b_tile || (b_blk & 7u)) {
+        printf_safe("[Cluster %d Core %d]: Error! gemm_fa b_pitch=%d: below one %d-byte "
+                    "block or not bank-aligned\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx(), b_pitch, b_tile);
+        return BINGO_RET_FAIL;
+    }
 
     // The C/D channels are a spatial NEST of BINGO_CD_SPATIAL_NUM dimensions, innermost
     // bound BINGO_CD_SPATIAL_BOUND0: channel i sits at sl0*(i%B0) + sl1*((i/B0)%B1). Every
@@ -139,16 +260,21 @@ static uint32_t __bingo_gemm_fa_run(uint32_t A_addr, uint32_t B_addr, uint32_t C
     uint32_t Ats[T_STRIDE_NUM_READER_0] = { a_tile, 0u, K * a_tile, 0u, 0u, 0u };
     uint32_t Bsl[S_STRIDE_NUM_READER_1] = { bw / 8u };
     uint32_t Btb[T_BOUND_NUM_READER_1]  = { K, N, M };
-    uint32_t Bts[T_STRIDE_NUM_READER_1] = { b_tile, K * b_tile, 0u };
+    // B's block order. n-major (block (k, n) at (n*K + k)*b_tile) is how a B operand is
+    // normally stored; k-major is how the INTERLEAVE quantiser writes P. The bounds walk
+    // k innermost either way -- only where each block is found changes.
+    const uint32_t kmaj = (flags & GEMM_FA_B_KMAJOR) != 0u;
+    uint32_t Bts[T_STRIDE_NUM_READER_1] = { kmaj ? N * b_blk : b_blk,
+                                            kmaj ? b_blk : K * b_blk, 0u };
     uint32_t Csl[S_STRIDE_NUM_READER_WRITER_0] = { bw / 8u, key_row };
     uint32_t Ctb[T_BOUND_NUM_READER_WRITER_0]  = {
         BINGO_C_ELEM_LEN * meshRow * meshCol / serial, N, M };
     uint32_t Cts[T_STRIDE_NUM_READER_WRITER_0] = { c_chunk, n_step, N * blk_i32 };
     uint32_t Dsl[S_STRIDE_NUM_READER_WRITER_1] = { bw / 8u, key_row };
     uint32_t Dtb[T_BOUND_NUM_READER_WRITER_1]  = {
-        emit_fp16 ? d_bound0 / 2u : d_bound0, N, M };
+        d_fp16 ? d_bound0 / 2u : d_bound0, N, M };
     uint32_t Dts[T_STRIDE_NUM_READER_WRITER_1] = {
-        c_chunk, n_step, emit_fp16 ? d_stride2 / 2u : d_stride2 };
+        c_chunk, n_step, d_fp16 ? d_stride2 / 2u : d_stride2 };
     // The D write host has no channel mask of its own -- the reader_writer declares
     // configurable_channel [1, 0], so only the READ slot has one and the library's write of
     // this array is compiled out.
@@ -185,7 +311,44 @@ static uint32_t __bingo_gemm_fa_run(uint32_t A_addr, uint32_t B_addr, uint32_t C
         D_addr, Dsl, Dtb, Dts, 0, chD,
         /*array_shape=*/0, /*quantization_enable=*/0,
         /*shift_i=*/0, /*multiplier_i=*/0, /*input_zp_i=*/0, /*output_zp_i=*/0,
-        /*int32tofp16_enable=*/(int32_t)emit_fp16, /*int4_a=*/0, /*int4_b=*/0);
+        /*int32tofp16_enable=*/(int32_t)d_fp16, /*int4_a=*/0, /*int4_b=*/0);
+
+#if BINGO_GEMM_FA_HAS_DSHIFT
+    // The converter's k, written on EVERY dispatch, 0 on an INT32 PV. The register is
+    // latched at START like the rest of the window and otherwise persists, so a k left
+    // behind by a score matmul would scale the FP16 output of whatever arms the converter
+    // next. (set_versacore_streamer_csr leaves it alone since snax 33c3bfd0, so this write
+    // is the only one: k for QK and for an FP16 PV, 0 otherwise.)
+    csrw_ss(READER_WRITER_EXTENSION_1_CSR_BASE + 2, d_fp16 ? d_shift : 0u);
+#endif
+
+#if BINGO_GEMM_FA_HAS_COLSCALE
+    // ---- the C read path's column scaler ---------------------------------------------
+    // Staged like every other streamer CSR and latched at START, so it applies to this
+    // dispatch only once the enable is cleared again below. N is the output's column-block
+    // count: the scaler walks C in the same (m, n, chunk) order as the descriptor above.
+    if (colscale) {
+        const volatile uint32_t *f = (const volatile uint32_t *)(uintptr_t)corr_addr;
+        csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 1, N);
+        csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 2, f[0]);
+        csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 3, f[1]);
+        csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 4, f[2]);
+        csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 5, f[3]);
+        csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 6, f[4]);
+        csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 7, f[5]);
+        csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 8, f[6]);
+        csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 9, f[7]);
+        csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 10, f[8]);
+        csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 11, f[9]);
+        csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 12, f[10]);
+        csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 13, f[11]);
+        csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 14, f[12]);
+        csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 15, f[13]);
+        csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 16, f[14]);
+        csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 17, f[15]);
+        csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 0, 1u);
+    }
+#endif
 
     // ---- the accelerator ---------------------------------------------------------------
     // take_in_new_c = 1: every output block starts from C, which is what makes the second
@@ -211,6 +374,12 @@ static uint32_t __bingo_gemm_fa_run(uint32_t A_addr, uint32_t B_addr, uint32_t C
     // here -- even a short poll loop -- is long enough for that to happen.
     csrw_ss(STREAMER_START_CSR, 0);
     csrw_ss(STREAMER_START_CSR, 0);
+#if BINGO_GEMM_FA_HAS_COLSCALE
+    // DISARM THE SCALER. The enable this dispatch needs was latched at START; left set, it
+    // would scale the C of whatever configures this streamer next -- every other GEMM
+    // kernel, none of which knows the extension exists.
+    if (colscale) csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 0, 0u);
+#endif
 
     // Wait for the dispatch by COUNTER, not by polling busy.
     //
@@ -338,14 +507,22 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_fa_qk(void *arg) {
         (const __snax_bingo_kernel_gemm_fa_args_t *)arg;
     bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_gemm_fa_args_t);
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+    // QK's B is Q^T, dense and n-major: neither PV flag nor a B pitch describes it.
+    if (a->flags || a->b_pitch) {
+        printf_safe("[Cluster %d Core %d]: Error! gemm_fa_qk takes no flags or b_pitch "
+                    "(got %d, %d)\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx(), a->flags, a->b_pitch);
+        return BINGO_RET_FAIL;
+    }
     return __bingo_gemm_fa_run(a->input_A_addr, a->input_B_addr, a->input_C_addr,
                                a->output_D_addr, a->M, a->K, a->N, 1u,
-                               a->perf_addr, sp);
+                               a->perf_addr, 0u, 0u, a->d_shift, 0u, sp);
 }
 
 // O^T += V^T.P^T -- accumulated in place in INT32. The caller passes the SAME buffer as C
 // and D; that is the online accumulation across KV tiles, and it is the GEMM's own C input
-// rather than anything extra.
+// rather than anything extra. The last tile may instead leave as FP16 (GEMM_FA_D_FP16, with
+// d_shift and a D of its own).
 // M*meshRow = d, N*meshCol = Br, K*tileSize = Bc.
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_fa_pv(void *arg) {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_gemm_fa_args_t);
@@ -357,5 +534,6 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemm_fa_pv(void *arg) {
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
     return __bingo_gemm_fa_run(a->input_A_addr, a->input_B_addr, a->input_C_addr,
                                a->output_D_addr, a->M, a->K, a->N, 0u,
-                               a->perf_addr, sp);
+                               a->perf_addr, a->flags, a->corr_addr, a->d_shift,
+                               a->b_pitch, sp);
 }
