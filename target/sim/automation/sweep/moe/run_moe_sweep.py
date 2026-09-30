@@ -12,7 +12,7 @@ rather than as zero cycles.
 
     source ~/no_backup/src_hemaia_eda.sh
     python3 run_moe_sweep.py --engine vcs --waveform 0 -j 1 \
-        --cfg ../../../rtl/cfg/hemaia_singlechiplet_16MB_4cluster.hjson
+        --cfg ../../../rtl/cfg/hemaia_twochiplet_16MBL3_4cluster.hjson
 
 Add --sw-only to reuse an existing RTL build and rebuild only the app binaries.
 """
