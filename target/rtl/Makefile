@@ -221,7 +221,7 @@ $(SOCCTRL_HJSON_DIR)/occamy_soc_reg.hjson: $(SOURCE_SOCCTRL_DIR)/occamy_soc_reg.
 	@echo "[OCCAMYGEN] Generate $@"
 	@$(OCCAMYGEN) --cfg $(CFG) --outdir $(SOCCTRL_HJSON_DIR) --ctrl $<
 # Generate the RTL file from the template
-$(SOCCTRL_RTL_TARGET): $(SOURCE_SOCCTRL_DIR)/occamy_soc_ctrl.sv.tpl | $(TARGET_SOCCTRL_DIR)
+$(SOCCTRL_RTL_TARGET): $(SOURCE_SOCCTRL_DIR)/occamy_soc_ctrl.sv.tpl $(CFG) | $(TARGET_SOCCTRL_DIR)
 	@echo "[OCCAMYGEN] Generate $@"
 	@$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_SOCCTRL_DIR) --ctrl $<
 
@@ -321,8 +321,9 @@ $(CLINT_REGGEN_TARGETS): .clint_reggen_targets_group
 $(CLINT_HJSON_DIR)/clint.hjson: $(SOURCE_CLINT_DIR)/data/clint.hjson.tpl $(CFG)
 	@echo "[OCCAMYGEN] Generate $@"
 	@$(OCCAMYGEN) --cfg $(CFG) --outdir $(CLINT_HJSON_DIR) --chip $<
-# Generate the RTL file from the template
-$(CLINT_RTL_TARGET): $(SOURCE_CLINT_DIR)/data/clint.sv.tpl | $(TARGET_CLINT_DIR)
+# Generate the RTL file from the template. It depends on the cfg (the hart count), or a
+# build for another cfg keeps the previous one's CLINT.
+$(CLINT_RTL_TARGET): $(SOURCE_CLINT_DIR)/data/clint.sv.tpl $(CFG) | $(TARGET_CLINT_DIR)
 	@echo "[OCCAMYGEN] Generate $@"
 	@$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_CLINT_DIR) --chip $<
 

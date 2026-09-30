@@ -42,6 +42,9 @@ APP_ELF  = $(SW_HOST_APPS_DIR)$(APP_REL_PATH)/build/$(APP_NAME).elf
 APP_BIN  = $(SW_HOST_APPS_DIR)$(APP_REL_PATH)/build/$(APP_NAME).bin
 APP_DUMP = $(SW_HOST_APPS_DIR)$(APP_REL_PATH)/build/$(APP_NAME).dump
 APP_MEM  = $(SW_HOST_APPS_DIR)$(APP_REL_PATH)/build/mempool.bin
+# A memory chip's own SRAM image, build/mempool_chip_<x>_<y>.bin (bingo_data_staging.py),
+# which that chip loads instead of mempool/ (load_binary.sv.tpl).
+APP_MEM_CHIPS = $(wildcard $(SW_HOST_APPS_DIR)$(APP_REL_PATH)/build/mempool_chip_*.bin)
 # The memchip HBM image: build/hbm/manifest.txt and the files it lists (see
 # hw/hemaia/hemaia_mem_system/hbm/README.md).
 APP_HBM  = $(SW_HOST_APPS_DIR)$(APP_REL_PATH)/build/hbm
@@ -81,6 +84,14 @@ apps: $(APP_ELF)
 		python3 bin2hex.py -i mempool.bin; \
 		cp -r -f $(MKFILE_DIR)/mempool $(BIN_DIR); \
 	fi
+# Removed first, like the HBM below, so a chip does not keep the previous workload's.
+	rm -rf $(BIN_DIR)/mempool_chip_*
+	for img in $(APP_MEM_CHIPS); do \
+		name=$$(basename $$img .bin); \
+		cp -f $$img $(MKFILE_DIR); \
+		python3 bin2hex.py -i $$name.bin; \
+		cp -r -f $(MKFILE_DIR)/$$name $(BIN_DIR); \
+	done
 # The HBM image is symlinked, never copied: it can be GiBs. Removed first so a
 # workload without one does not inherit the previous workload's.
 	rm -rf $(BIN_DIR)/hbm
