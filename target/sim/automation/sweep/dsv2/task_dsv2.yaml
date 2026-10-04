@@ -1,0 +1,8 @@
+# DeepSeek-V2-Lite layer 1 on the two-chiplet platform: the full layer (every stage, 1-8), one
+# token, INT4, its tuned params -- about 45 minutes of simulation. Every check byte-exact
+# against the snax golden. Stage by stage: -f task_dsv2_stages.yaml.
+#
+#     python3 run_dsv2_sweep.py [--sw-only]
+#     grep -E "Check|PASS|FAIL" task_*/bin/uart_chip_0_0.log
+runs:
+  - {HOST_APP_TYPE: offload_bingo_hw, CHIP_TYPE: multi_chip, DEV_APP: snax-bingo-offload, WORKLOAD: dsv2/two_chiplet/full_layer}
