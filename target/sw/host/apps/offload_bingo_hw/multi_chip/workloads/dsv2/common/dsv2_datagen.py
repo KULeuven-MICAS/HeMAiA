@@ -22,6 +22,8 @@ WHERE EACH PIECE GOES.
                            every golden
 """
 
+import dataclasses
+import glob
 import os
 import sys
 
@@ -73,6 +75,188 @@ def f16(a):
     return np.ascontiguousarray(np.asarray(a, dtype=np.float16))
 
 
+def att_split_plan(n_chips, nc, att, n_tiles, mode="key", chips=None):
+    """The split attention (params att_split), as the golden and the device graph both build it.
+
+    Every cluster attends over its own shard of key tiles for all 16 heads.
+
+    mode "key" (the default): PV split by key too. The attention's cluster takes the LAST
+    shard: it holds the row this token appends, which only its chip's cache copy receives.
+    Each chip's clusters add their partials on the chip's lead (the attention's cluster on its
+    chip, else the first), then the attention's cluster adds the other chips' in chip order.
+    shards[g] = (first tile, tiles); chips[k] = [lead, the others]; order = chips, in the order
+    the attention's cluster adds them (its own first).
+
+    mode "dim" (params att_split_mode: dim): QK and the softmax split by key, PV by latent:
+    every cluster gets every shard's P and computes its own d_v / G rows of O^T over ALL the
+    keys, so nothing is added in FP16 but the row sums. One cluster order serves every
+    gathered array: slots = the clusters chip by chip, the attention's chip LAST (an
+    all-gather over chips in that order lays the parts out in it). Slot i holds key tiles
+    [i nt, (i+1) nt) and O^T rows [i d_v/G, (i+1) d_v/G); the last slot, on the attention's
+    chip, holds the appended row. The row sums add as a halving tree over the slots.
+
+    `chips` (mode dim only, params att_split_chips): the chip indices (the platform's chiplet
+    order) that take part, the attention's among them; default every chip. g keeps its global
+    numbering; G is then the clusters taking part."""
+    ka = att // nc
+    part = list(range(n_chips)) if chips is None else [int(k) for k in chips]
+    if chips is not None and (mode != "dim" or ka not in part or len(set(part)) != len(part)
+                              or not all(0 <= k < n_chips for k in part)):
+        raise ValueError(f"att_split_chips={chips}: mode dim, distinct chip indices < {n_chips}, "
+                         f"the attention's chip {ka} among them")
+    G = len(part) * nc
+    if n_tiles % G:
+        raise ValueError(f"att_split: {n_tiles} key tiles do not split over {G} clusters")
+    nt = n_tiles // G
+    if mode == "dim":
+        corder = [k for k in part if k != ka] + [ka]
+        slots = [k * nc + c for k in corder for c in range(nc)]
+        if G & (G - 1):
+            raise ValueError(f"att_split_mode dim: the row-sum tree halves {G} slots")
+        return dict(G=G, nt=nt, mode="dim", slots=slots, chip_order=corder, att=att,
+                    shards={g: (i * nt, nt) for i, g in enumerate(slots)},
+                    slot={g: i for i, g in enumerate(slots)})
+    if mode != "key":
+        raise ValueError(f"att_split_mode={mode!r}: key or dim")
+    cl = [g for g in range(G) if g != att] + [att]
+    shards = {g: (s * nt, nt) for s, g in enumerate(cl)}
+    chips = []
+    for k in range(n_chips):
+        mem = [k * nc + c for c in range(nc)]
+        lead = att if att in mem else mem[0]
+        chips.append([lead] + [g for g in mem if g != lead])
+    ka = att // nc
+    return dict(G=G, nt=nt, shards=shards, chips=chips, mode="key",
+                order=[ka] + [k for k in range(n_chips) if k != ka], att=att)
+
+
+def split_attention_golden(g, hm, p):
+    """g.hw with the attention split over the clusters by key (att_split, one token).
+
+    Pass 1: each shard's row maximum, as the softmax kernel leaves it after the shard's tiles;
+    the global maximum m* is their lanewise max (the same kernel run on the gathered rows).
+    Pass 2: each shard's softmax SEEDED at m* (seed_state 0), so every shard quantises P on one
+    scale and its PV needs no correction; its last tile leaves O16_c through the D port. The
+    partials and their row sums are added in FP16 in the plan's order, then the normalise, W_UV,
+    W_O and the MoE run exactly as hwmodel.run_tokens does them."""
+    F16, F32, F64 = hm.F16, hm.F32, hm.F64
+    simd = hm.simd
+    H = dict(g.hw)
+    Q8, Kc, Vc = H["Q8"], H["Kc"], H["Vc"]
+    a32, k_s, k_o, a_n, bc = F32(H["a_exp"]), H["ks"]["s"], H["k_o"], H["a_n"], g.bc
+    T, Br = Kc.shape[0], Q8.shape[0]
+    if T % bc:
+        raise ValueError(f"att_split: {T} keys are not whole tiles of {bc}")
+    plan = att_split_plan(int(p["num_chiplets"]), int(p["num_clusters"]),
+                          int(p.get("att_cluster", 1)), T // bc, p.get("att_split_mode", "key"),
+                          p.get("att_split_chips"))
+    lane_max = lambda a: simd.reduce_lanewise(a, simd.MAX)
+
+    def tile(j):
+        K = Kc[j * bc:(j + 1) * bc].astype(np.int64)
+        V = Vc[j * bc:(j + 1) * bc].astype(np.int64)
+        return hm.d_port(K @ Q8.astype(np.int64).T, k_s), V
+
+    seed = np.full(Br, -65504.0, dtype=F16)
+    m_c = {}
+    for c, (t0, nt) in plan["shards"].items():
+        m16 = seed
+        for j in range(t0, t0 + nt):
+            m16 = lane_max(np.stack([lane_max(tile(j)[0]), m16]))
+        m_c[c] = m16
+    mstar = lane_max(np.stack([lane_max(np.stack(list(m_c.values()))), seed]))
+
+    dim = plan["mode"] == "dim"
+    O16, lc, oc, o_all = {}, {}, {}, 0
+    for c, (t0, nt) in plan["shards"].items():
+        m16, l16, o = mstar, np.zeros(Br, dtype=F16), None
+        for j in range(t0, t0 + nt):
+            S16, V = tile(j)
+            mnew = lane_max(np.stack([lane_max(S16), m16]))
+            corr16 = hm.exp16(hm.add16(m16, -mnew), a32)
+            p16 = hm.exp16(hm.add16(S16, -mnew[None, :]), a32)
+            rsum16 = simd.reduce_lanewise(p16, simd.ADD)
+            l16 = simd.reduce_lanewise(np.stack([rsum16, hm.mul16(corr16, l16)]), simd.ADD)
+            pv = V.T @ hm.quant_i8(p16, hm.P8_SCALE).astype(np.int64)
+            if dim:
+                # one INT32 matmul over every key: no column scale (corr is 1 at m*)
+                o_all = o_all + pv
+            else:
+                o = pv if o is None else np.clip(
+                    np.rint(o.astype(F64) * corr16.astype(F64)[None, :]),
+                    -2**31, 2**31 - 1).astype(np.int64) + pv
+            m16 = mnew
+        lc[c] = l16
+        if not dim:
+            O16[c], oc[c] = hm.d_port(o, k_o), o
+
+    if dim:
+        # O^T leaves the D port once, at k_o; the row sums add as the device's halving tree
+        Ot, oc = hm.d_port(o_all, k_o), {0: o_all}
+        ls = [lc[g] for g in plan["slots"]]
+        while len(ls) > 1:
+            h_ = len(ls) // 2
+            ls = [hm.add16(ls[i], ls[i + h_]) for i in range(h_)]
+        lt = ls[0]
+    else:
+        def fold(members):
+            acc_o, acc_l = O16[members[0]], lc[members[0]]
+            for c in members[1:]:
+                acc_o, acc_l = hm.add16(acc_o, O16[c]), hm.add16(acc_l, lc[c])
+            return acc_o, acc_l
+        parts = [fold(plan["chips"][k]) for k in plan["order"]]
+        Ot, lt = parts[0]
+        for o_, l_ in parts[1:]:
+            Ot, lt = hm.add16(Ot, o_), hm.add16(lt, l_)
+    t16 = simd.stream_map(lt, a_n, 0.0, simd.RSQRT)
+    rsc16 = hm.mul16(t16, t16)
+    ot = hm.mul16(Ot, rsc16[None, :]).T
+    heads = g.pack.W.d.heads
+    # a gross error would not survive this: the split is the same attention, re-rounded
+    ref = np.asarray(H["ot16"], dtype=np.float64)
+    err = np.max(np.abs(ot[:heads].astype(np.float64) - ref)) / max(np.max(np.abs(ref)), 1e-6)
+    if err > 0.05:
+        raise AssertionError(f"att_split golden drifts {err:.3f} from the sequential attention")
+    att = dict(o=sum(oc.values()), m=mstar, l=lt, tiles=[],
+               split=dict(plan=plan, m_c=m_c, O16=O16, l=lc, mstar=mstar))
+    tk = dict(H)
+    tk.update(hm.mla_output(g.pack, g.scales, tk["x16"], ot[:heads]))
+    tk.update(hm.moe_route(g.pack, g.scales, tk["h16"]))
+    order = hm.union_order([tk["ids"]])
+    tk.update(hm.moe_experts(g.pack, g.scales, tk["h16"], tk,
+                             [e for e in order if e in list(tk["ids"])]))
+    pair = dict(Q8=Q8, att=att, O16=Ot, rsc16=rsc16, masked=[])
+    tk.update(pair, pairs=[pair], order=order)
+    return tk
+
+
+def _golden_cached(golden, dsv2_dir, seed, L, wbits):
+    """export_only: the golden of (seed, L, wbits) from a pickle cache (BINGO_GOLDEN_CACHE, default
+    ~/.cache/hemaia/golden), keyed also by the golden's own sources -- it is slow to build and
+    the same for every scheduling variant a DSE exports."""
+    import hashlib
+    import pickle
+    src = hashlib.sha1()
+    for f in sorted(glob.glob(os.path.join(dsv2_dir, "util", "*.py"))):
+        with open(f, "rb") as fh:
+            src.update(fh.read())
+    root = os.environ.get("BINGO_GOLDEN_CACHE", os.path.expanduser("~/.cache/hemaia/golden"))
+    path = os.path.join(root, f"s{seed}_L{L}_w{wbits}_bc{BC}_{src.hexdigest()[:12]}.pkl")
+    try:
+        with open(path, "rb") as fh:
+            return pickle.load(fh)
+    except (OSError, EOFError, pickle.UnpicklingError):
+        pass
+    g = golden.make(seed=seed, L=L, bc=BC, wbits=wbits) if wbits != 8 else \
+        golden.make(seed=seed, L=L, bc=BC)
+    os.makedirs(root, exist_ok=True)
+    tmp = f"{path}.{os.getpid()}"
+    with open(tmp, "wb") as fh:
+        pickle.dump(g, fh, protocol=pickle.HIGHEST_PROTOCOL)
+    os.replace(tmp, path)
+    return g
+
+
 def generate(p, dsv2_dir):
     golden, hwmodel, layout, fp, pack = import_dsv2(dsv2_dir)
     seed, L = int(p.get("seed", 1)), int(p.get("L", 511))
@@ -81,8 +265,17 @@ def generate(p, dsv2_dir):
     wbits = int(p.get("wbits", 8))
     if wbits not in (8, 4):
         raise ValueError(f"params wbits={wbits}: 8 or 4")
-    g = golden.make(seed=seed, L=L, bc=BC, wbits=wbits) if wbits != 8 else \
-        golden.make(seed=seed, L=L, bc=BC)
+    if p.get("export_only", False):
+        g = _golden_cached(golden, dsv2_dir, seed, L, wbits)
+    else:
+        g = golden.make(seed=seed, L=L, bc=BC, wbits=wbits) if wbits != 8 else \
+            golden.make(seed=seed, L=L, bc=BC)
+    # params att_split: the attention split over every cluster by key (att_split_plan); its
+    # golden differs from the one-cluster attention's by rounding, and so does all after it
+    if p.get("att_split", False):
+        if int(p.get("tokens", 1)) != 1:
+            raise ValueError("att_split: one token per pass")
+        g = dataclasses.replace(g, hw=split_attention_golden(g, hwmodel, p))
     d, H, S, P = g.dims, g.hw, g.scales, g.pack
     if (d.hidden, d.heads, d.q_head, d.kv_rank + d.q_rope, d.n_routed, d.top_k,
             d.moe_inter, d.shared_inter) != (D_MODEL, HEADS, Q_HEAD, KV, N_EXP, TOP_K, I_EXP,
@@ -243,7 +436,9 @@ def generate(p, dsv2_dir):
                     "o": int(f32(S.o.inv)), "h": int(f32(S.h.inv)),
                     "sh_a": int(f32(S.shared_a.inv))},
                 x16=f16(H["x16"]), toks=toks, blobs=blobs, factors=factors, expert_f=expert_f,
-                rope=rope, key0=key0, val0=val0, gold=gold, report=report, pass_=pas)
+                rope=rope, key0=key0, val0=val0, gold=gold, report=report, pass_=pas,
+                # the whole one-token hardware model, for a mapping that cuts its own slices
+                hw=H)
 
 
 def _pass(g, hwmodel, layout, fp, raw, L, T, mesh):

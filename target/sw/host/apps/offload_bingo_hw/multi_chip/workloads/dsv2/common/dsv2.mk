@@ -58,7 +58,9 @@ BINGO_GEN_DEPS = $(shell find $(REPO_ROOT)/target/sw/host/runtime/libbingo/mini_
                  $(wildcard $(DSV2_ROOT)/common/*.py) \
                  $(wildcard $(dir $(MK_DIR:/=))*/main_bingo.py)
 
-$(DATA_H) $(OFFLOAD_H) $(HBM_MANIFEST): $(MK_DIR)main_bingo.py $(DATA_CFG) $(PLATFORM_H) $(BINGO_GEN_DEPS)
+# ONE run makes all three: a grouped target (&:, GNU make >= 4.3). As three plain targets of one
+# rule, make runs the recipe once for each that is out of date -- three generator runs per build.
+$(DATA_H) $(OFFLOAD_H) $(HBM_MANIFEST) &: $(MK_DIR)main_bingo.py $(DATA_CFG) $(PLATFORM_H) $(BINGO_GEN_DEPS)
 	python3 $(MK_DIR)main_bingo.py \
 		--output_dir $(MK_DIR) \
 		--data_h $(DATA_H) \
@@ -79,5 +81,11 @@ clean-data:
 clean-offload:
 	rm -rf $(OFFLOAD_H) $(MK_DIR)*.png $(MK_DIR)*.csv $(MK_DIR)block_dfg
 clean: clean-data clean-offload
+
+# The host's checks print only failures, and each chip one "Checks: N PASS, M FAIL" line at exit
+# (host_kernel_lib.h BINGO_CHECK_QUIET): every PASS line goes through the UART and costs
+# simulated time. `make ... CHECK_QUIET=0` prints every PASS again.
+CHECK_QUIET ?= 1
+RISCV_CFLAGS += -DBINGO_CHECK_QUIET=$(CHECK_QUIET)
 
 include $(APP_ROOT)/../../common.mk

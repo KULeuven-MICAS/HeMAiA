@@ -1,0 +1,54 @@
+// DeepSeek-V2-Lite layer 1 on six chiplets (hemaia_sixchiplet_16MBL3_2cluster), one token, INT4:
+// the optimal settings, the same in every stage directory, so stage N is the first N stages of
+// the best layer. What each field does is in ../../common/dsv2_mc.py.
+//
+// The compute chips' RX yield (d2d_rx_yield) needs the D2D router with writer fairness
+// (hw/hemaia/hemaia_d2d_link write-aware router mux): without it, routed rings with the
+// compute-side yield stall the gather reads.
+{
+  num_chiplets: 4
+  num_clusters: 2
+  seed: 1
+  L: 511
+  tokens: 1
+  wbits: 4
+  latent_cluster: 0
+  att_cluster: 1
+  fence_kv: true
+  w_chunk_bytes: 114688
+  w_buffers: 3
+  weight_ring:
+  {
+    slots: 20
+    batch: 1
+    policy: 1
+    batch_routed: 4
+    trailer: true
+    head: 8
+    batch_head: 4
+    routed_rings: true
+  }
+  static_l1: true
+  compact_tables: true
+  d2d_ddr: true
+  expert_after_route: true
+  wdkv_after_wq: true
+  gather_hier: true
+  expert_map: colgroup
+  // the compute chips yield their receive side every 255 flits, so a gather read's data gets
+  // back against the push
+  d2d_rx_yield:
+  [
+    255
+    0
+  ]
+  weight_crest: true
+  expert_gather_lag: 1
+  latent_late: true
+  latent_after_q: true
+  q_fused: true
+  lag_collect_late: false
+  q_stash_first: true
+  sh_after_h: false
+  att_loads_first: true
+}
