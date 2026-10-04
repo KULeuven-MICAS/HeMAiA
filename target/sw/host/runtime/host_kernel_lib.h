@@ -28,6 +28,17 @@ static inline uint64_t __host_bingo_kernel_dummy(void *arg){
     return BINGO_RET_SUCC;
 }
 
+// BINGO_CHECK_QUIET (a build flag; the dsv2 workloads set it, CHECK_QUIET=0 clears it): a
+// passing check is counted, not printed -- each PASS line through the UART costs simulated
+// time -- and the exit prints the counts. A failing check always prints, with its mismatches.
+#ifndef BINGO_CHECK_QUIET
+#define BINGO_CHECK_QUIET 0
+#endif
+static uint32_t bingo_check_npass __attribute__((unused)), bingo_check_nfail __attribute__((unused));
+#define BINGO_CHECK_PASS(...) do { bingo_check_npass++; \
+    if (!BINGO_CHECK_QUIET) printf_safe(__VA_ARGS__); } while (0)
+#define BINGO_CHECK_FAIL(...) do { bingo_check_nfail++; printf_safe(__VA_ARGS__); } while (0)
+
 static inline uint64_t __host_bingo_kernel_exit(void *arg){
     // Arg[0]: exit_code, Arg[1]: scratchpad_ptr
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
@@ -35,6 +46,9 @@ static inline uint64_t __host_bingo_kernel_exit(void *arg){
     bingo_kernel_scratchpad_t* sp = (bingo_kernel_scratchpad_t*)(uintptr_t)((uint64_t *)arg)[1];
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_START);
+    if (bingo_check_npass + bingo_check_nfail)
+        printf_safe("Chip(%x, %x): [Host] Checks: %d PASS, %d FAIL\r\n", get_current_chip_loc_x(),
+                    get_current_chip_loc_y(), (int)bingo_check_npass, (int)bingo_check_nfail);
     printf_safe("Chip(%x, %x): [Host] Kernel Exit called with exit code %d\r\n", get_current_chip_loc_x(), get_current_chip_loc_y(), exit_code);
     BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
     sp->return_value = BINGO_RET_EXIT;
@@ -138,6 +152,10 @@ static inline uint64_t __host_bingo_kernel_check_result(void *arg){
     tol_u.u = tolerance_bits;
     const float tolerance = tol_u.f;
 
+    // quiet checks: one line when the first one starts (the layer is over), so a log still
+    // says when the checks began
+    if (BINGO_CHECK_QUIET && !(bingo_check_npass + bingo_check_nfail))
+        printf_safe("[Host] Check [%s]: the checks start (quiet: failures only)\r\n", name);
     // add a fence here before check to get the latest data in the main mem
     asm volatile("fence" ::: "memory");
     uint32_t err = 0;
@@ -191,10 +209,10 @@ static inline uint64_t __host_bingo_kernel_check_result(void *arg){
         sp->return_value = err;
         sp->num_return_values = 0;
         if (err == 0) {
-            printf_safe("[Host] Check [%s]: PASS (%d bytes)\r\n", name, data_size);
+            BINGO_CHECK_PASS("[Host] Check [%s]: PASS (%d bytes)\r\n", name, data_size);
             return BINGO_RET_SUCC;
         } else {
-            printf_safe("[Host] Check [%s]: FAIL (%d / %d bytes)\r\n", name, err, data_size);
+            BINGO_CHECK_FAIL("[Host] Check [%s]: FAIL (%d / %d bytes)\r\n", name, err, data_size);
             return BINGO_RET_FAIL;
         }
     } else if (check_type == BINGO_CHECK_TYPE_INT8_TOL) {
@@ -215,10 +233,10 @@ static inline uint64_t __host_bingo_kernel_check_result(void *arg){
         sp->return_value = err;
         sp->num_return_values = 0;
         if (err == 0) {
-            printf_safe("[Host] Check [%s]: PASS (%d int8, tol=%d)\r\n", name, data_size, tol);
+            BINGO_CHECK_PASS("[Host] Check [%s]: PASS (%d int8, tol=%d)\r\n", name, data_size, tol);
             return BINGO_RET_SUCC;
         } else {
-            printf_safe("[Host] Check [%s]: FAIL (%d / %d int8, tol=%d)\r\n", name, err, data_size, tol);
+            BINGO_CHECK_FAIL("[Host] Check [%s]: FAIL (%d / %d int8, tol=%d)\r\n", name, err, data_size, tol);
             return BINGO_RET_FAIL;
         }
     } else if (check_type == BINGO_CHECK_TYPE_INT32_RELTOL) {
@@ -255,11 +273,11 @@ static inline uint64_t __host_bingo_kernel_check_result(void *arg){
         sp->return_value = err;
         sp->num_return_values = 0;
         if (err == 0) {
-            printf_safe("[Host] Check [%s]: PASS (%d int32, rtol=%d/1e4)\r\n", name,
+            BINGO_CHECK_PASS("[Host] Check [%s]: PASS (%d int32, rtol=%d/1e4)\r\n", name,
                         (int)num_elements, (int)(tolerance * 10000.0f));
             return BINGO_RET_SUCC;
         } else {
-            printf_safe("[Host] Check [%s]: FAIL (%d / %d int32, rtol=%d/1e4)\r\n", name,
+            BINGO_CHECK_FAIL("[Host] Check [%s]: FAIL (%d / %d int32, rtol=%d/1e4)\r\n", name,
                         err, (int)num_elements, (int)(tolerance * 10000.0f));
             return BINGO_RET_FAIL;
         }
@@ -287,11 +305,11 @@ static inline uint64_t __host_bingo_kernel_check_result(void *arg){
         sp->return_value = err;
         sp->num_return_values = 0;
         if (err == 0) {
-            printf_safe("[Host] Check [%s]: PASS (%d fp32 elems, tol_bits=0x%08x)\r\n",
+            BINGO_CHECK_PASS("[Host] Check [%s]: PASS (%d fp32 elems, tol_bits=0x%08x)\r\n",
                    name, num_elements, tolerance_bits);
             return BINGO_RET_SUCC;
         } else {
-            printf_safe("[Host] Check [%s]: FAIL (%d / %d fp32 elems, tol_bits=0x%08x)\r\n",
+            BINGO_CHECK_FAIL("[Host] Check [%s]: FAIL (%d / %d fp32 elems, tol_bits=0x%08x)\r\n",
                    name, err, num_elements, tolerance_bits);
             return BINGO_RET_FAIL;
         }
@@ -322,11 +340,11 @@ static inline uint64_t __host_bingo_kernel_check_result(void *arg){
         sp->return_value = err;
         sp->num_return_values = 0;
         if (err == 0) {
-            printf_safe("[Host] Check [%s]: PASS (%d fp16 elems, tol_bits=0x%08x)\r\n",
+            BINGO_CHECK_PASS("[Host] Check [%s]: PASS (%d fp16 elems, tol_bits=0x%08x)\r\n",
                    name, num_elements, tolerance_bits);
             return BINGO_RET_SUCC;
         } else {
-            printf_safe("[Host] Check [%s]: FAIL (%d / %d fp16 elems, tol_bits=0x%08x)\r\n",
+            BINGO_CHECK_FAIL("[Host] Check [%s]: FAIL (%d / %d fp16 elems, tol_bits=0x%08x)\r\n",
                    name, err, num_elements, tolerance_bits);
             printf_safe("[Host] Check [%s]: bad per 1/16 (%d elems each): "
                    "%d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d\r\n",
@@ -378,11 +396,11 @@ static inline uint64_t __host_bingo_kernel_check_result(void *arg){
         sp->return_value = err;
         sp->num_return_values = 0;
         if (err == 0) {
-            printf_safe("[Host] Check [%s]: PASS (%d fp16 elems, rtol_bits=0x%08x)\r\n",
+            BINGO_CHECK_PASS("[Host] Check [%s]: PASS (%d fp16 elems, rtol_bits=0x%08x)\r\n",
                    name, num_elements, tolerance_bits);
             return BINGO_RET_SUCC;
         } else {
-            printf_safe("[Host] Check [%s]: FAIL (%d / %d fp16 elems, rtol_bits=0x%08x)\r\n",
+            BINGO_CHECK_FAIL("[Host] Check [%s]: FAIL (%d / %d fp16 elems, rtol_bits=0x%08x)\r\n",
                    name, err, num_elements, tolerance_bits);
             // NON-FATAL during bring-up: return SUCC so a failing intermediate check does not
             // abort the run -- we want EVERY stage's verdict (incl. the final `out`) in one sim.
@@ -392,7 +410,7 @@ static inline uint64_t __host_bingo_kernel_check_result(void *arg){
     } else {
         // Unknown check_type — fail loudly
         BINGO_TRACE_MARKER(BINGO_TRACE_DUMMY_KERNEL_END);
-        printf_safe("[Host] Check [%s]: FAIL (unknown check_type=%d)\r\n", name, (int)check_type);
+        BINGO_CHECK_FAIL("[Host] Check [%s]: FAIL (unknown check_type=%d)\r\n", name, (int)check_type);
         sp->return_value = 1;
         sp->num_return_values = 0;
         return BINGO_RET_FAIL;
@@ -430,21 +448,37 @@ static inline uint64_t __host_bingo_kernel_check_result(void *arg){
 typedef struct {
     int      ring;                          // -1: nothing can be pushed yet
     uint64_t m, src, bytes;
+    uint64_t kind;                          // bit 0 routed, bit 1 trailer (no flag transfer)
 } weight_prefetch_run_t;
+
+// A schedule entry's kind: bit 0 its source is a record field (routed), bit 1 its record ends
+// in a trailer beat that says it has landed (libs/crest.py, weight_ring.trailer) -- a run of
+// those needs no flag transfer, so the next run's launch follows its data launch at once.
+#define WEIGHT_PREFETCH_ROUTED  1u
+#define WEIGHT_PREFETCH_TRAILER 2u
 
 // The next run of ring r, or m = 0 if it cannot be pushed now.
 static inline weight_prefetch_run_t weight_prefetch_run_of(
     const __host_bingo_kernel_weight_prefetch_args_t *a, const volatile uint64_t *sched,
     uint64_t r, uint64_t k0, uint64_t n, uint64_t first, uint64_t cons, uint64_t batch,
-    int *rec_ready) {
+    uint64_t batch_routed, int *rec_ready) {
+    const uint64_t head = a->head, batch_head = a->batch_head;
     const uint64_t ns = a->n_slots, s0 = k0 % ns;
-    weight_prefetch_run_t run = {(int)r, 0, 0, 0};
+    weight_prefetch_run_t run = {(int)r, 0, 0, 0, 0};
     uint64_t kind0 = 0, word0 = 0, next = 0;    // the run's stream, and where it goes on
     // A ring's FIRST run is one chunk: with every ring empty, runs of `batch` would make the
     // last ring's first chunk wait behind (rings - 1) * batch others, and every cluster
     // behind that one (BINGO's task stream is in order: a lagging cluster holds back the
     // others' next tasks).
-    const uint64_t lim = k0 == 0 ? 1 : batch;
+    // A routed run (its first chunk record-sourced) batches by `batch_routed` (the compiler's
+    // WeightRings applies the same limits, so every chunk lands where the clusters expect it).
+    // A run that STARTS within the ring's first `head` chunks batches by `batch_head` (when set):
+    // before the attention no read across the link waits yet, and one-chunk runs spend a large
+    // share of the link on their launches (WeightRings applies the same rule).
+    const uint64_t lim = k0 == 0 ? 1 :
+                         (batch_head && k0 < head) ? batch_head :
+                         (k0 < n && (sched[8 + 4 * (first + k0) + 1] &
+                                     WEIGHT_PREFETCH_ROUTED) ? batch_routed : batch);
     while (run.m < lim && k0 + run.m < n && s0 + run.m < ns) {
         const uint64_t k = k0 + run.m;
         if (k >= cons + ns) {               // its slot still holds an unread chunk: the
@@ -453,12 +487,13 @@ static inline weight_prefetch_run_t weight_prefetch_run_of(
         }
         const volatile uint64_t *e = sched + 8 + 4 * (first + k);
         const uint64_t kind = e[1], word = e[0], off = e[2], size = e[3];
+        const int routed = (kind & WEIGHT_PREFETCH_ROUTED) != 0;
         if (run.m > 0) {                    // the same stream, or the run ends here
             if (kind != kind0) break;
-            if (kind == 0 ? word + off != next : (word != word0 || off != next)) break;
+            if (!routed ? word + off != next : (word != word0 || off != next)) break;
         }
         uint64_t src;
-        if (kind == 0) {
+        if (!routed) {
             src = word + off;
         } else {
             const volatile uint32_t *rec = (const volatile uint32_t *)(uintptr_t)a->rec_addr;
@@ -472,10 +507,11 @@ static inline weight_prefetch_run_t weight_prefetch_run_of(
         }
         if (run.m == 0) {
             run.src = src;
+            run.kind = kind;
             kind0 = kind;
             word0 = word;
         }
-        next = kind == 0 ? word + off + size : off + size;
+        next = !routed ? word + off + size : off + size;
         run.bytes += size;
         run.m++;
     }
@@ -489,20 +525,32 @@ static inline uint64_t __host_bingo_kernel_weight_prefetch(void *arg){
     const volatile uint64_t *sched = (const volatile uint64_t *)(uintptr_t)a->sched_addr;
     const uint64_t nr = a->n_rings < 4 ? a->n_rings : 4, ns = a->n_slots, sb = a->slot_bytes;
     const uint64_t batch = a->batch ? a->batch : 1, policy = a->policy;
+    const uint64_t batch_routed = a->batch_routed ? a->batch_routed : batch;
     const uint8_t mem = (uint8_t)a->memchip_id;
+    const uint32_t eng = (uint32_t)a->engine;
+    // queued: each run is posted to the engine's descriptor queue, data then flags, and the
+    // host goes straight on (sys_dma_engine_queue); otherwise each launch reads (see below)
+    const int queued = a->queued != 0;
+    // queued runs not yet seen landed, oldest first: each run's last flag word and its value
+    const uint64_t cap = a->queued_inflight_routed < 8 ? a->queued_inflight_routed : 8;
+    uint64_t infl_addr[64], infl_val[64], infl_head = 0, infl_n = 0;   // >= rings x slots runs
     // pos: chunks pushed; cons: chunks the cluster has read (chunk k's slot holds k + 1
     // in its release word once read, and is not refilled before the host has seen it)
-    uint64_t n[4] = {0}, first[4] = {0}, pos[4] = {0}, cons[4] = {0}, left = 0;
+    // (set ring by ring, not "= {0}": that compiles to four calls of newlib's byte-wise memset
+    // ahead of the first push; only rings < nr are ever read)
+    uint64_t n[4], first[4], pos[4], cons[4], left = 0;
     for (uint64_t r = 0; r < nr; r++) {
         n[r] = sched[r];
         first[r] = sched[4 + r];
+        pos[r] = cons[r] = 0;
         left += n[r];
     }
     int rec_ready = a->rec_addr == 0;
     uint64_t turn = 0;
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
     BINGO_TRACE_MARKER(BINGO_TRACE_HOST_IDMA_CFG_START);
-    weight_prefetch_run_t cur = {-1, 0, 0, 0};
+    weight_prefetch_run_t cur = {-1, 0, 0, 0, 0};
+    if (queued) sys_dma_engine_queue_enable(mem, eng);
     while (left) {
         // Pick the next run from fresh release words (between the current run's data launch
         // and its flag launch, so the pick overlaps the data on the link).
@@ -515,13 +563,13 @@ static inline uint64_t __host_bingo_kernel_weight_prefetch(void *arg){
                 cons[r]++;
             }
         }
-        weight_prefetch_run_t best = {-1, 0, 0, 0};
+        weight_prefetch_run_t best = {-1, 0, 0, 0, 0};
         for (uint64_t i = 0; i < nr; i++) {
             const uint64_t r = (turn + i) % nr;
             if (pos[r] >= n[r]) continue;
             weight_prefetch_run_t run =
                 weight_prefetch_run_of(a, sched, r, pos[r], n[r], first[r], cons[r], batch,
-                                       &rec_ready);
+                                       batch_routed, &rec_ready);
             if (run.m == 0) continue;
             if (best.ring < 0 ||
                 (policy == 1 && pos[r] - cons[r] < pos[best.ring] - cons[best.ring])) {
@@ -529,29 +577,66 @@ static inline uint64_t __host_bingo_kernel_weight_prefetch(void *arg){
                 if (policy == 0) break;
             }
         }
-        // The current run's flags: this launch waits until its data has drained.
-        if (cur.ring >= 0) {
+        // The current run's flags: this launch waits until its data has drained. A trailer
+        // run has none: its records say themselves that they have landed.
+        if (cur.ring >= 0 && (cur.kind & WEIGHT_PREFETCH_TRAILER)) {
+            cur.ring = -1;
+        } else if (cur.ring >= 0) {
             const uint64_t r = (uint64_t)cur.ring, k0 = pos[r] - cur.m, s0 = k0 % ns;
-            sys_dma_memcpy(mem, a->flag_addr + (r * ns + s0) * 64, a->seq_addr + (k0 + 1) * 64,
-                           64 * cur.m);
+            sys_dma_engine_memcpy(mem, eng, a->flag_addr + (r * ns + s0) * 64,
+                                  a->seq_addr + (k0 + 1) * 64, 64 * cur.m);
             cur.ring = -1;
         }
         if (best.ring < 0) {
             for (int i = 0; i < 32; i++) asm volatile("nop");
             continue;
         }
-        // The next run's data, at once: the link is idle again after the flags.
         const uint64_t r = (uint64_t)best.ring, s0 = pos[r] % ns;
-        sys_dma_memcpy(mem, a->ring_addr + (r * ns + s0) * sb, best.src, best.bytes);
+        if (queued) {
+            // The engine runs its queue in order, so runs land in order: drop the landed ones.
+            while (infl_n && (int32_t)(*(const volatile uint32_t *)(uintptr_t)
+                                           infl_addr[infl_head] -
+                                       (uint32_t)infl_val[infl_head]) >= 0) {
+                infl_head = (infl_head + 1) % 64;
+                infl_n--;
+            }
+            // A routed run waits while `cap` queued runs are still in flight: a queue that never
+            // empties never lets the half-duplex link turn, and the all-gathers' remote reads
+            // wait behind all of it.
+            if (cap && infl_n >= cap &&
+                (sched[8 + 4 * (first[r] + pos[r]) + 1] & WEIGHT_PREFETCH_ROUTED)) {
+                for (int i = 0; i < 32; i++) asm volatile("nop");
+                continue;
+            }
+            // Its data, then its flags: the engine runs them in order, back to back with what
+            // is already queued, and the flags land after the data.
+            sys_dma_engine_queue(mem, eng, a->ring_addr + (r * ns + s0) * sb, best.src,
+                                 best.bytes);
+            if (!(best.kind & WEIGHT_PREFETCH_TRAILER))
+                sys_dma_engine_queue(mem, eng, a->flag_addr + (r * ns + s0) * 64,
+                                     a->seq_addr + (pos[r] + 1) * 64, 64 * best.m);
+            if (infl_n < 64) {
+                const uint64_t t = (infl_head + infl_n) % 64;
+                infl_addr[t] = a->flag_addr + (r * ns + s0 + best.m - 1) * 64;
+                infl_val[t] = pos[r] + best.m;
+                infl_n++;
+            }
+            pos[r] += best.m;
+            left -= best.m;
+            turn = (r + 1) % nr;
+            continue;
+        }
+        // The next run's data, at once: the link is idle again after the flags.
+        sys_dma_engine_memcpy(mem, eng, a->ring_addr + (r * ns + s0) * sb, best.src, best.bytes);
         pos[r] += best.m;
         left -= best.m;
         turn = (r + 1) % nr;
         cur = best;
     }
-    if (cur.ring >= 0) {                        // the last run's flags
+    if (cur.ring >= 0 && !(cur.kind & WEIGHT_PREFETCH_TRAILER)) {   // the last run's flags
         const uint64_t r = (uint64_t)cur.ring, k0 = pos[r] - cur.m, s0 = k0 % ns;
-        sys_dma_memcpy(mem, a->flag_addr + (r * ns + s0) * 64, a->seq_addr + (k0 + 1) * 64,
-                       64 * cur.m);
+        sys_dma_engine_memcpy(mem, eng, a->flag_addr + (r * ns + s0) * 64,
+                              a->seq_addr + (k0 + 1) * 64, 64 * cur.m);
     }
     BINGO_TRACE_MARKER(BINGO_TRACE_HOST_IDMA_CFG_END);
     return BINGO_RET_SUCC;

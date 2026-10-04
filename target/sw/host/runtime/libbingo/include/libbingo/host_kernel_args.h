@@ -133,6 +133,16 @@ __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_weight_prefetch_args {
     uint64_t memchip_id;
     uint64_t batch;         // chunks per push transfer, >= 1 (see BATCHING)
     uint64_t policy;        // which ring goes next: 0 in turn, 1 the one holding fewest chunks
+    uint64_t engine;        // the memchip's push engine (sys_dma.h): one per chip it feeds,
+                            // so two chips on one memchip push at once
+    uint64_t batch_routed;  // chunks per push transfer of a ROUTED run (record-sourced);
+                            // 0: the same as `batch`
+    uint64_t queued;        // 1: post each transfer to the engine's descriptor queue (writes
+                            // only, sys_dma_engine_queue) instead of launching it with reads
+    uint64_t queued_inflight_routed;  // queued: a ROUTED run waits while this many queued runs
+                                      // have not landed (their flags, read locally); 0: no cap
+    uint64_t head;          // a ring's run that STARTS within its first `head` chunks ...
+    uint64_t batch_head;    // ... batches by `batch_head` (0: off; WeightRings, the same rule)
     uint64_t scratchpad_ptr;
 } __host_bingo_kernel_weight_prefetch_args_t;
 

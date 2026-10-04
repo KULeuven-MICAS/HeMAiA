@@ -86,6 +86,21 @@ static inline volatile uint32_t *sys_dma_engine_reg(uint8_t chip_id, uint32_t en
 }
 
 // Launch a copy on engine `engine` of chip `chip_id` and return its transfer id.
+//
+// The launch is a READ (next_id) that follows posted register WRITES, and AXI does not order
+// a read after earlier writes. Across the D2D link it really overtakes them: the link answers
+// each write at the sender, and its framer arbitrates a waiting AR against waiting AWs
+// round-robin, so with the link busy (the previous push still draining) the launch can reach
+// the engine before the last register writes do and start with the PREVIOUS transfer's
+// values. On the weight prefetcher that turned a 64 B flag push into the preceding 128 KiB
+// data length, written from the flag address up over the device code.
+//
+// So the length's low word is written LAST and read back until it holds the new value:
+// writes to one engine land in order, so then every register does. The low word is cleared
+// after the launch, so a copy with the same length as the previous one cannot pass the check
+// on the stale value. The fence first pushes the writes out ahead of the check's read, which
+// then normally succeeds at once: the cost is one register round trip per launch. (A size
+// whose low word is 0, i.e. a multiple of 4 GiB, is not supported.)
 static inline uint32_t sys_dma_engine_memcpy(uint8_t chip_id, uint32_t engine, uint64_t dst,
                                              uint64_t src, uint64_t size) {
     volatile uint32_t *dst_ptr = sys_dma_engine_reg(chip_id, engine, IDMA_DST_ADDR);
@@ -95,11 +110,41 @@ static inline uint32_t sys_dma_engine_memcpy(uint8_t chip_id, uint32_t engine, u
     dst_ptr[1] = (uint32_t)(dst >> 32);
     src_ptr[0] = (uint32_t)src;
     src_ptr[1] = (uint32_t)(src >> 32);
-    len_ptr[0] = (uint32_t)size;
     len_ptr[1] = (uint32_t)(size >> 32);
     *sys_dma_engine_reg(chip_id, engine, IDMA_CONF_ADDR) = IDMA_CONF_AXI_MEMCPY;
+    len_ptr[0] = (uint32_t)size;
+    asm volatile("fence" ::: "memory");
+    while (len_ptr[0] != (uint32_t)size) {
+    }
     // Reading next_id launches the transfer and returns its id.
-    return *sys_dma_engine_reg(chip_id, engine, IDMA_NEXTID_ADDR);
+    const uint32_t id = *sys_dma_engine_reg(chip_id, engine, IDMA_NEXTID_ADDR);
+    len_ptr[0] = 0;
+    return id;
+}
+
+// Queued launch, for an engine with a descriptor-queue frontend: a transfer is WRITES alone --
+// src, dst, length, then a doorbell -- and the engine runs its queue back to back. No read
+// crosses the link, so the issuer waits neither for a round trip nor for a half-duplex link to
+// turn around while the engine is still pushing; and writes to one engine land in order, so
+// the doorbell always sees this transfer's registers. Two queued transfers run in the order
+// queued: a flag queued after its data lands after it. (For now the frontend is a testbench
+// model, snax_idma_queue_model in soc_probes.sv; an engine is switched over once, idle, by
+// sys_dma_engine_queue_enable.)
+#define SYS_DMA_QUEUE_ADDR (SYS_IDMA_CFG_BASE_ADDR + 0x800)
+
+static inline void sys_dma_engine_queue_enable(uint8_t chip_id, uint32_t engine) {
+    *sys_dma_engine_reg(chip_id, engine, IDMA_CONF_ADDR) = IDMA_CONF_AXI_MEMCPY;
+    *sys_dma_engine_reg(chip_id, engine, SYS_DMA_QUEUE_ADDR + 0x1c) = 1;
+}
+
+static inline void sys_dma_engine_queue(uint8_t chip_id, uint32_t engine, uint64_t dst,
+                                        uint64_t src, uint64_t size) {
+    volatile uint64_t *q =
+        (volatile uint64_t *)sys_dma_engine_reg(chip_id, engine, SYS_DMA_QUEUE_ADDR);
+    q[0] = src;
+    q[1] = dst;
+    q[2] = size;
+    q[3] = 0;   // the doorbell
 }
 
 // The id of the last transfer engine `engine` of chip `chip_id` completed. On a memory
