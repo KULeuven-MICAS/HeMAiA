@@ -88,6 +88,9 @@ class MoeRouteCfg:
     # top k -- exactly `union` of them (moe_route.h) -- with one record per token
     tokens: int = 1
     union: int = 0
+    # where the expert table is read from: L3 (each of the k entries is a latency-bound
+    # L3 read on the critical path) or a copy in this cluster's L1, fetched earlier
+    table_level: MemLevel = MemLevel.L3
 
     @property
     def slots(self) -> int:
@@ -123,7 +126,9 @@ class MoeRoute(Block):
                               mem_level=MemLevel.L1, cluster=c.cluster,
                               doc="router probabilities, a row per token"),
                 "table": PortSpec(Layout.ROW_MAJOR, DType.I8, (c.n, TABLE_ENTRY_BYTES),
-                                  mem_level=MemLevel.L3, doc="expert table")}
+                                  mem_level=c.table_level,
+                                  cluster=c.cluster if c.table_level == MemLevel.L1 else None,
+                                  doc="expert table")}
 
     @property
     def outputs(self) -> dict:
@@ -161,6 +166,9 @@ class SlotLoadCfg:
     # stream to drain (~25 us for 5.6 KiB, measured) while the in-order DM core holds
     # every later task behind it.
     stream: object = field(default=None, compare=False, repr=False)
+    # Where the tensor starts in the record field, in bytes: this cluster's slice of a table
+    # entry that names several clusters' slices back to back.
+    offset: int = 0
 
 
 class SlotLoad(Block):
@@ -202,7 +210,7 @@ class SlotLoad(Block):
             from .linear import WeightRings
             sl, fl, rl, seq = rings.take(c.cluster, nbytes=2 * c.cols,
                                          src=(c.slot << 8) | WeightRings.FIELDS[c.field],
-                                         kind=1, offset=0)
+                                         kind=1, offset=c.offset)
             prev = rings.last.get(c.cluster)
             nd = g.node("LdSlot", ctx.dm, "__snax_bingo_kernel_idma_ring_load",
                         SnaxBingoKernelIdmaRingLoadArgs(fl, seq, sl, y, 2 * c.cols, rl),
@@ -210,8 +218,8 @@ class SlotLoad(Block):
             rings.last[c.cluster] = nd
         else:
             nd = g.node("LdSlot", ctx.dm, "__snax_bingo_kernel_idma_copy_slot",
-                        SnaxBingoKernelIdmaCopySlotArgs(rec.handle, c.slot, c.field, 0, y,
-                                                        2 * c.cols),
+                        SnaxBingoKernelIdmaCopySlotArgs(rec.handle, c.slot, c.field, c.offset,
+                                                        y, 2 * c.cols),
                         list(rec.ends))
         return BlockResult(outputs={"y": Port(self.outputs["y"], y, (nd,), name="y")},
                            inputs={"rec": Port(self.inputs["rec"], rec.handle, (nd,),

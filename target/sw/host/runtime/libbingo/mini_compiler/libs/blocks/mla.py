@@ -39,6 +39,7 @@ from bingo_kernel_args import (
     SnaxBingoKernelIdma2dCopyArgs,
     SnaxBingoKernelIdmaPairwiseSwapArgs,
     SnaxBingoKernelSimdFaSoftmaxArgs,
+    SnaxBingoKernelSimdAddF16Args,
     SnaxBingoKernelSimdMlaNormaliseArgs,
     SnaxBingoKernelSimdQuantARowsArgs,
     SnaxBingoKernelSimdRopeArgs,
@@ -276,6 +277,7 @@ class QAssembleCfg:
     rope: int = 64
     cluster: int = 0
     tokens: int = 1            # 2: a second token's heads in rows 16-31 (inputs qt1, qpe1)
+    fused: bool = False        # one input "qq" [heads, kv_rank + rope]: each head's q~ then q_pe
 
 
 class QAssemble(Block):
@@ -299,6 +301,8 @@ class QAssemble(Block):
             raise ValueError("QAssemble: the query rows are one 16-row m-block; heads=16.")
         if self.cfg.tokens not in (1, 2) or self.cfg.tokens * self.cfg.heads > self.cfg.br:
             raise ValueError("QAssemble: one or two tokens of 16 heads in the br lanes.")
+        if self.cfg.fused and self.cfg.tokens != 1:
+            raise ValueError("QAssemble(fused): one token.")
 
     @property
     def _d(self):
@@ -307,6 +311,9 @@ class QAssemble(Block):
     @property
     def inputs(self) -> dict:
         c = self.cfg
+        if c.fused:
+            return {"qq": _row((c.heads, self._d), MemLevel.L1, c.cluster,
+                               "per head: q~, then the rotated q_pe")}
         ins = {"qt": _row((c.heads, c.kv_rank), MemLevel.L1, c.cluster, "q~ per head"),
                "qpe": _row((c.heads, c.rope), MemLevel.L1, c.cluster, "q_pe per head")}
         if c.tokens == 2:
@@ -334,18 +341,25 @@ class QAssemble(Block):
         z = g.node("ZeroQ8", ctx.xdma, "__snax_bingo_kernel_xdma_memset",
                    SnaxBingoKernelXdmaMemsetArgs(q8, nbytes,
                                                  SnaxBingoKernelXdmaMemsetArgs.PATTERN_ZERO))
+        # fused: one [heads, kv_rank + rope] input, both halves read at its row pitch
+        qt_in, qpe_in = (bound["qq"], bound["qq"]) if c.fused else (bound["qt"], bound["qpe"])
+        qt_pitch, qpe_pitch = (2 * self._d,) * 2 if c.fused else (2 * c.kv_rank, 2 * c.rope)
+        qpe_src = at_offset(qpe_in.handle, 2 * c.kv_rank) if c.fused else qpe_in.handle
         qt = g.node("Quant_qt", ctx.simd, "__snax_bingo_kernel_simd_quant_a_rows",
-                    SnaxBingoKernelSimdQuantARowsArgs(bound["qt"].handle, 2 * c.kv_rank, q8,
+                    SnaxBingoKernelSimdQuantARowsArgs(qt_in.handle, qt_pitch, q8,
                                                       c.kv_rank // 4, c.inv_qt_f32bits),
-                    [z] + list(bound["qt"].ends))
+                    [z] + list(qt_in.ends))
         qp = g.node("Quant_qpe", ctx.simd, "__snax_bingo_kernel_simd_quant_a_rows",
-                    SnaxBingoKernelSimdQuantARowsArgs(bound["qpe"].handle, 2 * c.rope,
+                    SnaxBingoKernelSimdQuantARowsArgs(qpe_src, qpe_pitch,
                                                       at_offset(q8, (c.kv_rank // 4) * BEAT),
                                                       c.rope // 4, c.inv_qpe_f32bits),
-                    [qt] + list(bound["qpe"].ends))
+                    [qt] + list(qpe_in.ends))
         nodes = [z, qt, qp]
-        ins = {"qt": Port(self.inputs["qt"], bound["qt"].handle, (qt,), name="qt"),
-               "qpe": Port(self.inputs["qpe"], bound["qpe"].handle, (qp,), name="qpe")}
+        if c.fused:
+            ins = {"qq": Port(self.inputs["qq"], qt_in.handle, (qp,), name="qq")}
+        else:
+            ins = {"qt": Port(self.inputs["qt"], bound["qt"].handle, (qt,), name="qt"),
+                   "qpe": Port(self.inputs["qpe"], bound["qpe"].handle, (qp,), name="qpe")}
         if c.tokens == 2:
             # token 1 in the second 16-row m-block: A layout is m-block major, one block of
             # d / 4 beats per 16 rows
@@ -643,14 +657,558 @@ class MlaAttention(Block):
         tr = g.node("Transpose", ctx.xdma, "__snax_bingo_kernel_xdma_transpose_2d",
                     SnaxBingoKernelXdmaTranspose2dArgs(ot16, xt, c.d_v, c.br, 2), [nrm])
         nodes += [nrm, tr]
+        # The key / value copies' readers, for the edges from their producer (the append): the
+        # fresh tile's loads. Named as tile 0's, every tile waited for the cache writes (tile
+        # 0 first in the chain) and the attention could not start on the old keys.
+        rd = max(fresh) if fresh else 0
         return BlockResult(
             outputs={"ot": Port(self.outputs["ot"], ot16, (nrm,), name="ot"),
                      "xt": Port(self.outputs["xt"], xt, (tr,), name="xt")},
             inputs={"q8": Port(self.inputs["q8"], q8.handle, (qk[0],), name="q8"),
-                    "key": Port(self.inputs["key"], bound["key"].handle, (k_ld(0),),
+                    "key": Port(self.inputs["key"], bound["key"].handle, (k_ld(rd),),
                                 name="key"),
-                    "val": Port(self.inputs["val"], bound["val"].handle, (v_ld(0),),
+                    "val": Port(self.inputs["val"], bound["val"].handle, (v_ld(rd),),
                                 name="val")},
             nodes=nodes,
             extra={"arena": arena, "layout": lay, "o16": at_offset(o16, BEAT),
-                   "oacc": oacc, "qk": qk, "softmax": sm, "pv": pv})
+                   "oacc": oacc, "qk": qk, "softmax": sm, "pv": pv,
+                   # the last tile's K and V loads: a stream's next loads can wait for them
+                   "last_loads": [k_ld(c.nt - 1), v_ld(c.nt - 1)]})
+
+
+# ---- the attention split over clusters by key (params att_split) -----------------------------
+#
+# Every cluster attends over its own shard of key tiles for all 16 heads. Pass 1 finds the
+# shard's row maximum; the clusters exchange them and each takes the lanewise max m*; pass 2
+# runs the shard's softmax SEEDED at m* (seed_state 0), so every shard quantises P on one scale
+# and its PV needs no correction across clusters; the FP16 partials and row sums are then added
+# (AddRow) and normalised on the attention's cluster. The golden is
+# dsv2_datagen.split_attention_golden, the same recurrence with the same seed.
+
+@dataclass(frozen=True)
+class MlaShardCfg:
+    tile0: int                 # the shard's first key tile
+    nt: int                    # its tiles
+    cap: int
+    k_s: int
+    k_o: int
+    a_exp: float
+    a_n_f32bits: int = 0
+    cluster: int = 0
+    bc: int = 64
+    br: int = 32
+    d_qk: int = 576
+    d_v: int = 512
+    # MlaShardScores loads the shard's V tiles too (mode "key": its own PV reads them); mode
+    # "dim" loads a latent slice of V^T over every key instead (MlaDimPV)
+    with_v: bool = True
+    # the key tile holding the rows the cache writes just produced (global index): only its
+    # loads wait for those writes. -1: every tile of the shard waits (as before)
+    fresh_tile: int = -1
+
+
+class MlaShardScores(Block):
+    """Pass 1 of a key shard: its K and V tiles into this L1, S^T = K . Q^T per tile, and the
+    online softmax with the kernel's own seed -- for its row maximum only.
+
+      in   q8   [br, d_qk] int8 A, L1;  key, val  the cache copies in L3 (this chip's)
+      out  m    one beat: the shard's row maximum per query lane (the arena's mrun)
+           s16  the score tiles, one 64-B prefix beat then bc x br fp16 each (pass 2 reads
+                them again)
+           v    the V tiles, d_v x bc bytes each (pass 2's PV)"""
+
+    name = "mla_shard1"
+
+    def __init__(self, cfg: MlaShardCfg = None, **params):
+        self.cfg = cfg if cfg is not None else MlaShardCfg(**params)
+
+    @property
+    def inputs(self) -> dict:
+        c = self.cfg
+        ins = {"q8": _row((c.br, c.d_qk), MemLevel.L1, c.cluster, "Q8", DType.I8, Layout.A),
+               "key": _row((c.cap, c.d_qk), MemLevel.L3, None, "key copy", DType.I8, Layout.A)}
+        if c.with_v:
+            ins["val"] = _row((c.d_v, c.cap), MemLevel.L3, None, "value copy", DType.I8,
+                              Layout.A)
+        return ins
+
+    @property
+    def outputs(self) -> dict:
+        c = self.cfg
+        s16b = c.nt * (BEAT + c.bc * c.br * 2)
+        outs = {"m": _row((1, c.br), MemLevel.L1, c.cluster, "row maximum"),
+                "s16": _row((1, s16b // 2), MemLevel.L1, c.cluster, "score tiles")}
+        if c.with_v:
+            outs["v"] = _row((1, c.nt * c.d_v * c.bc), MemLevel.L1, c.cluster, "V tiles",
+                             DType.I8)
+        return outs
+
+    def build(self, ctx: Ctx, bound: dict) -> BlockResult:
+        c = self.cfg
+        g = ctx.at(c.cluster)
+        fa = SnaxBingoKernelSimdFaSoftmaxArgs
+        kbytes, vbytes, sbytes = c.bc * c.d_qk, c.d_v * c.bc, BEAT + c.bc * c.br * 2
+        arena = g.l1(f"{self.name}_arena", fa.arena_bytes(c.bc, 1))
+        kt = g.l1(f"{self.name}_k", c.nt * kbytes)
+        vt = g.l1(f"{self.name}_v", c.nt * vbytes) if c.with_v else None
+        s16 = g.l1(f"{self.name}_s16", c.nt * sbytes)
+        p8 = g.l1(f"{self.name}_p8", fa.p8_bytes(c.bc, c.br, fa.EXACT))
+        key_after = list(bound["key"].ends)
+        val_after = list(bound["val"].ends) if c.with_v else []
+        # fresh_tile: only the tile with the appended rows waits for the cache writes (the
+        # shard's other tiles are in the copies already, and pass 1 starts on them)
+        waits = (lambda j: j == c.fresh_tile) if c.fresh_tile >= 0 else (lambda j: True)
+        rd = max(c.fresh_tile - c.tile0, 0) if 0 <= c.fresh_tile - c.tile0 < c.nt else 0
+        nodes, lk, lv, sm = [], [], [], []
+        for i in range(c.nt):
+            j = c.tile0 + i
+            lk.append(g.node(f"Ld_K{i}", ctx.dm, "__snax_bingo_kernel_idma_1d_copy",
+                             SnaxBingoKernelIdma1dCopyArgs(
+                                 at_offset(bound["key"].handle, j * kbytes),
+                                 at_offset(kt, i * kbytes), kbytes),
+                             key_after if waits(j) else []))
+            if c.with_v:
+                lv.append(g.node(f"Ld_V{i}", ctx.dm, "__snax_bingo_kernel_idma_2d_copy",
+                                 SnaxBingoKernelIdma2dCopyArgs(
+                                     at_offset(bound["val"].handle, j * 16 * c.bc),
+                                     at_offset(vt, i * vbytes), 16 * c.bc, 16 * c.cap,
+                                     16 * c.bc, c.d_v // 16),
+                                 val_after if waits(j) else []))
+            qk = g.node(f"QK{i}", ctx.gemm, "__snax_bingo_kernel_gemm_fa_qk",
+                        SnaxBingoKernelGemmFaQkArgs(
+                            at_offset(kt, i * kbytes), bound["q8"].handle, 0,
+                            at_offset(s16, i * sbytes + BEAT),
+                            M=c.bc // 16, K=c.d_qk // 4, N=c.br // 16, d_shift=c.k_s),
+                        [lk[i]] + list(bound["q8"].ends))
+            sm.append(g.node(f"Softmax{i}", ctx.simd, "__snax_bingo_kernel_simd_fa_softmax",
+                             fa(at_offset(s16, i * sbytes + BEAT), p8, arena, c.bc, 1,
+                                tile_idx=i, seed_state=1, geom_mode=fa.GEOM_SELF,
+                                score_scale=c.a_exp, p_mode=fa.EXACT, p8_pitch=0),
+                             [qk] + sm[-1:]))
+            nodes += [lk[i]] + lv[i:i + 1] + [qk, sm[i]]
+            qk0 = qk if i == 0 else qk0
+        lay = fa.layout(c.bc, 1)
+        outs = {"m": Port(self.outputs["m"], at_offset(arena, lay["mrun"]), (sm[-1],), name="m"),
+                "s16": Port(self.outputs["s16"], s16, (sm[-1],), name="s16")}
+        # (the copies' readers, for the edges from their producer: the fresh tile's loads)
+        ins = {"q8": Port(self.inputs["q8"], bound["q8"].handle, (qk0,), name="q8"),
+               "key": Port(self.inputs["key"], bound["key"].handle, (lk[rd],), name="key")}
+        if c.with_v:
+            outs["v"] = Port(self.outputs["v"], vt, tuple(lv), name="v")
+            ins["val"] = Port(self.inputs["val"], bound["val"].handle, (lv[rd],), name="val")
+        return BlockResult(outputs=outs, inputs=ins, nodes=nodes)
+
+
+@dataclass(frozen=True)
+class MlaRowMaxCfg:
+    rows: int                  # beats to reduce (even)
+    br: int = 32
+    cluster: int = 0
+
+
+class MlaRowMax(Block):
+    """The lanewise maximum of `rows` fp16 beats in this L1: the FA softmax kernel run over
+    them as one score tile (score_scale 1, its own seed), its arena's mrun left holding
+    max(rows, -65504) exactly -- the max has no rounding.
+
+      in   x  [rows, br] fp16, L1        out  m  one beat"""
+
+    name = "mla_rowmax"
+
+    def __init__(self, cfg: MlaRowMaxCfg = None, **params):
+        self.cfg = cfg if cfg is not None else MlaRowMaxCfg(**params)
+        if self.cfg.rows % 2:
+            raise ValueError("MlaRowMax: an even number of rows (the kernel packs P 2:1)")
+
+    @property
+    def inputs(self) -> dict:
+        c = self.cfg
+        return {"x": _row((c.rows, c.br), MemLevel.L1, c.cluster, "rows")}
+
+    @property
+    def outputs(self) -> dict:
+        c = self.cfg
+        return {"m": _row((1, c.br), MemLevel.L1, c.cluster, "their lanewise max")}
+
+    def build(self, ctx: Ctx, bound: dict) -> BlockResult:
+        c = self.cfg
+        g = ctx.at(c.cluster)
+        fa = SnaxBingoKernelSimdFaSoftmaxArgs
+        arena = g.l1(f"{self.name}_arena", fa.arena_bytes(c.rows, 1))
+        # the kernel writes -m into the beat just below its score tile: a prefixed copy
+        tile = g.l1(f"{self.name}_tile", BEAT + c.rows * BEAT)
+        p8 = g.l1(f"{self.name}_p8", fa.p8_bytes(c.rows, c.br, 0))
+        cp = g.node("Copy", ctx.dm, "__snax_bingo_kernel_idma_1d_copy",
+                    SnaxBingoKernelIdma1dCopyArgs(bound["x"].handle, at_offset(tile, BEAT),
+                                                  c.rows * BEAT), list(bound["x"].ends))
+        sm = g.node("Max", ctx.simd, "__snax_bingo_kernel_simd_fa_softmax",
+                    fa(at_offset(tile, BEAT), p8, arena, c.rows, 1, tile_idx=0, seed_state=1,
+                       geom_mode=fa.GEOM_SELF, score_scale=1.0, p_mode=0, p8_pitch=0), [cp])
+        lay = fa.layout(c.rows, 1)
+        return BlockResult(
+            outputs={"m": Port(self.outputs["m"], at_offset(arena, lay["mrun"]), (sm,),
+                               name="m")},
+            inputs={"x": Port(self.inputs["x"], bound["x"].handle, (cp,), name="x")},
+            nodes=[cp, sm])
+
+
+class MlaShardPV(Block):
+    """Pass 2 of a key shard: the softmax seeded at the global maximum m* (its arena's mrun =
+    m*, lrun = 0, seed_state 0) over pass 1's score tiles, and PV; the shard's last tile
+    leaves O^T as FP16 through the D port at k_o, as MlaAttention's last tile does.
+
+      in   m  one beat, m*;  s16, v  MlaShardScores'
+      out  o  [d_v x br] fp16 (O16^T), L1;  l  one beat, the shard's row sums"""
+
+    name = "mla_shard2"
+
+    def __init__(self, cfg: MlaShardCfg = None, **params):
+        self.cfg = cfg if cfg is not None else MlaShardCfg(**params)
+
+    @property
+    def inputs(self) -> dict:
+        c = self.cfg
+        s16b = c.nt * (BEAT + c.bc * c.br * 2)
+        return {"m": _row((1, c.br), MemLevel.L1, c.cluster, "m*"),
+                "s16": _row((1, s16b // 2), MemLevel.L1, c.cluster, "score tiles"),
+                "v": _row((1, c.nt * c.d_v * c.bc), MemLevel.L1, c.cluster, "V tiles",
+                          DType.I8)}
+
+    @property
+    def outputs(self) -> dict:
+        c = self.cfg
+        return {"o": _row((1, c.d_v * c.br), MemLevel.L1, c.cluster, "O16^T partial"),
+                "l": _row((1, c.br), MemLevel.L1, c.cluster, "row sums")}
+
+    def build(self, ctx: Ctx, bound: dict) -> BlockResult:
+        c = self.cfg
+        g = ctx.at(c.cluster)
+        fa, pv_cls = SnaxBingoKernelSimdFaSoftmaxArgs, SnaxBingoKernelGemmFaPvArgs
+        vbytes, sbytes = c.d_v * c.bc, BEAT + c.bc * c.br * 2
+        arena = g.l1(f"{self.name}_arena", fa.arena_bytes(c.bc, 1))
+        lay = fa.layout(c.bc, 1)
+        p8 = [g.l1(f"{self.name}_p8_{i}", fa.p8_bytes(c.bc, c.br, fa.EXACT))
+              for i in range(min(2, c.nt))]
+        o16 = g.l1(f"{self.name}_o16", c.d_v * c.br * 2)
+        oacc = g.l1(f"{self.name}_oacc", c.d_v * c.br * 4) if c.nt > 1 else None
+        corr = fa.corr_offset(c.bc, c.br)
+        seed_m = g.node("SeedM", ctx.dm, "__snax_bingo_kernel_idma_1d_copy",
+                        SnaxBingoKernelIdma1dCopyArgs(bound["m"].handle,
+                                                      at_offset(arena, lay["mrun"]), BEAT),
+                        list(bound["m"].ends))
+        seed_l = g.node("SeedL", ctx.xdma, "__snax_bingo_kernel_xdma_memset",
+                        SnaxBingoKernelXdmaMemsetArgs(at_offset(arena, lay["lrun"]), BEAT,
+                                                      SnaxBingoKernelXdmaMemsetArgs.PATTERN_ZERO))
+        nodes, sm, pv = [seed_m, seed_l], [], []
+        for i in range(c.nt):
+            first, last = i == 0, i == c.nt - 1
+            sm.append(g.node(f"Softmax{i}", ctx.simd, "__snax_bingo_kernel_simd_fa_softmax",
+                             fa(at_offset(bound["s16"].handle, i * sbytes + BEAT), p8[i % 2],
+                                arena, c.bc, 1, tile_idx=i, seed_state=0,
+                                geom_mode=fa.GEOM_SELF, score_scale=c.a_exp, p_mode=fa.EXACT,
+                                p8_pitch=0),
+                             [seed_m, seed_l] + list(bound["s16"].ends) + sm[-1:] +
+                             (pv[i - 2:i - 1] if i >= 2 else [])))
+            flags = pv_cls.B_KMAJOR | (0 if first else pv_cls.C_COLSCALE) | \
+                (pv_cls.D_FP16 if last else 0)
+            pv.append(g.node(f"PV{i}", ctx.gemm, "__snax_bingo_kernel_gemm_fa_pv",
+                             pv_cls(at_offset(bound["v"].handle, i * vbytes), p8[i % 2],
+                                    0 if first else oacc, o16 if last else oacc,
+                                    M=c.d_v // 16, K=c.bc // 4, N=c.br // 16, flags=flags,
+                                    corr_addr=0 if first else at_offset(p8[i % 2], corr),
+                                    d_shift=c.k_o if last else 0),
+                             [sm[i]] + list(bound["v"].ends) + pv[-1:]))
+            nodes += [sm[i], pv[i]]
+        return BlockResult(
+            outputs={"o": Port(self.outputs["o"], o16, (pv[-1],), name="o"),
+                     "l": Port(self.outputs["l"], at_offset(arena, lay["lrun"]), (sm[-1],),
+                               name="l")},
+            inputs={"m": Port(self.inputs["m"], bound["m"].handle, (seed_m,), name="m"),
+                    "s16": Port(self.inputs["s16"], bound["s16"].handle, (sm[0],), name="s16"),
+                    "v": Port(self.inputs["v"], bound["v"].handle, (pv[0],), name="v")},
+            nodes=nodes)
+
+
+class MlaShardOut(Block):
+    """The attention's cluster's end of the split: the LAST partials added (O16 and l, FP16,
+    RNE -- AddRow's SIMD pass) straight into the normalise's operand, o~ = O16 c / l, and
+    its transpose -- MlaAttention's two outputs.
+
+      in   o_acc, o_last  [d_v x br] fp16;  l_acc, l_last  one beat each
+      out  ot  [d_v, br] fp16;  xt  [br, d_v] fp16, one query (head) per row"""
+
+    name = "mla_shard_out"
+
+    def __init__(self, cfg: MlaShardCfg = None, **params):
+        self.cfg = cfg if cfg is not None else MlaShardCfg(**params)
+
+    @property
+    def inputs(self) -> dict:
+        c = self.cfg
+        o = _row((1, c.d_v * c.br), MemLevel.L1, c.cluster, "O16^T partial")
+        l = _row((1, c.br), MemLevel.L1, c.cluster, "row sums")
+        return {"o_acc": o, "o_last": o, "l_acc": l, "l_last": l}
+
+    @property
+    def outputs(self) -> dict:
+        c = self.cfg
+        return {"ot": _row((c.d_v, c.br), MemLevel.L1, c.cluster, "o~^T"),
+                "xt": _row((c.br, c.d_v), MemLevel.L1, c.cluster, "o~, a head per row")}
+
+    def build(self, ctx: Ctx, bound: dict) -> BlockResult:
+        c = self.cfg
+        g = ctx.at(c.cluster)
+        # the normalise reads its latch beat DIRECTLY BELOW O16
+        o16 = g.l1(f"{self.name}_o16", BEAT + c.d_v * c.br * 2)
+        lsum = g.l1(f"{self.name}_l", BEAT)
+        ot16 = g.l1(f"{self.name}_ot", c.d_v * c.br * 2)
+        xt = g.l1(f"{self.name}_xt", c.br * c.d_v * 2)
+        add_o = g.node("AddO", ctx.simd, "__snax_bingo_kernel_simd_stream_elementwise",
+                       SnaxBingoKernelSimdAddF16Args(bound["o_acc"].handle,
+                                                     bound["o_last"].handle,
+                                                     at_offset(o16, BEAT), rows=1,
+                                                     cols=c.d_v * c.br),
+                       list(bound["o_acc"].ends) + list(bound["o_last"].ends))
+        add_l = g.node("AddL", ctx.simd, "__snax_bingo_kernel_simd_stream_elementwise",
+                       SnaxBingoKernelSimdAddF16Args(bound["l_acc"].handle,
+                                                     bound["l_last"].handle, lsum, rows=1,
+                                                     cols=c.br),
+                       list(bound["l_acc"].ends) + list(bound["l_last"].ends) + [add_o])
+        nrm = g.node("Normalise", ctx.simd, "__snax_bingo_kernel_simd_mla_normalise",
+                     SnaxBingoKernelSimdMlaNormaliseArgs(lsum, o16, at_offset(o16, BEAT), ot16,
+                                                         c.d_v, c.a_n_f32bits), [add_o, add_l])
+        tr = g.node("Transpose", ctx.xdma, "__snax_bingo_kernel_xdma_transpose_2d",
+                    SnaxBingoKernelXdmaTranspose2dArgs(ot16, xt, c.d_v, c.br, 2), [nrm])
+        return BlockResult(
+            outputs={"ot": Port(self.outputs["ot"], ot16, (nrm,), name="ot"),
+                     "xt": Port(self.outputs["xt"], xt, (tr,), name="xt")},
+            inputs={"o_acc": Port(self.inputs["o_acc"], bound["o_acc"].handle, (add_o,),
+                                  name="o_acc"),
+                    "o_last": Port(self.inputs["o_last"], bound["o_last"].handle, (add_o,),
+                                   name="o_last"),
+                    "l_acc": Port(self.inputs["l_acc"], bound["l_acc"].handle, (add_l,),
+                                  name="l_acc"),
+                    "l_last": Port(self.inputs["l_last"], bound["l_last"].handle, (add_l,),
+                                   name="l_last")},
+            nodes=[add_o, add_l, nrm, tr])
+
+
+# ---- att_split_mode dim: PV split by latent, not by key --------------------------------------
+#
+# QK and both softmax passes stay split by key (MlaShardScores with_v=False, MlaRowMax), but
+# pass 2 only writes P: every cluster gathers every shard's P (P^T's k-major blocks of one
+# shard are one contiguous run, so the shards back to back in key order ARE the whole P^T)
+# and computes d_v / G rows of O^T over all the keys in ONE matmul, out of a V^T slice that
+# is one 2-D copy of the value cache. O never meets an FP16 add: only the row sums do, as a
+# halving tree on every cluster, so each normalises its own slice; the attention's cluster
+# gathers the slices and transposes. The golden is dsv2_datagen.split_attention_golden (mode
+# dim).
+
+class MlaShardP(Block):
+    """Pass 2 of a key shard, P only: the softmax seeded at m* (arena mrun = m*, lrun = 0,
+    seed_state 0) over pass 1's score tiles, tile i's P into a strip at i bc br bytes -- its
+    trailing row-sum and corr beats land on tile i+1's P before that is written, and nothing
+    reads them after their own pass.
+
+      in   m  one beat, m*;  s16  MlaShardScores'
+      out  p  [nt bc, br] int8, P^T in PV's k-major B layout;  l  one beat, the row sums"""
+
+    name = "mla_shard2"
+
+    def __init__(self, cfg: MlaShardCfg = None, **params):
+        self.cfg = cfg if cfg is not None else MlaShardCfg(**params)
+
+    @property
+    def inputs(self) -> dict:
+        c = self.cfg
+        s16b = c.nt * (BEAT + c.bc * c.br * 2)
+        return {"m": _row((1, c.br), MemLevel.L1, c.cluster, "m*"),
+                "s16": _row((1, s16b // 2), MemLevel.L1, c.cluster, "score tiles")}
+
+    @property
+    def outputs(self) -> dict:
+        c = self.cfg
+        return {"p": _row((1, c.nt * c.bc * c.br), MemLevel.L1, c.cluster, "P^T, k-major",
+                          DType.I8),
+                "l": _row((1, c.br), MemLevel.L1, c.cluster, "row sums")}
+
+    def build(self, ctx: Ctx, bound: dict) -> BlockResult:
+        c = self.cfg
+        g = ctx.at(c.cluster)
+        fa = SnaxBingoKernelSimdFaSoftmaxArgs
+        sbytes, pb = BEAT + c.bc * c.br * 2, c.bc * c.br
+        arena = g.l1(f"{self.name}_arena", fa.arena_bytes(c.bc, 1))
+        lay = fa.layout(c.bc, 1)
+        p8 = g.l1(f"{self.name}_p8", (c.nt - 1) * pb + fa.p8_bytes(c.bc, c.br, fa.EXACT))
+        seed_m = g.node("SeedM", ctx.dm, "__snax_bingo_kernel_idma_1d_copy",
+                        SnaxBingoKernelIdma1dCopyArgs(bound["m"].handle,
+                                                      at_offset(arena, lay["mrun"]), BEAT),
+                        list(bound["m"].ends))
+        seed_l = g.node("SeedL", ctx.xdma, "__snax_bingo_kernel_xdma_memset",
+                        SnaxBingoKernelXdmaMemsetArgs(at_offset(arena, lay["lrun"]), BEAT,
+                                                      SnaxBingoKernelXdmaMemsetArgs.PATTERN_ZERO))
+        nodes, sm = [seed_m, seed_l], []
+        for i in range(c.nt):
+            sm.append(g.node(f"Softmax{i}", ctx.simd, "__snax_bingo_kernel_simd_fa_softmax",
+                             fa(at_offset(bound["s16"].handle, i * sbytes + BEAT),
+                                at_offset(p8, i * pb), arena, c.bc, 1, tile_idx=i,
+                                seed_state=0, geom_mode=fa.GEOM_SELF, score_scale=c.a_exp,
+                                p_mode=fa.EXACT, p8_pitch=0),
+                             [seed_m, seed_l] + list(bound["s16"].ends) + sm[-1:]))
+        nodes += sm
+        return BlockResult(
+            outputs={"p": Port(self.outputs["p"], p8, (sm[-1],), name="p"),
+                     "l": Port(self.outputs["l"], at_offset(arena, lay["lrun"]), (sm[-1],),
+                               name="l")},
+            inputs={"m": Port(self.inputs["m"], bound["m"].handle, (seed_m,), name="m"),
+                    "s16": Port(self.inputs["s16"], bound["s16"].handle, (sm[0],), name="s16")},
+            nodes=nodes)
+
+
+@dataclass(frozen=True)
+class MlaDimPVCfg:
+    slot: int                  # this cluster's slot: O^T rows [slot d_v/G, (slot+1) d_v/G)
+    G: int                     # the slots
+    keys: int
+    cap: int
+    k_o: int
+    a_n_f32bits: int
+    # keys [0, k_static) come from `val`, the rest from `valf` (the appended rows, which only
+    # the attention's chip's copy has); k_static = keys reads them all from `val`
+    k_static: int
+    cluster: int = 0
+    br: int = 32
+    d_v: int = 512
+
+
+class MlaDimPV(Block):
+    """One latent slice of the attention: O^T[rows] = V^T[rows, :keys] . P^T over EVERY key in
+    one matmul (FP16 out of the D port at k_o, as the one-cluster attention's last tile), the
+    gathered row sums added as a halving tree (slot i + slot i + n/2, n = G, G/2, .. 2), and
+    the slice normalised, o~ = O16 (.) c / l.
+
+      in   p    [keys, br] int8, every shard's P back to back (P^T, k-major), L1
+           l    [G, br] fp16, every shard's row sums in slot order, L1
+           val  [d_v, cap] int8 A, L3: the value copy keys [0, k_static) are read from
+           valf the same, for keys [k_static, keys) (only when k_static < keys)
+      out  ot   [d_v / G, br] fp16: this slice of o~^T"""
+
+    name = "mla_dimpv"
+
+    def __init__(self, cfg: MlaDimPVCfg = None, **params):
+        self.cfg = cfg if cfg is not None else MlaDimPVCfg(**params)
+        c = self.cfg
+        d_s = c.d_v // c.G
+        if c.d_v % c.G or d_s % 16 or c.keys % 4 or c.br != 32 or c.G & (c.G - 1):
+            raise ValueError(f"MlaDimPV: d_v={c.d_v} over G={c.G} (a power of two) slots of "
+                             f"whole 16-row blocks, keys={c.keys} a multiple of 4, br = 32")
+        if not 0 < c.k_static <= c.keys or c.k_static % 4:
+            raise ValueError(f"MlaDimPV: k_static={c.k_static} in (0, {c.keys}], 4-aligned")
+
+    @property
+    def d_s(self) -> int:
+        return self.cfg.d_v // self.cfg.G
+
+    @property
+    def inputs(self) -> dict:
+        c = self.cfg
+        v = _row((c.d_v, c.cap), MemLevel.L3, None, "value copy", DType.I8, Layout.A)
+        ins = {"p": _row((1, c.keys * c.br), MemLevel.L1, c.cluster, "P^T, k-major", DType.I8),
+               "l": _row((c.G, c.br), MemLevel.L1, c.cluster, "row sums"),
+               "val": v}
+        if c.k_static < c.keys:
+            ins["valf"] = v
+        return ins
+
+    @property
+    def outputs(self) -> dict:
+        c = self.cfg
+        return {"ot": _row((self.d_s, c.br), MemLevel.L1, c.cluster, "o~^T slice")}
+
+    def build(self, ctx: Ctx, bound: dict) -> BlockResult:
+        c = self.cfg
+        g = ctx.at(c.cluster)
+        pv_cls = SnaxBingoKernelGemmFaPvArgs
+        d_s = self.d_s
+        # V^T's A layout: a 16-row block is one run of 16 cap bytes, 4 keys per 64-B beat
+        row, m0 = 16 * c.cap, c.slot * d_s // 16
+        vb = g.l1(f"{self.name}_v", d_s * c.keys)
+        ldv = [g.node("Ld_V", ctx.dm, "__snax_bingo_kernel_idma_2d_copy",
+                      SnaxBingoKernelIdma2dCopyArgs(at_offset(bound["val"].handle, m0 * row),
+                                                    vb, 16 * c.k_static, row, 16 * c.keys,
+                                                    d_s // 16),
+                      list(bound["val"].ends))]
+        if c.k_static < c.keys:
+            ldv.append(g.node("Ld_Vf", ctx.dm, "__snax_bingo_kernel_idma_2d_copy",
+                              SnaxBingoKernelIdma2dCopyArgs(
+                                  at_offset(bound["valf"].handle, m0 * row + 16 * c.k_static),
+                                  at_offset(vb, 16 * c.k_static),
+                                  16 * (c.keys - c.k_static), row, 16 * c.keys, d_s // 16),
+                              list(bound["valf"].ends)))
+        # the normalise reads its latch beat DIRECTLY BELOW O16
+        o16 = g.l1(f"{self.name}_o16", BEAT + d_s * c.br * 2)
+        pv = g.node("PV", ctx.gemm, "__snax_bingo_kernel_gemm_fa_pv",
+                    pv_cls(vb, bound["p"].handle, 0, at_offset(o16, BEAT),
+                           M=d_s // 16, K=c.keys // 4, N=c.br // 16,
+                           flags=pv_cls.B_KMAJOR | pv_cls.D_FP16, corr_addr=0, d_shift=c.k_o),
+                    ldv + list(bound["p"].ends))
+        adds, src, n, deps = [], bound["l"].handle, c.G, list(bound["l"].ends)
+        while n > 1:
+            h = n // 2
+            dst = g.l1(f"{self.name}_l{h}", h * BEAT)
+            adds.append(g.node(f"AddL{h}", ctx.simd,
+                               "__snax_bingo_kernel_simd_stream_elementwise",
+                               SnaxBingoKernelSimdAddF16Args(src, at_offset(src, h * BEAT), dst,
+                                                             rows=1, cols=h * c.br), deps))
+            src, n, deps = dst, h, adds[-1:]
+        ot = g.l1(f"{self.name}_ot", d_s * c.br * 2)
+        nrm = g.node("Normalise", ctx.simd, "__snax_bingo_kernel_simd_mla_normalise",
+                     SnaxBingoKernelSimdMlaNormaliseArgs(src, o16, at_offset(o16, BEAT), ot, d_s,
+                                                         c.a_n_f32bits),
+                     [pv] + adds[-1:] + (list(bound["l"].ends) if not adds else []))
+        ins = {"p": Port(self.inputs["p"], bound["p"].handle, (pv,), name="p"),
+               "l": Port(self.inputs["l"], bound["l"].handle, ((adds or [nrm])[0],), name="l"),
+               "val": Port(self.inputs["val"], bound["val"].handle, (ldv[0],), name="val")}
+        if c.k_static < c.keys:
+            ins["valf"] = Port(self.inputs["valf"], bound["valf"].handle, (ldv[1],),
+                               name="valf")
+        return BlockResult(
+            outputs={"ot": Port(self.outputs["ot"], ot, (nrm,), name="ot")},
+            inputs=ins, nodes=ldv + [pv] + adds + [nrm])
+
+
+class MlaDimOut(Block):
+    """The attention's cluster's end of att_split_mode dim: the gathered o~^T slices ARE o~^T
+    (slot order is row order), and its transpose -- MlaAttention's two outputs.
+
+      in   ot  [d_v, br] fp16, L1        out  ot  the same;  xt  [br, d_v] fp16"""
+
+    name = "mla_dim_out"
+
+    def __init__(self, cfg: MlaShardCfg = None, **params):
+        self.cfg = cfg if cfg is not None else MlaShardCfg(**params)
+
+    @property
+    def inputs(self) -> dict:
+        c = self.cfg
+        return {"ot": _row((c.d_v, c.br), MemLevel.L1, c.cluster, "o~^T")}
+
+    @property
+    def outputs(self) -> dict:
+        c = self.cfg
+        return {"ot": _row((c.d_v, c.br), MemLevel.L1, c.cluster, "o~^T"),
+                "xt": _row((c.br, c.d_v), MemLevel.L1, c.cluster, "o~, a head per row")}
+
+    def build(self, ctx: Ctx, bound: dict) -> BlockResult:
+        c = self.cfg
+        g = ctx.at(c.cluster)
+        xt = g.l1(f"{self.name}_xt", c.br * c.d_v * 2)
+        tr = g.node("Transpose", ctx.xdma, "__snax_bingo_kernel_xdma_transpose_2d",
+                    SnaxBingoKernelXdmaTranspose2dArgs(bound["ot"].handle, xt, c.d_v, c.br, 2),
+                    list(bound["ot"].ends))
+        return BlockResult(
+            outputs={"ot": Port(self.outputs["ot"], bound["ot"].handle, tuple(bound["ot"].ends),
+                                name="ot"),
+                     "xt": Port(self.outputs["xt"], xt, (tr,), name="xt")},
+            inputs={"ot": Port(self.inputs["ot"], bound["ot"].handle, (tr,), name="ot")},
+            nodes=[tr])

@@ -366,6 +366,39 @@ class Join(Block):
             nodes=[])
 
 
+class After(Block):
+    """`x` that also waits for `after`'s producers: a relabel, no node and no copy.
+
+      in   x      the tensor, unchanged
+           after  anything, in any memory: only its producers matter
+      out  y      `x`'s spec and bytes, its producers plus `after`'s
+
+    An ordering edge where no data flows -- e.g. a chip's second stash after its first, so
+    a collect waiting on both needs only the second (the first is implied).
+    """
+
+    name = "after"
+
+    def __init__(self, *, x: PortSpec, after: PortSpec):
+        self.x, self.after = x, after
+
+    @property
+    def inputs(self) -> dict:
+        return {"x": self.x, "after": self.after}
+
+    @property
+    def outputs(self) -> dict:
+        return {"y": self.x}
+
+    def build(self, ctx: Ctx, bound: dict) -> BlockResult:
+        ends = tuple(bound["x"].ends) + tuple(bound["after"].ends)
+        return BlockResult(
+            outputs={"y": Port(self.x, bound["x"].handle, ends, name="y")},
+            inputs={"x": Port(self.x, bound["x"].handle, (), name="x"),
+                    "after": Port(self.after, bound["after"].handle, (), name="after")},
+            nodes=[])
+
+
 class Fetch(Block):
     """A tensor from L3 or the HBM into one cluster's L1: one iDMA copy on its DM core.
 
@@ -406,6 +439,59 @@ class Fetch(Block):
         return BlockResult(outputs={"y": Port(self.dst, buf, (nd,), name="y")},
                            inputs={"x": Port(self.src, bound["x"].handle, (nd,), name="x")},
                            nodes=[nd], sources=[nd] if not bound["x"].ends else [])
+
+
+class Collect(Block):
+    """Several L3 tensors -- on this chip or on others -- stacked into one cluster's L1 by
+    its DM core: the receiving half of an all-gather across chips.
+
+      in   x{i}  `parts[i]` in L3 (a chip-qualified symbol reads another chip's copy)
+      out  y     `dst`: the parts back to back, in cluster `cluster`'s L1
+
+    One iDMA copy per part, in the order given. A copy that crosses chips is a READ of the
+    other chip's L3: a D2D write is acknowledged when it leaves the sender, so only a read
+    after the producer's own local write proves the bytes are there.
+    """
+
+    name = "collect"
+
+    def __init__(self, *, parts: list, nbytes: list, dst: PortSpec, cluster: int):
+        if any(p.mem_level not in (MemLevel.L3, MemLevel.HBM) for p in parts):
+            raise ValueError("Collect: every part is read from L3 or the HBM.")
+        if dst.mem_level != MemLevel.L1 or dst.cluster != cluster:
+            raise ValueError(f"Collect: {dst.describe()} is not cluster {cluster}'s L1.")
+        self.parts, self.dst, self.cluster = list(parts), dst, int(cluster)
+        self.nbytes = [int(n) for n in nbytes]
+        if len(self.nbytes) != len(self.parts) or min(self.nbytes, default=0) <= 0:
+            raise ValueError("Collect: one positive byte count per part.")
+
+    @property
+    def inputs(self) -> dict:
+        return {f"x{i}": p for i, p in enumerate(self.parts)}
+
+    @property
+    def outputs(self) -> dict:
+        return {"y": self.dst}
+
+    def idma_passes(self) -> int:
+        return len(self.parts)
+
+    def build(self, ctx: Ctx, bound: dict) -> BlockResult:
+        g = ctx.at(self.cluster)
+        buf = g.l1(f"{self.name}_y", sum(self.nbytes))
+        nodes, ins, at = [], {}, 0
+        for i, nb in enumerate(self.nbytes):
+            x = bound[f"x{i}"]
+            nd = g.node(f"Collect{i}", ctx.dm, "__snax_bingo_kernel_idma_1d_copy",
+                        SnaxBingoKernelIdma1dCopyArgs(x.handle, buf.view(at) if at else buf, nb),
+                        list(x.ends))
+            nodes.append(nd)
+            ins[f"x{i}"] = Port(self.parts[i], x.handle, (nd,), name=f"x{i}")
+            at += nb
+        return BlockResult(outputs={"y": Port(self.dst, buf, tuple(nodes), name="y")},
+                           inputs=ins, nodes=nodes,
+                           sources=[n for n, i in zip(nodes, range(len(nodes)))
+                                    if not bound[f"x{i}"].ends])
 
 
 class Stash(Block):

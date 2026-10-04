@@ -248,6 +248,12 @@ class BingoDFG(
         # On by default; a workload opts out with dfg.prune_fanout = False.
         if getattr(self, "prune_fanout", True):
             self.bingo_transform_prune_redundant_fanout()
+        # Off by default; a workload opts in with dfg.prune_implied = True.
+        if getattr(self, "prune_implied", False):
+            self.bingo_transform_prune_implied_edges()
+        # After every pass that removes edges: a task with only remote successors would get
+        # DepSet En=0, which bingo_hw_manager mis-pairs with its done entry off chip 0x00.
+        self.bingo_transform_keep_local_dep_set()
         # Fit every dep-matrix cell into 2**dep_tag_width tags by adding ordering edges
         # where the graph would need more. Runs on the real tasks, before the dummy passes
         # lower each edge, so an edge it adds is lowered like any other.

@@ -81,6 +81,7 @@ from bingo_kernel_args import (
     SnaxBingoKernelIdma1dCopyArgs,
     SnaxBingoKernelIdmaCopySlotArgs,
     SnaxBingoKernelIdmaRingLoadArgs,
+    SnaxBingoKernelXdmaCrestExpandArgs,
 )
 from bingo_mem_handle import BingoMemFixedAddr
 
@@ -123,15 +124,19 @@ class LoadStream:
     """
 
     def __init__(self, ctx: Ctx, cluster: int, nbytes: int = DEFAULT_W_CHUNK_BYTES,
-                 nbuf: int = 2, name: str = "stream"):
-        if nbuf < 1 or nbytes <= 0 or nbytes % 64:
-            raise ValueError(f"LoadStream: {nbuf} slabs of {nbytes} B; at least one slab, "
-                             f"a whole number of 64-B beats.")
+                 nbuf: int = 2, name: str = "stream", slack: int = 0):
+        if nbuf < 1 or nbytes <= 0 or nbytes % 64 or slack < 0 or slack % 64:
+            raise ValueError(f"LoadStream: {nbuf} slabs of {nbytes} B (+{slack}); at least one "
+                             f"slab, a whole number of 64-B beats.")
         g = ctx.at(cluster)
+        # nbytes is the most a load may bring; a slab is `slack` larger (weight_crest: a CREST
+        # record lands at the slab's end and expands in place, libs/crest.py)
         self.cluster, self.nbytes = cluster, int(nbytes)
-        self.slabs = [g.l1(f"{name}_c{cluster}_s{i}", self.nbytes) for i in range(nbuf)]
+        self.slab_bytes = self.nbytes + int(slack)
+        self.slabs = [g.l1(f"{name}_c{cluster}_s{i}", self.slab_bytes) for i in range(nbuf)]
         self._next = 0
         self._reader = [None] * nbuf
+        self._extra = [[] for _ in range(nbuf)]      # wait_for(): one-shot extra waits
 
     def take(self, nbytes: int):
         """(slab index, slab handle, [WAR predecessor]) for the next load of nbytes."""
@@ -141,6 +146,8 @@ class LoadStream:
         i = self._next
         self._next = (i + 1) % len(self.slabs)
         war = [self._reader[i]] if self._reader[i] is not None else []
+        war += [n for n in self._extra[i] if n not in war]
+        self._extra[i] = []
         return i, self.slabs[i], war
 
     def release(self, i: int, reader) -> None:
@@ -154,6 +161,15 @@ class LoadStream:
         starting cold fetches its code from L3, and those refills return behind the DMA
         reads in flight, any cluster's."""
         self._reader = [r if r is not None else node for r in self._reader]
+
+    def wait_for(self, node) -> None:
+        """The NEXT load into every slab also waits for `node`, besides whoever last read the
+        slab (unlike hold_until, which only reaches slabs nobody has read yet). For a stream
+        whose next block must not take the in-order DM core before `node` -- the shared
+        expert's loads behind the router's tasks, say."""
+        for e in self._extra:
+            if node not in e:
+                e.append(node)
 
     def fence(self, node) -> None:
         """Every later load waits for `node`, which must follow every read of the slabs so
@@ -189,7 +205,8 @@ class WeightRings:
     MAX_RINGS = 4
 
     def __init__(self, *, slots, flags, releases, n_rings: int, n_slots: int,
-                 slot_bytes: int, batch: int = 1):
+                 slot_bytes: int, batch: int = 1, batch_routed: int = 0, head: int = 0,
+                 batch_head: int = 0, split: bool = False):
         if not 1 <= n_rings <= self.MAX_RINGS or n_slots < 2 or slot_bytes % 64:
             raise ValueError(f"WeightRings: {n_rings} rings of {n_slots} slots of "
                              f"{slot_bytes} B; 1..4 rings, 2+ slots, whole 64-B beats.")
@@ -197,8 +214,36 @@ class WeightRings:
             raise ValueError(f"WeightRings: batch {batch}; 1..n_slots ({n_slots}).")
         self.slots, self.flags, self.releases = slots, flags, releases
         self.n_rings, self.n_slots, self.slot_bytes = n_rings, n_slots, slot_bytes
+        # `split`: every cluster has TWO rings, its dense chunks in ring c and its routed ones
+        # in ring c + n_rings / 2. In one ring a dense chunk taken after a routed one (the
+        # shared expert's down, built after the first routed gate|up for the all-gather
+        # lag) waited behind it for the router's record and went over the link after the
+        # route; in a ring of its own it is pushed before. take*() still name the CLUSTER.
+        self.split = bool(split)
+        if self.split and n_rings % 2:
+            raise ValueError(f"WeightRings(split): {n_rings} rings; two per cluster.")
+        self.n_clusters = n_rings // 2 if self.split else n_rings
         self.batch = batch
+        # Routed chunks (kind 1) may batch differently: before the router a short run keeps a
+        # read across the link from waiting long behind it, after it long runs keep the link
+        # streaming. 0: the same as `batch`. The prefetcher applies the same rule.
+        self.batch_routed = int(batch_routed) or batch
+        if not 1 <= self.batch_routed <= n_slots:
+            raise ValueError(f"WeightRings: batch_routed {batch_routed}; 1..n_slots ({n_slots}).")
+        # A ring's run that STARTS within its first `head` chunks batches by `batch_head`
+        # (0: off): before the attention the links push one-chunk runs and the launch -- a
+        # register round trip across the link per run -- takes a large share of them, while no
+        # read across the link is waiting yet. The prefetcher applies the same rule.
+        self.head, self.batch_head = int(head), int(batch_head)
+        if self.batch_head and not (self.head > 1 and 1 <= self.batch_head <= n_slots):
+            raise ValueError(f"WeightRings: head {head} batch_head {batch_head}; head > 1 and "
+                             f"1..n_slots ({n_slots}).")
         self.entries = [[] for _ in range(n_rings)]      # (src, kind, offset, size)
+        # per entry, for an Execution-IR export (bingo_exec_export): the bytes the GEMV reads after
+        # expansion, and whether the pushed record is compressed; `last_take` is the (ring, index)
+        # of the newest chunk, which the streamed Linear tags its ring load with
+        self.entry_meta = [[] for _ in range(n_rings)]
+        self.last_take = None
         # The newest ring load per cluster: every load of a ring waits for the one before
         # (same DM core, no tag), so the loads run in the ring's order whatever block
         # took them -- a load dispatched ahead of an earlier chunk of its ring would wait
@@ -206,6 +251,9 @@ class WeightRings:
         self.last = {}
         # The run each ring's newest chunk belongs to: [first slot, chunks, bytes]
         self._run = [None] * n_rings
+        # params weight_crest: the chip's CrestRings (libs/crest.py) -- every weight chunk is
+        # pushed compressed and loaded by the xDMA through its CrestDecompressor
+        self.crest = None
 
     def _continues(self, ring: int, k: int, src: int, kind: int, offset: int) -> bool:
         """Whether chunk k of `ring` joins its predecessor's run. The prefetcher applies the
@@ -215,12 +263,15 @@ class WeightRings:
         same record field, the next offset -- two experts adjacent in HBM never merge)."""
         run = self._run[ring]
         # k == 1: a ring's first run is chunk 0 alone (host_kernel_lib.h, the same rule)
-        if run is None or run[1] >= self.batch or k % self.n_slots == 0 or k == 1:
+        lim = self.batch_routed if kind & 1 else self.batch
+        if run is not None and self.batch_head and k - run[1] < self.head:
+            lim = self.batch_head       # the run's first chunk is k - run[1]
+        if run is None or run[1] >= lim or k % self.n_slots == 0 or k == 1:
             return False
         p_src, p_kind, p_off, p_n = self.entries[ring][k - 1]
         if kind != p_kind:
             return False
-        if kind == 0:
+        if not kind & 1:
             return src + offset == p_src + p_off + p_n
         return src == p_src and offset == p_off + p_n
 
@@ -229,8 +280,32 @@ class WeightRings:
         number). Chunks of one run sit back to back from the run's first slot, so a run of
         short chunks (a K = 1408 weight: 88 KiB per 64 columns) is still one push; the run
         never outgrows the slots it reserves, one per chunk."""
+        return self.take_ex(ring, src, nbytes, kind=kind, offset=offset)[:4]
+
+    def take_ex(self, ring: int, src: int, nbytes: int, *, kind: int = 0, offset: int = 0):
+        """take(), then (bit 0 CREST record, bit 1 trailer) and the bytes pushed: with
+        self.crest a dense weight chunk (kind 0) or a routed weight field (kind 1, gu / dn) is
+        replaced by its CREST record -- source, offset and pushed size -- before it is placed;
+        the routed scale vectors stay plain."""
+        compressed = False
+        raw_nbytes = int(nbytes)
+        if self.crest is not None:
+            fld = {v: k for k, v in self.FIELDS.items()}.get(int(src) & 0xFF) if kind else None
+            if kind == 0:
+                src, nbytes = self.crest.dense(ring, int(src) + int(offset), int(nbytes))
+                offset, compressed = 0, True
+            elif fld in self.crest.FIELDS:
+                offset, nbytes = self.crest.routed(ring, fld, int(offset), int(nbytes))
+                compressed = True
+        # trailer mode: the chunk's own last beat says it has landed; its schedule entry is
+        # marked (kind bit 1) so the prefetcher pushes no flag for it
+        trailer = compressed and self.crest.trailer
+        if trailer:
+            kind |= 2
         if nbytes > self.slot_bytes:
             raise ValueError(f"WeightRings: a {nbytes} B chunk; slots are {self.slot_bytes} B")
+        if self.split and kind & 1:
+            ring += self.n_clusters          # the cluster's routed ring
         k = len(self.entries[ring])
         src, kind, offset, nbytes = int(src), int(kind), int(offset), int(nbytes)
         if self._continues(ring, k, src, kind, offset):
@@ -242,8 +317,12 @@ class WeightRings:
         run[2] += nbytes
         idx = ring * self.n_slots + k % self.n_slots
         self.entries[ring].append((src, kind, offset, nbytes))
-        return (at_offset(self.slots, place), at_offset(self.flags, idx * 64),
-                at_offset(self.releases, idx * 64), k + 1)
+        self.entry_meta[ring].append({"raw": raw_nbytes, "compressed": compressed})
+        self.last_take = (ring, k)
+        flag = at_offset(self.slots, place + nbytes - 64) if trailer else \
+            at_offset(self.flags, idx * 64)
+        return (at_offset(self.slots, place), flag, at_offset(self.releases, idx * 64), k + 1,
+                int(compressed) | (2 if trailer else 0), nbytes)
 
     def schedule(self) -> list:
         """uint64 words: chunks per ring (4), first entry per ring (4), then 4 per entry."""
@@ -298,6 +377,10 @@ class LinearCfg:
     # record's length in slots, which its port states.
     w_slot: Optional[tuple] = None
     rec_slots: int = 6
+    # w_slot: where this block's columns start in the record field's weight, in bytes -- a
+    # cluster streaming its slice of an expert whose table entry names the slices of several
+    # clusters back to back.
+    w_slot_off: int = 0
     # The one-row GEMV's x: in the A layout (16 d_in bytes) or in a_row (2 d_in bytes, the
     # 8-byte word of each A block the GEMV reads; see comm/ports.py).
     x_layout: Layout = Layout.A
@@ -305,6 +388,10 @@ class LinearCfg:
     # starts waiting on a weight chunk first -- a ring chunk not pushed yet -- would hold
     # x's load, and the whole block, behind it.
     stream_after_x: bool = False
+    # ... and so is every slab's next load even when the stream already had readers
+    # (LoadStream.wait_for; hold_until reaches only unread slabs): the shared expert's loads
+    # behind the router's DM tasks (dsv2 params sh_wait_route)
+    stream_wait_x: bool = False
     # The weights' width: 8, or 4 -- INT4 through B's converter, one-row GEMV only, the weight
     # in Layout.B_W4 (nibble-packed pairs of 16-column blocks, half the bytes; gemv.h INT4
     # WEIGHTS). Every weight byte count below goes through _wb.
@@ -729,13 +816,15 @@ class Linear(Block):
             # dependency tag of its own in one (cluster, core, core) cell, and a slot has
             # dozens of chunks.
             rec_after = list(src_port.ends)
+        if c.stream_wait_x and ld_x is not None:
+            c.stream.wait_for(ld_x)
         if c.stream_after_x and ld_x is not None:
             c.stream.hold_until(ld_x)
         rings = getattr(c.stream, "rings", None)
         if rings is not None and c.w_slot is None and not isinstance(src_port.handle,
                                                                       BingoMemFixedAddr):
             rings = None        # not a numbered HBM / memchip address: pull it as before
-        loads, tasks = [], []
+        loads, tasks, expands = [], [], []
         for i, (c0, n) in enumerate(chunks):
             off, nbytes = c._wb(c0 * c.d_in), c._wb(n * c.d_in)
             si, slab, war = c.stream.take(nbytes)
@@ -749,31 +838,47 @@ class Linear(Block):
                 else:
                     slot, fld = c.w_slot
                     ring_src = dict(src=(slot << 8) | WeightRings.FIELDS[fld], kind=1,
-                                    offset=off)
-                sl, fl, rl, seq = rings.take(c.cluster, nbytes=nbytes, **ring_src)
-                args = SnaxBingoKernelIdmaRingLoadArgs(fl, seq, sl, slab, nbytes, rl)
+                                    offset=c.w_slot_off + off)
+                sl, fl, rl, seq, crest, pushed = rings.take_ex(c.cluster, nbytes=nbytes,
+                                                               **ring_src)
                 prev = [loads[-1]] if loads else \
                     ([rings.last[c.cluster]] if rings.last.get(c.cluster) is not None else [])
-                ld = g.node(nm, ctx.dm, "__snax_bingo_kernel_idma_ring_load", args,
-                            war + [n for n in prev if n not in war])
+                deps = war + [n for n in prev if n not in war]
+                if crest & 1:
+                    # weight_crest: the record into the END of the slab, then the xDMA expands
+                    # it in place into the slab's first beats (libs/crest.py)
+                    ld = g.node(nm, ctx.dm, "__snax_bingo_kernel_idma_ring_load",
+                                SnaxBingoKernelIdmaRingLoadArgs(
+                                    fl, seq, sl, at_offset(slab, c.stream.slab_bytes - pushed),
+                                    pushed, rl, trailer=bool(crest & 2)), deps)
+                    expands.append(g.node(
+                        f"Ex_{self.name}_w{i}" if len(chunks) > 1 else f"Ex_{self.name}_w",
+                        ctx.xdma, "__snax_bingo_kernel_xdma_crest_expand",
+                        SnaxBingoKernelXdmaCrestExpandArgs(slab, c.stream.slab_bytes), [ld]))
+                else:
+                    ld = g.node(nm, ctx.dm, "__snax_bingo_kernel_idma_ring_load",
+                                SnaxBingoKernelIdmaRingLoadArgs(fl, seq, sl, slab, nbytes, rl),
+                                deps)
                 rings.last[c.cluster] = ld
+                ld.exec_chunk = rings.last_take       # (ring, index): the Execution-IR export
             elif c.w_slot is None:
                 args = SnaxBingoKernelIdma1dCopyArgs(at_offset(src_port.handle, off), slab,
                                                      nbytes)
                 ld = g.node(nm, ctx.dm, "__snax_bingo_kernel_idma_1d_copy", args, war)
             else:
                 slot, fld = c.w_slot
-                args = SnaxBingoKernelIdmaCopySlotArgs(src_port.handle, slot, fld, off,
-                                                       slab, nbytes)
+                args = SnaxBingoKernelIdmaCopySlotArgs(src_port.handle, slot, fld,
+                                                       c.w_slot_off + off, slab, nbytes)
                 ld = g.node(nm, ctx.dm, "__snax_bingo_kernel_idma_copy_slot", args,
                             war + (rec_after if not loads else [loads[-1]]))
             loads.append(ld)
             name = f"Gemm_{self.name}_c{i}" if len(chunks) > 1 else f"Gemm_{self.name}"
-            dep = [ld] + (x_after if i == 0 else [tasks[-1]])
+            ready = expands[-1] if len(expands) == len(loads) else ld
+            dep = [ready] + (x_after if i == 0 else [tasks[-1]])
             ts_i = self._task(g, ctx, name, l1_x, slab, l1_y, c0, n, dep)
             tasks += ts_i
             c.stream.release(si, ts_i[-1])
-        nodes = ([ld_x] if ld_x is not None else []) + loads + tasks
+        nodes = ([ld_x] if ld_x is not None else []) + loads + expands + tasks
         x_end = (ld_x,) if ld_x is not None else (tasks[0],)
         ins = {"x": Port(self.inputs["x"], bound["x"].handle, x_end, name="x")}
         if c.w_slot is None:

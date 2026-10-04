@@ -154,7 +154,14 @@ class BingoDFGTransformsMixin:
                     # including the producer's own, leaving a stray (tagged) set with
                     # no consumer to drain it. Such a single edge must use a targeted
                     # dummy_set instead.
-                    if self.num_chiplets > 2 and len(chiplets_in_group) == (self.num_chiplets - 1):
+                    # A broadcast is a D2D multicast over the whole rectangle of chips, which
+                    # every router between the compute chips must forward -- memory chips too
+                    # (hemaia_d2d_link_initialize_grid programs them transit-only). Where a
+                    # platform's routers do not (a fenced memory chip in C-M-C rows), the
+                    # chips behind it never see it: dfg.remote_broadcast = False then sends
+                    # one targeted dummy set per chip instead.
+                    if (getattr(self, "remote_broadcast", True) and self.num_chiplets > 2
+                            and len(chiplets_in_group) == (self.num_chiplets - 1)):
                         # Broadcast: one dummy_set blocks cur_node's core and sets the bit on all chiplets
                         print(f"Node {cur_node.node_name} is a broadcast node to set all chiplets for core {core_id}.")
                         dummy_set_node = BingoNode(
@@ -387,15 +394,18 @@ class BingoDFGTransformsMixin:
         The mirror case too: a consumer B waiting on A1 .. An of ONE core (a gather's
         copies, one per source, all on the DM core) needs only the last of them, An; the
         core finishes its tasks in order, so An done means every Ai done. Both apply on the
-        producer's own core as well, where the chain itself is the only edge kept."""
+        producer's own core as well, where the chain itself is the only edge kept.
+
+        And both apply ACROSS CHIPS: a remote core's tasks are one chain too. There it is not
+        only cheaper but required: a broadcast dummy set (one producer feeding the same
+        (cluster, core) on every other chip) sets ONE tag bit per chip, so two consumers of
+        it on one remote core would both wait on that bit and the second would never see it."""
         topo = {n: i for i, n in enumerate(nx.topological_sort(self))}
         removed = 0
         for b_ in list(self.nodes()):
             groups: dict = {}
             for a in self.predecessors(b_):
                 key = (a.assigned_chiplet_id, a.assigned_cluster_id, a.assigned_core_id)
-                if a.assigned_chiplet_id != b_.assigned_chiplet_id:
-                    continue
                 groups.setdefault(key, []).append(a)
             for as_ in groups.values():
                 if len(as_) < 2:
@@ -412,8 +422,6 @@ class BingoDFGTransformsMixin:
             groups: dict = {}
             for b in self.successors(p_):
                 key = (b.assigned_chiplet_id, b.assigned_cluster_id, b.assigned_core_id)
-                if b.assigned_chiplet_id != p_.assigned_chiplet_id:
-                    continue
                 groups.setdefault(key, []).append(b)
             for bs in groups.values():
                 if len(bs) < 2:
@@ -429,6 +437,73 @@ class BingoDFGTransformsMixin:
         if removed:
             print(f"Fan-out pruning: removed {removed} cross-core edges the core order implies")
         return removed
+
+    def bingo_transform_prune_implied_edges(self) -> int:
+        """Drop u -> v when another predecessor w of v is reachable from u.
+
+        bingo_transform_prune_redundant_fanout drops what ONE core's chain implies. This is
+        the general case: u -> ... -> w -> v already orders u before v whatever cores the
+        path crosses, so the direct edge only costs a dependency tag live in (u's core,
+        v's core) until v runs. Typical: a gather's collect waiting on two stashes of one
+        chip that are themselves chained -- the second implies the first.
+
+        Removing an implied edge never changes reachability, so the reachability computed
+        once up front stays exact while edges go. Bitsets over a topological order: each
+        node's set is its successors' sets OR-ed with their bits."""
+        order = list(nx.topological_sort(self))
+        idx = {n: i for i, n in enumerate(order)}
+        reach = {}
+        for n in reversed(order):
+            r = 0
+            for s in self.successors(n):
+                r |= reach[s] | (1 << idx[s])
+            reach[n] = r
+        removed = 0
+        for v in order:
+            preds = list(self.predecessors(v))
+            if len(preds) < 2:
+                continue
+            for u in preds:
+                ru = reach[u]
+                if any(w is not u and self.has_edge(w, v) and (ru >> idx[w]) & 1 for w in preds):
+                    self.remove_edge(u, v)
+                    removed += 1
+        if removed:
+            print(f"Implied-edge pruning: removed {removed} edges another path already orders")
+        return removed
+
+    def bingo_transform_keep_local_dep_set(self) -> int:
+        """Give every task with a later task on its core a successor on its own chip.
+
+        A task whose only successors are on other chips gets DepSet En=0, and the remote
+        sets go on dummies after it. bingo_hw_manager pairs a task's checkout entry with its
+        done-queue entry only on the LOCAL set path: an En=0 entry is routed by its (unused)
+        dep_set_chiplet_id, which is 0, so on any chip but 0x00 it takes the chiplet path,
+        leaves without waiting for the task's done and never pops it. From then on the
+        core's next local set fires when its task is dispatched, not when it finishes, and
+        the dummies behind it send their remote sets at once too. (A DM core's stash whose
+        only consumer was a remote collect, once prune_implied had dropped its sequencing
+        edge, released a quantize before the copy it read had landed: X in L1.)
+
+        The edge added is to the next task on the same core, which runs after it anyway,
+        so it orders nothing new; a graph that has no such task is left unchanged."""
+        from collections import defaultdict
+
+        core_tasks: dict = defaultdict(list)
+        for n in nx.topological_sort(self):
+            core_tasks[(n.assigned_chiplet_id, n.assigned_cluster_id,
+                        n.assigned_core_id)].append(n)
+        added = 0
+        for (chip, _, _), tasks in core_tasks.items():
+            for prev, nxt in zip(tasks, tasks[1:]):
+                if any(s.assigned_chiplet_id == chip for s in self.successors(prev)):
+                    continue
+                self.add_edge(prev, nxt)
+                added += 1
+        if added:
+            print(f"Local dep set: added {added} same-core edges for tasks with only remote "
+                  f"successors")
+        return added
 
     def bingo_transform_fit_dep_tag_budget(self, tag_width: int = None) -> int:
         """Make every dep-matrix cell fit in 2**tag_width tags, adding ordering edges where
@@ -895,6 +970,19 @@ class BingoDFGTransformsMixin:
         colour = nx.coloring.greedy_color(H, strategy="DSATUR")
         n_tags = (max(colour.values()) + 1) if colour else 0
         if n_tags > max_tags:
+            import os as _os
+            if _os.environ.get("BINGO_TAG_DEBUG"):
+                # the cell whose groups are most CONCURRENT, not merely the most numerous:
+                # its largest set of mutually unordered groups is what needs the tags
+                best = (0, None, [])
+                for cell, gs in groups_in_cell.items():
+                    clq = max(nx.find_cliques(H.subgraph(gs)), key=len, default=[])
+                    if len(clq) > best[0]:
+                        best = (len(clq), cell, clq)
+                print(f"[tag-debug] cell {best[1]}: {best[0]} mutually unordered groups")
+                for gi in sorted(best[2]):
+                    print(f"[tag-debug]   " + ", ".join(
+                        f"{su.node_name}->{cv.node_name}" for su, cv in edges_of[gi][:2]))
             busiest = max(groups_in_cell.items(),
                           key=lambda kv: len(kv[1]))
             detail = "\n".join(

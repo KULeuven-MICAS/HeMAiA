@@ -315,7 +315,9 @@ class HostBingoKernelWeightPrefetchArgs(BingoKernelArgs):
 
     def __init__(self, sched_addr, ring_addr, flag_addr, release_addr, seq_addr, rec_addr,
                  rec_slots: int, n_rings: int, n_slots: int, slot_bytes: int, memchip_id: int,
-                 batch: int = 1, policy: int = 0):
+                 batch: int = 1, policy: int = 0, engine: int = 0, batch_routed: int = 0,
+                 queued: int = 0, queued_inflight_routed: int = 0, head: int = 0,
+                 batch_head: int = 0):
         if not 1 <= n_rings <= 4:
             raise ValueError(f"n_rings={n_rings}: 1..4")
         if not 1 <= batch <= n_slots:
@@ -327,6 +329,19 @@ class HostBingoKernelWeightPrefetchArgs(BingoKernelArgs):
         self.rec_slots, self.n_rings, self.n_slots = int(rec_slots), int(n_rings), int(n_slots)
         self.slot_bytes, self.memchip_id, self.batch = int(slot_bytes), int(memchip_id), int(batch)
         self.policy = int(policy)
+        if not 0 <= int(engine) <= 3:
+            raise ValueError(f"engine={engine}: 0..3, one of the memchip's push engines")
+        self.engine = int(engine)
+        if not 0 <= int(batch_routed) <= n_slots:
+            raise ValueError(f"batch_routed={batch_routed}: 0 (= batch) or 1..n_slots ({n_slots})")
+        self.batch_routed = int(batch_routed)
+        self.queued = int(bool(queued))
+        if not 0 <= int(queued_inflight_routed) <= 8:
+            raise ValueError(f"queued_inflight_routed={queued_inflight_routed}: 0 (no cap) .. 8")
+        self.queued_inflight_routed = int(queued_inflight_routed)
+        if int(batch_head) and not (int(head) > 1 and 1 <= int(batch_head) <= n_slots):
+            raise ValueError(f"head={head} batch_head={batch_head}: head > 1, 1..n_slots")
+        self.head, self.batch_head = int(head), int(batch_head)
 
     def get_struct_name(self) -> str:
         return "__host_bingo_kernel_weight_prefetch_args_t"
@@ -336,7 +351,9 @@ class HostBingoKernelWeightPrefetchArgs(BingoKernelArgs):
         for f in ("sched_addr", "ring_addr", "flag_addr", "release_addr", "seq_addr", "rec_addr"):
             self._process_addr(getattr(self, f), f, a, handle_name_map, split_64bit=False,
                                as_64bit=True)
-        for f in ("rec_slots", "n_rings", "n_slots", "slot_bytes", "memchip_id", "batch", "policy"):
+        for f in ("rec_slots", "n_rings", "n_slots", "slot_bytes", "memchip_id", "batch", "policy",
+                  "engine", "batch_routed", "queued", "queued_inflight_routed", "head",
+                  "batch_head"):
             a[f] = str(getattr(self, f))
         return a
 

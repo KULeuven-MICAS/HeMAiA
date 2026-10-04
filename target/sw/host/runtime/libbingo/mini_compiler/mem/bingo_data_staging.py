@@ -80,10 +80,11 @@ _CTYPE = {
 }
 
 
-def _c_array(ctype, name, n, alignment, values=None):
+def _c_array(ctype, name, n, alignment, values=None, section=None):
     """An integer C array of n elements: DEFINED with its values, or (values None) only
-    DECLARED, so it lands in .bss."""
-    head = f"{ctype} {name}[{n}] __attribute__ ((aligned ({alignment})))"
+    DECLARED, so it lands in .bss -- or, with `section`, zeros in that (data) section."""
+    sec = f", section (\"{section}\")" if section else ""
+    head = f"{ctype} {name}[{n}] __attribute__ ((aligned ({alignment}){sec}))"
     if values is None:
         return head + ";"
     return head + " = {\n" + "".join(f"\t{v},\n" for v in values) + "};"
@@ -218,6 +219,22 @@ class DataStaging:
         chip.hbm_items.append((name, off, arr.nbytes))
         return BingoMemFixedAddr(chip.hbm_base + off, mem_level="HBM")
 
+    def fill_hbm(self, handle, data):
+        """Overwrite bytes of an array put_hbm already placed, from `handle` (its handle or
+        one into it) on: for contents decided after their address -- compressed weight
+        chunks laid out while the graph is built, in a region reserved before it."""
+        addr = int(handle.address)
+        data = np.ascontiguousarray(data).view(np.uint8).reshape(-1)
+        for chip in self._chips.values():
+            if chip.hbm_size and chip.hbm_base <= addr < chip.hbm_base + len(chip.hbm):
+                off = addr - chip.hbm_base
+                if off + data.size > len(chip.hbm):
+                    raise ValueError(f"fill_hbm: {data.size} B at {addr:#x} runs past the "
+                                     f"image of memory chiplet {chip.loc}")
+                chip.hbm[off:off + data.size] = data.tobytes()
+                return
+        raise ValueError(f"fill_hbm: {addr:#x} is in no memory chiplet's HBM image")
+
     @property
     def hbm_bytes(self):
         return sum(len(c.hbm) for c in self._chips.values())
@@ -276,7 +293,7 @@ class DataStaging:
         self._items.append((name, ctype, None, arr))
         return BingoMemSymbol(name)
 
-    def put_zeros(self, name, ctype, count, mem_chip=None):
+    def put_zeros(self, name, ctype, count, mem_chip=None, preload=False):
         """Record a zero-filled array and return its handle, WITHOUT spelling out zeros.
 
         On the host path the array is DECLARED and not defined, so it lands in .bss, which
@@ -284,6 +301,11 @@ class DataStaging:
         large buffer. Spelling out a 64 KiB zero bias as C literals would add ~400 KiB of
         source for no information. On the memchip path there is no such trick: the pool is
         a flat binary, so the zeros are real bytes there.
+
+        `preload`: zeros in a .data section of their own instead, so the testbench's image
+        preload clears it at time zero; in .bss the boot clears it with the system DMA, which
+        for megabytes (a weight ring's slots) takes hundreds of microseconds of SIMULATED time
+        before the program starts.
         """
         chip = self._chip(mem_chip, f"put_zeros({name!r})")
         if mem_chip is not None and not self.on_memchip:
@@ -299,7 +321,7 @@ class DataStaging:
             chip.blob.extend(bytes(count * width))
             self._items.append((name, ctype, off, np.zeros(count, dtype=f"u{width}")))
             return BingoMemFixedAddr(chip.base + off)
-        self._zeros.append((name, ctype, count))
+        self._zeros.append((name, ctype, count, bool(preload)))
         return BingoMemSymbol(name)
 
     def emit(self, data_h_path, output_dir):
@@ -324,8 +346,9 @@ class DataStaging:
                 vals = arr.reshape(-1).tolist()
                 lines.append(_c_array(ctype, name, len(vals), 64, vals))
                 lines.append("")
-            for name, ctype, count in self._zeros:
-                lines.append(_c_array(ctype, name, count, 64))
+            for name, ctype, count, preload in self._zeros:
+                lines.append(_c_array(ctype, name, count, 64,
+                                      section=f".data.{name}" if preload else None))
                 lines.append("")
 
         if data_h_path is not None:

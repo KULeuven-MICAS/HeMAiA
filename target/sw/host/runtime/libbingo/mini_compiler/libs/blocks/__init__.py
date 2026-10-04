@@ -23,10 +23,12 @@ the port model cannot honour.
 from .flash_attention import FaCfg, FlashAttention
 from .linear import Linear, LinearCfg, LoadStream, WeightRings, record_spec
 from .gather import fa_gather
-from .mla import (CacheAppend, CacheAppendCfg, MlaAttention, MlaAttnCfg, QAssemble,
-                  QAssembleCfg, RopeRows, RopeRowsCfg)
+from .mla import (CacheAppend, CacheAppendCfg, MlaAttention, MlaAttnCfg, MlaDimOut, MlaDimPV,
+                  MlaDimPVCfg, MlaRowMax, MlaRowMaxCfg, MlaShardCfg, MlaShardOut, MlaShardP,
+                  MlaShardPV, MlaShardScores, QAssemble, QAssembleCfg, RopeRows, RopeRowsCfg)
 from .moe import MoeCfg, MoeFFN
-from .move import Broadcast, Fetch, Join, MoveCfg, Pull, Slice, Stash, TransposeView, View
+from .move import (After, Broadcast, Collect, Fetch, Join, MoveCfg, Pull, Slice, Stash,
+                   TransposeView, View)
 from .reshape import Reshape, ReshapeCfg
 from .route import (MoeRoute, MoeRouteCfg, SlotLoad, SlotLoadCfg, expert_table,
                     pass_record_bytes, record_bytes)
@@ -40,9 +42,12 @@ __all__ = ["Broadcast", "FaCfg", "FlashAttention", "fa_gather", "Gather", "Linea
            "LinearCfg", "LoadStream", "WeightRings", "record_spec", "MoeCfg", "MoeFFN", "MoveCfg",
            "Dequantize", "NormCfg", "Pull", "Quantize", "RMSNorm", "Reshape", "ReshapeCfg",
            "Join", "Residual", "RoPE", "RowCfg", "Scatter", "Slice", "TransposeView", "View",
-           "Fetch", "Stash", "ARowLoad", "ARowLoadCfg", "ARowPack", "ARowPackCfg", "NormRowCfg", "QuantARowCfg", "QuantizeARow", "RMSNormRow",
+           "After", "Collect", "Fetch", "Stash", "ARowLoad", "ARowLoadCfg", "ARowPack", "ARowPackCfg", "NormRowCfg", "QuantARowCfg", "QuantizeARow", "RMSNormRow",
            "ScaleCols", "ScaleColsCfg", "AddRow", "AddRowCfg", "ScaleRowBySlot",
            "ScaleRowCfg", "SoftmaxRow", "SoftmaxRowCfg", "SwigluARow", "SwigluARowCfg",
-           "CacheAppend", "CacheAppendCfg", "MlaAttention", "MlaAttnCfg", "QAssemble",
+           "CacheAppend", "CacheAppendCfg", "MlaAttention", "MlaAttnCfg", "MlaRowMax",
+           "MlaRowMaxCfg", "MlaShardCfg", "MlaShardOut", "MlaShardPV", "MlaShardScores",
+           "MlaShardP", "MlaDimPV", "MlaDimPVCfg", "MlaDimOut",
+           "QAssemble",
            "QAssembleCfg", "RopeRows", "RopeRowsCfg", "MoeRoute", "MoeRouteCfg",
            "SlotLoad", "SlotLoadCfg", "expert_table", "pass_record_bytes", "record_bytes"]

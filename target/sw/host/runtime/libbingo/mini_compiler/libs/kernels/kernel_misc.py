@@ -171,11 +171,15 @@ class SnaxBingoKernelIdmaRingLoadArgs(BingoKernelArgs):
     flag (libs/blocks/linear.py WeightRing); flag and release are local L3 words."""
     KERNEL_NAME = "__snax_bingo_kernel_idma_ring_load"
 
-    def __init__(self, flag_addr, seq: int, src_addr, dst_addr, size: int, release_addr):
+    def __init__(self, flag_addr, seq: int, src_addr, dst_addr, size: int, release_addr,
+                 trailer: bool = False):
         if seq < 1 or size <= 0:
             raise ValueError(f"seq={seq} (from 1), size={size}.")
         self.flag_addr, self.seq, self.src_addr = flag_addr, int(seq), src_addr
         self.dst_addr, self.size, self.release_addr = dst_addr, int(size), release_addr
+        # weight_ring.trailer: flag_addr is the record's last beat (a 64-bit magic, cleared
+        # after the copy) instead of the ring's flag word
+        self.trailer = int(bool(trailer))
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_idma_ring_load_args_t"
@@ -189,6 +193,29 @@ class SnaxBingoKernelIdmaRingLoadArgs(BingoKernelArgs):
         a["size"] = str(self.size)
         self._process_addr(self.release_addr, "release_addr", a, handle_name_map,
                            split_64bit=False)
+        a["trailer"] = str(self.trailer)
+        return a
+
+
+class SnaxBingoKernelXdmaCrestExpandArgs(BingoKernelArgs):
+    """CREST in place on the xDMA core (offload_hw_kernels/xdma.h): the slab's last 64-B beat
+    is a record's tail (stream words W, 0 = plain; output beats N), the stream ends right
+    before it, and it expands into the slab's first N beats, L1 to L1, through the writer's
+    CrestDecompressor. params weight_crest (libs/crest.py)."""
+    KERNEL_NAME = "__snax_bingo_kernel_xdma_crest_expand"
+
+    def __init__(self, slab_addr, slab_bytes: int):
+        if slab_bytes <= 64 or slab_bytes % 64:
+            raise ValueError(f"slab_bytes={slab_bytes}: whole 64-B beats, more than one")
+        self.slab_addr, self.slab_bytes = slab_addr, int(slab_bytes)
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_xdma_crest_expand_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.slab_addr, "slab_addr", a, handle_name_map)
+        a["slab_bytes"] = str(self.slab_bytes)
         return a
 
 

@@ -19,6 +19,8 @@ class BingoDFGReportMixin:
 
     def bingo_visualize_dfg(self, filename: str = "dfg_visualization", figsize: tuple = (20, 16)) -> None:
         """Visualize the DFG with different shapes for task types and colors for chiplets."""
+        if getattr(self, "skip_viz", False):    # a DSE export: no pictures (minutes at 6k nodes)
+            return
         try:
             import matplotlib.pyplot as plt
             from matplotlib.lines import Line2D
@@ -233,6 +235,8 @@ class BingoDFGReportMixin:
         Only a graph a libs Pipeline built has them: the Pipeline is what records which node
         belongs to which block. BINGO_BLOCK_DFG=0 skips them.
         """
+        if getattr(self, "skip_viz", False):
+            return
         if not getattr(self, "block_records", None):
             return
         if os.environ.get("BINGO_BLOCK_DFG", "1") == "0":
