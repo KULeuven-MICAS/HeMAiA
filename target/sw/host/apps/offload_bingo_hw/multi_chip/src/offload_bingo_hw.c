@@ -29,6 +29,10 @@ int main() {
     uint8_t current_chip_id = get_current_chip_id();
     // Program the Chiplet Topology
     hemaia_d2d_link_initialize_grid(current_chip_id);  // _4c1m only configures 0x00,0x01,0x10,0x11; every other chiplet kept reset availability and its packets were routed off-array and dropped
+#ifdef HEMAIA_D2D_RX_YIELD
+    // the workload's RX yield windows, compute chips and memory chips (dsv2: params d2d_rx_yield)
+    hemaia_d2d_link_rx_yield_grid(current_chip_id, HEMAIA_D2D_RX_YIELD, HEMAIA_D2D_RX_YIELD_MEM);
+#endif
 #if defined(HEMAIA_D2D_DDR) && HEMAIA_D2D_DDR
     // The workload asked for DDR links (its data header defines HEMAIA_D2D_DDR): switch
     // them now, before any D2D traffic (hemaia_d2d_link.h).
