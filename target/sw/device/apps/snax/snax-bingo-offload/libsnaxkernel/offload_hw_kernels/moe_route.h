@@ -106,9 +106,15 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_moe_route(void *arg)
         const volatile uint16_t *p = (const volatile uint16_t *)(a->p_addr + t * a->p_pitch);
         int32_t keys[BINGO_MOE_ROUTE_MAX_K];
         uint32_t have = 0;
+        // the k-th key in a register (below every key until the list is full), and the key
+        // without a branch: the loop over n probabilities dominates this kernel, which sits on
+        // the layer's critical path (every routed expert waits for the record)
+        int32_t thr = INT32_MIN;
         for (uint32_t i = 0; i < n; i++) {
-            const int32_t key = bingo_mono16(p[i]);
-            if (have == k && key <= keys[k - 1]) continue;
+            const uint32_t h = p[i];
+            const int32_t sgn = -(int32_t)(h >> 15);                 // 0, or -1 if negative
+            const int32_t key = ((int32_t)(h & 0x7FFFu) ^ sgn) - sgn;   // bingo_mono16
+            if (key <= thr) continue;
             uint32_t j = have < k ? have++ : k - 1;      // the slot it enters from
             while (j > 0 && key > keys[j - 1]) {
                 keys[j] = keys[j - 1];
@@ -117,6 +123,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_moe_route(void *arg)
             }
             keys[j] = key;
             ids[t][j] = i;
+            if (have == k) thr = keys[k - 1];
         }
         for (uint32_t r = 0; r < k; r++) w16s[t][r] = p[ids[t][r]];
     }
