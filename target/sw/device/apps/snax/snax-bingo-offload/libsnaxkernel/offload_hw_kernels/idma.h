@@ -210,6 +210,11 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_2d_copy(void *arg)
     return BINGO_RET_SUCC;
 }
 
+// weight_ring.trailer's 64-bit magic (libs/crest.py TRAILER_MAGIC)
+#ifndef BINGO_RING_TRAILER_MAGIC
+#define BINGO_RING_TRAILER_MAGIC 0x5EED7A11C0DEF1A6ULL
+#endif
+
 // The expert-slot record (moe_route.h) one copy reads its source from: slot `slot`, word
 // pair 16 + 2 field. The address was decided by the router at run time, so it is looked up
 // here, on the DM core, the one engine that reaches every memory.
@@ -238,13 +243,26 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_ring_load(void *arg)
     bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_idma_ring_load_args_t);
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
     BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_START);
-    while (*flag != a->seq) {
+    if (a->trailer) {
+        // weight_ring.trailer: the record's own last beat says it has landed (the push writes
+        // it last, one transfer, writes in order); the slots are zero at boot (.bss)
+        while (flag[0] != (uint32_t)BINGO_RING_TRAILER_MAGIC ||
+               flag[1] != (uint32_t)(BINGO_RING_TRAILER_MAGIC >> 32)) {
+        }
+    } else {
+        while (*flag != a->seq) {
+        }
     }
     snrt_dma_start_1d_wideptr(dst, src, a->size);
     BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_END);
     BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_START);
     snrt_dma_wait_all();
     BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_END);
+    if (a->trailer) {
+        // cleared before the slot is freed: a later record ending here must not look landed
+        flag[0] = 0u;
+        flag[1] = 0u;
+    }
     *release = a->seq;
     sp->return_value = (uint32_t)dst;
     sp->num_return_values = 0;

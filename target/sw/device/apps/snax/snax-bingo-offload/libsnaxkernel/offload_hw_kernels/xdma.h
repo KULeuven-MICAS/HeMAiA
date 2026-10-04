@@ -108,10 +108,14 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_memset(void *arg)
     BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
     xdma_disable_all_extensions();
     // src == dst: the reader is off, so its address only has to be legal, never read.
+    // The high word is the caller's, never 0: it carries the chip id, and 0 names chip
+    // 0x00. On any other chip a zeroed high word made the fill a REMOTE task into chip
+    // 0x00's L1 -- it wrote there, and the local finish counter this waits on never moved.
+    const uint32_t dst_hi = a->dst_addr_hi;
     snax_write_xdma_cfg_reg(XDMA_SRC_ADDR_PTR_LSB, dst);
-    snax_write_xdma_cfg_reg(XDMA_SRC_ADDR_PTR_MSB, 0);
+    snax_write_xdma_cfg_reg(XDMA_SRC_ADDR_PTR_MSB, dst_hi);
     snax_write_xdma_cfg_reg(XDMA_DST_ADDR_PTR_LSB, dst);
-    snax_write_xdma_cfg_reg(XDMA_DST_ADDR_PTR_MSB, 0);
+    snax_write_xdma_cfg_reg(XDMA_DST_ADDR_PTR_MSB, dst_hi);
     snax_write_xdma_cfg_reg(XDMA_SRC_SPATIAL_STRIDE_PTR, 8);
     snax_write_xdma_cfg_reg(XDMA_DST_SPATIAL_STRIDE_PTR, 8);
     // One temporal dimension: `beats` beats of 64 B. XDMA_WR_*_DIMS writes EVERY generated
@@ -175,6 +179,93 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_1d_copy(void *arg)
         printf_safe("[Cluster %d Core %d]: Error! XDMA copy must run on the xDMA core!\r\n", snrt_cluster_idx(), snrt_cluster_core_idx());
         return BINGO_RET_FAIL;
     }
+}
+
+// CREST in place (params weight_crest; snax_cluster hw/chisel/doc/crest_decompressor.md):
+// the memory chiplet pushes each weight chunk COMPRESSED, the DM core's ring load copies the
+// record into the END of the L1 slab, and this expands it into the slab's first N beats --
+// L1 to L1 through the writer's CrestDecompressor, the path snax's own test exercises. The
+// slab's last beat is the record's tail: bytes 8..11 the stream's 64-B words W (0: stored
+// plain), 12..15 the output beats N; the stream (or the plain data) ends right before it.
+// Input and output share the slab: output beat j lands below every input word not yet read,
+// which the datagen checked for this record and this slab (libs/crest.py), else it stored the
+// chunk plain.
+#if defined(WRITER_EXT_CRESTDECOMPRESSOR)
+#define BINGO_HAS_CREST 1
+#else
+#define BINGO_HAS_CREST 0
+#endif
+
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_xdma_crest_expand(void *arg)
+{
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_xdma_crest_expand_args_t);
+    if (!snax_is_xdma_core()) {
+        printf_safe("[Cluster %d Core %d]: Error! xdma_crest_expand must run on the xDMA core!\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+    const __snax_bingo_kernel_xdma_crest_expand_args_t *a =
+        (const __snax_bingo_kernel_xdma_crest_expand_args_t *)arg;
+    const uint64_t slab = make_u64(a->slab_addr_hi, a->slab_addr_lo);
+    const uint32_t cap = a->slab_bytes / XDMA_WIDTH;          // the slab in 64-B words
+    const volatile uint32_t *tail =
+        (const volatile uint32_t *)(uintptr_t)(a->slab_addr_lo + a->slab_bytes - XDMA_WIDTH);
+    const uint32_t words = tail[2], beats = tail[3];
+    bingo_kernel_scratchpad_t *sp = BINGO_GET_SP(arg, __snax_bingo_kernel_xdma_crest_expand_args_t);
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+    const uint32_t in = words ? words : beats;                // the words before the tail
+    if (beats == 0u || in + 1u > cap || beats + 1u > cap) {
+        printf_safe("[Cluster %d Core %d]: Error! xdma_crest_expand: tail says %d words -> %d "
+                    "beats in a %d-word slab\r\n", snrt_cluster_idx(), snrt_cluster_core_idx(),
+                    (int)words, (int)beats, (int)cap);
+        return BINGO_RET_FAIL;
+    }
+    const uint64_t src = slab + (uint64_t)(cap - 1u - in) * XDMA_WIDTH;
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_START);
+    xdma_disable_all_extensions();
+    uint32_t crest_on = 0;
+    if (words == 0u) {
+        // stored plain: a forward copy down to the slab's start (or nothing, already there)
+        if (src == slab) goto done;
+        BINGO_XDMA_TRY(xdma_memcpy_1d_full_addr(src, slab, beats * XDMA_WIDTH),
+                       "xdma_crest_expand (plain)");
+    } else {
+#if BINGO_HAS_CREST
+        uint32_t stride[1] = {XDMA_WIDTH};
+        uint32_t src_bound[1] = {words};
+        uint32_t dst_bound[1] = {beats};
+        BINGO_XDMA_TRY(xdma_memcpy_nd_full_addr(src, slab, XDMA_WIDTH / XDMA_SPATIAL_CHAN,
+                                                XDMA_WIDTH / XDMA_SPATIAL_CHAN, 1, stride,
+                                                src_bound, 1, stride, dst_bound, 0xFFFFFFFF,
+                                                0xFFFFFFFF, 0xFFFFFFFF),
+                       "xdma_crest_expand");
+        uint32_t csr[1] = {beats};
+        xdma_enable_dst_ext(WRITER_EXT_CRESTDECOMPRESSOR, csr);
+        crest_on = 1;
+#else
+        printf_safe("[Cluster %d Core %d]: Error! xdma_crest_expand: a CREST chunk on a cluster "
+                    "without the CrestDecompressor writer extension\r\n", snrt_cluster_idx(),
+                    snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+#endif
+    }
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_CFG_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_START);
+    {
+        xdma_task_t task_id = xdma_start();
+        xdma_wait_task(task_id);
+    }
+    BINGO_TRACE_MARKER(BINGO_TRACE_XDMA_RUN_END);
+#if BINGO_HAS_CREST
+    if (crest_on) xdma_disable_dst_ext(WRITER_EXT_CRESTDECOMPRESSOR);
+#else
+    (void)crest_on;
+#endif
+done:
+    sp->return_value = (uint32_t)slab;
+    sp->num_return_values = 0;
+    return BINGO_RET_SUCC;
 }
 
 // ONE READ FROM MAIN MEMORY, N WRITES INTO N CLUSTERS' L1.

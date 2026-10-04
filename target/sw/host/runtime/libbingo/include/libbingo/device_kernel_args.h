@@ -281,8 +281,24 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_idma_ring_load_args {
   uint32_t dst_addr_lo;
   uint32_t size;
   uint32_t release_addr;
+  // weight_ring.trailer: flag_addr is the record's last beat, holding a 64-bit magic (libs/
+  // crest.py TRAILER_MAGIC) the push itself writes last; polled, then cleared before the
+  // release. 0: flag_addr is the ring's flag word, polled for `seq`.
+  uint32_t trailer;
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_idma_ring_load_args_t;
+
+// CREST in place (offload_hw_kernels/xdma.h, params weight_crest): the slab's LAST 64-B beat
+// is the record's tail -- bytes 8..11 the stream's 64-B words W (0: stored plain), 12..15 the
+// output beats N -- and the stream (or the plain data) ends right before it; the xDMA core
+// expands it into the slab's first N beats, L1 to L1, through the writer's CrestDecompressor.
+// The datagen checked that no output beat overwrites a word not yet read (libs/crest.py).
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_crest_expand_args {
+  uint32_t slab_addr_hi;
+  uint32_t slab_addr_lo;
+  uint32_t slab_bytes;    // the slab: its last beat is the tail
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_xdma_crest_expand_args_t;
 
 // BINGO MoE route: the top k of n FP16 probabilities (largest first, ties to the lower
 // index), and per chosen expert its record slot: its id, its weight (FP16 and as FP32
