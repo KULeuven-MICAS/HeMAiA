@@ -330,6 +330,10 @@ static inline void wait_chips_checkpoint(
              i <= (bottom_right_chip_id >> 4); i++) {
             for (uint8_t j = top_left_chip_id & 0xF;
                  j <= (bottom_right_chip_id & 0xF); j++) {
+#ifdef HEMAIA_IS_COMPUTE_CHIP
+                // a memory chip inside the rectangle runs no code and never announces
+                if (!HEMAIA_IS_COMPUTE_CHIP((i << 4) + j)) continue;
+#endif
                 if ((*(chip_level_checkpoint + ((i << 4) + j)) < checkpoint) &&
                     (current_chip_id != ((i << 4) + j))) {
                     continue_loop = 1;

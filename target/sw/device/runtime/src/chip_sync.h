@@ -182,6 +182,12 @@ static inline void sw_chip_barrier_wait(
         // Master: the arrival slots are in ITS OWN comm buffer, so this poll is purely
         // local. Signed difference tolerates generation wraparound.
         for (uint32_t p = 0; p < count; p++) {
+#ifdef HEMAIA_IS_COMPUTE_CHIP
+            // a memory chip inside the rectangle runs no code and never arrives
+            if (!HEMAIA_IS_COMPUTE_CHIP(
+                    sw_barrier_chip_of_index(p, top_left_chip_id, bottom_right_chip_id)))
+                continue;
+#endif
             volatile uint32_t* slot = &chip_barrier_data_ptr->sw_barrier_arrive[p];
             while ((int32_t)(*slot - gen) < 0) {
                 asm volatile("fence" ::: "memory");
@@ -193,6 +199,9 @@ static inline void sw_chip_barrier_wait(
             uint8_t target =
                 sw_barrier_chip_of_index(p, top_left_chip_id, bottom_right_chip_id);
             if (target == top_left_chip_id) continue;
+#ifdef HEMAIA_IS_COMPUTE_CHIP
+            if (!HEMAIA_IS_COMPUTE_CHIP(target)) continue;
+#endif
             snrt_xchip_writew(
                 target,
                 SNRT_XCHIP_LOCAL_OFF(&chip_barrier_data_ptr->sw_barrier_release), gen);

@@ -27,6 +27,16 @@
 #define HEMAIA_D2D_LINK_DEFAULT_TEST_CYCLES 2000
 #define HEMAIA_D2D_LINK_FPGA_TX_YIELD_PERIOD 16
 #define HEMAIA_D2D_LINK_FPGA_TX_TURNAROUND_SILENCE_PERIOD 16
+// RX yield window (data-link cycles): a side that has been receiving this long with data of its
+// own waiting withholds CTS, and the sender hands it the half-duplex link (after its hold
+// period). Without it a push stream holds a link until its TX buffer empties and every read the
+// other way waits for the whole stream. 0 = off (the register's reset value) is the default: a
+// short window on every side hands the link over every few flits whenever both ends have data,
+// and each turnaround costs link time. A workload picks its own per side with
+// hemaia_d2d_link_rx_yield_grid (dsv2: params d2d_rx_yield).
+#ifndef HEMAIA_D2D_LINK_RX_YIELD_WINDOW
+#define HEMAIA_D2D_LINK_RX_YIELD_WINDOW 0
+#endif
 
 #ifndef HEMAIA_SAME_MEMCHIP_SPEED
 #define HEMAIA_SAME_MEMCHIP_SPEED 0
@@ -594,6 +604,16 @@ inline uint8_t get_d2d_link_tx_yield_period(D2DDirection direction) {
     return (val >> (direction * 8U)) & 0xFFU;
 }
 
+// RX yield window, every side at once
+inline void set_all_d2d_link_rx_yield_window(uint8_t window) {
+    uintptr_t base =
+        (uintptr_t)get_current_chip_baseaddress() | HEMAIA_D2D_LINK_BASE_ADDR;
+    base += HEMAIA_D2D_LINK_RX_YIELD_WINDOW_REGISTER_REG_OFFSET;
+    volatile uint32_t* reg = (volatile uint32_t*)base;
+    *reg = ((uint32_t)window << 24) | ((uint32_t)window << 16) | ((uint32_t)window << 8) |
+           window;
+}
+
 // TX turnaround silence period
 inline void set_d2d_link_tx_turnaround_silence_period(uint8_t period,
                                                       D2DDirection direction) {
@@ -904,10 +924,17 @@ static inline int hemaia_d2d_memchips_far_first(uint8_t chip_id, uint8_t* out) {
 // Every chip, compute or memory, keeps exactly the ports that face a chip
 // (HEMAIA_D2D_PORT_TABLE). Memory chips are routers like any other: traffic between the
 // two compute chips of a row C M C crosses the memory chip. They have no core, so
-// HEMAIA_D2D_MEMCHIP_CONFIGURER programs theirs over the link. Ports that face a memory
-// chip are multicast-fenced: a broadcast is for the compute chips, and a multicast write
-// must not land in a memory chip at the same address -- so a broadcast does not cross a
-// memory chip either.
+// HEMAIA_D2D_MEMCHIP_CONFIGURER programs theirs over the link.
+//
+// BROADCASTS (a store to chip 0xFF: the BINGO manager's all-chip dependency set, the chip
+// barrier's announce) travel a fixed tree over the whole rectangle
+// (hemaia_d2d_link_router_rc.sv), and each router's multicast fence register decides what
+// it does with one: bits 0-3 whether it forwards it east / west / north / south, bit 4
+// whether it delivers it to its own chip. So the broadcast REGION is programmed here: a
+// memory chip forwards a broadcast to its neighbours but never consumes it (bit 4 = 0),
+// and no compute chip fences a port facing a memory chip -- the tree needs every chip of
+// the rectangle as a hop, and in C-M-C rows the memory chips are hops between compute
+// chips. Every compute chip then gets each broadcast once, and no memory chip gets one.
 static inline void hemaia_d2d_link_initialize_grid(uint8_t chip_id) {
     // Same clock-domain setup as the fixed-topology routines: host and clusters at /7,
     // all four D2D PHYs at /1, so the core:link ratio matches the RTL's 1/7.
@@ -920,6 +947,7 @@ static inline void hemaia_d2d_link_initialize_grid(uint8_t chip_id) {
     enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 3, 1);  // North D2D PHY
     enable_clk_domain(N_CLUSTERS_PER_CHIPLET + 4, 1);  // South D2D PHY
     set_all_d2d_link_tx_turnaround_silence_period(0);
+    set_all_d2d_link_rx_yield_window(HEMAIA_D2D_LINK_RX_YIELD_WINDOW);
 
     uint8_t links, mem;
     hemaia_d2d_ports(chip_id, &links, &mem);
@@ -929,7 +957,6 @@ static inline void hemaia_d2d_link_initialize_grid(uint8_t chip_id) {
             set_d2d_link_availability(dir, false);
         }
         if ((mem >> d) & 1) {
-            set_d2d_link_multicast_fence(dir, false);
 #if !HEMAIA_SAME_MEMCHIP_SPEED
             // The memchip runs on a much slower clock, so a port facing one has to yield
             // and slow its PHY. Only such a port: throttling a link between compute chips
@@ -942,7 +969,8 @@ static inline void hemaia_d2d_link_initialize_grid(uint8_t chip_id) {
         }
     }
 
-    // The memory chips' availability: the ports that face a chip, as for us.
+    // The memory chips: availability = the ports that face a chip, as for us; multicast
+    // fence = forward on those ports, never deliver to the memory chip itself.
     if (chip_id == HEMAIA_D2D_MEMCHIP_CONFIGURER) {
         uint8_t order[16];
         const int n = hemaia_d2d_memchips_far_first(chip_id, order);
@@ -951,6 +979,29 @@ static inline void hemaia_d2d_link_initialize_grid(uint8_t chip_id) {
             hemaia_d2d_ports(order[i], &m_links, &m_mem);
             *hemaia_d2d_link_reg(order[i],
                                  HEMAIA_D2D_LINK_AVAILABILITY_REGISTER_REG_OFFSET) = m_links;
+            *hemaia_d2d_link_reg(order[i],
+                                 HEMAIA_D2D_LINK_MULTICAST_FENCE_REGISTER_REG_OFFSET) =
+                m_links & 0x0F;   // bit 4 (toward this chip) = 0: transit only
+            *hemaia_d2d_link_reg(order[i],
+                                 HEMAIA_D2D_LINK_RX_YIELD_WINDOW_REGISTER_REG_OFFSET) =
+                0x01010101u * HEMAIA_D2D_LINK_RX_YIELD_WINDOW;
+        }
+        asm volatile("fence" ::: "memory");
+    }
+}
+
+// The RX yield window on this chip's links and -- from the memory-chip configurer -- on every
+// memory chip's: `window` on the compute chips (each calls this for its own), `mem_window` on
+// the memory chips (0 = off). After hemaia_d2d_link_initialize_grid, before any D2D traffic.
+static inline void hemaia_d2d_link_rx_yield_grid(uint8_t chip_id, uint8_t window,
+                                                 uint8_t mem_window) {
+    set_all_d2d_link_rx_yield_window(window);
+    if (chip_id == HEMAIA_D2D_MEMCHIP_CONFIGURER) {
+        uint8_t order[16];
+        const int n = hemaia_d2d_memchips_far_first(chip_id, order);
+        for (int i = 0; i < n; i++) {
+            *hemaia_d2d_link_reg(order[i], HEMAIA_D2D_LINK_RX_YIELD_WINDOW_REGISTER_REG_OFFSET) =
+                0x01010101u * mem_window;
         }
         asm volatile("fence" ::: "memory");
     }

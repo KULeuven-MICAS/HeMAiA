@@ -40,6 +40,22 @@
 #define MEM_CHIP_IDS                   {${", ".join("0x%02x" % m["id"] for m in mem_chips)}}
 % endif
 
+// Which chip ids are COMPUTE chips (CHIPLET_ID_<k>): bit (id & 63) of map (id >> 6). A
+// rectangle of chip ids -- a chip barrier's -- may hold memory chips, which run no code and
+// never arrive; HEMAIA_IS_COMPUTE_CHIP skips them.
+<%
+    _cmap = [0, 0, 0, 0]
+    for _id in chiplet_ids:
+        _cmap[_id >> 6] |= 1 << (_id & 63)
+%>\
+% for _i, _m in enumerate(_cmap):
+#define HEMAIA_COMPUTE_CHIP_MAP_${_i}       0x${"%016x" % _m}ULL
+% endfor
+#define HEMAIA_IS_COMPUTE_CHIP(id) \
+    (((((id) >> 6) == 0 ? HEMAIA_COMPUTE_CHIP_MAP_0 : ((id) >> 6) == 1 ? HEMAIA_COMPUTE_CHIP_MAP_1 \
+       : ((id) >> 6) == 2 ? HEMAIA_COMPUTE_CHIP_MAP_2 : HEMAIA_COMPUTE_CHIP_MAP_3) \
+      >> ((id) & 63)) & 1)
+
 // The D2D ports of every chip on the grid, compute and memory: {chip id, ports that face a
 // chip, ports that face a memory chip}, a port being bit d for D2DDirection d (east 0,
 // west 1, north 2, south 3). hemaia_d2d_link_initialize_grid() programs the links from it.
