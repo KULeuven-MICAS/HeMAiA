@@ -168,7 +168,9 @@ class QuantARowCfg:
 
     @property
     def in_cols(self) -> int:
-        return self.cols if self.segs == 1 else self.segs * self.seg_pitch // 2
+        # a pitch makes the row the segments' whole slices, one segment included (the
+        # first `cols` of a single head's slice)
+        return self.cols if not self.seg_pitch else self.segs * self.seg_pitch // 2
 
 
 class QuantizeARow(Block):
