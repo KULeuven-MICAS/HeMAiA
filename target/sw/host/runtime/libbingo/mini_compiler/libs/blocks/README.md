@@ -5,6 +5,7 @@ Each is a sub-DFG with a declared interface, built once, in pipeline order.
 | file | |
 |---|---|
 | `flash_attention.py` | `FlashAttention` over one or more clusters, and `FaCfg`, which holds every parameter it has. |
+| `collective.py` | Collectives across chips -- `all_gather`, `send`, `scatter` -- built as small graphs of blocks on the application's chips (a `Fabric`), each with interchangeable implementations behind `impl`: `"idma"` (local write, remote read; optional per-chip chain, two-level tree, per-chip hierarchy) and, for the all-gather, `"bcast"` (`BcastPut`: each part and a landed flag to every compute chip by D2D broadcast; `FlagFetch`: spin on the flags, read the whole array locally -- the waits are ordering-only edges, `BingoDFG.bingo_add_order_edge`, so they spend no dependency tag). Functions, not blocks. |
 | `gather.py` | `fa_gather`, the in-fabric fold of attention's per-cluster partials. A function, not a block. |
 | `moe.py` | `MoeFFN` — a mixture-of-experts feed-forward layer with CERF-skipped losers — and `MoeCfg`. |
 | `linear.py` | `Linear` — one INT8 GEMM, or a one-token GEMV (`gemv=True`, VersaCore's (1, 4, 32) shape; `groups=G` for per-head GEMVs), with its operand loads, and `LoadStream`, a cluster's shared weight slabs. A weight larger than one chunk is streamed in column chunks through `w_buffers` L1 buffers (double buffering by default), from main memory or from the memory chiplet's HBM. Every weight matrix in a layer is this block with different shapes. |

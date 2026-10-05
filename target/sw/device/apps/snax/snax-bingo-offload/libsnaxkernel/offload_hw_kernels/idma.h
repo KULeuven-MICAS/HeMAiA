@@ -78,6 +78,104 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_1d_copy(void *arg)
     }
 }
 
+// A broadcast collective's producer (libs/blocks/collective.py, impl "bcast"): its part into
+// this chip's copy of the hand-off array and to the same address on every other compute chip
+// (a store to chip 0xFF; the router never delivers a broadcast back to its source, so this
+// chip's copy is written locally), then the landed flag the same two ways. All four go out on
+// this one iDMA, in order, so a flag that has landed says the part before it has. The flag's
+// source is this task's own `value` argument.
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_bcast_put(void *arg)
+{
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_idma_bcast_put_args_t);
+    if (!snrt_is_dm_core()) {
+        printf_safe("[Cluster %d Core %d]: Error! IDMA bcast put should be called from a DM core!\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+    __snax_bingo_kernel_idma_bcast_put_args_t *a = (__snax_bingo_kernel_idma_bcast_put_args_t *)arg;
+    const uint64_t src = make_u64(a->src_addr_hi, a->src_addr_lo);
+    const uint64_t dst = make_u64(a->dst_addr_hi, a->dst_addr_lo);
+    const uint64_t flag = make_u64(a->flag_addr_hi, a->flag_addr_lo);
+    // this chip's prefix: a DMA address whose high word is 0 names chip 0x00
+    const uint64_t val = chiplet_addr_transform((uint64_t)(uint32_t)(uintptr_t)&a->value);
+    const uint32_t size = a->size;
+    bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_idma_bcast_put_args_t);
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_START);
+    snrt_dma_start_1d_wideptr(dst, src, size);
+    snrt_dma_start_1d_wideptr(chiplet_addr_transform_loc(0xF, 0xF, dst), src, size);
+    snrt_dma_start_1d_wideptr(flag, val, 4);
+    snrt_dma_start_1d_wideptr(chiplet_addr_transform_loc(0xF, 0xF, flag), val, 4);
+    BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_START);
+    snrt_dma_wait_all();
+    BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_END);
+    sp->return_value = (uint32_t)dst;
+    sp->num_return_values = 0;
+    return BINGO_RET_SUCC;
+}
+
+// A broadcast collective's destination: spin until each producer's landed flag (64 B apart,
+// in this chip's memory) holds `value` -- the producers are ordering-only edges, not
+// dependencies, so the flags are the proof their parts are here -- then copy the gathered
+// array from this chip's memory into L1. No read crosses a link.
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_fetch_flagged(void *arg)
+{
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_idma_fetch_flagged_args_t);
+    if (!snrt_is_dm_core()) {
+        printf_safe("[Cluster %d Core %d]: Error! IDMA flagged fetch should be called from a DM core!\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+    __snax_bingo_kernel_idma_fetch_flagged_args_t *a = (__snax_bingo_kernel_idma_fetch_flagged_args_t *)arg;
+    const uint64_t src = make_u64(a->src_addr_hi, a->src_addr_lo);
+    const uint64_t dst = make_u64(a->dst_addr_hi, a->dst_addr_lo);
+    const uint64_t flags = make_u64(a->flags_addr_hi, a->flags_addr_lo);
+    const uint32_t n = a->n_flags, value = a->value, size = a->size;
+    bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_idma_fetch_flagged_args_t);
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_START);
+    // The poll: ONE strided iDMA copy brings every flag word (each at the head of its 64 B
+    // slot) into dst -- free until the data lands there -- and the core checks them in L1.
+    // Reading the flags one by one from L3 cost a round trip each: the last
+    // producer's flag landed, then the rest were read in turn. A dst too small for the n
+    // words falls back to those reads.
+    if (size >= 4u * n) {
+        volatile uint32_t *seen = (volatile uint32_t *)(uintptr_t)(uint32_t)dst;
+        uint32_t polls = 0, i = 0;
+        for (;;) {
+            snrt_dma_start_2d_wideptr(dst, flags, 4, 4, 64, n);
+            snrt_dma_wait_all();
+            while (i < n && seen[i] == value) i++;   // flags already seen stay landed
+            if (i == n) break;
+            // a flag that never lands means a producer never ran: say which, keep waiting
+            if (++polls == (1u << 18))
+                printf_safe("[Cluster %d]: flagged fetch still waiting for flag %d of %d\r\n",
+                            snrt_cluster_idx(), (int)i, (int)n);
+        }
+    } else {
+        for (uint32_t i = 0; i < n; i++) {
+            volatile uint32_t *f = (volatile uint32_t *)(uintptr_t)(flags + (uint64_t)i * 64u);
+            uint32_t spins = 0;
+            while (*f != value) {
+                if (++spins == (1u << 22))
+                    printf_safe("[Cluster %d]: flagged fetch still waiting for flag %d of %d\r\n",
+                                snrt_cluster_idx(), (int)i, (int)n);
+            }
+        }
+    }
+    snrt_dma_start_1d_wideptr(dst, src, size);
+    BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_START);
+    snrt_dma_wait_all();
+    BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_END);
+    sp->return_value = (uint32_t)dst;
+    sp->num_return_values = 0;
+    return BINGO_RET_SUCC;
+}
+
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_broadcast(void *arg)
 {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_idma_broadcast_args_t);

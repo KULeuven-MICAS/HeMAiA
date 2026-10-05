@@ -76,6 +76,9 @@ SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_exit),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_idma_1d_copy),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_idma_broadcast),
+    // A broadcast collective's two ends (libs/blocks/collective.py impl "bcast").
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_idma_bcast_put),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_idma_fetch_flagged),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_idma_pairwise_swap),
     // Strided runs (a row gather, a cache append into an A layout, a [512, cap] tile) and
     // a copy whose source an expert-slot record names at run time.

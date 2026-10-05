@@ -20,6 +20,7 @@ running state, not a produced tensor -- so declaring it as a port would promise 
 the port model cannot honour.
 """
 
+from . import collective
 from .flash_attention import FaCfg, FlashAttention
 from .linear import Linear, LinearCfg, LoadStream, WeightRings, record_spec
 from .gather import fa_gather
@@ -38,7 +39,7 @@ from .simd import (AddRow, AddRowCfg, ARowLoad, ARowLoadCfg, ARowPack, ARowPackC
                    ScaleCols, ScaleColsCfg, ScaleRowBySlot, ScaleRowCfg, SoftmaxRow,
                    SoftmaxRowCfg, SwigluARow, SwigluARowCfg)
 
-__all__ = ["Broadcast", "FaCfg", "FlashAttention", "fa_gather", "Gather", "Linear",
+__all__ = ["collective", "Broadcast", "FaCfg", "FlashAttention", "fa_gather", "Gather", "Linear",
            "LinearCfg", "LoadStream", "WeightRings", "record_spec", "MoeCfg", "MoeFFN", "MoveCfg",
            "Dequantize", "NormCfg", "Pull", "Quantize", "RMSNorm", "Reshape", "ReshapeCfg",
            "Join", "Residual", "RoPE", "RowCfg", "Scatter", "Slice", "TransposeView", "View",

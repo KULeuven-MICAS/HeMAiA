@@ -282,6 +282,51 @@ class SnaxBingoKernelIdmaBroadcastArgs(BingoKernelArgs):
         assignments["size"] = str(self.size)
         return assignments
 
+# BINGO IDMA broadcast with a landed flag: a collective's part, out to every compute chip.
+# Copied into this chip's copy of the hand-off array and broadcast (D2D chip 0xFF) into every
+# other's, then the 4-byte `value` into this producer's flag slot the same two ways. One iDMA,
+# in order, so a flag that has landed says the part before it has (the weight prefetcher's
+# chunks and flags rely on the same order).
+class SnaxBingoKernelIdmaBcastPutArgs(BingoKernelArgs):
+    def __init__(self, src_addr, dst_addr, size: int, flag_addr, value: int = 1):
+        self.src_addr, self.dst_addr, self.size = src_addr, dst_addr, int(size)
+        self.flag_addr, self.value = flag_addr, int(value)
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_idma_bcast_put_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.src_addr, "src_addr", a, handle_name_map)
+        self._process_addr(self.dst_addr, "dst_addr", a, handle_name_map)
+        a["size"] = str(self.size)
+        self._process_addr(self.flag_addr, "flag_addr", a, handle_name_map)
+        a["value"] = str(self.value)
+        return a
+
+
+# BINGO IDMA fetch behind landed flags: spin until each of the `n_flags` flag slots (64 B
+# apart, in this chip's memory) holds `value`, then copy `size` bytes. The receiving end of a
+# broadcast collective: its producers are ordering-only edges (bingo_add_order_edge), not
+# dependencies, so the flags are what proves their parts landed.
+class SnaxBingoKernelIdmaFetchFlaggedArgs(BingoKernelArgs):
+    def __init__(self, src_addr, dst_addr, size: int, flags_addr, n_flags: int, value: int = 1):
+        self.src_addr, self.dst_addr, self.size = src_addr, dst_addr, int(size)
+        self.flags_addr, self.n_flags, self.value = flags_addr, int(n_flags), int(value)
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_idma_fetch_flagged_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.src_addr, "src_addr", a, handle_name_map)
+        self._process_addr(self.dst_addr, "dst_addr", a, handle_name_map)
+        a["size"] = str(self.size)
+        self._process_addr(self.flags_addr, "flags_addr", a, handle_name_map)
+        a["n_flags"] = str(self.n_flags)
+        a["value"] = str(self.value)
+        return a
+
 # BINGO IDMA Pairwise Swap (flat adjacent-element-pair swap: dst[i] = src[i^1])
 class SnaxBingoKernelIdmaPairwiseSwapArgs(BingoKernelArgs):
     def __init__(self, src_addr: Union[BingoMemAlloc, int], dst_addr: Union[BingoMemAlloc, int],

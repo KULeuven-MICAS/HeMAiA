@@ -232,6 +232,38 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_idma_broadcast_args {
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_idma_broadcast_args_t;
 
+// BINGO IDMA broadcast with a landed flag (a broadcast collective's producer,
+// libs/blocks/collective.py impl "bcast"): `size` bytes from src into this chip's copy of dst
+// and to dst on every other compute chip (the D2D broadcast), then the 4-byte `value` into
+// flag the same two ways.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_idma_bcast_put_args {
+  uint32_t src_addr_hi;
+  uint32_t src_addr_lo;
+  uint32_t dst_addr_hi;
+  uint32_t dst_addr_lo;
+  uint32_t size;        // in Bytes
+  uint32_t flag_addr_hi;
+  uint32_t flag_addr_lo;
+  uint32_t value;       // the landed flag's value; also the flag write's source
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_idma_bcast_put_args_t;
+
+// BINGO IDMA fetch behind landed flags (a broadcast collective's destination): spin until
+// each of the n_flags flags, 64 B apart from flags_addr in this chip's memory, holds `value`,
+// then copy `size` bytes from src to dst.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_idma_fetch_flagged_args {
+  uint32_t src_addr_hi;
+  uint32_t src_addr_lo;
+  uint32_t dst_addr_hi;
+  uint32_t dst_addr_lo;
+  uint32_t size;        // in Bytes
+  uint32_t flags_addr_hi;
+  uint32_t flags_addr_lo;
+  uint32_t n_flags;
+  uint32_t value;
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_idma_fetch_flagged_args_t;
+
 // BINGO IDMA strided copy, up to three dimensions: `outer` repetitions (src_outer /
 // dst_outer bytes apart) of `reps` runs of `size` bytes (src_stride / dst_stride apart).
 // Any memory the iDMA reaches on either side. What a gather of rows into one buffer, a
