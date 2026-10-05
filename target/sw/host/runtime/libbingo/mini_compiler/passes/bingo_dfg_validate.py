@@ -41,6 +41,8 @@ class BingoDFGValidateMixin:
            tags exist to remove, so checking it here is the real oracle.
         4. CAPACITY -- a cell needs more distinct tags than the descriptor can
            encode.
+        5. SPIN CYCLE -- a consumer that spins on a producer by itself (an ordering-only
+           edge) is, through dependencies and queue order, a predecessor of that producer.
 
         KNOWN GAP: this reasons about the GRAPH, so it assumes every task runs.
         A CERF-skipped task fires its dep_set immediately out of the checkout
@@ -69,6 +71,18 @@ class BingoDFGValidateMixin:
         for seq in by_core.values():
             for i in range(len(seq) - 1):
                 hb.add_edge(seq[i], seq[i + 1])
+        # 5. SPIN CYCLE -- a consumer spinning on a producer (an ordering-only edge,
+        #    bingo_add_order_edge) that, through dependencies and queue order, the producer
+        #    itself waits for. No dependency check is stuck: the consumer's kernel just never
+        #    returns. Checked on a copy, so the tag checks below reason about the real edges.
+        if getattr(self, "order_edges", None):
+            spin = hb.copy()
+            spin.add_edges_from(self.order_edges)
+            if not nx.is_directed_acyclic_graph(spin):
+                cyc = nx.find_cycle(spin)
+                names = " -> ".join(a.node_name for a, _ in cyc[:12])
+                raise ValueError(f"hang check: a spin wait closes a cycle ({len(cyc)} edges: "
+                                 f"{names} ...). The consumer would spin forever.")
         _desc: dict = {}
 
         def reach(n):

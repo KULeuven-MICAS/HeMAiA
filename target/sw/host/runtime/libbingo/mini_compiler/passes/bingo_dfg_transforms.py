@@ -355,7 +355,9 @@ class BingoDFGTransformsMixin:
         """
         from collections import defaultdict
 
-        topo_order = list(nx.topological_sort(self))
+        # (with the ordering-only edges: a core's order must put every producer a spin waits
+        # for ahead of the spinning consumer -- bingo_add_order_edge)
+        topo_order = list(nx.topological_sort(self.bingo_order_view()))
 
         # Group nodes by their (chiplet, cluster, core) assignment
         core_groups: dict[tuple, list[BingoNode]] = defaultdict(list)
@@ -507,37 +509,67 @@ class BingoDFGTransformsMixin:
 
     def bingo_transform_fit_dep_tag_budget(self, tag_width: int = None) -> int:
         """Make every dep-matrix cell fit in 2**tag_width tags, adding ordering edges where
-        the graph would need more.
+        the graph would need more -- and relays where ordering cannot fit it.
 
         The allocator (bingo_transform_dfg_allocate_dep_tags) already uses the fewest tags
         a graph allows: two edges of a cell share a tag when one's check happens-before the
         other's set, so a cell needs as many tags as its largest set of edges that can all
         be live at once. That number is a property of the GRAPH, and when it is more than
-        the hardware has, the graph has to change. The change that always exists is more
-        order: an edge from the consumer of one live edge to the producer of another makes
-        the second's set wait for the first's check, and the two can then share a tag. The
-        producer may run later -- at most 2**tag_width of the cell's edges are in flight at
-        once -- which is the trade a register allocator makes when it runs out of registers.
+        the hardware has, the graph has to change.
+
+        ORDER first. An edge from the consumer of one live edge to the producer of another
+        makes the second's set wait for the first's check, and the two can then share a tag.
+        The producer may run later -- at most 2**tag_width of the cell's edges are in flight
+        at once -- which is the trade a register allocator makes when it runs out of
+        registers. Per over-budget cell, edges in the consumer core's order, greedily: an
+        edge joins a chain whose last consumer already happens-before its producer; else
+        opens a chain while there are fewer than 2**tag_width; else waits on the EARLIEST
+        chain end it can without a cycle, through a new edge (order_only=True: no data flows
+        on it). An added edge is itself a dependency in another cell, so this repeats until
+        nothing is over budget.
+
+        RELAYS when order cannot fit it. A collector waiting on producers on many chips
+        holds as many live edges as there are producers, and the only order that lets them
+        share tags makes a producer on one chip wait for a consumer on another. That edge
+        lands in the producer chip's own cell, which a gather fills the same way, so the
+        ordering spreads from chip to chip instead of converging, until a producer precedes
+        every chain end and nothing can be ordered. When ordering alone raises, the edges it
+        added are taken out and the fit runs again, keeping ordering inside one chip and
+        relaying the rest (_relay_dep_edges): a relay is a no-op task on another core of the
+        consumer's chip that waits for a group of the cell's producers and releases their
+        first consumer -- the group's edges move to the relay core's cell, where there is
+        room. A graph that fits by order alone never sees a relay.
 
         Runs on the real tasks, after core sequencing and fan-out pruning and before the
-        dummy passes, so an edge added here is lowered like any other. A cell is what it
-        will be after lowering: (consumer chiplet, consumer cluster, consumer core,
+        dummy passes, so an edge or a relay added here is lowered like any other. A cell is
+        what it will be after lowering: (consumer chiplet, consumer cluster, consumer core,
         producer core). The order here is weaker than after lowering -- a dummy check runs
         before its task, a dummy set after its producer -- so a cell that fits here fits in
         the allocator, which stays the final check.
 
-        Per over-budget cell, edges in the consumer core's order, greedily: an edge joins a
-        chain whose last consumer already happens-before its producer; else opens a chain
-        while there are fewer than 2**tag_width; else waits on the EARLIEST chain end it can
-        without a cycle, through a new edge. Added edges carry order_only=True: no data
-        flows on them. An added edge is itself a dependency in another cell, so this repeats
-        until nothing is over budget.
-
         Returns the number of edges added. Raises when a cell cannot be fitted."""
         if tag_width is None:
             tag_width = self.dep_tag_width
+        had = set(self.edges())
+        try:
+            return self._fit_dep_tag_budget(tag_width, relay=False)
+        except ValueError as e:
+            why = str(e).split("\n")[0]
+            if "dep-tag budget" not in why:
+                raise
+            for u, v in [e_ for e_ in self.edges() if e_ not in had]:
+                self.remove_edge(u, v)
+            print(f"Tag budget: ordering alone cannot fit ({why[:200]}); fitting again with "
+                  f"relays")
+            return self._fit_dep_tag_budget(tag_width, relay=True)
+
+    def _fit_dep_tag_budget(self, tag_width: int, relay: bool) -> int:
+        """bingo_transform_fit_dep_tag_budget's fit: order only, or (relay) order inside one
+        chip and relay the edges that would need order across chips."""
         budget = 1 << tag_width
-        added_total, widest = 0, 0
+        added_total, widest, relays_total, relayed_total = 0, 0, 0, 0
+        import os as _os
+        debug = bool(_os.environ.get("BINGO_TAG_DEBUG"))
 
         def cells_of_graph():
             cells: dict = {}
@@ -552,6 +584,9 @@ class BingoDFGTransformsMixin:
             over = {k: es for k, es in cells.items() if len(es) > budget}
             if not over:
                 break
+            if debug:
+                print(f"[tag-fit] round {_round}: {len(over)} cell(s) over {budget} edges: "
+                      + ", ".join(f"{k}:{len(es)}" for k, es in sorted(over.items())[:12]))
             # Reachability as bitsets over a topological order: bit pos[b] of reach[a] is
             # set when a reaches b. NOT bingo_stream_order(): that one is cached, and a
             # cache taken before the dummy passes would hand the allocator and the emitter
@@ -590,6 +625,7 @@ class BingoDFGTransformsMixin:
                 return n - sum(1 for k in m if k < n)
 
             added = 0
+            to_relay: dict = {}          # cell -> its edges that would need order across chips
             for key in sorted(over):
                 es = sorted(over[key], key=lambda e: (pos[e[1]], pos[e[0]]))
                 # A greedy cover is an upper bound; the exact one only when it is not enough.
@@ -616,6 +652,15 @@ class BingoDFGTransformsMixin:
                         continue
                     else:
                         legal = [i for i, last in enumerate(ends) if not before(p, last)]
+                        if relay and not (self.get_edge_data(p, c) or {}).get("cond"):
+                            # order inside one chip only: across chips the new edge lands in
+                            # another chip's cell and spreads; relay this edge instead
+                            near = [i for i in legal
+                                    if ends[i].assigned_chiplet_id == p.assigned_chiplet_id]
+                            if not near:
+                                to_relay.setdefault(key, []).append((p, c))
+                                continue
+                            legal = near
                         if not legal:
                             raise ValueError(
                                 f"dep-tag budget: cell {key} (chiplet, cluster, consumer core, "
@@ -626,18 +671,146 @@ class BingoDFGTransformsMixin:
                         i = min(legal, key=lambda i: pos[ends[i]])
                         add_order(ends[i], p)
                         added += 1
+                        if debug:
+                            x = ends[i].assigned_chiplet_id != p.assigned_chiplet_id
+                            print(f"[tag-fit]   cell {key} needs {need}: order "
+                                  f"{ends[i].node_name} -> {p.node_name}"
+                                  f"{' (across chips)' if x else ''}")
                     ends[i] = c
-            if not added:
+            if to_relay:
+                made = self._relay_dep_edges(to_relay, budget, debug)
+                relays_total += made
+                relayed_total += sum(len(v) for v in to_relay.values())
+            if not added and not to_relay:
                 break
             added_total += added
         else:
             raise ValueError(f"dep-tag budget: cells still over {budget} tags after 16 rounds "
-                             f"of added ordering edges.")
-        if added_total:
-            print(f"Tag budget: added {added_total} ordering edges so every dep-matrix cell "
-                  f"fits {budget} tags (the widest needed {widest})")
+                             f"of added ordering edges{' and relays' if relay else ''}.")
+        if added_total or relays_total:
+            relayed = (f" and {relays_total} relays ({relayed_total} edges relayed)"
+                       if relays_total else "")
+            print(f"Tag budget: added {added_total} ordering edges{relayed} so every "
+                  f"dep-matrix cell fits {budget} tags (the widest needed {widest})")
         self.tag_budget_edges_added = added_total
+        self.tag_budget_relays = relays_total
         return added_total
+
+    def _relay_dep_edges(self, to_relay: dict, budget: int, debug: bool = False) -> int:
+        """Move each over-budget cell's leftover edges onto relays; returns the relays made.
+
+        A relay is a normal task running __snax_bingo_kernel_sync_probe (no work, no
+        print) on another core of the consumers' chip -- another core of their cluster, or a
+        core of another cluster, never the host's, whose queue holds the weight prefetcher.
+        A group of up to 2**tag_width / 2 of the cell's edges (p -> c, in the consumers' core
+        order) becomes p -> relay for each, and relay -> c0, c0 the group's first consumer:
+        the later ones follow c0 on their core, so each still runs after its producer. The
+        group's edges now live in the relay core's cell, the least loaded one; c0 now also
+        waits for the group's other producers, which is the price. A producer that c0
+        already reaches starts a new group (it would close a cycle).
+
+        The relay joins its core's chain just before the first task there that c0 reaches:
+        everything behind it then waits for c0 anyway, so the relay holds no task back that
+        did not already wait for its group. That keeps every core one chain, which the
+        passes after this one rely on."""
+        from bingo_kernel_args import SnaxBingoKernelSyncProbeArgs
+        host = self.num_cores_per_cluster - 1 if self.is_host_as_acc else None
+        topo = list(nx.topological_sort(self))
+        pos = {n: i for i, n in enumerate(topo)}
+        chain: dict = {}
+        for n in topo:
+            chain.setdefault((n.assigned_chiplet_id, n.assigned_cluster_id,
+                              n.assigned_core_id), []).append(n)
+        load: dict = {}
+        for u, v in self.edges():
+            k = (v.assigned_chiplet_id, v.assigned_cluster_id, v.assigned_core_id,
+                 u.assigned_core_id)
+            load[k] = load.get(k, 0) + 1
+        group_max = max(1, budget // 2)
+        made = 0
+        for key in sorted(to_relay):
+            chip, cl, R, C = key
+            homes = [(c2, r2) for c2 in range(self.num_clusters_per_chiplet)
+                     for r2 in range(self.num_cores_per_cluster)
+                     if (c2, r2) != (cl, R) and r2 != host]
+            if not homes:
+                raise ValueError(f"dep-tag budget: cell {key} needs a relay, and its chip has "
+                                 f"no other core to put one on.")
+            groups, cur, first, below = [], [], None, set()
+            for p, c in sorted(to_relay[key], key=lambda e: (pos[e[1]], pos[e[0]])):
+                if cur and (len(cur) == group_max or p in below):
+                    groups.append((first, cur))
+                    cur = []
+                if not cur:
+                    first, below = c, nx.descendants(self, c)
+                cur.append((p, c))
+            if cur:
+                groups.append((first, cur))
+            for first, grp in groups:
+                c2, r2 = min(homes, key=lambda h: (load.get((chip, h[0], h[1], C), 0), h))
+                r = BingoNode(assigned_chiplet_id=chip, assigned_cluster_id=c2,
+                              assigned_core_id=r2,
+                              node_name=f"relay{made}_{first.node_name}",
+                              kernel_name="__snax_bingo_kernel_sync_probe",
+                              kernel_args=SnaxBingoKernelSyncProbeArgs())
+                self.bingo_add_node(r)
+                for p, c in grp:
+                    data = dict(self.get_edge_data(p, c) or {})
+                    self.remove_edge(p, c)
+                    self.add_edge(p, r, **data)
+                self.add_edge(r, first, order_only=True)
+                below = nx.descendants(self, first)
+                seq = chain.setdefault((chip, c2, r2), [])
+                at = next((i for i, x in enumerate(seq) if x in below), len(seq))
+                if at < len(seq):
+                    self.add_edge(r, seq[at], order_only=True)
+                if at > 0:
+                    self.add_edge(seq[at - 1], r, order_only=True)
+                seq.insert(at, r)
+                load[(chip, c2, r2, C)] = load.get((chip, c2, r2, C), 0) + len(grp)
+                made += 1
+                if debug:
+                    print(f"[tag-fit]   cell {key}: relay {r.node_name} on cluster {c2} core "
+                          f"{r2} takes {len(grp)} edges")
+        if not nx.is_directed_acyclic_graph(self):
+            raise ValueError("dep-tag budget: a relay closed a cycle (a bug in "
+                             "_relay_dep_edges).")
+        return made
+
+    def _split_broadcast_dep_set(self, b) -> None:
+        """Lower broadcast dummy set `b` as one targeted dummy set per successor, as the
+        dummy-set pass does with remote_broadcast off: each sits on b's producer's core,
+        follows the producer, and sets one chip's cell. `b` becomes the first of them, so no
+        node id is left unused. The producer's and the consumers' own set/check info do not
+        change: the dep-info passes skip dummy sets, and every new set is on b's core."""
+        (p,) = list(self.predecessors(b))
+        succs = sorted(self.successors(b),
+                       key=lambda s: (s.assigned_chiplet_id, s.node_id))
+        for i, s in enumerate(succs):
+            if i == 0:
+                d = b
+            else:
+                d = BingoNode(assigned_chiplet_id=b.assigned_chiplet_id,
+                              assigned_cluster_id=b.assigned_cluster_id,
+                              assigned_core_id=b.assigned_core_id,
+                              node_name=f"dummy_set_{p.node_name}_to_{s.node_name}",
+                              kernel_name=None)
+                d.node_type = "dummy"
+                d.dep_check_enable = False
+                d.dep_check_list = []
+                d.cerf_carry = getattr(b, "cerf_carry", False)
+                data = dict(self[b][s])
+                self.bingo_add_node(d)
+                self.remove_edge(b, s)
+                self.add_edge(p, d)
+                self.add_edge(d, s, **data)
+            d.node_name = f"dummy_set_{p.node_name}_to_{s.node_name}"
+            d.dep_set_enable = True
+            d.dep_set_list = [s.assigned_core_id]
+            d.dep_set_cluster_id = s.assigned_cluster_id
+            d.dep_set_chiplet_id = s.assigned_chiplet_id
+            d.remote_dep_set_all = False
+
 
     def bingo_assign_normal_node_dep_check_info(self) -> None:
         """Assign the dep check info for normal and gating nodes."""
@@ -720,7 +893,10 @@ class BingoDFGTransformsMixin:
             return self._stream_order_cache
 
         import heapq
-        topo_nodes = list(nx.topological_sort(self))
+        # the ordering-only edges count here too: a consumer that spins on a producer must
+        # not be dispatched ahead of it (bingo_add_order_edge)
+        g = self.bingo_order_view()
+        topo_nodes = list(nx.topological_sort(g))
         pos = {n: i for i, n in enumerate(topo_nodes)}
 
         def _anchor(node):
@@ -744,14 +920,14 @@ class BingoDFGTransformsMixin:
                 return (a, side, pos[node])
             return (pos[node], 1, 0)
 
-        indeg = {n: self.in_degree(n) for n in self.nodes()}
+        indeg = {n: g.in_degree(n) for n in g.nodes()}
         ready = [(_key(n), i, n) for i, n in enumerate(topo_nodes) if indeg[n] == 0]
         heapq.heapify(ready)
         seq, tie = [], len(topo_nodes)
         while ready:
             _, _, n = heapq.heappop(ready)
             seq.append(n)
-            for succ in self.successors(n):
+            for succ in g.successors(n):
                 indeg[succ] -= 1
                 if indeg[succ] == 0:
                     heapq.heappush(ready, (_key(succ), tie, succ)); tie += 1
@@ -969,6 +1145,67 @@ class BingoDFGTransformsMixin:
                     H.add_edge(a, b)
         colour = nx.coloring.greedy_color(H, strategy="DSATUR")
         n_tags = (max(colour.values()) + 1) if colour else 0
+        H_cell = None
+        if n_tags > max_tags:
+            # PER-CELL ORDER. _precedes asks for every drain of a, in every cell, before
+            # every set of b. A tag is a presence bit of ONE cell, though, so reuse only
+            # has to be ordered where both groups are: in each cell they share, a's drains
+            # IN THAT CELL before b's sets INTO it. A broadcast group spans every other
+            # chip, and its drains there need not reach a later producer here: the
+            # whole-group order makes it concurrent with everything a cell holds after
+            # it, which the fit pass -- one edge per cell -- never counts. The hang check
+            # tests reuse per cell, edge by edge, so this order is still sound. Tried only
+            # when the whole-group colouring does not fit, so a graph that fits keeps its
+            # tags.
+            drains_in: dict = {}
+            sets_in: dict = {}
+            for su, cv, cell in pairs:
+                gi = gid[skey(su)]
+                drains_in.setdefault((gi, cell), set()).add(cv)
+                sets_in.setdefault((gi, cell), set()).add(su)
+
+            def _precedes_in(a, b, cell):
+                for cv in drains_in[(a, cell)]:
+                    for su in sets_in[(b, cell)]:
+                        if cv is not su and su not in _descendants(cv):
+                            return False
+                return True
+
+            H_cell = nx.Graph()
+            H_cell.add_nodes_from(range(n_groups))
+            for cell in sorted(groups_in_cell):
+                for a, b in _it.combinations(sorted(groups_in_cell[cell]), 2):
+                    if not _precedes_in(a, b, cell) and not _precedes_in(b, a, cell):
+                        H_cell.add_edge(a, b)
+            colour_cell = nx.coloring.greedy_color(H_cell, strategy="DSATUR")
+            n_cell = (max(colour_cell.values()) + 1) if colour_cell else 0
+            print(f"Tag allocation: ordering groups as a whole needs {n_tags} tags, "
+                  f"ordering them per cell needs {n_cell} (of {max_tags})")
+            if n_cell <= max_tags:
+                H, colour, n_tags = H_cell, colour_cell, n_cell
+            else:
+                # SPLIT BROADCASTS. Each cell can fit on its own (the fit pass counts per
+                # cell), but a broadcast dep-set is ONE node setting one tag in every other
+                # chip's cell: its tag has to be free in all of them at once, so the cells
+                # it sets are coloured together. Lower the broadcasts in the cells that
+                # overflow as one targeted dummy set per chip -- what the dummy-set pass
+                # emits with remote_broadcast off -- and allocate again. Every round leaves
+                # fewer broadcasts, and a cell without one is coloured on its own.
+                over = {cell for cell, gs in groups_in_cell.items()
+                        if any(colour_cell[g] >= max_tags for g in gs)}
+                bsets = sorted({su for cell in over for g in groups_in_cell[cell]
+                                if len(cells_of[g]) > 1
+                                for su in setters[g] if su.remote_dep_set_all},
+                               key=lambda n: n.node_id)
+                if bsets:
+                    for b in bsets:
+                        self._split_broadcast_dep_set(b)
+                    self._stream_order_cache = None
+                    self.tag_bcast_split = getattr(self, "tag_bcast_split", 0) + len(bsets)
+                    print(f"Tag allocation: broadcast dep-sets tie the cells they set "
+                          f"together; splitting {len(bsets)} into targeted sets and "
+                          f"allocating again")
+                    return self.bingo_transform_dfg_allocate_dep_tags(tag_width=tag_width)
         if n_tags > max_tags:
             import os as _os
             if _os.environ.get("BINGO_TAG_DEBUG"):
@@ -983,6 +1220,26 @@ class BingoDFGTransformsMixin:
                 for gi in sorted(best[2]):
                     print(f"[tag-debug]   " + ", ".join(
                         f"{su.node_name}->{cv.node_name}" for su, cv in edges_of[gi][:2]))
+                if H_cell is not None:
+                    # ordered per cell: a clique here no colouring avoids; none here but
+                    # too many colours means the groups shared across cells are the cause
+                    clq, at = [], None
+                    for cell, gs in groups_in_cell.items():
+                        sub = H_cell.subgraph(gs).copy()
+                        # only the conflicts of THIS cell: two groups may be unordered in
+                        # another cell they share and ordered here
+                        sub.remove_edges_from([(a, b) for a, b in list(sub.edges())
+                                               if _precedes_in(a, b, cell)
+                                               or _precedes_in(b, a, cell)])
+                        c = max(nx.find_cliques(sub), key=len, default=[])
+                        if len(c) > len(clq):
+                            clq, at = c, cell
+                    print(f"[tag-debug] ordered per cell, the largest clique in one cell "
+                          f"has {len(clq)} groups, in cell {at}")
+                    for gi in sorted(clq):
+                        print(f"[tag-debug]   " + ", ".join(
+                            f"{su.node_name}->{cv.node_name}"
+                            for su, cv in edges_of[gi] if cv in drains_in[(gi, at)])[:300])
             busiest = max(groups_in_cell.items(),
                           key=lambda kv: len(kv[1]))
             detail = "\n".join(

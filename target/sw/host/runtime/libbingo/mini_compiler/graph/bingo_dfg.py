@@ -142,6 +142,8 @@ class BingoDFG(
         self._cond_forks: list = []            # declared BingoConditionalFork objects
         self._declared_combines: dict = {}     # combine node → the fork it closes
         self._gating_to_targets: dict = {}     # gating node → its conditional targets
+        # Ordering-only edges (producer, consumer), see bingo_add_order_edge.
+        self.order_edges: list = []
 
     def bingo_add_node(self, node_obj: BingoNode) -> None:
         """Add a node to the DFG."""
@@ -164,6 +166,32 @@ class BingoDFG(
         if cond_dic is not None:
             cond = True
         self.add_edge(from_node_obj, to_node_obj, cond=cond, cond_dic=cond_dic or {})
+
+    def bingo_add_order_edge(self, producer: BingoNode, consumer: BingoNode) -> None:
+        """`consumer` waits for `producer` by itself: its kernel spins on something
+        `producer` writes after its data (a landed flag in the consumer's own memory), so the
+        edge emits no dependency set or check and spends no tag.
+
+        It is still an edge for the ORDER. Every core's queue and the dispatch stream are
+        built from the graph with these edges added (bingo_order_view), so a producer is
+        always dispatched ahead of a consumer that spins on it -- a spinning task holds its
+        core's in-order queue, and the stream fills that queue and stops, so a producer
+        dispatched later would never run. And the hang check proves the graph with them
+        acyclic: a spin inside a cycle of dependencies and queue order never ends, and no
+        dependency check would show it."""
+        self.order_edges.append((producer, consumer))
+
+    def bingo_order_view(self):
+        """The graph every ORDER is derived from: this DFG, plus the ordering-only edges when
+        there are any (a copy; nodes and edges in the same insertion order, so with none
+        added the order is this graph's own)."""
+        if not self.order_edges:
+            return self
+        g = nx.DiGraph()
+        g.add_nodes_from(self.nodes())
+        g.add_edges_from(self.edges())
+        g.add_edges_from(self.order_edges)
+        return g
 
     def bingo_insert_node_between(self, from_node_obj: BingoNode, to_node_obj: BingoNode, new_node_obj: BingoNode) -> None:
         """Insert a new node between two existing nodes in the DFG."""
@@ -255,8 +283,9 @@ class BingoDFG(
         # DepSet En=0, which bingo_hw_manager mis-pairs with its done entry off chip 0x00.
         self.bingo_transform_keep_local_dep_set()
         # Fit every dep-matrix cell into 2**dep_tag_width tags by adding ordering edges
-        # where the graph would need more. Runs on the real tasks, before the dummy passes
-        # lower each edge, so an edge it adds is lowered like any other.
+        # where the graph would need more, and relays where order cannot fit it. Runs on
+        # the real tasks, before the dummy passes lower each edge, so an edge or a relay it
+        # adds is lowered like any other.
         if self.enable_tagged_deps:
             self.bingo_transform_fit_dep_tag_budget(tag_width=self.dep_tag_width)
         self.bingo_transform_dfg_add_dummy_set_nodes()
@@ -274,6 +303,10 @@ class BingoDFG(
         # op (incl. dummies) is final. Packed into the descriptor by bingo_pack_node.
         if self.enable_tagged_deps:
             self.bingo_transform_dfg_allocate_dep_tags(tag_width=self.dep_tag_width)
+            # the allocator lowered some broadcast dep-sets again: export the graph it emits
+            if getattr(self, "tag_bcast_split", 0):
+                self.bingo_visualize_dfg(os.path.join(output_dir, "final_dfg"))
+                self.bingo_export_dfg_to_csv(os.path.join(output_dir, "final_dfg"))
 
         # COMPILE-TIME HANG CHECK. Validates the LOWERED graph rather than
         # trusting the passes that produced it: a stuck dep-check does not
