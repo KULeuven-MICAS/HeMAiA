@@ -58,6 +58,10 @@
 !/sweep/simd/gather_simd_luts.py
 !/sweep/simd/simd_lut_report.py
 !/sweep/simd/task_simd.yaml
+!/sweep/dsv2/
+/sweep/dsv2/*
+!/sweep/dsv2/run_dsv2_sweep.py
+!/sweep/dsv2/task_dsv2.yaml
 !/sweep/simd/task_simd_fused.yaml
 !/sweep/fa/
 /sweep/fa/*
