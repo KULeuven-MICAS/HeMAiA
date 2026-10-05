@@ -4,7 +4,8 @@
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 """The shared driver of the MULTI-CHIPLET staged DeepSeek-V2-Lite workloads
-(workloads/dsv2/six_chiplet/stage*/), the counterpart of dsv2_staged.py (one chiplet).
+(workloads/dsv2/six_chiplet/stage*/ and sixteen_chiplet/stage*/), the counterpart of
+dsv2_staged.py (one chiplet).
 
 THE PLATFORM (hemaia_sixchiplet_16MBL3_2cluster): compute chiplets with two clusters each and
 memory chiplets between them, one C-M-C row per memory chiplet:
@@ -12,6 +13,10 @@ memory chiplets between them, one C-M-C row per memory chiplet:
     C00 - M10 - C20        each memory chiplet feeds its west and its east neighbour, each
      |     |     |         with a push engine of its own (sys_dma.h engines), from its own
     C01 - M11 - C21        HBM; compute chips of one column share a direct link
+
+Any layout where every compute chip has a memory chip beside it works the same way: each memory
+chip feeds the compute chips beside it, one push engine each (hemaia_sixteenchiplet_16MBL3_2cluster:
+four memory chips on the edge of a 4 x 4 package, each feeding three).
 
 THE MAPPING: TENSOR PARALLEL (docs/dsv2_multichiplet_plan.md, R4). The clusters of every
 chip are one pool, global cluster g = (chip index) * clusters + cluster, chips in cfg order.
@@ -21,9 +26,12 @@ every weight, whatever the router picks:
 
     W_DKV        on the latent's cluster (LAT): the latent's norm, k_pe's RoPE and the cache
                  append are there
-    W_Q          by head, heads / clusters a cluster (2 on 8 clusters)
+    W_Q          by head, heads / clusters a cluster (2 on 8 clusters). With more clusters than
+                 the heads divide over, the per-head work (W_Q, the RoPE, W_UK, W_UV) runs on
+                 the clusters of a subset of the chips (head_chips; S.HG, S.hd0)
     W_UK, W_UV   the same heads
-    W_O          by output columns (256 a cluster), from the all-gathered o
+    W_O          by output columns (256 a cluster on 8; whole 32-column pairs), from the
+                 all-gathered o
     router       on EVERY chip: each chip routes for itself from the all-gathered h, with its
                  own expert table -- whose addresses are its own memory chiplet's slices -- so
                  no record crosses a chip
@@ -52,6 +60,7 @@ at the end, upstream first, byte-exact, reading the other chips' copies over the
 """
 
 import argparse
+import fnmatch
 import os
 import sys
 from dataclasses import replace
@@ -73,8 +82,8 @@ from bingo_platform import (core_roles, guard_chiplet_count,           # noqa: E
                             parse_platform_cfg)
 from libs import (Ctx, DType, Layout, MemLevel, Pipeline, Port,        # noqa: E402
                   PortSpec, at_offset)
-from libs.blocks import (After, Collect, Join, Linear, LoadStream, Pull, ScaleCols,  # noqa: E402
-                        Stash, View, WeightRings, expert_table, record_bytes)
+from libs.blocks import (Linear, LoadStream, ScaleCols, Stash, View, WeightRings,  # noqa: E402
+                         collective, expert_table, record_bytes)
 from libs.verify import checks as vchecks                              # noqa: E402
 from libs.crest import CrestRings                                      # noqa: E402
 import dsv2_datagen as dg                                              # noqa: E402
@@ -136,9 +145,6 @@ class MBuild:
         chips = self.chips = [int(k) for k in plat["chiplet_ids"]]
         NC = self.NC = int(plat["num_clusters_per_chiplet"])
         G = self.G = len(chips) * NC
-        if HEADS % G:
-            raise ValueError(f"{G} clusters do not split {HEADS} heads evenly")
-        self.HPG = HEADS // G                        # heads per cluster
         mems = [int(m["id"]) for m in plat.get("mem_chips", [])]
         if not mems:
             raise ValueError(f"{args.platformcfg} lists no memory chips (an occamy.h from "
@@ -156,18 +162,55 @@ class MBuild:
             fed = sorted(k for k in chips if self.mem[k] == m)
             for i, k in enumerate(fed):
                 self.engine[k] = 1 + i
+        # the per-head work (W_Q, the RoPE, W_UK, W_UV) needs whole heads on every cluster that
+        # does it. When the heads do not divide evenly over every cluster, it runs on the
+        # clusters of `head_chips` only (params head_chips: chip ids; default: the most chips
+        # whose clusters divide the heads, taken round-robin over the memory chips, so the
+        # per-head weights stream over as many links as possible).
+        # HG: those clusters, in g order; hd0[g]: cluster g's first head
+        hc = p.get("head_chips")
+        if hc is None and HEADS % G:
+            fed = {m: sorted(k for k in chips if self.mem[k] == m) for m in mems}
+            n = max(i for i in range(1, len(chips) + 1) if HEADS % (i * NC) == 0)
+            order = [chips[0]] + [k for i in range(len(chips)) for m in mems
+                                  for k in fed[m][i: i + 1] if k != chips[0]]
+            hc = order[:n]
+        self.head_chips = [k for k in chips if hc is None or k in [int(v) for v in hc]]
+        self.HG = [g for k in self.head_chips for g in self.gs(k)]
+        if HEADS % len(self.HG):
+            raise ValueError(f"{len(self.HG)} head clusters do not split {HEADS} heads evenly")
+        self.HPG = HEADS // len(self.HG)              # heads per head cluster
+        self.hd0 = {g: self.HPG * i for i, g in enumerate(self.HG)}
         self.LAT = int(p.get("latent_cluster", 0))   # W_DKV, the latent's norm, the append
         self.ATT = int(p.get("att_cluster", 1))      # the attention
         self.CHIP0 = chips[0]                         # its host runs the checks
+        if self.LAT not in self.hd0 or self.ATT not in self.hd0:
+            raise ValueError(f"params latent_cluster / att_cluster: {self.LAT} / {self.ATT} must "
+                             f"be head clusters ({self.HG})")
 
-        # the column splits, per global cluster
-        self.o_cols = [D // G] * G                    # W_O, shared down, routed down, combine
+        # the column splits, per global cluster, in whole 32-column pairs
+        # params light_clusters: these clusters take the smallest shares of every split -- the
+        # ones with fewer weight slabs (w_buffers_at), which every all-gather would otherwise
+        # wait for
+        light = [int(g) for g in p.get("light_clusters", [])]
+
+        def place(shares):
+            if not light:
+                return shares
+            s, out = sorted(shares), [None] * G
+            for g in light:
+                out[g] = s.pop(0)
+            rest = sorted(s, reverse=True)
+            return [rest.pop(0) if v is None else v for v in out]
+        self.o_cols = place(split32(D, G))            # W_O, shared down, routed down, combine
         self.o0 = [sum(self.o_cols[:g]) for g in range(G)]
-        self.sh_cols = split32(I_SH, G)               # shared intermediate columns
+        self.sh_cols = place(split32(I_SH, G))        # shared intermediate columns
         self.sh0 = [sum(self.sh_cols[:g]) for g in range(G)]
         ex = split32(I_EXP, G)                        # routed: big and small shares
         big, small = ex[:G // 2], ex[G // 2:]         # alternate within a chip (balance)
         self.ex_cols = [big.pop(0) if g % 2 == 0 else small.pop(0) for g in range(G)]
+        if light:
+            self.ex_cols = place(ex)
         self.ex0 = [sum(self.ex_cols[:g]) for g in range(G)]
         # params expert_map: how the ROUTED experts are split.
         #   "tp8" (default): every slot over all G clusters -- each expert's SwiGLU output is
@@ -232,15 +275,20 @@ class MBuild:
                              chiplet=self.CHIP0)
         self.pipe = Pipeline(ctx, verbose=True, gate_sources=True)
         wbuf = int(p.get("w_buffers", 2))
+        # w_buffers_at {cluster: slabs}: a cluster that holds more than the others (the split
+        # attention's clusters) streams its weights through fewer slabs, and every other
+        # cluster keeps w_buffers
+        wbuf_at = {int(k): int(v) for k, v in (p.get("w_buffers_at") or {}).items()}
         # weight_crest: 1 KiB of slack per slab, the room an in-place expansion needs past a
         # full chunk (libs/crest.py checks every record against it)
-        self.ls = [LoadStream(self.ctx_of(g), self.c(g), nbytes=self.chunk, nbuf=wbuf,
-                              slack=1024 if self.crest else 0)
+        self.ls = [LoadStream(self.ctx_of(g), self.c(g), nbytes=self.chunk,
+                              nbuf=wbuf_at.get(g, wbuf), slack=1024 if self.crest else 0)
                    for g in range(G)]
         self._rings()
         if p.get("warm_kernels", False):
             self._warm_kernels()
         self.stash = []            # (name, stash stage, golden handle, got handle, nbytes)
+        self.stashed_from = set()  # id() of every stage a check stashes
         self.CHECKS_FROM = int(p.get("checks_from", 1))
         self.packs = []            # stage 1: each chip's x8 pack
         self.outs = []             # stage 8: every cluster's out slice
@@ -347,7 +395,7 @@ class MBuild:
         self.cimg, self.cex = {}, {}
         for g in range(G):
             k = self.chip(g)
-            hd0 = self.HPG * g
+            hd0 = self.hd0.get(g)
             parts = []
             if self.p.get("wdkv_split", False):
                 # params wdkv_split: W_DKV's columns halved between LAT and ATT (stage 3)
@@ -358,11 +406,12 @@ class MBuild:
                     parts.append(("wdkv", cols("wdkv", h_, KV - h_, D)))
             elif g == self.LAT:
                 parts.append(("wdkv", bl["wdkv"]))
-            parts.append(("wq", cols("wq", QH * hd0, QH * self.HPG, D)))
-            parts.append(("wuk", bl["wuk"][wb(hd0 * dg.Q_NOPE * KVR):
-                                          wb((hd0 + self.HPG) * dg.Q_NOPE * KVR)]))
-            parts.append(("wuv", bl["wuv"][wb(hd0 * KVR * dg.V_HEAD):
-                                          wb((hd0 + self.HPG) * KVR * dg.V_HEAD)]))
+            if hd0 is not None:                    # a head cluster: its heads' weights
+                parts.append(("wq", cols("wq", QH * hd0, QH * self.HPG, D)))
+                parts.append(("wuk", bl["wuk"][wb(hd0 * dg.Q_NOPE * KVR):
+                                              wb((hd0 + self.HPG) * dg.Q_NOPE * KVR)]))
+                parts.append(("wuv", bl["wuv"][wb(hd0 * KVR * dg.V_HEAD):
+                                              wb((hd0 + self.HPG) * KVR * dg.V_HEAD)]))
             parts.append(("wo", cols("wo", self.o0[g], self.o_cols[g], D)))
             if self.c(g) == 0:                     # the router: every chip, its cluster 0
                 parts.append(("wr", bl["wr"]))     # INT8 whatever wbits is
@@ -577,119 +626,47 @@ class MBuild:
             self.st.put_zeros(name, "uint8_t", nbytes)
         return name
 
+    # ---- collectives (libs/blocks/collective.py; this build is their Fabric) ---------------
+    xchg_prefix = "dsv2_xchg_"
+
     def allgather(self, name, parts, part_spec, part_bytes, dsts, dst_spec_of, chips=None):
-        """Every cluster in `dsts` gets the parts of every cluster, back to back in global
-        cluster order: each producer stashes its part into its OWN chip's copy of a staged
-        array (at its place), then each destination's DM core reads every chip's run of it
-        (Collect: its own chip's copy is a local read, the others' cross the links).
+        """Every cluster in `dsts` gets the parts of every cluster (of `chips`, default every
+        chip), back to back in global cluster order: collective.all_gather, with the
+        params' gather options (gather_chain, gather_tree, gather_hier).
 
         `parts`: {g: port}; `part_bytes`: one count, or one per cluster; returns
-        {g: the destination's stage}."""
-        # `chips`: the chips taking part (default every one); `part_bytes` follows their
-        # clusters in order, and so does the gathered layout
-        chips = list(self.chips) if chips is None else list(chips)
-        gl = [g for k in chips for g in self.gs(k)]
-        pbl = [int(part_bytes)] * len(gl) if isinstance(part_bytes, (int, np.integer)) else \
-            [int(v) for v in part_bytes]
-        pb = dict(zip(gl, pbl))
-        at = {g: sum(pbl[:i]) for i, g in enumerate(gl)}
-        sym = self.xsym(f"dsv2_xchg_{name}", sum(pbl))
-        runs, run_bytes = {}, {}
-        # `gather_chain`: a chip's stashes in cluster order, each after the one before (an
-        # ordering edge, no data), so a collect of the chip's run needs only the last one --
-        # the others are implied (with dfg.prune_implied the compiler drops their edges):
-        # one dependency tag per chip in the collector's cell instead of one per cluster.
-        chain = bool(self.p.get("gather_chain", False))
-        for k in chips:
-            st_k = []
-            for g in self.gs(k):
-                h = BingoMemSymbol(sym, at[g], chip_id=k)
-                x = parts[g]
-                if chain and st_k:
-                    gp = self.gs(k)[len(st_k) - 1]
-                    x = self.add(After(x=part_spec(g), after=_l3(part_spec(gp))),
-                                 f"xord_{name}_g{g}", g, x=x, after=st_k[-1].out()).out()
-                st_k.append(self.add(Stash(src=part_spec(g), nbytes=pb[g], dst=h),
-                                     f"xput_{name}_g{g}", g, x=x))
-                # (name, g) -> the producer's stash, for a stream that must not load ahead
-                # of it (stage 5's latent_after_q)
-                self.xput[(name, g)] = st_k[-1]
-            run_bytes[k] = sum(pb[g] for g in self.gs(k))
-            runs[k] = self.add(
-                Join(parts=[_l3(part_spec(g)) for g in self.gs(k)],
-                     dst=PortSpec(RM, I8, (1, run_bytes[k]), mem_level=L3)),
-                f"xrun_{name}_k{k:02x}", at_chip=k,
-                **{f"x{i}": s.out() for i, s in enumerate(st_k)})
-        # A chip's clusters are consecutive in g, so its run is one contiguous range of the
-        # array: collecting the runs in chip order lays the parts out in g order.
-        #
-        # `gather_hier`: per chip only its first destination cluster collects across the
-        # links, and the chip's other destinations copy that cluster's result over (a Pull,
-        # L1 to L1 on the chip). A read across a link waits for whatever the memory chiplet
-        # is pushing on it, so halving them halves those waits; and the second cluster then
-        # waits on one local edge instead of one per producing cluster.
-        hier = bool(self.p.get("gather_hier", False))
-        out, first_on = {}, {}
-        for g in dsts:
-            k, spec = self.chip(g), dst_spec_of(g)
-            if hier and k in first_on:
-                # the destination as raw bytes (an A-layout row is a whole 16-row block, which
-                # Pull will not cut), moved in one copy, then named again
-                g0, tot = first_on[k], sum(pbl)
-                raw = lambda c: PortSpec(RM, I8, (1, tot), mem_level=L1, cluster=c)
-                src = self.view(f"xraw_{name}_g{g}", g0, out[g0].out(), dst_spec_of(g0),
-                                raw(self.c(g0)))
-                cp = self.add(Pull(rows=1, cols=tot, layout=RM, dtype=I8, src=self.c(g0),
-                                   dst=self.c(g)), f"xget_{name}_g{g}", g, x0=src.out())
-                self.xget[(name, g)] = cp
-                out[g] = self.view(f"xnam_{name}_g{g}", g, cp.out(), raw(self.c(g)), spec)
-                continue
-            first_on.setdefault(k, g)
-            out[g] = self.xget[(name, g)] = self.add(Collect(parts=[PortSpec(RM, I8, (1, run_bytes[q]), mem_level=L3)
-                                             for q in chips],
-                                      nbytes=[run_bytes[q] for q in chips],
-                                      dst=spec, cluster=self.c(g)),
-                              f"xget_{name}_g{g}", g,
-                              **{f"x{i}": runs[q].out() for i, q in enumerate(chips)})
-        return out
+        {g: the destination's stage}. Records each producer's stash in self.xput and each
+        destination's read in self.xget, by (name, g)."""
+        res = collective.all_gather(
+            self, name, parts, part_spec, part_bytes, dsts, dst_spec_of, chips=chips,
+            chain=bool(self.p.get("gather_chain", False)),
+            tree=int(self.p.get("gather_tree", 0)),
+            hier=bool(self.p.get("gather_hier", False)), impl=self.gather_impl(name))
+        self.xput.update({(name, g): s for g, s in res.put.items()})
+        self.xget.update({(name, g): s for g, s in res.get.items()})
+        return res.out
+
+    def gather_impl(self, name):
+        """params gather_impl: the all-gathers' implementation (collective.all_gather impl),
+        one for all ("idma", the default, or "bcast"), or {name pattern: impl} -- e.g.
+        {h: bcast, "a8_s*": bcast} -- with "default" for the rest."""
+        v = self.p.get("gather_impl", "idma")
+        if isinstance(v, str):
+            return v
+        for pat, impl in v.items():
+            if pat != "default" and fnmatch.fnmatchcase(name, pat):
+                return impl
+        return v.get("default", "idma")
 
     def xfer(self, name, g_src, parts, part_spec, part_bytes, g_dst, dst_spec):
-        """Cluster g_src's `parts` (ports of `part_spec`, `part_bytes` each) into cluster
-        g_dst's L1, back to back: stashed into g_src's chip's copy of a staged array, read by
-        g_dst's DM core in one copy (local write, remote read, like every hand-off here)."""
-        k = self.chip(g_src)
-        tot = part_bytes * len(parts)
-        sym = self.xsym(f"dsv2_xchg_{name}", tot)
-        st = [self.add(Stash(src=part_spec, nbytes=part_bytes,
-                             dst=BingoMemSymbol(sym, i * part_bytes, chip_id=k)),
-                       f"xput_{name}_{i}", g_src, x=pt)
-              for i, pt in enumerate(parts)]
-        run = self.add(Join(parts=[_l3(part_spec)] * len(parts),
-                            dst=PortSpec(RM, I8, (1, tot), mem_level=L3)),
-                       f"xrun_{name}", at_chip=k, **{f"x{i}": s.out() for i, s in enumerate(st)})
-        return self.add(Collect(parts=[PortSpec(RM, I8, (1, tot), mem_level=L3)], nbytes=[tot],
-                                dst=dst_spec, cluster=self.c(g_dst)),
-                        f"xget_{name}", g_dst, x0=run.out())
+        """Cluster g_src's `parts` into cluster g_dst's L1, back to back: collective.send."""
+        return collective.send(self, name, g_src, parts, part_spec, part_bytes, g_dst,
+                               dst_spec)
 
     def scatter(self, name, g_src, port, spec, part_bytes, dsts, dst_spec_of):
-        """Cluster g_src's buffer, one part per destination: g_src stashes the whole buffer
-        into its chip's copy of a staged array, and each destination reads its part
-        (`part_bytes[i]` bytes at the offset of the parts before it, in `dsts` order)."""
-        k0 = self.chip(g_src)
-        pb = [int(v) for v in part_bytes]
-        sym = self.xsym(f"dsv2_xchg_{name}", sum(pb))
-        s = self.add(Stash(src=spec, nbytes=sum(pb), dst=BingoMemSymbol(sym, chip_id=k0)),
-                     f"xput_{name}", g_src, x=port)
-        out, at = {}, 0
-        for g, n in zip(dsts, pb):
-            part = self.add(View(src=_l3(spec), dst=PortSpec(RM, I8, (1, n), mem_level=L3),
-                                 offset=at),
-                            f"xpart_{name}_g{g}", at_chip=k0, x=s.out())
-            out[g] = self.add(Collect(parts=[PortSpec(RM, I8, (1, n), mem_level=L3)],
-                                      nbytes=[n], dst=dst_spec_of(g), cluster=self.c(g)),
-                              f"xget_{name}_g{g}", g, x0=part.out())
-            at += n
-        return out
+        """Cluster g_src's buffer, one part per destination: collective.scatter."""
+        return collective.scatter(self, name, g_src, port, spec, part_bytes, dsts,
+                                  dst_spec_of).out
 
     def check(self, name, stage, port, golden, nbytes, g, offset=0, st=99):
         """Stash `stage`'s output (on global cluster g) now, into a staged array on its chip;
@@ -698,6 +675,7 @@ class MBuild:
             return
         k = self.chip(g)
         sym = self.xsym(f"dsv2_chk_{name}", nbytes)
+        self.stashed_from.add(id(stage))
         sp = stage.out(port) if port else stage.out()
         s = self.add(Stash(src=_spec_of(stage, port), nbytes=nbytes, offset=offset,
                            dst=BingoMemSymbol(sym, chip_id=k)), f"stash_{name}", g, x=sp)
@@ -724,8 +702,29 @@ class MBuild:
                 if key in last:
                     dfg.bingo_add_edge(last[key], nd)
                 last[key] = nd
-            prev = list(last.values()) + [p_.out().port.ends[-1] for p_ in self.packs]
-            prev += [o.out().port.ends[-1] for o in self.outs]
+            # The first check waits for every chip's x8 pack, the outputs no check stashes (a
+            # stash of one implies it) and each cluster's last stash. They are chained per chip
+            # in that order -- a pack precedes everything on its chip, and nothing but the
+            # checks follows the others -- so one end per chip reaches the check: one
+            # dependency tag per chip instead of one per cluster
+            leaves = {}
+
+            def leaf(nd):
+                chain = leaves.setdefault(nd.assigned_chiplet_id, [])
+                if nd not in chain:
+                    chain.append(nd)
+            for p_ in self.packs:
+                leaf(p_.out().port.ends[-1])
+            for o in self.outs:
+                if id(o) not in self.stashed_from:
+                    leaf(o.out().port.ends[-1])
+            for key in sorted(last):
+                leaf(last[key])
+            prev = []
+            for chain in leaves.values():
+                for a, b in zip(chain, chain[1:]):
+                    dfg.bingo_add_edge(a, b)
+                prev.append(chain[-1])
             order = []
             for n, _s, gl, got, nb in self.stash:
                 order.append((n, got, gl, nb))

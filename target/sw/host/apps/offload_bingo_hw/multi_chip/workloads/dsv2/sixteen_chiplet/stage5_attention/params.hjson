@@ -1,0 +1,80 @@
+// DeepSeek-V2-Lite layer 1 on sixteen chiplets (hemaia_sixteenchiplet_16MBL3_2cluster), one token,
+// INT4: the six-chiplet layer's settings, the same in every stage directory, so stage N is the
+// first N stages of the layer. What each field does is in ../../common/dsv2_mc.py.
+//
+// What differs from six_chiplet, all because of the platform:
+//   expert_map tp8        the routed experts split over every cluster: colgroup pairs two
+//                         columns of compute chips, and here there are more
+//   expert_gather_lag 0   no expert's all-gather deferred: two gathers in flight over twelve
+//                         chips need more dependency tags than the manager has
+//   gather_chain, prune_implied, gather_tree
+//                         an all-gather over twelve chips in two levels, each collector
+//                         waiting for one task per chip or per row: one dependency tag each
+//   fast_export           no graph pictures (generation time)
+// The per-head work runs on eight of the twelve chips (dsv2_mc picks them, two per memory
+// chip): sixteen heads do not divide over 24 clusters.
+//
+// The compute chips' RX yield (d2d_rx_yield) needs the D2D router with writer fairness
+// (hw/hemaia/hemaia_d2d_link write-aware router mux): without it, routed rings with the
+// compute-side yield stall the gather reads.
+{
+  num_chiplets: 12
+  num_clusters: 2
+  seed: 1
+  L: 511
+  tokens: 1
+  wbits: 4
+  latent_cluster: 0
+  att_cluster: 1
+  fence_kv: true
+  // 104 KiB weight chunks (six_chiplet: 112): the three L1 slabs leave room for the gathers'
+  // buffers at 24 clusters and for the runtime's tables under l1_capacity
+  w_chunk_bytes: 106496
+  w_buffers: 3
+  weight_ring:
+  {
+    slots: 20
+    batch: 1
+    policy: 1
+    batch_routed: 4
+    trailer: true
+    head: 8
+    batch_head: 4
+    routed_rings: true
+  }
+  static_l1: true
+  // the static L1 plan leaves room for the runtime's own tables, which grow with the
+  // number of clusters (at the default, chip 0x22's cluster 0 ran out at boot)
+  l1_capacity: 470000
+  compact_tables: true
+  d2d_ddr: true
+  expert_after_route: true
+  wdkv_after_wq: true
+  gather_hier: true
+  // a gather reads from twelve chips: each chip's stashes in cluster order, so a collect waits
+  // for the chip's last one only (prune_implied drops the rest), one dependency tag per chip
+  gather_chain: true
+  prune_implied: true
+  // and over more than three chips, in two levels: each row of three compute chips gathers
+  // onto its first chip, every destination reads the four rows' ranges (dsv2_mc allgather)
+  gather_tree: 3
+  expert_map: tp8
+  // the compute chips yield their receive side every 255 flits, so a gather read's data gets
+  // back against the push
+  d2d_rx_yield:
+  [
+    255
+    0
+  ]
+  weight_crest: true
+  expert_gather_lag: 0
+  latent_late: true
+  latent_after_q: true
+  q_fused: true
+  lag_collect_late: false
+  q_stash_first: true
+  sh_after_h: false
+  att_loads_first: true
+  // no graph pictures: at this graph size they take most of the generation time
+  fast_export: true
+}
