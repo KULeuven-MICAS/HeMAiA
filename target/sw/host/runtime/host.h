@@ -17,6 +17,7 @@
 #include "hemaia-xdma-lib.h"
 #include "mailbox.h"
 #include "io.h"
+#include "tps6287x.h"
 #include "heterogeneous_runtime.h"
 // Host kernel lib
 #include "host_kernel_lib.h"

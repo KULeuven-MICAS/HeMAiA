@@ -99,6 +99,46 @@ task automatic check_finish();
 % endfor
             if (all_finished == 1) begin
                 if (all_correct == 1) begin
+% for compute_chip in compute_chips:
+<%
+    cx, cy = compute_chip.coordinate
+%>
+                    if ($test$plusargs("check_pmic_dvfs")) begin
+                        if (i_pmic_chip${cx}${cy}.read_count < 4 ||
+                            i_pmic_chip${cx}${cy}.vset_write_count < 3 ||
+                            chip${cx}${cy}_dvfs_phase != 3 ||
+                            i_pmic_chip${cx}${cy}.output_voltage_mv() != 800.0 ||
+                            !i_pmic_chip${cx}${cy}.voltage_settled() ||
+                            i_pmic_chip${cx}${cy}.regs[1] != 8'h38 ||
+                            i_pmic_chip${cx}${cy}.nack_count != 0)
+                            $fatal(1, "chip${cx}${cy}: missing or failed PMIC/DVFS transactions");
+%if not sim_with_netlist:
+%for domain in range(1 + len(occamy_cfg["clusters"])):
+                        if (chip${cx}${cy}_dvfs_div${domain} !== 8'd7)
+                            $fatal(1, "chip${cx}${cy} domain ${domain}: final divider is not /7");
+%endfor
+%for domain in range(1 + len(occamy_cfg["clusters"]), 5 + len(occamy_cfg["clusters"])):
+                        if (i_dut.i_hemaia_${cx}_${cy}.i_occamy_chip.i_hemaia_clk_rst_controller.gen_clock_divider[${domain}].i_clk_divider.divisor_q !== 8'd${20 if not same_memchip_speed and cx == 1 and cy == 0 and domain == 1 + len(occamy_cfg["clusters"]) else 1})
+                            $fatal(1, "chip${cx}${cy} domain ${domain}: D2D TX divider changed");
+%endfor
+%endif
+                        $display("[pmic-check] chip${cx}${cy} PASS: reads=%0d voltage_writes=%0d",
+                                 i_pmic_chip${cx}${cy}.read_count, i_pmic_chip${cx}${cy}.vset_write_count);
+                    end
+% endfor
+%if not sim_with_verilator:
+%for mem_chip in mem_chips:
+<%
+    mx, my = mem_chip.coordinate
+%>
+                    if ($test$plusargs("check_pmic_dvfs")) begin
+%for domain in range(5):
+                        if (i_hemaia_mem_chip_${mx}_${my}.i_hemaia_clk_rst_controller.gen_clock_divider[${domain}].i_clk_divider.divisor_q !== 8'd${6 if domain == 0 else 1})
+                            $fatal(1, "memchip${mx}${my} domain ${domain}: clock divider changed");
+%endfor
+                    end
+%endfor
+%endif
                     $display("All chips finished successfully at %0t", $time);
                     $finish;
                 end else begin
