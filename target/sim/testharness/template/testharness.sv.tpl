@@ -217,6 +217,56 @@ module testharness;
     // I2C
     wire chip${comp_chip_x}${comp_chip_y}_i2c_sda;
     wire chip${comp_chip_x}${comp_chip_y}_i2c_scl;
+    pullup (chip${comp_chip_x}${comp_chip_y}_i2c_sda);
+    pullup (chip${comp_chip_x}${comp_chip_y}_i2c_scl);
+    // Each compute chiplet has an independent local PMIC bus (VSEL tied low).
+    tps6287x #(.I2C_ADDRESS(7'h41)) i_pmic_chip${comp_chip_x}${comp_chip_y} (
+        .rst_ni(rst_periph_ni),
+        .scl(chip${comp_chip_x}${comp_chip_y}_i2c_scl),
+        .sda(chip${comp_chip_x}${comp_chip_y}_i2c_sda)
+    );
+    // Require the requested 800 -> 1000 -> 800 mV cycle on every local bus.
+    int chip${comp_chip_x}${comp_chip_y}_dvfs_phase = 0;
+    always @(i_pmic_chip${comp_chip_x}${comp_chip_y}.vset_write_count) begin
+        #1ps;
+        if ($test$plusargs("check_pmic_dvfs") && rst_ni &&
+            i_pmic_chip${comp_chip_x}${comp_chip_y}.vset_write_count != 0) begin
+            if (i_pmic_chip${comp_chip_x}${comp_chip_y}.target_mv == 800.0)
+                chip${comp_chip_x}${comp_chip_y}_dvfs_phase =
+                    chip${comp_chip_x}${comp_chip_y}_dvfs_phase >= 2 ? 3 : 1;
+            else if (i_pmic_chip${comp_chip_x}${comp_chip_y}.target_mv == 1000.0 &&
+                     chip${comp_chip_x}${comp_chip_y}_dvfs_phase != 0)
+                chip${comp_chip_x}${comp_chip_y}_dvfs_phase = 2;
+            else $fatal(1, "chip${comp_chip_x}${comp_chip_y}: unexpected DVFS voltage sequence");
+        end
+    end
+%if not sim_with_netlist:
+    // Enable for this workload with +check_pmic_dvfs. Observe the APPLIED
+    // divisors, rather than the software-visible divider request registers.
+%for domain in range(1 + len(occamy_cfg["clusters"])):
+    wire [7:0] chip${comp_chip_x}${comp_chip_y}_dvfs_div${domain} =
+        i_dut.i_hemaia_${comp_chip_x}_${comp_chip_y}.i_occamy_chip.i_hemaia_clk_rst_controller.gen_clock_divider[${domain}].i_clk_divider.divisor_q;
+    logic [7:0] chip${comp_chip_x}${comp_chip_y}_prev_div${domain};
+    always @(chip${comp_chip_x}${comp_chip_y}_dvfs_div${domain}) begin
+        if ($test$plusargs("check_pmic_dvfs") && rst_ni &&
+            i_pmic_chip${comp_chip_x}${comp_chip_y}.vset_write_count != 0 &&
+            chip${comp_chip_x}${comp_chip_y}_dvfs_div${domain} < chip${comp_chip_x}${comp_chip_y}_prev_div${domain}) begin
+            if (!i_pmic_chip${comp_chip_x}${comp_chip_y}.voltage_settled() ||
+                i_pmic_chip${comp_chip_x}${comp_chip_y}.output_voltage_mv() < 1000.0)
+                $fatal(1, "chip${comp_chip_x}${comp_chip_y} domain ${domain}: frequency raised before PMIC reached normal voltage");
+        end
+        chip${comp_chip_x}${comp_chip_y}_prev_div${domain} = chip${comp_chip_x}${comp_chip_y}_dvfs_div${domain};
+    end
+    always @(i_pmic_chip${comp_chip_x}${comp_chip_y}.vset_write_count) begin
+        #1ps;
+        if ($test$plusargs("check_pmic_dvfs") && rst_ni &&
+            i_pmic_chip${comp_chip_x}${comp_chip_y}.vset_write_count != 0 &&
+            i_pmic_chip${comp_chip_x}${comp_chip_y}.target_mv < 1000.0 &&
+            chip${comp_chip_x}${comp_chip_y}_dvfs_div${domain} < 7)
+            $fatal(1, "chip${comp_chip_x}${comp_chip_y} domain ${domain}: voltage lowered before frequency");
+    end
+%endfor
+%endif
     // JTAG
     wire chip${comp_chip_x}${comp_chip_y}_jtag_trst_ni;
     wire chip${comp_chip_x}${comp_chip_y}_jtag_tck_i;

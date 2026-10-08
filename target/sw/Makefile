@@ -86,6 +86,7 @@ PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/snitch_cluster_peripheral.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/hemaia_d2d_link_peripheral.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/hemaia_clk_rst_controller_peripheral.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/idma_reg64_1d.h
+PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/i2c_regs.h
 # OCCAMYGEN headers
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/occamy_memory_map.h
 PLATFORM_HEADERS += $(PLATFORM_HEADERS_DIR)/occamy.h
@@ -94,6 +95,10 @@ PLATFORM_HEADERS += $(SW_DEVICE_RT_DIR)/generated/occamy_defs.h
 
 $(PLATFORM_HEADERS_DIR):
 	mkdir -p $@
+
+# Use the register layout of the I2C IP actually instantiated in this SoC.
+$(PLATFORM_HEADERS_DIR)/i2c_regs.h: $(ROOT)/hw/vendor/pulp_platform_opentitan_peripherals/src/i2c/data/i2c.hjson | $(PLATFORM_HEADERS_DIR)
+	$(call reggen_generate_header,$@,$<)
 
 ###########
 # 1.CLINT #

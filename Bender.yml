@@ -171,6 +171,7 @@ sources:
   # target/sim
   - target: simulation_hemaia
     files:
+      - target/sim/testharness/pmic/tps6287x.sv
       - target/sim/testharness/uartdpi/uartdpi.sv
       - target/sim/testharness/dut.sv
       - target/sim/testharness/testharness.sv

@@ -121,7 +121,9 @@ DEVICE_DIR  = $(abspath $(HOST_DIR)/../device)
 INCDIRS += $(RUNTIME_DIR)
 INCDIRS += $(abspath $(SWDIR)/shared/platform/generated)
 INCDIRS += $(abspath $(SWDIR)/shared/runtime)
+INCDIRS += $(abspath $(SWDIR)/shared/vendor)
 SRCS    += $(RUNTIME_DIR)/start.S
+SRCS    += $(SWDIR)/shared/vendor/tps6287x.c
 
 # Include XDMA
 INCDIRS += $(SWDIR)/shared/vendor/xdma
@@ -444,7 +446,7 @@ DEP_TARGETS = $(PARTIAL_ELF) $(ELFS) $(ELF) $(DEP)
 # which #include the app's generated headers (gemm_data.h, xdma_data.h, ...), so those must
 # exist before the scan runs.
 $(DEP): $(SRCS) $(APP_GEN_FILES) | $(BUILDDIR)
-	$(RISCV_CC) $(RISCV_CFLAGS) -MM -MT '$(strip $(DEP_TARGETS))' $< > $@
+	$(RISCV_CC) $(RISCV_CFLAGS) -MM -MT '$(strip $(DEP_TARGETS))' $(SRCS) > $@
 
 # Read the discovered prerequisites. This is what makes an edit to a HEADER
 # (host_kernel_lib.h, ara_sweep.h, ...) rebuild the ELFs that include it: $(DEP) itself only

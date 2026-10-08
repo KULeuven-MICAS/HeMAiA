@@ -10,9 +10,10 @@
 // bring-up test (which armed DVFS only on chip(0,0)), here EVERY chiplet arms its
 // own DVFS host-notify path, so each chiplet independently:
 //   - programs its PM into DVFS mode + installs the trap handler (dvfs_init),
+//     after initializing its TPS6287x and establishing the idle voltage,
 //   - runs the DVFS-stress DAG (kernel_execution) whose cluster cores cycle
 //     busy<->idle several times,
-//   - services each idle<->busy doorbell in dvfs_trap_handler (records silently),
+//   - applies each idle<->busy transition in dvfs_trap_handler and logs it,
 //   - narrates the serviced RAISE/LOWER sequence via dvfs_dump_log().
 // dvfs_init targets get_current_chip_baseaddress()'s CLINT, so arming on every
 // chiplet is per-chip correct (each rings ITS OWN host).
@@ -40,7 +41,32 @@ int main() {
     }
 
     ///////////////////////////////
-    // 2. Wake up all the clusters
+    // 2. Configure THIS chiplet's PMIC and arm DVFS before waking the clusters.
+    ///////////////////////////////
+    // Every chiplet has its own I2C controller. The same PMIC address is valid
+    // on these independent buses. The dvfs.h defines use millivolts, while the
+    // PM's normal/idle levels are clock divisors (5/7 in the current workload).
+    const dvfs_config_t config = {
+        .pmic_address = DVFS_PMIC_ADDR,
+        .peripheral_clock_hz = DVFS_PERIPH_HZ,
+        .normal_level = BINGO_PM_NORMAL_POWER_LEVEL,
+        .idle_level = BINGO_PM_IDLE_POWER_LEVEL,
+        .normal_mv = DVFS_NORMAL_MV,
+        .idle_mv = DVFS_IDLE_MV,
+        .settle_us = DVFS_SETTLE_US,
+    };
+    int rc = dvfs_init(N_CLUSTERS_PER_CHIPLET + 1, &config);
+    if (rc < 0) {
+        printf("[dvfs][chip(%x,%x)] PMIC/DVFS init failed: %d. "
+               "Check DVFS_PMIC_ADDR/PERIPH_HZ/NORMAL_MV/IDLE_MV/SETTLE_US.\n",
+               x, y, rc);
+        return rc;
+    }
+    printf("[dvfs][chip(%x,%x)] TPS6287x 0x%02x initialized; DVFS armed\n",
+           x, y, (unsigned)config.pmic_address);
+
+    ///////////////////////////////
+    // 3. Wake up all the clusters
     ///////////////////////////////
     uint64_t comm_buffer_ptr = bingo_get_l2_comm_buffer(current_chip_id);
     enable_sw_interrupts();
@@ -51,31 +77,27 @@ int main() {
     asm volatile("fence" ::: "memory");
 
     ///////////////////////////////
-    // 3. Arm DVFS on THIS chiplet (all four do it)
-    ///////////////////////////////
-    // Arm BEFORE the workload so the PM is already in DVFS mode when the workload
-    // enables EN_IDLE_PM (see dvfs.h: pm_mode must be set before EN_IDLE_PM). boot_level
-    // = normal seeds DVFS_ACK so the chip starts at "normal" (no spurious initial RAISE);
-    // it only rings once the clusters actually go idle.
-    dvfs_init(N_CLUSTERS_PER_CHIPLET + 1, BINGO_PM_NORMAL_POWER_LEVEL);
-    printf("[dvfs][chip(%x,%x)] DVFS armed before workload\n", x, y);
-
-    ///////////////////////////////
     // 4. Run the DVFS-stress workload
     ///////////////////////////////
     // The DAG's cluster cores go busy (gemm) then idle (host-check gap) several times;
     // this chiplet's PM rings its host doorbell on each transition and dvfs_trap_handler
-    // records it.
+    // applies the voltage/frequency transition and records it.
     int ret = kernel_execution();
     clear_host_sw_interrupt(current_chip_id);
 
     ///////////////////////////////
     // 5. Narrate the serviced DVFS transitions
     ///////////////////////////////
-    // Stop further DVFS traps before printing (the ISR records silently; printing happens
-    // here, outside interrupt context, to stay reentrant-safe).
+    // The workload has stopped. Disable automatic requests and return to idle.
     asm volatile("csrc mstatus, %0" ::"r"(1 << 3));  // clear mstatus.MIE
-    printf("[dvfs][chip(%x,%x)] workload done\n", x, y);
+    writew(0, (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_enable_idle_pm_addr()));
+    fence();
+    rc = dvfs_apply_request((uint32_t)config.idle_level << DVFS_REQ_LEVEL_SHIFT);
+    if (rc < 0) return rc;
+    writew(config.idle_level,
+           (uintptr_t)chiplet_addr_transform((uint64_t)quad_ctrl_dvfs_ack_addr()));
+    printf("[dvfs][chip(%x,%x)] workload done; idle %d mV /%u\n",
+           x, y, rc, (unsigned)config.idle_level);
     dvfs_dump_log();
 
     // Keep all four compute chiplets alive at a rendezvous so none returns early
