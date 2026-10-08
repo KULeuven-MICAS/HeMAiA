@@ -593,6 +593,13 @@ def am_connect_soc_narrow_xbar_mem(am, am_soc_narrow_xbar, occamy_cfg):
         "sys_idma_cfg",
         occamy_cfg["sys_idma_cfg"]["length"],
         occamy_cfg["sys_idma_cfg"]["address"]).attach_to(am_soc_narrow_xbar)
+
+    am_moe_scheduler = None
+    if occamy_cfg.get("moe_scheduler", {}).get("enable", False):
+        am_moe_scheduler = am.new_leaf(
+            "moe_scheduler",
+            occamy_cfg["moe_scheduler"]["length"],
+            occamy_cfg["moe_scheduler"]["address"]).attach_to(am_soc_narrow_xbar)
     
     ##################
     # AM: HeMAiA Mem #
@@ -610,7 +617,7 @@ def am_connect_soc_narrow_xbar_mem(am, am_soc_narrow_xbar, occamy_cfg):
         4096,
         0x100000000 - 4096*5).attach_to(am_soc_narrow_xbar)
 
-    return am_spm_narrow, am_sys_idma_cfg, am_narrow_hemaia_xdma_ctrl_io, am_narrow_hemaia_xdma_cfg_io
+    return am_spm_narrow, am_sys_idma_cfg, am_moe_scheduler, am_narrow_hemaia_xdma_ctrl_io, am_narrow_hemaia_xdma_cfg_io
 
 
 def am_connect_soc_wide_xbar_mem(am, am_soc_wide_xbar, occamy_cfg):

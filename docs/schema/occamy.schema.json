@@ -291,6 +291,26 @@
 
             }
         },
+        "moe_scheduler": {
+            "type": "object",
+            "description": "Optional MMIO MoE scheduler; disabled unless explicitly enabled.",
+            "additionalProperties": false,
+            "properties": {
+                "enable": {"type": "boolean", "default": false},
+                "address": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 4294963200,
+                    "multipleOf": 4096
+                },
+                "length": {"type": "integer", "const": 4096}
+            },
+            "if": {
+                "required": ["enable"],
+                "properties": {"enable": {"const": true}}
+            },
+            "then": {"required": ["address", "length"]}
+        },
         "spm_narrow": {
             "$ref": "http://pulp-platform.org/occamy/address_range.schema.json"
         },

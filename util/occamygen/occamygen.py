@@ -18,6 +18,7 @@ import csv
 from jsonref import JsonRef
 
 from mako.template import Template
+from mako.lookup import TemplateLookup
 
 import occamy
 # from occamy import check_occamy_cfg, get_cluster_generators, generate_wrappers, generate_memories, get_cluster_cfg_list, generate_snitch
@@ -37,7 +38,8 @@ def write_template(tpl_path, outdir, fname=None, **kwargs):
         tpl_path = pathlib.Path(tpl_path).absolute()
         outdir = pathlib.Path(outdir)
         if tpl_path.exists():
-            tpl = Template(filename=str(tpl_path))
+            lookup = TemplateLookup(directories=[str(tpl_path.parent)])
+            tpl = Template(filename=str(tpl_path), uri=tpl_path.name, lookup=lookup)
             fname = tpl_path.with_suffix("").name.replace("occamy", kwargs["name"]) \
                 if not fname else fname
             outdir.mkdir(parents=True, exist_ok=True)
@@ -322,7 +324,7 @@ def main():
     am_quad_axi_lite_narrow_peripheral, am_quad_axi_lite_narrow_h2c_mailboxs, addrs_quad_axi_lite_narrow_peripherals = occamy.am_connect_quad_axi_lite_narrow_xbar(am, am_quad_axi_lite_narrow_xbar, occamy_cfg)
 
     # SoC Narrow Xbar
-    am_spm_narrow, am_sys_idma_cfg, am_narrow_hemaia_xdma_ctrl_io, am_narrow_hemaia_xdma_cfg_io = occamy.am_connect_soc_narrow_xbar_mem(
+    am_spm_narrow, am_sys_idma_cfg, am_moe_scheduler, am_narrow_hemaia_xdma_ctrl_io, am_narrow_hemaia_xdma_cfg_io = occamy.am_connect_soc_narrow_xbar_mem(
         am, am_soc_narrow_xbar, occamy_cfg)
     # SoC Wide Xbar
     am_wide_hemaia_mem, am_wide_hemaia_xdma_data_io, am_wide_zero_mem = occamy.am_connect_soc_wide_xbar_mem(
@@ -522,6 +524,8 @@ def main():
     soc_narrow_xbar.add_output_entry("periph", am_soc_axi_lite_periph_xbar)
     soc_narrow_xbar.add_output_entry("spm_narrow", am_spm_narrow)
     soc_narrow_xbar.add_output_entry("sys_idma_cfg", am_sys_idma_cfg)
+    if am_moe_scheduler is not None:
+        soc_narrow_xbar.add_output_entry("moe_scheduler", am_moe_scheduler)
     soc_narrow_xbar.add_output_entry("axi_lite_narrow_periph",
                                      am_soc_axi_lite_narrow_periph_xbar)
 

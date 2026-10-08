@@ -138,7 +138,13 @@ def hemaia_util():
         
         bender_targets = get_bender_targets(occamy_cfg)
         for i in bender_targets:
-            print(" -t "+ i,end="")
+            if i != "moe_scheduler":
+                print(" -t "+ i,end="")
+        # The pinned scheduler package predates target-gated sources.
+        if occamy_cfg.get("moe_scheduler", {}).get("enable", False):
+            print(" -t moe_scheduler", end="")
+        else:
+            print(" -e hw_scheduler", end="")
         print()
         return
 

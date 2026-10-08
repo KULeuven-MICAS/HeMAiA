@@ -34,14 +34,15 @@ dependencies:
   opentitan_peripherals:      { path: hw/vendor/pulp_platform_opentitan_peripherals                                      }
   register_interface:         { git:  https://github.com/pulp-platform/register_interface.git,          version: 0.3.8   }
   idma:                       { git:  https://github.com/KULeuven-MICAS/iDMA,                           rev:     master  }
-  snitch_cluster:             { git:  https://github.com/KULeuven-MICAS/snax_cluster.git,               rev:     main    }
+  snitch_cluster:             { git:  https://github.com/wenbo-li-ee/snax_cluster.git,                  rev:     e902b9b64b26e29f642ac21433624899c8775a53 }
   tech_cells_generic:         { git:  https://github.com/KULeuven-MICAS/tech_cells_generic.git,         version: 0.2.16  }
   cluster_icache:             { git:  https://github.com/KULeuven-MICAS/cluster_icache.git,             rev:     main    }
   hemaia_axi_spi_slave:       { git:  https://github.com/KULeuven-MICAS/hemaia_axi_spi_slave.git,       rev:     main    }
   hemaia_d2d_link:            { git:  https://github.com/KULeuven-MICAS/hemaia_d2d_link.git,            rev:     main    }
   hemaia_clk_rst_controller:  { git:  https://github.com/KULeuven-MICAS/hemaia_clk_rst_controller.git,  rev:     main    }
   floo_noc:                   { git:  https://github.com/KULeuven-MICAS/FlooNoC.git,                    rev:     main    }
-  bingo_hw_manager:           { git:  https://github.com/KULeuven-MICAS/bingo_hw_manager.git,           rev:     main    }
+  bingo_hw_manager:           { git:  https://github.com/roundeodo/bingo_hw_manager.git,                rev:     cda3a03ebba5de350fb8564dc3fdb8ec635cf394 }
+  hw_scheduler:               { git:  https://github.com/roundeodo/HW_Scheduler.git,                    rev:     d5ad95ce1a62e3cecc557d292793ab7e4109b29d }
 
 workspace:
   package_links:
