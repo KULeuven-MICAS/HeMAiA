@@ -52,10 +52,10 @@ module tps6287x #(
 
     function automatic real setpoint_mv();
         case (regs[2][3:2])
-            0: return 400.0 + int'(regs[0]) * 1.25;
-            1: return 400.0 + int'(regs[0]) * 2.5;
-            2: return 400.0 + int'(regs[0]) * 5.0;
-            3: return 800.0 + int'(regs[0]) * 10.0;
+            0: return 400.0 + real'(regs[0]) * 1.25;
+            1: return 400.0 + real'(regs[0]) * 2.5;
+            2: return 400.0 + real'(regs[0]) * 5.0;
+            3: return 800.0 + real'(regs[0]) * 10.0;
         endcase
     endfunction
 

@@ -117,10 +117,12 @@ task automatic check_finish();
                         if (chip${cx}${cy}_dvfs_div${domain} !== 8'd7)
                             $fatal(1, "chip${cx}${cy} domain ${domain}: final divider is not /7");
 %endfor
+%if not occamy_cfg["hemaia_multichip"]["single_chip"]:
 %for domain in range(1 + len(occamy_cfg["clusters"]), 5 + len(occamy_cfg["clusters"])):
                         if (i_dut.i_hemaia_${cx}_${cy}.i_occamy_chip.i_hemaia_clk_rst_controller.gen_clock_divider[${domain}].i_clk_divider.divisor_q !== 8'd${20 if not same_memchip_speed and cx == 1 and cy == 0 and domain == 1 + len(occamy_cfg["clusters"]) else 1})
                             $fatal(1, "chip${cx}${cy} domain ${domain}: D2D TX divider changed");
 %endfor
+%endif
 %endif
                         $display("[pmic-check] chip${cx}${cy} PASS: reads=%0d voltage_writes=%0d",
                                  i_pmic_chip${cx}${cy}.read_count, i_pmic_chip${cx}${cy}.vset_write_count);
