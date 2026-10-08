@@ -140,6 +140,7 @@ clean-idma:
 #######
 
 MISC_OCCAMYGEN_SV_TEMPLATES  = $(SOURCE_OCCAMY_DIR)/occamy_*.sv.tpl
+MISC_OCCAMYGEN_SV_TEMPLATES += $(SOURCE_OCCAMY_DIR)/moe/*.sv.tpl
 MISC_OCCAMYGEN_SV_TARGETS  = $(TARGET_SRC_DIR)/occamy_*.sv
 MISC_OCCAMYGEN_SV_TARGETS  += $(TARGET_SRC_DIR)/snax_*.sv
 
@@ -158,7 +159,7 @@ clean-soc:
 	rm -rf $(HEMAIA_MEM_SYS_DIR)/hemaia_mem_chip_xdma.sv
 
 $(MISC_OCCAMYGEN_TARGETS): .misc_occamygen_targets_group
-.misc_occamygen_targets_group: $$(CLUSTER_CFG_INPUTS) $(MISC_OCCAMYGEN_SV_TEMPLATES)
+.misc_occamygen_targets_group: $$(CLUSTER_CFG_INPUTS) $(MISC_OCCAMYGEN_SV_TEMPLATES) $(OCCAMYGEN) $(ROOT)/util/occamygen/occamy.py $(ROOT)/docs/schema/occamy.schema.json .snax_cluster_occamygen_targets_group
 	@echo "[OCCAMYGEN] Generate $(MISC_OCCAMYGEN_TARGETS)"
 
 	$(OCCAMYGEN) --cfg $(CFG) --outdir $(TARGET_SRC_DIR)\
@@ -241,6 +242,9 @@ clean-socctrl:
 # QUAD PERIPH #
 ###############
 QUADPERIPH_HJSON_DIR	    = $(SW_HJSON_DIR)/quad_periph
+$(QUADPERIPH_HJSON_DIR)/occamy_quad_periph_reg.hjson: $(SOURCE_QUADPERIPH_DIR)/occamy_quad_periph_reg.hjson.tpl $$(CLUSTER_CFG_INPUTS)
+	@$(OCCAMYGEN) --cfg $(CFG) --outdir $(QUADPERIPH_HJSON_DIR) --ctrl $<
+
 $(TARGET_QUADPERIPH_DIR):
 	@mkdir -p $@
 
@@ -330,5 +334,5 @@ clean-clint:
 	@$(REGGEN) -r -t $(TARGET_CLINT_DIR) $<
 	@touch $@
 
-src/bender_targets.tmp: $$(CLUSTER_CFG_INPUTS) # Generate bender_targets.tmp file
+src/bender_targets.tmp: $$(CLUSTER_CFG_INPUTS) $(HEMAIA_UTIL) # Generate bender_targets.tmp file
 	$(HEMAIA_UTIL) --cfg_path $(CFG) --get_bender_targets > $@

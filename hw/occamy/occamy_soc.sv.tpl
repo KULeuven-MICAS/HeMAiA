@@ -491,6 +491,10 @@ module ${name}_soc
   );
 
 
+% if occamy_cfg.get("moe_scheduler", {}).get("enable", False):
+<%include file="moe/scheduler.sv.tpl" args="max_trans_atop_filter_per=max_trans_atop_filter_per"/>\
+
+% endif
   /////////////////
   // Peripherals //
   /////////////////

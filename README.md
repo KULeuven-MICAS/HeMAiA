@@ -84,6 +84,24 @@ make bootrom
 make rtl CFG_OVERRIDE=target/rtl/cfg/<YOUR_CFG>
 ```
 
+The MoE configuration includes four dual-GEMM SwiGLU clusters (8 MiB TCDM each),
+32 MiB shared SRAM, and a 64-bit MMIO scheduler at `0x05010000` (4 KiB):
+
+```bash
+make rtl CFG_OVERRIDE=target/rtl/cfg/hemaia_moe.hjson
+```
+
+Set `moe_scheduler.enable` to enable the scheduler; it is disabled when omitted.
+The SNAX, Bingo, and scheduler pins in `Bender.yml` apply repository-wide.
+
+To test scheduler MMIO and task outputs against Python-reference golden results,
+build and stage the standalone host workload, then use the Questa flow below:
+
+```bash
+make single-sw CFG_OVERRIDE=target/rtl/cfg/hemaia_moe.hjson HOST_APP_TYPE=host_only CHIP_TYPE=single_chip WORKLOAD=scheduler_mmio_smoke DEV_APP=None
+make apps CFG_OVERRIDE=target/rtl/cfg/hemaia_moe.hjson HOST_APP_TYPE=host_only CHIP_TYPE=single_chip WORKLOAD=scheduler_mmio_smoke DEV_APP=None
+```
+
 ### Perform RTL simulation using Verilator
 
 Verilator is the open source SystemVerilog / Verilog simulator. Verilator is embedded in the docker image, thus there is no need to exit the container.

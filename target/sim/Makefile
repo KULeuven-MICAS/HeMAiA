@@ -447,7 +447,7 @@ $(VSIM_BUILDDIR)/compile.vsim.tcl:
 	@echo "ERROR: PREPARED_SIM_INPUTS=1 requires transferred Questa input: $@" >&2
 	@exit 1
 else
-$(VSIM_BUILDDIR)/compile.vsim.tcl: | $(VSIM_BUILDDIR)
+$(VSIM_BUILDDIR)/compile.vsim.tcl: $(BENDER_TARGETS_FILE) $(ROOT)/Bender.yml $(ROOT)/Bender.lock | $(VSIM_BUILDDIR)
 	$(BENDER) script vsim $(VSIM_BENDER) --vlog-arg="$(VLOG_FLAGS) -work $(dir $@) " > $@
 	echo '$(VLOG) -work $(dir $@) $(TB_CC_SOURCES) -vv -ccflags "$(TB_CC_FLAGS)"' >> $@
 	echo 'return 0' >> $@
