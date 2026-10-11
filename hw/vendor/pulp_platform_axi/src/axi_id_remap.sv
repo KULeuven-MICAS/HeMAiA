@@ -301,13 +301,37 @@ module axi_id_remap #(
         end
       end
 
+      // A held request must not stop the other direction: a master may couple its read data to its
+      // write data (a DMA copying memory to memory), so a read whose AR the slave cannot take until
+      // an earlier R drains, with the AW behind it held here, closes a loop (R waits for the W, the
+      // W for the AW, the AW for this hold, the hold for the AR, the AR for the R). In the held
+      // states the other channel is forwarded on its own; an ATOP that gives rise to an R response
+      // needs both tables and still waits for the hold to end.
       HoldAR: begin
         // Drive `mst_req_o.ar.id` through `rd_push_oup_id`.
         rd_push_oup_id      = ar_id_q;
         mst_req_o.ar_valid  = 1'b1;
         slv_resp_o.ar_ready = mst_resp_i.ar_ready;
+        if (slv_req_i.aw_valid && !slv_req_i.aw.atop[axi_pkg::ATOP_R_RESP]) begin
+          if ((wr_exists && !wr_exists_full) || (!wr_exists && !wr_full)) begin
+            wr_push_oup_id     = wr_exists ? wr_exists_id : wr_free_oup_id;
+            mst_req_o.aw_valid = 1'b1;
+            wr_push            = 1'b1;
+          end
+        end
+        if (mst_req_o.aw_valid) begin
+          slv_resp_o.aw_ready = mst_resp_i.aw_ready;
+          if (!mst_resp_i.aw_ready) begin
+            aw_id_d = wr_push_oup_id;
+          end
+        end
+        unique case ({mst_resp_i.ar_ready, mst_req_o.aw_valid && !mst_resp_i.aw_ready})
+          2'b11:   state_d = HoldAW;
+          2'b01:   state_d = HoldAx;
+          2'b10:   state_d = Ready;
+          default: state_d = HoldAR;
+        endcase
         if (mst_resp_i.ar_ready) begin
-          state_d = Ready;
           ar_prio_d = 1'b0; // Reset AR priority, because handshake was successful in this cycle.
         end
       end
@@ -317,8 +341,28 @@ module axi_id_remap #(
         wr_push_oup_id      = aw_id_q;
         mst_req_o.aw_valid  = 1'b1;
         slv_resp_o.aw_ready = mst_resp_i.aw_ready;
-        if (mst_resp_i.aw_ready) begin
-          state_d = Ready;
+        if (slv_req_i.ar_valid) begin
+          if ((rd_exists && !rd_exists_full) || (!rd_exists && !rd_full)) begin
+            rd_push_inp_id     = slv_req_i.ar.id;
+            rd_push_oup_id     = rd_exists ? rd_exists_id : rd_free_oup_id;
+            mst_req_o.ar_valid = 1'b1;
+            rd_push            = 1'b1;
+          end
+        end
+        if (mst_req_o.ar_valid) begin
+          slv_resp_o.ar_ready = mst_resp_i.ar_ready;
+          if (!mst_resp_i.ar_ready) begin
+            ar_id_d = rd_push_oup_id;
+          end
+        end
+        unique case ({mst_resp_i.aw_ready, mst_req_o.ar_valid && !mst_resp_i.ar_ready})
+          2'b11:   state_d = HoldAR;
+          2'b01:   state_d = HoldAx;
+          2'b10:   state_d = Ready;
+          default: state_d = HoldAW;
+        endcase
+        if (mst_req_o.ar_valid && mst_resp_i.ar_ready) begin
+          ar_prio_d = 1'b0;
         end
       end
 
