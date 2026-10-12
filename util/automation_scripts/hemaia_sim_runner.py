@@ -71,6 +71,8 @@ except Exception:
 DEFAULT_DOCKER_IMAGE = "ghcr.io/kuleuven-micas/hemaia:main"
 SIM_TIMEOUT_SECONDS = 4 * 60 * 60  # 4 hours per simulation thread
 DEFAULT_MAX_SIM_JOBS = 16
+FGP_DEFAULT_THREADS = 8  # VCS FGP worker threads a bare --fgp asks for
+ASSERT_MAXFAIL_DEFAULT = 1  # vcs: SystemVerilog assertion failures after which simv stops
 PREPARATION_MANIFEST = "netlist_ci_preparation_manifest.json"
 PREPARATION_MANIFEST_VERSION = 6
 MEMPOOL_BANK_COUNT = 16
@@ -630,6 +632,16 @@ def parse_workload_args(
     parser.add_argument(
         "--waveform", type=int, choices=(0, 1), default=default_waveform,
         help="SIM_WITH_WAVEFORM: record a waveform/log (default: %(default)s)")
+    parser.add_argument(
+        "--fgp", dest="fgp_threads", type=int, nargs="?", const=FGP_DEFAULT_THREADS,
+        default=0, metavar="N",
+        help=f"vcs: run each simulation with Fine-Grained Parallelism, N worker threads "
+             f"(N + 1 cores); a bare --fgp means {FGP_DEFAULT_THREADS} (default: off)")
+    parser.add_argument(
+        "--assert-maxfail", dest="assert_maxfail", type=int, default=ASSERT_MAXFAIL_DEFAULT,
+        metavar="N",
+        help="vcs: stop each simulation once its SystemVerilog assertions have failed N times "
+             "in all; 0 never stops (default: %(default)s)")
     if default_cfg is not None:
         parser.add_argument(
             "--cfg", default=default_cfg,
@@ -670,6 +682,8 @@ class HeMAiASimRunner:
         fail_on_task_failure: bool = False,
         timeout_seconds: int = SIM_TIMEOUT_SECONDS,
         enforce_preparation_hashes: bool = True,
+        fgp_threads: int = 0,
+        assert_maxfail: int = ASSERT_MAXFAIL_DEFAULT,
     ) -> None:
         if engine not in ENGINES:
             raise ValueError(f"Unknown engine {engine!r}; choose from {sorted(ENGINES)}")
@@ -703,9 +717,21 @@ class HeMAiASimRunner:
         # Parallelism for the sim compile (``make -j``); None = no -j flag. The
         # Verilator build in particular is far too slow serially on a CI runner.
         self.compile_jobs = compile_jobs
-        # VCS FGP counts its master separately from ``num_threads``.  Keep the
-        # public setting in total cores so multiplying it by ``max_jobs`` gives
-        # the intended upper bound on simulation CPU use.
+        # VCS Fine-Grained Parallelism worker threads per simulation (vcs only): the
+        # simv runs with -fgp=num_threads:N and takes N + 1 cores, the extra one for
+        # the FGP master. 0 runs it on one core. The Makefile builds every simv with
+        # -fgp, so one binary serves any thread count.
+        if fgp_threads < 0:
+            raise ValueError("fgp_threads must be >= 0")
+        if fgp_threads and engine != "vcs":
+            raise ValueError(f"fgp_threads needs the vcs engine, not {engine!r}")
+        self.fgp_threads = fgp_threads
+        # VCS stops a simulation (-assert global_finish_maxfail=N) once its SystemVerilog
+        # assertions have failed N times in all, so a run that went wrong ends there instead
+        # of printing a failure every cycle. 0 never stops. Ignored by the other engines.
+        if assert_maxfail < 0:
+            raise ValueError("assert_maxfail must be >= 0")
+        self.assert_maxfail = assert_maxfail
         # `make -jN` for the SW build. Only `sw` is parallel-safe (and it is the slow
         # one: ~96 host apps x ~20 device apps). `rtl` runs occamygen + bender script
         # generation and `bootrom` takes seconds -- both stay serial.
@@ -1448,6 +1474,12 @@ class HeMAiASimRunner:
         """Where the record of HOW the standing simulation was built lives."""
         return self.repo_root / "target/sim" / "bin" / f".{self.spec['binary']}.buildinfo"
 
+    def _simv_has_fgp(self) -> bool:
+        """Whether the standing VCS simulation was compiled with -fgp: an FGP build's daidir holds
+        the FGP runtime event database (fgp_rtime_event.sdb)."""
+        daidir = self.repo_root / "target/sim/bin" / f"{self.spec['binary']}.daidir"
+        return (daidir / "fgp_rtime_event.sdb").exists()
+
     def _write_simv_stamp(self) -> None:
         """Record the build-affecting settings next to the simulation binary.
 
@@ -1605,23 +1637,24 @@ class HeMAiASimRunner:
         results: Dict[str, Tuple[bool, float]] = {}
         binary_name = self.spec["binary"]
         run_args = list(self.spec.get("run_args", []))
-        # Extra runtime plusargs from the environment, space separated. The one that matters
-        # for turnaround is `SIM_PLUSARGS=+notrace`: every hart otherwise writes a per-cycle
-        # instruction trace, which is the single largest per-cycle cost in the simulation and
-        # is pure waste on any run whose traces nothing will read. Leave it unset whenever the
-        # run is being measured -- the performance tooling is built on those traces.
+        # Extra runtime arguments from the environment, space separated, appended verbatim.
         run_args += os.environ.get("SIM_PLUSARGS", "").split()
         if self._sim_cfg_flag("sim_with_netlist"):
             run_args.extend(self.spec.get("netlist_run_args", []))
-        # NO -fgp. VCS's fine-grained parallelism is aimed at GATE-LEVEL simulation, where a
-        # flattened netlist exposes enough fine-grained events to thread; an RTL event graph
-        # is coarser and more serialised, and the synchronisation overhead cancels the gain.
-        # Measured on this design at 4 cores: 4m52s and 4m54s against a 4m42s-6m04s
-        # single-core baseline -- no gain, on sim_rtl (sim_with_netlist: false).
-        #
-        # The parallelism that DOES pay here is job-level: independent simulations run
-        # concurrently (see max_jobs), which took three ~5-minute runs to 4m55s wall-clock.
-        # That is bounded by VCS runtime license seats rather than by cores.
+        # VCS Fine-Grained Parallelism spreads the events of a time step over worker
+        # threads, RTL processes as well as gates; it pays when much of the design is
+        # active each cycle and can lose on a mostly idle design. Independent simulations
+        # still run side by side through max_jobs.
+        if self.fgp_threads and self.engine == "vcs" and not self._simv_has_fgp():
+            # a simv compiled without -fgp refuses the runtime option (FGP_OPTION_ERR1)
+            print(f"[warn] --fgp {self.fgp_threads} ignored: the simulation was compiled without "
+                  f"-fgp (VCS_FGP=0); it runs on one core")
+        elif self.fgp_threads:
+            # allow_less_cores: on a busy machine simv starts with the cores it finds free instead
+            # of refusing to start (FGP_AFFINITY_FAILED)
+            run_args += [f"-fgp=num_threads:{self.fgp_threads}", "-fgp=allow_less_cores"]
+        if self.engine == "vcs" and self.assert_maxfail:
+            run_args += ["-assert", f"global_finish_maxfail={self.assert_maxfail}"]
 
         def _worker(task_dir: Path, ci_name: str):
             sim_binary = task_dir / "bin" / binary_name
@@ -1677,7 +1710,8 @@ class HeMAiASimRunner:
         worker_count = min(self.max_jobs, len(tasks_info))
         print(f"Running {len(tasks_info)} {self.engine} simulation(s) with up to "
               f"{worker_count} parallel job(s) and "
-              f"1 core(s) per job")
+              f"{self.fgp_threads + 1 if self.fgp_threads else 1} core(s) per job"
+              + (f" (FGP, {self.fgp_threads} threads)" if self.fgp_threads else ""))
 
         phase_start = time.monotonic()
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
