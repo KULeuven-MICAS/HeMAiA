@@ -5,10 +5,9 @@
 #
 # stages.sh <stage> [bound us]: one FFN prefill variant on the standing FGP simulator, ONE simulation at a
 # time, with its watchdog and hang guard.
-#   stage   full = workloads/ffn/dsv2_l0_prefill/all (4 iterations of 32 rows); full_v20 / poc_v20 =
-#           dsv2_l0_prefill{,_tiny}/all_sp_v20, the single-pass mapping at full size / on 3,072 intermediate
-#           columns; bench_paired = dsv2_l0_prefill_tiny/gemm_bench_paired, GEMM shapes alone on one cluster
-#           (INT4 B in the B-layout and the paired layout, and INT8 B)
+#   stage   full / poc = workloads/ffn/dsv2_l0_prefill{,_tiny}/all, the single-pass mapping at full size / on
+#           3,072 intermediate columns; bench_paired = dsv2_l0_prefill_tiny/gemm_bench_paired, GEMM shapes alone
+#           on one cluster (INT4 B in the B-layout and the paired layout, and INT8 B)
 # What it does: refuses to start while another simulator of this user runs; launches the run through
 # common/launch.sh (the runner's event log); arms common/sim_watchdog.py with the ffn_prefill profile (it
 # reads the scheduler monitor's bingo_progress.log and stops the simulator on a hang, a stalled AXI link, an
@@ -19,11 +18,10 @@
 # running simulations (SIM_SLOTS of them, default 3).
 S=$(cd "$(dirname "$0")" && pwd); H=${S%/target/sim/automation/sweep/ffn}
 stage=$1
-[ -z "$stage" ] && { sed -n 6,11p "$0"; exit 1; }
+[ -z "$stage" ] && { sed -n 6,10p "$0"; exit 1; }
 case $stage in
   full)     wl=ffn/dsv2_l0_prefill/all; bound=${2:-3300};;
-  full_v20) wl=ffn/dsv2_l0_prefill/all_sp_v20; bound=${2:-3300};;
-  poc_v20)  wl=ffn/dsv2_l0_prefill_tiny/all_sp_v20; bound=${2:-2000};;
+  poc)      wl=ffn/dsv2_l0_prefill_tiny/all; bound=${2:-2000};;
   bench_paired) wl=ffn/dsv2_l0_prefill_tiny/gemm_bench_paired; bound=${2:-1500};;
   *) echo "unknown stage $stage"; exit 1;;
 esac

@@ -270,7 +270,7 @@ def replay(S, header, dur, wq=32, msg_us=1.0, fetch_us=0.05, dc_us=0.01, free_re
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("workload", help="e.g. dsv2_l0_prefill/all_sp_v20")
+    ap.add_argument("workload", help="e.g. dsv2_l0_prefill/all")
     ap.add_argument("--run", required=True, help="the measured run dir (runs/<tag>)")
     ap.add_argument("--run-wl", default="dsv2_l0_prefill/all", help="the workload that run used (its final_dfg.csv names the ids)")
     ap.add_argument("--wq", type=int, default=32)
