@@ -331,6 +331,67 @@ class BingoDFGTransformsMixin:
                     dummy_check_node.remote_dep_set_all = False
                     self.bingo_insert_node_between(pred, cur_node, dummy_check_node)
 
+    @staticmethod
+    def _chain_gather_hops(args) -> list | None:
+        """The (chiplet, cluster) of every chain entry of a ChainGather's args: its `hops`, or
+        each entry's own L1 allocation. None when an entry names neither."""
+        if getattr(args, "hops", None) is not None:
+            return list(args.hops)
+        hops = []
+        for e in args.chain:
+            base = getattr(e, "base", e)
+            if getattr(base, "mem_level", None) != "L1" or not hasattr(base, "cluster_id"):
+                return None
+            hops.append((base.chip_id, base.cluster_id))
+        return hops
+
+    def bingo_transform_order_crossed_chain_gathers(self) -> list[tuple[str, str]]:
+        """Order every two ChainGathers that would meet as MIDDLE hops on one xDMA.
+
+        A ChainGather configures each middle hop with two frames from its collector, a reader
+        frame and then a writer frame, and the hop's xDMA starts the two only as a pair. When
+        one xDMA is a middle hop of two gathers from different collectors at once, their frames
+        can arrive crossed (reader A, reader B, writer B, writer A). Each of the xDMA's two cfg
+        queues then holds at its head a frame whose counterpart is behind the other queue's
+        head, and neither gather ever starts. Gathers from one collector cannot cross (its
+        frames leave in order), nor can a head (one frame) or a collector (its own two halves
+        enter together).
+
+        So two gathers from different collectors that share a middle-hop xDMA, with no path of
+        dependencies between them, get one: the later-built waits for the earlier, unless the
+        dispatch order (order edges included) already puts them the other way round. A gather
+        whose hops cannot be told is reported, not assumed safe. Returns the edges added.
+        """
+        gathers = []
+        unknown = []
+        for n in sorted(self.nodes(), key=lambda n: n.node_id):
+            if not (n.kernel_name or "").endswith("xdma_chain_gather") or n.kernel_args is None:
+                continue
+            hops = self._chain_gather_hops(n.kernel_args)
+            if hops is None:
+                unknown.append(n.node_name)
+                continue
+            gathers.append((n, (n.assigned_chiplet_id, n.assigned_cluster_id), set(hops[1:-1])))
+        if unknown and len(gathers) + len(unknown) > 1:
+            print(f"[bingo] WARNING: {len(unknown)} ChainGather(s) without hops cannot be checked "
+                  f"for crossing at a shared middle hop: {unknown[:4]}")
+        added, sharing = [], 0
+        for i, (a, ca, ma) in enumerate(gathers):
+            for b, cb, mb in gathers[i + 1:]:
+                if ca == cb or not (ma & mb):
+                    continue
+                sharing += 1
+                if nx.has_path(self, a, b) or nx.has_path(self, b, a):
+                    continue
+                first, then = (b, a) if nx.has_path(self.bingo_order_view(), b, a) else (a, b)
+                self.bingo_add_edge(first, then)
+                added.append((first.node_name, then.node_name))
+        if len(gathers) > 1:
+            print(f"[bingo] ChainGather crossing check: {len(gathers)} gathers, {sharing} pair(s) "
+                  f"from different collectors share a middle-hop xDMA, {len(added)} edge(s) "
+                  f"added{': ' + str(added[:4]) if added else ''}")
+        return added
+
     def bingo_transform_add_core_sequencing_edges(self) -> int:
         """Add edges between consecutive tasks on the same core.
 
@@ -567,6 +628,7 @@ class BingoDFGTransformsMixin:
         """bingo_transform_fit_dep_tag_budget's fit: order only, or (relay) order inside one
         chip and relay the edges that would need order across chips."""
         budget = 1 << tag_width
+        no_order = set(getattr(self, "relay_not_order_cores", None) or ())
         added_total, widest, relays_total, relayed_total = 0, 0, 0, 0
         import os as _os
         debug = bool(_os.environ.get("BINGO_TAG_DEBUG"))
@@ -652,6 +714,13 @@ class BingoDFGTransformsMixin:
                         continue
                     else:
                         legal = [i for i, last in enumerate(ends) if not before(p, last)]
+                        # The DFG's optional `relay_not_order_cores` [consumer cores]: a cell of
+                        # those cores relays the edge instead of ordering it, so no producer (a
+                        # long GEMM, say) waits for an unrelated consumer to finish.
+                        if (relay and key[2] in no_order
+                                and not (self.get_edge_data(p, c) or {}).get("cond")):
+                            to_relay.setdefault(key, []).append((p, c))
+                            continue
                         if relay and not (self.get_edge_data(p, c) or {}).get("cond"):
                             # order inside one chip only: across chips the new edge lands in
                             # another chip's cell and spreads; relay this edge instead
@@ -705,9 +774,16 @@ class BingoDFGTransformsMixin:
         A group of up to 2**tag_width / 2 of the cell's edges (p -> c, in the consumers' core
         order) becomes p -> relay for each, and relay -> c0, c0 the group's first consumer:
         the later ones follow c0 on their core, so each still runs after its producer. The
-        group's edges now live in the relay core's cell, the least loaded one; c0 now also
+        group's edges now live in the relay core's cell, the least loaded one (the DFG's optional
+        `relay_prefer_cores` {consumer core: [cores]} puts those cores first for a cell of that
+        consumer core: a core whose queue holds long or blocking tasks delays every relay behind them); c0 now also
         waits for the group's other producers, which is the price. A producer that c0
-        already reaches starts a new group (it would close a cycle).
+        already reaches starts a new group (it would close a cycle). The DFG's optional
+        `relay_one_consumer_cores` [consumer cores] starts a new group at every new consumer in
+        a cell of those cores, so no consumer waits for a later consumer's producers (a group
+        spanning two gathers holds the first back until the second's inputs are ready); the
+        price is more relays. For those cells a relay also goes ahead of any relay on its core
+        whose consumer runs after its own, for the same reason (see below).
 
         The relay joins its core's chain just before the first task there that c0 reaches:
         everything behind it then waits for c0 anyway, so the relay holds no task back that
@@ -727,6 +803,10 @@ class BingoDFGTransformsMixin:
                  u.assigned_core_id)
             load[k] = load.get(k, 0) + 1
         group_max = max(1, budget // 2)
+        # {relay: the consumer it releases}, over every round of the fit
+        if getattr(self, "_relay_for", None) is None:
+            self._relay_for = {}
+        relay_for = self._relay_for
         made = 0
         for key in sorted(to_relay):
             chip, cl, R, C = key
@@ -736,9 +816,10 @@ class BingoDFGTransformsMixin:
             if not homes:
                 raise ValueError(f"dep-tag budget: cell {key} needs a relay, and its chip has "
                                  f"no other core to put one on.")
+            one = R in set(getattr(self, "relay_one_consumer_cores", None) or ())
             groups, cur, first, below = [], [], None, set()
             for p, c in sorted(to_relay[key], key=lambda e: (pos[e[1]], pos[e[0]])):
-                if cur and (len(cur) == group_max or p in below):
+                if cur and (len(cur) == group_max or p in below or (one and c is not first)):
                     groups.append((first, cur))
                     cur = []
                 if not cur:
@@ -746,8 +827,9 @@ class BingoDFGTransformsMixin:
                 cur.append((p, c))
             if cur:
                 groups.append((first, cur))
+            prefer = set((getattr(self, "relay_prefer_cores", None) or {}).get(R, ()))
             for first, grp in groups:
-                c2, r2 = min(homes, key=lambda h: (load.get((chip, h[0], h[1], C), 0), h))
+                c2, r2 = min(homes, key=lambda h: (h[1] not in prefer, load.get((chip, h[0], h[1], C), 0), h))
                 r = BingoNode(assigned_chiplet_id=chip, assigned_cluster_id=c2,
                               assigned_core_id=r2,
                               node_name=f"relay{made}_{first.node_name}",
@@ -762,6 +844,18 @@ class BingoDFGTransformsMixin:
                 below = nx.descendants(self, first)
                 seq = chain.setdefault((chip, c2, r2), [])
                 at = next((i for i, x in enumerate(seq) if x in below), len(seq))
+                if one:
+                    # Also ahead of a relay on that core whose consumer runs after `first`:
+                    # behind it, this relay would wait for that consumer's producers too (the
+                    # core runs in order). Not when a task from there on feeds this group.
+                    anc = set()
+                    for p, _ in grp:
+                        anc |= nx.ancestors(self, p) | {p}
+                    early = next((i for i, x in enumerate(seq[:at])
+                                  if relay_for.get(x) in below), at)
+                    if not any(x in anc for x in seq[early:]):
+                        at = early
+                relay_for[r] = first
                 if at < len(seq):
                     self.add_edge(r, seq[at], order_only=True)
                 if at > 0:
