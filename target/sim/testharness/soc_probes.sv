@@ -38,10 +38,19 @@ package snax_probe_pkg;
   // moved data. A decode layer streams weights HBM -> cluster L1 for milliseconds without
   // touching L3; a per-memory watchdog killed that as a hang.
   longint unsigned live_last_ps = 0;
+  // SRAM marks (snax_sram_probe): the number of marks accepted so far, the slot of the last
+  // one, and the slot the next must carry. Every probe instance prints a snapshot of its
+  // counters when sram_mark_seq moves.
+  int unsigned sram_mark_seq = 0;
+  int unsigned sram_mark_slot = 0;
+  int unsigned sram_mark_expect = 0;
   function automatic int unsigned fd();
     if (probe_fd == 0) probe_fd = $fopen("snax_probes.log", "w");
     return probe_fd;
   endfunction
+  // The scheduler monitor (snax_bingo_progress_probe) writes its own file. The handle is opened
+  // by the initializer, once at time 0, so threads of a parallel simulator cannot open it twice.
+  int unsigned bingo_fd = $fopen("bingo_progress.log", "w");
 endpackage
 
 // ---------------------------------------------------------------------------------------
@@ -145,6 +154,244 @@ bind bingo_hw_manager_top snax_taskq_probe u_snax_taskq_probe (
     .r_ready (task_queue_axi_lite_req_o.r_ready),
     .q_empty (task_queue_mbox_empty),
     .q_pop   (task_queue_mbox_pop)
+);
+
+// ---------------------------------------------------------------------------------------
+// bingo_hw_manager_top: WHICH TASK IS THE SCHEDULER AT, AND DOES THE WORKLOAD STILL MOVE?
+//
+// A task's life is decided in the manager's queues, so the queues say where a workload is:
+//   F  fetched   the descriptor left the task list for its core's waiting queue (program order)
+//   R  released  its dependencies passed: it entered the checkout queue and, unless it is a
+//                dummy, the core's ready queue
+//   S  started   the core took it from the ready queue
+//   D  done      the core wrote its completion into the done queue
+// Nothing here depends on a core's instruction trace, which goes quiet whenever a core parks
+// on a blocking read. A chiplet is complete when its whole list is fetched and every queue is
+// empty. Task types: 0 normal, 1 dummy, 2 gating.
+//
+// Output goes to bingo_progress.log, one flushed line per record:
+//   [BINGO ARM]     the list fetch started (epoch, list length)
+//   [BINGO EV]      one task event (omitted with +bingo_quiet)
+//   [BINGO PROG]    counters and the queues of every cell with work, every ProgCyc cycles, also
+//                   while idle (+bingo_prog_cyc=N overrides); its time is the simulation clock
+//   [BINGO STALL]   no event for StallCyc cycles while work is outstanding (+bingo_stall_cyc=N)
+//   [BINGO CMPL]    the list is fully drained
+//   [BINGO ANOMALY] a queue push the FIFO accounting does not allow: a task pushed into the
+//                   checkout queue without its ready-queue push in the same cycle, the reverse,
+//                   or a done entry for a task that was never started
+//   [BINGO FINAL]   the counters at the end of the simulation
+// A cell is one (core, cluster); the printed queue fields are w waiting, r ready, c checkout
+// (count@head task id) and x tasks started and not done.
+// ---------------------------------------------------------------------------------------
+module snax_bingo_progress_probe #(
+    parameter int unsigned NC        = 4,
+    parameter int unsigned NCL       = 2,
+    parameter int unsigned CW        = 8,
+    parameter int unsigned ProgCyc   = 2000,
+    parameter int unsigned StallCyc  = 20000,
+    parameter type         task_desc_t  = logic,
+    parameter type         ready_desc_t = logic,
+    parameter type         done_info_t  = logic
+) (
+    input logic                           clk_i,
+    input logic                           rst_ni,
+    input logic [CW-1:0]                  chip_id_i,
+    input logic [31:0]                    num_task_i,
+    input logic                           list_ar_hs,
+    input logic                           fetch_pop,
+    input task_desc_t                     fetch_desc,
+    input task_desc_t  [NC-1:0][NCL-1:0]  wq_desc,
+    input logic        [NC-1:0][NCL-1:0]  wq_push,
+    input logic        [NC-1:0][NCL-1:0]  wq_pop,
+    input task_desc_t  [NC-1:0][NCL-1:0]  ck_desc,
+    input logic        [NC-1:0][NCL-1:0]  ck_push,
+    input logic        [NC-1:0][NCL-1:0]  ck_pop,
+    input logic        [NC-1:0][NCL-1:0]  rq_push,
+    input logic        [NC-1:0][NCL-1:0]  rq_drop,
+    input logic        [NC-1:0][NCL-1:0]  rq_pop,
+    input ready_desc_t [NC-1:0][NCL-1:0]  rq_desc,
+    input logic        [NC-1:0][NCL-1:0]  dq_push,
+    input done_info_t  [NC-1:0][NCL-1:0]  dq_in
+);
+
+  localparam int unsigned MaxAnomalyLines = 16;
+
+  int     wq_n [NC][NCL];
+  int     ck_n [NC][NCL];
+  int     rq_n [NC][NCL];
+  int     st_n [NC][NCL];
+  int     dn_n [NC][NCL];
+  longint cyc, last_ev_cyc, nlist;
+  longint fetched, released, started, done_c;
+  int     epoch, anomalies, occ;
+  bit     armed, stall_rpt, ev_en;
+  int     prog_cyc, stall_cyc;
+
+  initial begin
+    prog_cyc  = ProgCyc;
+    stall_cyc = StallCyc;
+    ev_en     = !$test$plusargs("bingo_quiet");
+    void'($value$plusargs("bingo_prog_cyc=%d", prog_cyc));
+    void'($value$plusargs("bingo_stall_cyc=%d", stall_cyc));
+    if (prog_cyc < 1) prog_cyc = 1;
+  end
+
+  task automatic ev(input string e, input int cl, input int co, input int id, input int ty);
+    last_ev_cyc = cyc;
+    stall_rpt   = 0;
+    if (ev_en) begin
+      $fdisplay(snax_probe_pkg::bingo_fd, "[BINGO EV] t=%0t chip=%02x cl=%0d co=%0d ev=%s id=%0d ty=%0d",
+                $time, chip_id_i, cl, co, e, id, ty);
+      $fflush(snax_probe_pkg::bingo_fd);
+    end
+  endtask
+
+  task automatic anomaly(input string what, input int cl, input int co);
+    anomalies = anomalies + 1;
+    if (anomalies <= MaxAnomalyLines) begin
+      $fdisplay(snax_probe_pkg::bingo_fd, "[BINGO ANOMALY] t=%0t chip=%02x cl=%0d co=%0d what=%s w=%0d r=%0d c=%0d x=%0d",
+                $time, chip_id_i, cl, co, what, wq_n[co][cl], rq_n[co][cl], ck_n[co][cl], st_n[co][cl] - dn_n[co][cl]);
+      $fflush(snax_probe_pkg::bingo_fd);
+    end
+  endtask
+
+  // The cells that hold work, as " cl.co:w2@id,r1@id,c3@id,x1"; "-" where a queue is empty.
+  function automatic string cells();
+    string s, w, r, c;
+    s = "";
+    for (int co = 0; co < NC; co++) begin
+      for (int cl = 0; cl < NCL; cl++) begin
+        if (wq_n[co][cl] + rq_n[co][cl] + ck_n[co][cl] + st_n[co][cl] - dn_n[co][cl] > 0) begin
+          w = (wq_n[co][cl] > 0) ? $sformatf("%0d", wq_desc[co][cl].task_id) : "-";
+          r = (rq_n[co][cl] > 0) ? $sformatf("%0d", rq_desc[co][cl].task_id) : "-";
+          c = (ck_n[co][cl] > 0) ? $sformatf("%0d", ck_desc[co][cl].task_id) : "-";
+          s = {s, $sformatf(" %0d.%0d:w%0d@%s,r%0d@%s,c%0d@%s,x%0d", cl, co,
+                            wq_n[co][cl], w, rq_n[co][cl], r, ck_n[co][cl], c, st_n[co][cl] - dn_n[co][cl])};
+        end
+      end
+    end
+    return s;
+  endfunction
+
+  function automatic string counters();
+    return $sformatf("chip=%02x t=%0t ep=%0d armed=%0d fetch=%0d/%0d rel=%0d start=%0d done=%0d quiet=%0d anom=%0d",
+                     chip_id_i, $time, epoch, armed, fetched, nlist, released, started, done_c,
+                     armed ? cyc - last_ev_cyc : 0, anomalies);
+  endfunction
+
+  always @(posedge clk_i) begin
+    if (!rst_ni) begin
+      cyc = 0; last_ev_cyc = 0; nlist = 0; fetched = 0; released = 0; started = 0; done_c = 0;
+      epoch = 0; anomalies = 0; armed = 0; stall_rpt = 0;
+      for (int co = 0; co < NC; co++) begin
+        for (int cl = 0; cl < NCL; cl++) begin
+          wq_n[co][cl] = 0; ck_n[co][cl] = 0; rq_n[co][cl] = 0; st_n[co][cl] = 0; dn_n[co][cl] = 0;
+        end
+      end
+    end else begin
+      cyc = cyc + 1;
+
+      // A new list: the first read of the descriptor list after reset or after the last list drained.
+      if (list_ar_hs && !armed) begin
+        armed = 1; epoch = epoch + 1; nlist = num_task_i;
+        fetched = 0; released = 0; started = 0; done_c = 0; last_ev_cyc = cyc; stall_rpt = 0;
+        $fdisplay(snax_probe_pkg::bingo_fd, "[BINGO ARM] t=%0t chip=%02x ep=%0d n_task=%0d",
+                  $time, chip_id_i, epoch, nlist);
+        $fflush(snax_probe_pkg::bingo_fd);
+      end
+
+      if (fetch_pop) begin
+        fetched = fetched + 1;
+        ev("F", int'(fetch_desc.assigned_cluster_id), int'(fetch_desc.assigned_core_id),
+           int'(fetch_desc.task_id), int'(fetch_desc.task_type));
+      end
+
+      for (int co = 0; co < NC; co++) begin
+        for (int cl = 0; cl < NCL; cl++) begin
+          if (wq_push[co][cl]) wq_n[co][cl] = wq_n[co][cl] + 1;
+          if (ck_push[co][cl]) begin
+            released = released + 1;
+            ev("R", cl, co, int'(wq_desc[co][cl].task_id), int'(wq_desc[co][cl].task_type));
+            if (!rq_drop[co][cl] && !rq_push[co][cl]) anomaly("checkout_push_without_ready_push", cl, co);
+            ck_n[co][cl] = ck_n[co][cl] + 1;
+          end
+          if (rq_push[co][cl]) begin
+            if (!ck_push[co][cl]) anomaly("ready_push_without_checkout_push", cl, co);
+            rq_n[co][cl] = rq_n[co][cl] + 1;
+          end
+          if (rq_pop[co][cl]) begin
+            started = started + 1;
+            ev("S", cl, co, int'(rq_desc[co][cl].task_id), 0);
+            rq_n[co][cl] = rq_n[co][cl] - 1;
+            st_n[co][cl] = st_n[co][cl] + 1;
+          end
+          if (dq_push[co][cl]) begin
+            done_c = done_c + 1;
+            ev("D", cl, co, int'(dq_in[co][cl].task_id), 0);
+            dn_n[co][cl] = dn_n[co][cl] + 1;
+            if (dn_n[co][cl] > st_n[co][cl]) anomaly("done_without_start", cl, co);
+          end
+          if (ck_pop[co][cl]) ck_n[co][cl] = ck_n[co][cl] - 1;
+          if (wq_pop[co][cl]) wq_n[co][cl] = wq_n[co][cl] - 1;
+        end
+      end
+
+      occ = 0;
+      for (int co = 0; co < NC; co++)
+        for (int cl = 0; cl < NCL; cl++)
+          occ = occ + wq_n[co][cl] + rq_n[co][cl] + ck_n[co][cl] + st_n[co][cl] - dn_n[co][cl];
+
+      if (armed && fetched >= nlist && occ == 0) begin
+        armed = 0;
+        $fdisplay(snax_probe_pkg::bingo_fd, "[BINGO CMPL] %s", counters());
+        $fflush(snax_probe_pkg::bingo_fd);
+      end
+
+      if (armed && !stall_rpt && (cyc - last_ev_cyc) >= stall_cyc) begin
+        stall_rpt = 1;
+        $fdisplay(snax_probe_pkg::bingo_fd, "[BINGO STALL] %s |%s", counters(), cells());
+        $fflush(snax_probe_pkg::bingo_fd);
+      end
+
+      if ((cyc % prog_cyc) == 0) begin
+        $fdisplay(snax_probe_pkg::bingo_fd, "[BINGO PROG] %s |%s", counters(), cells());
+        $fflush(snax_probe_pkg::bingo_fd);
+      end
+    end
+  end
+
+  final begin
+    $fdisplay(snax_probe_pkg::bingo_fd, "[BINGO FINAL] %s |%s", counters(), cells());
+    $fflush(snax_probe_pkg::bingo_fd);
+  end
+
+endmodule
+
+bind bingo_hw_manager_top snax_bingo_progress_probe #(
+    .NC(NUM_CORES_PER_CLUSTER), .NCL(NUM_CLUSTERS_PER_CHIPLET), .CW(ChipIdWidth),
+    .task_desc_t (bingo_hw_manager_task_desc_t),
+    .ready_desc_t(bingo_hw_manager_ready_task_desc_full_t),
+    .done_info_t (bingo_hw_manager_done_info_full_t)
+) u_snax_bingo_progress_probe (
+    .clk_i      (clk_i),
+    .rst_ni     (rst_ni),
+    .chip_id_i  (chip_id_i),
+    .num_task_i (num_task_i),
+    .list_ar_hs (task_queue_axi_lite_req_o.ar_valid & task_queue_axi_lite_resp_i.ar_ready),
+    .fetch_pop  (task_queue_mbox_pop),
+    .fetch_desc (cur_task_desc),
+    .wq_desc    (waiting_dep_check_task_desc),
+    .wq_push    (waiting_dep_check_queue_push),
+    .wq_pop     (waiting_dep_check_queue_pop),
+    .ck_desc    (checkout_queue_data_out),
+    .ck_push    (checkout_queue_push),
+    .ck_pop     (checkout_queue_pop),
+    .rq_push    (ready_queue_push),
+    .rq_drop    (ready_queue_filter_drop),
+    .rq_pop     (ready_queue_pop),
+    .rq_desc    (ready_queue_data_out),
+    .dq_push    (done_q_push),
+    .dq_in      (done_q_data_in)
 );
 
 // ---------------------------------------------------------------------------------------
@@ -547,6 +794,142 @@ bind SpatialArray snax_array_probe u_snax_array_probe (
 // expiry it prints the traffic census and finishes, so the `final` blocks of every other
 // probe run too -- a stalled run then yields the same data a healthy one does.
 // ---------------------------------------------------------------------------------------
+// snax_tcdm_xprobe: names the first input of a cluster's narrow TCDM interconnect that presents a
+// request whose valid is not 0 and whose control (address, write, atomic op, valid; the strobe of a
+// write) contains X. The data of a read and its strobe are don't-care and are not checked. The
+// inputs are {axi_soc, cores, snax ports}; in the split cluster the snax ports are 0-39
+// VersaCore, 40-55 SIMD, 56-71 xDMA, then core 0, 1, 2, 3 and the SoC port. One report per
+// interconnect, to the probe log and to the transcript.
+module snax_tcdm_xprobe #(
+    parameter int unsigned NumInp = 1,
+    parameter type         req_t  = logic
+) (
+    input logic              clk_i,
+    input logic              rst_ni,
+    input req_t [NumInp-1:0] req_i
+);
+  bit reported;
+  always @(posedge clk_i) begin
+    if (rst_ni && !reported) begin
+      for (int i = 0; i < NumInp; i++) begin
+        if (req_i[i].q_valid !== 1'b0 &&
+            ($isunknown({req_i[i].q.addr, req_i[i].q.write, req_i[i].q.amo, req_i[i].q_valid}) ||
+             (req_i[i].q.write !== 1'b0 && $isunknown(req_i[i].q.strb)))) begin
+          reported = 1;
+          $display("[TCDM-X] %m @%0t input %0d of %0d valid=%b write=%b amo=%h addr=%h strb=%h user=%h",
+                   $time, i, NumInp, req_i[i].q_valid, req_i[i].q.write, req_i[i].q.amo,
+                   req_i[i].q.addr, req_i[i].q.strb, req_i[i].q.user);
+          $fflush(snax_probe_pkg::fd());
+          $fdisplay(snax_probe_pkg::fd(),
+                    "[TCDM-X] %m @%0t input %0d of %0d valid=%b write=%b amo=%h addr=%h strb=%h user=%h",
+                    $time, i, NumInp, req_i[i].q_valid, req_i[i].q.write, req_i[i].q.amo,
+                    req_i[i].q.addr, req_i[i].q.strb, req_i[i].q.user);
+          $fflush(snax_probe_pkg::fd());
+          break;
+        end
+      end
+    end
+  end
+endmodule
+
+bind snitch_tcdm_interconnect snax_tcdm_xprobe #(
+    .NumInp(NumInp), .req_t(tcdm_req_t)
+) u_snax_tcdm_xprobe (.clk_i(clk_i), .rst_ni(rst_ni), .req_i(req_i));
+
+// snax_tcdm_level_xprobe: names the first input of a cluster's TCDM arbitration-level logic whose
+// level is X while its valid is not 0, with what the level is made of: the input's urgency (its
+// requester's tcdm_priority), override and age, and the cluster's urgency and guard enables. The
+// input order is the narrow interconnect's (snax ports, cores, SoC). One report per instance.
+module snax_tcdm_level_xprobe #(
+    parameter int unsigned NumInp     = 1,
+    parameter int unsigned LevelWidth = 3
+) (
+    input logic                                  clk_i,
+    input logic                                  rst_ni,
+    input logic [NumInp-1:0]                     valid_i,
+    input logic [NumInp-1:0]                     ready_i,
+    input logic [NumInp-1:0][1:0]                urgency_i,
+    input logic                                  urgency_en_i,
+    input logic                                  guard_en_i,
+    input logic [7:0]                            guard_threshold_i,
+    input logic [NumInp-1:0]                     override_en_i,
+    input logic [NumInp-1:0][LevelWidth-1:0]     override_level_i,
+    input logic [NumInp-1:0][LevelWidth-1:0]     level_o,
+    input logic [NumInp-1:0][7:0]                age_q
+);
+  bit reported;
+  always @(posedge clk_i) begin
+    if (rst_ni && !reported) begin
+      for (int i = 0; i < NumInp; i++) begin
+        if (valid_i[i] !== 1'b0 && $isunknown(level_o[i])) begin
+          reported = 1;
+          $display("[TCDM-LEVEL-X] %m @%0t input %0d of %0d valid=%b ready=%b urgency=%b urgency_en=%b guard_en=%b threshold=%h override_en=%b override_level=%b age=%h level=%b",
+                   $time, i, NumInp, valid_i[i], ready_i[i], urgency_i[i], urgency_en_i, guard_en_i,
+                   guard_threshold_i, override_en_i[i], override_level_i[i], age_q[i], level_o[i]);
+          $fflush(snax_probe_pkg::fd());
+          $fdisplay(snax_probe_pkg::fd(), "[TCDM-LEVEL-X] %m @%0t input %0d of %0d valid=%b ready=%b urgency=%b urgency_en=%b guard_en=%b threshold=%h override_en=%b override_level=%b age=%h level=%b",
+                    $time, i, NumInp, valid_i[i], ready_i[i], urgency_i[i], urgency_en_i, guard_en_i,
+                    guard_threshold_i, override_en_i[i], override_level_i[i], age_q[i], level_o[i]);
+          $fflush(snax_probe_pkg::fd());
+          break;
+        end
+      end
+    end
+  end
+endmodule
+
+bind snitch_tcdm_arb_level snax_tcdm_level_xprobe #(
+    .NumInp(NumInp), .LevelWidth(LevelWidth)
+) u_snax_tcdm_level_xprobe (
+    .clk_i(clk_i), .rst_ni(rst_ni), .valid_i(valid_i), .ready_i(ready_i), .urgency_i(urgency_i),
+    .urgency_en_i(urgency_en_i), .guard_en_i(guard_en_i), .guard_threshold_i(guard_threshold_i),
+    .override_en_i(override_en_i), .override_level_i(override_level_i), .level_o(level_o),
+    .age_q(age_q)
+);
+
+// snax_tcdm_bank_xprobe: inside a cluster's logarithmic TCDM crossbar, names the first bank whose
+// arbiter request (arb_req) contains X, or whose ready or chosen index is X while it has a request, with what it is made of: the bank's lock (valid and not
+// ready the cycle before) and remembered winner, its requests and eligible requests, the level it
+// serves, and the bank's valid and ready. One report per crossbar.
+module snax_tcdm_bank_xprobe #(
+    parameter int unsigned NumOut = 1,
+    parameter bit          IsLog  = 1'b0
+) (
+    input logic              clk_i,
+    input logic              rst_ni,
+    input logic [NumOut-1:0] mem_valid_i,
+    input logic [NumOut-1:0] mem_ready_i
+);
+  if (IsLog) begin : gen_log
+    bit reported;
+    for (genvar b = 0; b < NumOut; b++) begin : gen_bank
+      always @(posedge clk_i) begin
+        if (rst_ni && !reported && ($isunknown(gen_xbar.gen_bank[b].arb_req) ||
+            (mem_valid_i[b] !== 1'b0 && ($isunknown(mem_ready_i[b]) || $isunknown(gen_xbar.gen_bank[b].idx))))) begin
+          reported = 1;
+          $display("[TCDM-BANK-X] %m @%0t bank %0d idx=%0d lock_q=%b idx_q=%0d top=%0d present=%b mem_valid=%b mem_ready=%b req=%h elig=%h arb_req=%h",
+                   $time, b, gen_xbar.gen_bank[b].idx, gen_xbar.gen_bank[b].lock_q, gen_xbar.gen_bank[b].idx_q,
+                   gen_xbar.gen_bank[b].top, gen_xbar.gen_bank[b].present, mem_valid_i[b],
+                   mem_ready_i[b], gen_xbar.gen_bank[b].req, gen_xbar.gen_bank[b].elig,
+                   gen_xbar.gen_bank[b].arb_req);
+          $fflush(snax_probe_pkg::fd());
+          $fdisplay(snax_probe_pkg::fd(), "[TCDM-BANK-X] %m @%0t bank %0d idx=%0d lock_q=%b idx_q=%0d top=%0d present=%b mem_valid=%b mem_ready=%b req=%h elig=%h arb_req=%h",
+                    $time, b, gen_xbar.gen_bank[b].idx, gen_xbar.gen_bank[b].lock_q, gen_xbar.gen_bank[b].idx_q,
+                    gen_xbar.gen_bank[b].top, gen_xbar.gen_bank[b].present, mem_valid_i[b],
+                    mem_ready_i[b], gen_xbar.gen_bank[b].req, gen_xbar.gen_bank[b].elig,
+                    gen_xbar.gen_bank[b].arb_req);
+          $fflush(snax_probe_pkg::fd());
+        end
+      end
+    end
+  end
+endmodule
+
+bind snitch_tcdm_interconnect snax_tcdm_bank_xprobe #(
+    .NumOut(NumOut), .IsLog(Topology == snitch_pkg::LogarithmicInterconnect)
+) u_snax_tcdm_bank_xprobe (.clk_i(clk_i), .rst_ni(rst_ni), .mem_valid_i(mem_q_valid_flat),
+                           .mem_ready_i(mem_q_ready_flat));
+
 module snax_live_probe #(parameter int unsigned IdleTh = 200000) (
   input logic clk_i,
   input logic rst_ni,
@@ -635,6 +1018,14 @@ bind hemaia_hbm_model snax_live_probe_ports #(
     .NumPorts (NumPorts), .req_t (axi_req_t), .rsp_t (axi_rsp_t)
 ) u_snax_live_probe (
     .clk_i (clk_i), .rst_ni (rst_ni), .req_i (axi_req_i), .rsp_i (axi_rsp_o)
+);
+
+// A remote request that a chip's D2D framer hands to its own xbar counts too: a chip that pulls
+// partials out of other chips' L1 keeps the system running without touching L3 or HBM.
+bind hemaia_d2d_link_framer snax_live_probe u_snax_live_probe (
+    .clk_i (clk_i), .rst_ni (rst_ni),
+    .aw_valid (axi_out_req_o.aw_valid), .aw_ready (axi_out_rsp_i.aw_ready),
+    .ar_valid (axi_out_req_o.ar_valid), .ar_ready (axi_out_rsp_i.ar_ready)
 );
 
 // ---------------------------------------------------------------------------------------
@@ -1078,3 +1469,178 @@ bind hemaia_d2d_link_framer snax_d2dw_framer_probe #(.AW($bits(axi_out_req_o.ar.
   .own_ar_addr(axi_in_req_i.ar.addr), .own_ar_len(axi_in_req_i.ar.len),
   .own_r_v(axi_in_rsp_o.r_valid), .own_r_r(axi_in_req_i.r_ready), .own_r_last(axi_in_rsp_o.r.last)
 );
+
+// ---------------------------------------------------------------------------------------
+// snitch_data_mem: how many SRAM bank accesses does a piece of the program cost?
+//
+// Bound to every snitch_data_mem: each cluster's L1 (TCDM) and each chiplet's L3 bank array.
+// It counts bank reads and bank writes, one per enabled 64-bit bank per cycle. Software marks
+// points in the program with __snax_bingo_kernel_sync_mark: one 32-bit store of
+// 0x5A11_0000 | slot into chiplet 0x00's L1. The L1 probe of chiplet (0,0) recognises that store
+// when its slot is the next expected one, and every instance then prints its counters, so two
+// marks bracket the SRAM accesses of everything in between, on every chiplet.
+// ---------------------------------------------------------------------------------------
+module snax_sram_probe #(
+    parameter int unsigned N = 32,
+    parameter int unsigned W = 64
+) (
+    input logic                      clk_i,
+    input logic                      rst_ni,
+    input logic [N-1:0]              cs,
+    input logic [N-1:0]              wen,
+    input logic [N-1:0][W/8-1:0]     be,
+    input logic [N-1:0][W-1:0]       wdata
+);
+  longint unsigned rd, wr;
+  int unsigned     seen;
+  bit              is_mark_src;
+  string           path;
+
+  function automatic bit has(string s, string sub);
+    for (int i = 0; i + sub.len() <= s.len(); i++) if (s.substr(i, i + sub.len() - 1) == sub) return 1;
+    return 0;
+  endfunction
+
+  initial begin
+    path        = $sformatf("%m");
+    is_mark_src = has(path, "i_hemaia_0_0.") && has(path, "i_snitch_data_mem");
+    rd = 0; wr = 0; seen = 0;
+  end
+
+  always @(posedge clk_i) begin
+    if (rst_ni) begin
+      rd = rd + $countones(cs & ~wen);
+      wr = wr + $countones(cs & wen);
+      if (is_mark_src) begin
+        for (int i = 0; i < N; i++) begin
+          if (cs[i] && wen[i]) begin
+            for (int h = 0; h < W / 32; h++) begin
+              if (be[i][h*4 +: 4] == 4'hF && wdata[i][h*32+16 +: 16] == 16'h5A11 &&
+                  int'(wdata[i][h*32 +: 16]) == int'(snax_probe_pkg::sram_mark_expect)) begin
+                snax_probe_pkg::sram_mark_slot   = wdata[i][h*32 +: 16];
+                snax_probe_pkg::sram_mark_expect = snax_probe_pkg::sram_mark_slot + 1;
+                snax_probe_pkg::sram_mark_seq    = snax_probe_pkg::sram_mark_seq + 1;
+              end
+            end
+          end
+        end
+      end
+      if (seen != snax_probe_pkg::sram_mark_seq) begin
+        seen = snax_probe_pkg::sram_mark_seq;
+        $fdisplay(snax_probe_pkg::fd(), "[SRAM mark] slot=%0d t=%0t %m rd=%0d wr=%0d",
+                  snax_probe_pkg::sram_mark_slot, $time, rd, wr);
+        $fflush(snax_probe_pkg::fd());
+      end
+    end
+  end
+
+  final begin
+    $fdisplay(snax_probe_pkg::fd(), "[SRAM final] %m rd=%0d wr=%0d", rd, wr);
+    $fflush(snax_probe_pkg::fd());
+  end
+
+endmodule
+
+bind snitch_data_mem snax_sram_probe #(.N(NumTotalBanks), .W(NarrowDataWidth)) u_snax_sram_probe (
+    .clk_i (clk_i),
+    .rst_ni(rst_ni),
+    .cs    (mem_cs_i),
+    .wen   (mem_wen_i),
+    .be    (mem_be_i),
+    .wdata (mem_wdata_i)
+);
+
+// ---------------------------------------------------------------------------------------------
+// snax_axi_stall_probe: one AXI link that has work pending and has not moved for StallTh cycles.
+// Pending = a write (AW accepted, B not yet back), a read (AR accepted, last R not yet back), or
+// a valid offered and not taken on any channel. Moved = a handshake on any of the five channels.
+// A hung system leaves a chain of such links, from the master that issued the transaction to the
+// slave that does not answer; each reports once when it crosses the threshold, and again if it
+// moves and stops anew, so the first lines name where the transaction stopped and the order says
+// who waits for whom. The log is flushed at once: a hang never reaches `final`.
+// ---------------------------------------------------------------------------------------------
+module snax_axi_stall_probe #(
+  parameter type req_t = logic, parameter type resp_t = logic,
+  parameter int unsigned StallTh = 20000
+) (
+  input logic clk_i, input logic rst_ni, input req_t req_i, input resp_t resp_i
+);
+  int unsigned aw_n, b_n, ar_n, rl_n, idle;
+  bit reported;
+  wire aw_hs = req_i.aw_valid  & resp_i.aw_ready;
+  wire w_hs  = req_i.w_valid   & resp_i.w_ready;
+  wire b_hs  = resp_i.b_valid  & req_i.b_ready;
+  wire ar_hs = req_i.ar_valid  & resp_i.ar_ready;
+  wire r_hs  = resp_i.r_valid  & req_i.r_ready;
+  wire rl_hs = r_hs & resp_i.r.last;
+  wire moved = aw_hs | w_hs | b_hs | ar_hs | r_hs;
+  wire offered = req_i.aw_valid | req_i.w_valid | req_i.ar_valid | resp_i.b_valid | resp_i.r_valid;
+  wire pending = (aw_n != b_n) | (ar_n != rl_n) | offered;
+  always @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      aw_n <= 0; b_n <= 0; ar_n <= 0; rl_n <= 0; idle <= 0; reported <= 0;
+    end else begin
+      aw_n <= aw_n + aw_hs;
+      b_n  <= b_n + b_hs;
+      ar_n <= ar_n + ar_hs;
+      rl_n <= rl_n + rl_hs;
+      if (moved || !pending) begin
+        idle <= 0;
+        reported <= 0;
+      end else begin
+        idle <= idle + 1;
+        if (idle == StallTh && !reported) begin
+          reported <= 1;
+          $fdisplay(snax_probe_pkg::fd(),
+                    "[AXI-STALL] %m @%0t writes out %0d, reads out %0d | aw %0d/%0d w %0d/%0d b %0d/%0d ar %0d/%0d r %0d/%0d",
+                    $time, aw_n - b_n, ar_n - rl_n,
+                    req_i.aw_valid, resp_i.aw_ready, req_i.w_valid, resp_i.w_ready,
+                    resp_i.b_valid, req_i.b_ready, req_i.ar_valid, resp_i.ar_ready,
+                    resp_i.r_valid, req_i.r_ready);
+          $fflush(snax_probe_pkg::fd());
+        end
+      end
+    end
+  end
+endmodule
+
+module snax_axi_xbar_stall_probe #(
+  parameter int unsigned NSlv = 1, parameter int unsigned NMst = 1,
+  parameter type slv_req_t = logic, parameter type slv_resp_t = logic,
+  parameter type mst_req_t = logic, parameter type mst_resp_t = logic
+) (
+  input logic clk_i, input logic rst_ni,
+  input slv_req_t [NSlv-1:0] sreq, input slv_resp_t [NSlv-1:0] srsp,
+  input mst_req_t [NMst-1:0] mreq, input mst_resp_t [NMst-1:0] mrsp
+);
+  for (genvar i = 0; i < NSlv; i++) begin : g_slv
+    snax_axi_stall_probe #(.req_t(slv_req_t), .resp_t(slv_resp_t)) u_p (
+      .clk_i(clk_i), .rst_ni(rst_ni), .req_i(sreq[i]), .resp_i(srsp[i]));
+  end
+  for (genvar o = 0; o < NMst; o++) begin : g_mst
+    snax_axi_stall_probe #(.req_t(mst_req_t), .resp_t(mst_resp_t)) u_p (
+      .clk_i(clk_i), .rst_ni(rst_ni), .req_i(mreq[o]), .resp_i(mrsp[o]));
+  end
+endmodule
+
+bind axi_xbar snax_axi_xbar_stall_probe #(
+  .NSlv(Cfg.NoSlvPorts), .NMst(Cfg.NoMstPorts),
+  .slv_req_t(slv_req_t), .slv_resp_t(slv_resp_t), .mst_req_t(mst_req_t), .mst_resp_t(mst_resp_t)
+) u_snax_axi_xbar_stall_probe (
+  .clk_i(clk_i), .rst_ni(rst_ni),
+  .sreq(slv_ports_req_i), .srsp(slv_ports_resp_o), .mreq(mst_ports_req_o), .mrsp(mst_ports_resp_i));
+
+bind axi_id_remap snax_axi_stall_probe #(.req_t(slv_req_t), .resp_t(slv_resp_t)) u_snax_axi_stall_probe (
+  .clk_i(clk_i), .rst_ni(rst_ni), .req_i(slv_req_i), .resp_i(slv_resp_o));
+bind axi_dw_converter snax_axi_stall_probe #(.req_t(axi_slv_req_t), .resp_t(axi_slv_resp_t)) u_snax_axi_stall_probe (
+  .clk_i(clk_i), .rst_ni(rst_ni), .req_i(slv_req_i), .resp_i(slv_resp_o));
+bind axi_atop_filter snax_axi_stall_probe #(.req_t(axi_req_t), .resp_t(axi_resp_t)) u_snax_axi_stall_probe (
+  .clk_i(clk_i), .rst_ni(rst_ni), .req_i(slv_req_i), .resp_i(slv_resp_o));
+bind axi_to_mem_split snax_axi_stall_probe #(.req_t(axi_req_t), .resp_t(axi_resp_t)) u_snax_axi_stall_probe (
+  .clk_i(clk_i), .rst_ni(rst_ni), .req_i(axi_req_i), .resp_i(axi_resp_o));
+bind axi_to_mem_interleaved snax_axi_stall_probe #(.req_t(axi_req_t), .resp_t(axi_resp_t)) u_snax_axi_stall_probe (
+  .clk_i(clk_i), .rst_ni(rst_ni), .req_i(axi_req_i), .resp_i(axi_resp_o));
+bind hemaia_d2d_link_framer snax_axi_stall_probe #(.req_t(axi_req_t), .resp_t(axi_rsp_t)) u_snax_axi_in_stall_probe (
+  .clk_i(clk_i), .rst_ni(rst_ni), .req_i(axi_in_req_i), .resp_i(axi_in_rsp_o));
+bind hemaia_d2d_link_framer snax_axi_stall_probe #(.req_t(axi_req_t), .resp_t(axi_rsp_t)) u_snax_axi_out_stall_probe (
+  .clk_i(clk_i), .rst_ni(rst_ni), .req_i(axi_out_req_o), .resp_i(axi_out_rsp_i));

@@ -81,3 +81,39 @@
 !/test/0_start_single_chiplet_sim.py
 !/test/1_start_multi_chiplet_sim.py
 !/test/2_start_tapeout_sim.py
+
+# The ISCA isolated-experiment sweeps: hsweep (sweep/common) and one directory per experiment.
+# Scripts, point files and READMEs are kept; runs, builds, events, results and figures stay
+# ignored.
+!/sweep/common/
+/sweep/common/*
+!/sweep/common/hsweep.py
+!/sweep/common/launch.sh
+!/sweep/common/watch.sh
+!/sweep/common/watchdog.sh
+!/sweep/common/sim_watchdog.py
+!/sweep/common/sim_watchdog.profiles.json
+!/sweep/common/test_sim_watchdog.py
+!/sweep/common/README.md
+!/sweep/common/weights/
+/sweep/common/weights/cache/
+!/sweep/collective/
+!/sweep/sync/
+!/sweep/ffn/
+!/sweep/l2_moe/
+!/sweep/l2_fa/
+/sweep/collective/runs/
+/sweep/ffn/runs/
+/sweep/ffn/cache/
+/sweep/l2_moe/runs/
+/sweep/l2_fa/runs/
+/sweep/l2_fa/cache/
+/sweep/*/__pycache__/
+/sweep/*/results/
+/sweep/*/figs/
+/sweep/collective/old/
+/sweep/sync/runs/
+# the FFN sweep's run logs, and the podman / python shims of one machine
+/sweep/ffn/PROGRESS.md
+/sweep/ffn/HANDOFF.md
+/sweep/ffn/tools/bin/

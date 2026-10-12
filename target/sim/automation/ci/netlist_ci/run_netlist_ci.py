@@ -214,7 +214,7 @@ def main() -> None:
         with_d2d=True,
         with_pll=True,
         max_jobs=args.max_sim_jobs,
-        vcs_sim_cores_per_job=args.vcs_cores_per_job,
+        fgp_threads=args.vcs_cores_per_job - 1,
         build_sw_fleet=False,
         task_yaml=task_yaml,
         fail_on_task_failure=True,

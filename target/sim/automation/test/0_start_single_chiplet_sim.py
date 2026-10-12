@@ -69,6 +69,8 @@ def main() -> None:
         output_dir=_SCRIPT.parent,
         engine=args.engine,
         with_waveform=bool(args.waveform),
+        fgp_threads=args.fgp_threads,
+        assert_maxfail=args.assert_maxfail,
         cfg="target/rtl/cfg/hemaia_singlechiplet_16MB_1cluster.hjson",
         sim_cfg="target/sim/cfg/sim_rtl.hjson",
         # Single chiplet needs none of the private vendor modules.
