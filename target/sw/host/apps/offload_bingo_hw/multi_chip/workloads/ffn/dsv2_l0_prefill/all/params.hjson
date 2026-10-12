@@ -1,0 +1,53 @@
+// DeepSeek-V2-Lite FFN layer 0, 128-token prefill on 16 + 4 chiplets, variant all with mapping single_pass: every
+// weight chunk used for all 128 rows as it streams in (8 row tiles a GEMM, weights loaded into L1 once), the down
+// output reduced in 256-column slices; X multicast in 4 row blocks, the first gate|up chunk run per block (x_blocks); each store created one slice later (store_lag); a GEMM repeating the previous configuration runs as gemm_minimal (gemm_reuse); reshape + quantise in 4 row blocks (post_blocks) (fold, ChainGather, store) under the next slice. The root chip's clusters take the smaller column share (root_light); the first gate|up chunk two gate blocks wide (first_blocks); each cluster's first 4 weight chunks pushed one by one (weight_ring head, batch_head). The last gate|up chunk one GEMM per post block, its post-processing interleaved (split_last); the symmetric buffers not zeroed before the start, so the L1 plan lays them over X (sym_zero false); each chip's down projection split by output columns between its two clusters, so no partial is folded inside a chip and the gathers alternate between the clusters' xDMAs (dn_split cols); each cluster's first down slice one GEMM per post block, behind that block's A8 rows (split_first_dn); the columns split in 16-column units (col_unit) and cluster 0's share of the outputs moved so the busiest cluster has the fewest array steps (dn_balance); the root chip's clusters a block or two lighter than the busiest (root_cols); cluster 1's gathers run the ring the other way (chain_alt); the first down chunk's load ahead of the A8 copies (dn_load_early); dep-tag relays on the SIMD cores first (relay_on_simd); the first gather waits only for the copies into its own cluster, through the down GEMMs (first_gather_waits_copies false); each gather's dep-tag relays serve that gather alone (relay_per_gather); INT4 weights in the paired layout, read 64 bytes a pass (w4_paired). ../../common/ffn_prefill_mc.py.
+{
+  num_chiplets: 16
+  num_clusters: 2
+  model: dsv2-lite-l0
+  seed: 1
+  tokens: 128
+  rows: 128
+  wbits: 4
+  blocks: 3
+  dn_cols: 256
+  w_chunk_bytes: 114688
+  w_buffers: 2
+  x_buffers: 1
+  weight_ring:
+  {
+    slots: 16
+    batch: 4
+    policy: 1
+    head: 4
+    batch_head: 1
+  }
+  weight_crest: false
+  bcast: bcast_l1
+  reduce: chain
+  sync: edge
+  static_l1: true
+  l1_capacity: 990000
+  d2d_ddr: true
+  mapping: single_pass
+  deq_per_row: true
+  x_blocks: 4
+  store_lag: 1
+  gemm_reuse: true
+  post_blocks: 4
+  root_light: true
+  first_blocks: 2
+  split_last: true
+  sym_zero: false
+  dn_split: cols
+  split_first_dn: true
+  col_unit: 16
+  dn_balance: true
+  root_cols: [320, 304]
+  chain_alt: true
+  dn_load_early: true
+  relay_on_simd: true
+  first_gather_waits_copies: false
+  relay_per_gather: true
+  w4_paired: true
+}

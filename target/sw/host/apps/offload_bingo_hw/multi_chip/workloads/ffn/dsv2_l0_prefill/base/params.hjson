@@ -1,0 +1,34 @@
+// DeepSeek-V2-Lite's dense FFN (layer 0: 2048 -> 10944 -> 2048, SwiGLU) as a 128-token
+// prefill, 4 iterations of 32 rows on the (16, 4, 16) GEMM shape, INT4 weights, on
+// hemaia_16c4m_8MBL3_2cluster.
+// Variant base: X pulled by every cluster (iDMA); the partials loaded and folded by the root (iDMA load-all + local fold); bulk synchronous, the vanilla chip barrier fencing every core of a chip.
+// What each field does is in ../../common/ffn_prefill_mc.py.
+{
+  num_chiplets: 16
+  num_clusters: 2
+  model: dsv2-lite-l0
+  seed: 1
+  tokens: 128
+  rows: 32
+  wbits: 4
+  blocks: 3
+  dn_cols: 512
+  w_chunk_bytes: 114688
+  w_buffers: 2
+  x_buffers: 2
+  weight_ring:
+  {
+    slots: 12
+    batch: 4
+    policy: 1
+  }
+  weight_crest: false
+  bcast: pull
+  reduce: root
+  sync: barrier
+  barrier_mode: bcast
+  barrier_fence: true
+  static_l1: true
+  l1_capacity: 990000
+  d2d_ddr: true
+}

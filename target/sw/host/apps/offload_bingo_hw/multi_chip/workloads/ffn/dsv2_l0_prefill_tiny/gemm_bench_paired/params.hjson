@@ -1,0 +1,35 @@
+// GEMM shapes with INT4 B in the B-layout, INT4 B in the paired layout and INT8 B, alone on one cluster (common/gemm_bench_mc.py, bench_set paired).
+// A small debug version of the FFN prefill: layer 0's first 3072 intermediate columns (2048 -> 3072
+// -> 2048, two gate|up chunks a cluster), four iterations of 32 rows (128 tokens), INT4 weights, on
+// hemaia_16c4m_8MBL3_2cluster.
+// Variant all: X multicast into every chip's L3 by the D2D router; the partials folded in transit (xDMA ChainGather); per-edge BINGO hardware dependencies, software-pipelined.
+// What each field does is in ../../common/ffn_prefill_mc.py.
+{
+  num_chiplets: 16
+  num_clusters: 2
+  model: dsv2-lite-l0
+  seed: 1
+  tokens: 128
+  inter: 3072
+  rows: 32
+  wbits: 4
+  blocks: 3
+  dn_cols: 512
+  w_chunk_bytes: 114688
+  w_buffers: 2
+  x_buffers: 2
+  weight_ring:
+  {
+    slots: 12
+    batch: 4
+    policy: 1
+  }
+  weight_crest: false
+  bcast: bcast_l1
+  reduce: chain
+  sync: edge
+  static_l1: true
+  l1_capacity: 990000
+  d2d_ddr: true
+  bench_set: paired
+}
