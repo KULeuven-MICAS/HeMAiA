@@ -70,6 +70,40 @@ __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_sync_report_args {
     uint64_t scratchpad_ptr;
 } __host_bingo_kernel_sync_report_args_t;
 
+// Chip-barrier kernel args (host core of every participating chip).
+//   op 0: zero this chip's barrier state (both mechanisms' counters, the broadcast
+//         checkpoint array, the software arrival slots and release). Every chip runs it,
+//         ordered before any chip's first barrier.
+//   op 1: one 0xFF broadcast barrier over top_left..bottom_right (chip_barrier()).
+// seq: the barrier's 1-based index in the program (0: unchecked); the 8-bit checkpoint
+// must equal it modulo 256, and a mismatch prints a failed check.
+#define BINGO_CHIP_BARRIER_OP_INIT  0
+#define BINGO_CHIP_BARRIER_OP_BCAST 1
+__HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_chip_barrier_args {
+    uint64_t op;
+    uint64_t top_left;       // chip id of the rectangle's top-left corner
+    uint64_t bottom_right;   // chip id of the rectangle's bottom-right corner
+    uint64_t seq;
+    uint64_t scratchpad_ptr;
+} __host_bingo_kernel_chip_barrier_args_t;
+
+// Fold kernel args (host core): n_parts partials of part_bytes each, back to back at
+// src_addr, folded into dst_addr, one 64 B beat at a time.
+//   op 0 (TOPK):   per beat, 8 FP32 values in descending order at lanes 0..7 and their u32
+//                  indices at lanes 8..15; the result is the 8 largest pairs of the union.
+//   op 1 (MONOID): per beat, 8 query rows' online-softmax pair, m at lanes 0..7 and l at
+//                  lanes 8..15, FP32; the result is m* = max m, l* = sum l exp(m - m*).
+#define BINGO_HOST_FOLD_TOPK   0
+#define BINGO_HOST_FOLD_MONOID 1
+__HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_fold_args {
+    uint64_t op;
+    uint64_t src_addr;
+    uint64_t n_parts;
+    uint64_t part_bytes;   // a multiple of 64
+    uint64_t dst_addr;
+    uint64_t scratchpad_ptr;
+} __host_bingo_kernel_fold_args_t;
+
 __HOST_BINGO_KERNEL_ARGS_DEFINE __host_bingo_kernel_idma_args {
     uint64_t src_addr;
     uint64_t dst_addr;

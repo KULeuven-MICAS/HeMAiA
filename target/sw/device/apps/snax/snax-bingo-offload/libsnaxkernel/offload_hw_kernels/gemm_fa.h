@@ -103,8 +103,8 @@
 #define GEMM_FA_D_FP16     4u
 
 // The scaler's window: one enable word, then N (its csr 0), then 32 FP16 factors packed two
-// per CSR -- which is byte for byte a 64-byte FP16 beat, so the softmax's corr beat is copied
-// word for word. Any other count is a different extension and a different map.
+// per CSR, meshCol per column block -- byte for byte the softmax's corr beat(s), so they are
+// copied word for word. Any other count is a different extension and a different map.
 #if defined(READER_WRITER_EXTENSION_0_CSR_BASE) && READER_WRITER_EXTENSION_0_CSR_NUM == 18
 #define BINGO_GEMM_FA_HAS_COLSCALE 1
 #else
@@ -259,13 +259,28 @@ static uint32_t __bingo_gemm_fa_run(uint32_t A_addr, uint32_t B_addr, uint32_t C
     uint32_t Atb[T_BOUND_NUM_READER_0]  = { K, N, M, 1u, 1u, 1u };
     uint32_t Ats[T_STRIDE_NUM_READER_0] = { a_tile, 0u, K * a_tile, 0u, 0u, 0u };
     uint32_t Bsl[S_STRIDE_NUM_READER_1] = { bw / 8u };
-    uint32_t Btb[T_BOUND_NUM_READER_1]  = { K, N, M };
+    // B's reader declares three or six temporal dimensions depending on the cluster; the
+    // descriptor uses three and the rest are neutralised the same way (bound 1, stride 0).
+#if T_BOUND_NUM_READER_1 < 3 || T_STRIDE_NUM_READER_1 != T_BOUND_NUM_READER_1
+#error "the B walk needs at least three temporal loops, one stride per bound"
+#endif
+    uint32_t Btb[T_BOUND_NUM_READER_1];
+    uint32_t Bts[T_STRIDE_NUM_READER_1];
+    for (uint32_t i = 3; i < T_BOUND_NUM_READER_1; i++)
+    {
+        Btb[i] = 1u;
+        Bts[i] = 0u;
+    }
+    Btb[0] = K;
+    Btb[1] = N;
+    Btb[2] = M;
     // B's block order. n-major (block (k, n) at (n*K + k)*b_tile) is how a B operand is
     // normally stored; k-major is how the INTERLEAVE quantiser writes P. The bounds walk
     // k innermost either way -- only where each block is found changes.
     const uint32_t kmaj = (flags & GEMM_FA_B_KMAJOR) != 0u;
-    uint32_t Bts[T_STRIDE_NUM_READER_1] = { kmaj ? N * b_blk : b_blk,
-                                            kmaj ? b_blk : K * b_blk, 0u };
+    Bts[0] = kmaj ? N * b_blk : b_blk;
+    Bts[1] = kmaj ? b_blk : K * b_blk;
+    Bts[2] = 0u;
     uint32_t Csl[S_STRIDE_NUM_READER_WRITER_0] = { bw / 8u, key_row };
     uint32_t Ctb[T_BOUND_NUM_READER_WRITER_0]  = {
         BINGO_C_ELEM_LEN * meshRow * meshCol / serial, N, M };
@@ -338,6 +353,9 @@ static uint32_t __bingo_gemm_fa_run(uint32_t A_addr, uint32_t B_addr, uint32_t C
         csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 7, f[5]);
         csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 8, f[6]);
         csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 9, f[7]);
+        // The second column block's factors only when there is one: with N = 1 the corr
+        // beat is meshCol FP16 = 8 words, and the words after it are not corr.
+        if (N > 1u) {
         csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 10, f[8]);
         csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 11, f[9]);
         csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 12, f[10]);
@@ -346,6 +364,7 @@ static uint32_t __bingo_gemm_fa_run(uint32_t A_addr, uint32_t B_addr, uint32_t C
         csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 15, f[13]);
         csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 16, f[14]);
         csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 17, f[15]);
+        }
         csrw_ss(READER_WRITER_EXTENSION_0_CSR_BASE + 0, 1u);
     }
 #endif

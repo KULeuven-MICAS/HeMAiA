@@ -197,6 +197,34 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_sync_probe_args {
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_sync_probe_args_t;
 
+// Sync-mark kernel args: a sync probe that also stores BINGO_SYNC_MARK_MAGIC | slot to
+// mark_addr, a word in the task's own L1, which the testbench's SRAM probe recognises and
+// answers with a snapshot of every bank array's access counters. The magic's low 16 bits
+// carry the slot, and the probe accepts marks only with consecutive slots.
+#define BINGO_SYNC_MARK_MAGIC 0x5A110000u
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_sync_mark_args {
+  uint32_t stamp_buf;   // base of a uint32_t array on this chiplet, or 0 to skip stamping
+  uint32_t slot;        // index into that array; also the mark's sequence number
+  uint32_t mark_addr;   // an L1 word on this chiplet, or 0 to skip the mark
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_sync_mark_args_t;
+
+// Chip barrier args: one cross-chip barrier over the rectangle top_left..bottom_right, run
+// by ONE core of every participating chip (no cluster barrier inside).
+//   mode 0: point-to-point software barrier (sw_chip_barrier: arrivals to the top-left
+//           chip, which pushes the release back to every participant)
+//   mode 1: 0xFF broadcast barrier (one broadcast store, then a poll of the local array)
+// seq: the barrier's 1-based index in the program (0: unchecked). The mechanism's per-chip
+// counter must equal it after the barrier (the broadcast one modulo 256); a mismatch prints
+// a failed check.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_chip_barrier_args {
+  uint32_t mode;
+  uint32_t top_left;      // chip id of the rectangle's top-left corner
+  uint32_t bottom_right;  // chip id of the rectangle's bottom-right corner
+  uint32_t seq;
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_chip_barrier_args_t;
+
 __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_dummy_args {
   uint32_t dummy_input;            
   BINGO_KERNEL_ARGS_TRAILER;
@@ -263,6 +291,31 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_idma_fetch_flagged_args {
   uint32_t value;
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_idma_fetch_flagged_args_t;
+
+// BINGO IDMA put behind a landed flag: `size` bytes src -> dst, then the 4-byte `value` to flag.
+// bcast bit 0: dst and flag are local addresses, multicast over D2D 0xFF to every other chip;
+// bit 1: also written on this chip.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_idma_put_flagged_args {
+  uint32_t src_addr_hi;
+  uint32_t src_addr_lo;
+  uint32_t dst_addr_hi;
+  uint32_t dst_addr_lo;
+  uint32_t size;        // in Bytes
+  uint32_t flag_addr_hi;
+  uint32_t flag_addr_lo;
+  uint32_t value;       // the landed flag's value; also the flag write's source
+  uint32_t bcast;       // bit 0: multicast; bit 1: also here
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_idma_put_flagged_args_t;
+
+// Wait for landed flags: n_flags words, 64 B apart from flags_addr in this chip's L1, must hold
+// `value`.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_wait_flags_args {
+  uint32_t flags_addr;
+  uint32_t n_flags;
+  uint32_t value;
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_wait_flags_args_t;
 
 // BINGO IDMA strided copy, up to three dimensions: `outer` repetitions (src_outer /
 // dst_outer bytes apart) of `reps` runs of `size` bytes (src_stride / dst_stride apart).
@@ -352,8 +405,39 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_moe_route_args {
   uint32_t tokens;
   uint32_t p_pitch;
   uint32_t union_n;
+  // 0: candidate i is expert i. Otherwise n uint32 expert ids in this cluster's L1: candidate i
+  // is expert ids[i] (the router's candidates folded across chips, moe_router_pack mode 2).
+  uint32_t ids_addr;
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_moe_route_args_t;
+
+// One chip's share of a SHARDED router, and the root's view of the folded result
+// (offload_hw_kernels/moe_route.h, moe_router_pack). On the DM core; FP16 and FP32 handled as
+// bits, so no FPU is needed.
+//   mode 0  the chip's n FP16 logits at logits_addr -> a 32-lane row at row_addr, the other
+//           lanes -65504 (the input of simd_softmax_row, whose max and sum the fold needs)
+//   mode 1  its TopK beat at topk_addr (the n logits as FP32, descending, then their expert
+//           ids id_base + j; the other values -65504, ids 0xFFFFFFFF) and its Monoid beat at
+//           monoid_addr (lane 0 m, lane 8 l, as FP32: the softmax row's max beat at m_addr
+//           and sum beat at s_addr; the other rows m = -65504, l = 0), from the row at
+//           logits_addr
+//   mode 2  the root, after both folds: the folded TopK beat (topk_addr) and Monoid beat
+//           (monoid_addr) -> the 8 candidates' logits as an FP16 row at row_addr (the other
+//           lanes -65504), -m* splatted in the beat below it, l* rounded to FP16 and splatted
+//           at s_addr, and the candidates' expert ids, 8 uint32, at ids_addr
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_moe_router_pack_args {
+  uint32_t mode;
+  uint32_t logits_addr;
+  uint32_t row_addr;
+  uint32_t n;
+  uint32_t id_base;
+  uint32_t m_addr;
+  uint32_t s_addr;
+  uint32_t topk_addr;
+  uint32_t monoid_addr;
+  uint32_t ids_addr;
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_moe_router_pack_args_t;
 
 // BINGO IDMA Pairwise Swap (flat adjacent-element-pair swap: dst[i] = src[i^1]).
 // The data half of RoPE rotate_half; produced on-device via two strided iDMA copies.
@@ -695,7 +779,7 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_pack_fa_partial_args {
 // BINGO_XDMA_CHAIN_MAX bounds the chain in the ARG STRUCT only. The hardware bound is
 // XDMA_MAX_DST_COUNT (a generated, cfg-dependent define, not visible in this shared
 // host/device header); the kernel checks against it at call time.
-#define BINGO_XDMA_CHAIN_MAX 8
+#define BINGO_XDMA_CHAIN_MAX 16
 __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_xdma_chain_gather_args {
   uint32_t local_src_hi;
   uint32_t local_src_lo;
@@ -1108,6 +1192,19 @@ __SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_softmax_row_args {
   uint32_t beats;
   BINGO_KERNEL_ARGS_TRAILER;
 } __snax_bingo_kernel_simd_softmax_row_args_t;
+
+// The softmax row with its statistics GIVEN (a sharded router's root, after the TopK and
+// Monoid folds): -m splatted in x's latch beat (x_addr - 64) and s splatted at s_addr, both
+// written before; p = exp(x - m) * rsqrt(s * s). Three tasks: EW0 ADD|STICKY_B [-m][x] -> Map
+// EXP -> e; [s][s] EW0 MUL -> Map RSQRT -> 1/s in e's latch; EW1 MUL|STICKY_B [1/s][e] -> p.
+__SNAX_KERNEL_ARGS_DEFINE __snax_bingo_kernel_simd_softmax_row_ext_args {
+  uint32_t x_addr;
+  uint32_t s_addr;             // one beat
+  uint32_t e_addr;             // beats beats, a latch beat below
+  uint32_t p_addr;             // beats beats
+  uint32_t beats;
+  BINGO_KERNEL_ARGS_TRAILER;
+} __snax_bingo_kernel_simd_softmax_row_ext_args_t;
 
 // SwiGLU of one token into ROW 0 of the down GEMV's A operand: sg = SILU(gate), then
 // sat127(rne((sg * up) * inv)) written as simd_quant_a_row writes (16 * inter bytes, row 0

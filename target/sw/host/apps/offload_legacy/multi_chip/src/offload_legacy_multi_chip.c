@@ -26,6 +26,15 @@ int main() {
     // off-array packets into nothing -- while clearing EAST/SOUTH on 0x11, ports that are
     // real neighbours on any grid wider than 2x2.
     hemaia_d2d_link_initialize_grid(current_chip_id);
+#if defined(HEMAIA_D2D_DDR) && HEMAIA_D2D_DDR
+    // The device app asked for DDR links (the Makefile defines HEMAIA_D2D_DDR): switch them
+    // now, on every chip at the same moment, before any D2D traffic (hemaia_d2d_link.h).
+    if (hemaia_d2d_link_ddr_on_grid(current_chip_id)) {
+        printf("[HeMAiA] D2D DDR switch: memchip read-back FAILED\r\n");
+        return -1;
+    }
+    printf("[HeMAiA] D2D links in DDR mode\r\n");
+#endif
 
     // Communication buffer lives at the local narrow SPM, identical address on
     // every chip so the device chip_barrier broadcast lands at the same offset.

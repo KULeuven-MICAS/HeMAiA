@@ -52,6 +52,19 @@
 // log2 of a power of two, as popcount(n - 1): no branches (a branch's cold target is an
 // instruction-cache miss) and no __builtin_ctz (without Zbb a libgcc call, and this
 // runtime is freestanding).
+// Every kernel in this file but simd_mla_normalise lays its rows out in 64-byte SIMD beats of
+// 32 FP16 lanes (n / 32 beats; the A-row write of eight 8-byte channels). On a cluster whose
+// SIMD beat is narrower they refuse to run rather than compute on the wrong beats.
+#define BINGO_ROW_NEEDS_64B_BEAT(kname)                                                     \
+    do {                                                                                     \
+        if (SIMD_BEAT_BYTES != 64u) {                                                        \
+            printf_safe("[Cluster %d Core %d]: Error! " kname " is written for a 64-B SIMD "  \
+                        "beat; this cluster's is %d B. Kernel not executed.\r\n",            \
+                        snrt_cluster_idx(), snrt_cluster_core_idx(), (int)SIMD_BEAT_BYTES);  \
+            return BINGO_RET_FAIL;                                                           \
+        }                                                                                    \
+    } while (0)
+
 static inline __attribute__((always_inline)) uint32_t bingo_log2_pow2(uint32_t n) {
     uint32_t v = n - 1u;
     v = v - ((v >> 1) & 0x55555555u);
@@ -65,6 +78,7 @@ static inline __attribute__((always_inline)) uint32_t bingo_log2_pow2(uint32_t n
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_rmsnorm_row(void *arg) {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_simd_rmsnorm_row_args_t);
     BINGO_REQUIRE_CORE(snax_is_simd_core(), "simd_rmsnorm_row", "SIMD");
+    BINGO_ROW_NEEDS_64B_BEAT("simd_rmsnorm_row");
 #if !(BINGO_HAS_STREAMREDUCE && BINGO_HAS_STREAMMAP && BINGO_HAS_STREAMELEMENTWISE && \
       BINGO_SIMD_HAS_RSQRT)
     BINGO_SIMD_EXT_UNSUPPORTED("simd_rmsnorm_row",
@@ -169,6 +183,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_rmsnorm_row(void *arg) {
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_quant_a_row(void *arg) {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_simd_quant_a_row_args_t);
     BINGO_REQUIRE_CORE(snax_is_simd_core(), "simd_quant_a_row", "SIMD");
+    BINGO_ROW_NEEDS_64B_BEAT("simd_quant_a_row");
 #if !BINGO_HAS_FP16TOINT8
     BINGO_SIMD_EXT_UNSUPPORTED("simd_quant_a_row", "Fp16ToInt8");
 #else
@@ -246,6 +261,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_quant_a_row(void *arg) {
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_quant_a_rows(void *arg) {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_simd_quant_a_rows_args_t);
     BINGO_REQUIRE_CORE(snax_is_simd_core(), "simd_quant_a_rows", "SIMD");
+    BINGO_ROW_NEEDS_64B_BEAT("simd_quant_a_rows");
 #if !BINGO_HAS_FP16TOINT8
     BINGO_SIMD_EXT_UNSUPPORTED("simd_quant_a_rows", "Fp16ToInt8");
 #else
@@ -316,12 +332,13 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_mla_normalise(void *arg) {
     BINGO_SIMD_REQUIRE_LOCAL(l, "simd_mla_normalise", "l");
     BINGO_SIMD_REQUIRE_LOCAL(o, "simd_mla_normalise", "O16");
     BINGO_SIMD_REQUIRE_LOCAL(y, "simd_mla_normalise", "output");
-    if (beats == 0u || latch + SIMD_BEAT_BYTES != o || (l & 63u) || (o & 63u) ||
-        (y & 63u)) {
+    if (beats == 0u || latch + SIMD_BEAT_BYTES != o ||
+        ((l | o | y) & (SIMD_BEAT_BYTES - 1u))) {
         printf_safe("[Cluster %d Core %d]: Error! simd_mla_normalise: the latch beat must sit "
-                    "directly below O16 (latch=0x%08x O16=0x%08x), every buffer 64-B "
-                    "aligned, beats=%d > 0.\r\n",
-                    snrt_cluster_idx(), snrt_cluster_core_idx(), latch, o, (int)beats);
+                    "directly below O16 (latch=0x%08x O16=0x%08x), every buffer aligned to "
+                    "the %d-B SIMD beat, beats=%d > 0.\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx(), latch, o,
+                    (int)SIMD_BEAT_BYTES, (int)beats);
         return BINGO_RET_FAIL;
     }
     snax_simd_shape_t in, out;
@@ -360,6 +377,88 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_mla_normalise(void *arg) {
 }
 
 // ==========================================================================
+// The softmax row with its statistics GIVEN: -m in x's latch, s splatted at s_addr (a sharded
+// router's root, after the TopK and Monoid folds, moe_router_pack mode 2). Steps 3-5 of
+// simd_softmax_row below, without the reduces: p = exp(x - m) * rsqrt(s * s).
+// ==========================================================================
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_softmax_row_ext(void *arg) {
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_simd_softmax_row_ext_args_t);
+    BINGO_REQUIRE_CORE(snax_is_simd_core(), "simd_softmax_row_ext", "SIMD");
+    BINGO_ROW_NEEDS_64B_BEAT("simd_softmax_row_ext");
+#if !(BINGO_HAS_PREMAP_ELEMENTWISE && BINGO_HAS_STREAMMAP && BINGO_HAS_STREAMELEMENTWISE && \
+      BINGO_SIMD_HAS_RSQRT && BINGO_SIMD_EW0_HAS_MUL)
+    BINGO_SIMD_EXT_UNSUPPORTED("simd_softmax_row_ext",
+                               "StreamElementwise_0 (MUL, ADD), StreamMap (EXP, RSQRT) and "
+                               "StreamElementwise_1");
+#else
+    const __snax_bingo_kernel_simd_softmax_row_ext_args_t *a =
+        (const __snax_bingo_kernel_simd_softmax_row_ext_args_t *)arg;
+    bingo_kernel_scratchpad_t *sp =
+        BINGO_GET_SP(arg, __snax_bingo_kernel_simd_softmax_row_ext_args_t);
+    const uint32_t x = a->x_addr, s = a->s_addr, e = a->e_addr, p = a->p_addr;
+    const uint32_t beats = a->beats;
+    const uint32_t xl = x - SIMD_BEAT_BYTES, el = e - SIMD_BEAT_BYTES;
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_CFG_START);
+    BINGO_SIMD_REQUIRE_LOCAL(xl, "simd_softmax_row_ext", "x's latch");
+    BINGO_SIMD_REQUIRE_LOCAL(el, "simd_softmax_row_ext", "e's latch");
+    BINGO_SIMD_REQUIRE_LOCAL(s, "simd_softmax_row_ext", "s");
+    BINGO_SIMD_REQUIRE_LOCAL(p, "simd_softmax_row_ext", "p");
+    if (beats == 0u || ((x | s | e | p) & 63u)) {
+        printf_safe("[Cluster %d Core %d]: Error! simd_softmax_row_ext: beats=%d, every buffer "
+                    "64-B aligned.\r\n", snrt_cluster_idx(), snrt_cluster_core_idx(),
+                    (int)beats);
+        return BINGO_RET_FAIL;
+    }
+    snax_simd_shape_t in, out;
+    // e = exp(x - m)
+    snax_simd_shape_flat(&in, (void *)xl, 1u + beats);
+    snax_simd_shape_flat(&out, (void *)e, beats);
+    snax_write_simd_cfg_reg(SIMD_EXT_ENABLE_PTR, (1u << SIMD_EXT_STREAMELEMENTWISE_0) |
+                                                     (1u << SIMD_EXT_STREAMMAP));
+    snax_simd_set_op_csr(SIMD_EXT_STREAMELEMENTWISE_0_CSR, 0, 1u);
+    snax_simd_set_op_csr(SIMD_EXT_STREAMELEMENTWISE_0_CSR, 1, SIMD_EW_ADD | SIMD_EW_STICKY_B);
+    snax_simd_set_op_csr(SIMD_EXT_STREAMMAP_CSR, 0, SIMD_F32_ONE);
+    snax_simd_set_op_csr(SIMD_EXT_STREAMMAP_CSR, 1, 0u);
+    snax_simd_set_op_csr(SIMD_EXT_STREAMMAP_CSR, 2, SIMD_FUNC_EXP);
+    snax_simd_program_fast(&in, &out);
+    snax_simd_fire();
+    // 1/s = rsqrt(s * s) into e's latch
+    snax_simd_shape_broadcast(&in, (void *)s, 2u);
+    snax_simd_shape_flat(&out, (void *)el, 1u);
+    snax_write_simd_cfg_reg(SIMD_EXT_ENABLE_PTR, (1u << SIMD_EXT_STREAMELEMENTWISE_0) |
+                                                     (1u << SIMD_EXT_STREAMMAP));
+    snax_simd_set_op_csr(SIMD_EXT_STREAMELEMENTWISE_0_CSR, 0, 1u);
+    snax_simd_set_op_csr(SIMD_EXT_STREAMELEMENTWISE_0_CSR, 1, SIMD_EW_MUL | SIMD_EW_STICKY_B);
+    snax_simd_set_op_csr(SIMD_EXT_STREAMMAP_CSR, 0, SIMD_F32_ONE);
+    snax_simd_set_op_csr(SIMD_EXT_STREAMMAP_CSR, 1, 0u);
+    snax_simd_set_op_csr(SIMD_EXT_STREAMMAP_CSR, 2, SIMD_FUNC_RSQRT);
+    snax_simd_program_fast(&in, &out);
+    snax_simd_fire();
+    // p = e / s
+    snax_simd_shape_flat(&in, (void *)el, 1u + beats);
+    snax_simd_shape_flat(&out, (void *)p, beats);
+    snax_simd_use2(SIMD_EXT_STREAMELEMENTWISE_1, SIMD_EXT_STREAMELEMENTWISE_1_CSR, 1u,
+                   SIMD_EW_MUL | SIMD_EW_STICKY_B);
+    snax_simd_program_fast(&in, &out);
+    snax_simd_fire();
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_CFG_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_START);
+    const uint32_t bad = snax_simd_wait_all_bounded() || snax_simd_bad_config();
+    snax_write_simd_cfg_reg(SIMD_EXT_ENABLE_PTR, 0u);
+    BINGO_TRACE_MARKER(BINGO_TRACE_SIMD_RUN_END);
+    if (bad) {
+        printf_safe("[Cluster %d Core %d]: Error! simd_softmax_row_ext did not drain cleanly "
+                    "(status %08x)\r\n", snrt_cluster_idx(), snrt_cluster_core_idx(),
+                    snax_read_simd_cfg_reg(SIMD_STATUS));
+        return BINGO_RET_FAIL;
+    }
+    sp->return_value = p;
+    sp->num_return_values = 0;
+    return BINGO_RET_SUCC;
+#endif
+}
+
+// ==========================================================================
 // Softmax over ONE row (snax dsv2_softmax_row, the router's): the row max and sum fold
 // across lanes, so each comes out splatted over a beat. Five tasks, queued back to back:
 //
@@ -375,6 +474,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_mla_normalise(void *arg) {
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_softmax_row(void *arg) {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_simd_softmax_row_args_t);
     BINGO_REQUIRE_CORE(snax_is_simd_core(), "simd_softmax_row", "SIMD");
+    BINGO_ROW_NEEDS_64B_BEAT("simd_softmax_row");
 #if !(BINGO_HAS_PREMAP_ELEMENTWISE && BINGO_HAS_STREAMMAP && BINGO_HAS_STREAMREDUCE && \
       BINGO_HAS_STREAMELEMENTWISE && BINGO_SIMD_HAS_RSQRT && BINGO_SIMD_EW0_HAS_MUL)
     BINGO_SIMD_EXT_UNSUPPORTED("simd_softmax_row",
@@ -479,6 +579,7 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_softmax_row(void *arg) {
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_simd_swiglu_a_row(void *arg) {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_simd_swiglu_a_row_args_t);
     BINGO_REQUIRE_CORE(snax_is_simd_core(), "simd_swiglu_a_row", "SIMD");
+    BINGO_ROW_NEEDS_64B_BEAT("simd_swiglu_a_row");
 #if !(BINGO_HAS_STREAMMAP && BINGO_HAS_STREAMELEMENTWISE && BINGO_HAS_FP16TOINT8)
     BINGO_SIMD_EXT_UNSUPPORTED("simd_swiglu_a_row",
                                "StreamMap SILU, post-map StreamElementwise and Fp16ToInt8");

@@ -73,12 +73,16 @@ SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
     /// Used for bingo hw  ///
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_dummy),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_sync_probe),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_sync_mark),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_chip_barrier),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_exit),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_idma_1d_copy),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_idma_broadcast),
     // A broadcast collective's two ends (libs/blocks/collective.py impl "bcast").
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_idma_bcast_put),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_idma_fetch_flagged),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_idma_put_flagged),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_wait_flags),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_idma_pairwise_swap),
     // Strided runs (a row gather, a cache append into an A layout, a [512, cap] tile) and
     // a copy whose source an expert-slot record names at run time.
@@ -86,6 +90,7 @@ SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_idma_copy_slot),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_idma_ring_load),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_moe_route),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_moe_router_pack),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_gemm_full),
     // Clean per-precision GEMM wrappers (over gemm_full) — see offload_hw_kernels/gemm.h.
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_gemm_i8i8_i32),
@@ -170,6 +175,7 @@ SNAX_SYMTAB_SECTION const snax_symbol_t __snax_symtab[] = {
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_quant_a_rows),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_mla_normalise),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_softmax_row),
+    SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_softmax_row_ext),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_simd_swiglu_a_row),
     SNAX_EXPORT_FUNC(__snax_bingo_kernel_xdma_layout_convert),
     SNAX_SYMTAB_END

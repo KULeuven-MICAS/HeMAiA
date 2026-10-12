@@ -29,8 +29,11 @@ int main() {
     int32_t Atlstride[] = {Atlstride0, Atlstride1, Atlstride2,
                            Atlstride3, Atlstride4, Atlstride5};
     int32_t Bslstride[] = {Bslstride0};
-    int32_t Btlbound[] = {Btlbound0, Btlbound1, Btlbound2};
-    int32_t Btlstride[] = {Btlstride0, Btlstride1, Btlstride2};
+    // B temporal loops: one per declared loop (3 or 6, a property of the cluster);
+    // the walk uses three, the rest keep bound 1 and stride 0.
+    int32_t Btlbound[T_BOUND_NUM_READER_1] = {Btlbound0, Btlbound1, Btlbound2};
+    int32_t Btlstride[T_STRIDE_NUM_READER_1] = {Btlstride0, Btlstride1, Btlstride2};
+    for (int i = 3; i < T_BOUND_NUM_READER_1; i++) Btlbound[i] = 1;
 
     int32_t Cslstride[] = {Cslstride0};
     int32_t Ctlbound[] = {Ctlbound0, Ctlbound1, Ctlbound2, Ctlbound3};

@@ -44,6 +44,9 @@
 
 // Bytes moved per beat, and bytes per lane within a beat.
 #define SIMD_BEAT_BYTES SIMD_WIDTH
+// FP16 lanes in one beat: every operator has one lane per beat element, so the SIMD core's
+// TCDM port width (num_channel x 8 B) fixes it.
+#define SIMD_FP16_LANES (SIMD_BEAT_BYTES / 2u)
 #define SIMD_LANE_BYTES (SIMD_WIDTH / SIMD_SPATIAL_CHAN)
 
 // Deepest nested sweep the hardware supports, and the widest operator CSR block.
@@ -237,15 +240,20 @@ static inline uint32_t snax_simd_shape_beats(const snax_simd_shape_t *s) {
 // naming a tail inherits the previous task's. Use snax_simd_use2() and say 0.
 #define SIMD_QUANT_TAIL(beats) ((uint32_t)(beats))
 // Fp16ToInt8 csr(1) bit 16 (capability INTERLEAVE4): pack FOUR input beats into two output
-// beats as out[q/16][4*(q%16) + b] = quant(beat_b[q]) instead of concatenating two. Each
+// beats as out[q/(L/2)][4*(q%(L/2)) + b] = quant(beat_b[q]), L = SIMD_FP16_LANES, instead of
+// concatenating two. Each
 // 32-bit atom then holds four consecutive BEATS of one lane -- a 16x4 B-operand block of
 // VersaCore -- which no DMA can build from int8. OR it into the tail word; the tail period
 // must then be a multiple of 4. Every task that arms the quantiser rewrites csr(1), so
 // the bit never outlives the task that set it.
 #define SIMD_QUANT_ILV4 (1u << 16)
 
+// The elementwise op, out = x op B. One fused FMA provides all three, so a cfg listing only
+// FMA_FP16 has MUL, ADD and SUB. SUB is x - B: B is the latch (SIMD_EW_STICKY_B) or the FIRST
+// beat of each [B][x] pair.
 #define SIMD_EW_MUL 0u
 #define SIMD_EW_ADD 1u
+#define SIMD_EW_SUB 2u
 // Latch the FIRST beat of the task as operand B and combine every later beat against it,
 // instead of taking both operands from the stream. Use with operand_beats = 1, so each
 // beat is its own row. Without it a broadcast operand has to be physically replicated

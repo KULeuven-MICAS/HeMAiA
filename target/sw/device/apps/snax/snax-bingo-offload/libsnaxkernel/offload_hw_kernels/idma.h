@@ -176,6 +176,88 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_fetch_flagged(void *arg)
     return BINGO_RET_SUCC;
 }
 
+// A put behind a landed flag: `size` bytes from src to dst, then the 4-byte `value` to flag, both
+// from this chip's DM core and in that order, so a destination that sees the flag holds the
+// data. bcast bit 0 clear: dst and flag are full addresses (any one chip, its L1 included).
+// Bit 0 set: they are this chip's local addresses and the D2D 0xFF multicast writes both into
+// every other chip at the same addresses; bit 1 also writes them here, since the multicast does
+// not deliver to its sender. Unlike bcast_put, nothing is staged and nothing is copied on
+// arrival: the data lands where it is used, and the destination waits on its own flag with
+// __snax_bingo_kernel_wait_flags.
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_put_flagged(void *arg)
+{
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_idma_put_flagged_args_t);
+    if (!snrt_is_dm_core()) {
+        printf_safe("[Cluster %d Core %d]: Error! IDMA flagged put should be called from a DM core!\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx());
+        return BINGO_RET_FAIL;
+    }
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+    __snax_bingo_kernel_idma_put_flagged_args_t *a = (__snax_bingo_kernel_idma_put_flagged_args_t *)arg;
+    const uint64_t src = make_u64(a->src_addr_hi, a->src_addr_lo);
+    const uint64_t dst = make_u64(a->dst_addr_hi, a->dst_addr_lo);
+    const uint64_t flag = make_u64(a->flag_addr_hi, a->flag_addr_lo);
+    const uint32_t bcast = a->bcast;
+    // this chip's prefix: a DMA address whose high word is 0 names chip 0x00
+    const uint64_t val = chiplet_addr_transform((uint64_t)(uint32_t)(uintptr_t)&a->value);
+    const uint32_t size = a->size;
+    bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_idma_put_flagged_args_t);
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_START);
+    if (bcast & 2u) {
+        snrt_dma_start_1d_wideptr(dst, src, size);
+        snrt_dma_start_1d_wideptr(flag, val, 4);
+    }
+    if (bcast & 1u) {
+        snrt_dma_start_1d_wideptr(chiplet_addr_transform_loc(0xF, 0xF, dst), src, size);
+        snrt_dma_start_1d_wideptr(chiplet_addr_transform_loc(0xF, 0xF, flag), val, 4);
+    } else {
+        snrt_dma_start_1d_wideptr(dst, src, size);
+        snrt_dma_start_1d_wideptr(flag, val, 4);
+    }
+    BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_CFG_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_START);
+    snrt_dma_wait_all();
+    BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_END);
+    sp->return_value = (uint32_t)dst;
+    sp->num_return_values = 0;
+    return BINGO_RET_SUCC;
+}
+
+// The receiving end of __snax_bingo_kernel_idma_put_flagged: spin until each of the n_flags
+// words, 64 B apart from flags_addr in this chip's L1, holds `value`. The producers are
+// ordering-only edges, so the flags are what proves their data landed. Between polls the core
+// waits on mcycle, touching no memory, so the wait costs one L1 read per poll however long it
+// lasts.
+SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_wait_flags(void *arg)
+{
+    BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_wait_flags_args_t);
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+    __snax_bingo_kernel_wait_flags_args_t *a = (__snax_bingo_kernel_wait_flags_args_t *)arg;
+    volatile uint32_t *flags = (volatile uint32_t *)(uintptr_t)a->flags_addr;
+    const uint32_t n = a->n_flags, value = a->value;
+    bingo_kernel_scratchpad_t* sp = BINGO_GET_SP(arg, __snax_bingo_kernel_wait_flags_args_t);
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+    BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_START);
+    for (uint32_t i = 0; i < n; i++) {
+        uint32_t spins = 0;
+        while (flags[i * 16u] != value) {
+            // the pause reads only mcycle: a loop counter in memory would put the core's
+            // stack (in L1) between every two polls
+            const uint32_t t0 = snrt_mcycle();
+            while (snrt_mcycle() - t0 < 64u) {
+            }
+            if (++spins == (1u << 20))
+                printf_safe("[Cluster %d]: still waiting for flag %d of %d\r\n",
+                            snrt_cluster_idx(), (int)i, (int)n);
+        }
+    }
+    BINGO_TRACE_MARKER(BINGO_TRACE_IDMA_RUN_END);
+    sp->return_value = 0;
+    sp->num_return_values = 0;
+    return BINGO_RET_SUCC;
+}
+
 SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_idma_broadcast(void *arg)
 {
     BINGO_SW_GUARD_CHECK(arg, __snax_bingo_kernel_idma_broadcast_args_t);

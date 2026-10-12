@@ -191,6 +191,23 @@ SNAX_LIB_DEFINE uint32_t __snax_bingo_kernel_gemv(void *arg) {
     csrw_ss(T_STRIDE_READER_1_1, BINGO_GEMV_WB(w * kt * blk, w4));
     csrw_ss(T_BOUND_READER_1_2, groups);
     csrw_ss(T_STRIDE_READER_1_2, b_step);
+    // B's loops past the third, when the cluster has them: bound 1, stride 0, so a walk left
+    // by a paired INT4 GEMM (which uses the fourth) is not inherited.
+#ifdef T_BOUND_READER_1_3
+    csrw_ss(T_BOUND_READER_1_3, 1);
+    csrw_ss(T_STRIDE_READER_1_3, 0);
+#endif
+#ifdef T_BOUND_READER_1_4
+    csrw_ss(T_BOUND_READER_1_4, 1);
+    csrw_ss(T_STRIDE_READER_1_4, 0);
+#endif
+#ifdef T_BOUND_READER_1_5
+    csrw_ss(T_BOUND_READER_1_5, 1);
+    csrw_ss(T_STRIDE_READER_1_5, 0);
+#endif
+#if T_BOUND_NUM_READER_1 > 6
+#error "neutralise the B loops past the sixth"
+#endif
     csrw_ss(ADDR_REMAP_INDEX_READER_1, 0);
 #if BINGO_GEMV_HAS_W4
     csrw_ss(READER_EXTENSION_1_CSR_BASE, w4);  // on or off, every dispatch

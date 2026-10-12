@@ -47,6 +47,9 @@
 //   - int4_a_enable / int4_b_enable : pack operand A / B to 4-bit
 //       (a_elem_len / b_elem_len 8 -> 4). Inputs only; the MAC still runs on
 //       the int8 array. The A/B channel-enable masks are rebuilt dynamically.
+//       int4_b_enable also names B's LAYOUT (see "INT4 B layouts" below):
+//         1 = BINGO_INT4_B_LAYOUT_B      the B-layout, nibble-packed
+//         2 = BINGO_INT4_B_LAYOUT_PAIRED the paired layout (N even, B not transposed)
 //   - quantization_enable (+ shift_i, multiplier_i, input_zp_i, output_zp_i):
 //       requantize the INT32 accumulator down to an INT8 output
 //       (d_elem_len 32 -> 8).
@@ -69,6 +72,27 @@
 //   int8 x int8 -> fp16    (int32tofp16)                    -> gemm_i8i8_f16
 // (B is the weight operand; int4_b packs B to 4-bit.)
 // -------------------------------------------------------------
+
+// -------------------------------------------------------------
+// INT4 B layouts
+// -------------------------------------------------------------
+// One B pass is one (tileSize x meshCol) block: blk = tileSize * meshCol / 2 bytes of
+// nibbles. Where pass k of column tile n sits is the layout:
+//
+//   B-layout  (int4_b_enable = 1)   tile n at n * K * blk, pass k at k * blk.
+//       B advances blk bytes a pass, half of what an INT8 A does. On (16, 4, 16) that is
+//       4 banks a pass against A's 8, so B's banks sweep through A's and the two readers
+//       collide in two passes of every eight: the array loses one cycle in eight.
+//   paired    (int4_b_enable = 2)   blocks of 2 * meshCol columns (util/layout.py
+//       to_b_pairs + pack_int4): tile n at (n / 2) * K * 2 blk + (n % 2) * blk, pass k at
+//       k * 2 blk. B advances 2 blk bytes a pass, A's stride, so the two keep a fixed bank
+//       distance and collide at most once. B walks it in four loops (k, the block of the
+//       pair, the pair, the row tile), so it needs a B reader with at least four temporal
+//       loops, an even N, and B not transposed; anything else is refused.
+//
+// The same INT4 blob also serves the (1, 4, 32) GEMV, which reads a whole pair a pass.
+#define BINGO_INT4_B_LAYOUT_B 1
+#define BINGO_INT4_B_LAYOUT_PAIRED 2
 
 // -------------------------------------------------------------
 // The "+C" term and accumPrevC  (D = A*B + C)
@@ -224,6 +248,22 @@ static uint32_t __bingo_gemm_run(
     }
 #endif
 
+    if (int4_b_enable < 0 || int4_b_enable > BINGO_INT4_B_LAYOUT_PAIRED)
+    {
+        printf_safe("[Cluster %d Core %d]: Error! gemm_full int4_b_enable=%d, expected 0, 1 "
+                    "(B-layout) or 2 (paired)\r\n", snrt_cluster_idx(),
+                    snrt_cluster_core_idx(), (int)int4_b_enable);
+        return BINGO_RET_FAIL;
+    }
+    const uint32_t b_paired = int4_b_enable == BINGO_INT4_B_LAYOUT_PAIRED;
+    if (b_paired && (T_BOUND_NUM_READER_1 < 4 || (N % 2u) != 0 || transpose_B))
+    {
+        printf_safe("[Cluster %d Core %d]: Error! gemm_full paired INT4 B needs >= 4 B "
+                    "loops (have %d), an even N (N=%d) and B not transposed (%d)\r\n",
+                    snrt_cluster_idx(), snrt_cluster_core_idx(), T_BOUND_NUM_READER_1,
+                    (int)N, (int)transpose_B);
+        return BINGO_RET_FAIL;
+    }
     const uint32_t a_elem_len = int4_a_enable ? 4u : BINGO_A_ELEM_LEN;
     const uint32_t b_elem_len = int4_b_enable ? 4u : BINGO_B_ELEM_LEN;
     const uint32_t d_elem_len = quantization_enable ? 8u
@@ -379,21 +419,46 @@ static uint32_t __bingo_gemm_run(
 #if S_STRIDE_NUM_READER_1 > 1
     Bslstride[1] = (BINGO_BANK_WIDTH / 8) * 8u;
 #endif
-    // Btlbound0~2
-    uint32_t Btlbound[3];
-    // Btlbound0
-    Btlbound[0] = K;
-    // Btlbound1
-    Btlbound[1] = N;
-    // Btlbound2
-    Btlbound[2] = M;
-    uint32_t Btlstride[3];
-    // Btlstride0
-    Btlstride[0] = b_elem_len * tileSize * meshCol / 8;
-    // Btlstride1
-    Btlstride[1] = b_elem_len * tileSize * meshCol * K / 8;
-    // Btlstride2
-    Btlstride[2] = 0;
+    // B temporal loops -- ONE PER DECLARED LOOP: the streamer writes T_BOUND_NUM_READER_1
+    // bounds and strides whatever the caller passed, and the number is a property of the
+    // cluster (3 on snax_versacore_to_cluster, 6 on snax_split_cluster). A loop not used
+    // keeps bound 1 and stride 0: the address generator never starts with a bound of 0.
+#if T_BOUND_NUM_READER_1 < 3 || T_STRIDE_NUM_READER_1 != T_BOUND_NUM_READER_1
+#error "the B walk needs at least three temporal loops, one stride per bound"
+#endif
+    uint32_t Btlbound[T_BOUND_NUM_READER_1];
+    uint32_t Btlstride[T_STRIDE_NUM_READER_1];
+    for (uint32_t i = 0; i < T_BOUND_NUM_READER_1; i++)
+    {
+        Btlbound[i] = 1;
+        Btlstride[i] = 0;
+    }
+    // One B pass: a (tileSize x meshCol) block.
+    const uint32_t b_blk = b_elem_len * tileSize * meshCol / 8;
+    if (b_paired)
+    {
+        // k, then the block of the pair, then the pair, then the row tile (B is reused).
+        Btlbound[0] = K;
+        Btlstride[0] = 2u * b_blk;
+        Btlbound[1] = 2;
+        Btlstride[1] = b_blk;
+        Btlbound[2] = N / 2u;
+        Btlstride[2] = 2u * b_blk * K;
+#if T_BOUND_NUM_READER_1 >= 4
+        Btlbound[3] = M;
+        Btlstride[3] = 0;
+#endif
+    }
+    else
+    {
+        // k, then the column tile, then the row tile (B is reused).
+        Btlbound[0] = K;
+        Btlstride[0] = b_blk;
+        Btlbound[1] = N;
+        Btlstride[1] = b_blk * K;
+        Btlbound[2] = M;
+        Btlstride[2] = 0;
+    }
     uint32_t set_addr_remap_index_B = 0;
     //////////////////////////////////////////////////////////////
     // Streamer cfg for C
@@ -580,7 +645,8 @@ static uint32_t __bingo_gemm_run(
         output_zp_i,
         int32tofp16_enable,
         int4_a_enable,
-        int4_b_enable);
+        // The converter's enable is bit 0; the layout was used for the walk above.
+        int4_b_enable ? 1 : 0);
     // The D port's power-of-two output scale: RNE(acc * 2^-d_shift) when the converter is
     // armed. Written on EVERY dispatch -- it is sticky, and a k left behind by another
     // kernel (FlashAttention's score matmul, the GEMV) would silently rescale this one.

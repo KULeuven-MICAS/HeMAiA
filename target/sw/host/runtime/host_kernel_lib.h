@@ -118,6 +118,10 @@ static inline uint64_t __host_bingo_kernel_sync_report(void *arg){
     bingo_kernel_scratchpad_t* sp =
         (bingo_kernel_scratchpad_t*)(uintptr_t)((uint64_t *)arg)[3];
     BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+    // The stamps were written by device cores, which the write-through D-cache does not
+    // snoop: a report that runs more than once would read the lines an earlier one cached.
+    // A plain fence flushes and invalidates the D-cache.
+    asm volatile("fence" ::: "memory");
 
     // The local control is the LAST phase, so its value has to be in hand before any
     // "rt-local" can be printed.
@@ -128,6 +132,142 @@ static inline uint64_t __host_bingo_kernel_sync_report(void *arg){
         printf("SYNC[hw] phase=%2u | rt=%u cc | rt-local=%d cc\r\n",
                (unsigned)ph, (unsigned)rt, (int)(rt - local_rt));
     }
+    sp->return_value = 0;
+    sp->num_return_values = 0;
+    return BINGO_RET_SUCC;
+}
+
+// Chip barrier on the host core (host_kernel_args.h, __host_bingo_kernel_chip_barrier_args).
+// op 0 zeroes this chip's barrier state for both mechanisms -- the device kernel
+// __snax_bingo_kernel_chip_barrier keeps its counters in the same comm buffer -- and the
+// fence after it writes the lines back, so a device core reading memory sees the zeros.
+// op 1 is one 0xFF broadcast barrier with checkpoint = seq. It writes nothing into the comm
+// buffer: on chip 0x00 the narrow SPM is in the CVA6's cached region, and a dirty line there
+// would also hold chip_level_checkpoint[] entries, whose write-back at the poll loop's fence
+// could overwrite another chip's broadcast arrival. The barrier count that checks seq lives
+// in host memory instead.
+static uint32_t bingo_host_chip_barrier_count;
+static inline uint64_t __host_bingo_kernel_chip_barrier(void *arg){
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+    uint64_t op  = ((uint64_t *)arg)[0];
+    uint8_t  tl  = (uint8_t)((uint64_t *)arg)[1];
+    uint8_t  br  = (uint8_t)((uint64_t *)arg)[2];
+    uint64_t seq = ((uint64_t *)arg)[3];
+    bingo_kernel_scratchpad_t* sp = (bingo_kernel_scratchpad_t*)(uintptr_t)((uint64_t *)arg)[4];
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+
+    volatile comm_buffer_t* cb =
+        (volatile comm_buffer_t*)(uintptr_t)bingo_get_l2_comm_buffer(get_current_chip_id());
+    uint32_t reached = 0;
+    if (op == BINGO_CHIP_BARRIER_OP_INIT) {
+        cb->chip_barrier_checkpoint = 0;
+        for (uint32_t i = 0; i < 256; i++) cb->chip_level_checkpoint[i] = 0;
+        cb->sw_barrier_gen = 0;
+        cb->sw_barrier_release = 0;
+        for (uint32_t p = 0; p < SW_BARRIER_MAX_CHIPS; p++) cb->sw_barrier_arrive[p] = 0;
+        bingo_host_chip_barrier_count = 0;
+        asm volatile("fence" ::: "memory");
+    } else {
+        uint8_t cp = (uint8_t)seq;
+        BINGO_TRACE_MARKER(BINGO_TRACE_HW_CHIP_BARRIER_START);
+        chip_barrier(cb, tl, br, cp);
+        BINGO_TRACE_MARKER(BINGO_TRACE_HW_CHIP_BARRIER_END);
+        reached = ++bingo_host_chip_barrier_count;
+        if (seq == 0 || seq > 255 || reached != (uint32_t)seq) {
+            printf_safe("Chip(%x, %x): [Host] Check [chip_barrier_seq]: FAIL barrier %d, count %d\r\n",
+                        get_current_chip_loc_x(), get_current_chip_loc_y(), (int)seq, (int)reached);
+        }
+    }
+    sp->return_value = reached;
+    sp->num_return_values = 0;
+    return BINGO_RET_SUCC;
+}
+
+// exp(x) for x <= 0, single precision: 2^(x log2 e) split into 2^n (the exponent field) and
+// 2^f, f in [0, 1), by a degree-5 polynomial. The fold below only needs non-positive
+// arguments (m_p - max m), so there is no overflow path.
+static inline float bingo_host_expf_nonpos(float x){
+    if (x < -87.0f) return 0.0f;
+    float t = x * 1.4426950408889634f;
+    int32_t n = (int32_t)t;
+    if ((float)n > t) n--;
+    float f = t - (float)n;
+    float p = 1.0f + f * (0.69314718f + f * (0.24022651f + f * (0.05550411f +
+              f * (0.00961813f + f * 0.00133336f))));
+    union { float f; uint32_t u; } s;
+    s.u = (uint32_t)(n + 127) << 23;
+    return p * s.f;
+}
+
+static inline float bingo_host_as_f32(uint32_t u){
+    union { uint32_t u; float f; } v;
+    v.u = u;
+    return v.f;
+}
+
+static inline uint32_t bingo_host_as_u32(float f){
+    union { float f; uint32_t u; } v;
+    v.f = f;
+    return v.u;
+}
+
+// Fold on the host core (host_kernel_args.h, __host_bingo_kernel_fold_args): n_parts
+// partials of part_bytes each, back to back at src, folded into dst, 64 B beat by beat.
+// The cluster cores have no FPU, so this is where a fold of floats runs when no xDMA writer
+// junction does it. The fence first: the partials were written by a DMA, which the
+// write-through D-cache does not snoop, and a plain fence flushes and invalidates it.
+static inline uint64_t __host_bingo_kernel_fold(void *arg){
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_START);
+    uint64_t op         = ((uint64_t *)arg)[0];
+    const uint32_t* src = (const uint32_t*)(uintptr_t)(((uint64_t *)arg)[1]);
+    uint64_t n_parts    = ((uint64_t *)arg)[2];
+    uint64_t part_bytes = ((uint64_t *)arg)[3];
+    uint32_t* dst       = (uint32_t*)(uintptr_t)(((uint64_t *)arg)[4]);
+    bingo_kernel_scratchpad_t* sp = (bingo_kernel_scratchpad_t*)(uintptr_t)((uint64_t *)arg)[5];
+    BINGO_TRACE_MARKER(BINGO_TRACE_KERNEL_ARG_PARSE_END);
+    asm volatile("fence" ::: "memory");
+    uint64_t words = part_bytes / 4;
+    for (uint64_t b = 0; b < part_bytes / 64; b++) {
+        const uint32_t* p0 = src + b * 16;
+        uint32_t* o = dst + b * 16;
+        if (op == BINGO_HOST_FOLD_TOPK) {
+            // two descending lists of 8 merge into the 8 largest of their union
+            float bv[8];
+            uint32_t bi[8];
+            for (int j = 0; j < 8; j++) { bv[j] = bingo_host_as_f32(p0[j]); bi[j] = p0[8 + j]; }
+            for (uint64_t q = 1; q < n_parts; q++) {
+                const uint32_t* pq = src + q * words + b * 16;
+                float mv[8];
+                uint32_t mi[8];
+                int x = 0, y = 0;
+                for (int k = 0; k < 8; k++) {
+                    float yv = bingo_host_as_f32(pq[y]);
+                    if (bv[x] >= yv) { mv[k] = bv[x]; mi[k] = bi[x]; x++; }
+                    else             { mv[k] = yv;    mi[k] = pq[8 + y]; y++; }
+                }
+                for (int j = 0; j < 8; j++) { bv[j] = mv[j]; bi[j] = mi[j]; }
+            }
+            for (int j = 0; j < 8; j++) { o[j] = bingo_host_as_u32(bv[j]); o[8 + j] = bi[j]; }
+        } else {
+            // per query row r: m* = max m_p, l* = sum l_p exp(m_p - m*)
+            for (int r = 0; r < 8; r++) {
+                float m = bingo_host_as_f32(p0[r]);
+                for (uint64_t q = 1; q < n_parts; q++) {
+                    float mq = bingo_host_as_f32(src[q * words + b * 16 + r]);
+                    if (mq > m) m = mq;
+                }
+                float l = 0.0f;
+                for (uint64_t q = 0; q < n_parts; q++) {
+                    float mq = bingo_host_as_f32(src[q * words + b * 16 + r]);
+                    float lq = bingo_host_as_f32(src[q * words + b * 16 + 8 + r]);
+                    l += lq * bingo_host_expf_nonpos(mq - m);
+                }
+                o[r] = bingo_host_as_u32(m);
+                o[8 + r] = bingo_host_as_u32(l);
+            }
+        }
+    }
+    asm volatile("fence" ::: "memory");
     sp->return_value = 0;
     sp->num_return_values = 0;
     return BINGO_RET_SUCC;

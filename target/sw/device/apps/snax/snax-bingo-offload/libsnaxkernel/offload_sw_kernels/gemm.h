@@ -312,19 +312,30 @@ SNAX_LIB_DEFINE void __snax_kernel_versacore_load_compute_store(void *arg)
         // Bslstride0
         get_cls_shared_ptrs()[5][6] = BINGO_BANK_WIDTH / 8;
 
-        // Btlbound0~2
-        BINGO_L1_ALLOC_OR_RETURN(Btlbound, sizeof(uint32_t) * 3, "Btlbound");
+        // B temporal loops: the streamer writes T_BOUND_NUM_READER_1 of each (3 or 6,
+        // a property of the cluster); the walk uses three, the rest keep bound 1 and
+        // stride 0 (a bound of 0 never starts the reader).
+#if T_BOUND_NUM_READER_1 < 3 || T_STRIDE_NUM_READER_1 != T_BOUND_NUM_READER_1
+#error "the B walk needs at least three temporal loops, one stride per bound"
+#endif
+        BINGO_L1_ALLOC_OR_RETURN(Btlbound, sizeof(uint32_t) * T_BOUND_NUM_READER_1,
+                                 "Btlbound");
         get_cls_shared_ptrs()[5][7] = (uint32_t)(uintptr_t)Btlbound;
+        // Btlstride
+        BINGO_L1_ALLOC_OR_RETURN(Btlstride, sizeof(uint32_t) * T_STRIDE_NUM_READER_1,
+                                 "Btlstride");
+        get_cls_shared_ptrs()[5][8] = (uint32_t)(uintptr_t)Btlstride;
+        for (uint32_t i = 3; i < T_BOUND_NUM_READER_1; i++)
+        {
+            Btlbound[i] = 1;
+            Btlstride[i] = 0;
+        }
         // Btlbound0
         Btlbound[0] = K;
         // Btlbound1
         Btlbound[1] = N;
         // Btlbound2
         Btlbound[2] = M;
-
-        // Btlstride0~2
-        BINGO_L1_ALLOC_OR_RETURN(Btlstride, sizeof(uint32_t) * 3, "Btlstride");
-        get_cls_shared_ptrs()[5][8] = (uint32_t)(uintptr_t)Btlstride;
 
         // Btlstride0
         Btlstride[0] = tileSize * meshCol;
