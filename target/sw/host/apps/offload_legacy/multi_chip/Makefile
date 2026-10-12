@@ -17,6 +17,15 @@ INCL_DEVICE_BINARY ?= 1 # True to include the device binary
 DEVICE_APPS = snax-xdma-multicast-chiplet
 DEVICE_APPS += gemm-msplit-1cluster-4chip
 DEVICE_APPS += snax-test-chip-barrier
+DEVICE_APPS += snax-coll-broadcast snax-coll-reduce
+DEVICE_APPS += snax-coll-allreduce
+
+# The E2 collectives run with the D2D links in DDR, as the layer experiments on the same
+# platform do.
+# `override`: the top-level make passes USER_FLAGS on the command line.
+ifneq ($(filter snax-coll-%,$(DEV_APP)),)
+override USER_FLAGS += -DHEMAIA_D2D_DDR=1
+endif
 include ../../common.mk
 
 # The gemm-msplit device apps preload their input matrices into the
