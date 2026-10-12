@@ -440,10 +440,17 @@ def _engine_of_kernel(kernel_name):
 
 
 def load_cluster_cfg(hwcfg_path):
-    """The cluster hjson, parsed. The single place blocks read platform facts from."""
+    """The cluster hjson, parsed. The single place blocks read platform facts from. Also sets
+    the SIMD core's beat (kernel_simd.simd_beat_bytes), which every SIMD task is sized in."""
     import hjson
     with open(hwcfg_path) as f:
-        return hjson.loads(f.read())
+        hw = hjson.loads(f.read())
+    from kernel_simd import cluster_simd_beat_bytes, set_simd_beat_bytes
+    try:
+        set_simd_beat_bytes(cluster_simd_beat_bytes(hw))
+    except (KeyError, ValueError):
+        pass  # a cluster without a SIMD core: no SIMD task can be built for it
+    return hw
 
 
 def writer_junction_index(hw, name):

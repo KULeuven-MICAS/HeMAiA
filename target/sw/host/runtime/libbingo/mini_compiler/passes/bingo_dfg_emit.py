@@ -1,7 +1,61 @@
 # Fanchen Kong <fanchen.kong@kuleuven.be>
 
+import re
+
 from bingo_mem_handle import BingoMemAlloc
 from bingo_mem_handle import BingoMemAllocView
+
+
+# ======================================================================================
+# COMPILE-TIME DATA
+#
+# Everything the host would otherwise write word by word before the scheduler starts -- the
+# task-id tables, the descriptor list, the constant half of every device args struct -- is
+# emitted as initialised static data instead. Static data is part of the program image the
+# testbench loads at time zero, so it costs no simulated time; a store from the host costs a
+# round trip through the SoC fabric each.
+
+_C_IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_C_INT_LITERAL = re.compile(r"\b(0[xX][0-9a-fA-F]+|\d+)(?:[uU]?[lL]{0,2}|[lL]{1,2}[uU]?)\b")
+_C_TYPE_WORDS = frozenset({"uint8_t", "uint16_t", "uint32_t", "uint64_t", "int8_t", "int16_t",
+                           "int32_t", "int64_t", "uintptr_t", "intptr_t"})
+
+
+def _is_c_constant(expr: str) -> bool:
+    """True when `expr` is an integer constant expression: literals, casts to the fixed-width
+    integer types and arithmetic, with no variable and no call -- a value a static
+    initialiser can hold."""
+    return all(t in _C_TYPE_WORDS for t in _C_IDENT.findall(_C_INT_LITERAL.sub("0", expr)))
+
+
+def _c_static_table(name: str, ctype: str, length: int, entries: dict, fill=None,
+                    fill_range=None, align: int = 8) -> str:
+    """`static const ctype name[length]` as C source.
+
+    `entries` maps an index to (value, comment). Every index of `fill_range` (lo, hi) without an
+    entry holds `fill`, written as GNU range designators, so a table that is mostly one value is
+    a few lines of source. Indices outside both are zero. No index is initialised twice (the
+    build has -Woverride-init as an error)."""
+    lines = [f"static const {ctype} {name}[{length}] __attribute__((aligned({align}))) = {{"]
+    lo, hi = fill_range if fill_range is not None else (0, 0)
+    cur = lo
+
+    def gap(a, b):                       # fill [a, b)
+        if fill is None or b <= a:
+            return
+        lines.append(f"    [{a}] = {fill}," if b - a == 1 else f"    [{a} ... {b - 1}] = {fill},")
+
+    for idx in sorted(entries):
+        if not 0 <= idx < length:
+            raise ValueError(f"{name}: index {idx} outside [0, {length})")
+        if lo <= idx < hi:
+            gap(max(cur, lo), idx)
+            cur = idx + 1
+        value, comment = entries[idx]
+        lines.append(f"    [{idx}] = {value}," + (f" // {comment}" if comment else ""))
+    gap(max(cur, lo), hi)
+    lines.append("};")
+    return "\n".join(lines) + "\n"
 
 
 
@@ -199,32 +253,39 @@ class BingoDFGEmitMixin:
                  for w in range(words):
                      task_description_list += f"{list_name}[0 * BINGO_TASK_DESC_WORDS + {w}] = 0x0000000000000000ULL;\n"
             else:
+                # The packed list is static data in the program image; ONE DMA puts it where
+                # the manager fetches it from, instead of a host store per word.
+                image = f"__bingo_desc_image_chip_{chiplet_id:02x}"
                 task_description_list += (
-                    f"uint64_t* {list_name} = (uint64_t*){desc_alloc}(0x{chiplet_id:02x}, "
-                    f"{count_name} * BINGO_TASK_DESC_WORDS * sizeof(uint64_t));\n")
-                for idx, node in enumerate(local_nodes):
+                    f"static const uint64_t {image}[{num_local_nodes} * {words}] "
+                    f"__attribute__((aligned(64))) = {{\n")
+                for node in local_nodes:
                     packed_val = self.bingo_pack_node(node)
                     fields = self.bingo_unpack_node(packed_val)
                     desc_words = self.bingo_task_desc_words(packed_val)
 
-                    # Create a detailed comment
-                    comment = f"// Node ID {node.node_id}\n"
-                    comment += f"    // Fields: Type={fields['task_type']}, TaskID={fields['task_id']}\n"
-                    comment += f"    //         Assigned: Chiplet={fields['assigned_chiplet_id']:02x}, Cluster={fields['assigned_cluster_id']}, Core={fields['assigned_core_id']}\n"
-                    comment += f"    //         DepCheck: En={fields['dep_check_en']}, Code=0b{fields['dep_check_code']:0{self.ncores_hw}b}\n"
-                    comment += f"    //         DepSet:   En={fields['dep_set_en']}, All={fields['dep_set_all']}, Chiplet={fields['dep_set_chiplet_id']:02x}, Cluster={fields['dep_set_cluster_id']}, Code=0b{fields['dep_set_code']:0{self.ncores_hw}b}"
-
-                    # Word 0 (the low half) carries the comment; the rest follow in
+                    # Word 0 at the lower address holds the low bits, the rest follow in
                     # ascending significance. Each word is masked to 64 bits -- formatting
                     # the whole descriptor as one %016X emitted a 32-digit constant that no
                     # C integer type can hold.
                     task_description_list += (
-                        f"{list_name}[{idx} * BINGO_TASK_DESC_WORDS + 0] = "
-                        f"0x{desc_words[0]:016X}ULL; {comment}\n")
-                    for w in range(1, words):
-                        task_description_list += (
-                            f"{list_name}[{idx} * BINGO_TASK_DESC_WORDS + {w}] = "
-                            f"0x{desc_words[w]:016X}ULL;\n")
+                        "    " + ", ".join(f"0x{w:016X}ULL" for w in desc_words[:words]) +
+                        f", // Node ID {node.node_id}\n"
+                        f"    //   Type={fields['task_type']} TaskID={fields['task_id']}"
+                        f" Assigned={fields['assigned_chiplet_id']:02x}/{fields['assigned_cluster_id']}"
+                        f"/{fields['assigned_core_id']}"
+                        f" DepCheck=En{fields['dep_check_en']}:0b{fields['dep_check_code']:0{self.ncores_hw}b}"
+                        f" DepSet=En{fields['dep_set_en']},All{fields['dep_set_all']},"
+                        f"{fields['dep_set_chiplet_id']:02x}/{fields['dep_set_cluster_id']}:"
+                        f"0b{fields['dep_set_code']:0{self.ncores_hw}b}\n")
+                task_description_list += "};\n"
+                task_description_list += (
+                    f"uint64_t* {list_name} = (uint64_t*){desc_alloc}(0x{chiplet_id:02x}, "
+                    f"{count_name} * BINGO_TASK_DESC_WORDS * sizeof(uint64_t));\n"
+                    f"sys_dma_blk_memcpy(0x{chiplet_id:02x}, (uint64_t)(uintptr_t){list_name},\n"
+                    f"                   chiplet_addr_transform_full(0x{chiplet_id:02x}, "
+                    f"(uint64_t)(uintptr_t){image}),\n"
+                    f"                   sizeof({image}));\n")
 
         return task_description_list
 
@@ -275,61 +336,55 @@ class BingoDFGEmitMixin:
             dev_ids, bases = self._dev_task_numbering(chiplet_id)
             if bases is not None:
                 # compact: a magic word, then one int16 a task (see bingo_api.h); the host copies
-                # ALIGN_UP(4 + 2 * num_nodes, 8) bytes of it into every cluster
+                # ALIGN_UP(4 + 2 * num_nodes, 8) bytes of it into every cluster. Static data: a
+                # task off this chiplet is -1, written as ranges.
                 tab = f"global_task_id_to_local_dev_id_chip_{chiplet_id:02x}"
-                mapping_str += (f"int16_t* {tab} = (int16_t*)bingo_l3_alloc(0x{chiplet_id:02x}, "
-                                f"ALIGN_UP(4 + {num_nodes} * sizeof(int16_t), 8));\n")
-                mapping_str += f"*(uint32_t*){tab} = BINGO_G2L16_MAGIC;\n"
+                image = f"__bingo_g2l16_image_chip_{chiplet_id:02x}"
+                entries = {0: ("(int16_t)(BINGO_G2L16_MAGIC & 0xFFFFu)", "magic, low half"),
+                           1: ("(int16_t)(BINGO_G2L16_MAGIC >> 16)", "magic, high half")}
                 for idx, node in enumerate(all_nodes):
                     if node.node_id in dev_ids:
                         loc = dev_ids[node.node_id][1]
-                        mapping_str += (f"{tab}[2 + {idx}] = {loc}; // Node ID {node.node_id} -> "
-                                        f"cluster {node.assigned_cluster_id} task {loc} ({node.node_name})\n")
-                    else:
-                        mapping_str += f"{tab}[2 + {idx}] = -1;\n"
+                        entries[2 + idx] = (str(loc), f"Node ID {node.node_id} -> cluster "
+                                            f"{node.assigned_cluster_id} task {loc} ({node.node_name})")
+                length = -(-(2 + num_nodes) // 4) * 4
+                mapping_str += _c_static_table(image, "int16_t", length, entries, fill="-1",
+                                               fill_range=(2, 2 + num_nodes))
+                mapping_str += f"int16_t* {tab} = (int16_t*){image};\n"
                 mapping_str += (f"uint32_t num_dev_tasks_chip_{chiplet_id:02x} = {bases[-1]};\n")
                 mapping_str += (f"uint32_t cluster_dev_base_chip_{chiplet_id:02x}[{len(bases)}] = "
                                 f"{{{', '.join(str(b) for b in bases)}}};\n")
                 continue
-            mapping_str += f"int32_t* global_task_id_to_dev_task_id_chip_{chiplet_id:02x} = (int32_t*)bingo_l3_alloc(0x{chiplet_id:02x}, {num_nodes} * sizeof(int32_t));\n"
             dev_task_counter = 0
-            
+            entries = {}
             for idx, node in enumerate(all_nodes):
                 kernel_name = node.kernel_name
-                # Check if the node is assigned to the current chiplet
-                val = "-1"
-                comment = ""
-                if node.assigned_chiplet_id == chiplet_id:
-                    if kernel_name and kernel_name.startswith("__snax"):
-                         # It is a device task
-                        val = str(dev_task_counter)
-                        comment = f" -> Dev Task {dev_task_counter} ({node.node_name})"
-                        dev_task_counter += 1
-                    else:
-                        comment = f" ({node.node_name})"
-                
-                mapping_str += f"global_task_id_to_dev_task_id_chip_{chiplet_id:02x}[{idx}] = {val}; // Node ID {node.node_id}{comment}\n"
-            
+                if node.assigned_chiplet_id == chiplet_id and kernel_name and kernel_name.startswith("__snax"):
+                    entries[idx] = (str(dev_task_counter), f"Node ID {node.node_id} -> Dev Task "
+                                    f"{dev_task_counter} ({node.node_name})")
+                    dev_task_counter += 1
+            image = f"__bingo_g2d_image_chip_{chiplet_id:02x}"
+            mapping_str += _c_static_table(image, "int32_t", max(num_nodes, 1), entries, fill="-1",
+                                           fill_range=(0, num_nodes))
+            mapping_str += (f"int32_t* global_task_id_to_dev_task_id_chip_{chiplet_id:02x} = "
+                            f"(int32_t*){image};\n")
             mapping_str += f"uint32_t num_dev_tasks_chip_{chiplet_id:02x} = {dev_task_counter};\n"
-            
+
         # 2. Emit global_task_id_to_host_task_id
         for chiplet_id in chiplets_to_process:
-            mapping_str += f"int32_t* global_task_id_to_host_task_id_chip_{chiplet_id:02x} = (int32_t*)bingo_l3_alloc(0x{chiplet_id:02x}, {num_nodes} * sizeof(int32_t));\n"
             host_task_counter = 0
+            entries = {}
             for idx, node in enumerate(all_nodes):
                 kernel_name = node.kernel_name
-                val = "-1"
-                comment = ""
-                if node.assigned_chiplet_id == chiplet_id:
-                    if kernel_name and kernel_name.startswith("__host"):
-                        val = str(host_task_counter)
-                        comment = f" -> Host Task {host_task_counter} ({node.node_name})"
-                        host_task_counter += 1
-                    else:
-                        comment = f" ({node.node_name})"
-
-                mapping_str += f"global_task_id_to_host_task_id_chip_{chiplet_id:02x}[{idx}] = {val}; // Node ID {node.node_id}{comment}\n"
-            
+                if node.assigned_chiplet_id == chiplet_id and kernel_name and kernel_name.startswith("__host"):
+                    entries[idx] = (str(host_task_counter), f"Node ID {node.node_id} -> Host Task "
+                                    f"{host_task_counter} ({node.node_name})")
+                    host_task_counter += 1
+            image = f"__bingo_g2h_image_chip_{chiplet_id:02x}"
+            mapping_str += _c_static_table(image, "int32_t", max(num_nodes, 1), entries, fill="-1",
+                                           fill_range=(0, num_nodes))
+            mapping_str += (f"int32_t* global_task_id_to_host_task_id_chip_{chiplet_id:02x} = "
+                            f"(int32_t*){image};\n")
             mapping_str += f"uint32_t num_host_tasks_chip_{chiplet_id:02x} = {host_task_counter};\n"
         return mapping_str
 
@@ -613,6 +668,8 @@ class BingoDFGEmitMixin:
 
         dev_ids, _ = self._dev_task_numbering(chiplet_id)
         host_task_idx = 0
+        image_member = self._emit_device_args_images(f, chiplet_id, local_nodes, handle_name_map,
+                                                     sp_packed)
 
         for node in local_nodes:
             kernel_name = node.kernel_name
@@ -638,7 +695,15 @@ class BingoDFGEmitMixin:
                 dev_task_idx = dev_ids[node.node_id][0]
                 args_var = f"args_dev_chip{chiplet_id:02x}_{node.node_id}"
 
-                if node.kernel_args:
+                if node.node_id in image_member:
+                    # The args struct is a member of its cluster's static image: patch the
+                    # fields only known at run time, point the list at where the image lands
+                    img_var, img_t, member, runtime, l1_var = image_member[node.node_id]
+                    for field, value in runtime.items():
+                        f.write(f"        {img_var}.{member}.{field} = {value};\n")
+                    f.write(f"        device_arg_list_chip_{chiplet_id:02x}[{dev_task_idx}] = "
+                            f"(uint32_t)({l1_var} + __builtin_offsetof({img_t}, {member}));\n")
+                elif node.kernel_args:
                     _ab = f"__bingo_l1_arena_chip{chiplet_id:02x}_cl{node.assigned_cluster_id}"
                     f.write(f"        {args_struct_type}* {args_var} = ({args_struct_type}*)({_ab} + {_ab}_off);\n")
                     f.write(f"        {_ab}_off += ALIGN_UP(sizeof({args_struct_type}), 64);\n")
@@ -701,6 +766,77 @@ class BingoDFGEmitMixin:
                         for expert_idx, cerf_gid in mapping.items():
                             f.write(f"        __cerf_gids_{node.node_id}[{expert_idx}] = {cerf_gid};\n")
 
+        # Every runtime patch has landed in the images: one DMA a cluster puts them in L1
+        copies = sorted({(v[0], v[1], v[4]) for v in image_member.values()})
+        if copies:
+            f.write("\n        // 3d. Device args images -> their cluster's L1 arena\n")
+            f.write('        asm volatile("fence" ::: "memory");\n')
+            for img_var, img_t, l1_var in copies:
+                f.write(f"        sys_dma_blk_memcpy(0x{chiplet_id:02x}, {l1_var},\n"
+                        f"                           chiplet_addr_transform_full(0x{chiplet_id:02x}, "
+                        f"(uint64_t)(uintptr_t)&{img_var}),\n"
+                        f"                           sizeof({img_t}));\n")
+
+    def _emit_device_args_images(self, f, chiplet_id, local_nodes, handle_name_map, sp_packed):
+        """One static image a cluster of the device args structs this chiplet's host would
+        otherwise write field by field into L1. Returns {node_id: (image var, image type,
+        member, {field: runtime value}, L1 address var)}; empty when the images are off.
+
+        Only with packed scratchpad slots: then the args are the arena's last tenant and sit
+        back to back from the bump pointer, so a struct whose members are each 64-B aligned
+        has exactly the bump layout (offset k = offset k-1 + ALIGN_UP(sizeof, 64)). Fields
+        that are integer constants are initialised in the image -- it arrives with the
+        program -- and only the rest (L1 addresses from the runtime arena, scratchpads,
+        address transforms) is patched by the host, in L3, before one DMA moves the image.
+        A field no args class assigns is zero here rather than stale TCDM contents.
+        """
+        if not (sp_packed and getattr(self, "static_args_image", True)):
+            return {}
+        per_cl = {}
+        for node in local_nodes:
+            kn = node.kernel_name
+            if not (kn and kn.startswith("__snax")):
+                continue
+            sp_cast = f"(uint32_t)(uintptr_t){node._scratchpad_c_var}"
+            if node.kernel_args:
+                struct_t = node.kernel_args.get_struct_name()
+                node.kernel_args._scratchpad_c_expr = sp_cast
+                fields = dict(node.kernel_args.get_c_field_assignments_with_scratchpad(handle_name_map))
+                pred = getattr(node, "_pred_source_node", None)
+                if pred:
+                    fields["pred_scratchpad_addr"] = f"(uint32_t)(uintptr_t){pred._scratchpad_c_var}"
+            elif "exit" in kn:
+                struct_t = "__snax_bingo_kernel_exit_args_t"
+                fields = {"exit_code": "0", "scratchpad_ptr": sp_cast}
+            else:
+                continue
+            per_cl.setdefault(node.assigned_cluster_id, []).append((node, struct_t, fields))
+
+        out = {}
+        for cl in sorted(per_cl):
+            cid = f"{chiplet_id:02x}"
+            img_t = f"__bingo_args_image_chip{cid}_cl{cl}_t"
+            img_var = f"__bingo_args_image_chip{cid}_cl{cl}"
+            l1_var = f"__bingo_args_l1_chip{cid}_cl{cl}"
+            base = f"__bingo_l1_arena_chip{cid}_cl{cl}"
+            f.write(f"        // 3c. Device args of cluster {cl}: compile-time fields in a static image\n")
+            f.write("        typedef struct {\n")
+            for node, struct_t, _ in per_cl[cl]:
+                f.write(f"            {struct_t} a{node.node_id} __attribute__((aligned(64)));\n")
+            f.write(f"        }} {img_t};\n")
+            f.write(f"        static {img_t} {img_var} __attribute__((aligned(64))) = {{\n")
+            for node, struct_t, fields in per_cl[cl]:
+                const = [(k, v) for k, v in fields.items() if _is_c_constant(v)]
+                runtime = {k: v for k, v in fields.items() if not _is_c_constant(v)}
+                if const:
+                    f.write(f"            .a{node.node_id} = {{" +
+                            ", ".join(f".{k} = {v}" for k, v in const) + "},\n")
+                out[node.node_id] = (img_var, img_t, f"a{node.node_id}", runtime, l1_var)
+            f.write("        };\n")
+            f.write(f"        const uint64_t {l1_var} = {base} + {base}_off;\n")
+            f.write(f"        {base}_off += sizeof({img_t});\n\n")
+        return out
+
     def _emit_scheduler_launch(self, f, chiplet_id):
         """Emit the scheduler initialization and launch calls."""
         f.write("\n")
@@ -750,17 +886,29 @@ class BingoDFGEmitMixin:
             # Step 2: Emit Debug Kernel List
             self._emit_debug_kernel_list(f)
 
-            # Step 3: Emit kernel_execution function structure
-            f.write("int kernel_execution(){\n")
-            f.write("    check_kernel_tab_ready();\n")
-            f.write(f"    OFFLOAD_BINGO_HW_DEBUG_PRINT_SAFE(\"Chip(%x, %x): [Host] Preparing {app_name} Workload\\r\\n\", get_current_chip_loc_x(), get_current_chip_loc_y());\n")
-            f.write("    uint32_t current_chip_id = get_current_chip_id();\n")
-            
+            # Step 3: Emit kernel_execution function structure. With split_chip_functions every
+            # chiplet's block is its own function and kernel_execution only dispatches: the
+            # compiler then optimises one chiplet's block at a time, where one function
+            # holding every block grows its optimisation passes faster than its length.
+            split = bool(getattr(self, "split_chip_functions", False))
+            if not split:
+                f.write("int kernel_execution(){\n")
+                f.write("    check_kernel_tab_ready();\n")
+                f.write(f"    OFFLOAD_BINGO_HW_DEBUG_PRINT_SAFE(\"Chip(%x, %x): [Host] Preparing {app_name} Workload\\r\\n\", get_current_chip_loc_x(), get_current_chip_loc_y());\n")
+                f.write("    uint32_t current_chip_id = get_current_chip_id();\n")
+
 
             # Step 4: Iterate over each chiplet to generate isolated blocks
             for chiplet_id in self.chiplet_ids:
-                f.write(f"    if (current_chip_id == 0x{chiplet_id:02x}) {{\n")
-                
+                if split:
+                    f.write(f"static int __attribute__((noinline)) "
+                            f"kernel_execution_chip_{chiplet_id:02x}(void) {{\n")
+                    f.write(f"    uint32_t current_chip_id = 0x{chiplet_id:02x};\n")
+                    f.write("    (void)current_chip_id;\n")
+                    f.write("    {\n")
+                else:
+                    f.write(f"    if (current_chip_id == 0x{chiplet_id:02x}) {{\n")
+
                 # A. Emit Task Description and Mapping Lists
                 self._emit_task_desc_and_mappings(f, chiplet_id)
                 
@@ -783,7 +931,18 @@ class BingoDFGEmitMixin:
                         f.write(f"        {line}\n")
 
                 f.write("    }\n")
-            
+                if split:
+                    f.write("    return 0;\n")
+                    f.write("}\n\n")
+
+            if split:
+                f.write("int kernel_execution(){\n")
+                f.write("    check_kernel_tab_ready();\n")
+                f.write(f"    OFFLOAD_BINGO_HW_DEBUG_PRINT_SAFE(\"Chip(%x, %x): [Host] Preparing {app_name} Workload\\r\\n\", get_current_chip_loc_x(), get_current_chip_loc_y());\n")
+                f.write("    uint32_t current_chip_id = get_current_chip_id();\n")
+                for chiplet_id in self.chiplet_ids:
+                    f.write(f"    if (current_chip_id == 0x{chiplet_id:02x}) "
+                            f"return kernel_execution_chip_{chiplet_id:02x}();\n")
             f.write("    return 0;\n")
             f.write("}\n")
 

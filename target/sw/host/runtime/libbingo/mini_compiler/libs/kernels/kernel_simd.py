@@ -22,6 +22,73 @@ from kernel_base import LAYOUT_CODE, BingoKernelArgs
 from blocked_nest import blocked_nest
 
 
+# ---- the SIMD core's beat ----------------------------------------------------------------
+# One beat of the cluster's SIMD core is its num_channel TCDM channels of 8 bytes (cluster cfg,
+# snax_simd_cfg), and every operator has one FP16 lane per 2 bytes of it: the beat is what a
+# row of `cols` FP16 values costs, and it is a property of the cluster, not of this file.
+# bingo_platform.load_cluster_cfg sets it from the cfg it loads; a generator that never loads
+# its cluster cfg has it read from its --hwcfg argument the first time a SIMD task needs it.
+_simd_beat_bytes = None
+
+
+def cluster_simd_beat_bytes(hw: dict) -> int:
+    """Bytes in one SIMD-core beat of the cluster cfg `hw` (as loaded by hjson); num_channel
+    defaults to the DMA beat, as in the SIMD generator (SimdCfgParser.numChannel)."""
+    cluster = hw["cluster"]
+    for core in cluster["hives"][0]["cores"]:
+        if isinstance(core, dict) and "snax_simd_cfg" in core:
+            simd = core["snax_simd_cfg"]
+            n = simd.get("num_channel", cluster["dma_data_width"] // cluster["data_width"])
+            return int(n) * int(cluster["data_width"]) // 8
+    raise ValueError("this cluster has no snax_simd_cfg")
+
+
+def set_simd_beat_bytes(n: int) -> None:
+    global _simd_beat_bytes
+    _simd_beat_bytes = int(n)
+
+
+def simd_beat_bytes() -> int:
+    if _simd_beat_bytes is None:
+        import sys
+        import hjson
+        argv, path = sys.argv, None
+        for i, v in enumerate(argv):
+            if v == "--hwcfg" and i + 1 < len(argv):
+                path = argv[i + 1]
+            elif v.startswith("--hwcfg="):
+                path = v.split("=", 1)[1]
+        if path is None:
+            raise RuntimeError("the SIMD beat is a property of the cluster cfg: load it with "
+                               "bingo_platform.load_cluster_cfg (or call set_simd_beat_bytes) "
+                               "before building a SIMD task")
+        with open(path) as f:
+            set_simd_beat_bytes(cluster_simd_beat_bytes(hjson.load(f)))
+    return _simd_beat_bytes
+
+
+def simd_fp16_lanes() -> int:
+    """FP16 values in one SIMD beat."""
+    return simd_beat_bytes() // 2
+
+
+def simd_beats(nbytes: int) -> int:
+    """Whole SIMD beats in `nbytes` bytes; a partial beat is not handled."""
+    b = simd_beat_bytes()
+    if nbytes % b:
+        raise ValueError(f"{nbytes} B is not a whole number of {b}-B SIMD beats")
+    return nbytes // b
+
+
+def _check_simd_cols(cols: int) -> int:
+    """Beats in one row of `cols` FP16 values."""
+    lanes = simd_fp16_lanes()
+    if cols % lanes:
+        raise ValueError(f"cols={cols} must be a multiple of {lanes} -- one SIMD beat is "
+                         f"{2 * lanes} B = {lanes} fp16 lanes and a partial beat is not handled.")
+    return cols // lanes
+
+
 class SnaxBingoKernelSimdFp16ToInt8Args(BingoKernelArgs):
     """Fp16ToInt8: out = clamp(round(x * inv_scale), -128, 127) over `rows*beats` flat beats,
     on the HasFp16ToInt8 xDMA datapath -- the dedicated activation fp16 -> int8 GEMM-operand
@@ -93,9 +160,7 @@ class SnaxBingoKernelSimdScaleF16Args(BingoKernelArgs):
 
     def __init__(self, src_addr: Union[BingoMemAlloc, int], dst_addr: Union[BingoMemAlloc, int],
                  scale_f32bits: int, rows: int, cols: int, scale_addr=0):
-        if cols % 32:
-            raise ValueError(f"cols={cols} must be a multiple of 32 -- one SIMD beat is "
-                             f"64 B = 32 fp16 lanes and a partial beat is not handled.")
+        beats = _check_simd_cols(cols)
         self.src_addr = src_addr
         self.dst_addr = dst_addr
         self.scale_f32bits = int(scale_f32bits)
@@ -104,7 +169,7 @@ class SnaxBingoKernelSimdScaleF16Args(BingoKernelArgs):
         self.scale_addr = scale_addr
         self.rows = rows
         self.cols = cols
-        self.beats = cols // 32
+        self.beats = beats
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_simd_stream_map_args_t"
@@ -159,9 +224,7 @@ class SnaxBingoKernelSimdRopeArgs(BingoKernelArgs):
 
     def __init__(self, ops_addr: Union[BingoMemAlloc, int],
                  out_addr: Union[BingoMemAlloc, int], cols: int, rows: int = 1):
-        if cols % 32:
-            raise ValueError(f"cols={cols} must be a multiple of 32 -- one SIMD beat is "
-                             f"64 B = 32 fp16 lanes and a partial beat is not handled.")
+        _check_simd_cols(cols)
         self.ops_addr = ops_addr
         self.out_addr = out_addr
         self.cols = cols
@@ -202,15 +265,13 @@ class SnaxBingoKernelSimdAddF16Args(BingoKernelArgs):
 
     def __init__(self, a_addr: Union[BingoMemAlloc, int], b_addr: Union[BingoMemAlloc, int],
                  out_addr: Union[BingoMemAlloc, int], rows: int, cols: int):
-        if cols % 32:
-            raise ValueError(f"cols={cols} must be a multiple of 32 -- one SIMD beat is "
-                             f"64 B = 32 fp16 lanes and a partial beat is not handled.")
+        beats = _check_simd_cols(cols)
         self.a_addr = a_addr
         self.b_addr = b_addr
         self.out_addr = out_addr
         self.rows = rows
         self.cols = cols
-        self.beats = cols // 32
+        self.beats = beats
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_simd_stream_elementwise_args_t"
@@ -537,13 +598,14 @@ class SnaxBingoKernelSimdSiluF16I8Args(_SimdRowOpArgs):
 
 class _SnaxBingoKernelSimdSwigluArgs(BingoKernelArgs):
     """Shared base for the fused fp16 SwiGLU kernel (out = silu(gate) * up): two input tensors
-    (gate, up) + one output, all [rows, cols] (cols a multiple of 32). Output precision is chosen
+    (gate, up) + one output, all [rows, cols] (cols a whole number of SIMD beats). Output precision is chosen
     by the subclass: F16F16 -> fp16 output; F16I8 -> int8 (fused Fp16ToInt8, baked 16.0 scale).
     The kernel allocates the intermediate silu(gate) scratch itself. Subclasses set KERNEL_NAME."""
     STRUCT_NAME = "__snax_bingo_kernel_simd_swiglu_args_t"
 
     def __init__(self, gate_addr: Union[BingoMemAlloc, int], up_addr: Union[BingoMemAlloc, int],
                  output_addr: Union[BingoMemAlloc, int], rows: int, cols: int):
+        _check_simd_cols(cols)
         self.gate_addr = gate_addr
         self.up_addr = up_addr
         self.output_addr = output_addr
@@ -640,7 +702,8 @@ class SnaxBingoKernelSimdMoeCombineF16Args(BingoKernelArgs):
 class SnaxBingoKernelSimdFaSoftmaxArgs(BingoKernelArgs):
     """FlashAttention online-softmax epilogue: the whole per-tile SIMD half, one kernel.
 
-    The producing GEMM node writes `s16_src` (its D32 output, fp16 [bc, 32]); this node
+    The producing GEMM node writes `s16_src` (its D32 output, fp16 [bc, Br], Br the SIMD's
+    FP16 lanes: one beat per key); this node
     writes `p8_dst` for the consuming GEMM. `arena` carries the persistent (m, l, O)
     recurrence plus all scratch, so the SAME arena handle must be passed for every KV
     tile of one query tile; tile_idx=0 seeds m, l and O.
@@ -652,7 +715,7 @@ class SnaxBingoKernelSimdFaSoftmaxArgs(BingoKernelArgs):
     THE ADJACENCIES ARE NOT ALL INSIDE THE ARENA. Two of this kernel's SIMD tasks pair
     operands in DIFFERENT buffers, reaching out of the arena with a stride:
 
-        FA_SH_NEGM_OUT   writes -m_new to [rmax][negm]   negm = the one-beat prefix of s16_src
+        FA_SH_MNEW_OUT   writes m_new to [mnew][latch]   latch = the one-beat prefix of s16_src
         FA_SH_LNEW_IN    reads  [lsc][rsum]              rsum = the trailing beat of p8_dst
 
     `snax_simd_shape_t.stride` is a uint32_t, so the arena must sit at a LOWER address than
@@ -683,11 +746,12 @@ class SnaxBingoKernelSimdFaSoftmaxArgs(BingoKernelArgs):
     CORR_EXPORT = 2
     EXACT = P_INTERLEAVE | CORR_EXPORT
 
-    BEAT_BYTES = 64
     # THE P8 PITCH that keeps PV's operand streams off each other's banks: the smallest
     # pitch >= 64 whose double is 64 mod 256, so PV's k-major B walk (two blocks per pass)
     # steps round TCDM's 256 B bank rotation at the rate its A walk does. See "THE B
-    # PITCH" in offload_hw_kernels/gemm_fa.h. 0 (or BEAT_BYTES) is the dense layout.
+    # PITCH" in offload_hw_kernels/gemm_fa.h. 0 (or one beat) is the dense layout. Only for a
+    # 64-B SIMD beat, where one P8 beat is one B block; a narrower beat is half a block and
+    # an interleaved P must be dense (pitch 0): see spaced_pitch().
     PITCH_SPACED = 160
     # The arena opens with a FIXED block reserved for the cached task geometries, which is
     # NOT sizeof(snax_simd_shape_t) * 12: that struct's size follows the cluster's
@@ -696,27 +760,37 @@ class SnaxBingoKernelSimdFaSoftmaxArgs(BingoKernelArgs):
     # offload_hw_kernels/simd.h, where a _Static_assert checks the shapes still fit.
     SHAPE_BYTES = 1024
 
+    @staticmethod
+    def beat() -> int:
+        """One SIMD beat: Br FP16 scores, one key of the score tile."""
+        return simd_beat_bytes()
+
+    @classmethod
+    def spaced_pitch(cls) -> int:
+        """PITCH_SPACED where a P8 beat is a whole B block, else dense (0)."""
+        return cls.PITCH_SPACED if cls.beat() >= 64 else 0
+
     @classmethod
     def arena_bytes(cls, bc: int, dhead: int) -> int:
-        return cls.SHAPE_BYTES + (dhead + 10) * cls.BEAT_BYTES
+        return cls.SHAPE_BYTES + (dhead + 9) * cls.beat()
 
     @classmethod
     def pitch(cls, p8_pitch: int = 0) -> int:
         """The byte distance between two P8 beats that p8_pitch means (0 is dense)."""
-        return int(p8_pitch) or cls.BEAT_BYTES
+        return int(p8_pitch) or cls.beat()
 
     @classmethod
     def p8_bytes(cls, bc: int, br: int, p_mode: int = 0, p8_pitch: int = 0) -> int:
-        """The P buffer: bc*br INT8 as 64-byte beats one pitch apart, the row-sum beat one
+        """The P buffer: bc*br INT8 as SIMD beats one pitch apart, the row-sum beat one
         pitch after them, and under CORR_EXPORT the corr beat one pitch after that."""
         last = (cls.corr_offset(bc, br, p8_pitch) if p_mode & cls.CORR_EXPORT
                 else cls.rowsum_offset(bc, br, p8_pitch))
-        return last + cls.BEAT_BYTES
+        return last + cls.beat()
 
     @classmethod
     def rowsum_offset(cls, bc: int, br: int, p8_pitch: int = 0) -> int:
         """Where the fused pass's tapped row sum lands inside p8_dst."""
-        return (bc * br // cls.BEAT_BYTES) * cls.pitch(p8_pitch)
+        return (bc * br // cls.beat()) * cls.pitch(p8_pitch)
 
     @classmethod
     def corr_offset(cls, bc: int, br: int, p8_pitch: int = 0) -> int:
@@ -737,14 +811,15 @@ class SnaxBingoKernelSimdFaSoftmaxArgs(BingoKernelArgs):
         whatever is next to each other in it. Reordering anything here without doing the
         same in simd.h feeds a task the beat next door, which does not fault.
         """
-        b = cls.BEAT_BYTES
+        b = cls.beat()
         off = {}
         t = cls.SHAPE_BYTES
-        # negmS, s16 and p16 are GONE: the fused exp pass reads the GEMM's own score
-        # buffer through a one-beat prefix and emits INT8 directly, so neither the tile
-        # copy nor the FP16 P is ever materialised. Mirrors simd_fa_layout() exactly.
-        for name, beats in (("rmax", 1), ("mrun", 1),
-                            ("mnew", 1), ("delta", 1), ("corrL", 1), ("lrun", 1),
+        # The fused exp pass reads the GEMM's own score buffer through a one-beat prefix (the
+        # latch, m_new) and emits INT8 directly, so neither a tile copy nor an FP16 P is ever
+        # materialised. mnew comes first: it is the B of corr's [m_new]..[m_old] SUB pair.
+        # Mirrors simd_fa_layout() exactly.
+        for name, beats in (("mnew", 1), ("rmax", 1), ("mrun", 1),
+                            ("corrL", 1), ("lrun", 1),
                             ("lnew", 1), ("rsum", 1), ("lsc", 1),
                             ("corrO", 1), ("oacc", dhead)):
             off[name] = t
@@ -772,9 +847,13 @@ class SnaxBingoKernelSimdFaSoftmaxArgs(BingoKernelArgs):
                              f"a negative one flips which key is the maximum")
         if bc <= 0 or dhead <= 0:
             raise ValueError(f"bc and dhead must be positive, got {bc}, {dhead}")
-        if p8_pitch and (p8_pitch < self.BEAT_BYTES or p8_pitch % 8):
+        b = self.beat()
+        if p8_pitch and (p8_pitch < b or p8_pitch % 8):
             raise ValueError(f"p8_pitch={p8_pitch} must be 0 (dense) or at least "
-                             f"{self.BEAT_BYTES} and a multiple of 8")
+                             f"{b} and a multiple of 8")
+        if (p_mode & self.P_INTERLEAVE) and b < 64 and p8_pitch not in (0, b):
+            raise ValueError(f"p8_pitch={p8_pitch}: a {b}-B SIMD beat is half of a 64-B B block, "
+                             f"so an interleaved P must be dense (0)")
         self.p8_pitch = int(p8_pitch)
         self.s16_src = s16_src
         self.p8_dst = p8_dst
@@ -972,7 +1051,7 @@ class SnaxBingoKernelSimdQuantARowsArgs(BingoKernelArgs):
 
 class SnaxBingoKernelSimdMlaNormaliseArgs(BingoKernelArgs):
     """o~ = O16 (.) c / l per query lane, c / l = RSQRT(a_n * l)^2 into the latch beat that
-    sits DIRECTLY BELOW O16 (latch_addr == input_addr - 64), then a sticky MUL over
+    sits DIRECTLY BELOW O16 (latch_addr == input_addr - one SIMD beat), then a sticky MUL over
     [latch][O16]. a_n = 1 / c, FP32 bits."""
 
     KERNEL_NAME = "__snax_bingo_kernel_simd_mla_normalise"
@@ -1016,6 +1095,30 @@ class SnaxBingoKernelSimdSoftmaxRowArgs(BingoKernelArgs):
     def get_c_field_assignments(self, handle_name_map):
         a = {}
         for nm in ("x_addr", "tmp_addr", "e_addr", "p_addr"):
+            self._process_addr(getattr(self, nm), nm, a, handle_name_map, split_64bit=False)
+        a["beats"] = str(self.beats)
+        return a
+
+
+class SnaxBingoKernelSimdSoftmaxRowExtArgs(BingoKernelArgs):
+    """The softmax row with its statistics given: -m splatted in x's latch beat (x - 64), s
+    splatted in the beat at s_addr; p = exp(x - m) * rsqrt(s * s) (three SIMD tasks). e needs a
+    free latch beat below it."""
+
+    KERNEL_NAME = "__snax_bingo_kernel_simd_softmax_row_ext"
+
+    def __init__(self, x_addr, s_addr, e_addr, p_addr, beats: int):
+        if beats <= 0:
+            raise ValueError(f"beats={beats}: at least one.")
+        self.x_addr, self.s_addr, self.e_addr, self.p_addr = x_addr, s_addr, e_addr, p_addr
+        self.beats = int(beats)
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_simd_softmax_row_ext_args_t"
+
+    def get_c_field_assignments(self, handle_name_map):
+        a = {}
+        for nm in ("x_addr", "s_addr", "e_addr", "p_addr"):
             self._process_addr(getattr(self, nm), nm, a, handle_name_map, split_64bit=False)
         a["beats"] = str(self.beats)
         return a

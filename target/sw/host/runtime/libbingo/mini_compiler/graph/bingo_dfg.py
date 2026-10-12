@@ -263,6 +263,10 @@ class BingoDFG(
         self.bingo_compile_conditional_regions()
         self._validate_cerf_cross_group_edges()
         self._validate_cerf_core_sharing()
+        # Two ChainGathers that would meet as middle hops on one xDMA must not overlap (the
+        # hardware cannot start them once their frames cross); order them before any pass
+        # derives core order or dependency tags from the edges.
+        self.bingo_transform_order_crossed_chain_gathers()
         # Identity-aware deps: per-edge tags are allocated LAST (after dep-info
         # assignment). The allocator's min-chain-cover reuses a tag across edges
         # that can never be live together (happens-before / same-core order), which

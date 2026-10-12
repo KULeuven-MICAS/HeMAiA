@@ -463,20 +463,27 @@ class SnaxBingoKernelPackFaPartialArgs(BingoKernelArgs):
 
 class SnaxBingoKernelXdmaChainGatherArgs(BingoKernelArgs):
     # Must match BINGO_XDMA_CHAIN_MAX in device_kernel_args.h.
-    CHAIN_MAX = 8
+    CHAIN_MAX = 16
 
     def __init__(self, local_src: Union[BingoMemAlloc, int], chain: list,
-                 size: int, junction: str, jct_csr0: int):
+                 size: int, junction: str, jct_csr0: int, hops: list | None = None):
+        """`hops`: the (chiplet, cluster) whose xDMA each chain entry reaches, in chain order.
+        Needed when the entries are address expressions; an L1 BingoMemAlloc entry (or a view
+        of one) names its own. The compiler orders gathers that would meet as middle hops on
+        one xDMA from these (bingo_transform_order_crossed_chain_gathers)."""
         if not 2 <= len(chain) <= self.CHAIN_MAX:
             raise ValueError(
                 f"chain gather: chain has {len(chain)} entries; it must have 2.."
                 f"{self.CHAIN_MAX} -- the path in data order, ending at the "
                 "collector's own destination buffer.")
+        if hops is not None and len(hops) != len(chain):
+            raise ValueError(f"chain gather: {len(hops)} hops for {len(chain)} chain entries")
         self.local_src = local_src
         self.chain = list(chain)
         self.size = size
         self.junction = junction
         self.jct_csr0 = jct_csr0
+        self.hops = [tuple(h) for h in hops] if hops is not None else None
 
     def get_struct_name(self) -> str:
         return "__snax_bingo_kernel_xdma_chain_gather_args_t"

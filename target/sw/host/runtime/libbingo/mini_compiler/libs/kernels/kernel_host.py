@@ -27,6 +27,64 @@ class HostBingoKernelDummyArgs(BingoKernelArgs):
     def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
         return {"dummy_input": str(self.dummy_input)}
 
+
+class HostBingoKernelChipBarrierArgs(BingoKernelArgs):
+    """Args for __host_bingo_kernel_chip_barrier, on the host core of every chip.
+
+    op 0 (OP_INIT) zeroes the chip's barrier state for both mechanisms (this kernel's and
+    __snax_bingo_kernel_chip_barrier's); every chip runs it, ordered before any chip's first
+    barrier. op 1 (OP_BCAST) is one 0xFF broadcast barrier over top_left..bottom_right; seq is
+    its 1-based index in the program (0: unchecked), at most 255 per run (8-bit checkpoint)."""
+    KERNEL_NAME = "__host_bingo_kernel_chip_barrier"
+    OP_INIT = 0
+    OP_BCAST = 1
+
+    def __init__(self, op: int, top_left: int = 0, bottom_right: int = 0, seq: int = 0):
+        self.op = int(op)
+        self.top_left = int(top_left)
+        self.bottom_right = int(bottom_right)
+        self.seq = int(seq)
+        if self.op == self.OP_BCAST and self.seq > 255:
+            raise ValueError(f"broadcast barrier {self.seq}: the checkpoint is 8-bit, 255 per run")
+
+    def get_struct_name(self) -> str:
+        return "__host_bingo_kernel_chip_barrier_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        return {"op": str(self.op), "top_left": str(self.top_left),
+                "bottom_right": str(self.bottom_right), "seq": str(self.seq)}
+
+
+class HostBingoKernelFoldArgs(BingoKernelArgs):
+    """Args for __host_bingo_kernel_fold: n_parts partials of part_bytes each, back to back
+    at src_addr, folded on the host core into dst_addr. op TOPK keeps the 8 largest
+    (value, index) pairs per 64 B beat; op MONOID folds 8 rows' online-softmax (m, l) per
+    beat. Both buffers should be host-cacheable memory on the host's own chiplet."""
+    KERNEL_NAME = "__host_bingo_kernel_fold"
+    TOPK = 0
+    MONOID = 1
+
+    def __init__(self, op: int, src_addr, n_parts: int, part_bytes: int, dst_addr):
+        if part_bytes % 64:
+            raise ValueError(f"fold: part_bytes {part_bytes} is not a multiple of 64")
+        self.op = int(op)
+        self.src_addr = src_addr
+        self.n_parts = int(n_parts)
+        self.part_bytes = int(part_bytes)
+        self.dst_addr = dst_addr
+
+    def get_struct_name(self) -> str:
+        return "__host_bingo_kernel_fold_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {"op": str(self.op), "n_parts": str(self.n_parts), "part_bytes": str(self.part_bytes)}
+        self._process_addr(self.src_addr, "src_addr", a, handle_name_map,
+                           split_64bit=False, as_64bit=True)
+        self._process_addr(self.dst_addr, "dst_addr", a, handle_name_map,
+                           split_64bit=False, as_64bit=True)
+        return a
+
+
 # HOST BINGO Check Result
 # Check-mode constants (mirror #defines in host_kernel_args.h)
 BINGO_CHECK_TYPE_BYTE_EXACT = 0

@@ -15,6 +15,12 @@ from bingo_mem_handle import BingoMemAlloc
 
 from kernel_base import BingoKernelArgs
 
+# int4_b_enable of the general descriptor also names B's layout (offload_hw_kernels/gemm.h,
+# "INT4 B layouts"): the B-layout, nibble-packed, or the paired layout (util/layout.py
+# to_b_pairs + pack_int4), which B walks at A's stride and needs an even N, B not transposed.
+INT4_B_LAYOUT_B = 1
+INT4_B_LAYOUT_PAIRED = 2
+
 
 class SnaxBingoKernelGemmFullArgs(BingoKernelArgs):
     def __init__(self, 
@@ -46,6 +52,12 @@ class SnaxBingoKernelGemmFullArgs(BingoKernelArgs):
         if d_shift and not int32tofp16_enable:
             raise ValueError("d_shift scales the INT32 -> FP16 conversion; it means nothing "
                              "without int32tofp16_enable")
+        if int(int4_b_enable) not in (0, INT4_B_LAYOUT_B, INT4_B_LAYOUT_PAIRED):
+            raise ValueError(f"int4_b_enable={int4_b_enable}: 0, {INT4_B_LAYOUT_B} (B-layout) "
+                             f"or {INT4_B_LAYOUT_PAIRED} (paired)")
+        if int(int4_b_enable) == INT4_B_LAYOUT_PAIRED and (int(N) % 2 or transpose_B):
+            raise ValueError(f"paired INT4 B needs an even N (N={N}) and B not transposed "
+                             f"(transpose_B={transpose_B})")
         self.d_shift = int(d_shift)
         self.input_A_addr = input_A_addr
         self.input_B_addr = input_B_addr

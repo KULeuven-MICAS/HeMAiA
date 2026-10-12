@@ -57,6 +57,57 @@ class SnaxBingoKernelSyncProbeArgs(BingoKernelArgs):
         return assignments
 
 
+class SnaxBingoKernelChipBarrierArgs(BingoKernelArgs):
+    """Args for __snax_bingo_kernel_chip_barrier: one cross-chip barrier over the rectangle
+    top_left..bottom_right, run as a task on ONE core of every compute chip in it.
+
+    mode 0 (MODE_SW): point-to-point software barrier, arrivals to the top-left chip, which
+    pushes the release back. mode 1 (MODE_BCAST): 0xFF broadcast barrier. seq is the
+    barrier's 1-based index in the program (0: unchecked); every chip must run the same
+    sequence, and the comm-buffer state must have been zeroed first (the host chip-barrier
+    kernel, op 0, on every chip, ordered before any chip's first barrier)."""
+    MODE_SW = 0
+    MODE_BCAST = 1
+
+    def __init__(self, mode: int, top_left: int, bottom_right: int, seq: int = 0):
+        self.mode = int(mode)
+        self.top_left = int(top_left)
+        self.bottom_right = int(bottom_right)
+        self.seq = int(seq)
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_chip_barrier_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        return {"mode": str(self.mode), "top_left": str(self.top_left),
+                "bottom_right": str(self.bottom_right), "seq": str(self.seq)}
+
+
+class SnaxBingoKernelSyncMarkArgs(BingoKernelArgs):
+    """Args for __snax_bingo_kernel_sync_mark: the sync probe's stamp into stamp_buf[slot], then
+    a mark store to mark_addr that the testbench's SRAM probe answers with a snapshot of every
+    bank array's read and write counters. Marks must carry consecutive slots. stamp_buf and
+    mark_addr must be on the chiplet the task runs on, mark_addr in its L1."""
+
+    def __init__(self, stamp_buf: Union[BingoMemAlloc, int] = 0, slot: int = 0,
+                 mark_addr: Union[BingoMemAlloc, int] = 0):
+        self.stamp_buf = stamp_buf
+        self.slot = int(slot)
+        self.mark_addr = mark_addr
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_sync_mark_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        assignments = {}
+        self._process_addr(self.stamp_buf, "stamp_buf", assignments, handle_name_map,
+                           split_64bit=False, as_64bit=False)
+        assignments["slot"] = str(self.slot)
+        self._process_addr(self.mark_addr, "mark_addr", assignments, handle_name_map,
+                           split_64bit=False, as_64bit=False)
+        return assignments
+
+
 class HostBingoKernelSyncReportArgs(BingoKernelArgs):
     """Args for __host_bingo_kernel_sync_report (cross-chip sync latency, arm D).
 
@@ -232,7 +283,7 @@ class SnaxBingoKernelMoeRouteArgs(BingoKernelArgs):
     MAX_TOKENS = 4
 
     def __init__(self, p_addr, n: int, k: int, table_addr, record_addr, tokens: int = 1,
-                 p_pitch: int = 0, union_n: int = 0):
+                 p_pitch: int = 0, union_n: int = 0, ids_addr=0):
         if not 0 < n <= self.MAX_N or not 0 < k <= min(n, self.MAX_K):
             raise ValueError(f"n={n} (<= {self.MAX_N}), k={k} (<= {self.MAX_K}, <= n).")
         if not 1 <= tokens <= self.MAX_TOKENS or (tokens > 1 and (
@@ -243,6 +294,8 @@ class SnaxBingoKernelMoeRouteArgs(BingoKernelArgs):
         self.table_addr, self.record_addr = table_addr, record_addr
         self.tokens, self.p_pitch = int(tokens), int(p_pitch)
         self.union_n = int(union_n) if tokens > 1 else 0
+        # 0: candidate i is expert i; else n uint32 expert ids in L1 (moe_router_pack mode 2)
+        self.ids_addr = ids_addr
 
     @classmethod
     def record_bytes(cls, k: int) -> int:
@@ -262,6 +315,47 @@ class SnaxBingoKernelMoeRouteArgs(BingoKernelArgs):
         a["tokens"] = str(self.tokens)
         a["p_pitch"] = str(self.p_pitch)
         a["union_n"] = str(self.union_n)
+        if self.ids_addr:
+            self._process_addr(self.ids_addr, "ids_addr", a, handle_name_map, split_64bit=False)
+        else:
+            a["ids_addr"] = "0"
+        return a
+
+
+class SnaxBingoKernelMoeRouterPackArgs(BingoKernelArgs):
+    """One chip's share of a sharded router, or the root's view of its folds
+    (offload_hw_kernels/moe_route.h, moe_router_pack; on the DM core):
+      MODE_ROW     n FP16 logits -> a 32-lane row padded with -65504
+      MODE_PACK    the row + the softmax row kernel's max and sum beats -> the TopK beat (the
+                   logits as FP32 descending, ids id_base + j) and the Monoid beat (m, l)
+      MODE_UNPACK  the folded TopK and Monoid beats -> the candidates' row, -m* below it, l*
+                   splatted at s_addr, the candidates' ids at ids_addr"""
+    KERNEL_NAME = "__snax_bingo_kernel_moe_router_pack"
+    MODE_ROW, MODE_PACK, MODE_UNPACK = 0, 1, 2
+    FIELDS = ("logits_addr", "row_addr", "m_addr", "s_addr", "topk_addr", "monoid_addr",
+              "ids_addr")
+
+    def __init__(self, mode: int, n: int = 0, id_base: int = 0, **addrs):
+        if mode not in (0, 1, 2) or (mode < 2 and not 0 < n <= 8):
+            raise ValueError(f"moe_router_pack: mode {mode}, n={n} (1..8)")
+        unknown = set(addrs) - set(self.FIELDS)
+        if unknown:
+            raise ValueError(f"moe_router_pack: unknown fields {sorted(unknown)}")
+        self.mode, self.n, self.id_base = int(mode), int(n), int(id_base)
+        for f in self.FIELDS:
+            setattr(self, f, addrs.get(f, 0))
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_moe_router_pack_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {"mode": str(self.mode), "n": str(self.n), "id_base": str(self.id_base)}
+        for f in self.FIELDS:
+            v = getattr(self, f)
+            if v:
+                self._process_addr(v, f, a, handle_name_map, split_64bit=False)
+            else:
+                a[f] = "0"
         return a
 
 
@@ -301,6 +395,50 @@ class SnaxBingoKernelIdmaBcastPutArgs(BingoKernelArgs):
         self._process_addr(self.dst_addr, "dst_addr", a, handle_name_map)
         a["size"] = str(self.size)
         self._process_addr(self.flag_addr, "flag_addr", a, handle_name_map)
+        a["value"] = str(self.value)
+        return a
+
+
+# BINGO IDMA put behind a landed flag: `size` bytes src -> dst, then `value` to flag. bcast=False:
+# dst and flag are full addresses (any one chip's memory, L1 included); bcast=True: local
+# addresses that the D2D 0xFF multicast writes on every other chip, and with also_here=True on
+# this chip too (the multicast does not deliver to its sender). Nothing is staged or copied on
+# arrival.
+class SnaxBingoKernelIdmaPutFlaggedArgs(BingoKernelArgs):
+    def __init__(self, src_addr, dst_addr, size: int, flag_addr, value: int = 1, bcast: bool = False,
+                 also_here: bool = False):
+        self.src_addr, self.dst_addr, self.size = src_addr, dst_addr, int(size)
+        self.flag_addr, self.value = flag_addr, int(value)
+        self.bcast = (1 if bcast else 0) | (2 if (bcast and also_here) else 0)
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_idma_put_flagged_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.src_addr, "src_addr", a, handle_name_map)
+        self._process_addr(self.dst_addr, "dst_addr", a, handle_name_map)
+        a["size"] = str(self.size)
+        self._process_addr(self.flag_addr, "flag_addr", a, handle_name_map)
+        a["value"] = str(self.value)
+        a["bcast"] = str(self.bcast)
+        return a
+
+
+# The receiving end: wait until n_flags words, 64 B apart from flags_addr in this chip's L1,
+# hold `value`.
+class SnaxBingoKernelWaitFlagsArgs(BingoKernelArgs):
+    def __init__(self, flags_addr, n_flags: int, value: int = 1):
+        self.flags_addr, self.n_flags, self.value = flags_addr, int(n_flags), int(value)
+
+    def get_struct_name(self) -> str:
+        return "__snax_bingo_kernel_wait_flags_args_t"
+
+    def get_c_field_assignments(self, handle_name_map: Dict[BingoMemAlloc, str]) -> Dict[str, str]:
+        a = {}
+        self._process_addr(self.flags_addr, "flags_addr", a, handle_name_map,
+                           split_64bit=False, as_64bit=False)
+        a["n_flags"] = str(self.n_flags)
         a["value"] = str(self.value)
         return a
 
