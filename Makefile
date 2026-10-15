@@ -1,4 +1,4 @@
-.PHONY: clean-repo clean-bender clean-automation FORCE bootrom sw single-sw rtl open_terminal hemaia_system_vivado_preparation \
+.PHONY: clean-repo clean-bender clean-automation clean-stale FORCE bootrom sw single-sw rtl open_terminal hemaia_system_vivado_preparation \
 		hemaia_chip_vivado hemaia_chip_east_vivado hemaia_chip_west_vivado hemaia_chip_vivado_gui \
 		hemaia_system_vivado hemaia_system_east_vivado hemaia_system_west_vivado hemaia_system_vivado_gui \
 		hemaia_system_east_vivado_gui hemaia_system_vlt occamy_system_vsim_preparation occamy_system_vsim \
@@ -44,9 +44,20 @@ clean-sw:
 # test flows leave under target/sim/automation.  Kept out of clean-repo on
 # purpose: every simulation run starts by calling `make clean`, so folding this in
 # would make each run wipe the results of every other flow.  Sweep LUTs/CSVs are
-# preserved either way.
+# preserved either way.  clean-stale below is the guarded form that `make clean` runs.
 clean-automation:
 	$(MAKE) -C ./target/sim/automation clean
+
+# The stale files of the simulation flows and the workloads (target/sim/automation/clean_stale.py):
+# old run directories and summaries, the hsweep runs' traces (after their task spans are taken),
+# staged images and simulator copies, old build logs, the workloads' generated build/
+# directories. Only what has been left unchanged for STALE_AGE_H hours goes, so `make clean`,
+# which every simulation run starts with, never touches a run in progress; results, figures,
+# caches, logs and task spans stay. The leading '-' keeps a container without python3 cleaning
+# the rest.
+STALE_AGE_H ?= 24
+clean-stale:
+	-$(MAKE) -C ./target/sim/automation clean-stale STALE_AGE_H=$(STALE_AGE_H)
 
 clean-repo:
 	$(MAKE) -C ./target/fpga/hemaia_chip/ clean
@@ -70,7 +81,7 @@ clean-bender:
 	rm -rf deps
 	rm -rf .bender
 
-clean: clean-repo clean-bender
+clean: clean-stale clean-repo clean-bender
 #######################
 # Software Generation #
 #######################
