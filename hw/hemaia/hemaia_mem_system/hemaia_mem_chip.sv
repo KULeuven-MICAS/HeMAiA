@@ -106,9 +106,6 @@ module hemaia_mem_chip #(
   localparam int HeMAiAResetDelays[5] = '{default: 3};
 
   logic [4:0] clk_vec, rst_n_vec;
-`ifdef HEMAIA_SIM_MASTER_FREEZE
-  logic [4:0] clk_vec_div;
-`endif
   (* syn_keep = 1, syn_preserve = 1 *)
   logic clk_host;
   (* syn_keep = 1, syn_preserve = 1 *)
@@ -160,29 +157,9 @@ module hemaia_mem_chip #(
       .pll_lock_o        (/* Not used */),
       .clk_obs_o         ( /* Not used */),
       // generated clocks and resets
-`ifdef HEMAIA_SIM_MASTER_FREEZE
-      .clk_o(clk_vec_div),
-`else
       .clk_o(clk_vec),
-`endif
       .rst_no(rst_n_vec)
   );
-
-`ifdef HEMAIA_SIM_MASTER_FREEZE
-  // Simulation only: the digital clock carries on by itself once settled, so the testbench can
-  // stop the master clock (target/sim/testharness/util/hemaia_sim_clock_freeze.sv)
-  hemaia_sim_clock_freeze #(
-      .NumClocks(5),
-      .FreezeMask(5'b00001),
-      .CfgWidth(8 + 32)
-  ) i_sim_clock_freeze (
-      .clk_i(clk_vec_div),
-      .cfg_i({i_hemaia_clk_rst_controller.clock_division_reg_concat[0],
-              32'(i_hemaia_clk_rst_controller.reg2hw.reset_register)}),
-      .clk_o(clk_vec),
-      .all_settled_o()
-  );
-`endif
 
   ////////////////////////
   //  HeMAiA Mem System //
