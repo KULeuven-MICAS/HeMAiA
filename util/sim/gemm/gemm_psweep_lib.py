@@ -13,7 +13,7 @@
 # (offload_hw_kernels/gemm.h). Per config the DFG emits:
 #     Load_A -> Load_B -> Gemm<prec> -> Check_D
 # and the device GEMM kernel brackets its compute with BINGO_TRACE_GEMM_FULL_RUN_*
-# markers, so target/sim/automation/sweep/gemm/gather_gemm_luts.py recovers one
+# markers, so target/sim/automation/sweep/unit_test/gemm/gather_gemm_luts.py recovers one
 # cycle count per config (paired with configs.json) — no host mcycle bracketing.
 #
 # Precision is split across workloads (one per precision) because it changes the
