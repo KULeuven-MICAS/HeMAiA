@@ -167,8 +167,27 @@ task automatic load_main_mem;
     #10ns;
 endtask
 
+// Zero every compute chip's narrow SPM (L2) at time zero, before the boot ROM runs: the simulation
+// boot ROM does not clear it (target/rtl/bootrom/bootrom_sim/bootrom.c). With memory macros the
+// narrow SPM matches no macro and is tc_sram's register array; the netlist has no such path.
+task automatic clear_narrow_spm;
+% if sim_with_netlist:
+    $warning("clear_narrow_spm: no path to the narrow SPM in the netlist, it starts uncleared");
+% else:
+<%
+    spm_array = "i_tc_sram.gen_mem.gen_no_sram_matched.mem_array" if sim_with_mem_macro else "i_tc_sram.sram"
+%>\
+%   for compute_chip in compute_chips:
+    for (int i = 0; i < $size(i_dut.i_hemaia_${compute_chip.coordinate[0]}_${compute_chip.coordinate[1]}.i_occamy_chip.i_occamy.i_occamy_soc.i_spm_narrow_cut.i_mem.i_mem.${spm_array}); i++)
+        i_dut.i_hemaia_${compute_chip.coordinate[0]}_${compute_chip.coordinate[1]}.i_occamy_chip.i_occamy.i_occamy_soc.i_spm_narrow_cut.i_mem.i_mem.${spm_array}[i] = '0;
+%   endfor
+    $display("-- Cleared the narrow SPM of ${len(compute_chips)} compute chip(s) @%0g ns ---", $realtime);
+% endif
+endtask
+
 // Top-level load task called from the testharness initial block.
 task automatic load_binary;
+    clear_narrow_spm;
 % if len(mem_chips) > 0:
     load_mem_chip;
     load_hbm;
