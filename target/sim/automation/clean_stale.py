@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Fanchen Kong <fanchen.kong@kuleuven.be>
-"""clean_stale.py [--dry-run] [--age-h H] [--repo DIR]: delete what the simulation flows leave
+"""clean_stale.py [--dry-run] [--age-h H] [--repo DIR] [--under DIR ...]: delete what the simulation flows leave
 behind that no flow builds from or reads back. `make clean` runs it (`make clean-stale` alone).
 
 What goes, once idle (see below):
@@ -27,6 +27,7 @@ A path counts as idle when nothing in it has changed for --age-h hours (default 
 simulation writes its logs all the time, so its directory never is -- also inside the container
 `make clean` runs in, where the host's processes are not visible. On the host, a directory some
 process works in is skipped too. A run directory holding a file named KEEP is never touched.
+--under limits every rule to paths under the directories given (one experiment's, say).
 """
 
 import argparse
@@ -90,8 +91,9 @@ def busy_dirs():
 
 
 class Cleaner:
-    def __init__(self, repo, age_h, dry):
+    def __init__(self, repo, age_h, dry, under=()):
         self.repo, self.dry = Path(repo), dry
+        self.under = [os.path.realpath(u) for u in under]
         self.auto = self.repo / "target/sim/automation"
         self.now, self.age_s = time.time(), age_h * 3600
         self.busy = busy_dirs()
@@ -104,7 +106,16 @@ class Cleaner:
                 return False
         return self.now - newest(path) >= self.age_s
 
+    def inside(self, path):
+        """Whether --under (if given) covers path."""
+        if not self.under:
+            return True
+        real = os.path.realpath(path)
+        return any(real == u or real.startswith(u + os.sep) for u in self.under)
+
     def rm(self, rule, path, nbytes=None):
+        if not self.inside(path):
+            return
         n = size(path) if nbytes is None else nbytes
         self.freed[rule] = self.freed.get(rule, 0) + n
         self.count[rule] = self.count.get(rule, 0) + 1
@@ -141,7 +152,8 @@ class Cleaner:
     def run_bulk(self):
         trim = self.auto / "sweep/llm_blocks/ffn/trim_traces.py"
         for run in sorted(p for p in self.auto.glob("sweep/*/*/runs/*") if p.is_dir()):
-            if (run / "KEEP").exists() or not self.idle(run):
+            # trim_traces.py truncates traces itself, so a run outside --under is not even read
+            if not self.inside(run) or (run / "KEEP").exists() or not self.idle(run):
                 continue
             for task in sorted(run.glob("task_*")):
                 b = task / "bin"
@@ -207,8 +219,10 @@ def main():
     ap.add_argument("--age-h", type=float, default=24.0,
                     help="hours a path must have been left unchanged (default: %(default)s)")
     ap.add_argument("--repo", default=str(REPO))
+    ap.add_argument("--under", nargs="+", default=[], metavar="DIR",
+                    help="only paths under these directories")
     a = ap.parse_args()
-    Cleaner(a.repo, a.age_h, a.dry_run).run()
+    Cleaner(a.repo, a.age_h, a.dry_run, a.under).run()
 
 
 if __name__ == "__main__":
