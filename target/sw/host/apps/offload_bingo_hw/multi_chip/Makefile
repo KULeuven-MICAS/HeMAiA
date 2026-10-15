@@ -30,7 +30,7 @@ APPS += dvfs_cross_trigger_4chiplet_1cluster
 # DeepSeek-V2-Lite layer 1 on one compute chiplet's four clusters, the weights streamed from
 # the memory chiplet's HBM (hemaia_twochiplet_16MBL3_4cluster only): the full layer, and one
 # workload per stage -- stage N builds stages 1..N (workloads/dsv2/README.md). Run them
-# with sweep/dsv2/run_dsv2_sweep.py.
+# with sweep/llm_layer/dsv2/run_dsv2_sweep.py.
 DSV2_TWO_CHIPLET = full_layer \
                    stage1_rmsnorm stage2_wq stage3_wdkv stage4_latent_rope_wuk \
                    stage5_attention stage6_wuv_wo stage7_router stage8_experts

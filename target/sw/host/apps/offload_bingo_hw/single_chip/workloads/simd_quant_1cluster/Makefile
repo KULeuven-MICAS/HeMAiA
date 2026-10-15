@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # SIMD primitives workload: one armed operator per kernel on the cluster's SIMD core.
-# The sweep that collects the per-operator cost LUTs lives in target/sim/automation/sweep/simd.
+# The sweep that collects the per-operator cost LUTs lives in target/sim/automation/sweep/unit_test/simd.
 
 MK_DIR   := $(dir $(realpath $(lastword $(MAKEFILE_LIST))))
 HOST_APP_TYPE = offload_bingo_hw

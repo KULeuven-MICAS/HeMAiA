@@ -28,7 +28,7 @@ APPS += xdma_gather_1cluster
 APPS += xdma_elementwise_add_1cluster
 # Per-op SIMD sweep workloads (the fused whole-op kernels, one dir each). These run on
 # the cluster's SIMD core; the sweep that collects their cost LUTs lives in
-# target/sim/automation/sweep/simd.
+# target/sim/automation/sweep/unit_test/simd.
 APPS += simd_softmax_1cluster
 APPS += simd_softmax_t_1cluster
 APPS += simd_rmsnorm_1cluster
@@ -47,8 +47,8 @@ APPS += simd_quant_1cluster
 APPS += fa_decode_1cluster
 APPS += fa_prefill_1cluster
 # KV-sharded across four clusters, with the cross-cluster online-softmax merge done
-# IN THE FABRIC by a ChainGather over the monoid junction -- not gathered to one
-# cluster and reduced there.
+# IN THE FABRIC by a ChainGather over the softmax-statistics junction -- not gathered
+# to one cluster and reduced there.
 APPS += fa_decode_4cluster
 APPS += fa_prefill_4cluster
 APPS += xdma_row_to_a_1cluster

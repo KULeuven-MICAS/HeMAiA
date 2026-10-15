@@ -6,7 +6,7 @@
 #
 # Per-precision GEMM cycle-sweep workload (i8i4_i32). Runs every (M,K,N,shape) in
 # gemm_psweep_lib.CONFIGS via the gemm_i8i4_i32 wrapper kernel; cycles are read
-# from the BINGO_TRACE_GEMM_FULL_RUN_* markers by sweep/gemm/gather_gemm_luts.py.
+# from the BINGO_TRACE_GEMM_FULL_RUN_* markers by sweep/unit_test/gemm/gather_gemm_luts.py.
 MK_DIR   := $(dir $(realpath $(lastword $(MAKEFILE_LIST))))
 HOST_APP_TYPE = offload_bingo_hw
 CHIP_TYPE     = single_chip

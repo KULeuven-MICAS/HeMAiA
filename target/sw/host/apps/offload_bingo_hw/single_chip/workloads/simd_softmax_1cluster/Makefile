@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Per-op SIMD sweep workload for "softmax". One fused kernel on the cluster's SIMD core;
-# the sweep that collects its cost LUT lives in target/sim/automation/sweep/simd.
+# the sweep that collects its cost LUT lives in target/sim/automation/sweep/unit_test/simd.
 
 MK_DIR   := $(dir $(realpath $(lastword $(MAKEFILE_LIST))))
 HOST_APP_TYPE = offload_bingo_hw

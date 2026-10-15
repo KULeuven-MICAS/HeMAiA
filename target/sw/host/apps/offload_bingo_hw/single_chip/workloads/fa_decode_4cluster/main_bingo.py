@@ -94,16 +94,19 @@ from bingo_kernel_args import (                           # noqa: E402
     SnaxBingoKernelXdmaMulticastArgs,
     SnaxBingoKernelXdmaMemsetArgs,
     SnaxBingoKernelSimdFaSoftmaxArgs,
-    SnaxBingoKernelSimdScaleF16Args,
     SnaxBingoKernelGemmFaQkArgs,
     SnaxBingoKernelGemmFaPvArgs,
     SnaxBingoKernelGemmPerfReportArgs,
     HostBingoKernelIdmaArgs,
     HostBingoKernelIdmaMultiArgs,
     HostBingoKernelCheckResultArgs,
+    HostBingoKernelCheckResultF16RelArgs,
     SnaxBingoKernelPackFaPartialArgs,
     SnaxBingoKernelXdmaChainGatherArgs,
-    xdma_monoid_csr0,
+    XDMA_SSJ_IDENTITY,
+    XDMA_SSJ_ROWS,
+    xdma_softmax_stats_csrs,
+    xdma_softmax_stats_groups,
 )
 
 # Core placement, from the generated map (snax_core_roles_defs.h).
@@ -117,7 +120,6 @@ CHECK_BYTE_EXACT = 0        # data_size IS the byte count for this mode
 CHECK_FP16_TOL = 2
 # Signed-int32, relative tolerance -- for an ACCUMULATOR (see host_kernel_args.h).
 CHECK_INT32_RELTOL = 5
-CHECK_FP32_TOL = 1
 
 # ---- the tile ------------------------------------------------------------------------
 # VersaCore's single spatial unrolling on this cluster; the same numbers the device reads
@@ -151,7 +153,7 @@ NKV_PER = None           # KV tiles per cluster; set by _load_params()
 #   "kvsplit"  Each cluster owns a disjoint run of KV tiles and its own K. The softmax
 #              recurrence runs ALONG KV, so every cluster carries an independent (m, l)
 #              and ONE cross-cluster fold closes the run -- which is what exercises the
-#              ChainGather over the MonoidJunction.
+#              ChainGather over the SoftmaxStatsJunction.
 #
 #   "headpar"  Each cluster owns one QUERY HEAD of a GQA group. The group shares its KV
 #              head by definition, so K and V are byte-identical on all four clusters and
@@ -500,12 +502,6 @@ def _bcast_owner(j, skew=0):
     issuers already hang, the star multicast is irrelevant and any pair reproduces it.
     """
     return ((j + skew) % NCL) if BCAST_SPREAD else (skew % NCL)
-
-# Slots per beat in the monoid's lane geometry. F = 2 fields (m, l) and a 512-bit beat
-# holds 16 FP32 lanes, so 8 is the largest legal value and packs 8 query rows per beat.
-# It is NOT free to change: it must equal the `sigma` the gather's CSR(0) was built with,
-# and Br must be a multiple of it.
-MONOID_SLOTS = 8
 
 # Score/probability buffers in the QK -> softmax -> PV rotation. Two is the minimum that
 # lets QK(i+1) run while the softmax reads QK(i)'s tile; a third breaks the WAR edge that
@@ -867,10 +863,10 @@ def _load_params(param):
     # FP16. It exists for the cross-cluster fold, not for the arithmetic.
     #
     # At the minimum shift the scores span thousands, so exp(S - m) underflows for every
-    # key but the argmax and every shard's l is exactly 1.0. The monoid folds a key field
-    # (m, a max) and an exp-twisted value field (l); with l identically 1 the second field
-    # is folding 1 + 0 + 0 + 0 on every lane, so a junction that dropped the value
-    # coordinate entirely would still produce the right answer. Shrinking the operands
+    # key but the argmax and every shard's l is exactly 1.0. The softmax-statistics junction
+    # folds a key (m, a max) and an exp-weighted value (l); with l identically 1 the value
+    # beat is folding 1 + 0 + 0 + 0 on every lane, so a junction that dropped the value
+    # entirely would still produce the right answer. Shrinking the operands
     # narrows the score spread until the softmax is genuinely soft and l carries a real
     # distribution, which is what makes the merged l* evidence of anything.
     NQ = int(param.get("NQ", 1))
@@ -930,11 +926,11 @@ def _load_params(param):
             f"NKV={NKV} must divide across {NCL} clusters: each cluster owns a disjoint "
             f"run of KV tiles and the merge assumes every shard covers the same count.")
     NKV_PER = NKV // NCL
-    if BR % MONOID_SLOTS:
+    if BR > 32 and BR % 32:
         raise ValueError(
-            f"Br={BR} must be a multiple of MONOID_SLOTS={MONOID_SLOTS}: the monoid packs "
-            f"that many query rows per beat and a partial beat would fold lanes the pack "
-            f"never wrote.")
+            f"Br={BR} must be at most 32 or a multiple of 32: the softmax-statistics "
+            f"junction folds 32 query rows a group, with one count of live rows for every "
+            f"group of a gather.")
 
 
 def qshift(d, k=0):
@@ -1116,18 +1112,6 @@ def shard_golden(q8, k8_tiles, v8_tiles):
     return m, l, o
 
 
-def scaled_m(m):
-    """What the fold is handed as m: a*m, rounded to FP16 by the SIMD map computing it.
-
-    The monoid junction folds l* = sum exp(m_c - m*) l_c with NO scale, while the softmax
-    computed P = exp(a*(S - m)); so with a temperature the combine must see a*m, or it
-    weights the shards by the wrong power of e. m* then comes back as a*m*. m is the max
-    of the converted scores, S * 2^-k, so the factor is EXP_SCALE = a * 2^k.
-    """
-    return (np.float32(EXP_SCALE) *
-            np.asarray(m, dtype=np.float16).astype(np.float32)).astype(np.float16)
-
-
 def build_shards():
     """Random Q, K and V for the whole attention, and every shard's golden (m, l, O).
 
@@ -1174,20 +1158,26 @@ def build_shards():
 
     merged = None
     if DECOMP == "kvsplit":
-        # The online-softmax combine the monoid junction implements, on what the pack hands
-        # it -- a*m, see scaled_m() -- computed in FP32 on FP16 inputs like the device:
-        #     m* = max_c a*m_c              l* = sum_c exp(a*m_c - m*) * l_c
-        # packed into the junction's lanes: lane = field*S + slot, field 0 = m, 1 = l.
-        ms = np.stack([scaled_m(m) for m in m_c]).astype(np.float32)
+        # The online-softmax combine the softmax-statistics junction implements, on the raw
+        # running max and running sum the pack copies, computed in FP32 on FP16 inputs:
+        #     m* = max_c m_c                l* = sum_c exp(a'*(m_c - m*)) * l_c
+        # with a' = EXP_SCALE, the factor the softmax's exp applies and the junction's CSR(1).
+        # m is the max of the converted scores, S * 2^-k, and m* comes back in those units.
+        # Laid out in the junction's groups: per 32 query rows a beat of 32 FP16 keys then a
+        # beat of 32 FP16 values, rows past Br the identity row (key 0xFBFF, value 0), as
+        # FP16 bit patterns.
+        ms = np.asarray(m_c, dtype=np.float16).astype(np.float32)
+        ls = np.asarray(l_c, dtype=np.float16).astype(np.float32)
         m_star = ms.max(axis=0)
-        l_star = (np.exp(ms - m_star) * l_c.astype(np.float32)).sum(axis=0)
-        beats = BR // MONOID_SLOTS
-        merged = np.zeros(beats * 16, dtype=np.float32)
-        for beat in range(beats):
-            for slot in range(MONOID_SLOTS):
-                row = beat * MONOID_SLOTS + slot
-                merged[beat * 16 + 0 * MONOID_SLOTS + slot] = m_star[row]
-                merged[beat * 16 + 1 * MONOID_SLOTS + slot] = l_star[row]
+        l_star = (np.exp(np.float32(EXP_SCALE) * (ms - m_star)) * ls).sum(axis=0)
+        groups, _ = xdma_softmax_stats_groups(BR)
+        merged = np.zeros((groups, 2, XDMA_SSJ_ROWS), dtype=np.uint16)
+        merged[:, 0, :] = XDMA_SSJ_IDENTITY
+        for g in range(groups):
+            r0, r1 = g * XDMA_SSJ_ROWS, min(BR, (g + 1) * XDMA_SSJ_ROWS)
+            merged[g, 0, :r1 - r0] = m_star[r0:r1].astype(np.float16).view(np.uint16)
+            merged[g, 1, :r1 - r0] = l_star[r0:r1].astype(np.float16).view(np.uint16)
+        merged = merged.reshape(-1)
     return {"q8": q8, "k8": k8, "v8": v8, "m": m_c, "l": l_c, "o": o_c, "merged": merged}
 
 
@@ -1229,8 +1219,8 @@ def stage(st, data):
 
 
 def stage_merged(st, merged):
-    """The gathered (a*m*, l*), in the junction's own lane order, as FP32."""
-    return st.put("fa_ml_merged_golden", "float", np.asarray(merged, dtype=np.float32))
+    """The gathered (m*, l*), in the junction's own groups, as FP16 bit patterns."""
+    return st.put("fa_ml_merged_golden", "uint16_t", np.asarray(merged, dtype=np.uint16))
 
 
 class G:
@@ -1303,7 +1293,7 @@ def writer_junction_index(hw, name):
     jcts = find(hw)
     if jcts is None:
         raise ValueError("cluster cfg declares no writer_junctions: this workload needs "
-                         "the monoid junction to fold the shards in the fabric")
+                         "the softmax-statistics junction to fold the shards in the fabric")
     names = list(jcts.keys())
     if name not in names:
         raise ValueError(f"cluster cfg has writer junctions {names} but this workload "
@@ -2144,7 +2134,7 @@ def _build_cluster(dfg, c, h_all, m_all, l_all, buf, bcast=None, all_bufs=None):
     }
 
 
-def build(dfg, h, m_all, l_all, merged_h, jct_monoid, tol_ml=0.02):
+def build(dfg, h, m_all, l_all, merged_h, jct, tol_ml=0.02):
     """Four cluster pipelines, split either over KV or over the GQA group's query heads.
 
     Under DECOMP = "headpar" (the default) the four clusters hold four query heads of one
@@ -2159,10 +2149,10 @@ def build(dfg, h, m_all, l_all, merged_h, jct_monoid, tol_ml=0.02):
     tiles, producing its own (m_c, l_c). What makes this workload different from four
     copies of the one-cluster run is the epilogue -- the online-softmax merge
 
-        m* = max_c m_c        l* = sum_c exp(m_c - m*) * l_c
+        m* = max_c m_c        l* = sum_c exp(a' * (m_c - m*)) * l_c
 
     is not gathered to one cluster and reduced there. It is computed BY THE FABRIC: each
-    cluster packs its partial into the monoid junction's lane geometry, and one
+    cluster copies its partial into the softmax-statistics junction's group, and one
     ChainGather walks the four of them, folding at each hop, so the collector's buffer
     receives the answer rather than the operands.
     """
@@ -2298,35 +2288,26 @@ def build(dfg, h, m_all, l_all, merged_h, jct_monoid, tol_ml=0.02):
     if NCL < 2:
         return
 
-    # ---- pack each shard's (m, l) into the junction's lanes -----------------------------
-    # On each cluster's own xDMA core, so the gather that consumes it is the very next
-    # thing that core does. The pack is scalar FP16->FP32 bit work; that core has no FPU,
-    # which is the whole reason it is a kernel and not two lines in the caller.
-    #
-    # l is the arena's RUNNING sum (lrun); m is the running max scaled by the temperature
-    # first -- the junction's exponential has no scale of its own, see scaled_m() -- on the
-    # SIMD core that owns the arena, since the pack's core has no FPU.
-    part_bytes = SnaxBingoKernelPackFaPartialArgs.packed_bytes(BR, MONOID_SLOTS)
+    # ---- copy each shard's (m, l) into the junction's group ------------------------------
+    # The junction reads a key beat followed by a value beat; the arena keeps m and l apart,
+    # so each shard copies them into one buffer, on its own xDMA core, so that the gather
+    # that consumes it is the very next thing that core does. m is the running max as the
+    # softmax leaves it and l the running sum (lrun), committed by the last softmax.
+    part_bytes = SnaxBingoKernelPackFaPartialArgs.packed_bytes(BR)
+    _, n_valid = xdma_softmax_stats_groups(BR)
+    csr0, csr1 = xdma_softmax_stats_csrs(n_valid, EXP_SCALE)
     lay = SnaxBingoKernelSimdFaSoftmaxArgs.layout(BC, DHEAD)
-    a_bits = int(np.array(EXP_SCALE, dtype=np.float32).view(np.uint32))
     parts, packs = [], []
     for c, sh in enumerate(shards):
         gc = g.at(c)
         part = gc.l1("fa_ml_partial", part_bytes)
         parts.append(part)
-        src_m, after = sh["arena"].view(lay["mrun"]), [sh["last_sm"]]
-        if EXP_SCALE != 1.0:
-            src_m = gc.l1("fa_m_scaled", 64)
-            after = [gc.node(f"ScaleM_c{c}", SIMD_CORE, "__snax_bingo_kernel_simd_stream_map",
-                             SnaxBingoKernelSimdScaleF16Args(sh["arena"].view(lay["mrun"]),
-                                                             src_m, a_bits, rows=1, cols=BR),
-                             sh["last_sm"])]
         packs.append(gc.node(
             f"PackPartial_c{c}", XDMA_CORE, "__snax_bingo_kernel_pack_fa_partial",
             SnaxBingoKernelPackFaPartialArgs(
-                src_m=src_m, src_l=sh["arena"].view(lay["lrun"]),
-                dst=part, n_rows=BR, slots=MONOID_SLOTS),
-            after))
+                src_m=sh["arena"].view(lay["mrun"]), src_l=sh["arena"].view(lay["lrun"]),
+                dst=part, n_rows=BR),
+            [sh["last_sm"]]))
 
     # ---- the fold itself ----------------------------------------------------------------
     # chain is the path in DATA order, ENDING at the collector's own destination, and
@@ -2341,28 +2322,25 @@ def build(dfg, h, m_all, l_all, merged_h, jct_monoid, tol_ml=0.02):
         SnaxBingoKernelXdmaChainGatherArgs(
             local_src=parts[0], chain=parts[1:] + [merged],
             size=part_bytes,
-            # The identifier WRITER_JCT_MONOIDJUNCTION is device-side only; see
+            # The identifier WRITER_JCT_SOFTMAXSTATSJUNCTION is device-side only; see
             # writer_junction_index() for why the host emits the derived number instead.
-            junction=f"{jct_monoid} /* WRITER_JCT_MONOIDJUNCTION */",
-            # nValid is the number of ROWS folded per beat, not a count of operands: the
-            # geometry packs MONOID_SLOTS query rows into one beat, and at nValid=1 seven
-            # of every eight rows would silently keep the collector's own value.
-            jct_csr0=xdma_monoid_csr0(n_valid=MONOID_SLOTS, n=1, n_exp=1, n_add=0,
-                                      sigma=3)),
+            junction=f"{jct} /* WRITER_JCT_SOFTMAXSTATSJUNCTION */",
+            # nValid is the number of query rows folded in every group; CSR(1) is the
+            # softmax's own temperature, applied to the key difference before the exp.
+            jct_csr0=csr0, jct_csr1=csr1),
         packs)
 
     # ---- check the merged result --------------------------------------------------------
-    # Compared in the junction's own lane order as FP32, which is what the collector's
-    # buffer holds -- m in lanes 0..S-1 of each beat, l in lanes S..2S-1.
+    # Compared in the junction's own group order as FP16, which is what the collector's
+    # buffer holds -- per 32 rows a key beat then a value beat.
     l3_ml = BingoMemAlloc("out_fa_ml_merged", size=part_bytes, mem_level="L3")
     st_ml = g.node("Store_ml", HOST_CORE, "__host_bingo_kernel_idma",
                    HostBingoKernelIdmaArgs(merged, l3_ml, part_bytes),
                    [gather] + [sh["checks"] for sh in shards], cluster=0)
     g.node("Check_ml", HOST_CORE, "__host_bingo_kernel_check_result",
-           HostBingoKernelCheckResultArgs(merged_h, l3_ml, name="fa_ml_merged",
-                                          check_type=CHECK_FP32_TOL,
-                                          num_elements=part_bytes // 4,
-                                          tolerance=tol_ml), st_ml, cluster=0)
+           HostBingoKernelCheckResultF16RelArgs(merged_h, l3_ml, part_bytes // 2,
+                                                rtol=tol_ml, name="fa_ml_merged"),
+           st_ml, cluster=0)
 
 
 def main():
@@ -2412,10 +2390,10 @@ def main():
     h = stage(st, data)
     # headpar has nothing to fold, so there is no merged golden to stage.
     merged_h = stage_merged(st, merged) if merged is not None else None
-    # The merged l* folds NCL running sums, each a few FP16 steps from the golden (the
-    # device exponential is not libm's), so its tolerance scales with them; m* = a*m* is
-    # exact given exact per-shard maxima.
-    tol_ml = max(0.02, float(4 * NCL * np.max(np.spacing(np.abs(l).astype(np.float16)))))
+    # The merged check is relative: the junction rounds l* to FP16 at every hop and its
+    # exponential is a table, not libm's, so l* lands a few FP16 steps from the golden at
+    # any magnitude; m* is exact given exact per-shard maxima.
+    tol_ml = 0.02
     if args.data_h is not None:
         n = st.emit(args.data_h, args.output_dir)
         print(f"Staged {n} B of operands and goldens "
@@ -2442,8 +2420,8 @@ def main():
                    dep_tag_width=platform["dep_tag_width"])
     # The junction index is only meaningful for the fold. headpar has no fold, so it must
     # not demand a cfg feature it never uses -- a head-parallel quadrant is a legitimate
-    # target on hardware built without the monoid junction.
-    jct = writer_junction_index(hw, "HasMonoidJunction") if DECOMP == "kvsplit" else None
+    # target on hardware built without the softmax-statistics junction.
+    jct = writer_junction_index(hw, "HasSoftmaxStatsJunction") if DECOMP == "kvsplit" else None
     build(dfg, h, m, l, merged_h, jct, tol_ml)
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -2472,7 +2450,7 @@ def main():
           + NQ * SnaxBingoKernelSimdFaSoftmaxArgs.arena_bytes(BC, DHEAD)
           # headpar folds nothing, so it allocates no partial.
           + (0 if DECOMP == "headpar"
-             else SnaxBingoKernelPackFaPartialArgs.packed_bytes(BR, MONOID_SLOTS)))
+             else SnaxBingoKernelPackFaPartialArgs.packed_bytes(BR)))
     # Main-memory reads for the whole run, which is the quantity the decomposition
     # changes: kvsplit pays NCL x per-cluster, headpar pays it once.
     kb, vb = M * K * MESH_ROW * TILE_SIZE, S2_M * S2_K * MESH_ROW * TILE_SIZE

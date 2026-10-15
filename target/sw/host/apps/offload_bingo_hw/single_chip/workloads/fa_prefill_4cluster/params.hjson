@@ -31,7 +31,7 @@
     // Split 16//4 = 4 KV tiles per cluster; the shards are disjoint and each
     // runs its own softmax recurrence, leaving exactly one cross-cluster fold.
     NKV: 16
-    // Soften the softmax so the monoid's value field folds a real distribution
+    // Soften the softmax so the junction's value beat folds a real distribution
     // rather than a column of 1.0 -- see SCORE_SHIFT_EXTRA in main_bingo.py.
     SCORE_SHIFT_EXTRA: 4
     // PREFILL. NQ query tiles share every KV tile, so each K/V byte is reused NQ times.

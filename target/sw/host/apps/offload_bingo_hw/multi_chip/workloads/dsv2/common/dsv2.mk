@@ -17,7 +17,7 @@
 #
 # Build and run on hemaia_twochiplet_16MBL3_4cluster.hjson, the only cfg whose memory chiplet
 # has an HBM:
-#     python3 target/sim/automation/sweep/dsv2/run_dsv2_sweep.py
+#     python3 target/sim/automation/sweep/llm_layer/dsv2/run_dsv2_sweep.py
 
 HOST_APP_TYPE = offload_bingo_hw
 CHIP_TYPE     = multi_chip

@@ -37,7 +37,7 @@
     // The shift keeps every significant bit (only the exponent moves); before it existed
     // the operands had to be shrunk to 5 bits. As in the snax reference: the scores have a
     // standard deviation near 61,000, a = 2^-15 puts a*S at ~1.9 sigma -- soft enough that
-    // l carries a real distribution for the monoid fold, peaked enough that a moving row
+    // l carries a real distribution for the in-fabric fold, peaked enough that a moving row
     // maximum gives corr well below 1 and O cannot match unless PV really rescales it --
     // and k = 14 makes a' exactly 0.5.
     SCORE_SHIFT: 14

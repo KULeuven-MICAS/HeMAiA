@@ -49,8 +49,8 @@ directory. `params.hjson` is the stage's one-token run; `params_t4.hjson` its 4-
 
 ```bash
 # the sweep runner: the full layer (task_dsv2.yaml), or every stage (task_dsv2_stages.yaml)
-python3 target/sim/automation/sweep/dsv2/run_dsv2_sweep.py [-f task_dsv2_stages.yaml] [--sw-only]
-grep -E "Check|PASS|FAIL" target/sim/automation/sweep/dsv2/task_*/bin/uart_chip_0_0.log
+python3 target/sim/automation/sweep/llm_layer/dsv2/run_dsv2_sweep.py [-f task_dsv2_stages.yaml] [--sw-only]
+grep -E "Check|PASS|FAIL" target/sim/automation/sweep/llm_layer/dsv2/task_*/bin/uart_chip_0_0.log
 
 # or one stage, as the runner does it (inside the container)
 make apps CFG_OVERRIDE=target/rtl/cfg/hemaia_twochiplet_16MBL3_4cluster.hjson \
