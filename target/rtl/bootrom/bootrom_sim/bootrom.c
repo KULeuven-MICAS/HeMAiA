@@ -27,12 +27,8 @@
 // The first space is for the allocator and the last space is for stack and other data
 #define INIT_TCDM_SIZE 0x2000
 void bootrom() {
-    // Initialize L2
-    register uint64_t stack_pointer asm("sp");
-    sys_dma_blk_memcpy(
-        chiplet_addr_transform(SPM_NARROW_BASE_ADDR),
-        chiplet_addr_transform(WIDE_ZERO_MEM_BASE_ADDR),
-        stack_pointer - chiplet_addr_transform(SPM_NARROW_BASE_ADDR) - 128);
+    // L2 (the narrow SPM) is not cleared here: the simulation testharness zeroes it at time zero
+    // (target/sim/testharness/template/load_binary.sv.tpl, clear_narrow_spm)
     // Initialize Cluster TCDM
     for (uint32_t i = 0; i < N_CLUSTERS_PER_CHIPLET; i++) {
         // CLUSTER_TCDM_BASE_ADDR = QUAD_WIDE_CLUSTER_0_TCDM_BASE_ADDR + i * cluster_offset
@@ -47,6 +43,5 @@ void bootrom() {
             chiplet_addr_transform(QUAD_WIDE_CLUSTER_0_TCDM_BASE_ADDR + i * cluster_offset + CLUSTER_TCDM_SIZE - INIT_TCDM_SIZE),
             chiplet_addr_transform(WIDE_ZERO_MEM_BASE_ADDR),
             INIT_TCDM_SIZE);
-        }        
-
+        }
 }
