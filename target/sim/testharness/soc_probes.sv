@@ -31,6 +31,10 @@
 // One shared descriptor for every probe instance: a package variable is static, so the first
 // caller opens the file and everyone else appends to the same handle.
 // ---------------------------------------------------------------------------------------
+// SIM_LEAN_PROBES=1 (target/sim/Makefile): only the probes the sweep tools read are bound -- the
+// BINGO progress monitor, the liveness watchdog, the SRAM marks -- and the memory chip's iDMA
+// queue model, which drives the push engines. The others are pure monitors.
+// ---------------------------------------------------------------------------------------
 package snax_probe_pkg;
   int unsigned probe_fd = 0;
   // Liveness is SYSTEM-wide: every snax_live_probe instance stamps the time of the last
@@ -145,6 +149,7 @@ module snax_taskq_probe (
 
 endmodule
 
+`ifndef HEMAIA_SIM_LEAN_PROBES
 bind bingo_hw_manager_top snax_taskq_probe u_snax_taskq_probe (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
@@ -155,6 +160,7 @@ bind bingo_hw_manager_top snax_taskq_probe u_snax_taskq_probe (
     .q_empty (task_queue_mbox_empty),
     .q_pop   (task_queue_mbox_pop)
 );
+`endif
 
 // ---------------------------------------------------------------------------------------
 // bingo_hw_manager_top: WHICH TASK IS THE SCHEDULER AT, AND DOES THE WORKLOAD STILL MOVE?
@@ -480,6 +486,7 @@ module snax_icache_probe (
 
 endmodule
 
+`ifndef HEMAIA_SIM_LEAN_PROBES
 bind snitch_hive snax_icache_probe u_snax_icache_probe (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
@@ -489,6 +496,7 @@ bind snitch_hive snax_icache_probe u_snax_icache_probe (
     .r_ready (axi_req_o.r_ready),
     .r_last  (axi_rsp_i.r.last)
 );
+`endif
 
 // ---------------------------------------------------------------------------------------
 // snitch_hive: does an instruction REFILL come back poisoned?
@@ -543,6 +551,7 @@ module snax_refill_xguard #(
   end
 endmodule
 
+`ifndef HEMAIA_SIM_LEAN_PROBES
 bind snitch_hive snax_refill_xguard #(
     .AW($bits(axi_req_o.ar.addr)), .DW($bits(axi_rsp_i.r.data))
 ) u_snax_refill_xguard (
@@ -557,6 +566,7 @@ bind snitch_hive snax_refill_xguard #(
     .r_resp  (axi_rsp_i.r.resp),
     .r_data  (axi_rsp_i.r.data)
 );
+`endif
 
 // ---------------------------------------------------------------------------------------
 // axi_to_mem_split: who puts X INTO main memory, and is it read back?
@@ -673,6 +683,7 @@ module snax_mem_xguard #(
               n_xw, n_xr, n_rg);
 endmodule
 
+`ifndef HEMAIA_SIM_LEAN_PROBES
 bind axi_to_mem_split snax_mem_xguard #(
     .NP (NumMemPorts), .AW(AddrWidth), .DW(MemDataWidth),
     .AAW($bits(axi_req_i.aw.addr)), .IW($bits(axi_req_i.aw.id))
@@ -695,6 +706,7 @@ bind axi_to_mem_split snax_mem_xguard #(
     .w_ready (axi_resp_o.w_ready),
     .w_last  (axi_req_i.w.last)
 );
+`endif
 
 
 // ---------------------------------------------------------------------------------------
@@ -770,6 +782,7 @@ module snax_array_probe #(
 
 endmodule
 
+`ifndef HEMAIA_SIM_LEAN_PROBES
 bind SpatialArray snax_array_probe u_snax_array_probe (
     .clk_i (clock), .rst_ni (~reset),
     .in_c_valid           (io_array_data_in_c_valid),
@@ -781,6 +794,7 @@ bind SpatialArray snax_array_probe u_snax_array_probe (
     .compute_fire         (io_ctrl_computeFire),
     .cstate_is_busy       (io_ctrl_cstate_is_busy)
 );
+`endif
 
 // ---------------------------------------------------------------------------------------
 // Main memory: IS THE SYSTEM STILL RUNNING?
@@ -832,9 +846,11 @@ module snax_tcdm_xprobe #(
   end
 endmodule
 
+`ifndef HEMAIA_SIM_LEAN_PROBES
 bind snitch_tcdm_interconnect snax_tcdm_xprobe #(
     .NumInp(NumInp), .req_t(tcdm_req_t)
 ) u_snax_tcdm_xprobe (.clk_i(clk_i), .rst_ni(rst_ni), .req_i(req_i));
+`endif
 
 // snax_tcdm_level_xprobe: names the first input of a cluster's TCDM arbitration-level logic whose
 // level is X while its valid is not 0, with what the level is made of: the input's urgency (its
@@ -878,6 +894,7 @@ module snax_tcdm_level_xprobe #(
   end
 endmodule
 
+`ifndef HEMAIA_SIM_LEAN_PROBES
 bind snitch_tcdm_arb_level snax_tcdm_level_xprobe #(
     .NumInp(NumInp), .LevelWidth(LevelWidth)
 ) u_snax_tcdm_level_xprobe (
@@ -886,6 +903,7 @@ bind snitch_tcdm_arb_level snax_tcdm_level_xprobe #(
     .override_en_i(override_en_i), .override_level_i(override_level_i), .level_o(level_o),
     .age_q(age_q)
 );
+`endif
 
 // snax_tcdm_bank_xprobe: inside a cluster's logarithmic TCDM crossbar, names the first bank whose
 // arbiter request (arb_req) contains X, or whose ready or chosen index is X while it has a request, with what it is made of: the bank's lock (valid and not
@@ -925,10 +943,12 @@ module snax_tcdm_bank_xprobe #(
   end
 endmodule
 
+`ifndef HEMAIA_SIM_LEAN_PROBES
 bind snitch_tcdm_interconnect snax_tcdm_bank_xprobe #(
     .NumOut(NumOut), .IsLog(Topology == snitch_pkg::LogarithmicInterconnect)
 ) u_snax_tcdm_bank_xprobe (.clk_i(clk_i), .rst_ni(rst_ni), .mem_valid_i(mem_q_valid_flat),
                            .mem_ready_i(mem_q_ready_flat));
+`endif
 
 module snax_live_probe #(parameter int unsigned IdleTh = 200000) (
   input logic clk_i,
@@ -1020,6 +1040,53 @@ bind hemaia_hbm_model snax_live_probe_ports #(
     .clk_i (clk_i), .rst_ni (rst_ni), .req_i (axi_req_i), .rsp_i (axi_rsp_o)
 );
 
+// Push rate (+push_rate_ns=N): every N ns of simulated time, the bytes each port of a memory
+// chiplet's HBM has returned (R beats x the data width) -- per push engine, so per destination
+// chip -- one line per period with any traffic: "[PUSH] <hbm> t=<ns> <bytes port 0> <port 1> ...".
+module snax_push_rate_probe #(
+  parameter int unsigned NumPorts = 1,
+  parameter type         req_t    = logic,
+  parameter type         rsp_t    = logic
+) (
+  input logic                  clk_i,
+  input logic                  rst_ni,
+  input req_t [NumPorts-1:0]   req_i,
+  input rsp_t [NumPorts-1:0]   rsp_i
+);
+  localparam int unsigned BeatBytes = $bits(rsp_i[0].r.data) / 8;
+  longint unsigned period_ns, next_ns;   // $time is in ns (1ns/1ps)
+  longint unsigned bytes [NumPorts];
+  bit on;
+  initial begin
+    longint unsigned ns;
+    on = $value$plusargs("push_rate_ns=%d", ns) && ns > 0;
+    period_ns = on ? ns : 0;
+    next_ns = period_ns;
+    foreach (bytes[k]) bytes[k] = 0;
+  end
+  always @(posedge clk_i) if (on && rst_ni) begin
+    for (int unsigned k = 0; k < NumPorts; k++)
+      if (rsp_i[k].r_valid && req_i[k].r_ready) bytes[k] += BeatBytes;
+    if ($time >= next_ns) begin
+      longint unsigned tot = 0;
+      foreach (bytes[k]) tot += bytes[k];
+      if (tot > 0) begin
+        $fwrite(snax_probe_pkg::fd(), "[PUSH] %m t=%0d", next_ns);
+        foreach (bytes[k]) $fwrite(snax_probe_pkg::fd(), " %0d", bytes[k]);
+        $fwrite(snax_probe_pkg::fd(), "\n");
+      end
+      foreach (bytes[k]) bytes[k] = 0;
+      next_ns = ($time / period_ns + 1) * period_ns;
+    end
+  end
+endmodule
+
+bind hemaia_hbm_model snax_push_rate_probe #(
+    .NumPorts (NumPorts), .req_t (axi_req_t), .rsp_t (axi_rsp_t)
+) u_snax_push_rate_probe (
+    .clk_i (clk_i), .rst_ni (rst_ni), .req_i (axi_req_i), .rsp_i (axi_rsp_o)
+);
+
 // A remote request that a chip's D2D framer hands to its own xbar counts too: a chip that pulls
 // partials out of other chips' L1 keeps the system running without touching L3 or HBM.
 bind hemaia_d2d_link_framer snax_live_probe u_snax_live_probe (
@@ -1074,6 +1141,7 @@ module snax_d2d_framer_probe #(parameter int unsigned HW = 3, parameter int unsi
   end
 endmodule
 
+`ifndef HEMAIA_SIM_LEAN_PROBES
 bind hemaia_d2d_link_framer snax_d2d_framer_probe #(.HW($bits(payload_in_i.hdr))) u_snax_d2d_framer_probe (
   .clk_i(clk_i), .rst_ni(rst_ni),
   .in_valid(payload_in_valid_i), .in_ready(payload_in_ready_o), .in_hdr(payload_in_i.hdr),
@@ -1087,6 +1155,7 @@ bind hemaia_d2d_link_framer snax_d2d_framer_probe #(.HW($bits(payload_in_i.hdr))
   .r_allowed(r_allowed),
   .req_ar_v(axi_in_req_i.ar_valid), .req_ar_r(axi_in_rsp_o.ar_ready), .own_r_last(axi_in_rsp_o.r.last)
 );
+`endif
 
 module snax_d2d_dl_probe #(parameter int unsigned SW = 4, parameter int unsigned StallTh = 2000) (
   input logic clk_i, input logic rst_ni, input logic [SW-1:0] state,
@@ -1110,6 +1179,7 @@ module snax_d2d_dl_probe #(parameter int unsigned SW = 4, parameter int unsigned
   end
 endmodule
 
+`ifndef HEMAIA_SIM_LEAN_PROBES
 bind hemaia_d2d_link_data_link snax_d2d_dl_probe #(.SW($bits(flow_control_state))) u_snax_d2d_dl_probe (
   .clk_i(clk_i), .rst_ni(rst_ni), .state(flow_control_state),
   .rts_o(rts_o), .cts_o(cts_o), .rts_i(rts_i), .cts_i(cts_i),
@@ -1117,6 +1187,7 @@ bind hemaia_d2d_link_data_link snax_d2d_dl_probe #(.SW($bits(flow_control_state)
   .rxv(payload_from_remote_valid_o), .rxr(payload_from_remote_ready_i),
   .tx_empty(tx_buffer_empty_i), .rx_full(rx_buffer_near_full)
 );
+`endif
 
 module snax_d2d_router_probe #(parameter int unsigned NP = 5, parameter int unsigned StallTh = 2000) (
   input logic clk_i, input logic rst_ni,
@@ -1141,10 +1212,12 @@ module snax_d2d_router_probe #(parameter int unsigned NP = 5, parameter int unsi
   end
 endmodule
 
+`ifndef HEMAIA_SIM_LEAN_PROBES
 bind hemaia_d2d_link_router snax_d2d_router_probe #(.NP(NumPorts)) u_snax_d2d_router_probe (
   .clk_i(clk_i), .rst_ni(rst_ni), .iv(payload_in_valid), .ir(payload_in_ready),
   .ov(payload_out_valid), .orr(payload_out_ready)
 );
+`endif
 
 // The write-aware mux: per output a WRITE LOCK (an AW holds the output for its W beats, and
 // only the lock owner's writes may use it; a read or response waits while the owner has
@@ -1190,6 +1263,7 @@ module snax_d2d_mux_probe #(
   end
 endmodule
 
+`ifndef HEMAIA_SIM_LEAN_PROBES
 bind hemaia_d2d_link_write_aware_router_mux snax_d2d_mux_probe #(
   .NP(NumPorts), .EW($bits(input_data_i) / NumPorts), .PIW(PortIdxWidth), .LCW(LockCountWidth)
 ) u_snax_d2d_mux_probe (
@@ -1197,120 +1271,8 @@ bind hemaia_d2d_link_write_aware_router_mux snax_d2d_mux_probe #(
   .lock_active(lock_active_q), .lock_owner(lock_owner_q), .lock_count(lock_count_q),
   .ov(output_valid_q), .orr(output_ready_i)
 );
+`endif
 
-// ---------------------------------------------------------------------------------------------
-// snax_idma_queue_model: a TEST stand-in for a descriptor-queue frontend (what idma_desc64 would
-// give) on the memory chiplet's push engines. The host posts a transfer as WRITES into its
-// engine's register window and never reads anything back:
-//   +0x800 src   +0x808 dst   +0x810 length   +0x818 any write queues it
-//   +0x81c write 1: switch the engine over (the register frontend must be idle then)
-// From the switch on, this model -- not idma_reg64_1d -- drives the engine's backend, back to
-// back from its queue, each request FetchLat cycles after its doorbell landed (the descriptor
-// fetch a real frontend would do from local memory). The options come from the register
-// frontend's request at the switch (its conf register). Testbench only; nothing changes for a
-// program that never writes +0x81c.
-// ---------------------------------------------------------------------------------------------
-`include "idma/typedef.svh"
-
-module snax_idma_queue_model #(
-    parameter int unsigned N = 4,
-    parameter int unsigned FetchLat = 16
-) (
-    input logic clk_i,
-    input logic rst_ni,
-    // the engines' register buses (REG_BUS layout: addr, write, wdata, wstrb, valid / rdata,
-    // error, ready)
-    input logic [N-1:0][85:0] cfg_req_i,
-    input logic [N-1:0][33:0] cfg_rsp_i
-);
-  `IDMA_TYPEDEF_OPTIONS_T(q_options_t, logic [3:0])
-  `IDMA_TYPEDEF_REQ_T(q_req_t, logic [47:0], logic [47:0], q_options_t, logic [0:0])
-
-  typedef struct {
-    logic [47:0] src, dst, len;
-    longint      t;
-  } desc_t;
-
-  longint cyc;
-  always_ff @(posedge clk_i or negedge rst_ni)
-    if (!rst_ni) cyc <= 0; else cyc <= cyc + 1;
-
-  for (genvar k = 0; k < N; k++) begin : gen_q
-    logic        wr, en, head_valid;
-    logic [11:0] off;
-    logic [31:0] wdata;
-    logic [63:0] src, dst, len;
-    q_req_t      tmpl, head;
-    desc_t       q[$];
-    int unsigned n_queued, n_issued, max_depth;
-
-    assign wr    = cfg_req_i[k][0] && cfg_req_i[k][37] && cfg_rsp_i[k][0];
-    assign off   = cfg_req_i[k][49:38];
-    assign wdata = cfg_req_i[k][36:5];
-
-    always_ff @(posedge clk_i or negedge rst_ni) begin
-      if (!rst_ni) begin
-        en <= 1'b0;
-        q.delete();
-        n_queued <= 0;
-        n_issued <= 0;
-        max_depth <= 0;
-      end else begin
-        if (wr) begin
-          case (off)
-            12'h800: src[31:0]  <= wdata;
-            12'h804: src[63:32] <= wdata;
-            12'h808: dst[31:0]  <= wdata;
-            12'h80c: dst[63:32] <= wdata;
-            12'h810: len[31:0]  <= wdata;
-            12'h814: len[63:32] <= wdata;
-            12'h818: begin
-              q.push_back('{src[47:0], dst[47:0], len[47:0], cyc});
-              n_queued <= n_queued + 1;
-              if (q.size() + 1 > max_depth) max_depth <= q.size() + 1;
-            end
-            12'h81c: if (wdata[0] && !en) begin
-              en   <= 1'b1;
-              tmpl <= gen_sys_idma[k].idma_req;
-            end
-            default: ;
-          endcase
-        end
-        if (head_valid && gen_sys_idma[k].idma_req_ready) begin
-          void'(q.pop_front());
-          n_issued <= n_issued + 1;
-        end
-      end
-    end
-
-    always @* begin
-      head = tmpl;
-      head_valid = 1'b0;
-      if (en && q.size() > 0 && cyc >= q[0].t + FetchLat) begin
-        head_valid    = 1'b1;
-        head.length   = q[0].len;
-        head.src_addr = q[0].src;
-        head.dst_addr = q[0].dst;
-      end
-    end
-
-    initial begin
-      wait (en === 1'b1);
-      $fdisplay(snax_probe_pkg::fd(), "[IDMA-Q] %m: engine %0d switched to the queue model @%0t",
-                k, $time);
-      force gen_sys_idma[k].idma_req = head;
-      force gen_sys_idma[k].idma_req_valid = head_valid;
-    end
-
-    final if (en)
-      $fdisplay(snax_probe_pkg::fd(), "[IDMA-Q] %m: engine %0d queued %0d issued %0d, deepest queue %0d",
-                k, n_queued, n_issued, max_depth);
-  end
-endmodule
-
-bind hemaia_mem_chip snax_idma_queue_model #(.N(NumSysIdma)) u_snax_idma_queue_model (
-  .clk_i(clk_host), .rst_ni(rst_host_n), .cfg_req_i(engine_cfg_req), .cfg_rsp_i(engine_cfg_rsp)
-);
 
 // ---------------------------------------------------------------------------------------
 // D2D EVENT TRACE IN A TIME WINDOW: who holds a link, and where a read waits.
@@ -1375,6 +1337,7 @@ module snax_d2dw_dl_probe #(parameter int unsigned SW = 4) (
   end
 endmodule
 
+`ifndef HEMAIA_SIM_LEAN_PROBES
 bind hemaia_d2d_link_data_link snax_d2dw_dl_probe #(.SW($bits(flow_control_state))) u_snax_d2dw_dl_probe (
   .clk_i(clk_i), .rst_ni(rst_ni), .state(flow_control_state),
   .rts_o(rts_o), .cts_o(cts_o), .rts_i(rts_i), .cts_i(cts_i),
@@ -1382,6 +1345,7 @@ bind hemaia_d2d_link_data_link snax_d2dw_dl_probe #(.SW($bits(flow_control_state
   .rxv(payload_from_remote_valid_o), .rxr(payload_from_remote_ready_i),
   .tx_empty(tx_buffer_empty_i), .rx_full(rx_buffer_near_full)
 );
+`endif
 
 module snax_d2dw_mux_probe #(
   parameter int unsigned NP = 5, parameter int unsigned EW = 64,
@@ -1429,12 +1393,14 @@ module snax_d2dw_mux_probe #(
   end
 endmodule
 
+`ifndef HEMAIA_SIM_LEAN_PROBES
 bind hemaia_d2d_link_write_aware_router_mux snax_d2dw_mux_probe #(
   .NP(NumPorts), .EW($bits(input_data_i) / NumPorts), .PIW(PortIdxWidth), .LCW(LockCountWidth)
 ) u_snax_d2dw_mux_probe (
   .clk_i(clk_i), .rst_ni(rst_ni), .data(input_data_i), .iv(input_valid_i), .ir(input_ready_o),
   .lock_active(lock_active_q), .lock_owner(lock_owner_q)
 );
+`endif
 
 module snax_d2dw_framer_probe #(parameter int unsigned AW = 48) (
   input logic clk_i, input logic rst_ni,
@@ -1460,6 +1426,7 @@ module snax_d2dw_framer_probe #(parameter int unsigned AW = 48) (
   end
 endmodule
 
+`ifndef HEMAIA_SIM_LEAN_PROBES
 bind hemaia_d2d_link_framer snax_d2dw_framer_probe #(.AW($bits(axi_out_req_o.ar.addr))) u_snax_d2dw_framer_probe (
   .clk_i(clk_i), .rst_ni(rst_ni),
   .srv_ar_v(axi_out_req_o.ar_valid), .srv_ar_r(axi_out_rsp_i.ar_ready),
@@ -1469,6 +1436,7 @@ bind hemaia_d2d_link_framer snax_d2dw_framer_probe #(.AW($bits(axi_out_req_o.ar.
   .own_ar_addr(axi_in_req_i.ar.addr), .own_ar_len(axi_in_req_i.ar.len),
   .own_r_v(axi_in_rsp_o.r_valid), .own_r_r(axi_in_req_i.r_ready), .own_r_last(axi_in_rsp_o.r.last)
 );
+`endif
 
 // ---------------------------------------------------------------------------------------
 // snitch_data_mem: how many SRAM bank accesses does a piece of the program cost?
@@ -1623,24 +1591,40 @@ module snax_axi_xbar_stall_probe #(
   end
 endmodule
 
+`ifndef HEMAIA_SIM_LEAN_PROBES
 bind axi_xbar snax_axi_xbar_stall_probe #(
   .NSlv(Cfg.NoSlvPorts), .NMst(Cfg.NoMstPorts),
   .slv_req_t(slv_req_t), .slv_resp_t(slv_resp_t), .mst_req_t(mst_req_t), .mst_resp_t(mst_resp_t)
 ) u_snax_axi_xbar_stall_probe (
   .clk_i(clk_i), .rst_ni(rst_ni),
   .sreq(slv_ports_req_i), .srsp(slv_ports_resp_o), .mreq(mst_ports_req_o), .mrsp(mst_ports_resp_i));
+`endif
 
+`ifndef HEMAIA_SIM_LEAN_PROBES
 bind axi_id_remap snax_axi_stall_probe #(.req_t(slv_req_t), .resp_t(slv_resp_t)) u_snax_axi_stall_probe (
   .clk_i(clk_i), .rst_ni(rst_ni), .req_i(slv_req_i), .resp_i(slv_resp_o));
+`endif
+`ifndef HEMAIA_SIM_LEAN_PROBES
 bind axi_dw_converter snax_axi_stall_probe #(.req_t(axi_slv_req_t), .resp_t(axi_slv_resp_t)) u_snax_axi_stall_probe (
   .clk_i(clk_i), .rst_ni(rst_ni), .req_i(slv_req_i), .resp_i(slv_resp_o));
+`endif
+`ifndef HEMAIA_SIM_LEAN_PROBES
 bind axi_atop_filter snax_axi_stall_probe #(.req_t(axi_req_t), .resp_t(axi_resp_t)) u_snax_axi_stall_probe (
   .clk_i(clk_i), .rst_ni(rst_ni), .req_i(slv_req_i), .resp_i(slv_resp_o));
+`endif
+`ifndef HEMAIA_SIM_LEAN_PROBES
 bind axi_to_mem_split snax_axi_stall_probe #(.req_t(axi_req_t), .resp_t(axi_resp_t)) u_snax_axi_stall_probe (
   .clk_i(clk_i), .rst_ni(rst_ni), .req_i(axi_req_i), .resp_i(axi_resp_o));
+`endif
+`ifndef HEMAIA_SIM_LEAN_PROBES
 bind axi_to_mem_interleaved snax_axi_stall_probe #(.req_t(axi_req_t), .resp_t(axi_resp_t)) u_snax_axi_stall_probe (
   .clk_i(clk_i), .rst_ni(rst_ni), .req_i(axi_req_i), .resp_i(axi_resp_o));
+`endif
+`ifndef HEMAIA_SIM_LEAN_PROBES
 bind hemaia_d2d_link_framer snax_axi_stall_probe #(.req_t(axi_req_t), .resp_t(axi_rsp_t)) u_snax_axi_in_stall_probe (
   .clk_i(clk_i), .rst_ni(rst_ni), .req_i(axi_in_req_i), .resp_i(axi_in_rsp_o));
+`endif
+`ifndef HEMAIA_SIM_LEAN_PROBES
 bind hemaia_d2d_link_framer snax_axi_stall_probe #(.req_t(axi_req_t), .resp_t(axi_rsp_t)) u_snax_axi_out_stall_probe (
   .clk_i(clk_i), .rst_ni(rst_ni), .req_i(axi_out_req_o), .resp_i(axi_out_rsp_i));
+`endif
