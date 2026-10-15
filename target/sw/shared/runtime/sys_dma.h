@@ -127,9 +127,11 @@ static inline uint32_t sys_dma_engine_memcpy(uint8_t chip_id, uint32_t engine, u
 // crosses the link, so the issuer waits neither for a round trip nor for a half-duplex link to
 // turn around while the engine is still pushing; and writes to one engine land in order, so
 // the doorbell always sees this transfer's registers. Two queued transfers run in the order
-// queued: a flag queued after its data lands after it. (For now the frontend is a testbench
-// model, snax_idma_queue_model in soc_probes.sv; an engine is switched over once, idle, by
-// sys_dma_engine_queue_enable.)
+// queued: a flag queued after its data lands after it. The frontend is hemaia_sys_idma_queue
+// on each memory chip push engine (hemaia_mem_chip SysIdmaQueueDepth transfers; a doorbell to a
+// full queue is held until an entry frees). It shares the backend with the register frontend, so
+// queued and register launches can mix. sys_dma_engine_queue_enable sets the register frontend's
+// conf, whose options every queued transfer takes; its write to the control register is ignored.
 #define SYS_DMA_QUEUE_ADDR (SYS_IDMA_CFG_BASE_ADDR + 0x800)
 
 static inline void sys_dma_engine_queue_enable(uint8_t chip_id, uint32_t engine) {
@@ -154,8 +156,10 @@ static inline uint32_t sys_dma_engine_done_id(uint8_t chip_id, uint32_t engine) 
     return *sys_dma_engine_reg(chip_id, engine, IDMA_DONE_ADDR);
 }
 
+// The engine completes its transfers in order, queued and register launches alike, so done_id
+// may have moved past tf_id by the time it is read: wait until it is at or past it.
 static inline void sys_dma_engine_wait(uint8_t chip_id, uint32_t engine, uint32_t tf_id) {
-    while (sys_dma_engine_done_id(chip_id, engine) != tf_id) {
+    while ((int32_t)(sys_dma_engine_done_id(chip_id, engine) - tf_id) < 0) {
         asm volatile("nop");
     }
 }

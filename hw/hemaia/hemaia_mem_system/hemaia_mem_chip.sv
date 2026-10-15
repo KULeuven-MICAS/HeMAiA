@@ -36,7 +36,9 @@ module hemaia_mem_chip #(
     // the HBM and its own local port on the D2D link, so the memory chip can stream to that
     // many neighbours at once. Engine k's registers are at SYS_IDMA_CFG_BASE_ADDR +
     // k * SysIdmaCfgStride (engine 0 where the one engine always was).
-    parameter int unsigned NumSysIdma = 4
+    parameter int unsigned NumSysIdma = 4,
+    // Transfers each push engine's queue holds (hemaia_sys_idma_queue)
+    parameter int unsigned SysIdmaQueueDepth = 32
 ) (
     input  logic                 clk_i,
     input  logic                 rst_ni,
@@ -104,6 +106,9 @@ module hemaia_mem_chip #(
   localparam int HeMAiAResetDelays[5] = '{default: 3};
 
   logic [4:0] clk_vec, rst_n_vec;
+`ifdef HEMAIA_SIM_MASTER_FREEZE
+  logic [4:0] clk_vec_div;
+`endif
   (* syn_keep = 1, syn_preserve = 1 *)
   logic clk_host;
   (* syn_keep = 1, syn_preserve = 1 *)
@@ -155,9 +160,29 @@ module hemaia_mem_chip #(
       .pll_lock_o        (/* Not used */),
       .clk_obs_o         ( /* Not used */),
       // generated clocks and resets
+`ifdef HEMAIA_SIM_MASTER_FREEZE
+      .clk_o(clk_vec_div),
+`else
       .clk_o(clk_vec),
+`endif
       .rst_no(rst_n_vec)
   );
+
+`ifdef HEMAIA_SIM_MASTER_FREEZE
+  // Simulation only: the digital clock carries on by itself once settled, so the testbench can
+  // stop the master clock (target/sim/testharness/util/hemaia_sim_clock_freeze.sv)
+  hemaia_sim_clock_freeze #(
+      .NumClocks(5),
+      .FreezeMask(5'b00001),
+      .CfgWidth(8 + 32)
+  ) i_sim_clock_freeze (
+      .clk_i(clk_vec_div),
+      .cfg_i({i_hemaia_clk_rst_controller.clock_division_reg_concat[0],
+              32'(i_hemaia_clk_rst_controller.reg2hw.reset_register)}),
+      .clk_o(clk_vec),
+      .all_settled_o()
+  );
+`endif
 
   ////////////////////////
   //  HeMAiA Mem System //
@@ -392,91 +417,34 @@ module hemaia_mem_chip #(
   axi_a48_d512_i4_u1_resp_t [NumSysIdma-1:0] engine_to_link_rsp;
 
   for (genvar k = 0; k < NumSysIdma; k++) begin : gen_sys_idma
-    // frontend <-> backend datapath
-    sys_idma_req_t        idma_req;
-    logic                 idma_req_valid, idma_req_ready;
-    sys_idma_rsp_t        idma_rsp;
-    logic                 idma_rsp_valid;
-    idma_pkg::idma_busy_t idma_busy;
-    // transfer-id tracking
-    logic [31:0]          next_id, done_id;
     // backend split AXI ports (joined below)
     axi_a48_d512_i4_u1_req_t  axi_read_req, axi_write_req, axi_req;
     axi_a48_d512_i4_u1_resp_t axi_read_rsp, axi_write_rsp, axi_rsp;
 
-    idma_reg64_1d #(
-        .NumRegs   (32'd1),
-        .NumStreams(32'd1),
-        .reg_req_t (idma_cfg_reg_a48_d32_req_t),
-        .reg_rsp_t (idma_cfg_reg_a48_d32_rsp_t),
-        .dma_req_t (sys_idma_req_t)
-    ) i_idma_reg64_1d (
-        .clk_i         (clk_host),
-        .rst_ni        (rst_host_n),
-        .dma_ctrl_req_i(engine_cfg_req[k]),
-        .dma_ctrl_rsp_o(engine_cfg_rsp[k]),
-        .dma_req_o     (idma_req),
-        .req_valid_o   (idma_req_valid),
-        .req_ready_i   (idma_req_ready),
-        .next_id_i     (next_id),
-        .stream_idx_o  (/* NC */),
-        .done_id_i     (done_id),
-        .busy_i        (idma_busy),
-        .midend_busy_i (1'b0)
-    );
-
-    idma_transfer_id_gen #(
-        .IdWidth(32'd32)
-    ) i_transfer_id_gen (
-        .clk_i      (clk_host),
-        .rst_ni     (rst_host_n),
-        .issue_i    (idma_req_valid & idma_req_ready),
-        .retire_i   (idma_rsp_valid),  // backend rsp_ready tied to 1
-        .next_o     (next_id),
-        .completed_o(done_id)
-    );
-
-    idma_backend_rw_axi #(
+    // the register frontend, the transfer queue and the backend (hemaia_sys_idma_engine)
+    hemaia_sys_idma_engine #(
         .DataWidth           (512),
         .AddrWidth           (48),
-        .UserWidth           (1),
         .AxiIdWidth          (4),
-        .NumAxInFlight       (32'd64),
-        .BufferDepth         (32'd3),
         .TFLenWidth          (SysIdmaTFLenWidth),
-        .MemSysDepth         (32'd16),
-        .CombinedShifter     (1'b1),
-        .RAWCouplingAvail    (1'b1),
-        .MaskInvalidData     (1'b1),
-        .HardwareLegalizer   (1'b1),
-        .RejectZeroTransfers (1'b1),
-        .ErrorCap            (idma_pkg::NO_ERROR_HANDLING),
+        .QueueDepth          (SysIdmaQueueDepth),
+        .reg_req_t           (idma_cfg_reg_a48_d32_req_t),
+        .reg_rsp_t           (idma_cfg_reg_a48_d32_rsp_t),
         .idma_req_t          (sys_idma_req_t),
         .idma_rsp_t          (sys_idma_rsp_t),
-        .idma_eh_req_t       (idma_pkg::idma_eh_req_t),
-        .idma_busy_t         (idma_pkg::idma_busy_t),
         .axi_req_t           (axi_a48_d512_i4_u1_req_t),
         .axi_rsp_t           (axi_a48_d512_i4_u1_resp_t),
         .read_meta_channel_t (sys_idma_read_meta_channel_t),
         .write_meta_channel_t(sys_idma_write_meta_channel_t)
-    ) i_idma_backend_rw_axi (
+    ) i_engine (
         .clk_i          (clk_host),
         .rst_ni         (rst_host_n),
-        .testmode_i     (1'b0),
-        .idma_req_i     (idma_req),
-        .req_valid_i    (idma_req_valid),
-        .req_ready_o    (idma_req_ready),
-        .idma_rsp_o     (idma_rsp),
-        .rsp_valid_o    (idma_rsp_valid),
-        .rsp_ready_i    (1'b1),
-        .idma_eh_req_i  ('0),
-        .eh_req_valid_i (1'b0),
-        .eh_req_ready_o (/* NC */),
+        .cfg_req_i      (engine_cfg_req[k]),
+        .cfg_rsp_o      (engine_cfg_rsp[k]),
         .axi_read_req_o (axi_read_req),
         .axi_read_rsp_i (axi_read_rsp),
         .axi_write_req_o(axi_write_req),
-        .axi_write_rsp_i(axi_write_rsp),
-        .busy_o         (idma_busy)
+        .axi_write_rsp_i(axi_write_rsp)
     );
 
     axi_rw_join #(
