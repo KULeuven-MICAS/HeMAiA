@@ -802,7 +802,7 @@ def main():
     w.add_argument("--set", action="append", default=[], metavar="key=value")
     s = sub.add_parser("status")
     s.add_argument("target", help="run dir, events file or tag")
-    s.add_argument("--exp", default="ffn")
+    s.add_argument("--exp", default="llm_blocks/ffn")
     an = sub.add_parser("analyse")
     an.add_argument("--log", required=True)
     an.add_argument("--probes")

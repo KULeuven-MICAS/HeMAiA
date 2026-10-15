@@ -62,12 +62,12 @@ status). `test_sim_watchdog.py` tests it with scripted logs and a stand-in proce
 
 **Hardware build:** `hemaia_16c4m_8MBL3_2cluster`, the paper's platform: a 5 x 4 package, 16 compute
 chiplets (2 split clusters each, 1 MiB TCDM per cluster, 8 MiB L3 per chip) and 4 memory chiplets in
-the middle column. The collectives (`collective`) and the level-2 workloads (`ffn`, `l2_moe`,
-`l2_fa`) run on it; `sync` re-plots measured data and needs no build.
+the middle column. The collectives (`sop_ubench/collective`) and the LLM blocks (`llm_blocks/ffn`, `llm_blocks/moe`,
+`llm_blocks/fa`) run on it; `sop_ubench/sync` re-plots measured data and needs no build.
 
 **Weights:** `weights/` holds DeepSeek-V2-Lite's layer 1 (`weights/fetch_weights.py`, the cache in
 `weights/cache/` with its manifest), which the MoE and FA workloads read; the FFN fetches its own
-layer into `ffn/cache/` with the same HTTP helpers.
+layer into `llm_blocks/ffn/cache/` with the same HTTP helpers.
 
 **Pitfalls behind the design:**
 - A failing simulation exits 0.

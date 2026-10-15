@@ -5,7 +5,7 @@
 """Fetch the checkpoint layers the level-2 workloads read into cache/ (Hugging Face range requests).
 
 The MoE and FA workloads read DeepSeek-V2-Lite's layer 1 from here; the FFN's own fetcher
-(sweep/ffn/fetch_weights.py) uses this file's HTTP helpers.
+(sweep/llm_blocks/ffn/fetch_weights.py) uses this file's HTTP helpers.
 
 Each repository is pinned to the commit its API reports when fetched. For every model: the
 safetensors index (or the single model.safetensors), each shard's header, then one ranged GET per

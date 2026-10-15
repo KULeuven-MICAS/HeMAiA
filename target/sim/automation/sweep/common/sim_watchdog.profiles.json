@@ -1,15 +1,26 @@
 {
-  "_doc": "Named parameter sets for sim_watchdog.py; `sim_watchdog.py params --profile NAME` lists the effect of each. Override single values with --set key=value.",
-  "default": {},
-  "ffn_prefill": {
-    "_doc": "128-token FFN prefill on the 16c4m platform: host init takes a few ms of simulated time, the window 0.6 to 1.3 ms, and no task runs longer than a few tens of us.",
-    "bound_us": 3300,
-    "arm_deadline_us": 8000,
-    "stall_floor_us": 400,
-    "min_threads": 9,
-    "min_rate_us_per_min": 3,
-    "wedge_min": 30,
-    "post_complete_min": 30,
-    "on_stop_cmd": "python3 {sweep}/ffn/trim_traces.py {task_dir} --force"
-  }
+ "_doc": "Named parameter sets for sim_watchdog.py; `sim_watchdog.py params --profile NAME` lists the effect of each. Override single values with --set key=value.",
+ "default": {},
+ "ffn_prefill": {
+  "_doc": "128-token FFN prefill on the 16c4m platform: host init takes a few ms of simulated time, the window 0.6 to 1.3 ms, and no task runs longer than a few tens of us.",
+  "bound_us": 3300,
+  "arm_deadline_us": 8000,
+  "stall_floor_us": 400,
+  "min_threads": 9,
+  "min_rate_us_per_min": 3,
+  "wedge_min": 30,
+  "post_complete_min": 30,
+  "on_stop_cmd": "python3 {sweep}/llm_blocks/ffn/trim_traces.py {task_dir} --force"
+ },
+ "moe_prefill": {
+  "_doc": "256-token MoE prefill on the 16c4m platform (array shape 3): host init a few ms of simulated time, the window up to 1.5 ms at full size; the route's top-6 is one long task on the root.",
+  "bound_us": 3000,
+  "arm_deadline_us": 8000,
+  "stall_floor_us": 600,
+  "min_threads": 9,
+  "min_rate_us_per_min": 3,
+  "wedge_min": 30,
+  "post_complete_min": 30,
+  "on_stop_cmd": "python3 {sweep}/llm_blocks/ffn/trim_traces.py {task_dir} --force"
+ }
 }

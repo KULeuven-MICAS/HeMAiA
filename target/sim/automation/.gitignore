@@ -1,6 +1,7 @@
 /*
 !/Makefile
 !/.gitignore
+!/clean_stale.py
 
 !/ci/
 /ci/*
@@ -35,45 +36,51 @@
 
 !/sweep/
 /sweep/*
-!/sweep/xdma/
-/sweep/xdma/*
-!/sweep/xdma/run_xdma_sweep.py
-!/sweep/xdma/gather_xdma_luts.py
-!/sweep/xdma/xdma_lut_report.py
-!/sweep/xdma/task_xdma.yaml
-!/sweep/ara/
-/sweep/ara/*
-!/sweep/ara/run_ara_sweep.py
-!/sweep/ara/gather_ara_luts.py
-!/sweep/ara/ara_lut_report.py
-!/sweep/ara/task_ara.yaml
-!/sweep/gemm/
-/sweep/gemm/*
-!/sweep/gemm/run_gemm_sweep.py
-!/sweep/gemm/gather_gemm_luts.py
-!/sweep/gemm/task_gemm.yaml
-!/sweep/simd/
-/sweep/simd/*
-!/sweep/simd/run_simd_sweep.py
-!/sweep/simd/gather_simd_luts.py
-!/sweep/simd/simd_lut_report.py
-!/sweep/simd/task_simd.yaml
-!/sweep/dsv2/
-/sweep/dsv2/*
-!/sweep/dsv2/run_dsv2_sweep.py
-!/sweep/dsv2/task_dsv2.yaml
-!/sweep/simd/task_simd_fused.yaml
-!/sweep/fa/
-/sweep/fa/*
-!/sweep/fa/run_fa_sweep.py
-!/sweep/fa/gather_fa_cycles.py
-!/sweep/fa/task_fa.yaml
-!/sweep/moe/
-/sweep/moe/*
-!/sweep/moe/run_moe_sweep.py
-!/sweep/moe/moe_report.py
-!/sweep/moe/task_moe.yaml
+!/sweep/README.md
 
+# unit_test/: the per-block op-cost and LUT sweeps (the sim runner's task flows). Their scripts and
+# task lists are kept; task_<n>/ run dirs, summaries and LUT outputs stay ignored.
+!/sweep/unit_test/
+/sweep/unit_test/*
+!/sweep/unit_test/xdma/
+/sweep/unit_test/xdma/*
+!/sweep/unit_test/xdma/run_xdma_sweep.py
+!/sweep/unit_test/xdma/gather_xdma_luts.py
+!/sweep/unit_test/xdma/xdma_lut_report.py
+!/sweep/unit_test/xdma/task_xdma.yaml
+!/sweep/unit_test/ara/
+/sweep/unit_test/ara/*
+!/sweep/unit_test/ara/run_ara_sweep.py
+!/sweep/unit_test/ara/gather_ara_luts.py
+!/sweep/unit_test/ara/ara_lut_report.py
+!/sweep/unit_test/ara/task_ara.yaml
+!/sweep/unit_test/gemm/
+/sweep/unit_test/gemm/*
+!/sweep/unit_test/gemm/run_gemm_sweep.py
+!/sweep/unit_test/gemm/gather_gemm_luts.py
+!/sweep/unit_test/gemm/task_gemm.yaml
+!/sweep/unit_test/simd/
+/sweep/unit_test/simd/*
+!/sweep/unit_test/simd/run_simd_sweep.py
+!/sweep/unit_test/simd/gather_simd_luts.py
+!/sweep/unit_test/simd/simd_lut_report.py
+!/sweep/unit_test/simd/task_simd.yaml
+!/sweep/unit_test/simd/task_simd_fused.yaml
+!/sweep/unit_test/versacore/
+/sweep/unit_test/versacore/*
+!/sweep/unit_test/versacore/.gitignore
+!/sweep/unit_test/versacore/testing_launch.py
+!/sweep/unit_test/versacore/testing_workload_gen.py
+!/sweep/unit_test/versacore/versacore_params.py
+
+# llm_layer/: whole-layer runs (the sim runner's task flow).
+!/sweep/llm_layer/
+/sweep/llm_layer/*
+!/sweep/llm_layer/dsv2/
+/sweep/llm_layer/dsv2/*
+!/sweep/llm_layer/dsv2/run_dsv2_sweep.py
+!/sweep/llm_layer/dsv2/task_dsv2.yaml
+# misc/: one-off benchmarks, nothing tracked.
 
 !/test/
 /test/*
@@ -82,9 +89,9 @@
 !/test/1_start_multi_chiplet_sim.py
 !/test/2_start_tapeout_sim.py
 
-# The ISCA isolated-experiment sweeps: hsweep (sweep/common) and one directory per experiment.
-# Scripts, point files and READMEs are kept; runs, builds, events, results and figures stay
-# ignored.
+# The ISCA isolated-experiment sweeps: hsweep (sweep/common) and one directory per experiment,
+# grouped as sop_ubench/ (system-of-packages microbenchmarks) and llm_blocks/. Scripts, point
+# files and READMEs are kept; runs, builds, events, caches, results and figures stay ignored.
 !/sweep/common/
 /sweep/common/*
 !/sweep/common/hsweep.py
@@ -97,23 +104,15 @@
 !/sweep/common/README.md
 !/sweep/common/weights/
 /sweep/common/weights/cache/
-!/sweep/collective/
-!/sweep/sync/
-!/sweep/ffn/
-!/sweep/l2_moe/
-!/sweep/l2_fa/
-/sweep/collective/runs/
-/sweep/ffn/runs/
-/sweep/ffn/cache/
-/sweep/l2_moe/runs/
-/sweep/l2_fa/runs/
-/sweep/l2_fa/cache/
-/sweep/*/__pycache__/
-/sweep/*/results/
-/sweep/*/figs/
-/sweep/collective/old/
-/sweep/sync/runs/
+!/sweep/sop_ubench/
+!/sweep/llm_blocks/
+/sweep/*/*/runs/
+/sweep/*/*/cache/
+/sweep/*/*/results/
+/sweep/*/*/figs/
+/sweep/**/__pycache__/
+/sweep/sop_ubench/collective/old/
 # the FFN sweep's run logs, and the podman / python shims of one machine
-/sweep/ffn/PROGRESS.md
-/sweep/ffn/HANDOFF.md
-/sweep/ffn/tools/bin/
+/sweep/llm_blocks/ffn/PROGRESS.md
+/sweep/llm_blocks/ffn/HANDOFF.md
+/sweep/llm_blocks/ffn/tools/bin/
