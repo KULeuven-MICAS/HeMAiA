@@ -620,4 +620,26 @@ module testharness;
     %endfor
 %endif
 
+%if not (sim_with_interposer or sim_with_netlist or sim_with_verilator):
+`ifdef HEMAIA_D2D_PHY_MODEL_XMR
+    // Simulation only (target/sim/Makefile SIM_D2D_PHY_CORE_CLOCK=1): the two core-clock PHY models
+    // of a link read each other's records as a signal (hemaia_d2d_link_phy_model.sv), per channel
+<%
+    def phy_model(c, d, ch):
+        if chiplet_grid.is_memory(c):
+            top = f"i_hemaia_mem_chip_{c[0]}_{c[1]}"
+        else:
+            top = f"i_dut.i_hemaia_{c[0]}_{c[1]}.i_occamy_chip"
+        return f"{top}.i_d2d_link.gen_{d}_phy_enabled.gen_phy_channels[{ch}].i_phy_interface_{d}.i_phy_model"
+    d2d_num_channels = 3
+%>\
+    %for (a, da), (b, db) in chiplet_grid.links():
+    %for ch in range(d2d_num_channels):
+    assign ${phy_model(b, db, ch)}.rx_batch = ${phy_model(a, da, ch)}.tx_batch;
+    assign ${phy_model(a, da, ch)}.rx_batch = ${phy_model(b, db, ch)}.tx_batch;
+    %endfor
+    %endfor
+`endif
+%endif
+
 endmodule
