@@ -210,14 +210,94 @@ VCS_FLAGS += -j$(VCS_COMPILE_JOBS)
 # Debug Options
 VCS_FLAGS += -assert disable_cover
 
-# VCS documents these as compile-time runtime optimizers; -hsopt=gates is
-# specifically intended for functional and SDF gate-level designs.  None of
-# them enables Fine-Grained Parallelism at simulation time.
-ifeq ($(SIM_WITH_NETLIST), 1)
-	# Build every netlist simv with Fine-Grained Parallelism support.  Omitting a
-	# runtime -fgp option still runs on one core, so one binary supports every
-	# requested per-job core count without recompilation.
+# Fine-Grained Parallelism (FGP), RTL and netlist alike. FGP splits the events
+# of a time step -- always blocks, assignments and gates -- over worker threads,
+# so it pays when much of the design is active each cycle (all clusters
+# computing) and can lose on a mostly idle one. The thread count is a runtime
+# choice: simv -fgp=num_threads:N takes N + 1 cores (the sim runner's --fgp),
+# and without it the same binary runs on one core, so one build serves every
+# per-job core count. VCS_FGP=1 builds with it. An FGP build simulates the split cluster's narrow
+# TCDM crossbar wrongly (its bank arbiter returns an X index for a defined one-hot request, which a
+# build with debug access or without -fgp does not); the reproducer is snax
+# hw/snitch_cluster/test/snitch_tcdm_xbar_x_tb.sv. RTL builds therefore default to off.
+VCS_FGP ?= 0
+ifeq ($(VCS_FGP), 1)
 	VCS_FLAGS += -fgp
+endif
+
+# SIM_D2D_PHY_BEHAVIORAL=1 simulates the D2D PHY's RX clock delay line as a behavioral model (every
+# tap the RX clock 20 ps later: hemaia_d2d_link src/phy/phy_analog/sim/clk_delay_lines_behavioral.sv)
+# instead of its netlist, whose 32 taps of 5 ps and 100 ps cells switch at dozens of distinct times
+# on every link clock edge, each a simulation time step. The tap the link registers select at reset
+# samples the same.
+SIM_D2D_PHY_BEHAVIORAL ?= 0
+ifeq ($(SIM_D2D_PHY_BEHAVIORAL), 1)
+	VLOGAN_FLAGS += +define+HEMAIA_D2D_PHY_BEHAVIORAL
+endif
+
+# SIM_D2D_PHY_CORE_CLOCK=1 simulates every D2D PHY as its core-clock model (hemaia_d2d_link
+# src/phy/sim/hemaia_d2d_link_phy_model.sv): the PHY and forwarded-clock cycles stepped in batches
+# on the digital clock, the same digital-side behaviour cycle for cycle as the PHY with
+# SIM_D2D_PHY_BEHAVIORAL=1, without a simulation time step per link clock edge. It assumes the
+# digital clock is 1/7 of the PHY clock, as sim_clock.core_clk_div = 7 sets.
+SIM_D2D_PHY_CORE_CLOCK ?= 0
+ifeq ($(SIM_D2D_PHY_CORE_CLOCK), 1)
+	VLOGAN_FLAGS += +define+HEMAIA_D2D_PHY_CORE_CLOCK
+endif
+# The models of a link pass their records as a signal the testharness wires (HEMAIA_D2D_PHY_MODEL_XMR):
+# each model can then run on its own FGP thread. SIM_D2D_PHY_MODEL_XMR=0: the shared record table.
+SIM_D2D_PHY_MODEL_XMR ?= 1
+ifeq ($(SIM_D2D_PHY_CORE_CLOCK)$(SIM_D2D_PHY_MODEL_XMR), 11)
+	VLOGAN_FLAGS += +define+HEMAIA_D2D_PHY_MODEL_XMR
+endif
+
+# SIM_PROFILE=1 compiles the simv for VCS's unified simulation profiler (-simprofile): run it with
+# `-simprofile time` (optionally -simprofile_start/_stop <ns>), then `profrpt -view time_all
+# simprofile_dir`. Profile a build without -fgp: the profiler attributes a single thread's time.
+SIM_PROFILE ?= 0
+ifeq ($(SIM_PROFILE), 1)
+	VCS_FLAGS += -simprofile
+endif
+
+# SIM_NO_TRACE=1 compiles the Snitch instruction and DMA traces out (+define+SNITCH_NO_TRACE,
+# SNITCH_NO_DMA_TRACE in snitch_cc.sv): no logs/trace_chip_*_hart_*.dasm, no dma_trace_*.log. The
+# design behaves the same; tools that read the .dasm traces (sweep/llm_blocks/ffn/trace_ffn.py) have nothing
+# to read, the [BINGO EV] log stays.
+SIM_NO_TRACE ?= 0
+ifeq ($(SIM_NO_TRACE), 1)
+	VLOGAN_FLAGS += +define+SNITCH_NO_TRACE +define+SNITCH_NO_DMA_TRACE
+endif
+
+# SIM_LEAN_PROBES=1 binds only the simulation probes the sweep tools read
+# (target/sim/testharness/soc_probes.sv); the others are pure monitors.
+SIM_LEAN_PROBES ?= 0
+ifeq ($(SIM_LEAN_PROBES), 1)
+	VLOGAN_FLAGS += +define+HEMAIA_SIM_LEAN_PROBES
+endif
+
+# SIM_FAST_ARB=1 simulates every rr_arb_tree as common_cells' fast_sim model (bender target fast_sim:
+# src/fast_sim/rr_arb_tree.sv, the same module described procedurally instead of as a tree of nodes).
+SIM_FAST_ARB ?= 0
+ifeq ($(SIM_FAST_ARB), 1)
+	VSIM_BENDER += -t fast_sim
+	VLT_BENDER  += -t fast_sim
+	VCS_BENDER  += -t fast_sim
+endif
+
+# SIM_NO_ASSERT=1 compiles the common_cells assertion macros out (ASSERTS_OFF, COMMON_CELLS_ASSERTS_OFF):
+# the design behaves the same, its SystemVerilog assertions are no longer checked.
+SIM_NO_ASSERT ?= 0
+ifeq ($(SIM_NO_ASSERT), 1)
+	VLOGAN_FLAGS += +define+ASSERTS_OFF +define+COMMON_CELLS_ASSERTS_OFF
+endif
+
+# VCS_EXTRA_FLAGS: further vcs (elaboration) flags, e.g. +rad or -Xkeyopt=rtopt
+VCS_EXTRA_FLAGS ?=
+VCS_FLAGS += $(VCS_EXTRA_FLAGS)
+
+# VCS documents these as compile-time runtime optimizers; -hsopt=gates is
+# specifically intended for functional and SDF gate-level designs.
+ifeq ($(SIM_WITH_NETLIST), 1)
 	VCS_FLAGS += +notimingcheck
 	# Enable time-zero random 0/1 initialization.  VCS also requires the same
 	# option when simv is launched; the CI runner supplies that runtime option.
@@ -232,15 +312,6 @@ ifeq ($(SIM_WITH_NETLIST), 1)
 	VCS_FLAGS += -hsopt=gates
 	VCS_FLAGS += -Xkeyopt=rtopt
 	VCS_FLAGS += +rad
-	# NO -fgp. VCS's fine-grained parallelism targets GATE-LEVEL simulation, where a
-	# flattened netlist has enough fine-grained events to thread. An RTL event graph is
-	# coarser and more serialised, so thread synchronisation cancels the gain: measured
-	# at 4 cores on this design, 4m52s and 4m54s against a 4m42s-6m04s single-core
-	# baseline, on sim_rtl (sim_with_netlist: false).
-	#
-	# Parallelism that DOES pay here is job-level -- independent simulations run
-	# concurrently, which took three ~5-minute runs to 4m55s of wall-clock. Raise the
-	# runner's -j for that; it is bounded by VCS runtime license seats, not by cores.
 else
 	# Preserve the historical non-netlist behavior.
 	VCS_FLAGS += +nospecify
@@ -250,12 +321,20 @@ endif
 # for looking at the cells
 # for looking at the waveform
 # huge performace decline when enabled, use only for debugging
+# +vcs+fsdbon dumps the whole design from time 0. SIM_FSDB_AUTO=0 builds the same debug access
+# without it, for a dump the run starts itself (UCLI fsdbDumpvars on a scope and time window).
+# SIM_DEBUG_ACCESS is appended to -debug_access: +all (write, force, line debug) by default;
+# empty gives read access, which is enough for dumping and costs much less simulation speed.
+SIM_FSDB_AUTO ?= 1
+SIM_DEBUG_ACCESS ?= +all
 ifeq ($(SIM_WITH_WAVEFORM), 1)
 	VCS_FLAGS += -kdb
 	VLOGAN_FLAGS += -kdb
 	VHDLAN_FLAGS += -kdb
+ifeq ($(SIM_FSDB_AUTO), 1)
 	VCS_FLAGS += +vcs+fsdbon
-	VCS_FLAGS += -debug_access+all
+endif
+	VCS_FLAGS += -debug_access$(SIM_DEBUG_ACCESS)
 endif
 
 # Verilated and compiled Occamy system
@@ -488,6 +567,16 @@ clean-vsim: clean-work
 $(VCS_BUILDDIR):
 	mkdir -p $@
 
+# The analysis flags and the bender targets are baked into compile.sh too (VLOGAN_FLAGS:
+# SIM_D2D_PHY_BEHAVIORAL's define, ...; VCS_BENDER: SIM_FAST_ARB's fast_sim, ...). A stamp holds
+# them, rewritten only when they change, so turning such a switch on or off re-emits the script
+# instead of reusing one analysed without (or with) it.
+VCS_VLOGAN_STAMP := $(VCS_BUILDDIR)/vlogan_flags.stamp
+$(VCS_VLOGAN_STAMP): vcs_vlogan_flags_check | $(VCS_BUILDDIR)
+	@echo '$(VLOGAN_FLAGS) $(VCS_BENDER)' | cmp -s - $@ || echo '$(VLOGAN_FLAGS) $(VCS_BENDER)' > $@
+.PHONY: vcs_vlogan_flags_check
+vcs_vlogan_flags_check: ;
+
 # The script's contents are a function of $(VCS_BENDER) -- which is read from
 # bender_targets.tmp (cfg-dependent) -- and of the bender manifests, so both are real
 # prerequisites: switching CFG has to re-emit the script, or VCS analyses the source
@@ -498,7 +587,7 @@ $(VCS_BUILDDIR)/compile.sh:
 	@exit 1
 VCS_TESTHARNESS_PREREQUISITES :=
 else
-$(VCS_BUILDDIR)/compile.sh: $(BENDER_TARGETS_FILE) $(ROOT)/Bender.yml $(ROOT)/Bender.lock | $(VCS_BUILDDIR)
+$(VCS_BUILDDIR)/compile.sh: $(BENDER_TARGETS_FILE) $(ROOT)/Bender.yml $(ROOT)/Bender.lock $(VCS_VLOGAN_STAMP) | $(VCS_BUILDDIR)
 	mkdir -p $(VCS_BUILDDIR)
 	${BENDER} script vcs ${VCS_BENDER} --vlog-arg="${VLOGAN_FLAGS}" --vcom-arg="${VHDLAN_FLAGS}" > $@
 	chmod +x $@
